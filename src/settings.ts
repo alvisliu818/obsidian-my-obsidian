@@ -1,7 +1,7 @@
 import { PluginSettingTab, Setting, TextComponent, type Plugin } from "obsidian";
 import { VIEW_TYPE_SAVE_HISTORY, SaveHistoryView } from "./ui";
 import { translate, setLanguage, type Language } from "./locale";
-import { renameSnapshotFolder, renameExportFolder } from "./storage";
+import { renameSnapshotFolder, renameExportFolder, renameTempVersionFolder } from "./storage";
 import { AutosaveManager } from "./autosave";
 import type { SaveHistorySettings } from "./main";
 import type { GroupByMode } from "./main";
@@ -116,6 +116,54 @@ export class SaveHistorySettingTab extends PluginSettingTab {
 						this.refreshSidebarViews();
 					} else {
 						this.plugin.toast(translate("snapshotFolderRenameFailed"));
+					}
+				})();
+			});
+		});
+
+		// Temp version folder
+		const tempSetting = new Setting(this.containerEl)
+			.setName(translate("tempVersionFolder"))
+			.setDesc(translate("tempVersionFolderDesc"));
+
+		let tempText: TextComponent;
+		tempSetting.addText((text) => {
+			tempText = text;
+			text.setValue(this.plugin.settings.tempVersionFolder);
+			text.inputEl.addClass("sh-settings-input");
+		});
+		tempSetting.addButton((btn) => {
+			btn.setButtonText(translate("save"));
+			btn.onClick(() => {
+				void (async () => {
+					const newPath = tempText.getValue().trim();
+					if (newPath === this.plugin.settings.tempVersionFolder) return;
+
+					if (newPath) {
+						if (
+							newPath.startsWith(".") ||
+							/[<>:"|?*]/.test(newPath) ||
+							newPath.startsWith("/") ||
+							newPath.endsWith("/") ||
+							newPath.includes("..")
+						) {
+							this.plugin.toast(translate("tempVersionFolderRenameFailed"));
+							return;
+						}
+					}
+
+					const oldPath = this.plugin.settings.tempVersionFolder;
+					const success = await renameTempVersionFolder(
+						this.plugin.app.vault.adapter,
+						oldPath,
+						newPath
+					);
+					if (success) {
+						this.plugin.settings.tempVersionFolder = newPath;
+						await this.plugin.saveSettings();
+						this.plugin.toast(translate("tempVersionFolderRenamed"));
+					} else {
+						this.plugin.toast(translate("tempVersionFolderRenameFailed"));
 					}
 				})();
 			});

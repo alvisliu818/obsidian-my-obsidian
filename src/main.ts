@@ -22,6 +22,7 @@ export interface SaveHistorySettings {
   language: Language;
   snapshotFolder: string;
   exportFolder: string;
+  tempVersionFolder: string;
   autosaveInterval: number;
   autosaveOnTabClose: boolean;
   maxAutosaveVersions: number;
@@ -36,6 +37,7 @@ const DEFAULT_SETTINGS: SaveHistorySettings = {
   language: "system",
   snapshotFolder: ".versions(SH)",
   exportFolder: "Exported versions",
+  tempVersionFolder: "Preview",
   autosaveInterval: 0,
   autosaveOnTabClose: false,
   maxAutosaveVersions: 0,
@@ -83,6 +85,8 @@ export class SaveHistoryPlugin extends Plugin {
         void this.cleanupTempVersionFiles();
       })
     );
+
+    this.restoreTempVersionFiles();
 
     this.addRibbonIcon("history", translate("viewTitle"), () => {
       void (async () => {
@@ -321,6 +325,23 @@ export class SaveHistoryPlugin extends Plugin {
     if (data) {
       this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
     }
+    // Migrate empty folder defaults
+    if (!this.settings.snapshotFolder) {
+      this.settings.snapshotFolder = ".versions(SH)";
+    }
+    if (!this.settings.exportFolder) {
+      this.settings.exportFolder = "Exported versions";
+    }
+    if (!this.settings.tempVersionFolder) {
+      this.settings.tempVersionFolder = "Preview";
+    }
+    if (data && (
+      !data.snapshotFolder ||
+      !data.exportFolder ||
+      !data.tempVersionFolder
+    )) {
+      await this.saveSettings();
+    }
     setLanguage(this.settings.language);
   }
 
@@ -385,6 +406,8 @@ export class SaveHistoryPlugin extends Plugin {
     if (!file) return null;
     const root = this.settings.snapshotFolder || ".versions(SH)";
     if (file.path.startsWith(root + "/")) return null;
+    const tempRoot = this.settings.tempVersionFolder;
+    if (tempRoot && file.path.startsWith(tempRoot + "/")) return null;
     if (skipTempFiles && [...this.tempVersionFiles.values()].includes(file.path)) return null;
     if (!this.isExtensionAllowed(file.extension)) return null;
     return file;
@@ -437,6 +460,31 @@ export class SaveHistoryPlugin extends Plugin {
             await this.app.vault.adapter.remove(filePath);
           }
         } catch { /* ignore */ }
+      }
+    }
+  }
+
+  restoreTempVersionFiles(): void {
+    const folder = this.settings.tempVersionFolder;
+    if (!folder) return;
+    const prefix = folder + "/";
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const view = leaf.view as { file?: { path: string } };
+      if (view?.file?.path && view.file.path.startsWith(prefix)) {
+        this.tempVersionFiles.set(view.file.path, view.file.path);
+      }
+    });
+  }
+
+  async ensureTempVersionFolder(): Promise<void> {
+    const folder = this.settings.tempVersionFolder;
+    if (!folder) return;
+    const existing = this.app.vault.getAbstractFileByPath(folder);
+    if (!existing) {
+      try {
+        await this.app.vault.createFolder(folder);
+      } catch {
+        // folder may have been created by another call
       }
     }
   }

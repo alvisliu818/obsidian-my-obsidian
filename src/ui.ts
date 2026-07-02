@@ -1192,12 +1192,20 @@ export class SaveHistoryView extends ItemView {
       this.plugin.tempVersionFiles.delete(snap.filePath);
     }
 
-    const parentPath = activeFile.parent?.path || "";
     const baseName = activeFile.name.replace(/\.[^.]+$/, "");
     const safeTs = snap.timestamp.replace(/:/g, "-");
     const safeName = (snap.name || "unnamed").replace(/[\\/:*?"<>|]/g, "_");
     const fileName = `${baseName}(${safeName} ${safeTs}).${activeFile.extension}`;
-    const tmpPath = parentPath && parentPath !== "/" ? `${parentPath}/${fileName}` : fileName;
+    const parentPath = activeFile.parent?.path || "";
+    const tempFolder = this.plugin.settings.tempVersionFolder;
+    const relPath = parentPath && parentPath !== "/" ? parentPath : "";
+    const tmpPath = tempFolder
+      ? relPath
+        ? `${tempFolder}/${relPath}/${fileName}`
+        : `${tempFolder}/${fileName}`
+      : relPath
+        ? `${relPath}/${fileName}`
+        : fileName;
 
     // Get or create file
     let file: TFile | null = null;
@@ -1205,6 +1213,7 @@ export class SaveHistoryView extends ItemView {
     if (existing instanceof TFile) {
       file = existing;
     } else {
+      await this.plugin.ensureTempVersionFolder();
       try {
         file = await this.plugin.app.vault.create(tmpPath, restored.content);
       } catch {
@@ -1967,18 +1976,27 @@ window.clearTimeout(this.debounceTimer);
         this.plugin.tempVersionFiles.delete(match.filePath);
       }
 
-      const parentPath = sourceFile.parent?.path || "";
       const baseName = sourceFile.name.replace(/\.[^.]+$/, "");
       const safeTs = match.timestamp.replace(/:/g, "-");
       const safeName = (match.name || "unnamed").replace(/[\\/:*?"<>|]/g, "_");
       const fileName = `${baseName}(${safeName} ${safeTs}).${sourceFile.extension}`;
-      const tmpPath = parentPath && parentPath !== "/" ? `${parentPath}/${fileName}` : fileName;
+      const parentPath = sourceFile.parent?.path || "";
+      const tempFolder = this.plugin.settings.tempVersionFolder;
+      const relPath = parentPath && parentPath !== "/" ? parentPath : "";
+      const tmpPath = tempFolder
+        ? relPath
+          ? `${tempFolder}/${relPath}/${fileName}`
+          : `${tempFolder}/${fileName}`
+        : relPath
+          ? `${relPath}/${fileName}`
+          : fileName;
 
       let file2: TFile | null = null;
       const existing = this.plugin.app.vault.getAbstractFileByPath(tmpPath);
       if (existing instanceof TFile) {
         file2 = existing;
       } else {
+        await this.plugin.ensureTempVersionFolder();
         try {
           file2 = await this.plugin.app.vault.create(tmpPath, restored.content);
         } catch {

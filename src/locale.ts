@@ -127,6 +127,12 @@ type TranslationKeys = {
   snapshotFolderRenamed: string;
   snapshotFolderRenameFailed: string;
 
+  // Temp version folder
+  tempVersionFolder: string;
+  tempVersionFolderDesc: string;
+  tempVersionFolderRenamed: string;
+  tempVersionFolderRenameFailed: string;
+
   // Preview view
   versionPreview: string;
   noPreviewLoaded: string;
@@ -284,6 +290,11 @@ const en: TranslationKeys = {
   snapshotFolderRenamed: "Folder renamed successfully.",
   snapshotFolderRenameFailed: "Failed to rename folder.",
 
+  tempVersionFolder: "Temp version folder",
+  tempVersionFolderDesc: "Folder in the vault where temporary preview files are created. Leave empty to create alongside the original file.",
+  tempVersionFolderRenamed: "Temp folder updated successfully.",
+  tempVersionFolderRenameFailed: "Failed to update temp folder. Name must not start with \".\".",
+
   versionPreview: "Version Preview",
   noPreviewLoaded: "No preview loaded.",
   noChangesDetected: "Version not saved — no changes detected.",
@@ -437,6 +448,11 @@ const ru: TranslationKeys = {
   snapshotFolderRenamed: "Папка успешно переименована.",
   snapshotFolderRenameFailed: "Не удалось переименовать папку.",
 
+  tempVersionFolder: "Папка временных версий",
+  tempVersionFolderDesc: "Папка в хранилище для временных файлов предпросмотра. Оставьте пустым, чтобы создавать рядом с исходным файлом.",
+  tempVersionFolderRenamed: "Папка временных версий обновлена.",
+  tempVersionFolderRenameFailed: "Не удалось обновить папку временных версий. Имя не должно начинаться с \".\".",
+
   versionPreview: "Просмотр версии",
   noPreviewLoaded: "Просмотр не загружен.",
   noChangesDetected: "Версия не сохранена — изменений не обнаружено.",
@@ -589,6 +605,11 @@ const es: TranslationKeys = {
   snapshotFolderDesc: "Carpeta en la raíz del vault donde se almacenan las versiones. Comienza con \".\" para ocultarla del explorador de Obsidian.",
   snapshotFolderRenamed: "Carpeta renombrada correctamente.",
   snapshotFolderRenameFailed: "Error al renombrar la carpeta.",
+
+  tempVersionFolder: "Carpeta de versiones temporales",
+  tempVersionFolderDesc: "Carpeta en el vault para archivos de vista previa temporal. Déjelo vacío para crear junto al archivo original.",
+  tempVersionFolderRenamed: "Carpeta temporal actualizada correctamente.",
+  tempVersionFolderRenameFailed: "Error al actualizar la carpeta temporal. El nombre no debe comenzar con \".\".",
 
   versionPreview: "Vista previa de versión",
   noPreviewLoaded: "No hay vista previa cargada.",

@@ -523,6 +523,70 @@ export async function renameExportFolder(adapter: DataAdapter, oldName: string, 
   }
 }
 
+export async function renameTempVersionFolder(adapter: DataAdapter, oldName: string, newName: string): Promise<boolean> {
+  if (oldName === newName) return true;
+
+  const resolvedOld = await resolvePath(adapter, oldName);
+  if (!resolvedOld) return true;
+
+  const parentDir = newName.substring(0, newName.lastIndexOf("/"));
+  if (parentDir) {
+    const parts = parentDir.replace(/\\/g, "/").split("/").filter(p => p);
+    let currentPath = "";
+    for (const part of parts) {
+      currentPath = currentPath ? `${currentPath}/${part}` : part;
+      if (!(await adapter.exists(currentPath))) {
+        try {
+          await adapter.mkdir(currentPath);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  try {
+    await adapter.rename(resolvedOld, newName);
+
+    if (resolvedOld !== newName && await adapter.exists(resolvedOld)) {
+      try {
+        await adapter.remove(resolvedOld);
+      } catch {
+        // ignore
+      }
+    }
+
+    const oldParent = resolvedOld.substring(0, resolvedOld.lastIndexOf("/"));
+    if (oldParent) {
+      let dir = oldParent;
+      while (dir) {
+        if (!(await adapter.exists(dir))) break;
+        let listResult: { files: string[]; folders: string[] } | undefined;
+        try {
+          listResult = await adapter.list(dir);
+        } catch {
+          break;
+        }
+        const files = listResult.files || [];
+        const folders = listResult.folders || [];
+        if (files.length > 0 || folders.length > 0) break;
+        const parent = dir.split("/").slice(0, -1).join("/");
+        try {
+          await adapter.rmdir(dir, false);
+        } catch {
+          break;
+        }
+        if (parent === dir) break;
+        dir = parent;
+      }
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
