@@ -1221,7 +1221,7 @@ export class SaveHistoryView extends ItemView {
 
     // Check if file is already open in any leaf (e.g. from previous session)
     let existingLeaf: WorkspaceLeaf | null = null;
-    const filePath = file!.path;
+    const filePath = file.path;
     this.plugin.app.workspace.iterateAllLeaves((leaf) => {
       if ((leaf.view as { file?: { path: string } })?.file?.path === filePath) {
         existingLeaf = leaf;
@@ -1995,7 +1995,7 @@ window.clearTimeout(this.debounceTimer);
 
       // Check if file is already open in any leaf (e.g. from previous session)
       let existingLeaf2: WorkspaceLeaf | null = null;
-      const filePath2 = file2!.path;
+      const filePath2 = file2.path;
       this.plugin.app.workspace.iterateAllLeaves((leaf) => {
         if ((leaf.view as { file?: { path: string } })?.file?.path === filePath2) {
           existingLeaf2 = leaf;
