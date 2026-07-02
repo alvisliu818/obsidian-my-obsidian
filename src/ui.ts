@@ -1213,7 +1213,7 @@ export class SaveHistoryView extends ItemView {
     if (existing instanceof TFile) {
       file = existing;
     } else {
-      await this.plugin.ensureTempVersionFolder();
+      await this.plugin.ensureTempVersionFolder(tmpPath);
       try {
         file = await this.plugin.app.vault.create(tmpPath, restored.content);
       } catch {
@@ -1996,7 +1996,7 @@ window.clearTimeout(this.debounceTimer);
       if (existing instanceof TFile) {
         file2 = existing;
       } else {
-        await this.plugin.ensureTempVersionFolder();
+        await this.plugin.ensureTempVersionFolder(tmpPath);
         try {
           file2 = await this.plugin.app.vault.create(tmpPath, restored.content);
         } catch {

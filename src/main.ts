@@ -451,15 +451,30 @@ export class SaveHistoryPlugin extends Plugin {
         toDelete.push(key);
       }
     }
+    const tempRoot = this.settings.tempVersionFolder;
     for (const key of toDelete) {
       const filePath = this.tempVersionFiles.get(key);
       this.tempVersionFiles.delete(key);
-      if (filePath) {
-        try {
-          if (await this.app.vault.adapter.exists(filePath)) {
-            await this.app.vault.adapter.remove(filePath);
-          }
-        } catch { /* ignore */ }
+      if (!filePath) continue;
+      try {
+        if (await this.app.vault.adapter.exists(filePath)) {
+          await this.app.vault.adapter.remove(filePath);
+        }
+      } catch { /* ignore */ }
+      // Clean up empty parent dirs under tempVersionFolder
+      if (tempRoot && filePath.startsWith(tempRoot + "/")) {
+        let dir = filePath.substring(0, filePath.lastIndexOf("/"));
+        while (dir && dir !== tempRoot && dir.startsWith(tempRoot + "/")) {
+          if (!(await this.app.vault.adapter.exists(dir))) break;
+          try {
+            const list = await this.app.vault.adapter.list(dir);
+            if ((list.files?.length ?? 0) > 0 || (list.folders?.length ?? 0) > 0) break;
+            await this.app.vault.adapter.rmdir(dir, false);
+          } catch { break; }
+          const next = dir.lastIndexOf("/");
+          if (next < 0) break;
+          dir = dir.substring(0, next);
+        }
       }
     }
   }
@@ -476,15 +491,21 @@ export class SaveHistoryPlugin extends Plugin {
     });
   }
 
-  async ensureTempVersionFolder(): Promise<void> {
+  async ensureTempVersionFolder(tmpPath?: string): Promise<void> {
     const folder = this.settings.tempVersionFolder;
     if (!folder) return;
-    const existing = this.app.vault.getAbstractFileByPath(folder);
-    if (!existing) {
-      try {
-        await this.app.vault.createFolder(folder);
-      } catch {
-        // folder may have been created by another call
+    const dirPath = tmpPath ? tmpPath.substring(0, tmpPath.lastIndexOf("/")) : folder;
+    if (!dirPath) return;
+    const parts = dirPath.replace(/\\/g, "/").split("/").filter(p => p);
+    let currentPath = "";
+    for (const part of parts) {
+      currentPath = currentPath ? `${currentPath}/${part}` : part;
+      if (!this.app.vault.getAbstractFileByPath(currentPath)) {
+        try {
+          await this.app.vault.createFolder(currentPath);
+        } catch {
+          // folder may have been created by another call
+        }
       }
     }
   }
