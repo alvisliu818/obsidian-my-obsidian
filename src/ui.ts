@@ -1179,7 +1179,6 @@ export class SaveHistoryView extends ItemView {
         this.plugin.app.workspace.revealLeaf(targetLeaf);
         return;
       }
-      // Mobile fallback
       if (this.plugin.app.isMobile) {
         const f = this.plugin.app.vault.getAbstractFileByPath(existingPath);
         if (f instanceof TFile) {
@@ -1207,7 +1206,6 @@ export class SaveHistoryView extends ItemView {
         ? `${relPath}/${fileName}`
         : fileName;
 
-    // Get or create file
     let file: TFile | null = null;
     const existing = this.plugin.app.vault.getAbstractFileByPath(tmpPath);
     if (existing instanceof TFile) {
@@ -1228,7 +1226,6 @@ export class SaveHistoryView extends ItemView {
 
     this.plugin.tempVersionFiles.set(snap.filePath, file.path);
 
-    // Check if file is already open in any leaf (e.g. from previous session)
     let existingLeaf: WorkspaceLeaf | null = null;
     const filePath = file.path;
     this.plugin.app.workspace.iterateAllLeaves((leaf) => {

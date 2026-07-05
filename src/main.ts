@@ -50,7 +50,7 @@ export class SaveHistoryPlugin extends Plugin {
   settings: SaveHistorySettings = DEFAULT_SETTINGS;
   autosaveManager: AutosaveManager | null = null;
   versioning!: Versioning;
-  tempVersionFiles: Map<string, string> = new Map(); // snapshot filePath → temp file path
+  tempVersionFiles: Map<string, string> = new Map();
   private lastActiveFile: TFile | null = null;
   private tabCloseEventRef: EventRef | null = null;
 
@@ -120,7 +120,6 @@ export class SaveHistoryPlugin extends Plugin {
         // Don't await rename — it can be slow on Windows
         const renamePromise = renameSnapshotFolder(this.app.vault.adapter, oldDir, newDir);
 
-        // Refresh views immediately — no delay for the user
         const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_SAVE_HISTORY);
         const refreshViews = () => {
           for (const leaf of leaves) {
@@ -131,7 +130,6 @@ export class SaveHistoryPlugin extends Plugin {
         };
         refreshViews();
 
-        // Update perFileSettings keys (fast — memory only)
         const isFolder = file instanceof TFolder;
         const keysToUpdate: string[] = [];
         for (const key of Object.keys(this.settings.perFileSettings)) {
@@ -152,7 +150,6 @@ export class SaveHistoryPlugin extends Plugin {
         }
         if (keysToUpdate.length > 0) await this.saveSettings();
 
-        // Refresh sidebar after rename completes
         void renamePromise.then(refreshViews).catch(() => {});
 
         const parentDir = oldDir.substring(0, oldDir.lastIndexOf("/"));
@@ -325,7 +322,6 @@ export class SaveHistoryPlugin extends Plugin {
     if (data) {
       this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
     }
-    // Migrate empty folder defaults
     if (!this.settings.snapshotFolder) {
       this.settings.snapshotFolder = ".versions(SH)";
     }
@@ -460,8 +456,7 @@ export class SaveHistoryPlugin extends Plugin {
         if (await this.app.vault.adapter.exists(filePath)) {
           await this.app.vault.adapter.remove(filePath);
         }
-      } catch { /* ignore */ }
-      // Clean up empty parent dirs under tempVersionFolder
+      } catch { }
       if (tempRoot && filePath.startsWith(tempRoot + "/")) {
         let dir = filePath.substring(0, filePath.lastIndexOf("/"));
         while (dir && dir !== tempRoot && dir.startsWith(tempRoot + "/")) {
@@ -511,7 +506,6 @@ export class SaveHistoryPlugin extends Plugin {
   }
 
   async cleanupAllTempFiles(): Promise<void> {
-    // Close all leaves with temp files first
     for (const [, filePath] of this.tempVersionFiles) {
       this.app.workspace.iterateAllLeaves((leaf) => {
         const view = leaf.view as { file?: { path: string } };
@@ -520,13 +514,12 @@ export class SaveHistoryPlugin extends Plugin {
         }
       });
     }
-    // Then delete the files
     for (const [, filePath] of this.tempVersionFiles) {
       try {
         if (await this.app.vault.adapter.exists(filePath)) {
           await this.app.vault.adapter.remove(filePath);
         }
-      } catch { /* ignore */ }
+      } catch { }
     }
     this.tempVersionFiles.clear();
   }
