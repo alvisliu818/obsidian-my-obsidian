@@ -104,6 +104,7 @@ export async function listSnapshotsForFile(
         });
       }
     } catch {
+      // ignore
     }
   }
 
@@ -267,10 +268,14 @@ export async function savePreRestoreBackup(
             if (record.name === "pre-restore") {
               return;
             }
-          } catch { }
+          } catch {
+            // ignore
+          }
         }
       }
-    } catch { }
+    } catch {
+      // ignore
+    }
   }
 
   const timestamp = new Date().toISOString();
@@ -304,7 +309,9 @@ export async function renameSnapshotFolder(adapter: DataAdapter, oldName: string
       if (!(await adapter.exists(currentPath))) {
         try {
           await adapter.mkdir(currentPath);
-        } catch { }
+        } catch {
+          // ignore
+        }
       }
     }
   }
@@ -315,7 +322,9 @@ export async function renameSnapshotFolder(adapter: DataAdapter, oldName: string
     if (resolvedOld !== newName && await adapter.exists(resolvedOld)) {
       try {
         await adapter.remove(resolvedOld);
-      } catch { }
+      } catch {
+        // ignore — best effort cleanup
+      }
     }
 
     const oldParent = resolvedOld.substring(0, resolvedOld.lastIndexOf("/"));
@@ -370,7 +379,9 @@ export async function deleteSnapshotDirForFile(
     const fullVaultPath = fullPath.startsWith(dirPath) ? fullPath : `${dirPath}/${fullPath}`;
     try {
       await adapter.remove(fullVaultPath);
-    } catch { }
+    } catch {
+      // ignore
+    }
   }
 
   for (const p of listResult.folders || []) {
@@ -378,12 +389,16 @@ export async function deleteSnapshotDirForFile(
     const fullVaultPath = fullPath.startsWith(dirPath) ? fullPath : `${dirPath}/${fullPath}`;
     try {
       await adapter.rmdir(fullVaultPath, false);
-    } catch { }
+    } catch {
+      // ignore
+    }
   }
 
   try {
     await adapter.rmdir(dirPath, false);
-  } catch { }
+  } catch {
+    // ignore
+  }
 
   const parentDir = dirPath.substring(0, dirPath.lastIndexOf("/"));
   await removeEmptyParentDirs(plugin, parentDir);
@@ -457,7 +472,9 @@ export async function renameExportFolder(adapter: DataAdapter, oldName: string, 
       if (!(await adapter.exists(currentPath))) {
         try {
           await adapter.mkdir(currentPath);
-        } catch { }
+        } catch {
+          // ignore
+        }
       }
     }
   }
@@ -468,7 +485,9 @@ export async function renameExportFolder(adapter: DataAdapter, oldName: string, 
     if (resolvedOld !== newName && await adapter.exists(resolvedOld)) {
       try {
         await adapter.remove(resolvedOld);
-      } catch { }
+      } catch {
+        // ignore — best effort cleanup
+      }
     }
 
     const oldParent = resolvedOld.substring(0, resolvedOld.lastIndexOf("/"));
@@ -517,7 +536,9 @@ export async function renameTempVersionFolder(adapter: DataAdapter, oldName: str
       if (!(await adapter.exists(currentPath))) {
         try {
           await adapter.mkdir(currentPath);
-        } catch { }
+        } catch {
+          // ignore
+        }
       }
     }
   }
@@ -528,7 +549,9 @@ export async function renameTempVersionFolder(adapter: DataAdapter, oldName: str
     if (resolvedOld !== newName && await adapter.exists(resolvedOld)) {
       try {
         await adapter.remove(resolvedOld);
-      } catch { }
+      } catch {
+        // ignore — best effort cleanup
+      }
     }
 
     const oldParent = resolvedOld.substring(0, resolvedOld.lastIndexOf("/"));
@@ -817,7 +840,9 @@ export async function deleteTempVersionFile(
     if (await adapter.exists(tempFilePath)) {
       await adapter.remove(tempFilePath);
     }
-  } catch { }
+  } catch {
+    // ignore
+  }
 }
 
 

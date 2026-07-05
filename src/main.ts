@@ -456,7 +456,7 @@ export class SaveHistoryPlugin extends Plugin {
         if (await this.app.vault.adapter.exists(filePath)) {
           await this.app.vault.adapter.remove(filePath);
         }
-      } catch { }
+      } catch { /* ignore */ }
       if (tempRoot && filePath.startsWith(tempRoot + "/")) {
         let dir = filePath.substring(0, filePath.lastIndexOf("/"));
         while (dir && dir !== tempRoot && dir.startsWith(tempRoot + "/")) {
@@ -519,7 +519,7 @@ export class SaveHistoryPlugin extends Plugin {
         if (await this.app.vault.adapter.exists(filePath)) {
           await this.app.vault.adapter.remove(filePath);
         }
-      } catch { }
+      } catch { /* ignore */ }
     }
     this.tempVersionFiles.clear();
   }
