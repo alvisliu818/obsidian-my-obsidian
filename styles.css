@@ -636,6 +636,8 @@
   padding: 2px 8px;
   overflow: hidden;
   min-width: 0;
+  user-select: text;
+  -webkit-user-select: text;
 }
 .sh-diff-row-text > *:first-child {
   margin-top: 0;

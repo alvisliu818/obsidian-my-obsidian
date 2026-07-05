@@ -1522,22 +1522,24 @@ class DiffModal extends Modal {
     const app = this.plugin.app;
     const plugin = this.plugin;
     const COLLAPSE = 4;
+    let rawMode = false;
 
     const renderRows = async () => {
+      diffContainer.empty();
       let eqRun: DiffLine[] = [];
 
       const flushEq = async () => {
         if (eqRun.length === 0) return;
         if (eqRun.length > COLLAPSE * 2) {
           for (const line of eqRun.slice(0, COLLAPSE)) {
-            await appendDiffRow(diffContainer, app, line, sourcePath, plugin);
+            await appendDiffRow(diffContainer, app, line, sourcePath, plugin, rawMode);
           }
           const hidden = eqRun.slice(COLLAPSE, eqRun.length - COLLAPSE);
           const bar = diffContainer.createDiv({ cls: "sh-diff-collapse" });
           bar.textContent = translate("unchangedLinesShow", { n: hidden.length });
           const hiddenEl = diffContainer.createDiv({ cls: "sh-diff-hidden" });
           for (const line of hidden) {
-            await appendDiffRow(hiddenEl, app, line, sourcePath, plugin);
+            await appendDiffRow(hiddenEl, app, line, sourcePath, plugin, rawMode);
           }
           let expanded = false;
           bar.onclick = () => {
@@ -1551,11 +1553,11 @@ class DiffModal extends Modal {
             }
           };
           for (const line of eqRun.slice(eqRun.length - COLLAPSE)) {
-            await appendDiffRow(diffContainer, app, line, sourcePath, plugin);
+            await appendDiffRow(diffContainer, app, line, sourcePath, plugin, rawMode);
           }
         } else {
           for (const line of eqRun) {
-            await appendDiffRow(diffContainer, app, line, sourcePath, plugin);
+            await appendDiffRow(diffContainer, app, line, sourcePath, plugin, rawMode);
           }
         }
         eqRun = [];
@@ -1566,7 +1568,7 @@ class DiffModal extends Modal {
           eqRun.push(line);
         } else {
           await flushEq();
-          await appendDiffRow(diffContainer, app, line, sourcePath, plugin);
+          await appendDiffRow(diffContainer, app, line, sourcePath, plugin, rawMode);
         }
       }
       await flushEq();
@@ -1575,6 +1577,13 @@ class DiffModal extends Modal {
     renderRows().catch(() => {});
 
     const btnRow = el.createDiv({ cls: "sh-diff-btn-row" });
+
+    const rawBtn = btnRow.createEl("button", { text: translate("viewRaw") });
+    rawBtn.onclick = () => {
+      rawMode = !rawMode;
+      rawBtn.textContent = rawMode ? translate("viewRendered") : translate("viewRaw");
+      renderRows().catch(() => {});
+    };
 
     const closeBtn = btnRow.createEl("button", { text: translate("close") });
     closeBtn.onclick = () => this.close();
@@ -1595,7 +1604,8 @@ async function appendDiffRow(
   app: SaveHistoryPlugin["app"],
   line: DiffLine,
   sourcePath: string,
-  component: Component
+  component: Component,
+  rawMode: boolean = false
 ) {
   const hasCharHighlight = line.charRanges && line.charRanges.length > 0;
   const hasInterleaved = line.interleaved && line.interleaved.length > 0;
@@ -1644,12 +1654,13 @@ async function appendDiffRow(
     }
   } else if (line.text.length > 0) {
     const ext = sourcePath.split(".").pop()?.toLowerCase() || "";
-    if (ext === "md") {
+    if (ext === "md" && !rawMode) {
       try {
         const resolved = await resolveImagesInMarkdown(component as unknown as SaveHistoryPlugin, line.text, sourcePath);
         await MarkdownRenderer.render(app, resolved, textCol, sourcePath, component);
       } catch {
-        textCol.createEl("span", { text: line.text });
+        const span = textCol.createEl("span", { cls: "sh-raw-text" });
+        span.textContent = line.text;
       }
     } else {
       const span = textCol.createEl("span", { cls: "sh-raw-text" });
@@ -1945,93 +1956,6 @@ window.clearTimeout(this.debounceTimer);
     const restored = await readSnapshotContent(this.plugin, match.filePath);
     if (!restored) {
       this.plugin.toast(translate("failedLoadSnapshot"));
-      return;
-    }
-
-    if (this.plugin.settings.previewMode === "tab") {
-      if (!(sourceFile instanceof TFile)) return;
-
-      const existingPath = this.plugin.tempVersionFiles.get(match.filePath);
-      if (existingPath) {
-        let targetLeaf: WorkspaceLeaf | null = null;
-        this.plugin.app.workspace.iterateAllLeaves((leaf) => {
-          if ((leaf.view as { file?: { path: string } })?.file?.path === existingPath) {
-            targetLeaf = leaf;
-          }
-        });
-        if (targetLeaf) {
-          this.plugin.app.workspace.revealLeaf(targetLeaf);
-          return;
-        }
-        // Mobile fallback — open existing file again
-        if (this.plugin.app.isMobile) {
-          const f = this.plugin.app.vault.getAbstractFileByPath(existingPath);
-          if (f instanceof TFile) {
-            const leaf = this.plugin.app.workspace.getLeaf("tab");
-            await leaf.openFile(f);
-            this.plugin.app.workspace.revealLeaf(leaf);
-            return;
-          }
-        }
-        this.plugin.tempVersionFiles.delete(match.filePath);
-      }
-
-      const baseName = sourceFile.name.replace(/\.[^.]+$/, "");
-      const safeTs = match.timestamp.replace(/:/g, "-");
-      const safeName = (match.name || "unnamed").replace(/[\\/:*?"<>|]/g, "_");
-      const fileName = `${baseName}(${safeName} ${safeTs}).${sourceFile.extension}`;
-      const parentPath = sourceFile.parent?.path || "";
-      const tempFolder = this.plugin.settings.tempVersionFolder;
-      const relPath = parentPath && parentPath !== "/" ? parentPath : "";
-      const tmpPath = tempFolder
-        ? relPath
-          ? `${tempFolder}/${relPath}/${fileName}`
-          : `${tempFolder}/${fileName}`
-        : relPath
-          ? `${relPath}/${fileName}`
-          : fileName;
-
-      let file2: TFile | null = null;
-      const existing = this.plugin.app.vault.getAbstractFileByPath(tmpPath);
-      if (existing instanceof TFile) {
-        file2 = existing;
-      } else {
-        await this.plugin.ensureTempVersionFolder(tmpPath);
-        try {
-          file2 = await this.plugin.app.vault.create(tmpPath, restored.content);
-        } catch {
-          const fallback = this.plugin.app.vault.getAbstractFileByPath(tmpPath);
-          if (fallback instanceof TFile) file2 = fallback;
-        }
-      }
-      if (!file2) {
-        this.plugin.toast(translate("failedLoadSnapshot"));
-        return;
-      }
-
-      this.plugin.tempVersionFiles.set(match.filePath, file2.path);
-
-      // Check if file is already open in any leaf (e.g. from previous session)
-      let existingLeaf2: WorkspaceLeaf | null = null;
-      const filePath2 = file2.path;
-      this.plugin.app.workspace.iterateAllLeaves((leaf) => {
-        if ((leaf.view as { file?: { path: string } })?.file?.path === filePath2) {
-          existingLeaf2 = leaf;
-          return;
-        }
-        const state = leaf.getViewState() as { state?: { file?: string } };
-        if (state?.state?.file === filePath2) {
-          existingLeaf2 = leaf;
-        }
-      });
-      if (existingLeaf2) {
-        this.plugin.app.workspace.revealLeaf(existingLeaf2);
-        return;
-      }
-
-      const leaf = this.plugin.app.workspace.getLeaf("tab");
-      await leaf.openFile(file2);
-      this.plugin.app.workspace.revealLeaf(leaf);
       return;
     }
 
