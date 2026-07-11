@@ -54,27 +54,44 @@
 
 ### 方法二：从 GitHub Release 手动安装
 
-1. 从最新 GitHub Release 下载 `main.js`、`manifest.json` 和 `styles.css`。
-   不要下载 GitHub 自动生成的 `Source code.zip` 代替这三个文件。
-2. 在需要安装插件的 Obsidian 仓库中创建以下文件夹：
+1. 从最新 GitHub Release 下载：
 
    ```text
-   <仓库>/.obsidian/plugins/audio-timestamp-player/
+   audio-timestamp-player.zip
    ```
 
-   例如，本机 Notes 仓库的完整路径是：
-
-   ```text
-   E:\Aa-works\Notes\.obsidian\plugins\audio-timestamp-player\
-   ```
-
-3. 将下载的三个文件直接放入 `audio-timestamp-player` 文件夹。最终结构应为：
+   不要下载 GitHub 自动生成的 `Source code.zip` 或 `Source code.tar.gz`。
+2. 解压 `audio-timestamp-player.zip`。解压后会得到完整的插件文件夹：
 
    ```text
    audio-timestamp-player/
    ├── main.js
    ├── manifest.json
    └── styles.css
+   ```
+
+3. 将整个 `audio-timestamp-player` 文件夹复制到需要安装插件的 Obsidian 仓库：
+
+   ```text
+   <仓库>/.obsidian/plugins/
+   ```
+
+   例如，本机 Notes 仓库的完整路径是：
+
+   ```text
+   E:\Aa-works\Notes\.obsidian\plugins\
+   ```
+
+   复制完成后的最终结构应为：
+
+   ```text
+   E:\Aa-works\Notes\.obsidian\plugins\
+   ├── audio-timestamp-player\
+   │   ├── main.js
+   │   ├── manifest.json
+   │   └── styles.css
+   ├── templater-obsidian\
+   └── 其他插件文件夹\
    ```
 
 4. 打开 Obsidian 的 **设置 → 第三方插件**。
@@ -112,7 +129,9 @@ manifest.json
 styles.css
 ```
 
-`main.js` 是由 TypeScript 源码生成的构建文件，不直接提交到 Git 仓库。创建正式 GitHub Release 时，项目自带的发布工作流会重新构建插件，并把 `main.js`、`manifest.json` 和 `styles.css` 作为可下载附件上传。普通用户只需要下载这些附件，不需要自己构建。
+`main.js` 是由 TypeScript 源码生成的构建文件，不直接提交到 Git 仓库。创建正式 GitHub Release 时，项目自带的发布工作流会重新构建插件，将 `main.js`、`manifest.json` 和 `styles.css` 放入 `audio-timestamp-player` 文件夹，再自动生成 `audio-timestamp-player.zip`。普通用户只需要下载这个压缩包、解压并复制整个文件夹，不需要自己构建。
+
+Release 中仍会同时保留 `main.js`、`manifest.json` 和 `styles.css` 三个独立附件，用于满足 Obsidian 官方社区插件的发布和校验要求；普通用户可以忽略这些独立附件。
 
 ## 隐私
 

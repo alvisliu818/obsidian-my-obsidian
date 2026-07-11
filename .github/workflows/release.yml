@@ -31,11 +31,22 @@ jobs:
               run: |
                   [ -f styles.css ] && echo "exists=true" >> "$GITHUB_OUTPUT" || echo "exists=false" >> "$GITHUB_OUTPUT"
 
+            - name: Package plugin folder
+              run: |
+                  mkdir -p release/audio-timestamp-player
+                  cp main.js manifest.json release/audio-timestamp-player/
+                  if [ -f styles.css ]; then
+                      cp styles.css release/audio-timestamp-player/
+                  fi
+                  cd release
+                  zip -r ../audio-timestamp-player.zip audio-timestamp-player
+
             - name: Attest build provenance
               uses: actions/attest@v4
               with:
                   subject-path: |
                       main.js
+                      audio-timestamp-player.zip
                       ${{ steps.styles.outputs.exists == 'true' && 'styles.css' || '' }}
 
             - name: Create release
@@ -47,4 +58,5 @@ jobs:
                   gh release create "$tag" \
                     --title="$tag" \
                     --draft \
+                    audio-timestamp-player.zip \
                     main.js manifest.json ${{ steps.styles.outputs.exists == 'true' && 'styles.css' || '' }}

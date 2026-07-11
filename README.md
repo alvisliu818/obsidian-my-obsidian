@@ -54,21 +54,37 @@ After the plugin is accepted into the official Obsidian Community plugins catalo
 
 ### Option 2: Install from a GitHub release
 
-1. Download `main.js`, `manifest.json`, and `styles.css` from the latest release.
-   Do not use GitHub's automatically generated `Source code.zip` as a replacement for these files.
-2. Create the following folder inside the target Obsidian vault:
+1. Download the following file from the latest GitHub release:
 
    ```text
-   <vault>/.obsidian/plugins/audio-timestamp-player/
+   audio-timestamp-player.zip
    ```
 
-3. Put the downloaded files directly in that folder. The final structure must be:
+   Do not download GitHub's automatically generated `Source code.zip` or `Source code.tar.gz`.
+2. Extract `audio-timestamp-player.zip`. It contains the complete plugin folder:
 
    ```text
    audio-timestamp-player/
    ├── main.js
    ├── manifest.json
    └── styles.css
+   ```
+
+3. Copy the entire `audio-timestamp-player` folder into:
+
+   ```text
+   <vault>/.obsidian/plugins/
+   ```
+
+   The final structure must be:
+
+   ```text
+   <vault>/.obsidian/plugins/
+   ├── audio-timestamp-player/
+   │   ├── main.js
+   │   ├── manifest.json
+   │   └── styles.css
+   └── other-plugin-folders/
    ```
 
 4. Open **Settings → Community plugins**.
@@ -106,7 +122,9 @@ manifest.json
 styles.css
 ```
 
-`main.js` is generated from the TypeScript source and is not committed directly to Git. When a formal GitHub release is created, the included release workflow builds the plugin again and uploads `main.js`, `manifest.json`, and `styles.css` as downloadable release assets. Regular users download those files and do not build the plugin themselves.
+`main.js` is generated from the TypeScript source and is not committed directly to Git. When a formal GitHub release is created, the included workflow builds the plugin, places `main.js`, `manifest.json`, and `styles.css` in an `audio-timestamp-player` folder, and packages that folder as `audio-timestamp-player.zip`. Regular users only download the archive, extract it, and copy the complete folder.
+
+The release also keeps `main.js`, `manifest.json`, and `styles.css` as individual assets for the official Obsidian community plugin release and validation process. Regular users can ignore those individual assets.
 
 ## Privacy
 
