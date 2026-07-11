@@ -4,6 +4,14 @@
 	"description": "Jump to and play audio from timestamp links in Obsidian notes.",
 	"main": "main.js",
 	"type": "module",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/ITNQ18/obsidian-audio-timestamp-player.git"
+	},
+	"bugs": {
+		"url": "https://github.com/ITNQ18/obsidian-audio-timestamp-player/issues"
+	},
+	"homepage": "https://github.com/ITNQ18/obsidian-audio-timestamp-player#readme",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
