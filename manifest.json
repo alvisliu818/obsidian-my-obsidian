@@ -1,0 +1,9 @@
+{
+	"id": "audio-timestamp-player",
+	"name": "Audio Timestamp Player",
+	"version": "1.0.0",
+	"minAppVersion": "1.5.0",
+	"description": "Play audio embeds from clickable transcript timestamps.",
+	"author": "IT039",
+	"isDesktopOnly": false
+}
