@@ -39,28 +39,45 @@ The plugin uses the first supported audio embed in the active note. Keep each tr
 
 ## Installation
 
-### Manual installation
+Regular users do not need Node.js and do not need to run `npm install` or `npm run build`.
+
+### Option 1: Install from Obsidian Community plugins
+
+After the plugin is accepted into the official Obsidian Community plugins catalog:
+
+1. Open **Settings → Community plugins** in Obsidian.
+2. Select **Browse**.
+3. Search for **Audio Timestamp Player**.
+4. Select **Install**, then select **Enable**.
+
+> The plugin only appears in Community plugin search after it is published in a public GitHub repository and accepted into the official Obsidian community catalog.
+
+### Option 2: Install from a GitHub release
 
 1. Download `main.js`, `manifest.json`, and `styles.css` from the latest release.
-2. Create this folder inside your vault:
+   Do not use GitHub's automatically generated `Source code.zip` as a replacement for these files.
+2. Create the following folder inside the target Obsidian vault:
 
    ```text
    <vault>/.obsidian/plugins/audio-timestamp-player/
    ```
 
-3. Copy the three release files into that folder.
-4. Open **Settings → Community plugins**, reload the installed plugins, and enable **Audio Timestamp Player**.
+3. Put the downloaded files directly in that folder. The final structure must be:
 
-### Development installation
+   ```text
+   audio-timestamp-player/
+   ├── main.js
+   ├── manifest.json
+   └── styles.css
+   ```
 
-```bash
-npm install
-npm run build
-```
-
-Copy `main.js`, `manifest.json`, and `styles.css` to the plugin folder shown above.
+4. Open **Settings → Community plugins**.
+5. Refresh the installed plugin list. If the plugin does not appear, fully restart Obsidian.
+6. Find and enable **Audio Timestamp Player**.
 
 ## Development
+
+This section is only for developers who want to modify the source code or build the plugin themselves. Regular users can skip it.
 
 Requirements:
 
@@ -76,7 +93,20 @@ npm run lint
 npm run build
 ```
 
-The production build is generated at the project root as `main.js`. Build artifacts are excluded from Git and attached to GitHub releases by the release workflow.
+- `npm install` downloads the development dependencies. It is normally required once after obtaining the source code.
+- `npm run dev` watches the source files and rebuilds automatically during development.
+- `npm run lint` checks the TypeScript and Obsidian plugin coding rules.
+- `npm run build` type-checks the project and generates the production `main.js` file.
+
+After `npm run build`, developers can copy these files to a test vault's plugin folder:
+
+```text
+main.js
+manifest.json
+styles.css
+```
+
+`main.js` is generated from the TypeScript source and is not committed directly to Git. When a formal GitHub release is created, the included release workflow builds the plugin again and uploads `main.js`, `manifest.json`, and `styles.css` as downloadable release assets. Regular users download those files and do not build the plugin themselves.
 
 ## Privacy
 

@@ -39,28 +39,51 @@
 
 ## 安装
 
-### 手动安装
+普通用户不需要安装 Node.js，不需要运行 `npm install` 或 `npm run build`。
+
+### 方法一：从 Obsidian 社区插件安装
+
+当本插件被 Obsidian 官方社区插件目录收录后，可以直接安装：
+
+1. 打开 Obsidian 的 **设置 → 第三方插件**。
+2. 选择 **浏览**。
+3. 搜索 **Audio Timestamp Player**。
+4. 选择 **安装**，然后选择 **启用**。
+
+> 当前项目只有在发布到公开 GitHub 仓库，并向 Obsidian 官方社区插件目录提交申请且审核通过后，才会出现在社区插件搜索结果中。
+
+### 方法二：从 GitHub Release 手动安装
 
 1. 从最新 GitHub Release 下载 `main.js`、`manifest.json` 和 `styles.css`。
-2. 在 Obsidian 仓库中创建以下文件夹：
+   不要下载 GitHub 自动生成的 `Source code.zip` 代替这三个文件。
+2. 在需要安装插件的 Obsidian 仓库中创建以下文件夹：
 
    ```text
    <仓库>/.obsidian/plugins/audio-timestamp-player/
    ```
 
-3. 将三个发布文件复制到该文件夹。
-4. 打开 **设置 → 第三方插件**，刷新已安装插件，然后启用 **Audio Timestamp Player**。
+   例如，本机 Notes 仓库的完整路径是：
 
-### 开发版安装
+   ```text
+   E:\Aa-works\Notes\.obsidian\plugins\audio-timestamp-player\
+   ```
 
-```bash
-npm install
-npm run build
-```
+3. 将下载的三个文件直接放入 `audio-timestamp-player` 文件夹。最终结构应为：
 
-将生成的 `main.js`、`manifest.json` 和 `styles.css` 复制到上述插件文件夹。
+   ```text
+   audio-timestamp-player/
+   ├── main.js
+   ├── manifest.json
+   └── styles.css
+   ```
+
+4. 打开 Obsidian 的 **设置 → 第三方插件**。
+5. 选择已安装插件列表旁边的刷新按钮；如果没有出现插件，也可以完全退出并重新打开 Obsidian。
+6. 找到 **Audio Timestamp Player** 并启用。
 
 ## 开发
+
+本节只适用于需要修改插件源码、参与开发或自行构建插件的开发者。普通用户可以跳过本节。
 
 环境要求：
 
@@ -76,7 +99,20 @@ npm run lint
 npm run build
 ```
 
-生产构建会在项目根目录生成 `main.js`。构建产物不会提交到 Git，而会由发布工作流附加到 GitHub Release。
+- `npm install`：下载项目的开发依赖，通常在第一次获取源码后执行一次。
+- `npm run dev`：进入开发监听模式，源码修改后自动重新构建。
+- `npm run lint`：检查代码是否符合 TypeScript 和 Obsidian 插件规范。
+- `npm run build`：执行类型检查并生成正式版本的 `main.js`。
+
+`npm run build` 完成后，项目根目录会出现 `main.js`。开发者可以把以下三个文件复制到测试仓库的插件目录：
+
+```text
+main.js
+manifest.json
+styles.css
+```
+
+`main.js` 是由 TypeScript 源码生成的构建文件，不直接提交到 Git 仓库。创建正式 GitHub Release 时，项目自带的发布工作流会重新构建插件，并把 `main.js`、`manifest.json` 和 `styles.css` 作为可下载附件上传。普通用户只需要下载这些附件，不需要自己构建。
 
 ## 隐私
 
