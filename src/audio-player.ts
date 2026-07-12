@@ -81,6 +81,7 @@ export class AudioPlayerManager {
 		);
 		if (action === 'pause') this.audioEl?.pause();
 		if (action === 'close') this.close();
+		else this.attachToActiveLeaf(this.context.ownerDocument);
 	}
 
 	invalidateAudioIndex(path?: string): void {
@@ -115,8 +116,11 @@ export class AudioPlayerManager {
 		}
 
 		this.close();
+		const activeLeaf = ownerDocument.querySelector<HTMLElement>(
+			'.workspace-leaf.mod-active',
+		);
 		const workspace = ownerDocument.querySelector<HTMLElement>('.workspace');
-		const host = workspace ?? ownerDocument.body;
+		const host = activeLeaf ?? workspace ?? ownerDocument.body;
 		const container = host.createDiv({ cls: 'audio-timestamp-persistent-player' });
 		container.setAttribute('role', 'region');
 		container.setAttribute('aria-label', 'Audio timestamp player');
@@ -141,6 +145,16 @@ export class AudioPlayerManager {
 		this.containerEl = container;
 		this.audioEl = audio;
 		return audio;
+	}
+
+	private attachToActiveLeaf(ownerDocument: Document): void {
+		const activeLeaf = ownerDocument.querySelector<HTMLElement>(
+			'.workspace-leaf.mod-active',
+		);
+		const container = this.containerEl;
+		if (activeLeaf && container && container.parentElement !== activeLeaf) {
+			activeLeaf.appendChild(container);
+		}
 	}
 
 	private async getAudioBindings(note: TFile): Promise<AudioBinding[]> {
