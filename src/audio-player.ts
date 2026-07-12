@@ -1,52 +1,104 @@
-import { App, TFile } from 'obsidian';
+import { App, Notice, TFile } from 'obsidian';
 
 const AUDIO_EMBED_PATTERN = /!\[\[([^\]|#]+\.(?:mp3|wav|m4a|ogg|flac))(?:[^\]]*)\]\]/i;
 
-export function findVisiblePlayer(container: ParentNode): HTMLAudioElement | null {
-	const players = Array.from(container.querySelectorAll('audio'));
-	return players.find((audio) => {
-		const style = activeWindow.getComputedStyle(audio);
-		return (
-			audio.isConnected &&
-			audio.getClientRects().length > 0 &&
-			style.display !== 'none' &&
-			style.visibility !== 'hidden'
+export class AudioPlayerManager {
+	private containerEl: HTMLDivElement | null = null;
+	private audioEl: HTMLAudioElement | null = null;
+	private currentAudioPath: string | null = null;
+
+	constructor(private readonly app: App) {}
+
+	async play(note: TFile, seconds: number, view: HTMLElement): Promise<void> {
+		const audioFile = await this.findAudioFile(note);
+		if (!audioFile) {
+			new Notice('No embedded audio file was found in the current note.');
+			return;
+		}
+
+		const player = this.ensurePlayer();
+		this.pauseNativePlayers(view, player);
+
+		if (this.currentAudioPath !== audioFile.path) {
+			this.currentAudioPath = audioFile.path;
+			player.src = this.app.vault.getResourcePath(audioFile);
+			player.load();
+		}
+
+		await this.waitForMetadata(player);
+		if (player.readyState < HTMLMediaElement.HAVE_METADATA) return;
+
+		player.currentTime = Math.min(
+			seconds,
+			Number.isFinite(player.duration) ? player.duration : seconds,
 		);
-	}) ?? null;
-}
+		try {
+			await player.play();
+		} catch {
+			new Notice('Playback was blocked. Select the timestamp again.');
+		}
+	}
 
-export async function createPersistentPlayer(
-	app: App,
-	container: HTMLElement,
-	note: TFile,
-): Promise<HTMLAudioElement | null> {
-	const existing = container.querySelector<HTMLAudioElement>(
-		'audio.audio-timestamp-persistent-audio',
-	);
-	if (existing) return existing;
+	destroy(): void {
+		this.audioEl?.pause();
+		this.containerEl?.remove();
+		this.audioEl = null;
+		this.containerEl = null;
+		this.currentAudioPath = null;
+	}
 
-	const content = await app.vault.cachedRead(note);
-	const match = AUDIO_EMBED_PATTERN.exec(content);
-	if (!match) return null;
-	const audioLink = match[1];
-	if (!audioLink) return null;
+	private ensurePlayer(): HTMLAudioElement {
+		if (this.audioEl?.isConnected) return this.audioEl;
 
-	const audioFile = app.metadataCache.getFirstLinkpathDest(audioLink, note.path);
-	if (!audioFile) return null;
+		const workspace = activeDocument.querySelector<HTMLElement>('.workspace');
+		const container = activeDocument.createDiv({ cls: 'audio-timestamp-persistent-player' });
+		container.setAttribute('role', 'region');
+		container.setAttribute('aria-label', 'Audio timestamp player');
 
-	const bar = container.createDiv({ cls: 'audio-timestamp-persistent-player' });
-	const label = bar.createDiv({
-		cls: 'audio-timestamp-persistent-label',
-		text: 'Audio',
-	});
-	const audio = bar.createEl('audio', {
-		cls: 'audio-timestamp-persistent-audio',
-	});
-	audio.controls = true;
-	audio.preload = 'metadata';
-	audio.src = app.vault.getResourcePath(audioFile);
+		const label = activeDocument.createDiv({
+			cls: 'audio-timestamp-persistent-label',
+			text: 'Audio',
+		});
 
-	bar.append(label, audio);
-	container.prepend(bar);
-	return audio;
+		const audio = activeDocument.createEl('audio', {
+			cls: 'audio-timestamp-persistent-audio',
+		});
+		audio.controls = true;
+		audio.preload = 'metadata';
+
+		container.append(label, audio);
+		(workspace ?? activeDocument.body).append(container);
+		this.containerEl = container;
+		this.audioEl = audio;
+		return audio;
+	}
+
+	private async findAudioFile(note: TFile): Promise<TFile | null> {
+		const content = await this.app.vault.cachedRead(note);
+		const match = AUDIO_EMBED_PATTERN.exec(content);
+		const audioLink = match?.[1];
+		if (!audioLink) return null;
+		return this.app.metadataCache.getFirstLinkpathDest(audioLink, note.path);
+	}
+
+	private pauseNativePlayers(view: HTMLElement, persistentPlayer: HTMLAudioElement): void {
+		for (const player of Array.from(view.querySelectorAll<HTMLAudioElement>('audio'))) {
+			if (player !== persistentPlayer) player.pause();
+		}
+	}
+
+	private async waitForMetadata(player: HTMLAudioElement): Promise<void> {
+		if (player.readyState >= HTMLMediaElement.HAVE_METADATA) return;
+
+		await new Promise<void>((resolve, reject) => {
+			player.addEventListener('loadedmetadata', () => resolve(), { once: true });
+			player.addEventListener(
+				'error',
+				() => reject(new Error('Audio metadata failed to load.')),
+				{ once: true },
+			);
+		}).catch(() => {
+			new Notice('The audio file could not be loaded.');
+		});
+	}
 }

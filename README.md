@@ -9,8 +9,9 @@ Audio Timestamp Player is an Obsidian community plugin for transcripts, intervie
 - Seek and play audio from timestamp links.
 - Support `MM:SS` and `HH:MM:SS` timestamps.
 - Work in Reading view and Live Preview.
+- Recognize timestamp links while editing in Source mode.
 - Support MP3, WAV, M4A, OGG, and FLAC embeds.
-- Create a sticky player when Obsidian unloads an off-screen audio embed in a long note.
+- Keep one plugin-level floating player alive across view-mode changes, long-note scrolling, and pane rerenders.
 - Run entirely locally without telemetry or network requests.
 
 ## Usage
@@ -105,12 +106,14 @@ Commands:
 ```bash
 npm install
 npm run dev
+npm test
 npm run lint
 npm run build
 ```
 
 - `npm install` downloads the development dependencies. It is normally required once after obtaining the source code.
 - `npm run dev` watches the source files and rebuilds automatically during development.
+- `npm test` runs timestamp parsing and Source-mode link regression tests.
 - `npm run lint` checks the TypeScript and Obsidian plugin coding rules.
 - `npm run build` type-checks the project and generates the production `main.js` file.
 
@@ -125,6 +128,8 @@ styles.css
 `main.js` is generated from the TypeScript source and is not committed directly to Git. When a formal GitHub release is created, the included workflow builds the plugin, places `main.js`, `manifest.json`, and `styles.css` in an `audio-timestamp-player` folder, and packages that folder as `audio-timestamp-player.zip`. Regular users only download the archive, extract it, and copy the complete folder.
 
 The release also keeps `main.js`, `manifest.json`, and `styles.css` as individual assets for the official Obsidian community plugin release and validation process. Regular users can ignore those individual assets.
+
+See [TESTING.md](TESTING.md) for the automated checks and the manual regression checklist covering mode switching, long notes, multiple panes, and continuous seeking.
 
 ## Privacy
 

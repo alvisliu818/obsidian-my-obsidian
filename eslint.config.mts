@@ -29,4 +29,11 @@ export default defineConfig(
 		},
 	},
 	...obsidianmd.configs.recommended,
+	{
+		files: ['tests/**/*.ts'],
+		rules: {
+			'@typescript-eslint/no-floating-promises': 'off',
+			'obsidianmd/no-nodejs-modules': 'off',
+		},
+	},
 );

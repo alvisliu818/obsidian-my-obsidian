@@ -9,8 +9,9 @@
 - 点击时间码后跳转并播放音频。
 - 支持 `MM:SS` 和 `HH:MM:SS` 两种时间格式。
 - 支持阅读视图和实时预览。
+- 在源码模式编辑 Markdown 时也能识别时间码链接。
 - 支持 MP3、WAV、M4A、OGG 和 FLAC 音频嵌入。
-- 当 Obsidian 在长笔记中卸载屏幕外的音频播放器时，自动创建一个置顶播放器。
+- 使用插件级悬浮播放器，在视图模式切换、长笔记滚动和分栏重渲染时保持播放状态。
 - 完全在本地运行，不包含遥测，也不发起网络请求。
 
 ## 使用方法
@@ -112,12 +113,14 @@
 ```bash
 npm install
 npm run dev
+npm test
 npm run lint
 npm run build
 ```
 
 - `npm install`：下载项目的开发依赖，通常在第一次获取源码后执行一次。
 - `npm run dev`：进入开发监听模式，源码修改后自动重新构建。
+- `npm test`：运行时间码解析和源码模式链接识别回归测试。
 - `npm run lint`：检查代码是否符合 TypeScript 和 Obsidian 插件规范。
 - `npm run build`：执行类型检查并生成正式版本的 `main.js`。
 
@@ -132,6 +135,8 @@ styles.css
 `main.js` 是由 TypeScript 源码生成的构建文件，不直接提交到 Git 仓库。创建正式 GitHub Release 时，项目自带的发布工作流会重新构建插件，将 `main.js`、`manifest.json` 和 `styles.css` 放入 `audio-timestamp-player` 文件夹，再自动生成 `audio-timestamp-player.zip`。普通用户只需要下载这个压缩包、解压并复制整个文件夹，不需要自己构建。
 
 Release 中仍会同时保留 `main.js`、`manifest.json` 和 `styles.css` 三个独立附件，用于满足 Obsidian 官方社区插件的发布和校验要求；普通用户可以忽略这些独立附件。
+
+自动检查和人工回归清单见 [TESTING.md](TESTING.md)，覆盖模式切换、长笔记、多分栏和连续跳播场景。
 
 ## 隐私
 

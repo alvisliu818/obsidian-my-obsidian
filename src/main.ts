@@ -1,9 +1,13 @@
 import { Plugin } from 'obsidian';
+import { AudioPlayerManager } from './audio-player';
 import { TimestampController } from './timestamp-controller';
 
 export default class AudioTimestampPlayerPlugin extends Plugin {
+	private playerManager: AudioPlayerManager | null = null;
+
 	onload(): void {
-		const controller = new TimestampController(this.app);
+		this.playerManager = new AudioPlayerManager(this.app);
+		const controller = new TimestampController(this.app, this.playerManager);
 
 		this.registerDomEvent(
 			activeDocument,
@@ -13,5 +17,10 @@ export default class AudioTimestampPlayerPlugin extends Plugin {
 			},
 			true,
 		);
+	}
+
+	onunload(): void {
+		this.playerManager?.destroy();
+		this.playerManager = null;
 	}
 }
