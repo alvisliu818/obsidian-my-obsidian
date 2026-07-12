@@ -38,7 +38,7 @@ export class TimestampController {
 		event.preventDefault();
 		event.stopPropagation();
 		event.stopImmediatePropagation();
-		await this.playerManager.play(note, timestamp.seconds, view);
+		await this.playerManager.play(note, timestamp.seconds, timestamp.audioId, view);
 	}
 
 	private findNote(view: HTMLElement): TFile | null {

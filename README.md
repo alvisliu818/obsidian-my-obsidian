@@ -10,8 +10,10 @@ Audio Timestamp Player is an Obsidian community plugin for transcripts, intervie
 - Support `MM:SS` and `HH:MM:SS` timestamps.
 - Work in Reading view and Live Preview.
 - Recognize timestamp links while editing in Source mode.
+- Bind timestamps explicitly to multiple recordings in the same note.
 - Support MP3, WAV, M4A, OGG, and FLAC embeds.
-- Keep one plugin-level floating player alive across view-mode changes, long-note scrolling, and pane rerenders.
+- Keep a top-centered floating player alive across view-mode changes, long-note scrolling, and pane rerenders.
+- Continue, pause, or close the player when switching pages, with continue as the default.
 - Run entirely locally without telemetry or network requests.
 
 ## Usage
@@ -25,18 +27,38 @@ Embed an audio file in the note:
 Add timestamp links using the following format:
 
 ```markdown
-[00:13](#audio-timestamp=00:13) Speaker 1: Welcome to the meeting.
-[05:22](#audio-timestamp=05:22) Speaker 2: Let us review the proposal.
-[01:05:30](#audio-timestamp=01:05:30) Speaker 1: Closing remarks.
+[00:13](#audio-time=00:13) Speaker 1: Welcome to the meeting.
+[05:22](#audio-time=05:22) Speaker 2: Let us review the proposal.
+[01:05:30](#audio-time=01:05:30) Speaker 1: Closing remarks.
 ```
 
 If you want square brackets to appear around the timestamp, escape them in the link label:
 
 ```markdown
-[\[00:13\]](#audio-timestamp=00:13)
+[\[00:13\]](#audio-time=00:13)
 ```
 
-The plugin uses the first supported audio embed in the active note. Keep each transcript and its recording in the same note when possible.
+For multiple recordings, assign a stable alias on the same line as each embed and reference it from the timestamp:
+
+```markdown
+![[interview-part-1.mp3]] %%audio-id: part1%%
+![[interview-part-2.mp3]] %%audio-id: part2%%
+
+[\[00:13\]](#audio-time=00:13&audio=part1)
+[\[00:13\]](#audio-time=00:13&audio=part2)
+```
+
+Aliases use 1-32 letters, numbers, hyphens, or underscores and are case-insensitive. A note with one recording may omit `audio`. A note with multiple recordings must specify it so playback is never routed to the wrong file.
+
+## Settings
+
+**When switching pages** controls what happens after opening another note, image, PDF, canvas, or empty tab:
+
+- **Continue playback** (default) preserves the current playing or paused state.
+- **Pause playback** pauses audio but keeps the player available.
+- **Close player** stops playback and removes the player.
+
+The close button on the player always stops playback, releases the media, and removes the floating bar.
 
 ## Installation
 

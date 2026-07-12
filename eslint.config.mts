@@ -36,4 +36,10 @@ export default defineConfig(
 			'obsidianmd/no-nodejs-modules': 'off',
 		},
 	},
+	{
+		files: ['src/settings.ts'],
+		rules: {
+			'obsidianmd/settings-tab/prefer-setting-definitions': 'off',
+		},
+	},
 );
