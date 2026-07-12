@@ -16,7 +16,14 @@ export class TimestampController {
 
 		const timestampTarget = findTimestampTarget(event, targetElement);
 		if (!timestampTarget) return;
+		await this.handleTimestampTarget(event, targetElement, timestampTarget);
+	}
 
+	async handleTimestampTarget(
+		event: MouseEvent,
+		targetElement: Element,
+		timestampTarget: string,
+	): Promise<void> {
 		const timestamp = parseTimestamp(timestampTarget);
 		if (!timestamp) return;
 
@@ -30,6 +37,7 @@ export class TimestampController {
 
 		event.preventDefault();
 		event.stopPropagation();
+		event.stopImmediatePropagation();
 		await this.playerManager.play(note, timestamp.seconds, view);
 	}
 

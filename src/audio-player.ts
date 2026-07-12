@@ -51,23 +51,22 @@ export class AudioPlayerManager {
 		if (this.audioEl?.isConnected) return this.audioEl;
 
 		const workspace = activeDocument.querySelector<HTMLElement>('.workspace');
-		const container = activeDocument.createDiv({ cls: 'audio-timestamp-persistent-player' });
+		const host = workspace ?? activeDocument.body;
+		const container = host.createDiv({ cls: 'audio-timestamp-persistent-player' });
 		container.setAttribute('role', 'region');
 		container.setAttribute('aria-label', 'Audio timestamp player');
 
-		const label = activeDocument.createDiv({
+		container.createDiv({
 			cls: 'audio-timestamp-persistent-label',
 			text: 'Audio',
 		});
 
-		const audio = activeDocument.createEl('audio', {
+		const audio = container.createEl('audio', {
 			cls: 'audio-timestamp-persistent-audio',
 		});
 		audio.controls = true;
 		audio.preload = 'metadata';
 
-		container.append(label, audio);
-		(workspace ?? activeDocument.body).append(container);
 		this.containerEl = container;
 		this.audioEl = audio;
 		return audio;

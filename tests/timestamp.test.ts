@@ -32,3 +32,9 @@ test('selects the correct link when a source line contains multiple links', () =
 	assert.equal(findMarkdownLinkTarget(line, 4), 'https://example.com');
 	assert.equal(findMarkdownLinkTarget(line, 35), '#audio-timestamp=05:22');
 });
+
+test('maps the end of a rendered editor link back to its Markdown target', () => {
+	const line = '[\\[00:55\\]](#audio-timestamp=00:55) Speaker: Test.';
+	const linkEnd = line.indexOf(')');
+	assert.equal(findMarkdownLinkTarget(line, linkEnd), '#audio-timestamp=00:55');
+});
