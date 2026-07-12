@@ -2,16 +2,17 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Audio Timestamp Player is an Obsidian community plugin for transcripts, interviews, lectures, podcasts, and meeting notes. Select a timestamp link to seek an embedded audio file and start playback immediately.
+Audio Timestamp Player is an Obsidian community plugin for transcripts, interviews, lectures, podcasts, meeting notes, and video notes. Select a timestamp link to seek an embedded audio or video file and start playback immediately.
 
 ## Features
 
-- Seek and play audio from timestamp links.
+- Seek and play audio or video from timestamp links.
 - Support `MM:SS` and `HH:MM:SS` timestamps.
 - Work in Reading view and Live Preview.
 - Recognize timestamp links while editing in Source mode.
 - Bind timestamps explicitly to multiple recordings in the same note.
 - Support MP3, WAV, M4A, OGG, and FLAC embeds.
+- Support MP4, WebM, OGV, MOV, and M4V video embeds.
 - Keep a top-centered floating player alive across view-mode changes, long-note scrolling, and pane rerenders.
 - Continue, pause, or close the player when switching pages, with continue as the default.
 - Run entirely locally without telemetry or network requests.
@@ -50,15 +51,35 @@ For multiple recordings, assign a stable alias on the same line as each embed an
 
 Aliases use 1-32 letters, numbers, hyphens, or underscores and are case-insensitive. A note with one recording may omit `audio`. A note with multiple recordings must specify it so playback is never routed to the wrong file.
 
+For video, use the parallel `video-time`, `video-id`, and `video` syntax:
+
+```markdown
+![[demo-part-1.mp4]] %%video-id: part1%%
+![[demo-part-2.webm]] %%video-id: part2%%
+
+[\[00:13\]](#video-time=00:13&video=part1)
+[\[00:13\]](#video-time=00:13&video=part2)
+```
+
+A single embedded video may omit the `video` parameter. Multiple videos require an explicit alias.
+
 ## Settings
 
-**When switching pages** controls what happens after opening another note, image, PDF, canvas, or empty tab:
+The settings page has separate **Audio** and **Video** sections. Each **When switching pages** setting controls what happens after opening another note, image, PDF, canvas, or empty tab:
 
 - **Continue playback** (default) preserves the current playing or paused state.
 - **Pause playback** pauses audio but keeps the player available.
 - **Close player** stops playback and removes the player.
 
-The close button on the player always stops playback, releases the media, and removes the floating bar.
+**Video player display** chooses compact controls or an expanded player that shows the video picture. The expanded player starts at a compact 480 × 320 px size. An external double-corner handle resizes it while preserving the video's original aspect ratio, and the last size is remembered. The handle is enabled by default and can be disabled in settings; settings also provide a reset button.
+
+**Language** changes only this plugin's interface and notices:
+
+- **Follow Obsidian** uses Simplified Chinese for Chinese Obsidian locales and English for every other Obsidian language.
+- **简体中文** always displays this plugin in Simplified Chinese.
+- **English** always displays this plugin in English.
+
+Changing the plugin language never changes Obsidian's own language. The close button on the player always stops playback, releases the media, and removes the floating bar.
 
 ## Installation
 

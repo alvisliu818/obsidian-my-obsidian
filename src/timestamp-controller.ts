@@ -1,12 +1,12 @@
 import { App, MarkdownView, TFile } from 'obsidian';
-import { AudioPlayerManager } from './audio-player';
+import { MediaPlayerManager } from './media-player';
 import { findTimestampTarget } from './timestamp-target';
 import { parseTimestamp } from './timestamp';
 
 export class TimestampController {
 	constructor(
 		private readonly app: App,
-		private readonly playerManager: AudioPlayerManager,
+		private readonly playerManager: MediaPlayerManager,
 	) {}
 
 	async handleClick(event: MouseEvent): Promise<void> {
@@ -38,7 +38,13 @@ export class TimestampController {
 		event.preventDefault();
 		event.stopPropagation();
 		event.stopImmediatePropagation();
-		await this.playerManager.play(note, timestamp.seconds, timestamp.audioId, view);
+		await this.playerManager.play(
+			note,
+			timestamp.seconds,
+			timestamp.mediaType,
+			timestamp.mediaId,
+			view,
+		);
 	}
 
 	private findNote(view: HTMLElement): TFile | null {

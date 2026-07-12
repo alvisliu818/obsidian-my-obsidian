@@ -1,7 +1,7 @@
 {
 	"name": "obsidian-audio-timestamp-player",
-	"version": "1.1.1",
-	"description": "Jump to and play audio from timestamp links in Obsidian notes.",
+	"version": "1.2.0",
+	"description": "Jump to and play audio or video from timestamp links in Obsidian notes.",
 	"main": "main.js",
 	"type": "module",
 	"repository": {
@@ -23,6 +23,7 @@
 		"obsidian",
 		"obsidian-plugin",
 		"audio",
+		"video",
 		"timestamp",
 		"transcript"
 	],

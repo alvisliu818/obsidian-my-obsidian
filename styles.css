@@ -1,5 +1,7 @@
 a[href*="#audio-time="],
-a.internal-link[data-href*="#audio-time="] {
+a.internal-link[data-href*="#audio-time="],
+a[href*="#video-time="],
+a.internal-link[data-href*="#video-time="] {
 	cursor: pointer;
 	font-variant-numeric: tabular-nums;
 }
@@ -50,11 +52,101 @@ a.internal-link[data-href*="#audio-time="] {
 	font-weight: var(--font-normal);
 }
 
-.audio-timestamp-persistent-audio {
+.audio-timestamp-persistent-media {
 	flex: 1 1 auto;
 	width: 100%;
 	height: 2rem;
 	min-width: 10rem;
+}
+
+.audio-timestamp-persistent-player.is-video-expanded {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	grid-template-rows: auto minmax(0, 1fr);
+	min-width: 20rem;
+	min-height: 12rem;
+	max-width: calc(100% - 1.5rem);
+	max-height: calc(100% - var(--header-height, 40px) - 1.5rem);
+	overflow: visible;
+}
+
+.audio-timestamp-video-resize-handle {
+	position: absolute;
+	right: -3px;
+	bottom: -3px;
+	z-index: 2;
+	width: 11px;
+	height: 11px;
+	padding: 0;
+	border: 0 !important;
+	border-radius: 0 !important;
+	background: transparent;
+	box-shadow: none !important;
+	cursor: nwse-resize;
+	touch-action: none;
+}
+
+.audio-timestamp-video-resize-handle::before,
+.audio-timestamp-video-resize-handle::after {
+	position: absolute;
+	content: '';
+	border-right: 2px solid var(--text-muted);
+	border-bottom: 2px solid var(--text-muted);
+	border-radius: 0 0 1px;
+	transition: border-color 120ms ease, transform 120ms ease;
+}
+
+.audio-timestamp-video-resize-handle::before {
+	right: 4px;
+	bottom: 4px;
+	width: 10px;
+	height: 10px;
+}
+
+.audio-timestamp-video-resize-handle::after {
+	right: 0;
+	bottom: 0;
+	width: 10px;
+	height: 10px;
+}
+
+.audio-timestamp-video-resize-handle:hover::before,
+.audio-timestamp-video-resize-handle:hover::after,
+.audio-timestamp-video-resize-handle:focus-visible::before,
+.audio-timestamp-video-resize-handle:focus-visible::after {
+	border-color: var(--interactive-accent);
+}
+
+.audio-timestamp-video-resize-handle:active::before,
+.audio-timestamp-video-resize-handle:active::after {
+	transform: translate(1px, 1px);
+}
+
+.audio-timestamp-video-resize-handle.is-hidden {
+	display: none;
+}
+
+.audio-timestamp-persistent-player.is-video-expanded
+	.audio-timestamp-persistent-label {
+	grid-column: 1;
+	grid-row: 1;
+}
+
+.audio-timestamp-persistent-player.is-video-expanded
+	.audio-timestamp-persistent-video {
+	grid-column: 1 / -1;
+	grid-row: 2;
+	height: 100%;
+	min-height: 0;
+	max-height: 100%;
+	background: #000;
+	object-fit: contain;
+}
+
+.audio-timestamp-persistent-player.is-video-expanded
+	.audio-timestamp-close-button {
+	grid-column: 2;
+	grid-row: 1;
 }
 
 .audio-timestamp-close-button {
