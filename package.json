@@ -1,0 +1,39 @@
+{
+  "name": "obsidian-logseq",
+  "version": "0.1.0",
+  "description": "Logseq-style block outliner editor replacing the native Obsidian markdown editor",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node esbuild.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.mjs production",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "playwright test -c tests/e2e/playwright.config.ts"
+  },
+  "keywords": [
+    "obsidian",
+    "logseq",
+    "outliner",
+    "block-editor"
+  ],
+  "author": "alvisliu",
+  "license": "MIT",
+  "devDependencies": {
+    "builtin-modules": "^3.3.0",
+    "esbuild": "^0.21.5",
+    "obsidian": "^1.5.7",
+    "tslib": "^2.6.3",
+    "typescript": "^5.5.4",
+    "vitest": "^2.1.9"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.18.0",
+    "@codemirror/commands": "^6.6.0",
+    "@codemirror/lang-markdown": "^6.3.0",
+    "@codemirror/language": "^6.10.2",
+    "@codemirror/state": "^6.4.1",
+    "@codemirror/view": "^6.34.0",
+    "@lezer/highlight": "^1.2.1"
+  }
+}
