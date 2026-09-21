@@ -7,6 +7,7 @@
 import { Notice, TFile, normalizePath } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import { expandTemplates, formatDate } from './template';
+import { logOp } from './logger';
 
 interface DailyNotesCoreOptions {
   folder?: string;
@@ -49,8 +50,10 @@ export async function openJournal(plugin: LogseqEditorPlugin): Promise<void> {
   if (!f) {
     try {
       f = await plugin.app.vault.create(path, expandTemplates(plugin.settings.journalTemplate || ''));
+      logOp(plugin, 'journal.create', path, 'ok');
       new Notice(`Created journal: ${path}`);
     } catch (e) {
+      logOp(plugin, 'journal.create', path, 'error', String(e));
       new Notice(`Failed to create journal: ${String(e)}`);
       return;
     }

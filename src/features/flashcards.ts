@@ -53,12 +53,9 @@ export async function applyReview(
   const next = review(stateFromProps(block.props), grade);
   stateToProps(next, block.props);
 
-  try {
-    await app.vault.modify(f, serializeDocument(doc));
-  } catch (e) {
-    new Notice(`Failed to save review: ${String(e)}`);
-    return false;
-  }
+  // Guarded write: automatic backup + operation log (v0.2.0 safety layer).
+  const ok = await plugin.backups.safeProcess(f, () => serializeDocument(doc), 'srs.review');
+  if (!ok) return false;
 
   // Reload any open editor view of this file so our own write is not treated
   // as a conflicting external change (and stale in-memory state is dropped).

@@ -53,6 +53,7 @@ import { autocompleteSources } from '../features/links';
 import { PageSearchBar } from '../features/pageSearch';
 import { ConflictModal } from '../features/conflictModal';
 import { expandTemplates, parseVarLines, type TemplateContext } from '../features/template';
+import { logOp } from '../features/logger';
 
 export const VIEW_TYPE_BLOCK_EDITOR = 'logseq-block-editor';
 
@@ -487,7 +488,14 @@ export class BlockEditorView extends TextFileView {
     const b = root ? blockAtPath(root, path) : null;
     if (!b || b.text === text) return;
     b.text = text;
-    await this.app.vault.modify(file, serializeDocument(doc));
+    // Guarded write: backup + log (v0.2.0) — cross-file embed edits are
+    // real disk writes and must be recoverable.
+    const ok = await this.plugin.backups.safeProcess(
+      file,
+      () => serializeDocument(doc),
+      'blocks.embedEdit',
+    );
+    if (!ok) return;
   }
 
   /** Apply a text change made outside this view (e.g. an in-place embed edit). */
@@ -921,6 +929,11 @@ export class BlockEditorView extends TextFileView {
   }
 
   private markDirty(): void {
+    logOp(this.plugin, 'blocks.edit', this.file?.path ?? '', 'ok');
+    // First plugin-session write to this file: snapshot the on-disk original
+    // (fire-and-forget; the debounced save gives it time to land).
+    const f = this.file;
+    if (f) void this.plugin.backups.ensureSessionBackup(f);
     this.requestSave(); // native: sets dirty + debounced save (2s)
   }
 

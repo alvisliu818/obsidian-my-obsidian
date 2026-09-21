@@ -14,10 +14,20 @@ import { BlockSearchModal } from './panels/blockSearch';
 import { FlashcardPanelView, VIEW_TYPE_FLASHCARD_PANEL } from './panels/flashcardPanel';
 import { BlockGraphModal } from './panels/blockGraph';
 import { openJournal } from './features/dailyNote';
+import { BackupManager } from './core/backup';
+import { loadOpLog, logOp, flushOpLog } from './features/logger';
+import { OpLogModal } from './features/opLogModal';
+import { BackupRestoreModal } from './features/backupModal';
+import type { OperationRecord } from './core/operationLog';
 
 export default class LogseqEditorPlugin extends Plugin {
   settings: BlockEditorSettings = DEFAULT_SETTINGS;
   blockIndex: BlockIndex | null = null;
+  /** Automatic pre-write backups for user-visible .md files. */
+  backups: BackupManager = new BackupManager(this);
+  /** In-memory operation log ring (newest last) + pending disk appends. */
+  opLog: OperationRecord[] = [];
+  opLogPending: OperationRecord[] = [];
   /** Set when a block reference should be revealed after opening a file. */
   pendingReveal: { path: string; blockId: string } | null = null;
 
@@ -26,6 +36,8 @@ export default class LogseqEditorPlugin extends Plugin {
   async onload(): Promise<void> {
     await this.loadSettings();
     this.addSettingTab(new LogseqEditorSettingTab(this.app, this));
+    void loadOpLog(this);
+    logOp(this, 'plugin.load', '', 'ok', `v${this.manifest.version}`);
 
     this.registerView(VIEW_TYPE_BLOCK_EDITOR, (leaf) => new BlockEditorView(leaf, this));
     this.registerView(VIEW_TYPE_TODO_PANEL, (leaf) => new TodoPanelView(leaf, this));
@@ -71,6 +83,29 @@ export default class LogseqEditorPlugin extends Plugin {
       callback: () => {
         void this.blockIndex?.buildAll().then(() => new Notice('Block index rebuilt.'));
       },
+    });
+
+    this.addCommand({
+      id: 'show-operation-log',
+      name: 'Show the operation log (sync/write trail)',
+      callback: () => new OpLogModal(this).open(),
+    });
+
+    this.addCommand({
+      id: 'restore-backup',
+      name: 'Restore this file from an automatic backup',
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.extension !== 'md') return false;
+        if (!checking) new BackupRestoreModal(this, file).open();
+        return true;
+      },
+    });
+
+    this.addCommand({
+      id: 'browse-all-backups',
+      name: 'Browse all automatic backups',
+      callback: () => new BackupRestoreModal(this).open(),
     });
 
     this.addCommand({
@@ -174,6 +209,9 @@ export default class LogseqEditorPlugin extends Plugin {
   }
 
   onunload(): void {
+    logOp(this, 'plugin.unload', '', 'ok');
+    // Flush pending log records before the adapter access goes away.
+    void flushOpLog(this);
     // Restore the patched method...
     if (this.origSetViewState) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -196,6 +234,16 @@ export default class LogseqEditorPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    // Sanitize numeric settings from older/corrupt data files.
+    const d = Number(this.settings.saveDebounceMs);
+    if (!Number.isFinite(d) || d < 0) this.settings.saveDebounceMs = DEFAULT_SETTINGS.saveDebounceMs;
+    if (typeof this.settings.excludedFolders !== 'string') this.settings.excludedFolders = '';
+    if (typeof this.settings.journalFolder !== 'string') this.settings.journalFolder = '';
+    if (typeof this.settings.journalFormat !== 'string') this.settings.journalFormat = '';
+    if (typeof this.settings.journalTemplate !== 'string') this.settings.journalTemplate = '';
+    if (typeof this.settings.customTemplateVars !== 'string') this.settings.customTemplateVars = '';
+    this.settings.backupsEnabled = this.settings.backupsEnabled !== false;
+    this.settings.opLogEnabled = this.settings.opLogEnabled !== false;
   }
 
   async saveSettings(): Promise<void> {

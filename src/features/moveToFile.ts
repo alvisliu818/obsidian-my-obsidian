@@ -59,9 +59,8 @@ export async function moveBlocksToFile(host: BlockEditorView, blocks: Block[], t
   host.selectedBlocks.clear();
   host.syncSelectionClasses();
 
-  await host.app.vault.process(target, (data) => {
-    const base = data.trimEnd();
-    return (base ? base + '\n' : '') + md + '\n';
-  });
+  // Guarded append: backup + transform inside vault.process + log (v0.2.0).
+  const ok = await host.plugin.backups.safeAppend(target, md, 'blocks.move');
+  if (!ok) return;
   new Notice(`Moved ${blocks.length} block(s) to ${target.basename}`);
 }

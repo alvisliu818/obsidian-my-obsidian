@@ -39,6 +39,29 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         );
     }
 
+    // ---------- Safety: backups & operation log ----------
+    containerEl.createEl('h3', { text: 'Safety (backups & log)' });
+
+    new Setting(containerEl)
+      .setName('Automatic backups')
+      .setDesc('Before any write the plugin makes to your notes, save the original to .logseq-editor/backups/ (10 most recent per file). Restore via the command palette.')
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.backupsEnabled).onChange(async (v) => {
+          this.plugin.settings.backupsEnabled = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName('Operation log')
+      .setDesc('Record every sync/write operation (time, file, result) to .logseq-editor/log.jsonl and show it via "Show the operation log".')
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.opLogEnabled).onChange(async (v) => {
+          this.plugin.settings.opLogEnabled = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
     // ---------- Journal (daily notes) ----------
     containerEl.createEl('h3', { text: 'Journal (daily notes)' });
 

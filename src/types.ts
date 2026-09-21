@@ -44,6 +44,10 @@ export interface BlockEditorSettings {
   journalTemplate: string;
   /** User-defined template variables (`name = value` per line). */
   customTemplateVars: string;
+  /** Automatic pre-write backups (`.logseq-editor/backups/`). */
+  backupsEnabled: boolean;
+  /** Operation log trail (`.logseq-editor/log.jsonl`). */
+  opLogEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: BlockEditorSettings = {
@@ -54,6 +58,8 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   journalFormat: '',
   journalTemplate: '',
   customTemplateVars: '',
+  backupsEnabled: true,
+  opLogEnabled: true,
 };
 
 export function createBlock(text = '', marker: Marker = null): Block {

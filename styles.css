@@ -1307,3 +1307,69 @@ body.block-touch-dragging {
     min-width: 24px;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Operation log & backup modals (v0.2.0 safety layer)                 */
+/* ------------------------------------------------------------------ */
+
+.oplog-hint {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin: 4px 0 8px;
+}
+
+.oplog-list {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: var(--background-secondary);
+}
+
+.oplog-pre {
+  margin: 0;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.oplog-row.is-ok { color: var(--text-normal); }
+.oplog-row.is-error { color: var(--text-error); }
+.oplog-row.is-skipped { color: var(--text-muted); }
+
+.backup-list {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.backup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--background-modifier-border-hover);
+}
+.backup-row:last-child { border-bottom: none; }
+
+.backup-label { flex: 1; min-width: 0; }
+.backup-path {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.backup-time { color: var(--text-muted); font-size: var(--font-ui-smaller); }
+
+.backup-preview {
+  margin-top: 8px;
+  max-height: 260px;
+  overflow: auto;
+}

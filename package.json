@@ -20,6 +20,8 @@
   "author": "alvisliu",
   "license": "MIT",
   "devDependencies": {
+    "@playwright/test": "1.48",
+    "@types/node": "^20.19.43",
     "builtin-modules": "^3.3.0",
     "esbuild": "^0.21.5",
     "obsidian": "^1.5.7",
