@@ -1,5 +1,11 @@
 node_modules/
 main.js
 *.log
-.DS_Store
-dist/
+test-results/
+playwright-report/
+.openclaw/
+.workbuddy/
+.trae/
+tests/fixtures/edge-vault/.obsidian/workspace.json
+tests/fixtures/edge-vault/.logseq-editor/
+tests/fixtures/edge-vault/.obsidian/plugins/obsidian-logseq/main.js
