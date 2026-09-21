@@ -6,8 +6,8 @@
  * TextFileView requestSave/save — files stay 100% standard markdown).
  */
 
-import { TextFileView, type TAbstractFile, type ViewState, type ViewStateResult, type WorkspaceLeaf } from 'obsidian';
-import type { EditorView } from '@codemirror/view';
+import { TFile, TextFileView, type TAbstractFile, type ViewState, type ViewStateResult, type WorkspaceLeaf } from 'obsidian';
+import { EditorView } from '@codemirror/view';
 import type { CompletionSource } from '@codemirror/autocomplete';
 import type LogseqEditorPlugin from '../main';
 import type { Block, ParsedDocument } from '../types';
@@ -15,6 +15,7 @@ import { createBlock, setCollapsed } from '../types';
 import { parseDocument } from '../core/parser';
 import { serializeBlock, serializeDocument } from '../core/serializer';
 import {
+  blockAtPath,
   cycleMarker,
   duplicateBlock,
   findBlockById,
@@ -42,6 +43,8 @@ import {
   VIRTUAL_INITIAL_CAP,
 } from '../blocks/renderTree';
 import { applyCursor, commitEditorText, cursorAtCoords, mountFocusedEditor, type CursorPos } from '../editor/focusEditor';
+import { createEmbedExtensions } from '../editor/extensions';
+import { rerenderEmbedRow, type EmbedSource } from '../features/links';
 import { toggleCollapse } from '../interactions/collapse';
 import { breadcrumbFor, restoreZoomed, visibleRootsFor, zoomId } from '../interactions/zoom';
 import { attachDnd } from '../interactions/dnd';
@@ -49,7 +52,7 @@ import { attachContextMenu } from '../interactions/contextMenu';
 import { autocompleteSources } from '../features/links';
 import { PageSearchBar } from '../features/pageSearch';
 import { ConflictModal } from '../features/conflictModal';
-import { parseVarLines, type TemplateContext } from '../features/template';
+import { expandTemplates, parseVarLines, type TemplateContext } from '../features/template';
 
 export const VIEW_TYPE_BLOCK_EDITOR = 'logseq-block-editor';
 
@@ -68,6 +71,8 @@ export class BlockEditorView extends TextFileView {
   doc: ParsedDocument = { frontmatter: '', pageProps: '', blocks: [] };
   focusedBlock: Block | null = null;
   focusedView: EditorView | null = null;
+  /** CM6 mounted inside an embed row for in-place editing (null when idle). */
+  embedEdit: { view: EditorView; source: EmbedSource; path: number[]; row: HTMLElement } | null = null;
   zoomedBlock: Block | null = null;
   /** Bumped on every file (re)load; stale async markdown renders are dropped. */
   renderGeneration = 0;
@@ -137,6 +142,7 @@ export class BlockEditorView extends TextFileView {
     this.indexDisposer?.();
     this.indexDisposer = null;
     this.commitFocusedText();
+    this.commitEmbedEdit();
     clearAllBlockCaches(this.doc.blocks);
     super.onunload();
   }
@@ -255,6 +261,7 @@ export class BlockEditorView extends TextFileView {
 
   private render(): void {
     if (!this.editorContainerEl) return;
+    this.commitEmbedEdit(); // never lose an in-place embed edit on re-render
     const roots = this.visibleRoots;
     registerRoots(roots);
     this.renderBreadcrumb();
@@ -369,6 +376,8 @@ export class BlockEditorView extends TextFileView {
       v.destroy();
       this.focusedView = null;
     }
+    const ee = this.embedEdit;
+    if (ee && el.contains(ee.view.dom)) this.commitEmbedEdit();
   }
 
   /** Commit CM6 text back into the block model; single-block static refresh. */
@@ -396,6 +405,102 @@ export class BlockEditorView extends TextFileView {
 
   onFocusedBlur(): void {
     this.commitFocusedText();
+  }
+
+  // ------------------------------------------------------------------
+  // In-place editing of an embedded block (Logseq-style)
+  // ------------------------------------------------------------------
+
+  /**
+   * Edit a block of an embedded sub-tree right inside its row — only the
+   * clicked row swaps to a CM6 editor, the rest of the embed stays visible.
+   * `path` is the child-index path from the embedded root (`[]` = the root).
+   * Works for blocks of this file and of any other file (see writeEmbedText).
+   */
+  startEmbedEdit(row: HTMLElement, source: EmbedSource, path: number[] = []): void {
+    this.commitEmbedEdit(); // finish a previous in-place edit first
+    this.commitFocusedText(); // ...and any outline edit
+    this.clearSelection();
+    const content = row.querySelector(':scope > .embed-main > .embed-content') as HTMLElement | null;
+    if (!content) return;
+    const target = blockAtPath(source.block, path) ?? source.block;
+    row.classList.add('is-editing');
+    row.closest('.block-embed')?.classList.add('is-editing'); // e.g. lift max-height
+    content.empty();
+    const view = new EditorView({
+      doc: target.text,
+      parent: content,
+      extensions: createEmbedExtensions(this, () => this.commitEmbedEdit()),
+    });
+    applyCursor(view, 'end');
+    view.focus();
+    this.embedEdit = { view, source, path, row };
+  }
+
+  /**
+   * Commit + tear down the in-place embed editor: the text goes back to the
+   * source block (this file → model + undo; another file → its open view or
+   * the file on disk), then just that row is rebuilt — siblings stay put.
+   */
+  commitEmbedEdit(): boolean {
+    const cur = this.embedEdit;
+    this.embedEdit = null;
+    if (!cur) return false;
+    const text = expandTemplates(cur.view.state.doc.toString(), new Date(), this.templateContext());
+    cur.view.destroy();
+    cur.row.classList.remove('is-editing');
+    cur.row.closest('.block-embed')?.classList.remove('is-editing');
+    const target = blockAtPath(cur.source.block, cur.path) ?? cur.source.block;
+    const changed = text !== target.text;
+    if (changed) {
+      void this.writeEmbedText(cur.source, cur.path, text);
+      // Keep the in-memory copy in sync so the rebuilt row shows the edit.
+      target.text = text;
+    }
+    rerenderEmbedRow(cur.row, cur.source, cur.path, this);
+    return changed;
+  }
+
+  /** Write an in-place embed edit back into the block the row renders. */
+  private async writeEmbedText(src: EmbedSource, path: number[], text: string): Promise<void> {
+    const filePath = src.file?.path;
+    // Same file: go through the model so undo / dirty / rendering stay in sync.
+    if (!filePath || filePath === this.file?.path) {
+      this.applyBlockText(src.id, path, text);
+      return;
+    }
+    // Another file: prefer the block editor that has it open (keeps its undo
+    // stack and any unsaved edits), otherwise patch the markdown on disk.
+    const other = this.app.workspace
+      .getLeavesOfType(VIEW_TYPE_BLOCK_EDITOR)
+      .map((l) => l.view as BlockEditorView)
+      .find((v) => v.file?.path === filePath);
+    if (other) {
+      other.applyBlockText(src.id, path, text);
+      return;
+    }
+    const file = this.app.vault.getAbstractFileByPath(filePath);
+    if (!(file instanceof TFile)) return;
+    const doc = parseDocument(await this.app.vault.cachedRead(file));
+    linkParents(doc.blocks);
+    const root = findBlockById(doc.blocks, src.id);
+    const b = root ? blockAtPath(root, path) : null;
+    if (!b || b.text === text) return;
+    b.text = text;
+    await this.app.vault.modify(file, serializeDocument(doc));
+  }
+
+  /** Apply a text change made outside this view (e.g. an in-place embed edit). */
+  applyBlockText(id: string, path: number[], text: string): boolean {
+    const root = findBlockById(this.doc.blocks, id);
+    const b = root ? blockAtPath(root, path) : null;
+    if (!b || b.text === text) return false;
+    this.undo.push(this.serializeCurrent());
+    b.text = text;
+    this.markDirty();
+    refreshBlockContent(b, this);
+    this.focusStartSnapshot = serializeDocument(this.doc);
+    return true;
   }
 
   // ------------------------------------------------------------------
@@ -618,8 +723,11 @@ export class BlockEditorView extends TextFileView {
   // Zoom
   // ------------------------------------------------------------------
 
+  /**
+   * Focus (zoom) a block: the editor shows its children — or the block itself
+   * when it is a leaf, so focusing never lands on an empty page.
+   */
   zoomIn(b: Block): void {
-    if (b.children.length === 0) return;
     this.commitFocusedText();
     this.zoomedBlock = b;
     this.render();
@@ -684,8 +792,8 @@ export class BlockEditorView extends TextFileView {
     window.setTimeout(() => el.removeClass('block-revealed'), 1600);
   }
 
-  autocompleteSources(): CompletionSource[] {
-    return autocompleteSources(this);
+  autocompleteSources(embed = false): CompletionSource[] {
+    return autocompleteSources(this, embed);
   }
 
   // ------------------------------------------------------------------

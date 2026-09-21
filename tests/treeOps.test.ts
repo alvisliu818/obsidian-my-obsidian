@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseDocument } from '../src/core/parser';
 import {
+  blockAtPath,
   cloneForest,
   cycleMarker,
   findBlockById,
@@ -175,6 +176,16 @@ describe('insert/remove/clone', () => {
     const doc = setup('- a\n- b\n- c');
     removeBlock(doc.blocks[1]);
     expect(doc.blocks.map((b) => b.text)).toEqual(['a', 'c']);
+  });
+
+  it('blockAtPath resolves a child-index path (embed sub-tree addressing)', () => {
+    const doc = setup('- a\n\t- a1\n\t\t- a1x\n\t- a2\n');
+    const a = doc.blocks[0];
+    expect(blockAtPath(a, [])).toBe(a);
+    expect(blockAtPath(a, [1])?.text).toBe('a2');
+    expect(blockAtPath(a, [0, 0])?.text).toBe('a1x');
+    expect(blockAtPath(a, [5])).toBeNull();
+    expect(blockAtPath(a, [0, 0, 0])).toBeNull();
   });
 
   it('cloneForest deep-copies with ids and parents', () => {

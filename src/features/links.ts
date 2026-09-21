@@ -2,7 +2,7 @@
  * Link-related editing features:
  * - CM6 autocomplete sources: [[wiki links]], #tags, ((block references))
  * - Static render enhancement: ((uuid)) text → clickable block-ref chips
- * - {{embed ((uuid))}} → inline embedded block sub-trees
+ * - {{embed ((uuid))}} → embedded block sub-trees (click to edit in place)
  */
 
 import { MarkdownRenderer, TFile } from 'obsidian';
@@ -11,24 +11,23 @@ import type { BlockEditorView } from '../view/BlockEditorView';
 import { blockSummary } from '../types';
 import { slashMenuSource } from './slashMenu';
 import { parseDocument } from '../core/parser';
-import { findBlockById, linkParents } from '../core/treeOps';
-import { serializeBlockContent } from '../core/serializer';
+import { blockAtPath, findBlockById, linkParents, pathToRoot } from '../core/treeOps';
 import type { Block } from '../types';
 
 const BLOCK_REF_RE = /\(\(([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\)\)/g;
 const EMBED_RE = /\{\{embed\s*\(\(([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\)\)\}\}/g;
 
-// uuid → rendered sub-tree markdown, keyed by index version (cache invalidation)
-const embedCache = new Map<string, { version: number; md: string }>();
-/** Embeds being resolved right now — breaks A→B→A reference cycles. */
-const resolvingEmbeds = new Set<string>();
-
 // ---------------------------------------------------------------------------
 // Autocomplete sources
 // ---------------------------------------------------------------------------
 
-export function autocompleteSources(host: BlockEditorView): CompletionSource[] {
-  return [wikiLinkSource(host), tagSource(host), blockRefSource(host), slashMenuSource(host)];
+export function autocompleteSources(host: BlockEditorView, embed = false): CompletionSource[] {
+  return [
+    wikiLinkSource(host),
+    tagSource(host),
+    blockRefSource(host),
+    slashMenuSource(host, embed),
+  ];
 }
 
 function wikiLinkSource(host: BlockEditorView): CompletionSource {
@@ -142,8 +141,30 @@ export function enhanceBlockRefs(el: HTMLElement, host: BlockEditorView): void {
 }
 
 // ---------------------------------------------------------------------------
-// {{embed ((uuid))}} → inline embedded sub-tree
+// {{embed ((uuid))}} → embedded sub-tree; click to edit the source in place
 // ---------------------------------------------------------------------------
+
+/** Where an embedded block lives, what to render and what to edit. */
+export interface EmbedSource {
+  /** The embedded block (root of the embedded sub-tree). */
+  block: Block;
+  /** Location breadcrumb: [file, …ancestors], root first. */
+  crumbs: string[];
+  /** Container file; null = the file currently open in this view. */
+  file: TFile | null;
+  /** Block id of the embedded root (the embed target). */
+  id: string;
+}
+
+/** Resolved source of each rendered embed box (used for in-place editing). */
+const embedSources = new WeakMap<HTMLElement, EmbedSource>();
+/** Each rendered row of an embed body → the block it renders (path-aware). */
+const embedRows = new WeakMap<HTMLElement, { src: EmbedSource; path: number[] }>();
+/** Runtime-only collapsed state of embedded sub-trees (per block object). */
+const embedCollapsed = new WeakSet<Block>();
+
+/** Same caret glyph as the main outline (kept local to avoid a module cycle). */
+const EMBED_CARET_SVG = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6l4 4 4-4"/></svg>`;
 
 /** Replace {{embed ((uuid))}} text with live embedded block containers. */
 export function enhanceEmbeds(el: HTMLElement, host: BlockEditorView): void {
@@ -163,10 +184,7 @@ export function enhanceEmbeds(el: HTMLElement, host: BlockEditorView): void {
       const uuid = m[1];
       const idx = m.index ?? 0;
       if (idx > lastIdx) frag.appendChild(document.createTextNode(value.slice(lastIdx, idx)));
-      const box = document.createElement('div');
-      box.className = 'block-embed';
-      void renderEmbedInto(box, uuid, host);
-      frag.appendChild(box);
+      frag.appendChild(createEmbedBox(uuid, host));
       lastIdx = idx + m[0].length;
     }
     if (lastIdx < value.length) frag.appendChild(document.createTextNode(value.slice(lastIdx)));
@@ -174,61 +192,175 @@ export function enhanceEmbeds(el: HTMLElement, host: BlockEditorView): void {
   }
 }
 
-/** Resolve an embedded block (local file first, then vault-wide) and render it. */
-async function renderEmbedInto(box: HTMLElement, uuid: string, host: BlockEditorView): Promise<void> {
-  box.createEl('div', { cls: 'embed-loading', text: '⏳ embedding…' });
-  const md = await resolveEmbedMarkdown(uuid, host);
+/** One embed box: breadcrumb header + markdown body; click the body to edit. */
+function createEmbedBox(uuid: string, host: BlockEditorView): HTMLElement {
+  const box = document.createElement('div');
+  box.className = 'block-embed';
+  box.addEventListener('click', (e) => {
+    const t = e.target instanceof HTMLElement ? e.target : null;
+    if (!t) return;
+    // The embed owns EVERY click inside it. Without this the click bubbles up
+    // to the host block, which would swap the box for the raw
+    // `{{embed ((uuid))}}` source (and kill the in-place editor).
+    e.stopPropagation();
+    // The CM6 editor (when open) and inner links / chips / the breadcrumb own
+    // their clicks — never re-mount the editor from a click inside it.
+    if (t.closest('.embed-row.is-editing')) return;
+    if (t.closest('a') || t.closest('.block-ref') || t.closest('.block-embed-header')) return;
+    const src = embedSources.get(box);
+    if (!src) {
+      // Still resolving → ignore; only a broken embed jumps to the source.
+      if (box.hasClass('is-broken')) void host.plugin.openBlockRef(uuid);
+      return;
+    }
+    // Clicking a row edits THAT block of the embedded sub-tree (rows carry
+    // their child-index path); clicking elsewhere edits the root row.
+    const row =
+      (t.closest('.embed-row') as HTMLElement | null) ??
+      (box.querySelector('.embed-row') as HTMLElement | null);
+    if (!row) return;
+    const hit = embedRows.get(row);
+    host.startEmbedEdit(row, src, hit?.path ?? []);
+  });
+  void renderEmbedInto(box, uuid, host);
+  return box;
+}
+
+/** (Re)render an embed box: breadcrumb header + markdown body. */
+export async function renderEmbedInto(
+  box: HTMLElement,
+  uuid: string,
+  host: BlockEditorView,
+): Promise<void> {
   box.empty();
-  if (md === null) {
+  box.classList.remove('is-editing');
+  box.removeClass('is-broken');
+  box.createEl('div', { cls: 'embed-loading', text: '⏳ embedding…' });
+  const src = await resolveEmbed(uuid, host);
+  box.empty();
+  if (!src) {
+    embedSources.delete(box);
     box.addClass('is-broken');
     box.createEl('div', { cls: 'embed-error', text: `block not found ((${uuid.slice(0, 8)}…))` });
-  } else {
-    const gen = host.renderGeneration;
-    await MarkdownRenderer.render(host.app, md, box, host.file?.path ?? '', host);
-    if (host.renderGeneration !== gen) return; // stale: file switched mid-render
-    enhanceBlockRefs(box, host);
+    return;
   }
-  box.addEventListener('click', (e) => {
-    const anchor = (e.target as HTMLElement).closest('a');
-    if (anchor) return; // let inner links work through their own handlers
+  embedSources.set(box, src);
+  renderEmbedHeader(box, src, uuid, host);
+  const body = box.createEl('div', { cls: 'block-embed-body' });
+  // Rendered row by row: every row remembers the block it shows so a click
+  // edits that block instead of always the root of the sub-tree.
+  renderEmbedRow(body, src.block, [], src, host);
+}
+
+/** One row of an embedded sub-tree (recursively for its children). */
+function renderEmbedRow(
+  parent: HTMLElement,
+  b: Block,
+  path: number[],
+  src: EmbedSource,
+  host: BlockEditorView,
+): HTMLElement {
+  const row = parent.createEl('div', { cls: 'embed-row' });
+  row.setAttribute('title', 'Click to edit this block');
+  embedRows.set(row, { src, path });
+
+  // Outline chrome: caret (when children) + bullet, mirroring the main tree.
+  const main = row.createEl('div', { cls: 'embed-main' });
+  const controls = main.createEl('div', { cls: 'embed-controls' });
+  const hasKids = b.children.length > 0;
+  const collapsed = embedCollapsed.has(b);
+  if (hasKids) {
+    const caret = controls.createEl('div', {
+      cls: 'block-caret' + (collapsed ? ' is-collapsed' : ''),
+    });
+    caret.innerHTML = EMBED_CARET_SVG;
+    caret.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (embedCollapsed.has(b)) embedCollapsed.delete(b);
+      else embedCollapsed.add(b);
+      rerenderEmbedRow(row, src, path, host);
+    });
+  } else {
+    controls.createEl('div', { cls: 'block-caret-spacer' });
+  }
+  controls.createEl('div', { cls: 'block-bullet' });
+
+  const content = main.createEl('div', { cls: 'embed-content' });
+  const gen = host.renderGeneration;
+  void MarkdownRenderer.render(host.app, b.text, content, host.file?.path ?? '', host).then(() => {
+    if (host.renderGeneration !== gen) return; // stale: file switched
+    enhanceBlockRefs(content, host);
+  });
+
+  if (hasKids && !collapsed) {
+    const kids = row.createEl('div', { cls: 'embed-children' });
+    b.children.forEach((c, i) => renderEmbedRow(kids, c, [...path, i], src, host));
+  }
+  return row;
+}
+
+/** Rebuild one row of an embed in place (after an edit / collapse toggle). */
+export function rerenderEmbedRow(
+  row: HTMLElement,
+  src: EmbedSource,
+  path: number[],
+  host: BlockEditorView,
+): void {
+  const parent = row.parentElement;
+  if (!parent) return;
+  const b = blockAtPath(src.block, path) ?? src.block;
+  const fresh = renderEmbedRow(parent, b, path, src, host);
+  row.replaceWith(fresh);
+}
+
+/** Breadcrumb showing where the embedded block lives; click → open the source. */
+function renderEmbedHeader(
+  box: HTMLElement,
+  src: EmbedSource,
+  uuid: string,
+  host: BlockEditorView,
+): void {
+  const head = box.createEl('div', { cls: 'block-embed-header' });
+  head.setAttribute('title', 'Open the source block');
+  const crumbs = src.crumbs.length > 0 ? src.crumbs : ['(unknown)'];
+  crumbs.forEach((label, i) => {
+    if (i > 0) head.createEl('span', { cls: 'embed-bc-sep', text: '›' });
+    head.createEl('span', { cls: 'embed-bc-crumb', text: label || '…' });
+  });
+  head.addEventListener('click', (e) => {
+    e.preventDefault();
     e.stopPropagation();
     void host.plugin.openBlockRef(uuid);
   });
 }
 
-/** Get the embedded block's markdown sub-tree; null when unresolvable. */
-async function resolveEmbedMarkdown(uuid: string, host: BlockEditorView): Promise<string | null> {
-  const idx = host.plugin.blockIndex;
-  const version = idx?.version ?? 0;
-  const cached = embedCache.get(uuid);
-  if (cached && cached.version === version) return cached.md;
-
-  // 1) Same file (freshest — includes unsaved edits; never cached).
+/**
+ * Resolve an embed target. This file is checked first (freshest — includes
+ * unsaved edits); otherwise the block is read from the vault so it can be
+ * edited in place and written back.
+ */
+async function resolveEmbed(uuid: string, host: BlockEditorView): Promise<EmbedSource | null> {
   const local = findBlockById(host.doc.blocks, uuid);
-  if (local) return serializeBlockContent(local);
-
-  // 2) Other files via the index.
-  let block: Block | null = null;
-  if (idx) {
-    const info = idx.get(uuid);
-    if (info) {
-      const f = host.app.vault.getAbstractFileByPath(info.path);
-      if (f instanceof TFile) {
-        if (resolvingEmbeds.has(uuid)) return null; // cycle guard
-        resolvingEmbeds.add(uuid);
-        try {
-          const data = await host.app.vault.cachedRead(f);
-          const doc = parseDocument(data);
-          linkParents(doc.blocks);
-          block = findBlockById(doc.blocks, uuid);
-        } finally {
-          resolvingEmbeds.delete(uuid);
-        }
-      }
-    }
+  if (local) {
+    return {
+      block: local,
+      crumbs: crumbsFor(local, host.file?.basename ?? ''),
+      file: null,
+      id: uuid,
+    };
   }
-  if (!block) return null;
-  const md = serializeBlockContent(block);
-  embedCache.set(uuid, { version, md });
-  return md;
+  const info = host.plugin.blockIndex?.get(uuid);
+  if (!info) return null;
+  const file = host.app.vault.getAbstractFileByPath(info.path);
+  if (!(file instanceof TFile)) return null;
+  const doc = parseDocument(await host.app.vault.cachedRead(file));
+  linkParents(doc.blocks);
+  const b = findBlockById(doc.blocks, uuid);
+  if (!b) return null;
+  return { block: b, crumbs: crumbsFor(b, file.basename), file, id: uuid };
+}
+
+/** [file, …ancestors] labels for the embed breadcrumb (root first). */
+function crumbsFor(b: Block, fileLabel: string): string[] {
+  return [fileLabel, ...pathToRoot(b).slice(0, -1).map(blockSummary)];
 }

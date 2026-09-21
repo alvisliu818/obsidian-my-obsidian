@@ -211,6 +211,13 @@ export function parseDocument(md: string): ParsedDocument {
       }
       lastBlock = b;
       i++;
+      // `- ```sql` — a list item can open a code fence. Its body belongs to
+      // the block even when it is not indented; without this the closing fence
+      // and every following line would be swallowed into one raw block.
+      const openFence = FENCE_OPEN_RE.exec(text);
+      if (openFence && !openFence[3].includes(openFence[2])) {
+        i = consumeFenceBody(b, lines, i, openFence[2]);
+      }
       continue;
     }
 
@@ -247,6 +254,27 @@ export function parseDocument(md: string): ParsedDocument {
 
   flushRaw();
   return doc;
+}
+
+/**
+ * Consume the body of a fence opened by a list item (`- ```sql`) into the
+ * block's text, stopping after the closing fence. Returns the new line index.
+ * Body lines have one indentation unit stripped so an indented fence keeps its
+ * own internal indentation intact.
+ */
+function consumeFenceBody(b: Block, lines: string[], i: number, fenceRun: string): number {
+  const run = fenceRun[0];
+  while (i < lines.length) {
+    const cl = lines[i];
+    const fm = FENCE_OPEN_RE.exec(cl);
+    if (fm && fm[2][0] === run && fm[2].length >= fenceRun.length && fm[3].trim() === '') {
+      b.text += '\n' + fm[2];
+      return i + 1;
+    }
+    b.text += '\n' + stripIndent(cl, 1);
+    i++;
+  }
+  return i; // unterminated fence: swallow to EOF
 }
 
 function parentIdxOf(stack: Block[], parent: Block): number {

@@ -10,6 +10,8 @@ import type { Marker } from '../types';
 
 interface SlashCommand extends Completion {
   group: string;
+  /** Mutates the focused block model — not available in the embed editor. */
+  needsBlock?: boolean;
   run: (view: EditorView, from: number, to: number, host: BlockEditorView) => void;
 }
 
@@ -44,6 +46,7 @@ function markerCommand(label: string, marker: Marker): SlashCommand {
     group: 'Task state',
     detail: `set marker to ${label}`,
     type: 'keyword',
+    needsBlock: true,
     run: (view, from, to, host) => {
       replaceRange(view, from, to, '');
       const b = host.focusedBlock;
@@ -66,6 +69,7 @@ function propCommand(label: string, key: string, value: string | null, detail?: 
     group: 'Task state',
     detail: detail ?? (value === null ? `remove ${key}:: property` : `set ${key}:: ${value}`),
     type: 'keyword',
+    needsBlock: true,
     run: (view, from, to, host) => {
       replaceRange(view, from, to, '');
       const b = host.focusedBlock;
@@ -245,7 +249,7 @@ const COMMANDS: SlashCommand[] = [
   },
 ];
 
-export function slashMenuSource(host: BlockEditorView): CompletionSource {
+export function slashMenuSource(host: BlockEditorView, embed = false): CompletionSource {
   return (ctx: CompletionContext): CompletionResult | null => {
     const before = ctx.matchBefore(/(?:^|\s)\/[\w-]*$/);
     if (!before) return null;
@@ -254,6 +258,7 @@ export function slashMenuSource(host: BlockEditorView): CompletionSource {
     const from = before.from + slashIdx;
     const options: Completion[] = [];
     for (const c of COMMANDS) {
+      if (embed && c.needsBlock) continue; // block-model commands need the outline editor
       if (query && !c.label.toLowerCase().includes(query)) continue;
       options.push({
         ...c,

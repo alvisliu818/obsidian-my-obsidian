@@ -2,22 +2,27 @@
  * Right-click block menu (Logseq-style): copy reference / copy markdown,
  * duplicate, delete, cycle TODO, collapse, zoom. Uses Obsidian's Menu API so
  * theming, positioning and outside-click dismissal come for free.
+ *
+ * Right-clicking the bullet opens the same menu with the copy pair promoted to
+ * the top (Logseq puts the block-embed actions on the bullet).
  */
 
 import { Menu, Notice } from 'obsidian';
 import type { BlockEditorView } from '../view/BlockEditorView';
 import { blockFromEl } from '../blocks/renderTree';
-import { ensureId, isCollapsed, setCollapsed, type Block } from '../types';
-import { serializeBlock } from '../core/serializer';
+import { blockId, ensureId, isCollapsed, setCollapsed, type Block } from '../types';
 import { cycleMarker, duplicateBlock, isDescendant, removeBlock } from '../core/treeOps';
+import { blocksEmbedSyntax, blocksMarkdown } from '../features/copyFormats';
 import { openMoveToFileModal } from '../features/moveToFile';
 
 export function attachContextMenu(container: HTMLElement, host: BlockEditorView): void {
   container.addEventListener('contextmenu', (ev) => {
-    const b = blockFromEl(ev.target as HTMLElement | null);
+    const target = ev.target as HTMLElement | null;
+    const b = blockFromEl(target);
     if (!b) return;
     ev.preventDefault();
-    openBlockMenu(ev.clientX, ev.clientY, b, host);
+    const fromBullet = !!target?.closest('.block-bullet');
+    openBlockMenu(ev.clientX, ev.clientY, b, host, fromBullet);
   });
 
   // Touch long-press (500ms, 8px jitter tolerance) → the same block menu.
@@ -28,12 +33,14 @@ export function attachContextMenu(container: HTMLElement, host: BlockEditorView)
     (ev) => {
       if (ev.touches.length !== 1) return;
       const t = ev.touches[0];
-      const b = blockFromEl(ev.target as HTMLElement | null);
+      const target = ev.target as HTMLElement | null;
+      const b = blockFromEl(target);
       if (!b) return;
+      const fromBullet = !!target?.closest('.block-bullet');
       lpXY = { x: t.clientX, y: t.clientY };
       lpTimer = window.setTimeout(() => {
         lpTimer = null;
-        openBlockMenu(t.clientX, t.clientY, b, host);
+        openBlockMenu(t.clientX, t.clientY, b, host, fromBullet);
       }, 500);
     },
     { passive: true },
@@ -58,19 +65,42 @@ export function attachContextMenu(container: HTMLElement, host: BlockEditorView)
 }
 
 /** Show the block menu at a viewport position (right-click / long-press). */
-export function openBlockMenu(x: number, y: number, b: Block, host: BlockEditorView): void {
+export function openBlockMenu(
+  x: number,
+  y: number,
+  b: Block,
+  host: BlockEditorView,
+  fromBullet = false,
+): void {
   // Multi-selection containing the target block → bulk menu instead.
   if (host.selectedBlocks.has(b) && host.selectedBlocks.size > 1) {
-    buildBulkMenu(host).showAtPosition({ x, y });
+    buildBulkMenu(host, fromBullet).showAtPosition({ x, y });
     return;
   }
-  buildBlockMenu(b, host).showAtPosition({ x, y });
+  buildBlockMenu(b, host, fromBullet).showAtPosition({ x, y });
 }
 
 /** Bulk actions for the current multi-selection. */
-function buildBulkMenu(host: BlockEditorView): Menu {
+function buildBulkMenu(host: BlockEditorView, fromBullet: boolean): Menu {
   const menu = new Menu();
   const n = host.selectedBlocks.size;
+  const tops = host.topSelectedBlocks();
+
+  if (fromBullet) {
+    menu.addItem((item) =>
+      item
+        .setTitle(`Copy ${n} block embeds`)
+        .setIcon('braces')
+        .onClick(() => copyBlocksAsEmbed(tops, host)),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle(`Copy ${n} blocks as markdown`)
+        .setIcon('copy')
+        .onClick(() => copyBlocksAsMarkdown(tops, host)),
+    );
+    menu.addSeparator();
+  }
 
   menu.addItem((item) =>
     item
@@ -78,12 +108,14 @@ function buildBulkMenu(host: BlockEditorView): Menu {
       .setIcon('list-todo')
       .onClick(() => host.cycleMarkerSelected()),
   );
-  menu.addItem((item) =>
-    item
-      .setTitle(`Copy ${n} blocks as markdown`)
-      .setIcon('copy')
-      .onClick(() => void host.copySelectedAsMarkdown()),
-  );
+  if (!fromBullet) {
+    menu.addItem((item) =>
+      item
+        .setTitle(`Copy ${n} blocks as markdown`)
+        .setIcon('copy')
+        .onClick(() => copyBlocksAsMarkdown(host.topSelectedBlocks(), host)),
+    );
+  }
   menu.addItem((item) =>
     item
       .setTitle(`Duplicate ${n} blocks`)
@@ -118,8 +150,25 @@ function buildBulkMenu(host: BlockEditorView): Menu {
   return menu;
 }
 
-function buildBlockMenu(b: Block, host: BlockEditorView): Menu {
+function buildBlockMenu(b: Block, host: BlockEditorView, fromBullet: boolean): Menu {
   const menu = new Menu();
+
+  // Bullet menu leads with the two "copy this block elsewhere" shapes.
+  if (fromBullet) {
+    menu.addItem((item) =>
+      item
+        .setTitle('Copy block embed')
+        .setIcon('braces')
+        .onClick(() => copyBlocksAsEmbed([b], host)),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle('Copy block as markdown')
+        .setIcon('copy')
+        .onClick(() => copyBlocksAsMarkdown([b], host)),
+    );
+    menu.addSeparator();
+  }
 
   menu.addItem((item) =>
     item
@@ -127,15 +176,14 @@ function buildBlockMenu(b: Block, host: BlockEditorView): Menu {
       .setIcon('link')
       .onClick(() => copyBlockRef(b, host)),
   );
-  menu.addItem((item) =>
-    item
-      .setTitle('Copy block as markdown')
-      .setIcon('copy')
-      .onClick(() => {
-        void navigator.clipboard.writeText(serializeBlock(b, 0));
-        new Notice('Block copied as markdown');
-      }),
-  );
+  if (!fromBullet) {
+    menu.addItem((item) =>
+      item
+        .setTitle('Copy block as markdown')
+        .setIcon('copy')
+        .onClick(() => copyBlocksAsMarkdown([b], host)),
+    );
+  }
 
   menu.addSeparator();
 
@@ -231,15 +279,49 @@ function buildBlockMenu(b: Block, host: BlockEditorView): Menu {
 
 /** Ensure the block has a persistent id, then copy ((id)) to the clipboard. */
 function copyBlockRef(b: Block, host: BlockEditorView): void {
-  const id = ensureId(b);
-  // ensureId may have written an id:: property — persist it through the
-  // normal mutation pipeline (snapshot + dirty + targeted wrap rebuild).
+  persistIds([b], host);
+  void navigator.clipboard.writeText(`((${blockId(b)}))`);
+  new Notice('Block reference copied');
+}
+
+/** Copy `{{embed ((id))}}` for each block (assigning ids where needed). */
+function copyBlocksAsEmbed(blocks: Block[], host: BlockEditorView): void {
+  persistIds(blocks, host);
+  const text = blocksEmbedSyntax(blocks);
+  void navigator.clipboard.writeText(text);
+  new Notice(blocks.length > 1 ? `${blocks.length} block embeds copied` : 'Block embed copied');
+}
+
+/** Copy the markdown sub-tree of each block (live editor text committed first). */
+function copyBlocksAsMarkdown(blocks: Block[], host: BlockEditorView): void {
+  for (const b of blocks) commitIfFocused(b, host);
+  const md = blocksMarkdown(blocks);
+  void navigator.clipboard.writeText(md);
+  new Notice(
+    blocks.length > 1 ? `${blocks.length} blocks copied as markdown` : 'Block copied as markdown',
+  );
+}
+
+/**
+ * Give every block without an id a fresh one and persist the new `id::`
+ * properties through the normal mutation pipeline (snapshot + dirty + rebuild).
+ * No-op (no undo entry, no dirty flag) when all blocks already have ids.
+ * Returns true when at least one id was added.
+ */
+function persistIds(blocks: Block[], host: BlockEditorView): boolean {
+  let added = false;
+  for (const b of blocks) {
+    if (!blockId(b)) {
+      ensureId(b);
+      added = true;
+    }
+  }
+  if (!added) return false;
   host.mutate(
     () => {},
-    () => ({ subtree: b }),
+    () => ({ full: true }),
   );
-  void navigator.clipboard.writeText(`((${id}))`);
-  new Notice('Block reference copied');
+  return true;
 }
 
 /** Commit the focused CM6 text first when the menu target overlaps the edit. */

@@ -97,6 +97,20 @@ describe('parser: raw content preservation', () => {
     expect(doc.blocks[0].text).toBe('code block\n```js\nconst x = 1;\n  deep();\n```');
   });
 
+  it('a list item can open a fence whose body is not indented', () => {
+    const md = '- ```sql\ncreate database test;\n```\n- 删除库\n- ```sql\ndrop database test;\n```';
+    const doc = parseDocument(md);
+    expect(doc.blocks.map((b) => b.kind)).toEqual(['list', 'list', 'list']);
+    expect(doc.blocks[0].text).toBe('```sql\ncreate database test;\n```');
+    expect(doc.blocks[1].text).toBe('删除库');
+    expect(doc.blocks[2].text).toBe('```sql\ndrop database test;\n```');
+  });
+
+  it('does not treat inline triple backticks on a list item as a fence', () => {
+    const doc = parseDocument('- 用 ```code``` 表示\n- next');
+    expect(doc.blocks.map((b) => b.text)).toEqual(['用 ```code``` 表示', 'next']);
+  });
+
   it('attaches deep non-list lines as soft lines of the block', () => {
     const doc = parseDocument('- first line\n\tsecond line\n\tthird line');
     expect(doc.blocks[0].text).toBe('first line\nsecond line\nthird line');

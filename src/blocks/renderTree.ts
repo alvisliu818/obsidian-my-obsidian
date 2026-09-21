@@ -156,17 +156,15 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
       controls.createEl('div', { cls: 'block-caret-spacer' });
     }
     const bullet = controls.createEl('div', { cls: 'block-bullet' });
+    bullet.setAttribute('aria-label', 'Focus this block');
+    bullet.setAttribute('title', 'Click to focus · Shift/Ctrl+click to select');
     bullet.addEventListener('click', (e) => {
       e.stopPropagation();
       if (e.shiftKey || e.ctrlKey || e.metaKey) {
         host.selectFromClick(b, e); // multi-select from the bullet
         return;
       }
-      if (b.children.length > 0) host.toggleCollapse(b);
-      else host.toggleMarker(b);
-    });
-    bullet.addEventListener('dblclick', (e) => {
-      e.stopPropagation();
+      // Single click = focus (zoom) the block; collapsing lives on the caret.
       host.zoomIn(b);
     });
   } else {
@@ -473,8 +471,11 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockEditorVi
     if (host.renderGeneration !== gen) return; // stale (file switched)
     wireContentEvents(holder, b, host);
     if (!holder.hasClass('block-dataview')) {
-      enhanceBlockRefs(holder, host);
+      // Embeds FIRST: `{{embed ((id))}}` contains an inner `((id))` that
+      // enhanceBlockRefs would otherwise turn into a chip, splitting the text
+      // node so the embed pattern no longer matches.
       enhanceEmbeds(holder, host);
+      enhanceBlockRefs(holder, host);
     }
   });
   contentCache.set(b, { el: holder, sig });
@@ -499,6 +500,9 @@ function wireContentEvents(holder: HTMLElement, b: Block, host: BlockEditorView)
       e.stopPropagation();
       return; // block-ref has its own handler
     }
+    // Anything inside an embedded block belongs to the embed box itself —
+    // never turn a click there into "edit the host block's raw source".
+    if ((e.target as HTMLElement).closest('.block-embed')) return;
     // Shift/Ctrl+click anywhere on the content = multi-select (no editing).
     if (e.shiftKey || e.ctrlKey || e.metaKey) {
       e.preventDefault();

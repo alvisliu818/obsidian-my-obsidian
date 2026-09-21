@@ -145,8 +145,8 @@ export default class LogseqEditorPlugin extends Plugin {
 
     blockCmd(
       'zoom-in-block',
-      'Zoom in on the focused block',
-      (v) => !!v.focusedBlock && v.focusedBlock.children.length > 0,
+      'Focus (zoom in on) the focused block',
+      (v) => !!v.focusedBlock,
       (v) => v.focusedBlock && v.zoomIn(v.focusedBlock),
     );
     blockCmd('zoom-out-block', 'Zoom out one level', (v) => !!v.zoomedBlock, (v) => v.zoomOut());

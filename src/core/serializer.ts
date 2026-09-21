@@ -19,7 +19,7 @@ export function serializeDocument(doc: ParsedDocument): string {
   return parts.join('\n');
 }
 
-export function serializeBlock(b: Block, depth: number): string {
+export function serializeBlock(b: Block, depth: number, skipProps?: readonly string[]): string {
   if (b.kind === 'raw') return b.text;
 
   const prefix = '\t'.repeat(depth);
@@ -32,20 +32,31 @@ export function serializeBlock(b: Block, depth: number): string {
     out.push(softPrefix + textLines[k]);
   }
   for (const key of Object.keys(b.props)) {
+    if (skipProps?.includes(key)) continue;
     out.push(`${softPrefix}${key}:: ${b.props[key]}`);
   }
   for (const c of b.children) {
-    out.push(serializeBlock(c, depth + 1));
+    out.push(serializeBlock(c, depth + 1, skipProps));
   }
   return out.join('\n');
 }
 
-/** Serialize the visible sub-tree of one block (used for block-reference previews). */
+/** Bookkeeping props that are meaningless in an embed / drag-drop preview. */
+export const PREVIEW_SKIP_PROPS: readonly string[] = ['id', 'collapsed'];
+
+/**
+ * Serialize the content of one block (used for embeds and drag & drop):
+ * the block's own text followed by its children as a top-level list.
+ *
+ * Children are emitted at depth 0 — a tab-indented list cannot interrupt a
+ * paragraph, so the old `depth + 1` output collapsed the whole sub-tree into a
+ * single run-on paragraph when rendered as markdown.
+ */
 export function serializeBlockContent(b: Block): string {
   const lines = b.text.split('\n');
   const out: string[] = [];
-  out.push(lines[0]);
-  for (let k = 1; k < lines.length; k++) out.push(lines[k]);
-  for (const c of b.children) out.push(serializeBlock(c, 1));
+  for (const line of lines) out.push(line);
+  if (b.children.length > 0) out.push(''); // blank line: safe block break
+  for (const c of b.children) out.push(serializeBlock(c, 0, PREVIEW_SKIP_PROPS));
   return out.join('\n');
 }

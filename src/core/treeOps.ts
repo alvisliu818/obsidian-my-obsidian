@@ -50,6 +50,19 @@ export function pathToRoot(b: Block): Block[] {
   return chain;
 }
 
+/**
+ * Walk a child-index path down from `root` (`[]` = the root itself).
+ * Used to address blocks of an embedded sub-tree, which may have no id.
+ * Returns null when the path does not resolve (structure changed).
+ */
+export function blockAtPath(root: Block, path: number[]): Block | null {
+  let b: Block | null = root;
+  for (const i of path) {
+    b = b?.children[i] ?? null;
+  }
+  return b;
+}
+
 export function isDescendant(ancestor: Block, b: Block): boolean {
   let cur: Block | null = b;
   while (cur) {

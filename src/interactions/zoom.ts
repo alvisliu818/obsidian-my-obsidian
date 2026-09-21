@@ -11,7 +11,8 @@ import { findBlockById, pathToRoot } from '../core/treeOps';
 export function visibleRootsFor(doc: ParsedDocument, zoomed: Block | null): Block[] {
   if (!zoomed) return doc.blocks;
   if (!stillInForest(doc, zoomed)) return doc.blocks; // zoomed block was deleted
-  return zoomed.children;
+  // A leaf block has no children to focus — show the block itself.
+  return zoomed.children.length > 0 ? zoomed.children : [zoomed];
 }
 
 function stillInForest(doc: ParsedDocument, b: Block): boolean {

@@ -557,12 +557,13 @@
 
 /* ---------- Embedded blocks ({{embed ((uuid))}}) ---------- */
 .block-embed {
-  border-left: 3px solid var(--text-accent);
-  background: var(--background-secondary);
+  /* Look like the surrounding outline: no card background, no accent border,
+     no special padding — only a thin guide line marking the embed region. */
+  border-left: 2px solid var(--background-modifier-border);
+  background: transparent;
   border-radius: 4px;
-  padding: 4px 10px;
-  margin: 4px 0;
-  cursor: pointer;
+  padding: 0 6px;
+  margin: 0;
   max-height: 300px;
   overflow-y: auto;
 }
@@ -583,8 +584,114 @@
 }
 
 .block-embed .block-embed {
-  /* nested embeds get progressively subtler */
+  /* nested embeds keep the same subtle guide line */
   border-left-color: var(--background-modifier-border);
+}
+
+/* breadcrumb: where the embedded block lives (file › …ancestors) */
+.block-embed-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin: 0 0 2px;
+  padding: 0 0 2px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  color: var(--text-faint);
+  font-size: 0.8em;
+  cursor: pointer;
+}
+
+.block-embed-header:hover {
+  color: var(--text-accent);
+}
+
+.embed-bc-sep {
+  opacity: 0.6;
+}
+
+.embed-bc-crumb {
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.block-embed-body {
+  min-height: 1em;
+}
+
+/* one row per block of the embedded sub-tree — mirror the main outline */
+.embed-row {
+  border-radius: 4px;
+}
+
+.embed-main {
+  display: flex;
+  align-items: flex-start;
+  border-radius: 4px;
+}
+
+.embed-main:hover > .embed-content {
+  background: var(--background-modifier-hover);
+}
+
+.embed-controls {
+  display: flex;
+  align-items: center;
+  flex: none;
+  height: 1.55em;
+  width: 32px;
+  user-select: none;
+}
+
+.embed-content {
+  flex: 1;
+  min-height: 1.55em;
+  padding: 1px 6px;
+  line-height: 1.55;
+  cursor: text;
+  word-break: break-word;
+}
+
+/* editing affordance matches the main outline's .block-content.is-editing */
+.embed-row.is-editing .embed-content {
+  background: var(--background-secondary);
+  border-radius: 4px;
+}
+
+.embed-children {
+  margin-left: 16px;
+  padding-left: 14px;
+  border-left: 2px solid var(--background-modifier-border);
+}
+
+/* in-place editing lifts the embed box's own scroll cap so long blocks fit */
+.block-embed.is-editing {
+  max-height: none;
+}
+
+.block-embed .cm-editor {
+  background: transparent;
+  font-size: inherit;
+}
+
+.block-embed .cm-editor.cm-focused {
+  outline: none;
+}
+
+.block-embed .cm-scroller {
+  font-family: inherit;
+  line-height: inherit;
+}
+
+.block-embed .cm-content {
+  padding: 2px 0;
+  caret-color: var(--text-accent);
+}
+
+.block-embed .cm-line {
+  padding: 0 2px;
 }
 
 /* ---------- Property badges (priority / scheduled / deadline) ---------- */

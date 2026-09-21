@@ -74,6 +74,49 @@ export function createBlockKeymap(host: BlockEditorView): KeyBinding[] {
   ];
 }
 
+/**
+ * Extension set for the in-place embed editor: plain single-block editing with
+ * no outline keys. Enter / Escape / blur commit the text back to the source
+ * block and close the editor. Autocompletion ([[wiki]], #tag, ((ref)), /slash)
+ * is included; block-model slash commands are filtered out (no outline focus).
+ *
+ * The commit is deferred to a task: CM6 keeps touching the view right after a
+ * key or blur handler returns, so destroying it synchronously is unsafe.
+ * (Completion's own Enter/Escape keys run at Prec.highest, so accepting a
+ * suggestion never falls through to the commit bindings.)
+ */
+export function createEmbedExtensions(host: BlockEditorView, onCommit: () => void): Extension[] {
+  const commit = (): boolean => {
+    window.setTimeout(onCommit, 0);
+    return true;
+  };
+  return [
+    EditorView.lineWrapping,
+    highlightSpecialChars(),
+    history(),
+    drawSelection(),
+    dropCursor(),
+    markdown({ base: markdownLanguage, addKeymap: false }),
+    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+    autocompletion({ override: host.autocompleteSources(true), icons: true, activateOnTyping: true }),
+    Prec.high(
+      keymap.of([
+        { key: 'Enter', run: commit },
+        { key: 'Escape', run: commit },
+        { key: 'Shift-Enter', run: (v) => (insertNewline(v), true) },
+      ]),
+    ),
+    keymap.of(defaultKeymap.filter((k) => k.key !== 'Enter')),
+    keymap.of(historyKeymap),
+    EditorView.domEventHandlers({
+      blur: () => {
+        window.setTimeout(onCommit, 0);
+        return false;
+      },
+    }),
+  ];
+}
+
 export function createEditorExtensions(host: BlockEditorView): Extension[] {
   const blockKeymap = keymap.of(createBlockKeymap(host));
   const filteredDefaults = defaultKeymap.filter((k) => !OWNED_DEFAULT_KEYS.has(k.key ?? ''));
