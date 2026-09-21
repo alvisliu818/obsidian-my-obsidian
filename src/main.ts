@@ -1,4 +1,4 @@
-import { App, Notice, Plugin, ItemView, WorkspaceLeaf, MarkdownView, PluginSettingTab, Setting, normalizePath } from 'obsidian';
+import { App, FuzzySuggestModal, Notice, Plugin, EditorPosition, ItemView, WorkspaceLeaf, MarkdownView, TFile, PluginSettingTab, Setting, normalizePath } from 'obsidian';
 
 const VIEW_TYPE_VIDEO_RECORDER = 'video-recorder-view';
 
@@ -13,7 +13,9 @@ const DEFAULT_SETTINGS: VideoJournalSettings = {
 
 export default class VideoJournalPlugin extends Plugin {
     settings!: VideoJournalSettings;
-    targetMarkdownView: MarkdownView | null = null;
+    targetCursor: EditorPosition | null = null;
+    targetFilePath: string | null = null;
+    targetNoteWasSelected = false;
 
     async onload() {
         await this.loadSettings();
@@ -36,7 +38,14 @@ export default class VideoJournalPlugin extends Plugin {
 
     async activateView() {
         const { workspace } = this.app;
-        this.targetMarkdownView = workspace.getActiveViewOfType(MarkdownView);
+        const activeEditor = workspace.activeEditor;
+        const activeView = workspace.getActiveViewOfType(MarkdownView);
+        const targetEditor = activeEditor?.editor ?? activeView?.editor ?? null;
+        this.targetCursor = targetEditor?.getCursor() ?? null;
+        this.targetFilePath = activeEditor?.file?.path
+            ?? activeView?.file?.path
+            ?? workspace.getActiveFile()?.path
+            ?? null;
         
         // FIX: Added 'undefined' to the allowed types
         let leaf: WorkspaceLeaf | null | undefined = null; 
@@ -52,7 +61,7 @@ export default class VideoJournalPlugin extends Plugin {
             }
         }
         
-        if (leaf) workspace.revealLeaf(leaf);
+        if (leaf) void workspace.revealLeaf(leaf);
     }
 }
 
@@ -79,6 +88,7 @@ class VideoRecorderView extends ItemView {
     pipBtn!: HTMLButtonElement;
     qualitySelect!: HTMLSelectElement;
     embedCheckbox!: HTMLInputElement;
+    embedTargetLabel!: HTMLElement;
     muteCheckbox!: HTMLInputElement;
 
     constructor(leaf: WorkspaceLeaf, plugin: VideoJournalPlugin) {
@@ -145,7 +155,19 @@ class VideoRecorderView extends ItemView {
         const embedDiv = settingsDiv.createDiv({ attr: { style: 'display: flex; justify-content: space-between; align-items: center;' }});
         embedDiv.createSpan({ text: 'Embed in note:' });
         this.embedCheckbox = embedDiv.createEl('input', { type: 'checkbox' });
-        this.embedCheckbox.checked = true;
+        this.embedCheckbox.checked = false;
+        this.embedTargetLabel = settingsDiv.createDiv({
+            text: 'No note selected',
+            attr: { style: 'color: var(--text-muted); font-size: 0.9em;' },
+        });
+        this.embedCheckbox.onchange = () => {
+            if (this.embedCheckbox.checked) {
+                void this.chooseEmbedTarget();
+            } else {
+                this.plugin.targetNoteWasSelected = false;
+                this.embedTargetLabel.setText('No note selected');
+            }
+        };
 
         // Mute Preview Toggle
         const muteDiv = settingsDiv.createDiv({ attr: { style: 'display: flex; justify-content: space-between; align-items: center;' }});
@@ -168,6 +190,19 @@ class VideoRecorderView extends ItemView {
         this.stopBtn = controlsDiv.createEl('button', { text: 'Stop & Save', attr: { disabled: true }});
 
         this.setupEventListeners();
+    }
+
+    private async chooseEmbedTarget() {
+        const selectedPath = await new NotePickerModal(this.app).choose();
+        if (!selectedPath) {
+            this.embedCheckbox.checked = false;
+            return;
+        }
+
+        this.plugin.targetFilePath = selectedPath;
+        this.plugin.targetCursor = null;
+        this.plugin.targetNoteWasSelected = true;
+        this.embedTargetLabel.setText(`Selected note: ${selectedPath}`);
     }
 
     updateToggleButtonText() {
@@ -369,15 +404,7 @@ class VideoRecorderView extends ItemView {
             new Notice(`Saved to ${finalPath}!`);
 
             if (this.embedCheckbox.checked) {
-                const targetView = this.plugin.targetMarkdownView
-                    ?? this.app.workspace.getActiveViewOfType(MarkdownView);
-                if (targetView) {
-                    const editor = targetView.editor;
-                    const cursor = editor.getCursor();
-                    const embedText = `\n![[${finalPath}]]\n`;
-                    editor.replaceRange(embedText, cursor);
-                    editor.setCursor({ line: cursor.line + 2, ch: 0 });
-                }
+                await this.embedInTargetFile(finalPath);
             }
         } catch (error) {
             new Notice('Failed to save media.');
@@ -385,9 +412,70 @@ class VideoRecorderView extends ItemView {
         }
     }
 
+    private async embedInTargetFile(finalPath: string) {
+        if (!this.plugin.targetFilePath) {
+            new Notice('Recording saved, but no Markdown note was open to embed it.');
+            return;
+        }
+
+        const file = this.app.vault.getAbstractFileByPath(this.plugin.targetFilePath);
+        if (!(file instanceof TFile)) {
+            new Notice('Recording saved, but the target note could not be found.');
+            return;
+        }
+
+        const embedText = `\n![[${finalPath}]]\n`;
+        const cursor = this.plugin.targetCursor;
+        await this.app.vault.process(file, (content) => {
+            if (this.plugin.targetNoteWasSelected) {
+                const separator = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
+                return `${content}${separator}${embedText.slice(1)}`;
+            }
+
+            if (!cursor) return `${content}${embedText}`;
+
+            const lines = content.split('\n');
+            const line = Math.min(cursor.line, lines.length - 1);
+            const ch = Math.min(cursor.ch, (lines[line] ?? '').length);
+            let offset = 0;
+            for (let index = 0; index < line; index++) {
+                offset += (lines[index] ?? '').length + 1;
+            }
+            return `${content.slice(0, offset + ch)}${embedText}${content.slice(offset + ch)}`;
+        });
+    }
+
     async onClose() {
         this.stopTimer();
         this.stopMedia();
+    }
+}
+
+class NotePickerModal extends FuzzySuggestModal<TFile> {
+    private resolveSelection!: (path: string | null) => void;
+
+    constructor(app: App) {
+        super(app);
+        this.setPlaceholder('Choose a note for the recording');
+    }
+
+    choose(): Promise<string | null> {
+        return new Promise((resolve) => {
+            this.resolveSelection = resolve;
+            this.open();
+        });
+    }
+
+    getItems(): TFile[] {
+        return this.app.vault.getMarkdownFiles();
+    }
+
+    getItemText(file: TFile): string {
+        return file.path;
+    }
+
+    onChooseItem(file: TFile): void {
+        this.resolveSelection(file.path);
     }
 }
 
