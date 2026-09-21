@@ -16,11 +16,17 @@ export default class VideoJournalPlugin extends Plugin {
     targetCursor: EditorPosition | null = null;
     targetFilePath: string | null = null;
     targetNoteWasSelected = false;
+    lastActiveMarkdownPath: string | null = null;
 
     async onload() {
         await this.loadSettings();
         this.addSettingTab(new VideoJournalSettingTab(this.app, this));
         this.registerView(VIEW_TYPE_VIDEO_RECORDER, (leaf) => new VideoRecorderView(leaf, this));
+        this.registerEvent(this.app.workspace.on('active-leaf-change', (leaf) => {
+            if (leaf?.view instanceof MarkdownView) {
+                this.lastActiveMarkdownPath = leaf.view.file?.path ?? null;
+            }
+        }));
 
         this.addRibbonIcon('camera', 'Open Media Recorder', () => {
             void this.activateView(); // FIXED: Explicitly handled floating promise
@@ -46,6 +52,7 @@ export default class VideoJournalPlugin extends Plugin {
             ?? activeView?.file?.path
             ?? workspace.getActiveFile()?.path
             ?? null;
+        if (this.targetFilePath) this.lastActiveMarkdownPath = this.targetFilePath;
         
         // FIX: Added 'undefined' to the allowed types
         let leaf: WorkspaceLeaf | null | undefined = null; 
@@ -88,6 +95,9 @@ class VideoRecorderView extends ItemView {
     pipBtn!: HTMLButtonElement;
     qualitySelect!: HTMLSelectElement;
     embedCheckbox!: HTMLInputElement;
+    autoEmbedCheckbox!: HTMLInputElement;
+    embedWidthInput!: HTMLInputElement;
+    embedHeightInput!: HTMLInputElement;
     embedTargetLabel!: HTMLElement;
     muteCheckbox!: HTMLInputElement;
 
@@ -156,18 +166,49 @@ class VideoRecorderView extends ItemView {
         embedDiv.createSpan({ text: 'Embed in note:' });
         this.embedCheckbox = embedDiv.createEl('input', { type: 'checkbox' });
         this.embedCheckbox.checked = false;
+        const autoEmbedDiv = settingsDiv.createDiv({ attr: { style: 'display: flex; justify-content: space-between; align-items: center;' }});
+        autoEmbedDiv.createSpan({ text: 'Auto-embed in active note:' });
+        this.autoEmbedCheckbox = autoEmbedDiv.createEl('input', { type: 'checkbox' });
+        this.autoEmbedCheckbox.onchange = () => {
+            if (this.autoEmbedCheckbox.checked) {
+                this.embedCheckbox.checked = true;
+                this.plugin.targetNoteWasSelected = false;
+                this.embedTargetLabel.setText('The active note at save time');
+            } else if (this.embedCheckbox.checked) {
+                void this.chooseEmbedTarget();
+            }
+        };
         this.embedTargetLabel = settingsDiv.createDiv({
             text: 'No note selected',
             attr: { style: 'color: var(--text-muted); font-size: 0.9em;' },
         });
         this.embedCheckbox.onchange = () => {
             if (this.embedCheckbox.checked) {
-                void this.chooseEmbedTarget();
+                if (this.autoEmbedCheckbox.checked) {
+                    this.plugin.targetNoteWasSelected = false;
+                    this.embedTargetLabel.setText('The active note at save time');
+                } else {
+                    void this.chooseEmbedTarget();
+                }
             } else {
+                this.autoEmbedCheckbox.checked = false;
                 this.plugin.targetNoteWasSelected = false;
                 this.embedTargetLabel.setText('No note selected');
             }
         };
+        const sizeDiv = settingsDiv.createDiv({ attr: { style: 'display: flex; gap: 4px; align-items: center;' }});
+        sizeDiv.createSpan({ text: 'Embed size:' });
+        this.embedWidthInput = sizeDiv.createEl('input', {
+            type: 'number',
+            placeholder: 'Width',
+            attr: { min: '1', style: 'width: 70px;' },
+        });
+        sizeDiv.createSpan({ text: 'x' });
+        this.embedHeightInput = sizeDiv.createEl('input', {
+            type: 'number',
+            placeholder: 'Height',
+            attr: { min: '1', style: 'width: 70px;' },
+        });
 
         // Mute Preview Toggle
         const muteDiv = settingsDiv.createDiv({ attr: { style: 'display: flex; justify-content: space-between; align-items: center;' }});
@@ -203,6 +244,16 @@ class VideoRecorderView extends ItemView {
         this.plugin.targetCursor = null;
         this.plugin.targetNoteWasSelected = true;
         this.embedTargetLabel.setText(`Selected note: ${selectedPath}`);
+    }
+
+    private getEmbedDimensions(): string {
+        const width = Number.parseInt(this.embedWidthInput.value, 10);
+        const height = Number.parseInt(this.embedHeightInput.value, 10);
+        if (Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0) {
+            return `|${width}x${height}`;
+        }
+        if (Number.isInteger(width) && width > 0) return `|${width}`;
+        return '';
     }
 
     updateToggleButtonText() {
@@ -413,21 +464,25 @@ class VideoRecorderView extends ItemView {
     }
 
     private async embedInTargetFile(finalPath: string) {
-        if (!this.plugin.targetFilePath) {
+        const targetPath = this.autoEmbedCheckbox.checked
+            ? this.plugin.lastActiveMarkdownPath
+                ?? this.app.workspace.getActiveViewOfType(MarkdownView)?.file?.path
+            : this.plugin.targetFilePath;
+        if (!targetPath) {
             new Notice('Recording saved, but no Markdown note was open to embed it.');
             return;
         }
 
-        const file = this.app.vault.getAbstractFileByPath(this.plugin.targetFilePath);
+        const file = this.app.vault.getAbstractFileByPath(targetPath);
         if (!(file instanceof TFile)) {
             new Notice('Recording saved, but the target note could not be found.');
             return;
         }
 
-        const embedText = `\n![[${finalPath}]]\n`;
+        const embedText = `\n![[${finalPath}${this.getEmbedDimensions()}]]\n`;
         const cursor = this.plugin.targetCursor;
         await this.app.vault.process(file, (content) => {
-            if (this.plugin.targetNoteWasSelected) {
+            if (this.plugin.targetNoteWasSelected || this.autoEmbedCheckbox.checked) {
                 const separator = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
                 return `${content}${separator}${embedText.slice(1)}`;
             }
