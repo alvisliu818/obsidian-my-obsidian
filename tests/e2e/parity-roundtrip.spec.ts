@@ -1,5 +1,5 @@
-/**
- * Parity round-trip (isolated): in-app edit → save → reopen → verify props,
+﻿/**
+ * Parity round-trip (isolated): in-app edit 鈫?save 鈫?reopen 鈫?verify props,
  * hierarchy, and links survive; then cross-check the file with Logseq md
  * conventions. Runs in its OWN Obsidian instance so panel/journal leftovers
  * from the core parity suite cannot interfere.
@@ -15,7 +15,7 @@ import { execSync, spawn } from 'node:child_process';
 const CDP_PORT = '9231';
 const CDP = `http://127.0.0.1:${CDP_PORT}`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const VAULT = () => process.env.OBSIDIAN_VAULT!;
+const VAULT = 'E:\\\\HOME\\\\Local\\\\logseq-e2e-vault';
 
 let browser: Browser | null = null;
 let page: Page;
@@ -56,7 +56,7 @@ test.beforeAll(async () => {
   }
   await sleep(2000);
   // Deterministic fixture.
-  writeFileSync(join(VAULT(), 'Parity', 'Props.md'), 'type:: book\nrating:: 5\n\n- content block\n');
+  writeFileSync(join(VAULT, 'Parity', 'Props.md'), 'type:: book\nrating:: 5\n\n- content block\n');
   spawn(process.env.OBSIDIAN_PATH!, ['--remote-debugging-port=' + CDP_PORT], {
     detached: true,
     stdio: 'ignore',
@@ -68,7 +68,7 @@ test.beforeAll(async () => {
   await page.waitForLoadState('domcontentloaded');
   try {
     await page
-      .locator('button', { hasText: /trust|信任/i })
+      .locator('button', { hasText: /trust|淇′换/i })
       .first()
       .click({ timeout: 12_000 });
     await sleep(2500);
@@ -118,7 +118,7 @@ test('06 file round-trip: props and blocks survive reopen (isolated)', async () 
   await page.keyboard.press('Escape');
   // Save lands on disk before reopen (isolates save vs reopen bugs).
   await expect
-    .poll(() => readFileSync(join(VAULT(), 'Parity', 'Props.md'), 'utf8'), { timeout: 45_000 })
+    .poll(() => readFileSync(join(VAULT, 'Parity', 'Props.md'), 'utf8'), { timeout: 45_000 })
     .toContain('- content block edited');
 
   // Detach + reopen the file.
@@ -133,8 +133,9 @@ test('06 file round-trip: props and blocks survive reopen (isolated)', async () 
   await expect(page.locator('.block-wrap', { hasText: 'content block edited' })).toHaveCount(1, { timeout: 30_000 });
 
   // Logseq md conventions preserved on disk: page props + block content.
-  const onDisk = readFileSync(join(VAULT(), 'Parity', 'Props.md'), 'utf8');
+  const onDisk = readFileSync(join(VAULT, 'Parity', 'Props.md'), 'utf8');
   expect(onDisk).toContain('type:: book');
   expect(onDisk).toContain('rating:: 5');
   expect(onDisk).toContain('- content block edited');
 });
+

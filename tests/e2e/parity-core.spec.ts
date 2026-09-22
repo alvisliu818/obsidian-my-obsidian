@@ -1,5 +1,5 @@
-/**
- * Parity E2E — new Logseq-md-parity features in a real Obsidian instance:
+﻿/**
+ * Parity E2E 鈥?new Logseq-md-parity features in a real Obsidian instance:
  *   01 collapse-all / expand-all via real commands (collapsed:: prop round-trip)
  *   02 page-props card renders for files with top-level key:: value props
  *   03 tags panel opens and lists tags
@@ -7,7 +7,7 @@
  *   05 journal prev/next navigation creates + opens adjacent day file
  *
  * Test 06 (file round-trip) lives in parity-roundtrip.spec.ts with its own
- * Obsidian instance — in-suite it intermittently starved on click timing.
+ * Obsidian instance 鈥?in-suite it intermittently starved on click timing.
  *
  * Env: OBSIDIAN_PATH, OBSIDIAN_VAULT (plugin deployed, registry switched).
  */
@@ -20,7 +20,7 @@ import { execSync, spawn } from 'node:child_process';
 const CDP_PORT = '9229';
 const CDP = `http://127.0.0.1:${CDP_PORT}`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const VAULT = () => process.env.OBSIDIAN_VAULT!;
+const VAULT = 'E:\\\\HOME\\\\Local\\\\logseq-e2e-vault';
 
 let browser: Browser | null = null;
 let page: Page;
@@ -61,9 +61,9 @@ test.beforeAll(async () => {
   }
   await sleep(2000);
   // Parity fixtures.
-  writeFileSync(join(VAULT(), 'Parity', 'Props.md'), 'type:: book\nrating:: 5\n\n- content block\n');
+  writeFileSync(join(VAULT, 'Parity', 'Props.md'), 'type:: book\nrating:: 5\n\n- content block\n');
   writeFileSync(
-    join(VAULT(), 'Parity', 'Journal-like.md'),
+    join(VAULT, 'Parity', 'Journal-like.md'),
     '- 2026-09-20 entry\n\t- folded child\n\t\t- deep kid\n- TODO task one',
   );
   spawn(process.env.OBSIDIAN_PATH!, ['--remote-debugging-port=' + CDP_PORT], {
@@ -77,7 +77,7 @@ test.beforeAll(async () => {
   await page.waitForLoadState('domcontentloaded');
   try {
     await page
-      .locator('button', { hasText: /trust|信任/i })
+      .locator('button', { hasText: /trust|淇′换/i })
       .first()
       .click({ timeout: 12_000 });
     await sleep(2500);
@@ -124,7 +124,7 @@ test('01 collapse-all / expand-all commands round-trip', async () => {
   await expect(page.locator('.block-children-container')).toHaveCount(0, { timeout: 30_000 });
   // Persisted to disk in Logseq format (debounced save may take a moment).
   await expect
-    .poll(() => readFileSync(join(VAULT(), 'Parity', 'Journal-like.md'), 'utf8'), { timeout: 30_000 })
+    .poll(() => readFileSync(join(VAULT, 'Parity', 'Journal-like.md'), 'utf8'), { timeout: 30_000 })
     .toContain('collapsed:: true');
   // Expand all restores.
   await page.evaluate(() =>
@@ -132,7 +132,7 @@ test('01 collapse-all / expand-all commands round-trip', async () => {
     (window as any).app.commands.executeCommandById('obsidian-logseq:expand-all'),
   );
   await expect
-    .poll(() => readFileSync(join(VAULT(), 'Parity', 'Journal-like.md'), 'utf8'), { timeout: 30_000 })
+    .poll(() => readFileSync(join(VAULT, 'Parity', 'Journal-like.md'), 'utf8'), { timeout: 30_000 })
     .not.toContain('collapsed:: true');
   expect(await page.locator('.block-children-container').count()).toBe(containersBefore);
 });
@@ -151,7 +151,7 @@ test('02 page-props card renders and stays out of the outline', async () => {
   // Page props are NOT outline blocks.
   await expect(page.locator('.block-wrap', { hasText: 'type:: book' })).toHaveCount(0);
   // File on disk unchanged (read-only card).
-  expect(readFileSync(join(VAULT(), 'Parity', 'Props.md'), 'utf8')).toContain('rating:: 5');
+  expect(readFileSync(join(VAULT, 'Parity', 'Props.md'), 'utf8')).toContain('rating:: 5');
 });
 
 test('03 tags panel opens and lists tags', async () => {
@@ -192,8 +192,8 @@ test('05 journal prev/next navigation creates adjacent day', async () => {
   const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
   const pad = (n: number) => String(n).padStart(2, '0');
   const name = `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth() + 1)}-${pad(tomorrow.getDate())}`;
-  expect(readFileSync(join(VAULT(), name + '.md'), 'utf8')).toBeDefined();
-  // Prev twice from tomorrow lands on yesterday — anchored on the OPEN file.
+  expect(readFileSync(join(VAULT, name + '.md'), 'utf8')).toBeDefined();
+  // Prev twice from tomorrow lands on yesterday 鈥?anchored on the OPEN file.
   await page.evaluate(() =>
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (window as any).app.commands.executeCommandById('obsidian-logseq:open-prev-journal'),
@@ -206,5 +206,6 @@ test('05 journal prev/next navigation creates adjacent day', async () => {
   await sleep(2500);
   const yest = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
   const yname = `${yest.getFullYear()}-${pad(yest.getMonth() + 1)}-${pad(yest.getDate())}`;
-  expect(readFileSync(join(VAULT(), yname + '.md'), 'utf8')).toBeDefined();
+  expect(readFileSync(join(VAULT, yname + '.md'), 'utf8')).toBeDefined();
 });
+

@@ -1,6 +1,6 @@
 {
   "name": "obsidian-logseq",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Logseq-style block outliner editor replacing the native Obsidian markdown editor",
   "main": "main.js",
   "type": "module",

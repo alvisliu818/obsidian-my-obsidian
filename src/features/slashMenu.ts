@@ -247,6 +247,83 @@ const COMMANDS: SlashCommand[] = [
     type: 'keyword',
     run: (view, from, to) => replaceRange(view, from, to, '<% now %>'),
   },
+  // ---- Structure commands (block-model; Logseq md parity) ----
+  {
+    label: 'Indent block',
+    group: 'Structure',
+    detail: 'nest under the block above (Tab)',
+    type: 'keyword',
+    needsBlock: true,
+    run: (view, from, to, host) => {
+      replaceRange(view, from, to, '');
+      const b = host.focusedBlock;
+      if (!b) return;
+      host.handleTabFromCommand(false);
+    },
+  },
+  {
+    label: 'Outdent block',
+    group: 'Structure',
+    detail: 'move one level up (Shift+Tab)',
+    type: 'keyword',
+    needsBlock: true,
+    run: (view, from, to, host) => {
+      replaceRange(view, from, to, '');
+      const b = host.focusedBlock;
+      if (!b) return;
+      host.handleTabFromCommand(true);
+    },
+  },
+  {
+    label: 'New block below',
+    group: 'Structure',
+    detail: 'insert a sibling after this block',
+    type: 'keyword',
+    needsBlock: true,
+    run: (view, from, to, host) => {
+      replaceRange(view, from, to, '');
+      const b = host.focusedBlock;
+      if (!b) return;
+      host.handleEnterFromCommand();
+    },
+  },
+  {
+    label: 'Delete block',
+    group: 'Structure',
+    detail: 'remove this block (children move up)',
+    type: 'keyword',
+    needsBlock: true,
+    run: (view, from, to, host) => {
+      replaceRange(view, from, to, '');
+      host.deleteFocusedBlock();
+    },
+  },
+  {
+    label: 'Open in native editor',
+    group: 'Structure',
+    detail: 'switch this file to the native markdown editor',
+    type: 'keyword',
+    needsBlock: true,
+    run: (view, from, to, host) => {
+      replaceRange(view, from, to, '');
+      // Commit through the normal pipeline, then swap the leaf's view type.
+      window.setTimeout(() => {
+        const leaf = host.leaf;
+        const state = leaf?.view.getState();
+        const file = (state?.state as { file?: string } | undefined)?.file;
+        if (leaf && file) {
+          void leaf.setViewState({ type: 'markdown', state: { file }, active: true } as never);
+        }
+      }, 30);
+    },
+  },
+  {
+    label: 'Link to page',
+    group: 'Insert',
+    detail: 'insert [[wiki link]]',
+    type: 'text',
+    run: (view, from, to) => replaceRange(view, from, to, '[[', 2),
+  },
 ];
 
 export function slashMenuSource(host: BlockEditorView, embed = false): CompletionSource {

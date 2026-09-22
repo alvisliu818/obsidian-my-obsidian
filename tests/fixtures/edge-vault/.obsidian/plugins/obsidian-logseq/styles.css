@@ -1429,3 +1429,114 @@ body.block-touch-dragging {
   background: var(--interactive-accent);
   border-color: var(--interactive-accent);
 }
+
+/* ------------------------------------------------------------------ */
+/* Reading-mode typography parity (v0.2.2): static markdown renders    */
+/* with the SAME vertical rhythm as the editing surface. The editing   */
+/* side is CM6 with line-height 1.55 and zero inter-line padding       */
+/* (.block-content / .cm-line); Obsidian's .markdown-rendered defaults */
+/* give paragraphs large margins and taller line-height, which made    */
+/* read mode feel twice as airy. Pin the whole static subtree to the   */
+/* editor's metrics.                                                   */
+/* ------------------------------------------------------------------ */
+
+.block-content-static {
+  line-height: 1.55;
+}
+
+.block-content-static p {
+  margin-block: 0;
+  line-height: 1.55;
+}
+
+.block-content-static p + p {
+  /* Adjacent paragraphs inside one block: keep a visible but tight gap. */
+  margin-top: 0.35em;
+}
+
+.block-content-static ul,
+.block-content-static ol {
+  margin-block: 0;
+  padding-inline-start: 22px;
+}
+
+.block-content-static li {
+  margin-block: 0;
+  line-height: 1.55;
+}
+
+.block-content-static h1,
+.block-content-static h2,
+.block-content-static h3,
+.block-content-static h4,
+.block-content-static h5,
+.block-content-static h6 {
+  margin-block: 0.2em;
+  line-height: 1.4;
+}
+
+.block-content-static pre {
+  margin-block: 0.25em;
+  line-height: 1.5;
+}
+
+.block-content-static blockquote {
+  margin-block: 0.25em;
+}
+
+/* Same rhythm inside embed previews (they render static rows too). */
+.embed-content .block-content-static,
+.block-embed .block-content-static {
+  line-height: 1.55;
+}
+
+/* Editing-state line rhythm lives on .block-content (1.55) already; this
+   variable documents the shared contract between the two surfaces. */
+.block-editor-container {
+  --block-line: 1.55;
+}
+
+/* ------------------------------------------------------------------ */
+/* Self-drawn slash / angle command menu (v0.2.2)                      */
+/* ------------------------------------------------------------------ */
+
+.block-command-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 300px;
+  max-width: 420px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-s);
+  padding: 4px;
+}
+
+.bcm-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.bcm-item.is-selected {
+  background: var(--interactive-accent-hover, var(--background-modifier-hover));
+}
+
+.bcm-label {
+  font-weight: 600;
+  font-size: var(--font-ui-small);
+  white-space: nowrap;
+}
+
+.bcm-detail {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

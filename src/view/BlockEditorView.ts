@@ -28,6 +28,7 @@ import {
   outdent,
   registerRoots,
   removeBlock,
+  splitBlock,
   type MovePosition,
 } from '../core/treeOps';
 import { UndoStack } from '../state/undoStack';
@@ -842,6 +843,64 @@ export class BlockEditorView extends TextFileView {
 
   closeSearch(): void {
     this.searchBar?.close();
+  }
+
+  // ------------------------------------------------------------------
+  // Slash-command bridges (block-model structure commands)
+  // ------------------------------------------------------------------
+
+  /** Indent / outdent the focused block, as if Tab / Shift+Tab was pressed. */
+  handleTabFromCommand(shift: boolean): void {
+    const b = this.focusedBlock;
+    if (!b) return;
+    const offset = this.focusedView?.state.selection.main.head ?? 0;
+    const oldParent = b.parent;
+    this.mutate(
+      () => {
+        if (shift) outdent(b);
+        else indent(b);
+      },
+      () => ({ lists: [oldParent, b.parent] }),
+    );
+    this.focusBlock(b, Math.min(offset, b.text.length));
+  }
+
+  /** Insert a new empty sibling below the focused block (as Enter does). */
+  handleEnterFromCommand(): void {
+    const b = this.focusedBlock;
+    if (!b || b.kind === 'raw') return;
+    let nb: Block | null = null;
+    const parent = b.parent;
+    this.mutate(
+      () => {
+        nb = splitBlock(b, b.text.length);
+      },
+      () => ({ lists: [parent] }),
+    );
+    const target = nb as Block | null;
+    if (target) this.focusBlock(target, 0);
+  }
+
+  /** Delete the focused block; its children move up one level (Logseq behavior). */
+  deleteFocusedBlock(): void {
+    const b = this.focusedBlock;
+    if (!b) return;
+    const parent = b.parent;
+    const kids = b.children;
+    this.mutate(
+      () => {
+        const sibs = removeBlock(b);
+        // Re-insert children at the removed block's position (Logseq keeps
+        // them in place, lifted one level).
+        const idx = sibs.indexOf(b) >= 0 ? sibs.indexOf(b) : parent ? parent.children.length : 0;
+        for (let i = kids.length - 1; i >= 0; i--) {
+          const k = kids[i];
+          sibs.splice(idx, 0, k);
+          k.parent = b.parent ?? null;
+        }
+      },
+      () => ({ full: true }),
+    );
   }
 
   // ------------------------------------------------------------------

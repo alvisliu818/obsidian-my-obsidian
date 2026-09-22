@@ -1,6 +1,6 @@
-/**
+﻿/**
  * CM6 extension set for the focused-block editor.
- * Self-bundled CodeMirror 6 — mounted on our own DOM only, never mixed with
+ * Self-bundled CodeMirror 6 鈥?mounted on our own DOM only, never mixed with
  * Obsidian's internal CM6 instance.
  */
 
@@ -20,6 +20,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { syntaxHighlighting, defaultHighlightStyle, indentUnit } from '@codemirror/language';
 import { autocompletion } from '@codemirror/autocomplete';
 import type { BlockEditorView } from '../view/BlockEditorView';
+import { commandMenuKeymap, maybeOpenMenu, closeMenu } from '../features/commandMenu';
 import {
   handleArrow,
   handleBackspace,
@@ -98,7 +99,7 @@ export function createEmbedExtensions(host: BlockEditorView, onCommit: () => voi
     dropCursor(),
     markdown({ base: markdownLanguage, addKeymap: false }),
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-    autocompletion({ override: host.autocompleteSources(true), icons: true, activateOnTyping: true }),
+    autocompletion({ override: [...host.autocompleteSources(true)], icons: true, activateOnTyping: true }),
     Prec.high(
       keymap.of([
         { key: 'Enter', run: commit },
@@ -133,17 +134,30 @@ export function createEditorExtensions(host: BlockEditorView): Extension[] {
     indentUnit.of('    '),
     markdown({ base: markdownLanguage, addKeymap: false }),
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-    // Autocompletion sources ([[wiki]], #tag, ((ref)), /slash) — provided by host.
-    autocompletion({ override: host.autocompleteSources(), icons: true, activateOnTyping: true }),
+    // Autocompletion sources ([[wiki]], #tag, ((ref))) — / and < use the
+    // self-drawn command menu (CM6 tooltips don't render in this host DOM).
+    autocompletion({ override: [...host.autocompleteSources()], icons: true, activateOnTyping: true }),
+    // Self-drawn / and < command menus (swallows nav keys while open).
+    commandMenuKeymap(),
     // Our block keymap must outrank everything else.
     Prec.high(blockKeymap),
     keymap.of(filteredDefaults),
     keymap.of(historyKeymap),
     // Lifecycle wiring back into the view.
     EditorView.updateListener.of((u) => {
-      if (u.docChanged) host.onFocusedTextChange();
-      if (u.focusChanged && !u.view.hasFocus) host.onFocusedBlur();
+      if (u.docChanged) {
+        host.onFocusedTextChange();
+        // Open/refresh the self-drawn / and < menus on trigger chars.
+        maybeOpenMenu(u.view, host);
+      }
+      if (u.focusChanged && !u.view.hasFocus) {
+        closeMenu();
+        host.onFocusedBlur();
+      }
     }),
   ];
   return ext;
 }
+
+
+

@@ -9,17 +9,45 @@ import { Block, Marker, MARKERS, createBlock, ensureId } from '../types';
 export function siblingsOf(b: Block): Block[] {
   if (b.parent) return b.parent.children;
   // Top-level block: resolve its container array via the registry below.
-  return forestRootsCache.get(b) ?? [];
+  const cached = forestRootsCache.get(b);
+  if (cached) return cached;
+  // Last-node indent fix: blocks CREATED or PROMOTED after the last
+  // registerRoots call (Enter/split at the end of the page, outdent/move to
+  // top level) have no cache entry — scan the registered root arrays for
+  // structural membership instead of silently returning [].
+  for (const arr of rootArrays) {
+    const hit = findListContaining(arr, b);
+    if (hit) {
+      forestRootsCache.set(b, hit);
+      return hit;
+    }
+  }
+  return [];
 }
+
+/** Depth-first search for the sibling list that contains b. */
+function findListContaining(list: Block[], b: Block): Block[] | null {
+  if (list.includes(b)) return list;
+  for (const r of list) {
+    const hit = findListContaining(r.children, b);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** Every root array the view has registered (strong refs, view-lifetime). */
+const rootArrays = new Set<Block[]>();
 
 /** Side-channel mapping root block -> top-level array it lives in (set by the view). */
 const forestRootsCache = new WeakMap<Block, Block[]>();
 
 export function registerRoots(roots: Block[]): void {
+  rootArrays.add(roots);
   for (const r of roots) forestRootsCache.set(r, roots);
 }
 
 export function unregisterRoots(roots: Block[]): void {
+  rootArrays.delete(roots);
   for (const r of roots) forestRootsCache.delete(r);
 }
 
@@ -135,9 +163,17 @@ export function removeBlock(b: Block): Block[] {
 /**
  * Indent: block becomes the last child of its previous sibling.
  * Returns false when there is no previous sibling (already first).
+ *
+ * Last-node fix: for a top-level block whose roots array is NOT in the
+ * registry (e.g. the view replaced `doc.blocks` and render() has not yet
+ * re-registered, or the block was created after clear()), the previous
+ * sibling can still be resolved structurally: ask the caller's array —
+ * here we accept an optional `roots` hint and fall back to scanning the
+ * registry chain. Without a hint and without registration we must bail out
+ * (return false) WITHOUT corrupting anything.
  */
-export function indent(b: Block): boolean {
-  const sibs = siblingsOf(b);
+export function indent(b: Block, roots?: Block[]): boolean {
+  const sibs = roots ? (siblingsIn(b, roots) ?? []) : siblingsOf(b);
   const idx = sibs.indexOf(b);
   if (idx <= 0) return false;
   const prev = sibs[idx - 1];
@@ -145,6 +181,20 @@ export function indent(b: Block): boolean {
   prev.children.push(b);
   b.parent = prev;
   return true;
+}
+
+/** Resolve the sibling array of b by scanning `roots` (structure-first, no registry). */
+function siblingsIn(b: Block, roots: Block[]): Block[] | null {
+  if (b.parent) return b.parent.children;
+  const walk = (list: Block[]): Block[] | null => {
+    if (list.includes(b)) return list;
+    for (const r of list) {
+      const hit = walk(r.children);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  return walk(roots);
 }
 
 /**

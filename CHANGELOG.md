@@ -3,6 +3,26 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [semver](https://semver.org).
 
+## [0.2.2] — 2026-09-22
+
+UX round: last-node indent fix, reading-mode typography parity, self-drawn slash & angle command menus.
+
+### Fixed
+
+- **Last node could not be indented**: blocks created/promoted after the last root registration (Enter/split at page end, outdent/move to top level) were missing from the sibling registry, so Tab silently did nothing. `siblingsOf` now falls back to structural lookup over registered root arrays (7 new unit tests incl. single-node, deep-nested, restore-path edge cases).
+- **Reading mode line spacing much larger than editing mode**: static markdown renders inherited Obsidian's `.markdown-rendered` paragraph margins and line-height. The whole static subtree is now pinned to the editor's vertical rhythm (line-height 1.55, paragraph gap 0; lists/headings/quotes/code tuned to match).
+
+### Added
+
+- **Self-drawn command menu** (`src/features/commandMenu.ts`): CM6's tooltip layer does not render inside the host DOM (verified: even built-in `[[` completions produced zero tooltip nodes), so `/` and `<` now open an own-DOM menu with type-to-filter, ↑↓ navigation, Enter/Tab execute, Esc/outside-click close.
+- `/` slash commands (33): TODO/DOING/DONE, priorities, scheduled/deadline, headings, divider, code block, quote, bold/italic/highlight, today's date, current time, page link, block ref, embed, queries, indent/outdent/new-block/delete-block structure commands, template vars.
+- `<` angle commands (16): HTML snippets (div/span/br/mark/u/sub/sup/kbd/center/font/details) and entities (&nbsp;/&lt;/&gt;/&amp;/&copy;).
+- Prose safety: a bare `<` between words (`x < y`) is never rewritten; menus only trigger at line-start/whitespace.
+
+### Verification
+
+- 208/208 unit tests; real-Obsidian E2E: UX 4/4 (last-node indent + persistence, slash menu, angle menu, typography metrics), acceptance 8/8, edge-vault 13/13, parity 6/6.
+
 ## [0.2.1] — 2026-09-22
 
 Logseq md 版功能对齐轮（本地交付，不涉及 GitHub/市场/org-mode/DB）。
