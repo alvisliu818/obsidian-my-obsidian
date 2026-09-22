@@ -8,6 +8,7 @@ import { Notice, TFile, normalizePath } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import { expandTemplates, formatDate } from './template';
 import { logOp } from './logger';
+import { addDays, journalDateOf } from '../core/journalDate';
 
 interface DailyNotesCoreOptions {
   folder?: string;
@@ -31,6 +32,11 @@ function coreDailyNotesConfig(plugin: LogseqEditorPlugin): DailyNotesCoreOptions
 }
 
 export function journalPathFor(plugin: LogseqEditorPlugin, date = new Date()): string {
+  return journalPathForDate(plugin, date);
+}
+
+/** Resolve the journal path for a specific date (plugin settings → core fallback). */
+function journalPathForDate(plugin: LogseqEditorPlugin, date: Date): string {
   const s = plugin.settings;
   let folder = s.journalFolder;
   let format = s.journalFormat;
@@ -43,13 +49,33 @@ export function journalPathFor(plugin: LogseqEditorPlugin, date = new Date()): s
   return normalizePath((folder ? folder.replace(/[\\/]+$/, '') + '/' : '') + name + '.md');
 }
 
+/** Extract the journal date from a file name (default format, alt compact); null when not a journal. */
+export function journalDateFromName(name: string): Date | null {
+  return journalDateOf(name, 'YYYY-MM-DD') ?? journalDateOf(name, 'YYYYMMDD');
+}
+
 /** Open (and create if missing) today's journal note. */
 export async function openJournal(plugin: LogseqEditorPlugin): Promise<void> {
-  const path = journalPathFor(plugin);
+  await openJournalFor(plugin, 0);
+}
+
+/**
+ * Open the journal `days` from `base` (default: today). Logseq md parity:
+ * navigation anchors on the CURRENT file's date when it is itself a journal,
+ * so Alt+← / Alt+→ walk day by day from wherever you are.
+ */
+export async function openJournalFor(
+  plugin: LogseqEditorPlugin,
+  days = 0,
+  base?: Date | null,
+): Promise<void> {
+  const anchor = base ?? new Date();
+  const target = addDays(anchor, days);
+  const path = journalPathForDate(plugin, target);
   let f = plugin.app.vault.getAbstractFileByPath(path);
   if (!f) {
     try {
-      f = await plugin.app.vault.create(path, expandTemplates(plugin.settings.journalTemplate || ''));
+      f = await plugin.app.vault.create(path, expandTemplates(plugin.settings.journalTemplate || '', target));
       logOp(plugin, 'journal.create', path, 'ok');
       new Notice(`Created journal: ${path}`);
     } catch (e) {

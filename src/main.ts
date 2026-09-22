@@ -10,6 +10,7 @@ import { LogseqEditorSettingTab } from './settings/tab';
 import { BlockIndex } from './index/blockIndex';
 import { TodoPanelView, VIEW_TYPE_TODO_PANEL } from './panels/todoPanel';
 import { BacklinkPanelView, VIEW_TYPE_BACKLINK_PANEL } from './panels/backlinkPanel';
+import { TagPanelView, VIEW_TYPE_TAG_PANEL } from './panels/tagPanel';
 import { BlockSearchModal } from './panels/blockSearch';
 import { FlashcardPanelView, VIEW_TYPE_FLASHCARD_PANEL } from './panels/flashcardPanel';
 import { BlockGraphModal } from './panels/blockGraph';
@@ -42,6 +43,7 @@ export default class LogseqEditorPlugin extends Plugin {
     this.registerView(VIEW_TYPE_BLOCK_EDITOR, (leaf) => new BlockEditorView(leaf, this));
     this.registerView(VIEW_TYPE_TODO_PANEL, (leaf) => new TodoPanelView(leaf, this));
     this.registerView(VIEW_TYPE_BACKLINK_PANEL, (leaf) => new BacklinkPanelView(leaf, this));
+    this.registerView(VIEW_TYPE_TAG_PANEL, (leaf) => new TagPanelView(leaf, this));
     this.registerView(VIEW_TYPE_FLASHCARD_PANEL, (leaf) => new FlashcardPanelView(leaf, this));
 
     // Vault-wide ((block-id)) index
@@ -130,6 +132,45 @@ export default class LogseqEditorPlugin extends Plugin {
       id: 'open-today-journal',
       name: "Open today's journal",
       callback: () => void openJournal(this),
+    });
+
+    // Logseq md parity: prev/next day journal navigation.
+    const journalNav = (id: string, name: string, days: number): void => {
+      this.addCommand({
+        id,
+        name,
+        checkCallback: (checking) => {
+          const view = this.app.workspace.getActiveViewOfType(BlockEditorView);
+          if (!view) return false;
+          if (!checking) void view.openAdjacentJournal(days);
+          return true;
+        },
+      });
+    };
+    journalNav('open-prev-journal', 'Open previous daily note', -1);
+    journalNav('open-next-journal', 'Open next daily note', 1);
+
+    // Logseq md parity: global collapse / expand.
+    const collapseCmd = (id: string, name: string, run: (v: BlockEditorView) => void): void => {
+      this.addCommand({
+        id,
+        name,
+        checkCallback: (checking) => {
+          const view = this.app.workspace.getActiveViewOfType(BlockEditorView);
+          if (!view) return false;
+          if (!checking) run(view);
+          return true;
+        },
+      });
+    };
+    collapseCmd('collapse-all', 'Collapse all blocks', (v) => v.collapseAll());
+    collapseCmd('expand-all', 'Expand all blocks', (v) => v.expandAll());
+    collapseCmd('toggle-collapse-all', 'Toggle collapse / expand all (Ctrl+\\)', (v) => v.toggleCollapseAll());
+
+    this.addCommand({
+      id: 'open-tag-panel',
+      name: 'Open the tags panel',
+      callback: () => void this.activatePanel(VIEW_TYPE_TAG_PANEL),
     });
 
     this.addCommand({
@@ -227,7 +268,7 @@ export default class LogseqEditorPlugin extends Plugin {
       }
     }
     // Detach plugin-owned side panels.
-    for (const vt of [VIEW_TYPE_TODO_PANEL, VIEW_TYPE_BACKLINK_PANEL, VIEW_TYPE_FLASHCARD_PANEL]) {
+    for (const vt of [VIEW_TYPE_TODO_PANEL, VIEW_TYPE_BACKLINK_PANEL, VIEW_TYPE_TAG_PANEL, VIEW_TYPE_FLASHCARD_PANEL]) {
       for (const leaf of this.app.workspace.getLeavesOfType(vt)) leaf.detach();
     }
   }

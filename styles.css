@@ -1373,3 +1373,59 @@ body.block-touch-dragging {
   max-height: 260px;
   overflow: auto;
 }
+
+/* ------------------------------------------------------------------ */
+/* Logseq md parity: page-props card, tag panel, panel tabs            */
+/* ------------------------------------------------------------------ */
+
+.page-props-card {
+  margin: 4px 0 14px;
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+}
+
+.page-props-table { display: flex; flex-direction: column; gap: 2px; }
+
+.page-prop-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: var(--font-ui-smaller);
+  line-height: 1.6;
+}
+
+.page-prop-key {
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+  min-width: 90px;
+  flex-shrink: 0;
+}
+
+.page-prop-key::after { content: ' ::'; opacity: 0.6; }
+
+.page-prop-value { color: var(--text-normal); word-break: break-word; }
+
+.logseq-panel-tagcloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 2px 12px;
+}
+
+.logseq-tag-chip {
+  display: inline-block;
+  padding: 1px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--background-modifier-border);
+  font-size: var(--font-ui-smaller);
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.logseq-tag-chip:hover { color: var(--text-normal); border-color: var(--text-muted); }
+.logseq-tag-chip.is-active {
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+}

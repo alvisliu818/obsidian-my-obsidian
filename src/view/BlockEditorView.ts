@@ -57,6 +57,33 @@ import { logOp } from '../features/logger';
 
 export const VIEW_TYPE_BLOCK_EDITOR = 'logseq-block-editor';
 
+/**
+ * Logseq-style page properties header: when the file has top-level
+ * `key:: value` page properties (or frontmatter), render a read-only card
+ * above the outline — mirroring the md version's page-props area.
+ */
+export function renderPagePropsCard(containerEl: HTMLElement, doc: ParsedDocument): void {
+  const existing = containerEl.querySelector(':scope > .page-props-card');
+  if (existing) existing.remove();
+  const lines = doc.pageProps
+    ? doc.pageProps.split('\n')
+    : [];
+  if (lines.length === 0) return;
+  const card = containerEl.createEl('div', { cls: 'page-props-card' });
+  const table = card.createEl('div', { cls: 'page-props-table' });
+  for (const line of lines) {
+    const idx = line.indexOf('::');
+    if (idx < 0) continue;
+    const key = line.slice(0, idx).trim();
+    const value = line.slice(idx + 2).trim();
+    if (!key) continue;
+    const row = table.createEl('div', { cls: 'page-prop-row' });
+    row.createEl('span', { cls: 'page-prop-key', text: key });
+    row.createEl('span', { cls: 'page-prop-value', text: value });
+  }
+  if (table.children.length === 0) card.remove();
+}
+
 /** Targeted mutation: which DOM regions to rebuild (computed after fn runs). */
 export interface MutatePatch {
   /** Sibling lists to rebuild, keyed by their parent block (null = root list). */
@@ -263,6 +290,7 @@ export class BlockEditorView extends TextFileView {
   private render(): void {
     if (!this.editorContainerEl) return;
     this.commitEmbedEdit(); // never lose an in-place embed edit on re-render
+    renderPagePropsCard(this.editorContainerEl, this.doc);
     const roots = this.visibleRoots;
     registerRoots(roots);
     this.renderBreadcrumb();
@@ -817,6 +845,64 @@ export class BlockEditorView extends TextFileView {
   }
 
   // ------------------------------------------------------------------
+  // Collapse-all / expand-all (Logseq md parity)
+  // ------------------------------------------------------------------
+
+  /** Ctrl+\ semantics: anything folded → expand all; otherwise fold all. */
+  toggleCollapseAll(): void {
+    let hasCollapsed = false;
+    const walk = (b: Block): void => {
+      if (b.props['collapsed'] === 'true') hasCollapsed = true;
+      b.children.forEach(walk);
+    };
+    this.doc.blocks.forEach(walk);
+    if (hasCollapsed) this.expandAll();
+    else this.collapseAll();
+  }
+
+  /** Recursively set `collapsed:: true` on every block that has children. */
+  collapseAll(): void {
+    this.mutate(
+      () => {
+        const walk = (b: Block): void => {
+          if (b.children.length > 0) {
+            b.props['collapsed'] = 'true';
+            b.children.forEach(walk);
+          }
+        };
+        this.doc.blocks.forEach(walk);
+      },
+      () => ({ full: true }),
+    );
+  }
+
+  /** Remove the `collapsed::` prop from every block. */
+  expandAll(): void {
+    this.mutate(
+      () => {
+        const walk = (b: Block): void => {
+          delete b.props['collapsed'];
+          b.children.forEach(walk);
+        };
+        this.doc.blocks.forEach(walk);
+      },
+      () => ({ full: true }),
+    );
+  }
+
+  // ------------------------------------------------------------------
+  // Journal navigation (prev / next day, Logseq md parity)
+  // ------------------------------------------------------------------
+
+  /** Open the journal N days from THIS file's date (or today when not a journal). */
+  async openAdjacentJournal(days: number): Promise<void> {
+    const { openJournalFor, journalDateFromName } = await import('../features/dailyNote');
+    const name = (this.file?.name ?? '').replace(/\.md$/, '');
+    const base = journalDateFromName(name);
+    await openJournalFor(this.plugin, days, base);
+  }
+
+  // ------------------------------------------------------------------
   // Undo / redo (global, non-focused)
   // ------------------------------------------------------------------
 
@@ -840,6 +926,12 @@ export class BlockEditorView extends TextFileView {
     if (key === 'h') {
       ev.preventDefault();
       this.openSearch(true);
+      return;
+    }
+    // Logseq md parity: Ctrl+\ toggles collapse-all / expand-all.
+    if (key === '\\') {
+      ev.preventDefault();
+      this.toggleCollapseAll();
       return;
     }
     if (this.focusedView) return;
