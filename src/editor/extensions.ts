@@ -77,18 +77,29 @@ export function createBlockKeymap(host: BlockEditorView): KeyBinding[] {
 
 /**
  * Extension set for the in-place embed editor: plain single-block editing with
- * no outline keys. Enter / Escape / blur commit the text back to the source
- * block and close the editor. Autocompletion ([[wiki]], #tag, ((ref)), /slash)
- * is included; block-model slash commands are filtered out (no outline focus).
+ * no outline keys. Enter commits the edit and creates a NEW SIBLING BLOCK
+ * below the source block (Logseq md parity — see startEmbedEdit/onCommit);
+ * Escape / blur just commit. Autocompletion ([[wiki]], #tag, ((ref))) is
+ * included; block-model slash commands are filtered out (no outline focus).
  *
  * The commit is deferred to a task: CM6 keeps touching the view right after a
  * key or blur handler returns, so destroying it synchronously is unsafe.
- * (Completion's own Enter/Escape keys run at Prec.highest, so accepting a
- * suggestion never falls through to the commit bindings.)
  */
-export function createEmbedExtensions(host: BlockEditorView, onCommit: () => void): Extension[] {
+export function createEmbedExtensions(
+  host: BlockEditorView,
+  onCommit: () => void,
+  onCommitAndNew?: () => void,
+): Extension[] {
   const commit = (): boolean => {
     window.setTimeout(onCommit, 0);
+    return true;
+  };
+  const commitNew = (): boolean => {
+    if (onCommitAndNew) {
+      window.setTimeout(onCommitAndNew, 0);
+    } else {
+      window.setTimeout(onCommit, 0);
+    }
     return true;
   };
   return [
@@ -102,7 +113,7 @@ export function createEmbedExtensions(host: BlockEditorView, onCommit: () => voi
     autocompletion({ override: [...host.autocompleteSources(true)], icons: true, activateOnTyping: true }),
     Prec.high(
       keymap.of([
-        { key: 'Enter', run: commit },
+        { key: 'Enter', run: commitNew },
         { key: 'Escape', run: commit },
         { key: 'Shift-Enter', run: (v) => (insertNewline(v), true) },
       ]),

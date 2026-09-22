@@ -55,6 +55,9 @@ import { PageSearchBar } from '../features/pageSearch';
 import { ConflictModal } from '../features/conflictModal';
 import { expandTemplates, parseVarLines, type TemplateContext } from '../features/template';
 import { logOp } from '../features/logger';
+import { renderPageBacklinks } from '../features/pageBacklinks';
+import { refreshBlockBacklinkBadges } from '../blocks/blockBacklinks';
+import { renderEditablePageProps } from '../features/pagePropsEditor';
 
 export const VIEW_TYPE_BLOCK_EDITOR = 'logseq-block-editor';
 
@@ -162,7 +165,12 @@ export class BlockEditorView extends TextFileView {
     attachContextMenu(this.treeEl, this);
     this.searchBar = new PageSearchBar(this, this.editorContainerEl);
     // Live {{query}} blocks: refresh when the vault-wide index rebuilds.
-    this.indexDisposer = this.plugin.blockIndex?.onRebuild(() => this.refreshQueryResults()) ?? null;
+    this.indexDisposer = this.plugin.blockIndex?.onRebuild(() => {
+      this.refreshQueryResults();
+      // Backlinks (page-bottom section + per-block badges) track the index.
+      renderPageBacklinks(this.editorContainerEl, this.plugin, this.file?.path, this.file?.basename ?? '');
+      refreshBlockBacklinkBadges(this);
+    }) ?? null;
 
     this.render();
   }
@@ -258,6 +266,14 @@ export class BlockEditorView extends TextFileView {
     return super.onUnloadFile(file);
   }
 
+  /** Re-read the file from disk (after a page-props edit) and refresh the view. */
+  async reloadFile(): Promise<void> {
+    const f = this.file;
+    if (!f) return;
+    const data = await this.app.vault.read(f);
+    this.setViewData(data, false);
+  }
+
   getState(): Record<string, unknown> {
     const s = { ...super.getState() } as unknown as ViewState;
     const zid = zoomId(this.zoomedBlock);
@@ -291,7 +307,13 @@ export class BlockEditorView extends TextFileView {
   private render(): void {
     if (!this.editorContainerEl) return;
     this.commitEmbedEdit(); // never lose an in-place embed edit on re-render
-    renderPagePropsCard(this.editorContainerEl, this.doc);
+    renderEditablePageProps(
+      this.editorContainerEl,
+      this.plugin,
+      this.file?.path,
+      this.doc.pageProps,
+      () => this.reloadFile(),
+    );
     const roots = this.visibleRoots;
     registerRoots(roots);
     this.renderBreadcrumb();
@@ -302,6 +324,8 @@ export class BlockEditorView extends TextFileView {
       this.focusedView = null;
     }
     renderBlockTree(this.treeEl, roots, this);
+    // Bottom-of-page backlinks section (refreshed on every render).
+    renderPageBacklinks(this.editorContainerEl, this.plugin, this.file?.path, this.file?.basename ?? '');
     // The tree DOM was rebuilt — re-apply in-page search highlights if open.
     this.searchBar?.onRerender();
   }
@@ -366,7 +390,8 @@ export class BlockEditorView extends TextFileView {
     // Incremental: swap static ↔ CM6 inside the two affected wraps only.
     // Full render fallback when the target is beyond the virtual-scroll cap
     // or not currently rendered.
-    if (this.ensureCapFor(b) || !this.mountFocusedInDom(b)) this.render();
+    if (!this.ensureCapFor(b) && this.mountFocusedInDom(b)) return;
+    this.render();
   }
 
   focusBlockFromClick(b: Block, ev: MouseEvent): void {
@@ -434,7 +459,17 @@ export class BlockEditorView extends TextFileView {
   }
 
   onFocusedBlur(): void {
-    this.commitFocusedText();
+    // CM6 fires a blur on initial mount when the Electron window is not the
+    // OS-foreground window (CDP-driven tests, background windows). Committing
+    // there would tear down the editor the user is actively typing into.
+    // Re-check on the next task: if focus returned to THIS view's CM6, it was
+    // a focus juggle, not a real blur.
+    window.setTimeout(() => {
+      const v = this.focusedView;
+      if (!v) return;
+      if (v.hasFocus || document.activeElement === v.contentDOM || v.contentDOM.contains(document.activeElement)) return;
+      this.commitFocusedText();
+    }, 0);
   }
 
   // ------------------------------------------------------------------

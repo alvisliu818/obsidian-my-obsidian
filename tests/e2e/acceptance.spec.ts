@@ -1,7 +1,7 @@
-/**
- * Acceptance E2E against a REAL Obsidian instance — CDP mode, single session.
+﻿/**
+ * Acceptance E2E against a REAL Obsidian instance 鈥?CDP mode, single session.
  *
- * Obsidian ≥1.13 runs on Electron ≥39 (Chromium ≥129), which removed the
+ * Obsidian 鈮?.13 runs on Electron 鈮?9 (Chromium 鈮?29), which removed the
  * pipeline Playwright's _electron.launch() depends on. Instead we launch
  * Obsidian with --remote-debugging-port and drive it through CDP.
  *
@@ -10,8 +10,7 @@
  * trip the plugin's external-change conflict modal (by design!).
  *
  * Tests run in order within one Obsidian session (workers=1) and build on
- * each other: commands → log modal → settings → write+backup → log trail →
- * restore → reopen idempotency → hard-kill recovery.
+ * each other: commands 鈫?log modal 鈫?settings 鈫?write+backup 鈫?log trail 鈫? * restore 鈫?reopen idempotency 鈫?hard-kill recovery.
  *
  * Env: OBSIDIAN_PATH = Obsidian.exe, OBSIDIAN_VAULT = clean test vault with
  * the plugin installed & enabled and an E2E/Home.md file.
@@ -26,7 +25,10 @@ import { execSync, spawn } from 'node:child_process';
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const HOME = 'E2E/Home';
-const HOME_PATH = () => join(process.env.OBSIDIAN_VAULT!, 'E2E', 'Home.md');
+/** Dedicated throwaway test vault — hard-wired so Playwright worker
+ * processes don't depend on env-var propagation through npx → worker. */
+const VAULT = 'E:\\HOME\\Local\\logseq-e2e-vault';
+const HOME_PATH = () => join(VAULT, 'E2E', 'Home.md');
 const CDP_PORT = process.env.OBSIDIAN_CDP_PORT ?? '9222';
 const CDP = `http://127.0.0.1:${CDP_PORT}`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -78,22 +80,22 @@ async function findObsidianPage(b: Browser): Promise<Page> {
 
 test.beforeAll(async () => {
   test.setTimeout(300_000);
-  // Fixture reset happens while Obsidian is closed — never mid-session.
+  // Fixture reset happens while Obsidian is closed 鈥?never mid-session.
   try {
     execSync('taskkill /IM Obsidian.exe /F /T', { stdio: 'ignore' });
   } catch {
     /* none running */
   }
   await sleep(2000);
-  // ALWAYS deploy the current build into the vault — a stale main.js here
+  // ALWAYS deploy the current build into the vault 鈥?a stale main.js here
   // makes the whole suite validate yesterday's bugs.
-  const plugDir = join(process.env.OBSIDIAN_VAULT!, '.obsidian', 'plugins', 'obsidian-logseq');
+  const plugDir = join(VAULT, '.obsidian', 'plugins', 'obsidian-logseq');
   mkdirSync(plugDir, { recursive: true });
   copyFileSync(join(REPO, 'main.js'), join(plugDir, 'main.js'));
   copyFileSync(join(REPO, 'manifest.json'), join(plugDir, 'manifest.json'));
   copyFileSync(join(REPO, 'styles.css'), join(plugDir, 'styles.css'));
   // Deterministic state: wipe plugin test data (backups/log) from earlier runs.
-  const plugData = join(process.env.OBSIDIAN_VAULT!, '.logseq-editor');
+  const plugData = join(VAULT, '.logseq-editor');
   if (existsSync(plugData)) rmSync(plugData, { recursive: true, force: true });
   writeFileSync(HOME_PATH(), '- alpha\n');
   spawn(process.env.OBSIDIAN_PATH!, ['--remote-debugging-port=' + CDP_PORT], {
@@ -106,11 +108,11 @@ test.beforeAll(async () => {
   browser = await chromium.connectOverCDP(CDP);
   page = await findObsidianPage(browser);
   await page.waitForLoadState('domcontentloaded');
-  // Community-plugin trust dialog (button text may be localized — Chinese
-  // vaults show "信任仓库作者并启用插件").
+  // Community-plugin trust dialog (button text may be localized 鈥?Chinese
+  // vaults show "淇′换浠撳簱浣滆€呭苟鍚敤鎻掍欢").
   try {
     await page
-      .locator('button', { hasText: /trust|信任/i })
+      .locator('button', { hasText: /trust|淇′换/i })
       .first()
       .click({ timeout: 12_000 });
     await sleep(2500);
@@ -248,7 +250,7 @@ test('06 backup restore modal returns the original content', async () => {
   await page.locator('.modal .backup-row button', { hasText: 'Restore' }).first().click();
   await page.waitForTimeout(2500);
   // The view may re-save the adopted state in the serializer-canonical form
-  // (no trailing newline) — content-wise both are the restored original.
+  // (no trailing newline) 鈥?content-wise both are the restored original.
   expect(readFileSync(HOME_PATH(), 'utf8')).toMatch(/^- alpha\n?$/);
   const backups = await page.evaluate(() =>
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -287,11 +289,12 @@ test('08 hard kill mid-debounce leaves the file intact and restorable', async ()
   }
   obsidianPids = [];
   browser = null;
-  // The on-disk file must be one of the last fully-written versions — never
+  // The on-disk file must be one of the last fully-written versions 鈥?never
   // garbage (serializer may or may not keep the fixture's trailing newline).
   const onDisk = readFileSync(HOME_PATH(), 'utf8');
   expect(/^(- alpha( beta)?( gamma)?)\n?$/.test(onDisk)).toBe(true);
-  // A pre-edit backup must exist → recovery possible.
-  const backups = readdirSync(join(process.env.OBSIDIAN_VAULT!, '.logseq-editor', 'backups'));
+  // A pre-edit backup must exist 鈫?recovery possible.
+  const backups = readdirSync(join(VAULT, '.logseq-editor', 'backups'));
   expect(backups.some((n) => n.startsWith('E2E--Home.md-'))).toBe(true);
 });
+

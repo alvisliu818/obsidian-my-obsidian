@@ -37,6 +37,8 @@ export interface BacklinkEntry {
 
 const TAG_RE = /(?:^|[\s(])#([\p{L}\d][\p{L}\d_/-]*)/gu;
 const LINK_RE = /\[\[([^\]]+)\]\]/g;
+/** Block reference scan: ((uuid)) occurrences in block text. */
+const BLOCK_REF_SCAN_RE = /\(\(([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\)\)\}?/g;
 
 function collectTags(text: string): string[] {
   const bare = text.replace(LINK_RE, ' '); // tags inside [[...]] don't count
@@ -52,6 +54,8 @@ export class BlockIndex {
   version = 0;
 
   private byId = new Map<string, IndexedBlock>();
+  /** Block-level backlinks: referenced block id → referencing blocks. */
+  private refsTo = new Map<string, BacklinkEntry[]>();
   private all: IndexedBlock[] = [];
   private tagsByPath = new Map<string, Set<string>>();
   /** normalized page target → referencing blocks */
@@ -96,6 +100,13 @@ export class BlockIndex {
     return (this.backlinks.get(target) ?? []).filter((e) => e.sourcePath.toLowerCase() !== self);
   }
 
+  /** Blocks that reference the given block id via ((id)) — excluding self-references. */
+  refsToBlock(id: string): BacklinkEntry[] {
+    if (!id) return [];
+    const self = this.byId.get(id);
+    return (this.refsTo.get(id) ?? []).filter((e) => !self || e.sourcePath !== self.path || e.blockId !== id);
+  }
+
   /** All #card flashcards in the vault. */
   allCards(): CardEntry[] {
     return this.cards;
@@ -127,6 +138,7 @@ export class BlockIndex {
     this.all = [];
     this.tagsByPath.clear();
     this.backlinks.clear();
+    this.refsTo.clear();
     this.cards = [];
     const files = this.app.vault.getMarkdownFiles();
     for (const f of files) {
@@ -192,6 +204,14 @@ export class BlockIndex {
         list.push({ sourcePath: path, blockId: id ?? '', text, marker: b.marker });
         this.backlinks.set(l, list);
       }
+      // Block-level refs: ((uuid)) anywhere in this block's text.
+      for (const m of b.text.matchAll(BLOCK_REF_SCAN_RE)) {
+        const refId = m[1];
+        if (refId === id) continue; // self-embed/self-ref doesn't count
+        const list = this.refsTo.get(refId) ?? [];
+        list.push({ sourcePath: path, blockId: id ?? '', text, marker: b.marker });
+        this.refsTo.set(refId, list);
+      }
       b.children.forEach(walk);
     };
     doc.blocks.forEach(walk);
@@ -204,6 +224,11 @@ export class BlockIndex {
       if (info.path === path) this.byId.delete(id);
     }
     this.tagsByPath.delete(path);
+    for (const [target, list] of this.refsTo) {
+      const filtered = list.filter((e) => e.sourcePath !== path);
+      if (filtered.length === 0) this.refsTo.delete(target);
+      else if (filtered.length !== list.length) this.refsTo.set(target, filtered);
+    }
     for (const [target, list] of this.backlinks) {
       const filtered = list.filter((e) => e.sourcePath !== path);
       if (filtered.length === 0) this.backlinks.delete(target);

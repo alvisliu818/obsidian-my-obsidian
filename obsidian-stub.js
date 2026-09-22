@@ -1,0 +1,10 @@
+
+class Plugin { constructor(){}; registerEvent(){}; addCommand(){}; addSettingTab(){}; registerView(){}; addRibbonIcon(){}; async loadData(){ return {}; } async saveData(){} }
+module.exports = {
+  Plugin, PluginSettingTab: class {}, ItemView: class {}, Modal: class {},
+  FuzzySuggestModal: class {}, Setting: class {}, Notice: class {},
+  TFile: class {}, TFolder: class {}, TAbstractFile: class {},
+  normalizePath: (p) => p, MarkdownRenderer: { render: async () => {} },
+  debounce: (f) => f, Menu: class {}, Scope: class {}, WorkspaceLeaf: class {},
+  TextFileView: class {},
+};

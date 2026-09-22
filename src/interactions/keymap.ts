@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Block-level keyboard interaction handlers (Logseq behavior).
  * Each handler receives the CM6 view of the focused block plus the host view;
  * returning true consumes the key (prevents CM6 default), false falls through.
@@ -51,7 +51,9 @@ export function handleEnter(view: EditorView, host: BlockEditorView): boolean {
   );
   // Children stay with the head block (Logseq behavior); caret goes to new block.
   const target = nb as Block | null;
-  if (target) host.focusBlock(target, 0);
+  if (target) {
+    host.focusBlock(target, 0);
+  }
   return true;
 }
 
@@ -161,7 +163,7 @@ export function handleBackspace(view: EditorView, host: BlockEditorView): boolea
   return true;
 }
 
-/** Ctrl/Cmd+Enter: cycle TODO → DOING → DONE → none. */
+/** Ctrl/Cmd+Enter: cycle TODO 鈫?DOING 鈫?DONE 鈫?none. */
 export function handleCycleMarker(view: EditorView, host: BlockEditorView): boolean {
   const b = focusedBlock(host);
   if (!b || b.kind === 'raw') return false;
@@ -191,7 +193,7 @@ export function handleMoveBlock(view: EditorView, host: BlockEditorView, dir: -1
       b.text = text;
       ok = moveBlockVertically(roots, b, dir);
     },
-    // Nothing moved → nothing to re-render.
+    // Nothing moved 鈫?nothing to re-render.
     () => (ok ? { lists: [b.parent] } : {}),
   );
   if (ok) host.focusBlock(b, Math.min(offset, b.text.length));
@@ -216,3 +218,4 @@ export function handleEscape(view: EditorView, _host: BlockEditorView): boolean 
   view.contentDOM.blur();
   return true;
 }
+

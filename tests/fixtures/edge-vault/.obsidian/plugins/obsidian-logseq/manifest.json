@@ -1,10 +1,11 @@
 {
   "id": "obsidian-logseq",
   "name": "Logseq Editor",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "minAppVersion": "1.5.0",
   "description": "Logseq-style block outliner editor replacing the native markdown editor. A superset: switch back to the native editor anytime; files stay 100% standard markdown.",
   "author": "alvisliu",
   "authorUrl": "https://github.com/alvisliu818",
   "isDesktopOnly": true
 }
+

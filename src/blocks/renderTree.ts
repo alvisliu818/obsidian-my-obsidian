@@ -222,10 +222,28 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
     budget.stopped = true;
   }
 
+  // --- block properties below content (Logseq md parity) ---
+  syncPropsRow(wrap, b);
+
   // --- embedded query results ({{query ...}}) ---
   syncQueryContainer(wrap, b, host);
 
   return wrap;
+}
+
+const WRAP_PROPS_SKIP = new Set(['id', 'collapsed', 'style']);
+
+/** Render (or clear) the `key:: value` props row under the block content. */
+function syncPropsRow(wrap: HTMLElement, b: Block): void {
+  wrap.querySelector(':scope > .block-props-row')?.remove();
+  const entries = Object.entries(b.props).filter(([k]) => !WRAP_PROPS_SKIP.has(k));
+  if (entries.length === 0) return;
+  const row = wrap.createEl('div', { cls: 'block-props-row' });
+  for (const [k, v] of entries) {
+    const item = row.createEl('span', { cls: 'block-prop-item' });
+    item.createEl('span', { cls: 'block-prop-key', text: k });
+    item.createEl('span', { cls: 'block-prop-value', text: v });
+  }
 }
 
 /** True when the block body is a single {{query ...}} / {{query-table ...}} expression. */

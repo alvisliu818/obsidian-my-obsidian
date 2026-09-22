@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Focused-block CM6 lifecycle: mount / commit / unmount.
  * One CM6 EditorView at a time, living inside the focused block's content DOM.
  */
@@ -24,6 +24,14 @@ export function mountFocusedEditor(
   });
   applyCursor(view, pos);
   view.focus();
+  // Electron/CDP background windows drop the initial focus; re-assert on
+  // the next frames so the editor stays in editing state (Enter parity).
+  requestAnimationFrame(() => {
+    if (!view.hasFocus) view.focus();
+    setTimeout(() => {
+      if (!view.hasFocus && view.dom.isConnected) view.focus();
+    }, 60);
+  });
   return view;
 }
 
@@ -61,3 +69,4 @@ export function commitEditorText(view: EditorView, block: Block, ctx?: TemplateC
   block.text = text;
   return true;
 }
+

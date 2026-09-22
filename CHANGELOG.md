@@ -3,6 +3,26 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [semver](https://semver.org).
 
+## [0.2.3] — 2026-09-22
+
+Editing-flow round: Enter behavior parity, page/block backlinks UI, block props display, editable page properties.
+
+### Fixed
+
+- **Enter exited the editor instead of creating a block**: two stacked root causes. ① `manifest.json` was saved with a UTF-8 BOM by a PowerShell write, so Obsidian failed to parse it and the whole plugin silently didn't load (`loaded: false` — takeover, commands, everything). ② With the plugin actually loading, CM6 fires a spurious `blur` right after the initial editor mount when the Electron window is not OS-focused; the view committed and tore the editor down on that phantom blur. Both fixed: BOM stripped (and all repo JSONs audited), and `onFocusedBlur` now re-checks focus on the next task before committing — a real blur still commits instantly.
+- Enter now behaves Logseq-style everywhere: split at caret, new block focused below, embedded-block Enter creates a sibling below the source block (same-file embeds; cross-file embeds commit only).
+
+### Added
+
+- **Page-bottom backlinks section**: `N linked mentions` header under the outline, grouped by source page (icon + path, click to jump), each row shows marker + text and jumps to the referencing block via its `id::`.
+- **Block-level backlinks**: blocks referenced via `((id))` get a count badge on the row's right side; click expands an inline panel directly under the block listing each referencing page/block with a jump link; independent expand/collapse per block, multiple panels can be open at once, counts update live on index rebuilds.
+- **Block properties row**: `key:: value` pairs render under the block content (skip-list: `id`, `collapsed`, `style` are shown by their own UI affordances instead).
+- **Editable page-properties card**: the page-props header is now editable — pencil enters edit mode with key/value inputs per row, delete buttons, an add-row, Save/Cancel; writes go through the guarded write path (automatic backup + operation log) and the view reloads from disk after saving.
+
+### Verification
+
+- 208/208 unit tests; real-Obsidian E2E 37/37: iteration suite 6/6 (Enter persistence, mid-block split, page-bottom backlinks, badge expand/collapse, props row, page-props editing) + regression suites 31/31 (acceptance 8, edge 13, parity 6, UX 4).
+
 ## [0.2.2] — 2026-09-22
 
 UX round: last-node indent fix, reading-mode typography parity, self-drawn slash & angle command menus.

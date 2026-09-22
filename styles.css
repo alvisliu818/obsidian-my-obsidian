@@ -1540,3 +1540,145 @@ body.block-touch-dragging {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ------------------------------------------------------------------ */
+/* v0.2.3: page backlinks section, block backlink badges/panels,       */
+/* block props row, editable page-props card                           */
+/* ------------------------------------------------------------------ */
+
+/* --- page bottom backlinks --- */
+.page-backlinks {
+  margin-top: 28px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.page-backlinks-header {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+
+.page-backlinks.is-empty .page-backlinks-header { margin-bottom: 0; }
+
+.page-backlinks-group { margin-bottom: 10px; }
+.page-backlinks-group:last-child { margin-bottom: 0; }
+
+.page-backlinks-page {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: var(--font-ui-small);
+  cursor: pointer;
+  color: var(--text-normal);
+}
+.page-backlinks-page:hover { color: var(--text-accent); }
+.page-backlinks-icon { display: inline-flex; }
+
+.page-backlinks-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0 3px 22px;
+  cursor: pointer;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+.page-backlinks-item:hover { color: var(--text-normal); }
+.page-backlinks-item-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* --- block backlink badge (right side of the row) --- */
+.block-backlink-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  padding: 0 7px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+}
+.block-backlink-badge:hover { color: var(--text-accent); border-color: var(--text-accent); }
+.block-backlink-badge .block-backlink-icon { display: inline-flex; }
+.block-backlink-icon svg { width: 10px; height: 10px; }
+
+/* --- block backlinks panel (under the block) --- */
+.block-backlinks-panel {
+  margin: 4px 0 4px 32px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--text-accent);
+  background: var(--background-secondary);
+  border-radius: 0 6px 6px 0;
+}
+
+.block-backlinks-panel-header {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+  cursor: pointer;
+}
+
+.block-backlinks-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  cursor: pointer;
+  font-size: var(--font-ui-small);
+}
+.block-backlinks-row:hover { color: var(--text-accent); }
+.block-backlinks-row-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.block-backlinks-row-src { color: var(--text-faint); font-size: var(--font-ui-smaller); }
+.block-backlinks-more { color: var(--text-faint); font-size: var(--font-ui-smaller); padding-top: 4px; }
+
+/* --- block props row (under block content) --- */
+.block-props-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding: 2px 6px 2px 0;
+}
+
+.block-prop-item { font-size: var(--font-ui-smaller); line-height: 1.5; }
+.block-prop-key { color: var(--text-muted); font-family: var(--font-monospace); }
+.block-prop-key::after { content: ':: '; opacity: 0.6; }
+.block-prop-value { color: var(--text-normal); }
+
+/* --- editable page-props card --- */
+.page-props-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
+.page-props-edit { color: var(--text-muted); }
+.page-props-edit:hover { color: var(--text-accent); }
+
+.page-prop-row.is-edit-row,
+.page-prop-row.is-add-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.page-prop-input {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: var(--background-primary);
+  font-size: var(--font-ui-smaller);
+}
+.page-prop-input-key { flex: 0 0 140px; font-family: var(--font-monospace); }
+
+.page-prop-delete, .page-prop-add { color: var(--text-muted); display: inline-flex; }
+.page-prop-delete:hover { color: var(--text-error); }
+.page-prop-add:hover { color: var(--text-accent); }
+
+.page-props-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
