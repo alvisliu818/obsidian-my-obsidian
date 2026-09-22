@@ -54,7 +54,9 @@ export function renderEditablePageProps(
 ): void {
   containerEl.querySelector(':scope > .page-props-card')?.remove();
   const rows = parsePageProps(pageProps);
-  if (rows.length === 0 || !filePath) return;
+  // Even with no props yet, show the card so the user can add page properties
+  // (goal: first-block-as-props affordance). The card stays compact when empty.
+  if (!filePath) return;
 
   const card = containerEl.createEl('div', { cls: 'page-props-card' });
   const table = card.createEl('div', { cls: 'page-props-table' });
@@ -62,6 +64,10 @@ export function renderEditablePageProps(
     const el = table.createEl('div', { cls: 'page-prop-row' });
     el.createEl('span', { cls: 'page-prop-key', text: row.key });
     el.createEl('span', { cls: 'page-prop-value', text: row.value });
+  }
+  if (rows.length === 0) {
+    card.addClass('is-empty');
+    table.createEl('span', { cls: 'page-props-empty-hint', text: 'No page properties yet.' });
   }
 
   // Edit toggle (pencil).

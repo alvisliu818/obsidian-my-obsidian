@@ -3,6 +3,25 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [semver](https://semver.org).
 
+## [0.2.4] — 2026-09-22
+
+Embed-Enter fix (completed), page-props empty-state affordance, unlinked-mentions section.
+
+### Fixed
+
+- **Enter on an embedded block still only committed**: the v0.2.3 wiring was half-done — `startEmbedEdit` never passed the `onCommitAndNew` callback, so the embed's Enter fell back to plain commit. Now wired; semantics refined: Enter below an embed creates a NEW EMPTY BLOCK in the **host page**, directly below the block containing the embed (cross-file and same-file embeds behave identically), and focuses it. Verified live: new block inserted at the host index, focused, persisted.
+- **Embed resolve race**: `resolveEmbed` gave up when the vault-wide index hadn't scanned the target file yet (fresh vaults, recently created blocks); it now retries once after 300 ms before showing the is-broken state.
+
+### Added
+
+- **Page-props empty state**: pages without properties now show the compact props card with a hint and the pencil affordance — the "first block as page properties" entry point; adding the first property works straight from the card (guarded write path).
+- **Unlinked mentions section** (`src/features/unlinkedMentions.ts`): below the linked mentions, the page bottom now lists blocks whose plain text mentions this page's title without an existing `[[link]]` (title ≥ 3 chars, occurrence count per row, ±40-char context preview, max 50 rows).
+- **One-click convert**: clicking an unlinked mention rewrites the first bare occurrence into `[[title]]` through the guarded write path (backup + operation log); the mention leaves the list on the next index refresh; lines already containing the title inside a `[[ ]]` are never double-linked.
+
+### Verification
+
+- 208/208 unit tests; real-Obsidian E2E 40/40: iter2 3/3 (embed Enter, props empty-state, unlinked convert) + regression 37/37 (acceptance 8, iter 6, UX 4, edge 13, parity 6).
+
 ## [0.2.3] — 2026-09-22
 
 Editing-flow round: Enter behavior parity, page/block backlinks UI, block props display, editable page properties.

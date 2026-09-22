@@ -95,6 +95,7 @@ export function createEmbedExtensions(
     return true;
   };
   const commitNew = (): boolean => {
+    console.log('[LG] embed Enter commitNew, hasNew=', !!onCommitAndNew);
     if (onCommitAndNew) {
       window.setTimeout(onCommitAndNew, 0);
     } else {
@@ -169,6 +170,7 @@ export function createEditorExtensions(host: BlockEditorView): Extension[] {
   ];
   return ext;
 }
+
 
 
 

@@ -58,6 +58,8 @@ import { logOp } from '../features/logger';
 import { renderPageBacklinks } from '../features/pageBacklinks';
 import { refreshBlockBacklinkBadges } from '../blocks/blockBacklinks';
 import { renderEditablePageProps } from '../features/pagePropsEditor';
+import { blockFromEl } from '../blocks/renderTree';
+import { siblingsOf } from '../core/treeOps';
 
 export const VIEW_TYPE_BLOCK_EDITOR = 'logseq-block-editor';
 
@@ -495,11 +497,44 @@ export class BlockEditorView extends TextFileView {
     const view = new EditorView({
       doc: target.text,
       parent: content,
-      extensions: createEmbedExtensions(this, () => this.commitEmbedEdit()),
+      extensions: createEmbedExtensions(
+        this,
+        () => this.commitEmbedEdit(),
+        () => this.commitEmbedEditAndNew(source, path),
+      ),
     });
     applyCursor(view, 'end');
     view.focus();
     this.embedEdit = { view, source, path, row };
+  }
+
+  /**
+   * Commit the current embed edit, then create a NEW EMPTY BLOCK in the HOST
+   * page, directly below the block that contains the embed, and focus it
+   * (Logseq md Enter parity: Enter below an embed continues writing in the
+   * host outline). Cross-file and same-file embeds behave identically here —
+   * the embed's own text is committed untouched.
+   */
+  commitEmbedEditAndNew(_src: EmbedSource, _path: number[]): void {
+    this.commitEmbedEdit();
+    // Find the HOST block that renders this embed (the wrap containing the
+    // embed box), then insert a sibling right after it.
+    const hostWrap = this.treeEl.querySelector('.block-embed')?.closest('.block-wrap') as HTMLElement | null;
+    if (!hostWrap) return;
+    const hostBlock = blockFromEl(hostWrap);
+    if (!hostBlock) return;
+    const sibs = siblingsOf(hostBlock);
+    const idx = sibs.indexOf(hostBlock);
+    if (idx < 0) return;
+    const nb = createBlock('');
+    this.mutate(
+      () => {
+        sibs.splice(idx + 1, 0, nb);
+        nb.parent = hostBlock.parent ?? null;
+      },
+      () => ({ lists: [hostBlock.parent] }),
+    );
+    this.focusBlock(nb, 0);
   }
 
   /**

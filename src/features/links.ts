@@ -350,7 +350,24 @@ async function resolveEmbed(uuid: string, host: BlockEditorView): Promise<EmbedS
     };
   }
   const info = host.plugin.blockIndex?.get(uuid);
-  if (!info) return null;
+  if (!info) {
+    // Index miss: the vault may have been scanned before this file existed.
+    // One targeted retry after a short wait (layout-ready race), then give up
+    // with the is-broken state.
+    await new Promise((r) => setTimeout(r, 300));
+    const retry = host.plugin.blockIndex?.get(uuid);
+    if (!retry) return null;
+    return resolveFromIndex(retry, uuid, host);
+  }
+  return resolveFromIndex(info, uuid, host);
+}
+
+/** Build an EmbedSource from an index hit: parse the owning file, walk to the block. */
+async function resolveFromIndex(
+  info: { path: string },
+  uuid: string,
+  host: BlockEditorView,
+): Promise<EmbedSource | null> {
   const file = host.app.vault.getAbstractFileByPath(info.path);
   if (!(file instanceof TFile)) return null;
   const doc = parseDocument(await host.app.vault.cachedRead(file));
