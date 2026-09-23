@@ -1,4 +1,4 @@
-import { App, FuzzySuggestModal, Notice, Plugin, EditorPosition, ItemView, WorkspaceLeaf, MarkdownView, TFile, PluginSettingTab, Setting, normalizePath } from 'obsidian';
+import { App, FuzzySuggestModal, Notice, Plugin, EditorPosition, ItemView, WorkspaceLeaf, MarkdownView, TFile, PluginSettingTab, Setting, normalizePath, MarkdownPostProcessorContext } from 'obsidian';
 
 const VIEW_TYPE_VIDEO_RECORDER = 'video-recorder-view';
 
@@ -22,6 +22,7 @@ export default class VideoJournalPlugin extends Plugin {
         await this.loadSettings();
         this.addSettingTab(new VideoJournalSettingTab(this.app, this));
         this.registerView(VIEW_TYPE_VIDEO_RECORDER, (leaf) => new VideoRecorderView(leaf, this));
+        this.registerMarkdownPostProcessor((el, ctx) => this.addResizeHandle(el, ctx));
         this.registerEvent(this.app.workspace.on('active-leaf-change', (leaf) => {
             if (leaf?.view instanceof MarkdownView) {
                 this.lastActiveMarkdownPath = leaf.view.file?.path ?? null;
@@ -40,6 +41,65 @@ export default class VideoJournalPlugin extends Plugin {
 
     async saveSettings() {
         await this.saveData(this.settings);
+    }
+
+    private addResizeHandle(el: HTMLElement, ctx: MarkdownPostProcessorContext) {
+        const video = el instanceof HTMLVideoElement ? el : el.querySelector('video');
+        if (!(video instanceof HTMLVideoElement)) return;
+
+        const wrapper = video.parentElement ?? el;
+        if (wrapper.querySelector('.media-journal-resize-handle')) return;
+        wrapper.addClass('media-journal-resizable');
+        const handle = wrapper.createDiv({ cls: 'media-journal-resize-handle', attr: { 'aria-label': 'Resize video' } });
+        let startX = 0;
+        let startWidth = 0;
+        let resizing = false;
+
+        handle.addEventListener('pointerdown', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            resizing = true;
+            startX = event.clientX;
+            startWidth = video.getBoundingClientRect().width;
+            handle.setPointerCapture(event.pointerId);
+        });
+        handle.addEventListener('pointermove', (event) => {
+            if (!resizing) return;
+            const width = Math.max(160, Math.round(startWidth + event.clientX - startX));
+            video.setCssProps({ width: `${width}px`, height: 'auto' });
+        });
+        handle.addEventListener('pointerup', (event) => {
+            if (!resizing) return;
+            resizing = false;
+            handle.releasePointerCapture(event.pointerId);
+            const width = Math.max(160, Math.round(video.getBoundingClientRect().width));
+            void this.saveResizedEmbed(ctx, el, width);
+        });
+    }
+
+    private async saveResizedEmbed(ctx: MarkdownPostProcessorContext, el: HTMLElement, width: number) {
+        const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
+        if (!(file instanceof TFile)) return;
+        const section = ctx.getSectionInfo(el);
+        await this.app.vault.process(file, (content) => {
+            const lines = content.split('\n');
+            const sectionStart = section?.lineStart ?? 0;
+            const sectionEnd = section?.lineEnd ?? lines.length - 1;
+            for (let index = sectionStart; index <= sectionEnd; index++) {
+                const line = lines[index] ?? '';
+                if (!line.toLowerCase().includes('.webm')) continue;
+                if (/<video\b/i.test(line)) {
+                    lines[index] = line.replace(/(<video\b[^>]*\bwidth="?)\d+("?)/i, `$1${width}$2`);
+                    if (lines[index] === line) {
+                        lines[index] = line.replace(/(<video\b)/i, `$1 width="${width}"`);
+                    }
+                } else if (line.includes('![[')) {
+                    lines[index] = line.replace(/(!\[\[[^\]]+?)(?:\|\d+(?:x\d+)?)?(\]\])/i, `$1|${width}$2`);
+                }
+                break;
+            }
+            return lines.join('\n');
+        });
     }
 
     async activateView() {
@@ -97,7 +157,6 @@ class VideoRecorderView extends ItemView {
     embedCheckbox!: HTMLInputElement;
     autoEmbedCheckbox!: HTMLInputElement;
     embedWidthInput!: HTMLInputElement;
-    embedHeightInput!: HTMLInputElement;
     embedTargetLabel!: HTMLElement;
     muteCheckbox!: HTMLInputElement;
 
@@ -200,13 +259,7 @@ class VideoRecorderView extends ItemView {
         sizeDiv.createSpan({ text: 'Embed size:' });
         this.embedWidthInput = sizeDiv.createEl('input', {
             type: 'number',
-            placeholder: 'Width',
-            attr: { min: '1', style: 'width: 70px;' },
-        });
-        sizeDiv.createSpan({ text: 'x' });
-        this.embedHeightInput = sizeDiv.createEl('input', {
-            type: 'number',
-            placeholder: 'Height',
+            placeholder: 'Width in pixels',
             attr: { min: '1', style: 'width: 70px;' },
         });
 
@@ -246,13 +299,9 @@ class VideoRecorderView extends ItemView {
         this.embedTargetLabel.setText(`Selected note: ${selectedPath}`);
     }
 
-    private getEmbedDimensions(): string {
+    private getEmbedWidth(): string {
         const width = Number.parseInt(this.embedWidthInput.value, 10);
-        const height = Number.parseInt(this.embedHeightInput.value, 10);
-        if (Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0) {
-            return `|${width}x${height}`;
-        }
-        if (Number.isInteger(width) && width > 0) return `|${width}`;
+        if (Number.isInteger(width) && width > 0) return ` width="${width}"`;
         return '';
     }
 
@@ -479,7 +528,7 @@ class VideoRecorderView extends ItemView {
             return;
         }
 
-        const embedText = `\n![[${finalPath}${this.getEmbedDimensions()}]]\n`;
+        const embedText = `\n<video src="${finalPath}" controls${this.getEmbedWidth()}></video>\n`;
         const cursor = this.plugin.targetCursor;
         await this.app.vault.process(file, (content) => {
             if (this.plugin.targetNoteWasSelected || this.autoEmbedCheckbox.checked) {
