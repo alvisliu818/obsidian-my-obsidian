@@ -471,7 +471,7 @@ export default class LogseqEditorPlugin extends Plugin {
       menu.addItem((item) =>
         item.setTitle(title).setIcon(icon).setChecked(mode === current).onClick(() => void this.applyMode(mode)),
       );
-    entry('Live preview', 'lucide-eye', 'edit');
+    entry('Logseq editor', 'lucide-eye', 'edit');
     entry('Page source mode', 'lucide-file-code', 'source');
     entry('Native editor', 'lucide-pencil-line', 'native');
     menu.showAtMouseEvent(evt);
@@ -511,7 +511,7 @@ export default class LogseqEditorPlugin extends Plugin {
       return;
     }
     el.style.display = '';
-    el.setText(mode);
+    el.setText(mode === 'edit' ? 'Logseq editor' : mode === 'source' ? 'Page source mode' : 'Native editor');
     el.toggleClass('mod-active-srcmode', mode === 'source');
     el.setAttribute('aria-label', 'Editing mode — click to switch');
   }
