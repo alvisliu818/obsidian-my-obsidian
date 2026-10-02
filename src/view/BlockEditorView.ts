@@ -54,6 +54,7 @@ import { expandTemplates, parseVarLines, type TemplateContext } from '../feature
 import { logOp } from '../features/logger';
 import { refreshBlockBacklinkBadges } from '../blocks/blockBacklinks';
 import { renderPageReferences } from '../features/pageReferences';
+import { mountCodeEditor, parseCodeFence, type MountedCodeEditor } from '../blocks/codeBlockEdit';
 import { unwatchGuideLayout, watchGuideLayout } from '../blocks/guideLayout';
 
 export const VIEW_TYPE_BLOCK_EDITOR = 'logseq-block-editor';
@@ -74,6 +75,8 @@ export class BlockEditorView extends TextFileView {
   doc: ParsedDocument = { frontmatter: '', pageProps: '', blocks: [] };
   focusedBlock: Block | null = null;
   focusedView: EditorView | null = null;
+  /** Dedicated code-block edit mode (Logseq parity) — mounted instead of the raw editor. */
+  focusedCode: MountedCodeEditor | null = null;
   /**
    * Set by the block menu's "Source mode": the next editor mounted for THIS
    * block skips live preview (raw source for one edit session). Cleared on
@@ -391,6 +394,15 @@ export class BlockEditorView extends TextFileView {
   mountFocusedInto(content: HTMLElement): void {
     const b = this.focusedBlock;
     if (!b) return;
+    // Code blocks open their OWN editor (no fences on screen, Enter = newline
+    // inside the code). Source mode keeps the raw view.
+    const codeInfo = this.sourceModeBlock ? null : parseCodeFence(b.text);
+    if (codeInfo) {
+      this.pendingFocus = null;
+      this.focusedCode = mountCodeEditor(content, b, codeInfo, this);
+      this.focusStartSnapshot = serializeDocument(this.doc);
+      return;
+    }
     const pending = this.pendingFocus;
     const pos: CursorPos = pending?.pos ?? this.savedFocusPos;
     this.pendingFocus = null;
@@ -408,6 +420,10 @@ export class BlockEditorView extends TextFileView {
   // ------------------------------------------------------------------
 
   focusBlock(b: Block, pos: CursorPos = 'end'): void {
+    if (this.focusedCode?.block === b) {
+      this.focusedCode.view.focus();
+      return;
+    }
     if (this.focusedBlock === b && this.focusedView) {
       applyCursor(this.focusedView, pos);
       this.focusedView.focus();
@@ -427,6 +443,10 @@ export class BlockEditorView extends TextFileView {
   focusBlockFromClick(b: Block, ev: MouseEvent): void {
     this.clearSelection(); // editing replaces multi-selection
     const xy = { x: ev.clientX, y: ev.clientY };
+    if (this.focusedCode?.block === b) {
+      this.focusedCode.view.focus();
+      return;
+    }
     if (this.focusedBlock === b && this.focusedView) {
       const p = cursorAtCoords(this.focusedView, xy.x, xy.y, 'end');
       applyCursor(this.focusedView, p);
@@ -458,6 +478,10 @@ export class BlockEditorView extends TextFileView {
 
   /** Destroy the focused CM6 instance if it lives inside `el` (about to be wiped). */
   destroyFocusedInside(el: HTMLElement): void {
+    const fc = this.focusedCode;
+    if (fc && el.contains(fc.view.dom)) {
+      this.commitFocusedText(); // land the code edit before the section is wiped
+    }
     const v = this.focusedView;
     if (v && el.contains(v.dom)) {
       v.destroy();
@@ -491,6 +515,24 @@ export class BlockEditorView extends TextFileView {
 
   /** Commit CM6 text back into the block model; single-block static refresh. */
   commitFocusedText(): void {
+    const fc = this.focusedCode;
+    if (fc) {
+      this.focusedCode = null;
+      this.focusedBlock = null;
+      const content = fc.view.state.doc.toString();
+      const newText = fc.closed ? `${fc.openLine}
+${content}
+${fc.fence}` : `${fc.openLine}
+${content}`;
+      fc.view.destroy();
+      if (fc.block.text !== newText) {
+        fc.block.text = newText;
+        this.undo.push(this.focusStartSnapshot);
+        this.markDirty();
+      }
+      refreshBlockContent(fc.block, this);
+      return;
+    }
     const v = this.focusedView;
     const b = this.focusedBlock;
     this.focusedView = null;
@@ -1432,7 +1474,7 @@ export class BlockEditorView extends TextFileView {
       this.toggleCollapseAll();
       return;
     }
-    if (this.focusedView) return;
+    if (this.focusedView || this.focusedCode) return;
     // Bulk shortcuts when a multi-selection exists.
     if (this.selectedBlocks.size > 0) {
       if (key === 'a') {

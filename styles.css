@@ -2047,3 +2047,37 @@ body.block-touch-dragging {
 .block-editor-addblock:hover::after {
   opacity: 1;
 }
+
+/* ---------- Code block edit mode (Logseq parity) ---------- */
+/* A dedicated code editor replaces the raw fence view: no fence markers,
+   Enter = newline inside the code, Esc commits. Placed AFTER the generic
+   .block-content .cm-* rules so its overrides win at equal specificity. */
+.lgp-code-editing {
+  border-radius: 6px;
+}
+
+.lgp-code-editing .cm-editor {
+  font-family: var(--font-monospace);
+  font-size: 0.9em;
+  background: var(--background-primary);
+}
+
+.lgp-code-editing .cm-content {
+  padding: 6px 8px;
+  white-space: pre;
+  caret-color: var(--text-accent);
+}
+
+.lgp-code-editing .cm-line {
+  padding: 0;
+}
+
+.lgp-code-editing .cm-scroller {
+  overflow: auto;
+}
+
+.lgp-code-edit-hint {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: var(--font-smallest);
+}
