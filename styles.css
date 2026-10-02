@@ -312,7 +312,10 @@
 }
 
 .block-content .cm-content {
-  padding: 2px 0;
+  /* no vertical padding: the editor must be exactly as tall as the static
+     render (reading line-height 1.55 == cm-line), otherwise every block
+     jumps 4px when entering edit mode */
+  padding: 0;
   caret-color: var(--text-accent);
 }
 
