@@ -2149,6 +2149,12 @@ body.block-touch-dragging {
   border-radius: 6px;
 }
 
+.lgp-code-editing {
+  /* Same outer margin as the reading-state .lgp-code-block — the block does
+     not shift vertically when the edit session opens/closes. */
+  margin-block: 0.25em;
+}
+
 .lgp-code-editing .cm-editor {
   font-family: var(--font-monospace);
   /* Same size & line box as the reading view's pre code (1em/1.5), so the
