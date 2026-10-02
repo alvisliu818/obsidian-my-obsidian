@@ -1,0 +1,10 @@
+{
+	"id": "breadcrumb-nav",
+	"name": "Breadcrumb Nav",
+	"version": "1.0.0",
+	"minAppVersion": "1.4.0",
+	"description": "在笔记顶部、文件路径下方显示面包屑导航（文件名 › 各级标题），支持悬浮查看同级、下一级下钻与同标签页面。",
+	"author": "",
+	"authorUrl": "",
+	"isDesktopOnly": false
+}

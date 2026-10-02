@@ -1,0 +1,146 @@
+/* Breadcrumb Nav —— 笔记顶部（文件路径下方）的面包屑栏 */
+
+.bcn-bar {
+	position: relative;
+	z-index: 5;
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 1px;
+	margin: 0 0 6px;
+	padding: 3px 0 5px;
+	font-size: var(--font-ui-smallest, 12px);
+	line-height: 1.5;
+	color: var(--text-faint);
+	-webkit-user-select: none;
+	user-select: none;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+/* 吸顶：滚动时固定在笔记顶部，不遮挡正文（自身占位） */
+.bcn-bar.bcn-sticky {
+	position: sticky;
+	top: 0;
+	background-color: var(--background-primary);
+}
+
+.bcn-item {
+	max-width: 20em;
+	padding: 1px 5px;
+	border-radius: 4px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	cursor: pointer;
+}
+
+.bcn-item:hover {
+	color: var(--text-normal);
+	background-color: var(--background-modifier-hover);
+}
+
+.bcn-page {
+	color: var(--text-muted);
+	font-weight: 600;
+}
+
+.bcn-item.bcn-active {
+	color: var(--text-accent);
+}
+
+.bcn-sep {
+	padding: 0 1px;
+	opacity: 0.45;
+}
+
+.bcn-next {
+	padding: 1px 5px;
+	border-radius: 4px;
+	opacity: 0.5;
+	cursor: pointer;
+}
+
+.bcn-next:hover {
+	opacity: 1;
+	color: var(--text-accent);
+	background-color: var(--background-modifier-hover);
+}
+
+/* ============ 悬浮菜单 ============ */
+.bcn-popup {
+	position: fixed;
+	z-index: 1000;
+	min-width: 200px;
+	max-width: 380px;
+	max-height: 320px;
+	overflow-y: auto;
+	padding: 4px;
+	border-radius: 6px;
+	background-color: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+	font-size: var(--font-ui-small, 13px);
+	line-height: 1.5;
+	color: var(--text-normal);
+}
+
+.bcn-popup-item {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 3px 8px;
+	border-radius: 4px;
+}
+
+.bcn-popup-item:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.bcn-popup-text {
+	flex: 1 1 auto;
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	cursor: pointer;
+}
+
+.bcn-popup-tag {
+	flex: 0 0 auto;
+	max-width: 12em;
+	color: var(--text-faint);
+	font-size: 0.9em;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.bcn-popup-next {
+	flex: 0 0 auto;
+	width: 16px;
+	text-align: center;
+	border-radius: 3px;
+	opacity: 0.4;
+	cursor: pointer;
+}
+
+.bcn-popup-next:hover {
+	opacity: 1;
+	color: var(--text-accent);
+	background-color: var(--background-modifier-hover);
+}
+
+.bcn-popup-item.is-active {
+	color: var(--text-accent);
+	font-weight: 600;
+}
+
+/* 由 ▸ 悬浮展开的级联子菜单 */
+.bcn-popup-sub {
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+}
+
+/* 子菜单正展开着的那个条目，保持高亮以指明来源 */
+.bcn-popup-item.is-open {
+	background-color: var(--background-modifier-hover);
+}
