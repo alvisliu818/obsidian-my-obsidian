@@ -168,12 +168,13 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--text-faint);
+  /* light gray, theme-adaptive (Logseq's dots are very faint) */
+  background: color-mix(in srgb, var(--text-normal) 22%, transparent);
 }
 
-/* row hover darkens the dot back (affordance survives the lighter base) */
+/* row hover darkens the dot a step (affordance survives the lighter base) */
 .block-main:hover .block-bullet::before {
-  background: var(--text-muted);
+  background: color-mix(in srgb, var(--text-normal) 40%, transparent);
 }
 
 /* reserved slot where the floating caret appears on hover (keeps the bullet
@@ -270,7 +271,7 @@
   bottom: calc(0.775em + 9px);
   width: 2px;
   border-radius: 2px;
-  background: color-mix(in srgb, var(--background-modifier-border) 45%, transparent);
+  background: color-mix(in srgb, var(--background-modifier-border) 28%, transparent);
   cursor: pointer;
   transition: background 0.1s ease;
 }
@@ -2003,7 +2004,8 @@ body.block-touch-dragging {
 
 /* ---------- Add-block affordance under the last block (Logseq parity) ---------- */
 .block-editor-addblock {
-  height: 2.6em;
+  /* Same pitch as the normal distance between two bullets (one 1.55em row). */
+  height: 1.55em;
   cursor: text;
   position: relative;
 }
@@ -2023,12 +2025,14 @@ body.block-touch-dragging {
 .block-editor-addblock::after {
   content: '+';
   position: absolute;
-  left: 0;
-  width: var(--lgp-controls-w, 32px);
+  /* centered on the bullet dot column (dot center = controls-width − 8px) */
+  left: calc(var(--lgp-controls-w, 32px) - 16px);
+  width: 16px;
   top: 50%;
   transform: translateY(-50%);
   text-align: center;
-  color: var(--text-faint);
+  font-size: 0.9em;
+  color: color-mix(in srgb, var(--text-normal) 35%, transparent);
   opacity: 0;
   transition: opacity 0.12s ease;
 }
