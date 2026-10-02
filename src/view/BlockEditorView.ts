@@ -386,8 +386,14 @@ export class BlockEditorView extends TextFileView {
    * caret lives. Falls back to the zoom context when no block is focused.
    */
   private updateOutlinePath(): void {
-    const el = this.contentEl as HTMLElement & { __lgFocusPath?: string[] };
+    const el = this.contentEl as HTMLElement & {
+      __lgFocusPath?: string[];
+      __lgFocusBlocks?: Block[];
+      __lgRoots?: Block[];
+      __lgTopBlocks?: Block[];
+    };
     const crumbs: string[] = [];
+    const chain: Block[] = [];
     // The focused block while editing; after blur keep the LAST edited
     // block's position (companion breadcrumbs must not snap back to the zoom
     // context the moment the caret leaves).
@@ -395,9 +401,17 @@ export class BlockEditorView extends TextFileView {
     while (b) {
       const first = (b.text.split('\n')[0] ?? '').trim();
       crumbs.unshift(!first ? '·' : first.length > 24 ? first.slice(0, 24) + '…' : first);
+      chain.unshift(b);
       b = b.parent;
     }
     el.__lgFocusPath = crumbs;
+    // Companion breadcrumbs (breadcrumb-nav) render markdown-parity controls
+    // from the LIVE block chain: clickable levels (focus that block → path
+    // truncates), sibling menus, and a trailing next-level (▸) menu. Roots =
+    // current zoom context; top = document-level blocks (level-0 siblings).
+    el.__lgFocusBlocks = chain;
+    el.__lgRoots = this.visibleRoots;
+    el.__lgTopBlocks = this.doc.blocks;
     el.dispatchEvent(new CustomEvent('lgp-block-focus', { detail: { path: crumbs } }));
   }
 

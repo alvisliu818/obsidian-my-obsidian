@@ -1546,6 +1546,18 @@ body.block-touch-dragging {
   /* Theme pre padding is scoped to .markdown-rendered and never reaches
      plugin-rendered code — give the box its own so every line insets. */
   padding: 0.4em 0.9em;
+  /* No-language fences render as bare <pre> (no language class); themes
+     (Blue Topaz) style bare pre apart from pre[class] code boxes, so the
+     static box diverged from the dedicated code editor. Pin the box to the
+     SAME values the edit state's .lgp-code-editing .cm-editor uses so both
+     states render identically. */
+  background: var(--code-background, var(--background-secondary));
+  border: none;
+  border-bottom-left-radius: var(--code-radius, 6px);
+  border-bottom-right-radius: var(--code-radius, 6px);
+  font-family: var(--font-monospace);
+  font-size: 1em;
+  line-height: 1.5;
 }
 
 :is(.block-content-static:not(.block-dataview), .embed-content, .fc-question, .fc-answer) pre code {
