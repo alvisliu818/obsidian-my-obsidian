@@ -74,6 +74,8 @@ export class BlockEditorView extends TextFileView {
   plugin: LogseqEditorPlugin;
   doc: ParsedDocument = { frontmatter: '', pageProps: '', blocks: [] };
   focusedBlock: Block | null = null;
+  /** Last block the caret lived in — keeps the outline path shown after blur. */
+  lastEditedBlock: Block | null = null;
   focusedView: EditorView | null = null;
   /** Dedicated code-block edit mode (Logseq parity) — mounted instead of the raw editor. */
   focusedCode: MountedCodeEditor | null = null;
@@ -108,7 +110,12 @@ export class BlockEditorView extends TextFileView {
   private refsHostEl!: HTMLElement;
   private undo = new UndoStack();
   private focusStartSnapshot = '';
-  private pendingFocus: { pos: CursorPos; clickXY: { x: number; y: number } | null } | null = null;
+  private pendingFocus: {
+    pos: CursorPos;
+    clickXY: { x: number; y: number } | null;
+    /** Click position mapped from the static render (pre-swap), when available. */
+    staticPos: number | null;
+  } | null = null;
   private savedFocusPos: CursorPos = 'end';
   private indexDisposer: (() => void) | null = null;
   private searchBar: PageSearchBar | null = null;
@@ -229,6 +236,7 @@ export class BlockEditorView extends TextFileView {
     registerRoots(this.doc.blocks);
     this.zoomedBlock = null;
     this.focusedBlock = null;
+    this.lastEditedBlock = null; // new file: stale outline path must not leak
     this.scrollCap = VIRTUAL_INITIAL_CAP;
     this.selectedBlocks.clear();
     this.lastClicked = null;
@@ -379,7 +387,10 @@ export class BlockEditorView extends TextFileView {
   private updateOutlinePath(): void {
     const el = this.contentEl as HTMLElement & { __lgFocusPath?: string[] };
     const crumbs: string[] = [];
-    let b = this.focusedBlock ?? this.zoomedBlock;
+    // The focused block while editing; after blur keep the LAST edited
+    // block's position (companion breadcrumbs must not snap back to the zoom
+    // context the moment the caret leaves).
+    let b = this.focusedBlock ?? this.lastEditedBlock ?? this.zoomedBlock;
     while (b) {
       const first = (b.text.split('\n')[0] ?? '').trim();
       crumbs.unshift(!first ? '·' : first.length > 24 ? first.slice(0, 24) + '…' : first);
@@ -435,7 +446,23 @@ export class BlockEditorView extends TextFileView {
     const v = mountFocusedEditor(content, b, pos, this);
     this.focusedView = v;
     if (pending?.clickXY) {
-      const p = cursorAtCoords(v, pending.clickXY.x, pending.clickXY.y, 'end');
+      // posAtCoords on the fresh view uses the CLICK's page coords, but the
+      // raw-text CM6 is much shorter than the static render when it contained
+      // images/rendered code — the mapping clamps to doc end and the caret
+      // lands far from the click. When the mapped caret line is visibly off
+      // the click Y, fall back to the pre-swap static-render position.
+      let p = cursorAtCoords(v, pending.clickXY.x, pending.clickXY.y, 'end');
+      if (pending.staticPos !== null) {
+        let top: number | null = null;
+        try {
+          top = v.coordsAtPos(p)?.top ?? null;
+        } catch {
+          top = null;
+        }
+        if (top === null || Math.abs(top - pending.clickXY.y) > 60) {
+          p = Math.max(0, Math.min(pending.staticPos, v.state.doc.length));
+        }
+      }
       applyCursor(v, p);
     }
     this.focusStartSnapshot = serializeDocument(this.doc);
@@ -457,7 +484,8 @@ export class BlockEditorView extends TextFileView {
     }
     this.commitFocusedText();
     this.focusedBlock = b;
-    this.pendingFocus = { pos, clickXY: null };
+    this.lastEditedBlock = b;
+    this.pendingFocus = { pos, clickXY: null, staticPos: null };
     this.savedFocusPos = pos;
     // Incremental: swap static ↔ CM6 inside the two affected wraps only.
     // Full render fallback when the target is beyond the virtual-scroll cap
@@ -482,11 +510,70 @@ export class BlockEditorView extends TextFileView {
       this.focusedView.focus();
       return;
     }
+    // Capture the click's source position from the STATIC render BEFORE the
+    // CM6 swap: tall rendered elements (images, code blocks) make the raw-text
+    // editor much shorter, so post-mount posAtCoords maps the stale Y far off
+    // (usually clamping to doc end) and the caret "disappears" from the click
+    // point — e.g. clicking right before a rendered fence.
+    const staticPos = this.staticClickPos(b, ev.clientY);
     this.commitFocusedText();
     this.focusedBlock = b;
-    this.pendingFocus = { pos: 'end', clickXY: xy };
+    this.lastEditedBlock = b;
+    this.pendingFocus = { pos: 'end', clickXY: xy, staticPos };
     this.savedFocusPos = 'end';
     if (!this.mountFocusedInDom(b)) this.render();
+  }
+
+  /**
+   * Map a click Y (page coords) onto a doc position of b's text using the
+   * static render's top-level children. Markdown block constructs map 1:1 to
+   * source line groups (paragraph run / heading / fenced run), so "nearest
+   * child at/above Y" → end of that child's last source line. Returns null
+   * when no static render (focused, or structure not mapped).
+   */
+  private staticClickPos(b: Block, y: number): number | null {
+    if (b.kind === 'raw') return null;
+    const wrap = findBlockEl(b);
+    const holder = wrap?.querySelector(':scope > .block-main > .block-content > .block-content-static') as HTMLElement | null;
+    if (!holder || !holder.children.length) return null;
+    const lines = b.text.split('\n');
+    if (lines.length <= 1) return null;
+    // Line-run per top-level child: fences swallow their whole run; headings
+    // one line; everything else consumes up to the next fence/heading.
+    const runs: Array<[number, number]> = [];
+    let li = 0;
+    for (let ci = 0; ci < holder.children.length && li < lines.length; ci++) {
+      const tag = (holder.children[ci] as HTMLElement).tagName;
+      const isFence = /^\s*(```|~~~)/.test(lines[li] ?? '');
+      let j = li;
+      if (isFence || tag === 'PRE') {
+        if (isFence) {
+          j++;
+          while (j < lines.length && !/^\s*(```|~~~)/.test(lines[j])) j++;
+          if (j < lines.length) j++;
+        } else j = li + 1;
+      } else if (/^H[1-6]$/.test(tag)) {
+        j = li + 1;
+      } else {
+        while (j < lines.length && !/^\s*(```|~~~)/.test(lines[j]) && !/^#{1,6}\s/.test(lines[j])) j++;
+        if (j === li) j = li + 1;
+      }
+      runs.push([li, Math.min(j - 1, lines.length - 1)]);
+      li = j;
+    }
+    if (!runs.length) return null;
+    // Nearest child at/above the click Y.
+    let pick = -1;
+    for (let i = 0; i < holder.children.length && i < runs.length; i++) {
+      const r = (holder.children[i] as HTMLElement).getBoundingClientRect();
+      if (y < r.top) break;
+      pick = i;
+    }
+    if (pick < 0) return 0;
+    const endLine = runs[pick][1];
+    let pos = 0;
+    for (let i = 0; i < endLine; i++) pos += lines[i].length + 1;
+    return pos + lines[endLine].length;
   }
 
   /**
