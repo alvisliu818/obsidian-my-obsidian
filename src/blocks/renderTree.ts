@@ -612,8 +612,15 @@ function enhanceCodeBlocks(holder: HTMLElement, b: Block, host: BlockEditorView)
     wrap.className = 'lgp-code-block';
     pre.replaceWith(wrap);
     const bar = wrap.createDiv({ cls: 'lgp-code-toolbar' });
-    if (lang) {
-      const langEl = bar.createEl('span', { cls: 'lgp-code-lang', text: lang });
+    // Mixed blocks (image/prose lines above the fence) ALWAYS show the label —
+    // it is their only source-mode entry, and the dedicated code editor shows
+    // the same 'text' placeholder for a languageless fence. Pure blocks with
+    // no language show no label in EITHER state.
+    const lines = b.text.split('\n');
+    const fenceIdx = lines.findIndex((l) => /^(`{3,}|~{3,})/.test(l));
+    const isMixed = fenceIdx > 0;
+    if (lang || isMixed) {
+      const langEl = bar.createEl('span', { cls: 'lgp-code-lang', text: lang || 'text' });
       langEl.title = 'Edit as source (change language)';
       langEl.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -621,8 +628,6 @@ function enhanceCodeBlocks(holder: HTMLElement, b: Block, host: BlockEditorView)
         // One-shot source mode: the raw fence is edited with the caret at the
         // end of the opening fence line. Mixed blocks (image/prose prefix):
         // the fence line is NOT line 0 — offset past the prefix lines.
-        const lines = b.text.split('\n');
-        const fenceIdx = lines.findIndex((l) => /^(`{3,}|~{3,})/.test(l));
         const off =
           (fenceIdx > 0 ? lines.slice(0, fenceIdx).join('\n').length + 1 : 0) +
           (lines[fenceIdx]?.length ?? 0);
