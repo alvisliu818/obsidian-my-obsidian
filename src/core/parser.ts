@@ -200,7 +200,14 @@ export function parseDocument(md: string): ParsedDocument {
     // --- Code fence handling ---
     const fence = FENCE_OPEN_RE.exec(line);
     if (fence) {
-      const belongsToBlock = lastBlock !== null && depth >= realDepth(lastBlock) + 1;
+      // A fence belongs to the last block when indented past its content
+      // column (depth >= realDepth + 1) OR at the same depth as its marker
+      // (depth > 0). Logseq exports and cleanup tools write same-depth
+      // fences; hoisting those to root raw blocks would serialize them after
+      // the whole tree — every code block jumping to the bottom of the file.
+      const belongsToBlock =
+        lastBlock !== null &&
+        (depth >= realDepth(lastBlock) + 1 || (depth >= realDepth(lastBlock) && depth > 0));
       if (belongsToBlock && lastBlock) {
         // In-block fence: everything until the closing fence is block text.
         const prefix = leadingWs(line);
