@@ -227,6 +227,26 @@ export function splitBlock(b: Block, offset: number): Block {
 }
 
 /**
+ * Strip the common leading indent (spaces) from every non-blank line, keeping
+ * deeper indentation as the content's own. Enter uses this when the tail of a
+ * raw block becomes a new outline block: orphaned fences in Logseq exports
+ * sit at a fixed file indent; removing it puts the fence at the block's
+ * content column so it re-parses as an in-block fence (and renders as a code
+ * block) after the round-trip.
+ */
+export function dedentCommon(text: string): string {
+  const lines = text.split('\n');
+  let min = Infinity;
+  for (const l of lines) {
+    if (l.trim() === '') continue;
+    const w = /^ */.exec(l)?.[0].length ?? 0;
+    if (w < min) min = w;
+  }
+  if (!Number.isFinite(min) || min === 0) return text;
+  return lines.map((l) => (l.trim() === '' ? l : l.slice(min))).join('\n');
+}
+
+/**
  * Merge block into the previous visible block (Backspace at block start).
  * - text is appended to the previous block's text.
  * - children are re-parented after the previous block (as its trailing children).

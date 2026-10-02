@@ -56,6 +56,11 @@ export function parseCodeFence(text: string): CodeFenceInfo | null {
   let end = lines.length;
   for (let i = 1; i < lines.length; i++) {
     if (new RegExp('^' + fence[0] + '{' + fence.length + ',}\\s*$').test(lines[i])) {
+      // A pure code block ENDS at its closing fence. Non-blank content after
+      // it (a second fence, trailing prose) means this is a mixed block: the
+      // generic outline editor must keep it — mounting the code editor would
+      // commit only up to the FIRST closing fence and drop the rest.
+      if (lines.slice(i + 1).some((l) => l.trim() !== '')) return null;
       closed = true;
       end = i;
       break;

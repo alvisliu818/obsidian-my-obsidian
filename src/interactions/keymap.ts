@@ -1,14 +1,17 @@
-﻿/**
+/**
  * Block-level keyboard interaction handlers (Logseq behavior).
  * Each handler receives the CM6 view of the focused block plus the host view;
  * returning true consumes the key (prevents CM6 default), false falls through.
  */
 
+import { insertTab } from '@codemirror/commands';
 import type { EditorView } from '@codemirror/view';
-import { insertNewline, insertTab } from '@codemirror/commands';
 import type { BlockEditorView } from '../view/BlockEditorView';
 import {
+  dedentCommon,
   indent,
+  insertAfter,
+  insertBefore,
   mergeWithPrev,
   moveBlockVertically,
   nextVisible,
@@ -17,7 +20,7 @@ import {
   splitBlock,
 } from '../core/treeOps';
 import { cycleMarker } from '../core/treeOps';
-import { applyBlockProps, splitPropLines, type Block } from '../types';
+import { applyBlockProps, createBlock, splitPropLines, type Block } from '../types';
 
 function focusedBlock(host: BlockEditorView): Block | null {
   return host.focusedBlock;
@@ -36,7 +39,34 @@ export function handleEnter(view: EditorView, host: BlockEditorView): boolean {
   const b = focusedBlock(host);
   if (!b) return false;
   if (b.kind === 'raw') {
-    insertNewline(view); // raw content: plain line break inside the text
+    // Logseq parity: Enter creates outline blocks — Shift+Enter stays the
+    // soft newline. The raw block splits at the caret: the head keeps its
+    // verbatim text, the tail becomes a NEW outline list block with the
+    // common indent stripped (orphaned indented fences from Logseq exports
+    // thus re-parse as in-block fences and render as code blocks).
+    const { text, offset } = deleteSelection(view);
+    const parent = b.parent;
+    let nb: Block | null = null;
+    host.mutate(
+      () => {
+        if (offset === 0) {
+          // Caret at block start: new empty outline block ABOVE, the
+          // verbatim content stays untouched below (Logseq: empty head).
+          b.text = text;
+          nb = createBlock('');
+          insertBefore(b, nb);
+          return;
+        }
+        b.text = text.slice(0, offset);
+        nb = createBlock(dedentCommon(text.slice(offset)));
+        insertAfter(b, nb);
+      },
+      () => ({ lists: [parent] }),
+    );
+    const target = nb as Block | null;
+    if (target) {
+      host.focusBlock(target, 0);
+    }
     return true;
   }
   const { text, offset } = deleteSelection(view);
