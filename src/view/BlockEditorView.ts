@@ -432,21 +432,23 @@ export class BlockEditorView extends TextFileView {
   mountFocusedInto(content: HTMLElement): void {
     const b = this.focusedBlock;
     if (!b) return;
+    // A re-render while a code editor was already mounted (scroll-cap bump,
+    // index rebuild, ...) would leak the old CM6 instance and leave its dead
+    // wrap inside the cached static render — destroy & restore first. The
+    // restored code element is exactly what the source-mode branch below
+    // swaps out next.
+    if (this.focusedCode) {
+      const stale = this.focusedCode;
+      this.focusedCode = null;
+      stale.view.destroy();
+      if (stale.editingWrap && stale.restoreEl && stale.editingWrap.parentElement) {
+        stale.editingWrap.replaceWith(stale.restoreEl);
+      }
+    }
     // Code blocks open their OWN editor (no fences on screen, Enter = newline
     // inside the code). Source mode keeps the raw view.
     const codeInfo = this.sourceModeBlock || this.pageSourceMode ? null : parseCodeFence(b.text);
     if (codeInfo) {
-      // A re-render while a code editor was already mounted (scroll-cap bump,
-      // index rebuild, ...) would leak the old CM6 instance and leave its
-      // dead wrap inside the cached static render — destroy & restore first.
-      if (this.focusedCode) {
-        const stale = this.focusedCode;
-        this.focusedCode = null;
-        stale.view.destroy();
-        if (stale.editingWrap && stale.restoreEl && stale.editingWrap.parentElement) {
-          stale.editingWrap.replaceWith(stale.restoreEl);
-        }
-      }
       const pending = this.pendingFocus;
       this.pendingFocus = null;
       let mountOpts: { replaceEl?: HTMLElement } | undefined;
@@ -514,6 +516,46 @@ export class BlockEditorView extends TextFileView {
       // this the companion breadcrumb keeps showing the PREVIOUS block.
       this.updateOutlinePath();
       return;
+    }
+    // One-shot source mode on a MIXED block (image/prose + fence): the fence
+    // SOURCE (markers + language word editable) mounts through the code
+    // editor IN PLACE of the rendered code element, prefix kept rendered —
+    // the generic whole-text editor would collapse the image to a text line
+    // and jump the page by its height. Pure blocks fall through to the
+    // generic editor (their whole text IS the fence source).
+    if (this.sourceModeBlock === b) {
+      const mixed = parseCodeFence(b.text);
+      if (mixed?.prefix) {
+        const holder = cachedStaticEl(b);
+        const codeEl =
+          holder?.querySelector<HTMLElement>('.lgp-code-block:not(.lgp-code-editing)') ?? null;
+        if (holder && codeEl) {
+          const pending = this.pendingFocus;
+          this.pendingFocus = null;
+          content.appendChild(holder);
+          this.focusedCode = mountCodeEditor(content, b, mixed, this, {
+            replaceEl: codeEl,
+            source: true,
+          });
+          // Cursor: the doc starts at the opening fence line — whole-text
+          // positions shift by the prefix (plus its newline).
+          const cv = this.focusedCode.view;
+          const len = cv.state.doc.length;
+          if (pending) {
+            const off = mixed.prefix.length + 1;
+            const p =
+              pending.pos === 'start'
+                ? 0
+                : pending.pos === 'end'
+                  ? len
+                  : Math.max(0, Math.min(pending.pos - off, len));
+            applyCursorAndScroll(cv, p);
+          }
+          this.focusStartSnapshot = serializeDocument(this.doc);
+          this.updateOutlinePath();
+          return;
+        }
+      }
     }
     const pending = this.pendingFocus;
     const pos: CursorPos = pending?.pos ?? this.savedFocusPos;
@@ -740,9 +782,16 @@ export class BlockEditorView extends TextFileView {
       this.focusedBlock = null;
       const content = fc.view.state.doc.toString();
       const head = fc.prefix ? fc.prefix + '\n' : '';
-      const newText = fc.closed ? `${head}${fc.openLine}
+      // Source mode: the doc IS the fence source (markers/language possibly
+      // edited) — written verbatim under the prefix. Otherwise re-wrap the
+      // fence around the content.
+      const newText = fc.source
+        ? head + content
+        : fc.closed
+          ? `${head}${fc.openLine}
 ${content}
-${fc.fence}` : `${head}${fc.openLine}
+${fc.fence}`
+          : `${head}${fc.openLine}
 ${content}`;
       fc.view.destroy();
       // Mixed-block mount: put the static code element back so the cached
@@ -756,6 +805,8 @@ ${content}`;
         this.undo.push(this.focusStartSnapshot);
         this.markDirty();
       }
+      // One-shot source mode ends when its editor commits.
+      if (this.sourceModeBlock === fc.block) this.sourceModeBlock = null;
       refreshBlockContent(fc.block, this);
       this.updateOutlinePath();
       return;
@@ -765,10 +816,12 @@ ${content}`;
     this.focusedView = null;
     this.focusedBlock = null;
     if (!v || !b) return;
-    // "Source mode" is a one-shot edit session: committing ITS editor ends
-    // it. (The early return above matters — focusBlock() runs this on the
-    // way to mounting the source-mode editor, and must not clear the flag.)
-    this.sourceModeBlock = null;
+    // "Source mode" is a one-shot edit session: committing ITS editor ends it.
+    // Scoped to THIS block — focusBlock() commits the PREVIOUS editor on the
+    // way to mounting a source-mode editor for the NEXT one, and that commit
+    // must not clear the just-set flag. (The early return above matters too:
+    // nothing focused → keep the flag.)
+    if (this.sourceModeBlock === b) this.sourceModeBlock = null;
     const changed = commitEditorText(v, b, this.templateContext());
     if (b.kind === 'list' && b.text === '' && !b.frontmatter && this.doc.blocks[0] === b && this.file) registerLogseqPageProps(this.file.path, b.props);
     else clearLogseqPageProps(this.file?.path ?? '');

@@ -112,6 +112,8 @@ export interface MountedCodeEditor {
   fence: string;
   openLine: string;
   closed: boolean;
+  /** Source variant: the doc is the fence SOURCE (markers/language editable). */
+  source: boolean;
   /** The editing wrap that replaced the static code element (mixed blocks). */
   editingWrap: HTMLElement | null;
   /** The static code element to restore on commit (mixed blocks). */
@@ -125,6 +127,13 @@ export interface CodeMountOpts {
    * block keeps its rendered prefix (image/prose) untouched on screen.
    */
   replaceEl?: HTMLElement;
+  /**
+   * Source mode: the doc is the fence SOURCE (opening fence line + content +
+   * closing fence) so the fence markers and the language word are editable;
+   * commit writes the doc verbatim under the prefix. Mixed blocks only —
+   * pure blocks keep the generic whole-text source editor.
+   */
+  source?: boolean;
 }
 
 /**
@@ -139,6 +148,9 @@ export function mountCodeEditor(
   host: BlockEditorView,
   opts: CodeMountOpts = {},
 ): MountedCodeEditor {
+  const sourceMode = opts.source === true;
+  // Referenced by the source-mode label handler before the view exists.
+  let viewRef: EditorView | null = null;
   // Standard DOM APIs (no Obsidian prototype extensions) — keeps this module
   // testable outside Obsidian.
   const wrap = document.createElement('div');
@@ -155,11 +167,20 @@ export function mountCodeEditor(
     langEl.className = 'lgp-code-lang';
     langEl.textContent = info.lang || 'text';
     langEl.title = 'Edit as source (change language)';
-    // Click the language label → one-shot source mode with the cursor at the
-    // end of the fence's language word, so the language can be edited
-    // directly (the code content is committed first, never lost).
     langEl.addEventListener('click', (e) => {
       e.stopPropagation();
+      if (sourceMode) {
+        // Already in source mode — the fence line is IN the doc: just put
+        // the caret at the end of the language word.
+        if (viewRef) {
+          viewRef.dispatch({ selection: { anchor: viewRef.state.doc.line(1).to } });
+          viewRef.focus();
+        }
+        return;
+      }
+      // Click the language label → one-shot source mode with the cursor at
+      // the end of the fence's language word, so the language can be edited
+      // directly (the code content is committed first, never lost).
       host.commitFocusedText();
       host.sourceModeBlock = block;
       // Mixed blocks: the opening fence is NOT line 0 — offset past the prefix.
@@ -178,7 +199,13 @@ export function mountCodeEditor(
 
   const view = new EditorView({
     state: EditorState.create({
-      doc: info.content,
+      // Source mode edits the fence SOURCE (opening fence line + content +
+      // closing fence) so the markers and the language word are editable.
+      doc: sourceMode
+        ? info.closed
+          ? `${info.openLine}\n${info.content}\n${info.fence}`
+          : `${info.openLine}\n${info.content}`
+        : info.content,
       extensions: [
         drawSelection(),
         history(),
@@ -202,6 +229,7 @@ export function mountCodeEditor(
   });
   // Debug handle for e2e verification (same convention as the outline editor).
   (view.dom as HTMLElement & { __lgView?: EditorView }).__lgView = view;
+  viewRef = view;
   view.focus();
   return {
     view,
@@ -210,6 +238,7 @@ export function mountCodeEditor(
     fence: info.fence,
     openLine: info.openLine,
     closed: info.closed,
+    source: sourceMode,
     editingWrap: opts.replaceEl ? wrap : null,
     restoreEl: opts.replaceEl ?? null,
   };

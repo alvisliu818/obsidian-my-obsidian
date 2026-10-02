@@ -103,6 +103,24 @@ describe('parseCodeFence: mixed blocks (prefix + fence)', () => {
   });
 });
 
+describe('source-mode fence doc round-trips (mixed blocks)', () => {
+  it('prefix + source doc (markers included) reassembles the original text', () => {
+    for (const text of [
+      '![图](a.png)\n```\n# 搭建模型\n```',
+      '![图](a.png)\n```python\nx = 1\n```',
+      'prose line\n```js\ny = 2',
+      '```python\nx = 1\n```',
+    ]) {
+      const info = parseCodeFence(text);
+      expect(info).not.toBeNull();
+      const sourceDoc = info!.closed
+        ? `${info!.openLine}\n${info!.content}\n${info!.fence}`
+        : `${info!.openLine}\n${info!.content}`;
+      expect((info!.prefix ? info!.prefix + '\n' : '') + sourceDoc).toBe(text);
+    }
+  });
+});
+
 describe('raw Enter round-trip: carved-out fence block re-parses as in-block fence', () => {
   it('a dedented tail serialized as a list block keeps its fence structure', () => {
     // Simulate the Enter carve: tail of the raw blob → new list block.

@@ -618,11 +618,16 @@ function enhanceCodeBlocks(holder: HTMLElement, b: Block, host: BlockEditorView)
       langEl.addEventListener('click', (e) => {
         e.stopPropagation();
         e.preventDefault();
-        // One-shot source mode: the raw fence is edited in the normal outline
-        // editor with the caret at the end of the opening fence line.
-        const firstLine = b.text.split('\n')[0] ?? '';
+        // One-shot source mode: the raw fence is edited with the caret at the
+        // end of the opening fence line. Mixed blocks (image/prose prefix):
+        // the fence line is NOT line 0 — offset past the prefix lines.
+        const lines = b.text.split('\n');
+        const fenceIdx = lines.findIndex((l) => /^(`{3,}|~{3,})/.test(l));
+        const off =
+          (fenceIdx > 0 ? lines.slice(0, fenceIdx).join('\n').length + 1 : 0) +
+          (lines[fenceIdx]?.length ?? 0);
         host.sourceModeBlock = b;
-        host.focusBlock(b, firstLine.length);
+        host.focusBlock(b, Math.min(off, b.text.length));
       });
     }
     const btn = bar.createEl('span', { cls: 'lgp-code-copy', attr: { 'aria-label': 'Copy code' } });
