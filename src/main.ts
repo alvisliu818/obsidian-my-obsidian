@@ -26,12 +26,30 @@ const JUMP_GUARD = 600;
 const TAG_CACHE_TTL = 10000;
 
 /** obsidian-logseq 大纲编辑器视图（自定义视图，非 MarkdownView）的鸭子类型。
- *  它把「根 → 当前聚焦块」的文字路径维护在 contentEl.__lgFocusPath 上。 */
+ *  它把「根 → 当前聚焦块」的路径维护在 contentEl.__lgFocusPath（文字）和
+ *  __lgFocusBlocks（块对象链，与文字一一对应）上；__lgRoots 是当前缩放层级的
+ *  根块列表（空路径时下一级菜单用），__lgTopBlocks 是文档顶层块（第 0 级的
+ *  同级菜单用）。 */
 const LOGSEQ_VIEW_TYPE = "logseq-block-editor";
+/** obsidian-logseq Block 的极小子集（面包屑只读 text / children / parent） */
+interface LgBlockLike {
+	text: string;
+	children: LgBlockLike[];
+	parent?: LgBlockLike | null;
+}
 interface LogseqBlockView {
-	contentEl: HTMLElement & { __lgFocusPath?: string[] };
+	contentEl: HTMLElement & {
+		__lgFocusPath?: string[];
+		__lgFocusBlocks?: LgBlockLike[];
+		__lgRoots?: LgBlockLike[];
+		__lgTopBlocks?: LgBlockLike[];
+	};
 	file: TFile | null;
 	getViewType(): string;
+	/** 聚焦某块（光标落进去）——面包屑路径随之截断到该级 */
+	focusBlock?: (b: LgBlockLike, pos?: number | string) => void;
+	/** 缩放到某块（null = 回到页面根） */
+	zoomTo?: (b: LgBlockLike | null) => void;
 }
 
 /** 能挂面包屑的视图：原生 Markdown 视图或 logseq 大纲视图 */
@@ -447,8 +465,9 @@ export default class BreadcrumbNavPlugin extends Plugin {
 
 	/**
 	 * logseq 大纲视图的面包屑：文件名 › 块层级路径（根 → 当前聚焦块）。
-	 * 路径由 obsidian-logseq 实时维护在 contentEl.__lgFocusPath（聚焦、缩放、
-	 * 结构变化时更新），本插件只读展示；键入/点击触发的刷新会带出最新值。
+	 * 路径由 obsidian-logseq 实时维护在 contentEl.__lgFocusPath / __lgFocusBlocks
+	 * （聚焦、缩放、结构变化时更新）；交互对齐 markdown 版 renderBar：点某级 =
+	 * 聚焦该块（路径截断到该级），悬浮弹同级块菜单，末尾 ▸ 弹下一级。
 	 */
 	private renderLogseqBar(view: LogseqBlockView, isActive: boolean): void {
 		const file = view.file;
@@ -469,6 +488,7 @@ export default class BreadcrumbNavPlugin extends Plugin {
 			});
 		}
 
+		const chain = view.contentEl.__lgFocusBlocks ?? [];
 		const path = view.contentEl.__lgFocusPath ?? [];
 
 		let bar = this.bars.get(host);
@@ -486,23 +506,112 @@ export default class BreadcrumbNavPlugin extends Plugin {
 			this.nextEntriesProvider = null;
 		}
 
+		// —— 首项：文件名（点击回到页面顶部） ——
 		const pageEl = document.createElement("span");
 		pageEl.className = "bcn-item bcn-page";
 		pageEl.textContent = file.basename;
 		pageEl.title = file.path;
+		pageEl.addEventListener("click", () => {
+			this.lastJumpAt = Date.now();
+			this.closePopups();
+			view.zoomTo?.(null);
+			const sc = view.contentEl.querySelector<HTMLElement>(".block-editor-scroller") ?? view.contentEl;
+			sc.scrollTop = 0;
+			this.scheduleRefresh(0);
+		});
+		if (this.settings.enableRelatedPages) {
+			this.attachHover(pageEl, () => this.getRelatedPageEntries(file));
+		}
 		bar.appendChild(pageEl);
 
-		path.forEach((text, i) => {
+		// —— 块层级路径 ——
+		chain.forEach((b, i) => {
 			bar.appendChild(this.createSeparator());
 			const el = document.createElement("span");
-			el.className = "bcn-item" + (i === path.length - 1 ? " bcn-active" : "");
-			const label = text || "·";
+			el.className = "bcn-item" + (i === chain.length - 1 ? " bcn-active" : "");
+			const label = path[i] || "·";
 			el.textContent = this.truncate(label);
 			el.title = label;
+			// 点击某一级：聚焦该块，路径截短到该级
+			el.addEventListener("click", () => {
+				this.closePopups();
+				view.focusBlock?.(b);
+				this.scheduleRefresh(0);
+			});
+			if (this.settings.enableSiblingsMenu) {
+				// 高亮「本级所在的那一支」：即被悬浮的这一级本身
+				this.attachHover(el, () => {
+					const siblings = i > 0 ? chain[i - 1].children : (view.contentEl.__lgTopBlocks ?? []);
+					return this.lgBlockEntries(view, siblings, b);
+				});
+			}
 			bar.appendChild(el);
 		});
 
+		// —— 末尾的 ▸：下一级 ——
+		const nextChildren = this.settings.enableNextLevel
+			? chain.length
+				? chain[chain.length - 1].children
+				: (view.contentEl.__lgRoots ?? [])
+			: [];
+		if (nextChildren.length) {
+			bar.appendChild(this.createSeparator());
+			const icon = document.createElement("span");
+			icon.className = "bcn-next";
+			icon.textContent = "▸";
+			icon.title = "下一级";
+			const provider = () =>
+				this.lgBlockEntries(view, nextChildren, chain.length ? chain[chain.length - 1] : null);
+			this.attachHover(icon, provider);
+			icon.addEventListener("click", (ev) => {
+				ev.stopPropagation();
+				// 该 ▸ 自己弹出的菜单，再点一次收起；否则（别的锚点开着菜单）改为弹它自己的
+				const root = this.popups[0];
+				if (root && root.anchor === icon) {
+					this.closePopups();
+					return;
+				}
+				this.showPopup(icon, provider());
+			});
+			bar.appendChild(icon);
+			// 下钻后重新弹菜单只发生在活动视图，所以只记录它的 ▸
+			if (isActive) {
+				this.nextIconEl = icon;
+				this.nextEntriesProvider = provider;
+			}
+		}
+
 		if (bar.parentElement !== host) host.insertBefore(bar, host.firstChild);
+	}
+
+	/** logseq 块菜单条目：点文本 = 聚焦该块（路径变为它那条链）；点 ▸ = 聚焦并把
+	 *  它的下一级菜单立即展开（下钻，等价 markdown 版 onDrill）。 */
+	private lgBlockEntries(view: LogseqBlockView, blocks: LgBlockLike[], active: LgBlockLike | null): MenuEntry[] {
+		return blocks.map((b, idx) => {
+			const first = (b.text || "").split("\n")[0] || "·";
+			return {
+				key: "lg:" + idx + ":" + first,
+				text: this.truncate(first),
+				active: b === active,
+				hasChildren: b.children.length > 0,
+				onSelect: () => {
+					this.closePopups();
+					view.focusBlock?.(b);
+					this.scheduleRefresh(0);
+				},
+				onDrill: () => {
+					this.closePopups();
+					view.focusBlock?.(b);
+					void (async () => {
+						await this.refresh();
+						if (this.nextIconEl && this.nextEntriesProvider) {
+							this.showPopup(this.nextIconEl, this.nextEntriesProvider());
+						}
+					})();
+				},
+				children: b.children.length ? () => this.lgBlockEntries(view, b.children, active) : undefined,
+			};
+		});
 	}
 
 	private createSeparator(): HTMLElement {
