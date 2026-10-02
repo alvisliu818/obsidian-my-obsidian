@@ -29,11 +29,12 @@ describe('dedentCommon', () => {
   });
 });
 
-describe('parseCodeFence: mixed blocks are not pure code fences', () => {
+describe('parseCodeFence: pure code fences', () => {
   it('a single fenced block parses with content and language', () => {
     const info = parseCodeFence('```python\nx = 1\n```');
     expect(info?.lang).toBe('python');
     expect(info?.content).toBe('x = 1');
+    expect(info?.prefix).toBe('');
     expect(info?.closed).toBe(true);
   });
 
@@ -52,6 +53,53 @@ describe('parseCodeFence: mixed blocks are not pure code fences', () => {
     const info = parseCodeFence('```python\nx = 1');
     expect(info?.closed).toBe(false);
     expect(info?.content).toBe('x = 1');
+  });
+});
+
+describe('parseCodeFence: mixed blocks (prefix + fence)', () => {
+  it('an image line above the fence becomes the static prefix', () => {
+    const info = parseCodeFence('![图](assets/image83.png)\n```\n# 搭建模型\n```');
+    expect(info?.prefix).toBe('![图](assets/image83.png)');
+    expect(info?.lang).toBe('');
+    expect(info?.content).toBe('# 搭建模型');
+    expect(info?.closed).toBe(true);
+  });
+
+  it('multi-line prefixes are preserved verbatim', () => {
+    const info = parseCodeFence('para one\npara two\n```python\nx = 1\n```');
+    expect(info?.prefix).toBe('para one\npara two');
+    expect(info?.content).toBe('x = 1');
+  });
+
+  it('prose after the closing fence → null (data guard)', () => {
+    expect(parseCodeFence('![图](a.png)\n```\ncode\n```\ntail')).toBeNull();
+  });
+
+  it('an unterminated mixed fence parses to EOF', () => {
+    const info = parseCodeFence('![图](a.png)\n```\ncode');
+    expect(info?.prefix).toBe('![图](a.png)');
+    expect(info?.closed).toBe(false);
+    expect(info?.content).toBe('code');
+  });
+
+  it('no fence line at all → null (generic editor)', () => {
+    expect(parseCodeFence('just prose\nand more prose')).toBeNull();
+  });
+
+  it('prefix + fence reassembly round-trips through the serializer', () => {
+    const src = '- ![图](a.png)\n\t```\n\tcode line\n\t```';
+    const doc = parseDocument(src);
+    const b = doc.blocks[0];
+    expect(b.kind).toBe('list');
+    const info = parseCodeFence(b.text);
+    expect(info?.prefix).toBe('![图](a.png)');
+    expect(info?.content).toBe('code line');
+    // Commit reassembly: prefix + openLine + content + fence.
+    const reassembled = info
+      ? `${info.prefix ? info.prefix + '\n' : ''}${info.openLine}\n${info.content}\n${info.fence}`
+      : '';
+    expect(reassembled).toBe(b.text);
+    expect(parseDocument(serializeDocument(doc)).blocks[0].text).toBe(b.text);
   });
 });
 

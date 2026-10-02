@@ -1,10 +1,11 @@
 /**
- * Code-block edit mode (Logseq parity): a block whose text is a PURE code
- * fence opens a dedicated code editor instead of the raw-outline editor —
- * no fence markers on screen, Enter inserts newlines INSIDE the code (never
- * splits the outline block), Esc or clicking another block commits and
- * re-wraps the fence. Mixed blocks (text before the fence) keep the regular
- * editor; "Source mode" also keeps the raw view.
+ * Code-block edit mode (Logseq parity): a block whose text ends in a code
+ * fence opens a dedicated code editor — no fence markers on screen, Enter
+ * inserts newlines INSIDE the code (never splits the outline block), Esc or
+ * clicking another block commits and re-wraps the fence. Mixed blocks
+ * (image/prose lines BEFORE the fence) keep their prefix rendered statically
+ * while the fence gets the editor; prose after the closing fence keeps the
+ * regular editor. "Source mode" also keeps the raw view.
  */
 
 // CodeMirror is imported through the `cm-bundle:` prefix (rewritten by an
@@ -27,6 +28,8 @@ import type { Block } from '../types';
 import type { BlockEditorView } from '../view/BlockEditorView';
 
 export interface CodeFenceInfo {
+  /** Lines BEFORE the opening fence (mixed blocks: image/prose + fence). */
+  prefix: string;
   /** Language from the opening fence ('' when absent). */
   lang: string;
   /** The code content between the fences. */
@@ -42,31 +45,51 @@ export interface CodeFenceInfo {
 const FENCE_LINE_RE = /^(`{3,}|~{3,})([^\n`]*)$/;
 
 /**
- * Parse a block whose text is a PURE code fence (opening fence → content →
- * closing fence, or unterminated). Returns null for anything else — mixed
- * blocks keep the regular outline editor.
+ * Parse a block whose text ends in a code fence: [prefix lines +] opening
+ * fence → content → closing fence (or unterminated). The prefix (an image,
+ * prose) stays rendered statically while the fence gets the dedicated code
+ * editor. Returns null when the text has no fence line, or when non-blank
+ * content follows the closing fence — the generic outline editor must keep
+ * those blocks so no text is ever dropped on commit.
  */
 export function parseCodeFence(text: string): CodeFenceInfo | null {
   const lines = text.split('\n');
-  const open = FENCE_LINE_RE.exec(lines[0] ?? '');
-  if (!open) return null;
+  // The opening fence may sit at any line — mixed blocks carry a prefix.
+  let openIdx = -1;
+  let open: RegExpExecArray | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const m = FENCE_LINE_RE.exec(lines[i]);
+    if (m) {
+      openIdx = i;
+      open = m;
+      break;
+    }
+  }
+  if (openIdx < 0 || !open) return null;
   const fence = open[1];
   const lang = open[2].trim();
   let closed = false;
   let end = lines.length;
-  for (let i = 1; i < lines.length; i++) {
+  for (let i = openIdx + 1; i < lines.length; i++) {
     if (new RegExp('^' + fence[0] + '{' + fence.length + ',}\\s*$').test(lines[i])) {
-      // A pure code block ENDS at its closing fence. Non-blank content after
-      // it (a second fence, trailing prose) means this is a mixed block: the
-      // generic outline editor must keep it — mounting the code editor would
-      // commit only up to the FIRST closing fence and drop the rest.
+      // A code block ENDS at its closing fence. Non-blank content after it
+      // (a second fence, trailing prose) means this block has a tail the code
+      // editor cannot represent: mounting it would commit only up to the
+      // FIRST closing fence and silently drop the rest.
       if (lines.slice(i + 1).some((l) => l.trim() !== '')) return null;
       closed = true;
       end = i;
       break;
     }
   }
-  return { lang, content: lines.slice(1, closed ? end : lines.length).join('\n'), fence, openLine: lines[0] ?? fence, closed };
+  return {
+    prefix: lines.slice(0, openIdx).join('\n'),
+    lang,
+    content: lines.slice(openIdx + 1, closed ? end : lines.length).join('\n'),
+    fence,
+    openLine: lines[openIdx],
+    closed,
+  };
 }
 
 /**
@@ -84,14 +107,24 @@ function languageFor(lang: string): Extension | null {
 export interface MountedCodeEditor {
   view: EditorView;
   block: Block;
+  /** The prefix lines kept rendered statically (mixed blocks; '' for pure). */
+  prefix: string;
   fence: string;
   openLine: string;
   closed: boolean;
+  /** The editing wrap that replaced the static code element (mixed blocks). */
+  editingWrap: HTMLElement | null;
+  /** The static code element to restore on commit (mixed blocks). */
+  restoreEl: HTMLElement | null;
 }
 
-/** The block text for the edited code content (fence re-wrapped). */
-export function codeFenceText(info: { fence: string; closed: boolean }, content: string): string {
-  return info.closed ? `${info.fence}\n${content}\n${info.fence}` : `${info.fence}\n${content}`;
+export interface CodeMountOpts {
+  /**
+   * Replace this static element (the rendered code block inside the cached
+   * static render) instead of appending the editor to `content` — the mixed
+   * block keeps its rendered prefix (image/prose) untouched on screen.
+   */
+  replaceEl?: HTMLElement;
 }
 
 /**
@@ -104,19 +137,23 @@ export function mountCodeEditor(
   block: Block,
   info: CodeFenceInfo,
   host: BlockEditorView,
+  opts: CodeMountOpts = {},
 ): MountedCodeEditor {
   // Standard DOM APIs (no Obsidian prototype extensions) — keeps this module
   // testable outside Obsidian.
   const wrap = document.createElement('div');
   wrap.className = 'lgp-code-block lgp-code-editing';
-  content.appendChild(wrap);
+  if (opts.replaceEl) opts.replaceEl.replaceWith(wrap);
+  else content.appendChild(wrap);
   const bar = document.createElement('div');
   bar.className = 'lgp-code-toolbar';
   wrap.appendChild(bar);
-  if (info.lang) {
+  // Mixed blocks ALWAYS show the label: it is their only path into source
+  // mode (the prefix is not editable through the code editor itself).
+  if (info.lang || info.prefix) {
     const langEl = document.createElement('span');
     langEl.className = 'lgp-code-lang';
-    langEl.textContent = info.lang;
+    langEl.textContent = info.lang || 'text';
     langEl.title = 'Edit as source (change language)';
     // Click the language label → one-shot source mode with the cursor at the
     // end of the fence's language word, so the language can be edited
@@ -125,7 +162,9 @@ export function mountCodeEditor(
       e.stopPropagation();
       host.commitFocusedText();
       host.sourceModeBlock = block;
-      host.focusBlock(block, Math.min(info.openLine.length, block.text.length));
+      // Mixed blocks: the opening fence is NOT line 0 — offset past the prefix.
+      const openPos = (info.prefix ? info.prefix.length + 1 : 0) + info.openLine.length;
+      host.focusBlock(block, Math.min(openPos, block.text.length));
     });
     bar.appendChild(langEl);
   }
@@ -161,6 +200,17 @@ export function mountCodeEditor(
     }),
     parent: body,
   });
+  // Debug handle for e2e verification (same convention as the outline editor).
+  (view.dom as HTMLElement & { __lgView?: EditorView }).__lgView = view;
   view.focus();
-  return { view, block, fence: info.fence, openLine: info.openLine, closed: info.closed };
+  return {
+    view,
+    block,
+    prefix: info.prefix,
+    fence: info.fence,
+    openLine: info.openLine,
+    closed: info.closed,
+    editingWrap: opts.replaceEl ? wrap : null,
+    restoreEl: opts.replaceEl ?? null,
+  };
 }

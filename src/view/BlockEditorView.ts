@@ -6,7 +6,7 @@
  * TextFileView requestSave/save — files stay 100% standard markdown).
  */
 
-import { TFile, TextFileView, type TAbstractFile, type ViewState, type ViewStateResult, type WorkspaceLeaf } from 'obsidian';
+import { MarkdownRenderer, TFile, TextFileView, type TAbstractFile, type ViewState, type ViewStateResult, type WorkspaceLeaf } from 'obsidian';
 import { EditorView } from '@codemirror/view';
 import type { CompletionSource } from '@codemirror/autocomplete';
 import type LogseqEditorPlugin from '../main';
@@ -22,6 +22,7 @@ import {
   refreshBlockContent,
   refreshQueryBlocks,
   clearAllBlockCaches,
+  cachedStaticEl,
   findBlockEl,
   patchBlockSubtree,
   patchSiblingList,
@@ -435,8 +436,79 @@ export class BlockEditorView extends TextFileView {
     // inside the code). Source mode keeps the raw view.
     const codeInfo = this.sourceModeBlock || this.pageSourceMode ? null : parseCodeFence(b.text);
     if (codeInfo) {
+      // A re-render while a code editor was already mounted (scroll-cap bump,
+      // index rebuild, ...) would leak the old CM6 instance and leave its
+      // dead wrap inside the cached static render — destroy & restore first.
+      if (this.focusedCode) {
+        const stale = this.focusedCode;
+        this.focusedCode = null;
+        stale.view.destroy();
+        if (stale.editingWrap && stale.restoreEl && stale.editingWrap.parentElement) {
+          stale.editingWrap.replaceWith(stale.restoreEl);
+        }
+      }
+      const pending = this.pendingFocus;
       this.pendingFocus = null;
-      this.focusedCode = mountCodeEditor(content, b, codeInfo, this);
+      let mountOpts: { replaceEl?: HTMLElement } | undefined;
+      if (codeInfo.prefix) {
+        // Mixed block (image/prose + fence): keep the rendered prefix on
+        // screen — re-attach the cached static render and swap ONLY its code
+        // element for the dedicated editor. The block never collapses into
+        // raw text, so the page never jumps either.
+        const holder = cachedStaticEl(b);
+        const codeEl =
+          holder?.querySelector<HTMLElement>('.lgp-code-block:not(.lgp-code-editing)') ?? null;
+        if (holder && codeEl) {
+          content.appendChild(holder);
+          mountOpts = { replaceEl: codeEl };
+        } else {
+          // Static render unavailable or still rendering (async): render the
+          // prefix fresh above the editor; the image appears when done.
+          const ph = document.createElement('div');
+          ph.className = 'block-content-static';
+          content.appendChild(ph);
+          void MarkdownRenderer.render(
+            this.app,
+            codeInfo.prefix,
+            ph,
+            this.file?.path ?? '',
+            this,
+          ).catch(() => {});
+        }
+      }
+      this.focusedCode = mountCodeEditor(content, b, codeInfo, this, mountOpts);
+      // Cursor placement: the code editor's doc holds ONLY the fence content,
+      // so whole-text positions (staticPos / numeric pos) shift by the
+      // prefix + opening fence line.
+      const v = this.focusedCode.view;
+      const beforeLen =
+        (codeInfo.prefix ? codeInfo.prefix.length + 1 : 0) + codeInfo.openLine.length + 1;
+      const len = v.state.doc.length;
+      if (pending?.clickXY) {
+        // On mixed mounts the layout barely changed (only the code element
+        // was swapped), so the click maps accurately onto the fresh editor.
+        let p = cursorAtCoords(v, pending.clickXY.x, pending.clickXY.y, 'start');
+        if (pending.staticPos !== null) {
+          let top: number | null = null;
+          try {
+            top = v.coordsAtPos(p)?.top ?? null;
+          } catch {
+            top = null;
+          }
+          if (top === null || Math.abs(top - pending.clickXY.y) > 60) {
+            p = Math.max(0, Math.min(pending.staticPos - beforeLen, len));
+          }
+        }
+        applyCursorAndScroll(v, p);
+      } else if (pending) {
+        const p =
+          pending.pos === 'start'
+            ? 0
+            : pending.pos === 'end'
+              ? len
+              : Math.max(0, Math.min(pending.pos - beforeLen, len));
+        applyCursorAndScroll(v, p);
+      }
       this.focusStartSnapshot = serializeDocument(this.doc);
       // The dedicated code editor bypasses the generic mount path — without
       // this the companion breadcrumb keeps showing the PREVIOUS block.
@@ -667,11 +739,18 @@ export class BlockEditorView extends TextFileView {
       this.focusedCode = null;
       this.focusedBlock = null;
       const content = fc.view.state.doc.toString();
-      const newText = fc.closed ? `${fc.openLine}
+      const head = fc.prefix ? fc.prefix + '\n' : '';
+      const newText = fc.closed ? `${head}${fc.openLine}
 ${content}
-${fc.fence}` : `${fc.openLine}
+${fc.fence}` : `${head}${fc.openLine}
 ${content}`;
       fc.view.destroy();
+      // Mixed-block mount: put the static code element back so the cached
+      // static render (image + code) stays valid — the commit re-attaches it
+      // unchanged, and nothing re-renders or flickers.
+      if (fc.editingWrap && fc.restoreEl && fc.editingWrap.parentElement) {
+        fc.editingWrap.replaceWith(fc.restoreEl);
+      }
       if (fc.block.text !== newText) {
         fc.block.text = newText;
         this.undo.push(this.focusStartSnapshot);

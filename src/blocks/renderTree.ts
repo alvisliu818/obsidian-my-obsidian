@@ -59,6 +59,17 @@ export function forgetBlockCache(b: Block): void {
   blockElMap.delete(b);
 }
 
+/**
+ * The cached static render for `b` when it still matches the current text
+ * (NOT attached — callers attach it themselves). Used by the mixed-block
+ * code editor to keep the rendered prefix (image/prose) on screen while only
+ * the code element is swapped for the editor.
+ */
+export function cachedStaticEl(b: Block): HTMLElement | null {
+  const cached = contentCache.get(b);
+  return cached && cached.sig === contentSig(b) ? cached.el : null;
+}
+
 export function findBlockEl(b: Block): HTMLElement | null {
   return blockElMap.get(b) ?? null;
 }
