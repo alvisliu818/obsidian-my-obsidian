@@ -1,5 +1,6 @@
 ﻿import { PluginSettingTab, Setting, type App } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
+import type { ScopeMode } from '../types';
 
 export class LogseqEditorSettingTab extends PluginSettingTab {
   plugin: LogseqEditorPlugin;
@@ -25,6 +26,41 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
 
     if (this.plugin.settings.takeOverByDefault) {
+      new Setting(containerEl)
+        .setName('Take-over scope')
+        .setDesc(
+          'Which files open with the block editor by default: every markdown file, or only files inside the folders listed below.',
+        )
+        .addDropdown((d) =>
+          d
+            .addOptions({ all: 'All files (except exclusions)', folders: 'Only in specific folders' })
+            .setValue(this.plugin.settings.scopeMode)
+            .onChange(async (v) => {
+              this.plugin.settings.scopeMode = v as ScopeMode;
+              await this.plugin.saveSettings();
+              this.display();
+            }),
+        );
+    }
+
+    if (this.plugin.settings.takeOverByDefault && this.plugin.settings.scopeMode === 'folders') {
+      new Setting(containerEl)
+        .setName('Included folders')
+        .setDesc(
+          'Comma-separated folder paths where .md files open with the block editor (e.g. "journals, projects/notes"). Files outside these folders keep the native editor.',
+        )
+        .addText((t) =>
+          t
+            .setPlaceholder('journals, projects/notes')
+            .setValue(this.plugin.settings.includedFolders)
+            .onChange(async (v) => {
+              this.plugin.settings.includedFolders = v;
+              await this.plugin.saveSettings();
+            }),
+        );
+    }
+
+    if (this.plugin.settings.takeOverByDefault && this.plugin.settings.scopeMode === 'all') {
       new Setting(containerEl)
         .setName('Excluded folders')
         .setDesc('Comma-separated folder paths whose files keep opening with the native editor (e.g. "templates, attachments/notes").')
