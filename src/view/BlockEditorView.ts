@@ -448,7 +448,17 @@ export class BlockEditorView extends TextFileView {
     // Code blocks open their OWN editor (no fences on screen, Enter = newline
     // inside the code). Source mode keeps the raw view.
     const codeInfo = this.sourceModeBlock || this.pageSourceMode ? null : parseCodeFence(b.text);
-    if (codeInfo) {
+    // A click on the PREFIX (image/prose ABOVE the fence) edits the block
+    // TEXT — the generic editor at the click position, not the code editor.
+    // staticPos was mapped from the COMPLETE static render (before any
+    // swap), so it lands within the prefix exactly when the click did.
+    const peek = this.pendingFocus;
+    const prefixClick =
+      !!codeInfo?.prefix &&
+      !!peek?.clickXY &&
+      peek.staticPos !== null &&
+      peek.staticPos <= codeInfo.prefix.length;
+    if (codeInfo && !prefixClick) {
       const pending = this.pendingFocus;
       this.pendingFocus = null;
       let mountOpts: { replaceEl?: HTMLElement } | undefined;
@@ -565,19 +575,18 @@ export class BlockEditorView extends TextFileView {
     if (pending?.clickXY) {
       // posAtCoords on the fresh view uses the CLICK's page coords, but the
       // raw-text CM6 is much shorter than the static render when it contained
-      // images/rendered code — the mapping clamps to doc end and the caret
-      // lands far from the click. When the mapped caret line is visibly off
-      // the click Y, fall back to the pre-swap static-render position.
+      // images/rendered code — the mapping clamps the stale click Y far from
+      // the user's target (often to doc end, which can still sit within a
+      // small deviation of the click, defeating a pure pixel check). The
+      // pre-swap staticPos knows WHICH source line was clicked: when the two
+      // mappings disagree on the line, the layout collapsed and staticPos is
+      // the ground truth; when they agree, posAtCoords keeps its intra-line
+      // (x-axis) precision.
       let p = cursorAtCoords(v, pending.clickXY.x, pending.clickXY.y, 'end');
       if (pending.staticPos !== null) {
-        let top: number | null = null;
-        try {
-          top = v.coordsAtPos(p)?.top ?? null;
-        } catch {
-          top = null;
-        }
-        if (top === null || Math.abs(top - pending.clickXY.y) > 60) {
-          p = Math.max(0, Math.min(pending.staticPos, v.state.doc.length));
+        const pStat = Math.max(0, Math.min(pending.staticPos, v.state.doc.length));
+        if (v.state.doc.lineAt(p).number !== v.state.doc.lineAt(pStat).number) {
+          p = pStat;
         }
       }
       // Scroll-compensate: the raw editor is far shorter than the static
@@ -621,8 +630,11 @@ export class BlockEditorView extends TextFileView {
     this.clearSelection(); // editing replaces multi-selection
     const xy = { x: ev.clientX, y: ev.clientY };
     if (this.focusedCode?.block === b) {
-      this.focusedCode.view.focus();
-      return;
+      // The click reached the static PREFIX (the code editor sits OUTSIDE
+      // the cached holder, so clicks inside it never bubble here): land the
+      // code edit and edit the block TEXT at the click — the generic path
+      // below re-maps the click on the restored (complete) static render.
+      this.commitFocusedText();
     }
     if (this.focusedBlock === b && this.focusedView) {
       const p = cursorAtCoords(this.focusedView, xy.x, xy.y, 'end');
