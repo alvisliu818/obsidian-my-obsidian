@@ -1,3 +1,14 @@
+/* 隐藏原生面包屑（视图头部的文件/标题路径），由本插件的面包屑栏替代 */
+.view-header-breadcrumb,
+.view-header-breadcrumbs {
+	display: none !important;
+}
+
+/* 隐藏 logseq 插件自带的缩放面包屑（显示位置与内容均由本插件的面包屑栏承担） */
+.block-editor-breadcrumb {
+	display: none !important;
+}
+
 /* Breadcrumb Nav —— 笔记顶部（文件路径下方）的面包屑栏 */
 
 .bcn-bar {
