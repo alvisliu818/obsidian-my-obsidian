@@ -168,6 +168,11 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
+  background: var(--text-faint);
+}
+
+/* row hover darkens the dot back (affordance survives the lighter base) */
+.block-main:hover .block-bullet::before {
   background: var(--text-muted);
 }
 
@@ -261,11 +266,11 @@
      + 4px gap. */
   position: absolute;
   left: calc(var(--lgp-controls-w, 32px) - 9px);
-  top: calc(-0.775em + 7px);
-  bottom: calc(0.775em + 7px);
+  top: calc(-0.775em + 9px);
+  bottom: calc(0.775em + 9px);
   width: 2px;
   border-radius: 2px;
-  background: var(--background-modifier-border);
+  background: color-mix(in srgb, var(--background-modifier-border) 45%, transparent);
   cursor: pointer;
   transition: background 0.1s ease;
 }
@@ -1995,3 +2000,40 @@ body.block-touch-dragging {
   cursor: pointer;
 }
 .embed-header-title:hover { color: var(--text-accent); }
+
+/* ---------- Add-block affordance under the last block (Logseq parity) ---------- */
+.block-editor-addblock {
+  height: 2.6em;
+  cursor: text;
+  position: relative;
+}
+
+.block-editor-addblock::before {
+  content: '';
+  position: absolute;
+  left: var(--lgp-controls-w, 32px);
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: var(--background-modifier-border);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.block-editor-addblock::after {
+  content: '+';
+  position: absolute;
+  left: 0;
+  width: var(--lgp-controls-w, 32px);
+  top: 50%;
+  transform: translateY(-50%);
+  text-align: center;
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.block-editor-addblock:hover::before,
+.block-editor-addblock:hover::after {
+  opacity: 1;
+}

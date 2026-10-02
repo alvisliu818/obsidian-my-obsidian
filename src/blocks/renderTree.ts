@@ -105,6 +105,16 @@ export function renderBlockTree(container: HTMLElement, roots: Block[], host: Bl
   }
   container.appendChild(frag);
 
+  // Logseq parity: the empty area under the last block is an add-block
+  // affordance — hovering shows a faint line + plus, clicking appends and
+  // focuses a new block at the end of the visible outline.
+  container
+    .createEl('div', { cls: 'block-editor-addblock' })
+    .addEventListener('click', (e) => {
+      e.stopPropagation();
+      host.addBlockAtEnd();
+    });
+
   if (budget) {
     const hidden = total - cap;
     const sentinel = container.createEl('div', {

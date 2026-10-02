@@ -15,24 +15,7 @@ import { applyBlockProps, blockEditorDoc, createBlock, editableProps, propsShall
 import { parseDocument } from '../core/parser';
 import { clearLogseqPageProps, registerLogseqPageProps } from '../pagePropsRegistry';
 import { serializeBlock, serializeDocument } from '../core/serializer';
-import {
-  blockAtPath,
-  cycleMarker,
-  duplicateBlock,
-  findBlockById,
-  flattenVisible,
-  indent,
-  isDescendant,
-  linkParents,
-  moveBlock,
-  moveBlockVertically,
-  outdent,
-  pseudoRootOf,
-  registerRoots,
-  removeBlock,
-  splitBlock,
-  type MovePosition,
-} from '../core/treeOps';
+import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, isDescendant, linkParents, moveBlock, moveBlockVertically, outdent, pseudoRootOf, registerRoots, removeBlock, siblingsOf, splitBlock, type MovePosition } from '../core/treeOps';
 import { UndoStack } from '../state/undoStack';
 import {
   renderBlockTree,
@@ -1008,6 +991,27 @@ export class BlockEditorView extends TextFileView {
       this.doc.blocks.push(b);
     });
     this.focusBlock(b, 0);
+  }
+
+  /** Logseq parity: clicking the empty area under the last block appends a
+   *  new block at the end of the visible outline and focuses it. */
+  addBlockAtEnd(): void {
+    let nb: Block | null = null;
+    this.mutate(
+      () => {
+        nb = createBlock('');
+        const last = this.doc.blocks[this.doc.blocks.length - 1];
+        if (last) {
+          const sibs = siblingsOf(last);
+          sibs.splice(sibs.indexOf(last) + 1, 0, nb);
+          nb.parent = last.parent ?? null;
+        } else {
+          this.doc.blocks.push(nb);
+        }
+      },
+      () => ({ lists: [null] }),
+    );
+    if (nb) this.focusBlock(nb as Block, 0);
   }
 
   toggleCollapse(b: Block): void {

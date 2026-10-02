@@ -18,7 +18,7 @@
 /** ::before dot is a 6px circle → 3px radius. */
 export const GUIDE_DOT_RADIUS = 3;
 /** Same visual gap kept on BOTH ends of the line (past the dot's radius). */
-export const GUIDE_END_GAP = 3;
+export const GUIDE_END_GAP = 6;
 
 /**
  * Pin top/bottom of every guide line under `root` so both ends sit exactly
