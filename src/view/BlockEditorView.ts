@@ -71,6 +71,7 @@ import { expandTemplates, parseVarLines, type TemplateContext } from '../feature
 import { logOp } from '../features/logger';
 import { refreshBlockBacklinkBadges } from '../blocks/blockBacklinks';
 import { renderPageReferences } from '../features/pageReferences';
+import { unwatchGuideLayout, watchGuideLayout } from '../blocks/guideLayout';
 
 export const VIEW_TYPE_BLOCK_EDITOR = 'logseq-block-editor';
 
@@ -149,6 +150,11 @@ export class BlockEditorView extends TextFileView {
     // outline: they scroll with the page content (Logseq parity). render()
     // only empties treeEl, so this host persists across re-renders.
     this.refsHostEl = scroller.createEl('div', { cls: 'page-references-host' });
+    // Pin every guide line's ends to the real dot positions after any layout
+    // change (multi-line parents / props rows shift the containers — CSS
+    // approximations cannot know those heights).
+    watchGuideLayout(this.treeEl);
+    this.register(() => unwatchGuideLayout(this.treeEl));
 
     this.registerEvent(
       this.app.vault.on('modify', (file: TAbstractFile) => {

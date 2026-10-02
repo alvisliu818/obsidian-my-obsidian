@@ -247,10 +247,10 @@
 .block-children-container {
   display: flex;
   margin-left: 16px;
-  /* Children indent: the guide line is absolutely positioned (under the
-     bullet dot), so the flow indent lives here. */
+  /* Children indent: the guide line is absolutely positioned against the
+     PARENT WRAP (this container deliberately stays non-positioned so the
+     guideLayout calibration's wrap-relative offsets are correct). */
   padding-left: 16px;
-  position: relative;
 }
 
 .block-children-left-border {
@@ -260,7 +260,7 @@
      (top = parent dot, bottom = last child's dot): dot center + 3px radius
      + 4px gap. */
   position: absolute;
-  left: calc(var(--lgp-controls-w, 32px) - 25px);
+  left: calc(var(--lgp-controls-w, 32px) - 9px);
   top: calc(-0.775em + 7px);
   bottom: calc(0.775em + 7px);
   width: 2px;
