@@ -24,6 +24,18 @@ const HIDE_DELAY = 220;
 /** 程序化跳转后的一段时间内，不把「光标移动」当成用户主动切换（否则会清掉下钻状态） */
 const JUMP_GUARD = 600;
 const TAG_CACHE_TTL = 10000;
+
+/** obsidian-logseq 大纲编辑器视图（自定义视图，非 MarkdownView）的鸭子类型。
+ *  它把「根 → 当前聚焦块」的文字路径维护在 contentEl.__lgFocusPath 上。 */
+const LOGSEQ_VIEW_TYPE = "logseq-block-editor";
+interface LogseqBlockView {
+	contentEl: HTMLElement & { __lgFocusPath?: string[] };
+	file: TFile | null;
+	getViewType(): string;
+}
+
+/** 能挂面包屑的视图：原生 Markdown 视图或 logseq 大纲视图 */
+type BarView = MarkdownView | LogseqBlockView;
 /** CodeMirror 6 EditorView 的极小子集，避免直接依赖 CM 类型 */
 interface CmLike {
 	scrollDOM?: HTMLElement;
@@ -262,8 +274,8 @@ export default class BreadcrumbNavPlugin extends Plugin {
 			return;
 		}
 
-		const active = this.app.workspace.getActiveViewOfType(MarkdownView);
-		const views = this.collectMarkdownViews(active);
+		const active = this.getActiveBarView();
+		const views = this.collectBarViews(active);
 
 		if (!views.length) {
 			// 停在新建标签页 / 看板这类非笔记视图：只回收已关闭视图的面包屑，
@@ -280,15 +292,25 @@ export default class BreadcrumbNavPlugin extends Plugin {
 		this.pruneBars(live);
 	}
 
-	/** 所有打开的笔记视图（不止活动那个）；活动视图排在最前 */
-	private collectMarkdownViews(active: MarkdownView | null): MarkdownView[] {
-		const out: MarkdownView[] = [];
+	/** 活动视图（若它可挂面包屑）：优先 Markdown（含测试桩），logseq 视图走 activeLeaf */
+	private getActiveBarView(): BarView | null {
+		const md = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (md) return md;
+		const v = this.app.workspace.activeLeaf?.view;
+		if (v && this.isLogseqView(v)) return v;
+		return null;
+	}
+
+	/** 所有打开的可挂面包屑视图（不止活动那个）；活动视图排在最前 */
+	private collectBarViews(active: BarView | null): BarView[] {
+		const out: BarView[] = [];
 		const push = (v: unknown): void => {
-			if (!this.isMarkdownView(v) || out.indexOf(v) >= 0) return;
-			out.push(v);
+			if (out.indexOf(v as BarView) >= 0) return;
+			if (this.isMarkdownView(v) || this.isLogseqView(v)) out.push(v as BarView);
 		};
 		push(active);
 		this.app.workspace.getLeavesOfType("markdown").forEach((leaf) => push(leaf.view));
+		this.app.workspace.getLeavesOfType(LOGSEQ_VIEW_TYPE).forEach((leaf) => push(leaf.view));
 		return out;
 	}
 
@@ -299,7 +321,18 @@ export default class BreadcrumbNavPlugin extends Plugin {
 		return !!c.file && !!c.contentEl && typeof c.getMode === "function";
 	}
 
-	private renderBar(view: MarkdownView, isActive: boolean): void {
+	/** logseq 大纲编辑器视图（obsidian-logseq 插件的自定义视图） */
+	private isLogseqView(v: unknown): v is LogseqBlockView {
+		if (!v || typeof v !== "object") return false;
+		const c = v as Partial<LogseqBlockView> & { getViewType?: () => string };
+		return c.getViewType?.() === LOGSEQ_VIEW_TYPE && !!c.contentEl;
+	}
+
+	private renderBar(view: BarView, isActive: boolean): void {
+		if (this.isLogseqView(view)) {
+			this.renderLogseqBar(view, isActive);
+			return;
+		}
 		const file = view.file;
 		if (!file) return;
 		this.closePopups();
@@ -406,6 +439,53 @@ export default class BreadcrumbNavPlugin extends Plugin {
 				this.nextEntriesProvider = provider;
 			}
 		}
+
+		if (bar.parentElement !== host) host.insertBefore(bar, host.firstChild);
+	}
+
+	/**
+	 * logseq 大纲视图的面包屑：文件名 › 块层级路径（根 → 当前聚焦块）。
+	 * 路径由 obsidian-logseq 实时维护在 contentEl.__lgFocusPath（聚焦、缩放、
+	 * 结构变化时更新），本插件只读展示；键入/点击触发的刷新会带出最新值。
+	 */
+	private renderLogseqBar(view: LogseqBlockView, isActive: boolean): void {
+		const file = view.file;
+		if (!file) return;
+		this.closePopups();
+
+		const path = view.contentEl.__lgFocusPath ?? [];
+
+		const host = view.contentEl;
+		let bar = this.bars.get(host);
+		if (!bar) {
+			bar = document.createElement("div");
+			this.bars.set(host, bar);
+		}
+		if (isActive) bar.id = "bcn-bar";
+		else if (bar.id) bar.removeAttribute("id");
+		bar.className = "bcn-bar" + (this.settings.sticky ? " bcn-sticky" : "");
+		bar.textContent = "";
+		if (isActive) {
+			this.barEl = bar;
+			this.nextIconEl = null;
+			this.nextEntriesProvider = null;
+		}
+
+		const pageEl = document.createElement("span");
+		pageEl.className = "bcn-item bcn-page";
+		pageEl.textContent = file.basename;
+		pageEl.title = file.path;
+		bar.appendChild(pageEl);
+
+		path.forEach((text, i) => {
+			bar.appendChild(this.createSeparator());
+			const el = document.createElement("span");
+			el.className = "bcn-item" + (i === path.length - 1 ? " bcn-active" : "");
+			const label = text || "·";
+			el.textContent = this.truncate(label);
+			el.title = label;
+			bar.appendChild(el);
+		});
 
 		if (bar.parentElement !== host) host.insertBefore(bar, host.firstChild);
 	}
