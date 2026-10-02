@@ -1,3 +1,9 @@
+/* 隐藏原生面包屑（视图头部的文件/标题路径），由本插件的面包屑栏替代 */
+.view-header-breadcrumb,
+.view-header-breadcrumbs {
+	display: none !important;
+}
+
 /* Breadcrumb Nav —— 笔记顶部（文件路径下方）的面包屑栏 */
 
 .bcn-bar {

@@ -99,6 +99,8 @@ export default class BreadcrumbNavPlugin extends Plugin {
 	 * 各自独立占位，切换视图 / 切到非笔记视图再切回来时正文不会上下跳。
 	 */
 	private bars: Map<HTMLElement, HTMLElement> = new Map();
+	/** 已挂 lgp-block-focus 监听的 logseq 视图宿主（每个视图只挂一次） */
+	private wiredLogseqHosts: Set<HTMLElement> = new Set();
 	private nextIconEl: HTMLElement | null = null;
 	private nextEntriesProvider: (() => MenuEntry[]) | null = null;
 
@@ -453,9 +455,22 @@ export default class BreadcrumbNavPlugin extends Plugin {
 		if (!file) return;
 		this.closePopups();
 
+		// logseq 视图在聚焦/失焦/结构变化时派发 lgp-block-focus（路径同步在
+		// contentEl.__lgFocusPath 上）——监听一次，实时刷新面包屑位置。
+		const host = view.contentEl;
+		if (!this.wiredLogseqHosts.has(host)) {
+			this.wiredLogseqHosts.add(host);
+			host.addEventListener("lgp-block-focus", () => {
+				if (!host.isConnected) {
+					this.wiredLogseqHosts.delete(host);
+					return;
+				}
+				this.refresh();
+			});
+		}
+
 		const path = view.contentEl.__lgFocusPath ?? [];
 
-		const host = view.contentEl;
 		let bar = this.bars.get(host);
 		if (!bar) {
 			bar = document.createElement("div");
