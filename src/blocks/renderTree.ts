@@ -16,11 +16,11 @@
  * async markdown renderer for untouched blocks.
  */
 
-import { MarkdownRenderer } from 'obsidian';
+import { MarkdownRenderer, setIcon } from 'obsidian';
 import type { BlockEditorView } from '../view/BlockEditorView';
 import type { Block } from '../types';
 import { blockId } from '../types';
-import { enhanceBlockRefs, enhanceEmbeds } from '../features/links';
+import { createPageEmbedBox, enhanceBlockRefs, enhanceEmbeds } from '../features/links';
 import {
   buildQueryTableModel,
   execQuery,
@@ -142,6 +142,9 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
   const controls = main.createEl('div', { cls: 'block-controls' });
   if (b.kind === 'list') {
     controls.setAttribute('draggable', 'true'); // block drag handle zone
+    // Reserved slot where the floating caret appears (kept in flow so the
+    // bullet column aligns across sibling rows; the caret itself floats).
+    controls.createEl('div', { cls: 'block-caret-spacer' });
     if (b.children.length > 0) {
       const collapsed = b.props['collapsed'] === 'true';
       const caret = controls.createEl('div', {
@@ -152,8 +155,6 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
         e.stopPropagation();
         host.toggleCollapse(b);
       });
-    } else {
-      controls.createEl('div', { cls: 'block-caret-spacer' });
     }
     const bullet = controls.createEl('div', { cls: 'block-bullet' });
     bullet.setAttribute('aria-label', 'Focus this block');
@@ -181,13 +182,10 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
     });
   }
 
-  // --- property badges (priority:: A/B/C, scheduled::, deadline::) ---
-  if (b.kind === 'list') {
-    const badges = renderPropBadges(b);
-    if (badges) main.appendChild(badges);
-  }
-
   // --- content ---
+  // Property chips (priority/scheduled/deadline badges) are intentionally NOT
+  // rendered here: the props row below shows every `key:: value` pair, which
+  // is exactly what the editing state shows — one display, both states.
   const content = main.createEl('div', { cls: 'block-content' });
   if (b.props['style']) {
     for (const [k, v] of Object.entries(parseStyleProp(b.props['style']))) {
@@ -198,32 +196,48 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
     content.classList.add('is-editing');
     // CM6 gets mounted here by the view after the tree render pass.
     host.mountFocusedInto(content);
+  } else if (isPropsBlock(b, host)) {
+    // The page-properties block renders its props AS the content — the same
+    // `key:: value` lines the editor shows, so both states look alike.
+    renderPropsAsContent(content, b, host);
   } else {
     attachStaticContent(content, b, host);
   }
 
-  // --- children ---
+  // --- children: the guide line hangs from the bullet dot and doubles as a
+  // collapse toggle (click = fold/unfold, same as the caret). The container
+  // stays rendered while collapsed as a short stub so the line can be clicked
+  // again to expand. ---
   const collapsed = b.props['collapsed'] === 'true';
-  const kidsVisible = b.children.length > 0 && !collapsed;
-  if (kidsVisible && (!budget || budget.left > 0)) {
-    const cc = wrap.createEl('div', { cls: 'block-children-container' });
-    cc.createEl('div', { cls: 'block-children-left-border' });
-    const inner = cc.createEl('div', { cls: 'block-children' });
-    for (const c of b.children) {
-      if (budget && budget.left <= 0) {
-        budget.stopped = true;
-        break;
+  const hasKids = b.children.length > 0;
+  if (hasKids && (!budget || budget.left > 0)) {
+    const cc = wrap.createEl('div', { cls: 'block-children-container' + (collapsed ? ' is-collapsed' : '') });
+    const guide = cc.createEl('div', { cls: 'block-children-left-border' });
+    guide.setAttribute('aria-label', collapsed ? 'Expand child blocks' : 'Collapse child blocks');
+    guide.addEventListener('click', (e) => {
+      e.stopPropagation();
+      host.toggleCollapseGuide(b);
+    });
+    if (!collapsed) {
+      const inner = cc.createEl('div', { cls: 'block-children' });
+      for (const c of b.children) {
+        if (budget && budget.left <= 0) {
+          budget.stopped = true;
+          break;
+        }
+        if (budget) budget.left--;
+        inner.appendChild(renderBlock(c, host, budget));
       }
-      if (budget) budget.left--;
-      inner.appendChild(renderBlock(c, host, budget));
     }
-  } else if (kidsVisible && budget) {
+  } else if (hasKids && budget) {
     // Budget exhausted at this parent: children stay unrendered (virtualized).
     budget.stopped = true;
   }
 
-  // --- block properties below content (Logseq md parity) ---
-  syncPropsRow(wrap, b);
+  // --- block properties below content (Logseq md parity) — hidden while
+  // the block is being edited (the editor shows the prop lines itself) and
+  // for the props block (its props ARE the content). ---
+  if (!isPropsBlock(b, host)) syncPropsRow(wrap, b, host, host.focusedBlock === b);
 
   // --- embedded query results ({{query ...}}) ---
   syncQueryContainer(wrap, b, host);
@@ -233,17 +247,37 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
 
 const WRAP_PROPS_SKIP = new Set(['id', 'collapsed', 'style']);
 
+/**
+ * One `key:: value` line under a block (Logseq parity): dimmed like the
+ * editor's property lines, and BOTH the key and the value are pages —
+ * clicking either opens/creates that page.
+ */
+function renderPropLine(parent: HTMLElement, k: string, v: string, host: BlockEditorView, sep = ':: '): void {
+  const item = parent.createEl('div', { cls: 'block-prop-item' });
+  const key = item.createEl('span', { cls: 'block-prop-key', text: k });
+  item.createEl('span', { cls: 'block-prop-sep', text: sep });
+  const val = item.createEl('span', { cls: 'block-prop-value', text: v });
+  const open = (e: Event, page: string): void => {
+    e.stopPropagation();
+    e.preventDefault();
+    void host.app.workspace.openLinkText(page, '', false);
+  };
+  key.addEventListener('click', (e) => open(e, k));
+  val.addEventListener('click', (e) => open(e, v));
+}
+
 /** Render (or clear) the `key:: value` props row under the block content. */
-function syncPropsRow(wrap: HTMLElement, b: Block): void {
+function syncPropsRow(wrap: HTMLElement, b: Block, host: BlockEditorView, editing = false): void {
   wrap.querySelector(':scope > .block-props-row')?.remove();
+  // While the block is being edited the props show as text lines in the
+  // editor itself — the row would duplicate them.
+  if (editing) return;
   const entries = Object.entries(b.props).filter(([k]) => !WRAP_PROPS_SKIP.has(k));
   if (entries.length === 0) return;
   const row = wrap.createEl('div', { cls: 'block-props-row' });
-  for (const [k, v] of entries) {
-    const item = row.createEl('span', { cls: 'block-prop-item' });
-    item.createEl('span', { cls: 'block-prop-key', text: k });
-    item.createEl('span', { cls: 'block-prop-value', text: v });
-  }
+  // Logseq parity: props sit directly under the block text, BEFORE its children.
+  wrap.querySelector(':scope > .block-main')?.insertAdjacentElement('afterend', row);
+  for (const [k, v] of entries) renderPropLine(row, k, v, host);
 }
 
 /** True when the block body is a single {{query ...}} / {{query-table ...}} expression. */
@@ -255,8 +289,6 @@ function isQueryBlock(b: Block, host: BlockEditorView): boolean {
   );
 }
 
-/** Props that never render as generic badges (internal / dedicated UI). */
-const HIDDEN_PROPS = new Set(['id', 'collapsed', 'style', 'priority', 'scheduled', 'deadline']);
 /** style:: whitelist — safe CSS declarations applied to the block content. */
 const STYLE_ALLOWED = new Set([
   'color',
@@ -281,42 +313,6 @@ export function parseStyleProp(style: string): Record<string, string> {
     }
   }
   return out;
-}
-
-/** Inline badges for Logseq-style block properties: priority/scheduled/deadline
- *  plus any custom property (`key:: value` → badge). */
-function renderPropBadges(b: Block): HTMLElement | null {
-  const pr = b.props['priority'];
-  const sched = b.props['scheduled'];
-  const dl = b.props['deadline'];
-  const extras = Object.entries(b.props).filter(([k]) => !HIDDEN_PROPS.has(k));
-  if (!pr && !sched && !dl && extras.length === 0) return null;
-  const wrap = document.createElement('span');
-  wrap.className = 'block-badges';
-  if (pr) {
-    const c = /^[ABC]$/i.test(pr) ? pr.toUpperCase() : null;
-    const el = wrap.createEl('span', {
-      cls: 'block-badge' + (c ? ' badge-priority-' + c.toLowerCase() : ''),
-      text: c ? '[' + c + ']' : '[P]',
-    });
-    el.setAttribute('aria-label', 'priority: ' + pr);
-  }
-  if (sched) {
-    const el = wrap.createEl('span', { cls: 'block-badge badge-scheduled', text: '📅 ' + sched });
-    el.setAttribute('aria-label', 'scheduled: ' + sched);
-  }
-  if (dl) {
-    const el = wrap.createEl('span', { cls: 'block-badge badge-deadline', text: '⏰ ' + dl });
-    el.setAttribute('aria-label', 'deadline: ' + dl);
-  }
-  for (const [k, v] of extras.slice(0, 8)) {
-    const el = wrap.createEl('span', {
-      cls: 'block-badge badge-custom',
-      text: `${k}: ${v.length > 24 ? v.slice(0, 24) + '…' : v}`,
-    });
-    el.setAttribute('aria-label', `${k}:: ${v}`);
-  }
-  return wrap;
 }
 
 /** Add / remove / refresh the .block-query-results container of a block wrap. */
@@ -448,6 +444,43 @@ function isDataviewBlock(b: Block): boolean {
   return /^\s*```(dataview|dataviewjs)\b/i.test(b.text);
 }
 
+/**
+ * GFM tables only parse when the header row starts a new block (blank line
+ * before it), but Logseq-format files keep table rows hugging the block's
+ * first line — `| a | b |` right under the text renders as literal pipes.
+ * Insert a render-only blank line before a detected table (never inside a
+ * code fence); the block model and the saved file stay untouched.
+ */
+export function withTableSeparation(text: string): string {
+  if (!/^\s*\|/m.test(text)) return text;
+  const lines = text.split('\n');
+  const out: string[] = [];
+  let inFence = false;
+  let fenceMarker = '';
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const fenceOpen = /^\s*(```|~~~)/.exec(line);
+    if (fenceOpen && !inFence) {
+      inFence = true;
+      fenceMarker = fenceOpen[1];
+    } else if (inFence && line.trimStart().startsWith(fenceMarker)) {
+      inFence = false;
+    }
+    if (
+      !inFence &&
+      /^\s*\|/.test(line) &&
+      out.length > 0 &&
+      out[out.length - 1].trim() !== '' &&
+      i + 1 < lines.length &&
+      /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(lines[i + 1])
+    ) {
+      out.push('');
+    }
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
 /** Render static content with cache reuse when the block text is unchanged. */
 function attachStaticContent(content: HTMLElement, b: Block, host: BlockEditorView): void {
   const sig = contentSig(b);
@@ -485,7 +518,22 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockEditorVi
     contentCache.set(b, { el: holder, sig });
     return;
   }
-  MarkdownRenderer.render(host.app, b.text, holder, host.file?.path ?? '', host).then(() => {
+  // ![[Page]] page-embeds: Obsidian's markdown renderer would render the
+  // inner [[Page]] as an internal link BEFORE our embed pass can see the
+  // raw text. Protect the page-embed syntax with a token placeholder during
+  // markdown render, then swap tokens for live page-embed boxes.
+  const pageEmbedTokens: { token: string; page: string }[] = [];
+  const hasPageEmbed = /!\[\[[^\[\]]+\]\]/.test(b.text);
+  const mdSource = withTableSeparation(
+    hasPageEmbed
+      ? b.text.replace(/!\[\[([^\[\]]+)\]\]/g, (_m, page: string) => {
+          const token = `LGPAGEEMBED${pageEmbedTokens.length}LGPAGEEMBED`;
+          pageEmbedTokens.push({ token, page });
+          return token;
+        })
+      : b.text,
+  );
+  MarkdownRenderer.render(host.app, mdSource, holder, host.file?.path ?? '', host).then(() => {
     if (host.renderGeneration !== gen) return; // stale (file switched)
     wireContentEvents(holder, b, host);
     if (!holder.hasClass('block-dataview')) {
@@ -493,14 +541,119 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockEditorVi
       // enhanceBlockRefs would otherwise turn into a chip, splitting the text
       // node so the embed pattern no longer matches.
       enhanceEmbeds(holder, host);
+      enhanceCodeBlocks(holder);
+      // Swap page-embed tokens for live boxes ( BEFORE block-ref chips so
+      // the token is not mistaken for text).
+      for (const { token, page } of pageEmbedTokens) {
+        const walker = document.createTreeWalker(holder, NodeFilter.SHOW_TEXT);
+        let node = walker.nextNode() as Text | null;
+        while (node) {
+          const next = walker.nextNode() as Text | null;
+          if (node.data.includes(token)) {
+            const frag = document.createDocumentFragment();
+            const parts = node.data.split(token);
+            parts.forEach((part, i) => {
+              if (i > 0) frag.appendChild(createPageEmbedBox(page, host));
+              if (part) frag.appendChild(document.createTextNode(part));
+            });
+            node.replaceWith(frag);
+            break;
+          }
+          node = next;
+        }
+      }
       enhanceBlockRefs(holder, host);
     }
   });
   contentCache.set(b, { el: holder, sig });
 }
 
+/**
+ * Code-block toolbar (slim strip ABOVE the code): language name left, copy
+ * button right — a dedicated bar so the copy icon never overlaps the code
+ * content (the native floating copy button is hidden via CSS). Click copies
+ * the code text and flashes a check mark.
+ */
+function enhanceCodeBlocks(holder: HTMLElement): void {
+  for (const pre of holder.querySelectorAll('pre')) {
+    if (pre.closest('.lgp-code-block')) continue;
+    const code = pre.querySelector('code');
+    const lang = /language-([\w#+-]+)/.exec(code?.className ?? '')?.[1] ?? '';
+    if (code) enhanceCodeTokens(code);
+    const wrap = document.createElement('div');
+    wrap.className = 'lgp-code-block';
+    pre.replaceWith(wrap);
+    const bar = wrap.createDiv({ cls: 'lgp-code-toolbar' });
+    if (lang) bar.createEl('span', { cls: 'lgp-code-lang', text: lang });
+    const btn = bar.createEl('span', { cls: 'lgp-code-copy', attr: { 'aria-label': 'Copy code' } });
+    setIcon(btn, 'copy');
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      void navigator.clipboard
+        .writeText(code?.textContent ?? pre.textContent ?? '')
+        .then(() => {
+          setIcon(btn, 'check');
+          setTimeout(() => setIcon(btn, 'copy'), 1200);
+        })
+        .catch(() => {});
+    });
+    wrap.appendChild(pre);
+  }
+}
+
+/**
+ * Fill the syntax-coloring gap between the reading render and the editor:
+ * Prism's grammars leave function calls as plain text (`TensorDataset(x, y)`,
+ * `torch.randn(100, 1)` — every identifier but keywords/strings/numbers), so
+ * most of a code block reads as one color while the CM6 editor colors calls.
+ * Conservative fix-up: wrap a trailing identifier in `.token.function` when
+ * the next sibling is the call's `(` punctuation span. Text inside existing
+ * tokens (strings, comments, keywords — anything `.token`) is never touched;
+ * render-only, the block model and the saved file stay untouched.
+ */
+function enhanceCodeTokens(code: HTMLElement): void {
+  const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
+  const targets: Text[] = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const text = n.textContent ?? '';
+    if (!/[A-Za-z_$][\w$]*\s*$/.test(text)) continue;
+    if ((n.parentElement)?.closest('.token')) continue; // inside a string/comment/keyword
+    const next = n.nextSibling;
+    if (next?.nodeType !== Node.ELEMENT_NODE) continue;
+    const el = next as HTMLElement;
+    if (!(el.classList.contains('token') && el.textContent?.startsWith('('))) continue;
+    targets.push(n as Text);
+  }
+  for (const node of targets) {
+    const text = node.textContent ?? '';
+    const m = /([A-Za-z_$][\w$]*)(\s*)$/.exec(text);
+    if (!m) continue;
+    const span = document.createElement('span');
+    span.className = 'token function';
+    span.textContent = m[1];
+    node.textContent = text.slice(0, text.length - m[0].length);
+    const tail = document.createTextNode(m[2]);
+    const parent = node.parentNode;
+    if (!parent) continue;
+    parent.insertBefore(span, node.nextSibling);
+    parent.insertBefore(tail, span.nextSibling);
+  }
+}
+
 function wireContentEvents(holder: HTMLElement, b: Block, host: BlockEditorView): void {
   holder.addEventListener('click', (e) => {
+    // Logseq parity: a #tag IS a page reference — click opens the page
+    // (creating it when missing) instead of Obsidian's tag search.
+    const tagAnchor = (e.target as HTMLElement).closest('a.tag');
+    if (tagAnchor) {
+      e.preventDefault();
+      e.stopPropagation();
+      const href = decodeURIComponent(tagAnchor.getAttribute('href') ?? '');
+      const tag = (href.replace(/^#/, '') || (tagAnchor.textContent ?? '').replace(/^#/, '')).trim();
+      if (tag) host.openLink(tag);
+      return;
+    }
     const anchor = (e.target as HTMLElement).closest('a');
     if (anchor) {
       e.preventDefault();
@@ -533,9 +686,50 @@ function wireContentEvents(holder: HTMLElement, b: Block, host: BlockEditorView)
   });
 }
 
+/** The page-properties block: the doc's FIRST block, empty text. */
+function isPropsBlock(b: Block, host: BlockEditorView): boolean {
+  return host.doc.blocks[0] === b && b.kind === 'list' && (b.text === '' || b.frontmatter === true);
+}
+
+/**
+ * The page-properties block renders its props AS its content — the same
+ * dimmed `key:: value` lines the editor shows, so the editing and reading
+ * states look alike (Logseq parity).
+ */
+function renderPropsAsContent(content: HTMLElement, b: Block, host: BlockEditorView): void {
+  content.empty();
+  const box = content.createEl('div', { cls: 'block-content-static block-props-content' });
+  if (b.frontmatter) {
+    // Obsidian-format page properties: the frontmatter body lines verbatim
+    // (key: value — one per line; lists/comments render as-is), dimmed like
+    // the editor's property lines. Keys and simple values are pages.
+    for (const line of b.text.split('\n')) {
+      const m = /^([A-Za-z][A-Za-z0-9_-]*):( ?(.*))?$/.exec(line);
+      if (!m) {
+        box.createEl('div', { cls: 'block-prop-item block-prop-raw', text: line });
+        continue;
+      }
+      renderPropLine(box, m[1], m[3] ?? '', host, ': ');
+    }
+    // Clicks on the props lines must still open the editor (same as any block).
+    wireContentEvents(box, b, host);
+    return;
+  }
+  for (const [k, v] of Object.entries(b.props).filter(([k]) => !WRAP_PROPS_SKIP.has(k))) {
+    renderPropLine(box, k, v, host);
+  }
+  // Clicks on the props lines must still open the editor (same as any block).
+  wireContentEvents(box, b, host);
+}
+
 /** Refresh one block's static content in place (after blur-commit). */
 export function refreshBlockContent(b: Block, host: BlockEditorView): void {
   if (host.focusedBlock === b) return;
+  if (isPropsBlock(b, host)) {
+    // The props are the content here — re-render the whole wrap.
+    patchBlockSubtree(b, host);
+    return;
+  }
   const wrap = blockElMap.get(b);
   if (!wrap) return;
   const content = wrap.querySelector(':scope > .block-main > .block-content');
@@ -545,6 +739,9 @@ export function refreshBlockContent(b: Block, host: BlockEditorView): void {
   // No cache invalidation: when the text is unchanged the cached static el is
   // re-attached synchronously (it was only detached, never destroyed).
   attachStaticContent(content as HTMLElement, b, host);
+  // The edited text may have changed the block's properties (typed
+  // `key:: value` lines are extracted into props on commit).
+  syncPropsRow(wrap, b, host);
   // The edited text may have become (or stopped being) a {{query}} block.
   syncQueryContainer(wrap, b, host);
 }

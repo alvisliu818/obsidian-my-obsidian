@@ -56,12 +56,42 @@ describe('parser: basic Logseq structure', () => {
     expect(b.props['collapsed']).toBe('true');
   });
 
-  it('parses page properties and frontmatter', () => {
+  it('parses Obsidian frontmatter as the page-properties block', () => {
+    const md = '---\ntitle: Test Page\ntags: [a, b]\n---\n- block';
+    const doc = parseDocument(md);
+    // Carried by the block (the same model as Logseq page props).
+    expect(doc.frontmatter).toBe('');
+    expect(doc.blocks.length).toBe(2);
+    expect(doc.blocks[0].frontmatter).toBe(true);
+    expect(doc.blocks[0].kind).toBe('list');
+    expect(doc.blocks[0].text).toBe('title: Test Page\ntags: [a, b]');
+    expect(doc.blocks[0].props).toEqual({ title: 'Test Page', tags: '[a, b]' });
+    expect(doc.blocks[1].text).toBe('block');
+    // Round-trips as frontmatter (the Obsidian format is preserved).
+    expect(serializeDocument(doc)).toBe('---\ntitle: Test Page\ntags: [a, b]\n---\n- block');
+  });
+
+  it('parses Logseq page properties (key:: value) without frontmatter', () => {
+    const md = 'title:: My Page\ntags:: a, b\n\n- block';
+    const doc = parseDocument(md);
+    expect(doc.blocks.length).toBe(2);
+    expect(doc.blocks[0].text).toBe('');
+    expect(doc.blocks[0].props).toEqual({ title: 'My Page', tags: 'a, b' });
+    expect(doc.blocks[0].frontmatter).toBeUndefined();
+    expect(doc.blocks[1].text).toBe('block');
+    expect(serializeDocument(doc)).toBe('title:: My Page\ntags:: a, b\n- block');
+  });
+
+  it('frontmatter and Logseq page props coexist', () => {
     const md = '---\ntitle: x\n---\ntitle:: My Page\ntags:: a, b\n\n- block';
     const doc = parseDocument(md);
-    expect(doc.frontmatter).toBe('---\ntitle: x\n---');
-    expect(doc.pageProps).toBe('title:: My Page\ntags:: a, b');
-    expect(doc.blocks.length).toBe(1);
+    expect(doc.blocks.length).toBe(3);
+    expect(doc.blocks[0].frontmatter).toBe(true);
+    expect(doc.blocks[0].text).toBe('title: x');
+    expect(doc.blocks[1].text).toBe('');
+    expect(doc.blocks[1].props).toEqual({ title: 'My Page', tags: 'a, b' });
+    expect(doc.blocks[2].text).toBe('block');
+    expect(serializeDocument(doc)).toBe('---\ntitle: x\n---\ntitle:: My Page\ntags:: a, b\n- block');
   });
 
   it('handles empty file', () => {
@@ -72,13 +102,15 @@ describe('parser: basic Logseq structure', () => {
 });
 
 describe('parser: raw content preservation', () => {
-  it('keeps headings/paragraphs as raw top-level blocks', () => {
+  it('keeps headings raw; plain lines become first-level list items', () => {
     const doc = parseDocument('# Title\n\nSome paragraph text.\n- item');
-    expect(doc.blocks.length).toBe(2);
+    expect(doc.blocks.length).toBe(3);
     expect(doc.blocks[0].kind).toBe('raw');
-    expect(doc.blocks[0].text).toBe('# Title\n\nSome paragraph text.');
+    expect(doc.blocks[0].text).toBe('# Title');
     expect(doc.blocks[1].kind).toBe('list');
-    expect(doc.blocks[1].text).toBe('item');
+    expect(doc.blocks[1].text).toBe('Some paragraph text.');
+    expect(doc.blocks[2].kind).toBe('list');
+    expect(doc.blocks[2].text).toBe('item');
   });
 
   it('does not parse list lines inside top-level code fences', () => {
@@ -106,6 +138,25 @@ describe('parser: raw content preservation', () => {
     expect(doc.blocks[2].text).toBe('```sql\ndrop database test;\n```');
   });
 
+  it('dedents a nested fence body to the content column (Logseq parity)', () => {
+    // Logseq format: body lines sit one unit deeper than the block marker —
+    // that column is stripped so the code renders flush.
+    const md = '- parent\n\t- ```python\n\t\tds = TensorDataset(x, y)\n\t\tdl = DataLoader(ds)\n\t\t```\n- next';
+    const doc = parseDocument(md);
+    const fence = doc.blocks[0].children[0];
+    expect(fence.text).toBe('```python\nds = TensorDataset(x, y)\ndl = DataLoader(ds)\n```');
+  });
+
+  it('keeps indentation beyond the content column as code indent', () => {
+    // 深度学习.md shape: block at depth 2, body lines at 9 tabs — the column
+    // (depth+1 = 3 units) is stripped, the remaining 6 tabs are code indent.
+    const md =
+      '- parent\n\t- 1. 构造数据\n\t\t- ```python\n\t\t\t\t\t\t\t\t\tx = torch.randn(100, 1)\n\t\t\t```';
+    const doc = parseDocument(md);
+    const fence = doc.blocks[0].children[0].children[0];
+    expect(fence.text).toBe('```python\n\t\t\t\t\t\tx = torch.randn(100, 1)\n```');
+  });
+
   it('does not treat inline triple backticks on a list item as a fence', () => {
     const doc = parseDocument('- 用 ```code``` 表示\n- next');
     expect(doc.blocks.map((b) => b.text)).toEqual(['用 ```code``` 表示', 'next']);
@@ -126,6 +177,65 @@ describe('parser: raw content preservation', () => {
     const doc = parseDocument('- a\n    - b');
     expect(doc.blocks[0].children.length).toBe(1);
     expect(doc.blocks[0].children[0].text).toBe('b');
+  });
+
+  it('bare top-level lines become first-level list items (Logseq parity)', () => {
+    const doc = parseDocument('just a plain line\n- item\nanother plain line');
+    expect(doc.blocks.map((b) => [b.kind, b.text])).toEqual([
+      ['list', 'just a plain line'],
+      ['list', 'item'],
+      ['list', 'another plain line'],
+    ]);
+  });
+
+  it('consecutive bare lines (no blank between) merge into ONE first-level block', () => {
+    const doc = parseDocument('para one\npara two\npara three\n- item');
+    expect(doc.blocks.map((b) => [b.kind, b.text])).toEqual([
+      ['list', 'para one\npara two\npara three'],
+      ['list', 'item'],
+    ]);
+    // Round-trips as `- ` item + indented soft lines.
+    expect(serializeDocument(doc)).toBe('- para one\n\tpara two\n\tpara three\n- item');
+  });
+
+  it('a blank line separates bare-line groups into distinct blocks', () => {
+    const doc = parseDocument('para A line 1\npara A line 2\n\npara B\n- item');
+    expect(doc.blocks.map((b) => [b.kind, b.text])).toEqual([
+      ['list', 'para A line 1\npara A line 2'],
+      ['list', 'para B'],
+      ['list', 'item'],
+    ]);
+  });
+
+  it('bare lines keep marker detection and take indented props / children', () => {
+    const doc = parseDocument('TODO buy milk\n\tpriority:: high\n\t- check price');
+    expect(doc.blocks.length).toBe(1);
+    expect(doc.blocks[0].marker).toBe('TODO');
+    expect(doc.blocks[0].text).toBe('buy milk');
+    expect(doc.blocks[0].props['priority']).toBe('high');
+    expect(doc.blocks[0].children[0].text).toBe('check price');
+  });
+
+  it('structural raw lines stay raw (ordered list, quote, table, hr, html)', () => {
+    const doc = parseDocument('1. first\n- item\n> quoted\n- item2\n| a | b |');
+    expect(doc.blocks.map((b) => [b.kind, b.text])).toEqual([
+      ['raw', '1. first'],
+      ['list', 'item'],
+      ['raw', '> quoted'],
+      ['list', 'item2'],
+      ['raw', '| a | b |'],
+    ]);
+    // Consecutive structural lines form one raw block (quote/table runs);
+    // none of them is promoted to a list item.
+    const run = parseDocument('====\n<div>html</div>');
+    expect(run.blocks.map((b) => b.kind)).toEqual(['raw']);
+    expect(run.blocks[0].text).toBe('====\n<div>html</div>');
+  });
+
+  it('indented bare lines remain soft lines (not promoted to items)', () => {
+    const doc = parseDocument('- parent\n\tcontinued without dash');
+    expect(doc.blocks.length).toBe(1);
+    expect(doc.blocks[0].text).toBe('parent\ncontinued without dash');
   });
 });
 
@@ -152,6 +262,8 @@ describe('round-trip invariants', () => {
     ['raw heading', '# H1\npara\n\n- a'],
     ['top-level fence', '```js\n- fake\n```\n- real'],
     ['in-block fence', '- code\n\t```js\n\tconst x;\n\t```\n- next'],
+    ['nested fence column body', '- parent\n\t- ```python\n\t\tx = 1\n\t\t```\n- next'],
+    ['nested fence deep code indent', '- parent\n\t- 1. 构造\n\t\t- ```python\n\t\t\t\t\t\t\t\t\tx = torch.randn(100, 1)\n\t\t\t```'],
     ['empty block', '- \n- after'],
     ['deep nesting', '- l0\n\t- l1\n\t\t- l2\n\t\t\t- l3\n\t- back to l1'],
     ['mixed', '---\nf: 1\n---\ntype:: note\n\n# Head\n\n- TODO main\n\tid:: uuid-main\n\t- child A\n\t\t- grand\n\t- child B\n\nFooter paragraph.\n```py\nprint(1)\n```'],

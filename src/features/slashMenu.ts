@@ -332,17 +332,21 @@ export function slashMenuSource(host: BlockEditorView, embed = false): Completio
     if (!before) return null;
     const slashIdx = before.text.lastIndexOf('/');
     const query = before.text.slice(slashIdx + 1).toLowerCase();
-    const from = before.from + slashIdx;
+    // `from` sits AFTER the '/': CM6 filters options against the text between
+    // `from` and the cursor, and command labels never contain '/'.
+    const from = before.from + slashIdx + 1;
     const options: Completion[] = [];
     for (const c of COMMANDS) {
       if (embed && c.needsBlock) continue; // block-model commands need the outline editor
       if (query && !c.label.toLowerCase().includes(query)) continue;
       options.push({
         ...c,
-        apply: (view, _c, f, t) => c.run(view, f, t, host),
+        // The apply range covers only the query text (after the '/'); shift
+        // its start back one char so run() replaces the whole '/query'.
+        apply: (view, _c, f, t) => c.run(view, f - 1, t, host),
       });
     }
     if (options.length === 0) return null;
-    return { from, options, validFor: /(?:^|\s)\/[\w-]*$/ };
+    return { from, options, validFor: /^[\w-]*$/ };
   };
 }

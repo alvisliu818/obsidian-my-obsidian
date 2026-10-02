@@ -2,6 +2,9 @@
  * Unlinked mentions section (page-bottom, under linked mentions):
  * scans the vault for blocks that MENTION this page's title as plain text
  * (no [[link]]) and offers one-click conversion to a real [[link]].
+ * Hits are grouped by source file (same layout as linked mentions); the file
+ * header opens the file, clicking a row VIEWS the source (block/page), and
+ * the row-end link icon converts the mention to a [[link]].
  * Conversion goes through the guarded write path (backup + operation log),
  * and the mention disappears from the list on the next index refresh.
  */
@@ -58,22 +61,50 @@ export function renderUnlinkedMentions(
     return;
   }
 
+  // Group by source file (same layout as the linked-mentions section); the
+  // group header opens the file, rows view the source, the row-end link
+  // icon converts the mention to a [[link]].
+  const groups = new Map<string, Array<{ entry: IndexedBlock; count: number }>>();
+  for (const h of hits) {
+    const arr = groups.get(h.entry.path) ?? [];
+    arr.push(h);
+    groups.set(h.entry.path, arr);
+  }
+
   const body = section.createEl('div', { cls: 'page-backlinks-list' });
-  for (const { entry, count } of hits) {
-    const row = body.createEl('div', { cls: 'page-backlinks-item page-unlinked-item' });
-    if (entry.marker) {
-      const mk = row.createEl('span', { cls: 'block-marker ' + entry.marker.toLowerCase() });
-      mk.setAttribute('aria-label', entry.marker);
-    }
-    const textEl = row.createEl('span', { cls: 'page-backlinks-item-text' });
-    textEl.setText(plainPreview(entry.text, title));
-    row.createEl('span', { cls: 'page-unlinked-count', text: `×${count}` });
-    row.addEventListener('click', () => {
-      void convertMention(plugin, entry, title);
+  for (const [path, items] of groups) {
+    const group = body.createEl('div', { cls: 'page-backlinks-group' });
+    const pageRow = group.createEl('div', { cls: 'page-backlinks-page' });
+    const icon = pageRow.createEl('span', { cls: 'page-backlinks-icon' });
+    setIcon(icon, 'file-text');
+    pageRow.createEl('span', { text: path });
+    pageRow.addEventListener('click', () => {
+      void plugin.app.workspace.openLinkText(path, '', false);
     });
-    // Convert affordance icon at the row end.
-    const convert = row.createEl('span', { cls: 'page-unlinked-convert', attr: { 'aria-label': 'Convert to [[link]]' } });
-    setIcon(convert, 'link');
+    for (const { entry, count } of items) {
+      const row = group.createEl('div', { cls: 'page-backlinks-item page-unlinked-item' });
+      if (entry.marker) {
+        const mk = row.createEl('span', { cls: 'block-marker ' + entry.marker.toLowerCase() });
+        mk.setAttribute('aria-label', entry.marker);
+      }
+      const textEl = row.createEl('span', { cls: 'page-backlinks-item-text' });
+      textEl.setText(plainPreview(entry.text, title));
+      row.createEl('span', { cls: 'page-unlinked-count', text: `×${count}` });
+      // Clicking the row VIEWS the source (same as linked mentions): jump to
+      // the block when it has an id, otherwise open its page. Converting is
+      // a separate, explicit action on the link icon at the row end.
+      row.addEventListener('click', () => {
+        if (entry.blockId) void plugin.openBlockRef(entry.blockId);
+        else void plugin.app.workspace.openLinkText(entry.path, '', false);
+      });
+      // Convert affordance icon at the row end.
+      const convert = row.createEl('span', { cls: 'page-unlinked-convert', attr: { 'aria-label': 'Convert to [[link]]' } });
+      setIcon(convert, 'link');
+      convert.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void convertMention(plugin, entry, title);
+      });
+    }
   }
 }
 

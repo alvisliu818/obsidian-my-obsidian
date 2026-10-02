@@ -11,8 +11,9 @@ import { EditorView } from '@codemirror/view';
 import type { CompletionSource } from '@codemirror/autocomplete';
 import type LogseqEditorPlugin from '../main';
 import type { Block, ParsedDocument } from '../types';
-import { createBlock, setCollapsed } from '../types';
+import { applyBlockProps, blockEditorDoc, createBlock, editableProps, propsShallowEqual, setCollapsed, splitPropLines } from '../types';
 import { parseDocument } from '../core/parser';
+import { clearLogseqPageProps, registerLogseqPageProps } from '../pagePropsRegistry';
 import { serializeBlock, serializeDocument } from '../core/serializer';
 import {
   blockAtPath,
@@ -26,6 +27,7 @@ import {
   moveBlock,
   moveBlockVertically,
   outdent,
+  pseudoRootOf,
   registerRoots,
   removeBlock,
   splitBlock,
@@ -45,50 +47,33 @@ import {
 } from '../blocks/renderTree';
 import { applyCursor, commitEditorText, cursorAtCoords, mountFocusedEditor, type CursorPos } from '../editor/focusEditor';
 import { createEmbedExtensions } from '../editor/extensions';
-import { rerenderEmbedRow, type EmbedSource } from '../features/links';
-import { toggleCollapse } from '../interactions/collapse';
+import {
+  findEmbedBox,
+  findEmbedRow,
+  findEmbedRowForBlock,
+  getEmbedRowSource,
+  mutatePageEmbedSource,
+  refreshEmbedBox,
+  refreshPageEmbedBox,
+  renderEmbedBodyFrom,
+  rerenderEmbedRow,
+  type EmbedSource,
+} from '../features/links';
+import { collapseLevels, expandLevels, toggleCollapse } from '../interactions/collapse';
+import { isCollapsed } from '../types';
 import { breadcrumbFor, restoreZoomed, visibleRootsFor, zoomId } from '../interactions/zoom';
 import { attachDnd } from '../interactions/dnd';
 import { attachContextMenu } from '../interactions/contextMenu';
+import { clearActiveBlockEditor, syncActiveBlockEditor } from '../interactions/textSelectionMenu';
 import { autocompleteSources } from '../features/links';
 import { PageSearchBar } from '../features/pageSearch';
-import { ConflictModal } from '../features/conflictModal';
 import { expandTemplates, parseVarLines, type TemplateContext } from '../features/template';
 import { logOp } from '../features/logger';
-import { renderPageBacklinks } from '../features/pageBacklinks';
 import { refreshBlockBacklinkBadges } from '../blocks/blockBacklinks';
-import { renderEditablePageProps } from '../features/pagePropsEditor';
-import { blockFromEl } from '../blocks/renderTree';
-import { siblingsOf } from '../core/treeOps';
+import { renderPageReferences } from '../features/pageReferences';
 
 export const VIEW_TYPE_BLOCK_EDITOR = 'logseq-block-editor';
 
-/**
- * Logseq-style page properties header: when the file has top-level
- * `key:: value` page properties (or frontmatter), render a read-only card
- * above the outline — mirroring the md version's page-props area.
- */
-export function renderPagePropsCard(containerEl: HTMLElement, doc: ParsedDocument): void {
-  const existing = containerEl.querySelector(':scope > .page-props-card');
-  if (existing) existing.remove();
-  const lines = doc.pageProps
-    ? doc.pageProps.split('\n')
-    : [];
-  if (lines.length === 0) return;
-  const card = containerEl.createEl('div', { cls: 'page-props-card' });
-  const table = card.createEl('div', { cls: 'page-props-table' });
-  for (const line of lines) {
-    const idx = line.indexOf('::');
-    if (idx < 0) continue;
-    const key = line.slice(0, idx).trim();
-    const value = line.slice(idx + 2).trim();
-    if (!key) continue;
-    const row = table.createEl('div', { cls: 'page-prop-row' });
-    row.createEl('span', { cls: 'page-prop-key', text: key });
-    row.createEl('span', { cls: 'page-prop-value', text: value });
-  }
-  if (table.children.length === 0) card.remove();
-}
 
 /** Targeted mutation: which DOM regions to rebuild (computed after fn runs). */
 export interface MutatePatch {
@@ -105,8 +90,14 @@ export class BlockEditorView extends TextFileView {
   doc: ParsedDocument = { frontmatter: '', pageProps: '', blocks: [] };
   focusedBlock: Block | null = null;
   focusedView: EditorView | null = null;
+  /**
+   * Set by the block menu's "Source mode": the next editor mounted for THIS
+   * block skips live preview (raw source for one edit session). Cleared on
+   * commit.
+   */
+  sourceModeBlock: Block | null = null;
   /** CM6 mounted inside an embed row for in-place editing (null when idle). */
-  embedEdit: { view: EditorView; source: EmbedSource; path: number[]; row: HTMLElement } | null = null;
+  embedEdit: { view: EditorView; source: EmbedSource; path: number[]; row: HTMLElement; escHandler: (e: KeyboardEvent) => void } | null = null;
   zoomedBlock: Block | null = null;
   /** Bumped on every file (re)load; stale async markdown renders are dropped. */
   renderGeneration = 0;
@@ -115,14 +106,13 @@ export class BlockEditorView extends TextFileView {
   /** Multi-selection (Shift/Ctrl+click); only top-level members act in bulk. */
   selectedBlocks = new Set<Block>();
   private lastClicked: Block | null = null;
-  /** Last content handed to disk (getViewData/setViewData) — conflict baseline. */
+  /** Last content handed to disk (getViewData/setViewData) — external-change baseline. */
   private lastDiskData: string | null = null;
-  /** A conflict modal is open for this view (suppress re-entrant handling). */
-  private conflictOpen = false;
 
   private editorContainerEl!: HTMLElement;
   private breadcrumbEl!: HTMLElement;
   private treeEl!: HTMLElement;
+  private refsHostEl!: HTMLElement;
   private undo = new UndoStack();
   private focusStartSnapshot = '';
   private pendingFocus: { pos: CursorPos; clickXY: { x: number; y: number } | null } | null = null;
@@ -155,6 +145,10 @@ export class BlockEditorView extends TextFileView {
     this.breadcrumbEl = this.editorContainerEl.createEl('div', { cls: 'block-editor-breadcrumb' });
     const scroller = this.editorContainerEl.createEl('div', { cls: 'block-editor-scroller' });
     this.treeEl = scroller.createEl('div', { cls: 'block-editor-tree' });
+    // Page references (linked + unlinked) live INSIDE the scroller, after the
+    // outline: they scroll with the page content (Logseq parity). render()
+    // only empties treeEl, so this host persists across re-renders.
+    this.refsHostEl = scroller.createEl('div', { cls: 'page-references-host' });
 
     this.registerEvent(
       this.app.vault.on('modify', (file: TAbstractFile) => {
@@ -169,8 +163,13 @@ export class BlockEditorView extends TextFileView {
     // Live {{query}} blocks: refresh when the vault-wide index rebuilds.
     this.indexDisposer = this.plugin.blockIndex?.onRebuild(() => {
       this.refreshQueryResults();
-      // Backlinks (page-bottom section + per-block badges) track the index.
-      renderPageBacklinks(this.editorContainerEl, this.plugin, this.file?.path, this.file?.basename ?? '');
+      // Page references (linked + unlinked) track the index.
+      renderPageReferences(
+        this.refsHostEl,
+        this.plugin,
+        this.file?.path,
+        this.file?.basename ?? '',
+      );
       refreshBlockBacklinkBadges(this);
     }) ?? null;
 
@@ -227,6 +226,7 @@ export class BlockEditorView extends TextFileView {
     if (clear) this.commitFocusedText();
     this.renderGeneration++;
     this.doc = parseDocument(data);
+    this.syncPagePropsRegistry();
     linkParents(this.doc.blocks);
     registerRoots(this.doc.blocks);
     this.zoomedBlock = null;
@@ -249,11 +249,48 @@ export class BlockEditorView extends TextFileView {
     this.scrollCap = VIRTUAL_INITIAL_CAP;
     this.undo.clear();
     this.render();
+    // Obsidian's openLinkText reopen path may clear() a view whose file was
+    // JUST loaded (and whose leaf still points at that file). Schedule one
+    // deferred re-read: if the leaf still owns a file and the model is empty
+    // at next tick, reload it from disk (self-heal for the stray clear).
+    const f = this.file;
+    if (f) {
+      window.setTimeout(() => {
+        if (this.file === f && this.doc.blocks.length === 0 && !this.embedEdit) {
+          void this.app.vault.cachedRead(f).then((data) => {
+            if (this.file === f && this.doc.blocks.length === 0 && data.length > 0) {
+              this.setViewData(data, false);
+            }
+          });
+        }
+      }, 0);
+    }
   }
 
   async onLoadFile(file: import('obsidian').TFile): Promise<void> {
     await super.onLoadFile(file);
+    // Obsidian's openLinkText reopen path can fire a stray clear() AFTER
+    // setViewData populated the doc (observed when reopening the previous
+    // file's leaf while an openLinkText promise chain is still pending),
+    // leaving the view showing the file with an EMPTY model. Re-read from
+    // disk when we caught that state — the file on disk is authoritative.
+    if (file && this.doc.blocks.length === 0) {
+      const data = await this.app.vault.cachedRead(file);
+      if (data.length > 0) {
+        this.setViewData(data, false);
+      }
+    }
     this.render();
+    // Page references (linked + unlinked) normally re-render on index
+    // rebuilds only; a file SWITCH must also refresh them, otherwise the
+    // section shows the previous file's stale content (or an empty scan
+    // from before the index existed) until the next unrelated rebuild.
+    renderPageReferences(
+      this.refsHostEl,
+      this.plugin,
+      this.file?.path,
+      this.file?.basename ?? '',
+    );
     // Reveal a pending block reference (opened from another file via ((id))).
     const pending = this.plugin.pendingReveal;
     if (pending && pending.path === file.path) {
@@ -307,15 +344,16 @@ export class BlockEditorView extends TextFileView {
   }
 
   private render(): void {
+    try {
+      this.renderInner();
+    } catch (e) {
+      console.error('[LG] render() threw:', e);
+    }
+  }
+
+  private renderInner(): void {
     if (!this.editorContainerEl) return;
     this.commitEmbedEdit(); // never lose an in-place embed edit on re-render
-    renderEditablePageProps(
-      this.editorContainerEl,
-      this.plugin,
-      this.file?.path,
-      this.doc.pageProps,
-      () => this.reloadFile(),
-    );
     const roots = this.visibleRoots;
     registerRoots(roots);
     this.renderBreadcrumb();
@@ -326,8 +364,9 @@ export class BlockEditorView extends TextFileView {
       this.focusedView = null;
     }
     renderBlockTree(this.treeEl, roots, this);
-    // Bottom-of-page backlinks section (refreshed on every render).
-    renderPageBacklinks(this.editorContainerEl, this.plugin, this.file?.path, this.file?.basename ?? '');
+    // Bottom-of-page references render on INDEX REBUILD only (see onload's
+    // onRebuild handler) — the unlinked scan is a full-vault pass and must
+    // not run in the hot editing path (it re-creates DOM mid-typing).
     // The tree DOM was rebuilt — re-apply in-page search highlights if open.
     this.searchBar?.onRerender();
   }
@@ -422,6 +461,8 @@ export class BlockEditorView extends TextFileView {
     if (!wrap || !content) return false;
     content.empty();
     content.classList.add('is-editing');
+    // The editor now shows the props as text — drop the static props row.
+    wrap.querySelector(':scope > .block-props-row')?.remove();
     this.mountFocusedInto(content as HTMLElement);
     return true;
   }
@@ -437,6 +478,28 @@ export class BlockEditorView extends TextFileView {
     if (ee && el.contains(ee.view.dom)) this.commitEmbedEdit();
   }
 
+  /**
+   * Commit a SPECIFIC editor view into its block, bypassing host bookkeeping
+   * (focusedView/focusedBlock). Used by the Escape capture handler: in
+   * background windows the focus juggling can clear host state while the
+   * editor is still on screen, and Esc must still land the edit.
+   */
+  commitViewNow(view: EditorView, block: Block): void {
+    const changed = commitEditorText(view, block, this.templateContext());
+    if (this.sourceModeBlock === block) this.sourceModeBlock = null;
+    if (this.focusedView === view) {
+      this.focusedView = null;
+      this.focusedBlock = null;
+    }
+    view.destroy();
+    clearActiveBlockEditor(this.app);
+    if (changed) {
+      this.undo.push(this.focusStartSnapshot);
+      this.markDirty();
+    }
+    refreshBlockContent(block, this);
+  }
+
   /** Commit CM6 text back into the block model; single-block static refresh. */
   commitFocusedText(): void {
     const v = this.focusedView;
@@ -444,8 +507,15 @@ export class BlockEditorView extends TextFileView {
     this.focusedView = null;
     this.focusedBlock = null;
     if (!v || !b) return;
+    // "Source mode" is a one-shot edit session: committing ITS editor ends
+    // it. (The early return above matters — focusBlock() runs this on the
+    // way to mounting the source-mode editor, and must not clear the flag.)
+    this.sourceModeBlock = null;
     const changed = commitEditorText(v, b, this.templateContext());
+    if (b.kind === 'list' && b.text === '' && !b.frontmatter && this.doc.blocks[0] === b && this.file) registerLogseqPageProps(this.file.path, b.props);
+    else clearLogseqPageProps(this.file?.path ?? '');
     v.destroy();
+    clearActiveBlockEditor(this.app);
     if (changed) {
       this.undo.push(this.focusStartSnapshot);
       this.markDirty();
@@ -453,6 +523,15 @@ export class BlockEditorView extends TextFileView {
     // Always restore static content: the CM6 DOM was removed by destroy(),
     // and the cached static el re-attaches synchronously when unchanged.
     refreshBlockContent(b, this);
+  }
+
+  /** Keep the Logseq-page-props registry fresh for other plugins. */
+  private syncPagePropsRegistry(): void {
+    const path = this.file?.path;
+    if (!path) return;
+    const pb = this.doc.blocks[0];
+    if (pb && pb.kind === 'list' && pb.text === '' && !pb.frontmatter) registerLogseqPageProps(path, pb.props);
+    else clearLogseqPageProps(path);
   }
 
   /** CM6 updateListener hooks. */
@@ -495,67 +574,293 @@ export class BlockEditorView extends TextFileView {
     row.closest('.block-embed')?.classList.add('is-editing'); // e.g. lift max-height
     content.empty();
     const view = new EditorView({
-      doc: target.text,
+      doc: blockEditorDoc(target),
       parent: content,
       extensions: createEmbedExtensions(
         this,
         () => this.commitEmbedEdit(),
         () => this.commitEmbedEditAndNew(source, path),
+        (shift) => this.handleEmbedTab(shift),
       ),
     });
     applyCursor(view, 'end');
     view.focus();
-    this.embedEdit = { view, source, path, row };
+    syncActiveBlockEditor(this.app, this, view);
+    // Real Escape keystrokes never reach CM6's keymap: CM6's capture-phase
+    // keydown handler marks keyCode 27 as handled (tabFocusMode bookkeeping)
+    // and the bubbling keymap dispatch then skips the defaultPrevented
+    // event. Catch Escape here in the CAPTURE phase on the editor DOM —
+    // capture listeners run before CM6's own capture handler regardless of
+    // registration order, and preventDefault/stopPropagation here keeps the
+    // event out of the outline's global handlers too.
+    const escHandler = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape' || e.repeat) return;
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      void this.commitEmbedEdit();
+    };
+    view.dom.addEventListener('keydown', escHandler, true);
+    this.embedEdit = { view, source, path, row, escHandler };
   }
 
   /**
-   * Commit the current embed edit, then create a NEW EMPTY BLOCK in the HOST
-   * page, directly below the block that contains the embed, and focus it
-   * (Logseq md Enter parity: Enter below an embed continues writing in the
-   * host outline). Cross-file and same-file embeds behave identically here —
-   * the embed's own text is committed untouched.
+   * Commit the current embed edit, then create a NEW EMPTY BLOCK in the
+   * SOURCE page, directly below the block that was being edited (Logseq md
+   * parity: Enter below a block continues writing in the page the block
+   * lives in — for embeds that is the embedded source, not the host).
+   *
+   * Same-file embeds: insert via the model (undo/patch). Cross-file embeds
+   * and page-embed rows: patch the source file on disk (guarded write), then
+   * refresh the open views / the embed box itself.
    */
-  commitEmbedEditAndNew(_src: EmbedSource, _path: number[]): void {
-    this.commitEmbedEdit();
-    // Find the HOST block that renders this embed (the wrap containing the
-    // embed box), then insert a sibling right after it.
-    const hostWrap = this.treeEl.querySelector('.block-embed')?.closest('.block-wrap') as HTMLElement | null;
-    if (!hostWrap) return;
-    const hostBlock = blockFromEl(hostWrap);
-    if (!hostBlock) return;
-    const sibs = siblingsOf(hostBlock);
-    const idx = sibs.indexOf(hostBlock);
-    if (idx < 0) return;
-    const nb = createBlock('');
-    this.mutate(
-      () => {
-        sibs.splice(idx + 1, 0, nb);
-        nb.parent = hostBlock.parent ?? null;
-      },
-      () => ({ lists: [hostBlock.parent] }),
-    );
-    this.focusBlock(nb, 0);
+  commitEmbedEditAndNew(src: EmbedSource, path: number[]): void {
+    // Capture the edited row BEFORE committing (commit clears embedEdit);
+    // used to locate the embed box that owns this edit.
+    const editRow = this.embedEdit?.row ?? null;
+    // Awaited: the commit's text write must land BEFORE the insert below
+    // re-parses/re-serializes the same source (disk mode race).
+    void this.commitEmbedEdit().then(() => {
+      this.commitEmbedEditAndNewInner(src, path, editRow);
+    });
   }
 
   /**
-   * Commit + tear down the in-place embed editor: the text goes back to the
-   * source block (this file → model + undo; another file → its open view or
-   * the file on disk), then just that row is rebuilt — siblings stay put.
+   * Tab / Shift+Tab inside an in-place embed edit: indent/outdent the edited
+   * block in its source tree, then re-open the edit on it (Logseq parity).
    */
-  commitEmbedEdit(): boolean {
+  handleEmbedTab(shift: boolean): boolean {
+    const src = this.embedEdit?.source ?? null;
+    const path = this.embedEdit?.path ?? null;
+    const editRow = this.embedEdit?.row ?? null;
+    if (!src || !path || !editRow) return false;
+    void this.commitEmbedEdit().then(() => {
+      this.commitEmbedEditTabInner(src, path, editRow, shift);
+    });
+    return true;
+  }
+
+  private commitEmbedEditTabInner(src: EmbedSource, path: number[], editRow: HTMLElement | null, shift: boolean): void {
+    const isPageEmbed = src.id === '';
+    const isLocal = !src.file || src.file.path === this.file?.path;
+    const box = isPageEmbed
+      ? ((editRow?.closest('.block-embed.block-page-embed') as HTMLElement | null) ??
+         (this.treeEl.querySelector('.block-embed.block-page-embed') as HTMLElement | null))
+      : findEmbedBox(this, src.id);
+    if (!box) return;
+    const target = blockAtPath(src.block, path) ?? src.block;
+
+    const indentViaView = (view: BlockEditorView): boolean => {
+      const addrRoot = isPageEmbed ? pseudoRootOf(view.doc.blocks) : findBlockById(view.doc.blocks, src.id);
+      const t = addrRoot ? (blockAtPath(addrRoot, path) ?? (path.length === 0 ? addrRoot : null)) : null;
+      if (!t) return false;
+      const oldParent = t.parent;
+      view.mutate(() => (shift ? outdent(t) : indent(t)), () => ({ lists: [oldParent, t.parent] }));
+      return true;
+    };
+
+    // After the box re-renders, re-open the in-place editor on the indented
+    // block (matched against embed rows by block identity — same-file model
+    // objects survive the re-render).
+    const editIndentedWhenReady = (): void => {
+      const t0 = Date.now();
+      const tryFind = (): void => {
+        const hit = findEmbedRowForBlock(box, target);
+        if (hit) {
+          this.startEmbedEdit(hit.row, hit.src, hit.path);
+          return;
+        }
+        if (Date.now() - t0 < 4000) window.setTimeout(tryFind, 60);
+      };
+      tryFind();
+    };
+
+    if (isLocal) {
+      if (!indentViaView(this)) return;
+      if (isPageEmbed) {
+        void refreshPageEmbedBox(this, box, src.file!).then(() => editIndentedWhenReady());
+      } else {
+        const fresh = findBlockById(this.doc.blocks, src.id);
+        if (!fresh) return;
+        const freshSrc: EmbedSource = { block: fresh, crumbs: src.crumbs, file: src.file, id: src.id };
+        renderEmbedBodyFrom(box, freshSrc, src.id, this);
+        editIndentedWhenReady();
+      }
+      return;
+    }
+
+    const other = src.file ? this.findOpenBlockEditor(src.file.path) : null;
+    if (other) {
+      if (!indentViaView(other)) return;
+      if (isPageEmbed) {
+        void refreshPageEmbedBox(this, box, src.file!).then(() => editIndentedWhenReady());
+      } else {
+        const fresh = findBlockById(other.doc.blocks, src.id);
+        if (!fresh) return;
+        const freshSrc: EmbedSource = { block: fresh, crumbs: src.crumbs, file: src.file, id: src.id };
+        renderEmbedBodyFrom(box, freshSrc, src.id, this);
+      }
+      return;
+    }
+
+    // Nobody has the source open: patch the file on disk (guarded write).
+    void mutatePageEmbedSource(this, src.file!, (doc) => {
+      const root = src.id ? findBlockById(doc.blocks, src.id) : pseudoRootOf(doc.blocks);
+      const t = root ? blockAtPath(root, path) : null;
+      if (t) (shift ? outdent(t) : indent(t));
+    }).then(() => {
+      if (isPageEmbed) void refreshPageEmbedBox(this, box, src.file!);
+      else void refreshEmbedBox(this, box, src.id);
+    });
+  }
+
+  private commitEmbedEditAndNewInner(src: EmbedSource, path: number[], editRow: HTMLElement | null): void {
+    const isPageEmbed = src.id === '';
+    const isLocal = !src.file || src.file.path === this.file?.path;
+    const box = isPageEmbed
+      ? ((editRow?.closest('.block-embed.block-page-embed') as HTMLElement | null) ??
+         (this.treeEl.querySelector('.block-embed.block-page-embed') as HTMLElement | null))
+      : findEmbedBox(this, src.id);
+    if (!box) return;
+
+    /**
+     * Where a "new block below the addressed row" lands. Root rows of block
+     * embeds grow a LAST CHILD (the new block stays inside the embed and can
+     * be focused there — Logseq embed-scope parity); every other row takes a
+     * sibling below. A page-embed root row (`[]`) appends to the page's top
+     * level (its "rows" ARE the page's top-level blocks).
+     *
+     * `newPath` is expressed in the SAME address space as `path` — block-
+     * relative — so it can be matched against embed rows after a re-render.
+     */
+    const planInsert = (
+      docBlocks: Block[],
+      addrRoot: Block | null,
+    ): { list: Block[]; index: number; parent: Block | null; newPath: number[] } | null => {
+      const t = addrRoot ? (blockAtPath(addrRoot, path) ?? addrRoot) : null;
+      if (!t) return null;
+      if (path.length === 0) {
+        if (isPageEmbed) return { list: docBlocks, index: docBlocks.length, parent: null, newPath: [docBlocks.length] };
+        return { list: t.children, index: t.children.length, parent: t, newPath: [t.children.length] };
+      }
+      const sibs = t.parent ? t.parent.children : docBlocks;
+      const idx = sibs.indexOf(t);
+      if (idx < 0) return null;
+      return { list: sibs, index: idx + 1, parent: t.parent ?? null, newPath: [...path.slice(0, -1), idx + 1] };
+    };
+
+    /**
+     * After the box re-renders, the new empty row exists in the DOM but the
+     * re-render is async (markdown resolves on micro/next tasks), so the
+     * row-path registry may lag one tick. Poll briefly, then start the
+     * in-place editor on the row.
+     */
+    const editNewRowWhenReady = (np: number[]): void => {
+      const t0 = Date.now();
+      const tryFind = (): void => {
+        const row = findEmbedRow(box, np);
+        if (row) {
+          const liveSrc = getEmbedRowSource(row);
+          if (liveSrc) this.startEmbedEdit(row, liveSrc, np);
+          return;
+        }
+        if (Date.now() - t0 < 4000) window.setTimeout(tryFind, 60);
+      };
+      tryFind();
+    };
+
+    // ---- 1) Insert the new empty block into the source ----
+    // ---- 2) Refresh the embed box -------------------------
+    // ---- 3) In-place edit the new row ---------------------
+    const insertViaView = (view: BlockEditorView): number[] | null => {
+      const addrRoot = isPageEmbed ? pseudoRootOf(view.doc.blocks) : findBlockById(view.doc.blocks, src.id);
+      const plan = planInsert(view.doc.blocks, addrRoot);
+      if (!plan) return null;
+      const nb = createBlock('');
+      view.mutate(() => {
+        plan.list.splice(plan.index, 0, nb);
+        nb.parent = plan.parent;
+      });
+      return plan.newPath;
+    };
+
+    if (isLocal && !isPageEmbed) {
+      // Same-file block embed: model insert in THIS view, then re-render the
+      // box from the live model (fresher than disk during the save debounce).
+      // mutate() may fully re-render the view (virtual cap / patch fallback),
+      // replacing the box DOM — re-locate it afterwards.
+      const np = insertViaView(this);
+      if (!np) return;
+      const boxNow = findEmbedBox(this, src.id);
+      const fresh = findBlockById(this.doc.blocks, src.id);
+      if (!boxNow || !fresh) return;
+      const freshSrc: EmbedSource = { block: fresh, crumbs: src.crumbs, file: src.file, id: src.id };
+      renderEmbedBodyFrom(boxNow, freshSrc, src.id, this);
+      editNewRowWhenReady(np);
+      return;
+    }
+
+    const filePath = src.file?.path ?? '';
+    const other = isLocal ? null : this.findOpenBlockEditor(filePath);
+    if (other) {
+      // Source page open in another block-editor view: insert through ITS
+      // model so unsaved edits / undo / save stay authoritative.
+      const np = insertViaView(other);
+      if (!np) return;
+      if (isPageEmbed) {
+        void refreshPageEmbedBox(this, box, src.file!).then(() => editNewRowWhenReady(np));
+      } else {
+        const fresh = findBlockById(other.doc.blocks, src.id);
+        if (!fresh) return;
+        const freshSrc: EmbedSource = { block: fresh, crumbs: src.crumbs, file: src.file, id: src.id };
+        renderEmbedBodyFrom(box, freshSrc, src.id, this);
+        editNewRowWhenReady(np);
+      }
+      return;
+    }
+
+    // Nobody has the source open: patch the file on disk (guarded write:
+    // backup + operation log), re-render the box from disk, then edit the
+    // new row. An open native-editor view adopts the change via its own
+    // vault-modify handler — no forced reload from here.
+    if (!src.file) return;
+    let npDisk: number[] | null = null;
+    void mutatePageEmbedSource(this, src.file, (doc) => {
+      const addrRoot = isPageEmbed ? pseudoRootOf(doc.blocks) : findBlockById(doc.blocks, src.id);
+      const plan = planInsert(doc.blocks, addrRoot);
+      if (!plan) return;
+      const nb = createBlock('');
+      plan.list.splice(plan.index, 0, nb);
+      nb.parent = plan.parent;
+      npDisk = plan.newPath;
+    }).then((ok) => {
+      const np = npDisk as number[] | null;
+      if (!ok || !np) return;
+      const refreshed = isPageEmbed
+        ? refreshPageEmbedBox(this, box, src.file!)
+        : refreshEmbedBox(this, box, src.id);
+      void Promise.resolve(refreshed).then(() => editNewRowWhenReady(np));
+    });
+  }
+
+  /** Commit + tear down the in-place embed editor; resolves after any disk write lands. */
+  async commitEmbedEdit(): Promise<boolean> {
     const cur = this.embedEdit;
     this.embedEdit = null;
     if (!cur) return false;
-    const text = expandTemplates(cur.view.state.doc.toString(), new Date(), this.templateContext());
+    const raw = expandTemplates(cur.view.state.doc.toString(), new Date(), this.templateContext());
+    cur.view.dom.removeEventListener('keydown', cur.escHandler, true);
     cur.view.destroy();
+    clearActiveBlockEditor(this.app);
     cur.row.classList.remove('is-editing');
     cur.row.closest('.block-embed')?.classList.remove('is-editing');
     const target = blockAtPath(cur.source.block, cur.path) ?? cur.source.block;
-    const changed = text !== target.text;
+    const { text: clean, props } = splitPropLines(raw);
+    const changed = clean !== target.text || !propsShallowEqual(editableProps(target), props);
     if (changed) {
-      void this.writeEmbedText(cur.source, cur.path, text);
-      // Keep the in-memory copy in sync so the rebuilt row shows the edit.
-      target.text = text;
+      target.text = clean;
+      applyBlockProps(target, props);
+      // Writers re-extract, so the raw doc text is safe to hand over.
+      await this.writeEmbedText(cur.source, cur.path, raw);
     }
     rerenderEmbedRow(cur.row, cur.source, cur.path, this);
     return changed;
@@ -566,6 +871,11 @@ export class BlockEditorView extends TextFileView {
     const filePath = src.file?.path;
     // Same file: go through the model so undo / dirty / rendering stay in sync.
     if (!filePath || filePath === this.file?.path) {
+      // Page-embed rows of THIS file (no id) are addressed by path, not by id.
+      if (src.id === '') {
+        this.applyBlockTextAtPath(path, text);
+        return;
+      }
       this.applyBlockText(src.id, path, text);
       return;
     }
@@ -576,34 +886,65 @@ export class BlockEditorView extends TextFileView {
       .map((l) => l.view as BlockEditorView)
       .find((v) => v.file?.path === filePath);
     if (other) {
-      other.applyBlockText(src.id, path, text);
+      if (src.id === '') other.applyBlockTextAtPath(path, text);
+      else other.applyBlockText(src.id, path, text);
       return;
     }
     const file = this.app.vault.getAbstractFileByPath(filePath);
     if (!(file instanceof TFile)) return;
-    const doc = parseDocument(await this.app.vault.cachedRead(file));
-    linkParents(doc.blocks);
-    const root = findBlockById(doc.blocks, src.id);
-    const b = root ? blockAtPath(root, path) : null;
-    if (!b || b.text === text) return;
-    b.text = text;
-    // Guarded write: backup + log (v0.2.0) — cross-file embed edits are
-    // real disk writes and must be recoverable.
-    const ok = await this.plugin.backups.safeProcess(
-      file,
-      () => serializeDocument(doc),
-      'blocks.embedEdit',
+    // Path-based addressing handles id-less blocks (page-embed rows) and
+    // id-carrying blocks alike; the paths were captured from the same parse.
+    const ok = await mutatePageEmbedSource(this, file, (doc) => {
+      const root = src.id ? findBlockById(doc.blocks, src.id) : pseudoRootOf(doc.blocks);
+      if (!root) return;
+      const b = blockAtPath(root, path);
+      if (!b) return;
+      const { text: clean, props } = splitPropLines(text);
+      b.text = clean;
+      applyBlockProps(b, props);
+    });
+    if (ok) {
+      // An open view adopts the change via its vault-modify handler (its own
+      // unsaved edits win and re-save) — no forced reload here.
+    }
+  }
+
+  /** Apply a text change to a block addressed by child-index path (id-less rows). */
+  private applyBlockTextAtPath(path: number[], text: string): boolean {
+    const root = pseudoRootOf(this.doc.blocks);
+    const b = blockAtPath(root, path);
+    if (!b) return false;
+    const { text: clean, props } = splitPropLines(text);
+    if (b.text === clean && propsShallowEqual(editableProps(b), props)) return false;
+    this.undo.push(this.serializeCurrent());
+    b.text = clean;
+    applyBlockProps(b, props);
+    this.markDirty();
+    refreshBlockContent(b, this);
+    this.focusStartSnapshot = serializeDocument(this.doc);
+    return true;
+  }
+
+  /** First open block-editor view showing `path` (this view included), if any. */
+  findOpenBlockEditor(path: string): BlockEditorView | null {
+    return (
+      this.app.workspace
+        .getLeavesOfType(VIEW_TYPE_BLOCK_EDITOR)
+        .map((l) => l.view as BlockEditorView)
+        .find((v) => v.file?.path === path) ?? null
     );
-    if (!ok) return;
   }
 
   /** Apply a text change made outside this view (e.g. an in-place embed edit). */
   applyBlockText(id: string, path: number[], text: string): boolean {
     const root = findBlockById(this.doc.blocks, id);
     const b = root ? blockAtPath(root, path) : null;
-    if (!b || b.text === text) return false;
+    if (!b) return false;
+    const { text: clean, props } = splitPropLines(text);
+    if (b.text === clean && propsShallowEqual(editableProps(b), props)) return false;
     this.undo.push(this.serializeCurrent());
-    b.text = text;
+    b.text = clean;
+    applyBlockProps(b, props);
     this.markDirty();
     refreshBlockContent(b, this);
     this.focusStartSnapshot = serializeDocument(this.doc);
@@ -666,6 +1007,24 @@ export class BlockEditorView extends TextFileView {
   toggleCollapse(b: Block): void {
     this.mutate(
       () => toggleCollapse(b),
+      () => ({ subtree: b }),
+    );
+  }
+
+  /** Guide-line click: folds/unfolds the content INSIDE the guide (the
+   *  clicked block itself is not folded). Depths come from the settings
+   *  (`guideLineCollapseLevels` / `guideLineExpandLevels`, 0 = all levels). */
+  toggleCollapseGuide(b: Block): void {
+    const expanding = isCollapsed(b) || b.children.some((c) => isCollapsed(c));
+    this.mutate(
+      () => {
+        if (expanding) {
+          if (isCollapsed(b)) setCollapsed(b, false); // stub click on a folded block
+          expandLevels(b, this.plugin.settings.guideLineExpandLevels);
+        } else {
+          collapseLevels(b, this.plugin.settings.guideLineCollapseLevels);
+        }
+      },
       () => ({ subtree: b }),
     );
   }
@@ -1132,17 +1491,24 @@ export class BlockEditorView extends TextFileView {
 
   private serializeCurrent(): string {
     // Overlay the focused CM6's live text without committing it (no template
-    // expansion, no re-render): auto-save and conflict diffs must reflect
-    // exactly what is on screen even mid-edit.
+    // expansion, no re-render): auto-save and external-change comparisons
+    // must reflect exactly what is on screen even mid-edit. Trailing
+    // `key:: value` lines get the SAME treatment a commit would give them —
+    // they are properties, not body text — so an auto-save in the middle of
+    // typing props can never flatten them into the block's text.
     const v = this.focusedView;
     const b = this.focusedBlock;
     if (v && b) {
       const live = v.state.doc.toString();
-      if (live !== b.text) {
-        const saved = b.text;
-        b.text = live;
+      if (live !== blockEditorDoc(b)) {
+        const savedText = b.text;
+        const savedProps = b.props;
+        const { text, props } = splitPropLines(live);
+        b.text = text;
+        applyBlockProps(b, props);
         const s = serializeDocument(this.doc);
-        b.text = saved;
+        b.text = savedText;
+        b.props = savedProps;
         return s;
       }
     }
@@ -1163,28 +1529,17 @@ export class BlockEditorView extends TextFileView {
     const data = await this.app.vault.cachedRead(this.file);
     const ours = this.serializeCurrent();
     if (data === ours) return; // our own write echoed (or no real change)
-    if (this.conflictOpen) return; // already resolving this conflict
     const haveLocal = this.lastDiskData === null || ours !== this.lastDiskData;
     if (!haveLocal) {
       // No unsaved local edits — silently adopt the external version.
       this.setViewData(data, false);
       return;
     }
-    // Real conflict: unsaved local edits vs changed disk content.
-    this.conflictOpen = true;
-    new ConflictModal(this.app, {
-      path: this.file.path,
-      mine: ours,
-      external: data,
-      onKeepMine: () => {
-        this.conflictOpen = false;
-        void this.save(true);
-      },
-      onUseExternal: () => {
-        this.conflictOpen = false;
-        this.commitFocusedText(); // destroy the live CM6 before swapping docs
-        this.setViewData(data, false);
-      },
-    }).open();
+    // External change while we hold unsaved edits: the EDITOR always wins.
+    // The debounced save will overwrite the disk version; the original disk
+    // content is already recoverable via the session backup taken at the
+    // first markDirty of this session (plus the pre-write backup in the
+    // save path). No user prompt — editor-wins is the policy.
+    this.requestSave();
   }
 }

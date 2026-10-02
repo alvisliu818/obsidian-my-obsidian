@@ -7,4 +7,11 @@ module.exports = {
   normalizePath: (p) => p, MarkdownRenderer: { render: async () => {} },
   debounce: (f) => f, Menu: class {}, Scope: class {}, WorkspaceLeaf: class {},
   TextFileView: class {},
+  // CM StateFields exported for third-party extension compatibility.
+  editorInfoField: { id: 'stubInfo', create: () => null },
+  editorLivePreviewField: { id: 'stubLp', create: () => false },
+  // Math rendering (used by the live-preview math widget).
+  renderMath: () => document.createElement('span'),
+  finishRenderMath: async () => {},
+  loadMathJax: async () => {},
 };

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Bottom-of-page backlinks area (Logseq md parity): "Linked mentions" for the
  * CURRENT page, rendered as a collapsed-by-default section under the outline.
  * Clicking a source row jumps to the referencing page/block. Refreshes on
@@ -9,7 +9,6 @@ import { setIcon } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import type { BacklinkEntry } from '../index/blockIndex';
 import { plainText } from '../features/query';
-import { renderUnlinkedMentions } from './unlinkedMentions';
 
 export const BACKLINKS_SECTION_CLASS = 'page-backlinks';
 
@@ -21,7 +20,7 @@ export function renderPageBacklinks(
   containerEl: HTMLElement,
   plugin: LogseqEditorPlugin,
   currentPath: string | undefined,
-  fileBasename: string,
+  _fileBasename: string,
 ): void {
   containerEl.querySelector(`:scope > .${BACKLINKS_SECTION_CLASS}`)?.remove();
   if (!currentPath) return;
@@ -71,8 +70,4 @@ export function renderPageBacklinks(
       }
     }
   }
-
-  // Unlinked mentions section renders right below the linked ones.
-  renderUnlinkedMentions(containerEl, plugin, currentPath, fileBasename);
 }
-

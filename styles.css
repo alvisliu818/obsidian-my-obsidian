@@ -66,13 +66,22 @@
 .block-editor-scroller {
   flex: 1;
   overflow-y: auto;
-  padding: 14px 12px 45vh 6px;
+  padding: 14px 12px 12px 6px;
   scrollbar-gutter: stable;
+}
+
+/* Scroll-comfort gap after the outline (scroll the last block toward center).
+   The page-references host follows AFTER this gap so the bottom references
+   stay part of the scrollable page and can be scrolled to the very bottom. */
+.block-editor-tree {
+  padding-bottom: 45vh;
 }
 
 /* ---------- Block row ---------- */
 .block-wrap {
   position: relative;
+  --lgp-controls-w: 32px; /* bullet/controls column */
+  --lgp-content-pad: 6px; /* .block-content horizontal padding */
 }
 
 .block-main {
@@ -81,21 +90,24 @@
   border-radius: 4px;
 }
 
-.block-main:hover > .block-content {
-  background: var(--background-modifier-hover);
-}
-
 .block-controls {
+  position: relative; /* anchors the floating caret */
   display: flex;
   align-items: center;
   flex: none;
   height: 1.55em;
-  width: 32px;
+  width: var(--lgp-controls-w, 32px);
   user-select: none;
 }
 
-/* collapse caret */
+/* collapse caret — floats over a reserved slot (takes no layout space) and is
+   revealed by row hover; collapsed blocks keep it visible so the folded state
+   stays discoverable */
 .block-caret {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
   width: 16px;
   height: 16px;
   display: flex;
@@ -104,6 +116,25 @@
   cursor: pointer;
   color: var(--text-faint);
   border-radius: 4px;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.1s ease, visibility 0.1s ease;
+}
+
+.block-main:hover .block-caret,
+.embed-main:hover .block-caret,
+.block-caret.is-collapsed,
+.block-caret:hover {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* touch devices have no hover: keep the floating caret always visible */
+@media (hover: none) and (pointer: coarse) {
+  .block-caret {
+    opacity: 1;
+    visibility: visible;
+  }
 }
 
 .block-caret:hover {
@@ -138,15 +169,10 @@
   height: 6px;
   border-radius: 50%;
   background: var(--text-muted);
-  transition: all 0.1s ease;
 }
 
-.block-main:hover .block-bullet::before {
-  background: var(--text-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-accent) 20%, transparent);
-}
-
-/* caret space placeholder when no children */
+/* reserved slot where the floating caret appears on hover (keeps the bullet
+   column aligned across sibling rows) */
 .block-caret-spacer {
   width: 16px;
   height: 16px;
@@ -156,8 +182,12 @@
 /* ---------- Block content ---------- */
 .block-content {
   flex: 1;
+  /* Permit shrinking below the content's min-width — otherwise a long
+     white-space:pre line (code block) expands the whole row instead of
+     scrolling inside its box. */
+  min-width: 0;
   min-height: 1.55em;
-  padding: 1px 6px;
+  padding: 1px var(--lgp-content-pad, 6px);
   line-height: 1.55;
   cursor: text;
   word-break: break-word;
@@ -169,11 +199,6 @@
 
 .block-content > p:last-child {
   margin-bottom: 0;
-}
-
-.block-content.is-editing {
-  background: var(--background-secondary);
-  border-radius: 4px;
 }
 
 /* raw blocks (headings, paragraphs, fences) keep native spacing */
@@ -222,17 +247,43 @@
 .block-children-container {
   display: flex;
   margin-left: 16px;
+  /* Children indent: the guide line is absolutely positioned (under the
+     bullet dot), so the flow indent lives here. */
+  padding-left: 16px;
   position: relative;
 }
 
+.block-children-container.is-collapsed {
+  /* Collapsed: keep a short guide-line stub under the bullet so the line can
+     be clicked again to expand (same toggle as the caret). */
+  min-height: 0.9em;
+}
+
 .block-children-left-border {
-  flex: none;
+  /* Centered under the parent bullet's dot: the dot's center sits at
+     controls-width − 8px from the wrap left; the container is indented 16px,
+     the line is 2px wide. Both ends keep a small gap: the line starts just
+     below the parent dot and stops short of the last child's dot. */
+  position: absolute;
+  left: calc(var(--lgp-controls-w, 32px) - 25px);
+  top: calc(-0.78em + 7px);
+  bottom: 1em;
   width: 2px;
-  margin: 0 14px 0 0;
   border-radius: 2px;
   background: var(--background-modifier-border);
   cursor: pointer;
   transition: background 0.1s ease;
+}
+
+/* The 2px line is too narrow to click reliably — widen the hit area sideways
+   (the line is positioned, so it paints above the static child rows). */
+.block-children-left-border::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  right: -5px;
 }
 
 .block-children-left-border:hover {
@@ -316,16 +367,32 @@
   padding: 0 1px;
 }
 
+
+
+/* Tags are page references (Logseq parity): a #tag opens/creates the page
+   of the same name, so style it like a page link rather than a search tag. */
+.block-content a.tag,
+.block-props-content a.tag {
+  cursor: pointer;
+  color: var(--link-color, var(--text-accent));
+  background: none;
+  border: none;
+  padding: 0 1px;
+  text-decoration: none;
+}
+
+.block-content a.tag:hover,
+.block-props-content a.tag:hover {
+  background: var(--background-modifier-hover);
+}
+
 .block-ref:hover {
   background: var(--background-modifier-hover);
 }
 
 .block-ref-embed {
-  border-left: 3px solid var(--background-modifier-border);
   padding: 2px 8px;
   margin: 2px 0;
-  border-radius: 2px;
-  background: var(--background-secondary);
 }
 
 /* ---------- Autocompletion tweaks ---------- */
@@ -557,11 +624,9 @@
 
 /* ---------- Embedded blocks ({{embed ((uuid))}}) ---------- */
 .block-embed {
-  /* Look like the surrounding outline: no card background, no accent border,
-     no special padding — only a thin guide line marking the embed region. */
-  border-left: 2px solid var(--background-modifier-border);
+  /* Renders like the surrounding outline — no guide line, no card look.
+     Only the scroll cap and breadcrumb mark it as an embed. */
   background: transparent;
-  border-radius: 4px;
   padding: 0 6px;
   margin: 0;
   max-height: 300px;
@@ -575,17 +640,8 @@
   font-size: 0.9em;
 }
 
-.block-embed.is-broken {
-  border-left-color: var(--text-error);
-}
-
 .block-embed .embed-error {
   color: var(--text-error);
-}
-
-.block-embed .block-embed {
-  /* nested embeds keep the same subtle guide line */
-  border-left-color: var(--background-modifier-border);
 }
 
 /* breadcrumb: where the embedded block lives (file › …ancestors) */
@@ -632,11 +688,8 @@
   border-radius: 4px;
 }
 
-.embed-main:hover > .embed-content {
-  background: var(--background-modifier-hover);
-}
-
 .embed-controls {
+  position: relative; /* anchors the floating caret */
   display: flex;
   align-items: center;
   flex: none;
@@ -652,12 +705,6 @@
   line-height: 1.55;
   cursor: text;
   word-break: break-word;
-}
-
-/* editing affordance matches the main outline's .block-content.is-editing */
-.embed-row.is-editing .embed-content {
-  background: var(--background-secondary);
-  border-radius: 4px;
 }
 
 .embed-children {
@@ -692,53 +739,6 @@
 
 .block-embed .cm-line {
   padding: 0 2px;
-}
-
-/* ---------- Property badges (priority / scheduled / deadline) ---------- */
-.block-badges {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  margin: 0 4px 0 0;
-  align-self: center;
-  flex: none;
-  user-select: none;
-}
-
-.block-badge {
-  font-size: 0.75em;
-  line-height: 1.5;
-  padding: 0 6px;
-  border-radius: 8px;
-  background: var(--background-modifier-hover);
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-.badge-priority-a {
-  color: var(--text-error);
-  background: color-mix(in srgb, var(--text-error) 12%, transparent);
-  font-weight: 600;
-}
-
-.badge-priority-b {
-  color: var(--text-warning, #e0ac00);
-  background: color-mix(in srgb, var(--text-warning, #e0ac00) 12%, transparent);
-  font-weight: 600;
-}
-
-.badge-priority-c {
-  color: var(--text-accent);
-  background: color-mix(in srgb, var(--text-accent) 12%, transparent);
-  font-weight: 600;
-}
-
-.badge-scheduled {
-  color: var(--text-muted);
-}
-
-.badge-deadline {
-  color: var(--text-error);
 }
 
 /* ---------- Block search modal ---------- */
@@ -1030,6 +1030,65 @@
   background: var(--background-modifier-border);
 }
 
+/* ---------- Markdown tables in block content (slash-insert / GFM) ---------- */
+/* Obsidian's own table CSS is scoped to .markdown-rendered / .cm-embed-block,
+   which block content is not — without this a table renders as an invisible
+   grid (no borders, empty cells collapse to zero width). Same variables the
+   native preview tables use. */
+.block-content table {
+  border-collapse: collapse;
+  margin: 4px 0;
+}
+
+.block-content th,
+.block-content td {
+  border: 1px solid var(--table-border-color, var(--background-modifier-border));
+  padding: var(--table-cell-padding, 4px 10px);
+  min-width: 3em;
+  vertical-align: top;
+}
+
+.block-content th {
+  font-weight: 600;
+  text-align: left;
+  background: var(--table-header-background, var(--background-secondary));
+}
+
+.block-content tr:hover td {
+  background: var(--table-row-background-hover, var(--background-modifier-hover));
+}
+
+/* ---------- Live preview (实时预览) in the block editors ---------- */
+/* Syntax marks hidden by the live-preview decorations; the remaining text
+   takes its rendered form. Class names are unprefixed (unique) so both the
+   outline editor and the embed editor get them. */
+.cm-line.lgp-h1 { font-size: 1.6em; font-weight: 700; line-height: 1.3; }
+.cm-line.lgp-h2 { font-size: 1.45em; font-weight: 700; line-height: 1.3; }
+.cm-line.lgp-h3 { font-size: 1.3em; font-weight: 700; line-height: 1.3; }
+.cm-line.lgp-h4 { font-size: 1.15em; font-weight: 700; }
+.cm-line.lgp-h5 { font-size: 1.05em; font-weight: 700; }
+.cm-line.lgp-h6 { font-weight: 700; color: var(--text-muted); }
+
+.lgp-hr {
+  display: block;
+  width: 100%;
+  height: 0;
+  border-top: 1px solid var(--background-modifier-border);
+  margin: 0.4em 0;
+}
+
+/* Rendered table widget (live preview). The table itself inherits the
+   .block-content table rules (borders, padding, hover). */
+.lgp-table {
+  margin: 2px 0;
+}
+.lgp-table table {
+  margin: 0;
+}
+
+.lgp-wikilink { color: var(--link-color, var(--text-accent)); }
+.lgp-comment { color: var(--text-faint); }
+
 /* ---------- Query table ({{query-table ...}}) ---------- */
 .block-query-table-wrap {
   margin: 4px 0 4px 48px;
@@ -1110,61 +1169,6 @@
   background: var(--background-modifier-hover);
 }
 
-/* ---------- External-change conflict modal ---------- */
-.conflict-path {
-  font-family: var(--font-monospace);
-  font-size: 0.85em;
-  color: var(--text-muted);
-  margin-bottom: 6px;
-  word-break: break-all;
-}
-
-.conflict-hint {
-  font-size: 0.85em;
-  color: var(--text-muted);
-  margin: 0 0 10px;
-}
-
-.conflict-diff {
-  max-height: 50vh;
-  overflow: auto;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 6px;
-  padding: 6px 0;
-  font-family: var(--font-monospace);
-  font-size: 0.82em;
-  line-height: 1.5;
-  background: var(--background-secondary);
-}
-
-.conflict-diff .cd-line {
-  padding: 0 10px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.conflict-diff .cd-line.cd-del {
-  background: color-mix(in srgb, var(--text-error, #e93147) 14%, transparent);
-}
-
-.conflict-diff .cd-line.cd-add {
-  background: color-mix(in srgb, var(--text-success, #3fb950) 14%, transparent);
-}
-
-.conflict-diff .cd-gap {
-  padding: 2px 10px;
-  color: var(--text-faint);
-  font-style: italic;
-  user-select: none;
-}
-
-.conflict-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 12px;
-}
-
 /* ---------- Touch drag ---------- */
 .block-drag-ghost {
   position: fixed;
@@ -1199,11 +1203,6 @@ body.block-touch-dragging {
   background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
   border-radius: 6px;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 45%, transparent);
-}
-
-.block-badge.badge-custom {
-  color: var(--text-muted);
-  background: var(--background-secondary);
 }
 
 /* ---------- Dataview coexistence ---------- */
@@ -1305,6 +1304,12 @@ body.block-touch-dragging {
   .block-bullet {
     min-height: 32px;
     min-width: 24px;
+  }
+
+  /* the enlarged floating caret would reach 8px into the bullet zone —
+     nudge it left to keep the two controls visually separate */
+  .block-main .block-caret {
+    left: -4px;
   }
 }
 
@@ -1460,6 +1465,18 @@ body.block-touch-dragging {
   padding-inline-start: 22px;
 }
 
+/* Ordered-list prefixes ("1. " opening a block's text) align with the block
+   TEXT column like Logseq: the marker renders in-flow at the column start
+   instead of hanging at the list padding. The theme's own ::marker rule
+   colors it (Blue Topaz: --list-ol-number-color). */
+.block-content-static ol,
+.embed-content ol,
+.fc-question ol,
+.fc-answer ol {
+  padding-inline-start: 0;
+  list-style-position: inside;
+}
+
 .block-content-static li {
   margin-block: 0;
   line-height: 1.55;
@@ -1478,6 +1495,185 @@ body.block-touch-dragging {
 .block-content-static pre {
   margin-block: 0.25em;
   line-height: 1.5;
+}
+
+/* ------------------------------------------------------------------ */
+/* Code-block toolbar: slim strip ABOVE the code (language + copy),    */
+/* so the copy icon never overlaps the code content.                   */
+/* ------------------------------------------------------------------ */
+
+.lgp-code-block {
+  margin-block: 0.25em;
+}
+
+.lgp-code-block pre {
+  margin-block: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/* Logseq parity: rendered code blocks scroll horizontally instead of wrapping
+   long lines (Logseq `pre` = white-space pre + overflow-x auto). !important
+   beats theme body-class toggles (Blue Topaz `body.whole-code-wrap …` scoping
+   (0,2,2) otherwise wins and code wraps again) — and the theme sets pre-wrap
+   on the CODE element directly, which inheritance cannot override, so the
+   pair is pinned on both. overflow-y stays hidden — a code box never scrolls
+   vertically. Dataview blocks keep their own rendering (the plugin never
+   wraps those in .lgp-code-block). */
+.block-content-static:not(.block-dataview) pre,
+.embed-content pre,
+.fc-question pre,
+.fc-answer pre {
+  white-space: pre !important;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+:is(.block-content-static:not(.block-dataview), .embed-content, .fc-question, .fc-answer) pre {
+  /* Theme pre padding is scoped to .markdown-rendered and never reaches
+     plugin-rendered code — give the box its own so every line insets. */
+  padding: 0.4em 0.9em;
+}
+
+:is(.block-content-static:not(.block-dataview), .embed-content, .fc-question, .fc-answer) pre code {
+  white-space: pre !important;
+  /* `code` is inline by default: its own left padding would indent ONLY the
+     first line (inline box fragmentation), so every following line sat ~7px
+     left of the first — the x/y misalignment. Block-level with no padding
+     aligns all lines at the pre's content edge. */
+  display: block;
+  padding: 0;
+}
+
+/* Theme interplay (user-visible under Blue Topaz + snippets, theme-agnostic):
+   the language watermark some themes paint via pre::before duplicates our own
+   toolbar's language label — remove it inside plugin-rendered containers.
+   !important: themes generate high-specificity body:not(...) pre[class]::before
+   rules (Blue Topaz), which must never resurrect the label here. */
+.block-editor-container :is(.block-content-static, .embed-content) pre[class]::before,
+.fc-card :is(.fc-question, .fc-answer) pre[class]::before {
+  content: none !important;
+}
+
+/* Full syntax coloring: themes scope their Prism token rules to
+   .markdown-rendered / body-option classes, which plugin-rendered code never
+   matches — so most tokens fall back to plain text. Map the token classes to
+   the theme's own --code-* variables (defined globally by Obsidian and
+   extended by Blue Topaz / code-box snippets); graceful fallbacks keep the
+   default look when a variable is absent. */
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code {
+  color: var(--code-normal, var(--text-normal));
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.comment,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.prolog,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.doctype,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.cdata {
+  color: var(--code-comment, var(--text-faint));
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.punctuation {
+  color: var(--code-punctuation, var(--code-operator, var(--text-muted)));
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.keyword,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.important,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.atrule,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.selector,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.tag {
+  color: var(--code-keyword, var(--text-accent));
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.string,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.char,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.attr-value,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.regex {
+  color: var(--code-string, var(--text-accent));
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.number,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.boolean,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.constant,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.symbol {
+  color: var(--code-atom, var(--code-number, var(--text-accent)));
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.function,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.method {
+  color: var(--code-function, var(--code-def, var(--text-accent)));
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.class-name,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.maybe-class-name {
+  color: var(--code-type, var(--code-def, var(--text-accent)));
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.operator,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.entity,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.url {
+  color: var(--code-operator, var(--text-muted));
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.variable {
+  color: var(--code-variable, inherit);
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.builtin {
+  color: var(--code-builtin, inherit);
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.attr-name {
+  color: var(--code-attribute, inherit);
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.property {
+  color: var(--code-property, inherit);
+}
+
+/* The native floating copy button overlaps the code — ours lives in the bar. */
+.block-content-static pre .copy-code-button,
+.lgp-code-block pre .copy-code-button {
+  display: none;
+}
+
+.lgp-code-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  height: 22px;
+  padding: 0 6px;
+  font-size: var(--font-smallest);
+  color: var(--text-faint);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  user-select: none;
+}
+
+.lgp-code-lang {
+  margin-right: auto;
+  text-transform: lowercase;
+}
+
+.lgp-code-copy {
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.65;
+}
+
+.lgp-code-copy:hover {
+  opacity: 1;
+  background: var(--background-modifier-hover);
+}
+
+.lgp-code-copy svg {
+  width: 13px;
+  height: 13px;
 }
 
 .block-content-static blockquote {
@@ -1541,16 +1737,66 @@ body.block-touch-dragging {
   white-space: nowrap;
 }
 
+/* CM6 completion popup ([[ / ![[ / # / (( hints) — theme-matched to the
+   self-drawn .block-command-menu. The tooltip layer lives inside the
+   focused block's CM6 DOM and positions itself fixed to the viewport. */
+.block-editor-container .cm-tooltip.cm-tooltip-autocomplete {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  box-shadow: var(--shadow-s);
+  padding: 4px;
+  overflow: hidden;
+}
+
+.block-editor-container .cm-tooltip.cm-tooltip-autocomplete > ul {
+  font-family: var(--font-interface);
+  max-height: 300px;
+  margin: 0;
+  padding: 0;
+}
+
+.block-editor-container .cm-tooltip.cm-tooltip-autocomplete > ul > li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  color: var(--text-normal);
+}
+
+.block-editor-container .cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: var(--interactive-accent-hover, var(--background-modifier-hover));
+  color: var(--text-normal);
+}
+
+/* Property lines inside the block editor (`key:: value` at the end of the
+   doc) — they become block properties on commit; Logseq dims them. */
+.block-editor-container .cm-content .cm-prop-line {
+  color: var(--text-faint);
+}
+
+/* Page-properties block (reading state): the props render as the block's
+   content in the same dimmed `key:: value` form the editor shows — the two
+   states look alike. */
+.block-props-content .block-prop-item {
+  display: block;
+  padding: 0;
+  color: var(--text-faint);
+}
+
 /* ------------------------------------------------------------------ */
 /* v0.2.3: page backlinks section, block backlink badges/panels,       */
 /* block props row, editable page-props card                           */
 /* ------------------------------------------------------------------ */
 
 /* --- page bottom backlinks --- */
+/* Rendered INSIDE the collapsible "Linked references" section: no own top
+   margin/divider (the section header owns those); content indented to align
+   with the section title text (chevron 12px + gap 6px + header padding 2px). */
 .page-backlinks {
-  margin-top: 28px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--background-modifier-border);
+  margin-top: 0;
+  padding: 0 0 0 20px;
 }
 
 .page-backlinks-header {
@@ -1642,17 +1888,29 @@ body.block-touch-dragging {
 .block-backlinks-more { color: var(--text-faint); font-size: var(--font-ui-smaller); padding-top: 4px; }
 
 /* --- block props row (under block content) --- */
+/* Block props row: one `key:: value` line per property, dimmed exactly like
+   the editor's .cm-prop-line lines; key and value are pages — clicking either
+   opens/creates that page (Logseq parity). */
 .block-props-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 14px;
+  /* Logseq parity: property TEXT aligns with the block TEXT — past the bullet
+     column AND the content's own horizontal padding. */
+  margin-left: calc(var(--lgp-controls-w, 32px) + var(--lgp-content-pad, 6px));
   padding: 2px 6px 2px 0;
 }
 
-.block-prop-item { font-size: var(--font-ui-smaller); line-height: 1.5; }
-.block-prop-key { color: var(--text-muted); font-family: var(--font-monospace); }
-.block-prop-key::after { content: ':: '; opacity: 0.6; }
-.block-prop-value { color: var(--text-normal); }
+.block-prop-item {
+  display: block;
+  font-size: var(--font-ui-smaller);
+  line-height: 1.55;
+  color: var(--text-faint);
+}
+
+.block-prop-key { color: inherit; }
+.block-prop-sep { opacity: 0.6; }
+.block-prop-key, .block-prop-value { cursor: pointer; }
+.block-prop-key:hover { color: var(--text-accent); }
+.block-prop-value { color: var(--link-color, var(--text-accent)); }
+.block-prop-value:hover { text-decoration: underline; }
 
 /* --- editable page-props card --- */
 .page-props-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
@@ -1687,7 +1945,9 @@ body.block-touch-dragging {
 .page-props-empty-hint { color: var(--text-faint); font-size: var(--font-ui-smaller); }
 
 /* --- unlinked mentions (page bottom) --- */
-.page-unlinked { margin-top: 14px; }
+/* Inside the collapsible "Unlinked references" section — same indentation
+   as the linked panel so items align with the section title text. */
+.page-unlinked { margin-top: 0; padding-left: 20px; }
 .page-unlinked.is-empty .page-backlinks-header { margin-bottom: 0; }
 .page-unlinked-title { color: var(--text-muted); }
 .page-unlinked-item { cursor: pointer; }
@@ -1695,3 +1955,48 @@ body.block-touch-dragging {
 .page-unlinked-convert { display: inline-flex; color: var(--text-faint); }
 .page-unlinked-item:hover .page-unlinked-convert { color: var(--text-accent); }
 .page-unlinked-convert svg { width: 12px; height: 12px; }
+
+/* --- collapsible references section (v0.2.5) --- */
+.page-references { margin-top: 28px; }
+
+.refs-collapse-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 2px;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-weight: 600;
+  border-top: 1px solid var(--background-modifier-border);
+  margin-top: 8px;
+  user-select: none;
+}
+.refs-collapse-header:hover { color: var(--text-normal); }
+.refs-collapse-title { text-transform: uppercase; letter-spacing: 0.05em; font-size: var(--font-ui-smaller); }
+.refs-chevron { display: inline-flex; }
+.refs-chevron svg { width: 12px; height: 12px; }
+
+.refs-collapse-body.is-collapsed { display: none; }
+
+/* --- page embed (![[Page]]) box (v0.2.5) --- */
+.block-page-embed { margin: 2px 0; }
+
+.block-page-embed .block-embed-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--background-secondary);
+  border-radius: 6px 6px 0 0;
+  cursor: default;
+}
+.embed-header-icon { display: inline-flex; }
+.embed-header-icon svg { width: 12px; height: 12px; }
+.embed-header-title {
+  font-weight: 600;
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+  cursor: pointer;
+}
+.embed-header-title:hover { color: var(--text-accent); }

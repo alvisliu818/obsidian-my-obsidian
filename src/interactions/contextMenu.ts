@@ -5,6 +5,11 @@
  *
  * Right-clicking the bullet opens the same menu with the copy pair promoted to
  * the top (Logseq puts the block-embed actions on the bullet).
+ *
+ * Right-clicking INSIDE the focused editor (outline or in-place embed) shows
+ * the native-editor text menu instead: Cut / Copy / Paste / Select all over
+ * the CM6 selection — the same items the native Obsidian editor offers on a
+ * text selection.
  */
 
 import { Menu, Notice } from 'obsidian';
@@ -14,10 +19,14 @@ import { blockId, ensureId, isCollapsed, setCollapsed, type Block } from '../typ
 import { cycleMarker, duplicateBlock, isDescendant, removeBlock } from '../core/treeOps';
 import { blocksEmbedSyntax, blocksMarkdown } from '../features/copyFormats';
 import { openMoveToFileModal } from '../features/moveToFile';
+import { openTextSelectionMenu } from './textSelectionMenu';
 
 export function attachContextMenu(container: HTMLElement, host: BlockEditorView): void {
   container.addEventListener('contextmenu', (ev) => {
     const target = ev.target as HTMLElement | null;
+    // Native-editor parity: a right-click inside a live editor is about the
+    // TEXT selection, not the block.
+    if (target?.closest('.cm-editor') && openTextSelectionMenu(ev, host)) return;
     const b = blockFromEl(target);
     if (!b) return;
     ev.preventDefault();
@@ -186,6 +195,18 @@ function buildBlockMenu(b: Block, host: BlockEditorView, fromBullet: boolean): M
   }
 
   menu.addSeparator();
+
+  // Edit this block as raw markdown for one session (live preview is the
+  // default editing experience; this is the explicit way out).
+  menu.addItem((item) =>
+    item
+      .setTitle('Source mode')
+      .setIcon('code')
+      .onClick(() => {
+        host.sourceModeBlock = b;
+        host.focusBlock(b, 'end');
+      }),
+  );
 
   menu.addItem((item) =>
     item

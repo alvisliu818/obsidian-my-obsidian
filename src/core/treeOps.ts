@@ -353,3 +353,14 @@ export function ensureIds(roots: Block[]): void {
   };
   roots.forEach(walk);
 }
+
+/**
+ * Synthetic root wrapping the top-level blocks — lets path-based addressing
+ * (walking `children`) resolve page-level rows uniformly, the same way
+ * block-id roots do for ((id)) embeds. Does NOT mutate the blocks.
+ */
+export function pseudoRootOf(blocks: Block[]): Block {
+  const root = createBlock('', null);
+  root.children = blocks;
+  return root;
+}

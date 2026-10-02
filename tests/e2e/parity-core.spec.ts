@@ -16,6 +16,7 @@ import { test, expect, chromium, type Browser, type Page } from '@playwright/tes
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execSync, spawn } from 'node:child_process';
+import { killTestVaultObsidian, testSpawnArgs, EDGE_VAULT } from './testObsidian';
 
 const CDP_PORT = '9229';
 const CDP = `http://127.0.0.1:${CDP_PORT}`;
@@ -54,11 +55,7 @@ async function findObsidianPage(b: Browser): Promise<Page> {
 
 test.beforeAll(async () => {
   test.setTimeout(300_000);
-  try {
-    execSync('taskkill /IM Obsidian.exe /F /T', { stdio: 'ignore' });
-  } catch {
-    /* none */
-  }
+  killTestVaultObsidian();
   await sleep(2000);
   // Parity fixtures.
   writeFileSync(join(VAULT, 'Parity', 'Props.md'), 'type:: book\nrating:: 5\n\n- content block\n');
@@ -66,7 +63,7 @@ test.beforeAll(async () => {
     join(VAULT, 'Parity', 'Journal-like.md'),
     '- 2026-09-20 entry\n\t- folded child\n\t\t- deep kid\n- TODO task one',
   );
-  spawn(process.env.OBSIDIAN_PATH!, ['--remote-debugging-port=' + CDP_PORT], {
+  spawn(process.env.OBSIDIAN_PATH!, testSpawnArgs(CDP_PORT, 'obsidian://open?path=' + encodeURI(VAULT)), {
     detached: true,
     stdio: 'ignore',
   }).unref();
@@ -100,11 +97,7 @@ test.afterAll(async () => {
   } catch {
     /* ignore */
   }
-  try {
-    execSync('taskkill /IM Obsidian.exe /F /T', { stdio: 'ignore' });
-  } catch {
-    /* gone */
-  }
+  killTestVaultObsidian();
 });
 
 test('01 collapse-all / expand-all commands round-trip', async () => {
@@ -121,7 +114,9 @@ test('01 collapse-all / expand-all commands round-trip', async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (window as any).app.commands.executeCommandById('obsidian-logseq:collapse-all'),
   );
-  await expect(page.locator('.block-children-container')).toHaveCount(0, { timeout: 30_000 });
+  // Collapsed parents keep their guide-line container as a stub (click-to-
+  // expand) — what must disappear is every EXPANDED container.
+  await expect(page.locator('.block-children-container:not(.is-collapsed)')).toHaveCount(0, { timeout: 30_000 });
   // Persisted to disk in Logseq format (debounced save may take a moment).
   await expect
     .poll(() => readFileSync(join(VAULT, 'Parity', 'Journal-like.md'), 'utf8'), { timeout: 30_000 })
@@ -137,20 +132,23 @@ test('01 collapse-all / expand-all commands round-trip', async () => {
   expect(await page.locator('.block-children-container').count()).toBe(containersBefore);
 });
 
-test('02 page-props card renders and stays out of the outline', async () => {
+test('02 page-props block renders in the outline (ordinary first item)', async () => {
   test.setTimeout(120_000);
   await page.evaluate(async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (window as any).app.workspace.openLinkText('Parity/Props', '', false);
   });
-  await expect(page.locator('.page-props-card').first()).toBeVisible({ timeout: 60_000 });
-  const key = await page.locator('.page-prop-key', { hasText: 'rating' }).first().textContent();
-  expect(key).toContain('rating');
-  const value = await page.locator('.page-prop-value').first().textContent();
+  // Logseq model: the properties are the FIRST block — an ordinary item with
+  // empty content and its props row below it.
+  const firstWrap = page.locator('.block-editor-tree > .block-wrap').first();
+  await expect(firstWrap.locator('.block-prop-key', { hasText: 'rating' })).toBeVisible({ timeout: 60_000 });
+  const value = await firstWrap.locator('.block-prop-value').first().textContent();
   expect(value?.trim().length).toBeGreaterThan(0);
-  // Page props are NOT outline blocks.
-  await expect(page.locator('.block-wrap', { hasText: 'type:: book' })).toHaveCount(0);
-  // File on disk unchanged (read-only card).
+  // The raw property syntax is consumed by the renderer (not shown as text).
+  // The props render as the props UI (styled key:: value lines), not as
+  // raw body text.
+  await expect(firstWrap.locator('.block-prop-item', { hasText: 'book' })).toBeVisible();
+  // File on disk unchanged (read-only).
   expect(readFileSync(join(VAULT, 'Parity', 'Props.md'), 'utf8')).toContain('rating:: 5');
 });
 

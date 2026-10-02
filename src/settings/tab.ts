@@ -1,4 +1,4 @@
-import { PluginSettingTab, Setting, type App } from 'obsidian';
+﻿import { PluginSettingTab, Setting, type App } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 
 export class LogseqEditorSettingTab extends PluginSettingTab {
@@ -38,6 +38,46 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
             }),
         );
     }
+
+    // ---------- Outline guide line ----------
+    const levelOptions = {
+      '1': '1 level',
+      '2': '2 levels',
+      '3': '3 levels',
+      '4': '4 levels',
+      '5': '5 levels',
+      '0': 'All levels',
+    };
+
+    new Setting(containerEl)
+      .setName('Guide-line collapse depth')
+      .setDesc(
+        'Clicking the vertical guide line folds the content inside it: the first-level blocks stay visible as folded rows while everything below them hides. This sets how many levels carry the folded state (direct children = level 1); deeper levels stay folded when you expand again. "All levels" = fold everything below the first level.',
+      )
+      .addDropdown((d) =>
+        d
+          .addOptions(levelOptions)
+          .setValue(String(this.plugin.settings.guideLineCollapseLevels))
+          .onChange(async (v) => {
+            this.plugin.settings.guideLineCollapseLevels = Number(v);
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Guide-line expand depth')
+      .setDesc(
+        'Clicking the line of folded content unfolds this many levels at once (direct children = level 1; the clicked block itself always opens if it was folded). "1 level" = open one step per click; "All levels" = unfold everything below.',
+      )
+      .addDropdown((d) =>
+        d
+          .addOptions(levelOptions)
+          .setValue(String(this.plugin.settings.guideLineExpandLevels))
+          .onChange(async (v) => {
+            this.plugin.settings.guideLineExpandLevels = Number(v);
+            await this.plugin.saveSettings();
+          }),
+      );
 
     // ---------- Safety: backups & operation log ----------
     containerEl.createEl('h3', { text: 'Safety (backups & log)' });

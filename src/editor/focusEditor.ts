@@ -4,10 +4,19 @@
  */
 
 import { EditorView } from '@codemirror/view';
+import { closeCompletion, completionStatus } from '@codemirror/autocomplete';
 import type { BlockEditorView } from '../view/BlockEditorView';
 import { createEditorExtensions } from './extensions';
 import { expandTemplates, type TemplateContext } from '../features/template';
-import type { Block } from '../types';
+import {
+  applyBlockProps,
+  blockEditorDoc,
+  editableProps,
+  propsShallowEqual,
+  splitPropLines,
+  syncFrontmatterProps,
+  type Block,
+} from '../types';
 
 export type CursorPos = number | 'start' | 'end';
 
@@ -18,10 +27,50 @@ export function mountFocusedEditor(
   host: BlockEditorView,
 ): EditorView {
   const view = new EditorView({
-    doc: block.text,
+    // Properties ride along as `key:: value` lines under the text (Logseq
+    // editor parity); commit splits them back out.
+    doc: blockEditorDoc(block),
     parent,
-    extensions: createEditorExtensions(host),
+    extensions: createEditorExtensions(host, block),
   });
+  // Real Escape keystrokes never reach CM6's keymap inside Obsidian's host
+  // DOM (a capture-phase handler marks them handled first, so the keymap
+  // dispatch skips the defaultPrevented event). Catch Escape in the CAPTURE
+  // phase here and COMMIT synchronously. The completion state can still be
+  // "pending" right after typing (the accept pass runs ~75ms later), so gate
+  // on nothing: Esc always lands the edit, closing any popup en route.
+  // Blurring alone races with Obsidian's focus management (hasFocus may stay
+  // true, so the blur-commit path never fires and the edit never lands).
+  const escHandler = (e: KeyboardEvent): void => {
+    if (e.key !== 'Escape' || e.repeat) return;
+    // The NATIVE slash-command suggest is showing: Esc belongs to it (hides
+    // the popup via its keymap scope) — do not commit the edit.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const es = (window as any).app?.workspace?.editorSuggest;
+    if (es?.isShowingSuggestion?.()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // A VISIBLE popup (active) means the first Esc just closes it — native
+    // behavior. 'pending' is the accept-pass tail with no popup on screen
+    // and MUST fall through to the commit (gating on it was the bug that
+    // made Esc silently drop edits typed right before it).
+    if (completionStatus(view.state) === 'active') {
+      closeCompletion(view);
+      return;
+    }
+    closeCompletion(view);
+    view.contentDOM.blur();
+    host.commitViewNow(view, block);
+  };
+  view.dom.addEventListener('keydown', escHandler, true);
+  // The native slash-menu suggest requires the triggering keyboard event.
+  view.dom.addEventListener(
+    'keydown',
+    (e) => {
+      (window as unknown as { __lastKeyEvent?: KeyboardEvent }).__lastKeyEvent = e;
+    },
+    true,
+  );
   applyCursor(view, pos);
   view.focus();
   // Electron/CDP background windows drop the initial focus; re-assert on
@@ -63,10 +112,28 @@ export function cursorAtCoords(view: EditorView, x: number, y: number, fallback:
 
 /** Write the editor doc back into the block model (no rendering here). */
 export function commitEditorText(view: EditorView, block: Block, ctx?: TemplateContext): boolean {
-  // Logseq behavior: <% today %> etc. expand when the edit is committed.
-  const text = expandTemplates(view.state.doc.toString(), new Date(), ctx);
-  if (text === block.text) return false;
+  // Logseq behavior: <% today %> etc. expand when the edit is committed, and
+  // the trailing `key:: value` lines become block properties.
+  const raw = expandTemplates(view.state.doc.toString(), new Date(), ctx);
+  // Obsidian-format page properties: the whole doc IS the frontmatter body —
+  // no Logseq prop extraction; the raw lines round-trip verbatim and the
+  // props map re-syncs from simple `key: value` lines.
+  if (block.frontmatter) {
+    if (raw === block.text) return false;
+    block.text = raw
+      .split('\n')
+      .map((l) => {
+        const m = /^([A-Za-z][A-Za-z0-9_-]*)::\s*(.*)$/.exec(l);
+        return m ? `${m[1]}: ${m[2]}` : l;
+      })
+      .join('\n');
+    syncFrontmatterProps(block);
+    return true;
+  }
+  const { text, props } = splitPropLines(raw);
+  if (text === block.text && propsShallowEqual(editableProps(block), props)) return false;
   block.text = text;
+  applyBlockProps(block, props);
   return true;
 }
 

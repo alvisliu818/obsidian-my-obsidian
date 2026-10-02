@@ -3,9 +3,9 @@
  * vault-wide block-id index, and clean uninstall (restore native views).
  */
 
-import { Notice, Plugin, WorkspaceLeaf, type ViewState } from 'obsidian';
+import { Notice, Plugin, TAbstractFile, WorkspaceLeaf, type CachedMetadata, type ViewState } from 'obsidian';
 import { BlockEditorView, VIEW_TYPE_BLOCK_EDITOR } from './view/BlockEditorView';
-import { DEFAULT_SETTINGS, type BlockEditorSettings } from './types';
+import { DEFAULT_SETTINGS, parseFolderList, pathInFolders, shouldTakeOver, type BlockEditorSettings } from './types';
 import { LogseqEditorSettingTab } from './settings/tab';
 import { BlockIndex } from './index/blockIndex';
 import { TodoPanelView, VIEW_TYPE_TODO_PANEL } from './panels/todoPanel';
@@ -19,11 +19,15 @@ import { BackupManager } from './core/backup';
 import { loadOpLog, logOp, flushOpLog } from './features/logger';
 import { OpLogModal } from './features/opLogModal';
 import { BackupRestoreModal } from './features/backupModal';
+import { builtinSlashItems, registerSlashEditorCommands } from './features/commandMenu';
+import { getLogseqPageProps } from './pagePropsRegistry';
+import { NativeSlashSuggest, setBuiltinSlashProvider } from './features/nativeSlashSuggest';
 import type { OperationRecord } from './core/operationLog';
 
 export default class LogseqEditorPlugin extends Plugin {
   settings: BlockEditorSettings = DEFAULT_SETTINGS;
   blockIndex: BlockIndex | null = null;
+  slashSuggest: NativeSlashSuggest | null = null;
   /** Automatic pre-write backups for user-visible .md files. */
   backups: BackupManager = new BackupManager(this);
   /** In-memory operation log ring (newest last) + pending disk appends. */
@@ -55,6 +59,77 @@ export default class LogseqEditorPlugin extends Plugin {
     });
 
     this.patchSetViewState();
+
+    // Logseq-format page properties (file-top `key:: value` lines) are not
+    // frontmatter, so Obsidian's metadata cache never sees them. Expose them
+    // to other plugins by merging them into getFileCache's frontmatter —
+    // the file format itself stays Logseq (no conversion).
+    const mc = this.app.metadataCache as unknown as {
+      getFileCache: (f: TAbstractFile) => CachedMetadata | null;
+      getCache: (p: string) => CachedMetadata | null;
+    };
+    const origGetFileCache = mc.getFileCache.bind(mc);
+    const origGetCache = mc.getCache.bind(mc);
+    const mergeProps = (cache: CachedMetadata | null, path: string): CachedMetadata | null => {
+      const props = getLogseqPageProps(path);
+      if (!props) return cache;
+      // Logseq-format page props surface as native frontmatter for other
+      // plugins; the file itself stays Logseq (no conversion). Property values
+      // that resolve to existing files also get synthetic frontmatterLinks —
+      // plugins like abstract-folder build parent-child trees from those
+      // (Obsidian's own parser only extracts links from real frontmatter).
+      const fmLinks: NonNullable<CachedMetadata['frontmatterLinks']> = [];
+      for (const [k, v] of Object.entries(props)) {
+        const dest = v ? this.app.metadataCache.getFirstLinkpathDest(v, path) : null;
+        if (dest) {
+          fmLinks.push({
+            key: k,
+            link: v,
+            original: v,
+          });
+        }
+      }
+      return {
+        ...cache,
+        frontmatter: { ...(cache?.frontmatter ?? {}), ...props, position: cache?.frontmatter?.position },
+        ...(fmLinks.length > 0 ? { frontmatterLinks: [...(cache?.frontmatterLinks ?? []), ...fmLinks] } : {}),
+      } as CachedMetadata;
+    };
+    mc.getFileCache = (file: TAbstractFile) => mergeProps(origGetFileCache(file), file.path);
+    mc.getCache = (path: string) => mergeProps(origGetCache(path), path);
+    this.register(() => {
+      mc.getFileCache = origGetFileCache;
+      mc.getCache = origGetCache;
+    });
+    // Debug handle for e2e verification (harmless).
+    (window as unknown as { __lgDebug?: Record<string, unknown> }).__lgDebug = {
+      pageProps: (path: string) => getLogseqPageProps(path),
+      metadata: (path: string) => this.app.metadataCache.getCache(path)?.frontmatter ?? null,
+    };
+
+
+    // NATIVE slash menu (Logseq parity): an EditorSuggest that lists every
+    // editor command (core + plugins + our built-ins) and triggers on `/`.
+    this.slashSuggest = new NativeSlashSuggest(this);
+    (this.app.workspace as unknown as { editorSuggest: { addSuggest(s: unknown): void; removeSuggest(s: unknown): void } }).editorSuggest.addSuggest(this.slashSuggest);
+    this.register(() => (this.app.workspace as unknown as { editorSuggest: { removeSuggest(s: unknown): void } }).editorSuggest.removeSuggest(this.slashSuggest));
+    // Take priority over the core slash-command suggest (when the user has it
+    // enabled) inside the block editor: the trigger walks the registered
+    // suggests in order, so ours must come first. It declines for non-block
+    // editors, leaving the native editor's own menu untouched.
+    const suggests = (this.app.workspace as unknown as { editorSuggest: { suggests?: unknown[] } }).editorSuggest.suggests;
+    if (Array.isArray(suggests)) {
+      const i = suggests.indexOf(this.slashSuggest);
+      if (i > 0) {
+        suggests.splice(i, 1);
+        suggests.unshift(this.slashSuggest);
+      }
+    }
+    registerSlashEditorCommands(this);
+    // Wire the built-in slash items into the native suggest — without this
+    // the suggest's built-in list is empty and the menu shows only registry
+    // commands (whose order varies, so the cap could hide them entirely).
+    setBuiltinSlashProvider(builtinSlashItems);
 
     // ---- Commands ----
     this.addCommand({
@@ -279,12 +354,24 @@ export default class LogseqEditorPlugin extends Plugin {
     const d = Number(this.settings.saveDebounceMs);
     if (!Number.isFinite(d) || d < 0) this.settings.saveDebounceMs = DEFAULT_SETTINGS.saveDebounceMs;
     if (typeof this.settings.excludedFolders !== 'string') this.settings.excludedFolders = '';
+    // Take-over scope defaults to 'all' so pre-scope configs keep the old behavior.
+    if (this.settings.scopeMode !== 'all' && this.settings.scopeMode !== 'folders') {
+      this.settings.scopeMode = 'all';
+    }
+    if (typeof this.settings.includedFolders !== 'string') this.settings.includedFolders = '';
     if (typeof this.settings.journalFolder !== 'string') this.settings.journalFolder = '';
     if (typeof this.settings.journalFormat !== 'string') this.settings.journalFormat = '';
     if (typeof this.settings.journalTemplate !== 'string') this.settings.journalTemplate = '';
     if (typeof this.settings.customTemplateVars !== 'string') this.settings.customTemplateVars = '';
     this.settings.backupsEnabled = this.settings.backupsEnabled !== false;
     this.settings.opLogEnabled = this.settings.opLogEnabled !== false;
+    // Guide-line fold/unfold depths: non-negative int, 0 = all levels.
+    const clampLevels = (v: number) => {
+      const n = Number(v);
+      return Number.isInteger(n) && n >= 0 ? Math.min(n, 99) : 0;
+    };
+    this.settings.guideLineCollapseLevels = clampLevels(this.settings.guideLineCollapseLevels);
+    this.settings.guideLineExpandLevels = clampLevels(this.settings.guideLineExpandLevels);
   }
 
   async saveSettings(): Promise<void> {
@@ -296,11 +383,13 @@ export default class LogseqEditorPlugin extends Plugin {
   // ------------------------------------------------------------------
 
   isExcluded(file: string): boolean {
-    const folders = this.settings.excludedFolders
-      .split(',')
-      .map((s) => s.trim().replace(/^\/+|\/+$/g, ''))
-      .filter(Boolean);
-    return folders.some((f) => file === f || file.startsWith(f + '/'));
+    return pathInFolders(file, parseFolderList(this.settings.excludedFolders));
+  }
+
+  /** Automatic take-over decision for a vault-relative file path. */
+  shouldTakeOverFile(file: string): boolean {
+    const s = this.settings;
+    return shouldTakeOver(s.takeOverByDefault, s.scopeMode, s.includedFolders, s.excludedFolders, file);
   }
 
   private patchSetViewState(): void {
@@ -317,7 +406,7 @@ export default class LogseqEditorPlugin extends Plugin {
         plugin.settings.takeOverByDefault &&
         state.type === 'markdown' &&
         (state.state as { file?: string } | undefined)?.file &&
-        !plugin.isExcluded((state.state as { file: string }).file)
+        plugin.shouldTakeOverFile((state.state as { file: string }).file)
       ) {
         state = { ...state, type: VIEW_TYPE_BLOCK_EDITOR } as ViewState;
       }
@@ -332,7 +421,7 @@ export default class LogseqEditorPlugin extends Plugin {
     for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
       const st = leaf.view.getState();
       const file = (st.state as { file?: string } | undefined)?.file;
-      if (file && !this.isExcluded(file)) {
+      if (file && this.shouldTakeOverFile(file)) {
         void leaf.setViewState({ ...st, type: VIEW_TYPE_BLOCK_EDITOR } as ViewState);
       }
     }
@@ -346,6 +435,12 @@ export default class LogseqEditorPlugin extends Plugin {
     const state = leaf.view.getState();
     const file = (state.state as { file?: string } | undefined)?.file;
     if (!file) return;
+    // Bypass the take-over patch: the markdown setViewState would otherwise be
+    // converted straight back to the block editor (takeOverByDefault).
+    if (this.origSetViewState) {
+      void this.origSetViewState.call(leaf, { type: 'markdown', state: { file }, active: true } as ViewState);
+      return;
+    }
     void leaf.setViewState({ type: 'markdown', state: { file }, active: true } as ViewState);
   }
 

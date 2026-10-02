@@ -17,7 +17,7 @@ import {
   splitBlock,
 } from '../core/treeOps';
 import { cycleMarker } from '../core/treeOps';
-import type { Block } from '../types';
+import { applyBlockProps, splitPropLines, type Block } from '../types';
 
 function focusedBlock(host: BlockEditorView): Block | null {
   return host.focusedBlock;
@@ -44,8 +44,11 @@ export function handleEnter(view: EditorView, host: BlockEditorView): boolean {
   let nb: Block | null = null;
   host.mutate(
     () => {
-      b.text = text;
-      nb = splitBlock(b, offset);
+      // Trailing `key:: value` lines stay with the head block as properties.
+      const { text: clean, props } = splitPropLines(text);
+      applyBlockProps(b, props);
+      b.text = clean;
+      nb = splitBlock(b, Math.min(offset, clean.length));
     },
     () => ({ lists: [parent] }),
   );

@@ -25,6 +25,14 @@ const FENCE_OPEN_RE = /^(\s*)(`{3,}|~{3,})(.*)$/;
 const PROPERTY_RE = /^([A-Za-z][A-Za-z0-9_-]*)::\s*(.*)$/;
 const LIST_RE = /^(\s*)-(?:\s+(.*))?$/;
 const MARKER_RE = new RegExp(`^(${MARKERS.join('|')})\\s+(.*)$`);
+/**
+ * Top-level lines that keep their verbatim raw rendering (markdown / org
+ * structural syntax). Every OTHER plain top-level line becomes a first-level
+ * list item — the outline owns bare text lines (Logseq parity); saving
+ * normalizes them to `- ` items.
+ */
+const STRUCTURAL_RAW_RE =
+  /^(?:#{1,6}\s|#\+|>|\||<|%|\$\$|:|\d{1,9}[.)]\s|[*+]\s|(?:=+|\*+|_+|~+|\++)\s*$)/;
 
 /** Depth units: 1 tab = 1, 2 spaces = 1 (trailing odd space ignored). */
 export function depthOf(line: string): number {
@@ -79,8 +87,20 @@ export function parseDocument(md: string): ParsedDocument {
     let j = 1;
     while (j < lines.length && lines[j].trim() !== '---') j++;
     if (j < lines.length) {
-      doc.frontmatter = lines.slice(0, j + 1).join('\n');
       i = j + 1;
+      // Obsidian-format page properties: the frontmatter body becomes the
+      // page-properties first block (edited as `key: value` lines, written
+      // back as frontmatter — the Obsidian format is preserved verbatim,
+      // including lists, comments and key order).
+      const bodyLines = lines.slice(1, j);
+      const fmBlock = createBlock(bodyLines.join('\n'), null);
+      fmBlock.frontmatter = true;
+      fmBlock.parent = null;
+      for (const bl of bodyLines) {
+        const pm = /^([A-Za-z][A-Za-z0-9_-]*):(.*)$/.exec(bl);
+        if (pm) fmBlock.props[pm[1]] = pm[2].replace(/^ /, '');
+      }
+      doc.blocks.push(fmBlock);
     }
   }
 
@@ -100,12 +120,26 @@ export function parseDocument(md: string): ParsedDocument {
     }
   }
   doc.pageProps = pagePropLines.join('\n');
+  if (pagePropLines.length > 0) {
+    // Logseq model: page properties are the page's FIRST block (a block
+    // holding only `key:: value` lines). It renders as a regular outline
+    // item and is serialized back to the unindented file-top lines.
+    const propsBlock = createBlock('', null);
+    for (const pl of pagePropLines) {
+      const pm = PROPERTY_RE.exec(pl.trim());
+      if (pm) propsBlock.props[pm[1]] = pm[2];
+    }
+    propsBlock.parent = null;
+    doc.blocks.push(propsBlock);
+    doc.pageProps = '';
+  }
 
   // --- main loop ---
   // stack[d] = most recent block whose real depth is d. Roots live in doc.blocks.
   const stack: Block[] = [];
   let lastBlock: Block | null = null; // most recent 'list' block (property / soft-line target)
   let rawBuf: string[] = [];
+  let bareBuf: string[] = []; // consecutive bare lines → ONE first-level block
 
   const flushRaw = () => {
     while (rawBuf.length > 0 && rawBuf[rawBuf.length - 1].trim() === '') rawBuf.pop();
@@ -116,6 +150,19 @@ export function parseDocument(md: string): ParsedDocument {
     b.parent = null;
     doc.blocks.push(b);
     rawBuf = [];
+  };
+
+  /** Emit the pending run of bare lines as ONE first-level list block. */
+  const flushBare = () => {
+    if (bareBuf.length === 0) return;
+    const { marker, text } = parseMarker(bareBuf[0]);
+    const b = createBlock([text, ...bareBuf.slice(1)].join('\n'), marker);
+    b.parent = null;
+    doc.blocks.push(b);
+    stack.length = 0;
+    stack.push(b);
+    lastBlock = b;
+    bareBuf = [];
   };
 
   const appendSoftLine = (block: Block, line: string) => {
@@ -135,8 +182,10 @@ export function parseDocument(md: string): ParsedDocument {
   while (i < lines.length) {
     const line = lines[i];
 
-    // Empty line: separator outside raw, verbatim inside raw.
+    // Empty line: separator outside raw, verbatim inside raw. A blank line
+    // also ends a run of bare lines (each blank-separated run is its own block).
     if (line.trim() === '') {
+      if (bareBuf.length > 0) flushBare();
       if (rawBuf.length > 0) rawBuf.push(line);
       i++;
       continue;
@@ -144,6 +193,9 @@ export function parseDocument(md: string): ParsedDocument {
 
     const trimmed = line.trim();
     const depth = depthOf(line);
+    // A pending bare group is an implicit last block: indented lines and
+    // fences after it belong to it, just like they belong to a list block.
+    if (bareBuf.length > 0 && depth >= 1) flushBare();
 
     // --- Code fence handling ---
     const fence = FENCE_OPEN_RE.exec(line);
@@ -173,6 +225,7 @@ export function parseDocument(md: string): ParsedDocument {
         continue;
       }
       // Top-level fence → raw content (consume whole fence verbatim)
+      flushBare();
       rawBuf.push(line);
       i++;
       while (i < lines.length) {
@@ -188,6 +241,7 @@ export function parseDocument(md: string): ParsedDocument {
     const listMatch = LIST_RE.exec(line);
     if (listMatch) {
       flushRaw();
+      flushBare();
       const content = listMatch[2] ?? '';
       const { marker, text } = parseMarker(content);
       const b = createBlock(text, marker);
@@ -216,7 +270,7 @@ export function parseDocument(md: string): ParsedDocument {
       // and every following line would be swallowed into one raw block.
       const openFence = FENCE_OPEN_RE.exec(text);
       if (openFence && !openFence[3].includes(openFence[2])) {
-        i = consumeFenceBody(b, lines, i, openFence[2]);
+        i = consumeFenceBody(b, lines, i, openFence[2], depth);
       }
       continue;
     }
@@ -224,6 +278,8 @@ export function parseDocument(md: string): ParsedDocument {
     // --- Property line ---
     const propMatch = PROPERTY_RE.exec(trimmed);
     if (propMatch) {
+      // A property right after bare lines belongs to the block they form.
+      flushBare();
       if (lastBlock && depth >= realDepth(lastBlock) + 1) {
         lastBlock.props[propMatch[1]] = propMatch[2];
       } else if (rawBuf.length > 0) {
@@ -247,22 +303,35 @@ export function parseDocument(md: string): ParsedDocument {
       continue;
     }
 
-    // --- Top-level non-list content: raw block ---
-    rawBuf.push(line);
+    // Markdown/org structural lines keep their verbatim raw rendering.
+    if (depth > 0 || STRUCTURAL_RAW_RE.test(trimmed)) {
+      flushBare();
+      rawBuf.push(line);
+      i++;
+      continue;
+    }
+
+    // --- Top-level plain line: accumulate into ONE first-level block ---
+    // Consecutive bare lines (no blank line between them) form a single
+    // first-level list block; saving normalizes it to `- ` + soft lines.
+    flushRaw();
+    bareBuf.push(trimmed);
     i++;
   }
 
   flushRaw();
+  flushBare();
   return doc;
 }
 
 /**
  * Consume the body of a fence opened by a list item (`- ```sql`) into the
  * block's text, stopping after the closing fence. Returns the new line index.
- * Body lines have one indentation unit stripped so an indented fence keeps its
- * own internal indentation intact.
+ * Body lines are dedented to the block's content column (`depth` markers + 1
+ * unit — Logseq's convention) so column-indented code renders flush while any
+ * deeper indentation stays as the code's own internal indent.
  */
-function consumeFenceBody(b: Block, lines: string[], i: number, fenceRun: string): number {
+function consumeFenceBody(b: Block, lines: string[], i: number, fenceRun: string, depth: number): number {
   const run = fenceRun[0];
   while (i < lines.length) {
     const cl = lines[i];
@@ -271,7 +340,7 @@ function consumeFenceBody(b: Block, lines: string[], i: number, fenceRun: string
       b.text += '\n' + fm[2];
       return i + 1;
     }
-    b.text += '\n' + stripIndent(cl, 1);
+    b.text += '\n' + stripIndent(cl, depth + 1);
     i++;
   }
   return i; // unterminated fence: swallow to EOF

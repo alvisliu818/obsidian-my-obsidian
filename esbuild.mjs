@@ -14,10 +14,32 @@ const context = await esbuild.context({
   banner: { js: banner },
   entryPoints: ["src/main.ts"],
   bundle: true,
-  // @codemirror/* and @lezer/* are BUNDLED (self-contained, mounted on our own
-  // DOM — never mixed with Obsidian's internal CM6 instance, so double-loading
-  // is safe). Only obsidian/electron/node builtins stay external.
-  external: ["obsidian", "electron", ...builtins],
+  // @codemirror/* and @lezer/* — EXTERNAL (official plugin convention):
+  // Obsidian's loader provides the app's own CM6 instance, so our outline
+  // editor shares ONE CodeMirror with the native editor and with community
+  // plugins — which is what lets third-party registerEditorExtension bundles
+  // (latex-suite live math preview, …) run in the outline editor.
+  //
+  // Exception: @codemirror/lang-markdown (and its @lezer/markdown parser) is
+  // NOT among the modules Obsidian's loader provides — it is bundled here.
+  // Its @codemirror/* and @lezer/common|highlight|lr imports still resolve to
+  // the shared instance, so no duplicate state/view instances exist.
+  external: [
+    "obsidian",
+    "electron",
+    "@codemirror/state",
+    "@codemirror/view",
+    "@codemirror/commands",
+    "@codemirror/language",
+    "@codemirror/autocomplete",
+    "@codemirror/search",
+    "@codemirror/lint",
+    "@codemirror/collab",
+    "@lezer/common",
+    "@lezer/highlight",
+    "@lezer/lr",
+    ...builtins,
+  ],
   format: "cjs",
   target: "es2020",
   logLevel: "info",

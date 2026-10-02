@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Iteration E2E (v0.2.3): the six features from the user report.
  *   01 Enter keeps editing: split + new block focused, persists to disk
  *   02 Enter in the middle of a block splits text correctly
@@ -96,6 +96,7 @@ test.beforeAll(async () => {
   await sleep(3000);
   browser = await chromium.connectOverCDP(CDP);
   page = await findObsidianPage(browser);
+  page.on('console', (m) => { if (m.type() === 'error' || m.text().includes('[LG]')) console.log('PAGE-CONSOLE:', m.text().slice(0, 300)); });
   await page.waitForLoadState('domcontentloaded');
   try {
     await page
@@ -277,32 +278,38 @@ test('05 block props render under block content', async () => {
   expect(row).toContain('alice');
 });
 
-test('06 editable page-props card: add property, save, persists', async () => {
+test('06 page-props block: add property by typing, persists (Logseq flow)', async () => {
   test.setTimeout(180_000);
+  // Self-heal: detach + reopen so earlier tests' pending edit state can't
+  // leak into this one's keystrokes.
   await page.evaluate(async (l: string) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (window as any).app.workspace.openLinkText(l, '', false);
+    const a = (window as any).app;
+    a.workspace.activeLeaf?.detach?.();
+    await new Promise((r) => setTimeout(r, 800));
+    await a.workspace.openLinkText(l, '', false);
   }, 'UX/Anchor');
   await sleep(1500);
-  // Card shows existing props (type:: page).
-  await expect(page.locator('.page-props-card').first()).toBeVisible({ timeout: 30_000 });
-  // Enter edit mode.
-  await page.locator('.page-props-edit').first().click();
-  await expect(page.locator('.page-props-card.is-editing')).toBeVisible({ timeout: 10_000 });
-  // Fill the add-property row.
-  await page.locator('.page-prop-row.is-add-row .page-prop-input-key').fill('owner');
-  await page.locator('.page-prop-row.is-add-row .page-prop-input-value').fill('bob');
-  await page.locator('.page-prop-add').first().click();
-  // Save.
-  await page.locator('.page-props-btns .mod-cta').click();
+  // The first block IS the properties block: ordinary bullet + props row.
+  const firstWrap = page.locator('.block-editor-tree > .block-wrap').first();
+  await expect(firstWrap.locator('.block-prop-key', { hasText: 'type' })).toBeVisible({ timeout: 30_000 });
+  // Add a property by typing a new `key:: value` line in the block editor.
+  await firstWrap.locator('.block-content').first().click();
+  await page.waitForSelector('.cm-editor .cm-content', { timeout: 15_000 });
+  await page.keyboard.press('Control+End');
+  await page.keyboard.press('Shift+Enter');
+  await page.keyboard.type('owner:: bob');
+  // Commit by clicking another block (Esc never reaches the CM6 keymap).
+  await page.locator('.block-content', { hasText: 'the anchor block itself' }).first().click();
+  await sleep(600);
   await expect
     .poll(
       () => (readFileSync(join(VAULT, 'UX', 'Anchor.md'), 'utf8').includes('owner:: bob') ? 'ok' : 'pending'),
       { timeout: 45_000, intervals: [500, 1000, 2000, 4000] },
     )
     .toBe('ok');
-  // Card re-renders with the new prop.
-  await expect(page.locator('.page-prop-key', { hasText: 'owner' }).first()).toBeVisible({ timeout: 30_000 });
+  // The props row re-renders with the new prop.
+  await expect(page.locator('.block-prop-key', { hasText: 'owner' }).first()).toBeVisible({ timeout: 30_000 });
   // And the rest of the file is intact.
   const disk = readFileSync(join(VAULT, 'UX', 'Anchor.md'), 'utf8');
   expect(disk).toContain('type:: page');

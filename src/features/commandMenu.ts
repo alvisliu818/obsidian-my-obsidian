@@ -1,20 +1,13 @@
-﻿/**
- * Self-drawn command menu for `/` (structure & insert commands) and `<`
- * (HTML snippets & entities). Own DOM overlay 鈥?independent from CM6's
- * tooltip layer, which does not render reliably when the editor is mounted
- * inside Obsidian's workspace DOM in this configuration (verified: even the
- * built-in [[ completion produced zero .cm-tooltip nodes).
+/**
+ * Command menus for the block editor.
  *
- * Model:
- *   - openMenu(view, host, kind): captures the trigger position, renders an
- *     absolutely-positioned menu under the caret, wires keyboard nav
- *     (ArrowUp/Down, Enter execute, Esc close, type-to-filter).
- *   - The menu swallows Arrow/Enter/Escape keys while open (keymap at
- *     Prec.highest in extensions.ts), everything else types normally into
- *     the block and refines the filter.
- *   - Executing a command removes the "/query" (or "<query") text it was
- *     opened with, then applies the command (text insertion or block
- *     mutation through the host).
+ * - `/` opens the NATIVE slash-command menu (Obsidian core "Slash commands"
+ *   feature) driven through workspace.editorSuggest with our editor adapter:
+ *   it lists every editor command — core, this plugin's built-ins, and every
+ *   plugin's editorCallback commands — with native fuzzy filtering.
+ * - `<` opens the self-drawn angle menu (HTML snippets & entities).
+ * - registerSlashEditorCommands registers the built-in slash commands as
+ *   editor commands so they appear in the native menu and the command palette.
  */
 
 import { EditorView, keymap } from '@codemirror/view';
@@ -22,10 +15,11 @@ import { Prec } from '@codemirror/state';
 import type { BlockEditorView } from '../view/BlockEditorView';
 import type { Extension } from '@codemirror/state';
 import { Marker } from '../types';
+import { createEditorAdapter } from '../interactions/textSelectionMenu';
 
 export type MenuKind = 'slash' | 'angle';
 
-interface CommandItem {
+export interface CommandItem {
   label: string;
   group: string;
   detail: string;
@@ -35,6 +29,9 @@ interface CommandItem {
   caret?: number;
   /** Block-model command executed through the host instead of text insert. */
   block?: (host: BlockEditorView) => void;
+  /** Obsidian editor-command id (core or plugin): executed through the
+   *  command registry against workspace.activeEditor (our adapter). */
+  cmdId?: string;
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -54,7 +51,7 @@ const todayISO = (): string => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 };
 
-const SLASH_COMMANDS: CommandItem[] = [
+export const SLASH_COMMANDS: CommandItem[] = [
   { label: 'TODO', group: 'Task state', detail: 'set marker', block: (h) => setMarker(h, 'TODO') },
   { label: 'DOING', group: 'Task state', detail: 'set marker', block: (h) => setMarker(h, 'DOING') },
   { label: 'DONE', group: 'Task state', detail: 'set marker', block: (h) => setMarker(h, 'DONE') },
@@ -176,7 +173,7 @@ interface MenuState {
 
 let menu: MenuState | null = null;
 
-/** The keymap extension: swallows nav keys while the menu is open. */
+/** The keymap extension: swallows nav keys while the self-drawn menu is open. */
 export function commandMenuKeymap(): Extension {
   return Prec.highest(
     keymap.of([
@@ -216,18 +213,109 @@ export function commandMenuKeymap(): Extension {
   );
 }
 
-/** Detect a trigger char typed at line-start/whitespace; open the menu. */
+let nativeSlashActive = false;
+
+/**
+ * Detect a trigger char typed at line-start/whitespace.
+ *
+ * `/` opens the NATIVE slash-command menu (Obsidian core Slash commands
+ * feature) driven through workspace.editorSuggest with our editor adapter:
+ * it lists every editor command — core, this plugin's built-ins, and every
+ * plugin's editorCallback commands — with native fuzzy filtering. Typing
+ * re-filters, and removing the `/` closes it. The native suggest also pushes
+ * a keymap scope while open, so arrows/enter/escape are handled natively;
+ * our escHandler yields when the suggest is showing.
+ *
+ * `<` keeps the self-drawn angle menu (HTML snippets & entities).
+ */
 export function maybeOpenMenu(view: EditorView, host: BlockEditorView): void {
   if (menu) {
     updateFilter(view);
     return;
   }
   const head = view.state.selection.main.head;
-  const before = view.state.doc.sliceString(Math.max(0, head - 2), head);
-  if (/(^|\s)\/$/.test(before)) {
-    openMenu(view, host, 'slash', head - 1);
-  } else if (/(^|\s)<$/.test(before)) {
+  // Logseq parity: `/` (line-start or after whitespace) plus any query chars
+  // opens the NATIVE slash-command menu; typing re-filters it, and removing
+  // the `/` closes it — checked against the FULL line before the caret
+  // (a 2-char window would miss the trigger as soon as the query grows).
+  const lineBefore = view.state.doc.lineAt(head).text.slice(0, head - view.state.doc.lineAt(head).from);
+  if (/(^|\s)\/\S*$/.test(lineBefore)) {
+    triggerNativeSlash(view, host);
+  } else if (nativeSlashActive) {
+    closeNativeSlash();
+    nativeSlashActive = false;
+  }
+  if (/(^|\s)<$/.test(lineBefore)) {
     openMenu(view, host, 'angle', head - 1);
+  }
+}
+
+/** Built-in slash items for the native suggest (block-model actions). */
+export function builtinSlashItems(): Array<{ label: string; block: (h: BlockEditorView) => void }> {
+  return SLASH_COMMANDS.filter((c) => c.block).map((c) => ({ label: c.label, block: c.block! }));
+}
+
+function closeNativeSlash(): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const es = (window as any).app?.workspace?.editorSuggest;
+  es?.close?.();
+  nativeSlashActive = false;
+}
+
+/**
+ * Drive the native EditorSuggest system with our editor adapter: trigger()
+ * walks every registered suggest (the core slash suggest checks the `/`
+ * trigger, collects the available commands, and shows the native popup).
+ */
+export function triggerNativeSlash(view: EditorView, host: BlockEditorView): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const es = (window as any).app?.workspace?.editorSuggest;
+  if (!es?.trigger) return;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const adapter: any = createEditorAdapter(view, host);
+  // The native suggest requires the triggering keyboard event (its onTrigger
+  // returns null when evt is missing).
+  const evt = (window as unknown as { __lastKeyEvent?: KeyboardEvent }).__lastKeyEvent;
+  es.trigger(adapter, host.file ?? null, evt);
+  nativeSlashActive = true;
+}
+
+/**
+ * Register the built-in slash commands as editor commands so they appear in
+ * the NATIVE slash-command menu alongside core and plugin commands. Block
+ * commands resolve their host through the live activeEditor pseudo-view.
+ */
+export function registerSlashEditorCommands(plugin: { addCommand(cmd: unknown): void; app: unknown }): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = window as any;
+  const slug = (label: string): string =>
+    label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'cmd';
+  for (const item of SLASH_COMMANDS) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    plugin.addCommand({
+      id: 'slash-' + slug(item.label),
+      name: item.label,
+      editorCallback: (editor: any) => {
+        // The active editor is our block editor (synced via activeEditor):
+        // resolve its host for block-model commands.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const host = (w.app.workspace.activeEditor as any)?.__host;
+        if (item.block) {
+          if (host) item.block(host);
+          return;
+        }
+        if (item.insert !== undefined) {
+          editor.replaceSelection(item.insert);
+          if (item.caret !== undefined) {
+            // Cursor inside the inserted text (e.g. "{{embed ((", "# ").
+            const pos = editor.getCursor('from');
+            const line = editor.getLine(pos.line);
+            const abs = line.slice(0, pos.ch).length - item.insert.length + (item.caret ?? 0);
+            editor.setCursor({ line: pos.line, ch: Math.max(0, abs) });
+          }
+        }
+      },
+    });
   }
 }
 
@@ -261,7 +349,7 @@ function updateFilter(view: EditorView): void {
   // a whitespace char other than the leading one appears (query is one word).
   const raw = view.state.doc.sliceString(menu.triggerFrom + 1, head);
   if (/\s/.test(raw.replace(/^&/, ''))) {
-    // allow &-entities like &nbsp; 鈥?only cut on real spaces
+    // allow &-entities like &nbsp; — only cut on real spaces
     if (/\s/.test(raw)) {
       closeMenu();
       return;
@@ -349,7 +437,7 @@ function executeSelected(view: EditorView): void {
   const { triggerFrom, host } = menu;
   closeMenu();
   if (!item) return;
-  // Remove the trigger query text ("/tod" etc.) from the buffer.
+  // Remove the trigger query text ("<div" etc.) from the buffer.
   const head = view.state.selection.main.head;
   const removeFrom = triggerFrom;
   const removeTo = Math.max(head, triggerFrom + 1);
@@ -377,4 +465,3 @@ export function closeMenu(): void {
 export function isMenuOpen(): boolean {
   return menu !== null;
 }
-

@@ -11,12 +11,46 @@ import { Block, ParsedDocument } from '../types';
 
 export function serializeDocument(doc: ParsedDocument): string {
   const parts: string[] = [];
-  if (doc.frontmatter) parts.push(doc.frontmatter);
+  const blocks = doc.blocks;
+  if (doc.frontmatter && !blocks[0]?.frontmatter) parts.push(doc.frontmatter);
   if (doc.pageProps) parts.push(doc.pageProps);
-  for (const b of doc.blocks) {
+  // Obsidian-format page properties: a frontmatter-sourced props-only first
+  // block round-trips as the `---` fenced frontmatter (format preserved).
+  if (blocks[0]?.frontmatter) {
+    const fm = blocks[0];
+    parts.push('---', ...fm.text.split('\n'), '---');
+    for (const c of fm.children) parts.push(serializeBlock(c, 0));
+    for (let i = 1; i < blocks.length; i++) {
+      const b = blocks[i];
+      // Logseq props-only blocks after the frontmatter keep their format too.
+      if (isPropsOnlyBlock(b)) {
+        for (const [k, v] of Object.entries(b.props)) parts.push(`${k}:: ${v}`);
+        for (const c of b.children) parts.push(serializeBlock(c, 0));
+      } else {
+        parts.push(serializeBlock(b, 0));
+      }
+    }
+    return parts.join('\n');
+  }
+  // Logseq model: a first block holding ONLY properties is the page-properties
+  // block — its props are written as the unindented file-top lines, and its
+  // children (if any) shift up to top level.
+  if (isPropsOnlyBlock(blocks[0])) {
+    const pb = blocks[0];
+    for (const [k, v] of Object.entries(pb.props)) parts.push(`${k}:: ${v}`);
+    for (const c of pb.children) parts.push(serializeBlock(c, 0));
+    for (let i = 1; i < blocks.length; i++) parts.push(serializeBlock(blocks[i], 0));
+    return parts.join('\n');
+  }
+  for (const b of blocks) {
     parts.push(serializeBlock(b, 0));
   }
   return parts.join('\n');
+}
+
+/** The page-properties block: an empty-text first block that only carries props. */
+function isPropsOnlyBlock(b: Block | undefined): boolean {
+  return !!b && b.kind === 'list' && b.text === '' && Object.keys(b.props).length > 0;
 }
 
 export function serializeBlock(b: Block, depth: number, skipProps?: readonly string[]): string {
