@@ -1543,21 +1543,23 @@ body.block-touch-dragging {
 }
 
 :is(.block-content-static:not(.block-dataview), .embed-content, .fc-question, .fc-answer) pre {
-  /* Theme pre padding is scoped to .markdown-rendered and never reaches
-     plugin-rendered code — give the box its own so every line insets. */
-  padding: 0.4em 0.9em;
-  /* No-language fences render as bare <pre> (no language class); themes
-     (Blue Topaz) style bare pre apart from pre[class] code boxes, so the
-     static box diverged from the dedicated code editor. Pin the box to the
-     SAME values the edit state's .lgp-code-editing .cm-editor uses so both
-     states render identically. */
-  background: var(--code-background, var(--background-secondary));
-  border: none;
-  border-bottom-left-radius: var(--code-radius, 6px);
-  border-bottom-right-radius: var(--code-radius, 6px);
-  font-family: var(--font-monospace);
-  font-size: 1em;
-  line-height: 1.5;
+  /* Box parity with the dedicated code editor (.lgp-code-editing .cm-editor):
+     themes (Blue Topaz + snippets) restyle pre through body-class rules up to
+     (0,2,2) specificity, which beat this selector's (0,2,1) when properties
+     are non-important — the static box then diverges from the edit state.
+     !important pins the box to the EXACT values the editor renders with. */
+  margin: 0 !important;
+  padding: 0.4em 0.9em !important;
+  background: var(--code-background, var(--background-secondary)) !important;
+  border: none !important;
+  box-shadow: none !important;
+  border-top-left-radius: 0 !important;
+  border-top-right-radius: 0 !important;
+  border-bottom-left-radius: var(--code-radius, 6px) !important;
+  border-bottom-right-radius: var(--code-radius, 6px) !important;
+  font-family: var(--font-monospace) !important;
+  font-size: 1em !important;
+  line-height: 1.5 !important;
 }
 
 :is(.block-content-static:not(.block-dataview), .embed-content, .fc-question, .fc-answer) pre code {
