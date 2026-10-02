@@ -3,7 +3,7 @@
  * vault-wide block-id index, and clean uninstall (restore native views).
  */
 
-import { Notice, Plugin, TAbstractFile, WorkspaceLeaf, type CachedMetadata, type ViewState } from 'obsidian';
+import { Menu, Notice, Plugin, TAbstractFile, WorkspaceLeaf, type CachedMetadata, type ViewState } from 'obsidian';
 import { BlockEditorView, VIEW_TYPE_BLOCK_EDITOR } from './view/BlockEditorView';
 import { DEFAULT_SETTINGS, parseFolderList, pathInFolders, shouldTakeOver, type BlockEditorSettings } from './types';
 import { LogseqEditorSettingTab } from './settings/tab';
@@ -37,8 +37,7 @@ export default class LogseqEditorPlugin extends Plugin {
   pendingReveal: { path: string; blockId: string } | null = null;
 
   private origSetViewState: ((this: WorkspaceLeaf, state: ViewState, eState?: unknown) => Promise<void>) | null = null;
-  private statusSrcEl: HTMLElement | null = null;
-  private statusViewEl: HTMLElement | null = null;
+  private statusModeEl: HTMLElement | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -151,7 +150,7 @@ export default class LogseqEditorPlugin extends Plugin {
       checkCallback: (checking) => {
         const leaf = this.app.workspace.activeLeaf;
         if (!leaf || leaf.view.getViewType() !== 'markdown') return false;
-        if (!checking) this.switchToBlockEditor(leaf);
+        if (!checking) void this.switchToBlockEditor(leaf);
         return true;
       },
     });
@@ -323,7 +322,7 @@ export default class LogseqEditorPlugin extends Plugin {
       const active = this.app.workspace.activeLeaf;
       if (!active) return;
       if (active.view instanceof BlockEditorView) this.switchToNative(active);
-      else if (active.view.getViewType() === 'markdown') this.switchToBlockEditor(active);
+      else if (active.view.getViewType() === 'markdown') void this.switchToBlockEditor(active);
     });
 
     this.addRibbonIcon('calendar-day', "Open today's journal", () => void openJournal(this));
@@ -340,9 +339,10 @@ export default class LogseqEditorPlugin extends Plugin {
       this.origSetViewState = null;
     }
     // ...and put every block-editor leaf back to the native markdown view.
+    // NOTE: leaf.getViewState() (leaf level, wraps the file under `state`) —
+    // NOT view.getState(), which returns the flat view-level record.
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_BLOCK_EDITOR)) {
-      const state = leaf.view.getState();
-      const file = (state.state as { file?: string } | undefined)?.file;
+      const file = (leaf.getViewState().state as { file?: string } | undefined)?.file;
       if (file) {
         void leaf.setViewState({ type: 'markdown', state: { file }, active: true } as ViewState);
       }
@@ -424,10 +424,12 @@ export default class LogseqEditorPlugin extends Plugin {
   private convertOpenMarkdownLeaves(): void {
     if (!this.settings.takeOverByDefault) return;
     for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
-      const st = leaf.view.getState();
-      const file = (st.state as { file?: string } | undefined)?.file;
+      // leaf-level view state (file wrapped under `state`), spread whole so
+      // mode/source survive the swap.
+      const vs = leaf.getViewState();
+      const file = (vs.state as { file?: string } | undefined)?.file;
       if (file && this.shouldTakeOverFile(file)) {
-        void leaf.setViewState({ ...st, type: VIEW_TYPE_BLOCK_EDITOR } as ViewState);
+        void leaf.setViewState({ ...vs, type: VIEW_TYPE_BLOCK_EDITOR } as ViewState);
       }
     }
   }
@@ -436,59 +438,86 @@ export default class LogseqEditorPlugin extends Plugin {
   // View switching
   // ------------------------------------------------------------------
 
-  /** Status bar toggles: page-wide source mode + native/block editor. */
+  /**
+   * Status bar: ONE mode chip showing the CURRENT editing mode. Click expands
+   * a dropdown menu (Live preview / Page source mode / Native editor) with a
+   * check on the active mode — direct switching instead of cycling.
+   */
   private buildStatusBar(): void {
     const bar = this.addStatusBarItem();
     bar.addClass('lgp-statusbar');
-    this.statusSrcEl = bar.createEl('a', { cls: 'lgp-status-item' });
-    this.statusViewEl = bar.createEl('a', { cls: 'lgp-status-item' });
-    this.statusSrcEl.addEventListener('click', () => {
-      const v = this.app.workspace.getActiveViewOfType(BlockEditorView);
-      if (v) {
-        v.togglePageSourceMode();
-        this.updateStatusBar();
-      }
-    });
-    this.statusViewEl.addEventListener('click', () => {
-      const leaf = this.app.workspace.activeLeaf;
-      if (!leaf) return;
-      if (leaf.view instanceof BlockEditorView) this.switchToNative(leaf);
-      else if (leaf.view.getViewType() === 'markdown') this.switchToBlockEditor(leaf);
-    });
-    // Keep the labels in sync with whatever view is active.
+    this.statusModeEl = bar.createEl('a', { cls: 'lgp-status-item' });
+    this.statusModeEl.addEventListener('click', (evt) => this.showModeMenu(evt));
+    // Keep the label in sync with whatever view is active. A same-leaf view
+    // TYPE swap (native ↔ block editor) does not fire active-leaf-change, so
+    // also listen to layout-change.
     this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.updateStatusBar()));
+    this.registerEvent(this.app.workspace.on('layout-change', () => this.updateStatusBar()));
     this.updateStatusBar();
   }
 
-  private updateStatusBar(): void {
-    const src = this.statusSrcEl;
-    const view = this.statusViewEl;
-    if (!src || !view) return;
+  /** Current editing mode of the active editor (menu check + chip label). */
+  private currentMode(): 'edit' | 'source' | 'native' {
+    const v = this.app.workspace.getActiveViewOfType(BlockEditorView);
+    if (v) return v.pageSourceMode ? 'source' : 'edit';
+    return 'native';
+  }
+
+  /** Click → dropdown with the three modes; a check marks the current one. */
+  private showModeMenu(evt: MouseEvent): void {
+    const current = this.currentMode();
+    const menu = new Menu();
+    const entry = (title: string, icon: string, mode: 'edit' | 'source' | 'native') =>
+      menu.addItem((item) =>
+        item.setTitle(title).setIcon(icon).setChecked(mode === current).onClick(() => void this.applyMode(mode)),
+      );
+    entry('Live preview', 'lucide-eye', 'edit');
+    entry('Page source mode', 'lucide-file-code', 'source');
+    entry('Native editor', 'lucide-pencil-line', 'native');
+    menu.showAtMouseEvent(evt);
+  }
+
+  /** Switch the active editor to the picked mode (works from any mode). */
+  private async applyMode(mode: 'edit' | 'source' | 'native'): Promise<void> {
+    const leaf = this.app.workspace.activeLeaf;
+    if (!leaf) return;
+    if (mode === 'native') {
+      if (leaf.view instanceof BlockEditorView) this.switchToNative(leaf);
+      return;
+    }
+    const wantSource = mode === 'source';
     const v = this.app.workspace.getActiveViewOfType(BlockEditorView);
     if (v) {
-      src.style.display = '';
-      src.setText(v.pageSourceMode ? 'source' : 'edit');
-      src.toggleClass('mod-active-srcmode', v.pageSourceMode);
-      src.setAttribute('aria-label', v.pageSourceMode ? 'Page source mode — click for live preview' : 'Live preview — click for page source mode');
-      view.setText('native');
-      view.setAttribute('aria-label', 'Open this file with the native editor');
-    } else {
-      const leaf = this.app.workspace.activeLeaf;
-      if (leaf && leaf.view.getViewType() === 'markdown') {
-        src.style.display = 'none';
-        view.setText('blocks');
-        view.setAttribute('aria-label', 'Open this file with the block editor');
-      } else {
-        src.style.display = 'none';
-        view.style.display = 'none';
-      }
+      // In-view toggle fires neither active-leaf-change nor layout-change —
+      // refresh the chip explicitly.
+      if (v.pageSourceMode !== wantSource) v.togglePageSourceMode();
+      this.updateStatusBar();
+      return;
     }
-    if (v) view.style.display = '';
+    if (leaf.view?.getViewType?.() === 'markdown') {
+      await this.switchToBlockEditor(leaf, wantSource);
+      this.updateStatusBar();
+    }
+  }
+
+  private updateStatusBar(): void {
+    const el = this.statusModeEl;
+    if (!el) return;
+    const mode = this.currentMode();
+    const leaf = this.app.workspace.activeLeaf;
+    const isMarkdown = !!leaf && leaf.view?.getViewType?.() === 'markdown';
+    if (mode === 'native' && !isMarkdown) {
+      el.style.display = 'none';
+      return;
+    }
+    el.style.display = '';
+    el.setText(mode);
+    el.toggleClass('mod-active-srcmode', mode === 'source');
+    el.setAttribute('aria-label', 'Editing mode — click to switch');
   }
 
   private switchToNative(leaf: WorkspaceLeaf): void {
-    const state = leaf.view.getState();
-    const file = (state.state as { file?: string } | undefined)?.file;
+    const file = (leaf.getViewState().state as { file?: string } | undefined)?.file;
     if (!file) return;
     // Bypass the take-over patch: the markdown setViewState would otherwise be
     // converted straight back to the block editor (takeOverByDefault).
@@ -499,11 +528,14 @@ export default class LogseqEditorPlugin extends Plugin {
     void leaf.setViewState({ type: 'markdown', state: { file }, active: true } as ViewState);
   }
 
-  private switchToBlockEditor(leaf: WorkspaceLeaf): void {
-    const state = leaf.view.getState();
-    const file = (state.state as { file?: string } | undefined)?.file;
+  private async switchToBlockEditor(leaf: WorkspaceLeaf, wantSource = false): Promise<void> {
+    const file = (leaf.getViewState().state as { file?: string } | undefined)?.file;
     if (!file) return;
-    void leaf.setViewState({ type: VIEW_TYPE_BLOCK_EDITOR, state: { file }, active: true } as ViewState);
+    await leaf.setViewState({ type: VIEW_TYPE_BLOCK_EDITOR, state: { file }, active: true } as ViewState);
+    if (wantSource) {
+      const v = this.app.workspace.getActiveViewOfType(BlockEditorView);
+      if (v && !v.pageSourceMode) v.togglePageSourceMode();
+    }
   }
 
   /** Reveal a side panel, creating its leaf on first use. */

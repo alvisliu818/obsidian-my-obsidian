@@ -1689,18 +1689,16 @@ body.block-touch-dragging {
   user-select: none;
 }
 
+/* The language label is clickable in BOTH states (reading + code-editing):
+   click opens the block in one-shot source mode with the caret at the
+   language word. */
 .lgp-code-lang {
   margin-right: auto;
   text-transform: lowercase;
-}
-
-/* Edit state: the label is clickable (switch to source mode to edit the
-   language). Reading state has no handler — keep it plain there. */
-.lgp-code-editing .lgp-code-lang {
   cursor: pointer;
 }
 
-.lgp-code-editing .lgp-code-lang:hover {
+.lgp-code-lang:hover {
   color: var(--text-accent);
   text-decoration: underline;
 }
@@ -2079,6 +2077,7 @@ body.block-touch-dragging {
   height: 1.55em;
   cursor: text;
   position: relative;
+  --lgp-plus-c: color-mix(in srgb, var(--text-normal) 35%, transparent);
 }
 
 .block-editor-addblock::before {
@@ -2097,19 +2096,22 @@ body.block-touch-dragging {
 }
 
 .block-editor-addblock::after {
-  content: '+';
+  /* The plus is DRAWN (two gradient bars), not a font glyph: a '+' glyph's
+     ink is never vertically centered in its em box (font metrics put it above
+     the baseline), so the glyph plus visibly sat higher than the 1px line.
+     A drawn cross is pixel-exact: both bars center in a box that is itself
+     centered on the row midline — the exact reference the line uses. */
+  content: '';
   position: absolute;
   /* centered on the bullet dot column (dot center = controls-width − 8px) */
   left: calc(var(--lgp-controls-w, 32px) - 16px);
   width: 16px;
   top: 50%;
-  /* line-height:1 keeps the glyph's box == font box, so translateY(-50%)
-     centers the GLYPH itself (inherited 1.55 line-height offsets it). */
-  line-height: 1;
+  height: 9px;
   transform: translateY(-50%);
-  text-align: center;
-  font-size: 0.9em;
-  color: color-mix(in srgb, var(--text-normal) 35%, transparent);
+  background:
+    linear-gradient(var(--lgp-plus-c), var(--lgp-plus-c)) center / 9px 1px no-repeat,
+    linear-gradient(var(--lgp-plus-c), var(--lgp-plus-c)) center / 1px 9px no-repeat;
   opacity: 0;
   transition: opacity 0.12s ease;
 }

@@ -552,11 +552,11 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockEditorVi
     if (host.renderGeneration !== gen) return; // stale (file switched)
     wireContentEvents(holder, b, host);
     if (!holder.hasClass('block-dataview')) {
-      // Embeds FIRST: `{{embed ((id))}}` contains an inner `((id))` that
+      // Embeds FIRST: `{{embed ((id))}` contains an inner `((id))` that
       // enhanceBlockRefs would otherwise turn into a chip, splitting the text
       // node so the embed pattern no longer matches.
       enhanceEmbeds(holder, host);
-      enhanceCodeBlocks(holder);
+      enhanceCodeBlocks(holder, b, host);
       // Swap page-embed tokens for live boxes ( BEFORE block-ref chips so
       // the token is not mistaken for text).
       for (const { token, page } of pageEmbedTokens) {
@@ -587,9 +587,11 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockEditorVi
  * Code-block toolbar (slim strip ABOVE the code): language name left, copy
  * button right — a dedicated bar so the copy icon never overlaps the code
  * content (the native floating copy button is hidden via CSS). Click copies
- * the code text and flashes a check mark.
+ * the code text and flashes a check mark. Clicking the language label opens
+ * the block in one-shot source mode with the cursor at the end of the
+ * fence's language word, so the language can be edited directly.
  */
-function enhanceCodeBlocks(holder: HTMLElement): void {
+function enhanceCodeBlocks(holder: HTMLElement, b: Block, host: BlockEditorView): void {
   for (const pre of holder.querySelectorAll('pre')) {
     if (pre.closest('.lgp-code-block')) continue;
     const code = pre.querySelector('code');
@@ -599,7 +601,19 @@ function enhanceCodeBlocks(holder: HTMLElement): void {
     wrap.className = 'lgp-code-block';
     pre.replaceWith(wrap);
     const bar = wrap.createDiv({ cls: 'lgp-code-toolbar' });
-    if (lang) bar.createEl('span', { cls: 'lgp-code-lang', text: lang });
+    if (lang) {
+      const langEl = bar.createEl('span', { cls: 'lgp-code-lang', text: lang });
+      langEl.title = 'Edit as source (change language)';
+      langEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        // One-shot source mode: the raw fence is edited in the normal outline
+        // editor with the caret at the end of the opening fence line.
+        const firstLine = b.text.split('\n')[0] ?? '';
+        host.sourceModeBlock = b;
+        host.focusBlock(b, firstLine.length);
+      });
+    }
     const btn = bar.createEl('span', { cls: 'lgp-code-copy', attr: { 'aria-label': 'Copy code' } });
     setIcon(btn, 'copy');
     btn.addEventListener('click', (e) => {
@@ -773,6 +787,7 @@ export function patchBlockSubtree(b: Block, host: BlockEditorView): boolean {
   host.destroyFocusedInside(wrap);
   const fresh = renderBlock(b, host);
   parentEl.replaceChild(fresh, wrap);
+  scheduleGuideCalibration(host);
   return true;
 }
 
@@ -799,7 +814,21 @@ export function patchSiblingList(parent: Block | null, host: BlockEditorView): b
   for (const c of parent.children) frag.appendChild(renderBlock(c, host));
   (kidsEl as HTMLElement).empty();
   kidsEl.appendChild(frag);
+  scheduleGuideCalibration(host);
   return true;
+}
+
+/**
+ * Incremental patches rebuild wraps with guide lines at the CSS approximation;
+ * same-height patches never trigger the container ResizeObserver, so the lines
+ * would STAY approximated. Recalibrate before the next paint (rAF runs
+ * pre-paint: the approximation is never shown).
+ */
+function scheduleGuideCalibration(host: BlockEditorView): void {
+  requestAnimationFrame(() => {
+    const el = host.contentTreeEl;
+    if (el && el.isConnected) layoutGuideLines(el);
+  });
 }
 
 /** Drop content cache entries for all blocks (full reload). */

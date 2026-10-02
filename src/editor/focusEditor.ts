@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Focused-block CM6 lifecycle: mount / commit / unmount.
  * One CM6 EditorView at a time, living inside the focused block's content DOM.
  */
@@ -33,6 +33,9 @@ export function mountFocusedEditor(
     parent,
     extensions: createEditorExtensions(host, block),
   });
+  // Debug handle for e2e verification (harmless): lets page-context probes
+  // reach this editor's CM6 state (doc text, selection) from the DOM node.
+  (view.dom as HTMLElement & { __lgView?: EditorView }).__lgView = view;
   // Real Escape keystrokes never reach CM6's keymap inside Obsidian's host
   // DOM (a capture-phase handler marks them handled first, so the keymap
   // dispatch skips the defaultPrevented event). Catch Escape in the CAPTURE
