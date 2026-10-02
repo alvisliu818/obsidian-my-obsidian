@@ -320,7 +320,10 @@
 }
 
 .block-content .cm-line {
-  padding: 0 2px;
+  /* no horizontal padding: the edit-mode text must start at the same x as
+     the static render (content padding 6px) — otherwise the distance to the
+     bullet dot shifts 2px on every click into edit mode */
+  padding: 0;
 }
 
 /* basic syntax colors through Obsidian variables */
