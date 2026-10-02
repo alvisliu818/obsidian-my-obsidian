@@ -367,6 +367,26 @@ export class BlockEditorView extends TextFileView {
     // not run in the hot editing path (it re-creates DOM mid-typing).
     // The tree DOM was rebuilt — re-apply in-page search highlights if open.
     this.searchBar?.onRerender();
+    this.updateOutlinePath();
+  }
+
+  /**
+   * Focused block's outline position (root → focused, text crumbs), exposed
+   * on the DOM (`contentEl.__lgFocusPath`) plus an `lgp-block-focus` event so
+   * companion plugins (breadcrumb nav) can show WHERE in the outline the
+   * caret lives. Falls back to the zoom context when no block is focused.
+   */
+  private updateOutlinePath(): void {
+    const el = this.contentEl as HTMLElement & { __lgFocusPath?: string[] };
+    const crumbs: string[] = [];
+    let b = this.focusedBlock ?? this.zoomedBlock;
+    while (b) {
+      const first = (b.text.split('\n')[0] ?? '').trim();
+      crumbs.unshift(!first ? '·' : first.length > 24 ? first.slice(0, 24) + '…' : first);
+      b = b.parent;
+    }
+    el.__lgFocusPath = crumbs;
+    el.dispatchEvent(new CustomEvent('lgp-block-focus', { detail: { path: crumbs } }));
   }
 
   private renderBreadcrumb(): void {
@@ -442,8 +462,11 @@ export class BlockEditorView extends TextFileView {
     // Incremental: swap static ↔ CM6 inside the two affected wraps only.
     // Full render fallback when the target is beyond the virtual-scroll cap
     // or not currently rendered.
-    if (!this.ensureCapFor(b) && this.mountFocusedInDom(b)) return;
-    this.render();
+    if (!this.ensureCapFor(b) && this.mountFocusedInDom(b)) {
+      this.updateOutlinePath();
+      return;
+    }
+    this.render(); // render() → renderInner() syncs the outline path
   }
 
   focusBlockFromClick(b: Block, ev: MouseEvent): void {
@@ -537,6 +560,7 @@ ${content}`;
         this.markDirty();
       }
       refreshBlockContent(fc.block, this);
+      this.updateOutlinePath();
       return;
     }
     const v = this.focusedView;
@@ -560,6 +584,7 @@ ${content}`;
     // Always restore static content: the CM6 DOM was removed by destroy(),
     // and the cached static el re-attaches synchronously when unchanged.
     refreshBlockContent(b, this);
+    this.updateOutlinePath();
   }
 
   /** Toggle page-wide source mode (status bar): raw markdown for every block. */

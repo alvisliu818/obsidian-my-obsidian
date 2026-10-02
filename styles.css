@@ -320,10 +320,16 @@
 }
 
 .block-content .cm-line {
-  /* no horizontal padding: the edit-mode text must start at the same x as
-     the static render (content padding 6px) — otherwise the distance to the
+  /* no horizontal padding: the edit-mode text must start at the same x as the
+     static render (content padding 6px) — otherwise the distance to the
      bullet dot shifts 2px on every click into edit mode */
   padding: 0;
+}
+
+.block-content .cm-line:empty {
+  /* empty doc line: an empty div builds no line box (zero height), so the
+     drawn caret (drawSelection) collapses — floor it like the static state */
+  min-height: 1.55em;
 }
 
 /* basic syntax colors through Obsidian variables */
