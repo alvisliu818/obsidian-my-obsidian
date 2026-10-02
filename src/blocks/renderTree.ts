@@ -32,6 +32,7 @@ import {
 } from '../features/query';
 import type { IndexedBlock } from '../index/blockIndex';
 import { flattenVisible } from '../core/treeOps';
+import { layoutGuideLines } from './guideLayout';
 
 const contentCache = new WeakMap<Block, { el: HTMLElement; sig: string }>();
 const queryCache = new WeakMap<Block, { el: HTMLElement; sig: string; version: number }>();
@@ -135,6 +136,13 @@ export function renderBlockTree(container: HTMLElement, roots: Block[], host: Bl
     );
     loadMoreObserver.observe(sentinel);
   }
+
+  // The rebuild above replaced every guide line, so their inline calibration
+  // is gone and the CSS approximations show. The container ResizeObserver
+  // only re-fires when the tree's SIZE changed — same-height re-renders (e.g.
+  // clicking the breadcrumb file name) left the lines at the approximation
+  // (visibly shifted). Always recalibrate after a render, once laid out.
+  requestAnimationFrame(() => layoutGuideLines(container));
 }
 
 function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HTMLElement {

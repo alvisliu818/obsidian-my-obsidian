@@ -16,7 +16,12 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "paths": {
+      // `cm-bundle:<pkg>` — the code-block editor's own bundled CM copy.
+      // Strip the prefix for type resolution (esbuild/vite do the same).
+      "cm-bundle:*": ["./node_modules/*"]
+    }
   },
   "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"],
   "exclude": ["tests/e2e"]

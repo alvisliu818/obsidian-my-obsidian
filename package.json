@@ -37,6 +37,8 @@
     "@codemirror/legacy-modes": "^6.5.4",
     "@codemirror/state": "^6.4.1",
     "@codemirror/view": "^6.34.0",
-    "@lezer/highlight": "^1.2.1"
+    "@lezer/highlight": "^1.2.1",
+    "@types/prismjs": "^1.26.6",
+    "prismjs": "^1.30.0"
   }
 }

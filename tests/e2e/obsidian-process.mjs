@@ -17,8 +17,8 @@ export const TEST_VAULT_URI = 'obsidian://open?path=' + encodeURI(TEST_VAULT);
 /** Sibling of the vault (never INSIDE it — the profile must not be indexed). */
 export const TEST_PROFILE = 'E:\\HOME\\Local\\logseq-e2e-obsidian-profile';
 
-/** All our test instances launch with `--remote-debugging-port=92xx`. */
-const PORT_MATCH = 'remote-debugging-port=92';
+/** All our test instances launch with `--remote-debugging-port=9xxx`. */
+const PORT_MATCH = 'remote-debugging-port=9';
 
 /**
  * Ensure the dedicated profile exists and knows exactly one vault: the test
@@ -29,9 +29,12 @@ export function prepareTestProfile() {
   mkdirSync(TEST_PROFILE, { recursive: true });
   // Reset the workspace: without this, every probe run restores ALL leaves
   // from previous runs (they accumulate across sessions and break the
-  // leaf-by-file lookups).
-  for (const f of ['workspace.json', 'workspace.json.bak']) {
-    try { rmSync(join(TEST_PROFILE, f)); } catch {}
+  // leaf-by-file lookups). Obsidian keeps per-vault workspace state in the
+  // VAULT's .obsidian/ — clear it there (the profile copy is not the source).
+  for (const dir of [TEST_PROFILE, join(TEST_VAULT, '.obsidian')]) {
+    for (const f of ['workspace.json', 'workspace.json.bak']) {
+      try { rmSync(join(dir, f)); } catch {}
+    }
   }
   writeFileSync(
     join(TEST_PROFILE, 'obsidian.json'),

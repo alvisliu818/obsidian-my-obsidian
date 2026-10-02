@@ -1567,19 +1567,25 @@ body.block-touch-dragging {
    matches — so most tokens fall back to plain text. Map the token classes to
    the theme's own --code-* variables (defined globally by Obsidian and
    extended by Blue Topaz / code-box snippets); graceful fallbacks keep the
-   default look when a variable is absent. */
-:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code {
+   default look when a variable is absent.
+   The .lgp-code-editing variants cover the EDIT state: its CM6 editor emits
+   the very same .token classes (Prism runs through prismHighlight.ts), so
+   both states share one palette. */
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code,
+.lgp-code-editing .cm-line {
   color: var(--code-normal, var(--text-normal));
 }
 
 :is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.comment,
 :is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.prolog,
 :is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.doctype,
-:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.cdata {
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.cdata,
+.lgp-code-editing .cm-line .token.comment {
   color: var(--code-comment, var(--text-faint));
 }
 
-:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.punctuation {
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.punctuation,
+.lgp-code-editing .cm-line .token.punctuation {
   color: var(--code-punctuation, var(--code-operator, var(--text-muted)));
 }
 
@@ -1587,53 +1593,77 @@ body.block-touch-dragging {
 :is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.important,
 :is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.atrule,
 :is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.selector,
-:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.tag {
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.tag,
+.lgp-code-editing .cm-line .token.keyword,
+.lgp-code-editing .cm-line .token.important,
+.lgp-code-editing .cm-line .token.atrule,
+.lgp-code-editing .cm-line .token.selector,
+.lgp-code-editing .cm-line .token.tag {
   color: var(--code-keyword, var(--text-accent));
 }
 
 :is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.string,
 :is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.char,
 :is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.attr-value,
-:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.regex {
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.regex,
+.lgp-code-editing .cm-line .token.string,
+.lgp-code-editing .cm-line .token.char,
+.lgp-code-editing .cm-line .token.attr-value,
+.lgp-code-editing .cm-line .token.regex {
   color: var(--code-string, var(--text-accent));
 }
 
 :is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.number,
 :is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.boolean,
 :is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.constant,
-:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.symbol {
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.symbol,
+.lgp-code-editing .cm-line .token.number,
+.lgp-code-editing .cm-line .token.boolean,
+.lgp-code-editing .cm-line .token.constant,
+.lgp-code-editing .cm-line .token.symbol {
   color: var(--code-atom, var(--code-number, var(--text-accent)));
 }
 
 :is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.function,
-:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.method {
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.method,
+.lgp-code-editing .cm-line .token.function,
+.lgp-code-editing .cm-line .token.method {
   color: var(--code-function, var(--code-def, var(--text-accent)));
 }
 
 :is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.class-name,
-:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.maybe-class-name {
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.maybe-class-name,
+.lgp-code-editing .cm-line .token.class-name,
+.lgp-code-editing .cm-line .token.maybe-class-name {
   color: var(--code-type, var(--code-def, var(--text-accent)));
 }
 
 :is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.operator,
 :is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.entity,
-:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.url {
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.url,
+.lgp-code-editing .cm-line .token.operator,
+.lgp-code-editing .cm-line .token.entity,
+.lgp-code-editing .cm-line .token.url {
   color: var(--code-operator, var(--text-muted));
 }
 
-:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.variable {
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.variable,
+.lgp-code-editing .cm-line .token.variable {
   color: var(--code-variable, inherit);
 }
 
-:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.builtin {
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.builtin,
+.lgp-code-editing .cm-line .token.builtin {
   color: var(--code-builtin, inherit);
 }
 
-:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.attr-name {
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.attr-name,
+.lgp-code-editing .cm-line .token.attr-name {
   color: var(--code-attribute, inherit);
 }
 
-:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.property {
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.property,
+.lgp-code-editing .cm-line .token.property {
   color: var(--code-property, inherit);
 }
 
@@ -1662,6 +1692,17 @@ body.block-touch-dragging {
 .lgp-code-lang {
   margin-right: auto;
   text-transform: lowercase;
+}
+
+/* Edit state: the label is clickable (switch to source mode to edit the
+   language). Reading state has no handler — keep it plain there. */
+.lgp-code-editing .lgp-code-lang {
+  cursor: pointer;
+}
+
+.lgp-code-editing .lgp-code-lang:hover {
+  color: var(--text-accent);
+  text-decoration: underline;
 }
 
 .lgp-code-copy {
@@ -2008,6 +2049,30 @@ body.block-touch-dragging {
 }
 .embed-header-title:hover { color: var(--text-accent); }
 
+/* ---------- Status bar toggles (source mode / native editor) ---------- */
+.lgp-statusbar {
+  display: inline-flex;
+  gap: 0;
+}
+
+.lgp-status-item {
+  cursor: pointer;
+  padding: 0 6px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smallest, 0.8em);
+  text-transform: lowercase;
+}
+
+.lgp-status-item:hover {
+  color: var(--text-normal);
+  text-decoration: underline;
+}
+
+/* Page source mode is ON: highlight the toggle. */
+.lgp-status-item.mod-active-srcmode {
+  color: var(--text-accent);
+}
+
 /* ---------- Add-block affordance under the last block (Logseq parity) ---------- */
 .block-editor-addblock {
   /* Same pitch as the normal distance between two bullets (one 1.55em row). */
@@ -2022,6 +2087,9 @@ body.block-touch-dragging {
   left: var(--lgp-controls-w, 32px);
   right: 0;
   top: 50%;
+  /* 1px line: shift by half its height so its CENTER sits on the row's
+     midline — same reference the + uses, so line and plus align exactly. */
+  transform: translateY(-50%);
   height: 1px;
   background: var(--background-modifier-border);
   opacity: 0;
@@ -2035,6 +2103,9 @@ body.block-touch-dragging {
   left: calc(var(--lgp-controls-w, 32px) - 16px);
   width: 16px;
   top: 50%;
+  /* line-height:1 keeps the glyph's box == font box, so translateY(-50%)
+     centers the GLYPH itself (inherited 1.55 line-height offsets it). */
+  line-height: 1;
   transform: translateY(-50%);
   text-align: center;
   font-size: 0.9em;
@@ -2058,12 +2129,20 @@ body.block-touch-dragging {
 
 .lgp-code-editing .cm-editor {
   font-family: var(--font-monospace);
-  font-size: 0.9em;
-  background: var(--background-primary);
+  /* Same size & line box as the reading view's pre code (1em/1.5), so the
+     text does not shift when the block flips between states. */
+  font-size: 1em;
+  line-height: 1.5;
+  /* Same box as the reading view's pre: theme code background, radius on the
+     bottom only (the toolbar sits above, like .lgp-code-block pre). */
+  background: var(--code-background, var(--background-secondary));
+  border-radius: 0 0 var(--code-radius, 6px) var(--code-radius, 6px);
 }
 
 .lgp-code-editing .cm-content {
-  padding: 6px 8px;
+  /* 0.4em 0.9em — identical to the reading pre's padding, so the first
+     glyph keeps its x position when the block flips between states. */
+  padding: 0.4em 0.9em;
   white-space: pre;
   caret-color: var(--text-accent);
 }

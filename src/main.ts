@@ -37,6 +37,8 @@ export default class LogseqEditorPlugin extends Plugin {
   pendingReveal: { path: string; blockId: string } | null = null;
 
   private origSetViewState: ((this: WorkspaceLeaf, state: ViewState, eState?: unknown) => Promise<void>) | null = null;
+  private statusSrcEl: HTMLElement | null = null;
+  private statusViewEl: HTMLElement | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -275,6 +277,9 @@ export default class LogseqEditorPlugin extends Plugin {
     pageSearchCmd('find-in-page', 'Find in page (block editor)', false);
     pageSearchCmd('replace-in-page', 'Find and replace in page (block editor)', true);
 
+    // ---- Status bar: source-mode & native-editor toggles ----
+    this.buildStatusBar();
+
     // ---- Block commands (act on the focused block of the active editor) ----
     const blockCmd = (
       id: string,
@@ -430,6 +435,56 @@ export default class LogseqEditorPlugin extends Plugin {
   // ------------------------------------------------------------------
   // View switching
   // ------------------------------------------------------------------
+
+  /** Status bar toggles: page-wide source mode + native/block editor. */
+  private buildStatusBar(): void {
+    const bar = this.addStatusBarItem();
+    bar.addClass('lgp-statusbar');
+    this.statusSrcEl = bar.createEl('a', { cls: 'lgp-status-item' });
+    this.statusViewEl = bar.createEl('a', { cls: 'lgp-status-item' });
+    this.statusSrcEl.addEventListener('click', () => {
+      const v = this.app.workspace.getActiveViewOfType(BlockEditorView);
+      if (v) {
+        v.togglePageSourceMode();
+        this.updateStatusBar();
+      }
+    });
+    this.statusViewEl.addEventListener('click', () => {
+      const leaf = this.app.workspace.activeLeaf;
+      if (!leaf) return;
+      if (leaf.view instanceof BlockEditorView) this.switchToNative(leaf);
+      else if (leaf.view.getViewType() === 'markdown') this.switchToBlockEditor(leaf);
+    });
+    // Keep the labels in sync with whatever view is active.
+    this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.updateStatusBar()));
+    this.updateStatusBar();
+  }
+
+  private updateStatusBar(): void {
+    const src = this.statusSrcEl;
+    const view = this.statusViewEl;
+    if (!src || !view) return;
+    const v = this.app.workspace.getActiveViewOfType(BlockEditorView);
+    if (v) {
+      src.style.display = '';
+      src.setText(v.pageSourceMode ? 'source' : 'edit');
+      src.toggleClass('mod-active-srcmode', v.pageSourceMode);
+      src.setAttribute('aria-label', v.pageSourceMode ? 'Page source mode — click for live preview' : 'Live preview — click for page source mode');
+      view.setText('native');
+      view.setAttribute('aria-label', 'Open this file with the native editor');
+    } else {
+      const leaf = this.app.workspace.activeLeaf;
+      if (leaf && leaf.view.getViewType() === 'markdown') {
+        src.style.display = 'none';
+        view.setText('blocks');
+        view.setAttribute('aria-label', 'Open this file with the block editor');
+      } else {
+        src.style.display = 'none';
+        view.style.display = 'none';
+      }
+    }
+    if (v) view.style.display = '';
+  }
 
   private switchToNative(leaf: WorkspaceLeaf): void {
     const state = leaf.view.getState();

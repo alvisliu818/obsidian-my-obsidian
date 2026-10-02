@@ -83,6 +83,12 @@ export class BlockEditorView extends TextFileView {
    * commit.
    */
   sourceModeBlock: Block | null = null;
+  /**
+   * Page-wide source mode (status bar toggle): every block edits as raw
+   * markdown — no live preview, and pure code fences stay as raw fences
+   * (no dedicated code editor). Off by default.
+   */
+  pageSourceMode = false;
   /** CM6 mounted inside an embed row for in-place editing (null when idle). */
   embedEdit: { view: EditorView; source: EmbedSource; path: number[]; row: HTMLElement; escHandler: (e: KeyboardEvent) => void } | null = null;
   zoomedBlock: Block | null = null;
@@ -396,7 +402,7 @@ export class BlockEditorView extends TextFileView {
     if (!b) return;
     // Code blocks open their OWN editor (no fences on screen, Enter = newline
     // inside the code). Source mode keeps the raw view.
-    const codeInfo = this.sourceModeBlock ? null : parseCodeFence(b.text);
+    const codeInfo = this.sourceModeBlock || this.pageSourceMode ? null : parseCodeFence(b.text);
     if (codeInfo) {
       this.pendingFocus = null;
       this.focusedCode = mountCodeEditor(content, b, codeInfo, this);
@@ -554,6 +560,14 @@ ${content}`;
     // Always restore static content: the CM6 DOM was removed by destroy(),
     // and the cached static el re-attaches synchronously when unchanged.
     refreshBlockContent(b, this);
+  }
+
+  /** Toggle page-wide source mode (status bar): raw markdown for every block. */
+  togglePageSourceMode(): void {
+    this.commitFocusedText();
+    this.sourceModeBlock = null;
+    this.pageSourceMode = !this.pageSourceMode;
+    this.render();
   }
 
   /** Keep the Logseq-page-props registry fresh for other plugins. */
