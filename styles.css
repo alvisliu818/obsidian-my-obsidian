@@ -253,21 +253,16 @@
   position: relative;
 }
 
-.block-children-container.is-collapsed {
-  /* Collapsed: keep a short guide-line stub under the bullet so the line can
-     be clicked again to expand (same toggle as the caret). */
-  min-height: 0.9em;
-}
-
 .block-children-left-border {
   /* Centered under the parent bullet's dot: the dot's center sits at
      controls-width − 8px from the wrap left; the container is indented 16px,
-     the line is 2px wide. Both ends keep a small gap: the line starts just
-     below the parent dot and stops short of the last child's dot. */
+     the line is 2px wide. Both ends stop the SAME distance past their dot
+     (top = parent dot, bottom = last child's dot): dot center + 3px radius
+     + 4px gap. */
   position: absolute;
   left: calc(var(--lgp-controls-w, 32px) - 25px);
-  top: calc(-0.78em + 7px);
-  bottom: 1em;
+  top: calc(-0.775em + 7px);
+  bottom: calc(0.775em + 7px);
   width: 2px;
   border-radius: 2px;
   background: var(--background-modifier-border);

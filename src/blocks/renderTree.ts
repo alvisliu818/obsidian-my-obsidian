@@ -205,33 +205,30 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
   }
 
   // --- children: the guide line hangs from the bullet dot and doubles as a
-  // collapse toggle (click = fold/unfold, same as the caret). The container
-  // stays rendered while collapsed as a short stub so the line can be clicked
-  // again to expand. ---
+  // collapse toggle (click = fold the content inside it). Folded blocks render
+  // NO container/line at all — expansion lives on the always-visible caret. ---
   const collapsed = b.props['collapsed'] === 'true';
-  const hasKids = b.children.length > 0;
-  if (hasKids && (!budget || budget.left > 0)) {
-    const cc = wrap.createEl('div', { cls: 'block-children-container' + (collapsed ? ' is-collapsed' : '') });
+  const kidsVisible = b.children.length > 0 && !collapsed;
+  if (kidsVisible && (!budget || budget.left > 0)) {
+    const cc = wrap.createEl('div', { cls: 'block-children-container' });
     const guide = cc.createEl('div', { cls: 'block-children-left-border' });
-    guide.setAttribute('aria-label', collapsed ? 'Expand child blocks' : 'Collapse child blocks');
+    guide.setAttribute('aria-label', 'Collapse child blocks');
     guide.addEventListener('click', (e) => {
       e.stopPropagation();
       host.toggleCollapseGuide(b);
     });
-    if (!collapsed) {
-      const inner = cc.createEl('div', { cls: 'block-children' });
-      for (const c of b.children) {
-        if (budget && budget.left <= 0) {
-          budget.stopped = true;
-          break;
-        }
-        if (budget) budget.left--;
-        inner.appendChild(renderBlock(c, host, budget));
+    const inner = cc.createEl('div', { cls: 'block-children' });
+    for (const c of b.children) {
+      if (budget && budget.left <= 0) {
+        budget.stopped = true;
+        break;
       }
+      if (budget) budget.left--;
+      inner.appendChild(renderBlock(c, host, budget));
     }
-  } else if (hasKids && budget) {
-    // Budget exhausted at this parent: children stay unrendered (virtualized).
-    budget.stopped = true;
+  } else if (b.children.length > 0 && budget) {
+    // Collapsed (nothing to render) or budget exhausted (virtualized).
+    if (!collapsed) budget.stopped = true;
   }
 
   // --- block properties below content (Logseq md parity) — hidden while
