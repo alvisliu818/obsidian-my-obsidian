@@ -590,9 +590,10 @@
   color: var(--text-muted);
   padding: 2px 4px;
   cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* File paths under tags can be long — show them in FULL (wrap, no ellipsis). */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 
 .logseq-panel-group-title:hover {
