@@ -28,7 +28,7 @@ import {
   VIRTUAL_CHUNK,
   VIRTUAL_INITIAL_CAP,
 } from '../blocks/renderTree';
-import { applyCursor, commitEditorText, cursorAtCoords, mountFocusedEditor, type CursorPos } from '../editor/focusEditor';
+import { applyCursor, applyCursorAndScroll, commitEditorText, cursorAtCoords, mountFocusedEditor, type CursorPos } from '../editor/focusEditor';
 import { createEmbedExtensions } from '../editor/extensions';
 import {
   findEmbedBox,
@@ -438,6 +438,9 @@ export class BlockEditorView extends TextFileView {
       this.pendingFocus = null;
       this.focusedCode = mountCodeEditor(content, b, codeInfo, this);
       this.focusStartSnapshot = serializeDocument(this.doc);
+      // The dedicated code editor bypasses the generic mount path — without
+      // this the companion breadcrumb keeps showing the PREVIOUS block.
+      this.updateOutlinePath();
       return;
     }
     const pending = this.pendingFocus;
@@ -463,7 +466,10 @@ export class BlockEditorView extends TextFileView {
           p = Math.max(0, Math.min(pending.staticPos, v.state.doc.length));
         }
       }
-      applyCursor(v, p);
+      // Scroll-compensate: the raw editor is far shorter than the static
+      // render it replaced (images/code collapse to single lines), so the
+      // caret can land off-screen without this.
+      applyCursorAndScroll(v, p);
     }
     this.focusStartSnapshot = serializeDocument(this.doc);
   }
@@ -506,6 +512,16 @@ export class BlockEditorView extends TextFileView {
     }
     if (this.focusedBlock === b && this.focusedView) {
       const p = cursorAtCoords(this.focusedView, xy.x, xy.y, 'end');
+      // A click BELOW the raw-text doc (the raw editor is much shorter than
+      // the static render it replaced) clamps to doc end — visibly far from
+      // the click. Keep the caret where it is instead of teleporting it.
+      let top: number | null = null;
+      try {
+        top = this.focusedView.coordsAtPos(p)?.top ?? null;
+      } catch {
+        top = null;
+      }
+      if (top === null || Math.abs(top - xy.y) > 60) return;
       applyCursor(this.focusedView, p);
       this.focusedView.focus();
       return;
@@ -522,6 +538,7 @@ export class BlockEditorView extends TextFileView {
     this.pendingFocus = { pos: 'end', clickXY: xy, staticPos };
     this.savedFocusPos = 'end';
     if (!this.mountFocusedInDom(b)) this.render();
+    else this.updateOutlinePath();
   }
 
   /**
@@ -570,10 +587,24 @@ export class BlockEditorView extends TextFileView {
       pick = i;
     }
     if (pick < 0) return 0;
-    const endLine = runs[pick][1];
+    const [startLine, endLine] = runs[pick];
+    let line = endLine;
+    let atLineStart = false;
+    const rect = (holder.children[pick] as HTMLElement).getBoundingClientRect();
+    if (rect.height > 0 && endLine > startLine) {
+      const ratio = Math.min(1, Math.max(0, (y - rect.top) / rect.height));
+      if (ratio <= 0.25) {
+        // Top band of a multi-line run (e.g. right before a rendered fence):
+        // the caret goes to the START of the run's first line — "before ```".
+        line = startLine;
+        atLineStart = true;
+      } else {
+        line = startLine + Math.round(ratio * (endLine - startLine));
+      }
+    }
     let pos = 0;
-    for (let i = 0; i < endLine; i++) pos += lines[i].length + 1;
-    return pos + lines[endLine].length;
+    for (let i = 0; i < line; i++) pos += lines[i].length + 1;
+    return atLineStart ? pos : pos + lines[line].length;
   }
 
   /**

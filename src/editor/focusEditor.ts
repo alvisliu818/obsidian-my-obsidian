@@ -97,6 +97,21 @@ export function applyCursor(view: EditorView, pos: CursorPos): void {
 }
 
 /**
+ * Place the caret AND scroll it into view. After the static→raw-text swap
+ * the block's height collapses (rendered images/code become one line each),
+ * so a caret placed at the click's mapped position can sit far off-screen
+ * (usually above) — the "cursor disappears" effect. scrollIntoView keeps
+ * the caret on screen after every placement.
+ */
+export function applyCursorAndScroll(view: EditorView, pos: number): void {
+  const p = Math.max(0, Math.min(pos, view.state.doc.length));
+  view.dispatch({
+    selection: { anchor: p },
+    effects: EditorView.scrollIntoView(p, { y: 'center' }),
+  });
+}
+
+/**
  * Map a click coordinate (from the pre-focus static render) onto a CM6
  * position after mount; falls back to `fallback`.
  */
