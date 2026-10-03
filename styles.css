@@ -1571,6 +1571,19 @@ body.block-touch-dragging {
      aligns all lines at the pre's content edge. */
   display: block;
   padding: 0;
+  /* The UA stylesheet declares `code { font-family: monospace }` DIRECTLY on
+     the element, so the pre's pinned mono font never inherits in — and for a
+     generic-monospace element whose size is only inherited, Chromium applies
+     its fixed-font DEFAULT SIZE (13px) as the used size even though computed
+     font-size still reports the inherited 15px. A languageless code block
+     therefore rendered ~13px Consolas while the EDIT state rendered 15px
+     Cascadia — the user's "reading vs editing style differs" (languageful
+     blocks escaped via the theme's code[class*=language-] font rule).
+     Explicit declarations on the code element itself: beats the UA rule and
+     the size quirk in one go. */
+  font-family: inherit !important;
+  font-size: 1em !important;
+  line-height: inherit !important;
 }
 
 /* Theme interplay (user-visible under Blue Topaz + snippets, theme-agnostic):
