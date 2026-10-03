@@ -87,8 +87,8 @@
 /* ---------- Block row ---------- */
 .block-wrap {
   position: relative;
-  --lgp-content-pad: 3px; /* .block-content horizontal padding — tight
-                             dot-to-text gap, Logseq-style */
+  --lgp-content-pad: 5px; /* .block-content horizontal padding — the
+                             Logseq-ish dot-to-text gap */
 }
 
 .block-main {
