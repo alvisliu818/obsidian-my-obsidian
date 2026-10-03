@@ -1,11 +1,39 @@
+# ===== AI 助手工作区 =====
+# 运行时状态/临时文件不入库；memory/、.trae/、.workbuddy/ 里的经验文档保留跟踪
+.openclaw/
+.opencode/
+
+# ===== 桌面系统杂项 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== Node / 构建产物 =====
 node_modules/
 main.js
 *.log
 test-results/
 playwright-report/
-.openclaw/
-.workbuddy/
-.trae/
+blob-report/
+.playwright/
+.nyc_output/
+coverage/
+
+# ===== 依赖与本地配置 =====
+# .npmrc 保留跟踪（内容只有 legacy-peer-deps=true，无密钥）。
+# 如以后加了 registry token，请取消注释下一行：
+# .npmrc
+
+# ===== 一次性探针 / 截图 / 中间产物（e2e 调试残留） =====
+tests/e2e/_*
+tests/e2e/probe-*.mjs
+tests/e2e/verify-*.mjs
+tests/e2e/*.png
+
+# ===== 发布产物（由构建生成，不入库；README 已链接 DELIVERY） =====
+delivery/
+
+# ===== 测试夹具内可再生内容 =====
 tests/fixtures/edge-vault/.obsidian/workspace.json
 tests/fixtures/edge-vault/.logseq-editor/
 tests/fixtures/edge-vault/.obsidian/plugins/obsidian-logseq/main.js
