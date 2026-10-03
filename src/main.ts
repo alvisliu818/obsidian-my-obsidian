@@ -48,9 +48,10 @@ interface LogseqBlockView {
 	getViewType(): string;
 	/** 聚焦某块（光标落进去）——面包屑路径随之截断到该级 */
 	focusBlock?: (b: LgBlockLike, pos?: number | string) => void;
-	/** 聚焦并滚动到该块（obsidian-logseq 新 API；虚拟滚动下深层块必须先扩容
-	 *  渲染再滚动，focusBlock 自己从不滚动——没有它时降级 focusBlock） */
-	revealAndFocus?: (b: LgBlockLike) => void;
+	/** 滚动到某块并高亮一下，不进入编辑状态（obsidian-logseq 新 API，接受块
+	 *  对象或块 id；虚拟滚动下深层块必须先扩容渲染再滚动）。旧构建没有它时
+	 *  降级 focusBlock（旧行为：聚焦但不滚动） */
+	revealBlock?: (target: LgBlockLike | string) => void;
 	/** 缩放到某块（null = 回到页面根） */
 	zoomTo?: (b: LgBlockLike | null) => void;
 }
@@ -351,11 +352,11 @@ export default class BreadcrumbNavPlugin extends Plugin {
 		return c.getViewType?.() === LOGSEQ_VIEW_TYPE && !!c.contentEl;
 	}
 
-	/** logseq 面包屑/菜单的统一跳转：优先 revealAndFocus（聚焦 + 滚动到该块，
-	 *  虚拟滚动下深层块必须先扩容渲染再滚动，focusBlock 自己从不滚动）；
-	 *  旧 obsidian-logseq 构建没有该方法时降级 focusBlock（只聚焦不滚动）。 */
+	/** logseq 面包屑/菜单的统一跳转：优先 revealBlock（只滚动 + 高亮，不进编辑；
+	 *  虚拟滚动下深层块由视图侧扩容渲染、落点顶对齐、稳定后二次校正）；
+	 *  旧 obsidian-logseq 构建没有该方法时降级 focusBlock（旧行为）。 */
 	private focusLgBlock(view: LogseqBlockView, b: LgBlockLike): void {
-		if (typeof view.revealAndFocus === "function") view.revealAndFocus(b);
+		if (typeof view.revealBlock === "function") view.revealBlock(b);
 		else view.focusBlock?.(b);
 	}
 
