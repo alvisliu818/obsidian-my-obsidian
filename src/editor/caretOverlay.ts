@@ -58,7 +58,8 @@ function paint(view: EditorView): void {
   }
   const el = ensureOverlay();
   el.style.display = 'block';
-  el.style.left = `${coords.left - 0.5}px`;
+  // 1.2px bar (matches the native drawn cursor width), centered on the caret x.
+  el.style.left = `${coords.left - 0.6}px`;
   el.style.top = `${coords.top}px`;
   el.style.height = `${Math.max(coords.bottom - coords.top, 12)}px`;
 }
@@ -84,22 +85,35 @@ function startLoop(view: EditorView): void {
 }
 
 export function caretOverlay(): Extension {
-  return ViewPlugin.fromClass(
-    class {
-      view: EditorView;
-      constructor(view: EditorView) {
-        this.view = view;
-        if (view.hasFocus) startLoop(view);
-      }
-      update(u: ViewUpdate) {
-        if (u.focusChanged || u.selectionSet || u.docChanged || u.viewportChanged) {
-          if (u.view.hasFocus) startLoop(u.view);
-          else if (activeView === u.view) hide();
+  return [
+    // Single-caret-source rule: the overlay bar is the ONLY caret our editors
+    // show. CM's own drawn cursor (drawSelection .cm-cursor) is a second,
+    // non-blinking bar at the same spot (Obsidian's CSS strips its blink
+    // animation), and the native contentEditable caret paints only in some
+    // contexts — both make the blink look uneven across blocks. The theme
+    // rides on this extension, so every editor that opts into the overlay
+    // (outline + embed) hides the other sources automatically.
+    EditorView.theme({
+      '.cm-cursor': { display: 'none !important' },
+      '&.cm-focused .cm-content, &.cm-focused .cm-line': { caretColor: 'transparent !important' },
+    }),
+    ViewPlugin.fromClass(
+      class {
+        view: EditorView;
+        constructor(view: EditorView) {
+          this.view = view;
+          if (view.hasFocus) startLoop(view);
         }
-      }
-      destroy() {
-        if (activeView === this.view) hide();
-      }
-    },
-  );
+        update(u: ViewUpdate) {
+          if (u.focusChanged || u.selectionSet || u.docChanged || u.viewportChanged) {
+            if (u.view.hasFocus) startLoop(u.view);
+            else if (activeView === u.view) hide();
+          }
+        }
+        destroy() {
+          if (activeView === this.view) hide();
+        }
+      },
+    ),
+  ];
 }

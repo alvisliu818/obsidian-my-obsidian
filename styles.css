@@ -86,6 +86,18 @@
      scoped to .markdown-source-view, which this tree is not — without this
      the outline fell back to the INTERFACE font chain. */
   font-family: var(--font-text);
+  /* Native text parity (same two gaps vs the native editor, same cause —
+     theme rules scoped to .markdown-source-view that this tree never
+     matches):
+     - size: the native editor renders at --font-text-size (16px here); this
+       tree inherited the BODY size (15px) — smaller glyphs rasterize with
+       visibly thinner strokes.
+     - smoothing: Blue Topaz applies subpixel-antialiased to the native
+       cm-scroller; the default `auto` here renders grayscale-lighter.
+     Together they made the outline text look a whole weight step lighter
+     than the native editor's at the same numeric font-weight. */
+  font-size: var(--font-text-size, 1em);
+  -webkit-font-smoothing: subpixel-antialiased;
 }
 
 /* ---------- Block row ---------- */
@@ -347,12 +359,21 @@
    page (native-caret look), light over a dark glyph stroke — visible at a
    line start, where the native 1px caret hides inside the first glyph. */
 .lgp-caret-overlay {
-  width: 1px;
+  /* position:fixed is REQUIRED — the JS positions via left/top (viewport
+     coords from coordsAtPos); on a static element those are ignored and the
+     bar would sit invisible at the end of <body>. */
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1.2px;
   background: #fff;
   mix-blend-mode: difference;
   pointer-events: none;
   z-index: 99;
-  animation: lgp-caret-blink 1.06s steps(1) infinite;
+  /* 1.2s = CM6's own cursorBlinkRate (native-editor parity, and a touch
+     slower than the old 1.06s per user request). One rate everywhere: the
+     overlay is the single caret source (see caretOverlay.ts theme). */
+  animation: lgp-caret-blink 1.2s steps(1) infinite;
 }
 
 @keyframes lgp-caret-blink {
@@ -370,12 +391,13 @@
      render (reading line-height 1.55 == cm-line), otherwise every block
      jumps 4px when entering edit mode */
   padding: 0;
-  /* !important: Obsidian's own CM theme forces caret-color transparent on
-     .cm-content (its editors draw a custom caret widget that never renders
-     in this plugin's context) — without the override the outline editor has
-     NO visible caret at all, glaringly so on an EMPTY list item. Color =
-     Obsidian's own caret variable, matching the native editor's caret. */
-  caret-color: var(--caret-color, var(--text-normal)) !important;
+  /* The JS caret overlay (src/editor/caretOverlay.ts) is the single caret
+     source: keep the native contentEditable caret transparent everywhere —
+     it painted only in some contexts (never on an empty item), which made
+     the blink look uneven across blocks. Obsidian's own CM theme already
+     forces transparent on .cm-content; the !important just stops older
+     overrides from resurrecting it. */
+  caret-color: transparent !important;
 }
 
 .block-content .cm-line {
