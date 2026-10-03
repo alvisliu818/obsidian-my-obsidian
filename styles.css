@@ -2157,31 +2157,45 @@ body.block-touch-dragging {
 }
 
 .lgp-code-editing .cm-editor {
-  font-family: var(--font-monospace);
+  /* !important on every text/box declaration: the user's vault showed a
+     session state where the BOX kept its background while the CODE TEXT fell
+     back to the body font + natural line-height — the font/line-height lost
+     while background survived. Only order-dependent overrides can split one
+     rule apart like that (CM's runtime StyleModule mounts generated sheets
+     into document.adoptedStyleSheets, which sort AFTER every normal sheet),
+     so the edit state is pinned exactly like the reading pre above. */
+  font-family: var(--font-monospace) !important;
   /* Same size & line box as the reading view's pre code (1em/1.5), so the
      text does not shift when the block flips between states. */
-  font-size: 1em;
-  line-height: 1.5;
+  font-size: 1em !important;
+  line-height: 1.5 !important;
   /* Same box as the reading view's pre: theme code background, radius on the
      bottom only (the toolbar sits above, like .lgp-code-block pre). */
-  background: var(--code-background, var(--background-secondary));
-  border-radius: 0 0 var(--code-radius, 6px) var(--code-radius, 6px);
+  background: var(--code-background, var(--background-secondary)) !important;
+  border-radius: 0 0 var(--code-radius, 6px) var(--code-radius, 6px) !important;
+}
+
+.lgp-code-editing .cm-scroller {
+  /* Direct inherit pins on the chain: a declaration on a nearer ancestor
+     beats an inherited value from .cm-editor, so every level carries its own
+     — no runtime sheet can make the text inherit past the mono font. */
+  font-family: inherit !important;
+  line-height: inherit !important;
+  overflow: auto;
 }
 
 .lgp-code-editing .cm-content {
   /* 0.4em 0.9em — identical to the reading pre's padding, so the first
      glyph keeps its x position when the block flips between states. */
-  padding: 0.4em 0.9em;
-  white-space: pre;
+  padding: 0.4em 0.9em !important;
+  white-space: pre !important;
+  font-family: inherit !important;
+  line-height: inherit !important;
   caret-color: var(--text-accent);
 }
 
 .lgp-code-editing .cm-line {
   padding: 0;
-}
-
-.lgp-code-editing .cm-scroller {
-  overflow: auto;
 }
 
 .lgp-code-edit-hint {
