@@ -78,14 +78,17 @@
   /* Room for the depth-0 fold carets: they float LEFT of the bullet column
      (Logseq keeps them in the page margin — no layout space). */
   padding-left: 16px;
+  /* The bullet/controls column width — defined HERE so the add-block row
+     (a sibling of the wraps, outside any .block-wrap) inherits it too;
+     its line/plus anchor with the same var as the guide line. */
+  --lgp-controls-w: 16px;
 }
 
 /* ---------- Block row ---------- */
 .block-wrap {
   position: relative;
-  --lgp-controls-w: 16px; /* bullet/controls column — the fold caret floats
-                             OUTSIDE this column, over the left margin */
-  --lgp-content-pad: 6px; /* .block-content horizontal padding */
+  --lgp-content-pad: 3px; /* .block-content horizontal padding — tight
+                             dot-to-text gap, Logseq-style */
 }
 
 .block-main {
@@ -157,6 +160,7 @@
 
 /* bullet */
 .block-bullet {
+  position: relative; /* anchors the invisible touch-area extension */
   width: 16px;
   height: 16px;
   display: flex;
@@ -164,6 +168,18 @@
   justify-content: center;
   cursor: pointer;
   border-radius: 50%;
+}
+
+/* invisible tap-area extension: bigger touch target WITHOUT widening the box
+   — the dot must stay centered in the 16px column (the guide line and the
+   add-block plus anchor to that exact center) */
+.block-bullet::after {
+  content: '';
+  position: absolute;
+  top: -6px;
+  bottom: -6px;
+  left: -4px;
+  right: -4px;
 }
 
 .block-bullet::before {
@@ -1311,16 +1327,17 @@ body.block-touch-dragging {
     flex: 0 0 auto;
   }
 
-  /* Bigger touch targets on the block controls: bullet column widens a step,
-     the floating caret (still OUTSIDE the column) widens to match. */
-  .block-controls {
+  /* Bigger touch targets on the block controls: the CARET widens (it floats
+     in the margin), the bullet keeps its 16px box — the dot must stay
+     centered in the column the guide line and add-block plus anchor to —
+     and gains tap room via its invisible ::after extension instead. */
+  .block-caret {
+    min-height: 32px;
     min-width: 24px;
   }
 
-  .block-caret,
   .block-bullet {
     min-height: 32px;
-    min-width: 24px;
   }
 
   /* the enlarged floating caret sits fully left of the bullet column */
