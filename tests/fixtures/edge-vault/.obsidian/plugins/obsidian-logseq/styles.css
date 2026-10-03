@@ -82,6 +82,10 @@
      (a sibling of the wraps, outside any .block-wrap) inherits it too;
      its line/plus anchor with the same var as the guide line. */
   --lgp-controls-w: 16px;
+  /* The native editor's document font: the app's var(--font-text) rule is
+     scoped to .markdown-source-view, which this tree is not — without this
+     the outline fell back to the INTERFACE font chain. */
+  font-family: var(--font-text);
 }
 
 /* ---------- Block row ---------- */
@@ -334,23 +338,20 @@
   user-select: text;
 }
 
-/* Empty editing line: draw the caret ourselves. The browser's native caret
-   does not paint here at all (Obsidian's transparent-caret theme + the
-   user-select:none ancestor chain, even with both overridden) — the accent
-   bar below is a real DOM element, blinking via CSS. Only matches a truly
-   empty line (its sole child is the <br> CM renders for empty docs). */
-.block-content.is-editing .cm-line:has(> br:only-child) {
-  position: relative;
-}
+/* Empty editing line caret: superseded by the JS caret overlay
+   (src/editor/caretOverlay.ts) — one bar for ALL positions (empty lines,
+   line starts, mid-line), drawn above the glyphs so it stays visible. */
 
-.block-content.is-editing .cm-line:has(> br:only-child)::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 3px;
-  bottom: 3px;
-  width: 0;
-  border-left: 1.5px solid var(--text-accent);
+/* The caret overlay bar (positioned by src/editor/caretOverlay.ts). White +
+   difference blend = the exact inverse of what's behind it: dark over the
+   page (native-caret look), light over a dark glyph stroke — visible at a
+   line start, where the native 1px caret hides inside the first glyph. */
+.lgp-caret-overlay {
+  width: 1px;
+  background: #fff;
+  mix-blend-mode: difference;
+  pointer-events: none;
+  z-index: 99;
   animation: lgp-caret-blink 1.06s steps(1) infinite;
 }
 
@@ -372,8 +373,9 @@
   /* !important: Obsidian's own CM theme forces caret-color transparent on
      .cm-content (its editors draw a custom caret widget that never renders
      in this plugin's context) — without the override the outline editor has
-     NO visible caret at all, glaringly so on an EMPTY list item. */
-  caret-color: var(--text-accent) !important;
+     NO visible caret at all, glaringly so on an EMPTY list item. Color =
+     Obsidian's own caret variable, matching the native editor's caret. */
+  caret-color: var(--caret-color, var(--text-normal)) !important;
 }
 
 .block-content .cm-line {

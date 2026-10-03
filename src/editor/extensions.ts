@@ -20,6 +20,7 @@ import {
   type ViewUpdate,
 } from '@codemirror/view';
 import { EditorState, Prec, RangeSetBuilder, type Extension } from '@codemirror/state';
+import { caretOverlay } from './caretOverlay';
 import { defaultKeymap, history, historyKeymap, insertNewline } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { syntaxHighlighting, defaultHighlightStyle, indentUnit } from '@codemirror/language';
@@ -230,6 +231,7 @@ export function createEmbedExtensions(
     history(),
     drawSelection(),
     dropCursor(),
+    caretOverlay(),
     markdown({ base: markdownLanguage, addKeymap: false, extensions: [mathSyntax()] }),
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     propLineHighlighter,
@@ -270,6 +272,7 @@ export function createEditorExtensions(host: BlockEditorView, block?: Block): Ex
     history(),
     drawSelection(),
     dropCursor(),
+    caretOverlay(),
     EditorState.allowMultipleSelections.of(true),
     rectangularSelection(),
     crosshairCursor(),
