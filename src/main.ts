@@ -48,6 +48,9 @@ interface LogseqBlockView {
 	getViewType(): string;
 	/** 聚焦某块（光标落进去）——面包屑路径随之截断到该级 */
 	focusBlock?: (b: LgBlockLike, pos?: number | string) => void;
+	/** 聚焦并滚动到该块（obsidian-logseq 新 API；虚拟滚动下深层块必须先扩容
+	 *  渲染再滚动，focusBlock 自己从不滚动——没有它时降级 focusBlock） */
+	revealAndFocus?: (b: LgBlockLike) => void;
 	/** 缩放到某块（null = 回到页面根） */
 	zoomTo?: (b: LgBlockLike | null) => void;
 }
@@ -348,6 +351,14 @@ export default class BreadcrumbNavPlugin extends Plugin {
 		return c.getViewType?.() === LOGSEQ_VIEW_TYPE && !!c.contentEl;
 	}
 
+	/** logseq 面包屑/菜单的统一跳转：优先 revealAndFocus（聚焦 + 滚动到该块，
+	 *  虚拟滚动下深层块必须先扩容渲染再滚动，focusBlock 自己从不滚动）；
+	 *  旧 obsidian-logseq 构建没有该方法时降级 focusBlock（只聚焦不滚动）。 */
+	private focusLgBlock(view: LogseqBlockView, b: LgBlockLike): void {
+		if (typeof view.revealAndFocus === "function") view.revealAndFocus(b);
+		else view.focusBlock?.(b);
+	}
+
 	private renderBar(view: BarView, isActive: boolean): void {
 		if (this.isLogseqView(view)) {
 			this.renderLogseqBar(view, isActive);
@@ -535,7 +546,7 @@ export default class BreadcrumbNavPlugin extends Plugin {
 			// 点击某一级：聚焦该块，路径截短到该级
 			el.addEventListener("click", () => {
 				this.closePopups();
-				view.focusBlock?.(b);
+				this.focusLgBlock(view, b);
 				this.scheduleRefresh(0);
 			});
 			if (this.settings.enableSiblingsMenu) {
@@ -596,12 +607,12 @@ export default class BreadcrumbNavPlugin extends Plugin {
 				hasChildren: b.children.length > 0,
 				onSelect: () => {
 					this.closePopups();
-					view.focusBlock?.(b);
+					this.focusLgBlock(view, b);
 					this.scheduleRefresh(0);
 				},
 				onDrill: () => {
 					this.closePopups();
-					view.focusBlock?.(b);
+					this.focusLgBlock(view, b);
 					void (async () => {
 						await this.refresh();
 						if (this.nextIconEl && this.nextEntriesProvider) {
