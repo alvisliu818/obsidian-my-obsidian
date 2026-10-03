@@ -326,6 +326,14 @@
   outline: none;
 }
 
+/* Editing blocks must be text-selectable: an ancestor user-select:none (the
+   theme/app layer sets it across the workspace) suppresses the caret PAINTING
+   in the focused empty editor — the caret-color override alone is not enough
+   on an EMPTY item (nothing selectable = nothing to draw the caret at). */
+.block-content.is-editing {
+  user-select: text;
+}
+
 .block-content .cm-scroller {
   font-family: inherit;
   line-height: inherit;
@@ -336,7 +344,11 @@
      render (reading line-height 1.55 == cm-line), otherwise every block
      jumps 4px when entering edit mode */
   padding: 0;
-  caret-color: var(--text-accent);
+  /* !important: Obsidian's own CM theme forces caret-color transparent on
+     .cm-content (its editors draw a custom caret widget that never renders
+     in this plugin's context) — without the override the outline editor has
+     NO visible caret at all, glaringly so on an EMPTY list item. */
+  caret-color: var(--text-accent) !important;
 }
 
 .block-content .cm-line {
