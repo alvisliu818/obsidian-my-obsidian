@@ -1602,9 +1602,15 @@ ${content}`;
     this.app.workspace.openLinkText(linktext, this.file?.path ?? '', false);
   }
 
-  /** Scroll to a block (by id) and flash-highlight it. Used by ((ref)) navigation. */
-  revealBlock(id: string): void {
-    const b = findBlockById(this.doc.blocks, id);
+  /**
+   * Scroll to a block and flash-highlight it, WITHOUT entering edit mode.
+   * Used by ((ref)) navigation (block id), the outline/search jumps and
+   * breadcrumb clicks (Block object — most blocks carry no id). Navigation
+   * must never force the editor open (focusBlock both edits and never
+   * scrolls — the breadcrumb "click twice, nothing scrolls" report).
+   */
+  revealBlock(target: string | Block): void {
+    const b = typeof target === 'string' ? findBlockById(this.doc.blocks, target) : target;
     if (!b) return;
     this.makeBlockRenderable(b);
     this.ensureCapFor(b);
@@ -1614,6 +1620,10 @@ ${content}`;
     if (!el) return;
     el.addClass('block-revealed');
     window.setTimeout(() => el.removeClass('block-revealed'), 1600);
+    // The sync render leaves async static content (markdown, images) still
+    // growing — re-land once it settles or a beyond-cap target drifts away
+    // (the "second click finally scrolls" symptom).
+    window.setTimeout(() => this.scrollBlockTopIntoView(b), 350);
   }
 
   /**
@@ -1643,18 +1653,6 @@ ${content}`;
       this.zoomedBlock = null;
       this.render();
     }
-  }
-
-  /**
-   * Breadcrumb / outline navigation: focus the block AND scroll it into view.
-   * focusBlock() alone never scrolls — a target beyond the virtual-scroll cap
-   * (or inside a collapsed subtree) re-renders far off-screen and nothing
-   * visibly moves, which is exactly the "breadcrumb click doesn't jump" report.
-   */
-  revealAndFocus(b: Block): void {
-    this.makeBlockRenderable(b);
-    this.focusBlock(b, 'end');
-    this.scrollBlockTopIntoView(b);
   }
 
   autocompleteSources(embed = false): CompletionSource[] {
