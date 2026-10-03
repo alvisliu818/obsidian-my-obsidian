@@ -1606,16 +1606,7 @@ ${content}`;
   revealBlock(id: string): void {
     const b = findBlockById(this.doc.blocks, id);
     if (!b) return;
-    // Unfold ancestors so the block is visible.
-    let p = b.parent;
-    while (p) {
-      setCollapsed(p, false);
-      p = p.parent;
-    }
-    // Leave zoom mode if the block lives outside the zoomed subtree.
-    if (this.zoomedBlock && !isDescendant(this.zoomedBlock, b)) {
-      this.zoomedBlock = null;
-    }
+    this.makeBlockRenderable(b);
     this.ensureCapFor(b);
     this.render();
     const el = findBlockEl(b);
@@ -1623,6 +1614,34 @@ ${content}`;
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     el.addClass('block-revealed');
     window.setTimeout(() => el.removeClass('block-revealed'), 1600);
+  }
+
+  /** Uncollapse ancestors and leave zoom so `b` can render. A collapsed
+   *  ancestor hides `b` from flattenVisible, so ensureCapFor would never grow
+   *  the cap for it and focusBlock would silently do nothing visible. */
+  private makeBlockRenderable(b: Block): void {
+    let p = b.parent;
+    while (p) {
+      setCollapsed(p, false);
+      p = p.parent;
+    }
+    if (this.zoomedBlock && !isDescendant(this.zoomedBlock, b)) {
+      this.zoomedBlock = null;
+      this.render();
+    }
+  }
+
+  /**
+   * Breadcrumb / outline navigation: focus the block AND scroll it into view.
+   * focusBlock() alone never scrolls — a target beyond the virtual-scroll cap
+   * (or inside a collapsed subtree) re-renders far off-screen and nothing
+   * visibly moves, which is exactly the "breadcrumb click doesn't jump" report.
+   */
+  revealAndFocus(b: Block): void {
+    this.makeBlockRenderable(b);
+    this.focusBlock(b, 'end');
+    const el = findBlockEl(b);
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
   autocompleteSources(embed = false): CompletionSource[] {
