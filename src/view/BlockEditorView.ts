@@ -43,7 +43,7 @@ import {
   rerenderEmbedRow,
   type EmbedSource,
 } from '../features/links';
-import { collapseLevels, expandLevels, toggleCollapse } from '../interactions/collapse';
+import { collapseLevels, expandLevels, isSubtreeFullyFolded, toggleCollapse } from '../interactions/collapse';
 import { isCollapsed } from '../types';
 import { breadcrumbFor, restoreZoomed, visibleRootsFor, zoomId } from '../interactions/zoom';
 import { attachDnd } from '../interactions/dnd';
@@ -1382,14 +1382,19 @@ ${content}`;
    *  clicked block itself is not folded). Depths come from the settings
    *  (`guideLineCollapseLevels` / `guideLineExpandLevels`, 0 = all levels). */
   toggleCollapseGuide(b: Block): void {
-    const expanding = isCollapsed(b) || b.children.some((c) => isCollapsed(c));
+    // Guide-line toggle (user spec): NOT fully folded → click folds the whole
+    // subtree; FULLY folded → click expands the whole subtree. Both actions
+    // are all-levels regardless of the fold-depth settings — with a depth-1
+    // setting the state test and the action magnitudes dead-ended each other
+    // (fold 1 → still not fully folded → fold 1 was a no-op: the line stuck).
+    const expanding = isSubtreeFullyFolded(b);
     this.mutate(
       () => {
         if (expanding) {
           if (isCollapsed(b)) setCollapsed(b, false); // stub click on a folded block
-          expandLevels(b, this.plugin.settings.guideLineExpandLevels);
+          expandLevels(b, 0);
         } else {
-          collapseLevels(b, this.plugin.settings.guideLineCollapseLevels);
+          collapseLevels(b, 0);
         }
       },
       () => ({ subtree: b }),

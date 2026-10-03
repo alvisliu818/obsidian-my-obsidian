@@ -4,7 +4,20 @@
  */
 
 import type { Block } from '../types';
-import { setCollapsed } from '../types';
+import { isCollapsed, setCollapsed } from '../types';
+
+/**
+ * True when EVERY level of b's subtree is folded (all children and deeper
+ * descendants carry the collapsed state). The guide-line toggle expands only
+ * a fully folded subtree; any unfolded level means the click folds instead.
+ * Childless blocks are vacuously folded — collapseLevels never sets the flag
+ * on them (nothing to hide), so requiring it here would jam the toggle.
+ */
+export function isSubtreeFullyFolded(b: Block): boolean {
+  return b.children.every(
+    (c) => c.children.length === 0 || (isCollapsed(c) && isSubtreeFullyFolded(c)),
+  );
+}
 
 export function toggleCollapse(b: Block): void {
   setCollapsed(b, b.props['collapsed'] !== 'true');
