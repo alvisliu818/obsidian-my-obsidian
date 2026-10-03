@@ -1609,11 +1609,25 @@ ${content}`;
     this.makeBlockRenderable(b);
     this.ensureCapFor(b);
     this.render();
+    this.scrollBlockTopIntoView(b);
     const el = findBlockEl(b);
     if (!el) return;
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     el.addClass('block-revealed');
     window.setTimeout(() => el.removeClass('block-revealed'), 1600);
+  }
+
+  /**
+   * Scroll the scroller so `b`'s wrap top sits just below the sticky breadcrumb
+   * bar. scrollIntoView(block:'center') centers the ELEMENT — a block whose
+   * subtree wrap is thousands of px tall would land its TOP far above the
+   * viewport, leaving the focused editor invisible (the breadcrumb-jump bug).
+   */
+  private scrollBlockTopIntoView(b: Block): void {
+    const el = findBlockEl(b);
+    if (!el) return;
+    const sc = el.closest('.block-editor-scroller') ?? this.contentEl;
+    const top = el.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop;
+    sc.scrollTop = top - 48;
   }
 
   /** Uncollapse ancestors and leave zoom so `b` can render. A collapsed
@@ -1640,8 +1654,7 @@ ${content}`;
   revealAndFocus(b: Block): void {
     this.makeBlockRenderable(b);
     this.focusBlock(b, 'end');
-    const el = findBlockEl(b);
-    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    this.scrollBlockTopIntoView(b);
   }
 
   autocompleteSources(embed = false): CompletionSource[] {
