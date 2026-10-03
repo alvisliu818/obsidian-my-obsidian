@@ -109,7 +109,11 @@
 
 /* collapse caret — floats over the LEFT MARGIN (outside the bullet column,
    takes no layout space, Logseq-style) and is revealed by row hover only;
-   a COLLAPSED block is signalled by the gray halo on its bullet instead. */
+   a COLLAPSED block is signalled by the gray halo on its bullet instead.
+   Hidden state = opacity 0 with visibility kept: the invisible caret stays
+   hit-testable, so hovering its margin zone reveals it directly (previously
+   visibility:hidden made the zone dead — the caret only appeared once the
+   pointer reached the content). */
 .block-caret {
   position: absolute;
   top: 50%;
@@ -124,15 +128,13 @@
   color: var(--text-faint);
   border-radius: 4px;
   opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.1s ease, visibility 0.1s ease;
+  transition: opacity 0.1s ease;
 }
 
 .block-main:hover .block-caret,
 .embed-main:hover .block-caret,
 .block-caret:hover {
   opacity: 1;
-  visibility: visible;
 }
 
 /* touch devices have no hover: keep the floating caret always visible */
