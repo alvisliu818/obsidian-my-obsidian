@@ -75,12 +75,16 @@
    stay part of the scrollable page and can be scrolled to the very bottom. */
 .block-editor-tree {
   padding-bottom: 45vh;
+  /* Room for the depth-0 fold carets: they float LEFT of the bullet column
+     (Logseq keeps them in the page margin — no layout space). */
+  padding-left: 16px;
 }
 
 /* ---------- Block row ---------- */
 .block-wrap {
   position: relative;
-  --lgp-controls-w: 32px; /* bullet/controls column */
+  --lgp-controls-w: 16px; /* bullet/controls column — the fold caret floats
+                             OUTSIDE this column, over the left margin */
   --lgp-content-pad: 6px; /* .block-content horizontal padding */
 }
 
@@ -100,13 +104,13 @@
   user-select: none;
 }
 
-/* collapse caret — floats over a reserved slot (takes no layout space) and is
-   revealed by row hover; collapsed blocks keep it visible so the folded state
-   stays discoverable */
+/* collapse caret — floats over the LEFT MARGIN (outside the bullet column,
+   takes no layout space, Logseq-style) and is revealed by row hover only;
+   a COLLAPSED block is signalled by the gray halo on its bullet instead. */
 .block-caret {
   position: absolute;
   top: 50%;
-  left: 0;
+  left: -16px;
   transform: translateY(-50%);
   width: 16px;
   height: 16px;
@@ -123,7 +127,6 @@
 
 .block-main:hover .block-caret,
 .embed-main:hover .block-caret,
-.block-caret.is-collapsed,
 .block-caret:hover {
   opacity: 1;
   visibility: visible;
@@ -177,12 +180,11 @@
   background: color-mix(in srgb, var(--text-normal) 40%, transparent);
 }
 
-/* reserved slot where the floating caret appears on hover (keeps the bullet
-   column aligned across sibling rows) */
-.block-caret-spacer {
-  width: 16px;
-  height: 16px;
-  flex: none;
+/* COLLAPSED block: Logseq's folded indicator — a light gray circular halo
+   around the dot (no persistent caret; the caret stays hover-only). */
+.block-wrap.is-collapsed .block-bullet::before,
+.embed-row.is-collapsed .block-bullet::before {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--text-normal) 9%, transparent);
 }
 
 /* ---------- Block content ---------- */
@@ -708,7 +710,7 @@
   align-items: center;
   flex: none;
   height: 1.55em;
-  width: 32px;
+  width: 16px; /* bullet only — the caret floats over the left margin */
   user-select: none;
 }
 
@@ -1309,9 +1311,10 @@ body.block-touch-dragging {
     flex: 0 0 auto;
   }
 
-  /* Bigger touch targets on the block controls. */
+  /* Bigger touch targets on the block controls: bullet column widens a step,
+     the floating caret (still OUTSIDE the column) widens to match. */
   .block-controls {
-    min-width: 40px;
+    min-width: 24px;
   }
 
   .block-caret,
@@ -1320,10 +1323,9 @@ body.block-touch-dragging {
     min-width: 24px;
   }
 
-  /* the enlarged floating caret would reach 8px into the bullet zone —
-     nudge it left to keep the two controls visually separate */
+  /* the enlarged floating caret sits fully left of the bullet column */
   .block-main .block-caret {
-    left: -4px;
+    left: -24px;
   }
 }
 

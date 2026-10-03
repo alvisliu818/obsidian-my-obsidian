@@ -171,11 +171,11 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
   const controls = main.createEl('div', { cls: 'block-controls' });
   if (b.kind === 'list') {
     controls.setAttribute('draggable', 'true'); // block drag handle zone
-    // Reserved slot where the floating caret appears (kept in flow so the
-    // bullet column aligns across sibling rows; the caret itself floats).
-    controls.createEl('div', { cls: 'block-caret-spacer' });
     if (b.children.length > 0) {
       const collapsed = b.props['collapsed'] === 'true';
+      // Collapsed state lives on the wrap (the bullet draws the gray halo);
+      // the caret itself is hover-only, floating in the left margin.
+      if (collapsed) wrap.addClass('is-collapsed');
       const caret = controls.createEl('div', {
         cls: 'block-caret' + (collapsed ? ' is-collapsed' : ''),
       });
@@ -197,8 +197,6 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
       // Single click = focus (zoom) the block; collapsing lives on the caret.
       host.zoomIn(b);
     });
-  } else {
-    controls.createEl('div', { cls: 'block-caret-spacer' });
   }
 
   // --- marker checkbox ---

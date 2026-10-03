@@ -459,6 +459,7 @@ function renderEmbedRow(
   const hasKids = b.children.length > 0;
   const collapsed = embedCollapsed.has(b);
   if (hasKids) {
+    if (collapsed) row.addClass('is-collapsed');
     const caret = controls.createEl('div', {
       cls: 'block-caret' + (collapsed ? ' is-collapsed' : ''),
     });
@@ -469,8 +470,6 @@ function renderEmbedRow(
       else embedCollapsed.add(b);
       rerenderEmbedRow(row, src, path, host);
     });
-  } else {
-    controls.createEl('div', { cls: 'block-caret-spacer' });
   }
   controls.createEl('div', { cls: 'block-bullet' });
 
