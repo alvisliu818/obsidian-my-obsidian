@@ -1168,7 +1168,13 @@
   border-color: var(--theme-color, var(--blockquote-border-color, var(--background-modifier-border)));
   border-radius: var(--radius-s, 4px);
   padding: 0.5em 0.5em 0.5em 0.6em;
-  margin-inline: 2.5%;
+  margin-inline: 0;
+}
+
+/* A quote block whose content is only `>` markers renders a zero-height
+   blockquote — invisible. Give it a row so the empty quote shows its bar. */
+.block-content blockquote:not(:has(*)) {
+  min-height: 1.4em;
 }
 
 .block-content blockquote > :first-child {
