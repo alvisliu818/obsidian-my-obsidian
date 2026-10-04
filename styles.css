@@ -1547,7 +1547,12 @@ body.block-touch-dragging {
 
 /* ---------- Native properties editor mounted in the page-props block
    (setting: pagePropsEditor = native). The component brings its own styles;
-   only fit it to the block content column. ---------- */
+   the row drops its outline chrome so it reads like the native page
+   properties: no bullet column, container across the full content width. ---------- */
+.block-native-props .block-controls {
+  display: none;
+}
+
 .block-content .metadata-container {
   width: 100%;
 }

@@ -72,8 +72,11 @@ Settings → **Logseq Editor**:
 | Operation log | on | Append trail to `.logseq-editor/log.jsonl` (rotates at 256 KB) |
 | Journal folder / format / template | — | Daily-note location, date format (YYYY-MM-DD tokens), new-file template |
 | Custom template variables | — | `name = value` lines, usable as `<% name %>` |
+| Page properties editor | Logseq | How the page-properties block is edited in the outline: Logseq `key:: value` text, or Obsidian's native properties UI (with its property type widgets and property plugins). The file format never changes either way |
 
 **Per-page default editor**: a page property overrides the take-over decision for that one document — `editor:: logseq` opens it in the block editor, `editor:: native` keeps it in the native editor. Write it as file-top Logseq page properties or as frontmatter (`editor: native`); key and value are case-insensitive, any other value is ignored. `logseq` works even with take-over off (per-page opt-in), `native` works even inside included folders (per-page opt-out). The property only sets the DEFAULT: the status-bar mode menu, the toggle commands and the ribbon still switch either way. Edits to the property take effect the next time the file is opened.
+
+The status-bar mode chip switches between **Logseq editor**, **Page source mode** (Obsidian's own native source mode — the whole file as raw markdown) and **Native editor**.
 
 Settings persist in `data.json` (sanitize-guarded) and survive reloads/restarts (E2E-verified).
 

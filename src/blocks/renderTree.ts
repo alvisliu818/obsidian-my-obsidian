@@ -165,11 +165,18 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
   blockElMap.set(b, wrap);
   blockOfEl.set(wrap, b);
 
+  // Native properties editor for the props block: the row drops its outline
+  // chrome (no bullet, no drag handle) — the container renders exactly like
+  // the native page properties.
+  const nativeProps =
+    isPropsBlock(b, host) && host.plugin.settings.pagePropsEditor === 'native';
+  if (nativeProps) wrap.classList.add('block-native-props');
+
   const main = wrap.createEl('div', { cls: 'block-main' });
 
   // --- controls ---
   const controls = main.createEl('div', { cls: 'block-controls' });
-  if (b.kind === 'list') {
+  if (b.kind === 'list' && !nativeProps) {
     controls.setAttribute('draggable', 'true'); // block drag handle zone
     if (b.children.length > 0) {
       const collapsed = b.props['collapsed'] === 'true';
@@ -228,7 +235,7 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
     // setting picks it (falls back to the Logseq rendering until the native
     // component class resolves), otherwise the same `key:: value` lines the
     // editor shows, so both states look alike.
-    if (!(host.plugin.settings.pagePropsEditor === 'native' && host.nativePropsEditorFor(content, b))) {
+    if (!(nativeProps && host.nativePropsEditorFor(content, b))) {
       renderPropsAsContent(content, b, host);
     }
   } else {

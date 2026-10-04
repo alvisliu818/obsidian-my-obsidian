@@ -941,7 +941,9 @@ ${content}`;
    */
   private saveNativePropsRecord(record: Record<string, unknown>): void {
     const b = this.doc.blocks[0];
-    if (!b || this.doc.blocks[0] !== b || !(b.kind === 'list' && b.text === '')) return;
+    // The page-props block: an empty-text props block (Logseq format) or the
+    // frontmatter block (its text is the YAML body).
+    if (!b || !(b.kind === 'list' && (b.text === '' || b.frontmatter === true))) return;
     if (Object.keys(record).length === 0) {
       // Every property was deleted: the props block goes away with them.
       this.teardownNativePropsEditor();
