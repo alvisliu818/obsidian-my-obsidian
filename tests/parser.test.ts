@@ -312,3 +312,30 @@ describe('serializeBlock', () => {
     expect(out).toBe('- parent\n\t- c1\n\t\t- g1\n\t- c2');
   });
 });
+
+describe('empty quote line is its own block', () => {
+  it('splits the trailing ">" off the quote block (Logseq: visible empty quote row)', () => {
+    const doc = parseDocument('> 示例代码：创建一个列表\n>');
+    expect(doc.blocks.map((b) => b.kind)).toEqual(['raw', 'raw']);
+    expect(doc.blocks[0].text).toBe('> 示例代码：创建一个列表');
+    expect(doc.blocks[1].text).toBe('>');
+  });
+
+  it('an empty quote between two quote lines separates them', () => {
+    const doc = parseDocument('> a\n>\n> b');
+    expect(doc.blocks.map((b) => b.text)).toEqual(['> a', '>', '> b']);
+  });
+
+  it('multi-line quotes still merge (no empty lines between)', () => {
+    const doc = parseDocument('> a\n> b');
+    expect(doc.blocks).toHaveLength(1);
+    expect(doc.blocks[0].text).toBe('> a\n> b');
+  });
+
+  it('round-trips: serialize(parse(x)) re-parses to the same model', () => {
+    const src = '- 使用 copy 模块\n> 示例代码：浅拷贝\n>\n\n```python\nx = 1\n```';
+    const doc = parseDocument(src);
+    const again = parseDocument(serializeDocument(doc));
+    expect(again.blocks.map((b) => [b.kind, b.text])).toEqual(doc.blocks.map((b) => [b.kind, b.text]));
+  });
+});

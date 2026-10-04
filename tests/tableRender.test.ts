@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { withTableSeparation } from '../src/blocks/renderTree';
+import { withTableSeparation, withQuoteRowSeparation } from '../src/blocks/renderTree';
 
 describe('withTableSeparation', () => {
   it('leaves text without pipe rows untouched', () => {
@@ -44,5 +44,27 @@ describe('withTableSeparation', () => {
   it('handles multiple tables in one block', () => {
     const t = 'one\n| a |\n| - |\ntwo\n| b |\n| - |';
     expect(withTableSeparation(t)).toBe('one\n\n| a |\n| - |\ntwo\n\n| b |\n| - |');
+  });
+});
+
+describe('withQuoteRowSeparation', () => {
+  it('splits a trailing lone ">" into its own visible empty blockquote', () => {
+    const src = '> 示例代码：浅拷贝\n>';
+    const out = withQuoteRowSeparation(src);
+    expect(out).toBe('> 示例代码：浅拷贝\n\n>');
+    // The empty blockquote then renders with no element children → CSS min-height.
+  });
+
+  it('separates mid-quote empty ">" lines', () => {
+    expect(withQuoteRowSeparation('> a\n>\n> b')).toBe('> a\n\n>\n> b');
+  });
+
+  it('never touches quote lines with content', () => {
+    expect(withQuoteRowSeparation('> a\n> b')).toBe('> a\n> b');
+  });
+
+  it('skips empty ">" lines inside fences', () => {
+    const src = '```\n>\n```\n>\n';
+    expect(withQuoteRowSeparation(src)).toBe(src);
   });
 });

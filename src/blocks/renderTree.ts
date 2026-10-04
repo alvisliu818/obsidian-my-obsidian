@@ -585,6 +585,35 @@ export function withTableSeparation(text: string): string {
   return out.join('\n');
 }
 
+/**
+ * A lone `>` line inside a block (Logseq's empty quote row) is dropped by
+ * CommonMark when it trails the quote and renders as an invisible gap when it
+ * sits between quote lines. Insert a render-only blank line before it so it
+ * becomes its own empty blockquote (styled visible via the CSS min-height).
+ * Never inside a code fence; the block model and the saved file stay untouched.
+ */
+export function withQuoteRowSeparation(text: string): string {
+  if (!/^\s*>\s*$/m.test(text)) return text;
+  const lines = text.split('\n');
+  const out: string[] = [];
+  let inFence = false;
+  let fenceMarker = '';
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const fenceOpen = /^\s*(```|~~~)/.exec(line);
+    if (fenceOpen && !inFence) {
+      inFence = true;
+      fenceMarker = fenceOpen[1];
+    } else if (inFence && line.trimStart().startsWith(fenceMarker)) {
+      inFence = false;
+    }
+    const prevIsQuote = out.length > 0 && /^>/.test(out[out.length - 1].trimStart());
+    if (!inFence && /^\s*>\s*$/.test(line) && prevIsQuote) out.push('');
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
 /** Render static content with cache reuse when the block text is unchanged. */
 function attachStaticContent(content: HTMLElement, b: Block, host: BlockEditorView): void {
   const sig = contentSig(b);
@@ -629,13 +658,15 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockEditorVi
   const pageEmbedTokens: { token: string; page: string }[] = [];
   const hasPageEmbed = /!\[\[[^\[\]]+\]\]/.test(b.text);
   const mdSource = withTableSeparation(
-    hasPageEmbed
-      ? b.text.replace(/!\[\[([^\[\]]+)\]\]/g, (_m, page: string) => {
-          const token = `LGPAGEEMBED${pageEmbedTokens.length}LGPAGEEMBED`;
-          pageEmbedTokens.push({ token, page });
-          return token;
-        })
-      : b.text,
+    withQuoteRowSeparation(
+      hasPageEmbed
+        ? b.text.replace(/!\[\[([^\[\]]+)\]\]/g, (_m, page: string) => {
+            const token = `LGPAGEEMBED${pageEmbedTokens.length}LGPAGEEMBED`;
+            pageEmbedTokens.push({ token, page });
+            return token;
+          })
+        : b.text,
+    ),
   );
   MarkdownRenderer.render(host.app, mdSource, holder, host.file?.path ?? '', host).then(() => {
     if (host.renderGeneration !== gen) return; // stale (file switched)

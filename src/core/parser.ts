@@ -320,7 +320,16 @@ export function parseDocument(md: string): ParsedDocument {
     // Markdown/org structural lines keep their verbatim raw rendering.
     if (depth > 0 || STRUCTURAL_RAW_RE.test(trimmed)) {
       flushBare();
-      rawBuf.push(line);
+      if (/^>\s*$/.test(trimmed)) {
+        // An EMPTY quote line is its own block (Logseq: it renders as a
+        // visible empty quote row). Merging it into the neighboring quote
+        // block made CommonMark drop it silently — the row vanished.
+        flushRaw();
+        rawBuf.push(line);
+        flushRaw();
+      } else {
+        rawBuf.push(line);
+      }
       i++;
       continue;
     }
