@@ -11,7 +11,7 @@ import { EditorView } from '@codemirror/view';
 import type { CompletionSource } from '@codemirror/autocomplete';
 import type LogseqEditorPlugin from '../main';
 import type { Block, ParsedDocument } from '../types';
-import { applyBlockProps, blockEditorDoc, createBlock, editableProps, propsShallowEqual, setCollapsed, splitPropLines } from '../types';
+import { applyBlockProps, blockEditorDoc, createBlock, docPageProps, editableProps, isPagePropsBlock, propsShallowEqual, setCollapsed, splitPropLines } from '../types';
 import { parseDocument } from '../core/parser';
 import { clearLogseqPageProps, registerLogseqPageProps } from '../pagePropsRegistry';
 import { serializeBlock, serializeDocument } from '../core/serializer';
@@ -849,7 +849,7 @@ ${content}`;
     // nothing focused → keep the flag.)
     if (this.sourceModeBlock === b) this.sourceModeBlock = null;
     const changed = commitEditorText(v, b, this.templateContext());
-    if (b.kind === 'list' && b.text === '' && !b.frontmatter && this.doc.blocks[0] === b && this.file) registerLogseqPageProps(this.file.path, b.props);
+    if (isPagePropsBlock(b) && this.doc.blocks[0] === b && this.file) registerLogseqPageProps(this.file.path, b.props);
     else clearLogseqPageProps(this.file?.path ?? '');
     v.destroy();
     clearActiveBlockEditor(this.app);
@@ -875,9 +875,7 @@ ${content}`;
   private syncPagePropsRegistry(): void {
     const path = this.file?.path;
     if (!path) return;
-    const pb = this.doc.blocks[0];
-    if (pb && pb.kind === 'list' && pb.text === '' && !pb.frontmatter) registerLogseqPageProps(path, pb.props);
-    else clearLogseqPageProps(path);
+    registerLogseqPageProps(path, docPageProps(this.doc));
   }
 
   /** CM6 updateListener hooks. */

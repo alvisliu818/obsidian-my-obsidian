@@ -11,6 +11,9 @@ export const MARKERS: Exclude<Marker, null>[] = ['TODO', 'DOING', 'DONE'];
 /** Automatic take-over scope for the block editor. */
 export type ScopeMode = 'all' | 'folders';
 
+/** Per-page default editor, set by the page `editor` property. */
+export type EditorChoice = 'logseq' | 'native';
+
 export interface Block {
   /** 'list' = outline bullet block (Logseq style); 'raw' = verbatim top-level content (headings, paragraphs, fences, quotes...) */
   kind: 'list' | 'raw';
@@ -144,6 +147,59 @@ export function shouldTakeOver(
     return pathInFolders(file, parseFolderList(includedFolders));
   }
   return !pathInFolders(file, parseFolderList(excludedFolders));
+}
+
+/**
+ * The per-page default-editor property: `editor:: logseq|native` (Logseq
+ * page properties) or `editor: logseq|native` (frontmatter). Key and value
+ * match case-insensitively; any other value (or a missing property) means
+ * "no override". Non-string values (Obsidian parses frontmatter numbers /
+ * booleans natively) are stringified first.
+ */
+export function editorChoiceFromProps(props: Record<string, unknown> | undefined | null): EditorChoice | null {
+  if (!props) return null;
+  let raw: unknown;
+  for (const [k, v] of Object.entries(props)) {
+    if (k.toLowerCase() === 'editor') {
+      raw = v;
+      break;
+    }
+  }
+  if (raw === undefined || raw === null) return null;
+  const v = String(raw).trim().toLowerCase();
+  if (v === 'logseq') return 'logseq';
+  if (v === 'native') return 'native';
+  return null;
+}
+
+/**
+ * Take-over decision with the per-page `editor` property applied. The
+ * property is the most specific signal and overrides the settings in both
+ * directions (logseq forces the block editor even with take-over off;
+ * native keeps the native editor even inside included folders); without it
+ * the settings decide exactly as before.
+ */
+export function takeOverForFile(
+  choice: EditorChoice | null,
+  takeOverByDefault: boolean,
+  scopeMode: ScopeMode,
+  includedFolders: string,
+  excludedFolders: string,
+  file: string,
+): boolean {
+  if (choice === 'logseq') return true;
+  if (choice === 'native') return false;
+  return shouldTakeOver(takeOverByDefault, scopeMode, includedFolders, excludedFolders, file);
+}
+
+/** True when `b` is the props-only page-properties first block (Logseq model). */
+export function isPagePropsBlock(b: Block | undefined | null): boolean {
+  return !!b && b.kind === 'list' && b.text === '' && !b.frontmatter;
+}
+
+/** The Logseq-format page-props record of a parsed document ({} when none). */
+export function docPageProps(doc: ParsedDocument): Record<string, string> {
+  return isPagePropsBlock(doc.blocks[0]) ? doc.blocks[0].props : {};
 }
 
 /** Assign an id to a block if it does not have one. Returns the id. */

@@ -10,7 +10,8 @@
 import { TFile, debounce, type App, type EventRef } from 'obsidian';
 import { parseDocument } from '../core/parser';
 import { serializeBlock } from '../core/serializer';
-import type { Block } from '../types';
+import { docPageProps, type Block } from '../types';
+import { registerLogseqPageProps, clearLogseqPageProps } from '../pagePropsRegistry';
 import { normalizeLinkTarget, type QueryBlock } from '../features/query';
 
 export type IndexedBlock = QueryBlock;
@@ -163,6 +164,10 @@ export class BlockIndex {
 
   private indexContent(path: string, content: string): void {
     const doc = parseDocument(content);
+    // Vault-wide Logseq page-props registry (usually only open files are
+    // registered by their view): feeds the per-page `editor` property and
+    // the getFileCache frontmatter merge for never-opened files too.
+    registerLogseqPageProps(path, docPageProps(doc));
     const tags = new Set<string>();
     this.tagsByPath.set(path, tags);
 
@@ -218,6 +223,7 @@ export class BlockIndex {
   }
 
   private forgetFile(path: string): void {
+    clearLogseqPageProps(path);
     this.all = this.all.filter((b) => b.path !== path);
     this.cards = this.cards.filter((c) => c.path !== path);
     for (const [id, info] of this.byId) {

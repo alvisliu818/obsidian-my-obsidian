@@ -5,7 +5,15 @@
 
 import { Menu, Notice, Plugin, TAbstractFile, WorkspaceLeaf, type CachedMetadata, type ViewState } from 'obsidian';
 import { BlockEditorView, VIEW_TYPE_BLOCK_EDITOR } from './view/BlockEditorView';
-import { DEFAULT_SETTINGS, parseFolderList, pathInFolders, shouldTakeOver, type BlockEditorSettings } from './types';
+import {
+  DEFAULT_SETTINGS,
+  editorChoiceFromProps,
+  parseFolderList,
+  pathInFolders,
+  takeOverForFile,
+  type BlockEditorSettings,
+  type EditorChoice,
+} from './types';
 import { LogseqEditorSettingTab } from './settings/tab';
 import { BlockIndex } from './index/blockIndex';
 import { TodoPanelView, VIEW_TYPE_TODO_PANEL } from './panels/todoPanel';
@@ -391,10 +399,32 @@ export default class LogseqEditorPlugin extends Plugin {
     return pathInFolders(file, parseFolderList(this.settings.excludedFolders));
   }
 
-  /** Automatic take-over decision for a vault-relative file path. */
+  /**
+   * Per-page default-editor override: the page `editor` property. Logseq-format
+   * page properties come from the registry (vault-wide — the block index keeps
+   * it fresh for never-opened files too); frontmatter comes from Obsidian's
+   * metadata cache. Both lookups are synchronous.
+   */
+  editorDefaultFor(file: string): EditorChoice | null {
+    return (
+      editorChoiceFromProps(getLogseqPageProps(file)) ??
+      editorChoiceFromProps(
+        this.app.metadataCache.getCache(file)?.frontmatter as Record<string, unknown> | undefined,
+      )
+    );
+  }
+
+  /** Automatic take-over decision for a vault-relative file path (page `editor` property overrides the settings). */
   shouldTakeOverFile(file: string): boolean {
     const s = this.settings;
-    return shouldTakeOver(s.takeOverByDefault, s.scopeMode, s.includedFolders, s.excludedFolders, file);
+    return takeOverForFile(
+      this.editorDefaultFor(file),
+      s.takeOverByDefault,
+      s.scopeMode,
+      s.includedFolders,
+      s.excludedFolders,
+      file,
+    );
   }
 
   private patchSetViewState(): void {
@@ -407,12 +437,11 @@ export default class LogseqEditorPlugin extends Plugin {
       state: ViewState,
       eState?: unknown,
     ): Promise<void> {
-      if (
-        plugin.settings.takeOverByDefault &&
-        state.type === 'markdown' &&
-        (state.state as { file?: string } | undefined)?.file &&
-        plugin.shouldTakeOverFile((state.state as { file: string }).file)
-      ) {
+      // shouldTakeOverFile folds in both the settings and the per-page
+      // `editor` property, so this converts even when take-over is off
+      // globally but the page opts in with `editor:: logseq`.
+      const file = state.type === 'markdown' ? (state.state as { file?: string } | undefined)?.file : undefined;
+      if (file && plugin.shouldTakeOverFile(file)) {
         state = { ...state, type: VIEW_TYPE_BLOCK_EDITOR } as ViewState;
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -422,7 +451,6 @@ export default class LogseqEditorPlugin extends Plugin {
 
   /** After enable/reload: convert already-open native markdown leaves. */
   private convertOpenMarkdownLeaves(): void {
-    if (!this.settings.takeOverByDefault) return;
     for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
       // leaf-level view state (file wrapped under `state`), spread whole so
       // mode/source survive the swap.

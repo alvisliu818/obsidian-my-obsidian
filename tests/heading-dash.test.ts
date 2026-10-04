@@ -7,7 +7,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { parseDocument } from '../src/core/parser';
-import { serializeDocument, serializeBlock } from '../src/core/serializer';
+import { serializeDocument } from '../src/core/serializer';
 
 describe('heading-with-dash parse probe', () => {
   it('parses and serializes "- # 标题"', () => {
