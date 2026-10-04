@@ -43,6 +43,8 @@ export interface ParsedDocument {
   /** Top-of-file page properties (unindented `key:: value` lines, Logseq style). */
   pageProps: string;
   blocks: Block[];
+  /** The source file used CRLF line endings — serialize back with \r\n. */
+  crlf?: boolean;
 }
 
 export interface BlockEditorSettings {

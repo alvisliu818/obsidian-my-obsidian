@@ -78,8 +78,15 @@ export function stripIndent(line: string, depth: number): string {
 }
 
 export function parseDocument(md: string): ParsedDocument {
-  const lines = md.split('\n');
+  // CRLF (Windows) files: every parser regex below is `$`-anchored and `.`
+  // never matches `\r`, so a trailing `\r` silently breaks fence open/close,
+  // list and property detection (a CRLF file parsed raw explodes — fences
+  // leak their bodies as bare lines). Normalize once up front; serialize
+  // restores the file's own endings via the crlf flag.
+  const crlf = /\r/.test(md);
+  const lines = (crlf ? md.replace(/\r\n?/g, '\n') : md).split('\n');
   const doc: ParsedDocument = { frontmatter: '', pageProps: '', blocks: [] };
+  if (crlf) doc.crlf = true;
   let i = 0;
 
   // --- frontmatter ---

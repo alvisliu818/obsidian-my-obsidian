@@ -10,6 +10,9 @@
 import { Block, ParsedDocument } from '../types';
 
 export function serializeDocument(doc: ParsedDocument): string {
+  // CRLF files: parse normalized the model to \n; restore the file's own
+  // endings so saving never rewrites every line of a Windows-format file.
+  const finish = (lf: string): string => (doc.crlf ? lf.replace(/\n/g, '\r\n') : lf);
   const parts: string[] = [];
   const blocks = doc.blocks;
   if (doc.frontmatter && !blocks[0]?.frontmatter) parts.push(doc.frontmatter);
@@ -30,7 +33,7 @@ export function serializeDocument(doc: ParsedDocument): string {
         parts.push(serializeBlock(b, 0));
       }
     }
-    return parts.join('\n');
+    return finish(parts.join('\n'));
   }
   // Logseq model: a first block holding ONLY properties is the page-properties
   // block — its props are written as the unindented file-top lines, and its
@@ -40,12 +43,12 @@ export function serializeDocument(doc: ParsedDocument): string {
     for (const [k, v] of Object.entries(pb.props)) parts.push(`${k}:: ${v}`);
     for (const c of pb.children) parts.push(serializeBlock(c, 0));
     for (let i = 1; i < blocks.length; i++) parts.push(serializeBlock(blocks[i], 0));
-    return parts.join('\n');
+    return finish(parts.join('\n'));
   }
   for (const b of blocks) {
     parts.push(serializeBlock(b, 0));
   }
-  return parts.join('\n');
+  return finish(parts.join('\n'));
 }
 
 /** The page-properties block: an empty-text first block that only carries props. */
