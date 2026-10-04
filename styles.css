@@ -1235,6 +1235,34 @@
 
 .lgp-wikilink { color: var(--link-color, var(--text-accent)); }
 .lgp-comment { color: var(--text-faint); }
+.lgp-bold { font-weight: 600; }
+.lgp-italic { font-style: italic; }
+.lgp-strike { text-decoration: line-through; }
+.lgp-highlight { background: var(--text-highlight-bg, var(--text-highlight)); }
+
+/* Inline code in the live-preview editor: same look as the static render —
+   mono + background box, NOT bold (the theme bolds bare `code`). */
+.lgp-inline-code {
+  font-family: var(--font-monospace, var(--font-mono, monospace));
+  font-size: var(--code-size, 0.9em);
+  font-weight: var(--code-weight, normal);
+  color: var(--code-color, var(--text-normal));
+  background: var(--code-background, var(--background-secondary));
+  border-radius: var(--code-radius, 4px);
+  padding: 0.1em 0.25em;
+}
+
+/* Static render inline code spans (NOT fenced blocks): the theme bolds bare
+   `code` — restore the standard inline-code look for block content. */
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) code:not(pre code) {
+  font-family: var(--font-monospace, var(--font-mono, monospace));
+  font-size: var(--code-size, 0.9em);
+  font-weight: var(--code-weight, normal);
+  color: var(--code-color, var(--text-normal));
+  background: var(--code-background, var(--background-secondary));
+  border-radius: var(--code-radius, 4px);
+  padding: 0.1em 0.25em;
+}
 
 /* ---------- Query table ({{query-table ...}}) ---------- */
 .block-query-table-wrap {

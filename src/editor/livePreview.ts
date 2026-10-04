@@ -125,6 +125,11 @@ function alignOf(cell: string): string {
 const hrReplace = Decoration.replace({ widget: new HrWidget() });
 const wikilinkMark = Decoration.mark({ class: 'lgp-wikilink' });
 const commentMark = Decoration.mark({ class: 'lgp-comment' });
+const boldMark = Decoration.mark({ class: 'lgp-bold' });
+const italicMark = Decoration.mark({ class: 'lgp-italic' });
+const strikeMark = Decoration.mark({ class: 'lgp-strike' });
+const highlightMark = Decoration.mark({ class: 'lgp-highlight' });
+const inlineCodeMark = Decoration.mark({ class: 'lgp-inline-code' });
 const headingLine = [1, 2, 3, 4, 5, 6].map((n) => ({
   n,
   deco: Decoration.line({ class: `lgp-h${n}` }),
@@ -133,13 +138,13 @@ const hrLine = Decoration.line({ class: 'lgp-hr-line' });
 
 /** Inline marker pairs: [regex, mark length, content mark class?]. */
 const PAIRS: Array<{ kind: string; re: RegExp; len: number; mark?: Decoration }> = [
-  { kind: 'bold', re: /\*\*(?=[^\s*])((?:[^*]|[\s\S]*?[^\s*])?)\*\*/g, len: 2 },
-  { kind: 'boldAlt', re: /__(?=[^\s_])[\s\S]*?[^\s_]__/g, len: 2 },
-  { kind: 'highlight', re: /==(?=[^\s=])[\s\S]*?[^\s=]==/g, len: 2 },
-  { kind: 'strike', re: /~~(?=[^\s~])[\s\S]*?[^\s~]~~/g, len: 2 },
+  { kind: 'bold', re: /\*\*(?=[^\s*])((?:[^*]|[\s\S]*?[^\s*])?)\*\*/g, len: 2, mark: boldMark },
+  { kind: 'boldAlt', re: /__(?=[^\s_])[\s\S]*?[^\s_]__/g, len: 2, mark: boldMark },
+  { kind: 'highlight', re: /==(?=[^\s=])[\s\S]*?[^\s=]==/g, len: 2, mark: highlightMark },
+  { kind: 'strike', re: /~~(?=[^\s~])[\s\S]*?[^\s~]~~/g, len: 2, mark: strikeMark },
   { kind: 'comment', re: /%%([\s\S]*?)%%/g, len: 2, mark: commentMark },
-  { kind: 'code', re: /`([^`\n]+)`/g, len: 1 },
-  { kind: 'italic', re: /\*(?=[^\s*])(?:[^*\n]*[^\s*])?\*/g, len: 1 },
+  { kind: 'code', re: /`([^`\n]+)`/g, len: 1, mark: inlineCodeMark },
+  { kind: 'italic', re: /\*(?=[^\s*])(?:[^*\n]*[^\s*])?\*/g, len: 1, mark: italicMark },
 ];
 
 const WIKILINK_RE = /(?<!!)\[\[([^\[\]\n]+)\]\]/g;
