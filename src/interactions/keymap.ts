@@ -8,19 +8,17 @@ import { insertTab } from '@codemirror/commands';
 import type { EditorView } from '@codemirror/view';
 import type { BlockEditorView } from '../view/BlockEditorView';
 import {
-  dedentCommon,
   indent,
-  insertAfter,
-  insertBefore,
   mergeWithPrev,
   moveBlockVertically,
   nextVisible,
   outdent,
   prevVisible,
   splitBlock,
+  splitRawToOutline,
 } from '../core/treeOps';
 import { cycleMarker } from '../core/treeOps';
-import { applyBlockProps, createBlock, splitPropLines, type Block } from '../types';
+import { applyBlockProps, splitPropLines, type Block } from '../types';
 
 function focusedBlock(host: BlockEditorView): Block | null {
   return host.focusedBlock;
@@ -39,27 +37,17 @@ export function handleEnter(view: EditorView, host: BlockEditorView): boolean {
   const b = focusedBlock(host);
   if (!b) return false;
   if (b.kind === 'raw') {
-    // Logseq parity: Enter creates outline blocks — Shift+Enter stays the
-    // soft newline. The raw block splits at the caret: the head keeps its
-    // verbatim text, the tail becomes a NEW outline list block with the
-    // common indent stripped (orphaned indented fences from Logseq exports
-    // thus re-parse as in-block fences and render as code blocks).
+    // Logseq parity: Enter turns the raw block into outline blocks — the head
+    // converts to a list block, the tail becomes a new list sibling; edge
+    // blank lines and the common indent never survive (splitRawToOutline).
+    // Shift+Enter stays the soft newline.
     const { text, offset } = deleteSelection(view);
     const parent = b.parent;
     let nb: Block | null = null;
     host.mutate(
       () => {
-        if (offset === 0) {
-          // Caret at block start: new empty outline block ABOVE, the
-          // verbatim content stays untouched below (Logseq: empty head).
-          b.text = text;
-          nb = createBlock('');
-          insertBefore(b, nb);
-          return;
-        }
-        b.text = text.slice(0, offset);
-        nb = createBlock(dedentCommon(text.slice(offset)));
-        insertAfter(b, nb);
+        b.text = text;
+        nb = splitRawToOutline(b, offset);
       },
       () => ({ lists: [parent] }),
     );

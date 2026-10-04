@@ -1,10 +1,11 @@
 /**
- * Raw-block Enter (Logseq parity): Enter creates outline blocks from raw
- * (verbatim) content; Shift+Enter stays the soft newline. The tail of the
- * split becomes an outline list block with the common indent stripped.
+ * Raw-block Enter (Logseq parity): Enter converts the raw block into outline
+ * blocks — the head becomes a list block, the tail a new list sibling; edge
+ * blank lines and the common indent never survive. Shift+Enter stays the soft
+ * newline.
  */
 import { describe, expect, it } from 'vitest';
-import { dedentCommon } from '../src/core/treeOps';
+import { dedentCommon, splitRawToOutline } from '../src/core/treeOps';
 import { parseCodeFence } from '../src/blocks/codeBlockEdit';
 import { parseDocument } from '../src/core/parser';
 import { serializeDocument } from '../src/core/serializer';
@@ -137,5 +138,56 @@ describe('raw Enter round-trip: carved-out fence block re-parses as in-block fen
 
     // Round-trip stability.
     expect(parseDocument(serializeDocument(doc)).blocks[0].text).toBe(b.text);
+  });
+});
+
+describe('splitRawToOutline: raw block converts to outline on Enter', () => {
+  it('mid-block split: head converts in place, tail is a stripped list sibling', () => {
+    // The ## 12.3 case: raw blob of two headings + blank line, Enter after
+    // the first heading line (caret before the "\n\n").
+    const doc = parseDocument('## 12.3 命名空间和作用域\n\n### 12.3.1 什么是命名空间\n');
+    const b = doc.blocks[0];
+    const offset = b.text.indexOf('\n');
+    const nb = splitRawToOutline(b, offset);
+    expect(b.kind).toBe('list');
+    expect(b.text).toBe('## 12.3 命名空间和作用域');
+    expect(nb.kind).toBe('list');
+    expect(nb.text).toBe('### 12.3.1 什么是命名空间'); // no leading blanks
+  });
+
+  it('caret at block start: empty block in place, converted content below', () => {
+    const doc = parseDocument('# Title\n\nbody line\n');
+    const b = doc.blocks[0];
+    expect(b.kind).toBe('raw');
+    const nb = splitRawToOutline(b, 0);
+    expect(b.kind).toBe('list');
+    expect(b.text).toBe('');
+    expect(nb.text).toBe('# Title');
+    expect(nb.text.startsWith('\n')).toBe(false);
+  });
+
+  it('caret at block end: conversion + empty sibling below (normal Enter feel)', () => {
+    const doc = parseDocument('> quote line\n');
+    const b = doc.blocks[0];
+    const nb = splitRawToOutline(b, b.text.length);
+    expect(b.kind).toBe('list');
+    expect(b.text).toBe('> quote line');
+    expect(nb.text).toBe('');
+  });
+
+  it('the tail is dedented so orphaned fences re-parse as in-block fences', () => {
+    // A heading first line keeps this a RAW blob (bare text + fence would
+    // parse as an in-block fence list block).
+    const doc = parseDocument('# Para\n        ```python\n        x = 1\n        ```\n');
+    const b = doc.blocks[0];
+    expect(b.kind).toBe('raw');
+    const nb = splitRawToOutline(b, '# Para'.length);
+    expect(nb.text).toBe('```python\nx = 1\n```');
+    // Round-trip: the converted model re-parses to the same texts.
+    const out = serializeDocument(doc);
+    const again = parseDocument(out);
+    expect(again.blocks.map((x) => [x.kind, x.text])).toEqual(
+      doc.blocks.map((x) => [x.kind, x.text]),
+    );
   });
 });

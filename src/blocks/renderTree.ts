@@ -93,6 +93,16 @@ function contentSig(b: Block): string {
 export function renderBlockTree(container: HTMLElement, roots: Block[], host: BlockEditorView): void {
   loadMoreObserver?.disconnect();
   loadMoreObserver = null;
+  // A full rebuild empties the scroller for an instant — the browser clamps
+  // scrollTop to the collapsed height and never restores it, so EVERY edit
+  // that rebuilds the whole tree (root-level Enter → patchSiblingList(null),
+  // patch fallback → renderInner) jumped the page to the top. Pin the scroll
+  // position across the swap, but only on the editing path (a focused block
+  // exists) — file loads and zooms render with no focused block and should
+  // keep natural scrolling.
+  const sc = container.closest('.block-editor-scroller');
+  const savedTop = sc?.scrollTop ?? 0;
+  const preserveScroll = savedTop > 0 && !!host.focusedBlock;
   container.empty();
   if (roots.length === 0) {
     const empty = container.createEl('div', { cls: 'block-editor-empty' });
@@ -154,6 +164,10 @@ export function renderBlockTree(container: HTMLElement, roots: Block[], host: Bl
   // clicking the breadcrumb file name) left the lines at the approximation
   // (visibly shifted). Always recalibrate after a render, once laid out.
   requestAnimationFrame(() => layoutGuideLines(container));
+
+  // Content is back in the DOM (cached statics mount synchronously) — put the
+  // scroller back where the edit happened.
+  if (preserveScroll && sc) sc.scrollTop = savedTop;
 }
 
 function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HTMLElement {

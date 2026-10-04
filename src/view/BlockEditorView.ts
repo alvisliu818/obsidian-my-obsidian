@@ -15,7 +15,7 @@ import { applyBlockProps, blockEditorDoc, createBlock, docPageProps, editablePro
 import { parseDocument } from '../core/parser';
 import { clearLogseqPageProps, registerLogseqPageProps } from '../pagePropsRegistry';
 import { serializeBlock, serializeDocument } from '../core/serializer';
-import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, isDescendant, linkParents, moveBlock, moveBlockVertically, outdent, pseudoRootOf, registerRoots, removeBlock, siblingsOf, splitBlock, type MovePosition } from '../core/treeOps';
+import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, isDescendant, linkParents, moveBlock, moveBlockVertically, outdent, pseudoRootOf, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, type MovePosition } from '../core/treeOps';
 import { UndoStack } from '../state/undoStack';
 import {
   renderBlockTree,
@@ -1897,12 +1897,13 @@ ${content}`;
   /** Insert a new empty sibling below the focused block (as Enter does). */
   handleEnterFromCommand(): void {
     const b = this.focusedBlock;
-    if (!b || b.kind === 'raw') return;
+    if (!b) return;
     let nb: Block | null = null;
     const parent = b.parent;
     this.mutate(
       () => {
-        nb = splitBlock(b, b.text.length);
+        // Raw blocks convert to outline blocks (same as the Enter key).
+        nb = b.kind === 'raw' ? splitRawToOutline(b, b.text.length) : splitBlock(b, b.text.length);
       },
       () => ({ lists: [parent] }),
     );

@@ -246,6 +246,34 @@ export function dedentCommon(text: string): string {
   return lines.map((l) => (l.trim() === '' ? l : l.slice(min))).join('\n');
 }
 
+/** Drop leading/trailing blank (whitespace-only) lines; interior lines stay. */
+export function stripBlankEdges(text: string): string {
+  const lines = text.split('\n');
+  let a = 0;
+  let z = lines.length;
+  while (a < z && lines[a].trim() === '') a++;
+  while (z > a && lines[z - 1].trim() === '') z--;
+  return lines.slice(a, z).join('\n');
+}
+
+/**
+ * Enter on a raw (non-outline) block: the block becomes outline blocks —
+ * the head converts to a list block in place, the tail becomes a new list
+ * sibling below (empty text when the caret sits at the very end). Edge blank
+ * lines and the common indent never survive the conversion (Logseq: the
+ * outline owns everything; raw is a render-time state, not a persistent one).
+ * The caret target is always the tail block.
+ */
+export function splitRawToOutline(b: Block, offset: number): Block {
+  const head = stripBlankEdges(b.text.slice(0, offset));
+  const tail = stripBlankEdges(dedentCommon(b.text.slice(offset)));
+  b.kind = 'list';
+  b.text = head;
+  const nb = createBlock(tail);
+  insertAfter(b, nb);
+  return nb;
+}
+
 /**
  * Merge block into the previous visible block (Backspace at block start).
  * - text is appended to the previous block's text.
