@@ -605,7 +605,7 @@ export class BlockEditorView extends TextFileView {
       // posAtCoords on the fresh view uses the CLICK's page coords, but the
       // raw-text CM6 is much shorter than the static render when it contained
       // images/rendered code — the mapping clamps the stale click Y far from
-      // the user's target (often to doc end, which can still sit within a
+      // the user's target (often clamping to doc end, which can still sit within a
       // small deviation of the click, defeating a pure pixel check). The
       // pre-swap staticPos knows WHICH source line was clicked: when the two
       // mappings disagree on the line, the layout collapsed and staticPos is
@@ -614,7 +614,11 @@ export class BlockEditorView extends TextFileView {
       let p = cursorAtCoords(v, pending.clickXY.x, pending.clickXY.y, 'end');
       if (pending.staticPos !== null) {
         const pStat = Math.max(0, Math.min(pending.staticPos, v.state.doc.length));
-        if (v.state.doc.lineAt(p).number !== v.state.doc.lineAt(pStat).number) {
+        // Raw blocks always take the static line mapping: the rendered text
+        // hides the `## `/`>` markers the editor shows, so posAtCoords skews
+        // by the marker width (clicking a heading's first character landed
+        // INSIDE `## ` — Enter then produced an empty-looking heading block).
+        if (b.kind === 'raw' || v.state.doc.lineAt(p).number !== v.state.doc.lineAt(pStat).number) {
           p = pStat;
         }
       }
@@ -702,36 +706,63 @@ export class BlockEditorView extends TextFileView {
    * source line groups (paragraph run / heading / fenced run), so "nearest
    * child at/above Y" → end of that child's last source line. Returns null
    * when no static render (focused, or structure not mapped).
+   *
+   * Raw blocks map too — their rendered headings hide the `## `/`>` markers
+   * the editor shows, so the mapping is what makes clicking a rendered
+   * heading land on the right source line at all.
    */
   private staticClickPos(b: Block, y: number): number | null {
-    if (b.kind === 'raw') return null;
     const wrap = findBlockEl(b);
     const holder = wrap?.querySelector(':scope > .block-main > .block-content > .block-content-static') as HTMLElement | null;
     if (!holder || !holder.children.length) return null;
     const lines = b.text.split('\n');
-    if (lines.length <= 1) return null;
+    if (lines.length <= 1 && b.kind !== 'raw') return null;
     // Line-run per top-level child: fences swallow their whole run; headings
     // one line; everything else consumes up to the next fence/heading.
     const runs: Array<[number, number]> = [];
     let li = 0;
     for (let ci = 0; ci < holder.children.length && li < lines.length; ci++) {
-      const tag = (holder.children[ci] as HTMLElement).tagName;
+      const child = holder.children[ci] as HTMLElement;
+      const tag = child.tagName;
+      // The rendered code block is a div.lgp-code-block wrapping the <pre>
+      // (toolbar swap) — both count as the fence's render.
+      const isPreEl = tag === 'PRE' || child.classList.contains('lgp-code-block');
       const isFence = /^\s*(```|~~~)/.test(lines[li] ?? '');
       let j = li;
-      if (isFence || tag === 'PRE') {
-        if (isFence) {
-          j++;
-          while (j < lines.length && !/^\s*(```|~~~)/.test(lines[j])) j++;
-          if (j < lines.length) j++;
-        } else j = li + 1;
+      // Run start may move past blank lines (a rendered <pre> in a raw block
+      // sits behind its verbatim blank lines) — gap clicks then fall to the
+      // previous child, code clicks land ON the fence line.
+      let start = li;
+      if (isFence) {
+        j++;
+        while (j < lines.length && !/^\s*(```|~~~)/.test(lines[j])) j++;
+        if (j < lines.length) j++;
+      } else if (isPreEl) {
+        let k = li;
+        while (k < lines.length && lines[k].trim() === '') k++;
+        if (/^\s*(```|~~~)/.test(lines[k] ?? '')) {
+          start = k;
+          k++;
+          while (k < lines.length && !/^\s*(```|~~~)/.test(lines[k])) k++;
+          if (k < lines.length) k++;
+          j = k;
+        } else {
+          j = li + 1;
+        }
       } else if (/^H[1-6]$/.test(tag)) {
-        j = li + 1;
+        // Raw blobs keep blank lines verbatim — a rendered heading maps to
+        // its OWN line (skipping the blanks), so the caret lands on the
+        // heading line, not on the gap above it.
+        let k = li;
+        while (k < lines.length && lines[k].trim() === '') k++;
+        start = k;
+        j = k + 1;
       } else {
         while (j < lines.length && !/^\s*(```|~~~)/.test(lines[j]) && !/^#{1,6}\s/.test(lines[j])) j++;
         if (j === li) j = li + 1;
       }
-      runs.push([li, Math.min(j - 1, lines.length - 1)]);
-      li = j;
+      runs.push([start, Math.min(j - 1, lines.length - 1)]);
+      li = Math.max(j, start);
     }
     if (!runs.length) return null;
     // Nearest child at/above the click Y.
