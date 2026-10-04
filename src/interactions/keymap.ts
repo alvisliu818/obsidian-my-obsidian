@@ -267,22 +267,28 @@ export function handleJumpBlock(view: EditorView, host: BlockEditorView, dir: -1
 }
 
 /**
- * Typing ` with a selection wraps it in inline-code backticks (Obsidian
- * behavior) instead of typing over the selection. The wrapped text stays
- * selected so further formatting can be applied. Empty selection falls
- * through to the plain insert.
+ * Typing a markdown/bracket opener with a selection wraps the selection
+ * (Obsidian behavior) instead of typing over it: `*` → `*sel*`, `[` →
+ * `[sel]`, etc. The wrapped text stays selected so repeating the key chains
+ * formatting (`*` twice → `**sel**` bold, `[` twice → `[[sel]]` wikilink).
+ * An empty selection falls through to the plain insert.
  */
-export function handleBacktick(view: EditorView, host: BlockEditorView): boolean {
+export function handleWrapChar(view: EditorView, host: BlockEditorView, open: string, close: string): boolean {
   const b = focusedBlock(host);
   if (!b) return false;
   const sel = view.state.selection.main;
   if (sel.empty) return false;
   const inner = view.state.doc.sliceString(sel.from, sel.to);
   view.dispatch({
-    changes: { from: sel.from, to: sel.to, insert: '`' + inner + '`' },
-    selection: { anchor: sel.from + 1, head: sel.to + 1 },
+    changes: { from: sel.from, to: sel.to, insert: open + inner + close },
+    selection: { anchor: sel.from + open.length, head: sel.to + open.length },
   });
   return true;
+}
+
+/** Backtick = inline code. Kept as the named entry point for the keymap/test. */
+export function handleBacktick(view: EditorView, host: BlockEditorView): boolean {
+  return handleWrapChar(view, host, '`', '`');
 }
 
 /** Escape: commit + leave the block (Logseq exits editing). */

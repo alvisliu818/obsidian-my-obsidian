@@ -112,7 +112,6 @@ const propLineHighlighter = ViewPlugin.fromClass(
 import {
   handleArrow,
   handleBackspace,
-  handleBacktick,
   handleCycleMarker,
   handleDelete,
   handleEnter,
@@ -120,6 +119,7 @@ import {
   handleJumpBlock,
   handleMoveBlock,
   handleTab,
+  handleWrapChar,
 } from '../interactions/keymap';
 
 /** Keys we fully own; their defaultKeymap entries are filtered out. */
@@ -136,9 +136,29 @@ const OWNED_DEFAULT_KEYS = new Set([
   'ArrowRight',
 ]);
 
+/** Selection-wrapping pairs: typing the key with a selection wraps it. */
+const WRAP_PAIRS: Record<string, [string, string]> = {
+  '*': ['*', '*'],
+  '_': ['_', '_'],
+  '~': ['~', '~'],
+  '=': ['=', '='],
+  '$': ['$', '$'],
+  '%': ['%', '%'],
+  '`': ['`', '`'],
+  '[': ['[', ']'],
+  '(': ['(', ')'],
+  '{': ['{', '}'],
+  '"': ['"', '"'],
+  "'": ["'", "'"],
+};
+
 export function createBlockKeymap(host: BlockEditorView): KeyBinding[] {
   return [
     { key: 'Enter', run: (v) => handleEnter(v, host) },
+    ...Object.entries(WRAP_PAIRS).map(([key, [open, close]]) => ({
+      key,
+      run: (v: EditorView) => handleWrapChar(v, host, open, close),
+    })),
     {
       key: 'Shift-Enter',
       run: (v) => {
@@ -152,7 +172,6 @@ export function createBlockKeymap(host: BlockEditorView): KeyBinding[] {
     { key: 'Shift-Tab', run: (v) => handleTab(v, host, true) },
     { key: 'Backspace', run: (v) => handleBackspace(v, host) },
     { key: 'Delete', run: (v) => handleDelete(v, host) },
-    { key: '`', run: (v) => handleBacktick(v, host) },
     { key: 'ArrowUp', run: (v) => handleArrow(v, host, 'up') },
     { key: 'ArrowDown', run: (v) => handleArrow(v, host, 'down') },
     { key: 'ArrowLeft', run: (v) => handleArrow(v, host, 'left') },
