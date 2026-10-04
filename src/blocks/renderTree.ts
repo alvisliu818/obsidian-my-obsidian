@@ -277,7 +277,47 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
   // --- embedded query results ({{query ...}}) ---
   syncQueryContainer(wrap, b, host);
 
+  // --- TraceTime parity: last-edited label at the row's right edge ---
+  syncTracetimeLabel(wrap, b, host);
+
   return wrap;
+}
+
+/**
+ * TraceTime parity: render the block's last-edited timestamp (from the
+ * TraceTime plugin's tracker, see features/tracetime.ts) as its own
+ * `.tracetime-label` component at the row's right edge. No-op when the plugin
+ * is absent (labelFor returns null).
+ */
+function syncTracetimeLabel(wrap: HTMLElement, b: Block, host: BlockEditorView): void {
+  // The native properties UI has no labels of its own — keep that row bare.
+  if (isPropsBlock(b, host) && host.plugin.settings.pagePropsEditor === 'native') return;
+  const main = wrap.querySelector(':scope > .block-main');
+  if (!main) return;
+  const minutes = host.tracetimeModifiedAt(b);
+  let el = main.querySelector(':scope > .tracetime-label') as HTMLElement | null;
+  if (minutes === null) {
+    el?.remove();
+    return;
+  }
+  if (!el) {
+    el = main.createEl('div', { cls: 'tracetime-label' });
+    el.createSpan('tracetime-label-dot');
+    el.createSpan({ cls: 'tracetime-label-text' });
+    const vertical = host.tracetimeVertical();
+    if (vertical === 'start' || vertical === 'end') el.dataset.vertical = vertical;
+  }
+  const text = el.querySelector('.tracetime-label-text');
+  const next = host.tracetimeFormat(minutes);
+  if (text && text.textContent !== next) text.setText(next);
+}
+
+/** Update the labels of every rendered row after the tracker reconciled. */
+export function refreshTracetimeLabels(host: BlockEditorView): void {
+  for (const wrap of host.containerEl.querySelectorAll<HTMLElement>('.block-wrap')) {
+    const b = blockOfEl.get(wrap);
+    if (b) syncTracetimeLabel(wrap, b, host);
+  }
 }
 
 const WRAP_PROPS_SKIP = new Set(['id', 'collapsed', 'style']);

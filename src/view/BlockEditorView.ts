@@ -26,6 +26,7 @@ import {
   findBlockEl,
   patchBlockSubtree,
   patchSiblingList,
+  refreshTracetimeLabels,
   VIRTUAL_CHUNK,
   VIRTUAL_INITIAL_CAP,
 } from '../blocks/renderTree';
@@ -45,6 +46,7 @@ import {
 } from '../features/links';
 import { collapseLevels, expandLevels, isSubtreeFullyFolded, toggleCollapse } from '../interactions/collapse';
 import { isCollapsed } from '../types';
+import { buildTraceTimeIndex, formatTraceTimestamp, traceTimeModifiedAt, traceTimePluginOf, type TraceTimeIndex, type TraceTimeState } from '../features/tracetime';
 import { breadcrumbFor, restoreZoomed, visibleRootsFor, zoomId } from '../interactions/zoom';
 import { attachDnd } from '../interactions/dnd';
 import { attachContextMenu } from '../interactions/contextMenu';
@@ -122,6 +124,15 @@ export class BlockEditorView extends TextFileView {
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
     super(leaf);
     this.plugin = plugin;
+    // TraceTime parity: the tracker reconciles from disk after every save —
+    // refresh this page's labels shortly after (its reconcile reads async).
+    this.registerEvent(
+      this.app.vault.on('modify', (f) => {
+        if (f instanceof TFile && f.path === this.file?.path) {
+          window.setTimeout(() => this.refreshTracetimeLabels(), 700);
+        }
+      }),
+    );
   }
 
   getViewType(): string {
@@ -354,6 +365,8 @@ export class BlockEditorView extends TextFileView {
 
   private render(): void {
     try {
+      // TraceTime labels re-resolve against the tracker's current index.
+      this.tracetimeCache = null;
       this.renderInner();
     } catch (e) {
       console.error('[LG] render() threw:', e);
@@ -870,6 +883,105 @@ ${content}`;
     const path = this.file?.path;
     if (!path) return;
     registerLogseqPageProps(path, docPageProps(this.doc));
+  }
+
+  // ------------------------------------------------------------------
+  // TraceTime parity (block last-edited labels)
+  // ------------------------------------------------------------------
+
+  private tracetimeCache: TraceTimeIndex | null = null;
+  private tracetimeFp = '';
+  private tracetimeEnsured: string | null = null;
+  private tracetimeRetries = 0;
+  private tracetimeRetryPending = false;
+
+  /** minutes-since-epoch the TraceTime plugin recorded for `b`, or null. */
+  tracetimeModifiedAt(b: Block): number | null {
+    const p = traceTimePluginOf(this.app);
+    if (!p || !this.file) return null;
+    let st: TraceTimeState | undefined;
+    try {
+      st = p.tracker?.getState?.(this.file.path);
+    } catch {
+      return null;
+    }
+    if (!st) {
+      // The tracker only keeps files it saw in native markdown views and
+      // evicts them on layout-change — ask it to track ours; the bounded
+      // retry below re-walks the rows once its async open lands. NEVER call
+      // refreshTracetimeLabels() synchronously from here: the walk re-enters
+      // this method per row and would recurse until the stack overflows.
+      this.ensureTracetimeTracking();
+      return null;
+    }
+    // Fingerprint the state: after a save, their reconcile mutates the SAME
+    // state object (entry timestamps move, text grows) — rebuild the cache
+    // whenever anything in it changed.
+    const blocks = st.index.blocks;
+    let sum = 0;
+    for (const b of blocks) sum += b.modifiedAt;
+    const fp = `${st.text.length}:${blocks.length}:${sum}`;
+    if (!this.tracetimeCache || fp !== this.tracetimeFp) {
+      this.tracetimeFp = fp;
+      this.tracetimeCache = buildTraceTimeIndex(st);
+    }
+    if (!this.tracetimeCache) return null;
+    return traceTimeModifiedAt(this.tracetimeCache, b);
+  }
+
+  /** TraceTime's own relative/absolute formatting for a recorded time. */
+  tracetimeFormat(minutes: number): string {
+    const p = traceTimePluginOf(this.app);
+    return p ? formatTraceTimestamp(minutes, p.settings) : '';
+  }
+
+  /** TraceTime's label vertical alignment preference ('start' | 'middle' | 'end'). */
+  tracetimeVertical(): string {
+    const p = traceTimePluginOf(this.app);
+    const v = p?.settings?.['labelVertical'];
+    return v === 'start' || v === 'end' ? v : 'middle';
+  }
+
+  /**
+   * Make TraceTime track this file (idempotent) and re-walk the rows on a
+   * timer until its state sticks — bounded, timer-separated (no recursion
+   * through the render walk).
+   */
+  private ensureTracetimeTracking(): void {
+    if (!this.file) return;
+    if (this.tracetimeEnsured !== this.file.path) {
+      this.tracetimeEnsured = this.file.path;
+      try {
+        traceTimePluginOf(this.app)?.tracker?.ensureFile?.(this.file.path);
+      } catch {
+        /* plugin API drift */
+      }
+    }
+    if (this.tracetimeRetryPending || this.tracetimeRetries >= 10) return;
+    this.tracetimeRetryPending = true;
+    this.tracetimeRetries++;
+    window.setTimeout(() => {
+      this.tracetimeRetryPending = false;
+      const p = traceTimePluginOf(this.app);
+      if (!p || !this.file) return;
+      try {
+        p.tracker?.ensureFile?.(this.file.path);
+      } catch {
+        /* plugin API drift */
+      }
+      // One walk: rows pick up labels when the state exists; while it is
+      // still missing each row re-enters ensureTracetimeTracking, which
+      // schedules exactly one more pass.
+      refreshTracetimeLabels(this);
+    }, 800);
+  }
+
+  refreshTracetimeLabels(): void {
+    refreshTracetimeLabels(this);
+    const p = traceTimePluginOf(this.app);
+    const st = p && this.file ? p.tracker?.getState?.(this.file.path) : true;
+    if (!st) this.ensureTracetimeTracking();
+    else this.tracetimeRetries = 0;
   }
 
   // ------------------------------------------------------------------

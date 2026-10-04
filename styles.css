@@ -1557,6 +1557,30 @@ body.block-touch-dragging {
   width: 100%;
 }
 
+/* ---------- TraceTime parity: per-block last-edited labels at the row's
+   right edge — the plugin's own .tracetime-label component styles apply
+   (they are unscoped); only the anchor and alignment live here. All rows
+   share the same right edge (children indents are on the left), so the
+   labels line up like the native overlay's contentRight column. ---------- */
+.block-main .tracetime-label {
+  right: 0;
+  top: 50%;
+  transform: translate(0, -50%);
+  padding-left: 0.5em;
+  pointer-events: none;
+}
+
+.block-main .tracetime-label[data-vertical='start'] {
+  top: 4px;
+  transform: none;
+}
+
+.block-main .tracetime-label[data-vertical='end'] {
+  top: auto;
+  bottom: 4px;
+  transform: none;
+}
+
 .block-content-static p {
   margin-block: 0;
   line-height: 1.55;
