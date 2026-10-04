@@ -1173,8 +1173,22 @@
 
 /* A quote block whose content is only `>` markers renders a zero-height
    blockquote — invisible. Give it a row so the empty quote shows its bar. */
-.block-content blockquote:not(:has(*)) {
+.block-content blockquote:not(:has(*)),
+.block-content blockquote > p:only-child:empty {
   min-height: 1.4em;
+}
+
+/* The render pass splits an empty quote row into its own blockquote — kill
+   the junction (gap + rounded corners) so consecutive blockquotes read as
+   ONE continuous quote box. */
+.block-content blockquote + blockquote {
+  margin-top: 0;
+  border-top-left-radius: 0;
+}
+
+.block-content blockquote:has(+ blockquote) {
+  margin-bottom: 0;
+  border-bottom-left-radius: 0;
 }
 
 .block-content blockquote > :first-child {
