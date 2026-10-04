@@ -125,7 +125,7 @@ function alignOf(cell: string): string {
 const hrReplace = Decoration.replace({ widget: new HrWidget() });
 const wikilinkMark = Decoration.mark({ class: 'lgp-wikilink' });
 const commentMark = Decoration.mark({ class: 'lgp-comment' });
-const boldMark = Decoration.mark({ class: 'lgp-bold' });
+const boldMark = Decoration.mark({ class: 'cm-strong' });
 const italicMark = Decoration.mark({ class: 'lgp-italic' });
 const strikeMark = Decoration.mark({ class: 'lgp-strike' });
 const highlightMark = Decoration.mark({ class: 'lgp-highlight' });

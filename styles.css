@@ -1235,7 +1235,8 @@
 
 .lgp-wikilink { color: var(--link-color, var(--text-accent)); }
 .lgp-comment { color: var(--text-faint); }
-.lgp-bold { font-weight: 600; }
+/* Bold content uses Obsidian's native .cm-strong (app.css: weight calc +
+   var(--bold-color)) — the static <strong> look. */
 .lgp-italic { font-style: italic; }
 .lgp-strike { text-decoration: line-through; }
 .lgp-highlight { background: var(--text-highlight-bg, var(--text-highlight)); }
