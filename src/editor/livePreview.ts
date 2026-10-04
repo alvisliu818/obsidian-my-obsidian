@@ -138,12 +138,15 @@ const hrLine = Decoration.line({ class: 'lgp-hr-line' });
 
 /** Inline marker pairs: [regex, mark length, content mark class?]. */
 const PAIRS: Array<{ kind: string; re: RegExp; len: number; mark?: Decoration }> = [
+  // CODE FIRST: code spans claim their range before the emphasis pairs, so
+  // `__closure__` never false-triggers the __bold__ rule (CommonMark: code
+  // spans win; emphasis inside them is literal).
+  { kind: 'code', re: /`([^`\n]+)`/g, len: 1, mark: inlineCodeMark },
   { kind: 'bold', re: /\*\*(?=[^\s*])((?:[^*]|[\s\S]*?[^\s*])?)\*\*/g, len: 2, mark: boldMark },
   { kind: 'boldAlt', re: /__(?=[^\s_])[\s\S]*?[^\s_]__/g, len: 2, mark: boldMark },
   { kind: 'highlight', re: /==(?=[^\s=])[\s\S]*?[^\s=]==/g, len: 2, mark: highlightMark },
   { kind: 'strike', re: /~~(?=[^\s~])[\s\S]*?[^\s~]~~/g, len: 2, mark: strikeMark },
   { kind: 'comment', re: /%%([\s\S]*?)%%/g, len: 2, mark: commentMark },
-  { kind: 'code', re: /`([^`\n]+)`/g, len: 1, mark: inlineCodeMark },
   { kind: 'italic', re: /\*(?=[^\s*])(?:[^*\n]*[^\s*])?\*/g, len: 1, mark: italicMark },
 ];
 
@@ -175,11 +178,17 @@ export function collectLivePreview(state: EditorState): LiveSpec[] {
 
   const doc = state.doc;
   const specs: LiveSpec[] = [];
-  // Ranges already claimed by a longer construct (bold before italic, code
-  // spans before the regex pass).
-  const covered: Array<[number, number]> = [];
-  const overlaps = (from: number, to: number): boolean =>
-    covered.some(([a, b]) => from < b && to > a);
+  // Ranges already claimed by a processed construct. Code spans claim first;
+  // emphasis may fully CONTAIN a claimed code span (CommonMark nesting), but
+  // a partial overlap — e.g. __bold__ markers inside backticks — is dropped.
+  const covered: Array<{ from: number; to: number; code: boolean }> = [];
+  const overlaps = (from: number, to: number, isCode = false): boolean =>
+    covered.some(
+      (c) =>
+        from < c.to &&
+        to > c.from &&
+        !(c.code && !isCode && from <= c.from && to >= c.to),
+    );
 
   // --- inline marker pairs ---
   for (let ln = 1; ln <= doc.lines; ln++) {
@@ -192,7 +201,7 @@ export function collectLivePreview(state: EditorState): LiveSpec[] {
         const to = from + m[0].length;
         if (to - from <= p.len * 2) continue; // empty content
         if (overlaps(from, to)) continue;
-        covered.push([from, to]); // claim even when touched (blocks sub-matches)
+        covered.push({ from, to, code: p.kind === 'code' }); // claim even when touched (blocks sub-matches)
         if (inInterior(from, to)) continue;
         specs.push({ from, to: from + p.len, kind: p.kind, deco: hide });
         specs.push({ from: to - p.len, to, kind: p.kind, deco: hide });
@@ -212,7 +221,7 @@ export function collectLivePreview(state: EditorState): LiveSpec[] {
       const from = line.from + m.index;
       const to = from + m[0].length;
       if (overlaps(from, to)) continue;
-      covered.push([from, to]);
+      covered.push({ from, to, code: false });
       if (inInterior(from, to)) continue;
       specs.push({ from, to: from + 2, kind: 'wikilink', deco: hide });
       specs.push({ from: to - 2, to, kind: 'wikilink', deco: hide });

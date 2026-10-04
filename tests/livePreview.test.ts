@@ -135,3 +135,21 @@ describe('collectLivePreview — tables', () => {
     expect(at(doc, doc.length)).toEqual([]);
   });
 });
+
+describe('collectLivePreview — code spans claim before emphasis', () => {
+  const CODE_BOLD = '可通过`__closure__`等属性区分';
+
+  it('code span wins: __ markers inside backticks stay literal', () => {
+    const specs = at(CODE_BOLD, CODE_BOLD.length);
+    expect(specs.some((s) => s.kind === 'code')).toBe(true);
+    expect(specs.some((s) => s.kind === 'boldAlt')).toBe(false);
+    expect(visible(CODE_BOLD, CODE_BOLD.length)).toBe('可通过__closure__等属性区分');
+  });
+
+  it('bold containing a code span still renders bold (CommonMark nesting)', () => {
+    const doc = '**a `b` c**';
+    const specs = at(doc, doc.length);
+    expect(specs.some((s) => s.kind === 'bold')).toBe(true);
+    expect(visible(doc, doc.length)).toBe('a b c');
+  });
+});
