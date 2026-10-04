@@ -112,6 +112,7 @@ const propLineHighlighter = ViewPlugin.fromClass(
 import {
   handleArrow,
   handleBackspace,
+  handleBacktick,
   handleCycleMarker,
   handleDelete,
   handleEnter,
@@ -151,6 +152,7 @@ export function createBlockKeymap(host: BlockEditorView): KeyBinding[] {
     { key: 'Shift-Tab', run: (v) => handleTab(v, host, true) },
     { key: 'Backspace', run: (v) => handleBackspace(v, host) },
     { key: 'Delete', run: (v) => handleDelete(v, host) },
+    { key: '`', run: (v) => handleBacktick(v, host) },
     { key: 'ArrowUp', run: (v) => handleArrow(v, host, 'up') },
     { key: 'ArrowDown', run: (v) => handleArrow(v, host, 'down') },
     { key: 'ArrowLeft', run: (v) => handleArrow(v, host, 'left') },

@@ -266,6 +266,25 @@ export function handleJumpBlock(view: EditorView, host: BlockEditorView, dir: -1
   return true;
 }
 
+/**
+ * Typing ` with a selection wraps it in inline-code backticks (Obsidian
+ * behavior) instead of typing over the selection. The wrapped text stays
+ * selected so further formatting can be applied. Empty selection falls
+ * through to the plain insert.
+ */
+export function handleBacktick(view: EditorView, host: BlockEditorView): boolean {
+  const b = focusedBlock(host);
+  if (!b) return false;
+  const sel = view.state.selection.main;
+  if (sel.empty) return false;
+  const inner = view.state.doc.sliceString(sel.from, sel.to);
+  view.dispatch({
+    changes: { from: sel.from, to: sel.to, insert: '`' + inner + '`' },
+    selection: { anchor: sel.from + 1, head: sel.to + 1 },
+  });
+  return true;
+}
+
 /** Escape: commit + leave the block (Logseq exits editing). */
 export function handleEscape(view: EditorView, _host: BlockEditorView): boolean {
   void _host;
