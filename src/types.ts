@@ -11,8 +11,12 @@ export const MARKERS: Exclude<Marker, null>[] = ['TODO', 'DOING', 'DONE'];
 /** Automatic take-over scope for the block editor. */
 export type ScopeMode = 'all' | 'folders';
 
+  /** Per-page default editor, set by the page `editor` property. */
 /** Per-page default editor, set by the page `editor` property. */
 export type EditorChoice = 'logseq' | 'native';
+
+/** Editor UI for the page-properties first block: Logseq `key:: value` text or Obsidian's native properties editor. */
+export type PagePropsEditor = 'logseq' | 'native';
 
 export interface Block {
   /** 'list' = outline bullet block (Logseq style); 'raw' = verbatim top-level content (headings, paragraphs, fences, quotes...) */
@@ -68,6 +72,8 @@ export interface BlockEditorSettings {
   guideLineCollapseLevels: number;
   /** Guide-line click: how many child levels get unfolded (0 = all levels). */
   guideLineExpandLevels: number;
+  /** Editor for the page-properties first block: Logseq text editor or Obsidian's native properties editor. */
+  pagePropsEditor: PagePropsEditor;
 }
 
 export const DEFAULT_SETTINGS: BlockEditorSettings = {
@@ -84,6 +90,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   opLogEnabled: true,
   guideLineCollapseLevels: 0,
   guideLineExpandLevels: 0,
+  pagePropsEditor: 'logseq',
 };
 
 export function createBlock(text = '', marker: Marker = null): Block {

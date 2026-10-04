@@ -3,7 +3,7 @@
  * vault-wide block-id index, and clean uninstall (restore native views).
  */
 
-import { Menu, Notice, Plugin, TAbstractFile, WorkspaceLeaf, type CachedMetadata, type ViewState } from 'obsidian';
+import { Menu, MarkdownView, Notice, Plugin, TAbstractFile, WorkspaceLeaf, type CachedMetadata, type ViewState } from 'obsidian';
 import { BlockEditorView, VIEW_TYPE_BLOCK_EDITOR } from './view/BlockEditorView';
 import {
   DEFAULT_SETTINGS,
@@ -43,6 +43,9 @@ export default class LogseqEditorPlugin extends Plugin {
   opLogPending: OperationRecord[] = [];
   /** Set when a block reference should be revealed after opening a file. */
   pendingReveal: { path: string; blockId: string } | null = null;
+  /** Constructor of Obsidian's native properties editor (grabbed off a live instance). */
+  nativePropsCtor: unknown = null;
+  private nativePropsCtorPromise: Promise<unknown> | null = null;
 
   private origSetViewState: ((this: WorkspaceLeaf, state: ViewState, eState?: unknown) => Promise<void>) | null = null;
   private statusModeEl: HTMLElement | null = null;
@@ -64,6 +67,7 @@ export default class LogseqEditorPlugin extends Plugin {
     this.blockIndex.attach(this);
     this.app.workspace.onLayoutReady(() => {
       void this.blockIndex?.buildAll();
+      if (this.settings.pagePropsEditor === 'native') void this.resolveNativePropsCtor();
       this.convertOpenMarkdownLeaves();
     });
 
@@ -385,6 +389,7 @@ export default class LogseqEditorPlugin extends Plugin {
     };
     this.settings.guideLineCollapseLevels = clampLevels(this.settings.guideLineCollapseLevels);
     this.settings.guideLineExpandLevels = clampLevels(this.settings.guideLineExpandLevels);
+    if (this.settings.pagePropsEditor !== 'native') this.settings.pagePropsEditor = 'logseq';
   }
 
   async saveSettings(): Promise<void> {
@@ -486,8 +491,11 @@ export default class LogseqEditorPlugin extends Plugin {
 
   /** Current editing mode of the active editor (menu check + chip label). */
   private currentMode(): 'edit' | 'source' | 'native' {
-    const v = this.app.workspace.getActiveViewOfType(BlockEditorView);
-    if (v) return v.pageSourceMode ? 'source' : 'edit';
+    if (this.app.workspace.getActiveViewOfType(BlockEditorView)) return 'edit';
+    const md = this.app.workspace.getActiveViewOfType(MarkdownView);
+    // Obsidian's own raw source mode (mode 'source' + source flag true) —
+    // NOT live preview, which is also an editing mode.
+    if (md && md.getMode() === 'source' && md.getState()['source'] === true) return 'source';
     return 'native';
   }
 
@@ -505,27 +513,29 @@ export default class LogseqEditorPlugin extends Plugin {
     menu.showAtMouseEvent(evt);
   }
 
-  /** Switch the active editor to the picked mode (works from any mode). */
+  /**
+   * Switch the active editor to the picked mode (works from any mode).
+   * Page source mode IS Obsidian's own native source mode: the leaf opens the
+   * native markdown editor with `mode: 'source'` — the whole file as raw
+   * markdown, nothing rendered.
+   */
   private async applyMode(mode: 'edit' | 'source' | 'native'): Promise<void> {
     const leaf = this.app.workspace.activeLeaf;
     if (!leaf) return;
-    if (mode === 'native') {
-      if (leaf.view instanceof BlockEditorView) this.switchToNative(leaf);
-      return;
+    const blockView = this.app.workspace.getActiveViewOfType(BlockEditorView);
+    const md = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (mode === 'edit') {
+      if (!blockView && md) await this.switchToBlockEditor(leaf);
+    } else if (mode === 'source') {
+      if (blockView) this.switchToNative(leaf, 'source');
+      else if (md && !(md.getState()['source'] === true)) await this.setNativeSourceMode(leaf, true);
+    } else {
+      if (blockView) this.switchToNative(leaf);
+      else if (md && md.getState()['source'] === true) await this.setNativeSourceMode(leaf, false);
     }
-    const wantSource = mode === 'source';
-    const v = this.app.workspace.getActiveViewOfType(BlockEditorView);
-    if (v) {
-      // In-view toggle fires neither active-leaf-change nor layout-change —
-      // refresh the chip explicitly.
-      if (v.pageSourceMode !== wantSource) v.togglePageSourceMode();
-      this.updateStatusBar();
-      return;
-    }
-    if (leaf.view?.getViewType?.() === 'markdown') {
-      await this.switchToBlockEditor(leaf, wantSource);
-      this.updateStatusBar();
-    }
+    // In-view mode flips fire neither active-leaf-change nor layout-change —
+    // refresh the chip explicitly.
+    this.updateStatusBar();
   }
 
   private updateStatusBar(): void {
@@ -544,26 +554,74 @@ export default class LogseqEditorPlugin extends Plugin {
     el.setAttribute('aria-label', 'Editing mode — click to switch');
   }
 
-  private switchToNative(leaf: WorkspaceLeaf): void {
+  private switchToNative(leaf: WorkspaceLeaf, sourceMode?: 'source'): void {
     const file = (leaf.getViewState().state as { file?: string } | undefined)?.file;
     if (!file) return;
+    const state: Record<string, unknown> = { file };
+    if (sourceMode) {
+      state.mode = 'source';
+      state.source = true;
+    }
     // Bypass the take-over patch: the markdown setViewState would otherwise be
     // converted straight back to the block editor (takeOverByDefault).
-    if (this.origSetViewState) {
-      void this.origSetViewState.call(leaf, { type: 'markdown', state: { file }, active: true } as ViewState);
-      return;
-    }
-    void leaf.setViewState({ type: 'markdown', state: { file }, active: true } as ViewState);
+    void this.bypassingSetViewState(leaf, { type: 'markdown', state, active: true } as ViewState);
   }
 
-  private async switchToBlockEditor(leaf: WorkspaceLeaf, wantSource = false): Promise<void> {
+  /** Flip the NATIVE editor in place between raw source mode and live preview. */
+  private async setNativeSourceMode(leaf: WorkspaceLeaf, source: boolean): Promise<void> {
+    const vs = leaf.getViewState();
+    const state = (vs.state ?? {}) as Record<string, unknown>;
+    state.mode = 'source';
+    state.source = source;
+    vs.state = state;
+    await this.bypassingSetViewState(leaf, vs, { focus: true });
+  }
+
+  /** setViewState WITHOUT the take-over patch re-converting the file to the block editor. */
+  private async bypassingSetViewState(leaf: WorkspaceLeaf, state: ViewState, eState?: unknown): Promise<void> {
+    if (this.origSetViewState) await this.origSetViewState.call(leaf, state, eState);
+    else await leaf.setViewState(state, eState);
+  }
+
+  private async switchToBlockEditor(leaf: WorkspaceLeaf): Promise<void> {
     const file = (leaf.getViewState().state as { file?: string } | undefined)?.file;
     if (!file) return;
     await leaf.setViewState({ type: VIEW_TYPE_BLOCK_EDITOR, state: { file }, active: true } as ViewState);
-    if (wantSource) {
-      const v = this.app.workspace.getActiveViewOfType(BlockEditorView);
-      if (v && !v.pageSourceMode) v.togglePageSourceMode();
+  }
+
+  /**
+   * Resolve the constructor of Obsidian's native properties editor. The class
+   * is not exported, so it is taken off a live instance: any open native
+   * markdown view carries one; when none is open (take-over mode), a native
+   * markdown view is flashed in a new tab for exactly this purpose and
+   * detached again. Resolved once, cached.
+   */
+  async resolveNativePropsCtor(): Promise<unknown> {
+    if (this.nativePropsCtor) return this.nativePropsCtor;
+    if (!this.nativePropsCtorPromise) {
+      this.nativePropsCtorPromise = (async () => {
+        for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const ed = (leaf.view as any)?.metadataEditor;
+          if (ed) {
+            this.nativePropsCtor = ed.constructor;
+            return this.nativePropsCtor;
+          }
+        }
+        const file = this.app.workspace.getActiveFile() ?? this.app.vault.getMarkdownFiles()[0];
+        if (!file) return null;
+        const leaf = this.app.workspace.getLeaf(true);
+        try {
+          await this.bypassingSetViewState(leaf, { type: 'markdown', state: { file: file.path } } as ViewState);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          this.nativePropsCtor = (leaf.view as any)?.metadataEditor?.constructor ?? null;
+        } finally {
+          leaf.detach();
+        }
+        return this.nativePropsCtor;
+      })();
     }
+    return this.nativePropsCtorPromise;
   }
 
   /** Reveal a side panel, creating its leaf on first use. */

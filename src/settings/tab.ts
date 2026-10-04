@@ -1,6 +1,6 @@
 ﻿import { PluginSettingTab, Setting, type App } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
-import type { ScopeMode } from '../types';
+import type { PagePropsEditor, ScopeMode } from '../types';
 
 export class LogseqEditorSettingTab extends PluginSettingTab {
   plugin: LogseqEditorPlugin;
@@ -74,6 +74,23 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
             }),
         );
     }
+
+    // ---------- Page properties editor ----------
+    new Setting(containerEl)
+      .setName('Page properties editor')
+      .setDesc(
+        'How the page-properties block (the file-top key:: value lines, or frontmatter) is edited inside the block editor. "Native (Obsidian properties)" mounts Obsidian\'s own properties UI — with its property type widgets and the property plugins you have installed. The file format never changes either way.',
+      )
+      .addDropdown((d) =>
+        d
+          .addOptions({ logseq: 'Logseq (key:: value text)', native: 'Native (Obsidian properties)' })
+          .setValue(this.plugin.settings.pagePropsEditor)
+          .onChange(async (v) => {
+            this.plugin.settings.pagePropsEditor = v as PagePropsEditor;
+            await this.plugin.saveSettings();
+            if (v === 'native') void this.plugin.resolveNativePropsCtor();
+          }),
+      );
 
     // ---------- Outline guide line ----------
     const levelOptions = {

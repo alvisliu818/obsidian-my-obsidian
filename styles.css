@@ -1545,24 +1545,11 @@ body.block-touch-dragging {
   line-height: 1.55;
 }
 
-/* ---------- Page source mode (status bar): blocks show their RAW markdown.
-   Same font/line-height as the rendered static content and the editor (those
-   already match), so toggling shifts nothing and clicking a raw block maps
-   the editor caret precisely onto the click. Trailing `key:: value` lines dim
-   like the editor's .cm-prop-line. ---------- */
-.block-content-rawsource {
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
-  line-height: 1.55;
-}
-
-.block-content-rawsource:empty {
-  /* empty raw block: same floor as the editor's empty .cm-line */
-  min-height: 1.55em;
-}
-
-.block-content-rawsource .block-raw-propline {
-  color: var(--text-faint);
+/* ---------- Native properties editor mounted in the page-props block
+   (setting: pagePropsEditor = native). The component brings its own styles;
+   only fit it to the block content column. ---------- */
+.block-content .metadata-container {
+  width: 100%;
 }
 
 .block-content-static p {

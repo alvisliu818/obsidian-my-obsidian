@@ -261,10 +261,8 @@ export function createEditorExtensions(host: BlockEditorView, block?: Block): Ex
   const filteredDefaults = defaultKeymap.filter((k) => !OWNED_DEFAULT_KEYS.has(k.key ?? ''));
 
   // Live preview is always on; the block menu's "Source mode" mounts this
-  // block's editor WITHOUT it for one raw-source edit session, and the status
-  // bar's page-wide source mode does the same for EVERY block.
-  const livePreview =
-    block && (host.sourceModeBlock === block || host.pageSourceMode) ? [] : [livePreviewExtension];
+  // block's editor WITHOUT it for one raw-source edit session.
+  const livePreview = block && host.sourceModeBlock === block ? [] : [livePreviewExtension];
 
   const ext: Extension[] = [
     EditorView.lineWrapping,

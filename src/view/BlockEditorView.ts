@@ -6,12 +6,12 @@
  * TextFileView requestSave/save — files stay 100% standard markdown).
  */
 
-import { MarkdownRenderer, TFile, TextFileView, type TAbstractFile, type ViewState, type ViewStateResult, type WorkspaceLeaf } from 'obsidian';
+import { MarkdownRenderer, TFile, TextFileView, parseYaml, stringifyYaml, type TAbstractFile, type ViewState, type ViewStateResult, type WorkspaceLeaf } from 'obsidian';
 import { EditorView } from '@codemirror/view';
 import type { CompletionSource } from '@codemirror/autocomplete';
 import type LogseqEditorPlugin from '../main';
 import type { Block, ParsedDocument } from '../types';
-import { applyBlockProps, blockEditorDoc, createBlock, docPageProps, editableProps, isPagePropsBlock, propsShallowEqual, setCollapsed, splitPropLines } from '../types';
+import { applyBlockProps, blockEditorDoc, createBlock, docPageProps, editableProps, isPagePropsBlock, propsShallowEqual, setCollapsed, splitPropLines, syncFrontmatterProps } from '../types';
 import { parseDocument } from '../core/parser';
 import { clearLogseqPageProps, registerLogseqPageProps } from '../pagePropsRegistry';
 import { serializeBlock, serializeDocument } from '../core/serializer';
@@ -86,12 +86,10 @@ export class BlockEditorView extends TextFileView {
    * commit.
    */
   sourceModeBlock: Block | null = null;
-  /**
-   * Page-wide source mode (status bar toggle): every block edits as raw
-   * markdown — no live preview, and pure code fences stay as raw fences
-   * (no dedicated code editor). Off by default.
-   */
-  pageSourceMode = false;
+  /** Native properties editor mounted for the page-props block (setting: pagePropsEditor = native). */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private nativeProps: { editor: any; path: string } | null = null;
+  private nativePropsUnavailable = false;
   /** CM6 mounted inside an embed row for in-place editing (null when idle). */
   embedEdit: { view: EditorView; source: EmbedSource; path: number[]; row: HTMLElement; escHandler: (e: KeyboardEvent) => void } | null = null;
   zoomedBlock: Block | null = null;
@@ -231,6 +229,9 @@ export class BlockEditorView extends TextFileView {
   setViewData(data: string, clear: boolean): void {
     if (clear) this.commitFocusedText();
     this.renderGeneration++;
+    // The native properties editor is bound to ONE file — drop it on any
+    // (re)load; the next render re-mounts it against the fresh model.
+    this.teardownNativePropsEditor();
     this.doc = parseDocument(data);
     this.syncPagePropsRegistry();
     linkParents(this.doc.blocks);
@@ -308,6 +309,7 @@ export class BlockEditorView extends TextFileView {
 
   async onUnloadFile(file: import('obsidian').TFile): Promise<void> {
     this.commitFocusedText();
+    this.teardownNativePropsEditor();
     await this.save(true);
     return super.onUnloadFile(file);
   }
@@ -460,8 +462,8 @@ export class BlockEditorView extends TextFileView {
       }
     }
     // Code blocks open their OWN editor (no fences on screen, Enter = newline
-    // inside the code). Source mode keeps the raw view.
-    const codeInfo = this.sourceModeBlock || this.pageSourceMode ? null : parseCodeFence(b.text);
+    // inside the code). One-shot source mode keeps the raw view.
+    const codeInfo = this.sourceModeBlock ? null : parseCodeFence(b.text);
     // A click on the PREFIX (image/prose ABOVE the fence) edits the block
     // TEXT — the generic editor at the click position, not the code editor.
     // staticPos was mapped from the COMPLETE static render (before any
@@ -863,20 +865,104 @@ ${content}`;
     this.updateOutlinePath();
   }
 
-  /** Toggle page-wide source mode (status bar): raw markdown for every block. */
-  togglePageSourceMode(): void {
-    this.commitFocusedText();
-    this.sourceModeBlock = null;
-    this.pageSourceMode = !this.pageSourceMode;
-    this.render();
-  }
-
   /** Keep the Logseq-page-props registry fresh for other plugins. */
   private syncPagePropsRegistry(): void {
     const path = this.file?.path;
     if (!path) return;
     registerLogseqPageProps(path, docPageProps(this.doc));
   }
+
+  // ------------------------------------------------------------------
+  // Native properties editor (setting: pagePropsEditor = 'native')
+  // ------------------------------------------------------------------
+
+  /**
+   * Mount Obsidian's NATIVE properties editor (the `.metadata-container`
+   * component the native markdown view renders above its content) in place of
+   * the page-props block's Logseq `key:: value` content. Because the real
+   * component is used, every property plugin that extends the native
+   * properties UI (custom property type widgets, menus, suggestions) works
+   * here too. Returns false — rendering nothing — when the component class is
+   * not (yet) resolvable; the caller falls back to the Logseq rendering and
+   * the block is re-rendered once the class arrives.
+   */
+  nativePropsEditorFor(content: HTMLElement, b: Block): boolean {
+    if (!this.file) return false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const Ctor = this.plugin.nativePropsCtor as (new (app: unknown, owner: unknown) => any) | null;
+    if (!Ctor) {
+      if (this.nativePropsUnavailable) return false;
+      // Resolve once in the background, then re-render this block with the editor.
+      void this.plugin.resolveNativePropsCtor().then((resolved) => {
+        if (!resolved) this.nativePropsUnavailable = true;
+        if (this.doc.blocks[0] === b) patchBlockSubtree(b, this);
+      });
+      return false;
+    }
+    if (!this.nativeProps || this.nativeProps.path !== this.file.path) {
+      this.teardownNativePropsEditor();
+      const owner = {
+        app: this.app,
+        getFile: () => this.file ?? null,
+        // The native owner writes the record through its own editor; here the
+        // record round-trips into the page's OWN format (Logseq lines or
+        // frontmatter) through the block model + the debounced save.
+        saveFrontmatter: (record: Record<string, unknown>) => this.saveNativePropsRecord(record),
+        shiftFocusBefore: () => {},
+        shiftFocusAfter: () => {},
+        onMarkdownFold: () => {},
+        getHoverSource: () => null,
+      };
+      const editor = new Ctor(this.app, owner);
+      editor.load?.();
+      this.nativeProps = { editor, path: this.file.path };
+    }
+    content.appendChild(this.nativeProps.editor.containerEl);
+    this.nativeProps.editor.synchronize(nativePropsRecordOf(b));
+    return true;
+  }
+
+  private teardownNativePropsEditor(): void {
+    if (!this.nativeProps) return;
+    try {
+      this.nativeProps.editor.unload?.();
+    } catch {
+      /* component may never have been loaded */
+    }
+    this.nativeProps.editor.containerEl.remove();
+    this.nativeProps = null;
+  }
+
+  /**
+   * Native properties editor save: write the record back through the block
+   * model in the page's own format — file-top `key:: value` lines for
+   * Logseq-format pages, frontmatter for Obsidian-format ones — and let the
+   * debounced save put it on disk (registry + metadata cache follow).
+   */
+  private saveNativePropsRecord(record: Record<string, unknown>): void {
+    const b = this.doc.blocks[0];
+    if (!b || this.doc.blocks[0] !== b || !(b.kind === 'list' && b.text === '')) return;
+    if (Object.keys(record).length === 0) {
+      // Every property was deleted: the props block goes away with them.
+      this.teardownNativePropsEditor();
+      this.doc.blocks.shift();
+      this.markDirty();
+      this.render();
+      return;
+    }
+    if (b.frontmatter) {
+      b.text = stringifyYaml(record).replace(/\n+$/, '');
+      syncFrontmatterProps(b);
+    } else {
+      const props: Record<string, string> = {};
+      for (const [k, v] of Object.entries(record)) props[k] = nativePropValueToString(v);
+      b.props = props;
+      if (this.file) registerLogseqPageProps(this.file.path, props);
+    }
+    this.markDirty();
+  }
+
+  /** Keep the Logseq-page-props registry fresh for other plugins. */
 
   /** CM6 updateListener hooks. */
   onFocusedTextChange(): void {
@@ -1942,4 +2028,25 @@ ${content}`;
     // save path). No user prompt — editor-wins is the policy.
     this.requestSave();
   }
+}
+
+/** The record the native properties editor shows for the page-props block. */
+function nativePropsRecordOf(b: Block): Record<string, unknown> {
+  if (b.frontmatter) {
+    try {
+      const parsed = parseYaml(b.text) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    } catch {
+      /* invalid YAML: the editor shows its own error state for an empty record */
+    }
+    return {};
+  }
+  return { ...b.props };
+}
+
+/** Native property values (string | string[] | number | boolean | null) → the Logseq `key:: value` string form. */
+function nativePropValueToString(v: unknown): string {
+  if (v === null || v === undefined) return '';
+  if (Array.isArray(v)) return v.map(nativePropValueToString).join(', ');
+  return typeof v === 'string' ? v : String(v);
 }

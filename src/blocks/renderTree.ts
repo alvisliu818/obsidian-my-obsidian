@@ -19,7 +19,7 @@
 import { MarkdownRenderer, setIcon } from 'obsidian';
 import type { BlockEditorView } from '../view/BlockEditorView';
 import type { Block } from '../types';
-import { blockId, editableProps } from '../types';
+import { blockId } from '../types';
 import { createPageEmbedBox, enhanceBlockRefs, enhanceEmbeds } from '../features/links';
 import {
   buildQueryTableModel,
@@ -224,12 +224,13 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
     // CM6 gets mounted here by the view after the tree render pass.
     host.mountFocusedInto(content);
   } else if (isPropsBlock(b, host)) {
-    // The page-properties block renders its props AS the content — the same
-    // `key:: value` lines the editor shows, so both states look alike.
-    renderPropsAsContent(content, b, host);
-  } else if (host.pageSourceMode) {
-    // Page source mode: raw markdown instead of the rendered static content.
-    attachRawSource(content, b, host);
+    // The page-properties block: Obsidian's NATIVE properties editor when the
+    // setting picks it (falls back to the Logseq rendering until the native
+    // component class resolves), otherwise the same `key:: value` lines the
+    // editor shows, so both states look alike.
+    if (!(host.plugin.settings.pagePropsEditor === 'native' && host.nativePropsEditorFor(content, b))) {
+      renderPropsAsContent(content, b, host);
+    }
   } else {
     attachStaticContent(content, b, host);
   }
@@ -262,14 +263,12 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
   }
 
   // --- block properties below content (Logseq md parity) — hidden while
-  // the block is being edited (the editor shows the prop lines itself),
-  // for the props block (its props ARE the content), and in page source
-  // mode (the raw text already includes the `key:: value` lines). ---
-  if (!isPropsBlock(b, host) && !host.pageSourceMode) syncPropsRow(wrap, b, host, host.focusedBlock === b);
+  // the block is being edited (the editor shows the prop lines itself) and
+  // for the props block (its props ARE the content). ---
+  if (!isPropsBlock(b, host)) syncPropsRow(wrap, b, host, host.focusedBlock === b);
 
-  // --- embedded query results ({{query ...}}) — source mode shows the raw
-  // token, not executed results ---
-  if (!host.pageSourceMode) syncQueryContainer(wrap, b, host);
+  // --- embedded query results ({{query ...}}) ---
+  syncQueryContainer(wrap, b, host);
 
   return wrap;
 }
@@ -692,34 +691,6 @@ function enhanceCodeTokens(code: HTMLElement): void {
     parent.insertBefore(span, node.nextSibling);
     parent.insertBefore(tail, span.nextSibling);
   }
-}
-
-/**
- * Page source mode: the block shows its RAW markdown — exactly the doc the
- * focused editor mounts (blockEditorDoc: text plus trailing `key:: value`
- * lines, frontmatter body verbatim), with the property lines dimmed like the
- * editor's `.cm-prop-line`. No MarkdownRenderer, no embeds/code boxes/props
- * row/query results: the page reads as source, and clicking a block swaps in
- * the raw editor over identical geometry, so the caret lands at the click.
- */
-function attachRawSource(content: HTMLElement, b: Block, host: BlockEditorView): void {
-  const holder = content.createEl('div', { cls: 'block-content-rawsource' });
-  if (b.text) holder.createSpan({ text: b.text });
-  if (!b.frontmatter) {
-    for (const [k, v] of Object.entries(editableProps(b))) {
-      holder.createEl('div', { cls: 'block-raw-propline', text: `${k}:: ${v}`.trimEnd() });
-    }
-  }
-  holder.addEventListener('click', (e) => {
-    if (e.shiftKey || e.ctrlKey || e.metaKey) {
-      e.preventDefault();
-      e.stopPropagation();
-      host.selectFromClick(b, e);
-      return;
-    }
-    e.stopPropagation();
-    host.focusBlockFromClick(b, e);
-  });
 }
 
 function wireContentEvents(holder: HTMLElement, b: Block, host: BlockEditorView): void {
