@@ -254,6 +254,21 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
     }
   } else {
     attachStaticContent(content, b, host);
+    if (b.text === '' && !nativeProps) {
+      // Empty block: the static holder renders NOTHING (zero-height), so the
+      // focus handler wired on it can never receive a click — the row was
+      // unclickable and un-deletable. Wire the whole row (the wrap) instead:
+      // it is the only element guaranteed to cover the empty row's area.
+      wrap.addEventListener('click', (e) => {
+        if (e.shiftKey || e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          e.stopPropagation();
+          host.selectFromClick(b, e);
+          return;
+        }
+        host.focusBlockFromClick(b, e);
+      });
+    }
   }
 
   // --- children: the guide line hangs from the bullet dot and doubles as a
