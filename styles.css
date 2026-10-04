@@ -1153,6 +1153,38 @@
   background: var(--table-row-background-hover, var(--background-modifier-hover));
 }
 
+/* ---------- Blockquotes in block content ---------- */
+/* Obsidian scopes quote styling to .markdown-rendered / .markdown-preview-view
+   and themes (Blue Topaz) restyle it on the same scopes — block content is
+   neither, so a `> quote` block rendered as an unstyled paragraph. Mirror the
+   app defaults plus the theme look (5px theme-color bar, tinted background);
+   the variables resolve from the active theme, fallbacks keep other themes sane. */
+.block-content blockquote {
+  color: var(--blockquote-color, inherit);
+  font-style: var(--blockquote-font-style, normal);
+  background-color: var(--background-blockquote, var(--background-secondary));
+  border-width: 0 0 0 5px;
+  border-left-style: solid;
+  border-color: var(--theme-color, var(--blockquote-border-color, var(--background-modifier-border)));
+  border-radius: var(--radius-s, 4px);
+  padding: 0.5em 0.5em 0.5em 0.6em;
+  margin-inline: 2.5%;
+}
+
+.block-content blockquote > :first-child {
+  margin-top: 0;
+}
+
+.block-content blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.block-content blockquote p {
+  margin-left: 1px;
+  margin-right: 0;
+  font-size: var(--font-size-preview-blockquote, inherit);
+}
+
 /* ---------- Live preview (实时预览) in the block editors ---------- */
 /* Syntax marks hidden by the live-preview decorations; the remaining text
    takes its rendered form. Class names are unprefixed (unique) so both the
