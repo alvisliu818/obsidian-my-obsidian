@@ -11,6 +11,7 @@ import {
   insertBefore,
   isDescendant,
   linkParents,
+  mergeWithNext,
   mergeWithPrev,
   moveBlock,
   nextVisible,
@@ -117,6 +118,35 @@ describe('structure edits', () => {
     const tail = doc.blocks[1];
     const prev = mergeWithPrev(doc.blocks, tail);
     expect(prev?.text).toBe('parenttail');
+  });
+
+  it('mergeWithNext joins text and reparents children (document order)', () => {
+    const doc = setup('- first\n\t- kid1\n\t- kid2\n- second');
+    const first = doc.blocks[0];
+    // Document order: the next visible block after `first` is its first child
+    // (same walker Backspace uses backward).
+    const merged = mergeWithNext(doc.blocks, first);
+    expect(merged?.text).toBe('firstkid1');
+    expect(doc.blocks.length).toBe(2);
+    expect(doc.blocks[0].children.length).toBe(1);
+    expect(doc.blocks[0].children[0].text).toBe('kid2');
+    expect(doc.blocks[1].text).toBe('second');
+  });
+
+  it('mergeWithNext on an empty block deletes the empty row', () => {
+    // The table-preceding-empty-line case: Del on the empty block pulls the
+    // next block's content in and the row disappears.
+    const doc = setup('- para\n- \n- | a | b |');
+    const empty = doc.blocks[1];
+    const merged = mergeWithNext(doc.blocks, empty);
+    expect(merged?.text).toBe('| a | b |');
+    expect(doc.blocks.length).toBe(2);
+    expect(doc.blocks[1].text).toBe('| a | b |');
+  });
+
+  it('mergeWithNext returns null for the last block', () => {
+    const doc = setup('- only');
+    expect(mergeWithNext(doc.blocks, doc.blocks[0])).toBeNull();
   });
 });
 

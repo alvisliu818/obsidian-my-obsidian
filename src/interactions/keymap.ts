@@ -9,6 +9,7 @@ import type { EditorView } from '@codemirror/view';
 import type { BlockEditorView } from '../view/BlockEditorView';
 import {
   indent,
+  mergeWithNext,
   mergeWithPrev,
   moveBlockVertically,
   nextVisible,
@@ -165,7 +166,9 @@ export function handleBackspace(view: EditorView, host: BlockEditorView): boolea
   const sel = view.state.selection.main;
   if (!sel.empty) return false;
   if (sel.head !== 0) return false;
-  if (b.kind === 'raw') return true; // nothing before caret in raw block
+  // Raw blocks merge too (Logseq: Backspace at a block's start joins the
+  // previous block — the old raw guard made e.g. a table's first line an
+  // undeletable dead end).
   const roots = host.visibleRoots;
   const prev = prevVisible(roots, b);
   if (!prev) return true; // first block: consume, nothing to merge
@@ -181,6 +184,36 @@ export function handleBackspace(view: EditorView, host: BlockEditorView): boolea
     () => ({ lists: [parent] }),
   );
   host.focusBlock(prev, Math.min(joinOffset, prev.text.length));
+  return true;
+}
+
+/**
+ * Delete (forward) at block end: merge the NEXT visible block into this one
+ * (Logseq parity). On an empty block this removes the empty row — the next
+ * block's content fills it and the row disappears.
+ */
+export function handleDelete(view: EditorView, host: BlockEditorView): boolean {
+  const b = focusedBlock(host);
+  if (!b) return false;
+  const sel = view.state.selection.main;
+  if (!sel.empty) return false;
+  const text = view.state.doc.toString();
+  if (sel.head !== text.length) return false;
+  const roots = host.visibleRoots;
+  const next = nextVisible(roots, b);
+  if (!next) return true; // last block: consume, nothing to merge
+  const joinOffset = text.length;
+  const parent = b.parent;
+  const nextParent = next.parent;
+  host.mutate(
+    () => {
+      b.text = text;
+      mergeWithNext(roots, b);
+    },
+    // The merge may pull a block from a different sibling list — patch both.
+    () => ({ lists: [parent, nextParent] }),
+  );
+  host.focusBlock(b, joinOffset);
   return true;
 }
 

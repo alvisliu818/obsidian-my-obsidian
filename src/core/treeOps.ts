@@ -298,6 +298,27 @@ export function mergeWithPrev(roots: Block[], b: Block): Block | null {
   return prev;
 }
 
+/**
+ * Merge the NEXT visible block into b (Delete at block end) — the forward
+ * twin of mergeWithPrev. On an empty block this deletes the empty row: the
+ * next block's content fills it and the next block disappears. Returns b
+ * (caret stays at the join point), or null when there is no next visible
+ * block.
+ */
+export function mergeWithNext(roots: Block[], b: Block): Block | null {
+  const next = nextVisible(roots, b);
+  if (!next) return null;
+  b.text += next.text;
+  const kids = next.children.slice();
+  for (const k of kids) {
+    b.children.push(k);
+    k.parent = b;
+  }
+  next.children = [];
+  removeBlock(next);
+  return b;
+}
+
 export type MovePosition = 'before' | 'after' | 'child';
 
 /**
