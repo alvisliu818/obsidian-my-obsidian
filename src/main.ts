@@ -113,7 +113,18 @@ export default class LogseqEditorPlugin extends Plugin {
       // plugins like abstract-folder build parent-child trees from those
       // (Obsidian's own parser only extracts links from real frontmatter).
       const fmLinks: NonNullable<CachedMetadata['frontmatterLinks']> = [];
+      // Obsidian's list-type properties (tags/aliases/cssclasses) render as
+      // multi-value editors expecting an ARRAY — a comma-separated Logseq
+      // value merged as one string renders as a single broken chip. Split
+      // them (full-width commas too); other keys keep their literal value.
+      const LIST_KEYS = new Set(['tags', 'aliases', 'cssclasses', 'cssclass']);
+      const fmValues: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(props)) {
+        if (LIST_KEYS.has(k) && typeof v === 'string' && /[，,]/.test(v)) {
+          fmValues[k] = v.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+        } else {
+          fmValues[k] = v;
+        }
         const dest = v ? this.app.metadataCache.getFirstLinkpathDest(v, path) : null;
         if (dest) {
           fmLinks.push({
@@ -125,7 +136,7 @@ export default class LogseqEditorPlugin extends Plugin {
       }
       return {
         ...cache,
-        frontmatter: { ...(cache?.frontmatter ?? {}), ...props, position: cache?.frontmatter?.position },
+        frontmatter: { ...(cache?.frontmatter ?? {}), ...fmValues, position: cache?.frontmatter?.position },
         ...(fmLinks.length > 0 ? { frontmatterLinks: [...(cache?.frontmatterLinks ?? []), ...fmLinks] } : {}),
       } as CachedMetadata;
     };

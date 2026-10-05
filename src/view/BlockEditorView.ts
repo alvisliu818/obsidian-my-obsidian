@@ -2427,7 +2427,17 @@ function nativePropsRecordOf(b: Block): Record<string, unknown> {
     }
     return {};
   }
-  return { ...b.props };
+  const record: Record<string, unknown> = { ...b.props };
+  // Obsidian's list-type properties (tags/aliases/cssclasses) render as
+  // multi-value editors expecting an ARRAY — a comma-separated Logseq value
+  // fed as one string renders as a single "disallowed tag name" invalid pill.
+  for (const k of ['tags', 'aliases', 'cssclasses', 'cssclass']) {
+    const v = record[k];
+    if (typeof v === 'string' && /[，,]/.test(v)) {
+      record[k] = v.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+    }
+  }
+  return record;
 }
 
 /** Native property values (string | string[] | number | boolean | null) → the Logseq `key:: value` string form. */
