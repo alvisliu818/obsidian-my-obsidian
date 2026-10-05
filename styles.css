@@ -3415,3 +3415,34 @@ body.lgp-table-editor-cursor * {
   font-size: var(--font-ui-smaller);
   margin: 0 0 12px;
 }
+
+/* ---------- Image resize handles (native editor parity) ---------- */
+.lgp-img-wrap {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+  max-width: 100%;
+}
+.lgp-img-wrap img {
+  max-width: 100%;
+}
+.lgp-img-resize-corner {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: var(--interactive-accent);
+  border: 1.5px solid var(--background-primary);
+  opacity: 0;
+  cursor: nwse-resize;
+  transition: opacity 0.12s;
+  z-index: 6;
+}
+.lgp-img-wrap:hover .lgp-img-resize-corner {
+  opacity: 0.9;
+}
+.lgp-img-wrap.resizing .lgp-img-resize-corner {
+  opacity: 1;
+}

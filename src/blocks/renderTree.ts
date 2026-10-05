@@ -726,6 +726,8 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockEditorVi
       // rendered <table> in place) and after code blocks (a table inside a code
       // fence is not a table).
       enhanceTables(holder, b, host);
+      // Image resize handles (native editor parity): hover corner + drag.
+      enhanceImages(holder, b, host);
       // Swap page-embed tokens for live boxes ( BEFORE block-ref chips so
       // the token is not mistaken for text).
       for (const { token, page } of pageEmbedTokens) {
@@ -776,6 +778,78 @@ function enhanceTables(holder: HTMLElement, b: Block, host: BlockEditorView): vo
     if (table.closest('.block-query-table-wrap, .lgp-code-block, .dataview-missing')) continue;
     enhanceTable(table, b, host);
   }
+}
+
+/**
+ * Image resize (native editor parity): each rendered <img> gets a hover
+ * corner handle at its bottom-right; dragging resizes the image live and on
+ * drop writes the width back into the block text — `![alt|W](path)` /
+ * `![[path|W]]` for markdown forms, a zoom-percentage update for raw HTML
+ * <img style="zoom:X%"> images. Render-only until the drop commits through
+ * the block model.
+ */
+function enhanceImages(holder: HTMLElement, b: Block, host: BlockEditorView): void {
+  const imgs = [...holder.querySelectorAll('img')];
+  imgs.forEach((img, index) => {
+    if (img.closest('.lgp-img-wrap')) return;
+    const wrap = document.createElement('span');
+    wrap.className = 'lgp-img-wrap';
+    img.replaceWith(wrap);
+    wrap.appendChild(img);
+    const corner = wrap.createEl('div', { cls: 'lgp-img-resize-corner' });
+    corner.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX;
+      const startW = img.getBoundingClientRect().width;
+      const natural = img.naturalWidth || startW;
+      wrap.addClass('resizing');
+      const move = (ev: MouseEvent): void => {
+        const w = Math.max(24, Math.min(2000, Math.round(startW + (ev.clientX - startX))));
+        img.style.width = w + 'px';
+        img.style.height = 'auto';
+        img.style.maxWidth = 'none';
+      };
+      const up = (ev: MouseEvent): void => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+        wrap.removeClass('resizing');
+        const w = Math.max(24, Math.min(2000, Math.round(startW + (ev.clientX - startX))));
+        if (Math.abs(w - startW) < 2) return; // a click, not a resize
+        host.mutate(
+          () => {
+            writeImageWidth(b, index, w, natural);
+          },
+          () => ({ subtree: b }),
+        );
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+    });
+  });
+}
+
+/**
+ * Write a resized width back into the block text: the `index`-th image
+ * construct (md image / wiki embed / raw HTML zoom img, in text order)
+ * gains the width — `![alt|W](path)`, `![[path|W]]`, or an updated
+ * `zoom:X%` on the HTML tag.
+ */
+function writeImageWidth(b: Block, index: number, width: number, natural: number): void {
+  let count = -1;
+  const RE = /!\[[^\]]*\]\([^)]*\)|!\[\[[^\]]*\]\]|<img[^>]*style="[^"]*zoom:\s*[\d.]+%[^"]*"[^>]*>/g;
+  b.text = b.text.replace(RE, (m) => {
+    count++;
+    if (count !== index) return m;
+    if (m.startsWith('![') && !m.startsWith('![[')) {
+      return m.replace(/^!\[([^\]]*)\]/, (_x, alt: string) => `![${alt.replace(/\|\d+$/, '')}|${width}]`);
+    }
+    if (m.startsWith('![[')) {
+      return m.replace(/\|\d+\]\]$/, ']]').replace(/\]\]$/, `|${width}]]`);
+    }
+    const zoom = natural > 0 ? Math.round((width / natural) * 100) : 100;
+    return m.replace(/zoom:\s*[\d.]+%/i, `zoom:${zoom}%`);
+  });
 }
 
 function enhanceCodeBlocks(holder: HTMLElement, b: Block, host: BlockEditorView): void {
