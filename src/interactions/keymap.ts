@@ -104,7 +104,10 @@ export function handleTab(view: EditorView, host: BlockEditorView, shift: boolea
 function atFirstVisualLine(view: EditorView): boolean {
   const head = view.state.selection.main.head;
   const line = view.state.doc.lineAt(head);
-  if (line.from === 0 && line.to >= view.state.doc.length) return true;
+  // The block's doc holds soft lines (real newlines): arrows must walk them
+  // before exiting to the neighboring block — "first visual line" means the
+  // doc's FIRST logical line, and then the caret on its first visual row.
+  if (line.from !== 0) return false;
   const headTop = view.coordsAtPos(head)?.top;
   const lineTop = view.coordsAtPos(line.from)?.top;
   if (headTop === undefined || lineTop === undefined) return true;
@@ -114,7 +117,7 @@ function atFirstVisualLine(view: EditorView): boolean {
 function atLastVisualLine(view: EditorView): boolean {
   const head = view.state.selection.main.head;
   const line = view.state.doc.lineAt(head);
-  if (line.from === 0 && line.to >= view.state.doc.length) return true;
+  if (line.to !== view.state.doc.length) return false; // more soft lines below
   const headBottom = view.coordsAtPos(head)?.bottom;
   const lineBottom = view.coordsAtPos(line.to)?.bottom;
   if (headBottom === undefined || lineBottom === undefined) return true;

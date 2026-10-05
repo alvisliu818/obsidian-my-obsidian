@@ -339,3 +339,21 @@ describe('empty quote line is its own block', () => {
     expect(again.blocks.map((b) => [b.kind, b.text])).toEqual(doc.blocks.map((b) => [b.kind, b.text]));
   });
 });
+
+describe('indented blank soft lines', () => {
+  it('keeps the gap in a $$…$$ math block as an empty soft line', () => {
+    const doc = parseDocument('- $$\n\t\n\t$$');
+    expect(doc.blocks).toHaveLength(1);
+    expect(doc.blocks[0].text).toBe('$$\n\n$$');
+  });
+
+  it('drops a trailing indented blank (block ends, nothing follows)', () => {
+    const doc = parseDocument('- a\n\t\n- b');
+    expect(doc.blocks.map((b) => b.text)).toEqual(['a', 'b']);
+  });
+
+  it('round-trips the math block byte-stably', () => {
+    const src = '- $$\n\t\n\t$$';
+    expect(serializeDocument(parseDocument(src))).toBe(src);
+  });
+});

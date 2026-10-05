@@ -199,6 +199,20 @@ export function parseDocument(md: string): ParsedDocument {
     // also ends a run of bare lines (each blank-separated run is its own block).
     if (line.trim() === '') {
       if (bareBuf.length > 0) flushBare();
+      // An INDENTED blank line inside an open block, with further soft lines
+      // of the same block following, is an EMPTY SOFT LINE (the gap in a
+      // $$…$$ math block). Dropping it deleted the line users navigate into.
+      const blankDepth = depthOf(line);
+      if (rawBuf.length === 0 && blankDepth >= 1 && lastBlock && blankDepth >= realDepth(lastBlock) + 1) {
+        let j = i + 1;
+        while (j < lines.length && lines[j].trim() === '') j++;
+        const next = j < lines.length ? lines[j] : '';
+        if (next && depthOf(next) >= realDepth(lastBlock) + 1) {
+          appendSoftLine(lastBlock, line);
+          i++;
+          continue;
+        }
+      }
       if (rawBuf.length > 0) rawBuf.push(line);
       i++;
       continue;
