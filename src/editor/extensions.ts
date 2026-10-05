@@ -15,6 +15,7 @@ import {
   crosshairCursor,
   Decoration,
   ViewPlugin,
+  type PluginValue,
   type DecorationSet,
   type KeyBinding,
   type ViewUpdate,
@@ -32,7 +33,7 @@ import {
   moveCompletionSelection,
 } from '@codemirror/autocomplete';
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { editorInfoField, editorLivePreviewField } from 'obsidian';
+import { editorInfoField, editorLivePreviewField, renderMath, finishRenderMath } from 'obsidian';
 import type { BlockEditorView } from '../view/BlockEditorView';
 import type { Block } from '../types';
 import { ownedDefaultKeys } from '../interactions/defaultKeymapOwnership';
@@ -41,6 +42,56 @@ import { syncActiveBlockEditor } from '../interactions/textSelectionMenu';
 import { livePreviewExtension } from './livePreview';
 import { mathSyntax } from './mathSyntax';
 import { BLOCK_PROP_LINE_RE } from '../types';
+
+/**
+ * In-flow live math preview for pure display-math blocks (the whole doc is
+ * one $$…$$ block): a rendered-math element appended BELOW the cm editor,
+ * occupying document flow like the native live preview (not a floating
+ * tooltip). Re-renders on every doc change; removed when the doc stops
+ * being a math block or the editor unmounts.
+ */
+export function mathLiveBlockPreview(): Extension {
+  return ViewPlugin.fromClass(
+    class implements PluginValue {
+      dom: HTMLElement | null = null;
+      lastBody = '';
+
+      update(u: ViewUpdate) {
+        const doc = u.state.doc.toString();
+        // lazy: the FIRST closing $$ ends the math block
+        const m = /^\$\$([\s\S]*?)\$\$/.exec(doc);
+        const body = m ? m[1] : null;
+        if (body === null || body.trim() === '') {
+          if (this.dom) {
+            this.dom.remove();
+            this.dom = null;
+            this.lastBody = '';
+          }
+          return;
+        }
+        if (!this.dom) {
+          this.dom = document.createElement('div');
+          this.dom.className = 'lgp-math-live';
+          (u.view.dom.parentElement ?? u.view.dom).appendChild(this.dom);
+        }
+        if (body === this.lastBody) return;
+        this.lastBody = body;
+        try {
+          const rendered = renderMath(body, true);
+          this.dom.replaceChildren(rendered);
+          void finishRenderMath();
+        } catch (e) {
+          console.error('[LG] math live preview render failed:', e);
+        }
+      }
+
+      destroy() {
+        this.dom?.remove();
+        this.dom = null;
+      }
+    },
+  );
+}
 
 /**
  * Third-party editor extensions (registerEditorExtension — latex-suite,
@@ -290,6 +341,7 @@ export function createEmbedExtensions(
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     propLineHighlighter,
     livePreviewExtension,
+    mathLiveBlockPreview(),
     autocompletion({ override: [...host.autocompleteSources(true)], icons: true, activateOnTyping: true }),
     completionYieldKeymap(),
     Prec.high(
@@ -349,6 +401,7 @@ export function createEditorExtensions(host: BlockEditorView, block?: Block): Ex
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     propLineHighlighter,
     ...livePreview,
+    mathLiveBlockPreview(),
     // Autocompletion sources ([[wiki]], #tag, ((ref)) — / and < use the
     // self-drawn command menu in the main editor).
     autocompletion({ override: [...host.autocompleteSources()], icons: true, activateOnTyping: true }),

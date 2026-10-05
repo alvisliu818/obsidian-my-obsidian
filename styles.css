@@ -3400,6 +3400,13 @@ body.lgp-table-editor-cursor * {
   display: none;
 }
 
+/* In-flow live math preview for pure $$…$$ blocks: a rendered-math element
+   appended below the cm editor, occupying document flow like the native
+   live preview (MathJax centers its content within the container). */
+.lgp-math-live {
+  margin: 0.2em 0 0.35em;
+}
+
 /* ---------------------------------------------------------------------------
    Drag & drop — cross-file targets
 
