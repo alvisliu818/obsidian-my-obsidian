@@ -252,9 +252,12 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
       if (e.altKey) host.foldSubtree(b);
       else host.cycleFold(b);
     });
-    // A raw block has no bullet, so the caret is its only affordance — keep it
-    // visible rather than hover-only, or a folded code block looks inert.
-    if (b.kind === 'raw') caret.addClass('is-always-visible');
+    // Hover-only, like every other caret in the outline: the fold arrow is a
+    // per-row affordance and a column of permanently visible arrows competes
+    // with the text it is meant to fold. A FOLDED block keeps its caret
+    // visible, because there the arrow is the only way back — and it is the
+    // one row whose direction has changed.
+    if (level !== 'none') caret.addClass('is-persistent');
   }
   if (b.kind === 'list' && !nativeProps) {
     const bullet = controls.createEl('div', { cls: 'block-bullet' });

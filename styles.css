@@ -176,11 +176,11 @@
   transform: rotate(-90deg);
 }
 
-/* A verbatim block (heading / code fence / table / quote / media) has no
-   bullet, so a hover-only caret would leave a folded one looking inert —
-   there would be nothing to hover *for*. Keep it visible; it sits in the same
-   left margin, so it lines up with the list-block carets above it. */
-.block-caret.is-always-visible {
+/* A FOLDED block keeps its arrow visible: the row is collapsed, the arrow has
+   rotated to point at the hidden content, and it is the only way back. Every
+   unfolded row stays hover-only, so a document shows no column of arrows until
+   the pointer is over a row. */
+.block-caret.is-persistent {
   opacity: 1;
 }
 

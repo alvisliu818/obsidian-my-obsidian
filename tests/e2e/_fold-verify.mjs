@@ -238,7 +238,7 @@ try {
   check('a table gets a caret', cs.some((c) => c.text.includes('列 A') || c.text.includes('Row')), JSON.stringify(cs));
   check('a list block with children keeps its caret', cs.some((c) => c.text.includes('已有子块')), JSON.stringify(cs));
   check('a single-line plain block gets NO caret', !cs.some((c) => c.text === '子块'), JSON.stringify(cs));
-  check('carets on verbatim blocks are always visible', cs.filter((c) => c.visible).length >= 2, JSON.stringify(cs));
+  check('unfolded carets are hidden until hover', cs.every((c) => !c.visible), JSON.stringify(cs));
 
   // =========================================================================
   // Scenario 2 — click a code block's caret: folds to a summary, and the file
@@ -250,6 +250,15 @@ try {
   console.log('fold state:', JSON.stringify(st));
   check('a summary replaced the code body', st.summaries === 1, JSON.stringify(st));
   check('the folded code is NOT rendered', st.codeInFolded === 0, JSON.stringify(st));
+  // Hover-only for unfolded rows, but a FOLDED row keeps its arrow: it has
+  // rotated to point at hidden content and is the only way back.
+  const foldedCaret = await cdp.eval(() => {
+    const w = document.querySelector('.block-wrap.is-collapsed');
+    const caret = w?.querySelector(':scope > .block-main > .block-controls > .block-caret');
+    return { found: !!caret, opacity: caret ? getComputedStyle(caret).opacity : null, rotated: caret?.classList.contains('is-collapsed') ?? null };
+  });
+  console.log('folded caret:', JSON.stringify(foldedCaret));
+  check('a folded block keeps its caret visible', foldedCaret.found && foldedCaret.opacity === '1', JSON.stringify(foldedCaret));
 
   await settle(cdp, F, 'collapsed:: true');
   const md1 = await readMd(cdp, F);
