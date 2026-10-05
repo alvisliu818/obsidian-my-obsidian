@@ -35,6 +35,7 @@ import {
 import { editorInfoField, editorLivePreviewField } from 'obsidian';
 import type { BlockEditorView } from '../view/BlockEditorView';
 import type { Block } from '../types';
+import { ownedDefaultKeys } from '../interactions/defaultKeymapOwnership';
 import { commandMenuKeymap, maybeOpenMenu, closeMenu } from '../features/commandMenu';
 import { syncActiveBlockEditor } from '../interactions/textSelectionMenu';
 import { livePreviewExtension } from './livePreview';
@@ -122,21 +123,8 @@ import {
   handleWrapChar,
 } from '../interactions/keymap';
 
-/** Keys we fully own; their defaultKeymap entries are filtered out. */
-const OWNED_DEFAULT_KEYS = new Set([
-  'Enter',
-  'Shift-Enter',
-  'Mod-Enter',
-  'Tab',
-  'Shift-Tab',
-  'Backspace',
-  'ArrowUp',
-  'ArrowDown',
-  'ArrowLeft',
-  'ArrowRight',
-]);
-
-/** Selection-wrapping pairs: typing the key with a selection wraps it. */
+/**
+ * Selection-wrapping pairs: typing the key with a selection wraps it. */
 const WRAP_PAIRS: Record<string, [string, string]> = {
   '*': ['*', '*'],
   '_': ['_', '_'],
@@ -152,38 +140,81 @@ const WRAP_PAIRS: Record<string, [string, string]> = {
   "'": ["'", "'"],
 };
 
+/**
+ * The outline's own key bindings, grouped so each can be switched off
+ * individually from Settings. A disabled group contributes NO binding at all,
+ * so the key falls through to CM6 / Obsidian and behaves like a normal editor.
+ *
+ * Note what is deliberately NOT configurable here: `Mod-f` / `Mod-h` are
+ * stripped from CM6 in every mode (see `ALWAYS_STRIPPED_DEFAULT_KEYS`) and
+ * routed to Obsidian commands, because CM6's own `openSearchPanel` binding is
+ * broken without the `search()` extension.
+ */
 export function createBlockKeymap(host: BlockEditorView): KeyBinding[] {
-  return [
-    { key: 'Enter', run: (v) => handleEnter(v, host) },
-    ...Object.entries(WRAP_PAIRS).map(([key, [open, close]]) => ({
-      key,
-      run: (v: EditorView) => handleWrapChar(v, host, open, close),
-    })),
-    {
+  const on = host.plugin.settings.shortcuts;
+  const bindings: KeyBinding[] = [];
+
+  if (on.newBlock) {
+    bindings.push({ key: 'Enter', run: (v) => handleEnter(v, host) });
+  }
+  if (on.selectionWrap) {
+    bindings.push(
+      ...Object.entries(WRAP_PAIRS).map(([key, [open, close]]) => ({
+        key,
+        run: (v: EditorView) => handleWrapChar(v, host, open, close),
+      })),
+    );
+  }
+  if (on.newBlock) {
+    // Shift-Enter is a soft line break inside a block — it belongs to the
+    // same group as Enter (both are about splitting/continuing a block).
+    bindings.push({
       key: 'Shift-Enter',
       run: (v) => {
         insertNewline(v);
         return true;
       },
-    },
-    { key: 'Mod-Enter', run: (v) => handleCycleMarker(v, host) },
-    { key: 'Ctrl-Enter', run: (v) => handleCycleMarker(v, host) },
-    { key: 'Tab', run: (v) => handleTab(v, host, false) },
-    { key: 'Shift-Tab', run: (v) => handleTab(v, host, true) },
-    { key: 'Backspace', run: (v) => handleBackspace(v, host) },
-    { key: 'Delete', run: (v) => handleDelete(v, host) },
-    { key: 'ArrowUp', run: (v) => handleArrow(v, host, 'up') },
-    { key: 'ArrowDown', run: (v) => handleArrow(v, host, 'down') },
-    { key: 'ArrowLeft', run: (v) => handleArrow(v, host, 'left') },
-    { key: 'ArrowRight', run: (v) => handleArrow(v, host, 'right') },
-    { key: 'Mod-Shift-ArrowUp', run: (v) => handleMoveBlock(v, host, -1) },
-    { key: 'Mod-Shift-ArrowDown', run: (v) => handleMoveBlock(v, host, 1) },
-    { key: 'Alt-ArrowUp', run: (v) => handleJumpBlock(v, host, -1) },
-    { key: 'Alt-ArrowDown', run: (v) => handleJumpBlock(v, host, 1) },
-    { key: 'Alt-Shift-ArrowUp', run: (v) => handleMoveBlock(v, host, -1) },
-    { key: 'Alt-Shift-ArrowDown', run: (v) => handleMoveBlock(v, host, 1) },
-    { key: 'Escape', run: (v) => handleEscape(v, host) },
-  ];
+    });
+  }
+  if (on.todoCycle) {
+    bindings.push(
+      { key: 'Mod-Enter', run: (v) => handleCycleMarker(v, host) },
+      { key: 'Ctrl-Enter', run: (v) => handleCycleMarker(v, host) },
+    );
+  }
+  if (on.indent) {
+    bindings.push(
+      { key: 'Tab', run: (v) => handleTab(v, host, false) },
+      { key: 'Shift-Tab', run: (v) => handleTab(v, host, true) },
+    );
+  }
+  if (on.blockMerge) {
+    bindings.push(
+      { key: 'Backspace', run: (v) => handleBackspace(v, host) },
+      { key: 'Delete', run: (v) => handleDelete(v, host) },
+    );
+  }
+  // Arrow keys walk between blocks; turning this off gives plain caret
+  // movement inside the text (and Up/Down no longer leave the block).
+  if (on.blockNavigation) {
+    bindings.push(
+      { key: 'ArrowUp', run: (v) => handleArrow(v, host, 'up') },
+      { key: 'ArrowDown', run: (v) => handleArrow(v, host, 'down') },
+      { key: 'ArrowLeft', run: (v) => handleArrow(v, host, 'left') },
+      { key: 'ArrowRight', run: (v) => handleArrow(v, host, 'right') },
+      { key: 'Mod-Shift-ArrowUp', run: (v) => handleMoveBlock(v, host, -1) },
+      { key: 'Mod-Shift-ArrowDown', run: (v) => handleMoveBlock(v, host, 1) },
+      { key: 'Alt-ArrowUp', run: (v) => handleJumpBlock(v, host, -1) },
+      { key: 'Alt-ArrowDown', run: (v) => handleJumpBlock(v, host, 1) },
+      { key: 'Alt-Shift-ArrowUp', run: (v) => handleMoveBlock(v, host, -1) },
+      { key: 'Alt-Shift-ArrowDown', run: (v) => handleMoveBlock(v, host, 1) },
+    );
+  }
+  // Escape always exits editing — with navigation off there is otherwise no
+  // reliable way back to the rendered tree.
+  bindings.push({ key: 'Escape', run: (v) => handleEscape(v, host) });
+
+  return bindings;
 }
 
 /**
@@ -268,7 +299,14 @@ export function createEmbedExtensions(
         { key: 'Shift-Enter', run: (v) => (insertNewline(v), true) },
       ]),
     ),
-    keymap.of(defaultKeymap.filter((k) => k.key !== 'Enter')),
+    // Same filtering as createEditorExtensions, and it must track the same
+    // settings — an embed row is a CM6 editor too, so it would otherwise
+    // swallow Ctrl+F (and stale-strip keys whose group is now off).
+    keymap.of(
+      defaultKeymap.filter(
+        (k) => k.key !== 'Enter' && !ownedDefaultKeys(host.plugin.settings.shortcuts).has(k.key ?? ''),
+      ),
+    ),
     keymap.of(historyKeymap),
     EditorView.domEventHandlers({
       blur: () => {
@@ -281,7 +319,16 @@ export function createEmbedExtensions(
 
 export function createEditorExtensions(host: BlockEditorView, block?: Block): Extension[] {
   const blockKeymap = keymap.of(createBlockKeymap(host));
-  const filteredDefaults = defaultKeymap.filter((k) => !OWNED_DEFAULT_KEYS.has(k.key ?? ''));
+  // NB: this extension is only ever mounted on a FOCUSED (editing) block, so
+  // Ctrl+A / Ctrl+Z intentionally stay local here. The non-editing case is
+  // owned by the capture-phase handler in BlockEditorView.
+  //
+  // Strip exactly the keys `createBlockKeymap` actually binds — driven by the
+  // same settings, so a disabled group hands its keys back to CM6 instead of
+  // leaving them dead.
+  const filteredDefaults = defaultKeymap.filter(
+    (k) => !ownedDefaultKeys(host.plugin.settings.shortcuts).has(k.key ?? ''),
+  );
 
   // Live preview is always on; the block menu's "Source mode" mounts this
   // block's editor WITHOUT it for one raw-source edit session.
