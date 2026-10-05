@@ -388,3 +388,54 @@ describe('same-depth structural lines attach to the block (Logseq table shape)',
     expect(again.blocks[0].children.map((c) => c.text.split('\n')[0])).toEqual(['数据导入', '训练、评估模型']);
   });
 });
+
+describe('order preservation: subtree-exiting lines attach to the previous block', () => {
+  // The NLP file shape: a lone * and a $$ math block at depth 0 between
+  // depth-5 list items — the old root-detach serialized them after the
+  // whole subtree (the "math block at the file bottom" report).
+  const SHAPE = [
+    '- parent',
+    '  - item A',
+    '\t\t\t\t\t- 为了解决上述问题，Transformer 使用了位置编码',
+    '*', //
+    '',
+    '$${PE}_{(pos,2i)} = sin(...x...)$$',
+    '\t\t\t\t\t- 其中：',
+    '\t\t\t\t\t- 后续内容',
+  ].join('\n');
+
+  it('the * and the math stay in position inside the previous block', () => {
+    const doc = parseDocument(SHAPE);
+    // Walk for the block containing the math.
+    let hit: any = null;
+    const walk = (bs: any[]) => {
+      for (const b of bs) {
+        if (b.text.includes('${PE}')) hit = b;
+        walk(b.children || []);
+      }
+    };
+    walk(doc.blocks);
+    expect(hit).not.toBeNull();
+    expect(hit.text).toContain('*');
+    expect(hit.text).toContain('${PE}');
+    // The following items still parse as blocks after it (not swallowed).
+    let found后续 = false;
+    const walk2 = (bs: any[]) => {
+      for (const b of bs) {
+        if (b.text.startsWith('其中：')) found后续 = true;
+        walk2(b.children || []);
+      }
+    };
+    walk2(doc.blocks);
+    expect(found后续).toBe(true);
+  });
+
+  it('round-trip keeps the order: math before the following items', () => {
+    const doc = parseDocument(SHAPE);
+    const out = serializeDocument(doc);
+    const mathAt = out.indexOf('${PE}');
+    const itemsAt = out.indexOf('其中：');
+    expect(mathAt).toBeGreaterThan(-1);
+    expect(itemsAt).toBeGreaterThan(mathAt);
+  });
+});

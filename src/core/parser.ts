@@ -407,6 +407,16 @@ export function parseDocument(md: string): ParsedDocument {
         i++;
         continue;
       }
+      // A structural line that EXITS the current subtree (shallower than the
+      // open block chain) stays IN POSITION as the previous parsed block's
+      // raw content — the old root-detach serialized it after the whole
+      // subtree (the "math block at the file bottom" report). Parsing then
+      // continues normally with whatever follows.
+      if (rawBuf.length === 0 && lastBlock && stack.length > 0 && stack.length - 1 > depth) {
+        appendSoftLine(lastBlock, line);
+        i++;
+        continue;
+      }
       if (/^>\s*$/.test(trimmed)) {
         // An EMPTY quote line is its own block (Logseq: it renders as a
         // visible empty quote row). Merging it into the neighboring quote
@@ -424,7 +434,14 @@ export function parseDocument(md: string): ParsedDocument {
     // --- Top-level plain line: accumulate into ONE first-level block ---
     // Consecutive bare lines (no blank line between them) form a single
     // first-level list block; saving normalizes it to `- ` + soft lines.
+    // A bare line that EXITS the current subtree stays IN POSITION as the
+    // previous parsed block's raw content (the order-preservation rule).
     flushRaw();
+    if (lastBlock && stack.length > 0 && stack.length - 1 > depth) {
+      appendSoftLine(lastBlock, line);
+      i++;
+      continue;
+    }
     bareBuf.push(trimmed);
     i++;
   }
