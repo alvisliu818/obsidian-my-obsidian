@@ -3426,23 +3426,36 @@ body.lgp-table-editor-cursor * {
 .lgp-img-wrap img {
   max-width: 100%;
 }
+/* The native look: an invisible 30x30 hit zone at the bottom-right, with an
+   L-shaped bracket (::after) that fades in on hover and turns accent-colored
+   while resizing. */
 .lgp-img-resize-corner {
+  display: block;
   position: absolute;
-  right: -5px;
-  bottom: -5px;
-  width: 14px;
-  height: 14px;
-  border-radius: 3px;
-  background: var(--interactive-accent);
-  border: 1.5px solid var(--background-primary);
-  opacity: 0;
-  cursor: nwse-resize;
-  transition: opacity 0.12s;
   z-index: 6;
+  cursor: nwse-resize;
+  bottom: 0;
+  right: 0;
+  width: 30px;
+  height: 30px;
 }
-.lgp-img-wrap:hover .lgp-img-resize-corner {
-  opacity: 0.9;
+.lgp-img-resize-corner::after {
+  position: absolute;
+  display: block;
+  content: '';
+  width: 10px;
+  height: 10px;
+  border-bottom: var(--icon-stroke) solid var(--text-muted);
+  border-right: var(--icon-stroke) solid var(--text-muted);
+  border-bottom-right-radius: 4px;
+  right: 6px;
+  bottom: 6px;
+  opacity: 0;
 }
-.lgp-img-wrap.resizing .lgp-img-resize-corner {
+.lgp-img-wrap:hover .lgp-img-resize-corner::after {
   opacity: 1;
+}
+.lgp-img-wrap.resizing .lgp-img-resize-corner::after {
+  opacity: 1;
+  border-color: var(--color-accent);
 }
