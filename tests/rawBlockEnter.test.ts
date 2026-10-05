@@ -143,16 +143,28 @@ describe('raw Enter round-trip: carved-out fence block re-parses as in-block fen
 
 describe('splitRawToOutline: raw block converts to outline on Enter', () => {
   it('mid-block split: head converts in place, tail is a stripped list sibling', () => {
-    // The ## 12.3 case: raw blob of two headings + blank line, Enter after
-    // the first heading line (caret before the "\n\n").
-    const doc = parseDocument('## 12.3 命名空间和作用域\n\n### 12.3.1 什么是命名空间\n');
+    // Enter inside a multi-line raw block: the head converts in place and the
+    // tail becomes a list sibling. The fixture is an UNTERMINATED fence, which
+    // the parser never splits on a blank line (the fence is still open) — a
+    // closed one followed by another structural line is two blocks now, so it
+    // cannot exercise a mid-block split any more.
+    const doc = parseDocument('```python\nprint(1)\nprint(2)\n');
     const b = doc.blocks[0];
     const offset = b.text.indexOf('\n');
     const nb = splitRawToOutline(b, offset);
     expect(b.kind).toBe('list');
-    expect(b.text).toBe('## 12.3 命名空间和作用域');
+    expect(b.text).toBe('```python');
     expect(nb.kind).toBe('list');
-    expect(nb.text).toBe('### 12.3.1 什么是命名空间'); // no leading blanks
+    expect(nb.text).toBe('print(1)\nprint(2)');
+  });
+
+  it('a heading followed by another heading is two blocks now', () => {
+    // Each heading is independently foldable, which is the point of splitting
+    // verbatim regions on a blank line.
+    const doc = parseDocument('## 12.3 命名空间和作用域\n\n### 12.3.1 什么是命名空间\n');
+    expect(doc.blocks).toHaveLength(2);
+    expect(doc.blocks[0].text).toBe('## 12.3 命名空间和作用域');
+    expect(doc.blocks[1].text).toBe('### 12.3.1 什么是命名空间');
   });
 
   it('caret at block start: empty block in place, converted content below', () => {

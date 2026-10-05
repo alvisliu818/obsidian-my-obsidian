@@ -41,18 +41,30 @@ describe('display math fences', () => {
     expect(doc.blocks[0].text).toContain('\\eta');
   });
 
-  it('keeps consecutive math blocks in one raw region (matches code fences)', () => {
-    // A blank line inside raw content is verbatim, so two math blocks
-    // separated by a blank line land in ONE raw block — exactly how two
-    // adjacent ``` fences already behave. The renderer still sees two
-    // separate `$$…$$` regions, which is what matters for MathJax.
+  it('keeps consecutive math blocks as separate raw regions', () => {
+    // A blank line between two `$$…$$` regions now ENDS the verbatim block, so
+    // each formula is its own block — the same rule fences and tables follow,
+    // and what makes each region independently foldable. The renderer still
+    // sees two separate `$$…$$` regions either way, which is what MathJax needs.
     const doc = parseDocument(['$$', 'a=1', '$$', '', '$$', 'b=2', '$$'].join('\n'));
-    expect(doc.blocks).toHaveLength(1);
-    expect(doc.blocks[0].text).toBe('$$\na=1\n$$\n\n$$\nb=2\n$$');
+    expect(doc.blocks).toHaveLength(2);
+    expect(doc.blocks[0].text).toBe('$$\na=1\n$$');
+    expect(doc.blocks[1].text).toBe('$$\nb=2\n$$');
+    // Round-trip must put the blank line back, or the two formulas would merge
+    // into one construct on the next read.
+    expect(serializeDocument(doc)).toBe(['$$', 'a=1', '$$', '', '$$', 'b=2', '$$'].join('\n'));
 
     // A non-blank line between them does separate them.
     const two = parseDocument(['$$', 'a=1', '$$', '中间', '$$', 'b=2', '$$'].join('\n'));
     expect(two.blocks.length).toBeGreaterThan(1);
+  });
+
+  it('a blank line INSIDE one math region stays content', () => {
+    // The split only happens on a CLOSED region; a gap in the middle of a
+    // formula is part of it, and dropping it would corrupt the LaTeX.
+    const doc = parseDocument(['$$', '\\begin{aligned}', '', 'x &= 1', '', '\\end{aligned}', '$$'].join('\n'));
+    expect(doc.blocks).toHaveLength(1);
+    expect(doc.blocks[0].text).toContain('\n\nx &= 1\n');
   });
 
   it('folds an indented math block into its parent list block', () => {

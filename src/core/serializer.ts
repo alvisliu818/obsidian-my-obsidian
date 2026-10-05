@@ -50,11 +50,22 @@ export function serializeDocument(doc: ParsedDocument): string {
     const pb = blocks[0];
     for (const [k, v] of Object.entries(pb.props)) parts.push(`${k}:: ${v}`);
     for (const c of pb.children) parts.push(serializeBlock(c, 0, undefined, unit));
-    for (let i = 1; i < blocks.length; i++) parts.push(serializeBlock(blocks[i], 0, undefined, unit));
+    for (let i = 1; i < blocks.length; i++) {
+      // Same raw/raw blank-line rule as the general path below.
+      if (i > 1 && blocks[i - 1].kind === 'raw' && blocks[i].kind === 'raw') parts.push('');
+      parts.push(serializeBlock(blocks[i], 0, undefined, unit));
+    }
     return finish(parts.join('\n'));
   }
-  for (const b of blocks) {
-    parts.push(serializeBlock(b, 0, undefined, unit));
+  for (let i = 0; i < blocks.length; i++) {
+    // Two adjacent VERBATIM blocks need a blank line between them: written
+    // back to back, two fences (or two tables) merge into one construct in
+    // CommonMark. The parser splits them on a blank line, so the writer has to
+    // put it back or the file would not survive a save. A list block's `- `
+    // marker already starts a new item, and a blank line before a nested list
+    // would change its meaning, so only raw/raw pairs get one.
+    if (i > 0 && blocks[i - 1].kind === 'raw' && blocks[i].kind === 'raw') parts.push('');
+    parts.push(serializeBlock(blocks[i], 0, undefined, unit));
   }
   return finish(parts.join('\n'));
 }
@@ -65,7 +76,21 @@ function isPropsOnlyBlock(b: Block | undefined): boolean {
 }
 
 export function serializeBlock(b: Block, depth: number, skipProps?: readonly string[], unit: string = '\t'): string {
-  if (b.kind === 'raw') return b.text;
+  if (b.kind === 'raw') {
+    // A verbatim block is emitted as-is, but it may still OWN properties —
+    // the parser re-attaches a `key:: value` line written below it (see
+    // src/core/fold.ts for why the flag cannot live inside the text).
+    //
+    // Unindented, matching the block: a raw block always sits at the top
+    // level, and the parser only re-attaches an UNINDENTED property line to
+    // it. Indenting the way a list block's properties are indented would make
+    // the line read back as a soft line of the block instead — the flag would
+    // survive in the file but never come back into `props`.
+    const rawProps = Object.keys(b.props).filter((k) => !skipProps?.includes(k));
+    if (rawProps.length === 0) return b.text;
+    const tail = rawProps.map((k) => `${k}:: ${b.props[k]}`);
+    return [b.text, ...tail].join('\n');
+  }
 
   const prefix = unit.repeat(depth);
   const marker = b.marker ? b.marker + ' ' : '';

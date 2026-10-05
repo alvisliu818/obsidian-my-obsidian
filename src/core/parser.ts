@@ -20,6 +20,7 @@
  */
 
 import { Block, Marker, MARKERS, ParsedDocument, createBlock } from '../types';
+import { normFoldKey } from './fold';
 
 const FENCE_OPEN_RE = /^(\s*)(`{3,}|~{3,})(.*)$/;
 /**
@@ -39,6 +40,42 @@ const MARKER_RE = new RegExp(`^(${MARKERS.join('|')})\\s+(.*)$`);
  */
 const STRUCTURAL_RAW_RE =
   /^(?:#{1,6}\s|#\+|>|\||<|%|\$\$|:|\d{1,9}[.)]\s|[*+]\s|(?:=+|\*+|_+|~+|\++)\s*$)/;
+
+/**
+ * True when the pending raw region ENDS at its last line, so a property line
+ * about to arrive can only be that block's own property.
+ *
+ * A raw region is only ever fed STRUCTURAL lines, so reaching a non-closing
+ * structural line does not mean the block goes on: a table's next line, a
+ * quote's next line or a second heading all start a NEW region (the buffer is
+ * flushed by the blank line or the caller). What must NOT qualify is a region
+ * that can still swallow more content — an UNTERMINATED fence, where a
+ * `key:: value` line really is code. So the check is positive: the last line
+ * must close a construct, and an odd number of fence lines means "still open".
+ */
+function isRawRegionTail(region: string[]): boolean {
+  let lastReal = '';
+  for (const line of region) {
+    if (line.trim() !== '') lastReal = line.trim();
+  }
+  if (lastReal === '') return false;
+  if (/^`{3,}|^~{3,}/.test(lastReal)) {
+    // A fence: the region is complete only when the fences pair up. An odd
+    // count means the fence is still open, so following lines are its body.
+    let fences = 0;
+    for (const line of region) {
+      if (/^`{3,}|^~{3,}/.test(line.trim())) fences++;
+    }
+    return fences % 2 === 0;
+  }
+  // `$$`, tables, quotes, headings, dividers: the line itself ends the block.
+  return true;
+}
+
+/** Property keys the parser re-attaches to a raw block (its fold state). */
+function isFoldProperty(key: string): boolean {
+  return normFoldKey(key) === 'collapsed';
+}
 
 /** Depth units: 1 tab = 1, 2 spaces = 1 (trailing odd space ignored). */
 export function depthOf(line: string): number {
@@ -223,7 +260,38 @@ export function parseDocument(md: string): ParsedDocument {
           continue;
         }
       }
-      if (rawBuf.length > 0) rawBuf.push(line);
+      if (rawBuf.length > 0) {
+        // A blank line ends a verbatim region when the region is closed AND
+        // the next non-blank line starts a NEW structural construct (a fence,
+        // a table, a heading, a quote). That is what lets a heading, a code
+        // fence and a table each be folded on their own instead of collapsing
+        // into one giant raw block.
+        //
+        // Two guards, both load-bearing:
+        //  - `isRawRegionTail` pairs the fences, so a blank line INSIDE a fence
+        //    or a $$…$$ block stays content, and a `key:: value` line inside
+        //    an unterminated fence stays code.
+        //  - The lookahead: the next non-blank line must be able to START a
+        //    structural block. `STRUCTURAL_RAW_RE` alone is not enough — it
+        //    does not match a code fence (that is `FENCE_OPEN_RE`), so without
+        //    this a heading followed by a fence stayed ONE block and the two
+        //    could not be folded separately. A PROPERTY line must not split at
+        //    all: `key:: value` under a block is that block's property (where
+        //    the fold flag lives), and splitting there would drop the block
+        //    into page-property territory and reorder the file.
+        let j = i + 1;
+        while (j < lines.length && lines[j].trim() === '') j++;
+        const next = j < lines.length ? lines[j] : '';
+        const nextTrim = next.trim();
+        const startsStructure =
+          STRUCTURAL_RAW_RE.test(nextTrim) || FENCE_OPEN_RE.test(next);
+        if (next && isRawRegionTail(rawBuf) && depthOf(next) === 0 && startsStructure && !PROPERTY_RE.test(nextTrim)) {
+          flushRaw();
+          i++;
+          continue;
+        }
+        rawBuf.push(line);
+      }
       i++;
       continue;
     }
@@ -368,6 +436,28 @@ export function parseDocument(md: string): ParsedDocument {
       if (lastBlock && depth >= realDepth(lastBlock) + 1) {
         lastBlock.props[propMatch[1]] = propMatch[2];
       } else if (rawBuf.length > 0) {
+        // Unindented property line closing a RAW region belongs to that block,
+        // exactly like a list block's `key:: value` lines. This is how a
+        // verbatim block records its fold state: the serializer cannot write
+        // props INSIDE the text (a raw block is emitted verbatim) and a
+        // property line inside a fence would be read back as code, so the
+        // flag is written below the block and re-attached here.
+        //
+        // The pending region is flushed FIRST, so the block this line belongs
+        // to exists — it is still unflushed at this point (a blank line or the
+        // next structural line would have flushed it), and its tail is the line
+        // just before this property.
+        //
+        // Only a fold flag re-attaches. Any other key stays verbatim: a
+        // `key:: value` line under a table or inside prose is content, and
+        // silently promoting it to a property would move the user's text.
+        if (rawBuf.length > 0 && isFoldProperty(propMatch[1]) && isRawRegionTail(rawBuf)) {
+          flushRaw();
+          const raw = doc.blocks[doc.blocks.length - 1];
+          if (raw && raw.kind === 'raw') raw.props[propMatch[1]] = propMatch[2];
+          i++;
+          continue;
+        }
         // Unindented property inside a raw region: keep verbatim.
         rawBuf.push(line);
       } else if (lastBlock) {
@@ -380,7 +470,6 @@ export function parseDocument(md: string): ParsedDocument {
       i++;
       continue;
     }
-
     // --- Deeper non-list line: soft line of last block ---
     if (lastBlock && depth >= realDepth(lastBlock) + 1) {
       appendSoftLine(lastBlock, line);
