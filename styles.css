@@ -3377,6 +3377,16 @@ body.lgp-table-editor-cursor * {
   overflow-x: auto;
 }
 
+/* While EDITING, the content is the wrapping cm editor — no horizontal
+   overflow to scroll — and overflow-x:auto forces overflow-y:auto, which
+   CLIPS cm tooltips (latex-suite's math preview extends below the block's
+   bottom edge: the box appeared but the rendered math inside was cut off).
+   Let the editing container show everything. */
+.block-type-math .block-content.is-editing,
+.block-type-code .block-content.is-editing {
+  overflow: visible;
+}
+
 /* ---------------------------------------------------------------------------
    Drag & drop — cross-file targets
 
