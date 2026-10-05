@@ -7,11 +7,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
 
 ### Added
 
-- **Any block can be folded — not just list items with children.** Headings, code fences, tables, quotes, formulas, images and multi-line paragraphs now get a collapse caret whenever their body spans more than one rendered line. Click folds to a one-line summary (a fence keeps its ` ```python ` header, an image names its file); Alt+click folds all the way to a terse type chip for scanning a document. Click the summary — or the caret again — to expand.
+- **Any block can be folded — not just list items with children.** Headings, code fences, tables, quotes, formulas, images and multi-line paragraphs now get a collapse caret whenever they have something to hide. Click folds to a one-line summary (a fence keeps its ` ```python ` header, an image names its file); Alt+click folds all the way to a terse type chip for scanning a document. Click the summary — or the caret again — to expand.
+  - **A heading folds its section**, matching SiYuan: it hides the blocks it introduces, up to the next heading of the same or a shallower level. A deeper heading belongs to the section — `## 二级标题` covers `### 三级标题` and its body too.
   - Folding is a view state over your markdown, never a rewrite: the block's text is untouched and the state is stored as a plain `collapsed::` property, so it survives a save/reload and is queryable like any other property.
   - Folding flags are hidden from the props row by default (**Settings → Hidden block properties**). Hiding is view-only — the property is still written, still parsed, still indexed, and still editable. Add your own names to that list to hide them too.
   - Turn the caret off entirely with **Settings → Fold any block**.
-  - Matches SiYuan's own rule for what folds: a block with nothing to hide (a single-line heading, a divider) gets no caret, since a markdown heading's content is a *sibling* block, not a child. Folding a whole section under a heading is a separate behaviour.
+  - What does *not* fold matches SiYuan's own rule: a single-line block and a divider have nothing to hide, so they get no caret.
 
 ### Fixed
 
