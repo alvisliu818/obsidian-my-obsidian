@@ -3387,6 +3387,19 @@ body.lgp-table-editor-cursor * {
   overflow: visible;
 }
 
+/* latex-suite math preview: centered below the input (native display-math
+   parity). CM's default placement pins the tooltip's left edge to the
+   closing $$ (the block's left edge); center it over the block instead and
+   drop the arrow that points at the old anchor. */
+.block-type-math .cm-tooltip-cursor {
+  left: 50% !important;
+  transform: translateX(-50%);
+}
+
+.block-type-math .cm-tooltip-cursor .cm-tooltip-arrow {
+  display: none;
+}
+
 /* ---------------------------------------------------------------------------
    Drag & drop — cross-file targets
 
