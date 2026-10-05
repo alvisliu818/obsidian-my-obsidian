@@ -22,10 +22,12 @@ import {
   outdent,
   prependChild,
   prevVisible,
+  rangeAnchor,
   registerRoots,
   removeBlock,
   siblingsOf,
   splitBlock,
+  visibleRange,
 } from '../src/core/treeOps';
 
 function setup(md: string) {
@@ -374,5 +376,99 @@ describe('containsBlock', () => {
     expect(containsBlock(doc.blocks, createBlock('stranger'))).toBe(false);
     expect(containsBlock([], createBlock('a'))).toBe(false);
     expect(containsBlock(doc.blocks, null as unknown as Block)).toBe(false);
+  });
+});
+
+describe('shift-click range anchor', () => {
+  const MD = `- alpha
+\t- alpha-1
+\t- alpha-2
+- bravo
+\t- bravo-1
+- charlie
+\t- charlie-1
+`;
+
+  /** Visible order as plain strings — easier to assert on than identities. */
+  function seq(roots: Block[]): string[] {
+    return flattenVisible(roots).map((b) => b.text);
+  }
+
+  function rangeTexts(roots: Block[], anchor: Block, target: Block): string[] | null {
+    return visibleRange(roots, anchor, target)?.map((b) => b.text) ?? null;
+  }
+
+  it('falls back to the focused block when nothing was clicked yet', () => {
+    // The reported bug: editing `alpha`, then Shift+clicking `bravo-1`.
+    // lastClicked is null because editing never goes through selectFromClick.
+    const doc = setup(MD);
+    const [alpha, alpha1, alpha2, bravo, bravo1] = flattenVisible(doc.blocks);
+    expect(rangeAnchor(doc.blocks, null, alpha)).toBe(alpha);
+    expect(rangeTexts(doc.blocks, alpha, bravo1)).toEqual([
+      'alpha',
+      'alpha-1',
+      'alpha-2',
+      'bravo',
+      'bravo-1',
+    ]);
+    // Sanity: the block being edited is genuinely part of the range.
+    expect(rangeTexts(doc.blocks, alpha, bravo1)).toContain(alpha.text);
+    expect(alpha1.text).toBe('alpha-1');
+    expect(alpha2.text).toBe('alpha-2');
+    expect(bravo.text).toBe('bravo');
+  });
+
+  it('prefers lastClicked over the focused block', () => {
+    // Editing charlie but shift+clicking from bravo: the click anchor wins,
+    // otherwise the range would jump back to the block being edited.
+    const doc = setup(MD);
+    const seq2 = flattenVisible(doc.blocks);
+    const bravo = seq2[3];
+    const charlie = seq2[5];
+    expect(rangeAnchor(doc.blocks, bravo, charlie)).toBe(bravo);
+    expect(rangeTexts(doc.blocks, bravo, charlie)).toEqual(['bravo', 'bravo-1', 'charlie']);
+  });
+
+  it('returns null when neither anchor is visible', () => {
+    const doc = setup(MD);
+    expect(rangeAnchor(doc.blocks, null, null)).toBeNull();
+    expect(rangeAnchor(doc.blocks, createBlock('stranger'), null)).toBeNull();
+  });
+
+  it('ignores a lastClicked that left the visible sequence', () => {
+    // A stale anchor must not shadow a perfectly good focused block.
+    const doc = setup(MD);
+    const focused = flattenVisible(doc.blocks)[0];
+    expect(rangeAnchor(doc.blocks, createBlock('stranger'), focused)).toBe(focused);
+  });
+
+  it('is direction-agnostic', () => {
+    const doc = setup(MD);
+    const [alpha, , , , bravo1] = flattenVisible(doc.blocks);
+    expect(rangeTexts(doc.blocks, bravo1, alpha)).toEqual(
+      rangeTexts(doc.blocks, alpha, bravo1),
+    );
+  });
+
+  it('visibleRange returns null when an end is not visible', () => {
+    const doc = setup(MD);
+    const alpha = flattenVisible(doc.blocks)[0];
+    expect(visibleRange(doc.blocks, alpha, createBlock('stranger'))).toBeNull();
+    expect(visibleRange(doc.blocks, createBlock('stranger'), alpha)).toBeNull();
+  });
+
+  it('skips blocks hidden inside a collapsed sub-tree', () => {
+    const doc = setup(MD);
+    flattenVisible(doc.blocks)[0].props['collapsed'] = 'true';
+    const after = flattenVisible(doc.blocks);
+    expect(seq(doc.blocks)).toEqual(['alpha', 'bravo', 'bravo-1', 'charlie', 'charlie-1']);
+    // `alpha-1` is hidden, so the range must not contain it.
+    expect(rangeTexts(doc.blocks, after[0], after[1])).toEqual(['alpha', 'bravo']);
+  });
+
+  it('a single-block range (anchor === target) is just that block', () => {
+    const doc = setup(MD);
+    const bravo = flattenVisible(doc.blocks)[3];
+    expect(rangeTexts(doc.blocks, bravo, bravo)).toEqual(['bravo']);
   });
 });

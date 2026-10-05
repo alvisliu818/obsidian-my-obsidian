@@ -5,6 +5,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
 
 ## [Unreleased]
 
+### Fixed
+
+- **Shift+click while editing no longer drops the block being edited.** Editing a block and then Shift+clicking another one selected only the clicked block, leaving the block you were typing in out of the range.
+  - The range was anchored on the last *clicked* block, but that anchor is only ever set by a click that goes through the multi-select path — editing never does, so the first Shift+click had no anchor and collapsed to a single selection. The block being edited is now the fallback anchor.
+  - Reading it inside the click handler is not enough, and this only showed up under a real instance: pressing the mouse **moves focus off the block being edited, the embedded editor fires `blur`, and the blur commit clears the focused block before the click event even arrives**. The anchor is therefore captured on `mousedown` — the last point where it still exists. Verified with an e2e probe that wrapped the live handler and logged the state on entry: it read `null` there, which is exactly why the obvious fix did nothing.
+  - Plain clicks still enter editing as before, and a range grown from a previously clicked block still starts there (the click anchor wins over the edited block).
+
 ### Added
 
 - **Tab / Shift+Tab now indent and outdent a multi-selection.** Bulk indent was reachable only from the right-click menu, so the keyboard route every outliner is expected to have was missing. Tab indents every selected block, Shift+Tab lifts it back out; unselected blocks are never touched.

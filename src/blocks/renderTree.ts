@@ -237,6 +237,11 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
       // Single click = focus (zoom) the block; collapsing lives on the caret.
       host.zoomIn(b);
     });
+    // The bullet is not inside the content holder, so it needs its own
+    // mousedown capture for the same reason (see captureRangeAnchor).
+    bullet.addEventListener('mousedown', (e) => {
+      if (e.shiftKey || e.ctrlKey || e.metaKey) host.captureRangeAnchor(e);
+    });
   }
 
   // --- block type badge (SiYuan parity): names the type and opens the
@@ -285,6 +290,9 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
       // focus handler wired on it can never receive a click — the row was
       // unclickable and un-deletable. Wire the whole row (the wrap) instead:
       // it is the only element guaranteed to cover the empty row's area.
+      wrap.addEventListener('mousedown', (e) => {
+        if (e.shiftKey || e.ctrlKey || e.metaKey) host.captureRangeAnchor(e);
+      });
       wrap.addEventListener('click', (e) => {
         if (e.shiftKey || e.ctrlKey || e.metaKey) {
           e.preventDefault();
@@ -860,6 +868,13 @@ function enhanceCodeTokens(code: HTMLElement): void {
 }
 
 function wireContentEvents(holder: HTMLElement, b: Block, host: BlockEditorView): void {
+  // mousedown runs BEFORE the browser moves focus and before the click event,
+  // so it is the only point where the block being edited is still recorded as
+  // `focusedBlock`. See `captureRangeAnchor` for why the click handler cannot
+  // read it any more.
+  holder.addEventListener('mousedown', (e) => {
+    if (e.shiftKey || e.ctrlKey || e.metaKey) host.captureRangeAnchor(e);
+  });
   holder.addEventListener('click', (e) => {
     // Logseq parity: a #tag IS a page reference — click opens the page
     // (creating it when missing) instead of Obsidian's tag search.

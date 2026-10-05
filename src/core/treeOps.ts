@@ -148,6 +148,42 @@ export function prevVisible(roots: Block[], b: Block): Block | null {
   return idx > 0 ? seq[idx - 1] : null;
 }
 
+/**
+ * The block a Shift+click range should grow from.
+ *
+ * `lastClicked` is the anchor when the user built the selection by clicking
+ * blocks. But the very first Shift+click often happens while a block is still
+ * being edited — the click never went through `selectFromClick`, so
+ * `lastClicked` is still null and the range silently collapses to the clicked
+ * block, dropping the block the user was typing in. The focused block is the
+ * anchor the user actually sees, so it is the fallback.
+ *
+ * Returns null when neither anchor is in the visible sequence (e.g. the block
+ * being edited sits inside a sub-tree the user collapsed in between).
+ */
+export function rangeAnchor(
+  roots: Block[],
+  lastClicked: Block | null,
+  focused: Block | null,
+): Block | null {
+  const seq = flattenVisible(roots);
+  if (lastClicked && seq.includes(lastClicked)) return lastClicked;
+  if (focused && seq.includes(focused)) return focused;
+  return null;
+}
+
+/**
+ * Every block between `anchor` and `target` inclusive, in visible order.
+ * Returns null when either end is not in the visible sequence.
+ */
+export function visibleRange(roots: Block[], anchor: Block, target: Block): Block[] | null {
+  const seq = flattenVisible(roots);
+  const from = seq.indexOf(anchor);
+  const to = seq.indexOf(target);
+  if (from < 0 || to < 0) return null;
+  return seq.slice(Math.min(from, to), Math.max(from, to) + 1);
+}
+
 export function insertAfter(target: Block, b: Block): void {
   const sibs = siblingsOf(target);
   const idx = sibs.indexOf(target);

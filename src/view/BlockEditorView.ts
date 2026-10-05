@@ -15,7 +15,7 @@ import { applyBlockProps, blockEditorDoc, createBlock, docPageProps, editablePro
 import { parseDocument } from '../core/parser';
 import { clearLogseqPageProps, registerLogseqPageProps } from '../pagePropsRegistry';
 import { serializeBlock, serializeDocument } from '../core/serializer';
-import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, isDescendant, linkParents, moveBlockGroup, moveBlockVertically, outdent, pseudoRootOf, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, type MovePosition } from '../core/treeOps';
+import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, isDescendant, linkParents, moveBlockGroup, moveBlockVertically, outdent, pseudoRootOf, rangeAnchor, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, visibleRange, type MovePosition } from '../core/treeOps';
 import { UndoStack } from '../state/undoStack';
 import {
   renderBlockTree,
@@ -1675,19 +1675,42 @@ ${content}`;
   // Multi-selection
   // ------------------------------------------------------------------
 
+  /**
+   * The range anchor to use for the Shift+click now being processed.
+   *
+   * Captured on mousedown, NOT read inside the click handler: mousedown moves
+   * focus off the block being edited, CM6 fires blur, and the blur-commit
+   * (`commitFocusedText`) sets `focusedBlock = null` — all before the click
+   * event bubbles to the block's handler. Measured with an e2e probe that
+   * wrapped `selectFromClick` and logged `this.focusedBlock` at entry: it was
+   * already null, which is why editing a block and Shift+clicking another one
+   * silently selected only the clicked block.
+   */
+  private pendingRangeAnchor: Block | null = null;
+
+  /** mousedown on block content: stash the anchor before focus can move. */
+  captureRangeAnchor(ev: MouseEvent): void {
+    this.pendingRangeAnchor = ev.shiftKey
+      ? rangeAnchor(this.visibleRoots, this.lastClicked, this.focusedBlock)
+      : null;
+  }
+
   /** Shift/Ctrl+click on a block: plain = single select, ctrl = toggle,
-   *  shift = range from the last clicked block. */
+   *shift = range from the anchor (last clicked, else the block being edited). */
   selectFromClick(b: Block, ev: MouseEvent): void {
+    // The anchor was stashed at mousedown time — `commitFocusedText()` below
+    // destroys the focused CM6 and nulls focusedBlock, and the blur-commit
+    // that fires on mousedown has usually nulled it even earlier.
+    const anchor = ev.shiftKey
+      ? this.pendingRangeAnchor ?? rangeAnchor(this.visibleRoots, this.lastClicked, this.focusedBlock)
+      : null;
+    this.pendingRangeAnchor = null;
     this.commitFocusedText();
-    if (ev.shiftKey && this.lastClicked) {
-      const seq = flattenVisible(this.visibleRoots);
-      const from = seq.indexOf(this.lastClicked);
-      const to = seq.indexOf(b);
-      if (from >= 0 && to >= 0) {
+    if (ev.shiftKey && anchor) {
+      const range = visibleRange(this.visibleRoots, anchor, b);
+      if (range) {
         this.selectedBlocks.clear();
-        for (let i = Math.min(from, to); i <= Math.max(from, to); i++) {
-          this.selectedBlocks.add(seq[i]);
-        }
+        for (const member of range) this.selectedBlocks.add(member);
         this.syncSelectionClasses();
         this.focusTreeForSelection();
         return;
