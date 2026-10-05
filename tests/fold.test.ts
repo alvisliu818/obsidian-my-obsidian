@@ -156,9 +156,15 @@ describe('foldable bodies', () => {
 });
 
 describe('fold levels cycle', () => {
-  it('plain click walks none -> summary -> full -> none', () => {
+  it('plain click is a two-state toggle: fold, then expand', () => {
+    // Three states on the common path meant expanding took two clicks, which
+    // reads as "the first click didn't register" — the caret is a small target
+    // in the margin, so a user has no way to tell which click was wasted.
     expect(nextFoldLevel('none', false)).toBe('summary');
-    expect(nextFoldLevel('summary', false)).toBe('full');
+    expect(nextFoldLevel('summary', false)).toBe('none');
+  });
+
+  it('a plain click also expands from the full level', () => {
     expect(nextFoldLevel('full', false)).toBe('none');
   });
 

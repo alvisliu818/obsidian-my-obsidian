@@ -55,16 +55,26 @@ export function foldValueFor(level: FoldLevel): string | null {
   return null;
 }
 
-/** Toggle from a click: unfolded -> summary -> full -> unfolded. */
+/**
+ * Toggle from a caret click.
+ *
+ * A plain click is a two-state toggle: fold to the summary, click again to
+ * expand. Cycling through three states (unfolded → summary → full → unfolded)
+ * meant expanding took two clicks, which reads as "the first click didn't
+ * work" — the caret is small and sits in the margin, so a user who clicks it
+ * twice to undo has no idea which of the clicks was the wasted one.
+ *
+ * Alt+click is the separate "fold all the way" gesture, so the terse level is
+ * still one keystroke away without making it a step of the common path. From
+ * `full`, a plain click expands.
+ */
 export function nextFoldLevel(current: FoldLevel, alt: boolean): FoldLevel {
   if (alt) {
     // Alt is the "fold all the way" gesture: from anything but fully folded,
     // go straight to full; from full, unfold.
     return current === 'full' ? 'none' : 'full';
   }
-  if (current === 'none') return 'summary';
-  if (current === 'summary') return 'full';
-  return 'none';
+  return current === 'none' ? 'summary' : 'none';
 }
 
 /**
