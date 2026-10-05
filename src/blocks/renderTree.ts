@@ -233,15 +233,15 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
     caret.innerHTML = CARET_SVG;
     caret.setAttribute('role', 'button');
     caret.setAttribute('tabindex', '0');
-    caret.setAttribute(
-      'aria-label',
-      level === 'none' ? '折叠此块' : level === 'summary' ? '展开此块' : '完全折叠此块',
-    );
-    caret.setAttribute('title', '点击折叠 · Alt+点击完全折叠');
+    caret.setAttribute('aria-label', level === 'none' ? '折叠此块' : '展开此块');
+    caret.setAttribute('title', '点击折叠 · Alt+点击折叠所有子块');
     const onCaretActivate = (e: MouseEvent): void => {
       e.stopPropagation();
       e.preventDefault();
-      host.cycleFold(b, e.altKey);
+      // Alt is SiYuan's `toggleListFold`: fold (or unfold) EVERY descendant,
+      // not a deeper level of this block. A plain click toggles just this one.
+      if (e.altKey) host.foldSubtree(b);
+      else host.cycleFold(b);
     };
     caret.addEventListener('click', onCaretActivate);
     // Keyboard parity: the caret is focusable, so Enter/Space must work too.
@@ -249,7 +249,8 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
       if (e.key !== 'Enter' && e.key !== ' ') return;
       e.stopPropagation();
       e.preventDefault();
-      host.cycleFold(b, e.altKey);
+      if (e.altKey) host.foldSubtree(b);
+      else host.cycleFold(b);
     });
     // A raw block has no bullet, so the caret is its only affordance — keep it
     // visible rather than hover-only, or a folded code block looks inert.
@@ -302,24 +303,26 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
       content.style.setProperty(k, v);
     }
   }
-  // A folded block renders a one-line summary instead of its body. The block
-  // keeps its real text (markdown is the only source of truth) — this is
-  // purely a view state, so expanding restores everything exactly.
+  // Folding, in SiYuan's sense (`[fold="1"]`): a CONTAINER keeps its own text
+  // and collapses its children to folded rows — what changes is the children
+  // container, not the block's content. A block with nothing to keep (a fence,
+  // a table, media) is replaced by a one-line summary, because there is no
+  // second row to show. A heading folds the section it introduces.
+  //
+  // Either way the markdown is untouched; this is purely a view state.
   const foldLevel = foldLevelOf(b.props);
+  const heading = isFoldableHeading(b);
   // A folded heading is excluded from the editing path too: it has no body to
   // edit in place — its section is what got hidden.
-  if (host.focusedBlock === b && (foldLevel === 'none' || isFoldableHeading(b))) {
+  if (host.focusedBlock === b && (foldLevel === 'none' || heading)) {
     content.classList.add('is-editing');
     // CM6 gets mounted here by the view after the tree render pass.
     host.mountFocusedInto(content);
-  } else if (foldLevel !== 'none' && !isFoldableHeading(b)) {
-    // Focusing a folded block is not an error: clicking a summary should
-    // unfold it so the user can edit the real text. `cycleFold` handles that.
-    //
-    // A folded HEADING is excluded: it has no body of its own to replace —
-    // folding it hides the SECTION it introduces (see `renderBlockTree`),
-    // and the heading line itself stays readable.
-    renderFoldSummary(content, b, foldLevel, host);
+  } else if (foldLevel !== 'none' && !heading && b.children.length === 0) {
+    // Childless: nothing would be left visible, so summarise it.
+    // Focusing a folded block is not an error: clicking the summary unfolds it
+    // so the real text can be edited.
+    renderFoldSummary(content, b, host);
   } else if (isPropsBlock(b, host)) {
     // The page-properties block: Obsidian's NATIVE properties editor when the
     // setting picks it (falls back to the Logseq rendering until the native
@@ -450,31 +453,25 @@ export function refreshTracetimeLabels(host: BlockEditorView): void {
  * Clicking the summary unfolds. The text itself is never modified — folding is
  * a view state over the markdown, not a rewrite of it.
  */
-function renderFoldSummary(
-  content: HTMLElement,
-  b: Block,
-  level: 'summary' | 'full',
-  host: BlockEditorView,
-): void {
-  const row = content.createEl('div', { cls: 'block-fold-summary' + (level === 'full' ? ' is-full' : '') });
-  if (level === 'full') {
-    const kind = blockKindLabel(b);
-    row.createEl('span', { cls: 'block-fold-kind', text: kind });
-    const detail = foldSummary(b);
-    // The detail only differs from the label when it adds something (a file
-    // name, a first line) — otherwise the row would read `[代码块] 代码块`.
-    if (detail && !kind.includes(detail)) {
-      row.createEl('span', { cls: 'block-fold-detail', text: detail });
-    }
-  } else {
-    row.createEl('span', { cls: 'block-fold-detail', text: foldSummary(b) });
+/**
+ * The one-line placeholder shown for a folded block that has no children to
+ * keep visible (a code fence, a table, a media block) — a container keeps its
+ * own text instead, and a heading hides its section.
+ *
+ * The row is also the unfold button: clicking it restores the real text. The
+ * block's markdown is never modified, so this is a view state only.
+ */
+function renderFoldSummary(content: HTMLElement, b: Block, host: BlockEditorView): void {
+  const row = content.createEl('div', { cls: 'block-fold-summary' });
+  row.createEl('span', { cls: 'block-fold-kind', text: blockKindLabel(b) });
+  const detail = foldSummary(b);
+  // The detail only differs from the label when it adds something (a file
+  // name, a first line) — otherwise the row would read `[代码块] 代码块`.
+  if (detail && !blockKindLabel(b).includes(detail)) {
+    row.createEl('span', { cls: 'block-fold-detail', text: detail });
   }
   const lines = b.text.split('\n').length;
-  const kids = b.children.length;
-  const meta = [
-    kids > 0 ? `${kids} 个子块` : null,
-    lines > 1 ? `${lines} 行` : null,
-  ].filter(Boolean).join(' · ');
+  const meta = lines > 1 ? `${lines} 行` : null;
   if (meta) row.createEl('span', { cls: 'block-fold-meta', text: meta });
   row.setAttribute('role', 'button');
   row.setAttribute('tabindex', '0');
@@ -493,7 +490,7 @@ function renderFoldSummary(
   });
 }
 
-/** Short type name for the terse folded marker: 代码块 / 表格 / 引用 / 标题 … */
+/** Short type name for the folded placeholder: 代码块 / 表格 / 引用 / 标题 … */
 function blockKindLabel(b: Block): string {
   const text = b.text;
   if (/^\s*(?:`{3,}|~{3,})/.test(text)) return '代码块';

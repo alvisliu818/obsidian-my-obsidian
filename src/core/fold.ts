@@ -33,17 +33,32 @@ export function normFoldKey(k: string): string {
   return k.toLowerCase().replace(/-/g, '');
 }
 
-/** How a block is currently folded. */
-export type FoldLevel = 'none' | 'summary' | 'full';
+/**
+ * How a block is currently folded.
+ *
+ * `summary` is the only stored level, matching SiYuan's `setFold`, which
+ * writes `fold: "1"` on the block itself. What that LOOKS like depends on the
+ * block, not on a second flag:
+ *
+ *  - a container (a list item with children) keeps its own text visible and
+ *    its children collapse to folded rows — the block's `subtree` render
+ *    handles that, exactly as SiYuan's `[fold="1"]` CSS does;
+ *  - a childless block (a code fence, a table, a media block) has nothing to
+ *    keep visible, so it is replaced by a one-line summary;
+ *  - a heading folds the SECTION it introduces (see `sectionEndIndex`).
+ *
+ * The earlier second level (`collapsed:: full`) was a misreading: SiYuan's
+ * Alt+click is not "fold this block harder", it is `toggleListFold` — a
+ * DIFFERENT action that folds every descendant. That is `foldSubtree` here.
+ */
+export type FoldLevel = 'none' | 'summary';
 
 /** Read a block's fold level from its props. Unknown/absent = not folded. */
 export function foldLevelOf(props: Record<string, string> | undefined): FoldLevel {
   if (!props) return 'none';
   for (const [k, v] of Object.entries(props)) {
     if (normFoldKey(k) !== COLLAPSED) continue;
-    if (v === 'true') return 'summary';
-    if (v === 'full') return 'full';
-    return 'none';
+    return v === 'false' || v === '' ? 'none' : 'summary';
   }
   return 'none';
 }
@@ -51,30 +66,46 @@ export function foldLevelOf(props: Record<string, string> | undefined): FoldLeve
 /** The value to write for a level, or null when the block should just be unfolded. */
 export function foldValueFor(level: FoldLevel): string | null {
   if (level === 'summary') return 'true';
-  if (level === 'full') return 'full';
   return null;
 }
 
 /**
  * Toggle from a caret click.
  *
- * A plain click is a two-state toggle: fold to the summary, click again to
- * expand. Cycling through three states (unfolded → summary → full → unfolded)
- * meant expanding took two clicks, which reads as "the first click didn't
- * work" — the caret is small and sits in the margin, so a user who clicks it
- * twice to undo has no idea which of the clicks was the wasted one.
+ * A plain click is a two-state toggle: fold this block, click again to expand.
+ * Cycling through more than two states meant expanding took two clicks, which
+ * reads as "the first click didn't work" — the caret is a small target in the
+ * margin, so a user clicking twice to undo cannot tell which click was wasted.
  *
- * Alt+click is the separate "fold all the way" gesture, so the terse level is
- * still one keystroke away without making it a step of the common path. From
- * `full`, a plain click expands.
+ * `alt` is not a deeper fold level: it is SiYuan's `toggleListFold`, folding
+ * every descendant. The caller handles that separately (see `foldSubtree`),
+ * so the level itself only toggles.
  */
-export function nextFoldLevel(current: FoldLevel, alt: boolean): FoldLevel {
-  if (alt) {
-    // Alt is the "fold all the way" gesture: from anything but fully folded,
-    // go straight to full; from full, unfold.
-    return current === 'full' ? 'none' : 'full';
-  }
+export function nextFoldLevel(current: FoldLevel, _alt: boolean): FoldLevel {
   return current === 'none' ? 'summary' : 'none';
+}
+
+/**
+ * Every descendant that carries the fold state, deepest last — SiYuan's
+ * `toggleListFold(protyle, el, "children")`.
+ *
+ * Descendants WITHOUT children are skipped, matching its
+ * `childElementCount <= 3` guard: a childless block has nothing to collapse,
+ * and marking it would replace its text with a summary the user never asked
+ * for. `collapsed:: false` is written rather than removed so the flag stays
+ * comparable across siblings (SiYuan writes `fold: ""` the same way).
+ */
+export function subtreeFoldTargets(b: Block): Block[] {
+  const out: Block[] = [];
+  const walk = (block: Block): void => {
+    for (const c of block.children) {
+      if (c.children.length === 0) continue;
+      out.push(c);
+      walk(c);
+    }
+  };
+  walk(b);
+  return out;
 }
 
 /**

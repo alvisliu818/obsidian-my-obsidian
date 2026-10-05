@@ -218,8 +218,9 @@
   outline-offset: 1px;
 }
 
-/* The terse level: a type chip, so a document of folded blocks is scannable. */
-.block-fold-summary.is-full {
+/* The placeholder for a folded childless block: a type chip so a document of
+   folded blocks is scannable, then whatever identifies it. */
+.block-fold-summary {
   color: var(--text-muted);
 }
 
@@ -240,9 +241,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-monospace);
-}
-
-.block-fold-summary:not(.is-full) .block-fold-detail {
   font-size: 1.02em;
 }
 

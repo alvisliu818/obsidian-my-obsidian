@@ -16,7 +16,7 @@ import { parseDocument } from '../core/parser';
 import { clearLogseqPageProps, registerLogseqPageProps } from '../pagePropsRegistry';
 import { serializeBlock, serializeDocument } from '../core/serializer';
 import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, isDescendant, linkParents, moveBlockGroup, moveBlockVertically, outdent, pseudoRootOf, rangeAnchor, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, visibleRange, type MovePosition } from '../core/treeOps';
-import { foldLevelOf, foldValueFor, nextFoldLevel, normFoldKey, type FoldLevel } from '../core/fold';
+import { foldLevelOf, foldValueFor, nextFoldLevel, normFoldKey, subtreeFoldTargets, type FoldLevel } from '../core/fold';
 import { UndoStack } from '../state/undoStack';
 import {
   renderBlockTree,
@@ -1710,9 +1710,37 @@ ${content}`;
     this.focusTreeForSelection();
   }
 
-  /** Caret click: plain cycles none → summary → full → none; Alt jumps to full. */
-  cycleFold(b: Block, alt: boolean): void {
-    this.setFold(b, nextFoldLevel(foldLevelOf(b.props), alt));
+  /** Caret click: a plain click toggles just this block. */
+  cycleFold(b: Block): void {
+    this.setFold(b, nextFoldLevel(foldLevelOf(b.props), false));
+  }
+
+  /**
+   * Alt+click: fold (or unfold) EVERY descendant — SiYuan's
+   * `toggleListFold(protyle, el, "children")`, which marks each child that has
+   * children of its own and skips the childless ones (there is nothing to
+   * collapse there, and marking one would replace its text with a summary the
+   * user never asked for).
+   *
+   * Toggles on the FIRST descendant that disagrees, so a second Alt+click
+   * opens everything back up regardless of the current state.
+   */
+  foldSubtree(b: Block): void {
+    const targets = subtreeFoldTargets(b);
+    if (targets.length === 0) {
+      // No collapsible descendants: fall back to folding this block, so the
+      // gesture is never a dead click.
+      this.cycleFold(b);
+      return;
+    }
+    const opening = targets.some((t) => foldLevelOf(t.props) === 'none');
+    this.mutate(
+      () => {
+        for (const t of targets) setCollapsed(t, opening);
+      },
+      () => ({ full: true }),
+    );
+    this.focusTreeForSelection();
   }
 
   /** Guide-line click: folds/unfolds the content INSIDE the guide (the

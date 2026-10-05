@@ -7,14 +7,19 @@
  * dropped on every save, and a `collapsed:: true` line INSIDE a fence comes
  * back as code. So the flag has to live outside the text.
  *
- * Both levels share one key: `collapsed:: true` (one-line summary) and
- * `collapsed:: full` (terse marker).
+ * One flag, one level: `collapsed:: true`, matching SiYuan's `setFold`, which
+ * writes `fold: "1"` on the block itself. What that LOOKS like depends on the
+ * block — a container keeps its own text and collapses its children, a
+ * childless block (a fence, a table, media) is replaced by a summary, and a
+ * heading folds its section. There is no second "full" level: SiYuan's
+ * Alt+click is `toggleListFold` (fold every descendant), a different action.
  */
 import { describe, expect, it } from 'vitest';
 import { parseDocument } from '../src/core/parser';
 import { serializeDocument, serializeBlock } from '../src/core/serializer';
 import { createBlock, type Block } from '../src/types';
-import { foldLevelOf, foldSummary, isFoldableBody, isMediaOnlyBlock, nextFoldLevel } from '../src/core/fold';
+import { foldLevelOf, foldSummary, isFoldableBody, isMediaOnlyBlock, nextFoldLevel, subtreeFoldTargets } from '../src/core/fold';
+import { flattenVisible } from '../src/core/treeOps';
 
 function roundTrip(md: string): string {
   return serializeDocument(parseDocument(md)).trim();
@@ -29,16 +34,17 @@ describe('fold state as a property below the block', () => {
     expect(foldLevelOf(doc.blocks[0].props)).toBe('summary');
   });
 
-  it('reads the full level too', () => {
-    const doc = parseDocument(['```python', 'x = 1', '```', 'collapsed:: full'].join('\n'));
-    expect(foldLevelOf(doc.blocks[0].props)).toBe('full');
+  it('any non-false value reads as folded; false / blank read as unfolded', () => {
+    // SiYuan unfolds by writing `fold: ""` rather than removing the attribute,
+    // so a blank value has to read as UNfolded and anything else as folded.
+    expect(foldLevelOf({ collapsed: 'true' })).toBe('summary');
+    expect(foldLevelOf({ collapsed: 'false' })).toBe('none');
+    expect(foldLevelOf({ collapsed: '' })).toBe('none');
   });
 
-  it('round-trips both levels unchanged', () => {
-    for (const level of ['true', 'full']) {
-      const md = ['```python', 'x = 1', '```', `collapsed:: ${level}`].join('\n');
-      expect(roundTrip(md)).toBe(md);
-    }
+  it('round-trips unchanged', () => {
+    const md = ['```python', 'x = 1', '```', 'collapsed:: true'].join('\n');
+    expect(roundTrip(md)).toBe(md);
   });
 
   it('round-trips a folded heading, a folded table and a folded quote', () => {
@@ -89,12 +95,12 @@ describe('fold state as a property below the block', () => {
       '```',
       'b = 2',
       '```',
-      'collapsed:: full',
+      'collapsed:: true',
     ].join('\n');
     const doc = parseDocument(md);
     expect(doc.blocks).toHaveLength(2);
     expect(foldLevelOf(doc.blocks[0].props)).toBe('summary');
-    expect(foldLevelOf(doc.blocks[1].props)).toBe('full');
+    expect(foldLevelOf(doc.blocks[1].props)).toBe('summary');
     expect(roundTrip(md)).toBe(md);
   });
 
@@ -165,13 +171,42 @@ describe('fold levels cycle', () => {
   });
 
   it('a plain click also expands from the full level', () => {
-    expect(nextFoldLevel('full', false)).toBe('none');
+    expect(nextFoldLevel('summary', false)).toBe('none');
   });
 
-  it('alt click goes straight to full, and unfolds from full', () => {
-    expect(nextFoldLevel('none', true)).toBe('full');
-    expect(nextFoldLevel('summary', true)).toBe('full');
-    expect(nextFoldLevel('full', true)).toBe('none');
+  it('there is no second level for alt to reach', () => {
+    // Alt is SiYuan's `toggleListFold` — folding every DESCENDANT, a different
+    // action handled by `subtreeFoldTargets`, not a deeper fold of this block.
+    expect(nextFoldLevel('none', true)).toBe('summary');
+    expect(nextFoldLevel('summary', true)).toBe('none');
+  });
+});
+
+describe('alt folds every descendant (SiYuan toggleListFold)', () => {
+  const TREE = ['- a', '\t- a-1', '\t\t- a-1-1', '\t- a-2', '- b', '\t- b-1'].join('\n');
+
+  it('targets every descendant that has children, recursively', () => {
+    const seq = flattenVisible(parseDocument(TREE).blocks);
+    const texts = subtreeFoldTargets(seq[0]).map((x) => x.text);
+    console.log('subtree targets of `a`:', JSON.stringify(texts));
+    // a-1 has a child so it is a target; a-1-1 and a-2 are childless and are
+    // skipped, matching SiYuan's `childElementCount <= 3` guard.
+    expect(texts).toEqual(['a-1']);
+  });
+
+  it('a childless block has nothing to fold recursively', () => {
+    const seq = flattenVisible(parseDocument(TREE).blocks);
+    expect(subtreeFoldTargets(seq[1])).toEqual([]);
+  });
+
+  it('walks deeper levels of a wider tree', () => {
+    const wide = ['- root', '\t- c1', '\t\t- g1', '\t\t\t- gg1', '\t- c2', '\t\t- g2'].join('\n');
+    const root = flattenVisible(parseDocument(wide).blocks)[0];
+    const texts = subtreeFoldTargets(root).map((x) => x.text);
+    console.log('subtree targets of `root`:', JSON.stringify(texts));
+    // c1, g1 and c2 have children; gg1 and g2 are leaves and are skipped
+    // (verified: the tree parses as root > [c1 > [g1 > [gg1]], c2 > [g2]]).
+    expect(texts).toEqual(['c1', 'g1', 'c2']);
   });
 });
 

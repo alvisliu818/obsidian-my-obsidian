@@ -7,14 +7,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
 
 ### Added
 
-- **Any block can be folded — not just list items with children.** Headings, code fences, tables, quotes, formulas, images and multi-line paragraphs now get a collapse caret whenever they have something to hide. Click folds to a one-line summary (a fence keeps its ` ```python ` header, an image names its file); Alt+click folds all the way to a terse type chip for scanning a document. Click the summary — or the caret again — to expand.
-  - **A heading folds its section**, matching SiYuan: it hides the blocks it introduces, up to the next heading of the same or a shallower level. A deeper heading belongs to the section — `## 二级标题` covers `### 三级标题` and its body too.
+- **Any block can be folded — not just list items with children.** Code fences, tables, quotes, formulas, images and multi-line paragraphs now get a collapse caret. A plain click folds, a second click expands; Alt+click folds every descendant at once.
+  - **What folding looks like follows SiYuan.** A container (a list item with children) keeps its own text and collapses its children to folded rows. A block with nothing to keep — a fence, a table, a media block — is replaced by a one-line summary; click the summary to expand. A heading folds the section it introduces, up to the next heading of the same or a shallower level, and a deeper heading belongs to that section.
+  - Alt is not a deeper fold level: it is SiYuan's "fold all children", which marks every descendant that has children of its own and skips the childless ones.
   - Folding is a view state over your markdown, never a rewrite: the block's text is untouched and the state is stored as a plain `collapsed::` property, so it survives a save/reload and is queryable like any other property.
   - Folding flags are hidden from the props row by default (**Settings → Hidden block properties**). Hiding is view-only — the property is still written, still parsed, still indexed, and still editable. Add your own names to that list to hide them too.
   - Turn the caret off entirely with **Settings → Fold any block**.
   - What does *not* fold matches SiYuan's own rule: a single-line block and a divider have nothing to hide, so they get no caret.
-
-### Fixed
 
 - **Consecutive top-level blocks are now separate blocks.** A heading followed by a code fence, or one table followed by another, used to merge into a single verbatim blob — so they could not be folded, moved or edited individually. A blank line now ends a verbatim region, which is what Markdown itself means by it.
   - Blank lines *inside* a construct are still content: an unterminated fence, a `$$…$$` formula, and a table's rows each stay one block, and a mixed block (an image above a fence) is untouched.
