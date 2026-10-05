@@ -14,6 +14,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
 
 ### Fixed
 
+- **Extracting a nested block did nothing at all.** The membership check ran `doc.blocks.includes(b)`, which is only true for top-level blocks — so any block below the first level was filtered out, the extract found nothing to move, and it returned quietly. The replacement half always handled nesting correctly, which is why the embed logic looked right while the whole feature did nothing on a sub-block. Membership is now a structural check at any depth.
+
+- **A multi-select drag spanning levels left a ghost row behind.** The repaint list was built from `blocks[0].parent` only. A selection can hold both a root block and a child buried under a different parent; every one of those lists lost a row, but only the first was rebuilt — so the other block's old position stayed rendered after it had already moved. All members' original parents are collected now.
+
+- **One stationary member cancelled the whole group drop.** A drop was treated as a no-op when *any* member was already in place, but the group as a whole can still reorder: dragging `[a, c]` onto `b`'s lower band leaves `c` untouched and moves `a`, producing a genuinely different outline. The drop is now refused only when every member is stationary.
+
+- **Dropping a verbatim block on empty space could escape to the root level.** The empty-space drop path computed its band from `visibleRoots`, which is not the document root list — while zoomed it is `zoomed.children`, whose members have a parent. Since a raw block is written flush-left, landing it there made it re-parse as a root block, undoing the position the user dropped it on. That path now runs its band through the same verbatim resolver the per-block path uses, and refuses the drop.
+
 - **Cross-file drag left the moved block pointing at the wrong document.** `siblingsOf` resolves a top-level block's container through a cache set when a view registers its roots. A block that moved — especially into another note, which is what a cross-file drop does — kept its old entry, so the next delete / indent / move operated on the *old* document's block list: the block could survive its own deletion, or show up in two outlines at once. Every insertion primitive now re-points the cache.
 
 - **Dropping into a note that is already open could silently discard the blocks.** The destination was written straight to the file, while the open view's external-change handler follows an "editor always wins" policy — it re-saves its own version and overwrites what was just written. When the destination note is open in a block editor, the blocks now go into that view's model (undoable, re-rendered) instead of behind the view's back.
