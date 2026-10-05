@@ -131,6 +131,7 @@ export function insertAfter(target: Block, b: Block): void {
   const idx = sibs.indexOf(target);
   sibs.splice(idx + 1, 0, b);
   b.parent = target.parent;
+  reindexRoots(b);
 }
 
 export function insertBefore(target: Block, b: Block): void {
@@ -138,6 +139,7 @@ export function insertBefore(target: Block, b: Block): void {
   const idx = sibs.indexOf(target);
   sibs.splice(idx, 0, b);
   b.parent = target.parent;
+  reindexRoots(b);
 }
 
 /** Append as last child of parent. */
@@ -333,6 +335,90 @@ export function moveBlock(b: Block, target: Block, pos: MovePosition): boolean {
   else if (pos === 'after') insertAfter(target, b);
   else prependChild(target, b);
   return true;
+}
+
+/**
+ * Point a top-level block's sibling-list cache at the array it now lives in.
+ *
+ * `siblingsOf` resolves a top-level block's container through
+ * `forestRootsCache`, which is a WeakMap set when the view registers its
+ * roots. A block that MOVES between positions — or, for a cross-file drop,
+ * between documents — keeps its old entry, so the next `siblingsOf` hands back
+ * an array the block is no longer in. Every later `removeBlock`/`indent` on it
+ * then edits the wrong list: the block survives a delete, or appears twice.
+ *
+ * The cache is only consulted for parentless blocks, so re-pointing on every
+ * re-parent keeps it correct without invalidating anything else.
+ */
+function reindexRoots(b: Block): void {
+  if (b.parent) {
+    forestRootsCache.delete(b);
+    return;
+  }
+  // Find the array this block now belongs to among the registered forests.
+  for (const arr of rootArrays) {
+    if (arr.includes(b)) {
+      forestRootsCache.set(b, arr);
+      return;
+    }
+  }
+  forestRootsCache.delete(b);
+}
+
+/**
+ * Move a GROUP of blocks into one position, preserving their relative order.
+ *
+ * Looping `moveBlock` is wrong: each call inserts directly adjacent to the
+ * target, so the next member pushes the previous one further out — dropping
+ * [a, b] after `c` yields [c, b, a], exactly reversed. Inserting them one by
+ * one at a moving anchor (or as a contiguous run) keeps the order.
+ *
+ * Members that are descendants of another member are dropped: they travel
+ * inside their ancestor and re-inserting them would detach the subtree.
+ * Returns the blocks actually moved.
+ */
+export function moveBlockGroup(
+  blocks: readonly Block[],
+  target: Block,
+  pos: MovePosition,
+): Block[] {
+  // Any member that cannot be legally placed makes the WHOLE drop incoherent:
+  // moving half a selection is more surprising than not moving at all, and the
+  // user aimed at one target for the whole group.
+  for (const b of blocks) {
+    if (!b || b === target) return [];
+    // A member that contains the target could only be dropped inside itself.
+    if (isDescendant(b, target)) return [];
+  }
+  // Members nested in another member travel inside their ancestor; inserting
+  // them separately would detach the subtree.
+  const movers = blocks.filter((b) => !blocks.some((o) => o !== b && isDescendant(o, b)));
+  if (movers.length === 0) return [];
+
+  if (pos === 'child') {
+    // A run of first children, in order.
+    const kids = target.children;
+    for (const b of movers) removeBlock(b);
+    kids.splice(0, 0, ...movers);
+    for (const b of movers) b.parent = target;
+    return movers;
+  }
+
+  const sibs = siblingsOf(target);
+  if (pos === 'before' && sibs.indexOf(target) < 0) return [];
+  for (const b of movers) removeBlock(b);
+  // Removal may have shifted the target's index, so it is re-found AFTER the
+  // removals rather than trusting a position computed before them.
+  const nowSibs = siblingsOf(target);
+  const at = pos === 'before' ? nowSibs.indexOf(target) : nowSibs.indexOf(target) + 1;
+  if (at < 0) return [];
+  nowSibs.splice(at, 0, ...movers);
+  const parent = target.parent;
+  for (const b of movers) {
+    b.parent = parent;
+    reindexRoots(b);
+  }
+  return movers;
 }
 
 /**
