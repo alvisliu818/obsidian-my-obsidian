@@ -45,6 +45,11 @@ export interface ParsedDocument {
   blocks: Block[];
   /** The source file used CRLF line endings — serialize back with \r\n. */
   crlf?: boolean;
+  /** The source file's indentation unit ('  ' for space-indented Logseq
+      exports) — serialize back with it; defaults to tab. */
+  indentUnit?: string;
+  /** The source file ended with a newline — serialize back with one. */
+  trailingNewline?: boolean;
 }
 
 /**

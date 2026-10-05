@@ -97,10 +97,9 @@ describe('block views over real markdown', () => {
 
   it('ROUND-TRIP: a view is a rendering, so the file must serialize unchanged', () => {
     const md = ['- Books', '  view:: table', '  - Dune', '    author:: Herbert', '  - Solaris', '    author:: Lem', ''].join('\n');
-    // The serializer is compact AND tab-indented (documented project behavior),
-    // so the round-trip target is the normalized form, not the input verbatim.
-    const T = '\t';
-    const expected = ['- Books', `${T}view:: table`, `${T}- Dune`, `${T}${T}author:: Herbert`, `${T}- Solaris`, `${T}${T}author:: Lem`].join('\n');
+    // The file's indentation unit is preserved on save (space-indented files
+    // keep their spaces), and so is the trailing newline.
+    const expected = ['- Books', '  view:: table', '  - Dune', '    author:: Herbert', '  - Solaris', '    author:: Lem', ''].join('\n');
     expect(serializeDocument(parseDocument(md))).toBe(expected);
     // Re-parsing that output yields the same model — the view survives a save.
     const again = parse(expected)[0];

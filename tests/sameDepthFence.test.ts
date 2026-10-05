@@ -52,7 +52,8 @@ describe('same-depth fences attach in-block', () => {
     ].join('\n');
     const out = serializeDocument(parseDocument(md));
     const lines = out.split('\n');
-    const lastList = lines.map((l, i) => (/^\t*[-*+]\s/.test(l) ? i : -1)).filter((i) => i >= 0).pop()!;
+    // The file's indentation unit is preserved on save (spaces stay spaces).
+    const lastList = lines.map((l, i) => (/^[ \t]*[-*+]\s/.test(l) ? i : -1)).filter((i) => i >= 0).pop()!;
     // After the last list item only that item's own fence lines may follow:
     // section B's code — never section A's (which must stay in place above).
     const tail = lines.slice(lastList + 1).join('\n');
@@ -93,6 +94,7 @@ describe('same-depth fences attach in-block', () => {
     expect(raws).toHaveLength(0);
     const out = serializeDocument(doc);
     expect(out).toContain('def train(): pass');
-    expect(out.split('\n').pop()).toBe('\t\t\t\t\t```');
+    // The file's space indentation is preserved on save (no tab rewrite).
+    expect(out.split('\n').pop()).toBe('          ```');
   });
 });

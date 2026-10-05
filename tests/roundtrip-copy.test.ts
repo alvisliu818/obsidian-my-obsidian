@@ -4,23 +4,40 @@
  * what the plugin's save writes over the user's file.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { parseDocument } from '../src/core/parser';
 import { serializeDocument, serializeBlock } from '../src/core/serializer';
 
 const FILE = 'E:/HOME/BaiduSyncdisk/大模型/尚硅谷大模型技术之深度学习2.2.0-Logseq - 副本.md';
 
+// Representative double-marker structure (the 副本 file's head): tab-indented
+// Logseq format with `- - # 标题` headings.
+const DOUBLE_MARKER_FIXTURE =
+  '- - # 尚硅谷大模型技术之深度学习\n' +
+  '\t- **作者**：尚硅谷研究院　　**版本**：V2.2.0\n' +
+  '- - # 第 1 章 深度学习概述\n' +
+  '\t- ## 幻灯片 1：深度学习概述\n' +
+  '\t\t- ![](media/ppt/ppt1_slide01.png)\n' +
+  '\t- ## 幻灯片 2：什么是深度学习\n';
+
 describe('副本 round-trip', () => {
-  it('parse→serialize is byte-stable for the double-marker file', () => {
+  it('parse→serialize is byte-stable for the double-marker format', () => {
+    // Live assertion against the user's vault copy when it exists; the
+    // inline fixture keeps the regression guard when it doesn't.
+    if (!existsSync(FILE)) {
+      const doc = parseDocument(DOUBLE_MARKER_FIXTURE);
+      expect(serializeDocument(doc)).toBe(DOUBLE_MARKER_FIXTURE);
+      return;
+    }
     const md = readFileSync(FILE, 'utf8');
     const out = serializeDocument(parseDocument(md));
     expect(out).toBe(md);
   });
 
   it('minimal double-marker case round-trips', () => {
-    // The serializer drops the trailing newline of the last block.
+    // The serializer preserves the file's trailing newline.
     const md = '- - # 标题\n\t- 子项\n';
-    expect(serializeDocument(parseDocument(md))).toBe(md.trimEnd());
+    expect(serializeDocument(parseDocument(md))).toBe(md);
   });
 
   it('shows what the serializer does to a double-marker line', () => {

@@ -93,6 +93,16 @@ export function parseDocument(md: string): ParsedDocument {
   const lines = (crlf ? md.replace(/\r\n?/g, '\n') : md).split('\n');
   const doc: ParsedDocument = { frontmatter: '', pageProps: '', blocks: [] };
   if (crlf) doc.crlf = true;
+  // Indentation unit: tab-evidence lines vs 2-space-evidence lines (Logseq
+  // exports indent with two spaces). Majority wins; ties default to tab.
+  let tabLines = 0;
+  let spaceLines = 0;
+  for (const ln of lines) {
+    if (/^\t/.test(ln)) tabLines++;
+    else if (/^ {2}\S/.test(ln)) spaceLines++;
+  }
+  if (spaceLines > tabLines) doc.indentUnit = '  ';
+  if (/\n$/.test(md)) doc.trailingNewline = true;
   let i = 0;
 
   // --- frontmatter ---
