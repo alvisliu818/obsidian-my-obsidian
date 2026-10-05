@@ -159,6 +159,15 @@ export class BlockEditorView extends TextFileView {
     this.breadcrumbEl = this.editorContainerEl.createEl('div', { cls: 'block-editor-breadcrumb' });
     const scroller = this.editorContainerEl.createEl('div', { cls: 'block-editor-scroller' });
     this.treeEl = scroller.createEl('div', { cls: 'block-editor-tree' });
+    // Focusable so a MULTI-SELECTION can own the keyboard. Measured on a real
+    // instance: after Ctrl+click the focused CM6 is destroyed, focus falls back
+    // to <body>, and a keydown on <body> never reaches this view's container
+    // listener — Tab / Shift+Tab over a selection were silently dead. Parking
+    // focus on the tree element (which survives re-render, since render() only
+    // empties its children) gives those keys a target inside the editor.
+    // `-1` keeps it OUT of the Tab order: it is focusable programmatically only,
+    // so it never becomes a stop the user has to Tab through.
+    this.treeEl.tabIndex = -1;
     // Page references (linked + unlinked) live INSIDE the scroller, after the
     // outline: they scroll with the page content (Logseq parity). render()
     // only empties treeEl, so this host persists across re-renders.
@@ -1680,6 +1689,7 @@ ${content}`;
           this.selectedBlocks.add(seq[i]);
         }
         this.syncSelectionClasses();
+        this.focusTreeForSelection();
         return;
       }
     }
@@ -1692,6 +1702,10 @@ ${content}`;
     }
     this.lastClicked = b;
     this.syncSelectionClasses();
+    // Ctrl+click empties the selection (last one deselected) — nothing owns the
+    // keyboard then, so release the tree instead of leaving focus parked.
+    if (this.selectedBlocks.size > 0) this.focusTreeForSelection();
+    else this.treeEl?.blur();
   }
 
   clearSelection(): void {
@@ -1699,6 +1713,9 @@ ${content}`;
     this.selectedBlocks.clear();
     this.lastClicked = null;
     this.syncSelectionClasses();
+    // Nothing owns the keyboard once the selection is gone — hand focus back
+    // so Tab returns to Obsidian's own focus traversal.
+    this.treeEl?.blur();
   }
 
   /** Update .is-selected classes in place (no re-render). */
@@ -1706,6 +1723,21 @@ ${content}`;
     for (const [b, wrap] of this.selectionElIterator()) {
       wrap.classList.toggle('is-selected', this.selectedBlocks.has(b));
     }
+  }
+
+  /**
+   * Park keyboard focus on the tree so the selection owns Tab / Shift+Tab.
+   *
+   * Selecting blocks destroys the focused CM6 (see `selectFromClick`), and the
+   * browser then drops focus on <body> — a keydown there never reaches this
+   * view's container listener, so the bulk-indent shortcut could not fire. The
+   * tree element is the focusable target inside the editor, and because
+   * `render()` only empties its children, focus survives the re-render that
+   * `indentSelected` triggers (so repeated Tab presses keep working).
+   */
+  private focusTreeForSelection(): void {
+    if (!this.treeEl) return;
+    this.treeEl.focus({ preventScroll: true });
   }
 
   /** Selected blocks without selected ancestors, in visible order. */
@@ -1792,6 +1824,10 @@ ${content}`;
       },
       () => ({ full: true }),
     );
+    // The patch above forces a full re-render, so the selection's keyboard
+    // focus has to be re-asserted — otherwise the SECOND Tab (and every one
+    // after it) goes nowhere and the shortcut looks like it worked only once.
+    this.focusTreeForSelection();
   }
 
   /** Bulk move: up passes top-down, down passes bottom-up. */
@@ -2243,6 +2279,8 @@ ${content}`;
         if (action.op === 'select-all') {
           this.selectedBlocks = new Set(flattenVisible(this.visibleRoots));
           this.syncSelectionClasses();
+          // Same reason as the click path: an empty selection owns no keyboard.
+          this.focusTreeForSelection();
         } else if (action.op === 'duplicate') {
           this.duplicateSelected();
         } else {
@@ -2255,6 +2293,9 @@ ${content}`;
         break;
       case 'redo':
         this.redoRestore();
+        break;
+      case 'indent-selection':
+        this.indentSelected(action.shift);
         break;
     }
   }

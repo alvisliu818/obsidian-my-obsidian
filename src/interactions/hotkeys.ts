@@ -77,6 +77,8 @@ export function hasMod(m: HotkeyModifiers): boolean {
 export type ShortcutAction =
   | { kind: 'none' }
   | { kind: 'bulk'; op: 'select-all' | 'cut' | 'copy' | 'duplicate' }
+  /** Tab / Shift+Tab over a multi-selection: indent / outdent every member. */
+  | { kind: 'indent-selection'; shift: boolean }
   | { kind: 'undo' }
   | { kind: 'redo' };
 
@@ -102,6 +104,21 @@ export function classifyGlobalKey(
   // Absent `shortcuts` = stock Logseq behavior (used by tests and by any
   // caller that has not loaded settings yet).
   const on = opts.shortcuts ?? DEFAULT_SHORTCUT_OVERRIDES;
+
+  // Tab / Shift+Tab over a MULTI-SELECTION: indent / outdent every member.
+  //
+  // Checked BEFORE the bare-key bail-out below, because Tab carries no
+  // modifier. Two conditions keep it from stealing the key:
+  //   - `hasSelection` — with nothing selected there is no group to act on,
+  //     and Tab must keep bubbling to Obsidian (focus traversal).
+  //   - `!editing` — while a block is focused, Tab belongs to the CM6 keymap
+  //     (`handleTab`, the single-block indent path).
+  // It is gated on the `indent` group, not `bulkSelection`: Tab/Shift+Tab is
+  // the indent group's key in both the single- and multi-block case, so one
+  // switch owns it everywhere.
+  if (k === 'tab' && !hasMod(m) && !m.alt && on.indent && opts.hasSelection && !opts.editing) {
+    return { kind: 'indent-selection', shift: m.shift };
+  }
 
   // Single keys with no modifier belong to the focused text (typing).
   if (!hasMod(m) && !m.alt) return { kind: 'none' };

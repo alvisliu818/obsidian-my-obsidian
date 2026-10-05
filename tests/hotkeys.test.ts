@@ -97,6 +97,42 @@ describe('classifyGlobalKey', () => {
   });
 });
 
+describe('Tab / Shift+Tab over a multi-selection', () => {
+  const sel = { hasSelection: true, editing: false };
+
+  it('indents / outdents every selected block', () => {
+    expect(classifyGlobalKey('Tab', NONE, sel)).toEqual({ kind: 'indent-selection', shift: false });
+    expect(classifyGlobalKey('Tab', { ...NONE, shift: true }, sel)).toEqual({
+      kind: 'indent-selection',
+      shift: true,
+    });
+  });
+
+  it('leaves Tab alone when nothing is selected (focus traversal)', () => {
+    // Measured: with no selection the browser's own Tab focus traversal must
+    // keep working — claiming it would trap keyboard users in the editor.
+    expect(classifyGlobalKey('Tab', NONE, idle).kind).toBe('none');
+  });
+
+  it('leaves Tab to CM6 while a block is being edited', () => {
+    // Editing means the single-block `handleTab` path owns the key; claiming it
+    // here too would double-indent.
+    expect(classifyGlobalKey('Tab', NONE, editing).kind).toBe('none');
+    expect(classifyGlobalKey('Tab', NONE, { hasSelection: true, editing: true }).kind).toBe('none');
+  });
+
+  it('falls through when the indent group is switched off', () => {
+    const off = { ...DEFAULT_SHORTCUT_OVERRIDES, indent: false };
+    expect(classifyGlobalKey('Tab', NONE, { ...sel, shortcuts: off }).kind).toBe('none');
+    expect(classifyGlobalKey('Tab', { ...NONE, shift: true }, { ...sel, shortcuts: off }).kind).toBe('none');
+  });
+
+  it('does not fire for modified Tab combos (those are not ours)', () => {
+    expect(classifyGlobalKey('Tab', mod(), sel).kind).toBe('none');
+    expect(classifyGlobalKey('Tab', { ...NONE, alt: true }, sel).kind).toBe('none');
+  });
+});
+
 describe('classifyGlobalKey respects the shortcut-group settings', () => {
   const off: ShortcutOverrides = Object.fromEntries(
     Object.keys(DEFAULT_SHORTCUT_OVERRIDES).map((k) => [k, false]),

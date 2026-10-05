@@ -7,6 +7,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
 
 ### Added
 
+- **Tab / Shift+Tab now indent and outdent a multi-selection.** Bulk indent was reachable only from the right-click menu, so the keyboard route every outliner is expected to have was missing. Tab indents every selected block, Shift+Tab lifts it back out; unselected blocks are never touched.
+  - Measured on a real instance while building this: the shortcut was dead even with the handler wired, because selecting blocks destroys the focused editor and drops DOM focus on `<body>` — and a keydown there never reaches the view's own container listener. The outline tree is now a focus target (`tabindex="-1"`, so it stays out of the Tab order) and takes focus while a selection exists.
+  - Focus is re-asserted after each indent, since the operation repaints the tree — otherwise only the first Tab press would have taken effect.
+  - The shortcut obeys the **Indent** group in Settings → Shortcuts, and only applies while blocks are selected and nothing is being typed: with no selection Tab is left to Obsidian's own focus traversal, and while editing it stays with the single-block indent path. Escape clears the selection and hands Tab back.
+
 - **Extract blocks to their own page, leaving a page embed behind** (SiYuan's document block). "Move block to another page" removes the block and leaves nothing behind, which loses the reader's path — the detail is gone from the outline with no sign it ever existed. Extracting instead moves the block *and its children* into a brand-new page named after the block's own text, and puts an `![[Page]]` embed at exactly the position the block occupied, so the outline keeps its shape and the reader follows a link.
   - The page name is derived from the block text (leading list/heading markers and inline markup stripped, illegal filename characters replaced, length capped, collisions suffixed) and is offered as an editable suggestion — an empty block asks instead of inventing a name.
   - Available from the block context menu, from the multi-selection menu, and from the command palette / slash menu.
