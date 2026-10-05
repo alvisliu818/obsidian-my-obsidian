@@ -15,7 +15,7 @@ import { applyBlockProps, blockEditorDoc, createBlock, docPageProps, editablePro
 import { parseDocument } from '../core/parser';
 import { clearLogseqPageProps, registerLogseqPageProps } from '../pagePropsRegistry';
 import { serializeBlock, serializeDocument } from '../core/serializer';
-import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, isDescendant, linkParents, moveBlock, moveBlockVertically, outdent, pseudoRootOf, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, type MovePosition } from '../core/treeOps';
+import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, isDescendant, linkParents, moveBlockGroup, moveBlockVertically, outdent, pseudoRootOf, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, type MovePosition } from '../core/treeOps';
 import { UndoStack } from '../state/undoStack';
 import {
   renderBlockTree,
@@ -50,6 +50,7 @@ import { buildTraceTimeIndex, formatTraceTimestamp, traceTimeModifiedAt, traceTi
 import { breadcrumbFor, restoreZoomed, visibleRootsFor, zoomId } from '../interactions/zoom';
 import { attachDnd } from '../interactions/dnd';
 import { attachContextMenu } from '../interactions/contextMenu';
+import { classifyGlobalKey, modifiersOf } from '../interactions/hotkeys';
 import { clearActiveBlockEditor, syncActiveBlockEditor } from '../interactions/textSelectionMenu';
 import { autocompleteSources } from '../features/links';
 import { PageSearchBar } from '../features/pageSearch';
@@ -57,6 +58,9 @@ import { expandTemplates, parseVarLines, type TemplateContext } from '../feature
 import { logOp } from '../features/logger';
 import { refreshBlockBacklinkBadges } from '../blocks/blockBacklinks';
 import { renderPageReferences } from '../features/pageReferences';
+import { renderSupertagCollection } from '../features/supertagCollection';
+import { applySupertags, normalizeTag, removeSupertags } from '../features/supertags';
+import { collectBlockTags, removeTagFromText } from '../features/supertagText';
 import { mountCodeEditor, parseCodeFence, type MountedCodeEditor } from '../blocks/codeBlockEdit';
 import { unwatchGuideLayout, watchGuideLayout } from '../blocks/guideLayout';
 
@@ -170,21 +174,31 @@ export class BlockEditorView extends TextFileView {
         void this.onExternalModify(file);
       }),
     );
-    // Global undo/redo when no block is focused (block-internal undo is CM6's).
-    this.editorContainerEl.addEventListener('keydown', (ev) => this.handleGlobalKeydown(ev));
+    // Global shortcuts. Registered in the CAPTURE phase on purpose: the
+    // focused block's CM6 lives deeper in this subtree and dispatches its
+    // keymap during the bubble phase, calling preventDefault() on any match.
+    // A bubble-phase listener here would therefore never see Ctrl+F / Ctrl+H /
+    // Ctrl+\ (they looked "already handled" and got skipped), and CM6's own
+    // Mod-a / Mod-z would shadow the Obsidian commands for the same reason.
+    // Capturing first lets us decide our own keys, and — crucially — lets every
+    // key we do NOT own keep travelling to Obsidian's keymap untouched.
+    this.editorContainerEl.addEventListener('keydown', (ev) => this.handleGlobalKeydown(ev), true);
     attachDnd(this.treeEl, this);
     attachContextMenu(this.treeEl, this);
     this.searchBar = new PageSearchBar(this, this.editorContainerEl);
     // Live {{query}} blocks: refresh when the vault-wide index rebuilds.
     this.indexDisposer = this.plugin.blockIndex?.onRebuild(() => {
       this.refreshQueryResults();
-      // Page references (linked + unlinked) track the index.
+      // Page references (linked + unlinked) + the supertag collection track
+      // the index. renderPageReferences owns the whole host (it clears and
+      // rebuilds it), so the collection is drawn INSIDE that host, after it.
       renderPageReferences(
         this.refsHostEl,
         this.plugin,
         this.file?.path,
         this.file?.basename ?? '',
       );
+      renderSupertagCollection(this.refsHostEl, this.plugin, this.file?.path);
       refreshBlockBacklinkBadges(this);
     }) ?? null;
 
@@ -310,6 +324,7 @@ export class BlockEditorView extends TextFileView {
       this.file?.path,
       this.file?.basename ?? '',
     );
+    renderSupertagCollection(this.refsHostEl, this.plugin, this.file?.path);
     // Reveal a pending block reference (opened from another file via ((id))).
     const pending = this.plugin.pendingReveal;
     if (pending && pending.path === file.path) {
@@ -1600,6 +1615,23 @@ ${content}`;
     if (nb) this.focusBlock(nb as Block, 0);
   }
 
+  /**
+   * Insert a whole top-level block (a ```prolog query fence, typically). Raw
+   * blocks only exist at the top level — nested inside a bullet the serializer
+   * would indent the fence and the query would stop being a query.
+   */
+  insertTopLevelBlock(text: string, kind: 'list' | 'raw' = 'list'): Block {
+    const nb: Block = { kind, marker: null, text, props: {}, children: [], parent: null };
+    this.mutate(() => {
+      let anchor = this.focusedBlock;
+      while (anchor?.parent) anchor = anchor.parent;
+      const at = anchor ? this.doc.blocks.indexOf(anchor) : -1;
+      if (at >= 0) this.doc.blocks.splice(at + 1, 0, nb);
+      else this.doc.blocks.push(nb);
+    });
+    return nb;
+  }
+
   toggleCollapse(b: Block): void {
     this.mutate(
       () => toggleCollapse(b),
@@ -1818,14 +1850,111 @@ ${content}`;
   // ------------------------------------------------------------------
 
   dropBlock(dragged: Block, target: Block, pos: MovePosition): void {
-    const oldParent = dragged.parent; // captured before the move
+    this.dropBlocks([dragged], target, pos);
+  }
+
+  /**
+   * Move a whole payload (multi-selection drag) into a target position.
+   *
+   * Order matters: a group drag whose members are siblings must land in the
+   * ORIGINAL order, and members that are ancestors of each other must be
+   * applied outermost-first (moving a parent first would detach the child
+   * from the document before it gets placed). Both are why this cannot just
+   * loop `moveBlock`.
+   */
+  /**
+   * Move a whole payload (multi-selection drag) into a target position.
+   *
+   * Delegates to `moveBlockGroup`, NOT a loop over `moveBlock`: each
+   * `moveBlock` inserts directly adjacent to the target, so the next member
+   * pushes the previous one further out — dropping [a, b] after `c` would
+   * yield [c, b, a], exactly reversed.
+   */
+  dropBlocks(blocks: readonly Block[], target: Block, pos: MovePosition): void {
+    const oldParent = blocks[0]?.parent ?? null;
+    let moved: Block[] = [];
     this.mutate(
       () => {
-        moveBlock(dragged, target, pos);
+        moved = moveBlockGroup(blocks, target, pos);
       },
-      // Rebuild both the source and the destination sibling lists.
-      () => ({ lists: [oldParent, dragged.parent] }),
+      // Rebuild the source and destination sibling lists.
+      () => ({
+        lists: dedupeParents([oldParent, ...moved.map((b) => b.parent), target.parent]),
+      }),
     );
+  }
+
+  /**
+   * Detach blocks from this document without re-inserting them (the drop half
+   * of a cross-file move writes them to another file).
+   *
+   * Innermost first, and skipping any block that another member already
+   * carries: removing a parent first would leave the child's `parent` pointing
+   * at a block that is no longer in the document, and the block list rebuilt
+   * afterwards would miss the sub-tree entirely.
+   */
+  dropBlocksToNowhere(blocks: readonly Block[]): void {
+    const payload = blocks.filter(Boolean);
+    if (payload.length === 0) return;
+    const ordered = [...payload]
+      .filter((b) => !payload.some((o) => o !== b && isDescendant(o, b)))
+      .sort((a, b) => blockDepth(b) - blockDepth(a));
+    if (ordered.length === 0) return;
+    const parents = dedupeParents(ordered.map((b) => b.parent));
+    this.mutate(
+      () => {
+        for (const b of ordered) removeBlock(b);
+      },
+      () => ({ lists: parents }),
+    );
+  }
+
+  /**
+   * Another view moved blocks that used to live in this document (cross-view
+   * drop). The block objects were already re-parented by the destination view,
+   * so this only has to do what that view cannot: push an undo entry, mark the
+   * file dirty so it actually re-saves (otherwise the block stays on disk and
+   * the "move" is a duplicate), and rebuild the source sibling lists.
+   *
+   * `sourceLists` must be captured BEFORE the move — afterwards every block's
+   * `parent` points into the destination document.
+   */
+  adoptBlocksMovedAway(sourceLists: (Block | null)[]): void {
+    if (sourceLists.length === 0) return;
+    this.mutate(
+      () => undefined,
+      () => ({ lists: dedupeParents(sourceLists) }),
+    );
+  }
+
+  /**
+   * Append already-parsed blocks to the end of this document.
+   *
+   * Used by a cross-file drop whose destination is this open note: the blocks
+   * arrive parsed, so they join the live model (undoable, re-rendered) rather
+   * than being written to the file behind the view's back — which would race
+   * `onExternalModify`, whose "editor always wins" policy would then discard
+   * them.
+   */
+  appendBlocksAtEnd(blocks: Block[]): void {
+    if (blocks.length === 0) return;
+    // Skip blocks another one already contains — they arrive nested.
+    const tops = blocks.filter((b) => !blocks.some((o) => o !== b && isDescendant(o, b)));
+    if (tops.length === 0) return;
+    this.mutate(
+      () => {
+        for (const b of tops) {
+          b.parent = null;
+          this.doc.blocks.push(b);
+        }
+      },
+      () => ({ lists: [null] }),
+    );
+  }
+
+  /** The block-tree root, for handlers that need to reach another view's DOM. */
+  treeRoot(): HTMLElement {
+    return this.treeEl;
   }
 
   // ------------------------------------------------------------------
@@ -2010,6 +2139,61 @@ ${content}`;
     );
   }
 
+  // Supertags (Tana supertags / Logseq DB new tags)
+  // ------------------------------------------------------------------
+
+  /**
+   * Add `tag` to the focused block and materialize its inherited field
+   * template. Never overwrites an existing property value.
+   * Returns false when there is no focused block or nothing to do.
+   */
+  applySupertag(tag: string): boolean {
+    const b = this.focusedBlock;
+    const reg = this.plugin.blockIndex?.supertagRegistry();
+    if (!b || !reg) return false;
+    const t = normalizeTag(tag);
+    if (!reg.has(t)) return false; // a plain tag has no template
+    if (collectBlockTags(b.text).includes(t)) return false;
+
+    // 1. the tag itself goes into the block TEXT (so it round-trips as markdown)
+    const withTag = b.text.trimEnd().length > 0 ? `${b.text.trimEnd()} #${t}` : `#${t}`;
+    // 2. the template materializes as `key:: value` props
+    const nextProps = applySupertags(b.props, reg, [...collectBlockTags(withTag), t]);
+    this.mutate(
+      () => {
+        b.text = withTag;
+        if (nextProps) b.props = nextProps;
+      },
+      () => ({ lists: [b.parent ?? b] }),
+    );
+    return true;
+  }
+
+  /**
+   * Remove `tag` from the focused block and retract the fields it contributed
+   * (values the user filled in are kept). Returns false when nothing changed.
+   */
+  removeSupertag(tag: string): boolean {
+    const b = this.focusedBlock;
+    const reg = this.plugin.blockIndex?.supertagRegistry();
+    if (!b || !reg) return false;
+    const t = normalizeTag(tag);
+    const before = collectBlockTags(b.text);
+    if (!before.includes(t)) return false;
+
+    const after = before.filter((x) => x !== t);
+    const text = removeTagFromText(b.text, t);
+    const nextProps = removeSupertags(b.props, reg, [t], after);
+    this.mutate(
+      () => {
+        b.text = text;
+        if (nextProps) b.props = nextProps;
+      },
+      () => ({ lists: [b.parent ?? b] }),
+    );
+    return true;
+  }
+
   // ------------------------------------------------------------------
   // Journal navigation (prev / next day, Logseq md parity)
   // ------------------------------------------------------------------
@@ -2026,60 +2210,54 @@ ${content}`;
   // Undo / redo (global, non-focused)
   // ------------------------------------------------------------------
 
+  /**
+   * Global DOM keydown — ONLY for keys that cannot be reached any other way.
+   *
+   * Find / replace / collapse-all are NOT handled here: they are declared as
+   * `hotkeys` on real Obsidian commands, because Obsidian's keymap consumes
+   * the key event on `window` in the capture phase and a container-level
+   * listener never sees it. See `src/interactions/hotkeys.ts`.
+   */
   private handleGlobalKeydown(ev: KeyboardEvent): void {
-    // Escape exits multi-selection first (even while editing).
-    if (ev.key === 'Escape' && this.selectedBlocks.size > 0) {
+    // Escape exits multi-selection first. While a block or an embed row is
+    // being edited we must NOT touch it: those editors install their own
+    // capture handler on their own DOM (commit on Escape) which runs AFTER
+    // ours (we are on an ancestor), so preventing the default here would drop
+    // whatever the user just typed.
+    const editing = !!(this.focusedView || this.focusedCode || this.embedEdit);
+    if (ev.key === 'Escape' && this.selectedBlocks.size > 0 && !editing) {
       ev.preventDefault();
       this.clearSelection();
       return;
     }
-    const mod = ev.ctrlKey || ev.metaKey;
-    if (!mod) return;
-    const key = ev.key.toLowerCase();
-    // Find/replace works in both states (CM6 has no Mod-f binding of its own,
-    // so the event bubbles up here even while a block is focused).
-    if (key === 'f') {
-      ev.preventDefault();
-      this.openSearch(false);
-      return;
-    }
-    if (key === 'h') {
-      ev.preventDefault();
-      this.openSearch(true);
-      return;
-    }
-    // Logseq md parity: Ctrl+\ toggles collapse-all / expand-all.
-    if (key === '\\') {
-      ev.preventDefault();
-      this.toggleCollapseAll();
-      return;
-    }
-    if (this.focusedView || this.focusedCode) return;
-    // Bulk shortcuts when a multi-selection exists.
-    if (this.selectedBlocks.size > 0) {
-      if (key === 'a') {
-        // Select the entire visible outline.
-        ev.preventDefault();
-        this.selectedBlocks = new Set(flattenVisible(this.visibleRoots));
-        this.syncSelectionClasses();
-        return;
-      }
-      if (key === 'x' || key === 'c') {
-        ev.preventDefault();
-        void this.copySelectedAsMarkdown(); // cut = copy + delete
-        if (key === 'x') this.deleteSelected();
-        return;
-      }
-      if (key === 'd') {
-        ev.preventDefault();
-        this.duplicateSelected();
-        return;
-      }
-    }
-    if (key === 'z' && !ev.shiftKey) {
-      if (this.undoRestore()) ev.preventDefault();
-    } else if ((key === 'z' && ev.shiftKey) || key === 'y') {
-      if (this.redoRestore()) ev.preventDefault();
+    const action = classifyGlobalKey(ev.key, modifiersOf(ev), {
+      hasSelection: this.selectedBlocks.size > 0,
+      editing,
+      shortcuts: this.plugin.settings.shortcuts,
+    });
+    // `none` = not ours. Leave the event completely untouched so Obsidian's
+    // keymap (and therefore the user's own bindings) can handle it. Calling
+    // preventDefault here is what used to kill every global shortcut.
+    if (action.kind === 'none') return;
+    ev.preventDefault();
+    switch (action.kind) {
+      case 'bulk':
+        if (action.op === 'select-all') {
+          this.selectedBlocks = new Set(flattenVisible(this.visibleRoots));
+          this.syncSelectionClasses();
+        } else if (action.op === 'duplicate') {
+          this.duplicateSelected();
+        } else {
+          void this.copySelectedAsMarkdown(); // cut = copy + delete
+          if (action.op === 'cut') this.deleteSelected();
+        }
+        break;
+      case 'undo':
+        this.undoRestore();
+        break;
+      case 'redo':
+        this.redoRestore();
+        break;
     }
   }
 
@@ -2195,4 +2373,27 @@ function nativePropValueToString(v: unknown): string {
   if (v === null || v === undefined) return '';
   if (Array.isArray(v)) return v.map(nativePropValueToString).join(', ');
   return typeof v === 'string' ? v : String(v);
+}
+
+/** Nesting depth of a block (roots = 0). Used to order a drag payload. */
+function blockDepth(b: Block): number {
+  let d = 0;
+  let p = b.parent;
+  while (p) {
+    d++;
+    p = p.parent;
+  }
+  return d;
+}
+
+/** Distinct sibling-list owners, in first-seen order (null = root list). */
+function dedupeParents(parents: (Block | null)[]): (Block | null)[] {
+  const seen = new Set<Block | null>();
+  const out: (Block | null)[] = [];
+  for (const p of parents) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    out.push(p);
+  }
+  return out;
 }

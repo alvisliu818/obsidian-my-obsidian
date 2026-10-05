@@ -17,6 +17,8 @@
  */
 
 import { MarkdownRenderer, setIcon } from 'obsidian';
+import { enhanceTable } from './tableEditor';
+import { hasTable } from './tableModel';
 import type { BlockEditorView } from '../view/BlockEditorView';
 import type { Block } from '../types';
 import { blockId } from '../types';
@@ -33,6 +35,11 @@ import {
 import type { IndexedBlock } from '../index/blockIndex';
 import { flattenVisible } from '../core/treeOps';
 import { layoutGuideLines } from './guideLayout';
+import { renderBlockView } from './blockView';
+import { isViewBlock, VIEW_COLUMNS_PROP, VIEW_PROP } from '../features/blockViews';
+import { syncPrologContainer } from './prologResults';
+import { detectBlockType } from './blockTypes';
+import { renderBlockTypeBadge } from './blockTypeMenu';
 
 const contentCache = new WeakMap<Block, { el: HTMLElement; sig: string }>();
 const queryCache = new WeakMap<Block, { el: HTMLElement; sig: string; version: number }>();
@@ -173,6 +180,11 @@ export function renderBlockTree(container: HTMLElement, roots: Block[], host: Bl
 function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'block-wrap' + (b.kind === 'raw' ? ' block-raw' : '');
+  // SiYuan parity: the type is derived from the markdown on every render
+  // (never stored), and exposed to CSS / the gutter badge below.
+  const btype = detectBlockType(b);
+  wrap.dataset.blockType = btype;
+  wrap.classList.add('block-type-' + btype);
   if (host.selectedBlocks.has(b)) wrap.classList.add('is-selected');
   const id = blockId(b);
   if (id) wrap.dataset.blockId = id;
@@ -190,8 +202,15 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
 
   // --- controls ---
   const controls = main.createEl('div', { cls: 'block-controls' });
-  if (b.kind === 'list' && !nativeProps) {
+  // Raw (verbatim) blocks get the drag handle too: a table, divider, formula
+  // or media embed is real content the user expects to be able to move. The
+  // bullet / collapse caret stay list-only — a verbatim block has no outline
+  // position to zoom into and no children to fold.
+  const draggable = b.kind === 'list' || b.kind === 'raw';
+  if (draggable && !nativeProps) {
     controls.setAttribute('draggable', 'true'); // block drag handle zone
+  }
+  if (b.kind === 'list' && !nativeProps) {
     if (b.children.length > 0) {
       const collapsed = b.props['collapsed'] === 'true';
       // Collapsed state lives on the wrap (the bullet draws the gray halo);
@@ -218,6 +237,13 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
       // Single click = focus (zoom) the block; collapsing lives on the caret.
       host.zoomIn(b);
     });
+  }
+
+  // --- block type badge (SiYuan parity): names the type and opens the
+  // conversion menu. Plain paragraphs and the props block already read as
+  // what they are, so they stay clean. ---
+  if (btype !== 'paragraph' && btype !== 'props' && !nativeProps) {
+    renderBlockTypeBadge(controls, host, b, btype);
   }
 
   // --- marker checkbox ---
@@ -276,7 +302,14 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
   // NO container/line at all — expansion lives on the always-visible caret. ---
   const collapsed = b.props['collapsed'] === 'true';
   const kidsVisible = b.children.length > 0 && !collapsed;
-  if (kidsVisible && (!budget || budget.left > 0)) {
+  // A `view::` property renders the children as a table / cards / tabs instead
+  // of an outline list. The data stays the same indented markdown — only the
+  // presentation changes, and removing the property restores the list.
+  const viewEl = kidsVisible && (!budget || budget.left > 0) ? renderBlockView(b, host) : null;
+  if (viewEl) {
+    wrap.appendChild(viewEl);
+    if (budget) budget.left--; // the view consumed the child budget as one unit
+  } else if (kidsVisible && (!budget || budget.left > 0)) {
     const cc = wrap.createEl('div', { cls: 'block-children-container' });
     const guide = cc.createEl('div', { cls: 'block-children-left-border' });
     guide.setAttribute('aria-label', 'Collapse child blocks');
@@ -305,6 +338,9 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
 
   // --- embedded query results ({{query ...}}) ---
   syncQueryContainer(wrap, b, host);
+
+  // --- Prolog query results (a ```prolog fenced block) ---
+  syncPrologContainer(wrap, b, host);
 
   // --- TraceTime parity: last-edited label at the row's right edge ---
   syncTracetimeLabel(wrap, b, host);
@@ -349,7 +385,8 @@ export function refreshTracetimeLabels(host: BlockEditorView): void {
   }
 }
 
-const WRAP_PROPS_SKIP = new Set(['id', 'collapsed', 'style']);
+/** Props that configure the block itself and are never shown as a `key:: value` row. */
+const WRAP_PROPS_SKIP = new Set(['id', 'collapsed', 'style', VIEW_PROP, VIEW_COLUMNS_PROP]);
 
 /**
  * One `key:: value` line under a block (Logseq parity): dimmed like the
@@ -677,6 +714,10 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockEditorVi
       // node so the embed pattern no longer matches.
       enhanceEmbeds(holder, host);
       enhanceCodeBlocks(holder, b, host);
+      // Visual table editing. Must run AFTER MarkdownRenderer (it upgrades the
+      // rendered <table> in place) and after code blocks (a table inside a code
+      // fence is not a table).
+      enhanceTables(holder, b, host);
       // Swap page-embed tokens for live boxes ( BEFORE block-ref chips so
       // the token is not mistaken for text).
       for (const { token, page } of pageEmbedTokens) {
@@ -711,6 +752,24 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockEditorVi
  * the block in one-shot source mode with the cursor at the end of the
  * fence's language word, so the language can be edited directly.
  */
+/**
+ * Make every rendered table in this block visually editable.
+ *
+ * Obsidian's own table editor is a private CM6 extension (`.cm-table-widget`)
+ * that cannot be mounted into our editor, so `tableEditor.ts` reimplements the
+ * UX on the `<table>` that MarkdownRenderer already produced. Upgrading in
+ * place keeps all existing table styling.
+ */
+function enhanceTables(holder: HTMLElement, b: Block, host: BlockEditorView): void {
+  if (!hasTable(b.text)) return;
+  // Skip tables that are part of a query result (read-only by design) or that
+  // live inside a rendered code block.
+  for (const table of [...holder.querySelectorAll('table')] as HTMLTableElement[]) {
+    if (table.closest('.block-query-table-wrap, .lgp-code-block, .dataview-missing')) continue;
+    enhanceTable(table, b, host);
+  }
+}
+
 function enhanceCodeBlocks(holder: HTMLElement, b: Block, host: BlockEditorView): void {
   for (const pre of holder.querySelectorAll('pre')) {
     if (pre.closest('.lgp-code-block')) continue;
@@ -935,6 +994,9 @@ export function patchSiblingList(parent: Block | null, host: BlockEditorView): b
   const wrap = blockElMap.get(parent);
   if (!wrap) return false; // not rendered (virtualized / above the zoom root)
   const collapsed = parent.props['collapsed'] === 'true';
+  // A `view::` block renders a view INSTEAD of a child list — there is no
+  // `.block-children-container` to patch, so rebuild the parent's wrap.
+  if (isViewBlock(parent.props)) return patchBlockSubtree(parent, host);
   const kidsEl = wrap.querySelector(':scope > .block-children-container > .block-children');
   if (!kidsEl || collapsed || parent.children.length === 0) {
     return patchBlockSubtree(parent, host); // chrome changed: rebuild parent wrap

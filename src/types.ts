@@ -47,6 +47,73 @@ export interface ParsedDocument {
   crlf?: boolean;
 }
 
+/**
+ * Which groups of Logseq-specific shortcuts the block editor keeps.
+ *
+ * Every group is independent: turning one off hands exactly those keys back to
+ * CM6 / Obsidian and leaves the others alone. `'all'` / `'none'` are accepted
+ * as shorthands by the setting UI; they are expanded into the individual
+ * boolean groups before being persisted, so the stored shape is always the
+ * explicit one.
+ *
+ * These only ever apply INSIDE the block editor. The native Obsidian editor is
+ * never touched — it always uses Obsidian's own shortcuts.
+ */
+export interface ShortcutOverrides {
+  /** Alt+↑/↓ jump between blocks, Mod+Shift+↑/↓ and Alt+Shift+↑/↓ move them. */
+  blockNavigation: boolean;
+  /** Mod+Enter / Ctrl+Enter cycle the TODO marker. */
+  todoCycle: boolean;
+  /** Backspace at block start merges with the previous block; Delete merges forward. */
+  blockMerge: boolean;
+  /** Tab / Shift+Tab indent and outdent a block. */
+  indent: boolean;
+  /** Enter creates a new sibling block below. */
+  newBlock: boolean;
+  /** Typing a wrap character with a selection wraps it (*, _, ~, `, [, {, …). */
+  selectionWrap: boolean;
+  /**
+   * Whole-block selection ops: Ctrl+A / X / C / D.
+   * Only active when blocks are multi-selected.
+   */
+  bulkSelection: boolean;
+  /** Undo / redo of block operations (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y). */
+  undoRedo: boolean;
+}
+
+export const SHORTCUT_GROUP_LABELS: Record<keyof ShortcutOverrides, string> = {
+  blockNavigation: 'Block navigation (Alt+↑/↓ jump, Mod+Shift+↑/↓ move)',
+  todoCycle: 'TODO cycle (Mod+Enter)',
+  blockMerge: 'Block merge (Backspace / Delete)',
+  indent: 'Indent (Tab / Shift+Tab)',
+  newBlock: 'New block (Enter)',
+  selectionWrap: 'Selection wrap (typing * _ ~ ` [ { with a selection)',
+  bulkSelection: 'Bulk block ops (Ctrl+A / X / C / D on multi-selected blocks)',
+  undoRedo: 'Undo / redo of block operations',
+};
+
+/** Every group defaulting to ON = stock Logseq behavior. */
+export const DEFAULT_SHORTCUT_OVERRIDES: ShortcutOverrides = {
+  blockNavigation: true,
+  todoCycle: true,
+  blockMerge: true,
+  indent: true,
+  newBlock: true,
+  selectionWrap: true,
+  bulkSelection: true,
+  undoRedo: true,
+};
+
+/** Merge stored (possibly partial/legacy) data over the defaults. */
+export function shortcutOverridesFrom(raw: unknown): ShortcutOverrides {
+  const o = (raw ?? {}) as Partial<ShortcutOverrides>;
+  const out = { ...DEFAULT_SHORTCUT_OVERRIDES };
+  for (const k of Object.keys(out) as (keyof ShortcutOverrides)[]) {
+    if (typeof o[k] === 'boolean') out[k] = o[k];
+  }
+  return out;
+}
+
 export interface BlockEditorSettings {
   /** Folders (paths) where .md files keep opening with the native editor. */
   excludedFolders: string;
@@ -76,6 +143,29 @@ export interface BlockEditorSettings {
   guideLineExpandLevels: number;
   /** Editor for the page-properties first block: Logseq text editor or Obsidian's native properties editor. */
   pagePropsEditor: PagePropsEditor;
+  /**
+   * Per-page linked-reference filters, keyed by page path (Logseq's per-page
+   * funnel state). Values are normalized page names; include = AND, exclude =
+   * NONE — see `src/features/backlinkFilter.ts`.
+   */
+  refFilters: Record<string, RefFilter>;
+  /** Which groups of Logseq-specific shortcuts the block editor keeps. */
+  shortcuts: ShortcutOverrides;
+  /**
+   * Secondary SQLite index over the vault (markdown stays the source of
+   * truth — the database is a rebuildable cache of it).
+   */
+  sqliteIndexEnabled: boolean;
+  /** Keep a snapshot of the database on disk so restarts do not re-index. */
+  sqlitePersist: boolean;
+  /** Re-index files when they change on disk (including edits from outside). */
+  sqliteAutoSync: boolean;
+}
+
+/** A page's linked-reference filter: values to require / to hide. */
+export interface RefFilter {
+  includes: string[];
+  excludes: string[];
 }
 
 export const DEFAULT_SETTINGS: BlockEditorSettings = {
@@ -93,6 +183,11 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   guideLineCollapseLevels: 0,
   guideLineExpandLevels: 0,
   pagePropsEditor: 'logseq',
+  refFilters: {},
+  shortcuts: { ...DEFAULT_SHORTCUT_OVERRIDES },
+  sqliteIndexEnabled: true,
+  sqlitePersist: true,
+  sqliteAutoSync: true,
 };
 
 export function createBlock(text = '', marker: Marker = null): Block {

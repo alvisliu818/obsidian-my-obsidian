@@ -3,19 +3,29 @@
  * vault-wide block-id index, and clean uninstall (restore native views).
  */
 
-import { Menu, MarkdownView, Notice, Plugin, TAbstractFile, WorkspaceLeaf, type CachedMetadata, type ViewState } from 'obsidian';
+import { Menu, MarkdownView, Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf, debounce, normalizePath, type CachedMetadata, type ViewState } from 'obsidian';
 import { BlockEditorView, VIEW_TYPE_BLOCK_EDITOR } from './view/BlockEditorView';
+import { CMD_COLLAPSE_ALL, CMD_FIND, CMD_REPLACE } from './interactions/hotkeys';
 import {
   DEFAULT_SETTINGS,
   editorChoiceFromProps,
   parseFolderList,
   pathInFolders,
+  shortcutOverridesFrom,
   takeOverForFile,
   type BlockEditorSettings,
   type EditorChoice,
 } from './types';
 import { LogseqEditorSettingTab } from './settings/tab';
 import { BlockIndex } from './index/blockIndex';
+import {
+  SqliteIndex,
+  type SqliteFileSource,
+  type SqliteSnapshotStore,
+} from './index/sqliteIndex';
+import { SqliteConsoleModal } from './features/sqliteConsole';
+import { PrologQueryBuilderModal } from './features/prologBuilder';
+import { prologTemplate } from './features/prologQuery';
 import { TodoPanelView, VIEW_TYPE_TODO_PANEL } from './panels/todoPanel';
 import { BacklinkPanelView, VIEW_TYPE_BACKLINK_PANEL } from './panels/backlinkPanel';
 import { TagPanelView, VIEW_TYPE_TAG_PANEL } from './panels/tagPanel';
@@ -30,6 +40,7 @@ import { BackupRestoreModal } from './features/backupModal';
 import { builtinSlashItems, registerSlashEditorCommands } from './features/commandMenu';
 import { getLogseqPageProps } from './pagePropsRegistry';
 import { NativeSlashSuggest, setBuiltinSlashProvider } from './features/nativeSlashSuggest';
+import { isRefFilterActive, refFilterFrom } from './features/backlinkFilter';
 import type { OperationRecord } from './core/operationLog';
 
 export default class LogseqEditorPlugin extends Plugin {
@@ -46,6 +57,14 @@ export default class LogseqEditorPlugin extends Plugin {
   /** Constructor of Obsidian's native properties editor (grabbed off a live instance). */
   nativePropsCtor: unknown = null;
   private nativePropsCtorPromise: Promise<unknown> | null = null;
+  /**
+   * Secondary index over the vault. Markdown stays the source of truth: this
+   * is a rebuildable cache, never an authority (see `index/sqliteIndex.ts`).
+   */
+  sqliteIndex: SqliteIndex | null = null;
+  /** Paths waiting for an incremental re-index; flushed on a debounce. */
+  private sqlitePending = new Set<string>();
+  private sqliteFlush: (() => void) | null = null;
 
   private origSetViewState: ((this: WorkspaceLeaf, state: ViewState, eState?: unknown) => Promise<void>) | null = null;
   private statusModeEl: HTMLElement | null = null;
@@ -65,8 +84,10 @@ export default class LogseqEditorPlugin extends Plugin {
     // Vault-wide ((block-id)) index
     this.blockIndex = new BlockIndex(this.app);
     this.blockIndex.attach(this);
+    this.attachSqliteIndex();
     this.app.workspace.onLayoutReady(() => {
       void this.blockIndex?.buildAll();
+      void this.startSqliteIndex();
       if (this.settings.pagePropsEditor === 'native') void this.resolveNativePropsCtor();
       this.convertOpenMarkdownLeaves();
     });
@@ -145,6 +166,56 @@ export default class LogseqEditorPlugin extends Plugin {
     setBuiltinSlashProvider(builtinSlashItems);
 
     // ---- Commands ----
+    // In-page find / replace.
+    //
+    // These DO declare `hotkeys`, and that is the whole point — see the long
+    // note in hotkeys.ts. An earlier version tried to catch Ctrl+F with a
+    // CAPTURE-phase DOM listener on the view container. Probing a real
+    // Obsidian showed that never works: Obsidian's own keymap listens on
+    // `window` in the capture phase and calls `preventDefault()` first, so
+    // the event is already `defaultPrevented` before it ever reaches us, and
+    // it never even arrives at the container. Measured: a listener registered
+    // LAST on window-capture still observed `defaultPrevented === true`.
+    //
+    // Declaring `hotkeys` hands the decision to Obsidian's keymap, which runs
+    // first and dispatches our command directly. The DOM handler then must NOT
+    // also claim these keys, or it would double-fire.
+    this.addCommand({
+      id: CMD_FIND,
+      name: 'Find in current file (outline)',
+      hotkeys: [{ modifiers: ['Mod'], key: 'f' }],
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(BlockEditorView);
+        if (!view) return false;
+        if (!checking) view.openSearch(false);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: CMD_REPLACE,
+      name: 'Replace in current file (outline)',
+      hotkeys: [{ modifiers: ['Mod'], key: 'h' }],
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(BlockEditorView);
+        if (!view) return false;
+        if (!checking) view.openSearch(true);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: CMD_COLLAPSE_ALL,
+      name: 'Toggle collapse all (outline)',
+      // Ctrl+\ — routed through the keymap for the same reason as Ctrl+F: the
+      // keymap wins the capture race, a DOM listener never sees the event.
+      hotkeys: [{ modifiers: ['Mod'], key: '\\' }],
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(BlockEditorView);
+        if (!view) return false;
+        if (!checking) view.toggleCollapseAll();
+        return true;
+      },
+    });
+
     this.addCommand({
       id: 'open-with-native-editor',
       name: 'Open current file with the native editor',
@@ -176,6 +247,65 @@ export default class LogseqEditorPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: 'open-sqlite-console',
+      name: 'Open the SQLite index console',
+      callback: () => new SqliteConsoleModal(this).open(),
+    });
+
+    this.addCommand({
+      id: 'sync-sqlite-index',
+      name: 'Sync the SQLite index with the vault files',
+      callback: () => {
+        const idx = this.sqliteIndex;
+        if (!idx) {
+          new Notice('The SQLite index is disabled.');
+          return;
+        }
+        void idx.sync().then((s) => {
+          new Notice(
+            `SQLite index synced: +${s.added} new, ~${s.changed} changed, -${s.removed} removed (${s.unchanged} unchanged, ${s.ms} ms)`,
+          );
+        });
+      },
+    });
+
+    this.addCommand({
+      id: 'rebuild-sqlite-index',
+      name: 'Rebuild the SQLite index from markdown',
+      callback: () => {
+        const idx = this.sqliteIndex;
+        if (!idx) {
+          new Notice('The SQLite index is disabled.');
+          return;
+        }
+        void idx.rebuild().then((s) => {
+          new Notice(`SQLite index rebuilt from markdown: ${s.files} files, ${s.blocks} blocks (${s.ms} ms)`);
+        });
+      },
+    });
+
+    this.addCommand({
+      id: 'verify-sqlite-index',
+      name: 'Check the SQLite index against the files',
+      callback: () => {
+        const idx = this.sqliteIndex;
+        if (!idx) {
+          new Notice('The SQLite index is disabled.');
+          return;
+        }
+        void idx.verify().then((v) => {
+          if (v.drift.length === 0 && v.missing.length === 0) {
+            new Notice(`SQLite index matches the files (${v.checked} checked, ${v.ms} ms)`);
+          } else {
+            new Notice(
+              `SQLite index is stale — drift: ${v.drift.slice(0, 5).join(', ') || 'none'}; missing: ${v.missing.slice(0, 5).join(', ') || 'none'}`,
+            );
+          }
+        });
+      },
+    });
+
+    this.addCommand({
       id: 'show-operation-log',
       name: 'Show the operation log (sync/write trail)',
       callback: () => new OpLogModal(this).open(),
@@ -196,6 +326,48 @@ export default class LogseqEditorPlugin extends Plugin {
       id: 'browse-all-backups',
       name: 'Browse all automatic backups',
       callback: () => new BackupRestoreModal(this).open(),
+    });
+
+    // Supertags: apply/remove the supertag of the block's own PAGE. The page's
+    // own properties ARE the field template, so a block that lives on a
+    // supertag page is already an instance of it — this materializes the
+    // inherited fields onto the focused block.
+    const supertagCmd = (id: string, label: string, run: (v: BlockEditorView) => boolean) => {
+      this.addCommand({
+        id,
+        name: label,
+        checkCallback: (checking) => {
+          const view = this.app.workspace.getActiveViewOfType(BlockEditorView);
+          if (!view) return false;
+          const path = view.file?.path;
+          if (!path || !this.blockIndex?.supertagDef(path)) return false;
+          if (!checking) run(view);
+          return true;
+        },
+      });
+    };
+    supertagCmd('apply-supertag', 'Apply this page\'s supertag to the focused block', (v) =>
+      v.applySupertag(v.file?.path ?? ''),
+    );
+    supertagCmd('remove-supertag', 'Remove this page\'s supertag from the focused block', (v) =>
+      v.removeSupertag(v.file?.path ?? ''),
+    );
+
+    this.addCommand({
+      id: 'prolog-query-builder',
+      name: 'Build a Prolog query (visual builder)',
+      callback: () => new PrologQueryBuilderModal(this).open(),
+    });
+
+    this.addCommand({
+      id: 'insert-prolog-query',
+      name: 'Insert an empty Prolog query block',
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(BlockEditorView);
+        if (!view?.file) return false;
+        if (!checking) view.insertTopLevelBlock(prologTemplate(), 'raw');
+        return true;
+      },
     });
 
     this.addCommand({
@@ -342,6 +514,7 @@ export default class LogseqEditorPlugin extends Plugin {
 
   onunload(): void {
     logOp(this, 'plugin.unload', '', 'ok');
+    void this.sqliteIndex?.close();
     // Flush pending log records before the adapter access goes away.
     void flushOpLog(this);
     // Restore the patched method...
@@ -380,6 +553,11 @@ export default class LogseqEditorPlugin extends Plugin {
     if (typeof this.settings.journalFormat !== 'string') this.settings.journalFormat = '';
     if (typeof this.settings.journalTemplate !== 'string') this.settings.journalTemplate = '';
     if (typeof this.settings.customTemplateVars !== 'string') this.settings.customTemplateVars = '';
+    // Shortcut groups: a config written before these settings existed has no
+    // `shortcuts` key at all, and must keep stock Logseq behavior.
+    this.settings.shortcuts = shortcutOverridesFrom(
+      (this.settings as { shortcuts?: unknown }).shortcuts,
+    );
     this.settings.backupsEnabled = this.settings.backupsEnabled !== false;
     this.settings.opLogEnabled = this.settings.opLogEnabled !== false;
     // Guide-line fold/unfold depths: non-negative int, 0 = all levels.
@@ -390,6 +568,20 @@ export default class LogseqEditorPlugin extends Plugin {
     this.settings.guideLineCollapseLevels = clampLevels(this.settings.guideLineCollapseLevels);
     this.settings.guideLineExpandLevels = clampLevels(this.settings.guideLineExpandLevels);
     if (this.settings.pagePropsEditor !== 'native') this.settings.pagePropsEditor = 'logseq';
+    // Per-page linked-reference filters: absent in every pre-filter config, and
+    // each entry is sanitized (data.json is user-editable).
+    const rawFilters = (this.settings as { refFilters?: unknown }).refFilters;
+    const filters: BlockEditorSettings['refFilters'] = {};
+    if (rawFilters && typeof rawFilters === 'object') {
+      for (const [path, f] of Object.entries(rawFilters as Record<string, unknown>)) {
+        const clean = refFilterFrom(f);
+        if (isRefFilterActive(clean)) filters[path] = clean;
+      }
+    }
+    this.settings.refFilters = filters;
+    this.settings.sqliteIndexEnabled = this.settings.sqliteIndexEnabled !== false;
+    this.settings.sqlitePersist = this.settings.sqlitePersist !== false;
+    this.settings.sqliteAutoSync = this.settings.sqliteAutoSync !== false;
   }
 
   async saveSettings(): Promise<void> {
@@ -464,6 +656,118 @@ export default class LogseqEditorPlugin extends Plugin {
       if (file && this.shouldTakeOverFile(file)) {
         void leaf.setViewState({ ...vs, type: VIEW_TYPE_BLOCK_EDITOR } as ViewState);
       }
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // SQLite secondary index (markdown is the source of truth)
+  // ------------------------------------------------------------------
+
+  /** Where the disposable database image is kept (inside the plugin folder). */
+  private get sqliteDbPath(): string {
+    return normalizePath(`${this.manifest.dir}/logseq-index.sqlite`);
+  }
+
+  /**
+   * Build the index over the vault's markdown. The vault is reached through
+   * two tiny interfaces so `SqliteIndex` itself stays obsidian-free.
+   */
+  private attachSqliteIndex(): void {
+    if (!this.settings.sqliteIndexEnabled) return;
+    const source: SqliteFileSource = {
+      listMarkdownFiles: () =>
+        this.app.vault
+          .getMarkdownFiles()
+          .map((f) => ({ path: f.path, mtime: f.stat.mtime, size: f.stat.size })),
+      read: (path) => this.app.vault.adapter.read(path),
+    };
+    const snapshot: SqliteSnapshotStore = {
+      load: async () => {
+        try {
+          if (!(await this.app.vault.adapter.exists(this.sqliteDbPath))) return null;
+          return new Uint8Array(await this.app.vault.adapter.readBinary(this.sqliteDbPath));
+        } catch {
+          return null;
+        }
+      },
+      save: async (bytes) => {
+        await this.app.vault.adapter.writeBinary(this.sqliteDbPath, bytes.slice().buffer);
+      },
+    };
+    this.sqliteIndex = new SqliteIndex({
+      source,
+      snapshot: this.settings.sqlitePersist ? snapshot : null,
+    });
+    if (!this.settings.sqliteAutoSync) return;
+
+    this.sqliteFlush = debounce(() => void this.flushSqlite(), 1500, true);
+    const watch = (path: string): void => {
+      if (!path.toLowerCase().endsWith('.md') || !this.sqliteIndex) return;
+      this.sqlitePending.add(path);
+      this.sqliteFlush?.();
+    };
+    // Auto-unregistered on unload; the handlers no-op while the index is off.
+    this.registerEvent(this.app.vault.on('modify', (f) => f instanceof TFile && watch(f.path)));
+    this.registerEvent(this.app.vault.on('create', (f) => f instanceof TFile && watch(f.path)));
+    this.registerEvent(
+      this.app.vault.on('delete', (f) => {
+        if (f instanceof TFile && f.path.toLowerCase().endsWith('.md')) {
+          this.sqlitePending.delete(f.path);
+          void this.sqliteIndex?.forget(f.path);
+        }
+      }),
+    );
+    this.registerEvent(
+      this.app.vault.on('rename', (f, oldPath) => {
+        if (f instanceof TFile && f.path.toLowerCase().endsWith('.md')) {
+          this.sqlitePending.delete(oldPath);
+          void this.sqliteIndex?.forget(oldPath);
+          watch(f.path);
+        }
+      }),
+    );
+  }
+
+  /** Open + catch up with anything that changed while Obsidian was closed. */
+  private async startSqliteIndex(): Promise<void> {
+    const idx = this.sqliteIndex;
+    if (!idx) return;
+    await idx.open();
+    if (idx.lastError) {
+      new Notice(`SQLite index could not start: ${idx.lastError}`);
+      return;
+    }
+    // A sync (not a rebuild) is exactly the right catch-up: the `files` table
+    // knows each file's mtime/size, so only real changes are re-read — and a
+    // discarded database is empty, which makes this a full derive instead.
+    const s = await idx.sync();
+    if (s.added + s.changed > 0 && s.unchanged === 0) {
+      logOp(this, 'sqlite.sync', '', 'ok', `+${s.added} ~${s.changed} ${s.ms}ms`);
+    }
+  }
+
+  /** Re-index just the files that moved (debounced by the vault events). */
+  private async flushSqlite(): Promise<void> {
+    const paths = [...this.sqlitePending];
+    this.sqlitePending.clear();
+    const idx = this.sqliteIndex;
+    if (!idx || paths.length === 0) return;
+    for (const p of paths) await idx.syncFile(p);
+    await idx.persistNow();
+  }
+
+  /** Called by the settings tab when the SQLite toggles change. */
+  applySqliteSettings(): void {
+    const want = this.settings.sqliteIndexEnabled;
+    if (!want && this.sqliteIndex) {
+      const idx = this.sqliteIndex;
+      this.sqliteIndex = null;
+      void idx.close();
+      return;
+    }
+    if (want && !this.sqliteIndex) {
+      this.attachSqliteIndex();
+      void this.startSqliteIndex();
     }
   }
 
@@ -641,6 +945,18 @@ export default class LogseqEditorPlugin extends Plugin {
   // ------------------------------------------------------------------
   // Block reference navigation
   // ------------------------------------------------------------------
+
+  // ------------------------------------------------------------------
+  // Prolog queries
+  // ------------------------------------------------------------------
+
+  /** Insert a ```prolog fence into the active block editor; false when none. */
+  insertPrologQuery(source: string): boolean {
+    const view = this.app.workspace.getActiveViewOfType(BlockEditorView);
+    if (!view || !view.file) return false;
+    view.insertTopLevelBlock(source, 'raw');
+    return true;
+  }
 
   async openBlockRef(blockId: string): Promise<void> {
     const info = this.blockIndex?.get(blockId);

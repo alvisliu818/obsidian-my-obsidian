@@ -22,6 +22,12 @@
 import { Block, Marker, MARKERS, ParsedDocument, createBlock } from '../types';
 
 const FENCE_OPEN_RE = /^(\s*)(`{3,}|~{3,})(.*)$/;
+/**
+ * A line that is nothing but a `$$` delimiter — the opening/closing marker of
+ * an Obsidian/MathJax DISPLAY math block. `$$x$$` on one line is inline math
+ * and deliberately does not match.
+ */
+const MATH_FENCE_RE = /^(\s*)\$\$[ \t]*$/;
 const PROPERTY_RE = /^([A-Za-z][A-Za-z0-9_-]*)::\s*(.*)$/;
 const LIST_RE = /^(\s*)-(?:\s+(.*))?$/;
 const MARKER_RE = new RegExp(`^(${MARKERS.join('|')})\\s+(.*)$`);
@@ -247,6 +253,47 @@ export function parseDocument(md: string): ParsedDocument {
         rawBuf.push(cl);
         i++;
         if (FENCE_OPEN_RE.test(cl) && cl.trim().replace(/[`\s~]/g, '') === '') break;
+      }
+      continue;
+    }
+
+    // --- Display math fence (`$$` on its own line) ---
+    // `$$` matches STRUCTURAL_RAW_RE, but the LaTeX body between the
+    // delimiters usually does NOT (a bare `\nabla f(x,y)=...` line is an
+    // ordinary top-level line). Without this branch the parser emitted three
+    // sibling blocks — raw `$$`, bare formula, raw `$$` — so the renderer saw
+    // a lone delimiter and a naked formula string instead of one math block.
+    if (MATH_FENCE_RE.test(line)) {
+      // Same ownership rule as a code fence: indented past the parent block's
+      // content column (or same-depth with depth > 0) the math belongs to that
+      // block; otherwise it is verbatim top-level raw content.
+      const mathBelongsToBlock =
+        lastBlock !== null &&
+        (depth >= realDepth(lastBlock) + 1 || (depth >= realDepth(lastBlock) && depth > 0));
+      if (mathBelongsToBlock && lastBlock) {
+        // In-block math: every line until the closing `$$` joins the block
+        // text, dedented to the block's content column.
+        const mPrefix = leadingWs(line);
+        lastBlock.text += '\n' + stripIndent(line, realDepth(lastBlock) + 1);
+        i++;
+        while (i < lines.length) {
+          const cl = lines[i];
+          const closed = MATH_FENCE_RE.test(cl);
+          lastBlock.text += '\n' + (cl.startsWith(mPrefix) ? cl.slice(mPrefix.length) : cl.trimStart());
+          i++;
+          if (closed) break;
+        }
+        continue;
+      }
+      // Top-level math → one raw block holding the whole `$$…$$` region.
+      flushBare();
+      rawBuf.push(line);
+      i++;
+      while (i < lines.length) {
+        const cl = lines[i];
+        rawBuf.push(cl);
+        i++;
+        if (MATH_FENCE_RE.test(cl)) break;
       }
       continue;
     }

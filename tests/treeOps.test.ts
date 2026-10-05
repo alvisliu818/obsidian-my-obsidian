@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseDocument } from '../src/core/parser';
+import type { Block } from '../src/types';
 import {
   blockAtPath,
   cloneForest,
@@ -14,6 +15,7 @@ import {
   mergeWithNext,
   mergeWithPrev,
   moveBlock,
+  moveBlockGroup,
   nextVisible,
   outdent,
   prependChild,
@@ -30,6 +32,9 @@ function setup(md: string) {
   registerRoots(doc.blocks);
   return doc;
 }
+
+/** Block texts in document order — the readable form for most assertions. */
+const texts = (bs: Block[]): string[] => bs.map((b) => b.text);
 
 describe('tree navigation', () => {
   it('flattenVisible skips collapsed subtrees', () => {
@@ -165,6 +170,7 @@ describe('moveBlock', () => {
 
   it('rejects moving a block into its own descendant', () => {
     const doc = setup('- a\n\t- b\n\t\t- c');
+
     const a = doc.blocks[0];
     const c = a.children[0].children[0];
     expect(moveBlock(a, c, 'before')).toBe(false);
@@ -174,6 +180,125 @@ describe('moveBlock', () => {
   it('rejects moving onto itself', () => {
     const doc = setup('- a\n- b');
     expect(moveBlock(doc.blocks[0], doc.blocks[0], 'after')).toBe(false);
+  });
+});
+
+describe('moveBlockGroup', () => {
+  it('preserves order when dropping a group after a target', () => {
+    const doc = setup('- a\n- b\n- c');
+    const [a, b, c] = doc.blocks;
+    // Looping moveBlock would give [c, b, a] — every member is inserted
+    // directly adjacent to the target, so each one pushes the last further out.
+    expect(texts(moveBlockGroup([a, b], c, 'after'))).toEqual(['a', 'b']);
+    expect(texts(doc.blocks)).toEqual(['c', 'a', 'b']);
+  });
+
+  it('preserves order when dropping before a target', () => {
+    const doc = setup('- a\n- b\n- c');
+    const [a, b, c] = doc.blocks;
+    moveBlockGroup([a, b], c, 'before');
+    expect(texts(doc.blocks)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('preserves order when dropping into a target', () => {
+    const doc = setup('- a\n- b\n- c');
+    const [a, b, c] = doc.blocks;
+    moveBlockGroup([a, b], c, 'child');
+    expect(texts(doc.blocks)).toEqual(['c']);
+    expect(texts(c.children)).toEqual(['a', 'b']);
+    expect(c.children[0].parent).toBe(c);
+  });
+
+  it('keeps a non-contiguous group in order', () => {
+    const doc = setup('- a\n- x\n- b\n- y\n- c');
+    const [a, , b, , c] = doc.blocks;
+    moveBlockGroup([a, b], c, 'after');
+    expect(texts(doc.blocks)).toEqual(['x', 'y', 'c', 'a', 'b']);
+  });
+
+  it('re-parents the whole group', () => {
+    const doc = setup('- a\n- b\n- host');
+    const [a, b, host] = doc.blocks;
+    moveBlockGroup([a, b], host, 'child');
+    for (const b2 of host.children) expect(b2.parent).toBe(host);
+    expect(host.parent).toBeNull();
+  });
+
+  it('carries descendants along instead of detaching them', () => {
+    // `q` must be a ROOT bullet — an indented `- q` would be p's child.
+    const doc = setup('- p\n\t- p1\n- q\n- target');
+    const [p, , target] = doc.blocks;
+    const p1 = p.children[0];
+    // p1 is inside p: moving it separately would tear the subtree apart, so it
+    // travels as part of p instead of being listed as moved.
+    const moved = moveBlockGroup([p, p1], target, 'after');
+    expect(texts(moved)).toEqual(['p']);
+    expect(texts(p.children)).toEqual(['p1']);
+    expect(texts(doc.blocks)).toEqual(['q', 'target', 'p']);
+    expect(p1.parent).toBe(p);
+  });
+
+  it('refuses a group that would land on itself or its own descendant', () => {
+    const doc = setup('- a\n\t- a1\n- b');
+    const [a, b] = doc.blocks;
+    const a1 = a.children[0];
+    expect(moveBlockGroup([a, b], a, 'before')).toEqual([]);
+    expect(moveBlockGroup([a, b], a1, 'after')).toEqual([]);
+    expect(texts(doc.blocks)).toEqual(['a', 'b']);
+  });
+
+  it('moves a verbatim group at root level unchanged', () => {
+    const doc = setup('- a\n- b\n- c');
+    const table = { kind: 'raw' as const, marker: null, text: '| A |', props: {}, children: [], parent: null } as Block;
+    doc.blocks.splice(1, 0, table);
+    linkParents(doc.blocks);
+    moveBlockGroup([table], doc.blocks[0], 'after');
+    expect(texts(doc.blocks)).toEqual(['a', '| A |', 'b', 'c']);
+    expect(doc.blocks[1]).toBe(table);
+  });
+});
+
+describe('sibling cache stays correct after a move', () => {
+  it('follows a block within its own document', () => {
+    const doc = setup('- a\n- b\n- c');
+    const [a, b] = doc.blocks;
+    moveBlock(a, b, 'after');
+    expect(siblingsOf(a)).toBe(doc.blocks);
+    expect(texts(doc.blocks)).toEqual(['b', 'a', 'c']);
+  });
+
+  it('follows a block moved into ANOTHER document (cross-file drop)', () => {
+    const docA = setup('- a1\n- a2');
+    const docB = setup('- b1\n- b2');
+    const a1 = docA.blocks[0];
+    const b1 = docB.blocks[0];
+    moveBlock(a1, b1, 'after');
+    // The block now lives in docB: the cache must not hand back docA's array,
+    // or the next removeBlock/indent edits a list it is no longer in.
+    expect(siblingsOf(a1)).toBe(docB.blocks);
+    expect(texts(docA.blocks)).toEqual(['a2']);
+    expect(texts(docB.blocks)).toEqual(['b1', 'a1', 'b2']);
+    // And the stale entry must not make it survive a delete.
+    removeBlock(a1);
+    expect(texts(docB.blocks)).toEqual(['b1', 'b2']);
+  });
+
+  it('follows a whole group moved into another document', () => {
+    const docA = setup('- a1\n- a2');
+    const docB = setup('- b1');
+    moveBlockGroup(docA.blocks, docB.blocks[0], 'after');
+    expect(texts(docA.blocks)).toEqual([]);
+    expect(texts(docB.blocks)).toEqual(['b1', 'a1', 'a2']);
+    for (const b of docB.blocks) expect(siblingsOf(b)).toBe(docB.blocks);
+  });
+
+  it('a block that gained a parent no longer resolves as top-level', () => {
+    const doc = setup('- a\n- b');
+    const [a, b] = doc.blocks;
+    moveBlock(a, b, 'child');
+    expect(a.parent).toBe(b);
+    // Its container is now b.children — not the root list.
+    expect(siblingsOf(a)).toBe(b.children);
   });
 });
 

@@ -219,7 +219,12 @@ export function mountCodeEditor(
               return true;
             },
           },
-          ...defaultKeymap,
+          // Drop Mod-f / Mod-h: CM6's defaultKeymap binds them to
+          // `openSearchPanel`, which needs the `search()` extension we never
+          // mount. Left in, they swallow Ctrl+F inside a code block and nothing
+          // opens. Removing lets Obsidian's keymap route the key to our
+          // find-in-page command. See OWNED_DEFAULT_KEYS in editor/extensions.ts.
+          ...defaultKeymap.filter((k) => k.key !== 'Mod-f' && k.key !== 'Mod-h'),
           ...historyKeymap,
         ]),
         EditorView.contentAttributes.of({ spellcheck: 'false' }),

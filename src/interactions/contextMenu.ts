@@ -19,7 +19,10 @@ import { blockId, ensureId, isCollapsed, setCollapsed, type Block } from '../typ
 import { cycleMarker, duplicateBlock, isDescendant, removeBlock } from '../core/treeOps';
 import { blocksEmbedSyntax, blocksMarkdown } from '../features/copyFormats';
 import { openMoveToFileModal } from '../features/moveToFile';
+import { openExtractToPageModal } from '../features/extractToPage';
 import { openTextSelectionMenu } from './textSelectionMenu';
+import { blockTypeLabel, detectBlockType } from '../blocks/blockTypes';
+import { openBlockTypeMenu } from '../blocks/blockTypeMenu';
 
 export function attachContextMenu(container: HTMLElement, host: BlockEditorView): void {
   container.addEventListener('contextmenu', (ev) => {
@@ -145,6 +148,12 @@ function buildBulkMenu(host: BlockEditorView, fromBullet: boolean): Menu {
   );
   menu.addItem((item) =>
     item
+      .setTitle(`Extract ${n} blocks to a new page…`)
+      .setIcon('file-plus')
+      .onClick(() => openExtractToPageModal(host, host.topSelectedBlocks())),
+  );
+  menu.addItem((item) =>
+    item
       .setTitle(`Move ${n} blocks to another page…`)
       .setIcon('file-output')
       .onClick(() => openMoveToFileModal(host, host.topSelectedBlocks())),
@@ -196,6 +205,18 @@ function buildBlockMenu(b: Block, host: BlockEditorView, fromBullet: boolean): M
 
   menu.addSeparator();
 
+  // SiYuan parity: the block's type (derived from its markdown) is changeable
+  // from here — heading level, callout kind, fence language and conversions.
+  menu.addItem((item) =>
+    item
+      .setTitle(`Block type: ${blockTypeLabel(detectBlockType(b))}`)
+      .setIcon('shapes')
+      .onClick((evt) => {
+        const e = evt as MouseEvent;
+        openBlockTypeMenu(host, b, { x: e.clientX || 0, y: e.clientY || 0 });
+      }),
+  );
+
   // Edit this block as raw markdown for one session (live preview is the
   // default editing experience; this is the explicit way out).
   menu.addItem((item) =>
@@ -245,6 +266,15 @@ function buildBlockMenu(b: Block, host: BlockEditorView, fromBullet: boolean): M
   );
 
   menu.addSeparator();
+  menu.addItem((item) =>
+    item
+      .setTitle('Extract to a new page…')
+      .setIcon('file-plus')
+      .onClick(() => {
+        commitIfFocused(b, host);
+        openExtractToPageModal(host, [b]);
+      }),
+  );
   menu.addItem((item) =>
     item
       .setTitle('Move block to another page…')

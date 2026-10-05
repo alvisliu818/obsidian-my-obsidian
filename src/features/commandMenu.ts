@@ -16,6 +16,12 @@ import type { BlockEditorView } from '../view/BlockEditorView';
 import type { Extension } from '@codemirror/state';
 import { Marker } from '../types';
 import { createEditorAdapter } from '../interactions/textSelectionMenu';
+import { prologTemplate } from './prologQuery';
+import { BLOCK_TYPES } from '../blocks/blockTypes';
+import { openBlockTypePicker } from '../blocks/blockTypeMenu';
+import { openInsertMediaBlock } from './mediaBlock';
+import { extractCandidates, openExtractToPageModal } from './extractToPage';
+import { openMoveToFileModal } from './moveToFile';
 
 export type MenuKind = 'slash' | 'angle';
 
@@ -51,6 +57,33 @@ const todayISO = (): string => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 };
 
+/** Labels the hand-written commands above already provide. */
+const HAND_WRITTEN_TYPE_LABELS = new Set([
+  'Heading 1',
+  'Heading 2',
+  'Heading 3',
+  'Divider',
+  'Code block',
+  'Quote',
+]);
+
+/**
+ * Slash-menu entries derived from the block-type metadata, so a new block type
+ * only has to declare its template once. Types without a template (tasks,
+ * media, HTML) get a dedicated command instead.
+ */
+function blockTypeInsertCommands(): CommandItem[] {
+  return BLOCK_TYPES.filter((m) => m.template && !HAND_WRITTEN_TYPE_LABELS.has(m.label)).map(
+    (m) => ({
+      label: m.label,
+      group: 'Blocks',
+      detail: m.hint,
+      insert: m.template ?? '',
+      caret: m.caret ?? (m.template ?? '').length,
+    }),
+  );
+}
+
 export const SLASH_COMMANDS: CommandItem[] = [
   { label: 'TODO', group: 'Task state', detail: 'set marker', block: (h) => setMarker(h, 'TODO') },
   { label: 'DOING', group: 'Task state', detail: 'set marker', block: (h) => setMarker(h, 'DOING') },
@@ -69,12 +102,44 @@ export const SLASH_COMMANDS: CommandItem[] = [
   { label: 'Bold', group: 'Formatting', detail: '**text**', insert: '****', caret: 2 },
   { label: 'Italic', group: 'Formatting', detail: '*text*', insert: '**', caret: 1 },
   { label: 'Highlight', group: 'Formatting', detail: '==text==', insert: '====', caret: 2 },
+  // --- SiYuan-style block types (the metadata drives the menu copy) ---
+  ...blockTypeInsertCommands(),
+  {
+    label: 'Change block type',
+    group: 'Blocks',
+    detail: 'convert to heading, callout, code, table…',
+    block: (h) => openBlockTypePicker(h),
+  },
+  {
+    label: 'Media block',
+    group: 'Blocks',
+    detail: 'insert an image, video or audio file',
+    block: (h) => openInsertMediaBlock(h),
+  },
+  {
+    label: 'Extract to a new page',
+    group: 'Structure',
+    detail: 'move this block and its children out, leave an embed behind',
+    block: (h) => openExtractToPageModal(h, extractCandidates(h)),
+  },
+  {
+    label: 'Move to another page',
+    group: 'Structure',
+    detail: 'move this block to an existing page (no embed left behind)',
+    block: (h) => openMoveToFileModal(h, extractCandidates(h)),
+  },
   { label: "Today's date", group: 'Insert', detail: "link to today's journal", insert: todayLink() },
   { label: 'Current time', group: 'Insert', detail: 'HH:mm', insert: nowTime() },
   { label: 'Link to page', group: 'Insert', detail: '[[wiki link]]', insert: '[[', caret: 2 },
   { label: 'Block reference', group: 'Insert', detail: '((block-id))', insert: '((', caret: 2 },
   { label: 'Embed block', group: 'Insert', detail: 'inline another block', insert: '{{embed ((', caret: 9 },
   { label: 'Query', group: 'Advanced', detail: '{{query}} live results', insert: '{{query (TODO)}}' },
+  {
+    label: 'Prolog query',
+    group: 'Advanced',
+    detail: 'logic query with variables and joins',
+    block: (h) => h.insertTopLevelBlock(prologTemplate(), 'raw'),
+  },
   { label: 'Query table', group: 'Advanced', detail: '{{query-table}} with columns', insert: '{{query-table (TODO)}}' },
   {
     label: 'Indent block',
