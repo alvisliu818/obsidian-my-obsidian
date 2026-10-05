@@ -357,3 +357,34 @@ describe('indented blank soft lines', () => {
     expect(serializeDocument(parseDocument(src))).toBe(src);
   });
 });
+
+describe('same-depth structural lines attach to the block (Logseq table shape)', () => {
+  const NLP_SHAPE = [
+    '- **4.3 训练词向量模型**',
+    '  - 数据导入',
+    '  | cat | label | review |',
+    '  | --- | --- | --- |',
+    '  | 积极 | 1 | 正面情感 |',
+    '  - 训练、评估模型',
+  ].join('\n');
+
+  it('the table at the item marker depth becomes the item\'s soft lines', () => {
+    const doc = parseDocument(NLP_SHAPE);
+    // The table does NOT detach into a root raw block.
+    expect(doc.blocks).toHaveLength(1);
+    const ch43 = doc.blocks[0];
+    const dataImport = ch43.children[0];
+    expect(dataImport.text.startsWith('数据导入')).toBe(true);
+    expect(dataImport.text).toContain('| cat | label | review |');
+    // The next sibling is not swallowed by the table.
+    expect(ch43.children.map((c) => c.text.split('\n')[0])).toEqual(['数据导入', '训练、评估模型']);
+  });
+
+  it('round-trips: the table lines re-indent under the block', () => {
+    const doc = parseDocument(NLP_SHAPE);
+    const out = serializeDocument(doc);
+    const again = parseDocument(out);
+    expect(again.blocks[0].children[0].text).toContain('| cat | label | review |');
+    expect(again.blocks[0].children.map((c) => c.text.split('\n')[0])).toEqual(['数据导入', '训练、评估模型']);
+  });
+});

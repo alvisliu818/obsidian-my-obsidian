@@ -391,6 +391,22 @@ export function parseDocument(md: string): ParsedDocument {
     // Markdown/org structural lines keep their verbatim raw rendering.
     if (depth > 0 || STRUCTURAL_RAW_RE.test(trimmed)) {
       flushBare();
+      // A structural line (table/quote/fence) at the LAST BLOCK's own marker
+      // depth is that block's soft content — Logseq exports tables aligned
+      // with the item's marker column. The old root-detach pushed the table
+      // after the whole subtree (the "table at the file bottom" report) and
+      // the leftover indent rendered it as a code block instead of a table.
+      if (
+        rawBuf.length === 0 &&
+        lastBlock &&
+        depth === realDepth(lastBlock) &&
+        depth > 0 &&
+        STRUCTURAL_RAW_RE.test(trimmed)
+      ) {
+        appendSoftLine(lastBlock, line);
+        i++;
+        continue;
+      }
       if (/^>\s*$/.test(trimmed)) {
         // An EMPTY quote line is its own block (Logseq: it renders as a
         // visible empty quote row). Merging it into the neighboring quote
