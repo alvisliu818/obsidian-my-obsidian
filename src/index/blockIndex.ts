@@ -8,13 +8,28 @@
  */
 
 import { TFile, debounce, type App, type EventRef } from 'obsidian';
-import { parseDocument } from '../core/parser';
-import { serializeBlock } from '../core/serializer';
-import { docPageProps, type Block } from '../types';
 import { registerLogseqPageProps, clearLogseqPageProps } from '../pagePropsRegistry';
 import { normalizeLinkTarget, type QueryBlock } from '../features/query';
+import {
+  lookupSupertag,
+  normalizeTag,
+  supertagDefFrom,
+  type SupertagDef,
+  type SupertagRegistry,
+} from '../features/supertags';
+import { extractFile } from './fileFacts';
 
-export type IndexedBlock = QueryBlock;
+export type IndexedBlock = QueryBlock & {
+  /**
+   * EVERY block property, not just the query-relevant subset in `props`.
+   * Supertag collections read their columns' values from here, and
+   * `props` stays narrow so `{{query-table}}` columns are unchanged.
+   */
+  blockProps: Record<string, string>;
+  /** Owning id of the parent block ('' at the top level). Powers the Prolog
+   *  `parent/2` and `ancestor/2` facts. */
+  parentId: string;
+};
 
 /** A flashcard: any block tagged #card. Children are the answer side. */
 export interface CardEntry {
@@ -34,20 +49,13 @@ export interface BacklinkEntry {
   blockId: string;
   text: string;
   marker: string | null;
-}
-
-const TAG_RE = /(?:^|[\s(])#([\p{L}\d][\p{L}\d_/-]*)/gu;
-const LINK_RE = /\[\[([^\]]+)\]\]/g;
-/** Block reference scan: ((uuid)) occurrences in block text. */
-const BLOCK_REF_SCAN_RE = /\(\(([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\)\)\}?/g;
-
-function collectTags(text: string): string[] {
-  const bare = text.replace(LINK_RE, ' '); // tags inside [[...]] don't count
-  return [...new Set([...bare.matchAll(TAG_RE)].map((m) => m[1].toLowerCase()))];
-}
-
-function collectLinks(text: string): string[] {
-  return [...new Set([...text.matchAll(LINK_RE)].map((m) => normalizeLinkTarget(m[1])))].filter(Boolean);
+  /**
+   * Effective refs of the referencing block (normalized page names): its own
+   * `[[links]]` / `#tags`, everything inherited from its ANCESTORS (a child of
+   * a linked block is linked too) and the page it lives on — so a filter can
+   * select by source page as well. Mirrors Logseq's `effective-refs`.
+   */
+  refs: string[];
 }
 
 export class BlockIndex {
@@ -62,6 +70,8 @@ export class BlockIndex {
   /** normalized page target → referencing blocks */
   private backlinks = new Map<string, BacklinkEntry[]>();
   private cards: CardEntry[] = [];
+  /** Supertag definitions keyed by normalized tag name (see supertags.ts). */
+  private supertags: SupertagRegistry = new Map();
   private listeners = new Set<() => void>();
   private rebuild: () => void;
   private building: Promise<void> | null = null;
@@ -92,6 +102,31 @@ export class BlockIndex {
     const all = new Set<string>();
     for (const set of this.tagsByPath.values()) for (const t of set) all.add(t);
     return [...all].sort();
+  }
+
+  /**
+   * Every tag that carries a field template, i.e. whose own page declares
+   * properties (`Person.md` with `last name::` makes `#Person` a supertag).
+   * Plain tag pages contribute no definition and are absent here.
+   */
+  supertagRegistry(): SupertagRegistry {
+    return this.supertags;
+  }
+
+  /** The definition for one tag, or null when it is an ordinary tag. */
+  supertagDef(name: string): SupertagDef | null {
+    return lookupSupertag(this.supertags, name);
+  }
+
+  /**
+   * Blocks carrying `tag` — the supertag's "collection" (Tana) / the table on
+   * a new-tag page (Logseq DB). Includes blocks that only INHERIT the tag from
+   * an ancestor, matching how the template is resolved.
+   */
+  supertagInstances(tag: string): IndexedBlock[] {
+    const t = normalizeTag(tag);
+    if (!t) return [];
+    return this.all.filter((b) => b.tags.includes(t));
   }
 
   /** Blocks from other files that link to `path` (matched by basename). */
@@ -141,6 +176,7 @@ export class BlockIndex {
     this.backlinks.clear();
     this.refsTo.clear();
     this.cards = [];
+    this.supertags = new Map();
     const files = this.app.vault.getMarkdownFiles();
     for (const f of files) {
       let content: string;
@@ -162,64 +198,72 @@ export class BlockIndex {
     }
   }
 
+  /**
+   * Materialize one file's markdown into this index. The parsing itself lives
+   * in `fileFacts.extractFile` — the shared extractor — so the SQLite index
+   * and this one always agree on what a file means.
+   */
   private indexContent(path: string, content: string): void {
-    const doc = parseDocument(content);
+    const facts = extractFile(path, content);
     // Vault-wide Logseq page-props registry (usually only open files are
     // registered by their view): feeds the per-page `editor` property and
     // the getFileCache frontmatter merge for never-opened files too.
-    registerLogseqPageProps(path, docPageProps(doc));
-    const tags = new Set<string>();
-    this.tagsByPath.set(path, tags);
+    registerLogseqPageProps(path, facts.pageProps);
+    this.tagsByPath.set(path, new Set(facts.tags));
+    // A block inherits its ancestors' refs, and its own page counts as a ref
+    // too (Logseq's `own-refs` / `effective-refs`), so a filter can select
+    // references by the page they live on.
+    const pageRef = facts.page;
 
-    const walk = (b: Block) => {
-      const id = b.props['id'];
-      const text = b.text.split('\n')[0] ?? '';
-      const bTags = collectTags(b.text);
-      const bLinks = collectLinks(b.text);
-      // Query-relevant properties only (priority/scheduled/deadline).
-      const props: Record<string, string> = {};
-      for (const k of ['priority', 'scheduled', 'deadline'] as const) {
-        if (b.props[k] !== undefined) props[k] = b.props[k];
-      }
+    // A page whose own properties declare fields/parents IS the supertag
+    // definition for its name (Logseq DB: the tag page holds the template).
+    // A page with no properties contributes nothing — plain tags stay plain.
+    const def = supertagDefFrom(pageRef, facts.pageProps);
+    if (def) this.supertags.set(def.name, def);
+
+    // `effective` refs are folded top-down; the extractor emits blocks in
+    // document order, so a parent's refs are always already known.
+    const refsByKey = new Map<string, string[]>();
+    for (const bf of facts.blocks) {
+      const inherited = bf.parentKey ? refsByKey.get(bf.parentKey) ?? [] : [];
+      const effective = [...new Set([...inherited, ...bf.links, ...bf.tags, pageRef])];
+      refsByKey.set(bf.bkey, effective);
+
       const ib: IndexedBlock = {
         path,
-        blockId: id ?? '',
-        text,
-        marker: b.marker,
-        tags: bTags,
-        links: bLinks,
-        props,
+        blockId: bf.id,
+        text: bf.text,
+        marker: bf.marker,
+        tags: bf.tags,
+        links: bf.links,
+        props: bf.props,
+        blockProps: bf.blockProps,
+        parentId: bf.parentId,
       };
       this.all.push(ib);
-      if (id) this.byId.set(id, ib);
+      if (bf.id) this.byId.set(bf.id, ib);
       // Flashcards: any block tagged #card (children = answer side).
-      if (bTags.includes('card')) {
+      if (bf.isCard) {
         this.cards.push({
           path,
-          blockId: id ?? '',
-          question: text,
-          answer: b.children.map((c) => serializeBlock(c, 1)).join('\n'),
-          marker: b.marker,
-          props: { ...b.props },
+          blockId: bf.id,
+          question: bf.text,
+          answer: bf.answer,
+          marker: bf.marker,
+          props: { ...bf.blockProps },
         });
       }
-      for (const t of bTags) tags.add(t);
-      for (const l of bLinks) {
+      for (const l of bf.links) {
         const list = this.backlinks.get(l) ?? [];
-        list.push({ sourcePath: path, blockId: id ?? '', text, marker: b.marker });
+        list.push({ sourcePath: path, blockId: bf.id, text: bf.text, marker: bf.marker, refs: effective });
         this.backlinks.set(l, list);
       }
-      // Block-level refs: ((uuid)) anywhere in this block's text.
-      for (const m of b.text.matchAll(BLOCK_REF_SCAN_RE)) {
-        const refId = m[1];
-        if (refId === id) continue; // self-embed/self-ref doesn't count
+      for (const refId of bf.refs) {
         const list = this.refsTo.get(refId) ?? [];
-        list.push({ sourcePath: path, blockId: id ?? '', text, marker: b.marker });
+        list.push({ sourcePath: path, blockId: bf.id, text: bf.text, marker: bf.marker, refs: effective });
         this.refsTo.set(refId, list);
       }
-      b.children.forEach(walk);
-    };
-    doc.blocks.forEach(walk);
+    }
   }
 
   private forgetFile(path: string): void {
@@ -230,6 +274,10 @@ export class BlockIndex {
       if (info.path === path) this.byId.delete(id);
     }
     this.tagsByPath.delete(path);
+    // This page may have been a supertag definition; drop it so a rename or
+    // delete can't leave a ghost template behind (rebuild re-adds if it still
+    // exists under a new name).
+    this.supertags.delete(normalizeLinkTarget(path));
     for (const [target, list] of this.refsTo) {
       const filtered = list.filter((e) => e.sourcePath !== path);
       if (filtered.length === 0) this.refsTo.delete(target);

@@ -1,6 +1,8 @@
-﻿import { PluginSettingTab, Setting, type App } from 'obsidian';
+﻿import { PluginSettingTab, Setting, Notice, type App } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
-import type { PagePropsEditor, ScopeMode } from '../types';
+import { SqliteConsoleModal } from '../features/sqliteConsole';
+import type { PagePropsEditor, ScopeMode, ShortcutOverrides } from '../types';
+import { SHORTCUT_GROUP_LABELS } from '../types';
 
 export class LogseqEditorSettingTab extends PluginSettingTab {
   plugin: LogseqEditorPlugin;
@@ -8,6 +10,18 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
   constructor(app: App, plugin: LogseqEditorPlugin) {
     super(app, plugin);
     this.plugin = plugin;
+  }
+
+  /**
+   * The master dropdown's value: 'all' when every group is on, 'none' when
+   * every group is off, 'custom' for any mix in between.
+   */
+  private shortcutPresetValue(): 'all' | 'none' | 'custom' {
+    const s = this.plugin.settings.shortcuts;
+    const values = Object.values(s);
+    if (values.every(Boolean)) return 'all';
+    if (values.every((v) => !v)) return 'none';
+    return 'custom';
   }
 
   display(): void {
@@ -91,6 +105,52 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
             if (v === 'native') void this.plugin.resolveNativePropsCtor();
           }),
       );
+
+    // ---------- Shortcuts ----------
+    containerEl.createEl('h3', { text: 'Shortcuts' });
+
+    new Setting(containerEl)
+      .setName('Logseq shortcuts')
+      .setDesc(
+        'Master switch for the Logseq-specific shortcuts below. "All" keeps the stock Logseq bindings; "None" hands every one of them back to Obsidian/CodeMirror, so the block editor edits like a plain text editor. Individual groups below can then be re-enabled one by one. This only affects the block editor — the native Obsidian editor always uses Obsidian shortcuts.',
+      )
+      .addDropdown((d) =>
+        d
+          .addOptions({
+            all: 'All groups (Logseq default)',
+            none: 'None (use Obsidian shortcuts)',
+            custom: 'Custom — choose per group below',
+          })
+          .setValue(this.shortcutPresetValue())
+          .onChange(async (v) => {
+            if (v === 'custom') return; // driven by the per-group toggles
+            const value = v === 'all';
+            for (const k of Object.keys(this.plugin.settings.shortcuts) as (keyof ShortcutOverrides)[]) {
+              this.plugin.settings.shortcuts[k] = value;
+            }
+            await this.plugin.saveSettings();
+            this.display();
+          }),
+      );
+
+    containerEl.createEl('p', {
+      cls: 'setting-item-description',
+      text: 'Each group is independent. Switching one off returns exactly those keys to Obsidian and leaves the rest alone.',
+    });
+
+    for (const key of Object.keys(SHORTCUT_GROUP_LABELS) as (keyof ShortcutOverrides)[]) {
+      new Setting(containerEl)
+        .setName(SHORTCUT_GROUP_LABELS[key])
+        .setClass('lgp-shortcut-group')
+        .addToggle((t) =>
+          t.setValue(this.plugin.settings.shortcuts[key]).onChange(async (v) => {
+            this.plugin.settings.shortcuts[key] = v;
+            await this.plugin.saveSettings();
+            // Re-render so the master dropdown flips to "Custom".
+            this.display();
+          }),
+        );
+    }
 
     // ---------- Outline guide line ----------
     const levelOptions = {
@@ -210,5 +270,87 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         t.inputEl.rows = 4;
         t.inputEl.cols = 40;
       });
+    // ---------- SQLite secondary index ----------
+    containerEl.createEl('h3', { text: 'SQLite index (secondary)' });
+    containerEl.createEl('p', {
+      cls: 'setting-item-description',
+      text:
+        'A rebuildable database derived from your markdown. Markdown stays the source of truth — ' +
+        'the database never writes to a note, and Rebuild re-derives it from the files.',
+    });
+
+    new Setting(containerEl)
+      .setName('Enable the SQLite index')
+      .setDesc('Keep a queryable database of blocks, tags, links, properties and block references.')
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.sqliteIndexEnabled).onChange(async (v) => {
+          this.plugin.settings.sqliteIndexEnabled = v;
+          await this.plugin.saveSettings();
+          this.plugin.applySqliteSettings();
+          this.display();
+        }),
+      );
+
+    if (this.plugin.settings.sqliteIndexEnabled) {
+      new Setting(containerEl)
+        .setName('Keep a snapshot on disk')
+        .setDesc('Save the database between sessions so restarts only re-index what changed.')
+        .addToggle((t) =>
+          t.setValue(this.plugin.settings.sqlitePersist).onChange(async (v) => {
+            this.plugin.settings.sqlitePersist = v;
+            await this.plugin.saveSettings();
+          }),
+        );
+
+      new Setting(containerEl)
+        .setName('Sync when files change')
+        .setDesc('Re-index a file as soon as it is edited, created, renamed or deleted — including by other apps.')
+        .addToggle((t) =>
+          t.setValue(this.plugin.settings.sqliteAutoSync).onChange(async (v) => {
+            this.plugin.settings.sqliteAutoSync = v;
+            await this.plugin.saveSettings();
+          }),
+        );
+
+      const stats = this.plugin.sqliteIndex?.stats;
+      const detail = stats
+        ? `${stats.files} files · ${stats.blocks} blocks · ${stats.tags} tags · ${stats.links} links · ${stats.refs} refs (last run ${stats.ms} ms)`
+        : 'not started yet';
+      new Setting(containerEl).setName('Index').setDesc(detail).addButton((b) =>
+        b.setButtonText('Console').onClick(() => new SqliteConsoleModal(this.plugin).open()),
+      );
+
+      const actions = new Setting(containerEl).setName('Markdown → database');
+      actions.addButton((b) =>
+        b.setButtonText('Sync').onClick(async () => {
+          const idx = this.plugin.sqliteIndex;
+          if (!idx) return;
+          const s = await idx.sync();
+          new Notice(`Synced: +${s.added} ~${s.changed} -${s.removed} (${s.unchanged} unchanged)`);
+          this.display();
+        }),
+      );
+      actions.addButton((b) =>
+        b.setButtonText('Rebuild').onClick(async () => {
+          const idx = this.plugin.sqliteIndex;
+          if (!idx) return;
+          const s = await idx.rebuild();
+          new Notice(`Rebuilt from markdown: ${s.files} files, ${s.blocks} blocks (${s.ms} ms)`);
+          this.display();
+        }),
+      );
+      actions.addButton((b) =>
+        b.setButtonText('Verify').onClick(async () => {
+          const idx = this.plugin.sqliteIndex;
+          if (!idx) return;
+          const v = await idx.verify();
+          new Notice(
+            v.drift.length === 0 && v.missing.length === 0
+              ? `Matches the files (${v.checked} checked)`
+              : `Stale — drift ${v.drift.length}, missing ${v.missing.length}`,
+          );
+        }),
+      );
+    }
   }
 }
