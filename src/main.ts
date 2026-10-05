@@ -599,6 +599,21 @@ export default class LogseqEditorPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
+  /**
+   * Re-render every open block editor.
+   *
+   * Needed by settings that change how a block is RENDERED rather than what it
+   * contains — turning the fold caret on/off, or hiding a property — where a
+   * re-parse would be wrong (the markdown did not change) and leaving the view
+   * stale would be a lie about the current settings.
+   */
+  refreshAllViews(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_BLOCK_EDITOR)) {
+      const view = leaf.view as BlockEditorView | null;
+      if (view && typeof view.rerender === 'function') view.rerender();
+    }
+  }
+
   // ------------------------------------------------------------------
   // Take-over patch
   // ------------------------------------------------------------------

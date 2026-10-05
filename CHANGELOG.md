@@ -5,7 +5,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
 
 ## [Unreleased]
 
+### Added
+
+- **Any block can be folded — not just list items with children.** Headings, code fences, tables, quotes, formulas, images and multi-line paragraphs now get a collapse caret whenever their body spans more than one rendered line. Click folds to a one-line summary (a fence keeps its ` ```python ` header, an image names its file); Alt+click folds all the way to a terse type chip for scanning a document. Click the summary — or the caret again — to expand.
+  - Folding is a view state over your markdown, never a rewrite: the block's text is untouched and the state is stored as a plain `collapsed::` property, so it survives a save/reload and is queryable like any other property.
+  - Folding flags are hidden from the props row by default (**Settings → Hidden block properties**). Hiding is view-only — the property is still written, still parsed, still indexed, and still editable. Add your own names to that list to hide them too.
+  - Turn the caret off entirely with **Settings → Fold any block**.
+  - Matches SiYuan's own rule for what folds: a block with nothing to hide (a single-line heading, a divider) gets no caret, since a markdown heading's content is a *sibling* block, not a child. Folding a whole section under a heading is a separate behaviour.
+
 ### Fixed
+
+- **Consecutive top-level blocks are now separate blocks.** A heading followed by a code fence, or one table followed by another, used to merge into a single verbatim blob — so they could not be folded, moved or edited individually. A blank line now ends a verbatim region, which is what Markdown itself means by it.
+  - Blank lines *inside* a construct are still content: an unterminated fence, a `$$…$$` formula, and a table's rows each stay one block, and a mixed block (an image above a fence) is untouched.
+  - Two adjacent verbatim blocks are written back with a blank line between them, since two fences or two tables written back to back would merge again on the next read.
+  - This is what makes per-block folding of code, tables and headings possible at all — previously a document's headings, fences and tables were one giant block.
 
 - **A code fence with no language is no longer unreachable.** A plain ``` fence rendered a code toolbar with no language target, so there was no way to open source mode — and source mode is the only way to set a language. The label was gated on "has a language OR has a prefix", so exactly the fences that most needed a language were the ones with no way to set one.
   - The label now renders for every fence in both the reading and code-editing states. A fence with no language shows a dimmed, italic `text` placeholder — visibly a placeholder, not a language actually called "text".

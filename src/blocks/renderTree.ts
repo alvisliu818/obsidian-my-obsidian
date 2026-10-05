@@ -22,6 +22,7 @@ import { hasTable } from './tableModel';
 import type { BlockEditorView } from '../view/BlockEditorView';
 import type { Block } from '../types';
 import { blockId } from '../types';
+import { foldLevelOf, foldSummary, isFoldableBody, isMediaOnlyBlock, normFoldKey } from '../core/fold';
 import { createPageEmbedBox, enhanceBlockRefs, enhanceEmbeds } from '../features/links';
 import {
   buildQueryTableModel,
@@ -203,28 +204,50 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
   // --- controls ---
   const controls = main.createEl('div', { cls: 'block-controls' });
   // Raw (verbatim) blocks get the drag handle too: a table, divider, formula
-  // or media embed is real content the user expects to be able to move. The
-  // bullet / collapse caret stay list-only — a verbatim block has no outline
-  // position to zoom into and no children to fold.
+  // or media embed is real content the user expects to be able to move.
   const draggable = b.kind === 'list' || b.kind === 'raw';
   if (draggable && !nativeProps) {
     controls.setAttribute('draggable', 'true'); // block drag handle zone
   }
+  if (!nativeProps && host.foldEnabled && isFoldableBody(b)) {
+    // The caret belongs to EVERY foldable body, not just a list block with
+    // children: a heading, a fenced code block, a table, a quote, a
+    // media-only block and a multi-line paragraph all span more than one
+    // rendered line, and all of them can be folded.
+    //
+    // Collapsed state lives on the wrap (the bullet draws the gray halo);
+    // the caret itself is hover-only, floating in the left margin.
+    const level = foldLevelOf(b.props);
+    if (level !== 'none') wrap.addClass('is-collapsed');
+    const caret = controls.createEl('div', {
+      cls: 'block-caret' + (level !== 'none' ? ' is-collapsed' : ''),
+    });
+    caret.innerHTML = CARET_SVG;
+    caret.setAttribute('role', 'button');
+    caret.setAttribute('tabindex', '0');
+    caret.setAttribute(
+      'aria-label',
+      level === 'none' ? '折叠此块' : level === 'summary' ? '展开此块' : '完全折叠此块',
+    );
+    caret.setAttribute('title', '点击折叠 · Alt+点击完全折叠');
+    const onCaretActivate = (e: MouseEvent): void => {
+      e.stopPropagation();
+      e.preventDefault();
+      host.cycleFold(b, e.altKey);
+    };
+    caret.addEventListener('click', onCaretActivate);
+    // Keyboard parity: the caret is focusable, so Enter/Space must work too.
+    caret.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.stopPropagation();
+      e.preventDefault();
+      host.cycleFold(b, e.altKey);
+    });
+    // A raw block has no bullet, so the caret is its only affordance — keep it
+    // visible rather than hover-only, or a folded code block looks inert.
+    if (b.kind === 'raw') caret.addClass('is-always-visible');
+  }
   if (b.kind === 'list' && !nativeProps) {
-    if (b.children.length > 0) {
-      const collapsed = b.props['collapsed'] === 'true';
-      // Collapsed state lives on the wrap (the bullet draws the gray halo);
-      // the caret itself is hover-only, floating in the left margin.
-      if (collapsed) wrap.addClass('is-collapsed');
-      const caret = controls.createEl('div', {
-        cls: 'block-caret' + (collapsed ? ' is-collapsed' : ''),
-      });
-      caret.innerHTML = CARET_SVG;
-      caret.addEventListener('click', (e) => {
-        e.stopPropagation();
-        host.toggleCollapse(b);
-      });
-    }
     const bullet = controls.createEl('div', { cls: 'block-bullet' });
     bullet.setAttribute('aria-label', 'Focus this block');
     bullet.setAttribute('title', 'Click to focus · Shift/Ctrl+click to select');
@@ -271,10 +294,18 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
       content.style.setProperty(k, v);
     }
   }
-  if (host.focusedBlock === b) {
+  // A folded block renders a one-line summary instead of its body. The block
+  // keeps its real text (markdown is the only source of truth) — this is
+  // purely a view state, so expanding restores everything exactly.
+  const foldLevel = foldLevelOf(b.props);
+  if (host.focusedBlock === b && foldLevel === 'none') {
     content.classList.add('is-editing');
     // CM6 gets mounted here by the view after the tree render pass.
     host.mountFocusedInto(content);
+  } else if (foldLevel !== 'none') {
+    // Focusing a folded block is not an error: clicking a summary should
+    // unfold it so the user can edit the real text. `cycleFold` handles that.
+    renderFoldSummary(content, b, foldLevel, host);
   } else if (isPropsBlock(b, host)) {
     // The page-properties block: Obsidian's NATIVE properties editor when the
     // setting picks it (falls back to the Logseq rendering until the native
@@ -393,8 +424,94 @@ export function refreshTracetimeLabels(host: BlockEditorView): void {
   }
 }
 
+/**
+ * The one-line placeholder a folded block shows instead of its body.
+ *
+ * Two levels, matching the two gestures on the caret:
+ *   summary — the block's own first line (a fence keeps its ```python header,
+ *             an image names its file), so you can still tell WHAT it is.
+ *   full    — a terse `[类型]` marker for when you are scanning a document and
+ *             do not need the detail; the full text is one click away.
+ *
+ * Clicking the summary unfolds. The text itself is never modified — folding is
+ * a view state over the markdown, not a rewrite of it.
+ */
+function renderFoldSummary(
+  content: HTMLElement,
+  b: Block,
+  level: 'summary' | 'full',
+  host: BlockEditorView,
+): void {
+  const row = content.createEl('div', { cls: 'block-fold-summary' + (level === 'full' ? ' is-full' : '') });
+  if (level === 'full') {
+    const kind = blockKindLabel(b);
+    row.createEl('span', { cls: 'block-fold-kind', text: kind });
+    const detail = foldSummary(b);
+    // The detail only differs from the label when it adds something (a file
+    // name, a first line) — otherwise the row would read `[代码块] 代码块`.
+    if (detail && !kind.includes(detail)) {
+      row.createEl('span', { cls: 'block-fold-detail', text: detail });
+    }
+  } else {
+    row.createEl('span', { cls: 'block-fold-detail', text: foldSummary(b) });
+  }
+  const lines = b.text.split('\n').length;
+  const kids = b.children.length;
+  const meta = [
+    kids > 0 ? `${kids} 个子块` : null,
+    lines > 1 ? `${lines} 行` : null,
+  ].filter(Boolean).join(' · ');
+  if (meta) row.createEl('span', { cls: 'block-fold-meta', text: meta });
+  row.setAttribute('role', 'button');
+  row.setAttribute('tabindex', '0');
+  row.setAttribute('aria-label', '展开此块');
+  const unfold = (e: Event): void => {
+    e.stopPropagation();
+    e.preventDefault();
+    host.setFold(b, 'none');
+  };
+  row.addEventListener('click', unfold);
+  row.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.stopPropagation();
+    e.preventDefault();
+    host.setFold(b, 'none');
+  });
+}
+
+/** Short type name for the terse folded marker: 代码块 / 表格 / 引用 / 标题 … */
+function blockKindLabel(b: Block): string {
+  const text = b.text;
+  if (/^\s*(?:`{3,}|~{3,})/.test(text)) return '代码块';
+  if (/^\s*\$\$/.test(text)) return '公式块';
+  if (/^\s*\|/.test(text)) return '表格';
+  if (/^\s*>/.test(text)) return '引用';
+  if (/^\s*#{1,6}\s/.test(text)) return '标题';
+  if (/^\s*(?:=+|\*+|_+|~+|\++)\s*$/.test(text.split('\n')[0])) return '分隔线';
+  if (isMediaOnlyBlock(text)) return /<video|\.(mp4|webm|ogv|mov|m4v)\b/i.test(text) ? '视频' : '图片';
+  if (b.kind === 'raw') return '内容块';
+  return b.children.length > 0 ? '列表块' : '段落';
+}
+
 /** Props that configure the block itself and are never shown as a `key:: value` row. */
 const WRAP_PROPS_SKIP = new Set(['id', 'collapsed', 'style', VIEW_PROP, VIEW_COLUMNS_PROP]);
+
+/**
+ * Properties hidden from the props row, resolved per render.
+ *
+ * The base set configures the block itself and never renders as a row. The
+ * user's list is ADDED to it — hiding is view-only, so a hidden property keeps
+ * working everywhere else (folding, the SQLite index, the properties panel).
+ * Compared through `normFoldKey`, so `Collapsed` and `collapsed` are one key.
+ */
+function hiddenPropSet(host: BlockEditorView): Set<string> {
+  const set = new Set(WRAP_PROPS_SKIP);
+  for (const raw of (host.plugin.settings.hiddenProps ?? '').split(',')) {
+    const name = raw.trim();
+    if (name) set.add(normFoldKey(name));
+  }
+  return set;
+}
 
 /**
  * One `key:: value` line under a block (Logseq parity): dimmed like the
@@ -421,7 +538,11 @@ function syncPropsRow(wrap: HTMLElement, b: Block, host: BlockEditorView, editin
   // While the block is being edited the props show as text lines in the
   // editor itself — the row would duplicate them.
   if (editing) return;
-  const entries = Object.entries(b.props).filter(([k]) => !WRAP_PROPS_SKIP.has(k));
+  // A folded block shows a summary instead of its body, so the property row
+  // would float free of any content it belongs to.
+  if (foldLevelOf(b.props) !== 'none') return;
+  const hidden = hiddenPropSet(host);
+  const entries = Object.entries(b.props).filter(([k]) => !hidden.has(normFoldKey(k)));
   if (entries.length === 0) return;
   const row = wrap.createEl('div', { cls: 'block-props-row' });
   // Logseq parity: props sit directly under the block text, BEFORE its children.

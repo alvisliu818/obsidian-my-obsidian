@@ -176,6 +176,83 @@
   transform: rotate(-90deg);
 }
 
+/* A verbatim block (heading / code fence / table / quote / media) has no
+   bullet, so a hover-only caret would leave a folded one looking inert —
+   there would be nothing to hover *for*. Keep it visible; it sits in the same
+   left margin, so it lines up with the list-block carets above it. */
+.block-caret.is-always-visible {
+  opacity: 1;
+}
+
+.block-caret:focus-visible {
+  opacity: 1;
+  outline: 1px solid var(--text-accent);
+  outline-offset: 1px;
+}
+
+/* --- folded block summary ------------------------------------------------ */
+/* Replaces the block body while folded. The text is untouched in the file;
+   this is a view state, so unfolding restores the block exactly. */
+.block-fold-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 1.55em;
+  padding: 1px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller, 0.85em);
+  border-left: 2px solid var(--background-modifier-border, var(--text-faint));
+  background: var(--background-secondary);
+}
+
+.block-fold-summary:hover {
+  color: var(--text-muted);
+  border-left-color: var(--text-accent);
+  background: var(--background-modifier-hover);
+}
+
+.block-fold-summary:focus-visible {
+  outline: 1px solid var(--text-accent);
+  outline-offset: 1px;
+}
+
+/* The terse level: a type chip, so a document of folded blocks is scannable. */
+.block-fold-summary.is-full {
+  color: var(--text-muted);
+}
+
+.block-fold-kind {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: 0.92em;
+  font-weight: 500;
+}
+
+.block-fold-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-monospace);
+}
+
+.block-fold-summary:not(.is-full) .block-fold-detail {
+  font-size: 1.02em;
+}
+
+.block-fold-meta {
+  flex: none;
+  opacity: 0.7;
+  font-size: 0.9em;
+  white-space: nowrap;
+}
+
 /* bullet */
 .block-bullet {
   position: relative; /* anchors the invisible touch-area extension */

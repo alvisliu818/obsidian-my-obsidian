@@ -16,6 +16,7 @@ import { parseDocument } from '../core/parser';
 import { clearLogseqPageProps, registerLogseqPageProps } from '../pagePropsRegistry';
 import { serializeBlock, serializeDocument } from '../core/serializer';
 import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, isDescendant, linkParents, moveBlockGroup, moveBlockVertically, outdent, pseudoRootOf, rangeAnchor, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, visibleRange, type MovePosition } from '../core/treeOps';
+import { foldLevelOf, foldValueFor, nextFoldLevel, normFoldKey, type FoldLevel } from '../core/fold';
 import { UndoStack } from '../state/undoStack';
 import {
   renderBlockTree,
@@ -395,6 +396,17 @@ export class BlockEditorView extends TextFileView {
     } catch (e) {
       console.error('[LG] render() threw:', e);
     }
+  }
+
+  /**
+   * Re-render after a setting that changes how blocks are DRAWN (fold caret,
+   * hidden properties) rather than what they contain. The model is untouched,
+   * so this must not go through `setViewData` — that would re-parse the file
+   * and throw away the undo stack and the focused editor for nothing.
+   */
+  rerender(): void {
+    this.commitFocusedText();
+    this.render();
   }
 
   private renderInner(): void {
@@ -1646,6 +1658,51 @@ ${content}`;
       () => toggleCollapse(b),
       () => ({ subtree: b }),
     );
+  }
+
+  /** Whether the collapse caret is offered on every foldable body (setting). */
+  get foldEnabled(): boolean {
+    return this.plugin.settings.foldEnabled !== false;
+  }
+
+  /**
+   * Fold or unfold a block by writing the `collapsed` property.
+   *
+   * The flag is the ONLY state: markdown stays the single source of truth, so
+   * folding survives a reload and shows up in the SQLite index like any other
+   * property. `collapsed:: true` folds to a one-line summary, `collapsed:: full`
+   * to a terse type marker; `none` removes the property entirely rather than
+   * writing `false`, so an unfolded block's file is byte-identical to one that
+   * was never folded.
+   */
+  setFold(b: Block, level: FoldLevel): void {
+    const value = foldValueFor(level);
+    const current = foldLevelOf(b.props);
+    if (current === level) return;
+    this.mutate(
+      () => {
+        if (value === null) {
+          // Drop the property under every spelling of the key.
+          for (const k of Object.keys(b.props)) {
+            if (normFoldKey(k) === 'collapsed') delete b.props[k];
+          }
+        } else {
+          for (const k of Object.keys(b.props)) {
+            if (normFoldKey(k) === 'collapsed') delete b.props[k];
+          }
+          b.props['collapsed'] = value;
+        }
+        // A folded block must not stay in the edit state: its editor would
+        // render over the summary. Unfocus it so the summary takes over.
+        if (level !== 'none' && this.focusedBlock === b) this.commitFocusedText();
+      },
+      () => ({ subtree: b }),
+    );
+  }
+
+  /** Caret click: plain cycles none → summary → full → none; Alt jumps to full. */
+  cycleFold(b: Block, alt: boolean): void {
+    this.setFold(b, nextFoldLevel(foldLevelOf(b.props), alt));
   }
 
   /** Guide-line click: folds/unfolds the content INSIDE the guide (the

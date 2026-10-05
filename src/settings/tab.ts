@@ -163,6 +163,37 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
     };
 
     new Setting(containerEl)
+      .setName('Fold any block')
+      .setDesc(
+        'Show the collapse caret on every block whose body spans more than one line — headings, code fences, tables, quotes, images and multi-line paragraphs — not just list items with children. Click folds to a one-line summary; Alt+click folds all the way to a type chip. The state is saved as a `collapsed::` property in your markdown, exactly like a list block\'s.',
+      )
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.foldEnabled !== false)
+          .onChange(async (v) => {
+            this.plugin.settings.foldEnabled = v;
+            await this.plugin.saveSettings();
+            this.plugin.refreshAllViews();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Hidden block properties')
+      .setDesc(
+        'Comma-separated property names that stay in your markdown but are not drawn as a `key:: value` row. Hiding is view-only: the property is still parsed, still indexed for queries, and still editable from the block properties menu. `collapsed` is hidden by default so folding does not litter the view.',
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder('collapsed')
+          .setValue(this.plugin.settings.hiddenProps ?? '')
+          .onChange(async (v) => {
+            this.plugin.settings.hiddenProps = v;
+            await this.plugin.saveSettings();
+            this.plugin.refreshAllViews();
+          }),
+      );
+
+    new Setting(containerEl)
       .setName('Guide-line collapse depth')
       .setDesc(
         'Clicking the vertical guide line folds the content inside it: the first-level blocks stay visible as folded rows while everything below them hides. This sets how many levels carry the folded state (direct children = level 1); deeper levels stay folded when you expand again. "All levels" = fold everything below the first level.',

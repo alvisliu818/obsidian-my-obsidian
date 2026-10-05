@@ -165,6 +165,20 @@ export interface BlockEditorSettings {
   sqlitePersist: boolean;
   /** Re-index files when they change on disk (including edits from outside). */
   sqliteAutoSync: boolean;
+  /**
+   * Offer the collapse caret on every block whose body spans more than one
+   * rendered line — not just list blocks with children. Off = the caret only
+   * appears where it always did (list blocks with children).
+   */
+  foldEnabled: boolean;
+  /**
+   * Block properties that stay in the markdown but are NOT drawn as a
+   * `key:: value` row. Hiding is view-only: the property is still written,
+   * still parsed back, still queryable, and still editable from the block
+   * properties panel. Comma-separated; defaults to the fold flags so folding
+   * a block does not litter the view with bookkeeping.
+   */
+  hiddenProps: string;
 }
 
 /** A page's linked-reference filter: values to require / to hide. */
@@ -193,6 +207,8 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   sqliteIndexEnabled: true,
   sqlitePersist: true,
   sqliteAutoSync: true,
+  foldEnabled: true,
+  hiddenProps: 'collapsed',
 };
 
 export function createBlock(text = '', marker: Marker = null): Block {
