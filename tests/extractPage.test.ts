@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { parseDocument } from '../src/core/parser';
 import { serializeDocument } from '../src/core/serializer';
 import { createBlock, type Block } from '../src/types';
-import { linkParents, registerRoots, unregisterRoots } from '../src/core/treeOps';
+import { containsBlock, linkParents, registerRoots, unregisterRoots } from '../src/core/treeOps';
 import {
   MAX_NAME_LEN,
   extractedPageMarkdown,
@@ -207,5 +207,53 @@ describe('sanity: a block with no text cannot name a page', () => {
   it('is reported as unusable so the caller asks', () => {
     const empty: Block = createBlock('');
     expect(pageNameFor(empty.text)).toBe('');
+  });
+});
+
+/**
+ * The membership filter `extractBlocksToPage` runs before it moves anything.
+ * It used to be `doc.blocks.includes(b)`, which is true for root blocks only —
+ * so extracting a nested block found nothing to move and returned false with
+ * no error. `replaceWithPageEmbed` always handled nesting correctly, which is
+ * why the replacement half looked right while the extract half did nothing.
+ */
+describe('extracting a nested block', () => {
+  const setup = (md: string) => {
+    const doc = parseDocument(md);
+    linkParents(doc.blocks);
+    registerRoots(doc.blocks);
+    return doc;
+  };
+
+  it('finds the block at any depth, and keeps the embed in its parent', () => {
+    const doc = setup('- parent\n\t- a\n\t- b\n\t- c\n- other');
+    const parent = doc.blocks[0];
+    const b = parent.children[1];
+    // The filter the view used to run:
+    const byRootIdentity = [b].filter((x) => doc.blocks.includes(x));
+    expect(byRootIdentity).toHaveLength(0);
+    // The one it runs now:
+    const present = [b].filter((x) => containsBlock(doc.blocks, x));
+    expect(present).toHaveLength(1);
+
+    const body = extractedPageMarkdown(present);
+    expect(body).toContain('b');
+    const embed = replaceWithPageEmbed(doc.blocks, present[0], 'B page');
+    expect(embed).not.toBeNull();
+    // Still a child of `parent` — the outline shape is preserved.
+    expect(parent.children.map((c) => c.text)).toEqual(['a', '![[B page]]', 'c']);
+    expect(embed?.parent).toBe(parent);
+    unregisterRoots(doc.blocks);
+  });
+
+  it('keeps a nested sub-tree intact on the new page', () => {
+    const doc = setup('- parent\n\t- mid\n\t\t- deep\n- other');
+    const mid = doc.blocks[0].children[0];
+    const present = [mid].filter((x) => containsBlock(doc.blocks, x));
+    const body = extractedPageMarkdown(present);
+    // `deep` travels inside `mid`, so it must be in the exported markdown.
+    expect(body).toContain('mid');
+    expect(body).toContain('deep');
+    unregisterRoots(doc.blocks);
   });
 });

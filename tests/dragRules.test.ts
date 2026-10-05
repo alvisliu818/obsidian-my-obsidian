@@ -26,6 +26,7 @@ import {
   canStartDrag,
   edgeDropTarget,
   edgeScrollStep,
+  isNoopGroupMove,
   isNoopMove,
   planCrossFile,
   resolveBand,
@@ -119,6 +120,31 @@ describe('isNoopMove', () => {
     expect(isNoopMove(b1, b, 'child')).toBe(true);
     expect(isNoopMove(a, c, 'before')).toBe(false);
     expect(isNoopMove(a, c, 'after')).toBe(false);
+  });
+});
+
+describe('isNoopGroupMove', () => {
+  it('refuses only when EVERY member is stationary', () => {
+    // roots: [a, b, c] — `c` already sits directly after `b`.
+    const { a, b, c } = tree();
+    expect(isNoopGroupMove([c], b, 'after')).toBe(true);
+    // Adding `a` makes the drop meaningful again: the group as a whole
+    // reorders to [b, a, c]. Refusing here because `c` alone is a no-op is
+    // what made a legal group drag silently do nothing.
+    expect(isNoopGroupMove([a, c], b, 'after')).toBe(false);
+  });
+
+  it('treats an empty payload as nothing to do', () => {
+    const { b } = tree();
+    expect(isNoopGroupMove([], b, 'after')).toBe(true);
+  });
+
+  it('agrees with the single-block rule for one member', () => {
+    const { a, b, c } = tree();
+    for (const pos of ['before', 'after', 'child'] as const) {
+      expect(isNoopGroupMove([a], c, pos)).toBe(isNoopMove(a, c, pos));
+    }
+    void b;
   });
 });
 
@@ -302,6 +328,20 @@ describe('resolveBand', () => {
     const { roots, a } = tree();
     expect(resolveBand('child', a, [createBlock('list'), verbatim()])).toBe('after');
     expect(resolveBand('child', b1Of(roots), [verbatim(), createBlock('x')])).toBe(null);
+    unregisterRoots(roots);
+  });
+
+  it('refuses an edge drop onto a ZOOMED outline, whose roots have a parent', () => {
+    // While zoomed, `visibleRoots` is `zoomed.children` — not the document
+    // root list. Its members have `parent = zoomed`, so the empty-space drop
+    // path would otherwise append a verbatim block BELOW the root level, where
+    // `serializeBlock` writes it flush-left and it re-parses as a root block.
+    // `edgeDropFor` has to run the edge band through resolveBand for this.
+    const { roots, b } = tree();
+    const zoomedChild = b.children[0];
+    expect(zoomedChild.parent).toBe(b);
+    expect(resolveBand('after', zoomedChild, [verbatim()])).toBe(null);
+    expect(resolveBand('before', zoomedChild, [verbatim()])).toBe(null);
     unregisterRoots(roots);
   });
 });

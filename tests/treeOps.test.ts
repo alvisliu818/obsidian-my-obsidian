@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { parseDocument } from '../src/core/parser';
 import type { Block } from '../src/types';
+import { createBlock } from '../src/types';
 import {
   blockAtPath,
   cloneForest,
+  containsBlock,
   cycleMarker,
   findBlockById,
   flattenVisible,
@@ -349,5 +351,28 @@ describe('insert/remove/clone', () => {
     expect(copy[0].props['id']).toBe('u1');
     expect(copy[0].children[0].parent).toBe(copy[0]);
     expect(copy[0].children[0]).not.toBe(doc.blocks[0].children[0]);
+  });
+});
+
+describe('containsBlock', () => {
+  it('sees a block at ANY depth, not just at the root', () => {
+    const doc = setup('- root\n\t- mid\n\t\t- deep\n- other');
+    const [root, other] = doc.blocks;
+    const mid = root.children[0];
+    const deep = mid.children[0];
+    // Identity against the root array alone only finds `root` and `other`;
+    // a caller filtering candidates that way silently drops every nested
+    // block, which is how extracting a sub-block did nothing at all.
+    expect([root, other].includes(mid)).toBe(false);
+    expect(containsBlock(doc.blocks, root)).toBe(true);
+    expect(containsBlock(doc.blocks, mid)).toBe(true);
+    expect(containsBlock(doc.blocks, deep)).toBe(true);
+  });
+
+  it('rejects a block that is not in the forest', () => {
+    const doc = setup('- a');
+    expect(containsBlock(doc.blocks, createBlock('stranger'))).toBe(false);
+    expect(containsBlock([], createBlock('a'))).toBe(false);
+    expect(containsBlock(doc.blocks, null as unknown as Block)).toBe(false);
   });
 });
