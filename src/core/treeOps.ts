@@ -59,6 +59,28 @@ export function findBlockById(roots: Block[], id: string): Block | null {
   return null;
 }
 
+/**
+ * Is `b` still part of the forest rooted at `roots` — at ANY depth?
+ *
+ * Identity against the root array alone is not enough: a nested block is a
+ * member of the document but not of `roots`, so a caller filtering candidates
+ * with `roots.includes(b)` silently drops every non-top-level block. That is
+ * how "extract this sub-block to its own page" ended up doing nothing at all
+ * for any block below the first level, with no error to show for it.
+ *
+ * Structural, not registry-based: it answers "is this object still in the
+ * document", which is exactly the question a caller holding a stale block
+ * reference needs answered.
+ */
+export function containsBlock(roots: readonly Block[], b: Block): boolean {
+  if (!b) return false;
+  for (const r of roots) {
+    if (r === b) return true;
+    if (findListContaining(r.children, b)) return true;
+  }
+  return false;
+}
+
 function findBlockIn(b: Block, id: string): Block | null {
   if (b.props['id'] === id && id !== '') return b;
   for (const c of b.children) {

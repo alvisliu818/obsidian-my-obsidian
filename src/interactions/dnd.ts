@@ -32,7 +32,7 @@ import {
   canStartDrag,
   edgeDropTarget,
   edgeScrollStep,
-  isNoopMove,
+  isNoopGroupMove,
   planCrossFile,
   resolveBand,
   transferableBlocks,
@@ -265,7 +265,7 @@ export function attachDnd(treeEl: HTMLElement, host: BlockEditorView): void {
     clearIndicators(treeEl);
     if (!dest || !pos) return;
     if (dragged.some((b) => b === dest || isDescendant(b, dest))) return;
-    if (dragged.some((b) => isNoopMove(b, dest, pos))) return;
+    if (isNoopGroupMove(dragged, dest, pos)) return;
     ev.preventDefault();
     const payload = dragged;
     dragged = [];
@@ -465,7 +465,15 @@ function edgeDropFor(
   const payload = dragged.length > 0 ? dragged : (touchDrag?.blocks ?? []);
   if (payload.length === 0) return null;
   if (!canDrop(payload, hit.target, payload).ok) return null;
-  return hit;
+  // `visibleRoots` is NOT the document root list: while zoomed it is
+  // `zoomed.children`, whose members have a parent. `edgeDropTarget` has no
+  // idea that, so a verbatim payload would be appended BELOW the root level —
+  // and `serializeBlock` writes a raw block flush-left, so it re-parses as a
+  // root block and escapes the position the user dropped it on. The per-block
+  // path already runs every band through `resolveBand`; this one has to too.
+  const pos = resolveBand(hit.pos, hit.target, payload);
+  if (!pos) return null;
+  return { target: hit.target, pos };
 }
 
 /** Show the indicator for an empty-space drop (the row above/below the outline). */
@@ -543,7 +551,7 @@ function attachCrossViewDnd(host: BlockEditorView): void {
       if (!check.ok) return;
       const pos = dropPositionAt(ev.clientY, target, dragged);
       if (!pos) return;
-      if (dragged.some((b) => isNoopMove(b, target, pos))) return;
+      if (isNoopGroupMove(dragged, target, pos)) return;
       ev.preventDefault();
       const owner = hostOwning(findBlockEl(target));
       const payload = dragged;

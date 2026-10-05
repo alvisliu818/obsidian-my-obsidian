@@ -13,7 +13,7 @@
 
 import { Modal, Notice, Setting, TFile, normalizePath } from 'obsidian';
 import type { BlockEditorView } from '../view/BlockEditorView';
-import { isDescendant } from '../core/treeOps';
+import { containsBlock, isDescendant } from '../core/treeOps';
 import type { Block } from '../types';
 import {
   extractNotice,
@@ -122,10 +122,13 @@ export async function extractBlocksToPage(
   blocks: Block[],
   rawName: string,
 ): Promise<boolean> {
-  // Only blocks that are really in this document, and only the outermost of a
-  // nested group: a member carried by another member is already part of that
-  // member's serialized sub-tree, so exporting it again would duplicate it.
-  const present = blocks.filter((b) => b && host.doc.blocks.includes(b));
+  // Only blocks that are really in this document — at ANY depth. Membership
+  // was tested with `doc.blocks.includes(b)`, which is true for root blocks
+  // only, so extracting a nested block found nothing to move and returned
+  // false in silence. And only the outermost of a nested group: a member
+  // carried by another member is already part of that member's serialized
+  // sub-tree, so exporting it again would duplicate it.
+  const present = blocks.filter((b) => b && containsBlock(host.doc.blocks, b));
   const moving = present.filter((b) => !present.some((o) => o !== b && isDescendant(o, b)));
   if (moving.length === 0) return false;
 

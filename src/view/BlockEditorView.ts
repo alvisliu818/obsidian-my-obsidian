@@ -1856,22 +1856,20 @@ ${content}`;
   /**
    * Move a whole payload (multi-selection drag) into a target position.
    *
-   * Order matters: a group drag whose members are siblings must land in the
-   * ORIGINAL order, and members that are ancestors of each other must be
-   * applied outermost-first (moving a parent first would detach the child
-   * from the document before it gets placed). Both are why this cannot just
-   * loop `moveBlock`.
-   */
-  /**
-   * Move a whole payload (multi-selection drag) into a target position.
-   *
    * Delegates to `moveBlockGroup`, NOT a loop over `moveBlock`: each
    * `moveBlock` inserts directly adjacent to the target, so the next member
    * pushes the previous one further out — dropping [a, b] after `c` would
-   * yield [c, b, a], exactly reversed.
+   * yield [c, b, a], exactly reversed. `moveBlockGroup` also drops members
+   * that travel inside another member, and refuses the whole group when any
+   * member is illegal.
    */
   dropBlocks(blocks: readonly Block[], target: Block, pos: MovePosition): void {
-    const oldParent = blocks[0]?.parent ?? null;
+    // EVERY member's original parent, not just the first one's: a multi-select
+    // can span levels (`a` plus a child buried under `b`), and each of those
+    // lists lost a row. Capturing only `blocks[0].parent` left the other
+    // member's old position rendered forever — a ghost row of a block that had
+    // already moved.
+    const oldParents = dedupeParents(blocks.map((b) => b.parent));
     let moved: Block[] = [];
     this.mutate(
       () => {
@@ -1879,7 +1877,7 @@ ${content}`;
       },
       // Rebuild the source and destination sibling lists.
       () => ({
-        lists: dedupeParents([oldParent, ...moved.map((b) => b.parent), target.parent]),
+        lists: dedupeParents([...oldParents, ...moved.map((b) => b.parent), target.parent]),
       }),
     );
   }

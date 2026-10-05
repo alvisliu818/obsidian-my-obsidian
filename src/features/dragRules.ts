@@ -135,9 +135,37 @@ export function isNoopMove(b: Block, target: Block, pos: DropBand): boolean {
   return false;
 }
 
-/** Can this block start a drag at all? Empty list blocks have nothing to move. */
+/**
+ * Is a GROUP drop a no-op?
+ *
+ * Every member has to be a no-op, not just one of them. In `[a, b, c]` a drag
+ * of `[a, c]` onto `b`'s after-band leaves `c` exactly where it was, but `a`
+ * still has to travel — and the group as a whole produces a different order
+ * (`[b, a, c]`). Refusing because *some* member is stationary makes a legal,
+ * meaningful drop silently do nothing, which is exactly the "the indicator
+ * flashed and nothing happened" symptom `isNoopMove` exists to prevent.
+ */
+export function isNoopGroupMove(
+  dragged: readonly Block[],
+  target: Block,
+  pos: DropBand,
+): boolean {
+  if (dragged.length === 0) return true;
+  return dragged.every((b) => isNoopMove(b, target, pos));
+}
+
+/**
+ * Can this block start a drag at all? An empty block with no children has
+ * nothing to move.
+ *
+ * The parentheses are load-bearing: `&&` binds tighter than `||`, so the
+ * unparenthesised form reads as "has text, or (is non-null and has children)"
+ * — which happens to be equivalent today, but the moment a second `||` term
+ * is added it stops being. Written out so the intent survives editing.
+ */
 export function canStartDrag(b: Block | null): b is Block {
-  return !!b && b.text.trim() !== '' || !!b?.children.length;
+  if (!b) return false;
+  return b.text.trim() !== '' || b.children.length > 0;
 }
 
 // ---------------------------------------------------------------------------
