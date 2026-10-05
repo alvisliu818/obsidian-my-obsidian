@@ -7,6 +7,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
 
 ### Fixed
 
+- **A code fence with no language is no longer unreachable.** A plain ``` fence rendered a code toolbar with no language target, so there was no way to open source mode — and source mode is the only way to set a language. The label was gated on "has a language OR has a prefix", so exactly the fences that most needed a language were the ones with no way to set one.
+  - The label now renders for every fence in both the reading and code-editing states. A fence with no language shows a dimmed, italic `text` placeholder — visibly a placeholder, not a language actually called "text".
+  - The cursor lands immediately after the opening fence, so the language word can be typed straight in; the code body is never at risk.
+
 - **Shift+click while editing no longer drops the block being edited.** Editing a block and then Shift+clicking another one selected only the clicked block, leaving the block you were typing in out of the range.
   - The range was anchored on the last *clicked* block, but that anchor is only ever set by a click that goes through the multi-select path — editing never does, so the first Shift+click had no anchor and collapsed to a single selection. The block being edited is now the fallback anchor.
   - Reading it inside the click handler is not enough, and this only showed up under a real instance: pressing the mouse **moves focus off the block being edited, the embedded editor fires `blur`, and the blur commit clears the focused block before the click event even arrives**. The anchor is therefore captured on `mousedown` — the last point where it still exists. Verified with an e2e probe that wrapped the live handler and logged the state on entry: it read `null` there, which is exactly why the obvious fix did nothing.

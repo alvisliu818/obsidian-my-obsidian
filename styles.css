@@ -1943,6 +1943,18 @@ body.block-touch-dragging {
   text-decoration: underline;
 }
 
+/* A fence with no language still renders the label (it is the only way into
+   source mode), but as a placeholder — dimmed, so it reads as "unset" rather
+   than as a language literally called "text". */
+.lgp-code-lang-empty {
+  opacity: 0.55;
+  font-style: italic;
+}
+
+.lgp-code-lang-empty:hover {
+  opacity: 1;
+}
+
 .lgp-code-copy {
   display: flex;
   align-items: center;

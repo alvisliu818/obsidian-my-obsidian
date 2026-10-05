@@ -160,11 +160,16 @@ export function mountCodeEditor(
   const bar = document.createElement('div');
   bar.className = 'lgp-code-toolbar';
   wrap.appendChild(bar);
-  // Mixed blocks ALWAYS show the label: it is their only path into source
-  // mode (the prefix is not editable through the code editor itself).
-  if (info.lang || info.prefix) {
+  // The language label is the ONLY path into source mode, so it must render
+  // for EVERY fence. It used to be gated on `info.lang || info.prefix`, which
+  // left a plain fence with no language and no prefix (e.g. an untyped
+  // ```python-ish snippet under a heading) with no clickable target at all —
+  // the language could then never be set. An empty language shows as the
+  // placeholder `text`; the fence line itself is in the doc once source mode
+  // opens, so the caret lands right after it and the word can be typed.
+  {
     const langEl = document.createElement('span');
-    langEl.className = 'lgp-code-lang';
+    langEl.className = info.lang ? 'lgp-code-lang' : 'lgp-code-lang lgp-code-lang-empty';
     langEl.textContent = info.lang || 'text';
     langEl.title = 'Edit as source (change language)';
     langEl.addEventListener('click', (e) => {
