@@ -37,3 +37,8 @@ delivery/
 tests/fixtures/edge-vault/.obsidian/workspace.json
 tests/fixtures/edge-vault/.logseq-editor/
 tests/fixtures/edge-vault/.obsidian/plugins/obsidian-logseq/main.js
+
+# ===== 过程产物（可再生 / 误生成，不入库） =====
+vitest.config.ts.timestamp-*.mjs
+tests/_diag-*.test.ts
+HOMELocallogseq-*.json
