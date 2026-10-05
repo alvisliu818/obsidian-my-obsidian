@@ -78,11 +78,90 @@ export function nextFoldLevel(current: FoldLevel, alt: boolean): FoldLevel {
  * A media-only block (`![](a.png)` on its own, a wiki embed, a video embed)
  * counts as foldable even though its text is one line: the rendered image is
  * large, and folding it is exactly what the user asks for.
+ *
+ * Mirrors SiYuan's own rule, read from `setFold` in
+ * app/src/protyle/util/blockFold.ts: it bails out for a `NodeListItem` with
+ * `childElementCount < 4` ("没有子列表或多个块的列表项不进行折叠") and for a
+ * `NodeThematicBreak`. A markdown heading is a single line with no children —
+ * its content is a SIBLING, not a child — so it is foldable only as a SECTION
+ * (see `isFoldableHeading` / `sectionEndIndex`).
  */
 export function isFoldableBody(b: Block): boolean {
   if (b.children.length > 0) return true;
   if (b.text.split('\n').length > 1) return true;
+  if (isThematicBreak(b.text)) return false; // a divider is one line, never worth folding
   return isMediaOnlyBlock(b.text);
+}
+
+/** A `---` / `***` divider line — SiYuan refuses to fold these too. */
+export function isThematicBreak(text: string): boolean {
+  return /^\s*(?:=+|\*+|_+|~+|\++)\s*$/.test(text.split('\n')[0] ?? '');
+}
+
+const HEADING_RE = /^(#{1,6})\s+(.*)$/;
+
+/** Heading level of a block's first line, or 0 when it is not a heading. */
+export function headingLevel(b: Block): number {
+  const m = HEADING_RE.exec(b.text.split('\n')[0] ?? '');
+  return m ? m[1].length : 0;
+}
+
+/**
+ * A heading folds the SECTION it introduces: itself plus every following
+ * sibling of a deeper level, stopping at the next heading of the same or a
+ * shallower level.
+ *
+ * This is SiYuan's `removeFoldHeading`, which walks `nextElementSibling` while
+ * the next node is either not a heading or is a deeper one, and removes it. A
+ * markdown heading cannot own the section as children — its content is a
+ * sibling — so the section is defined by scanning the visible sequence
+ * instead of by tree structure.
+ */
+export function isFoldableHeading(b: Block): boolean {
+  return headingLevel(b) > 0;
+}
+
+/**
+ * Index just past the last block of the section `heading` opens, in the given
+ * visible sequence. Returns the index of the heading itself when it is not a
+ * heading or has no section (a heading immediately followed by an equal or
+ * shallower one).
+ */
+export function sectionEndIndex(seq: Block[], headingIndex: number): number {
+  const level = headingLevel(seq[headingIndex]);
+  if (level === 0) return headingIndex + 1;
+  let end = headingIndex + 1;
+  for (let i = headingIndex + 1; i < seq.length; i++) {
+    const l = headingLevel(seq[i]);
+    if (l > 0 && l <= level) break; // same or shallower heading ends the section
+    end = i + 1;
+  }
+  return end;
+}
+
+/**
+ * True when `b` falls inside a section whose heading is folded.
+ *
+ * `index` is `b`'s position in the visible sequence (`-1` when unknown, which
+ * happens for a block outside it — that block is never hidden). A folded
+ * heading hides everything from just after it up to the next same-or-shallower
+ * heading; a folded BODY block is not handled here, the renderer replaces its
+ * content in place instead.
+ */
+export function isInsideFoldedSection(_b: Block, index: number, seq: Block[]): boolean {
+  if (index < 0) return false;
+  for (let i = index - 1; i >= 0; i--) {
+    const h = seq[i];
+    const level = headingLevel(h);
+    // A same-or-shallower heading is the section's own owner; keep walking up
+    // only if this one is DEEPER than the block's enclosing section.
+    if (level > 0) {
+      if (foldLevelOf(h.props) !== 'none' && sectionEndIndex(seq, i) > index) return true;
+      if (i === 0) break;
+    }
+    if (i === 0) break;
+  }
+  return false;
 }
 
 const MEDIA_ONLY_RE =

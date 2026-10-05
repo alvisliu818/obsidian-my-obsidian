@@ -22,7 +22,7 @@ import { hasTable } from './tableModel';
 import type { BlockEditorView } from '../view/BlockEditorView';
 import type { Block } from '../types';
 import { blockId } from '../types';
-import { foldLevelOf, foldSummary, isFoldableBody, isMediaOnlyBlock, normFoldKey } from '../core/fold';
+import { foldLevelOf, foldSummary, isFoldableBody, isFoldableHeading, isInsideFoldedSection, isMediaOnlyBlock, normFoldKey } from '../core/fold';
 import { createPageEmbedBox, enhanceBlockRefs, enhanceEmbeds } from '../features/links';
 import {
   buildQueryTableModel,
@@ -125,11 +125,19 @@ export function renderBlockTree(container: HTMLElement, roots: Block[], host: Bl
   const budget: RenderBudget | undefined = total > cap ? { left: cap, stopped: false } : undefined;
 
   const frag = document.createDocumentFragment();
+  // Section folding (SiYuan's `removeFoldHeading`): a folded heading hides the
+  // blocks it introduces — the following siblings of a deeper heading level,
+  // up to the next heading of the same or a shallower level. A markdown heading
+  // cannot own them as children, so the section is defined by scanning the
+  // visible sequence rather than by tree structure.
+  const seq = flattenVisible(roots);
+  const posOf = new Map<Block, number>(seq.map((b, i) => [b, i] as const));
   for (const b of roots) {
     if (budget && (budget.left <= 0 || budget.stopped)) {
       budget.stopped = true;
       break;
     }
+    if (isInsideFoldedSection(b, posOf.get(b) ?? -1, seq)) continue;
     if (budget) budget.left--;
     frag.appendChild(renderBlock(b, host, budget));
   }
@@ -209,7 +217,7 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
   if (draggable && !nativeProps) {
     controls.setAttribute('draggable', 'true'); // block drag handle zone
   }
-  if (!nativeProps && host.foldEnabled && isFoldableBody(b)) {
+  if (!nativeProps && host.foldEnabled && (isFoldableBody(b) || isFoldableHeading(b))) {
     // The caret belongs to EVERY foldable body, not just a list block with
     // children: a heading, a fenced code block, a table, a quote, a
     // media-only block and a multi-line paragraph all span more than one
@@ -298,13 +306,19 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
   // keeps its real text (markdown is the only source of truth) — this is
   // purely a view state, so expanding restores everything exactly.
   const foldLevel = foldLevelOf(b.props);
-  if (host.focusedBlock === b && foldLevel === 'none') {
+  // A folded heading is excluded from the editing path too: it has no body to
+  // edit in place — its section is what got hidden.
+  if (host.focusedBlock === b && (foldLevel === 'none' || isFoldableHeading(b))) {
     content.classList.add('is-editing');
     // CM6 gets mounted here by the view after the tree render pass.
     host.mountFocusedInto(content);
-  } else if (foldLevel !== 'none') {
+  } else if (foldLevel !== 'none' && !isFoldableHeading(b)) {
     // Focusing a folded block is not an error: clicking a summary should
     // unfold it so the user can edit the real text. `cycleFold` handles that.
+    //
+    // A folded HEADING is excluded: it has no body of its own to replace —
+    // folding it hides the SECTION it introduces (see `renderBlockTree`),
+    // and the heading line itself stays readable.
     renderFoldSummary(content, b, foldLevel, host);
   } else if (isPropsBlock(b, host)) {
     // The page-properties block: Obsidian's NATIVE properties editor when the

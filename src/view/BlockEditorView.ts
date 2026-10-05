@@ -1696,8 +1696,18 @@ ${content}`;
         // render over the summary. Unfocus it so the summary takes over.
         if (level !== 'none' && this.focusedBlock === b) this.commitFocusedText();
       },
-      () => ({ subtree: b }),
+      // A FULL re-render, not `{ subtree: b }`: folding a HEADING hides the
+      // following siblings it introduces, which are outside the block's own
+      // subtree. A subtree patch would rewrite the heading and leave its
+      // section on screen (measured: the flag landed in the file but the rows
+      // stayed).
+      () => ({ full: true }),
     );
+    // The full re-render replaces the tree's children, so the caret that was
+    // just clicked is gone. Re-assert focus on the tree, or the second click
+    // (to expand) would land nowhere — the same failure the bulk-indent path
+    // hit, for the same reason.
+    this.focusTreeForSelection();
   }
 
   /** Caret click: plain cycles none → summary → full → none; Alt jumps to full. */
