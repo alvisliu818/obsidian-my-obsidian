@@ -3830,3 +3830,111 @@ body.lgp-table-editor-cursor * {
   margin-top: 8px;
   flex-wrap: wrap;
 }
+
+/* --------------------------------------------------------------------------
+   Editing a block in an external file.
+
+   The panel's own editor rather than CM6: reaching the vault editor needs a
+   real vault path, and creating one on an opening click would write to the
+   user's library uninvited. A single-block textarea keeps the file editable
+   without that trade.
+   -------------------------------------------------------------------------- */
+
+.logseq-external-editable {
+  cursor: text;
+}
+.logseq-external-editable:hover .block-content {
+  /* A hint that this block is editable, without shifting the layout. */
+  box-shadow: inset 0 0 0 1px var(--background-modifier-border);
+  border-radius: 3px;
+}
+
+.logseq-external-block-editor {
+  display: block;
+  width: 100%;
+  min-height: 1.6em;
+  padding: 2px 4px;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  color: var(--text-normal);
+  background-color: var(--background-primary);
+  border: 1px solid var(--color-accent);
+  border-radius: 3px;
+  resize: vertical;
+  /* The editor must not be swallowed by Obsidian's own key handling. */
+  pointer-events: auto;
+}
+
+.logseq-external-hint {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  flex: 0 0 auto;
+}
+.logseq-external-dirty {
+  font-size: var(--font-smallest);
+  color: var(--text-warning);
+  background-color: var(--background-modifier-border);
+  padding: 1px 6px;
+  border-radius: 8px;
+  flex: 0 0 auto;
+}
+
+/* --------------------------------------------------------------------------
+   External code editor (a file outside the vault, opened in CodeMirror 6)
+   -------------------------------------------------------------------------- */
+
+.logseq-external-code-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.logseq-external-code-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.logseq-external-code-host .cm-editor {
+  height: 100%;
+  font-family: var(--font-monospace);
+  font-size: var(--font-text-size);
+}
+.logseq-external-code-host .cm-scroller {
+  font-family: var(--font-monospace);
+  line-height: 1.6;
+}
+.logseq-external-code-host .cm-gutters {
+  background-color: transparent;
+  border-right: 1px solid var(--background-modifier-border);
+  color: var(--text-faint);
+}
+
+/* --------------------------------------------------------------------------
+   The note shown in place of the vault-only page sections when the block
+   editor is showing a file from outside the vault.
+   -------------------------------------------------------------------------- */
+
+.logseq-external-note {
+  margin: 10px 0 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-left: 3px solid var(--color-accent);
+  border-radius: 6px;
+  background-color: var(--background-secondary);
+}
+.logseq-external-note-title {
+  font-weight: var(--font-semibold);
+}
+.logseq-external-note-path {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  font-family: var(--font-monospace);
+  word-break: break-all;
+  margin-top: 2px;
+}
+.logseq-external-note-hint {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin-top: 4px;
+}

@@ -114,8 +114,14 @@ export class ExternalFileView extends ItemView {
     });
     banner.createSpan({ cls: 'logseq-external-banner-path', text: this.abs });
     banner.createSpan({ cls: 'logseq-external-badge', text: '库外' });
-    if (!this.readOnly) {
-      banner.createEl('button', { cls: 'logseq-external-save', text: '保存' }).addEventListener('click', () => {
+    if (this.readOnly) {
+      banner.createSpan({ cls: 'logseq-external-hint', text: '双击块可编辑' });
+    } else {
+      // Only offer the affordances that apply right now: an unsaved marker so a
+      // pending edit is never invisible, and a hint for how to edit at all.
+      if (this.dirty) banner.createSpan({ cls: 'logseq-external-dirty', text: '未保存' });
+      else banner.createSpan({ cls: 'logseq-external-hint', text: '双击块可编辑' });
+      banner.createEl('button', { cls: 'logseq-external-save', text: '保存到原文件' }).addEventListener('click', () => {
         void this.flush(true);
       });
     }
@@ -131,6 +137,12 @@ export class ExternalFileView extends ItemView {
   /**
    * One block, rendered with the SAME DOM classes as the vault block editor so
    * `styles.css` applies unchanged.
+   *
+   * Double-click puts ONE block into a plain textarea and commits on blur or
+   * Ctrl+Enter. This is deliberately a small editor rather than the full CM6 one:
+   * reaching the vault's editor needs a real vault path, and making an opening
+   * click write a link into the library uninvited is worse than a modest editor.
+   * A verbatim block (heading, fence, table) is edited as its raw markdown.
    */
   private renderBlock(parent: HTMLElement, b: Block, depth: number): void {
     const wrap = parent.createDiv({ cls: 'block-wrap' });
@@ -156,12 +168,70 @@ export class ExternalFileView extends ItemView {
       void this.renderRaw(content, b.text);
     }
 
+    if (!this.readOnly) this.makeEditable(wrap, content, b);
+
     if (b.children.length > 0) {
       const container = wrap.createDiv({ cls: 'block-children-container' });
       container.createDiv({ cls: 'block-children-left-border' });
       const kids = container.createDiv({ cls: 'block-children' });
       for (const c of b.children) this.renderBlock(kids, c, depth + 1);
     }
+  }
+
+  /**
+   * Turn a block's content element into a single-block editor on double-click.
+   *
+   * Escape abandons the edit, Ctrl+Enter or blur commits. The tree is
+   * re-rendered after a commit so a block that gained or lost a line (and the
+   * markdown that follows from it) is rebuilt from the parser rather than
+   * patched in the DOM.
+   */
+  private makeEditable(wrap: HTMLElement, content: HTMLElement, b: Block): void {
+    wrap.addClass('logseq-external-editable');
+    const start = (ev: MouseEvent) => {
+      ev.stopPropagation();
+      // A verbatim block is edited as its source; a list block as its text.
+      const original = b.kind === 'list' ? b.text : b.text;
+      const ta = document.createElement('textarea');
+      ta.className = 'logseq-external-block-editor';
+      ta.value = original;
+      ta.rows = Math.max(1, original.split('\n').length);
+      content.empty();
+      content.appendChild(ta);
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+
+      let done = false;
+      const finish = (commit: boolean): void => {
+        if (done) return;
+        done = true;
+        if (commit && ta.value !== original) {
+          b.text = ta.value;
+          this.dirty = true;
+          // Re-parse so the stored markdown is regenerated from the tree, then
+          // rebuild: a multi-line block may now split differently.
+          this.doc = parseDocument(serializeDocument(this.doc));
+          this.render();
+        } else {
+          this.render();
+        }
+      };
+      ta.addEventListener('blur', () => finish(true));
+      ta.addEventListener('keydown', (e) => {
+        const ke = e as KeyboardEvent;
+        if (ke.key === 'Escape') {
+          ke.preventDefault();
+          finish(false);
+        } else if (ke.key === 'Enter' && (ke.ctrlKey || ke.metaKey)) {
+          ke.preventDefault();
+          finish(true);
+        }
+        // A newline inside a list block is part of its text, so Enter is not
+        // intercepted; the user adds sibling blocks in the vault editor.
+        ke.stopPropagation();
+      });
+    };
+    wrap.addEventListener('dblclick', start);
   }
 
   private async renderRaw(host: HTMLElement, text: string): Promise<void> {

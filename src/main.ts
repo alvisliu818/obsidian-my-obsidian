@@ -38,8 +38,8 @@ import { BlockGraphModal } from './panels/blockGraph';
 import { MountEditorModal, MountListModal } from './panels/mountModals';
 import { MountPanelView, VIEW_TYPE_MOUNT_PANEL } from './panels/mountPanel';
 import { ExternalFileView, VIEW_TYPE_EXTERNAL_FILE, classifyExternalFile } from './views/ExternalFileView';
+import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE, isCodeFile } from './views/ExternalCodeView';
 import {
-  createLink,
   exists,
   linkTargetFor,
   linkVaultPath,
@@ -100,6 +100,7 @@ export default class LogseqEditorPlugin extends Plugin {
     this.registerView(VIEW_TYPE_FLASHCARD_PANEL, (leaf) => new FlashcardPanelView(leaf, this));
     this.registerView(VIEW_TYPE_MOUNT_PANEL, (leaf) => new MountPanelView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_FILE, (leaf) => new ExternalFileView(leaf, this));
+    this.registerView(VIEW_TYPE_EXTERNAL_CODE, (leaf) => new ExternalCodeView(leaf, this));
 
     // Vault-wide ((block-id)) index
     this.blockIndex = new BlockIndex(this.app);
@@ -1159,38 +1160,129 @@ export default class LogseqEditorPlugin extends Plugin {
       this.openWithSystem(node.abs);
       return;
     }
-    // Read-only means "show me, change nothing" — deliberately NOT going through
-    // a vault link, since creating one is itself a write to the vault.
+    // Read-only means "show me, change nothing", and it is also the fallback
+    // whenever a real editor cannot be given the file. Creating a link is a
+    // genuine change to the user's library, so it happens only when they ask
+    // for it from the row's context menu — never because they clicked a file.
     if (opts?.readOnly) {
       await this.openExternalInShimView(mount, node, { readOnly: true });
       return;
     }
-    // A real vault path is what unlocks the user's OWN editor for the file:
-    // markdown lands in this plugin's block editor (take-over), and a code file
-    // lands in whatever claimed that extension — measured: a linked .ts opens as
-    // viewType "code-editor", i.e. Code Files takes it. Neither works without
-    // the link, because Obsidian cannot open a path the vault has never indexed
-    // and a synthetic TFile degrades to the empty view.
-    //
-    // The link is a hard link — the SAME bytes under a second name, not a copy —
-    // so the file on disk stays the single source of truth.
-    if (this.canOpenNatively(node.abs)) {
-      const ok = await this.ensureLinked(node);
-      if (ok) {
-        // A link made a moment ago is not in the index yet; opening it too soon
-        // silently lands on the "empty" placeholder instead of the editor.
-        const rel = linkVaultPath(safeSegment(node.name));
-        if (await this.waitForIndex(rel)) {
-          await this.app.workspace.openLinkText(rel, '', false);
-        } else {
-          // Indexing is slow, not broken — the shim view still shows the file.
-          logOp(this, 'mount.link', node.abs, 'error', 'index timeout');
-          await this.openExternalInShimView(mount, node, opts);
-        }
-        return;
-      }
+    // An already-linked file has a real vault path, so open that and let
+    // Obsidian dispatch: markdown lands in this plugin's block editor, a code
+    // file in whichever plugin claimed the extension.
+    if (this.isLinkedInto(node)) {
+      await this.app.workspace.openLinkText(linkVaultPath(safeSegment(node.name)), '', false);
+      return;
     }
+    // Unlinked and editable: hand the file to the plugin's own editors. Neither
+    // of Obsidian's TextFileView-based editors can be used here — measured:
+    // setViewState on a view type with no TFile yields the "empty" placeholder
+    // for both `logseq-block-editor` and Code Files' `code-editor`, because
+    // those views only mount with a file attached. So markdown and code each get
+    // a view of ours that reads and writes the file over Node fs.
+    if (isCodeFile(node.name)) {
+      if (await this.openInCodeEditor(node)) return;
+    } else if (await this.openInBlockEditor(node)) return;
     await this.openExternalInShimView(mount, node, opts);
+  }
+
+  /**
+   * Open an external markdown file in THIS plugin's block editor — the real
+   * 2500-line editor, not a reduced stand-in, so folding, zoom, undo, drag and
+   * inline markdown all work on an outside file.
+   *
+   * The route matters and was measured four ways. A `TextFileView` only mounts
+   * with a file attached: `setViewState({type: 'logseq-block-editor'})` on an
+   * empty leaf, with or without a `file` in its state, yields the "empty"
+   * placeholder both times. What works is a leaf that is ALREADY showing a block
+   * editor — so one is prepared in a NEW tab, and the external content is pushed
+   * into it.
+   *
+   * The tab is separate on purpose. Seeding the ACTIVE leaf would retarget
+   * whatever note the user had open, leaving them with a tab pointing at a file
+   * they never asked for; reusing an existing block-editor tab would silently
+   * replace their work. A fresh tab is the only variant that touches nothing.
+   */
+  private async openInBlockEditor(node: MountNode): Promise<boolean> {
+    if (isCodeFile(node.name)) return false;
+    try {
+      readExternalText(node.abs);
+    } catch {
+      return false; // the shim view reports the failure with the mount name
+    }
+    try {
+      // A block editor already on screen needs no seeding, and reusing it is
+      // what the user would expect — they are already in that editor.
+      const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_BLOCK_EDITOR)[0];
+      if (existing) {
+        this.app.workspace.setActiveLeaf(existing, { focus: true });
+        const view = existing.view as BlockEditorView | null;
+        if (view instanceof BlockEditorView) {
+          await view.openExternalFile(node.abs, node.name);
+          return true;
+        }
+      }
+      // Otherwise open a NEW tab on a throwaway vault file purely to obtain a
+      // mounted editor instance, then retarget it. `split` keeps the user's
+      // current tab active and visible rather than yanking it away.
+      const seed = this.app.vault.getMarkdownFiles()[0] ?? this.app.vault.getFiles()[0];
+      if (!seed) return false;
+      const leaf = this.app.workspace.getLeaf('split');
+      await leaf.openFile(seed);
+      await new Promise((r) => setTimeout(r, 1500));
+      const view = leaf.view as BlockEditorView | null;
+      if (!(view instanceof BlockEditorView)) return false;
+      await view.openExternalFile(node.abs, node.name);
+      // Activate THIS leaf. Without it the focus can stay on the mount panel and
+      // the freshly opened note looks like it went nowhere.
+      this.app.workspace.setActiveLeaf(leaf, { focus: true });
+      logOp(this, 'external.open', node.abs, 'ok', 'block-editor');
+      return true;
+    } catch (e) {
+      logOp(this, 'external.open', node.abs, 'error', String(e).slice(0, 160));
+      return false;
+    }
+  }
+
+  /**
+   * Open an external code file in the plugin's own code editor.
+   *
+   * Code Files cannot be driven from outside: it exposes no plugin API (checked
+   * its source — the only entry point is a static method on its view class, not
+   * reachable from the instance), and its view is a TextFileView, so
+   * setViewState without a file mounts nothing (measured: the leaf came back as
+   * the "empty" placeholder). Rather than give up on code files, this opens them
+   * in a view we own, which saves back to the original file.
+   */
+  private async openInCodeEditor(node: MountNode): Promise<boolean> {
+    if (!isCodeFile(node.name)) return false;
+    let data: string;
+    try {
+      data = readExternalText(node.abs);
+    } catch {
+      return false; // the shim view reports the failure with the mount name
+    }
+    // Our code view is a plain ItemView, not a TextFileView, so it mounts
+    // without a file — no seed needed here (measured: setViewState on a
+    // TextFileView type with no TFile yields the "empty" placeholder, which is
+    // why the markdown path above has to borrow a live editor).
+    const leaf = this.app.workspace.getLeaf('tab');
+    await leaf.setViewState({
+      type: VIEW_TYPE_EXTERNAL_CODE,
+      active: true,
+      state: { abs: node.abs, name: node.name, content: data },
+    });
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    logOp(this, 'external.open', node.abs, 'ok', 'code-editor');
+    return true;
+  }
+
+  /** True when a link for this entry is already present in the vault. */
+  isLinkedInto(node: MountNode): boolean {
+    const base = this.vaultBasePath();
+    if (!base) return false;
+    return exists(linkTargetFor(base, node.name, safeSegment(node.name)));
   }
 
   /**
@@ -1205,25 +1297,6 @@ export default class LogseqEditorPlugin extends Plugin {
     const base = this.vaultBasePath();
     if (!base) return false;
     return sameVolume(base, abs);
-  }
-
-  /**
-   * Make sure `Mounts/<name>` points at `node.abs`, creating it if needed.
-   * Returns false (with a notice) rather than throwing.
-   */
-  private async ensureLinked(node: MountNode): Promise<boolean> {
-    const base = this.vaultBasePath();
-    const linkName = safeSegment(node.name);
-    const target = linkTargetFor(base, node.name, linkName);
-    if (exists(target)) return true;
-    const r = createLink(node.abs, target);
-    if (!r.ok) {
-      new Notice(`无法在库中创建链接：${r.error ?? '未知错误'}`);
-      logOp(this, 'mount.link', node.abs, 'error', r.error ?? '');
-      return false;
-    }
-    logOp(this, 'mount.link', node.abs, 'ok', r.kind ?? '');
-    return true;
   }
 
   /**

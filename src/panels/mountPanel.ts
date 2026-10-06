@@ -286,19 +286,20 @@ export class MountPanelView extends ItemView {
 
       if (node) {
         const text = !node.isDir && isTextMount(extOf(node.name));
-        const native = this.plugin.canOpenNatively(node.abs);
-        // Name the destination honestly. Markdown goes to this plugin's block
-        // editor; a code file goes to whichever plugin claimed the extension
-        // (measured: a linked .ts opens as "code-editor", i.e. Code Files).
-        const primaryTitle = !node.isDir
-          ? node.name.toLowerCase().endsWith('.md')
-            ? '在 Logseq 块编辑器中打开'
-            : text
-              ? native
-                ? '用已安装的编辑器打开（自动创建库内链接）'
-                : '在块编辑器中打开（跨盘，只读）'
-              : '用系统程序打开'
-          : '展开 / 折叠';
+        const linked = this.isLinked(node);
+        // Name the destination honestly, and never promise a vault link the user
+        // did not ask for: opening a file writes nothing to the vault.
+        const primaryTitle = node.isDir
+          ? '展开 / 折叠'
+          : linked
+            ? node.name.toLowerCase().endsWith('.md')
+              ? '在 Logseq 块编辑器中打开（已链接）'
+              : '用已安装的编辑器打开（已链接）'
+            : node.name.toLowerCase().endsWith('.md')
+              ? '在块编辑器中打开'
+              : text
+                ? '在块编辑器中打开'
+                : '用系统程序打开';
         menu.addItem((item) =>
           item
             .setTitle(primaryTitle)
@@ -308,12 +309,14 @@ export class MountPanelView extends ItemView {
               else void this.plugin.openExternalEntry(mount, node);
             }),
         );
-        menu.addItem((item) =>
-          item
-            .setTitle('只读打开（不建链接）')
-            .setIcon('eye' as never)
-            .onClick(() => void this.plugin.openExternalEntry(mount, node, { readOnly: true })),
-        );
+        if (!node.isDir) {
+          menu.addItem((item) =>
+            item
+              .setTitle('只读打开')
+              .setIcon('eye' as never)
+              .onClick(() => void this.plugin.openExternalEntry(mount, node, { readOnly: true })),
+          );
+        }
         menu.addSeparator();
 
         // ---- the link-into-vault action ----

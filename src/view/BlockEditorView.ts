@@ -6,7 +6,7 @@
  * TextFileView requestSave/save — files stay 100% standard markdown).
  */
 
-import { MarkdownRenderer, TFile, TextFileView, parseYaml, stringifyYaml, type TAbstractFile, type ViewState, type ViewStateResult, type WorkspaceLeaf } from 'obsidian';
+import { MarkdownRenderer, Notice, TFile, TextFileView, parseYaml, stringifyYaml, type TAbstractFile, type ViewState, type ViewStateResult, type WorkspaceLeaf } from 'obsidian';
 import { EditorView } from '@codemirror/view';
 import type { CompletionSource } from '@codemirror/autocomplete';
 import type LogseqEditorPlugin from '../main';
@@ -64,6 +64,7 @@ import { applySupertags, normalizeTag, removeSupertags } from '../features/super
 import { collectBlockTags, removeTagFromText } from '../features/supertagText';
 import { mountCodeEditor, parseCodeFence, type MountedCodeEditor } from '../blocks/codeBlockEdit';
 import { unwatchGuideLayout, watchGuideLayout } from '../blocks/guideLayout';
+import { readExternalText, writeExternalText } from '../features/extFs';
 
 export const VIEW_TYPE_BLOCK_EDITOR = 'logseq-block-editor';
 
@@ -144,8 +145,10 @@ export class BlockEditorView extends TextFileView {
     return VIEW_TYPE_BLOCK_EDITOR;
   }
   getDisplayText(): string {
+    if (this.isExternal) return this.externalName || '外部文件';
     return this.file?.basename ?? 'Block editor';
   }
+
   getIcon(): string {
     return 'list-tree';
   }
@@ -253,6 +256,140 @@ export class BlockEditorView extends TextFileView {
     return false;
   }
 
+  // External-file mode --------------------------------------------------------
+  //
+  // A file that lives OUTSIDE the vault. Measured constraints that shape this:
+  //   - `vault.adapter` anchors every path to the vault root, so reading or
+  //     writing an absolute path through it fails (ENOENT on a doubled path);
+  //   - a synthetic TFile is not usable: `openFile` resolves and then mounts the
+  //     "empty" placeholder, because the open flow validates against the index.
+  // What DOES work (measured) is registering a TextFileView subclass and letting
+  // it do its own IO — a `probe-external` leaf mounted with no file at all.
+  //
+  // So the content flows through getViewData/setViewData exactly as for a vault
+  // file, and only the two places that touch the filesystem are redirected to
+  // Node fs. Everything keyed on a vault path (backlinks, page references,
+  // backups, the operation log) has no meaning here and is skipped.
+  /** Absolute path on disk, or '' when this view holds a normal vault file. */
+  externalAbs = '';
+
+  /** True while this view is showing a file from outside the vault. */
+  get isExternal(): boolean {
+    return this.externalAbs !== '';
+  }
+
+  /**
+   * Point this view at an external file and show it.
+   *
+   * `leaf` must ALREADY be showing a block editor. A `TextFileView` only mounts
+   * with a file attached (measured: setViewState on the type with no TFile gives
+   * the "empty" placeholder), so the view is obtained by opening any vault file
+   * first and then pushing the external content in through setViewData — the
+   * identical parse/render path a vault file takes.
+   *
+   * Vault-only chrome is torn down here: backlinks, page references and the
+   * supertag section are all keyed on an indexed path this file does not have,
+   * so leaving them would show the PREVIOUS file's results under the new
+   * content.
+   */
+  async openExternalFile(abs: string, name: string): Promise<void> {
+    const data = readExternalText(abs);
+    // Release the seed note's page props before retargeting, so the registry
+    // entry that pointed at the borrowed file goes away with it.
+    clearLogseqPageProps(this.file?.path ?? '');
+    // NOTE: `this.file` deliberately KEEPS the seed note. Nulling it looks
+    // tidier but breaks Obsidian: the TextFileView save path dereferences
+    // `file.saving` (measured: "Cannot read properties of null"), and the
+    // framework treats a file-less TextFileView as a broken view. Everything
+    // that must not treat the seed as the current file checks `isExternal`
+    // first — there are ~47 such call sites and they all use `this.file?.path`.
+    this.externalAbs = abs;
+    this.externalName = name;
+    // Baseline for "has this actually been edited?" — without it, merely opening
+    // an outside file would rewrite it in our formatting on the first save.
+    this.externalDiskData = data;
+    this.teardownNativePropsEditor();
+    this.setViewData(data, false);
+    // A page banner that says "outside the vault" is the honest header, and it
+    // replaces the vault-only sections with something true.
+    this.renderExternalBanner();
+    this.renderBreadcrumb();
+    // Obsidian caches a leaf's tab text when the view loads, so the retargeted
+    // tab keeps showing the seed note's name until the header is re-read.
+    // Measured: updateHeader() fixes it; re-calling setViewState instead drops
+    // the view to the "empty" placeholder, so it is not an option.
+    // It is absent from obsidian's type definitions but present at runtime.
+    (this.leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
+  }
+
+  /** Banner shown instead of the vault-only backlinks / references sections. */
+  private renderExternalBanner(): void {
+    this.refsHostEl.empty();
+    const box = this.refsHostEl.createDiv({ cls: 'logseq-external-note' });
+    box.createDiv({ cls: 'logseq-external-note-title', text: `${this.externalName}（库外文件）` });
+    box.createDiv({ cls: 'logseq-external-note-path', text: this.externalAbs });
+    box.createDiv({
+      cls: 'logseq-external-note-hint',
+      text: '此文件不在库内。编辑直接写回原文件，反链与块引用不适用于它。',
+    });
+  }
+
+  /** File name for the tab and breadcrumb; the basename for a vault file. */
+  private externalName = '';
+
+  /**
+   * Persist the current content.
+   *
+   * For a vault file this is Obsidian's own TextFileView save, reached through
+   * the native debounced `requestSave` so the existing pipeline is untouched.
+   * For an external one there is no index entry and no adapter path that
+   * resolves, so the bytes go straight to the file the user actually has open —
+   * which is also the only place they can go, since a mount never copies
+   * anything into the vault.
+   */
+  /**
+   * The outside file's bytes as last read or written, tracked separately from
+   * `lastDiskData`.
+   *
+   * `lastDiskData` cannot serve here: `getViewData` overwrites it with the
+   * serializer's output on every read, so comparing the serialization against it
+   * always reports a change. The serializer also normalizes blank lines (a
+   * documented choice — see the changelog entry on verbatim regions), so without
+   * this baseline merely opening and closing an outside file would rewrite it in
+   * our formatting.
+   */
+  private externalDiskData: string | null = null;
+
+  /**
+   * Persist the current content.
+   *
+   * For a vault file this is Obsidian's own TextFileView save, where `force`
+   * means "write even if Obsidian does not consider the file dirty".
+   *
+   * For an external one there is no index entry and no adapter path that
+   * resolves, so the bytes go straight to the file the user actually has open —
+   * the only place they can go, since a mount never copies anything into the
+   * vault. `force` does NOT mean "rewrite regardless of content" there: the
+   * serializer normalizes blank lines (a documented choice — see the changelog
+   * entry on verbatim regions), so a forced write would silently reformat
+   * outside files the user only ever opened. The comparison below is the real
+   * guard, and it applies either way.
+   */
+  async save(force = false): Promise<void> {
+    if (!this.isExternal) {
+      await super.save(force);
+      return;
+    }
+    const data = this.serializeCurrent();
+    if (data === this.externalDiskData) return;
+    try {
+      writeExternalText(this.externalAbs, data);
+      this.externalDiskData = data;
+    } catch (e) {
+      new Notice(`保存失败：${String(e).slice(0, 120)}`);
+    }
+  }
+
   // TextFileView data interface -------------------------------------------------
 
   getViewData(): string {
@@ -296,6 +433,9 @@ export class BlockEditorView extends TextFileView {
     // JUST loaded (and whose leaf still points at that file). Schedule one
     // deferred re-read: if the leaf still owns a file and the model is empty
     // at next tick, reload it from disk (self-heal for the stray clear).
+    // An external file has no vault entry to re-read, and its content is the
+    // user's own — dropping it here would blank the tab.
+    if (this.isExternal) return;
     const f = this.file;
     if (f) {
       window.setTimeout(() => {
@@ -311,6 +451,13 @@ export class BlockEditorView extends TextFileView {
   }
 
   async onLoadFile(file: import('obsidian').TFile): Promise<void> {
+    // An external file never comes through here — it was pushed in with
+    // setViewData — so there is no vault path to read and no page references
+    // to resolve. Leave the model alone.
+    if (this.isExternal) {
+      this.render();
+      return;
+    }
     await super.onLoadFile(file);
     // Obsidian's openLinkText reopen path can fire a stray clear() AFTER
     // setViewData populated the doc (observed when reopening the previous
@@ -346,7 +493,15 @@ export class BlockEditorView extends TextFileView {
   async onUnloadFile(file: import('obsidian').TFile): Promise<void> {
     this.commitFocusedText();
     this.teardownNativePropsEditor();
-    await this.save(true);
+    // Write the outside file back before letting go of it, then clear the
+    // external state: this view is about to be retargeted at a vault note, and
+    // a stale externalAbs would route the next save to the wrong file.
+    // Deliberately not forced: an unedited external file must not be rewritten
+    // in our formatting just because the tab was closed.
+    await this.save();
+    this.externalAbs = '';
+    this.externalName = '';
+    this.externalDiskData = null;
     return super.onUnloadFile(file);
   }
 
@@ -360,6 +515,17 @@ export class BlockEditorView extends TextFileView {
 
   getState(): Record<string, unknown> {
     const s = { ...super.getState() } as unknown as ViewState;
+    // While an outside file is shown, the view state must not name the borrowed
+    // seed note: `workspace.getActiveFile()` reads `state.file`, so leaving it
+    // there makes Obsidian report a note the user never opened as "the file you
+    // are editing", and the tab breadcrumb/status follow suit. Measured: this is
+    // the only place that state is read from — patching the leaf's state object
+    // directly has no effect, because the framework rebuilds it from here.
+    if (this.isExternal && s.state) {
+      const next = { ...(s.state as Record<string, unknown>) };
+      delete next.file;
+      s.state = next;
+    }
     const zid = zoomId(this.zoomedBlock);
     if (zid) s.state = { ...(s.state ?? {}), zoomedBlockId: zid };
     return s as unknown as Record<string, unknown>;
@@ -470,7 +636,10 @@ export class BlockEditorView extends TextFileView {
     const el = this.breadcrumbEl;
     if (!el) return;
     el.empty();
-    const entries = breadcrumbFor(this.doc, this.zoomedBlock, this.file?.basename ?? '');
+    // An external file has no vault path, so name it from the mount instead —
+    // otherwise the crumb would keep showing whatever note was open before.
+    const label = this.isExternal ? this.externalName : this.file?.basename ?? '';
+    const entries = breadcrumbFor(this.doc, this.zoomedBlock, label);
     let hasZoom = false;
     entries.forEach((e, i) => {
       if (i > 0) el.createEl('span', { cls: 'bc-sep', text: '›' });
@@ -2483,11 +2652,16 @@ ${content}`;
   }
 
   private markDirty(): void {
-    logOp(this.plugin, 'blocks.edit', this.file?.path ?? '', 'ok');
-    // First plugin-session write to this file: snapshot the on-disk original
-    // (fire-and-forget; the debounced save gives it time to land).
-    const f = this.file;
-    if (f) void this.plugin.backups.ensureSessionBackup(f);
+    // While an outside file is shown, the borrowed seed note is NOT what is being
+    // edited. Logging the edit against it, and snapshotting the seed as a
+    // "backup", would both misattribute the change and litter the vault with a
+    // copy of a note the user never touched. The external save path writes to
+    // the real file directly and logs under its own operation.
+    if (!this.isExternal) {
+      logOp(this.plugin, 'blocks.edit', this.file?.path ?? '', 'ok');
+      const f = this.file;
+      if (f) void this.plugin.backups.ensureSessionBackup(f);
+    }
     this.requestSave(); // native: sets dirty + debounced save (2s)
   }
 
