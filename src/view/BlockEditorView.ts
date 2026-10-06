@@ -64,8 +64,9 @@ import { applySupertags, normalizeTag, removeSupertags } from '../features/super
 import { collectBlockTags, removeTagFromText } from '../features/supertagText';
 import { mountCodeEditor, parseCodeFence, type MountedCodeEditor } from '../blocks/codeBlockEdit';
 import { unwatchGuideLayout, watchGuideLayout } from '../blocks/guideLayout';
-import { readExternalText, writeExternalText } from '../features/extFs';
+import { MOUNT_FOLDER, readExternalText, writeExternalText } from '../features/extFs';
 import { relativeDisplayPath } from '../features/codeFileKind';
+import { setLeafTitle } from '../features/leafTitle';
 
 export const VIEW_TYPE_BLOCK_EDITOR = 'logseq-block-editor';
 
@@ -298,12 +299,20 @@ export class BlockEditorView extends TextFileView {
     // Release the seed note's page props before retargeting, so the registry
     // entry that pointed at the borrowed file goes away with it.
     clearLogseqPageProps(this.file?.path ?? '');
-    // NOTE: `this.file` deliberately KEEPS the seed note. Nulling it looks
-    // tidier but breaks Obsidian: the TextFileView save path dereferences
-    // `file.saving` (measured: "Cannot read properties of null"), and the
-    // framework treats a file-less TextFileView as a broken view. Everything
-    // that must not treat the seed as the current file checks `isExternal`
-    // first — there are ~47 such call sites and they all use `this.file?.path`.
+    // NOTE: `this.file` cannot simply be nulled — Obsidian's TextFileView save path
+    // dereferences `file.saving` (measured: "Cannot read properties of null").
+    // But leaving it on the SEED note is wrong too: third-party views label
+    // themselves from `view.file.basename` — the Breadcrumb Nav plugin opens its
+    // renderer with `let n = e.file; ... n.basename` — so its bar kept naming
+    // 第12章复现3 above an AGENTS.md (reported with a screenshot). Fixing only our
+    // own breadcrumb changed nothing visible, because that plugin's stylesheet
+    // hides ours (`.block-editor-breadcrumb { display: none !important; }`).
+    //
+    // So the field is REPLACED with a stand-in carrying the external file's name.
+    // Measured: the third-party bar follows it, saving still works (twice in a
+    // row), and the save lands on the real external file. Nothing writes through
+    // this object — saves go to Node fs — so the vault's note is never touched.
+    this.file = this.mintExternalFileHandle(name);
     this.externalAbs = abs;
     this.externalName = name;
     this.externalDisplayPath = relativeDisplayPath(abs, mountPath, name);
@@ -322,6 +331,84 @@ export class BlockEditorView extends TextFileView {
     // the view to the "empty" placeholder, so it is not an option.
     // It is absent from obsidian's type definitions but present at runtime.
     (this.leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
+    this.syncLeafTitle();
+    this.refreshBreadcrumbPlugins();
+  }
+
+  /**
+   * Ask the Breadcrumb Nav plugin to re-render, when it is installed.
+   *
+   * It is a third-party plugin that labels itself from `view.file`, so after a
+   * retarget it has to be told to look again — it only re-renders on its own
+   * triggers (file switch, heading focus), none of which happened here. Its
+   * `refresh` is a public method on the instance, so this is a documented call
+   * rather than a guess; if the plugin is absent or renamed, nothing happens.
+   */
+  private refreshBreadcrumbPlugins(): void {
+    if (!this.isExternal) return;
+    const plugins = (this.app as unknown as {
+      plugins?: { plugins?: Record<string, { refresh?: () => void }> };
+    }).plugins?.plugins;
+    for (const id of ['breadcrumb-nav', 'obsidian-breadcrumb-nav']) {
+      const p = plugins?.[id];
+      if (typeof p?.refresh === 'function') {
+        try {
+          p.refresh();
+        } catch {
+          /* a third-party failure must not block opening the file */
+        }
+      }
+    }
+  }
+
+  /**
+   * A TFile-shaped stand-in naming an outside file.
+   *
+   * Minted from the prototype of a real TFile so `instanceof` and the property
+   * observers behave, and never registered with the vault: this is a label, not
+   * a file. Nothing writes through it (saves go to Node fs), so it cannot damage
+   * the note it was borrowed from, and `getFileCache` on its path simply returns
+   * nothing — which is correct, since the file is not in the vault.
+   */
+  private mintExternalFileHandle(name: string): TFile {
+    const base = this.app.vault.getFiles()[0];
+    const proto = (base ?? ({} as TFile)) as TFile;
+    const handle = Object.create(Object.getPrototypeOf(proto) as object) as TFile;
+    const ext = name.includes('.') ? name.split('.').pop() ?? '' : '';
+    const stem = ext ? name.slice(0, -(ext.length + 1)) : name;
+    // The path is a label under the mount folder: it is never indexed, but a
+    // third-party view that groups by path will still show something sensible.
+    handle.path = `${MOUNT_FOLDER}/${name}`;
+    handle.name = name;
+    handle.basename = stem;
+    handle.extension = ext;
+    Object.defineProperty(handle, 'stat', {
+      value: { ctime: 0, mtime: 0, size: 0 },
+      configurable: true,
+    });
+    Object.defineProperty(handle, 'parent', { value: null, configurable: true, writable: true });
+    return handle;
+  }
+
+  /**
+   * Write the file's name into the leaf's own `.view-header`.
+   *
+   * updateHeader() only refreshes the TAB; the in-view header keeps the seed
+   * note's name, which is what made a mounted AGENTS.md sit under a heading
+   * that said 第12章复现3 (reported with a screenshot). Measured and ruled out as
+   * fixes: updateHeader(), workspace.updateOptions(), and a resize trigger all
+   * leave it alone; only writing the element changes it.
+   *
+   * The write is stable rather than a one-off: the node survives a re-render and
+   * a tab switch with the text intact (measured), so this does not need to be
+   * repeated on every render.
+   *
+   * The relative path is used, matching the breadcrumb and the mount panel — the
+   * drive-and-folder prefix only pushes the filename out of view.
+   */
+  private syncLeafTitle(): void {
+    if (!this.isExternal) return;
+    setLeafTitle(this.leaf, this.externalDisplayPath || this.externalName);
   }
 
   /** Banner shown instead of the vault-only backlinks / references sections. */
@@ -647,6 +734,7 @@ export class BlockEditorView extends TextFileView {
     if (!this.isExternal) return;
     this.renderExternalBanner();
     this.renderBreadcrumb();
+    this.syncLeafTitle();
   }
 
   private renderBreadcrumb(): void {

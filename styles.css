@@ -3733,9 +3733,11 @@ body.lgp-table-editor-cursor * {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  direction: rtl;
-  text-align: left;
-  flex: 1 1 auto;
+  /* Truncate at the START so the filename stays visible — the useful part. Done
+     by trimming in script (the path is short and mount-relative) rather than
+     with `direction: rtl`, which reorders the characters: it turned
+     ".gitignore" into "gitignore." (measured, from a screenshot). */
+  flex: 0 1 auto;
   min-width: 0;
 }
 .logseq-external-badge {
@@ -3941,14 +3943,3 @@ body.lgp-table-editor-cursor * {
   margin-top: 4px;
 }
 
-/* Banner collapsed by the setting: keep only what is actionable. The path and
-   the badge stay (they cost one line and explain where the file lives), the
-   prose hint goes. */
-.logseq-external-banner.is-compact {
-  padding-top: 2px;
-  padding-bottom: 2px;
-  font-size: var(--font-ui-smaller);
-}
-.logseq-external-banner.is-compact .logseq-external-badge {
-  padding: 0 4px;
-}

@@ -223,9 +223,46 @@ const TEXT_EXTENSIONS = new Set([
   'diff', 'patch', 'lock', 'gitignore', 'npmrc', 'nvmrc', 'editorconfig',
 ]);
 
+/**
+ * Files with no extension that are still plain text, and must therefore not be
+ * handed to the system app as a binary.
+ *
+ * `Dockerfile` is the one that bites: it has no extension, so an extension-keyed
+ * lookup finds nothing and the file gets `isTextMount('') === false` — i.e. a
+ * binary — which meant clicking it silently opened some unrelated program. Same
+ * class of problem as `.gitignore`, one level up.
+ */
+const TEXT_FILENAMES = new Set([
+  'dockerfile', 'makefile', 'rakefile', 'gemfile', 'brewfile', 'procfile',
+  'vagrantfile', 'jenkinsfile', 'cmakelists.txt', 'license', 'notice', 'authors',
+  'readme', 'changelog', 'contributing', 'codeowners', 'keep',
+]);
+
 /** True when the extension is one we can safely open as editable text. */
 export function isTextMount(ext: string): boolean {
   return TEXT_EXTENSIONS.has(ext.toLowerCase());
+}
+
+/**
+ * True when a filename is text, judged by BOTH extension and whole name.
+ *
+ * `ext` alone is not enough: extension-less source files exist and are common
+ * (Dockerfile, Makefile, LICENSE), and treating them as binaries means clicking
+ * one launches an unrelated program instead of opening it.
+ */
+export function isTextFileName(name: string): boolean {
+  const base = (name.split(/[\\/]/).pop() ?? name).toLowerCase();
+  if (TEXT_FILENAMES.has(base)) return true;
+  // A dotfile such as `.gitignore` has no extension either; treat any name that
+  // starts with a dot and carries no other dot as text.
+  if (base.startsWith('.') && !base.slice(1).includes('.')) return true;
+  return isTextMount(extOfName(base));
+}
+
+/** Extension of a bare filename, lowercase, '' when there is none. */
+export function extOfName(base: string): string {
+  const m = /\.([A-Za-z0-9]+)$/.exec(base);
+  return m ? m[1].toLowerCase() : '';
 }
 
 /**

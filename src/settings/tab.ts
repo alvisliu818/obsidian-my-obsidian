@@ -340,14 +340,14 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
     mountActions.addButton((b) => b.setButtonText('重新扫描').onClick(() => this.plugin.refreshMounts()));
 
     new Setting(containerEl)
-      .setName('代码编辑器不换行（横向滚动）')
+      .setName('代码编辑器自动换行')
       .setDesc(
-        '默认长行会自动折行。开启后改为横向滚动而不折行——深层缩进的代码更易读；' +
-          '配置文件和注释里的长文本则更适合保持折行。',
+        '默认开启：长行自动折行，宽度始终适应窗口。关闭后改为横向滚动而不折行，' +
+          '深层缩进的代码更易读。',
       )
       .addToggle((t) =>
-        t.setValue(this.plugin.settings.externalCodeNoWrap === true).onChange(async (v) => {
-          this.plugin.settings.externalCodeNoWrap = v;
+        t.setValue(this.plugin.settings.externalCodeWrap !== false).onChange(async (v) => {
+          this.plugin.settings.externalCodeWrap = v;
           await this.plugin.saveSettings();
           this.plugin.rerenderExternalViews();
         }),
@@ -356,9 +356,9 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('显示库外文件提示栏')
       .setDesc(
-        '在库外文件上方显示「库外」提示栏（含相对路径与保存按钮）。' +
-          '它说明了文件实际在哪里，但会占用一些纵向空间；' +
-          '关闭后文件一样会按原有的自动保存节奏写回原文件。',
+        '在文件顶部显示提示栏（文件名、相对路径、「库外」标记与保存按钮）。' +
+          '关闭后提示栏完全不显示；文件仍按原有的自动保存节奏写回原文件，' +
+          '随时可按 Ctrl+S 立即保存。',
       )
       .addToggle((t) =>
         t.setValue(this.plugin.settings.externalBanner !== false).onChange(async (v) => {

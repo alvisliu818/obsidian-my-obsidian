@@ -187,15 +187,17 @@ export interface BlockEditorSettings {
    */
   externalMounts: ExternalMount[];
   /**
-   * Turn OFF soft wrapping in the external code editor, giving real horizontal
-   * scrolling instead.
+   * Soft-wrap long lines in the external code editor. On by default: config
+   * files and comments read better wrapped, and "点开就是换行" is what people
+   * expect from a switch labelled 换行.
    *
-   * Named for the action rather than the mode, because the two are easy to
-   * invert: an earlier `externalCodeWrap: true` was wired to NOT add
-   * lineWrapping, so "wrap on" produced no wrapping. Default off (= wrapping on),
-   * which reads better for config files and comments.
+   * Turn it off for real horizontal scrolling, which deeply indented code
+   * prefers. Named for the MODE, and wired so true = wrapping, deliberately: an
+   * earlier version named it `externalCodeWrap: true` but did NOT add
+   * lineWrapping, so the switch read backwards and the label had to be
+   * re-explained in the description.
    */
-  externalCodeNoWrap: boolean;
+  externalCodeWrap: boolean;
   /**
    * Show the banner above an external file's content (the "库外" strip with the
    * path and the Save button). It is honest about where the file lives, but it
@@ -295,7 +297,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   foldEnabled: true,
   hiddenProps: 'collapsed',
   externalMounts: [],
-  externalCodeNoWrap: false,
+  externalCodeWrap: true,
   externalBanner: true,
 };
 

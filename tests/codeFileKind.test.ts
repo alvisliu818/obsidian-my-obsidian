@@ -12,6 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { isMarkdownFile, relativeDisplayPath } from '../src/features/codeFileKind';
+import { isTextFileName } from '../src/features/mountFilter';
 
 describe('isMarkdownFile — the only format that opens in the block editor', () => {
   it('accepts the markdown extensions', () => {
@@ -78,5 +79,41 @@ describe('relativeDisplayPath — the header shows a name, not a Windows path', 
 
   it('falls back to the basename when there is no filename at all', () => {
     expect(relativeDisplayPath('D:\\notes', '', '')).toBe('notes');
+  });
+});
+describe('isTextFileName — extension-less files are text, not binaries', () => {
+  it('recognises Dockerfile and its friends', () => {
+    // `Dockerfile` was handed to the system app as a binary (reported with a
+    // screenshot): an extension-only lookup finds nothing, and "nothing" read
+    // as "not text".
+    for (const n of ['Dockerfile', 'dockerfile', 'Makefile', 'Rakefile', 'Gemfile', 'LICENSE', 'README']) {
+      expect(isTextFileName(n)).toBe(true);
+    }
+  });
+
+  it('recognises extension-less dotfiles as text', () => {
+    for (const n of ['.gitignore', '.env', '.editorconfig', '.npmrc']) {
+      expect(isTextFileName(n)).toBe(true);
+    }
+  });
+
+  it('uses the last path segment', () => {
+    expect(isTextFileName('some.md/inner/Dockerfile')).toBe(true);
+    // A folder named Dockerfile must not make its contents binary — routing
+    // looks at the file itself.
+    expect(isTextFileName('Dockerfile/notes.md')).toBe(true);
+    expect(isTextFileName('src/a.exe/Dockerfile')).toBe(true);
+  });
+
+  it('still rejects real binaries', () => {
+    for (const n of ['a.exe', 'a.png', 'a.zip', 'a.mp4', 'a.pdf', 'app.so', 'a.dll']) {
+      expect(isTextFileName(n)).toBe(false);
+    }
+  });
+
+  it('accepts ordinary source and config by extension', () => {
+    for (const n of ['a.ts', 'a.py', 'a.json', 'a.yaml', 'a.md', 'a.txt', 'a.html']) {
+      expect(isTextFileName(n)).toBe(true);
+    }
   });
 });

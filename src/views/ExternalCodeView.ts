@@ -30,6 +30,7 @@ import { readExternalText, writeExternalText } from '../features/extFs';
 import { logOp } from '../features/logger';
 import type LogseqEditorPlugin from '../main';
 import { relativeDisplayPath } from '../features/codeFileKind';
+import { setLeafTitle } from '../features/leafTitle';
 
 export { relativeDisplayPath };
 
@@ -180,22 +181,22 @@ export class ExternalCodeView extends ItemView {
     contentEl.empty();
     contentEl.addClass('logseq-external-code-view');
 
-    const banner = contentEl.createDiv({ cls: 'logseq-external-banner' });
-    if (!this.plugin.settings.externalBanner) banner.addClass('is-compact');
-    banner.createSpan({ cls: 'logseq-external-banner-text', text: this.fileName });
-    // Relative to the mount root — that is the name the user recognises. The
-    // absolute path stays one hover away, since a linked file and an unlinked
-    // one resolve to different places and that is worth being able to check.
-    const shown = this.displayPath || this.fileName;
-    const pathEl = banner.createSpan({ cls: 'logseq-external-banner-path', text: shown });
-    pathEl.setAttribute('title', this.abs);
-    banner.createSpan({ cls: 'logseq-external-badge', text: '库外' });
-    // With the banner collapsed the hints would crowd a single row, so only the
-    // save action survives — the file still autosaves on the usual debounce.
-    if (!this.plugin.settings.externalBanner) {
-      const saveBtn = banner.createEl('button', { cls: 'logseq-external-save', text: '保存' });
-      saveBtn.addEventListener('click', () => void this.flush(true));
-    } else {
+    // The banner is optional and, when hidden, GONE — not compacted. Keeping a
+    // one-line version still left a strip at the top, which is exactly what
+    // turning the setting off is meant to remove. The file still autosaves on
+    // the usual debounce, so nothing is lost by not showing it.
+    if (this.plugin.settings.externalBanner) {
+      const banner = contentEl.createDiv({ cls: 'logseq-external-banner' });
+      banner.createSpan({ cls: 'logseq-external-banner-text', text: this.fileName });
+      // Relative to the mount root — that is the name the user recognises. The
+      // absolute path stays one hover away, since a linked file and an unlinked
+      // one resolve to different places and that is worth being able to check.
+      const pathEl = banner.createSpan({
+        cls: 'logseq-external-banner-path',
+        text: this.displayPath || this.fileName,
+      });
+      pathEl.setAttribute('title', this.abs);
+      banner.createSpan({ cls: 'logseq-external-badge', text: '库外' });
       const status = banner.createSpan({ cls: 'logseq-external-hint', text: '与原文件实时同步' });
       status.setAttribute('title', '保存时写回原文件');
       const saveBtn = banner.createEl('button', { cls: 'logseq-external-save', text: '保存' });
@@ -236,10 +237,13 @@ export class ExternalCodeView extends ItemView {
       highlightSelectionMatches(),
       search(),
       syntaxHighlighting(highlightStyle, { fallback: true }),
-      // Wrapping is the default; the setting asks for the opposite — real
-      // horizontal scrolling, which deeply indented code prefers.
-      ...(this.plugin.settings.externalCodeNoWrap ? [] : [EditorView.lineWrapping]),
+      // true = wrap (the default, and what the switch label says).
+      ...(this.plugin.settings.externalCodeWrap === false ? [] : [EditorView.lineWrapping]),
       keymap.of([
+        // Ctrl/Cmd+S saves immediately. The banner's save button is the visible
+        // route, but the banner can be switched off entirely, and a file the user
+        // is editing should never depend on a setting to be saveable.
+        { key: 'Mod-s', run: () => { void this.flush(true); return true; } },
         ...closeBracketsKeymap,
         ...defaultKeymap,
         // The ambient declaration types this as unknown[]; the runtime value is
@@ -265,8 +269,10 @@ export class ExternalCodeView extends ItemView {
       parent: host,
     });
     this.editor.focus();
-    void name;
-    void status;
+    // The leaf's own view header caches the name it was mounted with; on a fresh
+    // mount that is nothing, on a re-mount it is the previous file. Writing it
+    // here covers both, and the mount-relative path is what the user recognises.
+    setLeafTitle(this.leaf, this.displayPath || this.fileName);
   }
 
   /**

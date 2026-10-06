@@ -20,7 +20,7 @@ import {
 } from './types';
 import { mountDisplayName } from './types';
 import { isMarkdownFile } from './features/codeFileKind';
-import { isTextMount } from './features/mountFilter';
+import { isTextFileName } from './features/mountFilter';
 import { LogseqEditorSettingTab } from './settings/tab';
 import { BlockIndex } from './index/blockIndex';
 import {
@@ -43,7 +43,6 @@ import { ExternalFileView, VIEW_TYPE_EXTERNAL_FILE } from './views/ExternalFileV
 import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE } from './views/ExternalCodeView';
 import {
   exists,
-  extOf,
   linkTargetFor,
   linkVaultPath,
   readExternalText,
@@ -1202,8 +1201,11 @@ export default class LogseqEditorPlugin extends Plugin {
     if (isMarkdownFile(node.name)) {
       if (await this.openInBlockEditor(mount, node)) return;
     } else {
-      // Binaries have no text to edit; hand them to the system as before.
-      if (!isTextMount(extOf(node.name))) {
+      // Real binaries have nothing to edit, so hand them to the system. Judged
+      // by whole name as well as extension: `Dockerfile` and friends have no
+      // extension and were being treated as binary, which sent them off to some
+      // unrelated program instead of opening.
+      if (!isTextFileName(node.name)) {
         this.openWithSystem(node.abs);
         return;
       }
