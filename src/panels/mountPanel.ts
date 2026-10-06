@@ -40,6 +40,7 @@ import {
   scanExternal,
   linkVaultPath,
 } from '../features/extFs';
+import { iconForEntry } from '../features/iconTheme';
 
 export const VIEW_TYPE_MOUNT_PANEL = 'logseq-mount-panel';
 
@@ -169,8 +170,19 @@ export class MountPanelView extends ItemView {
     const caret = head.createSpan({ cls: 'logseq-mount-caret' });
     const state = this.scan(mount);
     caret.textContent = state.open.has('') ? '▾' : '▸';
-    head.createSpan({ cls: 'logseq-mount-icon', text: '📁' });
-    head.createSpan({ cls: 'logseq-mount-name', text: mountDisplayName(mount) });
+    // The mount root is a folder too, so it gets the same treatment.
+    const headLabel = mountDisplayName(mount);
+    head.appendChild(
+      iconForEntry(this.plugin.app, {
+        name: headLabel,
+        isDir: true,
+        mountPath: mount.path,
+        rel: '',
+        collapsed: !state.open.has(''),
+        fallback: '📁',
+      }),
+    );
+    head.createSpan({ cls: 'logseq-mount-name', text: headLabel });
     head.addEventListener('click', () => {
       if (state.open.has('')) state.open.delete('');
       else state.open.add('');
@@ -208,7 +220,16 @@ export class MountPanelView extends ItemView {
     if (node.isDir) {
       const caret = row.createSpan({ cls: 'logseq-mount-caret' });
       caret.textContent = isOpen ? '▾' : '▸';
-      row.createSpan({ cls: 'logseq-mount-icon', text: '📁' });
+      row.appendChild(
+        iconForEntry(this.plugin.app, {
+          name: node.name,
+          isDir: true,
+          mountPath: mount.path,
+          rel: node.rel,
+          collapsed: !isOpen,
+          fallback: '📁',
+        }),
+      );
       row.createSpan({ cls: 'logseq-mount-name', text: node.name });
       if (node.empty) row.createSpan({ cls: 'logseq-mount-flag', text: '空' });
       row.addEventListener('click', () => {
@@ -223,7 +244,19 @@ export class MountPanelView extends ItemView {
 
     const ext = extOf(node.name);
     const text = isTextMount(ext);
-    row.createSpan({ cls: 'logseq-mount-icon', text: text ? '📄' : '🔒' });
+    // Files get the icon theme's own artwork when it is installed, so a mounted
+    // tree shows the same icons the vault's files do. Folders keep a generic
+    // marker: the theme resolves folder icons by vault path, which an
+    // out-of-vault folder does not have.
+    row.appendChild(
+      iconForEntry(this.plugin.app, {
+        name: node.name,
+        isDir: false,
+        mountPath: mount.path,
+        rel: node.rel,
+        fallback: text ? '📄' : '🔒',
+      }),
+    );
     row.createSpan({ cls: 'logseq-mount-name', text: node.name });
     if (this.isLinked(node)) row.createSpan({ cls: 'logseq-mount-flag is-linked', text: '已链接' });
     else if (!text) row.createSpan({ cls: 'logseq-mount-flag', text: ext || '二进制' });
@@ -253,20 +286,22 @@ export class MountPanelView extends ItemView {
 
       if (node) {
         const text = !node.isDir && isTextMount(extOf(node.name));
-        // A same-volume markdown file is linked automatically on click, so the
-        // primary action really does open the Logseq block editor.
-        const autoOpens = !node.isDir && this.plugin.canOpenNatively(node.abs);
+        const native = this.plugin.canOpenNatively(node.abs);
+        // Name the destination honestly. Markdown goes to this plugin's block
+        // editor; a code file goes to whichever plugin claimed the extension
+        // (measured: a linked .ts opens as "code-editor", i.e. Code Files).
+        const primaryTitle = !node.isDir
+          ? node.name.toLowerCase().endsWith('.md')
+            ? '在 Logseq 块编辑器中打开'
+            : text
+              ? native
+                ? '用已安装的编辑器打开（自动创建库内链接）'
+                : '在块编辑器中打开（跨盘，只读）'
+              : '用系统程序打开'
+          : '展开 / 折叠';
         menu.addItem((item) =>
           item
-            .setTitle(
-              node.isDir
-                ? '展开 / 折叠'
-                : autoOpens
-                  ? '在 Logseq 块编辑器中打开'
-                  : text
-                    ? '在块编辑器中打开（跨盘，自动创建库内链接）'
-                    : '用系统程序打开',
-            )
+            .setTitle(primaryTitle)
             .setIcon('file-text' as never)
             .onClick(() => {
               if (node.isDir) this.toggleNode(mount, node.rel);

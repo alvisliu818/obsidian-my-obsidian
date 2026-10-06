@@ -1165,11 +1165,15 @@ export default class LogseqEditorPlugin extends Plugin {
       await this.openExternalInShimView(mount, node, { readOnly: true });
       return;
     }
-    // Markdown belongs in the Logseq block editor. Getting it there means giving
-    // the vault a real path to the file — a synthetic TFile does NOT work
-    // (measured: `openFile` resolves, then mounts the "empty" placeholder).
-    // So link it in and open that. The link is a hard link, i.e. the SAME bytes,
-    // not a copy: the file on disk stays the single source of truth.
+    // A real vault path is what unlocks the user's OWN editor for the file:
+    // markdown lands in this plugin's block editor (take-over), and a code file
+    // lands in whatever claimed that extension — measured: a linked .ts opens as
+    // viewType "code-editor", i.e. Code Files takes it. Neither works without
+    // the link, because Obsidian cannot open a path the vault has never indexed
+    // and a synthetic TFile degrades to the empty view.
+    //
+    // The link is a hard link — the SAME bytes under a second name, not a copy —
+    // so the file on disk stays the single source of truth.
     if (this.canOpenNatively(node.abs)) {
       const ok = await this.ensureLinked(node);
       if (ok) {

@@ -3644,6 +3644,23 @@ body.lgp-table-editor-cursor * {
   opacity: 0.8;
   flex: 0 0 auto;
 }
+/* When Material Icon Theme supplies the artwork it also brings its own sizing
+   (.mfi-icon is a 16x16 flex box and it styles the inner svg), so the row only
+   has to line up with the surrounding text. */
+.logseq-mount-icon.mfi-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-right: 4px;
+  opacity: 1;
+}
+.logseq-mount-icon.mfi-icon svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
 .logseq-mount-name {
   overflow: hidden;
   text-overflow: ellipsis;

@@ -13,6 +13,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
   - **Right-click any entry to link it into the vault** (or unlink it). Folders become directory junctions, which work across drives; single files become hard links, so a file on another drive cannot be linked and falls back to a read-only block view.
   - Unlinking removes only the link. The external file and everything in it is untouched.
   - Other file types (images, PDFs, binaries) open with your system app, and every entry has a read-only open that never writes to your vault.
+  - **Icons come from your icon theme.** If you use Material Icon Theme, mounted files and folders show the same artwork your vault's own files do — a `.ts` gets the TypeScript glyph, a source folder gets the source folder icon. Without an icon theme, rows fall back to a plain marker.
+  - **Your other editor plugins still apply.** A mounted code file opens in whichever plugin claimed that extension — Code Files, for instance — because the file is a real vault path by the time it opens. A mounted `.md` opens in this plugin's block editor.
   - Exclude wins over include; an empty include keeps everything. Folders are exempt from `include` (filtering them would orphan the files inside), and an excluded pattern also matches a whole path segment, so `archive` hides that folder wherever it sits.
   - Add mounts from **Settings → 外部挂载**, or with the *Open the mount panel* / *Mount an external folder* commands. An invalid regular expression is reported in the dialog instead of silently showing everything.
 
