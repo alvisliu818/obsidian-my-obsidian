@@ -31,8 +31,8 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     new Setting(containerEl)
-      .setName('Take over markdown files')
-      .setDesc('Open all .md files with the Logseq-style block editor by default. You can always switch back to the native editor per file.')
+      .setName('接管 Markdown 文件')
+      .setDesc('默认用 Logseq 式块编辑器打开所有 .md 文件。单个文件随时可以切回原生编辑器。')
       .addToggle((t) =>
         t.setValue(this.plugin.settings.takeOverByDefault).onChange(async (v) => {
           this.plugin.settings.takeOverByDefault = v;
@@ -43,13 +43,11 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
 
     if (this.plugin.settings.takeOverByDefault) {
       new Setting(containerEl)
-        .setName('Take-over scope')
-        .setDesc(
-          'Which files open with the block editor by default: every markdown file, or only files inside the folders listed below.',
-        )
+        .setName('接管范围')
+        .setDesc('哪些文件默认用块编辑器打开：全部 Markdown 文件，或仅限下面列出的文件夹。')
         .addDropdown((d) =>
           d
-            .addOptions({ all: 'All files (except exclusions)', folders: 'Only in specific folders' })
+            .addOptions({ all: '全部文件（排除项除外）', folders: '仅指定文件夹' })
             .setValue(this.plugin.settings.scopeMode)
             .onChange(async (v) => {
               this.plugin.settings.scopeMode = v as ScopeMode;
@@ -61,9 +59,9 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
 
     if (this.plugin.settings.takeOverByDefault && this.plugin.settings.scopeMode === 'folders') {
       new Setting(containerEl)
-        .setName('Included folders')
+        .setName('包含的文件夹')
         .setDesc(
-          'Comma-separated folder paths where .md files open with the block editor (e.g. "journals, projects/notes"). Files outside these folders keep the native editor.',
+          '以逗号分隔的文件夹路径，其中的 .md 文件用块编辑器打开（例如 "journals, projects/notes"）。这些文件夹之外的文件仍使用原生编辑器。',
         )
         .addText((t) =>
           t
@@ -78,8 +76,8 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
 
     if (this.plugin.settings.takeOverByDefault && this.plugin.settings.scopeMode === 'all') {
       new Setting(containerEl)
-        .setName('Excluded folders')
-        .setDesc('Comma-separated folder paths whose files keep opening with the native editor (e.g. "templates, attachments/notes").')
+        .setName('排除的文件夹')
+        .setDesc('以逗号分隔的文件夹路径，其中的文件仍使用原生编辑器打开（例如 "templates, attachments/notes"）。')
         .addText((t) =>
           t
             .setPlaceholder('folder1, folder2')
@@ -93,13 +91,14 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
 
     // ---------- Page properties editor ----------
     new Setting(containerEl)
-      .setName('Page properties editor')
+      .setName('页面属性编辑器')
       .setDesc(
-        'How the page-properties block (the file-top key:: value lines, or frontmatter) is edited inside the block editor. "Native (Obsidian properties)" mounts Obsidian\'s own properties UI — with its property type widgets and the property plugins you have installed. The file format never changes either way.',
+        '页面属性块（文件开头的 key:: value 行，或 frontmatter）在块编辑器里如何编辑。"原生（Obsidian 属性）"会挂载 Obsidian 自带的属性界面，' +
+          '带有它的属性类型控件和你已安装的属性插件。无论选哪种，文件格式都不会变。',
       )
       .addDropdown((d) =>
         d
-          .addOptions({ logseq: 'Logseq (key:: value text)', native: 'Native (Obsidian properties)' })
+          .addOptions({ logseq: 'Logseq（key:: value 文本）', native: '原生（Obsidian 属性）' })
           .setValue(this.plugin.settings.pagePropsEditor)
           .onChange(async (v) => {
             this.plugin.settings.pagePropsEditor = v as PagePropsEditor;
@@ -109,19 +108,20 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
 
     // ---------- Shortcuts ----------
-    containerEl.createEl('h3', { text: 'Shortcuts' });
+    containerEl.createEl('h3', { text: '快捷键' });
 
     new Setting(containerEl)
-      .setName('Logseq shortcuts')
+      .setName('Logseq 快捷键')
       .setDesc(
-        'Master switch for the Logseq-specific shortcuts below. "All" keeps the stock Logseq bindings; "None" hands every one of them back to Obsidian/CodeMirror, so the block editor edits like a plain text editor. Individual groups below can then be re-enabled one by one. This only affects the block editor — the native Obsidian editor always uses Obsidian shortcuts.',
+        '下面这些 Logseq 专属快捷键的总开关。"全部"保留 Logseq 的默认绑定；"无"把它们全部交还给 Obsidian/CodeMirror，' +
+          '块编辑器就像纯文本编辑器一样工作。之后可以再逐组单独开启。本项只影响块编辑器——原生 Obsidian 编辑器始终使用 Obsidian 的快捷键。',
       )
       .addDropdown((d) =>
         d
           .addOptions({
-            all: 'All groups (Logseq default)',
-            none: 'None (use Obsidian shortcuts)',
-            custom: 'Custom — choose per group below',
+            all: '全部分组（Logseq 默认）',
+            none: '无（使用 Obsidian 快捷键）',
+            custom: '自定义——在下面逐组选择',
           })
           .setValue(this.shortcutPresetValue())
           .onChange(async (v) => {
@@ -137,7 +137,7 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
 
     containerEl.createEl('p', {
       cls: 'setting-item-description',
-      text: 'Each group is independent. Switching one off returns exactly those keys to Obsidian and leaves the rest alone.',
+      text: '每一组都是独立的。关闭其中一组，只把这些键交还给 Obsidian，其余保持不变。',
     });
 
     for (const key of Object.keys(SHORTCUT_GROUP_LABELS) as (keyof ShortcutOverrides)[]) {
@@ -156,18 +156,19 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
 
     // ---------- Outline guide line ----------
     const levelOptions = {
-      '1': '1 level',
-      '2': '2 levels',
-      '3': '3 levels',
-      '4': '4 levels',
-      '5': '5 levels',
-      '0': 'All levels',
+      '1': '1 级',
+      '2': '2 级',
+      '3': '3 级',
+      '4': '4 级',
+      '5': '5 级',
+      '0': '全部层级',
     };
 
     new Setting(containerEl)
-      .setName('Fold any block')
+      .setName('任意块折叠')
       .setDesc(
-        'Show the collapse caret on every block whose body spans more than one line — headings, code fences, tables, quotes, images and multi-line paragraphs — not just list items with children. Click folds to a one-line summary; Alt+click folds all the way to a type chip. The state is saved as a `collapsed::` property in your markdown, exactly like a list block\'s.',
+        '在正文超过一行的块上显示折叠箭头——标题、代码围栏、表格、引用、图片和多行段落——而不只是带子块的列表项。' +
+          '点击折叠为一行摘要；Alt+点击直接折叠成类型标签。折叠状态会像列表块那样，以 `collapsed::` 属性的形式存进你的 Markdown。',
       )
       .addToggle((t) =>
         t
@@ -180,9 +181,10 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('Hidden block properties')
+      .setName('隐藏的块属性')
       .setDesc(
-        'Comma-separated property names that stay in your markdown but are not drawn as a `key:: value` row. Hiding is view-only: the property is still parsed, still indexed for queries, and still editable from the block properties menu. `collapsed` is hidden by default so folding does not litter the view.',
+        '以逗号分隔的属性名，它们仍保留在你的 Markdown 里，但不渲染成 `key:: value` 行。隐藏只是显示层面的：' +
+          '属性照样会被解析、照样参与查询索引，也照样能在块属性菜单里编辑。`collapsed` 默认隐藏，以免折叠标记弄乱视图。',
       )
       .addText((t) =>
         t
@@ -196,9 +198,10 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('Guide-line collapse depth')
+      .setName('竖线折叠深度')
       .setDesc(
-        'Clicking the vertical guide line folds the content inside it: the first-level blocks stay visible as folded rows while everything below them hides. This sets how many levels carry the folded state (direct children = level 1); deeper levels stay folded when you expand again. "All levels" = fold everything below the first level.',
+        '点击竖直参考线会折叠它里面的内容：一级块仍以折叠行的形式可见，其下的一切都隐藏起来。' +
+          '这一项决定有多少层级承载折叠状态（直接子块算第 1 级）；更深的层级在再次展开时保持折叠。"全部层级"表示第 1 级以下全部折叠。',
       )
       .addDropdown((d) =>
         d
@@ -211,9 +214,10 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('Guide-line expand depth')
+      .setName('竖线展开深度')
       .setDesc(
-        'Clicking the line of folded content unfolds this many levels at once (direct children = level 1; the clicked block itself always opens if it was folded). "1 level" = open one step per click; "All levels" = unfold everything below.',
+        '点击已折叠的内容时，一次展开多少层级（直接子块算第 1 级；被点击的块本身若已折叠总会打开）。' +
+          '"1 级"表示每点一次展开一步；"全部层级"表示第 1 级以下全部展开。',
       )
       .addDropdown((d) =>
         d
@@ -226,11 +230,11 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
 
     // ---------- Safety: backups & operation log ----------
-    containerEl.createEl('h3', { text: 'Safety (backups & log)' });
+    containerEl.createEl('h3', { text: '安全（备份与日志）' });
 
     new Setting(containerEl)
-      .setName('Automatic backups')
-      .setDesc('Before any write the plugin makes to your notes, save the original to .logseq-editor/backups/ (10 most recent per file). Restore via the command palette.')
+      .setName('自动备份')
+      .setDesc('在插件写入笔记之前，先把原文件存到 .logseq-editor/backups/（每个文件保留最近 10 份）。通过命令面板恢复。')
       .addToggle((t) =>
         t.setValue(this.plugin.settings.backupsEnabled).onChange(async (v) => {
           this.plugin.settings.backupsEnabled = v;
@@ -239,8 +243,8 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('Operation log')
-      .setDesc('Record every sync/write operation (time, file, result) to .logseq-editor/log.jsonl and show it via "Show the operation log".')
+      .setName('操作日志')
+      .setDesc('把每次同步/写入操作（时间、文件、结果）记录到 .logseq-editor/log.jsonl，并通过"显示操作日志"查看。')
       .addToggle((t) =>
         t.setValue(this.plugin.settings.opLogEnabled).onChange(async (v) => {
           this.plugin.settings.opLogEnabled = v;
@@ -249,14 +253,14 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
 
     // ---------- Journal (daily notes) ----------
-    containerEl.createEl('h3', { text: 'Journal (daily notes)' });
+    containerEl.createEl('h3', { text: '日记（每日笔记）' });
 
     new Setting(containerEl)
-      .setName('Journal folder')
-      .setDesc('Folder for daily notes. Empty = use the core Daily notes plugin setting, or vault root.')
+      .setName('日记文件夹')
+      .setDesc('每日笔记所在文件夹。留空则使用核心 Daily notes 插件的设置，或库根目录。')
       .addText((t) =>
         t
-          .setPlaceholder('e.g. journals')
+          .setPlaceholder('例如 journals')
           .setValue(this.plugin.settings.journalFolder)
           .onChange(async (v) => {
             this.plugin.settings.journalFolder = v;
@@ -265,8 +269,8 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('Journal date format')
-      .setDesc('Tokens: YYYY MM DD HH mm ss. Empty = use the core Daily notes plugin setting, or YYYY-MM-DD.')
+      .setName('日记日期格式')
+      .setDesc('可用标记：YYYY MM DD HH mm ss。留空则使用核心 Daily notes 插件的设置，或 YYYY-MM-DD。')
       .addText((t) =>
         t
           .setPlaceholder('YYYY-MM-DD')
@@ -278,8 +282,8 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('Journal template')
-      .setDesc('Text written into a newly created journal file (markdown, Logseq blocks welcome).')
+      .setName('日记模板')
+      .setDesc('新建日记文件时写入的文本（Markdown，支持 Logseq 块语法）。')
       .addTextArea((t) => {
         t.setValue(this.plugin.settings.journalTemplate).onChange(async (v) => {
           this.plugin.settings.journalTemplate = v;
@@ -383,11 +387,11 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
 
     // ---------- Templates ----------
-    containerEl.createEl('h3', { text: 'Templates' });
+    containerEl.createEl('h3', { text: '模板' });
 
     new Setting(containerEl)
-      .setName('Custom template variables')
-      .setDesc('One "name = value" per line. Use in any block as <% name %>. Built-ins: today, yesterday, tomorrow, now, time, current page.')
+      .setName('自定义模板变量')
+      .setDesc('每行一个 "名称 = 值"。可在任意块中用 <% 名称 %> 引用。内置变量：today、yesterday、tomorrow、now、time、current page。')
       .addTextArea((t) => {
         t.setValue(this.plugin.settings.customTemplateVars).onChange(async (v) => {
           this.plugin.settings.customTemplateVars = v;
@@ -396,18 +400,19 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         t.inputEl.rows = 4;
         t.inputEl.cols = 40;
       });
+
     // ---------- SQLite secondary index ----------
-    containerEl.createEl('h3', { text: 'SQLite index (secondary)' });
+    containerEl.createEl('h3', { text: 'SQLite 二级索引' });
     containerEl.createEl('p', {
       cls: 'setting-item-description',
       text:
-        'A rebuildable database derived from your markdown. Markdown stays the source of truth — ' +
-        'the database never writes to a note, and Rebuild re-derives it from the files.',
+        '从 Markdown 派生出的可重建数据库。Markdown 始终是唯一真值——' +
+        '数据库绝不回写笔记，「重建」也完全从文件重新推导。',
     });
 
     new Setting(containerEl)
-      .setName('Enable the SQLite index')
-      .setDesc('Keep a queryable database of blocks, tags, links, properties and block references.')
+      .setName('启用 SQLite 索引')
+      .setDesc('维护一个可查询的数据库，收录块、标签、链接、属性和块引用。')
       .addToggle((t) =>
         t.setValue(this.plugin.settings.sqliteIndexEnabled).onChange(async (v) => {
           this.plugin.settings.sqliteIndexEnabled = v;
@@ -419,8 +424,8 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
 
     if (this.plugin.settings.sqliteIndexEnabled) {
       new Setting(containerEl)
-        .setName('Keep a snapshot on disk')
-        .setDesc('Save the database between sessions so restarts only re-index what changed.')
+        .setName('在磁盘保留快照')
+        .setDesc('把数据库保存到会话之间，让重启只重新索引变化的部分。')
         .addToggle((t) =>
           t.setValue(this.plugin.settings.sqlitePersist).onChange(async (v) => {
             this.plugin.settings.sqlitePersist = v;
@@ -429,8 +434,8 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         );
 
       new Setting(containerEl)
-        .setName('Sync when files change')
-        .setDesc('Re-index a file as soon as it is edited, created, renamed or deleted — including by other apps.')
+        .setName('文件变化时同步')
+        .setDesc('文件一被编辑、新建、重命名或删除就重新索引——包括其他应用造成的改动。')
         .addToggle((t) =>
           t.setValue(this.plugin.settings.sqliteAutoSync).onChange(async (v) => {
             this.plugin.settings.sqliteAutoSync = v;
@@ -440,40 +445,40 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
 
       const stats = this.plugin.sqliteIndex?.stats;
       const detail = stats
-        ? `${stats.files} files · ${stats.blocks} blocks · ${stats.tags} tags · ${stats.links} links · ${stats.refs} refs (last run ${stats.ms} ms)`
-        : 'not started yet';
-      new Setting(containerEl).setName('Index').setDesc(detail).addButton((b) =>
-        b.setButtonText('Console').onClick(() => new SqliteConsoleModal(this.plugin).open()),
+        ? `${stats.files} 个文件 · ${stats.blocks} 个块 · ${stats.tags} 个标签 · ${stats.links} 条链接 · ${stats.refs} 处引用（上次运行 ${stats.ms} 毫秒）`
+        : '尚未开始';
+      new Setting(containerEl).setName('索引').setDesc(detail).addButton((b) =>
+        b.setButtonText('控制台').onClick(() => new SqliteConsoleModal(this.plugin).open()),
       );
 
-      const actions = new Setting(containerEl).setName('Markdown → database');
+      const actions = new Setting(containerEl).setName('Markdown → 数据库');
       actions.addButton((b) =>
-        b.setButtonText('Sync').onClick(async () => {
+        b.setButtonText('同步').onClick(async () => {
           const idx = this.plugin.sqliteIndex;
           if (!idx) return;
           const s = await idx.sync();
-          new Notice(`Synced: +${s.added} ~${s.changed} -${s.removed} (${s.unchanged} unchanged)`);
+          new Notice(`已同步：+${s.added} ~${s.changed} -${s.removed}（${s.unchanged} 个未变）`);
           this.display();
         }),
       );
       actions.addButton((b) =>
-        b.setButtonText('Rebuild').onClick(async () => {
+        b.setButtonText('重建').onClick(async () => {
           const idx = this.plugin.sqliteIndex;
           if (!idx) return;
           const s = await idx.rebuild();
-          new Notice(`Rebuilt from markdown: ${s.files} files, ${s.blocks} blocks (${s.ms} ms)`);
+          new Notice(`已从 Markdown 重建：${s.files} 个文件，${s.blocks} 个块（${s.ms} 毫秒）`);
           this.display();
         }),
       );
       actions.addButton((b) =>
-        b.setButtonText('Verify').onClick(async () => {
+        b.setButtonText('校验').onClick(async () => {
           const idx = this.plugin.sqliteIndex;
           if (!idx) return;
           const v = await idx.verify();
           new Notice(
             v.drift.length === 0 && v.missing.length === 0
-              ? `Matches the files (${v.checked} checked)`
-              : `Stale — drift ${v.drift.length}, missing ${v.missing.length}`,
+              ? `与文件一致（已校验 ${v.checked} 个）`
+              : `已过期——不一致 ${v.drift.length} 处，缺失 ${v.missing.length} 处`,
           );
         }),
       );

@@ -87,14 +87,14 @@ export interface ShortcutOverrides {
 }
 
 export const SHORTCUT_GROUP_LABELS: Record<keyof ShortcutOverrides, string> = {
-  blockNavigation: 'Block navigation (Alt+↑/↓ jump, Mod+Shift+↑/↓ move)',
-  todoCycle: 'TODO cycle (Mod+Enter)',
-  blockMerge: 'Block merge (Backspace / Delete)',
-  indent: 'Indent (Tab / Shift+Tab)',
-  newBlock: 'New block (Enter)',
-  selectionWrap: 'Selection wrap (typing * _ ~ ` [ { with a selection)',
-  bulkSelection: 'Bulk block ops (Ctrl+A / X / C / D on multi-selected blocks)',
-  undoRedo: 'Undo / redo of block operations',
+  blockNavigation: '块导航（Alt+↑/↓ 跳转，Mod+Shift+↑/↓ 移动）',
+  todoCycle: 'TODO 切换状态（Mod+Enter）',
+  blockMerge: '合并块（Backspace / Delete）',
+  indent: '缩进（Tab / Shift+Tab）',
+  newBlock: '新建块（Enter）',
+  selectionWrap: '选区包裹（有选区时输入* _ ~ ` [ {）',
+  bulkSelection: '多选块操作（Ctrl+A / X / C / D）',
+  undoRedo: '块操作的撤销 / 重做',
 };
 
 /** Every group defaulting to ON = stock Logseq behavior. */
