@@ -1,6 +1,8 @@
 # ===== AI 助手工作区 =====
-# 运行时状态/临时文件不入库；私人助手文件由 E:\HOME\Code 私有仓库跟踪，
-# 公开仓库一律不提交（隐私文件 + pre-commit hook 双重拦截）。
+# 私人助手文件与开发计划由 E:\HOME\Code 私有仓库跟踪，
+# 公开仓库一律不提交（.gitignore + pre-commit hook 双重拦截）。
+# 运行时状态/临时文件同样不入库。
+.trae/
 .openclaw/
 .opencode/
 .workbuddy/
