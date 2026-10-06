@@ -354,6 +354,20 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName('库外文件分栏打开')
+      .setDesc(
+        '在侧边分栏中打开库外文件，不替换当前标签页。' +
+          '关闭则直接用当前标签页打开（默认）——窗口更整洁，' +
+          '但若该标签页正显示着别的笔记，会被替换掉。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.externalSplitView === true).onChange(async (v) => {
+          this.plugin.settings.externalSplitView = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName('显示库外文件提示栏')
       .setDesc(
         '在文件顶部显示提示栏（文件名、相对路径、「库外」标记与保存按钮）。' +

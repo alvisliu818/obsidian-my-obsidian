@@ -3943,3 +3943,91 @@ body.lgp-table-editor-cursor * {
   margin-top: 4px;
 }
 
+
+/* --------------------------------------------------------------------------
+   External block view — an ItemView shell hosting the Logseq block editor for a
+   file outside the vault.
+
+   The shell exists because a TextFileView will not mount without a TFile, and
+   borrowing one put another note on screen for ~500 ms. An ItemView mounts with
+   no file, so nothing in the vault is opened. The host must lay the editor out
+   full-height: the editor's own scroller handles the scrolling.
+   -------------------------------------------------------------------------- */
+
+.logseq-external-block-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.logseq-external-block-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* The editor element moved into the host still carries its own classes; let it
+   fill the shell rather than sizing to its default block flow. */
+.logseq-external-block-host > .view-content,
+.logseq-external-block-host > .workspace-leaf-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* --------------------------------------------------------------------------
+   External block view — an ItemView shell hosting the Logseq block editor for a
+   file outside the vault.
+
+   The shell exists because a TextFileView will not mount without a TFile, and
+   borrowing one put another note on screen for ~500 ms. An ItemView mounts with
+   no file, so nothing in the vault is opened. The host must lay the editor out
+   full-height: the editor's own scroller handles the scrolling.
+   -------------------------------------------------------------------------- */
+
+.logseq-external-block-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.logseq-external-block-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* The editor element moved into the host still carries its own classes; let it
+   fill the shell rather than sizing to its default block flow. */
+.logseq-external-block-host > .view-content,
+.logseq-external-block-host > .workspace-leaf-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* The hosted editor keeps the view header its base class created — back/forward
+   arrows that navigate the tab strip, which is meaningless here because the shell
+   owns navigation. The tab already carries the file's name. */
+.logseq-external-block-host .view-header {
+  display: none;
+}
+
+/* The hosted editor keeps the view header its base class created — back/forward
+   arrows that navigate the tab strip, which is meaningless here because the shell
+   owns navigation. The tab already carries the file's name. */
+.logseq-external-block-host .view-header {
+  display: none;
+}

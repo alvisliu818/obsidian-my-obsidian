@@ -319,6 +319,7 @@ export class BlockEditorView extends TextFileView {
     // Baseline for "has this actually been edited?" — without it, merely opening
     // an outside file would rewrite it in our formatting on the first save.
     this.externalDiskData = data;
+    this.externalDirty = false;
     this.teardownNativePropsEditor();
     this.setViewData(data, false);
     // A page banner that says "outside the vault" is the honest header, and it
@@ -359,6 +360,26 @@ export class BlockEditorView extends TextFileView {
         }
       }
     }
+  }
+
+  /**
+   * Bring a hand-created instance to life on a leaf that has no file.
+   *
+   * Obsidian will not mount a TextFileView without a TFile: every route through
+   * openFile/setViewState yields the "empty" placeholder (measured four ways).
+   * Borrowing a real note works but opens a note the user did not ask for, which
+   * is exactly what they objected to.
+   *
+   * So the view is built here instead: `onload()` — the same DOM skeleton the
+   * framework would have run — and the host shell (ExternalBlockView) appends
+   * the result. Nothing in the vault is opened, read or written.
+   *
+   * Idempotent, so a view that is already live can be re-adopted safely.
+   */
+  adoptIntoView(): void {
+    // Just the skeleton: the caller pushes content in straight after, and
+    // rendering an empty model here would only flash.
+    if (!this.editorContainerEl) this.onload();
   }
 
   /**
@@ -455,6 +476,8 @@ export class BlockEditorView extends TextFileView {
    * our formatting.
    */
   private externalDiskData: string | null = null;
+  /** Whether the MODEL changed since the file was last written. */
+  private externalDirty = false;
 
   /**
    * Persist the current content.
@@ -476,11 +499,21 @@ export class BlockEditorView extends TextFileView {
       await super.save(force);
       return;
     }
+    // Nothing was edited, so nothing is written.
+    //
+    // The test is NOT "does the serialization differ from the file" — the
+    // serializer normalizes blank lines (a documented choice, see the changelog
+    // entry on verbatim regions), so a file that merely round-trips always
+    // differs and a comparison on text would rewrite every outside file the user
+    // opens. The question is whether the MODEL changed, and the model only moves
+    // through the edit paths, which all funnel into markDirty().
+    if (!this.externalDirty && !force) return;
     const data = this.serializeCurrent();
     if (data === this.externalDiskData) return;
     try {
       writeExternalText(this.externalAbs, data);
       this.externalDiskData = data;
+      this.externalDirty = false;
     } catch (e) {
       new Notice(`保存失败：${String(e).slice(0, 120)}`);
     }
@@ -595,10 +628,24 @@ export class BlockEditorView extends TextFileView {
     // Deliberately not forced: an unedited external file must not be rewritten
     // in our formatting just because the tab was closed.
     await this.save();
+    const wasExternal = this.isExternal;
     this.externalAbs = '';
     this.externalName = '';
     this.externalDisplayPath = "";
     this.externalDiskData = null;
+    this.externalDirty = false;
+    if (wasExternal) {
+      // While an outside file is shown, `this.file` is a STAND-IN carrying the
+      // external name — and the framework's unload writes what getViewData()
+      // returns through the vault adapter. It would try to write
+      // `Mounts/<name>` (measured: "ENOENT ... Mounts/outside.md") and, worse,
+      // would rewrite the file in our formatting. Detaching the stand-in first
+      // leaves the base class with no file, which skips that write; the bytes
+      // were already written above, or deliberately not, by our own save().
+      this.file = null;
+      await super.onUnloadFile(file);
+      return;
+    }
     return super.onUnloadFile(file);
   }
 
@@ -2770,6 +2817,10 @@ ${content}`;
       logOp(this.plugin, 'blocks.edit', this.file?.path ?? '', 'ok');
       const f = this.file;
       if (f) void this.plugin.backups.ensureSessionBackup(f);
+    } else {
+      // The only signal that separates "the user typed" from "the file merely
+      // round-trips" — every edit funnels through here.
+      this.externalDirty = true;
     }
     this.requestSave(); // native: sets dirty + debounced save (2s)
   }

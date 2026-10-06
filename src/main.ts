@@ -41,6 +41,7 @@ import { MountEditorModal, MountListModal } from './panels/mountModals';
 import { MountPanelView, VIEW_TYPE_MOUNT_PANEL } from './panels/mountPanel';
 import { ExternalFileView, VIEW_TYPE_EXTERNAL_FILE } from './views/ExternalFileView';
 import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE } from './views/ExternalCodeView';
+import { ExternalBlockView, VIEW_TYPE_EXTERNAL_BLOCK } from './views/ExternalBlockView';
 import {
   exists,
   linkTargetFor,
@@ -103,6 +104,7 @@ export default class LogseqEditorPlugin extends Plugin {
     this.registerView(VIEW_TYPE_MOUNT_PANEL, (leaf) => new MountPanelView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_FILE, (leaf) => new ExternalFileView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_CODE, (leaf) => new ExternalCodeView(leaf, this));
+    this.registerView(VIEW_TYPE_EXTERNAL_BLOCK, (leaf) => new ExternalBlockView(leaf, this));
 
     // Vault-wide ((block-id)) index
     this.blockIndex = new BlockIndex(this.app);
@@ -1231,7 +1233,7 @@ export default class LogseqEditorPlugin extends Plugin {
    * they never asked for; reusing an existing block-editor tab would silently
    * replace their work. A fresh tab is the only variant that touches nothing.
    */
-  private async openInBlockEditor(mount: ExternalMount, node: MountNode): Promise<boolean> {
+  private async openInBlockEditor(_mount: ExternalMount, node: MountNode): Promise<boolean> {
     if (!isMarkdownFile(node.name)) return false;
     try {
       readExternalText(node.abs);
@@ -1239,30 +1241,33 @@ export default class LogseqEditorPlugin extends Plugin {
       return false; // the shim view reports the failure with the mount name
     }
     try {
-      // A block editor already on screen needs no seeding, and reusing it is
-      // what the user would expect — they are already in that editor.
-      const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_BLOCK_EDITOR)[0];
-      if (existing) {
-        this.app.workspace.setActiveLeaf(existing, { focus: true });
-        const view = existing.view as BlockEditorView | null;
-        if (view instanceof BlockEditorView) {
-          await view.openExternalFile(node.abs, node.name, mount.path);
-          return true;
-        }
-      }
-      // Otherwise open a NEW tab on a throwaway vault file purely to obtain a
-      // mounted editor instance, then retarget it. `split` keeps the user's
-      // current tab active and visible rather than yanking it away.
-      const seed = this.app.vault.getMarkdownFiles()[0] ?? this.app.vault.getFiles()[0];
-      if (!seed) return false;
-      const leaf = this.app.workspace.getLeaf('split');
-      await leaf.openFile(seed);
-      await new Promise((r) => setTimeout(r, 1500));
-      const view = leaf.view as BlockEditorView | null;
-      if (!(view instanceof BlockEditorView)) return false;
-      await view.openExternalFile(node.abs, node.name, mount.path);
-      // Activate THIS leaf. Without it the focus can stay on the mount panel and
-      // the freshly opened note looks like it went nowhere.
+      // A TextFileView only mounts with a real file, so one is opened and then
+      // retargeted. Hand-attaching our own view DOES mount (measured) but leaves
+      // Obsidian's view container empty — the screenshot showed the new-tab
+      // placeholder instead of the file, with our tree squeezed below it, so that
+      // route renders wrongly and is not used.
+      //
+      // Two things the user asked for, both here:
+      //
+      //  - Never touch an existing leaf. Reusing one (or the current tab) means
+      //    the note they were reading gets replaced by the seed and then by the
+      //    outside file — their work disappears from the screen.
+      //  - Always a fresh tab. `getLeaf('tab')` creates one, so the seed's brief
+      //    appearance is confined to a tab that did not exist a moment ago. The
+      //    alternative, reusing a block editor already on screen, is instant
+      //    (measured: a 5 ms window) but costs that editor's tab its contents.
+      // The same route the code editor takes: an ItemView mounted by
+      // setViewState, which needs no file at all. BlockEditorView is a
+      // TextFileView and cannot be mounted that way, so a thin shell hosts it
+      // (see ExternalBlockView for the measurements behind this).
+      const leaf = this.app.workspace.getLeaf(
+        this.settings.externalSplitView === true ? 'split' : 'tab',
+      );
+      await leaf.setViewState({
+        type: VIEW_TYPE_EXTERNAL_BLOCK,
+        active: true,
+        state: { abs: node.abs, name: node.name, rel: node.rel },
+      });
       this.app.workspace.setActiveLeaf(leaf, { focus: true });
       logOp(this, 'external.open', node.abs, 'ok', 'block-editor');
       return true;

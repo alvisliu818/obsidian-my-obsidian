@@ -199,6 +199,16 @@ export interface BlockEditorSettings {
    */
   externalCodeWrap: boolean;
   /**
+   * Open a mounted file in a split pane rather than replacing the current tab.
+   *
+   * Obsidian refuses to mount a text view without a file, so opening one seeds
+   * the leaf with a real note first (measured: every other route yields the
+   * "empty" placeholder). A split keeps that seeding out of the way of whatever
+   * the user is working in; a tab keeps the window uncluttered. Tab is the
+   * default because it is what a click on a file usually means.
+   */
+  externalSplitView: boolean;
+  /**
    * Show the banner above an external file's content (the "库外" strip with the
    * path and the Save button). It is honest about where the file lives, but it
    * eats vertical space, so it can be turned off once the behaviour is familiar.
@@ -298,6 +308,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   hiddenProps: 'collapsed',
   externalMounts: [],
   externalCodeWrap: true,
+  externalSplitView: false,
   externalBanner: true,
 };
 
