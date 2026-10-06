@@ -1,7 +1,9 @@
 ﻿import { PluginSettingTab, Setting, Notice, type App } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import { SqliteConsoleModal } from '../features/sqliteConsole';
-import type { PagePropsEditor, ScopeMode, ShortcutOverrides } from '../types';
+import { MountListModal } from '../panels/mountModals';
+import { VIEW_TYPE_MOUNT_PANEL } from '../panels/mountPanel';
+import { mountDisplayName, type PagePropsEditor, type ScopeMode, type ShortcutOverrides } from '../types';
 import { SHORTCUT_GROUP_LABELS } from '../types';
 
 export class LogseqEditorSettingTab extends PluginSettingTab {
@@ -286,6 +288,56 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         t.inputEl.rows = 4;
         t.inputEl.cols = 40;
       });
+
+    // ---------- External mounts ----------
+    containerEl.createEl('h3', { text: '外部挂载' });
+    containerEl.createEl('p', {
+      cls: 'setting-item-description',
+      text:
+        '把库外的文件夹挂到挂载面板。Markdown 在原地编辑并存回原文件，不会复制进库。' +
+        '每个挂载可以用包含 / 排除两条正则过滤；在面板里右键任意条目还可以把它链接进库，' +
+        '之后就能用原生块编辑器打开（反链、块引用、搜索全部生效）。',
+    });
+
+    const mounts = this.plugin.settings.externalMounts ?? [];
+    if (mounts.length === 0) {
+      containerEl.createDiv({ cls: 'setting-item-description', text: '暂无外部挂载。' });
+    }
+    for (const m of mounts) {
+      new Setting(containerEl)
+        .setName(mountDisplayName(m))
+        .setDesc(m.path)
+        .addExtraButton((b) =>
+          b
+            .setIcon('settings')
+            .setTooltip('编辑这个挂载')
+            .onClick(() => this.plugin.editMount(m)),
+        )
+        .addExtraButton((b) =>
+          b
+            .setIcon('trash')
+            .setTooltip('卸载')
+            .onClick(async () => {
+              await this.plugin.removeMount(m);
+              this.display();
+            }),
+        );
+    }
+
+    const mountActions = new Setting(containerEl).setName('管理');
+    mountActions.addButton((b) =>
+      b
+        .setButtonText('打开挂载面板')
+        .setCta()
+        .onClick(() => void this.plugin.activatePanel(VIEW_TYPE_MOUNT_PANEL)),
+    );
+    mountActions.addButton((b) =>
+      b.setButtonText('添加挂载').onClick(() => this.plugin.promptAddMount()),
+    );
+    mountActions.addButton((b) =>
+      b.setButtonText('管理全部').onClick(() => new MountListModal(this.plugin).open()),
+    );
+    mountActions.addButton((b) => b.setButtonText('重新扫描').onClick(() => this.plugin.refreshMounts()));
 
     // ---------- Templates ----------
     containerEl.createEl('h3', { text: 'Templates' });

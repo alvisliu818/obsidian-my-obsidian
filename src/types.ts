@@ -179,6 +179,74 @@ export interface BlockEditorSettings {
    * a block does not litter the view with bookkeeping.
    */
   hiddenProps: string;
+  /**
+   * Folders OUTSIDE the vault listed in the mount panel. Each is shown as a
+   * virtual tree; any entry can also be linked into the vault as a real path
+   * (junction for folders, hard link for files), which makes it open in the
+   * native block editor. See `notes/mounts.md`.
+   */
+  externalMounts: ExternalMount[];
+}
+
+/**
+ * One mount: an absolute path to a folder outside the vault.
+ *
+ * Nothing is copied into the vault — a mounted file is read from and written
+ * back to where it actually lives. `include` / `exclude` are regular
+ * expressions matched against the path relative to `path`.
+ */
+export interface ExternalMount {
+  /** Stable id; also used as the link folder name, so it must be path-safe. */
+  id: string;
+  /** Absolute Windows path, e.g. `D:\\notes`. */
+  path: string;
+  /** Label shown in the panel; '' = use the folder's own name. */
+  label: string;
+  /** Only entries matching this survive. '' = keep everything. */
+  include: string;
+  /** Entries matching this are dropped even when they match `include`. '' = none. */
+  exclude: string;
+  /** Re-scan this mount every N seconds. 0 = manual only. */
+  refreshSeconds: number;
+  /** Hide the mount without deleting it. */
+  enabled: boolean;
+}
+
+/** Drop anything malformed — `data.json` is user-editable. */
+export function mountFrom(raw: unknown): ExternalMount | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const m = raw as Partial<ExternalMount>;
+  if (typeof m.id !== 'string' || !m.id.trim()) return null;
+  if (typeof m.path !== 'string' || !m.path.trim()) return null;
+  const secs = Number(m.refreshSeconds);
+  return {
+    id: m.id.trim(),
+    path: m.path.trim(),
+    label: typeof m.label === 'string' ? m.label : '',
+    include: typeof m.include === 'string' ? m.include : '',
+    exclude: typeof m.exclude === 'string' ? m.exclude : '',
+    refreshSeconds: Number.isFinite(secs) && secs >= 0 ? Math.min(secs, 3600) : 0,
+    // absent = enabled, so a config written before this field existed still works
+    enabled: m.enabled !== false,
+  };
+}
+
+/** Sanitize the stored mount list (see `mountFrom` for the per-entry rules). */
+export function mountsFrom(raw: unknown): ExternalMount[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ExternalMount[] = [];
+  for (const item of raw) {
+    const m = mountFrom(item);
+    if (m) out.push(m);
+  }
+  return out;
+}
+
+/** Display name for a mount: its label, else the folder's own name. */
+export function mountDisplayName(m: ExternalMount): string {
+  if (m.label.trim()) return m.label.trim();
+  const parts = m.path.replace(/[\\/]+$/, '').split(/[\\/]+/);
+  return parts[parts.length - 1] || m.path;
 }
 
 /** A page's linked-reference filter: values to require / to hide. */
@@ -209,6 +277,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   sqliteAutoSync: true,
   foldEnabled: true,
   hiddenProps: 'collapsed',
+  externalMounts: [],
 };
 
 export function createBlock(text = '', marker: Marker = null): Block {

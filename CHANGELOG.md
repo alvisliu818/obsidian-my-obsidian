@@ -7,6 +7,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
 
 ### Added
 
+- **Mount folders from outside the vault in a dedicated sidebar panel.** A folder that does not live in your vault can be listed in the mount panel, with an include/exclude regular expression to filter what it shows.
+  - **Markdown opens in the Logseq block editor.** Clicking a `.md` gives the vault a real path to that file (under `Mounts/`) and opens it natively, so everything you already rely on works: take-over, backlinks, `((block references))`, search. Nothing is copied — a linked file *is* the file, so edits land where they always did.
+  - **A panel of its own means nothing is injected into Obsidian's own file explorer**, so the surrounding layout cannot be disturbed.
+  - **Right-click any entry to link it into the vault** (or unlink it). Folders become directory junctions, which work across drives; single files become hard links, so a file on another drive cannot be linked and falls back to a read-only block view.
+  - Unlinking removes only the link. The external file and everything in it is untouched.
+  - Other file types (images, PDFs, binaries) open with your system app, and every entry has a read-only open that never writes to your vault.
+  - Exclude wins over include; an empty include keeps everything. Folders are exempt from `include` (filtering them would orphan the files inside), and an excluded pattern also matches a whole path segment, so `archive` hides that folder wherever it sits.
+  - Add mounts from **Settings → 外部挂载**, or with the *Open the mount panel* / *Mount an external folder* commands. An invalid regular expression is reported in the dialog instead of silently showing everything.
+
 - **Any block can be folded — not just list items with children.** Code fences, tables, quotes, formulas, images and multi-line paragraphs now get a collapse caret. A plain click folds, a second click expands; Alt+click folds every descendant at once.
   - **What folding looks like follows SiYuan.** A container (a list item with children) keeps its own text and collapses its children to folded rows. A block with nothing to keep — a fence, a table, a media block — is replaced by a one-line summary; click the summary to expand. A heading folds the section it introduces, up to the next heading of the same or a shallower level, and a deeper heading belongs to that section.
   - Alt is not a deeper fold level: it is SiYuan's "fold all children", which marks every descendant that has children of its own and skips the childless ones.

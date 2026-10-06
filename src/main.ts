@@ -9,13 +9,16 @@ import { CMD_COLLAPSE_ALL, CMD_FIND, CMD_REPLACE } from './interactions/hotkeys'
 import {
   DEFAULT_SETTINGS,
   editorChoiceFromProps,
+  mountsFrom,
   parseFolderList,
   pathInFolders,
   shortcutOverridesFrom,
   takeOverForFile,
   type BlockEditorSettings,
   type EditorChoice,
+  type ExternalMount,
 } from './types';
+import { mountDisplayName } from './types';
 import { LogseqEditorSettingTab } from './settings/tab';
 import { BlockIndex } from './index/blockIndex';
 import {
@@ -32,6 +35,19 @@ import { TagPanelView, VIEW_TYPE_TAG_PANEL } from './panels/tagPanel';
 import { BlockSearchModal } from './panels/blockSearch';
 import { FlashcardPanelView, VIEW_TYPE_FLASHCARD_PANEL } from './panels/flashcardPanel';
 import { BlockGraphModal } from './panels/blockGraph';
+import { MountEditorModal, MountListModal } from './panels/mountModals';
+import { MountPanelView, VIEW_TYPE_MOUNT_PANEL } from './panels/mountPanel';
+import { ExternalFileView, VIEW_TYPE_EXTERNAL_FILE, classifyExternalFile } from './views/ExternalFileView';
+import {
+  createLink,
+  exists,
+  linkTargetFor,
+  linkVaultPath,
+  readExternalText,
+  safeSegment,
+  sameVolume,
+} from './features/extFs';
+import type { MountNode } from './features/mountFilter';
 import { openJournal } from './features/dailyNote';
 import { BackupManager } from './core/backup';
 import { loadOpLog, logOp, flushOpLog } from './features/logger';
@@ -65,6 +81,8 @@ export default class LogseqEditorPlugin extends Plugin {
   /** Paths waiting for an incremental re-index; flushed on a debounce. */
   private sqlitePending = new Set<string>();
   private sqliteFlush: (() => void) | null = null;
+  /** Timer id for the mount panel's optional auto-refresh; 0 = not scheduled. */
+  private mountRefreshTimer = 0;
 
   private origSetViewState: ((this: WorkspaceLeaf, state: ViewState, eState?: unknown) => Promise<void>) | null = null;
   private statusModeEl: HTMLElement | null = null;
@@ -80,6 +98,8 @@ export default class LogseqEditorPlugin extends Plugin {
     this.registerView(VIEW_TYPE_BACKLINK_PANEL, (leaf) => new BacklinkPanelView(leaf, this));
     this.registerView(VIEW_TYPE_TAG_PANEL, (leaf) => new TagPanelView(leaf, this));
     this.registerView(VIEW_TYPE_FLASHCARD_PANEL, (leaf) => new FlashcardPanelView(leaf, this));
+    this.registerView(VIEW_TYPE_MOUNT_PANEL, (leaf) => new MountPanelView(leaf, this));
+    this.registerView(VIEW_TYPE_EXTERNAL_FILE, (leaf) => new ExternalFileView(leaf, this));
 
     // Vault-wide ((block-id)) index
     this.blockIndex = new BlockIndex(this.app);
@@ -444,6 +464,28 @@ export default class LogseqEditorPlugin extends Plugin {
       callback: () => void this.activatePanel(VIEW_TYPE_TAG_PANEL),
     });
 
+    // ---------- External mounts ----------
+    this.addCommand({
+      id: 'open-mount-panel',
+      name: 'Open the mount panel (folders outside the vault)',
+      callback: () => void this.activatePanel(VIEW_TYPE_MOUNT_PANEL),
+    });
+    this.addCommand({
+      id: 'add-external-mount',
+      name: 'Mount an external folder',
+      callback: () => this.promptAddMount(),
+    });
+    this.addCommand({
+      id: 'manage-external-mounts',
+      name: 'Manage external mounts',
+      callback: () => new MountListModal(this).open(),
+    });
+    this.addCommand({
+      id: 'refresh-external-mounts',
+      name: 'Rescan external mounts',
+      callback: () => this.refreshMounts(),
+    });
+
     this.addCommand({
       id: 'search-blocks',
       name: 'Search blocks across the vault',
@@ -525,6 +567,10 @@ export default class LogseqEditorPlugin extends Plugin {
 
   onunload(): void {
     logOp(this, 'plugin.unload', '', 'ok');
+    if (this.mountRefreshTimer) {
+      window.clearInterval(this.mountRefreshTimer);
+      this.mountRefreshTimer = 0;
+    }
     void this.sqliteIndex?.close();
     // Flush pending log records before the adapter access goes away.
     void flushOpLog(this);
@@ -593,6 +639,11 @@ export default class LogseqEditorPlugin extends Plugin {
     this.settings.sqliteIndexEnabled = this.settings.sqliteIndexEnabled !== false;
     this.settings.sqlitePersist = this.settings.sqlitePersist !== false;
     this.settings.sqliteAutoSync = this.settings.sqliteAutoSync !== false;
+    // External mounts: absent in every pre-mount config, and each entry is
+    // sanitized because data.json is user-editable.
+    this.settings.externalMounts = mountsFrom(
+      (this.settings as { externalMounts?: unknown }).externalMounts,
+    );
   }
 
   async saveSettings(): Promise<void> {
@@ -955,7 +1006,8 @@ export default class LogseqEditorPlugin extends Plugin {
   }
 
   /** Reveal a side panel, creating its leaf on first use. */
-  private async activatePanel(viewType: string): Promise<void> {
+  /** Reveal a sidebar panel, creating its leaf on first use. */
+  async activatePanel(viewType: string): Promise<void> {
     const { workspace } = this.app;
     const existing = workspace.getLeavesOfType(viewType)[0];
     if (existing) {
@@ -1002,5 +1054,268 @@ export default class LogseqEditorPlugin extends Plugin {
       this.pendingReveal = null;
     }
     // else: view will pick up pendingReveal in onLoadFile
+  }
+
+  // ------------------------------------------------------------------
+  // External mounts (folders outside the vault, in the mount panel)
+  // ------------------------------------------------------------------
+
+  /** The vault's own root path — where links get created. */
+  vaultBasePath(): string {
+    const adapter = this.app.vault.adapter as unknown as {
+      basePath?: string;
+      getBasePath?: () => string;
+    };
+    return adapter.basePath ?? adapter.getBasePath?.() ?? '';
+  }
+
+  /** Open the add-mount dialog. */
+  promptAddMount(): void {
+    new MountEditorModal(this).open();
+  }
+
+  /** Edit an existing mount. */
+  editMount(mount: ExternalMount): void {
+    new MountEditorModal(this, mount).open();
+  }
+
+  /** Persist a new mount and show the panel. */
+  async addMount(draft: Omit<ExternalMount, 'id' | 'enabled'>): Promise<ExternalMount> {
+    const trimmed = draft.path.trim().replace(/[\\/]+$/, '');
+    const base = this.vaultBasePath() || 'mount';
+    let id = safeSegment(draft.label.trim() || trimmed.split(/[\\/]+/).pop() || base);
+    // Ids become folder names under Mounts/, so they must stay unique there.
+    let n = 2;
+    while (this.settings.externalMounts.some((m) => m.id === id)) id = `${safeSegment(draft.label || base)}_${n++}`;
+    const mount: ExternalMount = { ...draft, path: trimmed, id, enabled: true };
+    this.settings.externalMounts.push(mount);
+    await this.saveSettings();
+    this.startMountRefresh();
+    this.refreshMounts();
+    await this.activatePanel(VIEW_TYPE_MOUNT_PANEL);
+    logOp(this, 'mount.add', mount.path, 'ok');
+    return mount;
+  }
+
+  /** Remove a mount. Never touches the target folder. */
+  async removeMount(mount: ExternalMount): Promise<void> {
+    const list = this.settings.externalMounts;
+    const i = list.findIndex((m) => m.id === mount.id);
+    if (i < 0) return;
+    list.splice(i, 1);
+    await this.saveSettings();
+    this.startMountRefresh();
+    this.refreshMounts();
+    logOp(this, 'mount.remove', mount.path, 'ok');
+    new Notice(`已卸载 ${mountDisplayName(mount)}`);
+  }
+
+  /** Re-scan every open mount panel. */
+  refreshMounts(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_MOUNT_PANEL)) {
+      (leaf.view as MountPanelView | null)?.refreshMounts();
+    }
+  }
+
+  /**
+   * Poll the panel for mounts that asked for a timed refresh.
+   *
+   * A single shared timer rather than one per mount: the panel is the only
+   * consumer, and several timers would each re-render the same view.
+   */
+  private startMountRefresh(): void {
+    if (this.mountRefreshTimer) {
+      window.clearInterval(this.mountRefreshTimer);
+      this.mountRefreshTimer = 0;
+    }
+    const interval = (this.settings.externalMounts ?? []).reduce(
+      (min, m) => (m.enabled && m.refreshSeconds > 0 ? Math.min(min, m.refreshSeconds) : min),
+      Infinity,
+    );
+    if (!Number.isFinite(interval)) return;
+    this.mountRefreshTimer = window.setInterval(() => {
+      if ((this.settings.externalMounts ?? []).some((m) => m.enabled && m.refreshSeconds > 0)) {
+        this.refreshMounts();
+      }
+    }, Math.max(5, interval) * 1000);
+  }
+
+  /**
+   * Open one entry of a mount.
+   *
+   * Text-like files go into the block-style view, which reads and writes the
+   * original file over Node fs. Everything else is handed to the system.
+   * A synthetic `TFile` would be the shortcut here, but it does not work:
+   * measured, `leaf.openFile(fake)` resolves and then mounts the "empty"
+   * placeholder, so the content never appears.
+   */
+  async openExternalEntry(
+    mount: ExternalMount,
+    node: MountNode,
+    opts?: { readOnly?: boolean },
+  ): Promise<void> {
+    if (node.isDir) return;
+    if (classifyExternalFile(node.name) !== 'text') {
+      this.openWithSystem(node.abs);
+      return;
+    }
+    // Read-only means "show me, change nothing" — deliberately NOT going through
+    // a vault link, since creating one is itself a write to the vault.
+    if (opts?.readOnly) {
+      await this.openExternalInShimView(mount, node, { readOnly: true });
+      return;
+    }
+    // Markdown belongs in the Logseq block editor. Getting it there means giving
+    // the vault a real path to the file — a synthetic TFile does NOT work
+    // (measured: `openFile` resolves, then mounts the "empty" placeholder).
+    // So link it in and open that. The link is a hard link, i.e. the SAME bytes,
+    // not a copy: the file on disk stays the single source of truth.
+    if (this.canOpenNatively(node.abs)) {
+      const ok = await this.ensureLinked(node);
+      if (ok) {
+        // A link made a moment ago is not in the index yet; opening it too soon
+        // silently lands on the "empty" placeholder instead of the editor.
+        const rel = linkVaultPath(safeSegment(node.name));
+        if (await this.waitForIndex(rel)) {
+          await this.app.workspace.openLinkText(rel, '', false);
+        } else {
+          // Indexing is slow, not broken — the shim view still shows the file.
+          logOp(this, 'mount.link', node.abs, 'error', 'index timeout');
+          await this.openExternalInShimView(mount, node, opts);
+        }
+        return;
+      }
+    }
+    await this.openExternalInShimView(mount, node, opts);
+  }
+
+  /**
+   * True when a file at `abs` can be given a real path in this vault.
+   *
+   * A hard link needs both paths on the same volume (measured: cross-volume
+   * fails with "系统无法将文件复制到不同的磁盘驱动器"), while a directory
+   * junction crosses volumes fine. So the check is about the volume, not the
+   * file type — and it is why the shim view still exists as a fallback.
+   */
+  canOpenNatively(abs: string): boolean {
+    const base = this.vaultBasePath();
+    if (!base) return false;
+    return sameVolume(base, abs);
+  }
+
+  /**
+   * Make sure `Mounts/<name>` points at `node.abs`, creating it if needed.
+   * Returns false (with a notice) rather than throwing.
+   */
+  private async ensureLinked(node: MountNode): Promise<boolean> {
+    const base = this.vaultBasePath();
+    const linkName = safeSegment(node.name);
+    const target = linkTargetFor(base, node.name, linkName);
+    if (exists(target)) return true;
+    const r = createLink(node.abs, target);
+    if (!r.ok) {
+      new Notice(`无法在库中创建链接：${r.error ?? '未知错误'}`);
+      logOp(this, 'mount.link', node.abs, 'error', r.error ?? '');
+      return false;
+    }
+    logOp(this, 'mount.link', node.abs, 'ok', r.kind ?? '');
+    return true;
+  }
+
+  /**
+   * Wait until the vault has indexed `path`, so a link created a moment ago can
+   * be opened by name.
+   *
+   * A link made while Obsidian is running is on disk immediately but reaches the
+   * indexer on its own schedule; opening it in that window resolves to nothing
+   * and leaves the "empty" placeholder view. Measured: with the link present at
+   * startup, `openLinkText` works on the first try, so this only has to cover
+   * the just-created case.
+   */
+  async waitForIndex(path: string, timeoutMs = 3000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    // The indexer reacts to a vault event, so yield to it between checks rather
+    // than spinning on a tight loop.
+    while (Date.now() < deadline) {
+      if (this.app.vault.getAbstractFileByPath(path)) return true;
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    return this.app.vault.getAbstractFileByPath(path) !== null;
+  }
+
+  /**
+   * Fallback: the block-styled view that reads and writes the file directly.
+   * Used when a real vault path cannot be created (e.g. the file is on another
+   * volume). Same parser and serializer, so the markdown is identical — what is
+   * missing is the native take-over, block references and backlinks.
+   */
+  private async openExternalInShimView(
+    mount: ExternalMount,
+    node: MountNode,
+    opts?: { readOnly?: boolean },
+  ): Promise<void> {
+    let content: string;
+    try {
+      content = readExternalText(node.abs);
+    } catch (e) {
+      // Name the mount, because the user clicked a row in a tree of many and
+      // an absolute path alone would not tell them which one failed.
+      new Notice(`无法读取「${mountDisplayName(mount)}」中的 ${node.name}：${String(e).slice(0, 90)}`);
+      logOp(this, 'external.read', node.abs, 'error', String(e).slice(0, 200));
+      return;
+    }
+    // Reuse the tab already showing this file instead of stacking duplicates.
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_EXTERNAL_FILE)) {
+      const view = leaf.view as ExternalFileView | null;
+      if (view?.abs === node.abs && view.readOnly === false) {
+        this.app.workspace.setActiveLeaf(leaf, { focus: true });
+        return;
+      }
+    }
+    const leaf = this.app.workspace.getLeaf('tab');
+    await leaf.setViewState({
+      type: VIEW_TYPE_EXTERNAL_FILE,
+      active: true,
+      state: { abs: node.abs, name: node.name, readOnly: opts?.readOnly === true },
+    });
+    const view = leaf.view as ExternalFileView | null;
+    if (view) await view.openExternal({ abs: node.abs, name: node.name, content, readOnly: opts?.readOnly });
+  }
+
+  /** Hand a path to the OS default program. */
+  openWithSystem(abs: string): void {
+    try {
+      const electron = (window as unknown as { require?: (id: string) => unknown }).require?.('electron') as
+        | { shell?: { openPath?: (p: string) => Promise<string> } }
+        | undefined;
+      if (electron?.shell?.openPath) {
+        void electron.shell.openPath(abs);
+        return;
+      }
+    } catch {
+      /* fall through to the notice below */
+    }
+    new Notice(`没有可用的系统打开方式：${abs}`);
+  }
+
+  /** Reveal a path in Explorer. */
+  revealInSystem(abs: string): void {
+    try {
+      const electron = (window as unknown as { require?: (id: string) => unknown }).require?.('electron') as
+        | { shell?: { showItemInFolder?: (p: string) => void } }
+        | undefined;
+      if (electron?.shell?.showItemInFolder) {
+        electron.shell.showItemInFolder(abs);
+        return;
+      }
+    } catch {
+      /* fall through */
+    }
+    new Notice(abs);
+  }
+
+  /** Open an entry that has been linked into the vault, natively. */
+  async openLinked(linkName: string, rel = ''): Promise<void> {
+    await this.app.workspace.openLinkText(linkVaultPath(linkName, rel), '', false);
   }
 }

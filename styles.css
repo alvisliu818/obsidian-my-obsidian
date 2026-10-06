@@ -3546,3 +3546,270 @@ body.lgp-table-editor-cursor * {
   opacity: 1;
   border-color: var(--color-accent);
 }
+
+/* ==========================================================================
+   Mount panel — a self-contained sidebar view for folders outside the vault.
+
+   Deliberately namespaced and DOM-isolated: this view owns its whole subtree
+   and never injects into Obsidian's own file explorer, so there is no shared
+   DOM to disturb.
+   ========================================================================== */
+
+.logseq-mount-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 6px 0;
+  font-size: var(--font-ui-small);
+}
+
+.logseq-mount-panel-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 6px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  margin-bottom: 4px;
+}
+.logseq-mount-panel-count {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  flex: 1 1 auto;
+}
+.logseq-mount-panel-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+.logseq-mount-panel-btn:hover {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.logseq-mount-panel-empty {
+  padding: 20px 14px;
+  text-align: center;
+  color: var(--text-muted);
+}
+.logseq-mount-panel-hint {
+  margin-top: 6px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  line-height: 1.6;
+}
+.logseq-mount-panel-empty button {
+  margin-top: 12px;
+}
+
+.logseq-mount-section {
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  margin-bottom: 4px;
+}
+.logseq-mount-section:last-child {
+  border-bottom: none;
+}
+
+.logseq-mount-head,
+.logseq-mount-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.logseq-mount-head:hover,
+.logseq-mount-row:hover {
+  background-color: var(--background-modifier-hover);
+}
+.logseq-mount-head {
+  font-weight: var(--font-semibold);
+}
+
+.logseq-mount-caret {
+  width: 11px;
+  flex: 0 0 11px;
+  font-size: 9px;
+  color: var(--text-faint);
+  text-align: center;
+}
+.logseq-mount-icon {
+  font-size: var(--font-ui-smaller);
+  opacity: 0.8;
+  flex: 0 0 auto;
+}
+.logseq-mount-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-normal);
+}
+
+.logseq-mount-meta,
+.logseq-mount-empty,
+.logseq-mount-error {
+  padding: 1px 8px 3px 22px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+}
+.logseq-mount-error {
+  color: var(--text-error);
+  white-space: normal;
+}
+
+/* Marks a binary entry, and an entry that has been linked into the vault. */
+.logseq-mount-flag {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: var(--font-smallest);
+  color: var(--text-faint);
+  background-color: var(--background-modifier-border);
+  padding: 0 5px;
+  border-radius: 6px;
+}
+.logseq-mount-flag.is-linked {
+  color: var(--text-success);
+  background-color: var(--background-modifier-success);
+}
+/* A folder row's own flag should hug the name, not be pushed to the edge. */
+.logseq-mount-row.is-dir .logseq-mount-flag {
+  margin-left: 4px;
+}
+
+/* --------------------------------------------------------------------------
+   External file view (a block-rendered editor for a file outside the vault)
+   -------------------------------------------------------------------------- */
+
+.logseq-external-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.logseq-external-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background-color: var(--background-secondary);
+  font-size: var(--font-ui-small);
+  flex: 0 0 auto;
+}
+.logseq-external-banner-icon {
+  color: var(--text-muted);
+}
+.logseq-external-banner-text {
+  font-weight: var(--font-semibold);
+  white-space: nowrap;
+}
+/* Long absolute paths truncate from the left so the filename stays visible. */
+.logseq-external-banner-path {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.logseq-external-badge {
+  font-size: var(--font-smallest);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background-color: var(--background-modifier-border);
+  padding: 1px 6px;
+  border-radius: 8px;
+  flex: 0 0 auto;
+}
+.logseq-external-save {
+  flex: 0 0 auto;
+}
+
+.logseq-external-tree {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+.logseq-external-raw {
+  white-space: pre-wrap;
+}
+
+/* --------------------------------------------------------------------------
+   Mount modals
+   -------------------------------------------------------------------------- */
+
+.logseq-mount-modal-error {
+  color: var(--text-error);
+  font-size: var(--font-ui-small);
+  margin: 4px 0;
+}
+.logseq-mount-modal-empty {
+  color: var(--text-muted);
+  padding: 8px 0;
+}
+
+.logseq-mount-list-row {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.logseq-mount-list-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.logseq-mount-list-name {
+  font-weight: var(--font-semibold);
+}
+.logseq-mount-list-off,
+.logseq-mount-list-warn {
+  font-size: var(--font-smallest);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background-color: var(--background-modifier-border);
+  color: var(--text-muted);
+}
+.logseq-mount-list-warn {
+  color: var(--text-error);
+}
+.logseq-mount-list-path {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  word-break: break-all;
+}
+.logseq-mount-list-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+}
+.logseq-mount-list-include {
+  color: var(--text-success);
+}
+.logseq-mount-list-exclude {
+  color: var(--text-error);
+}
+.logseq-mount-list-refresh {
+  color: var(--text-muted);
+}
+.logseq-mount-list-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
