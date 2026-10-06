@@ -43,11 +43,3 @@ vitest.config.ts.timestamp-*.mjs
 tests/_diag-*.test.ts
 HOMELocallogseq-*.json
 
-# ===== 个人隐私文件（私有仓库 E:\HOME\Code 同步，公开仓库不含） =====
-TOOLS.md
-USER.md
-SOUL.md
-IDENTITY.md
-HEARTBEAT.md
-memory/
-.workbuddy/
