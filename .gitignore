@@ -1,7 +1,15 @@
 # ===== AI 助手工作区 =====
-# 运行时状态/临时文件不入库；memory/、.trae/、.workbuddy/ 里的经验文档保留跟踪
+# 运行时状态/临时文件不入库；私人助手文件由 E:\HOME\Code 私有仓库跟踪，
+# 公开仓库一律不提交（隐私文件 + pre-commit hook 双重拦截）。
 .openclaw/
 .opencode/
+.workbuddy/
+memory/
+TOOLS.md
+USER.md
+SOUL.md
+IDENTITY.md
+HEARTBEAT.md
 
 # ===== 桌面系统杂项 =====
 .DS_Store
