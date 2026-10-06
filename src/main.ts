@@ -19,6 +19,8 @@ import {
   type ExternalMount,
 } from './types';
 import { mountDisplayName } from './types';
+import { isMarkdownFile } from './features/codeFileKind';
+import { isTextMount } from './features/mountFilter';
 import { LogseqEditorSettingTab } from './settings/tab';
 import { BlockIndex } from './index/blockIndex';
 import {
@@ -37,10 +39,11 @@ import { FlashcardPanelView, VIEW_TYPE_FLASHCARD_PANEL } from './panels/flashcar
 import { BlockGraphModal } from './panels/blockGraph';
 import { MountEditorModal, MountListModal } from './panels/mountModals';
 import { MountPanelView, VIEW_TYPE_MOUNT_PANEL } from './panels/mountPanel';
-import { ExternalFileView, VIEW_TYPE_EXTERNAL_FILE, classifyExternalFile } from './views/ExternalFileView';
-import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE, isCodeFile } from './views/ExternalCodeView';
+import { ExternalFileView, VIEW_TYPE_EXTERNAL_FILE } from './views/ExternalFileView';
+import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE } from './views/ExternalCodeView';
 import {
   exists,
+  extOf,
   linkTargetFor,
   linkVaultPath,
   readExternalText,
@@ -1119,6 +1122,26 @@ export default class LogseqEditorPlugin extends Plugin {
   }
 
   /**
+   * Re-mount the open external-file views.
+   *
+   * Both the banner and the soft-wrap setting are baked in when the editor is
+   * built, so toggling either has to rebuild rather than patch — a mounted
+   * CodeMirror instance cannot change its extensions after the fact.
+   */
+  rerenderExternalViews(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_EXTERNAL_CODE)) {
+      const view = leaf.view as ExternalCodeView | null;
+      if (!view?.abs) continue;
+      view.remount();
+    }
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_BLOCK_EDITOR)) {
+      const view = leaf.view as BlockEditorView | null;
+      if (!view?.isExternal) continue;
+      view.renderExternalSections();
+    }
+  }
+
+  /**
    * Poll the panel for mounts that asked for a timed refresh.
    *
    * A single shared timer rather than one per mount: the panel is the only
@@ -1156,10 +1179,6 @@ export default class LogseqEditorPlugin extends Plugin {
     opts?: { readOnly?: boolean },
   ): Promise<void> {
     if (node.isDir) return;
-    if (classifyExternalFile(node.name) !== 'text') {
-      this.openWithSystem(node.abs);
-      return;
-    }
     // Read-only means "show me, change nothing", and it is also the fallback
     // whenever a real editor cannot be given the file. Creating a link is a
     // genuine change to the user's library, so it happens only when they ask
@@ -1169,21 +1188,27 @@ export default class LogseqEditorPlugin extends Plugin {
       return;
     }
     // An already-linked file has a real vault path, so open that and let
-    // Obsidian dispatch: markdown lands in this plugin's block editor, a code
-    // file in whichever plugin claimed the extension.
+    // Obsidian dispatch on the extension as it would for any vault note.
     if (this.isLinkedInto(node)) {
       await this.app.workspace.openLinkText(linkVaultPath(safeSegment(node.name)), '', false);
       return;
     }
-    // Unlinked and editable: hand the file to the plugin's own editors. Neither
-    // of Obsidian's TextFileView-based editors can be used here — measured:
-    // setViewState on a view type with no TFile yields the "empty" placeholder
-    // for both `logseq-block-editor` and Code Files' `code-editor`, because
-    // those views only mount with a file attached. So markdown and code each get
-    // a view of ours that reads and writes the file over Node fs.
-    if (isCodeFile(node.name)) {
-      if (await this.openInCodeEditor(node)) return;
-    } else if (await this.openInBlockEditor(node)) return;
+    // Routing is by CONTENT, not by file type: markdown is prose and belongs in
+    // the block editor; everything else — code, config, `.gitignore`, `.env`,
+    // plain text — is something you read line by line and belongs in the code
+    // editor. An allowlist of "code extensions" was the wrong shape: it sends
+    // every file the list forgot to the wrong editor, which is how a
+    // `.gitignore` ended up rendered as a document with headings.
+    if (isMarkdownFile(node.name)) {
+      if (await this.openInBlockEditor(mount, node)) return;
+    } else {
+      // Binaries have no text to edit; hand them to the system as before.
+      if (!isTextMount(extOf(node.name))) {
+        this.openWithSystem(node.abs);
+        return;
+      }
+      if (await this.openInCodeEditor(mount, node)) return;
+    }
     await this.openExternalInShimView(mount, node, opts);
   }
 
@@ -1204,8 +1229,8 @@ export default class LogseqEditorPlugin extends Plugin {
    * they never asked for; reusing an existing block-editor tab would silently
    * replace their work. A fresh tab is the only variant that touches nothing.
    */
-  private async openInBlockEditor(node: MountNode): Promise<boolean> {
-    if (isCodeFile(node.name)) return false;
+  private async openInBlockEditor(mount: ExternalMount, node: MountNode): Promise<boolean> {
+    if (!isMarkdownFile(node.name)) return false;
     try {
       readExternalText(node.abs);
     } catch {
@@ -1219,7 +1244,7 @@ export default class LogseqEditorPlugin extends Plugin {
         this.app.workspace.setActiveLeaf(existing, { focus: true });
         const view = existing.view as BlockEditorView | null;
         if (view instanceof BlockEditorView) {
-          await view.openExternalFile(node.abs, node.name);
+          await view.openExternalFile(node.abs, node.name, mount.path);
           return true;
         }
       }
@@ -1233,7 +1258,7 @@ export default class LogseqEditorPlugin extends Plugin {
       await new Promise((r) => setTimeout(r, 1500));
       const view = leaf.view as BlockEditorView | null;
       if (!(view instanceof BlockEditorView)) return false;
-      await view.openExternalFile(node.abs, node.name);
+      await view.openExternalFile(node.abs, node.name, mount.path);
       // Activate THIS leaf. Without it the focus can stay on the mount panel and
       // the freshly opened note looks like it went nowhere.
       this.app.workspace.setActiveLeaf(leaf, { focus: true });
@@ -1255,8 +1280,8 @@ export default class LogseqEditorPlugin extends Plugin {
    * the "empty" placeholder). Rather than give up on code files, this opens them
    * in a view we own, which saves back to the original file.
    */
-  private async openInCodeEditor(node: MountNode): Promise<boolean> {
-    if (!isCodeFile(node.name)) return false;
+  private async openInCodeEditor(mount: ExternalMount, node: MountNode): Promise<boolean> {
+    if (isMarkdownFile(node.name)) return false;
     let data: string;
     try {
       data = readExternalText(node.abs);
@@ -1271,7 +1296,7 @@ export default class LogseqEditorPlugin extends Plugin {
     await leaf.setViewState({
       type: VIEW_TYPE_EXTERNAL_CODE,
       active: true,
-      state: { abs: node.abs, name: node.name, content: data },
+      state: { abs: node.abs, name: node.name, content: data, mountPath: mount.path },
     });
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
     logOp(this, 'external.open', node.abs, 'ok', 'code-editor');

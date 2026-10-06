@@ -65,6 +65,7 @@ import { collectBlockTags, removeTagFromText } from '../features/supertagText';
 import { mountCodeEditor, parseCodeFence, type MountedCodeEditor } from '../blocks/codeBlockEdit';
 import { unwatchGuideLayout, watchGuideLayout } from '../blocks/guideLayout';
 import { readExternalText, writeExternalText } from '../features/extFs';
+import { relativeDisplayPath } from '../features/codeFileKind';
 
 export const VIEW_TYPE_BLOCK_EDITOR = 'logseq-block-editor';
 
@@ -292,7 +293,7 @@ export class BlockEditorView extends TextFileView {
    * so leaving them would show the PREVIOUS file's results under the new
    * content.
    */
-  async openExternalFile(abs: string, name: string): Promise<void> {
+  async openExternalFile(abs: string, name: string, mountPath = ''): Promise<void> {
     const data = readExternalText(abs);
     // Release the seed note's page props before retargeting, so the registry
     // entry that pointed at the borrowed file goes away with it.
@@ -305,6 +306,7 @@ export class BlockEditorView extends TextFileView {
     // first — there are ~47 such call sites and they all use `this.file?.path`.
     this.externalAbs = abs;
     this.externalName = name;
+    this.externalDisplayPath = relativeDisplayPath(abs, mountPath, name);
     // Baseline for "has this actually been edited?" — without it, merely opening
     // an outside file would rewrite it in our formatting on the first save.
     this.externalDiskData = data;
@@ -325,9 +327,13 @@ export class BlockEditorView extends TextFileView {
   /** Banner shown instead of the vault-only backlinks / references sections. */
   private renderExternalBanner(): void {
     this.refsHostEl.empty();
+    // The section is also where the save button lives; with the banner off the
+    // file still autosaves, so the space is simply given back to the blocks.
+    if (!this.plugin.settings.externalBanner) return;
     const box = this.refsHostEl.createDiv({ cls: 'logseq-external-note' });
     box.createDiv({ cls: 'logseq-external-note-title', text: `${this.externalName}（库外文件）` });
-    box.createDiv({ cls: 'logseq-external-note-path', text: this.externalAbs });
+    const path = box.createDiv({ cls: 'logseq-external-note-path', text: this.externalDisplayPath });
+    path.setAttribute('title', this.externalAbs);
     box.createDiv({
       cls: 'logseq-external-note-hint',
       text: '此文件不在库内。编辑直接写回原文件，反链与块引用不适用于它。',
@@ -336,6 +342,9 @@ export class BlockEditorView extends TextFileView {
 
   /** File name for the tab and breadcrumb; the basename for a vault file. */
   private externalName = '';
+  /** Path shown to the user: relative to the mount root. The absolute one is
+   *  still on record as `externalAbs`, one hover away on the banner. */
+  private externalDisplayPath = '';
 
   /**
    * Persist the current content.
@@ -501,6 +510,7 @@ export class BlockEditorView extends TextFileView {
     await this.save();
     this.externalAbs = '';
     this.externalName = '';
+    this.externalDisplayPath = "";
     this.externalDiskData = null;
     return super.onUnloadFile(file);
   }
@@ -632,13 +642,24 @@ export class BlockEditorView extends TextFileView {
     el.dispatchEvent(new CustomEvent('lgp-block-focus', { detail: { path: crumbs } }));
   }
 
+  /** Re-render the vault-only sections replaced by the external banner. */
+  renderExternalSections(): void {
+    if (!this.isExternal) return;
+    this.renderExternalBanner();
+    this.renderBreadcrumb();
+  }
+
   private renderBreadcrumb(): void {
     const el = this.breadcrumbEl;
     if (!el) return;
     el.empty();
     // An external file has no vault path, so name it from the mount instead —
     // otherwise the crumb would keep showing whatever note was open before.
-    const label = this.isExternal ? this.externalName : this.file?.basename ?? '';
+    // The relative form is what the user recognises; the bare name is used when
+    // the file sits at the mount root.
+    const label = this.isExternal
+      ? this.externalDisplayPath || this.externalName
+      : this.file?.basename ?? '';
     const entries = breadcrumbFor(this.doc, this.zoomedBlock, label);
     let hasZoom = false;
     entries.forEach((e, i) => {

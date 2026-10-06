@@ -186,6 +186,23 @@ export interface BlockEditorSettings {
    * native block editor. See `notes/mounts.md`.
    */
   externalMounts: ExternalMount[];
+  /**
+   * Turn OFF soft wrapping in the external code editor, giving real horizontal
+   * scrolling instead.
+   *
+   * Named for the action rather than the mode, because the two are easy to
+   * invert: an earlier `externalCodeWrap: true` was wired to NOT add
+   * lineWrapping, so "wrap on" produced no wrapping. Default off (= wrapping on),
+   * which reads better for config files and comments.
+   */
+  externalCodeNoWrap: boolean;
+  /**
+   * Show the banner above an external file's content (the "库外" strip with the
+   * path and the Save button). It is honest about where the file lives, but it
+   * eats vertical space, so it can be turned off once the behaviour is familiar.
+   * When hidden, saving still happens on the usual debounce.
+   */
+  externalBanner: boolean;
 }
 
 /**
@@ -278,6 +295,8 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   foldEnabled: true,
   hiddenProps: 'collapsed',
   externalMounts: [],
+  externalCodeNoWrap: false,
+  externalBanner: true,
 };
 
 export function createBlock(text = '', marker: Marker = null): Block {

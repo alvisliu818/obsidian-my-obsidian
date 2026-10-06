@@ -3893,7 +3893,9 @@ body.lgp-table-editor-cursor * {
 .logseq-external-code-host {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: hidden;
+  /* With soft wrap off, long lines must scroll sideways rather than being
+     clipped — CodeMirror's own scroller handles the overflow. */
+  overflow: auto;
 }
 .logseq-external-code-host .cm-editor {
   height: 100%;
@@ -3937,4 +3939,16 @@ body.lgp-table-editor-cursor * {
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
   margin-top: 4px;
+}
+
+/* Banner collapsed by the setting: keep only what is actionable. The path and
+   the badge stay (they cost one line and explain where the file lives), the
+   prose hint goes. */
+.logseq-external-banner.is-compact {
+  padding-top: 2px;
+  padding-bottom: 2px;
+  font-size: var(--font-ui-smaller);
+}
+.logseq-external-banner.is-compact .logseq-external-badge {
+  padding: 0 4px;
 }

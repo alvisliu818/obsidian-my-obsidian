@@ -22,54 +22,81 @@ import { EditorView, keymap, lineNumbers, type KeyBinding, highlightActiveLine, 
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { searchKeymap, highlightSelectionMatches, search } from '@codemirror/search';
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete';
-import { bracketMatching, foldGutter, foldKeymap, indentOnInput, indentUnit, syntaxHighlighting, HighlightStyle } from '@codemirror/language';
+import { bracketMatching, foldGutter, foldKeymap, indentOnInput, indentUnit, syntaxHighlighting, HighlightStyle, StreamLanguage } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
 import { javascript } from '@codemirror/lang-javascript';
 import { markdown } from '@codemirror/lang-markdown';
 import { readExternalText, writeExternalText } from '../features/extFs';
 import { logOp } from '../features/logger';
 import type LogseqEditorPlugin from '../main';
+import { relativeDisplayPath } from '../features/codeFileKind';
+
+export { relativeDisplayPath };
 
 export const VIEW_TYPE_EXTERNAL_CODE = 'logseq-external-code';
 
-/** Languages we highlight. Anything else still opens, just unhighlighted. */
+/**
+ * Languages we highlight.
+ *
+ * The code editor now receives every non-markdown file, so this covers config
+ * formats and shell too — a YAML file that opens but renders as flat grey text
+ * reads as broken, even though it is perfectly editable. Anything not listed
+ * still opens fine, just without colouring.
+ */
 function languageFor(ext: string): Extension[] {
   switch (ext) {
-    case 'ts':
-    case 'tsx':
-    case 'js':
-    case 'jsx':
-    case 'mjs':
-    case 'cjs':
-    case 'json':
+    // The javascript mode covers the whole ECMAScript family plus JSON.
+    case 'ts': case 'tsx': case 'js': case 'jsx': case 'mjs': case 'cjs':
+    case 'mts': case 'cts': case 'json': case 'json5':
       return [javascript()];
-    case 'md':
-    case 'markdown':
+    // Markdown normally goes to the block editor, but a .md opened read-only
+    // can land here, and highlighting costs nothing.
+    case 'md': case 'markdown':
       return [markdown()];
     default:
-      return [];
+      // StreamLanguage gives comments/strings for the common config and script
+      // formats; without it they are readable but entirely uncoloured.
+      return streamLanguageFor(ext);
   }
+}
+
+/** Minimal StreamLanguage definitions for formats with no bundled mode. */
+function streamLanguageFor(ext: string): Extension[] {
+  const map: Record<string, { comment: string | RegExp; string: RegExp; number: RegExp }> = {
+    sh: { comment: /#.*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
+    bash: { comment: /#.*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
+    zsh: { comment: /#.*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
+    yaml: { comment: /#.*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
+    yml: { comment: /#.*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
+    toml: { comment: /#.*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
+    ini: { comment: /[;#].*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
+    conf: { comment: /[;#].*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
+    cfg: { comment: /#.*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
+    env: { comment: /#.*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
+    gitignore: { comment: /#.*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
+    properties: { comment: /[#!].*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
+    log: { comment: /$/, string: /"[^"]*"/, number: /\d+/ },
+  };
+  const spec = map[ext.toLowerCase()];
+  if (!spec) return [];
+  return [
+    StreamLanguage.define({
+      name: ext.toLowerCase(),
+      token(stream) {
+        if (stream.sol() && stream.match(spec.comment)) return 'comment';
+        if (stream.match(spec.string)) return 'string';
+        if (stream.match(spec.number)) return 'number';
+        stream.next();
+        return null;
+      },
+    }),
+  ];
 }
 
 /**
  * File types this view is for. Mirrors the set Code Files claims, since that is
  * what a user with it installed would expect to open here.
  */
-const CODE_EXTENSIONS = new Set([
-  'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'mts', 'cts',
-  'py', 'rb', 'go', 'rs', 'java', 'kt', 'kts', 'c', 'h', 'cc', 'cpp', 'hpp', 'cs',
-  'sh', 'bash', 'zsh', 'fish', 'ps1', 'bat', 'cmd',
-  'json', 'json5', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'xml', 'html', 'htm',
-  'css', 'scss', 'less', 'vue', 'svelte', 'sql', 'graphql', 'php', 'lua', 'pl', 'r',
-]);
-
-/** True when a filename should open in the code editor rather than as markdown. */
-export function isCodeFile(name: string): boolean {
-  const m = /\.([A-Za-z0-9]+)$/.exec(name);
-  if (!m) return false;
-  return CODE_EXTENSIONS.has(m[1].toLowerCase());
-}
-
 const highlightStyle = HighlightStyle.define([
   { tag: t.keyword, color: 'var(--code-accent, #c792ea)' },
   { tag: [t.name, t.deleted, t.character, t.propertyName, t.macroName], color: 'var(--text-normal)' },
@@ -89,6 +116,11 @@ export class ExternalCodeView extends ItemView {
   plugin: LogseqEditorPlugin;
   abs = '';
   fileName = '';
+  /** Path shown in the header: relative to the mount root, which is what the
+   *  user recognises. The absolute path stays available as a tooltip. */
+  displayPath = '';
+  /** The mount this file came from, so the header can say where it lives. */
+  mountPath = '';
   /** Public so the e2e probe can read the buffer without reaching into privates. */
   editor: EditorView | null = null;
   private lastDiskData = '';
@@ -112,7 +144,7 @@ export class ExternalCodeView extends ItemView {
   }
 
   getState(): Record<string, unknown> {
-    return { abs: this.abs, name: this.fileName };
+    return { abs: this.abs, name: this.fileName, mountPath: this.mountPath };
   }
 
   async onOpen(): Promise<void> {
@@ -124,10 +156,12 @@ export class ExternalCodeView extends ItemView {
   }
 
   async setState(state: unknown, result: ViewStateResult): Promise<void> {
-    const s = (state ?? {}) as { abs?: string; name?: string; content?: string };
+    const s = (state ?? {}) as { abs?: string; name?: string; content?: string; mountPath?: string };
     if (typeof s.abs === 'string') this.abs = s.abs;
     if (typeof s.name === 'string') this.fileName = s.name;
     if (typeof s.content === 'string') this.lastDiskData = s.content;
+    if (typeof s.mountPath === 'string') this.mountPath = s.mountPath;
+    this.displayPath = relativeDisplayPath(this.abs, this.mountPath, this.fileName);
     await super.setState(state, result);
     // Now the path is known; build the editor if onOpen ran before us.
     if (!this.editor && this.abs) this.mount();
@@ -147,12 +181,26 @@ export class ExternalCodeView extends ItemView {
     contentEl.addClass('logseq-external-code-view');
 
     const banner = contentEl.createDiv({ cls: 'logseq-external-banner' });
-    const name = banner.createSpan({ cls: 'logseq-external-banner-text', text: this.fileName });
-    banner.createSpan({ cls: 'logseq-external-banner-path', text: this.abs });
+    if (!this.plugin.settings.externalBanner) banner.addClass('is-compact');
+    banner.createSpan({ cls: 'logseq-external-banner-text', text: this.fileName });
+    // Relative to the mount root — that is the name the user recognises. The
+    // absolute path stays one hover away, since a linked file and an unlinked
+    // one resolve to different places and that is worth being able to check.
+    const shown = this.displayPath || this.fileName;
+    const pathEl = banner.createSpan({ cls: 'logseq-external-banner-path', text: shown });
+    pathEl.setAttribute('title', this.abs);
     banner.createSpan({ cls: 'logseq-external-badge', text: '库外' });
-    const status = banner.createSpan({ cls: 'logseq-external-hint', text: '与原文件实时同步' });
-    const saveBtn = banner.createEl('button', { cls: 'logseq-external-save', text: '保存' });
-    saveBtn.addEventListener('click', () => void this.flush(true));
+    // With the banner collapsed the hints would crowd a single row, so only the
+    // save action survives — the file still autosaves on the usual debounce.
+    if (!this.plugin.settings.externalBanner) {
+      const saveBtn = banner.createEl('button', { cls: 'logseq-external-save', text: '保存' });
+      saveBtn.addEventListener('click', () => void this.flush(true));
+    } else {
+      const status = banner.createSpan({ cls: 'logseq-external-hint', text: '与原文件实时同步' });
+      status.setAttribute('title', '保存时写回原文件');
+      const saveBtn = banner.createEl('button', { cls: 'logseq-external-save', text: '保存' });
+      saveBtn.addEventListener('click', () => void this.flush(true));
+    }
 
     const host = contentEl.createDiv({ cls: 'logseq-external-code-host' });
 
@@ -188,7 +236,9 @@ export class ExternalCodeView extends ItemView {
       highlightSelectionMatches(),
       search(),
       syntaxHighlighting(highlightStyle, { fallback: true }),
-      EditorView.lineWrapping,
+      // Wrapping is the default; the setting asks for the opposite — real
+      // horizontal scrolling, which deeply indented code prefers.
+      ...(this.plugin.settings.externalCodeNoWrap ? [] : [EditorView.lineWrapping]),
       keymap.of([
         ...closeBracketsKeymap,
         ...defaultKeymap,
@@ -241,6 +291,32 @@ export class ExternalCodeView extends ItemView {
     } catch (e) {
       new Notice(`保存失败：${String(e).slice(0, 120)}`);
       logOp(this.plugin, 'external.code.save', this.abs, 'error', String(e).slice(0, 200));
+    }
+  }
+
+  /**
+   * Rebuild the editor, keeping the current buffer.
+   *
+   * The banner and the soft-wrap setting are baked into the CodeMirror
+   * extensions at construction, and an instance cannot change them afterwards,
+   * so a settings toggle has to remount. The unsaved text is carried across so
+   * nothing is lost in the swap.
+   */
+  remount(): void {
+    if (!this.abs) return;
+    try {
+      // Prefer what is on screen: an autosave may not have landed yet.
+      const text = this.editor ? this.editor.state.doc.toString() : this.lastDiskData;
+      this.editor?.destroy();
+      this.editor = null;
+      this.mount();
+      // mount() rebuilds from lastDiskData, so put the live buffer back.
+      const ed = this.editor as EditorView | null;
+      if (ed && text !== this.lastDiskData) {
+        ed.dispatch({ changes: { from: 0, to: ed.state.doc.length, insert: text } });
+      }
+    } catch {
+      /* a failed remount leaves the previous view in place; not fatal */
     }
   }
 
