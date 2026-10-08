@@ -4031,3 +4031,44 @@ body.lgp-table-editor-cursor * {
 .logseq-external-block-host .view-header {
   display: none;
 }
+
+/* ===== 代码块「▶ 运行」输出面板 (移植自思源 syfe-cb-run) ===== */
+.lgp-code-run {
+  cursor: pointer;
+  opacity: 0.72;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.lgp-code-run:hover { opacity: 1; background: var(--background-modifier-hover); }
+.lgp-cb-run {
+  margin: 6px 0 2px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+  font-size: 12.5px;
+}
+.lgp-cb-run__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.lgp-cb-run__label { opacity: 0.8; }
+.lgp-cb-run__actions { display: flex; gap: 8px; }
+.lgp-cb-run__btn { cursor: pointer; opacity: 0.72; }
+.lgp-cb-run__btn:hover { opacity: 1; }
+.lgp-cb-run__output {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-monospace);
+  font-size: 12px;
+}
+.lgp-cb-run__stdin { padding: 4px 8px 8px; }
+.lgp-cb-run__stdin input { width: 100%; }

@@ -17,6 +17,7 @@
  */
 
 import { MarkdownRenderer, setIcon } from 'obsidian';
+import { createRunButton, mountRunUi, registerCodeWrap } from '../exec/codeBlockRun';
 import { enhanceTable } from './tableEditor';
 import { hasTable } from './tableModel';
 import type { BlockEditorView } from '../view/BlockEditorView';
@@ -1042,6 +1043,11 @@ function enhanceCodeBlocks(holder: HTMLElement, b: Block, host: BlockEditorView)
         })
         .catch(() => {});
     });
+    // 「▶ 运行」+ 输出面板(仅 python;按块记状态,重渲染后重挂)
+    const runBtn = createRunButton(lang, () => code?.textContent ?? pre.textContent ?? '', b);
+    if (runBtn) bar.appendChild(runBtn);
+    registerCodeWrap(b, wrap);
+    mountRunUi(wrap, lang, b);
     wrap.appendChild(pre);
   }
 }

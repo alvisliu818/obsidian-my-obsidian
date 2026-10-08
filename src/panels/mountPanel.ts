@@ -576,10 +576,13 @@ export class MountPanelView extends ItemView {
         }
         // 已链接节点跟着改名:链接名就是旧文件名,不拆链的话
         // isLinked 会继续「看见」旧名并误报已链接。
+        // renameEntry(abs, newName) 在 abs 自己的父目录下改名,
+        // 所以这里传裸名 name 而不是完整目标路径 —— 传完整路径会被
+        // validateEntryName 的非法字符检查拒掉(实测踩过)。
         const base = this.plugin.vaultBasePath();
         const oldLink = base ? linkTargetFor(base, node.name, safeSegment(node.name)) : '';
         if (base && exists(oldLink)) {
-          const rr = renameEntry(oldLink, joinAbs(linkTargetDirFor(base), name));
+          const rr = renameEntry(oldLink, name);
           if (!rr.ok) new Notice(`链接未同步改名：${rr.error ?? '未知错误'}`);
         }
         new Notice(`已重命名为 ${name}`);
@@ -738,10 +741,4 @@ function parentRelOf(rel: string): string {
 /** 挂载根 + 父目录相对路径 → 绝对路径（与 joinAbs 一致，只是先算 rel）。 */
 function parentAbsOf(rel: string, mountRoot: string): string {
   return joinAbs(mountRoot, parentRelOf(rel));
-}
-
-/** 库内链接目录的绝对路径（Mounts/，不存在也不创建 —— 链接时已建过）。 */
-function linkTargetDirFor(vaultBase: string): string {
-  const sep = vaultBase.includes('\\') ? '\\' : '/';
-  return vaultBase.replace(/[\\/]+$/, '') + sep + MOUNT_FOLDER;
 }
