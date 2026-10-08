@@ -126,6 +126,10 @@ It lives in its own module rather than in `src/rename-delete-handler-component.t
 
 A blocking modal inside a queued delete is safe: `addToQueue` passes `pluginNoticeComponent: null` to `runWithTimeoutNotice`, so the 60s timeout resolves to `onTimeoutWithoutNotice` — a debug log, no notice, and **no abort**.
 
+### A shared attachment moves with the LAST of its notes, not with none of them
+
+`src/shared-attachment-batch-move.cross-platform.integration.test.ts` pins issue #5. A batch move from the file explorer is a run of single renames, each handled on its own, so "move a linked attachment only when no other note links it" never moves a shared one: the first note sees the second still at home, and the last sees the first, already moved and still linking it. `RenameMap.canMoveLinkedAttachment` also moves it when every OTHER linker already resolves its attachment folder (`getAttachmentFolderPath`, `RenameNote` context, at its current path) to the moving note's new one. A linker left behind resolves elsewhere, and the suite's second case pins that the attachment then stays. The rule is skipped when `shouldRenameAttachmentFiles` is on, because the renamed attachment would take its name from whichever note happened to move last (decided 2026-10-08).
+
 ### An attachment unit folder is moved BEFORE the walk, never by the per-file rescue hook
 
 `src/attachment-unit-folder-rescue.cross-platform.integration.test.ts` pins the rescue of a whole attachment unit folder (Custom Attachment Location issue #70). The obvious implementation — have `didRescueStillUsedAttachment` move the folder when the hook names one — cannot work, and reading `deleteIfNotUsed` in `obsidian-dev-utils/obsidian/vault-delete` is what says so:
