@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 2.1.2
+
+- fix(rename): move a shared attachment with the last of its notes
+
 ## 2.1.1
 
 - test(screenshots): merge setting the dark theme through applyObsidianTheme
