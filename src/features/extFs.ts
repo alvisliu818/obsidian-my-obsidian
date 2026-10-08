@@ -29,6 +29,12 @@ export interface NodeFsLike {
   writeFileSync(p: string, data: string, enc: 'utf8'): void;
   lstatSync(p: string): StatLike;
   realpathSync(p: string): string;
+  /** Optional: only the fs-module methods the tree-file ops need. Tests that
+   *  never exercise them can omit these (production Node fs always has them). */
+  renameSync?(from: string, to: string): void;
+  mkdirSync?(p: string, opts: { recursive: true }): void;
+  unlinkSync?(p: string): void;
+  rmSync?(p: string, opts: { recursive: true; force: true }): void;
 }
 
 export interface DirentLike {
@@ -82,6 +88,125 @@ export function extOf(name: string): string {
 export function joinAbs(root: string, rel: string): string {
   const sep = root.includes('\\') ? '\\' : '/';
   return root.replace(/[\\/]+$/, '') + sep + rel.split('/').join(sep);
+}
+
+/**
+ * Validate a user-typed file/folder name for the tree-file ops.
+ *
+ * Returns '' when the name is usable, otherwise a user-facing reason. Only
+ * characters that are illegal ON WINDOWS are rejected (the vault runs on
+ * desktop): the name is also trimmed of trailing dots/spaces because Windows
+ * silently strips those, which would make the created name differ from the
+ * typed one. A name that is only dots is invalid for the same reason.
+ */
+export function validateEntryName(raw: string): string {
+  const name = raw.trim();
+  if (!name) return '名称不能为空。';
+  if (name === '.' || name === '..') return '名称不能是 . 或 ..';
+  if (/[\\/:*?"<>|]/.test(name)) return '名称不能包含 \\ / : * ? " < > |';
+  if (name.length > 255) return '名称过长（最多 255 个字符）。';
+  if (/[. ]$/.test(name)) return '名称不能以点或空格结尾（Windows 会静默去掉）。';
+  return '';
+}
+
+export type FsOpResult = { ok: boolean; error?: string };
+
+/** Ensure a directory exists (recursive). */
+export function ensureDirX(abs: string): FsOpResult {
+  try {
+    const fs = fsMod();
+    if (!fs.mkdirSync) return { ok: false, error: '当前环境不支持创建目录。' };
+    fs.mkdirSync(abs, { recursive: true });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: errorMessage(e) };
+  }
+}
+
+/** Create an empty file; fails when the target already exists. */
+export function createEmptyFile(abs: string): FsOpResult {
+  try {
+    const fs = fsMod();
+    if (!fs.writeFileSync) return { ok: false, error: '当前环境不支持写文件。' };
+    if (fs.existsSync(abs)) return { ok: false, error: '同名文件已存在。' };
+    fs.writeFileSync(abs, '', 'utf8');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: errorMessage(e) };
+  }
+}
+
+/**
+ * Rename a file or folder within its parent (same directory, name change only).
+ * Refuses to clobber an existing target — Windows renameSync would overwrite a
+ * FILE silently, and that is never what a rename means.
+ */
+export function renameEntry(abs: string, newName: string): FsOpResult {
+  const bad = validateEntryName(newName);
+  if (bad) return { ok: false, error: bad };
+  // 父目录 + 分隔符:分隔符取自路径本身(Windows 两种都认),
+  // 无分隔符说明是裸名(不可能出现在挂载树,但守住边界)。
+  const idx = Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\'));
+  if (idx < 0) return { ok: false, error: '路径缺少父目录。' };
+  const target = abs.slice(0, idx + 1) + newName;
+  try {
+    const fs = fsMod();
+    if (!fs.renameSync) return { ok: false, error: '当前环境不支持重命名。' };
+    if (fs.existsSync(target)) return { ok: false, error: '同名文件或文件夹已存在。' };
+    fs.renameSync(abs, target);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: errorMessage(e) };
+  }
+}
+
+/**
+ * Delete a file or folder, preferring the OS trash when available.
+ *
+ * Uses Node's `trash`-like electron.shell.trashItem — Electron exposes it on
+ * the loaded `electron` module (measured: `require('electron')` in the plugin
+ * returns the full API, `shell.trashItem` included). When it fails (Linux
+ * without a portal, for instance), the caller decides whether to offer a
+ * permanent delete fallback; this helper never deletes without being told to.
+ */
+export function trashEntry(abs: string): Promise<FsOpResult> {
+  let shell: { trashItem?(p: string): Promise<void> } | undefined;
+  try {
+    shell = nodeRequire('electron') as { trashItem?(p: string): Promise<void> } | undefined;
+  } catch {
+    shell = undefined;
+  }
+  if (!shell?.trashItem) return Promise.resolve({ ok: false, error: '此环境没有系统回收站。' });
+  return shell
+    .trashItem(abs)
+    .then(() => ({ ok: true }))
+    .catch((e: unknown): FsOpResult => ({ ok: false, error: errorMessage(e) }));
+}
+
+/**
+ * PERMANENT delete — bypasses the trash. Only ever call this from a confirm
+ * dialog that says so, and only after `trashEntry` has failed (no recycle bin
+ * on this system), so the destructive path is always the second choice.
+ */
+export function deletePermanent(abs: string, isDir: boolean): FsOpResult {
+  try {
+    const fs = fsMod();
+    if (isDir) {
+      if (!fs.rmSync) return { ok: false, error: '当前环境不支持删除目录。' };
+      fs.rmSync(abs, { recursive: true, force: true });
+    } else {
+      if (!fs.unlinkSync) return { ok: false, error: '当前环境不支持删除文件。' };
+      fs.unlinkSync(abs);
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: errorMessage(e) };
+  }
+}
+
+function errorMessage(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  return msg;
 }
 
 /**

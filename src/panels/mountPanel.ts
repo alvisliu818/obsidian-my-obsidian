@@ -29,17 +29,25 @@ import {
 } from '../features/mountFilter';
 import {
   MOUNT_FOLDER,
+  createEmptyFile,
   createLink,
+  deletePermanent,
+  ensureDirX,
   exists,
   extOf,
   isDirectory,
+  joinAbs,
   linkKindFor,
   linkTargetFor,
   removeLink,
+  renameEntry,
   safeSegment,
   scanExternal,
+  trashEntry,
+  validateEntryName,
   linkVaultPath,
 } from '../features/extFs';
+import { ConfirmModal, NamePromptModal } from './promptModals';
 import { iconForEntry } from '../features/iconTheme';
 
 export const VIEW_TYPE_MOUNT_PANEL = 'logseq-mount-panel';
@@ -364,6 +372,9 @@ export class MountPanelView extends ItemView {
           );
         }
         menu.addSeparator();
+        // ---- file management on the external tree (思源文件树对齐) ----
+        this.addTreeFileMenuItems(menu, mount, node);
+        menu.addSeparator();
         menu.addItem((item) =>
           item
             .setTitle('在资源管理器中显示')
@@ -380,6 +391,10 @@ export class MountPanelView extends ItemView {
             }),
         );
       } else {
+        // Mount header: directory-level ops land on the mount ROOT, matching
+        // how the SiYuan file tree exposes 新建 on the tree root.
+        this.addTreeFileMenuItems(menu, mount, null);
+        menu.addSeparator();
         menu.addItem((item) =>
           item.setTitle('编辑这个挂载…').setIcon('settings' as never).onClick(() => this.plugin.editMount(mount)),
         );
@@ -457,6 +472,164 @@ export class MountPanelView extends ItemView {
     if (st.open.has(rel)) st.open.delete(rel);
     else st.open.add(rel);
     this.render();
+  }
+
+  // ------------------------------------------------------------------
+  // file management on the external tree (思源文件树对齐)
+  // ------------------------------------------------------------------
+
+  /**
+   * 新建文件 / 新建文件夹 / 重命名 / 删除,对齐思源文件树
+   * (siyuan-editor components/file-tree.ts) 的四个入口。
+   *
+   * node == null 表示挂载根:只给两个新建(重命名/删除属于挂载本身,
+   * 归「编辑这个挂载…/卸载」管,不在这里给)。
+   */
+  private addTreeFileMenuItems(menu: Menu, mount: ExternalMount, node: MountNode | null): void {
+    const dirNode = node?.isDir ? node : null;
+    const newDirAbs = dirNode ? dirNode.abs : node ? parentAbsOf(node.rel, mount.path) : mount.path;
+    // 新建目标:文件夹节点/挂载根进它自己;文件节点进它的上级目录。
+    const canNew = node === null || node.isDir || true; // 文件也能在其上级新建,始终给
+    void canNew;
+
+    menu.addItem((item) =>
+      item
+        .setTitle('新建文件')
+        .setIcon('file-plus' as never)
+        .onClick(() => this.promptNewFile(mount, newDirAbs, dirNode?.rel ?? (node ? parentRelOf(node.rel) : ''))),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle('新建文件夹')
+        .setIcon('folder-plus' as never)
+        .onClick(() => this.promptNewFolder(mount, newDirAbs, dirNode?.rel ?? (node ? parentRelOf(node.rel) : ''))),
+    );
+    if (node) {
+      menu.addItem((item) =>
+        item
+          .setTitle('重命名')
+          .setIcon('text-cursor-input' as never)
+          .onClick(() => this.promptRename(mount, node)),
+      );
+      menu.addItem((item) =>
+        item
+          .setTitle('删除…')
+          .setIcon('trash-2' as never)
+          .onClick(() => this.promptDelete(mount, node)),
+      );
+    }
+  }
+
+  /** 刷新扫描缓存并重绘;openRel 非空时确保该目录处于展开态。 */
+  private rescan(mount: ExternalMount, openRel = ''): void {
+    const st = this.states.get(mount.id);
+    if (openRel) st?.open.add(openRel);
+    this.scan(mount, true);
+    this.render();
+  }
+
+  private promptNewFile(mount: ExternalMount, dirAbs: string, dirRel: string): void {
+    new NamePromptModal(
+      this.app,
+      { title: '新建文件', placeholder: 'untitled.md', validate: validateEntryName },
+      (name) => {
+        if (!name) return;
+        const abs = joinAbs(dirAbs, name);
+        const r = createEmptyFile(abs);
+        if (!r.ok) {
+          new Notice(`创建失败：${r.error ?? '未知错误'}`);
+          return;
+        }
+        new Notice(`已创建 ${name}`);
+        this.rescan(mount, dirRel);
+      },
+    ).open();
+  }
+
+  private promptNewFolder(mount: ExternalMount, dirAbs: string, dirRel: string): void {
+    new NamePromptModal(
+      this.app,
+      { title: '新建文件夹', placeholder: 'new-folder', validate: validateEntryName },
+      (name) => {
+        if (!name) return;
+        const r = ensureDirX(joinAbs(dirAbs, name));
+        if (!r.ok) {
+          new Notice(`创建失败：${r.error ?? '未知错误'}`);
+          return;
+        }
+        new Notice(`已创建 ${name}`);
+        this.rescan(mount, dirRel);
+      },
+    ).open();
+  }
+
+  private promptRename(mount: ExternalMount, node: MountNode): void {
+    new NamePromptModal(
+      this.app,
+      { title: '重命名', initial: node.name, validate: validateEntryName },
+      (name) => {
+        if (!name || name === node.name) return;
+        const r = renameEntry(node.abs, name);
+        if (!r.ok) {
+          new Notice(`重命名失败：${r.error ?? '未知错误'}`);
+          return;
+        }
+        // 已链接节点跟着改名:链接名就是旧文件名,不拆链的话
+        // isLinked 会继续「看见」旧名并误报已链接。
+        const base = this.plugin.vaultBasePath();
+        const oldLink = base ? linkTargetFor(base, node.name, safeSegment(node.name)) : '';
+        if (base && exists(oldLink)) {
+          const rr = renameEntry(oldLink, joinAbs(linkTargetDirFor(base), name));
+          if (!rr.ok) new Notice(`链接未同步改名：${rr.error ?? '未知错误'}`);
+        }
+        new Notice(`已重命名为 ${name}`);
+        this.rescan(mount, parentRelOf(node.rel));
+      },
+    ).open();
+  }
+
+  private promptDelete(mount: ExternalMount, node: MountNode): void {
+    const typeStr = node.isDir ? '文件夹' : '文件';
+    new ConfirmModal(
+      this.app,
+      {
+        title: `删除${typeStr}`,
+        body: `确定删除${typeStr}「${node.name}」${node.isDir ? '及其全部内容' : ''}吗？将移入系统回收站。`,
+        confirmText: '删除',
+        dangerous: true,
+      },
+      (ok) => {
+        if (!ok) return;
+        // 先拆链接:硬链接删掉只是去掉目录项,但留着会指向一个不再存在的名字。
+        const base = this.plugin.vaultBasePath();
+        const oldLink = base ? linkTargetFor(base, node.name, safeSegment(node.name)) : '';
+        if (base && exists(oldLink)) removeLink(oldLink);
+        void trashEntry(node.abs).then((r) => {
+          if (r.ok) {
+            new Notice('已移入回收站');
+            this.rescan(mount, parentRelOf(node.rel));
+            return;
+          }
+          // 没有回收站(或系统拒绝):二次确认后永久删除,绝不静默。
+          new ConfirmModal(
+            this.app,
+            {
+              title: '无法移入回收站',
+              body: `${r.error ?? '此系统不支持回收站'}。要永久删除「${node.name}」吗？此操作不可恢复。`,
+              confirmText: '永久删除',
+              dangerous: true,
+            },
+            (ok2) => {
+              if (!ok2) return;
+              const rr = deletePermanent(node.abs, node.isDir);
+              if (!rr.ok) new Notice(`删除失败：${rr.error ?? '未知错误'}`);
+              else new Notice('已永久删除');
+              this.rescan(mount, parentRelOf(node.rel));
+            },
+          ).open();
+        });
+      },
+    ).open();
   }
 
   // ------------------------------------------------------------------
@@ -554,4 +727,21 @@ function findNode(nodes: MountNode[], rel: string): MountNode | null {
     if (hit) return hit;
   }
   return null;
+}
+
+/** rel 的父目录相对路径；顶层返回 ''（挂载根）。 */
+function parentRelOf(rel: string): string {
+  const idx = rel.lastIndexOf('/');
+  return idx < 0 ? '' : rel.slice(0, idx);
+}
+
+/** 挂载根 + 父目录相对路径 → 绝对路径（与 joinAbs 一致，只是先算 rel）。 */
+function parentAbsOf(rel: string, mountRoot: string): string {
+  return joinAbs(mountRoot, parentRelOf(rel));
+}
+
+/** 库内链接目录的绝对路径（Mounts/，不存在也不创建 —— 链接时已建过）。 */
+function linkTargetDirFor(vaultBase: string): string {
+  const sep = vaultBase.includes('\\') ? '\\' : '/';
+  return vaultBase.replace(/[\\/]+$/, '') + sep + MOUNT_FOLDER;
 }
