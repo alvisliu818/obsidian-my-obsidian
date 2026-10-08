@@ -2,7 +2,7 @@ import esbuild from "esbuild";
 import process from "process";
 import builtins from "builtin-modules";
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
+import { readFileSync, copyFileSync } from "node:fs";
 import path from "node:path";
 
 const nodeRequire = createRequire(import.meta.url);
@@ -111,6 +111,12 @@ const context = await esbuild.context({
   minify: prod,
 });
 
+// syfe-kernel.py:内置 Python 内核本体(运行时由 kernel/legacyPython 以子进程拉起)。
+// 与思源侧一致:构建产物目录必须带这份脚本,否则内核启动直接报「找不到内核脚本」。
+copyFileSync(
+  path.join(process.cwd(), "tools", "syfe-kernel.py"),
+  path.join(process.cwd(), "syfe-kernel.py"),
+);
 if (prod) {
   await context.rebuild();
   process.exit(0);

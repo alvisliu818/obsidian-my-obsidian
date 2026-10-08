@@ -41,6 +41,8 @@ import { FlashcardPanelView, VIEW_TYPE_FLASHCARD_PANEL } from './panels/flashcar
 import { BlockGraphModal } from './panels/blockGraph';
 import { MountEditorModal, MountListModal } from './panels/mountModals';
 import { MountPanelView, VIEW_TYPE_MOUNT_PANEL } from './panels/mountPanel';
+import { KernelPanelView, VIEW_TYPE_KERNEL_PANEL } from './panels/kernelPanel';
+import { disposeAllKernels } from './exec/kernel/registry';
 import { ExternalFileView, VIEW_TYPE_EXTERNAL_FILE } from './views/ExternalFileView';
 import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE } from './views/ExternalCodeView';
 import { ExternalBlockView, VIEW_TYPE_EXTERNAL_BLOCK } from './views/ExternalBlockView';
@@ -116,6 +118,7 @@ export default class LogseqEditorPlugin extends Plugin {
     this.registerView(VIEW_TYPE_TAG_PANEL, (leaf) => new TagPanelView(leaf, this));
     this.registerView(VIEW_TYPE_FLASHCARD_PANEL, (leaf) => new FlashcardPanelView(leaf, this));
     this.registerView(VIEW_TYPE_MOUNT_PANEL, (leaf) => new MountPanelView(leaf, this));
+this.registerView(VIEW_TYPE_KERNEL_PANEL, (leaf) => new KernelPanelView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_FILE, (leaf) => new ExternalFileView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_CODE, (leaf) => new ExternalCodeView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_BLOCK, (leaf) => new ExternalBlockView(leaf, this));
@@ -515,6 +518,11 @@ export default class LogseqEditorPlugin extends Plugin {
       callback: () => void this.activatePanel(VIEW_TYPE_MOUNT_PANEL),
     });
     this.addCommand({
+      id: 'open-kernel-panel',
+      name: 'Open the Python kernel panel',
+      callback: () => void this.activatePanel(VIEW_TYPE_KERNEL_PANEL),
+    });
+    this.addCommand({
       id: 'add-external-mount',
       name: 'Mount an external folder',
       callback: () => this.promptAddMount(),
@@ -732,6 +740,7 @@ export default class LogseqEditorPlugin extends Plugin {
   }
 
   onunload(): void {
+    void disposeAllKernels();
     logOp(this, 'plugin.unload', '', 'ok');
     if (this.mountRefreshTimer) {
       window.clearInterval(this.mountRefreshTimer);
