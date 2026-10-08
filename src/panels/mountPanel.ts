@@ -138,7 +138,12 @@ export class MountPanelView extends ItemView {
     contentEl.empty();
     contentEl.addClass('logseq-mount-panel');
 
-    const mounts = (this.plugin.settings.externalMounts ?? []).filter((m) => m.enabled);
+    // Pinned mounts float to the top; everything else keeps the order the user
+    // dragged it into (see `wireDragReorder`).
+    const mounts = (this.plugin.settings.externalMounts ?? [])
+      .filter((m) => m.enabled)
+      .slice()
+      .sort((a, b) => Number(b.pinned === true) - Number(a.pinned === true));
     if (mounts.length === 0) {
       const empty = contentEl.createDiv({ cls: 'logseq-mount-panel-empty' });
       empty.createDiv({ text: '还没有外部挂载。' });
@@ -183,13 +188,15 @@ export class MountPanelView extends ItemView {
       }),
     );
     head.createSpan({ cls: 'logseq-mount-name', text: headLabel });
+    if (mount.pinned) head.createSpan({ cls: 'logseq-mount-flag is-pinned', text: '已固定' });
     head.addEventListener('click', () => {
       if (state.open.has('')) state.open.delete('');
       else state.open.add('');
       this.render();
     });
-    // The mount's own menu: edit, unmount, rescan.
+    // The mount's own menu: edit, unmount, rescan, pin.
     this.wireMenu(head, mount, null);
+    this.wireDragReorder(section, head, mount);
 
     if (!state.open.has('')) return;
 
@@ -379,6 +386,16 @@ export class MountPanelView extends ItemView {
         menu.addItem((item) =>
           item.setTitle('重新扫描').setIcon('refresh-cw' as never).onClick(() => this.refreshMounts()),
         );
+        menu.addItem((item) =>
+          item
+            .setTitle(mount.pinned ? '取消固定' : '固定到顶部')
+            .setIcon('pin' as never)
+            .onClick(async () => {
+              mount.pinned = !mount.pinned;
+              await this.plugin.saveSettings();
+              this.render();
+            }),
+        );
         menu.addSeparator();
         menu.addItem((item) =>
           item
@@ -392,6 +409,45 @@ export class MountPanelView extends ItemView {
       }
 
       menu.showAtMouseEvent(e);
+    });
+  }
+
+  /**
+   * Drag the mount's header to reorder the list.
+   *
+   * HTML5 drag-and-drop, not a pointer handler: the rows already own click
+   * (expand/collapse) and contextmenu, and a drag gesture never fires click, so
+   * the two do not fight. The order is written straight into
+   * `settings.externalMounts`, which is what `render()` reads.
+   */
+  private wireDragReorder(section: HTMLElement, head: HTMLElement, mount: ExternalMount): void {
+    head.draggable = true;
+    head.addEventListener('dragstart', (e) => {
+      e.dataTransfer?.setData('text/plain', mount.id);
+      // Firefox refuses to start a drag without some payload being set.
+      e.dataTransfer?.setData('application/x-logseq-mount', mount.id);
+      e.dataTransfer!.effectAllowed = 'move';
+      section.addClass('is-dragging');
+    });
+    head.addEventListener('dragend', () => {
+      section.removeClass('is-dragging');
+      section.removeClass('is-drop-target');
+    });
+    section.addEventListener('dragover', (e) => {
+      const id = e.dataTransfer?.getData('application/x-logseq-mount');
+      if (!id || id === mount.id) return;
+      e.preventDefault();
+      e.dataTransfer!.dropEffect = 'move';
+      section.addClass('is-drop-target');
+    });
+    section.addEventListener('dragleave', () => section.removeClass('is-drop-target'));
+    section.addEventListener('drop', (e) => {
+      const id = e.dataTransfer?.getData('application/x-logseq-mount');
+      section.removeClass('is-drop-target');
+      if (!id || id === mount.id) return;
+      e.preventDefault();
+      void this.plugin.reorderMount(id, mount.id);
+      this.render();
     });
   }
 

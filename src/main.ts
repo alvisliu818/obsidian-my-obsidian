@@ -14,6 +14,8 @@ import {
   pathInFolders,
   shortcutOverridesFrom,
   takeOverForFile,
+  contentSearchFrom,
+  openWithAppsFrom,
   type BlockEditorSettings,
   type EditorChoice,
   type ExternalMount,
@@ -42,6 +44,18 @@ import { MountPanelView, VIEW_TYPE_MOUNT_PANEL } from './panels/mountPanel';
 import { ExternalFileView, VIEW_TYPE_EXTERNAL_FILE } from './views/ExternalFileView';
 import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE } from './views/ExternalCodeView';
 import { ExternalBlockView, VIEW_TYPE_EXTERNAL_BLOCK } from './views/ExternalBlockView';
+import { OfficeView, VIEW_TYPE_OFFICE } from './views/OfficeView';
+import { ImageView, VIEW_TYPE_IMAGE, IMAGE_EXTENSIONS, isImageFile } from './views/ImageView';
+import { OFFICE_EXTENSIONS } from './office/types';
+import { ContentSearchPanelView, VIEW_TYPE_CONTENT_SEARCH } from './panels/contentSearchPanel';
+import { RecentPanelView, VIEW_TYPE_RECENT_PANEL, pushRecent } from './panels/recentPanel';
+import {
+  PRESET_OPEN_WITH,
+  addOpenWithMenuItems,
+  openWithAppById,
+  openWithSystemDefault,
+  revealInSystemExplorer,
+} from './features/openWith';
 import {
   exists,
   linkTargetFor,
@@ -105,6 +119,31 @@ export default class LogseqEditorPlugin extends Plugin {
     this.registerView(VIEW_TYPE_EXTERNAL_FILE, (leaf) => new ExternalFileView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_CODE, (leaf) => new ExternalCodeView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_BLOCK, (leaf) => new ExternalBlockView(leaf, this));
+    this.registerView(VIEW_TYPE_OFFICE, (leaf) => new OfficeView(leaf, this));
+    this.registerView(VIEW_TYPE_IMAGE, (leaf) => new ImageView(leaf, this));
+    this.registerView(VIEW_TYPE_CONTENT_SEARCH, (leaf) => new ContentSearchPanelView(leaf, this));
+    this.registerView(VIEW_TYPE_RECENT_PANEL, (leaf) => new RecentPanelView(leaf, this));
+
+    // Hand Office files to the previewer. Obsidian has no viewer for these at
+    // all (it offers "open in default app" and nothing else), so taking the
+    // extension costs nothing and gains an in-app read path.
+    if (this.settings.officeViewerEnabled) {
+      this.registerExtensions(OFFICE_EXTENSIONS, VIEW_TYPE_OFFICE);
+    }
+    // Images are different: Obsidian already previews them, so this is opt-in.
+    if (this.settings.imageViewerTakeOver) {
+      this.registerExtensions(IMAGE_EXTENSIONS, VIEW_TYPE_IMAGE);
+    }
+
+    // Recent-files tracking. `file-open` fires for every file the user lands
+    // on, which is exactly the notion of "recent" the panel wants.
+    this.registerEvent(
+      this.app.workspace.on('file-open', (file) => {
+        if (!file) return;
+        this.settings.recentFiles = pushRecent(this.settings.recentFiles ?? [], file.path);
+        void this.saveSettings();
+      }),
+    );
 
     // Vault-wide ((block-id)) index
     this.blockIndex = new BlockIndex(this.app);
@@ -497,6 +536,128 @@ export default class LogseqEditorPlugin extends Plugin {
       callback: () => new BlockSearchModal(this.app, this).open(),
     });
 
+    // ---------- Content search (port of siyuan-editor's search panel) ----------
+    this.addCommand({
+      id: 'open-content-search',
+      name: 'Search file contents across the vault',
+      callback: () => void this.activatePanel(VIEW_TYPE_CONTENT_SEARCH),
+    });
+    this.addCommand({
+      id: 'content-search-selection',
+      name: 'Search file contents for the selection',
+      checkCallback: (checking) => {
+        const sel = window.getSelection()?.toString().trim();
+        if (!sel) return false;
+        if (checking) return true;
+        void (async () => {
+          await this.activatePanel(VIEW_TYPE_CONTENT_SEARCH);
+          const view = this.app.workspace.getLeavesOfType(VIEW_TYPE_CONTENT_SEARCH)[0]?.view;
+          if (view instanceof ContentSearchPanelView) {
+            view.setQuery(sel);
+            view.focusQuery();
+            await view.run();
+          }
+        })();
+        return true;
+      },
+    });
+
+    // ---------- Recent files ----------
+    this.addCommand({
+      id: 'open-recent-panel',
+      name: 'Open the recent files panel',
+      callback: () => void this.activatePanel(VIEW_TYPE_RECENT_PANEL),
+    });
+
+    // ---------- Office / image viewers ----------
+    this.addCommand({
+      id: 'open-in-office-view',
+      name: 'Reopen this file in the Office previewer',
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file) return false;
+        if (checking) return true;
+        void this.openInView(VIEW_TYPE_OFFICE, file);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: 'open-in-image-view',
+      name: 'Open this image in the enhanced viewer',
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || !isImageFile(file.name)) return false;
+        if (checking) return true;
+        void this.openInView(VIEW_TYPE_IMAGE, file);
+        return true;
+      },
+    });
+
+    // ---------- External applications ----------
+    this.addCommand({
+      id: 'open-with-system-default',
+      name: 'Open the current file with its system default app',
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file) return false;
+        if (checking) return true;
+        void openWithSystemDefault(this.app, file);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: 'reveal-in-explorer',
+      name: 'Reveal the current file in the system file manager',
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file) return false;
+        if (checking) return true;
+        revealInSystemExplorer(this.app, file);
+        return true;
+      },
+    });
+    for (const app of this.settings.openWithApps ?? []) {
+      if (!app.enabled) continue;
+      this.addCommand({
+        id: `open-with-${app.id}`,
+        name: `Open the current file with ${app.name}`,
+        checkCallback: (checking) => {
+          const file = this.app.workspace.getActiveFile();
+          if (!file) return false;
+          if (checking) return true;
+          void openWithAppById(this.app, file, this.settings.openWithApps ?? [], app.id);
+          return true;
+        },
+      });
+    }
+
+    // File-explorer context menu: the "open with" entries plus the two new
+    // viewers. Registered as an event so Obsidian owns the menu's lifetime.
+    this.registerEvent(
+      this.app.workspace.on('file-menu', (menu, file) => {
+        if (file instanceof TFile) {
+          menu.addSeparator();
+          addOpenWithMenuItems(this.app, file, menu, this.settings.openWithApps ?? []);
+          if (isImageFile(file.name)) {
+            menu.addItem((item) =>
+              item
+                .setTitle('在增强图片查看器中打开')
+                .setIcon('image' as never)
+                .onClick(() => void this.openInView(VIEW_TYPE_IMAGE, file)),
+            );
+          }
+          if (this.settings.officeViewerEnabled && OFFICE_EXTENSIONS.includes(file.extension.toLowerCase())) {
+            menu.addItem((item) =>
+              item
+                .setTitle('用 Office 预览器打开')
+                .setIcon('file-text' as never)
+                .onClick(() => void this.openInView(VIEW_TYPE_OFFICE, file)),
+            );
+          }
+        }
+      }),
+    );
+
     this.addCommand({
       id: 'open-block-graph',
       name: 'Open the block reference graph',
@@ -649,6 +810,21 @@ export default class LogseqEditorPlugin extends Plugin {
     this.settings.externalMounts = mountsFrom(
       (this.settings as { externalMounts?: unknown }).externalMounts,
     );
+    this.settings.externalCodeWrap = this.settings.externalCodeWrap !== false;
+    this.settings.externalBanner = this.settings.externalBanner !== false;
+
+    // "Open with": a config that never had the key gets the presets, so a fresh
+    // install has something in the menu; once the key exists (even as []) the
+    // user's own list — including an empty one — is respected.
+    const rawApps = (this.settings as { openWithApps?: unknown }).openWithApps;
+    this.settings.openWithApps =
+      rawApps === undefined ? PRESET_OPEN_WITH.map((a) => ({ ...a })) : openWithAppsFrom(rawApps);
+    this.settings.recentFiles = Array.isArray(this.settings.recentFiles)
+      ? this.settings.recentFiles.filter((p): p is string => typeof p === 'string').slice(0, 60)
+      : [];
+    this.settings.contentSearch = contentSearchFrom(this.settings.contentSearch);
+    this.settings.officeViewerEnabled = this.settings.officeViewerEnabled !== false;
+    this.settings.imageViewerTakeOver = this.settings.imageViewerTakeOver === true;
   }
 
   async saveSettings(): Promise<void> {
@@ -1012,6 +1188,51 @@ export default class LogseqEditorPlugin extends Plugin {
 
   /** Reveal a side panel, creating its leaf on first use. */
   /** Reveal a sidebar panel, creating its leaf on first use. */
+  /**
+   * Open a file in one of the plugin's own views (Office / image).
+   *
+   * `openFile` cannot do this — it dispatches on the extension through
+   * Obsidian's registry — so the leaf is pointed at the view type directly and
+   * the path handed to it through the view state.
+   */
+  async openInView(viewType: string, file: TFile): Promise<void> {
+    const { workspace } = this.app;
+    const leaf = workspace.getLeaf(false);
+    await leaf.setViewState({ type: viewType, state: { path: file.path }, active: true });
+    workspace.revealLeaf(leaf);
+  }
+
+  /** Move a mount so that `fromId` sits immediately before `toId`. */
+  async reorderMount(fromId: string, toId: string): Promise<void> {
+    const list = this.settings.externalMounts ?? [];
+    const from = list.findIndex((m) => m.id === fromId);
+    const to = list.findIndex((m) => m.id === toId);
+    if (from < 0 || to < 0 || from === to) return;
+    const [moved] = list.splice(from, 1);
+    list.splice(to, 0, moved);
+    await this.saveSettings();
+  }
+
+  /** Keep every open image viewer's tab title in sync after prev/next. */
+  refreshImageViewTitles(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_IMAGE)) {
+      const view = leaf.view as ImageView | null;
+      if (!view) continue;
+      // Obsidian caches the tab label; assigning the display text again is not
+      // enough, so the leaf's own title element is refreshed through the
+      // workspace's update path.
+      (leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
+    }
+  }
+
+  /** Re-render every open recent-files panel. */
+  refreshRecentPanels(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_RECENT_PANEL)) {
+      const view = leaf.view as RecentPanelView | null;
+      view?.render();
+    }
+  }
+
   async activatePanel(viewType: string): Promise<void> {
     const { workspace } = this.app;
     const existing = workspace.getLeavesOfType(viewType)[0];

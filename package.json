@@ -39,7 +39,10 @@
     "@codemirror/view": "^6.34.0",
     "@lezer/highlight": "^1.2.1",
     "@types/prismjs": "^1.26.6",
+    "jszip": "^3.10.2",
+    "mammoth": "^1.13.0",
     "prismjs": "^1.30.0",
-    "wa-sqlite": "^1.0.0"
+    "wa-sqlite": "^1.0.0",
+    "xlsx": "^0.18.5"
   }
 }

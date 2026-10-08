@@ -4,6 +4,7 @@
 # 运行时状态/临时文件同样不入库。
 .trae/
 .openclaw/
+.openclaw-attachments/
 .opencode/
 .workbuddy/
 memory/

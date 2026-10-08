@@ -215,6 +215,26 @@ export interface BlockEditorSettings {
    * When hidden, saving still happens on the usual debounce.
    */
   externalBanner: boolean;
+  /**
+   * Take over Office files (.docx/.xlsx/.pptx/…) with the built-in previewer.
+   * On by default: Obsidian has no viewer for these at all, so there is nothing
+   * to displace — and "open with the system app" stays one click away in the
+   * view's toolbar.
+   */
+  officeViewerEnabled: boolean;
+  /**
+   * Take over image files with the enhanced viewer (zoom / rotate / pan /
+   * prev-next). Off by default, unlike Office: Obsidian already previews
+   * images, so replacing that for every image in the vault is a real change.
+   * The command and the file-menu entry work either way.
+   */
+  imageViewerTakeOver: boolean;
+  /** Configured external applications for the "open with" menu. */
+  openWithApps: OpenWithApp[];
+  /** Recently opened file paths, newest first (bounded by RECENT_LIMIT). */
+  recentFiles: string[];
+  /** Vault-wide content search panel options. */
+  contentSearch: ContentSearchOptions;
 }
 
 /**
@@ -239,6 +259,8 @@ export interface ExternalMount {
   refreshSeconds: number;
   /** Hide the mount without deleting it. */
   enabled: boolean;
+  /** Keep the mount at the top of the panel regardless of drag order. */
+  pinned: boolean;
 }
 
 /** Drop anything malformed — `data.json` is user-editable. */
@@ -257,6 +279,7 @@ export function mountFrom(raw: unknown): ExternalMount | null {
     refreshSeconds: Number.isFinite(secs) && secs >= 0 ? Math.min(secs, 3600) : 0,
     // absent = enabled, so a config written before this field existed still works
     enabled: m.enabled !== false,
+    pinned: m.pinned === true,
   };
 }
 
@@ -276,6 +299,82 @@ export function mountDisplayName(m: ExternalMount): string {
   if (m.label.trim()) return m.label.trim();
   const parts = m.path.replace(/[\\/]+$/, '').split(/[\\/]+/);
   return parts[parts.length - 1] || m.path;
+}
+
+/**
+ * One "open with" entry: an external application that can be handed a file.
+ * `%1` in `args` is the file's absolute path, `%d` its containing folder.
+ */
+export interface OpenWithApp {
+  id: string;
+  /** Label shown in the menu. */
+  name: string;
+  /** Executable path, or a bare command resolvable on PATH. */
+  command: string;
+  args: string;
+  /** Hide without deleting. */
+  enabled: boolean;
+}
+
+/** Drop malformed entries — `data.json` is user-editable. */
+export function openWithAppFrom(raw: unknown): OpenWithApp | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const a = raw as Partial<OpenWithApp>;
+  if (typeof a.id !== 'string' || !a.id.trim()) return null;
+  if (typeof a.command !== 'string' || !a.command.trim()) return null;
+  return {
+    id: a.id.trim(),
+    name: typeof a.name === 'string' && a.name.trim() ? a.name.trim() : a.id.trim(),
+    command: a.command.trim(),
+    args: typeof a.args === 'string' ? a.args : '%1',
+    enabled: a.enabled !== false,
+  };
+}
+
+export function openWithAppsFrom(raw: unknown): OpenWithApp[] {
+  if (!Array.isArray(raw)) return [];
+  const out: OpenWithApp[] = [];
+  for (const item of raw) {
+    const a = openWithAppFrom(item);
+    if (a) out.push(a);
+  }
+  return out;
+}
+
+/** Options for the vault-wide content search panel. */
+export interface ContentSearchOptions {
+  caseSensitive: boolean;
+  wholeWord: boolean;
+  regex: boolean;
+  /** Folder prefix filter; '' = whole vault. */
+  folder: string;
+  /** Comma-separated extension list, dot optional; '' = defaults. */
+  extensions: string;
+  /** Files larger than this (KB) are skipped. */
+  maxFileKB: number;
+}
+
+export const DEFAULT_CONTENT_SEARCH: ContentSearchOptions = {
+  caseSensitive: false,
+  wholeWord: false,
+  regex: false,
+  folder: '',
+  extensions: 'md, txt, markdown',
+  maxFileKB: 1024,
+};
+
+/** Merge stored (possibly partial) search options over the defaults. */
+export function contentSearchFrom(raw: unknown): ContentSearchOptions {
+  const o = (raw ?? {}) as Partial<ContentSearchOptions>;
+  const kb = Number(o.maxFileKB);
+  return {
+    caseSensitive: o.caseSensitive === true,
+    wholeWord: o.wholeWord === true,
+    regex: o.regex === true,
+    folder: typeof o.folder === 'string' ? o.folder : '',
+    extensions: typeof o.extensions === 'string' ? o.extensions : DEFAULT_CONTENT_SEARCH.extensions,
+    maxFileKB: Number.isFinite(kb) && kb >= 1 ? Math.min(kb, 10240) : DEFAULT_CONTENT_SEARCH.maxFileKB,
+  };
 }
 
 /** A page's linked-reference filter: values to require / to hide. */
@@ -310,6 +409,11 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   externalCodeWrap: true,
   externalSplitView: false,
   externalBanner: true,
+  officeViewerEnabled: true,
+  imageViewerTakeOver: false,
+  openWithApps: [],
+  recentFiles: [],
+  contentSearch: { ...DEFAULT_CONTENT_SEARCH },
 };
 
 export function createBlock(text = '', marker: Marker = null): Block {

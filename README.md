@@ -119,3 +119,4 @@ npm run e2e       # CDP-attached real-Obsidian suites in tests/e2e/
 ## License
 
 MIT
+test-mod

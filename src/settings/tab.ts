@@ -3,6 +3,8 @@ import type LogseqEditorPlugin from '../main';
 import { SqliteConsoleModal } from '../features/sqliteConsole';
 import { MountListModal } from '../panels/mountModals';
 import { VIEW_TYPE_MOUNT_PANEL } from '../panels/mountPanel';
+import { VIEW_TYPE_CONTENT_SEARCH } from '../panels/contentSearchPanel';
+import { OpenWithEditModal } from '../features/openWithUi';
 import { mountDisplayName, type PagePropsEditor, type ScopeMode, type ShortcutOverrides } from '../types';
 import { SHORTCUT_GROUP_LABELS } from '../types';
 
@@ -385,6 +387,141 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
           this.plugin.rerenderExternalViews();
         }),
       );
+
+    // ---------- Viewers & content search ----------
+    containerEl.createEl('h3', { text: '查看器与搜索' });
+
+    new Setting(containerEl)
+      .setName('接管 Office 文件')
+      .setDesc(
+        '用内置预览器打开 .docx / .xlsx / .pptx（以及 .odt / .rtf / .csv 等）文件，' +
+          '只读渲染。Obsidian 本身对这类文件没有预览能力，所以开启不挤占任何现有功能；' +
+          '需要编辑时点预览器工具栏的「用外部应用打开」。修改后需重启 Obsidian 生效。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.officeViewerEnabled !== false).onChange(async (v) => {
+          this.plugin.settings.officeViewerEnabled = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName('接管图片文件')
+      .setDesc(
+        '用增强图片查看器打开图片：滚轮 / 按钮缩放、旋转 90°、按住拖拽平移、' +
+          '同目录上一张 / 下一张、复制与另存为。Obsidian 自带图片预览，因此默认关闭；' +
+          '命令面板与右键菜单里的入口无论是否开启都可用。修改后需重启 Obsidian 生效。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.imageViewerTakeOver === true).onChange(async (v) => {
+          this.plugin.settings.imageViewerTakeOver = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName('文件内容搜索')
+      .setDesc(
+        '跨整个库搜索文件内容：支持正则表达式、区分大小写、全词匹配，可按文件夹与扩展名过滤，' +
+          '结果带上下文并可直接跳转到对应行。',
+      )
+      .addButton((b) =>
+        b
+          .setButtonText('打开面板')
+          .setCta()
+          .onClick(() => void this.plugin.activatePanel(VIEW_TYPE_CONTENT_SEARCH)),
+      );
+
+    const cs = this.plugin.settings.contentSearch;
+    new Setting(containerEl)
+      .setName('搜索：默认扩展名')
+      .setDesc('逗号分隔，点号可省略。留空则回退到一组常用文本扩展名。')
+      .addText((t) =>
+        t.setValue(cs.extensions).onChange(async (v) => {
+          this.plugin.settings.contentSearch = { ...cs, extensions: v };
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName('搜索：单文件大小上限（KB）')
+      .setDesc('超过此大小的文件不参与搜索，避免大文件拖慢整库扫描。')
+      .addText((t) =>
+        t.setValue(String(cs.maxFileKB)).onChange(async (v) => {
+          const n = Number(v);
+          this.plugin.settings.contentSearch = {
+            ...cs,
+            maxFileKB: Number.isFinite(n) && n >= 1 ? Math.min(n, 10240) : 1024,
+          };
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    // ---------- Open with ----------
+    containerEl.createEl('h4', { text: '打开方式' });
+    containerEl.createEl('p', {
+      cls: 'setting-item-description',
+      text:
+        '为文件配置「用 XX 打开」的入口。%1 替换为文件绝对路径，%d 替换为所在文件夹。' +
+        '配置后出现在文件右键菜单、图片查看器与 Office 预览器的菜单里，' +
+        '命令面板中也会生成对应命令（需重启后刷新命令列表）。',
+    });
+
+    const apps = this.plugin.settings.openWithApps ?? [];
+    if (apps.length === 0) {
+      containerEl.createDiv({ cls: 'setting-item-description', text: '暂无配置。' });
+    }
+    for (const a of apps) {
+      new Setting(containerEl)
+        .setName(a.name)
+        .setDesc(`${a.command} ${a.args}${a.enabled ? '' : '（已停用）'}`)
+        .addExtraButton((b) =>
+          b
+            .setIcon('settings')
+            .setTooltip('编辑')
+            .onClick(() => {
+              new OpenWithEditModal(this.plugin.app, a, async (next) => {
+                const list = this.plugin.settings.openWithApps ?? [];
+                const i = list.findIndex((x) => x.id === a.id);
+                if (i >= 0) list[i] = next;
+                await this.plugin.saveSettings();
+                this.display();
+              }).open();
+            }),
+        )
+        .addExtraButton((b) =>
+          b
+            .setIcon(a.enabled ? 'toggle-right' : 'toggle-left')
+            .setTooltip(a.enabled ? '停用' : '启用')
+            .onClick(async () => {
+              a.enabled = !a.enabled;
+              await this.plugin.saveSettings();
+              this.display();
+            }),
+        )
+        .addExtraButton((b) =>
+          b
+            .setIcon('trash')
+            .setTooltip('删除')
+            .onClick(async () => {
+              this.plugin.settings.openWithApps = (this.plugin.settings.openWithApps ?? []).filter(
+                (x) => x.id !== a.id,
+              );
+              await this.plugin.saveSettings();
+              this.display();
+            }),
+        );
+    }
+
+    new Setting(containerEl).setName('添加').addButton((b) =>
+      b.setButtonText('添加打开方式').onClick(() => {
+        new OpenWithEditModal(this.plugin.app, null, async (next) => {
+          this.plugin.settings.openWithApps = [...(this.plugin.settings.openWithApps ?? []), next];
+          await this.plugin.saveSettings();
+          this.display();
+        }).open();
+      }),
+    );
 
     // ---------- Templates ----------
     containerEl.createEl('h3', { text: '模板' });

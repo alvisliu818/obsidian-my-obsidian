@@ -186,6 +186,7 @@ export class MountEditorModal extends Modal {
       include: this.draft.include,
       exclude: this.draft.exclude,
       refreshSeconds: Math.min(secs, 3600),
+      pinned: false,
     });
     new Notice('挂载已保存');
     return true;
