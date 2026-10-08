@@ -1420,12 +1420,7 @@ class RenameMap {
           continue;
         }
 
-        const oldAttachmentBacklinks = await getBacklinksForFileSafe({ app: this.app, pathOrFile: oldAttachmentFile });
-        this.abortSignal.throwIfAborted();
-        const keys = new Set<string>(oldAttachmentBacklinks.keys());
-        keys.delete(this.oldPath);
-        keys.delete(this.newPath);
-        if (keys.size === 0) {
+        if (await this.canMoveLinkedAttachment(oldAttachmentFile, newAttachmentFolderPath)) {
           oldAttachmentFiles.push(oldAttachmentFile);
         }
       }
@@ -1514,6 +1509,53 @@ class RenameMap {
 
   public set(oldPath: string, newPath: string): void {
     this.map.set(oldPath, newPath);
+  }
+
+  /**
+   * Whether an attachment this note links moves with it.
+   *
+   * It does when no other note links it. It also does when every other note linking it already keeps its
+   * attachments where this note is going to. A batch move is a run of single renames, each handled on its own,
+   * and moving only an unshared attachment left a shared one behind for good: the first note saw the second
+   * still in the old folder, and the last saw the first, already moved and still linking it. A linker that stays
+   * behind resolves elsewhere and keeps the attachment where it is.
+   *
+   * The second rule is skipped when attachment files are renamed, because a renamed attachment takes its name
+   * from the one note being moved, which for a shared attachment is just whichever note happened to move last.
+   *
+   * See https://github.com/mnaoumov/obsidian-advanced-rename-and-delete-handler/issues/5.
+   *
+   * @param attachmentFile - The attachment this note links.
+   * @param newAttachmentFolderPath - The attachment folder this note resolves to at its new path.
+   * @returns Whether the attachment moves with this note.
+   */
+  private async canMoveLinkedAttachment(attachmentFile: TFile, newAttachmentFolderPath: string): Promise<boolean> {
+    const backlinks = await getBacklinksForFileSafe({ app: this.app, pathOrFile: attachmentFile });
+    this.abortSignal.throwIfAborted();
+    const linkerPaths = new Set<string>(backlinks.keys());
+    linkerPaths.delete(this.oldPath);
+    linkerPaths.delete(this.newPath);
+    if (linkerPaths.size === 0) {
+      return true;
+    }
+
+    if (this.settingsManager.getSettings().shouldRenameAttachmentFiles) {
+      return false;
+    }
+
+    for (const linkerPath of linkerPaths) {
+      const linkerAttachmentFolderPath = await getAttachmentFolderPath({
+        app: this.app,
+        context: AttachmentPathContext.RenameNote,
+        notePathOrFile: linkerPath
+      });
+      this.abortSignal.throwIfAborted();
+      if (linkerAttachmentFolderPath !== newAttachmentFolderPath) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   private async getOldAttachmentFolderPath(oldFile: TFile): Promise<string> {
