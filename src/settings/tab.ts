@@ -305,6 +305,22 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         '之后就能用原生块编辑器打开（反链、块引用、搜索全部生效）。',
     });
 
+    new Setting(containerEl)
+      .setName('启用挂载过滤')
+      .setDesc(
+        '默认关闭：虚拟文档树显示挂载文件夹下的全部内容，不做任何过滤。' +
+          '开启后，每个挂载自己的包含 / 排除正则才会生效；正则原样保留，' +
+          '随时开关都不用重新填写。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.mountFilterEnabled === true).onChange(async (v) => {
+          this.plugin.settings.mountFilterEnabled = v;
+          await this.plugin.saveSettings();
+          this.plugin.refreshMounts();
+          this.display();
+        }),
+      );
+
     const mounts = this.plugin.settings.externalMounts ?? [];
     if (mounts.length === 0) {
       containerEl.createDiv({ cls: 'setting-item-description', text: '暂无外部挂载。' });

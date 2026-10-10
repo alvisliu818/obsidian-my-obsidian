@@ -159,6 +159,11 @@ export interface BlockEditorSettings {
   /**
    * Secondary SQLite index over the vault (markdown stays the source of
    * truth — the database is a rebuildable cache of it).
+   *
+   * Off by default: the in-memory BlockIndex already serves block refs and
+   * backlinks, and the virtual document tree needs no database at all, so the
+   * extra write/startup cost buys nothing for the common case. Turn it on for
+   * the SQL console / large-vault query work.
    */
   sqliteIndexEnabled: boolean;
   /** Keep a snapshot of the database on disk so restarts do not re-index. */
@@ -179,6 +184,14 @@ export interface BlockEditorSettings {
    * a block does not litter the view with bookkeeping.
    */
   hiddenProps: string;
+  /**
+   * Apply each mount's include/exclude regexes to the virtual document tree.
+   *
+   * Off by default: the tree then shows everything under a mounted folder —
+   * "挂载不过滤". The regexes stay configured per mount and take effect again
+   * the moment this is switched on, so nothing has to be re-entered.
+   */
+  mountFilterEnabled: boolean;
   /**
    * Folders OUTSIDE the vault listed in the mount panel. Each is shown as a
    * virtual tree; any entry can also be linked into the vault as a real path
@@ -400,11 +413,12 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   pagePropsEditor: 'logseq',
   refFilters: {},
   shortcuts: { ...DEFAULT_SHORTCUT_OVERRIDES },
-  sqliteIndexEnabled: true,
+  sqliteIndexEnabled: false,
   sqlitePersist: true,
   sqliteAutoSync: true,
   foldEnabled: true,
   hiddenProps: 'collapsed',
+  mountFilterEnabled: false,
   externalMounts: [],
   externalCodeWrap: true,
   externalSplitView: false,

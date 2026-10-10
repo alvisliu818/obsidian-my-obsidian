@@ -19,11 +19,11 @@ import type LogseqEditorPlugin from '../main';
 import type { ExternalMount } from '../types';
 import { mountDisplayName } from '../types';
 import {
-  buildTree,
   compileFilter,
   countTree,
   dirPruned,
   entryMatches,
+  EMPTY_FILTER,
   isTextMount,
   type MountNode,
 } from '../features/mountFilter';
@@ -52,11 +52,28 @@ import { iconForEntry } from '../features/iconTheme';
 
 export const VIEW_TYPE_MOUNT_PANEL = 'logseq-mount-panel';
 
+/**
+ * Row counts below this are drawn whole; above it only the viewport is drawn.
+ * Small mounts keep the plain DOM they always had (which is also what the E2E
+ * suite walks), and the extra machinery only appears where it pays for itself.
+ */
+const MOUNT_VIRTUAL_THRESHOLD = 500;
+/** Must match the row height in styles.css so the spacer maths stays honest. */
+const MOUNT_ROW_HEIGHT = 24;
+/** Rows drawn beyond the viewport on each side, so fast scrolling stays filled. */
+const MOUNT_OVERSCAN = 8;
+
 /** Per-mount render state, kept across repaints. */
 interface MountState {
   /** Expanded folder paths, relative to the mount root. */
   open: Set<string>;
   tree: MountNode[];
+  /**
+   * Folders whose children have been read (`''` = the mount root). The tree is
+   * built one layer at a time: expanding a folder reads just that folder, so
+   * mounting a drive root costs one `readdir` instead of walking all of it.
+   */
+  loaded: Set<string>;
   truncated: boolean;
   scannedAt: number;
   error?: string;
@@ -111,10 +128,16 @@ export class MountPanelView extends ItemView {
     const cached = this.states.get(mount.id);
     if (cached && !force) return cached;
 
-    const f = compileFilter({ include: mount.include, exclude: mount.exclude });
+    // 过滤默认关闭：虚拟文档树挂载不过滤，显示挂载目录下的全部内容。
+    // 关闭时用一个恒真的过滤器，include/exclude 正则原样保留，开启后立即生效。
+    const filtering = this.plugin.settings.mountFilterEnabled !== false;
+    const f = filtering
+      ? compileFilter({ include: mount.include, exclude: mount.exclude })
+      : compileFilter(EMPTY_FILTER);
     const state: MountState = {
       open: cached?.open ?? new Set<string>(['']),
       tree: [],
+      loaded: new Set<string>(),
       truncated: false,
       scannedAt: Date.now(),
     };
@@ -125,16 +148,73 @@ export class MountPanelView extends ItemView {
       return state;
     }
 
-    const { entries, truncated } = scanExternal(mount.path, {
-      shouldEnterDir: (rel) => !dirPruned(rel, f),
-      keepFile: (rel) => entryMatches(rel, f),
-    });
-    state.tree = buildTree(entries, f);
-    state.truncated = truncated;
     if (f.errors.include) state.error = `包含正则无效，已忽略：/${f.errors.include}/`;
     else if (f.errors.exclude) state.error = `排除正则无效，已忽略：/${f.errors.exclude}/`;
     this.states.set(mount.id, state);
+    // First layer only — deeper folders are read when they are expanded
+    // (see `loadLayer`), which is what lets a drive root mount instantly
+    // instead of walking the whole disk before anything is shown.
+    this.loadLayer(mount, '', state);
     return state;
+  }
+
+  /**
+   * Read ONE folder and attach its children to the tree.
+   *
+   * `depth: 0` lists the folder's own entries without descending, so the cost
+   * of expanding a folder is a single `readdir` no matter how much is under it.
+   * Because there is no full walk any more, there is no entry cap either — the
+   * tree is always complete, just filled in lazily.
+   */
+  private loadLayer(mount: ExternalMount, rel: string, state: MountState): void {
+    if (state.loaded.has(rel)) return;
+    state.loaded.add(rel);
+
+    const filtering = this.plugin.settings.mountFilterEnabled !== false;
+    const f = filtering
+      ? compileFilter({ include: mount.include, exclude: mount.exclude })
+      : compileFilter(EMPTY_FILTER);
+
+    const dirAbs = rel ? joinAbs(mount.path, rel) : mount.path;
+    const { entries } = scanExternal(dirAbs, {
+      shouldEnterDir: (childRel) => !dirPruned(rel ? `${rel}/${childRel}` : childRel, f),
+      keepFile: (childRel) => entryMatches(rel ? `${rel}/${childRel}` : childRel, f),
+      depth: 0,
+    });
+
+    const children: MountNode[] = entries.map((e) => ({
+      name: e.name,
+      rel: rel ? `${rel}/${e.rel}` : e.rel,
+      abs: e.abs,
+      isDir: e.isDir,
+      size: e.size,
+      mtime: e.mtime,
+      children: [],
+    }));
+    // Same order `buildTree` produces: folders first, then files, A→Z.
+    children.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+
+    if (!rel) {
+      state.tree = children;
+      return;
+    }
+    const parent = this.findNode(state.tree, rel);
+    if (parent) {
+      parent.children = children;
+      parent.empty = children.length === 0;
+    }
+  }
+
+  /** Find a node by its mount-relative path among the layers loaded so far. */
+  private findNode(list: MountNode[], rel: string): MountNode | null {
+    for (const n of list) {
+      if (n.rel === rel) return n;
+      if (n.isDir) {
+        const hit = this.findNode(n.children, rel);
+        if (hit) return hit;
+      }
+    }
+    return null;
   }
 
   // ------------------------------------------------------------------
@@ -211,7 +291,9 @@ export class MountPanelView extends ItemView {
     if (state.error) section.createDiv({ cls: 'logseq-mount-error', text: state.error });
     const counts = countTree(state.tree);
     const meta: string[] = [];
-    if (counts.files || counts.folders) meta.push(`${counts.files} 文件 · ${counts.folders} 文件夹`);
+    // The tree fills in layer by layer, so a total would be a lie: only what
+    // has actually been read is counted, and the row says so.
+    if (counts.files || counts.folders) meta.push(`已加载 ${counts.files} 文件 · ${counts.folders} 文件夹`);
     if (mount.include.trim()) meta.push(`包含 /${mount.include}/`);
     if (mount.exclude.trim()) meta.push(`排除 /${mount.exclude}/`);
     if (state.truncated) meta.push('已截断');
@@ -221,7 +303,69 @@ export class MountPanelView extends ItemView {
       section.createDiv({ cls: 'logseq-mount-empty', text: '没有符合过滤条件的条目。' });
       return;
     }
-    for (const node of state.tree) this.renderNode(section, mount, node, state, 0);
+    this.renderRows(section, mount, state);
+  }
+
+  /**
+   * Draw the visible rows of one mount.
+   *
+   * The tree is flattened to a list first (only folders in `open` contribute
+   * their children), then only the rows inside the viewport are turned into
+   * DOM — a mounted source tree can hold tens of thousands of entries, and
+   * building a row for each one is what used to make a big mount freeze the
+   * panel. Small trees (up to `VIRTUAL_ROW_THRESHOLD`) are drawn whole, which
+   * keeps the DOM identical to what it has always been for ordinary mounts.
+   */
+  private renderRows(section: HTMLElement, mount: ExternalMount, state: MountState): void {
+    const rows = this.flatten(state);
+    if (rows.length <= MOUNT_VIRTUAL_THRESHOLD) {
+      const box = section.createDiv({ cls: 'logseq-mount-rows' });
+      for (const r of rows) this.renderNode(box, mount, r.node, state, r.depth);
+      return;
+    }
+
+    // Virtualised: a spacer of the full height keeps the scrollbar honest,
+    // and an absolutely positioned band holds only the rows on screen.
+    const scroller = section.createDiv({ cls: 'logseq-mount-scroller' });
+    scroller.style.overflowY = 'auto';
+    scroller.style.maxHeight = '420px';
+    const spacer = scroller.createDiv({ cls: 'logseq-mount-spacer' });
+    spacer.style.position = 'relative';
+    spacer.style.height = `${rows.length * MOUNT_ROW_HEIGHT}px`;
+    const band = spacer.createDiv({ cls: 'logseq-mount-band' });
+    band.style.position = 'absolute';
+    band.style.left = '0';
+    band.style.right = '0';
+
+    const paint = (): void => {
+      band.empty();
+      const top = scroller.scrollTop;
+      const first = Math.max(0, Math.floor(top / MOUNT_ROW_HEIGHT) - MOUNT_OVERSCAN);
+      const visible = Math.ceil(scroller.clientHeight / MOUNT_ROW_HEIGHT) + MOUNT_OVERSCAN * 2;
+      const last = Math.min(rows.length, first + visible);
+      band.style.transform = `translateY(${first * MOUNT_ROW_HEIGHT}px)`;
+      for (let i = first; i < last; i++) {
+        const r = rows[i];
+        const row = band.createDiv({ cls: 'logseq-mount-row-wrap' });
+        row.style.height = `${MOUNT_ROW_HEIGHT}px`;
+        this.renderNode(row, mount, r.node, state, r.depth);
+      }
+    };
+    paint();
+    scroller.addEventListener('scroll', () => paint(), { passive: true });
+  }
+
+  /** Flatten the loaded tree into draw order, honouring which folders are open. */
+  private flatten(state: MountState): Array<{ node: MountNode; depth: number }> {
+    const out: Array<{ node: MountNode; depth: number }> = [];
+    const walk = (list: MountNode[], depth: number): void => {
+      for (const n of list) {
+        out.push({ node: n, depth });
+        if (n.isDir && state.open.has(n.rel)) walk(n.children, depth + 1);
+      }
+    };
+    walk(state.tree, 0);
+    return out;
   }
 
   private renderNode(parent: HTMLElement, mount: ExternalMount, node: MountNode, state: MountState, depth: number): void {
@@ -248,12 +392,18 @@ export class MountPanelView extends ItemView {
       row.createSpan({ cls: 'logseq-mount-name', text: node.name });
       if (node.empty) row.createSpan({ cls: 'logseq-mount-flag', text: '空' });
       row.addEventListener('click', () => {
-        if (isOpen) state.open.delete(node.rel);
-        else state.open.add(node.rel);
+        if (isOpen) {
+          state.open.delete(node.rel);
+        } else {
+          state.open.add(node.rel);
+          // Lazily read this folder's children the first time it is opened.
+          this.loadLayer(mount, node.rel, state);
+        }
         this.render();
       });
       this.wireMenu(row, mount, node);
-      if (isOpen) for (const child of node.children) this.renderNode(row.parentElement ?? parent, mount, child, state, depth + 1);
+      // Children are drawn by `flatten`/`renderRows`, not recursively here —
+      // that is what keeps the row count (and the DOM) bounded.
       return;
     }
 

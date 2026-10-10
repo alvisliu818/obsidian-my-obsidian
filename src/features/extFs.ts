@@ -214,11 +214,17 @@ function errorMessage(e: unknown): string {
  *
  * - `shouldEnterDir(rel)` decides whether to descend (prunes whole subtrees).
  * - `keepFile(rel, name)` decides whether a file becomes an entry.
- * - `limit` bounds the result so mounting `/` cannot hang the file explorer.
- * - `depth` bounds recursion for the same reason.
  *
- * Returns `{ entries, truncated }` — truncated means the limit was hit and the
+ * Returns `{ entries, truncated }` — truncated means a limit was hit and the
  * tree is incomplete, which the caller must surface rather than hide.
+ *
+ * **No limit by default**: the virtual document tree must show a mounted
+ * folder whole, so it is never silently cut short. The old 4000-entry / 12-level
+ * caps existed to stop `mount /` from hanging the panel; that job is done now
+ * by lazy loading (each folder is read when it is expanded), which scales to
+ * any size. `limit`/`depth` stay available for callers that really do want a
+ * bounded scan — only those can ever see `truncated`. Symlinks are not followed
+ * unless asked, so a cyclic link cannot walk the tree forever.
  */
 export function scanExternal(
   root: string,
@@ -230,8 +236,8 @@ export function scanExternal(
     followSymlinks?: boolean;
   },
 ): { entries: ScanEntry[]; truncated: boolean } {
-  const limit = opts.limit ?? 4000;
-  const maxDepth = opts.depth ?? 12;
+  const limit = opts.limit ?? Number.POSITIVE_INFINITY;
+  const maxDepth = opts.depth ?? Number.POSITIVE_INFINITY;
   const follow = opts.followSymlinks ?? false;
   const entries: ScanEntry[] = [];
   let truncated = false;

@@ -3624,6 +3624,32 @@ body.lgp-table-editor-cursor * {
   border-radius: 4px;
   cursor: pointer;
 }
+
+/* Virtualised rows: only used once a mount has more entries than
+   MOUNT_VIRTUAL_THRESHOLD, so an ordinary mount keeps the plain rows above.
+   The 24px here must stay in step with MOUNT_ROW_HEIGHT in mountPanel.ts —
+   the spacer's height is computed from it. */
+.logseq-mount-scroller {
+  position: relative;
+}
+
+.logseq-mount-band {
+  top: 0;
+  will-change: transform;
+}
+
+.logseq-mount-row-wrap {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+.logseq-mount-row-wrap .logseq-mount-row {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  box-sizing: border-box;
+}
 .logseq-mount-head:hover,
 .logseq-mount-row:hover {
   background-color: var(--background-modifier-hover);
