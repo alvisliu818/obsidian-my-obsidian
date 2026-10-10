@@ -230,4 +230,3 @@ test('03 unlinked mentions listed + one-click convert to link', async () => {
     .poll(() => page.evaluate(() => window.app.workspace.getActiveFile()?.path ?? ''), { timeout: 15_000 })
     .toBe('UX/Mentions.md');
 });
-});
