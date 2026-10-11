@@ -14,16 +14,18 @@
  */
 
 import type { Block } from '../types';
-import { runPythonCode, stripANSI, type RunHandle } from './pythonRunner';
+import { runCode, isRunnableLang as isRunnable, langFromTag } from './runner';
+import { stripANSI, type RunHandle } from './pythonRunner';
 
-/** 语言门控:与思源侧一致,先只放行 python。 */
+/** 语言门控:Python / JavaScript / Shell 三类可运行。 */
 export function isRunnableLang(lang: string): boolean {
-  const l = lang.trim().toLowerCase();
-  return l === 'python' || l === 'py';
+  return isRunnable(lang);
 }
 
 interface RunState {
   running: boolean;
+  /** 首次运行时的语言标签;重跑沿用 */
+  lang: string;
   handle: RunHandle | null;
   /** 累积输出(重挂面板时回放) */
   output: string;
@@ -39,7 +41,7 @@ const runStates = new WeakMap<Block, RunState>();
 function stateOf(b: Block): RunState {
   let st = runStates.get(b);
   if (!st) {
-    st = { running: false, handle: null, output: '', exitCode: null, collapsed: false, panel: null };
+    st = { running: false, lang: '', handle: null, output: '', exitCode: null, collapsed: false, panel: null };
     runStates.set(b, st);
   }
   return st;
@@ -60,20 +62,21 @@ export function createRunButton(lang: string, getCode: () => string, b: Block): 
   if (!isRunnableLang(lang)) return null;
   const btn = document.createElement('span');
   btn.className = 'lgp-code-run';
-  btn.setAttribute('aria-label', '运行 Python 代码');
+  btn.setAttribute('aria-label', `运行 ${lang || '代码'}`);
   btn.textContent = '▶';
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
     e.preventDefault();
-    void runBlock(b, getCode());
+    void runBlock(b, getCode(), lang);
   });
   return btn;
 }
 
 /** 运行一个块的代码;面板会被创建/更新。 */
-async function runBlock(b: Block, code: string): Promise<void> {
+async function runBlock(b: Block, code: string, rawLang: string): Promise<void> {
   const st = stateOf(b);
   if (st.running) return;
+  st.lang = rawLang || st.lang;
   st.running = true;
   st.exitCode = null;
   st.output = '';
@@ -92,8 +95,10 @@ async function runBlock(b: Block, code: string): Promise<void> {
   renderPanel(b, st, 'running');
 
   try {
-    st.handle = runPythonCode({
+    const lang = langFromTag(rawLang) ?? 'python';
+    st.handle = runCode({
       code,
+      lang,
       onOutput: (chunk) => {
         st.output += chunk;
         if (st.output.length > 200_000) st.output = st.output.slice(-100_000);
@@ -187,7 +192,7 @@ function renderPanelInto(panel: HTMLElement, b: Block, st: RunState, _phase: 'ru
     e.stopPropagation();
     if (st.running) return;
     // 从块模型取最新代码:面板存在但代码可能已被编辑
-    void runBlock(b, latestCodeOf(b));
+    void runBlock(b, latestCodeOf(b), st.lang);
   });
   actions.appendChild(rerunBtn);
 

@@ -74,11 +74,16 @@ function nodeRequire(id: string): unknown {
   return eval('require')(id);
 }
 
-/** 探测本机可用的 Python 解释器;找不到返回 null。每次调用即时探测(很便宜)。 */
-export function resolvePythonInterpreter(): PythonCandidate | null {
-  const proc = (
-    globalThis as { process?: { platform?: string; env?: Record<string, string | undefined> } }
-  ).process;
+/**
+ * 探测/选择解释器。
+ *
+ * `preferred` 是用户在设置里选中的环境(conda / venv / 自定义路径)——命中就
+ * 直接用,不再走探测链。环境切换的意义正在于此:选了 ai 环境就必须是 ai 的
+ * python,而不是 PATH 上第一个。
+ */
+export function resolvePythonInterpreter(preferred?: PythonCandidate | null): PythonCandidate | null {
+  if (preferred && preferred.cmd) return { cmd: preferred.cmd, args: preferred.args ?? [] };
+  const proc = (globalThis as { process?: { platform?: string; env?: Record<string, string | undefined> } }).process;
   if (!proc) return null;
   const fs = nodeRequire('fs') as { existsSync(p: string): boolean };
   const path = nodeRequire('path') as { join(...parts: string[]): string };

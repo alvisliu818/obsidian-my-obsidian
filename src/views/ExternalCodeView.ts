@@ -56,6 +56,8 @@ import type LogseqEditorPlugin from '../main';
 import { relativeDisplayPath } from '../features/codeFileKind';
 import { setLeafTitle } from '../features/leafTitle';
 import { applyHeaderPath, headerPathSegments } from './headerPath';
+import { runFile, langFromExt } from '../exec/runner';
+import type { RunHandle } from '../exec/pythonRunner';
 
 export { relativeDisplayPath };
 
@@ -197,6 +199,9 @@ export class ExternalCodeView extends ItemView {
   mountPath = '';
   /** 挂载名——视图头部路径的第一段（「挂载名 / 子目录 / 文件名」） */
   mountLabel = '';
+  /** 运行输出区(首次运行时创建) */
+  private runOutputEl: HTMLPreElement | null = null;
+  private runHandle: RunHandle | null = null;
 
   /** 老 state 没有挂载名时，按最长前缀匹配在挂载配置里找回来。 */
   private mountLabelFromSettings(): string {
@@ -314,6 +319,15 @@ export class ExternalCodeView extends ItemView {
       status.setAttribute('title', '保存时写回原文件');
       const saveBtn = banner.createEl('button', { cls: 'logseq-external-save', text: '保存' });
       saveBtn.addEventListener('click', () => void this.flush(true));
+
+      // 运行:仅对可执行的扩展名显示(py / js / sh / ps1 …),用设置里选中的
+      // Python 环境跑 —— 与代码块 ▶ 走同一条执行路径。
+      const runLang = langFromExt(this.fileName);
+      if (runLang) {
+        const runBtn = banner.createEl('button', { cls: 'logseq-external-save', text: '▶ 运行' });
+        runBtn.setAttribute('title', `运行 ${this.fileName}`);
+        runBtn.addEventListener('click', () => void this.runCurrentFile());
+      }
     }
 
     const host = contentEl.createDiv({ cls: 'logseq-external-code-host' });
@@ -398,6 +412,41 @@ export class ExternalCodeView extends ItemView {
    * The file on disk is the note — there is no vault copy and no second source
    * of truth — so saving means writing where the file already lives.
    */
+  /** 运行当前文件(先写回磁盘,再按扩展名分派)。 */
+  async runCurrentFile(): Promise<void> {
+    const lang = langFromExt(this.fileName);
+    if (!lang || !this.abs) return;
+    await this.flush(true);
+    const out = this.ensureRunOutput();
+    out.textContent = '';
+    out.style.display = 'block';
+    const cwd = this.abs.replace(/[\/][^\/]+$/, '');
+    this.runHandle?.interrupt();
+    this.runHandle = runFile(
+      this.abs,
+      lang,
+      cwd,
+      (chunk) => {
+        out.textContent += chunk;
+        out.scrollTop = out.scrollHeight;
+      },
+      (code) => {
+        out.textContent += `
+[退出码 ${code}]
+`;
+        this.runHandle = null;
+      },
+    );
+  }
+
+  private ensureRunOutput(): HTMLPreElement {
+    if (this.runOutputEl && this.runOutputEl.isConnected) return this.runOutputEl;
+    const el = this.contentEl.createEl('pre', { cls: 'logseq-external-run-output' });
+    el.style.display = 'none';
+    this.runOutputEl = el;
+    return el;
+  }
+
   async flush(notify = false): Promise<void> {
     if (this.saveTimer !== null) {
       window.clearTimeout(this.saveTimer);

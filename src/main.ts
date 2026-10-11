@@ -69,8 +69,17 @@ import {
 import type { MountNode } from './features/mountFilter';
 import { openJournal } from './features/dailyNote';
 import { BackupManager } from './core/backup';
+import { registerNativeImgFix } from './features/nativeImgFix';
+import { ExtensionMarketModal } from './extensions/marketModal';
+import { restoreAllExtensions, registerExtensionConsumer, search as extSearch, installExtension, uninstallExtension, toggleExtension, reinstallExtension, getInstalledExtensions } from './extensions/extensionManager';
+import { isExtensionInstalled } from './extensions/extensionStore';
+import { hasGrammarForFence } from './extensions/tmEngine';
+import type { ExtensionSource } from './extensions/types';
+import { registerGrammarFromExtension, unregisterGrammarFromExtension, ensureTmEngineReady } from './extensions/tmEngine';
 import { loadOpLog, logOp, flushOpLog } from './features/logger';
 import { OpLogModal } from './features/opLogModal';
+import { discoverPythonEnvs, probeVersions, spawnEnvFor, type PythonEnv } from './exec/pythonEnvs';
+import { setActivePythonEnv, getActivePythonEnv } from './exec/activeEnv';
 import { BackupRestoreModal } from './features/backupModal';
 import { builtinSlashItems, registerSlashEditorCommands } from './features/commandMenu';
 import { getLogseqPageProps } from './pagePropsRegistry';
@@ -103,12 +112,42 @@ export default class LogseqEditorPlugin extends Plugin {
   /** Timer id for the mount panel's optional auto-refresh; 0 = not scheduled. */
   private mountRefreshTimer = 0;
 
+  /** 扩展市场 API（设置/命令/E2E 与其他插件消费的正式入口） */
+  extMarket = {
+    open: () => new ExtensionMarketModal(this).open(),
+    search: (q: string, size?: number, source?: ExtensionSource) => extSearch(q, size, source),
+    install: (ns: string, name: string, source?: ExtensionSource, version?: string) => installExtension(this, ns, name, source, version),
+    uninstall: (id: string) => uninstallExtension(this, id),
+    toggle: (id: string) => toggleExtension(this, id),
+    reinstall: (id: string) => reinstallExtension(this, id),
+    list: () => getInstalledExtensions(this),
+    isInstalled: (id: string) => isExtensionInstalled(this, id),
+    /** fence 语言是否命中已安装的 TextMate 语法（消费端分流状态） */
+    hasGrammarForFence: (lang: string) => hasGrammarForFence(lang),
+  };
+
   private origSetViewState: ((this: WorkspaceLeaf, state: ViewState, eState?: unknown) => Promise<void>) | null = null;
   private statusModeEl: HTMLElement | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
+    // 供 obsidian-jupyter-notebook 复用同一份环境发现(与它取
+    // renderMarkdownFragment 的软依赖方式一致;插件必须能独立运行,所以那边
+    // 也有自己的降级实现)。
+    (this as unknown as Record<string, unknown>).pythonEnvs = {
+      discover: (roots?: string[]) => discoverPythonEnvs(roots ?? []),
+      resolve: (id: string) => discoverPythonEnvs().find((e) => e.id === id) ?? null,
+      spawnEnvFor,
+    };
+
     this.addSettingTab(new LogseqEditorSettingTab(this.app, this));
+
+    // 扩展市场：注册消费端（语法 → TextMate 引擎），预热引擎后恢复已安装扩展
+    registerExtensionConsumer((ext, action) => {
+      if (action === 'install' || action === 'enable' || action === 'restore') registerGrammarFromExtension(ext);
+      else unregisterGrammarFromExtension(ext);
+    });
+    void ensureTmEngineReady().catch(() => {/* wasm 失败时回落 Prism */}).then(() => restoreAllExtensions(this));
     void loadOpLog(this);
     logOp(this, 'plugin.load', '', 'ok', `v${this.manifest.version}`);
 
@@ -146,6 +185,9 @@ export default class LogseqEditorPlugin extends Plugin {
         void this.saveSettings();
       }),
     );
+
+    // Native-view HTML img 相对 src 锚定（防库内同名劫持，见 features/nativeImgFix）
+    registerNativeImgFix(this);
 
     // Vault-wide ((block-id)) index
     this.blockIndex = new BlockIndex(this.app);
@@ -257,6 +299,11 @@ export default class LogseqEditorPlugin extends Plugin {
     // Declaring `hotkeys` hands the decision to Obsidian's keymap, which runs
     // first and dispatches our command directly. The DOM handler then must NOT
     // also claim these keys, or it would double-fire.
+    this.addCommand({
+      id: 'open-ext-market',
+      name: '打开扩展市场',
+      callback: () => this.extMarket.open(),
+    });
     this.addCommand({
       id: CMD_FIND,
       name: 'Find in current file (outline)',
@@ -778,6 +825,50 @@ export default class LogseqEditorPlugin extends Plugin {
     }
   }
 
+  /** 已扫描到的环境缓存(设置面板与运行路径共用)。 */
+  private pyEnvs: PythonEnv[] | null = null;
+
+  /** 发现环境(含仓库内的 venv);结果缓存,设置面板可强制刷新。 */
+  discoveredPythonEnvs(force = false): PythonEnv[] {
+    if (!force && this.pyEnvs) return this.pyEnvs;
+    const roots: string[] = [];
+    const base = (this.app.vault.adapter as unknown as { basePath?: string }).basePath;
+    if (base) roots.push(base);
+    this.pyEnvs = discoverPythonEnvs(roots);
+    return this.pyEnvs;
+  }
+
+  /** 异步补版本号(不阻塞:列表先出,版本后到)。 */
+  async refreshPythonEnvs(): Promise<void> {
+    this.discoveredPythonEnvs(true);
+    this.pyEnvs = await probeVersions(this.pyEnvs ?? []);
+    this.applyPythonEnv();
+  }
+
+  /** 按设置决定当前生效的环境。自定义路径 > 下拉选择 > 自动探测。 */
+  applyPythonEnv(): void {
+    const custom = this.settings.pythonEnvCustomPath.trim();
+    if (custom) {
+      setActivePythonEnv({ id: custom, name: `${custom} (自定义)`, cmd: custom, args: [], kind: 'system' });
+      return;
+    }
+    const id = this.settings.pythonEnvId;
+    if (id) {
+      const hit = this.discoveredPythonEnvs().find((e) => e.id === id);
+      if (hit) {
+        setActivePythonEnv(hit);
+        return;
+      }
+    }
+    setActivePythonEnv(null);
+  }
+
+  activePythonEnvLabel(): string {
+    const env = getActivePythonEnv();
+    if (!env) return '当前:自动探测';
+    return `当前:${env.name}${env.version ? ' · ' + env.version : ''} — ${env.cmd}`;
+  }
+
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     // Sanitize numeric settings from older/corrupt data files.
@@ -792,6 +883,9 @@ export default class LogseqEditorPlugin extends Plugin {
     if (typeof this.settings.journalFolder !== 'string') this.settings.journalFolder = '';
     if (typeof this.settings.journalFormat !== 'string') this.settings.journalFormat = '';
     if (typeof this.settings.journalTemplate !== 'string') this.settings.journalTemplate = '';
+    if (typeof this.settings.pythonEnvId !== 'string') this.settings.pythonEnvId = '';
+    if (typeof this.settings.pythonEnvCustomPath !== 'string') this.settings.pythonEnvCustomPath = '';
+    this.applyPythonEnv();
     if (typeof this.settings.customTemplateVars !== 'string') this.settings.customTemplateVars = '';
     // Shortcut groups: a config written before these settings existed has no
     // `shortcuts` key at all, and must keep stock Logseq behavior.

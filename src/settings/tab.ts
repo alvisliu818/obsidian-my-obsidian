@@ -1,6 +1,7 @@
 ﻿import { PluginSettingTab, Setting, Notice, type App } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import { SqliteConsoleModal } from '../features/sqliteConsole';
+import { ExtensionMarketModal } from '../extensions/marketModal';
 import { MountListModal } from '../panels/mountModals';
 import { VIEW_TYPE_MOUNT_PANEL } from '../panels/mountPanel';
 import { VIEW_TYPE_CONTENT_SEARCH } from '../panels/contentSearchPanel';
@@ -109,6 +110,13 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
           }),
       );
 
+    // ---------- Extensions ----------
+    containerEl.createEl('h3', { text: '扩展市场' });
+
+    new Setting(containerEl)
+      .setName('扩展市场')
+      .setDesc('从 Open VSX / VSCode Marketplace 搜索并安装 VSCode 扩展（TextMate 语法等），供块编辑器消费。')
+      .addButton((b) => b.setButtonText('打开扩展市场').onClick(() => new ExtensionMarketModal(this.plugin).open()));
     // ---------- Shortcuts ----------
     containerEl.createEl('h3', { text: '快捷键' });
 
@@ -667,5 +675,55 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         }),
       );
     }
+
+    // ------------------------------------------------------------------
+    containerEl.createEl('h3', { text: '代码运行' });
+    containerEl.createEl('p', {
+      text: '代码块与代码文件的 ▶ 运行使用这里选中的 Python 环境（conda / venv / 系统）。切换后对下一次运行生效。',
+      cls: 'setting-item-description',
+    });
+
+    const envs = this.plugin.discoveredPythonEnvs();
+    new Setting(containerEl)
+      .setName('Python 环境')
+      .setDesc(this.plugin.activePythonEnvLabel())
+      .addDropdown((d) => {
+        d.addOption('', '自动探测（PATH → py.exe → Program Files）');
+        for (const e of envs) {
+          d.addOption(e.id, `${e.name}${e.version ? ' · ' + e.version : ''}`);
+        }
+        d.setValue(this.plugin.settings.pythonEnvId);
+        d.onChange(async (v) => {
+          this.plugin.settings.pythonEnvId = v;
+          await this.plugin.saveSettings();
+          this.plugin.applyPythonEnv();
+          this.display();
+        });
+      })
+      .addExtraButton((b) =>
+        b
+          .setIcon('refresh-cw')
+          .setTooltip('重新扫描环境')
+          .onClick(async () => {
+            await this.plugin.refreshPythonEnvs();
+            this.display();
+            new Notice(`已扫描到 ${this.plugin.discoveredPythonEnvs().length} 个 Python 环境`);
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('自定义解释器路径')
+      .setDesc('留空使用上面的下拉选择。填了就优先用它（例如 D:\programs\anaconda3\envs\ai\python.exe）')
+      .addText((t) =>
+        t
+          .setPlaceholder('例如 D:\programs\anaconda3\envs\ai\python.exe')
+          .setValue(this.plugin.settings.pythonEnvCustomPath)
+          .onChange(async (v) => {
+            this.plugin.settings.pythonEnvCustomPath = v.trim();
+            await this.plugin.saveSettings();
+            this.plugin.applyPythonEnv();
+          }),
+      );
   }
 }
+

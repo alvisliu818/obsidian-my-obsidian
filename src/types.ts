@@ -124,6 +124,10 @@ export interface BlockEditorSettings {
   excludedFolders: string;
   /** Debounce delay (ms) before writing edits to disk. */
   saveDebounceMs: number;
+  /** Python env used to run code ('' = auto-detect). See exec/pythonEnvs.ts. */
+  pythonEnvId: string;
+  /** Fallback interpreter path when no discovered env fits ('' = unused). */
+  pythonEnvCustomPath: string;
   /** Open .md files in the block editor by default (all-intrusive take-over). */
   takeOverByDefault: boolean;
   /** Take-over scope: 'all' = every .md file (minus exclusions); 'folders' = only inside includedFolders. */
@@ -451,6 +455,8 @@ export interface RefFilter {
 export const DEFAULT_SETTINGS: BlockEditorSettings = {
   excludedFolders: '',
   saveDebounceMs: 800,
+  pythonEnvId: '',
+  pythonEnvCustomPath: '',
   takeOverByDefault: true,
   scopeMode: 'all',
   includedFolders: '',

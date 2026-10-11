@@ -18,6 +18,7 @@
  */
 
 import { resolvePythonInterpreter } from './pythonInterpreter';
+import { spawnEnvFor, type PythonEnv } from './pythonEnvs';
 
 export interface RunHandle {
   /** 向 stdin 写一行(input() 会消费掉它) */
@@ -30,6 +31,8 @@ export interface RunOptions {
   code: string;
   /** 工作目录(缺省 = 临时目录) */
   cwd?: string;
+  /** 选定环境(conda / venv / 自定义);不传则自动探测 */
+  env?: PythonEnv | null;
   onOutput: (chunk: string) => void;
   onExit: (code: number) => void;
 }
@@ -73,9 +76,9 @@ function tempScriptDir(): string {
 
 /** 执行一段 Python 代码;返回句柄。同步抛错表示根本没起来(调用方展示原因)。 */
 export function runPythonCode(options: RunOptions): RunHandle {
-  const python = resolvePythonInterpreter();
+  const python = resolvePythonInterpreter(options.env ?? null);
   if (!python) {
-    throw new Error('未找到 Python。请安装 Python 3 并确保 python 在 PATH 中');
+    throw new Error('未找到 Python。请在设置里选择环境,或安装 Python 3 并确保 python 在 PATH 中');
   }
 
   const fs = nodeRequire('fs') as {
@@ -94,16 +97,16 @@ export function runPythonCode(options: RunOptions): RunHandle {
   fs.writeFileSync(script, '\ufeff' + options.code.replace(/\r\n/g, '\n'), { encoding: 'utf8' });
 
   const proc = nodeRequire('process') as { env?: Record<string, string | undefined> };
-  const child = cp.spawn(
-    python.cmd,
-    [...python.args, '-u', script],
-    {
-      cwd: options.cwd || undefined,
-      env: {
-        ...proc?.env,
-        PYTHONIOENCODING: 'utf-8', // 双保险:输出固定 UTF-8
-        PYTHONNOUSERSITE: '1',
-      },
+  // 环境切换的关键一步:把环境的 bin 目录前置进 PATH(conda 激活脚本干的事),
+  // 否则带 DLL 的包会 ImportError,matplotlib 也可能弹窗卡死。
+  const childEnv = spawnEnvFor(options.env ?? null, proc?.env ?? {});
+  const child = cp.spawn(python.cmd, [...python.args, '-u', script], {
+    cwd: options.cwd || options.env?.rootDir || undefined,
+    env: {
+      ...childEnv,
+      PYTHONIOENCODING: 'utf-8', // 双保险:输出固定 UTF-8
+      PYTHONNOUSERSITE: '1',
+    },
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
     },
