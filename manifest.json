@@ -1,0 +1,10 @@
+{
+  "id": "obsidian-jupyter-notebook",
+  "name": "Obsidian Jupyter Notebook",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "View, edit and run Jupyter notebooks (.ipynb) inside Obsidian, with a persistent built-in Python kernel.",
+  "author": "alvisliu",
+  "authorUrl": "https://github.com/alvisliu818",
+  "isDesktopOnly": true
+}

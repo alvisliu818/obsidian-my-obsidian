@@ -1,0 +1,39 @@
+{
+  "name": "obsidian-jupyter-notebook",
+  "version": "0.1.0",
+  "description": "View, edit and run Jupyter notebooks (.ipynb) inside Obsidian",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node esbuild.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.mjs production"
+  },
+  "keywords": [
+    "obsidian",
+    "jupyter",
+    "notebook",
+    "ipynb"
+  ],
+  "author": "alvisliu",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "^0.21.5",
+    "obsidian": "^1.5.7",
+    "tslib": "^2.6.3",
+    "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.18.0",
+    "@codemirror/commands": "^6.6.0",
+    "@codemirror/lang-javascript": "^6.2.2",
+    "@codemirror/lang-markdown": "^6.3.0",
+    "@codemirror/language": "^6.10.2",
+    "@codemirror/legacy-modes": "^6.5.4",
+    "@codemirror/search": "^6.7.2",
+    "@codemirror/state": "^6.4.1",
+    "@codemirror/view": "^6.34.0",
+    "@lezer/highlight": "^1.2.1"
+  }
+}
