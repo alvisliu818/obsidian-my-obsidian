@@ -1,0 +1,428 @@
+/* obsidian-browser styles — every colour comes from Obsidian's theme vars so
+   the browser chrome follows the active theme (light and dark). */
+
+.ob-browser-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  padding: 0;
+}
+
+/* ---------- tab strip ---------- */
+
+.ob-tabbar {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 4px 6px 0 6px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--divider-color);
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex: 0 0 auto;
+  scrollbar-width: thin;
+}
+
+.ob-tabbar::-webkit-scrollbar {
+  height: 4px;
+}
+
+.ob-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 200px;
+  min-width: 90px;
+  padding: 4px 6px 4px 8px;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  white-space: nowrap;
+}
+
+.ob-tab:hover {
+  background: var(--background-modifier-hover);
+}
+
+.ob-tab.is-active {
+  background: var(--background-primary);
+  color: var(--text-normal);
+  border-color: var(--divider-color);
+}
+
+.ob-tab-favicon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  object-fit: contain;
+}
+
+.ob-tab-favicon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.ob-tab-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--font-ui-smaller);
+  line-height: 1.4;
+}
+
+.ob-tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-faint);
+}
+
+.ob-tab-close:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.ob-tab-close svg {
+  width: 12px;
+  height: 12px;
+}
+
+.ob-tab-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+}
+
+.ob-tab-add:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.ob-tab-add svg {
+  width: 14px;
+  height: 14px;
+}
+
+.ob-tabhost {
+  flex: 1 1 auto;
+  position: relative;
+  min-height: 0;
+  display: flex;
+}
+
+/* ---------- tab body ---------- */
+
+.ob-browser-tab {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.ob-browser-webview-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  background: var(--background-primary);
+}
+
+.ob-browser-webview-wrap webview {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.ob-browser-toolbar {
+  flex: 0 0 auto;
+  position: relative;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--divider-color);
+}
+
+.ob-browser-loading-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 2px;
+  width: 100%;
+  background: var(--interactive-accent);
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.ob-browser-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+}
+
+.ob-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.ob-btn:hover:not(:disabled) {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.ob-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.ob-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ob-btn.is-active {
+  color: var(--interactive-accent);
+}
+
+.ob-urlbar {
+  flex: 1 1 auto;
+  min-width: 80px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--divider-color);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+}
+
+.ob-urlbar:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+}
+
+.ob-extbar {
+  display: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.ob-ext-icon {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+.ob-findbar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-top: 1px solid var(--divider-color);
+}
+
+.ob-findbar {
+  flex: 1 1 auto;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--divider-color);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+}
+
+.ob-find-result {
+  min-width: 44px;
+  text-align: right;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+/* ---------- docks ---------- */
+
+.ob-dock {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  padding: 0;
+}
+
+.ob-dock-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  flex: 0 0 auto;
+}
+
+.ob-dock-search {
+  flex: 1 1 auto;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--divider-color);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+}
+
+.ob-dock-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+}
+
+.ob-dock-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.ob-dock-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 0 4px 12px 4px;
+}
+
+.ob-dock-group {
+  padding: 8px 6px 4px 6px;
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  color: var(--text-faint);
+  text-transform: none;
+}
+
+.ob-dock-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.ob-dock-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.ob-dock-favicon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  margin-top: 1px;
+  object-fit: contain;
+  color: var(--text-faint);
+}
+
+.ob-dock-favicon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ob-dock-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ob-dock-title {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-normal);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ob-dock-sub {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ob-dock-empty {
+  padding: 16px 8px;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
+.ob-progress {
+  height: 4px;
+  margin: 3px 0;
+  border-radius: 2px;
+  background: var(--background-modifier-border);
+  overflow: hidden;
+}
+
+.ob-progress-fill {
+  height: 100%;
+  background: var(--interactive-accent);
+  transition: width 150ms linear;
+}
+
+/* ---------- extension popup ---------- */
+
+.ob-popup-layer {
+  position: fixed;
+  z-index: 1000;
+  width: 380px;
+  height: 480px;
+  max-height: 70vh;
+  display: flex;
+  background: var(--background-primary);
+  border: 1px solid var(--divider-color);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+
+.ob-popup-webview {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* ---------- settings ---------- */
+
+.ob-ext-list {
+  border-top: 1px solid var(--divider-color);
+  padding-top: 4px;
+}
+
+.ob-modal-hint {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin-bottom: 10px;
+}
