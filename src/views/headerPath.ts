@@ -7,7 +7,7 @@
  * 的 DOM 结构补上「挂载名 / 子目录 / … /」，观感与库内笔记一致。
  */
 
-import { Menu, Notice } from 'obsidian';
+import { Menu, Notice, setIcon } from 'obsidian';
 import { scanExternal } from '../features/extFs';
 
 export interface HeaderSegment {
@@ -82,10 +82,13 @@ export function renderHeaderPath(
 		const span = container.createSpan({ cls: 'view-header-breadcrumb', text: seg.label });
 		span.setAttribute('aria-label', seg.label);
 		span.setAttribute('draggable', 'true');
-		span.title = `${seg.abs}（点击展开同级）`;
+		span.title = `${seg.abs}（点击查看同级）`;
 		if (host) {
-			span.addClass('lgp-hdr-crumb');
-			attachHeaderMenu(span, host, seg);
+			attachHeaderMenu(span, host, {
+				abs: seg.abs,
+				currentAbs: seg.abs,
+				isMount: seg.isMount,
+			});
 		}
 		container.createSpan({ cls: 'view-header-breadcrumb-separator', text: '/' });
 	}
@@ -95,8 +98,6 @@ export function renderHeaderPath(
 // 点击某一段：弹出它的同级（VSCode 面包屑的同款交互）
 // --------------------------------------------------------------------------
 
-/** 子菜单最多再往下铺几层，避免在大目录里递归读盘。 */
-const MAX_MENU_DEPTH = 3;
 /** 一层最多列多少条目 */
 const MENU_LIMIT = 200;
 
@@ -152,39 +153,204 @@ function fileIcon(name: string): string {
 	return /\.md$/i.test(name) ? 'file-text' : 'file-code';
 }
 
+/** 点什么东西弹出来的菜单：看谁的同级、点亮谁。 */
+interface MenuTarget {
+	/** 段 / 文件自己的路径 */
+	abs: string;
+	/** 菜单里要点亮的那一项（空 = 不点亮） */
+	currentAbs: string;
+	/** 挂载名那一段：同级是别的挂载，不是磁盘目录 */
+	isMount?: boolean;
+	/** 直接看这个目录里的内容（点三角展开时用），而不是它的同级 */
+	viewDir?: boolean;
+}
+
 /**
- * 点某一段 → 菜单列出**它的同级**（父目录里的条目），当前那一段勾选高亮；
- * 目录项带子菜单可以继续往下钻，文件项点击直接打开。
+ * 点某一段（或文件名）→ 菜单列出**它的同级**，当前那一项高亮。
+ *
+ * 高亮是整行底色 + 强调色，不用 setChecked：那个只放一个 ✓，语义是"已选中"，
+ * 放在"你当前在这里"上会读成勾选项。
  */
-export function attachHeaderMenu(span: HTMLElement, host: HeaderMenuHost, seg: HeaderSegment): void {
-	span.addEventListener('click', (ev) => {
+function openHeaderMenu(anchor: HTMLElement, host: HeaderMenuHost, target: MenuTarget): void {
+	const menu = new Menu();
+	const folders: { name: string; abs: string }[] = [];
+	// 点文件夹（名字或左侧三角）= 展开/收起，展开的行就地插在同一张菜单里，
+	// 不换浮窗。addItem 时还拿不到 DOM，所以先记名字，等菜单挂上再回填。
+	const toggles = new Map<string, () => void>();
+	if (target.isMount) {
+		addMountLevel(menu, host, target.abs);
+	} else {
+		const dirAbs = target.viewDir ? target.abs : parentOf(target.abs);
+		addDirLevel(menu, host, dirAbs, target.currentAbs, folders, toggles, menu);
+	}
+	addTail(menu, host, target.abs);
+	const rect = anchor.getBoundingClientRect();
+	menu.showAtPosition({ x: rect.left, y: rect.bottom + 2 });
+	// 挂载那一段的菜单里写的是挂载名（不是目录名），所以点亮也得按挂载名比。
+	decorateMenu(
+		menu,
+		folders,
+		host,
+		toggles,
+		target.isMount ? (mountAtRoot(host, target.abs)?.label ?? '') : basenameOf(target.currentAbs),
+	);
+}
+
+/** 挂载根本身精确匹配（findMount 要求 abs 在挂载之下，对挂载根不成立）。 */
+function mountAtRoot(host: HeaderMenuHost, rootAbs: string): ExternalMountLike | null {
+	const want = norm(rootAbs).replace(/\/+$/, '').toLowerCase();
+	for (const m of host.settings.externalMounts ?? []) {
+		if (norm(m.path).replace(/\/+$/, '').toLowerCase() === want) return m;
+	}
+	return null;
+}
+
+/** 点某一段 / 文件名：同级菜单。 */
+export function attachHeaderMenu(el: HTMLElement, host: HeaderMenuHost, target: MenuTarget): void {
+	el.addClass('lgp-hdr-crumb');
+	el.addEventListener('click', (ev) => {
 		ev.preventDefault();
 		ev.stopPropagation();
-		const menu = new Menu();
-		if (seg.isMount) addMountLevel(menu, host, seg.abs);
-		else addDirLevel(menu, host, parentOf(seg.abs), seg.abs, 1);
-		addTail(menu, host, seg);
-		menu.showAtMouseEvent(ev as MouseEvent);
-		highlightChecked(menu);
+		openHeaderMenu(el, host, target);
 	});
 }
 
 /**
- * 给菜单里"当前所在"那一项加一层高亮。
+ * 菜单挂上 DOM 之后再补的两件事：
  *
- * `setChecked` 只放一个 ✓（class `mod-checked`），VSCode 里当前那一级是整行
- * 底色 + 强调色，看得出来自己站在哪。Menu.addItem 返回的是 Menu 而不是
- * MenuItem，所以只能等菜单挂上 DOM 后按 class 回找再补——只碰根菜单，
- * 子菜单里没有"当前项"。
+ *  - 给"当前所在"那一项加高亮 class
+ *  - 给文件夹项在**图标左侧**插一个三角，点它展开该文件夹
+ *
+ * 为什么只能事后补：`Menu.addItem` 返回的是 Menu 而不是 MenuItem，拿不到
+ * 条目对象；而且 Menu 在 show 时会按 section 重排，插入序 ≠ DOM 顺序，所以
+ * 只能按标题文本回找。
  */
-function highlightChecked(menu: Menu): void {
+function decorateMenu(
+	menu: Menu,
+	folders: { name: string; abs: string }[],
+	host: HeaderMenuHost,
+	toggles: Map<string, () => void>,
+	currentName: string,
+): void {
 	const root = (menu as unknown as { dom?: HTMLElement }).dom;
 	if (!root) return;
 	window.requestAnimationFrame(() => {
-		Array.from(root.querySelectorAll<HTMLElement>('.menu-item.mod-checked'))
-			.filter((el) => el.closest('.menu') === root)
-			.forEach((el) => el.addClass('lgp-hdr-current'));
+		const items = Array.from(root.querySelectorAll<HTMLElement>('.menu-item')).filter(
+			(el) => el.closest('.menu') === root,
+		);
+		for (const el of items) {
+			const name = el.querySelector('.menu-item-title')?.textContent ?? '';
+			if (currentName && name === currentName) el.addClass('lgp-hdr-current');
+			const folder = folders.find((f) => f.name === name);
+			if (folder) addTwisty(el, folder.abs, host, toggles, menu, currentName, 0);
+		}
 	});
+}
+
+/**
+ * 文件夹项左侧的三角：点它（或点整行）在**同一张菜单里**就地展开子项，
+ * 再点收起——不换浮窗，子项和同级的文件/文件夹一起列着，跟 VSCode 一样。
+ *
+ * 展开的行是手建的 DOM：Menu.show 之后 addItem 就不再生效了，只能自己往里插
+ * 结构相同的 `.menu-item`。好处是这些行不在 Obsidian 的条目表里，点它们不会
+ * 触发"点完就关菜单"，所以能一路展开下去。
+ */
+function addTwisty(
+	itemEl: HTMLElement,
+	dirAbs: string,
+	host: HeaderMenuHost,
+	toggles: Map<string, () => void>,
+	menu: Menu,
+	currentName: string,
+	depth: number,
+): void {
+	if (itemEl.querySelector('.lgp-hdr-twisty')) return;
+	const name = itemEl.querySelector('.menu-item-title')?.textContent ?? '';
+	const tw = document.createElement('div');
+	tw.className = 'menu-item-icon lgp-hdr-twisty';
+	tw.textContent = '▶';
+	tw.title = '展开这个文件夹';
+	let expanded = false;
+
+	const collapse = (): void => {
+		let next: Element | null = itemEl.nextElementSibling;
+		while (next && (next as HTMLElement).dataset['lgpChild'] === '1') {
+			const after: Element | null = next.nextElementSibling;
+			next.remove();
+			next = after;
+		}
+	};
+
+	const expand = (): void => {
+		let ref: Element = itemEl;
+		for (const entry of listDir(dirAbs)) {
+			const row = makeRow(entry, depth + 1, host, toggles, menu, currentName);
+			ref.insertAdjacentElement('afterend', row);
+			ref = row;
+		}
+	};
+
+	tw.addEventListener('click', (ev) => {
+		ev.preventDefault();
+		ev.stopPropagation();
+		if (expanded) collapse();
+		else expand();
+		expanded = !expanded;
+		tw.textContent = expanded ? '▼' : '▶';
+	});
+	itemEl.insertBefore(tw, itemEl.firstChild);
+	if (name) toggles.set(name, () => tw.click());
+}
+
+/** 一行展开出来的子项：文件夹带自己的三角，文件点击直接打开。 */
+function makeRow(
+	entry: { name: string; abs: string; isDir: boolean },
+	depth: number,
+	host: HeaderMenuHost,
+	toggles: Map<string, () => void>,
+	menu: Menu,
+	currentName: string,
+): HTMLElement {
+	const row = document.createElement('div');
+	row.className = 'menu-item tappable lgp-hdr-child';
+	row.dataset['lgpChild'] = '1';
+	row.style.paddingLeft = `${6 + depth * 14}px`;
+
+	const icon = document.createElement('div');
+	icon.className = 'menu-item-icon';
+	void setIcon(icon, entry.isDir ? 'folder' : fileIcon(entry.name));
+	row.appendChild(icon);
+
+	const title = document.createElement('div');
+	title.className = 'menu-item-title';
+	title.textContent = entry.name;
+	row.appendChild(title);
+
+	if (entry.name === currentName) row.addClass('lgp-hdr-current');
+
+	if (entry.isDir) {
+		// 三角要插在图标左侧，所以先建行再加
+		window.requestAnimationFrame(() =>
+			addTwisty(row, entry.abs, host, toggles, menu, currentName, depth),
+		);
+	} else {
+		row.addEventListener('click', (ev) => {
+			ev.preventDefault();
+			ev.stopPropagation();
+			menu.hide();
+			const mount = findMount(host, entry.abs);
+			if (mount) {
+				void host.openExternalEntry(mount, {
+					name: entry.name,
+					rel: relUnder(mount, entry.abs) || entry.name,
+					abs: entry.abs,
+					isDir: false,
+					children: [],
+				});
+			}
+		});
+	}
+	return row;
 }
 
 function parentOf(abs: string): string {
@@ -193,22 +359,28 @@ function parentOf(abs: string): string {
 	return i > 0 ? full.slice(0, i) : full;
 }
 
-function addTail(menu: Menu, host: HeaderMenuHost, seg: HeaderSegment): void {
+function basenameOf(abs: string): string {
+	const full = norm(abs);
+	const i = full.lastIndexOf('/');
+	return i >= 0 ? full.slice(i + 1) : full;
+}
+
+function addTail(menu: Menu, host: HeaderMenuHost, abs: string): void {
 	menu.addSeparator();
 	menu.addItem((it) =>
 		it.setTitle('复制路径').setIcon('copy').onClick(() => {
-			void navigator.clipboard?.writeText(seg.abs).then(
-				() => new Notice(`已复制路径：${seg.abs}`),
-				() => new Notice(`复制失败：${seg.abs}`),
+			void navigator.clipboard?.writeText(norm(abs)).then(
+				() => new Notice(`已复制路径：${norm(abs)}`),
+				() => new Notice(`复制失败：${norm(abs)}`),
 			);
 		}),
 	);
 	menu.addItem((it) =>
-		it.setTitle('在系统中显示').setIcon('folder-open').onClick(() => host.revealInSystem(seg.abs)),
+		it.setTitle('在系统中显示').setIcon('folder-open').onClick(() => host.revealInSystem(abs)),
 	);
 }
 
-/** 挂载名那一段：同级是别的挂载；点开某个挂载列出它的顶层内容。 */
+/** 挂载名那一段：同级是别的挂载，当前挂载高亮。 */
 function addMountLevel(menu: Menu, host: HeaderMenuHost, currentRoot: string): void {
 	const mounts = (host.settings.externalMounts ?? []).filter((m) => m.enabled !== false);
 	if (!mounts.length) {
@@ -218,9 +390,7 @@ function addMountLevel(menu: Menu, host: HeaderMenuHost, currentRoot: string): v
 	for (const m of mounts) {
 		const root = norm(m.path).replace(/\/+$/, '');
 		menu.addItem((it) => {
-			it.setTitle(m.label || root)
-				.setIcon('folder-open')
-				.setChecked(root.toLowerCase() === norm(currentRoot).toLowerCase());
+			it.setTitle(m.label || root).setIcon('folder-open');
 			if (root.toLowerCase() !== norm(currentRoot).toLowerCase()) {
 				it.onClick(() => host.revealInSystem(root));
 			}
@@ -229,13 +399,15 @@ function addMountLevel(menu: Menu, host: HeaderMenuHost, currentRoot: string): v
 	}
 }
 
-/** 某一层的同级列表。`currentAbs` 是要点亮的那一项。 */
+/** 一个目录里的条目：文件夹在前、文件在后。文件夹由调用方补左侧三角。 */
 function addDirLevel(
 	menu: Menu,
 	host: HeaderMenuHost,
 	dirAbs: string,
 	currentAbs: string,
-	depth: number,
+	folders: { name: string; abs: string }[],
+	toggles: Map<string, () => void>,
+	owner: Menu,
 ): void {
 	const items = listDir(dirAbs);
 	if (!items.length) {
@@ -244,24 +416,20 @@ function addDirLevel(
 	}
 	const mount = findMount(host, dirAbs) ?? findMount(host, currentAbs);
 	for (const entry of items) {
-		const isCurrent = norm(entry.abs) === norm(currentAbs);
 		menu.addItem((it) => {
-			it.setTitle(entry.name)
-				.setIcon(entry.isDir ? 'folder' : fileIcon(entry.name))
-				.setChecked(isCurrent);
-			if (entry.isDir && depth < MAX_MENU_DEPTH) {
-				const sub = new Menu();
-				addDirLevel(sub, host, entry.abs, '', depth + 1);
-				const withSub = it as unknown as { setSubmenu?: (m: Menu) => void };
-				if (typeof withSub.setSubmenu === 'function') withSub.setSubmenu(sub);
-				it.onClick(() => host.revealInSystem(entry.abs));
+			it.setTitle(entry.name).setIcon(entry.isDir ? 'folder' : fileIcon(entry.name));
+			if (entry.isDir) {
+				folders.push({ name: entry.name, abs: entry.abs });
+				// 三角（也就是展开动作）要等菜单挂上 DOM 才有，先按名字记账
+				it.onClick(() => toggles.get(entry.name)?.());
 			} else if (mount) {
 				it.onClick(() => {
+					owner.hide();
 					void host.openExternalEntry(mount, {
 						name: entry.name,
 						rel: relUnder(mount, entry.abs) || entry.name,
 						abs: entry.abs,
-						isDir: entry.isDir,
+						isDir: false,
 						children: [],
 					});
 				});
@@ -286,12 +454,27 @@ export function applyHeaderPath(
 	host: HTMLElement,
 	segments: HeaderSegment[],
 	menuHost?: HeaderMenuHost,
+	fileAbs?: string,
 ): void {
 	const render = (): void => {
 		const parent = headerTitleParent(host);
 		if (!parent) return;
 		renderHeaderPath(parent, segments, menuHost);
+		if (menuHost && fileAbs) attachTitleMenu(host, menuHost, fileAbs);
 	};
 	render();
 	window.requestAnimationFrame(render);
+}
+
+/**
+ * 文件名（标题）也点得动：弹出它所在目录的同级，当前文件高亮。
+ * 标题节点由框架持有、每次 setState 复用，所以只挂一次监听。
+ */
+function attachTitleMenu(host: HTMLElement, menuHost: HeaderMenuHost, fileAbs: string): void {
+	const title = host.querySelector<HTMLElement>('.view-header-title');
+	if (!title) return;
+	if (title.dataset['lgpHdrMenu'] === '1') return;
+	title.dataset['lgpHdrMenu'] = '1';
+	title.title = `${norm(fileAbs)}（点击查看同级）`;
+	attachHeaderMenu(title, menuHost, { abs: fileAbs, currentAbs: fileAbs });
 }

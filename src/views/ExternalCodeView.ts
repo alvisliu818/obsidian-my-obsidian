@@ -206,7 +206,7 @@ export class ExternalCodeView extends ItemView {
       this.mountLabel || this.mountLabelFromSettings(),
     );
     if (segments.length) segments[0].isMount = true;
-    applyHeaderPath(this.containerEl, segments, this.plugin);
+    applyHeaderPath(this.containerEl, segments, this.plugin, this.abs);
   }
 
   async onClose(): Promise<void> {

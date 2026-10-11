@@ -3763,13 +3763,29 @@ body.lgp-table-editor-cursor * {
   text-decoration: underline;
 }
 
-/* 路径菜单里"当前所在那一级"的高亮（VSCode 面包屑的同款观感） */
+/* 路径菜单里"当前所在那一级"的高亮（VSCode 面包屑的同款观感）。
+   不用 setChecked——那个画的是"已勾选"，放在"你在这里"上会读错。 */
 .menu-item.lgp-hdr-current {
   background-color: var(--background-modifier-hover);
 }
 .menu-item.lgp-hdr-current .menu-item-title {
   color: var(--text-accent);
   font-weight: 600;
+}
+
+/* 文件夹项左侧的展开三角（点它换成"看这个文件夹里有什么"） */
+.menu-item-icon.lgp-hdr-twisty {
+  width: 14px;
+  min-width: 14px;
+  margin-left: -2px;
+  font-size: 9px;
+  line-height: 1;
+  opacity: 0.55;
+  cursor: pointer;
+}
+.menu-item-icon.lgp-hdr-twisty:hover {
+  opacity: 1;
+  color: var(--text-accent);
 }
 
 .logseq-external-banner-path {
