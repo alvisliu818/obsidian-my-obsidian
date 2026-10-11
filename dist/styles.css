@@ -51,17 +51,6 @@
 	font-weight: 600;
 }
 
-/* 目录链（文件路径）：比文件名弱一档，且不可点 */
-.bcn-folder {
-	color: var(--text-faint);
-	cursor: default;
-}
-
-.bcn-folder:hover {
-	color: var(--text-muted);
-	background-color: transparent;
-}
-
 .bcn-item.bcn-active {
 	color: var(--text-accent);
 }

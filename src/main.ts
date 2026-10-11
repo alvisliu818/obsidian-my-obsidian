@@ -72,14 +72,13 @@ interface LogseqExternalView {
 	getViewType(): string;
 }
 
-/** 面包屑首项（文件）要展示的东西 */
+/** 面包屑首项（文件）要展示的东西。面包屑只讲「当前文件 › 它的层级」，
+ *  文件路径不参与显示——那是视图头部的事，混进来会多出一层无意义的目录链。 */
 interface PageInfo {
 	/** 文件名（不含扩展名） */
 	name: string;
-	/** 悬浮提示：完整路径 */
+	/** 悬浮提示：文件路径。库外文件给真实磁盘路径（file.path 是 file: 前缀的垃圾） */
 	title: string;
-	/** 目录链；库外文件是「挂载名 › 子目录…」 */
-	segments: string[];
 	/** 库内文件才非空（同标签页面用）；库外文件为 null */
 	file: TFile | null;
 }
@@ -394,109 +393,25 @@ export default class BreadcrumbNavPlugin extends Plugin {
 
 	// ============ 文件路径（面包屑首项前面的目录链） ============
 
-	/**
-	 * 当前视图文件的展示信息。
-	 *
-	 * 库内文件用 `file.path`；库外文件（`TExternalFile`，`path` 是 `file:` +
-	 * 绝对路径，且 `parent` 为 null）走 `getRealPath()`，再按 obsidian-logseq
-	 * 的挂载配置折算成「挂载名 › 子目录…」——从虚拟文档树打开的文件只有这样才看得出
-	 * 它在磁盘上的位置。
-	 */
+	/** 当前视图文件是什么（面包屑首项）。 */
 	private pageInfo(view: BarView): PageInfo | null {
 		if (this.isLogseqExternalView(view)) {
 			const abs = view.abs ?? "";
 			const name = view.fileName || abs.split(/[\\/]/).pop() || "外部笔记";
-			const full = abs.replace(/\\/g, "/");
-			const rel = (view.rel ?? "").replace(/\\/g, "/");
-			return {
-				name: this.stripExt(name),
-				title: full,
-				segments: this.externalSegments(full, rel),
-				file: null,
-			};
+			return { name: this.stripExt(name), title: abs.replace(/\\/g, "/"), file: null };
 		}
 		const file = this.isLogseqView(view) ? view.file : (view as MarkdownView).file;
 		if (!file) return null;
 		const ext = file as unknown as { getRealPath?: () => string };
-		const realPath = typeof ext.getRealPath === "function" ? ext.getRealPath() : file.path;
+		// 库外文件（TExternalFile）的 file.path 是 `file:` + 绝对路径，tooltip 上
+		// 得换成真实磁盘路径；库内文件就是 file.path 本身。
+		const title = typeof ext.getRealPath === "function" ? ext.getRealPath() : file.path;
 		const isExternal = file.path.startsWith("file:");
-		return {
-			name: file.basename,
-			title: realPath,
-			segments: isExternal ? this.externalSegments(realPath, "") : this.vaultSegments(file.path),
-			file: isExternal ? null : file,
-		};
-	}
-
-	/** 库内文件：去掉文件名，剩下的就是目录链 */
-	private vaultSegments(path: string): string[] {
-		const parts = path.split("/").filter(Boolean);
-		parts.pop();
-		return parts;
-	}
-
-	/**
-	 * 库外文件：绝对路径 → 目录链。命中挂载点就显示「挂载名 › 相对目录…」；
-	 * 没命中（比如直接用原生编辑器打开的库外文件）就退回盘内目录，太长只留最后三级。
-	 */
-	private externalSegments(abs: string, rel: string): string[] {
-		const norm = (abs || "").replace(/\\/g, "/");
-		if (!norm) return [];
-		const mount = this.findExternalMount(norm);
-		let parts: string[];
-		if (mount) {
-			parts = norm.slice(mount.root.length).replace(/^\//, "").split("/").filter(Boolean);
-		} else if (rel) {
-			// 外壳视图给了挂载相对路径，直接用它（比绝对路径短得多）
-			parts = rel.replace(/^\//, "").split("/").filter(Boolean);
-		} else {
-			parts = norm.replace(/^[A-Za-z]:/, "").replace(/^\//, "").split("/").filter(Boolean);
-		}
-		parts.pop(); // 最后一段是文件本身
-		if (mount && mount.label) parts.unshift(mount.label);
-		// 没有挂载名可依托时，绝对路径可能很长，只留最后三级
-		if (!mount && parts.length > 3) parts = ["…", ...parts.slice(-3)];
-		return parts;
-	}
-
-	/** 在 obsidian-logseq 的挂载配置里找覆盖该绝对路径的挂载点（取最长匹配） */
-	private findExternalMount(norm: string): { label: string; root: string } | null {
-		const plugins = (
-			this.app as unknown as {
-				plugins?: { plugins?: Record<string, { settings?: { externalMounts?: unknown } }> };
-			}
-		).plugins?.plugins;
-		const mounts = plugins?.["obsidian-logseq"]?.settings?.externalMounts;
-		if (!Array.isArray(mounts)) return null;
-		const lower = norm.toLowerCase();
-		let best: { label: string; root: string } | null = null;
-		for (const raw of mounts) {
-			const m = raw as { path?: unknown; label?: unknown };
-			const root = String(m?.path ?? "").replace(/\\/g, "/").replace(/\/$/, "");
-			if (!root) continue;
-			if (!lower.startsWith(root.toLowerCase() + "/")) continue;
-			if (!best || root.length > best.root.length) {
-				const label = String(m?.label ?? "") || (root.split("/").pop() ?? root);
-				best = { label, root };
-			}
-		}
-		return best;
+		return { name: file.basename, title, file: isExternal ? null : file };
 	}
 
 	private stripExt(name: string): string {
 		return name.replace(/\.(md|markdown|txt)$/i, "");
-	}
-
-	/** 目录链：各级之间用 › 隔开，末尾补一个分隔符交给后面的文件项 */
-	private appendPathItems(bar: HTMLElement, segments: string[]): void {
-		segments.forEach((seg) => {
-			const el = document.createElement("span");
-			el.className = "bcn-item bcn-folder";
-			el.textContent = this.truncate(seg);
-			el.title = seg;
-			bar.appendChild(el);
-			bar.appendChild(this.createSeparator());
-		});
 	}
 
 	/** logseq 面包屑/菜单的统一跳转：优先 revealBlock（只滚动 + 高亮，不进编辑；
@@ -554,8 +469,7 @@ export default class BreadcrumbNavPlugin extends Plugin {
 		bar.textContent = "";
 		if (isActive) this.barEl = bar;
 
-		// —— 目录链 + 首项：文件名（常驻） ——
-		if (this.settings.showFilePath) this.appendPathItems(bar, info.segments);
+		// —— 首项：文件名（常驻） ——
 		const pageEl = document.createElement("span");
 		pageEl.className = "bcn-item bcn-page";
 		pageEl.textContent = info.name;
@@ -675,8 +589,7 @@ export default class BreadcrumbNavPlugin extends Plugin {
 			this.nextEntriesProvider = null;
 		}
 
-		// —— 目录链 + 首项：文件名（点击回到页面顶部） ——
-		if (this.settings.showFilePath) this.appendPathItems(bar, info.segments);
+		// —— 首项：文件名（点击回到页面顶部） ——
 		const pageEl = document.createElement("span");
 		pageEl.className = "bcn-item bcn-page";
 		pageEl.textContent = info.name;

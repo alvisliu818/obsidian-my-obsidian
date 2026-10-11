@@ -51,8 +51,6 @@ export interface BreadcrumbNavSettings {
 	enableRelatedPages: boolean;
 	/** 是否把当前所在标题也放进面包屑 */
 	includeCurrentHeading: boolean;
-	/** 面包屑首项前面是否显示文件所在目录链（库外文件显示为「挂载名 › 子目录…」） */
-	showFilePath: boolean;
 	/** 面包屑是否吸顶（关闭则随内容滚动） */
 	sticky: boolean;
 	/** 是否跟随光标/滚动位置自动更新 */
@@ -70,7 +68,6 @@ export const DEFAULT_SETTINGS: BreadcrumbNavSettings = {
 	hoverExpandOnItem: true,
 	enableRelatedPages: true,
 	includeCurrentHeading: true,
-	showFilePath: true,
 	sticky: true,
 	followCursor: true,
 	maxMenuItems: 20,
