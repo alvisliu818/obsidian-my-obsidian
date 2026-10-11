@@ -1,12 +1,17 @@
 # Breadcrumb Nav（Obsidian 面包屑导航）
 
 把 [logseq-plugin-breadcrumb-nav](../logseq-plugin-breadcrumb-nav) 的思路搬到 Obsidian：
-在**笔记顶部、文件路径（视图头部）下方**常驻一条面包屑，显示 `文件名 › 一级标题 › 二级标题 › …`，
+在**笔记顶部、文件路径（视图头部）下方**常驻一条面包屑，显示 `目录 › 文件名 › 一级标题 › 二级标题 › …`，
 并支持**悬浮查看同级**与**下一级连续下钻**（菜单项悬浮即自动铺开下一级，不用点）。
 
 Logseq 里是「页面 ➡️ 块层级」，Obsidian 里对应「文件 ➡️ 标题层级（H1 › H2 › H3 …）」。
 
 ## 功能
+
+- **文件路径**：面包屑最前面显示文件所在的目录链（`E2E › 笔记 › …`）。从
+  [obsidian-logseq](../obsidian-logseq) 的**虚拟文档树**打开库外文件时，显示
+  `挂载名 › 子目录 › … › 文件名` —— 这类文件不在库里，Obsidian 自己的视图头部
+  不会给出任何路径，只有面包屑能说明它在磁盘上的位置。可在设置里关掉。
 
 - **面包屑常驻**：打开笔记即显示，占据笔记顶部一栏空间（不遮挡正文）；默认吸顶，滚动时固定在文件路径下方。
   **切到非笔记视图（新建标签页、看板等）时保留占位不移除**，切回笔记正文位置不变，不会来回跳动；
@@ -63,6 +68,7 @@ breadcrumb-nav/          ← 把 dist/ 里的东西复制到这里
 | `hoverExpandOnItem` | boolean | true | 悬浮**条目本体**即展开下一级；关闭后必须精确停在 `▸` 上才展开 |
 | `enableRelatedPages` | boolean | true | 是否启用「悬浮文件名显示同标签笔记」 |
 | `includeCurrentHeading` | boolean | true | 是否把当前所在标题也算作面包屑最后一级 |
+| `showFilePath` | boolean | true | 是否在文件名前显示目录链（库外文件显示「挂载名 › 子目录…」） |
 | `sticky` | boolean | true | 面包屑是否吸顶（关闭则随内容滚动） |
 | `followCursor` | boolean | true | 是否跟随光标 / 滚动位置自动更新 |
 | `maxMenuItems` | number | 20 | 悬浮菜单一次最多显示多少条目 |
@@ -71,6 +77,13 @@ breadcrumb-nav/          ← 把 dist/ 里的东西复制到这里
 
 - **数据来源**：`app.metadataCache.getFileCache(file).headings`（`HeadingCache[]`）用栈构建 `HeadingNode` 树，
   先序遍历顺序即文档顺序，`key` 取标题起始偏移量。
+- **三种能挂面包屑的视图**：原生 Markdown 视图、obsidian-logseq 的块编辑器
+  （`logseq-block-editor`）、以及它打开库外文件的外壳视图（`logseq-external-block`）。
+  外壳视图自己没有 `file`，块层级状态（`__lgFocusPath` / `__lgFocusBlocks` / `__lgRoots`）和
+  跳转方法都在它托管的块编辑器上，所以面包屑挂在壳上、数据与动作走内部编辑器。
+- **文件路径**：库内文件取 `file.path` 去掉文件名；库外文件（`TExternalFile`，`path` 是
+  `file:` + 绝对路径且 `parent` 为 null）走 `getRealPath()`，再按 obsidian-logseq 的挂载
+  配置折算成「挂载名 › 相对目录…」，命中不了的退回盘内目录（过长只留最后三级）。
 - **当前位置**：实时预览 / 源码模式取 `view.editor.getCursor().line`，找最后一个 `position.start.line <= 光标行` 的标题；
   阅读模式取滚动位置，与 `.markdown-preview-view` 里的 `h1..h6` 元素按序比对。
 - **跳转（对齐视口顶部，而不是居中）**：不用 `scrollIntoView` 的居中参数。源码 / 实时预览模式先

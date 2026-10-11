@@ -31,6 +31,9 @@ const TAG_CACHE_TTL = 10000;
  *  根块列表（空路径时下一级菜单用），__lgTopBlocks 是文档顶层块（第 0 级的
  *  同级菜单用）。 */
 const LOGSEQ_VIEW_TYPE = "logseq-block-editor";
+/** obsidian-logseq 打开库外 markdown 的外壳视图（虚拟文档树点击 md 走的正是它）。
+ *  它自己没有 file，真正的块编辑器托管在 blockEditor 里。 */
+const LOGSEQ_EXTERNAL_VIEW_TYPE = "logseq-external-block";
 /** obsidian-logseq Block 的极小子集（面包屑只读 text / children / parent） */
 interface LgBlockLike {
 	text: string;
@@ -56,8 +59,33 @@ interface LogseqBlockView {
 	zoomTo?: (b: LgBlockLike | null) => void;
 }
 
-/** 能挂面包屑的视图：原生 Markdown 视图或 logseq 大纲视图 */
-type BarView = MarkdownView | LogseqBlockView;
+/** obsidian-logseq 的库外文件外壳视图：没有 file，文件名与路径由 fileName/abs/rel 提供，
+ *  真正的块编辑器托管在 blockEditor 上（__lg* 状态与跳转方法都在它身上）。 */
+interface LogseqExternalView {
+	contentEl: HTMLElement;
+	fileName: string;
+	/** 磁盘绝对路径 */
+	abs: string;
+	/** 相对挂载根的路径 */
+	rel: string;
+	blockEditor: LogseqBlockView | null;
+	getViewType(): string;
+}
+
+/** 面包屑首项（文件）要展示的东西 */
+interface PageInfo {
+	/** 文件名（不含扩展名） */
+	name: string;
+	/** 悬浮提示：完整路径 */
+	title: string;
+	/** 目录链；库外文件是「挂载名 › 子目录…」 */
+	segments: string[];
+	/** 库内文件才非空（同标签页面用）；库外文件为 null */
+	file: TFile | null;
+}
+
+/** 能挂面包屑的视图：原生 Markdown 视图、logseq 大纲视图、logseq 库外文件外壳视图 */
+type BarView = MarkdownView | LogseqBlockView | LogseqExternalView;
 /** CodeMirror 6 EditorView 的极小子集，避免直接依赖 CM 类型 */
 interface CmLike {
 	scrollDOM?: HTMLElement;
@@ -321,7 +349,7 @@ export default class BreadcrumbNavPlugin extends Plugin {
 		const md = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (md) return md;
 		const v = this.app.workspace.activeLeaf?.view;
-		if (v && this.isLogseqView(v)) return v;
+		if (v && (this.isLogseqView(v) || this.isLogseqExternalView(v))) return v;
 		return null;
 	}
 
@@ -330,11 +358,16 @@ export default class BreadcrumbNavPlugin extends Plugin {
 		const out: BarView[] = [];
 		const push = (v: unknown): void => {
 			if (out.indexOf(v as BarView) >= 0) return;
-			if (this.isMarkdownView(v) || this.isLogseqView(v)) out.push(v as BarView);
+			if (this.isMarkdownView(v) || this.isLogseqView(v) || this.isLogseqExternalView(v)) {
+				out.push(v as BarView);
+			}
 		};
 		push(active);
 		this.app.workspace.getLeavesOfType("markdown").forEach((leaf) => push(leaf.view));
 		this.app.workspace.getLeavesOfType(LOGSEQ_VIEW_TYPE).forEach((leaf) => push(leaf.view));
+		this.app.workspace
+			.getLeavesOfType(LOGSEQ_EXTERNAL_VIEW_TYPE)
+			.forEach((leaf) => push(leaf.view));
 		return out;
 	}
 
@@ -352,6 +385,120 @@ export default class BreadcrumbNavPlugin extends Plugin {
 		return c.getViewType?.() === LOGSEQ_VIEW_TYPE && !!c.contentEl;
 	}
 
+	/** logseq 库外文件外壳视图（虚拟文档树点击 md 打开的那个） */
+	private isLogseqExternalView(v: unknown): v is LogseqExternalView {
+		if (!v || typeof v !== "object") return false;
+		const c = v as Partial<LogseqExternalView> & { getViewType?: () => string };
+		return c.getViewType?.() === LOGSEQ_EXTERNAL_VIEW_TYPE && !!c.contentEl;
+	}
+
+	// ============ 文件路径（面包屑首项前面的目录链） ============
+
+	/**
+	 * 当前视图文件的展示信息。
+	 *
+	 * 库内文件用 `file.path`；库外文件（`TExternalFile`，`path` 是 `file:` +
+	 * 绝对路径，且 `parent` 为 null）走 `getRealPath()`，再按 obsidian-logseq
+	 * 的挂载配置折算成「挂载名 › 子目录…」——从虚拟文档树打开的文件只有这样才看得出
+	 * 它在磁盘上的位置。
+	 */
+	private pageInfo(view: BarView): PageInfo | null {
+		if (this.isLogseqExternalView(view)) {
+			const abs = view.abs ?? "";
+			const name = view.fileName || abs.split(/[\\/]/).pop() || "外部笔记";
+			const full = abs.replace(/\\/g, "/");
+			const rel = (view.rel ?? "").replace(/\\/g, "/");
+			return {
+				name: this.stripExt(name),
+				title: full,
+				segments: this.externalSegments(full, rel),
+				file: null,
+			};
+		}
+		const file = this.isLogseqView(view) ? view.file : (view as MarkdownView).file;
+		if (!file) return null;
+		const ext = file as unknown as { getRealPath?: () => string };
+		const realPath = typeof ext.getRealPath === "function" ? ext.getRealPath() : file.path;
+		const isExternal = file.path.startsWith("file:");
+		return {
+			name: file.basename,
+			title: realPath,
+			segments: isExternal ? this.externalSegments(realPath, "") : this.vaultSegments(file.path),
+			file: isExternal ? null : file,
+		};
+	}
+
+	/** 库内文件：去掉文件名，剩下的就是目录链 */
+	private vaultSegments(path: string): string[] {
+		const parts = path.split("/").filter(Boolean);
+		parts.pop();
+		return parts;
+	}
+
+	/**
+	 * 库外文件：绝对路径 → 目录链。命中挂载点就显示「挂载名 › 相对目录…」；
+	 * 没命中（比如直接用原生编辑器打开的库外文件）就退回盘内目录，太长只留最后三级。
+	 */
+	private externalSegments(abs: string, rel: string): string[] {
+		const norm = (abs || "").replace(/\\/g, "/");
+		if (!norm) return [];
+		const mount = this.findExternalMount(norm);
+		let parts: string[];
+		if (mount) {
+			parts = norm.slice(mount.root.length).replace(/^\//, "").split("/").filter(Boolean);
+		} else if (rel) {
+			// 外壳视图给了挂载相对路径，直接用它（比绝对路径短得多）
+			parts = rel.replace(/^\//, "").split("/").filter(Boolean);
+		} else {
+			parts = norm.replace(/^[A-Za-z]:/, "").replace(/^\//, "").split("/").filter(Boolean);
+		}
+		parts.pop(); // 最后一段是文件本身
+		if (mount && mount.label) parts.unshift(mount.label);
+		// 没有挂载名可依托时，绝对路径可能很长，只留最后三级
+		if (!mount && parts.length > 3) parts = ["…", ...parts.slice(-3)];
+		return parts;
+	}
+
+	/** 在 obsidian-logseq 的挂载配置里找覆盖该绝对路径的挂载点（取最长匹配） */
+	private findExternalMount(norm: string): { label: string; root: string } | null {
+		const plugins = (
+			this.app as unknown as {
+				plugins?: { plugins?: Record<string, { settings?: { externalMounts?: unknown } }> };
+			}
+		).plugins?.plugins;
+		const mounts = plugins?.["obsidian-logseq"]?.settings?.externalMounts;
+		if (!Array.isArray(mounts)) return null;
+		const lower = norm.toLowerCase();
+		let best: { label: string; root: string } | null = null;
+		for (const raw of mounts) {
+			const m = raw as { path?: unknown; label?: unknown };
+			const root = String(m?.path ?? "").replace(/\\/g, "/").replace(/\/$/, "");
+			if (!root) continue;
+			if (!lower.startsWith(root.toLowerCase() + "/")) continue;
+			if (!best || root.length > best.root.length) {
+				const label = String(m?.label ?? "") || (root.split("/").pop() ?? root);
+				best = { label, root };
+			}
+		}
+		return best;
+	}
+
+	private stripExt(name: string): string {
+		return name.replace(/\.(md|markdown|txt)$/i, "");
+	}
+
+	/** 目录链：各级之间用 › 隔开，末尾补一个分隔符交给后面的文件项 */
+	private appendPathItems(bar: HTMLElement, segments: string[]): void {
+		segments.forEach((seg) => {
+			const el = document.createElement("span");
+			el.className = "bcn-item bcn-folder";
+			el.textContent = this.truncate(seg);
+			el.title = seg;
+			bar.appendChild(el);
+			bar.appendChild(this.createSeparator());
+		});
+	}
+
 	/** logseq 面包屑/菜单的统一跳转：优先 revealBlock（只滚动 + 高亮，不进编辑；
 	 *  虚拟滚动下深层块由视图侧扩容渲染、落点顶对齐、稳定后二次校正）；
 	 *  旧 obsidian-logseq 构建没有该方法时降级 focusBlock（旧行为）。 */
@@ -361,12 +508,14 @@ export default class BreadcrumbNavPlugin extends Plugin {
 	}
 
 	private renderBar(view: BarView, isActive: boolean): void {
-		if (this.isLogseqView(view)) {
+		if (this.isLogseqView(view) || this.isLogseqExternalView(view)) {
 			this.renderLogseqBar(view, isActive);
 			return;
 		}
 		const file = view.file;
 		if (!file) return;
+		const info = this.pageInfo(view);
+		if (!info) return;
 		this.closePopups();
 
 		const cache = this.app.metadataCache.getFileCache(file);
@@ -405,16 +554,17 @@ export default class BreadcrumbNavPlugin extends Plugin {
 		bar.textContent = "";
 		if (isActive) this.barEl = bar;
 
-		// —— 首项：文件名（常驻） ——
+		// —— 目录链 + 首项：文件名（常驻） ——
+		if (this.settings.showFilePath) this.appendPathItems(bar, info.segments);
 		const pageEl = document.createElement("span");
 		pageEl.className = "bcn-item bcn-page";
-		pageEl.textContent = file.basename;
-		pageEl.title = file.path;
+		pageEl.textContent = info.name;
+		pageEl.title = info.title;
 		pageEl.addEventListener("click", () => {
 			this.scrollToTop(view);
 		});
-		if (this.settings.enableRelatedPages) {
-			this.attachHover(pageEl, () => this.getRelatedPageEntries(file));
+		if (this.settings.enableRelatedPages && info.file) {
+			this.attachHover(pageEl, () => this.getRelatedPageEntries(info.file as TFile));
 		}
 		bar.appendChild(pageEl);
 
@@ -476,32 +626,39 @@ export default class BreadcrumbNavPlugin extends Plugin {
 	}
 
 	/**
-	 * logseq 大纲视图的面包屑：文件名 › 块层级路径（根 → 当前聚焦块）。
+	 * logseq 大纲视图的面包屑：目录链 › 文件名 › 块层级路径（根 → 当前聚焦块）。
 	 * 路径由 obsidian-logseq 实时维护在 contentEl.__lgFocusPath / __lgFocusBlocks
 	 * （聚焦、缩放、结构变化时更新）；交互对齐 markdown 版 renderBar：点某级 =
 	 * 聚焦该块（路径截断到该级），悬浮弹同级块菜单，末尾 ▸ 弹下一级。
+	 *
+	 * 库外文件走的是外壳视图（logseq-external-block）：面包屑仍挂在壳上，但
+	 * __lg* 状态、lgp-block-focus 事件和所有跳转方法都在它托管的块编辑器上，
+	 * 所以这里分出「挂 bar 的 host」和「取数据/执行动作的 inner」两件事。
 	 */
-	private renderLogseqBar(view: LogseqBlockView, isActive: boolean): void {
-		const file = view.file;
-		if (!file) return;
+	private renderLogseqBar(view: LogseqBlockView | LogseqExternalView, isActive: boolean): void {
+		const inner = this.isLogseqExternalView(view) ? view.blockEditor : view;
+		if (!inner) return;
+		const info = this.pageInfo(view);
+		if (!info) return;
 		this.closePopups();
 
 		// logseq 视图在聚焦/失焦/结构变化时派发 lgp-block-focus（路径同步在
 		// contentEl.__lgFocusPath 上）——监听一次，实时刷新面包屑位置。
 		const host = view.contentEl;
-		if (!this.wiredLogseqHosts.has(host)) {
-			this.wiredLogseqHosts.add(host);
-			host.addEventListener("lgp-block-focus", () => {
-				if (!host.isConnected) {
-					this.wiredLogseqHosts.delete(host);
+		const src = inner.contentEl;
+		if (!this.wiredLogseqHosts.has(src)) {
+			this.wiredLogseqHosts.add(src);
+			src.addEventListener("lgp-block-focus", () => {
+				if (!src.isConnected) {
+					this.wiredLogseqHosts.delete(src);
 					return;
 				}
 				this.refresh();
 			});
 		}
 
-		const chain = view.contentEl.__lgFocusBlocks ?? [];
-		const path = view.contentEl.__lgFocusPath ?? [];
+		const chain = src.__lgFocusBlocks ?? [];
+		const path = src.__lgFocusPath ?? [];
 
 		let bar = this.bars.get(host);
 		if (!bar) {
@@ -518,21 +675,22 @@ export default class BreadcrumbNavPlugin extends Plugin {
 			this.nextEntriesProvider = null;
 		}
 
-		// —— 首项：文件名（点击回到页面顶部） ——
+		// —— 目录链 + 首项：文件名（点击回到页面顶部） ——
+		if (this.settings.showFilePath) this.appendPathItems(bar, info.segments);
 		const pageEl = document.createElement("span");
 		pageEl.className = "bcn-item bcn-page";
-		pageEl.textContent = file.basename;
-		pageEl.title = file.path;
+		pageEl.textContent = info.name;
+		pageEl.title = info.title;
 		pageEl.addEventListener("click", () => {
 			this.lastJumpAt = Date.now();
 			this.closePopups();
-			view.zoomTo?.(null);
-			const sc = view.contentEl.querySelector<HTMLElement>(".block-editor-scroller") ?? view.contentEl;
+			inner.zoomTo?.(null);
+			const sc = src.querySelector<HTMLElement>(".block-editor-scroller") ?? src;
 			sc.scrollTop = 0;
 			this.scheduleRefresh(0);
 		});
-		if (this.settings.enableRelatedPages) {
-			this.attachHover(pageEl, () => this.getRelatedPageEntries(file));
+		if (this.settings.enableRelatedPages && info.file) {
+			this.attachHover(pageEl, () => this.getRelatedPageEntries(info.file as TFile));
 		}
 		bar.appendChild(pageEl);
 
@@ -547,14 +705,14 @@ export default class BreadcrumbNavPlugin extends Plugin {
 			// 点击某一级：聚焦该块，路径截短到该级
 			el.addEventListener("click", () => {
 				this.closePopups();
-				this.focusLgBlock(view, b);
+				this.focusLgBlock(inner, b);
 				this.scheduleRefresh(0);
 			});
 			if (this.settings.enableSiblingsMenu) {
 				// 高亮「本级所在的那一支」：即被悬浮的这一级本身
 				this.attachHover(el, () => {
-					const siblings = i > 0 ? chain[i - 1].children : (view.contentEl.__lgTopBlocks ?? []);
-					return this.lgBlockEntries(view, siblings, b);
+					const siblings = i > 0 ? chain[i - 1].children : (src.__lgTopBlocks ?? []);
+					return this.lgBlockEntries(inner, siblings, b);
 				});
 			}
 			bar.appendChild(el);
@@ -564,7 +722,7 @@ export default class BreadcrumbNavPlugin extends Plugin {
 		const nextChildren = this.settings.enableNextLevel
 			? chain.length
 				? chain[chain.length - 1].children
-				: (view.contentEl.__lgRoots ?? [])
+				: (src.__lgRoots ?? [])
 			: [];
 		if (nextChildren.length) {
 			bar.appendChild(this.createSeparator());
@@ -573,7 +731,7 @@ export default class BreadcrumbNavPlugin extends Plugin {
 			icon.textContent = "▸";
 			icon.title = "下一级";
 			const provider = () =>
-				this.lgBlockEntries(view, nextChildren, chain.length ? chain[chain.length - 1] : null);
+				this.lgBlockEntries(inner, nextChildren, chain.length ? chain[chain.length - 1] : null);
 			this.attachHover(icon, provider);
 			icon.addEventListener("click", (ev) => {
 				ev.stopPropagation();

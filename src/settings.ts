@@ -116,6 +116,20 @@ export class BreadcrumbNavSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName("显示文件路径")
+			.setDesc(
+				"面包屑最前面显示文件所在的目录链（如「E2E › 」）；库外文件显示为「挂载名 › 子目录…」，" +
+					"这样从虚拟文档树打开的文件也能看出它在磁盘上的位置"
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.showFilePath).onChange(async (value) => {
+					this.plugin.settings.showFilePath = value;
+					await this.plugin.saveSettings();
+					this.plugin.scheduleRefresh(0);
+				})
+			);
+
+		new Setting(containerEl)
 			.setName("吸顶显示")
 			.setDesc("滚动时面包屑固定在笔记顶部；关闭后随内容一起滚走")
 			.addToggle((toggle) =>

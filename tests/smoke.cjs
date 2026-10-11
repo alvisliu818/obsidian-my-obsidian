@@ -189,6 +189,8 @@ const nextBtnOf = (item) => item.children.find((c) => c.className === "bcn-popup
 	const plugin = new BreadcrumbNavPlugin(app, { id: "breadcrumb-nav" });
 	await plugin.onload();
 	clearTimeout(plugin.refreshTimer); // 停掉启动时的延迟刷新，避免干扰断言
+	// 下面这些场景断言的是「标题链」本身，先关掉目录链前缀（场景 16 起单独测它）
+	plugin.settings.showFilePath = false;
 
 	view.editor.cursor = { line: 5, ch: 0 };
 	await plugin.refresh();
@@ -546,8 +548,111 @@ const nextBtnOf = (item) => item.children.find((c) => c.className === "bcn-popup
 		assert.ok(barOf(view), "活动视图的面包屑仍在");
 	});
 
+	// ---------- 场景 16：库内文件显示目录链 ----------
+	plugin.app = app;
+	plugin.settings.showFilePath = true;
+	caches.set(file.path, { headings: HEADINGS, tags: [], frontmatter: null });
+	view.editor.cursor = { line: 5, ch: 0 };
+	await plugin.refresh();
+	check("开启后目录链排在文件名前面", () => {
+		bar = barOf(view);
+		assert.strictEqual(bar.textContent, "工作›项目笔记›第一章›第一节›小节›▸");
+		assert.strictEqual(itemsOf(bar)[0].className, "bcn-item bcn-folder");
+		assert.strictEqual(itemsOf(bar)[0].textContent, "工作");
+		assert.strictEqual(itemsOf(bar)[1].className, "bcn-item bcn-page");
+	});
+	check("文件项的悬浮提示是完整路径", () => {
+		assert.strictEqual(itemsOf(barOf(view))[1].title, "工作/项目笔记.md");
+	});
+	plugin.settings.showFilePath = false;
+	await plugin.refresh();
+	check("关掉后回到只有文件名的形态", () => {
+		assert.strictEqual(barOf(view).textContent, "项目笔记›第一章›第一节›小节›▸");
+	});
+
+	// ---------- 场景 17：虚拟文档树（库外文件外壳视图）也有面包屑 ----------
+	// 点击虚拟文档树里的 md 打开的是 obsidian-logseq 的 logseq-external-block
+	// 外壳：自己没有 file，块编辑器托管在 blockEditor 上，路径来自 abs/rel。
+	const MOUNT_ABS = "E:\\HOME\\Local\\mount-menu-e2e";
+	const extInner = document.createElement("div");
+	extInner.className = "view-content";
+	document.body.appendChild(extInner);
+	const b1 = { text: "根块", children: [] };
+	const b2 = { text: "子块", children: [] };
+	const b3 = { text: "孙块", children: [] };
+	b1.children = [b2];
+	b2.children = [b3];
+	b2.parent = b1;
+	b3.parent = b2;
+	extInner.__lgFocusBlocks = [b1, b2];
+	extInner.__lgFocusPath = ["根块", "子块"];
+	extInner.__lgRoots = [b1];
+	extInner.__lgTopBlocks = [b1];
+
+	const extHost = document.createElement("div");
+	extHost.className = "view-content logseq-external-block-view";
+	document.body.appendChild(extHost);
+	const zoomed = [];
+	const extView = {
+		contentEl: extHost,
+		fileName: "a.md",
+		abs: MOUNT_ABS + "\\probe-sub\\a.md",
+		rel: "probe-sub/a.md",
+		blockEditor: {
+			contentEl: extInner,
+			zoomTo: (b) => zoomed.push(b),
+			revealBlock: (b) => zoomed.push(b),
+		},
+		getViewType: () => "logseq-external-block",
+	};
+	const extApp = {
+		vault: app.vault,
+		metadataCache: app.metadataCache,
+		plugins: {
+			plugins: {
+				"obsidian-logseq": {
+					settings: {
+						externalMounts: [
+							{ id: "menu", path: MOUNT_ABS, label: "菜单挂载", enabled: true },
+						],
+					},
+				},
+			},
+		},
+		workspace: {
+			getActiveViewOfType: () => null,
+			activeLeaf: { view: extView },
+			getLeavesOfType: (type) => (type === "logseq-external-block" ? [{ view: extView }] : []),
+			getLeaf: () => ({ openFile: async () => {} }),
+			on: () => ({}),
+		},
+	};
+	plugin.app = extApp;
+	plugin.settings.showFilePath = true;
+	await plugin.refresh();
+	check("虚拟文档树打开的文件也有面包屑（挂载名 › 子目录 › 文件名）", () => {
+		const b = barOf(extView);
+		assert.ok(b, "外壳视图里应插入面包屑");
+		assert.strictEqual(extHost.children[0], b, "面包屑应在最前面");
+		assert.strictEqual(b.textContent, "菜单挂载›probe-sub›a›根块›子块›▸");
+		const items = itemsOf(b);
+		assert.strictEqual(items[0].className, "bcn-item bcn-folder");
+		assert.strictEqual(items[2].className, "bcn-item bcn-page");
+		assert.strictEqual(items[2].title, "E:/HOME/Local/mount-menu-e2e/probe-sub/a.md");
+	});
+	check("点文件名回到页面根（走内部块编辑器的 zoomTo）", () => {
+		itemsOf(barOf(extView))[2].dispatch("click");
+		assert.deepStrictEqual(zoomed, [null]);
+	});
+	check("点块层级某一级聚焦该块（走内部块编辑器）", () => {
+		itemsOf(barOf(extView))[4].dispatch("click");
+		assert.strictEqual(zoomed.length, 2);
+		assert.strictEqual(zoomed[1], b2);
+	});
+
 	plugin.onunload();
 	assert.strictEqual(barOf(view), null);
+	assert.strictEqual(barOf(extView), null);
 
 	console.log("\n全部 " + passed + " 项冒烟测试通过 ✅");
 	process.exit(0);
