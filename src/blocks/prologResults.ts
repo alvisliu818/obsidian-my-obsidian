@@ -4,7 +4,7 @@
  */
 
 import { setIcon } from 'obsidian';
-import type { BlockEditorView } from '../view/BlockEditorView';
+import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Block } from '../types';
 import { type Term } from '../features/prolog';
 import { prologFacts } from '../features/prologFacts';
@@ -21,7 +21,7 @@ interface CacheEntry {
 const cache = new WeakMap<Block, CacheEntry>();
 
 /** A raw block whose body is a ```prolog fence, and not being edited. */
-export function isPrologBlock(b: Block, host: BlockEditorView): boolean {
+export function isPrologBlock(b: Block, host: BlockRenderHost): boolean {
   if (host.focusedBlock === b) return false;
   return prologSourceOf(b.text) !== null;
 }
@@ -30,7 +30,7 @@ export function isPrologBlock(b: Block, host: BlockEditorView): boolean {
 export function syncPrologContainer(
   wrap: HTMLElement,
   b: Block,
-  host: BlockEditorView,
+  host: BlockRenderHost,
 ): void {
   const active = isPrologBlock(b, host);
   wrap.classList.toggle('block-has-prolog', active);
@@ -44,7 +44,7 @@ export function syncPrologContainer(
   else wrap.appendChild(el);
 }
 
-function renderPrologResults(b: Block, host: BlockEditorView): HTMLElement {
+function renderPrologResults(b: Block, host: BlockRenderHost): HTMLElement {
   const idx = host.plugin.blockIndex;
   const version = idx?.version ?? 0;
   const sig = b.text;

@@ -5,7 +5,7 @@
 
 import { EditorView } from '@codemirror/view';
 import { closeCompletion, completionStatus } from '@codemirror/autocomplete';
-import type { BlockEditorView } from '../view/BlockEditorView';
+import type { BlockRenderHost } from '../blocks/renderHost';
 import { createEditorExtensions } from './extensions';
 import { expandTemplates, type TemplateContext } from '../features/template';
 import {
@@ -24,7 +24,7 @@ export function mountFocusedEditor(
   parent: HTMLElement,
   block: Block,
   pos: CursorPos,
-  host: BlockEditorView,
+  host: BlockRenderHost,
 ): EditorView {
   const view = new EditorView({
     // Properties ride along as `key:: value` lines under the text (Logseq

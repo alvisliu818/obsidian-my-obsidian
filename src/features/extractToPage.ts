@@ -12,7 +12,7 @@
  */
 
 import { Modal, Notice, Setting, TFile, normalizePath } from 'obsidian';
-import type { BlockEditorView } from '../view/BlockEditorView';
+import type { BlockRenderHost } from '../blocks/renderHost';
 import { containsBlock, isDescendant } from '../core/treeOps';
 import type { Block } from '../types';
 import {
@@ -24,7 +24,7 @@ import {
 } from './extractPage';
 
 /** The blocks an extract acts on: the multi-selection, else the focused one. */
-export function extractCandidates(host: BlockEditorView): Block[] {
+export function extractCandidates(host: BlockRenderHost): Block[] {
   const sel = host.topSelectedBlocks();
   if (sel.length > 0) return sel;
   const b = host.focusedBlock ?? host.lastEditedBlock;
@@ -37,7 +37,7 @@ export function extractCandidates(host: BlockEditorView): Block[] {
  * The suggested name comes from the block text; an empty suggestion (an empty
  * block) means the user must type one — we never invent a page name.
  */
-export function openExtractToPageModal(host: BlockEditorView, blocks: Block[]): void {
+export function openExtractToPageModal(host: BlockRenderHost, blocks: Block[]): void {
   if (blocks.length === 0) {
     new Notice('Focus a block first.');
     return;
@@ -49,7 +49,7 @@ class ExtractToPageModal extends Modal {
   private name: string;
 
   constructor(
-    private host: BlockEditorView,
+    private host: BlockRenderHost,
     private blocks: Block[],
   ) {
     super(host.app);
@@ -118,7 +118,7 @@ class ExtractToPageModal extends Modal {
  * A failure at step 3 aborts with the source untouched.
  */
 export async function extractBlocksToPage(
-  host: BlockEditorView,
+  host: BlockRenderHost,
   blocks: Block[],
   rawName: string,
 ): Promise<boolean> {

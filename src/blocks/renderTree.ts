@@ -20,7 +20,7 @@ import { MarkdownRenderer, setIcon } from 'obsidian';
 import { createRunButton, mountRunUi, registerCodeWrap } from '../exec/codeBlockRun';
 import { enhanceTable } from './tableEditor';
 import { hasTable } from './tableModel';
-import type { BlockEditorView } from '../view/BlockEditorView';
+import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Block } from '../types';
 import { blockId } from '../types';
 import { foldLevelOf, foldSummary, isFoldableBody, isFoldableHeading, isInsideFoldedSection, isMediaOnlyBlock, normFoldKey } from '../core/fold';
@@ -99,7 +99,7 @@ function contentSig(b: Block): string {
   return JSON.stringify([b.text, b.marker ?? '', b.kind]);
 }
 
-export function renderBlockTree(container: HTMLElement, roots: Block[], host: BlockEditorView): void {
+export function renderBlockTree(container: HTMLElement, roots: Block[], host: BlockRenderHost): void {
   loadMoreObserver?.disconnect();
   loadMoreObserver = null;
   // A full rebuild empties the scroller for an instant — the browser clamps
@@ -187,7 +187,7 @@ export function renderBlockTree(container: HTMLElement, roots: Block[], host: Bl
   if (preserveScroll && sc) sc.scrollTop = savedTop;
 }
 
-function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HTMLElement {
+function renderBlock(b: Block, host: BlockRenderHost, budget?: RenderBudget): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'block-wrap' + (b.kind === 'raw' ? ' block-raw' : '');
   // SiYuan parity: the type is derived from the markdown on every render
@@ -414,7 +414,7 @@ function renderBlock(b: Block, host: BlockEditorView, budget?: RenderBudget): HT
  * `.tracetime-label` component at the row's right edge. No-op when the plugin
  * is absent (labelFor returns null).
  */
-function syncTracetimeLabel(wrap: HTMLElement, b: Block, host: BlockEditorView): void {
+function syncTracetimeLabel(wrap: HTMLElement, b: Block, host: BlockRenderHost): void {
   // The native properties UI has no labels of its own — keep that row bare.
   if (isPropsBlock(b, host) && host.plugin.settings.pagePropsEditor === 'native') return;
   const main = wrap.querySelector(':scope > .block-main');
@@ -438,7 +438,7 @@ function syncTracetimeLabel(wrap: HTMLElement, b: Block, host: BlockEditorView):
 }
 
 /** Update the labels of every rendered row after the tracker reconciled. */
-export function refreshTracetimeLabels(host: BlockEditorView): void {
+export function refreshTracetimeLabels(host: BlockRenderHost): void {
   for (const wrap of host.containerEl.querySelectorAll<HTMLElement>('.block-wrap')) {
     const b = blockOfEl.get(wrap);
     if (b) syncTracetimeLabel(wrap, b, host);
@@ -465,7 +465,7 @@ export function refreshTracetimeLabels(host: BlockEditorView): void {
  * The row is also the unfold button: clicking it restores the real text. The
  * block's markdown is never modified, so this is a view state only.
  */
-function renderFoldSummary(content: HTMLElement, b: Block, host: BlockEditorView): void {
+function renderFoldSummary(content: HTMLElement, b: Block, host: BlockRenderHost): void {
   const row = content.createEl('div', { cls: 'block-fold-summary' });
   row.createEl('span', { cls: 'block-fold-kind', text: blockKindLabel(b) });
   const detail = foldSummary(b);
@@ -519,7 +519,7 @@ const WRAP_PROPS_SKIP = new Set(['id', 'collapsed', 'style', VIEW_PROP, VIEW_COL
  * working everywhere else (folding, the SQLite index, the properties panel).
  * Compared through `normFoldKey`, so `Collapsed` and `collapsed` are one key.
  */
-function hiddenPropSet(host: BlockEditorView): Set<string> {
+function hiddenPropSet(host: BlockRenderHost): Set<string> {
   const set = new Set(WRAP_PROPS_SKIP);
   for (const raw of (host.plugin.settings.hiddenProps ?? '').split(',')) {
     const name = raw.trim();
@@ -533,7 +533,7 @@ function hiddenPropSet(host: BlockEditorView): Set<string> {
  * editor's property lines, and BOTH the key and the value are pages —
  * clicking either opens/creates that page.
  */
-function renderPropLine(parent: HTMLElement, k: string, v: string, host: BlockEditorView, sep = ':: '): void {
+function renderPropLine(parent: HTMLElement, k: string, v: string, host: BlockRenderHost, sep = ':: '): void {
   const item = parent.createEl('div', { cls: 'block-prop-item' });
   const key = item.createEl('span', { cls: 'block-prop-key', text: k });
   item.createEl('span', { cls: 'block-prop-sep', text: sep });
@@ -548,7 +548,7 @@ function renderPropLine(parent: HTMLElement, k: string, v: string, host: BlockEd
 }
 
 /** Render (or clear) the `key:: value` props row under the block content. */
-function syncPropsRow(wrap: HTMLElement, b: Block, host: BlockEditorView, editing = false): void {
+function syncPropsRow(wrap: HTMLElement, b: Block, host: BlockRenderHost, editing = false): void {
   wrap.querySelector(':scope > .block-props-row')?.remove();
   // While the block is being edited the props show as text lines in the
   // editor itself — the row would duplicate them.
@@ -566,7 +566,7 @@ function syncPropsRow(wrap: HTMLElement, b: Block, host: BlockEditorView, editin
 }
 
 /** True when the block body is a single {{query ...}} / {{query-table ...}} expression. */
-function isQueryBlock(b: Block, host: BlockEditorView): boolean {
+function isQueryBlock(b: Block, host: BlockRenderHost): boolean {
   return (
     b.kind === 'list' &&
     host.focusedBlock !== b &&
@@ -601,7 +601,7 @@ export function parseStyleProp(style: string): Record<string, string> {
 }
 
 /** Add / remove / refresh the .block-query-results container of a block wrap. */
-function syncQueryContainer(wrap: HTMLElement, b: Block, host: BlockEditorView): void {
+function syncQueryContainer(wrap: HTMLElement, b: Block, host: BlockRenderHost): void {
   const isQuery = isQueryBlock(b, host);
   wrap.classList.toggle('block-has-query', isQuery);
   const old = wrap.querySelector(':scope > .block-query-results');
@@ -619,7 +619,7 @@ function syncQueryContainer(wrap: HTMLElement, b: Block, host: BlockEditorView):
 }
 
 /** Render (or reuse from cache) the results container of a query block. */
-function renderQueryResults(b: Block, host: BlockEditorView): HTMLElement {
+function renderQueryResults(b: Block, host: BlockRenderHost): HTMLElement {
   const idx = host.plugin.blockIndex;
   const version = idx?.version ?? 0;
   const sig = b.text;
@@ -633,7 +633,7 @@ function renderQueryResults(b: Block, host: BlockEditorView): HTMLElement {
 }
 
 /** {{query ...}} — flat result list. */
-function renderQueryList(b: Block, host: BlockEditorView): HTMLElement {
+function renderQueryList(b: Block, host: BlockRenderHost): HTMLElement {
   const el = document.createElement('div');
   el.className = 'block-query-results';
   const idx = host.plugin.blockIndex;
@@ -655,7 +655,7 @@ function renderQueryList(b: Block, host: BlockEditorView): HTMLElement {
 }
 
 /** {{query-table ...}} — results as a table with dynamic property columns. */
-function renderQueryTable(b: Block, host: BlockEditorView): HTMLElement {
+function renderQueryTable(b: Block, host: BlockRenderHost): HTMLElement {
   const el = document.createElement('div');
   el.className = 'block-query-results block-query-table-wrap';
   const idx = host.plugin.blockIndex;
@@ -700,7 +700,7 @@ function renderQueryTable(b: Block, host: BlockEditorView): HTMLElement {
   return el;
 }
 
-function queryResultItem(r: IndexedBlock, host: BlockEditorView): HTMLElement {
+function queryResultItem(r: IndexedBlock, host: BlockRenderHost): HTMLElement {
   const item = document.createElement('div');
   item.className = 'query-result-item';
   if (r.marker) {
@@ -717,7 +717,7 @@ function queryResultItem(r: IndexedBlock, host: BlockEditorView): HTMLElement {
 }
 
 /** Refresh query results of all visible query blocks (index rebuilt). */
-export function refreshQueryBlocks(container: HTMLElement, host: BlockEditorView): void {
+export function refreshQueryBlocks(container: HTMLElement, host: BlockRenderHost): void {
   for (const wrap of Array.from(container.querySelectorAll('.block-has-query'))) {
     const b = blockFromEl(wrap as HTMLElement);
     if (b) syncQueryContainer(wrap as HTMLElement, b, host);
@@ -796,7 +796,7 @@ export function withQuoteRowSeparation(text: string): string {
 }
 
 /** Render static content with cache reuse when the block text is unchanged. */
-function attachStaticContent(content: HTMLElement, b: Block, host: BlockEditorView): void {
+function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHost): void {
   const sig = contentSig(b);
   const cached = contentCache.get(b);
   if (cached && cached.sig === sig) {
@@ -906,7 +906,7 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockEditorVi
  * UX on the `<table>` that MarkdownRenderer already produced. Upgrading in
  * place keeps all existing table styling.
  */
-function enhanceTables(holder: HTMLElement, b: Block, host: BlockEditorView): void {
+function enhanceTables(holder: HTMLElement, b: Block, host: BlockRenderHost): void {
   if (!hasTable(b.text)) return;
   // Skip tables that are part of a query result (read-only by design) or that
   // live inside a rendered code block.
@@ -924,7 +924,7 @@ function enhanceTables(holder: HTMLElement, b: Block, host: BlockEditorView): vo
  * <img style="zoom:X%"> images. Render-only until the drop commits through
  * the block model.
  */
-function enhanceImages(holder: HTMLElement, b: Block, host: BlockEditorView): void {
+function enhanceImages(holder: HTMLElement, b: Block, host: BlockRenderHost): void {
   const imgs = [...holder.querySelectorAll('img')];
   imgs.forEach((img, index) => {
     if (img.closest('.lgp-img-wrap')) return;
@@ -988,7 +988,7 @@ function writeImageWidth(b: Block, index: number, width: number, natural: number
   });
 }
 
-function enhanceCodeBlocks(holder: HTMLElement, b: Block, host: BlockEditorView): void {
+function enhanceCodeBlocks(holder: HTMLElement, b: Block, host: BlockRenderHost): void {
   for (const pre of holder.querySelectorAll('pre')) {
     if (pre.closest('.lgp-code-block')) continue;
     const code = pre.querySelector('code');
@@ -1091,7 +1091,7 @@ function enhanceCodeTokens(code: HTMLElement): void {
   }
 }
 
-function wireContentEvents(holder: HTMLElement, b: Block, host: BlockEditorView): void {
+function wireContentEvents(holder: HTMLElement, b: Block, host: BlockRenderHost): void {
   // mousedown runs BEFORE the browser moves focus and before the click event,
   // so it is the only point where the block being edited is still recorded as
   // `focusedBlock`. See `captureRangeAnchor` for why the click handler cannot
@@ -1144,7 +1144,7 @@ function wireContentEvents(holder: HTMLElement, b: Block, host: BlockEditorView)
 }
 
 /** The page-properties block: the doc's FIRST block, empty text. */
-function isPropsBlock(b: Block, host: BlockEditorView): boolean {
+function isPropsBlock(b: Block, host: BlockRenderHost): boolean {
   return host.doc.blocks[0] === b && b.kind === 'list' && (b.text === '' || b.frontmatter === true);
 }
 
@@ -1153,7 +1153,7 @@ function isPropsBlock(b: Block, host: BlockEditorView): boolean {
  * dimmed `key:: value` lines the editor shows, so the editing and reading
  * states look alike (Logseq parity).
  */
-function renderPropsAsContent(content: HTMLElement, b: Block, host: BlockEditorView): void {
+function renderPropsAsContent(content: HTMLElement, b: Block, host: BlockRenderHost): void {
   content.empty();
   const box = content.createEl('div', { cls: 'block-content-static block-props-content' });
   if (b.frontmatter) {
@@ -1180,7 +1180,7 @@ function renderPropsAsContent(content: HTMLElement, b: Block, host: BlockEditorV
 }
 
 /** Refresh one block's static content in place (after blur-commit). */
-export function refreshBlockContent(b: Block, host: BlockEditorView): void {
+export function refreshBlockContent(b: Block, host: BlockRenderHost): void {
   if (host.focusedBlock === b) return;
   if (isPropsBlock(b, host)) {
     // The props are the content here — re-render the whole wrap.
@@ -1208,7 +1208,7 @@ export function refreshBlockContent(b: Block, host: BlockEditorView): void {
  * fresh one from the model. Returns false when `b` is not currently rendered
  * (virtualized away / zoom ancestor) — callers fall back to a full render.
  */
-export function patchBlockSubtree(b: Block, host: BlockEditorView): boolean {
+export function patchBlockSubtree(b: Block, host: BlockRenderHost): boolean {
   const wrap = blockElMap.get(b);
   const parentEl = wrap?.parentElement ?? null;
   if (!wrap || !parentEl) return false;
@@ -1225,7 +1225,7 @@ export function patchBlockSubtree(b: Block, host: BlockEditorView): boolean {
  * chrome (caret / children container) no longer matches the model — e.g. it
  * gained its first child — its whole subtree is rebuilt instead.
  */
-export function patchSiblingList(parent: Block | null, host: BlockEditorView): boolean {
+export function patchSiblingList(parent: Block | null, host: BlockRenderHost): boolean {
   if (parent === null || parent === host.zoomedBlock) {
     renderBlockTree(host.contentTreeEl, host.visibleRoots, host);
     return true;
@@ -1255,7 +1255,7 @@ export function patchSiblingList(parent: Block | null, host: BlockEditorView): b
  * would STAY approximated. Recalibrate before the next paint (rAF runs
  * pre-paint: the approximation is never shown).
  */
-function scheduleGuideCalibration(host: BlockEditorView): void {
+function scheduleGuideCalibration(host: BlockRenderHost): void {
   requestAnimationFrame(() => {
     const el = host.contentTreeEl;
     if (el && el.isConnected) layoutGuideLines(el);

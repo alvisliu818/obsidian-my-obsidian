@@ -6,7 +6,7 @@
 
 import { insertTab } from '@codemirror/commands';
 import type { EditorView } from '@codemirror/view';
-import type { BlockEditorView } from '../view/BlockEditorView';
+import type { BlockRenderHost } from '../blocks/renderHost';
 import {
   indent,
   mergeWithNext,
@@ -21,7 +21,7 @@ import {
 import { cycleMarker } from '../core/treeOps';
 import { applyBlockProps, splitPropLines, type Block } from '../types';
 
-function focusedBlock(host: BlockEditorView): Block | null {
+function focusedBlock(host: BlockRenderHost): Block | null {
   return host.focusedBlock;
 }
 
@@ -34,7 +34,7 @@ function deleteSelection(view: EditorView): { text: string; offset: number } {
 }
 
 /** Enter: split block at caret; tail becomes a new sibling below. */
-export function handleEnter(view: EditorView, host: BlockEditorView): boolean {
+export function handleEnter(view: EditorView, host: BlockRenderHost): boolean {
   const b = focusedBlock(host);
   if (!b) return false;
   if (b.kind === 'raw') {
@@ -80,7 +80,7 @@ export function handleEnter(view: EditorView, host: BlockEditorView): boolean {
 }
 
 /** Tab / Shift+Tab: indent / outdent the whole block. */
-export function handleTab(view: EditorView, host: BlockEditorView, shift: boolean): boolean {
+export function handleTab(view: EditorView, host: BlockRenderHost, shift: boolean): boolean {
   const b = focusedBlock(host);
   if (!b) return false;
   if (b.kind === 'raw') {
@@ -125,7 +125,7 @@ function atLastVisualLine(view: EditorView): boolean {
 }
 
 /** Arrow keys: cross-block caret movement at block boundaries. */
-export function handleArrow(view: EditorView, host: BlockEditorView, dir: 'up' | 'down' | 'left' | 'right'): boolean {
+export function handleArrow(view: EditorView, host: BlockRenderHost, dir: 'up' | 'down' | 'left' | 'right'): boolean {
   const b = focusedBlock(host);
   if (!b) return false;
   const roots = host.visibleRoots;
@@ -163,7 +163,7 @@ export function handleArrow(view: EditorView, host: BlockEditorView, dir: 'up' |
 }
 
 /** Backspace at position 0: merge into previous visible block. */
-export function handleBackspace(view: EditorView, host: BlockEditorView): boolean {
+export function handleBackspace(view: EditorView, host: BlockRenderHost): boolean {
   const b = focusedBlock(host);
   if (!b) return false;
   const sel = view.state.selection.main;
@@ -195,7 +195,7 @@ export function handleBackspace(view: EditorView, host: BlockEditorView): boolea
  * (Logseq parity). On an empty block this removes the empty row — the next
  * block's content fills it and the row disappears.
  */
-export function handleDelete(view: EditorView, host: BlockEditorView): boolean {
+export function handleDelete(view: EditorView, host: BlockRenderHost): boolean {
   const b = focusedBlock(host);
   if (!b) return false;
   const sel = view.state.selection.main;
@@ -221,7 +221,7 @@ export function handleDelete(view: EditorView, host: BlockEditorView): boolean {
 }
 
 /** Ctrl/Cmd+Enter: cycle TODO 鈫?DOING 鈫?DONE 鈫?none. */
-export function handleCycleMarker(view: EditorView, host: BlockEditorView): boolean {
+export function handleCycleMarker(view: EditorView, host: BlockRenderHost): boolean {
   const b = focusedBlock(host);
   if (!b || b.kind === 'raw') return false;
   const offset = view.state.selection.main.head;
@@ -238,7 +238,7 @@ export function handleCycleMarker(view: EditorView, host: BlockEditorView): bool
 }
 
 /** Ctrl/Cmd+Shift+ArrowUp/Down: move block up/down. */
-export function handleMoveBlock(view: EditorView, host: BlockEditorView, dir: -1 | 1): boolean {
+export function handleMoveBlock(view: EditorView, host: BlockRenderHost, dir: -1 | 1): boolean {
   const b = focusedBlock(host);
   if (!b || b.kind === 'raw') return false;
   const offset = view.state.selection.main.head;
@@ -258,7 +258,7 @@ export function handleMoveBlock(view: EditorView, host: BlockEditorView, dir: -1
 }
 
 /** Alt+ArrowUp/Down: jump to the previous/next block regardless of caret line. */
-export function handleJumpBlock(view: EditorView, host: BlockEditorView, dir: -1 | 1): boolean {
+export function handleJumpBlock(view: EditorView, host: BlockRenderHost, dir: -1 | 1): boolean {
   const b = focusedBlock(host);
   if (!b) return false;
   void view; // caret position intentionally ignored
@@ -276,7 +276,7 @@ export function handleJumpBlock(view: EditorView, host: BlockEditorView, dir: -1
  * formatting (`*` twice → `**sel**` bold, `[` twice → `[[sel]]` wikilink).
  * An empty selection falls through to the plain insert.
  */
-export function handleWrapChar(view: EditorView, host: BlockEditorView, open: string, close: string): boolean {
+export function handleWrapChar(view: EditorView, host: BlockRenderHost, open: string, close: string): boolean {
   const b = focusedBlock(host);
   if (!b) return false;
   const sel = view.state.selection.main;
@@ -290,12 +290,12 @@ export function handleWrapChar(view: EditorView, host: BlockEditorView, open: st
 }
 
 /** Backtick = inline code. Kept as the named entry point for the keymap/test. */
-export function handleBacktick(view: EditorView, host: BlockEditorView): boolean {
+export function handleBacktick(view: EditorView, host: BlockRenderHost): boolean {
   return handleWrapChar(view, host, '`', '`');
 }
 
 /** Escape: commit + leave the block (Logseq exits editing). */
-export function handleEscape(view: EditorView, _host: BlockEditorView): boolean {
+export function handleEscape(view: EditorView, _host: BlockRenderHost): boolean {
   void _host;
   view.contentDOM.blur();
   return true;

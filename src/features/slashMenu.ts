@@ -5,14 +5,14 @@
 
 import type { Completion, CompletionContext, CompletionResult, CompletionSource } from '@codemirror/autocomplete';
 import type { EditorView } from '@codemirror/view';
-import type { BlockEditorView } from '../view/BlockEditorView';
+import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Marker } from '../types';
 
 interface SlashCommand extends Completion {
   group: string;
   /** Mutates the focused block model — not available in the embed editor. */
   needsBlock?: boolean;
-  run: (view: EditorView, from: number, to: number, host: BlockEditorView) => void;
+  run: (view: EditorView, from: number, to: number, host: BlockRenderHost) => void;
 }
 
 const todayLink = (): string => {
@@ -326,7 +326,7 @@ const COMMANDS: SlashCommand[] = [
   },
 ];
 
-export function slashMenuSource(host: BlockEditorView, embed = false): CompletionSource {
+export function slashMenuSource(host: BlockRenderHost, embed = false): CompletionSource {
   return (ctx: CompletionContext): CompletionResult | null => {
     const before = ctx.matchBefore(/(?:^|\s)\/[\w-]*$/);
     if (!before) return null;

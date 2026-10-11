@@ -12,7 +12,7 @@
 
 import { EditorView, keymap } from '@codemirror/view';
 import { Prec } from '@codemirror/state';
-import type { BlockEditorView } from '../view/BlockEditorView';
+import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Extension } from '@codemirror/state';
 import { Marker } from '../types';
 import { createEditorAdapter } from '../interactions/textSelectionMenu';
@@ -34,7 +34,7 @@ export interface CommandItem {
   /** Caret offset inside the inserted text after insertion. */
   caret?: number;
   /** Block-model command executed through the host instead of text insert. */
-  block?: (host: BlockEditorView) => void;
+  block?: (host: BlockRenderHost) => void;
   /** Obsidian editor-command id (core or plugin): executed through the
    *  command registry against workspace.activeEditor (our adapter). */
   cmdId?: string;
@@ -201,7 +201,7 @@ const ANGLE_COMMANDS: CommandItem[] = [
   { label: 'copy', group: 'Entities', detail: '漏 symbol', insert: '&copy;' },
 ];
 
-function setMarker(host: BlockEditorView, marker: Marker): void {
+function setMarker(host: BlockRenderHost, marker: Marker): void {
   const b = host.focusedBlock;
   if (!b) return;
   host.mutate(
@@ -212,7 +212,7 @@ function setMarker(host: BlockEditorView, marker: Marker): void {
   );
 }
 
-function setProp(host: BlockEditorView, key: string, value: string): void {
+function setProp(host: BlockRenderHost, key: string, value: string): void {
   const b = host.focusedBlock;
   if (!b) return;
   host.mutate(
@@ -232,7 +232,7 @@ interface MenuState {
   selected: number;
   items: CommandItem[];
   el: HTMLElement | null;
-  host: BlockEditorView;
+  host: BlockRenderHost;
   view: EditorView;
 }
 
@@ -293,7 +293,7 @@ let nativeSlashActive = false;
  *
  * `<` keeps the self-drawn angle menu (HTML snippets & entities).
  */
-export function maybeOpenMenu(view: EditorView, host: BlockEditorView): void {
+export function maybeOpenMenu(view: EditorView, host: BlockRenderHost): void {
   if (menu) {
     updateFilter(view);
     return;
@@ -316,7 +316,7 @@ export function maybeOpenMenu(view: EditorView, host: BlockEditorView): void {
 }
 
 /** Built-in slash items for the native suggest (block-model actions). */
-export function builtinSlashItems(): Array<{ label: string; block: (h: BlockEditorView) => void }> {
+export function builtinSlashItems(): Array<{ label: string; block: (h: BlockRenderHost) => void }> {
   return SLASH_COMMANDS.filter((c) => c.block).map((c) => ({ label: c.label, block: c.block! }));
 }
 
@@ -332,7 +332,7 @@ function closeNativeSlash(): void {
  * walks every registered suggest (the core slash suggest checks the `/`
  * trigger, collects the available commands, and shows the native popup).
  */
-export function triggerNativeSlash(view: EditorView, host: BlockEditorView): void {
+export function triggerNativeSlash(view: EditorView, host: BlockRenderHost): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const es = (window as any).app?.workspace?.editorSuggest;
   if (!es?.trigger) return;
@@ -384,7 +384,7 @@ export function registerSlashEditorCommands(plugin: { addCommand(cmd: unknown): 
   }
 }
 
-function openMenu(view: EditorView, host: BlockEditorView, kind: MenuKind, triggerFrom: number): void {
+function openMenu(view: EditorView, host: BlockRenderHost, kind: MenuKind, triggerFrom: number): void {
   closeMenu();
   menu = {
     kind,

@@ -7,7 +7,7 @@
  */
 
 import { FuzzySuggestModal, Menu, Modal, Notice, Setting, setIcon, type IconName } from 'obsidian';
-import type { BlockEditorView } from '../view/BlockEditorView';
+import type { BlockRenderHost } from '../blocks/renderHost';
 import { blockId, type Block } from '../types';
 import {
   blockTypeMeta,
@@ -46,7 +46,7 @@ const COMMON_LANGS: readonly string[] = [
 
 /** Rewrite one block's markdown to match `to`. */
 export function applyBlockType(
-  host: BlockEditorView,
+  host: BlockRenderHost,
   b: Block,
   to: BlockType,
   opts: ConvertOptions = {},
@@ -80,7 +80,7 @@ export function applyBlockType(
 }
 
 /** Apply a parameter-only rewrite (heading level, callout kind, fence lang). */
-function applyRewrite(host: BlockEditorView, b: Block, next: BlockShape | null): void {
+function applyRewrite(host: BlockRenderHost, b: Block, next: BlockShape | null): void {
   if (!next) return;
   host.mutate(
     () => {
@@ -97,7 +97,7 @@ function applyRewrite(host: BlockEditorView, b: Block, next: BlockShape | null):
  * the menu follows the mouse (right-click).
  */
 export function openBlockTypeMenu(
-  host: BlockEditorView,
+  host: BlockRenderHost,
   b: Block,
   at: { x: number; y: number },
 ): Menu {
@@ -198,7 +198,7 @@ function addSubmenu(
 /** Free-text fence language. */
 class LangPromptModal extends Modal {
   constructor(
-    private host: BlockEditorView,
+    private host: BlockRenderHost,
     private block: Block,
     private current: string,
   ) {
@@ -245,7 +245,7 @@ interface TypeChoice {
 
 class BlockTypeSuggestModal extends FuzzySuggestModal<TypeChoice> {
   constructor(
-    private host: BlockEditorView,
+    private host: BlockRenderHost,
     private block: Block,
     private choices: TypeChoice[],
   ) {
@@ -267,7 +267,7 @@ class BlockTypeSuggestModal extends FuzzySuggestModal<TypeChoice> {
 }
 
 /** Command entry: convert the focused (or selected) block to another type. */
-export function openBlockTypePicker(host: BlockEditorView): void {
+export function openBlockTypePicker(host: BlockRenderHost): void {
   const targets = host.selectedBlocks.size > 0 ? host.topSelectedBlocks() : [];
   const b = targets[0] ?? host.focusedBlock ?? host.lastEditedBlock;
   if (!b) {
@@ -285,7 +285,7 @@ export function openBlockTypePicker(host: BlockEditorView): void {
 /** The gutter badge: an icon that names the block's type and opens the menu. */
 export function renderBlockTypeBadge(
   parent: HTMLElement,
-  host: BlockEditorView,
+  host: BlockRenderHost,
   b: Block,
   type: BlockType,
 ): HTMLElement {

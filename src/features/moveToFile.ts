@@ -6,19 +6,19 @@
  */
 
 import { FuzzySuggestModal, Notice, TFile } from 'obsidian';
-import type { BlockEditorView } from '../view/BlockEditorView';
+import type { BlockRenderHost } from '../blocks/renderHost';
 import { serializeBlock } from '../core/serializer';
 import { isDescendant, removeBlock } from '../core/treeOps';
 import type { Block } from '../types';
 
 /** Fuzzy-pick a destination markdown file, then move the blocks there. */
-export function openMoveToFileModal(host: BlockEditorView, blocks: Block[]): void {
+export function openMoveToFileModal(host: BlockRenderHost, blocks: Block[]): void {
   if (blocks.length === 0) return;
   new MoveToFileModal(host, blocks).open();
 }
 
 class MoveToFileModal extends FuzzySuggestModal<TFile> {
-  constructor(private host: BlockEditorView, private blocks: Block[]) {
+  constructor(private host: BlockRenderHost, private blocks: Block[]) {
     super(host.app);
     this.setPlaceholder(`Move ${blocks.length} block(s) to…`);
   }
@@ -36,7 +36,7 @@ class MoveToFileModal extends FuzzySuggestModal<TFile> {
   }
 }
 
-export async function moveBlocksToFile(host: BlockEditorView, blocks: Block[], target: TFile): Promise<void> {
+export async function moveBlocksToFile(host: BlockRenderHost, blocks: Block[], target: TFile): Promise<void> {
   if (blocks.length === 0 || host.file?.path === target.path) return;
 
   // Serialize before removal (removal detaches the subtrees).

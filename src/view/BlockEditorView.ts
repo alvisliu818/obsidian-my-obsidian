@@ -10,6 +10,7 @@ import { MarkdownRenderer, Notice, TFile, TextFileView, parseYaml, stringifyYaml
 import { EditorView } from '@codemirror/view';
 import type { CompletionSource } from '@codemirror/autocomplete';
 import type LogseqEditorPlugin from '../main';
+import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Block, ParsedDocument } from '../types';
 import { applyBlockProps, blockEditorDoc, createBlock, docPageProps, editableProps, isPagePropsBlock, propsShallowEqual, setCollapsed, splitPropLines, syncFrontmatterProps } from '../types';
 import { parseDocument } from '../core/parser';
@@ -30,7 +31,7 @@ import {
   refreshTracetimeLabels,
   VIRTUAL_CHUNK,
   VIRTUAL_INITIAL_CAP,
-} from '../blocks/renderTree';
+} from '../blocks/renderTree'
 import { applyCursor, applyCursorAndScroll, commitEditorText, cursorAtCoords, mountFocusedEditor, type CursorPos } from '../editor/focusEditor';
 import { createEmbedExtensions } from '../editor/extensions';
 import {
@@ -81,7 +82,7 @@ export interface MutatePatch {
   full?: boolean;
 }
 
-export class BlockEditorView extends TextFileView {
+export class BlockEditorView extends TextFileView implements BlockRenderHost {
   plugin: LogseqEditorPlugin;
   doc: ParsedDocument = { frontmatter: '', pageProps: '', blocks: [] };
   focusedBlock: Block | null = null;

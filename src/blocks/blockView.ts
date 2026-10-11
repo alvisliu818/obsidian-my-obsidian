@@ -9,7 +9,7 @@
  * (a patch rebuild would otherwise reset the view to the first tab).
  */
 
-import type { BlockEditorView } from '../view/BlockEditorView';
+import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Block } from '../types';
 import { buildBlockView, type BlockViewModel, type ViewChild } from '../features/blockViews';
 
@@ -39,7 +39,7 @@ function toViewChild(b: Block): ViewChild {
  * Render the parent's children as a view. Returns null when the block has no
  * `view::` property, so the caller falls back to the normal child list.
  */
-export function renderBlockView(b: Block, host: BlockEditorView): HTMLElement | null {
+export function renderBlockView(b: Block, host: BlockRenderHost): HTMLElement | null {
   const model = buildBlockView(b.props, b.children.map(toViewChild), MAX_VIEW_RECORDS);
   if (!model) return null;
 
@@ -77,7 +77,7 @@ function markerSpan(parent: HTMLElement, marker: string | null): void {
 }
 
 /** Table view: one row per child, one column per property. */
-function renderTable(el: HTMLElement, b: Block, model: BlockViewModel, host: BlockEditorView): void {
+function renderTable(el: HTMLElement, b: Block, model: BlockViewModel, host: BlockRenderHost): void {
   const table = el.createEl('table', { cls: 'block-view-table' });
   const thead = table.createEl('thead');
   const hrow = thead.createEl('tr');
@@ -99,7 +99,7 @@ function renderTable(el: HTMLElement, b: Block, model: BlockViewModel, host: Blo
 }
 
 /** Cards view: one card per child, showing all of its properties. */
-function renderCards(el: HTMLElement, b: Block, model: BlockViewModel, host: BlockEditorView): void {
+function renderCards(el: HTMLElement, b: Block, model: BlockViewModel, host: BlockRenderHost): void {
   const grid = el.createEl('div', { cls: 'block-view-cards' });
   model.records.forEach((r, i) => {
     const card = grid.createEl('div', { cls: 'block-view-card' });
@@ -120,7 +120,7 @@ function renderCards(el: HTMLElement, b: Block, model: BlockViewModel, host: Blo
 }
 
 /** Tabs view: child names as tabs, the selected child's record below. */
-function renderTabs(el: HTMLElement, b: Block, model: BlockViewModel, host: BlockEditorView): void {
+function renderTabs(el: HTMLElement, b: Block, model: BlockViewModel, host: BlockRenderHost): void {
   const bar = el.createEl('div', { cls: 'block-view-tabs' });
   const body = el.createEl('div', { cls: 'block-view-tab-body' });
 
@@ -184,7 +184,7 @@ function renderTabs(el: HTMLElement, b: Block, model: BlockViewModel, host: Bloc
 }
 
 /** A record opens the child it represents (zoom in) — never a dead end. */
-function wire(row: HTMLElement, child: Block | undefined, host: BlockEditorView): void {
+function wire(row: HTMLElement, child: Block | undefined, host: BlockRenderHost): void {
   if (!child) return;
   row.classList.add('is-clickable');
   row.setAttribute('title', 'Open this block');

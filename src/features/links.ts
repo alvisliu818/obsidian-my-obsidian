@@ -7,7 +7,7 @@
 
 import { MarkdownRenderer, TFile, Notice, setIcon } from 'obsidian';
 import type { Completion, CompletionContext, CompletionResult, CompletionSource } from '@codemirror/autocomplete';
-import type { BlockEditorView } from '../view/BlockEditorView';
+import type { BlockRenderHost } from '../blocks/renderHost';
 import { blockSummary } from '../types';
 import { parseDocument } from '../core/parser';
 import { serializeDocument } from '../core/serializer';
@@ -24,7 +24,7 @@ const PAGE_EMBED_RE = /!\[\[([^\[\]|]+)\]\]/g;
 // Autocomplete sources
 // ---------------------------------------------------------------------------
 
-export function autocompleteSources(host: BlockEditorView, embed = false): CompletionSource[] {
+export function autocompleteSources(host: BlockRenderHost, embed = false): CompletionSource[] {
   // The main editor's `/` commands use the self-drawn command menu
   // (commandMenu.ts); offering the CM6 slash source there would open TWO
   // menus on `/`. The in-place embed editor has no self-drawn menu, so it
@@ -34,7 +34,7 @@ export function autocompleteSources(host: BlockEditorView, embed = false): Compl
     : [wikiLinkSource(host), tagSource(host), blockRefSource(host)];
 }
 
-export function wikiLinkSource(host: BlockEditorView): CompletionSource {
+export function wikiLinkSource(host: BlockRenderHost): CompletionSource {
   return (ctx: CompletionContext): CompletionResult | null => {
     // Supports BOTH triggers: `[[` (plain link) and `![[` (page embed, Logseq
     // md parity). `from` must sit AFTER the trigger brackets: CM6 filters the
@@ -65,7 +65,7 @@ export function wikiLinkSource(host: BlockEditorView): CompletionSource {
   };
 }
 
-export function tagSource(host: BlockEditorView): CompletionSource {
+export function tagSource(host: BlockRenderHost): CompletionSource {
   return (ctx: CompletionContext): CompletionResult | null => {
     const before = ctx.matchBefore(/#[\p{L}\d_\/-]*$/u);
     if (!before) return null;
@@ -91,7 +91,7 @@ export function tagSource(host: BlockEditorView): CompletionSource {
   };
 }
 
-export function blockRefSource(host: BlockEditorView): CompletionSource {
+export function blockRefSource(host: BlockRenderHost): CompletionSource {
   return (ctx: CompletionContext): CompletionResult | null => {
     // `((id))` refs and the `{{embed ((id))}}` form share one trigger; the
     // embed variant closes with `}}` instead of `))`.
@@ -127,7 +127,7 @@ export function blockRefSource(host: BlockEditorView): CompletionSource {
 // Static render enhancement: ((uuid)) 鈫?clickable chips
 // ---------------------------------------------------------------------------
 
-export function enhanceBlockRefs(el: HTMLElement, host: BlockEditorView): void {
+export function enhanceBlockRefs(el: HTMLElement, host: BlockRenderHost): void {
   const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
   const targets: { node: Text; matches: RegExpMatchArray[] }[] = [];
   let cur = walker.nextNode() as Text | null;
@@ -189,7 +189,7 @@ const embedCollapsed = new WeakSet<Block>();
 const EMBED_CARET_SVG = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6l4 4 4-4"/></svg>`;
 
 /** Replace {{embed ((uuid))}} text with live embedded block containers. */
-export function enhanceEmbeds(el: HTMLElement, host: BlockEditorView): void {
+export function enhanceEmbeds(el: HTMLElement, host: BlockRenderHost): void {
   const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
   const targets: { node: Text; matches: RegExpMatchArray[]; kind: 'block' | 'page' }[] = [];
   let cur = walker.nextNode() as Text | null;
@@ -233,7 +233,7 @@ export function enhanceEmbeds(el: HTMLElement, host: BlockEditorView): void {
  * which protects ![[ ]] from markdown rendering via tokens and swaps the
  * placeholders for live boxes afterwards.
  */
-export function createPageEmbedBox(pageName: string, host: BlockEditorView): HTMLElement {
+export function createPageEmbedBox(pageName: string, host: BlockRenderHost): HTMLElement {
   const box = document.createElement('div');
   box.className = 'block-embed block-page-embed';
   box.addEventListener('click', (e) => {
@@ -255,7 +255,7 @@ export function createPageEmbedBox(pageName: string, host: BlockEditorView): HTM
 export async function renderPageEmbedInto(
   box: HTMLElement,
   pageName: string,
-  host: BlockEditorView,
+  host: BlockRenderHost,
 ): Promise<void> {
   box.empty();
   box.classList.remove('is-broken');
@@ -287,7 +287,7 @@ export function renderPageEmbedBody(
   box: HTMLElement,
   file: TFile,
   blocks: Block[],
-  host: BlockEditorView,
+  host: BlockRenderHost,
 ): void {
   box.empty();
   box.classList.remove('is-broken');
@@ -318,7 +318,7 @@ export function renderPageEmbedBody(
  * of an open block-editor view for that file, else the file on disk.
  */
 export async function refreshPageEmbedBox(
-  host: BlockEditorView,
+  host: BlockRenderHost,
   box: HTMLElement,
   file: TFile,
 ): Promise<void> {
@@ -334,7 +334,7 @@ export async function refreshPageEmbedBox(
 }
 
 /** One embed box: breadcrumb header + markdown body; click the body to edit. */
-function createEmbedBox(uuid: string, host: BlockEditorView): HTMLElement {
+function createEmbedBox(uuid: string, host: BlockRenderHost): HTMLElement {
   const box = document.createElement('div');
   box.className = 'block-embed';
   box.setAttribute('data-uuid', uuid);
@@ -372,7 +372,7 @@ function createEmbedBox(uuid: string, host: BlockEditorView): HTMLElement {
 export async function renderEmbedInto(
   box: HTMLElement,
   uuid: string,
-  host: BlockEditorView,
+  host: BlockRenderHost,
 ): Promise<void> {
   box.empty();
   box.classList.remove('is-editing');
@@ -403,7 +403,7 @@ export function renderEmbedBodyFrom(
   box: HTMLElement,
   src: EmbedSource,
   uuid: string,
-  host: BlockEditorView,
+  host: BlockRenderHost,
 ): void {
   embedSources.set(box, src);
   box.empty();
@@ -447,7 +447,7 @@ function renderEmbedRow(
   b: Block,
   path: number[],
   src: EmbedSource,
-  host: BlockEditorView,
+  host: BlockRenderHost,
 ): HTMLElement {
   const row = parent.createEl('div', { cls: 'embed-row' });
   row.setAttribute('title', 'Click to edit this block');
@@ -492,7 +492,7 @@ export function rerenderEmbedRow(
   row: HTMLElement,
   src: EmbedSource,
   path: number[],
-  host: BlockEditorView,
+  host: BlockRenderHost,
 ): void {
   const parent = row.parentElement;
   if (!parent) return;
@@ -507,7 +507,7 @@ export function rerenderEmbedRow(
  * (backup + operation log). Used by page-embed row edits and Enter-adds.
  */
 export async function mutatePageEmbedSource(
-  host: BlockEditorView,
+  host: BlockRenderHost,
   file: TFile,
   fn: (doc: ReturnType<typeof parseDocument>) => void,
 ): Promise<boolean> {
@@ -525,7 +525,7 @@ export async function mutatePageEmbedSource(
 }
 
 /** Find the currently rendered embed box (block embed) holding `uuid`. */
-export function findEmbedBox(host: BlockEditorView, uuid: string): HTMLElement | null {
+export function findEmbedBox(host: BlockRenderHost, uuid: string): HTMLElement | null {
   const tree = host.contentTreeEl;
   return (
     (tree.querySelector(`.block-embed[data-uuid="${uuid}"]`) as HTMLElement | null) ??
@@ -537,7 +537,7 @@ export function findEmbedBox(host: BlockEditorView, uuid: string): HTMLElement |
  * Re-render an embed box in place (structure changed on the source side).
  * Resolves when the box has been re-rendered (rows re-registered).
  */
-export function refreshEmbedBox(host: BlockEditorView, box: HTMLElement, uuid: string): Promise<void> {
+export function refreshEmbedBox(host: BlockRenderHost, box: HTMLElement, uuid: string): Promise<void> {
   return renderEmbedInto(box, uuid, host);
 }
 
@@ -546,7 +546,7 @@ function renderEmbedHeader(
   box: HTMLElement,
   src: EmbedSource,
   uuid: string,
-  host: BlockEditorView,
+  host: BlockRenderHost,
 ): void {
   const head = box.createEl('div', { cls: 'block-embed-header' });
   head.setAttribute('title', 'Open the source block');
@@ -567,7 +567,7 @@ function renderEmbedHeader(
  * unsaved edits); otherwise the block is read from the vault so it can be
  * edited in place and written back.
  */
-async function resolveEmbed(uuid: string, host: BlockEditorView): Promise<EmbedSource | null> {
+async function resolveEmbed(uuid: string, host: BlockRenderHost): Promise<EmbedSource | null> {
   const local = findBlockById(host.doc.blocks, uuid);
   if (local) {
     return {
@@ -594,7 +594,7 @@ async function resolveEmbed(uuid: string, host: BlockEditorView): Promise<EmbedS
 async function resolveFromIndex(
   info: { path: string },
   uuid: string,
-  host: BlockEditorView,
+  host: BlockRenderHost,
 ): Promise<EmbedSource | null> {
   const file = host.app.vault.getAbstractFileByPath(info.path);
   if (!(file instanceof TFile)) return null;

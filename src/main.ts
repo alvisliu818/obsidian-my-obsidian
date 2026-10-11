@@ -5,6 +5,7 @@
 
 import { Menu, MarkdownView, Notice, Platform, Plugin, TAbstractFile, TFile, WorkspaceLeaf, debounce, normalizePath, type CachedMetadata, type ViewState } from 'obsidian';
 import { BlockEditorView, VIEW_TYPE_BLOCK_EDITOR } from './view/BlockEditorView';
+import { FragmentHost, type FragmentOptions } from './blocks/fragmentEditor';
 import { CMD_COLLAPSE_ALL, CMD_FIND, CMD_REPLACE } from './interactions/hotkeys';
 import {
   DEFAULT_SETTINGS,
@@ -42,8 +43,6 @@ import { FlashcardPanelView, VIEW_TYPE_FLASHCARD_PANEL } from './panels/flashcar
 import { BlockGraphModal } from './panels/blockGraph';
 import { MountEditorModal, MountListModal, MountPositionModal } from './panels/mountModals';
 import { MountPanelView, VIEW_TYPE_MOUNT_PANEL } from './panels/mountPanel';
-import { KernelPanelView, VIEW_TYPE_KERNEL_PANEL } from './panels/kernelPanel';
-import { disposeAllKernels } from './exec/kernel/registry';
 import { ExternalFileView, VIEW_TYPE_EXTERNAL_FILE } from './views/ExternalFileView';
 import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE } from './views/ExternalCodeView';
 import { ExternalBlockView, VIEW_TYPE_EXTERNAL_BLOCK } from './views/ExternalBlockView';
@@ -119,7 +118,6 @@ export default class LogseqEditorPlugin extends Plugin {
     this.registerView(VIEW_TYPE_TAG_PANEL, (leaf) => new TagPanelView(leaf, this));
     this.registerView(VIEW_TYPE_FLASHCARD_PANEL, (leaf) => new FlashcardPanelView(leaf, this));
     this.registerView(VIEW_TYPE_MOUNT_PANEL, (leaf) => new MountPanelView(leaf, this));
-this.registerView(VIEW_TYPE_KERNEL_PANEL, (leaf) => new KernelPanelView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_FILE, (leaf) => new ExternalFileView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_CODE, (leaf) => new ExternalCodeView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_BLOCK, (leaf) => new ExternalBlockView(leaf, this));
@@ -519,11 +517,6 @@ this.registerView(VIEW_TYPE_KERNEL_PANEL, (leaf) => new KernelPanelView(leaf, th
       callback: () => void this.activatePanel(VIEW_TYPE_MOUNT_PANEL),
     });
     this.addCommand({
-      id: 'open-kernel-panel',
-      name: 'Open the Python kernel panel',
-      callback: () => void this.activatePanel(VIEW_TYPE_KERNEL_PANEL),
-    });
-    this.addCommand({
       id: 'add-external-mount',
       name: 'Mount an external folder',
       callback: () => this.promptAddMount(),
@@ -740,8 +733,22 @@ this.registerView(VIEW_TYPE_KERNEL_PANEL, (leaf) => new KernelPanelView(leaf, th
     this.addRibbonIcon('calendar-day', "Open today's journal", () => void openJournal(this));
   }
 
+  /**
+   * 跨插件公开 API:用本插件的 logseq 风格块编辑器渲染管线,把一段
+   * markdown 渲染进 container 并支持就地编辑(可关)。
+   *
+   * 返回 FragmentHost(一个 Component):调用方把它挂进自己的组件树
+   * (addChild)或在不复用时 destroy(),即可随宿主视图回收 DOM 与监听。
+   * 编辑提交(块文本落模型/结构变化)时触发 opts.onContentChange,参数是
+   * 序列化后的 markdown —— 外部把它写回自己的存储(如 notebook 单元格)。
+   */
+  renderMarkdownFragment(container: HTMLElement, md: string, opts: FragmentOptions = {}): FragmentHost {
+    const host = new FragmentHost(this, container, opts);
+    host.setMarkdown(md);
+    return host;
+  }
+
   onunload(): void {
-    void disposeAllKernels();
     logOp(this, 'plugin.unload', '', 'ok');
     if (this.mountRefreshTimer) {
       window.clearInterval(this.mountRefreshTimer);

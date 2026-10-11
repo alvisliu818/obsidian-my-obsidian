@@ -34,7 +34,7 @@ import {
 } from '@codemirror/autocomplete';
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { editorInfoField, editorLivePreviewField, renderMath, finishRenderMath } from 'obsidian';
-import type { BlockEditorView } from '../view/BlockEditorView';
+import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Block } from '../types';
 import { ownedDefaultKeys } from '../interactions/defaultKeymapOwnership';
 import { commandMenuKeymap, maybeOpenMenu, closeMenu } from '../features/commandMenu';
@@ -201,7 +201,7 @@ const WRAP_PAIRS: Record<string, [string, string]> = {
  * routed to Obsidian commands, because CM6's own `openSearchPanel` binding is
  * broken without the `search()` extension.
  */
-export function createBlockKeymap(host: BlockEditorView): KeyBinding[] {
+export function createBlockKeymap(host: BlockRenderHost): KeyBinding[] {
   const on = host.plugin.settings.shortcuts;
   const bindings: KeyBinding[] = [];
 
@@ -304,7 +304,7 @@ function completionYieldKeymap(): Extension {
  * key or blur handler returns, so destroying it synchronously is unsafe.
  */
 export function createEmbedExtensions(
-  host: BlockEditorView,
+  host: BlockRenderHost,
   onCommit: () => void,
   onCommitAndNew?: () => void,
   onTab?: (shift: boolean) => boolean,
@@ -369,7 +369,7 @@ export function createEmbedExtensions(
   ];
 }
 
-export function createEditorExtensions(host: BlockEditorView, block?: Block): Extension[] {
+export function createEditorExtensions(host: BlockRenderHost, block?: Block): Extension[] {
   const blockKeymap = keymap.of(createBlockKeymap(host));
   // NB: this extension is only ever mounted on a FOCUSED (editing) block, so
   // Ctrl+A / Ctrl+Z intentionally stay local here. The non-editing case is

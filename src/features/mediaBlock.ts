@@ -8,7 +8,7 @@
  */
 
 import { FuzzySuggestModal, TFile } from 'obsidian';
-import type { BlockEditorView } from '../view/BlockEditorView';
+import type { BlockRenderHost } from '../blocks/renderHost';
 import { mediaTypeOf } from '../blocks/blockTypes';
 
 const MEDIA_EXT_RE =
@@ -20,12 +20,12 @@ export function isMediaPath(path: string): boolean {
 }
 
 /** Fuzzy-pick a vault media file and embed it in the focused block. */
-export function openInsertMediaBlock(host: BlockEditorView): void {
+export function openInsertMediaBlock(host: BlockRenderHost): void {
   new MediaBlockModal(host).open();
 }
 
 class MediaBlockModal extends FuzzySuggestModal<TFile> {
-  constructor(private host: BlockEditorView) {
+  constructor(private host: BlockRenderHost) {
     super(host.app);
     this.setPlaceholder('Insert a media block…');
   }
@@ -47,7 +47,7 @@ class MediaBlockModal extends FuzzySuggestModal<TFile> {
  * Write the embed at the caret, or as a new top-level block when no block is
  * being edited (a media block still belongs to the outline, not to a text row).
  */
-export function insertMediaEmbed(host: BlockEditorView, file: TFile): void {
+export function insertMediaEmbed(host: BlockRenderHost, file: TFile): void {
   const text = `![[${file.path}]]`;
   const view = host.focusedView;
   if (view && host.focusedBlock) {

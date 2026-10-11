@@ -38,7 +38,7 @@ import {
 } from '@codemirror/commands';
 import { EditorSelection } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
-import type { BlockEditorView } from '../view/BlockEditorView';
+import type { BlockRenderHost } from '../blocks/renderHost';
 
 type EditorCommand = (view: EditorView) => boolean;
 
@@ -104,7 +104,7 @@ const MD_FORMAT_SPECS: Record<string, { mark: string; alt?: string }> = {
 };
 
 /** Returns false when there is no live editor to act on (caller falls back). */
-export function openTextSelectionMenu(ev: MouseEvent, host: BlockEditorView): boolean {
+export function openTextSelectionMenu(ev: MouseEvent, host: BlockRenderHost): boolean {
   const view: EditorView | null = host.focusedView ?? host.embedEdit?.view ?? null;
   if (!view) return false;
   ev.preventDefault();
@@ -490,7 +490,7 @@ function buildInsertSubmenu(menu: Menu, view: EditorView): void {
  * Unimplemented members resolve to no-ops (returning null) instead of
  * crashing the contributor.
  */
-export function createEditorAdapter(view: EditorView, host?: BlockEditorView): Record<string, unknown> {
+export function createEditorAdapter(view: EditorView, host?: BlockRenderHost): Record<string, unknown> {
   const offToPos = (offset: number): { line: number; ch: number } => {
     const line = view.state.doc.lineAt(Math.max(0, Math.min(offset, view.state.doc.length)));
     return { line: line.number - 1, ch: offset - line.from };
@@ -841,7 +841,7 @@ export function createEditorAdapter(view: EditorView, host?: BlockEditorView): R
   });
 }
 
-function triggerEditorMenu(menu: Menu, view: EditorView, host: BlockEditorView): void {
+function triggerEditorMenu(menu: Menu, view: EditorView, host: BlockRenderHost): void {
   try {
     const adapter = createEditorAdapter(view, host);
     // `view` is wrapped so plugins reaching for `view.editor` (the native
@@ -870,7 +870,7 @@ function triggerEditorMenu(menu: Menu, view: EditorView, host: BlockEditorView):
  * while one of its CM6 views is live, `activeEditor` is a pseudo-MarkdownView
  * whose `.editor` is the adapter.
  */
-export function syncActiveBlockEditor(app: { workspace: unknown }, host: BlockEditorView, view: EditorView): void {
+export function syncActiveBlockEditor(app: { workspace: unknown }, host: BlockRenderHost, view: EditorView): void {
   const adapter = createEditorAdapter(view, host);
   const pseudo = {
     __blockEditorPseudo: true,

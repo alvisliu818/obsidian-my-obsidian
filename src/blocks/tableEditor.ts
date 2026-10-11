@@ -25,7 +25,7 @@
  * Every mutation goes through `host.mutate`, so undo, save-debounce and
  * re-render all keep working with no extra bookkeeping here.
  */
-import type { BlockEditorView } from '../view/BlockEditorView';
+import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Block } from '../types';
 import {
   addColumn,
@@ -83,7 +83,7 @@ export interface TableController {
  * Make one rendered `<table>` interactive. Returns null when the block has no
  * editable table (nothing to do).
  */
-export function enhanceTable(table: HTMLTableElement, b: Block, host: BlockEditorView): TableController | null {
+export function enhanceTable(table: HTMLTableElement, b: Block, host: BlockRenderHost): TableController | null {
   // Only the FIRST table in a block is made interactive. A block holding two
   // tables is rare, and multi-table editing would need an index-aware model.
   if (findTable(b.text) === null) return null;
