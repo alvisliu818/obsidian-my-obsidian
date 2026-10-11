@@ -33,6 +33,12 @@ export interface DownloadItem {
 
 export type SearchEngineId = "google" | "bing" | "baidu" | "duckduckgo" | "custom";
 export type NewTabMode = "blank" | "home" | "search";
+/**
+ * `internal` — one Obsidian leaf holding N webviews with our own tab strip.
+ * `native`   — one leaf per page, so Obsidian's own tab bar owns the tabs
+ *              (drag to splits, Ctrl+W, workspace.json restore all come free).
+ */
+export type TabMode = "internal" | "native";
 
 export interface BrowserSettings {
   /** URL loaded by the home button / new-tab page. */
@@ -48,6 +54,8 @@ export interface BrowserSettings {
   historyLimit: number;
   /** Restore tabs that were open when Obsidian exited. */
   restoreSession: boolean;
+  /** internal = our own strip, native = one Obsidian leaf per page. */
+  tabMode: TabMode;
 
   /** Clicking an http(s) link anywhere in Obsidian opens it in the browser view. */
   interceptAllLinks: boolean;

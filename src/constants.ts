@@ -48,6 +48,7 @@ export const DEFAULT_SETTINGS: BrowserSettings = {
   recordHistory: true,
   historyLimit: 5000,
   restoreSession: true,
+  tabMode: "internal",
 
   interceptAllLinks: true,
   excludedSites: "",

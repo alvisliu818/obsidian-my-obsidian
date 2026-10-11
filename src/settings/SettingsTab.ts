@@ -127,6 +127,21 @@ export class BrowserSettingTab extends PluginSettingTab {
         }),
       );
 
+    new Setting(containerEl)
+      .setName("标签页模式")
+      .setDesc(
+        "插件内页签条：所有页面在一个 Obsidian 标签里，页签条由插件绘制。" +
+          "Obsidian 原生标签页：每个页面占一个 Obsidian 标签，可拖到分栏、用 Ctrl+W 关闭、随工作区恢复。切换后请重新打开浏览器视图",
+      )
+      .addDropdown((d) => {
+        d.addOption("internal", "插件内页签条");
+        d.addOption("native", "Obsidian 原生标签页");
+        d.setValue(s.tabMode).onChange((v) => {
+          s.tabMode = v as BrowserSettings["tabMode"];
+          this.host.save();
+        });
+      });
+
     new Setting(containerEl).setName("链接处理").setHeading();
 
     new Setting(containerEl)

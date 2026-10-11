@@ -43,6 +43,8 @@ export default class BrowserPlugin extends Plugin {
   private extPreloadUrl = "";
   private unbindDownloads: (() => void) | null = null;
   private lastRightClickedUrl = "";
+  /** URL for the next browser leaf we are about to create (native mode). */
+  private pendingLeafUrl = "";
 
   /** Plugin base class owns `settings`; this is our own accessor. */
   get config(): BrowserSettings {
@@ -65,7 +67,16 @@ export default class BrowserPlugin extends Plugin {
     await this.writePreloads();
     this.ctx = this.buildContext();
 
-    this.registerView(VIEW_TYPE_BROWSER, (leaf) => new BrowserView(leaf, this.ctx));
+    this.registerView(VIEW_TYPE_BROWSER, (leaf) => {
+      const view = new BrowserView(leaf, this.ctx);
+      // Hand the URL to the view directly: for a brand-new leaf Obsidian does
+      // not always route the state through setState() before onOpen().
+      if (this.pendingLeafUrl) {
+        view.pendingUrl = this.pendingLeafUrl;
+        this.pendingLeafUrl = "";
+      }
+      return view;
+    });
     this.registerView(VIEW_TYPE_BOOKMARKS, (leaf) => new BookmarksView(leaf, this.ctx));
     this.registerView(VIEW_TYPE_HISTORY, (leaf) => new HistoryView(leaf, this.ctx));
     this.registerView(VIEW_TYPE_DOWNLOADS, (leaf) => new DownloadsView(leaf, this.ctx));
@@ -199,13 +210,15 @@ export default class BrowserPlugin extends Plugin {
     return (leaf.view as BrowserView) ?? null;
   }
 
+  /** The view the user is looking at (falls back to the first browser leaf). */
+  private activeBrowserView(): BrowserView | null {
+    const active = this.app.workspace.activeLeaf;
+    if (active?.view instanceof BrowserView) return active.view;
+    return (this.browserLeaves()[0]?.view as BrowserView) ?? null;
+  }
+
   private activeTab(): BrowserTab | null {
-    for (const leaf of this.browserLeaves()) {
-      const view = leaf.view as BrowserView;
-      const tab = view?.activeTab?.();
-      if (tab) return tab;
-    }
-    return null;
+    return this.activeBrowserView()?.activeTab() ?? null;
   }
 
   private onTabChanged(tab: BrowserTab): void {
@@ -230,7 +243,25 @@ export default class BrowserPlugin extends Plugin {
     await this.getBrowserView();
   }
 
+  /**
+   * Native mode = one Obsidian leaf per page, so "open in a new tab" is a new
+   * leaf whose view state carries the URL (restored by workspace.json).
+   */
   private async openUrl(url: string, newTab = false): Promise<void> {
+    if (this.config.tabMode === "native") {
+      if (newTab || !this.browserLeaves().length) {
+        this.pendingLeafUrl = url;
+        const leaf = this.app.workspace.getLeaf("tab");
+        await leaf.setViewState({ type: VIEW_TYPE_BROWSER, state: { url }, active: true });
+        this.app.workspace.revealLeaf(leaf);
+        return;
+      }
+      const view = this.activeBrowserView();
+      if (!view) return;
+      await view.activeTab()?.loadUrl(url);
+      this.app.workspace.revealLeaf(view.leaf);
+      return;
+    }
     const view = await this.getBrowserView();
     view?.openUrl(url, newTab);
   }
@@ -266,8 +297,11 @@ export default class BrowserPlugin extends Plugin {
       name: "关闭当前标签页",
       hotkeys: [{ modifiers: ["Mod", "Alt"], key: "W" }],
       callback: () => {
-        const view = this.browserLeaves()[0]?.view as BrowserView | undefined;
-        if (view?.activeId) view.closeTab(view.activeId);
+        const view = this.activeBrowserView();
+        if (!view) return;
+        // Native mode: the whole leaf is the tab.
+        if (view.isNative) view.leaf.detach();
+        else if (view.activeId) view.closeTab(view.activeId);
       },
     });
     this.addCommand({
