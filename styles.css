@@ -3625,10 +3625,10 @@ body.lgp-table-editor-cursor * {
   cursor: pointer;
 }
 
-/* Virtualised rows: only used once a mount has more entries than
-   MOUNT_VIRTUAL_THRESHOLD, so an ordinary mount keeps the plain rows above.
-   The 24px here must stay in step with MOUNT_ROW_HEIGHT in mountPanel.ts —
-   the spacer's height is computed from it. */
+/* Virtualised rows: EVERY mount renders through the scroller — one DOM shape
+   for any tree size, so nothing re-structures when a mount grows. The 24px
+   here must stay in step with MOUNT_ROW_HEIGHT in mountPanel.ts — the
+   spacer's height is computed from it. */
 .logseq-mount-scroller {
   position: relative;
 }

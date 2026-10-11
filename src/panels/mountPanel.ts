@@ -52,12 +52,6 @@ import { iconForEntry } from '../features/iconTheme';
 
 export const VIEW_TYPE_MOUNT_PANEL = 'logseq-mount-panel';
 
-/**
- * Row counts below this are drawn whole; above it only the viewport is drawn.
- * Small mounts keep the plain DOM they always had (which is also what the E2E
- * suite walks), and the extra machinery only appears where it pays for itself.
- */
-const MOUNT_VIRTUAL_THRESHOLD = 500;
 /** Must match the row height in styles.css so the spacer maths stays honest. */
 const MOUNT_ROW_HEIGHT = 24;
 /** Rows drawn beyond the viewport on each side, so fast scrolling stays filled. */
@@ -307,25 +301,21 @@ export class MountPanelView extends ItemView {
   }
 
   /**
-   * Draw the visible rows of one mount.
+   * Draw the rows of one mount, ALWAYS through the virtual scroller.
    *
    * The tree is flattened to a list first (only folders in `open` contribute
    * their children), then only the rows inside the viewport are turned into
    * DOM — a mounted source tree can hold tens of thousands of entries, and
    * building a row for each one is what used to make a big mount freeze the
-   * panel. Small trees (up to `VIRTUAL_ROW_THRESHOLD`) are drawn whole, which
-   * keeps the DOM identical to what it has always been for ordinary mounts.
+   * panel. One path for every mount, no small/large split: the DOM shape no
+   * longer changes when a tree crosses a size line, which is what the
+   * two-threshold version did mid-session (expand a folder past the cap and
+   * the whole panel re-rendered into a different structure).
    */
   private renderRows(section: HTMLElement, mount: ExternalMount, state: MountState): void {
     const rows = this.flatten(state);
-    if (rows.length <= MOUNT_VIRTUAL_THRESHOLD) {
-      const box = section.createDiv({ cls: 'logseq-mount-rows' });
-      for (const r of rows) this.renderNode(box, mount, r.node, state, r.depth);
-      return;
-    }
-
-    // Virtualised: a spacer of the full height keeps the scrollbar honest,
-    // and an absolutely positioned band holds only the rows on screen.
+    // A spacer of the full height keeps the scrollbar honest, and an
+    // absolutely positioned band holds only the rows on screen.
     const scroller = section.createDiv({ cls: 'logseq-mount-scroller' });
     scroller.style.overflowY = 'auto';
     scroller.style.maxHeight = '420px';
