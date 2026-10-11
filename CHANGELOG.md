@@ -7,6 +7,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
 
 ### Added
 
+- **用原生编辑器打开库外文件** (Obsidian 1.14.4+). A mounted file's right-click menu gains 用原生编辑器打开, which resolves the absolute path to a `TExternalFile` (`vault.getAbstractFileByPath` on the `file:`-prefixed form) and opens it with Obsidian's own markdown editor — relative image/link resolution, Outline and Outgoing links included. The setViewState take-over patch now leaves every `file:`-prefixed path alone, so out-of-vault files stay native even in vaults that take over everything; on 1.13.x the menu item simply does not appear.
+- **The mount tree always renders through the viewport.** The small-tree plain-DOM path is gone: every mount flattens to rows and paints only what is on screen, so a tree never switches DOM shape mid-session when an expansion pushes it past the old 500-row threshold. Indentation (`6 + depth*14` inline padding) is identical on every row, verified by a two-fixture e2e probe (2-row and 551-row trees).
+
 - **Mount folders from outside the vault in a dedicated sidebar panel.** A folder that does not live in your vault can be listed in the mount panel, with an include/exclude regular expression to filter what it shows.
   - **Markdown opens in the Logseq block editor.** Clicking a `.md` gives the vault a real path to that file (under `Mounts/`) and opens it natively, so everything you already rely on works: take-over, backlinks, `((block references))`, search. Nothing is copied — a linked file *is* the file, so edits land where they always did.
   - **A panel of its own means nothing is injected into Obsidian's own file explorer**, so the surrounding layout cannot be disturbed.

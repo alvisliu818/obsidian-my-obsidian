@@ -472,6 +472,17 @@ export class MountPanelView extends ItemView {
               .onClick(() => void this.plugin.openExternalEntry(mount, node, { readOnly: true })),
           );
         }
+        // Obsidian 1.14.4+ opens out-of-vault files with its NATIVE editor
+        // (TExternalFile) — offer that alongside our own editors when the
+        // running app supports it.
+        if (!node.isDir && this.plugin.canOpenNativeExternal()) {
+          menu.addItem((item) =>
+            item
+              .setTitle('用原生编辑器打开')
+              .setIcon('app-window' as never)
+              .onClick(() => void this.plugin.openExternalInNativeEditor(node)),
+          );
+        }
         menu.addSeparator();
 
         // ---- the link-into-vault action ----

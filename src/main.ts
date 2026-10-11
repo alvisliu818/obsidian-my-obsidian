@@ -3,7 +3,7 @@
  * vault-wide block-id index, and clean uninstall (restore native views).
  */
 
-import { Menu, MarkdownView, Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf, debounce, normalizePath, type CachedMetadata, type ViewState } from 'obsidian';
+import { Menu, MarkdownView, Notice, Platform, Plugin, TAbstractFile, TFile, WorkspaceLeaf, debounce, normalizePath, type CachedMetadata, type ViewState } from 'obsidian';
 import { BlockEditorView, VIEW_TYPE_BLOCK_EDITOR } from './view/BlockEditorView';
 import { CMD_COLLAPSE_ALL, CMD_FIND, CMD_REPLACE } from './interactions/hotkeys';
 import {
@@ -905,6 +905,14 @@ this.registerView(VIEW_TYPE_KERNEL_PANEL, (leaf) => new KernelPanelView(leaf, th
       // `editor` property, so this converts even when take-over is off
       // globally but the page opts in with `editor:: logseq`.
       const file = state.type === 'markdown' ? (state.state as { file?: string } | undefined)?.file : undefined;
+      // Obsidian 1.14.4+ opens files OUTSIDE the vault as TExternalFile, whose
+      // `path` carries the `file:` prefix. The NATIVE editor is built for those
+      // (relative image/link resolution, outline, outgoing links) — taking them
+      // over would drag an out-of-vault file into our vault-shaped editor, so
+      // they always stay native, whatever the take-over settings say.
+      if (file && plugin.isExternalVaultPath(file)) {
+        return (plugin.origSetViewState as any).call(this, state, eState);
+      }
       if (file && plugin.shouldTakeOverFile(file)) {
         state = { ...state, type: VIEW_TYPE_BLOCK_EDITOR } as ViewState;
       }
@@ -920,10 +928,68 @@ this.registerView(VIEW_TYPE_KERNEL_PANEL, (leaf) => new KernelPanelView(leaf, th
       // mode/source survive the swap.
       const vs = leaf.getViewState();
       const file = (vs.state as { file?: string } | undefined)?.file;
-      if (file && this.shouldTakeOverFile(file)) {
+      // Out-of-vault files stay native — same rule as the setViewState patch.
+      if (file && !this.isExternalVaultPath(file) && this.shouldTakeOverFile(file)) {
         void leaf.setViewState({ ...vs, type: VIEW_TYPE_BLOCK_EDITOR } as ViewState);
       }
     }
+  }
+
+  // ------------------------------------------------------------------
+  // native out-of-vault open (Obsidian 1.14.4+)
+  // ------------------------------------------------------------------
+
+  /**
+   * Does this view-state file path refer to a file OUTSIDE the vault?
+   *
+   * On 1.14.4+ such files are `TExternalFile`s whose `path` is `file:` +
+   * the absolute filesystem path (verified against the running app), and
+   * `vault.getAbstractFileByPath` resolves them through its external fallback.
+   * A vault file can never carry that prefix on Windows (`:` is illegal in
+   * names); elsewhere the getRealPath check keeps a hypothetical `file:`-named
+   * vault file out of this branch.
+   */
+  isExternalVaultPath(file: string): boolean {
+    if (!file.startsWith('file:')) return false;
+    try {
+      const af = this.app.vault.getAbstractFileByPath(file) as TFile | null;
+      return !!af && typeof (af as unknown as { getRealPath?: unknown }).getRealPath === 'function';
+    } catch {
+      return false;
+    }
+  }
+
+  /** Can THIS Obsidian open out-of-vault files natively? (desktop, 1.14.4+ installer) */
+  canOpenNativeExternal(): boolean {
+    return (Platform as unknown as { canOpenExternalFiles?: boolean }).canOpenExternalFiles === true;
+  }
+
+  /**
+   * Open an external mount file with Obsidian's NATIVE editor.
+   *
+   * The route is the one Obsidian's own "Open file from outside the vault…"
+   * uses underneath: resolve the absolute path to a `TExternalFile` (the
+   * `file:`-prefixed form is what `getAbstractFileByPath` hands to the external
+   * file manager — measured), then `leaf.openFile` it like any vault file. The
+   * setViewState take-over patch explicitly leaves these alone, so this really
+   * lands in the native markdown editor, not in ours.
+   */
+  async openExternalInNativeEditor(node: MountNode): Promise<boolean> {
+    if (!this.canOpenNativeExternal()) {
+      new Notice('用原生编辑器打开库外文件需要 Obsidian 1.14.4+，并通过最新安装器安装。');
+      return false;
+    }
+    const key = `file:${node.abs.replace(/\\/g, '/')}`;
+    const af = this.app.vault.getAbstractFileByPath(key) as TFile | null;
+    if (!af || typeof (af as unknown as { getRealPath?: unknown }).getRealPath !== 'function') {
+      new Notice('无法打开：文件不存在，或此版本不支持库外文件。');
+      return false;
+    }
+    const leaf = this.app.workspace.getLeaf(this.settings.externalSplitView === true ? 'split' : 'tab');
+    await leaf.openFile(af);
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    logOp(this, 'external.open', node.abs, 'ok', 'native-editor');
+    return true;
   }
 
   // ------------------------------------------------------------------

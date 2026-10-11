@@ -28,7 +28,7 @@ A [Logseq](https://logseq.com)-style **block outliner editor** for [Obsidian](ht
 | Backups | Every write path backs up the original first (10 most recent per file) under `.logseq-editor/backups/`; restore via command palette |
 | Operation log | Every edit/move/review/backup recorded to `.logseq-editor/log.jsonl` (auto-rotating); view & export in-app |
 | Conflict safety | External file changes while you have unsaved edits → merge modal; never silently overwritten |
-| External mounts | Browse & edit folders **outside the vault** in a side panel; junction/hard-link into the vault on demand; 新建文件/新建文件夹/重命名/删除 right on the tree (recycle-bin delete), parity with the SiYuan file tree |
+| External mounts | Browse & edit folders **outside the vault** in a side panel; junction/hard-link into the vault on demand; 新建文件/新建文件夹/重命名/删除 right on the tree (recycle-bin delete), parity with the SiYuan file tree; on Obsidian 1.14.4+ a right-click action opens a mounted file with Obsidian's **native editor** (`TExternalFile`, never taken over by the block editor) |
 | Python code run | 「▶ 运行」button on ```python code blocks — real subprocess with `input()` support, live output panel, traceback display |
 | Python kernel panel | Persistent REPL (command palette → Open the Python kernel panel): variables persist across runs, Tab completion, reset & interrupt |
 
