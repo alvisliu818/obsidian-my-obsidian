@@ -1,0 +1,10 @@
+{
+  "id": "obsidian-browser",
+  "name": "Browser",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "A full Chromium browser inside Obsidian: multi-tab webviews, address bar, bookmarks, history, downloads, web clipper and Chrome extension support.",
+  "author": "alvisliu",
+  "authorUrl": "https://github.com/alvisliu818",
+  "isDesktopOnly": true
+}

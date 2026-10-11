@@ -1,0 +1,36 @@
+{
+  "name": "obsidian-browser",
+  "version": "0.1.0",
+  "description": "Full Chromium browser inside Obsidian: multi-tab webview, address bar, bookmarks, history, downloads, web clipper and Chrome extension support.",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node esbuild.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.mjs production",
+    "typecheck": "tsc -noEmit -skipLibCheck",
+    "version": "node version-bump.mjs"
+  },
+  "keywords": [
+    "obsidian",
+    "browser",
+    "webview",
+    "web-clipper",
+    "electron"
+  ],
+  "author": "alvisliu",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "@types/turndown": "^5.0.5",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "^0.21.5",
+    "obsidian": "^1.5.7",
+    "tslib": "^2.6.3",
+    "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.5.0",
+    "jszip": "^3.10.1",
+    "turndown": "^7.2.0"
+  }
+}
