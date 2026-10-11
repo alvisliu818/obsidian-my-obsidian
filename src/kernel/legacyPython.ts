@@ -32,6 +32,7 @@ import {
   type StatusListener,
 } from './types';
 import { resolvePythonInterpreter } from '../pythonInterpreter';
+import { spawnEnvFor, getActiveEnv } from '../pythonEnvs';
 
 /** 一次请求的聚合器:流式事件累积,遇终态 resolve。 */
 interface Aggregate {
@@ -183,12 +184,14 @@ export class LegacyPythonKernel implements KernelClient {
 
     let child: KernelProcess;
     try {
+      // 环境切换的关键:不是只换解释器路径,还要把环境的 bin 目录前置进 PATH
+      // (见 pythonEnvs.spawnEnvFor)。conda 环境里带 DLL 的包靠这些目录加载,
+      // 不补会 ImportError;MPLBACKEND=Agg 防止 matplotlib 弹窗卡死内核。
+      const envForChild = spawnEnvFor(getActiveEnv(), proc?.env ?? {});
       child = cp.spawn(python.cmd, [...python.args, '-u', script], {
         cwd: cwdOpt,
         env: {
-          ...proc?.env,
-          // 内核自己会把 stdout/stderr 改成 UTF-8,这里是双保险
-          PYTHONIOENCODING: 'utf-8',
+          ...envForChild,
           // 去掉用户 site-packages 里的 .pth 影响,保证启动可预测
           PYTHONNOUSERSITE: '1',
         },
