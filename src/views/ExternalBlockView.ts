@@ -29,6 +29,7 @@ import { ItemView, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian'
 import type LogseqEditorPlugin from '../main';
 import { BlockEditorView } from '../view/BlockEditorView';
 import type { MountNode } from '../features/mountFilter';
+import { applyHeaderPath, headerPathSegments } from './headerPath';
 
 export const VIEW_TYPE_EXTERNAL_BLOCK = 'logseq-external-block';
 
@@ -37,6 +38,9 @@ export interface ExternalBlockViewState {
   abs: string;
   name: string;
   rel?: string;
+  /** 挂载名——视图头部路径的第一段（「挂载名 / 子目录 / 文件名」） */
+  mountLabel?: string;
+  mountPath?: string;
 }
 
 export class ExternalBlockView extends ItemView {
@@ -45,6 +49,9 @@ export class ExternalBlockView extends ItemView {
   fileName = '';
   /** Path relative to the mount root — what the header shows. */
   rel = '';
+  /** 挂载名与挂载根：视图头部路径的起始段。 */
+  mountLabel = '';
+  mountPath = '';
   /** The hosted block editor. */
   private inner: BlockEditorView | null = null;
 
@@ -66,7 +73,13 @@ export class ExternalBlockView extends ItemView {
   }
 
   getState(): Record<string, unknown> {
-    return { abs: this.abs, name: this.fileName, rel: this.rel };
+    return {
+      abs: this.abs,
+      name: this.fileName,
+      rel: this.rel,
+      mountLabel: this.mountLabel,
+      mountPath: this.mountPath,
+    };
   }
 
   async setState(state: unknown, result: ViewStateResult): Promise<void> {
@@ -74,14 +87,58 @@ export class ExternalBlockView extends ItemView {
     if (typeof s.abs === 'string') this.abs = s.abs;
     if (typeof s.name === 'string') this.fileName = s.name;
     if (typeof s.rel === 'string') this.rel = s.rel;
+    if (typeof s.mountLabel === 'string') this.mountLabel = s.mountLabel;
+    if (typeof s.mountPath === 'string') this.mountPath = s.mountPath;
     await super.setState(state, result);
     // Mounting waits for the state: Obsidian calls onOpen BEFORE setState, so the
     // path and name are not known yet at onOpen time.
     if (this.abs && !this.inner) this.hostBlockEditor();
+    this.syncHeaderPath();
   }
 
   async onOpen(): Promise<void> {
     if (this.abs) this.hostBlockEditor();
+    this.syncHeaderPath();
+  }
+
+  // ------------------------------------------------------------------
+  // view-header 的完整路径（挂载名 / 子目录 / …，文件名是标题本身）
+  // ------------------------------------------------------------------
+
+  /**
+   * 库外文件不在库里，Obsidian 不给自定义视图生成目录链，标签页下面于是只剩
+   * 一个文件名。这里按原生 FileView 的 DOM 结构补上完整路径。
+   */
+  syncHeaderPath(): void {
+    if (!this.abs) return;
+    const rel = this.rel || this.relFromMount();
+    const label = this.mountLabel || this.mountLabelFromSettings();
+    applyHeaderPath(this.containerEl, headerPathSegments(this.abs, rel, label));
+  }
+
+  /** 没有 rel（老 state 恢复的标签页）时，用挂载根现算一个相对路径。 */
+  private relFromMount(): string {
+    const root = (this.mountPath || '').replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
+    const full = this.abs.replace(/\\/g, '/');
+    if (root && full.toLowerCase().startsWith(root + '/')) return full.slice(root.length + 1);
+    return this.fileName;
+  }
+
+  /** 老 state 没有挂载名时，按最长前缀匹配在挂载配置里找回来。 */
+  private mountLabelFromSettings(): string {
+    const mounts = this.plugin.settings.externalMounts ?? [];
+    const full = this.abs.replace(/\\/g, '/').toLowerCase();
+    let best = '';
+    let bestLen = -1;
+    for (const m of mounts) {
+      const root = String(m.path ?? '').replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
+      if (!root || !full.startsWith(root + '/')) continue;
+      if (root.length > bestLen) {
+        bestLen = root.length;
+        best = m.label || '';
+      }
+    }
+    return best;
   }
 
   async onClose(): Promise<void> {

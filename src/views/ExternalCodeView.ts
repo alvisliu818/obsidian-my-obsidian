@@ -31,6 +31,7 @@ import { logOp } from '../features/logger';
 import type LogseqEditorPlugin from '../main';
 import { relativeDisplayPath } from '../features/codeFileKind';
 import { setLeafTitle } from '../features/leafTitle';
+import { applyHeaderPath, headerPathSegments } from './headerPath';
 
 export { relativeDisplayPath };
 
@@ -122,6 +123,8 @@ export class ExternalCodeView extends ItemView {
   displayPath = '';
   /** The mount this file came from, so the header can say where it lives. */
   mountPath = '';
+  /** 挂载名——视图头部路径的第一段（「挂载名 / 子目录 / 文件名」） */
+  mountLabel = '';
   /** Public so the e2e probe can read the buffer without reaching into privates. */
   editor: EditorView | null = null;
   private lastDiskData = '';
@@ -145,7 +148,12 @@ export class ExternalCodeView extends ItemView {
   }
 
   getState(): Record<string, unknown> {
-    return { abs: this.abs, name: this.fileName, mountPath: this.mountPath };
+    return {
+      abs: this.abs,
+      name: this.fileName,
+      mountPath: this.mountPath,
+      mountLabel: this.mountLabel,
+    };
   }
 
   async onOpen(): Promise<void> {
@@ -157,15 +165,28 @@ export class ExternalCodeView extends ItemView {
   }
 
   async setState(state: unknown, result: ViewStateResult): Promise<void> {
-    const s = (state ?? {}) as { abs?: string; name?: string; content?: string; mountPath?: string };
+    const s = (state ?? {}) as {
+      abs?: string;
+      name?: string;
+      content?: string;
+      mountPath?: string;
+      mountLabel?: string;
+    };
     if (typeof s.abs === 'string') this.abs = s.abs;
     if (typeof s.name === 'string') this.fileName = s.name;
     if (typeof s.content === 'string') this.lastDiskData = s.content;
     if (typeof s.mountPath === 'string') this.mountPath = s.mountPath;
+    if (typeof s.mountLabel === 'string') this.mountLabel = s.mountLabel;
     this.displayPath = relativeDisplayPath(this.abs, this.mountPath, this.fileName);
     await super.setState(state, result);
     // Now the path is known; build the editor if onOpen ran before us.
     if (!this.editor && this.abs) this.mount();
+    // 视图头部的完整路径（挂载名 / 子目录 / …）：库外文件没有库内路径，
+    // Obsidian 不会给自定义视图生成目录链。
+    applyHeaderPath(
+      this.containerEl,
+      headerPathSegments(this.abs, this.displayPath || this.fileName, this.mountLabel),
+    );
   }
 
   async onClose(): Promise<void> {
@@ -271,8 +292,12 @@ export class ExternalCodeView extends ItemView {
     this.editor.focus();
     // The leaf's own view header caches the name it was mounted with; on a fresh
     // mount that is nothing, on a re-mount it is the previous file. Writing it
-    // here covers both, and the mount-relative path is what the user recognises.
-    setLeafTitle(this.leaf, this.displayPath || this.fileName);
+    // here covers both.
+    //
+    // File name only — NOT the mount-relative path. The header now carries the
+    // full path as breadcrumbs (挂载名 / 子目录 / …), so putting the path in the
+    // title as well spelled it out twice (`挂载库/sub/sub/code.ts`).
+    setLeafTitle(this.leaf, this.fileName);
   }
 
   /**

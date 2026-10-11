@@ -1557,7 +1557,7 @@ this.registerView(VIEW_TYPE_KERNEL_PANEL, (leaf) => new KernelPanelView(leaf, th
    * they never asked for; reusing an existing block-editor tab would silently
    * replace their work. A fresh tab is the only variant that touches nothing.
    */
-  private async openInBlockEditor(_mount: ExternalMount, node: MountNode): Promise<boolean> {
+  private async openInBlockEditor(mount: ExternalMount, node: MountNode): Promise<boolean> {
     if (!isMarkdownFile(node.name)) return false;
     try {
       readExternalText(node.abs);
@@ -1590,7 +1590,13 @@ this.registerView(VIEW_TYPE_KERNEL_PANEL, (leaf) => new KernelPanelView(leaf, th
       await leaf.setViewState({
         type: VIEW_TYPE_EXTERNAL_BLOCK,
         active: true,
-        state: { abs: node.abs, name: node.name, rel: node.rel },
+        state: {
+          abs: node.abs,
+          name: node.name,
+          rel: node.rel,
+          mountLabel: mount.label,
+          mountPath: mount.path,
+        },
       });
       this.app.workspace.setActiveLeaf(leaf, { focus: true });
       logOp(this, 'external.open', node.abs, 'ok', 'block-editor');
@@ -1627,7 +1633,13 @@ this.registerView(VIEW_TYPE_KERNEL_PANEL, (leaf) => new KernelPanelView(leaf, th
     await leaf.setViewState({
       type: VIEW_TYPE_EXTERNAL_CODE,
       active: true,
-      state: { abs: node.abs, name: node.name, content: data, mountPath: mount.path },
+      state: {
+        abs: node.abs,
+        name: node.name,
+        content: data,
+        mountPath: mount.path,
+        mountLabel: mount.label,
+      },
     });
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
     logOp(this, 'external.open', node.abs, 'ok', 'code-editor');

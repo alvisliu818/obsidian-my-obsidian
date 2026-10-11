@@ -424,12 +424,13 @@ export class BlockEditorView extends TextFileView {
    * a tab switch with the text intact (measured), so this does not need to be
    * repeated on every render.
    *
-   * The relative path is used, matching the breadcrumb and the mount panel — the
-   * drive-and-folder prefix only pushes the filename out of view.
+   * File name only — the view header now spells out the full path as
+   * breadcrumbs (挂载名 / 子目录 / …), so repeating it here wrote the directory
+   * twice (`挂载库/sub/sub/code.ts`).
    */
   private syncLeafTitle(): void {
     if (!this.isExternal) return;
-    setLeafTitle(this.leaf, this.externalDisplayPath || this.externalName);
+    setLeafTitle(this.leaf, this.externalName);
   }
 
   /** Banner shown instead of the vault-only backlinks / references sections. */
