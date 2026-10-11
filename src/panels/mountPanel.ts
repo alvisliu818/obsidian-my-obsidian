@@ -540,42 +540,46 @@ export class MountPanelView extends ItemView {
         }
         menu.addSeparator();
 
-        // ---- the link-into-vault action ----
+        // ---- the link-into-vault action (hideable via 设置 → 外部挂载) ----
         // Windows refuses a junction for a file and refuses symlinks without
         // privileges, so the kind is derived from the target rather than chosen.
-        const kind = linkKindFor(node.abs);
-        const linkName = safeSegment(node.name);
-        const already = this.isLinked(node);
-        const kindLabel = kind === 'junction' ? '目录联接' : '硬链接';
-        menu.addItem((item) =>
-          item
-            .setTitle(
-              already
-                ? '从库中取消链接'
-                : `链接到库（${kindLabel} → ${MOUNT_FOLDER}/）`,
-            )
-            .setIcon((already ? 'unlink' : 'link') as never)
-            .onClick(async () => {
-              if (already) this.unlinkNode(node);
-              else await this.linkNode(node, linkName);
-            }),
-        );
-        if (!node.isDir && !already) {
+        // With the setting off the whole group disappears: no link, no unlink,
+        // no parent-folder link — already-established links keep working.
+        if (this.plugin.settings.mountLinkEnabled !== false) {
+          const kind = linkKindFor(node.abs);
+          const linkName = safeSegment(node.name);
+          const already = this.isLinked(node);
+          const kindLabel = kind === 'junction' ? '目录联接' : '硬链接';
           menu.addItem((item) =>
-            item.setTitle('链接整个上级文件夹').setIcon('folder-plus' as never).onClick(async () => {
-              // Linking the containing folder brings the whole subtree across at
-              // once — often what people actually want, and a hard link cannot
-              // do it per-file without linking hundreds of entries.
-              const st = this.states.get(mount.id);
-              if (!st) return;
-              const parent = parentNodeOf(st, node.rel);
-              if (!parent) {
-                new Notice('找不到上级文件夹。');
-                return;
-              }
-              await this.linkNode(parent, safeSegment(parent.name));
-            }),
+            item
+              .setTitle(
+                already
+                  ? '从库中取消链接'
+                  : `链接到库（${kindLabel} → ${MOUNT_FOLDER}/）`,
+              )
+              .setIcon((already ? 'unlink' : 'link') as never)
+              .onClick(async () => {
+                if (already) this.unlinkNode(node);
+                else await this.linkNode(node, linkName);
+              }),
           );
+          if (!node.isDir && !already) {
+            menu.addItem((item) =>
+              item.setTitle('链接整个上级文件夹').setIcon('folder-plus' as never).onClick(async () => {
+                // Linking the containing folder brings the whole subtree across at
+                // once — often what people actually want, and a hard link cannot
+                // do it per-file without linking hundreds of entries.
+                const st = this.states.get(mount.id);
+                if (!st) return;
+                const parent = parentNodeOf(st, node.rel);
+                if (!parent) {
+                  new Notice('找不到上级文件夹。');
+                  return;
+                }
+                await this.linkNode(parent, safeSegment(parent.name));
+              }),
+            );
+          }
         }
         menu.addSeparator();
         // ---- file management on the external tree (思源文件树对齐) ----
@@ -587,20 +591,26 @@ export class MountPanelView extends ItemView {
             .setIcon('folder-open' as never)
             .onClick(() => this.plugin.revealInSystem(node.abs)),
         );
-        menu.addItem((item) =>
-          item
-            .setTitle('复制绝对路径')
-            .setIcon('copy' as never)
-            .onClick(() => {
-              void navigator.clipboard?.writeText(node.abs);
-              new Notice('已复制路径');
-            }),
-        );
+        // When the forward ran, its handlers already provide 复制绝对路径 —
+        // adding ours too would show the entry twice.
+        const forwarded = this.addFileMenuEventItems(menu, node.abs);
+        if (!forwarded) {
+          menu.addItem((item) =>
+            item
+              .setTitle('复制绝对路径')
+              .setIcon('copy' as never)
+              .onClick(() => {
+                void navigator.clipboard?.writeText(node.abs);
+                new Notice('已复制路径');
+              }),
+          );
+        }
       } else {
         // Mount header: directory-level ops land on the mount ROOT, matching
         // how the SiYuan file tree exposes 新建 on the tree root.
         this.addTreeFileMenuItems(menu, mount, null);
         menu.addSeparator();
+        this.addFileMenuEventItems(menu, mount.path);
         menu.addItem((item) =>
           item.setTitle('编辑这个挂载…').setIcon('settings' as never).onClick(() => this.plugin.editMount(mount)),
         );
@@ -678,6 +688,47 @@ export class MountPanelView extends ItemView {
     if (st.open.has(rel)) st.open.delete(rel);
     else st.open.add(rel);
     this.render();
+  }
+
+  /**
+   * Forward the native `file-menu` event so THIS menu carries everything the
+   * file explorer's would — most importantly the items OTHER PLUGINS add.
+   *
+   * The file is resolved to its `TExternalFile` (`file:`-prefixed lookup,
+   * Obsidian 1.14.4+); handlers receive a real TAbstractFile, so items that
+   * act through the vault API work unchanged. A neutral source string keeps
+   * most core-explorer entries out — 新建 / 重命名 / 删除 already exist above
+   * via the SiYuan-parity block — but handlers otherwise append freely
+   * (Obsidian sorts the menu by section at show time, so placement is the
+   * menu's business, not ours). One broken handler must not take the whole
+   * menu down, hence the try/catch. Returns whether the forward actually
+   * happened, so callers can skip items the handlers already provide —
+   * 「复制绝对路径」 in particular is added by the open-with group.
+   */
+  private addFileMenuEventItems(menu: Menu, abs: string): boolean {
+    if (!this.plugin.canOpenNativeExternal()) return false;
+    const af = this.app.vault.getAbstractFileByPath(`file:${abs.replace(/\\/g, '/')}`);
+    if (!af) return false;
+    menu.addSeparator();
+    try {
+      this.app.workspace.trigger('file-menu', menu, af, 'logseq-mount-panel');
+    } catch (e) {
+      console.error('file-menu handler failed for', abs, e);
+      return false;
+    }
+    // Some handlers re-offer entries this menu already added earlier (the
+    // known case is 重命名). First occurrence wins; separators carry no title
+    // and stay. `items` is undocumented — hence the cast — and the dedupe
+    // splices IN PLACE, so the live array is the one being mutated.
+    const items = (menu as unknown as { items: Array<{ title?: string } | null> }).items;
+    const seen = new Set<string>();
+    for (let i = items.length - 1; i >= 0; i--) {
+      const t = (items[i]?.title ?? '').trim();
+      if (!t) continue;
+      if (seen.has(t)) items.splice(i, 1);
+      else seen.add(t);
+    }
+    return true;
   }
 
   // ------------------------------------------------------------------

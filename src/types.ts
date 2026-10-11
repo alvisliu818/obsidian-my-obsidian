@@ -193,6 +193,15 @@ export interface BlockEditorSettings {
    */
   mountFilterEnabled: boolean;
   /**
+   * Offer 「链接到库」 in the mount panel's right-click menu.
+   *
+   * On by default. Off hides the whole group — 链接到库 / 从库中取消链接 /
+   * 链接整个上级文件夹 — for people who never link into the vault. Links
+   * already on disk keep working either way: an existing link still opens
+   * through its vault path.
+   */
+  mountLinkEnabled: boolean;
+  /**
    * Show the 「已加载 N 文件 · M 文件夹」 line under a mount's header.
    *
    * On by default; the tree is filled in lazily, so the numbers only ever
@@ -427,6 +436,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   foldEnabled: true,
   hiddenProps: 'collapsed',
   mountFilterEnabled: false,
+  mountLinkEnabled: true,
   mountShowLoadedCount: true,
   externalMounts: [],
   externalCodeWrap: true,

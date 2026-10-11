@@ -336,6 +336,22 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         }),
       );
 
+    new Setting(containerEl)
+      .setName('显示「链接到库」')
+      .setDesc(
+        '右键菜单里的链接进库入口（目录联接 / 硬链接到 Mounts/，' +
+          '含「链接整个上级文件夹」和「从库中取消链接」）。' +
+          '不需要把库外文件链接进库的话可以关掉；' +
+          '已经建立的链接不受影响，仍会照常打开。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.mountLinkEnabled !== false).onChange(async (v) => {
+          this.plugin.settings.mountLinkEnabled = v;
+          await this.plugin.saveSettings();
+          this.plugin.refreshMounts();
+        }),
+      );
+
     const mounts = this.plugin.settings.externalMounts ?? [];
     if (mounts.length === 0) {
       containerEl.createDiv({ cls: 'setting-item-description', text: '暂无外部挂载。' });
