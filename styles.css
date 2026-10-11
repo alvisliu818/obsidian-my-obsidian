@@ -3621,18 +3621,24 @@ body.lgp-table-editor-cursor * {
   align-items: center;
   gap: 4px;
   padding: 2px 8px 2px 4px;
-  border-radius: 4px;
+  /* Native file explorer look: nav typography, hover wash and radius all
+     come from the same variables the explorer uses, so themes apply too. */
+  font-size: var(--nav-item-size, var(--font-ui-small, 13px));
+  border-radius: var(--nav-item-radius, 4px);
   cursor: pointer;
 }
 
-/* Virtualised rows: EVERY mount renders through the scroller — one DOM shape
-   for any tree size, so nothing re-structures when a mount grows. The 24px
-   here must stay in step with MOUNT_ROW_HEIGHT in mountPanel.ts — the
-   spacer's height is computed from it. */
-.logseq-mount-scroller {
-  position: relative;
+/* The mount head reads as the depth-0 folder of its tree: the same caret
+   gutter a native folder title carries (the tree's rows start one level in,
+   indent computed in mountPanel.ts). */
+.logseq-mount-head {
+  padding-inline-start: 24px;
 }
 
+/* Viewport band: every mount flattens to rows and paints only what is near
+   the panel's viewport — there is no inner scroll box, the whole panel
+   scrolls together. The 25px here must stay in step with MOUNT_ROW_HEIGHT
+   in mountPanel.ts — the spacer's height is computed from it. */
 .logseq-mount-band {
   top: 0;
   will-change: transform;
@@ -3647,12 +3653,12 @@ body.lgp-table-editor-cursor * {
 .logseq-mount-row-wrap .logseq-mount-row {
   flex: 1 1 auto;
   min-width: 0;
-  height: 24px;
+  height: 25px;
   box-sizing: border-box;
 }
 .logseq-mount-head:hover,
 .logseq-mount-row:hover {
-  background-color: var(--background-modifier-hover);
+  background-color: var(--nav-item-background-hover, var(--background-modifier-hover));
 }
 .logseq-mount-head {
   font-weight: var(--font-semibold);

@@ -53,7 +53,7 @@ import { iconForEntry } from '../features/iconTheme';
 export const VIEW_TYPE_MOUNT_PANEL = 'logseq-mount-panel';
 
 /** Must match the row height in styles.css so the spacer maths stays honest. */
-const MOUNT_ROW_HEIGHT = 24;
+const MOUNT_ROW_HEIGHT = 25;
 /** Rows drawn beyond the viewport on each side, so fast scrolling stays filled. */
 const MOUNT_OVERSCAN = 8;
 
@@ -76,6 +76,13 @@ interface MountState {
 export class MountPanelView extends ItemView {
   plugin: LogseqEditorPlugin;
   private states = new Map<string, MountState>();
+  /** Per-render viewport painters; the panel's scroll runs them all. */
+  private rowPainters: Array<() => void> = [];
+  /** The ancestor that actually scrolls the panel (usually `.view-content`). */
+  private scrollEl: HTMLElement | null = null;
+  private readonly onScrollRepaint = (): void => {
+    for (const paint of this.rowPainters) paint();
+  };
 
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
     super(leaf);
@@ -99,7 +106,26 @@ export class MountPanelView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    if (this.scrollEl) this.scrollEl.removeEventListener('scroll', this.onScrollRepaint);
+    this.scrollEl = null;
+    this.rowPainters = [];
     this.states.clear();
+  }
+
+  /**
+   * The ancestor that actually scrolls the panel — the first element with a
+   * scrollable overflow, which in a sidebar leaf is `.view-content`
+   * (measured: overflowY auto). Rows repaint on its scroll, so the whole
+   * panel scrolls as one and there is no inner scroll box to fix in place.
+   */
+  private findScrollEl(): HTMLElement | null {
+    let el: HTMLElement | null = this.contentEl;
+    while (el) {
+      const oy = getComputedStyle(el).overflowY;
+      if (oy === 'auto' || oy === 'scroll') return el;
+      el = el.parentElement;
+    }
+    return null;
   }
 
   /** Forget every cached scan, so the next paint re-reads from disk. */
@@ -220,6 +246,13 @@ export class MountPanelView extends ItemView {
     contentEl.empty();
     contentEl.addClass('logseq-mount-panel');
 
+    // Viewport painters are rebuilt with the DOM; the scroll listener lives
+    // on the panel's scrollable ancestor, which survives re-renders.
+    this.rowPainters = [];
+    if (this.scrollEl) this.scrollEl.removeEventListener('scroll', this.onScrollRepaint);
+    this.scrollEl = this.findScrollEl();
+    this.scrollEl?.addEventListener('scroll', this.onScrollRepaint, { passive: true });
+
     // Pinned mounts float to the top; everything else keeps the order the user
     // dragged it into (see `wireDragReorder`).
     const mounts = (this.plugin.settings.externalMounts ?? [])
@@ -248,6 +281,9 @@ export class MountPanelView extends ItemView {
     refreshBtn.addEventListener('click', () => this.refreshMounts());
 
     for (const m of mounts) this.renderMount(contentEl, m);
+    // Repaint with the final DOM in place — geometry measured mid-build can
+    // be stale, and the scroll position may have been reset by the rebuild.
+    for (const paint of this.rowPainters) paint();
   }
 
   private renderMount(root: HTMLElement, mount: ExternalMount): void {
@@ -301,25 +337,18 @@ export class MountPanelView extends ItemView {
   }
 
   /**
-   * Draw the rows of one mount, ALWAYS through the virtual scroller.
+   * Draw the rows of one mount through a viewport band.
    *
    * The tree is flattened to a list first (only folders in `open` contribute
-   * their children), then only the rows inside the viewport are turned into
-   * DOM — a mounted source tree can hold tens of thousands of entries, and
-   * building a row for each one is what used to make a big mount freeze the
-   * panel. One path for every mount, no small/large split: the DOM shape no
-   * longer changes when a tree crosses a size line, which is what the
-   * two-threshold version did mid-session (expand a folder past the cap and
-   * the whole panel re-rendered into a different structure).
+   * their children); a spacer of the full height keeps the panel's own scroll
+   * honest, and an absolutely positioned band holds only the rows near the
+   * viewport. There is deliberately NO inner scroll box: the whole panel
+   * scrolls as one — the mount header scrolls away with its tree — and the
+   * band is repainted by the panel scroll listener (`onScrollRepaint`).
    */
   private renderRows(section: HTMLElement, mount: ExternalMount, state: MountState): void {
     const rows = this.flatten(state);
-    // A spacer of the full height keeps the scrollbar honest, and an
-    // absolutely positioned band holds only the rows on screen.
-    const scroller = section.createDiv({ cls: 'logseq-mount-scroller' });
-    scroller.style.overflowY = 'auto';
-    scroller.style.maxHeight = '420px';
-    const spacer = scroller.createDiv({ cls: 'logseq-mount-spacer' });
+    const spacer = section.createDiv({ cls: 'logseq-mount-spacer' });
     spacer.style.position = 'relative';
     spacer.style.height = `${rows.length * MOUNT_ROW_HEIGHT}px`;
     const band = spacer.createDiv({ cls: 'logseq-mount-band' });
@@ -328,11 +357,25 @@ export class MountPanelView extends ItemView {
     band.style.right = '0';
 
     const paint = (): void => {
+      // Rects are viewport-based, so whichever ancestor scrolls, the visible
+      // window math stays honest. With no scrollable ancestor the content
+      // fits, and every row is painted.
+      let first = 0;
+      let last = rows.length;
+      const scroller = this.scrollEl;
+      if (scroller) {
+        const outer = scroller.getBoundingClientRect();
+        const inner = spacer.getBoundingClientRect();
+        if (inner.bottom < outer.top || inner.top > outer.bottom) {
+          band.empty();
+          return;
+        }
+        const above = inner.top < outer.top ? Math.floor((outer.top - inner.top) / MOUNT_ROW_HEIGHT) : 0;
+        first = Math.max(0, Math.min(rows.length, above - MOUNT_OVERSCAN));
+        const visible = Math.ceil(outer.height / MOUNT_ROW_HEIGHT) + MOUNT_OVERSCAN * 2;
+        last = Math.min(rows.length, first + visible);
+      }
       band.empty();
-      const top = scroller.scrollTop;
-      const first = Math.max(0, Math.floor(top / MOUNT_ROW_HEIGHT) - MOUNT_OVERSCAN);
-      const visible = Math.ceil(scroller.clientHeight / MOUNT_ROW_HEIGHT) + MOUNT_OVERSCAN * 2;
-      const last = Math.min(rows.length, first + visible);
       band.style.transform = `translateY(${first * MOUNT_ROW_HEIGHT}px)`;
       for (let i = first; i < last; i++) {
         const r = rows[i];
@@ -341,8 +384,8 @@ export class MountPanelView extends ItemView {
         this.renderNode(row, mount, r.node, state, r.depth);
       }
     };
+    this.rowPainters.push(paint);
     paint();
-    scroller.addEventListener('scroll', () => paint(), { passive: true });
   }
 
   /** Flatten the loaded tree into draw order, honouring which folders are open. */
@@ -363,8 +406,11 @@ export class MountPanelView extends ItemView {
     const row = parent.createDiv({
       cls: 'logseq-mount-row ' + (node.isDir ? 'is-dir' : 'is-file'),
     });
-    // Mirror the explorer indent rhythm so the tree reads the same way.
-    row.style.paddingInlineStart = `${6 + depth * 14}px`;
+    // Mirror the NATIVE file explorer's rhythm (default theme, measured on a
+    // live instance): folder rows carry a 24px caret gutter, file rows 4px,
+    // and each level shifts the row 17px. The mount head counts as the
+    // depth-0 folder, so the mount's own rows start one level in.
+    row.style.paddingInlineStart = `${(node.isDir ? 24 : 4) + (depth + 1) * 17}px`;
 
     if (node.isDir) {
       const caret = row.createSpan({ cls: 'logseq-mount-caret' });
