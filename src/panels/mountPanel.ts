@@ -319,6 +319,7 @@ export class MountPanelView extends ItemView {
     if (!state.open.has('')) return;
 
     if (state.error) section.createDiv({ cls: 'logseq-mount-error', text: state.error });
+    const filtering = this.plugin.settings.mountFilterEnabled !== false;
     const counts = countTree(state.tree);
     const meta: string[] = [];
     // The tree fills in layer by layer, so a total would be a lie: only what
@@ -327,8 +328,12 @@ export class MountPanelView extends ItemView {
     if (this.plugin.settings.mountShowLoadedCount !== false && (counts.files || counts.folders)) {
       meta.push(`已加载 ${counts.files} 文件 · ${counts.folders} 文件夹`);
     }
-    if (mount.include.trim()) meta.push(`包含 /${mount.include}/`);
-    if (mount.exclude.trim()) meta.push(`排除 /${mount.exclude}/`);
+    // Filter hints only while filtering is ON: with the toggle off the
+    // regexes are inert, and showing 排除 /…/ suggests they still bite.
+    if (filtering) {
+      if (mount.include.trim()) meta.push(`包含 /${mount.include}/`);
+      if (mount.exclude.trim()) meta.push(`排除 /${mount.exclude}/`);
+    }
     if (state.truncated) meta.push('已截断');
     section.createDiv({ cls: 'logseq-mount-meta', text: meta.join(' · ') || mount.path });
 
@@ -447,8 +452,7 @@ export class MountPanelView extends ItemView {
       return;
     }
 
-    const ext = extOf(node.name);
-    const text = isTextMount(ext);
+    const text = isTextMount(extOf(node.name));
     // Files get the icon theme's own artwork when it is installed, so a mounted
     // tree shows the same icons the vault's files do. Folders keep a generic
     // marker: the theme resolves folder icons by vault path, which an
@@ -463,8 +467,9 @@ export class MountPanelView extends ItemView {
       }),
     );
     row.createSpan({ cls: 'logseq-mount-name', text: node.name });
+    // Linked state is the only flair a file row carries: type pills (png /
+    // 二进制 / …) read as noise repeated on half the rows, so they are gone.
     if (this.isLinked(node)) row.createSpan({ cls: 'logseq-mount-flag is-linked', text: '已链接' });
-    else if (!text) row.createSpan({ cls: 'logseq-mount-flag', text: ext || '二进制' });
     row.addEventListener('click', () => {
       void this.plugin.openExternalEntry(mount, node);
     });

@@ -90,23 +90,34 @@ export class MountEditorModal extends Modal {
         }),
       );
 
-    new Setting(contentEl)
-      .setName('包含正则')
-      .setDesc('只显示匹配此式的文件。留空 = 全部显示。例如 \\.md$')
-      .addText((t) =>
-        t.setPlaceholder('\\.md$').setValue(this.draft.include).onChange((v) => {
-          this.draft.include = v;
-        }),
-      );
+    if (this.plugin.settings.mountFilterEnabled === true) {
+      new Setting(contentEl)
+        .setName('包含正则')
+        .setDesc('只显示匹配此式的文件。留空 = 全部显示。例如 \\.md$')
+        .addText((t) =>
+          t.setPlaceholder('\\.md$').setValue(this.draft.include).onChange((v) => {
+            this.draft.include = v;
+          }),
+        );
 
-    new Setting(contentEl)
-      .setName('排除正则')
-      .setDesc('隐藏匹配此式的条目，即使它匹配包含正则。例如 node_modules|[\\\\/]\\.git[\\\\/]')
-      .addText((t) =>
-        t.setPlaceholder('node_modules').setValue(this.draft.exclude).onChange((v) => {
-          this.draft.exclude = v;
-        }),
-      );
+      new Setting(contentEl)
+        .setName('排除正则')
+        .setDesc('隐藏匹配此式的条目，即使它匹配包含正则。例如 node_modules|[\\\\/]\\.git[\\\\/]')
+        .addText((t) =>
+          t.setPlaceholder('node_modules').setValue(this.draft.exclude).onChange((v) => {
+            this.draft.exclude = v;
+          }),
+        );
+    } else {
+      // 过滤关闭时这两个字段不渲染（用户要求）：正则仍保留在挂载配置里，
+      // 一个字都不会丢，开启「启用挂载过滤」后这里恢复成输入框。
+      new Setting(contentEl)
+        .setName('包含 / 排除正则')
+        .setDesc(
+          '挂载过滤当前是关闭的（设置 → 外部挂载 → 启用挂载过滤），' +
+            '已配置的正则保留但不生效；开启过滤后即可在这里编辑。',
+        );
+    }
 
     new Setting(contentEl)
       .setName('自动刷新（秒）')
