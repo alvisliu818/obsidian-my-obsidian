@@ -125,6 +125,23 @@ export class ExternalCodeView extends ItemView {
   mountPath = '';
   /** 挂载名——视图头部路径的第一段（「挂载名 / 子目录 / 文件名」） */
   mountLabel = '';
+
+  /** 老 state 没有挂载名时，按最长前缀匹配在挂载配置里找回来。 */
+  private mountLabelFromSettings(): string {
+    const mounts = this.plugin.settings.externalMounts ?? [];
+    const full = this.abs.replace(/\\/g, '/').toLowerCase();
+    let best = '';
+    let bestLen = -1;
+    for (const m of mounts) {
+      const root = String(m.path ?? '').replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
+      if (!root || !full.startsWith(root + '/')) continue;
+      if (root.length > bestLen) {
+        bestLen = root.length;
+        best = m.label || '';
+      }
+    }
+    return best;
+  }
   /** Public so the e2e probe can read the buffer without reaching into privates. */
   editor: EditorView | null = null;
   private lastDiskData = '';
@@ -183,10 +200,13 @@ export class ExternalCodeView extends ItemView {
     if (!this.editor && this.abs) this.mount();
     // 视图头部的完整路径（挂载名 / 子目录 / …）：库外文件没有库内路径，
     // Obsidian 不会给自定义视图生成目录链。
-    applyHeaderPath(
-      this.containerEl,
-      headerPathSegments(this.abs, this.displayPath || this.fileName, this.mountLabel),
+    const segments = headerPathSegments(
+      this.abs,
+      this.displayPath || this.fileName,
+      this.mountLabel || this.mountLabelFromSettings(),
     );
+    if (segments.length) segments[0].isMount = true;
+    applyHeaderPath(this.containerEl, segments, this.plugin);
   }
 
   async onClose(): Promise<void> {

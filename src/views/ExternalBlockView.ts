@@ -113,7 +113,9 @@ export class ExternalBlockView extends ItemView {
     if (!this.abs) return;
     const rel = this.rel || this.relFromMount();
     const label = this.mountLabel || this.mountLabelFromSettings();
-    applyHeaderPath(this.containerEl, headerPathSegments(this.abs, rel, label));
+    const segments = headerPathSegments(this.abs, rel, label);
+    if (segments.length) segments[0].isMount = true;
+    applyHeaderPath(this.containerEl, segments, this.plugin);
   }
 
   /** 没有 rel（老 state 恢复的标签页）时，用挂载根现算一个相对路径。 */

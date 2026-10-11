@@ -3754,6 +3754,24 @@ body.lgp-table-editor-cursor * {
   white-space: nowrap;
 }
 /* Long absolute paths truncate from the left so the filename stays visible. */
+/* 视图头部路径面包屑：可点的每一段（手型 + 悬浮反馈） */
+.view-header-breadcrumb.lgp-hdr-crumb {
+  cursor: pointer;
+}
+.view-header-breadcrumb.lgp-hdr-crumb:hover {
+  color: var(--text-normal);
+  text-decoration: underline;
+}
+
+/* 路径菜单里"当前所在那一级"的高亮（VSCode 面包屑的同款观感） */
+.menu-item.lgp-hdr-current {
+  background-color: var(--background-modifier-hover);
+}
+.menu-item.lgp-hdr-current .menu-item-title {
+  color: var(--text-accent);
+  font-weight: 600;
+}
+
 .logseq-external-banner-path {
   color: var(--text-faint);
   font-size: var(--font-ui-smaller);
