@@ -321,6 +321,21 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         }),
       );
 
+    new Setting(containerEl)
+      .setName('显示「已加载」统计')
+      .setDesc(
+        '挂载标题下方的「已加载 N 文件 · M 文件夹」提示。' +
+          '树是逐层懒加载的，这只是已读取层的统计，不是总数；' +
+          '嫌它占地方可以关掉。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.mountShowLoadedCount !== false).onChange(async (v) => {
+          this.plugin.settings.mountShowLoadedCount = v;
+          await this.plugin.saveSettings();
+          this.plugin.refreshMounts();
+        }),
+      );
+
     const mounts = this.plugin.settings.externalMounts ?? [];
     if (mounts.length === 0) {
       containerEl.createDiv({ cls: 'setting-item-description', text: '暂无外部挂载。' });

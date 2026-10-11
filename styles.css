@@ -3608,11 +3608,7 @@ body.lgp-table-editor-cursor * {
 
 .logseq-mount-section {
   padding-bottom: 4px;
-  border-bottom: 1px solid var(--background-modifier-border);
-  margin-bottom: 4px;
-}
-.logseq-mount-section:last-child {
-  border-bottom: none;
+  /* no divider between mounts — the headers read as top-level folders */
 }
 
 .logseq-mount-head,
@@ -3628,11 +3624,10 @@ body.lgp-table-editor-cursor * {
   cursor: pointer;
 }
 
-/* The mount head reads as the depth-0 folder of its tree: the same caret
-   gutter a native folder title carries (the tree's rows start one level in,
-   indent computed in mountPanel.ts). */
+/* The mount head reads as the depth-0 folder of its tree: the caret gutter
+   (the tree's rows start one level in, indent computed in mountPanel.ts). */
 .logseq-mount-head {
-  padding-inline-start: 24px;
+  padding-inline-start: 14px;
 }
 
 /* Viewport band: every mount flattens to rows and paints only what is near

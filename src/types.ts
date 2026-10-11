@@ -193,6 +193,14 @@ export interface BlockEditorSettings {
    */
   mountFilterEnabled: boolean;
   /**
+   * Show the 「已加载 N 文件 · M 文件夹」 line under a mount's header.
+   *
+   * On by default; the tree is filled in lazily, so the numbers only ever
+   * describe the layers read so far — users who find the line noisy can turn
+   * it off without losing anything.
+   */
+  mountShowLoadedCount: boolean;
+  /**
    * Folders OUTSIDE the vault listed in the mount panel. Each is shown as a
    * virtual tree; any entry can also be linked into the vault as a real path
    * (junction for folders, hard link for files), which makes it open in the
@@ -419,6 +427,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   foldEnabled: true,
   hiddenProps: 'collapsed',
   mountFilterEnabled: false,
+  mountShowLoadedCount: true,
   externalMounts: [],
   externalCodeWrap: true,
   externalSplitView: false,

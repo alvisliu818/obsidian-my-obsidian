@@ -322,8 +322,11 @@ export class MountPanelView extends ItemView {
     const counts = countTree(state.tree);
     const meta: string[] = [];
     // The tree fills in layer by layer, so a total would be a lie: only what
-    // has actually been read is counted, and the row says so.
-    if (counts.files || counts.folders) meta.push(`已加载 ${counts.files} 文件 · ${counts.folders} 文件夹`);
+    // has actually been read is counted — and the whole line is optional
+    // (Settings → 外部挂载 → 显示「已加载」统计).
+    if (this.plugin.settings.mountShowLoadedCount !== false && (counts.files || counts.folders)) {
+      meta.push(`已加载 ${counts.files} 文件 · ${counts.folders} 文件夹`);
+    }
     if (mount.include.trim()) meta.push(`包含 /${mount.include}/`);
     if (mount.exclude.trim()) meta.push(`排除 /${mount.exclude}/`);
     if (state.truncated) meta.push('已截断');
@@ -406,11 +409,12 @@ export class MountPanelView extends ItemView {
     const row = parent.createDiv({
       cls: 'logseq-mount-row ' + (node.isDir ? 'is-dir' : 'is-file'),
     });
-    // Mirror the NATIVE file explorer's rhythm (default theme, measured on a
-    // live instance): folder rows carry a 24px caret gutter, file rows 4px,
-    // and each level shifts the row 17px. The mount head counts as the
-    // depth-0 folder, so the mount's own rows start one level in.
-    row.style.paddingInlineStart = `${(node.isDir ? 24 : 4) + (depth + 1) * 17}px`;
+    // Native-explorer rhythm, pulled 10px left as a whole (user preference):
+    // folder rows carry a 14px caret gutter, FILE rows the same gutter plus
+    // the caret's width (11px + 4px gap), so the file ICON aligns with the
+    // folder ICON at the same depth. Each level shifts the row 17px; the
+    // mount head counts as the depth-0 folder, rows start one level in.
+    row.style.paddingInlineStart = `${(node.isDir ? 14 : 29) + (depth + 1) * 17}px`;
 
     if (node.isDir) {
       const caret = row.createSpan({ cls: 'logseq-mount-caret' });

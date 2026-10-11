@@ -1315,6 +1315,34 @@ this.registerView(VIEW_TYPE_KERNEL_PANEL, (leaf) => new KernelPanelView(leaf, th
       workspace.revealLeaf(existing);
       return;
     }
+    // The mount tree opens in the LEFT sidebar, to the LEFT of the native
+    // file explorer: a tree browsing folders OUTSIDE the vault belongs next
+    // to the tree that browses the vault. First open only — after that the
+    // user's own arrangement wins and reveal is all that happens. Every
+    // other panel keeps its right-side slot.
+    if (viewType === VIEW_TYPE_MOUNT_PANEL) {
+      const explorer = workspace.getLeavesOfType('file-explorer')[0];
+      const leaf = workspace.getLeftLeaf(false);
+      if (!leaf) return;
+      await leaf.setViewState({ type: viewType, active: true });
+      if (explorer && leaf.parent === explorer.parent) {
+        // Same tab group as the explorer: move this tab to sit before it.
+        // insertChild/removeChild are Obsidian-internal but stable, and the
+        // probe measured getLeftLeaf landing in this exact container.
+        const tabs = explorer.parent as unknown as {
+          children: WorkspaceLeaf[];
+          insertChild: (index: number, child: WorkspaceLeaf) => void;
+          removeChild: (child: WorkspaceLeaf) => void;
+        };
+        const at = tabs.children.indexOf(explorer);
+        if (at > -1) {
+          tabs.removeChild(leaf);
+          tabs.insertChild(at, leaf);
+        }
+      }
+      workspace.revealLeaf(leaf);
+      return;
+    }
     const leaf = workspace.getRightLeaf(false);
     if (!leaf) return;
     await leaf.setViewState({ type: viewType, active: true });
