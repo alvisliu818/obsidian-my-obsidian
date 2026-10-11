@@ -4191,32 +4191,6 @@ body.lgp-table-editor-cursor * {
 .lgp-cb-run__stdin { padding: 4px 8px 8px; }
 .lgp-cb-run__stdin input { width: 100%; }
 
-/* ===== Python 内核面板(REPL) ===== */
-.lgp-kernel-panel { display: flex; flex-direction: column; padding: 8px; gap: 6px; }
-.lgp-kernel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.lgp-kernel-status { font-size: 12px; opacity: 0.75; }
-.lgp-kernel-status.is-ready { color: var(--text-success, #4caf50); }
-.lgp-kernel-status.is-error { color: var(--text-error, #e53935); }
-.lgp-kernel-actions { display: flex; gap: 4px; }
-.lgp-kernel-actions button { font-size: 12px; padding: 2px 8px; }
-.lgp-kernel-out {
-  flex: 1 1 auto; min-height: 120px; overflow: auto;
-  border: 1px solid var(--background-modifier-border); border-radius: 6px;
-  background: var(--background-secondary);
-  font-family: var(--font-monospace); font-size: 12px;
-  padding: 6px 8px;
-}
-.lgp-kernel-line { white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
-.lgp-kernel-line.is-in { color: var(--text-accent, #7c8aff); margin-top: 6px; }
-.lgp-kernel-line.is-out {}
-.lgp-kernel-line.is-err { color: var(--text-error, #e53935); }
-.lgp-kernel-line.is-result { color: var(--text-normal); opacity: 0.92; }
-.lgp-kernel-line.is-info { color: var(--text-muted); font-style: italic; }
-.lgp-kernel-editor textarea {
-  width: 100%; min-height: 72px; resize: vertical;
-  font-family: var(--font-monospace); font-size: 12.5px;
-}
-
 /* ---------- 挂载树拖拽排序（工具栏 ⇅ 开关） ---------- */
 .logseq-mount-panel-btn.is-active {
   background-color: var(--interactive-accent);
