@@ -3559,21 +3559,27 @@ body.lgp-table-editor-cursor * {
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 6px 0;
   font-size: var(--font-ui-small);
+}
+/* Obsidian 主题对 .view-content 的 padding（上12/下32）特异性更高，
+   单类选择器压不过它；双写类名提升到 0,2,0 才能覆盖。
+   顶部归零：上边只留工具栏自身 2px，与工具栏下方 margin 2px 对称 */
+.logseq-mount-panel.logseq-mount-panel {
+  padding: 0 0 6px;
 }
 
 .logseq-mount-panel-bar {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 8px 6px;
+  gap: 2px;
+  /* 上下等距；多出的高度由文字/图标放大占住 */
+  padding: 2px 4px;
   border-bottom: 1px solid var(--background-modifier-border);
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 .logseq-mount-panel-count {
   color: var(--text-muted);
-  font-size: var(--font-ui-smaller);
+  font-size: var(--font-ui-small, 13px);
   flex: 1 1 auto;
 }
 .logseq-mount-panel-btn {
@@ -3581,10 +3587,18 @@ body.lgp-table-editor-cursor * {
   border: none;
   cursor: pointer;
   color: var(--text-muted);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1;
-  padding: 2px 5px;
-  border-radius: 4px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  /* Obsidian 给裸 button 固定 --input-height(30px)，工具栏要紧凑就必须覆盖 */
+  height: auto;
+  min-height: 0;
+}
+/* 图标按钮（定位当前文件）与文字按钮同高同大 */
+.logseq-mount-panel-btn svg {
+  width: 15px;
+  height: 15px;
 }
 .logseq-mount-panel-btn:hover {
   background-color: var(--background-modifier-hover);
@@ -3618,8 +3632,9 @@ body.lgp-table-editor-cursor * {
   gap: 4px;
   padding: 2px 8px 2px 4px;
   /* Native file explorer look: nav typography, hover wash and radius all
-     come from the same variables the explorer uses, so themes apply too. */
-  font-size: var(--nav-item-size, var(--font-ui-small, 13px));
+     come from the same variables the explorer uses, so themes apply too.
+     用户偏好：比原生大一号（+1px），图标也相应加大。 */
+  font-size: calc(var(--nav-item-size, var(--font-ui-small, 13px)) + 1px);
   border-radius: var(--nav-item-radius, 4px);
   cursor: pointer;
 }
@@ -3687,6 +3702,26 @@ body.lgp-table-editor-cursor * {
   width: 16px;
   height: 16px;
   display: block;
+}
+/* 用户偏好：树行图标比默认大一号（字体用 calc+1px，图标 15/17/18） */
+.logseq-mount-row .logseq-mount-icon,
+.logseq-mount-head .logseq-mount-icon {
+  font-size: 15px;
+}
+.logseq-mount-row .logseq-mount-icon svg,
+.logseq-mount-head .logseq-mount-icon svg {
+  width: 17px;
+  height: 17px;
+}
+.logseq-mount-row .logseq-mount-icon.mfi-icon,
+.logseq-mount-head .logseq-mount-icon.mfi-icon {
+  width: 18px;
+  height: 18px;
+}
+.logseq-mount-row .logseq-mount-icon.mfi-icon svg,
+.logseq-mount-head .logseq-mount-icon.mfi-icon svg {
+  width: 18px;
+  height: 18px;
 }
 .logseq-mount-name {
   overflow: hidden;
@@ -3775,9 +3810,11 @@ body.lgp-table-editor-cursor * {
 
 /* 文件夹项左侧的展开三角（点它换成"看这个文件夹里有什么"） */
 .menu-item-icon.lgp-hdr-twisty {
-  width: 14px;
-  min-width: 14px;
+  width: 12px;
+  min-width: 12px;
   margin-left: -2px;
+  /* 抵消菜单行 8px gap 的一半，三角和文件夹图标靠近一点 */
+  margin-right: -4px;
   font-size: 9px;
   line-height: 1;
   opacity: 0.55;
@@ -3786,6 +3823,26 @@ body.lgp-table-editor-cursor * {
 .menu-item-icon.lgp-hdr-twisty:hover {
   opacity: 1;
   color: var(--text-accent);
+}
+
+/* 文件项没有三角，但要在图标前占同样的格位，图标列才与同层文件夹对齐
+   （同挂载面板树行：文件行补上折叠箭头的列宽） */
+/* 路径菜单里的条目图标与虚拟文档树同源（Material）：
+   收掉 .mfi-icon 自带的 margin-right（菜单行已有 8px gap），svg 15px 和树行观感一致 */
+.menu-item .logseq-mount-icon.mfi-icon {
+  margin-right: 0;
+}
+.menu-item .logseq-mount-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* 盒模型与 lgp-hdr-twisty 完全一致，文件图标才与同层文件夹图标同列 */
+.menu-item-icon.lgp-hdr-gutter {
+  width: 12px;
+  min-width: 12px;
+  margin-left: -2px;
+  margin-right: -4px;
 }
 
 .logseq-external-banner-path {
@@ -4158,4 +4215,29 @@ body.lgp-table-editor-cursor * {
 .lgp-kernel-editor textarea {
   width: 100%; min-height: 72px; resize: vertical;
   font-family: var(--font-monospace); font-size: 12.5px;
+}
+
+/* ---------- 挂载树拖拽排序（工具栏 ⇅ 开关） ---------- */
+.logseq-mount-panel-btn.is-active {
+  background-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+/* 拖拽模式开启时行可拖：抓手光标提示可拖，拖动中的行半透明 */
+.logseq-mount-row[draggable='true'] {
+  cursor: grab;
+}
+.logseq-mount-row[draggable='true']:active {
+  cursor: grabbing;
+}
+.logseq-mount-row.is-dragging-row {
+  opacity: 0.45;
+}
+/* 插入位置指示：目标行顶部一条强调色线 */
+.logseq-mount-row.is-drop-row {
+  box-shadow: inset 0 2px 0 0 var(--interactive-accent);
+}
+/* 定位当前文件：短暂高亮目标行 */
+.logseq-mount-row.is-reveal-row {
+  background-color: var(--background-modifier-active-hover);
+  border-radius: 3px;
 }

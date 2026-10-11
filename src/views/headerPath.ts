@@ -7,8 +7,10 @@
  * 的 DOM 结构补上「挂载名 / 子目录 / … /」，观感与库内笔记一致。
  */
 
-import { Menu, Notice, setIcon } from 'obsidian';
+import { Menu, Notice } from 'obsidian';
+import type { App } from 'obsidian';
 import { scanExternal } from '../features/extFs';
+import { iconForEntry } from '../features/iconTheme';
 
 export interface HeaderSegment {
 	/** 这一段显示的文字 */
@@ -35,6 +37,8 @@ export interface MountNodeLike {
 }
 export interface HeaderMenuHost {
 	settings: { externalMounts?: ExternalMountLike[] };
+	/** Material 图标主题解析需要 app（宿主即 plugin 实例，自带 app） */
+	app: App;
 	openExternalEntry(mount: ExternalMountLike, node: MountNodeLike): Promise<void>;
 	revealInSystem(abs: string): void;
 }
@@ -153,6 +157,19 @@ function fileIcon(name: string): string {
 	return /\.md$/i.test(name) ? 'file-text' : 'file-code';
 }
 
+/** 条目的 Material 图标（与虚拟文档树行同源），菜单里用它替换原生 svg。 */
+function entryIcon(host: HeaderMenuHost, entry: { name: string; abs: string; isDir: boolean }): HTMLElement {
+	const mount = findMount(host, entry.abs);
+	return iconForEntry(host.app, {
+		name: entry.name,
+		isDir: entry.isDir,
+		mountPath: mount?.path ?? '',
+		rel: mount ? relUnder(mount, entry.abs) : entry.name,
+		collapsed: entry.isDir,
+		fallback: entry.isDir ? '\ud83d\udcc1' : '\ud83d\udcc4',
+	});
+}
+
 /** 点什么东西弹出来的菜单：看谁的同级、点亮谁。 */
 interface MenuTarget {
 	/** 段 / 文件自己的路径 */
@@ -173,15 +190,15 @@ interface MenuTarget {
  */
 function openHeaderMenu(anchor: HTMLElement, host: HeaderMenuHost, target: MenuTarget): void {
 	const menu = new Menu();
-	const folders: { name: string; abs: string }[] = [];
+	const entries: { name: string; abs: string; isDir: boolean }[] = [];
 	// 点文件夹（名字或左侧三角）= 展开/收起，展开的行就地插在同一张菜单里，
 	// 不换浮窗。addItem 时还拿不到 DOM，所以先记名字，等菜单挂上再回填。
 	const toggles = new Map<string, () => void>();
 	if (target.isMount) {
-		addMountLevel(menu, host, target.abs);
+		addMountLevel(menu, host, entries, toggles);
 	} else {
 		const dirAbs = target.viewDir ? target.abs : parentOf(target.abs);
-		addDirLevel(menu, host, dirAbs, target.currentAbs, folders, toggles, menu);
+		addDirLevel(menu, host, dirAbs, target.currentAbs, entries, toggles, menu);
 	}
 	addTail(menu, host, target.abs);
 	const rect = anchor.getBoundingClientRect();
@@ -189,7 +206,7 @@ function openHeaderMenu(anchor: HTMLElement, host: HeaderMenuHost, target: MenuT
 	// 挂载那一段的菜单里写的是挂载名（不是目录名），所以点亮也得按挂载名比。
 	decorateMenu(
 		menu,
-		folders,
+		entries,
 		host,
 		toggles,
 		target.isMount ? (mountAtRoot(host, target.abs)?.label ?? '') : basenameOf(target.currentAbs),
@@ -227,7 +244,7 @@ export function attachHeaderMenu(el: HTMLElement, host: HeaderMenuHost, target: 
  */
 function decorateMenu(
 	menu: Menu,
-	folders: { name: string; abs: string }[],
+	entries: { name: string; abs: string; isDir: boolean }[],
 	host: HeaderMenuHost,
 	toggles: Map<string, () => void>,
 	currentName: string,
@@ -241,8 +258,17 @@ function decorateMenu(
 		for (const el of items) {
 			const name = el.querySelector('.menu-item-title')?.textContent ?? '';
 			if (currentName && name === currentName) el.addClass('lgp-hdr-current');
-			const folder = folders.find((f) => f.name === name);
-			if (folder) addTwisty(el, folder.abs, host, toggles, menu, currentName, 0);
+			const entry = entries.find((f) => f.name === name);
+			if (entry) {
+				// 图标换成与虚拟文档树行同源的 Material 图标
+				const slot = el.querySelector('.menu-item-icon');
+				if (slot) {
+					slot.empty();
+					slot.appendChild(entryIcon(host, entry));
+				}
+				if (entry.isDir) addTwisty(el, entry.abs, host, toggles, menu, currentName, 0);
+				else addGutter(el);
+			}
 		}
 	});
 }
@@ -302,6 +328,14 @@ function addTwisty(
 	if (name) toggles.set(name, () => tw.click());
 }
 
+/** 文件项左侧的空占位：与三角同宽同位，文件图标才和同层文件夹图标对齐（同树行）。 */
+function addGutter(itemEl: HTMLElement): void {
+	if (itemEl.querySelector('.lgp-hdr-twisty, .lgp-hdr-gutter')) return;
+	const g = document.createElement('div');
+	g.className = 'menu-item-icon lgp-hdr-gutter';
+	itemEl.insertBefore(g, itemEl.firstChild);
+}
+
 /** 一行展开出来的子项：文件夹带自己的三角，文件点击直接打开。 */
 function makeRow(
 	entry: { name: string; abs: string; isDir: boolean },
@@ -314,11 +348,13 @@ function makeRow(
 	const row = document.createElement('div');
 	row.className = 'menu-item tappable lgp-hdr-child';
 	row.dataset['lgpChild'] = '1';
-	row.style.paddingLeft = `${6 + depth * 14}px`;
+	// 每级 17px，与挂载面板树行一致；起点 8px 与菜单原生 padding 对齐，
+	// 图标列逐级正好右移 17px
+	row.style.paddingLeft = `${8 + depth * 17}px`;
 
 	const icon = document.createElement('div');
 	icon.className = 'menu-item-icon';
-	void setIcon(icon, entry.isDir ? 'folder' : fileIcon(entry.name));
+	icon.appendChild(entryIcon(host, entry));
 	row.appendChild(icon);
 
 	const title = document.createElement('div');
@@ -334,6 +370,7 @@ function makeRow(
 			addTwisty(row, entry.abs, host, toggles, menu, currentName, depth),
 		);
 	} else {
+		addGutter(row);
 		row.addEventListener('click', (ev) => {
 			ev.preventDefault();
 			ev.stopPropagation();
@@ -381,7 +418,12 @@ function addTail(menu: Menu, host: HeaderMenuHost, abs: string): void {
 }
 
 /** 挂载名那一段：同级是别的挂载，当前挂载高亮。 */
-function addMountLevel(menu: Menu, host: HeaderMenuHost, currentRoot: string): void {
+function addMountLevel(
+	menu: Menu,
+	host: HeaderMenuHost,
+	entries: { name: string; abs: string; isDir: boolean }[],
+	toggles: Map<string, () => void>,
+): void {
 	const mounts = (host.settings.externalMounts ?? []).filter((m) => m.enabled !== false);
 	if (!mounts.length) {
 		menu.addItem((it) => it.setTitle('（没有挂载）').setDisabled(true));
@@ -390,10 +432,12 @@ function addMountLevel(menu: Menu, host: HeaderMenuHost, currentRoot: string): v
 	for (const m of mounts) {
 		const root = norm(m.path).replace(/\/+$/, '');
 		menu.addItem((it) => {
-			it.setTitle(m.label || root).setIcon('folder-open');
-			if (root.toLowerCase() !== norm(currentRoot).toLowerCase()) {
-				it.onClick(() => host.revealInSystem(root));
-			}
+			const name = m.label || root;
+			it.setTitle(name).setIcon('folder-open');
+			// 挂载根也是目录：和普通文件夹一样记账 + 就地展开，
+			// 点击不再弹系统文件管理器（tail 里本来就有“在系统中显示”）
+			entries.push({ name, abs: root, isDir: true });
+			it.onClick(() => toggles.get(name)?.());
 			return it;
 		});
 	}
@@ -405,7 +449,7 @@ function addDirLevel(
 	host: HeaderMenuHost,
 	dirAbs: string,
 	currentAbs: string,
-	folders: { name: string; abs: string }[],
+	entries: { name: string; abs: string; isDir: boolean }[],
 	toggles: Map<string, () => void>,
 	owner: Menu,
 ): void {
@@ -418,8 +462,9 @@ function addDirLevel(
 	for (const entry of items) {
 		menu.addItem((it) => {
 			it.setTitle(entry.name).setIcon(entry.isDir ? 'folder' : fileIcon(entry.name));
+			// 条目全部记账：文件夹补三角，文件补图标前的空占位（列对齐用）
+			entries.push({ name: entry.name, abs: entry.abs, isDir: entry.isDir });
 			if (entry.isDir) {
-				folders.push({ name: entry.name, abs: entry.abs });
 				// 三角（也就是展开动作）要等菜单挂上 DOM 才有，先按名字记账
 				it.onClick(() => toggles.get(entry.name)?.());
 			} else if (mount) {
