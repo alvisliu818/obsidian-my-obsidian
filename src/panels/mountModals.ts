@@ -269,3 +269,63 @@ export class MountListModal extends Modal {
     foot.addButton((b) => b.setButtonText('关闭').onClick(() => this.close()));
   }
 }
+
+/**
+ * Pick where a new mount lands in the panel: before any existing mount, or
+ * at the end. Opened by the tree row's 挂载 action, where path and label come
+ * from the row itself — only the position needs choosing. With no existing
+ * mounts there is nothing to choose, so callers add directly instead.
+ */
+export class MountPositionModal extends Modal {
+  plugin: LogseqEditorPlugin;
+  private draft: Omit<ExternalMount, 'id' | 'enabled'>;
+
+  constructor(plugin: LogseqEditorPlugin, draft: Omit<ExternalMount, 'id' | 'enabled'>) {
+    super(plugin.app);
+    this.plugin = plugin;
+    this.draft = draft;
+  }
+
+  onOpen(): void {
+    this.titleEl.setText('选择挂载位置');
+    this.display();
+  }
+
+  private display(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    const name = this.draft.label.trim() || this.draft.path;
+
+    contentEl.createEl('p', {
+      cls: 'setting-item-description',
+      text: `把「${name}」作为独立条目挂到虚拟文档树。选择它在挂载列表中的位置：`,
+    });
+
+    const mounts = this.plugin.settings.externalMounts ?? [];
+    mounts.forEach((m, i) => {
+      const row = contentEl.createDiv({ cls: 'logseq-mount-list-row' });
+      const head = row.createDiv({ cls: 'logseq-mount-list-head' });
+      head.createSpan({ cls: 'logseq-mount-list-name', text: mountDisplayName(m) });
+      if (!m.enabled) head.createSpan({ cls: 'logseq-mount-list-off', text: '已停用' });
+      const actions = row.createDiv({ cls: 'logseq-mount-list-actions' });
+      actions.createEl('button', { cls: 'mod-cta', text: `挂到「${mountDisplayName(m)}」之前` }).addEventListener(
+        'click',
+        () => void this.commit(i),
+      );
+    });
+
+    const end = contentEl.createDiv({ cls: 'logseq-mount-list-row' });
+    end
+      .createEl('button', { cls: 'mod-cta', text: '挂到面板末尾' })
+      .addEventListener('click', () => void this.commit(mounts.length));
+
+    const foot = new Setting(contentEl);
+    foot.addButton((b) => b.setButtonText('取消').onClick(() => this.close()));
+  }
+
+  private async commit(atIndex: number): Promise<void> {
+    const m = await this.plugin.addMount(this.draft, atIndex);
+    new Notice(`已挂载 ${mountDisplayName(m)}`);
+    this.close();
+  }
+}

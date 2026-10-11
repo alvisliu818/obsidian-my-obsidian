@@ -14,7 +14,7 @@
  * that implies — backlinks, block references, search.
  */
 
-import { ItemView, Menu, Notice, TFile, TFolder, type WorkspaceLeaf } from 'obsidian';
+import { FileSystemAdapter, ItemView, Menu, Notice, setIcon, TFile, TFolder, type WorkspaceLeaf } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import type { ExternalMount } from '../types';
 import { mountDisplayName } from '../types';
@@ -78,6 +78,12 @@ export class MountPanelView extends ItemView {
   private states = new Map<string, MountState>();
   /** Per-render viewport painters; the panel's scroll runs them all. */
   private rowPainters: Array<() => void> = [];
+  /** The tree row being dragged (mountId + parent dir + name), if any. */
+  private draggedRow: { mountId: string; parentRel: string; name: string } | null = null;
+  /** The mount being dragged by its header, if any. */
+  private draggedMountId: string | null = null;
+  /** 待定位目标行（挂载 + 相对路径），渲染后由 consumePendingReveal 消费。 */
+  private pendingReveal: { mountId: string; rel: string } | null = null;
   /** The ancestor that actually scrolls the panel (usually `.view-content`). */
   private scrollEl: HTMLElement | null = null;
   private readonly onScrollRepaint = (): void => {
@@ -163,6 +169,16 @@ export class MountPanelView extends ItemView {
     };
 
     if (!isDirectory(mount.path)) {
+      // A mounted FILE is legal: the tree is that one row (挂载为独立条目
+      // offers both folders and files). `loaded` covers '' so loadLayer
+      // never readdir's a path that is not a directory.
+      if (exists(mount.path)) {
+        const base = mount.path.replace(/[\\/]+$/, '').split(/[\\/]+/).pop() ?? mount.path;
+        state.tree = [{ name: base, rel: base, abs: mount.path, isDir: false, children: [] }];
+        state.loaded.add('');
+        this.states.set(mount.id, state);
+        return state;
+      }
       state.error = '文件夹不存在，请检查路径。';
       this.states.set(mount.id, state);
       return state;
@@ -196,6 +212,9 @@ export class MountPanelView extends ItemView {
       : compileFilter(EMPTY_FILTER);
 
     const dirAbs = rel ? joinAbs(mount.path, rel) : mount.path;
+    // Guard for mounted-FILE roots and races where the entry vanished:
+    // readdir on a non-directory would only produce a confusing error.
+    if (!isDirectory(dirAbs)) return;
     const { entries } = scanExternal(dirAbs, {
       shouldEnterDir: (childRel) => !dirPruned(rel ? `${rel}/${childRel}` : childRel, f),
       keepFile: (childRel) => entryMatches(rel ? `${rel}/${childRel}` : childRel, f),
@@ -211,8 +230,8 @@ export class MountPanelView extends ItemView {
       mtime: e.mtime,
       children: [],
     }));
-    // Same order `buildTree` produces: folders first, then files, A→Z.
-    children.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+    // Folders first, then files; drag-mode display order applies within each class.
+    this.sortChildren(mount.id, rel, children);
 
     if (!rel) {
       state.tree = children;
@@ -225,7 +244,174 @@ export class MountPanelView extends ItemView {
     }
   }
 
+  /**
+   * Sort one directory's children: folders first, then files, A→Z — then
+   * raise the names the user dragged into their saved order (folders stay
+   * before files; custom order only reorders within each class). Names not
+   * in the saved list keep the stock sort, so a stale entry (renamed or
+   * deleted on disk) is simply ignored — no cleanup pass needed.
+   */
+  private sortChildren(mountId: string, rel: string, children: MountNode[]): void {
+    children.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+    const order = this.plugin.settings.mountTreeOrder?.[mountId]?.[rel];
+    if (!order || order.length === 0) return;
+    const rank = new Map(order.map((n, i) => [n, i]));
+    const last = order.length;
+    children.sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+      const ra = rank.get(a.name) ?? last;
+      const rb = rank.get(b.name) ?? last;
+      return ra !== rb ? ra - rb : a.name.localeCompare(b.name);
+    });
+  }
+
+  /**
+   * Persist a drag reorder: put `draggedName` just above `targetName` in the
+   * DISPLAY order of `parentRel`, update the in-memory tree so the very next
+   * paint reflects it (loadLayer is cached — a rescan is NOT needed), and
+   * save. Display order only; the filesystem is never touched.
+   *
+   * The saved order is the FULL sibling list as currently displayed, not a
+   * sparse "names the user touched" list: splicing into a sparse list put
+   * unsaved targets' positions out of reach (a drop on a name the list did
+   * not yet contain pushed the dragged name to the END, so items visibly
+   * jumped to wrong slots — the 乱跑 report). Full lists stay small, stale
+   * names are skipped at apply time, and files created later still append
+   * after the saved ones.
+   */
+  private reorderTreeRow(mount: ExternalMount, parentRel: string, draggedName: string, targetName: string): void {
+    if (draggedName === targetName) return;
+    const st = this.states.get(mount.id);
+    const list = parentRel ? (this.findNode(st?.tree ?? [], parentRel)?.children ?? null) : st?.tree ?? null;
+    if (!list || list.length === 0) return;
+
+    // Rebuild the display order: current visual order minus the dragged name,
+    // with the dragged name re-inserted just above its drop target.
+    const names = list.map((c) => c.name).filter((n) => n !== draggedName);
+    const ti = names.indexOf(targetName);
+    if (ti < 0) return;
+    names.splice(ti, 0, draggedName);
+
+    const all = this.plugin.settings.mountTreeOrder ?? {};
+    this.plugin.settings.mountTreeOrder = {
+      ...all,
+      [mount.id]: { ...(all[mount.id] ?? {}), [parentRel]: names },
+    };
+    void this.plugin.saveSettings();
+
+    // Reorder the live tree in place so the next paint already matches.
+    const byName = new Map(list.map((c) => [c.name, c]));
+    const ordered = names.map((n) => byName.get(n)).filter((c): c is MountNode => !!c);
+    for (const c of list) if (!names.includes(c.name)) ordered.push(c);
+    list.length = 0;
+    list.push(...ordered);
+    this.render();
+  }
+
   /** Find a node by its mount-relative path among the layers loaded so far. */
+  /** 当前正在编辑文件的绝对路径：库内文件取库根+路径；挂载树打开的库外文件
+   *  没有 TFile，从外部块编辑器视图的 abs 拿。视图类型用字符串比对而不是
+   *  import，避免 main → mountPanel → ExternalBlockView → main 循环依赖。 */
+  private activeAbsPath(): string | null {
+    // 外部块视图优先：getActiveFile 对它返回 null，甚至可能残留上一个
+    // 库内文件的 TFile —— 那会让定位静默走“不在任何挂载内”分支。
+    const leaf = this.app.workspace.getMostRecentLeaf();
+    const view = leaf?.view as { getViewType?: () => string; abs?: string } | undefined;
+    if (view?.getViewType?.() === 'logseq-external-block' && view.abs) return view.abs;
+    const f = this.app.workspace.getActiveFile();
+    if (f) {
+      const adapter = this.app.vault.adapter as FileSystemAdapter;
+      return `${adapter.getBasePath().replace(/[\\/]+$/, '')}/${f.path}`;
+    }
+    return null;
+  }
+
+  /**
+   * 定位当前文件：把正在编辑的文件在树里展开到可见——逐级 loadLayer + 展开
+   * 祖先目录（只改面板显示状态，文件系统不动），渲染后滚动到该行并短暂高亮。
+   * 虚拟滚动下行可能不在视口带内：按固定行高直接算出滚动位置。
+   */
+  private revealActiveFile(): void {
+    const abs = this.activeAbsPath();
+    if (!abs) {
+      new Notice('当前没有打开的文件');
+      return;
+    }
+    const norm = (p: string): string => p.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
+    const target = norm(abs);
+    const mount = (this.plugin.settings.externalMounts ?? []).find((m) => {
+      if (m.enabled === false) return false;
+      const root = norm(m.path);
+      return target === root || target.startsWith(root + '/');
+    });
+    if (!mount) {
+      new Notice('当前文件不在任何挂载目录内');
+      return;
+    }
+    const rootSlash = mount.path.replace(/[\\/]+$/, '').replace(/\\/g, '/');
+    const absSlash = abs.replace(/\\/g, '/');
+    const rel = absSlash.toLowerCase().startsWith(rootSlash.toLowerCase())
+      ? absSlash.slice(rootSlash.length).replace(/^\/+/, '')
+      : '';
+    const state = this.scan(mount);
+    let acc = '';
+    for (const seg of rel.split('/').filter(Boolean)) {
+      if (!state.loaded.has(acc)) this.loadLayer(mount, acc, state);
+      state.open.add(acc);
+      acc = acc ? `${acc}/${seg}` : seg;
+    }
+    // 挂载根自身被定位时 rel 为空：consumePendingReveal 找不到行就停在区段。
+    this.pendingReveal = { mountId: mount.id, rel: acc };
+    this.render();
+    this.consumePendingReveal();
+  }
+
+  /** 找到定位目标行并高亮；行不在视口带内时按固定行高滚动到它。 */
+  private consumePendingReveal(): void {
+    const pend = this.pendingReveal;
+    if (!pend) return;
+    const sel = `.logseq-mount-row[data-mount="${CSS.escape(pend.mountId)}"][data-rel="${CSS.escape(pend.rel)}"]`;
+    const highlight = (el: HTMLElement): void => {
+      el.addClass('is-reveal-row');
+      window.setTimeout(() => el.removeClass('is-reveal-row'), 2000);
+    };
+    requestAnimationFrame(() => {
+      this.pendingReveal = null;
+      const row = this.contentEl.querySelector(sel) as HTMLElement | null;
+      if (row) {
+        row.scrollIntoView({ block: 'center' });
+        highlight(row);
+        return;
+      }
+      // 目标行在视口带外：用固定行高算出它在滚动容器里的位置。
+      const section = this.contentEl.querySelector(`.logseq-mount-section[data-mount-id="${CSS.escape(pend.mountId)}"]`);
+      const st = this.states.get(pend.mountId);
+      const scroller = this.scrollEl;
+      if (!section || !st || !scroller) return;
+      const rows = this.flatten(st);
+      const idx = rows.findIndex((r) => r.node.rel === pend.rel);
+      if (idx < 0) return;
+      const spacer = section.querySelector('.logseq-mount-spacer') as HTMLElement | null;
+      if (!spacer) return;
+      const targetTop =
+        spacer.getBoundingClientRect().top -
+        scroller.getBoundingClientRect().top +
+        scroller.scrollTop +
+        idx * MOUNT_ROW_HEIGHT;
+      scroller.scrollTop = Math.max(0, targetTop - scroller.clientHeight / 2 + MOUNT_ROW_HEIGHT / 2);
+      // 滚动触发 paint 后行才会进 DOM；rAF 一次可能还早，再给几次机会。
+      const tryHighlight = (attempt: number): void => {
+        const el = this.contentEl.querySelector(sel) as HTMLElement | null;
+        if (el) {
+          highlight(el);
+        } else if (attempt < 3) {
+          window.setTimeout(() => tryHighlight(attempt + 1), 60);
+        }
+      };
+      requestAnimationFrame(() => tryHighlight(0));
+    });
+  }
+
   private findNode(list: MountNode[], rel: string): MountNode | null {
     for (const n of list) {
       if (n.rel === rel) return n;
@@ -279,6 +465,24 @@ export class MountPanelView extends ItemView {
     const refreshBtn = bar.createEl('button', { cls: 'logseq-mount-panel-btn', text: '⟳' });
     refreshBtn.setAttribute('aria-label', '重新扫描');
     refreshBtn.addEventListener('click', () => this.refreshMounts());
+    // 拖拽模式：开时树行可拖拽排序（仅显示顺序，存 mountTreeOrder），
+    // 关时行恢复默认排序且不可拖。状态持久化，重启后保持。
+    const dragOn = this.plugin.settings.mountDragMode === true;
+    const dragBtn = bar.createEl('button', {
+      cls: 'logseq-mount-panel-btn' + (dragOn ? ' is-active' : ''),
+      text: '⇅',
+    });
+    dragBtn.setAttribute('aria-label', dragOn ? '拖拽排序：开' : '拖拽排序：关');
+    dragBtn.addEventListener('click', () => {
+      this.plugin.settings.mountDragMode = this.plugin.settings.mountDragMode !== true;
+      void this.plugin.saveSettings();
+      this.render();
+    });
+    // 定位当前文件：把正在编辑的文件在树里展开并滚动到可见（原生文件列表的定位）
+    const locateBtn = bar.createEl('button', { cls: 'logseq-mount-panel-btn' });
+    setIcon(locateBtn, 'crosshair');
+    locateBtn.setAttribute('aria-label', '定位当前文件');
+    locateBtn.addEventListener('click', () => void this.revealActiveFile());
 
     for (const m of mounts) this.renderMount(contentEl, m);
     // Repaint with the final DOM in place — geometry measured mid-build can
@@ -288,6 +492,8 @@ export class MountPanelView extends ItemView {
 
   private renderMount(root: HTMLElement, mount: ExternalMount): void {
     const section = root.createDiv({ cls: 'logseq-mount-section' });
+    // 定位当前文件时按挂载找到区段、再按固定行高算偏移。
+    section.dataset.mountId = mount.id;
 
     const head = section.createDiv({ cls: 'logseq-mount-head' });
     const caret = head.createSpan({ cls: 'logseq-mount-caret' });
@@ -295,10 +501,12 @@ export class MountPanelView extends ItemView {
     caret.textContent = state.open.has('') ? '▾' : '▸';
     // The mount root is a folder too, so it gets the same treatment.
     const headLabel = mountDisplayName(mount);
+    // A mounted FILE's head carries the file's own icon, not a folder's.
+    const rootNode = state.tree.length === 1 ? state.tree[0] : null;
     head.appendChild(
       iconForEntry(this.plugin.app, {
         name: headLabel,
-        isDir: true,
+        isDir: rootNode ? rootNode.isDir : true,
         mountPath: mount.path,
         rel: '',
         collapsed: !state.open.has(''),
@@ -414,6 +622,9 @@ export class MountPanelView extends ItemView {
     const row = parent.createDiv({
       cls: 'logseq-mount-row ' + (node.isDir ? 'is-dir' : 'is-file'),
     });
+    // 定位与测试用：行级身份（挂载 + 相对路径）。
+    row.dataset.mount = mount.id;
+    row.dataset.rel = node.rel;
     // Native-explorer rhythm, pulled 10px left as a whole (user preference):
     // folder rows carry a 14px caret gutter, FILE rows the same gutter plus
     // the caret's width (11px + 4px gap), so the file ICON aligns with the
@@ -447,6 +658,7 @@ export class MountPanelView extends ItemView {
         this.render();
       });
       this.wireMenu(row, mount, node);
+      this.wireRowDrag(row, mount, node);
       // Children are drawn by `flatten`/`renderRows`, not recursively here —
       // that is what keeps the row count (and the DOM) bounded.
       return;
@@ -474,6 +686,7 @@ export class MountPanelView extends ItemView {
       void this.plugin.openExternalEntry(mount, node);
     });
     this.wireMenu(row, mount, node);
+    this.wireRowDrag(row, mount, node);
   }
 
   // ------------------------------------------------------------------
@@ -584,6 +797,23 @@ export class MountPanelView extends ItemView {
         menu.addSeparator();
         // ---- file management on the external tree (思源文件树对齐) ----
         this.addTreeFileMenuItems(menu, mount, node);
+        // 挂载为独立条目：把这个深层目录/文件提升成面板上自己的挂载，
+        // 位置由用户在弹窗里选（面板顺序，不动磁盘）。
+        menu.addItem((item) =>
+          item
+            .setTitle('挂载为独立条目…')
+            .setIcon('folder-symlink' as never)
+            .onClick(() => {
+              void this.plugin.promptMountEntry({
+                path: node.abs,
+                label: safeSegment(node.name) || node.name,
+                include: '',
+                exclude: 'node_modules|[\\\\/]\\.git[\\\\/]',
+                refreshSeconds: 0,
+                pinned: false,
+              });
+            }),
+        );
         menu.addSeparator();
         menu.addItem((item) =>
           item
@@ -651,9 +881,18 @@ export class MountPanelView extends ItemView {
    * the two do not fight. The order is written straight into
    * `settings.externalMounts`, which is what `render()` reads.
    */
+  /**
+   * Reorder MOUNTS by dragging a section onto another. The dragged mount is
+   * tracked in `draggedMountId` — the same protected-mode reasoning as
+   * `wireRowDrag`: getData during dragover returns '' in Chromium, which made
+   * every real-mouse dragover bail out and the drop never fire (mount drag
+   * silently never worked). The MIME payload is still set for compat, but it
+   * is never read back.
+   */
   private wireDragReorder(section: HTMLElement, head: HTMLElement, mount: ExternalMount): void {
     head.draggable = true;
     head.addEventListener('dragstart', (e) => {
+      this.draggedMountId = mount.id;
       e.dataTransfer?.setData('text/plain', mount.id);
       // Firefox refuses to start a drag without some payload being set.
       e.dataTransfer?.setData('application/x-logseq-mount', mount.id);
@@ -661,24 +900,70 @@ export class MountPanelView extends ItemView {
       section.addClass('is-dragging');
     });
     head.addEventListener('dragend', () => {
+      this.draggedMountId = null;
       section.removeClass('is-dragging');
       section.removeClass('is-drop-target');
     });
     section.addEventListener('dragover', (e) => {
-      const id = e.dataTransfer?.getData('application/x-logseq-mount');
-      if (!id || id === mount.id) return;
+      if (!this.draggedMountId || this.draggedMountId === mount.id) return;
       e.preventDefault();
       e.dataTransfer!.dropEffect = 'move';
       section.addClass('is-drop-target');
     });
     section.addEventListener('dragleave', () => section.removeClass('is-drop-target'));
     section.addEventListener('drop', (e) => {
-      const id = e.dataTransfer?.getData('application/x-logseq-mount');
+      const from = this.draggedMountId;
       section.removeClass('is-drop-target');
-      if (!id || id === mount.id) return;
+      if (!from || from === mount.id) return;
+      this.draggedMountId = null;
       e.preventDefault();
-      void this.plugin.reorderMount(id, mount.id);
+      void this.plugin.reorderMount(from, mount.id);
       this.render();
+    });
+  }
+
+  /**
+   * Drag a tree ROW to reorder it among its siblings — only while the panel's
+   * drag mode is on, and only within the same parent directory.
+   *
+   * The dragged row is tracked in `draggedRow` rather than read back from
+   * dataTransfer during dragover: the store is in protected mode there and
+   * getData may return '' depending on the browser, while the drop handler
+   * needs the source to decide whether to accept. Mount headers listen for a
+   * different MIME (and rows never read it), so the two drag systems stay
+   * out of each other's way.
+   */
+  private wireRowDrag(row: HTMLElement, mount: ExternalMount, node: MountNode): void {
+    if (this.plugin.settings.mountDragMode !== true) return;
+    row.draggable = true;
+    const parentRel = parentRelOf(node.rel);
+    row.addEventListener('dragstart', (e) => {
+      this.draggedRow = { mountId: mount.id, parentRel, name: node.name };
+      // Firefox refuses to start a drag without a payload being set.
+      e.dataTransfer?.setData('text/plain', node.name);
+      e.dataTransfer!.effectAllowed = 'move';
+      row.addClass('is-dragging-row');
+    });
+    row.addEventListener('dragover', (e) => {
+      const d = this.draggedRow;
+      if (!d || d.mountId !== mount.id || d.parentRel !== parentRel || d.name === node.name) return;
+      e.preventDefault();
+      e.dataTransfer!.dropEffect = 'move';
+      row.addClass('is-drop-row');
+    });
+    row.addEventListener('dragleave', () => row.removeClass('is-drop-row'));
+    row.addEventListener('drop', (e) => {
+      row.removeClass('is-drop-row');
+      const d = this.draggedRow;
+      if (!d || d.mountId !== mount.id || d.parentRel !== parentRel) return; // cross-directory: ignored
+      e.preventDefault();
+      this.reorderTreeRow(mount, parentRel, d.name, node.name);
+    });
+    row.addEventListener('dragend', () => {
+      this.draggedRow = null;
+      row.removeClass('is-dragging-row');
+      // A cancelled drag can leave highlights behind (dragleave never fired).
+      this.contentEl.querySelectorAll('.is-drop-row').forEach((n) => n.classList.remove('is-drop-row'));
     });
   }
 

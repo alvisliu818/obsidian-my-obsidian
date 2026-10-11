@@ -9,6 +9,7 @@ import { CMD_COLLAPSE_ALL, CMD_FIND, CMD_REPLACE } from './interactions/hotkeys'
 import {
   DEFAULT_SETTINGS,
   editorChoiceFromProps,
+  mountTreeOrderFrom,
   mountsFrom,
   parseFolderList,
   pathInFolders,
@@ -39,7 +40,7 @@ import { TagPanelView, VIEW_TYPE_TAG_PANEL } from './panels/tagPanel';
 import { BlockSearchModal } from './panels/blockSearch';
 import { FlashcardPanelView, VIEW_TYPE_FLASHCARD_PANEL } from './panels/flashcardPanel';
 import { BlockGraphModal } from './panels/blockGraph';
-import { MountEditorModal, MountListModal } from './panels/mountModals';
+import { MountEditorModal, MountListModal, MountPositionModal } from './panels/mountModals';
 import { MountPanelView, VIEW_TYPE_MOUNT_PANEL } from './panels/mountPanel';
 import { KernelPanelView, VIEW_TYPE_KERNEL_PANEL } from './panels/kernelPanel';
 import { disposeAllKernels } from './exec/kernel/registry';
@@ -819,6 +820,13 @@ this.registerView(VIEW_TYPE_KERNEL_PANEL, (leaf) => new KernelPanelView(leaf, th
     this.settings.externalMounts = mountsFrom(
       (this.settings as { externalMounts?: unknown }).externalMounts,
     );
+    // Tree drag mode + display-order overrides: absent in pre-drag configs,
+    // and the order map is user-editable data.json, so only well-shaped
+    // records survive (mountId -> dir rel -> array of names).
+    this.settings.mountDragMode = this.settings.mountDragMode === true;
+    this.settings.mountTreeOrder = mountTreeOrderFrom(
+      (this.settings as { mountTreeOrder?: unknown }).mountTreeOrder,
+    );
     this.settings.externalCodeWrap = this.settings.externalCodeWrap !== false;
     this.settings.externalBanner = this.settings.externalBanner !== false;
 
@@ -1408,8 +1416,21 @@ this.registerView(VIEW_TYPE_KERNEL_PANEL, (leaf) => new KernelPanelView(leaf, th
     new MountEditorModal(this, mount).open();
   }
 
-  /** Persist a new mount and show the panel. */
-  async addMount(draft: Omit<ExternalMount, 'id' | 'enabled'>): Promise<ExternalMount> {
+  /**
+   * Mount a tree row (folder OR file) as its own panel entry. Path and label
+   * come from the row; the user only picks where in the mount list it lands.
+   * With no existing mounts there is no position to choose — add directly.
+   */
+  promptMountEntry(draft: Omit<ExternalMount, 'id' | 'enabled'>): void {
+    if ((this.settings.externalMounts ?? []).length === 0) {
+      void this.addMount(draft).then((m) => new Notice(`已挂载 ${mountDisplayName(m)}`));
+      return;
+    }
+    new MountPositionModal(this, draft).open();
+  }
+
+  /** Persist a new mount and show the panel; `atIndex` places it in the panel list. */
+  async addMount(draft: Omit<ExternalMount, 'id' | 'enabled'>, atIndex?: number): Promise<ExternalMount> {
     const trimmed = draft.path.trim().replace(/[\\/]+$/, '');
     const base = this.vaultBasePath() || 'mount';
     let id = safeSegment(draft.label.trim() || trimmed.split(/[\\/]+/).pop() || base);
@@ -1417,7 +1438,13 @@ this.registerView(VIEW_TYPE_KERNEL_PANEL, (leaf) => new KernelPanelView(leaf, th
     let n = 2;
     while (this.settings.externalMounts.some((m) => m.id === id)) id = `${safeSegment(draft.label || base)}_${n++}`;
     const mount: ExternalMount = { ...draft, path: trimmed, id, enabled: true };
-    this.settings.externalMounts.push(mount);
+    if (atIndex === undefined || atIndex >= this.settings.externalMounts.length) {
+      this.settings.externalMounts.push(mount);
+    } else {
+      // Clamp negatives to 0 rather than wrapping from the end: callers mean
+      // "before the i-th mount", and -1 would silently hide the entry.
+      this.settings.externalMounts.splice(Math.max(0, atIndex), 0, mount);
+    }
     await this.saveSettings();
     this.startMountRefresh();
     this.refreshMounts();

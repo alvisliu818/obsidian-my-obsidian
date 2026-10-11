@@ -210,6 +210,20 @@ export interface BlockEditorSettings {
    */
   mountShowLoadedCount: boolean;
   /**
+   * Drag mode for the virtual document tree: when on, tree rows can be
+   * dragged to a custom DISPLAY order (persisted in `mountTreeOrder`).
+   * The filesystem is never touched - this is purely how the panel draws.
+   * Off by default so rows keep the stock folders-first A-to-Z order.
+   */
+  mountDragMode: boolean;
+  /**
+   * Display-order overrides for the tree, `mountId -> dir rel -> names`.
+   * Only names the user actually dragged are recorded; anything unlisted
+   * keeps the default sort after them. Stale names (renamed/deleted on
+   * disk) are skipped at apply time, so no cleanup pass is needed.
+   */
+  mountTreeOrder: Record<string, Record<string, string[]>>;
+  /**
    * Folders OUTSIDE the vault listed in the mount panel. Each is shown as a
    * virtual tree; any entry can also be linked into the vault as a real path
    * (junction for folders, hard link for files), which makes it open in the
@@ -320,6 +334,27 @@ export function mountsFrom(raw: unknown): ExternalMount[] {
   for (const item of raw) {
     const m = mountFrom(item);
     if (m) out.push(m);
+  }
+  return out;
+}
+
+/**
+ * Sanitize the tree display-order overrides read from user-editable data.json:
+ * keep only well-shaped `mountId -> dirRel -> string[]` records, dropping
+ * anything malformed so a hand-edited config cannot poison rendering.
+ */
+export function mountTreeOrderFrom(raw: unknown): Record<string, Record<string, string[]>> {
+  const out: Record<string, Record<string, string[]>> = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [mountId, dirs] of Object.entries(raw as Record<string, unknown>)) {
+    if (!dirs || typeof dirs !== 'object') continue;
+    const clean: Record<string, string[]> = {};
+    for (const [rel, names] of Object.entries(dirs as Record<string, unknown>)) {
+      if (!Array.isArray(names)) continue;
+      const list = names.filter((n): n is string => typeof n === 'string' && n.length > 0);
+      if (list.length) clean[rel] = list;
+    }
+    if (Object.keys(clean).length) out[mountId] = clean;
   }
   return out;
 }
@@ -438,6 +473,8 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   mountFilterEnabled: false,
   mountLinkEnabled: true,
   mountShowLoadedCount: true,
+  mountDragMode: false,
+  mountTreeOrder: {},
   externalMounts: [],
   externalCodeWrap: true,
   externalSplitView: false,
