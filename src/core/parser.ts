@@ -72,6 +72,45 @@ function isRawRegionTail(region: string[]): boolean {
   return true;
 }
 
+/**
+ * True when the raw region's last non-blank line opens an HTML element that
+ * is not closed on that line (`<img src="x.png"` with the `>` on a later
+ * line). While this holds, the following lines are CONTENT of that element,
+ * not document structure: Word/OneNote exports routinely wrap `<img>` tags
+ * across lines, and reading the tail as bare text made it a list block
+ * whose serialization wrote `- style="..."` - the corrupted-image report.
+ *
+ * Only a line STARTING with `<` can open this state, so tables (`|`),
+ * quotes (`>`), headings and `$$` regions can never trip it (math like
+ * `x<y` lives on lines starting with `$$`, and a `$$...$$` region's last
+ * line is its own closer). Quoted attribute values are stripped before
+ * counting so a `>` inside `alt="a > b"` does not close the tag.
+ */
+function endsWithUnclosedHtmlTag(region: string[]): boolean {
+  // Scan from the LAST line that starts with `<` (the element's opening
+  // line). Lines after it can only be that element's continuation, so the
+  // tag balance over this run decides the state. A region whose tail never
+  // starts with `<` (a `$$...$$` closer, a table, a quote) is never inside
+  // an element - that is what keeps math like `$$ x < y $$` out.
+  let start = -1;
+  for (let i = region.length - 1; i >= 0; i--) {
+    if (/^</.test(region[i].trim())) {
+      start = i;
+      break;
+    }
+  }
+  if (start < 0) return false;
+  let open = 0;
+  for (let i = start; i < region.length; i++) {
+    const unquoted = region[i].replace(/"[^"]*"|'[^']*'/g, '');
+    for (const ch of unquoted) {
+      if (ch === '<') open++;
+      else if (ch === '>') open--;
+    }
+  }
+  return open > 0;
+}
+
 /** Property keys the parser re-attaches to a raw block (its fold state). */
 function isFoldProperty(key: string): boolean {
   return normFoldKey(key) === 'collapsed';
@@ -261,6 +300,14 @@ export function parseDocument(md: string): ParsedDocument {
         }
       }
       if (rawBuf.length > 0) {
+        // A blank line inside an unclosed HTML element is that element's
+        // content - keep it verbatim; the flush lookahead below would read
+        // past the open tag and end the region early.
+        if (endsWithUnclosedHtmlTag(rawBuf)) {
+          rawBuf.push(line);
+          i++;
+          continue;
+        }
         // A blank line ends a verbatim region when the region is closed AND
         // the next non-blank line starts a NEW structural construct (a fence,
         // a table, a heading, a quote). That is what lets a heading, a code
@@ -301,6 +348,17 @@ export function parseDocument(md: string): ParsedDocument {
     // A pending bare group is an implicit last block: indented lines and
     // fences after it belong to it, just like they belong to a list block.
     if (bareBuf.length > 0 && depth >= 1) flushBare();
+
+    // --- Multi-line HTML element continuation ---
+    // A pending raw region whose tail opens an unclosed tag (`<img src="a.png"`)
+    // swallows the line as its content, whatever it looks like: `style="..."`
+    // is NOT a bare document line, and treating it as one made the editor
+    // split the element and serialize the tail as `- style="..."`.
+    if (rawBuf.length > 0 && endsWithUnclosedHtmlTag(rawBuf)) {
+      rawBuf.push(line);
+      i++;
+      continue;
+    }
 
     // --- Code fence handling ---
     const fence = FENCE_OPEN_RE.exec(line);

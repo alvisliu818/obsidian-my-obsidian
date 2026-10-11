@@ -439,3 +439,88 @@ describe('order preservation: subtree-exiting lines attach to the previous block
     expect(itemsAt).toBeGreaterThan(mathAt);
   });
 });
+
+describe('parser: multi-line HTML elements (Word-export images)', () => {
+  const IMG_DOC = [
+    '段落一。',
+    '',
+    '<img src="media/image1.png"',
+    'style="width:2.08162in;height:1.42325in" />',
+    '',
+    '### 1.2.2 序列标注',
+  ].join('\n');
+
+  it('keeps a two-line <img> as ONE raw block (tail is not a list block)', () => {
+    const doc = parseDocument(IMG_DOC);
+    // 裸行段落按设计归一化为列表块：[list 段落一, raw img, raw 标题]
+    expect(doc.blocks.length).toBe(3);
+    expect(doc.blocks[0].text).toBe('段落一。');
+    expect(doc.blocks[1].kind).toBe('raw');
+    expect(doc.blocks[1].text).toBe(
+      '<img src="media/image1.png"\nstyle="width:2.08162in;height:1.42325in" />',
+    );
+    expect(doc.blocks[2].kind).toBe('raw'); // the heading
+    expect(doc.blocks[2].text).toBe('### 1.2.2 序列标注');
+  });
+
+  it('never serializes the style line as a `- ` list item', () => {
+    const out = serializeDocument(parseDocument(IMG_DOC));
+    expect(out).not.toContain('- style=');
+    expect(out).toContain('style="width:2.08162in;height:1.42325in" />');
+    expect(out).toContain('段落一。');
+  });
+
+  it('round-trips the img element contiguously (no insertion between its lines)', () => {
+    const out = serializeDocument(parseDocument(IMG_DOC));
+    expect(out).toContain(
+      '<img src="media/image1.png"\nstyle="width:2.08162in;height:1.42325in" />',
+    );
+    // idempotent: 再解析再序列化不再变化
+    expect(serializeDocument(parseDocument(out))).toBe(out);
+  });
+
+  it('a blank line inside the open tag stays element content', () => {
+    const md = '<img src="a.png"\n\nstyle="width:1in" />';
+    const doc = parseDocument(md);
+    expect(doc.blocks.length).toBe(1);
+    expect(doc.blocks[0].kind).toBe('raw');
+    expect(doc.blocks[0].text).toBe('<img src="a.png"\n\nstyle="width:1in" />');
+  });
+
+  it('a self-closing single-line <img/> does not swallow the next line', () => {
+    const md = '<img src="a.png" />\n后续文本。';
+    const doc = parseDocument(md);
+    expect(doc.blocks[0].kind).toBe('raw');
+    expect(doc.blocks[0].text).toBe('<img src="a.png" />');
+    expect(doc.blocks[1].text).toBe('后续文本。');
+  });
+
+  it('a `>` inside a quoted attribute does not close the tag', () => {
+    const md = '<img src="a.png" alt="a > b"\nstyle="width:1in" />';
+    const doc = parseDocument(md);
+    expect(doc.blocks.length).toBe(1);
+    expect(doc.blocks[0].text).toBe(md);
+  });
+
+  it('a tag spanning three lines stays one raw block', () => {
+    const md = '<table border="1"\n  cellpadding="2"\n  style="width:100%">\n内容。';
+    const doc = parseDocument(md);
+    expect(doc.blocks[0].kind).toBe('raw');
+    expect(doc.blocks[0].text).toBe('<table border="1"\n  cellpadding="2"\n  style="width:100%">');
+    expect(doc.blocks[1].text).toBe('内容。');
+  });
+
+  it('multi-line tables remain one region and math is untouched', () => {
+    // `<`-starting lines balanced per line: each joins the raw region as before
+    const table = '<table>\n<tr><td>x</td></tr>\n</table>';
+    const doc = parseDocument(table);
+    expect(doc.blocks.length).toBe(1);
+    expect(doc.blocks[0].text).toBe(table);
+
+    // `$$…$$` region: its last line is the closer, so no continuation kicks in
+    const math = '$$\nx < y\n$$\n后续。';
+    const mdoc = parseDocument(math);
+    expect(mdoc.blocks[0].text).toBe('$$\nx < y\n$$');
+    expect(mdoc.blocks[1].text).toBe('后续。');
+  });
+});
