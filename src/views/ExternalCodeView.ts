@@ -17,15 +17,39 @@
  */
 
 import { ItemView, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
-import { EditorState, type Extension } from '@codemirror/state';
-import { EditorView, keymap, lineNumbers, type KeyBinding, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection, crosshairCursor, highlightSpecialChars, dropCursor } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
-import { searchKeymap, highlightSelectionMatches, search } from '@codemirror/search';
-import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete';
-import { bracketMatching, foldGutter, foldKeymap, indentOnInput, indentUnit, syntaxHighlighting, HighlightStyle, StreamLanguage } from '@codemirror/language';
-import { tags as t } from '@lezer/highlight';
-import { javascript } from '@codemirror/lang-javascript';
-import { markdown } from '@codemirror/lang-markdown';
+import { EditorState, type Extension } from 'cm-bundle:@codemirror/state';
+import { EditorView, keymap, lineNumbers, type KeyBinding, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection, crosshairCursor, highlightSpecialChars, dropCursor } from 'cm-bundle:@codemirror/view';
+import { defaultKeymap, history, historyKeymap, indentWithTab } from 'cm-bundle:@codemirror/commands';
+import { searchKeymap, highlightSelectionMatches, search } from 'cm-bundle:@codemirror/search';
+import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from 'cm-bundle:@codemirror/autocomplete';
+import { bracketMatching, foldGutter, foldKeymap, indentOnInput, indentUnit, syntaxHighlighting, HighlightStyle, StreamLanguage } from 'cm-bundle:@codemirror/language';
+import { tags as t } from 'cm-bundle:@lezer/highlight';
+import { javascript } from 'cm-bundle:@codemirror/lang-javascript';
+import { markdown } from 'cm-bundle:@codemirror/lang-markdown';
+// legacy-modes 是直接依赖（package.json ^6.5.4）——每个语言家族一个
+// StreamParser，覆盖 TEXT_EXTENSIONS 能打开的绝大多数扩展名，代码文件
+// 不再打开成一片灰（用户报告：代码文件没有语法高亮）。
+// lang-html / lang-css 是完整 lezer 解析器，已在依赖树里，此处显式声明。
+import { html } from 'cm-bundle:@codemirror/lang-html';
+import { css as cssParser } from 'cm-bundle:@codemirror/lang-css';
+import { cpp, java, csharp, kotlin, objectiveC, scala, dart } from 'cm-bundle:@codemirror/legacy-modes/mode/clike';
+import { go } from 'cm-bundle:@codemirror/legacy-modes/mode/go';
+import { python } from 'cm-bundle:@codemirror/legacy-modes/mode/python';
+import { ruby } from 'cm-bundle:@codemirror/legacy-modes/mode/ruby';
+import { lua } from 'cm-bundle:@codemirror/legacy-modes/mode/lua';
+import { perl } from 'cm-bundle:@codemirror/legacy-modes/mode/perl';
+import { r } from 'cm-bundle:@codemirror/legacy-modes/mode/r';
+import { julia } from 'cm-bundle:@codemirror/legacy-modes/mode/julia';
+import { erlang } from 'cm-bundle:@codemirror/legacy-modes/mode/erlang';
+import { haskell } from 'cm-bundle:@codemirror/legacy-modes/mode/haskell';
+import { shell } from 'cm-bundle:@codemirror/legacy-modes/mode/shell';
+import { powerShell } from 'cm-bundle:@codemirror/legacy-modes/mode/powershell';
+import { diff } from 'cm-bundle:@codemirror/legacy-modes/mode/diff';
+import { standardSQL } from 'cm-bundle:@codemirror/legacy-modes/mode/sql';
+import { rust } from 'cm-bundle:@codemirror/legacy-modes/mode/rust';
+import { xml } from 'cm-bundle:@codemirror/legacy-modes/mode/xml';
+import { yaml } from 'cm-bundle:@codemirror/legacy-modes/mode/yaml';
+import { swift } from 'cm-bundle:@codemirror/legacy-modes/mode/swift';
 import { readExternalText, writeExternalText } from '../features/extFs';
 import { logOp } from '../features/logger';
 import type LogseqEditorPlugin from '../main';
@@ -47,17 +71,70 @@ export const VIEW_TYPE_EXTERNAL_CODE = 'logseq-external-code';
  */
 function languageFor(ext: string): Extension[] {
   switch (ext) {
-    // The javascript mode covers the whole ECMAScript family plus JSON.
+    // javascript() 覆盖整个 ECMAScript 家族加 JSON。
     case 'ts': case 'tsx': case 'js': case 'jsx': case 'mjs': case 'cjs':
     case 'mts': case 'cts': case 'json': case 'json5':
       return [javascript()];
-    // Markdown normally goes to the block editor, but a .md opened read-only
-    // can land here, and highlighting costs nothing.
+    // Markdown 正常走块编辑器，只读打开的 .md 也会落到这里，顺手高亮。
     case 'md': case 'markdown':
       return [markdown()];
+    // HTML：完整 lezer 解析器（标签/属性/内联脚本样式都着色）。vue/svelte 模板同理。
+    case 'html': case 'htm': case 'vue': case 'svelte':
+      return [html()];
+    case 'css': case 'scss': case 'less':
+      return [cssParser()];
+    case 'py':
+      return [StreamLanguage.define(python)];
+    case 'rb':
+      return [StreamLanguage.define(ruby)];
+    case 'go':
+      return [StreamLanguage.define(go)];
+    case 'rs':
+      return [StreamLanguage.define(rust)];
+    case 'java':
+      return [StreamLanguage.define(java)];
+    case 'kt': case 'kts':
+      return [StreamLanguage.define(kotlin)];
+    case 'c': case 'h': case 'cc': case 'cpp': case 'hpp':
+      return [StreamLanguage.define(cpp)];
+    case 'cs':
+      return [StreamLanguage.define(csharp)];
+    case 'm': case 'mm':
+      return [StreamLanguage.define(objectiveC)];
+    case 'scala':
+      return [StreamLanguage.define(scala)];
+    case 'dart':
+      return [StreamLanguage.define(dart)];
+    case 'lua':
+      return [StreamLanguage.define(lua)];
+    case 'pl':
+      return [StreamLanguage.define(perl)];
+    case 'r':
+      return [StreamLanguage.define(r)];
+    case 'jl':
+      return [StreamLanguage.define(julia)];
+    case 'erl':
+      return [StreamLanguage.define(erlang)];
+    case 'hs':
+      return [StreamLanguage.define(haskell)];
+    case 'swift':
+      return [StreamLanguage.define(swift)];
+    case 'sh': case 'bash': case 'zsh': case 'fish':
+      return [StreamLanguage.define(shell)];
+    case 'ps1':
+      return [StreamLanguage.define(powerShell)];
+    case 'diff': case 'patch':
+      return [StreamLanguage.define(diff)];
+    case 'sql':
+      return [StreamLanguage.define(standardSQL)];
+    case 'xml': case 'svg':
+      return [StreamLanguage.define(xml)];
+    case 'yaml': case 'yml':
+      return [StreamLanguage.define(yaml)];
     default:
-      // StreamLanguage gives comments/strings for the common config and script
-      // formats; without it they are readable but entirely uncoloured.
+      // 没有现成模式的配置格式（toml/ini/cfg/conf/env/properties/log/
+      // gitignore）至少给注释/字符串/数字着色；都不在表里的仍可编辑，
+      // 只是无色（如 .bat/.cmd——legacy-modes 没有 DOS batch 模式）。
       return streamLanguageFor(ext);
   }
 }
@@ -65,11 +142,6 @@ function languageFor(ext: string): Extension[] {
 /** Minimal StreamLanguage definitions for formats with no bundled mode. */
 function streamLanguageFor(ext: string): Extension[] {
   const map: Record<string, { comment: string | RegExp; string: RegExp; number: RegExp }> = {
-    sh: { comment: /#.*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
-    bash: { comment: /#.*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
-    zsh: { comment: /#.*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
-    yaml: { comment: /#.*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
-    yml: { comment: /#.*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
     toml: { comment: /#.*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
     ini: { comment: /[;#].*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
     conf: { comment: /[;#].*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
