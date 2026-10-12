@@ -1,0 +1,62 @@
+# Build the plugin, attest its provenance, and publish the files Obsidian installs.
+name: Release
+
+on:
+  push:
+    tags:
+      - '*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  # Required by actions/attest-build-provenance so users can verify these
+  # artifacts were built from this repository.
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Verify release source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/verify-release.mjs > "$RUNNER_TEMP/release-notes.md"
+
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+      - run: npm run build
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
+
+      # Obsidian downloads these three files individually; a zip would just be
+      # an unused extra asset on the release.
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          body_path: ${{ runner.temp }}/release-notes.md
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            main.js
+            manifest.json
+            styles.css
