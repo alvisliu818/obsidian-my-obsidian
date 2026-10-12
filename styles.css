@@ -5554,3 +5554,299 @@ body.lgp-table-editor-cursor * {
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 }
+
+/* ==================== Material Icon Theme (modules/material-icon-theme) ==================== */
+/* 第三方模块，MIT © GilbertzzzZZ — 样式原样保留 */
+/* The row is a flex container with align-items: center, so the icon is already
+   centred vertically — no nudge required. */
+.mfi-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.mfi-icon svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+/* Hide default Obsidian collapse indicator and file tag when our icon is present */
+.nav-file-title[data-mfi-applied] .nav-file-tag {
+  display: none;
+}
+.nav-folder-title[data-mfi-applied] > .nav-folder-collapse-indicator {
+  display: none;
+}
+
+.nav-file-title[data-mfi-applied],
+.nav-folder-title[data-mfi-applied] {
+  display: flex;
+  align-items: center;
+}
+
+/* ── Settings: rule icon preview ─────────────────────────────────────────────── */
+.mfi-rule-icon {
+  display: inline-flex;
+  align-items: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.mfi-rule-icon svg { width: 18px; height: 18px; }
+
+
+/* ── AddRuleModal: icon preview row ─────────────────────────────────────────── */
+.mfi-add-rule-preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 8px;
+}
+.mfi-add-rule-icon {
+  display: inline-flex;
+  align-items: center;
+  width: 20px;
+  height: 20px;
+}
+.mfi-add-rule-icon svg { width: 20px; height: 20px; }
+.mfi-add-rule-key {
+  font-size: 0.85em;
+  color: var(--text-muted);
+}
+
+/* ── Icon picker modal ──────────────────────────────────────────────────────── */
+.mfi-picker-modal .modal-content {
+  width: 600px;
+  max-width: 90vw;
+}
+
+.mfi-picker-search {
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.mfi-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(70px, 1fr));
+  gap: 4px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+button.mfi-picker-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 4px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: background 0.1s;
+  height: auto;
+  color: var(--text-normal);
+  background: transparent;
+  box-shadow: none;
+  font: inherit;
+  text-align: center;
+}
+button.mfi-picker-item:hover { background: var(--background-modifier-hover); }
+button.mfi-picker-item.is-active {
+  border-color: var(--color-accent);
+  background: var(--background-modifier-active-hover);
+}
+button.mfi-picker-item:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+}
+
+.mfi-picker-svg {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.mfi-picker-svg svg { width: 24px; height: 24px; }
+
+.mfi-picker-name {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 3px;
+  max-width: 66px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+
+/* ==================== TraceTime (modules/tracetime) ==================== */
+/* 第三方模块，MIT © QuincySx — 样式原样保留 */
+/* TraceTime plugin styles */
+
+/* 编辑模式：overlay 挂在 .cm-scroller 内，用文档坐标定位，
+   滚动由浏览器原生处理，标签始终跟随内容。
+   scroller 需要成为定位基准（插件卸载时样式一并移除）。 */
+.markdown-source-view .cm-scroller {
+	position: relative;
+}
+
+.tracetime-editor-overlay {
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 0;
+	height: 0;
+	overflow: visible;
+	pointer-events: none;
+}
+
+/* 共用标签组件：圆点 + 文字，编辑/阅读两种模式同构。
+   字号走 CSS 变量，由设置页滑块实时写入 body。 */
+.tracetime-label {
+	position: absolute;
+	display: flex;
+	align-items: center;
+	white-space: nowrap;
+	font-size: var(--tracetime-font-size, 12px);
+	font-family: var(--font-text);
+	font-weight: normal;
+	font-style: normal;
+	line-height: normal;
+	color: var(--text-faint);
+	pointer-events: auto; /* 悬停展开需要命中测试 */
+	cursor: default;
+}
+
+.tracetime-label-dot {
+	display: none; /* 默认全文显示；仅“点模式”下出现 */
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--text-faint);
+	flex: none;
+}
+
+.tracetime-label-text {
+	overflow: hidden;
+}
+
+/* 编辑模式：开了“限制行宽”时左缘锚定、向右伸进页边距；
+   clamped（未开限制行宽，或窗口过窄内容超出可视区）时右缘锚定、向左延伸 */
+.tracetime-editor-overlay .tracetime-label {
+	transform: translate(0, -50%);
+	padding-left: 0.5em;
+}
+
+.tracetime-editor-overlay.tracetime-clamped .tracetime-label {
+	transform: translate(-100%, -50%);
+	padding-left: 0;
+}
+
+/* 阅读模式：统一 overlay 浮层，不参与正文布局；
+   不做 paint contain，标签才能画在浮层（= 文档区）右边界之外 */
+.tracetime-section {
+	position: relative;
+}
+
+.tracetime-overlay {
+	position: absolute;
+	inset: 0;
+	overflow: visible;
+	pointer-events: none;
+	contain: layout style;
+}
+
+/* 阅读模式：限制行宽时放在文档区右缘之外（页边距里）；
+   关闭限制行宽时锚在可视区右缘内侧，向左延伸 */
+.tracetime-overlay .tracetime-label {
+	right: -20px;
+	transform: translateY(-50%);
+}
+
+.is-readable-line-width .tracetime-overlay .tracetime-label {
+	right: auto;
+	left: 100%;
+	padding-left: 0.5em;
+}
+
+/* 点模式 = 紧凑模式开启 且 未开启“限制行宽”——两种模式统一只读
+   Obsidian 的 is-readable-line-width class，与编辑/阅读模式无关。
+   文字收成 0 宽，只留圆点；悬停时 Dock 式展开。 */
+.markdown-source-view:not(.is-readable-line-width) .tracetime-editor-overlay.tracetime-compact .tracetime-label-text,
+.markdown-preview-view:not(.is-readable-line-width) .tracetime-overlay.tracetime-compact .tracetime-label-text {
+	max-width: 0;
+	opacity: 0;
+	padding-left: 0;
+	transition: max-width 0.18s ease, opacity 0.18s ease, padding-left 0.18s ease;
+}
+
+.markdown-source-view:not(.is-readable-line-width) .tracetime-editor-overlay.tracetime-compact .tracetime-label-dot,
+.markdown-preview-view:not(.is-readable-line-width) .tracetime-overlay.tracetime-compact .tracetime-label-dot {
+	display: block;
+}
+
+/* 扩大悬停判定区：伪元素向四周外扩（上/右/下/左），不占用布局、不影响圆点位置 */
+.markdown-source-view:not(.is-readable-line-width) .tracetime-editor-overlay.tracetime-compact .tracetime-label::before,
+.markdown-preview-view:not(.is-readable-line-width) .tracetime-overlay.tracetime-compact .tracetime-label::before {
+	content: "";
+	position: absolute;
+	inset: -14px -7px -14px -29px;
+}
+
+.markdown-source-view:not(.is-readable-line-width) .tracetime-editor-overlay.tracetime-compact .tracetime-label:hover .tracetime-label-text,
+.markdown-preview-view:not(.is-readable-line-width) .tracetime-overlay.tracetime-compact .tracetime-label:hover .tracetime-label-text {
+	max-width: 12em;
+	opacity: 1;
+	padding-left: 0.4em;
+}
+
+/* 悬停展开时垫个底色，避免压字看不清 */
+.markdown-source-view:not(.is-readable-line-width) .tracetime-editor-overlay.tracetime-compact .tracetime-label:hover,
+.markdown-preview-view:not(.is-readable-line-width) .tracetime-overlay.tracetime-compact .tracetime-label:hover {
+	background: var(--background-primary);
+	border-radius: 4px;
+}
+
+/* 设置页：实时预览区 */
+.tracetime-settings-preview {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	padding: 8px 14px;
+	margin-bottom: 16px;
+}
+
+.tracetime-preview-title {
+	font-weight: 600;
+	margin-bottom: 6px;
+	color: var(--text-muted);
+}
+
+.tracetime-preview-row {
+	display: flex;
+	justify-content: space-between;
+	padding: 2px 0;
+	font-size: var(--font-ui-small);
+}
+
+.tracetime-preview-sample {
+	color: var(--text-muted);
+}
+
+.tracetime-preview-result {
+	color: var(--text-accent);
+	font-variant-numeric: tabular-nums;
+}

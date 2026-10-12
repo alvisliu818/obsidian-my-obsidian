@@ -30,6 +30,8 @@ import BrowserPlugin from "../modules/browser/src/main";
 import JupyterNotebookPlugin from "../modules/jupyter/src/main";
 import BreadcrumbNavPlugin from "../modules/breadcrumb/src/main";
 import DocAssistPlugin from "../modules/doc-assist/src/main";
+import MaterialIconThemePlugin from "../modules/material-icon-theme/src/main";
+import TraceTimePlugin from "../modules/tracetime/src/main";
 import { CodeFileView, DEFAULT_CODE_EXTENSIONS, VIEW_TYPE_CODE_FILE } from "./codeFileView";
 
 export default class MyObsidianPlugin extends Plugin {
@@ -83,6 +85,28 @@ export default class MyObsidianPlugin extends Plugin {
 				"文档加工流水线：剪藏清洗（多余空行 / 行尾空白 / 列表前缀 / AI 报告残留）、中英文加空格与标点互转、列表段落整理、断尾求真删区间。",
 			desktopOnly: true,
 			cls: DocAssistPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			id: "material-icon-theme",
+			// Same id before and after the merge: this module is a THIRD-PARTY
+			// plugin (GilbertzzzZZ, MIT) kept whole, not our own code, so the
+			// alias has to be its real upstream id.
+			legacyId: "material-icon-theme",
+			name: "Material Icon Theme",
+			summary:
+				"文件浏览器换上 Material Design 图标：按文件名 / 扩展名 / 文件夹名匹配，含 Obsidian 专有的 canvas、base。上游 GilbertzzzZZ（MIT）。",
+			desktopOnly: false,
+			cls: MaterialIconThemePlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			id: "tracetime",
+			// Third-party too (QuincySx, MIT), kept as the user's own fork of it.
+			legacyId: "tracetime",
+			name: "TraceTime",
+			summary:
+				"在每个段落旁显示它最后一次被编辑的时间，编辑器与阅读模式都有；记录存在本地，不联网。上游 QuincySx（MIT）。",
+			desktopOnly: false,
+			cls: TraceTimePlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 

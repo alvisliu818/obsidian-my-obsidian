@@ -7,3 +7,6 @@ test-results/
 coverage/
 # 本地 e2e 探针脚本（沿用各插件的约定：下划线开头的不入库）
 tests/e2e/_*.mjs
+# Material Icon Theme 的图标数据由 scripts/build-icons.mjs 生成（约 2MB
+# 内联 SVG），跟随上游做法不入库，构建前生成。
+modules/material-icon-theme/src/icon-data.ts
