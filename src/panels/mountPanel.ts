@@ -429,6 +429,12 @@ export class MountPanelView extends ItemView {
 
   render(): void {
     const { contentEl } = this;
+    // The panel scrolls on contentEl ITSELF (the .view-content), so emptying
+    // it empties the scroller — Chromium clamps scrollTop to 0 the moment the
+    // last child is removed, and nothing restored it: every toggle / drag
+    // reorder / rescan yanked the panel back to the top (展开文件夹页面会
+    // 滚动). Capture the position before the wipe and put it back below.
+    const restoreScrollTop = this.scrollEl ? this.scrollEl.scrollTop : 0;
     contentEl.empty();
     contentEl.addClass('logseq-mount-panel');
 
@@ -485,6 +491,15 @@ export class MountPanelView extends ItemView {
     locateBtn.addEventListener('click', () => void this.revealActiveFile());
 
     for (const m of mounts) this.renderMount(contentEl, m);
+    // Restore the scroll position BEFORE the first paint so the viewport band
+    // is computed against the real scrollTop, not the post-clamp 0. Clamping
+    // to the new scrollable range keeps collapses (shrunk content) honest.
+    if (this.scrollEl) {
+      this.scrollEl.scrollTop = Math.max(
+        0,
+        Math.min(restoreScrollTop, this.scrollEl.scrollHeight - this.scrollEl.clientHeight),
+      );
+    }
     // Repaint with the final DOM in place — geometry measured mid-build can
     // be stale, and the scroll position may have been reset by the rebuild.
     for (const paint of this.rowPainters) paint();
