@@ -50,9 +50,11 @@ import { cpp, csharp, dart, java, kotlin, scala } from "cm-bundle:@codemirror/le
 import { erlang } from "cm-bundle:@codemirror/legacy-modes/mode/erlang";
 import { go } from "cm-bundle:@codemirror/legacy-modes/mode/go";
 import { haskell } from "cm-bundle:@codemirror/legacy-modes/mode/haskell";
+import { julia } from "cm-bundle:@codemirror/legacy-modes/mode/julia";
 import { lua } from "cm-bundle:@codemirror/legacy-modes/mode/lua";
 import { perl } from "cm-bundle:@codemirror/legacy-modes/mode/perl";
 import { powerShell } from "cm-bundle:@codemirror/legacy-modes/mode/powershell";
+import { properties } from "cm-bundle:@codemirror/legacy-modes/mode/properties";
 import { python } from "cm-bundle:@codemirror/legacy-modes/mode/python";
 import { r } from "cm-bundle:@codemirror/legacy-modes/mode/r";
 import { ruby } from "cm-bundle:@codemirror/legacy-modes/mode/ruby";
@@ -60,6 +62,7 @@ import { rust } from "cm-bundle:@codemirror/legacy-modes/mode/rust";
 import { shell } from "cm-bundle:@codemirror/legacy-modes/mode/shell";
 import { standardSQL } from "cm-bundle:@codemirror/legacy-modes/mode/sql";
 import { swift } from "cm-bundle:@codemirror/legacy-modes/mode/swift";
+import { toml } from "cm-bundle:@codemirror/legacy-modes/mode/toml";
 import { xml } from "cm-bundle:@codemirror/legacy-modes/mode/xml";
 import { yaml } from "cm-bundle:@codemirror/legacy-modes/mode/yaml";
 import { runFile, langFromExt } from "../modules/logseq/src/exec/runner";
@@ -150,7 +153,7 @@ function languageFor(ext: string): Extension[] {
 		case "h":
 		case "cpp":
 		case "hpp":
-			return [StreamLanguage.define(ext === "cpp" || ext === "hpp" ? cpp : cpp)];
+			return [StreamLanguage.define(cpp)];
 		case "cs":
 			return [StreamLanguage.define(csharp)];
 		case "rb":
@@ -173,6 +176,8 @@ function languageFor(ext: string): Extension[] {
 			return [StreamLanguage.define(erlang)];
 		case "hs":
 			return [StreamLanguage.define(haskell)];
+		case "jl":
+			return [StreamLanguage.define(julia)];
 		case "sql":
 			return [StreamLanguage.define(standardSQL)];
 		case "xml":
@@ -180,10 +185,14 @@ function languageFor(ext: string): Extension[] {
 		case "yaml":
 		case "yml":
 			return [StreamLanguage.define(yaml)];
+		case "toml":
+			return [StreamLanguage.define(toml)];
+		case "ini":
+			return [StreamLanguage.define(properties)];
 		default:
-			// Formats with no bundled mode (toml/ini/…) still get comments,
-			// strings and numbers coloured; anything else stays editable and
-			// simply uncoloured (legacy-modes has no DOS batch mode).
+			// Extensions we claim but have no mode for (bat/cmd — legacy-modes
+			// has no DOS batch parser) stay editable and uncoloured. The list in
+			// DEFAULT_CODE_EXTENSIONS is the promise; keep the two in sync.
 			return [];
 	}
 }
