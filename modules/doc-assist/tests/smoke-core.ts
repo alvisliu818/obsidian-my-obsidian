@@ -13,6 +13,12 @@ import {
 	splitBilingualParagraphsInText,
 } from '../src/core/cleanup-text';
 import {
+	countByType,
+	formatKeyInfo,
+	scanKeyInfo,
+	SUMMARY_CALLOUT_PREFIX,
+} from '../src/core/key-info';
+import {
 	buildDeleteFromCurrentToEnd,
 	buildDeleteFromStartToCurrent,
 } from '../src/core/delete-range';
@@ -146,6 +152,132 @@ test('CJK 与拉丁之间补空格（URL 跳过）', () => {
 	const r = addCjkLatinSpaces('使用Obsidian插件，见https://obsidian.md/help页面。');
 	assert.equal(r.text, '使用 Obsidian 插件，见https://obsidian.md/help页面。');
 	assert.equal(r.changedCount, 2);
+});
+
+// ---- 场景一 关键信息提炼 ----
+const SAMPLE = [
+	'---',
+	'editor: native',
+	'---',
+	'',
+	'# 一级标题',
+	'',
+	'正文里有**加粗要点**和==高亮要点==，还有 *斜体* 与 `行内代码`。',
+	'',
+	'## 二级标题',
+	'',
+	'> 这是一段引述，',
+	'> 跨了两行。',
+	'',
+	'> [!note] 一个 callout',
+	'> 也是引述块',
+	'',
+	'```python',
+	'print("hi")',
+	'```',
+	'',
+	'标签 #工作 和双链 [[另一篇笔记]]。',
+].join('\n');
+
+test('扫描：八类要素都认得出', () => {
+	const items = scanKeyInfo(SAMPLE);
+	const types = new Set(items.flatMap((i) => i.types));
+	for (const t of ['heading', 'bold', 'highlight', 'italic', 'inlineCode', 'blockquote', 'tag', 'link']) {
+		assert.ok(types.has(t as never), `缺少 ${t}`);
+	}
+});
+
+test('扫描：同一行多个要点合并为一条', () => {
+	const items = scanKeyInfo(SAMPLE);
+	const line = items.find((i) => i.text.includes('加粗要点'));
+	assert.ok(line, '没找到含加粗要点那条');
+	assert.deepEqual(line.types.sort(), ['bold', 'highlight', 'inlineCode', 'italic']);
+	assert.equal(line.text, '加粗要点；高亮要点；斜体；`行内代码`');
+});
+
+test('扫描：连续引述行合成一条，且带行号', () => {
+	const items = scanKeyInfo(SAMPLE);
+	const q = items.filter((i) => i.types.includes('blockquote'));
+	assert.equal(q.length, 2, '应有两段引述（普通引述 + callout）');
+	assert.equal(q[0].text, '这是一段引述， 跨了两行。');
+	assert.equal(q[0].line, 10, '行号应是引述起始行');
+	assert.ok(q[1].text.includes('一个 callout'));
+});
+
+test('扫描：代码块内部不拆出假要点', () => {
+	const items = scanKeyInfo(SAMPLE);
+	const code = items.filter((i) => i.types.includes('codeBlock'));
+	assert.equal(code.length, 1);
+	assert.equal(code[0].lang, 'python');
+	// print("hi") 那行不该产生 heading/bold 之类（fence 是 16，内容行 17）
+	assert.ok(!items.some((i) => i.line === 17 && i.types.some((t) => t !== 'codeBlock')));
+});
+
+test('扫描：标题行的 # 不当成标签', () => {
+	const items = scanKeyInfo('# 标题一\n\n# 标题二\n');
+	assert.ok(items.every((i) => i.types.includes('heading')));
+	assert.ok(items.every((i) => !i.types.includes('tag')));
+});
+
+test('扫描：自家插入的摘要区块被整段跳过', () => {
+	// 摘要 callout 的内容行也带 `>` 前缀（与 insertSummaryAtTop 的实际输出一致）
+	const doc =
+		`${SUMMARY_CALLOUT_PREFIX}：全要素摘要\n` +
+		'> ## 标题（1）\n> - （第 5 行）真标题\n\n# 真标题\n';
+	const items = scanKeyInfo(doc);
+	assert.equal(items.length, 1, '只应剩下真正的标题');
+	assert.equal(items[0].line, 4);
+});
+
+test('筛选：只留用户点名的四类（加粗/高亮/代码块/引述块）', () => {
+	const items = scanKeyInfo(SAMPLE);
+	const kept = items.filter((i) =>
+		i.types.some((t) => ['bold', 'highlight', 'codeBlock', 'blockquote'].includes(t)),
+	);
+	// 筛选以「行」为单位：同一行的斜体/行内代码会跟着加粗那条一起进来，
+	// 这正是「同一行多个要点合并为一条」的语义。
+	assert.ok(kept.length > 0);
+	assert.ok(
+		kept.every((i) =>
+			i.types.some((t) => ['bold', 'highlight', 'codeBlock', 'blockquote'].includes(t)),
+		),
+	);
+	// 纯标题 / 纯标签 / 纯双链的行不该入选
+	assert.ok(
+		!kept.some((i) => {
+			const only = i.types.length === 1 ? i.types[0] : null;
+			return only === 'heading' || only === 'tag' || only === 'link';
+		}),
+	);
+	// 标题行（纯 heading）确实被排除了
+	assert.ok(!kept.some((i) => i.types.length === 1 && i.types[0] === 'heading'));
+});
+
+test('格式化：按类型分组，带行号', () => {
+	const items = scanKeyInfo(SAMPLE);
+	const out = formatKeyInfo(items, { types: ['heading'] });
+	assert.ok(out.startsWith('## 标题（2）'), out.slice(0, 30));
+	assert.ok(out.includes('- （第 5 行）一级标题'));
+	assert.ok(out.includes('- （第 9 行）二级标题'));
+});
+
+test('格式化：maxLevel 限制标题层级', () => {
+	const items = scanKeyInfo(SAMPLE);
+	const out = formatKeyInfo(items, { types: ['heading'], maxLevel: 1 });
+	assert.ok(out.includes('一级标题'));
+	assert.ok(!out.includes('二级标题'));
+});
+
+test('格式化：无命中时返回空串', () => {
+	assert.equal(formatKeyInfo([]), '');
+	assert.equal(formatKeyInfo(scanKeyInfo('纯正文，没有任何要素。')), '');
+});
+
+test('统计：countByType 给出分类计数', () => {
+	const items = scanKeyInfo(SAMPLE);
+	const s = countByType(items);
+	assert.ok(s.includes('标题 2'), s);
+	assert.ok(s.includes('引述 2'), s);
 });
 
 console.log(`\n${passed} tests passed`);

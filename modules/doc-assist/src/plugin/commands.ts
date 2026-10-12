@@ -21,6 +21,13 @@ import {
 	splitBilingualParagraphsInText,
 } from '../core/cleanup-text';
 import {
+	countByType,
+	formatKeyInfo,
+	scanKeyInfo,
+	SUMMARY_CALLOUT_PREFIX,
+	type KeyInfoType,
+} from '../core/key-info';
+import {
 	buildDeleteFromCurrentToEnd,
 	buildDeleteFromStartToCurrent,
 	type DeleteRangeResult,
@@ -95,6 +102,56 @@ function runTextCommand(
 		editor.replaceRange(result.text, { line: 0, ch: 0 }, documentEndPosition(editor));
 	}
 	new Notice(`Doc Assist ${label}：${result.summary}`);
+}
+
+// ---------------------------------------------------------------------------
+// 场景一 关键信息提炼
+//
+// 与场景二不同，这里**不原地改写文档**——摘要是额外信息，覆盖原文就丢了内容。
+// 统一做法是在文档顶部插入一个 `> [!info]` 摘要区块（frontmatter 之后），
+// 走一次 replaceRange，所以 Ctrl+Z 能整体撤回。
+// ---------------------------------------------------------------------------
+
+/** 在文档顶部（frontmatter 之后）插入摘要区块，保持单个撤销步。 */
+function insertSummaryAtTop(editor: Editor, label: string, body: string): void {
+	const text = editor.getValue();
+	const lines = text.split('\n');
+	let at = 0;
+	if (lines[0]?.trim() === '---') {
+		for (let i = 1; i < lines.length; i++) {
+			if (lines[i].trim() === '---') {
+				at = i + 1;
+				break;
+			}
+		}
+	}
+	// callout 的内容行也必须带 `>` 前缀，否则渲染时会在 callout 外面散开
+	const quoted = body
+		.split('\n')
+		.map((l) => `> ${l}`)
+		.join('\n');
+	const block = `${SUMMARY_CALLOUT_PREFIX}：${label}\n${quoted}\n\n`;
+	editor.replaceRange(block, { line: at, ch: 0 }, { line: at, ch: 0 });
+}
+
+/** 扫描 + 格式化 + 插入。typeFilter 为空表示全要素。 */
+function runKeyInfoCommand(
+	editor: Editor,
+	label: string,
+	typeFilter: KeyInfoType[] | null,
+): void {
+	const items = scanKeyInfo(editor.getValue());
+	const filtered = typeFilter
+		? items.filter((it) => it.types.some((t) => typeFilter.includes(t)))
+		: items;
+	if (!filtered.length) {
+		new Notice(`Doc Assist ${label}：没有找到关键内容`);
+		return;
+	}
+	const body = formatKeyInfo(filtered);
+	const counts = countByType(filtered);
+	insertSummaryAtTop(editor, label, body);
+	new Notice(`Doc Assist ${label}：已插入 ${filtered.length} 条（${counts}）`);
 }
 
 /** 删区间命令：按行范围删除（单撤销步），删除后光标定位到删除点。 */
@@ -331,6 +388,70 @@ export function registerDocAssistCommands(plugin: DocAssistPlugin): void {
 		editorCheckCallback: (checking, editor) => {
 			if (checking) return true;
 			runDeleteRangeCommand(plugin, editor, '删前段', buildDeleteFromStartToCurrent);
+		},
+	});
+
+	// ---- 场景一 关键信息提炼（摘要插入文档顶部，不改写原文） ----
+	add({
+		id: 'key-info-summary',
+		name: '关键内容：全要素摘要（标题/加粗/高亮/斜体/代码/标签/双链）',
+		editorCheckCallback: (checking, editor) => {
+			if (checking) return true;
+			runKeyInfoCommand(editor, '全要素摘要', null);
+		},
+	});
+
+	add({
+		id: 'key-info-outline',
+		name: '关键内容：标题大纲',
+		editorCheckCallback: (checking, editor) => {
+			if (checking) return true;
+			runKeyInfoCommand(editor, '标题大纲', ['heading']);
+		},
+	});
+
+	add({
+		id: 'key-info-emphasis',
+		name: '关键内容：重点句（加粗 / 高亮 / 斜体）',
+		editorCheckCallback: (checking, editor) => {
+			if (checking) return true;
+			runKeyInfoCommand(editor, '重点句', ['bold', 'highlight', 'italic']);
+		},
+	});
+
+	add({
+		id: 'key-info-keypoints',
+		name: '关键内容：核心要点（加粗 / 高亮 / 代码块 / 引述块）',
+		editorCheckCallback: (checking, editor) => {
+			if (checking) return true;
+			runKeyInfoCommand(editor, '核心要点', ['bold', 'highlight', 'codeBlock', 'blockquote']);
+		},
+	});
+
+	add({
+		id: 'key-info-code',
+		name: '关键内容：代码块清单',
+		editorCheckCallback: (checking, editor) => {
+			if (checking) return true;
+			runKeyInfoCommand(editor, '代码块清单', ['codeBlock', 'inlineCode']);
+		},
+	});
+
+	add({
+		id: 'key-info-links',
+		name: '关键内容：标签与双链清单',
+		editorCheckCallback: (checking, editor) => {
+			if (checking) return true;
+			runKeyInfoCommand(editor, '标签与双链', ['tag', 'link']);
+		},
+	});
+
+	add({
+		id: 'key-info-quote',
+		name: '关键内容：引述块清单',
+		editorCheckCallback: (checking, editor) => {
+			if (checking) return true;
+			runKeyInfoCommand(editor, '引述块', ['blockquote']);
 		},
 	});
 }
