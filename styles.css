@@ -5547,3 +5547,10 @@ body.lgp-table-editor-cursor * {
 .lgp-terminal__shell:hover {
   color: var(--text-normal);
 }
+
+/* ==================== Doc Assist (modules/doc-assist) ==================== */
+/* Doc Assist 设置面板（目前仅此一处样式；其余功能是纯编辑器命令，不产 DOM） */
+.doc-assist-setting-hint {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}

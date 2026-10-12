@@ -118,7 +118,7 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 		}
 
 		containerEl.createEl("p", {
-			text: "每个模块自己的设置项仍然在各自原来的设置页里（Logseq Editor / Browser / Jupyter Notebook / Breadcrumb Nav）。",
+			text: "每个模块自己的设置项仍然在各自原来的设置页里（Logseq Editor / Browser / Jupyter Notebook / Breadcrumb Nav / Doc Assist）。",
 			cls: "setting-item-description",
 		});
 

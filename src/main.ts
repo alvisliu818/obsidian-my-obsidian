@@ -29,6 +29,7 @@ import LogseqEditorPlugin from "../modules/logseq/src/main";
 import BrowserPlugin from "../modules/browser/src/main";
 import JupyterNotebookPlugin from "../modules/jupyter/src/main";
 import BreadcrumbNavPlugin from "../modules/breadcrumb/src/main";
+import DocAssistPlugin from "../modules/doc-assist/src/main";
 import { CodeFileView, DEFAULT_CODE_EXTENSIONS, VIEW_TYPE_CODE_FILE } from "./codeFileView";
 
 export default class MyObsidianPlugin extends Plugin {
@@ -73,6 +74,15 @@ export default class MyObsidianPlugin extends Plugin {
 			summary: "笔记顶部的面包屑（文件 › 标题 / 块层级），支持悬浮查看同级与逐级下钻。",
 			desktopOnly: false,
 			cls: BreadcrumbNavPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			id: "doc-assist",
+			legacyId: "obsidian-doc-assist",
+			name: "Doc Assist",
+			summary:
+				"文档加工流水线：剪藏清洗（多余空行 / 行尾空白 / 列表前缀 / AI 报告残留）、中英文加空格与标点互转、列表段落整理、断尾求真删区间。",
+			desktopOnly: true,
+			cls: DocAssistPlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 

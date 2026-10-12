@@ -21,6 +21,6 @@
       "cm-bundle:*": ["./node_modules/*"]
     }
   },
-  "include": ["src/**/*.ts", "modules/logseq/src/**/*.ts", "modules/browser/src/**/*.ts", "modules/jupyter/src/**/*.ts", "modules/breadcrumb/src/**/*.ts"],
+  "include": ["src/**/*.ts", "modules/logseq/src/**/*.ts", "modules/browser/src/**/*.ts", "modules/jupyter/src/**/*.ts", "modules/breadcrumb/src/**/*.ts", "modules/doc-assist/src/**/*.ts"],
   "exclude": ["**/node_modules", "**/tests/e2e"]
 }
