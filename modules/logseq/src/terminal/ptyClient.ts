@@ -19,6 +19,8 @@ export interface PtySessionEvents {
 
 export interface PtySession {
   id: string;
+  /** Which shell actually came up (may be the fallback when the pick is absent). */
+  shellName: string;
   write: (data: string) => void;
   resize: (cols: number, rows: number) => void;
   dispose: () => void; // 结束会话（shell 被杀，onExit 会触发）
@@ -236,12 +238,12 @@ export async function findNodeExe(): Promise<string | null> {
 }
 
 /** Windows shell 探测：pwsh7 → powershell → cmd（返回可执行绝对路径与展示名） */
-export async function detectShell(): Promise<{ file: string; name: string }> {
+export async function detectShell(): Promise<{ file: string; name: string; args: string[] }> {
   const stat = fsPromises.stat;
-  const candidates: { file: string; name: string }[] = [
-    { file: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe', name: 'pwsh' },
-    { file: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', name: 'PowerShell' },
-    { file: 'C:\\Windows\\System32\\cmd.exe', name: 'cmd' },
+  const candidates: { file: string; name: string; args: string[] }[] = [
+    { file: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe', name: 'pwsh', args: ['-NoLogo'] },
+    { file: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', name: 'PowerShell', args: ['-NoLogo'] },
+    { file: 'C:\\Windows\\System32\\cmd.exe', name: 'cmd', args: [] },
   ];
   for (const c of candidates) {
     try {
@@ -251,7 +253,61 @@ export async function detectShell(): Promise<{ file: string; name: string }> {
       // 继续下一个候选
     }
   }
-  return { file: 'C:\\Windows\\System32\\cmd.exe', name: 'cmd' };
+  return { file: 'C:\\Windows\\System32\\cmd.exe', name: 'cmd', args: [] };
+}
+
+/**
+ * The shells the terminal can run, by id.
+ *
+ * 'auto' is what detectShell() used to be the only option: pick whatever is
+ * installed. The rest let the user choose — the reason this exists is that
+ * detect() stops at PowerShell and never reaches Git Bash or WSL, which is
+ * where a lot of shell scripts actually run.
+ */
+export interface ShellChoice {
+  id: string;
+  name: string;
+  /** How to find the executable: an absolute path, or a bare name on PATH. */
+  file: string;
+  /** Extra argv for the shell itself (before any script). */
+  args?: string[];
+  /** Windows only (WSL runs a Linux distro). */
+  win?: boolean;
+}
+
+export const SHELL_CHOICES: ShellChoice[] = [
+  { id: 'auto', name: '自动检测（pwsh7 → PowerShell → cmd）', file: '' },
+  { id: 'pwsh', name: 'PowerShell 7 (pwsh)', file: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe', args: ['-NoLogo'], win: true },
+  { id: 'powershell', name: 'Windows PowerShell 5.1', file: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', args: ['-NoLogo'], win: true },
+  { id: 'cmd', name: '命令提示符 (cmd)', file: 'C:\\Windows\\System32\\cmd.exe', win: true },
+  { id: 'gitbash', name: 'Git Bash', file: 'C:\\Program Files\\Git\\bin\\bash.exe', args: ['--norc', '-i'], win: true },
+  { id: 'wsl', name: 'WSL', file: 'wsl.exe', win: true },
+  { id: 'bash', name: 'bash', file: '/bin/bash', args: ['-i'] },
+  { id: 'zsh', name: 'zsh', file: '/bin/zsh', args: ['-i'] },
+];
+
+/**
+ * Resolve a shell id to something spawnable, or null when that shell is not
+ * installed (caller then falls back to auto-detect and says so).
+ */
+export async function resolveShell(id: string): Promise<{ file: string; name: string; args: string[] } | null> {
+  const choice = SHELL_CHOICES.find((c) => c.id === id);
+  if (!choice || choice.id === 'auto' || !choice.file) return null;
+  const exists = async (file: string): Promise<boolean> => {
+    // An absolute path must exist on disk; a bare name is assumed to be on PATH
+    // (wsl.exe lives there and has no fixed install dir).
+    if (/^[A-Za-z]:[\\/]/.test(file) || file.startsWith('/')) {
+      try {
+        await fsPromises.stat(file);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return true;
+  };
+  if (!(await exists(choice.file))) return null;
+  return { file: choice.file, name: choice.name, args: choice.args ?? [] };
 }
 
 /** 拉起（或复用）helper 进程；插件目录路径由调用方提供 */
@@ -304,7 +360,7 @@ async function ensureHelper(manifestDir: string, nodeExe: string): Promise<void>
  */
 export async function createPtySession(
   manifestDir: string,
-  opts: { cwd?: string; cols?: number; rows?: number },
+  opts: { cwd?: string; cols?: number; rows?: number; shell?: string },
   ev: PtySessionEvents,
 ): Promise<PtySession> {
   const nodeExe = await findNodeExe();
@@ -313,7 +369,12 @@ export async function createPtySession(
 
   const id = `s${++seq}-${Date.now().toString(36)}`;
   sessions.set(id, ev);
-  const shell = await detectShell();
+  // A shell the user picked that turns out not to be installed falls back to
+  // auto-detect, and the view says so — better a working terminal than an
+  // error the user has to decode.
+  const picked = opts.shell && opts.shell !== 'auto' ? await resolveShell(opts.shell) : null;
+  const shell = picked ?? (await detectShell());
+  const fellBack = !!opts.shell && opts.shell !== 'auto' && !picked;
   // 终端用纯净 shell 环境：注入 Python 环境 PATH 会与 conda init 的 PowerShell
   // 启动钩子冲突（hook 用环境里的 python 跑 base 的 conda 脚本 → ModuleNotFound）。
   // 终端里用户自行 conda activate；代码块/文件运行与 LSP 才跟随选定环境。
@@ -322,11 +383,14 @@ export async function createPtySession(
 
   const pid = await new Promise<number>((resolve, reject) => {
     pendingSpawns.set(id, { resolve, reject });
+    // `shell.args` are the shell's OWN flags (-NoLogo for PowerShell, --norc -i
+    // for bash); the old code hard-coded ['-NoLogo'] for everything, which
+    // bash rejects.
     send({
       t: 'spawn',
       id,
       file: shell.file,
-      args: shell.name === 'cmd' ? [] : ['-NoLogo'],
+      args: shell.args ?? (shell.name === 'cmd' ? [] : ['-NoLogo']),
       cwd,
       env,
       cols: opts.cols ?? 80,
@@ -341,8 +405,11 @@ export async function createPtySession(
   });
   void pid;
 
+  if (fellBack) ev.onError?.(`未找到所选 shell，已改用自动检测（${shell.name}）`);
   return {
     id,
+    /** Which shell actually came up — the view shows it in its bar. */
+    shellName: picked?.name ?? shell.name,
     write: (data: string) => send({ t: 'input', id, b64: Buffer.from(data, 'utf8').toString('base64') }),
     resize: (cols: number, rows: number) => send({ t: 'resize', id, cols, rows }),
     dispose: () => send({ t: 'kill', id }),

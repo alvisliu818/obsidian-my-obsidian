@@ -10,6 +10,7 @@
  */
 import type { App } from "obsidian";
 import { Notice, PluginSettingTab, Setting as SettingCtor } from "obsidian";
+import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
 
 export interface ModuleState {
 	/** Master switch. Off = the module is never loaded at all. */
@@ -20,6 +21,8 @@ export interface ModuleState {
 
 export interface MyObsidianSettings {
 	modules: Record<string, ModuleState>;
+	/** 宿主自己的代码文件视图接管哪些扩展名（Markdown 永远不在其中） */
+	codeFileExtensions?: string[];
 }
 
 /** Catalogue of what can be switched on. Order = the order shown in settings. */
@@ -55,7 +58,7 @@ export interface SubPluginLike {
 	saveData?(data: unknown): Promise<void>;
 }
 
-export const DEFAULT_SETTINGS: MyObsidianSettings = { modules: {} };
+export const DEFAULT_SETTINGS: MyObsidianSettings = { modules: {}, codeFileExtensions: [] };
 
 export function defaultModuleState(desktopOnly: boolean): ModuleState {
 	return { enabled: !desktopOnly || isDesktopApp(), data: {} };
@@ -118,6 +121,28 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 			text: "每个模块自己的设置项仍然在各自原来的设置页里（Logseq Editor / Browser / Jupyter Notebook / Breadcrumb Nav）。",
 			cls: "setting-item-description",
 		});
+
+		containerEl.createEl("h3", { text: "代码文件" });
+		containerEl.createEl("p", {
+			text: "这些扩展名由本插件打开（Obsidian 原本对它们没有视图，点了只会是一片空白）。带 ▶ 运行的会在运行前自动保存。改动后需要重启 Obsidian。",
+			cls: "setting-item-description",
+		});
+		new SettingCtor(containerEl)
+			.setName("接管的扩展名")
+			.setDesc("英文逗号分隔。留空则用默认清单；Markdown 与 canvas 永远不会被接管。")
+			.addText((text) =>
+				text
+					.setPlaceholder(DEFAULT_CODE_EXTENSIONS.join(","))
+					.setValue((this.host.settings.codeFileExtensions ?? []).join(","))
+					.onChange(async (value) => {
+						const list = value
+							.split(/[,\s]+/)
+							.map((s) => s.trim().replace(/^\./, "").toLowerCase())
+							.filter(Boolean);
+						this.host.settings.codeFileExtensions = list;
+						await this.host.save();
+					}),
+			);
 	}
 }
 

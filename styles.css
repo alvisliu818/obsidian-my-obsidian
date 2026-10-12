@@ -5480,3 +5480,70 @@ body.lgp-table-editor-cursor * {
 .bcn-popup-item.is-open {
 	background-color: var(--background-modifier-hover);
 }
+
+/* ==================== 宿主自带：库内代码文件视图 ==================== */
+.lgp-code-file-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.lgp-code-file-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  font-size: var(--font-ui-small);
+}
+.lgp-code-file-name {
+  flex: 1 1 auto;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lgp-code-file-run {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 5px;
+  background-color: var(--interactive-normal);
+  color: var(--text-normal);
+  cursor: pointer;
+}
+.lgp-code-file-run:hover {
+  background-color: var(--interactive-hover);
+}
+.lgp-code-file-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+.lgp-code-file-host .cm-editor {
+  height: 100%;
+}
+.lgp-code-file-output {
+  flex: 0 0 auto;
+  max-height: 40%;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-top: 1px solid var(--background-modifier-border);
+  background-color: var(--background-secondary);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small);
+  white-space: pre-wrap;
+}
+
+/* 终端视图的 shell 选择下拉 */
+.lgp-terminal__shell {
+  margin-left: 6px;
+  max-width: 220px;
+  font-size: var(--font-ui-smaller);
+  background-color: transparent;
+  color: var(--text-faint);
+  border: none;
+  cursor: pointer;
+}
+.lgp-terminal__shell:hover {
+  color: var(--text-normal);
+}

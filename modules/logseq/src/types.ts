@@ -126,6 +126,11 @@ export interface BlockEditorSettings {
   saveDebounceMs: number;
   /** Python env used to run code ('' = auto-detect). See exec/pythonEnvs.ts. */
   pythonEnvId: string;
+  /**
+   * Terminal shell: 'auto' = detect (pwsh7 → PowerShell → cmd), or an id from
+   * SHELL_CHOICES. Per-view switching still works; this is only the default.
+   */
+  terminalShell: string;
   /** Fallback interpreter path when no discovered env fits ('' = unused). */
   pythonEnvCustomPath: string;
   /** Open .md files in the block editor by default (all-intrusive take-over). */
@@ -479,6 +484,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   excludedFolders: '',
   saveDebounceMs: 800,
   pythonEnvId: '',
+  terminalShell: 'auto',
   pythonEnvCustomPath: '',
   takeOverByDefault: true,
   scopeMode: 'all',

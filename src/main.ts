@@ -29,6 +29,7 @@ import LogseqEditorPlugin from "../modules/logseq/src/main";
 import BrowserPlugin from "../modules/browser/src/main";
 import JupyterNotebookPlugin from "../modules/jupyter/src/main";
 import BreadcrumbNavPlugin from "../modules/breadcrumb/src/main";
+import { CodeFileView, DEFAULT_CODE_EXTENSIONS, VIEW_TYPE_CODE_FILE } from "./codeFileView";
 
 export default class MyObsidianPlugin extends Plugin {
 	settings: MyObsidianSettings = DEFAULT_SETTINGS;
@@ -86,6 +87,39 @@ export default class MyObsidianPlugin extends Plugin {
 			}),
 		);
 		for (const d of this.descriptors) await this.bootModule(d);
+		this.registerCodeFiles();
+	}
+
+	// ------------------------------------------------------------------
+	// 宿主自己的功能：库内代码文件
+	// ------------------------------------------------------------------
+
+	/**
+	 * Take over the code extensions Obsidian has no view for, and add a
+	 * "run the current file" command.
+	 *
+	 * The extension list is a setting, not a constant: the point is that these
+	 * files currently open as an empty placeholder, so claiming them costs
+	 * nothing — but a user who wants `.json` handled by something else can drop
+	 * it without rebuilding Markdown is never in the list.
+	 */
+	private registerCodeFiles(): void {
+		const exts = (this.settings.codeFileExtensions ?? DEFAULT_CODE_EXTENSIONS).filter(
+			(e) => !!e && !/^(md|canvas)$/i.test(e),
+		);
+		this.registerView(VIEW_TYPE_CODE_FILE, (leaf) => new CodeFileView(leaf));
+		if (exts.length) this.registerExtensions(exts, VIEW_TYPE_CODE_FILE);
+
+		this.addCommand({
+			id: "run-code-file",
+			name: "运行当前代码文件",
+			checkCallback: (checking) => {
+				const view = this.app.workspace.getActiveViewOfType(CodeFileView);
+				if (!view?.file) return false;
+				if (!checking) void view.runCurrentFile();
+				return true;
+			},
+		});
 	}
 
 	/** Which modules actually came up. Used by the e2e probe and handy in the
