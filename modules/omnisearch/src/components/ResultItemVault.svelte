@@ -1,0 +1,260 @@
+<script lang="ts">
+  import { showExcerpt } from '../settings/index'
+  import type { ResultNote } from '../globals'
+  import {
+    getExtension,
+    isFileCanvas,
+    isFileBase,
+    isFileExcalidraw,
+    isFileImage,
+    isFilePDF,
+    pathWithoutFilename,
+  } from '../tools/utils'
+  import ResultItemContainer from './ResultItemContainer.svelte'
+  import type OmnisearchPlugin from '../main'
+  import { setIcon, TFile } from 'obsidian'
+  import { onMount } from 'svelte'
+  import type { SearchMatch } from '../globals'
+
+  // Import icon utility functions
+  import {
+    loadIconData,
+    initializeIconPacks,
+    getIconNameForPath,
+    loadIconSVG,
+    getDefaultIconSVG,
+  } from '../tools/icon-utils'
+
+  export let selected = false
+  export let note: ResultNote
+  export let plugin: OmnisearchPlugin
+
+  let imagePath: string | null = null
+  let title = ''
+  let notePath = ''
+  let iconData = {}
+  let folderIconSVG: string | null = null
+  let fileIconSVG: string | null = null
+  let prefixToIconPack: { [prefix: string]: string } = {}
+  let iconsPath: string
+  let iconDataLoaded = false // Flag to indicate iconData is loaded
+
+  // Lazy-computed body matches for offscreen results
+  // Pre-computed for first 10 visible results, deferred for the rest
+  let lazyMatches: SearchMatch[] = []
+
+  // Initialize icon data and icon packs once when the component mounts
+  onMount(async () => {
+    iconData = await loadIconData(plugin)
+    const iconPacks = await initializeIconPacks(plugin)
+    prefixToIconPack = iconPacks.prefixToIconPack
+    iconsPath = iconPacks.iconsPath
+    iconDataLoaded = true // Set the flag after iconData is loaded
+  })
+
+  // Reactive statement to call loadIcons() whenever the note changes and iconData is loaded
+  $: if (note && note.path && iconDataLoaded) {
+    ;(async () => {
+      // Update title and notePath before loading icons
+      title = note.displayTitle || note.basename
+      notePath = pathWithoutFilename(note.path)
+      await loadIcons()
+    })()
+  }
+
+  async function loadIcons() {
+    // Load folder icon
+    const folderIconName = getIconNameForPath(notePath, iconData)
+    if (folderIconName) {
+      folderIconSVG = await loadIconSVG(
+        folderIconName,
+        plugin,
+        iconsPath,
+        prefixToIconPack
+      )
+    } else {
+      // Fallback to default folder icon
+      folderIconSVG = getDefaultIconSVG('folder')
+    }
+
+    // Load file icon
+    const fileIconName = getIconNameForPath(note.path, iconData)
+    if (fileIconName) {
+      fileIconSVG = await loadIconSVG(
+        fileIconName,
+        plugin,
+        iconsPath,
+        prefixToIconPack
+      )
+    } else {
+      // Fallback to default icons based on file type
+      fileIconSVG = getDefaultIconSVG(note.path)
+    }
+  }
+
+  // Svelte action to render SVG content with dynamic updates
+  function renderSVG(node: HTMLElement, svgContent: string) {
+    const parser = new DOMParser()
+    const svgDoc = parser.parseFromString(svgContent, 'image/svg+xml')
+    let svgElement = svgDoc.documentElement
+    node.appendChild(svgElement)
+    return {
+      update(newSvgContent: string) {
+        const newSvgDoc = parser.parseFromString(newSvgContent, 'image/svg+xml')
+        const newSvgElement = newSvgDoc.documentElement
+        node.replaceChild(newSvgElement, svgElement)
+        svgElement = newSvgElement
+      },
+      destroy() {
+        if (node.firstElementChild) {
+          node.removeChild(node.firstElementChild)
+        }
+      },
+    }
+  }
+  let elFolderPathIcon: HTMLElement | null = null
+  let elFilePathIcon: HTMLElement | null = null
+  let elEmbedIcon: HTMLElement | null = null
+
+  $: {
+    imagePath = null
+    if (isFileImage(note.path)) {
+      const file = plugin.app.vault.getAbstractFileByPath(note.path)
+      if (file instanceof TFile) {
+        imagePath = plugin.app.vault.getResourcePath(file)
+      }
+    }
+  }
+
+  $: matchesTitle = plugin.textProcessor.getMatches(title, note.foundWords)
+  $: matchesNotePath = plugin.textProcessor.getMatches(
+    notePath,
+    note.foundWords
+  )
+
+  // Compute body matches lazily for offscreen results
+  $: {
+    if (note.matches.length > 0) {
+      lazyMatches = note.matches
+    } else if (note.foundWords.length > 0 && note.content) {
+      // Defer heavy regex to avoid blocking first paint
+      setTimeout(() => {
+        lazyMatches = plugin.textProcessor.getMatches(
+          note.content,
+          note.foundWords
+        )
+      }, 0)
+    }
+  }
+
+  $: cleanedContent = plugin.textProcessor.makeExcerpt(
+    note.content,
+    lazyMatches[0]?.offset ?? -1
+  )
+  $: glyph = false //cacheManager.getLiveDocument(note.path)?.doesNotExist
+  $: {
+    title = note.displayTitle || note.basename
+    notePath = pathWithoutFilename(note.path)
+
+    // Icons
+    if (elFolderPathIcon) {
+      setIcon(elFolderPathIcon, 'folder-open')
+    }
+    if (elFilePathIcon) {
+      if (isFileImage(note.path)) {
+        setIcon(elFilePathIcon, 'image')
+      } else if (isFilePDF(note.path)) {
+        setIcon(elFilePathIcon, 'file-text')
+      } else if (
+        isFileCanvas(note.path) ||
+        isFileExcalidraw(note.path) ||
+        isFileBase(note.path)
+      ) {
+        setIcon(elFilePathIcon, 'layout-dashboard')
+      } else {
+        setIcon(elFilePathIcon, 'file')
+      }
+    }
+    if (elEmbedIcon) {
+      setIcon(elEmbedIcon, 'corner-down-right')
+    }
+  }
+</script>
+
+<ResultItemContainer
+  {glyph}
+  id={note.path}
+  cssClass=" {note.isEmbed ? 'omnisearch-result__embed' : ''}"
+  on:auxclick
+  on:click
+  on:longpress
+  on:mousemove
+  {selected}>
+  <div>
+    <div class="omnisearch-result__title-container">
+      <span class="omnisearch-result__title">
+        {#if note.isEmbed}
+          <span
+            bind:this={elEmbedIcon}
+            title="The document above is embedded in this note"></span>
+        {:else}
+          <!-- File Icon -->
+          {#if fileIconSVG}
+            <span class="omnisearch-result__icon" use:renderSVG={fileIconSVG}></span>
+          {/if}
+        {/if}
+        <span>
+          {@html plugin.textProcessor.highlightText(title, matchesTitle)}
+        </span>
+        {#if !note.displayTitle}
+          <span class="omnisearch-result__extension">
+            .{getExtension(note.path)}
+          </span>
+        {/if}
+
+        <!-- Counter -->
+        {#if lazyMatches.length > 0}
+          <span class="omnisearch-result__counter">
+            {lazyMatches.length}&nbsp;{lazyMatches.length > 1
+              ? 'matches'
+              : 'match'}
+          </span>
+        {/if}
+      </span>
+    </div>
+
+    <!-- Folder path -->
+    {#if notePath}
+      <div class="omnisearch-result__folder-path">
+        <!-- Folder Icon -->
+        {#if folderIconSVG}
+          <span class="omnisearch-result__icon" use:renderSVG={folderIconSVG}></span>
+        {/if}
+        <span>
+          {@html plugin.textProcessor.highlightText(notePath, matchesNotePath)}
+        </span>
+      </div>
+    {/if}
+
+    <!-- Do not display the excerpt for embedding references -->
+    {#if !note.isEmbed}
+      <div style="display: flex; flex-direction: row;">
+        {#if $showExcerpt}
+          <div class="omnisearch-result__body">
+            {@html plugin.textProcessor.highlightText(
+              cleanedContent,
+              lazyMatches
+            )}
+          </div>
+        {/if}
+
+        <!-- Image -->
+        {#if imagePath}
+          <div class="omnisearch-result__image-container">
+            <img style="width: 100px" src={imagePath} alt="" />
+          </div>
+        {/if}
+      </div>
+    {/if}
+  </div>
+</ResultItemContainer>

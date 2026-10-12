@@ -1,0 +1,6 @@
+allowBuilds:
+  esbuild: true
+  svelte-preprocess: true
+  unrs-resolver: true
+patchedDependencies:
+  dexie: patches/dexie.patch

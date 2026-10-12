@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "inlineSourceMap": true,
+    "inlineSources": true,
+    "module": "ESNext",
+    "target": "ES2021",
+    "allowJs": true,
+    "noImplicitAny": true,
+    "moduleResolution": "bundler",
+    "importHelpers": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "isolatedModules": true,
+    "strictNullChecks": true,
+    "types": [
+      "node"
+    ],
+    "lib": [
+      "DOM",
+      "ES2021"
+    ]
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.mts",
+    "**/*.svelte"
+  ]
+}
