@@ -84,6 +84,11 @@ export function getKernel(docId: string = DEFAULT_KERNEL_ID): KernelClient {
   return created;
 }
 
+/** 只查不建:该文档的内核实例,没有返回 null(视图用它对齐缓存的实例)。 */
+export function peekKernel(docId: string = DEFAULT_KERNEL_ID): KernelClient | null {
+  return instances.get(docId) ?? null;
+}
+
 /** 该文档当前选择的内核 */
 export function getKernelChoice(docId: string = DEFAULT_KERNEL_ID): KernelChoice | null {
   return choices.get(docId) ?? null;

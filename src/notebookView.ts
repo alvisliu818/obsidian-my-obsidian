@@ -49,7 +49,7 @@ import {
   parseNotebook, escapeHTML, getSourceText, setSourceText,
   renderOutputsHTML, outcomeToOutputs, makeCell, cellBadge, notebookLang,
 } from './notebook';
-import { getKernel, disposeKernel } from './kernel/registry';
+import { getKernel, peekKernel, disposeKernel } from './kernel/registry';
 import type { KernelClient, KernelStatus } from './kernel/types';
 import type JupyterNotebookPlugin from './main';
 
@@ -808,6 +808,11 @@ export class NotebookView extends ItemView {
   }
 
   private kernelFor(): KernelClient {
+    // 注册表是内核实例的唯一权威:切 Python 环境(applyPythonEnv →
+    // disposeAllKernels)会销毁旧实例,而缓存的旧内核 disposed 后 start()
+    // 永远失败 —— 表现为「切完环境后运行单元格没反应」。先对齐缓存,
+    // 实例身份变了就换绑状态监听,再按需创建。
+    this.syncKernelCache();
     if (!this.kernel) {
       this.kernel = getKernel(this.path);
       this.kernelUnsub = this.kernel.onStatus((s, detail) => this.renderKernelState(s, detail));
@@ -815,6 +820,18 @@ export class NotebookView extends ItemView {
     // 单元格里的相对路径按笔记本所在目录解析(Jupyter 标准语义)
     this.kernel.setCwd(this.path.includes('/') ? this.path.slice(0, this.path.lastIndexOf('/')) : '');
     return this.kernel;
+  }
+
+  /** 把缓存的内核实例对齐到注册表:被销毁(切环境)就丢弃,注册表有就换绑。 */
+  private syncKernelCache(): void {
+    const current = peekKernel(this.path);
+    if (current === this.kernel) return;
+    this.kernelUnsub?.();
+    this.kernelUnsub = null;
+    this.kernel = current;
+    if (current) {
+      this.kernelUnsub = current.onStatus((s, detail) => this.renderKernelState(s, detail));
+    }
   }
 
   private renderKernelState(status: KernelStatus, detail?: string): void {
@@ -940,6 +957,7 @@ export class NotebookView extends ItemView {
   }
 
   private async interrupt(): Promise<void> {
+    this.syncKernelCache();
     if (this.kernel) await this.kernel.interrupt();
   }
 
@@ -959,12 +977,12 @@ export class NotebookView extends ItemView {
   }
 
   private async restartKernel(): Promise<void> {
+    // 先对齐缓存:切环境后 this.kernel 可能是已被注册表销毁的旧实例,
+    // 不丢弃的话 reset() 因 disposed 永远失败(「内核重置失败」)。
+    this.syncKernelCache();
     if (!this.kernel) {
       // 没起过内核:重启语义 = 丢弃实例,下次运行重新拉起
       if (this.path) await disposeKernel(this.path);
-      this.kernel = null;
-      this.kernelUnsub?.();
-      this.kernelUnsub = null;
       this.renderKernelState('stopped');
       return;
     }
