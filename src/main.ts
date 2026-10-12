@@ -24,7 +24,7 @@ import {
 } from './types';
 import { mountDisplayName } from './types';
 import { isMarkdownFile } from './features/codeFileKind';
-import { isTextFileName } from './features/mountFilter';
+import { isTextFileName, extOfName } from './features/mountFilter';
 import { LogseqEditorSettingTab } from './settings/tab';
 import { BlockIndex } from './index/blockIndex';
 import {
@@ -1687,6 +1687,19 @@ export default class LogseqEditorPlugin extends Plugin {
     // editor. An allowlist of "code extensions" was the wrong shape: it sends
     // every file the list forgot to the wrong editor, which is how a
     // `.gitignore` ended up rendered as a document with headings.
+    // .ipynb 优先交给 jupyter notebook 插件（库外绝对路径 fs 直读直写）。
+    // 未装/未启用时走原路由（通常被二进制门控交给系统）。
+    if (extOfName(node.name) === 'ipynb') {
+      // App 类型不暴露 plugins（iconTheme 同款防御式访问）
+      const host = (this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } }).plugins;
+      const jupyter = host?.plugins?.['obsidian-jupyter-notebook'] as
+        | { openExternalNotebook?: (p: string) => Promise<void> }
+        | undefined;
+      if (typeof jupyter?.openExternalNotebook === 'function') {
+        await jupyter.openExternalNotebook(node.abs);
+        return;
+      }
+    }
     if (isMarkdownFile(node.name)) {
       if (await this.openInBlockEditor(mount, node)) return;
     } else {
