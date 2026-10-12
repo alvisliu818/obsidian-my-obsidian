@@ -1,0 +1,53 @@
+! Built-in element-hiding rules shipped with the plugin.
+! Syntax: [domains##]selector  (network-level rules are NOT supported)
+! Add your own rules in the plugin settings; exceptions use #@#.
+
+! --- Google ads / AdSense ---
+##ins.adsbygoogle
+##div[id^="google_ads_"]
+##div[id^="aswift_"]
+##iframe[id^="google_ads_iframe"]
+##iframe[src*="doubleclick.net"]
+##iframe[src*="googlesyndication.com"]
+##div[class*="google-auto-placed"]
+##adswrap
+##div[id^="div-gpt-ad"]
+##div[data-ad-slot]
+
+! --- Generic ad containers ---
+##div[class*="adsbygoogle"]
+##div[class*="-ad-banner"]
+##div[class^="ad-banner"]
+##div[id^="ad-banner"]
+##div[class^="banner-ad"]
+##div[aria-label="Advertisement"]
+##div[class*="advertisement"]
+##div[data-testid="placementTracking"]
+##.adsbygoogle-noablate
+
+! --- Chinese sites ---
+pos.baidu.com##div[id^="cpc_"]
+pos.baidu.com##div[class*="bdas"]
+##div[class*="pos-baidu"]
+tgb.cn###tcAd
+tgb.cn##div[class*="tgb-ad"]
+##div[class^="kp_box_"]
+##div[id^="kp_box_"]
+zhihu.com##.Pc-word
+zhihu.com##.Pc-floorAd
+zhihu.com##div[class*="AdblockBanner"]
+##div[class^="csdn-side-toolbar"]
+blog.csdn.net##div[id^="kp_box_"]
+##div[class*="recommend-ad"]
+##div[class*="feed-ad"]
+##div[class*="article-ad"]
+##.sidebar-ad
+##.top-ad
+##.bottom-ad
+
+! --- Video / interstitial overlays ---
+##div[class*="video-ad"]
+##div[class*="popup-ad"]
+##div[class*="modal-ad"]
+##div[class^="float-ad"]
+##div[class*="fixed-ad"]
