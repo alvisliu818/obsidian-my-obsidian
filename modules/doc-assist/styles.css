@@ -1,0 +1,7 @@
+/* obsidian-doc-assist — 样式随功能模块落地逐步补充 */
+
+/* Doc Assist 设置面板 */
+.doc-assist-setting-hint {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
