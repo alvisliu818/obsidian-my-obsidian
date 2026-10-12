@@ -55,6 +55,19 @@ import type JupyterNotebookPlugin from './main';
 
 export const VIEW_TYPE_NOTEBOOK = 'jupyter-notebook-view';
 
+// 库外(虚拟文档树挂载)notebook 支持:绝对盘符路径在 vault 里没有 TFile,
+// 读/写直接走 fs(nodeRequire 与 pythonEnvs.ts 同款,打包后渲染进程可用)。
+type Requirer = (id: string) => unknown;
+function nodeRequire(id: string): unknown {
+  const r = (globalThis as { require?: Requirer }).require;
+  if (typeof r === 'function') return r(id);
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  return eval('require')(id);
+}
+function isAbsoluteFsPath(p: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(p);
+}
+
 /** 阅读态懒加载余量(px):滚进视口前 400px 就建实例,离开视口销毁 */
 const RO_MARGIN = 400;
 
@@ -197,8 +210,16 @@ export class NotebookView extends ItemView {
   }
 
   async setState(state: unknown, result: ViewStateResult): Promise<void> {
-    const s = (state ?? {}) as { path?: string };
-    if (typeof s.path === 'string') this.path = s.path;
+    // 两种入口形态:openNotebook 显式传 {path};registerExtensions 后的 openFile
+    // (点击/双击/链接跳转)传 FileState{file} —— 两者都要接管,否则点击打开空白。
+    const s = (state ?? {}) as { path?: string; file?: string };
+    const incoming =
+      typeof s.path === 'string' && s.path
+        ? s.path
+        : typeof s.file === 'string' && s.file
+          ? s.file
+          : '';
+    if (incoming) this.path = incoming;
     this.fileName = this.path.split('/').pop() ?? this.path;
     await super.setState(state, result);
     if (this.path) this.mount();
@@ -275,11 +296,17 @@ export class NotebookView extends ItemView {
       // TFile 用顶部静态导入;渲染进程解析不了裸模块名(import('obsidian') 会抛
       // Failed to resolve module specifier),类型位写法可以,运行时不行。
       const file = this.app.vault.getAbstractFileByPath(this.path);
-      if (!(file instanceof TFile)) {
+      let text: string;
+      if (file instanceof TFile) {
+        text = await this.app.vault.read(file);
+      } else if (isAbsoluteFsPath(this.path)) {
+        // 库外(虚拟文档树挂载)文件:vault 里没有 TFile,fs 直读
+        const fs = nodeRequire('fs') as { readFileSync(p: string, e: string): string };
+        text = fs.readFileSync(this.path, 'utf8');
+      } else {
         this.bodyEl.innerHTML = `<div class="lgp-nb__loading">文件不存在: ${escapeHTML(this.path)}</div>`;
         return;
       }
-      const text = await this.app.vault.read(file);
       const { nb, error } = parseNotebook(text);
       if (nb) {
         this.nb = nb;
@@ -343,8 +370,15 @@ export class NotebookView extends ItemView {
     try {
       const data = this.saveContent();
       const file = this.app.vault.getAbstractFileByPath(this.path);
-      if (!file) throw new Error('文件不存在');
-      await this.app.vault.modify(file as TFile, data);
+      if (file instanceof TFile) {
+        await this.app.vault.modify(file, data);
+      } else if (isAbsoluteFsPath(this.path)) {
+        // 库外文件:fs 直写
+        const fs = nodeRequire('fs') as { writeFileSync(p: string, d: string, e: string): void };
+        fs.writeFileSync(this.path, data, 'utf8');
+      } else {
+        throw new Error('文件不存在');
+      }
       this.setDirty(false);
       if (notify) new Notice(`已保存 ${this.fileName}`);
     } catch (e) {

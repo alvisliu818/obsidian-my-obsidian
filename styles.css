@@ -191,7 +191,7 @@
 
 /* markdown 单元格预览 */
 .lgp-nb__mdview {
-  padding: 8px 14px;
+  padding: 2px 10px;
   cursor: default;
 }
 .lgp-nb__mdview > *:first-child { margin-top: 0; }

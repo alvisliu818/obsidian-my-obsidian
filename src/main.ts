@@ -117,6 +117,31 @@ export default class JupyterNotebookPlugin extends Plugin {
 	}
 
 	/** 在新标签页打开 notebook(复用已有同文件视图则聚焦) */
+	/**
+	 * 库外(虚拟文档树挂载)notebook:绝对路径，vault 里没有 TFile。
+	 * 路径统一正斜杠（与 vault path 形态一致，view 内 cwd 提取按 '/' 切分）；
+	 * 读/写走 fs（notebookView 内按 isAbsoluteFsPath 分流）。
+	 */
+	async openExternalNotebook(absPath: string): Promise<void> {
+		const path = absPath.replace(/\\/g, '/');
+		const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_NOTEBOOK);
+		for (const leaf of leaves) {
+			const view = leaf.view as NotebookView;
+			if (view.path === path) {
+				this.app.workspace.setActiveLeaf(leaf, { focus: true });
+				return;
+			}
+		}
+		const leaf: WorkspaceLeaf = this.app.workspace.getLeaf('tab');
+		await leaf.setViewState({
+			type: VIEW_TYPE_NOTEBOOK,
+			active: true,
+			state: { path },
+		});
+		this.app.workspace.setActiveLeaf(leaf, { focus: true });
+		new Notice(`Notebook: ${path.split('/').pop() ?? path}`, 1500);
+	}
+
 	async openNotebook(file: TFile): Promise<void> {
 		// 同文件去重:已打开的 Notebook 视图直接聚焦
 		const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_NOTEBOOK);

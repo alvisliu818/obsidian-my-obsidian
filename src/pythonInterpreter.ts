@@ -74,8 +74,21 @@ function nodeRequire(id: string): unknown {
   return eval('require')(id);
 }
 
+/**
+ * 用户在设置页指定的解释器路径覆盖（setPythonInterpreterOverride 注入）。
+ * 设置后 resolvePythonInterpreter 优先返回它；置空回到自动探测。
+ */
+let interpreterOverride: PythonCandidate | null = null;
+
+/** 设置自定义 Python 解释器路径（空串清除覆盖，回到自动探测）。 */
+export function setPythonInterpreterOverride(path: string): void {
+  const p = (path || '').trim();
+  interpreterOverride = p ? { cmd: p, args: [] } : null;
+}
+
 /** 探测本机可用的 Python 解释器;找不到返回 null。每次调用即时探测(很便宜)。 */
 export function resolvePythonInterpreter(): PythonCandidate | null {
+  if (interpreterOverride) return interpreterOverride;
   const proc = (
     globalThis as { process?: { platform?: string; env?: Record<string, string | undefined> } }
   ).process;
