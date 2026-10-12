@@ -11,10 +11,13 @@
  * *.bak-pre-merge first, and the old plugins are NOT deleted (switch them off
  * in Settings → Community plugins yourself, once you are happy).
  *
+ * The vault path is NEVER a default — this repo is public, and a hard-coded
+ * default would publish where your notes live. Pass it (or set OBSIDIAN_VAULT).
+ *
  * Usage:
- *   node scripts/migrate-settings.mjs                       # preview
- *   node scripts/migrate-settings.mjs --apply               # write
- *   node scripts/migrate-settings.mjs --vault <path> --apply
+ *   node scripts/migrate-settings.mjs --vault "<库路径>"            # preview
+ *   node scripts/migrate-settings.mjs --vault "<库路径>" --apply    # write
+ *   OBSIDIAN_VAULT="<库路径>" node scripts/migrate-settings.mjs --apply
  */
 import { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
@@ -22,7 +25,16 @@ import path from "node:path";
 const args = process.argv.slice(2);
 const apply = args.includes("--apply");
 const vaultFlag = args.indexOf("--vault");
-const VAULT = vaultFlag >= 0 ? args[vaultFlag + 1] : "E:\\HOME\\BaiduSyncdisk";
+const VAULT = (vaultFlag >= 0 ? args[vaultFlag + 1] : process.env.OBSIDIAN_VAULT) ?? "";
+
+if (!VAULT) {
+	console.error(
+		"需要指定库路径：\n" +
+			'  node scripts/migrate-settings.mjs --vault "E:\\\\你的库" [--apply]\n' +
+			"或设置环境变量 OBSIDIAN_VAULT。",
+	);
+	process.exit(1);
+}
 
 /** Plugin folder -> module id in the merged plugin. */
 const SOURCES = [
