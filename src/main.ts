@@ -76,6 +76,7 @@ import { isExtensionInstalled } from './extensions/extensionStore';
 import { hasGrammarForFence } from './extensions/tmEngine';
 import { TerminalView, VIEW_TYPE_TERMINAL } from './terminal/terminalView';
 import { shutdownPtyHelper } from './terminal/ptyClient';
+import { shutdownAllLsp } from './lsp/lspHost';
 import type { ExtensionSource } from './extensions/types';
 import { registerGrammarFromExtension, unregisterGrammarFromExtension, ensureTmEngineReady } from './extensions/tmEngine';
 import { loadOpLog, logOp, flushOpLog } from './features/logger';
@@ -826,6 +827,7 @@ export default class LogseqEditorPlugin extends Plugin {
   }
 
   onunload(): void {
+    void shutdownAllLsp();
     shutdownPtyHelper();
     logOp(this, 'plugin.unload', '', 'ok');
     if (this.mountRefreshTimer) {
@@ -961,6 +963,7 @@ export default class LogseqEditorPlugin extends Plugin {
     );
     this.settings.externalCodeWrap = this.settings.externalCodeWrap !== false;
     this.settings.lspEnabled = this.settings.lspEnabled !== false;
+    if (!Array.isArray(this.settings.lspServers)) this.settings.lspServers = [];
     this.settings.externalBanner = this.settings.externalBanner !== false;
 
     // "Open with": a config that never had the key gets the presets, so a fresh

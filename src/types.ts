@@ -248,6 +248,8 @@ export interface BlockEditorSettings {
   externalCodeWrap: boolean;
   /** LSP（Python 代码文件的 pyright 补全/提示/诊断）开关 */
   lspEnabled: boolean;
+  /** 用户自定义语言服务器（语言→启动命令映射）；内置 pyright 不入此表，仅可用同 id 条目覆盖 enabled */
+  lspServers: LspServerSpec[];
   /**
    * Open a mounted file in a split pane rather than replacing the current tab.
    *
@@ -376,6 +378,25 @@ export function mountDisplayName(m: ExternalMount): string {
  * One "open with" entry: an external application that can be handed a file.
  * `%1` in `args` is the file's absolute path, `%d` its containing folder.
  */
+/** LSP 语言服务器配置：语言 → 启动命令映射（多语言通用化） */
+export interface LspServerSpec {
+  /** 唯一 id；内置 pyright 固定 'pyright'，用户添加的自取 */
+  id: string;
+  /** 匹配的 languageId（即文件扩展名小写），如 ['python']、['ts','tsx'] */
+  languages: string[];
+  /** node = 用系统 node.exe 跑 JS 脚本（复用终端的 node 发现）；direct = 直接 spawn 可执行文件 */
+  launch: 'node' | 'direct';
+  /** node 模式：脚本路径（相对插件目录或绝对）；direct 模式：可执行文件名/路径 */
+  command: string;
+  /** 追加参数（如 ['--stdio']） */
+  args: string[];
+  enabled: boolean;
+  /** generic 服务器按 section 回复的静态 workspace/configuration（pyright 内置语义不需要） */
+  config?: { section: string; value: unknown }[];
+  /** 内置预设（不可删除，仅可禁用） */
+  builtin?: boolean;
+}
+
 export interface OpenWithApp {
   id: string;
   /** Label shown in the menu. */
@@ -491,6 +512,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   officeViewerEnabled: true,
   imageViewerTakeOver: false,
   openWithApps: [],
+  lspServers: [],
   recentFiles: [],
   contentSearch: { ...DEFAULT_CONTENT_SEARCH },
 };

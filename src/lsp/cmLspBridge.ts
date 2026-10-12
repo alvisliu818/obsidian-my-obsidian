@@ -20,9 +20,9 @@ import {
   lspCompletion,
   lspHover,
   onLspDiagnostics,
-} from './pyrightHost';
+} from './lspHost';
+import { resolveLspSpec } from './serverSpecs';
 import type LogseqEditorPlugin from '../main';
-import { absolutePluginDir } from '../terminal/ptyClient';
 
 interface DiagRange {
   from: number;
@@ -91,22 +91,18 @@ export interface LspBridgeOptions {
   languageId: string; // 'python'
 }
 
-/** 构建 LSP 桥扩展（非 python / 设置关闭时返回空数组） */
+/** 构建 LSP 桥扩展（无匹配 server / 设置关闭时返回空数组） */
 export function lspBridgeExtensions(opts: LspBridgeOptions): Extension[] {
-  if (opts.languageId !== 'python') return [];
+  if (!resolveLspSpec(opts.languageId, opts.plugin.settings.lspServers)) return [];
   if (opts.plugin.settings.lspEnabled === false) return [];
 
-  const { absPath, plugin } = opts;
-  const absPluginDir = absolutePluginDir(plugin.manifest.dir ?? '', plugin.app.vault.adapter);
-  // DataAdapter 类型不暴露 getBasePath；运行时存在（openWith.ts 同款断言）
-  const adapter = plugin.app.vault.adapter as unknown as { getBasePath?: () => string; basePath?: string };
-  const vaultBase = typeof adapter.getBasePath === 'function' ? adapter.getBasePath() : adapter.basePath || '';
+  const { absPath, plugin, languageId } = opts;
 
   const uriTail = absPath.toLowerCase().replace(/\\/g, '/');
 
   const completionSource = async (ctx: CompletionContext): Promise<CompletionResult | null> => {
     const line = ctx.state.doc.lineAt(ctx.pos);
-    const items = await lspCompletion(absPath, line.number - 1, ctx.pos - line.from);
+    const items = await lspCompletion(plugin, languageId, absPath, line.number - 1, ctx.pos - line.from);
     if (!items.length) return null;
     const word = ctx.matchBefore(/[A-Za-z0-9_]+/);
     const from = word ? word.from : ctx.pos;
@@ -130,7 +126,7 @@ export function lspBridgeExtensions(opts: LspBridgeOptions): Extension[] {
     async (view: EditorView, pos: number, side: -1 | 1) => {
       void side;
       const line = view.state.doc.lineAt(pos);
-      const md = await lspHover(absPath, line.number - 1, pos - line.from);
+      const md = await lspHover(plugin, languageId, absPath, line.number - 1, pos - line.from);
       if (!md) return null;
       return { pos, create: () => ({ dom: markdownDom(md) }) };
     },
@@ -141,7 +137,7 @@ export function lspBridgeExtensions(opts: LspBridgeOptions): Extension[] {
     class implements PluginValue {
       private unregDiag: (() => void) | null = null;
       constructor(view: EditorView) {
-        void openLspDocument(absPluginDir, vaultBase, absPath, opts.languageId, view.state.doc.toString());
+        void openLspDocument(plugin, absPath, opts.languageId, view.state.doc.toString());
         this.unregDiag = onLspDiagnostics((ds) => {
           // pyright 回传的 uri 是 vscode-uri 规范化形态（盘符小写 + 冒号 percent-encode，
           // 如 file:///e%3A/HOME/...），与客户端发送形态（file:///E:/...）不同；
@@ -162,7 +158,7 @@ export function lspBridgeExtensions(opts: LspBridgeOptions): Extension[] {
       }
       update(u: ViewUpdate) {
         if (u.docChanged) {
-          void openLspDocument(absPluginDir, vaultBase, absPath, opts.languageId, u.state.doc.toString());
+          void openLspDocument(plugin, absPath, opts.languageId, u.state.doc.toString());
         }
       }
       destroy() {

@@ -6,7 +6,9 @@ import { MountListModal } from '../panels/mountModals';
 import { VIEW_TYPE_MOUNT_PANEL } from '../panels/mountPanel';
 import { VIEW_TYPE_CONTENT_SEARCH } from '../panels/contentSearchPanel';
 import { OpenWithEditModal } from '../features/openWithUi';
-import { mountDisplayName, type PagePropsEditor, type ScopeMode, type ShortcutOverrides } from '../types';
+import { mountDisplayName, type LspServerSpec, type PagePropsEditor, type ScopeMode, type ShortcutOverrides } from '../types';
+import { effectiveLspServers } from '../lsp/serverSpecs';
+import { LspServerEditModal } from './lspServerModal';
 import { SHORTCUT_GROUP_LABELS } from '../types';
 
 export class LogseqEditorSettingTab extends PluginSettingTab {
@@ -118,6 +120,89 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       .setDesc('从 Open VSX / VSCode Marketplace 搜索并安装 VSCode 扩展（TextMate 语法等），供块编辑器消费。')
       .addButton((b) => b.setButtonText('打开扩展市场').onClick(() => new ExtensionMarketModal(this.plugin).open()));
     // ---------- Shortcuts ----------
+    // ---------- LSP ----------
+    containerEl.createEl('h3', { text: 'LSP 语言服务器' });
+
+    new Setting(containerEl)
+      .setName('LSP（补全/悬停/诊断）')
+      .setDesc(
+        '库外代码文件的补全、悬停提示与诊断。语言服务器随下面配置的 Python 环境解析代码（如 ai 环境的 numpy/torch），' +
+          '切换环境后自动重启。内置 pyright（Python）开箱即用；其他语言用下方列表接入任意 --stdio 语言服务器。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.lspEnabled !== false).onChange(async (v) => {
+          this.plugin.settings.lspEnabled = v;
+          await this.plugin.saveSettings();
+          this.plugin.rerenderExternalViews();
+        }),
+      );
+
+    const lspServers = effectiveLspServers(this.plugin.settings.lspServers);
+    for (const s of lspServers) {
+      const covered = (this.plugin.settings.lspServers ?? []).find((u) => u.id === s.id);
+      const enabledNow = s.enabled;
+      const row = new Setting(containerEl)
+        .setName(`${s.builtin ? '内置 ' : ''}${s.id}${enabledNow ? '' : '（已停用）'}`)
+        .setDesc(`${s.languages.join(', ')} → ${s.launch === 'node' ? `node ${s.command}` : s.command} ${s.args.join(' ')}`.trim());
+      row.addToggle((t) =>
+        t.setValue(enabledNow).onChange(async (v) => {
+          if (s.builtin) {
+            // 内置 pyright 的开关存在用户覆盖条目里，升级不丢
+            const list = this.plugin.settings.lspServers ?? [];
+            const i = list.findIndex((u) => u.id === s.id);
+            if (i >= 0) list[i] = { ...list[i], enabled: v };
+            else list.push({ id: s.id, languages: [...s.languages], launch: s.launch, command: s.command, args: [...s.args], enabled: v });
+            this.plugin.settings.lspServers = list;
+          } else {
+            s.enabled = v;
+          }
+          await this.plugin.saveSettings();
+          this.plugin.rerenderExternalViews();
+          this.display();
+        }),
+      );
+      if (!s.builtin) {
+        row
+          .addExtraButton((b) =>
+            b.setIcon('settings').setTooltip('编辑').onClick(() => {
+              new LspServerEditModal(this.plugin.app, s, async (next: LspServerSpec) => {
+                const list = this.plugin.settings.lspServers ?? [];
+                const i = list.findIndex((u) => u.id === covered?.id);
+                if (i >= 0) list[i] = next;
+                else list.push(next);
+                this.plugin.settings.lspServers = list;
+                await this.plugin.saveSettings();
+                this.plugin.rerenderExternalViews();
+                this.display();
+              }).open();
+            }),
+          )
+          .addExtraButton((b) =>
+            b.setIcon('trash').setTooltip('删除').onClick(async () => {
+              this.plugin.settings.lspServers = (this.plugin.settings.lspServers ?? []).filter((u) => u.id !== s.id);
+              await this.plugin.saveSettings();
+              this.plugin.rerenderExternalViews();
+              this.display();
+            }),
+          );
+      }
+    }
+
+    new Setting(containerEl).setName('添加').addButton((b) =>
+      b
+        .setButtonText('添加语言服务器')
+        .onClick(() => {
+          new LspServerEditModal(this.plugin.app, null, async (next: LspServerSpec) => {
+            const list = this.plugin.settings.lspServers ?? [];
+            list.push(next);
+            this.plugin.settings.lspServers = list;
+            await this.plugin.saveSettings();
+            this.plugin.rerenderExternalViews();
+            this.display();
+          }).open();
+        }),
+    );
+
     containerEl.createEl('h3', { text: '快捷键' });
 
     new Setting(containerEl)
