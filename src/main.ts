@@ -1,0 +1,198 @@
+/**
+ * My Obsidian — one plugin hosting several of the author's add-ons.
+ *
+ * Each module is the ORIGINAL plugin class, unmodified: it still calls
+ * `this.loadData()` / `this.saveData()` and still thinks it owns its data.json.
+ * What makes four of them coexist is two things done here:
+ *
+ *  1. every instance gets its own slice of our single data.json (its `loadData`
+ *     returns `settings.modules[id].data`, its `saveData` writes it back), and
+ *  2. it is handed the host's manifest, so `manifest.dir` points at the one
+ *     real plugin folder — sidecar files (wasm, preload scripts) land in the
+ *     same place they did before.
+ *
+ * That is the whole trick. No module had to be rewritten to become a module.
+ */
+import { Notice, Plugin } from "obsidian";
+import type { App, PluginManifest } from "obsidian";
+import {
+	DEFAULT_SETTINGS,
+	MyObsidianSettingTab,
+	defaultModuleState,
+	type ModuleDescriptor,
+	type ModuleState,
+	type MyObsidianSettings,
+	type SubPluginLike,
+} from "./settings";
+
+import LogseqEditorPlugin from "../modules/logseq/src/main";
+import BrowserPlugin from "../modules/browser/src/main";
+import JupyterNotebookPlugin from "../modules/jupyter/src/main";
+import BreadcrumbNavPlugin from "../modules/breadcrumb/src/main";
+
+export default class MyObsidianPlugin extends Plugin {
+	settings: MyObsidianSettings = DEFAULT_SETTINGS;
+
+	/** Loaded modules, by id. */
+	private readonly live = new Map<string, SubPluginLike>();
+	/** Old plugin ids we re-published into the app's plugin table. */
+	private readonly aliases: string[] = [];
+
+	readonly descriptors: ModuleDescriptor[] = [
+		{
+			id: "logseq",
+			// The id other modules look this one up by (jupyter reads
+			// `pythonEnvs` off it, breadcrumb reads its mount list).
+			legacyId: "obsidian-logseq",
+			name: "Logseq Editor",
+			summary: "Logseq 式块大纲编辑器：折叠、缩放、块引用、任务、SQLite 索引，以及库外文件的虚拟文档树。",
+			desktopOnly: true,
+			cls: LogseqEditorPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			id: "browser",
+			legacyId: "obsidian-browser",
+			name: "Browser",
+			summary: "库内的多标签浏览器：地址栏、书签、历史、下载、网页剪藏与 Chrome 扩展支持。",
+			desktopOnly: true,
+			cls: BrowserPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			id: "jupyter",
+			legacyId: "obsidian-jupyter-notebook",
+			name: "Jupyter Notebook",
+			summary: "在库里查看、编辑并运行 .ipynb，自带常驻 Python 内核。",
+			desktopOnly: true,
+			cls: JupyterNotebookPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			id: "breadcrumb",
+			legacyId: "breadcrumb-nav",
+			name: "Breadcrumb Nav",
+			summary: "笔记顶部的面包屑（文件 › 标题 / 块层级），支持悬浮查看同级与逐级下钻。",
+			desktopOnly: false,
+			cls: BreadcrumbNavPlugin as unknown as ModuleDescriptor["cls"],
+		},
+	];
+
+	async onload(): Promise<void> {
+		await this.loadSettings();
+		this.addSettingTab(
+			new MyObsidianSettingTab(this.app, this, {
+				settings: this.settings,
+				descriptors: this.descriptors,
+				save: () => this.saveSettings(),
+				reload: (id) => this.enableModule(id),
+			}),
+		);
+		for (const d of this.descriptors) await this.bootModule(d);
+	}
+
+	/** Which modules actually came up. Used by the e2e probe and handy in the
+	 *  console when a feature looks missing. */
+	loadedModuleIds(): string[] {
+		return Array.from(this.live.keys());
+	}
+
+	onunload(): void {
+		// Leave the app's plugin table exactly as we found it.
+		const table = (
+			this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } }
+		).plugins?.plugins;
+		for (const alias of this.aliases) if (table) delete table[alias];
+		for (const [id, inst] of this.live) {
+			try {
+				inst.onunload?.();
+			} catch (e) {
+				console.error(`[my-obsidian] ${id} failed to unload`, e);
+			}
+		}
+		this.live.clear();
+	}
+
+	// ------------------------------------------------------------------
+
+	async loadSettings(): Promise<void> {
+		const raw = (await this.loadData()) as Partial<MyObsidianSettings> | null;
+		this.settings = { modules: {} };
+		for (const d of this.descriptors) {
+			this.settings.modules[d.id] = Object.assign(
+				defaultModuleState(d.desktopOnly),
+				raw?.modules?.[d.id],
+			);
+		}
+	}
+
+	async saveSettings(): Promise<void> {
+		await this.saveData(this.settings);
+	}
+
+	/** Boot a module if its switch is on. A failing module must not take the
+	 *  others down with it — one broken feature should not brick the plugin. */
+	private async bootModule(d: ModuleDescriptor): Promise<void> {
+		const state = this.settings.modules[d.id];
+		if (!state?.enabled) return;
+		if (this.live.has(d.id)) return;
+		try {
+			await this.startModule(d, state);
+		} catch (e) {
+			console.error(`[my-obsidian] ${d.id} failed to load`, e);
+			new Notice(`「${d.name}」载入失败，其余功能不受影响（详情见控制台）`);
+		}
+	}
+
+	/** Turn a module on at runtime (the settings toggle). */
+	async enableModule(id: string): Promise<void> {
+		const d = this.descriptors.find((x) => x.id === id);
+		const state = this.settings.modules[id];
+		if (!d || !state) return;
+		await this.bootModule(d);
+	}
+
+	/**
+	 * Instantiate a sub-plugin and run its onload with its own data slice.
+	 *
+	 * Two small lies make four plugins behave as one:
+	 *
+	 *  - `loadData`/`saveData` are shadowed on the instance, so the module sees
+	 *    only its own slice of the one data.json (shadowing the instance, not
+	 *    the prototype, keeps the swap scoped to this module).
+	 *  - the manifest is a SHALLOW COPY with `name` replaced. `id` and `dir`
+	 *    must stay the host's: logseq builds its extension-store path from
+	 *    `manifest.id` and writes sidecar files under `manifest.dir`, so
+	 *    changing either would point outside the real plugin folder. The name
+	 *    is what the settings sidebar labels the tab with — sharing the host's
+	 *    name would show five tabs all called "My Obsidian".
+	 */
+	private async startModule(d: ModuleDescriptor, state: ModuleState): Promise<void> {
+		const manifest = { ...this.manifest, name: d.name } as PluginManifest;
+		const inst = new d.cls(this.app as App, manifest);
+		const host = this;
+		inst.loadData = async (): Promise<unknown> => state.data ?? {};
+		inst.saveData = async (data: unknown): Promise<void> => {
+			state.data = data;
+			await host.saveSettings();
+		};
+		await inst.onload();
+		this.live.set(d.id, inst);
+		this.aliasLegacyId(d, inst);
+	}
+
+	/**
+	 * Re-publish the instance under the id it had as a standalone plugin.
+	 *
+	 * Adds a key to the app's plugin table and nothing else: the enable/disable
+	 * list comes from community-plugins.json, not from this table, so no ghost
+	 * plugin appears in the settings. It only makes `app.plugins.plugins[oldId]`
+	 * resolve again for the modules (and third-party plugins) that look it up.
+	 */
+	private aliasLegacyId(d: ModuleDescriptor, inst: SubPluginLike): void {
+		if (!d.legacyId) return;
+		const table = (
+			this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } }
+		).plugins?.plugins;
+		if (!table) return;
+		table[d.legacyId] = inst;
+		this.aliases.push(d.legacyId);
+	}
+}

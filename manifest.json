@@ -1,0 +1,10 @@
+{
+  "id": "obsidian-my-obsidian",
+  "name": "My Obsidian",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "One plugin for the author's Obsidian add-ons: Logseq-style block editor, in-app browser, Jupyter notebooks and breadcrumb navigation — each can be switched off in the settings.",
+  "author": "alvisliu",
+  "authorUrl": "https://github.com/alvisliu818",
+  "isDesktopOnly": true
+}

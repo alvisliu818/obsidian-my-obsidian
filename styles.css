@@ -1,0 +1,5482 @@
+/* My Obsidian — 各子功能的样式按模块拼接。
+   类名互不冲突：CodeMirror 的规则各家都带自己的容器前缀
+   (.block-content / .lgp-nb__*)，.is-active 之类状态类也都带前缀。 */
+
+/* ==================== Logseq Editor (modules/logseq) ==================== */
+/* ==========================================================================
+   Obsidian Logseq-style block editor
+   Visual language mirrored after Logseq: bullets, collapse carets, vertical
+   children guides, hover highlights, breadcrumbs. All colors via Obsidian CSS
+   variables so light/dark themes work automatically.
+   ========================================================================== */
+
+/* ---------- Layout ---------- */
+.block-editor-container {
+  position: relative;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.block-editor-breadcrumb {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 6px 18px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  font-size: 0.82em;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.block-editor-breadcrumb .bc-crumb {
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.block-editor-breadcrumb .bc-crumb:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.block-editor-breadcrumb .bc-crumb.is-current {
+  color: var(--text-normal);
+  font-weight: 600;
+}
+
+.block-editor-breadcrumb .bc-sep {
+  opacity: 0.5;
+  padding: 0 2px;
+}
+
+.block-editor-breadcrumb .bc-zoom-out {
+  margin-left: auto;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.block-editor-breadcrumb .bc-zoom-out:hover {
+  background: var(--background-modifier-hover);
+}
+
+.block-editor-scroller {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 12px 12px 6px;
+  scrollbar-gutter: stable;
+}
+
+/* Scroll-comfort gap after the outline (scroll the last block toward center).
+   The page-references host follows AFTER this gap so the bottom references
+   stay part of the scrollable page and can be scrolled to the very bottom. */
+/* 片段宿主（renderMarkdownFragment → .lgp-fragment，如 jupyter notebook 的
+   md 单元格预览）：高度随内容自适应、不独立滚动。整页编辑器的滚动舒适区
+   与大 padding 在这里会变成内容下方的可见空白，覆盖之，让高度紧贴内容。 */
+.lgp-fragment .block-editor-tree {
+  padding-bottom: 0;
+}
+.lgp-fragment .block-editor-scroller {
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+/* 底部“添加块”占位行（25px）：片段内回车即可加块，jupyter 也有自己的
+   插入按钮，这行在短内容下是纯空白。 */
+.lgp-fragment .block-editor-addblock {
+  display: none;
+}
+
+.block-editor-tree {
+  padding-bottom: 45vh;
+  /* ↑ 整页编辑器的滚动舒适区（把最后一块滚到视口中央）。
+     片段宿主（.lgp-fragment，如 jupyter notebook 的 md 单元格）高度随内容
+     自适应、不独立滚动，45vh 会变成内容下方的可见空白 —— 上方规则覆盖。 */
+  /* Room for the depth-0 fold carets: they float LEFT of the bullet column
+     (Logseq keeps them in the page margin — no layout space). */
+  padding-left: 16px;
+  /* The bullet/controls column width — defined HERE so the add-block row
+     (a sibling of the wraps, outside any .block-wrap) inherits it too;
+     its line/plus anchor with the same var as the guide line. */
+  --lgp-controls-w: 16px;
+  /* The native editor's document font: the app's var(--font-text) rule is
+     scoped to .markdown-source-view, which this tree is not — without this
+     the outline fell back to the INTERFACE font chain. */
+  font-family: var(--font-text);
+  /* Native text parity (same two gaps vs the native editor, same cause —
+     theme rules scoped to .markdown-source-view that this tree never
+     matches):
+     - size: the native editor renders at --font-text-size (16px here); this
+       tree inherited the BODY size (15px) — smaller glyphs rasterize with
+       visibly thinner strokes.
+     - smoothing: Blue Topaz applies subpixel-antialiased to the native
+       cm-scroller; the default `auto` here renders grayscale-lighter.
+     Together they made the outline text look a whole weight step lighter
+     than the native editor's at the same numeric font-weight. */
+  font-size: var(--font-text-size, 1em);
+  -webkit-font-smoothing: subpixel-antialiased;
+}
+
+/* ---------- Block row ---------- */
+.block-wrap {
+  position: relative;
+  --lgp-content-pad: 5px; /* .block-content horizontal padding — the
+                             Logseq-ish dot-to-text gap */
+}
+
+.block-main {
+  display: flex;
+  align-items: flex-start;
+  border-radius: 4px;
+}
+
+.block-controls {
+  position: relative; /* anchors the floating caret */
+  display: flex;
+  align-items: center;
+  flex: none;
+  height: 1.55em;
+  width: var(--lgp-controls-w, 32px);
+  user-select: none;
+}
+
+/* collapse caret — floats over the LEFT MARGIN (outside the bullet column,
+   takes no layout space, Logseq-style) and is revealed by row hover only;
+   a COLLAPSED block is signalled by the gray halo on its bullet instead.
+   Hidden state = opacity 0 with visibility kept: the invisible caret stays
+   hit-testable, so hovering its margin zone reveals it directly (previously
+   visibility:hidden made the zone dead — the caret only appeared once the
+   pointer reached the content). */
+.block-caret {
+  position: absolute;
+  top: 50%;
+  left: -16px;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-faint);
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.block-main:hover .block-caret,
+.embed-main:hover .block-caret,
+.block-caret:hover {
+  opacity: 1;
+}
+
+/* touch devices have no hover: keep the floating caret always visible */
+@media (hover: none) and (pointer: coarse) {
+  .block-caret {
+    opacity: 1;
+    visibility: visible;
+  }
+}
+
+.block-caret:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.block-caret svg {
+  width: 10px;
+  height: 10px;
+  transition: transform 0.12s ease;
+}
+
+.block-caret.is-collapsed svg {
+  transform: rotate(-90deg);
+}
+
+/* A FOLDED block keeps its arrow visible: the row is collapsed, the arrow has
+   rotated to point at the hidden content, and it is the only way back. Every
+   unfolded row stays hover-only, so a document shows no column of arrows until
+   the pointer is over a row. */
+.block-caret.is-persistent {
+  opacity: 1;
+}
+
+.block-caret:focus-visible {
+  opacity: 1;
+  outline: 1px solid var(--text-accent);
+  outline-offset: 1px;
+}
+
+/* --- folded block summary ------------------------------------------------ */
+/* Replaces the block body while folded. The text is untouched in the file;
+   this is a view state, so unfolding restores the block exactly. */
+.block-fold-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 1.55em;
+  padding: 1px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller, 0.85em);
+  border-left: 2px solid var(--background-modifier-border, var(--text-faint));
+  background: var(--background-secondary);
+}
+
+.block-fold-summary:hover {
+  color: var(--text-muted);
+  border-left-color: var(--text-accent);
+  background: var(--background-modifier-hover);
+}
+
+.block-fold-summary:focus-visible {
+  outline: 1px solid var(--text-accent);
+  outline-offset: 1px;
+}
+
+/* The placeholder for a folded childless block: a type chip so a document of
+   folded blocks is scannable, then whatever identifies it. */
+.block-fold-summary {
+  color: var(--text-muted);
+}
+
+.block-fold-kind {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: 0.92em;
+  font-weight: 500;
+}
+
+.block-fold-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-monospace);
+  font-size: 1.02em;
+}
+
+.block-fold-meta {
+  flex: none;
+  opacity: 0.7;
+  font-size: 0.9em;
+  white-space: nowrap;
+}
+
+/* bullet */
+.block-bullet {
+  position: relative; /* anchors the invisible touch-area extension */
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: 50%;
+}
+
+/* invisible tap-area extension: bigger touch target WITHOUT widening the box
+   — the dot must stay centered in the 16px column (the guide line and the
+   add-block plus anchor to that exact center) */
+.block-bullet::after {
+  content: '';
+  position: absolute;
+  top: -6px;
+  bottom: -6px;
+  left: -4px;
+  right: -4px;
+}
+
+.block-bullet::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  /* light gray, theme-adaptive (Logseq's dots are very faint) */
+  background: color-mix(in srgb, var(--text-normal) 22%, transparent);
+}
+
+/* row hover darkens the dot a step (affordance survives the lighter base) */
+.block-main:hover .block-bullet::before {
+  background: color-mix(in srgb, var(--text-normal) 40%, transparent);
+}
+
+/* COLLAPSED block: Logseq's folded indicator — a light gray circular halo
+   around the dot (no persistent caret; the caret stays hover-only). */
+.block-wrap.is-collapsed .block-bullet::before,
+.embed-row.is-collapsed .block-bullet::before {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--text-normal) 9%, transparent);
+}
+
+/* ---------- Block content ---------- */
+.block-content {
+  flex: 1;
+  /* Permit shrinking below the content's min-width — otherwise a long
+     white-space:pre line (code block) expands the whole row instead of
+     scrolling inside its box. */
+  min-width: 0;
+  min-height: 1.55em;
+  padding: 1px var(--lgp-content-pad, 6px);
+  line-height: 1.55;
+  cursor: text;
+  word-break: break-word;
+}
+
+.block-content > p:first-child {
+  margin-top: 0;
+}
+
+.block-content > p:last-child {
+  margin-bottom: 0;
+}
+
+/* raw blocks (headings, paragraphs, fences) keep native spacing */
+.block-raw .block-content {
+  cursor: default;
+}
+
+/* marker checkbox (TODO / DOING / DONE) */
+.block-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+  vertical-align: -3px;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  color: transparent;
+  user-select: none;
+}
+
+.block-marker:hover {
+  border-color: var(--text-accent);
+}
+
+.block-marker.doing {
+  border-color: var(--text-accent);
+  background: linear-gradient(to top, var(--text-accent) 45%, transparent 45%);
+}
+
+.block-marker.done {
+  border-color: var(--text-success);
+  background: var(--text-success);
+  color: var(--background-primary);
+}
+
+.block-marker.done::after {
+  content: '✓';
+}
+
+/* ---------- Children guides ---------- */
+.block-children-container {
+  display: flex;
+  margin-left: 16px;
+  /* Children indent: the guide line is absolutely positioned against the
+     PARENT WRAP (this container deliberately stays non-positioned so the
+     guideLayout calibration's wrap-relative offsets are correct). */
+  padding-left: 16px;
+}
+
+.block-children-left-border {
+  /* Centered under the parent bullet's dot: the dot's center sits at
+     controls-width − 8px from the wrap left; the container is indented 16px,
+     the line is 2px wide. Both ends stop the SAME distance past their dot
+     (top = parent dot, bottom = last child's dot): dot center + 3px radius
+     + 4px gap. */
+  position: absolute;
+  left: calc(var(--lgp-controls-w, 32px) - 9px);
+  top: calc(-0.775em + 9px);
+  bottom: calc(0.775em + 9px);
+  width: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--background-modifier-border) 28%, transparent);
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+/* The 2px line is too narrow to click reliably — widen the hit area sideways
+   (the line is positioned, so it paints above the static child rows). */
+.block-children-left-border::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  right: -5px;
+}
+
+.block-children-left-border:hover {
+  background: var(--text-accent);
+}
+
+.block-children {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---------- CodeMirror (focused block) ---------- */
+.block-content .cm-editor {
+  background: transparent;
+  font-size: inherit;
+}
+
+.block-content .cm-editor.cm-focused {
+  outline: none;
+}
+
+/* Editing blocks must be text-selectable: an ancestor user-select:none (the
+   theme/app layer sets it across the workspace) suppresses the caret PAINTING
+   in the focused empty editor — the caret-color override alone is not enough
+   on an EMPTY item (nothing selectable = nothing to draw the caret at). */
+.block-content.is-editing {
+  user-select: text;
+}
+
+/* Empty editing line caret: superseded by the JS caret overlay
+   (src/editor/caretOverlay.ts) — one bar for ALL positions (empty lines,
+   line starts, mid-line), drawn above the glyphs so it stays visible. */
+
+/* The caret overlay bar (positioned by src/editor/caretOverlay.ts). White +
+   difference blend = the exact inverse of what's behind it: dark over the
+   page (native-caret look), light over a dark glyph stroke — visible at a
+   line start, where the native 1px caret hides inside the first glyph. */
+.lgp-caret-overlay {
+  /* position:fixed is REQUIRED — the JS positions via left/top (viewport
+     coords from coordsAtPos); on a static element those are ignored and the
+     bar would sit invisible at the end of <body>. */
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1.2px;
+  background: #fff;
+  mix-blend-mode: difference;
+  pointer-events: none;
+  z-index: 99;
+  /* 1.2s = CM6's own cursorBlinkRate (native-editor parity, and a touch
+     slower than the old 1.06s per user request). One rate everywhere: the
+     overlay is the single caret source (see caretOverlay.ts theme). */
+  animation: lgp-caret-blink 1.2s steps(1) infinite;
+}
+
+@keyframes lgp-caret-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+.block-content .cm-scroller {
+  font-family: inherit;
+  line-height: inherit;
+}
+
+.block-content .cm-content {
+  /* no vertical padding: the editor must be exactly as tall as the static
+     render (reading line-height 1.55 == cm-line), otherwise every block
+     jumps 4px when entering edit mode */
+  padding: 0;
+  /* The JS caret overlay (src/editor/caretOverlay.ts) is the single caret
+     source: keep the native contentEditable caret transparent everywhere —
+     it painted only in some contexts (never on an empty item), which made
+     the blink look uneven across blocks. Obsidian's own CM theme already
+     forces transparent on .cm-content; the !important just stops older
+     overrides from resurrecting it. */
+  caret-color: transparent !important;
+}
+
+.block-content .cm-line {
+  /* no horizontal padding: the edit-mode text must start at the same x as the
+     static render (content padding 6px) — otherwise the distance to the
+     bullet dot shifts 2px on every click into edit mode */
+  padding: 0;
+}
+
+.block-content .cm-line:empty {
+  /* empty doc line: an empty div builds no line box (zero height), so the
+     drawn caret (drawSelection) collapses — floor it like the static state */
+  min-height: 1.55em;
+}
+
+/* basic syntax colors through Obsidian variables */
+.block-content .cm-highlight,
+.block-content .cm-content .ͼa,
+.block-content .tok-keyword { color: var(--text-accent); }
+.block-content .cm-emphasis { font-style: italic; }
+.block-content .cm-strong { font-weight: 700; }
+.block-content .cm-link,
+.block-content .cm-url { color: var(--text-accent); }
+.block-content .cm-quote { color: var(--text-muted); }
+.block-content .cm-heading { font-weight: 700; }
+
+/* ---------- Drop indicators (drag & drop) ---------- */
+.block-wrap.drop-before > .block-main::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -2px;
+  height: 2.5px;
+  border-radius: 2px;
+  background: var(--text-accent);
+}
+
+.block-wrap.drop-after > .block-main::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 2.5px;
+  border-radius: 2px;
+  background: var(--text-accent);
+}
+
+.block-wrap.drop-child > .block-main {
+  background: color-mix(in srgb, var(--text-accent) 12%, transparent);
+  outline: 1.5px dashed var(--text-accent);
+  outline-offset: -1.5px;
+  border-radius: 6px;
+}
+
+/* Empty-space drop: the insertion line still shows, plus a faint row tint so
+   it reads as "the note ends here" rather than a stray line on a block. */
+.block-wrap.drop-edge > .block-main {
+  background: color-mix(in srgb, var(--text-accent) 6%, transparent);
+  border-radius: 6px;
+}
+
+/* ---------- Block references ((uuid)) ---------- */
+.block-ref {
+  cursor: pointer;
+  border-bottom: 1px dashed var(--text-accent);
+  padding: 0 1px;
+}
+
+
+
+/* Tags are page references (Logseq parity): a #tag opens/creates the page
+   of the same name, so style it like a page link rather than a search tag. */
+.block-content a.tag,
+.block-props-content a.tag {
+  cursor: pointer;
+  color: var(--link-color, var(--text-accent));
+  background: none;
+  border: none;
+  padding: 0 1px;
+  text-decoration: none;
+}
+
+.block-content a.tag:hover,
+.block-props-content a.tag:hover {
+  background: var(--background-modifier-hover);
+}
+
+.block-ref:hover {
+  background: var(--background-modifier-hover);
+}
+
+.block-ref-embed {
+  padding: 2px 8px;
+  margin: 2px 0;
+}
+
+/* ---------- Autocompletion tweaks ---------- */
+.cm-tooltip.cm-tooltip-autocomplete {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.cm-tooltip.cm-tooltip-autocomplete .cm-completionLabel {
+  font-size: 0.92em;
+}
+
+.cm-completionIcon-slash::before { content: '⌘ '; opacity: 0.7; }
+
+/* ---------- Empty document ---------- */
+.block-editor-empty {
+  color: var(--text-faint);
+  padding: 24px 40px;
+  cursor: text;
+  font-style: italic;
+}
+
+.block-editor-empty:hover {
+  color: var(--text-muted);
+}
+
+/* Empty block slot stays clickable */
+.block-content-static:empty {
+  min-height: 1.55em;
+}
+
+/* ---------- Reveal highlight (((ref)) navigation) ---------- */
+.block-wrap.block-revealed > .block-main {
+  animation: block-reveal-flash 1.6s ease;
+}
+
+@keyframes block-reveal-flash {
+  0% { background: color-mix(in srgb, var(--text-accent) 35%, transparent); }
+  100% { background: transparent; }
+}
+
+/* ---------- Embedded query results ({{query ...}}) ---------- */
+.block-query-results {
+  margin: 2px 0 4px 48px;
+  border-left: 2px solid var(--background-modifier-border);
+  border-radius: 2px;
+  background: var(--background-secondary);
+  padding: 4px 8px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.query-result-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.92em;
+}
+
+.query-result-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.query-result-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.query-result-src {
+  flex: none;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.82em;
+  color: var(--text-faint);
+}
+
+.query-result-item .block-marker {
+  align-self: center;
+  cursor: pointer;
+}
+
+.query-empty,
+.query-error {
+  color: var(--text-faint);
+  font-style: italic;
+  padding: 2px 4px;
+  font-size: 0.9em;
+}
+
+.query-error {
+  color: var(--text-error);
+}
+
+.query-more {
+  color: var(--text-faint);
+  font-size: 0.85em;
+  padding: 2px 4px;
+}
+
+/* ---------- Side panels (tasks / backlinks) ---------- */
+.logseq-panel {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.logseq-panel-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  margin-bottom: 6px;
+}
+
+.logseq-panel-title {
+  font-weight: 600;
+  font-size: 0.95em;
+  flex: 1;
+}
+
+.logseq-panel-tabs {
+  display: flex;
+  gap: 2px;
+  flex: 1;
+}
+
+.logseq-panel-tab {
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.85em;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.logseq-panel-tab:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.logseq-panel-tab.is-active {
+  background: var(--background-modifier-active-hover);
+  color: var(--text-normal);
+  font-weight: 600;
+}
+
+.logseq-panel-refresh {
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 1.05em;
+}
+
+.logseq-panel-refresh:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.logseq-panel-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.logseq-panel-group {
+  margin-bottom: 10px;
+}
+
+.logseq-panel-group-title {
+  font-size: 0.82em;
+  color: var(--text-muted);
+  padding: 2px 4px;
+  cursor: pointer;
+  /* File paths under tags can be long — show them in FULL (wrap, no ellipsis). */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.logseq-panel-group-title:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+  border-radius: 4px;
+}
+
+.logseq-panel-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 4px 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+
+.logseq-panel-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.logseq-panel-item-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logseq-panel-item .block-marker {
+  align-self: center;
+  cursor: pointer;
+}
+
+.logseq-panel-empty {
+  color: var(--text-faint);
+  font-style: italic;
+  padding: 12px 6px;
+  font-size: 0.9em;
+}
+
+/* ---------- Embedded blocks ({{embed ((uuid))}}) ---------- */
+.block-embed {
+  /* Renders like the surrounding outline — no guide line, no card look.
+     Only the scroll cap and breadcrumb mark it as an embed. */
+  background: transparent;
+  padding: 0 6px;
+  margin: 0;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.block-embed .embed-loading,
+.block-embed .embed-error {
+  color: var(--text-faint);
+  font-style: italic;
+  font-size: 0.9em;
+}
+
+.block-embed .embed-error {
+  color: var(--text-error);
+}
+
+/* breadcrumb: where the embedded block lives (file › …ancestors) */
+.block-embed-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin: 0 0 2px;
+  padding: 0 0 2px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  color: var(--text-faint);
+  font-size: 0.8em;
+  cursor: pointer;
+}
+
+.block-embed-header:hover {
+  color: var(--text-accent);
+}
+
+.embed-bc-sep {
+  opacity: 0.6;
+}
+
+.embed-bc-crumb {
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.block-embed-body {
+  min-height: 1em;
+}
+
+/* one row per block of the embedded sub-tree — mirror the main outline */
+.embed-row {
+  border-radius: 4px;
+}
+
+.embed-main {
+  display: flex;
+  align-items: flex-start;
+  border-radius: 4px;
+}
+
+.embed-controls {
+  position: relative; /* anchors the floating caret */
+  display: flex;
+  align-items: center;
+  flex: none;
+  height: 1.55em;
+  width: 16px; /* bullet only — the caret floats over the left margin */
+  user-select: none;
+}
+
+.embed-content {
+  flex: 1;
+  min-height: 1.55em;
+  padding: 1px 6px;
+  line-height: 1.55;
+  cursor: text;
+  word-break: break-word;
+}
+
+.embed-children {
+  margin-left: 16px;
+  padding-left: 14px;
+  border-left: 2px solid var(--background-modifier-border);
+}
+
+/* in-place editing lifts the embed box's own scroll cap so long blocks fit */
+.block-embed.is-editing {
+  max-height: none;
+}
+
+.block-embed .cm-editor {
+  background: transparent;
+  font-size: inherit;
+}
+
+.block-embed .cm-editor.cm-focused {
+  outline: none;
+}
+
+.block-embed .cm-scroller {
+  font-family: inherit;
+  line-height: inherit;
+}
+
+.block-embed .cm-content {
+  padding: 2px 0;
+  caret-color: var(--text-accent);
+}
+
+.block-embed .cm-line {
+  padding: 0 2px;
+}
+
+/* ---------- Block search modal ---------- */
+.block-search-item .block-search-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.block-search-item .block-marker {
+  align-self: center;
+}
+
+.block-search-item .block-search-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.block-search-item .block-search-src {
+  font-size: 0.8em;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- Flashcard review panel ---------- */
+.logseq-fc-panel .fc-progress {
+  font-size: 0.85em;
+  color: var(--text-muted);
+  padding: 4px 2px;
+}
+
+.logseq-fc-panel .fc-progress-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--background-modifier-border);
+  overflow: hidden;
+  margin: 2px 2px 12px;
+}
+
+.logseq-fc-panel .fc-progress-fill {
+  height: 100%;
+  background: var(--text-accent);
+  transition: width 0.25s ease;
+}
+
+.logseq-fc-panel .fc-card {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--background-primary);
+}
+
+.logseq-fc-panel .fc-question {
+  font-size: 1.02em;
+  line-height: 1.5;
+}
+
+.logseq-fc-panel .fc-src {
+  font-size: 0.78em;
+  color: var(--text-faint);
+  margin: 6px 0 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logseq-fc-panel .fc-answer {
+  border-top: 1px dashed var(--background-modifier-border);
+  margin-top: 8px;
+  padding-top: 8px;
+  font-size: 0.95em;
+}
+
+.logseq-fc-panel .fc-reveal {
+  margin: 10px 0 0;
+  width: 100%;
+  padding: 6px;
+  border: none;
+  border-radius: 6px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  cursor: pointer;
+}
+
+.logseq-fc-panel .fc-reveal:hover {
+  background: var(--interactive-accent-hover);
+}
+
+.logseq-fc-panel .fc-grades {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.logseq-fc-panel .fc-grade {
+  flex: 1;
+  padding: 6px 0;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.logseq-fc-panel .fc-grade:hover {
+  filter: brightness(1.15);
+}
+
+.logseq-fc-panel .fc-grade-again {
+  background: color-mix(in srgb, var(--text-error) 22%, transparent);
+  color: var(--text-error);
+}
+
+.logseq-fc-panel .fc-grade-hard {
+  background: color-mix(in srgb, var(--text-warning, #e0ac00) 22%, transparent);
+  color: var(--text-warning, #e0ac00);
+}
+
+.logseq-fc-panel .fc-grade-good {
+  background: color-mix(in srgb, var(--text-success) 22%, transparent);
+  color: var(--text-success);
+}
+
+.logseq-fc-panel .fc-grade-easy {
+  background: color-mix(in srgb, var(--text-accent) 22%, transparent);
+  color: var(--text-accent);
+}
+
+.logseq-fc-panel .fc-jump {
+  margin-top: 10px;
+  font-size: 0.8em;
+  color: var(--text-faint);
+  cursor: pointer;
+  text-align: right;
+}
+
+.logseq-fc-panel .fc-jump:hover {
+  color: var(--text-accent);
+}
+
+.logseq-fc-panel .fc-restart {
+  margin-top: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  cursor: pointer;
+}
+
+/* ---------- In-page search bar (Ctrl+F / Ctrl+H) ---------- */
+.block-editor-searchbar {
+  position: absolute;
+  top: 8px;
+  right: 24px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.sb-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sb-input {
+  width: 200px;
+  padding: 3px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 5px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: 0.88em;
+}
+
+.sb-input:focus {
+  outline: none;
+  border-color: var(--text-accent);
+}
+
+.sb-count {
+  font-size: 0.78em;
+  color: var(--text-muted);
+  min-width: 44px;
+  text-align: center;
+  user-select: none;
+}
+
+.sb-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.9em;
+  user-select: none;
+}
+
+.sb-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.sb-replace-all {
+  padding: 3px 10px;
+  border: none;
+  border-radius: 5px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-size: 0.82em;
+  cursor: pointer;
+}
+
+.sb-replace-all:hover {
+  background: var(--interactive-accent-hover);
+}
+
+/* search highlights in rendered content */
+.block-content mark.search-hit {
+  background: color-mix(in srgb, var(--text-warning, #e0ac00) 35%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.block-content mark.search-hit.is-current {
+  background: var(--text-warning, #e0ac00);
+  color: var(--background-primary);
+}
+
+/* ---------- Block context menu ---------- */
+.block-context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 200px;
+  padding: 4px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+}
+
+.block-context-menu .bcm-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  font-size: 0.88em;
+  color: var(--text-normal);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.block-context-menu .bcm-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.block-context-menu .bcm-item.is-danger {
+  color: var(--text-error);
+}
+
+.block-context-menu .bcm-item .bcm-icon {
+  width: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.95em;
+}
+
+.block-context-menu .bcm-sep {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--background-modifier-border);
+}
+
+/* ---------- Markdown tables in block content (slash-insert / GFM) ---------- */
+/* Obsidian's own table CSS is scoped to .markdown-rendered / .cm-embed-block,
+   which block content is not — without this a table renders as an invisible
+   grid (no borders, empty cells collapse to zero width). Same variables the
+   native preview tables use. */
+.block-content table {
+  border-collapse: collapse;
+  margin: 4px 0;
+}
+
+.block-content th,
+.block-content td {
+  border: 1px solid var(--table-border-color, var(--background-modifier-border));
+  padding: var(--table-cell-padding, 4px 10px);
+  min-width: 3em;
+  vertical-align: top;
+}
+
+.block-content th {
+  font-weight: 600;
+  text-align: left;
+  background: var(--table-header-background, var(--background-secondary));
+}
+
+.block-content tr:hover td {
+  background: var(--table-row-background-hover, var(--background-modifier-hover));
+}
+
+/* ---------- Blockquotes in block content ---------- */
+/* Obsidian scopes quote styling to .markdown-rendered / .markdown-preview-view
+   and themes (Blue Topaz) restyle it on the same scopes — block content is
+   neither, so a `> quote` block rendered as an unstyled paragraph. Mirror the
+   app defaults plus the theme look (5px theme-color bar, tinted background);
+   the variables resolve from the active theme, fallbacks keep other themes sane. */
+.block-content blockquote {
+  color: var(--blockquote-color, inherit);
+  font-style: var(--blockquote-font-style, normal);
+  background-color: var(--background-blockquote, var(--background-secondary));
+  border-width: 0 0 0 5px;
+  border-left-style: solid;
+  border-color: var(--theme-color, var(--blockquote-border-color, var(--background-modifier-border)));
+  border-radius: var(--radius-s, 4px);
+  padding: 0.5em 0.5em 0.5em 0.6em;
+  margin-inline: 0;
+}
+
+/* A quote block whose content is only `>` markers renders a zero-height
+   blockquote — invisible. Give it a row so the empty quote shows its bar. */
+.block-content blockquote:not(:has(*)),
+.block-content blockquote > p:only-child:empty {
+  min-height: 1.4em;
+}
+
+/* The render pass splits an empty quote row into its own blockquote — kill
+   the junction (gap + rounded corners) so consecutive blockquotes read as
+   ONE continuous quote box. */
+.block-content blockquote + blockquote {
+  margin-top: 0;
+  border-top-left-radius: 0;
+}
+
+.block-content blockquote:has(+ blockquote) {
+  margin-bottom: 0;
+  border-bottom-left-radius: 0;
+}
+
+.block-content blockquote > :first-child {
+  margin-top: 0;
+}
+
+.block-content blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.block-content blockquote p {
+  margin-left: 1px;
+  margin-right: 0;
+  font-size: var(--font-size-preview-blockquote, inherit);
+}
+
+/* ---------- Live preview (实时预览) in the block editors ---------- */
+/* Syntax marks hidden by the live-preview decorations; the remaining text
+   takes its rendered form. Class names are unprefixed (unique) so both the
+   outline editor and the embed editor get them. */
+.cm-line.lgp-h1 { font-size: 1.6em; font-weight: 700; line-height: 1.3; }
+.cm-line.lgp-h2 { font-size: 1.45em; font-weight: 700; line-height: 1.3; }
+.cm-line.lgp-h3 { font-size: 1.3em; font-weight: 700; line-height: 1.3; }
+.cm-line.lgp-h4 { font-size: 1.15em; font-weight: 700; }
+.cm-line.lgp-h5 { font-size: 1.05em; font-weight: 700; }
+.cm-line.lgp-h6 { font-weight: 700; color: var(--text-muted); }
+
+.lgp-hr {
+  display: block;
+  width: 100%;
+  height: 0;
+  border-top: 1px solid var(--background-modifier-border);
+  margin: 0.4em 0;
+}
+
+/* Rendered table widget (live preview). The table itself inherits the
+   .block-content table rules (borders, padding, hover). */
+.lgp-table {
+  margin: 2px 0;
+}
+.lgp-table table {
+  margin: 0;
+}
+
+.lgp-wikilink { color: var(--link-color, var(--text-accent)); }
+.lgp-comment { color: var(--text-faint); }
+/* Bold content uses Obsidian's native .cm-strong (app.css: weight calc +
+   var(--bold-color)) — the static <strong> look. */
+.lgp-italic { font-style: italic; }
+.lgp-strike { text-decoration: line-through; }
+.lgp-highlight { background: var(--text-highlight-bg, var(--text-highlight)); }
+
+/* Inline code in the live-preview editor: same look as the static render —
+   mono + background box, NOT bold (the theme bolds bare `code`). */
+.lgp-inline-code {
+  font-family: var(--font-monospace, var(--font-mono, monospace));
+  font-size: var(--code-size, 0.9em);
+  font-weight: var(--code-weight, normal);
+  color: var(--code-color, var(--text-normal));
+  background: var(--code-background, var(--background-secondary));
+  border-radius: var(--code-radius, 4px);
+  padding: 0.1em 0.25em;
+}
+
+/* Static render inline code spans (NOT fenced blocks): the theme bolds bare
+   `code` — restore the standard inline-code look for block content. */
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) code:not(pre code) {
+  font-family: var(--font-monospace, var(--font-mono, monospace));
+  font-size: var(--code-size, 0.9em);
+  font-weight: var(--code-weight, normal);
+  color: var(--code-color, var(--text-normal));
+  background: var(--code-background, var(--background-secondary));
+  border-radius: var(--code-radius, 4px);
+  padding: 0.1em 0.25em;
+}
+
+/* ---------- Query table ({{query-table ...}}) ---------- */
+.block-query-table-wrap {
+  margin: 4px 0 4px 48px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+  padding: 6px;
+  max-height: 460px;
+  overflow: auto;
+}
+
+.block-query-table-wrap table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.88em;
+}
+
+.block-query-table-wrap th {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 2px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  background: var(--background-secondary);
+  white-space: nowrap;
+}
+
+.block-query-table-wrap td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  vertical-align: top;
+}
+
+.block-query-table-wrap tr:hover td {
+  background: var(--background-modifier-hover);
+}
+
+.block-query-table-wrap .qt-text {
+  max-width: 460px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.block-query-table-wrap .qt-src {
+  color: var(--text-faint);
+  font-size: 0.85em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.block-query-table-wrap .qt-empty,
+.block-query-table-wrap .qt-error {
+  color: var(--text-faint);
+  font-style: italic;
+  padding: 4px;
+}
+
+/* ---------- Virtual scroll sentinel ---------- */
+.block-editor-load-more {
+  margin: 10px 0 6px 32px;
+  padding: 10px 12px;
+  border: 1px dashed var(--background-modifier-border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 0.85em;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.block-editor-load-more:hover {
+  border-color: var(--text-accent);
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+/* ---------- Touch drag ---------- */
+.block-drag-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  padding: 4px 12px;
+  border-radius: 6px;
+  background: var(--background-primary-alt);
+  border: 1px solid var(--background-modifier-border-hover);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  font-size: 0.9em;
+  max-width: 320px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  z-index: 100;
+  opacity: 0.95;
+}
+
+body.block-touch-dragging {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.block-wrap.is-dragging-src {
+  opacity: 0.35;
+}
+
+/* ---------- Multi-selection ---------- */
+.block-wrap.is-selected > .block-main {
+  background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 45%, transparent);
+}
+
+/* ---------- Dataview coexistence ---------- */
+.block-content.has-dataview .block-content-static {
+  width: 100%;
+}
+
+.dataview-missing {
+  color: var(--text-faint);
+  font-style: italic;
+  font-size: 0.85em;
+}
+
+/* ---------- Block reference graph ---------- */
+.block-graph-wrap {
+  max-width: 800px;
+}
+
+.block-graph-empty {
+  color: var(--text-muted);
+}
+
+.block-graph-wrap svg {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+
+.block-graph-wrap .bg-edge {
+  stroke: var(--text-faint);
+  stroke-width: 1;
+  opacity: 0.5;
+}
+
+.block-graph-wrap .bg-edge-strong {
+  stroke-width: 2;
+  opacity: 0.75;
+}
+
+.block-graph-wrap .bg-node circle {
+  fill: var(--interactive-accent);
+}
+
+.block-graph-wrap .bg-node-current circle {
+  fill: var(--text-accent);
+  stroke: var(--text-on-accent);
+  stroke-width: 2;
+}
+
+.block-graph-wrap .bg-node-missing circle {
+  fill: var(--background-modifier-border);
+  stroke: var(--text-faint);
+  stroke-dasharray: 3 2;
+}
+
+.block-graph-wrap .bg-node text {
+  fill: var(--text-normal);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.block-graph-wrap .bg-node:hover circle {
+  stroke: var(--text-accent);
+  stroke-width: 2;
+}
+
+.block-graph-legend {
+  margin-top: 6px;
+  font-size: 0.85em;
+  color: var(--text-muted);
+}
+
+.block-graph-legend .bg-legend-missing {
+  font-style: italic;
+}
+
+/* ---------- Narrow screens (mobile) ---------- */
+@media (max-width: 640px) {
+  .block-editor-searchbar .sb-row {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .block-editor-searchbar .sb-input {
+    flex: 1 1 45%;
+    min-width: 0;
+  }
+
+  .block-editor-searchbar .sb-replace-all {
+    flex: 0 0 auto;
+  }
+
+  /* Bigger touch targets on the block controls: the CARET widens (it floats
+     in the margin), the bullet keeps its 16px box — the dot must stay
+     centered in the column the guide line and add-block plus anchor to —
+     and gains tap room via its invisible ::after extension instead. */
+  .block-caret {
+    min-height: 32px;
+    min-width: 24px;
+  }
+
+  .block-bullet {
+    min-height: 32px;
+  }
+
+  /* the enlarged floating caret sits fully left of the bullet column */
+  .block-main .block-caret {
+    left: -24px;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Operation log & backup modals (v0.2.0 safety layer)                 */
+/* ------------------------------------------------------------------ */
+
+.oplog-hint {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin: 4px 0 8px;
+}
+
+.oplog-list {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: var(--background-secondary);
+}
+
+.oplog-pre {
+  margin: 0;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.oplog-row.is-ok { color: var(--text-normal); }
+.oplog-row.is-error { color: var(--text-error); }
+.oplog-row.is-skipped { color: var(--text-muted); }
+
+.backup-list {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.backup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--background-modifier-border-hover);
+}
+.backup-row:last-child { border-bottom: none; }
+
+.backup-label { flex: 1; min-width: 0; }
+.backup-path {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.backup-time { color: var(--text-muted); font-size: var(--font-ui-smaller); }
+
+.backup-preview {
+  margin-top: 8px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+/* ------------------------------------------------------------------ */
+/* Logseq md parity: page-props card, tag panel, panel tabs            */
+/* ------------------------------------------------------------------ */
+
+.page-props-card {
+  margin: 4px 0 14px;
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+}
+
+.page-props-table { display: flex; flex-direction: column; gap: 2px; }
+
+.page-prop-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: var(--font-ui-smaller);
+  line-height: 1.6;
+}
+
+.page-prop-key {
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+  min-width: 90px;
+  flex-shrink: 0;
+}
+
+.page-prop-key::after { content: ' ::'; opacity: 0.6; }
+
+.page-prop-value { color: var(--text-normal); word-break: break-word; }
+
+.logseq-panel-tagcloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 2px 12px;
+}
+
+.logseq-tag-chip {
+  display: inline-block;
+  padding: 1px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--background-modifier-border);
+  font-size: var(--font-ui-smaller);
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.logseq-tag-chip:hover { color: var(--text-normal); border-color: var(--text-muted); }
+.logseq-tag-chip.is-active {
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+}
+
+/* ------------------------------------------------------------------ */
+/* Reading-mode typography parity (v0.2.2): static markdown renders    */
+/* with the SAME vertical rhythm as the editing surface. The editing   */
+/* side is CM6 with line-height 1.55 and zero inter-line padding       */
+/* (.block-content / .cm-line); Obsidian's .markdown-rendered defaults */
+/* give paragraphs large margins and taller line-height, which made    */
+/* read mode feel twice as airy. Pin the whole static subtree to the   */
+/* editor's metrics.                                                   */
+/* ------------------------------------------------------------------ */
+
+.block-content-static {
+  line-height: 1.55;
+}
+
+/* ---------- Native properties editor mounted in the page-props block
+   (setting: pagePropsEditor = native). The component brings its own styles;
+   the row drops its outline chrome so it reads like the native page
+   properties: no bullet column, container across the full content width. ---------- */
+.block-native-props .block-controls {
+  display: none;
+}
+
+.block-content .metadata-container {
+  width: 100%;
+}
+
+/* ---------- TraceTime parity: per-block last-edited labels at the row's
+   right edge — the plugin's own .tracetime-label component styles apply
+   (they are unscoped); only the anchor and alignment live here. All rows
+   share the same right edge (children indents are on the left), so the
+   labels line up like the native overlay's contentRight column. ---------- */
+.block-main .tracetime-label {
+  right: 0;
+  top: 50%;
+  transform: translate(0, -50%);
+  padding-left: 0.5em;
+  pointer-events: none;
+}
+
+.block-main .tracetime-label[data-vertical='start'] {
+  top: 4px;
+  transform: none;
+}
+
+.block-main .tracetime-label[data-vertical='end'] {
+  top: auto;
+  bottom: 4px;
+  transform: none;
+}
+
+.block-content-static p {
+  margin-block: 0;
+  line-height: 1.55;
+}
+
+.block-content-static p + p {
+  /* Adjacent paragraphs inside one block: keep a visible but tight gap. */
+  margin-top: 0.35em;
+}
+
+.block-content-static ul,
+.block-content-static ol {
+  margin-block: 0;
+  padding-inline-start: 22px;
+}
+
+/* Ordered-list prefixes ("1. " opening a block's text) align with the block
+   TEXT column like Logseq: the marker renders in-flow at the column start
+   instead of hanging at the list padding. The theme's own ::marker rule
+   colors it (Blue Topaz: --list-ol-number-color). */
+.block-content-static ol,
+.embed-content ol,
+.fc-question ol,
+.fc-answer ol {
+  padding-inline-start: 0;
+  list-style-position: inside;
+}
+
+.block-content-static li {
+  margin-block: 0;
+  line-height: 1.55;
+}
+
+.block-content-static h1,
+.block-content-static h2,
+.block-content-static h3,
+.block-content-static h4,
+.block-content-static h5,
+.block-content-static h6 {
+  margin-block: 0.2em;
+  line-height: 1.4;
+}
+
+.block-content-static pre {
+  margin-block: 0.25em;
+  line-height: 1.5;
+}
+
+/* ------------------------------------------------------------------ */
+/* Code-block toolbar: slim strip ABOVE the code (language + copy),    */
+/* so the copy icon never overlaps the code content.                   */
+/* ------------------------------------------------------------------ */
+
+.lgp-code-block {
+  margin-block: 0.25em;
+}
+
+.lgp-code-block pre {
+  margin-block: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/* Logseq parity: rendered code blocks scroll horizontally instead of wrapping
+   long lines (Logseq `pre` = white-space pre + overflow-x auto). !important
+   beats theme body-class toggles (Blue Topaz `body.whole-code-wrap …` scoping
+   (0,2,2) otherwise wins and code wraps again) — and the theme sets pre-wrap
+   on the CODE element directly, which inheritance cannot override, so the
+   pair is pinned on both. overflow-y stays hidden — a code box never scrolls
+   vertically. Dataview blocks keep their own rendering (the plugin never
+   wraps those in .lgp-code-block). */
+.block-content-static:not(.block-dataview) pre,
+.embed-content pre,
+.fc-question pre,
+.fc-answer pre {
+  white-space: pre !important;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+:is(.block-content-static:not(.block-dataview), .embed-content, .fc-question, .fc-answer) pre {
+  /* Box parity with the dedicated code editor (.lgp-code-editing .cm-editor):
+     themes (Blue Topaz + snippets) restyle pre through body-class rules up to
+     (0,2,2) specificity, which beat this selector's (0,2,1) when properties
+     are non-important — the static box then diverges from the edit state.
+     !important pins the box to the EXACT values the editor renders with. */
+  margin: 0 !important;
+  padding: 0.4em 0.9em !important;
+  background: var(--code-background, var(--background-secondary)) !important;
+  border: none !important;
+  box-shadow: none !important;
+  border-top-left-radius: 0 !important;
+  border-top-right-radius: 0 !important;
+  border-bottom-left-radius: var(--code-radius, 6px) !important;
+  border-bottom-right-radius: var(--code-radius, 6px) !important;
+  font-family: var(--font-monospace) !important;
+  font-size: 1em !important;
+  line-height: 1.5 !important;
+}
+
+:is(.block-content-static:not(.block-dataview), .embed-content, .fc-question, .fc-answer) pre code {
+  white-space: pre !important;
+  /* `code` is inline by default: its own left padding would indent ONLY the
+     first line (inline box fragmentation), so every following line sat ~7px
+     left of the first — the x/y misalignment. Block-level with no padding
+     aligns all lines at the pre's content edge. */
+  display: block;
+  padding: 0;
+  /* The UA stylesheet declares `code { font-family: monospace }` DIRECTLY on
+     the element, so the pre's pinned mono font never inherits in — and for a
+     generic-monospace element whose size is only inherited, Chromium applies
+     its fixed-font DEFAULT SIZE (13px) as the used size even though computed
+     font-size still reports the inherited 15px. A languageless code block
+     therefore rendered ~13px Consolas while the EDIT state rendered 15px
+     Cascadia — the user's "reading vs editing style differs" (languageful
+     blocks escaped via the theme's code[class*=language-] font rule).
+     Explicit declarations on the code element itself: beats the UA rule and
+     the size quirk in one go. */
+  font-family: inherit !important;
+  font-size: 1em !important;
+  line-height: inherit !important;
+}
+
+/* Theme interplay (user-visible under Blue Topaz + snippets, theme-agnostic):
+   the language watermark some themes paint via pre::before duplicates our own
+   toolbar's language label — remove it inside plugin-rendered containers.
+   !important: themes generate high-specificity body:not(...) pre[class]::before
+   rules (Blue Topaz), which must never resurrect the label here. */
+.block-editor-container :is(.block-content-static, .embed-content) pre[class]::before,
+.fc-card :is(.fc-question, .fc-answer) pre[class]::before {
+  content: none !important;
+}
+
+/* Full syntax coloring: themes scope their Prism token rules to
+   .markdown-rendered / body-option classes, which plugin-rendered code never
+   matches — so most tokens fall back to plain text. Map the token classes to
+   the theme's own --code-* variables (defined globally by Obsidian and
+   extended by Blue Topaz / code-box snippets); graceful fallbacks keep the
+   default look when a variable is absent.
+   The .lgp-code-editing variants cover the EDIT state: its CM6 editor emits
+   the very same .token classes (Prism runs through prismHighlight.ts), so
+   both states share one palette. */
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code,
+.lgp-code-editing .cm-line {
+  color: var(--code-normal, var(--text-normal));
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.comment,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.prolog,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.doctype,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.cdata,
+.lgp-code-editing .cm-line .token.comment {
+  color: var(--code-comment, var(--text-faint));
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.punctuation,
+.lgp-code-editing .cm-line .token.punctuation {
+  color: var(--code-punctuation, var(--code-operator, var(--text-muted)));
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.keyword,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.important,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.atrule,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.selector,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.tag,
+.lgp-code-editing .cm-line .token.keyword,
+.lgp-code-editing .cm-line .token.important,
+.lgp-code-editing .cm-line .token.atrule,
+.lgp-code-editing .cm-line .token.selector,
+.lgp-code-editing .cm-line .token.tag {
+  color: var(--code-keyword, var(--text-accent));
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.string,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.char,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.attr-value,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.regex,
+.lgp-code-editing .cm-line .token.string,
+.lgp-code-editing .cm-line .token.char,
+.lgp-code-editing .cm-line .token.attr-value,
+.lgp-code-editing .cm-line .token.regex {
+  color: var(--code-string, var(--text-accent));
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.number,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.boolean,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.constant,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.symbol,
+.lgp-code-editing .cm-line .token.number,
+.lgp-code-editing .cm-line .token.boolean,
+.lgp-code-editing .cm-line .token.constant,
+.lgp-code-editing .cm-line .token.symbol {
+  color: var(--code-atom, var(--code-number, var(--text-accent)));
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.function,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.method,
+.lgp-code-editing .cm-line .token.function,
+.lgp-code-editing .cm-line .token.method {
+  color: var(--code-function, var(--code-def, var(--text-accent)));
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.class-name,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.maybe-class-name,
+.lgp-code-editing .cm-line .token.class-name,
+.lgp-code-editing .cm-line .token.maybe-class-name {
+  color: var(--code-type, var(--code-def, var(--text-accent)));
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.operator,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.entity,
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.url,
+.lgp-code-editing .cm-line .token.operator,
+.lgp-code-editing .cm-line .token.entity,
+.lgp-code-editing .cm-line .token.url {
+  color: var(--code-operator, var(--text-muted));
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.variable,
+.lgp-code-editing .cm-line .token.variable {
+  color: var(--code-variable, inherit);
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.builtin,
+.lgp-code-editing .cm-line .token.builtin {
+  color: var(--code-builtin, inherit);
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.attr-name,
+.lgp-code-editing .cm-line .token.attr-name {
+  color: var(--code-attribute, inherit);
+}
+
+:is(.block-content-static, .embed-content, .fc-question, .fc-answer) pre code .token.property,
+.lgp-code-editing .cm-line .token.property {
+  color: var(--code-property, inherit);
+}
+
+/* The native floating copy button overlaps the code — ours lives in the bar. */
+.block-content-static pre .copy-code-button,
+.lgp-code-block pre .copy-code-button {
+  display: none;
+}
+
+.lgp-code-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  height: 22px;
+  padding: 0 6px;
+  font-size: var(--font-smallest);
+  color: var(--text-faint);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  user-select: none;
+}
+
+/* The language label is clickable in BOTH states (reading + code-editing):
+   click opens the block in one-shot source mode with the caret at the
+   language word. */
+.lgp-code-lang {
+  margin-right: auto;
+  text-transform: lowercase;
+  cursor: pointer;
+}
+
+.lgp-code-lang:hover {
+  color: var(--text-accent);
+  text-decoration: underline;
+}
+
+/* A fence with no language still renders the label (it is the only way into
+   source mode), but as a placeholder — dimmed, so it reads as "unset" rather
+   than as a language literally called "text". */
+.lgp-code-lang-empty {
+  opacity: 0.55;
+  font-style: italic;
+}
+
+.lgp-code-lang-empty:hover {
+  opacity: 1;
+}
+
+.lgp-code-copy {
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.65;
+}
+
+.lgp-code-copy:hover {
+  opacity: 1;
+  background: var(--background-modifier-hover);
+}
+
+.lgp-code-copy svg {
+  width: 13px;
+  height: 13px;
+}
+
+.block-content-static blockquote {
+  margin-block: 0.25em;
+}
+
+/* Same rhythm inside embed previews (they render static rows too). */
+.embed-content .block-content-static,
+.block-embed .block-content-static {
+  line-height: 1.55;
+}
+
+/* Editing-state line rhythm lives on .block-content (1.55) already; this
+   variable documents the shared contract between the two surfaces. */
+.block-editor-container {
+  --block-line: 1.55;
+}
+
+/* ------------------------------------------------------------------ */
+/* Self-drawn slash / angle command menu (v0.2.2)                      */
+/* ------------------------------------------------------------------ */
+
+.block-command-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 300px;
+  max-width: 420px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-s);
+  padding: 4px;
+}
+
+.bcm-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.bcm-item.is-selected {
+  background: var(--interactive-accent-hover, var(--background-modifier-hover));
+}
+
+.bcm-label {
+  font-weight: 600;
+  font-size: var(--font-ui-small);
+  white-space: nowrap;
+}
+
+.bcm-detail {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* CM6 completion popup ([[ / ![[ / # / (( hints) — theme-matched to the
+   self-drawn .block-command-menu. The tooltip layer lives inside the
+   focused block's CM6 DOM and positions itself fixed to the viewport. */
+.block-editor-container .cm-tooltip.cm-tooltip-autocomplete {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  box-shadow: var(--shadow-s);
+  padding: 4px;
+  overflow: hidden;
+}
+
+.block-editor-container .cm-tooltip.cm-tooltip-autocomplete > ul {
+  font-family: var(--font-interface);
+  max-height: 300px;
+  margin: 0;
+  padding: 0;
+}
+
+.block-editor-container .cm-tooltip.cm-tooltip-autocomplete > ul > li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  color: var(--text-normal);
+}
+
+.block-editor-container .cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: var(--interactive-accent-hover, var(--background-modifier-hover));
+  color: var(--text-normal);
+}
+
+/* Property lines inside the block editor (`key:: value` at the end of the
+   doc) — they become block properties on commit; Logseq dims them. */
+.block-editor-container .cm-content .cm-prop-line {
+  color: var(--text-faint);
+}
+
+/* Page-properties block (reading state): the props render as the block's
+   content in the same dimmed `key:: value` form the editor shows — the two
+   states look alike. */
+.block-props-content .block-prop-item {
+  display: block;
+  padding: 0;
+  color: var(--text-faint);
+}
+
+/* ------------------------------------------------------------------ */
+/* v0.2.3: page backlinks section, block backlink badges/panels,       */
+/* block props row, editable page-props card                           */
+/* ------------------------------------------------------------------ */
+
+/* --- page bottom backlinks --- */
+/* Rendered INSIDE the collapsible "Linked references" section: no own top
+   margin/divider (the section header owns those); content indented to align
+   with the section title text (chevron 12px + gap 6px + header padding 2px). */
+.page-backlinks {
+  margin-top: 0;
+  padding: 0 0 0 20px;
+}
+
+.page-backlinks-header {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+
+.page-backlinks.is-empty .page-backlinks-header { margin-bottom: 0; }
+
+.page-backlinks-group { margin-bottom: 10px; }
+.page-backlinks-group:last-child { margin-bottom: 0; }
+
+.page-backlinks-page {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: var(--font-ui-small);
+  cursor: pointer;
+  color: var(--text-normal);
+}
+.page-backlinks-page:hover { color: var(--text-accent); }
+.page-backlinks-icon { display: inline-flex; }
+
+.page-backlinks-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0 3px 22px;
+  cursor: pointer;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+.page-backlinks-item:hover { color: var(--text-normal); }
+.page-backlinks-item-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* --- block backlink badge (right side of the row) --- */
+.block-backlink-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  padding: 0 7px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+}
+.block-backlink-badge:hover { color: var(--text-accent); border-color: var(--text-accent); }
+.block-backlink-badge .block-backlink-icon { display: inline-flex; }
+.block-backlink-icon svg { width: 10px; height: 10px; }
+
+/* --- block backlinks panel (under the block) --- */
+.block-backlinks-panel {
+  margin: 4px 0 4px 32px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--text-accent);
+  background: var(--background-secondary);
+  border-radius: 0 6px 6px 0;
+}
+
+.block-backlinks-panel-header {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+  cursor: pointer;
+}
+
+.block-backlinks-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  cursor: pointer;
+  font-size: var(--font-ui-small);
+}
+.block-backlinks-row:hover { color: var(--text-accent); }
+.block-backlinks-row-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.block-backlinks-row-src { color: var(--text-faint); font-size: var(--font-ui-smaller); }
+.block-backlinks-more { color: var(--text-faint); font-size: var(--font-ui-smaller); padding-top: 4px; }
+
+/* --- block props row (under block content) --- */
+/* Block props row: one `key:: value` line per property, dimmed exactly like
+   the editor's .cm-prop-line lines; key and value are pages — clicking either
+   opens/creates that page (Logseq parity). */
+.block-props-row {
+  /* Logseq parity: property TEXT aligns with the block TEXT — past the bullet
+     column AND the content's own horizontal padding. */
+  margin-left: calc(var(--lgp-controls-w, 32px) + var(--lgp-content-pad, 6px));
+  padding: 2px 6px 2px 0;
+}
+
+.block-prop-item {
+  display: block;
+  font-size: var(--font-ui-smaller);
+  line-height: 1.55;
+  color: var(--text-faint);
+}
+
+.block-prop-key { color: inherit; }
+.block-prop-sep { opacity: 0.6; }
+.block-prop-key, .block-prop-value { cursor: pointer; }
+.block-prop-key:hover { color: var(--text-accent); }
+.block-prop-value { color: var(--link-color, var(--text-accent)); }
+.block-prop-value:hover { text-decoration: underline; }
+
+/* --- editable page-props card --- */
+.page-props-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
+.page-props-edit { color: var(--text-muted); }
+.page-props-edit:hover { color: var(--text-accent); }
+
+.page-prop-row.is-edit-row,
+.page-prop-row.is-add-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.page-prop-input {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: var(--background-primary);
+  font-size: var(--font-ui-smaller);
+}
+.page-prop-input-key { flex: 0 0 140px; font-family: var(--font-monospace); }
+
+.page-prop-delete, .page-prop-add { color: var(--text-muted); display: inline-flex; }
+.page-prop-delete:hover { color: var(--text-error); }
+.page-prop-add:hover { color: var(--text-accent); }
+
+.page-props-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+
+.page-props-card.is-empty { padding: 6px 12px; }
+.page-props-empty-hint { color: var(--text-faint); font-size: var(--font-ui-smaller); }
+
+/* --- unlinked mentions (page bottom) --- */
+/* Inside the collapsible "Unlinked references" section — same indentation
+   as the linked panel so items align with the section title text. */
+.page-unlinked { margin-top: 0; padding-left: 20px; }
+.page-unlinked.is-empty .page-backlinks-header { margin-bottom: 0; }
+.page-unlinked-title { color: var(--text-muted); }
+.page-unlinked-item { cursor: pointer; }
+.page-unlinked-count { color: var(--text-faint); font-size: var(--font-ui-smaller); }
+.page-unlinked-convert { display: inline-flex; color: var(--text-faint); }
+.page-unlinked-item:hover .page-unlinked-convert { color: var(--text-accent); }
+.page-unlinked-convert svg { width: 12px; height: 12px; }
+
+/* --- collapsible references section (v0.2.5) --- */
+.page-references { margin-top: 28px; }
+
+.refs-collapse-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 2px;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-weight: 600;
+  border-top: 1px solid var(--background-modifier-border);
+  margin-top: 8px;
+  user-select: none;
+}
+.refs-collapse-header:hover { color: var(--text-normal); }
+.refs-collapse-title { text-transform: uppercase; letter-spacing: 0.05em; font-size: var(--font-ui-smaller); }
+.refs-chevron { display: inline-flex; }
+.refs-chevron svg { width: 12px; height: 12px; }
+
+.refs-collapse-body.is-collapsed { display: none; }
+
+/* --- page embed (![[Page]]) box (v0.2.5) --- */
+.block-page-embed { margin: 2px 0; }
+
+.block-page-embed .block-embed-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--background-secondary);
+  border-radius: 6px 6px 0 0;
+  cursor: default;
+}
+.embed-header-icon { display: inline-flex; }
+.embed-header-icon svg { width: 12px; height: 12px; }
+.embed-header-title {
+  font-weight: 600;
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+  cursor: pointer;
+}
+.embed-header-title:hover { color: var(--text-accent); }
+
+/* ---------- Status bar toggles (source mode / native editor) ---------- */
+.lgp-statusbar {
+  display: inline-flex;
+  gap: 0;
+}
+
+.lgp-status-item {
+  cursor: pointer;
+  padding: 0 6px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smallest, 0.8em);
+  text-transform: lowercase;
+}
+
+.lgp-status-item:hover {
+  color: var(--text-normal);
+  text-decoration: underline;
+}
+
+/* Page source mode is ON: highlight the toggle. */
+.lgp-status-item.mod-active-srcmode {
+  color: var(--text-accent);
+}
+
+/* ---------- Add-block affordance under the last block (Logseq parity) ---------- */
+.block-editor-addblock {
+  /* Same pitch as the normal distance between two bullets (one 1.55em row). */
+  height: 1.55em;
+  cursor: text;
+  position: relative;
+  --lgp-plus-c: color-mix(in srgb, var(--text-normal) 35%, transparent);
+}
+
+.block-editor-addblock::before {
+  content: '';
+  position: absolute;
+  left: var(--lgp-controls-w, 32px);
+  right: 0;
+  top: 50%;
+  /* 1px line: shift by half its height so its CENTER sits on the row's
+     midline — same reference the + uses, so line and plus align exactly. */
+  transform: translateY(-50%);
+  height: 1px;
+  background: var(--background-modifier-border);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.block-editor-addblock::after {
+  /* The plus is DRAWN (two gradient bars), not a font glyph: a '+' glyph's
+     ink is never vertically centered in its em box (font metrics put it above
+     the baseline), so the glyph plus visibly sat higher than the 1px line.
+     A drawn cross is pixel-exact: both bars center in a box that is itself
+     centered on the row midline — the exact reference the line uses. */
+  content: '';
+  position: absolute;
+  /* centered on the bullet dot column (dot center = controls-width − 8px) */
+  left: calc(var(--lgp-controls-w, 32px) - 16px);
+  width: 16px;
+  top: 50%;
+  height: 9px;
+  transform: translateY(-50%);
+  background:
+    linear-gradient(var(--lgp-plus-c), var(--lgp-plus-c)) center / 9px 1px no-repeat,
+    linear-gradient(var(--lgp-plus-c), var(--lgp-plus-c)) center / 1px 9px no-repeat;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.block-editor-addblock:hover::before,
+.block-editor-addblock:hover::after {
+  opacity: 1;
+}
+
+/* ---------- Code block edit mode (Logseq parity) ---------- */
+/* A dedicated code editor replaces the raw fence view: no fence markers,
+   Enter = newline inside the code, Esc commits. Placed AFTER the generic
+   .block-content .cm-* rules so its overrides win at equal specificity. */
+.lgp-code-editing {
+  border-radius: 6px;
+}
+
+.lgp-code-editing {
+  /* Same outer margin as the reading-state .lgp-code-block — the block does
+     not shift vertically when the edit session opens/closes. */
+  margin-block: 0.25em;
+}
+
+.lgp-code-editing .cm-editor {
+  /* !important on every text/box declaration: the user's vault showed a
+     session state where the BOX kept its background while the CODE TEXT fell
+     back to the body font + natural line-height — the font/line-height lost
+     while background survived. Only order-dependent overrides can split one
+     rule apart like that (CM's runtime StyleModule mounts generated sheets
+     into document.adoptedStyleSheets, which sort AFTER every normal sheet),
+     so the edit state is pinned exactly like the reading pre above. */
+  font-family: var(--font-monospace) !important;
+  /* Same size & line box as the reading view's pre code (1em/1.5), so the
+     text does not shift when the block flips between states. */
+  font-size: 1em !important;
+  line-height: 1.5 !important;
+  /* Same box as the reading view's pre: theme code background, radius on the
+     bottom only (the toolbar sits above, like .lgp-code-block pre). */
+  background: var(--code-background, var(--background-secondary)) !important;
+  border-radius: 0 0 var(--code-radius, 6px) var(--code-radius, 6px) !important;
+}
+
+.lgp-code-editing .cm-scroller {
+  /* Direct inherit pins on the chain: a declaration on a nearer ancestor
+     beats an inherited value from .cm-editor, so every level carries its own
+     — no runtime sheet can make the text inherit past the mono font. */
+  font-family: inherit !important;
+  line-height: inherit !important;
+  overflow: auto;
+}
+
+.lgp-code-editing .cm-content {
+  /* 0.4em 0.9em — identical to the reading pre's padding, so the first
+     glyph keeps its x position when the block flips between states. */
+  padding: 0.4em 0.9em !important;
+  white-space: pre !important;
+  font-family: inherit !important;
+  line-height: inherit !important;
+  caret-color: var(--text-accent);
+}
+
+.lgp-code-editing .cm-line {
+  padding: 0;
+}
+
+.lgp-code-edit-hint {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: var(--font-smallest);
+}
+
+/* ------------------------------------------------------------------
+   Visual table editing (block editor)
+
+   Obsidian's own table editor is a private CM6 extension, so the outline
+   upgrades the rendered <table> in place instead. The toolbar is hidden
+   until hover so a table still reads as content, not as chrome.
+   ------------------------------------------------------------------ */
+.lgp-table-editor {
+  position: relative;
+  display: block;
+  /* The row handle hangs OUTSIDE the table's left edge, so the wrapper reserves
+     room for it. Without this padding the handle would be covered by the
+     block's own containers and never receive pointer events (measured:
+     elementFromPoint returned `block-main`). */
+  padding-left: 20px;
+  padding-top: 22px;
+}
+
+.lgp-table-editor-table {
+  /* Shrink to content instead of filling the block width: a 2-column table
+     stretched across a wide screen is hard to read and hard to drag. */
+  width: auto;
+  max-width: 100%;
+  margin: 0;
+  font-size: var(--font-smaller);
+}
+
+.lgp-table-editor-table th,
+.lgp-table-editor-table td {
+  /* Roomier cells than the block default (4px 10px). */
+  padding: 6px 12px;
+  min-width: 2.5em;
+}
+
+/* Editing affordance: a subtle focus ring on the cell being edited. */
+.lgp-table-editor-table th[contenteditable='true']:focus,
+.lgp-table-editor-table td[contenteditable='true']:focus {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+  border-radius: 2px;
+  /* Make the caret visible (accent colored) so focusing a cell reads as
+     "the caret is in here" even before anything is typed. */
+  caret-color: var(--text-accent);
+}
+
+/* Toolbar ------------------------------------------------------------ */
+.lgp-table-editor-bar {
+  position: absolute;
+  /* Sits in the same gutter as the column handles, but at the far right so the
+     two do not overlap. */
+  top: -24px;
+  right: 0;
+  z-index: 6;
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  padding: 1px 3px;
+  font-size: var(--font-smallest);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+  user-select: none;
+}
+
+.lgp-table-editor:hover .lgp-table-editor-bar,
+.lgp-table-editor-bar:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.lgp-table-editor-btn {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  font-size: var(--font-smallest);
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.lgp-table-editor-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.lgp-table-editor-align {
+  display: inline-flex;
+  gap: 1px;
+  margin-left: 4px;
+  padding-left: 4px;
+  border-left: 1px solid var(--background-modifier-border);
+}
+
+/* Drag handles -------------------------------------------------------- */
+/* Drag handles.
+
+   These MUST keep a real hit area. An empty div with no content collapses to
+   0x0: it is then unclickable, never fires :hover, and the whole drag feature
+   is silently dead (measured: 0x0 boxes, elementFromPoint returned the TH).
+   So: explicit width/height, flex-centred glyph, and opacity transitions from
+   a VISIBLE-but-transparent state — `opacity: 0` would also disable hovering. */
+.lgp-table-editor-col-handle,
+.lgp-table-editor-row-handle {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  color: var(--text-faint);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 3px;
+  cursor: grab;
+  user-select: none;
+  /* Hidden, but NEVER `visibility: hidden` and never `display: none`.
+     Both remove the element from the hit-test path entirely: the pointer
+     events never reach the handle and the drag silently does nothing
+     (measured: 0 listeners fired, only a document-level pointerup).
+     `opacity: 0` keeps the box hit-testable while invisible; the glyph comes
+     from ::before so the element itself has no text to show. */
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+
+.lgp-table-editor-col-handle:hover,
+.lgp-table-editor-row-handle:hover {
+  opacity: 1;
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+  cursor: grabbing;
+}
+
+/* Active drag: a strong outline makes the drop target obvious. */
+.lgp-table-editor-col-handle.dragging,
+.lgp-table-editor-row-handle.dragging {
+  opacity: 1;
+  color: var(--text-normal);
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+}
+
+/* Glyphs come from ::before so the handle element itself stays EMPTY — a text
+   node inside a contenteditable cell would become part of the cell value. */
+.lgp-table-editor-col-handle::before {
+  content: '\2195';
+}
+
+.lgp-table-editor-row-handle::before {
+  content: '\2261';
+}
+
+/* Column handle: sits ABOVE the table, centred on its column, in the gutter
+   that `.lgp-table-editor { padding-top }` reserves. */
+.lgp-table-editor-col-handle {
+  top: -21px;
+  right: auto;
+  width: 20px;
+  height: 14px;
+  margin-left: -10px;
+  font-size: 10px;
+  line-height: 1;
+  z-index: 4;
+}
+
+/* Row handle: hangs OUTSIDE the table's left edge, in the gutter that
+   `.lgp-table-editor { padding-left }` reserves. The negative offset is safe
+   precisely because that padding exists — without it the handle would be
+   covered by the block's own containers and never get pointer events.
+   `top: 50%` + margin-top centres it on the row regardless of row height. */
+.lgp-table-editor-row-handle {
+  top: 50%;
+  left: -19px;
+  width: 14px;
+  height: 18px;
+  margin-top: -9px;
+  font-size: 10px;
+  line-height: 1;
+  z-index: 4;
+}
+
+.lgp-table-editor:hover .lgp-table-editor-col-handle,
+.lgp-table-editor:hover .lgp-table-editor-row-handle {
+  opacity: 1;
+}
+
+.lgp-table-editor-col-handle:hover,
+.lgp-table-editor-row-handle:hover {
+  opacity: 1;
+  color: var(--text-normal);
+}
+
+.lgp-table-editor th,
+.lgp-table-editor td {
+  /* Positioning context for the drag handles, which are children of their cell. */
+  position: relative;
+}
+
+/* The row handle hangs off the left edge of the first cell, so the table must
+   not clip it. */
+.lgp-table-editor-table {
+  overflow: visible;
+}
+
+/* ------------------------------------------------------------------
+   Drag feedback
+
+   A reorder is only trustworthy if the user can see three things: what they
+   grabbed (the ghost), where it will land (the drop outline), and that letting
+   go outside cancels (the ghost turns red). All three live here.
+   ------------------------------------------------------------------ */
+.lgp-table-editor-table.lgp-table-editor-dragging {
+  /* No text selection while reordering, or the gesture becomes a text drag. */
+  user-select: none;
+  cursor: grabbing;
+}
+
+/* While dragging, the source handle and its row/column stay clearly marked. */
+.lgp-table-editor-dragging th,
+.lgp-table-editor-dragging td {
+  /* Keep cell text from being selected mid-drag. */
+  user-select: none;
+}
+
+/* The row/column being moved: dimmed, so the eye can tell it left its slot.
+   A smooth transition here is most of what removes the "stiff" feeling. */
+.lgp-table-editor th.lgp-table-editor-lifted,
+.lgp-table-editor td.lgp-table-editor-lifted,
+.lgp-table-editor tr.lgp-table-editor-lifted {
+  opacity: 0.35;
+  transition: opacity 140ms ease;
+}
+
+/* Landing marker: a thin accent LINE drawn with a pseudo-element, exactly like
+   the block drag-and-drop in this project (`.drop-before` / `.drop-after` in
+   the "Drop indicators" section above). One visual language for blocks and
+   tables; an outline would instead read as "this box is selected".
+
+   The class goes on the CELLS: a <tr> renders neither pseudo-elements nor
+   box-shadow, so marking the row alone is invisible. */
+.lgp-table-editor th.lgp-table-editor-drop-before,
+.lgp-table-editor td.lgp-table-editor-drop-before,
+.lgp-table-editor th.lgp-table-editor-drop-after,
+.lgp-table-editor td.lgp-table-editor-drop-after {
+  position: relative;
+}
+
+.lgp-table-editor td.lgp-table-editor-drop-before::before,
+.lgp-table-editor th.lgp-table-editor-drop-before::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -2px;
+  height: 2.5px;
+  border-radius: 2px;
+  background: var(--text-accent);
+  pointer-events: none;
+  /* The block drag indicator appears instantly (that is Obsidian's feel); a
+     very short fade here reads as smoother without lagging behind the cursor. */
+  animation: lgp-drop-line-in 90ms ease-out;
+}
+
+.lgp-table-editor td.lgp-table-editor-drop-after::after,
+.lgp-table-editor th.lgp-table-editor-drop-after::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 2.5px;
+  border-radius: 2px;
+  background: var(--text-accent);
+  pointer-events: none;
+  animation: lgp-drop-line-in 90ms ease-out;
+}
+
+@keyframes lgp-drop-line-in {
+  from { opacity: 0; transform: scaleX(0.7); }
+  to   { opacity: 1; transform: scaleX(1); }
+}
+
+/* Just-placed feedback: a brief highlight so the row does not simply teleport
+   into its new slot. */
+@keyframes lgp-table-landed {
+  0%   { background: var(--interactive-accent); }
+  100% { background: transparent; }
+}
+
+.lgp-table-editor td.lgp-table-editor-landed-cell,
+.lgp-table-editor th.lgp-table-editor-landed-cell {
+  animation: lgp-table-landed 600ms ease-out;
+}
+
+/* The floating preview: a MINIATURE of the dragged row/column, so the user
+   sees the whole thing they grabbed, with its real shape. */
+.lgp-table-editor-ghost {
+  position: fixed;
+  z-index: 1000;
+  padding: 4px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 5px;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 28%);
+  pointer-events: none;
+  /* Pop in with a slight scale-up, and fade the whole thing a touch so it
+     reads as "floating above" the page rather than being pasted on it. */
+  opacity: 0.92;
+  transform-origin: top left;
+  animation: lgp-ghost-in 140ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  will-change: transform;
+}
+
+@keyframes lgp-ghost-in {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 0.92;
+    transform: scale(1);
+  }
+}
+
+.lgp-table-editor-ghost-table {
+  border-collapse: collapse;
+  font-size: var(--font-smallest);
+  max-width: 260px;
+}
+
+.lgp-table-editor-ghost-table th,
+.lgp-table-editor-ghost-table td {
+  border: 1px solid var(--background-modifier-border);
+  padding: 3px 8px;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-height: 1.6em;
+}
+
+.lgp-table-editor-ghost-table th {
+  font-weight: 600;
+  background: var(--background-secondary);
+}
+
+/* Outside the table: the drop is cancelled. Tint the frame — NOT the text,
+   since a miniature table has no room for a strikethrough to read well. */
+.lgp-table-editor-ghost-invalid {
+  border-color: var(--text-error);
+  box-shadow: 0 0 0 1px var(--text-error), 0 4px 14px rgb(0 0 0 / 28%);
+  /* Tinting, not a hard swap: the change should feel like feedback, not a
+     glitch. */
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.lgp-table-editor-ghost-invalid .lgp-table-editor-ghost-table {
+  opacity: 0.5;
+  transition: opacity 120ms ease;
+}
+
+/* Keep the grab cursor even when the pointer leaves the tiny handle. */
+body.lgp-table-editor-cursor,
+body.lgp-table-editor-cursor * {
+  cursor: grabbing !important;
+}
+
+.lgp-table-editor th.lgp-table-editor-drop,
+.lgp-table-editor td.lgp-table-editor-drop,
+.lgp-table-editor tr.lgp-table-editor-drop {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+}
+
+/* A table must be wide enough to show the row handle. */
+.lgp-table-editor {
+  overflow: visible;
+}
+
+/* ------------------------------------------------------------------ */
+/* Linked-references filter (Logseq parity): funnel button next to the */
+/* "N linked mentions" count + its dialog.                            */
+/* ------------------------------------------------------------------ */
+
+/* The header is a flex row so the funnel can sit at the right edge. */
+.page-backlinks-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Funnel button: neutral when idle, then Logseq's state colors —
+   green = only includes, red = only excludes, amber = both. */
+.page-backlinks-filter-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-faint);
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 1px 3px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.page-backlinks-filter-btn:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.page-backlinks-filter-btn svg { width: 13px; height: 13px; }
+.page-backlinks-filter-btn.is-include { color: var(--color-green, #4a9e5c); }
+.page-backlinks-filter-btn.is-exclude { color: var(--color-red, #d9534f); }
+.page-backlinks-filter-btn.is-both { color: var(--color-yellow, #c99700); }
+
+/* Shown when a filter hides every reference (distinct from "no references"). */
+.page-backlinks-filtered-empty {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* --- the dialog (lives in document.body, anchored under the button) --- */
+.backlink-filter-dialog {
+  position: fixed;
+  z-index: 1000;
+  width: 320px;
+  max-height: 60vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-s);
+}
+
+.bfilter-head { display: flex; align-items: flex-start; gap: 10px; }
+.bfilter-badge {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+}
+.bfilter-badge svg { width: 16px; height: 16px; }
+.bfilter-title { font-size: var(--font-ui-small); font-weight: 600; }
+.bfilter-hint { font-size: var(--font-ui-smaller); color: var(--text-muted); margin-top: 2px; }
+
+/* Includes / Excludes rows */
+.bfilter-pinned { display: flex; flex-direction: column; gap: 4px; }
+.bfilter-pin-row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.bfilter-pin-label {
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-right: 2px;
+}
+
+/* Search box */
+.bfilter-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: var(--background-secondary);
+  border-radius: 6px;
+}
+.bfilter-search-wrap:focus-within { box-shadow: 0 0 0 2px var(--interactive-accent, var(--color-accent)); }
+.bfilter-search-icon { display: inline-flex; color: var(--text-faint); }
+.bfilter-search-icon svg { width: 13px; height: 13px; }
+.bfilter-search {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+}
+
+/* Value chips — Logseq: green when included, red when excluded. */
+.bfilter-values,
+.bfilter-pin-row { display: flex; flex-wrap: wrap; gap: 5px; }
+
+.bfilter-value {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  max-width: 100%;
+  padding: 2px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-normal);
+  cursor: pointer;
+  user-select: none;
+}
+.bfilter-value:hover { border-color: var(--text-accent); }
+.bfilter-value-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bfilter-value-count { color: var(--text-faint); font-size: 9px; }
+.bfilter-value.is-included {
+  background: var(--background-modifier-success, rgba(74, 158, 92, 0.18));
+  border-color: var(--color-green, #4a9e5c);
+  color: var(--color-green, #4a9e5c);
+}
+.bfilter-value.is-excluded {
+  background: var(--background-modifier-error, rgba(217, 83, 79, 0.18));
+  border-color: var(--color-red, #d9534f);
+  color: var(--color-red, #d9534f);
+  text-decoration: line-through;
+}
+.bfilter-value.is-pinned { padding: 1px 6px; }
+
+.bfilter-empty { font-size: var(--font-ui-smaller); color: var(--text-faint); padding: 4px 2px; }
+
+.bfilter-clear {
+  align-self: flex-start;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  cursor: pointer;
+  border-top: 1px solid var(--background-modifier-border);
+  padding-top: 8px;
+  width: 100%;
+}
+.bfilter-clear:hover { color: var(--text-accent); }
+
+/* ------------------------------------------------------------------ */
+/* Supertags (Tana supertags / Logseq DB new tags): the collection     */
+/* table shown at the bottom of a supertag's own page.                 */
+/* ------------------------------------------------------------------ */
+
+.page-supertag-collection {
+  margin-top: 28px;
+  padding: 0 0 0 20px;
+}
+
+.page-supertag-collection .page-backlinks-header { gap: 8px; }
+
+.page-supertag-icon { display: inline-flex; margin-right: 4px; }
+.page-supertag-icon svg { width: 12px; height: 12px; }
+
+.page-supertag-count { color: var(--text-faint); margin-left: auto; }
+
+.page-supertag-hint,
+.page-supertag-more,
+.page-supertag-template {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+.page-supertag-template { margin-top: 8px; }
+
+.page-supertag-table {
+  width: auto;
+  max-width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-ui-small);
+}
+.page-supertag-table th,
+.page-supertag-table td {
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  text-align: left;
+  vertical-align: top;
+}
+.page-supertag-table th {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.page-supertag-table tbody tr:hover { background: var(--background-modifier-hover); }
+.page-supertag-table tbody tr { cursor: pointer; }
+.page-supertag-table td.qt-src { color: var(--text-faint); font-size: var(--font-ui-smaller); }
+
+/* ------------------------------------------------------------------ */
+/* Block views: a `view::` property on a parent block renders its      */
+/* children as a table / cards / tabs.                                 */
+/* ------------------------------------------------------------------ */
+
+.block-view {
+  margin: 4px 0 2px;
+  padding-left: 20px; /* align with the block text column, like the guide line */
+}
+
+.block-view-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 0.5px dashed var(--background-modifier-border);
+  border-radius: var(--radius-s, 6px);
+  color: var(--text-faint);
+  font-size: var(--font-ui-small);
+}
+.block-view-empty-hint { font-size: var(--font-ui-smaller); color: var(--text-faint); }
+
+.block-view-more {
+  margin-top: 6px;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
+/* --- table view --- */
+.block-view-table {
+  width: auto;
+  max-width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-ui-small);
+}
+.block-view-table th,
+.block-view-table td {
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  text-align: left;
+  vertical-align: top;
+}
+.block-view-table th {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.block-view-table tr.is-clickable { cursor: pointer; }
+.block-view-table tbody tr:hover { background: var(--background-modifier-hover); }
+.block-view-table td.block-view-title { font-weight: 500; }
+.block-view-table td.block-view-title .block-marker { margin-right: 4px; }
+
+/* --- cards view --- */
+.block-view-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+}
+.block-view-card {
+  padding: 9px 11px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+}
+.block-view-card.is-clickable { cursor: pointer; }
+.block-view-card:hover { border-color: var(--text-accent); }
+.block-view-card-title {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-weight: 600;
+  font-size: var(--font-ui-small);
+  margin-bottom: 4px;
+}
+.block-view-card-line {
+  display: flex;
+  gap: 6px;
+  font-size: var(--font-ui-smaller);
+  line-height: 1.5;
+}
+.block-view-card-key { color: var(--text-faint); flex-shrink: 0; }
+.block-view-card-val { color: var(--text-normal); min-width: 0; overflow-wrap: anywhere; }
+
+/* --- tabs view --- */
+.block-view-tabs {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.block-view-tab {
+  padding: 4px 11px;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  user-select: none;
+}
+.block-view-tab:hover { color: var(--text-normal); }
+.block-view-tab.is-active {
+  color: var(--text-accent);
+  border-bottom-color: var(--text-accent);
+}
+.block-view-tab-body { padding: 8px 2px; cursor: pointer; }
+.block-view-tab-nested {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  margin: 2px 0 6px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Prolog queries: results under a ```prolog block, and the visual    */
+/* query builder.                                                     */
+/* ------------------------------------------------------------------ */
+
+.block-prolog-results {
+  margin: 2px 0 4px;
+  padding-left: 20px; /* align with the block text column */
+}
+
+.prolog-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  margin-bottom: 4px;
+}
+.prolog-count { color: var(--text-muted); }
+.prolog-meta { color: var(--text-faint); }
+
+.prolog-table {
+  width: auto;
+  max-width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-ui-small);
+}
+.prolog-table th,
+.prolog-table td {
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  text-align: left;
+  vertical-align: top;
+}
+.prolog-table th {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.prolog-table tbody tr:hover { background: var(--background-modifier-hover); }
+.prolog-table td.is-block-ref { color: var(--text-accent); cursor: pointer; }
+
+.prolog-empty,
+.prolog-more { color: var(--text-faint); font-size: var(--font-ui-smaller); }
+.prolog-more { margin-top: 4px; }
+
+.prolog-error {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--text-error);
+  font-size: var(--font-ui-smaller);
+}
+.prolog-error-icon { display: inline-flex; }
+.prolog-error-icon svg { width: 12px; height: 12px; }
+
+/* --- visual query builder --- */
+.prolog-builder { min-width: 520px; }
+
+.prolog-builder-hint {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin-bottom: 10px;
+}
+.prolog-builder-label {
+  margin: 12px 0 4px;
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.prolog-builder-rows { display: flex; flex-direction: column; gap: 6px; }
+
+.prolog-builder-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  background: var(--background-secondary);
+  border-radius: 6px;
+}
+.prolog-builder-pred { max-width: 120px; }
+.prolog-builder-args { display: flex; gap: 6px; flex: 1; flex-wrap: wrap; }
+.prolog-builder-arg { display: flex; align-items: center; gap: 3px; }
+.prolog-builder-input { width: 96px; }
+.prolog-builder-arg-label { color: var(--text-faint); font-size: var(--font-ui-smaller); }
+.prolog-builder-var {
+  padding: 1px 5px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.prolog-builder-var.is-var { color: var(--text-accent); border-color: var(--text-accent); }
+.prolog-builder-neg {
+  padding: 1px 7px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.prolog-builder-neg.is-neg { color: var(--text-error); border-color: var(--text-error); }
+.prolog-builder-rm { display: inline-flex; padding: 2px; cursor: pointer; color: var(--text-faint); }
+.prolog-builder-rm:hover { color: var(--text-normal); }
+.prolog-builder-rm svg { width: 13px; height: 13px; }
+
+.prolog-builder-add { margin-top: 8px; }
+.prolog-builder-add-btn { font-size: var(--font-ui-smaller); cursor: pointer; }
+
+.prolog-builder-code {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--background-secondary);
+  border-radius: 6px;
+  font-size: var(--font-ui-smaller);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.prolog-builder-preview { max-height: 220px; overflow: auto; }
+.prolog-builder-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-ui-smaller);
+}
+.prolog-builder-table th,
+.prolog-builder-table td {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  text-align: left;
+}
+.prolog-builder-table th { color: var(--text-muted); font-weight: 600; }
+
+.prolog-builder-status { margin-top: 6px; font-size: var(--font-ui-smaller); color: var(--text-faint); }
+.prolog-builder-status.is-error { color: var(--text-error); }
+
+/* ---------------------------------------------------------------------------
+   SQLite index console (markdown is the source of truth; this is a cache view)
+   --------------------------------------------------------------------------- */
+.lgp-sqlite-note { color: var(--text-muted); font-size: var(--font-ui-smaller); margin: 0 0 10px; }
+.lgp-sqlite-status {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  padding: 6px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  margin-bottom: 10px;
+}
+.lgp-sqlite-input {
+  width: 100%;
+  min-height: 76px;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  resize: vertical;
+}
+.lgp-sqlite-actions { display: flex; gap: 8px; margin: 10px 0; }
+.lgp-sqlite-btn { cursor: pointer; }
+.lgp-sqlite-schema {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  margin-bottom: 8px;
+}
+.lgp-sqlite-result { max-height: 45vh; overflow: auto; }
+.lgp-sqlite-meta { font-size: var(--font-ui-smaller); color: var(--text-muted); margin-bottom: 4px; }
+.lgp-sqlite-error { color: var(--text-error); font-size: var(--font-ui-smaller); white-space: pre-wrap; }
+.lgp-sqlite-table { border-collapse: collapse; width: 100%; font-size: var(--font-ui-smaller); }
+.lgp-sqlite-table th,
+.lgp-sqlite-table td {
+  border: 1px solid var(--background-modifier-border);
+  padding: 3px 6px;
+  text-align: left;
+  vertical-align: top;
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lgp-sqlite-table th { color: var(--text-muted); font-weight: 600; }
+
+/* ---------------------------------------------------------------------------
+   Block types (SiYuan parity)
+
+   The type is derived from the block's markdown on every render and exposed as
+   `data-block-type`; the badge names it and opens the conversion menu. Like the
+   collapse caret it floats in the left margin and is revealed on row hover, so
+   it costs no layout width.
+   --------------------------------------------------------------------------- */
+.block-type-badge {
+  position: absolute;
+  top: 50%;
+  left: -16px;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-faint);
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.1s ease, color 0.1s ease;
+}
+
+.block-main:hover .block-type-badge,
+.block-type-badge:hover {
+  opacity: 1;
+}
+
+.block-type-badge:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.block-type-badge svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* A parent row's left margin already belongs to the collapse caret. */
+.block-wrap:has(.block-caret) .block-type-badge {
+  display: none;
+}
+
+/* Raw blocks have no bullet, so the controls column is free real estate. */
+.block-raw .block-type-badge {
+  position: static;
+  transform: none;
+  opacity: 0.5;
+}
+
+.block-raw .block-main:hover .block-type-badge {
+  opacity: 1;
+}
+
+/* Touch devices have no hover: keep the badge faintly visible. */
+@media (hover: none) and (pointer: coarse) {
+  .block-type-badge {
+    opacity: 0.5;
+  }
+}
+
+/* Type-driven presentation only — the file stays plain markdown. */
+.block-type-divider .block-content hr {
+  margin: 0.35em 0;
+}
+
+.block-type-math .block-content,
+.block-type-code .block-content {
+  overflow-x: auto;
+}
+
+/* While EDITING, the content is the wrapping cm editor — no horizontal
+   overflow to scroll — and overflow-x:auto forces overflow-y:auto, which
+   CLIPS cm tooltips (latex-suite's math preview extends below the block's
+   bottom edge: the box appeared but the rendered math inside was cut off).
+   Let the editing container show everything. */
+.block-type-math .block-content.is-editing,
+.block-type-code .block-content.is-editing {
+  overflow: visible;
+}
+
+/* In-flow live math preview for pure $$…$$ blocks: a rendered-math element
+   appended below the cm editor, occupying document flow like the native
+   live preview (MathJax centers its content within the container). */
+.lgp-math-live {
+  margin: 0.2em 0 0.35em;
+}
+
+/* ---------------------------------------------------------------------------
+   Drag & drop — cross-file targets
+
+   Dropping a block on a note in Obsidian's own file explorer moves it there.
+   The row needs an explicit "this is the destination" state: the file explorer
+   gives no drop feedback of its own for a custom MIME type.
+   --------------------------------------------------------------------------- */
+.nav-file-title.logseq-drop-target {
+  background-color: var(--background-modifier-hover);
+  box-shadow: inset 2px 0 0 var(--text-accent);
+  border-radius: var(--radius-s);
+}
+
+/* ---------------------------------------------------------------------------
+   Extract to a new page — the destination-name prompt
+   --------------------------------------------------------------------------- */
+.logseq-modal-hint {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin: 0 0 12px;
+}
+
+/* ---------- Image resize handles (native editor parity) ---------- */
+.lgp-img-wrap {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+  max-width: 100%;
+}
+.lgp-img-wrap img {
+  max-width: 100%;
+}
+/* The native look: an invisible 30x30 hit zone at the bottom-right, with an
+   L-shaped bracket (::after) that fades in on hover and turns accent-colored
+   while resizing. */
+.lgp-img-resize-corner {
+  display: block;
+  position: absolute;
+  z-index: 6;
+  cursor: nwse-resize;
+  bottom: 0;
+  right: 0;
+  width: 30px;
+  height: 30px;
+}
+.lgp-img-resize-corner::after {
+  position: absolute;
+  display: block;
+  content: '';
+  width: 10px;
+  height: 10px;
+  border-bottom: var(--icon-stroke) solid var(--text-muted);
+  border-right: var(--icon-stroke) solid var(--text-muted);
+  border-bottom-right-radius: 4px;
+  right: 6px;
+  bottom: 6px;
+  opacity: 0;
+}
+.lgp-img-wrap:hover .lgp-img-resize-corner::after {
+  opacity: 1;
+}
+.lgp-img-wrap.resizing .lgp-img-resize-corner::after {
+  opacity: 1;
+  border-color: var(--color-accent);
+}
+
+/* ==========================================================================
+   Mount panel — a self-contained sidebar view for folders outside the vault.
+
+   Deliberately namespaced and DOM-isolated: this view owns its whole subtree
+   and never injects into Obsidian's own file explorer, so there is no shared
+   DOM to disturb.
+   ========================================================================== */
+
+.logseq-mount-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  font-size: var(--font-ui-small);
+}
+/* Obsidian 主题对 .view-content 的 padding（上12/下32）特异性更高，
+   单类选择器压不过它；双写类名提升到 0,2,0 才能覆盖。
+   顶部归零：上边只留工具栏自身 2px，与工具栏下方 margin 2px 对称 */
+.logseq-mount-panel.logseq-mount-panel {
+  padding: 0 0 6px;
+}
+
+.logseq-mount-panel-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  /* 上下等距；多出的高度由文字/图标放大占住 */
+  padding: 2px 4px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  margin-bottom: 2px;
+}
+.logseq-mount-panel-count {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small, 13px);
+  flex: 1 1 auto;
+}
+.logseq-mount-panel-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 1px 4px;
+  border-radius: 3px;
+  /* Obsidian 给裸 button 固定 --input-height(30px)，工具栏要紧凑就必须覆盖 */
+  height: auto;
+  min-height: 0;
+}
+/* 图标按钮（定位当前文件）与文字按钮同高同大 */
+.logseq-mount-panel-btn svg {
+  width: 15px;
+  height: 15px;
+}
+.logseq-mount-panel-btn:hover {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.logseq-mount-panel-empty {
+  padding: 20px 14px;
+  text-align: center;
+  color: var(--text-muted);
+}
+.logseq-mount-panel-hint {
+  margin-top: 6px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  line-height: 1.6;
+}
+.logseq-mount-panel-empty button {
+  margin-top: 12px;
+}
+
+.logseq-mount-section {
+  padding-bottom: 4px;
+  /* no divider between mounts — the headers read as top-level folders */
+}
+
+.logseq-mount-head,
+.logseq-mount-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 4px;
+  /* Native file explorer look: nav typography, hover wash and radius all
+     come from the same variables the explorer uses, so themes apply too.
+     用户偏好：比原生大一号（+1px），图标也相应加大。 */
+  font-size: calc(var(--nav-item-size, var(--font-ui-small, 13px)) + 1px);
+  border-radius: var(--nav-item-radius, 4px);
+  cursor: pointer;
+}
+
+/* The mount head reads as the depth-0 folder of its tree: the caret gutter
+   (the tree's rows start one level in, indent computed in mountPanel.ts). */
+.logseq-mount-head {
+  padding-inline-start: 14px;
+}
+
+/* Viewport band: every mount flattens to rows and paints only what is near
+   the panel's viewport — there is no inner scroll box, the whole panel
+   scrolls together. The 25px here must stay in step with MOUNT_ROW_HEIGHT
+   in mountPanel.ts — the spacer's height is computed from it. */
+.logseq-mount-band {
+  top: 0;
+  will-change: transform;
+}
+
+.logseq-mount-row-wrap {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+.logseq-mount-row-wrap .logseq-mount-row {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 25px;
+  box-sizing: border-box;
+}
+.logseq-mount-head:hover,
+.logseq-mount-row:hover {
+  background-color: var(--nav-item-background-hover, var(--background-modifier-hover));
+}
+.logseq-mount-head {
+  font-weight: var(--font-semibold);
+}
+
+.logseq-mount-caret {
+  width: 11px;
+  flex: 0 0 11px;
+  font-size: 9px;
+  color: var(--text-faint);
+  text-align: center;
+}
+.logseq-mount-icon {
+  font-size: var(--font-ui-smaller);
+  opacity: 0.8;
+  flex: 0 0 auto;
+}
+/* When Material Icon Theme supplies the artwork it also brings its own sizing
+   (.mfi-icon is a 16x16 flex box and it styles the inner svg), so the row only
+   has to line up with the surrounding text. */
+.logseq-mount-icon.mfi-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-right: 4px;
+  opacity: 1;
+}
+.logseq-mount-icon.mfi-icon svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+/* 用户偏好：树行图标比默认大一号（字体用 calc+1px，图标 15/17/18） */
+.logseq-mount-row .logseq-mount-icon,
+.logseq-mount-head .logseq-mount-icon {
+  font-size: 15px;
+}
+.logseq-mount-row .logseq-mount-icon svg,
+.logseq-mount-head .logseq-mount-icon svg {
+  width: 17px;
+  height: 17px;
+}
+.logseq-mount-row .logseq-mount-icon.mfi-icon,
+.logseq-mount-head .logseq-mount-icon.mfi-icon {
+  width: 18px;
+  height: 18px;
+}
+.logseq-mount-row .logseq-mount-icon.mfi-icon svg,
+.logseq-mount-head .logseq-mount-icon.mfi-icon svg {
+  width: 18px;
+  height: 18px;
+}
+.logseq-mount-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-normal);
+}
+
+.logseq-mount-meta,
+.logseq-mount-empty,
+.logseq-mount-error {
+  padding: 1px 8px 3px 22px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+}
+.logseq-mount-error {
+  color: var(--text-error);
+  white-space: normal;
+}
+
+/* Marks a binary entry, and an entry that has been linked into the vault. */
+.logseq-mount-flag {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: var(--font-smallest);
+  color: var(--text-faint);
+  background-color: var(--background-modifier-border);
+  padding: 0 5px;
+  border-radius: 6px;
+}
+.logseq-mount-flag.is-linked {
+  color: var(--text-success);
+  background-color: var(--background-modifier-success);
+}
+/* A folder row's own flag should hug the name, not be pushed to the edge. */
+.logseq-mount-row.is-dir .logseq-mount-flag {
+  margin-left: 4px;
+}
+
+/* --------------------------------------------------------------------------
+   External file view (a block-rendered editor for a file outside the vault)
+   -------------------------------------------------------------------------- */
+
+.logseq-external-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.logseq-external-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background-color: var(--background-secondary);
+  font-size: var(--font-ui-small);
+  flex: 0 0 auto;
+}
+.logseq-external-banner-icon {
+  color: var(--text-muted);
+}
+.logseq-external-banner-text {
+  font-weight: var(--font-semibold);
+  white-space: nowrap;
+}
+/* Long absolute paths truncate from the left so the filename stays visible. */
+/* 视图头部路径面包屑：可点的每一段（手型 + 悬浮反馈） */
+.view-header-breadcrumb.lgp-hdr-crumb {
+  cursor: pointer;
+}
+.view-header-breadcrumb.lgp-hdr-crumb:hover {
+  color: var(--text-normal);
+  text-decoration: underline;
+}
+
+/* 路径菜单里"当前所在那一级"的高亮（VSCode 面包屑的同款观感）。
+   不用 setChecked——那个画的是"已勾选"，放在"你在这里"上会读错。 */
+.menu-item.lgp-hdr-current {
+  background-color: var(--background-modifier-hover);
+}
+.menu-item.lgp-hdr-current .menu-item-title {
+  color: var(--text-accent);
+  font-weight: 600;
+}
+
+/* 文件夹项左侧的展开三角（点它换成"看这个文件夹里有什么"） */
+.menu-item-icon.lgp-hdr-twisty {
+  width: 12px;
+  min-width: 12px;
+  margin-left: -2px;
+  /* 抵消菜单行 8px gap 的一半，三角和文件夹图标靠近一点 */
+  margin-right: -4px;
+  font-size: 9px;
+  line-height: 1;
+  opacity: 0.55;
+  cursor: pointer;
+}
+.menu-item-icon.lgp-hdr-twisty:hover {
+  opacity: 1;
+  color: var(--text-accent);
+}
+
+/* 文件项没有三角，但要在图标前占同样的格位，图标列才与同层文件夹对齐
+   （同挂载面板树行：文件行补上折叠箭头的列宽） */
+/* 路径菜单里的条目图标与虚拟文档树同源（Material）：
+   收掉 .mfi-icon 自带的 margin-right（菜单行已有 8px gap），svg 15px 和树行观感一致 */
+.menu-item .logseq-mount-icon.mfi-icon {
+  margin-right: 0;
+}
+.menu-item .logseq-mount-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* 盒模型与 lgp-hdr-twisty 完全一致，文件图标才与同层文件夹图标同列 */
+.menu-item-icon.lgp-hdr-gutter {
+  width: 12px;
+  min-width: 12px;
+  margin-left: -2px;
+  margin-right: -4px;
+}
+
+.logseq-external-banner-path {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Truncate at the START so the filename stays visible — the useful part. Done
+     by trimming in script (the path is short and mount-relative) rather than
+     with `direction: rtl`, which reorders the characters: it turned
+     ".gitignore" into "gitignore." (measured, from a screenshot). */
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.logseq-external-badge {
+  font-size: var(--font-smallest);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background-color: var(--background-modifier-border);
+  padding: 1px 6px;
+  border-radius: 8px;
+  flex: 0 0 auto;
+}
+.logseq-external-save {
+  flex: 0 0 auto;
+}
+
+.logseq-external-tree {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+.logseq-external-raw {
+  white-space: pre-wrap;
+}
+
+/* --------------------------------------------------------------------------
+   Mount modals
+   -------------------------------------------------------------------------- */
+
+.logseq-mount-modal-error {
+  color: var(--text-error);
+  font-size: var(--font-ui-small);
+  margin: 4px 0;
+}
+.logseq-mount-modal-empty {
+  color: var(--text-muted);
+  padding: 8px 0;
+}
+
+.logseq-mount-list-row {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.logseq-mount-list-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.logseq-mount-list-name {
+  font-weight: var(--font-semibold);
+}
+.logseq-mount-list-off,
+.logseq-mount-list-warn {
+  font-size: var(--font-smallest);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background-color: var(--background-modifier-border);
+  color: var(--text-muted);
+}
+.logseq-mount-list-warn {
+  color: var(--text-error);
+}
+.logseq-mount-list-path {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  word-break: break-all;
+}
+.logseq-mount-list-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+}
+.logseq-mount-list-include {
+  color: var(--text-success);
+}
+.logseq-mount-list-exclude {
+  color: var(--text-error);
+}
+.logseq-mount-list-refresh {
+  color: var(--text-muted);
+}
+.logseq-mount-list-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+/* --------------------------------------------------------------------------
+   Editing a block in an external file.
+
+   The panel's own editor rather than CM6: reaching the vault editor needs a
+   real vault path, and creating one on an opening click would write to the
+   user's library uninvited. A single-block textarea keeps the file editable
+   without that trade.
+   -------------------------------------------------------------------------- */
+
+.logseq-external-editable {
+  cursor: text;
+}
+.logseq-external-editable:hover .block-content {
+  /* A hint that this block is editable, without shifting the layout. */
+  box-shadow: inset 0 0 0 1px var(--background-modifier-border);
+  border-radius: 3px;
+}
+
+.logseq-external-block-editor {
+  display: block;
+  width: 100%;
+  min-height: 1.6em;
+  padding: 2px 4px;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  color: var(--text-normal);
+  background-color: var(--background-primary);
+  border: 1px solid var(--color-accent);
+  border-radius: 3px;
+  resize: vertical;
+  /* The editor must not be swallowed by Obsidian's own key handling. */
+  pointer-events: auto;
+}
+
+.logseq-external-hint {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  flex: 0 0 auto;
+}
+.logseq-external-dirty {
+  font-size: var(--font-smallest);
+  color: var(--text-warning);
+  background-color: var(--background-modifier-border);
+  padding: 1px 6px;
+  border-radius: 8px;
+  flex: 0 0 auto;
+}
+
+/* --------------------------------------------------------------------------
+   External code editor (a file outside the vault, opened in CodeMirror 6)
+   -------------------------------------------------------------------------- */
+
+.logseq-external-code-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.logseq-external-code-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* With soft wrap off, long lines must scroll sideways rather than being
+     clipped — CodeMirror's own scroller handles the overflow. */
+  overflow: auto;
+}
+.logseq-external-code-host .cm-editor {
+  height: 100%;
+  font-family: var(--font-monospace);
+  font-size: var(--font-text-size);
+}
+.logseq-external-code-host .cm-scroller {
+  font-family: var(--font-monospace);
+  line-height: 1.6;
+}
+.logseq-external-code-host .cm-gutters {
+  background-color: transparent;
+  border-right: 1px solid var(--background-modifier-border);
+  color: var(--text-faint);
+}
+
+/* --------------------------------------------------------------------------
+   The note shown in place of the vault-only page sections when the block
+   editor is showing a file from outside the vault.
+   -------------------------------------------------------------------------- */
+
+.logseq-external-note {
+  margin: 10px 0 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-left: 3px solid var(--color-accent);
+  border-radius: 6px;
+  background-color: var(--background-secondary);
+}
+.logseq-external-note-title {
+  font-weight: var(--font-semibold);
+}
+.logseq-external-note-path {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  font-family: var(--font-monospace);
+  word-break: break-all;
+  margin-top: 2px;
+}
+.logseq-external-note-hint {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin-top: 4px;
+}
+
+
+/* --------------------------------------------------------------------------
+   External block view — an ItemView shell hosting the Logseq block editor for a
+   file outside the vault.
+
+   The shell exists because a TextFileView will not mount without a TFile, and
+   borrowing one put another note on screen for ~500 ms. An ItemView mounts with
+   no file, so nothing in the vault is opened. The host must lay the editor out
+   full-height: the editor's own scroller handles the scrolling.
+   -------------------------------------------------------------------------- */
+
+.logseq-external-block-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.logseq-external-block-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* The editor element moved into the host still carries its own classes; let it
+   fill the shell rather than sizing to its default block flow. */
+.logseq-external-block-host > .view-content,
+.logseq-external-block-host > .workspace-leaf-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* --------------------------------------------------------------------------
+   External block view — an ItemView shell hosting the Logseq block editor for a
+   file outside the vault.
+
+   The shell exists because a TextFileView will not mount without a TFile, and
+   borrowing one put another note on screen for ~500 ms. An ItemView mounts with
+   no file, so nothing in the vault is opened. The host must lay the editor out
+   full-height: the editor's own scroller handles the scrolling.
+   -------------------------------------------------------------------------- */
+
+.logseq-external-block-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.logseq-external-block-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* The editor element moved into the host still carries its own classes; let it
+   fill the shell rather than sizing to its default block flow. */
+.logseq-external-block-host > .view-content,
+.logseq-external-block-host > .workspace-leaf-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* The hosted editor keeps the view header its base class created — back/forward
+   arrows that navigate the tab strip, which is meaningless here because the shell
+   owns navigation. The tab already carries the file's name. */
+.logseq-external-block-host .view-header {
+  display: none;
+}
+
+/* The hosted editor keeps the view header its base class created — back/forward
+   arrows that navigate the tab strip, which is meaningless here because the shell
+   owns navigation. The tab already carries the file's name. */
+.logseq-external-block-host .view-header {
+  display: none;
+}
+
+/* ===== 代码块「▶ 运行」输出面板 (移植自思源 syfe-cb-run) ===== */
+.lgp-code-run {
+  cursor: pointer;
+  opacity: 0.72;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.lgp-code-run:hover { opacity: 1; background: var(--background-modifier-hover); }
+.lgp-cb-run {
+  margin: 6px 0 2px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+  font-size: 12.5px;
+}
+.lgp-cb-run__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.lgp-cb-run__label { opacity: 0.8; }
+.lgp-cb-run__actions { display: flex; gap: 8px; }
+.lgp-cb-run__btn { cursor: pointer; opacity: 0.72; }
+.lgp-cb-run__btn:hover { opacity: 1; }
+.lgp-cb-run__output {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-monospace);
+  font-size: 12px;
+}
+.lgp-cb-run__stdin { padding: 4px 8px 8px; }
+.lgp-cb-run__stdin input { width: 100%; }
+
+/* ---------- 挂载树拖拽排序（工具栏 ⇅ 开关） ---------- */
+.logseq-mount-panel-btn.is-active {
+  background-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+/* 拖拽模式开启时行可拖：抓手光标提示可拖，拖动中的行半透明 */
+.logseq-mount-row[draggable='true'] {
+  cursor: grab;
+}
+.logseq-mount-row[draggable='true']:active {
+  cursor: grabbing;
+}
+.logseq-mount-row.is-dragging-row {
+  opacity: 0.45;
+}
+/* 插入位置指示：目标行顶部一条强调色线 */
+.logseq-mount-row.is-drop-row {
+  box-shadow: inset 0 2px 0 0 var(--interactive-accent);
+}
+/* 定位当前文件：短暂高亮目标行 */
+.logseq-mount-row.is-reveal-row {
+  background-color: var(--background-modifier-active-hover);
+  border-radius: 3px;
+}
+
+
+/* ------------------------------------------------------------------ */
+/* 扩展市场（ExtensionMarketModal）                                    */
+/* ------------------------------------------------------------------ */
+.lgp-ext-market .lgp-ext-market__search {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.lgp-ext-market .lgp-ext-market__input {
+  flex: 1;
+}
+.lgp-ext-market .lgp-ext-market__tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  margin-bottom: 10px;
+}
+.lgp-ext-market .lgp-ext-market__tab {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 6px 14px;
+  cursor: pointer;
+  color: var(--text-muted);
+  border-bottom: 2px solid transparent;
+}
+.lgp-ext-market .lgp-ext-market__tab.is-active {
+  color: var(--text-normal);
+  border-bottom-color: var(--interactive-accent);
+}
+.lgp-ext-market .lgp-ext-market__list {
+  max-height: 55vh;
+  overflow-y: auto;
+}
+.lgp-ext-market .lgp-ext-market__empty {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 28px 0;
+}
+.lgp-ext-market .lgp-ext-card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+.lgp-ext-market .lgp-ext-card__icon {
+  width: 36px;
+  height: 36px;
+  flex: none;
+}
+.lgp-ext-market .lgp-ext-card__icon img {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+}
+.lgp-ext-market .lgp-ext-card__icon-default {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+}
+.lgp-ext-market .lgp-ext-card__info {
+  flex: 1;
+  min-width: 0;
+}
+.lgp-ext-market .lgp-ext-card__title {
+  font-weight: 600;
+}
+.lgp-ext-market .lgp-ext-card__meta {
+  font-size: 0.82em;
+  color: var(--text-muted);
+}
+.lgp-ext-market .lgp-ext-card__desc {
+  font-size: 0.88em;
+  color: var(--text-faint);
+  margin-top: 2px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.lgp-ext-market .lgp-ext-card__contrib {
+  margin-top: 4px;
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.lgp-ext-market .lgp-ext-tag {
+  font-size: 0.75em;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  color: var(--text-muted);
+}
+.lgp-ext-market .lgp-ext-card__action {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex: none;
+}
+
+
+/* ===== xterm.css (from @xterm/xterm) ===== */
+/**
+ * Copyright (c) 2014 The xterm.js authors. All rights reserved.
+ * Copyright (c) 2012-2013, Christopher Jeffrey (MIT License)
+ * https://github.com/chjj/term.js
+ * @license MIT
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ *
+ * Originally forked from (with the author's permission):
+ *   Fabrice Bellard's javascript vt100 for jslinux:
+ *   http://bellard.org/jslinux/
+ *   Copyright (c) 2011 Fabrice Bellard
+ *   The original design remains. The terminal itself
+ *   has been extended to include xterm CSI codes, among
+ *   other features.
+ */
+
+/**
+ *  Default styles for xterm.js
+ */
+
+.xterm {
+    cursor: text;
+    position: relative;
+    user-select: none;
+    -ms-user-select: none;
+    -webkit-user-select: none;
+}
+
+.xterm.focus,
+.xterm:focus {
+    outline: none;
+}
+
+.xterm .xterm-helpers {
+    position: absolute;
+    top: 0;
+    /**
+     * The z-index of the helpers must be higher than the canvases in order for
+     * IMEs to appear on top.
+     */
+    z-index: 5;
+}
+
+.xterm .xterm-helper-textarea {
+    padding: 0;
+    border: 0;
+    margin: 0;
+    /* Move textarea out of the screen to the far left, so that the cursor is not visible */
+    position: absolute;
+    opacity: 0;
+    left: -9999em;
+    top: 0;
+    width: 0;
+    height: 0;
+    z-index: -5;
+    /** Prevent wrapping so the IME appears against the textarea at the correct position */
+    white-space: nowrap;
+    overflow: hidden;
+    resize: none;
+}
+
+.xterm .composition-view {
+    /* TODO: Composition position got messed up somewhere */
+    background: #000;
+    color: #FFF;
+    display: none;
+    position: absolute;
+    white-space: nowrap;
+    z-index: 1;
+}
+
+.xterm .composition-view.active {
+    display: block;
+}
+
+.xterm .xterm-viewport {
+    /* On OS X this is required in order for the scroll bar to appear fully opaque */
+    background-color: #000;
+    overflow-y: scroll;
+    cursor: default;
+    position: absolute;
+    right: 0;
+    left: 0;
+    top: 0;
+    bottom: 0;
+}
+
+.xterm .xterm-screen {
+    position: relative;
+}
+
+.xterm .xterm-screen canvas {
+    position: absolute;
+    left: 0;
+    top: 0;
+}
+
+.xterm-char-measure-element {
+    display: inline-block;
+    visibility: hidden;
+    position: absolute;
+    top: 0;
+    left: -9999em;
+    line-height: normal;
+}
+
+.xterm.enable-mouse-events {
+    /* When mouse events are enabled (eg. tmux), revert to the standard pointer cursor */
+    cursor: default;
+}
+
+.xterm.xterm-cursor-pointer,
+.xterm .xterm-cursor-pointer {
+    cursor: pointer;
+}
+
+.xterm.column-select.focus {
+    /* Column selection mode */
+    cursor: crosshair;
+}
+
+.xterm .xterm-accessibility:not(.debug),
+.xterm .xterm-message {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    z-index: 10;
+    color: transparent;
+    pointer-events: none;
+}
+
+.xterm .xterm-accessibility-tree:not(.debug) *::selection {
+  color: transparent;
+}
+
+.xterm .xterm-accessibility-tree {
+  font-family: monospace;
+  user-select: text;
+  white-space: pre;
+}
+
+.xterm .xterm-accessibility-tree > div {
+  transform-origin: left;
+  width: fit-content;
+}
+
+.xterm .live-region {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+}
+
+.xterm-dim {
+    /* Dim should not apply to background, so the opacity of the foreground color is applied
+     * explicitly in the generated class and reset to 1 here */
+    opacity: 1 !important;
+}
+
+.xterm-underline-1 { text-decoration: underline; }
+.xterm-underline-2 { text-decoration: double underline; }
+.xterm-underline-3 { text-decoration: wavy underline; }
+.xterm-underline-4 { text-decoration: dotted underline; }
+.xterm-underline-5 { text-decoration: dashed underline; }
+
+.xterm-overline {
+    text-decoration: overline;
+}
+
+.xterm-overline.xterm-underline-1 { text-decoration: overline underline; }
+.xterm-overline.xterm-underline-2 { text-decoration: overline double underline; }
+.xterm-overline.xterm-underline-3 { text-decoration: overline wavy underline; }
+.xterm-overline.xterm-underline-4 { text-decoration: overline dotted underline; }
+.xterm-overline.xterm-underline-5 { text-decoration: overline dashed underline; }
+
+.xterm-strikethrough {
+    text-decoration: line-through;
+}
+
+.xterm-screen .xterm-decoration-container .xterm-decoration {
+	z-index: 6;
+	position: absolute;
+}
+
+.xterm-screen .xterm-decoration-container .xterm-decoration.xterm-decoration-top-layer {
+	z-index: 7;
+}
+
+.xterm-decoration-overview-ruler {
+    z-index: 8;
+    position: absolute;
+    top: 0;
+    right: 0;
+    pointer-events: none;
+}
+
+.xterm-decoration-top {
+    z-index: 2;
+    position: relative;
+}
+
+
+
+/* Derived from vs/base/browser/ui/scrollbar/media/scrollbar.css */
+
+/* xterm.js customization: Override xterm's cursor style */
+.xterm .xterm-scrollable-element > .scrollbar {
+    cursor: default;
+}
+
+/* Arrows */
+.xterm .xterm-scrollable-element > .scrollbar > .scra {
+	cursor: pointer;
+	font-size: 11px !important;
+}
+
+.xterm .xterm-scrollable-element > .visible {
+	opacity: 1;
+
+	/* Background rule added for IE9 - to allow clicks on dom node */
+	background:rgba(0,0,0,0);
+
+	transition: opacity 100ms linear;
+	/* In front of peek view */
+	z-index: 11;
+}
+.xterm .xterm-scrollable-element > .invisible {
+	opacity: 0;
+	pointer-events: none;
+}
+.xterm .xterm-scrollable-element > .invisible.fade {
+	transition: opacity 800ms linear;
+}
+
+/* Scrollable Content Inset Shadow */
+.xterm .xterm-scrollable-element > .shadow {
+	position: absolute;
+	display: none;
+}
+.xterm .xterm-scrollable-element > .shadow.top {
+	display: block;
+	top: 0;
+	left: 3px;
+	height: 3px;
+	width: 100%;
+	box-shadow: var(--vscode-scrollbar-shadow, #000) 0 6px 6px -6px inset;
+}
+.xterm .xterm-scrollable-element > .shadow.left {
+	display: block;
+	top: 3px;
+	left: 0;
+	height: 100%;
+	width: 3px;
+	box-shadow: var(--vscode-scrollbar-shadow, #000) 6px 0 6px -6px inset;
+}
+.xterm .xterm-scrollable-element > .shadow.top-left-corner {
+	display: block;
+	top: 0;
+	left: 0;
+	height: 3px;
+	width: 3px;
+}
+.xterm .xterm-scrollable-element > .shadow.top.left {
+	box-shadow: var(--vscode-scrollbar-shadow, #000) 6px 0 6px -6px inset;
+}
+
+/* ===== 终端视图 ===== */
+.lgp-terminal { display: flex; flex-direction: column; padding: 4px; }
+.lgp-terminal .lgp-terminal__host { flex: 1; min-height: 0; padding: 2px 4px; }
+.lgp-terminal .lgp-terminal__host .xterm { height: 100%; }
+.lgp-terminal .lgp-terminal__bar { display: flex; gap: 6px; align-items: center; padding: 2px 4px; border-bottom: 1px solid var(--background-modifier-border); }
+.lgp-terminal .lgp-terminal__hint { font-size: 0.8em; color: var(--text-muted); flex: 1; }
+
+/* ==================== Browser (modules/browser) ==================== */
+/* obsidian-browser styles — every colour comes from Obsidian's theme vars so
+   the browser chrome follows the active theme (light and dark). */
+
+.ob-browser-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  padding: 0;
+}
+
+/* ---------- tab strip ---------- */
+
+.ob-tabbar {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 4px 6px 0 6px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--divider-color);
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex: 0 0 auto;
+  scrollbar-width: thin;
+}
+
+.ob-tabbar::-webkit-scrollbar {
+  height: 4px;
+}
+
+.ob-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 200px;
+  min-width: 90px;
+  padding: 4px 6px 4px 8px;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  white-space: nowrap;
+}
+
+.ob-tab:hover {
+  background: var(--background-modifier-hover);
+}
+
+.ob-tab.is-active {
+  background: var(--background-primary);
+  color: var(--text-normal);
+  border-color: var(--divider-color);
+}
+
+.ob-tab-favicon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  object-fit: contain;
+}
+
+.ob-tab-favicon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.ob-tab-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--font-ui-smaller);
+  line-height: 1.4;
+}
+
+.ob-tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-faint);
+}
+
+.ob-tab-close:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.ob-tab-close svg {
+  width: 12px;
+  height: 12px;
+}
+
+.ob-tab-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+}
+
+.ob-tab-add:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.ob-tab-add svg {
+  width: 14px;
+  height: 14px;
+}
+
+.ob-tabhost {
+  flex: 1 1 auto;
+  position: relative;
+  min-height: 0;
+  display: flex;
+}
+
+/* ---------- tab body ---------- */
+
+.ob-browser-tab {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.ob-browser-webview-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  background: var(--background-primary);
+}
+
+.ob-browser-webview-wrap webview {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.ob-browser-toolbar {
+  flex: 0 0 auto;
+  position: relative;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--divider-color);
+}
+
+.ob-browser-loading-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 2px;
+  width: 100%;
+  background: var(--interactive-accent);
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.ob-browser-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+}
+
+.ob-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.ob-btn:hover:not(:disabled) {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.ob-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.ob-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ob-btn.is-active {
+  color: var(--interactive-accent);
+}
+
+.ob-urlbar {
+  flex: 1 1 auto;
+  min-width: 80px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--divider-color);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+}
+
+.ob-urlbar:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+}
+
+.ob-extbar {
+  display: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.ob-ext-icon {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+.ob-findbar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-top: 1px solid var(--divider-color);
+}
+
+.ob-findbar {
+  flex: 1 1 auto;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--divider-color);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+}
+
+.ob-find-result {
+  min-width: 44px;
+  text-align: right;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+/* ---------- docks ---------- */
+
+.ob-dock {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  padding: 0;
+}
+
+.ob-dock-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  flex: 0 0 auto;
+}
+
+.ob-dock-search {
+  flex: 1 1 auto;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--divider-color);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+}
+
+.ob-dock-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+}
+
+.ob-dock-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.ob-dock-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 0 4px 12px 4px;
+}
+
+.ob-dock-group {
+  padding: 8px 6px 4px 6px;
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  color: var(--text-faint);
+  text-transform: none;
+}
+
+.ob-dock-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.ob-dock-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.ob-dock-favicon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  margin-top: 1px;
+  object-fit: contain;
+  color: var(--text-faint);
+}
+
+.ob-dock-favicon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ob-dock-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ob-dock-title {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-normal);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ob-dock-sub {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ob-dock-empty {
+  padding: 16px 8px;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
+.ob-progress {
+  height: 4px;
+  margin: 3px 0;
+  border-radius: 2px;
+  background: var(--background-modifier-border);
+  overflow: hidden;
+}
+
+.ob-progress-fill {
+  height: 100%;
+  background: var(--interactive-accent);
+  transition: width 150ms linear;
+}
+
+/* ---------- extension popup ---------- */
+
+.ob-popup-layer {
+  position: fixed;
+  z-index: 1000;
+  width: 380px;
+  height: 480px;
+  max-height: 70vh;
+  display: flex;
+  background: var(--background-primary);
+  border: 1px solid var(--divider-color);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+
+.ob-popup-webview {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* ---------- settings ---------- */
+
+.ob-ext-list {
+  border-top: 1px solid var(--divider-color);
+  padding-top: 4px;
+}
+
+.ob-modal-hint {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin-bottom: 10px;
+}
+
+/* ==================== Jupyter Notebook (modules/jupyter) ==================== */
+/* ==========================================================================
+   Obsidian Jupyter Notebook — .ipynb 查看编辑运行视图
+   ========================================================================== */
+
+.lgp-nb-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 0;
+}
+
+/* 工具栏 */
+.lgp-nb__bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+.lgp-nb__kind {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+.lgp-nb__meta {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lgp-nb__kernel {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+.lgp-nb__kernel--ready { color: var(--text-success, #4caf50); }
+.lgp-nb__kernel--busy { color: var(--color-orange, #ffcb6b); }
+.lgp-nb__kernel--error { color: var(--text-error, #e53935); cursor: help; }
+.lgp-nb__dirty {
+  color: var(--color-orange, #ffcb6b);
+  flex: 0 0 auto;
+}
+.lgp-nb__actions {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.lgp-nb__btn {
+  font-size: 12px;
+  padding: 2px 8px;
+  height: auto;
+  min-height: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 3px;
+}
+.lgp-nb__btn:hover {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+/* 主体滚动区 */
+.lgp-nb__body {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 8px 10px 40px;
+}
+.lgp-nb__loading,
+.lgp-nb__empty {
+  color: var(--text-muted);
+  padding: 24px;
+  text-align: center;
+}
+.lgp-nb__banner {
+  color: var(--text-error);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  font-size: var(--font-ui-small);
+}
+.lgp-nb__raw .cm-editor {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+}
+
+/* 单元格卡片 */
+.lgp-nb__cell {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  margin-bottom: 10px;
+  background: var(--background-primary);
+  overflow: hidden;
+}
+.lgp-nb__cell--active {
+  border-color: var(--interactive-accent);
+}
+.lgp-nb__cell--running {
+  border-color: var(--color-orange, #ffcb6b);
+}
+
+/* 单元格操作条 */
+.lgp-nb__cellbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 8px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  min-height: 22px;
+}
+.lgp-nb__badge {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  flex: 0 0 auto;
+}
+.lgp-nb__cell--markdown .lgp-nb__badge,
+.lgp-nb__cell--raw .lgp-nb__badge {
+  color: var(--color-green, #7fb285);
+}
+.lgp-nb__exec {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  flex: 0 0 auto;
+}
+.lgp-nb__spacer { flex: 1 1 auto; }
+.lgp-nb__cellbtn {
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 3px;
+  user-select: none;
+  flex: 0 0 auto;
+}
+.lgp-nb__cellbtn:hover {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+.lgp-nb__cellbtn--del:hover {
+  color: var(--text-error);
+}
+.lgp-nb__cellbtn--busy {
+  color: var(--color-orange, #ffcb6b);
+  animation: lgp-nb-spin 1s linear infinite;
+}
+@keyframes lgp-nb-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* 源码区(CodeMirror 容器) */
+.lgp-nb__src {
+  cursor: pointer;
+  min-height: 20px;
+}
+.lgp-nb__src .cm-editor {
+  background: transparent;
+  font-size: 13px;
+}
+.lgp-nb__src .cm-gutters {
+  background: transparent;
+  border-right: none;
+}
+.lgp-nb__src--ro {
+  cursor: default;
+}
+.lgp-nb__celledit {
+  cursor: text;
+  outline: 1px solid var(--interactive-accent);
+  outline-offset: -1px;
+}
+.lgp-nb__cell--code .lgp-nb__src {
+  line-height: 20px;
+}
+.lgp-nb__cell--code .lgp-nb__src .cm-line {
+  line-height: 20px;
+}
+
+/* markdown 单元格预览 */
+.lgp-nb__mdview {
+  padding: 2px 10px;
+  cursor: default;
+}
+.lgp-nb__mdview > *:first-child { margin-top: 0; }
+.lgp-nb__mdview > *:last-child { margin-bottom: 0; }
+
+/* 输出区(有内容才显示,:empty 降噪) */
+.lgp-nb__outs:empty {
+  display: none;
+}
+.lgp-nb__outs {
+  border-top: 1px dashed var(--background-modifier-border);
+  padding: 6px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lgp-nb__out {
+  margin: 0;
+  padding: 4px 8px;
+  font-family: var(--font-monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--background-secondary);
+  border-radius: 4px;
+  overflow-x: auto;
+}
+.lgp-nb__out--stream { color: var(--text-normal); }
+.lgp-nb__out--error {
+  color: var(--text-error);
+  background: color-mix(in srgb, var(--text-error) 8%, var(--background-secondary));
+}
+.lgp-nb__err-name {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.lgp-nb__out--img {
+  background: none;
+  padding: 2px 0;
+}
+.lgp-nb__out--img img {
+  max-width: 100%;
+  border-radius: 4px;
+}
+.lgp-nb__out--md {
+  background: none;
+  padding: 2px 0;
+}
+.lgp-nb__out--html {
+  width: 100%;
+  min-height: 60px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: #fff;
+}
+
+/* ==================== Breadcrumb Nav (modules/breadcrumb) ==================== */
+/* 原生视图头面包屑（test / 文件名）保留可见——用户要靠它看文件夹名；
+   本插件的面包屑栏在它下方渲染块路径，两者不重复 */
+/* 隐藏 logseq 插件自带的缩放面包屑（显示位置与内容均由本插件的面包屑栏承担） */
+.block-editor-breadcrumb {
+	display: none !important;
+}
+
+/* Breadcrumb Nav —— 笔记顶部（文件路径下方）的面包屑栏 */
+
+.bcn-bar {
+	position: relative;
+	z-index: 5;
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 1px;
+	margin: 0 0 6px;
+	padding: 3px 0 5px;
+	font-size: var(--font-ui-smallest, 12px);
+	line-height: 1.5;
+	color: var(--text-faint);
+	-webkit-user-select: none;
+	user-select: none;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+/* 吸顶：滚动时固定在笔记顶部，不遮挡正文（自身占位） */
+.bcn-bar.bcn-sticky {
+	position: sticky;
+	top: 0;
+	background-color: var(--background-primary);
+}
+
+.bcn-item {
+	max-width: 20em;
+	padding: 1px 5px;
+	border-radius: 4px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	cursor: pointer;
+}
+
+.bcn-item:hover {
+	color: var(--text-normal);
+	background-color: var(--background-modifier-hover);
+}
+
+.bcn-page {
+	color: var(--text-muted);
+	font-weight: 600;
+}
+
+.bcn-item.bcn-active {
+	color: var(--text-accent);
+}
+
+.bcn-sep {
+	padding: 0 1px;
+	opacity: 0.45;
+}
+
+.bcn-next {
+	padding: 1px 5px;
+	border-radius: 4px;
+	opacity: 0.5;
+	cursor: pointer;
+}
+
+.bcn-next:hover {
+	opacity: 1;
+	color: var(--text-accent);
+	background-color: var(--background-modifier-hover);
+}
+
+/* ============ 悬浮菜单 ============ */
+.bcn-popup {
+	position: fixed;
+	z-index: 1000;
+	min-width: 200px;
+	max-width: 380px;
+	max-height: 320px;
+	overflow-y: auto;
+	padding: 4px;
+	border-radius: 6px;
+	background-color: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+	font-size: var(--font-ui-small, 13px);
+	line-height: 1.5;
+	color: var(--text-normal);
+}
+
+.bcn-popup-item {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 3px 8px;
+	border-radius: 4px;
+}
+
+.bcn-popup-item:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.bcn-popup-text {
+	flex: 1 1 auto;
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	cursor: pointer;
+}
+
+.bcn-popup-tag {
+	flex: 0 0 auto;
+	max-width: 12em;
+	color: var(--text-faint);
+	font-size: 0.9em;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.bcn-popup-next {
+	flex: 0 0 auto;
+	width: 16px;
+	text-align: center;
+	border-radius: 3px;
+	opacity: 0.4;
+	cursor: pointer;
+}
+
+.bcn-popup-next:hover {
+	opacity: 1;
+	color: var(--text-accent);
+	background-color: var(--background-modifier-hover);
+}
+
+.bcn-popup-item.is-active {
+	color: var(--text-accent);
+	font-weight: 600;
+}
+
+/* 由 ▸ 悬浮展开的级联子菜单 */
+.bcn-popup-sub {
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+}
+
+/* 子菜单正展开着的那个条目，保持高亮以指明来源 */
+.bcn-popup-item.is-open {
+	background-color: var(--background-modifier-hover);
+}
