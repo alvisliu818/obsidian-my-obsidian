@@ -1,0 +1,27 @@
+{
+	"name": "obsidian-breadcrumb-nav",
+	"version": "1.0.0",
+	"description": "Obsidian 页面面包屑导航插件：在笔记顶部显示 文件名 › 标题层级 的面包屑。",
+	"main": "dist/main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"build:fast": "node esbuild.config.mjs production",
+		"test": "node esbuild.config.mjs production && node tests/smoke.cjs"
+	},
+	"keywords": [
+		"obsidian",
+		"obsidian-plugin",
+		"breadcrumb"
+	],
+	"author": "",
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "22.10.2",
+		"builtin-modules": "5.1.0",
+		"esbuild": "0.24.2",
+		"obsidian": "1.7.2",
+		"tslib": "2.8.1",
+		"typescript": "5.7.2"
+	}
+}
