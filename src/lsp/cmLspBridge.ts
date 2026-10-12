@@ -110,7 +110,13 @@ export function lspBridgeExtensions(opts: LspBridgeOptions): Extension[] {
     if (!items.length) return null;
     const word = ctx.matchBefore(/[A-Za-z0-9_]+/);
     const from = word ? word.from : ctx.pos;
-    const options: Completion[] = items.slice(0, 200).map((it) => ({
+    // pyright 把模块 dunder 成员排最前（__name__ 等），打 "np." 先看到一屏下划线；
+    // 下划线成员降权排后，普通成员保持 pyright 原序（稳定排序）。
+    const rank = (label: string) => (label.startsWith('__') ? 2 : label.startsWith('_') ? 1 : 0);
+    const options: Completion[] = [...items]
+      .sort((a, b) => rank(a.label) - rank(b.label))
+      .slice(0, 200)
+      .map((it) => ({
       label: it.label,
       type: lspKindToCm(it.kind),
       detail: it.detail,
