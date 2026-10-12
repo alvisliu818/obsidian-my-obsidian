@@ -24,6 +24,8 @@ import { EditorState, type Extension } from 'cm-bundle:@codemirror/state';
 import { defaultKeymap, history, historyKeymap } from 'cm-bundle:@codemirror/commands';
 import { indentUnit } from 'cm-bundle:@codemirror/language';
 import { prismGrammarFor, prismHighlightExtension } from './prismHighlight';
+import { hasGrammarForFence } from '../extensions/tmEngine';
+import { tmHighlightExtension } from '../extensions/tmHighlight';
 import type { Block } from '../types';
 import type { BlockEditorView } from '../view/BlockEditorView';
 
@@ -100,6 +102,8 @@ export function parseCodeFence(text: string): CodeFenceInfo | null {
 
 /** CM extension for the fence's language (null = plain text). */
 function languageFor(lang: string): Extension | null {
+  // 已安装扩展的 TextMate 语法优先（市场扩展覆盖内置 Prism）；未命中回落 Prism
+  if (hasGrammarForFence(lang)) return tmHighlightExtension(lang);
   const grammar = prismGrammarFor(lang);
   return grammar ? prismHighlightExtension(grammar) : null;
 }

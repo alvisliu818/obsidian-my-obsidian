@@ -74,6 +74,8 @@ import { ExtensionMarketModal } from './extensions/marketModal';
 import { restoreAllExtensions, registerExtensionConsumer, search as extSearch, installExtension, uninstallExtension, toggleExtension, reinstallExtension, getInstalledExtensions } from './extensions/extensionManager';
 import { isExtensionInstalled } from './extensions/extensionStore';
 import { hasGrammarForFence } from './extensions/tmEngine';
+import { TerminalView, VIEW_TYPE_TERMINAL } from './terminal/terminalView';
+import { shutdownPtyHelper } from './terminal/ptyClient';
 import type { ExtensionSource } from './extensions/types';
 import { registerGrammarFromExtension, unregisterGrammarFromExtension, ensureTmEngineReady } from './extensions/tmEngine';
 import { loadOpLog, logOp, flushOpLog } from './features/logger';
@@ -111,6 +113,20 @@ export default class LogseqEditorPlugin extends Plugin {
   private sqliteFlush: (() => void) | null = null;
   /** Timer id for the mount panel's optional auto-refresh; 0 = not scheduled. */
   private mountRefreshTimer = 0;
+
+  /** 打开（或聚焦）终端标签页 */
+  async activateTerminalView(): Promise<void> {
+    const { workspace } = this.app;
+    const existing = workspace.getLeavesOfType(VIEW_TYPE_TERMINAL);
+    let leaf: WorkspaceLeaf;
+    if (existing.length) {
+      leaf = existing[0];
+    } else {
+      leaf = workspace.getLeaf('split');
+      await leaf.setViewState({ type: VIEW_TYPE_TERMINAL, active: true });
+    }
+    workspace.revealLeaf(leaf);
+  }
 
   /** 扩展市场 API（设置/命令/E2E 与其他插件消费的正式入口） */
   extMarket = {
@@ -299,6 +315,20 @@ export default class LogseqEditorPlugin extends Plugin {
     // Declaring `hotkeys` hands the decision to Obsidian's keymap, which runs
     // first and dispatches our command directly. The DOM handler then must NOT
     // also claim these keys, or it would double-fire.
+    this.registerView(VIEW_TYPE_TERMINAL, (leaf) => new TerminalView(leaf, this));
+
+    this.addCommand({
+      id: 'open-terminal',
+      name: '打开终端',
+      callback: () => this.activateTerminalView(),
+    });
+
+    this.addRibbonIcon(
+      'terminal-square',
+      '打开终端',
+      () => this.activateTerminalView(),
+    );
+
     this.addCommand({
       id: 'open-ext-market',
       name: '打开扩展市场',
@@ -796,6 +826,7 @@ export default class LogseqEditorPlugin extends Plugin {
   }
 
   onunload(): void {
+    shutdownPtyHelper();
     logOp(this, 'plugin.unload', '', 'ok');
     if (this.mountRefreshTimer) {
       window.clearInterval(this.mountRefreshTimer);
@@ -929,6 +960,7 @@ export default class LogseqEditorPlugin extends Plugin {
       (this.settings as { mountTreeOrder?: unknown }).mountTreeOrder,
     );
     this.settings.externalCodeWrap = this.settings.externalCodeWrap !== false;
+    this.settings.lspEnabled = this.settings.lspEnabled !== false;
     this.settings.externalBanner = this.settings.externalBanner !== false;
 
     // "Open with": a config that never had the key gets the presets, so a fresh

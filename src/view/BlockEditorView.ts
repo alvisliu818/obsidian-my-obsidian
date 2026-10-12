@@ -25,6 +25,9 @@ import {
   refreshQueryBlocks,
   clearAllBlockCaches,
   cachedStaticEl,
+  anchorRelativeImgSrcs,
+  type ImgAnchorToken,
+  applyAnchoredImgSrcs,
   findBlockEl,
   patchBlockSubtree,
   patchSiblingList,
@@ -871,13 +874,16 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
           const ph = document.createElement('div');
           ph.className = 'block-content-static';
           content.appendChild(ph);
+          const imgAnchorTokens: ImgAnchorToken[] = [];
           void MarkdownRenderer.render(
             this.app,
-            codeInfo.prefix,
+            anchorRelativeImgSrcs(codeInfo.prefix, this, imgAnchorTokens),
             ph,
             this.file?.path ?? '',
             this,
-          ).catch(() => {});
+          )
+            .then(() => applyAnchoredImgSrcs(ph, this, imgAnchorTokens))
+            .catch(() => {});
         }
       }
       this.focusedCode = mountCodeEditor(content, b, codeInfo, this, mountOpts);

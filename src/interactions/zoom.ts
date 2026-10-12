@@ -27,11 +27,33 @@ export interface BreadcrumbEntry {
 }
 
 /** Breadcrumb chain: file → ancestors → zoomed block. */
+/**
+ * 面包屑摘要：raw HTML 块（Word 导出常见的跨行 <img> 标签）直接取首行会把
+ *  原文漏进面包屑，换成可读的 [图片]/[代码块] 摘要。
+ */
+function crumbLabel(b: Block): string {
+  const first = (b.text || '').split('\n')[0].trim();
+  if (!first) return '…';
+  if (b.kind === 'raw') {
+    if (/^<img\b/i.test(first)) {
+      const src = /src="([^"]*)"/i.exec(b.text)?.[1] ?? '';
+      const name = src.split('/').pop() || 'image';
+      return `[图片] ${name}`;
+    }
+    if (/^<iframe|^<video|^<audio|^<embed/i.test(first)) return '[嵌入]';
+    if (/^`{3,}|^~{3,}/.test(first)) {
+      const lang = first.match(/^`{3,}|^~{3,}(.*)$/)?.[1]?.trim();
+      return lang ? `[代码块] ${lang}` : '[代码块]';
+    }
+  }
+  return first;
+}
+
 export function breadcrumbFor(doc: ParsedDocument, zoomed: Block | null, fileLabel: string): BreadcrumbEntry[] {
   const entries: BreadcrumbEntry[] = [{ block: null, label: fileLabel }];
   if (!zoomed || !stillInForest(doc, zoomed)) return entries;
   for (const b of pathToRoot(zoomed)) {
-    entries.push({ block: b, label: b.text.split('\n')[0].trim() || '…' });
+    entries.push({ block: b, label: crumbLabel(b) });
   }
   return entries;
 }

@@ -25,6 +25,7 @@
     "builtin-modules": "^3.3.0",
     "esbuild": "^0.21.5",
     "obsidian": "^1.5.7",
+    "pyright": "^1.1.414",
     "tslib": "^2.6.3",
     "typescript": "^5.5.4",
     "vitest": "^2.1.9"
@@ -42,9 +43,14 @@
     "@codemirror/view": "^6.34.0",
     "@lezer/highlight": "^1.2.1",
     "@types/prismjs": "^1.26.6",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "jszip": "^3.10.2",
     "mammoth": "^1.13.0",
+    "node-pty": "^1.1.0",
     "prismjs": "^1.30.0",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2",
     "wa-sqlite": "^1.0.0",
     "xlsx": "^0.18.5"
   }

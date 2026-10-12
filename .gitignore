@@ -44,6 +44,9 @@ tests/e2e/*.png
 # ===== 发布产物（由构建生成，不入库；README 已链接 DELIVERY） =====
 delivery/
 
+# ===== 部署 staging（pty-helper / pyright，由构建脚本生成） =====
+dist/
+
 # ===== 测试夹具内可再生内容 =====
 tests/fixtures/edge-vault/.obsidian/workspace.json
 tests/fixtures/edge-vault/.logseq-editor/

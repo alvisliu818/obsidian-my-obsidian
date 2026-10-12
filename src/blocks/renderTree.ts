@@ -16,7 +16,7 @@
  * async markdown renderer for untouched blocks.
  */
 
-import { MarkdownRenderer, setIcon } from 'obsidian';
+import { MarkdownRenderer, setIcon, TFile } from 'obsidian';
 import { createRunButton, mountRunUi, registerCodeWrap } from '../exec/codeBlockRun';
 import { enhanceTable } from './tableEditor';
 import { hasTable } from './tableModel';
@@ -838,21 +838,29 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
   // markdown render, then swap tokens for live page-embed boxes.
   const pageEmbedTokens: { token: string; page: string }[] = [];
   const hasPageEmbed = /!\[\[[^\[\]]+\]\]/.test(b.text);
+  // HTML img 相对 src 锚定：防库内同名图片劫持（见 anchorRelativeImgSrcs 注释）
+  const imgAnchorTokens: ImgAnchorToken[] = [];
   const mdSource = withTableSeparation(
     withQuoteRowSeparation(
-      hasPageEmbed
+      anchorRelativeImgSrcs(
+        hasPageEmbed
         ? b.text.replace(/!\[\[([^\[\]]+)\]\]/g, (_m, page: string) => {
             const token = `LGPAGEEMBED${pageEmbedTokens.length}LGPAGEEMBED`;
             pageEmbedTokens.push({ token, page });
             return token;
           })
         : b.text,
+        host,
+        imgAnchorTokens,
+      ),
     ),
   );
   MarkdownRenderer.render(host.app, mdSource, holder, host.file?.path ?? '', host).then(() => {
     if (host.renderGeneration !== gen) return; // stale (file switched)
     wireContentEvents(holder, b, host);
     if (!holder.hasClass('block-dataview')) {
+      // 锚定恢复必须先于一切包裹/检查 img 的 enhance pass
+      applyAnchoredImgSrcs(holder, host, imgAnchorTokens);
       // Embeds FIRST: `{{embed ((id))}` contains an inner `((id))` that
       // enhanceBlockRefs would otherwise turn into a chip, splitting the text
       // node so the embed pattern no longer matches.
@@ -906,6 +914,78 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
  * UX on the `<table>` that MarkdownRenderer already produced. Upgrading in
  * place keeps all existing table styling.
  */
+/**
+ * HTML img 相对 src 锚定 —— 防止库内同名文件劫持。
+ *
+ * Word/OneNote 导出的笔记用 <img src="media/imageN.png"> 相对路径引用图片。
+ * Obsidian MarkdownRenderer 对 HTML img 的 src 走全局链接解析（库根优先，
+ * 未命中后全库模糊匹配），库内存在其他笔记的同名 media/imageN.png 时会
+ * 渲染出错误的图片（实测：NLP 笔记的 image6 被深度学习笔记的 tensor
+ * 截图劫持，库内同名词达 10 处）。
+ *
+ * 修复：渲染前把能解析到库内文件的相对 src 替换成 token（解析顺序 =
+ * md 所在目录优先，其次库根）；渲染后用该文件的资源 URL 恢复。
+ * 解析不到文件的 src 原样保留，交给 Obsidian 的默认行为。
+ */
+export type ImgAnchorToken = { token: string; file: TFile | null };
+
+const IMG_ANCHOR_PREFIX = 'LGIMGANCHOR';
+const IMG_ANCHOR_RE = /^LGIMGANCHOR(\d+)LGIMGANCHOR$/;
+const IMG_EXT_RE = /^(png|jpe?g|gif|webp|svg|bmp|avif|ico)$/i;
+
+export function anchorRelativeImgSrcs(
+	md: string,
+	host: BlockRenderHost,
+	tokens: ImgAnchorToken[],
+): string {
+	const file = host.file;
+	if (!file) return md; // 片段场景无基准目录，维持现状
+	const dir = file.parent?.path ?? '';
+	const resolve = (raw: string): TFile | null => {
+		if (!raw || /^(app|https?|data|vault|file|mailto):/i.test(raw) || raw.startsWith('/')) return null;
+		let decoded = raw;
+		try {
+			decoded = decodeURIComponent(raw);
+		} catch {
+			/* 保留原文 */
+		}
+		const candidates = dir ? [`${dir}/${decoded}`, decoded] : [decoded];
+		for (const p of candidates) {
+			const found = host.app.vault.getAbstractFileByPath(p);
+			if (found instanceof TFile && IMG_EXT_RE.test(found.extension)) return found;
+		}
+		return null;
+	};
+	const rewrite = (m: string, pre: string, src: string, post: string): string => {
+		const resolved = resolve(src);
+		if (!resolved) return m;
+		const token = `${IMG_ANCHOR_PREFIX}${tokens.length}${IMG_ANCHOR_PREFIX}`;
+		tokens.push({ token, file: resolved });
+		return `${pre}${token}${post}`;
+	};
+	return md
+		.replace(/(<img\b[^>]*?\bsrc=")([^"]*)(")/gi, rewrite)
+		.replace(/(<img\b[^>]*?\bsrc=')([^']*)(')/gi, rewrite);
+}
+
+/** 渲染后：把 token src 恢复为被锚定文件的 vault 资源 URL。 */
+export function applyAnchoredImgSrcs(
+	holder: HTMLElement,
+	host: BlockRenderHost,
+	tokens: ImgAnchorToken[],
+): void {
+	if (!tokens.length) return;
+	holder.querySelectorAll<HTMLImageElement>('img').forEach((img) => {
+		const src = img.getAttribute('src') || '';
+		const m = IMG_ANCHOR_RE.exec(src);
+		if (!m) return;
+		const entry = tokens[Number(m[1])];
+		if (entry?.file) {
+			img.setAttribute('src', host.app.vault.getResourcePath(entry.file));
+		}
+	});
+}
+
 function enhanceTables(holder: HTMLElement, b: Block, host: BlockRenderHost): void {
   if (!hasTable(b.text)) return;
   // Skip tables that are part of a query result (read-only by design) or that

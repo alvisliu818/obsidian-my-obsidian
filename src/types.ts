@@ -246,6 +246,8 @@ export interface BlockEditorSettings {
    * re-explained in the description.
    */
   externalCodeWrap: boolean;
+  /** LSP（Python 代码文件的 pyright 补全/提示/诊断）开关 */
+  lspEnabled: boolean;
   /**
    * Open a mounted file in a split pane rather than replacing the current tab.
    *
@@ -483,6 +485,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   mountTreeOrder: {},
   externalMounts: [],
   externalCodeWrap: true,
+  lspEnabled: true,
   externalSplitView: false,
   externalBanner: true,
   officeViewerEnabled: true,

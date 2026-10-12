@@ -19,6 +19,7 @@
 import { ItemView, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
 import { EditorState, type Extension } from 'cm-bundle:@codemirror/state';
 import { EditorView, keymap, lineNumbers, type KeyBinding, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection, crosshairCursor, highlightSpecialChars, dropCursor } from 'cm-bundle:@codemirror/view';
+import { lspBridgeExtensions } from '../lsp/cmLspBridge';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from 'cm-bundle:@codemirror/commands';
 import { searchKeymap, highlightSelectionMatches, search } from 'cm-bundle:@codemirror/search';
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from 'cm-bundle:@codemirror/autocomplete';
@@ -389,6 +390,7 @@ export class ExternalCodeView extends ItemView {
         this.saveTimer = window.setTimeout(() => void this.flush(), 900);
       }),
       ...languageFor(ext),
+      ...(this.abs ? lspBridgeExtensions({ plugin: this.plugin, absPath: this.abs, languageId: ext === 'py' ? 'python' : ext }) : []),
     ];
 
     this.editor = new EditorView({
