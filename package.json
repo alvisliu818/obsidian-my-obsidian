@@ -1,0 +1,29 @@
+{
+	"name": "obsidian-doc-assist",
+	"version": "0.2.0",
+	"description": "Document processing pipeline for Obsidian: key info extraction, clipping cleanup, link organization, AI assist, side-by-side writing, image slimming. Ported from siyuan-doc-assist.",
+	"main": "main.js",
+	"type": "module",
+	"scripts": {
+		"dev": "node esbuild.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.mjs production",
+		"test": "tsc -noEmit -skipLibCheck && esbuild tests/smoke-core.ts --bundle --platform=node --format=cjs --outfile=node_modules/.cache/smoke.cjs --log-level=warning && node node_modules/.cache/smoke.cjs"
+	},
+	"keywords": [
+		"obsidian",
+		"doc-assist",
+		"key-info",
+		"cleanup",
+		"backlinks"
+	],
+	"author": "alvisliu",
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^20.19.43",
+		"builtin-modules": "^3.3.0",
+		"esbuild": "^0.21.5",
+		"obsidian": "^1.5.7",
+		"tslib": "^2.6.3",
+		"typescript": "^5.5.4"
+	}
+}

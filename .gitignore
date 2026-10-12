@@ -1,0 +1,24 @@
+# ===== AI 助手工作区 =====
+# 私人助手文件与开发计划由 E:\HOME\Code 私有仓库跟踪，
+# 公开仓库一律不提交（.gitignore + pre-commit hook 双重拦截）。
+.trae/
+.openclaw/
+.openclaw-attachments/
+.opencode/
+.workbuddy/
+memory/
+TOOLS.md
+USER.md
+SOUL.md
+IDENTITY.md
+HEARTBEAT.md
+
+# ===== 桌面系统杂项 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== Node / 构建产物 =====
+node_modules/
+main.js
+*.log

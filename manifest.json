@@ -1,0 +1,10 @@
+{
+	"id": "obsidian-doc-assist",
+	"name": "Doc Assist",
+	"version": "0.2.0",
+	"minAppVersion": "1.5.0",
+	"description": "文档加工流水线：关键信息提炼、剪藏清洗、双链整理、AI 赋能、对照写作、图片瘦身。移植自 siyuan-doc-assist。",
+	"author": "alvisliu",
+	"authorUrl": "https://github.com/alvisliu818",
+	"isDesktopOnly": true
+}
