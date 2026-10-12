@@ -1,0 +1,303 @@
+/**
+ * Block-level keyboard interaction handlers (Logseq behavior).
+ * Each handler receives the CM6 view of the focused block plus the host view;
+ * returning true consumes the key (prevents CM6 default), false falls through.
+ */
+
+import { insertTab } from '@codemirror/commands';
+import type { EditorView } from '@codemirror/view';
+import type { BlockRenderHost } from '../blocks/renderHost';
+import {
+  indent,
+  mergeWithNext,
+  mergeWithPrev,
+  moveBlockVertically,
+  nextVisible,
+  outdent,
+  prevVisible,
+  splitBlock,
+  splitRawToOutline,
+} from '../core/treeOps';
+import { cycleMarker } from '../core/treeOps';
+import { applyBlockProps, splitPropLines, type Block } from '../types';
+
+function focusedBlock(host: BlockRenderHost): Block | null {
+  return host.focusedBlock;
+}
+
+/** Selection with deleted-range applied: returns resulting text + caret offset. */
+function deleteSelection(view: EditorView): { text: string; offset: number } {
+  const sel = view.state.selection.main;
+  const text = view.state.doc.toString();
+  if (sel.empty) return { text, offset: sel.head };
+  return { text: text.slice(0, sel.from) + text.slice(sel.to), offset: sel.from };
+}
+
+/** Enter: split block at caret; tail becomes a new sibling below. */
+export function handleEnter(view: EditorView, host: BlockRenderHost): boolean {
+  const b = focusedBlock(host);
+  if (!b) return false;
+  if (b.kind === 'raw') {
+    // Logseq parity: Enter turns the raw block into outline blocks — the head
+    // converts to a list block, the tail becomes a new list sibling; edge
+    // blank lines and the common indent never survive (splitRawToOutline).
+    // Shift+Enter stays the soft newline.
+    const { text, offset } = deleteSelection(view);
+    const parent = b.parent;
+    let nb: Block | null = null;
+    host.mutate(
+      () => {
+        b.text = text;
+        nb = splitRawToOutline(b, offset);
+      },
+      () => ({ lists: [parent] }),
+    );
+    const target = nb as Block | null;
+    if (target) {
+      host.focusBlock(target, 0);
+    }
+    return true;
+  }
+  const { text, offset } = deleteSelection(view);
+  const parent = b.parent;
+  let nb: Block | null = null;
+  host.mutate(
+    () => {
+      // Trailing `key:: value` lines stay with the head block as properties.
+      const { text: clean, props } = splitPropLines(text);
+      applyBlockProps(b, props);
+      b.text = clean;
+      nb = splitBlock(b, Math.min(offset, clean.length));
+    },
+    () => ({ lists: [parent] }),
+  );
+  // Children stay with the head block (Logseq behavior); caret goes to new block.
+  const target = nb as Block | null;
+  if (target) {
+    host.focusBlock(target, 0);
+  }
+  return true;
+}
+
+/** Tab / Shift+Tab: indent / outdent the whole block. */
+export function handleTab(view: EditorView, host: BlockRenderHost, shift: boolean): boolean {
+  const b = focusedBlock(host);
+  if (!b) return false;
+  if (b.kind === 'raw') {
+    if (!shift) insertTab(view); // raw content: literal indentation
+    return true;
+  }
+  const offset = view.state.selection.main.head;
+  const oldParent = b.parent;
+  host.mutate(
+    () => {
+      if (shift) outdent(b);
+      else indent(b);
+    },
+    // Rebuild both the old and the new sibling list of b.
+    () => ({ lists: [oldParent, b.parent] }),
+  );
+  host.focusBlock(b, Math.min(offset, b.text.length));
+  return true;
+}
+
+function atFirstVisualLine(view: EditorView): boolean {
+  const head = view.state.selection.main.head;
+  const line = view.state.doc.lineAt(head);
+  // The block's doc holds soft lines (real newlines): arrows must walk them
+  // before exiting to the neighboring block — "first visual line" means the
+  // doc's FIRST logical line, and then the caret on its first visual row.
+  if (line.from !== 0) return false;
+  const headTop = view.coordsAtPos(head)?.top;
+  const lineTop = view.coordsAtPos(line.from)?.top;
+  if (headTop === undefined || lineTop === undefined) return true;
+  return Math.abs(headTop - lineTop) < 2;
+}
+
+function atLastVisualLine(view: EditorView): boolean {
+  const head = view.state.selection.main.head;
+  const line = view.state.doc.lineAt(head);
+  if (line.to !== view.state.doc.length) return false; // more soft lines below
+  const headBottom = view.coordsAtPos(head)?.bottom;
+  const lineBottom = view.coordsAtPos(line.to)?.bottom;
+  if (headBottom === undefined || lineBottom === undefined) return true;
+  return Math.abs(headBottom - lineBottom) < 2;
+}
+
+/** Arrow keys: cross-block caret movement at block boundaries. */
+export function handleArrow(view: EditorView, host: BlockRenderHost, dir: 'up' | 'down' | 'left' | 'right'): boolean {
+  const b = focusedBlock(host);
+  if (!b) return false;
+  const roots = host.visibleRoots;
+  const sel = view.state.selection.main;
+  const textLen = view.state.doc.length;
+
+  if (dir === 'up') {
+    if (b.kind === 'raw' && !atFirstVisualLine(view)) return false;
+    if (!atFirstVisualLine(view)) return false;
+    const prev = prevVisible(roots, b);
+    if (!prev) return true; // consume: nothing above
+    host.focusBlock(prev, 'end');
+    return true;
+  }
+  if (dir === 'down') {
+    if (!atLastVisualLine(view)) return false;
+    const next = nextVisible(roots, b);
+    if (!next) return true;
+    host.focusBlock(next, 0);
+    return true;
+  }
+  if (dir === 'left') {
+    if (!sel.empty || sel.head !== 0) return false;
+    const prev = prevVisible(roots, b);
+    if (!prev) return true;
+    host.focusBlock(prev, 'end');
+    return true;
+  }
+  // right
+  if (!sel.empty || sel.head !== textLen) return false;
+  const next = nextVisible(roots, b);
+  if (!next) return true;
+  host.focusBlock(next, 0);
+  return true;
+}
+
+/** Backspace at position 0: merge into previous visible block. */
+export function handleBackspace(view: EditorView, host: BlockRenderHost): boolean {
+  const b = focusedBlock(host);
+  if (!b) return false;
+  const sel = view.state.selection.main;
+  if (!sel.empty) return false;
+  if (sel.head !== 0) return false;
+  // Raw blocks merge too (Logseq: Backspace at a block's start joins the
+  // previous block — the old raw guard made e.g. a table's first line an
+  // undeletable dead end).
+  const roots = host.visibleRoots;
+  const prev = prevVisible(roots, b);
+  if (!prev) return true; // first block: consume, nothing to merge
+  const joinOffset = prev.text.length;
+  const { text } = deleteSelection(view); // no-op (empty selection)
+  void text;
+  const parent = b.parent;
+  host.mutate(
+    () => {
+      b.text = view.state.doc.toString();
+      mergeWithPrev(roots, b);
+    },
+    () => ({ lists: [parent] }),
+  );
+  host.focusBlock(prev, Math.min(joinOffset, prev.text.length));
+  return true;
+}
+
+/**
+ * Delete (forward) at block end: merge the NEXT visible block into this one
+ * (Logseq parity). On an empty block this removes the empty row — the next
+ * block's content fills it and the row disappears.
+ */
+export function handleDelete(view: EditorView, host: BlockRenderHost): boolean {
+  const b = focusedBlock(host);
+  if (!b) return false;
+  const sel = view.state.selection.main;
+  if (!sel.empty) return false;
+  const text = view.state.doc.toString();
+  if (sel.head !== text.length) return false;
+  const roots = host.visibleRoots;
+  const next = nextVisible(roots, b);
+  if (!next) return true; // last block: consume, nothing to merge
+  const joinOffset = text.length;
+  const parent = b.parent;
+  const nextParent = next.parent;
+  host.mutate(
+    () => {
+      b.text = text;
+      mergeWithNext(roots, b);
+    },
+    // The merge may pull a block from a different sibling list — patch both.
+    () => ({ lists: [parent, nextParent] }),
+  );
+  host.focusBlock(b, joinOffset);
+  return true;
+}
+
+/** Ctrl/Cmd+Enter: cycle TODO 鈫?DOING 鈫?DONE 鈫?none. */
+export function handleCycleMarker(view: EditorView, host: BlockRenderHost): boolean {
+  const b = focusedBlock(host);
+  if (!b || b.kind === 'raw') return false;
+  const offset = view.state.selection.main.head;
+  const text = view.state.doc.toString();
+  host.mutate(
+    () => {
+      b.text = text;
+      cycleMarker(b);
+    },
+    () => ({ subtree: b }),
+  );
+  host.focusBlock(b, Math.min(offset, b.text.length));
+  return true;
+}
+
+/** Ctrl/Cmd+Shift+ArrowUp/Down: move block up/down. */
+export function handleMoveBlock(view: EditorView, host: BlockRenderHost, dir: -1 | 1): boolean {
+  const b = focusedBlock(host);
+  if (!b || b.kind === 'raw') return false;
+  const offset = view.state.selection.main.head;
+  const text = view.state.doc.toString();
+  const roots = host.visibleRoots;
+  let ok = false;
+  host.mutate(
+    () => {
+      b.text = text;
+      ok = moveBlockVertically(roots, b, dir);
+    },
+    // Nothing moved 鈫?nothing to re-render.
+    () => (ok ? { lists: [b.parent] } : {}),
+  );
+  if (ok) host.focusBlock(b, Math.min(offset, b.text.length));
+  return true;
+}
+
+/** Alt+ArrowUp/Down: jump to the previous/next block regardless of caret line. */
+export function handleJumpBlock(view: EditorView, host: BlockRenderHost, dir: -1 | 1): boolean {
+  const b = focusedBlock(host);
+  if (!b) return false;
+  void view; // caret position intentionally ignored
+  const roots = host.visibleRoots;
+  const target = dir === -1 ? prevVisible(roots, b) : nextVisible(roots, b);
+  if (!target) return true; // consume at document edges
+  host.focusBlock(target, dir === -1 ? 'end' : 0);
+  return true;
+}
+
+/**
+ * Typing a markdown/bracket opener with a selection wraps the selection
+ * (Obsidian behavior) instead of typing over it: `*` → `*sel*`, `[` →
+ * `[sel]`, etc. The wrapped text stays selected so repeating the key chains
+ * formatting (`*` twice → `**sel**` bold, `[` twice → `[[sel]]` wikilink).
+ * An empty selection falls through to the plain insert.
+ */
+export function handleWrapChar(view: EditorView, host: BlockRenderHost, open: string, close: string): boolean {
+  const b = focusedBlock(host);
+  if (!b) return false;
+  const sel = view.state.selection.main;
+  if (sel.empty) return false;
+  const inner = view.state.doc.sliceString(sel.from, sel.to);
+  view.dispatch({
+    changes: { from: sel.from, to: sel.to, insert: open + inner + close },
+    selection: { anchor: sel.from + open.length, head: sel.to + open.length },
+  });
+  return true;
+}
+
+/** Backtick = inline code. Kept as the named entry point for the keymap/test. */
+export function handleBacktick(view: EditorView, host: BlockRenderHost): boolean {
+  return handleWrapChar(view, host, '`', '`');
+}
+
+/** Escape: commit + leave the block (Logseq exits editing). */
+export function handleEscape(view: EditorView, _host: BlockRenderHost): boolean {
+  void _host;
+  view.contentDOM.blur();
+  return true;
+}
+

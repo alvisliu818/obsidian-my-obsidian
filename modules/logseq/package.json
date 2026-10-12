@@ -1,0 +1,57 @@
+{
+  "name": "obsidian-logseq",
+  "version": "0.2.4",
+  "description": "Logseq-style block outliner editor replacing the native Obsidian markdown editor",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node esbuild.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.mjs production",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "playwright test -c tests/e2e/playwright.config.ts"
+  },
+  "keywords": [
+    "obsidian",
+    "logseq",
+    "outliner",
+    "block-editor"
+  ],
+  "author": "alvisliu",
+  "license": "MIT",
+  "devDependencies": {
+    "@playwright/test": "1.48",
+    "@types/node": "^20.19.43",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "^0.21.5",
+    "obsidian": "^1.5.7",
+    "pyright": "^1.1.414",
+    "tslib": "^2.6.3",
+    "typescript": "^5.5.4",
+    "vitest": "^2.1.9"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.18.0",
+    "@codemirror/commands": "^6.6.0",
+    "@codemirror/lang-css": "^6.3.1",
+    "@codemirror/lang-html": "^6.4.12",
+    "@codemirror/lang-markdown": "^6.3.0",
+    "@codemirror/language": "^6.10.2",
+    "@codemirror/legacy-modes": "^6.5.4",
+    "@codemirror/search": "^6.7.2",
+    "@codemirror/state": "^6.4.1",
+    "@codemirror/view": "^6.34.0",
+    "@lezer/highlight": "^1.2.1",
+    "@types/prismjs": "^1.26.6",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "jszip": "^3.10.2",
+    "mammoth": "^1.13.0",
+    "node-pty": "^1.1.0",
+    "prismjs": "^1.30.0",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2",
+    "wa-sqlite": "^1.0.0",
+    "xlsx": "^0.18.5"
+  }
+}

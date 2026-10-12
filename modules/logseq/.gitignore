@@ -1,0 +1,59 @@
+# ===== AI 助手工作区 =====
+# 私人助手文件与开发计划由 E:\HOME\Code 私有仓库跟踪，
+# 公开仓库一律不提交（.gitignore + pre-commit hook 双重拦截）。
+# 运行时状态/临时文件同样不入库。
+.trae/
+.openclaw/
+.openclaw-attachments/
+.opencode/
+.workbuddy/
+memory/
+TOOLS.md
+USER.md
+SOUL.md
+IDENTITY.md
+HEARTBEAT.md
+
+# ===== 桌面系统杂项 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== Node / 构建产物 =====
+node_modules/
+main.js
+*.log
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+.nyc_output/
+coverage/
+
+# ===== 依赖与本地配置 =====
+# .npmrc 保留跟踪（内容只有 legacy-peer-deps=true，无密钥）。
+# 如以后加了 registry token，请取消注释下一行：
+# .npmrc
+
+# ===== 一次性探针 / 截图 / 中间产物（e2e 调试残留） =====
+tests/e2e/_*
+tests/e2e/probe-*.mjs
+tests/e2e/verify-*.mjs
+tests/e2e/*.png
+
+# ===== 发布产物（由构建生成，不入库；README 已链接 DELIVERY） =====
+delivery/
+
+# ===== 部署 staging（pty-helper / pyright，由构建脚本生成） =====
+dist/
+
+# ===== 测试夹具内可再生内容 =====
+tests/fixtures/edge-vault/.obsidian/workspace.json
+tests/fixtures/edge-vault/.logseq-editor/
+tests/fixtures/edge-vault/.obsidian/plugins/obsidian-logseq/main.js
+
+# ===== 过程产物（可再生 / 误生成，不入库） =====
+vitest.config.ts.timestamp-*.mjs
+tests/_diag-*.test.ts
+HOMELocallogseq-*.json
+
