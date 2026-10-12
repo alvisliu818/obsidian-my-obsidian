@@ -5,3 +5,5 @@ styles.css.map
 .workbuddy/
 test-results/
 coverage/
+# 本地 e2e 探针脚本（沿用各插件的约定：下划线开头的不入库）
+tests/e2e/_*.mjs
