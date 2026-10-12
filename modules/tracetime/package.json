@@ -1,0 +1,35 @@
+{
+	"name": "obsidian-tracetime",
+	"version": "0.2.0",
+	"description": "Time tracking plugin for Obsidian.",
+	"private": true,
+	"main": "build/main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"test": "esbuild test/selftest.ts --bundle --platform=node --format=cjs --target=es2020 --outfile=test/selftest.cjs --log-level=warning && node test/selftest.cjs && rm test/selftest.cjs",
+		"pack": "npm run build && rm -rf dist && mkdir -p dist/tracetime && cp build/main.js build/manifest.json build/styles.css dist/tracetime/ && cd dist && zip -r tracetime-$(node -p \"require('../package.json').version\").zip tracetime",
+		"version": "node version-bump.mjs && git add manifest.json versions.json"
+	},
+	"keywords": [
+		"obsidian",
+		"obsidian-plugin",
+		"time-tracking"
+	],
+	"license": "MIT",
+	"dependencies": {
+		"@msgpack/msgpack": "^3.0.2"
+	},
+	"devDependencies": {
+		"@codemirror/state": "^6.4.1",
+		"@codemirror/view": "^6.26.0",
+		"@types/node": "^16.11.6",
+		"esbuild": "0.17.3",
+		"eslint": "^9.39.5",
+		"eslint-plugin-obsidianmd": "^0.4.1",
+		"obsidian": "latest",
+		"tslib": "2.4.0",
+		"typescript": "^5.9.3",
+		"typescript-eslint": "^8.65.0"
+	}
+}

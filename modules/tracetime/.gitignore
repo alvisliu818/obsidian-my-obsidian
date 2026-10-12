@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build output
+build/
+dist/
+
+# Logs
+npm-debug.log*
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# Env
+.env
+
+# Test vault（本地测试环境，含插件软链和运行数据）
+test-vault/
+
+# 测试临时产物（selftest.ts 是源码，不忽略）
+test/selftest.cjs

@@ -1,0 +1,10 @@
+{
+	"id": "tracetime",
+	"name": "TraceTime",
+	"version": "0.2.0",
+	"minAppVersion": "1.5.0",
+	"description": "Show when each block of a note was last edited.",
+	"author": "QuincySx",
+	"authorUrl": "https://github.com/QuincySx",
+	"isDesktopOnly": false
+}
