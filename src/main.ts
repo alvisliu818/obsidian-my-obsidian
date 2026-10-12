@@ -32,6 +32,8 @@ import BreadcrumbNavPlugin from "../modules/breadcrumb/src/main";
 import DocAssistPlugin from "../modules/doc-assist/src/main";
 import MaterialIconThemePlugin from "../modules/material-icon-theme/src/main";
 import TraceTimePlugin from "../modules/tracetime/src/main";
+import AIImageAnalyzerPlugin from "../modules/ai-image-analyzer/src/main";
+import OmnisearchPlugin from "../modules/omnisearch/src/main";
 import { CodeFileView, DEFAULT_CODE_EXTENSIONS, VIEW_TYPE_CODE_FILE } from "./codeFileView";
 
 export default class MyObsidianPlugin extends Plugin {
@@ -107,6 +109,28 @@ export default class MyObsidianPlugin extends Plugin {
 				"在每个段落旁显示它最后一次被编辑的时间，编辑器与阅读模式都有；记录存在本地，不联网。上游 QuincySx（MIT）。",
 			desktopOnly: false,
 			cls: TraceTimePlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// GPL-3.0: merging it in is what switched the whole repo to GPL-3.
+			// Kept whole, upstream is Swaggeroo.
+			id: "ai-image-analyzer",
+			legacyId: "ai-image-analyzer",
+			name: "AI image analyzer",
+			summary:
+				"用 AI 给图片生成关键词：Gemini / Ollama 等接口，支持批量分析、按关键词反查图片，结果缓存本地。上游 Swaggeroo（GPL-3.0）。",
+			desktopOnly: true,
+			cls: AIImageAnalyzerPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// GPL-3 as well — upstream Simon Cambier. Its Svelte components build
+			// through the same esbuild (see the svelte plugin in esbuild.mjs).
+			id: "omnisearch",
+			legacyId: "omnisearch",
+			name: "Omnisearch",
+			summary:
+				"库内全文搜索引擎：拼音容错、按路径/标签/区块过滤、文件内搜索与 API。上游 Simon Cambier（GPL-3）。",
+			desktopOnly: false,
+			cls: OmnisearchPlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 
@@ -198,11 +222,20 @@ export default class MyObsidianPlugin extends Plugin {
 	/** Boot a module if its switch is on. A failing module must not take the
 	 *  others down with it — one broken feature should not brick the plugin. */
 	private async bootModule(d: ModuleDescriptor): Promise<void> {
+		const bootlog = ((window as unknown as { __bootlog?: string[] }).__bootlog ??= []);
 		const state = this.settings.modules[d.id];
-		if (!state?.enabled) return;
+		if (!state?.enabled) {
+			console.debug(`[my-obsidian] ${d.id}: disabled, skip`);
+			bootlog.push(`${d.id}: disabled`);
+			return;
+		}
 		if (this.live.has(d.id)) return;
 		try {
+			console.debug(`[my-obsidian] booting ${d.id}...`);
+			bootlog.push(`${d.id}: booting`);
 			await this.startModule(d, state);
+			console.debug(`[my-obsidian] booted ${d.id}`);
+			bootlog.push(`${d.id}: booted`);
 		} catch (e) {
 			console.error(`[my-obsidian] ${d.id} failed to load`, e);
 			new Notice(`「${d.name}」载入失败，其余功能不受影响（详情见控制台）`);

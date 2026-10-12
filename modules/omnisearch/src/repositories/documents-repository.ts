@@ -2,7 +2,6 @@ import { normalizePath, TFile } from 'obsidian'
 import type { CanvasData } from 'obsidian/canvas'
 import type { IndexedDocument } from '../globals'
 import type OmnisearchPlugin from '../main'
-import { getNonExistingNotes } from '../tools/notes'
 import {
   countError,
   extractHeadingsFromCache,
@@ -24,7 +23,6 @@ export class DocumentsRepository {
    */
   private documents: Map<string, IndexedDocument> = new Map()
   private errorsCount = 0
-  private errorsWarned = false
 
   constructor(private plugin: OmnisearchPlugin) {
     this.plugin.registerInterval(

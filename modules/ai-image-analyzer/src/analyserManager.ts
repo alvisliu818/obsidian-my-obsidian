@@ -154,7 +154,7 @@ export async function analyzeImageWithNotice(file: TFile): Promise<string> {
 	} catch (e) {
 		debugLog(context, e);
 		new Notice("Failed to analyze image");
-		new Notice(e.toString());
+		new Notice(String(e));
 		return "";
 	}
 }

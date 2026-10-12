@@ -287,7 +287,7 @@ export class OllamaProvider extends Provider {
 				return await this.checkOllama();
 			}
 			new Notice("Error connecting to ollama.");
-			new Notice(e.toString());
+			new Notice(String(e));
 			return false;
 		}
 	}
@@ -334,7 +334,7 @@ export class OllamaProvider extends Provider {
 			debugLog(context, e);
 			progressNotice?.hide();
 			new Notice(`Failed to pull ${model.name} model`);
-			new Notice(e.toString());
+			new Notice(String(e));
 		}
 	}
 
@@ -399,7 +399,10 @@ export class OllamaProvider extends Provider {
 	 * 为每个 Ollama 请求创建独立的 AbortController，支持请求中止
 	 * 同时转发调用方提供的 signal，确保双方都能触发中止
 	 */
-	static ollamaFetch(input: never, init?: RequestInit): Promise<Response> {
+	static ollamaFetch(
+		input: Parameters<typeof globalThis.fetch>[0],
+		init?: RequestInit,
+	): Promise<Response> {
 		const controller = new AbortController();
 
 		// 转发调用方的中止信号

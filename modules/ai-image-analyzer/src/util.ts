@@ -35,7 +35,7 @@ function stringToColor(str: string): string {
  * @param context - 日志上下文标识（如模块名）
  * @param message - 日志消息
  */
-export function debugLog(context: string, message: object | string) {
+export function debugLog(context: string, message: unknown) {
 	if (settings.debug) {
 		const color = stringToColor(context);
 

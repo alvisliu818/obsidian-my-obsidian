@@ -13,9 +13,9 @@ import AIImageAnalyzerPlugin from "../main";
 
 export abstract class Provider {
 	/** 上次使用的文本模型 */
-	lastModel: Models;
+	lastModel!: Models;
 	/** 上次使用的图片分析模型 */
-	lastImageModel: Models;
+	lastImageModel!: Models;
 
 	/**
 	 * 纯文本查询（抽象方法，子类必须实现）

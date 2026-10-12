@@ -8,6 +8,8 @@
  * logseq and jupyter for their private CodeMirror copy.
  */
 import esbuild from "esbuild";
+import esbuildSvelte from "esbuild-svelte";
+import { sveltePreprocess } from "svelte-preprocess";
 import process from "process";
 import builtins from "builtin-modules";
 import { createRequire } from "node:module";
@@ -98,6 +100,47 @@ const cmBundlePlugin = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// omnisearch: Svelte 5 components for its search modals.
+//
+// esbuild-svelte self-scopes to `\.svelte$` files, so it is inert for the
+// other modules; Svelte 5's `mount`/`unmount` runtime comes in through
+// node_modules and bundles alongside. `css: injected` matches the upstream
+// config (styles end up inline in the DOM rather than a separate css file).
+// ---------------------------------------------------------------------------
+const sveltePlugin = esbuildSvelte({
+	compilerOptions: { css: "injected" },
+	preprocess: sveltePreprocess(),
+});
+
+// ---------------------------------------------------------------------------
+// omnisearch: dexie 的 dual-package-hazard 补丁。
+//
+// 上游用 pnpm patch 打（modules/omnisearch/patches/dexie.patch）：去掉
+// dexie import-wrapper 里的 Symbol.for("Dexie") 全局实例检查。pnpm 的补丁
+// 格式与 patch-package 不兼容（试过），所以改为 esbuild onLoad 插件在打包
+// 时直接替换——不依赖 node_modules 的状态，构建自愈。
+//
+// 原代码（两个 import-wrapper*.mjs 都有）：
+//   const DexieSymbol = Symbol.for("Dexie");
+//   const Dexie = globalThis[DexieSymbol] || (globalThis[DexieSymbol] = _Dexie);
+//   if (_Dexie.semVer !== Dexie.semVer) { throw ... }
+// 单文件打包后只存在一份 dexie，这段检查没有意义且占地方。
+// ---------------------------------------------------------------------------
+const dexiePatchPlugin = {
+	name: "dexie-patch",
+	setup(build) {
+		build.onLoad({ filter: /dexie[\\/]import-wrapper(-prod)?\.mjs$/ }, (args) => {
+			let contents = readFileSync(args.path, "utf8");
+			contents = contents.replace(
+				/const DexieSymbol = Symbol\.for\("Dexie"\);[\s\S]*?_Dexie\.semVer\);\s*\n\}/,
+				"const Dexie = _Dexie;",
+			);
+			return { contents, loader: "js", resolveDir: path.dirname(args.path) };
+		});
+	},
+};
+
 const context = await esbuild.context({
   banner: { js: banner },
   entryPoints: ["src/main.ts"],
@@ -120,8 +163,10 @@ const context = await esbuild.context({
     "@lezer/highlight",
     "@lezer/lr",
     ...builtins,
+    // ollama 等包用 `node:fs` 带前缀的写法，裸名列表罩不住
+    ...builtins.map((m) => `node:${m}`),
   ],
-  plugins: [cmBundlePlugin],
+  plugins: [cmBundlePlugin, sveltePlugin, dexiePatchPlugin],
   define: {
     // wa-sqlite's Emscripten glue reads import.meta.url to locate its wasm;
     // in the CJS bundle that is `{}`, which throws before it ever looks at
@@ -138,7 +183,7 @@ const context = await esbuild.context({
     ),
   },
   format: "cjs",
-  target: "es2020",
+  target: "es2021",
   logLevel: "info",
   sourcemap: prod ? false : "inline",
   treeShaking: true,

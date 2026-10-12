@@ -61,7 +61,10 @@ export default class OmnisearchPlugin extends Plugin {
   }
 
   async onload(): Promise<void> {
+    const bootlog = ((window as unknown as { __bootlog?: string[] }).__bootlog ??= []);
+    bootlog.push('omnisearch: onload start');
     this.settings = await loadSettings(this)
+    bootlog.push('omnisearch: settings loaded')
     this.addSettingTab(new SettingsTab(this))
 
     if (!Platform.isMobile) {
@@ -77,8 +80,11 @@ export default class OmnisearchPlugin extends Plugin {
       return
     }
 
+    bootlog.push('omnisearch: cleaning cache files')
     await cleanOldCacheFiles(this.app)
+    bootlog.push('omnisearch: cache cleaned; clearing old dbs')
     await this.database.clearOldDatabases()
+    bootlog.push('omnisearch: old dbs cleared')
 
     registerAPI(this)
 

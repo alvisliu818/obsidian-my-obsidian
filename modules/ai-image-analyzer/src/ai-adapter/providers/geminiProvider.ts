@@ -235,7 +235,7 @@ export class GeminiProvider extends Provider {
 			new Notice(
 				"Error connecting to gemini API. Please check your gemini API key.",
 			);
-			new Notice(e.toString());
+			new Notice(String(e));
 			return false;
 		}
 	}

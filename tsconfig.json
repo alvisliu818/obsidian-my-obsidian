@@ -1,10 +1,10 @@
 {
   "compilerOptions": {
     "baseUrl": ".",
-    "target": "ES2020",
+    "target": "ES2021",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["DOM", "ES2020", "DOM.Iterable"],
+    "lib": ["DOM", "ES2021", "DOM.Iterable"],
     "strict": true,
     "noImplicitAny": true,
     "strictNullChecks": true,
@@ -21,6 +21,6 @@
       "cm-bundle:*": ["./node_modules/*"]
     }
   },
-  "include": ["src/**/*.ts", "modules/logseq/src/**/*.ts", "modules/browser/src/**/*.ts", "modules/jupyter/src/**/*.ts", "modules/breadcrumb/src/**/*.ts", "modules/doc-assist/src/**/*.ts", "modules/material-icon-theme/src/**/*.ts", "modules/tracetime/src/**/*.ts"],
-  "exclude": ["**/node_modules", "**/tests/e2e"]
+  "include": ["src/**/*.ts", "modules/logseq/src/**/*.ts", "modules/browser/src/**/*.ts", "modules/jupyter/src/**/*.ts", "modules/breadcrumb/src/**/*.ts", "modules/doc-assist/src/**/*.ts", "modules/material-icon-theme/src/**/*.ts", "modules/tracetime/src/**/*.ts", "modules/ai-image-analyzer/src/**/*.ts", "modules/omnisearch/src/**/*.ts"],
+  "exclude": ["**/node_modules", "**/tests/e2e", "modules/omnisearch/src/__tests__", "modules/ai-image-analyzer/src"]
 }

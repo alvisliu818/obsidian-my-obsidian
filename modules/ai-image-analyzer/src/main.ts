@@ -131,7 +131,10 @@ export default class AIImageAnalyzerPlugin extends Plugin {
 					menu.addItem((item: MenuItem) => {
 						item.setTitle("AI analyze image");
 
-						const submenu = item.setSubmenu();
+						// obsidian ^1.5.7 的 typings 没收录 setSubmenu，运行时（1.9+）存在
+					const submenu = (
+						item as unknown as { setSubmenu(): import("obsidian").Menu }
+					).setSubmenu();
 
 						// 子菜单：分析图片并复制到剪贴板
 						submenu.addItem((item: MenuItem) =>
@@ -193,8 +196,11 @@ export default class AIImageAnalyzerPlugin extends Plugin {
  * @returns 当前活动的 TFile，如果没有则返回 null
  */
 function getActiveFile(): TFile | null {
-	return (
-		this.app.workspace.activeEditor?.file ??
-		this.app.workspace.getActiveFile()
-	);
+	// 模块顶层函数没有实例 this（esbuild 的 CJS 输出里 this 是 undefined，
+	// 原来的 this.app 一调用就 TypeError）——改走全局 app。
+	const workspace = (
+		globalThis as unknown as { app?: { workspace: { activeEditor?: { file?: TFile | null }; getActiveFile(): TFile | null } } }
+	).app?.workspace;
+	if (!workspace) return null;
+	return workspace.activeEditor?.file ?? workspace.getActiveFile();
 }
