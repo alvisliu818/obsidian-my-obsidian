@@ -21,6 +21,7 @@ import {
   type BlockEditorSettings,
   type EditorChoice,
   type ExternalMount,
+  type RecentOpenEntry,
 } from './types';
 import { mountDisplayName } from './types';
 import { isMarkdownFile } from './features/codeFileKind';
@@ -50,7 +51,8 @@ import { OfficeView, VIEW_TYPE_OFFICE } from './views/OfficeView';
 import { ImageView, VIEW_TYPE_IMAGE, IMAGE_EXTENSIONS, isImageFile } from './views/ImageView';
 import { OFFICE_EXTENSIONS } from './office/types';
 import { ContentSearchPanelView, VIEW_TYPE_CONTENT_SEARCH } from './panels/contentSearchPanel';
-import { RecentPanelView, VIEW_TYPE_RECENT_PANEL, pushRecent } from './panels/recentPanel';
+import { RecentPanelView, VIEW_TYPE_RECENT_PANEL } from './panels/recentPanel';
+import { RECENT_OPEN_LIMIT, pushRecentOpen, recentOpenFrom } from './panels/recentOpen';
 import {
   PRESET_OPEN_WITH,
   addOpenWithMenuItems,
@@ -198,8 +200,15 @@ export default class LogseqEditorPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on('file-open', (file) => {
         if (!file) return;
-        this.settings.recentFiles = pushRecent(this.settings.recentFiles ?? [], file.path);
-        void this.saveSettings();
+        // 经原生编辑器打开库外文件时 fire 的也可能是 TExternalFile（path 带
+        // file: 前缀、有 getRealPath）。按库外条目记——绝对路径才是面板能
+        // 再打开的形式。
+        const asExt = file as unknown as { getRealPath?: () => string };
+        if (file.path.startsWith('file:') && typeof asExt.getRealPath === 'function') {
+          this.recordRecentOpen(asExt.getRealPath(), 'ext');
+        } else if (!file.path.startsWith('file:')) {
+          this.recordRecentOpen(file.path, 'vault');
+        }
       }),
     );
 
@@ -972,9 +981,25 @@ export default class LogseqEditorPlugin extends Plugin {
     const rawApps = (this.settings as { openWithApps?: unknown }).openWithApps;
     this.settings.openWithApps =
       rawApps === undefined ? PRESET_OPEN_WITH.map((a) => ({ ...a })) : openWithAppsFrom(rawApps);
-    this.settings.recentFiles = Array.isArray(this.settings.recentFiles)
-      ? this.settings.recentFiles.filter((p): p is string => typeof p === 'string').slice(0, 60)
+    // 最近使用面板：recentOpenFiles 是唯一列表（库内 + 库外都记）。
+    // 旧版只存库内路径的 recentFiles 在这里迁进来（递减时间戳保持原顺序），
+    // 迁完即删，data.json 不留双份。
+    const legacy = (this.settings as { recentFiles?: unknown }).recentFiles;
+    const legacyPaths = Array.isArray(legacy)
+      ? legacy.filter((p): p is string => typeof p === 'string').slice(0, RECENT_OPEN_LIMIT)
       : [];
+    this.settings.recentOpenFiles = recentOpenFrom(
+      (this.settings as { recentOpenFiles?: unknown }).recentOpenFiles,
+    );
+    if (this.settings.recentOpenFiles.length === 0 && legacyPaths.length > 0) {
+      const now = Date.now();
+      this.settings.recentOpenFiles = legacyPaths.map((path, i) => ({
+        path,
+        kind: 'vault' as const,
+        at: now - i * 1000,
+      }));
+    }
+    delete (this.settings as { recentFiles?: unknown }).recentFiles;
     this.settings.contentSearch = contentSearchFrom(this.settings.contentSearch);
     this.settings.officeViewerEnabled = this.settings.officeViewerEnabled !== false;
     this.settings.imageViewerTakeOver = this.settings.imageViewerTakeOver === true;
@@ -1133,6 +1158,8 @@ export default class LogseqEditorPlugin extends Plugin {
     await leaf.openFile(af);
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
     logOp(this, 'external.open', node.abs, 'ok', 'native-editor');
+    // 右键菜单直达的打开链不经过 openExternalEntry，在这里补记。
+    this.recordRecentOpen(node.abs, 'ext');
     return true;
   }
 
@@ -1452,6 +1479,24 @@ export default class LogseqEditorPlugin extends Plugin {
     }
   }
 
+  /**
+   * 记一条「最近打开」（最近使用面板用），库内、库外都走这里。
+   *
+   * 重复打开同一个文件只更新时间、不保存不刷新：file-open 在切换标签页
+   * 时会密集触发，每次都写 data.json 会把保存变成刷屏。
+   */
+  private recordRecentOpen(path: string, kind: RecentOpenEntry['kind']): void {
+    const list = this.settings.recentOpenFiles ?? [];
+    const head = list[0];
+    if (head && head.path === path && head.kind === kind) {
+      head.at = Date.now();
+      return;
+    }
+    this.settings.recentOpenFiles = pushRecentOpen(list, path, kind, Date.now());
+    void this.saveSettings();
+    this.refreshRecentPanels();
+  }
+
   async activatePanel(viewType: string): Promise<void> {
     const { workspace } = this.app;
     const existing = workspace.getLeavesOfType(viewType)[0];
@@ -1667,6 +1712,10 @@ export default class LogseqEditorPlugin extends Plugin {
     opts?: { readOnly?: boolean },
   ): Promise<void> {
     if (node.isDir) return;
+    // 最近使用面板的记录入口：点开一个库外文件就算最近打开，不论后面落在
+    // 块编辑器、代码编辑器、shim 视图还是系统程序上。走原生编辑器的那条
+    // 菜单链不经过这里，在 openExternalInNativeEditor 里单独记。
+    this.recordRecentOpen(node.abs, 'ext');
     // Read-only means "show me, change nothing", and it is also the fallback
     // whenever a real editor cannot be given the file. Creating a link is a
     // genuine change to the user's library, so it happens only when they ask

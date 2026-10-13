@@ -288,10 +288,29 @@ export interface BlockEditorSettings {
   imageViewerTakeOver: boolean;
   /** Configured external applications for the "open with" menu. */
   openWithApps: OpenWithApp[];
-  /** Recently opened file paths, newest first (bounded by RECENT_LIMIT). */
-  recentFiles: string[];
+  /**
+   * 最近使用面板的记录：库内文件与库外挂载文件都记，最新在前。
+   */
+  recentOpenFiles: RecentOpenEntry[];
   /** Vault-wide content search panel options. */
   contentSearch: ContentSearchOptions;
+}
+
+/**
+ * One entry in the recent-files panel's list.
+ *
+ * `kind` decides how the row is opened: a vault path goes through
+ * `openLinkText` like any note; an absolute path is resolved back to its
+ * mount and opened through the external-file routes. Keeping the two apart
+ * in the data (rather than sniffing the path at render time) means a vault
+ * file whose name happens to look absolute still opens correctly.
+ */
+export interface RecentOpenEntry {
+  /** Vault-relative path when kind is 'vault'; absolute path when 'ext'. */
+  path: string;
+  kind: 'vault' | 'ext';
+  /** Epoch ms of the last open; ordering only. */
+  at: number;
 }
 
 /**
@@ -519,7 +538,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   imageViewerTakeOver: false,
   openWithApps: [],
   lspServers: [],
-  recentFiles: [],
+  recentOpenFiles: [],
   contentSearch: { ...DEFAULT_CONTENT_SEARCH },
 };
 

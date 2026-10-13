@@ -942,6 +942,168 @@
   padding: 0 2px;
 }
 
+/* ---------- Recent files panel (最近使用：库内 + 库外，可按类型筛选) ---------- */
+.lg-recent {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.lg-recent__bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  margin-bottom: 6px;
+}
+
+.lg-recent__title {
+  font-weight: 600;
+  font-size: 0.95em;
+  flex: 1;
+}
+
+.lg-recent__count {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.lg-recent__btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  border-radius: 4px;
+  /* Obsidian 给裸 button 固定 --input-height，工具栏要紧凑就必须覆盖 */
+  height: auto;
+  min-height: 0;
+}
+
+.lg-recent__btn:hover {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.lg-recent__btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* 类型筛选 chips */
+.lg-recent__chips {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-bottom: 6px;
+}
+
+.lg-recent__chip {
+  background: var(--background-modifier-border);
+  border: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 6px;
+  cursor: pointer;
+  height: auto;
+  min-height: 0;
+}
+
+.lg-recent__chip:hover {
+  color: var(--text-normal);
+  background-color: var(--background-modifier-hover);
+}
+
+.lg-recent__chip.is-active {
+  color: var(--text-on-accent);
+  background-color: var(--interactive-accent);
+}
+
+.lg-recent__list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+/* 文件行：图标 + 两行文字（名称 / 路径），库外行带标记 */
+.lg-recent__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: var(--nav-item-radius, 4px);
+  cursor: pointer;
+}
+
+.lg-recent__row:hover {
+  background-color: var(--nav-item-background-hover, var(--background-modifier-hover));
+}
+
+.lg-recent__row .logseq-mount-icon {
+  font-size: 15px;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+.lg-recent__row .logseq-mount-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.lg-recent__row .logseq-mount-icon.mfi-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.lg-recent__row .logseq-mount-icon.mfi-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.lg-recent__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.lg-recent__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-normal);
+}
+
+.lg-recent__path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+}
+
+.lg-recent__flag {
+  flex: 0 0 auto;
+  font-size: var(--font-smallest);
+  color: var(--text-accent);
+  background-color: var(--background-modifier-border);
+  padding: 0 5px;
+  border-radius: 6px;
+}
+
+.lg-recent__empty,
+.lg-recent__note {
+  padding: 6px 4px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+}
+
 /* ---------- Block search modal ---------- */
 .block-search-item .block-search-row {
   display: flex;
