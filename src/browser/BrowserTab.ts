@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { Menu } from "obsidian";
 import { HEALTH_CHECK_INTERVAL, HEALTH_FAIL_STREAK } from "../constants";
 import type { IWebviewTag, WebViewContextMenuParams } from "../types";
 import { Toolbar } from "./Toolbar";
@@ -208,7 +209,10 @@ export class BrowserTab {
   }
 
   private showMenu(e: MouseEvent): void {
-    void import("obsidian").then(({ Menu }) => {
+    // Menu 必须静态导入：esbuild target es2021 下动态 import("obsidian") 会
+    // 以原生 import 保留进 cjs 产物，渲染进程解析不了裸模块名（jupyter 模块
+    // notebookView.ts 同坑先例），点击后菜单静默不出现。
+    {
       const menu = new Menu();
       menu.addItem((i) => i.setTitle("刷新").setIcon("refresh-cw").onClick(() => this.reload(false)));
       menu.addItem((i) => i.setTitle("在系统中打开").setIcon("external-link").onClick(() => this.ctx.openInSystemBrowser(this.url)));
@@ -217,7 +221,7 @@ export class BrowserTab {
       menu.addSeparator();
       menu.addItem((i) => i.setTitle("检查元素").setIcon("terminal").onClick(() => this.controller.openDevTools()));
       menu.showAtMouseEvent(e);
-    });
+    }
   }
 
   // ---------------- health ----------------
