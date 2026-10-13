@@ -8112,3 +8112,9 @@ div:hover > .git-gutter-marker.git-changedelete {
 .view-header.ob-browser-native-header .view-actions {
   display: none;
 }
+
+/* The header nav buttons drive leaf history, not the webview — ours already
+   handle page back/forward, so the native pair is noise. */
+.view-header.ob-browser-native-header .view-header-nav-buttons {
+  display: none;
+}
