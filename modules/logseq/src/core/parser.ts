@@ -251,14 +251,14 @@ export function parseDocument(md: string, opts: ParseOptions = {}): ParsedDocume
   let lastBlock: Block | null = null; // most recent 'list' block (property / soft-line target)
   let rawBuf: string[] = [];
   let bareBuf: string[] = []; // consecutive bare lines → ONE first-level block
-  // 保真模式：刚被丢弃（既不作为内容也不作为软行）的空行——下一个块之前要补
-  // 回一个空行，否则段落与列表/标题之间的分隔会在保存时悄悄消失。
-  let pendingBlank = false;
+  // 保真模式：刚被丢弃（既不作为内容也不作为软行）的空行数——下一个块之前要
+  // 补回这么多空行，否则段落与列表/标题之间的分隔会在保存时悄悄消失。
+  let pendingBlanks = 0;
 
   /** 把一个新块挂到顶层，并在保真模式下带上"前面有空行"的标记。 */
   const pushRoot = (b: Block) => {
-    if (opts.preservePlainText && pendingBlank && doc.blocks.length > 0) b.blankBefore = true;
-    pendingBlank = false;
+    if (opts.preservePlainText && pendingBlanks > 0 && doc.blocks.length > 0) b.blankBefore = pendingBlanks;
+    pendingBlanks = 0;
     b.parent = null;
     doc.blocks.push(b);
   };
@@ -358,18 +358,30 @@ export function parseDocument(md: string, opts: ParseOptions = {}): ParsedDocume
           STRUCTURAL_RAW_RE.test(nextTrim) ||
           FENCE_OPEN_RE.test(next) ||
           (opts.preservePlainText === true && LIST_RE.test(next));
-        if (next && isRawRegionTail(rawBuf) && depthOf(next) === 0 && startsStructure && !PROPERTY_RE.test(nextTrim)) {
+        // 保真模式再进一步：空行结束**任何**已闭合的逐字区域，哪怕是普通段落。
+        // 否则"段落\n\n段落"会被并成一个块（空行进块文本），段落既不能单独
+        // 多选、也不能单独折叠/缩进/转换。序列化会把相邻逐字块之间的空行补回来
+        // （raw/raw 规则 + blankBefore），字节仍然不变。
+        // 属性行依旧不拆分：`key:: value` 是该块的折叠标记。
+        const endsRegion = opts.preservePlainText ? !PROPERTY_RE.test(nextTrim) : startsStructure;
+        if (next && isRawRegionTail(rawBuf) && depthOf(next) === 0 && endsRegion) {
           flushRaw();
-          // 空行属于**后面**那个块，所以要在区域冲刷之后才置位。
-          if (opts.preservePlainText) pendingBlank = true;
+          if (opts.preservePlainText) {
+            // 空行属于**后面**那个块，所以要在区域冲刷之后才置位；j - i 就是
+            // 这次跳过的空行数（连续空行原样保留）。注意 i 要直接跳到 j——
+            // 逐个 i++ 会把同一批空行再数一遍。
+            pendingBlanks = Math.max(pendingBlanks, j - i);
+            i = j;
+            continue;
+          }
           i++;
           continue;
         }
         rawBuf.push(line);
       }
       // 保真模式：这个空行既不是内容也不是软行，被丢弃了——记下来，下一个块
-      // 之前要补回一个空行（否则每保存一次就吃掉一个分隔空行）。
-      if (opts.preservePlainText && rawBuf.length === 0) pendingBlank = true;
+      // 之前要补回这么多空行（否则每保存一次就吃掉一个分隔空行）。
+      if (opts.preservePlainText && rawBuf.length === 0) pendingBlanks++;
       i++;
       continue;
     }

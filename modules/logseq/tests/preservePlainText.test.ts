@@ -76,6 +76,21 @@ describe('保真模式：普通 Markdown 不转大纲', () => {
     expect(roundTrip(md)).toBe(md);
   });
 
+  it('空行分隔的段落各自成块（可单独多选/折叠/转换）', () => {
+    const doc = parseDocument('第一段。\n\n第二段。\n\n第三段。\n', P);
+    expect(doc.blocks).toHaveLength(3);
+    expect(doc.blocks.every((b) => b.kind === 'raw')).toBe(true);
+    expect(doc.blocks.map((b) => b.text)).toEqual(['第一段。', '第二段。', '第三段。']);
+    // 块间空行以 blankBefore 计数保留，字节仍然不变
+    expect(doc.blocks[1].blankBefore).toBe(1);
+    expect(serializeDocument(doc)).toBe('第一段。\n\n第二段。\n\n第三段。\n');
+  });
+
+  it('连续空行原样保留（不收敛成一个）', () => {
+    const md = ['# 标题', '', '', '正文', ''].join('\n');
+    expect(roundTrip(md)).toBe(md);
+  });
+
   it('关闭开关时维持 Logseq 原生语义（裸行收编为 - 项）', () => {
     const doc = parseDocument('裸行\n', {});
     expect(doc.blocks[0].kind).toBe('list');

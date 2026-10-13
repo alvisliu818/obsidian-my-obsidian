@@ -24,12 +24,19 @@ export function serializeDocument(doc: ParsedDocument): string {
   const parts: string[] = [];
   const blocks = doc.blocks;
   /**
-   * 顶层块入列。保真模式下块可能带 `blankBefore`（原文里它前面有一个空行）——
-   * 补回去，否则段落与列表/标题之间的空行会在保存时消失。相邻的逐字块本来就
-   * 要插一个空行（两块围栏/表格不能连写），所以用最后一个元素是否已是空串去重。
+   * 顶层块入列。两个空行来源要合并去重：
+   *  - `blankBefore`（保真模式）：原文里这个块前面有 N 个空行，原样补回；
+   *  - 相邻逐字块规则：两块围栏/表格不能连写，之间必须有空行（默认模式）。
+   * 取两者较大值，且不重复追加。
    */
-  const pushTop = (b: Block): void => {
-    if (b.blankBefore && parts.length > 0 && parts[parts.length - 1] !== '') parts.push('');
+  const pushTop = (b: Block, prev?: Block): void => {
+    // need 取两个来源的较大值，直接追加对应数量的空行——中间不能再插"去重"
+    // 判断，否则第二个空行会被自己刚 push 的空串拦掉（连续空行全丢）。
+    const need = Math.max(
+      b.blankBefore ?? 0,
+      prev && prev.kind === 'raw' && b.kind === 'raw' ? 1 : 0,
+    );
+    for (let k = 0; k < need; k++) parts.push('');
     parts.push(serializeBlock(b, 0, undefined, unit));
   };
   if (doc.frontmatter && !blocks[0]?.frontmatter) parts.push(doc.frontmatter);
@@ -39,15 +46,15 @@ export function serializeDocument(doc: ParsedDocument): string {
   if (blocks[0]?.frontmatter) {
     const fm = blocks[0];
     parts.push('---', ...fm.text.split('\n'), '---');
-    for (const c of fm.children) pushTop(c);
+    fm.children.forEach((c, i) => pushTop(c, fm.children[i - 1]));
     for (let i = 1; i < blocks.length; i++) {
       const b = blocks[i];
       // Logseq props-only blocks after the frontmatter keep their format too.
       if (isPropsOnlyBlock(b)) {
         for (const [k, v] of Object.entries(b.props)) parts.push(`${k}:: ${v}`);
-        for (const c of b.children) pushTop(c);
+        b.children.forEach((c, j) => pushTop(c, b.children[j - 1]));
       } else {
-        pushTop(b);
+        pushTop(b, blocks[i - 1]);
       }
     }
     return finish(parts.join('\n'));
@@ -58,23 +65,14 @@ export function serializeDocument(doc: ParsedDocument): string {
   if (isPropsOnlyBlock(blocks[0])) {
     const pb = blocks[0];
     for (const [k, v] of Object.entries(pb.props)) parts.push(`${k}:: ${v}`);
-    for (const c of pb.children) pushTop(c);
+    pb.children.forEach((c, j) => pushTop(c, pb.children[j - 1]));
     for (let i = 1; i < blocks.length; i++) {
-      // Same raw/raw blank-line rule as the general path below.
-      if (i > 1 && blocks[i - 1].kind === 'raw' && blocks[i].kind === 'raw') parts.push('');
-      pushTop(blocks[i]);
+      pushTop(blocks[i], blocks[i - 1]);
     }
     return finish(parts.join('\n'));
   }
   for (let i = 0; i < blocks.length; i++) {
-    // Two adjacent VERBATIM blocks need a blank line between them: written
-    // back to back, two fences (or two tables) merge into one construct in
-    // CommonMark. The parser splits them on a blank line, so the writer has to
-    // put it back or the file would not survive a save. A list block's `- `
-    // marker already starts a new item, and a blank line before a nested list
-    // would change its meaning, so only raw/raw pairs get one.
-    if (i > 0 && blocks[i - 1].kind === 'raw' && blocks[i].kind === 'raw') parts.push('');
-    pushTop(blocks[i]);
+    pushTop(blocks[i], blocks[i - 1]);
   }
   return finish(parts.join('\n'));
 }

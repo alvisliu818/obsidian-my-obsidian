@@ -8,7 +8,7 @@ import { insertTab } from '@codemirror/commands';
 import type { EditorView } from '@codemirror/view';
 import type { BlockRenderHost } from '../blocks/renderHost';
 import {
-  indent,
+  indentBlock,
   mergeWithNext,
   mergeWithPrev,
   moveBlockVertically,
@@ -19,6 +19,7 @@ import {
   splitRawToOutline,
 } from '../core/treeOps';
 import { cycleMarker } from '../core/treeOps';
+import { blockTypeOf } from '../blocks/blockTypes';
 import { applyBlockProps, splitPropLines, type Block } from '../types';
 
 function focusedBlock(host: BlockRenderHost): Block | null {
@@ -84,6 +85,25 @@ export function handleTab(view: EditorView, host: BlockRenderHost, shift: boolea
   const b = focusedBlock(host);
   if (!b) return false;
   if (b.kind === 'raw') {
+    // 保真模式下正文是逐字段：普通段落/标题按 Tab 是"显式结构操作"——转成
+    // 大纲块再缩进（与 Enter 的 splitRawToOutline 同一套语义）。代码、表格、
+    // 公式没有大纲形态，保持字面缩进（Shift+Tab 对它们无事可做）。
+    const bt = blockTypeOf(b);
+    if (bt === 'paragraph' || bt === 'heading') {
+      const offset = view.state.selection.main.head;
+      const parent = b.parent;
+      host.mutate(
+        () => {
+          b.kind = 'list';
+          if (shift) outdent(b);
+          else indentBlock(b);
+        },
+        // Rebuild both the old and the new sibling list of b.
+        () => ({ lists: [parent, b.parent] }),
+      );
+      host.focusBlock(b, Math.min(offset, b.text.length));
+      return true;
+    }
     if (!shift) insertTab(view); // raw content: literal indentation
     return true;
   }
@@ -92,7 +112,7 @@ export function handleTab(view: EditorView, host: BlockRenderHost, shift: boolea
   host.mutate(
     () => {
       if (shift) outdent(b);
-      else indent(b);
+      else indentBlock(b); // 前一个兄弟可能是逐字段段落——先提升它，避免 raw 块带子块
     },
     // Rebuild both the old and the new sibling list of b.
     () => ({ lists: [oldParent, b.parent] }),

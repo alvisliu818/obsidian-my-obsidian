@@ -16,7 +16,8 @@ import { applyBlockProps, blockEditorDoc, createBlock, docPageProps, editablePro
 import { parseDocument } from '../core/parser';
 import { clearLogseqPageProps, registerLogseqPageProps } from '../pagePropsRegistry';
 import { serializeBlock, serializeDocument } from '../core/serializer';
-import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, isDescendant, linkParents, moveBlockGroup, moveBlockVertically, outdent, pseudoRootOf, rangeAnchor, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, visibleRange, type MovePosition } from '../core/treeOps';
+import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indentBlock, isDescendant, linkParents, moveBlockGroup, moveBlockVertically, outdent, pseudoRootOf, rangeAnchor, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, visibleRange, type MovePosition } from '../core/treeOps';
+import { blockTypeOf } from '../blocks/blockTypes';
 import { foldLevelOf, foldValueFor, nextFoldLevel, normFoldKey, subtreeFoldTargets, type FoldLevel } from '../core/fold';
 import { UndoStack } from '../state/undoStack';
 import {
@@ -1647,7 +1648,7 @@ ${content}`;
       const t = addrRoot ? (blockAtPath(addrRoot, path) ?? (path.length === 0 ? addrRoot : null)) : null;
       if (!t) return false;
       const oldParent = t.parent;
-      view.mutate(() => (shift ? outdent(t) : indent(t)), () => ({ lists: [oldParent, t.parent] }));
+      view.mutate(() => (shift ? outdent(t) : indentBlock(t)), () => ({ lists: [oldParent, t.parent] }));
       return true;
     };
 
@@ -1699,7 +1700,7 @@ ${content}`;
     void mutatePageEmbedSource(this, src.file!, (doc) => {
       const root = src.id ? findBlockById(doc.blocks, src.id) : pseudoRootOf(doc.blocks);
       const t = root ? blockAtPath(root, path) : null;
-      if (t) (shift ? outdent(t) : indent(t));
+      if (t) (shift ? outdent(t) : indentBlock(t));
     }).then(() => {
       if (isPageEmbed) void refreshPageEmbedBox(this, box, src.file!);
       else void refreshEmbedBox(this, box, src.id);
@@ -2325,24 +2326,39 @@ ${content}`;
   }
 
   indentSelected(shift: boolean): void {
-    const tops = this.topSelectedBlocks().filter((b) => b.kind === 'list');
-    if (tops.length === 0) return;
-    // Upward: top-down; downward: bottom-up — each block moves relative to
-    // its (possibly just-moved) previous sibling.
-    const seq = shift ? [...tops].reverse() : tops;
+    const moved: Block[] = [];
     this.mutate(
       () => {
+        // 缩进/取消缩进按文档顺序（outdent 反过来：每个块相对于可能刚移动过的
+        // 前一个兄弟）。保真模式下正文是逐字段，普通段落/标题也是合法目标——
+        // 结构操作把它转成大纲块（这正是"显式动作才转换"的语义）；代码、表格、
+        // 公式等没有大纲形态，跳过。
+        const tops = this.topSelectedBlocks();
+        const seq = shift ? [...tops].reverse() : tops;
         for (const b of seq) {
-          if (shift) outdent(b);
-          else indent(b);
+          if (shift) {
+            if (outdent(b)) moved.push(b);
+          } else {
+            if (b.kind === 'raw') {
+              const t = blockTypeOf(b);
+              if (t !== 'paragraph' && t !== 'heading') continue;
+              b.kind = 'list';
+            }
+            if (indentBlock(b)) moved.push(b);
+          }
         }
       },
       () => ({ full: true }),
     );
+    // 选集收敛到**真正移动过**的块。锚点父块不动却留在选集里，会让紧接着的
+    // Shift+Tab 变成"对根级块 outdent"的空操作——取消缩进按不动的典型病因。
+    // 选集空了（比如选的是代码块）则什么都不做。
+    this.selectedBlocks = new Set(moved);
+    this.syncSelectionClasses();
     // The patch above forces a full re-render, so the selection's keyboard
     // focus has to be re-asserted — otherwise the SECOND Tab (and every one
     // after it) goes nowhere and the shortcut looks like it worked only once.
-    this.focusTreeForSelection();
+    if (moved.length > 0) this.focusTreeForSelection();
   }
 
   /** Bulk move: up passes top-down, down passes bottom-up. */
@@ -2596,7 +2612,7 @@ ${content}`;
     this.mutate(
       () => {
         if (shift) outdent(b);
-        else indent(b);
+        else indentBlock(b);
       },
       () => ({ lists: [oldParent, b.parent] }),
     );

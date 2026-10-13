@@ -5,6 +5,7 @@
  */
 
 import { Block, Marker, MARKERS, createBlock, ensureId } from '../types';
+import { blockTypeOf } from '../blocks/blockTypes';
 
 export function siblingsOf(b: Block): Block[] {
   if (b.parent) return b.parent.children;
@@ -243,7 +244,36 @@ export function indent(b: Block, roots?: Block[]): boolean {
   return true;
 }
 
-/** Resolve the sibling array of b by scanning `roots` (structure-first, no registry). */
+/**
+ * 保真模式的转换点：把逐字段的普通段落/标题提升为大纲块。
+ * 代码、表格、公式、媒体等没有大纲形态，返回 false（调用方应放弃缩进）。
+ * 已经是大纲块时原样返回 true。
+ */
+export function promoteRawToOutline(b: Block): boolean {
+  if (b.kind !== 'raw') return true;
+  const t = blockTypeOf(b);
+  if (t !== 'paragraph' && t !== 'heading') return false;
+  b.kind = 'list';
+  return true;
+}
+
+/**
+ * 缩进，并保证父块是大纲块：前一个兄弟是逐字段段落/标题时先提升它
+ * （Tab 是显式结构操作）。没有前一个兄弟、或前一个兄弟是不能提升的逐字段
+ * （代码/表格/公式）时返回 false。
+ */
+export function indentBlock(b: Block): boolean {
+  const sibs = siblingsOf(b);
+  const idx = sibs.indexOf(b);
+  if (idx <= 0) return false;
+  const prev = sibs[idx - 1];
+  if (!promoteRawToOutline(prev)) return false;
+  return indent(b);
+}
+
+/**
+ * Resolve the sibling array of b by scanning `roots` (structure-first, no registry).
+ */
 function siblingsIn(b: Block, roots: Block[]): Block[] | null {
   if (b.parent) return b.parent.children;
   const walk = (list: Block[]): Block[] | null => {

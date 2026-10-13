@@ -36,11 +36,11 @@ export interface Block {
    */
   frontmatter?: boolean;
   /**
-   * 保真模式：原文里这个块**前面**有一个空行（顶层）。序列化时补回去，否则
-   * 「段落 ↔ 列表」「段落 ↔ 标题」之间的空行会在每次保存时被吃掉一个。
+   * 保真模式：原文里这个块**前面**有几个空行（顶层，>=1）。序列化时补回去，
+   * 否则「段落 ↔ 列表」「段落 ↔ 标题」之间的空行会在每次保存时被吃掉。
    * 只在 `preservePlainText` 解析时写入；默认解析路径不产生它。
    */
-  blankBefore?: boolean;
+  blankBefore?: number;
 }
 
 export interface ParsedDocument {
