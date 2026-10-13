@@ -16,7 +16,7 @@
  * which is what the user asked for.
  */
 
-import { ItemView, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
+import { ItemView, Menu, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
 import { EditorState, type Extension } from 'cm-bundle:@codemirror/state';
 import { EditorView, keymap, lineNumbers, type KeyBinding, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection, crosshairCursor, highlightSpecialChars, dropCursor } from 'cm-bundle:@codemirror/view';
 import { lspBridgeExtensions } from '../lsp/cmLspBridge';
@@ -56,6 +56,7 @@ import { logOp } from '../features/logger';
 import type LogseqEditorPlugin from '../main';
 import { relativeDisplayPath } from '../features/codeFileKind';
 import { setLeafTitle } from '../features/leafTitle';
+import { buildExternalPaneMenu } from '../features/externalPaneMenu';
 import { applyHeaderPath, headerPathSegments } from './headerPath';
 import { runFile, langFromExt } from '../exec/runner';
 import type { RunHandle } from '../exec/pythonRunner';
@@ -257,6 +258,46 @@ export class ExternalCodeView extends ItemView {
     // content have not arrived yet — and the state that carries them is the
     // only place they exist.
     if (this.abs) this.mount();
+  }
+
+  /**
+   * ⋮ 菜单 / 标签页右键菜单（库外文件与库内标签页对齐）。
+   *
+   * 库内文件的这类菜单由 `FileView.onPaneMenu` 提供；本视图是 ItemView，
+   * 继承链上只有分屏项。`buildExternalPaneMenu` 先以中性 source 转发
+   * `file-menu`（hop-1 TExternalFile + hop-2 TFile 适配器）让其他插件补项，
+   * 再补作用在真实绝对路径上的自建项。source 原样透传：'more-options'（⋮）
+   * 与 'tab-header'（右键）都走这里。
+   */
+  onPaneMenu(menu: Menu, source: string): void {
+    super.onPaneMenu(menu, source);
+    if (!this.abs) return;
+    buildExternalPaneMenu(this.plugin, menu, {
+      abs: this.abs,
+      fileName: this.fileName,
+      popout: { viewType: VIEW_TYPE_EXTERNAL_CODE, getState: () => this.getState() },
+      onRenamed: (newAbs, newName) => {
+        this.abs = newAbs;
+        this.fileName = newName;
+        this.displayPath = relativeDisplayPath(newAbs, this.mountPath, newName);
+        // 缓冲区原样保留（改名不动内容），之后的 flush 写去新路径；语言模式
+        // 由扩展名决定，改名不改扩展名，无需 remount。
+        setLeafTitle(this.leaf, newName);
+        (this.leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
+        const segments = headerPathSegments(
+          newAbs,
+          this.displayPath || newName,
+          this.mountLabel || this.mountLabelFromSettings(),
+        );
+        if (segments.length) segments[0].isMount = true;
+        applyHeaderPath(this.containerEl, segments, this.plugin, newAbs);
+      },
+      onDeleted: () => {
+        // 文件已经没了：先落盘再关（onClose 里 flush + destroy editor）。
+        void this.onClose();
+        this.leaf.detach();
+      },
+    });
   }
 
   async setState(state: unknown, result: ViewStateResult): Promise<void> {

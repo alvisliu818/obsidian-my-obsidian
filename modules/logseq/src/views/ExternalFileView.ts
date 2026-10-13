@@ -15,7 +15,7 @@
  * copied into the vault.
  */
 
-import { ItemView, MarkdownRenderer, Notice, WorkspaceLeaf, setIcon, type ViewStateResult } from 'obsidian';
+import { ItemView, MarkdownRenderer, Menu, Notice, WorkspaceLeaf, setIcon, type ViewStateResult } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import type { Block } from '../types';
 import { parseDocument } from '../core/parser';
@@ -23,6 +23,8 @@ import { serializeDocument } from '../core/serializer';
 import { logOp } from '../features/logger';
 import { extOf, readExternalText, writeExternalText } from '../features/extFs';
 import { isTextMount } from '../features/mountFilter';
+import { setLeafTitle } from '../features/leafTitle';
+import { buildExternalPaneMenu } from '../features/externalPaneMenu';
 
 export const VIEW_TYPE_EXTERNAL_FILE = 'logseq-external-file';
 
@@ -94,6 +96,46 @@ export class ExternalFileView extends ItemView {
 
   async onClose(): Promise<void> {
     await this.flush();
+  }
+
+  /**
+   * ⋮ 菜单 / 标签页右键菜单（库外文件与库内标签页对齐）。
+   *
+   * 库内文件的这类菜单由 `FileView.onPaneMenu` 提供；本视图是 ItemView，
+   * 继承链上只有分屏项。`buildExternalPaneMenu` 先以中性 source 转发
+   * `file-menu`（hop-1 TExternalFile + hop-2 TFile 适配器）让其他插件补项，
+   * 再补作用在真实绝对路径上的自建项。source 原样透传：'more-options'（⋮）
+   * 与 'tab-header'（右键）都走这里。
+   */
+  onPaneMenu(menu: Menu, source: string): void {
+    super.onPaneMenu(menu, source);
+    if (!this.abs) return;
+    buildExternalPaneMenu(this.plugin, menu, {
+      abs: this.abs,
+      fileName: this.fileName,
+      popout: { viewType: VIEW_TYPE_EXTERNAL_FILE, getState: () => this.getState() },
+      onRenamed: (newAbs, newName) => {
+        this.abs = newAbs;
+        this.fileName = newName;
+        // 改名不动内容，但按新路径重读一次最稳（拾起别处的修改）。
+        if (isTextMount(extOf(newName))) {
+          try {
+            this.doc = parseDocument(readExternalText(newAbs));
+            this.dirty = false;
+          } catch (e) {
+            new Notice(`无法读取 ${newName}：${String(e).slice(0, 100)}`);
+          }
+        }
+        setLeafTitle(this.leaf, newName);
+        (this.leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
+        this.render();
+      },
+      onDeleted: () => {
+        // 文件已经没了：先落盘再关（onClose 里 flush）。
+        void this.onClose();
+        this.leaf.detach();
+      },
+    });
   }
 
   // ------------------------------------------------------------------

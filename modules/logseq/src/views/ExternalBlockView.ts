@@ -25,10 +25,13 @@
  * banner rather than showing the previous note's results.
  */
 
-import { ItemView, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
+import { ItemView, Menu, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import { BlockEditorView } from '../view/BlockEditorView';
 import type { MountNode } from '../features/mountFilter';
+import { relativeDisplayPath } from '../features/codeFileKind';
+import { setLeafTitle } from '../features/leafTitle';
+import { buildExternalPaneMenu } from '../features/externalPaneMenu';
 import { applyHeaderPath, headerPathSegments } from './headerPath';
 
 export const VIEW_TYPE_EXTERNAL_BLOCK = 'logseq-external-block';
@@ -99,6 +102,44 @@ export class ExternalBlockView extends ItemView {
   async onOpen(): Promise<void> {
     if (this.abs) this.hostBlockEditor();
     this.syncHeaderPath();
+  }
+
+  /**
+   * ⋮ 菜单 / 标签页右键菜单。
+   *
+   * 库内文件的这两类菜单由 Obsidian 的 `FileView.onPaneMenu` 提供（重命名/
+   * 删除 + `file-menu` 事件，核心与第三方插件随之补项，实测一个库内标签页
+   * 的 ⋮ 有 17 项）；库外文件由本视图承载，继承链上只剩基类的分屏项。
+   * `buildExternalPaneMenu` 把两边补齐：先以中性 source 转发 `file-menu`
+   * （hop-1 TExternalFile + hop-2 TFile 适配器），再补作用在真实绝对路径上
+   * 的自建项（重命名/删除/复制路径/资源管理器/默认应用/新窗口）。
+   *
+   * source 原样透传：'more-options'（⋮）与 'tab-header'（右键）都走这里。
+   */
+  onPaneMenu(menu: Menu, source: string): void {
+    super.onPaneMenu(menu, source);
+    if (!this.abs) return;
+    buildExternalPaneMenu(this.plugin, menu, {
+      abs: this.abs,
+      fileName: this.fileName,
+      popout: { viewType: VIEW_TYPE_EXTERNAL_BLOCK, getState: () => this.getState() },
+      onRenamed: (newAbs, newName) => {
+        this.abs = newAbs;
+        this.fileName = newName;
+        this.rel = relativeDisplayPath(newAbs, this.mountPath, newName);
+        // 托管编辑器持有自己的 abs/fileName，重定向过去保存才会落到新路径；
+        // 内容以磁盘为准重读（改名不动内容，顺带拾起别处的修改）。
+        void this.inner?.openExternalFile(newAbs, newName, this.mountPath);
+        setLeafTitle(this.leaf, newName);
+        (this.leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
+        this.syncHeaderPath();
+      },
+      onDeleted: () => {
+        // 文件已经没了，标签页没有存在意义——关掉前让托管编辑器存盘。
+        void this.onClose();
+        this.leaf.detach();
+      },
+    });
   }
 
   // ------------------------------------------------------------------
