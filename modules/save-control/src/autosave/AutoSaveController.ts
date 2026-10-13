@@ -266,6 +266,23 @@ export class AutoSaveController {
     this.onPendingSaveCountChange?.(this.pendingSaveQueue.getPaths().length);
   }
 
+  /**
+   * 合并新增：丢弃待保存内容并回滚磁盘到会话基线。
+   *
+   * 自动保存可能在用户点「不保存并关闭」之前已把缓冲区写进磁盘——丢弃队列
+   * 只能让状态栏变干净，磁盘上还是"已保存"的编辑内容。这里额外把磁盘写回
+   * 该路径第一次进入队列前的字节（见 PendingSaveQueue.baselines）。
+   */
+  async discardAndRevertPath(filePath: string): Promise<void> {
+    this.discardPath(filePath);
+    await this.pendingSaveQueue.revertToBaseline(filePath);
+  }
+
+  /** 合并新增：显式保存后作废会话基线（Ctrl+S / 关闭提示的「保存并关闭」）。 */
+  clearSessionBaseline(filePath: string): void {
+    this.pendingSaveQueue.clearBaseline(filePath);
+  }
+
   refreshScheduling() {
     this.pendingSaveQueue.refreshScheduling();
     this.workspaceLayoutSaveController.refreshScheduling();
@@ -1458,6 +1475,9 @@ export class AutoSaveController {
 
   private handleManualSaveShortcut(_view: MarkdownView, filePath: string, event: KeyboardEvent): boolean {
     this.markManualSaveRequested(filePath);
+    // 显式保存：本会话基线作废——用户主动按下 Ctrl+S 的内容就是想要的内容，
+    // 之后「不保存并关闭」不应把它回滚掉。
+    this.pendingSaveQueue.clearBaseline(filePath);
     dlog("Allowing manual save shortcut to continue through Obsidian save command", {
       filePath,
       key: event.key,

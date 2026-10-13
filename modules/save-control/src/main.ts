@@ -258,15 +258,24 @@ export class SaveControlPlugin extends Plugin {
       return;
     }
     const path = (leaf.view as { file?: { path?: string } } | null)?.file?.path ?? "";
-    if (path) await this.autosaveController?.flushPath(path);
+    if (path) {
+      await this.autosaveController?.flushPath(path);
+      // 显式保存：会话基线作废——之后「不保存并关闭」不能回滚这次保存。
+      this.autosaveController?.clearSessionBaseline(path);
+    }
   }
 
-  /** 「不保存并关闭」：库外直接拆（缓冲区随视图消失），库内丢弃待保存项。 */
+  /**
+   * 「不保存并关闭」：库外直接拆（缓冲区随视图消失），库内丢弃待保存项并把
+   * 磁盘回滚到会话基线——自动保存可能已把本会话的编辑落盘（2s 防抖），只
+   * 丢队列的话磁盘上仍是"已保存"的脏内容（第12章回车重复 bug 的第三个症状
+   * 正是这样产生的），所以丢弃之外还要还原字节。
+   */
   private discardLeafUnsaved(leaf: { view?: unknown }): void {
     const handle = asExternalSaveHandle(leaf.view);
     if (handle) return; // 库外：没有要丢的磁盘状态，拆掉即丢弃
     const path = (leaf.view as { file?: { path?: string } } | null)?.file?.path ?? "";
-    if (path) this.autosaveController?.discardPath(path);
+    if (path) void this.autosaveController?.discardAndRevertPath(path);
   }
 
   // ------------------------------------------------------------------

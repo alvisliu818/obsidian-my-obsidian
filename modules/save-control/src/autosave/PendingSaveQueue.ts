@@ -18,6 +18,11 @@ type PendingSaveEntry = {
 export class PendingSaveQueue {
   private readonly pendingSavesByPath = new Map<string, PendingSaveEntry>();
   private readonly flushingPaths = new Set<string>();
+  // 会话基线：每个路径第一次进入待保存队列时的磁盘内容（异步读取）。自动保存
+  // 把缓冲区落盘后磁盘已不再是"未保存"状态，但「不保存并关闭」的语义是放弃
+  // 本会话的全部编辑——所以基线独立于队列条目存活，冲刷不清除它，只有显式
+  // 保存（Ctrl+S / 保存并关闭）或回滚才消费掉。
+  private readonly baselines = new Map<string, Promise<string | null>>();
 
   constructor(
     private readonly app: App,
@@ -71,6 +76,7 @@ export class PendingSaveQueue {
       return;
     }
 
+    this.captureBaseline(filePath);
     this.pendingSavesByPath.set(filePath, {
       view,
       timeoutId: this.createTimeout(filePath),
@@ -146,6 +152,9 @@ export class PendingSaveQueue {
     }
 
     this.pendingSavesByPath.delete(oldPath);
+    const baseline = this.baselines.get(oldPath);
+    this.baselines.delete(oldPath);
+    if (baseline) this.baselines.set(newPath, baseline);
     this.pendingSavesByPath.set(newPath, {
       ...pendingSave,
       timeoutId: this.createTimeout(newPath),
@@ -182,6 +191,54 @@ export class PendingSaveQueue {
     for (const filePath of Array.from(this.pendingSavesByPath.keys())) {
       this.clear(filePath);
     }
+    // 退出/卸载冲刷后基线失去意义，丢弃防止之后误回滚。
+    this.baselines.clear();
+  }
+
+  /** 显式保存（Ctrl+S / 关闭提示的「保存并关闭」）：基线作废，之后不再回滚。 */
+  clearBaseline(filePath: string): void {
+    this.baselines.delete(filePath);
+  }
+
+  /**
+   * 「不保存并关闭」的回滚：把磁盘写回会话基线（若自动保存已把本会话的编辑
+   * 落盘）。基线缺失或磁盘与基线一致时不写。返回是否发生了回写。
+   */
+  async revertToBaseline(filePath: string): Promise<boolean> {
+    const baselinePromise = this.baselines.get(filePath);
+    this.baselines.delete(filePath);
+    const baseline = baselinePromise ? await baselinePromise : null;
+    if (baseline === null) return false;
+
+    const file = this.app.vault.getAbstractFileByPath(filePath);
+    if (!(file instanceof TFile)) return false;
+    const disk = await this.readCurrentDiskData(file, filePath);
+    if (disk === null || disk === baseline) return false;
+
+    try {
+      const adapter = this.app.vault.adapter;
+      if (adapter instanceof FileSystemAdapter) {
+        await adapter.write(filePath, baseline);
+      } else {
+        await this.app.vault.modify(file, baseline);
+      }
+      dlog("Reverted file to session baseline on discard", filePath);
+      return true;
+    } catch (error) {
+      dlog("Baseline revert failed", filePath, error);
+      return false;
+    }
+  }
+
+  /** 第一次进入待保存队列时快照磁盘内容（异步，读到的就是本会话编辑前的字节）。 */
+  private captureBaseline(filePath: string): void {
+    if (this.baselines.has(filePath)) return;
+    const file = this.app.vault.getAbstractFileByPath(filePath);
+    const promise =
+      file instanceof TFile
+        ? this.readCurrentDiskData(file, filePath).catch(() => null)
+        : Promise.resolve(null);
+    this.baselines.set(filePath, promise);
   }
 
   async flush(filePath: string) {
