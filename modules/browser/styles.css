@@ -283,6 +283,11 @@
   color: var(--icon-color);
 }
 
+/* The header's own "more options" button duplicates ours — hide it. */
+.view-header.ob-browser-native-header .view-actions {
+  display: none;
+}
+
 /* The header can't grow: the find bar drops over the page content instead. */
 .view-header.ob-browser-native-header .ob-findbar-wrap {
   position: absolute;
