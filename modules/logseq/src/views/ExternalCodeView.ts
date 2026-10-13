@@ -204,6 +204,29 @@ export class ExternalCodeView extends ItemView {
   /** 运行输出区(首次运行时创建) */
   private runOutputEl: HTMLPreElement | null = null;
   private runHandle: RunHandle | null = null;
+  /**
+   * 内置自动保存的开关与延时。save-control 模块（若启用）会成为唯一权威：
+   * 它通过 configureAutoSave 把这里的设置改成自己的，避免两处计时器重复
+   * 落盘；模块没启用时保持默认（开、900ms），行为与从前一致。
+   */
+  private autoSaveEnabled = true;
+  private autoSaveDelayMs = 900;
+
+  /** save-control 模块调用：接管/交还内置自动保存的节奏。 */
+  configureAutoSave(opts: { enabled: boolean; delayMs: number }): void {
+    this.autoSaveEnabled = opts.enabled;
+    this.autoSaveDelayMs = Math.max(100, Math.round(opts.delayMs));
+    if (!opts.enabled && this.saveTimer !== null) {
+      window.clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+  }
+
+  /** 缓冲区相对磁盘是否有未落盘的改动（save-control 的脏状态探针）。 */
+  isDirty(): boolean {
+    if (!this.editor || !this.abs) return false;
+    return this.editor.state.doc.toString() !== this.lastDiskData;
+  }
 
   /** 老 state 没有挂载名时，按最长前缀匹配在挂载配置里找回来。 */
   private mountLabelFromSettings(): string {
@@ -427,8 +450,11 @@ export class ExternalCodeView extends ItemView {
       EditorView.updateListener.of((u) => {
         if (!u.docChanged) return;
         // Debounced like the vault editor, so typing is not a write per keystroke.
+        // The delay is the view's own unless save-control took the rhythm over
+        // (configureAutoSave) — then its setting wins.
         if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
-        this.saveTimer = window.setTimeout(() => void this.flush(), 900);
+        if (!this.autoSaveEnabled) return;
+        this.saveTimer = window.setTimeout(() => void this.flush(), this.autoSaveDelayMs);
       }),
       ...languageFor(ext),
       ...(this.abs ? lspBridgeExtensions({ plugin: this.plugin, absPath: this.abs, languageId: ext === 'py' ? 'python' : ext }) : []),

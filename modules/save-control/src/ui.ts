@@ -1,5 +1,5 @@
 import { Modal, TFile, ItemView, WorkspaceLeaf, MarkdownRenderer, Component, setIcon } from "obsidian";
-import { SaveHistoryPlugin, type GroupByMode } from "./main";
+import { SaveControlPlugin, type GroupByMode } from "./main";
 import { listSnapshotsForFile, readSnapshotContent, deleteSnapshotFile, updateSnapshotLabel, toggleSnapshotFavorite, savePreRestoreBackup, ensureExportDir, getExportFolderPath, searchSnapshots, createSearchRegex } from "./storage";
 import type { SnapshotRecord, SearchMatch } from "./storage";
 import { computeDiff, type DiffLine } from "./diff";
@@ -26,7 +26,7 @@ function toBase64(str: string): string {
   return result;
 }
 
-async function resolveImagesInMarkdown(plugin: SaveHistoryPlugin, markdown: string, sourcePath: string): Promise<string> {
+async function resolveImagesInMarkdown(plugin: SaveControlPlugin, markdown: string, sourcePath: string): Promise<string> {
   const adapter = plugin.app.vault.adapter;
   const parentFolder = sourcePath.includes("/") ? sourcePath.substring(0, sourcePath.lastIndexOf("/")) : "";
 
@@ -74,13 +74,13 @@ export const VIEW_TYPE_SAVE_HISTORY = "save-history-view";
 export const VIEW_TYPE_PREVIEW = "save-history-preview";
 
 export class PreviewTabView extends ItemView {
-  private plugin: SaveHistoryPlugin;
+  private plugin: SaveControlPlugin;
   private content: string = "";
   private fileName: string = "";
-  private contentEl: HTMLElement | null = null;
+  // contentEl 沿用 ItemView 自带的（非空）；这里不再遮蔽。
   private fileNameEl: HTMLElement | null = null;
 
-  constructor(leaf: WorkspaceLeaf, plugin: SaveHistoryPlugin) {
+  constructor(leaf: WorkspaceLeaf, plugin: SaveControlPlugin) {
     super(leaf);
     this.plugin = plugin;
   }
@@ -124,7 +124,7 @@ export class PreviewTabView extends ItemView {
   }
 }
 
-export function registerCommands(plugin: SaveHistoryPlugin, versioning: Versioning) {
+export function registerCommands(plugin: SaveControlPlugin, versioning: Versioning) {
   plugin.addCommand?.({
     id: "save-now",
     name: translate("cmdSaveNow"),
@@ -223,14 +223,14 @@ export function registerCommands(plugin: SaveHistoryPlugin, versioning: Versioni
 }
 
 export class SaveHistoryView extends ItemView {
-  private plugin: SaveHistoryPlugin;
+  private plugin: SaveControlPlugin;
   private versioning: Versioning;
   private diffMode: boolean = false;
   private diffSelection: (SnapshotRecord & { filePath: string })[] = [];
   private bulkDeleteMode: boolean = false;
   private bulkDeleteSelection: Set<string> = new Set();
 
-  constructor(leaf: WorkspaceLeaf, plugin: SaveHistoryPlugin, versioning: Versioning) {
+  constructor(leaf: WorkspaceLeaf, plugin: SaveControlPlugin, versioning: Versioning) {
     super(leaf);
     this.plugin = plugin;
     this.versioning = versioning;
@@ -909,7 +909,7 @@ export class SaveHistoryView extends ItemView {
             const ts = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}T${String(d.getHours()).padStart(2, "0")}-${String(d.getMinutes()).padStart(2, "0")}-${String(d.getSeconds()).padStart(2, "0")}`;
             const defaultName = `${baseName}_${ts}.${ext}`;
 
-            if (this.plugin.app.isMobile) {
+            if ((this.plugin.app as unknown as { isMobile?: boolean }).isMobile) {
               const exportDir = getExportFolderPath(this.plugin);
               await ensureExportDir(this.plugin);
               await this.plugin.app.vault.adapter.write(`${exportDir}/${defaultName}.${ext}`, snapContent.content);
@@ -1179,7 +1179,7 @@ export class SaveHistoryView extends ItemView {
         this.plugin.app.workspace.revealLeaf(targetLeaf);
         return;
       }
-      if (this.plugin.app.isMobile) {
+      if ((this.plugin.app as unknown as { isMobile?: boolean }).isMobile) {
         const f = this.plugin.app.vault.getAbstractFileByPath(existingPath);
         if (f instanceof TFile) {
           const leaf = this.plugin.app.workspace.getLeaf("tab");
@@ -1339,7 +1339,7 @@ export class SaveHistoryView extends ItemView {
     }
   }
 
-  onClose() {
+  async onClose(): Promise<void> {
     this.cleanupDropdowns();
   }
 
@@ -1351,7 +1351,7 @@ export class SaveHistoryView extends ItemView {
 
 class RestoreVersionModal extends Modal {
   private file: TFile;
-  private plugin: SaveHistoryPlugin;
+  private plugin: SaveControlPlugin;
   private versioning: Versioning;
 
   private loadingEl!: HTMLElement;
@@ -1359,7 +1359,7 @@ class RestoreVersionModal extends Modal {
 
   private snapshots: (SnapshotRecord & { filePath: string })[] = [];
 
-  constructor(plugin: SaveHistoryPlugin, file: TFile, versioning: Versioning) {
+  constructor(plugin: SaveControlPlugin, file: TFile, versioning: Versioning) {
     super(plugin.app);
     this.plugin = plugin;
     this.file = file;
@@ -1443,7 +1443,7 @@ class RestoreVersionModal extends Modal {
 }
 
 class DiffModal extends Modal {
-  private plugin: SaveHistoryPlugin;
+  private plugin: SaveControlPlugin;
   private snapOld: SnapshotRecord & { filePath: string };
   private snapNew: SnapshotRecord & { filePath: string };
   private contentOld: string;
@@ -1451,7 +1451,7 @@ class DiffModal extends Modal {
   private abortController: AbortController;
 
   constructor(
-    plugin: SaveHistoryPlugin,
+    plugin: SaveControlPlugin,
     snapOld: SnapshotRecord & { filePath: string },
     snapNew: SnapshotRecord & { filePath: string },
     contentOld: string,
@@ -1598,7 +1598,7 @@ class DiffModal extends Modal {
 
 async function appendDiffRow(
   parent: HTMLElement,
-  app: SaveHistoryPlugin["app"],
+  app: SaveControlPlugin["app"],
   line: DiffLine,
   sourcePath: string,
   component: Component,
@@ -1653,7 +1653,7 @@ async function appendDiffRow(
     const ext = sourcePath.split(".").pop()?.toLowerCase() || "";
     if (ext === "md" && !rawMode) {
       try {
-        const resolved = await resolveImagesInMarkdown(component as unknown as SaveHistoryPlugin, line.text, sourcePath);
+        const resolved = await resolveImagesInMarkdown(component as unknown as SaveControlPlugin, line.text, sourcePath);
         await MarkdownRenderer.render(app, resolved, textCol, sourcePath, component);
       } catch {
         const span = textCol.createEl("span", { cls: "sh-raw-text" });
@@ -1766,7 +1766,7 @@ function makeResizable(el: HTMLElement, signal?: AbortSignal) {
 }
 
 export class SearchSnapshotsModal extends Modal {
-  private plugin: SaveHistoryPlugin;
+  private plugin: SaveControlPlugin;
   private versioning: Versioning;
   private query: string = "";
   private results: SearchMatch[] = [];
@@ -1775,7 +1775,7 @@ export class SearchSnapshotsModal extends Modal {
   private inputEl!: HTMLInputElement;
   private countEl!: HTMLElement;
 
-  constructor(plugin: SaveHistoryPlugin, versioning: Versioning) {
+  constructor(plugin: SaveControlPlugin, versioning: Versioning) {
     super(plugin.app);
     this.plugin = plugin;
     this.versioning = versioning;

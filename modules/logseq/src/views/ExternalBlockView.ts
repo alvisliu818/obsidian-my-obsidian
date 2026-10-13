@@ -274,6 +274,11 @@ export class ExternalBlockView extends ItemView {
     await this.inner?.save();
   }
 
+  /** 托管编辑器是否有未落盘的改动（save-control 模块的脏状态探针）。 */
+  isDirty(): boolean {
+    return this.inner?.isDirty() === true;
+  }
+
   getViewData(): string {
     return this.inner?.getViewData() ?? '';
   }

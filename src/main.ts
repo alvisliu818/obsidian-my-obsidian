@@ -34,6 +34,7 @@ import MaterialIconThemePlugin from "../modules/material-icon-theme/src/main";
 import TraceTimePlugin from "../modules/tracetime/src/main";
 import AIImageAnalyzerPlugin from "../modules/ai-image-analyzer/src/main";
 import OmnisearchPlugin from "../modules/omnisearch/src/main";
+import SaveControlPlugin from "../modules/save-control/src/main";
 import { CodeFileView, DEFAULT_CODE_EXTENSIONS, VIEW_TYPE_CODE_FILE } from "./codeFileView";
 
 export default class MyObsidianPlugin extends Plugin {
@@ -131,6 +132,17 @@ export default class MyObsidianPlugin extends Plugin {
 				"库内全文搜索引擎：拼音容错、按路径/标签/区块过滤、文件内搜索与 API。上游 Simon Cambier（GPL-3）。",
 			desktopOnly: false,
 			cls: OmnisearchPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// 两个上游 MIT 插件的合并（见 modules/save-control/NOTICE.md）。库外
+			// 文件支持依赖 Node fs（快照/读写），只承诺桌面端。
+			id: "save-control",
+			legacyId: "save-history",
+			name: "Save Control",
+			summary:
+				"自动保存节奏控制 + 文件版本历史（save-history 与 autosave-control 合并）：延迟落盘、状态栏待保存指示、标签页未保存圆点与关闭提示；虚拟文档树挂载的库外文件同样支持。上游 Sevoni（MIT）+ mihasm（MIT）。",
+			desktopOnly: true,
+			cls: SaveControlPlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 

@@ -526,6 +526,11 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
 
   // TextFileView data interface -------------------------------------------------
 
+  /** 库外文件是否有未落盘的改动（ExternalBlockView 与 save-control 的探针）。 */
+  isDirty(): boolean {
+    return this.isExternal && this.externalDirty;
+  }
+
   getViewData(): string {
     const s = this.serializeCurrent();
     this.lastDiskData = s; // this is what Obsidian writes to disk

@@ -320,6 +320,11 @@ export class ExternalFileView extends ItemView {
       new Notice(`重新读取失败：${String(e).slice(0, 100)}`);
     }
   }
+
+  /** 是否有未落盘的改动（save-control 模块的脏状态探针）。 */
+  isDirty(): boolean {
+    return this.dirty;
+  }
 }
 
 /**

@@ -1,5 +1,12 @@
 import { DataAdapter } from "obsidian";
-import { SaveHistoryPlugin } from "./main";
+import { SaveControlPlugin } from "./main";
+import {
+  deleteExternalSnapshot,
+  listExternalSnapshots,
+  readExternalSnapshot,
+  resolveExternalSnapshotRoot,
+  saveExternalSnapshot,
+} from "./externalStore";
 
 export type SnapshotRecord = {
   timestamp: string; // ISO
@@ -7,6 +14,31 @@ export type SnapshotRecord = {
   name: string;
   favorite?: boolean;
 };
+
+/**
+ * 一个路径/目录是不是库外快照存储。
+ *
+ * 库外目标的「路径」是快照目录的**绝对路径**（targets.snapshotKeyFor 拼出，
+ * main.snapshotPathFor 生成），而 vault 相对路径永远不以盘符/根斜杠开头——
+ * 据此路由 vault adapter 与 Node fs 两套存储，无需登记表。
+ */
+export function isExternalSnapshotPath(p: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("/");
+}
+
+export function getExternalSnapshotRoot(plugin: SaveControlPlugin): string {
+  const adapter = plugin.app.vault.adapter as unknown as {
+    basePath?: string;
+    getBasePath?: () => string;
+  };
+  const vaultBase =
+    (typeof adapter.getBasePath === "function" ? adapter.getBasePath() : adapter.basePath) ?? "";
+  return resolveExternalSnapshotRoot({
+    configured: plugin.settings.externalSnapshotFolder,
+    vaultBase,
+    pluginDir: plugin.manifest.dir ?? "",
+  });
+}
 
 export function normalizeRecord(raw: Record<string, unknown>): SnapshotRecord {
   return {
@@ -19,22 +51,29 @@ export function normalizeRecord(raw: Record<string, unknown>): SnapshotRecord {
 
 const LEGACY_SNAPSHOT_ROOT = ".versions(SH)";
 
-export function getSnapshotRoot(plugin: SaveHistoryPlugin): string {
+export function getSnapshotRoot(plugin: SaveControlPlugin): string {
   return plugin.settings.snapshotFolder || LEGACY_SNAPSHOT_ROOT;
 }
 
-export function getSnapshotDirPath(plugin: SaveHistoryPlugin, vaultRelativePath: string): string {
+export function getSnapshotDirPath(plugin: SaveControlPlugin, vaultRelativePath: string): string {
+  // 库外：传入的已经是完整的绝对目录，原样用。
+  if (isExternalSnapshotPath(vaultRelativePath)) return vaultRelativePath;
   const normalized = vaultRelativePath.replace(/^\/+/, "");
   return `${getSnapshotRoot(plugin)}/${normalized}`;
 }
 
-export function getSnapshotFilePath(plugin: SaveHistoryPlugin, vaultRelativePath: string, timestamp: string): string {
+export function getSnapshotFilePath(plugin: SaveControlPlugin, vaultRelativePath: string, timestamp: string): string {
   const safeTimestamp = timestamp.replace(/:/g, "-");
+  // 库外与库内同构：getSnapshotDirPath 对库外原样返回绝对目录。
   return `${getSnapshotDirPath(plugin, vaultRelativePath)}/${safeTimestamp}.json`;
 }
 
-export async function ensureSnapshotDir(plugin: SaveHistoryPlugin, vaultRelativePath: string) {
+export async function ensureSnapshotDir(plugin: SaveControlPlugin, vaultRelativePath: string) {
   const dirPath = getSnapshotDirPath(plugin, vaultRelativePath);
+  if (isExternalSnapshotPath(dirPath)) {
+    // externalStore.saveExternalSnapshot 内部 ensureDir，这里无需动作。
+    return;
+  }
   const adapter = plugin.app.vault.adapter;
 
   const parts = dirPath.split("/");
@@ -53,12 +92,18 @@ export async function ensureSnapshotDir(plugin: SaveHistoryPlugin, vaultRelative
 }
 
 export async function saveSnapshotContent(
-  plugin: SaveHistoryPlugin,
+  plugin: SaveControlPlugin,
   vaultRelativePath: string,
   timestamp: string,
   content: string,
   name: string
 ) {
+  // 库外：Node fs 直写（externalStore 内部建目录）。
+  if (isExternalSnapshotPath(vaultRelativePath)) {
+    const root = getExternalSnapshotRoot(plugin);
+    saveExternalSnapshot(root, vaultRelativePath.slice(root.length + 1).replace(/^\/+/, ""), timestamp, content, name);
+    return;
+  }
   await ensureSnapshotDir(plugin, vaultRelativePath);
 
   const record: SnapshotRecord = { timestamp, content, name };
@@ -69,9 +114,14 @@ export async function saveSnapshotContent(
 }
 
 export async function listSnapshotsForFile(
-  plugin: SaveHistoryPlugin,
+  plugin: SaveControlPlugin,
   vaultRelativePath: string
 ): Promise<(SnapshotRecord & { filePath: string })[]> {
+  if (isExternalSnapshotPath(vaultRelativePath)) {
+    const root = getExternalSnapshotRoot(plugin);
+    const key = vaultRelativePath.slice(root.length + 1).replace(/^\/+/, "");
+    return listExternalSnapshots(root, key).sort((a, b) => (a.timestamp > b.timestamp ? -1 : 1));
+  }
   const dirPath = getSnapshotDirPath(plugin, vaultRelativePath);
   const adapter = plugin.app.vault.adapter;
 
@@ -113,9 +163,13 @@ export async function listSnapshotsForFile(
 }
 
 export async function readSnapshotContent(
-  plugin: SaveHistoryPlugin,
+  plugin: SaveControlPlugin,
   filePath: string
 ): Promise<SnapshotRecord | null> {
+  // 库外快照是绝对路径的 fs 文件。
+  if (isExternalSnapshotPath(filePath)) {
+    return readExternalSnapshot(filePath);
+  }
   const adapter = plugin.app.vault.adapter;
 
   if (!(await adapter.exists(filePath))) {
@@ -131,9 +185,12 @@ export async function readSnapshotContent(
 }
 
 export async function deleteSnapshotFile(
-  plugin: SaveHistoryPlugin,
+  plugin: SaveControlPlugin,
   filePath: string
 ): Promise<boolean> {
+  if (isExternalSnapshotPath(filePath)) {
+    return deleteExternalSnapshot(getExternalSnapshotRoot(plugin), filePath);
+  }
   const adapter = plugin.app.vault.adapter;
 
   if (await adapter.exists(filePath)) {
@@ -149,7 +206,7 @@ export async function deleteSnapshotFile(
 }
 
 export async function deleteOldestAutosaves(
-  plugin: SaveHistoryPlugin,
+  plugin: SaveControlPlugin,
   vaultRelativePath: string,
   keepCount: number
 ): Promise<void> {
@@ -164,7 +221,7 @@ export async function deleteOldestAutosaves(
   }
 }
 
-async function removeEmptySnapshotDirs(plugin: SaveHistoryPlugin, filePath: string) {
+async function removeEmptySnapshotDirs(plugin: SaveControlPlugin, filePath: string) {
   const adapter = plugin.app.vault.adapter;
   const root = getSnapshotRoot(plugin);
 
@@ -206,10 +263,28 @@ async function removeEmptySnapshotDirs(plugin: SaveHistoryPlugin, filePath: stri
 }
 
 export async function updateSnapshotLabel(
-  plugin: SaveHistoryPlugin,
+  plugin: SaveControlPlugin,
   filePath: string,
   newLabel: string
 ): Promise<boolean> {
+  // 库外快照：fs 直改。
+  if (isExternalSnapshotPath(filePath)) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const fs = eval("require")("fs") as {
+        existsSync(p: string): boolean;
+        readFileSync(p: string, enc: "utf8"): string;
+        writeFileSync(p: string, data: string, enc: "utf8"): void;
+      };
+      if (!fs.existsSync(filePath)) return false;
+      const record = normalizeRecord(JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>);
+      record.name = newLabel;
+      fs.writeFileSync(filePath, JSON.stringify(record, null, 2), "utf8");
+      return true;
+    } catch {
+      return false;
+    }
+  }
   const adapter = plugin.app.vault.adapter;
 
   if (await adapter.exists(filePath)) {
@@ -227,9 +302,26 @@ export async function updateSnapshotLabel(
 }
 
 export async function toggleSnapshotFavorite(
-  plugin: SaveHistoryPlugin,
+  plugin: SaveControlPlugin,
   filePath: string
 ): Promise<boolean> {
+  if (isExternalSnapshotPath(filePath)) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const fs = eval("require")("fs") as {
+        existsSync(p: string): boolean;
+        readFileSync(p: string, enc: "utf8"): string;
+        writeFileSync(p: string, data: string, enc: "utf8"): void;
+      };
+      if (!fs.existsSync(filePath)) return false;
+      const record = normalizeRecord(JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>);
+      record.favorite = !record.favorite;
+      fs.writeFileSync(filePath, JSON.stringify(record, null, 2), "utf8");
+      return record.favorite;
+    } catch {
+      return false;
+    }
+  }
   const adapter = plugin.app.vault.adapter;
   if (await adapter.exists(filePath)) {
     try {
@@ -246,7 +338,7 @@ export async function toggleSnapshotFavorite(
 }
 
 export async function savePreRestoreBackup(
-  plugin: SaveHistoryPlugin,
+  plugin: SaveControlPlugin,
   vaultRelativePath: string,
   content: string
 ) {
@@ -359,9 +451,11 @@ export async function renameSnapshotFolder(adapter: DataAdapter, oldName: string
 }
 
 export async function deleteSnapshotDirForFile(
-  plugin: SaveHistoryPlugin,
+  plugin: SaveControlPlugin,
   vaultRelativePath: string
 ): Promise<void> {
+  // 库外文件没有 vault delete 事件；其快照清理走 EVENT_EXTERNAL_DELETED。
+  if (isExternalSnapshotPath(vaultRelativePath)) return;
   const dirPath = getSnapshotDirPath(plugin, vaultRelativePath);
   const adapter = plugin.app.vault.adapter;
 
@@ -404,11 +498,11 @@ export async function deleteSnapshotDirForFile(
   await removeEmptyParentDirs(plugin, parentDir);
 }
 
-export function getExportFolderPath(plugin: SaveHistoryPlugin): string {
+export function getExportFolderPath(plugin: SaveControlPlugin): string {
   return plugin.settings.exportFolder || "Exported versions";
 }
 
-export async function ensureExportDir(plugin: SaveHistoryPlugin): Promise<void> {
+export async function ensureExportDir(plugin: SaveControlPlugin): Promise<void> {
   const dirPath = getExportFolderPath(plugin);
   const adapter = plugin.app.vault.adapter;
 
@@ -428,7 +522,7 @@ export async function ensureExportDir(plugin: SaveHistoryPlugin): Promise<void> 
 }
 
 export async function exportSnapshotToVault(
-  plugin: SaveHistoryPlugin,
+  plugin: SaveControlPlugin,
   fileName: string,
   content: string
 ): Promise<void> {
@@ -652,9 +746,20 @@ function generateSnippet(content: string, query: string): string {
   return snippet;
 }
 
-export function derivePathFromSnapshotFile(plugin: SaveHistoryPlugin, filePath: string): string {
-  const root = getSnapshotRoot(plugin);
+export function derivePathFromSnapshotFile(plugin: SaveControlPlugin, filePath: string): string {
   const normalized = filePath.replace(/\\/g, "/");
+  // 库外快照：目录名就是快照键（ext_..._<hash>）。返回值与
+  // getActiveFile().path（= 快照目录绝对路径）一致，isCurrentFile 才能对上。
+  if (isExternalSnapshotPath(normalized)) {
+    const extRoot = getExternalSnapshotRoot(plugin).replace(/\\/g, "/");
+    const prefix = extRoot + "/";
+    if (!normalized.startsWith(prefix)) return "";
+    const afterRoot = normalized.slice(prefix.length);
+    const lastSlash = afterRoot.lastIndexOf("/");
+    if (lastSlash < 0) return "";
+    return afterRoot.slice(0, lastSlash);
+  }
+  const root = getSnapshotRoot(plugin);
   const prefix = root + "/";
   if (!normalized.startsWith(prefix)) return "";
   const afterRoot = normalized.slice(prefix.length);
@@ -671,7 +776,7 @@ export type SearchMatch = SnapshotRecord & {
 };
 
 export async function searchSnapshots(
-  plugin: SaveHistoryPlugin,
+  plugin: SaveControlPlugin,
   query: string
 ): Promise<SearchMatch[]> {
   if (!query.trim()) return [];
@@ -700,7 +805,6 @@ export async function searchSnapshots(
         });
         return;
       }
-
       if (getMatchRanges(derivedPath, queryTrimmed).length > 0) {
         results.push({
           ...record,
@@ -728,6 +832,62 @@ export async function searchSnapshots(
     }
   });
 
+  // 库外快照根（若存在）也走一遍，同样的匹配逻辑。
+  if (plugin.settings.externalFilesEnabled) {
+    const extRoot = getExternalSnapshotRoot(plugin).replace(/\\/g, "/");
+    const extRootNorm = extRoot.replace(/\/+$/, "");
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = eval("require")("fs") as {
+      existsSync(p: string): boolean;
+      readdirSync(p: string): string[];
+      readFileSync(p: string, enc: "utf8"): string;
+    };
+    if (fs.existsSync(extRootNorm)) {
+      const stack: string[] = [extRootNorm];
+      while (stack.length > 0) {
+        const dir = stack.pop()!;
+        let names: string[] = [];
+        try {
+          names = fs.readdirSync(dir);
+        } catch {
+          continue;
+        }
+        for (const n of names) {
+          const full = `${dir}/${n}`;
+          let isDir = false;
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            isDir = (eval("require")("fs") as { statSync(p: string): { isDirectory(): boolean } }).statSync(full).isDirectory();
+          } catch {
+            continue;
+          }
+          if (isDir) {
+            stack.push(full);
+          } else if (n.endsWith(".json")) {
+            try {
+              const record = normalizeRecord(JSON.parse(fs.readFileSync(full, "utf8")) as Record<string, unknown>);
+              const derivedPath = derivePathFromSnapshotFile(plugin, full);
+              const snippet = generateSnippet(record.content, queryTrimmed);
+              const matchedContent = getMatchRanges(record.content, queryTrimmed).length > 0;
+              const matchedPath = getMatchRanges(derivedPath, queryTrimmed).length > 0;
+              if (matchedContent || matchedPath) {
+                results.push({
+                  ...record,
+                  filePath: full,
+                  path: derivedPath,
+                  snippet: matchedContent ? snippet : derivedPath,
+                  isCurrentFile: derivedPath === currentFilePath,
+                });
+              }
+            } catch {
+              // skip invalid files
+            }
+          }
+        }
+      }
+    }
+  }
+
   results.sort((a, b) => {
     if (a.isCurrentFile !== b.isCurrentFile) {
       return a.isCurrentFile ? -1 : 1;
@@ -741,7 +901,7 @@ export async function searchSnapshots(
   return results;
 }
 
-export async function removeEmptyParentDirs(plugin: SaveHistoryPlugin, dirPath: string) {
+export async function removeEmptyParentDirs(plugin: SaveControlPlugin, dirPath: string) {
   const snapshotRoot = getSnapshotRoot(plugin);
   let currentDir = dirPath.replace(/\\/g, "/");
 
@@ -806,7 +966,7 @@ async function walkJsonFiles(
 }
 
 export async function writeTempVersionFile(
-  plugin: SaveHistoryPlugin,
+  plugin: SaveControlPlugin,
   sourceFilePath: string,
   timestamp: string,
   content: string
@@ -832,7 +992,7 @@ export async function writeTempVersionFile(
 }
 
 export async function deleteTempVersionFile(
-  plugin: SaveHistoryPlugin,
+  plugin: SaveControlPlugin,
   tempFilePath: string
 ): Promise<void> {
   const adapter = plugin.app.vault.adapter;

@@ -1,321 +1,126 @@
-import { PluginSettingTab, Setting, TextComponent, type Plugin } from "obsidian";
-import { VIEW_TYPE_SAVE_HISTORY, SaveHistoryView } from "./ui";
-import { translate, setLanguage, type Language } from "./locale";
-import { renameSnapshotFolder, renameExportFolder, renameTempVersionFolder } from "./storage";
-import { AutosaveManager } from "./autosave";
-import type { SaveHistorySettings } from "./main";
-import type { GroupByMode } from "./main";
+/**
+ * save-control 的合并设置项。
+ *
+ * 两个上游插件的设置在这里合成一张表，另加四个开关（模块的总开关在宿主
+ * 「My Obsidian」设置页里，这里是模块内部的分项开关）：
+ *
+ *   - autosaveEnabled       自动保存（延迟落盘 + 状态栏指示）
+ *   - versionHistoryEnabled 版本历史（快照、侧栏、命令、文件菜单）
+ *   - externalFilesEnabled  库外文件（虚拟文档树挂载的文件）支持
+ *   - statusIndicatorEnabled 状态栏待保存指示器
+ *
+ * 命名尽量保留两边的原字段，方便从旧插件的数据里迁移。
+ */
 
-type PluginWithSettings = Plugin & {
-	settings: SaveHistorySettings;
-	saveSettings: () => Promise<void>;
-	toast: (msg: string) => void;
-	autosaveManager: AutosaveManager | null;
-	registerTabCloseListener: () => void;
-	unregisterTabCloseListener: () => void;
-	refreshCommands: () => void;
-	cleanupAllTempFiles: () => Promise<void>;
+export type GroupByMode = "none" | "day" | "week" | "month" | "year";
+export type Language = "system" | "en" | "ru" | "es";
+export type PreviewMode = "modal" | "tab";
+
+/** 按文件覆盖的项（键 = 库内 vault 路径或库外绝对路径）。 */
+export interface PerFileSettings {
+  autosaveInterval?: number;
+  autosaveOnTabClose?: boolean;
+  maxAutosaveVersions?: number;
+  groupBy?: GroupByMode;
+}
+
+export interface SaveControlSettings {
+  // ---- 开关 ----
+  autosaveEnabled: boolean;
+  versionHistoryEnabled: boolean;
+  externalFilesEnabled: boolean;
+  statusIndicatorEnabled: boolean;
+  /** 关闭有未保存更改的标签页前提示（保存 / 不保存 / 取消）。 */
+  promptUnsavedOnClose: boolean;
+
+  // ---- 自动保存（上游 obsidian-autosave-control） ----
+  /** 上游字段名保留：true = 完全禁用自动保存（旧数据里它等于 autosaveEnabled=false）。 */
+  disableAutoSave: boolean;
+  saveDelaySeconds: number;
+  deferWorkspaceLayoutSaves: boolean;
+  workspaceLayoutSaveDelaySeconds: number;
+  savedStatusColor: string;
+  pendingStatusColor: string;
+  statusIconSizePx: number;
+
+  // ---- 版本历史（上游 save-history） ----
+  groupBy: GroupByMode;
+  collapsedGroups: Record<string, boolean>;
+  language: Language;
+  snapshotFolder: string;
+  exportFolder: string;
+  tempVersionFolder: string;
+  autosaveInterval: number;
+  autosaveOnTabClose: boolean;
+  maxAutosaveVersions: number;
+  allowedExtensions: string;
+  previewMode: PreviewMode;
+  perFileSettings: Record<string, PerFileSettings>;
+
+  // ---- 库外文件 ----
+  /**
+   * 库外文件快照的根目录。空 = 插件目录下的 save-control-snapshots；
+   * 绝对路径按原样用；相对路径相对库根解析。
+   */
+  externalSnapshotFolder: string;
+}
+
+export const DEFAULT_SETTINGS: SaveControlSettings = {
+  // 开关：默认全开——库外文件支持与本模块合并后新增的能力默认启用。
+  autosaveEnabled: true,
+  versionHistoryEnabled: true,
+  externalFilesEnabled: true,
+  statusIndicatorEnabled: true,
+  promptUnsavedOnClose: true,
+
+  disableAutoSave: false,
+  saveDelaySeconds: 10,
+  deferWorkspaceLayoutSaves: false,
+  workspaceLayoutSaveDelaySeconds: 60,
+  savedStatusColor: "#32cd32",
+  pendingStatusColor: "#00bfff",
+  statusIconSizePx: 16,
+
+  groupBy: "day",
+  collapsedGroups: {},
+  language: "system",
+  snapshotFolder: ".versions(SH)",
+  exportFolder: "Exported versions",
+  tempVersionFolder: "Preview",
+  autosaveInterval: 0,
+  autosaveOnTabClose: false,
+  maxAutosaveVersions: 0,
+  allowedExtensions: "",
+  previewMode: "modal",
+  perFileSettings: {},
+
+  externalSnapshotFolder: "",
 };
 
-export class SaveHistorySettingTab extends PluginSettingTab {
-	plugin: PluginWithSettings;
-
-	constructor(app: PluginWithSettings["app"], plugin: Plugin) {
-		super(app, plugin);
-		this.plugin = plugin as PluginWithSettings;
-	}
-
-	display(): void {
-		this.containerEl.empty();
-		this.containerEl.addClass("sh-settings-container");
-
-		new Setting(this.containerEl).setName(translate("settingsTitle")).setHeading();
-
-		// Language
-		new Setting(this.containerEl)
-			.setName(translate("language"))
-			.setDesc(translate("languageDesc"))
-			.addDropdown((dropdown) => {
-				dropdown.addOption("system", translate("langSystem"));
-				dropdown.addOption("en", "English");
-				dropdown.addOption("ru", "\u0420\u0443\u0441\u0441\u043a\u0438\u0439");
-				dropdown.addOption("es", "Espa\u00f1ol");
-				dropdown.setValue(this.plugin.settings.language);
-				dropdown.onChange((val) => {
-					void (async () => {
-						const lang = val as Language;
-						this.plugin.settings.language = lang;
-						setLanguage(lang);
-						await this.plugin.saveSettings();
-						this.plugin.refreshCommands();
-						this.display();
-						this.refreshSidebarViews();
-					})();
-				});
-			});
-
-		// Group by
-		new Setting(this.containerEl)
-			.setName(translate("groupVersionsBy"))
-			.setDesc(translate("groupVersionsDesc"))
-			.addDropdown((dropdown) => {
-				dropdown.addOption("none", translate("groupNone"));
-				dropdown.addOption("day", translate("groupDay"));
-				dropdown.addOption("week", translate("groupWeek"));
-				dropdown.addOption("month", translate("groupMonth"));
-				dropdown.addOption("year", translate("groupYear"));
-				dropdown.setValue(this.plugin.settings.groupBy);
-				dropdown.onChange((val) => {
-					void (async () => {
-						this.plugin.settings.groupBy = val as GroupByMode;
-						await this.plugin.saveSettings();
-						this.refreshSidebarViews();
-					})();
-				});
-			});
-
-		// Snapshot folder
-		const snapshotSetting = new Setting(this.containerEl)
-			.setName(translate("snapshotFolder"))
-			.setDesc(translate("snapshotFolderDesc"));
-
-		let snapshotText: TextComponent;
-		snapshotSetting.addText((text) => {
-			snapshotText = text;
-			text.setValue(this.plugin.settings.snapshotFolder);
-			text.inputEl.addClass("sh-settings-input");
-		});
-		snapshotSetting.addButton((btn) => {
-			btn.setButtonText(translate("save"));
-			btn.onClick(() => {
-				void (async () => {
-					const newName = snapshotText.getValue().trim();
-					if (!newName) return;
-					if (newName === this.plugin.settings.snapshotFolder) return;
-
-					if (
-						/[<>:"|?*]/.test(newName) ||
-						newName.startsWith("/") ||
-						newName.endsWith("/") ||
-						newName.includes("..")
-					) {
-						this.plugin.toast(translate("snapshotFolderRenameFailed"));
-						return;
-					}
-
-					const oldName = this.plugin.settings.snapshotFolder;
-					const success = await renameSnapshotFolder(
-						this.plugin.app.vault.adapter,
-						oldName,
-						newName
-					);
-					if (success) {
-						this.plugin.settings.snapshotFolder = newName;
-						await this.plugin.saveSettings();
-						this.plugin.toast(translate("snapshotFolderRenamed"));
-						this.refreshSidebarViews();
-					} else {
-						this.plugin.toast(translate("snapshotFolderRenameFailed"));
-					}
-				})();
-			});
-		});
-
-		// Temp version folder
-		const tempSetting = new Setting(this.containerEl)
-			.setName(translate("tempVersionFolder"))
-			.setDesc(translate("tempVersionFolderDesc"));
-
-		let tempText: TextComponent;
-		tempSetting.addText((text) => {
-			tempText = text;
-			text.setValue(this.plugin.settings.tempVersionFolder);
-			text.inputEl.addClass("sh-settings-input");
-		});
-		tempSetting.addButton((btn) => {
-			btn.setButtonText(translate("save"));
-			btn.onClick(() => {
-				void (async () => {
-					const newPath = tempText.getValue().trim();
-					if (newPath === this.plugin.settings.tempVersionFolder) return;
-
-					if (newPath) {
-						if (
-							newPath.startsWith(".") ||
-							/[<>:"|?*]/.test(newPath) ||
-							newPath.startsWith("/") ||
-							newPath.endsWith("/") ||
-							newPath.includes("..")
-						) {
-							this.plugin.toast(translate("tempVersionFolderRenameFailed"));
-							return;
-						}
-					}
-
-					const oldPath = this.plugin.settings.tempVersionFolder;
-					const success = await renameTempVersionFolder(
-						this.plugin.app.vault.adapter,
-						oldPath,
-						newPath
-					);
-					if (success) {
-						this.plugin.settings.tempVersionFolder = newPath;
-						await this.plugin.saveSettings();
-						this.plugin.toast(translate("tempVersionFolderRenamed"));
-					} else {
-						this.plugin.toast(translate("tempVersionFolderRenameFailed"));
-					}
-				})();
-			});
-		});
-
-		// Export folder
-		const exportSetting = new Setting(this.containerEl)
-			.setName(translate("exportFolder"))
-			.setDesc(translate("exportFolderDesc"));
-
-		let exportText: TextComponent;
-		exportSetting.addText((text) => {
-			exportText = text;
-			text.setValue(this.plugin.settings.exportFolder);
-			text.inputEl.addClass("sh-settings-input");
-		});
-		exportSetting.addButton((btn) => {
-			btn.setButtonText(translate("save"));
-			btn.onClick(() => {
-				void (async () => {
-					const newName = exportText.getValue().trim();
-					if (!newName) return;
-					if (newName === this.plugin.settings.exportFolder) return;
-
-					if (
-						/[<>:"|?*]/.test(newName) ||
-						newName.startsWith("/") ||
-						newName.endsWith("/") ||
-						newName.includes("..")
-					) {
-						this.plugin.toast(translate("exportFolderRenameFailed"));
-						return;
-					}
-
-					const oldName = this.plugin.settings.exportFolder;
-					const success = await renameExportFolder(
-						this.plugin.app.vault.adapter,
-						oldName,
-						newName
-					);
-					if (success) {
-						this.plugin.settings.exportFolder = newName;
-						await this.plugin.saveSettings();
-						this.plugin.toast(translate("exportFolderRenamed"));
-					} else {
-						this.plugin.toast(translate("exportFolderRenameFailed"));
-					}
-				})();
-			});
-		});
-
-		// Autosave interval
-		new Setting(this.containerEl)
-			.setName(translate("autosaveInterval"))
-			.setDesc(translate("autosaveIntervalDesc"))
-			.addText((text) => {
-				text.setValue(String(this.plugin.settings.autosaveInterval));
-				text.inputEl.type = "number";
-				text.inputEl.min = "0";
-				text.inputEl.classList.add("sh-settings-input-num");
-				text.onChange((val) => {
-					void (async () => {
-						const num = Math.max(0, Math.floor(Number(val) || 0));
-						text.setValue(String(num));
-						this.plugin.settings.autosaveInterval = num;
-						await this.plugin.saveSettings();
-						this.plugin.autosaveManager?.restart();
-					})();
-				});
-			});
-
-		// Autosave on tab close — toggle
-		new Setting(this.containerEl)
-			.setName(translate("autosaveOnTabClose"))
-			.setDesc(translate("autosaveOnTabCloseDesc"))
-			.addToggle((toggle) => {
-				toggle.setValue(this.plugin.settings.autosaveOnTabClose);
-				toggle.onChange((val) => {
-					void (async () => {
-						this.plugin.settings.autosaveOnTabClose = val;
-						await this.plugin.saveSettings();
-						if (val) {
-							this.plugin.registerTabCloseListener();
-						} else {
-							this.plugin.unregisterTabCloseListener();
-						}
-					})();
-				});
-			});
-
-		// Max autosave versions
-		new Setting(this.containerEl)
-			.setName(translate("maxAutosaveVersions"))
-			.setDesc(translate("maxAutosaveVersionsDesc"))
-			.addText((text) => {
-				text.setValue(String(this.plugin.settings.maxAutosaveVersions));
-				text.inputEl.type = "number";
-				text.inputEl.min = "0";
-				text.inputEl.classList.add("sh-settings-input-num");
-				text.onChange((val) => {
-					void (async () => {
-						const num = Math.max(0, Math.floor(Number(val) || 0));
-						text.setValue(String(num));
-						this.plugin.settings.maxAutosaveVersions = num;
-						await this.plugin.saveSettings();
-					})();
-				});
-			});
-
-		// Allowed file extensions
-		new Setting(this.containerEl)
-			.setName(translate("allowedExtensions"))
-			.setDesc(translate("allowedExtensionsDesc"))
-			.addText((text) => {
-				text.setValue(this.plugin.settings.allowedExtensions);
-				text.setPlaceholder("md");
-				text.inputEl.classList.add("sh-settings-input-text");
-				text.onChange((val) => {
-					void (async () => {
-						this.plugin.settings.allowedExtensions = val.trim();
-						await this.plugin.saveSettings();
-					})();
-        });
-      });
-
-    // Preview mode
-    new Setting(this.containerEl)
-      .setName(translate("previewMode"))
-      .setDesc(translate("previewModeDesc"))
-      .addDropdown((dropdown) => {
-        dropdown.addOption("modal", translate("previewModeModal"));
-        dropdown.addOption("tab", translate("previewModeTab"));
-        dropdown.setValue(this.plugin.settings.previewMode);
-        dropdown.onChange((val) => {
-          void (async () => {
-            this.plugin.settings.previewMode = val as "modal" | "tab";
-            await this.plugin.saveSettings();
-            if (val === "modal") {
-              await this.plugin.cleanupAllTempFiles();
-            }
-          })();
-        });
-      });
+/**
+ * 合并加载：把旧插件的设置搬过来。
+ *
+ * 宿主给每个模块一片独立的数据切片，所以从旧插件 data.json 迁移是一次性的：
+ * 两个上游字段表并集，缺省值兜底；`disableAutoSave` 折叠进 `autosaveEnabled`。
+ */
+export function mergeLegacySettings(
+  base: SaveControlSettings,
+  ...sources: Array<Partial<SaveControlSettings> | null | undefined>
+): SaveControlSettings {
+  const out: SaveControlSettings = { ...base };
+  for (const src of sources) {
+    if (!src) continue;
+    for (const [key, value] of Object.entries(src)) {
+      if (value === undefined || value === null) continue;
+      if (!(key in out)) continue;
+      // 只有类型一致才搬：上游改过字段语义时不硬搬。
+      if (typeof value !== typeof out[key as keyof SaveControlSettings]) continue;
+      (out as unknown as Record<string, unknown>)[key] = value;
+    }
   }
-
-	private refreshSidebarViews() {
-		const leaves =
-			this.plugin.app.workspace.getLeavesOfType(VIEW_TYPE_SAVE_HISTORY);
-		for (const leaf of leaves) {
-			if (leaf.view instanceof SaveHistoryView) {
-				leaf.view.refresh();
-			}
-		}
-	}
+  // disableAutoSave 与 autosaveEnabled 是同一件事的两种写法；任何一边说“关”，
+  // 就都关。
+  if (out.disableAutoSave) out.autosaveEnabled = false;
+  if (!out.autosaveEnabled) out.disableAutoSave = true;
+  return out;
 }
