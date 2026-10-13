@@ -15,6 +15,7 @@
 | TraceTime | obsidian-tracetime | 段落旁显示最后编辑时间（第三方，fork 维护） |
 | AI image analyzer | ai-image-analyzer | 用 AI 给图片生成关键词并反查（第三方） |
 | Omnisearch | obsidian-omnisearch | 库内全文搜索引擎（第三方） |
+| Save Control | save-history + autosave-control | 库外文件的自动保存、版本快照、未保存圆点与关闭提示（两 MIT 插件合并） |
 
 历史用 `git subtree` 挂在 `modules/<子功能>/` 下，各插件原来的提交都能追溯。
 
@@ -34,10 +35,15 @@ GPL-3 是强 copyleft——衍生作品必须整体以 GPL-3 分发，这不是�
 | TraceTime | QuincySx | MIT | https://github.com/QuincySx/obsidian-tracetime |
 | AI image analyzer | Swaggeroo | GPL-3.0 | 见 `modules/ai-image-analyzer/README.md` |
 | Omnisearch | Simon Cambier | GPL-3 | https://github.com/scambier/obsidian-omnisearch |
+| Save Control（save-history） | Sevoni | MIT | 见 `modules/save-control/NOTICE.md` |
+| Save Control（autosave-control） | mihasm | MIT | 见 `modules/save-control/NOTICE.md` |
 
 - **Material Icon Theme** 另外打包了 Material Icon Theme 的图标美术资源（来源
   `material-icon-theme` npm 包），其许可声明见
   `modules/material-icon-theme/NOTICE`（© Material Extensions，MIT）。
+- **Save Control** 由两个 MIT 插件合并而成（save-history 为基座 +
+  autosave-control 的延迟落盘控制器），两上游的版本、作者与 subtree 历史
+  见 `modules/save-control/NOTICE.md`。
 - 这些第三方模块的源码未作功能性修改，仅为主仓的构建与装载方式做了适配；
   如需同步上游更新，可在各自目录用 `git subtree pull`。
 
