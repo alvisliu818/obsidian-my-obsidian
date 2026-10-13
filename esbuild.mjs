@@ -109,8 +109,10 @@ const cmBundlePlugin = {
 // config (styles end up inline in the DOM rather than a separate css file).
 // ---------------------------------------------------------------------------
 const sveltePlugin = esbuildSvelte({
-	compilerOptions: { css: "injected" },
-	preprocess: sveltePreprocess(),
+  compilerOptions: { css: "injected", dev: !prod },
+  // obsidian-git 的组件带大量 a11y 提示，上游也是这么过滤的
+  filterWarnings: (warning) => !warning.code.startsWith("a11y-"),
+  preprocess: sveltePreprocess(),
 });
 
 // ---------------------------------------------------------------------------
@@ -184,6 +186,10 @@ const context = await esbuild.context({
   },
   format: "cjs",
   target: "es2021",
+  // esm-env（obsidian-git 的 svelte 组件用它）按这个条件切换 dev/prod 分支
+  conditions: [prod ? "production" : "development"],
+  // isomorphic-git 在移动端需要 Buffer 全局（obsidian-git 上游的 polyfill）
+  inject: ["modules/obsidian-git/polyfill_buffer.js"],
   logLevel: "info",
   sourcemap: prod ? false : "inline",
   treeShaking: true,

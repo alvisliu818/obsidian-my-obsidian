@@ -18,9 +18,10 @@
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
     "paths": {
-      "cm-bundle:*": ["./node_modules/*"]
+      "cm-bundle:*": ["./node_modules/*"],
+      "src/*": ["modules/obsidian-git/src/*"]
     }
   },
-  "include": ["src/**/*.ts", "modules/logseq/src/**/*.ts", "modules/browser/src/**/*.ts", "modules/jupyter/src/**/*.ts", "modules/breadcrumb/src/**/*.ts", "modules/doc-assist/src/**/*.ts", "modules/material-icon-theme/src/**/*.ts", "modules/tracetime/src/**/*.ts", "modules/ai-image-analyzer/src/**/*.ts", "modules/omnisearch/src/**/*.ts"],
-  "exclude": ["**/node_modules", "**/tests/e2e", "modules/omnisearch/src/__tests__", "modules/ai-image-analyzer/src"]
+  "include": ["src/**/*.ts", "modules/logseq/src/**/*.ts", "modules/browser/src/**/*.ts", "modules/jupyter/src/**/*.ts", "modules/breadcrumb/src/**/*.ts", "modules/doc-assist/src/**/*.ts", "modules/material-icon-theme/src/**/*.ts", "modules/tracetime/src/**/*.ts", "modules/ai-image-analyzer/src/**/*.ts", "modules/omnisearch/src/**/*.ts", "modules/obsidian-git/src/**/*.ts"],
+  "exclude": ["**/node_modules", "**/tests/e2e", "modules/omnisearch/src/__tests__", "modules/ai-image-analyzer/src", "modules/obsidian-git/tests", "modules/obsidian-git/src/__tests__"]
 }

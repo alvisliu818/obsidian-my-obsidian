@@ -34,6 +34,7 @@ import MaterialIconThemePlugin from "../modules/material-icon-theme/src/main";
 import TraceTimePlugin from "../modules/tracetime/src/main";
 import AIImageAnalyzerPlugin from "../modules/ai-image-analyzer/src/main";
 import OmnisearchPlugin from "../modules/omnisearch/src/main";
+import ObsidianGitPlugin from "../modules/obsidian-git/src/main";
 import SaveControlPlugin from "../modules/save-control/src/main";
 import { CodeFileView, DEFAULT_CODE_EXTENSIONS, VIEW_TYPE_CODE_FILE } from "./codeFileView";
 
@@ -121,6 +122,19 @@ export default class MyObsidianPlugin extends Plugin {
 				"用 AI 给图片生成关键词：Gemini / Ollama 等接口，支持批量分析、按关键词反查图片，结果缓存本地。上游 Swaggeroo（GPL-3.0）。",
 			desktopOnly: true,
 			cls: AIImageAnalyzerPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			id: "obsidian-git",
+			// Third-party (Vinzent03, MIT). Upstream natively supports split
+			// git layouts: settings.gitDir is injected as GIT_DIR/GIT_WORK_TREE
+			// env into simple-git (desktop) and as gitdir: into isomorphic-git
+			// (mobile). The user's vault then keeps zero .git traces.
+			legacyId: "obsidian-git",
+			name: "Git",
+			summary:
+				"库内 git 集成：自动备份/定时 pull、源管理视图、行作者标注、差异比对。支持分离布局（设置里填 gitDir 即可让仓库数据放 vault 之外）。上游 Vinzent03（MIT）。",
+			desktopOnly: false,
+			cls: ObsidianGitPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
 			// GPL-3 as well — upstream Simon Cambier. Its Svelte components build

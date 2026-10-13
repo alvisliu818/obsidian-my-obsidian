@@ -74,7 +74,7 @@ export class ImageView extends ItemView {
   private stageEl!: HTMLElement;
   private imgEl!: HTMLImageElement;
   private toolbarEl!: HTMLElement;
-  private titleEl!: HTMLElement;
+  private viewTitleEl!: HTMLElement;
   private zoomLabelEl!: HTMLElement;
 
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
@@ -112,7 +112,7 @@ export class ImageView extends ItemView {
     this.contentEl.addClass('lg-image-view');
 
     this.toolbarEl = this.contentEl.createDiv({ cls: 'lg-image-view__toolbar' });
-    this.titleEl = this.toolbarEl.createDiv({ cls: 'lg-image-view__title' });
+    this.viewTitleEl = this.toolbarEl.createDiv({ cls: 'lg-image-view__title' });
 
     const zoomGroup = this.toolbarEl.createDiv({ cls: 'lg-image-view__group' });
     this.zoomLabelEl = zoomGroup.createEl('span', { cls: 'lg-image-view__zoom' });
@@ -215,11 +215,11 @@ export class ImageView extends ItemView {
 
     const file = this.path ? this.app.vault.getAbstractFileByPath(this.path) : null;
     if (!(file instanceof TFile)) {
-      this.titleEl.textContent = this.path || '未选择图片';
+      this.viewTitleEl.textContent = this.path || '未选择图片';
       this.imgEl.removeAttribute('src');
       return;
     }
-    this.titleEl.textContent = file.name;
+    this.viewTitleEl.textContent = file.name;
 
     try {
       const data = await this.app.vault.adapter.readBinary(file.path);

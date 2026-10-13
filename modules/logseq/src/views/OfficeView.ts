@@ -36,7 +36,7 @@ export class OfficeView extends ItemView {
   private engine: OfficeEngine | null = null;
   private bodyEl!: HTMLElement;
   private toolbarEl!: HTMLElement;
-  private titleEl!: HTMLElement;
+  private viewTitleEl!: HTMLElement;
 
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
     super(leaf);
@@ -76,7 +76,7 @@ export class OfficeView extends ItemView {
     this.contentEl.addClass('lg-office-view');
 
     this.toolbarEl = this.contentEl.createDiv({ cls: 'lg-office-view__toolbar' });
-    this.titleEl = this.toolbarEl.createDiv({ cls: 'lg-office-view__title' });
+    this.viewTitleEl = this.toolbarEl.createDiv({ cls: 'lg-office-view__title' });
     const actions = this.toolbarEl.createDiv({ cls: 'lg-office-view__actions' });
 
     const openBtn = actions.createEl('button', { cls: 'lg-office-view__btn' });
@@ -117,14 +117,14 @@ export class OfficeView extends ItemView {
 
     const file = this.path ? this.app.vault.getAbstractFileByPath(this.path) : null;
     if (!(file instanceof TFile)) {
-      this.titleEl.textContent = this.path || '未选择文件';
+      this.viewTitleEl.textContent = this.path || '未选择文件';
       this.bodyEl.createDiv({ cls: 'lg-office-view__error', text: '找不到该文件。' });
       return;
     }
 
     const ext = extOf(file.name);
     const kind = getOfficeKind(ext);
-    this.titleEl.textContent = `${file.name} · ${kind ? OFFICE_KIND_LABEL[kind] : ext.toUpperCase()}`;
+    this.viewTitleEl.textContent = `${file.name} · ${kind ? OFFICE_KIND_LABEL[kind] : ext.toUpperCase()}`;
 
     if (!kind) {
       this.bodyEl.createDiv({ cls: 'lg-office-view__error', text: `不支持的格式：.${ext}` });
