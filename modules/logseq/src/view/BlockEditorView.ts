@@ -1956,12 +1956,27 @@ ${content}`;
   mutate(fn: () => void, patch?: () => MutatePatch): void {
     const v = this.focusedView;
     const b = this.focusedBlock;
+    let committed: string | null = null;
     if (v && b) {
       commitEditorText(v, b, this.templateContext());
+      committed = b.text;
       this.savedFocusPos = v.state.selection.main.head;
     }
     this.undo.push(this.serializeCurrent());
     fn();
+    // fn() may structurally change the focused block (Enter at the block start
+    // sets b.text='' and inserts a sibling). The still-mounted editor holds
+    // the PRE-mutation text; focusBlock()'s commitFocusedText() would then
+    // write that stale content back over the mutation (measured: Enter at the
+    // start of "## 12.3 …" with a heading folded duplicated the heading). If
+    // the model moved past what was committed, drop the stale editor now.
+    if (v && b && committed !== null && this.focusedView === v && this.focusedBlock === b && b.text !== committed) {
+      v.destroy();
+      this.focusedView = null;
+      this.focusedBlock = null;
+      clearActiveBlockEditor(this.app);
+      refreshBlockContent(b, this);
+    }
     this.markDirty();
     const p = patch?.();
     if (!p || !this.renderPatched(p)) this.render();
