@@ -23,6 +23,15 @@ export function serializeDocument(doc: ParsedDocument): string {
   const unit = doc.indentUnit ?? '\t';
   const parts: string[] = [];
   const blocks = doc.blocks;
+  /**
+   * 顶层块入列。保真模式下块可能带 `blankBefore`（原文里它前面有一个空行）——
+   * 补回去，否则段落与列表/标题之间的空行会在保存时消失。相邻的逐字块本来就
+   * 要插一个空行（两块围栏/表格不能连写），所以用最后一个元素是否已是空串去重。
+   */
+  const pushTop = (b: Block): void => {
+    if (b.blankBefore && parts.length > 0 && parts[parts.length - 1] !== '') parts.push('');
+    parts.push(serializeBlock(b, 0, undefined, unit));
+  };
   if (doc.frontmatter && !blocks[0]?.frontmatter) parts.push(doc.frontmatter);
   if (doc.pageProps) parts.push(doc.pageProps);
   // Obsidian-format page properties: a frontmatter-sourced props-only first
@@ -30,15 +39,15 @@ export function serializeDocument(doc: ParsedDocument): string {
   if (blocks[0]?.frontmatter) {
     const fm = blocks[0];
     parts.push('---', ...fm.text.split('\n'), '---');
-    for (const c of fm.children) parts.push(serializeBlock(c, 0, undefined, unit));
+    for (const c of fm.children) pushTop(c);
     for (let i = 1; i < blocks.length; i++) {
       const b = blocks[i];
       // Logseq props-only blocks after the frontmatter keep their format too.
       if (isPropsOnlyBlock(b)) {
         for (const [k, v] of Object.entries(b.props)) parts.push(`${k}:: ${v}`);
-        for (const c of b.children) parts.push(serializeBlock(c, 0, undefined, unit));
+        for (const c of b.children) pushTop(c);
       } else {
-        parts.push(serializeBlock(b, 0, undefined, unit));
+        pushTop(b);
       }
     }
     return finish(parts.join('\n'));
@@ -49,11 +58,11 @@ export function serializeDocument(doc: ParsedDocument): string {
   if (isPropsOnlyBlock(blocks[0])) {
     const pb = blocks[0];
     for (const [k, v] of Object.entries(pb.props)) parts.push(`${k}:: ${v}`);
-    for (const c of pb.children) parts.push(serializeBlock(c, 0, undefined, unit));
+    for (const c of pb.children) pushTop(c);
     for (let i = 1; i < blocks.length; i++) {
       // Same raw/raw blank-line rule as the general path below.
       if (i > 1 && blocks[i - 1].kind === 'raw' && blocks[i].kind === 'raw') parts.push('');
-      parts.push(serializeBlock(blocks[i], 0, undefined, unit));
+      pushTop(blocks[i]);
     }
     return finish(parts.join('\n'));
   }
@@ -65,7 +74,7 @@ export function serializeDocument(doc: ParsedDocument): string {
     // marker already starts a new item, and a blank line before a nested list
     // would change its meaning, so only raw/raw pairs get one.
     if (i > 0 && blocks[i - 1].kind === 'raw' && blocks[i].kind === 'raw') parts.push('');
-    parts.push(serializeBlock(blocks[i], 0, undefined, unit));
+    pushTop(blocks[i]);
   }
   return finish(parts.join('\n'));
 }

@@ -35,6 +35,12 @@ export interface Block {
    * the `---` fences, never as Logseq `key:: value` lines.
    */
   frontmatter?: boolean;
+  /**
+   * 保真模式：原文里这个块**前面**有一个空行（顶层）。序列化时补回去，否则
+   * 「段落 ↔ 列表」「段落 ↔ 标题」之间的空行会在每次保存时被吃掉一个。
+   * 只在 `preservePlainText` 解析时写入；默认解析路径不产生它。
+   */
+  blankBefore?: boolean;
 }
 
 export interface ParsedDocument {
@@ -135,6 +141,12 @@ export interface BlockEditorSettings {
   pythonEnvCustomPath: string;
   /** Open .md files in the block editor by default (all-intrusive take-over). */
   takeOverByDefault: boolean;
+  /**
+   * 保真模式：不以 `- ` 开头的顶层文本行保持原文——按逐字块打开（不画 bullet），
+   * 保存时原样写回，不补 `- ` 前缀。只有用户主动做结构操作（缩进/回车/转换）
+   * 才把该块变成真正的大纲块。关 = Logseq 原生行为（裸行一律收编为 `- ` 列表项）。
+   */
+  preservePlainText: boolean;
   /** Take-over scope: 'all' = every .md file (minus exclusions); 'folders' = only inside includedFolders. */
   scopeMode: ScopeMode;
   /** Folders (paths) where the block editor takes over; used when scopeMode = 'folders'. */
@@ -506,6 +518,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   terminalShell: 'auto',
   pythonEnvCustomPath: '',
   takeOverByDefault: true,
+  preservePlainText: true,
   scopeMode: 'all',
   includedFolders: '',
   journalFolder: '',

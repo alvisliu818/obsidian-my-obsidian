@@ -79,6 +79,18 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         );
     }
 
+    new Setting(containerEl)
+      .setName('保真模式：不自动转为大纲')
+      .setDesc(
+        '打开文件时，不以 `- ` 开头的文本行保持原文——不显示项目符号，保存时也不补 `- ` 前缀，文件字节原样保留。需要大纲时对该块做结构操作（缩进、回车、类型转换）即可。关闭则按 Logseq 原生行为把裸行一律收编成 `- ` 列表项。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.preservePlainText !== false).onChange(async (v) => {
+          this.plugin.settings.preservePlainText = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
     if (this.plugin.settings.takeOverByDefault && this.plugin.settings.scopeMode === 'all') {
       new Setting(containerEl)
         .setName('排除的文件夹')

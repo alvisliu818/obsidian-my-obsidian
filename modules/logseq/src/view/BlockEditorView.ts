@@ -586,7 +586,8 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     // The native properties editor is bound to ONE file — drop it on any
     // (re)load; the next render re-mounts it against the fresh model.
     this.teardownNativePropsEditor();
-    this.doc = parseDocument(data);
+    // 保真模式（设置项）：顶层裸文本行按逐字块解析——不画 bullet、保存原样。
+    this.doc = parseDocument(data, { preservePlainText: this.plugin.settings.preservePlainText !== false });
     this.syncPagePropsRegistry();
     linkParents(this.doc.blocks);
     registerRoots(this.doc.blocks);
@@ -2840,7 +2841,9 @@ ${content}`;
 
   private restoreSnapshot(snap: string): void {
     this.commitFocusedText();
-    this.doc = parseDocument(snap);
+    // 撤销/重做必须回到与当前打开方式一致的模型，否则一次 undo 就会把文件
+    // 悄悄换成另一种格式。
+    this.doc = parseDocument(snap, { preservePlainText: this.plugin.settings.preservePlainText !== false });
     linkParents(this.doc.blocks);
     this.zoomedBlock = this.zoomedBlock && findBlockById(this.doc.blocks, zoomId(this.zoomedBlock));
     this.render();

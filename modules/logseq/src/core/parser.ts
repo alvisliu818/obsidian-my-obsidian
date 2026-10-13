@@ -159,7 +159,19 @@ export function stripIndent(line: string, depth: number): string {
   return rest;
 }
 
-export function parseDocument(md: string): ParsedDocument {
+export interface ParseOptions {
+  /**
+   * 保真模式：不以 `- ` 开头的顶层文本行走**逐字块**路径（kind: 'raw'）——
+   * 渲染不画 bullet，序列化原样输出，文件字节保持不变。
+   *
+   * 关（默认）是 Logseq 的原生语义：裸行被收编成一级 `- ` 列表项，保存时
+   * 整篇被规范化成项目符号列表。编辑视图（块编辑器 / 库外文件视图）按设置
+   * 打开此开关；索引等只读解析维持原语义。
+   */
+  preservePlainText?: boolean;
+}
+
+export function parseDocument(md: string, opts: ParseOptions = {}): ParsedDocument {
   // CRLF (Windows) files: every parser regex below is `$`-anchored and `.`
   // never matches `\r`, so a trailing `\r` silently breaks fence open/close,
   // list and property detection (a CRLF file parsed raw explodes — fences
@@ -239,6 +251,17 @@ export function parseDocument(md: string): ParsedDocument {
   let lastBlock: Block | null = null; // most recent 'list' block (property / soft-line target)
   let rawBuf: string[] = [];
   let bareBuf: string[] = []; // consecutive bare lines → ONE first-level block
+  // 保真模式：刚被丢弃（既不作为内容也不作为软行）的空行——下一个块之前要补
+  // 回一个空行，否则段落与列表/标题之间的分隔会在保存时悄悄消失。
+  let pendingBlank = false;
+
+  /** 把一个新块挂到顶层，并在保真模式下带上"前面有空行"的标记。 */
+  const pushRoot = (b: Block) => {
+    if (opts.preservePlainText && pendingBlank && doc.blocks.length > 0) b.blankBefore = true;
+    pendingBlank = false;
+    b.parent = null;
+    doc.blocks.push(b);
+  };
 
   const flushRaw = () => {
     while (rawBuf.length > 0 && rawBuf[rawBuf.length - 1].trim() === '') rawBuf.pop();
@@ -246,8 +269,7 @@ export function parseDocument(md: string): ParsedDocument {
     const b = createBlock();
     b.kind = 'raw';
     b.text = rawBuf.join('\n');
-    b.parent = null;
-    doc.blocks.push(b);
+    pushRoot(b);
     rawBuf = [];
   };
 
@@ -330,15 +352,24 @@ export function parseDocument(md: string): ParsedDocument {
         while (j < lines.length && lines[j].trim() === '') j++;
         const next = j < lines.length ? lines[j] : '';
         const nextTrim = next.trim();
+        // 保真模式：紧随其后的 `- ` 列表项也算"新的结构"——逐字区域必须在空行
+        // 处结束，否则空行被当作区域内容吞掉，段落与列表之间的分隔就丢了。
         const startsStructure =
-          STRUCTURAL_RAW_RE.test(nextTrim) || FENCE_OPEN_RE.test(next);
+          STRUCTURAL_RAW_RE.test(nextTrim) ||
+          FENCE_OPEN_RE.test(next) ||
+          (opts.preservePlainText === true && LIST_RE.test(next));
         if (next && isRawRegionTail(rawBuf) && depthOf(next) === 0 && startsStructure && !PROPERTY_RE.test(nextTrim)) {
           flushRaw();
+          // 空行属于**后面**那个块，所以要在区域冲刷之后才置位。
+          if (opts.preservePlainText) pendingBlank = true;
           i++;
           continue;
         }
         rawBuf.push(line);
       }
+      // 保真模式：这个空行既不是内容也不是软行，被丢弃了——记下来，下一个块
+      // 之前要补回一个空行（否则每保存一次就吃掉一个分隔空行）。
+      if (opts.preservePlainText && rawBuf.length === 0) pendingBlank = true;
       i++;
       continue;
     }
@@ -469,8 +500,7 @@ export function parseDocument(md: string): ParsedDocument {
         stack.length = parentIdxOf(stack, parent) + 1;
         stack.push(b);
       } else {
-        b.parent = null;
-        doc.blocks.push(b);
+        pushRoot(b);
         stack.length = 0;
         stack.push(b);
       }
@@ -583,12 +613,20 @@ export function parseDocument(md: string): ParsedDocument {
     // first-level list block; saving normalizes it to `- ` + soft lines.
     // A bare line that EXITS the current subtree stays IN POSITION as the
     // previous parsed block's raw content (the order-preservation rule).
-    flushRaw();
     if (lastBlock && stack.length > 0 && stack.length - 1 > depth) {
       appendSoftLine(lastBlock, line);
       i++;
       continue;
     }
+    if (opts.preservePlainText) {
+      // 保真模式：裸行并入当前的逐字区域（**不** flushRaw —— 段落与紧随其后
+      // 的标题/表格同属一个逐字块，序列化时原样输出，字节零改动；分开成两块
+      // 会被序列化规则强行插入空行）。逐字块渲染时不画 bullet。
+      rawBuf.push(line);
+      i++;
+      continue;
+    }
+    flushRaw();
     bareBuf.push(trimmed);
     i++;
   }

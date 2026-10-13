@@ -41,12 +41,17 @@ export class ExternalFileView extends ItemView {
   abs = '';
   fileName = '';
   readOnly = false;
-  private doc = parseDocument('');
+  private doc = parseDocument('', { preservePlainText: true });
   private dirty = false;
 
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
     super(leaf);
     this.plugin = plugin;
+  }
+
+  /** 保真模式与块编辑器一致：库外文件的裸行也不转大纲。 */
+  private parseOpts(): { preservePlainText: boolean } {
+    return { preservePlainText: this.plugin.settings.preservePlainText !== false };
   }
 
   getViewType(): string {
@@ -78,7 +83,7 @@ export class ExternalFileView extends ItemView {
     this.abs = opts.abs;
     this.fileName = opts.name;
     this.readOnly = opts.readOnly === true;
-    this.doc = parseDocument(opts.content);
+    this.doc = parseDocument(opts.content, this.parseOpts());
     this.dirty = false;
     this.render();
   }
@@ -86,7 +91,7 @@ export class ExternalFileView extends ItemView {
   async onOpen(): Promise<void> {
     if (this.abs && isTextMount(extOf(this.fileName))) {
       try {
-        this.doc = parseDocument(readExternalText(this.abs));
+        this.doc = parseDocument(readExternalText(this.abs), this.parseOpts());
       } catch (e) {
         new Notice(`无法读取 ${this.fileName}：${String(e).slice(0, 100)}`);
       }
@@ -120,7 +125,7 @@ export class ExternalFileView extends ItemView {
         // 改名不动内容，但按新路径重读一次最稳（拾起别处的修改）。
         if (isTextMount(extOf(newName))) {
           try {
-            this.doc = parseDocument(readExternalText(newAbs));
+            this.doc = parseDocument(readExternalText(newAbs), this.parseOpts());
             this.dirty = false;
           } catch (e) {
             new Notice(`无法读取 ${newName}：${String(e).slice(0, 100)}`);
@@ -252,7 +257,7 @@ export class ExternalFileView extends ItemView {
           this.dirty = true;
           // Re-parse so the stored markdown is regenerated from the tree, then
           // rebuild: a multi-line block may now split differently.
-          this.doc = parseDocument(serializeDocument(this.doc));
+          this.doc = parseDocument(serializeDocument(this.doc), this.parseOpts());
           this.render();
         } else {
           this.render();
@@ -313,7 +318,7 @@ export class ExternalFileView extends ItemView {
   /** Re-read from disk (after the file changed elsewhere). */
   reload(): void {
     try {
-      this.doc = parseDocument(readExternalText(this.abs));
+      this.doc = parseDocument(readExternalText(this.abs), this.parseOpts());
       this.dirty = false;
       this.render();
     } catch (e) {
