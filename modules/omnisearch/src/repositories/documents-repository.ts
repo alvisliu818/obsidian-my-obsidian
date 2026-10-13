@@ -113,7 +113,7 @@ export class DocumentsRepository {
    */
   private async getAndMapIndexedDocument(
     path: string
-  ): Promise<IndexedDocument> {
+  ): Promise<IndexedDocument | null> {
     // 库外文件（ext: 伪路径）：读磁盘，不走 vault API。
     if (isExternalDocPath(path)) {
       return this.getExternalIndexedDocument(path)
