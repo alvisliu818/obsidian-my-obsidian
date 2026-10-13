@@ -288,6 +288,12 @@
   display: none;
 }
 
+/* The header nav buttons drive leaf history, not the webview — ours already
+   handle page back/forward, so the native pair is noise. */
+.view-header.ob-browser-native-header .view-header-nav-buttons {
+  display: none;
+}
+
 /* The header can't grow: the find bar drops over the page content instead. */
 .view-header.ob-browser-native-header .ob-findbar-wrap {
   position: absolute;
