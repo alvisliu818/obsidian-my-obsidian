@@ -264,6 +264,37 @@
   color: var(--text-muted);
 }
 
+/* ---------- toolbar inside the native view header ---------- */
+
+/* Native tab mode: the toolbar replaces the title, core-Web-Viewer style. */
+.view-header.ob-browser-native-header .ob-browser-toolbar {
+  flex: 1 1 auto;
+  width: 100%;
+  background: transparent;
+  border-bottom: none;
+  overflow: visible;
+}
+
+.view-header.ob-browser-native-header .ob-browser-row {
+  padding: 0 2px;
+}
+
+.view-header.ob-browser-native-header .ob-btn {
+  color: var(--icon-color);
+}
+
+/* The header can't grow: the find bar drops over the page content instead. */
+.view-header.ob-browser-native-header .ob-findbar-wrap {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: var(--layer-status-bar, 15);
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--divider-color);
+  box-shadow: var(--shadow-s);
+}
+
 /* ---------- docks ---------- */
 
 .ob-dock {

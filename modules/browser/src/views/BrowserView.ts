@@ -149,9 +149,10 @@ export class BrowserView extends ItemView {
       if (activate) this.activate(existing.id);
       return existing;
     }
-    const tab = new BrowserTab(this.ctx, url !== "about:blank" ? url : undefined);
+    const tab = new BrowserTab(this.ctx, url !== "about:blank" ? url : undefined, !this.isNative);
     this.tabs.push(tab);
     this.tabhost.appendChild(tab.element);
+    if (this.isNative) this.mountToolbarInHeader(tab);
     if (activate) this.activate(tab.id);
     else this.renderTabbar();
     return tab;
@@ -210,6 +211,9 @@ export class BrowserView extends ItemView {
   }
 
   async updateTitle(): Promise<void> {
+    // Native mode: the header title element is detached and the toolbar lives
+    // where the title was — nothing to patch.
+    if (this.isNative) return;
     // Obsidian caches the header text; there is no public "refresh title" API,
     // so patch the node the native views use. `tabHeaderEl` is internal and
     // not always present — walking up to .workspace-leaf always works.
@@ -219,6 +223,30 @@ export class BrowserView extends ItemView {
       leaf?.querySelector(".view-header-title");
     const text = this.getDisplayText();
     if (titleEl && text) titleEl.textContent = text;
+  }
+
+  // ---------------- native header toolbar ----------------
+
+  /**
+   * Native mode: mount the tab's toolbar in the leaf's own view header, the
+   * way the core Web Viewer does — header always visible, title element
+   * detached, toolbar taking the title container's place. The header lives
+   * inside the leaf's containerEl, so it survives the leaf being dragged
+   * between splits without re-mounting.
+   */
+  private mountToolbarInHeader(tab: BrowserTab): void {
+    const tryMount = (): boolean => {
+      const header = this.containerEl.querySelector(".view-header");
+      if (!header) return false;
+      header.addClass("view-header-always-show", "ob-browser-native-header");
+      const titleContainer = header.querySelector(".view-header-title-container");
+      const host = (titleContainer ?? header) as HTMLElement;
+      host.empty();
+      host.addClass("ob-browser-header-host");
+      host.appendChild(tab.toolbar.element);
+      return true;
+    };
+    if (!tryMount()) setTimeout(() => tryMount(), 0);
   }
 
   // ---------------- tab strip ----------------
