@@ -37,6 +37,8 @@ export class BrowserTab {
   constructor(
     private ctx: BrowserContext,
     initialUrl?: string,
+    /** false = the view owns the toolbar (e.g. mounted in the native view header). */
+    private embedToolbar = true,
   ) {
     this.id = "tab" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
     this.element = document.createElement("div");
@@ -63,7 +65,7 @@ export class BrowserTab {
         onExtensionClick: (id, anchor) => this.ctx.onExtensionClick(id, anchor),
       },
     );
-    this.element.insertBefore(this.toolbar.element, this.wrap);
+    if (this.embedToolbar) this.element.insertBefore(this.toolbar.element, this.wrap);
 
     this.webview = this.createWebviewElement();
     this.wrap.appendChild(this.webview as unknown as HTMLElement);
