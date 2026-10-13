@@ -211,13 +211,15 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
       // Page references (linked + unlinked) + the supertag collection track
       // the index. renderPageReferences owns the whole host (it clears and
       // rebuilds it), so the collection is drawn INSIDE that host, after it.
+      // refsPathFor：库外打开但实为库内的文件也能按 vault 路径查询。
+      const rp = this.refsPathFor();
       renderPageReferences(
         this.refsHostEl,
         this.plugin,
-        this.file?.path,
-        this.file?.basename ?? '',
+        rp?.path,
+        rp?.basename ?? '',
       );
-      renderSupertagCollection(this.refsHostEl, this.plugin, this.file?.path);
+      renderSupertagCollection(this.refsHostEl, this.plugin, rp?.path);
       refreshBlockBacklinkBadges(this);
     }) ?? null;
 
@@ -338,6 +340,14 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     // replaces the vault-only sections with something true.
     this.renderExternalBanner();
     this.renderBreadcrumb();
+    // 库外打开但文件其实位于库内（虚拟文档树点开库内 md 就是这种情况）时，
+    // 反链/未引用面板依然有内容可查：把绝对路径换算回 vault 相对路径。
+    // 真库外文件解析不出路径，下面两个渲染自然什么都不画，banner 照旧。
+    // refs 之前只在 blockIndex 重建时刷新——新开的 leaf 在索引建成后永远
+    // 等不到 onRebuild，面板就一直是空的（实测 numpy.md 复现）。
+    const rp = this.refsPathFor();
+    renderPageReferences(this.refsHostEl, this.plugin, rp?.path, rp?.basename ?? '');
+    renderSupertagCollection(this.refsHostEl, this.plugin, rp?.path);
     // Obsidian caches a leaf's tab text when the view loads, so the retargeted
     // tab keeps showing the seed note's name until the header is re-read.
     // Measured: updateHeader() fixes it; re-calling setViewState instead drops
@@ -443,6 +453,31 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   private syncLeafTitle(): void {
     if (!this.isExternal) return;
     setLeafTitle(this.leaf, this.externalName);
+  }
+
+  /**
+   * refs 查询用的路径：库内文件用 file.path；库外打开时尝试把 externalAbs
+   * 换算回 vault 相对路径（挂载树点开库内 md 的场景），换算不出（真库外）
+   * 返回 null —— 调用方据此跳过 refs 渲染。
+   */
+  private refsPathFor(): { path: string; basename: string } | null {
+    if (!this.isExternal) {
+      return this.file ? { path: this.file.path, basename: this.file.basename } : null;
+    }
+    try {
+      const adapter = (this.app.vault as unknown as { adapter?: { getBasePath?: () => string } }).adapter;
+      const base = adapter?.getBasePath?.();
+      if (!base || !this.externalAbs) return null;
+      const abs = this.externalAbs.replace(/\\/g, '/');
+      const baseNorm = base.replace(/\\/g, '/').replace(/\/+$/, '');
+      if (abs.toLowerCase() !== (baseNorm.toLowerCase() + '/') && !abs.toLowerCase().startsWith(baseNorm.toLowerCase() + '/')) return null;
+      const rel = abs.slice(baseNorm.length + 1);
+      const f = this.app.vault.getAbstractFileByPath(rel);
+      if (f instanceof TFile) return { path: f.path, basename: f.basename };
+    } catch (e) {
+      console.error('refsPathFor failed for', this.externalAbs, e);
+    }
+    return null;
   }
 
   /** Banner shown instead of the vault-only backlinks / references sections. */

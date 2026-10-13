@@ -1484,7 +1484,9 @@ export default class LogseqEditorPlugin extends Plugin {
   refreshRecentPanels(): void {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_RECENT_PANEL)) {
       const view = leaf.view as RecentPanelView | null;
-      view?.render();
+      // 插件重载后 leaf 可能短暂挂着一个没有 render 的占位/异构视图——
+      // 这里抛错会炸掉调用链（openExternalEntry 中断 → 树节点要点两次）。
+      if (view && typeof view.render === 'function') view.render();
     }
   }
 
