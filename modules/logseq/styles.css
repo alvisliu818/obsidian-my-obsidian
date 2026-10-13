@@ -4638,3 +4638,26 @@ body.lgp-table-editor-cursor * {
 .lgp-terminal .lgp-terminal__host .xterm { height: 100%; }
 .lgp-terminal .lgp-terminal__bar { display: flex; gap: 6px; align-items: center; padding: 2px 4px; border-bottom: 1px solid var(--background-modifier-border); }
 .lgp-terminal .lgp-terminal__hint { font-size: 0.8em; color: var(--text-muted); flex: 1; }
+
+/* ==========================================================================
+   External shell — kill the editor-OUTER padding blank strip.
+
+   The theme gives every `.view-content` padding (top 12 / bottom 32) and the
+   shell chain nests TWO of them (shell contentEl + the adopted inner editor's
+   own view-content). After the editor's scroller reaches its end the theme
+   paddings stack into a bare blank strip, and the outer contentEl (overflow
+   auto via the theme) can still scroll past the host — more blank. The
+   scroller already carries its own 14/12 breathing padding, so zero the
+   theme paddings on the whole shell chain. Doubled class names lift
+   specificity to 0,2,0 to beat the theme's single-class rule.
+   ========================================================================== */
+
+.view-content.logseq-external-block-view.view-content.logseq-external-block-view {
+  padding: 0;
+  overflow: hidden;
+}
+
+.logseq-external-block-host .workspace-leaf-content > .view-content {
+  padding: 0;
+  overflow: hidden;
+}

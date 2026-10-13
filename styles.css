@@ -8118,3 +8118,18 @@ div:hover > .git-gutter-marker.git-changedelete {
 .view-header.ob-browser-native-header .view-header-nav-buttons {
   display: none;
 }
+
+/* ==========================================================================
+   External shell — kill the editor-OUTER padding blank strip (see
+   modules/logseq/styles.css for the full rationale).
+   ========================================================================== */
+
+.view-content.logseq-external-block-view.view-content.logseq-external-block-view {
+  padding: 0;
+  overflow: hidden;
+}
+
+.logseq-external-block-host .workspace-leaf-content > .view-content {
+  padding: 0;
+  overflow: hidden;
+}
