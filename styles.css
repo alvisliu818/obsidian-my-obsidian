@@ -8107,3 +8107,8 @@ div:hover > .git-gutter-marker.git-changedelete {
   border-bottom: 1px solid var(--divider-color);
   box-shadow: var(--shadow-s);
 }
+
+/* The header's own "more options" button duplicates ours — hide it. */
+.view-header.ob-browser-native-header .view-actions {
+  display: none;
+}
