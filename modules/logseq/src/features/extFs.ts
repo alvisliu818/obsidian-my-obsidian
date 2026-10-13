@@ -137,6 +137,17 @@ export function createEmptyFile(abs: string): FsOpResult {
 }
 
 /**
+ * 同目录改名的目标路径（renameEntry 用它；调用方在改名成功后也要用它更新
+ * 自己记的 abs）。分隔符取自路径本身（Windows 两种都认），无分隔符说明是
+ * 裸名（不可能出现在挂载树，但守住边界）——此时返回裸名本身。
+ */
+export function renameTarget(abs: string, newName: string): string {
+  const idx = Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\'));
+  if (idx < 0) return newName;
+  return abs.slice(0, idx + 1) + newName;
+}
+
+/**
  * Rename a file or folder within its parent (same directory, name change only).
  * Refuses to clobber an existing target — Windows renameSync would overwrite a
  * FILE silently, and that is never what a rename means.
@@ -144,11 +155,7 @@ export function createEmptyFile(abs: string): FsOpResult {
 export function renameEntry(abs: string, newName: string): FsOpResult {
   const bad = validateEntryName(newName);
   if (bad) return { ok: false, error: bad };
-  // 父目录 + 分隔符:分隔符取自路径本身(Windows 两种都认),
-  // 无分隔符说明是裸名(不可能出现在挂载树,但守住边界)。
-  const idx = Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\'));
-  if (idx < 0) return { ok: false, error: '路径缺少父目录。' };
-  const target = abs.slice(0, idx + 1) + newName;
+  const target = renameTarget(abs, newName);
   try {
     const fs = fsMod();
     if (!fs.renameSync) return { ok: false, error: '当前环境不支持重命名。' };

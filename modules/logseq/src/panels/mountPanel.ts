@@ -14,7 +14,7 @@
  * that implies — backlinks, block references, search.
  */
 
-import { FileSystemAdapter, ItemView, Menu, Notice, setIcon, TFile, TFolder, type WorkspaceLeaf } from 'obsidian';
+import { FileSystemAdapter, ItemView, Menu, Notice, setIcon, type WorkspaceLeaf } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import type { ExternalMount } from '../types';
 import { mountDisplayName } from '../types';
@@ -31,7 +31,6 @@ import {
   MOUNT_FOLDER,
   createEmptyFile,
   createLink,
-  deletePermanent,
   ensureDirX,
   exists,
   extOf,
@@ -40,15 +39,18 @@ import {
   linkKindFor,
   linkTargetFor,
   removeLink,
-  renameEntry,
   safeSegment,
   scanExternal,
-  trashEntry,
   validateEntryName,
   linkVaultPath,
 } from '../features/extFs';
-import { ConfirmModal, NamePromptModal } from './promptModals';
+import { NamePromptModal } from './promptModals';
 import { iconForEntry } from '../features/iconTheme';
+import {
+  forwardFileMenuEvent,
+  promptExternalDelete,
+  promptExternalRename,
+} from '../features/externalPaneMenu';
 
 export const VIEW_TYPE_MOUNT_PANEL = 'logseq-mount-panel';
 
@@ -994,76 +996,13 @@ export class MountPanelView extends ItemView {
    * Forward the native `file-menu` event so THIS menu carries everything the
    * file explorer's would — most importantly the items OTHER PLUGINS add.
    *
-   * The file is resolved to its `TExternalFile` (`file:`-prefixed lookup,
-   * Obsidian 1.14.4+); handlers receive a real TAbstractFile, so items that
-   * act through the vault API work unchanged. A neutral source string keeps
-   * most core-explorer entries out — 新建 / 重命名 / 删除 already exist above
-   * via the SiYuan-parity block — but handlers otherwise append freely
-   * (Obsidian sorts the menu by section at show time, so placement is the
-   * menu's business, not ours). One broken handler must not take the whole
-   * menu down, hence the try/catch. Returns whether the forward actually
-   * happened, so callers can skip items the handlers already provide —
-   * 「复制绝对路径」 in particular is added by the open-with group.
+   * 实现搬到了 `features/externalPaneMenu.ts`（库外标签页的 ⋮ 菜单用同一套：
+   * hop-1 TExternalFile + hop-2 TFile 伪适配器 + 标题去重 LAST wins），这里
+   * 只保留挂载面板自己的中性 source 与调用约定。返回 hop-1 是否真的跑了，
+   * 调用方据此决定要不要补「复制绝对路径」兜底。
    */
   private addFileMenuEventItems(menu: Menu, abs: string, isDir: boolean): boolean {
-    if (!this.plugin.canOpenNativeExternal()) return false;
-    // First hop: the TExternalFile lookup only resolves FILES, so folder rows
-    // get af == null here — the adapter hops below still run for them.
-    const af = this.app.vault.getAbstractFileByPath(`file:${abs.replace(/\\/g, '/')}`);
-    if (af) {
-      menu.addSeparator();
-      try {
-        this.app.workspace.trigger('file-menu', menu, af, 'logseq-mount-panel');
-      } catch (e) {
-        console.error('file-menu handler failed for', abs, e);
-        return false;
-      }
-    }
-    // Second hop: handlers that gate on `file instanceof TFile` / `TFolder`
-    // (Shell Commands among them) skip TExternalFile entirely, so re-fire the
-    // event with a matching T-shaped adapter. The adapter path is a
-    // vault-root-escaping `../` chain, NOT the absolute path: plugins like
-    // Shell Commands build variable values as
-    // `getVaultAbsolutePath() + '/' + file.path`, so an absolute path would
-    // produce `<vault>/E:/...` garbage while the `../` chain resolves to the
-    // real external file (absolute mode via the OS, relative mode via the
-    // vault-dir cwd that Shell Commands spawns with).
-    // Handlers re-fire on both hops; the title dedupe below keeps LAST wins
-    // so the adapter-path item (correct variables) survives, not the hop-1
-    // TExternalFile one (`file:`-prefixed path, garbage for variables).
-    try {
-      const adapter = isDir ? makeExternalTFolderAdapter(abs, this.app.vault) : makeExternalTFileAdapter(abs, this.app.vault);
-      if (adapter) {
-        this.app.workspace.trigger('file-menu', menu, adapter, isDir ? 'logseq-mount-panel-tfolder' : 'logseq-mount-panel-tfile');
-      }
-    } catch (e) {
-      console.error('file-menu (adapter) handler failed for', abs, e);
-    }
-    // Some handlers re-offer entries this menu already added earlier (the
-    // known case is 重命名). First occurrence wins; separators carry no title
-    // and stay. `items` is undocumented — hence the cast — and the dedupe
-    // splices IN PLACE, so the live array is the one being mutated.
-    const items = (menu as unknown as { items: Array<{ titleEl?: { textContent?: string | null }; title?: unknown } | null> }).items;
-    // Some handlers re-offer entries this menu already added earlier (each
-    // forward hop re-fires the whole handler set, so most entries land twice).
-    // MenuItems have NO `.title` field — setTitle only writes titleEl — hence
-    // the textContent read. LAST occurrence wins: the hop-1 TExternalFile pass
-    // leaves items whose captured file has a `file:`-prefixed path (Shell
-    // Commands would build garbage absolute paths from it), while the hop-2
-    // adapter carries the vault-escaping path that resolves correctly.
-    // Separators carry no title and stay.
-    const seen = new Set<string>();
-    for (let i = items.length - 1; i >= 0; i--) {
-      const it = items[i];
-      const t = (it?.titleEl?.textContent ?? (typeof it?.title === 'string' ? it.title : '') ?? '').trim();
-      if (!t) continue;
-      if (seen.has(t)) items.splice(i, 1);
-      else seen.add(t);
-    }
-    // Report whether the TExternalFile hop actually ran (folder rows have no
-    // TExternalFile lookup): callers use it to decide whether to add their own
-    // 复制绝对路径 fallback, so it must not count adapter-only forwards.
-    return af != null;
+    return forwardFileMenuEvent(this.plugin, menu, abs, isDir, 'logseq-mount-panel');
   }
 
   // ------------------------------------------------------------------
@@ -1155,76 +1094,21 @@ export class MountPanelView extends ItemView {
     ).open();
   }
 
+  /**
+   * 重命名：弹窗 + fs + 链接同步在 `features/externalPaneMenu.ts`（库外标签页
+   * 的 ⋮ 菜单用同一套），这里只提供挂载面板自己的收尾：刷新缓存并重绘，
+   * openRel 保证父目录仍处于展开态。
+   */
   private promptRename(mount: ExternalMount, node: MountNode): void {
-    new NamePromptModal(
-      this.app,
-      { title: '重命名', initial: node.name, validate: validateEntryName },
-      (name) => {
-        if (!name || name === node.name) return;
-        const r = renameEntry(node.abs, name);
-        if (!r.ok) {
-          new Notice(`重命名失败：${r.error ?? '未知错误'}`);
-          return;
-        }
-        // 已链接节点跟着改名:链接名就是旧文件名,不拆链的话
-        // isLinked 会继续「看见」旧名并误报已链接。
-        // renameEntry(abs, newName) 在 abs 自己的父目录下改名,
-        // 所以这里传裸名 name 而不是完整目标路径 —— 传完整路径会被
-        // validateEntryName 的非法字符检查拒掉(实测踩过)。
-        const base = this.plugin.vaultBasePath();
-        const oldLink = base ? linkTargetFor(base, node.name, safeSegment(node.name)) : '';
-        if (base && exists(oldLink)) {
-          const rr = renameEntry(oldLink, name);
-          if (!rr.ok) new Notice(`链接未同步改名：${rr.error ?? '未知错误'}`);
-        }
-        new Notice(`已重命名为 ${name}`);
-        this.rescan(mount, parentRelOf(node.rel));
-      },
-    ).open();
+    promptExternalRename(this.plugin, node.abs, node.name, () => {
+      this.rescan(mount, parentRelOf(node.rel));
+    });
   }
 
   private promptDelete(mount: ExternalMount, node: MountNode): void {
-    const typeStr = node.isDir ? '文件夹' : '文件';
-    new ConfirmModal(
-      this.app,
-      {
-        title: `删除${typeStr}`,
-        body: `确定删除${typeStr}「${node.name}」${node.isDir ? '及其全部内容' : ''}吗？将移入系统回收站。`,
-        confirmText: '删除',
-        dangerous: true,
-      },
-      (ok) => {
-        if (!ok) return;
-        // 先拆链接:硬链接删掉只是去掉目录项,但留着会指向一个不再存在的名字。
-        const base = this.plugin.vaultBasePath();
-        const oldLink = base ? linkTargetFor(base, node.name, safeSegment(node.name)) : '';
-        if (base && exists(oldLink)) removeLink(oldLink);
-        void trashEntry(node.abs).then((r) => {
-          if (r.ok) {
-            new Notice('已移入回收站');
-            this.rescan(mount, parentRelOf(node.rel));
-            return;
-          }
-          // 没有回收站(或系统拒绝):二次确认后永久删除,绝不静默。
-          new ConfirmModal(
-            this.app,
-            {
-              title: '无法移入回收站',
-              body: `${r.error ?? '此系统不支持回收站'}。要永久删除「${node.name}」吗？此操作不可恢复。`,
-              confirmText: '永久删除',
-              dangerous: true,
-            },
-            (ok2) => {
-              if (!ok2) return;
-              const rr = deletePermanent(node.abs, node.isDir);
-              if (!rr.ok) new Notice(`删除失败：${rr.error ?? '未知错误'}`);
-              else new Notice('已永久删除');
-              this.rescan(mount, parentRelOf(node.rel));
-            },
-          ).open();
-        });
-      },
-    ).open();
+    promptExternalDelete(this.plugin, node.abs, node.name, node.isDir, () => {
+      this.rescan(mount, parentRelOf(node.rel));
+    });
   }
 
   // ------------------------------------------------------------------
@@ -1333,99 +1217,4 @@ function parentRelOf(rel: string): string {
 /** 挂载根 + 父目录相对路径 → 绝对路径（与 joinAbs 一致，只是先算 rel）。 */
 function parentAbsOf(rel: string, mountRoot: string): string {
   return joinAbs(mountRoot, parentRelOf(rel));
-}
-
-/**
- * Build a TFile-shaped adapter for an OUTSIDE-the-vault file so that
- * `file-menu` handlers gating on `file instanceof TFile` (Shell Commands is the
- * motivating case) accept it. `Object.create(TFile.prototype)` passes the
- * instanceof test without registering anything in the vault; the `path` is the
- * absolute on-disk path, so string-based variables ({{file_path:absolute}} &
-Co.) resolve to the real file. A synthetic parent TFolder backs {{folder_name}}.
- * Nothing here touches the vault API — handlers that do will misbehave, but
- * those handlers already cannot serve external files anyway.
- */
-/**
- * Path used by the T-shaped adapters: a `../` chain that walks out of the
- * vault root and then down to the external target. Plugins that build
- * absolute paths as `vaultBase + '/' + file.path` (Shell Commands'
- * {{file_path:absolute}} family) end up with `E:\vault\..\Local\target`,
- * which the OS resolves to the real file; relative mode works too because
- * Shell Commands spawns shells with the vault dir as cwd. Cross-drive
- * targets cannot be expressed this way — fall back to the absolute path.
- */
-function vaultEscapePath(abs: string, vault: unknown): string {
-  try {
-    const adapter = (vault as { adapter?: unknown }).adapter as
-      | { getBasePath?: () => string }
-      | undefined;
-    const base = adapter?.getBasePath?.();
-    if (!base) return abs;
-    const a = abs.replace(/\\/g, '/').replace(/\/+$/, '');
-    const b = base.replace(/\\/g, '/').replace(/\/+$/, '');
-    const as = a.split('/');
-    const bs = b.split('/');
-    if (as[0].toLowerCase() !== bs[0].toLowerCase()) return abs; // different drive
-    let i = 0;
-    while (i < as.length && i < bs.length && as[i].toLowerCase() === bs[i].toLowerCase()) i++;
-    const ups = bs.length - i;
-    if (ups <= 0) return as.slice(i).join('/') || '/'; // inside the vault
-    return '../'.repeat(ups) + as.slice(i).join('/');
-  } catch (e) {
-    console.error('vaultEscapePath failed for', abs, e);
-    return abs;
-  }
-}
-
-function makeExternalTFileAdapter(abs: string, vault: unknown): TFile | null {
-  try {
-    const norm = abs.replace(/\\/g, '/');
-    const slash = norm.lastIndexOf('/');
-    const name = slash >= 0 ? norm.slice(slash + 1) : norm;
-    const dot = name.lastIndexOf('.');
-    const fake = Object.create(TFile.prototype) as TFile;
-    const f = fake as unknown as Record<string, unknown>;
-    f.vault = vault;
-    f.path = vaultEscapePath(abs, vault);
-    f.name = name;
-    f.basename = dot > 0 ? name.slice(0, dot) : name;
-    f.extension = dot > 0 ? name.slice(dot + 1) : '';
-    f.stat = { ctime: 0, mtime: 0, size: 0 };
-    const parent = Object.create(TFolder.prototype) as TFolder;
-    const p = parent as unknown as Record<string, unknown>;
-    p.path = slash > 0 ? norm.slice(0, slash) : '/';
-    p.name = slash > 0 ? (norm.slice(0, slash).split('/').pop() || '') : '/';
-    p.children = [];
-    f.parent = parent;
-    return fake;
-  } catch (e) {
-    console.error('makeExternalTFileAdapter failed for', abs, e);
-    return null;
-  }
-}
-
-function makeExternalTFolderAdapter(abs: string, vault: unknown): TFolder | null {
-  try {
-    const norm = abs.replace(/\\/g, '/').replace(/\/+$/, '');
-    const slash = norm.lastIndexOf('/');
-    const name = slash >= 0 ? norm.slice(slash + 1) : norm;
-    const fake = Object.create(TFolder.prototype) as TFolder;
-    const f = fake as unknown as Record<string, unknown>;
-    f.vault = vault;
-    f.path = vaultEscapePath(abs, vault);
-    f.name = name || '/';
-    f.children = [];
-    f.isRoot = () => f.path === '/';
-    const parent = Object.create(TFolder.prototype) as TFolder;
-    const p = parent as unknown as Record<string, unknown>;
-    p.path = slash > 0 ? norm.slice(0, slash) : '/';
-    p.name = slash > 0 ? (norm.slice(0, slash).split('/').pop() || '') : '/';
-    p.children = [];
-    p.isRoot = () => p.path === '/';
-    f.parent = parent;
-    return fake;
-  } catch (e) {
-    console.error('makeExternalTFolderAdapter failed for', abs, e);
-    return null;
-  }
 }
