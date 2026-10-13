@@ -1,0 +1,12 @@
+node_modules/
+
+# Build output
+main.js
+main.js.map
+
+# Plugin settings (user-specific)
+data.json
+
+# Misc
+.hot-reload
+AGENTS.md
