@@ -284,6 +284,14 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     return this.externalAbs !== '';
   }
 
+  /** 库外文档的图片基准目录（posix）；库内为 null。见 renderHost 注释。 */
+  get externalImageDir(): string | null {
+    if (!this.isExternal) return null;
+    const posix = this.externalAbs.replace(/\\/g, '/');
+    const cut = posix.lastIndexOf('/');
+    return cut > 0 ? posix.slice(0, cut) : null;
+  }
+
   /**
    * Point this view at an external file and show it.
    *

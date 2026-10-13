@@ -927,21 +927,66 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
  * md 所在目录优先，其次库根）；渲染后用该文件的资源 URL 恢复。
  * 解析不到文件的 src 原样保留，交给 Obsidian 的默认行为。
  */
-export type ImgAnchorToken = { token: string; file: TFile | null };
+export type ImgAnchorToken = { token: string; file: TFile | null; abs?: string };
 
 const IMG_ANCHOR_PREFIX = 'LGIMGANCHOR';
 const IMG_ANCHOR_RE = /^LGIMGANCHOR(\d+)LGIMGANCHOR$/;
 const IMG_EXT_RE = /^(png|jpe?g|gif|webp|svg|bmp|avif|ico)$/i;
+const IMG_EXT_DOT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif|ico)$/i;
+
+/**
+ * 库外图片的 blob URL 缓存（LRU）。磁盘二进制 → objectURL；同一个 abs 反复
+ * 渲染复用，超容量淘汰并 revoke。
+ */
+const absImgUrlCache = new Map<string, string>();
+const ABS_IMG_CACHE_MAX = 200;
+
+function absImgUrl(abs: string): string | null {
+	const cached = absImgUrlCache.get(abs);
+	if (cached) {
+		// LRU touch
+		absImgUrlCache.delete(abs);
+		absImgUrlCache.set(abs, cached);
+		return cached;
+	}
+	try {
+		// eslint-disable-next-line @typescript-eslint/no-var-requires
+		const fs = eval('require')('fs') as { readFileSync(p: string): Buffer };
+		const data = fs.readFileSync(abs) as unknown as BlobPart;
+		const ext = abs.split('.').pop()?.toLowerCase() ?? '';
+		const mime =
+			ext === 'svg'
+				? 'image/svg+xml'
+				: `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+		const url = URL.createObjectURL(new Blob([data], { type: mime }));
+		absImgUrlCache.set(abs, url);
+		if (absImgUrlCache.size > ABS_IMG_CACHE_MAX) {
+			const oldest = absImgUrlCache.keys().next().value;
+			if (oldest !== undefined) {
+				const u = absImgUrlCache.get(oldest);
+				absImgUrlCache.delete(oldest);
+				if (u) URL.revokeObjectURL(u);
+			}
+		}
+		return url;
+	} catch {
+		return null;
+	}
+}
 
 export function anchorRelativeImgSrcs(
 	md: string,
 	host: BlockRenderHost,
 	tokens: ImgAnchorToken[],
 ): string {
+	const extDir = host.externalImageDir ?? null;
 	const file = host.file;
-	if (!file) return md; // 片段场景无基准目录，维持现状
-	const dir = file.parent?.path ?? '';
-	const resolve = (raw: string): TFile | null => {
+	if (!file && !extDir) return md; // 片段场景无基准目录，维持现状
+	const dir = extDir ?? (file?.parent?.path ?? '');
+	// 库外模式：file 是句柄替身（path=Mounts/<name>、parent=null），vault 解析
+	// 全靠不住，三种图片构造全部锚定到磁盘目录。
+	const external = !!extDir;
+	const resolve = (raw: string): { file: TFile | null; abs?: string } | null => {
 		if (!raw || /^(app|https?|data|vault|file|mailto):/i.test(raw) || raw.startsWith('/')) return null;
 		let decoded = raw;
 		try {
@@ -949,26 +994,80 @@ export function anchorRelativeImgSrcs(
 		} catch {
 			/* 保留原文 */
 		}
+		if (external) {
+			// 磁盘解析：目录优先，其次原样（尽量不再退回全库）。
+			const posix = decoded.replace(/\\/g, '/').replace(/^\.\//, '');
+			const candidates = dir ? [`${dir}/${posix}`, posix] : [posix];
+			// eslint-disable-next-line @typescript-eslint/no-var-requires
+			const fs = eval('require')('fs') as { existsSync(p: string): boolean };
+			for (const c of candidates) {
+				if (IMG_EXT_DOT_RE.test(c) && fs.existsSync(c)) return { file: null, abs: c };
+			}
+			// wiki 嵌入常省扩展名：逐个补图片扩展名探测
+			for (const c of candidates) {
+				for (const ext of ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']) {
+					const probe = `${c}.${ext}`;
+					if (fs.existsSync(probe)) return { file: null, abs: probe };
+				}
+			}
+			return null;
+		}
 		const candidates = dir ? [`${dir}/${decoded}`, decoded] : [decoded];
 		for (const p of candidates) {
 			const found = host.app.vault.getAbstractFileByPath(p);
-			if (found instanceof TFile && IMG_EXT_RE.test(found.extension)) return found;
+			if (found instanceof TFile && IMG_EXT_RE.test(found.extension)) return { file: found };
 		}
 		return null;
 	};
+	const tokenFor = (resolved: { file: TFile | null; abs?: string }): string => {
+		const token = `${IMG_ANCHOR_PREFIX}${tokens.length}${IMG_ANCHOR_PREFIX}`;
+		tokens.push({ token, file: resolved.file, abs: resolved.abs });
+		return token;
+	};
+	let out = md;
+	if (external) {
+		// HTML img（先处理，避免被 md 图规则二次命中——img 标签里不含 ![ 构造）
+		out = out.replace(
+			/(<img\b[^>]*?\bsrc=")([^"]*)(")/gi,
+			(m, pre: string, src: string, post: string) => {
+				const resolved = resolve(src);
+				return resolved ? `${pre}${tokenFor(resolved)}${post}` : m;
+			},
+		);
+		out = out.replace(
+			/(<img\b[^>]*?\bsrc=')([^']*)(')/gi,
+			(m, pre: string, src: string, post: string) => {
+				const resolved = resolve(src);
+				return resolved ? `${pre}${tokenFor(resolved)}${post}` : m;
+			},
+		);
+		// md 图：解析得到磁盘文件才转成 HTML img（带 token src），否则原样
+		out = out.replace(/!\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, (m, alt: string, src: string) => {
+			const resolved = resolve(src);
+			if (!resolved) return m;
+			const safeAlt = alt.replace(/"/g, '&quot;');
+			return `<img alt="${safeAlt}" src="${tokenFor(resolved)}">`;
+		});
+		// wiki 嵌入：同上（省扩展名的由 resolve 探测补全）
+		out = out.replace(/!\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g, (m, linktext: string) => {
+			const resolved = resolve(linktext.trim());
+			if (!resolved) return m;
+			return `<img src="${tokenFor(resolved)}">`;
+		});
+		return out;
+	}
 	const rewrite = (m: string, pre: string, src: string, post: string): string => {
 		const resolved = resolve(src);
 		if (!resolved) return m;
-		const token = `${IMG_ANCHOR_PREFIX}${tokens.length}${IMG_ANCHOR_PREFIX}`;
-		tokens.push({ token, file: resolved });
+		const token = tokenFor(resolved);
 		return `${pre}${token}${post}`;
 	};
-	return md
+	return out
 		.replace(/(<img\b[^>]*?\bsrc=")([^"]*)(")/gi, rewrite)
 		.replace(/(<img\b[^>]*?\bsrc=')([^']*)(')/gi, rewrite);
 }
 
-/** 渲染后：把 token src 恢复为被锚定文件的 vault 资源 URL。 */
+/** 渲染后：把 token src 恢复为真实图片 URL（库内=资源 URL，库外=blob URL）。 */
 export function applyAnchoredImgSrcs(
 	holder: HTMLElement,
 	host: BlockRenderHost,
@@ -982,6 +1081,9 @@ export function applyAnchoredImgSrcs(
 		const entry = tokens[Number(m[1])];
 		if (entry?.file) {
 			img.setAttribute('src', host.app.vault.getResourcePath(entry.file));
+		} else if (entry?.abs) {
+			const url = absImgUrl(entry.abs);
+			if (url) img.setAttribute('src', url);
 		}
 	});
 }
