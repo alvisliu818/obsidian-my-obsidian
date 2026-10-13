@@ -328,6 +328,12 @@ export function splitRawToOutline(b: Block, offset: number): Block {
   const head = stripBlankEdges(b.text.slice(0, offset));
   const tail = stripBlankEdges(dedentCommon(b.text.slice(offset)));
   b.kind = 'list';
+  // Caret at the block start (empty head): Logseq just converts the block in
+  // place — no empty outline block is left behind, caret stays on b.
+  if (head === '') {
+    b.text = tail;
+    return b;
+  }
   b.text = head;
   const nb = createBlock(tail);
   insertAfter(b, nb);
