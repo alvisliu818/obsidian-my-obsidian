@@ -42,6 +42,14 @@ export class DocumentsRepository {
   public async addDocument(path: string): Promise<void> {
     try {
       const doc = await this.getAndMapIndexedDocument(path)
+      if (!doc) {
+        // 库外文件读不了（被网盘客户端锁定/替换、临时消失等）——静默跳过。
+        // 这些是瞬态失败，不是缓存损坏；计入 countError 只会造成
+        // 「请清理缓存」的误报（百度盘挂载下每次重启都会凑满阈值）。
+        // 文件真正删除由下一轮 reconcile 从索引里清掉。
+        this.removeDocument(path)
+        return
+      }
       if (!doc.path) {
         console.error(
           `Missing .path field in IndexedDocument "${doc.basename}", skipping`
@@ -69,6 +77,24 @@ export class DocumentsRepository {
     logVerbose('Generating IndexedDocument from', path)
     await this.addDocument(path)
     const document = this.documents.get(path)
+
+    // 库外瞬态跳过（被锁定/替换中的网盘文件）：给空壳文档，不计错误——
+    // 文件下次可读时会被 diff 重新收录。真正的缓存损坏才走 countError。
+    if (!document && isExternalDocPath(path)) {
+      return {
+        basename: '',
+        displayTitle: '',
+        content: '',
+        path,
+        mtime: 0,
+        tags: [],
+        unmarkedTags: [],
+        aliases: '',
+        headings1: '',
+        headings2: '',
+        headings3: '',
+      }
+    }
 
     // Only happens if the cache is corrupted
     if (!document) {
@@ -264,14 +290,21 @@ export class DocumentsRepository {
    * 没有 metadataCache，所以标签/标题/别名为空；文件名本身参与索引
    * （minisearch 对 basename 有权重），内容按明文读。
    */
-  private getExternalIndexedDocument(path: string): IndexedDocument {
+  private getExternalIndexedDocument(path: string): IndexedDocument | null {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const fs = eval('require')('fs') as {
       readFileSync(p: string, enc: 'utf8'): string
       statSync(p: string): { mtimeMs?: number }
     }
     const abs = absFromExternalDocPath(path)
-    const content = fs.readFileSync(abs, 'utf8')
+    // 百度盘等网盘挂载下，文件随时可能被客户端锁定（EBUSY/EPERM）或正处于
+    // 替换中（ENOENT）——读取失败不抛，返回 null 让调用方静默跳过。
+    let content: string
+    try {
+      content = fs.readFileSync(abs, 'utf8')
+    } catch {
+      return null
+    }
     const name = abs.split('/').pop() ?? abs
     const dot = name.lastIndexOf('.')
     let mtime = 0
