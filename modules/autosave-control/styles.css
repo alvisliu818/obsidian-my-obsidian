@@ -1,0 +1,40 @@
+.save-status-icon {
+  font-size: var(--asc-icon-size, 16px);
+}
+
+.save-status-icon.asc-saved {
+  color: var(--asc-saved-color, #32cd32);
+}
+
+.save-status-icon.asc-pending {
+  color: var(--asc-pending-color, #00bfff);
+}
+
+/*
+ * While the manual-mode "close & discard?" dialog is shown, hide Obsidian's
+ * full-screen "Saving…" progress overlay so it is not visible behind the dialog.
+ *
+ * Obsidian styles the overlay with `.progress-bar-container { display: flex }`
+ * (one class). This selector (two classes + an element) has higher specificity,
+ * so it wins without needing `!important`.
+ */
+body.asc-hide-saving-overlay .progress-bar-container {
+  display: none;
+}
+
+/*
+ * The same progress state also un-hides Obsidian's window titlebar on a
+ * frameless macOS window (`body.is-frameless.in-progress` un-collapses
+ * `.titlebar` and adds top padding — Obsidian app.css). Normally the full-screen
+ * overlay covers it, but we hide that overlay to show our dialog, so the
+ * "Untitled — Obsidian" titlebar would peek through. Keep it collapsed while the
+ * dialog is up. These selectors match Obsidian's own specificity and, loading
+ * after app.css, win on source order — no `!important` needed.
+ */
+body.asc-hide-saving-overlay.is-frameless .titlebar {
+  display: none;
+}
+
+body.asc-hide-saving-overlay.is-frameless {
+  padding-top: 0;
+}
