@@ -2,6 +2,7 @@ import type { TAbstractFile } from 'obsidian'
 import type OmnisearchPlugin from './main'
 import { removeAnchors } from './tools/notes'
 import type { IndexedDocument } from './globals'
+import { isExternalDocPath } from './tools/externalDocs'
 import {
   isFileCanvas,
   isFileBase,
@@ -54,6 +55,9 @@ export class NotesIndexer {
   }
 
   public isFileIndexable(path: string): boolean {
+    // 库外文件（ext: 伪路径）：按真实扩展名走明文索引那条路。
+    if (isExternalDocPath(path)) return this.isFilePlaintext(path)
+
     // Skip excluded files when hideExcluded is enabled
     if (
       this.plugin.settings.hideExcluded &&

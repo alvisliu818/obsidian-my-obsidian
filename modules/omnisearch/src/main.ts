@@ -248,13 +248,68 @@ export default class OmnisearchPlugin extends Plugin {
     return (this.app as any).plugins?.plugins?.['ai-image-analyzer']?.api
   }
 
+  /**
+   * 合并新增：库外文件（虚拟文档树挂载）的索引清单。
+   *
+   * 通过 logseq 模块（宿主别名 obsidian-logseq）的全深度扫描拿文件清单，
+   * 转成 ext: 伪路径。logseq 模块不在（未启用）时返回空——库外支持是
+   * 纯增益，缺了它 omnisearch 照常工作。
+   */
+  private getExternalIndexableFiles(): Array<{ path: string; mtime: number }> {
+    try {
+      const logseq = (this.app as any).plugins?.plugins?.['obsidian-logseq'] as
+        | { listExternalSearchFiles?: () => Array<{ abs: string; name: string; mtime: number }> }
+        | undefined
+      const files = logseq?.listExternalSearchFiles?.() ?? []
+      return files
+        .filter(f => this.notesIndexer.isFileIndexable(`ext:${f.abs.replace(/\\/g, '/')}`))
+        .map(f => ({ path: `ext:${f.abs.replace(/\\/g, '/')}`, mtime: f.mtime }))
+    } catch (e) {
+      console.warn('Omnisearch: listing external files failed', e)
+      return []
+    }
+  }
+
+  /**
+   * 合并新增：重索引库外文件（logseq 的 refreshMounts 在挂载变化后调用）。
+   *
+   * 增删差集只在 ext: 范围内求——绝不能把「只有 ext 的清单」喂给
+   * getDocumentsToReindex，那会把「不在清单里的所有库内文档」都判成已删除
+   * 而清掉整个库内索引（e2e 的金丝雀探针逮到过）。
+   */
+  public async reindexExternalFiles(): Promise<void> {
+    try {
+      const ext = this.getExternalIndexableFiles()
+      const next = new Map(ext.map(f => [f.path, f.mtime]))
+      const current = this.searchEngine.getExternalIndexedDocs()
+      const currentMap = new Map(current.map(d => [d.path, d.mtime]))
+      const toAdd = ext.filter(f => currentMap.get(f.path) !== f.mtime)
+      const toRemove = current.filter(d => !next.has(d.path)).map(d => d.path)
+      if (toRemove.length) this.searchEngine.removeFromPaths(toRemove)
+      if (toAdd.length) await this.searchEngine.addFromPaths(toAdd.map(f => f.path))
+      if (toRemove.length || toAdd.length) {
+        console.debug(
+          `Omnisearch: external reindex +${toAdd.length} -${toRemove.length}`
+        )
+      }
+    } catch (e) {
+      console.warn('Omnisearch: external reindex failed', e)
+    }
+  }
+
   private async populateIndex(): Promise<void> {
     console.time('Indexing total time')
     indexingStep.set(IndexingStepType.ReadingFiles)
-    const files = this.app.vault
-      .getFiles()
-      .filter(f => this.notesIndexer.isFileIndexable(f.path))
-    console.debug(`${files.length} files total`)
+    // 库外文件（虚拟文档树挂载）：ext: 伪路径与库内文件一起进 diff/索引。
+    const extFiles = this.getExternalIndexableFiles()
+    const files = [
+      ...this.app.vault
+        .getFiles()
+        .filter(f => this.notesIndexer.isFileIndexable(f.path))
+        .map(f => ({ path: f.path, mtime: f.stat.mtime })),
+      ...extFiles,
+    ].filter(f => this.notesIndexer.isFileIndexable(f.path))
+    console.debug(`${files.length} files total (${extFiles.length} external)`)
     console.debug(`Cache is ${isCacheEnabled() ? 'enabled' : 'disabled'}`)
     // Map documents in the background
     // Promise.all(files.map(f => cacheManager.addToLiveCache(f.path)))
@@ -269,9 +324,7 @@ export default class OmnisearchPlugin extends Plugin {
       }
     }
 
-    const diff = searchEngine.getDocumentsToReindex(
-      files.map(f => ({ path: f.path, mtime: f.stat.mtime }))
-    )
+    const diff = searchEngine.getDocumentsToReindex(files)
 
     if (isCacheEnabled()) {
       if (diff.toAdd.length) {

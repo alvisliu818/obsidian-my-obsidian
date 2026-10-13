@@ -25,7 +25,7 @@ import {
 } from './types';
 import { mountDisplayName } from './types';
 import { isMarkdownFile } from './features/codeFileKind';
-import { isTextFileName, extOfName } from './features/mountFilter';
+import { isTextFileName, extOfName, isTextMount, dirPruned, entryMatches, compileFilter, EMPTY_FILTER } from './features/mountFilter';
 import { LogseqEditorSettingTab } from './settings/tab';
 import { BlockIndex } from './index/blockIndex';
 import {
@@ -52,7 +52,7 @@ import { ImageView, VIEW_TYPE_IMAGE, IMAGE_EXTENSIONS, isImageFile } from './vie
 import { OFFICE_EXTENSIONS } from './office/types';
 import { ContentSearchPanelView, VIEW_TYPE_CONTENT_SEARCH } from './panels/contentSearchPanel';
 import { RecentPanelView, VIEW_TYPE_RECENT_PANEL } from './panels/recentPanel';
-import { RECENT_OPEN_LIMIT, pushRecentOpen, recentOpenFrom } from './panels/recentOpen';
+import { RECENT_OPEN_LIMIT, pushRecentOpen, recentOpenFrom, resolveMountForAbs } from './panels/recentOpen';
 import {
   PRESET_OPEN_WITH,
   addOpenWithMenuItems,
@@ -62,11 +62,14 @@ import {
 } from './features/openWith';
 import {
   exists,
+  isDirectory,
   linkTargetFor,
   linkVaultPath,
   readExternalText,
   safeSegment,
   sameVolume,
+  scanExternal,
+  extOf,
 } from './features/extFs';
 import type { MountNode } from './features/mountFilter';
 import { openJournal } from './features/dailyNote';
@@ -1658,6 +1661,65 @@ export default class LogseqEditorPlugin extends Plugin {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_MOUNT_PANEL)) {
       (leaf.view as MountPanelView | null)?.refreshMounts();
     }
+    // 挂载集合变了，omnisearch 的库外索引跟着重算（去抖；omnisearch 未启用时静默）。
+    this.scheduleOmnisearchExternalReindex();
+  }
+
+  /**
+   * omnisearch 索引用：枚举全部启用挂载下的文本类库外文件（全深度扫描）。
+   *
+   * 过滤语义与挂载面板一致：mountFilterEnabled 总开关 + 每个挂载的
+   * include/exclude（dirPruned/entryMatches 按累积相对路径判断）。只收文本类
+   * ——二进制没有可索引的内容；深度/数量上限防把整个盘拖进索引。
+   */
+  listExternalSearchFiles(): Array<{ abs: string; name: string; mtime: number }> {
+    const out: Array<{ abs: string; name: string; mtime: number }> = [];
+    const filtering = this.settings.mountFilterEnabled !== false;
+    for (const mount of this.settings.externalMounts ?? []) {
+      if (mount.enabled === false) continue;
+      if (!isDirectory(mount.path)) continue;
+      const f = filtering
+        ? compileFilter({ include: mount.include, exclude: mount.exclude })
+        : compileFilter(EMPTY_FILTER);
+      try {
+        const { entries } = scanExternal(mount.path, {
+          shouldEnterDir: (childRel) => !dirPruned(childRel, f),
+          keepFile: (childRel) => entryMatches(childRel, f),
+          depth: 12,
+          limit: 20000,
+        });
+        for (const e of entries) {
+          if (e.isDir || !isTextMount(extOf(e.name))) continue;
+          out.push({ abs: e.abs, name: e.name, mtime: e.mtime ?? 0 });
+        }
+      } catch (err) {
+        console.error('[logseq] external search scan failed for', mount.path, err);
+      }
+    }
+    return out;
+  }
+
+  /** omnisearch 搜库外文件后的打开路由：按绝对路径找所属挂载（最长前缀）。 */
+  resolveExternalMount(abs: string): { mount: ExternalMount; rel: string } | null {
+    return resolveMountForAbs(this.settings.externalMounts ?? [], abs);
+  }
+
+  /** omnisearch 的库外重索引（去抖 3s；挂载刷新/设置变化都会触发）。 */
+  private omnisearchReindexTimer: number | null = null;
+
+  private scheduleOmnisearchExternalReindex(): void {
+    if (this.omnisearchReindexTimer !== null) window.clearTimeout(this.omnisearchReindexTimer);
+    this.omnisearchReindexTimer = window.setTimeout(() => {
+      this.omnisearchReindexTimer = null;
+      try {
+        const omni = (
+          this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } }
+        ).plugins?.plugins?.['omnisearch'] as { reindexExternalFiles?: () => Promise<void> } | undefined;
+        void omni?.reindexExternalFiles?.();
+      } catch {
+        // omnisearch 不在（未启用/旧版）时静默——软依赖。
+      }
+    }, 3000);
   }
 
   /**

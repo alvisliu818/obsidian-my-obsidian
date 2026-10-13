@@ -2,10 +2,12 @@ import {
   type App,
   type CachedMetadata,
   MarkdownView,
+  Notice,
   TFile,
 } from 'obsidian'
 import OmnisearchPlugin from '../main'
 import type { ResultNote } from '../globals'
+import { absFromExternalDocPath, isExternalDocPath } from './externalDocs'
 
 /**
  * Extracts the PDF page number from content based on the offset, looking for page markers in format: `^# Page N^page=N$`
@@ -37,6 +39,30 @@ export async function openNote(
   newLeaf = false
 ): Promise<void> {
   const app = plugin.app
+  // 库外文件（虚拟文档树挂载）：交给 logseq 模块打开——md 进块编辑器、文本进
+  // 代码编辑器、其余按它自己的路由。软依赖：logseq 不在时回退系统默认应用。
+  if (isExternalDocPath(item.path)) {
+    const abs = absFromExternalDocPath(item.path)
+    const lg = (app as any).plugins?.plugins?.['obsidian-logseq']
+    const hit = lg?.resolveExternalMount?.(abs) ?? null
+    if (hit && typeof lg.openExternalEntry === 'function') {
+      const name = abs.split('/').pop() ?? abs
+      await lg.openExternalEntry(hit.mount, {
+        name,
+        rel: hit.rel,
+        abs,
+        isDir: false,
+        children: [],
+      })
+      return
+    }
+    if (typeof lg?.openWithSystem === 'function') {
+      lg.openWithSystem(abs)
+      return
+    }
+    new Notice(`无法打开库外文件：${abs}`)
+    return
+  }
   // We don't have a way to switch pages on a PDF view, so we must open a new pane for PDF results to trigger page navigation
   // We should only trigger this behaviour if we know the page number for the result
   // This code runs before the normal implementation because we don't want to trigger activation of an existing pane for this PDF and then open a new one on top

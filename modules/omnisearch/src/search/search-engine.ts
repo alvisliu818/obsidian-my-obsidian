@@ -9,6 +9,7 @@ import {
   type IndexedDocument,
   type ResultNote,
 } from '../globals'
+import { isExternalDocPath } from '../tools/externalDocs'
 
 import {
   chunkArray,
@@ -35,6 +36,13 @@ export class SearchEngine {
   constructor(protected plugin: OmnisearchPlugin) {
     this.tokenizer = new Tokenizer(plugin)
     this.minisearch = new MiniSearch(this.getOptions())
+  }
+
+  /** 合并新增：索引里现有的库外文件（ext: 伪路径）——重索引时求增删差集用。 */
+  getExternalIndexedDocs(): DocumentRef[] {
+    return [...this.indexedDocuments]
+      .filter(([p]) => p.startsWith('ext:'))
+      .map(([path, mtime]) => ({ path, mtime }))
   }
 
   /**
@@ -120,8 +128,11 @@ export class SearchEngine {
       // Its delete handler ran before the doc was in minisearch,
       // so it couldn't discard it.
       // Remove vanished files now to avoid keeping stale entries.
+      // 库外文件（ext: 伪路径）不在 vault 里，豁免这条“文件已消失”的清理。
       const deleted = docs.filter(
-        doc => !this.plugin.app.vault.getAbstractFileByPath(doc.path)
+        doc =>
+          !isExternalDocPath(doc.path) &&
+          !this.plugin.app.vault.getAbstractFileByPath(doc.path)
       )
       if (deleted.length) {
         this.removeFromPaths(deleted.map(doc => doc.path))

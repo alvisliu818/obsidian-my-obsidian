@@ -2,6 +2,7 @@ import { normalizePath, TFile } from 'obsidian'
 import type { CanvasData } from 'obsidian/canvas'
 import type { IndexedDocument } from '../globals'
 import type OmnisearchPlugin from '../main'
+import { absFromExternalDocPath, isExternalDocPath } from '../tools/externalDocs'
 import {
   countError,
   extractHeadingsFromCache,
@@ -87,6 +88,10 @@ export class DocumentsRepository {
   private async getAndMapIndexedDocument(
     path: string
   ): Promise<IndexedDocument> {
+    // 库外文件（ext: 伪路径）：读磁盘，不走 vault API。
+    if (isExternalDocPath(path)) {
+      return this.getExternalIndexedDocument(path)
+    }
     path = normalizePath(path)
     const app = this.plugin.app
     const file = app.vault.getAbstractFileByPath(path)
@@ -250,6 +255,44 @@ export class DocumentsRepository {
       headings3: metadata
         ? extractHeadingsFromCache(metadata, 3).join(' ')
         : '',
+    }
+  }
+
+  /**
+   * 库外文件（虚拟文档树挂载）的 IndexedDocument：Node fs 直读。
+   *
+   * 没有 metadataCache，所以标签/标题/别名为空；文件名本身参与索引
+   * （minisearch 对 basename 有权重），内容按明文读。
+   */
+  private getExternalIndexedDocument(path: string): IndexedDocument {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = eval('require')('fs') as {
+      readFileSync(p: string, enc: 'utf8'): string
+      statSync(p: string): { mtimeMs?: number }
+    }
+    const abs = absFromExternalDocPath(path)
+    const content = fs.readFileSync(abs, 'utf8')
+    const name = abs.split('/').pop() ?? abs
+    const dot = name.lastIndexOf('.')
+    let mtime = 0
+    try {
+      mtime = Math.round(fs.statSync(abs).mtimeMs ?? 0)
+    } catch {
+      // stat 失败不影响索引，mtime=0 会让下次重建时重读一遍，无害
+    }
+    return {
+      basename: dot > 0 ? name.slice(0, dot) : name,
+      displayTitle: '',
+      content,
+      path,
+      mtime,
+
+      tags: [],
+      unmarkedTags: [],
+      aliases: '',
+      headings1: '',
+      headings2: '',
+      headings3: '',
     }
   }
 }
