@@ -84,17 +84,24 @@ export function handleEnter(view: EditorView, host: BlockRenderHost): boolean {
 export function handleTab(view: EditorView, host: BlockRenderHost, shift: boolean): boolean {
   const b = focusedBlock(host);
   if (!b) return false;
+  // 多选优先（安全网）：鼠标进入编辑态会清空选集（focusBlockFromClick），
+  // 所以正常不会两者并存；但命令/键盘等路径可能留下"编辑中 + 多选"，此时
+  // Tab 必须作用于整个选集，而不是只缩进焦点块——那正是"多选缩进坏了"的
+  // 经典误判。mutate 会先提交焦点块文本，行为与选集路径一致。
+  if (host.selectedBlocks.size > 1 && typeof host.indentSelected === 'function') {
+    host.indentSelected(shift);
+    return true;
+  }
   if (b.kind === 'raw') {
-    // 保真模式下正文是逐字段：普通段落/标题按 Tab 是"显式结构操作"——转成
-    // 大纲块再缩进（与 Enter 的 splitRawToOutline 同一套语义）。代码、表格、
-    // 公式没有大纲形态，保持字面缩进（Shift+Tab 对它们无事可做）。
+    // 保真模式下正文是逐字段：普通段落/标题/代码块按 Tab 是"显式结构操作"——
+    // indentBlock 内部先把它提升为大纲块再缩进（预检不过就整体不动，不会留下
+    // 半成品）。表格、公式、引用、媒体没有稳定的大纲形态，保持字面缩进。
     const bt = blockTypeOf(b);
-    if (bt === 'paragraph' || bt === 'heading') {
+    if (bt === 'paragraph' || bt === 'heading' || bt === 'code') {
       const offset = view.state.selection.main.head;
       const parent = b.parent;
       host.mutate(
         () => {
-          b.kind = 'list';
           if (shift) outdent(b);
           else indentBlock(b);
         },

@@ -70,6 +70,11 @@ export interface BlockRenderHost extends Component {
   commitFocusedText(): void;
   /** 按 selectedBlocks 重刷 DOM 选中类(块级命令后同步视觉) */
   syncSelectionClasses(): void;
+  /**
+   * 多选块的批量缩进/取消缩进。编辑态按 Tab 时若存在多选，键位会把事件路由到
+   * 这里（否则 CM6 只会缩进焦点块，多选像坏了一样）。可选：片段编辑器不实现。
+   */
+  indentSelected?(shift: boolean): void;
   focusBlock(b: Block, pos?: CursorPos): void;
   focusBlockFromClick(b: Block, ev: MouseEvent): void;
   selectFromClick(b: Block, ev: MouseEvent): void;

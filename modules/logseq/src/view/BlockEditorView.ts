@@ -17,7 +17,6 @@ import { parseDocument } from '../core/parser';
 import { clearLogseqPageProps, registerLogseqPageProps } from '../pagePropsRegistry';
 import { serializeBlock, serializeDocument } from '../core/serializer';
 import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indentBlock, isDescendant, linkParents, moveBlockGroup, moveBlockVertically, outdent, pseudoRootOf, rangeAnchor, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, visibleRange, type MovePosition } from '../core/treeOps';
-import { blockTypeOf } from '../blocks/blockTypes';
 import { foldLevelOf, foldValueFor, nextFoldLevel, normFoldKey, subtreeFoldTargets, type FoldLevel } from '../core/fold';
 import { UndoStack } from '../state/undoStack';
 import {
@@ -2327,38 +2326,47 @@ ${content}`;
 
   indentSelected(shift: boolean): void {
     const moved: Block[] = [];
+    let refused = 0;
     this.mutate(
       () => {
         // 缩进/取消缩进按文档顺序（outdent 反过来：每个块相对于可能刚移动过的
-        // 前一个兄弟）。保真模式下正文是逐字段，普通段落/标题也是合法目标——
-        // 结构操作把它转成大纲块（这正是"显式动作才转换"的语义）；代码、表格、
-        // 公式等没有大纲形态，跳过。
+        // 前一个兄弟）。indentBlock 自己会把逐字段的段落/标题/代码提升成大纲块
+        // （Tab 就是"显式结构操作"），表格/公式/引用/图片没有稳定的大纲形态，
+        // 会被拒绝并在下面统一告知原因。
         const tops = this.topSelectedBlocks();
         const seq = shift ? [...tops].reverse() : tops;
         for (const b of seq) {
-          if (shift) {
-            if (outdent(b)) moved.push(b);
-          } else {
-            if (b.kind === 'raw') {
-              const t = blockTypeOf(b);
-              if (t !== 'paragraph' && t !== 'heading') continue;
-              b.kind = 'list';
-            }
-            if (indentBlock(b)) moved.push(b);
-          }
+          if (shift ? outdent(b) : indentBlock(b)) moved.push(b);
+          else refused++;
         }
       },
       () => ({ full: true }),
     );
     // 选集收敛到**真正移动过**的块。锚点父块不动却留在选集里，会让紧接着的
     // Shift+Tab 变成"对根级块 outdent"的空操作——取消缩进按不动的典型病因。
-    // 选集空了（比如选的是代码块）则什么都不做。
     this.selectedBlocks = new Set(moved);
     this.syncSelectionClasses();
-    // The patch above forces a full re-render, so the selection's keyboard
-    // focus has to be re-asserted — otherwise the SECOND Tab (and every one
-    // after it) goes nowhere and the shortcut looks like it worked only once.
-    if (moved.length > 0) this.focusTreeForSelection();
+    if (moved.length > 0) {
+      // The patch above forces a full re-render, so the selection's keyboard
+      // focus has to be re-asserted — otherwise the SECOND Tab (and every one
+      // after it) goes nowhere and the shortcut looks like it worked only once.
+      this.focusTreeForSelection();
+      if (refused > 0) {
+        // 部分成功也要说清楚：哪类块动不了，否则用户只会觉得"时好时坏"。
+        new Notice(
+          shift
+            ? `已取消缩进 ${moved.length} 个块；${refused} 个已在最顶层。`
+            : `已缩进 ${moved.length} 个块；${refused} 个动不了（没有前一个兄弟，或是表格/公式/引用/图片等不能转大纲的块）。`,
+        );
+      }
+    } else if (refused > 0) {
+      // 静默失败是"多选缩进没反应"最大的抱怨源：说清楚为什么动不了。
+      new Notice(
+        shift
+          ? '无法取消缩进：选中的块已经在最顶层。'
+          : '无法缩进：需要一个前一个兄弟块作为父级；表格、公式、引用、图片等块不能转成大纲项。',
+      );
+    }
   }
 
   /** Bulk move: up passes top-down, down passes bottom-up. */

@@ -245,29 +245,44 @@ export function indent(b: Block, roots?: Block[]): boolean {
 }
 
 /**
- * 保真模式的转换点：把逐字段的普通段落/标题提升为大纲块。
- * 代码、表格、公式、媒体等没有大纲形态，返回 false（调用方应放弃缩进）。
+ * 保真模式的转换点：把逐字段提升为大纲块（结构操作的转换点）。
+ *
+ * 放行：
+ *  - paragraph / heading：文本原样变成列表项；
+ *  - code：整个围栏变成列表项的文本（`- ```python ... ``` `），解析器的
+ *    `- ```sql` 分支能原样读回来，往返稳定。
+ * 拒绝（返回 false）：表格、公式、引用、HTML、媒体——它们没有稳定的列表项
+ * 形态（缩进的表格会被解析成上一个块的软行，往返会变树）。
  * 已经是大纲块时原样返回 true。
  */
 export function promoteRawToOutline(b: Block): boolean {
-  if (b.kind !== 'raw') return true;
-  const t = blockTypeOf(b);
-  if (t !== 'paragraph' && t !== 'heading') return false;
-  b.kind = 'list';
+  if (!canPromoteRawToOutline(b)) return false;
+  if (b.kind === 'raw') b.kind = 'list';
   return true;
 }
 
+/** 不改变任何状态的预检：这个逐字段能不能提升为大纲块。 */
+function canPromoteRawToOutline(b: Block): boolean {
+  if (b.kind !== 'raw') return true;
+  const t = blockTypeOf(b);
+  return t === 'paragraph' || t === 'heading' || t === 'code';
+}
+
 /**
- * 缩进，并保证父块是大纲块：前一个兄弟是逐字段段落/标题时先提升它
- * （Tab 是显式结构操作）。没有前一个兄弟、或前一个兄弟是不能提升的逐字段
- * （代码/表格/公式）时返回 false。
+ * 缩进，并保证父子两边都是大纲块：前一个兄弟是逐字段时先提升它，自己也是
+ * 逐字段时同样先提升（Tab 是显式结构操作）。没有前一个兄弟、或某一侧是不
+ * 能提升的逐字段（表格/公式/引用/媒体）时返回 false。
  */
 export function indentBlock(b: Block): boolean {
   const sibs = siblingsOf(b);
   const idx = sibs.indexOf(b);
   if (idx <= 0) return false;
   const prev = sibs[idx - 1];
-  if (!promoteRawToOutline(prev)) return false;
+  // 先预检再动手：任一侧不能提升就整体放弃，不会留下"转了却没动"的半成品。
+  if (!canPromoteRawToOutline(prev)) return false;
+  if (!canPromoteRawToOutline(b)) return false;
+  promoteRawToOutline(prev);
+  promoteRawToOutline(b);
   return indent(b);
 }
 
