@@ -3856,6 +3856,16 @@ body.lgp-table-editor-cursor * {
 .logseq-mount-row:hover {
   background-color: var(--nav-item-background-hover, var(--background-modifier-hover));
 }
+/* 当前行（Ctrl+C/V 的锚点）：比 hover 弱一档的底色，点过的行有归宿感。 */
+.logseq-mount-head.is-current,
+.logseq-mount-row.is-current {
+  background-color: var(--nav-item-background-active, var(--background-modifier-active-hover));
+}
+.logseq-mount-head.is-current .logseq-mount-name,
+.logseq-mount-row.is-current .logseq-mount-name {
+  color: var(--nav-item-color-active, var(--text-normal));
+  font-weight: var(--font-medium);
+}
 .logseq-mount-head {
   font-weight: var(--font-semibold);
 }

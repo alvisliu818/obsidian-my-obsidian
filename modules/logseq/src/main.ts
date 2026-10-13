@@ -103,6 +103,12 @@ export default class LogseqEditorPlugin extends Plugin {
   opLogPending: OperationRecord[] = [];
   /** Set when a block reference should be revealed after opening a file. */
   pendingReveal: { path: string; blockId: string } | null = null;
+  /**
+   * 虚拟文档树的复制剪贴板（Ctrl+C 复制、Ctrl+V 粘贴）。挂在插件上而非面板上：
+   * 面板重开不失，跨面板/跨挂载也能粘贴。剪贴的是绝对路径——磁盘上真实的
+   * 文件，粘贴走 Node fs 的 copyEntry（文件夹递归、二进制安全）。
+   */
+  mountClipboard: { abs: string; isDir: boolean; name: string } | null = null;
   /** Constructor of Obsidian's native properties editor (grabbed off a live instance). */
   nativePropsCtor: unknown = null;
   private nativePropsCtorPromise: Promise<unknown> | null = null;

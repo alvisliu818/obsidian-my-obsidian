@@ -29,6 +29,7 @@ import {
 } from '../features/mountFilter';
 import {
   MOUNT_FOLDER,
+  copyEntry,
   createEmptyFile,
   createLink,
   ensureDirX,
@@ -110,6 +111,9 @@ export class MountPanelView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    // 键盘焦点：树要能收 Ctrl+C/V，容器必须先可聚焦。点行时也会把焦点抓过来。
+    this.contentEl.tabIndex = 0;
+    this.contentEl.addEventListener('keydown', (ev) => this.onPanelKeydown(ev as KeyboardEvent));
     this.render();
   }
 
@@ -512,7 +516,9 @@ export class MountPanelView extends ItemView {
     // 定位当前文件时按挂载找到区段、再按固定行高算偏移。
     section.dataset.mountId = mount.id;
 
-    const head = section.createDiv({ cls: 'logseq-mount-head' });
+    const head = section.createDiv({
+      cls: 'logseq-mount-head' + (this.current?.mountId === mount.id && this.current?.rel === null ? ' is-current' : ''),
+    });
     const caret = head.createSpan({ cls: 'logseq-mount-caret' });
     const state = this.scan(mount);
     caret.textContent = state.open.has('') ? '▾' : '▸';
@@ -532,6 +538,10 @@ export class MountPanelView extends ItemView {
     );
     head.createSpan({ cls: 'logseq-mount-name', text: headLabel });
     if (mount.pinned) head.createSpan({ cls: 'logseq-mount-flag is-pinned', text: '已固定' });
+    head.addEventListener('mousedown', () => {
+      this.setCurrent(mount.id, null);
+      this.contentEl.focus();
+    });
     head.addEventListener('click', () => {
       if (state.open.has('')) state.open.delete('');
       else state.open.add('');
@@ -636,12 +646,19 @@ export class MountPanelView extends ItemView {
 
   private renderNode(parent: HTMLElement, mount: ExternalMount, node: MountNode, state: MountState, depth: number): void {
     const isOpen = state.open.has(node.rel);
+    const isCurrent = this.current?.mountId === mount.id && this.current?.rel === node.rel;
     const row = parent.createDiv({
-      cls: 'logseq-mount-row ' + (node.isDir ? 'is-dir' : 'is-file'),
+      cls: 'logseq-mount-row ' + (node.isDir ? 'is-dir' : 'is-file') + (isCurrent ? ' is-current' : ''),
     });
     // 定位与测试用：行级身份（挂载 + 相对路径）。
     row.dataset.mount = mount.id;
     row.dataset.rel = node.rel;
+    // 点击/右键都会把这行设为「当前行」——Ctrl+C/V 的锚点。mousedown 而不是
+    // click：click 会打开文件/切换折叠，锚点却应该在任何按下时就位。
+    row.addEventListener('mousedown', () => {
+      this.setCurrent(mount.id, node.rel);
+      this.contentEl.focus();
+    });
     // Native-explorer rhythm, pulled 10px left as a whole (user preference):
     // folder rows carry a 14px caret gutter, FILE rows the same gutter plus
     // the caret's width (11px + 4px gap), so the file ICON aligns with the
@@ -1023,6 +1040,26 @@ export class MountPanelView extends ItemView {
     const canNew = node === null || node.isDir || true; // 文件也能在其上级新建,始终给
     void canNew;
 
+    // ---- 复制 / 粘贴（Ctrl+C / Ctrl+V 的菜单形态，同一套代码） ----
+    if (node) {
+      menu.addItem((item) =>
+        item
+          .setTitle('复制')
+          .setIcon('copy' as never)
+          .onClick(() => this.copyNode(node)),
+      );
+    }
+    const clip = this.plugin.mountClipboard;
+    if (clip) {
+      menu.addItem((item) =>
+        item
+          .setTitle(`粘贴「${clip.name}」`)
+          .setIcon('clipboard-paste' as never)
+          .onClick(() => this.pasteInto(mount, node)),
+      );
+    }
+    if (node || clip) menu.addSeparator();
+
     menu.addItem((item) =>
       item
         .setTitle('新建文件')
@@ -1057,6 +1094,97 @@ export class MountPanelView extends ItemView {
     if (openRel) st?.open.add(openRel);
     this.scan(mount, true);
     this.render();
+  }
+
+  // ------------------------------------------------------------------
+  // 复制 / 粘贴（Ctrl+C / Ctrl+V）
+  // ------------------------------------------------------------------
+
+  /** 当前焦点行（Ctrl+C/V 的锚点）；rel 为 null 表示挂载头（= 挂载根）。 */
+  private current: { mountId: string; rel: string | null } | null = null;
+
+  /** 设当前行并即时更新高亮（重渲染时 renderNode 会按 current 补类）。 */
+  private setCurrent(mountId: string, rel: string | null): void {
+    this.current = { mountId, rel };
+    // 即时反馈：不等下一次 render。旧行（包括挂载头）的高亮先全部撤掉。
+    for (const el of this.contentEl.querySelectorAll('.is-current')) {
+      el.classList.remove('is-current');
+    }
+    const root = this.contentEl.querySelector(
+      rel === null
+        ? `.logseq-mount-section[data-mount-id="${mountId}"] > .logseq-mount-head`
+        : `.logseq-mount-row[data-mount="${mountId}"][data-rel="${CSS.escape(rel)}"]`,
+    );
+    root?.classList.add('is-current');
+  }
+
+  /** 把当前行解析回挂载与节点；行已不存在（重扫描后被删）时返回 null。 */
+  private resolveCurrent(): { mount: ExternalMount; node: MountNode | null } | null {
+    if (!this.current) return null;
+    const mount = (this.plugin.settings.externalMounts ?? []).find((m) => m.id === this.current?.mountId);
+    if (!mount) return null;
+    if (this.current.rel === null) return { mount, node: null };
+    const st = this.states.get(mount.id);
+    const node = st ? findNode(st.tree, this.current.rel) : null;
+    return node ? { mount, node } : null;
+  }
+
+  private onPanelKeydown(e: KeyboardEvent): void {
+    const mod = e.ctrlKey || e.metaKey;
+    if (!mod) return;
+    const key = e.key.toLowerCase();
+    if (key === 'c') {
+      e.preventDefault();
+      this.copyCurrent();
+    } else if (key === 'v') {
+      e.preventDefault();
+      this.pasteCurrent();
+    }
+  }
+
+  private copyCurrent(): void {
+    const hit = this.resolveCurrent();
+    if (!hit?.node) {
+      new Notice('先在树上点选一个文件或文件夹。');
+      return;
+    }
+    this.copyNode(hit.node);
+  }
+
+  private copyNode(node: MountNode): void {
+    this.plugin.mountClipboard = { abs: node.abs, isDir: node.isDir, name: node.name };
+    new Notice(node.isDir ? `已复制文件夹「${node.name}」` : `已复制「${node.name}」`);
+  }
+
+  private pasteCurrent(): void {
+    const hit = this.resolveCurrent();
+    if (!hit) {
+      new Notice('先在树上点选一个粘贴位置。');
+      return;
+    }
+    this.pasteInto(hit.mount, hit.node);
+  }
+
+  /**
+   * 粘贴：文件/文件夹进目标目录（文件夹节点进它自己，文件节点进上级，
+   * 挂载根进根）。撞名自动加序号；文件夹递归、二进制安全（copyEntry）。
+   */
+  private pasteInto(mount: ExternalMount, node: MountNode | null): void {
+    const clip = this.plugin.mountClipboard;
+    if (!clip) {
+      new Notice('剪贴板是空的——先在树上 Ctrl+C 复制一个文件或文件夹。');
+      return;
+    }
+    const dirAbs = node?.isDir ? node.abs : node ? parentAbsOf(node.rel, mount.path) : mount.path;
+    const dirRel = node?.isDir ? node.rel : node ? parentRelOf(node.rel) : '';
+    const r = copyEntry(clip.abs, dirAbs);
+    if (!r.ok) {
+      new Notice(`粘贴失败：${r.error ?? '未知错误'}`);
+      return;
+    }
+    const finalName = r.target?.split(/[\\/]/).pop() ?? '';
+    new Notice(`已粘贴为「${finalName}」`);
+    this.rescan(mount, dirRel);
   }
 
   private promptNewFile(mount: ExternalMount, dirAbs: string, dirRel: string): void {
