@@ -14,5 +14,7 @@
   `externalScheduler.ts`）、标签页未保存圆点（`tabUnsavedDot.ts`）、
   关闭标签页提示（`closePrompt.ts`）、设置项合并与开关（`settings.ts`）。
 - 上游原始提交历史以 subtree 保留：save-history 在 `modules/save-control`
-  前缀下，autosave-control 在 `modules/autosave-control` 前缀下（查历史用
-  `git log --full-history --follow`）。
+  前缀下（查历史用 `git log --full-history --follow`）；autosave-control
+  的目录在合并完成后已移除（工作树不再保留独立副本），其快照仍可经
+  `git show a8799b7` 查看全部 52 个文件，`git log --full-history --
+  modules/autosave-control` 仍能定位引入点。
