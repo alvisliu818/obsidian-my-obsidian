@@ -1,0 +1,373 @@
+import { Key, ChainablePromiseElement } from 'webdriverio'
+import { ConfigItem } from 'obsidian-typings'
+import type { OpenTabSettingsPluginSettings } from "../../src/settings.js"
+import { equals } from "@jest/expect-utils";
+import { WorkspaceTabs, WorkspaceLeaf, WorkspaceParent } from 'obsidian';
+import { obsidianPage } from 'wdio-obsidian-service';
+import path from "path";
+
+type LeafInfo = {
+    id: string,
+    parent: string, root: string, container: string,
+    type: string, file: string,
+    deferred: boolean, pinned: boolean,
+    /** True if this leaf is the globally focused leaf */
+    active: boolean,
+    /** True if this leaf is selected within its tab group */
+    currentTab: boolean,
+    isPreview: boolean,
+    tabHeaderElClasses: string[], tabHeaderElTextContent: string,
+    containerElClasses: string[], containerElIsVisible: boolean,
+}
+
+class WorkspacePage {
+    async setSettings(settings: Partial<OpenTabSettingsPluginSettings>) {
+        await browser.executeObsidian(async ({plugins}, settings) => {
+            await plugins.openTabSettings.updateSettings(settings);
+        }, settings);
+    }
+
+    async setSettingsDefaults(settings: Partial<OpenTabSettingsPluginSettings>) {
+        const defaults: OpenTabSettingsPluginSettings = {
+            openInNewTab: true,
+            previewTabs: false,
+            deduplicateTabs: true,
+            deduplicateAcrossTabGroups: true,
+            newTabPlacement: "afterActive",
+            newTabTabGroupPlacement: "same",
+            modClickBehavior: "tab",
+        }
+        this.setSettings({...defaults, ...settings});
+    }
+
+    async loadPlatformWorkspaceLayout(layout: string) {
+        const platform = await obsidianPage.getPlatform();
+        if (platform.isPhone) {
+            layout = layout + "-phone";
+        } else if (platform.isTablet) {
+            layout = layout + "-tablet";
+        }
+        await obsidianPage.loadWorkspaceLayout(layout);
+    }
+
+    /**
+     * Opens a file in a new tab.
+     * 
+     * Normally I'd just use `wdio-obsidian-service` `obsidianPage.openFile`, but that method uses `getLeaf`, which we
+     * are patching. So this plugin uses its own openFile that bypasses our patch so openFile behavior isn't affected
+     * by the settings.
+     */
+    async openFile(path: string) {
+        await browser.executeObsidian(async ({app, obsidian}, path) => {
+            const file = app.vault.getAbstractFileByPath(path);
+            if (file instanceof obsidian.TFile) {
+                const leaf = app.workspace.createLeafInTabGroup();
+                await leaf.openFile(file);
+                app.workspace.setActiveLeaf(leaf, {focus: true});
+            } else {
+                throw Error(`No file ${path} exists`);
+            }
+        }, path)
+    }
+
+    /**
+     * Get all leaves in the rootSplit or floating windows, excluding sidebars.
+     * Results are grouped by tab pane.
+     */
+    async getAllLeaves(): Promise<LeafInfo[][]> {
+        return await browser.executeObsidian(({app, obsidian}) => {
+            const tabGroups: WorkspaceParent[] = [];
+            
+            // I'm assuming iterateAllLeaves goes in the natural order, which it seems to
+            app.workspace.iterateAllLeaves(leaf => {
+                const root = leaf.getRoot();
+                // Don't include sidebars and such, but do include popout windows
+                if (root instanceof obsidian.WorkspaceRoot || root instanceof obsidian.WorkspaceFloating) {
+                    if (!tabGroups.includes(leaf.parent)) {
+                        tabGroups.push(leaf.parent);
+                    }
+                }
+            });
+
+            const activeLeaf = app.workspace.getActiveViewOfType(obsidian.View)!.leaf;
+
+            return tabGroups.map(group =>
+                (group.children as WorkspaceLeaf[]).map(leaf => {
+                    return {
+                        parent: leaf.parent.id,
+                        id: leaf.id,
+                        root: leaf.getRoot().id, container: leaf.getContainer().id,
+                        type: leaf.view.getViewType(),
+                        file: (leaf.getViewState()?.state?.file ?? "") as string,
+                        deferred: leaf.isDeferred, pinned: leaf.pinned,
+                        active: activeLeaf == leaf,
+                        currentTab: leaf.parent.children.indexOf(leaf) === (leaf.parent as WorkspaceTabs).currentTab,
+                        isPreview: leaf.openTabSettings?.isPreview ?? false,
+                        tabHeaderElClasses: [...leaf.tabHeaderEl.classList],
+                        tabHeaderElTextContent: leaf.tabHeaderEl.textContent,
+                        containerElClasses: [...leaf.containerEl.classList],
+                        containerElIsVisible: leaf.containerEl.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}),
+                    };
+                })
+            );
+        });
+    }
+
+    /**
+     * Returns leaf for a path. Can also be passed the id directly in which case it returns the id if it exists.
+     * @param pathOrId 
+     */
+
+    async getLeaf(pathOrId: string): Promise<LeafInfo> {
+        const allLeaves = (await this.getAllLeaves()).flatMap(l => l);
+        const matches = allLeaves.filter(l => l.id == pathOrId ||l.file == pathOrId);
+        if (matches.length < 1) {
+            throw new Error(`No leaf for ${pathOrId} found`)
+        } else if (matches.length > 1) {
+            throw new Error(`Multiple leaves for ${pathOrId} found`)
+        }
+        return matches[0];
+    }
+
+    async getActiveLeaf(): Promise<LeafInfo> {
+        const allLeaves = (await this.getAllLeaves()).flatMap(l => l);
+        return allLeaves.find(l => l.active)!;
+    }
+
+    /** Seems like there should be a built-in WebdriverIO way to do this... */
+    async waitUntilEqual(func: () => any, expected: any) {
+        let result: any
+        try {
+            await browser.waitUntil(async () => {
+                result = await func();
+                return equals(result, expected);
+            });
+        } catch {}
+        // Call expect again, this will give us nice error messages if value doesn't match.
+        expect(result).toEqual(expected);
+    }
+
+    /** Match against leaves */
+    async matchWorkspace(expected: Partial<LeafInfo>[][]) {
+        const matcher = expected.map(g => g.map(l => expect.objectContaining(l)));
+        let actual: LeafInfo[][] = [];
+        const check = (actual: LeafInfo[][]) => {
+            if (!equals(actual, matcher)) {
+                // Show a pretty error message with only the relevant keys
+                const keys = [...new Set(expected.flat().flatMap(l => Object.keys(l)))];
+                const filteredActual = actual.map(group =>
+                    group.map(leaf => Object.fromEntries(keys.map(k => [k, leaf[k as keyof LeafInfo]])),
+                ));
+
+                throw new Error(
+                    "Workspace did not match!\n\n" +
+                    "Expected:\n" + JSON.stringify(expected, null, 2) + "\n\n" +
+                    "Actual:\n" + JSON.stringify(filteredActual, null, 2),
+                );
+            }
+
+            // sanity checks to make sure the active tabs are in fact visible and not out of sync with the DOM
+            for (const tabGroup of actual) {
+                for (const leaf of tabGroup) {
+                    if (leaf.currentTab) {
+                        expect(leaf.tabHeaderElClasses).toContain("is-active");
+                    } else {
+                        expect(leaf.tabHeaderElClasses).not.toContain("is-active");
+                    }
+                    if (leaf.active) {
+                        expect(leaf.currentTab).toBe(true);
+                        expect(leaf.containerElClasses).toContain("mod-active");
+                        expect(leaf.containerElIsVisible).toBe(true);
+                    } else {
+                        expect(leaf.containerElClasses).not.toContain("mod-active");
+                    }
+                    if (leaf.type == "markdown") {
+                        expect(leaf.tabHeaderElTextContent.trim()).toBe(path.parse(leaf.file).name);
+                    } else if (leaf.type == "empty") {
+                        expect(leaf.tabHeaderElTextContent.trim()).toBe("New tab");
+                    } else {
+                        expect(leaf.tabHeaderElTextContent.trim()).not.toBe("");
+                    }
+                }
+            }
+        }
+
+        try {
+            await browser.waitUntil(async () => {
+                actual = await this.getAllLeaves();
+                check(actual);
+                return true;
+            });
+        } catch {}
+        check(actual); // call again to get better error message
+    }
+
+    /**
+     * Focuses tab containing file.
+     */
+    async setActiveFile(pathOrId: string) {
+        const leafInfo = await this.getLeaf(pathOrId);
+        await browser.executeObsidian(({app}, leafInfo) => {
+            const leaf = app.workspace.getLeafById(leafInfo.id)!
+            app.workspace.setActiveLeaf(leaf, {focus: true});
+        }, leafInfo);
+        await browser.waitUntil(async () => (await this.getActiveLeaf()).id == leafInfo.id);
+    }
+
+    /**
+     * Pins the specified tab. Note it also focuses the tab.
+     */
+    async pinTab(pathOrId: string) {
+        const leafInfo = await this.getLeaf(pathOrId);
+        await browser.executeObsidian(({app}, leafInfo) => {
+            return app.workspace.getLeafById(leafInfo.id)!.setPinned(true);
+        }, leafInfo);
+    }
+
+    async getLink(text: string): Promise<ChainablePromiseElement> {
+        const activeView = $(await browser.executeObsidian(({app, obsidian}) =>
+            app.workspace.getActiveViewOfType(obsidian.View)!.containerEl
+        ));
+        text = text.replace("#", " > "); // reading mode shows subpaths as " > "
+        // In reading view there's some kind of hidden copy of the link that shows up as well, so we have to filter for
+        // the "internal-link" real one.
+        return activeView.$(`.//a[contains(@class, 'internal-link') and text() = '${text}']`)
+    }
+
+    async openLink(link: ChainablePromiseElement) {
+        await link.click();
+    }
+
+    async openContextMenu(elem: ChainablePromiseElement) {
+        // this requires nativeMenus to be set "false" (see appearance.json)
+        const platform = await obsidianPage.getPlatform();
+        if (platform.isDesktopApp) {
+            await elem.click({button: "right"});
+        } else {
+            // on android, the context menu event is a glitchy and I can't get the longPress to work properly from wdio.
+            // Instead manually trigger it in js:
+            await browser.execute((elem) => {
+                const {bottom, left, right, top} = elem.getBoundingClientRect()
+                const x = (right - left)/2 + left; // get middle
+                const y = (bottom - top)/2 + top;
+                elem.dispatchEvent(new MouseEvent("contextmenu", {
+                    button: 0, buttons: 0,
+                    screenX: x, screenY: y,
+                    bubbles: true, cancelable: true,
+                    clientX: x, clientY: y,
+                }))
+            }, elem);
+        }
+        // Clicking in the mobile drawer context menu thing somehow triggers Rename instead of open in new tab
+        // if I don't wait a bit
+        if (platform.isMobile) {
+            await browser.pause(250);
+        }
+        return browser.$(".menu");
+    }
+
+    async openLinkInNewTab(link: ChainablePromiseElement) {
+        const menu = await this.openContextMenu(link);
+        await menu.$("div.*=Open in new tab").click()
+    }
+
+    async openLinkToRight(link: ChainablePromiseElement) {
+        const menu = await this.openContextMenu(link);
+        await menu.$("div.*=Open to the right").click()
+    }
+
+    async openLinkInNewWindow(link: ChainablePromiseElement) {
+        const menu = await this.openContextMenu(link);
+        await menu.$("div.*=Open in new window").click()
+    }
+
+    async openLinkMenuOption(link: ChainablePromiseElement, item: string) {
+        const menu = await this.openContextMenu(link);
+        await menu.$(`div.*=${item}`).click();
+    }
+
+    async openFileViaQuickSwitcher(path: string): Promise<void> {
+        path = path.replace(/\.md$/, '')
+        await browser.executeObsidianCommand("switcher:open");
+        await browser.keys(path);
+        await browser.keys(Key.Enter);
+
+        if ((await obsidianPage.getPlatform()).isMobile) {
+            await browser.pause(500); // have to wait a bit for the animation to complete
+        }
+    }
+
+    async openFileViaFileExplorer(path: string): Promise<void> {
+        const expandAllButton = $(".nav-action-button[aria-label='Expand all']");
+        if (await expandAllButton.isExisting()) {
+            await expandAllButton.click()
+        }
+        const platform = await obsidianPage.getPlatform();
+        if (platform.isTablet) {
+            await browser.$(".sidebar-toggle-button").click();
+        } else if (platform.isMobile) {
+            await browser.$(".mod-left-split-toggle").click();
+            await browser.pause(250);
+        }
+        await $(`.nav-files-container [data-path='${path}']`).click()
+    }
+
+    async setConfig(name: ConfigItem, value: any) {
+        await browser.executeObsidian(({app}, name, value) => {
+            app.vault.setConfig(name, value);
+        }, name, value)
+    }
+
+    /** Replaces the leaf's content */
+    async editLeaf(pathOrId: string, text: string) {
+        const leafInfo = await workspacePage.getLeaf(pathOrId);
+        await browser.executeObsidian(async ({app, obsidian}, leafInfo, text) => {
+            const leaf = app.workspace.getLeafById(leafInfo.id)!;
+            app.workspace.setActiveLeaf(leaf, {focus: true});
+            await leaf.view.setState({...leaf.view.getState(), mode: "source"}, {history: false});
+            if (leaf.view instanceof obsidian.MarkdownView) {
+                leaf.view.editor.replaceSelection(text);
+            } else {
+                throw Error("Not a markdown view")
+            }
+        }, leafInfo, text);
+    }
+
+    /** double click on the leaf's tab header (for testing tab preview) */
+    async doubleClickTab(pathOrId: string) {
+        const leafInfo = await workspacePage.getLeaf(pathOrId);
+        await browser.executeObsidian(({app}, leafInfo) => {
+            const elem = app.workspace.getLeafById(leafInfo.id)!.tabHeaderEl;
+            elem.dispatchEvent(new MouseEvent("dblclick", {bubbles: true}));
+        }, leafInfo);
+    }
+
+    private mainWindowHandle: string|undefined;
+
+    /** Returns the main window */
+    async getMainWindowHandle() {
+        const windowHandles = await browser.getWindowHandles();
+        if (!this.mainWindowHandle || !windowHandles.includes(this.mainWindowHandle)) {
+            const currentWindow = await browser.getWindowHandle();
+            for (const windowHandle of windowHandles) {
+                await browser.switchToWindow(windowHandle);
+                const isMain = await browser.executeObsidian(({app}) => (app.workspace.rootSplit.win == window));
+                if (isMain) {
+                    this.mainWindowHandle = windowHandle;
+                    break;
+                }
+            }
+            await browser.switchToWindow(currentWindow);
+        }
+        return this.mainWindowHandle!;
+    }
+
+    /** Gets all window handles, the main window will always be first */
+    async getWindowHandles() {
+        const mainWindow = await this.getMainWindowHandle();
+        return [mainWindow, ...(await browser.getWindowHandles()).filter(h => h != mainWindow)];
+    }
+}
+
+const workspacePage = new WorkspacePage()
+export default workspacePage;
