@@ -38,6 +38,9 @@ export function resetReferencesCollapse(plugin: LogseqEditorPlugin): void {
  * Render the references area: a wrapper with two toggleable subsections.
  * The linked/unlinked renderers stay unchanged — this only adds the
  * collapsible chrome around them.
+ *
+ * 折叠的区不渲染查询体（懒加载）：默认折叠时打开笔记只画两个标题，不跑
+ * 反链/提及查询；展开的那一次（以及之后处于展开状态的每次重渲染）才查询。
  */
 export function renderPageReferences(
   containerEl: HTMLElement,
@@ -57,7 +60,7 @@ export function renderPageReferences(
   linkedHead.createEl('span', { cls: 'refs-collapse-title', text: 'Linked references' });
   const linkedBody = wrapper.createEl('div', { cls: 'refs-collapse-body' });
   if (state.linked) linkedBody.addClass('is-collapsed');
-  renderPageBacklinks(linkedBody, plugin, currentPath, fileBasename);
+  else renderPageBacklinks(linkedBody, plugin, currentPath, fileBasename);
   linkedHead.addEventListener('click', () => {
     state.linked = !state.linked;
     renderPageReferences(containerEl, plugin, currentPath, fileBasename);
@@ -70,7 +73,7 @@ export function renderPageReferences(
   unlinkedHead.createEl('span', { cls: 'refs-collapse-title', text: 'Unlinked references' });
   const unlinkedBody = wrapper.createEl('div', { cls: 'refs-collapse-body' });
   if (state.unlinked) unlinkedBody.addClass('is-collapsed');
-  renderUnlinkedMentions(unlinkedBody, plugin, currentPath, fileBasename);
+  else renderUnlinkedMentions(unlinkedBody, plugin, currentPath, fileBasename);
   unlinkedHead.addEventListener('click', () => {
     state.unlinked = !state.unlinked;
     renderPageReferences(containerEl, plugin, currentPath, fileBasename);
