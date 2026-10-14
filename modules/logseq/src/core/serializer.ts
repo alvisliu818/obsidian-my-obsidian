@@ -24,18 +24,11 @@ export function serializeDocument(doc: ParsedDocument): string {
   const parts: string[] = [];
   const blocks = doc.blocks;
   /**
-   * 顶层块入列。两个空行来源要合并去重：
-   *  - `blankBefore`（保真模式）：原文里这个块前面有 N 个空行，原样补回；
-   *  - 相邻逐字块规则：两块围栏/表格不能连写，之间必须有空行（默认模式）。
-   * 取两者较大值，且不重复追加。
+   * 顶层块入列：块前面的空行按原文逐字补回（blankBefore，所有模式）。
+   * 历史上的"相邻逐字块强制补 1 个空行"已移除——空行是否存在完全由原文决定。
    */
-  const pushTop = (b: Block, prev?: Block): void => {
-    // need 取两个来源的较大值，直接追加对应数量的空行——中间不能再插"去重"
-    // 判断，否则第二个空行会被自己刚 push 的空串拦掉（连续空行全丢）。
-    const need = Math.max(
-      b.blankBefore ?? 0,
-      prev && prev.kind === 'raw' && b.kind === 'raw' ? 1 : 0,
-    );
+  const pushTop = (b: Block, _prev?: Block): void => {
+    const need = b.blankBefore ?? 0;
     for (let k = 0; k < need; k++) parts.push('');
     parts.push(serializeBlock(b, 0, undefined, unit));
   };

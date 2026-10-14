@@ -255,9 +255,9 @@ export function parseDocument(md: string, opts: ParseOptions = {}): ParsedDocume
   // 补回这么多空行，否则段落与列表/标题之间的分隔会在保存时悄悄消失。
   let pendingBlanks = 0;
 
-  /** 把一个新块挂到顶层，并在保真模式下带上"前面有空行"的标记。 */
+  /** 把一个新块挂到顶层，并带上"前面有空行"的标记（所有模式逐字保留空行）。 */
   const pushRoot = (b: Block) => {
-    if (opts.preservePlainText && pendingBlanks > 0 && doc.blocks.length > 0) b.blankBefore = pendingBlanks;
+    if (pendingBlanks > 0 && doc.blocks.length > 0) b.blankBefore = pendingBlanks;
     pendingBlanks = 0;
     b.parent = null;
     doc.blocks.push(b);
@@ -278,6 +278,9 @@ export function parseDocument(md: string, opts: ParseOptions = {}): ParsedDocume
     if (bareBuf.length === 0) return;
     const { marker, text } = parseMarker(bareBuf[0]);
     const b = createBlock([text, ...bareBuf.slice(1)].join('\n'), marker);
+    // 顶层挂接统一走空行记账（与 pushRoot 一致）。
+    if (pendingBlanks > 0 && doc.blocks.length > 0) b.blankBefore = pendingBlanks;
+    pendingBlanks = 0;
     b.parent = null;
     doc.blocks.push(b);
     stack.length = 0;
@@ -352,36 +355,25 @@ export function parseDocument(md: string, opts: ParseOptions = {}): ParsedDocume
         while (j < lines.length && lines[j].trim() === '') j++;
         const next = j < lines.length ? lines[j] : '';
         const nextTrim = next.trim();
-        // 保真模式：紧随其后的 `- ` 列表项也算"新的结构"——逐字区域必须在空行
-        // 处结束，否则空行被当作区域内容吞掉，段落与列表之间的分隔就丢了。
-        const startsStructure =
-          STRUCTURAL_RAW_RE.test(nextTrim) ||
-          FENCE_OPEN_RE.test(next) ||
-          (opts.preservePlainText === true && LIST_RE.test(next));
-        // 保真模式再进一步：空行结束**任何**已闭合的逐字区域，哪怕是普通段落。
-        // 否则"段落\n\n段落"会被并成一个块（空行进块文本），段落既不能单独
-        // 多选、也不能单独折叠/缩进/转换。序列化会把相邻逐字块之间的空行补回来
-        // （raw/raw 规则 + blankBefore），字节仍然不变。
-        // 属性行依旧不拆分：`key:: value` 是该块的折叠标记。
-        const endsRegion = opts.preservePlainText ? !PROPERTY_RE.test(nextTrim) : startsStructure;
+        // 空行结束**任何**已闭合的逐字区域（属性行除外——`key:: value` 是块的
+        // 折叠标记）。两种模式一致：这样空行要么进 blankBefore 逐字补回（拆分），
+        // 要么不存在"区域吞空行"的形态。否则"段落\n\n段落"里空行进 rawBuf 后
+        // 会被 flushRaw 的尾 pop 吃掉，保存一次丢一行。
+        const endsRegion = !PROPERTY_RE.test(nextTrim);
         if (next && isRawRegionTail(rawBuf) && depthOf(next) === 0 && endsRegion) {
           flushRaw();
-          if (opts.preservePlainText) {
-            // 空行属于**后面**那个块，所以要在区域冲刷之后才置位；j - i 就是
-            // 这次跳过的空行数（连续空行原样保留）。注意 i 要直接跳到 j——
-            // 逐个 i++ 会把同一批空行再数一遍。
-            pendingBlanks = Math.max(pendingBlanks, j - i);
-            i = j;
-            continue;
-          }
-          i++;
+          // 空行属于**后面**那个块，所以要在区域冲刷之后才置位；j - i 就是
+          // 这次跳过的空行数（连续空行原样保留）。注意 i 要直接跳到 j——
+          // 逐个 i++ 会把同一批空行再数一遍。所有模式都逐字保留空行。
+          pendingBlanks = Math.max(pendingBlanks, j - i);
+          i = j;
           continue;
         }
         rawBuf.push(line);
       }
-      // 保真模式：这个空行既不是内容也不是软行，被丢弃了——记下来，下一个块
-      // 之前要补回这么多空行（否则每保存一次就吃掉一个分隔空行）。
-      if (opts.preservePlainText && rawBuf.length === 0) pendingBlanks++;
+      // 这个空行既不是内容也不是软行，被丢弃了——记下来，下一个块之前要补回
+      // 这么多空行（否则每保存一次就吃掉一个分隔空行）。所有模式一致。
+      if (rawBuf.length === 0) pendingBlanks++;
       i++;
       continue;
     }

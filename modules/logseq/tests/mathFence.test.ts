@@ -81,13 +81,13 @@ describe('display math fences', () => {
   });
 
   it('serializes a math block without mangling the LaTeX body', () => {
-    // The serializer emits the compact Logseq form (no blank lines between
-    // blocks) — same as a code fence. The file's trailing newline is
-    // preserved on save (1-byte fidelity). What matters is that the `$$`
+    // Blank lines around the math fence are preserved verbatim now (the
+    // serializer no longer normalizes them away). The file's trailing newline
+    // is preserved on save (1-byte fidelity). What matters is that the `$$`
     // delimiters and every LaTeX byte survive verbatim.
     const md = ['- 段落', '', '$$', '\\sigma(x)=\\frac{1}{1+{e}^{-x}}', '$$', '', '- 结束', ''].join('\n');
     const out = serializeDocument(parseDocument(md));
-    expect(out).toBe('- 段落\n$$\n\\sigma(x)=\\frac{1}{1+{e}^{-x}}\n$$\n- 结束\n');
+    expect(out).toBe('- 段落\n\n$$\n\\sigma(x)=\\frac{1}{1+{e}^{-x}}\n$$\n\n- 结束\n');
     // Re-parsing the serialized form yields the same math block (stable).
     expect(parseDocument(out).blocks[1].text).toBe('$$\n\\sigma(x)=\\frac{1}{1+{e}^{-x}}\n$$');
   });
