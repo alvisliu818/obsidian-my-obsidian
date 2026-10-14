@@ -119,11 +119,14 @@ export function asExternalSaveHandle(view: unknown): ExternalSaveHandle | null {
 /**
  * 当前活动标签页对应的目标。
  *
- * 库内：workspace.getActiveFile()。库外：活动叶子的视图是三个库外视图之一。
- * 库内的临时版本文件（预览用）与快照文件夹自身不算目标。
+ * 库内：workspace.getActiveFile()。库外：最近活动叶子的视图是三个库外视图之一。
+ *
+ * 注意不能用 `app.workspace.activeLeaf`（已废弃，点击侧边栏面板时指向侧边栏
+ * 或为 null —— File History 面板就在侧边栏，点它的按钮会把目标清成 null）。
+ * getMostRecentLeaf 稳定返回主区最近活动的叶子：面板聚焦时目标不变。
  */
 export function resolveActiveTarget(app: App, opts: { skipVaultPrefixes?: string[] } = {}): SaveTarget | null {
-  const leaf = app.workspace.activeLeaf;
+  const leaf = app.workspace.getMostRecentLeaf?.();
   if (leaf) {
     const handle = asExternalSaveHandle(leaf.view);
     if (handle) return handle.target();
