@@ -229,6 +229,8 @@ export class SaveHistoryView extends ItemView {
   private diffSelection: (SnapshotRecord & { filePath: string })[] = [];
   private bulkDeleteMode: boolean = false;
   private bulkDeleteSelection: Set<string> = new Set();
+  /** 上次渲染对应的活动目标键（kind:key），active-leaf-change 去重用。 */
+  private lastTargetKey: string | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: SaveControlPlugin, versioning: Versioning) {
     super(leaf);
@@ -237,6 +239,18 @@ export class SaveHistoryView extends ItemView {
 
     this.plugin.registerEvent(
       this.plugin.app.workspace.on("file-open", () => void this.refresh())
+    );
+    // 虚拟文档树打开的库外文件不触发 file-open（shell 是 setViewState，没有
+    // vault 文件）——File History 面板会停留在上一个状态（如 "No active file."）。
+    // 追 active-leaf-change，按目标键去重，避免侧边栏切换等高频事件反复重建。
+    this.plugin.registerEvent(
+      this.plugin.app.workspace.on("active-leaf-change", () => {
+        const target = this.plugin.getActiveTarget();
+        const key = target ? `${target.kind}:${target.key}` : "";
+        if (key === this.lastTargetKey) return;
+        this.lastTargetKey = key;
+        void this.refresh();
+      })
     );
   }
 
@@ -1250,6 +1264,8 @@ export class SaveHistoryView extends ItemView {
   }
 
   refresh(): void {
+    const target = this.plugin.getActiveTarget();
+    this.lastTargetKey = target ? `${target.kind}:${target.key}` : "";
     void this.onOpen();
   }
 
