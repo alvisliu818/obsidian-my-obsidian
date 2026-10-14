@@ -131,7 +131,7 @@ export default class OpenTabSettingsPlugin extends Plugin {
              * Note that as of 1.9.10, getUnpinnedLeaf takes an undocumented "focus" boolean. Obsidian uses this param
              * when using ctrl and arrow keys in the file explorer to open files.
              */
-            getUnpinnedLeaf(oldMethod) {
+            getUnpinnedLeaf(_oldMethod) {
                 return function(this: Workspace, focus?: boolean) {
                     if (plugin.settings.openInNewTab) {
                         return this.getLeaf(false);
@@ -306,7 +306,7 @@ export default class OpenTabSettingsPlugin extends Plugin {
     }
 
     registerFileMenuOptions() {
-        this.registerEvent(this.app.workspace.on("file-menu", (menu, file, source, leaf) => {
+        this.registerEvent(this.app.workspace.on("file-menu", (menu, file, _source, _leaf) => {
             if (file instanceof TFile) {
                 if (this.settings.openInNewTab) {
                     menu.addItem((item) => {
@@ -344,7 +344,7 @@ export default class OpenTabSettingsPlugin extends Plugin {
     }
 
     registerPreviewTabsEvents() {
-        this.registerEvent(this.app.workspace.on("editor-change", (editor, info) => {
+        this.registerEvent(this.app.workspace.on("editor-change", (_editor, info) => {
             if (info instanceof MarkdownView) {
                 this.setLeafIsPreview(info.leaf, false);
             }

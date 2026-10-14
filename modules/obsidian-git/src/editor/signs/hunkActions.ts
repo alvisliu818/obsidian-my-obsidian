@@ -9,7 +9,7 @@ export class HunkActions {
 
     get editor(): { obEditor: Editor; editor: EditorView } | undefined {
         const obEditor = this.plugin.app.workspace.activeEditor?.editor;
-        // @ts-expect-error, not typed
+        // @ts-ignore, not typed
         const editor = obEditor?.cm as EditorView;
 
         if (!obEditor || !HunksStateHelper.hasHunksData(editor.state)) {

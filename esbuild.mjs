@@ -13,7 +13,7 @@ import { sveltePreprocess } from "svelte-preprocess";
 import process from "process";
 import builtins from "builtin-modules";
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
+import { readFileSync, globSync as fsGlobSync } from "node:fs";
 import path from "node:path";
 
 const nodeRequire = createRequire(import.meta.url);
@@ -143,6 +143,37 @@ const dexiePatchPlugin = {
 	},
 };
 
+// ---------------------------------------------------------------------------
+// open-tab-settings: `glob:./locales/*.json` 聚合导入（上游 esbuild 插件原样
+// 移植）。编译期把 glob 匹配到的 JSON 各自 import 后聚成一个对象，键取文件名。
+// TS 侧由 modules/open-tab-settings/src/glob.d.ts 的 `declare module 'glob:*'`
+// 兜住类型。
+// ---------------------------------------------------------------------------
+const importGlobPlugin = {
+  name: "import-glob",
+  setup(build) {
+    build.onResolve({ filter: /^glob:.*$/ }, async (args) => ({
+      path: args.path.replace(/^glob:/, ""),
+      namespace: "import-glob",
+      pluginData: { resolveDir: args.resolveDir },
+    }));
+    build.onLoad({ filter: /.*/, namespace: "import-glob" }, async (args) => {
+      const files = fsGlobSync(args.path, { cwd: args.pluginData.resolveDir })
+        .map((f) => f.split(path.sep).join("/"))
+        .sort();
+      return {
+        contents: [
+          ...files.map((module, i) => `import m${i} from './${module}'`),
+          "export default {",
+          ...files.map((f, i) => `${JSON.stringify(path.basename(f, path.extname(f)))}: m${i},`),
+          "}",
+        ].join("\n"),
+        resolveDir: args.pluginData.resolveDir,
+      };
+    });
+  },
+};
+
 const context = await esbuild.context({
   banner: { js: banner },
   entryPoints: ["src/main.ts"],
@@ -168,7 +199,7 @@ const context = await esbuild.context({
     // ollama 等包用 `node:fs` 带前缀的写法，裸名列表罩不住
     ...builtins.map((m) => `node:${m}`),
   ],
-  plugins: [cmBundlePlugin, sveltePlugin, dexiePatchPlugin],
+  plugins: [cmBundlePlugin, sveltePlugin, dexiePatchPlugin, importGlobPlugin],
   define: {
     // wa-sqlite's Emscripten glue reads import.meta.url to locate its wasm;
     // in the CJS bundle that is `{}`, which throws before it ever looks at

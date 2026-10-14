@@ -57,7 +57,7 @@ export class ObsidianGitSettingsTab extends PluginSettingTab {
     private lineAuthorRefreshTimer?: number;
     constructor(
         app: App,
-        private plugin: ObsidianGit
+        public plugin: ObsidianGit
     ) {
         super(app, plugin);
     }

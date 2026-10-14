@@ -36,6 +36,7 @@ import AIImageAnalyzerPlugin from "../modules/ai-image-analyzer/src/main";
 import OmnisearchPlugin from "../modules/omnisearch/src/main";
 import ObsidianGitPlugin from "../modules/obsidian-git/src/main";
 import SaveControlPlugin from "../modules/save-control/src/main";
+import OpenTabSettingsPlugin from "../modules/open-tab-settings/src/main";
 import { CodeFileView, DEFAULT_CODE_EXTENSIONS, VIEW_TYPE_CODE_FILE } from "./codeFileView";
 
 export default class MyObsidianPlugin extends Plugin {
@@ -157,6 +158,16 @@ export default class MyObsidianPlugin extends Plugin {
 				"自动保存节奏控制 + 文件版本历史（save-history 与 autosave-control 合并）：延迟落盘、状态栏待保存指示、标签页未保存圆点与关闭提示；虚拟文档树挂载的库外文件同样支持。上游 Sevoni（MIT）+ mihasm（MIT）。",
 			desktopOnly: true,
 			cls: SaveControlPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Third-party (jesse-r-s-hines, MIT), kept whole.
+			id: "open-tab-settings",
+			legacyId: "open-tab-settings",
+			name: "Open Tab Settings",
+			summary:
+				"标签页打开方式定制：默认新标签页/新窗口打开、防止重复标签页、新标签页分组摆放，可按来源（文件列表/搜索/反链等）分别设置。上游 jesse-r-s-hines（MIT）。",
+			desktopOnly: false,
+			cls: OpenTabSettingsPlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 
