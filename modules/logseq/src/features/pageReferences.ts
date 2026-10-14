@@ -2,8 +2,11 @@
  * Bottom-of-page references section (v0.2.5): TWO collapsible subsections —
  * "Linked references" (existing backlinks) and "Unlinked references" (plain
  * text mentions with one-click convert). Each section toggles independently
- * via its header; collapsed state lives per view session (WeakMap), so it
+ * via its header; collapsed state lives per plugin session (WeakMap), so it
  * survives re-renders but resets on plugin reload (local preference only).
+ *
+ * The INITIAL state comes from the `refsDefaultCollapsed` setting: on = both
+ * sections start folded, so opening a note shows just the two headers.
  */
 
 import { setIcon } from 'obsidian';
@@ -13,16 +16,22 @@ import { renderUnlinkedMentions } from './unlinkedMentions';
 
 export const REFERENCES_SECTION_CLASS = 'page-references';
 
-/** Collapsed state per view instance. */
+/** Collapsed state per plugin instance. */
 const collapsedByView = new WeakMap<object, { linked: boolean; unlinked: boolean }>();
 
-function stateFor(view: object): { linked: boolean; unlinked: boolean } {
-  let s = collapsedByView.get(view);
+function stateFor(plugin: LogseqEditorPlugin): { linked: boolean; unlinked: boolean } {
+  let s = collapsedByView.get(plugin);
   if (!s) {
-    s = { linked: false, unlinked: false }; // expanded by default
-    collapsedByView.set(view, s);
+    const start = plugin.settings.refsDefaultCollapsed === true;
+    s = { linked: start, unlinked: start }; // 默认折叠由设置决定
+    collapsedByView.set(plugin, s);
   }
   return s;
+}
+
+/** 设置变更后调用：丢掉会话状态，下次渲染按新默认值来。 */
+export function resetReferencesCollapse(plugin: LogseqEditorPlugin): void {
+  collapsedByView.delete(plugin);
 }
 
 /**
@@ -39,7 +48,6 @@ export function renderPageReferences(
   containerEl.querySelector(`:scope > .${REFERENCES_SECTION_CLASS}`)?.remove();
   if (!currentPath) return;
   const state = stateFor(plugin);
-
   const wrapper = containerEl.createEl('div', { cls: REFERENCES_SECTION_CLASS });
 
   // --- Linked references (collapsible) ---

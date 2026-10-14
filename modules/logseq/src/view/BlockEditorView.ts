@@ -460,6 +460,16 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
    * 换算回 vault 相对路径（挂载树点开库内 md 的场景），换算不出（真库外）
    * 返回 null —— 调用方据此跳过 refs 渲染。
    */
+  /**
+   * 重画底部引用区（设置默认折叠后立即生效；文件切换/索引重建也会各自刷新）。
+   * 库外 shell 里的托管编辑器与库内视图走同一条路。
+   */
+  refreshReferences(): void {
+    const rp = this.refsPathFor();
+    renderPageReferences(this.refsHostEl, this.plugin, rp?.path, rp?.basename ?? '');
+    renderSupertagCollection(this.refsHostEl, this.plugin, rp?.path);
+  }
+
   private refsPathFor(): { path: string; basename: string } | null {
     if (!this.isExternal) {
       return this.file ? { path: this.file.path, basename: this.file.basename } : null;

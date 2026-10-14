@@ -5,6 +5,9 @@ import { ExtensionMarketModal } from '../extensions/marketModal';
 import { MountListModal } from '../panels/mountModals';
 import { VIEW_TYPE_MOUNT_PANEL } from '../panels/mountPanel';
 import { VIEW_TYPE_CONTENT_SEARCH } from '../panels/contentSearchPanel';
+import { VIEW_TYPE_BLOCK_EDITOR, type BlockEditorView } from '../view/BlockEditorView';
+import { VIEW_TYPE_EXTERNAL_BLOCK } from '../views/ExternalBlockView';
+import { resetReferencesCollapse } from '../features/pageReferences';
 import { OpenWithEditModal } from '../features/openWithUi';
 import { mountDisplayName, type LspServerSpec, type PagePropsEditor, type ScopeMode, type ShortcutOverrides } from '../types';
 import { effectiveLspServers } from '../lsp/serverSpecs';
@@ -285,6 +288,28 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
             this.plugin.refreshAllViews();
           }),
+      );
+
+    new Setting(containerEl)
+      .setName('底部引用区默认折叠')
+      .setDesc(
+        '打开文件时，底部的 Linked references / Unlinked references 两个区默认收起，只留标题栏，点标题栏展开。' +
+          '关闭则默认展开（旧行为）。折叠只是当前会话的显示状态，不会写进文件；已经展开/收起过的区记住你的选择。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.refsDefaultCollapsed === true).onChange(async (v) => {
+          this.plugin.settings.refsDefaultCollapsed = v;
+          await this.plugin.saveSettings();
+          // 丢掉会话里的折叠记忆，让新默认值作用到所有已打开的编辑器
+          // （库内视图 + 库外 shell 托管的那个）。
+          resetReferencesCollapse(this.plugin);
+          for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_BLOCK_EDITOR)) {
+            (leaf.view as BlockEditorView | null)?.refreshReferences?.();
+          }
+          for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_EXTERNAL_BLOCK)) {
+            (leaf.view as { blockEditor?: BlockEditorView | null } | null)?.blockEditor?.refreshReferences?.();
+          }
+        }),
       );
 
     new Setting(containerEl)
