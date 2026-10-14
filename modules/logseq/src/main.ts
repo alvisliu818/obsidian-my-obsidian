@@ -1960,8 +1960,10 @@ export default class LogseqEditorPlugin extends Plugin {
         if (this.isMainAreaLeaf(l) && showsSameFile(l)) existing = l;
       });
       if (existing) return existing;
+      // 不用 canNavigate()：外部 shell 是自定义 ItemView，没实现该方法恒为 false。
+      // 主区 + 非固定即可复用。
       const active = this.app.workspace.getMostRecentLeaf();
-      if (active?.canNavigate() && this.isMainAreaLeaf(active) && !this.isLeafEdited(active)) {
+      if (active && !active.pinned && this.isMainAreaLeaf(active) && !this.isLeafEdited(active)) {
         return active;
       }
     }
