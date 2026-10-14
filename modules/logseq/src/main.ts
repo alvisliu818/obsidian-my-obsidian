@@ -924,7 +924,15 @@ export default class LogseqEditorPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const raw = (await this.loadData()) as Record<string, unknown> | null;
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, raw);
+    // 旧单开关迁移：两个独立开关都未持久化过时，跟随旧 refsDefaultCollapsed 的值，
+    // 之后以各自开关为准（旧字段保留在 data.json 里但 UI 不再读写）。
+    if (raw && raw.refsLinkedDefaultCollapsed === undefined && raw.refsUnlinkedDefaultCollapsed === undefined) {
+      const legacy = raw.refsDefaultCollapsed === true;
+      this.settings.refsLinkedDefaultCollapsed = legacy;
+      this.settings.refsUnlinkedDefaultCollapsed = legacy;
+    }
     // Sanitize numeric settings from older/corrupt data files.
     const d = Number(this.settings.saveDebounceMs);
     if (!Number.isFinite(d) || d < 0) this.settings.saveDebounceMs = DEFAULT_SETTINGS.saveDebounceMs;

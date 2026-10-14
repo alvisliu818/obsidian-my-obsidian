@@ -5,8 +5,9 @@
  * via its header; collapsed state lives per plugin session (WeakMap), so it
  * survives re-renders but resets on plugin reload (local preference only).
  *
- * The INITIAL state comes from the `refsDefaultCollapsed` setting: on = both
- * sections start folded, so opening a note shows just the two headers.
+ * The INITIAL state comes from the `refsLinkedDefaultCollapsed` /
+ * `refsUnlinkedDefaultCollapsed` settings: on = that section starts folded, so
+ * opening a note shows just the header (no query — expanding one runs it).
  */
 
 import { setIcon } from 'obsidian';
@@ -22,8 +23,10 @@ const collapsedByView = new WeakMap<object, { linked: boolean; unlinked: boolean
 function stateFor(plugin: LogseqEditorPlugin): { linked: boolean; unlinked: boolean } {
   let s = collapsedByView.get(plugin);
   if (!s) {
-    const start = plugin.settings.refsDefaultCollapsed === true;
-    s = { linked: start, unlinked: start }; // 默认折叠由设置决定
+    s = {
+      linked: plugin.settings.refsLinkedDefaultCollapsed === true,
+      unlinked: plugin.settings.refsUnlinkedDefaultCollapsed === true,
+    };
     collapsedByView.set(plugin, s);
   }
   return s;

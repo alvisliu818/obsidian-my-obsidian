@@ -285,10 +285,14 @@ export interface BlockEditorSettings {
    */
   externalBanner: boolean;
   /**
-   * 底部引用区（Linked references / Unlinked references）默认折叠。
-   * 开 = 打开文件时两个区只显示标题栏，点标题栏才展开；关 = 默认展开（旧行为）。
-   * 折叠只是会话内的显示状态，不写进文件。
+   * 底部引用区默认折叠，两个区独立开关。
+   * 开 = 打开文件时该区只显示标题栏，点标题栏才展开（并触发查询）；关 = 默认展开。
+   * 折叠只是会话内的显示状态，不写进文件。refsDefaultCollapsed 是旧单开关，
+   * 迁移后保留作只读回显（不再被 UI 读写）。
    */
+  refsLinkedDefaultCollapsed: boolean;
+  refsUnlinkedDefaultCollapsed: boolean;
+  /** 旧版单开关（1.14.x）：迁移到上面两个独立开关后仅在旧 data.json 兼容读取。 */
   refsDefaultCollapsed: boolean;
   /**
    * Take over Office files (.docx/.xlsx/.pptx/…) with the built-in previewer.
@@ -553,6 +557,8 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   lspEnabled: true,
   externalSplitView: false,
   externalBanner: true,
+  refsLinkedDefaultCollapsed: false,
+  refsUnlinkedDefaultCollapsed: false,
   refsDefaultCollapsed: false,
   officeViewerEnabled: true,
   imageViewerTakeOver: false,
