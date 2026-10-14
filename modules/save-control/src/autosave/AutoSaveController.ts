@@ -1210,6 +1210,10 @@ export class AutoSaveController {
   /** 关闭提示丢弃后调用：抑制这个视图后续的 requestSave（防止拆卸过程中重新入队）。 */
   markViewDiscarded(view: unknown): void {
     if (view instanceof TextFileView) this.discardedViews.add(view);
+    // 库外 shell（ItemView）里托管的块编辑器是真正的 TextFileView——拆卸
+    // 过程中它的 requestSave 同样会重新入队，必须一并标记。
+    const inner = (view as { blockEditor?: unknown } | null)?.blockEditor;
+    if (inner instanceof TextFileView) this.discardedViews.add(inner);
   }
 
   private markLeafViewDiscarded(leaf: WorkspaceLeaf): void {

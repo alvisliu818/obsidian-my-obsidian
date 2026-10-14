@@ -229,6 +229,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   onunload(): void {
     this.indexDisposer?.();
     this.indexDisposer = null;
+    this.clearExternalSaveTimer();
     this.commitFocusedText();
     this.commitEmbedEdit();
     clearAllBlockCaches(this.doc.blocks);
@@ -560,10 +561,48 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
    */
   private discardPending = false;
 
+  /**
+   * 库外文件的自动保存开关（save-control 经 ExternalBlockView.configureAutoSave
+   * 下发）。库内文件由 save-control 的 requestSave 包装器持有，库外 inner 的
+   * file 为 null、包装器直接透传——所以库外的节奏必须自己管：关了就不定时的
+   * 写盘，脏状态留给 save-control（关闭提示 / 手动保存）决定。
+   */
+  private externalAutoSaveEnabled = true;
+  private externalAutoSaveDelayMs = 2000;
+  private externalSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** save-control 的库外节奏下发（鸭子类型，可选实现）。 */
+  configureAutoSave(opts: { enabled: boolean; delayMs: number }): void {
+    this.externalAutoSaveEnabled = opts.enabled;
+    this.externalAutoSaveDelayMs = Math.max(0, opts.delayMs);
+    if (!opts.enabled && this.externalSaveTimer !== null) {
+      // 关掉时撤掉已排的定时器：内容保持脏，何时落盘交给 save-control。
+      clearTimeout(this.externalSaveTimer);
+      this.externalSaveTimer = null;
+    }
+  }
+
+  /** 库外文件的延迟落盘（替代原生 requestSave 的 2s 防抖）。 */
+  private scheduleExternalSave(): void {
+    if (!this.externalAutoSaveEnabled || this.externalSaveTimer !== null) return;
+    this.externalSaveTimer = setTimeout(() => {
+      this.externalSaveTimer = null;
+      if (this.externalDirty && !this.discardPending) void this.save();
+    }, this.externalAutoSaveDelayMs);
+  }
+
+  private clearExternalSaveTimer(): void {
+    if (this.externalSaveTimer !== null) {
+      clearTimeout(this.externalSaveTimer);
+      this.externalSaveTimer = null;
+    }
+  }
+
   /** save-control 关闭提示「不保存并关闭」时调用（鸭子类型，可选实现）。 */
   discardPendingChanges(): void {
     this.discardPending = true;
     this.externalDirty = false;
+    this.clearExternalSaveTimer();
     // Obsidian 自己的未保存标记一并清掉：内容既已放弃，视图不该再报脏。
     (this as unknown as { dirty?: boolean }).dirty = false;
   }
@@ -2951,7 +2990,13 @@ ${content}`;
       // round-trips" — every edit funnels through here.
       this.externalDirty = true;
     }
-    this.requestSave(); // native: sets dirty + debounced save (2s)
+    if (!this.isExternal) {
+      this.requestSave(); // native: sets dirty + debounced save (2s)
+    } else {
+      // 库外：原生 requestSave 的 2s 防抖会无视 save-control 的自动保存开关
+      // （file 为 null，包装器透传），改走自己的调度——关了就不定时写盘。
+      this.scheduleExternalSave();
+    }
     // 状态栏字数刷新（main 侧节流）；所有编辑路径都汇聚到这里，一个口就够。
     this.plugin.notifyEditorDirty();
   }

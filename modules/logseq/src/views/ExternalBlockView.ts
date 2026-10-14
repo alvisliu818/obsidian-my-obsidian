@@ -57,6 +57,8 @@ export class ExternalBlockView extends ItemView {
   mountPath = '';
   /** The hosted block editor. */
   private inner: BlockEditorView | null = null;
+  /** save-control 下发的自动保存节奏：inner 重建时（改名重开等）要补发。 */
+  private lastAutoSaveCfg: { enabled: boolean; delayMs: number } | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
     super(leaf);
@@ -222,6 +224,9 @@ export class ExternalBlockView extends ItemView {
 
     const inner = new BlockEditorView(this.leaf, this.plugin);
     this.inner = inner;
+    // 调度器只对「配置变化」下发；shell 的 abs 没变就不会重发，inner 换人了
+    // 必须在这里补上当前节奏，否则新编辑器回到默认的自动保存开。
+    if (this.lastAutoSaveCfg) inner.configureAutoSave(this.lastAutoSaveCfg);
     // Build the editor's DOM skeleton (the same one onload() builds) and adopt
     // the outside file's content into it.
     inner.adoptIntoView();
@@ -277,6 +282,15 @@ export class ExternalBlockView extends ItemView {
   /** 托管编辑器是否有未落盘的改动（save-control 模块的脏状态探针）。 */
   isDirty(): boolean {
     return this.inner?.isDirty() === true;
+  }
+
+  /**
+   * save-control 的自动保存节奏下发。节奏记在 shell 上：调度器按 abs 记
+   * 「配置已发过」，inner 重建后不会重发，这里在创建时补上一次。
+   */
+  configureAutoSave(opts: { enabled: boolean; delayMs: number }): void {
+    this.lastAutoSaveCfg = { enabled: opts.enabled, delayMs: opts.delayMs };
+    this.inner?.configureAutoSave(opts);
   }
 
   getViewData(): string {

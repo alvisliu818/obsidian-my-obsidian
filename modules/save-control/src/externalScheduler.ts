@@ -99,7 +99,9 @@ export class ExternalSaveScheduler {
         return;
       }
       existing.handle = handle;
-      if (now - existing.dirtySince >= delayMs) {
+      // 自动保存关闭：只记待保存（标签页圆点/关闭提示用），不自动落盘——
+      // 何时写由关闭提示或手动保存决定，与库内的持有语义对齐。
+      if (this.plugin.settings.autosaveEnabled && now - existing.dirtySince >= delayMs) {
         void this.flushKey(key);
       }
     });
