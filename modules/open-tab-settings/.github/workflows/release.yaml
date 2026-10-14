@@ -1,0 +1,55 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+name: Release
+# Create a release when a new version tag is created
+# You can trigger this like so:
+#     npm version patch
+#     # push the created commit and tag
+#     git push
+#     git push origin tag <tag>
+# See also: https://docs.obsidian.md/Plugins/Releasing/Release+your+plugin+with+GitHub+Actions
+on:
+  push:
+    tags: ["*.*.*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24.x"
+
+      - name: Build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Generate artifact attestation
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
+
+      - name: Release
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+
+          if [ -e styles.css ]; then
+              FILES="main.js manifest.json styles.css"
+          else
+              FILES="main.js manifest.json"
+          fi
+
+          gh release create "$TAG" \
+            --title="$TAG" \
+            $FILES
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
