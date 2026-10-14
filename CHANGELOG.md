@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 14.0.3
+
+- fix: merge updating obsidian-dev-utils to 107.4.1
+
 ## 14.0.2
 
 - chore: merge updating libs onto obsidian-dev-utils 107.3.1
