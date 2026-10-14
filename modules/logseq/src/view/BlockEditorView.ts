@@ -230,6 +230,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     this.indexDisposer?.();
     this.indexDisposer = null;
     this.clearExternalSaveTimer();
+    this.clearBaselineCheckTimer();
     this.commitFocusedText();
     this.commitEmbedEdit();
     clearAllBlockCaches(this.doc.blocks);
@@ -338,6 +339,8 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     this.externalDirty = false;
     this.teardownNativePropsEditor();
     this.setViewData(data, false);
+    // 干净基线取「解析后序列化」的输出：撤销回编辑前状态 = 序列化回到这里。
+    this.externalCleanData = this.serializeCurrent();
     // A page banner that says "outside the vault" is the honest header, and it
     // replaces the vault-only sections with something true.
     this.renderExternalBanner();
@@ -536,6 +539,12 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
    * our formatting.
    */
   private externalDiskData: string | null = null;
+  /**
+   * 「干净基线」：打开或上次保存时的**序列化输出**（不是磁盘原始文本——序列化
+   * 会规范化空行，两者从打开那一刻就可能不等）。撤销（Ctrl+Z）把模型退回这个
+   * 基线时，脏状态应当消失。
+   */
+  private externalCleanData: string | null = null;
   /** Whether the MODEL changed since the file was last written. */
   private externalDirty = false;
 
@@ -570,6 +579,8 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   private externalAutoSaveEnabled = true;
   private externalAutoSaveDelayMs = 2000;
   private externalSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 撤销回磁盘基线的比对定时器（编辑停止 500ms 后序列化比对一次）。 */
+  private baselineCheckTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** save-control 的库外节奏下发（鸭子类型，可选实现）。 */
   configureAutoSave(opts: { enabled: boolean; delayMs: number }): void {
@@ -598,11 +609,44 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     }
   }
 
+  /**
+   * 编辑停止后比对一次序列化结果与磁盘基线：相等（撤销把内容退回原状）就清掉
+   * 脏标记——圆点、待保存计数、关闭提示随之消失。防抖 500ms：markDirty 是每个
+   * 编辑动作都会走的口子，逐键全量序列化太贵。
+   */
+  private scheduleBaselineCheck(): void {
+    if (!this.isExternal) return;
+    if (this.baselineCheckTimer !== null) clearTimeout(this.baselineCheckTimer);
+    this.baselineCheckTimer = setTimeout(() => {
+      this.baselineCheckTimer = null;
+      if (!this.isExternal || !this.externalDirty || this.discardPending) return;
+      try {
+        const baseline = this.externalCleanData ?? this.externalDiskData;
+        if (baseline !== null && this.serializeCurrent() === baseline) {
+          this.externalDirty = false;
+          this.clearExternalSaveTimer();
+          (this as unknown as { dirty?: boolean }).dirty = false;
+          this.plugin.notifyEditorDirty();
+        }
+      } catch {
+        /* 序列化失败：保持脏状态，下轮编辑再试 */
+      }
+    }, 500);
+  }
+
+  private clearBaselineCheckTimer(): void {
+    if (this.baselineCheckTimer !== null) {
+      clearTimeout(this.baselineCheckTimer);
+      this.baselineCheckTimer = null;
+    }
+  }
+
   /** save-control 关闭提示「不保存并关闭」时调用（鸭子类型，可选实现）。 */
   discardPendingChanges(): void {
     this.discardPending = true;
     this.externalDirty = false;
     this.clearExternalSaveTimer();
+    this.clearBaselineCheckTimer();
     // Obsidian 自己的未保存标记一并清掉：内容既已放弃，视图不该再报脏。
     (this as unknown as { dirty?: boolean }).dirty = false;
   }
@@ -625,10 +669,17 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     // through the edit paths, which all funnel into markDirty().
     if (!this.externalDirty && !force) return;
     const data = this.serializeCurrent();
-    if (data === this.externalDiskData) return;
+    if (data === this.externalDiskData) {
+      // 内容与磁盘一致（撤销退回原状后触发保存）：缓冲区其实是干净的，
+      // 脏标记一并清掉，别让圆点/计数/关闭提示挂在一个不存在的修改上。
+      this.externalDirty = false;
+      this.externalCleanData = data;
+      return;
+    }
     try {
       writeExternalText(this.externalAbs, data);
       this.externalDiskData = data;
+      this.externalCleanData = data;
       this.externalDirty = false;
     } catch (e) {
       new Notice(`保存失败：${String(e).slice(0, 120)}`);
@@ -757,6 +808,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     this.externalName = '';
     this.externalDisplayPath = "";
     this.externalDiskData = null;
+    this.externalCleanData = null;
     this.externalDirty = false;
     if (wasExternal) {
       // While an outside file is shown, `this.file` is a STAND-IN carrying the
@@ -2989,6 +3041,10 @@ ${content}`;
       // The only signal that separates "the user typed" from "the file merely
       // round-trips" — every edit funnels through here.
       this.externalDirty = true;
+      // 撤销（Ctrl+Z）也走这里：如果撤销让内容回到了磁盘基线，脏状态应当
+      // 消失——否则标签页圆点、待保存计数、关闭提示都停留在一个已经不存在的
+      // "修改"上。序列化有成本，防抖到编辑停止后再比对。
+      this.scheduleBaselineCheck();
     }
     if (!this.isExternal) {
       this.requestSave(); // native: sets dirty + debounced save (2s)
