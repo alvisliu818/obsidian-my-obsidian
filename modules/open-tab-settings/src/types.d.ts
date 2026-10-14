@@ -11,6 +11,8 @@ declare module "obsidian" {
             },
             /** true when a leaf has just been opened, set to false the leaf is interacted with */
             isPreview?: boolean,
+            /** true when the user has edited this tab (used by reuseUnmodifiedTab) */
+            touched?: boolean,
             eventCleanup?: () => void,
             openedTime?: number,
         },

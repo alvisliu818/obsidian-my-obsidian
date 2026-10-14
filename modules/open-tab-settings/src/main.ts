@@ -1,6 +1,6 @@
 import {
     Plugin, Workspace, WorkspaceLeaf, WorkspaceRoot, WorkspaceFloating, View, TFile, PaneType, WorkspaceTabs,
-    WorkspaceItem, Platform, Keymap, Notice, App, MarkdownView,
+    WorkspaceItem, Platform, Keymap, Notice, App, MarkdownView, TextFileView,
 } from 'obsidian';
 import * as monkeyAround from 'monkey-around';
 import {
@@ -198,7 +198,7 @@ export default class OpenTabSettingsPlugin extends Plugin {
                     // eslint-disable-next-line @typescript-eslint/no-this-alias -- target
                     if (!target) target = this;
 
-                    target.openTabSettings = {...target.openTabSettings, openedTime: performance.now()};
+                    target.openTabSettings = {...target.openTabSettings, openedTime: performance.now(), touched: false};
 
                     if (target !== this) {
                         if (target.view.getViewType() == "kanban") {
@@ -347,6 +347,8 @@ export default class OpenTabSettingsPlugin extends Plugin {
         this.registerEvent(this.app.workspace.on("editor-change", (_editor, info) => {
             if (info instanceof MarkdownView) {
                 this.setLeafIsPreview(info.leaf, false);
+                // track that the user has edited this tab (used by reuseUnmodifiedTab)
+                this.setLeafTouched(info.leaf, true);
             }
         }));
         this.registerEvent(this.app.workspace.on("layout-change", this.syncPreviewTabs));
@@ -507,6 +509,24 @@ export default class OpenTabSettingsPlugin extends Plugin {
         return [...tabGroups];
     }
 
+    /** Mark/unmark a leaf as "edited by the user" (for reuseUnmodifiedTab). */
+    private setLeafTouched(leaf: WorkspaceLeaf, touched: boolean) {
+        if (leaf.openTabSettings?.touched === touched) return;
+        leaf.openTabSettings = {...leaf.openTabSettings, touched};
+    }
+
+    /**
+     * Whether the leaf holds user edits. Two signals: the touched flag (set via
+     * the editor-change event, covers native MarkdownView) and TextFileView.dirty
+     * (covers custom editors like the host block editor, whose edit paths funnel
+     * into requestSave and clear once the debounced save lands).
+     */
+    private isLeafEdited(leaf: WorkspaceLeaf): boolean {
+        if (leaf.openTabSettings?.touched) return true;
+        const view = leaf.view;
+        return view instanceof TextFileView && view.dirty === true;
+    }
+
     private setLeafIsPreview(leaf: WorkspaceLeaf, isPreview: boolean) {
         if (leaf.openTabSettings?.isPreview === isPreview) return;
 
@@ -638,7 +658,12 @@ export default class OpenTabSettingsPlugin extends Plugin {
 
         const activeLeaf = workspace.getActiveViewOfType(View)?.leaf;
         if (activeLeaf?.canNavigate()) {
-            return activeLeaf;
+            // reuseUnmodifiedTab: reuse the active tab only if it hasn't been edited; if it has
+            // unsaved edits, open the file in a new tab instead of clobbering the current one.
+            if (!settings.reuseUnmodifiedTab || !this.isLeafEdited(activeLeaf)) {
+                return activeLeaf;
+            }
+            return this.createNewLeaf(focus, settings);
         }
 
         const container = activeLeaf?.getContainer() ?? workspace.rootSplit;

@@ -32,6 +32,7 @@ export interface OpenTabSettingsPluginSettings {
     previewTabs: boolean,
     deduplicateTabs: boolean,
     deduplicateAcrossTabGroups: boolean,
+    reuseUnmodifiedTab: boolean,
     newTabPlacement: keyof typeof NEW_TAB_PLACEMENTS,
     newTabTabGroupPlacement: "same"|"opposite"|"first"|"last",
     modClickBehavior: keyof typeof MOD_CLICK_BEHAVIOR,
@@ -42,6 +43,7 @@ export const DEFAULT_SETTINGS: OpenTabSettingsPluginSettings = {
     previewTabs: false,
     deduplicateTabs: true,
     deduplicateAcrossTabGroups: true,
+    reuseUnmodifiedTab: false,
     newTabPlacement: "afterActive",
     newTabTabGroupPlacement: "same",
     modClickBehavior: "tab",
@@ -98,6 +100,13 @@ export class OpenTabSettingsPluginSettingTab extends PluginSettingTab {
                     type: 'toggle',
                     key: 'previewTabs',
                     disabled: () => !settings.openInNewTab,
+                },
+            }, {
+                name: t('settings.reuseUnmodifiedTab.name'),
+                desc: t('settings.reuseUnmodifiedTab.description'),
+                control: {
+                    type: 'toggle',
+                    key: 'reuseUnmodifiedTab',
                 },
             }, {
                 name: t('settings.deduplicateTabs.name'),

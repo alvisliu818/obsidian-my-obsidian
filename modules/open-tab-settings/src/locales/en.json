@@ -73,6 +73,10 @@
       "name": "Always open in new tab",
       "description": "Open files in a new tab by default."
     },
+    "reuseUnmodifiedTab": {
+      "name": "Reuse unmodified tab",
+      "description": "When opening a file, reuse the current tab if it hasn't been edited; if it has unsaved edits, open the file in a new tab instead."
+    },
     "previewTabs": {
       "name": "Preview tabs",
       "description": "VS Code style preview tabs. Initially open tabs as \"preview\" until interacted with. Preview tabs will be replaced instead of opening in new tab."
