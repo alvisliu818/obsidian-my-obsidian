@@ -1,4 +1,5 @@
 import { App, EditorPosition, EventRef, FileSystemAdapter, Hotkey, MarkdownView, Platform, Tasks, TextFileView, TFile, WorkspaceLeaf } from "obsidian";
+import { asExternalSaveHandle } from "../targets";
 import { dlog } from "../debug";
 import type { SaveControlSettings } from "../settings";
 import { askUnsavedClose as askUnsavedCloseForLeaf } from "../closePrompt";
@@ -2142,6 +2143,7 @@ export class AutoSaveController {
 
   private wrapSaveCommand(): void {
     const markActiveFileManualSaveRequested = () => this.markActiveFileManualSaveRequested();
+    const app = this.app;
     const saveCommandDefinition = this.getSaveCommandDefinition();
     if (!saveCommandDefinition || typeof saveCommandDefinition.checkCallback !== "function") {
       return;
@@ -2150,6 +2152,21 @@ export class AutoSaveController {
     const checkCallback = this.unwrapWrappedFunction(saveCommandDefinition.checkCallback);
     this.originalSaveCommandCheckCallback = checkCallback;
     const wrappedCheckCallback = function (this: unknown, checking: boolean) {
+      // 虚拟文档树打开的库外文件不是 MarkdownView，原命令的 checkCallback 对它
+      // 返回 false——Ctrl+S 在库外 shell 上完全失效（实测：脏缓冲区不动）。
+      // 这里补上：激活的是库外视图时命令可用，执行 = 立即落盘。显式保存不受
+      // 持有语义约束（持有的只是「后台自动写」）。
+      const mostRecent = app.workspace.getMostRecentLeaf?.();
+      const handle = mostRecent ? asExternalSaveHandle(mostRecent.view) : null;
+      if (handle) {
+        if (checking) return true;
+        void handle
+          .save()
+          .then(() => dlog("external manual save", handle.abs))
+          .catch((e) => console.error("[save-control] external manual save failed", handle.abs, e));
+        return true;
+      }
+
       if (!checking) {
         markActiveFileManualSaveRequested();
       }

@@ -1949,10 +1949,10 @@ export default class LogseqEditorPlugin extends Plugin {
    * 为外部文件挑选落页：设置开启时优先复用已显示同一文件的标签页，其次复用
    * 无编辑的当前页；设置关闭或当前页有编辑时按原样开新页（split/tab）。
    */
-  private pickExternalLeaf(
+  private async pickExternalLeaf(
     openMode: 'tab' | 'split',
     showsSameFile: (leaf: WorkspaceLeaf) => boolean,
-  ): WorkspaceLeaf {
+  ): Promise<WorkspaceLeaf> {
     if (this.shouldReuseUnmodifiedLeaf()) {
       let existing: WorkspaceLeaf | undefined;
       this.app.workspace.iterateAllLeaves((l) => {
@@ -1967,7 +1967,14 @@ export default class LogseqEditorPlugin extends Plugin {
         return active;
       }
     }
-    return this.app.workspace.getLeaf(openMode);
+    try {
+      return this.app.workspace.getLeaf(openMode);
+    } catch (e) {
+      // 启动早期布局可能还没有标签组（createNewLeaf 抛 "No tab group found"），
+      // 稍等片刻重试一次；仍失败就如实抛给调用方。
+      await new Promise((r) => setTimeout(r, 400));
+      return this.app.workspace.getLeaf(openMode);
+    }
   }
 
   private async openInBlockEditor(mount: ExternalMount, node: MountNode): Promise<boolean> {
@@ -1997,7 +2004,7 @@ export default class LogseqEditorPlugin extends Plugin {
       // setViewState, which needs no file at all. BlockEditorView is a
       // TextFileView and cannot be mounted that way, so a thin shell hosts it
       // (see ExternalBlockView for the measurements behind this).
-      const leaf = this.pickExternalLeaf(
+      const leaf = await this.pickExternalLeaf(
         this.settings.externalSplitView === true ? 'split' : 'tab',
         (l) => l.view instanceof ExternalBlockView && (l.view as ExternalBlockView).abs === node.abs,
       );
@@ -2043,7 +2050,7 @@ export default class LogseqEditorPlugin extends Plugin {
     // without a file — no seed needed here (measured: setViewState on a
     // TextFileView type with no TFile yields the "empty" placeholder, which is
     // why the markdown path above has to borrow a live editor).
-    const leaf = this.pickExternalLeaf(
+    const leaf = await this.pickExternalLeaf(
       'tab',
       (l) => l.view instanceof ExternalCodeView && (l.view as ExternalCodeView).abs === node.abs,
     );
@@ -2134,7 +2141,7 @@ export default class LogseqEditorPlugin extends Plugin {
         return;
       }
     }
-    const leaf = this.pickExternalLeaf(
+    const leaf = await this.pickExternalLeaf(
       'tab',
       (l) => {
         const v = l.view as ExternalFileView | null;
