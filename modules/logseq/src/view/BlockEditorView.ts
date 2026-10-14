@@ -309,6 +309,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
    * content.
    */
   async openExternalFile(abs: string, name: string, mountPath = ''): Promise<void> {
+    this.discardPending = false;
     const data = readExternalText(abs);
     // Release the seed note's page props before retargeting, so the registry
     // entry that pointed at the borrowed file goes away with it.
@@ -552,7 +553,25 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
    * outside files the user only ever opened. The comparison below is the real
    * guard, and it applies either way.
    */
+  /**
+   * 关闭提示「不保存并关闭」的丢弃标记。save-control 的丢弃钩子（鸭子类型的
+   * discardPendingChanges）置位后，save() 直接跳过——卸载路径（库内 super.save）
+   * 和库外 shell 的 onClose 都不能再把缓冲区写回磁盘。
+   */
+  private discardPending = false;
+
+  /** save-control 关闭提示「不保存并关闭」时调用（鸭子类型，可选实现）。 */
+  discardPendingChanges(): void {
+    this.discardPending = true;
+    this.externalDirty = false;
+    // Obsidian 自己的未保存标记一并清掉：内容既已放弃，视图不该再报脏。
+    (this as unknown as { dirty?: boolean }).dirty = false;
+  }
+
   async save(force = false): Promise<void> {
+    // 关闭提示选了「不保存并关闭」：save() 变为空操作——onUnloadFile 和库外
+    // shell 的 onClose 都走这里，不拦住的话丢弃决定之后内容照样落盘。
+    if (this.discardPending && !force) return;
     if (!this.isExternal) {
       await super.save(force);
       return;
@@ -644,6 +663,8 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   }
 
   async onLoadFile(file: import('obsidian').TFile): Promise<void> {
+    // 新内容进来：丢弃标记绝不跨内容存活（同标签页切换文件 = 恢复正常保存）。
+    this.discardPending = false;
     // An external file never comes through here — it was pushed in with
     // setViewData — so there is no vault path to read and no page references
     // to resolve. Leave the model alone.

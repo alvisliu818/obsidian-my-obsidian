@@ -1207,6 +1207,11 @@ export class AutoSaveController {
     this.clearTrackedFileState(filePath);
   }
 
+  /** 关闭提示丢弃后调用：抑制这个视图后续的 requestSave（防止拆卸过程中重新入队）。 */
+  markViewDiscarded(view: unknown): void {
+    if (view instanceof TextFileView) this.discardedViews.add(view);
+  }
+
   private markLeafViewDiscarded(leaf: WorkspaceLeaf): void {
     if (leaf.view instanceof TextFileView) {
       this.discardedViews.add(leaf.view);

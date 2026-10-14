@@ -266,14 +266,28 @@ export class SaveControlPlugin extends Plugin {
   }
 
   /**
-   * 「不保存并关闭」：库外直接拆（缓冲区随视图消失），库内丢弃待保存项并把
-   * 磁盘回滚到会话基线——自动保存可能已把本会话的编辑落盘（2s 防抖），只
-   * 丢队列的话磁盘上仍是"已保存"的脏内容（第12章回车重复 bug 的第三个症状
-   * 正是这样产生的），所以丢弃之外还要还原字节。
+   * 「不保存并关闭」：丢掉待保存项，并叫停视图卸载时自己的落盘。
+   *
+   * 块编辑器（logseq 模块）的 onUnloadFile / 库外 shell 的 onClose 都会无条件
+   * save()——库内走 TextFileView.save 直写库（save-control 只包了
+   * MarkdownView.save，拦不到它），库外把 externalDirty 内容写回文件。丢弃
+   * 决定之后它们再写盘，「不保存」就完全失效了。所以除了丢队列/回滚基线，
+   * 还要按鸭子类型通知视图本身：实现了 discardPendingChanges 的视图在卸载
+   * 时不得再 save。
    */
   private discardLeafUnsaved(leaf: { view?: unknown }): void {
+    const view = leaf.view as
+      | { discardPendingChanges?: () => void; blockEditor?: { discardPendingChanges?: () => void } | null }
+      | null;
+    view?.discardPendingChanges?.();
+    // 库外 shell：真正的编辑器是托管在里面的块编辑器（ExternalBlockView）。
+    view?.blockEditor?.discardPendingChanges?.();
+    // 拆卸过程中框架可能再触发 requestSave：shouldHoldSave 一看缓冲区还是脏的
+    // 就会重新入队，定时器随后照样落盘——丢弃决定被整个绕过。标记进
+    // discardedViews 后，requestSave 包装器会最先拦掉这些调用。
+    this.autosaveController?.markViewDiscarded(leaf.view);
     const handle = asExternalSaveHandle(leaf.view);
-    if (handle) return; // 库外：没有要丢的磁盘状态，拆掉即丢弃
+    if (handle) return; // 库外：没有要丢的队列状态，拆掉即丢弃
     const path = (leaf.view as { file?: { path?: string } } | null)?.file?.path ?? "";
     if (path) void this.autosaveController?.discardAndRevertPath(path);
   }
