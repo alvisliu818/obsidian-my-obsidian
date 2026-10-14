@@ -33,8 +33,11 @@ export class ExternalSaveScheduler {
   private timer: number | null = null;
   private readonly pending = new Map<string, PendingEntry>();
   private onCountChange: ((n: number) => void) | null = null;
-  /** 已下发的接管配置（按 abs），值变了才重复调用视图。 */
+  /** 已下发的接管配置（按 abs）：cfg 变了或视图实例换人了都要重发——tick 可能在
+   *  inner 编辑器创建前推送（记了 cfg 没人收），之后 cfg 不变就永不重发，新
+   *  视图永远停留在自带的自动保存节奏上。 */
   private readonly configuredAutoSave = new Map<string, string>();
+  private readonly configuredViews = new Map<string, object>();
 
   constructor(private readonly plugin: SaveControlPlugin) {}
 
@@ -59,6 +62,7 @@ export class ExternalSaveScheduler {
   refresh(): void {
     for (const entry of this.pending.values()) entry.dirtySince = Date.now();
     this.configuredAutoSave.clear();
+    this.configuredViews.clear();
   }
 
   /** 待保存的库外文件名（状态栏提示用）。 */
@@ -83,9 +87,14 @@ export class ExternalSaveScheduler {
       // 接管视图内置自动保存的节奏（配置变了才下发）——本模块是唯一权威，
       // 视图自己的 debounce 否则会和这里的调度抢跑。
       const cfg = `${this.plugin.settings.autosaveEnabled}:${delayMs}`;
-      if (handle.configureAutoSave && this.configuredAutoSave.get(key) !== cfg) {
+      const viewObj = leaf.view as object;
+      if (
+        handle.configureAutoSave &&
+        (this.configuredAutoSave.get(key) !== cfg || this.configuredViews.get(key) !== viewObj)
+      ) {
         handle.configureAutoSave({ enabled: this.plugin.settings.autosaveEnabled, delayMs });
         this.configuredAutoSave.set(key, cfg);
+        this.configuredViews.set(key, viewObj);
       }
       if (!handle.isDirty()) {
         // 不脏了：视图自己落盘过（内置自动保存/手动保存）——撤掉待保存标记。

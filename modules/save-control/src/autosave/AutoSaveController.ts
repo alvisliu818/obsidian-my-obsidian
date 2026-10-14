@@ -231,7 +231,7 @@ export class AutoSaveController {
     );
     this.pendingSaveQueue = new PendingSaveQueue(
       this.app,
-      () => this.getSettings().disableAutoSave,
+      () => this.isHoldMode(),
       () => this.getSettings().saveDelaySeconds,
       () => this.originalSave,
       () => this.isUnloading,
@@ -403,7 +403,7 @@ export class AutoSaveController {
       this.workspaceQuitEventRef = this.app.workspace.on("quit", (tasks: Tasks) => {
         this.pendingSaveQueue.refreshAllLatestData();
         const shortcut = this.wasQuitShortcutIntentRecentlyMarked();
-        const manual = this.getSettings().disableAutoSave;
+        const manual = this.isHoldMode();
         const hasPending = this.pendingSaveQueue.hasAny();
 
         // MANUAL mode (issue #26): plain window close (the X button, not the
@@ -676,7 +676,7 @@ export class AutoSaveController {
 
       syncPendingDataForFile(file.path);
 
-      if (getSettings().disableAutoSave) {
+      if (getSettings().disableAutoSave || !getSettings().autosaveEnabled) {
         await callWithArgs(originalOnUnloadFile, this, file);
         return;
       }
@@ -945,7 +945,7 @@ export class AutoSaveController {
     // stays held and falls back to Obsidian's merge (which the #43 fix restored).
     // In delayed mode the write is due within the delay anyway, so bringing it
     // forward costs nothing and keeps the caller's read coherent.
-    if (this.getSettings().disableAutoSave) {
+    if (this.isHoldMode()) {
       return;
     }
 
@@ -1061,7 +1061,7 @@ export class AutoSaveController {
 
       const shortcut = this.wasQuitShortcutIntentRecentlyMarked();
       const hasPending = this.pendingSaveQueue.hasAny();
-      const manual = this.getSettings().disableAutoSave;
+      const manual = this.isHoldMode();
 
       if (!shortcut && hasPending) {
         if (manual) {
@@ -1095,7 +1095,7 @@ export class AutoSaveController {
       this.pendingSaveQueue.refreshAllLatestData();
       const shortcut = this.wasQuitShortcutIntentRecentlyMarked();
       const hasPending = this.pendingSaveQueue.hasAny();
-      const manual = this.getSettings().disableAutoSave;
+      const manual = this.isHoldMode();
 
       if (!shortcut && hasPending) {
         // CRITICAL (issue #26): Obsidian's main process force-destroys the window
@@ -1223,7 +1223,7 @@ export class AutoSaveController {
   }
 
   private confirmDeleteIfNeeded(filePath: string): boolean {
-    if (!this.getSettings().disableAutoSave || !this.pendingSaveQueue.has(filePath)) {
+    if (!this.isHoldMode() || !this.pendingSaveQueue.has(filePath)) {
       return true;
     }
 
@@ -1364,7 +1364,7 @@ export class AutoSaveController {
 
     this.markQuitShortcutIntent();
 
-    if (!this.getSettings().disableAutoSave || !this.pendingSaveQueue.hasAny()) {
+    if (!this.isHoldMode() || !this.pendingSaveQueue.hasAny()) {
       return;
     }
 
@@ -1492,6 +1492,16 @@ export class AutoSaveController {
       key: event.key,
     });
     return false;
+  }
+
+  /**
+   * 持有模式：disableAutoSave（上游手动模式）或 autosaveEnabled 关闭。
+   * 语义 = 永不自动落盘：队列条目只挂起不冲刷，关闭/退出弹提示，丢弃可回滚。
+   * 控制器与调度器常驻创建，autosaveEnabled 只在这一层生效。
+   */
+  private isHoldMode(): boolean {
+    const s = this.getSettings();
+    return s.disableAutoSave || !s.autosaveEnabled;
   }
 
   private shouldHoldSave(view: TextFileView, filePath: string): boolean {

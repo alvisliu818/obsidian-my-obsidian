@@ -121,26 +121,30 @@ export class SaveControlPlugin extends Plugin {
 
     // 自动保存：上游控制器管库内（延迟 Obsidian 自己的保存），本模块的调度器
     // 管库外（驱动三个库外视图落盘）。两者共用状态栏的待保存计数。
+    // 控制器与调度器无条件常驻：它们同时承载关闭提示、丢弃回滚、configureAutoSave
+    // 下发——autosaveEnabled=false 只是「持有模式」（不自动落盘），不是「模块下线」；
+    // 之前把机制整个关掉，库外编辑器回落到自带 2s 防抖，编辑期间就把磁盘写脏了。
+    this.autosaveController = new AutoSaveController(this.app, () => this.settings, {
+      // 关标签页提示：库内看待保存队列，库外看视图脏状态。
+      describeUnsaved: (leaf) => this.describeLeafUnsaved(leaf),
+      flushLeaf: (leaf) => this.flushLeafUnsaved(leaf),
+      discardLeaf: (leaf) => this.discardLeafUnsaved(leaf),
+      promptOnClose: () => this.settings.promptUnsavedOnClose,
+    });
+    this.autosaveController.setPendingSaveCountChangeHandler(() => this.emitPendingCount());
+    this.autosaveController.enable();
     if (this.settings.autosaveEnabled) {
       this.autosaveManager = new AutosaveManager(this, this.versioning);
       this.autosaveManager.start();
-      this.autosaveController = new AutoSaveController(this.app, () => this.settings, {
-        // 关标签页提示：库内看待保存队列，库外看视图脏状态。
-        describeUnsaved: (leaf) => this.describeLeafUnsaved(leaf),
-        flushLeaf: (leaf) => this.flushLeafUnsaved(leaf),
-        discardLeaf: (leaf) => this.discardLeafUnsaved(leaf),
-        promptOnClose: () => this.settings.promptUnsavedOnClose,
-      });
-      this.autosaveController.setPendingSaveCountChangeHandler(() => this.emitPendingCount());
-      this.autosaveController.enable();
-      // 退出前冲刷库外的待保存更改（库内的由控制器自己的 quit 处理）。
-      this.registerEvent(
-        this.app.workspace.on("quit", () => {
-          void this.externalScheduler?.flushAll();
-        }),
-      );
     }
-    if (this.settings.externalFilesEnabled && this.settings.autosaveEnabled) {
+    // 退出前冲刷库外的待保存更改（库内的由控制器自己的 quit 处理）。退出即写：
+    // 静默丢弃会丢数据；持有语义只约束「后台自动写」，不约束显式退出。
+    this.registerEvent(
+      this.app.workspace.on("quit", () => {
+        void this.externalScheduler?.flushAll();
+      }),
+    );
+    if (this.settings.externalFilesEnabled) {
       this.externalScheduler = new ExternalSaveScheduler(this);
       this.externalScheduler.setPendingSaveCountChangeHandler(() => this.emitPendingCount());
       this.externalScheduler.start();
@@ -798,23 +802,20 @@ export class SaveControlPlugin extends Plugin {
       this.saveStatusIndicator.detach();
       this.saveStatusIndicator = null;
     }
-    // 自动保存（库内控制器 + 间隔快照 + 库外调度器）
-    if (this.settings.autosaveEnabled && !this.autosaveController) {
-      this.autosaveManager = this.autosaveManager ?? new AutosaveManager(this, this.versioning);
+    // 自动保存（间隔快照）：随 autosaveEnabled 开关启停。
+    // 控制器与调度器常驻（见 onload 注释）——持有语义在它们内部按开关门控。
+    if (this.settings.autosaveEnabled && !this.autosaveManager) {
+      this.autosaveManager = new AutosaveManager(this, this.versioning);
       this.autosaveManager.start();
-      this.autosaveController = new AutoSaveController(this.app, () => this.settings);
-      this.autosaveController.setPendingSaveCountChangeHandler((n) => this.saveStatusIndicator?.setPendingSaveCount(n));
-      this.autosaveController.enable();
-    } else if (!this.settings.autosaveEnabled && this.autosaveController) {
-      this.autosaveController.disable();
-      this.autosaveController = null;
-      this.autosaveManager?.stop();
+    } else if (!this.settings.autosaveEnabled && this.autosaveManager) {
+      this.autosaveManager.stop();
       this.autosaveManager = null;
     }
-    if (this.settings.externalFilesEnabled && this.settings.autosaveEnabled && !this.externalScheduler) {
+    if (this.settings.externalFilesEnabled && !this.externalScheduler) {
       this.externalScheduler = new ExternalSaveScheduler(this);
+      this.externalScheduler.setPendingSaveCountChangeHandler((n) => this.saveStatusIndicator?.setPendingSaveCount(n));
       this.externalScheduler.start();
-    } else if (this.externalScheduler && (!this.settings.externalFilesEnabled || !this.settings.autosaveEnabled)) {
+    } else if (this.externalScheduler && !this.settings.externalFilesEnabled) {
       this.externalScheduler.stop();
       this.externalScheduler = null;
     }
