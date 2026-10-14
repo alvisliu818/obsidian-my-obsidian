@@ -156,6 +156,9 @@ export default class LogseqEditorPlugin extends Plugin {
 
   private origSetViewState: ((this: WorkspaceLeaf, state: ViewState, eState?: unknown) => Promise<void>) | null = null;
   private statusModeEl: HTMLElement | null = null;
+  /** 字数/字符数状态项：块编辑器（含库外 shell）激活时显示。 */
+  private statusCountEl: HTMLElement | null = null;
+  private countRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -1296,6 +1299,8 @@ export default class LogseqEditorPlugin extends Plugin {
   private buildStatusBar(): void {
     const bar = this.addStatusBarItem();
     bar.addClass('lgp-statusbar');
+    this.statusCountEl = bar.createEl('span', { cls: 'lgp-status-count' });
+    this.statusCountEl.style.display = 'none';
     this.statusModeEl = bar.createEl('a', { cls: 'lgp-status-item' });
     this.statusModeEl.addEventListener('click', (evt) => this.showModeMenu(evt));
     // Keep the label in sync with whatever view is active. A same-leaf view
@@ -1309,6 +1314,9 @@ export default class LogseqEditorPlugin extends Plugin {
   /** Current editing mode of the active editor (menu check + chip label). */
   private currentMode(): 'edit' | 'source' | 'native' {
     if (this.app.workspace.getActiveViewOfType(BlockEditorView)) return 'edit';
+    // 库外 shell：里面托管的就是块编辑器（外层视图类型是 logseq-external-block，
+    // getActiveViewOfType(BlockEditorView) 探不到 inner）。
+    if (this.app.workspace.getActiveViewOfType(ExternalBlockView)) return 'edit';
     const md = this.app.workspace.getActiveViewOfType(MarkdownView);
     // Obsidian's own raw source mode (mode 'source' + source flag true) —
     // NOT live preview, which is also an editing mode.
@@ -1319,14 +1327,18 @@ export default class LogseqEditorPlugin extends Plugin {
   /** Click → dropdown with the three modes; a check marks the current one. */
   private showModeMenu(evt: MouseEvent): void {
     const current = this.currentMode();
+    const external = !!this.app.workspace.getActiveViewOfType(ExternalBlockView);
     const menu = new Menu();
     const entry = (title: string, icon: string, mode: 'edit' | 'source' | 'native') =>
       menu.addItem((item) =>
         item.setTitle(title).setIcon(icon).setChecked(mode === current).onClick(() => void this.applyMode(mode)),
       );
     entry('Logseq editor', 'lucide-eye', 'edit');
-    entry('Page source mode', 'lucide-file-code', 'source');
-    entry('Native editor', 'lucide-pencil-line', 'native');
+    // 库外文件打不开原生编辑器（不挂 TFile），只列当前模式。
+    if (!external) {
+      entry('Page source mode', 'lucide-file-code', 'source');
+      entry('Native editor', 'lucide-pencil-line', 'native');
+    }
     menu.showAtMouseEvent(evt);
   }
 
@@ -1363,12 +1375,55 @@ export default class LogseqEditorPlugin extends Plugin {
     const isMarkdown = !!leaf && leaf.view?.getViewType?.() === 'markdown';
     if (mode === 'native' && !isMarkdown) {
       el.style.display = 'none';
+    } else {
+      el.style.display = '';
+      el.setText(mode === 'edit' ? 'Logseq editor' : mode === 'source' ? 'Page source mode' : 'Native editor');
+      el.toggleClass('mod-active-srcmode', mode === 'source');
+      el.setAttribute('aria-label', 'Editing mode — click to switch');
+    }
+    this.refreshCountStatusBar();
+  }
+
+  // ------------------------------------------------------------------
+  // 字数/字符数：块编辑器（含库外 shell）激活时显示。原生 MarkdownView 的
+  // 字数统计只挂在自己视图上，块编辑器接管（或库外 shell）后这一栏就空了，
+  // 这里补回来。编辑侧统一走 markDirty → notifyEditorDirty 节流刷新。
+  // ------------------------------------------------------------------
+
+  /** 编辑器内容有改动（BlockEditorView.markDirty 调用）——300ms 节流刷新。 */
+  notifyEditorDirty(): void {
+    if (this.countRefreshTimer !== null) return;
+    this.countRefreshTimer = setTimeout(() => {
+      this.countRefreshTimer = null;
+      this.refreshCountStatusBar();
+    }, 300);
+  }
+
+  /** 活动编辑器（库内块编辑器或库外 shell 的 inner），没有则 null。 */
+  private activeBlockEditor(): BlockEditorView | null {
+    const direct = this.app.workspace.getActiveViewOfType(BlockEditorView);
+    if (direct) return direct;
+    const shell = this.app.workspace.getActiveViewOfType(ExternalBlockView);
+    return shell?.blockEditor ?? null;
+  }
+
+  private refreshCountStatusBar(): void {
+    const el = this.statusCountEl;
+    if (!el) return;
+    const editor = this.activeBlockEditor();
+    if (!editor) {
+      el.style.display = 'none';
       return;
     }
+    const text = editor.getViewData();
+    // CJK 字符逐字计数，其余按空白分词——与原生字数统计的中英混合口径一致。
+    const cjk = text.match(/[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/g)?.length ?? 0;
+    const latin = text
+      .replace(/[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean).length;
     el.style.display = '';
-    el.setText(mode === 'edit' ? 'Logseq editor' : mode === 'source' ? 'Page source mode' : 'Native editor');
-    el.toggleClass('mod-active-srcmode', mode === 'source');
-    el.setAttribute('aria-label', 'Editing mode — click to switch');
+    el.setText(`${cjk + latin} 字数 ${text.length} 字符`);
   }
 
   private switchToNative(leaf: WorkspaceLeaf, sourceMode?: 'source'): void {

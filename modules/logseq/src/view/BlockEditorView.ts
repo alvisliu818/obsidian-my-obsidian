@@ -2952,6 +2952,8 @@ ${content}`;
       this.externalDirty = true;
     }
     this.requestSave(); // native: sets dirty + debounced save (2s)
+    // 状态栏字数刷新（main 侧节流）；所有编辑路径都汇聚到这里，一个口就够。
+    this.plugin.notifyEditorDirty();
   }
 
   private async onExternalModify(file: TAbstractFile): Promise<void> {
