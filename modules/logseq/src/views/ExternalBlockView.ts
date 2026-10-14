@@ -89,6 +89,7 @@ export class ExternalBlockView extends ItemView {
 
   async setState(state: unknown, result: ViewStateResult): Promise<void> {
     const s = (state ?? {}) as Partial<ExternalBlockViewState>;
+    const prevAbs = this.abs;
     if (typeof s.abs === 'string') this.abs = s.abs;
     if (typeof s.name === 'string') this.fileName = s.name;
     if (typeof s.rel === 'string') this.rel = s.rel;
@@ -97,6 +98,12 @@ export class ExternalBlockView extends ItemView {
     await super.setState(state, result);
     // Mounting waits for the state: Obsidian calls onOpen BEFORE setState, so the
     // path and name are not known yet at onOpen time.
+    //
+    // 复用路径（reuseUnmodifiedTab 把已有 shell 的 leaf 交给另一个文件）：abs 变了
+    // 必须先释放旧 inner（保存+卸载）再重建，否则 abs 换了内容还是旧文件。
+    if (this.abs && this.inner && prevAbs && prevAbs !== this.abs) {
+      await this.releaseInner();
+    }
     if (this.abs && !this.inner) this.hostBlockEditor();
     this.syncHeaderPath();
   }
@@ -189,13 +196,18 @@ export class ExternalBlockView extends ItemView {
   async onClose(): Promise<void> {
     // The hosted view is not owned by the framework, so its teardown is ours:
     // save the outside file and release the editor.
+    await this.releaseInner();
+  }
+
+  /** Save and tear down the hosted editor (shared by close and in-place retarget). */
+  private async releaseInner(): Promise<void> {
     const inner = this.inner;
     this.inner = null;
     if (!inner) return;
     try {
       await inner.save();
     } catch {
-      /* a failed save on close must not block the tab closing */
+      /* a failed save must not block the tab closing or retargeting */
     }
     try {
       inner.onunload();
