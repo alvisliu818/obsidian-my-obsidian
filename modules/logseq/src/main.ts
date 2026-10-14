@@ -3,7 +3,7 @@
  * vault-wide block-id index, and clean uninstall (restore native views).
  */
 
-import { Menu, MarkdownView, Notice, Platform, Plugin, TAbstractFile, TFile, WorkspaceLeaf, debounce, normalizePath, type CachedMetadata, type ViewState } from 'obsidian';
+import { Menu, MarkdownView, Notice, Platform, Plugin, TAbstractFile, TFile, TextFileView, WorkspaceFloating, WorkspaceLeaf, WorkspaceRoot, debounce, normalizePath, type CachedMetadata, type ViewState } from 'obsidian';
 import { BlockEditorView, VIEW_TYPE_BLOCK_EDITOR } from './view/BlockEditorView';
 import { FragmentHost, type FragmentOptions } from './blocks/fragmentEditor';
 import { CMD_COLLAPSE_ALL, CMD_FIND, CMD_REPLACE } from './interactions/hotkeys';
@@ -1915,6 +1915,59 @@ export default class LogseqEditorPlugin extends Plugin {
    * they never asked for; reusing an existing block-editor tab would silently
    * replace their work. A fresh tab is the only variant that touches nothing.
    */
+  // ------------------------------------------------------------------
+  // 外部文件的落页策略（遵循 open-tab-settings 的「未修改时在当前标签页打开」）
+  // ------------------------------------------------------------------
+
+  /** open-tab-settings 模块是否要求「未修改则复用当前页」（鸭子类型读其设置切片）。 */
+  private shouldReuseUnmodifiedLeaf(): boolean {
+    const host = (this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } }).plugins;
+    const ots = host?.plugins?.['open-tab-settings'] as
+      | { settings?: { reuseUnmodifiedTab?: boolean; openInNewTab?: boolean } }
+      | undefined;
+    return ots?.settings?.reuseUnmodifiedTab === true && ots.settings.openInNewTab !== true;
+  }
+
+  /** 该 leaf 是否有未落盘的用户编辑（与 open-tab-settings 的判定信号一致）。 */
+  private isLeafEdited(leaf: WorkspaceLeaf): boolean {
+    const duck = leaf as unknown as { openTabSettings?: { touched?: boolean } };
+    if (duck.openTabSettings?.touched) return true;
+    const view = leaf.view;
+    if (view instanceof TextFileView && (view as TextFileView & { dirty?: boolean }).dirty === true) return true;
+    // 外壳视图（ExternalBlockView 等）的真编辑器是宿主的 TextFileView 子类
+    const inner = (view as unknown as { blockEditor?: unknown } | null)?.blockEditor;
+    if (inner instanceof TextFileView && (inner as TextFileView & { dirty?: boolean }).dirty === true) return true;
+    return false;
+  }
+
+  private isMainAreaLeaf(leaf: WorkspaceLeaf): boolean {
+    const root = leaf.getRoot();
+    return root instanceof WorkspaceRoot || root instanceof WorkspaceFloating;
+  }
+
+  /**
+   * 为外部文件挑选落页：设置开启时优先复用已显示同一文件的标签页，其次复用
+   * 无编辑的当前页；设置关闭或当前页有编辑时按原样开新页（split/tab）。
+   */
+  private pickExternalLeaf(
+    openMode: 'tab' | 'split',
+    showsSameFile: (leaf: WorkspaceLeaf) => boolean,
+  ): WorkspaceLeaf {
+    if (this.shouldReuseUnmodifiedLeaf()) {
+      let existing: WorkspaceLeaf | undefined;
+      this.app.workspace.iterateAllLeaves((l) => {
+        if (existing) return;
+        if (this.isMainAreaLeaf(l) && showsSameFile(l)) existing = l;
+      });
+      if (existing) return existing;
+      const active = this.app.workspace.getMostRecentLeaf();
+      if (active?.canNavigate() && this.isMainAreaLeaf(active) && !this.isLeafEdited(active)) {
+        return active;
+      }
+    }
+    return this.app.workspace.getLeaf(openMode);
+  }
+
   private async openInBlockEditor(mount: ExternalMount, node: MountNode): Promise<boolean> {
     if (!isMarkdownFile(node.name)) return false;
     try {
@@ -1931,19 +1984,20 @@ export default class LogseqEditorPlugin extends Plugin {
       //
       // Two things the user asked for, both here:
       //
-      //  - Never touch an existing leaf. Reusing one (or the current tab) means
-      //    the note they were reading gets replaced by the seed and then by the
-      //    outside file — their work disappears from the screen.
-      //  - Always a fresh tab. `getLeaf('tab')` creates one, so the seed's brief
-      //    appearance is confined to a tab that did not exist a moment ago. The
-      //    alternative, reusing a block editor already on screen, is instant
-      //    (measured: a 5 ms window) but costs that editor's tab its contents.
+      //  - Never touch a leaf the user has edited. Reusing one means the note
+      //    they were writing gets replaced by the outside file — their work
+      //    disappears from the screen. isLeafEdited guards that.
+      //  - Honor open-tab-settings' "reuse unmodified tab" toggle: with it on,
+      //    the current tab is reused when it has no edits, and a tab already
+      //    showing the same file is revealed instead of stacking duplicates.
+      //    Otherwise (the old default) every open lands in a fresh tab.
       // The same route the code editor takes: an ItemView mounted by
       // setViewState, which needs no file at all. BlockEditorView is a
       // TextFileView and cannot be mounted that way, so a thin shell hosts it
       // (see ExternalBlockView for the measurements behind this).
-      const leaf = this.app.workspace.getLeaf(
+      const leaf = this.pickExternalLeaf(
         this.settings.externalSplitView === true ? 'split' : 'tab',
+        (l) => l.view instanceof ExternalBlockView && (l.view as ExternalBlockView).abs === node.abs,
       );
       await leaf.setViewState({
         type: VIEW_TYPE_EXTERNAL_BLOCK,
@@ -1987,7 +2041,10 @@ export default class LogseqEditorPlugin extends Plugin {
     // without a file — no seed needed here (measured: setViewState on a
     // TextFileView type with no TFile yields the "empty" placeholder, which is
     // why the markdown path above has to borrow a live editor).
-    const leaf = this.app.workspace.getLeaf('tab');
+    const leaf = this.pickExternalLeaf(
+      'tab',
+      (l) => l.view instanceof ExternalCodeView && (l.view as ExternalCodeView).abs === node.abs,
+    );
     await leaf.setViewState({
       type: VIEW_TYPE_EXTERNAL_CODE,
       active: true,
@@ -2075,7 +2132,13 @@ export default class LogseqEditorPlugin extends Plugin {
         return;
       }
     }
-    const leaf = this.app.workspace.getLeaf('tab');
+    const leaf = this.pickExternalLeaf(
+      'tab',
+      (l) => {
+        const v = l.view as ExternalFileView | null;
+        return v instanceof ExternalFileView && v.abs === node.abs && v.readOnly === false;
+      },
+    );
     await leaf.setViewState({
       type: VIEW_TYPE_EXTERNAL_FILE,
       active: true,
