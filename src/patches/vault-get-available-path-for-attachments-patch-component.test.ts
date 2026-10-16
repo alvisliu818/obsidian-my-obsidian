@@ -1,7 +1,6 @@
 import type { Vault as VaultOriginal } from 'obsidian';
 
 import { AttachmentPathContext } from '@mnaoumov/obsidian-lib/attachment-path';
-import { castTo } from '@mnaoumov/typescript-lib/object-utils';
 import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import { App } from 'obsidian-test-mocks/obsidian';
 import {
@@ -13,9 +12,6 @@ import {
 } from 'vitest';
 
 import type { AttachmentPathManager } from '../attachment-path-manager.ts';
-import type { PluginSettingsComponent } from '../plugin-settings-component.ts';
-import type { PluginSettings } from '../plugin-settings.ts';
-import type { GetAvailablePathForAttachmentsFunctionExtended } from './vault-get-available-path-for-attachments-patch-component.ts';
 
 import {
   SelfWriteClaim,
@@ -23,33 +19,10 @@ import {
 } from '../self-write-registry.ts';
 import { VaultGetAvailablePathForAttachmentsPatchComponent } from './vault-get-available-path-for-attachments-patch-component.ts';
 
-interface PatchedMethodWithExtended {
-  extended: () => Promise<string>;
-}
-
-interface SettingsLike {
-  isAttachmentUnitFolder: (path: string) => boolean;
-}
-
 describe('VaultGetAvailablePathForAttachmentsPatchComponent', () => {
   let vault: VaultOriginal;
   let attachmentPathManager: AttachmentPathManager;
   let originalMethod: ReturnType<typeof vi.fn>;
-  let pluginSettingsComponent: PluginSettingsComponent;
-  let settings: SettingsLike;
-
-  /**
-   * Reads the designation back the way a published `obsidian-dev-utils` release does — off the patched vault
-   * method. `@mnaoumov/obsidian-lib` reads it through the plugin API instead, which is why the graft is only kept.
-   *
-   * @param folderPath - The vault-relative path of the folder.
-   * @returns `true` when the folder is designated, `false` when it is not and when nobody published a
-   * designation at all.
-   */
-  function checkIsAttachmentUnitFolder(folderPath: string): boolean {
-    const graft = castTo<Partial<GetAvailablePathForAttachmentsFunctionExtended>>(vault.getAvailablePathForAttachments);
-    return graft.checkIsAttachmentUnitFolder?.(folderPath) ?? false;
-  }
 
   beforeEach(() => {
     const appMock = App.createConfigured__();
@@ -63,18 +36,11 @@ describe('VaultGetAvailablePathForAttachmentsPatchComponent', () => {
     attachmentPathManager = strictProxy<AttachmentPathManager>({
       getAvailablePathForAttachments: vi.fn().mockResolvedValue('/extended/attachment/path')
     });
-    settings = {
-      isAttachmentUnitFolder: vi.fn<(path: string) => boolean>().mockReturnValue(false)
-    };
-    pluginSettingsComponent = strictProxy<PluginSettingsComponent>({
-      settings: castTo<PluginSettings>(settings)
-    });
   });
 
   function createComponent(): VaultGetAvailablePathForAttachmentsPatchComponent {
     return new VaultGetAvailablePathForAttachmentsPatchComponent({
       attachmentPathManager,
-      pluginSettingsComponent,
       vault
     });
   }
@@ -122,31 +88,15 @@ describe('VaultGetAvailablePathForAttachmentsPatchComponent', () => {
     expect(selfWriteRegistry.consume('/extended/attachment/path')).toBe(SelfWriteClaim.OutsideCaller);
   });
 
-  it('should attach an extended method bound to the attachment path manager', async () => {
-    const component = createComponent();
-    component.load();
-
-    const patchedMethod = castTo<PatchedMethodWithExtended>(vault.getAvailablePathForAttachments);
-    const result = await patchedMethod.extended();
-
-    expect(result).toBe('/extended/attachment/path');
-    expect(vi.mocked(attachmentPathManager.getAvailablePathForAttachments)).toHaveBeenCalledTimes(1);
-  });
-
-  it('should publish the attachment unit folder designation read back from the vault', () => {
-    vi.mocked(settings.isAttachmentUnitFolder).mockImplementation((path) => path === 'Materials/page_files');
-    const component = createComponent();
-    component.load();
-
-    expect(checkIsAttachmentUnitFolder('Materials/page_files')).toBe(true);
-    expect(checkIsAttachmentUnitFolder('Materials')).toBe(false);
-  });
-
-  it('should answer no designation before the patch is installed', () => {
+  it('should graft no extra members onto the patched method', () => {
     /*
-     * A reader that runs against a vault no attachment-location plugin has patched — the other plugin
-     * installed on its own, or this one still loading — gets `false`, not a crash.
+     * `extended` and `checkIsAttachmentUnitFolder` were removed in 15.0.0. Their replacements are the plugin API's
+     * `getAvailablePathForAttachments` and `isAttachmentUnitFolder`.
      */
-    expect(checkIsAttachmentUnitFolder('Materials/page_files')).toBe(false);
+    const component = createComponent();
+    component.load();
+
+    expect(Reflect.get(vault.getAvailablePathForAttachments, 'extended')).toBeUndefined();
+    expect(Reflect.get(vault.getAvailablePathForAttachments, 'checkIsAttachmentUnitFolder')).toBeUndefined();
   });
 });

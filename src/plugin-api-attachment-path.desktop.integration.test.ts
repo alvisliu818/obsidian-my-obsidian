@@ -9,41 +9,31 @@ import {
 import { findPluginSettingsComponent } from '../scripts/helpers/plugin-settings-component-finder.ts';
 
 /*
- * End-to-end coverage for the two API members that replace the members grafted onto the patched
- * `Vault.getAvailablePathForAttachments`: `getAvailablePathForAttachments` for `extended`, and
- * `isAttachmentUnitFolder` for `checkIsAttachmentUnitFolder`.
+ * End-to-end coverage for the API member `getAvailablePathForAttachments`, which replaced the `extended` member
+ * grafted onto the patched `Vault.getAvailablePathForAttachments` until 15.0.0.
  *
- * A library moves from the graft to the API without changing what it computes, so the claim under test is
- * PARITY: asked the same questions in the same vault, the graft and the API answer the same. The questions are
- * chosen so that a member answering with a constant, or with Obsidian's own location, would differ — a note
- * whose folder template is this plugin's, the same question asked as a rename with an old note path (so the
- * context is mapped rather than dropped), and a designated folder beside a plain one.
+ * The questions are chosen so that a member answering with a constant, or with Obsidian's own location, would
+ * fail: a note whose folder template is this plugin's, and the same question asked as a rename with an old note
+ * path, so the context is mapped rather than dropped. The patched method itself is checked to carry no graft.
  */
 
 const PLUGIN_ID = 'obsidian-custom-attachment-location';
 const ATTACHMENT_FOLDER_PATH = './_/{{noteFileName}}';
-const DESIGNATED_FOLDER_PATH = 'Materials/page_files';
-const PLAIN_FOLDER_PATH = 'Materials';
 
 interface ProbeResult {
   readonly apiFound: boolean;
   readonly apiPaths: readonly string[];
-  readonly apiUnitFolderAnswers: readonly boolean[];
-  readonly graftFound: boolean;
-  readonly graftPaths: readonly string[];
-  readonly graftUnitFolderAnswers: readonly boolean[];
+  readonly graftMembers: readonly string[];
   readonly settingsFound: boolean;
 }
 
-describe('The plugin API answers as the getAvailablePathForAttachments graft does', () => {
-  it('gives the same attachment paths and the same unit-folder answers', async () => {
+describe('The plugin API resolves attachment paths with this plugin\'s template', () => {
+  it('answers with the template for a plain and a rename question, and the vault method carries no graft', async () => {
     const result = await evalInObsidian({
       async callback({
         app,
         attachmentFolderPath,
-        designatedFolderPath,
         findPluginSettingsComponent: findSettingsComponent,
-        plainFolderPath,
         pluginId
       }): Promise<ProbeResult> {
         interface ResolverParams {
@@ -60,21 +50,11 @@ describe('The plugin API answers as the getAvailablePathForAttachments graft doe
 
         interface ApiLike {
           getAvailablePathForAttachments: (params: ResolverParams) => Promise<string>;
-          isAttachmentUnitFolder: (params: UnitFolderParams) => boolean;
-        }
-
-        interface GraftLike {
-          checkIsAttachmentUnitFolder: (folderPath: string) => boolean;
-          extended: (params: ResolverParams) => Promise<string>;
         }
 
         interface ApiRecord {
           readonly api: unknown;
           readonly isRevoked: boolean;
-        }
-
-        interface UnitFolderParams {
-          readonly folderPath: string;
         }
 
         interface ObsidianDevUtilsWrapper {
@@ -93,35 +73,20 @@ describe('The plugin API answers as the getAvailablePathForAttachments graft doe
           readonly records?: Record<string, ApiRecord[]>;
         }
 
-        interface ParitySettings {
+        interface PathSettings {
           attachmentFolderPath: string;
-          attachmentUnitFolderPaths: string[];
-          isAttachmentUnitFolder: (path: string) => boolean;
         }
 
-        const EMPTY: ProbeResult = {
-          apiFound: false,
-          apiPaths: [],
-          apiUnitFolderAnswers: [],
-          graftFound: false,
-          graftPaths: [],
-          graftUnitFolderAnswers: [],
-          settingsFound: false
-        };
+        const graftMembers = ['extended', 'checkIsAttachmentUnitFolder']
+          .filter((member) => Reflect.get(app.vault.getAvailablePathForAttachments, member) !== undefined);
 
         function isApiLike(value: unknown): value is ApiLike {
           const record = value as null | Record<string, unknown>;
           return typeof value === 'object' && record !== null
-            && typeof record['getAvailablePathForAttachments'] === 'function'
-            && typeof record['isAttachmentUnitFolder'] === 'function';
+            && typeof record['getAvailablePathForAttachments'] === 'function';
         }
 
-        function isGraftLike(value: unknown): value is GraftLike {
-          return typeof Reflect.get(value as object, 'extended') === 'function'
-            && typeof Reflect.get(value as object, 'checkIsAttachmentUnitFolder') === 'function';
-        }
-
-        function isParitySettings(value: unknown): value is ParitySettings {
+        function isPathSettings(value: unknown): value is PathSettings {
           const record = value as null | Record<string, unknown>;
           return typeof value === 'object' && record !== null
             && typeof record['attachmentFolderPath'] === 'string'
@@ -131,23 +96,18 @@ describe('The plugin API answers as the getAvailablePathForAttachments graft doe
         const record = (window as Partial<ObsidianDevUtilsWrapper>).__obsidianDevUtils?.pluginApiRegistry?.value?.records?.[pluginId]
           ?.find((candidate) => !candidate.isRevoked);
         const api = record && isApiLike(record.api) ? record.api : null;
-        // Read the way a foreign plugin does: off `app.vault` alone.
-        const graftCandidate: unknown = app.vault.getAvailablePathForAttachments;
-        const graft = isGraftLike(graftCandidate) ? graftCandidate : null;
-
-        if (!api || !graft) {
-          return { ...EMPTY, apiFound: api !== null, graftFound: graft !== null };
+        if (!api) {
+          return { apiFound: false, apiPaths: [], graftMembers, settingsFound: false };
         }
 
-        const settingsComponent = findSettingsComponent(app.plugins.getPlugin(pluginId), isParitySettings);
+        const settingsComponent = findSettingsComponent(app.plugins.getPlugin(pluginId), isPathSettings);
         if (!settingsComponent) {
-          return { ...EMPTY, apiFound: true, graftFound: true };
+          return { apiFound: true, apiPaths: [], graftMembers, settingsFound: false };
         }
 
         const priorFolderPath = settingsComponent.settings.attachmentFolderPath;
-        const priorUnitFolderPaths = settingsComponent.settings.attachmentUnitFolderPaths;
         const stamp = `${Date.now().toString()}-${Math.floor(performance.now()).toString()}`;
-        const notePath = `parity-${stamp}.md`;
+        const notePath = `api-path-${stamp}.md`;
 
         const questions: ResolverParams[] = [
           {
@@ -166,41 +126,28 @@ describe('The plugin API answers as the getAvailablePathForAttachments graft doe
             context: 'RenameNote',
             notePathOrFile: notePath,
             oldAttachmentPathOrFile: 'image.png',
-            oldNotePathOrFile: `parity-old-${stamp}.md`,
+            oldNotePathOrFile: `api-path-old-${stamp}.md`,
             readAttachmentFileContent: null,
             shouldSkipGeneratedAttachmentFileName: true,
             shouldSkipMissingAttachmentFolderCreation: true
           }
         ];
-        const folderPaths = [designatedFolderPath, plainFolderPath];
 
         try {
           await settingsComponent.editAndSave((settings) => {
             settings.attachmentFolderPath = attachmentFolderPath;
-            settings.attachmentUnitFolderPaths = [designatedFolderPath];
           });
           await app.vault.create(notePath, '');
 
-          const graftPaths: string[] = [];
           const apiPaths: string[] = [];
           for (const question of questions) {
-            graftPaths.push(await graft.extended(question));
             apiPaths.push(await api.getAvailablePathForAttachments(question));
           }
 
-          return {
-            apiFound: true,
-            apiPaths,
-            apiUnitFolderAnswers: folderPaths.map((folderPath) => api.isAttachmentUnitFolder({ folderPath })),
-            graftFound: true,
-            graftPaths,
-            graftUnitFolderAnswers: folderPaths.map((folderPath) => graft.checkIsAttachmentUnitFolder(folderPath)),
-            settingsFound: true
-          };
+          return { apiFound: true, apiPaths, graftMembers, settingsFound: true };
         } finally {
           await settingsComponent.editAndSave((settings) => {
             settings.attachmentFolderPath = priorFolderPath;
-            settings.attachmentUnitFolderPaths = priorUnitFolderPaths;
           });
           const note = app.vault.getAbstractFileByPath(notePath);
           if (note) {
@@ -210,23 +157,20 @@ describe('The plugin API answers as the getAvailablePathForAttachments graft doe
       },
       input: {
         attachmentFolderPath: ATTACHMENT_FOLDER_PATH,
-        designatedFolderPath: DESIGNATED_FOLDER_PATH,
         findPluginSettingsComponent,
-        plainFolderPath: PLAIN_FOLDER_PATH,
         pluginId: PLUGIN_ID
       },
       vaultPath: getTemporaryVault().path
     });
 
+    expect(result.graftMembers).toEqual([]);
     expect(result.apiFound).toBe(true);
-    expect(result.graftFound).toBe(true);
     expect(result.settingsFound).toBe(true);
 
-    // This plugin's template, not Obsidian's location: a member answering with Obsidian's would not match.
-    expect(result.graftPaths[0]).toMatch(/^_\/parity-.*\/image\.png$/);
-    expect(result.apiPaths).toEqual(result.graftPaths);
-
-    expect(result.graftUnitFolderAnswers).toEqual([true, false]);
-    expect(result.apiUnitFolderAnswers).toEqual(result.graftUnitFolderAnswers);
+    // This plugin's template, not Obsidian's location, for both contexts.
+    expect(result.apiPaths).toHaveLength(2);
+    for (const apiPath of result.apiPaths) {
+      expect(apiPath).toMatch(/^_\/api-path-[\d-]+\/image\.png$/);
+    }
   }, 120_000);
 });
