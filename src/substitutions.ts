@@ -3,13 +3,13 @@ import type {
   FileStats
 } from 'obsidian';
 
-// eslint-disable-next-line import-x/no-namespace -- Need to pass entire obsidian module.
-import * as obsidian from 'obsidian';
 import {
   basename,
   dirname,
   extname
-} from 'obsidian-dev-utils/path';
+} from '@mnaoumov/typescript-lib/path';
+// eslint-disable-next-line import-x/no-namespace -- Need to pass entire obsidian module.
+import * as obsidian from 'obsidian';
 
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';
 import type { TokenEvaluatorContext } from './token-evaluator-context.ts';

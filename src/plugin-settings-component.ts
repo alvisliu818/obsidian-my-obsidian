@@ -1,25 +1,25 @@
-import type { DataHandler } from 'obsidian-dev-utils/obsidian/data-handler';
-import type { PathOrAbstractFile } from 'obsidian-dev-utils/obsidian/file-system';
-import type { PluginEventSource } from 'obsidian-dev-utils/obsidian/plugin/plugin-event-source';
-import type { MaybeReturn } from 'obsidian-dev-utils/type';
-import type { ValueWrapper } from 'obsidian-dev-utils/value-wrapper';
+import type { DataHandler } from '@mnaoumov/obsidian-lib/data-handler';
+import type { PathOrAbstractFile } from '@mnaoumov/obsidian-lib/file-system';
+import type { PluginEventSource } from '@mnaoumov/obsidian-lib/plugin/plugin-event-source';
+import type { MaybeReturn } from '@mnaoumov/typescript-lib/type';
+import type { ValueWrapper } from '@mnaoumov/typescript-lib/value-wrapper';
 
+import { PluginSettingsComponentBase } from '@mnaoumov/obsidian-lib/components/plugin-settings-component';
+import {
+  getPath,
+  isNote
+} from '@mnaoumov/obsidian-lib/file-system';
+import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { getOsUnsafePathCharsRegExp } from '@mnaoumov/obsidian-lib/validation';
+import { EmptyFolderBehavior } from '@mnaoumov/obsidian-lib/vault';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { isValidRegExp } from '@mnaoumov/typescript-lib/reg-exp';
+import { replaceAll } from '@mnaoumov/typescript-lib/string';
+import { ensureNonNullable } from '@mnaoumov/typescript-lib/type-guards';
 import {
   App,
   debounce
 } from 'obsidian';
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { PluginSettingsComponentBase } from 'obsidian-dev-utils/obsidian/components/plugin-settings-component';
-import {
-  getPath,
-  isNote
-} from 'obsidian-dev-utils/obsidian/file-system';
-import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { getOsUnsafePathCharsRegExp } from 'obsidian-dev-utils/obsidian/validation';
-import { EmptyFolderBehavior } from 'obsidian-dev-utils/obsidian/vault';
-import { isValidRegExp } from 'obsidian-dev-utils/reg-exp';
-import { replaceAll } from 'obsidian-dev-utils/string';
-import { ensureNonNullable } from 'obsidian-dev-utils/type-guards';
 import { compare } from 'semver';
 
 import type { MigratableSettings } from './advanced-rename-and-delete-handler.ts';

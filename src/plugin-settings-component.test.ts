@@ -1,13 +1,13 @@
-import type { AsyncEventRef } from 'obsidian-dev-utils/async-events';
-import type { DataHandler } from 'obsidian-dev-utils/obsidian/data-handler';
-import type { PathOrAbstractFile } from 'obsidian-dev-utils/obsidian/file-system';
-import type { PluginEventSource } from 'obsidian-dev-utils/obsidian/plugin/plugin-event-source';
+import type { DataHandler } from '@mnaoumov/obsidian-lib/data-handler';
+import type { PathOrAbstractFile } from '@mnaoumov/obsidian-lib/file-system';
+import type { PluginEventSource } from '@mnaoumov/obsidian-lib/plugin/plugin-event-source';
+import type { AsyncEventRef } from '@mnaoumov/typescript-lib/async-events';
 
-import { noopAsync } from 'obsidian-dev-utils/function';
-import { initI18N } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { EmptyFolderBehavior } from 'obsidian-dev-utils/obsidian/vault';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
-import { ValueWrapper } from 'obsidian-dev-utils/value-wrapper';
+import { initI18N } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { EmptyFolderBehavior } from '@mnaoumov/obsidian-lib/vault';
+import { noopAsync } from '@mnaoumov/typescript-lib/function';
+import { ValueWrapper } from '@mnaoumov/typescript-lib/value-wrapper';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import { App } from 'obsidian-test-mocks/obsidian';
 import {
   beforeAll,
@@ -31,8 +31,8 @@ import {
 } from './plugin-settings.ts';
 import { TokenValidator } from './token-validator.ts';
 
-vi.mock('obsidian-dev-utils/error', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/error')>(),
+vi.mock('@mnaoumov/typescript-lib/error', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/typescript-lib/error')>(),
   printError: vi.fn<(error: unknown) => void>()
 }));
 

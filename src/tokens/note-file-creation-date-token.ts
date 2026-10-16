@@ -1,5 +1,5 @@
-import { DUMMY_PATH } from 'obsidian-dev-utils/obsidian/attachment-path';
-import { getFile } from 'obsidian-dev-utils/obsidian/file-system';
+import { DUMMY_PATH } from '@mnaoumov/obsidian-lib/attachment-path';
+import { getFile } from '@mnaoumov/obsidian-lib/file-system';
 import { z } from 'zod';
 
 import type { TokenEvaluatorContext } from '../token-evaluator-context.ts';

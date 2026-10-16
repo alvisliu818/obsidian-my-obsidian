@@ -1,13 +1,13 @@
+import type { StrictProxyPartial } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import type {
   App,
   EditorPosition
 } from 'obsidian';
-import type { StrictProxyPartial } from 'obsidian-dev-utils/strict-proxy';
 import type { MockInstance } from 'vitest';
 
-import { printError } from 'obsidian-dev-utils/error';
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+import { printError } from '@mnaoumov/typescript-lib/error';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import {
   afterEach,
   beforeEach,
@@ -27,7 +27,7 @@ import {
 } from './token-evaluator-context.ts';
 import { LegacyTokenSyntaxError } from './token-parser.ts';
 
-vi.mock('obsidian-dev-utils/error', () => ({
+vi.mock('@mnaoumov/typescript-lib/error', () => ({
   printError: vi.fn<(error: unknown) => void>()
 }));
 

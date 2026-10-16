@@ -1,45 +1,50 @@
+import type { AbortSignalComponent } from '@mnaoumov/obsidian-lib/components/abort-signal-component';
+import type { CachedMetadataEx } from '@mnaoumov/obsidian-lib/metadata-cache';
+import type { CanvasReference } from '@mnaoumov/obsidian-lib/reference';
 import type { CustomArrayDict } from '@obsidian-typings/obsidian-public-latest';
 import type {
   App,
+  Plugin,
   Reference,
   TAbstractFile,
   TFile,
   TFolder
 } from 'obsidian';
-import type { GetAvailablePathForAttachmentsFunctionExtended } from 'obsidian-dev-utils/obsidian/attachment-path';
-import type { AbortSignalComponent } from 'obsidian-dev-utils/obsidian/components/abort-signal-component';
-import type { CachedMetadataEx } from 'obsidian-dev-utils/obsidian/metadata-cache';
-import type { CanvasReference } from 'obsidian-dev-utils/obsidian/reference';
 import type {
   Mock,
   MockInstance
 } from 'vitest';
 
-import { Vault } from 'obsidian';
-import { noopAsync } from 'obsidian-dev-utils/function';
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { getCanvasReferences } from 'obsidian-dev-utils/obsidian/canvas';
-import { PluginNoticeComponent } from 'obsidian-dev-utils/obsidian/components/plugin-notice-component';
+import { CUSTOM_ATTACHMENT_LOCATION_PLUGIN_ID } from '@mnaoumov/obsidian-lib/attachment-path';
+import { getCanvasReferences } from '@mnaoumov/obsidian-lib/canvas';
+import { PluginNoticeComponent } from '@mnaoumov/obsidian-lib/components/plugin-notice-component';
 import {
   isCanvasFile,
   isFile,
   isFolder
-} from 'obsidian-dev-utils/obsidian/file-system';
-import { initI18N } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { extractLinkFile } from 'obsidian-dev-utils/obsidian/link';
-import { renderInternalLink } from 'obsidian-dev-utils/obsidian/markdown';
+} from '@mnaoumov/obsidian-lib/file-system';
+import { initI18N } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { extractLinkFile } from '@mnaoumov/obsidian-lib/link';
+import { renderInternalLink } from '@mnaoumov/obsidian-lib/markdown';
 import {
   getBacklinksForFileSafe,
   getCacheSafe,
   getLinks
-} from 'obsidian-dev-utils/obsidian/metadata-cache';
-import { addToQueue } from 'obsidian-dev-utils/obsidian/queue';
+} from '@mnaoumov/obsidian-lib/metadata-cache';
+import { publishPluginApi } from '@mnaoumov/obsidian-lib/plugin/plugin-api';
+import { addToQueue } from '@mnaoumov/obsidian-lib/queue';
 import {
   cleanupEmptyFolders,
   EmptyFolderBehavior,
   trashSafe
-} from 'obsidian-dev-utils/obsidian/vault';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+} from '@mnaoumov/obsidian-lib/vault';
+import { noopAsync } from '@mnaoumov/typescript-lib/function';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
+import {
+  Component,
+  Vault
+} from 'obsidian';
 import {
   afterEach,
   beforeAll,
@@ -53,11 +58,13 @@ import {
 import type { HandedOverSettings } from './advanced-rename-and-delete-handler.ts';
 import type { AttachmentPathManager } from './attachment-path-manager.ts';
 import type { HandedOverSettingsComponent } from './handed-over-settings-component.ts';
+import type { CustomAttachmentLocationApi } from './plugin-api.ts';
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';
 import type { PluginSettings } from './plugin-settings.ts';
 
 import { translationsMap } from './i18n/locales/translations-map.ts';
 import { confirmMinimizable } from './modals/minimizable-confirm-modal.ts';
+import { PLUGIN_API_VERSION } from './plugin-api.ts';
 import { UnusedAttachmentsRemover } from './unused-attachments-remover.ts';
 
 interface QueueParamsLike {
@@ -78,25 +85,25 @@ interface SettingsLike {
   isPathIgnored: (path: string) => boolean;
 }
 
-vi.mock('obsidian-dev-utils/obsidian/canvas', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/canvas')>(),
+vi.mock('@mnaoumov/obsidian-lib/canvas', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/canvas')>(),
   getCanvasReferences: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/file-system', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/file-system')>(),
+vi.mock('@mnaoumov/obsidian-lib/file-system', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/file-system')>(),
   isCanvasFile: vi.fn(),
   isFile: vi.fn(),
   isFolder: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/link', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/link')>(),
+vi.mock('@mnaoumov/obsidian-lib/link', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/link')>(),
   extractLinkFile: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/metadata-cache', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/metadata-cache')>(),
+vi.mock('@mnaoumov/obsidian-lib/metadata-cache', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/metadata-cache')>(),
   getBacklinksForFileSafe: vi.fn(),
   getCacheSafe: vi.fn(),
   getLinks: vi.fn()
@@ -104,8 +111,8 @@ vi.mock('obsidian-dev-utils/obsidian/metadata-cache', async (importOriginal) => 
 
 // The real renderer goes through Obsidian's markdown renderer; a bare anchor naming the path is all the
 // dialog's text needs.
-vi.mock('obsidian-dev-utils/obsidian/markdown', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/markdown')>(),
+vi.mock('@mnaoumov/obsidian-lib/markdown', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/markdown')>(),
   renderInternalLink: vi.fn(async (params: RenderInternalLinkParamsLike) => {
     await noopAsync();
     const path = typeof params.pathOrAbstractFile === 'string' ? params.pathOrAbstractFile : params.pathOrAbstractFile.path;
@@ -117,13 +124,13 @@ vi.mock('./modals/minimizable-confirm-modal.ts', () => ({
   confirmMinimizable: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/queue', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/queue')>(),
+vi.mock('@mnaoumov/obsidian-lib/queue', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/queue')>(),
   addToQueue: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/vault', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/vault')>(),
+vi.mock('@mnaoumov/obsidian-lib/vault', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/vault')>(),
   cleanupEmptyFolders: vi.fn(),
   trashSafe: vi.fn()
 }));
@@ -163,21 +170,30 @@ function createFile(path: string): TFile {
 }
 
 /**
- * Builds the patched vault method the remover reads the attachment-unit-folder designation off.
+ * Publishes the attachment-unit-folder designation the way the plugin does: through its plugin API, which is
+ * where the library reads it.
  *
- * The remover consults the published answer rather than the settings object directly, so the mock has
- * to publish it the way the patch component does.
+ * The code under test consults the published answer rather than the settings object directly, so the test has
+ * to publish it.
  *
  * @param settingsLike - The settings the designation answers from.
- * @returns The patched method carrying the designation.
+ * @returns The component that owns the published API. Unloading it withdraws the API.
  */
-function createGetAvailablePathForAttachments(settingsLike: SettingsLike): App['vault']['getAvailablePathForAttachments'] {
-  const designation: Pick<Required<GetAvailablePathForAttachmentsFunctionExtended>, 'checkIsAttachmentUnitFolder'> = {
-    checkIsAttachmentUnitFolder: (folderPath) => settingsLike.isAttachmentUnitFolder(folderPath)
+function publishAttachmentUnitFolderDesignation(settingsLike: SettingsLike): Component {
+  const component = new Component();
+  component.load();
+  const api: Pick<CustomAttachmentLocationApi, 'getAvailablePathForAttachments' | 'isAttachmentUnitFolder'> = {
+    getAvailablePathForAttachments: vi.fn<CustomAttachmentLocationApi['getAvailablePathForAttachments']>(),
+    isAttachmentUnitFolder: ({ folderPath }) => settingsLike.isAttachmentUnitFolder(folderPath)
   };
-  return castTo<App['vault']['getAvailablePathForAttachments']>(Object.assign(vi.fn(), designation));
+  publishPluginApi({
+    api,
+    apiVersion: PLUGIN_API_VERSION,
+    component,
+    plugin: castTo<Plugin>({ manifest: { id: CUSTOM_ATTACHMENT_LOCATION_PLUGIN_ID } })
+  });
+  return component;
 }
-
 let vaultRootFolder: TFolder;
 
 function createCanvasReference(link: string): CanvasReference {
@@ -223,6 +239,7 @@ describe('UnusedAttachmentsRemover', () => {
   let getFolderByPath: Mock<(path: string) => null | TFolder>;
   let pluginNoticeComponent: PluginNoticeComponent;
   let pluginSettingsComponent: PluginSettingsComponent;
+  let designationComponent: Component;
   let remover: UnusedAttachmentsRemover;
   let settings: SettingsLike;
   let showNoticeSpy: Mock;
@@ -245,12 +262,12 @@ describe('UnusedAttachmentsRemover', () => {
     app = strictProxy<App>({
       vault: strictProxy<App['vault']>({
         cachedRead: (file: TFile) => cachedRead(file),
-        getAvailablePathForAttachments: createGetAvailablePathForAttachments(settings),
         getFolderByPath: (path: string) => getFolderByPath(path),
         getRoot: () => vaultRootFolder
       })
     });
     vaultRootFolder = createFolder('/');
+    designationComponent = publishAttachmentUnitFolderDesignation(settings);
     pluginSettingsComponent = strictProxy<PluginSettingsComponent>({
       isNoteEx: vi.fn<PluginSettingsComponent['isNoteEx']>().mockReturnValue(false),
       settings: castTo<PluginSettings>(settings)
@@ -282,6 +299,7 @@ describe('UnusedAttachmentsRemover', () => {
   });
 
   afterEach(() => {
+    designationComponent.unload();
     warnSpy.mockRestore();
   });
 

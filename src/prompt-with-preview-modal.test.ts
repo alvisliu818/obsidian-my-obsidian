@@ -1,15 +1,15 @@
+import type { StrictProxyPartial } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import type {
   App,
   ButtonComponent,
   TextComponent,
   TFile
 } from 'obsidian';
-import type { StrictProxyPartial } from 'obsidian-dev-utils/strict-proxy';
 
-import { noopAsync } from 'obsidian-dev-utils/function';
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { initI18N } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+import { initI18N } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { noopAsync } from '@mnaoumov/typescript-lib/function';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import {
   ButtonComponent as ButtonComponentClass,
   TextComponent as TextComponentClass
@@ -48,11 +48,11 @@ const hoisted = vi.hoisted(() => ({
   mockTrashSafe: vi.fn((..._arguments: unknown[]): Promise<void> => noopAsync())
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/plugin/plugin-context', () => ({
+vi.mock('@mnaoumov/obsidian-lib/plugin/plugin-context', () => ({
   addPluginCssClasses: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/vault', () => ({
+vi.mock('@mnaoumov/obsidian-lib/vault', () => ({
   trashSafe: (...$arguments: unknown[]): Promise<void> => hoisted.mockTrashSafe(...$arguments)
 }));
 

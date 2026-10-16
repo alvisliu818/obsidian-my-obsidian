@@ -75,7 +75,7 @@ interface ObsidianDevUtilsStateWrapper {
 }
 
 /**
- * One entry of obsidian-dev-utils' global operation queue, as seen from outside the library.
+ * One entry of `@mnaoumov/obsidian-lib`'s global operation queue, as seen from outside the library.
  *
  * Only the shape this file reads is modeled; the library does not export the type. Declared at module
  * scope rather than inside the callback because types are erased before the callback is serialized.
@@ -103,7 +103,7 @@ interface OperationQueueState {
  *   whatever the ~30 before it left — an attachment path carrying a `{{prompt}}` token, a rescue toggle,
  *   a note-priority list.
  *
- * Third, and the one that actually caused failures rather than merely risking them: obsidian-dev-utils'
+ * Third, and the one that actually caused failures rather than merely risking them: `@mnaoumov/obsidian-lib`'s
  * operation queue. See the drain below.
  *
  * Measured with this hook in place, the vault stays flat at ~12 entries instead of reaching ~400, and
@@ -276,7 +276,7 @@ afterAll(async () => {
         }
 
         /*
-         * Drain obsidian-dev-utils' operation queue before letting the next file start.
+         * Drain `@mnaoumov/obsidian-lib`'s operation queue before letting the next file start.
          *
          * That queue is a GLOBAL singleton — `getObsidianDevUtilsState('queue')` on `globalThis`, shared
          * by every plugin using the library — and it is a promise chain: each entry runs only after the
@@ -314,7 +314,7 @@ afterAll(async () => {
         await runBounded('enabling the plugin', () => app.plugins.enablePlugin(PLUGIN_ID), PLUGIN_TOGGLE_TIMEOUT_IN_MILLISECONDS);
 
         /*
-         * Wait for the plugin to reappear in obsidian-dev-utils' rename/delete handler registry.
+         * Wait for the plugin to reappear in `@mnaoumov/obsidian-lib`'s rename/delete handler registry.
          *
          * That registry is another global singleton keyed by plugin id: registering `set`s the key,
          * unregistering `delete`s it, and `shouldInvokeHandler()` only lets the FIRST key's plugin handle

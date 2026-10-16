@@ -1,9 +1,9 @@
+import type { GetAvailablePathForAttachmentsExtendedFunctionParams } from '@mnaoumov/obsidian-lib/attachment-path';
 import type { Vault } from 'obsidian';
-import type { GetAvailablePathForAttachmentsFunctionExtended } from 'obsidian-dev-utils/obsidian/attachment-path';
 
-import { AttachmentPathContext } from 'obsidian-dev-utils/obsidian/attachment-path';
-import { MonkeyAroundComponent } from 'obsidian-dev-utils/obsidian/components/monkey-around-component';
-import { makeFileName } from 'obsidian-dev-utils/path';
+import { AttachmentPathContext } from '@mnaoumov/obsidian-lib/attachment-path';
+import { MonkeyAroundComponent } from '@mnaoumov/obsidian-lib/components/monkey-around-component';
+import { makeFileName } from '@mnaoumov/typescript-lib/path';
 
 import type { AttachmentPathManager } from '../attachment-path-manager.ts';
 import type { PluginSettingsComponent } from '../plugin-settings-component.ts';
@@ -12,6 +12,32 @@ import {
   SelfWriteClaim,
   selfWriteRegistry
 } from '../self-write-registry.ts';
+
+/**
+ * The shape of the graft on {@link Vault.getAvailablePathForAttachments}, as published `obsidian-dev-utils` releases read it.
+ *
+ * `@mnaoumov/obsidian-lib` reads these capabilities through the plugin API and no longer declares the graft, so its
+ * shape is pinned here, member for member, for as long as the graft is published.
+ */
+export interface GetAvailablePathForAttachmentsFunctionExtended extends GetAvailablePathForAttachmentsFunction {
+  /**
+   * Whether a folder path is designated as an attachment unit.
+   *
+   * @param folderPath - The vault-relative path of the folder.
+   * @returns `true` if the folder is designated as an attachment unit, `false` otherwise.
+   */
+  checkIsAttachmentUnitFolder?: (folderPath: string) => boolean;
+
+  /**
+   * Gets the available path for attachments with additional params.
+   *
+   * @param params - Parameters for the get available path for attachments.
+   * @returns A {@link Promise} that resolves to the available path for attachments.
+   */
+  extended: (params: GetAvailablePathForAttachmentsExtendedFunctionParams) => Promise<string>;
+}
+
+type GetAvailablePathForAttachmentsFunction = Vault['getAvailablePathForAttachments'];
 
 interface VaultGetAvailablePathForAttachmentsPatchComponentConstructorParams {
   readonly attachmentPathManager: AttachmentPathManager;
@@ -79,7 +105,7 @@ export class VaultGetAvailablePathForAttachmentsPatchComponent extends MonkeyAro
          * to know which plugin is answering. The delete interception needs it to keep a designated
          * folder whole (issue #70), and it moved to another plugin in 12.0.0.
          *
-         * `obsidian-dev-utils` declares both members, so annotating the assembled method with its
+         * `obsidian-dev-utils` reads both members, so annotating the assembled method with its
          * interface is what keeps this publisher and every reader — this plugin's own collecting and
          * deleting commands included — agreeing on one shape instead of on two copies of it.
          *

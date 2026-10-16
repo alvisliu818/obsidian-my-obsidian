@@ -1,22 +1,22 @@
+import type { PromiseResolve } from '@mnaoumov/typescript-lib/async';
 import type { EmbedComponent } from '@obsidian-typings/obsidian-public-latest';
 import type { TFile } from 'obsidian';
-import type { PromiseResolve } from 'obsidian-dev-utils/async';
 
+import { CssClass } from '@mnaoumov/obsidian-lib/css-class';
+import { applySpellcheckMode } from '@mnaoumov/obsidian-lib/html-element';
+import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { SpellcheckMode } from '@mnaoumov/obsidian-lib/obsidian-settings';
+import { addPluginCssClasses } from '@mnaoumov/obsidian-lib/plugin/plugin-context';
+import { trashSafe } from '@mnaoumov/obsidian-lib/vault';
+import {
+  convertAsyncToSync,
+  invokeAsyncSafely
+} from '@mnaoumov/typescript-lib/async';
 import {
   ButtonComponent,
   Modal,
   TextComponent
 } from 'obsidian';
-import {
-  convertAsyncToSync,
-  invokeAsyncSafely
-} from 'obsidian-dev-utils/async';
-import { CssClass } from 'obsidian-dev-utils/obsidian/css-class';
-import { applySpellcheckMode } from 'obsidian-dev-utils/obsidian/html-element';
-import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { SpellcheckMode } from 'obsidian-dev-utils/obsidian/obsidian-settings';
-import { addPluginCssClasses } from 'obsidian-dev-utils/obsidian/plugin/plugin-context';
-import { trashSafe } from 'obsidian-dev-utils/obsidian/vault';
 
 import type { TokenEvaluatorContext } from './token-evaluator-context.ts';
 
@@ -181,7 +181,7 @@ class PromptWithPreviewModal extends Modal {
     /*
      * `AbstractTextComponent` forces `spellcheck="false"` on every text component, so the mode has to
      * be applied here. This box names a file, so it follows `Editor > Spellcheck` — the same thing
-     * the `prompt()` in obsidian-dev-utils does, and what Obsidian's file explorer does for an inline rename.
+     * the `prompt()` in `@mnaoumov/obsidian-lib` does, and what Obsidian's file explorer does for an inline rename.
      */
     applySpellcheckMode({
       app: this.app,
@@ -227,7 +227,7 @@ class PromptWithPreviewModal extends Modal {
     /*
      * Focus LAST, once the whole modal is built. The input does not exist when `Modal` focuses its
      * first field — this modal fills its content in `onOpenAsync`, after `onOpen` has returned — so
-     * the focus has to be explicit, unlike the upstream `obsidian-dev-utils` prompt, which builds
+     * the focus has to be explicit, unlike the upstream `@mnaoumov/obsidian-lib` prompt, which builds
      * synchronously. It also has to come after the rest of the build: `reportValidity()` and the
      * button construction above both drop the focus if they run afterwards. `select()` then
      * pre-selects the default value, so typing replaces the name instead of appending to it

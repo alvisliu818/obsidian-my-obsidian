@@ -6,14 +6,14 @@ import type {
   WorkspaceLeaf
 } from 'obsidian';
 
-import { ViewType } from '@obsidian-typings/obsidian-public-latest/implementations';
+import { initI18N } from '@mnaoumov/obsidian-lib/i18n/i18n';
 import {
   noop,
   noopAsync
-} from 'obsidian-dev-utils/function';
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { initI18N } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+} from '@mnaoumov/typescript-lib/function';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
+import { ViewType } from '@obsidian-typings/obsidian-public-latest/implementations';
 import {
   App,
   MenuItem

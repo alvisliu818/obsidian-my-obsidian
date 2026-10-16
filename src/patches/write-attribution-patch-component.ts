@@ -3,8 +3,8 @@ import type {
   Vault
 } from 'obsidian';
 
-import { MonkeyAroundComponent } from 'obsidian-dev-utils/obsidian/components/monkey-around-component';
-import { extname } from 'obsidian-dev-utils/path';
+import { MonkeyAroundComponent } from '@mnaoumov/obsidian-lib/components/monkey-around-component';
+import { extname } from '@mnaoumov/typescript-lib/path';
 
 import type { PluginSettingsComponent } from '../plugin-settings-component.ts';
 

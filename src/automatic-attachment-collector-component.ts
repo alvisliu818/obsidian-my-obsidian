@@ -15,7 +15,7 @@ import type {
   TFile
 } from 'obsidian';
 
-import { LayoutReadyComponent } from 'obsidian-dev-utils/obsidian/components/layout-ready-component';
+import { LayoutReadyComponent } from '@mnaoumov/obsidian-lib/components/layout-ready-component';
 
 import type { AttachmentCollector } from './attachment-collector.ts';
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';

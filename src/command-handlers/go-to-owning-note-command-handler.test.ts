@@ -1,17 +1,17 @@
+import type { ActiveFileProvider } from '@mnaoumov/obsidian-lib/active-file-provider';
+import type { PluginNoticeComponent } from '@mnaoumov/obsidian-lib/components/plugin-notice-component';
 import type {
   App,
   TFile,
   WorkspaceLeaf
 } from 'obsidian';
-import type { ActiveFileProvider } from 'obsidian-dev-utils/obsidian/active-file-provider';
-import type { PluginNoticeComponent } from 'obsidian-dev-utils/obsidian/components/plugin-notice-component';
 import type { Mock } from 'vitest';
 
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { initI18N } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { selectItem } from 'obsidian-dev-utils/obsidian/modals/select-item';
-import { NoPriorityWinnerReason } from 'obsidian-dev-utils/obsidian/note-priority';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+import { initI18N } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { selectItem } from '@mnaoumov/obsidian-lib/modals/select-item';
+import { NoPriorityWinnerReason } from '@mnaoumov/obsidian-lib/note-priority';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import {
   beforeAll,
   beforeEach,
@@ -40,8 +40,8 @@ interface TestableHandler {
   shouldAddToFileMenu: () => boolean;
 }
 
-vi.mock('obsidian-dev-utils/obsidian/modals/select-item', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/modals/select-item')>(),
+vi.mock('@mnaoumov/obsidian-lib/modals/select-item', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/modals/select-item')>(),
   selectItem: vi.fn()
 }));
 

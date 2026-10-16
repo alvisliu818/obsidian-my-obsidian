@@ -2,10 +2,10 @@
 
 import type { App as AppOriginal } from 'obsidian';
 
+import { initI18N } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { MinimizableModal } from '@mnaoumov/obsidian-lib/modals/minimizable-modal';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
 import { ButtonComponent } from 'obsidian';
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { initI18N } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { MinimizableModal } from 'obsidian-dev-utils/obsidian/modals/minimizable-modal';
 import { App } from 'obsidian-test-mocks/obsidian';
 import {
   afterEach,

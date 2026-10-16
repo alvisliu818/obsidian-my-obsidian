@@ -1,6 +1,6 @@
 import type { Promisable } from 'type-fest';
 
-import { castTo } from 'obsidian-dev-utils/object-utils';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
 import {
   describe,
   expect,

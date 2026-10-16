@@ -5,11 +5,11 @@ import type {
 } from 'obsidian';
 import type { MockInstance } from 'vitest';
 
+import { printError } from '@mnaoumov/typescript-lib/error';
+import { noopAsync } from '@mnaoumov/typescript-lib/function';
+import { dirname } from '@mnaoumov/typescript-lib/path';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import { ViewType } from '@obsidian-typings/obsidian-public-latest/implementations';
-import { printError } from 'obsidian-dev-utils/error';
-import { noopAsync } from 'obsidian-dev-utils/function';
-import { dirname } from 'obsidian-dev-utils/path';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
 import {
   App,
   Editor,
@@ -40,7 +40,7 @@ import {
   selfWriteRegistry
 } from './self-write-registry.ts';
 
-vi.mock('obsidian-dev-utils/error', () => ({
+vi.mock('@mnaoumov/typescript-lib/error', () => ({
   printError: vi.fn<(error: unknown) => void>()
 }));
 

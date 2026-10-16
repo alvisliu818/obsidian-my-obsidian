@@ -1,13 +1,13 @@
 import type { TAbstractFile } from 'obsidian';
 import type { Promisable } from 'type-fest';
 
-import { noopAsync } from 'obsidian-dev-utils/function';
-import { AbstractFileCommandHandler } from 'obsidian-dev-utils/obsidian/command-handlers/abstract-file-command-handler';
+import { AbstractFileCommandHandler } from '@mnaoumov/obsidian-lib/command-handlers/abstract-file-command-handler';
 import {
   isFile,
   isNote
-} from 'obsidian-dev-utils/obsidian/file-system';
-import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
+} from '@mnaoumov/obsidian-lib/file-system';
+import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { noopAsync } from '@mnaoumov/typescript-lib/function';
 
 import type { AttachmentCollector } from '../attachment-collector.ts';
 

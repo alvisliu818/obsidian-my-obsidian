@@ -1,5 +1,5 @@
-import { printError } from 'obsidian-dev-utils/error';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+import { printError } from '@mnaoumov/typescript-lib/error';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import {
   afterEach,
   describe,
@@ -14,8 +14,8 @@ import { CustomToken } from './custom-token.ts';
 
 type TokenEvaluator = ConstructorParameters<typeof CustomToken>[1];
 
-vi.mock('obsidian-dev-utils/error', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('obsidian-dev-utils/error')>();
+vi.mock('@mnaoumov/typescript-lib/error', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@mnaoumov/typescript-lib/error')>();
   return {
     ...actual,
     printError: vi.fn<typeof printError>()

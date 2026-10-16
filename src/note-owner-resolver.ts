@@ -14,22 +14,22 @@
  * every one of those members ownerless, so the whole unit is consulted instead.
  */
 
+import type { NoPriorityWinnerReason } from '@mnaoumov/obsidian-lib/note-priority';
 import type {
   App,
   TFile
 } from 'obsidian';
-import type { NoPriorityWinnerReason } from 'obsidian-dev-utils/obsidian/note-priority';
 
-import { Vault } from 'obsidian';
-import { findAttachmentUnitFolderPath } from 'obsidian-dev-utils/obsidian/attachment-unit-folder';
-import { isFile } from 'obsidian-dev-utils/obsidian/file-system';
-import { getBacklinksForFileSafe } from 'obsidian-dev-utils/obsidian/metadata-cache';
+import { findAttachmentUnitFolderPath } from '@mnaoumov/obsidian-lib/attachment-unit-folder';
+import { isFile } from '@mnaoumov/obsidian-lib/file-system';
+import { getBacklinksForFileSafe } from '@mnaoumov/obsidian-lib/metadata-cache';
 import {
   filterHighestPriorityNotePaths,
   findNoPriorityWinnerReason,
   findNotePriorityRank,
   pickHighestPriorityNotePath
-} from 'obsidian-dev-utils/obsidian/note-priority';
+} from '@mnaoumov/obsidian-lib/note-priority';
+import { Vault } from 'obsidian';
 
 import type { HandedOverSettingsComponent } from './handed-over-settings-component.ts';
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';

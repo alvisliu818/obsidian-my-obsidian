@@ -1,3 +1,4 @@
+import type { GetAvailablePathForAttachmentsExtendedFunctionParams } from '@mnaoumov/obsidian-lib/attachment-path';
 import type { CustomArrayDict } from '@obsidian-typings/obsidian-public-latest';
 import type {
   App,
@@ -6,24 +7,23 @@ import type {
   TAbstractFile,
   TFile
 } from 'obsidian';
-import type { GetAvailablePathForAttachmentsExtendedFunctionParams } from 'obsidian-dev-utils/obsidian/attachment-path';
 import type { Mock } from 'vitest';
 
 import {
-  noop,
-  noopAsync
-} from 'obsidian-dev-utils/function';
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import {
   AttachmentPathContext,
   DUMMY_PATH
-} from 'obsidian-dev-utils/obsidian/attachment-path';
+} from '@mnaoumov/obsidian-lib/attachment-path';
 import {
   getAbstractFileOrNull,
   getFileOrNull
-} from 'obsidian-dev-utils/obsidian/file-system';
-import { getBacklinksForFileSafe } from 'obsidian-dev-utils/obsidian/metadata-cache';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+} from '@mnaoumov/obsidian-lib/file-system';
+import { getBacklinksForFileSafe } from '@mnaoumov/obsidian-lib/metadata-cache';
+import {
+  noop,
+  noopAsync
+} from '@mnaoumov/typescript-lib/function';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import {
   beforeEach,
   describe,
@@ -52,14 +52,14 @@ vi.mock('./modals/collect-settings-migration-modal.ts', () => ({
   showCollectSettingsMigrationModal: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/file-system', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/file-system')>(),
+vi.mock('@mnaoumov/obsidian-lib/file-system', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/file-system')>(),
   getAbstractFileOrNull: vi.fn(),
   getFileOrNull: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/metadata-cache', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/metadata-cache')>(),
+vi.mock('@mnaoumov/obsidian-lib/metadata-cache', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/metadata-cache')>(),
   getBacklinksForFileSafe: vi.fn()
 }));
 

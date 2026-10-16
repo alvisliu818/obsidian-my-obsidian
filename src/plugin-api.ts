@@ -8,7 +8,7 @@
  * reads, and are re-exported from it so there is exactly one declaration of each and nothing to drift.
  */
 
-import type { PluginApiContract } from 'obsidian-dev-utils/obsidian/plugin/plugin-api';
+import type { ApiContract } from '@mnaoumov/typescript-lib/api-contract';
 
 import { CUSTOM_ATTACHMENT_LOCATION_API_CONTRACT } from '../api-contract.ts';
 
@@ -32,7 +32,7 @@ export type {
  * provider and its consumers validate against one definition. Assigning it here is also what checks that the
  * hand-written schemas are Standard Schemas the registry accepts.
  */
-export const PLUGIN_API_CONTRACT: PluginApiContract = CUSTOM_ATTACHMENT_LOCATION_API_CONTRACT;
+export const PLUGIN_API_CONTRACT: ApiContract = CUSTOM_ATTACHMENT_LOCATION_API_CONTRACT;
 
 /**
  * The version of the contract above — independent of the plugin's own version, so a consumer asks for `'^1'`

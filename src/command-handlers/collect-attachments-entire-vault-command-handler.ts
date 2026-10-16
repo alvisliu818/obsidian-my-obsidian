@@ -1,6 +1,6 @@
-import { noopAsync } from 'obsidian-dev-utils/function';
-import { GlobalCommandHandler } from 'obsidian-dev-utils/obsidian/command-handlers/global-command-handler';
-import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
+import { GlobalCommandHandler } from '@mnaoumov/obsidian-lib/command-handlers/global-command-handler';
+import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { noopAsync } from '@mnaoumov/typescript-lib/function';
 
 import type { AttachmentCollector } from '../attachment-collector.ts';
 

@@ -1,5 +1,5 @@
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { initI18N } from 'obsidian-dev-utils/obsidian/i18n/i18n';
+import { initI18N } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
 import {
   beforeAll,
   describe,

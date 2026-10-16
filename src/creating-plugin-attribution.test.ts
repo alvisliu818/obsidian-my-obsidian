@@ -69,7 +69,7 @@ describe('findCreatingPluginId', () => {
   });
 
   it('should stop the id at the path of a source-mapped frame', () => {
-    // `obsidian-dev-utils` rewrites source-map sources to this shape, which a stack-mapping tool surfaces.
+    // The `@mnaoumov` build tooling rewrites source-map sources to this shape, which a stack-mapping tool surfaces.
     const stack = [
       'Error: Stack capture',
       '    at save (app://obsidian.md/plugin:media-extended/src/screenshot.ts:12:3)'

@@ -1,9 +1,8 @@
-import type { TFile } from 'obsidian';
 import type {
   AttachmentPathContext,
-  GetAvailablePathForAttachmentsExtendedFunctionParams,
-  GetAvailablePathForAttachmentsFunctionExtended
-} from 'obsidian-dev-utils/obsidian/attachment-path';
+  GetAvailablePathForAttachmentsExtendedFunctionParams
+} from '@mnaoumov/obsidian-lib/attachment-path';
+import type { TFile } from 'obsidian';
 
 import {
   evalInObsidian,
@@ -15,6 +14,8 @@ import {
   expect,
   it
 } from 'vitest';
+
+import type { GetAvailablePathForAttachmentsFunctionExtended } from './patches/vault-get-available-path-for-attachments-patch-component.ts';
 
 import {
   FAT_NOTE_LINK_COUNT,
@@ -122,6 +123,7 @@ describe('Attachment-path bottleneck', () => {
           return { ...EMPTY_RESULT, error: 'Plugin not loaded' };
         }
 
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-assignment -- The closure runs inside Obsidian, where the enum value cannot be imported; the resolver treats the context as an opaque string.
         const context = consumerContext as AttachmentPathContext;
         const extendedFunction = (app.vault.getAvailablePathForAttachments as Partial<GetAvailablePathForAttachmentsFunctionExtended>).extended;
         if (!extendedFunction) {

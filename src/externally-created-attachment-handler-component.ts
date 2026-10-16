@@ -5,33 +5,33 @@ import type {
   WorkspaceLeaf
 } from 'obsidian';
 
+import { isNote } from '@mnaoumov/obsidian-lib/file-system';
+import {
+  splitSubpath,
+  updateLink
+} from '@mnaoumov/obsidian-lib/link';
+import {
+  parseLinks,
+  toParseLinkReference
+} from '@mnaoumov/obsidian-lib/parse-link';
+import { createFolderSafe } from '@mnaoumov/obsidian-lib/vault';
+import {
+  convertAsyncToSync,
+  setTimeoutAsync
+} from '@mnaoumov/typescript-lib/async';
+import { printError } from '@mnaoumov/typescript-lib/error';
+import {
+  basename,
+  dirname,
+  join,
+  makeFileName
+} from '@mnaoumov/typescript-lib/path';
 import { ViewType } from '@obsidian-typings/obsidian-public-latest/implementations';
 import {
   App,
   Component,
   TFile
 } from 'obsidian';
-import {
-  convertAsyncToSync,
-  setTimeoutAsync
-} from 'obsidian-dev-utils/async';
-import { printError } from 'obsidian-dev-utils/error';
-import { isNote } from 'obsidian-dev-utils/obsidian/file-system';
-import {
-  splitSubpath,
-  updateLink
-} from 'obsidian-dev-utils/obsidian/link';
-import {
-  parseLinks,
-  toParseLinkReference
-} from 'obsidian-dev-utils/obsidian/parse-link';
-import { createFolderSafe } from 'obsidian-dev-utils/obsidian/vault';
-import {
-  basename,
-  dirname,
-  join,
-  makeFileName
-} from 'obsidian-dev-utils/path';
 
 import type { AttachmentPathManager } from './attachment-path-manager.ts';
 import type { HandedOverSettingsComponent } from './handed-over-settings-component.ts';

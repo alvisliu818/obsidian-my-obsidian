@@ -1,3 +1,5 @@
+import type { PluginNoticeComponent } from '@mnaoumov/obsidian-lib/components/plugin-notice-component';
+import type { PathOrFile } from '@mnaoumov/obsidian-lib/file-system';
 import type {
   App,
   FileStats,
@@ -5,47 +7,45 @@ import type {
   TFile,
   Vault
 } from 'obsidian';
-import type { PluginNoticeComponent } from 'obsidian-dev-utils/obsidian/components/plugin-notice-component';
-import type { PathOrFile } from 'obsidian-dev-utils/obsidian/file-system';
 
-import {
-  isReferenceCache,
-  parentFolderPath
-} from '@obsidian-typings/obsidian-public-latest/implementations';
-import { normalizePath } from 'obsidian';
-import { printError } from 'obsidian-dev-utils/error';
 import {
   AttachmentPathContext,
   DUMMY_PATH,
   getAvailablePathForAttachments
-} from 'obsidian-dev-utils/obsidian/attachment-path';
+} from '@mnaoumov/obsidian-lib/attachment-path';
 import {
   getAbstractFileOrNull,
   getFileOrNull,
   getPath,
   isNote
-} from 'obsidian-dev-utils/obsidian/file-system';
-import { appendCodeBlock } from 'obsidian-dev-utils/obsidian/html-element';
-import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { extractLinkFile } from 'obsidian-dev-utils/obsidian/link';
+} from '@mnaoumov/obsidian-lib/file-system';
+import { appendCodeBlock } from '@mnaoumov/obsidian-lib/html-element';
+import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { extractLinkFile } from '@mnaoumov/obsidian-lib/link';
 import {
   getCacheSafe,
   getLinks
-} from 'obsidian-dev-utils/obsidian/metadata-cache';
+} from '@mnaoumov/obsidian-lib/metadata-cache';
 import {
   createFolderSafe,
   EmptyFolderBehavior
-} from 'obsidian-dev-utils/obsidian/vault';
+} from '@mnaoumov/obsidian-lib/vault';
+import { printError } from '@mnaoumov/typescript-lib/error';
 import {
   basename,
   dirname,
   extname,
   join,
   makeFileName
-} from 'obsidian-dev-utils/path';
-import { escapeRegExp } from 'obsidian-dev-utils/reg-exp';
-import { trimStart } from 'obsidian-dev-utils/string';
-import { ensureNonNullable } from 'obsidian-dev-utils/type-guards';
+} from '@mnaoumov/typescript-lib/path';
+import { escapeRegExp } from '@mnaoumov/typescript-lib/reg-exp';
+import { trimStart } from '@mnaoumov/typescript-lib/string';
+import { ensureNonNullable } from '@mnaoumov/typescript-lib/type-guards';
+import {
+  isReferenceCache,
+  parentFolderPath
+} from '@obsidian-typings/obsidian-public-latest/implementations';
+import { normalizePath } from 'obsidian';
 
 import type { HandedOverSettingsComponent } from './handed-over-settings-component.ts';
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';

@@ -18,10 +18,17 @@
  * definition.
  */
 
-import type { PluginApiContract } from 'obsidian-dev-utils/obsidian/plugin/plugin-api';
-import type { SettingsMigrationApi } from 'obsidian-dev-utils/obsidian/plugin/settings-migration-api';
+import type { SettingsMigrationApi } from '@mnaoumov/obsidian-lib/plugin/settings-migration-api';
+import type { ApiContract } from '@mnaoumov/typescript-lib/api-contract';
 
-import { EmptyFolderBehavior } from 'obsidian-dev-utils/obsidian/vault';
+import { EmptyFolderBehavior } from '@mnaoumov/obsidian-lib/vault';
+
+import type {
+  AdvancedRenameAndDeleteHandlerApi as ProviderApi,
+  EmptyFolderBehavior as ProviderEmptyFolderBehavior,
+  HandedOverSettings as ProviderHandedOverSettings,
+  MigratableSettings as ProviderMigratableSettings
+} from './advanced-rename-and-delete-handler-api/api.d.ts';
 
 import { ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT } from './advanced-rename-and-delete-handler-api/api-contract.ts';
 
@@ -49,7 +56,7 @@ export interface AdvancedRenameAndDeleteHandlerApi extends SettingsMigrationApi<
    * Whether a path is one the handler leaves alone entirely.
    *
    * Exposed as a predicate rather than as the raw include/exclude arrays deliberately: every plugin bundles
-   * its OWN `obsidian-dev-utils`, so re-running those arrays through THIS plugin's copy of `PathSettings`
+   * its OWN `@mnaoumov/obsidian-lib`, so re-running those arrays through THIS plugin's copy of `PathSettings`
    * would let the two implementations drift apart across a library bump.
    *
    * @param path - The vault-relative path.
@@ -135,9 +142,21 @@ export const ADVANCED_RENAME_AND_DELETE_HANDLER_DEPENDENCY_API_VERSION_RANGE = '
  * consumers here need different halves of the API and must be told apart: the migration works against
  * every `^1` provider, while the read-back below does not.
  */
-export const ADVANCED_RENAME_AND_DELETE_HANDLER_MIGRATION_API_CONTRACT: PluginApiContract = {
+export const ADVANCED_RENAME_AND_DELETE_HANDLER_MIGRATION_API_CONTRACT: ApiContract<SettingsMigrationApi<AdvancedRenameAndDeleteHandlerMigratableSettings>> = {
   migrateSettings: ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT.migrateSettings
 };
+
+/**
+ * The settings a migration proposes, in the provider's own types, which its contract's schemas check. This plugin's
+ * {@link MigratableSettings} is assignable to it.
+ */
+export type AdvancedRenameAndDeleteHandlerMigratableSettings = ProviderMigratableSettings;
+
+/**
+ * The half of the provider's API the read-back calls, in the provider's own types, because those are what the
+ * contract's schemas check.
+ */
+export type AdvancedRenameAndDeleteHandlerReadBackApi = Pick<ProviderApi, 'getSettings' | 'isPathIgnored' | 'isTreatedAsAttachment'>;
 
 /**
  * What the READ-BACK needs — the three members contract `1.1.0` added.
@@ -149,7 +168,7 @@ export const ADVANCED_RENAME_AND_DELETE_HANDLER_MIGRATION_API_CONTRACT: PluginAp
  * check, `PluginApiRef.value` stays `null`, and this plugin falls back to
  * {@link DEFAULT_HANDED_OVER_SETTINGS} until the provider is new enough.
  */
-export const ADVANCED_RENAME_AND_DELETE_HANDLER_READ_BACK_API_CONTRACT: PluginApiContract = {
+export const ADVANCED_RENAME_AND_DELETE_HANDLER_READ_BACK_API_CONTRACT: ApiContract<AdvancedRenameAndDeleteHandlerReadBackApi> = {
   getSettings: ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT.getSettings,
   isPathIgnored: ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT.isPathIgnored,
   isTreatedAsAttachment: ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT.isTreatedAsAttachment
@@ -174,3 +193,31 @@ export const DEFAULT_HANDED_OVER_SETTINGS: HandedOverSettings = {
   shouldRenameAttachmentFiles: false,
   treatAsAttachmentExtensions: ['.excalidraw.md']
 };
+
+/**
+ * The provider's spellings of an empty-folder behavior, each mapped to the library enum member with the same value.
+ *
+ * The provider's copyable `api.d.ts` imports nothing, so it spells the behavior as a string union, while this
+ * plugin passes `@mnaoumov/obsidian-lib`'s enum on to the library. The record is total over the union, so a value
+ * the provider adds fails to compile here instead of reaching the library unmapped.
+ */
+const EMPTY_FOLDER_BEHAVIORS: Readonly<Record<ProviderEmptyFolderBehavior, EmptyFolderBehavior>> = {
+  Delete: EmptyFolderBehavior.Delete,
+  DeleteWithEmptyParents: EmptyFolderBehavior.DeleteWithEmptyParents,
+  Keep: EmptyFolderBehavior.Keep
+};
+
+/**
+ * Narrows the settings the provider hands back to the ones this plugin reads, in this plugin's types.
+ *
+ * @param settings - The settings, as the provider's `getSettings` returns them.
+ * @returns The settings this plugin reads.
+ */
+export function toHandedOverSettings(settings: ProviderHandedOverSettings): HandedOverSettings {
+  return {
+    emptyFolderBehavior: EMPTY_FOLDER_BEHAVIORS[settings.emptyFolderBehavior],
+    notePriorities: settings.notePriorities,
+    shouldRenameAttachmentFiles: settings.shouldRenameAttachmentFiles,
+    treatAsAttachmentExtensions: settings.treatAsAttachmentExtensions
+  };
+}

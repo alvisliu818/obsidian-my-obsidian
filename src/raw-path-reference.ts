@@ -1,5 +1,5 @@
-import { basename } from 'obsidian-dev-utils/path';
-import { escapeRegExp } from 'obsidian-dev-utils/reg-exp';
+import { basename } from '@mnaoumov/typescript-lib/path';
+import { escapeRegExp } from '@mnaoumov/typescript-lib/reg-exp';
 
 interface IsReferencedByRawPathParams {
   /**

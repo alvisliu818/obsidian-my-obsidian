@@ -1,8 +1,8 @@
+import type { PluginApiRef } from '@mnaoumov/obsidian-lib/plugin/plugin-api';
 import type { App as AppOriginal } from 'obsidian';
-import type { PluginApiRef } from 'obsidian-dev-utils/obsidian/plugin/plugin-api';
 
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { EmptyFolderBehavior } from 'obsidian-dev-utils/obsidian/vault';
+import { EmptyFolderBehavior } from '@mnaoumov/obsidian-lib/vault';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
 import { App } from 'obsidian-test-mocks/obsidian';
 import {
   beforeEach,
@@ -23,8 +23,8 @@ const { mockWatchPluginApi } = vi.hoisted(() => ({
   mockWatchPluginApi: vi.fn<() => PluginApiRef<AdvancedRenameAndDeleteHandlerApi>>()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/plugin/plugin-api', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/plugin/plugin-api')>(),
+vi.mock('@mnaoumov/obsidian-lib/plugin/plugin-api', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/plugin/plugin-api')>(),
   watchPluginApi: mockWatchPluginApi
 }));
 

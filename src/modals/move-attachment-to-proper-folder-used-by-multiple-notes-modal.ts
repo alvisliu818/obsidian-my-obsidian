@@ -1,14 +1,14 @@
+import type { PromiseResolve } from '@mnaoumov/typescript-lib/async';
 import type { App } from 'obsidian';
-import type { PromiseResolve } from 'obsidian-dev-utils/async';
 
+import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { renderInternalLink } from '@mnaoumov/obsidian-lib/markdown';
+import { invokeAsyncSafely } from '@mnaoumov/typescript-lib/async';
+import { createFragmentAsync } from '@mnaoumov/typescript-lib/html-element';
 import {
   Modal,
   Setting
 } from 'obsidian';
-import { invokeAsyncSafely } from 'obsidian-dev-utils/async';
-import { createFragmentAsync } from 'obsidian-dev-utils/html-element';
-import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { renderInternalLink } from 'obsidian-dev-utils/obsidian/markdown';
 
 import { MoveAttachmentToProperFolderUsedByMultipleNotesMode } from '../plugin-settings.ts';
 

@@ -1,5 +1,5 @@
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
 import { loadPrism } from '@obsidian-typings/obsidian-public-latest/implementations';
-import { castTo } from 'obsidian-dev-utils/object-utils';
 import {
   beforeEach,
   describe,

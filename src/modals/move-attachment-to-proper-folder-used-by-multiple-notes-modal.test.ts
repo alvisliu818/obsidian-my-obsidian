@@ -4,9 +4,9 @@ import type {
   ToggleComponent
 } from 'obsidian';
 
-import { noopAsync } from 'obsidian-dev-utils/function';
-import { initI18N } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+import { initI18N } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { noopAsync } from '@mnaoumov/typescript-lib/function';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import {
   ButtonComponent as ButtonComponentClass,
   Setting as SettingClass
@@ -25,7 +25,7 @@ import { translationsMap } from '../i18n/locales/translations-map.ts';
 import { MoveAttachmentToProperFolderUsedByMultipleNotesMode } from '../plugin-settings.ts';
 import { selectMode } from './move-attachment-to-proper-folder-used-by-multiple-notes-modal.ts';
 
-vi.mock('obsidian-dev-utils/obsidian/markdown', () => ({
+vi.mock('@mnaoumov/obsidian-lib/markdown', () => ({
   renderInternalLink: vi.fn((): Promise<HTMLElement> => Promise.resolve(createSpan()))
 }));
 

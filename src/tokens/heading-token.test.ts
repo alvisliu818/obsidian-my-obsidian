@@ -1,12 +1,12 @@
+import type { CachedMetadataEx } from '@mnaoumov/obsidian-lib/metadata-cache';
 import type {
   App,
   HeadingCache
 } from 'obsidian';
-import type { CachedMetadataEx } from 'obsidian-dev-utils/obsidian/metadata-cache';
 
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { getCacheSafe } from 'obsidian-dev-utils/obsidian/metadata-cache';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+import { getCacheSafe } from '@mnaoumov/obsidian-lib/metadata-cache';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import {
   beforeEach,
   describe,
@@ -20,7 +20,7 @@ import type { TokenEvaluatorContext } from '../token-evaluator-context.ts';
 
 import { HeadingToken } from './heading-token.ts';
 
-vi.mock('obsidian-dev-utils/obsidian/metadata-cache', () => ({
+vi.mock('@mnaoumov/obsidian-lib/metadata-cache', () => ({
   getCacheSafe: vi.fn<(app: App, fileOrPath: string) => Promise<CachedMetadataEx | null>>()
 }));
 

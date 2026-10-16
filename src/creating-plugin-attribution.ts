@@ -22,7 +22,7 @@
  *   the write happens.
  */
 
-import { getStackTrace } from 'obsidian-dev-utils/error';
+import { getStackTrace } from '@mnaoumov/typescript-lib/error';
 
 /**
  * Matches a frame produced by community-plugin code.
@@ -32,7 +32,7 @@ import { getStackTrace } from 'obsidian-dev-utils/error';
  * shape a plugin's own `eval` produces matches the same way, since the id still follows the marker.
  *
  * `/` ends the id as well, so the source-map-rewritten form `app://obsidian.md/plugin:<id>/src/foo.ts:1:2`
- * — which `obsidian-dev-utils` emits and a stack-mapping tool can surface — yields the id alone rather than
+ * — which the `@mnaoumov` build tooling emits and a stack-mapping tool can surface — yields the id alone rather than
  * the id plus a path. No id can contain a `/` regardless: `encodeURIComponent` would have escaped it.
  */
 const PLUGIN_FRAME_REG_EXP = /\bplugin:[^:)\s/]+/g;
@@ -54,7 +54,7 @@ const STACK_TRACE_LIMIT = 50;
 /**
  * Captures the current call stack with enough frames to reach the calling plugin.
  *
- * The capture itself is `obsidian-dev-utils`' {@link getStackTrace}; the only thing added here is the
+ * The capture itself is `@mnaoumov/typescript-lib`'s {@link getStackTrace}; the only thing added here is the
  * raised frame limit, which that helper does not touch.
  *
  * @returns The stack trace.

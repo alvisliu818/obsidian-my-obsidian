@@ -4,18 +4,18 @@ import type {
 } from 'obsidian';
 
 import {
-  noop,
-  noopAsync
-} from 'obsidian-dev-utils/function';
-import {
   AttachmentPathContext,
   DUMMY_PATH
-} from 'obsidian-dev-utils/obsidian/attachment-path';
+} from '@mnaoumov/obsidian-lib/attachment-path';
 import {
   getAbstractFileOrNull,
   getFileOrNull
-} from 'obsidian-dev-utils/obsidian/file-system';
-import { getBacklinksForFileSafe } from 'obsidian-dev-utils/obsidian/metadata-cache';
+} from '@mnaoumov/obsidian-lib/file-system';
+import { getBacklinksForFileSafe } from '@mnaoumov/obsidian-lib/metadata-cache';
+import {
+  noop,
+  noopAsync
+} from '@mnaoumov/typescript-lib/function';
 
 import type { AttachmentCollector } from './attachment-collector.ts';
 import type { AttachmentPathManager } from './attachment-path-manager.ts';
@@ -158,9 +158,10 @@ export class PluginApiImpl implements CustomAttachmentLocationApi {
    * @returns The attachment's path.
    */
   public async getAvailablePathForAttachments(params: PluginApiImplGetAvailablePathForAttachmentsParams): Promise<string> {
+    const { context, ...rest } = params;
     return await this.attachmentPathManager.getAvailablePathForAttachments({
-      ...params,
-      context: ATTACHMENT_PATH_CONTEXTS[params.context]
+      ...rest,
+      context: ATTACHMENT_PATH_CONTEXTS[context]
     });
   }
 
@@ -224,7 +225,7 @@ export class PluginApiImpl implements CustomAttachmentLocationApi {
    * @param migrateSettingsParams - The proposal.
    * @returns What the user approved.
    */
-  // eslint-disable-next-line obsidian-dev-utils/params-options-name-match -- The type is the published contract's, shared with the interface this class implements; renaming it per class+method would rename it in every consumer.
+  // eslint-disable-next-line typescript-dev-toolkit/params-options-name-match -- The type is the published contract's, shared with the interface this class implements; renaming it per class+method would rename it in every consumer.
   public async migrateSettings(migrateSettingsParams: MigrateSettingsParams): Promise<MigrateSettingsResult> {
     const previousMigrations = this.queuedMigrations;
     let releaseQueue: () => void = noop;
@@ -245,7 +246,7 @@ export class PluginApiImpl implements CustomAttachmentLocationApi {
     return this.app.plugins.manifests[sourcePluginId]?.name ?? sourcePluginId;
   }
 
-  // eslint-disable-next-line obsidian-dev-utils/params-options-name-match -- Same published contract type, one call deeper.
+  // eslint-disable-next-line typescript-dev-toolkit/params-options-name-match -- Same published contract type, one call deeper.
   private async migrateSettingsWithoutQueueing(migrateSettingsParams: MigrateSettingsParams): Promise<MigrateSettingsResult> {
     const rows = buildSettingsMigrationRows({
       currentSettings: this.pluginSettingsComponent.settings,

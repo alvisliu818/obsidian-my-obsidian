@@ -6,12 +6,12 @@ import type {
   Workspace
 } from 'obsidian';
 
-import { moment as moment_ } from 'obsidian';
 import {
   castTo,
   extractDefaultExportInterop
-} from 'obsidian-dev-utils/object-utils';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+} from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
+import { moment as moment_ } from 'obsidian';
 import {
   beforeEach,
   describe,

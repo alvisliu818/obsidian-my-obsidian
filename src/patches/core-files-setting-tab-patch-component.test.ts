@@ -6,10 +6,10 @@ import type {
   SettingTab
 } from 'obsidian';
 
-import { AsyncEvents } from 'obsidian-dev-utils/async-events';
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { initI18N } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+import { initI18N } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { AsyncEvents } from '@mnaoumov/typescript-lib/async-events';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import { ButtonComponent } from 'obsidian-test-mocks/obsidian';
 import {
   afterEach,

@@ -38,7 +38,7 @@ describe('defaultTranslations', () => {
     expect(defaultTranslations.goToOwningNote.noPriorityWinnerReason.Tie).toContain('{{settingName}}');
   });
 
-  it('should merge the obsidian-dev-utils translations', () => {
+  it('should merge the obsidian-lib translations', () => {
     expect(defaultTranslations.obsidianDevUtils.buttons.cancel).toBeTypeOf('string');
   });
 

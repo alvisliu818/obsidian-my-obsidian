@@ -1,18 +1,18 @@
+import type { PluginNoticeComponent } from '@mnaoumov/obsidian-lib/components/plugin-notice-component';
 import type {
   App,
   TAbstractFile,
   TFile
 } from 'obsidian';
-import type { PluginNoticeComponent } from 'obsidian-dev-utils/obsidian/components/plugin-notice-component';
 
+import { DUMMY_PATH } from '@mnaoumov/obsidian-lib/attachment-path';
+import { FileCommandHandler } from '@mnaoumov/obsidian-lib/command-handlers/file-command-handler';
+import { appendCodeBlock } from '@mnaoumov/obsidian-lib/html-element';
+import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { createFolderSafe } from '@mnaoumov/obsidian-lib/vault';
+import { invokeAsyncSafely } from '@mnaoumov/typescript-lib/async';
 import { InternalPluginName } from '@obsidian-typings/obsidian-public-latest/implementations';
 import { ButtonComponent } from 'obsidian';
-import { invokeAsyncSafely } from 'obsidian-dev-utils/async';
-import { DUMMY_PATH } from 'obsidian-dev-utils/obsidian/attachment-path';
-import { FileCommandHandler } from 'obsidian-dev-utils/obsidian/command-handlers/file-command-handler';
-import { appendCodeBlock } from 'obsidian-dev-utils/obsidian/html-element';
-import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { createFolderSafe } from 'obsidian-dev-utils/obsidian/vault';
 
 import type { AttachmentPathManager } from '../attachment-path-manager.ts';
 import type { HandedOverSettingsComponent } from '../handed-over-settings-component.ts';

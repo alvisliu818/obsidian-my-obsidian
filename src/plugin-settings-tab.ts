@@ -1,27 +1,27 @@
+import type { PluginGateComponent } from '@mnaoumov/obsidian-lib/components/plugin-gate-component';
+import type {
+  BindOptionsExtended,
+  PluginSettingsTabBaseConstructorParams
+} from '@mnaoumov/obsidian-lib/plugin/plugin-settings-tab';
 import type {
   SettingDefinitionItem,
   SettingDefinitionRender,
   TextComponent
 } from 'obsidian';
-import type { PluginGateComponent } from 'obsidian-dev-utils/obsidian/components/plugin-gate-component';
-import type {
-  BindOptionsExtended,
-  PluginSettingsTabBaseConstructorParams
-} from 'obsidian-dev-utils/obsidian/plugin/plugin-settings-tab';
 import type { ConditionalKeys } from 'type-fest';
 
+import { appendCodeBlock } from '@mnaoumov/obsidian-lib/html-element';
+import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { confirm } from '@mnaoumov/obsidian-lib/modals/confirm';
+import { PluginSettingsTabBase } from '@mnaoumov/obsidian-lib/plugin/plugin-settings-tab';
+import {
+  convertAsyncToSync,
+  invokeAsyncSafely
+} from '@mnaoumov/typescript-lib/async';
 import {
   debounce,
   normalizePath
 } from 'obsidian';
-import {
-  convertAsyncToSync,
-  invokeAsyncSafely
-} from 'obsidian-dev-utils/async';
-import { appendCodeBlock } from 'obsidian-dev-utils/obsidian/html-element';
-import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { confirm } from 'obsidian-dev-utils/obsidian/modals/confirm';
-import { PluginSettingsTabBase } from 'obsidian-dev-utils/obsidian/plugin/plugin-settings-tab';
 
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';
 import type { PluginSettings } from './plugin-settings.ts';

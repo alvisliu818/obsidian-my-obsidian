@@ -1,73 +1,73 @@
+import type { AbortSignalComponent } from '@mnaoumov/obsidian-lib/components/abort-signal-component';
+import type { ConsoleDebugComponent } from '@mnaoumov/obsidian-lib/components/console-debug-component';
+import type { PluginNoticeComponent } from '@mnaoumov/obsidian-lib/components/plugin-notice-component';
+import type { FileChange } from '@mnaoumov/obsidian-lib/file-change';
+import type { CanvasReference } from '@mnaoumov/obsidian-lib/reference';
+import type { ResourceLockComponent } from '@mnaoumov/obsidian-lib/resource-lock';
+import type { MaybeReturn } from '@mnaoumov/typescript-lib/type';
 import type {
   Reference,
   TAbstractFile
 } from 'obsidian';
-import type { AbortSignalComponent } from 'obsidian-dev-utils/obsidian/components/abort-signal-component';
-import type { ConsoleDebugComponent } from 'obsidian-dev-utils/obsidian/components/console-debug-component';
-import type { PluginNoticeComponent } from 'obsidian-dev-utils/obsidian/components/plugin-notice-component';
-import type { FileChange } from 'obsidian-dev-utils/obsidian/file-change';
-import type { CanvasReference } from 'obsidian-dev-utils/obsidian/reference';
-import type { ResourceLockComponent } from 'obsidian-dev-utils/obsidian/resource-lock';
-import type { MaybeReturn } from 'obsidian-dev-utils/type';
 
+import {
+  findAttachmentUnitFolderPath,
+  rebasePathOntoFolder
+} from '@mnaoumov/obsidian-lib/attachment-unit-folder';
+import { getCanvasReferences } from '@mnaoumov/obsidian-lib/canvas';
+import { applyFileChanges } from '@mnaoumov/obsidian-lib/file-change';
+import {
+  isCanvasFile,
+  isFile,
+  isFolder,
+  isNote
+} from '@mnaoumov/obsidian-lib/file-system';
+import { appendCodeBlock } from '@mnaoumov/obsidian-lib/html-element';
+import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import {
+  editLinks,
+  extractLinkFile,
+  updateLink
+} from '@mnaoumov/obsidian-lib/link';
+import { loop } from '@mnaoumov/obsidian-lib/loop';
+import { renderInternalLink } from '@mnaoumov/obsidian-lib/markdown';
+import {
+  getBacklinksForFileSafe,
+  getCacheSafe,
+  getLinks
+} from '@mnaoumov/obsidian-lib/metadata-cache';
+import { confirm } from '@mnaoumov/obsidian-lib/modals/confirm';
+import {
+  addToQueue,
+  addToQueueAndWait
+} from '@mnaoumov/obsidian-lib/queue';
+import {
+  isCanvasTextNodeReference,
+  referenceToFileChange
+} from '@mnaoumov/obsidian-lib/reference';
+import {
+  cleanupEmptyFolders,
+  copySafe,
+  renameSafe
+} from '@mnaoumov/obsidian-lib/vault';
+import { abortSignalAny } from '@mnaoumov/typescript-lib/abort-controller';
+import { noop } from '@mnaoumov/typescript-lib/function';
+import {
+  createElAsync,
+  createFragmentAsync
+} from '@mnaoumov/typescript-lib/html-element';
+import {
+  basename,
+  dirname,
+  join
+} from '@mnaoumov/typescript-lib/path';
+import { ensureNonNullable } from '@mnaoumov/typescript-lib/type-guards';
 import {
   App,
   setIcon,
   TFile,
   Vault
 } from 'obsidian';
-import { abortSignalAny } from 'obsidian-dev-utils/abort-controller';
-import { noop } from 'obsidian-dev-utils/function';
-import {
-  createElAsync,
-  createFragmentAsync
-} from 'obsidian-dev-utils/html-element';
-import {
-  findAttachmentUnitFolderPath,
-  rebasePathOntoFolder
-} from 'obsidian-dev-utils/obsidian/attachment-unit-folder';
-import { getCanvasReferences } from 'obsidian-dev-utils/obsidian/canvas';
-import { applyFileChanges } from 'obsidian-dev-utils/obsidian/file-change';
-import {
-  isCanvasFile,
-  isFile,
-  isFolder,
-  isNote
-} from 'obsidian-dev-utils/obsidian/file-system';
-import { appendCodeBlock } from 'obsidian-dev-utils/obsidian/html-element';
-import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import {
-  editLinks,
-  extractLinkFile,
-  updateLink
-} from 'obsidian-dev-utils/obsidian/link';
-import { loop } from 'obsidian-dev-utils/obsidian/loop';
-import { renderInternalLink } from 'obsidian-dev-utils/obsidian/markdown';
-import {
-  getBacklinksForFileSafe,
-  getCacheSafe,
-  getLinks
-} from 'obsidian-dev-utils/obsidian/metadata-cache';
-import { confirm } from 'obsidian-dev-utils/obsidian/modals/confirm';
-import {
-  addToQueue,
-  addToQueueAndWait
-} from 'obsidian-dev-utils/obsidian/queue';
-import {
-  isCanvasTextNodeReference,
-  referenceToFileChange
-} from 'obsidian-dev-utils/obsidian/reference';
-import {
-  cleanupEmptyFolders,
-  copySafe,
-  renameSafe
-} from 'obsidian-dev-utils/obsidian/vault';
-import {
-  basename,
-  dirname,
-  join
-} from 'obsidian-dev-utils/path';
-import { ensureNonNullable } from 'obsidian-dev-utils/type-guards';
 
 import type { AttachmentPathManager } from './attachment-path-manager.ts';
 import type { HandedOverSettingsComponent } from './handed-over-settings-component.ts';

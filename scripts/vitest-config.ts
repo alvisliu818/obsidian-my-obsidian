@@ -1,7 +1,7 @@
-import type { ObsidianPluginVitestConfigContext } from 'obsidian-dev-utils/script-utils/test-runners/vitest-config';
+import type { ObsidianPluginVitestConfigContext } from '@mnaoumov/obsidian-dev-toolkit/test-runners/vitest-config';
 import type { TestProjectConfiguration } from 'vitest/config';
 
-import { defineObsidianPluginVitestConfig } from 'obsidian-dev-utils/script-utils/test-runners/vitest-config';
+import { defineObsidianPluginVitestConfig } from '@mnaoumov/obsidian-dev-toolkit/test-runners/vitest-config';
 
 /**
  * The screenshot-capture suites that write
@@ -93,8 +93,8 @@ const GLOBAL_SETUP_FILE = './scripts/vitest-global-setup.ts';
  * **It is a backstop, NOT a budget a closure may spend.** Every closure in this repo is sized under the
  * transport's 30s DEFAULT rather than under this, and each one that waits says so beside its ceiling. A closure
  * written against this number would mean nothing on the Android project, which does not raise it, and would be
- * red under `obsidian-dev-utils/no-over-cap-wait-in-eval-in-obsidian`, which enforces the default cap. The one
- * exception is the `desktop-performance` project, whose transport and cap obsidian-dev-utils raises itself.
+ * red under `obsidian-dev-toolkit/no-over-cap-wait-in-eval-in-obsidian`, which enforces the default cap. The one
+ * exception is the `desktop-performance` project, whose transport and cap the `@mnaoumov/obsidian-dev-toolkit` config raises itself.
  */
 const CDP_COMMAND_TIMEOUT_IN_MILLISECONDS = 240_000;
 

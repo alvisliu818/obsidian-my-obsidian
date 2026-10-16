@@ -1,7 +1,7 @@
 import type { TFolder } from 'obsidian';
 
-import { FolderCommandHandler } from 'obsidian-dev-utils/obsidian/command-handlers/folder-command-handler';
-import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
+import { FolderCommandHandler } from '@mnaoumov/obsidian-lib/command-handlers/folder-command-handler';
+import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
 
 import type { AttachmentCollector } from '../attachment-collector.ts';
 
