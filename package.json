@@ -48,6 +48,7 @@
     "version": "jiti scripts/version.ts"
   },
   "overrides": {
+    "@mnaoumov/obsidian-lib": "$@mnaoumov/obsidian-lib",
     "@puppeteer/browsers": "^3.2.3",
     "deepmerge-ts": "^8.0.2",
     "eslint": "$eslint",
@@ -89,7 +90,7 @@
     "zod": "^4.6.5"
   },
   "dependencies": {
-    "@mnaoumov/obsidian-lib": "^3.3.1",
+    "@mnaoumov/obsidian-lib": "^4.1.0",
     "@mnaoumov/typescript-lib": "^1.1.1"
   }
 }
