@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 2.2.0
+
+- build(deps): merge moving off obsidian-dev-utils onto the @mnaoumov packages
+- refactor(api): merge building the API contract on @mnaoumov/typescript-lib/api-contract
+- feat(api): merge shipping the API contract as a copyable api-contract.ts
+- fix(ui): merge showing plugin names as code
+- test: merge using the obsidian-typings declarations of Obsidian internals
+
 ## 2.1.2
 
 - fix(rename): move a shared attachment with the last of its notes
