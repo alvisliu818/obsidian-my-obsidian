@@ -20,7 +20,7 @@ import { findPluginSettingsComponent } from '../scripts/helpers/plugin-settings-
  * the lone linked file and left the rest of the unit behind, so the surviving note inherited a torn tree.
  *
  * The fix spans two plugins: this one publishes the unit-folder designation on the patched
- * `Vault.getAvailablePathForAttachments`, and Advanced Rename and Delete Handler — which owns delete
+ * `Vault.getAvailablePathForAttachments`, and `Advanced Rename and Delete Handler` — which owns delete
  * interception since 12.0.0 — reads it back and moves the whole folder.
  *
  * Neither repo could prove that on its own, and both said so. The handler's own suite stages the designation

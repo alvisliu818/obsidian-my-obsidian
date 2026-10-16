@@ -12,7 +12,7 @@ import { findPluginSettingsComponent } from '../scripts/helpers/plugin-settings-
  * End-to-end coverage for the attachment-unit-folder designation this plugin publishes on the
  * patched `Vault.getAvailablePathForAttachments`, beside `extended`.
  *
- * The reader that needs it is another plugin: Advanced Rename and Delete Handler owns the delete
+ * The reader that needs it is another plugin: `Advanced Rename and Delete Handler` owns the delete
  * interception from 12.0.0 and has to keep a designated folder whole when it rescues an attachment out
  * of a deleted note's area (issue #70), while resolving attachment policy without knowing which plugin
  * supplies it. So what matters is not that the setting works — other suites cover that — but that the

@@ -39,8 +39,8 @@ export async function previewAttachmentPath(app: App): Promise<void> {
 /**
  * Applies a settings patch, live, through the plugin's own settings component.
  *
- * Manual equivalent: edit the same field in **Settings -> Community plugins -> Custom Attachment
- * Location**.
+ * Manual equivalent: edit the same field in **Settings -> Community plugins ->
+ * `Custom Attachment Location`**.
  */
 export async function changeSettings(app: App, patch: DemoSettingsPatch): Promise<void> {
   await configureCommunityPlugin({ app, pluginId: PLUGIN_ID, settings: patch });

@@ -7,14 +7,14 @@ import {
 } from 'vitest';
 
 /*
- * An image only an Excalidraw drawing shows survives "Delete unused attachments", and this pins WHY.
+ * An image only an `Excalidraw` drawing shows survives "Delete unused attachments", and this pins WHY.
  *
  * The sweep never scans a drawing as a note (it is treated as an attachment), so the only thing keeping such an
- * image alive is its backlink from the drawing. That backlink exists because Excalidraw writes each image a
+ * image alive is its backlink from the drawing. That backlink exists because `Excalidraw` writes each image a
  * drawing shows as a plain `<fileId>: [[path]]` line under `## Embedded Files`, OUTSIDE the `compressed-json`
  * block, which holds the scene JSON and no vault paths. Compression therefore hides nothing from the index.
  *
- * The layout whose data section opens with `%%` (Excalidraw keeps it once a file has it) looks as if it should
+ * The layout whose data section opens with `%%` (`Excalidraw` keeps it once a file has it) looks as if it should
  * hide the line in a comment, but Obsidian indexes links inside a `%%` comment too. If either precondition below
  * ever stops holding, the sweep's backlink check is no longer enough for drawings and needs to read their text.
  *
@@ -56,7 +56,7 @@ describe('Delete unused attachments keeps what a drawing shows', () => {
         await app.vault.createBinary(plainPath, bytes);
         await app.vault.createBinary(orphanPath, bytes);
 
-        // The shape Excalidraw's `generateMDBase` writes, with the scene JSON reduced to a stub.
+        // The shape `Excalidraw`'s `generateMDBase` writes, with the scene JSON reduced to a stub.
         function drawingContent(isCommentedOut: boolean, imagePath: string): string {
           return [
             '---',

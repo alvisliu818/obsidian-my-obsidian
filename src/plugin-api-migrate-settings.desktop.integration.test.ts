@@ -11,7 +11,7 @@ import { PLUGIN_API_VERSION } from './plugin-api.ts';
 
 /*
  * End-to-end coverage for `CustomAttachmentLocationApi.migrateSettings`, the receiving half of the collect-settings
- * handover from Consistent Attachments and Links.
+ * handover from `Consistent Attachments and Links`.
  *
  * The API is read off the `obsidian-dev-utils` registry, which is what a consumer negotiates against, and the
  * dialog it opens is the real one, answered by pressing its real buttons. One run walks the whole contract:

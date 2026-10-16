@@ -389,7 +389,7 @@ describe('ExternallyCreatedAttachmentHandlerComponent', () => {
     /*
      * A drawing is listed in `treatAsAttachmentExtensions` by default, so `isNoteEx` says it is not a note. It
      * still OWNS the images it shows — the same call `AttachmentPathManager` makes when it resolves the folder a
-     * drawing's paste lands in — and Excalidraw writes each one as an indexed `[[link]]` line, which
+     * drawing's paste lands in — and `Excalidraw` writes each one as an indexed `[[link]]` line, which
      * `renameFile` rewrites like any other.
      */
     const drawingPath = 'notes/sketch.excalidraw.md';
@@ -411,7 +411,7 @@ describe('ExternallyCreatedAttachmentHandlerComponent', () => {
 
   it('should rename a file a plugin wrote under its own name into a path resolved for it (issue #65)', async () => {
     /*
-     * Excalidraw asks `getAvailablePathForAttachment` for its `Pasted Image <date>.png` and writes exactly the path
+     * `Excalidraw` asks `getAvailablePathForAttachment` for its `Pasted Image <date>.png` and writes exactly the path
      * it gets back. The resolver kept the caller's name, so this plugin named nothing — the claim it left is
      * no reason to skip the file once a plugin is known to have written it.
      */

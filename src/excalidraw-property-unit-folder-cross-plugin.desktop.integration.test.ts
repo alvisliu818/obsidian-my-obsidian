@@ -13,10 +13,10 @@ import {
 import { findPluginSettingsComponent } from '../scripts/helpers/plugin-settings-component-finder.ts';
 
 /*
- * End-to-end coverage for issue #90: an Excalidraw drawing saved as a PLAIN `.md` is an attachment by its
+ * End-to-end coverage for issue #90: an `Excalidraw` drawing saved as a PLAIN `.md` is an attachment by its
  * `excalidraw-plugin` property, not only a `.excalidraw.md` by its name.
  *
- * This plugin holds no copy of that rule. It asks Advanced Rename and Delete Handler's published
+ * This plugin holds no copy of that rule. It asks `Advanced Rename and Delete Handler`'s published
  * `isTreatedAsAttachment(path)`, which learned property entries in 2.1.0, so what needs proving is the seam: the
  * REAL seeded handler, answering from its own `treatAsAttachmentExtensions`, through this plugin's `isNoteEx`,
  * into the sweep #83 is about. No stub is parked on the read-back ref.

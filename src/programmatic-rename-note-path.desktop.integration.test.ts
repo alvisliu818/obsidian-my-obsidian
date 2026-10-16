@@ -7,7 +7,7 @@ import {
 } from 'vitest';
 
 /*
- * End-to-end coverage for the defect behind Advanced Note Composer issue #259: a PROGRAMMATIC
+ * End-to-end coverage for the defect behind `Advanced Note Composer` issue #259: a PROGRAMMATIC
  * attachment-path resolution with `AttachmentPathContext.RenameNote` must never run the
  * generated-name template, and so must never open the `{{prompt}}` modal.
  *
@@ -17,7 +17,7 @@ import {
  * `generatedAttachmentFileName`, and a `{{prompt}}` there opened a modal.
  *
  * This drives `vault.getAvailablePathForAttachments.extended` directly, which is exactly the surface
- * dev-utils' `getAttachmentFilePath` reaches and therefore exactly what Advanced Note Composer calls.
+ * dev-utils' `getAttachmentFilePath` reaches and therefore exactly what `Advanced Note Composer` calls.
  * Going through the resolver rather than `app.fileManager.renameFile` is deliberate: renameFile stalls
  * on `metadataCache.onCleanCache` in the shared-instance aggregate (the documented headless wall that
  * forces the rename suites to `it.skip`), and it is not what this fix is about. The defect lives in
@@ -50,7 +50,7 @@ describe('Programmatic RenameNote resolution (Advanced Note Composer issue #259)
         }
 
         /*
-         * `shouldRenameAttachmentFiles` belongs to Advanced Rename and Delete Handler since 12.0.0, and
+         * `shouldRenameAttachmentFiles` belongs to `Advanced Rename and Delete Handler` since 12.0.0, and
          * this plugin reads it back through that plugin's API. So the two phases below swap the
          * PROVIDER rather than the setting, by parking a stub on the read-back component's live ref —
          * which exercises the real read path without needing the other plugin installed in the vault.

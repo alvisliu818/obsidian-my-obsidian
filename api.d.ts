@@ -54,7 +54,7 @@ import type {
  *
  * ## While the dependency is missing
  *
- * This plugin is gated on Advanced Rename and Delete Handler being installed and enabled, and registers
+ * This plugin is gated on `Advanced Rename and Delete Handler` being installed and enabled, and registers
  * nothing at all while it is not. The registry handle is revoked with that surface, so a consumer holding one
  * sees the API GO AWAY rather than answering from torn-down components — the same observation as this plugin
  * being uninstalled, which for a consumer is the same thing to do about it.
@@ -94,8 +94,8 @@ export interface CustomAttachmentLocationApi {
    *
    * @param params - The note, and optionally the attachment whose name the template may read.
    * @returns The folder path from the vault root, with no trailing slash — or `null` when this plugin leaves
-   *   `notePath` alone entirely, per the include and exclude lists it reads from Advanced Rename and Delete
-   *   Handler. `null` is the signal to fall back to Obsidian's own `attachmentFolderPath`: it means this
+   *   `notePath` alone entirely, per the include and exclude lists it reads from
+   *   `Advanced Rename and Delete Handler`. `null` is the signal to fall back to Obsidian's own `attachmentFolderPath`: it means this
    *   plugin is installed and has decided not to manage this note, which is a different answer from "this
    *   plugin is not installed" and is meant to be.
    */

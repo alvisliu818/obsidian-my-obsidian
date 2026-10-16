@@ -64,7 +64,7 @@ export class VaultGetAvailablePathForAttachmentsPatchComponent extends MonkeyAro
         /*
          * The caller named the file and the resolver kept that name, so the claim the manager just made is weaker
          * than one on a name this plugin chose. It still covers core Obsidian's audio recorder and file imports,
-         * but not a PLUGIN that asks for a folder and writes its own name into it — Excalidraw's
+         * but not a PLUGIN that asks for a folder and writes its own name into it — `Excalidraw`'s
          * `Pasted Image <date>.png` (issue #65), which is another plugin's attachment like any other.
          */
         selfWriteRegistry.register(attachmentPath, SelfWriteClaim.OutsideCaller);

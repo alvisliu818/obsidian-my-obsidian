@@ -17,8 +17,8 @@ import {
  *     compressed or not (`delete-unused-attachments-drawing.desktop.integration.test.ts`).
  *   - `Collect attachments in current note` is still OFFERED on it. Issues #57 and #75 both ship collecting
  *     FROM a drawing as their defining scenario (`note-priority.desktop.integration.test.ts`,
- *     `collect-higher-priority-notes.desktop.integration.test.ts`), so the collect-side skip that Consistent
- *     Attachments and Links, the plugin this collector is forked from, applies is deliberately not ported. This half guards
+ *     `collect-higher-priority-notes.desktop.integration.test.ts`), so the collect-side skip that
+ *     `Consistent Attachments and Links`, the plugin this collector is forked from, applies is deliberately not ported. This half guards
  *     against a later port quietly taking that entry point away again.
  *
  * Each question is asked through `checkCallback(true)` — the availability probe Obsidian itself uses before
@@ -26,7 +26,7 @@ import {
  * drawing an ordinary note, where both commands are offered; the fix phase restores the default. Without the
  * control a refusal would pass whenever the command was missing altogether.
  *
- * `treatAsAttachmentExtensions` belongs to Advanced Rename and Delete Handler since 12.0.0 and this plugin
+ * `treatAsAttachmentExtensions` belongs to `Advanced Rename and Delete Handler` since 12.0.0 and this plugin
  * asks `isTreatedAsAttachment(path)` rather than reading the array, so what each phase swaps is a stub
  * parked on the read-back component's live `apiRef`, which is the reason the other plugin does not have to be
  * reconfigured to run this.

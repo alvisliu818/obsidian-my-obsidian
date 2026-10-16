@@ -13,7 +13,7 @@ import { getPluginSettingsPopulate } from './helpers/plugin-settings-seed.ts';
  * `TemporaryVault.populate()` before Obsidian opens it, so the startup scan indexes
  * everything in one pass.
  *
- * Advanced Rename and Delete Handler is seeded alongside, as in every other project:
+ * `Advanced Rename and Delete Handler` is seeded alongside, as in every other project:
  * this plugin declares it as a dependency and loads nothing without it.
  */
 export const { setup, teardown } = createSetup({

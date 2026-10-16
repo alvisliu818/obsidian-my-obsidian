@@ -18,8 +18,8 @@
 
 - revert: leave no special case for a note's auto-export (#92)
 - fix(external-attachments): merge leaving a note's auto-export where it is written (#92)
-- test(external-attachments): merge pinning that an Excalidraw paste is renamed only once Excalidraw is listed
-- docs(external-attachments): merge saying an image pasted into a drawing is Excalidraw's write
+- test(external-attachments): merge pinning that an `Excalidraw` paste is renamed only once `Excalidraw` is listed
+- docs(external-attachments): merge saying an image pasted into a drawing is `Excalidraw`'s write
 - test(screenshots): merge setting the desktop capture theme with applyObsidianTheme
 - test(android): merge verifying the overlap stub writes
 - fix(release-notes): merge naming the plugin in the release notes popup
@@ -43,7 +43,7 @@ Upgrading from `${...}`: your saved patterns are rewritten to `{{...}}` automati
 - chore(deps): merge the dependency sweep onto obsidian-integration-testing 17 and the re-shot store frames
 - refactor(settings): merge dropping the private-field onSavingRecord override on obsidian-dev-utils 107
 - refactor(styles): merge dropping the local multiple-dropdown rule on obsidian-dev-utils 107 (#86)
-- feat(external-attachments): merge renaming an image pasted into an Excalidraw drawing (#65)
+- feat(external-attachments): merge renaming an image pasted into an `Excalidraw` drawing (#65)
 - test(coverage): merge covering the branches the obsidian-test-mocks 7 float left uncovered
 - test(delete-unused): merge pinning that the images a drawing shows are backlinks
 - refactor(tokens): merge keeping parseFormatObject file-local
@@ -60,7 +60,7 @@ Upgrading from `${...}`: your saved patterns are rewritten to `{{...}}` automati
 - build(lint): merge turning on no-soft-break-in-paragraph
 - refactor: merge dropping the local command disposal the base now makes redundant
 - chore(deps): merge raising obsidian-dev-utils to 106 and obsidian-integration-testing to 16
-- test(demo-vault): merge installing CodeScript Toolkit headlessly when it is missing
+- test(demo-vault): merge installing `CodeScript Toolkit` headlessly when it is missing
 - chore: merge adopting the npm run gate branch gate
 - fix(settings): merge stopping every settings load from rewriting data.json
 - fix(deps): merge restoring the lockfile's missing resolved and integrity fields
@@ -88,7 +88,7 @@ Upgrading from `${...}`: your saved patterns are rewritten to `{{...}}` automati
 - fix: re #82
 - docs: say why every test vault seeds pattern mode now that a fresh install follows Obsidian
 - feat(location)!: follow Obsidian by default; switch it off to get ./assets/${noteFileName} back
-- feat(collect): receive the collect settings Consistent Attachments and Links hands over
+- feat(collect): receive the collect settings `Consistent Attachments and Links` hands over
 - feat(location): follow Obsidian's own attachment location on request
 - feat(collect): say when a collect moved nothing, and name the setting that pinned it
 - docs: replace two labels a reader of this repo cannot resolve
@@ -107,8 +107,8 @@ Upgrading from `${...}`: your saved patterns are rewritten to `{{...}}` automati
 - docs: name the library and the sibling plugins so a reader can resolve them
 - docs: replace the private tracker references with what they pointed at
 - test: bring eight in-closure wait ceilings under the transport's per-eval cap
-- feat!: require Advanced Rename and Delete Handler instead of suggesting it
-- feat: warn about the Consistent Attachments and Links collecting overlap
+- feat!: require `Advanced Rename and Delete Handler` instead of suggesting it
+- feat: warn about the `Consistent Attachments and Links` collecting overlap
 
 ## 12.0.1
 
@@ -128,7 +128,7 @@ Upgrading from `${...}`: your saved patterns are rewritten to `{{...}}` automati
 
 ## 12.0.0
 
-- feat(rename-delete)!: hand rename and delete over to Advanced Rename and Delete Handler
+- feat(rename-delete)!: hand rename and delete over to `Advanced Rename and Delete Handler`
 - feat(collect): name the higher-priority notes when collecting from an outranked note
 - feat(note-priority): report only the notes tying for the highest rank
 - feat(collect): stay quiet when the priority winner already holds the attachment
@@ -286,7 +286,7 @@ Upgrading from `${...}`: your saved patterns are rewritten to `{{...}}` automati
 - docs: standardize demo-vault README
 - docs: drop per-plugin demo-vault setup notes (bootstrap covered by the obsidian-dev-utils harness)
 - docs: unnumber demo-vault setup notes
-- docs(demo-vault): create the Custom Attachment Location demo vault
+- docs(demo-vault): create the `Custom Attachment Location` demo vault
 
 ## 11.2.0
 
@@ -413,7 +413,7 @@ Upgrading from `${...}`: your saved patterns are rewritten to `{{...}}` automati
 
 ## 9.26.1
 
-- fix: add reference to Backlink Cache re #235
+- fix: add reference to `Backlink Cache` re #235
 - chore: update libs
 
 ## 9.26.0

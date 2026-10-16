@@ -95,7 +95,7 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       // The row exists only while a warning conflict holds, since the library renders nothing otherwise and an
       // empty row is still a divider and a block of padding.
       //
-      // There is no row for Advanced Rename and Delete Handler: it is a declared dependency, so while it is
+      // There is no row for `Advanced Rename and Delete Handler`: it is a declared dependency, so while it is
       // missing this tab is never registered at all and the library's own blocked tab explains what to install.
       this.settingEx({
         name: '',

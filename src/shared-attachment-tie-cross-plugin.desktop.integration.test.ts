@@ -20,7 +20,7 @@ import { findPluginSettingsComponent } from '../scripts/helpers/plugin-settings-
  * attachment simply stayed. The request had two halves: consult the note-priority list before giving up, and,
  * when the top rank is TIED, name the tied notes and ask rather than stall.
  *
- * Both halves live in Advanced Rename and Delete Handler, which owns deletion interception since 12.0.0, and
+ * Both halves live in `Advanced Rename and Delete Handler`, which owns deletion interception since 12.0.0, and
  * both shipped in its 1.3.0. So there is no code in this repo to test — and that is exactly why this file
  * exists rather than being unnecessary.
  *

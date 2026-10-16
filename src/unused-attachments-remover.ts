@@ -323,7 +323,7 @@ export class UnusedAttachmentsRemover {
        * The cost is deliberate and worth stating: an attachment folder reached only through a drawing is
        * no longer visited by the note-driven pass. The orphan pass still reaches its files for a user who
        * has opted into orphan scanning, and judges them on backlinks rather than on a note's say-so. That
-       * is enough for what a drawing shows: Excalidraw writes each image as a plain `[[path]]` line under
+       * is enough for what a drawing shows: `Excalidraw` writes each image as a plain `[[path]]` line under
        * `## Embedded Files`, outside the `compressed-json` block, and Obsidian indexes it even inside a `%%`
        * comment (`delete-unused-attachments-drawing.desktop.integration.test.ts`).
        */

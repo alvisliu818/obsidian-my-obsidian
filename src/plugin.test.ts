@@ -350,7 +350,7 @@ beforeEach(() => {
     removeSettingTab: vi.fn()
   });
 
-  // Advanced Rename and Delete Handler is a declared dependency, so the feature surface — everything these
+  // `Advanced Rename and Delete Handler` is a declared dependency, so the feature surface — everything these
   // tests look at — loads only once its API is published. An empty API is enough: the gate checks only that
   // one is there, at a matching version. Each test gets a fresh app, and with it a fresh registry.
   providerComponent = new Component();
@@ -370,7 +370,7 @@ function seedOnRawTarget(strictProxiedObject: object, key: string, value: unknow
 }
 
 /**
- * Withdraws the stand-in provider's API, as Advanced Rename and Delete Handler being disabled would.
+ * Withdraws the stand-in provider's API, as `Advanced Rename and Delete Handler` being disabled would.
  */
 function unpublishProviderApi(): void {
   providerComponent.unload();
@@ -393,7 +393,7 @@ describe('Plugin', () => {
     expect(CustomAttachmentLocationComponent).toHaveBeenCalledOnce();
     expect(PluginSettingsTabComponent).toHaveBeenCalledOnce();
     expect(PluginSettingsTab).toHaveBeenCalledOnce();
-    // The whole point of 12.0.0: rename/delete belongs to Advanced Rename and Delete Handler, and two
+    // The whole point of 12.0.0: rename/delete belongs to `Advanced Rename and Delete Handler`, and two
     // handlers acting on one rename corrupt links. This plugin must register NONE.
     expect(RenameDeleteHandlerComponent).not.toHaveBeenCalled();
     expect(HandedOverSettingsComponent).toHaveBeenCalledOnce();

@@ -146,7 +146,7 @@ describe('Attachments created by other plugins (issue #59)', () => {
           /*
            * ...and then, as soon as that write resolves, it inserts its own embed into the editor — by
            * which time the `create` handler has ALREADY begun moving the file. That ordering is the
-           * whole risk in catching an attachment after the fact, and it is why *Paste image rename*
+           * whole risk in catching an attachment after the fact, and it is why `Paste image rename`
            * rewrites the current editor line by hand instead of trusting the rename to do it. Assert
            * the embed ends up pointing at the moved file.
            */

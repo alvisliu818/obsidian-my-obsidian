@@ -34,7 +34,7 @@ import {
  * plus the manual repro recipe below, rather than silently omitted.
  *
  * MANUAL REPRO (real Obsidian, GUI):
- *   1. Install + enable Custom Attachment Location; set "Location for new attachments" to a relative
+ *   1. Install + enable `Custom Attachment Location`; set "Location for new attachments" to a relative
  *      shared folder (e.g. `./assets`), "Should handle renames" ON.
  *   2. Create `img.png` and a canvas containing a TEXT card with a markdown table whose cell is
  *      `| ![[img.png\|500]] |`. Save.

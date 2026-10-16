@@ -38,7 +38,7 @@ export enum SelfWriteClaim {
    *
    * Such a claim holds only while core Obsidian is the writer: its audio recorder and its file imports ask
    * exactly this way and must not be renamed a second time. A PLUGIN that asks for a folder and then writes
-   * its own name into it — Excalidraw's `Pasted Image <date>.png` (issue #65) — is the very case
+   * its own name into it — `Excalidraw`'s `Pasted Image <date>.png` (issue #65) — is the very case
    * `renameAttachmentsCreatedByOtherPluginsMode` exists for, and the plugin named nothing there.
    */
   OutsideCaller = 'OutsideCaller',

@@ -117,7 +117,7 @@ export class ExternallyCreatedAttachmentHandlerComponent extends Component {
    *
    * Plain `isNote`, not `isNoteEx`, on purpose — the same call `AttachmentPathManager` makes when it resolves the
    * folder a drawing's paste lands in. A drawing the user treats as an attachment still OWNS the images it
-   * shows (issue #65), and Excalidraw records each one as an ordinary `[[link]]` line under `## Embedded Files`,
+   * shows (issue #65), and `Excalidraw` records each one as an ordinary `[[link]]` line under `## Embedded Files`,
    * outside its `compressed-json` block, so the metadata cache indexes it and `renameFile` rewrites it. The open
    * drawing follows too: its in-memory record of the image holds the `TFile` and serializes the link from it.
    */
@@ -182,7 +182,7 @@ export class ExternallyCreatedAttachmentHandlerComponent extends Component {
     /*
      * A path this plugin resolved for an outside caller kept that caller's file name. It is this plugin's own
      * only when core Obsidian wrote it — the audio recorder and the file imports ask that way. A plugin that
-     * asked for a folder and wrote its own name into it (Excalidraw's `Pasted Image <date>.png`, issue #65) is
+     * asked for a folder and wrote its own name into it (`Excalidraw`'s `Pasted Image <date>.png`, issue #65) is
      * exactly what this handler is for.
      */
     if ((selfWriteClaim === SelfWriteClaim.OutsideCaller && creatingPluginId === null) || !settings.shouldRenameAttachmentCreatedByPlugin(creatingPluginId)) {

@@ -59,7 +59,7 @@ describe('findCreatingPluginId', () => {
   });
 
   it('should read the id out of a nested eval frame', () => {
-    // The shape a plugin's own `eval` produces, e.g. Dataview running a user script.
+    // The shape a plugin's own `eval` produces, e.g. `Dataview` running a user script.
     const stack = [
       'Error: Stack capture',
       '    at eval (eval at <anonymous> (plugin:dataview), <anonymous>:1:56)'

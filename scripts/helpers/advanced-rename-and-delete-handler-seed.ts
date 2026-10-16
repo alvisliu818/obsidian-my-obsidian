@@ -1,7 +1,7 @@
 /**
  * @file
  *
- * Seeds Advanced Rename and Delete Handler into an integration vault, because this plugin declares it as a
+ * Seeds `Advanced Rename and Delete Handler` into an integration vault, because this plugin declares it as a
  * dependency and loads nothing of its own until it is there.
  *
  * Without it every suite would meet this plugin blocked — no commands, no patches, no settings — and fail on
@@ -29,7 +29,7 @@ import { downloadReleasedPlugin } from './download-released-plugin.ts';
 export const ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_ID = 'advanced-rename-and-delete-handler';
 
 /**
- * The release seeded. `2.1.0` is the first to recognize an Excalidraw drawing by its `excalidraw-plugin`
+ * The release seeded. `2.1.0` is the first to recognize an `Excalidraw` drawing by its `excalidraw-plugin`
  * property (#90), which `excalidraw-property-unit-folder-cross-plugin.desktop.integration.test.ts` drives.
  */
 export const ADVANCED_RENAME_AND_DELETE_HANDLER_VERSION = '2.1.0';
