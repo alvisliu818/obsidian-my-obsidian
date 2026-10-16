@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 14.2.0
+
+- refactor: merge moving off obsidian-dev-utils onto the @mnaoumov packages
+- refactor(api): merge building the API contract on @mnaoumov/typescript-lib/api-contract
+- feat(api): merge taking Advanced Rename and Delete Handler's own contract, with full schemas
+- feat(api): merge the copyable api-contract.ts with full schemas
+- feat(ui): merge marking plugin names as code in UI, markdown and comments
+
 ## 14.1.0
 
 - test: merge using the obsidian-typings declarations of Obsidian internals
