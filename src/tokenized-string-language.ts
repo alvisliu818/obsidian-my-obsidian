@@ -3,14 +3,14 @@
  *
  * The Prism language the plugin's tokenized-string settings are highlighted as.
  *
- * The grammar itself is `TemplatesLanguageComponent` in `obsidian-dev-utils`: the `{{token:format}}` syntax is
+ * The grammar itself is `TemplatesLanguageComponent` in `@mnaoumov/obsidian-lib`: the `{{token:format}}` syntax is
  * Obsidian core's own Templates language, shared by every plugin that extends it. What is this plugin's own is the
  * language id, the shape of the format half, and the two path tokens its templates carry.
  */
 
 import type { PrismTokenObject } from '@obsidian-typings/obsidian-public-latest';
 
-import { TemplatesLanguageComponent } from 'obsidian-dev-utils/obsidian/components/templates-language-component';
+import { TemplatesLanguageComponent } from '@mnaoumov/obsidian-lib/components/templates-language-component';
 
 /**
  * The Prism language the settings tab's template fields are highlighted as.

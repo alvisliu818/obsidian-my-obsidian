@@ -1,11 +1,11 @@
 import type { App } from 'obsidian';
 
-import { DUMMY_PATH } from 'obsidian-dev-utils/obsidian/attachment-path';
-import { getOsUnsafePathCharsRegExp } from 'obsidian-dev-utils/obsidian/validation';
+import { DUMMY_PATH } from '@mnaoumov/obsidian-lib/attachment-path';
+import { getOsUnsafePathCharsRegExp } from '@mnaoumov/obsidian-lib/validation';
 import {
   trimEnd,
   trimStart
-} from 'obsidian-dev-utils/string';
+} from '@mnaoumov/typescript-lib/string';
 
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';
 

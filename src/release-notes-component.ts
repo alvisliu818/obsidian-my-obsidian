@@ -1,11 +1,11 @@
+import type { ReleaseNotes } from '@mnaoumov/obsidian-lib/components/release-notes-component';
 import type { App } from 'obsidian';
-import type { ReleaseNotes } from 'obsidian-dev-utils/obsidian/components/release-notes-component';
 
-import { noop } from 'obsidian-dev-utils/function';
-import { ReleaseNotesComponent } from 'obsidian-dev-utils/obsidian/components/release-notes-component';
-import { appendCodeBlock } from 'obsidian-dev-utils/obsidian/html-element';
-import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { alert } from 'obsidian-dev-utils/obsidian/modals/alert';
+import { ReleaseNotesComponent } from '@mnaoumov/obsidian-lib/components/release-notes-component';
+import { appendCodeBlock } from '@mnaoumov/obsidian-lib/html-element';
+import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { alert } from '@mnaoumov/obsidian-lib/modals/alert';
+import { noop } from '@mnaoumov/typescript-lib/function';
 import { compare } from 'semver';
 
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';
@@ -27,7 +27,7 @@ interface ShowVersionMismatchWarningParams {
 }
 
 /*
- * The popup itself is obsidian-dev-utils' `ReleaseNotesComponent`: it names the plugin in its title and waits for
+ * The popup itself is `@mnaoumov/obsidian-lib`'s `ReleaseNotesComponent`: it names the plugin in its title and waits for
  * `data.json` to be read before deciding what was already shown. What stays here is this plugin's storage, the
  * version-mismatch warning, and the notes themselves.
  *

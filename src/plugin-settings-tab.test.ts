@@ -1,3 +1,11 @@
+import type { PluginGateComponent } from '@mnaoumov/obsidian-lib/components/plugin-gate-component';
+import type { DataHandler } from '@mnaoumov/obsidian-lib/data-handler';
+import type { PluginEventSource } from '@mnaoumov/obsidian-lib/plugin/plugin-event-source';
+import type { CodeHighlighterComponent } from '@mnaoumov/obsidian-lib/setting-components/code-highlighter-component';
+import type { MultipleDropdownComponent } from '@mnaoumov/obsidian-lib/setting-components/multiple-dropdown-component';
+import type { MultipleTextComponent } from '@mnaoumov/obsidian-lib/setting-components/multiple-text-component';
+import type { NumberComponent } from '@mnaoumov/obsidian-lib/setting-components/number-component';
+import type { AsyncEventRef } from '@mnaoumov/typescript-lib/async-events';
 import type { PrismModule } from '@obsidian-typings/obsidian-public-latest/implementations';
 import type {
   ButtonComponent,
@@ -11,23 +19,15 @@ import type {
   SettingGroup,
   ToggleComponent
 } from 'obsidian';
-import type { AsyncEventRef } from 'obsidian-dev-utils/async-events';
-import type { PluginGateComponent } from 'obsidian-dev-utils/obsidian/components/plugin-gate-component';
-import type { DataHandler } from 'obsidian-dev-utils/obsidian/data-handler';
-import type { PluginEventSource } from 'obsidian-dev-utils/obsidian/plugin/plugin-event-source';
-import type { CodeHighlighterComponent } from 'obsidian-dev-utils/obsidian/setting-components/code-highlighter-component';
-import type { MultipleDropdownComponent } from 'obsidian-dev-utils/obsidian/setting-components/multiple-dropdown-component';
-import type { MultipleTextComponent } from 'obsidian-dev-utils/obsidian/setting-components/multiple-text-component';
-import type { NumberComponent } from 'obsidian-dev-utils/obsidian/setting-components/number-component';
 
-import { waitForAllAsyncOperations } from 'obsidian-dev-utils/async';
-import { noopAsync } from 'obsidian-dev-utils/function';
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { initI18N } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { confirm } from 'obsidian-dev-utils/obsidian/modals/confirm';
-import { SettingEx } from 'obsidian-dev-utils/obsidian/setting-ex';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
-import { ValueWrapper } from 'obsidian-dev-utils/value-wrapper';
+import { initI18N } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { confirm } from '@mnaoumov/obsidian-lib/modals/confirm';
+import { SettingEx } from '@mnaoumov/obsidian-lib/setting-ex';
+import { noopAsync } from '@mnaoumov/typescript-lib/function';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { ValueWrapper } from '@mnaoumov/typescript-lib/value-wrapper';
+import { waitForAllAsyncOperations } from '@mnaoumov/typescript-test-toolkit/async-operation-tracking';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import {
   App,
   ButtonComponent as ButtonComponentClass,
@@ -61,7 +61,7 @@ import {
 } from './plugin-settings.ts';
 import { TokenValidator } from './token-validator.ts';
 
-vi.mock('obsidian-dev-utils/obsidian/modals/confirm', () => ({
+vi.mock('@mnaoumov/obsidian-lib/modals/confirm', () => ({
   confirm: vi.fn((): Promise<boolean> => Promise.resolve(true))
 }));
 

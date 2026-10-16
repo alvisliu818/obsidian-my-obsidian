@@ -1,22 +1,22 @@
+import type { NoPriorityWinnerReason } from '@mnaoumov/obsidian-lib/note-priority';
+import type { PromiseResolve } from '@mnaoumov/typescript-lib/async';
 import type { App } from 'obsidian';
-import type { PromiseResolve } from 'obsidian-dev-utils/async';
-import type { NoPriorityWinnerReason } from 'obsidian-dev-utils/obsidian/note-priority';
 
+import {
+  asCodeBlock,
+  createFragmentWithCodeBlocks
+} from '@mnaoumov/obsidian-lib/html-element';
+import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { renderInternalLink } from '@mnaoumov/obsidian-lib/markdown';
+import { invokeAsyncSafely } from '@mnaoumov/typescript-lib/async';
+import {
+  createElAsync,
+  createFragmentAsync
+} from '@mnaoumov/typescript-lib/html-element';
 import {
   Modal,
   Setting
 } from 'obsidian';
-import { invokeAsyncSafely } from 'obsidian-dev-utils/async';
-import {
-  createElAsync,
-  createFragmentAsync
-} from 'obsidian-dev-utils/html-element';
-import {
-  asCodeBlock,
-  createFragmentWithCodeBlocks
-} from 'obsidian-dev-utils/obsidian/html-element';
-import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { renderInternalLink } from 'obsidian-dev-utils/obsidian/markdown';
 
 import { ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_NAME } from '../advanced-rename-and-delete-handler.ts';
 import { CollectAttachmentUsedByMultipleNotesMode } from '../plugin-settings.ts';

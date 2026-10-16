@@ -1,9 +1,9 @@
+import { MonkeyAroundComponent } from '@mnaoumov/obsidian-lib/components/monkey-around-component';
 import { webUtils } from 'electron';
 import {
   App,
   FileSystemAdapter
 } from 'obsidian';
-import { MonkeyAroundComponent } from 'obsidian-dev-utils/obsidian/components/monkey-around-component';
 
 import type { ArrayBufferMap } from '../array-buffer-map.ts';
 

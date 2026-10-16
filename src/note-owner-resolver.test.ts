@@ -1,3 +1,4 @@
+import type { CachedMetadataEx } from '@mnaoumov/obsidian-lib/metadata-cache';
 import type { CustomArrayDict } from '@obsidian-typings/obsidian-public-latest';
 import type {
   App,
@@ -5,16 +6,15 @@ import type {
   TFile,
   TFolder
 } from 'obsidian';
-import type { CachedMetadataEx } from 'obsidian-dev-utils/obsidian/metadata-cache';
 import type { Mock } from 'vitest';
 
+import { findAttachmentUnitFolderPath } from '@mnaoumov/obsidian-lib/attachment-unit-folder';
+import { isFile } from '@mnaoumov/obsidian-lib/file-system';
+import { getBacklinksForFileSafe } from '@mnaoumov/obsidian-lib/metadata-cache';
+import { NoPriorityWinnerReason } from '@mnaoumov/obsidian-lib/note-priority';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import { Vault } from 'obsidian';
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { findAttachmentUnitFolderPath } from 'obsidian-dev-utils/obsidian/attachment-unit-folder';
-import { isFile } from 'obsidian-dev-utils/obsidian/file-system';
-import { getBacklinksForFileSafe } from 'obsidian-dev-utils/obsidian/metadata-cache';
-import { NoPriorityWinnerReason } from 'obsidian-dev-utils/obsidian/note-priority';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
 import {
   beforeEach,
   describe,
@@ -35,18 +35,18 @@ interface SettingsLike {
   notePriorities: readonly string[];
 }
 
-vi.mock('obsidian-dev-utils/obsidian/attachment-unit-folder', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/attachment-unit-folder')>(),
+vi.mock('@mnaoumov/obsidian-lib/attachment-unit-folder', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/attachment-unit-folder')>(),
   findAttachmentUnitFolderPath: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/file-system', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/file-system')>(),
+vi.mock('@mnaoumov/obsidian-lib/file-system', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/file-system')>(),
   isFile: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/metadata-cache', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/metadata-cache')>(),
+vi.mock('@mnaoumov/obsidian-lib/metadata-cache', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/metadata-cache')>(),
   getBacklinksForFileSafe: vi.fn()
 }));
 

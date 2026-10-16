@@ -1,3 +1,4 @@
+import type { CachedMetadataEx } from '@mnaoumov/obsidian-lib/metadata-cache';
 import type {
   App,
   FileStats,
@@ -7,33 +8,32 @@ import type {
   TFile,
   Vault
 } from 'obsidian';
-import type { CachedMetadataEx } from 'obsidian-dev-utils/obsidian/metadata-cache';
 
-import { castTo } from 'obsidian-dev-utils/object-utils';
 import {
   AttachmentPathContext,
   DUMMY_PATH,
   getAvailablePathForAttachments
-} from 'obsidian-dev-utils/obsidian/attachment-path';
-import { PluginNoticeComponent } from 'obsidian-dev-utils/obsidian/components/plugin-notice-component';
+} from '@mnaoumov/obsidian-lib/attachment-path';
+import { PluginNoticeComponent } from '@mnaoumov/obsidian-lib/components/plugin-notice-component';
 import {
   getAbstractFileOrNull,
   getFileOrNull,
   getPath,
   isNote
-} from 'obsidian-dev-utils/obsidian/file-system';
-import { initI18N } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { extractLinkFile } from 'obsidian-dev-utils/obsidian/link';
+} from '@mnaoumov/obsidian-lib/file-system';
+import { initI18N } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { extractLinkFile } from '@mnaoumov/obsidian-lib/link';
 import {
   getCacheSafe,
   getLinks
-} from 'obsidian-dev-utils/obsidian/metadata-cache';
+} from '@mnaoumov/obsidian-lib/metadata-cache';
 import {
   createFolderSafe,
   CreateFolderSafeResult,
   EmptyFolderBehavior
-} from 'obsidian-dev-utils/obsidian/vault';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+} from '@mnaoumov/obsidian-lib/vault';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import {
   beforeAll,
   beforeEach,
@@ -74,32 +74,32 @@ vi.mock('obsidian', async (importOriginal) => {
   };
 });
 
-vi.mock('obsidian-dev-utils/obsidian/attachment-path', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/attachment-path')>(),
+vi.mock('@mnaoumov/obsidian-lib/attachment-path', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/attachment-path')>(),
   getAvailablePathForAttachments: vi.fn<typeof getAvailablePathForAttachments>()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/file-system', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/file-system')>(),
+vi.mock('@mnaoumov/obsidian-lib/file-system', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/file-system')>(),
   getAbstractFileOrNull: vi.fn<typeof getAbstractFileOrNull>(),
   getFileOrNull: vi.fn<typeof getFileOrNull>(),
   getPath: vi.fn<typeof getPath>(),
   isNote: vi.fn<typeof isNote>()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/link', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/link')>(),
+vi.mock('@mnaoumov/obsidian-lib/link', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/link')>(),
   extractLinkFile: vi.fn<typeof extractLinkFile>()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/metadata-cache', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/metadata-cache')>(),
+vi.mock('@mnaoumov/obsidian-lib/metadata-cache', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/metadata-cache')>(),
   getCacheSafe: vi.fn<typeof getCacheSafe>(),
   getLinks: vi.fn<typeof getLinks>()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/vault', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/vault')>(),
+vi.mock('@mnaoumov/obsidian-lib/vault', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/vault')>(),
   createFolderSafe: vi.fn<typeof createFolderSafe>()
 }));
 

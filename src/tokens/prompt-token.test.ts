@@ -1,8 +1,8 @@
 import type { App } from 'obsidian';
 
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { DUMMY_PATH } from 'obsidian-dev-utils/obsidian/attachment-path';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+import { DUMMY_PATH } from '@mnaoumov/obsidian-lib/attachment-path';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import {
   beforeEach,
   describe,

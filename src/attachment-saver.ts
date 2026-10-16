@@ -4,14 +4,14 @@ import type {
   TFile
 } from 'obsidian';
 
-import { moment as moment_ } from 'obsidian';
 import {
   extractDefaultExportInterop,
   normalizeOptionalProperties,
   removeUndefinedProperties
-} from 'obsidian-dev-utils/object-utils';
-import { makeFileName } from 'obsidian-dev-utils/path';
-import { ensureNonNullable } from 'obsidian-dev-utils/type-guards';
+} from '@mnaoumov/typescript-lib/object-utils';
+import { makeFileName } from '@mnaoumov/typescript-lib/path';
+import { ensureNonNullable } from '@mnaoumov/typescript-lib/type-guards';
+import { moment as moment_ } from 'obsidian';
 
 import type { ArrayBufferMap } from './array-buffer-map.ts';
 import type { AttachmentPathManager } from './attachment-path-manager.ts';

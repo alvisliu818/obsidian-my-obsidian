@@ -1,69 +1,72 @@
+import type { AbortSignalComponent } from '@mnaoumov/obsidian-lib/components/abort-signal-component';
+import type { ConsoleDebugComponent } from '@mnaoumov/obsidian-lib/components/console-debug-component';
+import type { CachedMetadataEx } from '@mnaoumov/obsidian-lib/metadata-cache';
+import type {
+  CanvasReference,
+  CanvasTextNodeReference
+} from '@mnaoumov/obsidian-lib/reference';
 import type { CustomArrayDict } from '@obsidian-typings/obsidian-public-latest';
 import type {
   App,
+  Plugin,
   Reference,
   TAbstractFile,
   TFile,
   TFolder
 } from 'obsidian';
-import type { GetAvailablePathForAttachmentsFunctionExtended } from 'obsidian-dev-utils/obsidian/attachment-path';
-import type { AbortSignalComponent } from 'obsidian-dev-utils/obsidian/components/abort-signal-component';
-import type { ConsoleDebugComponent } from 'obsidian-dev-utils/obsidian/components/console-debug-component';
-import type { CachedMetadataEx } from 'obsidian-dev-utils/obsidian/metadata-cache';
-import type {
-  CanvasReference,
-  CanvasTextNodeReference
-} from 'obsidian-dev-utils/obsidian/reference';
 import type {
   Mock,
   MockInstance
 } from 'vitest';
 
-import {
-  Notice,
-  Vault
-} from 'obsidian';
-import { abortSignalAny } from 'obsidian-dev-utils/abort-controller';
-import {
-  noop,
-  noopAsync
-} from 'obsidian-dev-utils/function';
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { getCanvasReferences } from 'obsidian-dev-utils/obsidian/canvas';
-import { PluginNoticeComponent } from 'obsidian-dev-utils/obsidian/components/plugin-notice-component';
-import { applyFileChanges } from 'obsidian-dev-utils/obsidian/file-change';
+import { CUSTOM_ATTACHMENT_LOCATION_PLUGIN_ID } from '@mnaoumov/obsidian-lib/attachment-path';
+import { getCanvasReferences } from '@mnaoumov/obsidian-lib/canvas';
+import { PluginNoticeComponent } from '@mnaoumov/obsidian-lib/components/plugin-notice-component';
+import { applyFileChanges } from '@mnaoumov/obsidian-lib/file-change';
 import {
   isCanvasFile,
   isFile,
   isFolder,
   isNote
-} from 'obsidian-dev-utils/obsidian/file-system';
-import { initI18N } from 'obsidian-dev-utils/obsidian/i18n/i18n';
+} from '@mnaoumov/obsidian-lib/file-system';
+import { initI18N } from '@mnaoumov/obsidian-lib/i18n/i18n';
 import {
   editLinks,
   extractLinkFile,
   updateLink
-} from 'obsidian-dev-utils/obsidian/link';
-import { loop } from 'obsidian-dev-utils/obsidian/loop';
+} from '@mnaoumov/obsidian-lib/link';
+import { loop } from '@mnaoumov/obsidian-lib/loop';
 import {
   getBacklinksForFileSafe,
   getCacheSafe,
   getLinks
-} from 'obsidian-dev-utils/obsidian/metadata-cache';
-import { confirm } from 'obsidian-dev-utils/obsidian/modals/confirm';
-import { NoPriorityWinnerReason } from 'obsidian-dev-utils/obsidian/note-priority';
+} from '@mnaoumov/obsidian-lib/metadata-cache';
+import { confirm } from '@mnaoumov/obsidian-lib/modals/confirm';
+import { NoPriorityWinnerReason } from '@mnaoumov/obsidian-lib/note-priority';
+import { publishPluginApi } from '@mnaoumov/obsidian-lib/plugin/plugin-api';
 import {
   addToQueue,
   addToQueueAndWait
-} from 'obsidian-dev-utils/obsidian/queue';
-import { ResourceLockComponent } from 'obsidian-dev-utils/obsidian/resource-lock';
+} from '@mnaoumov/obsidian-lib/queue';
+import { ResourceLockComponent } from '@mnaoumov/obsidian-lib/resource-lock';
 import {
   cleanupEmptyFolders,
   copySafe,
   EmptyFolderBehavior,
   renameSafe
-} from 'obsidian-dev-utils/obsidian/vault';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+} from '@mnaoumov/obsidian-lib/vault';
+import { abortSignalAny } from '@mnaoumov/typescript-lib/abort-controller';
+import {
+  noop,
+  noopAsync
+} from '@mnaoumov/typescript-lib/function';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
+import {
+  Component,
+  Notice,
+  Vault
+} from 'obsidian';
 import {
   afterEach,
   beforeAll,
@@ -78,12 +81,14 @@ import type { HandedOverSettings } from './advanced-rename-and-delete-handler.ts
 import type { AttachmentPathManager } from './attachment-path-manager.ts';
 import type { HandedOverSettingsComponent } from './handed-over-settings-component.ts';
 import type { NetworkImageDownloader } from './network-image-downloader.ts';
+import type { CustomAttachmentLocationApi } from './plugin-api.ts';
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';
 import type { PluginSettings } from './plugin-settings.ts';
 
 import { AttachmentCollector } from './attachment-collector.ts';
 import { translationsMap } from './i18n/locales/translations-map.ts';
 import { selectMode } from './modals/collect-attachment-used-by-multiple-notes-modal.ts';
+import { PLUGIN_API_VERSION } from './plugin-api.ts';
 import { CollectAttachmentUsedByMultipleNotesMode } from './plugin-settings.ts';
 
 interface ApplyFileChangesParamsLike {
@@ -131,43 +136,43 @@ interface SettingsLike {
   shouldSkipCollectingAttachmentsReferencedByRawPath: boolean;
 }
 
-vi.mock('obsidian-dev-utils/abort-controller', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/abort-controller')>(),
+vi.mock('@mnaoumov/typescript-lib/abort-controller', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/typescript-lib/abort-controller')>(),
   abortSignalAny: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/canvas', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/canvas')>(),
+vi.mock('@mnaoumov/obsidian-lib/canvas', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/canvas')>(),
   getCanvasReferences: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/file-change', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/file-change')>(),
+vi.mock('@mnaoumov/obsidian-lib/file-change', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/file-change')>(),
   applyFileChanges: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/file-system', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/file-system')>(),
+vi.mock('@mnaoumov/obsidian-lib/file-system', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/file-system')>(),
   isCanvasFile: vi.fn(),
   isFile: vi.fn(),
   isFolder: vi.fn(),
   isNote: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/link', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/link')>(),
+vi.mock('@mnaoumov/obsidian-lib/link', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/link')>(),
   editLinks: vi.fn(),
   extractLinkFile: vi.fn(),
   updateLink: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/loop', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/loop')>(),
+vi.mock('@mnaoumov/obsidian-lib/loop', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/loop')>(),
   loop: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/markdown', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/markdown')>(),
+vi.mock('@mnaoumov/obsidian-lib/markdown', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/markdown')>(),
   // The real renderer needs a live workspace; the path is the whole of what the assertions read.
   renderInternalLink: vi.fn((params: RenderInternalLinkParamsLike): Promise<HTMLElement> => {
     const span = createSpan();
@@ -176,26 +181,26 @@ vi.mock('obsidian-dev-utils/obsidian/markdown', async (importOriginal) => ({
   })
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/metadata-cache', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/metadata-cache')>(),
+vi.mock('@mnaoumov/obsidian-lib/metadata-cache', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/metadata-cache')>(),
   getBacklinksForFileSafe: vi.fn(),
   getCacheSafe: vi.fn(),
   getLinks: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/modals/confirm', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/modals/confirm')>(),
+vi.mock('@mnaoumov/obsidian-lib/modals/confirm', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/modals/confirm')>(),
   confirm: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/queue', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/queue')>(),
+vi.mock('@mnaoumov/obsidian-lib/queue', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/queue')>(),
   addToQueue: vi.fn(),
   addToQueueAndWait: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/vault', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/vault')>(),
+vi.mock('@mnaoumov/obsidian-lib/vault', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/vault')>(),
   cleanupEmptyFolders: vi.fn(),
   copySafe: vi.fn(),
   renameSafe: vi.fn()
@@ -299,28 +304,37 @@ function createFile(path: string, isDeleted = false): TFile {
   });
 }
 
-/**
- * Builds the patched vault method the collector reads the attachment-unit-folder designation off.
- *
- * The collector consults the published answer rather than the settings object directly, so the mock
- * has to publish it the way the patch component does.
- *
- * @param settingsLike - The settings the designation answers from.
- * @returns The patched method carrying the designation.
- */
-function createGetAvailablePathForAttachments(settingsLike: SettingsLike): App['vault']['getAvailablePathForAttachments'] {
-  const designation: Pick<Required<GetAvailablePathForAttachmentsFunctionExtended>, 'checkIsAttachmentUnitFolder'> = {
-    checkIsAttachmentUnitFolder: (folderPath) => settingsLike.isAttachmentUnitFolder(folderPath)
-  };
-  return castTo<App['vault']['getAvailablePathForAttachments']>(Object.assign(vi.fn(), designation));
-}
-
 function createReference(overrides: Partial<Reference> = {}): Reference {
   return strictProxy<Reference>({
     link: 'img.png',
     original: '![[img.png]]',
     ...overrides
   });
+}
+/**
+ * Publishes the attachment-unit-folder designation the way the plugin does: through its plugin API, which is
+ * where the library reads it.
+ *
+ * The code under test consults the published answer rather than the settings object directly, so the test has
+ * to publish it.
+ *
+ * @param settingsLike - The settings the designation answers from.
+ * @returns The component that owns the published API. Unloading it withdraws the API.
+ */
+function publishAttachmentUnitFolderDesignation(settingsLike: SettingsLike): Component {
+  const component = new Component();
+  component.load();
+  const api: Pick<CustomAttachmentLocationApi, 'getAvailablePathForAttachments' | 'isAttachmentUnitFolder'> = {
+    getAvailablePathForAttachments: vi.fn<CustomAttachmentLocationApi['getAvailablePathForAttachments']>(),
+    isAttachmentUnitFolder: ({ folderPath }) => settingsLike.isAttachmentUnitFolder(folderPath)
+  };
+  publishPluginApi({
+    api,
+    apiVersion: PLUGIN_API_VERSION,
+    component,
+    plugin: castTo<Plugin>({ manifest: { id: CUSTOM_ATTACHMENT_LOCATION_PLUGIN_ID } })
+  });
+  return component;
 }
 
 beforeAll(async () => {
@@ -350,6 +364,7 @@ describe('AttachmentCollector', () => {
   let warnSpy: MockInstance<typeof console.warn>;
   let pluginNoticeComponent: PluginNoticeComponent;
   let resourceLockComponent: ResourceLockComponent;
+  let designationComponent: Component;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -367,6 +382,7 @@ describe('AttachmentCollector', () => {
       shouldRenameCollectedAttachments: false,
       shouldSkipCollectingAttachmentsReferencedByRawPath: false
     };
+    designationComponent = publishAttachmentUnitFolderDesignation(settings);
     getRoot = vi.fn<() => TFolder>().mockReturnValue(strictProxy<TFolder>({ path: '/' }));
     readJson = vi.fn<(path: string) => Promise<null | object>>();
     getMarkdownFiles = vi.fn<() => TFile[]>().mockReturnValue([]);
@@ -381,7 +397,6 @@ describe('AttachmentCollector', () => {
       vault: strictProxy<App['vault']>({
         cachedRead: (file: TFile) => cachedRead(file),
         // The collector reads the unit-folder designation off the patched method, not off the settings.
-        getAvailablePathForAttachments: createGetAvailablePathForAttachments(settings),
         getFileByPath: (path: string) => getFileByPath(path),
         getFolderByPath: (path: string) => getFolderByPath(path),
         getMarkdownFiles: () => getMarkdownFiles(),
@@ -434,6 +449,7 @@ describe('AttachmentCollector', () => {
   });
 
   afterEach(() => {
+    designationComponent.unload();
     warnSpy.mockRestore();
     errorSpy.mockRestore();
   });

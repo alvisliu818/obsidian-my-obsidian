@@ -4,12 +4,12 @@ import type {
   TFile
 } from 'obsidian';
 
+import { getFileOrNull } from '@mnaoumov/obsidian-lib/file-system';
 import {
   castTo,
   getNestedPropertyValue
-} from 'obsidian-dev-utils/object-utils';
-import { getFileOrNull } from 'obsidian-dev-utils/obsidian/file-system';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+} from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import {
   beforeEach,
   describe,
@@ -22,15 +22,15 @@ import type { TokenEvaluatorContext } from '../token-evaluator-context.ts';
 
 import { FrontmatterToken } from './frontmatter-token.ts';
 
-vi.mock('obsidian-dev-utils/object-utils', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('obsidian-dev-utils/object-utils')>();
+vi.mock('@mnaoumov/typescript-lib/object-utils', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@mnaoumov/typescript-lib/object-utils')>();
   return {
     ...actual,
     getNestedPropertyValue: vi.fn<(object: object, path: string) => unknown>()
   };
 });
 
-vi.mock('obsidian-dev-utils/obsidian/file-system', () => ({
+vi.mock('@mnaoumov/obsidian-lib/file-system', () => ({
   getFileOrNull: vi.fn<(app: App, pathOrFile: null | string) => null | TFile>()
 }));
 

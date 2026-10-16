@@ -3,7 +3,7 @@
  *
  * A confirmation dialog the user can set aside to go and look at what it is asking about.
  *
- * It takes exactly what `confirm` from `obsidian-dev-utils/obsidian/modals/confirm` takes, and draws the
+ * It takes exactly what `confirm` from `@mnaoumov/obsidian-lib/modals/confirm` takes, and draws the
  * same dialog with the same classes, but opens it through {@link MinimizableModal}: a minimize button sits
  * beside the close button, and a floating bar restores it. While it is minimized the app is peek-only, so
  * nothing new can be started behind a pending confirmation.
@@ -12,18 +12,18 @@
  * one of its links would otherwise open BEHIND it, where the user cannot see it (#87).
  */
 
-import type { PromiseResolve } from 'obsidian-dev-utils/async';
-import type { ConfirmParams } from 'obsidian-dev-utils/obsidian/modals/confirm';
-import type { ModalBaseConstructorParams } from 'obsidian-dev-utils/obsidian/modals/modal';
+import type { ConfirmParams } from '@mnaoumov/obsidian-lib/modals/confirm';
+import type { ModalBaseConstructorParams } from '@mnaoumov/obsidian-lib/modals/modal';
+import type { PromiseResolve } from '@mnaoumov/typescript-lib/async';
 
-import { ButtonComponent } from 'obsidian';
-import { CssClass } from 'obsidian-dev-utils/obsidian/css-class';
-import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { MinimizableModal } from 'obsidian-dev-utils/obsidian/modals/minimizable-modal';
+import { CssClass } from '@mnaoumov/obsidian-lib/css-class';
+import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { MinimizableModal } from '@mnaoumov/obsidian-lib/modals/minimizable-modal';
 import {
   ModalBase,
   showModal
-} from 'obsidian-dev-utils/obsidian/modals/modal';
+} from '@mnaoumov/obsidian-lib/modals/modal';
+import { ButtonComponent } from 'obsidian';
 
 /**
  * Parameters for {@link confirmMinimizable}: exactly what `confirm` takes.

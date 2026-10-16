@@ -13,7 +13,7 @@ interface ObsidianDevUtilsGlobal {
 }
 
 /**
- * The obsidian-dev-utils global operation queue, as seen from outside the library.
+ * The `@mnaoumov/obsidian-lib` global operation queue, as seen from outside the library.
  *
  * Only the shape read here is modeled; the library does not export the type. Declared at module scope
  * because types are erased before the callback is serialized into Obsidian.
@@ -159,7 +159,7 @@ describe('The prompt token modal (issue #59)', () => {
 
         /*
          * Creating and opening the note above queues the plugin's own create/open handling on
-         * obsidian-dev-utils' GLOBAL operation queue, which runs one entry at a time. `saveAttachment`
+         * `@mnaoumov/obsidian-lib`'s GLOBAL operation queue, which runs one entry at a time. `saveAttachment`
          * below lands BEHIND those entries, and the prompt modal only opens once its entry starts —
          * so triggering while the queue is busy is what made the modal miss the wait below entirely,
          * reported (misleadingly) as the input not being focused.

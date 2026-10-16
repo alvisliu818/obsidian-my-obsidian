@@ -1,24 +1,27 @@
-import type { TAbstractFile } from 'obsidian';
 import type {
   PluginConflict,
   PluginDependency,
   PluginGateComponent
-} from 'obsidian-dev-utils/obsidian/components/plugin-gate-component';
-import type { TranslationsMap } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import type { PluginApiDeclaration } from 'obsidian-dev-utils/obsidian/plugin/plugin-api';
+} from '@mnaoumov/obsidian-lib/components/plugin-gate-component';
+import type { TranslationsMap } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import type { PluginApiDeclaration } from '@mnaoumov/obsidian-lib/plugin/plugin-api';
+import type { TAbstractFile } from 'obsidian';
 
+import { OpenDemoVaultCommandHandler } from '@mnaoumov/obsidian-lib/command-handlers/open-demo-vault-command-handler';
+import { PluginConflictSeverity } from '@mnaoumov/obsidian-lib/components/plugin-gate-component';
+import { PluginSettingsTabComponent } from '@mnaoumov/obsidian-lib/components/plugin-settings-tab-component';
+import { SettingsMigrationComponent } from '@mnaoumov/obsidian-lib/components/settings-migration-component';
+import { PluginDataHandler } from '@mnaoumov/obsidian-lib/data-handler';
+import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { PluginBase } from '@mnaoumov/obsidian-lib/plugin/plugin';
+import { PluginEventSourceImpl } from '@mnaoumov/obsidian-lib/plugin/plugin-event-source';
+import { ValueWrapper } from '@mnaoumov/typescript-lib/value-wrapper';
 import { Component } from 'obsidian';
-import { OpenDemoVaultCommandHandler } from 'obsidian-dev-utils/obsidian/command-handlers/open-demo-vault-command-handler';
-import { PluginConflictSeverity } from 'obsidian-dev-utils/obsidian/components/plugin-gate-component';
-import { PluginSettingsTabComponent } from 'obsidian-dev-utils/obsidian/components/plugin-settings-tab-component';
-import { SettingsMigrationComponent } from 'obsidian-dev-utils/obsidian/components/settings-migration-component';
-import { PluginDataHandler } from 'obsidian-dev-utils/obsidian/data-handler';
-import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { PluginBase } from 'obsidian-dev-utils/obsidian/plugin/plugin';
-import { PluginEventSourceImpl } from 'obsidian-dev-utils/obsidian/plugin/plugin-event-source';
-import { ValueWrapper } from 'obsidian-dev-utils/value-wrapper';
 
-import type { MigratableSettings } from './advanced-rename-and-delete-handler.ts';
+import type {
+  AdvancedRenameAndDeleteHandlerMigratableSettings,
+  MigratableSettings
+} from './advanced-rename-and-delete-handler.ts';
 
 import {
   ADVANCED_RENAME_AND_DELETE_HANDLER_API_VERSION_RANGE,
@@ -177,7 +180,7 @@ export class Plugin extends PluginBase {
     this.pluginSettingsComponent = pluginSettingsComponent;
 
     this.addChild(
-      new SettingsMigrationComponent<MigratableSettings>({
+      new SettingsMigrationComponent<AdvancedRenameAndDeleteHandlerMigratableSettings>({
         apiVersionRange: ADVANCED_RENAME_AND_DELETE_HANDLER_API_VERSION_RANGE,
         app: this.app,
         // Names only what migrating needs, `migrateSettings`. The dependency gate already insists on a provider

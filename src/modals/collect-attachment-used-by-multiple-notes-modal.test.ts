@@ -4,10 +4,10 @@ import type {
   ToggleComponent
 } from 'obsidian';
 
-import { noopAsync } from 'obsidian-dev-utils/function';
-import { initI18N } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { NoPriorityWinnerReason } from 'obsidian-dev-utils/obsidian/note-priority';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+import { initI18N } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { NoPriorityWinnerReason } from '@mnaoumov/obsidian-lib/note-priority';
+import { noopAsync } from '@mnaoumov/typescript-lib/function';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import {
   ButtonComponent as ButtonComponentClass,
   Modal as ModalClass,
@@ -27,7 +27,7 @@ import { translationsMap } from '../i18n/locales/translations-map.ts';
 import { CollectAttachmentUsedByMultipleNotesMode } from '../plugin-settings.ts';
 import { selectMode } from './collect-attachment-used-by-multiple-notes-modal.ts';
 
-vi.mock('obsidian-dev-utils/obsidian/markdown', () => ({
+vi.mock('@mnaoumov/obsidian-lib/markdown', () => ({
   renderInternalLink: vi.fn((): Promise<HTMLElement> => Promise.resolve(createSpan()))
 }));
 

@@ -4,9 +4,9 @@ import type {
   Vault
 } from 'obsidian';
 
+import { MonkeyAroundComponent } from '@mnaoumov/obsidian-lib/components/monkey-around-component';
+import { createFolderSafe } from '@mnaoumov/obsidian-lib/vault';
 import { parentFolderPath } from '@obsidian-typings/obsidian-public-latest/implementations';
-import { MonkeyAroundComponent } from 'obsidian-dev-utils/obsidian/components/monkey-around-component';
-import { createFolderSafe } from 'obsidian-dev-utils/obsidian/vault';
 
 interface VaultCreateBinaryEnsureFolderPatchComponentConstructorParams {
   readonly app: App;

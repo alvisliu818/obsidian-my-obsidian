@@ -1,3 +1,12 @@
+import type { CommandHandler } from '@mnaoumov/obsidian-lib/command-handlers/command-handler';
+import type {
+  PluginConflict,
+  PluginDependency,
+  PluginGateComponent
+} from '@mnaoumov/obsidian-lib/components/plugin-gate-component';
+import type { NotebookNavigatorMenuDispose } from '@mnaoumov/obsidian-lib/notebook-navigator';
+import type { ApiContract } from '@mnaoumov/typescript-lib/api-contract';
+import type { DisposableEx } from '@mnaoumov/typescript-lib/disposable';
 /* eslint-disable perfectionist/sort-named-imports -- dprint orders these members by their ORIGINAL name (`Plugin` before `PluginManifest`) while perfectionist orders them by the LOCAL alias (`PluginManifest` before `PluginOriginal`). For an aliased import the two orders conflict, and satisfying one re-breaks the other. */
 import type {
   App as AppOriginal,
@@ -6,34 +15,25 @@ import type {
   TFile
 } from 'obsidian';
 /* eslint-enable perfectionist/sort-named-imports -- Only the aliased import above is exempt. */
-import type { DisposableEx } from 'obsidian-dev-utils/disposable';
-import type { CommandHandler } from 'obsidian-dev-utils/obsidian/command-handlers/command-handler';
-import type {
-  PluginConflict,
-  PluginDependency,
-  PluginGateComponent
-} from 'obsidian-dev-utils/obsidian/components/plugin-gate-component';
-import type { NotebookNavigatorMenuDispose } from 'obsidian-dev-utils/obsidian/notebook-navigator';
-import type { PluginApiContract } from 'obsidian-dev-utils/obsidian/plugin/plugin-api';
 import type { Mock } from 'vitest';
 
-import { Component } from 'obsidian';
-import {
-  noop,
-  noopAsync
-} from 'obsidian-dev-utils/function';
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { CommandHandlerComponent } from 'obsidian-dev-utils/obsidian/command-handlers/command-handler-component';
-import { OpenDemoVaultCommandHandler } from 'obsidian-dev-utils/obsidian/command-handlers/open-demo-vault-command-handler';
-import { PluginConflictSeverity } from 'obsidian-dev-utils/obsidian/components/plugin-gate-component';
-import { PluginSettingsTabComponent } from 'obsidian-dev-utils/obsidian/components/plugin-settings-tab-component';
-import { RenameDeleteHandlerComponent } from 'obsidian-dev-utils/obsidian/components/rename-delete-handler-component';
-import { SettingsMigrationComponent } from 'obsidian-dev-utils/obsidian/components/settings-migration-component';
-import { NOTEBOOK_NAVIGATOR_PLUGIN_ID } from 'obsidian-dev-utils/obsidian/notebook-navigator';
+import { CommandHandlerComponent } from '@mnaoumov/obsidian-lib/command-handlers/command-handler-component';
+import { OpenDemoVaultCommandHandler } from '@mnaoumov/obsidian-lib/command-handlers/open-demo-vault-command-handler';
+import { PluginConflictSeverity } from '@mnaoumov/obsidian-lib/components/plugin-gate-component';
+import { PluginSettingsTabComponent } from '@mnaoumov/obsidian-lib/components/plugin-settings-tab-component';
+import { RenameDeleteHandlerComponent } from '@mnaoumov/obsidian-lib/components/rename-delete-handler-component';
+import { SettingsMigrationComponent } from '@mnaoumov/obsidian-lib/components/settings-migration-component';
+import { NOTEBOOK_NAVIGATOR_PLUGIN_ID } from '@mnaoumov/obsidian-lib/notebook-navigator';
 import {
   publishPluginApi,
   watchPluginApi
-} from 'obsidian-dev-utils/obsidian/plugin/plugin-api';
+} from '@mnaoumov/obsidian-lib/plugin/plugin-api';
+import {
+  noop,
+  noopAsync
+} from '@mnaoumov/typescript-lib/function';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { Component } from 'obsidian';
 import { App } from 'obsidian-test-mocks/obsidian';
 import {
   afterEach,
@@ -98,15 +98,15 @@ const hoisted = vi.hoisted(() => {
 
 // --- Collaborator dev-utils components added as children: stub as constructor spies returning a real Component so the real addChild lifecycle can load them while capturing constructor args. ---
 
-vi.mock('obsidian-dev-utils/obsidian/components/plugin-settings-tab-component', () => ({
+vi.mock('@mnaoumov/obsidian-lib/components/plugin-settings-tab-component', () => ({
   // eslint-disable-next-line prefer-arrow-callback -- a vi.fn constructor stub must be a function (not an arrow) so `new` works and returns a loadable Component.
   PluginSettingsTabComponent: vi.fn(function pluginSettingsTabComponentStub() {
     return new Component();
   })
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/components/rename-delete-handler-component', async (importOriginal) => {
-  const original = await importOriginal<typeof import('obsidian-dev-utils/obsidian/components/rename-delete-handler-component')>();
+vi.mock('@mnaoumov/obsidian-lib/components/rename-delete-handler-component', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@mnaoumov/obsidian-lib/components/rename-delete-handler-component')>();
   return {
     ...original,
     // eslint-disable-next-line prefer-arrow-callback -- a vi.fn constructor stub must be a function (not an arrow) so `new` works and returns a loadable Component.
@@ -130,8 +130,8 @@ vi.mock('./handed-over-settings-component.ts', () => ({
   })
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/components/settings-migration-component', async (importOriginal) => {
-  const original = await importOriginal<typeof import('obsidian-dev-utils/obsidian/components/settings-migration-component')>();
+vi.mock('@mnaoumov/obsidian-lib/components/settings-migration-component', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@mnaoumov/obsidian-lib/components/settings-migration-component')>();
   return {
     ...original,
     // eslint-disable-next-line prefer-arrow-callback -- a vi.fn constructor stub must be a function (not an arrow) so `new` works and returns a loadable Component.
@@ -256,7 +256,7 @@ interface AppGlobal {
 
 interface MigrationParamsProbe {
   readonly apiVersionRange: string;
-  readonly contract: PluginApiContract;
+  readonly contract: ApiContract;
   getProposedSettings: () => MigratableSettings | null;
   readonly providerPluginId: string;
   retireProposedSettings: () => Promise<void>;

@@ -140,7 +140,7 @@ describe('The published API answers per note, which the getConfig patch cannot',
          * the record — which is what a consumer's watch resolves to anyway.
          */
         /*
-         * The bag `obsidian-dev-utils` keeps its registry in lives on the main renderer's global, which is
+         * The bag `@mnaoumov/obsidian-lib` keeps its registry in lives on the main renderer's global, which is
          * the window this closure and every plugin bundle share.
          */
         const registryState = (window as Partial<ObsidianDevUtilsWrapper>).__obsidianDevUtils;

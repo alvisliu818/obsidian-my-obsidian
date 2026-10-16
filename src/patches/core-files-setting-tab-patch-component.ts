@@ -26,13 +26,13 @@ import type {
   SettingTab
 } from 'obsidian';
 
-import { registerAsyncEvent } from 'obsidian-dev-utils/obsidian/components/async-events-component';
-import { MonkeyAroundComponent } from 'obsidian-dev-utils/obsidian/components/monkey-around-component';
+import { registerAsyncEvent } from '@mnaoumov/obsidian-lib/components/async-events-component';
+import { MonkeyAroundComponent } from '@mnaoumov/obsidian-lib/components/monkey-around-component';
 import {
   asCodeBlock,
   createFragmentWithCodeBlocks
-} from 'obsidian-dev-utils/obsidian/html-element';
-import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
+} from '@mnaoumov/obsidian-lib/html-element';
+import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
 
 import type { PluginSettingsComponent } from '../plugin-settings-component.ts';
 

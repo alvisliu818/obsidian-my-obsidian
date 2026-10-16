@@ -1,11 +1,11 @@
+import type { ReleaseNotesComponent } from '@mnaoumov/obsidian-lib/components/release-notes-component';
 import type { App as AppOriginal } from 'obsidian';
-import type { ReleaseNotesComponent } from 'obsidian-dev-utils/obsidian/components/release-notes-component';
 
-import { noopAsync } from 'obsidian-dev-utils/function';
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { initI18N } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { alert } from 'obsidian-dev-utils/obsidian/modals/alert';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+import { initI18N } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { alert } from '@mnaoumov/obsidian-lib/modals/alert';
+import { noopAsync } from '@mnaoumov/typescript-lib/function';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import { App } from 'obsidian-test-mocks/obsidian';
 import {
   afterEach,
@@ -34,7 +34,7 @@ interface TestContext {
   readonly settings: PluginSettings;
 }
 
-vi.mock('obsidian-dev-utils/obsidian/modals/alert', () => ({
+vi.mock('@mnaoumov/obsidian-lib/modals/alert', () => ({
   alert: vi.fn(() => noopAsync())
 }));
 
@@ -101,7 +101,10 @@ describe('createReleaseNotesComponent', () => {
 
     expect(mockAlert).toHaveBeenCalledOnce();
     const params = mockAlert.mock.lastCall?.[0];
-    expect(params?.title).toBe('Custom Attachment Location release notes');
+    const title = castTo<DocumentFragment>(params?.title);
+    expect(title.textContent).toBe('Custom Attachment Location release notes');
+    // The library renders the plugin name as code.
+    expect(title.querySelector('code')?.textContent).toBe('Custom Attachment Location');
     const headings = Array.from(castTo<DocumentFragment>(params?.message).querySelectorAll('h3'), (heading) => heading.textContent);
     expect(headings).toEqual(['9.16.0', '10.0.0', '11.0.0']);
     expect(context.settings.version).toBe(PLUGIN_VERSION);

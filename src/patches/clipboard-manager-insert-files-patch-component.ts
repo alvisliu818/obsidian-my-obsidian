@@ -1,7 +1,7 @@
 import type { ClipboardManager } from '@obsidian-typings/obsidian-public-latest';
 
-import { getPrototypeOf } from 'obsidian-dev-utils/object-utils';
-import { MonkeyAroundComponent } from 'obsidian-dev-utils/obsidian/components/monkey-around-component';
+import { MonkeyAroundComponent } from '@mnaoumov/obsidian-lib/components/monkey-around-component';
+import { getPrototypeOf } from '@mnaoumov/typescript-lib/object-utils';
 
 import type { ArrayBufferMap } from '../array-buffer-map.ts';
 

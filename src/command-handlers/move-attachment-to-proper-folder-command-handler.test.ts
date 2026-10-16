@@ -1,3 +1,5 @@
+import type { ActiveFileProvider } from '@mnaoumov/obsidian-lib/active-file-provider';
+import type { AbortSignalComponent } from '@mnaoumov/obsidian-lib/components/abort-signal-component';
 import type { CustomArrayDict } from '@obsidian-typings/obsidian-public-latest';
 import type {
   App,
@@ -6,31 +8,29 @@ import type {
   TFile,
   TFolder
 } from 'obsidian';
-import type { ActiveFileProvider } from 'obsidian-dev-utils/obsidian/active-file-provider';
-import type { AbortSignalComponent } from 'obsidian-dev-utils/obsidian/components/abort-signal-component';
 
-import { Vault } from 'obsidian';
-import { abortSignalAny } from 'obsidian-dev-utils/abort-controller';
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { PluginNoticeComponent } from 'obsidian-dev-utils/obsidian/components/plugin-notice-component';
+import { PluginNoticeComponent } from '@mnaoumov/obsidian-lib/components/plugin-notice-component';
 import {
   isFile,
   isFolder
-} from 'obsidian-dev-utils/obsidian/file-system';
-import { initI18N } from 'obsidian-dev-utils/obsidian/i18n/i18n';
+} from '@mnaoumov/obsidian-lib/file-system';
+import { initI18N } from '@mnaoumov/obsidian-lib/i18n/i18n';
 import {
   editLinks,
   updateLink
-} from 'obsidian-dev-utils/obsidian/link';
-import { loop } from 'obsidian-dev-utils/obsidian/loop';
-import { getBacklinksForFileSafe } from 'obsidian-dev-utils/obsidian/metadata-cache';
-import { ResourceLockComponent } from 'obsidian-dev-utils/obsidian/resource-lock';
-import { copySafe } from 'obsidian-dev-utils/obsidian/vault';
+} from '@mnaoumov/obsidian-lib/link';
+import { loop } from '@mnaoumov/obsidian-lib/loop';
+import { getBacklinksForFileSafe } from '@mnaoumov/obsidian-lib/metadata-cache';
+import { ResourceLockComponent } from '@mnaoumov/obsidian-lib/resource-lock';
+import { copySafe } from '@mnaoumov/obsidian-lib/vault';
 import {
   deleteIfNotUsed,
   DeleteIfNotUsedResult
-} from 'obsidian-dev-utils/obsidian/vault-delete';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+} from '@mnaoumov/obsidian-lib/vault-delete';
+import { abortSignalAny } from '@mnaoumov/typescript-lib/abort-controller';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
+import { Vault } from 'obsidian';
 import {
   beforeAll,
   beforeEach,
@@ -86,39 +86,39 @@ interface TestableHandler {
   shouldAddToAbstractFilesMenu: () => boolean;
 }
 
-vi.mock('obsidian-dev-utils/abort-controller', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/abort-controller')>(),
+vi.mock('@mnaoumov/typescript-lib/abort-controller', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/typescript-lib/abort-controller')>(),
   abortSignalAny: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/file-system', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/file-system')>(),
+vi.mock('@mnaoumov/obsidian-lib/file-system', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/file-system')>(),
   isFile: vi.fn(),
   isFolder: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/link', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/link')>(),
+vi.mock('@mnaoumov/obsidian-lib/link', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/link')>(),
   editLinks: vi.fn(),
   updateLink: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/loop', () => ({
+vi.mock('@mnaoumov/obsidian-lib/loop', () => ({
   loop: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/metadata-cache', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/metadata-cache')>(),
+vi.mock('@mnaoumov/obsidian-lib/metadata-cache', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/metadata-cache')>(),
   getBacklinksForFileSafe: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/vault', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/vault')>(),
+vi.mock('@mnaoumov/obsidian-lib/vault', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/vault')>(),
   copySafe: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/vault-delete', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/vault-delete')>(),
+vi.mock('@mnaoumov/obsidian-lib/vault-delete', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/vault-delete')>(),
   deleteIfNotUsed: vi.fn()
 }));
 

@@ -1,11 +1,11 @@
-import type { BlobToJpegArrayBufferOptions } from 'obsidian-dev-utils/blob';
+import type { BlobToJpegArrayBufferOptions } from '@mnaoumov/typescript-lib/blob';
 
 import {
   blobToDataUrl,
   blobToJpegArrayBuffer
-} from 'obsidian-dev-utils/blob';
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+} from '@mnaoumov/typescript-lib/blob';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import {
   afterEach,
   beforeEach,
@@ -24,7 +24,7 @@ import {
   DefaultImageSizeDimension
 } from './plugin-settings.ts';
 
-vi.mock('obsidian-dev-utils/blob', () => ({
+vi.mock('@mnaoumov/typescript-lib/blob', () => ({
   blobToDataUrl: vi.fn<(blob: Blob) => Promise<string>>(),
   blobToJpegArrayBuffer: vi.fn<(blob: Blob, jpegQuality: number, options?: BlobToJpegArrayBufferOptions) => Promise<ArrayBuffer>>()
 }));

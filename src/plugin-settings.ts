@@ -1,6 +1,6 @@
-import { INFINITE_TIMEOUT } from 'obsidian-dev-utils/abort-controller';
-import { PathSettings } from 'obsidian-dev-utils/obsidian/path-settings';
-import { escapeRegExp } from 'obsidian-dev-utils/reg-exp';
+import { PathSettings } from '@mnaoumov/obsidian-lib/path-settings';
+import { INFINITE_TIMEOUT } from '@mnaoumov/typescript-lib/abort-controller';
+import { escapeRegExp } from '@mnaoumov/typescript-lib/reg-exp';
 
 import type { MigratableSettings } from './advanced-rename-and-delete-handler.ts';
 

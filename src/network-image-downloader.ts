@@ -1,17 +1,17 @@
+import type { AbortSignalComponent } from '@mnaoumov/obsidian-lib/components/abort-signal-component';
 import type {
   App,
   TFile
 } from 'obsidian';
-import type { AbortSignalComponent } from 'obsidian-dev-utils/obsidian/components/abort-signal-component';
 
-import { requestUrl } from 'obsidian';
-import { runWithTimeout } from 'obsidian-dev-utils/async';
-import { hasEmbedSyntax } from 'obsidian-dev-utils/obsidian/link';
+import { hasEmbedSyntax } from '@mnaoumov/obsidian-lib/link';
+import { runWithTimeout } from '@mnaoumov/typescript-lib/async';
 import {
   basename,
   extname
-} from 'obsidian-dev-utils/path';
-import { ensureNonNullable } from 'obsidian-dev-utils/type-guards';
+} from '@mnaoumov/typescript-lib/path';
+import { ensureNonNullable } from '@mnaoumov/typescript-lib/type-guards';
+import { requestUrl } from 'obsidian';
 
 import type { AttachmentPathManager } from './attachment-path-manager.ts';
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';

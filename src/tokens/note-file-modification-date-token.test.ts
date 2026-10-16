@@ -3,14 +3,14 @@ import type {
   TFile
 } from 'obsidian';
 
-import { moment as moment_ } from 'obsidian';
+import { DUMMY_PATH } from '@mnaoumov/obsidian-lib/attachment-path';
+import { getFile } from '@mnaoumov/obsidian-lib/file-system';
 import {
   castTo,
   extractDefaultExportInterop
-} from 'obsidian-dev-utils/object-utils';
-import { DUMMY_PATH } from 'obsidian-dev-utils/obsidian/attachment-path';
-import { getFile } from 'obsidian-dev-utils/obsidian/file-system';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+} from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
+import { moment as moment_ } from 'obsidian';
 import {
   afterEach,
   describe,
@@ -23,7 +23,7 @@ import type { TokenEvaluatorContext } from '../token-evaluator-context.ts';
 
 import { NoteFileModificationDateToken } from './note-file-modification-date-token.ts';
 
-vi.mock('obsidian-dev-utils/obsidian/file-system', () => ({
+vi.mock('@mnaoumov/obsidian-lib/file-system', () => ({
   getFile: vi.fn<(app: App, pathOrFile: string) => TFile>()
 }));
 

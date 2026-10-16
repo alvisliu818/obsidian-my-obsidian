@@ -3,9 +3,9 @@ import type {
   Vault
 } from 'obsidian';
 
-import { MonkeyAroundComponent } from 'obsidian-dev-utils/obsidian/components/monkey-around-component';
-import { getAbstractFileOrNull } from 'obsidian-dev-utils/obsidian/file-system';
-import { makeFileName } from 'obsidian-dev-utils/path';
+import { MonkeyAroundComponent } from '@mnaoumov/obsidian-lib/components/monkey-around-component';
+import { getAbstractFileOrNull } from '@mnaoumov/obsidian-lib/file-system';
+import { makeFileName } from '@mnaoumov/typescript-lib/path';
 
 import type { PluginSettingsComponent } from '../plugin-settings-component.ts';
 

@@ -1,4 +1,4 @@
-import { AttachmentPathContext } from 'obsidian-dev-utils/obsidian/attachment-path';
+import { AttachmentPathContext } from '@mnaoumov/obsidian-lib/attachment-path';
 import {
   describe,
   expect,

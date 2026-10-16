@@ -11,7 +11,7 @@
  * duplication that drifts.
  *
  * The rules match `Advanced Note Composer`'s `normalizeTypedFolderName`, which is where the reporter met
- * them. Worth lifting into `obsidian-dev-utils` once both plugins can be released together.
+ * them. Worth lifting into `@mnaoumov/obsidian-lib` once both plugins can be released together.
  */
 
 /**

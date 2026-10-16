@@ -8,11 +8,11 @@
  * the contract stays a plain description of types.
  */
 
-import type { ReadonlyPluginSettings } from 'obsidian-dev-utils/obsidian/components/plugin-settings-component';
+import type { ReadonlyPluginSettings } from '@mnaoumov/obsidian-lib/components/plugin-settings-component';
 
-import { isDeepEqual } from 'obsidian-dev-utils/object-utils';
-import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { assertNever } from 'obsidian-dev-utils/type-guards';
+import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { isDeepEqual } from '@mnaoumov/typescript-lib/object-utils';
+import { assertNever } from '@mnaoumov/typescript-lib/type-guards';
 
 import type { MigratableCollectSettings } from './plugin-api.ts';
 import type { PluginSettings } from './plugin-settings.ts';

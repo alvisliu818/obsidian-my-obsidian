@@ -1,14 +1,8 @@
-import type {
-  App as AppOriginal,
-  Vault as VaultOriginal
-} from 'obsidian';
+import type { Vault as VaultOriginal } from 'obsidian';
 
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import {
-  AttachmentPathContext,
-  getCheckIsAttachmentUnitFolderFunction
-} from 'obsidian-dev-utils/obsidian/attachment-path';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+import { AttachmentPathContext } from '@mnaoumov/obsidian-lib/attachment-path';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import { App } from 'obsidian-test-mocks/obsidian';
 import {
   beforeEach,
@@ -21,6 +15,7 @@ import {
 import type { AttachmentPathManager } from '../attachment-path-manager.ts';
 import type { PluginSettingsComponent } from '../plugin-settings-component.ts';
 import type { PluginSettings } from '../plugin-settings.ts';
+import type { GetAvailablePathForAttachmentsFunctionExtended } from './vault-get-available-path-for-attachments-patch-component.ts';
 
 import {
   SelfWriteClaim,
@@ -37,7 +32,6 @@ interface SettingsLike {
 }
 
 describe('VaultGetAvailablePathForAttachmentsPatchComponent', () => {
-  let app: AppOriginal;
   let vault: VaultOriginal;
   let attachmentPathManager: AttachmentPathManager;
   let originalMethod: ReturnType<typeof vi.fn>;
@@ -45,19 +39,20 @@ describe('VaultGetAvailablePathForAttachmentsPatchComponent', () => {
   let settings: SettingsLike;
 
   /**
-   * Reads the designation back the way any consumer does — through the library, off the vault.
+   * Reads the designation back the way a published `obsidian-dev-utils` release does — off the patched vault
+   * method. `@mnaoumov/obsidian-lib` reads it through the plugin API instead, which is why the graft is only kept.
    *
    * @param folderPath - The vault-relative path of the folder.
    * @returns `true` when the folder is designated, `false` when it is not and when nobody published a
    * designation at all.
    */
   function checkIsAttachmentUnitFolder(folderPath: string): boolean {
-    return getCheckIsAttachmentUnitFolderFunction(app)?.(folderPath) ?? false;
+    const graft = castTo<Partial<GetAvailablePathForAttachmentsFunctionExtended>>(vault.getAvailablePathForAttachments);
+    return graft.checkIsAttachmentUnitFolder?.(folderPath) ?? false;
   }
 
   beforeEach(() => {
     const appMock = App.createConfigured__();
-    app = appMock.asOriginalType__();
     vault = appMock.vault.asOriginalType2__();
     originalMethod = vi.fn().mockResolvedValue('/original/attachment/path');
     Object.defineProperty(vault, 'getAvailablePathForAttachments', {

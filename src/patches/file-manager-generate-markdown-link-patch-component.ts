@@ -3,14 +3,14 @@ import type {
   FileManager
 } from 'obsidian';
 
-import { MonkeyAroundComponent } from 'obsidian-dev-utils/obsidian/components/monkey-around-component';
+import { MonkeyAroundComponent } from '@mnaoumov/obsidian-lib/components/monkey-around-component';
 import {
   generateMarkdownLink,
   hasAngleBrackets,
   hasWikilinkSyntax,
   LinkStyle
-} from 'obsidian-dev-utils/obsidian/link';
-import { encodeUrl } from 'obsidian-dev-utils/url';
+} from '@mnaoumov/obsidian-lib/link';
+import { encodeUrl } from '@mnaoumov/typescript-lib/url';
 
 import type { ImageSizeMap } from '../image-size-map.ts';
 import type { MarkdownUrlMap } from '../markdown-url-map.ts';

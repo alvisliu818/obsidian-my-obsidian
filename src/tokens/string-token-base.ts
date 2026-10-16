@@ -1,5 +1,5 @@
-import { extractDefaultExportInterop } from 'obsidian-dev-utils/object-utils';
-import { ensureNonNullable } from 'obsidian-dev-utils/type-guards';
+import { extractDefaultExportInterop } from '@mnaoumov/typescript-lib/object-utils';
+import { ensureNonNullable } from '@mnaoumov/typescript-lib/type-guards';
 import slugify_ from 'slugify';
 import { z } from 'zod';
 

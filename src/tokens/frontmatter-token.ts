@@ -1,6 +1,6 @@
-import { getNestedPropertyValue } from 'obsidian-dev-utils/object-utils';
-import { getFileOrNull } from 'obsidian-dev-utils/obsidian/file-system';
-import { ensureGenericObject } from 'obsidian-dev-utils/type-guards';
+import { getFileOrNull } from '@mnaoumov/obsidian-lib/file-system';
+import { getNestedPropertyValue } from '@mnaoumov/typescript-lib/object-utils';
+import { ensureGenericObject } from '@mnaoumov/typescript-lib/type-guards';
 import { z } from 'zod';
 
 import type { TokenEvaluatorContext } from '../token-evaluator-context.ts';

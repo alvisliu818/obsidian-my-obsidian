@@ -3,6 +3,10 @@ import type {
   WorkspaceLeaf
 } from 'obsidian';
 
+import { DUMMY_PATH } from '@mnaoumov/obsidian-lib/attachment-path';
+import { AllWindowsEventComponent } from '@mnaoumov/obsidian-lib/components/all-windows-event-component';
+import { LayoutReadyComponent } from '@mnaoumov/obsidian-lib/components/layout-ready-component';
+import { convertAsyncToSync } from '@mnaoumov/typescript-lib/async';
 import { ViewType } from '@obsidian-typings/obsidian-public-latest/implementations';
 import { webUtils } from 'electron';
 import {
@@ -11,10 +15,6 @@ import {
   MenuItem,
   TFile
 } from 'obsidian';
-import { convertAsyncToSync } from 'obsidian-dev-utils/async';
-import { DUMMY_PATH } from 'obsidian-dev-utils/obsidian/attachment-path';
-import { AllWindowsEventComponent } from 'obsidian-dev-utils/obsidian/components/all-windows-event-component';
-import { LayoutReadyComponent } from 'obsidian-dev-utils/obsidian/components/layout-ready-component';
 
 import type { ArrayBufferMap } from './array-buffer-map.ts';
 import type { AttachmentPathManager } from './attachment-path-manager.ts';

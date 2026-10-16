@@ -1,5 +1,5 @@
+import { extractDefaultExportInterop } from '@mnaoumov/typescript-lib/object-utils';
 import { moment as moment_ } from 'obsidian';
-import { extractDefaultExportInterop } from 'obsidian-dev-utils/object-utils';
 import { z } from 'zod';
 
 const moment = extractDefaultExportInterop(moment_);

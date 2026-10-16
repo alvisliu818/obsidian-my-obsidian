@@ -1,4 +1,4 @@
-import { INFINITE_TIMEOUT } from 'obsidian-dev-utils/abort-controller';
+import { INFINITE_TIMEOUT } from '@mnaoumov/typescript-lib/abort-controller';
 import {
   describe,
   expect,

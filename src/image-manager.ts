@@ -1,8 +1,8 @@
 import {
   blobToDataUrl,
   blobToJpegArrayBuffer
-} from 'obsidian-dev-utils/blob';
-import { trimEnd } from 'obsidian-dev-utils/string';
+} from '@mnaoumov/typescript-lib/blob';
+import { trimEnd } from '@mnaoumov/typescript-lib/string';
 
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';
 

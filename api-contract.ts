@@ -14,7 +14,7 @@
  * builders and the common guards. What is left here is this API's own constant and the guards for its own
  * shapes. {@link defineApiContract} checks every entry against its method's signature, and the result is
  * assignable to any registry's contract type that is generic over the API (such as
- * `PluginApiContract<CustomAttachmentLocationApi>`).
+ * `ApiContract<CustomAttachmentLocationApi>`).
  *
  * It is not named `api.ts`: TypeScript would read `api.d.ts` as that file's own declarations.
  */

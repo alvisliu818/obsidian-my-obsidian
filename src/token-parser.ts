@@ -1,5 +1,5 @@
+import { ensureNonNullable } from '@mnaoumov/typescript-lib/type-guards';
 import { parse } from 'json5';
-import { ensureNonNullable } from 'obsidian-dev-utils/type-guards';
 
 import { parseObjectExpressionEndExclusive } from './parse-object-expression-end-exclusive.ts';
 

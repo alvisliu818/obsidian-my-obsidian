@@ -1,12 +1,12 @@
 import type { ShareReceiver } from '@obsidian-typings/obsidian-public-latest';
 import type { App } from 'obsidian';
 
-import { getPrototypeOf } from 'obsidian-dev-utils/object-utils';
-import { MonkeyAroundComponent } from 'obsidian-dev-utils/obsidian/components/monkey-around-component';
+import { MonkeyAroundComponent } from '@mnaoumov/obsidian-lib/components/monkey-around-component';
+import { getPrototypeOf } from '@mnaoumov/typescript-lib/object-utils';
 import {
   extname,
   makeFileName
-} from 'obsidian-dev-utils/path';
+} from '@mnaoumov/typescript-lib/path';
 
 import type { AttachmentPathManager } from '../attachment-path-manager.ts';
 import type { PluginSettingsComponent } from '../plugin-settings-component.ts';

@@ -1,12 +1,12 @@
+import type { PluginNoticeComponent } from '@mnaoumov/obsidian-lib/components/plugin-notice-component';
 import type {
   App,
   TFile
 } from 'obsidian';
-import type { PluginNoticeComponent } from 'obsidian-dev-utils/obsidian/components/plugin-notice-component';
 
-import { FileCommandHandler } from 'obsidian-dev-utils/obsidian/command-handlers/file-command-handler';
-import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { selectItem } from 'obsidian-dev-utils/obsidian/modals/select-item';
+import { FileCommandHandler } from '@mnaoumov/obsidian-lib/command-handlers/file-command-handler';
+import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { selectItem } from '@mnaoumov/obsidian-lib/modals/select-item';
 
 import type { NoteOwnerResolver } from '../note-owner-resolver.ts';
 import type { PluginSettingsComponent } from '../plugin-settings-component.ts';

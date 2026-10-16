@@ -1,32 +1,32 @@
+import type { AbortSignalComponent } from '@mnaoumov/obsidian-lib/components/abort-signal-component';
+import type { PluginNoticeComponent } from '@mnaoumov/obsidian-lib/components/plugin-notice-component';
+import type { ResourceLockComponent } from '@mnaoumov/obsidian-lib/resource-lock';
 import type {
   App,
   Reference,
   TAbstractFile,
   TFile
 } from 'obsidian';
-import type { AbortSignalComponent } from 'obsidian-dev-utils/obsidian/components/abort-signal-component';
-import type { PluginNoticeComponent } from 'obsidian-dev-utils/obsidian/components/plugin-notice-component';
-import type { ResourceLockComponent } from 'obsidian-dev-utils/obsidian/resource-lock';
 import type { Promisable } from 'type-fest';
 
-import { Vault } from 'obsidian';
-import { abortSignalAny } from 'obsidian-dev-utils/abort-controller';
-import { toJson } from 'obsidian-dev-utils/object-utils';
-import { AbstractFileCommandHandler } from 'obsidian-dev-utils/obsidian/command-handlers/abstract-file-command-handler';
+import { AbstractFileCommandHandler } from '@mnaoumov/obsidian-lib/command-handlers/abstract-file-command-handler';
 import {
   isFile,
   isFolder
-} from 'obsidian-dev-utils/obsidian/file-system';
-import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
+} from '@mnaoumov/obsidian-lib/file-system';
+import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
 import {
   editLinks,
   updateLink
-} from 'obsidian-dev-utils/obsidian/link';
-import { loop } from 'obsidian-dev-utils/obsidian/loop';
-import { getBacklinksForFileSafe } from 'obsidian-dev-utils/obsidian/metadata-cache';
-import { copySafe } from 'obsidian-dev-utils/obsidian/vault';
-import { deleteIfNotUsed } from 'obsidian-dev-utils/obsidian/vault-delete';
-import { ensureNonNullable } from 'obsidian-dev-utils/type-guards';
+} from '@mnaoumov/obsidian-lib/link';
+import { loop } from '@mnaoumov/obsidian-lib/loop';
+import { getBacklinksForFileSafe } from '@mnaoumov/obsidian-lib/metadata-cache';
+import { copySafe } from '@mnaoumov/obsidian-lib/vault';
+import { deleteIfNotUsed } from '@mnaoumov/obsidian-lib/vault-delete';
+import { abortSignalAny } from '@mnaoumov/typescript-lib/abort-controller';
+import { toJson } from '@mnaoumov/typescript-lib/object-utils';
+import { ensureNonNullable } from '@mnaoumov/typescript-lib/type-guards';
+import { Vault } from 'obsidian';
 
 import type { AttachmentPathManager } from '../attachment-path-manager.ts';
 import type { HandedOverSettingsComponent } from '../handed-over-settings-component.ts';

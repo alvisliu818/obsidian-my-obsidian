@@ -15,14 +15,14 @@
  * handle is never stored, so a provider that unloads simply makes the next read fall back.
  */
 
+import type { PluginApiRef } from '@mnaoumov/obsidian-lib/plugin/plugin-api';
 import type { App } from 'obsidian';
-import type { PluginApiRef } from 'obsidian-dev-utils/obsidian/plugin/plugin-api';
 
-import { ComponentEx } from 'obsidian-dev-utils/obsidian/components/component-ex';
-import { watchPluginApi } from 'obsidian-dev-utils/obsidian/plugin/plugin-api';
+import { ComponentEx } from '@mnaoumov/obsidian-lib/components/component-ex';
+import { watchPluginApi } from '@mnaoumov/obsidian-lib/plugin/plugin-api';
 
 import type {
-  AdvancedRenameAndDeleteHandlerApi,
+  AdvancedRenameAndDeleteHandlerReadBackApi,
   HandedOverSettings
 } from './advanced-rename-and-delete-handler.ts';
 
@@ -30,7 +30,8 @@ import {
   ADVANCED_RENAME_AND_DELETE_HANDLER_API_VERSION_RANGE,
   ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_ID,
   ADVANCED_RENAME_AND_DELETE_HANDLER_READ_BACK_API_CONTRACT,
-  DEFAULT_HANDED_OVER_SETTINGS
+  DEFAULT_HANDED_OVER_SETTINGS,
+  toHandedOverSettings
 } from './advanced-rename-and-delete-handler.ts';
 
 interface HandedOverSettingsComponentConstructorParams {
@@ -42,10 +43,11 @@ export class HandedOverSettingsComponent extends ComponentEx {
    * The handed-over values, or this plugin's own defaults while the other plugin is unavailable.
    */
   public get settings(): HandedOverSettings {
-    return this.apiRef?.value?.getSettings() ?? DEFAULT_HANDED_OVER_SETTINGS;
+    const api = this.apiRef?.value;
+    return api ? toHandedOverSettings(api.getSettings()) : DEFAULT_HANDED_OVER_SETTINGS;
   }
 
-  private apiRef: null | PluginApiRef<AdvancedRenameAndDeleteHandlerApi> = null;
+  private apiRef: null | PluginApiRef<AdvancedRenameAndDeleteHandlerReadBackApi> = null;
 
   private readonly app: App;
 
@@ -80,7 +82,7 @@ export class HandedOverSettingsComponent extends ComponentEx {
     // A watch rather than `whenAvailable()`: that wait blocks for ten seconds and then throws when the
     // plugin is simply not installed, which would stall this plugin's load for every user who declined the
     // suggestion. The ref costs nothing while the provider is absent and becomes live the moment it appears.
-    this.apiRef = watchPluginApi<AdvancedRenameAndDeleteHandlerApi>({
+    this.apiRef = watchPluginApi<AdvancedRenameAndDeleteHandlerReadBackApi>({
       apiVersionRange: ADVANCED_RENAME_AND_DELETE_HANDLER_API_VERSION_RANGE,
       app: this.app,
       component: this,

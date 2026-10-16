@@ -1,7 +1,7 @@
 import type { Promisable } from 'type-fest';
 
-import { printError } from 'obsidian-dev-utils/error';
-import { createFunction } from 'obsidian-dev-utils/function';
+import { printError } from '@mnaoumov/typescript-lib/error';
+import { createFunction } from '@mnaoumov/typescript-lib/function';
 import { z } from 'zod';
 
 import type { TokenEvaluatorContext } from '../token-evaluator-context.ts';

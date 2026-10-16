@@ -1,16 +1,16 @@
+import type { ActiveFileProvider } from '@mnaoumov/obsidian-lib/active-file-provider';
 import type {
   TAbstractFile,
   TFile
 } from 'obsidian';
-import type { ActiveFileProvider } from 'obsidian-dev-utils/obsidian/active-file-provider';
 
-import { castTo } from 'obsidian-dev-utils/object-utils';
 import {
   isFile,
   isNote
-} from 'obsidian-dev-utils/obsidian/file-system';
-import { initI18N } from 'obsidian-dev-utils/obsidian/i18n/i18n';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+} from '@mnaoumov/obsidian-lib/file-system';
+import { initI18N } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import {
   beforeAll,
   beforeEach,
@@ -42,8 +42,8 @@ interface TestableHandler {
   shouldAddToAbstractFilesMenu: () => boolean;
 }
 
-vi.mock('obsidian-dev-utils/obsidian/file-system', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/file-system')>(),
+vi.mock('@mnaoumov/obsidian-lib/file-system', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/file-system')>(),
   isFile: vi.fn(),
   isNote: vi.fn()
 }));
