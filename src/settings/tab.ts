@@ -500,6 +500,23 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName('代码文件注释用 Logseq 编辑器编辑')
+      .setDesc(
+        '代码文件的注释区（连续的整行注释，以及 /* */ 与 """ 块注释、docstring）' +
+          '以 Logseq 块编辑器呈现，嵌在代码行的对应位置：可编辑、按 Markdown 渲染、' +
+          '可写 [[双链]]。代码区仍由 Monaco 编辑，未编辑时保存完全无损。' +
+          '关闭则整个文件是一台 Monaco 的纯源码形态。' +
+          '单个文件可在视图头部按钮临时切换到另一种呈现。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.externalCodeHybrid !== false).onChange(async (v) => {
+          this.plugin.settings.externalCodeHybrid = v;
+          await this.plugin.saveSettings();
+          this.plugin.rerenderExternalViews();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName('库外文件分栏打开')
       .setDesc(
         '在侧边分栏中打开库外文件，不替换当前标签页。' +

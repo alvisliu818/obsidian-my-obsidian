@@ -4051,6 +4051,27 @@ body.lgp-table-editor-cursor * {
   color: var(--text-faint);
 }
 
+/* 混合模式(注释区 = Logseq 编辑器):引擎在 host 内建自己的根元素,必须撑满
+   —— 否则 Monaco 的 automaticLayout 量到一个 0 高的容器,整个编辑器不可见。
+   注释 zone 的样式复用 .lgp-code-doc-note(全局类选择器,见混合视图段),
+   那里的 height:auto / z-index:1 两条坑的修法对新视图同样成立。 */
+.logseq-external-code-host .lgp-hybrid-editor {
+  height: 100%;
+  min-height: 0;
+}
+
+/* 注释区切成「代码编辑器」形态后的容器:高度由 Monaco 的 autoHeight 按行数
+   写进 style.height,ResizeObserver 据此把 zone 撑到内容真实高度。 */
+.lgp-hybrid-note-code {
+  width: 100%;
+  background: var(--code-background);
+}
+
+/* 视图头部的混合模式按钮:开启时高亮,一眼能看出当前是哪种呈现。 */
+.view-action.logseq-external-hybrid-on {
+  color: var(--text-accent);
+}
+
 /* --------------------------------------------------------------------------
    The note shown in place of the vault-only page sections when the block
    editor is showing a file from outside the vault.

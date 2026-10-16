@@ -27,6 +27,7 @@ import type LogseqEditorPlugin from '../main';
 import { relativeDisplayPath } from '../features/codeFileKind';
 import { setLeafTitle } from '../features/leafTitle';
 import { applyHeaderPath, headerPathSegments } from './headerPath';
+import { HybridCodeEditor } from './hybridCodeEditor';
 import { runFile, langFromExt } from '../exec/runner';
 import type { RunHandle } from '../exec/pythonRunner';
 
@@ -69,6 +70,60 @@ export class ExternalCodeView extends ItemView {
   editor: monacoNS.editor.IStandaloneCodeEditor | null = null;
   private lastDiskData = '';
   private saveTimer: number | null = null;
+  /**
+   * 是否有未落盘的编辑。
+   *
+   * 必须有这个标记:混合模式下重建会把注释行的前导缩进归一到列 0(见
+   * features/codeDoc 的 v1 边界),所以「没动过的文件」重建结果也可能与原文件
+   * 不同。只靠「重建结果 ≠ lastDiskData」判断该不该写,会让打开即关的文件被
+   * 悄悄改格式。现在改成只写真正编辑过的。
+   */
+  private dirty = false;
+
+  /**
+   * 混合模式引擎:非 null 表示当前以「注释区 = Logseq 块编辑器(view zone 内嵌)」
+   * 呈现,此时代码区与注释区分居两处,保存要走引擎重建而不是整台 Monaco 的
+   * getValue()。纯源码模式下为 null。
+   */
+  private hybridEngine: HybridCodeEditor | null = null;
+  /**
+   * 当前文件对混合模式的临时覆盖(视图头部按钮切换)。null = 跟随设置里的默认值。
+   * 重新 mount 与 remount 都读它,所以切换后重挂载不会退回设置值。
+   */
+  private hybridOverride: boolean | null = null;
+  /** 原文件是否 CRLF(混合模式落盘时还原) */
+  private crlf = false;
+  private actionAdded = false;
+  /** 视图头部的混合模式按钮(切换后要改图标与提示) */
+  private actionEl: HTMLElement | null = null;
+
+  /** 设置里的默认值,可被本文件的临时覆盖反向取值。 */
+  private hybridDefault(): boolean {
+    return this.plugin.settings.externalCodeHybrid !== false;
+  }
+
+  /** 当前生效的混合模式(临时覆盖优先,否则设置默认) */
+  get hybrid(): boolean {
+    return this.hybridOverride ?? this.hybridDefault();
+  }
+
+  private async toggleHybrid(): Promise<void> {
+    // 先落盘:切换要重挂载,缓冲区会随引擎一起销毁。
+    await this.flush();
+    this.hybridOverride = !this.hybrid;
+    this.mount();
+  }
+
+  /** 头部按钮按当前模式改图标与提示(纯源码 → 混合,混合 → 纯源码)。 */
+  private syncAction(): void {
+    const el = this.actionEl;
+    if (!el) return;
+    const on = this.hybrid;
+    el.setAttribute('aria-label', on ? '切换为纯源码模式' : '切换为混合模式（注释可编辑）');
+    el.setAttribute('title', on ? '切换为纯源码模式' : '切换为混合模式（注释可编辑）');
+    // 混合模式图标高亮,一眼能看出当前是哪种呈现。
+    el.toggleClass('logseq-external-hybrid-on', on);
+  }
 
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
     super(leaf);
@@ -97,6 +152,16 @@ export class ExternalCodeView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    if (!this.actionAdded) {
+      this.actionAdded = true;
+      // 视图头部按钮:临时反向覆盖当前文件的呈现方式(设置里的是默认值)。
+      // 放在头部而不是提示栏里,因为提示栏可以被设置关掉——按钮得始终可达。
+      this.actionEl = this.addAction(
+        'list',
+        '混合模式：注释用 Logseq 编辑器编辑',
+        () => void this.toggleHybrid(),
+      );
+    }
     // Mounting waits for setState: Obsidian calls onOpen BEFORE setState, so
     // mounting here would build an empty editor for a file whose path and
     // content have not arrived yet — and the state that carries them is the
@@ -134,15 +199,44 @@ export class ExternalCodeView extends ItemView {
 
   async onClose(): Promise<void> {
     await this.flush();
+    this.disposeEditors();
+  }
+
+  /** 当前缓冲区全文(混合模式按区块重建,纯源码模式取 Monaco 全文)。 */
+  private currentBuffer(): string {
+    if (this.hybridEngine) return this.hybridEngine.reconstruct();
+    return this.editor ? this.editor.getValue() : this.lastDiskData;
+  }
+
+  /** 销毁 Monaco 实例与混合引擎( FragmentHost / ResizeObserver 随引擎卸载)。 */
+  private disposeEditors(): void {
+    if (this.hybridEngine) {
+      this.hybridEngine.unload();
+      this.hybridEngine = null;
+      // 引擎的 onunload 已 dispose 自己的 editor/model
+      this.editor = null;
+      return;
+    }
     const model = this.editor?.getModel();
     this.editor?.dispose();
     model?.dispose();
     this.editor = null;
   }
 
+  /** 防抖自动保存(与库内编辑器同节奏:不是每敲一个键就写盘)。 */
+  private scheduleSave(): void {
+    this.dirty = true;
+    if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
+    this.saveTimer = window.setTimeout(() => void this.flush(), 900);
+  }
+
   // ------------------------------------------------------------------
 
   private mount(): void {
+    // 重挂载(切换混合/源码、设置变更)前先销毁旧的:
+    // contentEl.empty() 只清 DOM,M Monaco 实例与 FragmentHost 组件会泄漏,
+    // 且它们的 ResizeObserver 还盯着已脱离文档的容器。
+    this.disposeEditors();
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass('logseq-external-code-view');
@@ -190,25 +284,44 @@ export class ExternalCodeView extends ItemView {
       }
     }
     this.lastDiskData = content;
+    this.crlf = content.includes('\r\n');
 
     setupMonaco(this.plugin);
 
     // 语言由路径扩展名决定(Monaco basic-languages + TS worker);高亮与
     // VS Code 同源。保存仍走原防抖链路,Ctrl/Cmd+S 即时落盘。
     const language = getLanguageByPath(this.abs);
-    this.editor = createEditor(host, {
-      value: content,
-      language,
-      wordWrap: this.plugin.settings.externalCodeWrap === false ? 'off' : 'on',
-      lineNumbers: true,
-      onSave: () => void this.flush(true),
-      onChange: () => {
-        // Debounced like the vault editor, so typing is not a write per keystroke.
-        if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
-        this.saveTimer = window.setTimeout(() => void this.flush(), 900);
-      },
-    });
-    this.editor.focus();
+
+    if (this.hybrid) {
+      // 混合模式:注释区交给 Logseq 块编辑器(view zone 内嵌),代码区仍是这台
+      // Monaco。整文件无注释时 buildCodeDoc 只切出一个 code 区,观感与纯源码
+      // 模式一致(仅行号映射),所以不必为「没注释的文件」特判。
+      const engine = new HybridCodeEditor(this.plugin);
+      engine.load();
+      engine.mount({
+        container: host,
+        lang: language,
+        value: this.crlf ? content.replace(/\r\n/g, '\n') : content,
+        crlf: this.crlf,
+        wordWrap: this.plugin.settings.externalCodeWrap === false ? 'off' : 'on',
+        onSave: () => void this.flush(true),
+        onChange: () => this.scheduleSave(),
+      });
+      this.hybridEngine = engine;
+      this.editor = engine.getEditor();
+    } else {
+      this.hybridEngine = null;
+      this.editor = createEditor(host, {
+        value: content,
+        language,
+        wordWrap: this.plugin.settings.externalCodeWrap === false ? 'off' : 'on',
+        lineNumbers: true,
+        onSave: () => void this.flush(true),
+        onChange: () => this.scheduleSave(),
+      });
+    }
+    this.syncAction();
+    this.editor?.focus();
     // The leaf's own view header caches the name it was mounted with; on a fresh
     // mount that is nothing, on a re-mount it is the previous file. Writing it
     // here covers both.
@@ -266,11 +379,16 @@ export class ExternalCodeView extends ItemView {
       this.saveTimer = null;
     }
     if (!this.editor || !this.abs) return;
-    const data = this.editor.getValue();
-    if (data === this.lastDiskData) return;
+    // 混合模式下整台 Monaco 只有代码行,注释内容在 FragmentHost 里——必须按
+    // 区块重建,直接 getValue() 会把注释区从文件里抹掉。
+    const data = this.hybridEngine ? this.hybridEngine.reconstruct() : this.editor.getValue();
+    // 未编辑就不写盘:混合模式的重建会归一注释缩进,只看「结果 ≠ 磁盘内容」
+    // 会把没动过的文件改掉格式(见 dirty 的注释)。
+    if (!this.dirty || data === this.lastDiskData) return;
     try {
       writeExternalText(this.abs, data);
       this.lastDiskData = data;
+      this.dirty = false;
       if (notify) new Notice(`已保存 ${this.fileName}`);
       logOp(this.plugin, 'external.code.save', this.abs, 'ok');
     } catch (e) {
@@ -282,26 +400,20 @@ export class ExternalCodeView extends ItemView {
   /**
    * Rebuild the editor, keeping the current buffer.
    *
-   * The banner and the soft-wrap setting are baked into the CodeMirror
-   * extensions at construction, and an instance cannot change them afterwards,
-   * so a settings toggle has to remount. The unsaved text is carried across so
+   * The banner, the soft-wrap setting and the hybrid mode are baked into the
+   * editor at construction, and an instance cannot change them afterwards, so a
+   * settings toggle has to remount. The unsaved text is carried across so
    * nothing is lost in the swap.
    */
   remount(): void {
     if (!this.abs) return;
     try {
       // Prefer what is on screen: an autosave may not have landed yet.
-      const text = this.editor ? this.editor.getValue() : this.lastDiskData;
-      const model = this.editor?.getModel();
-      this.editor?.dispose();
-      model?.dispose();
-      this.editor = null;
+      this.lastDiskData = this.currentBuffer();
+      // mount() rebuilds from lastDiskData, so the live buffer travels with it
+      // in BOTH modes — in hybrid mode there is no single model to setValue()
+      // onto anyway (the code lines are only part of the file).
       this.mount();
-      // mount() rebuilds from lastDiskData, so put the live buffer back.
-      const ed = this.editor as monacoNS.editor.IStandaloneCodeEditor | null;
-      if (ed && text !== this.lastDiskData) {
-        ed.getModel()?.setValue(text);
-      }
     } catch {
       /* a failed remount leaves the previous view in place; not fatal */
     }
@@ -310,9 +422,12 @@ export class ExternalCodeView extends ItemView {
   /** Re-read from disk (the file changed elsewhere). */
   reload(): void {
     try {
-      const data = readExternalText(this.abs);
-      this.lastDiskData = data;
-      this.editor?.getModel()?.setValue(data);
+      this.lastDiskData = readExternalText(this.abs);
+      // 重新读取是「放弃本地改动,以磁盘为准」,所以清掉脏标记。
+      this.dirty = false;
+      // 混合模式下给 Monaco setValue 只换掉代码行,注释区还是旧的——必须整
+      // 体重挂载,让 buildCodeDoc 重新切一遍。
+      this.mount();
     } catch (e) {
       new Notice(`重新读取失败：${String(e).slice(0, 100)}`);
     }

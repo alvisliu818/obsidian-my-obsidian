@@ -257,6 +257,15 @@ export interface BlockEditorSettings {
    * re-explained in the description.
    */
   externalCodeWrap: boolean;
+  /**
+   * 代码文件打开时,注释区用 Logseq 块编辑器呈现(view zone 内嵌在 Monaco
+   * 代码流里):可编辑、按 Markdown 渲染、写 [[双链]]。代码块仍由 Monaco 编辑。
+   *
+   * 默认开启——注释本来就是给人读的笔记,让它能被当成笔记编辑是这个插件的
+   * 初衷。单个文件可在视图头部临时反向覆盖(设置里的是默认值)。
+   * 关掉则回到「整文件一台 Monaco」的纯源码形态。
+   */
+  externalCodeHybrid: boolean;
   /** LSP（Python 代码文件的 pyright 补全/提示/诊断）开关 */
   lspEnabled: boolean;
   /** 用户自定义语言服务器（语言→启动命令映射）；内置 pyright 不入此表，仅可用同 id 条目覆盖 enabled */
@@ -517,6 +526,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   mountTreeOrder: {},
   externalMounts: [],
   externalCodeWrap: true,
+  externalCodeHybrid: true,
   lspEnabled: true,
   externalSplitView: false,
   externalBanner: true,
