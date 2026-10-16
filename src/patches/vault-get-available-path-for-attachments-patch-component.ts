@@ -82,6 +82,10 @@ export class VaultGetAvailablePathForAttachmentsPatchComponent extends MonkeyAro
          * `obsidian-dev-utils` declares both members, so annotating the assembled method with its
          * interface is what keeps this publisher and every reader — this plugin's own collecting and
          * deleting commands included — agreeing on one shape instead of on two copies of it.
+         *
+         * Superseded by the plugin API's `getAvailablePathForAttachments` and `isAttachmentUnitFolder` (contract
+         * `1.3.0`), and kept only so a published library that still reads the graft keeps working. It goes in a
+         * major release, once no reader is left.
          */
         const extendedMethod: GetAvailablePathForAttachmentsFunctionExtended = Object.assign(patchedMethod, {
           checkIsAttachmentUnitFolder: (folderPath: string) => this.pluginSettingsComponent.settings.isAttachmentUnitFolder(folderPath),

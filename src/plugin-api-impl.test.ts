@@ -6,6 +6,7 @@ import type {
   TAbstractFile,
   TFile
 } from 'obsidian';
+import type { GetAvailablePathForAttachmentsExtendedFunctionParams } from 'obsidian-dev-utils/obsidian/attachment-path';
 import type { Mock } from 'vitest';
 
 import {
@@ -13,7 +14,10 @@ import {
   noopAsync
 } from 'obsidian-dev-utils/function';
 import { castTo } from 'obsidian-dev-utils/object-utils';
-import { DUMMY_PATH } from 'obsidian-dev-utils/obsidian/attachment-path';
+import {
+  AttachmentPathContext,
+  DUMMY_PATH
+} from 'obsidian-dev-utils/obsidian/attachment-path';
 import {
   getAbstractFileOrNull,
   getFileOrNull
@@ -83,9 +87,11 @@ function createFile(path: string): TFile {
 describe('PluginApiImpl', () => {
   let collectAttachmentsInAbstractFilesAndWait: Mock<AttachmentCollector['collectAttachmentsInAbstractFilesAndWait']>;
   let getAttachmentFolderFullPathForPath: Mock<AttachmentPathManager['getAttachmentFolderFullPathForPath']>;
+  let getAvailablePathForAttachments: Mock<AttachmentPathManager['getAvailablePathForAttachments']>;
   let getProperAttachmentPath: Mock<AttachmentPathManager['getProperAttachmentPath']>;
   let getSequenceNumberMap: Mock<AttachmentPathManager['getSequenceNumberMap']>;
   let ignoredPaths: Set<string>;
+  let isAttachmentUnitFolder: Mock<PluginSettings['isAttachmentUnitFolder']>;
   let pluginApi: PluginApiImpl;
 
   beforeEach(() => {
@@ -94,6 +100,8 @@ describe('PluginApiImpl', () => {
     ignoredPaths = new Set<string>();
     collectAttachmentsInAbstractFilesAndWait = vi.fn().mockResolvedValue(undefined);
     getAttachmentFolderFullPathForPath = vi.fn().mockResolvedValue('Attachments/Alpha');
+    getAvailablePathForAttachments = vi.fn().mockResolvedValue('Attachments/Alpha/image.png');
+    isAttachmentUnitFolder = vi.fn((folderPath: string) => folderPath === 'Notes/page_files');
     getProperAttachmentPath = vi.fn().mockResolvedValue('Attachments/Alpha/image.png');
     getSequenceNumberMap = vi.fn().mockResolvedValue(new Map([[ATTACHMENT_FILE.path, 3]]));
 
@@ -104,13 +112,16 @@ describe('PluginApiImpl', () => {
       }),
       attachmentPathManager: strictProxy<AttachmentPathManager>({
         getAttachmentFolderFullPathForPath,
+        getAvailablePathForAttachments,
         getProperAttachmentPath,
         getSequenceNumberMap
       }),
       handedOverSettingsComponent: strictProxy<HandedOverSettingsComponent>({
         isPathIgnored: (path: string) => ignoredPaths.has(path)
       }),
-      pluginSettingsComponent: strictProxy<PluginSettingsComponent>({})
+      pluginSettingsComponent: strictProxy<PluginSettingsComponent>({
+        settings: strictProxy<PluginSettings>({ isAttachmentUnitFolder })
+      })
     });
 
     mockGetFileOrNull.mockReturnValue(ATTACHMENT_FILE);
@@ -213,6 +224,60 @@ describe('PluginApiImpl', () => {
 
       await expect(pluginApi.getAttachmentFolderPath({ notePath: NOTE_PATH })).resolves.toBeNull();
       expect(getAttachmentFolderFullPathForPath).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getAvailablePathForAttachments', () => {
+    const PARAMS = {
+      attachmentFileBaseName: 'image',
+      attachmentFileExtension: 'png',
+      notePathOrFile: NOTE_PATH,
+      oldAttachmentPathOrFile: 'image.png',
+      readAttachmentFileContent: null,
+      shouldSkipDuplicateCheck: true,
+      shouldSkipGeneratedAttachmentFileName: true,
+      shouldSkipMissingAttachmentFolderCreation: true
+    } as const;
+
+    it('should answer with the path the resolver gives', async () => {
+      await expect(pluginApi.getAvailablePathForAttachments({ ...PARAMS, context: 'Unknown' })).resolves.toBe('Attachments/Alpha/image.png');
+    });
+
+    it('should hand every option to the resolver the graft exposes', async () => {
+      await pluginApi.getAvailablePathForAttachments({ ...PARAMS, context: 'Unknown' });
+
+      expect(getAvailablePathForAttachments).toHaveBeenCalledWith({ ...PARAMS, context: AttachmentPathContext.Unknown });
+    });
+
+    it('should accept a params object built for the library resolver type', async () => {
+      const libraryParams: GetAvailablePathForAttachmentsExtendedFunctionParams = { ...PARAMS, context: AttachmentPathContext.RenameNote };
+
+      await pluginApi.getAvailablePathForAttachments(libraryParams);
+
+      expect(getAvailablePathForAttachments).toHaveBeenCalledWith(libraryParams);
+    });
+
+    it.each(
+      [
+        ['DeleteNote', AttachmentPathContext.DeleteNote],
+        ['RenameNote', AttachmentPathContext.RenameNote],
+        ['Unknown', AttachmentPathContext.Unknown]
+      ] as const
+    )('should map the %s context onto the library enum', async (contextName, context) => {
+      await pluginApi.getAvailablePathForAttachments({ ...PARAMS, context: contextName, oldNotePathOrFile: 'Notes/Old.md' });
+
+      expect(getAvailablePathForAttachments).toHaveBeenCalledWith(expect.objectContaining({ context, oldNotePathOrFile: 'Notes/Old.md' }));
+    });
+  });
+
+  describe('isAttachmentUnitFolder', () => {
+    it('should answer true for a designated folder', () => {
+      expect(pluginApi.isAttachmentUnitFolder({ folderPath: 'Notes/page_files' })).toBe(true);
+    });
+
+    it('should answer false for a plain folder', () => {
+      expect(pluginApi.isAttachmentUnitFolder({ folderPath: 'Notes' })).toBe(false);
+      expect(isAttachmentUnitFolder).toHaveBeenCalledWith('Notes');
     });
   });
 

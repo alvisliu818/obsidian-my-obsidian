@@ -24,6 +24,7 @@
  */
 
 import type {
+  FileStats,
   TAbstractFile,
   TFile
 } from 'obsidian';
@@ -32,18 +33,21 @@ import type {
  * This plugin's API, published through the `obsidian-dev-utils` plugin registry under the plugin id
  * `obsidian-custom-attachment-location`.
  *
- * Every member is asynchronous, and that is not an accident of the implementation: an attachment folder is
- * the result of evaluating a user-written template whose tokens can read the note's frontmatter, the
- * attachment's bytes and its file stats. There is no synchronous answer to hand back, so a caller that cannot
- * `await` — a `checkCallback`, a settings row's `disabled` predicate — cannot use this API and should not
- * pretend it can.
+ * Every member that resolves a path is asynchronous, and that is not an accident of the implementation: an
+ * attachment folder is the result of evaluating a user-written template whose tokens can read the note's
+ * frontmatter, the attachment's bytes and its file stats. There is no synchronous answer to hand back, so a
+ * caller that cannot `await` — a `checkCallback`, a settings row's `disabled` predicate — cannot use those
+ * members and should not pretend it can. {@link CustomAttachmentLocationApi.isAttachmentUnitFolder} resolves
+ * nothing, and is the one synchronous member.
  *
  * ## Non-interactive
  *
- * Both reads run in a context that never asks the user anything — unlike
- * {@link CustomAttachmentLocationApi.collectAttachments} and {@link CustomAttachmentLocationApi.migrateSettings},
- * which act and may ask. A folder or file-name template may hold a
- * `{{prompt}}` token, and an audit walking a vault must not raise one dialog per note. In that context the
+ * The two per-note reads, {@link CustomAttachmentLocationApi.getAttachmentFolderPath} and
+ * {@link CustomAttachmentLocationApi.getProperAttachmentPath}, run in a context that never asks the user
+ * anything — unlike {@link CustomAttachmentLocationApi.collectAttachments},
+ * {@link CustomAttachmentLocationApi.getAvailablePathForAttachments} and
+ * {@link CustomAttachmentLocationApi.migrateSettings}, which act on the caller's behalf and may ask. A folder or
+ * file-name template may hold a `{{prompt}}` token, and an audit walking a vault must not raise one dialog per note. In that context the
  * token resolves to Obsidian's own placeholder path segment instead of opening a dialog, so a template that
  * genuinely needs the user produces an answer carrying that placeholder rather than a hang. A consumer that
  * cares can spot it; a consumer that does not is still not blocked.
@@ -98,6 +102,26 @@ export interface CustomAttachmentLocationApi {
   getAttachmentFolderPath(params: GetAttachmentFolderPathParams): Promise<null | string>;
 
   /**
+   * The full path this plugin's resolver gives an attachment — the same resolver Obsidian's own
+   * `Vault.getAvailablePathForAttachments` is answered with while this plugin is loaded, but with every option
+   * that call cannot express.
+   *
+   * This is the member a library reaches for when it moves or renames attachments on a note's behalf and wants
+   * them to land where this plugin would put them: it knows the note's OLD path during a rename, can read the
+   * attachment's bytes for a template that hashes them, and can skip the generated file name or the duplicate
+   * check.
+   *
+   * Unlike the two reads above, it runs under the context the caller names, so a template's `{{prompt}}` token
+   * may ask the user. It answers about a note this plugin leaves alone too, with Obsidian's own location.
+   *
+   * Added in contract version `1.3.0`.
+   *
+   * @param params - The attachment, the note, and what to skip.
+   * @returns The attachment's path from the vault root.
+   */
+  getAvailablePathForAttachments(params: GetAvailablePathForAttachmentsParams): Promise<string>;
+
+  /**
    * Where an attachment a note already references BELONGS — the full path, folder and file name both.
    *
    * The acting half of the same question {@link CustomAttachmentLocationApi.getAttachmentFolderPath} answers
@@ -115,6 +139,20 @@ export interface CustomAttachmentLocationApi {
    *   referenced by that note. `null` therefore means "nothing to do", in every one of its senses.
    */
   getProperAttachmentPath(params: GetProperAttachmentPathParams): Promise<null | string>;
+
+  /**
+   * Whether the user designated this folder an attachment unit folder: one whose whole hierarchy travels as a
+   * single attachment, such as the `page_files` folder a saved web page brings with it.
+   *
+   * The ONE synchronous member, and on purpose: the answer is a match against the settings and reads nothing
+   * else, and a caller walking a folder's ancestors asks it in a synchronous loop.
+   *
+   * Added in contract version `1.3.0`.
+   *
+   * @param params - The folder.
+   * @returns Whether the folder is designated.
+   */
+  isAttachmentUnitFolder(params: IsAttachmentUnitFolderParams): boolean;
 
   /**
    * Offers the user settings another plugin used to own, and applies what they approve.
@@ -172,6 +210,92 @@ export interface GetAttachmentFolderPathParams {
    * The note whose attachment folder is being asked about, as a vault-relative path.
    */
   readonly notePath: string;
+}
+
+/**
+ * Why an attachment path is being resolved. The same spellings `obsidian-dev-utils`' `AttachmentPathContext`
+ * enum uses, so a value of that enum passes as one of these.
+ *
+ * - `DeleteNote`: the note is being deleted.
+ * - `RenameNote`: the note is being renamed or moved, and `oldNotePathOrFile` names where it was.
+ * - `Unknown`: anything else, including a plain save.
+ */
+export type AttachmentPathContext = 'DeleteNote' | 'RenameNote' | 'Unknown';
+
+/**
+ * Parameters for {@link CustomAttachmentLocationApi.getAvailablePathForAttachments}.
+ *
+ * The same fields as `obsidian-dev-utils`' `GetAvailablePathForAttachmentsExtendedFunctionParams`, so a params
+ * object built for that type passes as this one.
+ */
+export interface GetAvailablePathForAttachmentsParams {
+  /**
+   * The attachment's file name without its extension.
+   */
+  readonly attachmentFileBaseName: string;
+
+  /**
+   * The attachment's extension, without the dot.
+   */
+  readonly attachmentFileExtension: string;
+
+  /**
+   * The attachment's file stats, for a template that reads them.
+   */
+  readonly attachmentFileStats?: FileStats | undefined;
+
+  /**
+   * Why the path is being resolved.
+   */
+  readonly context: AttachmentPathContext;
+
+  /**
+   * The note the attachment belongs to, or `null` for none.
+   */
+  readonly notePathOrFile: null | string | TFile;
+
+  /**
+   * Where the attachment is now, or the name it was given. The generated file name's sequence number is
+   * worked out from it.
+   */
+  readonly oldAttachmentPathOrFile: string | TFile;
+
+  /**
+   * The note's path before a rename, when `context` is `RenameNote`.
+   */
+  readonly oldNotePathOrFile?: string | TFile | undefined;
+
+  /**
+   * Reads the attachment's bytes, for a template that hashes them. Called only if a template needs them; `null`
+   * when there are no bytes to read.
+   */
+  readonly readAttachmentFileContent: (() => Promise<ArrayBuffer>) | null;
+
+  /**
+   * Whether to return the path even when a file already exists there, rather than the next free one.
+   */
+  readonly shouldSkipDuplicateCheck?: boolean;
+
+  /**
+   * Whether to keep `attachmentFileBaseName` rather than generate a name from the file-name template.
+   */
+  readonly shouldSkipGeneratedAttachmentFileName?: boolean;
+
+  /**
+   * Whether to leave the attachment's folder uncreated when it does not exist yet. Pass `true` for a probe
+   * that will not write the attachment, or the probe leaves an empty folder behind.
+   */
+  readonly shouldSkipMissingAttachmentFolderCreation: boolean | undefined;
+}
+
+/**
+ * Parameters for {@link CustomAttachmentLocationApi.isAttachmentUnitFolder}.
+ */
+export interface IsAttachmentUnitFolderParams {
+  /**
+   * The folder, as a vault-relative path.
+   */
+  readonly folderPath: string;
 }
 
 /**

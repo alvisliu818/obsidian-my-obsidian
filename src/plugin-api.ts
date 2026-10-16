@@ -10,11 +10,14 @@
 import type { PluginApiContract } from 'obsidian-dev-utils/obsidian/plugin/plugin-api';
 
 export type {
+  AttachmentPathContext,
   CollectAttachmentsParams,
   CollectAttachmentUsedByMultipleNotesMode,
   CustomAttachmentLocationApi,
   GetAttachmentFolderPathParams,
+  GetAvailablePathForAttachmentsParams,
   GetProperAttachmentPathParams,
+  IsAttachmentUnitFolderParams,
   MigratableCollectSettings,
   MigrateSettingsParams,
   MigrateSettingsResult,
@@ -28,7 +31,9 @@ export type {
 export const PLUGIN_API_CONTRACT: PluginApiContract = {
   collectAttachments: {},
   getAttachmentFolderPath: {},
+  getAvailablePathForAttachments: {},
   getProperAttachmentPath: {},
+  isAttachmentUnitFolder: {},
   migrateSettings: {}
 };
 
@@ -40,6 +45,8 @@ export const PLUGIN_API_CONTRACT: PluginApiContract = {
  * Consistent Attachments and Links hands over when it stops collecting. That is purely additive, so a consumer
  * of the reads keeps asking for `'^1'`, and a consumer of the migration asks for `'^1.1.0'`. `1.2.0` adds
  * `collectAttachments`, the declared replacement for the plugin instance's `collectAttachmentsInAbstractFiles`,
- * so a consumer of it asks for `'^1.2.0'`.
+ * so a consumer of it asks for `'^1.2.0'`. `1.3.0` adds `getAvailablePathForAttachments` and
+ * `isAttachmentUnitFolder`, the attachment-path policy a library used to read off members grafted onto
+ * `Vault.getAvailablePathForAttachments`, so a consumer of them asks for `'^1.3.0'`.
  */
-export const PLUGIN_API_VERSION = '1.2.0';
+export const PLUGIN_API_VERSION = '1.3.0';

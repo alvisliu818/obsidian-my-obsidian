@@ -39,6 +39,10 @@ Two consequences for anyone adding or changing one:
 
 The convention: a consumer copies that one file, or references it where it sits, with no build-time dependency on this repository. `src/plugin-api.ts` holds only the runtime half (`PLUGIN_API_CONTRACT`, `PLUGIN_API_VERSION`) and RE-EXPORTS the types from it, so each type is declared once. Adding a member means editing `api.d.ts`, the contract, the impl, and the version — a minor bump for an addition, which is what lets a consumer keep asking for `'^1'`.
 
+## The `getAvailablePathForAttachments` graft is superseded, not yet removed
+
+The patch in `src/patches/vault-get-available-path-for-attachments-patch-component.ts` still grafts `extended` and `checkIsAttachmentUnitFolder` onto the method it patches, because published `obsidian-dev-utils` / `obsidian-lib` releases read them. Since contract `1.3.0` the same two capabilities are API members (`getAvailablePathForAttachments`, `isAttachmentUnitFolder`), and both must keep answering exactly as the graft does: the API's resolver is the same `AttachmentPathManager.getAvailablePathForAttachments`, its params the library's `GetAvailablePathForAttachmentsExtendedFunctionParams` fields with `context` spelled as the enum's string values. Add nothing new to the graft. It is removed in a major release once every reader finds the capabilities through the API.
+
 ## An integration suite edits settings through `editAndSave`, never onto the settings object
 
 A `data.json` reload replaces the settings object, so an assignment onto it reverts to the file's values mid-suite, silently. Every desktop suite therefore gets the settings component from `scripts/helpers/plugin-settings-component-finder.ts`, passed into the closure through `evalInObsidian`'s `input` (functions there are serialized by source text, so the finder stays self-contained), and both edits and the final restore go through `editAndSave`. Read values through `settingsComponent.settings` each time rather than holding the object. A saved edit outlives the suite in `data.json`, so a suite that changes settings restores them in a `finally`.
