@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { dedentCommon, splitRawToOutline } from '../src/core/treeOps';
-import { parseCodeFence } from '../src/blocks/codeBlockEdit';
+import { parseCodeFence } from '../src/blocks/codeFence';
 import { parseDocument } from '../src/core/parser';
 import { serializeDocument } from '../src/core/serializer';
 

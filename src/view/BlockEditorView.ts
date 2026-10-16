@@ -835,7 +835,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     if (this.focusedCode) {
       const stale = this.focusedCode;
       this.focusedCode = null;
-      stale.view.destroy();
+      stale.view.dispose();
       if (stale.editingWrap && stale.restoreEl && stale.editingWrap.parentElement) {
         stale.editingWrap.replaceWith(stale.restoreEl);
       }
@@ -890,26 +890,21 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
       // Cursor placement: the code editor's doc holds ONLY the fence content,
       // so whole-text positions (staticPos / numeric pos) shift by the
       // prefix + opening fence line.
-      const v = this.focusedCode.view;
+      const ed = this.focusedCode.view;
       const beforeLen =
         (codeInfo.prefix ? codeInfo.prefix.length + 1 : 0) + codeInfo.openLine.length + 1;
-      const len = v.state.doc.length;
+      const len = ed.getDocLength();
       if (pending?.clickXY) {
         // On mixed mounts the layout barely changed (only the code element
         // was swapped), so the click maps accurately onto the fresh editor.
-        let p = cursorAtCoords(v, pending.clickXY.x, pending.clickXY.y, 'start');
+        let p = ed.offsetAtCoords(pending.clickXY.x, pending.clickXY.y, 0);
         if (pending.staticPos !== null) {
-          let top: number | null = null;
-          try {
-            top = v.coordsAtPos(p)?.top ?? null;
-          } catch {
-            top = null;
-          }
+          const top = ed.topAtOffset(p);
           if (top === null || Math.abs(top - pending.clickXY.y) > 60) {
             p = Math.max(0, Math.min(pending.staticPos - beforeLen, len));
           }
         }
-        applyCursorAndScroll(v, p);
+        ed.placeCursorAndScroll(p);
       } else if (pending) {
         const p =
           pending.pos === 'start'
@@ -917,7 +912,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
             : pending.pos === 'end'
               ? len
               : Math.max(0, Math.min(pending.pos - beforeLen, len));
-        applyCursorAndScroll(v, p);
+        ed.placeCursorAndScroll(p);
       }
       this.focusStartSnapshot = serializeDocument(this.doc);
       // The dedicated code editor bypasses the generic mount path — without
@@ -947,8 +942,8 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
           });
           // Cursor: the doc starts at the opening fence line — whole-text
           // positions shift by the prefix (plus its newline).
-          const cv = this.focusedCode.view;
-          const len = cv.state.doc.length;
+          const ed = this.focusedCode.view;
+          const len = ed.getDocLength();
           if (pending) {
             const off = mixed.prefix.length + 1;
             const p =
@@ -957,7 +952,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
                 : pending.pos === 'end'
                   ? len
                   : Math.max(0, Math.min(pending.pos - off, len));
-            applyCursorAndScroll(cv, p);
+            ed.placeCursorAndScroll(p);
           }
           this.focusStartSnapshot = serializeDocument(this.doc);
           this.updateOutlinePath();
@@ -1221,7 +1216,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     if (fc) {
       this.focusedCode = null;
       this.focusedBlock = null;
-      const content = fc.view.state.doc.toString();
+      const content = fc.view.getText();
       const head = fc.prefix ? fc.prefix + '\n' : '';
       // Source mode: the doc IS the fence source (markers/language possibly
       // edited) — written verbatim under the prefix. Otherwise re-wrap the
@@ -1234,7 +1229,7 @@ ${content}
 ${fc.fence}`
           : `${head}${fc.openLine}
 ${content}`;
-      fc.view.destroy();
+      fc.view.dispose();
       // Mixed-block mount: put the static code element back so the cached
       // static render (image + code) stays valid — the commit re-attaches it
       // unchanged, and nothing re-renders or flickers.

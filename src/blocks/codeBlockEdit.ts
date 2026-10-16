@@ -16,100 +16,42 @@
 // dedicated code editor — the outline editor keeps the shared instance for
 // third-party registerEditorExtension compatibility.
 //
-// Syntax coloring runs Prism (same engine as the reading view) through
-// prismHighlight.ts: tokens carry the same `.token <type>` classes in both
-// states, so the styles.css rules color them identically.
-import { EditorView, keymap, drawSelection } from 'cm-bundle:@codemirror/view';
-import { EditorState, type Extension } from 'cm-bundle:@codemirror/state';
-import { defaultKeymap, history, historyKeymap } from 'cm-bundle:@codemirror/commands';
-import { indentUnit } from 'cm-bundle:@codemirror/language';
-import { prismGrammarFor, prismHighlightExtension } from './prismHighlight';
-import { hasGrammarForFence } from '../extensions/tmEngine';
-import { tmHighlightExtension } from '../extensions/tmHighlight';
+// 编辑器本体是 Monaco(开源 VS Code 内核),与外部代码文件同一套技术:
+// 语言解析/高亮见 src/editor/monaco.ts;已装扩展的 TM 语法经 grammarLoader
+// 注册进 Monaco(市场扩展覆盖内置 monarch)。
+import { createEditor, setupMonaco, getLanguageByFence } from '../editor/monaco';
 import type { Block } from '../types';
 import type { BlockEditorView } from '../view/BlockEditorView';
 
-export interface CodeFenceInfo {
-  /** Lines BEFORE the opening fence (mixed blocks: image/prose + fence). */
-  prefix: string;
-  /** Language from the opening fence ('' when absent). */
-  lang: string;
-  /** The code content between the fences. */
-  content: string;
-  /** The exact opening fence run (``` / ~~~ / longer). */
-  fence: string;
-  /** The full opening fence LINE (fence + language) — commit re-wraps with it. */
-  openLine: string;
-  /** Whether the block text carried a closing fence. */
-  closed: boolean;
-}
+// parseCodeFence/CodeFenceInfo 移至 codeFence.ts(纯逻辑,单测不必拉起 Monaco)。
+import { parseCodeFence, type CodeFenceInfo } from './codeFence';
 
-const FENCE_LINE_RE = /^(`{3,}|~{3,})([^\n`]*)$/;
+export { parseCodeFence, type CodeFenceInfo };
 
 /**
- * Parse a block whose text ends in a code fence: [prefix lines +] opening
- * fence → content → closing fence (or unterminated). The prefix (an image,
- * prose) stays rendered statically while the fence gets the dedicated code
- * editor. Returns null when the text has no fence line, or when non-blank
- * content follows the closing fence — the generic outline editor must keep
- * those blocks so no text is ever dropped on commit.
+ * Monaco 编辑器的最小适配面:BlockEditorView 对聚焦代码块的全部操作都走这里,
+ * 不直接触碰 CM6/Monaco 的具体 API(换实现只改本文件)。
  */
-export function parseCodeFence(text: string): CodeFenceInfo | null {
-  const lines = text.split('\n');
-  // The opening fence may sit at any line — mixed blocks carry a prefix.
-  let openIdx = -1;
-  let open: RegExpExecArray | null = null;
-  for (let i = 0; i < lines.length; i++) {
-    const m = FENCE_LINE_RE.exec(lines[i]);
-    if (m) {
-      openIdx = i;
-      open = m;
-      break;
-    }
-  }
-  if (openIdx < 0 || !open) return null;
-  const fence = open[1];
-  const lang = open[2].trim();
-  let closed = false;
-  let end = lines.length;
-  for (let i = openIdx + 1; i < lines.length; i++) {
-    if (new RegExp('^' + fence[0] + '{' + fence.length + ',}\\s*$').test(lines[i])) {
-      // A code block ENDS at its closing fence. Non-blank content after it
-      // (a second fence, trailing prose) means this block has a tail the code
-      // editor cannot represent: mounting it would commit only up to the
-      // FIRST closing fence and silently drop the rest.
-      if (lines.slice(i + 1).some((l) => l.trim() !== '')) return null;
-      closed = true;
-      end = i;
-      break;
-    }
-  }
-  return {
-    prefix: lines.slice(0, openIdx).join('\n'),
-    lang,
-    content: lines.slice(openIdx + 1, closed ? end : lines.length).join('\n'),
-    fence,
-    openLine: lines[openIdx],
-    closed,
-  };
-}
-
-/**
- * Syntax coloring in BOTH states comes from Prism (the reading view runs it
- * through Obsidian's MarkdownRenderer) — the editor maps the same token
- * classes onto CM6 decorations, so styles.css colors them identically.
- */
-
-/** CM extension for the fence's language (null = plain text). */
-function languageFor(lang: string): Extension | null {
-  // 已安装扩展的 TextMate 语法优先（市场扩展覆盖内置 Prism）；未命中回落 Prism
-  if (hasGrammarForFence(lang)) return tmHighlightExtension(lang);
-  const grammar = prismGrammarFor(lang);
-  return grammar ? prismHighlightExtension(grammar) : null;
+export interface CodeEditorHandle {
+  /** 全文(提交与光标换算用) */
+  getText(): string;
+  getDocLength(): number;
+  focus(): void;
+  /** destroyFocusedInside 的包含关系判定用 */
+  dom: HTMLElement;
+  dispose(): void;
+  /** 点击坐标 → 文档字符偏移(命中不了行时回退 fallback) */
+  offsetAtCoords(x: number, y: number, fallback: number): number;
+  /** 该偏移在视口内的纵向坐标(用于命中校验);拿不到返回 null */
+  topAtOffset(offset: number): number | null;
+  /** 把光标放到指定字符偏移并滚动到可见 */
+  placeCursorAndScroll(offset: number): void;
+  /** 光标放到第 1 行行尾(源码模式语言词后) */
+  caretToEndOfLine1(): void;
 }
 
 export interface MountedCodeEditor {
-  view: EditorView;
+  view: CodeEditorHandle;
   block: Block;
   /** The prefix lines kept rendered statically (mixed blocks; '' for pure). */
   prefix: string;
@@ -153,8 +95,8 @@ export function mountCodeEditor(
   opts: CodeMountOpts = {},
 ): MountedCodeEditor {
   const sourceMode = opts.source === true;
-  // Referenced by the source-mode label handler before the view exists.
-  let viewRef: EditorView | null = null;
+  // Referenced by the source-mode label handler before the handle exists.
+  let viewRef: CodeEditorHandle | null = null;
   // Standard DOM APIs (no Obsidian prototype extensions) — keeps this module
   // testable outside Obsidian.
   const wrap = document.createElement('div');
@@ -181,10 +123,9 @@ export function mountCodeEditor(
       if (sourceMode) {
         // Already in source mode — the fence line is IN the doc: just put
         // the caret at the end of the language word.
-        if (viewRef) {
-          viewRef.dispatch({ selection: { anchor: viewRef.state.doc.line(1).to } });
-          viewRef.focus();
-        }
+      if (viewRef) {
+        viewRef.caretToEndOfLine1();
+      }
         return;
       }
       // Click the language label → one-shot source mode with the cursor at
@@ -206,47 +147,61 @@ export function mountCodeEditor(
   body.className = 'lgp-code-editor-host';
   wrap.appendChild(body);
 
-  const view = new EditorView({
-    state: EditorState.create({
-      // Source mode edits the fence SOURCE (opening fence line + content +
-      // closing fence) so the markers and the language word are editable.
-      doc: sourceMode
-        ? info.closed
-          ? `${info.openLine}\n${info.content}\n${info.fence}`
-          : `${info.openLine}\n${info.content}`
-        : info.content,
-      extensions: [
-        drawSelection(),
-        history(),
-        indentUnit.of('  '),
-        languageFor(info.lang) ?? [],
-        keymap.of([
-          {
-            key: 'Escape',
-            run: () => {
-              host.commitFocusedText();
-              return true;
-            },
-          },
-          // Drop Mod-f / Mod-h: CM6's defaultKeymap binds them to
-          // `openSearchPanel`, which needs the `search()` extension we never
-          // mount. Left in, they swallow Ctrl+F inside a code block and nothing
-          // opens. Removing lets Obsidian's keymap route the key to our
-          // find-in-page command. See OWNED_DEFAULT_KEYS in editor/extensions.ts.
-          ...defaultKeymap.filter((k) => k.key !== 'Mod-f' && k.key !== 'Mod-h'),
-          ...historyKeymap,
-        ]),
-        EditorView.contentAttributes.of({ spellcheck: 'false' }),
-      ],
-    }),
-    parent: body,
+  // Monaco 挂载(块内:高度贴内容、无行号;Esc 提交回块模型)
+  setupMonaco((rel) => host.plugin.app.vault.adapter.getResourcePath(rel));
+  const doc = sourceMode
+    ? info.closed
+      ? `${info.openLine}\n${info.content}\n${info.fence}`
+      : `${info.openLine}\n${info.content}`
+    : info.content;
+  const mEditor = createEditor(body, {
+    value: doc,
+    language: getLanguageByFence(info.lang),
+    autoHeight: true,
+    lineNumbers: false,
+    onEscape: () => host.commitFocusedText(),
   });
+  const model = mEditor.getModel();
+  const handle: CodeEditorHandle = {
+    getText: () => mEditor.getValue(),
+    getDocLength: () => model?.getValueLength() ?? 0,
+    focus: () => mEditor.focus(),
+    dom: body,
+    dispose: () => {
+      const m = mEditor.getModel();
+      mEditor.dispose();
+      m?.dispose();
+    },
+    offsetAtCoords: (x, y, fallback) => {
+      if (!model) return fallback;
+      const t = mEditor.getTargetAtClientPoint(x, y);
+      return t?.position ? model.getOffsetAt(t.position) : fallback;
+    },
+    topAtOffset: (offset) => {
+      if (!model) return null;
+      const p = model.getPositionAt(Math.max(0, Math.min(offset, model.getValueLength())));
+      const vp = mEditor.getScrolledVisiblePosition(p);
+      return vp ? vp.top : null;
+    },
+    placeCursorAndScroll: (offset) => {
+      if (!model) return;
+      const pos = model.getPositionAt(Math.max(0, Math.min(offset, model.getValueLength())));
+      mEditor.setPosition(pos);
+      mEditor.revealPositionInCenter(pos);
+    },
+    caretToEndOfLine1: () => {
+      if (!model) return;
+      const len = model.getLineContent(1).length;
+      mEditor.setPosition(model.getPositionAt(len));
+      mEditor.focus();
+    },
+  };
   // Debug handle for e2e verification (same convention as the outline editor).
-  (view.dom as HTMLElement & { __lgView?: EditorView }).__lgView = view;
-  viewRef = view;
-  view.focus();
+  (body as HTMLElement & { __lgCode?: CodeEditorHandle }).__lgCode = handle;
+  viewRef = handle;
+  handle.focus();
   return {
-    view,
+    view: handle,
     block,
     prefix: info.prefix,
     fence: info.fence,
