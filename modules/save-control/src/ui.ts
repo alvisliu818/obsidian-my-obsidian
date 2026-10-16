@@ -892,14 +892,19 @@ export class SaveHistoryView extends ItemView {
         addMenuItem(translate("renameVersion"), () => renderEditState());
 
         addMenuItem(translate("diffWithCurrent"), () => { void (async () => {
-      const curFile = this.plugin.getActiveFile(false);
+          const curFile = this.plugin.getActiveFile(false);
           if (!curFile) return;
           const snapContent = await readSnapshotContent(this.plugin, snap.filePath);
           if (!snapContent) {
             this.plugin.toast(translate("failedLoadSnapshot"));
             return;
           }
-          const currentContent = await this.plugin.app.vault.read(curFile);
+          // 库外句柄的 path 是快照目录，vault.read 必然抛错——走目标感知读取。
+          const currentContent = await this.versioning.readCurrentContentForFile(curFile);
+          if (currentContent === null) {
+            this.plugin.toast(translate("failedLoadSnapshot"));
+            return;
+          }
           const currentSnap: SnapshotRecord & { filePath: string } = {
             content: currentContent,
             timestamp: new Date().toISOString(),
@@ -1066,7 +1071,13 @@ export class SaveHistoryView extends ItemView {
       const curFile = this.plugin.getActiveFile();
       if (!curFile) return;
 
-      const currentContent = await this.plugin.app.vault.read(curFile);
+      // 库外句柄的 path 是快照目录，vault.read 必然抛错（恢复会静默失败）——
+      // 走目标感知读取。
+      const currentContent = await this.versioning.readCurrentContentForFile(curFile);
+      if (currentContent === null) {
+        this.plugin.toast(translate("failedLoadSnapshotDot"));
+        return;
+      }
       await savePreRestoreBackup(this.plugin, curFile.path, currentContent);
 
       const restored = await readSnapshotContent(this.plugin, snap.filePath);
@@ -1128,7 +1139,11 @@ export class SaveHistoryView extends ItemView {
 
         const rst = btnRow.createEl("button", { text: translate("restoreThisVersion") });
         rst.onclick = async () => {
-          const currentContent = await this.plugin.app.vault.read(curFile);
+          const currentContent = await this.versioning.readCurrentContentForFile(curFile);
+          if (currentContent === null) {
+            this.plugin.toast(translate("failedLoadSnapshotDot"));
+            return;
+          }
           await savePreRestoreBackup(this.plugin, curFile.path, currentContent);
 
           await this.versioning.restoreFromSnapshot(curFile, restored);
@@ -1449,7 +1464,12 @@ class RestoreVersionModal extends Modal {
       return;
     }
 
-    const currentContent = await this.plugin.app.vault.read(this.file);
+    // 库外句柄的 path 是快照目录，vault.read 必然抛错——走目标感知读取。
+    const currentContent = await this.versioning.readCurrentContentForFile(this.file);
+    if (currentContent === null) {
+      this.plugin.toast(translate("failedLoadSnapshotDot"));
+      return;
+    }
     await savePreRestoreBackup(this.plugin, this.file.path, currentContent);
 
     await this.versioning.restoreFromSnapshot(this.file, restored);
@@ -2054,7 +2074,12 @@ window.clearTimeout(this.debounceTimer);
       if (sourceFile instanceof TFile && this.plugin.isExtensionAllowed(sourceFile.extension)) {
         const rst = btnRow.createEl("button", { text: translate("restoreThisVersion") });
         rst.onclick = async () => {
-          const currentContent = await this.plugin.app.vault.read(sourceFile);
+          // 库外句柄的 path 是快照目录，vault.read 必然抛错——走目标感知读取。
+          const currentContent = await this.versioning.readCurrentContentForFile(sourceFile);
+          if (currentContent === null) {
+            this.plugin.toast(translate("failedLoadSnapshotDot"));
+            return;
+          }
           await savePreRestoreBackup(this.plugin, sourceFile.path, currentContent);
           await this.versioning.restoreFromSnapshot(sourceFile, restored);
           this.plugin.toast(translate("versionRestored"));

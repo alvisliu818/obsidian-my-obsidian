@@ -651,6 +651,27 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     (this as unknown as { dirty?: boolean }).dirty = false;
   }
 
+  /**
+   * Re-read from disk (the file changed elsewhere — e.g. save-control 版本恢复
+   * 直接写回了原文件)。语义对齐 ExternalFileView / ExternalCodeView 的 reload：
+   * 以磁盘为准整体重载，脏状态清零——缓冲里的旧内容不能再被自动保存写回去。
+   */
+  reload(): void {
+    if (!this.isExternal) return;
+    this.clearExternalSaveTimer();
+    this.clearBaselineCheckTimer();
+    try {
+      const data = readExternalText(this.externalAbs);
+      this.discardPending = false;
+      this.externalDiskData = data;
+      this.externalDirty = false;
+      this.setViewData(data, false);
+      this.externalCleanData = this.serializeCurrent();
+    } catch (e) {
+      new Notice(`重新读取失败：${String(e).slice(0, 100)}`);
+    }
+  }
+
   async save(force = false): Promise<void> {
     // 关闭提示选了「不保存并关闭」：save() 变为空操作——onUnloadFile 和库外
     // shell 的 onClose 都走这里，不拦住的话丢弃决定之后内容照样落盘。
