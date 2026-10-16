@@ -628,7 +628,9 @@ export class MountPanelView extends ItemView {
         if (n.isDir && state.open.has(n.rel)) walk(n.children, depth + 1);
       }
     };
-    walk(state.tree, 0);
+    // 根层从 depth 1 起排:挂载根是区块头(不在行流里),子项整体缩进一级,
+    // 与根形成父子缩进关系(此前 depth 0 与头完全平齐,被报告为 bug)。
+    walk(state.tree, 1);
     return out;
   }
 
@@ -680,6 +682,9 @@ export class MountPanelView extends ItemView {
     }
 
     const text = isTextMount(extOf(node.name));
+    // 文件行补一个空 caret 占位,图标与同级文件夹的图标对齐
+    // (否则文件图标顶到文件夹 caret 的位置,父子缩进看不出来)。
+    row.createSpan({ cls: 'logseq-mount-caret' });
     // Files get the icon theme's own artwork when it is installed, so a mounted
     // tree shows the same icons the vault's files do. Folders keep a generic
     // marker: the theme resolves folder icons by vault path, which an
