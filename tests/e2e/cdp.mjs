@@ -285,10 +285,25 @@ export class Cdp {
    * `keyUp`. Sending only rawKeyDown+keyUp makes modifiers and shortcuts work
    * but silently drops printable text — which looks exactly like "the input
    * swallowed my typing" when you are really just missing the `char` event.
+   *
+   * Combo syntax: 'Control+End', 'Shift+Tab', 'Alt+ArrowLeft' … — modifiers are
+   * folded into `modifiers`, and the final key is sent as `key`/`code`/VK.
+   * (Sending the whole 'Control+End' string as the key name produces a bogus
+   * key event that no keymap matches.)
    */
-  async key(key, { code, ctrl = false, shift = false, alt = false, meta = false } = {}) {
+  async key(combo, { code, ctrl = false, shift = false, alt = false, meta = false } = {}) {
+    const parts = String(combo).split('+');
+    let key = parts.pop();
+    for (const m of parts) {
+      const mm = m.toLowerCase();
+      if (mm === 'ctrl' || mm === 'control') ctrl = true;
+      else if (mm === 'shift') shift = true;
+      else if (mm === 'alt') alt = true;
+      else if (mm === 'meta' || mm === 'cmd') meta = true;
+    }
     const mods = (alt ? 1 : 0) | (ctrl ? 2 : 0) | (meta ? 4 : 0) | (shift ? 8 : 0);
-    const base = { modifiers: mods, key, code: code ?? key, windowsVirtualKeyCode: VK[key] ?? 0, nativeVirtualKeyCode: VK[key] ?? 0 };
+    const vk = VK[key] ?? vkOfKey(key);
+    const base = { modifiers: mods, key, code: code ?? key, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk };
     await this.send('Input.dispatchKeyEvent', { ...base, type: 'rawKeyDown' });
     // Printable single characters need the char event to produce text.
     if (key.length === 1 && !ctrl && !meta && !alt) {
@@ -308,9 +323,20 @@ export class Cdp {
 const VK = {
   f: 70, F: 70, h: 72, H: 72, a: 65, A: 65, p: 80, P: 80, o: 79, O: 79,
   n: 78, N: 78, e: 69, E: 69, z: 90, Z: 90, y: 89, Y: 89, '\\': 220,
-  Escape: 27, Enter: 13, Tab: 9, Backspace: 8, ' ': 32,
+  Escape: 27, Enter: 13, Tab: 9, Backspace: 8, ' ': 32, Delete: 46,
   ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39,
+  Home: 36, End: 35, PageUp: 33, PageDown: 34,
+  Control: 17, Shift: 16, Alt: 18, Meta: 91,
 };
+
+/** Single printable chars: letters/digits map to their ASCII VK codes. */
+function vkOfKey(key) {
+  if (key.length !== 1) return 0;
+  const c = key.toUpperCase();
+  if (c >= 'A' && c <= 'Z') return c.charCodeAt(0);
+  if (c >= '0' && c <= '9') return c.charCodeAt(0);
+  return 0;
+}
 
 export { sleep, killTestVaultObsidian, httpJson };
 export function killAll() {

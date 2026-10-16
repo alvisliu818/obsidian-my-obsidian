@@ -45,6 +45,7 @@ import { MountEditorModal, MountListModal, MountPositionModal } from './panels/m
 import { MountPanelView, VIEW_TYPE_MOUNT_PANEL } from './panels/mountPanel';
 import { ExternalFileView, VIEW_TYPE_EXTERNAL_FILE } from './views/ExternalFileView';
 import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE } from './views/ExternalCodeView';
+import { CodeDocView, VIEW_TYPE_CODE_DOC } from './views/CodeDocView';
 import { ExternalBlockView, VIEW_TYPE_EXTERNAL_BLOCK } from './views/ExternalBlockView';
 import { OfficeView, VIEW_TYPE_OFFICE } from './views/OfficeView';
 import { ImageView, VIEW_TYPE_IMAGE, IMAGE_EXTENSIONS, isImageFile } from './views/ImageView';
@@ -176,6 +177,7 @@ export default class LogseqEditorPlugin extends Plugin {
     this.registerView(VIEW_TYPE_MOUNT_PANEL, (leaf) => new MountPanelView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_FILE, (leaf) => new ExternalFileView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_CODE, (leaf) => new ExternalCodeView(leaf, this));
+    this.registerView(VIEW_TYPE_CODE_DOC, (leaf) => new CodeDocView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_BLOCK, (leaf) => new ExternalBlockView(leaf, this));
     this.registerView(VIEW_TYPE_OFFICE, (leaf) => new OfficeView(leaf, this));
     this.registerView(VIEW_TYPE_IMAGE, (leaf) => new ImageView(leaf, this));
@@ -1664,7 +1666,7 @@ export default class LogseqEditorPlugin extends Plugin {
   async openExternalEntry(
     mount: ExternalMount,
     node: MountNode,
-    opts?: { readOnly?: boolean },
+    opts?: { readOnly?: boolean; forceCodeEditor?: boolean },
   ): Promise<void> {
     if (node.isDir) return;
     // Read-only means "show me, change nothing", and it is also the fallback
@@ -1711,6 +1713,10 @@ export default class LogseqEditorPlugin extends Plugin {
         this.openWithSystem(node.abs);
         return;
       }
+      // 默认:混合视图(注释区 = Logseq 块,代码段 = Monaco);右键可切纯 Monaco。
+      if (!opts?.forceCodeEditor) {
+        if (await this.openInCodeDocView(mount, node)) return;
+      }
       if (await this.openInCodeEditor(mount, node)) return;
     }
     await this.openExternalInShimView(mount, node, opts);
@@ -1733,6 +1739,32 @@ export default class LogseqEditorPlugin extends Plugin {
    * they never asked for; reusing an existing block-editor tab would silently
    * replace their work. A fresh tab is the only variant that touches nothing.
    */
+  /** 用混合视图打开库外代码文件(注释区 = Logseq 块,代码段 = Monaco)。 */
+  private async openInCodeDocView(mount: ExternalMount, node: MountNode): Promise<boolean> {
+    if (!isTextFileName(node.name)) return false;
+    try {
+      readExternalText(node.abs);
+    } catch {
+      return false; // 混合视图打不开时回落(代码编辑器/shim 会给出提示)
+    }
+    const leaf = this.app.workspace.getLeaf(
+      this.settings.externalSplitView === true ? 'split' : 'tab',
+    );
+    await leaf.setViewState({
+      type: VIEW_TYPE_CODE_DOC,
+      active: true,
+      state: {
+        abs: node.abs,
+        name: node.name,
+        rel: node.rel,
+        mountLabel: mount.label,
+        mountPath: mount.path,
+      },
+    });
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    logOp(this, 'external.open', node.abs, 'ok', 'code-doc');
+    return true;
+  }
   private async openInBlockEditor(mount: ExternalMount, node: MountNode): Promise<boolean> {
     if (!isMarkdownFile(node.name)) return false;
     try {

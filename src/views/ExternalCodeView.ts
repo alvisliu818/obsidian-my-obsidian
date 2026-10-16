@@ -191,7 +191,7 @@ export class ExternalCodeView extends ItemView {
     }
     this.lastDiskData = content;
 
-    setupMonaco((rel) => this.app.vault.adapter.getResourcePath(rel));
+    setupMonaco(this.plugin);
 
     // 语言由路径扩展名决定(Monaco basic-languages + TS worker);高亮与
     // VS Code 同源。保存仍走原防抖链路,Ctrl/Cmd+S 即时落盘。

@@ -2,7 +2,10 @@
  * codeDoc 切分器/重建器的往返无损与结构用例。
  */
 import { describe, expect, it } from 'vitest';
-import { buildCodeDoc, reconstructFromDoc } from '../src/features/codeDoc';
+import { buildCodeDoc, reconstructFromDoc, toOutlineDocText } from '../src/features/codeDoc';
+import { parseCodeFence } from '../src/blocks/codeFence';
+import { parseDocument } from '../src/core/parser';
+import type { Block } from '../src/types';
 
 const rt = (text: string, lang: string) => reconstructFromDoc(buildCodeDoc(text, lang));
 
@@ -127,5 +130,63 @@ describe('边界', () => {
     expect(blocks.length).toBe(1);
     expect(blocks[0].kind).toBe('code');
     expect(rt(t, 'plaintext')).toBe(t);
+  });
+});
+
+describe('P2 混合视图链路', () => {
+  const py = [
+    '# 顶部说明:见 [[设计笔记]]',
+    'import os',
+    '',
+    'def f(x):',
+    '    # 缩进注释',
+    '    return x + 1  # 行内注释',
+    '',
+    'print(f(1))',
+  ].join('\n');
+
+  it('toOutlineDocText:注释块序列化为列表项(非标题),代码段为围栏', () => {
+    const vdoc = toOutlineDocText(buildCodeDoc(py, 'python'));
+    expect(vdoc.split('\n')[0]).toBe('- # 顶部说明:见 [[设计笔记]]');
+    expect(vdoc).toContain('```python');
+    expect(vdoc.split('\n').filter((l) => l.startsWith('# ') && !l.startsWith('# 顶部')).length).toBe(0);
+  });
+
+  it('startLine:代码段携带真实起始行(1 基)', () => {
+    const starts = buildCodeDoc(py, 'python').filter((b) => b.kind === 'code').map((b) => b.startLine);
+    expect(starts).toEqual([2, 6]);
+  });
+
+  it('混合链路:toOutlineDocText → parseDocument → 重建(代码逐字,注释缩进归一)', () => {
+    const doc = parseDocument(toOutlineDocText(buildCodeDoc(py, 'python')));
+    // 模拟 HybridCodeBlockEditorView.serializeDocCurrent:围栏剥壳,其余逐字,子块递归
+    const walk = (bs: Block[]): string[] =>
+      bs.flatMap((b) => {
+        const fence = parseCodeFence(b.text);
+        const lines = fence ? fence.content.split('\n') : b.text.split('\n');
+        return b.children.length ? [...lines, ...walk(b.children)] : lines;
+      });
+    const out = walk(doc.blocks).join('\n');
+    expect(out).toBe([
+      '# 顶部说明:见 [[设计笔记]]',
+      'import os',
+      '',
+      'def f(x):',
+      '# 缩进注释',
+      '    return x + 1  # 行内注释',
+      '',
+      'print(f(1))',
+    ].join('\n'));
+    expect(out).not.toContain('```');
+  });
+
+  it('混合链路:纯代码文件(无注释)往返逐字无损', () => {
+    const code = ['import os', '', 'print(os.getcwd())'].join('\n');
+    const doc = parseDocument(toOutlineDocText(buildCodeDoc(code, 'python')));
+    const lines = doc.blocks.flatMap((b) => {
+      const fence = parseCodeFence(b.text);
+      return (fence ? fence.content.split('\n') : b.text.split('\n'));
+    });
+    expect(lines.join('\n')).toBe(code);
   });
 });

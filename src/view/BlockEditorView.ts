@@ -2801,16 +2801,25 @@ ${content}`;
         const { text, props } = splitPropLines(live);
         b.text = text;
         applyBlockProps(b, props);
-        const s = serializeDocument(this.doc);
+        const s = this.serializeDocCurrent();
         b.text = savedText;
         b.props = savedProps;
         return s;
       }
     }
+    return this.serializeDocCurrent();
+  }
+
+  /**
+   * 序列化出口:库内文件 = 大纲序列化;混合视图(CodeDocView)的子类覆写它,
+   * 从块模型重建代码文本(围栏块剥围栏、其余逐字)。聚焦 CM 的活文本覆盖
+   * 已在 serializeCurrent 里完成,此处拿到的是已同步的块模型。
+   */
+  protected serializeDocCurrent(): string {
     return serializeDocument(this.doc);
   }
 
-  private markDirty(): void {
+  protected markDirty(): void {
     // While an outside file is shown, the borrowed seed note is NOT what is being
     // edited. Logging the edit against it, and snapshotting the seed as a
     // "backup", would both misattribute the change and litter the vault with a

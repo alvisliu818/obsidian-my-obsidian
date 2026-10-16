@@ -148,7 +148,7 @@ export function mountCodeEditor(
   wrap.appendChild(body);
 
   // Monaco 挂载(块内:高度贴内容、无行号;Esc 提交回块模型)
-  setupMonaco((rel) => host.plugin.app.vault.adapter.getResourcePath(rel));
+  setupMonaco(host.plugin);
   const doc = sourceMode
     ? info.closed
       ? `${info.openLine}\n${info.content}\n${info.fence}`

@@ -11,6 +11,7 @@
  */
 
 import * as monaco from 'monaco-editor';
+import { normalizePath, type App } from 'obsidian';
 import { registerTmGrammarForMonaco } from '../extensions/monacoGrammarBridge';
 
 let initialized = false;
@@ -182,24 +183,32 @@ const WORKER_FILES: Record<string, string> = {
   razor: 'html.worker.js',
 };
 
-// 初始化 Monaco:worker 路径 + TS 诊断开关 + 主题。
-// getResourcePath 由插件注入(adapter.getResourcePath 的包装),避免本模块直接依赖 app 实例。
-export function setupMonaco(resolver: (rel: string) => string): void {
-  getResourcePath = resolver;
+/** setupMonaco 需要的插件最小面(Plugin 或其宿主视图都满足)。 */
+interface MonacoPluginHost {
+  app: App;
+  manifest: { dir?: string };
+}
 
-  // Monaco 自身的布局/组件 CSS(esbuild 产出为 monaco.css)必须加载,
-  // 否则编辑器布局散架;注入一次即可。
-  try {
-    if (!document.getElementById('logseq-monaco-css')) {
-      const link = document.createElement('link');
-      link.id = 'logseq-monaco-css';
-      link.rel = 'stylesheet';
-      link.href = resolver('monaco.css');
-      document.head.appendChild(link);
-    }
-  } catch (e) {
-    console.warn('[obsidian-logseq] 注入 monaco.css 失败:', e);
-  }
+let cssInjectStarted = false;
+
+/**
+ * 初始化 Monaco:worker 路径 + TS 诊断开关 + 主题 + 布局 CSS 注入。
+ *
+ * 两个资源路径的坑(都实测踩过):
+ *  1. `adapter.getResourcePath` 是**库根相对**的——插件文件必须带
+ *     `manifest.dir` 前缀,否则解析成 `<vault>/monaco.css`(404)。
+ *  2. 即便路径对,`<link rel=stylesheet href="app://…">` 会被 Obsidian 的 CSP
+ *     (style-src)拦下——控制台报 "violates … style-src",静默无样式。
+ *     fetch 同一 URL 却 200(fetch 走 connect-src,不受 style-src 管),
+ *     极具迷惑性。解法:读文件内容注入 `<style>`(内联在 'unsafe-inline' 里)。
+ *     worker 的 `new Worker(blob)` 走 worker-src,不受影响,仍用 URL。
+ */
+export function setupMonaco(plugin: MonacoPluginHost): void {
+  const dir = plugin.manifest.dir ?? '';
+  const rel = (p: string) => normalizePath(dir ? `${dir}/${p}` : p);
+  getResourcePath = (p: string) => plugin.app.vault.adapter.getResourcePath(rel(p));
+
+  injectMonacoCss(plugin, rel('monaco.css'));
 
   (self as unknown as { MonacoEnvironment: unknown }).MonacoEnvironment = {
     getWorker(_moduleId: unknown, label: string): Worker {
@@ -213,6 +222,28 @@ export function setupMonaco(resolver: (rel: string) => string): void {
 
   configureTypeScriptWorker();
   applyTheme(getCurrentMode());
+}
+
+/** monaco.css 注入(只一次):读内容 → <style> 内联,绕开 CSP 的 style-src。 */
+function injectMonacoCss(plugin: MonacoPluginHost, vaultRelPath: string): void {
+  if (cssInjectStarted || document.getElementById('logseq-monaco-css')) {
+    cssInjectStarted = true;
+    return;
+  }
+  cssInjectStarted = true;
+  void (async () => {
+    try {
+      const css = await plugin.app.vault.adapter.read(vaultRelPath);
+      if (document.getElementById('logseq-monaco-css')) return;
+      const style = document.createElement('style');
+      style.id = 'logseq-monaco-css';
+      style.textContent = css;
+      document.head.appendChild(style);
+    } catch (e) {
+      console.warn('[obsidian-logseq] 注入 monaco.css 失败:', e);
+      cssInjectStarted = false; // 失败允许后续重试
+    }
+  })();
 }
 
 // 禁用 TS/JS worker 的语义与语法诊断,避免分析深度嵌套表达式时栈溢出
@@ -270,9 +301,16 @@ export interface CreateEditorOptions {
   minimap?: boolean;
   /** 高度:块内自适应内容(滚动关),文件视图撑满容器 */
   autoHeight?: boolean;
+  /** 行号起点(1 基):混合视图的代码段显示真实文件行号 */
+  lineNumbersStart?: number;
+  /** 自定义行号映射(优先于 lineNumbersStart):Monaco 行号 n → 显示文本 */
+  lineNumbersFn?: (n: number) => string;
+  /** 代码折叠(默认开) */
+  folding?: boolean;
   onSave?: () => void;
   onEscape?: () => void;
-  onChange?: (value: string) => void;
+  /** 变更明细:混合视图按变更行归属代码区(维护区行数) */
+  onChange?: (value: string, changes?: Array<{ range: { startLineNumber: number; endLineNumber: number }; text: string }>) => void;
 }
 
 // 创建编辑器实例(两个代码面共用:外部代码文件 / 块内代码块)
@@ -288,7 +326,15 @@ export function createEditor(
     theme: getCurrentMode() === 1 ? 'logseq-dark' : 'logseq-light',
     fontSize: opts.fontSize ?? 13,
     wordWrap: opts.wordWrap ?? 'off',
-    lineNumbers: opts.lineNumbers === false ? 'off' : 'on',
+    lineNumbers:
+      opts.lineNumbers === false
+        ? 'off'
+        : opts.lineNumbersFn
+          ? opts.lineNumbersFn
+          : opts.lineNumbersStart
+            ? (n: number) => String(opts.lineNumbersStart! + n - 1)
+            : 'on',
+    folding: opts.folding ?? true,
     minimap: { enabled: opts.minimap === true },
     automaticLayout: true,
     scrollBeyondLastLine: !opts.autoHeight,
@@ -319,7 +365,13 @@ export function createEditor(
   }
   if (opts.onChange) {
     const cb = opts.onChange;
-    editor.onDidChangeModelContent(() => cb(editor.getValue()));
+    editor.onDidChangeModelContent((e) => {
+      const changes = e.changes.map((c) => ({
+        range: { startLineNumber: c.range.startLineNumber, endLineNumber: c.range.endLineNumber },
+        text: c.text,
+      }));
+      cb(editor.getValue(), changes);
+    });
   }
 
   // Obsidian/外层会拦截 Ctrl+V/C/X:编辑器持焦时在 capture 阶段接管剪贴板

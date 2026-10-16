@@ -4638,3 +4638,70 @@ body.lgp-table-editor-cursor * {
 .lgp-terminal .lgp-terminal__host .xterm { height: 100%; }
 .lgp-terminal .lgp-terminal__bar { display: flex; gap: 6px; align-items: center; padding: 2px 4px; border-bottom: 1px solid var(--background-modifier-border); }
 .lgp-terminal .lgp-terminal__hint { font-size: 0.8em; color: var(--text-muted); flex: 1; }
+
+/* ============ 混合视图(logseq-code-doc):代码编辑器主导 ============ */
+/* 整个视图 = 一台 Monaco 代码编辑器;注释区是编辑器内 view zone 里的 Logseq 块片段。
+   布局走 flex 正常流(与 ExternalCodeView 同款):绝不能用
+   position:absolute; inset:0 —— contentEl 没有 position:relative,绝对定位会锚到
+   .workspace-leaf-content 顶部,编辑器压住 view-header,第一个注释 zone(after
+   line 0)整个落在 header 底下,真实点击全被面包屑拦掉。 */
+.logseq-code-doc-view {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.logseq-code-doc-view .logseq-code-doc-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--code-background);
+}
+/* zone domNode 不裁剪:Monaco 按 heightInPx 设的内联高度在 ResizeObserver
+   纠正前会短于内容,hidden 会把注释块切掉(点不到);visible 最差只是重叠一帧。 */
+.lgp-code-doc-note {
+  width: 100%;
+  overflow: visible;
+  background: var(--code-background);
+  font-family: var(--font-monospace, 'JetBrains Mono', monospace);
+  font-size: var(--code-size, 13px);
+  padding: 0;
+}
+/* 断开高度钳制传导:Monaco 给 zone domNode 设的内联高度(heightInPx)会经
+   .block-editor-container 的 height:100% → scroller flex:1 一路传导到内容,
+   容器测到哪里都是钳制值,ResizeObserver 反馈环失效、zone 卡在最小高度。
+   这里让片段链恢复自然高度(与 .lgp-fragment 的设计一致),CodeDocView 以
+   frag.containerEl.offsetHeight 为 zone 高度回写 heightInPx。 */
+.lgp-code-doc-note .block-editor-container {
+  height: auto;
+  overflow: visible;
+}
+.lgp-code-doc-note .block-editor-scroller {
+  overflow: visible;
+}
+/* Monaco 的 DOM 顺序:.view-zones 排在 .view-lines 之前,而 .view-lines 是
+   覆盖整个内容区的盒子(高度 = scrollHeight)——它会把注释 zone 的鼠标事件
+   全拦走(实测 elementFromPoint 落在 .view-lines 上,块永远点不进编辑态)。
+   zone domNode 已被 Monaco 设为 absolute,抬一层 z-index 把点击还给它;
+   空白预留区与代码行不重叠,视觉不变。 */
+.lgp-code-doc-note {
+  z-index: 1;
+}
+.lgp-code-doc-note .block-editor-container,
+.lgp-code-doc-note .block-editor-tree,
+.lgp-code-doc-note .cm-editor {
+  background: transparent;
+}
+.lgp-code-doc-note .block-editor-tree .block-wrap {
+  margin-block: 0;
+}
+.lgp-code-doc-note .block-editor-tree .block-main {
+  padding-block: 1px;
+}
+.lgp-code-doc-note .block-editor-tree .block-bullet {
+  width: 8px;
+  height: 8px;
+  opacity: 0.5;
+}
+.lgp-code-doc-note .block-editor-tree .block-content {
+  line-height: 1.55;
+}

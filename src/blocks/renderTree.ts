@@ -69,6 +69,27 @@ export function forgetBlockCache(b: Block): void {
 }
 
 /**
+ * 列表块文本:行首 markdown 标记('# x')加渲染期转义,围栏内部跳过。
+ * 只在渲染管线里用 —— 块文本本身保持原样。
+ */
+function escapeInBlockHeadings(text: string): string {
+  const lines = text.split('\n');
+  let fence: string | null = null; // 当前所处围栏串(如 ```);null = 不在围栏内
+  return lines
+    .map((line) => {
+      const m = /^(`{3,}|~{3,})/.exec(line);
+      if (m) {
+        if (!fence) fence = m[1];
+        else if (m[1][0] === fence[0] && line.trim().replace(/[`\s~]/g, '') === '') fence = null;
+        return line;
+      }
+      if (!fence && /^#{1,6}\s/.test(line)) return line.replace(/^(#{1,6}\s)/, '\\$1');
+      return line;
+    })
+    .join('\n');
+}
+
+/**
  * The cached static render for `b` when it still matches the current text
  * (NOT attached — callers attach it themselves). Used by the mixed-block
  * code editor to keep the rendered prefix (image/prose) on screen while only
@@ -840,16 +861,21 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
   const hasPageEmbed = /!\[\[[^\[\]]+\]\]/.test(b.text);
   // HTML img 相对 src 锚定：防库内同名图片劫持（见 anchorRelativeImgSrcs 注释）
   const imgAnchorTokens: ImgAnchorToken[] = [];
+  // Logseq parity: 列表块文本里的 markdown 标题行('# x')渲染为字面文本 ——
+  // Logseq 块内没有标题语义;Obsidian 渲染器会把它们 heading 化,在混合视图里
+  // 把代码注释行渲染成大字标题。仅影响渲染(块文本不变,往返无损);围栏
+  // 内部保持逐字(代码里的 # 不动)。raw 块(真标题)不受影响。
+  const blockSource = b.kind === 'list' ? escapeInBlockHeadings(b.text) : b.text;
   const mdSource = withTableSeparation(
     withQuoteRowSeparation(
       anchorRelativeImgSrcs(
         hasPageEmbed
-        ? b.text.replace(/!\[\[([^\[\]]+)\]\]/g, (_m, page: string) => {
+        ? blockSource.replace(/!\[\[([^\[\]]+)\]\]/g, (_m, page: string) => {
             const token = `LGPAGEEMBED${pageEmbedTokens.length}LGPAGEEMBED`;
             pageEmbedTokens.push({ token, page });
             return token;
           })
-        : b.text,
+        : blockSource,
         host,
         imgAnchorTokens,
       ),

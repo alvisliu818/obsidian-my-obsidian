@@ -83,6 +83,8 @@ export interface CodeDocBlock {
    * kind=code:围栏包裹的块文本(```lang\n 代码 \n```)。
    */
   text: string;
+  /** 块在源文件中的起始行(1 基);代码段用它显示真实行号 */
+  startLine: number;
 }
 
 function markersFor(lang: string): { line: string[]; block: Array<[string, string]> } {
@@ -120,17 +122,11 @@ export function buildCodeDoc(text: string, lang: string): CodeDocBlock[] {
 
   const blocks: CodeDocBlock[] = [];
   let codeBuf: string[] = [];
+  let codeStart = 0;
 
   const flushCode = (): void => {
     if (codeBuf.length === 0) return;
-    // 围栏长度:比代码里最长的反引号串至少长 1,且 ≥3
-    let maxRun = 0;
-    for (const l of codeBuf) {
-      const m = /^`+/.exec(l);
-      if (m) maxRun = Math.max(maxRun, m[0].length);
-    }
-    const fence = '`'.repeat(Math.max(3, maxRun + 1));
-    blocks.push({ kind: 'code', text: `${fence}${lang}\n${codeBuf.join('\n')}\n${fence}` });
+    blocks.push({ kind: 'code', text: wrapCodeFence(codeBuf.join('\n'), lang), startLine: codeStart });
     codeBuf = [];
   };
 
@@ -153,13 +149,14 @@ export function buildCodeDoc(text: string, lang: string): CodeDocBlock[] {
           i++;
         }
       }
-      blocks.push({ kind: 'text', text: buf.join('\n') });
+      blocks.push({ kind: 'text', text: buf.join('\n'), startLine: i + 1 });
       continue;
     }
 
     // --- 整行注释:并入当前注释块(连续注释 + 夹空行 = 一个块)---
     if (isLineComment(trimmed, lineMarkers)) {
       flushCode();
+      const i0 = i;
       const buf: string[] = [line];
       // 向后吞并:注释行或空行(空行仅当后续仍回到注释,否则空行留给代码段)
       let j = i + 1;
@@ -180,11 +177,12 @@ export function buildCodeDoc(text: string, lang: string): CodeDocBlock[] {
       // 悬空空行不属于注释块,退还给代码段
       i = j - 1;
       if (pendingBlanks.length) i -= pendingBlanks.length;
-      blocks.push({ kind: 'text', text: buf.join('\n') });
+      blocks.push({ kind: 'text', text: buf.join('\n'), startLine: i0 + 1 });
       continue;
     }
 
     // --- 代码行(含纯空行)---
+    if (codeBuf.length === 0) codeStart = i + 1;
     codeBuf.push(line);
   }
   flushCode();
@@ -212,5 +210,54 @@ export function reconstructFromDoc(
       out.push(...b.text.split('\n'));
     }
   }
+  return out.join('\n');
+}
+
+/**
+ * 把代码内容包进自适应围栏(围栏长度比内容里最长的反引号串至少长 1,且 ≥3)。
+ * 切分器与混合视图的活编辑器同步共用 —— 保证 parseCodeFence 能读回。
+ */
+export function wrapCodeFence(content: string, lang: string): string {
+  let maxRun = 0;
+  for (const l of content.split('\n')) {
+    const m = /^`+/.exec(l);
+    if (m) maxRun = Math.max(maxRun, m[0].length);
+  }
+  const fence = '`'.repeat(Math.max(3, maxRun + 1));
+  return `${fence}${lang}\n${content}\n${fence}`;
+}
+
+/**
+ * 虚拟文档块 → Logseq 大纲格式文本(供 parseDocument/块编辑器消费)。
+ *
+ * - 代码块:围栏文本逐字(解析器把围栏整体归为一个 raw 块,内部永不解析);
+ * - 注释块:首行作为顶层列表项(`- ` + 剥缩进行),后续行缩进 +2 空格 ——
+ *   解析器的软换行规则会把它们合并为**一个块**(appendSoftLine 会剥掉恰好
+ *   一级缩进,重建逐字无损);块内空行写成缩进空行(解析器的 indented-blank
+ *   分支保持块不闭合)。用列表项而非裸行:裸行 `# x` 会被解析器当 markdown
+ *   标题(raw heading)渲染成大字标题,不符合代码注释的块观感;列表项则
+ *   统一为普通 Logseq 块。
+ * - 块与块之间写一个空行:解析器切分 raw 区的时机是「空行 + 下一个结构行」,
+ *   且要求下一行 depth 0 —— 所以每个注释行都剥掉前导缩进后发出。
+ *   (v1 边界:注释行的原始缩进不保留,首次混合保存后归一到列 0;
+ *   代码段在围栏内逐字无损。)空行是合成分隔符,重建时不落盘。
+ */
+export function toOutlineDocText(blocks: CodeDocBlock[]): string {
+  const out: string[] = [];
+  const strip = (s: string): string => s.replace(/^[ \t]+/, '');
+  for (const b of blocks) {
+    if (b.kind === 'code') {
+      out.push(...b.text.split('\n'));
+    } else {
+      const lines = b.text.split('\n');
+      if (lines.length === 0) continue;
+      out.push('- ' + strip(lines[0]));
+      for (let k = 1; k < lines.length; k++) {
+        out.push(lines[k] === '' ? '  ' : '  ' + strip(lines[k]));
+      }
+    }
+    out.push('');
+  }
+  while (out.length > 0 && out[out.length - 1] === '') out.pop();
   return out.join('\n');
 }

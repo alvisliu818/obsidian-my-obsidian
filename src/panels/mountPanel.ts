@@ -755,6 +755,12 @@ export class MountPanelView extends ItemView {
         if (!node.isDir) {
           menu.addItem((item) =>
             item
+              .setTitle('用 Monaco 打开（纯代码）')
+              .setIcon('code' as never)
+              .onClick(() => void this.plugin.openExternalEntry(mount, node, { forceCodeEditor: true })),
+          );
+          menu.addItem((item) =>
+            item
               .setTitle('只读打开')
               .setIcon('eye' as never)
               .onClick(() => void this.plugin.openExternalEntry(mount, node, { readOnly: true })),
