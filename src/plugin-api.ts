@@ -19,10 +19,13 @@
  *
  * The shape is declared ONCE, in the repo-root `api.d.ts`, and re-exported here for the rest of `src`: that file is
  * the one a consumer copies, so it imports nothing, and a second declaration here would be a second copy to drift.
- * This module keeps only what has to exist at runtime — the contract and its version.
+ * The contract is declared once too, in the repo-root `api-contract.ts`, for the same reason; this module
+ * publishes it and keeps the contract version.
  */
 
 import type { PluginApiContract } from 'obsidian-dev-utils/obsidian/plugin/plugin-api';
+
+import { ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT } from '../api-contract.ts';
 
 export type {
   AdvancedRenameAndDeleteHandlerApi,
@@ -34,18 +37,11 @@ export type {
 } from '../api.d.ts';
 
 /**
- * The contract this plugin publishes. It declares the method names; the payloads are checked as they are
- * written, by a converter that refuses a value of the wrong type rather than storing it.
- *
- * A consumer that wants schema validation at the boundary supplies its own contract to `watchPluginApi` —
- * the consumer's contract wins when it supplies one.
+ * The contract this plugin publishes: the repo-root `api-contract.ts` constant a consumer copies, so the
+ * provider and its consumers validate against one definition. Assigning it here is also what checks that the
+ * hand-written schemas are Standard Schemas the registry accepts.
  */
-export const PLUGIN_API_CONTRACT: PluginApiContract = {
-  getSettings: {},
-  isPathIgnored: {},
-  isTreatedAsAttachment: {},
-  migrateSettings: {}
-};
+export const PLUGIN_API_CONTRACT: PluginApiContract = ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT;
 
 /**
  * The version of the contract above — independent of the plugin's own version.

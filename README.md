@@ -53,6 +53,8 @@ A copy of the vault ships with every release. You can access it via any of the f
 
 This plugin publishes an API for the plugins that used to handle renames and deletions themselves and no longer do: they propose the settings they held so a vault keeps behaving the way it did, and go on reading those settings back afterwards. Its types are in [`api.d.ts`](./api.d.ts) at the root of this repository — it imports nothing at all, so copy it into your plugin as it is.
 
+Beside it, [`api-contract.ts`](./api-contract.ts) holds the published API's contract, `ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT`: for every method, a schema over its arguments and a schema over what it returns. It is the constant this plugin publishes with the API, so copy it next to `api.d.ts` and pass it as the `contract`, and both sides check the same definition. It imports from `./api.d.ts` alone, its schemas being hand-written [Standard Schema](https://standardschema.dev) objects. (It is not named `api.ts`: TypeScript would read `api.d.ts` as that file's own declarations.)
+
 This plugin owns those settings, so it owns the dialog too: your proposal is shown next to the current values, and the user approves, edits or declines it row by row. Nothing is written unless they press OK.
 
 The API is published through the `obsidian-dev-utils` cross-plugin registry, which gives you version negotiation, a handle that is revoked when this plugin unloads, and a wait that ends when this plugin loads — rather than a lookup that returns `undefined` because it ran first. The contract version is `1.1.0` and moves independently of the plugin's own version; ask for `'^1'`.
@@ -62,10 +64,15 @@ If your plugin already uses [`obsidian-dev-utils`](https://mnaoumov.dev/obsidian
 ```ts
 import { watchPluginApi } from 'obsidian-dev-utils/obsidian/plugin/plugin-api';
 
+import type { AdvancedRenameAndDeleteHandlerApi } from './api.d.ts';
+
+import { ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT } from './api-contract.ts';
+
 const ref = watchPluginApi<AdvancedRenameAndDeleteHandlerApi>({
   apiVersionRange: '^1',
   app: this.app,
   component: this,
+  contract: ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT,
   pluginId: 'advanced-rename-and-delete-handler'
 });
 
@@ -102,6 +109,7 @@ const ref = watchPluginApi<AdvancedRenameAndDeleteHandlerApi>({
   apiVersionRange: '^1',
   app: this.app,
   component: this,
+  contract: ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT,
   pluginId: 'advanced-rename-and-delete-handler'
 });
 
