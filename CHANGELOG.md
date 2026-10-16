@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 2.2.1
+
+- refactor(demo-vault): merge importing configureCommunityPlugin from @mnaoumov/obsidian-lib
+
 ## 2.2.0
 
 - build(deps): merge moving off obsidian-dev-utils onto the @mnaoumov packages
