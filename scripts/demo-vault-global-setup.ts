@@ -1,13 +1,13 @@
 import type { PopulateFilesParams } from 'obsidian-integration-testing';
 
-import { join } from 'node:path';
-import process from 'node:process';
-import { CODE_SCRIPT_TOOLKIT_PLUGIN_ID } from 'obsidian-dev-utils/script-utils/demo-vault-buttons';
-import { getRootFolder } from 'obsidian-dev-utils/script-utils/root';
+import { CODE_SCRIPT_TOOLKIT_PLUGIN_ID } from '@mnaoumov/obsidian-dev-toolkit/demo-vault-buttons';
 import {
   getIntegrationTestPluginPopulate,
-  OBSIDIAN_DEV_UTILS_INTEGRATION_TEST_PLUGIN_ID
-} from 'obsidian-dev-utils/script-utils/test-runners/integration-test-plugin';
+  OBSIDIAN_DEV_TOOLKIT_INTEGRATION_TEST_PLUGIN_ID
+} from '@mnaoumov/obsidian-dev-toolkit/test-runners/integration-test-plugin';
+import { getRootFolder } from '@mnaoumov/typescript-dev-toolkit/root';
+import { join } from 'node:path';
+import process from 'node:process';
 import { buildDemoVaultPopulateAsync } from 'obsidian-integration-testing';
 import { createSetup } from 'obsidian-integration-testing/vitest-global-setup-plugin';
 
@@ -40,7 +40,7 @@ async function populate(): Promise<PopulateFilesParams> {
     }),
     /*
      * This project brings its own `populate`, so it composes the harness plugin in by hand rather than
-     * taking `obsidian-dev-utils/integration-test-vitest-global-setup` the way the other projects do.
+     * taking `@mnaoumov/obsidian-dev-toolkit/integration-test-vitest-global-setup` the way the other projects do.
      */
     ...getIntegrationTestPluginPopulate()
   };
@@ -50,7 +50,7 @@ async function populate(): Promise<PopulateFilesParams> {
 // before Obsidian opens, so the startup scan indexes every note in one pass. Used by
 // `integration-tests:demo-vault`.
 const { setup, teardown } = createSetup({
-  enableCommunityPlugins: [CODE_SCRIPT_TOOLKIT_PLUGIN_ID, OBSIDIAN_DEV_UTILS_INTEGRATION_TEST_PLUGIN_ID],
+  enableCommunityPlugins: [CODE_SCRIPT_TOOLKIT_PLUGIN_ID, OBSIDIAN_DEV_TOOLKIT_INTEGRATION_TEST_PLUGIN_ID],
   populate
 });
 

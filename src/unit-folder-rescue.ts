@@ -13,7 +13,7 @@ import {
   basename,
   dirname,
   join
-} from 'obsidian-dev-utils/path';
+} from '@mnaoumov/typescript-lib/path';
 
 import type { RescueDestination } from './rename-delete-handler-component.ts';
 

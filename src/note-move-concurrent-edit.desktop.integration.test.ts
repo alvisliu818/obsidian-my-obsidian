@@ -171,7 +171,7 @@ interface ObsidianDevUtilsStateLike {
 }
 
 /**
- * The slice of the `obsidian-dev-utils` cross-plugin registry a closure reads the API from: the wire-level path
+ * The slice of the `@mnaoumov/obsidian-lib` cross-plugin registry a closure reads the API from: the wire-level path
  * that library's Plugin API protocol guide freezes, so a suite reaches the plugin the way a consumer does.
  */
 interface PluginApiRegistryHostLike {

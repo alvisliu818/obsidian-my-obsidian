@@ -4,6 +4,16 @@
  * Contains utility functions for handling rename and delete events in Obsidian.
  */
 
+import type { AbortSignalComponent } from '@mnaoumov/obsidian-lib/components/abort-signal-component';
+import type { PluginNoticeComponent } from '@mnaoumov/obsidian-lib/components/plugin-notice-component';
+import type {
+  EditBacklinksSnapshotParams,
+  UpdateLinkParams,
+  UpdateLinksInFileParams
+} from '@mnaoumov/obsidian-lib/link';
+import type { LinkUpdateProgressReporter } from '@mnaoumov/obsidian-lib/link-update-progress';
+import type { ResourceLockComponent } from '@mnaoumov/obsidian-lib/resource-lock';
+import type { RescueStillUsedFileParams } from '@mnaoumov/obsidian-lib/vault-delete';
 import type {
   LinkUpdate,
   LinkUpdatesHandler
@@ -16,45 +26,18 @@ import type {
   TFile,
   TFolder
 } from 'obsidian';
-import type { AbortSignalComponent } from 'obsidian-dev-utils/obsidian/components/abort-signal-component';
-import type { PluginNoticeComponent } from 'obsidian-dev-utils/obsidian/components/plugin-notice-component';
-import type {
-  EditBacklinksSnapshotParams,
-  UpdateLinkParams,
-  UpdateLinksInFileParams
-} from 'obsidian-dev-utils/obsidian/link';
-import type { LinkUpdateProgressReporter } from 'obsidian-dev-utils/obsidian/link-update-progress';
-import type { ResourceLockComponent } from 'obsidian-dev-utils/obsidian/resource-lock';
-import type { RescueStillUsedFileParams } from 'obsidian-dev-utils/obsidian/vault-delete';
 
-/* v8 ignore start -- Deeply coupled to Obsidian runtime; requires running vault for meaningful testing. */
-import {
-  getDataAdapterEx,
-  InternalPluginName
-} from '@obsidian-typings/obsidian-public-latest/implementations';
-import {
-  FileManager,
-  Vault
-} from 'obsidian';
-import { filterInPlace } from 'obsidian-dev-utils/array';
-import { getLibDebugger } from 'obsidian-dev-utils/debug';
-import { printError } from 'obsidian-dev-utils/error';
-import {
-  normalizeOptionalProperties,
-  toJson
-} from 'obsidian-dev-utils/object-utils';
-import { getObsidianDevUtilsState } from 'obsidian-dev-utils/obsidian-dev-utils-state';
 import {
   AttachmentPathContext,
   getAttachmentFilePath,
   getAttachmentFolderPath,
   hasOwnAttachmentFolder
-} from 'obsidian-dev-utils/obsidian/attachment-path';
-import { rebasePathOntoFolder } from 'obsidian-dev-utils/obsidian/attachment-unit-folder';
-import { getCanvasReferences } from 'obsidian-dev-utils/obsidian/canvas';
-import { ComponentEx } from 'obsidian-dev-utils/obsidian/components/component-ex';
-import { MonkeyAroundComponent } from 'obsidian-dev-utils/obsidian/components/monkey-around-component';
-import { waitForPendingLinkUpdates } from 'obsidian-dev-utils/obsidian/file-manager';
+} from '@mnaoumov/obsidian-lib/attachment-path';
+import { rebasePathOntoFolder } from '@mnaoumov/obsidian-lib/attachment-unit-folder';
+import { getCanvasReferences } from '@mnaoumov/obsidian-lib/canvas';
+import { ComponentEx } from '@mnaoumov/obsidian-lib/components/component-ex';
+import { MonkeyAroundComponent } from '@mnaoumov/obsidian-lib/components/monkey-around-component';
+import { waitForPendingLinkUpdates } from '@mnaoumov/obsidian-lib/file-manager';
 import {
   CANVAS_FILE_EXTENSION,
   getFile,
@@ -65,14 +48,14 @@ import {
   isFolder,
   isMarkdownFile,
   isNote
-} from 'obsidian-dev-utils/obsidian/file-system';
+} from '@mnaoumov/obsidian-lib/file-system';
 import {
   buildBacklinksSnapshot,
   editBacklinksSnapshot,
   extractLinkFile,
   updateLink,
   updateLinksInFile
-} from 'obsidian-dev-utils/obsidian/link';
+} from '@mnaoumov/obsidian-lib/link';
 import {
   getBacklinksForFileOrPath,
   getBacklinksForFileSafe,
@@ -80,9 +63,10 @@ import {
   hasBacklinkCachePlugin,
   registerFileCacheForNonExistingFile,
   registerFiles
-} from 'obsidian-dev-utils/obsidian/metadata-cache';
-import { addToQueue } from 'obsidian-dev-utils/obsidian/queue';
-import { isResourceLockedForPathByAncestor } from 'obsidian-dev-utils/obsidian/resource-lock';
+} from '@mnaoumov/obsidian-lib/metadata-cache';
+import { getObsidianDevUtilsState } from '@mnaoumov/obsidian-lib/obsidian-dev-utils-state';
+import { addToQueue } from '@mnaoumov/obsidian-lib/queue';
+import { isResourceLockedForPathByAncestor } from '@mnaoumov/obsidian-lib/resource-lock';
 import {
   cleanupEmptyFolders,
   EmptyFolderBehavior,
@@ -90,15 +74,31 @@ import {
   isChildOrSelf,
   renameSafe,
   trashSafe
-} from 'obsidian-dev-utils/obsidian/vault';
-import { deleteIfNotUsed } from 'obsidian-dev-utils/obsidian/vault-delete';
+} from '@mnaoumov/obsidian-lib/vault';
+import { deleteIfNotUsed } from '@mnaoumov/obsidian-lib/vault-delete';
+import { filterInPlace } from '@mnaoumov/typescript-lib/array';
+import { getLibDebugger } from '@mnaoumov/typescript-lib/debug';
+import { printError } from '@mnaoumov/typescript-lib/error';
+import {
+  normalizeOptionalProperties,
+  toJson
+} from '@mnaoumov/typescript-lib/object-utils';
 import {
   basename,
   dirname,
   extname,
   join,
   relative
-} from 'obsidian-dev-utils/path';
+} from '@mnaoumov/typescript-lib/path';
+/* v8 ignore start -- Deeply coupled to Obsidian runtime; requires running vault for meaningful testing. */
+import {
+  getDataAdapterEx,
+  InternalPluginName
+} from '@obsidian-typings/obsidian-public-latest/implementations';
+import {
+  FileManager,
+  Vault
+} from 'obsidian';
 
 import type { UnitFolderMove } from './unit-folder-rescue.ts';
 
@@ -2113,4 +2113,4 @@ async function rescueStillUsedUnitFolders(params: RescueStillUsedUnitFoldersPara
 
 /* v8 ignore stop */
 
-export { EmptyFolderBehavior } from 'obsidian-dev-utils/obsidian/vault';
+export { EmptyFolderBehavior } from '@mnaoumov/obsidian-lib/vault';

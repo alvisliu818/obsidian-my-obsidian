@@ -1,7 +1,7 @@
-import type { ObsidianPluginVitestConfigContext } from 'obsidian-dev-utils/script-utils/test-runners/vitest-config';
+import type { ObsidianPluginVitestConfigContext } from '@mnaoumov/obsidian-dev-toolkit/test-runners/vitest-config';
 import type { TestProjectConfiguration } from 'vitest/config';
 
-import { defineObsidianPluginVitestConfig } from 'obsidian-dev-utils/script-utils/test-runners/vitest-config';
+import { defineObsidianPluginVitestConfig } from '@mnaoumov/obsidian-dev-toolkit/test-runners/vitest-config';
 
 /**
  * The screenshot-capture suites that write
@@ -59,7 +59,7 @@ const SCREENSHOT_AVD_NAME = 'obsidian_screenshots';
  * public release out of the listing. It moves when Obsidian ships, which is a drift worth having — unlike
  * the harness's provisioning, it moves with the audience.
  *
- * This deliberately overrides the `OBSIDIAN_VERSION` escape hatch `obsidian-dev-utils` honours on
+ * This deliberately overrides the `OBSIDIAN_VERSION` escape hatch `@mnaoumov/obsidian-dev-toolkit` honours on
  * `integration-tests:desktop`, for the capture project only. A capture is not a test run, and a listing
  * photographed against an arbitrary version is the defect above.
  *
@@ -122,7 +122,7 @@ const DEMO_VAULT_TIMEOUT_IN_MILLISECONDS = 600_000;
  * which moved thirty attachments and waited for the rewrite inside one call — and they each declared
  * 240 000 ms, i.e. exactly this number, so even raised it bounded nothing. They wait in Node now, one short
  * `pollInObsidian` `poll` at a time, and every closure in this repo is sized under the transport's 30s
- * DEFAULT rather than under this. That is what `obsidian-dev-utils/no-over-cap-wait-in-eval-in-obsidian`
+ * DEFAULT rather than under this. That is what `obsidian-dev-toolkit/no-over-cap-wait-in-eval-in-obsidian`
  * enforces — at the default cap, with no per-project override — so a budget written against this number
  * would be red there, and would mean nothing on the Android and performance projects, which do not raise it.
  */
@@ -180,7 +180,7 @@ export const config = defineObsidianPluginVitestConfig({
   },
 
   /*
-   * Seeds `obsidian-dev-utils`' integration-test harness plugin alongside the plugin under test, so an
+   * Seeds `@mnaoumov/obsidian-dev-toolkit`'s integration-test harness plugin alongside the plugin under test, so an
    * `evalInObsidian` closure reaches the whole library surface as `lib.<helper>` — `lib.lockResourceForPath`
    * and `lib.flushQueue` among them, which the suppression suites need to stage a foreign locked
    * transaction and to drain the handler's queue. Without it `lib` carries only the harness's own helpers.
@@ -200,10 +200,10 @@ export const config = defineObsidianPluginVitestConfig({
     context.coverageExclude.push(INTEGRATION_HELPER_FILES);
 
     for (const project of [context.android, context.desktop, context.desktopPerformance]) {
-      project.globalSetup = ['obsidian-dev-utils/integration-test-vitest-global-setup'];
+      project.globalSetup = ['@mnaoumov/obsidian-dev-toolkit/integration-test-vitest-global-setup'];
       project.setupFiles = [
         'obsidian-integration-testing/vitest-setup',
-        'obsidian-dev-utils/integration-test-setup'
+        '@mnaoumov/obsidian-dev-toolkit/integration-test-setup'
       ];
     }
 

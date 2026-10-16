@@ -1,9 +1,9 @@
+import type { PluginGateComponent } from '@mnaoumov/obsidian-lib/components/plugin-gate-component';
+import type { PluginSettingsTabBaseConstructorParams } from '@mnaoumov/obsidian-lib/plugin/plugin-settings-tab';
 import type { SettingDefinitionItem } from 'obsidian';
-import type { PluginGateComponent } from 'obsidian-dev-utils/obsidian/components/plugin-gate-component';
-import type { PluginSettingsTabBaseConstructorParams } from 'obsidian-dev-utils/obsidian/plugin/plugin-settings-tab';
 
-import { appendCodeBlock } from 'obsidian-dev-utils/obsidian/html-element';
-import { PluginSettingsTabBase } from 'obsidian-dev-utils/obsidian/plugin/plugin-settings-tab';
+import { appendCodeBlock } from '@mnaoumov/obsidian-lib/html-element';
+import { PluginSettingsTabBase } from '@mnaoumov/obsidian-lib/plugin/plugin-settings-tab';
 
 import type { PluginDependentsComponent } from './plugin-dependents-component.ts';
 import type { PluginSettings } from './plugin-settings.ts';

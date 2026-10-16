@@ -12,7 +12,7 @@ import type { App } from 'obsidian';
 import {
   noop,
   noopAsync
-} from 'obsidian-dev-utils/function';
+} from '@mnaoumov/typescript-lib/function';
 
 import type {
   AdvancedRenameAndDeleteHandlerApi,
@@ -117,7 +117,7 @@ export class PluginApiImpl implements AdvancedRenameAndDeleteHandlerApi {
    * @param params - The proposal.
    * @returns What the user approved.
    */
-  // eslint-disable-next-line obsidian-dev-utils/params-options-name-match -- The type is the published contract's, shared with the interface this class implements; renaming it per class+method would rename it in every consumer.
+  // eslint-disable-next-line typescript-dev-toolkit/params-options-name-match -- The type is the published contract's, shared with the interface this class implements; renaming it per class+method would rename it in every consumer.
   public async migrateSettings(migrateSettingsParams: MigrateSettingsParams): Promise<MigrateSettingsResult> {
     const previousMigrations = this.queuedMigrations;
     let releaseQueue: () => void = noop;
@@ -138,7 +138,7 @@ export class PluginApiImpl implements AdvancedRenameAndDeleteHandlerApi {
     return this.app.plugins.manifests[sourcePluginId]?.name ?? sourcePluginId;
   }
 
-  // eslint-disable-next-line obsidian-dev-utils/params-options-name-match -- Same published contract type, one call deeper.
+  // eslint-disable-next-line typescript-dev-toolkit/params-options-name-match -- Same published contract type, one call deeper.
   private async migrateSettingsWithoutQueueing(migrateSettingsParams: MigrateSettingsParams): Promise<MigrateSettingsResult> {
     const rows = buildSettingsMigrationRows({
       currentSettings: this.pluginSettingsComponent.settings,

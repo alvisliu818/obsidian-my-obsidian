@@ -8,9 +8,15 @@
  * and a single row is declined by resetting it to the current value rather than by cancelling everything.
  */
 
+import type { PromiseResolve } from '@mnaoumov/typescript-lib/async';
 import type { App } from 'obsidian';
-import type { PromiseResolve } from 'obsidian-dev-utils/async';
 
+import { appendCodeBlock } from '@mnaoumov/obsidian-lib/html-element';
+import {
+  ModalBase,
+  showModal
+} from '@mnaoumov/obsidian-lib/modals/modal';
+import { assertNever } from '@mnaoumov/typescript-lib/type-guards';
 import {
   ButtonComponent,
   DropdownComponent,
@@ -19,12 +25,6 @@ import {
   TextAreaComponent,
   ToggleComponent
 } from 'obsidian';
-import { appendCodeBlock } from 'obsidian-dev-utils/obsidian/html-element';
-import {
-  ModalBase,
-  showModal
-} from 'obsidian-dev-utils/obsidian/modals/modal';
-import { assertNever } from 'obsidian-dev-utils/type-guards';
 
 import type {
   MigratableSettingValue,

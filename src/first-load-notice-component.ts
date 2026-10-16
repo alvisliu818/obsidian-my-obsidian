@@ -14,10 +14,10 @@
  * tells both. Then it writes the file, which is what makes "once" true: the next load finds settings to read.
  */
 
+import type { PluginNoticeComponent } from '@mnaoumov/obsidian-lib/components/plugin-notice-component';
 import type { App } from 'obsidian';
-import type { PluginNoticeComponent } from 'obsidian-dev-utils/obsidian/components/plugin-notice-component';
 
-import { ComponentEx } from 'obsidian-dev-utils/obsidian/components/component-ex';
+import { ComponentEx } from '@mnaoumov/obsidian-lib/components/component-ex';
 
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';
 

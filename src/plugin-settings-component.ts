@@ -1,13 +1,13 @@
+import type { DataHandler } from '@mnaoumov/obsidian-lib/data-handler';
+import type { PathOrAbstractFile } from '@mnaoumov/obsidian-lib/file-system';
+import type { PluginEventSource } from '@mnaoumov/obsidian-lib/plugin/plugin-event-source';
 import type { App } from 'obsidian';
-import type { DataHandler } from 'obsidian-dev-utils/obsidian/data-handler';
-import type { PathOrAbstractFile } from 'obsidian-dev-utils/obsidian/file-system';
-import type { PluginEventSource } from 'obsidian-dev-utils/obsidian/plugin/plugin-event-source';
 
-import { PluginSettingsComponentBase } from 'obsidian-dev-utils/obsidian/components/plugin-settings-component';
+import { PluginSettingsComponentBase } from '@mnaoumov/obsidian-lib/components/plugin-settings-component';
 import {
   isNote,
   isTreatedAsAttachment
-} from 'obsidian-dev-utils/obsidian/file-system';
+} from '@mnaoumov/obsidian-lib/file-system';
 
 import { PluginSettings } from './plugin-settings.ts';
 

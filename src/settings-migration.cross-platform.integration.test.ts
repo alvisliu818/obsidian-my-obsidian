@@ -20,7 +20,7 @@ import {
  *
  * Driven through the plugin's own `api` field — the fallback path a consumer takes when it cannot depend on
  * a library version new enough to have the registry. `lib.watchPluginApi` is reachable now that
- * `scripts/vitest-config.ts` seeds the `obsidian-dev-utils` integration-test harness plugin, but this test
+ * `scripts/vitest-config.ts` seeds the `@mnaoumov/obsidian-dev-toolkit` integration-test harness plugin, but this test
  * deliberately stays on the fallback field: it is the only end-to-end coverage the fallback has, and the
  * registry path is covered by unit tests.
  *
@@ -63,7 +63,7 @@ interface ObsidianDevUtilsStateLike {
 }
 
 /**
- * The slice of the `obsidian-dev-utils` cross-plugin registry a closure reads the API from: the wire-level path
+ * The slice of the `@mnaoumov/obsidian-lib` cross-plugin registry a closure reads the API from: the wire-level path
  * that library's Plugin API protocol guide freezes, so a suite reaches the plugin the way a consumer does.
  */
 interface PluginApiRegistryHostLike {

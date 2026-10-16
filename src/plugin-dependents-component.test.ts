@@ -1,10 +1,10 @@
+import type { PluginLifecycleEventPayload } from '@mnaoumov/obsidian-lib/plugin/plugin-lifecycle-events';
 import type { App as AppOriginal } from 'obsidian';
-import type { PluginLifecycleEventPayload } from 'obsidian-dev-utils/obsidian/plugin/plugin-lifecycle-events';
 
 import {
   PLUGIN_LOADED_EVENT_NAME,
   PLUGIN_UNLOADED_EVENT_NAME
-} from 'obsidian-dev-utils/obsidian/plugin/plugin-lifecycle-events';
+} from '@mnaoumov/obsidian-lib/plugin/plugin-lifecycle-events';
 import { App } from 'obsidian-test-mocks/obsidian';
 import {
   beforeEach,

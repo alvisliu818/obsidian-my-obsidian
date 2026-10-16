@@ -1,10 +1,10 @@
+import type { DataHandler } from '@mnaoumov/obsidian-lib/data-handler';
+import type { PluginEventSource } from '@mnaoumov/obsidian-lib/plugin/plugin-event-source';
 import type { App as AppOriginal } from 'obsidian';
-import type { DataHandler } from 'obsidian-dev-utils/obsidian/data-handler';
-import type { PluginEventSource } from 'obsidian-dev-utils/obsidian/plugin/plugin-event-source';
 import type { Mock } from 'vitest';
 
-import { noopAsync } from 'obsidian-dev-utils/function';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+import { noopAsync } from '@mnaoumov/typescript-lib/function';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import { App } from 'obsidian-test-mocks/obsidian';
 import {
   beforeEach,

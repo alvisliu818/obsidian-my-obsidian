@@ -1,18 +1,18 @@
 import type {
+  PluginConflict,
+  PluginGateComponent
+} from '@mnaoumov/obsidian-lib/components/plugin-gate-component';
+import type { PluginApiDeclaration } from '@mnaoumov/obsidian-lib/plugin/plugin-api';
+import type {
   App,
   PluginManifest
 } from 'obsidian';
-import type {
-  PluginConflict,
-  PluginGateComponent
-} from 'obsidian-dev-utils/obsidian/components/plugin-gate-component';
-import type { PluginApiDeclaration } from 'obsidian-dev-utils/obsidian/plugin/plugin-api';
 
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { PluginConflictSeverity } from 'obsidian-dev-utils/obsidian/components/plugin-gate-component';
-import { PluginSettingsTabComponent } from 'obsidian-dev-utils/obsidian/components/plugin-settings-tab-component';
-import { watchPluginApi } from 'obsidian-dev-utils/obsidian/plugin/plugin-api';
-import { ensureNonNullable } from 'obsidian-dev-utils/type-guards';
+import { PluginConflictSeverity } from '@mnaoumov/obsidian-lib/components/plugin-gate-component';
+import { PluginSettingsTabComponent } from '@mnaoumov/obsidian-lib/components/plugin-settings-tab-component';
+import { watchPluginApi } from '@mnaoumov/obsidian-lib/plugin/plugin-api';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { ensureNonNullable } from '@mnaoumov/typescript-lib/type-guards';
 import { App as AppCls } from 'obsidian-test-mocks/obsidian';
 import {
   beforeEach,
@@ -82,7 +82,7 @@ const { renameDeleteHandlerStub } = vi.hoisted(() => ({
 vi.mock('./plugin-settings-component.ts', async () => {
   const { Component } = await vi.importActual<ComponentModuleActual>('obsidian');
   const { PluginSettings } = await vi.importActual<typeof import('./plugin-settings.ts')>('./plugin-settings.ts');
-  const { noopAsync } = await vi.importActual<typeof import('obsidian-dev-utils/function')>('obsidian-dev-utils/function');
+  const { noopAsync } = await vi.importActual<typeof import('@mnaoumov/typescript-lib/function')>('@mnaoumov/typescript-lib/function');
   class PluginSettingsComponent extends Component {
     public settings = new PluginSettings();
 

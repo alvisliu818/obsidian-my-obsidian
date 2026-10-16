@@ -17,7 +17,7 @@
  * no suffix can tell them apart — so they end up on the full path and read identically, which is true.
  */
 
-import { basename } from 'obsidian-dev-utils/path';
+import { basename } from '@mnaoumov/typescript-lib/path';
 
 // The shortest grown label is the basename plus the folder above it: a one-segment suffix IS the basename that collided.
 const MIN_DISTINGUISHING_SEGMENT_COUNT = 2;

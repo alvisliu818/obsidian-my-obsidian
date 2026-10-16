@@ -1,12 +1,15 @@
 import type {
   App as AppOriginal,
+  Plugin,
   TFile
 } from 'obsidian';
-import type { GetAvailablePathForAttachmentsFunctionExtended } from 'obsidian-dev-utils/obsidian/attachment-path';
 
-import { NoPriorityWinnerReason } from 'obsidian-dev-utils/obsidian/note-priority';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+import { NoPriorityWinnerReason } from '@mnaoumov/obsidian-lib/note-priority';
+import { publishPluginApi } from '@mnaoumov/obsidian-lib/plugin/plugin-api';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
+import { Component } from 'obsidian';
 import {
+  afterEach,
   beforeEach,
   describe,
   expect,
@@ -34,22 +37,36 @@ interface CreateResolverOptions {
   readonly settings?: Partial<PluginSettings>;
 
   /**
-   * The folders an attachment-location plugin has designated as attachment units, published on the vault.
-   * Omitted means no plugin published a designation, which is what a plain vault answers.
+   * The folders `Custom Attachment Location` designates as attachment units, published through its plugin API.
+   * Omitted means no such API is published, which is what a vault without that plugin answers.
    */
   readonly unitFolderPaths?: readonly string[];
 }
 
+/**
+ * The question @mnaoumov/obsidian-lib puts to Custom Attachment Location's `isAttachmentUnitFolder`.
+ */
+interface IsAttachmentUnitFolderParamsLike {
+  readonly folderPath: string;
+}
+
 const ATTACHMENT_PATH = 'attachments/image.png';
 const ATTACHMENT_FOLDER_PATH = 'Notes/attachments';
+
+const CUSTOM_ATTACHMENT_LOCATION_PLUGIN_ID = 'obsidian-custom-attachment-location';
+
+/**
+ * Owns every API record a test publishes; unloading it revokes them, so no record leaks into the next test.
+ */
+let publishedApis = new Component();
 
 const { mockGetAttachmentFolderPath, mockShowRescueAmbiguityModal } = vi.hoisted(() => ({
   mockGetAttachmentFolderPath: vi.fn(),
   mockShowRescueAmbiguityModal: vi.fn()
 }));
 
-vi.mock('obsidian-dev-utils/obsidian/attachment-path', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('obsidian-dev-utils/obsidian/attachment-path')>();
+vi.mock('@mnaoumov/obsidian-lib/attachment-path', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@mnaoumov/obsidian-lib/attachment-path')>();
   return {
     ...actual,
     getAttachmentFolderPath: mockGetAttachmentFolderPath
@@ -67,6 +84,11 @@ beforeEach(() => {
   mockShowRescueAmbiguityModal.mockResolvedValue({ adoptingNotePath: null, shouldUseSameActionForRest: false });
 });
 
+afterEach(() => {
+  publishedApis.unload();
+  publishedApis = new Component();
+});
+
 function createResolver(options: CreateResolverOptions = {}): RescuePathResolver {
   const settings = Object.assign(new PluginSettings(), options.settings);
   const attachmentFile = options.attachmentFile === undefined
@@ -82,22 +104,22 @@ function createResolver(options: CreateResolverOptions = {}): RescuePathResolver
       getFileCache: vi.fn().mockReturnValue(options.hasNoFileCache ? null : { frontmatter: options.frontmatter ?? null })
     }),
     vault: strictProxy<AppOriginal['vault']>({
-      /*
-       * Present but bare unless the test says otherwise: a vault with no attachment-location plugin still
-       * has this method, it simply carries no designation, and that is the answer the resolver falls back
-       * on.
-       */
-      getAvailablePathForAttachments: Object.assign(
-        vi.fn(),
-        options.unitFolderPaths
-          ? {
-            checkIsAttachmentUnitFolder: (folderPath: string): boolean => options.unitFolderPaths?.includes(folderPath) ?? false
-          } satisfies Pick<Required<GetAvailablePathForAttachmentsFunctionExtended>, 'checkIsAttachmentUnitFolder'>
-          : {}
-      ),
       getFileByPath: vi.fn((path: string) => path === ATTACHMENT_PATH ? attachmentFile : noteFiles.get(path) ?? null)
     })
   });
+
+  const { unitFolderPaths } = options;
+  if (unitFolderPaths) {
+    publishPluginApi({
+      api: {
+        getAvailablePathForAttachments: vi.fn(),
+        isAttachmentUnitFolder: ({ folderPath }: IsAttachmentUnitFolderParamsLike): boolean => unitFolderPaths.includes(folderPath)
+      },
+      apiVersion: '1.3.0',
+      component: publishedApis,
+      plugin: strictProxy<Plugin>({ manifest: strictProxy<Plugin['manifest']>({ id: CUSTOM_ATTACHMENT_LOCATION_PLUGIN_ID }) })
+    });
+  }
 
   return new RescuePathResolver({
     app,
