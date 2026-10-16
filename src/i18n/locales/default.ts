@@ -141,8 +141,8 @@ export const defaultTranslations = {
   },
   pluginDependency: {
     advancedRenameAndDeleteHandler: {
-      reason: 'Custom Attachment Location no longer handles renames and deletions itself.'
-        + ' Advanced Rename and Delete Handler does: it moves a note\'s attachments with the note and cleans up after'
+      reason: '{{pluginName}} no longer handles renames and deletions itself.'
+        + ' {{dependencyPluginName}} does: it moves a note\'s attachments with the note and cleans up after'
         + ' a deleted one, and it holds the settings this plugin\'s commands read, such as which paths to skip.'
     }
   },
