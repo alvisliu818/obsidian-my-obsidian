@@ -129,7 +129,7 @@ const isUnitFolder = apiRef.value?.isAttachmentUnitFolder({ folderPath: 'Notes/p
 
 `getAvailablePathForAttachments` is this plugin's full resolver, with the options `Vault.getAvailablePathForAttachments` cannot express: the note's old path during a rename, the attachment's bytes for a template that hashes them, and whether to keep the file name or skip the duplicate check. Its params are the same fields as `@mnaoumov/obsidian-lib`'s `GetAvailablePathForAttachmentsExtendedFunctionParams`. It acts for the caller, so a `{{prompt}}` token may ask the user. `isAttachmentUnitFolder` says whether the user designated a folder whose whole hierarchy travels as one attachment, and is synchronous.
 
-Both replace the `extended` and `checkIsAttachmentUnitFolder` members this plugin grafts onto `app.vault.getAvailablePathForAttachments`. Those still work, but are superseded and will be removed in a major release.
+Both replace the `extended` and `checkIsAttachmentUnitFolder` members this plugin used to graft onto `app.vault.getAvailablePathForAttachments`. Those were removed in 15.0.0.
 
 ### Handing collect settings over
 

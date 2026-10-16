@@ -1,7 +1,3 @@
-import type {
-  AttachmentPathContext,
-  GetAvailablePathForAttachmentsExtendedFunctionParams
-} from '@mnaoumov/obsidian-lib/attachment-path';
 import type { TFile } from 'obsidian';
 
 import {
@@ -15,7 +11,10 @@ import {
   it
 } from 'vitest';
 
-import type { GetAvailablePathForAttachmentsFunctionExtended } from './patches/vault-get-available-path-for-attachments-patch-component.ts';
+import type {
+  CustomAttachmentLocationApi,
+  GetAvailablePathForAttachmentsParams
+} from './plugin-api.ts';
 
 import {
   FAT_NOTE_LINK_COUNT,
@@ -34,7 +33,8 @@ import {
  * (`consistent-attachments-and-links`) calls the dev-utils core
  * `getAttachmentFilePath` once per attachment link per file; that core reads the WHOLE
  * binary of each attachment (`await app.vault.readBinary(...)`) before dispatching to this
- * plugin's patched `Vault.getAvailablePathForAttachments.extended` handler. This test
+ * plugin's resolver, which it reaches through the plugin API's `getAvailablePathForAttachments`
+ * (the `Vault.getAvailablePathForAttachments.extended` graft until 15.0.0). This test
  * reproduces that exact call shape against a pre-populated real vault and decomposes the
  * per-call cost into (a) the binary read and (b) the handler, proving the read — wasted for
  * the default templates, which reference no attachment-content token — is the dominant,
@@ -42,8 +42,6 @@ import {
  */
 
 const PLUGIN_ID = 'obsidian-custom-attachment-location';
-// The literal context string `consistent-attachments-and-links` passes (files-handler.ts).
-const CONSUMER_CONTEXT = 'consistent-attachments-and-links';
 const INDEX_WAIT_IN_MS = 180_000;
 const INDEX_POLL_IN_MS = 2000;
 const SETTLE_DELAY_IN_MS = 5000;
@@ -96,7 +94,6 @@ describe('Attachment-path bottleneck', () => {
     const result = await evalInObsidian({
       async callback({
         app,
-        CONSUMER_CONTEXT: consumerContext,
         FAT_NOTE_PATH: fatNotePath,
         fatAttachmentPaths: fatAttachments,
         HANDLER_ITERATIONS: handlerIterations,
@@ -123,14 +120,37 @@ describe('Attachment-path bottleneck', () => {
           return { ...EMPTY_RESULT, error: 'Plugin not loaded' };
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-assignment -- The closure runs inside Obsidian, where the enum value cannot be imported; the resolver treats the context as an opaque string.
-        const context = consumerContext as AttachmentPathContext;
-        const extendedFunction = (app.vault.getAvailablePathForAttachments as Partial<GetAvailablePathForAttachmentsFunctionExtended>).extended;
-        if (!extendedFunction) {
-          return { ...EMPTY_RESULT, error: 'Patched getAvailablePathForAttachments.extended is not installed' };
+        interface ApiRecord {
+          readonly api: unknown;
+          readonly isRevoked: boolean;
         }
-        // Bind the narrowed (non-undefined) handler so the hoisted timing helpers can invoke it.
-        const invokeExtended = extendedFunction;
+
+        interface ObsidianDevUtilsWrapper {
+          readonly __obsidianDevUtils: ObsidianDevUtilsState;
+        }
+
+        interface ObsidianDevUtilsState {
+          readonly pluginApiRegistry?: RegistryWrapper;
+        }
+
+        interface RegistryWrapper {
+          readonly value?: RegistryValue;
+        }
+
+        interface RegistryValue {
+          readonly records?: Record<string, ApiRecord[]>;
+        }
+
+        const api = (window as Partial<ObsidianDevUtilsWrapper>).__obsidianDevUtils?.pluginApiRegistry?.value?.records?.[pluginId]
+          ?.find((candidate) => !candidate.isRevoked)?.api as CustomAttachmentLocationApi | undefined;
+        if (!api) {
+          return { ...EMPTY_RESULT, error: 'The plugin API is not published' };
+        }
+        // Bind the narrowed (defined) API so the hoisted timing helpers can invoke it.
+        const publishedApi = api;
+        async function invokeExtended(params: GetAvailablePathForAttachmentsParams): Promise<string> {
+          return await publishedApi.getAvailablePathForAttachments(params);
+        }
 
         const fileCount = app.vault.getFiles().length;
         // Let the metadata cache resolve the embeds so the handler's link walk is realistic.
@@ -193,12 +213,12 @@ describe('Attachment-path bottleneck', () => {
           return !noteFile || !attachmentFile ? null : { attachmentFile, noteFile };
         }
 
-        function buildParams(noteFile: TFile, attachmentFile: TFile, content: ArrayBuffer | undefined): GetAvailablePathForAttachmentsExtendedFunctionParams {
+        function buildParams(noteFile: TFile, attachmentFile: TFile, content: ArrayBuffer | undefined): GetAvailablePathForAttachmentsParams {
           return {
             attachmentFileBaseName: attachmentFile.basename,
             attachmentFileExtension: attachmentFile.extension,
             attachmentFileStats: attachmentFile.stat,
-            context,
+            context: 'Unknown',
             notePathOrFile: noteFile.path,
             oldAttachmentPathOrFile: attachmentFile.path,
             readAttachmentFileContent: content ? (): Promise<ArrayBuffer> => Promise.resolve(content) : null,
@@ -241,7 +261,6 @@ describe('Attachment-path bottleneck', () => {
         }
       },
       input: {
-        CONSUMER_CONTEXT,
         FAT_NOTE_PATH,
         fatAttachmentPaths,
         HANDLER_ITERATIONS,

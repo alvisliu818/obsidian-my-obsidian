@@ -16,8 +16,9 @@ import {
  * plugin. `renamedAttachmentFileName` ships empty, so the resolver fell back to
  * `generatedAttachmentFileName`, and a `{{prompt}}` there opened a modal.
  *
- * This drives `vault.getAvailablePathForAttachments.extended` directly, which is exactly the surface
- * dev-utils' `getAttachmentFilePath` reaches and therefore exactly what `Advanced Note Composer` calls.
+ * This drives the plugin API's `getAvailablePathForAttachments` directly, which is exactly the surface
+ * `@mnaoumov/obsidian-lib`'s `getAttachmentFilePath` reaches and therefore exactly what `Advanced Note Composer`
+ * calls.
  * Going through the resolver rather than `app.fileManager.renameFile` is deliberate: renameFile stalls
  * on `metadataCache.onCleanCache` in the shared-instance aggregate (the documented headless wall that
  * forces the rename suites to `it.skip`), and it is not what this fix is about. The defect lives in
@@ -39,8 +40,29 @@ describe('Programmatic RenameNote resolution (Advanced Note Composer issue #259)
   it('keeps the attachment file name and opens no prompt, with attachment renaming off and on', async () => {
     const result = await evalInObsidian({
       async callback({ app }): Promise<ProgrammaticRenameResult> {
+        interface ApiRecord {
+          readonly api: unknown;
+          readonly isRevoked: boolean;
+        }
+
         interface ExtendedResolver {
-          extended: (params: ResolveParams) => Promise<string>;
+          getAvailablePathForAttachments: (params: ResolveParams) => Promise<string>;
+        }
+
+        interface ObsidianDevUtilsWrapper {
+          readonly __obsidianDevUtils: ObsidianDevUtilsState;
+        }
+
+        interface ObsidianDevUtilsState {
+          readonly pluginApiRegistry?: RegistryWrapper;
+        }
+
+        interface RegistryWrapper {
+          readonly value?: RegistryValue;
+        }
+
+        interface RegistryValue {
+          readonly records?: Record<string, ApiRecord[]>;
         }
 
         interface RenameNoteSettings {
@@ -89,10 +111,9 @@ describe('Programmatic RenameNote resolution (Advanced Note Composer issue #259)
         };
 
         function hasExtendedResolver(value: unknown): value is ExtendedResolver {
-          // Read the property before the `typeof value === 'function'` check narrows `value` to
-          // `Function`, which carries no index signature to read `extended` off.
           const record = value as null | Record<string, unknown>;
-          return typeof value === 'function' && typeof record?.['extended'] === 'function';
+          return typeof value === 'object' && record !== null
+            && typeof record['getAvailablePathForAttachments'] === 'function';
         }
 
         function isRenameNoteSettings(value: unknown): value is RenameNoteSettings {
@@ -151,7 +172,8 @@ describe('Programmatic RenameNote resolution (Advanced Note Composer issue #259)
 
         const settings = findInPluginTree((record) => isRenameNoteSettings(record['settings']) ? record['settings'] : null);
         const foundHolder = findInPluginTree((record) => isHandedOverSettingsHolder(record) ? record : null);
-        const resolver: unknown = app.vault.getAvailablePathForAttachments;
+        const resolver: unknown = (window as Partial<ObsidianDevUtilsWrapper>).__obsidianDevUtils?.pluginApiRegistry?.value
+          ?.records?.['obsidian-custom-attachment-location']?.find((candidate) => !candidate.isRevoked)?.api;
         if (!settings || !foundHolder || !hasExtendedResolver(resolver)) {
           return { ...EMPTY_RESULT, probesFound: false };
         }
@@ -230,7 +252,7 @@ describe('Programmatic RenameNote resolution (Advanced Note Composer issue #259)
 
         async function resolve(): Promise<string> {
           try {
-            return await extendedResolver.extended({
+            return await extendedResolver.getAvailablePathForAttachments({
               attachmentFileBaseName: `pic-${stamp}`,
               attachmentFileExtension: 'png',
               // `AttachmentPathContext.RenameNote` — the enum is not importable inside this callback.

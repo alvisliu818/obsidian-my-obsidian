@@ -151,8 +151,8 @@ export class PluginApiImpl implements CustomAttachmentLocationApi {
   /**
    * The full path this plugin's resolver gives an attachment.
    *
-   * The same resolver the `getAvailablePathForAttachments` patch grafts on as `extended`, so a consumer that
-   * moves from the graft to this member gets the same answer.
+   * The same resolver the `getAvailablePathForAttachments` patch delegates to, and the replacement for the
+   * `extended` member that patch grafted on until 15.0.0.
    *
    * @param params - The attachment, the note, and what to skip.
    * @returns The attachment's path.

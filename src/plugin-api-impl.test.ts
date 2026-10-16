@@ -243,7 +243,7 @@ describe('PluginApiImpl', () => {
       await expect(pluginApi.getAvailablePathForAttachments({ ...PARAMS, context: 'Unknown' })).resolves.toBe('Attachments/Alpha/image.png');
     });
 
-    it('should hand every option to the resolver the graft exposes', async () => {
+    it('should hand every option to the plugin resolver', async () => {
       await pluginApi.getAvailablePathForAttachments({ ...PARAMS, context: 'Unknown' });
 
       expect(getAvailablePathForAttachments).toHaveBeenCalledWith({ ...PARAMS, context: AttachmentPathContext.Unknown });
