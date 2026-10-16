@@ -1,7 +1,7 @@
 /**
  * @file
  *
- * Everything this plugin knows about Advanced Rename and Delete Handler, which owns rename/delete handling
+ * Everything this plugin knows about `Advanced Rename and Delete Handler`, which owns rename/delete handling
  * since this plugin's 12.0.0.
  *
  * Three things need it, so it is written once: the suggestion banner that offers to install it, the
@@ -19,7 +19,7 @@ import type { SettingsMigrationApi } from 'obsidian-dev-utils/obsidian/plugin/se
 import { EmptyFolderBehavior } from 'obsidian-dev-utils/obsidian/vault';
 
 /**
- * Advanced Rename and Delete Handler's public API, as this plugin compiles against it.
+ * `Advanced Rename and Delete Handler`'s public API, as this plugin compiles against it.
  *
  * It publishes contract version `1.1.0`, so consumers ask for `^1`. The reads are SYNCHRONOUS by design:
  * this plugin calls them from `checkCallback(isChecking): boolean`, from settings-row `disabled` predicates,
@@ -62,7 +62,7 @@ export interface AdvancedRenameAndDeleteHandlerApi extends SettingsMigrationApi<
 }
 
 /**
- * The settings Advanced Rename and Delete Handler owns and this plugin reads back.
+ * The settings `Advanced Rename and Delete Handler` owns and this plugin reads back.
  */
 export interface HandedOverSettings {
   /**
@@ -135,7 +135,7 @@ export const ADVANCED_RENAME_AND_DELETE_HANDLER_MIGRATION_API_CONTRACT: PluginAp
 /**
  * What the READ-BACK needs — the three members contract `1.1.0` added.
  *
- * This is load-bearing rather than decorative. Advanced Rename and Delete Handler `1.1.1` publishes
+ * This is load-bearing rather than decorative. `Advanced Rename and Delete Handler` `1.1.1` publishes
  * contract `1.0.0`, whose own contract declares only `migrateSettings` — so it satisfies `^1` and passes a
  * shape check made against the PROVIDER's contract. Without this one, a user on that released version would
  * be handed an API with no `getSettings` and every read would throw. With it, the record fails the shape
@@ -149,7 +149,7 @@ export const ADVANCED_RENAME_AND_DELETE_HANDLER_READ_BACK_API_CONTRACT: PluginAp
 };
 
 /**
- * What this plugin uses while Advanced Rename and Delete Handler's API is not in hand.
+ * What this plugin uses while `Advanced Rename and Delete Handler`'s API is not in hand.
  *
  * Rarely reached now that the other plugin is a declared dependency: this plugin's commands, patches and
  * handlers do not load at all until the dependency gate has seen its API. What is left is the gap the gate

@@ -70,7 +70,7 @@ describe('Delete unused attachments in entire vault, attachment unit folders (is
         }
 
         /*
-         * `treatAsAttachmentExtensions` belongs to Advanced Rename and Delete Handler since 12.0.0, and
+         * `treatAsAttachmentExtensions` belongs to `Advanced Rename and Delete Handler` since 12.0.0, and
          * this plugin no longer reads the array — it asks `isTreatedAsAttachment(path)`. Writing the array
          * onto this plugin's settings therefore pins nothing, and would have LOOKED like it worked because
          * the absent-provider default holds `.excalidraw.md` anyway. What this test needs is the

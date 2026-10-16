@@ -54,7 +54,7 @@ describe('An unambiguous collect stays quiet when the winning note already holds
         }
 
         /*
-         * `notePriorities` belongs to Advanced Rename and Delete Handler since 12.0.0, and this plugin
+         * `notePriorities` belongs to `Advanced Rename and Delete Handler` since 12.0.0, and this plugin
          * reads it back through that plugin's API. So the ranking is no longer writable here - the
          * PROVIDER is what this stubs, by parking one on the read-back component's live ref. That
          * exercises the real read path (`apiRef.value.getSettings()`) without needing the other plugin

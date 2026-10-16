@@ -4,7 +4,7 @@ Changing your location or naming pattern only affects *new* attachments. To brin
 
 ## Commands
 
-Open the Command Palette (`Ctrl`/`Cmd` + `P`) and search for *Custom Attachment Location*:
+Open the Command Palette (`Ctrl`/`Cmd` + `P`) and search for *`Custom Attachment Location`*:
 
 - **Collect attachments in current note**
   - reorganizes only the attachments used by the active note.
@@ -103,7 +103,7 @@ Five things worth knowing:
 
 ### Try it
 
-1. Embed the same image in a note and in an Excalidraw drawing.
+1. Embed the same image in a note and in an `Excalidraw` drawing.
 2. Run **Collect attachments in current note** with **Note priorities** empty - the image is left alone (or handled per the mode).
 3. Set **Note priorities** to `.md` then `.excalidraw.md` and repeat - the image moves into the markdown note's attachment folder, whichever of the two you ran the command on.
 4. Run it on the *drawing* - the image lands in the markdown note's folder as before, and a notice now names that note, with a link to open it, so you can see who really owns the image.

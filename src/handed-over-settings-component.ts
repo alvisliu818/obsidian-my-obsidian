@@ -1,7 +1,7 @@
 /**
  * @file
  *
- * Reads back the settings this plugin handed to Advanced Rename and Delete Handler in 12.0.0.
+ * Reads back the settings this plugin handed to `Advanced Rename and Delete Handler` in 12.0.0.
  *
  * Handing the rename/delete HANDLER over did not stop this plugin needing the VALUES. Collect attachments
  * cleans up folders it empties, Go to owning note ranks the notes referencing an attachment, `isNoteEx`

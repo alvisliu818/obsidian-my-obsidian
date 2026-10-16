@@ -10,7 +10,7 @@
  * settings, and a second, differently-configured idea of a valid character is exactly the kind of
  * duplication that drifts.
  *
- * The rules match Advanced Note Composer's `normalizeTypedFolderName`, which is where the reporter met
+ * The rules match `Advanced Note Composer`'s `normalizeTypedFolderName`, which is where the reporter met
  * them. Worth lifting into `obsidian-dev-utils` once both plugins can be released together.
  */
 

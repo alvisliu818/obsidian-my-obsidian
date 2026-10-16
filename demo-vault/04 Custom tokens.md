@@ -1,6 +1,6 @@
 # Custom tokens
 
-When the built-in tokens (see [03 Tokens and patterns](<./03 Tokens and patterns.md>)) are not enough, you can define your **own** tokens as JavaScript functions - both synchronous and asynchronous are supported. They are stored in the `customTokensStr` setting and edited under **Settings -> Community plugins -> Custom Attachment Location -> Custom tokens**.
+When the built-in tokens (see [03 Tokens and patterns](<./03 Tokens and patterns.md>)) are not enough, you can define your **own** tokens as JavaScript functions - both synchronous and asynchronous are supported. They are stored in the `customTokensStr` setting and edited under **Settings -> Community plugins -> `Custom Attachment Location` -> Custom tokens**.
 
 ## Example
 
@@ -21,7 +21,7 @@ After registering them, you can use `{{alpha}}` and `{{bravo:{formatKey:'charlie
 
 ## Try it
 
-1. Open **Settings -> Community plugins -> Custom Attachment Location -> Custom tokens** and paste a `registerCustomToken(...)` block.
+1. Open **Settings -> Community plugins -> `Custom Attachment Location` -> Custom tokens** and paste a `registerCustomToken(...)` block.
 2. Set **Generated attachment file name** to a pattern using your token, e.g. `{{alpha}}`.
 3. Paste an image (you supply the file) and watch the generated name.
 

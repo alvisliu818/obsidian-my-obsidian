@@ -55,7 +55,7 @@ describe('Collect deletes the folder an attachment unit folder was carried out o
         }
 
         /*
-         * `emptyFolderBehavior` belongs to Advanced Rename and Delete Handler since 12.0.0, so writing it
+         * `emptyFolderBehavior` belongs to `Advanced Rename and Delete Handler` since 12.0.0, so writing it
          * onto this plugin's settings pins nothing: the sweep asks the read-back component, which answers
          * from the provider or from this plugin's absent-provider defaults. Those defaults happen to hold
          * the deleting behavior this test wants, so the write would have LOOKED like it worked while

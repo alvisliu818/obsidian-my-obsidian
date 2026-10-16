@@ -11,6 +11,10 @@ import {
   createElAsync,
   createFragmentAsync
 } from 'obsidian-dev-utils/html-element';
+import {
+  asCodeBlock,
+  createFragmentWithCodeBlocks
+} from 'obsidian-dev-utils/obsidian/html-element';
 import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
 import { renderInternalLink } from 'obsidian-dev-utils/obsidian/markdown';
 
@@ -85,14 +89,13 @@ class CollectAttachmentUsedByMultipleNotesModal extends Modal {
     }
 
     const reason = this.noPriorityWinnerReason;
-    this.contentEl.createEl('p', {
-      cls: 'custom-attachment-location-no-priority-winner-reason',
-      text: t(($) => $.collectAttachmentUsedByMultipleNotesModal.noPriorityWinnerReason[reason], {
-        // Qualified with the owning plugin since 12.0.0: the setting lives in Advanced Rename and Delete
-        // Handler now, so naming it alone would send the user looking through this plugin's tab for a row
+    this.contentEl.createEl('p', { cls: 'custom-attachment-location-no-priority-winner-reason' }, (p) => {
+      p.append(createFragmentWithCodeBlocks(t(($) => $.collectAttachmentUsedByMultipleNotesModal.noPriorityWinnerReason[reason], {
+        // Qualified with the owning plugin since 12.0.0: the setting lives in
+        // `Advanced Rename and Delete Handler` now, so naming it alone would send the user looking through this plugin's tab for a row
         // that is not there. An arrow rather than a possessive, which reads the same in every locale.
-        settingName: `${ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_NAME} → ${t(($) => $.pluginSettingsTab.notePriorities.name)}`
-      })
+        settingName: `${asCodeBlock(ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_NAME)} → ${t(($) => $.pluginSettingsTab.notePriorities.name)}`
+      })));
     });
   }
 

@@ -54,7 +54,7 @@ describe('The cancel dialog names the real reason a shared attachment did not mo
         }
 
         /*
-         * `notePriorities` belongs to Advanced Rename and Delete Handler since 12.0.0, and this plugin
+         * `notePriorities` belongs to `Advanced Rename and Delete Handler` since 12.0.0, and this plugin
          * reads it back through that plugin's API. So the setting is no longer writable here — the
          * PROVIDER is what the phases swap, by parking a stub on the read-back component's live ref.
          * That exercises the real read path (`apiRef.value.getSettings()`) without needing the other

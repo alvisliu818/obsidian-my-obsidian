@@ -9,7 +9,7 @@ import {
 import { findPluginSettingsComponent } from '../scripts/helpers/plugin-settings-component-finder.ts';
 
 /*
- * End-to-end coverage for `Collect attachments automatically`, the setting Consistent Attachments and Links
+ * End-to-end coverage for `Collect attachments automatically`, the setting `Consistent Attachments and Links`
  * hands over when it stops collecting.
  *
  * It drives the REAL flow: the live setting is turned on and the note is changed with a genuine

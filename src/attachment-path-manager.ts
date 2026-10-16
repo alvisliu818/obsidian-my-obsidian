@@ -531,7 +531,7 @@ export class AttachmentPathManager {
      * A note rename must not rename the attachment when the user turned that off. The setting reaches
      * dev-utils' `RenameDeleteHandlerComponent` only, so a plugin calling `getAttachmentFilePath` directly
      * would otherwise resolve a brand-new name here — and, with a `{{prompt}}` template, open a modal per
-     * renamed note (issue #259 in Advanced Note Composer). Skipping the generated name leaves the file
+     * renamed note (issue #259 in `Advanced Note Composer`). Skipping the generated name leaves the file
      * named as it is and moves only its folder.
      */
     return shouldSkipGeneratedAttachmentFileName === true

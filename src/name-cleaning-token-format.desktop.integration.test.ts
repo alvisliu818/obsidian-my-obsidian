@@ -9,7 +9,7 @@ import {
 import { findPluginSettingsComponent } from '../scripts/helpers/plugin-settings-component-finder.ts';
 
 /*
- * End-to-end coverage for issue #59's fourth ask: the name cleaning Advanced Note Composer does
+ * End-to-end coverage for issue #59's fourth ask: the name cleaning `Advanced Note Composer` does
  * -- exactly one space between words, no leading or trailing spaces, and title case that leaves an
  * already-capitalized word alone -- available on a generated attachment name.
  *

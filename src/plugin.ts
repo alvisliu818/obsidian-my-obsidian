@@ -134,7 +134,7 @@ export class Plugin extends PluginBase {
   }
 
   /**
-   * Declares Advanced Rename and Delete Handler as a dependency this plugin cannot run without.
+   * Declares `Advanced Rename and Delete Handler` as a dependency this plugin cannot run without.
    *
    * It owns renames and deletions since 12.0.0, and the settings this plugin's own commands read back. Without
    * it, a note's attachment folder silently stops following the note — and nothing would connect that to a
@@ -158,7 +158,7 @@ export class Plugin extends PluginBase {
     const validatorWrapper = ValueWrapper.unset<TokenValidator>();
 
     // Before the settings component, which reads back through it: `isNoteEx` consults the attachment-extension
-    // list that Advanced Rename and Delete Handler owns since 12.0.0.
+    // list that `Advanced Rename and Delete Handler` owns since 12.0.0.
     const handedOverSettingsComponent = this.addChild(
       new HandedOverSettingsComponent({
         app: this.app
@@ -245,6 +245,7 @@ export class Plugin extends PluginBase {
         imageSizeMap,
         markdownUrlMap,
         pluginId: this.manifest.id,
+        pluginName: this.manifest.name,
         pluginSettingsComponent,
         tokenValidator: validator
       })

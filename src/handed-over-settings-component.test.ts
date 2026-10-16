@@ -79,7 +79,7 @@ describe('HandedOverSettingsComponent', () => {
 
   /*
    * The consumer's own contract wins over the provider's, and here that is load-bearing rather than
-   * decorative. Advanced Rename and Delete Handler 1.1.1 publishes contract 1.0.0, which declares only
+   * decorative. `Advanced Rename and Delete Handler` 1.1.1 publishes contract 1.0.0, which declares only
    * `migrateSettings` — so it satisfies `^1`, and a shape check made against the PROVIDER's contract would
    * pass and hand over an API with no `getSettings` for every read to throw on. Demanding the three
    * read-back members is what makes that record fail the check and leaves the fallback in charge instead.

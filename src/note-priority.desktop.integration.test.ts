@@ -12,7 +12,7 @@ import {
  * `collectAttachmentUsedByMultipleNotesMode`.
  *
  * The reporter's scenario, staged literally: one image embedded by BOTH a plain markdown note and an
- * Excalidraw note. The control phase proves the attachment is left where it is without the setting —
+ * `Excalidraw` note. The control phase proves the attachment is left where it is without the setting —
  * which is the behavior being replaced — and the fix phase proves it lands in the higher-priority
  * note's folder.
  *
@@ -61,7 +61,7 @@ describe('Note priorities decide which note owns a shared attachment (issue #57)
         }
 
         /*
-         * `notePriorities` belongs to Advanced Rename and Delete Handler since 12.0.0, and this plugin
+         * `notePriorities` belongs to `Advanced Rename and Delete Handler` since 12.0.0, and this plugin
          * reads it back through that plugin's API. So the setting is no longer writable here — the
          * PROVIDER is what the phases swap, by parking a stub on the read-back component's live ref.
          * That exercises the real read path (`apiRef.value.getSettings()`) without needing the other
@@ -174,7 +174,7 @@ describe('Note priorities decide which note owns a shared attachment (issue #57)
         }
 
         /*
-         * Stages one image embedded by two notes: a plain markdown one and an Excalidraw one. Both
+         * Stages one image embedded by two notes: a plain markdown one and an `Excalidraw` one. Both
          * are `.md` files on disk, which is exactly why the priority entries have to distinguish them
          * by the longest match rather than by a bare suffix.
          */
@@ -264,7 +264,7 @@ describe('Note priorities decide which note owns a shared attachment (issue #57)
     expect(result.control.movedIntoWinnerFolder).toBe(false);
     expect(result.control.attachmentPath).toMatch(/^np-img-.*\.png$/);
 
-    // Fix: the plain markdown note outranks the Excalidraw one and takes the image, even though the
+    // Fix: the plain markdown note outranks the `Excalidraw` one and takes the image, even though the
     // command was run on the drawing.
     expect(result.fix.movedIntoWinnerFolder).toBe(true);
     expect(result.fix.attachmentPath).toMatch(/^assets\/np-note-.*\/np-img-.*\.png$/);

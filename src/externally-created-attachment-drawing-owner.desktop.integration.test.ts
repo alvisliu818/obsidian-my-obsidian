@@ -12,34 +12,34 @@ import { installReleasedPlugin } from '../scripts/helpers/download-released-plug
 import { findPluginSettingsComponent } from '../scripts/helpers/plugin-settings-component-finder.ts';
 
 /*
- * Issue #65 asks for an image pasted into an Excalidraw drawing to get this plugin's file name, `{{prompt}}`
- * included. This suite pastes one through the REAL Excalidraw and pins what happens to it.
+ * Issue #65 asks for an image pasted into an `Excalidraw` drawing to get this plugin's file name, `{{prompt}}`
+ * included. This suite pastes one through the REAL `Excalidraw` and pins what happens to it.
  *
- * Excalidraw saves a pasted image itself: it asks `fileManager.getAvailablePathForAttachment` for
+ * `Excalidraw` saves a pasted image itself: it asks `fileManager.getAvailablePathForAttachment` for
  * `Pasted Image <date>.png`, keeps only the folder this plugin resolves, and writes its own name into it with
  * `vault.createBinary`. So the paste is another plugin's attachment, and `renameAttachmentsCreatedByOtherPluginsMode`
- * is the switch that governs it — under a list mode, only when Excalidraw is listed, which is what issue #92 asked
+ * is the switch that governs it — under a list mode, only when `Excalidraw` is listed, which is what issue #92 asked
  * to have waived and what the two phases below pin: not listed, then listed. Two things used to stop that switch from ever reaching it, and each phase
  * below exercises one:
  *
- *   - the resolver CLAIMED the path it handed Excalidraw as this plugin's own write, although the name in it was
- *     Excalidraw's;
+ *   - the resolver CLAIMED the path it handed `Excalidraw` as this plugin's own write, although the name in it was
+ *     `Excalidraw`'s;
  *   - the handler resolved templates only against a file `isNoteEx` calls a note, and a drawing is listed in
  *     `treatAsAttachmentExtensions` by default.
  *
  * The reason once given for keeping it that way was that compression hides the drawing's reference from
- * Obsidian. It does not: Excalidraw writes each image as a plain `<fileId>: [[path]]` line under
+ * Obsidian. It does not: `Excalidraw` writes each image as a plain `<fileId>: [[path]]` line under
  * `## Embedded Files`, outside the `compressed-json` block, so the metadata cache indexes it and `renameFile`
  * rewrites it. The open drawing follows as well, because its in-memory record of the image holds the `TFile`
  * and serializes the link from it — which is why the suite saves the drawing AGAIN after the rename and reads
  * the line once more.
  *
- * Excalidraw ships with compression on and this suite keeps its defaults, so the drawings here are the
+ * `Excalidraw` ships with compression on and this suite keeps its defaults, so the drawings here are the
  * compressed kind the old reasoning was about.
  *
- * Both plugins are real. Excalidraw is its pinned RELEASE, written into the vault's plugin folder and enabled
+ * Both plugins are real. `Excalidraw` is its pinned RELEASE, written into the vault's plugin folder and enabled
  * with `enablePlugin` (never `enablePluginAndSave`, since the vault is shared by every suite) and removed again
- * at the end; Advanced Rename and Delete Handler is the one every vault is seeded with, which is what lists
+ * at the end; `Advanced Rename and Delete Handler` is the one every vault is seeded with, which is what lists
  * `.excalidraw.md` as an attachment.
  */
 
@@ -47,7 +47,7 @@ const EXCALIDRAW_PLUGIN_ID = 'obsidian-excalidraw-plugin';
 const EXCALIDRAW_REPO = 'zsviczian/obsidian-excalidraw-plugin';
 const EXCALIDRAW_VERSION = '2.27.3';
 
-// A 1x1 PNG: the smallest image Excalidraw accepts as a paste.
+// A 1x1 PNG: the smallest image `Excalidraw` accepts as a paste.
 const PNG_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 interface ExcalidrawApiLike {
@@ -69,7 +69,7 @@ interface ExcalidrawPluginLike {
   readonly settings?: unknown;
 }
 
-// Excalidraw's view is a `TextFileView` whose `save` takes a second flag that forces the write.
+// `Excalidraw`'s view is a `TextFileView` whose `save` takes a second flag that forces the write.
 interface ExcalidrawViewLike extends TextFileView {
   save: (shouldPreventReload?: boolean, shouldForceSave?: boolean) => Promise<void>;
 }
@@ -105,8 +105,8 @@ describe('An image pasted into an Excalidraw drawing (issue #65)', () => {
     const vaultPath = getTemporaryVault().path;
     // Almost 5 MB of `main.js`, so it is written from Node rather than handed to the closure.
     /*
-     * Release notes off: Excalidraw opens its Welcome dialog on every load that finds no recorded release, and the
-     * second Excalidraw suite in one Obsidian instance then times out waiting for its drawing to open.
+     * Release notes off: `Excalidraw` opens its Welcome dialog on every load that finds no recorded release, and the
+     * second `Excalidraw` suite in one Obsidian instance then times out waiting for its drawing to open.
      */
     await installReleasedPlugin({ data: { showReleaseNotes: false }, pluginId: EXCALIDRAW_PLUGIN_ID, repo: EXCALIDRAW_REPO, vaultPath, version: EXCALIDRAW_VERSION });
 
@@ -170,7 +170,7 @@ describe('An image pasted into an Excalidraw drawing (issue #65)', () => {
           ea.setView(view);
           await ea.addImage(0, 0, pngDataUrl);
           await ea.addElementsToView(false, true);
-          // Excalidraw writes a pasted image into the vault on SAVE, which is where the foreign write happens.
+          // `Excalidraw` writes a pasted image into the vault on SAVE, which is where the foreign write happens.
           await view.save(false, true);
 
           await waitFor('the pasted image to be written', () => Promise.resolve(getNewPngPaths().length === 1));
@@ -190,7 +190,7 @@ describe('An image pasted into an Excalidraw drawing (issue #65)', () => {
           const [imagePath = ''] = getNewPngPaths();
           const drawingText = await readText(drawingPath);
 
-          // Save the drawing again, as the next edit would. Excalidraw writes the line from its own in-memory record.
+          // Save the drawing again, as the next edit would. `Excalidraw` writes the line from its own in-memory record.
           ea.reset();
           ea.setView(view);
           ea.addRect(0, 0, 10, 10);
@@ -210,8 +210,8 @@ describe('An image pasted into an Excalidraw drawing (issue #65)', () => {
           await app.plugins.loadManifests();
           await app.plugins.enablePlugin(excalidrawPluginId);
           /*
-           * Excalidraw finishes loading after `enablePlugin` resolves: its automation API exists before its settings
-           * do, and `create` reads them. Asking too early throws inside Excalidraw, so wait for both.
+           * `Excalidraw` finishes loading after `enablePlugin` resolves: its automation API exists before its settings
+           * do, and `create` reads them. Asking too early throws inside `Excalidraw`, so wait for both.
            */
           await waitFor('Excalidraw to finish loading', () =>
             Promise.resolve(
@@ -229,8 +229,8 @@ describe('An image pasted into an Excalidraw drawing (issue #65)', () => {
             /*
              * The enum's values ARE the display strings; this code runs inside Obsidian and cannot import them.
              *
-             * The list names a plugin, just not Excalidraw: issue #92's vault, which expected the paste to be renamed
-             * anyway because the user, not Excalidraw, pasted it.
+             * The list names a plugin, just not `Excalidraw`: issue #92's vault, which expected the paste to be renamed
+             * anyway because the user, not `Excalidraw`, pasted it.
              */
             settings.renameAttachmentsCreatedByOtherPluginsMode = 'Only listed plugins';
             settings.otherPluginIdsForAttachmentRename = ['advanced-rename-and-delete-handler'];
@@ -243,13 +243,13 @@ describe('An image pasted into an Excalidraw drawing (issue #65)', () => {
           const leaf = app.workspace.getLeavesOfType('excalidraw').find((candidate) => (candidate.view as ExcalidrawViewLike).file?.path === drawingPath);
           const view = leaf?.view as ExcalidrawViewLike;
 
-          // The control: with Excalidraw not listed, the paste keeps Excalidraw's own name, so the rename below is the list's doing.
+          // The control: with `Excalidraw` not listed, the paste keeps `Excalidraw`'s own name, so the rename below is the list's doing.
           const controlPaste = await paste(ea, view, drawingPath, false);
 
           await settingsComponent.editAndSave((settings) => {
             /*
-             * Listing Excalidraw rather than switching to `All`: `All` renames a write nobody is attributed to as well,
-             * so only a list proves the paste is identified as Excalidraw's.
+             * Listing `Excalidraw` rather than switching to `All`: `All` renames a write nobody is attributed to as well,
+             * so only a list proves the paste is identified as `Excalidraw`'s.
              */
             settings.otherPluginIdsForAttachmentRename = ['advanced-rename-and-delete-handler', excalidrawPluginId];
           });
@@ -270,7 +270,7 @@ describe('An image pasted into an Excalidraw drawing (issue #65)', () => {
           }
           await app.plugins.disablePlugin(excalidrawPluginId);
 
-          // Everything this suite or Excalidraw added to the vault, deepest first so a folder is empty when its turn comes.
+          // Everything this suite or `Excalidraw` added to the vault, deepest first so a folder is empty when its turn comes.
           const addedPaths = app.vault.getAllLoadedFiles().map((file) => file.path).filter((path) => !pathsBeforeSuite.has(path));
           for (const path of addedPaths.sort((a, b) => b.length - a.length)) {
             const file = app.vault.getAbstractFileByPath(path);
@@ -297,12 +297,12 @@ describe('An image pasted into an Excalidraw drawing (issue #65)', () => {
     const drawingFolder = result.drawingPath.slice(0, result.drawingPath.lastIndexOf('/'));
     const drawingFileName = result.drawingPath.slice(result.drawingPath.lastIndexOf('/') + 1, -'.md'.length);
 
-    // With Excalidraw not listed, the image stays exactly as Excalidraw named it.
+    // With `Excalidraw` not listed, the image stays exactly as `Excalidraw` named it.
     expect(result.controlPaste?.imagePath).toMatch(/\/Pasted Image [^/]+\.png$/);
 
     /*
      * With it listed, the image carries this plugin's generated name, in the folder the drawing's own template
-     * resolves to — the same folder Excalidraw was handed for it.
+     * resolves to — the same folder `Excalidraw` was handed for it.
      */
     const renamedPaste = result.renamedPaste;
     const expectedFolder = `${drawingFolder}/assets/${drawingFileName}`;

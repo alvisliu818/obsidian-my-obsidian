@@ -119,7 +119,7 @@ const mockGetCacheSafe = vi.mocked(getCacheSafe);
 const mockCreateFolderSafe = vi.mocked(createFolderSafe);
 const mockPromptWithPreview = vi.mocked(promptWithPreview);
 
-// The handed-over settings live in Advanced Rename and Delete Handler since 12.0.0. Mutable here so a test
+// The handed-over settings live in `Advanced Rename and Delete Handler` since 12.0.0. Mutable here so a test
 // can still change one mid-run, exactly as it used to change .
 interface MutableHandedOverSettings {
   emptyFolderBehavior: EmptyFolderBehavior;

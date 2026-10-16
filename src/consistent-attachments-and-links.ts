@@ -1,7 +1,7 @@
 /**
  * @file
  *
- * Everything this plugin knows about Consistent Attachments and Links, which still ships its own copy of
+ * Everything this plugin knows about `Consistent Attachments and Links`, which still ships its own copy of
  * the attachment-collecting commands this plugin owns.
  *
  * Both plugins register `collect-attachments-entire-vault`, `collect-attachments-in-current-folder`,

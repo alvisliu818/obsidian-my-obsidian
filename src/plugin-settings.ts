@@ -156,8 +156,8 @@ export class PluginSettings {
   public otherPluginIdsForAttachmentRename: readonly string[] = [];
 
   /**
-   * The rename/delete values this plugin held before 12.0.0, waiting to be offered to Advanced Rename and
-   * Delete Handler.
+   * The rename/delete values this plugin held before 12.0.0, waiting to be offered to
+   * `Advanced Rename and Delete Handler`.
    *
    * Non-`null` means an offer is still pending; `null` means there is nothing to offer, which is also what a
    * fresh install has. ONE nullable object rather than a flag plus values, so a fresh install can never be
@@ -174,7 +174,7 @@ export class PluginSettings {
    * `Collect attachments in current note` had been run on it.
    *
    * Off by default. Collecting moves files, and with this on it happens on every save of a note, without being
-   * asked. It is the setting Consistent Attachments and Links offered before it handed collecting over to this
+   * asked. It is the setting `Consistent Attachments and Links` offered before it handed collecting over to this
    * plugin, and it is migrated from there.
    */
   public shouldCollectAttachmentsAutomatically = false;

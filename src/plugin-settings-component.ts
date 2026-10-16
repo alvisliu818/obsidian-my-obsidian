@@ -80,7 +80,7 @@ class LegacySettings {
   public emptyAttachmentFolderBehavior = EmptyFolderBehavior.DeleteWithEmptyParents;
   /*
    * The rename/delete settings this plugin owned before 12.0.0. They are no longer members of
-   * `PluginSettings` — Advanced Rename and Delete Handler owns them now — but they are still declared here
+   * `PluginSettings` — `Advanced Rename and Delete Handler` owns them now — but they are still declared here
    * for the two reasons this class exists: so the converter recognizes the persisted keys and strips them
    * from saved settings, and so `convertRenameDeleteSettingsToProposal` can gather the user's values into
    * `proposedRenameDeleteSettings` instead of silently dropping them.
@@ -287,8 +287,8 @@ ${commentOut(this.legacySettings.customTokensStr)}
   }
 
   /**
-   * Gathers the rename/delete values this plugin used to own into a proposal for Advanced Rename and Delete
-   * Handler.
+   * Gathers the rename/delete values this plugin used to own into a proposal for
+   * `Advanced Rename and Delete Handler`.
    *
    * Only keys the user actually had are gathered. A fresh install has none of them, so the proposal stays
    * `null` and nobody is offered a migration of values they never set — which is the whole reason this is one
@@ -428,7 +428,7 @@ export class PluginSettingsComponent extends PluginSettingsComponentBase<PluginS
   /**
    * Whether a file is a note rather than an attachment.
    *
-   * The attachment-extension list this consults belongs to Advanced Rename and Delete Handler since 12.0.0,
+   * The attachment-extension list this consults belongs to `Advanced Rename and Delete Handler` since 12.0.0,
    * so it is read back rather than held here. It is the same question in both plugins — "is this
    * `.excalidraw.md` a note or a drawing?" — so a single answer is the right one.
    *
@@ -539,10 +539,10 @@ function addDateTimeFormat(params: AddDateTimeFormatParams): string {
 }
 
 /**
- * Carries a historic `treatAsAttachmentExtensions` list over to Advanced Rename and Delete Handler without losing
+ * Carries a historic `treatAsAttachmentExtensions` list over to `Advanced Rename and Delete Handler` without losing
  * what that plugin now adds to it (#90).
  *
- * This plugin's list could only hold extensions, so a user who kept `.excalidraw.md` in it meant "an Excalidraw
+ * This plugin's list could only hold extensions, so a user who kept `.excalidraw.md` in it meant "an `Excalidraw`
  * drawing is an attachment". The handler says the same thing since 2.1.0 with a second entry,
  * `property:excalidraw-plugin`, which also catches a drawing saved as a plain `.md`. Proposed as it was, the
  * historic list would show up as a row that REMOVES that entry from the handler's default, and a user approving it

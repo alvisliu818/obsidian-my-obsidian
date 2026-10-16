@@ -102,7 +102,7 @@ beforeEach(() => {
     on: castTo<PluginSettingsComponent['on']>(events.on.bind(events)),
     settings: castTo<PluginSettings>(settings)
   });
-  component = new CoreFilesSettingTabPatchComponent({ app, pluginId: PLUGIN_ID, pluginSettingsComponent });
+  component = new CoreFilesSettingTabPatchComponent({ app, pluginId: PLUGIN_ID, pluginName: 'Custom Attachment Location', pluginSettingsComponent });
 });
 
 afterEach(() => {
@@ -125,7 +125,10 @@ describe('CoreFilesSettingTabPatchComponent', () => {
     expect(result[2]).toBe(unrelatedRender);
     const controlledRow = castTo<SettingDefinitionRender>(result[1]);
     expect(controlledRow.name).toBe('Default location for new attachments');
-    expect(controlledRow.desc).toContain('Controlled by Custom Attachment Location');
+    expect(controlledRow.desc).toBeInstanceOf(DocumentFragment);
+    const desc = castTo<DocumentFragment>(controlledRow.desc);
+    expect(desc.textContent).toContain('Controlled by Custom Attachment Location');
+    expect(desc.querySelector('code')?.textContent).toBe('Custom Attachment Location');
   });
 
   it('should open the plugin\'s own settings from the replacement row', () => {

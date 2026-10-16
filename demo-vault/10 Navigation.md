@@ -28,6 +28,6 @@ If the attachment sits in an **attachment unit folder** (see [06 Settings](<./06
 ## Try it
 
 1. Open [01 Attachment folder location](<./01 Attachment folder location.md>) and paste an image into it — you supply the file.
-2. Run **Custom Attachment Location: Go to attachment folder**. The file explorer highlights `assets/01 Attachment folder location/`.
-3. Click the pasted image to open it, then run **Custom Attachment Location: Go to owning note**. You are back in the note.
+2. Run **`Custom Attachment Location`: Go to attachment folder**. The file explorer highlights `assets/01 Attachment folder location/`.
+3. Click the pasted image to open it, then run **`Custom Attachment Location`: Go to owning note**. You are back in the note.
 4. Right-click either file in the file explorer — both commands are on the context menu too.
