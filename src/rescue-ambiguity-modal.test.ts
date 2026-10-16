@@ -2,14 +2,14 @@
 
 import type { App as AppOriginal } from 'obsidian';
 
+import { NoPriorityWinnerReason } from '@mnaoumov/obsidian-lib/note-priority';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { ensureNonNullable } from '@mnaoumov/typescript-lib/type-guards';
 import {
   ButtonComponent,
   Modal,
   ToggleComponent
 } from 'obsidian';
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { NoPriorityWinnerReason } from 'obsidian-dev-utils/obsidian/note-priority';
-import { ensureNonNullable } from 'obsidian-dev-utils/type-guards';
 import { App } from 'obsidian-test-mocks/obsidian';
 import {
   beforeEach,
@@ -30,7 +30,7 @@ import {
  * rather than on the DOM node, so those are captured as they are registered — which is what lets a test
  * press a button exactly the way a user does.
  */
-vi.mock('obsidian-dev-utils/obsidian/markdown', () => ({
+vi.mock('@mnaoumov/obsidian-lib/markdown', () => ({
   renderInternalLink: vi.fn((): Promise<HTMLElement> => Promise.resolve(createSpan()))
 }));
 

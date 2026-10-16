@@ -1,4 +1,5 @@
-import type { GetAvailablePathForAttachmentsExtendedFunctionParams } from 'obsidian-dev-utils/obsidian/attachment-path';
+import type { GetAvailablePathForAttachmentsExtendedFunctionParams } from '@mnaoumov/obsidian-lib/attachment-path';
+import type { Plugin } from 'obsidian';
 
 import {
   ContextId,
@@ -23,13 +24,13 @@ import {
  * Real-Obsidian reproduction of the bulk-deletion freeze. When a folder of N notes is
  * deleted in one burst, Obsidian fires one `vault.on('delete')` per descendant, and this
  * plugin's `RenameDeleteHandlerComponent` runs `DeleteHandler.handle()` for each —
- * resolving the note's attachment folder via
- * `app.vault.getAvailablePathForAttachments.extended`. That `extended` seam is exactly
- * what `custom-attachment-location` patches with its expensive resolver in the real vault,
- * so a bulk delete becomes O(N) expensive resolutions and freezes the UI.
+ * resolving the note's attachment folder through the `getAvailablePathForAttachments` member
+ * of `Custom Attachment Location`'s plugin API. That member is that plugin's expensive
+ * resolver in the real vault, so a bulk delete becomes O(N) expensive resolutions and freezes
+ * the UI.
  *
- * This test installs its OWN counting + delaying `extended` stub standing in for
- * `custom-attachment-location` (the temp vault has no such plugin), so the cost is
+ * This test publishes its OWN counting + delaying API record under that plugin's id, standing
+ * in for `Custom Attachment Location` (the temp vault has no such plugin), so the cost is
  * deterministic and the structural bottleneck is provable without a 90k-file vault:
  *
  *   - With the plugin ENABLED and `shouldHandleDeletions` on (seeded in data.json),
@@ -125,9 +126,48 @@ interface IndexOnlyContext {
   syntheticResolverCalls?: number;
 }
 
+/**
+ * The page-side state both scenarios share: the component owning the stub API record each one publishes.
+ */
+interface ResolverStubContext {
+  resolverStubOwner?: ResolverStubOwnerLike;
+}
+
+/**
+ * The component that owns a published stub API record. Unloading it revokes the record, which is what lets
+ * the next scenario publish the same API version again.
+ */
+interface ResolverStubOwnerLike {
+  unload: () => void;
+}
+
+/**
+ * The plugin id and contract version the stub API record is published under: the ones `@mnaoumov/obsidian-lib`
+ * asks `Custom Attachment Location` for.
+ */
+const CUSTOM_ATTACHMENT_LOCATION_PLUGIN_ID = 'obsidian-custom-attachment-location';
+const CUSTOM_ATTACHMENT_LOCATION_API_VERSION = '1.3.0';
+
+/**
+ * Revokes the stub API record a scenario published, so it cannot answer for anything that runs after it.
+ *
+ * @param contextId - The scenario's shared page-side state.
+ * @param vaultPath - The temporary vault's path.
+ */
+async function revokeResolverStub(contextId: ContextId<ResolverStubContext>, vaultPath: string): Promise<void> {
+  await evalInObsidian({
+    callback({ context }): void {
+      context.resolverStubOwner?.unload();
+      delete context.resolverStubOwner;
+    },
+    contextId,
+    vaultPath
+  });
+}
+
 describe('bulk-deletion delete-handler bottleneck', () => {
   it('resolves the attachment path once per deleted note (O(N) freeze), and not at all without the handler', async () => {
-    const contextId = new ContextId<BulkDeleteContext>();
+    const contextId = new ContextId<BulkDeleteContext & ResolverStubContext>();
     const vaultPath = getTemporaryVault().path;
 
     try {
@@ -161,43 +201,62 @@ describe('bulk-deletion delete-handler bottleneck', () => {
         PERFORMANCE_VAULT_NOTE_COUNT * SIMULATED_ATTACHMENT_PATH_COST_IN_MS * MIN_LINEAR_COST_FRACTION
       );
     } finally {
+      await revokeResolverStub(contextId, vaultPath);
       await contextId.dispose();
     }
 
     /**
-     * Installs the counting and delaying resolver into the seam custom-attachment-location patches.
+     * Publishes the counting and delaying resolver as `Custom Attachment Location`'s plugin API.
      *
-     * The handler reads `app.vault.getAvailablePathForAttachments.extended`, and the count lives in the
-     * shared `context` so the later calls can read it back.
+     * The handler asks that API's `getAvailablePathForAttachments`, and the count lives in the shared
+     * `context` so the later calls can read it back.
      *
      * @returns How many notes the primary bulk folder holds, which the caller asserts is the expected count.
      */
     async function installResolver(): Promise<number> {
       return await evalInObsidian({
         callback({
+          apiVersion,
           app,
           context,
+          lib: {
+            castTo,
+            ComponentEx,
+            publishPluginApi
+          },
           primaryFolder,
-          simulatedCostInMilliseconds
+          simulatedCostInMilliseconds,
+          sourcePluginId
         }): number {
           // Path whose parent folder does not exist, so the delete handler resolves it, finds no attachment folder, and returns after exactly one resolver call.
           const NONEXISTENT_ATTACHMENT_PATH = '__perf_nonexistent_attachment_folder__/dummy.png';
 
           context.resolverCallCount = 0;
-          Object.assign(app.vault.getAvailablePathForAttachments, {
-            extended: async (): Promise<string> => {
-              await sleep(simulatedCostInMilliseconds);
-              context.resolverCallCount = (context.resolverCallCount ?? 0) + 1;
-              return NONEXISTENT_ATTACHMENT_PATH;
-            }
+          const resolverStubOwner = new ComponentEx();
+          resolverStubOwner.load();
+          context.resolverStubOwner = resolverStubOwner;
+          publishPluginApi({
+            api: {
+              getAvailablePathForAttachments: async (): Promise<string> => {
+                await sleep(simulatedCostInMilliseconds);
+                context.resolverCallCount = (context.resolverCallCount ?? 0) + 1;
+                return NONEXISTENT_ATTACHMENT_PATH;
+              },
+              isAttachmentUnitFolder: (): boolean => false
+            },
+            apiVersion,
+            component: resolverStubOwner,
+            plugin: castTo<Plugin>({ manifest: { id: sourcePluginId } })
           });
 
           return app.vault.getMarkdownFiles().filter((file) => file.path.startsWith(`${primaryFolder}/`)).length;
         },
         contextId,
         input: {
+          apiVersion: CUSTOM_ATTACHMENT_LOCATION_API_VERSION,
           primaryFolder: PERFORMANCE_VAULT_PRIMARY_FOLDER,
-          simulatedCostInMilliseconds: SIMULATED_ATTACHMENT_PATH_COST_IN_MS
+          simulatedCostInMilliseconds: SIMULATED_ATTACHMENT_PATH_COST_IN_MS,
+          sourcePluginId: CUSTOM_ATTACHMENT_LOCATION_PLUGIN_ID
         },
         vaultPath
       });
@@ -359,7 +418,7 @@ describe('bulk-deletion delete-handler bottleneck', () => {
    * bare script timeout naming the harness. Node owns that budget now.
    */
   it('skips the delete handler for index-only removals, resolving no attachment paths', async () => {
-    const contextId = new ContextId<IndexOnlyContext>();
+    const contextId = new ContextId<IndexOnlyContext & ResolverStubContext>();
     const vaultPath = getTemporaryVault().path;
 
     try {
@@ -387,6 +446,7 @@ describe('bulk-deletion delete-handler bottleneck', () => {
       // Sanity: nothing other than the marker was ever resolved.
       expect(result.otherResolverCalls).toBe(0);
     } finally {
+      await revokeResolverStub(contextId, vaultPath);
       await contextId.dispose();
     }
 
@@ -416,10 +476,17 @@ describe('bulk-deletion delete-handler bottleneck', () => {
     async function stageIndexOnlyRemovals(): Promise<void> {
       await evalInObsidian({
         async callback({
+          apiVersion,
           app,
           context,
           indexOnlyDeleteCount,
-          simulatedCostInMilliseconds
+          lib: {
+            castTo,
+            ComponentEx,
+            publishPluginApi
+          },
+          simulatedCostInMilliseconds,
+          sourcePluginId
         }): Promise<void> {
           const SYNTHETIC_FOLDER = '__perf_index_only_delete__';
           const MARKER_PATH = `${SYNTHETIC_FOLDER}/__drain_marker__.md`;
@@ -428,19 +495,28 @@ describe('bulk-deletion delete-handler bottleneck', () => {
           context.markerResolverCalls = 0;
           context.otherResolverCalls = 0;
           context.syntheticResolverCalls = 0;
-          Object.assign(app.vault.getAvailablePathForAttachments, {
-            extended: async (params: GetAvailablePathForAttachmentsExtendedFunctionParams): Promise<string> => {
-              await sleep(simulatedCostInMilliseconds);
-              const notePath = typeof params.notePathOrFile === 'string' ? params.notePathOrFile : params.notePathOrFile?.path ?? '';
-              if (notePath === MARKER_PATH) {
-                context.markerResolverCalls = (context.markerResolverCalls ?? 0) + 1;
-              } else if (notePath.startsWith(`${SYNTHETIC_FOLDER}/`)) {
-                context.syntheticResolverCalls = (context.syntheticResolverCalls ?? 0) + 1;
-              } else {
-                context.otherResolverCalls = (context.otherResolverCalls ?? 0) + 1;
-              }
-              return NONEXISTENT_ATTACHMENT_PATH;
-            }
+          const resolverStubOwner = new ComponentEx();
+          resolverStubOwner.load();
+          context.resolverStubOwner = resolverStubOwner;
+          publishPluginApi({
+            api: {
+              getAvailablePathForAttachments: async (params: GetAvailablePathForAttachmentsExtendedFunctionParams): Promise<string> => {
+                await sleep(simulatedCostInMilliseconds);
+                const notePath = typeof params.notePathOrFile === 'string' ? params.notePathOrFile : params.notePathOrFile?.path ?? '';
+                if (notePath === MARKER_PATH) {
+                  context.markerResolverCalls = (context.markerResolverCalls ?? 0) + 1;
+                } else if (notePath.startsWith(`${SYNTHETIC_FOLDER}/`)) {
+                  context.syntheticResolverCalls = (context.syntheticResolverCalls ?? 0) + 1;
+                } else {
+                  context.otherResolverCalls = (context.otherResolverCalls ?? 0) + 1;
+                }
+                return NONEXISTENT_ATTACHMENT_PATH;
+              },
+              isAttachmentUnitFolder: (): boolean => false
+            },
+            apiVersion,
+            component: resolverStubOwner,
+            plugin: castTo<Plugin>({ manifest: { id: sourcePluginId } })
           });
 
           // Create N notes that REMAIN on disk. Firing `vault.on('delete')` for each is an index-only removal (what hiding a folder does), so the handler's disk-existence guard must skip every one.
@@ -465,8 +541,10 @@ describe('bulk-deletion delete-handler bottleneck', () => {
         },
         contextId,
         input: {
+          apiVersion: CUSTOM_ATTACHMENT_LOCATION_API_VERSION,
           indexOnlyDeleteCount: PERFORMANCE_VAULT_NOTE_COUNT,
-          simulatedCostInMilliseconds: SIMULATED_ATTACHMENT_PATH_COST_IN_MS
+          simulatedCostInMilliseconds: SIMULATED_ATTACHMENT_PATH_COST_IN_MS,
+          sourcePluginId: CUSTOM_ATTACHMENT_LOCATION_PLUGIN_ID
         },
         vaultPath
       });

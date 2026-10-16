@@ -14,22 +14,22 @@
  * `Custom Attachment Location` shows the same three reasons on the collecting path.
  */
 
+import type { PromiseResolve } from '@mnaoumov/typescript-lib/async';
 import type { App } from 'obsidian';
-import type { PromiseResolve } from 'obsidian-dev-utils/async';
 
+import { renderInternalLink } from '@mnaoumov/obsidian-lib/markdown';
+import {
+  ModalBase,
+  showModal
+} from '@mnaoumov/obsidian-lib/modals/modal';
+import { NoPriorityWinnerReason } from '@mnaoumov/obsidian-lib/note-priority';
+import { invokeAsyncSafely } from '@mnaoumov/typescript-lib/async';
+import { assertNever } from '@mnaoumov/typescript-lib/type-guards';
 import {
   ButtonComponent,
   Setting,
   ToggleComponent
 } from 'obsidian';
-import { invokeAsyncSafely } from 'obsidian-dev-utils/async';
-import { renderInternalLink } from 'obsidian-dev-utils/obsidian/markdown';
-import {
-  ModalBase,
-  showModal
-} from 'obsidian-dev-utils/obsidian/modals/modal';
-import { NoPriorityWinnerReason } from 'obsidian-dev-utils/obsidian/note-priority';
-import { assertNever } from 'obsidian-dev-utils/type-guards';
 
 import { getDisambiguatedNoteLabels } from './note-path-labels.ts';
 

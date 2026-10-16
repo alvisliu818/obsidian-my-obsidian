@@ -1,4 +1,4 @@
-import { PathSettings } from 'obsidian-dev-utils/obsidian/path-settings';
+import { PathSettings } from '@mnaoumov/obsidian-lib/path-settings';
 
 import { EmptyFolderBehavior } from './rename-delete-handler-component.ts';
 

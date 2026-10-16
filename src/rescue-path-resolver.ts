@@ -7,15 +7,15 @@
  * has to be decided is where the survivor should live, and this plugin answers with the attachment
  * folder of the note that adopts it.
  *
- * Resolving that folder needs no knowledge of any other plugin. `getAttachmentFolderPath` routes
- * through `app.vault.getAvailablePathForAttachments.extended` when an attachment-location plugin has
- * installed one, and falls back to Obsidian's own configured folder when none has — so a vault running
- * a custom attachment-path policy gets that policy here, and a plain vault gets the plain answer.
+ * Resolving that folder needs no knowledge of any other plugin. `getAttachmentFolderPath` asks
+ * `Custom Attachment Location`'s plugin API when that plugin has published one, and falls back to
+ * Obsidian's own configured folder when it has not — so a vault running a custom attachment-path policy
+ * gets that policy here, and a plain vault gets the plain answer.
  *
  * The answer also says whether the attachment is one file of a folder that has to travel whole — a
- * `_files` tree, a drawing's sidecar folder. That designation is read off a sibling member on the same
- * patched function, for the same reason and with the same fallback: whoever owns the vault's
- * attachment-path policy owns this too, and a vault with nobody owning it has no units.
+ * `_files` tree, a drawing's sidecar folder. That designation is read off the same published API, for the
+ * same reason and with the same fallback: whoever owns the vault's attachment-path policy owns this too,
+ * and a vault with nobody owning it has no units.
  *
  * The answer must be free of side effects: the handler calls this twice for a folder deletion, because
  * the owning note's own deletion re-walks its links afterwards, and performs the move itself once it
@@ -31,14 +31,14 @@ import type { App } from 'obsidian';
 import {
   AttachmentPathContext,
   getAttachmentFolderPath
-} from 'obsidian-dev-utils/obsidian/attachment-path';
-import { findAttachmentUnitFolderPath } from 'obsidian-dev-utils/obsidian/attachment-unit-folder';
+} from '@mnaoumov/obsidian-lib/attachment-path';
+import { findAttachmentUnitFolderPath } from '@mnaoumov/obsidian-lib/attachment-unit-folder';
 import {
   findNoPriorityWinnerReason,
   findNotePriorityRank,
   pickHighestPriorityNotePath
-} from 'obsidian-dev-utils/obsidian/note-priority';
-import { join } from 'obsidian-dev-utils/path';
+} from '@mnaoumov/obsidian-lib/note-priority';
+import { join } from '@mnaoumov/typescript-lib/path';
 
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';
 import type {
@@ -135,10 +135,9 @@ export class RescuePathResolver {
       attachmentPath: join(attachmentFolderPath, attachmentFile.name),
 
       /*
-       * Read off the vault, not off any plugin's settings: whichever attachment-location plugin is
-       * installed publishes the designation next to the `extended` this resolver already asks for the
-       * attachment folder, and a vault running none answers "no unit" — which is the behavior this plugin
-       * had before it asked at all.
+       * Read off the published API, not off any plugin's settings: `Custom Attachment Location` publishes
+       * the designation beside the resolver this one already asks for the attachment folder, and a vault
+       * running without it answers "no unit" — which is the behavior this plugin had before it asked at all.
        */
       unitFolderPath: findAttachmentUnitFolderPath({
         app: this.app,

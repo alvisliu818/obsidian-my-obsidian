@@ -18,14 +18,14 @@
  * the enabled dependents, and the settings tab says so.
  */
 
+import type { PluginLifecycleEventPayload } from '@mnaoumov/obsidian-lib/plugin/plugin-lifecycle-events';
 import type { App } from 'obsidian';
-import type { PluginLifecycleEventPayload } from 'obsidian-dev-utils/obsidian/plugin/plugin-lifecycle-events';
 
-import { ComponentEx } from 'obsidian-dev-utils/obsidian/components/component-ex';
+import { ComponentEx } from '@mnaoumov/obsidian-lib/components/component-ex';
 import {
   PLUGIN_LOADED_EVENT_NAME,
   PLUGIN_UNLOADED_EVENT_NAME
-} from 'obsidian-dev-utils/obsidian/plugin/plugin-lifecycle-events';
+} from '@mnaoumov/obsidian-lib/plugin/plugin-lifecycle-events';
 
 /**
  * An enabled plugin that declares this one as a dependency.

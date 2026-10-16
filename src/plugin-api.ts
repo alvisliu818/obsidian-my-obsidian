@@ -13,7 +13,7 @@
  * synchronously, live, and with the path and attachment matching handed over as predicates rather than as
  * arrays each consumer would re-match with its own bundled copy of the library.
  *
- * Published through the `obsidian-dev-utils` registry, so a consumer gets version negotiation, a handle that
+ * Published through the `@mnaoumov/obsidian-lib` plugin API registry, so a consumer gets version negotiation, a handle that
  * is revoked when this plugin unloads, and a wait that ends when this plugin loads rather than a lookup that
  * returns `undefined` because it ran first.
  *
@@ -23,7 +23,7 @@
  * publishes it and keeps the contract version.
  */
 
-import type { PluginApiContract } from 'obsidian-dev-utils/obsidian/plugin/plugin-api';
+import type { ApiContract } from '@mnaoumov/typescript-lib/api-contract';
 
 import { ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT } from '../api-contract.ts';
 
@@ -41,7 +41,7 @@ export type {
  * provider and its consumers validate against one definition. Assigning it here is also what checks that the
  * library-built schemas are Standard Schemas the registry accepts.
  */
-export const PLUGIN_API_CONTRACT: PluginApiContract = ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT;
+export const PLUGIN_API_CONTRACT: ApiContract = ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT;
 
 /**
  * The version of the contract above — independent of the plugin's own version.

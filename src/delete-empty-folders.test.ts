@@ -1,15 +1,15 @@
+import type { PluginNoticeComponent } from '@mnaoumov/obsidian-lib/components/plugin-notice-component';
+import type { LoopParams } from '@mnaoumov/obsidian-lib/loop';
+import type { CleanupEmptyFoldersParams } from '@mnaoumov/obsidian-lib/vault';
 import type {
   App as AppOriginal,
   TFolder
 } from 'obsidian';
-import type { PluginNoticeComponent } from 'obsidian-dev-utils/obsidian/components/plugin-notice-component';
-import type { LoopParams } from 'obsidian-dev-utils/obsidian/loop';
-import type { CleanupEmptyFoldersParams } from 'obsidian-dev-utils/obsidian/vault';
 
-import { castTo } from 'obsidian-dev-utils/object-utils';
-import { loop } from 'obsidian-dev-utils/obsidian/loop';
-import { cleanupEmptyFolders } from 'obsidian-dev-utils/obsidian/vault';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+import { loop } from '@mnaoumov/obsidian-lib/loop';
+import { cleanupEmptyFolders } from '@mnaoumov/obsidian-lib/vault';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import {
   beforeEach,
   describe,
@@ -27,7 +27,7 @@ import { EmptyFolderBehavior } from './rename-delete-handler-component.ts';
  * DOES depend on — that `processItem` runs once per item, in the order given — so the ordering assertions
  * below still mean what they say.
  */
-vi.mock('obsidian-dev-utils/obsidian/loop', () => ({
+vi.mock('@mnaoumov/obsidian-lib/loop', () => ({
   loop: vi.fn()
 }));
 
@@ -36,8 +36,8 @@ vi.mock('obsidian-dev-utils/obsidian/loop', () => ({
  * re-exports `EmptyFolderBehavior` FROM this module, so a bare factory would leave every enum member
  * below `undefined` and each behavior assertion would pass against nothing.
  */
-vi.mock('obsidian-dev-utils/obsidian/vault', async (importOriginal) => ({
-  ...await importOriginal<typeof import('obsidian-dev-utils/obsidian/vault')>(),
+vi.mock('@mnaoumov/obsidian-lib/vault', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@mnaoumov/obsidian-lib/vault')>(),
   cleanupEmptyFolders: vi.fn()
 }));
 

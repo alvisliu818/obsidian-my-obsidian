@@ -1,3 +1,5 @@
+import type { Plugin } from 'obsidian';
+
 import { evalInObsidian } from 'obsidian-integration-testing';
 import {
   afterAll,
@@ -17,7 +19,7 @@ import {
 /*
  * Some attachments are really a directory tree rather than a file: a page saved from a browser sits next
  * to a `_files/` folder, an `.excalidraw` next to the images it references. An attachment-location plugin
- * lets the user designate such folders as attachment units, and publishes that designation on the vault.
+ * lets the user designate such folders as attachment units, and publishes that designation on its plugin API.
  *
  * Rescuing the lone linked file out of a deleted note's area tears the unit apart, and the attachment
  * arrives at the surviving note broken. See
@@ -29,9 +31,10 @@ import {
  * - NOTHING travels when the folder cannot — a unit already sitting at its destination must not have its
  *   linked file pulled out of it into the folder above, which is the same tearing seen from the other end.
  *
- * The designation is staged with a stub on `app.vault.getAvailablePathForAttachments`, the same stand-in
- * pattern the performance suite uses for `.extended`, so this proves the plugin's half without installing
- * the plugin that publishes it.
+ * The designation is staged by publishing a stub `Custom Attachment Location` API record, the same stand-in
+ * the performance suite uses for that plugin's resolver, so this proves the plugin's half without installing
+ * the plugin that publishes it. The stub's resolver answers the way Obsidian's own `./assets` setting would,
+ * because publishing the API also hands it every attachment-path question.
  *
  * `alwaysUpdateLinks` is on because the rescue moves files through `app.fileManager.renameFile`, and
  * Obsidian would otherwise raise its own confirmation modal, which a headless run cannot answer.
@@ -42,6 +45,23 @@ import {
 
 const PLUGIN_ID = 'advanced-rename-and-delete-handler';
 const SOURCE_PLUGIN_ID = 'obsidian-custom-attachment-location';
+
+/**
+ * The fields of the attachment-path question `@mnaoumov/obsidian-lib` puts to `Custom Attachment Location`'s
+ * API that the stub reads.
+ */
+interface AttachmentPathParamsLike {
+  readonly attachmentFileBaseName: string;
+  readonly attachmentFileExtension: string;
+  readonly notePathOrFile: NotePathOrFileLike;
+}
+
+/**
+ * The question `@mnaoumov/obsidian-lib` puts to `Custom Attachment Location`'s `isAttachmentUnitFolder`.
+ */
+interface IsAttachmentUnitFolderParamsLike {
+  readonly folderPath: string;
+}
 
 interface MigratableSettingsLike {
   readonly shouldHandleDeletions?: boolean;
@@ -62,12 +82,24 @@ interface MigrationApiLike {
   migrateSettings: (params: MigrateSettingsParamsLike) => Promise<MigrateSettingsResultLike>;
 }
 
+/**
+ * A note, named by its path or by a file that carries one.
+ */
+type NotePathOrFileLike = null | PathHolderLike | string;
+
 interface ObsidianDevUtilsStateLike {
   readonly pluginApiRegistry?: PluginApiRegistryWrapperLike;
 }
 
 /**
- * The slice of the `obsidian-dev-utils` cross-plugin registry a closure reads the API from: the wire-level path
+ * Anything that carries a vault path, such as a `TFile`.
+ */
+interface PathHolderLike {
+  readonly path: string;
+}
+
+/**
+ * The slice of the `@mnaoumov/obsidian-lib` cross-plugin registry a closure reads the API from: the wire-level path
  * that library's Plugin API protocol guide freezes, so a suite reaches the plugin the way a consumer does.
  */
 interface PluginApiRegistryHostLike {
@@ -122,7 +154,10 @@ describe('Deleting a folder whose attachment belongs to an attachment unit folde
       async callback({
         app,
         lib: {
+          castTo,
+          ComponentEx,
           flushQueue,
+          publishPluginApi,
           waitUntil
         },
         pluginId,
@@ -199,6 +234,35 @@ describe('Deleting a folder whose attachment belongs to an attachment unit folde
           }
         }
 
+        const attachmentLocationStubOwner = new ComponentEx();
+
+        /**
+         * Publishes the stub `Custom Attachment Location` API: `_files` folders are attachment units, and every
+         * note's attachments go to an `assets` folder beside it, as Obsidian's own `./assets` setting puts them.
+         * Unloading {@link attachmentLocationStubOwner} revokes it.
+         */
+        function publishAttachmentLocationStub(): void {
+          attachmentLocationStubOwner.load();
+          publishPluginApi({
+            api: {
+              /*
+               * Synchronous on purpose: the library awaits whatever the API returns, and this stub has nothing to
+               * wait for.
+               */
+              getAvailablePathForAttachments: (params: AttachmentPathParamsLike): string => {
+                const notePath = typeof params.notePathOrFile === 'string' ? params.notePathOrFile : params.notePathOrFile?.path ?? '';
+                const noteFolderPath = notePath.split('/').slice(0, -1).join('/');
+                const extension = params.attachmentFileExtension ? `.${params.attachmentFileExtension}` : '';
+                return `${noteFolderPath}/assets/${params.attachmentFileBaseName}${extension}`;
+              },
+              isAttachmentUnitFolder: ({ folderPath }: IsAttachmentUnitFolderParamsLike): boolean => folderPath.endsWith('_files')
+            },
+            apiVersion: '1.3.0',
+            component: attachmentLocationStubOwner,
+            plugin: castTo<Plugin>({ manifest: { id: sourcePluginId } })
+          });
+        }
+
         const originalAlwaysUpdateLinks = app.vault.getConfig('alwaysUpdateLinks');
         const originalAttachmentFolderPath = app.vault.getConfig('attachmentFolderPath');
 
@@ -208,14 +272,10 @@ describe('Deleting a folder whose attachment belongs to an attachment unit folde
           app.vault.setConfig('attachmentFolderPath', './assets');
 
           /*
-           * Stands in for an installed attachment-location plugin: the designation rides a member on the
-           * patched function, and its absence is what a plain vault answers.
+           * Stands in for an installed `Custom Attachment Location`: the designation is a member of its
+           * published API, and no API is what a plain vault answers.
            */
-          Reflect.set(
-            app.vault.getAvailablePathForAttachments,
-            'checkIsAttachmentUnitFolder',
-            (folderPath: string): boolean => folderPath.endsWith('_files')
-          );
+          publishAttachmentLocationStub();
 
           await applySettings({
             shouldHandleDeletions: true,
@@ -259,7 +319,7 @@ describe('Deleting a folder whose attachment belongs to an attachment unit folde
             survivorContent: await app.vault.read(survivorFile)
           };
         } finally {
-          Reflect.deleteProperty(app.vault.getAvailablePathForAttachments, 'checkIsAttachmentUnitFolder');
+          attachmentLocationStubOwner.unload();
           app.vault.setConfig('alwaysUpdateLinks', originalAlwaysUpdateLinks);
           app.vault.setConfig('attachmentFolderPath', originalAttachmentFolderPath);
           /*
@@ -299,7 +359,10 @@ describe('Deleting a folder whose attachment belongs to an attachment unit folde
       async callback({
         app,
         lib: {
+          castTo,
+          ComponentEx,
           flushQueue,
+          publishPluginApi,
           waitUntil
         },
         pluginId,
@@ -376,6 +439,35 @@ describe('Deleting a folder whose attachment belongs to an attachment unit folde
           }
         }
 
+        const attachmentLocationStubOwner = new ComponentEx();
+
+        /**
+         * Publishes the stub `Custom Attachment Location` API: `_files` folders are attachment units, and every
+         * note's attachments go to an `assets` folder beside it, as Obsidian's own `./assets` setting puts them.
+         * Unloading {@link attachmentLocationStubOwner} revokes it.
+         */
+        function publishAttachmentLocationStub(): void {
+          attachmentLocationStubOwner.load();
+          publishPluginApi({
+            api: {
+              /*
+               * Synchronous on purpose: the library awaits whatever the API returns, and this stub has nothing to
+               * wait for.
+               */
+              getAvailablePathForAttachments: (params: AttachmentPathParamsLike): string => {
+                const notePath = typeof params.notePathOrFile === 'string' ? params.notePathOrFile : params.notePathOrFile?.path ?? '';
+                const noteFolderPath = notePath.split('/').slice(0, -1).join('/');
+                const extension = params.attachmentFileExtension ? `.${params.attachmentFileExtension}` : '';
+                return `${noteFolderPath}/assets/${params.attachmentFileBaseName}${extension}`;
+              },
+              isAttachmentUnitFolder: ({ folderPath }: IsAttachmentUnitFolderParamsLike): boolean => folderPath.endsWith('_files')
+            },
+            apiVersion: '1.3.0',
+            component: attachmentLocationStubOwner,
+            plugin: castTo<Plugin>({ manifest: { id: sourcePluginId } })
+          });
+        }
+
         const originalAlwaysUpdateLinks = app.vault.getConfig('alwaysUpdateLinks');
         const originalAttachmentFolderPath = app.vault.getConfig('attachmentFolderPath');
 
@@ -383,11 +475,7 @@ describe('Deleting a folder whose attachment belongs to an attachment unit folde
           app.vault.setConfig('alwaysUpdateLinks', true);
           app.vault.setConfig('attachmentFolderPath', './assets');
 
-          Reflect.set(
-            app.vault.getAvailablePathForAttachments,
-            'checkIsAttachmentUnitFolder',
-            (folderPath: string): boolean => folderPath.endsWith('_files')
-          );
+          publishAttachmentLocationStub();
 
           await applySettings({
             shouldHandleDeletions: true,
@@ -422,7 +510,7 @@ describe('Deleting a folder whose attachment belongs to an attachment unit folde
             wasLinkedFilePulledOutOfTheUnit: app.vault.getFileByPath(PULLED_OUT_FILE) !== null
           };
         } finally {
-          Reflect.deleteProperty(app.vault.getAvailablePathForAttachments, 'checkIsAttachmentUnitFolder');
+          attachmentLocationStubOwner.unload();
           app.vault.setConfig('alwaysUpdateLinks', originalAlwaysUpdateLinks);
           app.vault.setConfig('attachmentFolderPath', originalAttachmentFolderPath);
           if (await app.vault.adapter.exists(ROOT)) {

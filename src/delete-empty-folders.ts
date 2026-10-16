@@ -26,11 +26,11 @@
  * Sorting those folders deepest-first is the same post-order a recursion produces, without the recursion.
  */
 
+import type { PluginNoticeComponent } from '@mnaoumov/obsidian-lib/components/plugin-notice-component';
 import type { App } from 'obsidian';
-import type { PluginNoticeComponent } from 'obsidian-dev-utils/obsidian/components/plugin-notice-component';
 
-import { loop } from 'obsidian-dev-utils/obsidian/loop';
-import { cleanupEmptyFolders } from 'obsidian-dev-utils/obsidian/vault';
+import { loop } from '@mnaoumov/obsidian-lib/loop';
+import { cleanupEmptyFolders } from '@mnaoumov/obsidian-lib/vault';
 
 import { EmptyFolderBehavior } from './rename-delete-handler-component.ts';
 

@@ -1,3 +1,6 @@
+import type { PluginGateComponent } from '@mnaoumov/obsidian-lib/components/plugin-gate-component';
+import type { PluginSettingsComponentBase } from '@mnaoumov/obsidian-lib/components/plugin-settings-component';
+import type { PluginLifecycleEventPayload } from '@mnaoumov/obsidian-lib/plugin/plugin-lifecycle-events';
 import type {
   App as AppOriginal,
   Plugin,
@@ -7,19 +10,16 @@ import type {
   SettingDefinitionRender,
   SettingGroup
 } from 'obsidian';
-import type { PluginGateComponent } from 'obsidian-dev-utils/obsidian/components/plugin-gate-component';
-import type { PluginSettingsComponentBase } from 'obsidian-dev-utils/obsidian/components/plugin-settings-component';
-import type { PluginLifecycleEventPayload } from 'obsidian-dev-utils/obsidian/plugin/plugin-lifecycle-events';
 
-import { noopAsync } from 'obsidian-dev-utils/function';
-import { castTo } from 'obsidian-dev-utils/object-utils';
 import {
   PLUGIN_LOADED_EVENT_NAME,
   PLUGIN_UNLOADED_EVENT_NAME
-} from 'obsidian-dev-utils/obsidian/plugin/plugin-lifecycle-events';
-import { PluginSettingsTabBase } from 'obsidian-dev-utils/obsidian/plugin/plugin-settings-tab';
-import { SettingEx } from 'obsidian-dev-utils/obsidian/setting-ex';
-import { strictProxy } from 'obsidian-dev-utils/strict-proxy';
+} from '@mnaoumov/obsidian-lib/plugin/plugin-lifecycle-events';
+import { PluginSettingsTabBase } from '@mnaoumov/obsidian-lib/plugin/plugin-settings-tab';
+import { SettingEx } from '@mnaoumov/obsidian-lib/setting-ex';
+import { noopAsync } from '@mnaoumov/typescript-lib/function';
+import { castTo } from '@mnaoumov/typescript-lib/object-utils';
+import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import { App } from 'obsidian-test-mocks/obsidian';
 import {
   beforeEach,

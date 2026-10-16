@@ -8,10 +8,10 @@
  * the contract stays a plain description of types.
  */
 
-import type { ReadonlyPluginSettings } from 'obsidian-dev-utils/obsidian/components/plugin-settings-component';
+import type { ReadonlyPluginSettings } from '@mnaoumov/obsidian-lib/components/plugin-settings-component';
 
-import { isDeepEqual } from 'obsidian-dev-utils/object-utils';
-import { assertNever } from 'obsidian-dev-utils/type-guards';
+import { isDeepEqual } from '@mnaoumov/typescript-lib/object-utils';
+import { assertNever } from '@mnaoumov/typescript-lib/type-guards';
 
 import type {
   EmptyFolderBehavior as ApiEmptyFolderBehavior,

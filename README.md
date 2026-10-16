@@ -57,12 +57,12 @@ Beside it, [`api-contract.ts`](./api-contract.ts) holds the published API's cont
 
 This plugin owns those settings, so it owns the dialog too: your proposal is shown next to the current values, and the user approves, edits or declines it row by row. Nothing is written unless they press OK.
 
-The API is published through the `obsidian-dev-utils` cross-plugin registry, which gives you version negotiation, a handle that is revoked when this plugin unloads, and a wait that ends when this plugin loads — rather than a lookup that returns `undefined` because it ran first. The contract version is `1.1.0` and moves independently of the plugin's own version; ask for `'^1'`.
+The API is published through the `@mnaoumov/obsidian-lib` cross-plugin registry (the same registry `obsidian-dev-utils` plugins use), which gives you version negotiation, a handle that is revoked when this plugin unloads, and a wait that ends when this plugin loads — rather than a lookup that returns `undefined` because it ran first. The contract version is `1.1.0` and moves independently of the plugin's own version; ask for `'^1'`.
 
-If your plugin already uses [`obsidian-dev-utils`](https://mnaoumov.dev/obsidian-dev-utils/guides/cross-plugin-apis/), `watchPluginApi` is the whole of it:
+If your plugin already uses [`@mnaoumov/obsidian-lib`](https://mnaoumov.dev/obsidian-dev-utils/guides/cross-plugin-apis/), `watchPluginApi` is the whole of it:
 
 ```ts
-import { watchPluginApi } from 'obsidian-dev-utils/obsidian/plugin/plugin-api';
+import { watchPluginApi } from '@mnaoumov/obsidian-lib/plugin/plugin-api';
 
 import type { AdvancedRenameAndDeleteHandlerApi } from './api.d.ts';
 
@@ -96,7 +96,7 @@ if (result.isApplied) {
 - **A value of the wrong type is refused** rather than written, so a mistake surfaces as an error instead of a corrupted `data.json`.
 - The settings you may propose are the members of `HandedOverSettings` in [`api.d.ts`](./api.d.ts), each documented there.
 
-If your plugin does not use `obsidian-dev-utils` — and is not going to — you still need no dependency on anything. The registry, and the two events a plugin announces itself through, are a documented wire protocol reachable with the `obsidian` module alone; [Plugin API protocol](https://mnaoumov.dev/obsidian-dev-utils/guides/plugin-api-protocol/) is that route written out, and `api.d.ts` types it just as well, since nothing in that file imports the library either. Look the API up each time you use it rather than keeping it in a field: the raw object does not know when this plugin has unloaded.
+If your plugin does not use `@mnaoumov/obsidian-lib` — and is not going to — you still need no dependency on anything. The registry, and the two events a plugin announces itself through, are a documented wire protocol reachable with the `obsidian` module alone; [Plugin API protocol](https://mnaoumov.dev/obsidian-dev-utils/guides/plugin-api-protocol/) is that route written out, and `api.d.ts` types it just as well, since nothing in that file imports the library either. Look the API up each time you use it rather than keeping it in a field: the raw object does not know when this plugin has unloaded.
 
 ### Reading the settings back
 
@@ -124,12 +124,12 @@ if (api && !api.isPathIgnored(file.path) && !api.isTreatedAsAttachment(file.path
 - **`getSettings()`** returns every setting you may propose, as plain data, read live on every call, so there is nothing to invalidate and nothing to subscribe to. The arrays are copies — writing to one changes nothing here.
 - **`isPathIgnored(path)`** answers whether this plugin leaves the path alone, per the include and exclude lists.
 - **`isTreatedAsAttachment(path)`** answers whether the path names an attachment despite its extension, by an ending such as `.excalidraw.md` or a `property:` entry matched against its frontmatter. A Markdown file Obsidian has not indexed yet matches no `property:` entry.
-- **Use the two predicates rather than re-matching the arrays yourself.** Every plugin bundles its own copy of `obsidian-dev-utils`, so running the lists through your copy of the matching code is two copies that can drift apart; asking here keeps the matching in one place.
+- **Use the two predicates rather than re-matching the arrays yourself.** Every plugin bundles its own copy of `@mnaoumov/obsidian-lib`, so running the lists through your copy of the matching code is two copies that can drift apart; asking here keeps the matching in one place.
 - These arrived in contract `1.1.0`. That is purely additive, so `'^1'` still gets you them — but a vault running an older release will hand you an API without them, which is what `watchPluginApi`'s shape check is for.
 
 ### Declaring this plugin as a dependency
 
-If your plugin cannot work without this one, say so rather than failing quietly once a user removes it. With `obsidian-dev-utils`' `PluginBase`, declare it and your `onloadImpl` does not run until this plugin is installed, enabled and new enough — your plugin explains what is missing and installs it in one click, and finishes loading the moment it arrives:
+If your plugin cannot work without this one, say so rather than failing quietly once a user removes it. With `@mnaoumov/obsidian-lib`'s `PluginBase`, declare it and your `onloadImpl` does not run until this plugin is installed, enabled and new enough — your plugin explains what is missing and installs it in one click, and finishes loading the moment it arrives:
 
 ```ts
 protected override getPluginDependencies(): PluginDependency[] {
