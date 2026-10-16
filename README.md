@@ -71,6 +71,8 @@ Everything this plugin offers another plugin is declared in one hand-written fil
 
 The API is published through the `obsidian-dev-utils` plugin registry under the plugin id `obsidian-custom-attachment-location`, so you get version negotiation, a handle that is revoked when this plugin unloads, and a wait that ends when it loads rather than a lookup that returns `undefined` because it ran first. The contract version is `1.3.0` and moves independently of the plugin's own version, so pin a range against the contract, not against a release.
 
+Beside `api.d.ts`, [`api-contract.ts`](./api-contract.ts) holds the API's contract, `CUSTOM_ATTACHMENT_LOCATION_API_CONTRACT`: for every method, a schema over its arguments and a schema over what it returns. It is the constant this plugin publishes with the API, so copy it next to `api.d.ts` and pass it as the `contract`, and both sides check the same definition. It imports from `obsidian` and `./api.d.ts` alone, its schemas being hand-written [Standard Schema](https://standardschema.dev) objects. (It is not named `api.ts`: TypeScript would read `api.d.ts` as that file's own declarations.)
+
 If your plugin already uses [`obsidian-dev-utils`](https://mnaoumov.dev/obsidian-dev-utils/guides/cross-plugin-apis/), `watchPluginApi` is the whole of it:
 
 ```ts
@@ -78,6 +80,7 @@ const apiRef = watchPluginApi<CustomAttachmentLocationApi>({
   apiVersionRange: '^1',
   app,
   component: this,
+  contract: CUSTOM_ATTACHMENT_LOCATION_API_CONTRACT,
   pluginId: 'obsidian-custom-attachment-location'
 });
 
