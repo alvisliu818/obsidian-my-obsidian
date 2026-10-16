@@ -22,6 +22,17 @@ export interface Block {
   /** 'list' = outline bullet block (Logseq style); 'raw' = verbatim top-level content (headings, paragraphs, fences, quotes...) */
   kind: 'list' | 'raw';
   marker: Marker;
+  /**
+   * 段落容器标记(运行时字段,不落盘):源文件里没有列表标志(`-`)的顶层文本行。
+   *
+   * 思源式文档模型里,大纲列表只是文档的一种容器块,段落是另一种:段落不显示
+   * 圆点、序列化不带 `- ` 前缀(保存不会把段落改写成列表项)。带任务标记的
+   * 裸行(`TODO x`)语义上是任务项,不算段落。
+   *
+   * 生命周期:parser 的 flushBare 置位;Enter 分裂时继承;depth>0 时序列化回落
+   * 带 `- ` 的形式(磁盘上嵌套段必须带标记,否则重解析会并成上一块的软行)。
+   */
+  bare?: boolean;
   /** Block text without marker/props. May contain '\n' for in-block line breaks (soft wrap). */
   text: string;
   /** Logseq-style properties (`key:: value` child lines). `id` and `collapsed` live here. */

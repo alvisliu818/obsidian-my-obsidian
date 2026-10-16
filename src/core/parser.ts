@@ -35,8 +35,8 @@ const MARKER_RE = new RegExp(`^(${MARKERS.join('|')})\\s+(.*)$`);
 /**
  * Top-level lines that keep their verbatim raw rendering (markdown / org
  * structural syntax). Every OTHER plain top-level line becomes a first-level
- * list item — the outline owns bare text lines (Logseq parity); saving
- * normalizes them to `- ` items.
+ * PARAGRAPH container (bare block) — the SiYuan-style document model treats
+ * the outline list as just one container kind; a paragraph is another.
  */
 const STRUCTURAL_RAW_RE =
   /^(?:#{1,6}\s|#\+|>|\||<|%|\$\$|:|\d{1,9}[.)]\s|[*+]\s|(?:=+|\*+|_+|~+|\++)\s*$)/;
@@ -256,6 +256,9 @@ export function parseDocument(md: string): ParsedDocument {
     if (bareBuf.length === 0) return;
     const { marker, text } = parseMarker(bareBuf[0]);
     const b = createBlock([text, ...bareBuf.slice(1)].join('\n'), marker);
+    // 段落容器:没有列表标志、也没有任务标记的裸文本行。带 marker 的裸行
+    // (`TODO x`)语义上是任务项,保持列表容器(显示圆点 + 复选框)。
+    if (marker === null) b.bare = true;
     b.parent = null;
     doc.blocks.push(b);
     stack.length = 0;

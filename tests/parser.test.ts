@@ -188,14 +188,25 @@ describe('parser: raw content preservation', () => {
     ]);
   });
 
-  it('consecutive bare lines (no blank between) merge into ONE first-level block', () => {
+  it('consecutive bare lines (no blank between) merge into ONE paragraph container', () => {
     const doc = parseDocument('para one\npara two\npara three\n- item');
     expect(doc.blocks.map((b) => [b.kind, b.text])).toEqual([
       ['list', 'para one\npara two\npara three'],
       ['list', 'item'],
     ]);
-    // Round-trips as `- ` item + indented soft lines.
-    expect(serializeDocument(doc)).toBe('- para one\n\tpara two\n\tpara three\n- item');
+    // 段落容器(bare):源文件没有列表标志——不显示圆点,序列化不带 `- ` 前缀,
+    // 软行不缩进(原文件就没有缩进,加了会改字节)。
+    expect(doc.blocks[0].bare).toBe(true);
+    expect(doc.blocks[1].bare).toBeFalsy();
+    expect(serializeDocument(doc)).toBe('para one\npara two\npara three\n- item');
+    // 往返稳定:保存后重新解析,段落还是段落(圆点抑制在磁盘上稳定)。
+    const doc2 = parseDocument(serializeDocument(doc));
+    expect(doc2.blocks.map((b) => [b.kind, b.text])).toEqual([
+      ['list', 'para one\npara two\npara three'],
+      ['list', 'item'],
+    ]);
+    expect(doc2.blocks[0].bare).toBe(true);
+    expect(serializeDocument(doc2)).toBe(serializeDocument(doc));
   });
 
   it('a blank line separates bare-line groups into distinct blocks', () => {

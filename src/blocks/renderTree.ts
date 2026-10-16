@@ -281,7 +281,9 @@ function renderBlock(b: Block, host: BlockRenderHost, budget?: RenderBudget): HT
     // one row whose direction has changed.
     if (level !== 'none') caret.addClass('is-persistent');
   }
-  if (b.kind === 'list' && !nativeProps) {
+  // 大纲圆点只属于列表容器。段落容器(bare:源文件没有列表标志)不显示圆点;
+  // 但带任务标记的裸行(`TODO x`)语义上是任务项,圆点照显(复选框在下面)。
+  if (b.kind === 'list' && !b.bare && !nativeProps) {
     const bullet = controls.createEl('div', { cls: 'block-bullet' });
     bullet.setAttribute('aria-label', 'Focus this block');
     bullet.setAttribute('title', 'Click to focus · Shift/Ctrl+click to select');

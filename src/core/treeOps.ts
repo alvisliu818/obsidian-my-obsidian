@@ -282,6 +282,8 @@ export function splitBlock(b: Block, offset: number): Block {
   const tail = text.slice(offset);
   b.text = head;
   const nb = createBlock(tail);
+  // 段落容器延续:在段落里回车,新块同为段落(不显示圆点、保存不带 `- `)。
+  if (b.bare) nb.bare = true;
   insertAfter(b, nb);
   return nb;
 }
@@ -510,6 +512,9 @@ export function cycleMarker(b: Block): Marker {
   const cur = b.marker;
   if (cur === null) {
     b.marker = 'TODO';
+    // 加上任务标记即成为任务项:清掉段落标记,磁盘上以 `- TODO` 形式往返
+    // (裸 `TODO x` 行虽也能解析回来,但列表形式才是任务的标准容器)。
+    delete b.bare;
     return 'TODO';
   }
   const idx = MARKERS.indexOf(cur);

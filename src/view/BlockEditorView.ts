@@ -1936,7 +1936,9 @@ ${content}`;
   }
 
   createFirstBlock(): void {
+    // 空文档的第一个块 = 段落容器(思源式默认:大纲列表只是一种容器)。
     const b = createBlock('');
+    b.bare = true;
     this.mutate(() => {
       this.doc.blocks.push(b);
     });
@@ -1950,6 +1952,8 @@ ${content}`;
     this.mutate(
       () => {
         nb = createBlock('');
+        // 与 createFirstBlock 同旨:显式新增的块默认是段落容器。
+        (nb as Block).bare = true;
         const last = this.doc.blocks[this.doc.blocks.length - 1];
         if (last) {
           const sibs = siblingsOf(last);

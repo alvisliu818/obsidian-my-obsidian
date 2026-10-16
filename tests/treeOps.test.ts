@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseDocument } from '../src/core/parser';
+import { serializeDocument } from '../src/core/serializer';
 import type { Block } from '../src/types';
 import { createBlock } from '../src/types';
 import {
@@ -470,5 +471,32 @@ describe('shift-click range anchor', () => {
     const doc = setup(MD);
     const bravo = flattenVisible(doc.blocks)[3];
     expect(rangeTexts(doc.blocks, bravo, bravo)).toEqual(['bravo']);
+  });
+});
+
+describe('paragraph container propagation', () => {
+  it('splitBlock inherits the bare flag (Enter in a paragraph stays a paragraph)', () => {
+    const doc = setup('a paragraph\n');
+    const b = doc.blocks[0];
+    expect(b.bare).toBe(true);
+    const nb = splitBlock(b, 5);
+    expect(nb.bare).toBe(true);
+    expect(serializeDocument(doc)).toBe('a par\nagraph\n');
+  });
+
+  it('splitBlock does not mark list items as bare', () => {
+    const doc = setup('- a list item\n');
+    const nb = splitBlock(doc.blocks[0], 2);
+    expect(nb.bare).toBeFalsy();
+  });
+
+  it('cycleMarker promotes a paragraph to a task list item (bare cleared)', () => {
+    const doc = setup('buy milk\n');
+    const b = doc.blocks[0];
+    expect(b.bare).toBe(true);
+    cycleMarker(b);
+    expect(b.marker).toBe('TODO');
+    expect(b.bare).toBeFalsy();
+    expect(serializeDocument(doc)).toBe('- TODO buy milk\n');
   });
 });
