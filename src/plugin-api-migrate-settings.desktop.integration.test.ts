@@ -7,7 +7,7 @@ import {
 } from 'vitest';
 
 import { findPluginSettingsComponent } from '../scripts/helpers/plugin-settings-component-finder.ts';
-import { PLUGIN_API_VERSION } from './plugin-api.ts';
+import { PLUGIN_API_VERSION } from './plugin-api-version.ts';
 
 /*
  * End-to-end coverage for `CustomAttachmentLocationApi.migrateSettings`, the receiving half of the collect-settings
