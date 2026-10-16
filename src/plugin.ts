@@ -12,6 +12,10 @@ import { PluginConflictSeverity } from '@mnaoumov/obsidian-lib/components/plugin
 import { PluginSettingsTabComponent } from '@mnaoumov/obsidian-lib/components/plugin-settings-tab-component';
 import { SettingsMigrationComponent } from '@mnaoumov/obsidian-lib/components/settings-migration-component';
 import { PluginDataHandler } from '@mnaoumov/obsidian-lib/data-handler';
+import {
+  asCodeBlock,
+  createFragmentWithCodeBlocks
+} from '@mnaoumov/obsidian-lib/html-element';
 import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
 import { PluginBase } from '@mnaoumov/obsidian-lib/plugin/plugin';
 import { PluginEventSourceImpl } from '@mnaoumov/obsidian-lib/plugin/plugin-event-source';
@@ -152,7 +156,10 @@ export class Plugin extends PluginBase {
         apiVersionRange: ADVANCED_RENAME_AND_DELETE_HANDLER_DEPENDENCY_API_VERSION_RANGE,
         pluginId: ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_ID,
         pluginName: ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_NAME,
-        reason: t(($) => $.pluginDependency.advancedRenameAndDeleteHandler.reason)
+        reason: createFragmentWithCodeBlocks(t(($) => $.pluginDependency.advancedRenameAndDeleteHandler.reason, {
+          dependencyPluginName: asCodeBlock(ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_NAME),
+          pluginName: asCodeBlock(this.manifest.name)
+        }))
       }
     ];
   }
