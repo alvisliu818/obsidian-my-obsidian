@@ -69,7 +69,7 @@ Moved to [06 Settings](<./demo-vault/06 Settings.md>), under `markdownUrlFormat`
 
 Everything this plugin offers another plugin is declared in one hand-written file — [api.d.ts](./api.d.ts) at the repository root. It imports from `obsidian` and nothing else, so you can copy it into your own code or reference it where it sits, with no build-time dependency on this repository.
 
-The API is published through the `obsidian-dev-utils` plugin registry under the plugin id `obsidian-custom-attachment-location`, so you get version negotiation, a handle that is revoked when this plugin unloads, and a wait that ends when it loads rather than a lookup that returns `undefined` because it ran first. The contract version is `1.2.0` and moves independently of the plugin's own version, so pin a range against the contract, not against a release.
+The API is published through the `obsidian-dev-utils` plugin registry under the plugin id `obsidian-custom-attachment-location`, so you get version negotiation, a handle that is revoked when this plugin unloads, and a wait that ends when it loads rather than a lookup that returns `undefined` because it ran first. The contract version is `1.3.0` and moves independently of the plugin's own version, so pin a range against the contract, not against a release.
 
 If your plugin already uses [`obsidian-dev-utils`](https://mnaoumov.dev/obsidian-dev-utils/guides/cross-plugin-apis/), `watchPluginApi` is the whole of it:
 
@@ -104,6 +104,29 @@ await apiRef.value?.collectAttachments({ pathsOrFiles: ['Notes/Alpha.md'] });
 ```
 
 It is an action, not a read, so it asks what the command asks: it confirms several files or a folder with the user, and it follows the user's settings for an attachment several notes share. The promise settles once the collect has finished, queued behind any collect already running. It replaces reaching into the plugin instance for `collectAttachmentsInAbstractFiles`, which still works but is superseded.
+
+### Moving attachments the way this plugin would
+
+Two members added in contract version `1.3.0` (ask for `'^1.3.0'`) serve a plugin that moves or deletes attachments on a note's behalf and wants to follow this plugin's policy:
+
+```ts
+const attachmentPath = await apiRef.value?.getAvailablePathForAttachments({
+  attachmentFileBaseName: 'image',
+  attachmentFileExtension: 'png',
+  context: 'RenameNote',
+  notePathOrFile: 'Notes/Renamed.md',
+  oldAttachmentPathOrFile: 'Attachments/Alpha/image.png',
+  oldNotePathOrFile: 'Notes/Alpha.md',
+  readAttachmentFileContent: null,
+  shouldSkipMissingAttachmentFolderCreation: true
+});
+
+const isUnitFolder = apiRef.value?.isAttachmentUnitFolder({ folderPath: 'Notes/page_files' });
+```
+
+`getAvailablePathForAttachments` is this plugin's full resolver, with the options `Vault.getAvailablePathForAttachments` cannot express: the note's old path during a rename, the attachment's bytes for a template that hashes them, and whether to keep the file name or skip the duplicate check. Its params are the same fields as `obsidian-dev-utils`' `GetAvailablePathForAttachmentsExtendedFunctionParams`. It acts for the caller, so a `{{prompt}}` token may ask the user. `isAttachmentUnitFolder` says whether the user designated a folder whose whole hierarchy travels as one attachment, and is synchronous.
+
+Both replace the `extended` and `checkIsAttachmentUnitFolder` members this plugin grafts onto `app.vault.getAvailablePathForAttachments`. Those still work, but are superseded and will be removed in a major release.
 
 ### Handing collect settings over
 

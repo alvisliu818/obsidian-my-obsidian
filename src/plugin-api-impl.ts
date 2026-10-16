@@ -7,7 +7,10 @@ import {
   noop,
   noopAsync
 } from 'obsidian-dev-utils/function';
-import { DUMMY_PATH } from 'obsidian-dev-utils/obsidian/attachment-path';
+import {
+  AttachmentPathContext,
+  DUMMY_PATH
+} from 'obsidian-dev-utils/obsidian/attachment-path';
 import {
   getAbstractFileOrNull,
   getFileOrNull
@@ -18,10 +21,13 @@ import type { AttachmentCollector } from './attachment-collector.ts';
 import type { AttachmentPathManager } from './attachment-path-manager.ts';
 import type { HandedOverSettingsComponent } from './handed-over-settings-component.ts';
 import type {
+  AttachmentPathContext as AttachmentPathContextName,
   CollectAttachmentsParams,
   CustomAttachmentLocationApi,
   GetAttachmentFolderPathParams,
+  GetAvailablePathForAttachmentsParams,
   GetProperAttachmentPathParams,
+  IsAttachmentUnitFolderParams,
   MigrateSettingsParams,
   MigrateSettingsResult
 } from './plugin-api.ts';
@@ -50,7 +56,21 @@ interface PluginApiImplConstructorParams {
 
 type PluginApiImplGetAttachmentFolderPathParams = GetAttachmentFolderPathParams;
 
+type PluginApiImplGetAvailablePathForAttachmentsParams = GetAvailablePathForAttachmentsParams;
+
 type PluginApiImplGetProperAttachmentPathParams = GetProperAttachmentPathParams;
+
+type PluginApiImplIsAttachmentUnitFolderParams = IsAttachmentUnitFolderParams;
+
+/**
+ * The published context names, mapped onto the library enum the resolver takes. Spelled out rather than cast, so a
+ * name added on either side without the other fails to compile here.
+ */
+const ATTACHMENT_PATH_CONTEXTS: Readonly<Record<AttachmentPathContextName, AttachmentPathContext>> = {
+  DeleteNote: AttachmentPathContext.DeleteNote,
+  RenameNote: AttachmentPathContext.RenameNote,
+  Unknown: AttachmentPathContext.Unknown
+};
 
 /**
  * The published API, implemented over the same {@link AttachmentPathManager} the plugin's own commands drive.
@@ -129,6 +149,22 @@ export class PluginApiImpl implements CustomAttachmentLocationApi {
   }
 
   /**
+   * The full path this plugin's resolver gives an attachment.
+   *
+   * The same resolver the `getAvailablePathForAttachments` patch grafts on as `extended`, so a consumer that
+   * moves from the graft to this member gets the same answer.
+   *
+   * @param params - The attachment, the note, and what to skip.
+   * @returns The attachment's path.
+   */
+  public async getAvailablePathForAttachments(params: PluginApiImplGetAvailablePathForAttachmentsParams): Promise<string> {
+    return await this.attachmentPathManager.getAvailablePathForAttachments({
+      ...params,
+      context: ATTACHMENT_PATH_CONTEXTS[params.context]
+    });
+  }
+
+  /**
    * Where an attachment a note already references belongs.
    *
    * @param params - The note, and the attachment it references.
@@ -170,6 +206,16 @@ export class PluginApiImpl implements CustomAttachmentLocationApi {
       reference,
       sequenceNumber: sequenceNumberByAttachmentPath.get(attachmentFile.path) ?? 0
     });
+  }
+
+  /**
+   * Whether the user designated the folder an attachment unit folder.
+   *
+   * @param params - The folder.
+   * @returns Whether the folder is designated.
+   */
+  public isAttachmentUnitFolder(params: PluginApiImplIsAttachmentUnitFolderParams): boolean {
+    return this.pluginSettingsComponent.settings.isAttachmentUnitFolder(params.folderPath);
   }
 
   /**

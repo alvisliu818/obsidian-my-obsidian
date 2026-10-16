@@ -271,10 +271,17 @@ describe('The published API answers per note, which the getConfig patch cannot',
     expect(result.settingsFound).toBe(true);
 
     // The record a consumer negotiates against.
-    // `1.1.0` added `migrateSettings` and `1.2.0` `collectAttachments`; the two reads are unchanged since `1.0.0`, so a
-    // `'^1'` consumer still matches.
-    expect(result.apiVersion).toBe('1.2.0');
-    expect(result.contractMethodNames).toEqual(['collectAttachments', 'getAttachmentFolderPath', 'getProperAttachmentPath', 'migrateSettings']);
+    // `1.1.0` added `migrateSettings`, `1.2.0` `collectAttachments`, and `1.3.0` `getAvailablePathForAttachments` and
+    // `isAttachmentUnitFolder`; the two reads are unchanged since `1.0.0`, so a `'^1'` consumer still matches.
+    expect(result.apiVersion).toBe('1.3.0');
+    expect(result.contractMethodNames).toEqual([
+      'collectAttachments',
+      'getAttachmentFolderPath',
+      'getAvailablePathForAttachments',
+      'getProperAttachmentPath',
+      'isAttachmentUnitFolder',
+      'migrateSettings'
+    ]);
 
     // The defect: one value for the whole vault, and it is the OPEN note's.
     expect(result.getConfigFolder).toMatch(/^_\/api-open-/);
