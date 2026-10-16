@@ -28,6 +28,7 @@ const SETTLE_TIMEOUT_IN_MILLISECONDS = 600;
 
 interface CoreTabRow {
   readonly description: string;
+  readonly descriptionCode: string;
   readonly hasButton: boolean;
   readonly hasDropdown: boolean;
   readonly name: string;
@@ -125,6 +126,7 @@ describe('Follow Obsidian attachment location', () => {
           const rowEls = [...setting.modalEl.querySelectorAll<HTMLElement>(':scope .vertical-tab-content .setting-item')];
           const rows = rowEls.map((el) => ({
             description: text(el.querySelector(':scope .setting-item-description')),
+            descriptionCode: text(el.querySelector(':scope .setting-item-description code')),
             hasButton: el.querySelector(':scope .setting-item-control button') !== null,
             hasDropdown: el.querySelector(':scope .setting-item-control select') !== null,
             name: text(el.querySelector(':scope .setting-item-name'))
@@ -270,6 +272,7 @@ describe('Follow Obsidian attachment location', () => {
     // Template mode: Obsidian's row says who decides, links to the plugin, and its follow-up rows are gone.
     const templatingRow = result.coreTabWhileTemplating.rows.find((row) => row.name === 'Default location for new attachments');
     expect(templatingRow?.description).toContain('Controlled by Custom Attachment Location');
+    expect(templatingRow?.descriptionCode).toBe('Custom Attachment Location');
     expect(templatingRow?.hasButton).toBe(true);
     expect(templatingRow?.hasDropdown).toBe(false);
     expect(result.coreTabWhileTemplating.rows.map((row) => row.name)).not.toContain('Attachment folder path');

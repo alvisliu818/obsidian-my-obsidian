@@ -47,7 +47,7 @@ export const defaultTranslations = {
     moveAttachmentToProperFolder: 'Move attachment to proper folder'
   },
   coreFilesSettingTab: {
-    controlledByPlugin: 'Controlled by Custom Attachment Location, so the value stored here is not in effect. To let this setting decide again, turn on Follow Obsidian attachment location in that plugin.',
+    controlledByPlugin: 'Controlled by {{pluginName}}, so the value stored here is not in effect. To let this setting decide again, turn on Follow Obsidian attachment location in that plugin.',
     openPluginSettings: 'Open'
   },
   deleteUnusedAttachments: {

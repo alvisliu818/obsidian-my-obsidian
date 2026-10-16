@@ -47,6 +47,7 @@ interface CustomAttachmentLocationComponentConstructorParams {
   readonly imageSizeMap: ImageSizeMap;
   readonly markdownUrlMap: MarkdownUrlMap;
   readonly pluginId: string;
+  readonly pluginName: string;
   readonly pluginSettingsComponent: PluginSettingsComponent;
   readonly tokenValidator: TokenValidator;
 }
@@ -82,6 +83,7 @@ export class CustomAttachmentLocationComponent extends LayoutReadyComponent {
 
   private readonly markdownUrlMap: MarkdownUrlMap;
   private readonly pluginId: string;
+  private readonly pluginName: string;
   private readonly pluginSettingsComponent: PluginSettingsComponent;
   private readonly tokenValidator: TokenValidator;
 
@@ -90,6 +92,7 @@ export class CustomAttachmentLocationComponent extends LayoutReadyComponent {
     this.arrayBufferMap = params.arrayBufferMap;
     this.handedOverSettingsComponent = params.handedOverSettingsComponent;
     this.pluginId = params.pluginId;
+    this.pluginName = params.pluginName;
     this.pluginSettingsComponent = params.pluginSettingsComponent;
     this.attachmentPathManager = params.attachmentPathManager;
     this.markdownUrlMap = params.markdownUrlMap;
@@ -172,6 +175,7 @@ export class CustomAttachmentLocationComponent extends LayoutReadyComponent {
       new CoreFilesSettingTabPatchComponent({
         app: this.app,
         pluginId: this.pluginId,
+        pluginName: this.pluginName,
         pluginSettingsComponent: this.pluginSettingsComponent
       })
     );

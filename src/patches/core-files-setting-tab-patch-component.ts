@@ -28,6 +28,10 @@ import type {
 
 import { registerAsyncEvent } from 'obsidian-dev-utils/obsidian/components/async-events-component';
 import { MonkeyAroundComponent } from 'obsidian-dev-utils/obsidian/components/monkey-around-component';
+import {
+  asCodeBlock,
+  createFragmentWithCodeBlocks
+} from 'obsidian-dev-utils/obsidian/html-element';
 import { t } from 'obsidian-dev-utils/obsidian/i18n/i18n';
 
 import type { PluginSettingsComponent } from '../plugin-settings-component.ts';
@@ -38,6 +42,7 @@ const ATTACHMENT_FOLDER_PATH_CONFIG_KEY = 'attachmentFolderPath';
 interface CoreFilesSettingTabPatchComponentConstructorParams {
   readonly app: App;
   readonly pluginId: string;
+  readonly pluginName: string;
   readonly pluginSettingsComponent: PluginSettingsComponent;
 }
 
@@ -46,12 +51,14 @@ export class CoreFilesSettingTabPatchComponent extends MonkeyAroundComponent {
   private coreFilesSettingTab: null | SettingTab = null;
   private isUnloading = false;
   private readonly pluginId: string;
+  private readonly pluginName: string;
   private readonly pluginSettingsComponent: PluginSettingsComponent;
 
   public constructor(params: CoreFilesSettingTabPatchComponentConstructorParams) {
     super();
     this.app = params.app;
     this.pluginId = params.pluginId;
+    this.pluginName = params.pluginName;
     this.pluginSettingsComponent = params.pluginSettingsComponent;
   }
 
@@ -106,7 +113,7 @@ export class CoreFilesSettingTabPatchComponent extends MonkeyAroundComponent {
 
   private createControlledRow(originalDefinition: SettingDefinitionRender): SettingDefinitionRender {
     return {
-      desc: t(($) => $.coreFilesSettingTab.controlledByPlugin),
+      desc: createFragmentWithCodeBlocks(t(($) => $.coreFilesSettingTab.controlledByPlugin, { pluginName: asCodeBlock(this.pluginName) })),
       name: originalDefinition.name,
       render: (setting): void => {
         setting.addButton((button) => {

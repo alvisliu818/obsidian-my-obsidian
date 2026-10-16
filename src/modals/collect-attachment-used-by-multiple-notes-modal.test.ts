@@ -189,6 +189,7 @@ describe('selectMode', () => {
     });
     await flushOnOpen();
     expect(getReasonText()).toBe('It was not moved because the Advanced Rename and Delete Handler → Note priorities setting is empty, so nothing decides which of these notes owns it.');
+    expect(captured.contentEl?.querySelector(':scope .custom-attachment-location-no-priority-winner-reason code')?.textContent).toBe('Advanced Rename and Delete Handler');
     clickButton(captured.buttons[0]);
     await promise;
   });
