@@ -53,7 +53,7 @@ export interface UnitFolderMove {
  *
  * The folder lands under its own name inside the attachment folder the lone file would have gone to, so
  * the tree's internal shape — and the relative links inside it — survive the move. This is the same rule
- * Custom Attachment Location's collector applies, deliberately: a unit that two plugins relocate must
+ * `Custom Attachment Location`'s collector applies, deliberately: a unit that two plugins relocate must
  * land in the same place either way.
  *
  * @param params - The answer to plan from, and the folder being deleted.

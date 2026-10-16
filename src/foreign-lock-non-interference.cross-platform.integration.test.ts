@@ -17,7 +17,7 @@ import {
 /*
  * One of the two deliberate holes in `FileManagerRunAsyncLinkUpdatePatchComponent`'s suppression of
  * Obsidian's native link update, driven end to end: a rename performed inside a FOREIGN plugin's in-flight
- * subtree-locked transaction (Advanced Note Composer's folder merge being the real case) belongs to that
+ * subtree-locked transaction (`Advanced Note Composer`'s folder merge being the real case) belongs to that
  * transaction, which owns its own link and attachment consistency. This handler stays out of it entirely —
  * it neither moves the attachment nor suppresses the native update, because suppressing an update it is not
  * replacing would leave the links dangling.
@@ -194,7 +194,7 @@ describe('A rename inside a foreign plugin\'s locked transaction', () => {
         const originalAttachmentFolderPath = app.vault.getConfig('attachmentFolderPath');
 
         /*
-         * A foreign plugin mirroring Advanced Note Composer's folder merge, holding a subtree lock over both
+         * A foreign plugin mirroring `Advanced Note Composer`'s folder merge, holding a subtree lock over both
          * folders for the duration of its own rename. A plain subtree lock is enough: the behavior keys off
          * the lock's presence, not off whether it also blocks mutations. The component's unload releases
          * every lock it holds.
@@ -205,7 +205,7 @@ describe('A rename inside a foreign plugin\'s locked transaction', () => {
         try {
           app.vault.setConfig('attachmentFolderPath', './attachments');
 
-          // The Custom Attachment Location configuration from the issue: move attachments with the note, do not update links.
+          // The `Custom Attachment Location` configuration from the issue: move attachments with the note, do not update links.
           await applySettings({
             shouldHandleRenames: false,
             shouldRenameAttachmentFolder: true

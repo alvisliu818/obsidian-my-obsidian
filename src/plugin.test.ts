@@ -381,7 +381,7 @@ describe('Plugin', () => {
     });
 
     /*
-     * The requirement Custom Attachment Location's issue 79 handed over: two reporters read the notice this
+     * The requirement `Custom Attachment Location`'s issue 79 handed over: two reporters read the notice this
      * block replaced as a defect in THIS plugin. Every version these entries ask for has shipped, so a
      * blocked user is waiting rather than stuck — and the reason has to read that way, name the other plugin
      * as the one to update, and say that recovery costs nothing.

@@ -10,8 +10,8 @@
  * the folder is then free to go.
  *
  * The reason comes from `findNoPriorityWinnerReason`, which exists precisely so a caller can name the
- * real cause rather than only reporting that several notes reference the file. Its sibling in Custom
- * Attachment Location shows the same three reasons on the collecting path.
+ * real cause rather than only reporting that several notes reference the file. Its sibling in
+ * `Custom Attachment Location` shows the same three reasons on the collecting path.
  */
 
 import type { App } from 'obsidian';

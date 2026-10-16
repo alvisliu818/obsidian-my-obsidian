@@ -1,7 +1,7 @@
 /**
  * @file
  *
- * Everything this plugin knows about Consistent Attachments and Links, which still ships its own copy of
+ * Everything this plugin knows about `Consistent Attachments and Links`, which still ships its own copy of
  * the `delete-empty-folders` command this plugin owns.
  *
  * Both plugins register that id under the same English name. Obsidian namespaces command ids per plugin,
@@ -23,7 +23,7 @@
  *   command as well would put two notices on screen for one plugin, the second of them about a command this
  *   plugin is not registering anyway, since its feature surface is shut.
  * - `4.1.0` is the release that gave the command up. It is a minor, not a major: a major of that plugin
- *   would also lift a version range Custom Attachment Location keys on, so the removal shipped without one.
+ *   would also lift a version range `Custom Attachment Location` keys on, so the removal shipped without one.
  *   The bound therefore names the version rather than following semver.
  *
  * TODO: delete the declaration outright once every version that still registers the command is old enough

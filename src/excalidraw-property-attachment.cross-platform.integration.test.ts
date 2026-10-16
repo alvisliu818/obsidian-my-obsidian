@@ -6,12 +6,12 @@ import {
 } from 'vitest';
 
 /*
- * An Excalidraw drawing saved as a plain `.md` is an attachment, recognized by its `excalidraw-plugin`
- * frontmatter property (Custom Attachment Location issue #90). Excalidraw itself decides a Markdown file is
+ * An `Excalidraw` drawing saved as a plain `.md` is an attachment, recognized by its `excalidraw-plugin`
+ * frontmatter property (`Custom Attachment Location` issue #90). `Excalidraw` itself decides a Markdown file is
  * a drawing by that property, so the compound `.excalidraw.md` extension is a convention, not a guarantee.
  *
  * Driven through the published API's `isTreatedAsAttachment`, because that is the answer every consumer
- * reads: Custom Attachment Location's `isNoteEx` asks exactly this, so pinning it here is what lets that
+ * reads: `Custom Attachment Location`'s `isNoteEx` asks exactly this, so pinning it here is what lets that
  * plugin follow with no change of its own. A unit test mocks the metadata cache; this one needs Obsidian to
  * actually parse the frontmatter, which is the half a mock cannot vouch for.
  *

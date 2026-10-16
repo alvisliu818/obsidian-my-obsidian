@@ -36,7 +36,7 @@ export interface DeleteEmptyFoldersCommandHandlerConstructorParams {
 /**
  * Sweeps the whole vault for empty folders on demand.
  *
- * The id, name and icon are the ones Consistent Attachments and Links used for the same command before it
+ * The id, name and icon are the ones `Consistent Attachments and Links` used for the same command before it
  * moved here, so a user's existing hotkey and command-palette habit survive the move.
  */
 export class DeleteEmptyFoldersCommandHandler extends GlobalCommandHandler {

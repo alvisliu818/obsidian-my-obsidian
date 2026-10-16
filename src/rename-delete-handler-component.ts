@@ -869,7 +869,7 @@ class FileManagerRunAsyncLinkUpdatePatchComponent extends MonkeyAroundComponent 
       isRenameCalled = true;
       /*
        * A rename performed inside a foreign plugin's in-flight locked transaction (which locks the
-       * affected folder subtree, e.g. Advanced Note Composer's folder merge) is owned by that
+       * affected folder subtree, e.g. `Advanced Note Composer`'s folder merge) is owned by that
        * transaction, which is responsible for its own link consistency. This handler deliberately does
        * NOT rewrite links for it, so suppressing Obsidian's native link update below would leave the
        * links dangling. Let the native update proceed untouched. See
@@ -1751,7 +1751,7 @@ export class RenameDeleteHandlerComponent extends ComponentEx {
 
     /*
      * A rename occurring inside a foreign plugin's in-flight locked transaction (which locks the
-     * affected folder subtree, e.g. Advanced Note Composer's folder merge) is orchestrated by that
+     * affected folder subtree, e.g. `Advanced Note Composer`'s folder merge) is orchestrated by that
      * transaction's owner, which takes responsibility for its own link consistency. Reacting to it
      * here would (a) perturb Obsidian's native post-rename link update and leave links dangling, and
      * (b) collide with the foreign transaction — an async abort from this handler aborts an

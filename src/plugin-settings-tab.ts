@@ -291,7 +291,9 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
               appendCodeBlock(f, 'property:name=value');
               f.appendText(' frontmatter match such as ');
               appendCodeBlock(f, 'property:excalidraw-plugin');
-              f.appendText(', which is how Excalidraw marks a drawing stored as markdown.');
+              f.appendText(', which is how ');
+              appendCodeBlock(f, 'Excalidraw');
+              f.appendText(' marks a drawing stored as markdown.');
               f.createEl('br');
               f.appendText('A property entry matches a markdown file only once Obsidian has indexed it.');
             }),
