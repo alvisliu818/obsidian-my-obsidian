@@ -590,6 +590,9 @@ describe('Plugin', () => {
       // `1.1.0` rather than `^1`: the read-back arrived in that contract, and an older provider would open the
       // gate and then fail every read.
       expect(dependency?.apiVersionRange).toBe('^1.1.0');
+      // 2.1.x publishes that same contract but reads the unit-folder designation off a graft this plugin removed,
+      // so only the plugin version tells it apart.
+      expect(dependency?.minPluginVersion).toBe('2.2.0');
       // Both plugin names are marked as code, so the reason is a fragment rather than a plain string.
       const reason = dependency?.reason;
       expect(reason).toBeInstanceOf(DocumentFragment);

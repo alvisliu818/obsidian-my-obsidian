@@ -136,6 +136,16 @@ export const ADVANCED_RENAME_AND_DELETE_HANDLER_API_VERSION_RANGE = '^1';
 export const ADVANCED_RENAME_AND_DELETE_HANDLER_DEPENDENCY_API_VERSION_RANGE = '^1.1.0';
 
 /**
+ * The lowest plugin version this plugin REQUIRES, declared through `getPluginDependencies()` beside the contract range.
+ *
+ * `2.2.0` is the first release that reads the attachment-unit-folder designation through this plugin's API rather than
+ * off the `getAvailablePathForAttachments` graft 15.0.0 removed. A 2.1.x provider still publishes contract `1.1.0`, so
+ * the range above cannot tell it apart: it would open the gate and then delete a unit folder's contents piecemeal,
+ * without any notice. Asking for `2.2.0` here gives that user the gate's own "update this plugin" message instead.
+ */
+export const ADVANCED_RENAME_AND_DELETE_HANDLER_MIN_PLUGIN_VERSION = '2.2.0';
+
+/**
  * What the MIGRATION needs — a single method, published since contract `1.0.0`.
  *
  * Supplied to `watchPluginApi` as the consumer's own contract, which wins over the provider's. The two
