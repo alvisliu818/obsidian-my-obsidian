@@ -19,6 +19,7 @@ import {
   TextAreaComponent,
   ToggleComponent
 } from 'obsidian';
+import { appendCodeBlock } from 'obsidian-dev-utils/obsidian/html-element';
 import {
   ModalBase,
   showModal
@@ -81,11 +82,15 @@ class SettingsMigrationModal extends ModalBase<null | SettingsMigrationRow[]> {
   }
 
   public override onOpen(): void {
-    this.titleEl.setText(`Settings proposed by ${this.sourcePluginName}`);
+    this.titleEl.empty();
+    this.titleEl.appendText('Settings proposed by ');
+    appendCodeBlock(this.titleEl, this.sourcePluginName);
 
-    this.contentEl.createEl('p', {
-      text: `${this.sourcePluginName} used to handle renames and deletions itself and no longer does. It proposes the settings it held, so this vault keeps behaving the way it did.`
-    });
+    const introEl = this.contentEl.createEl('p');
+    appendCodeBlock(introEl, this.sourcePluginName);
+    introEl.appendText(
+      ' used to handle renames and deletions itself and no longer does. It proposes the settings it held, so this vault keeps behaving the way it did.'
+    );
     this.contentEl.createEl('p', {
       text: 'Each row shows what this plugin holds now and what is proposed. Edit a suggested value, or reset a row to keep the current one. Nothing is written until you press OK.'
     });

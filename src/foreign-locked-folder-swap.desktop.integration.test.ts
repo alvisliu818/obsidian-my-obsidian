@@ -18,16 +18,16 @@ import {
  * A whole folder swap owned by another plugin is left alone, rename by rename.
  *
  * See https://github.com/mnaoumov/obsidian-custom-attachment-location/issues/49 ("Attachments get renamed
- * when Advanced Note Composer swaps two folders"). The reporter swapped folder `B` with its own parent `A`
- * through Advanced Note Composer's "Swap folder with...", and both notes came back de-duplicated:
+ * when `Advanced Note Composer` swaps two folders"). The reporter swapped folder `B` with its own parent `A`
+ * through `Advanced Note Composer`'s "Swap folder with...", and both notes came back de-duplicated:
  * `A/Overview.md` and `A/B/Overview.md` landed as `B/A/Overview 1.md` and `B/Overview 1.md`, so every link
  * to them dangled.
  *
- * The de-duplication is the fingerprint. Advanced Note Composer renames through `renameSafe`, which asks for
+ * The de-duplication is the fingerprint. `Advanced Note Composer` renames through `renameSafe`, which asks for
  * another name whenever the destination is occupied — and the destination was only ever "occupied" because
  * the rename handler re-registered a phantom file at the OLD path while the next rename was picking a name.
  *
- * Advanced Note Composer does take `subtree` locks on both folders for the whole swap, and this handler does
+ * `Advanced Note Composer` does take `subtree` locks on both folders for the whole swap, and this handler does
  * skip a rename covered by such a lock. The guard missed because the lock registry is path-keyed and nothing
  * re-keyed it when a locked folder was itself renamed — which is the first thing a folder swap does. After
  * `A/B` -> `A/A` and `A` -> `B`, the live tree reads `B/...` while the lock keys still read `A` and `A/B`, so
@@ -35,7 +35,7 @@ import {
  *
  * This suite reproduces that without installing a second plugin: it takes the same `subtree` locks under a
  * foreign plugin id through the shared lock component every plugin bundling the library sees — which is
- * exactly how the guard sees Advanced Note Composer's locks — and then replays that plugin's `swapFolder`
+ * exactly how the guard sees `Advanced Note Composer`'s locks — and then replays that plugin's `swapFolder`
  * sequence verbatim.
  *
  * It pins BOTH halves:
@@ -43,7 +43,7 @@ import {
  *   - the mechanism — every rename of the swap must be reported as lock-covered, so a failure names the hole
  *     rather than only the damage;
  * and it runs a control phase first, with the rename handler switched off entirely, to show the replayed
- * sequence is sound on its own: the damage belongs to the handler, not to Advanced Note Composer.
+ * sequence is sound on its own: the damage belongs to the handler, not to `Advanced Note Composer`.
  *
  * Ported from `obsidian-custom-attachment-location`, which deleted the suite when it stopped registering a
  * rename/delete handler. Rewritten rather than copied: the original assigned to a settings object it found by
@@ -239,7 +239,7 @@ describe('A folder swap owned by another plugin', () => {
         }
 
         /**
-         * Asks the vault for a free path the way Advanced Note Composer's `renameSafe` does.
+         * Asks the vault for a free path the way `Advanced Note Composer`'s `renameSafe` does.
          *
          * @param path - The occupied path.
          * @returns A free path near it.
@@ -314,7 +314,7 @@ describe('A folder swap owned by another plugin', () => {
         }
 
         /**
-         * Renames as Advanced Note Composer does — onto the requested path, or onto a de-duplicated one when
+         * Renames as `Advanced Note Composer` does — onto the requested path, or onto a de-duplicated one when
          * it is occupied — recording whether the transaction's locks covered the rename.
          *
          * Recording the lock coverage is what turns a failure into a diagnosis rather than just damage.
@@ -373,7 +373,7 @@ describe('A folder swap owned by another plugin', () => {
           });
 
           /*
-           * Advanced Note Composer locks both folders for the whole transaction under its own plugin id. The
+           * `Advanced Note Composer` locks both folders for the whole transaction under its own plugin id. The
            * guard only asks whether the path is covered, so a foreign id reproduces it exactly — and keeps
            * this suite free of a second installed plugin.
            */
@@ -411,7 +411,7 @@ describe('A folder swap owned by another plugin', () => {
         }
 
         /**
-         * A verbatim replay of Advanced Note Composer 5.3.0's `swapFolder`, with its
+         * A verbatim replay of `Advanced Note Composer` 5.3.0's `swapFolder`, with its
          * "swap entire folder structure" option off — the reporter's run, where only the files change place
          * and the sub-folders travel with their renamed parent.
          *
@@ -500,7 +500,7 @@ describe('A folder swap owned by another plugin', () => {
     /*
      * Control: with the handler switched off, the very same sequence under the very same locks lands every
      * file exactly where it was asked to. So the sequence is sound, and anything below belongs to the
-     * handler rather than to Advanced Note Composer.
+     * handler rather than to `Advanced Note Composer`.
      */
     expect(result.control.steps.filter((step) => step.actualNewPath !== step.requestedNewPath)).toStrictEqual([]);
     expect(result.control.finalPaths).toStrictEqual(EXPECTED_FINAL_PATHS);

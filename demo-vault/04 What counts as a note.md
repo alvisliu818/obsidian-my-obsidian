@@ -2,10 +2,10 @@
 
 Everything this plugin does starts with one question: is this file a note, or is it something a note owns? Extensions usually answer it, and sometimes they lie.
 
-An Excalidraw drawing is usually stored as `.excalidraw.md`. By extension it is a note; by every other measure it is a picture that happens to be written in Markdown. Treating it as a note means the plugin would try to move *its* attachments around when it is renamed, and would never move it along with the note that embeds it.
+An `Excalidraw` drawing is usually stored as `.excalidraw.md`. By extension it is a note; by every other measure it is a picture that happens to be written in Markdown. Treating it as a note means the plugin would try to move *its* attachments around when it is renamed, and would never move it along with the note that embeds it.
 
 - `treatAsAttachmentExtensions`
-  - the entries that make a file an attachment regardless of what its extension would otherwise say. An entry is a file ending, or a `property:name` / `property:name=value` frontmatter match. Both `.excalidraw.md` and `property:excalidraw-plugin` are there by default: the second is how Excalidraw itself recognizes a drawing, so one saved as a plain `.md` still counts.
+  - the entries that make a file an attachment regardless of what its extension would otherwise say. An entry is a file ending, or a `property:name` / `property:name=value` frontmatter match. Both `.excalidraw.md` and `property:excalidraw-plugin` are there by default: the second is how `Excalidraw` itself recognizes a drawing, so one saved as a plain `.md` still counts.
 
 ```code-button
 ---

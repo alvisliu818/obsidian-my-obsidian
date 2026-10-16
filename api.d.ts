@@ -51,7 +51,7 @@ export interface AdvancedRenameAndDeleteHandlerApi {
   isPathIgnored: (path: string) => boolean;
 
   /**
-   * Whether the path names an attachment even though its extension says otherwise — an Excalidraw drawing
+   * Whether the path names an attachment even though its extension says otherwise — an `Excalidraw` drawing
    * being the case that motivated the setting, recognized by its `.excalidraw.md` extension or, through a
    * `property:excalidraw-plugin` entry, by its frontmatter.
    *

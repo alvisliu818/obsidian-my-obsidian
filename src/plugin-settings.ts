@@ -7,7 +7,7 @@ import { EmptyFolderBehavior } from './rename-delete-handler-component.ts';
  * them — the list is empty, nothing in it matched, or the best rank is shared.
  *
  * An enum rather than a toggle because the box this governs is expected to grow more ways of settling
- * the same question, the way its sibling in Custom Attachment Location has.
+ * the same question, the way its sibling in `Custom Attachment Location` has.
  */
 export enum RescueAttachmentUsedByMultipleNotesMode {
   /**
@@ -92,8 +92,8 @@ export class PluginSettings {
 
   /**
    * Entries that make a file an attachment even though its extension says otherwise — the canonical
-   * case being an Excalidraw drawing, which is stored as markdown. An entry is an extension such as
-   * `.excalidraw.md`, or a `property:name` / `property:name=value` frontmatter match: Excalidraw itself
+   * case being an `Excalidraw` drawing, which is stored as markdown. An entry is an extension such as
+   * `.excalidraw.md`, or a `property:name` / `property:name=value` frontmatter match: `Excalidraw` itself
    * recognizes a drawing by its `excalidraw-plugin` property, so one saved without the compound extension
    * is still a drawing.
    */

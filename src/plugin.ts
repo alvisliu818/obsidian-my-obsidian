@@ -66,9 +66,9 @@ interface RenameDeleteHandlerOwner {
  * therefore load-order dependent. So this plugin does not compete — it declares each of them as a BLOCKING
  * conflict and stands aside while one of them is enabled at a version that still owns the handler.
  *
- * Every version named here has shipped, measured 2026-09-20: Custom Attachment Location 12.0.1, Consistent
- * Attachments and Links 4.0.1, Better Markdown Links 5.0.1, External Rename Handler 4.0.1 and Frontmatter
- * Markdown Links 3.0.2. So the block can dead-end nobody — the update each entry asks for exists — which is
+ * Every version named here has shipped, measured 2026-09-20: `Custom Attachment Location` 12.0.1,
+ * `Consistent Attachments and Links` 4.0.1, `Better Markdown Links` 5.0.1, `External Rename Handler` 4.0.1
+ * and `Frontmatter Markdown Links` 3.0.2. So the block can dead-end nobody — the update each entry asks for exists — which is
  * what the wording below is written against.
  *
  * TODO: drop an entry outright once every version that still owns a handler is old enough to have aged out.

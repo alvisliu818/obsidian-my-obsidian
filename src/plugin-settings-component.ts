@@ -66,7 +66,7 @@ export class PluginSettingsComponent extends PluginSettingsComponentBase<PluginS
    * Whether the path is a note this plugin should treat as one.
    *
    * A file whose extension makes it a note is still an attachment when
-   * {@link PluginSettingsComponent.isTreatedAsAttachment} says so — an Excalidraw drawing being the case
+   * {@link PluginSettingsComponent.isTreatedAsAttachment} says so — an `Excalidraw` drawing being the case
    * that motivated the setting.
    *
    * @param pathOrFile - The path or file to test.

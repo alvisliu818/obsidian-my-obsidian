@@ -85,7 +85,7 @@ console.log(require('/demoSetup.ts').printVaultTree(app));
 Manual equivalent: drag `Notes/Target note.md` onto the `Archive` folder, and drag it back.
 
 - `shouldRenameAttachmentFolder`
-  - whether a note's own attachment folder moves and is renamed along with it. This applies when a note has a folder of its own — the arrangement plugins like Custom Attachment Location set up, where each note keeps its files in a folder named after it. It works whether or not this plugin updates the links, which is why it is a switch of its own. Off by default.
+  - whether a note's own attachment folder moves and is renamed along with it. This applies when a note has a folder of its own — the arrangement plugins like `Custom Attachment Location` set up, where each note keeps its files in a folder named after it. It works whether or not this plugin updates the links, which is why it is a switch of its own. Off by default.
 - `shouldRenameAttachmentFiles`
   - whether the attachment **files** are renamed too, so their names keep matching the note. Off by default: renaming a file the user named themselves is a bigger surprise than leaving it alone.
 

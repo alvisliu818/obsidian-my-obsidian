@@ -10,12 +10,12 @@
 - test(android): verify the stub plugin writes in the manifest suites
 - chore(deps): take obsidian-dev-utils 107.2.0
 - refactor(backlinks): drop the local backlink index for the library one
-- fix(rename): recognize Advanced Metadata Cache in the canvas gate
+- fix(rename): recognize `Advanced Metadata Cache` in the canvas gate
 
 ## 2.1.0
 
-- feat(settings): *Treat as attachment extensions* accepts `property:name` and `property:name=value` entries, matched against a note's frontmatter, so an Excalidraw drawing saved as a plain `.md` is an attachment by its `excalidraw-plugin` property (Custom Attachment Location #90). The default is now `.excalidraw.md` plus `property:excalidraw-plugin`. **A list you already have saved is not changed:** to get the new behaviour, add `property:excalidraw-plugin` on its own line in the settings tab. A property entry matches a file only once Obsidian has indexed it.
-- fix(conflicts): stop warning about *Delete empty folders* on Consistent Attachments and Links 4.1.0, which no longer offers that command.
+- feat(settings): *Treat as attachment extensions* accepts `property:name` and `property:name=value` entries, matched against a note's frontmatter, so an `Excalidraw` drawing saved as a plain `.md` is an attachment by its `excalidraw-plugin` property (`Custom Attachment Location` #90). The default is now `.excalidraw.md` plus `property:excalidraw-plugin`. **A list you already have saved is not changed:** to get the new behaviour, add `property:excalidraw-plugin` on its own line in the settings tab. A property entry matches a file only once Obsidian has indexed it.
+- fix(conflicts): stop warning about *Delete empty folders* on `Consistent Attachments and Links` 4.1.0, which no longer offers that command.
 - chore(deps): obsidian-dev-utils 107.1.0 and obsidian-integration-testing 17.
 
 ## 2.0.0
@@ -24,7 +24,7 @@
 - **Breaking:** when a conflicting plugin version is installed, this plugin stays enabled but inert and explains why in its settings tab, instead of disabling itself. It resumes as soon as the conflict is gone, with no restart.
 - **Breaking (API):** the `api` getter on the plugin instance is removed. The API is published only through the plugin API registry, and its types are declared in the root `api.d.ts`.
 - feat: the settings tab lists the plugins that depend on this one.
-- feat: warn when Consistent Attachments and Links 4.x also offers the Delete empty folders command.
+- feat: warn when `Consistent Attachments and Links` 4.x also offers the Delete empty folders command.
 - fix(ui): tell same-named notes apart on the rescue dialog's buttons (#1).
 - fix(rename): a canvas whose text node embeds an attachment no longer holds the operation queue forever when moved.
 - fix(rename): link updates in canvases are applied without the *Update links* prompt while rename handling is on.
@@ -47,7 +47,7 @@
 
 - chore(deps): sweep onto obsidian-dev-utils 98, integration-testing 12 and test-mocks 5
 - test(rename-delete): adopt the regression suites the attachment plugin hands over
-- test(bulk-delete): port the Consistent Attachments and Links performance suite onto the handler that owns the cost
+- test(bulk-delete): port the `Consistent Attachments and Links` performance suite onto the handler that owns the cost
 - test(rename-delete-handler): land the runAsyncLinkUpdate suppression guards
 - feat(api): read the handed-over settings back, at contract 1.1.0
 - fix(build): wire build:compile to buildCompile and drop the duplicate leaf script

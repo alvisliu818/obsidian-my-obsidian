@@ -110,6 +110,20 @@ beforeEach(() => {
   );
 });
 
+function getModalEl(): Element {
+  const [buttonComponent] = buttonHandlers.keys();
+  let el: Element | undefined = buttonComponent?.buttonEl;
+  while (el?.parentElement) {
+    el = el.parentElement;
+  }
+
+  if (!el) {
+    throw new Error('The dialog rendered no button');
+  }
+
+  return el;
+}
+
 function pressButton(buttonText: string): void {
   for (const [buttonComponent, handler] of buttonHandlers) {
     if (buttonComponent.buttonEl.textContent === buttonText) {
@@ -133,6 +147,22 @@ describe('showSettingsMigrationModal', () => {
 
     const rows = await rowsPromise;
     expect(rows).toEqual([BOOLEAN_ROW]);
+  });
+
+  it('marks the source plugin name as code in the title and the introduction', async () => {
+    const rowsPromise = showSettingsMigrationModal({
+      app,
+      rows: [BOOLEAN_ROW],
+      sourcePluginName: 'Custom Attachment Location'
+    });
+
+    const modalEl = getModalEl();
+    const codeTexts = [...modalEl.querySelectorAll(':scope .modal-title code, :scope .modal-content p code')].map((codeEl) => codeEl.textContent);
+    expect(codeTexts).toEqual(['Custom Attachment Location', 'Custom Attachment Location']);
+    expect(modalEl.querySelector('.modal-title')?.textContent).toBe('Settings proposed by Custom Attachment Location');
+
+    pressButton('Cancel');
+    await rowsPromise;
   });
 
   it('writes nothing when the user cancels', async () => {

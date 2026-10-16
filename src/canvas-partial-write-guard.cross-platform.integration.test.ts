@@ -16,7 +16,7 @@ import {
 
 /*
  * A rename that travels over a PARTIAL canvas — parsed JSON with a `nodes` array but no `edges` one — must
- * never write that malformed shape back to disk. Advanced Canvas leaves a freshly inserted canvas as `{}` or
+ * never write that malformed shape back to disk. `Advanced Canvas` leaves a freshly inserted canvas as `{}` or
  * partial while it initializes; re-serializing it made Obsidian's canvas renderer throw
  * `Cannot read properties of undefined (reading 'length')` / `data.edges is not iterable`. The guard skips
  * the write when `nodes` and `edges` are not both arrays.
@@ -29,7 +29,7 @@ import {
  *
  * What this proves end to end: the rename completes, still relocates the embedded attachment, and THIS PLUGIN
  * never writes the canvas — which is the guard holding — while the canvas keeps the data it was written with,
- * its file node at most re-pointed at the moved attachment by Obsidian itself. The `{}`-shaped transient Advanced Canvas leaves mid-initialization cannot be staged
+ * its file node at most re-pointed at the moved attachment by Obsidian itself. The `{}`-shaped transient `Advanced Canvas` leaves mid-initialization cannot be staged
  * headlessly; that half is the second, deliberately skipped case below.
  *
  * Why "this plugin never writes it" rather than "the file is byte-identical", which is what this suite used
@@ -310,7 +310,7 @@ describe('Moving a partial canvas', () => {
           await app.vault.createFolder(DST_FOLDER);
           await app.vault.createBinary(SRC_ATTACHMENT, new ArrayBuffer(8));
 
-          // A `nodes` array but NO `edges` one: the shape Advanced Canvas leaves behind mid-initialization.
+          // A `nodes` array but NO `edges` one: the shape `Advanced Canvas` leaves behind mid-initialization.
           const partialCanvasContent = JSON.stringify(
             {
               nodes: [
@@ -447,14 +447,14 @@ describe('Moving a partial canvas', () => {
 
   /*
    * The guard-specific half — proving the canvas write is SKIPPED on malformed content rather than Obsidian
-   * core performing a valid file-node rewrite — cannot be staged headlessly. It needs Advanced Canvas
+   * core performing a valid file-node rewrite — cannot be staged headlessly. It needs `Advanced Canvas`
    * installed and its mid-initialization race hit, where a freshly inserted canvas is transiently `{}`.
    * Skipped, not silently omitted; the guard itself is unit-covered in `obsidian-dev-utils`
    * (`file-change.test.ts`: `{}` and a partial `{"nodes":[…]}` both skip the write).
    *
    * MANUAL REPRO (real Obsidian, GUI):
-   *   1. Install and enable this plugin and Advanced Canvas, with "Should handle renames" on.
-   *   2. Insert a new canvas through Advanced Canvas's own affordance.
+   *   1. Install and enable this plugin and `Advanced Canvas`, with "Should handle renames" on.
+   *   2. Insert a new canvas through `Advanced Canvas`'s own affordance.
    *   3. Without the guard the insert throws `Cannot read properties of undefined (reading 'length')` /
    *      `data.edges is not iterable`; with it the canvas inserts cleanly. Turning "Should handle renames"
    *      off also avoids the error, which is the diagnostic tell that the write came from the handler.
