@@ -47,6 +47,7 @@ import {
 import type { MigratableSettings } from './advanced-rename-and-delete-handler.ts';
 import type { CustomAttachmentLocationApi } from './plugin-api.ts';
 
+import { ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT } from './advanced-rename-and-delete-handler-api/api-contract.ts';
 import { ArrayBufferMap } from './array-buffer-map.ts';
 import { AttachmentCollector } from './attachment-collector.ts';
 import { AttachmentPathManager } from './attachment-path-manager.ts';
@@ -617,12 +618,13 @@ describe('Plugin', () => {
     });
 
     // The migration names only the method it calls. Which provider versions are good enough is the dependency
-    // gate's question, answered by its own version range, not by this contract.
+    // gate's question, answered by its own version range, not by this contract. The entry is the provider's own,
+    // schemas included.
     it('should demand only the method it calls, migrateSettings', async () => {
       const plugin = new Plugin(app, manifest);
       await plugin.onload();
 
-      expect(getMigrationParams().contract).toStrictEqual({ migrateSettings: {} });
+      expect(getMigrationParams().contract).toStrictEqual({ migrateSettings: ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT.migrateSettings });
     });
 
     it('should offer nothing while no legacy values are pending', async () => {

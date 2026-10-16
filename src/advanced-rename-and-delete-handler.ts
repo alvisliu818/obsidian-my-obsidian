@@ -9,14 +9,21 @@
  * the values this plugin's own features still depend on.
  *
  * The API is DECLARED here rather than imported. That plugin is an Obsidian plugin repo, not an npm package,
- * so there is nothing to depend on — the shape below is this plugin's compiled-against copy of the contract,
+ * so there is nothing to depend on — the shape below is this plugin's compiled-against copy of the API,
  * and `watchPluginApi` negotiates the version at runtime.
+ *
+ * The CONTRACTS are the provider's own. Its copyable `api.d.ts` and `api-contract.ts` are copied VERBATIM into
+ * `./advanced-rename-and-delete-handler-api/`, and each contract below takes its entries, schemas included.
+ * Refresh the copy from the provider's repository rather than editing it, so both ends keep checking ONE
+ * definition.
  */
 
 import type { PluginApiContract } from 'obsidian-dev-utils/obsidian/plugin/plugin-api';
 import type { SettingsMigrationApi } from 'obsidian-dev-utils/obsidian/plugin/settings-migration-api';
 
 import { EmptyFolderBehavior } from 'obsidian-dev-utils/obsidian/vault';
+
+import { ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT } from './advanced-rename-and-delete-handler-api/api-contract.ts';
 
 /**
  * `Advanced Rename and Delete Handler`'s public API, as this plugin compiles against it.
@@ -129,7 +136,7 @@ export const ADVANCED_RENAME_AND_DELETE_HANDLER_DEPENDENCY_API_VERSION_RANGE = '
  * every `^1` provider, while the read-back below does not.
  */
 export const ADVANCED_RENAME_AND_DELETE_HANDLER_MIGRATION_API_CONTRACT: PluginApiContract = {
-  migrateSettings: {}
+  migrateSettings: ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT.migrateSettings
 };
 
 /**
@@ -143,9 +150,9 @@ export const ADVANCED_RENAME_AND_DELETE_HANDLER_MIGRATION_API_CONTRACT: PluginAp
  * {@link DEFAULT_HANDED_OVER_SETTINGS} until the provider is new enough.
  */
 export const ADVANCED_RENAME_AND_DELETE_HANDLER_READ_BACK_API_CONTRACT: PluginApiContract = {
-  getSettings: {},
-  isPathIgnored: {},
-  isTreatedAsAttachment: {}
+  getSettings: ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT.getSettings,
+  isPathIgnored: ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT.isPathIgnored,
+  isTreatedAsAttachment: ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT.isTreatedAsAttachment
 };
 
 /**
