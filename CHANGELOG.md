@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## 15.0.0
+
+- feat(api)!: merge removing the vault graft; use the API's getAvailablePathForAttachments and isAttachmentUnitFolder
+  - BREAKING: `app.vault.getAvailablePathForAttachments.extended` is removed. Use the plugin API's `getAvailablePathForAttachments` (contract `1.3.0`).
+  - BREAKING: `app.vault.getAvailablePathForAttachments.checkIsAttachmentUnitFolder` is removed. Use the plugin API's `isAttachmentUnitFolder` (contract `1.3.0`).
+  - `obsidian-dev-utils` 107.4.1 and older read these members; `@mnaoumov/obsidian-lib` 2.0.0 and later read the plugin API.
+  - `Advanced Rename and Delete Handler` needs 2.2.0 or later to keep an attachment unit folder whole when it rescues attachments out of a deleted folder.
+- test: merge seeding Advanced Rename and Delete Handler 2.2.1, which reads the designation through the API
+- build(demo-vault): merge requiring CodeScript Toolkit 13.8.0 for the obsidian-lib demo script
+- fix(ui): merge marking the plugin names in the dependency reason as code
+- refactor(demo-vault): merge importing the community-plugin helpers from @mnaoumov/obsidian-lib
+
 ## 14.2.0
 
 - refactor: merge moving off obsidian-dev-utils onto the @mnaoumov packages
