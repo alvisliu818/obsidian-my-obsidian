@@ -1,7 +1,7 @@
 import type { App } from 'obsidian';
 
 import { Notice } from 'obsidian';
-import { configureCommunityPlugin } from 'obsidian-dev-utils/obsidian/community-plugins';
+import { configureCommunityPlugin } from '@mnaoumov/obsidian-lib/community-plugins';
 
 // The `obsidian-` prefix is part of the id, not decoration: it is what `manifest.json` and the vault's
 // `community-plugins.json` both say, so it is the folder every settings write has to land in.
