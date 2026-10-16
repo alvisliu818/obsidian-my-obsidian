@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 14.1.0
+
+- test: merge using the obsidian-typings declarations of Obsidian internals
+- test(api): read the migrate suite's expected contract version from the source
+- feat(api): merge publishing the attachment-path resolver and the unit-folder check
+
 ## 14.0.3
 
 - fix: merge updating obsidian-dev-utils to 107.4.1
