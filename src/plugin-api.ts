@@ -39,7 +39,7 @@ export type {
 /**
  * The contract this plugin publishes: the repo-root `api-contract.ts` constant a consumer copies, so the
  * provider and its consumers validate against one definition. Assigning it here is also what checks that the
- * hand-written schemas are Standard Schemas the registry accepts.
+ * library-built schemas are Standard Schemas the registry accepts.
  */
 export const PLUGIN_API_CONTRACT: PluginApiContract = ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT;
 
