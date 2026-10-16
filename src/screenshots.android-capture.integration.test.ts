@@ -66,13 +66,6 @@ interface RenameProbe {
   readonly noticeText: string;
 }
 
-/**
- * Obsidian's settings modal, reduced to the container `obsidian-typings` does not declare.
- */
-interface SettingsModalWithContainer {
-  containerEl: HTMLElement;
-}
-
 interface SettingsProbe {
   readonly noticeText: string;
   readonly settingNames: string[];
@@ -230,8 +223,7 @@ async function openSettingsTab(): Promise<SettingsProbe> {
       const OPEN_DELAY_IN_MILLISECONDS = 500;
       const SETTLE_DELAY_IN_MILLISECONDS = 1500;
 
-      const settingsModal: unknown = app.setting;
-      const containerEl = (settingsModal as SettingsModalWithContainer).containerEl;
+      const { containerEl } = app.setting;
       if (!document.body.contains(containerEl)) {
         document.body.append(containerEl);
       }
