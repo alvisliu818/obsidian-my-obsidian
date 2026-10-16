@@ -7,6 +7,7 @@ import {
 } from 'vitest';
 
 import { findPluginSettingsComponent } from '../scripts/helpers/plugin-settings-component-finder.ts';
+import { PLUGIN_API_VERSION } from './plugin-api.ts';
 
 /*
  * End-to-end coverage for `CustomAttachmentLocationApi.migrateSettings`, the receiving half of the collect-settings
@@ -236,7 +237,8 @@ describe('migrateSettings', () => {
     });
 
     expect(result.apiFound).toBe(true);
-    expect(result.apiVersion).toBe('1.2.0');
+    // The contract version is pinned once, in the per-note suite; this one only needs the record it negotiated.
+    expect(result.apiVersion).toBe(PLUGIN_API_VERSION);
     expect(result.settingsFound).toBe(true);
 
     expect(result.noChangeResult).toBe(true);
