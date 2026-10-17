@@ -225,6 +225,13 @@ export class ExtensionHost {
   async loadNative(rec: ExtensionRecord): Promise<string | null> {
     const ses = this.session();
     if (!ses?.loadExtension) return null;
+    // 单扩展垫片（install/enable 路径；启动路径由 syncNativeOnStartup 全局做）：
+    // SW 文件被垫后必须卸掉重载，Electron 才会从磁盘拉新脚本 —— 否则垫了也白垫。
+    try {
+      if (await this.shimBackgroundFile(rec)) {
+        try { await this.unloadNative(rec); } catch { /* 此前未加载 */ }
+      }
+    } catch { /* 垫片失败不阻断加载 */ }
     try {
       const info = await ses.loadExtension(this.dirOf(rec), { allowFileAccess: true });
       const id = info?.id ? String(info.id) : "";
@@ -276,7 +283,407 @@ export class ExtensionHost {
 
   /** 启动恢复：session 重启后 loadExtension 的状态不保留，必须重新加载才能拿到
    *  electronId（记录里存着上次的 id，但扩展没真的在 session 里）。 */
+  // =====================================================================
+  // 以下两个方法移植自 siyuan-plugin-browser src/extensions/extensionHost.ts
+  // （__sy* 前缀已改为 __ob*）。此前移植只带了 cs-runtime 的读取端
+  // （__obOnMessageHandlers || []），收集端（本文件 SW 垫片）漏了 ——
+  // 导致 routeSendMessage 恒 __noHandlers、AdGuard popup React boot 挂死。
+  // =====================================================================
+
+    /**
+     * 单扩展版 SW 垫片：把兼容垫片拼接到该扩展 background 源文件头部并写回磁盘。
+     * 返回是否修改了文件 —— 调用方必须卸掉重载该扩展（Electron 才会从磁盘拉新脚本）。
+     * 幂等：文件头有标记就跳过；扩展更新（文件重写）后标记消失会重新注入。
+     */
+    private async shimBackgroundFile(rec: ExtensionRecord): Promise<boolean> {
+        const fs = this.fs;
+        const path = this.pathMod;
+        const SHIM_MARK = "/* ob-bg-shim:v1 */";
+        const extPath = this.dirOf(rec);
+        try {
+ const manifest = JSON.parse(fs.readFileSync(path.join(extPath, "manifest.json"), "utf8"));
+            const swPath = manifest.background?.service_worker;
+            if (!swPath) return false;
+            const abs = path.join(extPath, swPath);
+            const src = fs.readFileSync(abs, "utf8");
+            if (src.startsWith(SHIM_MARK)) return false;
+            // ★ 与源侧不同：无条件垫（源侧只垫用到缺失 API 的扩展）。
+            //   实测：Liner 这类"没问题"的扩展不垫时，其 SW 里 __obOnMessageHandlers
+            //   缺失 → content script 的 runtime.sendMessage 恒 __noHandlers（重试
+            //   16s 耗尽报错）。垫片是防御性空壳 + handler 收集，对正常扩展无害。
+            void 0;
+            const shim = SHIM_MARK + `
+;(function () {
+try {
+    if (typeof chrome === "undefined") return;
+    // 0) onMessage handlers 收集数组：无条件最顶部创建 —— background 顶层的
+    //    addListener 稍后 push 进同一数组；宿主 routeSendMessage 据此判断
+    //    "handler 已注册（非空）" 还是 "仍在启动期（空 → 重试）"。
+    //    （此前数组在 onMessage 包装内创建，若包装条件不满足则数组缺失，
+    //    宿主会误报 "垫片未运行" 且无重试依据。）
+    self.__obOnMessageHandlers = self.__obOnMessageHandlers || [];
+    // 1) 通用存在性垫片：background 里引用到的缺失命名空间统一补空壳，
+    //    否则任何一处 undefined 访问都会让 SW 整个崩掉（实测 SiYuan Clip
+    //    第一行 contextMenus、中段 commands 各崩一次）。
+    var eventHub = function () {
+        var fns = [];
+        return {
+            addListener: function (fn) { if (typeof fn === "function") fns.push(fn); },
+            removeListener: function (fn) { var i = fns.indexOf(fn); if (i >= 0) fns.splice(i, 1); },
+            __emit: function () { var a = arguments; fns.forEach(function (fn) { try { fn.apply(null, a); } catch (e) {} }); },
+        };
+    };
+    var MISSING = ["contextMenus", "commands", "action", "browserAction", "pageAction",
+        "notifications", "cookies", "downloads", "webNavigation", "webRequest",
+        "declarativeNetRequest", "idle", "alarms", "permissions", "sessions",
+        "topSites", "bookmarks", "history", "omnibox", "pageCapture"];
+    MISSING.forEach(function (ns) {
+        if (chrome[ns]) return;
+        chrome[ns] = { onChanged: eventHub() };
+        // 常见事件口补 addListener（保证注册不抛）
+        ["onClicked", "onCommand", "onInstalled", "onStartup", "onChanged"].forEach(function (ev) {
+            chrome[ns][ev] = eventHub();
+        });
+    });
+    // 引擎拦截链需要 webRequest/webNavigation 的**全套请求事件**
+    // （v4 空壳只补了 5 个通用事件 → AdGuard engine 启动报 .addListener undefined）
+    try {
+        var REQ_EVENTS = ["onBeforeRequest", "onBeforeSendHeaders", "onSendHeaders", "onHeadersReceived",
+            "onAuthRequired", "onResponseStarted", "onBeforeRedirect", "onCompleted", "onErrorOccurred"];
+        var NAV_EVENTS = ["onBeforeNavigate", "onCommitted", "onDOMContentLoaded", "onCompleted",
+            "onErrorOccurred", "onCreatedNavigationTarget", "onReferenceFragmentUpdated",
+            "onTabReplaced", "onHistoryStateUpdated", "onDomainChanged"];
+        ["webRequest", "declarativeNetRequest"].forEach(function (ns) {
+            if (!chrome[ns]) chrome[ns] = {};
+            REQ_EVENTS.forEach(function (ev) {
+                if (!chrome[ns][ev] || typeof chrome[ns][ev].addListener !== "function") chrome[ns][ev] = eventHub();
+            });
+        });
+        if (!chrome.webNavigation) chrome.webNavigation = {};
+        NAV_EVENTS.forEach(function (ev) {
+            if (!chrome.webNavigation[ev] || typeof chrome.webNavigation[ev].addListener !== "function") chrome.webNavigation[ev] = eventHub();
+        });
+        // privacy 壳（AdGuard StealthService 调 privacy.network.webRTCIPHandlingPolicy）
+        if (!chrome.privacy) chrome.privacy = {};
+        if (!chrome.privacy.network) chrome.privacy.network = {};
+        ["webRTCIPHandlingPolicy", "networkPredictionEnabled"].forEach(function (k) {
+            if (!chrome.privacy.network[k]) chrome.privacy.network[k] = {
+                get: function (d, cb) { var v = { value: "default" }; if (typeof cb === "function") { try { cb(v); } catch (e) {} } return Promise.resolve(v); },
+                set: function (d, cb) { if (typeof cb === "function") { try { cb(); } catch (e) {} } return Promise.resolve(); },
+                clear: function (d, cb) { if (typeof cb === "function") { try { cb(); } catch (e) {} } return Promise.resolve(); },
+            };
+        });
+        if (!chrome.webNavigation.getAllFrames) chrome.webNavigation.getAllFrames = function (opts, cb) { var v = []; if (typeof cb === "function") { try { cb(v); } catch (e) {} } return Promise.resolve(v); };
+    } catch (e) {}
+    // 6) 给 webextension-polyfill 的 browser 对象补 webNavigation：
+    //    polyfill 的 schema 天生不含 webNavigation（AdGuard 代码却引用
+    //    browser.webNavigation.*），垫片执行时 polyfill 尚未构建，故延迟一拍
+    //    注入 —— 晚于 polyfill 构建、早于 engine.start 的异步流程。
+    setTimeout(function () {
+        try {
+            if (typeof browser !== "undefined" && browser && !browser.webNavigation && chrome.webNavigation) {
+                browser.webNavigation = chrome.webNavigation;
+            }
+        } catch (e) {}
+    }, 0);
+    // commands 补 API 形态（manifest 里声明的快捷键注册）
+    if (chrome.commands && !chrome.commands.getAll) {
+        chrome.commands.getAll = function (cb) { cb && cb([]); };
+    }
+    // 3) onInstalled 补发：Electron 不触发 runtime.onInstalled，而不少扩展
+    //    把 contextMenus.create 全放它的回调里（实测 SiYuan Clip）——
+    //    不补发则菜单注册永不执行。SW 每次唤醒补发一次正符合
+    //    "重启需重新注册内存态菜单"的生命周期语义。
+    try {
+        if (chrome.runtime && chrome.runtime.onInstalled && !chrome.runtime.onInstalled.__obWrapped) {
+            var oiFns = [];
+            var wrapped = {
+                addListener: function (fn) { if (typeof fn === "function") oiFns.push(fn); },
+                removeListener: function (fn) { var i = oiFns.indexOf(fn); if (i >= 0) oiFns.splice(i, 1); },
+            };
+            Object.defineProperty(chrome.runtime, "onInstalled", {
+                configurable: true,
+                get: function () { return wrapped; },
+            });
+            wrapped.__obWrapped = true;
+            // Chromium 原生触发在 Electron 下不存在；延迟让扩展先完成顶层注册
+            setTimeout(function () {
+                oiFns.forEach(function (fn) { try { fn({ reason: "install" }); } catch (e) {} });
+            }, 200);
+        }
+    } catch (e) {}
+    // 2) contextMenus 特化：记录注册项，点击经 storage 通道由宿主触发
+    if (!chrome.contextMenus.__obStore) {
+        var store = { items: {}, click: eventHub() };
+        chrome.contextMenus.removeAll = function (cb) { store.items = {}; if (cb) cb(); };
+        chrome.contextMenus.create = function (props) { if (props && props.id) store.items[props.id] = props; };
+        chrome.contextMenus.onClicked = store.click;
+        chrome.contextMenus.__obStore = store;
+        self.__obContextMenuStore = store;
+        // 宿主点击菜单 → 写 storage → 这里触发 onClicked
+        if (chrome.storage && chrome.storage.onChanged) {
+            chrome.storage.onChanged.addListener(function (changes, area) {
+                try {
+                    if (area !== "local" || !changes.__obMenuClick) return;
+                    var p = changes.__obMenuClick.newValue;
+                    store.click.__emit(p.info, p.tab);
+                } catch (e) {}
+            });
+        }
+    }
+    // 3) runtime.onMessage 路由（CS→SW 方向的通用替代）：
+    //    Electron 没实现 SW↔CS 消息路由（SW 的 tabs.sendMessage 恒报
+    //    "Receiving end does not exist"，CS 的 runtime.sendMessage 同理静默丢失）。
+    //    这里包装 onMessage.addListener 收集扩展注册的 handlers，
+    //    配合 storage 通道（__obRouteIn 请求 / __obRouteResp_<id> 响应）
+    //    用官方 chrome.storage 实现两端路由 —— storage 在 CS 和 SW 里
+    //    都是真实可用的（实测）。CS 侧的发送端 shim 由 sw-bridge 经 CDP
+    //    注入到扩展的 isolated world。
+    try {
+        if (chrome.runtime && chrome.runtime.onMessage && !chrome.runtime.onMessage.__obWrapped) {
+            var omFns = [];
+            var omWrapped = {
+                addListener: function (fn) { if (typeof fn === "function") omFns.push(fn); },
+                removeListener: function (fn) { var i = omFns.indexOf(fn); if (i >= 0) omFns.splice(i, 1); },
+            };
+            Object.defineProperty(chrome.runtime, "onMessage", {
+                configurable: true,
+                get: function () { return omWrapped; },
+            });
+            omWrapped.__obWrapped = true;
+            self.__obOnMessageHandlers = omFns;
+            if (chrome.storage && chrome.storage.onChanged) {
+                chrome.storage.onChanged.addListener(function (changes, area) {
+                    try {
+                        if (area !== "local" || !changes.__obRouteIn || !changes.__obRouteIn.newValue) return;
+                        var env = changes.__obRouteIn.newValue;
+                        if (!env || typeof env.reqId === "undefined") return;
+                        var responded = false;
+                        var sendResponse = function (resp) {
+                            if (responded) return;
+                            responded = true;
+                            var key = "__obRouteResp_" + env.reqId;
+                            var item = {};
+                            item[key] = { resp: resp === undefined ? null : resp };
+                            try { chrome.storage.local.set(item); } catch (e) {}
+                        };
+                        var anySync = false;
+                        omFns.forEach(function (fn) {
+                            try {
+                                var r = fn(env.msg, env.sender || { id: "ob-host" }, sendResponse);
+                                if (r === true) {
+                                    // handler 返回 true 表示异步 sendResponse，等待其回调
+                                } else if (r !== undefined) {
+                                    anySync = true;
+                                    sendResponse(r);
+                                }
+                            } catch (e) {}
+                        });
+                        if (!anySync && omFns.length === 0) sendResponse(undefined);
+                    } catch (e) {}
+                });
+            }
+        }
+    } catch (e) {}
+    // 4) runtime.onConnect 端口语义（AdGuard 等经 port 与 SW 通信取状态）：
+    //    Electron 没实现扩展间 port 路由。这里收集 onConnect listeners；
+    //    宿主（cs-runtime routePortMessage）经 CDP 建连时构造 port 对象派发，
+    //    port.postMessage 写入 outbox、由宿主轮询带回页面世界。
+    try {
+        if (chrome.runtime && chrome.runtime.onConnect && !chrome.runtime.onConnect.__obWrapped) {
+            var ocFns = [];
+            var ocWrapped = {
+                addListener: function (fn) { if (typeof fn === "function") ocFns.push(fn); },
+                removeListener: function (fn) { var i = ocFns.indexOf(fn); if (i >= 0) ocFns.splice(i, 1); },
+            };
+            Object.defineProperty(chrome.runtime, "onConnect", {
+                configurable: true,
+                get: function () { return ocWrapped; },
+            });
+            ocWrapped.__obWrapped = true;
+            self.__obOnConnectFns = ocFns;
+            self.__obPorts = self.__obPorts || {};
+            self.__obPortOutbox = self.__obPortOutbox || {};
+        }
+    } catch (e) {}
+    // 5) chrome.tabs 事件收集（AdGuard 等靠 onCreated/onUpdated 维护 tabContext，
+    //    Electron SW 里这些事件永不触发 → 扩展取 tab 状态时 getTabContext 恒
+    //    undefined → popup 卡 loading）。宿主经 "tabevent" 通道手工喂 tab。
+    try {
+        if (chrome.tabs && !chrome.tabs.__obTabWrapped) {
+            // 5a) tabs API 补桩：Electron 原生 tabs 缺 create/update/remove 等，
+            //     AdGuard onInstalled 流程调 tabs.create 直接 TypeError →
+            //     初始化链中断（tabsApi.start 永不执行 → popup 取状态卡 loading）
+            if (!chrome.tabs.create) chrome.tabs.create = function (props, cb) { var t = { id: 1, index: 0, windowId: 1, active: true, url: (props && props.url) || "" }; if (typeof cb === "function") { try { cb(t); } catch (e) {} } return Promise.resolve(t); };
+            if (!chrome.tabs.update) chrome.tabs.update = function (id, props, cb) { var t = { id: typeof id === "number" ? id : 1, url: (props && props.url) || "" }; if (typeof cb === "function") { try { cb(t); } catch (e) {} } return Promise.resolve(t); };
+            if (!chrome.tabs.remove) chrome.tabs.remove = function (id, cb) { if (typeof cb === "function") { try { cb(); } catch (e) {} } return Promise.resolve(); };
+            if (!chrome.tabs.get) chrome.tabs.get = function (id, cb) { var t = { id: id, index: 0, windowId: 1, active: false, url: "" }; if (typeof cb === "function") { try { cb(t); } catch (e) {} } return Promise.resolve(t); };
+            if (!chrome.tabs.reload) chrome.tabs.reload = function (id, cb) { if (typeof cb === "function") { try { cb(); } catch (e) {} } return Promise.resolve(); };
+            if (chrome.tabs.TAB_ID_NONE === undefined) chrome.tabs.TAB_ID_NONE = -1;
+            // 5c) permissions API 补桩：AdGuard 引擎启动链调 permissions.contains
+            //     （Electron 原生缺失 → "Cannot be started"）。MV3 所需权限默认放行。
+            if (chrome.permissions) {
+                if (!chrome.permissions.contains) chrome.permissions.contains = function (perms, cb) { var v = true; if (typeof cb === "function") { try { cb(v); } catch (e) {} } return Promise.resolve(v); };
+                if (!chrome.permissions.request) chrome.permissions.request = function (perms, cb) { var v = true; if (typeof cb === "function") { try { cb(v); } catch (e) {} } return Promise.resolve(v); };
+                if (!chrome.permissions.remove) chrome.permissions.remove = function (perms, cb) { var v = true; if (typeof cb === "function") { try { cb(v); } catch (e) {} } return Promise.resolve(v); };
+                if (!chrome.permissions.getAll) chrome.permissions.getAll = function (cb) { var v = { origins: [], permissions: [] }; if (typeof cb === "function") { try { cb(v); } catch (e) {} } return Promise.resolve(v); };
+            }
+            // 5b) tabs 事件收集（AdGuard 等靠 onCreated/onUpdated 维护 tabContext，
+            //     Electron SW 里这些事件永不触发 → 宿主经 "tabevent" 通道手工喂 tab）
+            var tcFns = [], tuFns = [], taFns = [];
+            var tabEvFor = function (fns) {
+                return {
+                    addListener: function (fn) { if (typeof fn === "function") fns.push(fn); },
+                    removeListener: function (fn) { var i = fns.indexOf(fn); if (i >= 0) fns.splice(i, 1); },
+                    hasListener: function (fn) { return fns.indexOf(fn) >= 0; },
+                };
+            };
+            try { Object.defineProperty(chrome.tabs, "onCreated", { configurable: true, get: function () { return tabEvFor(tcFns); } }); } catch (e) { chrome.tabs.onCreated = tabEvFor(tcFns); }
+            try { Object.defineProperty(chrome.tabs, "onUpdated", { configurable: true, get: function () { return tabEvFor(tuFns); } }); } catch (e) { chrome.tabs.onUpdated = tabEvFor(tuFns); }
+            try { Object.defineProperty(chrome.tabs, "onActivated", { configurable: true, get: function () { return tabEvFor(taFns); } }); } catch (e) { chrome.tabs.onActivated = tabEvFor(taFns); }
+            chrome.tabs.__obTabWrapped = true;
+            self.__obTabCreatedFns = tcFns;
+            self.__obTabUpdatedFns = tuFns;
+            self.__obTabActivatedFns = taFns;
+            // 5d) tabs.sendMessage 回程路由：Electron 原生实现恒报
+            //     "Receiving end does not exist"（SW↔CS 消息路由缺失）——
+            //     剪藏 tip/结果回不到页面、lastError 刷屏的根因。请求写
+            //     __obTabsOutbox，宿主在 routeSendMessage 后的监听窗口内
+            //     轮询取走 → 派发到 content 世界 → evalInSw 写回 __obTabsPending。
+            try {
+                var tsmSeq = 0;
+                var tsm = function (tabId, msg, cb, respCb) {
+                    var callback = typeof cb === "function" ? cb : (typeof respCb === "function" ? respCb : null);
+                    var rid = "t" + (++tsmSeq) + "_" + Date.now().toString(36);
+                    self.__obTabsOutbox = self.__obTabsOutbox || [];
+                    self.__obTabsOutbox.push({ id: rid, tabId: typeof tabId === "number" ? tabId : null, msg: msg === undefined ? null : msg });
+                    if (callback) {
+                        self.__obTabsPending = self.__obTabsPending || {};
+                        self.__obTabsPending[rid] = function (respJson) {
+                            delete self.__obTabsPending[rid];
+                            var resp;
+                            try { resp = respJson == null ? undefined : JSON.parse(respJson); } catch (e3) { resp = undefined; }
+                            try { callback(resp); } catch (e3) {}
+                        };
+                        setTimeout(function () {
+                            if (self.__obTabsPending && self.__obTabsPending[rid]) {
+                                delete self.__obTabsPending[rid];
+                                try { callback(undefined); } catch (e3) {}
+                            }
+                        }, 20000);
+                    }
+                };
+                try { Object.defineProperty(chrome.tabs, "sendMessage", { configurable: true, get: function () { return tsm; } }); }
+                catch (e2) { chrome.tabs.sendMessage = tsm; }
+            } catch (e) {}
+        }
+    } catch (e) {}
+    // 5e) chrome.storage.sync 修复：Electron SW 原生 sync.get 回调 undefined
+    //     （实测 SiYuan Clip storageSyncGet 拿到 undefined → 解构抛 TypeError
+    //     → article 剪藏流程崩进 catch → tip_siyuan_kernel_unavailable）。
+    //     与宿主 CS 代理同策略：sync 代理到 local（CS 世界经宿主代理同样落
+    //     在 SW 的 storage.local，数据同源）。
+    try {
+        if (chrome.storage && (!chrome.storage.sync || !chrome.storage.sync.__obShim)) {
+            var syncArea = {
+                __obShim: true,
+                get: function (keys, cb) {
+                    var done = function (v) { if (typeof cb === "function") { try { cb(v == null ? {} : v); } catch (e3) {} } };
+                    try {
+                        var p = chrome.storage.local.get(keys == null ? {} : keys, done);
+                        if (p && typeof p.then === "function") p.then(function (v) { done(v); }, function () { done({}); });
+                        return p;
+                    } catch (e2) { done({}); }
+                },
+                set: function (items, cb) { return chrome.storage.local.set(items == null ? {} : items, cb); },
+                remove: function (keys, cb) { return chrome.storage.local.remove(keys == null ? [] : keys, cb); },
+                clear: function (cb) { return chrome.storage.local.clear(cb); },
+                getBytesInUse: function (keys, cb) { var v = 0; if (typeof cb === "function") { try { cb(v); } catch (e3) {} } return Promise.resolve(v); },
+            };
+            try { Object.defineProperty(chrome.storage, "sync", { configurable: true, get: function () { return syncArea; } }); }
+            catch (e2) { chrome.storage.sync = syncArea; }
+        }
+    } catch (e) {}
+} catch (e) {}
+})();
+`;
+            fs.writeFileSync(abs, shim + src, "utf8");
+            return true;
+            return false;
+        } catch {
+            // 单个扩展垫片失败不影响其它
+            return false;
+        }
+    }
+
+    private async injectBackgroundShims(): Promise<void> {
+        let changedShimCount = 0;
+        for (const rec of this.getRecords()) {
+            if (await this.shimBackgroundFile(rec)) changedShimCount++;
+        }
+        if (changedShimCount > 0) {
+            // 垫片改了 SW 源码，Electron 侧的已加载扩展需要卸掉重载 ——
+            // 紧随其后的逐个 loadNative 发现原生缺席会重新 loadExtension
+            const ses = this.session();
+            if (ses?.getAllExtensions && ses.unloadExtension) {
+                for (const x of ses.getAllExtensions()) {
+                    try { ses.unloadExtension(x.id); } catch {}
+                }
+            }
+            // 关键：分区里持久化的 SW 注册/脚本缓存不随 loadExtension 更新
+            // （实测：background.js 已重写为新版，重载后 SW 仍执行旧脚本）。
+            // 清掉 SW 存储后，重载注册必然从磁盘拉新脚本。仅垫片变更时执行；
+            // 网站自身的 SW 被清后下次访问会自动重注册，无感。
+            if (ses?.clearStorageData) {
+                try {
+                    await ses.clearStorageData({ storages: ["serviceworkers"] });
+                } catch {}
+            }
+        }
+    }
+
+      private async neutralizeNativeContentScripts(): Promise<void> {
+        const fs = this.fs;
+        const path = this.pathMod;
+        let changed = false;
+        for (const rec of this.getRecords()) {
+            if (!rec.enabled) continue;
+            const extPath = this.dirOf(rec);
+            try {
+                const manifestPath = path.join(extPath, "manifest.json");
+                const origPath = path.join(extPath, "manifest.orig.json");
+                const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+                const groups = manifest.content_scripts || [];
+                if (groups.length === 0) continue;
+                // 原始 manifest 只在首次清空时备份（此后 manifest 已无 CS，避免
+                // 用清空版覆盖备份）
+                if (!fs.existsSync(origPath)) {
+                    fs.writeFileSync(origPath, JSON.stringify(manifest, null, 2), "utf8");
+                }
+                manifest.content_scripts = [];
+                fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+                changed = true;
+            } catch {
+                // 单个扩展失败不影响其它
+            }
+        }
+        if (changed) {
+            // 已加载的原生扩展需要卸掉重载才会按新 manifest 运行；
+            // reconcileNative（紧随其后调用）发现原生缺席会重新 loadExtension
+            const ses = this.session();
+            if (ses?.getAllExtensions && ses.unloadExtension) {
+                for (const x of ses.getAllExtensions()) {
+                    try { ses.unloadExtension(x.id); } catch {}
+                }
+            }
+        }
+    }
+
   async syncNativeOnStartup(): Promise<void> {
+    // 源侧 load() 同序：先垫 SW 文件 / 清原生 CS 副本（有变更会卸掉已加载原生），
+    // 再逐个恢复 —— 顺序不能反，否则垫片改了文件而 session 里还是旧 SW。
+    await this.injectBackgroundShims();
+    await this.neutralizeNativeContentScripts();
     for (const rec of this.getRecords()) {
       if (rec.enabled) await this.loadNative(rec);
       else await this.unloadNative(rec);
