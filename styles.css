@@ -75,6 +75,24 @@
   scrollbar-gutter: stable;
 }
 
+/* bcn-bar（breadcrumb 模块插在 view-content 首位的 sticky 条）与块编辑器
+   同住一个 view-content：bar 占流空间，container 又是 height:100%，两者相加
+   必然溢出 —— Obsidian 原生 .view-content 是 overflow:auto，于是编辑器
+   scroller 之外多出第二条滚动条。flex 化：bar 占自然高度，container 弹性填满
+   剩余（总高恰好贴合），外层不再溢出；sticky 在不滚动的容器里静止，视觉不变。
+   无 bar 时行为与 height:100% 等价。只命中 view-content 直子——片段宿主
+   （.lgp-fragment）与 Monaco zone 内的 container 不在此层级，不受影响。 */
+.view-content:has(> .block-editor-container) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.view-content > .block-editor-container {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+
 /* Scroll-comfort gap after the outline (scroll the last block toward center).
    The page-references host follows AFTER this gap so the bottom references
    stay part of the scrollable page and can be scrolled to the very bottom. */
