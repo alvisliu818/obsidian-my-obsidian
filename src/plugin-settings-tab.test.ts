@@ -79,8 +79,8 @@ vi.mock('@obsidian-typings/obsidian-public-latest/implementations', async (impor
 const DEBOUNCE_REVALIDATION_TEST_TIMEOUT_IN_MILLISECONDS = 30_000;
 
 // Every declared row across the inline Core group and the eight sub-pages, guarding against a whole section being dropped when rows are moved between pages.
-// 36 = 35 setting rows + the overlap banner row that rides at the top.
-const EXPECTED_ROW_COUNT = 36;
+// 37 = 36 setting rows + the overlap banner row that rides at the top.
+const EXPECTED_ROW_COUNT = 37;
 
 const STRICT_PROXY_TARGET_SYMBOL = Symbol.for('strictProxyTarget');
 
@@ -583,6 +583,7 @@ describe('PluginSettingsTab', () => {
     expect(names).toContain('Generated attachment file name');
     expect(names).toContain('Duplicate name separator');
     expect(names).toContain('Attachment rename mode');
+    expect(names).toContain('Screenshot file paths');
     expect(names).toContain('Rename attachments created by other plugins');
     expect(names).toContain('Renamed attachment file name');
     expect(names).toContain('Move attachment to proper folder used by multiple notes mode');

@@ -157,7 +157,7 @@ export const defaultTranslations = {
         displayText: 'None'
       },
       onlyPastedImages: {
-        description: 'only pasted images are renamed. Applies only when the PNG image content is pasted from the clipboard directly. Typically, for pasting screenshots.',
+        description: 'only pasted images are renamed, typically screenshots. That is image content pasted from the clipboard, or an image file a screenshot tool copied there (see Screenshot file paths). An image file you copy in a file manager and paste, or drag in, keeps its name.',
         displayText: 'Only pasted images'
       }
     },
@@ -543,6 +543,16 @@ export const defaultTranslations = {
     resetToSampleCustomTokens: {
       message: 'Are you sure you want to reset the custom tokens to the sample custom tokens? Your changes will be lost.',
       title: 'Reset to sample custom tokens'
+    },
+    screenshotFilePaths: {
+      description: {
+        part1: 'Some screenshot tools copy the capture to the clipboard as a file, for example PixPin with Copy images as files, or the Windows Snipping Tool. A pasted image file on one of these paths counts as a pasted image. So does any image file written less than a minute before it is pasted.',
+        part2: 'Insert each path on a new line.',
+        part3: 'You can use a folder path, or',
+        part4: 'A folder path is a full path on your computer, not a vault path; on macOS and Linux, leave off its trailing slash. A regular expression is tested against the full path of the file, ignoring case.',
+        part5: 'An image you drag in is never a pasted image, whatever its path.'
+      },
+      name: 'Screenshot file paths'
     },
     shouldCollectAttachmentsAutomatically: {
       description: 'Collect a note\'s attachments each time the note changes, as if Collect attachments in current note had been run on it. This moves files without asking, on every save of the note, so it is off by default.',

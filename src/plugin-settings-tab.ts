@@ -764,6 +764,31 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
+          f.appendText(t(($) => $.pluginSettingsTab.screenshotFilePaths.description.part1));
+          f.createEl('br');
+          f.appendText(t(($) => $.pluginSettingsTab.screenshotFilePaths.description.part2));
+          f.createEl('br');
+          f.appendText(t(($) => $.pluginSettingsTab.screenshotFilePaths.description.part3));
+          f.appendText(' ');
+          appendCodeBlock(f, t(($) => $.regularExpression));
+          f.appendText('.');
+          f.createEl('br');
+          f.appendText(t(($) => $.pluginSettingsTab.screenshotFilePaths.description.part4));
+          f.createEl('br');
+          f.appendText(t(($) => $.pluginSettingsTab.screenshotFilePaths.description.part5));
+        }),
+        name: t(($) => $.pluginSettingsTab.screenshotFilePaths.name),
+        render: (setting) => {
+          setting.addMultipleText((multipleText) => {
+            this.bind({
+              propertyName: 'screenshotFilePaths',
+              valueComponent: multipleText
+            });
+          });
+        }
+      }),
+      this.settingEx({
+        desc: createFragment((f) => {
           f.appendText(t(($) => $.pluginSettingsTab.renameAttachmentsCreatedByOtherPluginsMode.description.part1));
           f.createEl('br');
           f.appendText(t(($) => $.pluginSettingsTab.renameAttachmentsCreatedByOtherPluginsMode.description.part2));

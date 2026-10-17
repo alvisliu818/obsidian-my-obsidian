@@ -32,7 +32,9 @@ import type { ArrayBufferMap } from './array-buffer-map.ts';
 import type { AttachmentPathManager } from './attachment-path-manager.ts';
 import type { HandedOverSettingsComponent } from './handed-over-settings-component.ts';
 import type { ImageSizeMap } from './image-size-map.ts';
+import type { InsertGestureTrackerComponent } from './insert-gesture-tracker-component.ts';
 import type { MarkdownUrlMap } from './markdown-url-map.ts';
+import type { PastedImageMarker } from './pasted-image-marker.ts';
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';
 import type { PluginSettings } from './plugin-settings.ts';
 import type { TokenValidator } from './token-validator.ts';
@@ -62,6 +64,11 @@ type GenerateMarkdownLinkFunction = (file: TFile, sourcePath: string) => string;
 
 interface GenerateMarkdownLinkHolder {
   generateMarkdownLink: GenerateMarkdownLinkFunction;
+}
+
+interface InsertFilesChildParams {
+  readonly insertGestureTrackerComponent: InsertGestureTrackerComponent;
+  readonly pastedImageMarker: PastedImageMarker;
 }
 
 interface LayoutReadyTrigger {
@@ -113,6 +120,10 @@ vi.mock('./substitutions.ts', () => ({
   Substitutions: {
     registerCustomTokens: vi.fn()
   }
+}));
+
+vi.mock('./patches/app-import-attachments-patch-component.ts', async () => ({
+  AppImportAttachmentsPatchComponent: await createChildStub('AppImportAttachmentsPatchComponent')
 }));
 
 vi.mock('./patches/clipboard-manager-insert-files-patch-component.ts', async () => ({
@@ -188,6 +199,7 @@ describe('CustomAttachmentLocationComponent', () => {
     const settings = strictProxy<PluginSettings>({
       // eslint-disable-next-line unicorn/name-replacements -- `customTokensStr` is a persisted `data.json` settings key; renaming it would silently drop the user's custom tokens.
       customTokensStr: 'custom-tokens',
+      screenshotFilePaths: ['/PixPin_/'],
       shouldFollowObsidianAttachmentLocation: false
     });
 
@@ -300,6 +312,7 @@ describe('CustomAttachmentLocationComponent', () => {
       expect(types).toContain('FileManagerGenerateMarkdownLinkPatchComponent');
       expect(types).toContain('ShareReceiverImportFilesPatchComponent');
       expect(types).toContain('CoreFilesSettingTabPatchComponent');
+      expect(types).toContain('AppImportAttachmentsPatchComponent');
     });
 
     it('should add the web-utils patch child when web utils are available', async () => {
@@ -512,6 +525,30 @@ describe('CustomAttachmentLocationComponent', () => {
       expect(capturedChildTypes()).toContain('ClipboardManagerInsertFilesPatchComponent');
     });
 
+    it('should hand the clipboard manager patch the gesture tracker, and a marker that reads the screenshot paths', async () => {
+      const markAsPastedImageMock = vi.fn();
+      const component = createComponent(strictProxy<ArrayBufferMap>({
+        getFileStats: () => undefined,
+        markAsPastedImage: markAsPastedImageMock,
+        trySetByPath: () => Promise.resolve(false)
+      }));
+      const handler = await loadAndGetActiveLeafChangeHandler(component);
+      handler(createMarkdownLeaf(ViewType.Markdown));
+      await vi.runAllTimersAsync();
+      const child = hoisted.capturedChildren.find((entry) => entry.type === 'ClipboardManagerInsertFilesPatchComponent');
+      const params = castTo<InsertFilesChildParams>(child?.params);
+      expect(params.insertGestureTrackerComponent.gesture).toBeNull();
+
+      const arrayBuffer = new ArrayBuffer(4);
+      await params.pastedImageMarker.record([{
+        data: Promise.resolve(arrayBuffer),
+        extension: 'png',
+        filepath: 'C:/Temp/PixPin_2026-10-16_22-00-00.png',
+        name: 'PixPin_2026-10-16_22-00-00'
+      }], null);
+      expect(markAsPastedImageMock).toHaveBeenCalledWith(arrayBuffer);
+    });
+
     it('should do nothing for a null leaf', async () => {
       const component = createComponent();
       const handler = await loadAndGetActiveLeafChangeHandler(component);
@@ -555,10 +592,10 @@ async function createChildStub(type: string): Promise<new (params: unknown) => o
   };
 }
 
-function createComponent(): CustomAttachmentLocationComponent {
+function createComponent(arrayBufferMap = strictProxy<ArrayBufferMap>({})): CustomAttachmentLocationComponent {
   const component = new CustomAttachmentLocationComponent({
     app: context.app,
-    arrayBufferMap: strictProxy<ArrayBufferMap>({}),
+    arrayBufferMap,
     attachmentPathManager: context.attachmentPathManager,
     handedOverSettingsComponent: context.handedOverSettingsComponent,
     imageSizeMap: strictProxy<ImageSizeMap>({}),

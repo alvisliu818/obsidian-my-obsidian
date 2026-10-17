@@ -12,47 +12,56 @@ import {
   vi
 } from 'vitest';
 
-import type { ArrayBufferMap } from '../array-buffer-map.ts';
+import type { InsertGestureTrackerComponent } from '../insert-gesture-tracker-component.ts';
+import type { PastedImageMarker } from '../pasted-image-marker.ts';
 
+import { InsertGesture } from '../insert-gesture-tracker-component.ts';
 import { ClipboardManagerInsertFilesPatchComponent } from './clipboard-manager-insert-files-patch-component.ts';
 
 interface ClipboardManagerPrototype {
   insertFiles: InsertFilesFunction;
 }
 
+interface GestureHolder {
+  gesture: InsertGesture | null;
+}
+
 type InsertFilesFunction = (importedAttachments: ImportedAttachment[]) => Promise<void>;
 
 describe('ClipboardManagerInsertFilesPatchComponent', () => {
-  let arrayBufferMap: ArrayBufferMap;
+  let gestureHolder: GestureHolder;
   let insertFilesMock: ReturnType<typeof vi.fn<InsertFilesFunction>>;
-  let clipboardManagerPrototype: ClipboardManagerPrototype;
   let clipboardManager: ClipboardManager;
+  let recordMock: ReturnType<typeof vi.fn<PastedImageMarker['record']>>;
 
   beforeEach(() => {
-    arrayBufferMap = strictProxy<ArrayBufferMap>({
-      markAsPastedImage: vi.fn(),
-      trySetByPath: vi.fn().mockResolvedValue(true)
-    });
+    gestureHolder = { gesture: null };
     insertFilesMock = vi.fn<InsertFilesFunction>().mockResolvedValue(undefined);
-    clipboardManagerPrototype = {
+    const clipboardManagerPrototype: ClipboardManagerPrototype = {
       insertFiles: insertFilesMock
     };
     clipboardManager = strictProxy<ClipboardManager>(Object.create(clipboardManagerPrototype));
+    recordMock = vi.fn<PastedImageMarker['record']>().mockResolvedValue(undefined);
   });
 
   function createComponent(): ClipboardManagerInsertFilesPatchComponent {
     return new ClipboardManagerInsertFilesPatchComponent({
-      arrayBufferMap,
-      clipboardManager
+      clipboardManager,
+      insertGestureTrackerComponent: strictProxy<InsertGestureTrackerComponent>({
+        get gesture(): InsertGesture | null {
+          return gestureHolder.gesture;
+        }
+      }),
+      pastedImageMarker: strictProxy<PastedImageMarker>({ record: recordMock })
     });
   }
 
-  function createAttachment(filepath: string, buffer: ArrayBuffer, extension = 'png'): ImportedAttachment {
+  function createAttachment(filepath: string): ImportedAttachment {
     return {
-      data: Promise.resolve(buffer),
-      extension,
+      data: Promise.resolve(new ArrayBuffer(4)),
+      extension: 'png',
       filepath,
-      name: `attachment.${extension}`
+      name: 'attachment'
     };
   }
 
@@ -65,51 +74,28 @@ describe('ClipboardManagerInsertFilesPatchComponent', () => {
     expect(registerMethodPatchSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('should record each attachment by path and delegate to the original method', async () => {
+  it('should record the attachments with the gesture in progress, then delegate to the original method', async () => {
     const component = createComponent();
     component.load();
+    gestureHolder.gesture = InsertGesture.Drop;
 
-    const buffer1 = new ArrayBuffer(4);
-    const buffer2 = new ArrayBuffer(8);
-    const attachments = [
-      createAttachment('folder/a.png', buffer1),
-      createAttachment('folder/b.png', buffer2)
-    ];
+    const attachments = [createAttachment('folder/a.png'), createAttachment('folder/b.png')];
+    const promise = strictProxy<ClipboardManagerPrototype>(clipboardManager).insertFiles(attachments);
+    // The gesture is read synchronously, before the tracker forgets it.
+    gestureHolder.gesture = null;
+    await promise;
 
-    await strictProxy<ClipboardManagerPrototype>(clipboardManager).insertFiles(attachments);
-
-    expect(vi.mocked(arrayBufferMap.trySetByPath)).toHaveBeenCalledWith(buffer1, 'folder/a.png');
-    expect(vi.mocked(arrayBufferMap.trySetByPath)).toHaveBeenCalledWith(buffer2, 'folder/b.png');
+    expect(recordMock).toHaveBeenCalledWith(attachments, InsertGesture.Drop);
     expect(insertFilesMock).toHaveBeenCalledWith(attachments);
   });
 
-  it('should flag image attachments as pasted images but not non-image attachments (issue #31)', async () => {
-    const component = createComponent();
-    component.load();
-
-    const imageBuffer = new ArrayBuffer(4);
-    const pdfBuffer = new ArrayBuffer(8);
-    const attachments = [
-      createAttachment('folder/screenshot.png', imageBuffer, 'png'),
-      createAttachment('folder/doc.pdf', pdfBuffer, 'pdf')
-    ];
-
-    await strictProxy<ClipboardManagerPrototype>(clipboardManager).insertFiles(attachments);
-
-    // Assert by reference identity (`.mock.calls`) rather than structural `toHaveBeenCalledWith`,
-    // because all-zero ArrayBuffers compare loosely so identity is the only reliable check.
-    const markCalls = vi.mocked(arrayBufferMap.markAsPastedImage).mock.calls;
-    expect(markCalls).toHaveLength(1);
-    expect(markCalls[0]?.[0]).toBe(imageBuffer);
-  });
-
-  it('should still delegate to the original method when there are no attachments', async () => {
+  it('should record with no gesture when insertFiles is called outside a paste or drop', async () => {
     const component = createComponent();
     component.load();
 
     await strictProxy<ClipboardManagerPrototype>(clipboardManager).insertFiles([]);
 
-    expect(vi.mocked(arrayBufferMap.trySetByPath)).not.toHaveBeenCalled();
+    expect(recordMock).toHaveBeenCalledWith([], null);
     expect(insertFilesMock).toHaveBeenCalledTimes(1);
   });
 });

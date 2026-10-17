@@ -23,6 +23,9 @@ import type { ImageSizeMap } from './image-size-map.ts';
 import type { MarkdownUrlMap } from './markdown-url-map.ts';
 
 import { ExternallyCreatedAttachmentHandlerComponent } from './externally-created-attachment-handler-component.ts';
+import { InsertGestureTrackerComponent } from './insert-gesture-tracker-component.ts';
+import { PastedImageMarker } from './pasted-image-marker.ts';
+import { AppImportAttachmentsPatchComponent } from './patches/app-import-attachments-patch-component.ts';
 import { ClipboardManagerInsertFilesPatchComponent } from './patches/clipboard-manager-insert-files-patch-component.ts';
 import { CoreFilesSettingTabPatchComponent } from './patches/core-files-setting-tab-patch-component.ts';
 import { FileArrayBufferPatchComponent } from './patches/file-array-buffer-patch-component.ts';
@@ -77,11 +80,14 @@ export class CustomAttachmentLocationComponent extends LayoutReadyComponent {
   private readonly handedOverSettingsComponent: HandedOverSettingsComponent;
   private readonly imageSizeMap: ImageSizeMap;
 
+  private readonly insertGestureTrackerComponent: InsertGestureTrackerComponent;
+
   private isMarkdownViewPatched = false;
 
   private lastOpenFilePath: null | string = null;
 
   private readonly markdownUrlMap: MarkdownUrlMap;
+  private readonly pastedImageMarker: PastedImageMarker;
   private readonly pluginId: string;
   private readonly pluginName: string;
   private readonly pluginSettingsComponent: PluginSettingsComponent;
@@ -98,6 +104,11 @@ export class CustomAttachmentLocationComponent extends LayoutReadyComponent {
     this.markdownUrlMap = params.markdownUrlMap;
     this.imageSizeMap = params.imageSizeMap;
     this.tokenValidator = params.tokenValidator;
+    this.insertGestureTrackerComponent = new InsertGestureTrackerComponent(params.app);
+    this.pastedImageMarker = new PastedImageMarker({
+      arrayBufferMap: this.arrayBufferMap,
+      getScreenshotFilePaths: (): readonly string[] => this.pluginSettingsComponent.settings.screenshotFilePaths
+    });
   }
 
   public override onload(): void {
@@ -208,6 +219,16 @@ export class CustomAttachmentLocationComponent extends LayoutReadyComponent {
       })
     );
 
+    this.addChild(this.insertGestureTrackerComponent);
+
+    this.addChild(
+      new AppImportAttachmentsPatchComponent({
+        app: this.app,
+        insertGestureTrackerComponent: this.insertGestureTrackerComponent,
+        pastedImageMarker: this.pastedImageMarker
+      })
+    );
+
     this.addChild(new AllWindowsEventComponent(this.app)).registerAllDocumentsDomEvent({
       callback: this.handleInputFileChange.bind(this),
       options: { capture: true },
@@ -232,8 +253,9 @@ export class CustomAttachmentLocationComponent extends LayoutReadyComponent {
 
     this.addChild(
       new ClipboardManagerInsertFilesPatchComponent({
-        arrayBufferMap: this.arrayBufferMap,
-        clipboardManager: markdownView.editMode.clipboardManager
+        clipboardManager: markdownView.editMode.clipboardManager,
+        insertGestureTrackerComponent: this.insertGestureTrackerComponent,
+        pastedImageMarker: this.pastedImageMarker
       })
     );
 

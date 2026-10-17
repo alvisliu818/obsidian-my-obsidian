@@ -3,23 +3,25 @@ import type { ClipboardManager } from '@obsidian-typings/obsidian-public-latest'
 import { MonkeyAroundComponent } from '@mnaoumov/obsidian-lib/components/monkey-around-component';
 import { getPrototypeOf } from '@mnaoumov/typescript-lib/object-utils';
 
-import type { ArrayBufferMap } from '../array-buffer-map.ts';
-
-import { isImageExtension } from '../image-mime-types.ts';
+import type { InsertGestureTrackerComponent } from '../insert-gesture-tracker-component.ts';
+import type { PastedImageMarker } from '../pasted-image-marker.ts';
 
 interface ClipboardManagerInsertFilesPatchComponentConstructorParams {
-  readonly arrayBufferMap: ArrayBufferMap;
   readonly clipboardManager: ClipboardManager;
+  readonly insertGestureTrackerComponent: InsertGestureTrackerComponent;
+  readonly pastedImageMarker: PastedImageMarker;
 }
 
 export class ClipboardManagerInsertFilesPatchComponent extends MonkeyAroundComponent {
-  private readonly arrayBufferMap: ArrayBufferMap;
   private readonly clipboardManager: ClipboardManager;
+  private readonly insertGestureTrackerComponent: InsertGestureTrackerComponent;
+  private readonly pastedImageMarker: PastedImageMarker;
 
   public constructor(params: ClipboardManagerInsertFilesPatchComponentConstructorParams) {
     super();
-    this.arrayBufferMap = params.arrayBufferMap;
     this.clipboardManager = params.clipboardManager;
+    this.insertGestureTrackerComponent = params.insertGestureTrackerComponent;
+    this.pastedImageMarker = params.pastedImageMarker;
   }
 
   public override onload(): void {
@@ -30,17 +32,10 @@ export class ClipboardManagerInsertFilesPatchComponent extends MonkeyAroundCompo
         fallback,
         originalArguments: [importedAttachments]
       }) => {
-        for (const importedAttachment of importedAttachments) {
-          const arrayBuffer = await importedAttachment.data;
-          // `insertFiles` is the clipboard-paste / editor insert sink. Image attachments are flagged
-          // by exact ArrayBuffer identity so `Attachment rename mode: Only pasted images` detects them
-          // without depending on Obsidian's `Pasted image <timestamp>` naming, which is absent for a
-          // Windows 11 Win+Shift+S screenshot backed by a real temp file. See issue #31.
-          if (isImageExtension(importedAttachment.extension)) {
-            this.arrayBufferMap.markAsPastedImage(arrayBuffer);
-          }
-          await this.arrayBufferMap.trySetByPath(arrayBuffer, importedAttachment.filepath);
-        }
+        // `insertFiles` is where both an editor paste and an editor drop end up. Read the gesture before the first
+        // `await`: the tracker forgets it as soon as the DOM event has been dispatched.
+        const gesture = this.insertGestureTrackerComponent.gesture;
+        await this.pastedImageMarker.record(importedAttachments, gesture);
         return fallback();
       }
     });
