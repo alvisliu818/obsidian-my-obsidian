@@ -5,6 +5,7 @@
 import { Modal, Notice, setIcon } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import { getInstalledExtensions, installFromSearchEntry, search, toggleExtension, uninstallExtension, reinstallExtension } from './extensionManager';
+import { getIconThemesWithMissingIcons } from './iconThemeLoader';
 import type { ExtensionSource, InstalledExtension, SearchEntry } from './types';
 
 function escapeHTML(s: string): string {
@@ -148,6 +149,14 @@ export class ExtensionMarketModal extends Modal {
     if (e.contributes.iconThemes?.length) tags.push(`图标 ×${e.contributes.iconThemes.length}`);
     if (e.contributes.snippets?.length) tags.push(`片段 ×${e.contributes.snippets.length}`);
     for (const t of tags) contrib.createSpan({ cls: 'lgp-ext-tag', text: t });
+    // 图标主题声明了图标但 SVG 全部缺失（历史安装数据不完整）→ 提示重装
+    if (getIconThemesWithMissingIcons().some((t) => t.extensionId === e.id)) {
+      contrib.createSpan({
+        cls: 'lgp-ext-tag is-warn',
+        text: '图标缺失',
+        attr: { title: '图标文件缺失，请点「重装」重新下载' },
+      });
+    }
 
     const action = card.createDiv({ cls: 'lgp-ext-card__action' });
     const iconBtn = (icon: string, tooltip: string, onClick: () => Promise<void>): HTMLElement => {

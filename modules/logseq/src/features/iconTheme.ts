@@ -25,6 +25,10 @@ export const THEME_ICON_CLASS = 'mfi-icon';
 export const THEME_FOLDER_ICON_CLASS = 'mfi-folder-icon';
 /** The attribute it sets on a row it has decorated. */
 export const THEME_APPLIED_ATTR = 'data-mfi-applied';
+/** Class on the <img> that renders a market icon theme's data URI. */
+export const EXT_ICON_CLASS = 'lgp-ext-icon';
+
+import { getFileIconFor, getFolderIcon } from '../extensions/iconThemeLoader';
 
 interface IconThemeLike {
   getFileIconSvg?: (path: string) => string | null | undefined;
@@ -150,12 +154,31 @@ export interface IconDecision {
   fallback: string;
   /** True when the SVG came from the icon theme (as opposed to nothing). */
   themed: boolean;
+  /** Extension-market icon theme hit: a data: URI to render as <img> instead of inline SVG. */
+  dataUri?: string;
+}
+
+/**
+ * VSCode 扩展市场装的图标主题（iconThemeLoader）优先于 Material Icon Theme
+ * 社区插件：前者是用户在本插件市场里显式安装启用的，意图更明确。
+ * 命中时返回 data URI（<img> 渲染），未命中走原有社区插件路径。
+ */
+function extensionIconFor(name: string, isDir: boolean, collapsed: boolean): string | null {
+  try {
+    // 延迟 import 会破坏纯 Node 测试（本文件无 Obsidian 依赖是刻意的），
+    // 而 iconThemeLoader 同样零依赖，直接静态引入。
+    return isDir ? getFolderIcon(name, collapsed) : getFileIconFor(name);
+  } catch {
+    return null;
+  }
 }
 
 export function decideIcon(
   app: AppLike,
   o: { name: string; isDir: boolean; rel: string; fallback: string; collapsed?: boolean },
 ): IconDecision {
+  const extUri = extensionIconFor(o.name, o.isDir, o.collapsed ?? true);
+  if (extUri) return { svg: null, fallback: o.fallback, themed: true, dataUri: extUri };
   if (o.isDir) {
     // The theme matches folder icons on the NAME, not on a path, so the name is
     // the right thing to ask with — and a wrong folder icon is worse than an
@@ -200,7 +223,14 @@ export function iconForEntry(
   const el = document.createElement('span');
   el.className = 'logseq-mount-icon';
   const decision = decideIcon(app, opts);
-  if (decision.svg) {
+  if (decision.dataUri) {
+    // 扩展市场图标主题：SVG 以 data URI 存储，用 <img> 渲染（同源侧 fileIconHTML）
+    const img = document.createElement('img');
+    img.className = EXT_ICON_CLASS;
+    img.src = decision.dataUri;
+    img.alt = '';
+    el.appendChild(img);
+  } else if (decision.svg) {
     el.innerHTML = decision.svg;
     // classList rather than Obsidian's addClass helper: this element is created
     // with the plain DOM API, so the Obsidian extension may not be on it.

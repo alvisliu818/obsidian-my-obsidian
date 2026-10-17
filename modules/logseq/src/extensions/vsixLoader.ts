@@ -43,6 +43,27 @@ function getBasePath(packagePath: string): string {
   return parts.join('/');
 }
 
+/** 文件所在目录（相对于 extension 根） */
+function getDirPath(filePath: string): string {
+  const parts = filePath.split('/');
+  parts.pop();
+  return parts.join('/');
+}
+
+/** 解析相对路径（处理 . 与 ..），返回相对于 extension 根的规范化路径。
+ *  iconTheme 的 iconPath 相对主题 JSON 所在目录，须与此处存储路径一致
+ *  （iconThemeLoader 用同一算法回查 ext.files）。 */
+function resolveRelativePath(baseDir: string, relPath: string): string {
+  const normalized = normalizePath(relPath);
+  const parts = normalized.split('/');
+  const result = baseDir ? baseDir.split('/').filter(Boolean) : [];
+  for (const part of parts) {
+    if (part === '..') result.pop();
+    else if (part !== '.') result.push(part);
+  }
+  return result.join('/');
+}
+
 /** ZIP 内模糊查找文件（过滤 __MACOSX，优先 extension/ 前缀） */
 function findFile(zip: JSZip, filename: string): string | null {
   const paths: string[] = [];
@@ -114,6 +135,65 @@ export async function parseVsix(
         files[fp] = await file.async('string');
       } catch {
         // 跳过无法按文本读取的文件
+      }
+    }
+  }
+
+  // 图标主题：iconTheme JSON 本体 + iconDefinitions 引用的 SVG 文件。
+  // iconPath 相对主题 JSON 所在目录，可能带 ./ 与 ../，需归一到 extension 根
+  // （iconThemeLoader 用同一算法回查，两处必须一致）。
+  if (contributes.iconThemes) {
+    for (const it of contributes.iconThemes) {
+      if (!it.path) continue;
+      const themePath = normalizePath(it.path);
+      const themeFile = findFileInZip(zip, themePath, basePath);
+      if (!themeFile) {
+        console.warn(`[lgp-ext] VSIX 中未找到图标主题文件: ${it.path}`);
+        continue;
+      }
+
+      let themeData: any;
+      try {
+        const themeContent = await themeFile.async('string');
+        files[themePath] = themeContent;
+        themeData = JSON.parse(themeContent);
+      } catch (e) {
+        console.error(`[lgp-ext] 解析图标主题失败 ${themePath}:`, e);
+        continue;
+      }
+
+      const themeDir = getDirPath(themePath);
+      const iconDefs = themeData.iconDefinitions || {};
+      const defEntries = Object.entries(iconDefs) as [string, any][];
+      let extracted = 0;
+      let failed = 0;
+      for (const [, def] of defEntries) {
+        if (!def?.iconPath) continue;
+        const iconRelPath = resolveRelativePath(themeDir, def.iconPath);
+        if (files[iconRelPath] !== undefined) {
+          extracted++; // 多个定义可引用同一 SVG
+          continue;
+        }
+        const iconFile = findFileInZip(zip, iconRelPath, basePath);
+        if (!iconFile) {
+          failed++;
+          continue;
+        }
+        try {
+          files[iconRelPath] = await iconFile.async('string');
+          extracted++;
+        } catch {
+          failed++;
+        }
+      }
+      if (defEntries.length > 0 && extracted === 0) {
+        // 一个 SVG 都没提取到 → 图标必然无法显示，显式暴露而非静默
+        console.error(
+          `[lgp-ext] 图标主题 ${themePath} 声明了 ${defEntries.length} 个图标定义，` +
+            `但一个 SVG 都没提取到（未找到 ${failed} 个），请检查 VSIX 结构`,
+        );
+      } else if (failed > 0) {
+        console.warn(`[lgp-ext] 图标主题 ${themePath}: 提取 ${extracted} 个，缺失 ${failed} 个`);
       }
     }
   }

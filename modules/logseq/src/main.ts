@@ -75,6 +75,8 @@ import { ExtensionMarketModal } from './extensions/marketModal';
 import { restoreAllExtensions, registerExtensionConsumer, search as extSearch, installExtension, uninstallExtension, toggleExtension, reinstallExtension, getInstalledExtensions } from './extensions/extensionManager';
 import { isExtensionInstalled } from './extensions/extensionStore';
 import { hasGrammarForFence } from './extensions/tmEngine';
+import { activateIconThemeByPreference, ICON_THEME_CHANGED_EVENT } from './extensions/iconThemeLoader';
+import { applyCodeThemePreference } from './editor/monaco';
 import { TerminalView, VIEW_TYPE_TERMINAL } from './terminal/terminalView';
 import { shutdownPtyHelper } from './terminal/ptyClient';
 import { shutdownAllLsp } from './lsp/lspHost';
@@ -164,7 +166,20 @@ export default class LogseqEditorPlugin extends Plugin {
     registerExtensionConsumer((ext, action) => {
       if (action === 'install' || action === 'enable' || action === 'restore') registerGrammarFromExtension(ext);
       else unregisterGrammarFromExtension(ext);
+      // 贡献点变化后按偏好重应用代码主题与图标主题（manager 已先加载好本扩展的
+      // 贡献点再通知到这里）：装/启/恢复 → 可能切到扩展主题；禁用/卸载 → 回退内置。
+      applyCodeThemePreference(this.settings.codeThemePref);
+      activateIconThemeByPreference(this.settings.iconThemePref);
     });
+    // 图标主题就绪/切换 → 挂载面板行内图标重绘（iconForEntry 每次渲染时查询）
+    // 自定义事件不走 registerDomEvent（其重载只收已知事件名），register 兜底注销。
+    const onIconThemeChanged = () => {
+      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_MOUNT_PANEL)) {
+        (leaf.view as MountPanelView).render();
+      }
+    };
+    window.addEventListener(ICON_THEME_CHANGED_EVENT, onIconThemeChanged);
+    this.register(() => window.removeEventListener(ICON_THEME_CHANGED_EVENT, onIconThemeChanged));
     void ensureTmEngineReady().catch(() => {/* wasm 失败时回落 Prism */}).then(() => restoreAllExtensions(this));
     void loadOpLog(this);
     logOp(this, 'plugin.load', '', 'ok', `v${this.manifest.version}`);
@@ -920,6 +935,8 @@ export default class LogseqEditorPlugin extends Plugin {
     if (typeof this.settings.journalTemplate !== 'string') this.settings.journalTemplate = '';
     if (typeof this.settings.pythonEnvId !== 'string') this.settings.pythonEnvId = '';
     if (typeof this.settings.pythonEnvCustomPath !== 'string') this.settings.pythonEnvCustomPath = '';
+    if (typeof this.settings.codeThemePref !== 'string') this.settings.codeThemePref = '';
+    if (typeof this.settings.iconThemePref !== 'string') this.settings.iconThemePref = '';
     this.applyPythonEnv();
     if (typeof this.settings.customTemplateVars !== 'string') this.settings.customTemplateVars = '';
     // Shortcut groups: a config written before these settings existed has no

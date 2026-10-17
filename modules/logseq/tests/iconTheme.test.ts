@@ -8,12 +8,13 @@
  * must all fall back to the caller's marker rather than break the tree.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, afterAll } from 'vitest';
 import {
   decideIcon,
   hasIconTheme,
   iconSvgFor,
 } from '../src/features/iconTheme';
+import { loadIconThemes, clearAllIconThemes } from '../src/extensions/iconThemeLoader';
 
 const SVG = '<svg viewBox="0 0 16 16"><path d="M2 2h12v12H2z"/></svg>';
 
@@ -166,5 +167,41 @@ describe('decideIcon — what the row should show', () => {
     });
     decideIcon(app, opts({ rel: 'a\\b\\c.md' }));
     expect(asked[0]).toBe('a/b/c.md');
+  });
+});
+
+describe('decideIcon — extension-market icon theme takes priority', () => {
+  // iconThemeLoader 是模块级单例（零依赖，与 Material 插件桥可共存）；
+  // 用真实 loader 挂一个激活主题，测完 clearAllIconThemes 还原。
+  const EXT_SVG = '<svg id="ext-file"/>';
+
+  afterAll(() => clearAllIconThemes());
+
+  it('returns the extension theme data URI before asking the Material plugin', () => {
+    loadIconThemes({
+      id: 'tester.icons',
+      namespace: 'tester',
+      name: 'icons',
+      version: '1.0.0',
+      displayName: 'Icons',
+      description: '',
+      enabled: true,
+      installedAt: 0,
+      contributes: { iconThemes: [{ id: 'icons', label: 'Icons', path: 'icons.json' }] },
+      files: { 'icons.json': JSON.stringify({ iconDefinitions: { file: { iconPath: './file.svg' } }, file: 'file' }), 'file.svg': EXT_SVG },
+    });
+    // 第一个加载的图标主题自动激活（与 loader 行为一致）
+    const d = decideIcon(appWith({ getFileIconSvg: () => SVG }), opts({ name: 'whatever.ts' }));
+    expect(d.dataUri).toContain(encodeURIComponent(EXT_SVG));
+    expect(d.svg).toBeNull(); // 不再走社区插件
+    expect(d.themed).toBe(true);
+    clearAllIconThemes();
+  });
+
+  it('falls through to the Material plugin when the extension theme has no hit', () => {
+    clearAllIconThemes(); // 确保扩展侧无激活主题
+    const d = decideIcon(appWith({ getFileIconSvg: () => SVG }), opts());
+    expect(d.svg).toBe(SVG);
+    expect(d.dataUri).toBeUndefined();
   });
 });

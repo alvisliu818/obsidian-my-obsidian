@@ -3742,6 +3742,19 @@ body.lgp-table-editor-cursor * {
   width: 18px;
   height: 18px;
 }
+/* 扩展市场图标主题：SVG 以 data URI 经 <img> 渲染，尺寸对齐 mfi-icon 档位 */
+.logseq-mount-icon .lgp-ext-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+  object-fit: contain;
+}
+.logseq-mount-row .logseq-mount-icon .lgp-ext-icon,
+.logseq-mount-head .logseq-mount-icon .lgp-ext-icon,
+.menu-item .logseq-mount-icon .lgp-ext-icon {
+  width: 17px;
+  height: 17px;
+}
 .logseq-mount-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4357,6 +4370,11 @@ body.lgp-table-editor-cursor * {
   border-radius: 10px;
   padding: 1px 8px;
   color: var(--text-muted);
+}
+/* 图标缺失警示（历史安装数据不完整，需重装扩展） */
+.lgp-ext-market .lgp-ext-tag.is-warn {
+  color: var(--text-warning, #b81a1a);
+  border-color: var(--text-warning, #b81a1a);
 }
 .lgp-ext-market .lgp-ext-card__action {
   display: flex;

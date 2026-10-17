@@ -13,6 +13,7 @@
 import * as monaco from 'monaco-editor';
 import { normalizePath, type App } from 'obsidian';
 import { registerTmGrammarForMonaco } from '../extensions/monacoGrammarBridge';
+import { applyThemeByPreference, getActiveThemeName } from '../extensions/themeLoader';
 
 let initialized = false;
 let getResourcePath: ((rel: string) => string) | null = null;
@@ -311,6 +312,21 @@ export function applyTheme(mode: 0 | 1): void {
   monaco.editor.setTheme(themeName);
 }
 
+/** 当前编辑器应使用的 Monaco 主题名：扩展主题优先，否则内置 Obsidian 配色 */
+export function currentMonacoTheme(): string {
+  return getActiveThemeName() ?? (getCurrentMode() === 1 ? 'logseq-dark' : 'logseq-light');
+}
+
+/**
+ * 按设置偏好应用扩展代码主题（themeLoader 侧 setTheme 是全局的，会覆盖所有编辑器）。
+ * 无可用扩展主题（未装/偏好 '__none__'/指定主题已被卸载）时回退内置 Obsidian 配色。
+ */
+export function applyCodeThemePreference(pref: string): boolean {
+  if (applyThemeByPreference(pref, getCurrentMode() === 1)) return true;
+  applyTheme(getCurrentMode());
+  return false;
+}
+
 export interface CreateEditorOptions {
   value: string;
   language: string;
@@ -343,7 +359,7 @@ export function createEditor(
   const editor = monaco.editor.create(container, {
     value: opts.value,
     language: opts.language,
-    theme: getCurrentMode() === 1 ? 'logseq-dark' : 'logseq-light',
+    theme: currentMonacoTheme(),
     fontSize: opts.fontSize ?? 13,
     wordWrap: opts.wordWrap ?? 'off',
     lineNumbers:

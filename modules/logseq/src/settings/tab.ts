@@ -1,7 +1,10 @@
-﻿import { PluginSettingTab, Setting, Notice, type App } from 'obsidian';
+import { PluginSettingTab, Setting, Notice, type App } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import { SqliteConsoleModal } from '../features/sqliteConsole';
 import { ExtensionMarketModal } from '../extensions/marketModal';
+import { getLoadedThemes } from '../extensions/themeLoader';
+import { getLoadedIconThemes, activateIconThemeByPreference } from '../extensions/iconThemeLoader';
+import { applyCodeThemePreference } from '../editor/monaco';
 import { MountListModal } from '../panels/mountModals';
 import { VIEW_TYPE_MOUNT_PANEL } from '../panels/mountPanel';
 import { VIEW_TYPE_CONTENT_SEARCH } from '../panels/contentSearchPanel';
@@ -119,6 +122,44 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       .setName('扩展市场')
       .setDesc('从 Open VSX / VSCode Marketplace 搜索并安装 VSCode 扩展（TextMate 语法等），供块编辑器消费。')
       .addButton((b) => b.setButtonText('打开扩展市场').onClick(() => new ExtensionMarketModal(this.plugin).open()));
+
+    // 代码配色主题偏好（'' 自动 / '__none__' 内置配色 / Monaco 主题名）
+    new Setting(containerEl)
+      .setName('代码配色主题')
+      .setDesc('应用已安装扩展的颜色主题到代码编辑器；未装或指定主题不可用时回退内置 Obsidian 配色。')
+      .addDropdown((d) => {
+        const themes = getLoadedThemes();
+        const options: Record<string, string> = { '': '自动（扩展主题优先）', __none__: '内置 Obsidian 配色' };
+        for (const t of themes) options[t.name] = `${t.label}（${t.base === 'vs' ? '亮' : '暗'}）`;
+        // 偏好指向的主题当前未加载（扩展被禁用等）也列出，避免显示成值本身
+        if (this.plugin.settings.codeThemePref && !(this.plugin.settings.codeThemePref in options)) {
+          options[this.plugin.settings.codeThemePref] = this.plugin.settings.codeThemePref;
+        }
+        d.addOptions(options).setValue(this.plugin.settings.codeThemePref).onChange(async (v) => {
+          this.plugin.settings.codeThemePref = v;
+          await this.plugin.saveSettings();
+          applyCodeThemePreference(v);
+        });
+      });
+
+    // 文件图标主题偏好（'' 自动 / '__none__' 不使用 / 扩展 id）
+    new Setting(containerEl)
+      .setName('文件图标主题')
+      .setDesc('应用已安装扩展的图标主题到外部挂载面板；未装时用默认图标。')
+      .addDropdown((d) => {
+        const themes = getLoadedIconThemes();
+        const options: Record<string, string> = { '': '自动（第一个已装主题）', __none__: '不使用扩展图标主题' };
+        for (const t of themes) options[t.extensionId] = t.label;
+        if (this.plugin.settings.iconThemePref && !(this.plugin.settings.iconThemePref in options)) {
+          options[this.plugin.settings.iconThemePref] = this.plugin.settings.iconThemePref;
+        }
+        d.addOptions(options).setValue(this.plugin.settings.iconThemePref).onChange(async (v) => {
+          this.plugin.settings.iconThemePref = v;
+          await this.plugin.saveSettings();
+          activateIconThemeByPreference(v);
+        });
+      });
+
     // ---------- Shortcuts ----------
     // ---------- LSP ----------
     containerEl.createEl('h3', { text: 'LSP 语言服务器' });

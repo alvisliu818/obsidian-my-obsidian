@@ -91,8 +91,10 @@ export async function installExtension(
   ext.source = source;
   await addInstalledExtension(plugin, ext);
   if (ext.enabled) {
-    consumeFn?.(ext, 'install');
+    // 先加载主题/图标/片段，后通知消费端：消费端可能按偏好立即应用主题，
+    // 顺序反了会让刚装的贡献点对偏好应用不可见。
     applyOtherContributions(ext, 'install');
+    consumeFn?.(ext, 'install');
   }
   return ext;
 }

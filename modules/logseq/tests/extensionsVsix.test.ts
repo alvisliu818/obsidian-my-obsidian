@@ -80,4 +80,49 @@ describe('parseVsix', () => {
     const ext = await parseVsix(vsix, 'tester', 'test-lang', '1.2.3');
     expect(ext.namespace).toBe('tester');
   });
+
+  it('extracts iconTheme JSON and its referenced SVGs (relative paths, shared dedupe)', async () => {
+    // iconPath 相对主题 JSON 所在目录解析；../ 回到上级；两个定义共用同一 SVG 只存一份
+    const iconThemeJson = JSON.stringify({
+      iconDefinitions: {
+        folder: { iconPath: './icons/folder.svg' },
+        file: { iconPath: '../fileicons/file.svg' },
+        dup: { iconPath: './icons/folder.svg' },
+      },
+      folder: 'folder',
+      file: 'file',
+      fileExtensions: { ts: 'file' },
+    });
+    const pkg = {
+      ...PKG,
+      contributes: {
+        ...PKG.contributes,
+        iconThemes: [{ id: 'test-icons', label: 'Test Icons', path: './themes/test-icon-theme.json' }],
+      },
+    };
+    const vsix = await makeVsix(pkg, {
+      'themes/test-icon-theme.json': iconThemeJson,
+      'themes/icons/folder.svg': '<svg id="folder"/>',
+      'fileicons/file.svg': '<svg id="file"/>',
+    });
+    const ext = await parseVsix(vsix, 'tester', 'test-lang', '1.2.3');
+    // 主题 JSON 本体必须入库（iconThemeLoader 靠它解析贡献）
+    expect(ext.files['themes/test-icon-theme.json']).toContain('iconDefinitions');
+    // 相对路径归一到 extension 根：./icons/… 与 ../fileicons/…
+    expect(ext.files['themes/icons/folder.svg']).toContain('folder');
+    expect(ext.files['fileicons/file.svg']).toContain('file');
+  });
+
+  it('skips iconTheme JSON silently when the theme file is missing from the VSIX', async () => {
+    const pkg = {
+      ...PKG,
+      contributes: {
+        ...PKG.contributes,
+        iconThemes: [{ id: 'ghost', label: 'Ghost', path: './themes/missing.json' }],
+      },
+    };
+    const vsix = await makeVsix(pkg, { 'syntaxes/test.tmLanguage.json': '{}' });
+    const ext = await parseVsix(vsix, 'tester', 'test-lang', '1.2.3');
+    expect(ext.files['themes/missing.json']).toBeUndefined();
+  });
 });

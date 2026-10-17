@@ -271,6 +271,16 @@ export interface BlockEditorSettings {
   /** 用户自定义语言服务器（语言→启动命令映射）；内置 pyright 不入此表，仅可用同 id 条目覆盖 enabled */
   lspServers: LspServerSpec[];
   /**
+   * 扩展市场代码配色主题偏好：'' = 自动（优先已装扩展主题，明暗匹配）；
+   * '__none__' = 不用扩展主题（内置 Obsidian 配色）；其他 = Monaco 主题名。
+   */
+  codeThemePref: string;
+  /**
+   * 扩展市场文件图标主题偏好：'' = 自动（第一个已装主题）；
+   * '__none__' = 不使用扩展图标主题；其他 = 扩展 id。
+   */
+  iconThemePref: string;
+  /**
    * Open a mounted file in a split pane rather than replacing the current tab.
    *
    * Obsidian refuses to mount a text view without a file, so opening one seeds
@@ -545,12 +555,14 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   externalCodeWrap: true,
   externalCodeHybrid: true,
   lspEnabled: true,
+  lspServers: [],
+  codeThemePref: '',
+  iconThemePref: '',
   externalSplitView: false,
   externalBanner: true,
   officeViewerEnabled: true,
   imageViewerTakeOver: false,
   openWithApps: [],
-  lspServers: [],
   recentFiles: [],
   contentSearch: { ...DEFAULT_CONTENT_SEARCH },
 };
