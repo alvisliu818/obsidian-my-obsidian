@@ -33,8 +33,9 @@ export interface LiveTranscribeViewUi {
 	openWindowPicker(onPicked?: (name: string) => void): void;
 }
 
-/** One transcript row in the DOM: its text node, for marker updates. */
+/** One transcript row in the DOM: its box and its text node. */
 interface LineRow {
+	rowEl: HTMLElement;
 	textEl: HTMLElement;
 }
 
@@ -47,11 +48,22 @@ export class LiveTranscribeView extends ItemView implements LiveTranscribeSink {
 	private readonly ui: LiveTranscribeViewUi;
 	private statusEl!: HTMLElement;
 	private transcriptEl!: HTMLElement;
-	private previewEl!: HTMLElement;
 	private startButton!: HTMLButtonElement;
 	private stopButton!: HTMLButtonElement;
 	private screenshotButton!: HTMLButtonElement;
+	/** One row per committed line, indexed exactly like the controller's. */
 	private lineRows: LineRow[] = [];
+	/**
+	 * The row the speaker is still speaking into. It sits inside the transcript
+	 * as its last row and is handed over to the committed line when the pause
+	 * ends the sentence, so text grows downward from the top instead of living
+	 * in a strip pinned under the box.
+	 */
+	private activeRow: LineRow | null = null;
+	/** Whether the transcript still shows its "say something" placeholder. */
+	private hintShowing = true;
+	private static readonly HINT =
+		'（对着麦克风说话，转写从上往下一句句往下写；鼠标悬到某句上打标记）';
 	// ---- 悬浮标记条（以鼠标为中心）----
 	private markerPopup: HTMLDivElement | null = null;
 	private popupLineIndex = -1;
@@ -108,22 +120,18 @@ export class LiveTranscribeView extends ItemView implements LiveTranscribeSink {
 			this.ui.openWindowPicker();
 		};
 
+		// 唯一的转写区：正文从上往下累积，正在说的那一行就是区内最后一行，
+		// 不再挂一条钉在底部的独立预览条。
 		this.transcriptEl = root.createDiv();
 		this.transcriptEl.style.flex = '1';
+		this.transcriptEl.style.minHeight = '0';
 		this.transcriptEl.style.overflowY = 'auto';
 		this.transcriptEl.style.whiteSpace = 'pre-wrap';
 		this.transcriptEl.style.fontFamily = 'var(--font-text)';
 		this.transcriptEl.style.padding = '8px';
 		this.transcriptEl.style.borderRadius = '8px';
 		this.transcriptEl.style.background = 'var(--background-secondary)';
-		this.transcriptEl.setText('（对着麦克风说话，按停顿一句一句出字；鼠标悬到某句上打标记）');
-
-		this.previewEl = root.createDiv();
-		this.previewEl.style.padding = '4px 8px';
-		this.previewEl.style.fontFamily = 'var(--font-text)';
-		this.previewEl.style.minHeight = '20px';
-		this.previewEl.style.color = 'var(--text-muted)';
-		this.previewEl.style.display = 'none';
+		this.transcriptEl.setText(LiveTranscribeView.HINT);
 
 		const footer = root.createDiv();
 		footer.style.display = 'flex';
@@ -158,10 +166,17 @@ export class LiveTranscribeView extends ItemView implements LiveTranscribeSink {
 
 	/** The transcript without the per-line session timestamps. */
 	private plainText(): string {
-		return this.controller
+		const lines = this.controller
 			.getTranscript()
-			.map((line) => line.replace(/^\[\d{2}:\d{2}\] /, ''))
-			.join('\n');
+			.map((line) => line.replace(/^\[\d{2}:\d{2}\] /, ''));
+		// The line still being spoken is on screen too, so it goes along.
+		const held = (this.activeRow?.textEl.textContent ?? '')
+			.replace(/▍$/, '')
+			.trim();
+		if (held !== '') {
+			lines.push(held);
+		}
+		return lines.join('\n');
 	}
 
 	override async onClose(): Promise<void> {
@@ -253,6 +268,77 @@ export class LiveTranscribeView extends ItemView implements LiveTranscribeSink {
 	}
 
 	// ------------------------------------------------------------------
+	// 行 DOM：一律追加到转写区末尾，天然自上而下
+	// ------------------------------------------------------------------
+
+	/** Drops the placeholder so the first row starts at the top of the box. */
+	private ensureNoHint(): void {
+		if (!this.hintShowing) {
+			return;
+		}
+		this.hintShowing = false;
+		this.transcriptEl.setText('');
+	}
+
+	/**
+	 * Appends one row at the end of the transcript box. Rows are never
+	 * inserted anywhere else, which is what keeps the text top-down.
+	 */
+	private appendRow(): LineRow {
+		this.ensureNoHint();
+		const rowEl = this.transcriptEl.createDiv();
+		rowEl.style.marginBottom = '4px';
+		rowEl.style.borderRadius = '4px';
+		return { rowEl, textEl: rowEl.createSpan() };
+	}
+
+	/** Puts one line's text into a row, as solid text. */
+	private writeRow(row: LineRow, text: string): void {
+		row.textEl.setText(text);
+	}
+
+	/** Wires the hovered marker bar onto a committed row. */
+	private bindRowHover(row: LineRow, index: number): void {
+		row.rowEl.onmouseenter = (event): void => {
+			row.rowEl.style.background = 'var(--background-modifier-hover)';
+			this.showMarkerPopup(event, index);
+		};
+		row.rowEl.onmouseleave = (): void => {
+			row.rowEl.style.background = '';
+			this.scheduleMarkerHide();
+		};
+	}
+
+	/**
+	 * Keeps the last line in view, unless the reader has scrolled up to reread
+	 * something — then the text stays where they left it.
+	 */
+	private stickToBottom(): void {
+		const el = this.transcriptEl;
+		const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+		if (distanceFromBottom < 48) {
+			el.scrollTop = el.scrollHeight;
+		}
+	}
+
+	/**
+	 * Takes back a row nothing is being spoken into any more. A row still
+	 * carrying text is kept: the pause may have cut the sentence off, and the
+	 * words are worth more than the empty line where they were being written.
+	 */
+	private dropActiveRow(): void {
+		const row = this.activeRow;
+		if (!row) {
+			return;
+		}
+		if ((row.textEl.textContent ?? '').trim() !== '') {
+			return;
+		}
+		this.activeRow = null;
+		row.rowEl.remove();
+	}
+
+	// ------------------------------------------------------------------
 	// Sink 回调
 	// ------------------------------------------------------------------
 
@@ -265,42 +351,42 @@ export class LiveTranscribeView extends ItemView implements LiveTranscribeSink {
 	onLine(line: string, index: number): void {
 		const existing = this.lineRows[index];
 		if (existing) {
-			existing.textEl.setText(line);
+			// A marker tagged an already committed line.
+			this.writeRow(existing, line);
 			return;
 		}
-		if (this.lineRows.length === 0) {
-			this.transcriptEl.setText('');
-		}
-		const row = this.transcriptEl.createDiv();
-		row.style.marginBottom = '4px';
-		row.style.borderRadius = '4px';
-		const textEl = row.createSpan({ text: line });
-		row.onmouseenter = (event): void => {
-			row.style.background = 'var(--background-modifier-hover)';
-			this.showMarkerPopup(event, index);
-		};
-		row.onmouseleave = (): void => {
-			row.style.background = '';
-			this.scheduleMarkerHide();
-		};
-		this.lineRows.push({ textEl });
-		this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
+		// The sentence being spoken keeps the row it was already rendering in:
+		// the committed text replaces the moving preview in place instead of
+		// the line jumping to another place in the box.
+		const row = this.activeRow ?? this.appendRow();
+		this.activeRow = null;
+		this.writeRow(row, line);
+		this.bindRowHover(row, index);
+		this.lineRows[index] = row;
+		this.stickToBottom();
 	}
 
 	onPreview(stable: string, unstable: string): void {
 		if (stable === '' && unstable === '') {
-			this.previewEl.style.display = 'none';
-			this.previewEl.setText('');
+			// Silence, or the tail is on its way to become a committed line:
+			// the row keeps what was recognized and only loses its caret, so a
+			// sentence never blinks out while the recognizer answers.
+			const row = this.activeRow;
+			if (row) {
+				const held = (row.textEl.textContent ?? '').replace(/▍$/, '');
+				this.writeRow(row, held);
+			}
 			return;
 		}
-		this.previewEl.style.display = 'block';
-		this.previewEl.setText('');
+		const row = this.activeRow ?? this.appendRow();
+		this.activeRow = row;
+		row.textEl.setText('');
 		if (stable !== '') {
-			this.previewEl.createSpan({ text: stable });
+			row.textEl.createSpan({ text: stable });
 		}
-		const moving = this.previewEl.createSpan({ text: unstable + '▍' });
+		const moving = row.textEl.createSpan({ text: unstable + '▍' });
 		moving.style.color = 'var(--text-muted)';
-		this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
+		this.stickToBottom();
 	}
 
 	onState(state: LiveSessionState): void {
@@ -309,8 +395,13 @@ export class LiveTranscribeView extends ItemView implements LiveTranscribeSink {
 		// 截屏是「正在听」的动作；标记不受限——会话停了，转写仍是文档。
 		this.screenshotButton.disabled = state !== 'listening';
 		this.statusEl.setText(STATE_LABELS[state]);
-		if (state === 'idle' && this.lineRows.length === 0) {
-			this.transcriptEl.setText('（对着麦克风说话，按停顿一句一句出字；鼠标悬到某句上打标记）');
+		if (state === 'idle') {
+			// Nothing is being spoken into a row any more.
+			this.dropActiveRow();
+			if (this.lineRows.length === 0 && !this.hintShowing) {
+				this.hintShowing = true;
+				this.transcriptEl.setText(LiveTranscribeView.HINT);
+			}
 		}
 	}
 }
