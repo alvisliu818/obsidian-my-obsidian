@@ -39,6 +39,7 @@ import ObsidianGitPlugin from "../modules/obsidian-git/src/main";
 import SaveControlPlugin from "../modules/save-control/src/main";
 import OpenTabSettingsPlugin from "../modules/open-tab-settings/src/main";
 import AudioRecorderPlugin from "../modules/audio-recorder/src/main";
+import MediaJournalPlugin from "../modules/media-journal/src/main";
 import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
 
 export default class MyObsidianPlugin extends Plugin {
@@ -181,6 +182,18 @@ export default class MyObsidianPlugin extends Plugin {
 				"库内录音与语音转写：多轨（麦克风+系统声）录音、带书签/章节/波形的高级播放器、格式转换、降噪清理与说话人分离转写（Whisper / Deepgram / Gemini / 本地 whisper.cpp）。上游 Anatol Khmialeuski（MIT）。",
 			desktopOnly: false,
 			cls: AudioRecorderPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Third-party (Alaxanalax10, 0-BSD), kept whole — see
+			// modules/media-journal/NOTICE. Desktop-only like its own
+			// manifest: screen capture needs getDisplayMedia.
+			id: "media-journal",
+			legacyId: "media-recorder",
+			name: "my Media Recorder",
+			summary:
+				"侧栏里的录像/录屏/录音机：三档画质、画中画预览、计时与暂停续录，录完的 .webm 存进库并可自动嵌入当前笔记（或指定笔记）；嵌入后的视频能拖拽改宽度并写回原文。上游 Alaxanalax10（0-BSD）。",
+			desktopOnly: true,
+			cls: MediaJournalPlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 
