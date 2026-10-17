@@ -25,6 +25,7 @@ import { clipPage } from "./browser/excerpt";
 import { bindSessionDownloads } from "./browser/downloads";
 import { ExtensionHost } from "./extensions/extensionHost";
 import { buildEdgeStoreHelperScript, isEdgeAddonsSiteUrl } from "./extensions/edgeStoreHelper";
+import { EDGE_ADDONS_HOME } from "./extensions/edgeStore";
 import { setClipBridge } from "./extensions/cs-runtime";
 import { htmlToMarkdown } from "./utils/markdown";
 import { PopupLayer } from "./extensions/popup";
@@ -202,9 +203,17 @@ export default class BrowserPlugin extends Plugin {
         }
       },
 
-      onEdgeInstall: (id: string) => {
+      onEdgeInstall: (id: string, webview: IWebviewTag) => {
         void this.extHost.installFromEdgeAddons(id).then((r) => {
           new Notice(r.ok ? `扩展已安装：${r.ext?.name ?? id}` : `安装失败：${r.error ?? id}`);
+          // 回写页面按钮状态（"安装中…" → "已安装"/复位），见 edgeStoreHelper
+          try {
+            void webview.executeJavaScript(
+              `window.__obEdgeStoreSetState && window.__obEdgeStoreSetState(${JSON.stringify(r.ok ? "ok" : "idle")})`,
+            );
+          } catch {
+            /* guest gone */
+          }
         });
       },
       extensionStartPayload: (url: string) => this.extHost.documentStartPayload(url),
@@ -342,6 +351,11 @@ export default class BrowserPlugin extends Plugin {
       name: "新建标签页",
       hotkeys: [{ modifiers: ["Mod", "Alt"], key: "T" }],
       callback: () => void this.openUrl(this.config.homePage || "about:blank", true),
+    });
+    this.addCommand({
+      id: "open-edge-addons",
+      name: "打开 Edge 扩展集市",
+      callback: () => void this.openUrl(EDGE_ADDONS_HOME, true),
     });
     this.addCommand({
       id: "close-tab",

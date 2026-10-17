@@ -13,6 +13,7 @@ export interface ToolbarCallbacks {
   onFind(text: string, forward: boolean, findNext: boolean): void;
   onFindClose(): void;
   onOpenExternal(): void;
+  onOpenExtensionStore(): void;
   onMenu(e: MouseEvent): void;
   onExtensionClick?(id: string, anchor: HTMLElement): void;
 }
@@ -40,6 +41,13 @@ export class Toolbar {
     this.element.className = "ob-browser-toolbar";
     this.buildDom();
     this.bindEvents();
+    this.updateStoreVisibility();
+  }
+
+  /** 扩展总开关关闭时隐藏集市入口（设置变更后由 setExtensionIcons 顺带刷新） */
+  private updateStoreVisibility(): void {
+    const btn = this.element.querySelector<HTMLElement>('[data-act="extensionStore"]');
+    if (btn) btn.style.display = this.getSettings().extensionsEnabled ? "" : "none";
   }
 
   private buildDom(): void {
@@ -55,6 +63,7 @@ export class Toolbar {
         <button class="ob-btn" data-act="find" aria-label="查找" title="查找 (Ctrl+F)"></button>
         <button class="ob-btn" data-act="openExternal" aria-label="系统浏览器打开" title="在系统浏览器中打开"></button>
         <button class="ob-btn" data-act="menu" aria-label="更多" title="更多"></button>
+        <button class="ob-btn" data-act="extensionStore" aria-label="Edge 扩展集市" title="Edge 扩展集市（扩展页有“安装到 Obsidian”按钮）"></button>
         <div class="ob-extbar"></div>
       </div>
       <div class="ob-findbar-wrap" style="display:none">
@@ -85,6 +94,7 @@ export class Toolbar {
     setIcon(q('[data-act="find"]'), "search");
     setIcon(q('[data-act="openExternal"]'), "external-link");
     setIcon(q('[data-act="menu"]'), "more-vertical");
+    setIcon(q('[data-act="extensionStore"]'), "store");
     setIcon(q('[data-act="findPrev"]'), "chevron-up");
     setIcon(q('[data-act="findNext"]'), "chevron-down");
     setIcon(q('[data-act="findClose"]'), "x");
@@ -107,6 +117,7 @@ export class Toolbar {
         case "home": this.cb.onHome(); break;
         case "bookmark": this.cb.onToggleBookmark(); break;
         case "openExternal": this.cb.onOpenExternal(); break;
+        case "extensionStore": this.cb.onOpenExtensionStore(); break;
         case "menu": this.cb.onMenu(e as MouseEvent); break;
         case "find": this.toggleFind(true); break;
         case "findClose": this.toggleFind(false); break;
@@ -198,6 +209,7 @@ export class Toolbar {
 
   /** Extension icons: file:// images are blocked, so everything is a data URL. */
   setExtensionIcons(items: { id: string; name: string; icon: string }[]): void {
+    this.updateStoreVisibility();
     this.extbar.empty();
     for (const it of items) {
       const btn = document.createElement("button");

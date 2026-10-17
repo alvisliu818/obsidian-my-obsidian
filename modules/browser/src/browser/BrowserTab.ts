@@ -8,6 +8,7 @@ import { showWebViewContextMenu } from "./contextMenu";
 import type { BrowserContext } from "./context";
 import { buildAdBlockCss, BUILTIN_ADBLOCK_RULES } from "./adblock";
 import { isValidHttpUrl } from "../utils/url";
+import { EDGE_ADDONS_HOME } from "../extensions/edgeStore";
 
 /**
  * One browser tab: toolbar + a single <webview> guest, plus the defensive
@@ -62,6 +63,7 @@ export class BrowserTab {
         onFind: (text, forward, next) => this.controller.findInPage(text, forward, next),
         onFindClose: () => this.controller.stopFind(),
         onOpenExternal: () => this.ctx.openInSystemBrowser(this.url),
+        onOpenExtensionStore: () => void this.loadUrl(EDGE_ADDONS_HOME),
         onMenu: (e) => this.showMenu(e),
         onExtensionClick: (id, anchor) => this.ctx.onExtensionClick(id, anchor),
       },
@@ -115,7 +117,7 @@ export class BrowserTab {
         this.toolbar.setExtensionIcons(this.ctx.extensionIcons());
       },
       onExtensionRequest: (url: string) => this.ctx.extensionStartPayload(url),
-      onEdgeInstall: (id: string) => this.ctx.onEdgeInstall?.(id),
+      onEdgeInstall: (id: string, webview: IWebviewTag) => this.ctx.onEdgeInstall?.(id, webview),
       onContextMenu: (params: WebViewContextMenuParams) => {
         showWebViewContextMenu(params, this.wrap.getBoundingClientRect(), {
           goBack: () => this.goBack(),

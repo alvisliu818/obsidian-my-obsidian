@@ -15,9 +15,10 @@ export interface WebviewCallbacks {
   onExtensionRequest?(url: string): { css: string[]; js: string[] };
   /**
    * Edge Add-ons store page: the injected helper (edgeStoreHelper) hands back the
-   * extension id when the user clicks its "install" button.
+   * extension id when the user clicks its "install" button (IPC channel or the
+   * __obEdgeInstall polling fallback). The webview is passed for state writeback.
    */
-  onEdgeInstall?(id: string): void;
+  onEdgeInstall?(id: string, webview: IWebviewTag): void;
   onFindResult?(active: number, matches: number): void;
   /** Injection point for ad-filter CSS and content scripts. */
   onDomReady?(webview: IWebviewTag, url: string): void;
@@ -48,6 +49,7 @@ export class WebviewController {
   private programmaticNav = false;
   private lastNewTabUrl = "";
   private lastNewTabTime = 0;
+  private edgePollTimer: ReturnType<typeof setInterval> | null = null;
   private lastKnownUrl = "";
   private loading = false;
   private hasLoadedOnce = false;
@@ -110,6 +112,7 @@ export class WebviewController {
       this.syncUserAgent(this.getCurrentUrl());
       void this.injectLinkInterceptor();
       const url = this.getCurrentUrl();
+      this.syncEdgeInstallPolling(url);
       if (/^(https?:|chrome-extension:)/i.test(url)) this.callbacks.onDomReady?.(this.webview, url);
     });
 
@@ -147,7 +150,7 @@ export class WebviewController {
       }
       // Edge 商店页助手回传的扩展 id（见 edgeStoreHelper 的 sendInstall）
       if (e?.channel === "ob-edge-install" && e.args?.[0]) {
-        this.callbacks.onEdgeInstall?.(String(e.args[0]));
+        this.callbacks.onEdgeInstall?.(String(e.args[0]), this.webview);
       }
     });
 
@@ -467,6 +470,33 @@ export class WebviewController {
     const ua = this.getSettings().userAgent;
     if (ua && ua !== this.appliedUserAgent) this.setUserAgent(ua);
     void url;
+  }
+
+  /**
+   * Edge 商店页兜底通道：注入脚本在 IPC 不可用时把扩展 id 写进
+   * window.__obEdgeInstall，由宿主轮询消费并清除。仅在商店页面上轮询，
+   * 导航离开后停止（dom-ready 驱动）。
+   */
+  private syncEdgeInstallPolling(url: string): void {
+    const onStore = /^https?:\/\/microsoftedge\.microsoft\.com\//i.test(url);
+    if (onStore && this.edgePollTimer === null) {
+      this.edgePollTimer = setInterval(() => {
+        void this.webview
+          .executeJavaScript(
+            "(function(){var v=window.__obEdgeInstall; if(v){try{delete window.__obEdgeInstall;}catch(e){window.__obEdgeInstall=null;}} return v||'';})()",
+            true,
+          )
+          .then((v) => {
+            if (v) this.callbacks.onEdgeInstall?.(String(v), this.webview);
+          })
+          .catch(() => {
+            /* guest gone */
+          });
+      }, 1000);
+    } else if (!onStore && this.edgePollTimer !== null) {
+      clearInterval(this.edgePollTimer);
+      this.edgePollTimer = null;
+    }
   }
 
   // ---------------- health ----------------
