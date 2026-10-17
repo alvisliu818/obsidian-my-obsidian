@@ -28,6 +28,7 @@ function isClassifiedAsPasted(overrides: Partial<IsPastedImageParams>): boolean 
     gesture: InsertGesture.Paste,
     now: NOW,
     screenshotFilePaths: [],
+    shouldKeepNamesOfPastedNonScreenshotFiles: true,
     ...overrides
   });
 }
@@ -67,6 +68,20 @@ describe('isPastedImage', () => {
 
   it('should keep a pasted file whose stats could not be read', () => {
     expect(isClassifiedAsPasted({ fileStats: undefined })).toBe(false);
+  });
+
+  it('should treat every pasted file as pasted while the names of non-screenshot files are not kept', () => {
+    expect(isClassifiedAsPasted({ shouldKeepNamesOfPastedNonScreenshotFiles: false })).toBe(true);
+    expect(isClassifiedAsPasted({ fileStats: undefined, shouldKeepNamesOfPastedNonScreenshotFiles: false })).toBe(true);
+    expect(isClassifiedAsPasted({ gesture: null, shouldKeepNamesOfPastedNonScreenshotFiles: false })).toBe(true);
+  });
+
+  it('should keep a dropped file even while the names of non-screenshot files are not kept', () => {
+    expect(isClassifiedAsPasted({ gesture: InsertGesture.Drop, shouldKeepNamesOfPastedNonScreenshotFiles: false })).toBe(false);
+  });
+
+  it('should never treat a non-image as pasted while the names of non-screenshot files are not kept', () => {
+    expect(isClassifiedAsPasted({ extension: 'pdf', shouldKeepNamesOfPastedNonScreenshotFiles: false })).toBe(false);
   });
 
   it('should classify a call outside any gesture like a paste', () => {

@@ -157,7 +157,7 @@ export const defaultTranslations = {
         displayText: 'None'
       },
       onlyPastedImages: {
-        description: 'only pasted images are renamed, typically screenshots. That is image content pasted from the clipboard, or an image file a screenshot tool copied there (see Screenshot file paths). An image file you copy in a file manager and paste, or drag in, keeps its name.',
+        description: 'only pasted images are renamed, typically screenshots. That is image content pasted from the clipboard, or an image file pasted from it. An image file you drag in keeps its name, and so does an old image file you copy in a file manager and paste, if Keep the names of pasted image files that are not screenshots is on.',
         displayText: 'Only pasted images'
       }
     },
@@ -546,7 +546,7 @@ export const defaultTranslations = {
     },
     screenshotFilePaths: {
       description: {
-        part1: 'Some screenshot tools copy the capture to the clipboard as a file, for example PixPin with Copy images as files, or the Windows Snipping Tool. A pasted image file on one of these paths counts as a pasted image. So does any image file written less than a minute before it is pasted.',
+        part1: 'Used only while Keep the names of pasted image files that are not screenshots is on. Some screenshot tools copy the capture to the clipboard as a file, for example PixPin with Copy images as files, or the Windows Snipping Tool. A pasted image file on one of these paths counts as a pasted image. So does any image file written less than a minute before it is pasted.',
         part2: 'Insert each path on a new line.',
         part3: 'You can use a folder path, or',
         part4: 'A folder path is a full path on your computer, not a vault path; on macOS and Linux, leave off its trailing slash. A regular expression is tested against the full path of the file, ignoring case.',
@@ -569,6 +569,10 @@ export const defaultTranslations = {
     shouldFollowObsidianAttachmentLocation: {
       description: 'If enabled, new attachments go wherever Obsidian\'s own Files and links > Default location for new attachments says, and Location for new attachments below is not used. The file name settings still apply.',
       name: 'Follow Obsidian attachment location'
+    },
+    shouldKeepNamesOfPastedNonScreenshotFiles: {
+      description: 'If enabled, Only pasted images keeps the name of a pasted image file unless it looks like a screenshot: it was written less than a minute before it is pasted, or it matches Screenshot file paths. Turn it on if you copy real image files in a file manager and want their names kept. If disabled, every pasted image is renamed, whichever screenshot tool copied it.',
+      name: 'Keep the names of pasted image files that are not screenshots'
     },
     shouldPreserveImageMetadata: {
       description: {

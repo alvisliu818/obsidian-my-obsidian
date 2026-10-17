@@ -172,6 +172,9 @@ export class PluginSettings {
   /**
    * Where screenshot tools leave the files they copy, so a paste of such a file counts as a pasted image.
    *
+   * Consulted only while {@link shouldKeepNamesOfPastedNonScreenshotFiles} is on; otherwise every pasted image
+   * file counts as pasted.
+   *
    * Some screenshot tools put the capture on the clipboard as a FILE rather than as image data: PixPin with
    * `Copy images as files`, and the Windows 11 Snipping Tool, whose clipboard is backed by a file in its
    * `TempState\ScreenClip` folder. Obsidian keeps the name of a pasted file, so without this list such a capture
@@ -232,6 +235,17 @@ export class PluginSettings {
    * release, so a user whose attachments moved on the upgrade switches this off and has the old behavior back.
    */
   public shouldFollowObsidianAttachmentLocation = true;
+
+  /**
+   * Whether `Only pasted images` keeps the name of a pasted image FILE that does not look like a screenshot.
+   *
+   * Off, every image that is pasted counts as pasted, whether the clipboard held image data or a file. On, a
+   * pasted file counts only when it was written in the last minute or matches {@link screenshotFilePaths}, so an
+   * old image copied in a file manager keeps its name. Off by default: capture tools that copy as a
+   * file are too many for any list to name, and on 15.1.0, where this was the only behavior, a capture from an
+   * unlisted tool kept its own name (issue #97). A drop keeps its name either way.
+   */
+  public shouldKeepNamesOfPastedNonScreenshotFiles = false;
 
   public shouldPreserveImageMetadata = false;
   public shouldRenameCollectedAttachments = false;

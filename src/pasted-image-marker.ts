@@ -8,6 +8,7 @@ import { isPastedImage } from './pasted-image-classifier.ts';
 interface PastedImageMarkerConstructorParams {
   readonly arrayBufferMap: ArrayBufferMap;
   readonly getScreenshotFilePaths: (this: void) => readonly string[];
+  readonly getShouldKeepNamesOfPastedNonScreenshotFiles: (this: void) => boolean;
 }
 
 /**
@@ -19,10 +20,12 @@ interface PastedImageMarkerConstructorParams {
 export class PastedImageMarker {
   private readonly arrayBufferMap: ArrayBufferMap;
   private readonly getScreenshotFilePaths: (this: void) => readonly string[];
+  private readonly getShouldKeepNamesOfPastedNonScreenshotFiles: (this: void) => boolean;
 
   public constructor(params: PastedImageMarkerConstructorParams) {
     this.arrayBufferMap = params.arrayBufferMap;
     this.getScreenshotFilePaths = params.getScreenshotFilePaths;
+    this.getShouldKeepNamesOfPastedNonScreenshotFiles = params.getShouldKeepNamesOfPastedNonScreenshotFiles;
   }
 
   /**
@@ -49,7 +52,8 @@ export class PastedImageMarker {
           fileStats: this.arrayBufferMap.getFileStats(arrayBuffer),
           gesture,
           now: Date.now(),
-          screenshotFilePaths: this.getScreenshotFilePaths()
+          screenshotFilePaths: this.getScreenshotFilePaths(),
+          shouldKeepNamesOfPastedNonScreenshotFiles: this.getShouldKeepNamesOfPastedNonScreenshotFiles()
         })
       ) {
         this.arrayBufferMap.markAsPastedImage(arrayBuffer);

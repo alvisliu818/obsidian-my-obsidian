@@ -200,7 +200,8 @@ describe('CustomAttachmentLocationComponent', () => {
       // eslint-disable-next-line unicorn/name-replacements -- `customTokensStr` is a persisted `data.json` settings key; renaming it would silently drop the user's custom tokens.
       customTokensStr: 'custom-tokens',
       screenshotFilePaths: ['/PixPin_/'],
-      shouldFollowObsidianAttachmentLocation: false
+      shouldFollowObsidianAttachmentLocation: false,
+      shouldKeepNamesOfPastedNonScreenshotFiles: true
     });
 
     const loadFromFileMock = vi.fn((): Promise<void> => noopAsync());

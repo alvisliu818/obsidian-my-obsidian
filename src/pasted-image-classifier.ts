@@ -46,6 +46,11 @@ export interface IsPastedImageParams {
    * The `Screenshot file paths` setting entries.
    */
   readonly screenshotFilePaths: readonly string[];
+
+  /**
+   * The `Keep the names of pasted image files that are not screenshots` setting.
+   */
+  readonly shouldKeepNamesOfPastedNonScreenshotFiles: boolean;
 }
 
 /**
@@ -58,8 +63,11 @@ export interface IsPastedImageParams {
  * 2. **A drop:** the user dragged a file in. Its name is meant to be kept.
  * 3. **A paste with a path:** the clipboard held a file. Screenshot tools such as PixPin (with `Copy images as files`)
  *    and the Windows 11 Snipping Tool copy their capture this way, and so does a file manager copying a real file.
- *    The image counts as a screenshot when its path matches a `Screenshot file paths` entry, or when the file was
- *    written less than {@link FRESH_SCREENSHOT_FILE_THRESHOLD_IN_MILLISECONDS} ago.
+ *    By default it counts as pasted: capture tools that copy as a file are too many for any list to name, and a
+ *    capture that keeps its own name is the regression issue #97 reported. Only when
+ *    `shouldKeepNamesOfPastedNonScreenshotFiles` is on does it have to look like a screenshot: its path matches a
+ *    `Screenshot file paths` entry, or the file was written less than
+ *    {@link FRESH_SCREENSHOT_FILE_THRESHOLD_IN_MILLISECONDS} ago.
  *
  * @param params - The parameters.
  * @returns `true` when the image should be treated as pasted.
@@ -74,7 +82,11 @@ export function isPastedImage(params: IsPastedImageParams): boolean {
   }
 
   const isDropped = params.gesture === InsertGesture.Drop;
-  return !isDropped && (isScreenshotFilePath(params.filePath, params.screenshotFilePaths) || isFreshFile(params.fileStats, params.now));
+  return !isDropped && (
+    !params.shouldKeepNamesOfPastedNonScreenshotFiles
+    || isScreenshotFilePath(params.filePath, params.screenshotFilePaths)
+    || isFreshFile(params.fileStats, params.now)
+  );
 }
 
 /**
