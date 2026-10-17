@@ -113,6 +113,33 @@ describe('PluginSettingsComponent', () => {
     });
   });
 
+  describe('shouldDeleteEmptyNoteFolders on a record from before it existed', () => {
+    // Such a record also deleted the folder a deleted note left empty, so upgrading must not stop that.
+    it('should load as true when the record already deletes empty folders', async () => {
+      const component = await loadComponent({ emptyFolderBehavior: 'Delete' });
+
+      expect(component.settings.shouldDeleteEmptyNoteFolders).toBe(true);
+    });
+
+    it('should load as false when the record keeps empty folders', async () => {
+      const component = await loadComponent({ emptyFolderBehavior: 'Keep' });
+
+      expect(component.settings.shouldDeleteEmptyNoteFolders).toBe(false);
+    });
+
+    it('should load as false when the record names no empty folder behavior', async () => {
+      const component = await loadComponent({ shouldHandleRenames: true });
+
+      expect(component.settings.shouldDeleteEmptyNoteFolders).toBe(false);
+    });
+
+    it('should keep the value a record already holds', async () => {
+      const component = await loadComponent({ emptyFolderBehavior: 'DeleteWithEmptyParents', shouldDeleteEmptyNoteFolders: false });
+
+      expect(component.settings.shouldDeleteEmptyNoteFolders).toBe(false);
+    });
+  });
+
   describe('isNoteEx', () => {
     it('should report a markdown file as a note', () => {
       expect(createComponent().isNoteEx('note.md')).toBe(true);

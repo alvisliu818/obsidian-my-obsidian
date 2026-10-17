@@ -80,6 +80,7 @@ export class PluginApiImpl implements AdvancedRenameAndDeleteHandlerApi {
       includePaths: [...settings.includePaths],
       notePriorities: [...settings.notePriorities],
       shouldDeleteConflictingAttachments: settings.shouldDeleteConflictingAttachments,
+      shouldDeleteEmptyNoteFolders: settings.shouldDeleteEmptyNoteFolders,
       shouldHandleDeletions: settings.shouldHandleDeletions,
       shouldHandleRenames: settings.shouldHandleRenames,
       shouldRenameAttachmentFiles: settings.shouldRenameAttachmentFiles,

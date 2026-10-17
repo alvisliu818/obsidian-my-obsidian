@@ -50,6 +50,17 @@ export class PluginSettings {
   public shouldDeleteConflictingAttachments = false;
 
   /**
+   * Whether {@link emptyFolderBehavior} also applies to the folder a deleted note leaves empty, not only to the
+   * attachment folders it leaves empty.
+   *
+   * Off by default: the folder a note sat in is usually one the user made to file notes in, and Obsidian itself
+   * never deletes it with its last note. A settings record from before this setting existed that already deletes
+   * empty folders loads it as `true` instead, because that is what such a record used to do (see
+   * `PluginSettingsComponent.onLoadRecord`).
+   */
+  public shouldDeleteEmptyNoteFolders = false;
+
+  /**
    * Whether deleting a note also deletes the attachments only that note referenced.
    *
    * Destructive, so off by default.

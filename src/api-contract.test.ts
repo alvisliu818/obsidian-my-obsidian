@@ -36,6 +36,7 @@ const SETTINGS: HandedOverSettings = {
   includePaths: [],
   notePriorities: ['.md'],
   shouldDeleteConflictingAttachments: false,
+  shouldDeleteEmptyNoteFolders: false,
   shouldHandleDeletions: true,
   shouldHandleRenames: true,
   shouldRenameAttachmentFiles: false,

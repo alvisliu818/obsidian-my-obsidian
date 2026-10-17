@@ -1,6 +1,7 @@
 import type { DataHandler } from '@mnaoumov/obsidian-lib/data-handler';
 import type { PathOrAbstractFile } from '@mnaoumov/obsidian-lib/file-system';
 import type { PluginEventSource } from '@mnaoumov/obsidian-lib/plugin/plugin-event-source';
+import type { GenericObject } from '@mnaoumov/typescript-lib/type-guards';
 import type { App } from 'obsidian';
 
 import { PluginSettingsComponentBase } from '@mnaoumov/obsidian-lib/components/plugin-settings-component';
@@ -10,6 +11,7 @@ import {
 } from '@mnaoumov/obsidian-lib/file-system';
 
 import { PluginSettings } from './plugin-settings.ts';
+import { EmptyFolderBehavior } from './rename-delete-handler-component.ts';
 
 interface PluginSettingsComponentConstructorParams {
   readonly app: App;
@@ -112,7 +114,32 @@ export class PluginSettingsComponent extends PluginSettingsComponentBase<PluginS
 
     await super.loadFromFile(isInitialLoad);
   }
+
+  /**
+   * Keeps a settings record from before {@link PluginSettings.shouldDeleteEmptyNoteFolders} existed doing what it did.
+   *
+   * Such a record that deletes empty folders at all also deleted the folder a deleted note left empty, so it loads
+   * the new setting as `true`; the default `false` would quietly stop that. A record that keeps empty folders, or
+   * already holds the setting, is left alone.
+   *
+   * @param record - The record read from `data.json`.
+   * @returns A {@link Promise} that resolves when the record is converted.
+   */
+  protected override async onLoadRecord(record: GenericObject): Promise<void> {
+    const emptyFolderBehavior: unknown = record['emptyFolderBehavior'];
+    if (
+      !Object.hasOwn(record, EMPTY_NOTE_FOLDERS_PROPERTY_NAME)
+      && emptyFolderBehavior !== undefined
+      && emptyFolderBehavior !== EmptyFolderBehavior.Keep
+    ) {
+      record[EMPTY_NOTE_FOLDERS_PROPERTY_NAME] = true;
+    }
+
+    await super.onLoadRecord(record);
+  }
 }
+
+const EMPTY_NOTE_FOLDERS_PROPERTY_NAME: keyof PluginSettings = 'shouldDeleteEmptyNoteFolders';
 
 /**
  * Whether a `loadData` result means there is no `data.json` — which is how the library itself reads it.

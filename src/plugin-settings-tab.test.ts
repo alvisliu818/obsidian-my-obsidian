@@ -41,6 +41,7 @@ const EXPECTED_PROPERTY_NAMES = [
   'shouldDeleteConflictingAttachments',
   'shouldHandleDeletions',
   'emptyFolderBehavior',
+  'shouldDeleteEmptyNoteFolders',
   'shouldRescueSharedAttachments',
   'notePriorities',
   'rescueAttachmentUsedByMultipleNotesMode',

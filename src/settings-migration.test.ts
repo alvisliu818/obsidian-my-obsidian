@@ -33,6 +33,7 @@ describe('MIGRATABLE_SETTING_DESCRIPTORS', () => {
       'shouldDeleteConflictingAttachments',
       'shouldHandleDeletions',
       'emptyFolderBehavior',
+      'shouldDeleteEmptyNoteFolders',
       'shouldRescueSharedAttachments',
       'notePriorities',
       'treatAsAttachmentExtensions',
@@ -161,6 +162,7 @@ describe('applyMigratableSettings, over every setting a consumer may propose', (
       includePaths: ['Notes'],
       notePriorities: ['.md'],
       shouldDeleteConflictingAttachments: true,
+      shouldDeleteEmptyNoteFolders: true,
       shouldHandleDeletions: true,
       shouldHandleRenames: false,
       shouldRenameAttachmentFiles: true,
@@ -179,6 +181,7 @@ describe('applyMigratableSettings, over every setting a consumer may propose', (
     expect(settings.includePaths).toEqual(['Notes']);
     expect(settings.notePriorities).toEqual(['.md']);
     expect(settings.shouldDeleteConflictingAttachments).toBe(true);
+    expect(settings.shouldDeleteEmptyNoteFolders).toBe(true);
     expect(settings.shouldHandleRenames).toBe(false);
     expect(settings.shouldRenameAttachmentFiles).toBe(true);
     expect(settings.shouldRenameAttachmentFolder).toBe(false);

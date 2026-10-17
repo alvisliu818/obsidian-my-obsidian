@@ -7,8 +7,8 @@
  *
  * The API is reached through the `@mnaoumov/obsidian-lib` cross-plugin API registry, keyed by the plugin id
  * `advanced-rename-and-delete-handler` and version-negotiated against its CONTRACT version, which moves independently of
- * the plugin's own `manifest.version`. `1.1.0` added the three read-back members to `1.0.0`'s `migrateSettings`, purely
- * additively, so ask for `^1`. The README's `For plugin developers` section shows both routes: `watchPluginApi` for a
+ * the plugin's own `manifest.version`. `1.1.0` added the three read-back members to `1.0.0`'s `migrateSettings`, and
+ * `1.2.0` added {@link HandedOverSettings.shouldDeleteEmptyNoteFolders}, both purely additively, so ask for `^1`. The README's `For plugin developers` section shows both routes: `watchPluginApi` for a
  * consumer that already has `@mnaoumov/obsidian-lib`, and the library-free registry read for one that does not.
  */
 
@@ -112,6 +112,12 @@ export interface HandedOverSettings {
    * Whether an attachment that collides with an existing file at the destination replaces it.
    */
   readonly shouldDeleteConflictingAttachments: boolean;
+
+  /**
+   * Whether {@link HandedOverSettings.emptyFolderBehavior} also applies to the folder a deleted note leaves empty,
+   * not only to the attachment folders it leaves empty. Added in contract `1.2.0`.
+   */
+  readonly shouldDeleteEmptyNoteFolders: boolean;
 
   /**
    * Whether deleting a note also deletes the attachments only that note referenced.

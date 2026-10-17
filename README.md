@@ -44,7 +44,7 @@ A copy of the vault ships with every release. You can access it via any of the f
 - **It tells you which plugins need it.** Its settings tab lists the enabled plugins that declare this one as a dependency, each with a button to that plugin's own settings — the answer to "why is this in my vault" before you remove it.
 - **Links follow a renamed or moved note**, including the display text of a link that was showing the old file name — while a link somebody gave their own words to is left alone. [01 Renaming a note](<./demo-vault/01 Renaming a note.md>)
 - **Attachments travel with the note that owns them**, folder and all, when it is renamed or moved to another folder. [01 Renaming a note](<./demo-vault/01 Renaming a note.md>)
-- **Deleting a note can clean up after it** — the attachments only that note used, and the folder the deletion leaves empty. Off by default, because each option removes something. A **Delete empty folders** command sweeps the whole vault for the ones already sitting there, left by deletions made before you turned any of this on. [02 Deleting a note](<./demo-vault/02 Deleting a note.md>)
+- **Deleting a note can clean up after it** — the attachments only that note used, and the attachment folders the deletion leaves empty, plus the note's own folder if you ask for it. Off by default, because each option removes something. A **Delete empty folders** command sweeps the whole vault for the ones already sitting there, left by deletions made before you turned any of this on. [02 Deleting a note](<./demo-vault/02 Deleting a note.md>)
 - **An attachment two notes share is never deleted with one of them**, and can be moved to the note that still uses it rather than left in a folder belonging to a note that is gone. When several notes could adopt it and your priority list settles nothing, the plugin names them and asks rather than guessing. An attachment that is really a folder — a `_files` tree, a drawing's sidecar folder — moves whole, when your attachment-location plugin says so. [03 Shared attachments](<./demo-vault/03 Shared attachments.md>)
 - **An `Excalidraw` drawing is treated as an attachment, not a note**, whether it is stored as `.excalidraw.md` or as a plain `.md` carrying its `excalidraw-plugin` property, along with any other ending or `property:` match you add. [04 What counts as a note](<./demo-vault/04 What counts as a note.md>)
 - **The plugin can be confined to part of the vault** with include and exclude path lists. [05 Limiting the scope](<./demo-vault/05 Limiting the scope.md>)
@@ -57,7 +57,7 @@ Beside it, [`api-contract.ts`](./api-contract.ts) holds the published API's cont
 
 This plugin owns those settings, so it owns the dialog too: your proposal is shown next to the current values, and the user approves, edits or declines it row by row. Nothing is written unless they press OK.
 
-The API is published through the `@mnaoumov/obsidian-lib` cross-plugin registry (the same registry `obsidian-dev-utils` plugins use), which gives you version negotiation, a handle that is revoked when this plugin unloads, and a wait that ends when this plugin loads — rather than a lookup that returns `undefined` because it ran first. The contract version is `1.1.0` and moves independently of the plugin's own version; ask for `'^1'`.
+The API is published through the `@mnaoumov/obsidian-lib` cross-plugin registry (the same registry `obsidian-dev-utils` plugins use), which gives you version negotiation, a handle that is revoked when this plugin unloads, and a wait that ends when this plugin loads — rather than a lookup that returns `undefined` because it ran first. The contract version is `1.2.0` and moves independently of the plugin's own version; ask for `'^1'`.
 
 If your plugin already uses [`@mnaoumov/obsidian-lib`](https://mnaoumov.dev/obsidian-dev-utils/guides/cross-plugin-apis/), `watchPluginApi` is the whole of it:
 
@@ -125,7 +125,7 @@ if (api && !api.isPathIgnored(file.path) && !api.isTreatedAsAttachment(file.path
 - **`isPathIgnored(path)`** answers whether this plugin leaves the path alone, per the include and exclude lists.
 - **`isTreatedAsAttachment(path)`** answers whether the path names an attachment despite its extension, by an ending such as `.excalidraw.md` or a `property:` entry matched against its frontmatter. A Markdown file Obsidian has not indexed yet matches no `property:` entry.
 - **Use the two predicates rather than re-matching the arrays yourself.** Every plugin bundles its own copy of `@mnaoumov/obsidian-lib`, so running the lists through your copy of the matching code is two copies that can drift apart; asking here keeps the matching in one place.
-- These arrived in contract `1.1.0`. That is purely additive, so `'^1'` still gets you them — but a vault running an older release will hand you an API without them, which is what `watchPluginApi`'s shape check is for.
+- These arrived in contract `1.1.0`, and `shouldDeleteEmptyNoteFolders` in `getSettings()` in `1.2.0`. Both are purely additive, so `'^1'` still gets you them — but a vault running an older release will hand you an API without them, which is what `watchPluginApi`'s shape check is for.
 
 ### Declaring this plugin as a dependency
 
