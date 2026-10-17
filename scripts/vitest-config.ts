@@ -199,13 +199,23 @@ export const config = defineObsidianPluginVitestConfig({
   editContext(context: ObsidianPluginVitestConfigContext): void {
     context.coverageExclude.push(INTEGRATION_HELPER_FILES);
 
+    const sharedSetupFiles = [
+      'obsidian-integration-testing/vitest-setup',
+      '@mnaoumov/obsidian-dev-toolkit/integration-test-setup'
+    ];
+
     for (const project of [context.android, context.desktop, context.desktopPerformance]) {
       project.globalSetup = ['@mnaoumov/obsidian-dev-toolkit/integration-test-vitest-global-setup'];
-      project.setupFiles = [
-        'obsidian-integration-testing/vitest-setup',
-        '@mnaoumov/obsidian-dev-toolkit/integration-test-setup'
-      ];
+      project.setupFiles = [...sharedSetupFiles];
     }
+
+    /*
+     * The emulator writes about one file in a hundred as empty, whichever plugins are enabled; the setup file
+     * says how that was measured and why it re-writes rather than waits longer. Android only:
+     * `capture-screenshots:android` inherits it through the `context.android` spread in `customProjects`, and
+     * no desktop project gets it.
+     */
+    context.android.setupFiles = [...sharedSetupFiles, './scripts/vitest-setup-android-write-loss-guard.ts'];
 
     /*
      * Merged rather than assigned: the context seeds `obsidianTransport.obsidianVersion` here when the
