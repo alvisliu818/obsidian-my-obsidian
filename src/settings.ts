@@ -117,8 +117,11 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 				);
 		}
 
+		// 模块名清单由 descriptors 动态生成:硬编码会漏(这里就曾漏掉后加的 7 个)。
 		containerEl.createEl("p", {
-			text: "每个模块自己的设置项仍然在各自原来的设置页里（Logseq Editor / Browser / Jupyter Notebook / Breadcrumb Nav / Doc Assist）。",
+			text: `每个模块自己的设置项仍然在各自原来的设置页里（${this.host.descriptors
+				.map((m) => m.name)
+				.join(" / ")}）。`,
 			cls: "setting-item-description",
 		});
 
