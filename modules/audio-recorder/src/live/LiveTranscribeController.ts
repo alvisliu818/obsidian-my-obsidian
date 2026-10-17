@@ -423,14 +423,12 @@ export class LiveTranscribeController {
 
 	/**
 	 * Appends a marker tag to one transcript line (hover markers let any line
-	 * be tagged, not just the newest).
+	 * be tagged, and stay usable after the session has stopped — the
+	 * transcript is a document, not only a live view).
 	 * @param kind - The marker's name (重点 / 问题 / 待办)
 	 * @param lineIndex - Which line the tag belongs to
 	 */
 	async addMarker(kind: string, lineIndex: number): Promise<void> {
-		if (this.state !== 'listening') {
-			return;
-		}
 		if (lineIndex < 0 || lineIndex >= this.lines.length) {
 			return;
 		}

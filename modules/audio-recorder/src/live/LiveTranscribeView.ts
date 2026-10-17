@@ -52,7 +52,6 @@ export class LiveTranscribeView extends ItemView implements LiveTranscribeSink {
 	private stopButton!: HTMLButtonElement;
 	private screenshotButton!: HTMLButtonElement;
 	private lineRows: LineRow[] = [];
-	private listening = false;
 	// ---- 悬浮标记条（以鼠标为中心）----
 	private markerPopup: HTMLDivElement | null = null;
 	private popupLineIndex = -1;
@@ -187,9 +186,6 @@ export class LiveTranscribeView extends ItemView implements LiveTranscribeSink {
 	 * @param lineIndex - The line the bar tags
 	 */
 	private showMarkerPopup(event: MouseEvent, lineIndex: number): void {
-		if (!this.listening) {
-			return;
-		}
 		if (this.popupHideTimer) {
 			clearTimeout(this.popupHideTimer);
 			this.popupHideTimer = null;
@@ -310,11 +306,8 @@ export class LiveTranscribeView extends ItemView implements LiveTranscribeSink {
 	onState(state: LiveSessionState): void {
 		this.startButton.disabled = state !== 'idle';
 		this.stopButton.disabled = state !== 'listening' && state !== 'starting';
+		// 截屏是「正在听」的动作；标记不受限——会话停了，转写仍是文档。
 		this.screenshotButton.disabled = state !== 'listening';
-		this.listening = state === 'listening';
-		if (!this.listening) {
-			this.hideMarkerPopup();
-		}
 		this.statusEl.setText(STATE_LABELS[state]);
 		if (state === 'idle' && this.lineRows.length === 0) {
 			this.transcriptEl.setText('（对着麦克风说话，按停顿一句一句出字；鼠标悬到某句上打标记）');
