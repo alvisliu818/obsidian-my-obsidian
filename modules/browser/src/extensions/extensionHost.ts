@@ -87,6 +87,7 @@ export class ExtensionHost {
     if (!manifestEntry) throw new Error("所选内容里没有 manifest.json（请选择扩展根目录或 CRX/ZIP 包）");
 
     const manifest = JSON.parse(new TextDecoder().decode(toBytes(manifestEntry.data))) as RawManifest;
+    this.resolveManifestI18n(manifest, files);
     const dir = this.sanitizeDir((manifest.name || "extension") + "-" + (manifest.version || "0"));
     const target = this.pathMod.join(this.rootDir, dir);
 
@@ -105,8 +106,59 @@ export class ExtensionHost {
     return rec;
   }
 
-  async installFromArchive(buffer: ArrayBuffer, fallbackName: string): Promise<ExtensionRecord> {
-    const files = await extractExtensionArchive(buffer);
+  /**
+   * 解析 manifest 里的 `__MSG_key__` 占位符（Chrome 从 `_locales/<locale>/messages.json`
+   * 取值；不解析的话扩展名会显示成 `__MSG_appName__`，且污染目录名/记录 id）。
+   * 依次尝试 default_locale → en/en_US/zh_CN → 任意语言目录下的 messages.json。
+   */
+  private resolveManifestI18n(manifest: RawManifest, files: { path: string; data: Uint8Array | ArrayBuffer }[]): void {
+    const placeholder = /__MSG_([A-Za-z0-9@_]+)__/;
+    const needs = (v: string | undefined): v is string => typeof v === "string" && placeholder.test(v);
+    if (!needs(manifest.name) && !needs(manifest.description)) return;
+
+    const readMessages = (path: string): Record<string, { message?: string }> | null => {
+      const entry = files.find((f) => f.path.replace(/^\/+/, "").toLowerCase() === path);
+      if (!entry) return null;
+      try {
+        return JSON.parse(new TextDecoder().decode(toBytes(entry.data))) as Record<string, { message?: string }>;
+      } catch {
+        return null;
+      }
+    };
+
+    let messages: Record<string, { message?: string }> | null = null;
+    const dl = typeof manifest.default_locale === "string" ? manifest.default_locale : "";
+    for (const loc of [dl, "en", "en_US", "zh_CN"]) {
+      if (!loc) continue;
+      messages = readMessages(`_locales/${loc}/messages.json`);
+      if (messages) break;
+    }
+    if (!messages) {
+      const anyEntry = files.find((f) => /^_locales\/[^/]+\/messages\.json$/i.test(f.path.replace(/^\/+/, "")));
+      if (anyEntry) {
+        try {
+          messages = JSON.parse(new TextDecoder().decode(toBytes(anyEntry.data))) as Record<
+            string,
+            { message?: string }
+          >;
+        } catch {
+          messages = null;
+        }
+      }
+    }
+    if (!messages) return;
+
+    const keys = Object.keys(messages);
+    const lookup = (key: string): string | null => {
+      const hit = messages![key] ?? messages![keys.find((k) => k.toLowerCase() === key.toLowerCase()) ?? ""];
+      return hit && typeof hit.message === "string" ? hit.message : null;
+    };
+    const subst = (v: string): string => v.replace(/__MSG_([A-Za-z0-9@_]+)__/g, (all, key: string) => lookup(key) ?? all);
+    if (needs(manifest.name)) manifest.name = subst(manifest.name);
+    if (needs(manifest.description)) manifest.description = subst(manifest.description);
+  }
+
+  async installFromArchive(buffer: ArrayBuffer, fallbackName: string): Promise<ExtensionRecord> {    const files = await extractExtensionArchive(buffer);
     if (!files.some((f) => f.path === "manifest.json")) {
       throw new Error("压缩包里没有 manifest.json" + (fallbackName ? "（" + fallbackName + "）" : ""));
     }
