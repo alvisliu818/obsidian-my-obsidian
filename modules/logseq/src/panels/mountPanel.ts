@@ -644,10 +644,13 @@ export class MountPanelView extends ItemView {
     row.dataset.rel = node.rel;
     // Native-explorer rhythm, pulled 10px left as a whole (user preference):
     // folder rows carry a 14px caret gutter, FILE rows the same gutter plus
-    // the caret's width (11px + 4px gap), so the file ICON aligns with the
-    // folder ICON at the same depth. Each level shifts the row 17px; the
-    // mount head counts as the depth-0 folder, rows start one level in.
-    row.style.paddingInlineStart = `${(node.isDir ? 14 : 29) + (depth + 1) * 17}px`;
+    // the caret's width (11px + 4px gap). Each level shifts the row 17px; the
+    // mount head counts as the depth-0 folder and flatten starts at depth 1,
+    // so `depth * 17` puts first-level rows exactly ONE step in from the head
+    // (31px vs the head's 14px caret) — the same parent-child step as every
+    // deeper level. The old `(depth + 1) * 17` doubled that step (48px) and
+    // the root looked detached from its children.
+    row.style.paddingInlineStart = `${(node.isDir ? 14 : 29) + depth * 17}px`;
 
     if (node.isDir) {
       const caret = row.createSpan({ cls: 'logseq-mount-caret' });

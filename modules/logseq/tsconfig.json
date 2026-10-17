@@ -20,7 +20,11 @@
     "paths": {
       // `cm-bundle:<pkg>` — the code-block editor's own bundled CM copy.
       // Strip the prefix for type resolution (esbuild/vite do the same).
-      "cm-bundle:*": ["./node_modules/*"]
+      // Fallback to the HOST root's node_modules: as a module of
+      // obsidian-my-obsidian the CM packages live hoisted one level up, and a
+      // local duplicate would split CM's class identities between the host
+      // program and this one (EditorView/SelectionRange private-field clash).
+      "cm-bundle:*": ["./node_modules/*", "../../node_modules/*"]
     }
   },
   "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"],
