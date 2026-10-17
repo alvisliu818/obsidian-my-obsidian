@@ -1,5 +1,25 @@
 # CHANGELOG
 
+## 15.1.1
+
+- docs(api): merge naming the validation debug switch in the contract
+- fix(paste): merge renaming every pasted image file again under Only pasted images
+- chore(deps): merge bumping obsidian-test-mocks to ^7.2.3
+- refactor(api): merge refreshing the Advanced Rename and Delete Handler contract copy
+- chore(github): merge linking Discussions from the issue chooser
+- refactor(paste): merge using the nullable ImportedAttachment typings
+- docs(agents): merge saying how a demo-vault Try it promise is asserted
+- docs(demo-vault): merge giving every Try it a button for its setup and steps
+- docs(tokens): merge a custom-token example that renames only images
+- fix(attachments): merge replacing special characters in a name a new attachment keeps
+- docs(settings): say the Markdown URL format applies only when an attachment is added
+- fix(collect): merge collecting after a note is moved outside Obsidian
+- test(network-images): merge pinning the automatic collect downloading a network image
+- test(excalidraw): merge pinning a paste into a folder that does not exist yet
+- test(api-contract): verify the contract with verifyApiContract from typescript-lib 1.5.0
+- fix(paste): merge no longer force-loading a deferred markdown tab at startup
+- refactor(api-contract): merge building the contract guards from typescript-lib and obsidian-lib
+
 ## 15.1.0
 
 - feat(paste): merge telling screenshot files apart from real files in Only pasted images
