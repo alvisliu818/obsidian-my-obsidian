@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## 2.3.0
+
+- test(android): re-write files the emulator writes as empty
+- refactor(api-contract): merge building the contract guards from typescript-lib 1.3.0
+- fix(rename): merge rewriting a folder's links past a note with unparseable frontmatter
+- chore(github): point questions to Discussions from the new-issue page
+- feat(delete): add shouldDeleteEmptyNoteFolders, off by default
+- ci: merge attesting release assets through the toolkit's reusable workflow
+- build(demo-vault): require CodeScript Toolkit 13.8.0 for the obsidian-lib demo script
+
 ## 2.2.1
 
 - refactor(demo-vault): merge importing configureCommunityPlugin from @mnaoumov/obsidian-lib
