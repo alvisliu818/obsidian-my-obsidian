@@ -26,7 +26,7 @@ import {
 } from "./settings";
 
 import LogseqEditorPlugin from "../modules/logseq/src/main";
-import type LogseqEditorPluginType from "../modules/logseq/src/main";
+import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE } from "../modules/logseq/src/views/ExternalCodeView";
 import BrowserPlugin from "../modules/browser/src/main";
 import JupyterNotebookPlugin from "../modules/jupyter/src/main";
 import BreadcrumbNavPlugin from "../modules/breadcrumb/src/main";
@@ -38,7 +38,7 @@ import OmnisearchPlugin from "../modules/omnisearch/src/main";
 import ObsidianGitPlugin from "../modules/obsidian-git/src/main";
 import SaveControlPlugin from "../modules/save-control/src/main";
 import OpenTabSettingsPlugin from "../modules/open-tab-settings/src/main";
-import { CodeFileView, DEFAULT_CODE_EXTENSIONS, VIEW_TYPE_CODE_FILE } from "./codeFileView";
+import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
 
 export default class MyObsidianPlugin extends Plugin {
 	settings: MyObsidianSettings = DEFAULT_SETTINGS;
@@ -180,7 +180,6 @@ export default class MyObsidianPlugin extends Plugin {
 				descriptors: this.descriptors,
 				save: () => this.saveSettings(),
 				reload: (id) => this.enableModule(id),
-				rerenderCodeFileViews: () => this.rerenderCodeFileViews(),
 			}),
 		);
 		for (const d of this.descriptors) await this.bootModule(d);
@@ -204,40 +203,27 @@ export default class MyObsidianPlugin extends Plugin {
 		const exts = (this.settings.codeFileExtensions ?? DEFAULT_CODE_EXTENSIONS).filter(
 			(e) => !!e && !/^(md|canvas)$/i.test(e),
 		);
-		// 混合编辑引擎长在 logseq 模块里(Monaco 初始化 + 注释区块编辑器都要
-		// 那个插件实例),所以把实例交给视图;模块被关掉时为 null,视图会安静
-		// 退回纯源码形态。懒解析:工厂在叶子真正打开时才执行,那时模块必已就绪。
-		this.registerView(VIEW_TYPE_CODE_FILE, (leaf) => {
-			const logseq = this.live.get("logseq") as unknown as LogseqEditorPluginType | undefined;
-			return new CodeFileView(leaf, logseq ?? null, this.settings);
-		});
-		if (exts.length) this.registerExtensions(exts, VIEW_TYPE_CODE_FILE);
+		// 库内代码文件与库外用**同一个编辑器**(用户要求):logseq 模块已在自己的
+		// onload 里 registerView(VIEW_TYPE_EXTERNAL_CODE),宿主只把扩展名映射过去
+		// —— Obsidian 打开 .py 时按该 type 建视图,setState 会带上 {file}(库内
+		// 相对路径),ExternalCodeView.setState 已兼容并解析为真实路径。
+		// 因此宿主不再注册自己的 CodeFileView(旧整台 CM 方案)。
+		if (exts.length) this.registerExtensions(exts, VIEW_TYPE_EXTERNAL_CODE);
 
 		this.addCommand({
 			id: "run-code-file",
 			name: "运行当前代码文件",
 			checkCallback: (checking) => {
-				const view = this.app.workspace.getActiveViewOfType(CodeFileView);
-				if (!view?.file) return false;
-				if (!checking) void view.runCurrentFile();
+				// 代码文件统一在 ExternalCodeView(混合编辑)里打开;getActiveViewOfType
+				// 对双参构造的类报类型错,直接遍历叶子找当前活动的一个。
+				const active = this.app.workspace.activeLeaf?.view;
+				const ext =
+					active instanceof ExternalCodeView ? active : null;
+				if (!ext?.abs) return false;
+				if (!checking) void ext.runCurrentFile();
 				return true;
 			},
 		});
-	}
-
-	/**
-	 * Rebuild every open in-vault code file view.
-	 *
-	 * The hybrid/source choice is baked into the editor at construction, so a
-	 * settings toggle has to remount. Each view rebuilds from the text it was
-	 * last handed, so nothing is lost in the swap.
-	 */
-	rerenderCodeFileViews(): void {
-		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CODE_FILE)) {
-			const view = leaf.view as CodeFileView | null;
-			if (!view?.file) continue;
-			view.remount();
-		}
 	}
 
 	/** Which modules actually came up. Used by the e2e probe and handy in the

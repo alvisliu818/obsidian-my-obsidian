@@ -46,6 +46,11 @@ export class ExternalCodeView extends ItemView {
   mountPath = '';
   /** 挂载名——视图头部路径的第一段（「挂载名 / 子目录 / 文件名」） */
   mountLabel = '';
+  /**
+   * 文件来自库内（宿主把库内代码扩展名也映射到本视图）还是库外挂载。
+   * 只影响提示文案（「库内」/「库外」徽标），读写完全一样——都是文件本体。
+   */
+  inVault = false;
   /** 运行输出区(首次运行时创建) */
   private runOutputEl: HTMLPreElement | null = null;
   private runHandle: RunHandle | null = null;
@@ -176,12 +181,37 @@ export class ExternalCodeView extends ItemView {
       content?: string;
       mountPath?: string;
       mountLabel?: string;
+      /** 库内文件:Obsidian 的 registerExtensions 路径传的是 {file}(vault 相对路径)。 */
+      file?: string;
     };
     if (typeof s.abs === 'string') this.abs = s.abs;
     if (typeof s.name === 'string') this.fileName = s.name;
     if (typeof s.content === 'string') this.lastDiskData = s.content;
     if (typeof s.mountPath === 'string') this.mountPath = s.mountPath;
     if (typeof s.mountLabel === 'string') this.mountLabel = s.mountLabel;
+    // 库内文件:宿主把代码扩展名 registerExtensions 到本视图,Obsidian 传
+    // {file}(vault 相对路径)。解析成真实路径 + 标记来源,徽标与提示随之区分。
+    if (!this.abs && typeof s.file === 'string' && s.file) {
+      this.inVault = true;
+      const adapter = this.plugin.app.vault.adapter as unknown as {
+        getFullPath?: (p: string) => string;
+        basePath?: string;
+      };
+      if (typeof adapter.getFullPath === 'function') {
+        try {
+          this.abs = adapter.getFullPath(s.file);
+        } catch {
+          /* fall through */
+        }
+      }
+      if (!this.abs) {
+        const base = adapter.basePath ?? '';
+        this.abs = base ? `${base.replace(/[\\/]+$/, '')}/${s.file}` : s.file;
+      }
+      if (!this.fileName) {
+        this.fileName = s.file.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? s.file;
+      }
+    }
     this.displayPath = relativeDisplayPath(this.abs, this.mountPath, this.fileName);
     await super.setState(state, result);
     // Now the path is known; build the editor if onOpen ran before us.
@@ -256,7 +286,10 @@ export class ExternalCodeView extends ItemView {
         text: this.displayPath || this.fileName,
       });
       pathEl.setAttribute('title', this.abs);
-      banner.createSpan({ cls: 'logseq-external-badge', text: '库外' });
+      banner.createSpan({
+        cls: 'logseq-external-badge',
+        text: this.inVault ? '库内' : '库外',
+      });
       const status = banner.createSpan({ cls: 'logseq-external-hint', text: '与原文件实时同步' });
       status.setAttribute('title', '保存时写回原文件');
       const saveBtn = banner.createEl('button', { cls: 'logseq-external-save', text: '保存' });

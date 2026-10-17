@@ -23,15 +23,6 @@ export interface MyObsidianSettings {
 	modules: Record<string, ModuleState>;
 	/** 宿主自己的代码文件视图接管哪些扩展名（Markdown 永远不在其中） */
 	codeFileExtensions?: string[];
-	/**
-	 * 库内代码文件是否用混合编辑器打开：注释区是内嵌在代码流里的 Logseq 块
-	 * 编辑器（可编辑、按 Markdown 渲染、可写 [[双链]]），代码区仍是编辑器。
-	 * 默认开启；单个文件可在视图头部临时反向覆盖。
-	 *
-	 * 与 logseq 模块的 `externalCodeHybrid`（库外代码文件）是同一套引擎，
-	 * 但**设置分开存**：这个开关只影响库内文件。
-	 */
-	codeFileHybrid?: boolean;
 }
 
 /** Catalogue of what can be switched on. Order = the order shown in settings. */
@@ -67,11 +58,7 @@ export interface SubPluginLike {
 	saveData?(data: unknown): Promise<void>;
 }
 
-export const DEFAULT_SETTINGS: MyObsidianSettings = {
-	modules: {},
-	codeFileExtensions: [],
-	codeFileHybrid: true,
-};
+export const DEFAULT_SETTINGS: MyObsidianSettings = { modules: {}, codeFileExtensions: [] };
 
 export function defaultModuleState(desktopOnly: boolean): ModuleState {
 	return { enabled: !desktopOnly || isDesktopApp(), data: {} };
@@ -87,7 +74,6 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 		descriptors: ModuleDescriptor[];
 		save(): Promise<void>;
 		reload(id: string): Promise<void>;
-		rerenderCodeFileViews(): void;
 	};
 
 	constructor(
@@ -98,7 +84,6 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 			descriptors: ModuleDescriptor[];
 			save(): Promise<void>;
 			reload(id: string): Promise<void>;
-			rerenderCodeFileViews(): void;
 		},
 	) {
 		super(app, plugin as never);
@@ -139,24 +124,6 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 				.join(" / ")}）。`,
 			cls: "setting-item-description",
 		});
-
-		containerEl.createEl("h3", { text: "代码文件" });
-		new SettingCtor(containerEl)
-			.setName("代码文件用混合编辑器打开")
-			.setDesc(
-				"库内代码文件的注释区（连续的整行注释，以及 /* */ 与 \"\"\" 块注释、docstring）" +
-					"以 Logseq 块编辑器呈现，嵌在代码行的对应位置：可编辑、按 Markdown 渲染、可写 [[双链]]。代码区仍是编辑器，未编辑时保存完全无损。" +
-					"关闭则整个文件是一台编辑器的纯源码形态。单个文件可在视图头部按钮临时切换到另一种呈现。",
-			)
-			.addToggle((t) =>
-				t
-					.setValue(this.host.settings.codeFileHybrid !== false)
-					.onChange(async (v) => {
-						this.host.settings.codeFileHybrid = v;
-						await this.host.save();
-						this.host.rerenderCodeFileViews();
-					}),
-			);
 
 		containerEl.createEl("p", {
 			text: "这些扩展名由本插件打开（Obsidian 原本对它们没有视图，点了只会是一片空白）。带 ▶ 运行的会在运行前自动保存。改动后需要重启 Obsidian。",
