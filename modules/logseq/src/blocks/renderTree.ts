@@ -167,13 +167,17 @@ export function renderBlockTree(container: HTMLElement, roots: Block[], host: Bl
 
   // Logseq parity: the empty area under the last block is an add-block
   // affordance — hovering shows a faint line + plus, clicking appends and
-  // focuses a new block at the end of the visible outline.
-  container
-    .createEl('div', { cls: 'block-editor-addblock' })
-    .addEventListener('click', (e) => {
-      e.stopPropagation();
-      host.addBlockAtEnd();
-    });
+  // focuses a new block at the end of the visible outline. Switched OFF by
+  // 设置 → 文末添加块, which drops the whole row: the page then ends at the
+  // last bullet (the row is display-level only — nothing else depends on it).
+  if (host.plugin.settings.addBlockAffordance !== false) {
+    container
+      .createEl('div', { cls: 'block-editor-addblock' })
+      .addEventListener('click', (e) => {
+        e.stopPropagation();
+        host.addBlockAtEnd();
+      });
+  }
 
   if (budget) {
     const hidden = total - cap;

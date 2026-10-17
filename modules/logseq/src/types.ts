@@ -192,6 +192,16 @@ export interface BlockEditorSettings {
    */
   foldEnabled: boolean;
   /**
+   * 大纲末尾的「添加块」提示行：鼠标移过去会在子弹圆点那一列浮现一条横线
+   * 和一个加号，点击就在可见大纲最后追加一个新块并聚焦——对应 Logseq / 思源
+   * 文档底部那一条可以接着往下写的空白行。
+   *
+   * 默认开启。关掉后这一行整条不再渲染：页面少一行占位（滚动到底就是最后
+   * 一块），但「点空白处继续写」的入口随之消失——在最末一块里按 Enter 仍然
+   * 照常分裂出新块，所以日常写作不受影响，只是少了那个视觉锚点。
+   */
+  addBlockAffordance: boolean;
+  /**
    * Block properties that stay in the markdown but are NOT drawn as a
    * `key:: value` row. Hiding is view-only: the property is still written,
    * still parsed back, still queryable, and still editable from the block
@@ -545,6 +555,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   sqlitePersist: true,
   sqliteAutoSync: true,
   foldEnabled: true,
+  addBlockAffordance: true,
   hiddenProps: 'collapsed',
   mountFilterEnabled: false,
   mountLinkEnabled: true,

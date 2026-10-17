@@ -317,6 +317,23 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName('文末添加块')
+      .setDesc(
+        '大纲最后一块下方那条可点击的空白提示行——鼠标移过去会浮现一条横线和一个加号（与思源文档底部一致），' +
+          '点击就在末尾追加新块并聚焦。关掉它，页面滚到底就是最后一块，不再多一行占位；' +
+          '在最后一块里按 Enter 仍然照常分裂出新块，所以只是少了这个视觉入口，不影响接着写。',
+      )
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.addBlockAffordance !== false)
+          .onChange(async (v) => {
+            this.plugin.settings.addBlockAffordance = v;
+            await this.plugin.saveSettings();
+            this.plugin.refreshAllViews();
+          }),
+      );
+
+    new Setting(containerEl)
       .setName('隐藏的块属性')
       .setDesc(
         '以逗号分隔的属性名，它们仍保留在你的 Markdown 里，但不渲染成 `key:: value` 行。隐藏只是显示层面的：' +

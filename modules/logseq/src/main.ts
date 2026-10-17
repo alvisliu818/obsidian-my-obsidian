@@ -986,6 +986,8 @@ export default class LogseqEditorPlugin extends Plugin {
     this.settings.lspEnabled = this.settings.lspEnabled !== false;
     if (!Array.isArray(this.settings.lspServers)) this.settings.lspServers = [];
     this.settings.externalBanner = this.settings.externalBanner !== false;
+    // Absent in every pre-toggle config → the affordance stays visible.
+    this.settings.addBlockAffordance = this.settings.addBlockAffordance !== false;
 
     // "Open with": a config that never had the key gets the presets, so a fresh
     // install has something in the menu; once the key exists (even as []) the
