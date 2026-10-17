@@ -16,11 +16,14 @@ import type { AudioRecorderSettings } from '../settings/settingsSchema';
 import { errorMessage } from '../errors';
 import { encodeFloatsAsInt16Wav } from '../audio/WavEncoder';
 import {
+	DEFAULT_PAUSE_SEGMENTER_CONFIG,
 	formatLiveLine,
 	formatMarkerTag,
+	isLikelyHallucination,
 	longestCommonPrefix,
 	PauseSegmenter,
 	rmsOf,
+	voicedRatioOf,
 } from './liveAudio';
 import { transcribeChunk } from './inferenceClient';
 import {
@@ -80,6 +83,17 @@ const PREVIEW_MIN_NEW_FRAMES = Math.round(0.35 * CAPTURE_RATE);
 const PREVIEW_MAX_WINDOW_FRAMES = Math.round(12 * CAPTURE_RATE);
 /** Preview span quieter than this is silence: skip the GPU, clear the text. */
 const PREVIEW_SILENCE_RMS = 0.0035;
+
+// ---- 提交路径的幻听防线 ----
+// whisper 对静音、呼吸声和背景音乐最会"脑补"出一些网络上 famous 的幽灵句
+// （明镜与点点栏目 / 字幕志愿者 / 重复单字……）。提交前先看能量：几乎无声
+// 或够不到语音电平的段落根本不送模型；识别结果再过一遍幻听句式过滤。
+/** A committed segment quieter than this carries no speech at all. */
+const SEGMENT_MIN_RMS = 0.0045;
+/** The share of speech-level windows a committed segment must reach. */
+const SEGMENT_MIN_VOICED = 0.2;
+/** The speech level the voiced ratio is measured against (the segmenter's). */
+const SPEECH_RMS = DEFAULT_PAUSE_SEGMENTER_CONFIG.speechRms;
 
 /** Dependencies the plugin hands the controller once. */
 export interface LiveTranscribeControllerDeps {
@@ -278,14 +292,32 @@ export class LiveTranscribeController {
 		}
 		this.inFlight = true;
 		try {
+			if (
+				rmsOf(next.samples) < SEGMENT_MIN_RMS ||
+				voicedRatioOf(next.samples, CAPTURE_RATE, SPEECH_RMS) <
+					SEGMENT_MIN_VOICED
+			) {
+				// Silence, breath or background music: recognizing it can only
+				// produce a hallucination, so the model never sees it.
+				return;
+			}
 			const wav = await encodeFloatsAsInt16Wav([next.samples], CAPTURE_RATE);
 			const language = this.deps.getSettings().transcriptionLanguage;
-			const result = await transcribeChunk(base, wav, language);
-			if (this.state === 'listening' && !result.empty) {
-				const line = formatLiveLine(next.startFrame / CAPTURE_RATE, result.text);
-				this.lines.push(line);
-				this.sink?.onLine(line, this.lines.length - 1);
+			// temperature pinned: the fallback retries that warmer decoding
+			// allows are themselves a hallucination source on marginal audio.
+			const result = await transcribeChunk(base, wav, language, {
+				temperature: '0',
+			});
+			if (this.state !== 'listening' || result.empty) {
+				return;
 			}
+			if (isLikelyHallucination(result.text)) {
+				this.log(`已过滤一段疑似幻听：「${result.text.slice(0, 24)}」`);
+				return;
+			}
+			const line = formatLiveLine(next.startFrame / CAPTURE_RATE, result.text);
+			this.lines.push(line);
+			this.sink?.onLine(line, this.lines.length - 1);
 		} catch (error) {
 			this.log(`转写失败：${errorMessage(error)}`);
 		} finally {
@@ -373,7 +405,7 @@ export class LiveTranscribeController {
 				return;
 			}
 			this.lastPreviewEndFrame = spanEnd;
-			if (result.empty) {
+			if (result.empty || isLikelyHallucination(result.text)) {
 				this.lastPreviewText = '';
 				this.sink?.onPreview('', '');
 				return;

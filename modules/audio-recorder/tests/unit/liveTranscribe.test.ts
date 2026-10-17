@@ -7,8 +7,10 @@
 import {
 	formatLiveLine,
 	formatMarkerTag,
+	isLikelyHallucination,
 	longestCommonPrefix,
 	PauseSegmenter,
+	voicedRatioOf,
 } from '../../src/live/liveAudio';
 import { buildMultipartBody } from '../../src/live/inferenceClient';
 
@@ -109,6 +111,44 @@ describe('the streaming preview diff', () => {
 		expect(longestCommonPrefix('', '新的一句')).toBe('');
 		expect(longestCommonPrefix('旧的一句', '')).toBe('');
 		expect(longestCommonPrefix('相同', '相同')).toBe('相同');
+	});
+});
+
+describe('the segment energy gates', () => {
+	it('scores pure silence at zero and a half-voiced span near one half', () => {
+		expect(voicedRatioOf(new Float32Array(RATE), RATE, 0.006)).toBe(0);
+		const half = new Float32Array(RATE);
+		for (let i = 0; i < RATE / 2; i++) {
+			half[i] = 0.5;
+		}
+		expect(voicedRatioOf(half, RATE, 0.006)).toBeCloseTo(0.5, 1);
+	});
+
+	it('returns zero for an empty span', () => {
+		expect(voicedRatioOf(new Float32Array(0), RATE, 0.006)).toBe(0);
+	});
+});
+
+describe('the hallucination filter', () => {
+	it('drops whisper\'s famous ghost sentences', () => {
+		expect(
+			isLikelyHallucination('请不吝点赞 订阅 转发 打赏支持明镜与点点栏目'),
+		).toBe(true);
+		expect(isLikelyHallucination('字幕志愿者 李宗盛')).toBe(true);
+		expect(isLikelyHallucination('谢谢观看！')).toBe(true);
+		expect(isLikelyHallucination('Subtitles by the Amara.org community')).toBe(
+			true,
+		);
+		expect(isLikelyHallucination('爹爹爹爹爹')).toBe(true);
+	});
+
+	it('keeps laughter, fillers and ordinary speech', () => {
+		expect(isLikelyHallucination('哈哈哈哈哈')).toBe(false);
+		expect(isLikelyHallucination('收到 adjusted')).toBe(false);
+		expect(isLikelyHallucination('今天我们聊聊实时转写的分段策略')).toBe(false);
+		// Narrow ghost phrases only: a real sentence about videos survives.
+		expect(isLikelyHallucination('别再点赞订阅这条视频了')).toBe(false);
+		expect(isLikelyHallucination('')).toBe(false);
 	});
 });
 

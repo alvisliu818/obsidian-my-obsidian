@@ -53,6 +53,91 @@ export function rmsOf(samples: Float32Array): number {
 	return Math.sqrt(sum / samples.length);
 }
 
+/**
+ * The share of ~30 ms windows whose level reaches the speech gate. A segment
+ * mostly under the gate is silence, breath or background music — exactly the
+ * audio whisper answers with a confident hallucination — so the commit path
+ * refuses to spend the model on it.
+ * @param samples - Mono samples, range -1..1
+ * @param sampleRate - The samples' rate in Hz
+ * @param speechRms - The level a window must reach to count as voiced
+ * @param windowMs - Window length in milliseconds
+ * @returns Voiced windows over all windows (0 for an empty span)
+ */
+export function voicedRatioOf(
+	samples: Float32Array,
+	sampleRate: number,
+	speechRms: number,
+	windowMs = 30,
+): number {
+	const window = Math.max(1, Math.round((windowMs / 1000) * sampleRate));
+	let total = 0;
+	let voiced = 0;
+	for (let offset = 0; offset + window <= samples.length; offset += window) {
+		total++;
+		if (rmsOf(samples.subarray(offset, offset + window)) >= speechRms) {
+			voiced++;
+		}
+	}
+	return total === 0 ? 0 : voiced / total;
+}
+
+/**
+ * Whisper's best-known ghost sentences, as substrings of the
+ * punctuation-stripped, lower-cased probe. A recognized line carrying one of
+ * these did not come from the microphone: the model dreamed it over silence,
+ * breath or background music. Each entry is chosen to be specific enough that
+ * a speaker is realistically never heard saying it into a live microphone —
+ * the dictation surface, not video transcription, is what this guards.
+ */
+const GHOST_SUBSTRINGS = [
+	'明镜与点点栏目',
+	'字幕志愿者',
+	'字幕由',
+	'谢谢观看',
+	'谢谢收看',
+	'订阅转发',
+	'打赏支持',
+	'欢迎收看',
+	'amaraorg',
+	'subtitlesby',
+	'pleasesubscribe',
+] as const;
+
+/**
+ * A whole line that is one syllable hammered again and again ("爹爹爹爹爹")
+ * is the other shape a hallucination takes — unless the syllable is a
+ * laughter or filler particle a speaker really does repeat.
+ */
+const GHOST_REPEAT_ALLOWED = new Set([
+	'哈', '呵', '嘿', '嘻', '嗯', '呃', '啊', '哦', '喔', '噢', '唉', '哎',
+	'呜', '呼', '啦', '呀', '咦', '哒', '嘛', '么',
+]);
+
+/**
+ * Whether a recognized line reads like a whisper hallucination rather than
+ * speech. The ghost phrases are specific enough that their substring match is
+ * trusted; the hammered-syllable rule judges the whole line.
+ * @param text - The recognized text, whitespace and newlines already flat
+ * @returns True when the line should not be shown
+ */
+export function isLikelyHallucination(text: string): boolean {
+	const probe = text
+		.toLowerCase()
+		.replace(/\s+/g, '')
+		.replace(/[\p{P}\p{S}]/gu, '');
+	if (probe === '') {
+		return false;
+	}
+	for (const ghost of GHOST_SUBSTRINGS) {
+		if (probe.includes(ghost)) {
+			return true;
+		}
+	}
+	const hammered = /^(.)\1{4,}$/u.exec(probe);
+	return hammered !== null && !GHOST_REPEAT_ALLOWED.has(hammered[1] ?? '');
+}
+
 /** One completed speech segment, with its place on the capture timeline. */
 export interface LiveSegment {
 	/** Mono samples of the whole segment (pre-roll included). */
