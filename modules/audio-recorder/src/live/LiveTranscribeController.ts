@@ -422,42 +422,60 @@ export class LiveTranscribeController {
 	}
 
 	/**
-	 * Appends a marker tag (and, when configured, a window screenshot link)
-	 * to the last transcript line — or opens a line of its own when nothing
-	 * has been recognized yet.
+	 * Appends a marker tag to one transcript line (hover markers let any line
+	 * be tagged, not just the newest).
 	 * @param kind - The marker's name (重点 / 问题 / 待办)
+	 * @param lineIndex - Which line the tag belongs to
 	 */
-	async addMarker(kind: string): Promise<void> {
+	async addMarker(kind: string, lineIndex: number): Promise<void> {
 		if (this.state !== 'listening') {
 			return;
 		}
-		let suffix = formatMarkerTag(kind, new Date());
+		if (lineIndex < 0 || lineIndex >= this.lines.length) {
+			return;
+		}
+		const tag = formatMarkerTag(kind, new Date());
+		this.lines[lineIndex] = (this.lines[lineIndex] ?? '') + tag;
+		this.sink?.onLine(this.lines[lineIndex] ?? '', lineIndex);
+	}
+
+	/**
+	 * Screenshots the configured window on its own (decoupled from markers)
+	 * and inserts the vault link as a transcript line of its own.
+	 */
+	async captureScreenshot(): Promise<void> {
+		if (this.state !== 'listening') {
+			return;
+		}
 		const settings = this.deps.getSettings();
-		if (settings.liveMarkerScreenshotEnabled && settings.liveMarkerWindowName !== '') {
-			try {
-				const png = await captureWindowByName(
-					settings.liveMarkerWindowName,
-					SCREENSHOT_WIDTH,
-					SCREENSHOT_HEIGHT,
-				);
-				const path = png ? await this.savePngToVault(png, kind) : null;
-				if (path) {
-					suffix += ` ![[${path}]]`;
-				} else {
-					this.log('截屏失败：找不到所选窗口或截取被拒。');
-				}
-			} catch (error) {
-				this.log(`截屏失败：${errorMessage(error)}`);
+		if (!settings.liveMarkerScreenshotEnabled) {
+			new Notice('先在设置里开启「标记时截屏窗口」。');
+			return;
+		}
+		if (settings.liveMarkerWindowName === '') {
+			new Notice('先选择截图窗口（面板或设置里都可选）。');
+			return;
+		}
+		try {
+			const png = await captureWindowByName(
+				settings.liveMarkerWindowName,
+				SCREENSHOT_WIDTH,
+				SCREENSHOT_HEIGHT,
+			);
+			const path = png ? await this.savePngToVault(png, '截屏') : null;
+			if (!path) {
+				this.log('截屏失败：找不到所选窗口或截取被拒。');
+				return;
 			}
+			const line = formatLiveLine(
+				this.captureFrames / CAPTURE_RATE,
+				`![[${path}]]`,
+			);
+			this.lines.push(line);
+			this.sink?.onLine(line, this.lines.length - 1);
+		} catch (error) {
+			this.log(`截屏失败：${errorMessage(error)}`);
 		}
-		if (this.lines.length === 0) {
-			this.lines.push(suffix);
-		} else {
-			const last = this.lines.length - 1;
-			this.lines[last] = (this.lines[last] ?? '') + suffix;
-		}
-		const lastLine = this.lines[this.lines.length - 1] ?? '';
-		this.sink?.onLine(lastLine, this.lines.length - 1);
 	}
 
 	/**

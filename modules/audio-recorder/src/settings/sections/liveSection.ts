@@ -24,15 +24,15 @@ export function livePage(
 ): SettingGroupItem {
 	const rows: SettingGroupItem[] = [
 		{
-			name: '标记时截屏窗口',
+			name: '启用截屏按钮',
 			aliases: ['screenshot', 'marker', 'live'],
-			desc: '在实时转写面板里点「重点 / 问题」等标记时，同时截取所选窗口的画面，并把截图链接写在标签后面。',
+			desc: '实时转写面板里显示「截屏」按钮：点击即截取所选窗口，截图链接作为独立一行写进转写。标记（悬停句子上出现）不截屏，两者相互独立。',
 			control: { type: 'toggle', key: 'liveMarkerScreenshotEnabled' },
 		},
 		{
 			name: '截图窗口',
 			aliases: ['window', 'capture target'],
-			desc: '标记时截取哪一个窗口。也可以在实时转写面板里随时改选。',
+			desc: '点截屏按钮时截取哪一个窗口。也可以在实时转写面板里随时改选。',
 			render: (setting: Setting): void => {
 				const label = setting.controlEl.createSpan({
 					text: settings.liveMarkerWindowName || '未选择',
@@ -52,7 +52,7 @@ export function livePage(
 	return {
 		type: 'page',
 		name: '实时转写',
-		desc: '边说边出字的实时转写面板（whisper.cpp server 模式），以及标记时是否截屏。',
+		desc: '实时转写面板（whisper.cpp server 模式）：按停顿分句、逐句悬停标记、独立截屏按钮。',
 		displayValue: (): string =>
 			settings.liveMarkerScreenshotEnabled ? '截屏开' : '截屏关',
 		items: sectionItems(rows),

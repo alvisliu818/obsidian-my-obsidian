@@ -1,9 +1,10 @@
 /**
- * The live-transcribe panel: start/stop, a row of marker buttons (重点 /
- * 问题 / 待办 — a click tags the last line with its name and the wall-clock
- * time, optionally screenshotting the chosen window), the rolling transcript
- * cut per speech pause, and copy/insert actions for what accumulated.
- * Chinese by construction — a merged-fork feature, not upstream surface.
+ * The live-transcribe panel: start/stop, an independent screenshot button
+ * (captures the configured window into the vault as its own line), the
+ * rolling transcript cut per speech pause, and per-line markers — hovering a
+ * line floats a small marker bar centered on the mouse, so any sentence can
+ * be tagged, not just the newest. Chinese by construction — a merged-fork
+ * feature, not upstream surface.
  * @module live/LiveTranscribeView
  */
 
@@ -32,6 +33,11 @@ export interface LiveTranscribeViewUi {
 	openWindowPicker(onPicked?: (name: string) => void): void;
 }
 
+/** One transcript row in the DOM: its text node, for marker updates. */
+interface LineRow {
+	textEl: HTMLElement;
+}
+
 /**
  * The panel. One view at a time is enforced by the leaf the commands use;
  * the controller refuses concurrent sessions regardless.
@@ -42,10 +48,15 @@ export class LiveTranscribeView extends ItemView implements LiveTranscribeSink {
 	private statusEl!: HTMLElement;
 	private transcriptEl!: HTMLElement;
 	private previewEl!: HTMLElement;
-	private markerRowEl!: HTMLElement;
 	private startButton!: HTMLButtonElement;
 	private stopButton!: HTMLButtonElement;
-	private lineEls: HTMLElement[] = [];
+	private screenshotButton!: HTMLButtonElement;
+	private lineRows: LineRow[] = [];
+	private listening = false;
+	// ---- 悬浮标记条（以鼠标为中心）----
+	private markerPopup: HTMLDivElement | null = null;
+	private popupLineIndex = -1;
+	private popupHideTimer: ReturnType<typeof setTimeout> | null = null;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -90,23 +101,12 @@ export class LiveTranscribeView extends ItemView implements LiveTranscribeSink {
 		this.stopButton = header.createEl('button', { text: '停止' });
 		this.stopButton.disabled = true;
 		this.stopButton.onclick = () => void this.controller.stop();
-
-		this.markerRowEl = root.createDiv();
-		this.markerRowEl.style.display = 'flex';
-		this.markerRowEl.style.gap = '6px';
-		for (const kind of LIVE_MARKER_KINDS) {
-			const button = this.markerRowEl.createEl('button', { text: kind });
-			button.onclick = (): void => {
-				void this.controller.addMarker(kind);
-			};
-		}
-		const pickWindow = this.markerRowEl.createEl('button', {
-			text: '选择截图窗口…',
-		});
+		this.screenshotButton = header.createEl('button', { text: '截屏' });
+		this.screenshotButton.disabled = true;
+		this.screenshotButton.onclick = () => void this.controller.captureScreenshot();
+		const pickWindow = header.createEl('button', { text: '选择窗口' });
 		pickWindow.onclick = (): void => {
-			this.ui.openWindowPicker((name) => {
-				pickWindow.setText(name === '' ? '选择截图窗口…' : `截屏：${name}`);
-			});
+			this.ui.openWindowPicker();
 		};
 
 		this.transcriptEl = root.createDiv();
@@ -117,7 +117,7 @@ export class LiveTranscribeView extends ItemView implements LiveTranscribeSink {
 		this.transcriptEl.style.padding = '8px';
 		this.transcriptEl.style.borderRadius = '8px';
 		this.transcriptEl.style.background = 'var(--background-secondary)';
-		this.transcriptEl.setText('（对着麦克风说话，按停顿一句一句出字；点上方按钮打标记）');
+		this.transcriptEl.setText('（对着麦克风说话，按停顿一句一句出字；鼠标悬到某句上打标记）');
 
 		this.previewEl = root.createDiv();
 		this.previewEl.style.padding = '4px 8px';
@@ -170,8 +170,95 @@ export class LiveTranscribeView extends ItemView implements LiveTranscribeSink {
 		// the chosen lifecycle kills the server on stop, so a closed panel
 		// means a stopped session. stop() is a no-op when nothing runs.
 		this.controller.setSink(null);
+		this.hideMarkerPopup();
+		this.markerPopup?.remove();
+		this.markerPopup = null;
 		void this.controller.stop();
 	}
+
+	// ------------------------------------------------------------------
+	// 悬浮标记条：一行上出现，以鼠标为中心，移开即隐
+	// ------------------------------------------------------------------
+
+	/**
+	 * Builds the shared floating marker bar once and positions it centered on
+	 * the cursor (clamped to the viewport), over the hovered line.
+	 * @param event - The mouseenter that asked for it
+	 * @param lineIndex - The line the bar tags
+	 */
+	private showMarkerPopup(event: MouseEvent, lineIndex: number): void {
+		if (!this.listening) {
+			return;
+		}
+		if (this.popupHideTimer) {
+			clearTimeout(this.popupHideTimer);
+			this.popupHideTimer = null;
+		}
+		this.popupLineIndex = lineIndex;
+		if (!this.markerPopup) {
+			const popup = document.body.createDiv();
+			popup.style.position = 'fixed';
+			popup.style.zIndex = 'var(--layer-popover, 30)';
+			popup.style.display = 'flex';
+			popup.style.gap = '4px';
+			popup.style.padding = '4px';
+			popup.style.borderRadius = '8px';
+			popup.style.background = 'var(--background-primary)';
+			popup.style.border = '1px solid var(--background-modifier-border)';
+			popup.style.boxShadow = 'var(--shadow-s)';
+			for (const kind of LIVE_MARKER_KINDS) {
+				const button = popup.createEl('button', { text: kind });
+				button.style.padding = '2px 8px';
+				button.onclick = (event): void => {
+					event.stopPropagation();
+					void this.controller.addMarker(kind, this.popupLineIndex);
+					this.hideMarkerPopup();
+				};
+			}
+			popup.onmouseenter = (): void => {
+				if (this.popupHideTimer) {
+					clearTimeout(this.popupHideTimer);
+					this.popupHideTimer = null;
+				}
+			};
+			popup.onmouseleave = (): void => this.hideMarkerPopup();
+			this.markerPopup = popup;
+		}
+		const popup = this.markerPopup;
+		popup.style.display = 'flex';
+		// 先展示量宽，再贴着鼠标居中：过窄的侧栏也 clamp 在视口内。
+		const width = popup.offsetWidth || 150;
+		const left = Math.min(
+			Math.max(event.clientX - width / 2, 8),
+			window.innerWidth - width - 8,
+		);
+		const top = event.clientY > 70 ? event.clientY - 44 : event.clientY + 18;
+		popup.style.left = `${left}px`;
+		popup.style.top = `${top}px`;
+	}
+
+	/** Schedules the bar away; moving onto the bar itself cancels this. */
+	private scheduleMarkerHide(): void {
+		if (this.popupHideTimer) {
+			clearTimeout(this.popupHideTimer);
+		}
+		this.popupHideTimer = setTimeout(() => this.hideMarkerPopup(), 150);
+	}
+
+	private hideMarkerPopup(): void {
+		if (this.popupHideTimer) {
+			clearTimeout(this.popupHideTimer);
+			this.popupHideTimer = null;
+		}
+		if (this.markerPopup) {
+			this.markerPopup.style.display = 'none';
+		}
+		this.popupLineIndex = -1;
+	}
+
+	// ------------------------------------------------------------------
+	// Sink 回调
+	// ------------------------------------------------------------------
 
 	onLog(message: string): void {
 		if (message !== '') {
@@ -180,17 +267,27 @@ export class LiveTranscribeView extends ItemView implements LiveTranscribeSink {
 	}
 
 	onLine(line: string, index: number): void {
-		const existing = this.lineEls[index];
+		const existing = this.lineRows[index];
 		if (existing) {
-			existing.setText(line);
+			existing.textEl.setText(line);
 			return;
 		}
-		if (this.lineEls.length === 0) {
+		if (this.lineRows.length === 0) {
 			this.transcriptEl.setText('');
 		}
-		const row = this.transcriptEl.createDiv({ text: line });
+		const row = this.transcriptEl.createDiv();
 		row.style.marginBottom = '4px';
-		this.lineEls.push(row);
+		row.style.borderRadius = '4px';
+		const textEl = row.createSpan({ text: line });
+		row.onmouseenter = (event): void => {
+			row.style.background = 'var(--background-modifier-hover)';
+			this.showMarkerPopup(event, index);
+		};
+		row.onmouseleave = (): void => {
+			row.style.background = '';
+			this.scheduleMarkerHide();
+		};
+		this.lineRows.push({ textEl });
 		this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
 	}
 
@@ -213,12 +310,14 @@ export class LiveTranscribeView extends ItemView implements LiveTranscribeSink {
 	onState(state: LiveSessionState): void {
 		this.startButton.disabled = state !== 'idle';
 		this.stopButton.disabled = state !== 'listening' && state !== 'starting';
-		for (const child of Array.from(this.markerRowEl.children)) {
-			(child as HTMLButtonElement).disabled = state !== 'listening';
+		this.screenshotButton.disabled = state !== 'listening';
+		this.listening = state === 'listening';
+		if (!this.listening) {
+			this.hideMarkerPopup();
 		}
 		this.statusEl.setText(STATE_LABELS[state]);
-		if (state === 'idle' && this.lineEls.length === 0) {
-			this.transcriptEl.setText('（对着麦克风说话，按停顿一句一句出字；点上方按钮打标记）');
+		if (state === 'idle' && this.lineRows.length === 0) {
+			this.transcriptEl.setText('（对着麦克风说话，按停顿一句一句出字；鼠标悬到某句上打标记）');
 		}
 	}
 }
