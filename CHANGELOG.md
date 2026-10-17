@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 15.1.0
+
+- feat(paste): merge telling screenshot files apart from real files in Only pasted images
+- feat(collect): merge an opt-in setting that merges byte-identical attachments
+- build(deps): merge taking obsidian-dev-toolkit 3.1.0 without the obsidian-lib override
+- ci: merge attesting release assets through the toolkit's reusable workflow
+- feat(dependency): merge requiring Advanced Rename and Delete Handler 2.2.0 or later
+
 ## 15.0.0
 
 - feat(api)!: merge removing the vault graft; use the API's getAvailablePathForAttachments and isAttachmentUnitFolder
