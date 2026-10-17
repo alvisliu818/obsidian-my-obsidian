@@ -451,7 +451,7 @@ export const defaultTranslations = {
     },
     markdownUrlFormat: {
       description: {
-        part1: 'Format for the URL that will be inserted into Markdown.',
+        part1: 'Format for the URL that will be inserted into Markdown when an attachment is added. It is applied at that moment only: a link Obsidian rewrites later, when a note or an attachment is renamed or moved, gets the default format.',
         part2: 'See available',
         part3: 'tokens',
         part4: 'Leave blank to use the default format.'

@@ -37,6 +37,7 @@ Open **Settings -> Community plugins -> `Custom Attachment Location`** to config
 
 - `markdownUrlFormat`
   - a pattern for the link text inserted into the note. Leave blank for the default; setting it forces Markdown links even when Obsidian is configured for wikilinks.
+  - it applies **when the attachment is added, and only then**. A link that is rewritten later, because the note or the attachment was renamed or moved, gets the default format. A rename cannot rebuild the URL: the pattern may use what existed only at insert time (`{{originalAttachmentFileName}}`, the pasted content, a `{{prompt}}` answer), and a link carries no mark saying the pattern produced it, so reapplying it would also rewrite links you wrote by hand.
 
 ## Link display text
 
