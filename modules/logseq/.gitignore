@@ -51,9 +51,17 @@ dist/
 tests/fixtures/edge-vault/.obsidian/workspace.json
 tests/fixtures/edge-vault/.logseq-editor/
 tests/fixtures/edge-vault/.obsidian/plugins/obsidian-logseq/main.js
+# Monaco 部署产物（构建脚本拷入夹具，勿入库）
+tests/fixtures/edge-vault/.obsidian/plugins/obsidian-logseq/monaco.css
+tests/fixtures/edge-vault/.obsidian/plugins/obsidian-logseq/monaco-workers/
 
 # ===== 过程产物（可再生 / 误生成，不入库） =====
 vitest.config.ts.timestamp-*.mjs
 tests/_diag-*.test.ts
 HOMELocallogseq-*.json
+# 一次性探针转储 / 主库截图（e2e 调试残留）
+tests/_ins-*.txt
+tests/_new-*.ts.txt
+_mainvault-*.png
+/新文件测试.txt
 
