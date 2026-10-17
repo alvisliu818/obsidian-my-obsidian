@@ -149,6 +149,8 @@ export function fullyPopulatedSettings(): Omit<
 		transcriptionSpeakerRenameEnabled: false,
 		transcriptionAutoChaptersEnabled: true,
 		transcriptionAutoChaptersOnTranscribe: true,
+		liveMarkerScreenshotEnabled: true,
+		liveMarkerWindowName: 'Test window',
 		quickNotesEnabled: true,
 		quickNoteTranscriptionProvider: TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM,
 		transcriptionChunkMb: 10,

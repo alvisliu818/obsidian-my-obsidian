@@ -78,6 +78,12 @@ import { RecordingMarkerModal } from './ui/MarkerModal';
 import { openPluginSettings } from './obsidian/settingsNavigation';
 import { quickNotesAvailable } from './settings/settingsSchema';
 import { QuickNoteController } from './quicknotes/QuickNoteController';
+import { LiveTranscribeController } from './live/LiveTranscribeController';
+import {
+	LIVE_TRANSCRIBE_VIEW_TYPE,
+	LiveTranscribeView,
+} from './live/LiveTranscribeView';
+import { LiveWindowPickerModal } from './live/windowPickerModal';
 import { MemoryRecorder } from './recording/MemoryRecorder';
 import { TranscriptionService } from './transcription/TranscriptionService';
 import { ProfileNoteStore } from './settings/ProfileNoteStore';
@@ -245,6 +251,8 @@ export default class AudioRecorderPlugin extends Plugin {
 
 	/** The queue itself, kept so its pending writes are flushed on unload. */
 	private queuedTranscriptions: TranscriptionQueue | null = null;
+	/** 实时转写控制器：懒创建（首次打开面板），卸载时销毁并杀 server。 */
+	private liveController: LiveTranscribeController | null = null;
 	/** Current actionable silent-channel notice, replaced per save. */
 	private silentChannelNotice: Notice | null = null;
 	/** Invalidates an older asynchronous analysis when a newer save starts. */
@@ -432,6 +440,34 @@ export default class AudioRecorderPlugin extends Plugin {
 			(leaf) =>
 				new RecordingPanelView(leaf, this.createRecordingPanelHost()),
 		);
+
+		// 实时转写（whisper.cpp server 模式）：合并侧新增能力，不属上游。
+		// 控制器懒创建，首次打开面板才出生，卸载时统一销毁。
+		this.registerView(LIVE_TRANSCRIBE_VIEW_TYPE, (leaf) => {
+			this.liveController ??= new LiveTranscribeController({
+				app: this.app,
+				getSettings: () => this.settings,
+			});
+			return new LiveTranscribeView(leaf, this.liveController, {
+				openWindowPicker: (onPicked) => this.openLiveWindowPicker(onPicked),
+			});
+		});
+		this.addCommand({
+			id: 'open-live-transcribe',
+			name: '实时转写（whisper.cpp，边说边出字）',
+			checkCallback: (checking) => {
+				if (
+					this.settings.localWhisperBinaryPath === '' ||
+					this.settings.localWhisperModelPath === ''
+				) {
+					return false;
+				}
+				if (!checking) {
+					void this.openLiveTranscribe();
+				}
+				return true;
+			},
+		});
 
 		// The queue outlives a session, so it is built before anything can
 		// queue into it and offered back once the workspace is up.
@@ -651,6 +687,44 @@ export default class AudioRecorderPlugin extends Plugin {
 	}
 
 	/**
+	 * Opens the live-transcribe panel in the right sidebar, creating the
+	 * controller on first use. A second invocation reveals the existing leaf
+	 * rather than stacking panels.
+	 */
+	private async openLiveTranscribe(): Promise<void> {
+		this.liveController ??= new LiveTranscribeController({
+			app: this.app,
+			getSettings: () => this.settings,
+		});
+		const { workspace } = this.app;
+		const existing = workspace.getLeavesOfType(LIVE_TRANSCRIBE_VIEW_TYPE)[0];
+		const leaf =
+			existing ??
+			workspace.getRightLeaf(false) ??
+			workspace.getLeaf('tab');
+		await leaf.setViewState({
+			type: LIVE_TRANSCRIBE_VIEW_TYPE,
+			active: true,
+		});
+		workspace.revealLeaf(leaf);
+	}
+
+	/**
+	 * Opens the screenshot-window picker for live markers and persists the
+	 * choice. Shared by the settings row and the panel's own button.
+	 * @param onPicked - Told the chosen window's display name, if any
+	 */
+	openLiveWindowPicker(onPicked?: (name: string) => void): void {
+		new LiveWindowPickerModal(this.app, (name) => {
+			this.settings.liveMarkerWindowName = name;
+			void this.saveSettings().catch((error: unknown) => {
+				console.warn(`${PLUGIN_LOG_PREFIX} Saving the live marker window failed:`, error);
+			});
+			onPicked?.(name);
+		}).open();
+	}
+
+	/**
 	 * Called when the plugin is unloaded.
 	 */
 	override onunload(): void {
@@ -680,6 +754,10 @@ export default class AudioRecorderPlugin extends Plugin {
 		this.playerRegistrar.dispose();
 		this.encodingWorker?.terminate();
 		this.encodingWorker = null;
+		// 实时转写：停会话、杀 server（控制器内部幂等），面板由 Obsidian 随卸载移除。
+		const live = this.liveController;
+		this.liveController = null;
+		void live?.dispose();
 		// The status bar item and the ribbon icon are not reset here: Obsidian
 		// removes both when the plugin unloads.
 	}

@@ -535,6 +535,13 @@ export interface AudioRecorderSettings {
 	/** Automatically generate chapters after each transcription run. */
 	transcriptionAutoChaptersOnTranscribe: boolean;
 	/**
+	 * Whether clicking a live marker also screenshots the chosen window and
+	 * links the shot after the tag (live transcription, merged-fork feature).
+	 */
+	liveMarkerScreenshotEnabled: boolean;
+	/** The window title a live marker screenshots, as picked in settings. */
+	liveMarkerWindowName: string;
+	/**
 	 * Whether quick notes are offered: a ribbon button and a command that
 	 * dictate into the note at the cursor. Off by default, and while off the
 	 * button is hidden and the command is not offered.
@@ -1006,6 +1013,8 @@ export const DEFAULT_SETTINGS: AudioRecorderSettings = {
 	transcriptionSpeakerRenameEnabled: false,
 	transcriptionAutoChaptersEnabled: false,
 	transcriptionAutoChaptersOnTranscribe: false,
+	liveMarkerScreenshotEnabled: false,
+	liveMarkerWindowName: '',
 	quickNotesEnabled: false,
 	quickNoteTranscriptionProvider: TRANSCRIPTION_PROVIDER_IDS.WHISPER_API,
 	transcriptionChunkMb: DEFAULT_TRANSCRIBE_CHUNK_MB,

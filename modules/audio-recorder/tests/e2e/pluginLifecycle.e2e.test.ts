@@ -179,12 +179,14 @@ describe('the command line', () => {
 
 	it('answers every palette command on the command line too', async () => {
 		// One registry puts an action on both; a palette command with no
-		// command-line twin would be an action added past it.
+		// command-line twin would be an action added past it. The live
+		// transcribe command is the one deliberate exception: it only opens a
+		// UI panel, which has no headless form to answer a terminal with.
 		const { plugin } = await loadPlugin();
 		const mock = asMockPlugin(plugin);
 
 		expect(mock.registeredCliCommands).toHaveLength(
-			mock.registeredCommands.length + 3,
+			mock.registeredCommands.length + 2,
 		);
 	});
 

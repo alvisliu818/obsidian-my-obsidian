@@ -125,6 +125,8 @@ const TEST_RECORDING_DURATION_MS = 5000;
 export interface AudioRecorderPluginInterface extends Plugin {
 	settings: AudioRecorderSettings;
 	saveSettings(): Promise<void>;
+	/** Opens the live-marker screenshot window picker, persisting the choice. */
+	openLiveWindowPicker(onPicked?: (name: string) => void): void;
 }
 
 const EMPTY_DEVICE_SNAPSHOT: AudioInputDeviceSnapshot = {
@@ -333,6 +335,11 @@ export class AudioRecorderSettingTab extends PluginSettingTab {
 					).then((data) => {
 						new SystemInfoModal(this.app, data).open();
 					});
+				},
+			},
+			live: {
+				pickScreenshotWindow: (onPicked): void => {
+					this.plugin.openLiveWindowPicker(onPicked);
 				},
 			},
 		});

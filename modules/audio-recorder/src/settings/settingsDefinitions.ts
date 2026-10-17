@@ -37,6 +37,7 @@ import { diagnosticsPage } from './sections/diagnosticsSection';
 import { enginesPage } from './sections/enginesSection';
 import { fileStorageGroup } from './sections/fileStorageSection';
 import { isSystemAudioLoopbackAvailable } from '../recording/systemAudioSupport';
+import { livePage } from './sections/liveSection';
 import { llmGroup } from './sections/llmSection';
 import { mobilePage } from './sections/mobileSection';
 import { multiTrackPage } from './sections/multiTrackSection';
@@ -68,6 +69,7 @@ export {
 
 export type {
 	DiagnosticsActions,
+	LiveTranscribeSettingsActions,
 	ProfileCatalogue,
 	SettingsDefinitionContext,
 } from './sections/context';
@@ -130,6 +132,8 @@ export function buildSettingsDefinitions(
 			// looked for by its own name, above the sections a recording is
 			// tuned with.
 			quickNotesPage(ctx),
+			// 实时转写（合并侧新增能力）：面板由命令打开，这里只配标记截屏。
+			livePage(ctx.live, ctx.settings),
 			audioSplittingPage(ctx.settings),
 			multiTrackPage(ctx.settings, ctx.devices, systemAudioAvailable),
 			audioPlayerPage(ctx.settings),

@@ -144,6 +144,19 @@ export interface DiagnosticsActions {
 	showSystemInfo(): void;
 }
 
+/**
+ * The live-transcribe settings actions: the window picker is runtime state
+ * (the list of windows exists only while the app runs), so the row opens a
+ * modal rather than binding a control.
+ */
+export interface LiveTranscribeSettingsActions {
+	/**
+	 * Opens the screenshot-window picker, persisting the choice before the
+	 * callback reports it back to the row that asked.
+	 */
+	pickScreenshotWindow(onPicked?: (name: string) => void): void;
+}
+
 /** One stored profile, as its entry in the catalogue presents it. */
 export interface ProfileEntry {
 	/** Stable id. Control keys and the edit actions address a profile by it. */
@@ -236,6 +249,8 @@ export interface SettingsDefinitionContext {
 	renderDocumentationLink(host: HTMLElement): void;
 	/** Handlers for the diagnostics rows. */
 	readonly diagnostics: DiagnosticsActions;
+	/** The live-transcribe actions (screenshot window picker). */
+	readonly live: LiveTranscribeSettingsActions;
 	/** The transcription blocks that are not definitions yet. */
 	readonly transcriptionBlocks: TranscriptionBlocks;
 }
