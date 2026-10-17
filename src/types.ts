@@ -428,6 +428,23 @@ export interface OpenWithApp {
   enabled: boolean;
 }
 
+/**
+ * One entry in the recent-files panel's list.
+ *
+ * `kind` decides how the row is opened: a vault path goes through
+ * `openLinkText` like any note; an absolute path is resolved back to its
+ * mount and opened through the external-file routes. Keeping the two apart
+ * in the data (rather than sniffing the path at render time) means a vault
+ * file whose name happens to look absolute still opens correctly.
+ */
+export interface RecentOpenEntry {
+  /** Vault-relative path when kind is 'vault'; absolute path when 'ext'. */
+  path: string;
+  kind: 'vault' | 'ext';
+  /** Epoch ms of the last open; ordering only. */
+  at: number;
+}
+
 /** Drop malformed entries — `data.json` is user-editable. */
 export function openWithAppFrom(raw: unknown): OpenWithApp | null {
   if (!raw || typeof raw !== 'object') return null;

@@ -35,6 +35,9 @@ export interface NodeFsLike {
   mkdirSync?(p: string, opts: { recursive: true }): void;
   unlinkSync?(p: string): void;
   rmSync?(p: string, opts: { recursive: true; force: true }): void;
+  /** Binary-safe single-file copy (Node fs.copyFileSync)。文本接口会把
+   *  二进制文件写坏，复制必须走这个。 */
+  copyFileSync?(from: string, to: string): void;
 }
 
 export interface DirentLike {
@@ -111,6 +114,12 @@ export function validateEntryName(raw: string): string {
 
 export type FsOpResult = { ok: boolean; error?: string };
 
+/** 复制操作的结果：带上最终落地的路径（撞名时会加序号）。 */
+export type CopyOpResult = FsOpResult & { target?: string; count?: number };
+
+/** 一次复制允许的文件数上限（同步 IO，大目录会占一会儿 UI 线程）。 */
+const COPY_FILE_LIMIT = 20000;
+
 /** Ensure a directory exists (recursive). */
 export function ensureDirX(abs: string): FsOpResult {
   try {
@@ -137,6 +146,17 @@ export function createEmptyFile(abs: string): FsOpResult {
 }
 
 /**
+ * 同目录改名的目标路径（renameEntry 用它；调用方在改名成功后也要用它更新
+ * 自己记的 abs）。分隔符取自路径本身（Windows 两种都认），无分隔符说明是
+ * 裸名（不可能出现在挂载树，但守住边界）——此时返回裸名本身。
+ */
+export function renameTarget(abs: string, newName: string): string {
+  const idx = Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\'));
+  if (idx < 0) return newName;
+  return abs.slice(0, idx + 1) + newName;
+}
+
+/**
  * Rename a file or folder within its parent (same directory, name change only).
  * Refuses to clobber an existing target — Windows renameSync would overwrite a
  * FILE silently, and that is never what a rename means.
@@ -144,11 +164,7 @@ export function createEmptyFile(abs: string): FsOpResult {
 export function renameEntry(abs: string, newName: string): FsOpResult {
   const bad = validateEntryName(newName);
   if (bad) return { ok: false, error: bad };
-  // 父目录 + 分隔符:分隔符取自路径本身(Windows 两种都认),
-  // 无分隔符说明是裸名(不可能出现在挂载树,但守住边界)。
-  const idx = Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\'));
-  if (idx < 0) return { ok: false, error: '路径缺少父目录。' };
-  const target = abs.slice(0, idx + 1) + newName;
+  const target = renameTarget(abs, newName);
   try {
     const fs = fsMod();
     if (!fs.renameSync) return { ok: false, error: '当前环境不支持重命名。' };
@@ -157,6 +173,67 @@ export function renameEntry(abs: string, newName: string): FsOpResult {
     return { ok: true };
   } catch (e) {
     return { ok: false, error: errorMessage(e) };
+  }
+}
+
+/**
+ * 目录里一个不撞名的副本名：`a.md` → `a 2.md` → `a 3.md`…
+ * （Windows 资源管理器 / Obsidian 的惯例；纯函数，好测。）
+ */
+export function uniqueCopyName(dirAbs: string, name: string): string {
+  const fs = fsMod();
+  const dot = name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : '';
+  if (!fs.existsSync(joinAbs(dirAbs, name))) return name;
+  for (let i = 2; i < 1000; i++) {
+    const candidate = `${stem} ${i}${ext}`;
+    if (!fs.existsSync(joinAbs(dirAbs, candidate))) return candidate;
+  }
+  return `${stem} ${Date.now()}${ext}`;
+}
+
+/**
+ * 复制一个文件/文件夹到 destDir（文件夹递归，二进制安全）。
+ *
+ * 撞名自动加序号（uniqueCopyName）；拒绝把目录复制进自己的子树（那会无限
+ * 递归）。复制过程中同步 IO——大目录会占一会儿 UI 线程，故有文件数上限。
+ */
+export function copyEntry(abs: string, destDir: string): CopyOpResult {
+  try {
+    const fs = fsMod();
+    if (!fs.existsSync(abs)) return { ok: false, error: '源不存在。' };
+    if (!fs.existsSync(destDir)) return { ok: false, error: '目标文件夹不存在。' };
+    const isDir = fs.statSync(abs).isDirectory?.() === true;
+    const srcNorm = abs.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    const destNorm = destDir.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    if (isDir && destNorm.startsWith(srcNorm + '/')) {
+      return { ok: false, error: '不能把文件夹复制到它自己里面。' };
+    }
+    const name = abs.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? 'copy';
+    const finalName = uniqueCopyName(destDir, name);
+    const target = joinAbs(destDir, finalName);
+    const ref = { n: 0 };
+    copyTree(abs, target, isDir, ref);
+    return { ok: true, target, count: ref.n };
+  } catch (e) {
+    return { ok: false, error: errorMessage(e) };
+  }
+}
+
+function copyTree(src: string, dest: string, isDir: boolean, ref: { n: number }): void {
+  const fs = fsMod();
+  if (!isDir) {
+    if (!fs.copyFileSync) throw new Error('当前环境不支持复制文件。');
+    fs.copyFileSync(src, dest);
+    ref.n += 1;
+    if (ref.n > COPY_FILE_LIMIT) throw new Error(`一次最多复制 ${COPY_FILE_LIMIT} 个文件。`);
+    return;
+  }
+  if (!fs.mkdirSync) throw new Error('当前环境不支持创建目录。');
+  fs.mkdirSync(dest, { recursive: true });
+  for (const ent of fs.readdirSync(src, { withFileTypes: true })) {
+    copyTree(joinAbs(src, ent.name), joinAbs(dest, ent.name), ent.isDirectory(), ref);
   }
 }
 
