@@ -89,7 +89,7 @@
     "zod": "^4.6.5"
   },
   "dependencies": {
-    "@mnaoumov/obsidian-lib": "^4.1.0",
+    "@mnaoumov/obsidian-lib": "^4.3.0",
     "@mnaoumov/typescript-lib": "^1.5.0"
   }
 }
