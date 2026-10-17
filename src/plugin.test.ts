@@ -10,7 +10,9 @@ import type {
 
 import { PluginConflictSeverity } from '@mnaoumov/obsidian-lib/components/plugin-gate-component';
 import { PluginSettingsTabComponent } from '@mnaoumov/obsidian-lib/components/plugin-settings-tab-component';
+import { ObsidianLibrary } from '@mnaoumov/obsidian-lib/library';
 import { watchPluginApi } from '@mnaoumov/obsidian-lib/plugin/plugin-api';
+import { Library } from '@mnaoumov/typescript-lib/library';
 import { castTo } from '@mnaoumov/typescript-lib/object-utils';
 import { ensureNonNullable } from '@mnaoumov/typescript-lib/type-guards';
 import { App as AppCls } from 'obsidian-test-mocks/obsidian';
@@ -153,6 +155,10 @@ const CONFLICTING_PLUGIN_VERSION = '11.10.0';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Each test loads a fresh plugin and never unloads it, and the library's contexts initialize only once
+  // per load, so they are reset here the way the plugin context's own unload would reset them.
+  Library.resetToDefault();
+  ObsidianLibrary.resetToDefault();
 });
 
 function createConfiguredApp(): App {
