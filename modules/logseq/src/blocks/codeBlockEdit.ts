@@ -154,11 +154,20 @@ export function mountCodeEditor(
       ? `${info.openLine}\n${info.content}\n${info.fence}`
       : `${info.openLine}\n${info.content}`
     : info.content;
+  // 度量对齐阅读态:pre 是 font-size 1em / line-height 1.5 / 内边距 0.4em 0.9em
+  // (styles.css 钉死的值)。字号取宿主计算值,行高与上下内边距按同一字号折算,
+  // 编辑态打开/提交时文字与盒子都不跳。
+  const cs = getComputedStyle(body);
+  const fontSize = Math.round((parseFloat(cs.fontSize) || 13) * 10) / 10;
   const mEditor = createEditor(body, {
     value: doc,
     language: getLanguageByFence(info.lang),
     autoHeight: true,
     lineNumbers: false,
+    fontFamily: 'var(--font-monospace)',
+    fontSize,
+    lineHeight: Math.round(fontSize * 1.5),
+    vPadding: Math.round(fontSize * 0.4),
     onEscape: () => host.commitFocusedText(),
   });
   const model = mEditor.getModel();

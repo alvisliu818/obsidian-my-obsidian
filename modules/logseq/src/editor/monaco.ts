@@ -293,20 +293,52 @@ function configureTypeScriptWorker(): void {
   }
 }
 
-// 根据 Obsidian 配色定义并切换 Monaco 主题
+// 根据 Obsidian 配色定义并切换 Monaco 主题。
+//
+// token 规则复刻阅读态的配色(见 styles.css 的 `.token.* → --code-*` 映射):
+// 阅读(MarkdownRenderer → Prism)与编辑(Monaco)共用同一组 --code-* 变量,
+ // 两种状态的代码颜色才一致——此前内置主题 rules 为空,Monaco 落回 vs 基础色
+// (字符串绿、关键字蓝),与阅读态(粉关键字/橙字符串)对不上,即用户报告的
+// 「代码渲染也不一样」。变量本身随明暗模式变,所以 light/dark 用同一组规则。
+// 规则形状对照 Prism 类名 → Obsidian 变量(见 app.css):
+//   comment→--code-comment  string→--code-string  keyword→--code-keyword
+//   number→--code-value     operator→--code-operator  delimiter→--code-punctuation
+//   tag→--code-tag          type.identifier(class-name)→--code-function
+//   其余(identifier 等)→--code-normal;attr-name → 正常色(Obsidian 的
+//   .token.attr-name 走未定义的 --code-attribute,回退 inherit)。
 export function applyTheme(mode: 0 | 1): void {
   const bgFallback = mode === 1 ? '#1e1e1e' : '#ffffff';
   const fgFallback = mode === 1 ? '#d4d4d4' : '#222222';
   const bg = normalizeColor(readCSSVar('--background-primary'), bgFallback);
   const fg = normalizeColor(readCSSVar('--text-normal'), fgFallback);
+  const codeFg = normalizeColor(readCSSVar('--code-normal'), fg);
+  const c = (name: string, fallback: string): string => normalizeColor(readCSSVar(name), fallback);
+  const stringC = c('--code-string', mode === 1 ? '#ce9178' : '#a31515');
+  const tagC = c('--code-tag', mode === 1 ? '#569cd6' : '#800000');
+  const rules: monaco.editor.ITokenThemeRule[] = [
+    { token: '', foreground: codeFg },
+    { token: 'identifier', foreground: codeFg },
+    { token: 'comment', foreground: c('--code-comment', mode === 1 ? '#6a9955' : '#237e38') },
+    { token: 'string', foreground: stringC },
+    { token: 'keyword', foreground: c('--code-keyword', mode === 1 ? '#c586c0' : '#0000ff') },
+    { token: 'number', foreground: c('--code-value', mode === 1 ? '#b5cea8' : '#098658') },
+    { token: 'regexp', foreground: c('--code-important', mode === 1 ? '#d16969' : '#811f3f') },
+    { token: 'operator', foreground: c('--code-operator', mode === 1 ? '#d4d4d4' : '#333333') },
+    { token: 'delimiter', foreground: c('--code-punctuation', mode === 1 ? '#808080' : '#666666') },
+    { token: 'tag', foreground: tagC },
+    { token: 'metatag', foreground: tagC },
+    { token: 'attribute.name', foreground: codeFg },
+    { token: 'attribute.value', foreground: stringC },
+    { token: 'type.identifier', foreground: c('--code-function', mode === 1 ? '#dcdcaa' : '#795e26') },
+  ];
   const themeName = mode === 1 ? 'logseq-dark' : 'logseq-light';
   monaco.editor.defineTheme(themeName, {
     base: mode === 1 ? 'vs-dark' : 'vs',
     inherit: true,
-    rules: [],
+    rules,
     colors: {
       'editor.background': bg,
-      'editor.foreground': fg,
+      'editor.foreground': codeFg,
     },
   });
   monaco.editor.setTheme(themeName);
@@ -331,6 +363,12 @@ export interface CreateEditorOptions {
   value: string;
   language: string;
   fontSize?: number;
+  /** 字体(块内代码块传 var(--font-monospace),与阅读态 pre 同字体) */
+  fontFamily?: string;
+  /** 行高(px);不传走 Monaco 默认(1.35×fontSize) */
+  lineHeight?: number;
+  /** 覆盖默认的上下内边距(px);不传 8 / autoHeight?8:24 */
+  vPadding?: number;
   wordWrap?: 'on' | 'off';
   /** 行号:代码文件开,块内代码块关(与块宽对齐) */
   lineNumbers?: boolean;
@@ -356,11 +394,19 @@ export function createEditor(
 ): monaco.editor.IStandaloneCodeEditor {
   // 市场扩展的 TM 语法优先:异步注册完成后实时覆盖内置 monarch tokenizer
   void registerTmGrammarForMonaco(opts.language).catch(() => {});
+  // 块内模式(lineNumbers:false):折叠槽(lineDecorationsWidth 默认 ~20px)会把
+  // 代码整体往右推一格——阅读态没有这条槽,这就是「编辑态比阅读态多一层缩进」
+  // 的来源。块内把槽清零,折叠也一并关掉(阅读态同样没有折叠箭头)。
+  const blockMode = opts.lineNumbers === false;
+  const padTop = opts.vPadding ?? 8;
+  const padBottom = opts.vPadding ?? (opts.autoHeight ? 8 : 24);
   const editor = monaco.editor.create(container, {
     value: opts.value,
     language: opts.language,
     theme: currentMonacoTheme(),
     fontSize: opts.fontSize ?? 13,
+    fontFamily: opts.fontFamily,
+    lineHeight: opts.lineHeight,
     wordWrap: opts.wordWrap ?? 'off',
     lineNumbers:
       opts.lineNumbers === false
@@ -370,22 +416,24 @@ export function createEditor(
           : opts.lineNumbersStart
             ? (n: number) => String(opts.lineNumbersStart! + n - 1)
             : 'on',
-    folding: opts.folding ?? true,
+    lineDecorationsWidth: blockMode ? 0 : undefined,
+    // 括号对着色是 Monaco 特有的,阅读态的 Prism 只有一种 punctuation 色。
+    bracketPairColorization: { enabled: !blockMode },
+    folding: opts.folding ?? !blockMode,
     minimap: { enabled: opts.minimap === true },
     automaticLayout: true,
     scrollBeyondLastLine: !opts.autoHeight,
     smoothScrolling: true,
     cursorBlinking: 'smooth',
     renderWhitespace: 'selection',
-    bracketPairColorization: { enabled: true },
-    padding: { top: 8, bottom: opts.autoHeight ? 8 : 24 },
+    padding: { top: padTop, bottom: padBottom },
   });
 
   if (opts.autoHeight) {
     const updateHeight = () => {
       const lineCount = editor.getModel()?.getLineCount() ?? 1;
       const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
-      const pad = 16;
+      const pad = padTop + padBottom;
       container.style.height = `${lineCount * lineHeight + pad}px`;
     };
     updateHeight();

@@ -2541,6 +2541,30 @@ body.block-touch-dragging {
   padding: 0;
 }
 
+/* ---- Monaco 接管代码块编辑态后的盒子对齐 ----
+   (.cm-* 那组是旧 CM6 编辑器的规则,留着不碍事。)
+   背景:Monaco 主题的 editor.background 是全局的(--background-primary,
+   外部代码文件在用),块内代码块按容器覆盖成阅读态的 --code-background。
+   圆角:只在底部,顶部是工具栏——与 .lgp-code-block pre 一致。 */
+.lgp-code-editing .monaco-editor,
+.lgp-code-editing .monaco-editor-background,
+.lgp-code-editing .monaco-editor .margin {
+  background: var(--code-background, var(--background-secondary)) !important;
+}
+.lgp-code-editing .monaco-editor {
+  border-radius: 0 0 var(--code-radius, 6px) var(--code-radius, 6px) !important;
+  overflow: hidden;
+}
+.lgp-code-editing .monaco-editor .scroll-decoration {
+  box-shadow: none !important;
+}
+/* 左右内边距:Monaco 自身只有上下 padding(见 createEditor 的 vPadding),
+   水平的 0.9em 挂在宿主上——与阅读态 pre 的 `0.4em 0.9em` 左右一致,
+   首字符的 x 位置在两种状态间不跳。 */
+.lgp-code-editing .lgp-code-editor-host {
+  padding: 0 0.9em;
+}
+
 .lgp-code-edit-hint {
   margin-left: auto;
   color: var(--text-faint);
