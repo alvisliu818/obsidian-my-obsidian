@@ -21,9 +21,38 @@ Turn on **Collect attachments automatically** (`shouldCollectAttachmentsAutomati
 
 ## Try it
 
-1. Paste a couple of images into [01 Attachment folder location](<./01 Attachment folder location.md>) and [02 Attachment file naming](<./02 Attachment file naming.md>) (you supply the files).
-2. Change **Location for new attachments** in the settings to something new.
-3. Run **Collect attachments in entire vault** and watch the existing attachments move to match the new pattern.
+Every demo on this page works the same way. A set-up button creates a folder of its own under `Materials/05 Collect attachments/`, writes the notes and images the demo needs, sets every setting the demo depends on, and opens the demo's note. The buttons after it each do one step, and each one ends with a notice listing what the demo folder holds now, so you can watch the files move without hunting for them in the File Explorer. Pressing a set-up button again starts its demo over from scratch. The demos change settings that affect the whole vault, so the button at the end of this page puts them all back.
+
+This one creates `Collect demo/`: a note, `Collect demo`, embedding `loose/image.png` - an attachment sitting outside the folder the settings name.
+
+```code-button
+---
+caption: Set up the collect demo
+---
+await require('/demoSetup.ts').setUpCollectDemo(app, 'basic');
+```
+
+Collect it. The image moves to `assets/Collect demo/image.png`, the folder **Location for new attachments** (`./assets/{{noteFileName}}`) gives the note.
+
+```code-button
+---
+caption: Collect the attachments of Collect demo
+---
+await require('/demoSetup.ts').collectInDemo(app, 'basic');
+```
+
+Now change **Location for new attachments** to `./attachments` and collect again. The image follows the new pattern to `attachments/image.png`.
+
+```code-button
+---
+caption: Change the location to ./attachments and collect again
+---
+const demoSetup = require('/demoSetup.ts');
+await demoSetup.changeSettings(app, { attachmentFolderPath: './attachments' });
+await demoSetup.collectInDemo(app, 'basic');
+```
+
+Manual equivalent: create a note embedding an image kept outside its attachment folder, open it and run **Collect attachments in current note**, then edit **Location for new attachments** in **Settings -> Community plugins -> `Custom Attachment Location`** and run the command again. **Collect attachments in current folder** and **Collect attachments in entire vault** do the same for every note they reach.
 
 Relevant settings: `shouldRenameCollectedAttachments`, `collectedAttachmentFileName`, `collectAttachmentUsedByMultipleNotesMode`, and `moveAttachmentToProperFolderUsedByMultipleNotesMode` control how collecting handles renaming and attachments shared by several notes; `excludePathsFromMultipleNotesCheck` lets you ignore certain notes (e.g. `.excalidraw` drawings) from that shared-attachment check, and `excludeExtensionsFromMultipleNotesCheck` exempts whole attachment file types from it. All keys are explained in [06 Settings](<./06 Settings.md>).
 
@@ -45,10 +74,45 @@ Two things worth knowing:
 
 ### Try it
 
-1. Set **Location for new attachments** to `_Attachments` and leave **Collected attachment folder path** empty.
-2. Paste an image into a note and run **Collect attachments in current note** - the image stays in `_Attachments`, because both settings resolve to the same folder.
-3. Set **Collected attachment folder path** to `./{{noteFileName}}.assets` and run the command again - the image moves into `<note name>.assets/` beside the note.
-4. Paste another image - it still lands in `_Attachments`, untouched by the collect destination.
+The set-up button creates `Destination demo/` with **Location for new attachments** set to its `_Attachments` folder and **Collected attachment folder path** empty. Its note, `Example Note`, embeds `_Attachments/image.png`, as if you had pasted it there.
+
+```code-button
+---
+caption: Set up the destination demo
+---
+await require('/demoSetup.ts').setUpCollectDemo(app, 'destination');
+```
+
+Collect the note. The image stays in `_Attachments`, because both settings resolve to the same folder.
+
+```code-button
+---
+caption: Collect with no destination of its own
+---
+await require('/demoSetup.ts').collectInDemo(app, 'destination');
+```
+
+Set **Collected attachment folder path** to `./{{noteFileName}}.assets` and collect again. The image moves into `Example Note.assets/` beside the note.
+
+```code-button
+---
+caption: Give collecting its own destination and collect again
+---
+const demoSetup = require('/demoSetup.ts');
+await demoSetup.changeSettings(app, { collectedAttachmentFolderPath: './{{noteFileName}}.assets' });
+await demoSetup.collectInDemo(app, 'destination');
+```
+
+Paste another image. It still lands in `_Attachments`, untouched by the collect destination. The button saves a sample image under the folder and the name a paste would get.
+
+```code-button
+---
+caption: Save a new image the way a paste would
+---
+await require('/demoSetup.ts').pasteIntoDestinationDemo(app);
+```
+
+Manual equivalent: set the two settings in **Settings -> Community plugins -> `Custom Attachment Location`**, paste an image into a note, and run **Collect attachments in current note** after each change.
 
 ## Safety net for non-standard references
 
@@ -58,9 +122,41 @@ Turn on **Skip collecting attachments referenced by a raw path** (`shouldSkipCol
 
 ### Try it
 
-1. Create a note `raw-ref.md` whose body embeds an image with raw HTML, e.g. `<img src="my-image.png">` (Obsidian will not index this link).
-2. Reference the same image with a normal `![[my-image.png]]` embed from another note and run **Collect attachments** with the setting **off** - the image is relocated even though `raw-ref.md` still points at the old path.
-3. Turn the setting **on** and repeat - the image is left where it is, and a notice reports that it is referenced by a raw path.
+The set-up button creates `Raw path demo/` with an image and two notes: `raw-ref` shows the image through raw HTML, an `<img src=...>` tag Obsidian does not index, and `Embed` embeds it the ordinary way. The setting starts **off**.
+
+```code-button
+---
+caption: Set up the raw-path demo with the setting off
+---
+await require('/demoSetup.ts').setUpCollectDemo(app, 'rawPath');
+```
+
+Collect `Embed`. The image moves to `assets/Embed/`, even though `raw-ref` still points at the old path, so the raw HTML now shows nothing.
+
+```code-button
+---
+caption: Collect Embed with the setting off
+---
+await require('/demoSetup.ts').collectInDemo(app, 'rawPath');
+```
+
+Start over with the setting **on** and collect again. The image is left where it is, and a notice reports that it is referenced by a raw path.
+
+```code-button
+---
+caption: Start over with the setting on
+---
+await require('/demoSetup.ts').setUpCollectDemo(app, 'rawPath', { shouldSkipCollectingAttachmentsReferencedByRawPath: true });
+```
+
+```code-button
+---
+caption: Collect Embed with the setting on
+---
+await require('/demoSetup.ts').collectInDemo(app, 'rawPath');
+```
+
+Manual equivalent: create the two notes, run **Collect attachments in current note** in `Embed`, then toggle **Skip collecting attachments referenced by a raw path** in **Settings -> Community plugins -> `Custom Attachment Location`** and repeat with a fresh copy.
 
 ## Identical copies
 
@@ -70,10 +166,41 @@ The files are compared by content, not by name. Two different images that happen
 
 ### Try it
 
-1. Set **Location for new attachments** to `_Attachments`, and leave **Rename collected attachments** off so the names survive.
-2. Put a copy of the same image into two folders under the same name, `a/image.png` and `b/image.png`, and embed each from its own note.
-3. Run **Collect attachments in current note** in both notes with the setting **off** - `_Attachments` ends up holding `image.png` and `image 1.png`.
-4. Turn the setting **on** and repeat with fresh copies - `_Attachments` holds one `image.png`, both notes embed it, and the second copy is in the trash.
+The set-up button creates `Dedupe demo/` holding the same image twice under the same name, `a/image.png` and `b/image.png`, each embedded from its own note. It sets **Location for new attachments** to the demo's `_Attachments` folder, leaves **Rename collected attachments** off so the names survive, and starts with the setting **off**.
+
+```code-button
+---
+caption: Set up the dedupe demo with the setting off
+---
+await require('/demoSetup.ts').setUpCollectDemo(app, 'dedupe');
+```
+
+Collect both notes. `_Attachments` ends up holding `image.png` and `image 1.png`.
+
+```code-button
+---
+caption: Collect Note A and Note B with the setting off
+---
+await require('/demoSetup.ts').collectInDemo(app, 'dedupe', ['a/Note A.md', 'b/Note B.md']);
+```
+
+Start over with the setting **on** and collect both again. `_Attachments` holds one `image.png`, both notes embed it, and the second copy is in the trash.
+
+```code-button
+---
+caption: Start over with deduplication on
+---
+await require('/demoSetup.ts').setUpCollectDemo(app, 'dedupe', { shouldDeduplicateIdenticalAttachments: true });
+```
+
+```code-button
+---
+caption: Collect Note A and Note B with deduplication on
+---
+await require('/demoSetup.ts').collectInDemo(app, 'dedupe', ['a/Note A.md', 'b/Note B.md']);
+```
+
+Manual equivalent: make the two copies and their notes, run **Collect attachments in current note** in each note, then toggle **Deduplicate identical attachments** in **Settings -> Community plugins -> `Custom Attachment Location`** and repeat with fresh copies.
 
 ## Attachments that are really a folder
 
@@ -90,9 +217,41 @@ Two things worth knowing:
 
 ### Try it
 
-1. Create `saved-page/page_files/logo.png` and `saved-page/page_files/style.css`, and a note embedding only `![[saved-page/page_files/logo.png]]`.
-2. Run **Collect attachments in current note** with the setting empty - only `logo.png` moves, and `style.css` is stranded.
-3. Add `saved-page/page_files` to **Attachment unit folders** and repeat with a fresh copy - the whole `page_files` folder moves, `style.css` included.
+The set-up button creates `Unit folder demo/` with `saved-page/page_files/logo.png` and `saved-page/page_files/style.css`, and a note, `Saved page`, embedding only `logo.png`. **Attachment unit folders** starts empty.
+
+```code-button
+---
+caption: Set up the unit-folder demo with the setting empty
+---
+await require('/demoSetup.ts').setUpCollectDemo(app, 'unitFolder');
+```
+
+Collect the note. Only `logo.png` moves, to `assets/Saved page/`, and `style.css` is stranded.
+
+```code-button
+---
+caption: Collect Saved page with no unit folder
+---
+await require('/demoSetup.ts').collectInDemo(app, 'unitFolder');
+```
+
+Start over with `saved-page/page_files` listed under **Attachment unit folders** and collect again. The whole `page_files` folder moves to `assets/Saved page/page_files/`, `style.css` included.
+
+```code-button
+---
+caption: Start over with page_files as a unit folder
+---
+await require('/demoSetup.ts').setUpCollectDemo(app, 'unitFolder', { attachmentUnitFolderPaths: ['Materials/05 Collect attachments/Unit folder demo/saved-page/page_files'] });
+```
+
+```code-button
+---
+caption: Collect Saved page with the unit folder
+---
+await require('/demoSetup.ts').collectInDemo(app, 'unitFolder');
+```
+
+Manual equivalent: create the two files and the note, run **Collect attachments in current note**, then add `Materials/05 Collect attachments/Unit folder demo/saved-page/page_files` to **Attachment unit folders** in **Settings -> Community plugins -> `Custom Attachment Location`** and repeat with a fresh copy.
 
 ## When several notes reference the same attachment
 
@@ -116,12 +275,54 @@ Five things worth knowing:
 
 ### Try it
 
-1. Embed the same image in a note and in an `Excalidraw` drawing.
-2. Run **Collect attachments in current note** with **Note priorities** empty - the image is left alone (or handled per the mode).
-3. Set **Note priorities** to `.md` then `.excalidraw.md` and repeat - the image moves into the markdown note's attachment folder, whichever of the two you ran the command on.
-4. Run it on the *drawing* - the image lands in the markdown note's folder as before, and a notice now names that note, with a link to open it, so you can see who really owns the image.
-5. Run it a second time on the markdown note - the image is already in its folder, so nothing moves and nothing is reported.
-6. Embed the same image in a *second* markdown note and run it again - the two markdown notes now tie, so the dialog appears and names those two. The drawing, which the list ranked below them, is not on it.
+**Note priorities** belongs to **`Advanced Rename and Delete Handler`** since 12.0.0, so it is set in that plugin's settings tab. The set-up button creates `Note priorities demo/` with `shared.png` embedded by a note, `Note`, and by a drawing, `Drawing.excalidraw.md`. **Note priorities** starts empty and **Collect attachment used by multiple notes mode** is `Skip`. The drawing is a plain file with the drawing's extension, so `Excalidraw` does not need to be installed.
+
+```code-button
+---
+caption: Set up the note-priorities demo
+---
+await require('/demoSetup.ts').setUpCollectDemo(app, 'priorities');
+```
+
+Collect `Note` with the list empty. The image is left alone: two notes reference it, nothing ranks them, and the mode says skip.
+
+```code-button
+---
+caption: Collect Note with no priorities
+---
+await require('/demoSetup.ts').collectInDemo(app, 'priorities');
+```
+
+Set **Note priorities** to `.md` then `.excalidraw.md`, and collect the *drawing*. The image moves into the markdown note's attachment folder, `assets/Note/`, because `Note` outranks the drawing, and a notice names `Note`, with a link to open it, so you can see who really owns the image.
+
+```code-button
+---
+caption: Rank .md above .excalidraw.md and collect the drawing
+---
+const demoSetup = require('/demoSetup.ts');
+await demoSetup.changeNotePriorities(app, ['.md', '.excalidraw.md']);
+await demoSetup.collectInDemo(app, 'priorities', ['Drawing.excalidraw.md']);
+```
+
+Collect `Note` itself. The image is already in its folder, so nothing moves and nothing is reported.
+
+```code-button
+---
+caption: Collect Note now that it owns the image
+---
+await require('/demoSetup.ts').collectInDemo(app, 'priorities');
+```
+
+Embed the image in a *second* markdown note, set the mode to `Prompt` so the plugin asks instead of skipping, and collect `Note` again. The two markdown notes now tie, so the dialog appears and names those two. The drawing, which the list ranked below them, is not on it. The dialog is left open for you to answer.
+
+```code-button
+---
+caption: Add a second markdown note and collect into a tie
+---
+await require('/demoSetup.ts').collectPrioritiesTie(app);
+```
+
+Manual equivalent: embed one image in a note and in an `.excalidraw.md` file, edit **Note priorities** in **Settings -> Community plugins -> `Advanced Rename and Delete Handler`**, set **Collect attachment used by multiple notes mode** in **Settings -> Community plugins -> `Custom Attachment Location`**, and run **Collect attachments in current note** in each note.
 
 ## When a whole file type is shared on purpose
 
@@ -135,6 +336,51 @@ This is the mirror image of `excludePathsFromMultipleNotesCheck`. That one names
 
 ### Try it
 
-1. Embed the same file from two ordinary notes and run **Collect attachments in current note** with the mode set to **Skip** - nothing moves.
-2. Add that file's extension to **Exclude extensions from multiple notes check** and repeat with a fresh copy - it moves into the note's attachment folder, and the other note's link follows it.
-3. Repeat with a file of a *different* type - it is skipped again, so the list exempts the types you named rather than switching the check off.
+The set-up button creates `Shared type demo/` with two files, `shared.af` and `shared.png`, each linked from two ordinary notes, `Note A` and `Note B`. The mode is **Skip** and the extension list starts empty.
+
+```code-button
+---
+caption: Set up the shared-type demo with no extension listed
+---
+await require('/demoSetup.ts').setUpCollectDemo(app, 'extensions');
+```
+
+Collect `Note A`. Nothing moves: both files are referenced by two notes, and the mode says skip.
+
+```code-button
+---
+caption: Collect Note A with no extension listed
+---
+await require('/demoSetup.ts').collectInDemo(app, 'extensions');
+```
+
+Start over with `af` listed under **Exclude extensions from multiple notes check** and collect again. `shared.af` moves into `assets/Note A/`, and the link in `Note B` follows it. `shared.png` is skipped again, so the list exempts the types you named rather than switching the check off.
+
+```code-button
+---
+caption: Start over with af listed
+---
+await require('/demoSetup.ts').setUpCollectDemo(app, 'extensions', { excludeExtensionsFromMultipleNotesCheck: ['af'] });
+```
+
+```code-button
+---
+caption: Collect Note A with af listed
+---
+await require('/demoSetup.ts').collectInDemo(app, 'extensions');
+```
+
+Manual equivalent: link two files from two notes, run **Collect attachments in current note** with **Collect attachment used by multiple notes mode** set to `Skip`, then add the extension to **Exclude extensions from multiple notes check** in **Settings -> Community plugins -> `Custom Attachment Location`** and repeat with fresh copies.
+
+## Put the settings back
+
+The demos on this page change settings that apply to the whole vault: the location for new attachments, the collect destination, and every switch above, plus **Note priorities** in **`Advanced Rename and Delete Handler`**. This button puts all of them back to the values this vault ships with.
+
+```code-button
+---
+caption: Restore the collect settings
+---
+await require('/demoSetup.ts').restoreCollectSettings(app);
+```
+
+Manual equivalent: set each setting named on this page back by hand - all of them empty or off, the mode `Skip`, the location `./assets/{{noteFileName}}`.

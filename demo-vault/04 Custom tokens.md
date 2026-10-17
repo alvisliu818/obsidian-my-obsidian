@@ -23,7 +23,43 @@ After registering them, you can use `{{alpha}}` and `{{bravo:{formatKey:'charlie
 
 1. Open **Settings -> Community plugins -> `Custom Attachment Location` -> Custom tokens** and paste a `registerCustomToken(...)` block.
 2. Set **Generated attachment file name** to a pattern using your token, e.g. `{{alpha}}`.
-3. Paste an image (you supply the file) and watch the generated name.
+3. Paste an image and watch the generated name.
+
+The first button does steps 1 and 2 with the example above. It replaces whatever is in **Custom tokens**, so copy your own tokens somewhere first if you have any. It also restarts the plugin once: the settings tab registers a token as you type it, but a token saved any other way is only registered when the plugin loads.
+
+```code-button
+---
+caption: Register alpha and bravo, and name attachments with {{alpha}}
+---
+await require('/demoSetup.ts').registerExampleTokens(app);
+```
+
+The next two stand in for step 3. One asks where a pasted image would go and what it would be called, and the other saves a sample image as an attachment of this note under that name:
+
+```code-button
+---
+caption: What would a pasted image be called?
+---
+await require('/demoSetup.ts').previewAttachmentPath(app);
+```
+
+```code-button
+---
+caption: Save a sample image named by {{alpha}}
+---
+await require('/demoSetup.ts').saveSampleAttachment(app, { kind: 'image' });
+```
+
+The name is this note's name, the app id, `defaultFormatValue` and the API version, run together. To put things back:
+
+```code-button
+---
+caption: Remove the example tokens
+---
+await require('/demoSetup.ts').removeExampleTokens(app);
+```
+
+Manual equivalent: the three steps above, then empty **Custom tokens** and set **Generated attachment file name** back to `file-{{date:{momentJsFormat:'YYYYMMDDHHmmssSSS'}}}`.
 
 The `ctx` argument exposes the note, the attachment, the app, and a `ctx.fillTemplate(...)` helper that resolves a pattern of its own from inside your token:
 
@@ -55,6 +91,31 @@ Then:
 
 1. Set **Attachment rename mode** (`attachmentRenameMode`) to `All`, so a dropped or imported image goes through the pattern too, not only a pasted one.
 2. Set **Generated attachment file name** to `{{imagesOnly}}`.
+
+The first button registers the token and does both steps. The other two save a sample image and a sample PDF as attachments of this note: the image gets this note's name and a timestamp, and the PDF keeps its name, `report-2026.pdf`.
+
+```code-button
+---
+caption: Register imagesOnly and turn on its two settings
+---
+await require('/demoSetup.ts').registerImagesOnlyToken(app);
+```
+
+```code-button
+---
+caption: Save a sample image through imagesOnly
+---
+await require('/demoSetup.ts').saveSampleAttachment(app, { kind: 'image' });
+```
+
+```code-button
+---
+caption: Save a sample PDF through imagesOnly
+---
+await require('/demoSetup.ts').saveSampleAttachment(app, { kind: 'pdf' });
+```
+
+**Remove the example tokens** above puts all three settings back. Manual equivalent: paste the token into **Custom tokens**, do the two steps, then paste an image and drag a PDF into a note.
 
 `ctx.originalAttachmentFileName` is the name **without** its extension, and `ctx.originalAttachmentFileExtension` is the extension without its dot. The plugin adds the extension back itself, so neither branch returns one. Swap the `fillTemplate` pattern for whatever an image should be called, and the list for the extensions that count as images to you; to do the reverse - keep the original names of a few types, say `pdf`, and rename the rest - flip the test to `['pdf'].includes(...)`.
 
