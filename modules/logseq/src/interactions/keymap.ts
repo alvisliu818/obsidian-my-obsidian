@@ -15,8 +15,10 @@ import {
   nextVisible,
   outdent,
   prevVisible,
+  shouldExitListOnEnter,
   splitBlock,
   splitRawToOutline,
+  toBareParagraph,
 } from '../core/treeOps';
 import { cycleMarker } from '../core/treeOps';
 import { applyBlockProps, splitPropLines, type Block } from '../types';
@@ -37,6 +39,18 @@ function deleteSelection(view: EditorView): { text: string; offset: number } {
 export function handleEnter(view: EditorView, host: BlockRenderHost): boolean {
   const b = focusedBlock(host);
   if (!b) return false;
+  // 思源交互:空的列表块(同级末尾)上回车 → 退出列表、转成段落容器。
+  // 常见路径是"在有内容的块上回车得到空的列表块,再回车变成段落"——
+  // 与思源一致(顶层 listOutdent / 嵌套 breakList,都是同层换容器)。
+  // 页面属性块除外:它是文件头的属性容器,回车该往下新建块(同 isPropsBlock)。
+  const isPageProps = host.doc.blocks[0] === b && (b.text === '' || b.frontmatter === true);
+  if (!isPageProps && shouldExitListOnEnter(b, view.state.doc.toString())) {
+    const parent = b.parent;
+    // mutate 内部会重渲染(圆点随之消失);焦点块还是它,所以只把光标放回块首。
+    host.mutate(() => toBareParagraph(b), () => ({ lists: [parent] }));
+    host.focusBlock(b, 0);
+    return true;
+  }
   if (b.kind === 'raw') {
     // Logseq parity: Enter turns the raw block into outline blocks — the head
     // converts to a list block, the tail becomes a new list sibling; edge

@@ -289,6 +289,41 @@ export function splitBlock(b: Block, offset: number): Block {
 }
 
 /**
+ * 思源式「空的列表块回车退出列表」判定(见 keymap.handleEnter)。
+ *
+ * 思源的做法(protyle/wysiwyg/enter.ts 的 listEnter):空的列表项在回车时
+ * 退出列表变成段落——顶层走 listOutdent、嵌套走 breakList,两种路径的结果
+ * 都是「同一层级上从列表容器换成段落容器」,层级不变。本模型的等价判定:
+ *
+ * - 必须是列表块:已经是段落的(bare)或 raw 块不参与;
+ * - 回车那一刻块里没有内容(传进来的编辑文本);
+ * - 没有任务标记:`TODO` 空块是任务项,转成段落会把标记弄丢;
+ * - 没有子块:有子块时回车在思源里是往子层插入,不是退出列表;
+ * - 是同级的最后一项:中间的空块回车照旧分裂出同级空块(与思源一致,
+ *   否则在列表中间一回车就把后面的兄弟块甩出列表了)。
+ *
+ * 典型路径正是「在有内容的块上回车得到空的列表块,再回车变成段落」。
+ */
+export function shouldExitListOnEnter(b: Block, text: string): boolean {
+  if (b.kind !== 'list' || b.bare) return false;
+  if (text.trim() !== '') return false;
+  if (b.marker) return false;
+  if (b.children.length > 0) return false;
+  const sibs = siblingsOf(b);
+  return sibs.length > 0 && sibs[sibs.length - 1] === b;
+}
+
+/**
+ * 把列表块换成段落容器(bare):不再显示圆点,顶层保存时不带 `- ` 前缀。
+ * 位置与层级不变——思源的退出列表也是同层转换。
+ */
+export function toBareParagraph(b: Block): void {
+  if (b.kind !== 'list') return;
+  b.text = '';
+  b.bare = true;
+}
+
+/**
  * Strip the common leading indent (spaces) from every non-blank line, keeping
  * deeper indentation as the content's own. Enter uses this when the tail of a
  * raw block becomes a new outline block: orphaned fences in Logseq exports

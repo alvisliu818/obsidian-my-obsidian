@@ -27,7 +27,9 @@ import {
   registerRoots,
   removeBlock,
   siblingsOf,
+  shouldExitListOnEnter,
   splitBlock,
+  toBareParagraph,
   visibleRange,
 } from '../src/core/treeOps';
 
@@ -498,5 +500,51 @@ describe('paragraph container propagation', () => {
     expect(b.marker).toBe('TODO');
     expect(b.bare).toBeFalsy();
     expect(serializeDocument(doc)).toBe('- TODO buy milk\n');
+  });
+});
+
+describe('empty list block leaves the list on Enter (SiYuan parity)', () => {
+  it('the LAST empty list block exits the list and becomes a paragraph', () => {
+    const doc = setup('- a\n- ');
+    const empty = doc.blocks[1];
+    expect(empty.text).toBe('');
+    expect(shouldExitListOnEnter(empty, '')).toBe(true);
+    toBareParagraph(empty);
+    expect(empty.bare).toBe(true);
+    // 段落容器:顶层不带 `- ` 前缀,保存不会把段落改写回列表项。
+    // 空段落落在文件末尾时磁盘上只留下一个换行(没有载体),开始打字后才落盘。
+    expect(serializeDocument(doc)).toBe('- a\n');
+  });
+
+  it('an empty list block in the MIDDLE keeps splitting into siblings', () => {
+    const doc = setup('- a\n- \n- c\n');
+    const empty = doc.blocks[1];
+    expect(shouldExitListOnEnter(empty, '')).toBe(false);
+  });
+
+  it('a block with content, a TODO marker, children or bare already is not one', () => {
+    const doc = setup('- a\n- b\n');
+    expect(shouldExitListOnEnter(doc.blocks[1], 'b')).toBe(false);
+    doc.blocks[1].marker = 'TODO';
+    expect(shouldExitListOnEnter(doc.blocks[1], '')).toBe(false);
+    doc.blocks[1].marker = null;
+    doc.blocks[1].children.push(createBlock('child'));
+    expect(shouldExitListOnEnter(doc.blocks[1], '')).toBe(false);
+    // 已经是段落的空块:回车照常分裂出新的空段落,不参与退出列表。
+    const para = setup('a paragraph\n').blocks[0];
+    expect(para.bare).toBe(true);
+    expect(shouldExitListOnEnter(para, '')).toBe(false);
+  });
+
+  it('a nested empty block exits too — same level, and the disk keeps `- `', () => {
+    const doc = setup('- a\n  - b\n  - ');
+    const nested = doc.blocks[0].children[1];
+    expect(nested.text).toBe('');
+    expect(shouldExitListOnEnter(nested, '')).toBe(true);
+    toBareParagraph(nested);
+    // 层级不变(思源的 breakList 也是同层换容器);depth>0 的段落序列化回落
+    // 成 `- ` 形式,否则重解析会把裸行并成上一块的软行。
+    expect(nested.parent).toBe(doc.blocks[0]);
+    expect(serializeDocument(doc)).toBe('- a\n  - b\n  - ');
   });
 });
