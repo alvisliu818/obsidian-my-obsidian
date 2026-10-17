@@ -56,6 +56,13 @@ Since 13.0.0 `shouldFollowObsidianAttachmentLocation` defaults to on. While it i
 
 The `@mnaoumov/obsidian-lib` base `loadFromFile` writes the full default record to `data.json` when none exists (since `obsidian-dev-utils` 107.0.0, which it was split from; this plugin used to override it to do so). Without that write, nothing on disk tells a fresh install apart from a user who never saved a setting, and a default change moves both.
 
+## A demo-vault `Try it` promise is asserted by calling the button's helper, not by clicking the button
+
+Every `Try it` button is a one-line call into `demo-vault/_assets/CodeScriptToolkit/demoSetup.ts`, and the helper returns what it did: the files its demo folder holds, the link it wrote, the note it opened. `registerDemoVaultButtonSuite` only proves a button reported success, so `src/demo-vault-try-it.demo-vault.integration.test.ts` calls the SAME helpers through `CodeScript Toolkit`'s `window.requireAsync('/demoSetup.ts')` and asserts the sentence the note wrote about each step. A new `Try it` adds its step there.
+
+- **Each demo owns a folder under `Materials/<NN> <note>/` and resets it.** Its set-up helper deletes and recreates the folder and sets every setting the outcome depends on, because the button suite clicks note `01`'s buttons first and they leave `shouldFollowObsidianAttachmentLocation` on, and the two test files share one vault in either order.
+- **A dialog a demo leaves open blocks the collect queue for every later collect.** The shared-attachment dialog has no close button, so the button suite runs with `shouldDismissModals` (it presses `Escape`) and the outcome test dismisses it the same way before it moves on.
+
 ## `Only pasted images` is decided by the gesture and the file, never by the sink
 
 An editor paste and an editor drop both end in `ClipboardManager.insertFiles`, and a canvas paste, a canvas drop, a file-explorer drop and a base drop all end in `App.importAttachments` (Obsidian 1.14.4). So reaching one of those methods says nothing about whether the user pasted, and marking every image that reaches `insertFiles` as pasted renamed real files that were dragged in. `src/pasted-image-classifier.ts` decides from four things. Image data with no file path is pasted. A drop is never pasted. A paste of a file counts as pasted when the file is under a minute old or matches `screenshotFilePaths`.
