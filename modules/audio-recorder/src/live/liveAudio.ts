@@ -225,3 +225,20 @@ export function formatMarkerTag(kind: string, now: Date): string {
 	const ss = String(now.getSeconds()).padStart(2, '0');
 	return `【${kind} · ${hh}:${mi}:${ss}】`;
 }
+
+/**
+ * The longest common prefix of two decode results, character-wise. The
+ * streaming preview splits a re-decode at this boundary: everything the last
+ * two decodes agree on is stable, the tail after it is still moving.
+ * @param a - The previous decode
+ * @param b - The new decode
+ * @returns The shared prefix ('' when either side is empty)
+ */
+export function longestCommonPrefix(a: string, b: string): string {
+	const max = Math.min(a.length, b.length);
+	let i = 0;
+	while (i < max && a[i] === b[i]) {
+		i++;
+	}
+	return a.slice(0, i);
+}

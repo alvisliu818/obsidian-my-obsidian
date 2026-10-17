@@ -18,7 +18,9 @@ import { encodeFloatsAsInt16Wav } from '../audio/WavEncoder';
 import {
 	formatLiveLine,
 	formatMarkerTag,
+	longestCommonPrefix,
 	PauseSegmenter,
+	rmsOf,
 } from './liveAudio';
 import { transcribeChunk } from './inferenceClient';
 import {
@@ -45,6 +47,13 @@ export interface LiveTranscribeSink {
 	 * @param index - The line's position in the transcript
 	 */
 	onLine(line: string, index: number): void;
+	/**
+	 * The streaming preview moved: text recognized from the uncommitted tail
+	 * by a rolling re-decode, split where two consecutive decodes agree.
+	 * @param stable - The agreed prefix (solid text)
+	 * @param unstable - The still-moving tail (muted text)
+	 */
+	onPreview(stable: string, unstable: string): void;
 	onState(state: LiveSessionState): void;
 }
 
@@ -59,6 +68,18 @@ const SERVER_THREADS = 6;
 /** Screenshot size for a marker click. */
 const SCREENSHOT_WIDTH = 1920;
 const SCREENSHOT_HEIGHT = 1080;
+/** How often the streaming preview re-decodes the uncommitted tail. */
+const PREVIEW_INTERVAL_MS = 800;
+/** The preview never decodes the newest 0.3 s, so no half word is shown. */
+const PREVIEW_GUARD_FRAMES = Math.round(0.3 * CAPTURE_RATE);
+/** Smallest uncommitted span worth a preview decode. */
+const PREVIEW_MIN_SPAN_FRAMES = Math.round(0.4 * CAPTURE_RATE);
+/** New audio required since the last preview before decoding again. */
+const PREVIEW_MIN_NEW_FRAMES = Math.round(0.35 * CAPTURE_RATE);
+/** Longest window the preview decodes (the commit path owns longer spans). */
+const PREVIEW_MAX_WINDOW_FRAMES = Math.round(12 * CAPTURE_RATE);
+/** Preview span quieter than this is silence: skip the GPU, clear the text. */
+const PREVIEW_SILENCE_RMS = 0.0035;
 
 /** Dependencies the plugin hands the controller once. */
 export interface LiveTranscribeControllerDeps {
@@ -83,6 +104,15 @@ export class LiveTranscribeController {
 	private inFlight = false;
 	private pending: Array<{ samples: Float32Array; startFrame: number }> = [];
 	private lines: string[] = [];
+	// ---- 流式预览（滚动窗口重解码）----
+	private previewBlocks: Float32Array[] = [];
+	private previewStartFrame = 0;
+	private captureFrames = 0;
+	private previewEpoch = 0;
+	private previewInFlight = false;
+	private lastPreviewText = '';
+	private lastPreviewEndFrame = 0;
+	private previewTimer: ReturnType<typeof setInterval> | null = null;
 
 	constructor(private readonly deps: LiveTranscribeControllerDeps) {}
 
@@ -147,6 +177,13 @@ export class LiveTranscribeController {
 		this.pending = [];
 		this.inFlight = false;
 		this.segmenter = new PauseSegmenter({ sampleRate: CAPTURE_RATE });
+		this.previewBlocks = [];
+		this.previewStartFrame = 0;
+		this.captureFrames = 0;
+		this.previewEpoch++;
+		this.previewInFlight = false;
+		this.lastPreviewText = '';
+		this.lastPreviewEndFrame = 0;
 		this.setState('starting');
 		try {
 			const serverPath = this.resolveServerPath(settings.localWhisperBinaryPath);
@@ -165,6 +202,9 @@ export class LiveTranscribeController {
 			);
 			this.serverBaseUrl = `http://127.0.0.1:${this.server.port}`;
 			await this.openCapture();
+			this.previewTimer = setInterval(() => {
+				void this.previewTick();
+			}, PREVIEW_INTERVAL_MS);
 			this.setState('listening');
 			this.log('正在聆听——按停顿分句，说完一句稍停即出字。');
 		} catch (error) {
@@ -201,9 +241,17 @@ export class LiveTranscribeController {
 			if (!segmenter) {
 				return;
 			}
+			this.captureFrames += input.length;
+			this.pushPreviewBlock(new Float32Array(input));
 			const segment = segmenter.feed(new Float32Array(input));
 			if (segment) {
 				this.pending.push(segment);
+				// The segment is committed audio: the preview that covered it is
+				// obsolete, and the next preview starts from the capture edge.
+				this.previewEpoch++;
+				this.lastPreviewText = '';
+				this.lastPreviewEndFrame = this.captureFrames;
+				this.sink?.onPreview('', '');
 				void this.pump();
 			}
 		};
@@ -246,6 +294,131 @@ export class LiveTranscribeController {
 				void this.pump();
 			}
 		}
+	}
+
+	/**
+	 * Keeps the preview ring to the newest window's worth of audio. The ring
+	 * is a plain block list with a start frame, so a decode can slice any
+	 * span that is still inside it.
+	 * @param block - One capture block to append
+	 */
+	private pushPreviewBlock(block: Float32Array): void {
+		this.previewBlocks.push(block);
+		while (
+			this.captureFrames - this.previewStartFrame > PREVIEW_MAX_WINDOW_FRAMES &&
+			this.previewBlocks.length > 1
+		) {
+			this.previewStartFrame += this.previewBlocks[0]?.length ?? 0;
+			this.previewBlocks.shift();
+		}
+	}
+
+	/**
+	 * One streaming-preview tick: re-decode the uncommitted tail (minus the
+	 * guard) and split the answer against the previous decode at the longest
+	 * common prefix — everything agreed on renders solid, the tail renders
+	 * muted. Skipped while the commit queue is busy, when too little is new,
+	 * or when the span is silence; a stale answer from before a commit is
+	 * dropped via the epoch.
+	 */
+	private async previewTick(): Promise<void> {
+		if (
+			this.state !== 'listening' ||
+			this.disposed ||
+			this.previewInFlight ||
+			this.pending.length > 0 ||
+			!this.serverBaseUrl
+		) {
+			return;
+		}
+		if (this.captureFrames - this.lastPreviewEndFrame < PREVIEW_MIN_NEW_FRAMES) {
+			// Nothing new worth the GPU since the last preview decode.
+			return;
+		}
+		const spanStart = Math.max(
+			this.previewStartFrame,
+			this.lastPreviewEndFrame,
+		);
+		const spanEnd = this.captureFrames - PREVIEW_GUARD_FRAMES;
+		if (spanEnd - spanStart < PREVIEW_MIN_SPAN_FRAMES) {
+			return;
+		}
+		if (spanEnd - this.previewStartFrame > PREVIEW_MAX_WINDOW_FRAMES) {
+			// Should not happen (the ring trims), but a silent guard beats a
+			// decode that grows without bound.
+			this.previewStartFrame = spanEnd - PREVIEW_MAX_WINDOW_FRAMES;
+		}
+		const samples = this.slicePreview(spanStart, spanEnd);
+		if (!samples || rmsOf(samples) < PREVIEW_SILENCE_RMS) {
+			// Nobody spoke since the last tick: retire the moving text.
+			if (this.lastPreviewText !== '') {
+				this.lastPreviewText = '';
+				this.lastPreviewEndFrame = spanEnd;
+				this.sink?.onPreview('', '');
+			}
+			return;
+		}
+		const epoch = this.previewEpoch;
+		this.previewInFlight = true;
+		try {
+			const wav = await encodeFloatsAsInt16Wav([samples], CAPTURE_RATE);
+			const result = await transcribeChunk(
+				this.serverBaseUrl,
+				wav,
+				this.deps.getSettings().transcriptionLanguage,
+				{ temperature: '0' },
+			);
+			if (epoch !== this.previewEpoch || this.disposed) {
+				// A commit happened while this decode ran: its answer is stale.
+				return;
+			}
+			this.lastPreviewEndFrame = spanEnd;
+			if (result.empty) {
+				this.lastPreviewText = '';
+				this.sink?.onPreview('', '');
+				return;
+			}
+			const stable = longestCommonPrefix(this.lastPreviewText, result.text);
+			this.lastPreviewText = result.text;
+			this.sink?.onPreview(stable, result.text.slice(stable.length));
+		} catch (error) {
+			// The preview is best-effort: a failed tick just skips, the commit
+			// path at the pause is the one that owns correctness.
+			this.log(`预览跳过：${errorMessage(error)}`);
+		} finally {
+			this.previewInFlight = false;
+		}
+	}
+
+	/**
+	 * Concatenates one span of the preview ring into a single buffer.
+	 * @param startFrame - First frame of the span (absolute capture time)
+	 * @param endFrame - Frame after the last one of the span
+	 * @returns The span's samples, or null when the ring no longer holds it
+	 */
+	private slicePreview(
+		startFrame: number,
+		endFrame: number,
+	): Float32Array | null {
+		const start = Math.max(startFrame, this.previewStartFrame);
+		const end = Math.min(endFrame, this.captureFrames);
+		if (end <= start) {
+			return null;
+		}
+		const out = new Float32Array(end - start);
+		let offset = 0;
+		let cursor = this.previewStartFrame;
+		for (const block of this.previewBlocks) {
+			const blockEnd = cursor + block.length;
+			if (blockEnd > start && cursor < end) {
+				const from = Math.max(0, start - cursor);
+				const to = Math.min(block.length, end - cursor);
+				out.set(block.subarray(from, to), offset);
+				offset += to - from;
+			}
+			cursor = blockEnd;
+		}
+		return offset === out.length ? out : out.subarray(0, offset);
 	}
 
 	/**
@@ -346,6 +519,13 @@ export class LiveTranscribeController {
 
 	/** Closes the capture graph and kills the server, leaving state alone. */
 	private async teardown(): Promise<void> {
+		if (this.previewTimer) {
+			clearInterval(this.previewTimer);
+			this.previewTimer = null;
+		}
+		this.previewEpoch++;
+		this.previewBlocks = [];
+		this.lastPreviewText = '';
 		this.stream?.getTracks().forEach((track) => track.stop());
 		this.stream = null;
 		if (this.audioContext) {

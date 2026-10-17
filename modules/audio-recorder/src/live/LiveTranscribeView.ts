@@ -41,6 +41,7 @@ export class LiveTranscribeView extends ItemView implements LiveTranscribeSink {
 	private readonly ui: LiveTranscribeViewUi;
 	private statusEl!: HTMLElement;
 	private transcriptEl!: HTMLElement;
+	private previewEl!: HTMLElement;
 	private markerRowEl!: HTMLElement;
 	private startButton!: HTMLButtonElement;
 	private stopButton!: HTMLButtonElement;
@@ -118,6 +119,13 @@ export class LiveTranscribeView extends ItemView implements LiveTranscribeSink {
 		this.transcriptEl.style.background = 'var(--background-secondary)';
 		this.transcriptEl.setText('（对着麦克风说话，按停顿一句一句出字；点上方按钮打标记）');
 
+		this.previewEl = root.createDiv();
+		this.previewEl.style.padding = '4px 8px';
+		this.previewEl.style.fontFamily = 'var(--font-text)';
+		this.previewEl.style.minHeight = '20px';
+		this.previewEl.style.color = 'var(--text-muted)';
+		this.previewEl.style.display = 'none';
+
 		const footer = root.createDiv();
 		footer.style.display = 'flex';
 		footer.style.gap = '8px';
@@ -183,6 +191,22 @@ export class LiveTranscribeView extends ItemView implements LiveTranscribeSink {
 		const row = this.transcriptEl.createDiv({ text: line });
 		row.style.marginBottom = '4px';
 		this.lineEls.push(row);
+		this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
+	}
+
+	onPreview(stable: string, unstable: string): void {
+		if (stable === '' && unstable === '') {
+			this.previewEl.style.display = 'none';
+			this.previewEl.setText('');
+			return;
+		}
+		this.previewEl.style.display = 'block';
+		this.previewEl.setText('');
+		if (stable !== '') {
+			this.previewEl.createSpan({ text: stable });
+		}
+		const moving = this.previewEl.createSpan({ text: unstable + '▍' });
+		moving.style.color = 'var(--text-muted)';
 		this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
 	}
 

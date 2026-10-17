@@ -7,6 +7,7 @@
 import {
 	formatLiveLine,
 	formatMarkerTag,
+	longestCommonPrefix,
 	PauseSegmenter,
 } from '../../src/live/liveAudio';
 import { buildMultipartBody } from '../../src/live/inferenceClient';
@@ -96,6 +97,18 @@ describe('the live line and marker tags', () => {
 	it('formats a marker tag with wall-clock time', () => {
 		const at = new Date(2026, 9, 17, 21, 5, 3);
 		expect(formatMarkerTag('重点', at)).toBe('【重点 · 21:05:03】');
+	});
+});
+
+describe('the streaming preview diff', () => {
+	it('splits two decodes at the longest common prefix', () => {
+		expect(longestCommonPrefix('今天下午三点', '今天下午三点开会')).toBe('今天下午三点');
+		expect(longestCommonPrefix('今天下午三点', '今天下午三点二十')).toBe('今天下午三点');
+		// A rewrite shortens the stable zone instead of keeping a wrong tail.
+		expect(longestCommonPrefix('今天下午三点', '今天下午四点开会')).toBe('今天下午');
+		expect(longestCommonPrefix('', '新的一句')).toBe('');
+		expect(longestCommonPrefix('旧的一句', '')).toBe('');
+		expect(longestCommonPrefix('相同', '相同')).toBe('相同');
 	});
 });
 

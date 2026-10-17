@@ -87,6 +87,8 @@ interface WhisperServerResponse {
  * @param baseUrl - e.g. `http://127.0.0.1:18742`
  * @param wav - The chunk encoded as a 16 kHz mono WAV
  * @param language - ISO code or `auto`
+ * @param opts - `temperature` pins decoding (the streaming preview pins 0 so
+ *   the same prefix is not rewritten from one tick to the next)
  * @returns The recognized text, or an empty result for silence
  * @throws When the server answers with an error status or an unusable body
  */
@@ -94,12 +96,17 @@ export async function transcribeChunk(
 	baseUrl: string,
 	wav: ArrayBuffer,
 	language: string,
+	opts?: { temperature?: string },
 ): Promise<LiveChunkResult> {
+	const fields: MultipartField[] = [
+		{ name: 'response_format', value: 'verbose_json' },
+		{ name: 'language', value: language || 'auto' },
+	];
+	if (opts?.temperature !== undefined) {
+		fields.push({ name: 'temperature', value: opts.temperature });
+	}
 	const { body, contentType } = buildMultipartBody(
-		[
-			{ name: 'response_format', value: 'verbose_json' },
-			{ name: 'language', value: language || 'auto' },
-		],
+		fields,
 		{ name: 'file', filename: 'chunk.wav', mime: 'audio/wav', data: wav },
 	);
 	const response = await requestUrl({
