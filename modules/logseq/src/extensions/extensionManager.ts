@@ -7,6 +7,9 @@ import type { ExtensionSource, InstalledExtension, LoadResult, SearchEntry, Sear
 import { downloadMarketplaceVsix, downloadOpenVsxVsix, getMarketplaceLatestVersion, getOpenVsxMetadata, searchMarketplace, searchOpenVsx } from './marketClient';
 import { parseVsix } from './vsixLoader';
 import { addInstalledExtension, loadInstalledExtensions, removeInstalledExtension, toggleExtensionEnabled } from './extensionStore';
+import { loadIconThemes, removeExtensionIconThemes } from './iconThemeLoader';
+import { loadThemes, removeExtensionThemes } from './themeLoader';
+import { loadSnippets, removeExtensionSnippets } from './snippetLoader';
 import type Plugin from '../main';
 
 /** 消费端回调：扩展数据变化（安装/启用/禁用/启动恢复）后触发 */
@@ -16,6 +19,33 @@ let consumeFn: ConsumeFn | null = null;
 /** 消费端注册（tmEngine 在 onload 时调用） */
 export function registerExtensionConsumer(fn: ConsumeFn | null): void {
   consumeFn = fn;
+}
+
+/** 三类贡献点计数（供 LoadResult 回填） */
+interface ContributionCounts {
+  themes: number;
+  snippets: number;
+  iconThemes: number;
+}
+
+// 语法之外的三类贡献点（图标主题 / 颜色主题 / 代码片段）由本模块直接加载：
+// 语法走 consumeFn 是因为它要等 TextMate 引擎的 onig wasm 就绪，而这三类的
+// loader 只操作 Monaco 与内存，无需预热。
+function applyOtherContributions(
+  ext: InstalledExtension,
+  action: 'install' | 'enable' | 'disable' | 'restore',
+): ContributionCounts {
+  if (action === 'disable') {
+    removeExtensionIconThemes(ext.id);
+    removeExtensionThemes(ext.id);
+    removeExtensionSnippets(ext.id);
+    return { themes: 0, snippets: 0, iconThemes: 0 };
+  }
+  return {
+    iconThemes: loadIconThemes(ext),
+    themes: loadThemes(ext),
+    snippets: loadSnippets(ext),
+  };
 }
 
 // ------------------------------------------------------------------
@@ -60,7 +90,10 @@ export async function installExtension(
   const ext = await parseVsix(vsixBuffer, namespace, extensionName, resolvedVersion);
   ext.source = source;
   await addInstalledExtension(plugin, ext);
-  if (ext.enabled) consumeFn?.(ext, 'install');
+  if (ext.enabled) {
+    consumeFn?.(ext, 'install');
+    applyOtherContributions(ext, 'install');
+  }
   return ext;
 }
 
@@ -76,7 +109,10 @@ export async function uninstallExtension(plugin: Plugin, extensionId: string): P
   const list = await loadInstalledExtensions(plugin);
   const ext = list.find((e) => e.id === extensionId);
   // 通知消费端按禁用清理（若此前启用）
-  if (ext?.enabled) consumeFn?.(ext, 'disable');
+  if (ext?.enabled) {
+    consumeFn?.(ext, 'disable');
+    applyOtherContributions(ext, 'disable');
+  }
   return removeInstalledExtension(plugin, extensionId);
 }
 
@@ -98,7 +134,11 @@ export async function toggleExtension(plugin: Plugin, extensionId: string): Prom
   const before = list.find((e) => e.id === extensionId);
   const next = await toggleExtensionEnabled(plugin, extensionId);
   const ext = next.find((e) => e.id === extensionId);
-  if (ext) consumeFn?.(ext, ext.enabled ? 'enable' : 'disable');
+  if (ext) {
+    const action = ext.enabled ? 'enable' : 'disable';
+    consumeFn?.(ext, action);
+    applyOtherContributions(ext, action);
+  }
   void before;
   return ext ? ext.enabled : false;
 }
@@ -118,7 +158,15 @@ export async function restoreAllExtensions(plugin: Plugin): Promise<LoadResult[]
     .map((ext) => {
       try {
         consumeFn?.(ext, 'restore');
-        return { extensionId: ext.id, status: 'loaded' as const, loadedGrammars: ext.contributes.grammars?.length ?? 0, loadedThemes: ext.contributes.themes?.length ?? 0, loadedSnippets: ext.contributes.snippets?.length ?? 0, loadedIconThemes: ext.contributes.iconThemes?.length ?? 0 };
+        const counts = applyOtherContributions(ext, 'restore');
+        return {
+          extensionId: ext.id,
+          status: 'loaded' as const,
+          loadedGrammars: ext.contributes.grammars?.length ?? 0,
+          loadedThemes: counts.themes,
+          loadedSnippets: counts.snippets,
+          loadedIconThemes: counts.iconThemes,
+        };
       } catch (e) {
         return { extensionId: ext.id, status: 'error' as const, message: String(e), loadedGrammars: 0, loadedThemes: 0, loadedSnippets: 0, loadedIconThemes: 0 };
       }
