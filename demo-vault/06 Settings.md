@@ -29,7 +29,7 @@ Open **Settings -> Community plugins -> `Custom Attachment Location`** to config
 - `shouldDeduplicateIdenticalAttachments`
   - **Off by default.** When an attachment is collected, moved to its proper folder, or renamed after another plugin created it, and its destination already holds a file with exactly the same content, keep only that file: links to the incoming attachment are pointed at it, and the incoming attachment goes to the trash. Different content still gets the counter. See [05 Collect attachments](<05 Collect attachments.md>).
 - `specialCharacters`
-  - characters stripped/replaced from generated folder and file names.
+  - characters stripped/replaced from generated folder and file names, and from the name a new attachment keeps when it is not renamed (a file dropped under `Only pasted images`, say), so a `#` in it does not break the link.
 - `specialCharactersReplacement`
   - the string that replaces those special characters.
 

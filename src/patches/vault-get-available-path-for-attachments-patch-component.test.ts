@@ -74,6 +74,7 @@ describe('VaultGetAvailablePathForAttachmentsPatchComponent', () => {
       notePathOrFile: null,
       oldAttachmentPathOrFile: 'attachment.png',
       readAttachmentFileContent: null,
+      shouldReplaceSpecialCharactersInKeptFileName: true,
       shouldSkipGeneratedAttachmentFileName: true,
       shouldSkipMissingAttachmentFolderCreation: true
     });

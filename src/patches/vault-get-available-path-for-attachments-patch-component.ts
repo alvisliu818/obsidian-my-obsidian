@@ -52,6 +52,7 @@ export class VaultGetAvailablePathForAttachmentsPatchComponent extends MonkeyAro
             fileExtension: attachmentFileExtension
           }),
           readAttachmentFileContent: null,
+          shouldReplaceSpecialCharactersInKeptFileName: true,
           shouldSkipGeneratedAttachmentFileName: true,
           shouldSkipMissingAttachmentFolderCreation: true
         });
