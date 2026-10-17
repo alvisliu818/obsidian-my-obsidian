@@ -90,6 +90,6 @@
   },
   "dependencies": {
     "@mnaoumov/obsidian-lib": "^4.1.0",
-    "@mnaoumov/typescript-lib": "^1.1.1"
+    "@mnaoumov/typescript-lib": "^1.3.0"
   }
 }

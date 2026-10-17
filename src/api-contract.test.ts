@@ -107,7 +107,8 @@ const CASES: Record<MethodName, MethodCases> = {
   isAttachmentUnitFolder: {
     input: {
       invalid: [[], ['Notes/page_files'], [{ folderPath: null }]],
-      valid: [[{ folderPath: 'Notes/page_files' }]]
+      // A key the params do not name is let through, as before the guards moved to `@mnaoumov/typescript-lib`.
+      valid: [[{ folderPath: 'Notes/page_files' }], [{ folderPath: 'Notes/page_files', unknownKey: true }]]
     },
     output: { invalid: [null, undefined, 'true'], valid: [true, false] }
   },
