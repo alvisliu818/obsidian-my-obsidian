@@ -13,6 +13,11 @@ export interface WebviewCallbacks {
   onContextMenu?(params: WebViewContextMenuParams): void;
   /** The preload asks (at document_start) for extension content scripts. */
   onExtensionRequest?(url: string): { css: string[]; js: string[] };
+  /**
+   * Edge Add-ons store page: the injected helper (edgeStoreHelper) hands back the
+   * extension id when the user clicks its "install" button.
+   */
+  onEdgeInstall?(id: string): void;
   onFindResult?(active: number, matches: number): void;
   /** Injection point for ad-filter CSS and content scripts. */
   onDomReady?(webview: IWebviewTag, url: string): void;
@@ -138,6 +143,11 @@ export class WebviewController {
         } catch {
           /* guest gone */
         }
+        return;
+      }
+      // Edge 商店页助手回传的扩展 id（见 edgeStoreHelper 的 sendInstall）
+      if (e?.channel === "ob-edge-install" && e.args?.[0]) {
+        this.callbacks.onEdgeInstall?.(String(e.args[0]));
       }
     });
 

@@ -30,6 +30,8 @@ export interface BrowserContext {
   onDomReady(webview: IWebviewTag, url: string): void;
   /** Content scripts that must run before the page's own scripts. */
   extensionStartPayload(url: string): { css: string[]; js: string[] };
+  /** Edge Add-ons store page: the injected helper hands back an extension id. */
+  onEdgeInstall?(id: string): void;
 
   extensionIcons(): { id: string; name: string; icon: string }[];
   onExtensionClick(id: string, anchor: HTMLElement): void;

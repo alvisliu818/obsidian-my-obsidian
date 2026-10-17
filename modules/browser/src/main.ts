@@ -24,10 +24,13 @@ import type { BrowserContext } from "./browser/context";
 import { clipPage } from "./browser/excerpt";
 import { bindSessionDownloads } from "./browser/downloads";
 import { ExtensionHost } from "./extensions/extensionHost";
+import { buildEdgeStoreHelperScript, isEdgeAddonsSiteUrl } from "./extensions/edgeStoreHelper";
+import { setClipBridge } from "./extensions/cs-runtime";
+import { htmlToMarkdown } from "./utils/markdown";
 import { PopupLayer } from "./extensions/popup";
 import { BrowserSettingTab } from "./settings/SettingsTab";
 import { downloadToVault } from "./utils/download";
-import { isUrlExcluded, normalizeUrl } from "./utils/url";
+import { isUrlExcluded, normalizeUrl, safeFilename } from "./utils/url";
 import { nodeRequire, openExternal, vaultBasePath } from "./utils/electron";
 
 export default class BrowserPlugin extends Plugin {
@@ -63,6 +66,31 @@ export default class BrowserPlugin extends Plugin {
       () => this.config.extensionsEnabled,
       () => this.store.save(),
     );
+
+    // 思源内核 API 的 Obsidian 对应：扩展剪藏流程（cs-runtime）经这个桥落库。
+    // extract ← 思源 /api/extension/copy；save ← 思源 createDocWithMd + renderSprig
+    // + netImg2LocalAssets 的组合（Obsidian 侧 = vault.create + clipFolder 设置）。
+    setClipBridge({
+      extract: async (data: Record<string, any>) => {
+        const html = String(data.html || "");
+        const md = html ? htmlToMarkdown(html) : String(data.excerpt || "");
+        return md ? { md } : { md: "", error: "页面无可用内容" };
+      },
+      save: async (_data: Record<string, any>, markdown: string, title: string) => {
+        const folder = (this.config.clipFolder || "Browser/Clippings").replace(/\/+$/, "");
+        const stem = safeFilename(title) || "clipping";
+        let path = `${folder}/${stem}.md`;
+        for (let i = 1; this.app.vault.getAbstractFileByPath(path) && i < 500; i++) {
+          path = `${folder}/${stem} ${i}.md`;
+        }
+        const file = await this.app.vault.create(path, markdown);
+        return { ok: true, path: file.path };
+      },
+    });
+
+    // 插件重启后 session 里的原生扩展已失效，需重新加载以拿回 electronId，
+    // 否则 cs-runtime / sw-bridge 拿不到 SW，退回自研注入式。
+    void this.extHost.syncNativeOnStartup();
 
     await this.writePreloads();
     this.ctx = this.buildContext();
@@ -154,7 +182,30 @@ export default class BrowserPlugin extends Plugin {
       },
 
       onDomReady: (webview: IWebviewTag, url: string) => {
+        // 关键：为已原生加载（有 electronId）的扩展创建 isolated world，
+        // 让 content script 拿到真实 chrome.* 绑定 —— 不做这步 cs-runtime 等于没接。
+        this.extHost.ensureCsRuntime(webview);
         void this.extHost.injectDocumentEnd(webview as never, url);
+        // Edge 加载项商店：注入"安装到 Obsidian"按钮（点击经 ob-edge-install 回传 id）
+        if (this.config.extensionsEnabled && isEdgeAddonsSiteUrl(url)) {
+          void webview
+            .executeJavaScript(
+              buildEdgeStoreHelperScript({
+                install: "安装到 Obsidian",
+                installing: "安装中…",
+                installed: "已安装",
+              }),
+            )
+            .catch(() => {
+              /* guest gone */
+            });
+        }
+      },
+
+      onEdgeInstall: (id: string) => {
+        void this.extHost.installFromEdgeAddons(id).then((r) => {
+          new Notice(r.ok ? `扩展已安装：${r.ext?.name ?? id}` : `安装失败：${r.error ?? id}`);
+        });
       },
       extensionStartPayload: (url: string) => this.extHost.documentStartPayload(url),
       extensionIcons: () =>

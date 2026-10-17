@@ -99,6 +99,13 @@ export interface ExtensionRecord {
   /** browser_action / action popup html (may be empty). */
   popup?: string;
   permissions: string[];
+  /**
+   * Electron 原生加载后的扩展 id（`session.loadExtension` 返回）。
+   * 只有拿到它，扩展的 background service worker 才真实存在，
+   * cs-runtime（isolated world + chrome 真实绑定）与 sw-bridge（SW CDP 通道）才能工作。
+   * 桌面端不可用 / 加载失败时为 undefined —— 此时退回自研注入式（内容脚本 + shim）不报错。
+   */
+  electronId?: string;
 }
 
 export interface ExtensionContentScript {

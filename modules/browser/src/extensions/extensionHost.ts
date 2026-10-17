@@ -1,10 +1,16 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { App } from "obsidian";
 import { requestUrl } from "obsidian";
-import type { ExtensionContentScript, ExtensionRecord } from "../types";
-import { nodeRequire, vaultBasePath } from "../utils/electron";
+import type { ExtensionContentScript, ExtensionRecord, IWebviewTag } from "../types";
+import { nodeRequire, sessionFromPartition, vaultBasePath } from "../utils/electron";
 import { extractExtensionArchive } from "./crx";
 import { buildShimSource } from "./cs-runtime";
+import { EDGE_ADDONS_HOME, downloadEdgeCrx, parseEdgeAddonId, toArrayBuffer } from "./edgeStore";
+import {
+  disposeCsRuntime as disposeCsRt,
+  ensureCsRuntime as ensureCsRt,
+  initCsRuntime,
+} from "./cs-runtime";
 
 interface RawManifest {
   name?: string;
@@ -41,6 +47,9 @@ export interface InjectedScript {
  * background pages / service workers never run, so extensions that depend on
  * one will only partially work. Same limitation as the SiYuan plugin.
  */
+/** webview 的 session partition（与 constants.ts 里的默认值一致） */
+const BROWSER_PARTITION = "persist:obsidian-browser";
+
 export class ExtensionHost {
   private fs: any;
   private pathMod: any;
@@ -101,7 +110,10 @@ export class ExtensionHost {
     if (!files.some((f) => f.path === "manifest.json")) {
       throw new Error("压缩包里没有 manifest.json" + (fallbackName ? "（" + fallbackName + "）" : ""));
     }
-    return this.installFromFiles(files);
+    const rec = await this.installFromFiles(files);
+    // 装完立刻原生加载以拿到 electronId —— 没有它 SW 不存在，cs-runtime/sw-bridge 用不了
+    await this.loadNative(rec);
+    return rec;
   }
 
   async installFromUrl(url: string): Promise<ExtensionRecord> {
@@ -110,9 +122,186 @@ export class ExtensionHost {
     return this.installFromArchive(resp.arrayBuffer, url);
   }
 
+  /** 从 Edge 加载项商店安装（配 edgeStore）：下载 CRX 后直接走 installFromArchive。
+   *  与源侧不同：源侧先落盘成 .crx 再 installFromPackage（因其安装入口只吃文件路径），
+   *  本插件的 installFromArchive 直接吃 ArrayBuffer，省掉临时文件。 */
+  async installFromEdgeAddons(
+    rawInput: string,
+  ): Promise<{ ok: boolean; error?: string; ext?: ExtensionRecord }> {
+    const id = parseEdgeAddonId(rawInput);
+    if (!id) {
+      return { ok: false, error: "无效的 Edge 加载项链接或扩展 id: " + String(rawInput).slice(0, 200) };
+    }
+    try {
+      const buf = await downloadEdgeCrx(id);
+      const ext = await this.installFromArchive(toArrayBuffer(buf), `edge-${id}`);
+      return { ok: true, ext };
+    } catch (e: any) {
+      return { ok: false, error: `Edge 加载项安装失败: ${String(e?.message || e)}` };
+    }
+  }
+
+  /** 打开 Edge 加载项商店（与 edgeStoreHelper 注入的页面"安装"按钮配合） */
+  openEdgeStore(): void {
+    window.open(EDGE_ADDONS_HOME, "_blank");
+  }
+
+  // ===== Electron 原生扩展加载 =====
+  // 本插件原本是"自研注入式"（自己解压 CRX + 注入内容脚本 + chrome shim），
+  // 那样扩展没有真实 background service worker，cs-runtime 的 isolated world
+  // 与 sw-bridge 的 SW CDP 通道就无从附着。这里补上原生加载，把
+  // session.loadExtension 返回的 id 写回记录的 electronId —— 它是激活那两个
+  // 模块的开关。桌面端不可用时静默退回自研注入式，不报错。
+
+  /** 扩展所在磁盘目录（loadExtension 需要真实路径） */
+  private dirOf(rec: ExtensionRecord): string {
+    return this.pathMod.join(this.rootDir, rec.dir);
+  }
+
+  /** webview 用的 partition 上的 session：loadExtension / removeExtension / serviceWorkers 都在它上面 */
+  private session(): any | null {
+    return sessionFromPartition(BROWSER_PARTITION);
+  }
+
+  /** 原生加载并写回 electronId；失败返回 null（退回自研注入式） */
+  async loadNative(rec: ExtensionRecord): Promise<string | null> {
+    const ses = this.session();
+    if (!ses?.loadExtension) return null;
+    try {
+      const info = await ses.loadExtension(this.dirOf(rec), { allowFileAccess: true });
+      const id = info?.id ? String(info.id) : "";
+      if (id) {
+        if (rec.electronId !== id) {
+          rec.electronId = id;
+          this.onChange();
+        }
+        return id;
+      }
+    } catch {
+      /* 退回自研注入式 */
+    }
+    return null;
+  }
+
+  async unloadNative(rec: ExtensionRecord): Promise<void> {
+    const ses = this.session();
+    if (!rec.electronId || !ses?.removeExtension) return;
+    try {
+      ses.removeExtension(rec.electronId);
+    } catch {
+      /* ignore */
+    }
+    rec.electronId = undefined;
+  }
+
+  /** 无副作用唤醒 SW（startWorkerForScope 只启动 SW，不卸载扩展）。
+   *  remove+load 会销毁已打开扩展面板的 isolated world（binding 失效 → hostCall 永挂），
+   *  故面板打开前的预热走 startWorkerForScope，失败才回退 remove+load。 */
+  async wakeSw(electronId: string): Promise<void> {
+    const ses = this.session();
+    if (!ses) return;
+    try {
+      await ses.serviceWorkers?.startWorkerForScope(`chrome-extension://${electronId}/`);
+      return;
+    } catch {
+      /* fall through */
+    }
+    const rec = this.getRecords().find((r) => r.electronId === electronId);
+    if (!rec) return;
+    try {
+      ses.removeExtension(electronId);
+    } catch {
+      /* ignore */
+    }
+    await this.loadNative(rec);
+  }
+
+  /** 启动恢复：session 重启后 loadExtension 的状态不保留，必须重新加载才能拿到
+   *  electronId（记录里存着上次的 id，但扩展没真的在 session 里）。 */
+  async syncNativeOnStartup(): Promise<void> {
+    for (const rec of this.getRecords()) {
+      if (rec.enabled) await this.loadNative(rec);
+      else await this.unloadNative(rec);
+    }
+  }
+
+  /** dom-ready 时调用：确保该页签的 CDP 会话与各扩展自建世界就绪 */
+  ensureCsRuntime(webview: IWebviewTag): void {
+    try {
+      this.initCsRuntimeOnce();
+      ensureCsRt(webview);
+    } catch (e) {
+      console.warn("[obsidian-browser] ensureCsRuntime failed:", e);
+    }
+  }
+
+  disposeCsRuntime(webview: IWebviewTag): void {
+    try {
+      disposeCsRt(webview);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  private csRuntimeInited = false;
+
+  private initCsRuntimeOnce(): void {
+    if (this.csRuntimeInited) return;
+    initCsRuntime({
+      listNativeExts: () =>
+        this.getRecords()
+          .filter((r) => r.enabled && !!r.electronId)
+          .map((r) => ({
+            electronId: r.electronId!,
+            path: this.dirOf(r),
+            name: r.name,
+            version: r.version,
+            // 记录里没有 defaultLocale；messages() 的回退链（defaultLocale → en → zh_CN）会兜住
+            defaultLocale: "en",
+            contentScripts: r.contentScripts.map((cs) => ({
+              matches: cs.matches,
+              excludeMatches: cs.excludeMatches,
+              js: cs.js,
+              css: cs.css,
+              runAt: cs.runAt,
+              allFrames: cs.allFrames,
+            })),
+          })),
+      readFile: (extPath: string, rel: string) =>
+        this.fs.readFileSync(this.pathMod.join(extPath, rel), "utf8"),
+      messages: (extPath: string, defaultLocale?: string) => {
+        for (const locale of [defaultLocale, "en", "zh_CN"].filter(Boolean)) {
+          try {
+            return JSON.parse(
+              this.fs.readFileSync(this.pathMod.join(extPath, `_locales/${locale}/messages.json`), "utf8"),
+            );
+          } catch {
+            /* try next */
+          }
+        }
+        return {};
+      },
+      wakeOne: async (electronId: string) => {
+        const rec = this.getRecords().find((r) => r.electronId === electronId);
+        if (!rec) return null;
+        try {
+          this.session()?.removeExtension(electronId);
+        } catch {
+          /* ignore */
+        }
+        return await this.loadNative(rec);
+      },
+      wakeSw: async (electronId: string) => {
+        await this.wakeSw(electronId);
+      },
+    });
+    this.csRuntimeInited = true;
+  }
+
   remove(id: string): void {
     const rec = this.getRecords().find((r) => r.id === id);
     if (rec) {
+      void this.unloadNative(rec);
       try {
         this.fs?.rmSync(this.pathMod.join(this.rootDir, rec.dir), { recursive: true, force: true });
       } catch {
@@ -131,6 +320,8 @@ export class ExtensionHost {
     const rec = this.getRecords().find((r) => r.id === id);
     if (!rec) return;
     rec.enabled = enabled;
+    if (enabled) void this.loadNative(rec);
+    else void this.unloadNative(rec);
     this.onChange();
   }
 

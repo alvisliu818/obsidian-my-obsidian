@@ -115,6 +115,7 @@ export class BrowserTab {
         this.toolbar.setExtensionIcons(this.ctx.extensionIcons());
       },
       onExtensionRequest: (url: string) => this.ctx.extensionStartPayload(url),
+      onEdgeInstall: (id: string) => this.ctx.onEdgeInstall?.(id),
       onContextMenu: (params: WebViewContextMenuParams) => {
         showWebViewContextMenu(params, this.wrap.getBoundingClientRect(), {
           goBack: () => this.goBack(),
