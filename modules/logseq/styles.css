@@ -2565,6 +2565,13 @@ body.block-touch-dragging {
   padding: 0 0.9em;
 }
 
+/* 函数调用着色(monaco.ts 的 installCallHighlight 给 `name(` 的 name 加的
+   内联类):颜色与阅读态 .token.function 用同一组变量。!important 必须要——
+   Monaco 给 token span 的 .mtkN 色类是运行时注入的样式表,顺序不定。 */
+.lgp-mtk-function {
+  color: var(--code-function, var(--code-def, var(--text-accent))) !important;
+}
+
 .lgp-code-edit-hint {
   margin-left: auto;
   color: var(--text-faint);

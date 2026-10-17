@@ -441,6 +441,9 @@ export function createEditor(
     editor.onDidChangeConfiguration(updateHeight);
   }
 
+  // 块内代码块:补上「函数调用」着色(见 installCallHighlight 的说明)。
+  if (blockMode) installCallHighlight(editor);
+
   if (opts.onSave) {
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => opts.onSave?.());
   }
@@ -517,6 +520,73 @@ export function createEditor(
   });
 
   return editor;
+}
+
+/**
+ * 函数调用着色:补齐 Monaco 与阅读态的最后一处差异。
+ *
+ * 阅读态(Prism)里 `print(` 的 `print` 是 `.token.function`,用 --code-function
+ * 色(见 enhanceCodeTokens 与 styles.css 的 token 映射)。Monaco 内置的
+ * monarch 词法**没有** function-call 这一档 token——紧跟 `(` 的标识符就是普通
+ * identifier,所以调用名在编辑态一直是普通色。
+ *
+ * 主题规则做不到(Monaco 的 token 规则只按 scope 前缀匹配,无法表达"后面跟
+ * 着左括号"),于是走第二遍:`monaco.editor.tokenize` 拿到每行的 token 序列
+ * (用它而不是正则,好处是注释/字符串里的 `foo(` 不会被误判——那些 token 不是
+ * identifier),凡 identifier 后面紧跟以 `(` 开头的 delimiter,就给该标识符
+ * 加一个内联类;颜色与阅读态同一组变量(styles.css 的 .lgp-mtk-function)。
+ * 只对块内小块代码启用(文本短、重算便宜),外部代码文件保持原样。
+ */
+function installCallHighlight(editor: monaco.editor.IStandaloneCodeEditor): void {
+  const model = editor.getModel();
+  if (!model) return;
+  const coll = editor.createDecorationsCollection([]);
+  const refresh = (): void => {
+    const lang = model.getLanguageId();
+    const lines = model.getLinesContent();
+    const out: monaco.editor.IModelDeltaDecoration[] = [];
+    let tokenized: monaco.Token[][];
+    try {
+      // 整篇一起 tokenize(而不是逐行):跨行状态(块注释/三引号字符串)才能
+      // 延续,否则续行会被当成普通代码。
+      tokenized = monaco.editor.tokenize(lines.join('\n'), lang);
+    } catch {
+      return;
+    }
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const toks = tokenized[i];
+      if (!line || !toks) continue;
+      for (let k = 0; k + 1 < toks.length; k++) {
+        const t = toks[k];
+        const nx = toks[k + 1];
+        if (!/^identifier/.test(t.type)) continue;
+        if (!/^delimiter/.test(nx.type)) continue;
+        const end = k + 2 < toks.length ? toks[k + 2].offset : line.length;
+        const nextText = line.slice(nx.offset, end);
+        if (!nextText.trimStart().startsWith('(')) continue;
+        out.push({
+          range: new monaco.Range(i + 1, t.offset + 1, i + 1, nx.offset + 1),
+          options: { inlineClassName: 'lgp-mtk-function' },
+        });
+      }
+    }
+    coll.set(out);
+  };
+  refresh();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const schedule = (): void => {
+    if (timer) clearTimeout(timer);
+    // 打字时不必逐字符重算(tokenize 整篇有成本),落笔 120ms 后补一次。
+    timer = setTimeout(refresh, 120);
+  };
+  const d1 = editor.onDidChangeModelContent(schedule);
+  const d2 = editor.onDidChangeModelLanguage?.(refresh);
+  editor.onDidDispose(() => {
+    if (timer) clearTimeout(timer);
+    d1.dispose();
+    d2?.dispose();
+  });
 }
 
 // 全局清理(onunload 时调用)
