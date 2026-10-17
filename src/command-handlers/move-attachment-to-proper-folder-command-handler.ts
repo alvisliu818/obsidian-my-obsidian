@@ -32,6 +32,7 @@ import type { AttachmentPathManager } from '../attachment-path-manager.ts';
 import type { HandedOverSettingsComponent } from '../handed-over-settings-component.ts';
 import type { PluginSettingsComponent } from '../plugin-settings-component.ts';
 
+import { findIdenticalAttachmentFile } from '../identical-attachment.ts';
 import { selectMode } from '../modals/move-attachment-to-proper-folder-used-by-multiple-notes-modal.ts';
 import { MoveAttachmentToProperFolderUsedByMultipleNotesMode } from '../plugin-settings.ts';
 import { ActionContext } from '../token-evaluator-context.ts';
@@ -229,7 +230,19 @@ export class MoveAttachmentToProperFolderCommandHandler extends AbstractFileComm
         continue;
       }
 
-      await copySafe({
+      /*
+       * A destination already holding the same bytes is reused rather than copied beside under a suffix
+       * (discussion #96). Either way the notes are pointed at the path the file really ended up at: the
+       * planned path is OCCUPIED whenever `copySafe` had to add a suffix, so relinking to it would point
+       * the notes at whatever other file sits there.
+       */
+      const identicalFile = await findIdenticalAttachmentFile({
+        app: this.app,
+        attachmentPathOrFile: attachmentFile,
+        destinationPath: newAttachmentPath,
+        pluginSettingsComponent: this.pluginSettingsComponent
+      });
+      const copiedAttachmentPath = identicalFile?.path ?? await copySafe({
         app: this.app,
         newPath: newAttachmentPath,
         oldPathOrFile: attachmentFile
@@ -238,7 +251,7 @@ export class MoveAttachmentToProperFolderCommandHandler extends AbstractFileComm
       for (const relinkedNotePath of relinkedNotePaths) {
         await this.relinkNote({
           attachmentFile,
-          newAttachmentPath,
+          newAttachmentPath: copiedAttachmentPath,
           notePath: relinkedNotePath,
           // Every relinked path is one of the backlink keys, so its references are always there.
           references: ensureNonNullable(backlinks.get(relinkedNotePath))

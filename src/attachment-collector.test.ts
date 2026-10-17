@@ -87,6 +87,10 @@ import type { PluginSettings } from './plugin-settings.ts';
 
 import { AttachmentCollector } from './attachment-collector.ts';
 import { translationsMap } from './i18n/locales/translations-map.ts';
+import {
+  findIdenticalAttachmentFile,
+  mergeIntoIdenticalAttachment
+} from './identical-attachment.ts';
 import { selectMode } from './modals/collect-attachment-used-by-multiple-notes-modal.ts';
 import { PLUGIN_API_VERSION } from './plugin-api.ts';
 import { CollectAttachmentUsedByMultipleNotesMode } from './plugin-settings.ts';
@@ -206,6 +210,12 @@ vi.mock('@mnaoumov/obsidian-lib/vault', async (importOriginal) => ({
   renameSafe: vi.fn()
 }));
 
+// Its byte comparison and link rewriting are tested on their own; here only the collector's use of them is.
+vi.mock('./identical-attachment.ts', () => ({
+  findIdenticalAttachmentFile: vi.fn(),
+  mergeIntoIdenticalAttachment: vi.fn()
+}));
+
 vi.mock('./modals/collect-attachment-used-by-multiple-notes-modal.ts', () => ({
   selectMode: vi.fn()
 }));
@@ -231,6 +241,8 @@ const mockRenameSafe = vi.mocked(renameSafe);
 const mockGetCanvasReferences = vi.mocked(getCanvasReferences);
 const mockApplyFileChanges = vi.mocked(applyFileChanges);
 const mockSelectMode = vi.mocked(selectMode);
+const mockFindIdenticalAttachmentFile = vi.mocked(findIdenticalAttachmentFile);
+const mockMergeIntoIdenticalAttachment = vi.mocked(mergeIntoIdenticalAttachment);
 
 const PLUGIN_NAME = 'Custom Attachment Location';
 
@@ -368,6 +380,8 @@ describe('AttachmentCollector', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFindIdenticalAttachmentFile.mockResolvedValue(null);
+    mockMergeIntoIdenticalAttachment.mockResolvedValue();
     settings = {
       collectAttachmentUsedByMultipleNotesMode: CollectAttachmentUsedByMultipleNotesMode.Move,
       collectedAttachmentFileName: '',
@@ -639,6 +653,45 @@ describe('AttachmentCollector', () => {
         newPath: 'attachments/img.png',
         oldPathOrAbstractFile: 'img.png'
       });
+    });
+
+    it('should merge into an identical file at the destination instead of moving beside it', async () => {
+      mockGetLinks.mockReturnValue([createReference()]);
+      const attachmentFile = createFile('old-folder/img.png');
+      const identicalFile = createFile('attachments/img.png');
+      mockExtractLinkFile.mockReturnValue(attachmentFile);
+      getFileByPath.mockImplementation((path) => path === 'old-folder/img.png' ? attachmentFile : createFile(path));
+      mockGetBacklinksForFileSafe.mockResolvedValue(createBacklinks(['note.md']));
+      mockFindIdenticalAttachmentFile.mockResolvedValue(identicalFile);
+      await runSingleFile(note);
+      expect(mockFindIdenticalAttachmentFile).toHaveBeenCalledExactlyOnceWith({
+        app,
+        attachmentPathOrFile: attachmentFile,
+        destinationPath: 'attachments/img.png',
+        pluginSettingsComponent
+      });
+      expect(mockMergeIntoIdenticalAttachment).toHaveBeenCalledExactlyOnceWith({
+        app,
+        attachmentFile,
+        identicalFile,
+        pluginNoticeComponent,
+        resourceLockComponent,
+        skippedCanvasPaths: new Set(['note.md'])
+      });
+      expect(mockRenameSafe).not.toHaveBeenCalled();
+      // The merged file's folder is vacated just as a moved one's is.
+      expect(mockCleanupEmptyFolders).toHaveBeenCalledWith(expect.objectContaining({ folderPaths: ['old-folder'] }));
+    });
+
+    it('should move as before when the attachment file can no longer be resolved', async () => {
+      mockGetLinks.mockReturnValue([createReference()]);
+      mockExtractLinkFile.mockReturnValue(createFile('img.png'));
+      getFileByPath.mockReturnValue(null);
+      mockGetBacklinksForFileSafe.mockResolvedValue(createBacklinks(['note.md']));
+      mockRenameSafe.mockResolvedValue('attachments/img.png');
+      await runSingleFile(note);
+      expect(mockFindIdenticalAttachmentFile).not.toHaveBeenCalled();
+      expect(mockRenameSafe).toHaveBeenCalledOnce();
     });
 
     it('should clean up the vacated source folder after moving an attachment', async () => {
@@ -1202,6 +1255,29 @@ describe('AttachmentCollector', () => {
         expect(nonMatchingResult).toBeUndefined();
       });
 
+      it('should point the note at an identical copy already at the destination instead of copying again', async () => {
+        settings.collectAttachmentUsedByMultipleNotesMode = CollectAttachmentUsedByMultipleNotesMode.Copy;
+        mockFindIdenticalAttachmentFile.mockResolvedValue(createFile('attachments/img.png'));
+        let matchingResult: unknown;
+        mockEditLinks.mockImplementation(async ({ linkConverter }) => {
+          matchingResult = await linkConverter(createReference({ link: 'img.png' }));
+        });
+        mockExtractLinkFile.mockReturnValue(createFile('img.png'));
+        mockUpdateLink.mockReturnValue('![](attachments/img.png)');
+        await runSingleFile(note);
+        expect(mockFindIdenticalAttachmentFile).toHaveBeenCalledExactlyOnceWith({
+          app,
+          attachmentPathOrFile: 'img.png',
+          destinationPath: 'attachments/img.png',
+          pluginSettingsComponent
+        });
+        expect(mockCopySafe).not.toHaveBeenCalled();
+        // The other notes still use the original, so nothing is merged or trashed.
+        expect(mockMergeIntoIdenticalAttachment).not.toHaveBeenCalled();
+        expect(mockUpdateLink).toHaveBeenCalledWith(expect.objectContaining({ newTargetPathOrFile: 'attachments/img.png' }));
+        expect(matchingResult).toBe('![](attachments/img.png)');
+      });
+
       it('should not record any vacated folder in Copy mode', async () => {
         settings.collectAttachmentUsedByMultipleNotesMode = CollectAttachmentUsedByMultipleNotesMode.Copy;
         mockCopySafe.mockResolvedValue('attachments/img.png');
@@ -1491,6 +1567,19 @@ describe('AttachmentCollector', () => {
         const applyParams = castTo<ApplyFileChangesParamsLike>(mockApplyFileChanges.mock.calls[0]?.[0]);
         expect(applyParams.changesProvider).toHaveLength(1);
         // A file-node prop is a raw path, not a formatted embed.
+        expect(applyParams.changesProvider[0]?.newContent).toBe('attachments/img.png');
+        expect(applyParams.changesProvider[0]?.reference).toBe(fileRef);
+      });
+
+      it('should rewrite the collected canvas itself when the attachment is merged into an identical file', async () => {
+        const fileRef = createCanvasFileNodeReference();
+        mockGetCanvasReferences.mockResolvedValue([fileRef]);
+        mockFindIdenticalAttachmentFile.mockResolvedValue(createFile('attachments/img.png'));
+        await runSingleFile(note);
+        expect(mockRenameSafe).not.toHaveBeenCalled();
+        // Nothing was renamed, so Obsidian core rewrites no file node: the collector has to.
+        const applyParams = castTo<ApplyFileChangesParamsLike>(mockApplyFileChanges.mock.calls[0]?.[0]);
+        expect(applyParams.pathOrFile).toBe(note);
         expect(applyParams.changesProvider[0]?.newContent).toBe('attachments/img.png');
         expect(applyParams.changesProvider[0]?.reference).toBe(fileRef);
       });

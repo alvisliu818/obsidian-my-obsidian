@@ -31,6 +31,7 @@ import type { TokenValidator } from './token-validator.ts';
 
 import { ExternallyCreatedAttachmentHandlerComponent } from './externally-created-attachment-handler-component.ts';
 import { foreignWriteRegistry } from './foreign-write-registry.ts';
+import { mergeIntoIdenticalAttachment } from './identical-attachment.ts';
 import {
   PluginSettings,
   RenameAttachmentsCreatedByOtherPluginsMode
@@ -44,6 +45,12 @@ vi.mock('@mnaoumov/typescript-lib/error', () => ({
   printError: vi.fn<(error: unknown) => void>()
 }));
 
+// The comparison runs for real; the merge needs a link index the mock App does not model, and is tested on its own.
+vi.mock('./identical-attachment.ts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./identical-attachment.ts')>(),
+  mergeIntoIdenticalAttachment: vi.fn()
+}));
+
 interface GetAttachmentFolderFullPathForPathParams {
   readonly notePath?: string | undefined;
   readonly readAttachmentFileContent?: (() => Promise<ArrayBuffer>) | undefined;
@@ -53,6 +60,7 @@ interface SettingsOverrides {
   isPathIgnored?: (path: string) => boolean;
   otherPluginIdsForAttachmentRename?: string[];
   renameAttachmentsCreatedByOtherPluginsMode?: RenameAttachmentsCreatedByOtherPluginsMode;
+  shouldDeduplicateIdenticalAttachments?: boolean;
 }
 
 interface SetupOverrides {
@@ -69,6 +77,7 @@ const FRESHLY_CREATED_THRESHOLD_IN_MILLISECONDS = 10_000;
 // Mirrors NOTE_REFERENCE_WAIT_IN_MILLISECONDS in the component under test.
 const NOTE_REFERENCE_WAIT_IN_MILLISECONDS = 5000;
 
+const mockMergeIntoIdenticalAttachment = vi.mocked(mergeIntoIdenticalAttachment);
 const mockPrintError = vi.mocked(printError);
 
 describe('ExternallyCreatedAttachmentHandlerComponent', () => {
@@ -79,6 +88,7 @@ describe('ExternallyCreatedAttachmentHandlerComponent', () => {
   beforeEach(() => {
     app = App.createConfigured__();
     mockPrintError.mockClear();
+    mockMergeIntoIdenticalAttachment.mockReset();
   });
 
   afterEach(() => {
@@ -103,6 +113,7 @@ describe('ExternallyCreatedAttachmentHandlerComponent', () => {
     settings.renameAttachmentsCreatedByOtherPluginsMode = overrides?.renameAttachmentsCreatedByOtherPluginsMode
       ?? RenameAttachmentsCreatedByOtherPluginsMode.All;
     settings.otherPluginIdsForAttachmentRename = overrides?.otherPluginIdsForAttachmentRename ?? [];
+    settings.shouldDeduplicateIdenticalAttachments = overrides?.shouldDeduplicateIdenticalAttachments ?? false;
     return settings;
   }
 
@@ -191,6 +202,35 @@ describe('ExternallyCreatedAttachmentHandlerComponent', () => {
 
     expect(renameFileSpy).toHaveBeenCalledOnce();
     expect(renameFileSpy.mock.calls[0]?.[1]).toBe('notes/assets/renamed.png');
+  });
+
+  it('should merge into an identical file already at the destination instead of renaming beside it', async () => {
+    await setUp({ settings: { shouldDeduplicateIdenticalAttachments: true } });
+    await getApp().vault.createFolder('notes/assets');
+    // The same four zero bytes `createForeignAttachment` writes.
+    const identicalFile = await getApp().vault.createBinary('notes/assets/renamed.png', new ArrayBuffer(4));
+
+    const attachmentFile = await createForeignAttachment();
+
+    expect(renameFileSpy).not.toHaveBeenCalled();
+    expect(mockMergeIntoIdenticalAttachment).toHaveBeenCalledExactlyOnceWith({
+      app: getApp(),
+      attachmentFile,
+      identicalFile,
+      pluginNoticeComponent: null,
+      resourceLockComponent: null
+    });
+  });
+
+  it('should rename beside a file holding different bytes, as before', async () => {
+    await setUp({ settings: { shouldDeduplicateIdenticalAttachments: true } });
+    await getApp().vault.createFolder('notes/assets');
+    await getApp().vault.createBinary('notes/assets/renamed.png', new Uint8Array([1, 2, 3, 4]).buffer);
+
+    await createForeignAttachment();
+
+    expect(mockMergeIntoIdenticalAttachment).not.toHaveBeenCalled();
+    expect(renameFileSpy.mock.calls[0]?.[1]).toBe('notes/assets/renamed 1.png');
   });
 
   it('should create the destination folder the template resolves to', async () => {

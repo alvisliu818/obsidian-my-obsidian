@@ -180,6 +180,19 @@ export class PluginSettings {
   public shouldCollectAttachmentsAutomatically = false;
 
   /**
+   * Whether an attachment moved onto a path already holding a byte-identical file is merged into that file
+   * instead of being placed beside it under a duplicate-name suffix (discussion #96).
+   *
+   * On, every reference to the incoming attachment is repointed at the file already there, and the incoming
+   * file goes to the trash. Different bytes, or a comparison that fails, keep the suffix. The match is by
+   * CONTENT, never by name: several common setups resolve unrelated attachments to one name, so a name match
+   * would silently point a note at a different image.
+   *
+   * Off by default, because it trashes a file.
+   */
+  public shouldDeduplicateIdenticalAttachments = false;
+
+  /**
    * Whether a new attachment goes wherever Obsidian's own *Default location for new attachments* says.
    *
    * On, {@link attachmentFolderPath} is not consulted at all: the folder is Obsidian's setting, resolved the

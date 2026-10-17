@@ -24,6 +24,8 @@ Open **Settings -> Community plugins -> `Custom Attachment Location`** to config
   - **Which plugin created a file is worked out from the call stack of the write, and that is best-effort.** Obsidian runs each community plugin's code under a marker naming it, so a write made from that code can be traced back. Nothing names Obsidian's own writes, a sync client's, or a plugin that defers its write past the moment it was asked for — such a file counts as *not* being in the list, so `Only listed plugins` leaves it alone and `All except listed plugins` renames it. If a plugin you listed is not being caught, `All` still works as it always did.
 - `duplicateNameSeparator`
   - the separator inserted before the counter when a name already exists (e.g. `file 1.png`).
+- `shouldDeduplicateIdenticalAttachments`
+  - **Off by default.** When an attachment is collected, moved to its proper folder, or renamed after another plugin created it, and its destination already holds a file with exactly the same content, keep only that file: links to the incoming attachment are pointed at it, and the incoming attachment goes to the trash. Different content still gets the counter. See [05 Collect attachments](<05 Collect attachments.md>).
 - `specialCharacters`
   - characters stripped/replaced from generated folder and file names.
 - `specialCharactersReplacement`
