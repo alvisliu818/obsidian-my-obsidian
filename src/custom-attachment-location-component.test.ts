@@ -516,12 +516,39 @@ describe('CustomAttachmentLocationComponent', () => {
     });
   });
 
-  describe('handleActiveLeafChange', () => {
+  describe('patchClipboardManagerFromLoadedMarkdownView', () => {
     it('should patch the clipboard manager when an active markdown leaf becomes available', async () => {
       const component = createComponent();
       const handler = await loadAndGetActiveLeafChangeHandler(component);
-      handler(createMarkdownLeaf(ViewType.Markdown));
+      const leaf = createMarkdownLeaf(ViewType.Markdown);
+      context.getLeavesOfTypeMock.mockReturnValue([leaf]);
+      handler(leaf);
       await vi.runAllTimersAsync();
+      expect(capturedChildTypes()).toContain('ClipboardManagerInsertFilesPatchComponent');
+    });
+
+    it('should patch the clipboard manager on a layout change that loads a markdown view', async () => {
+      const component = createComponent();
+      const spy = spyOnWorkspaceOn();
+      await loadAndReachLayoutReady(component);
+      context.getLeavesOfTypeMock.mockReturnValue([createMarkdownLeaf(ViewType.Markdown)]);
+      findHandler(spy, 'layout-change')();
+      expect(capturedChildTypes()).toContain('ClipboardManagerInsertFilesPatchComponent');
+    });
+
+    it('should leave a deferred markdown leaf unloaded and wait for a loaded one', async () => {
+      const component = createComponent();
+      context.getLeavesOfTypeMock.mockReturnValue([createMarkdownLeaf(ViewType.Markdown, true)]);
+      const workspaceOnSpy = spyOnWorkspaceOn();
+      await loadAndReachLayoutReady(component);
+      expect(capturedChildTypes()).not.toContain('ClipboardManagerInsertFilesPatchComponent');
+      expect(workspaceOnSpy.mock.calls.map((call) => call[0])).toEqual(expect.arrayContaining(['active-leaf-change', 'layout-change']));
+    });
+
+    it('should patch through a loaded markdown leaf that follows a deferred one', async () => {
+      const component = createComponent();
+      context.getLeavesOfTypeMock.mockReturnValue([createMarkdownLeaf(ViewType.Markdown, true), createMarkdownLeaf(ViewType.Markdown)]);
+      await loadAndReachLayoutReady(component);
       expect(capturedChildTypes()).toContain('ClipboardManagerInsertFilesPatchComponent');
     });
 
@@ -533,7 +560,9 @@ describe('CustomAttachmentLocationComponent', () => {
         trySetByPath: () => Promise.resolve(false)
       }));
       const handler = await loadAndGetActiveLeafChangeHandler(component);
-      handler(createMarkdownLeaf(ViewType.Markdown));
+      const leaf = createMarkdownLeaf(ViewType.Markdown);
+      context.getLeavesOfTypeMock.mockReturnValue([leaf]);
+      handler(leaf);
       await vi.runAllTimersAsync();
       const child = hoisted.capturedChildren.find((entry) => entry.type === 'ClipboardManagerInsertFilesPatchComponent');
       const params = castTo<InsertFilesChildParams>(child?.params);
@@ -557,10 +586,12 @@ describe('CustomAttachmentLocationComponent', () => {
       expect(capturedChildTypes()).not.toContain('ClipboardManagerInsertFilesPatchComponent');
     });
 
-    it('should do nothing for a non-markdown leaf', async () => {
+    it('should do nothing for a markdown leaf whose loaded view is not a markdown view', async () => {
       const component = createComponent();
       const handler = await loadAndGetActiveLeafChangeHandler(component);
-      handler(createMarkdownLeaf('other'));
+      const leaf = createMarkdownLeaf('empty');
+      context.getLeavesOfTypeMock.mockReturnValue([leaf]);
+      handler(leaf);
       await vi.runAllTimersAsync();
       expect(capturedChildTypes()).not.toContain('ClipboardManagerInsertFilesPatchComponent');
     });
@@ -568,9 +599,10 @@ describe('CustomAttachmentLocationComponent', () => {
     it('should do nothing once the markdown view is already patched', async () => {
       const component = createComponent();
       const handler = await loadAndGetActiveLeafChangeHandler(component);
-      handler(createMarkdownLeaf(ViewType.Markdown));
+      context.getLeavesOfTypeMock.mockReturnValue([createMarkdownLeaf(ViewType.Markdown)]);
+      handler(null);
       await vi.runAllTimersAsync();
-      handler(createMarkdownLeaf(ViewType.Markdown));
+      handler(null);
       await vi.runAllTimersAsync();
       const clipboardChildCount = hoisted.capturedChildren.filter((child) => child.type === 'ClipboardManagerInsertFilesPatchComponent').length;
       expect(clipboardChildCount).toBe(1);
@@ -609,13 +641,14 @@ function createComponent(arrayBufferMap = strictProxy<ArrayBufferMap>({})): Cust
   return component;
 }
 
-function createMarkdownLeaf(viewType: string): WorkspaceLeaf {
+// The leaf carries no `loadIfDeferred`, so the strict proxy throws if the component ever tries to load one.
+function createMarkdownLeaf(viewType: string, isDeferred = false): WorkspaceLeaf {
   const view = strictProxy<MarkdownLeafView>({
     editMode: { clipboardManager: {} },
     getViewType: (): string => viewType
   });
   return strictProxy<WorkspaceLeaf>({
-    loadIfDeferred: vi.fn((): Promise<void> => noopAsync()),
+    isDeferred,
     view: castTo<WorkspaceLeaf['view']>(view)
   });
 }

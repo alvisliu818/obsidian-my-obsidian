@@ -1,7 +1,4 @@
-import type {
-  App,
-  WorkspaceLeaf
-} from 'obsidian';
+import type { App } from 'obsidian';
 
 import { DUMMY_PATH } from '@mnaoumov/obsidian-lib/attachment-path';
 import { AllWindowsEventComponent } from '@mnaoumov/obsidian-lib/components/all-windows-event-component';
@@ -235,31 +232,15 @@ export class CustomAttachmentLocationComponent extends LayoutReadyComponent {
       type: 'change'
     });
 
-    await this.handleActiveLeafChange(this.app.workspace.getLeavesOfType(ViewType.Markdown)[0] ?? null);
+    this.patchClipboardManagerFromLoadedMarkdownView();
 
-    if (!this.isMarkdownViewPatched) {
-      this.registerEvent(this.app.workspace.on('active-leaf-change', convertAsyncToSync(this.handleActiveLeafChange.bind(this))));
-    }
-  }
-
-  private async handleActiveLeafChange(leaf: null | WorkspaceLeaf): Promise<void> {
-    if (this.isMarkdownViewPatched || leaf?.view.getViewType() !== ViewType.Markdown) {
+    if (this.isMarkdownViewPatched) {
       return;
     }
 
-    await leaf.loadIfDeferred();
-
-    const markdownView = leaf.view as MarkdownView;
-
-    this.addChild(
-      new ClipboardManagerInsertFilesPatchComponent({
-        clipboardManager: markdownView.editMode.clipboardManager,
-        insertGestureTrackerComponent: this.insertGestureTrackerComponent,
-        pastedImageMarker: this.pastedImageMarker
-      })
-    );
-
-    this.isMarkdownViewPatched = true;
+    const handler = this.patchClipboardManagerFromLoadedMarkdownView.bind(this);
+    this.registerEvent(this.app.workspace.on('active-leaf-change', handler));
+    this.registerEvent(this.app.workspace.on('layout-change', handler));
   }
 
   private async handleFileOpen(file: null | TFile): Promise<void> {
@@ -331,5 +312,36 @@ export class CustomAttachmentLocationComponent extends LayoutReadyComponent {
 
   private async handleRename(): Promise<void> {
     await this.handleFileOpen(this.app.workspace.getActiveFile());
+  }
+
+  /**
+   * Patches the clipboard manager's prototype, which only a loaded markdown view can reach.
+   *
+   * A background tab stays deferred until it is shown, and it is never loaded here. Loading one restores its saved
+   * selection, and another plugin may have stored that selection against an older version of the note, so the load
+   * threw at startup with `Selection points outside of document`. The events registered in `onLayoutReady` retry once
+   * Obsidian loads a markdown view itself, which it does before anyone can paste into it.
+   */
+  private patchClipboardManagerFromLoadedMarkdownView(): void {
+    if (this.isMarkdownViewPatched) {
+      return;
+    }
+
+    const leaf = this.app.workspace.getLeavesOfType(ViewType.Markdown).find((candidate) => !candidate.isDeferred && candidate.view.getViewType() === ViewType.Markdown);
+    if (!leaf) {
+      return;
+    }
+
+    const markdownView = leaf.view as MarkdownView;
+
+    this.addChild(
+      new ClipboardManagerInsertFilesPatchComponent({
+        clipboardManager: markdownView.editMode.clipboardManager,
+        insertGestureTrackerComponent: this.insertGestureTrackerComponent,
+        pastedImageMarker: this.pastedImageMarker
+      })
+    );
+
+    this.isMarkdownViewPatched = true;
   }
 }
