@@ -123,6 +123,25 @@ describe('Substitutions', () => {
     });
   });
 
+  describe('ensureCustomTokensRegistered', () => {
+    it('should register custom tokens that differ from the ones registered last', () => {
+      Substitutions.ensureCustomTokensRegistered('registerCustomToken("fresh", () => "x");');
+      expect(Substitutions.isRegisteredToken('fresh')).toBe(true);
+    });
+
+    it('should not run the code again when it is the code registered last', () => {
+      const code = 'window.__ensureCount = (window.__ensureCount ?? 0) + 1;';
+      const globalRecord = castTo<Record<string, unknown>>(window);
+      try {
+        Substitutions.registerCustomTokens(code);
+        Substitutions.ensureCustomTokensRegistered(code);
+        expect(globalRecord['__ensureCount']).toBe(1);
+      } finally {
+        delete globalRecord['__ensureCount'];
+      }
+    });
+  });
+
   describe('constructor', () => {
     it('should derive the note folder path from the note file path', () => {
       const substitutions = createSubstitutions({ noteFilePath: 'folder/note.md' });

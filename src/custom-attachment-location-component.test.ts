@@ -276,31 +276,27 @@ describe('CustomAttachmentLocationComponent', () => {
   });
 
   describe('onLayoutReady', () => {
-    it('should register custom tokens and load settings from file', async () => {
+    it('should neither register custom tokens nor reload the settings, since loading them registers the tokens', async () => {
       const component = createComponent();
       await loadAndReachLayoutReady(component);
-      expect(vi.mocked(Substitutions.registerCustomTokens)).toHaveBeenCalledWith('custom-tokens');
-      expect(context.loadFromFileMock).toHaveBeenCalledWith(false);
+      expect(vi.mocked(Substitutions.registerCustomTokens)).not.toHaveBeenCalled();
+      expect(context.loadFromFileMock).not.toHaveBeenCalled();
     });
 
-    it('should not register custom tokens until the settings have been read from the file', async () => {
+    it('should not add the patch children until the settings have been read from the file', async () => {
       let resolve: () => void = noop;
       context.whenLoadedFromFileMock.mockReturnValue(
         new Promise<void>((promiseResolve) => {
           resolve = promiseResolve;
         })
       );
-      const registerCustomTokensMock = vi.mocked(Substitutions.registerCustomTokens);
-      const callCountBefore = registerCustomTokensMock.mock.calls.length;
       const component = createComponent();
       await loadAndReachLayoutReady(component);
-      expect(registerCustomTokensMock.mock.calls.length).toBe(callCountBefore);
-      expect(context.loadFromFileMock).not.toHaveBeenCalled();
+      expect(capturedChildTypes()).not.toContain('VaultGetAvailablePathForAttachmentsPatchComponent');
 
       resolve();
       await vi.runAllTimersAsync();
-      expect(registerCustomTokensMock.mock.calls.length).toBe(callCountBefore + 1);
-      expect(context.loadFromFileMock).toHaveBeenCalledWith(false);
+      expect(capturedChildTypes()).toContain('VaultGetAvailablePathForAttachmentsPatchComponent');
     });
 
     it('should add the vault, file-manager and share-receiver patch children', async () => {

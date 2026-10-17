@@ -35,7 +35,6 @@ import { VaultGetConfigPatchComponent } from './patches/vault-get-config-patch-c
 import { WebUtilsGetPathForFilePatchComponent } from './patches/web-utils-get-path-for-file-patch-component.ts';
 import { WriteAttributionPatchComponent } from './patches/write-attribution-patch-component.ts';
 import { PluginSettingsComponent } from './plugin-settings-component.ts';
-import { Substitutions } from './substitutions.ts';
 import { ActionContext } from './token-evaluator-context.ts';
 import { TokenValidator } from './token-validator.ts';
 
@@ -119,14 +118,9 @@ export class CustomAttachmentLocationComponent extends LayoutReadyComponent {
   }
 
   protected override async onLayoutReady(): Promise<void> {
-    /*
-     * On an enable after layout-ready this runs while the settings component is still reading `data.json`, so
-     * `customTokensStr` would still be the default. The reload below is not redundant: the first load validated
-     * the stored templates before any custom token existed, so it runs again once they are registered.
-     */
+    // On an enable after layout-ready this runs while the settings component is still reading `data.json`, and the
+    // patches below must not act on the defaults. Custom tokens need nothing here: the load registers them.
     await this.pluginSettingsComponent.whenLoadedFromFile();
-    Substitutions.registerCustomTokens(this.pluginSettingsComponent.settings.customTokensStr);
-    await this.pluginSettingsComponent.loadFromFile(false);
 
     this.addChild(
       new VaultGetAvailablePathForAttachmentsPatchComponent({
