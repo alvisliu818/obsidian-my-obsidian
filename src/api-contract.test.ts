@@ -66,7 +66,13 @@ const CASES: Record<MethodName, MethodCases> = {
         { ...SETTINGS, shouldUpdateFileNameAliases: undefined },
         { ...SETTINGS, treatAsAttachmentExtensions: null }
       ],
-      valid: [SETTINGS, { ...SETTINGS, emptyFolderBehavior: 'Keep' }, { ...SETTINGS, emptyFolderBehavior: 'Delete' }]
+      valid: [
+        SETTINGS,
+        { ...SETTINGS, emptyFolderBehavior: 'Keep' },
+        { ...SETTINGS, emptyFolderBehavior: 'Delete' },
+        // A key that names no setting is let through, as before the guards moved to `@mnaoumov/typescript-lib`.
+        { ...SETTINGS, unknownSetting: 1 }
+      ]
     }
   },
   isPathIgnored: { input: PATH, output: BOOLEAN },
