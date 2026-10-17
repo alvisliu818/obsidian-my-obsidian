@@ -50,6 +50,7 @@ import { normalizePath } from 'obsidian';
 import type { HandedOverSettingsComponent } from './handed-over-settings-component.ts';
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';
 
+import { findIdenticalAttachmentFile } from './identical-attachment.ts';
 import { IMPORT_FILES_PREFIX } from './patches/share-receiver-import-files-patch-component.ts';
 import { selfWriteRegistry } from './self-write-registry.ts';
 import { Substitutions } from './substitutions.ts';
@@ -439,7 +440,27 @@ export class AttachmentPathManager {
     });
     const newAttachmentPath = join(newAttachmentFolderPath, newAttachmentName);
 
-    return params.attachmentFile.path === newAttachmentPath || this.isParkedBesideProperPath(params.attachmentFile, newAttachmentPath) ? null : newAttachmentPath;
+    if (params.attachmentFile.path === newAttachmentPath) {
+      return null;
+    }
+
+    /*
+     * A file parked beside an IDENTICAL one is exactly the duplicate `Deduplicate identical attachments`
+     * exists to remove (discussion #96), so it is not left where it is. Merging it leaves nothing parked,
+     * which keeps the endless-rename loop the parked check guards against closed.
+     */
+    if (
+      this.isParkedBesideProperPath(params.attachmentFile, newAttachmentPath) && !await findIdenticalAttachmentFile({
+        app: this.app,
+        attachmentPathOrFile: params.attachmentFile,
+        destinationPath: newAttachmentPath,
+        pluginSettingsComponent: this.pluginSettingsComponent
+      })
+    ) {
+      return null;
+    }
+
+    return newAttachmentPath;
   }
 
   /**

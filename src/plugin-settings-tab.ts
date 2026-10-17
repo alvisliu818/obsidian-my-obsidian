@@ -718,6 +718,18 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
         }
       }),
       this.settingEx({
+        desc: t(($) => $.pluginSettingsTab.shouldDeduplicateIdenticalAttachments.description),
+        name: t(($) => $.pluginSettingsTab.shouldDeduplicateIdenticalAttachments.name),
+        render: (setting) => {
+          setting.addToggle((toggle) => {
+            this.bind({
+              propertyName: 'shouldDeduplicateIdenticalAttachments',
+              valueComponent: toggle
+            });
+          });
+        }
+      }),
+      this.settingEx({
         desc: createFragment((f) => {
           f.appendText(t(($) => $.pluginSettingsTab.attachmentRenameMode.description.part1));
           f.createEl('br');

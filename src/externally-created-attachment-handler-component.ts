@@ -39,6 +39,10 @@ import type { PluginSettingsComponent } from './plugin-settings-component.ts';
 import type { TokenValidator } from './token-validator.ts';
 
 import { foreignWriteRegistry } from './foreign-write-registry.ts';
+import {
+  findIdenticalAttachmentFile,
+  mergeIntoIdenticalAttachment
+} from './identical-attachment.ts';
 import { RenameAttachmentsCreatedByOtherPluginsMode } from './plugin-settings.ts';
 import {
   SelfWriteClaim,
@@ -263,6 +267,28 @@ export class ExternallyCreatedAttachmentHandlerComponent extends Component {
      */
     const properAttachmentPath = join(attachmentFolderFullPath, generatedAttachmentFileName);
     if (properAttachmentPath === attachmentFile.path) {
+      return;
+    }
+
+    const identicalFile = await findIdenticalAttachmentFile({
+      app: this.app,
+      attachmentPathOrFile: attachmentFile,
+      destinationPath: properAttachmentPath,
+      pluginSettingsComponent: this.pluginSettingsComponent
+    });
+    if (identicalFile) {
+      /*
+       * The editor first: the creating plugin's embed may still be unsaved, so the backlinks the merge
+       * rewrites cannot see it, and the merge would then trash a file that embed still points at.
+       */
+      this.repointUnsavedEditorLinks(attachmentFile.path, identicalFile, noteFile);
+      await mergeIntoIdenticalAttachment({
+        app: this.app,
+        attachmentFile,
+        identicalFile,
+        pluginNoticeComponent: null,
+        resourceLockComponent: null
+      });
       return;
     }
 

@@ -51,6 +51,7 @@ import type { TokenValidator } from './token-validator.ts';
 
 import { AttachmentPathManager } from './attachment-path-manager.ts';
 import { translationsMap } from './i18n/locales/translations-map.ts';
+import { findIdenticalAttachmentFile } from './identical-attachment.ts';
 import { IMPORT_FILES_PREFIX } from './patches/share-receiver-import-files-patch-component.ts';
 import { promptWithPreview } from './prompt-with-preview-modal.ts';
 import { Substitutions } from './substitutions.ts';
@@ -103,6 +104,10 @@ vi.mock('@mnaoumov/obsidian-lib/vault', async (importOriginal) => ({
   createFolderSafe: vi.fn<typeof createFolderSafe>()
 }));
 
+vi.mock('./identical-attachment.ts', () => ({
+  findIdenticalAttachmentFile: vi.fn()
+}));
+
 vi.mock('./prompt-with-preview-modal.ts', async (importOriginal) => ({
   ...await importOriginal<typeof import('./prompt-with-preview-modal.ts')>(),
   promptWithPreview: vi.fn<typeof promptWithPreview>()
@@ -118,6 +123,7 @@ const mockGetLinks = vi.mocked(getLinks);
 const mockGetCacheSafe = vi.mocked(getCacheSafe);
 const mockCreateFolderSafe = vi.mocked(createFolderSafe);
 const mockPromptWithPreview = vi.mocked(promptWithPreview);
+const mockFindIdenticalAttachmentFile = vi.mocked(findIdenticalAttachmentFile);
 
 // The handed-over settings live in `Advanced Rename and Delete Handler` since 12.0.0. Mutable here so a test
 // can still change one mid-run, exactly as it used to change .
@@ -257,6 +263,7 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   noticeInstances.length = 0;
+  mockFindIdenticalAttachmentFile.mockResolvedValue(null);
   mockGetAbstractFileOrNull.mockReturnValue(null);
   mockGetFileOrNull.mockReturnValue(null);
   mockGetPath.mockImplementation((_app, pathOrFile) => typeof pathOrFile === 'string' ? pathOrFile : castTo<TFile>(pathOrFile).path);
@@ -731,6 +738,20 @@ describe('AttachmentPathManager', () => {
 
       await expect(getProperPath(createParkedFile('img 1'))).resolves.toBeNull();
       expect(mockGetAbstractFileOrNull).toHaveBeenCalledWith(expect.objectContaining({ pathOrFile: 'assets/img.png' }));
+    });
+
+    it('should hand back the proper path when the file holding it is identical, so the duplicate is merged', async () => {
+      const identicalFile = createTFile({ path: 'assets/img.png' });
+      mockGetAbstractFileOrNull.mockReturnValue(identicalFile);
+      mockFindIdenticalAttachmentFile.mockResolvedValue(identicalFile);
+      const parkedFile = createParkedFile('img 1');
+
+      await expect(getProperPath(parkedFile)).resolves.toBe('assets/img.png');
+      expect(mockFindIdenticalAttachmentFile).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        attachmentPathOrFile: parkedFile,
+        destinationPath: 'assets/img.png',
+        pluginSettingsComponent: context.pluginSettingsComponent
+      }));
     });
 
     it('should move it onto the proper path once that path is free', async () => {

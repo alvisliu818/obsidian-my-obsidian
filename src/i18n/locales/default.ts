@@ -552,6 +552,10 @@ export const defaultTranslations = {
       description: 'Whether to convert pasted images to JPEG. Applies only when the PNG image content is pasted from the clipboard directly. Typically, for pasting screenshots.',
       name: 'Should convert pasted images to JPEG'
     },
+    shouldDeduplicateIdenticalAttachments: {
+      description: 'When an attachment is collected, moved to its proper folder, or renamed after another plugin created it, and its destination already holds a file with exactly the same content, keep only that file: every link to the incoming attachment is pointed at it, and the incoming attachment is moved to the trash. A destination holding different content still gets the duplicate-name suffix.',
+      name: 'Deduplicate identical attachments'
+    },
     shouldFollowObsidianAttachmentLocation: {
       description: 'If enabled, new attachments go wherever Obsidian\'s own Files and links > Default location for new attachments says, and Location for new attachments below is not used. The file name settings still apply.',
       name: 'Follow Obsidian attachment location'

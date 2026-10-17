@@ -46,6 +46,7 @@ import type { PluginSettingsComponent } from '../plugin-settings-component.ts';
 import type { PluginSettings } from '../plugin-settings.ts';
 
 import { translationsMap } from '../i18n/locales/translations-map.ts';
+import { findIdenticalAttachmentFile } from '../identical-attachment.ts';
 import { selectMode } from '../modals/move-attachment-to-proper-folder-used-by-multiple-notes-modal.ts';
 import { MoveAttachmentToProperFolderUsedByMultipleNotesMode } from '../plugin-settings.ts';
 import { MoveAttachmentToProperFolderCommandHandler } from './move-attachment-to-proper-folder-command-handler.ts';
@@ -85,6 +86,10 @@ interface TestableHandler {
   shouldAddToAbstractFileMenu: () => boolean;
   shouldAddToAbstractFilesMenu: () => boolean;
 }
+
+vi.mock('../identical-attachment.ts', () => ({
+  findIdenticalAttachmentFile: vi.fn()
+}));
 
 vi.mock('@mnaoumov/typescript-lib/abort-controller', async (importOriginal) => ({
   ...await importOriginal<typeof import('@mnaoumov/typescript-lib/abort-controller')>(),
@@ -128,6 +133,7 @@ vi.mock('../modals/move-attachment-to-proper-folder-used-by-multiple-notes-modal
 
 const mockAbortSignalAny = vi.mocked(abortSignalAny);
 const mockCopySafe = vi.mocked(copySafe);
+const mockFindIdenticalAttachmentFile = vi.mocked(findIdenticalAttachmentFile);
 const mockDeleteIfNotUsed = vi.mocked(deleteIfNotUsed);
 const mockEditLinks = vi.mocked(editLinks);
 const mockGetBacklinksForFileSafe = vi.mocked(getBacklinksForFileSafe);
@@ -195,6 +201,9 @@ describe('MoveAttachmentToProperFolderCommandHandler', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // A free destination: the copy lands exactly where it was asked to.
+    mockCopySafe.mockImplementation(({ newPath }) => Promise.resolve(newPath));
+    mockFindIdenticalAttachmentFile.mockResolvedValue(null);
     mockGetSequenceNumberMap.mockResolvedValue(new Map());
     mockIsPathIgnored.mockReturnValue(false);
     mockIsExcludedFromMultipleNotesCheck.mockReturnValue(false);
@@ -474,6 +483,54 @@ describe('MoveAttachmentToProperFolderCommandHandler', () => {
         oldTargetPathOrFile: attachment
       });
       expect(mockDeleteIfNotUsed).toHaveBeenCalledExactlyOnceWith({ app, pathOrFile: attachment });
+    });
+
+    it('should point the notes at an identical file already at the destination instead of copying beside it', async () => {
+      const attachment = createFile('attachment.png');
+      const reference = createReference('[[attachment]]');
+      const backlinkFile = createFile('note1.md');
+      mockGetBacklinksForFileSafe
+        .mockResolvedValueOnce(createBacklinks(new Map([['note1.md', [reference]]])))
+        .mockResolvedValueOnce(createBacklinks(new Map()));
+      getFileByPath.mockReturnValue(backlinkFile);
+      mockGetProperAttachmentPath.mockResolvedValue('new-folder/attachment.png');
+      mockFindIdenticalAttachmentFile.mockResolvedValue(createFile('new-folder/Attachment.png'));
+      mockEditLinks.mockImplementation(async ({ linkConverter }) => {
+        await linkConverter(reference);
+      });
+      mockDeleteIfNotUsed.mockResolvedValue(DeleteIfNotUsedResult.Deleted);
+
+      await runProcessItem(attachment);
+
+      expect(mockFindIdenticalAttachmentFile).toHaveBeenCalledExactlyOnceWith({
+        app,
+        attachmentPathOrFile: attachment,
+        destinationPath: 'new-folder/attachment.png',
+        pluginSettingsComponent
+      });
+      expect(mockCopySafe).not.toHaveBeenCalled();
+      expect(mockUpdateLink).toHaveBeenCalledWith(expect.objectContaining({ newTargetPathOrFile: 'new-folder/Attachment.png' }));
+      // The original is now unused, and goes the way an unused original always went.
+      expect(mockDeleteIfNotUsed).toHaveBeenCalledExactlyOnceWith({ app, pathOrFile: attachment });
+    });
+
+    it('should point the notes at the copy where it really landed when the destination was taken', async () => {
+      const attachment = createFile('attachment.png');
+      const reference = createReference('[[attachment]]');
+      mockGetBacklinksForFileSafe
+        .mockResolvedValueOnce(createBacklinks(new Map([['note1.md', [reference]]])))
+        .mockResolvedValueOnce(createBacklinks(new Map()));
+      getFileByPath.mockReturnValue(createFile('note1.md'));
+      mockGetProperAttachmentPath.mockResolvedValue('new-folder/attachment.png');
+      mockCopySafe.mockResolvedValue('new-folder/attachment 1.png');
+      mockEditLinks.mockImplementation(async ({ linkConverter }) => {
+        await linkConverter(reference);
+      });
+      mockDeleteIfNotUsed.mockResolvedValue(DeleteIfNotUsedResult.Deleted);
+
+      await runProcessItem(attachment);
+
+      expect(mockUpdateLink).toHaveBeenCalledWith(expect.objectContaining({ newTargetPathOrFile: 'new-folder/attachment 1.png' }));
     });
 
     it('should leave an attachment used by a single note alone when it is already in the destination folder', async () => {

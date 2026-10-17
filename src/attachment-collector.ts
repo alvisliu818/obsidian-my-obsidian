@@ -74,6 +74,10 @@ import type { HandedOverSettingsComponent } from './handed-over-settings-compone
 import type { NetworkImageDownloader } from './network-image-downloader.ts';
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';
 
+import {
+  findIdenticalAttachmentFile,
+  mergeIntoIdenticalAttachment
+} from './identical-attachment.ts';
 import { selectMode } from './modals/collect-attachment-used-by-multiple-notes-modal.ts';
 import { NoteOwnerResolver } from './note-owner-resolver.ts';
 import { CollectAttachmentUsedByMultipleNotesMode } from './plugin-settings.ts';
@@ -578,10 +582,20 @@ export class AttachmentCollector {
                   }));
                   return false;
                 }
+                /*
+                 * A destination already holding the same bytes is that copy, made earlier (discussion #96). The
+                 * other notes still use the original, so it stays; this note is simply pointed at the copy.
+                 */
+                const identicalFile = await findIdenticalAttachmentFile({
+                  app,
+                  attachmentPathOrFile: result.oldAttachmentPath,
+                  destinationPath: result.newAttachmentPath,
+                  pluginSettingsComponent
+                });
                 // eslint-disable-next-line require-atomic-updates -- Ignore possible race condition.
                 result = {
                   ...result,
-                  newAttachmentPath: await copySafe({
+                  newAttachmentPath: identicalFile?.path ?? await copySafe({
                     app,
                     newPath: result.newAttachmentPath,
                     oldPathOrFile: result.oldAttachmentPath
@@ -684,6 +698,10 @@ export class AttachmentCollector {
            */
           oldParentFolderPaths.add(dirname(attachmentMoveResult.unitFolderPath ?? attachmentMoveResult.oldAttachmentPath));
 
+          if (await didMergeIntoIdenticalFile(attachmentMoveResult, attachmentMoveResult.newAttachmentPath)) {
+            return;
+          }
+
           const newAttachmentPath = attachmentMoveResult.unitFolderPath
             ? await moveUnitFolder(attachmentMoveResult.unitFolderPath, attachmentMoveResult.oldAttachmentPath, attachmentMoveResult.newAttachmentPath)
             : await renameSafe({
@@ -704,6 +722,50 @@ export class AttachmentCollector {
             newAttachmentPath,
             wasCopied: false
           });
+        }
+
+        /**
+         * Merges the attachment into a byte-identical file already at its destination, instead of moving it
+         * beside that file under a duplicate-name suffix (discussion #96). A unit folder travels whole, so
+         * none of its files is merged.
+         *
+         * The canvas being collected is left to {@link rewriteMovedCanvasReferences}, which rewrites it from
+         * this run's snapshot of its references after the loop. Recorded as a copy, because Obsidian core
+         * rewrites a canvas file node on a rename only, and nothing was renamed.
+         */
+        async function didMergeIntoIdenticalFile(result: AttachmentMoveResult, destinationPath: string): Promise<boolean> {
+          const attachmentFile = app.vault.getFileByPath(result.oldAttachmentPath);
+          if (result.unitFolderPath || !attachmentFile) {
+            return false;
+          }
+
+          const identicalFile = await findIdenticalAttachmentFile({
+            app,
+            attachmentPathOrFile: attachmentFile,
+            destinationPath,
+            pluginSettingsComponent
+          });
+          if (!identicalFile) {
+            return false;
+          }
+
+          await mergeIntoIdenticalAttachment({
+            app,
+            attachmentFile,
+            identicalFile,
+            pluginNoticeComponent,
+            resourceLockComponent,
+            skippedCanvasPaths: new Set([params.note.path])
+          });
+          attachmentMoveResult = {
+            ...result,
+            newAttachmentPath: identicalFile.path
+          };
+          movedAttachments.set(result.oldAttachmentPath, {
+            newAttachmentPath: identicalFile.path,
+            wasCopied: true
+          });
+          return true;
         }
 
         /**

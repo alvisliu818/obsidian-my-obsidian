@@ -62,6 +62,19 @@ Turn on **Skip collecting attachments referenced by a raw path** (`shouldSkipCol
 2. Reference the same image with a normal `![[my-image.png]]` embed from another note and run **Collect attachments** with the setting **off** - the image is relocated even though `raw-ref.md` still points at the old path.
 3. Turn the setting **on** and repeat - the image is left where it is, and a notice reports that it is referenced by a raw path.
 
+## Identical copies
+
+Collecting the same image from two notes into one folder normally leaves two files, `image.png` and `image 1.png`, which differ only by the suffix. Turn on **Deduplicate identical attachments** (`shouldDeduplicateIdenticalAttachments`) to keep one: when the destination already holds a file with exactly the same content, every link to the incoming attachment is pointed at that file - in note bodies, in frontmatter and in canvases - and the incoming attachment is moved to the trash.
+
+The files are compared by content, not by name. Two different images that happen to share a name still get the suffix, so a note is never pointed at a different picture. The same applies to **Move attachment to proper folder** and to attachments other plugins create.
+
+### Try it
+
+1. Set **Location for new attachments** to `_Attachments`, and leave **Rename collected attachments** off so the names survive.
+2. Put a copy of the same image into two folders under the same name, `a/image.png` and `b/image.png`, and embed each from its own note.
+3. Run **Collect attachments in current note** in both notes with the setting **off** - `_Attachments` ends up holding `image.png` and `image 1.png`.
+4. Turn the setting **on** and repeat with fresh copies - `_Attachments` holds one `image.png`, both notes embed it, and the second copy is in the trash.
+
 ## Attachments that are really a folder
 
 Some attachments are a directory tree rather than a file: a page saved from a browser sits next to a `_files/` folder holding its images and stylesheets, and a drawing sits next to the pictures it references. Collecting moves the file that was linked and leaves its siblings behind, so the attachment arrives intact-looking but blank.
