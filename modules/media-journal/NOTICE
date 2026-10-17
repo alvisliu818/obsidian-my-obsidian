@@ -1,0 +1,31 @@
+THIRD-PARTY NOTICES
+===================
+
+This module keeps the Media Recorder plugin whole. Nothing in it was
+rewritten for the merge: it still calls this.loadData()/this.saveData()
+and the host shadows those two so the module reads and writes its own
+slice of my-obsidian's single data.json.
+
+  Media Recorder
+  https://github.com/Alaxanalax10/obsidian-media-journal
+  Copyright (C) 2020-2026 by Dynalist Inc. (0-BSD, see LICENSE)
+
+  Permission to use, copy, modify, and/or distribute this software for any
+  purpose with or without fee is hereby granted.
+
+  THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+  WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+  MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+  SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+  WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+  ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
+  IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+Changes made only for the merge:
+
+  - the module registers itself through the host's ModuleDescriptor list
+    instead of its own manifest id; its original id, "media-recorder", is
+    kept alive in app.plugins.plugins so anything looking it up still finds
+    it.
+  - its styles.css now lives as the "Media Journal" section of the host
+    root styles.css, because an Obsidian plugin loads exactly one.
