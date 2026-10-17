@@ -1,6 +1,7 @@
 import type { ImportedAttachment } from '@obsidian-typings/obsidian-public-latest';
 import type {
   App,
+  TFile,
   TFolder
 } from 'obsidian';
 
@@ -23,7 +24,7 @@ interface GestureHolder {
   gesture: InsertGesture | null;
 }
 
-type ImportAttachmentsFunction = (attachmentsToImport: ImportedAttachment[], folder: null | TFolder) => Promise<void>;
+type ImportAttachmentsFunction = (attachmentsToImport: ImportedAttachment[], folder: null | TFolder) => Promise<TFile[]>;
 
 interface ImportAttachmentsHolder {
   importAttachments: ImportAttachmentsFunction;
@@ -37,7 +38,7 @@ describe('AppImportAttachmentsPatchComponent', () => {
 
   beforeEach(() => {
     gestureHolder = { gesture: null };
-    importAttachmentsMock = vi.fn<ImportAttachmentsFunction>().mockResolvedValue(undefined);
+    importAttachmentsMock = vi.fn<ImportAttachmentsFunction>().mockResolvedValue([]);
     app = strictProxy<App>({ importAttachments: importAttachmentsMock });
     recordMock = vi.fn<PastedImageMarker['record']>().mockResolvedValue(undefined);
   });
