@@ -148,6 +148,11 @@ export class BrowserTab {
 
   // ---------------- public API ----------------
 
+  /** 主 webview（PopupLayer 页内渲染 popup 用） */
+  getWebview(): IWebviewTag {
+    return this.webview;
+  }
+
   async loadUrl(url: string): Promise<void> {
     if (this.disposed) return;
     const target = url || "about:blank";

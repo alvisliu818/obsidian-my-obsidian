@@ -251,11 +251,15 @@ export default class BrowserPlugin extends Plugin {
   }
 
   private buildPopupLayer(): void {
-    if (this.popupLayer || !this.extPreloadUrl) return;
-    this.popupLayer = new PopupLayer(document.body, this.extHost, this.extPreloadUrl);
-    this.popupLayer.onOpenNewTab = (url) => void this.openUrl(url, true);
-    // 扩展 popup 里的设置齿轮（chrome.runtime.openOptionsPage）→ 当前页签打开设置页
-    this.popupLayer.onOpenOptions = (rec) => {
+    if (this.popupLayer) return;
+    this.popupLayer = new PopupLayer(
+      this.extHost,
+      () => this.activeTab()?.getWebview() ?? null,
+      (msg) => new Notice(msg),
+    );
+    // 扩展 popup 设置齿轮（chrome.runtime.openOptionsPage → binding 桥 → extHost）→
+    // 当前页签打开设置页
+    this.extHost.onOpenOptionsPage = (rec) => {
       const url = this.extHost.optionsPageUrl(rec);
       if (!url) {
         new Notice(`扩展「${rec.name}」没有设置页`);
@@ -530,7 +534,8 @@ export default class BrowserPlugin extends Plugin {
         fs.mkdirSync(dir, { recursive: true });
         for (const [name, src] of sources) fs.writeFileSync(pathMod.join(dir, name), src, "utf8");
         this.preloadUrl = toFileUrl(pathMod.join(dir, "preload.js"));
-        this.extPreloadUrl = toFileUrl(pathMod.join(dir, "ext-preload.js"));
+        this.extPreloadUrl = toFileUrl(pathMod.join(dir, "ext-preload.js")); // 保留写盘：页面直开路径的兜底
+        void this.extPreloadUrl;
       } catch (e) {
         console.warn("[obsidian-browser] preload write failed", e);
       }

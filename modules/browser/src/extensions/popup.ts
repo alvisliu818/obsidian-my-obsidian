@@ -1,89 +1,82 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ExtensionHost } from "./extensionHost";
-import type { ExtensionRecord } from "../types";
+import type { ExtensionRecord, IWebviewTag } from "../types";
+import { beginPopupWorld, evalPopupJs } from "./cs-runtime";
+import { closeExtensionPopupInPage, showExtensionPopupInPage } from "./extPopup";
 
 /**
- * Extension popups: a floating <webview> pinned under the toolbar icon.
+ * Extension popups —— 源侧（siyuan-plugin-browser）架构：**页内渲染 + 扩展世界注入**。
  *
- * A webview (not an iframe) because the popup lives on file:// — an iframe from
- * the app:// host could not reach into it to install the chrome shim, and the
- * popup's own scripts need that shim before they run.
+ * showExtensionPopupInPage 把 popup.html 的 body/CSS/脚本渲染进当前页签页面的
+ * #ob-ext-popup-host 容器，脚本经 beginPopupWorld 新建的扩展专属世界逐文件执行 ——
+ * shim 在首个脚本前同步建立（无 IPC 异步竞态），世界全局与页面隔离（AdGuard 自带
+ * 的 runtime/*.js polyfill 空壳 chrome 不会覆盖 shim）。这与 cs-runtime/SW 的
+ * binding 桥是同一套通道：设置齿轮（openOptionsPage → hostCall("openoptions")）。
+ *
+ * 历史教训：旧实现用「独立 webview + extPreload IPC 握手」交付 shim —— popup 页面
+ * 没有 window.require（webview 无 nodeIntegration），extPreload 拿不到 ipcRenderer
+ * 提前 return，shim 从未交付（window.chrome 一直是页面 polyfill 的空壳）。
  */
-/** Electron's <webview> is not in lib.dom — this covers what we use. */
-type PopupWebview = HTMLElement & { send(channel: string, ...args: unknown[]): void };
-
 export class PopupLayer {
-  private layer: HTMLDivElement | null = null;
-  private current: { webview: PopupWebview; rec: ExtensionRecord } | null = null;
+  private current: { rec: ExtensionRecord; webview: IWebviewTag } | null = null;
 
   constructor(
-    private host: HTMLElement,
     private extHost: ExtensionHost,
-    private extPreloadUrl: string,
+    /** 当前活动页签的主 webview（popup 渲染进它的页面） */
+    private getWebview: () => IWebviewTag | null,
+    private onNotice: (msg: string) => void,
   ) {}
 
   get isOpen(): boolean {
-    return !!this.layer;
+    return !!this.current;
   }
 
   toggle(rec: ExtensionRecord, anchor: HTMLElement): void {
-    if (this.current?.rec.id === rec.id && this.isOpen) {
+    if (this.current?.rec.id === rec.id) {
       this.close();
       return;
     }
     this.close();
     if (!rec.popup) return;
 
+    const webview = this.getWebview();
+    if (!webview) {
+      this.onNotice("没有可用的浏览器页签");
+      return;
+    }
+    if (!rec.electronId) {
+      this.onNotice(`扩展「${rec.name}」未完成原生加载（重启 Obsidian 后重试）`);
+      return;
+    }
+
     const rect = anchor.getBoundingClientRect();
-    const layer = document.createElement("div");
-    layer.className = "ob-popup-layer";
-    layer.style.left = `${Math.max(8, rect.left - 220)}px`;
-    layer.style.top = `${Math.min(window.innerHeight - 40, rect.bottom + 6)}px`;
-
-    const wv = document.createElement("webview") as unknown as PopupWebview;
-    wv.setAttribute("partition", "persist:obsidian-browser");
-    wv.setAttribute("webpreferences", "contextIsolation=no");
-    wv.setAttribute("allowpopups", "");
-    if (this.extPreloadUrl) wv.setAttribute("preload", this.extPreloadUrl);
-    wv.setAttribute("src", this.extHost.extensionFileUrl(rec, rec.popup));
-    wv.className = "ob-popup-webview";
-    layer.appendChild(wv);
-
-    wv.addEventListener("ipc-message", (e: any) => {
-      if (e.channel === "ob-popup-request") {
-        wv.send("ob-popup-shim", this.extHost.shimSourceFor(rec));
-      } else if (e.channel === "obsidian-browser-open-new-tab") {
-        this.onOpenNewTab?.(String(e.args?.[0] ?? ""));
-        this.close();
-      } else if (e.channel === "ob-open-options") {
-        // 扩展 popup 里的设置齿轮（chrome.runtime.openOptionsPage）→ 宿主开设置页
-        const current = this.current?.rec ?? rec;
-        this.close();
-        this.onOpenOptions?.(current);
-      }
-    });
-
-    document.addEventListener("pointerdown", this.outsideHandler, true);
-    this.host.appendChild(layer);
-    this.layer = layer;
-    this.current = { webview: wv, rec };
+    const info = this.extHost.extInfoOf(rec);
+    void showExtensionPopupInPage({
+      webview,
+      extPath: this.extHost.extPathOf(rec),
+      electronId: rec.electronId,
+      popupPath: rec.popup,
+      anchorRect: { right: rect.right, bottom: rect.bottom },
+      begin: () => beginPopupWorld(webview, info),
+      evalJs: (src: string, relPath: string) => {
+        const fakeUrl = "chrome-extension://" + rec.electronId + "/" + String(relPath).replace(/^\.\//, "");
+        const prefixed = "self.__obSetCurrentScript && self.__obSetCurrentScript(" + JSON.stringify(fakeUrl) + ");\n" + src;
+        return evalPopupJs(webview, info, prefixed).then((rr) => {
+          if (!rr.ok) throw new Error(rr.error);
+          return rr.value;
+        });
+      },
+    })
+      .then((out) => {
+        if (out.ok) this.current = { rec, webview };
+        else this.onNotice(`打开「${rec.name}」面板失败: ${out.error ?? ""}`);
+      })
+      .catch((e) => this.onNotice(`打开「${rec.name}」面板失败: ${String(e?.message || e)}`));
   }
 
-  onOpenNewTab: ((url: string) => void) | null = null;
-  /** popup 里调用 chrome.runtime.openOptionsPage 时触发（宿主负责打开设置页） */
-  onOpenOptions: ((rec: ExtensionRecord) => void) | null = null;
-
-  private outsideHandler = (e: PointerEvent) => {
-    if (!this.layer) return;
-    const t = e.target as Node | null;
-    if (this.layer.contains(t)) return;
-    this.close();
-  };
-
   close(): void {
-    document.removeEventListener("pointerdown", this.outsideHandler, true);
-    this.layer?.remove();
-    this.layer = null;
+    const cur = this.current;
     this.current = null;
+    if (cur) void closeExtensionPopupInPage(cur.webview).catch(() => undefined);
   }
 }

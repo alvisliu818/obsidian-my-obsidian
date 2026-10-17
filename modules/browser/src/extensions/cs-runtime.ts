@@ -129,6 +129,8 @@ export interface ICsRuntimeHost {
      *  面板世界会随 removeExtension 被销毁（binding 失效 → hostCall 永挂），
      *  面板/存储路径的唤醒必须用这个 */
     wakeSw?(electronId: string): Promise<void>;
+    /** 扩展 popup/页面调 chrome.runtime.openOptionsPage（设置齿轮）→ 宿主开设置页 */
+    openExtensionOptions?(ext: ICsExtInfo): void;
 }
 
 let manager: CsRuntimeManager | null = null;
@@ -896,6 +898,15 @@ class CsPageSession {
         if (req.type === "tabs-sendmessage") {
             // popup 世界 → content 世界的 onMessage 监听器（SW↔CS 路由缺失的替代）
             return await this.dispatchToContentWorld(ext, args);
+        }
+        if (req.type === "openoptions") {
+            // chrome.runtime.openOptionsPage（扩展 popup 设置齿轮）→ 宿主当前页签打开设置页
+            try {
+                this.host.openExtensionOptions?.(ext);
+            } catch (e) {
+                console.warn("[browser-plugin] cs-runtime: openoptions 处理失败:", e);
+            }
+            return { data: null };
         }
         return { err: "unknown bridge type: " + req.type };
     }
@@ -1978,13 +1989,9 @@ function buildShim(ext: ICsExtInfo, messages: Record<string, any>): string {
         onMessageExternal: eventHub(),
         getBackgroundPage: function () { return Promise.resolve(undefined); },
         openOptionsPage: function () {
-            // AdGuard 等扩展的 popup 设置齿轮调它；原先是静默 no-op → 设置页打不开。
-            // 经宿主通道让宿主在当前页签打开 options 页（PopupLayer 消费 ob-open-options）。
-            try {
-                var req = window.require;
-                var ipc = req && req("electron") && req("electron").ipcRenderer;
-                if (ipc && ipc.sendToHost) ipc.sendToHost("ob-open-options");
-            } catch (e) {}
+            // AdGuard 等扩展 popup 的设置齿轮。世界走 binding 桥（hostCall）回宿主，
+            // 宿主在当前页签打开 options 页。与宿主路由的 "openoptions" 配对。
+            try { hostCall("openoptions", {}).catch(function () {}); } catch (e) {}
             return Promise.resolve();
         },
         setUninstallURL: function () {},
@@ -2176,6 +2183,16 @@ export function buildShimSource(extId: string, baseUrl: string): string {
     lastError: null,
     getURL: function (p) { return BASE + String(p || "").replace(/^\\/+/, ""); },
     getManifest: function () { return window.__obExtManifest || {}; },
+    // AdGuard 等扩展 popup 的设置齿轮调它；缺了直接 TypeError，设置页打不开。
+    // 经宿主通道（PopupLayer 消费 ob-open-options）在当前页签打开设置页。
+    openOptionsPage: function () {
+      try {
+        var req = window.require;
+        var ipc = req && req("electron") && req("electron").ipcRenderer;
+        if (ipc && ipc.sendToHost) ipc.sendToHost("ob-open-options");
+      } catch (e) {}
+      return Promise.resolve();
+    },
     sendMessage: function (msg, cb) { bus.emit(msg); if (typeof cb === "function") cb(null); return Promise.resolve(null); },
     onMessage: bus,
     onInstalled: bus,
@@ -2206,8 +2223,15 @@ export function buildShimSource(extId: string, baseUrl: string): string {
     scripting: { executeScript: function () { return Promise.resolve(); }, insertCSS: function () { return Promise.resolve(); } }
   };
   try {
-    if (!window.chrome) window.chrome = shim;
-    else Object.keys(shim).forEach(function (k) { if (!(k in window.chrome)) window.chrome[k] = shim[k]; });
+    if (!window.chrome) {
+      window.chrome = shim;
+    } else {
+      // 页面自带 polyfill（如 AdGuard 的 runtime/*.js）会在 shim 异步到达前先定义一个
+      // 不完整的 chrome（无 runtime 或 stub 实现）——「键不存在才补」会让我们的
+      // runtime/storage/i18n 永远落不了地（popup 设置齿轮因此 TypeError）。
+      // 我们的键都接了宿主桥，是有真实实现的，直接覆盖。
+      Object.keys(shim).forEach(function (k) { try { window.chrome[k] = shim[k]; } catch (e) {} });
+    }
   } catch (e) { window.chrome = shim; }
   window.__obChromeShim = true;
 })();

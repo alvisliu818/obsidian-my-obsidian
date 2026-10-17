@@ -9,9 +9,30 @@
  * define window.chrome for the popup.
  */
 (function () {
-  const req = (window as any).require as ((name: string) => any) | undefined;
-  const ipcRenderer = req?.("electron")?.ipcRenderer;
+  // preload 作用域里 require 是 Electron 原生绑定（沙箱下也有受限版），但**不在
+  // window 上**——webview 没有 nodeIntegration 时页面世界读 window.require 是
+  // undefined，此前 extPreload 因此拿不到 ipcRenderer 直接 return，popup shim
+  // 从未交付过（window.chrome 一直是 AdGuard 自带 polyfill 的空壳）。
+  const nodeRequire: ((name: string) => any) | undefined = (() => {
+    try {
+      // @ts-ignore —— require 由 Electron 注入 preload 作用域
+      if (typeof require === "function") return require;
+    } catch {
+      /* fallthrough */
+    }
+    return (window as any).require;
+  })();
+  const ipcRenderer = nodeRequire?.("electron")?.ipcRenderer;
   if (!ipcRenderer) return;
+  // 页面世界的 shim 用它回传宿主（页面没有 window.require，见上）
+  (window as any).__obHostSend = (channel: string, ...args: unknown[]) => {
+    try {
+      ipcRenderer.sendToHost(channel, ...args);
+    } catch {
+      /* guest gone */
+    }
+  };
+  (window as any).__obExtPreloadOk = true;
 
   function injectCss(css: string): void {
     const style = document.createElement("style");

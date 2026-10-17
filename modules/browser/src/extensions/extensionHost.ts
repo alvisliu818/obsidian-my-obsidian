@@ -352,8 +352,32 @@ export class ExtensionHost {
       wakeSw: async (electronId: string) => {
         await this.wakeSw(electronId);
       },
+      openExtensionOptions: (ext) => {
+        const rec = this.getRecords().find((r) => r.electronId === ext.electronId);
+        if (rec) this.onOpenOptionsPage?.(rec);
+      },
     });
     this.csRuntimeInited = true;
+  }
+
+  /** 扩展 popup 设置齿轮（openOptionsPage → binding 桥 → 这里）→ 宿主开设置页 */
+  onOpenOptionsPage: ((rec: ExtensionRecord) => void) | null = null;
+
+  /** 扩展所在磁盘目录（公开给 PopupLayer/世界注入用） */
+  extPathOf(rec: ExtensionRecord): string {
+    return this.dirOf(rec);
+  }
+
+  /** PopupLayer/整页注入共用的扩展世界信息 */
+  extInfoOf(rec: ExtensionRecord): ICsExtInfo {
+    return {
+      electronId: rec.electronId ?? "",
+      path: this.dirOf(rec),
+      name: rec.name,
+      version: rec.version,
+      defaultLocale: "en",
+      contentScripts: rec.contentScripts.map((cs) => ({ matches: cs.matches, js: cs.js, css: cs.css })),
+    };
   }
 
   remove(id: string): void {
