@@ -30,7 +30,17 @@ const FENCE_OPEN_RE = /^(\s*)(`{3,}|~{3,})(.*)$/;
  */
 const MATH_FENCE_RE = /^(\s*)\$\$[ \t]*$/;
 const PROPERTY_RE = /^([A-Za-z][A-Za-z0-9_-]*)::\s*(.*)$/;
-const LIST_RE = /^(\s*)-(?:\s+(.*))?$/;
+/**
+ * 列表项。标记 `-` 后只消费**一个**空格(`\s` 而非 `\s+`),其余前导空白算内容。
+ *
+ * 用 `\s+` 会把 `-     # 注释` 的前导空格全吃掉,块文本变成 `# 注释`——
+ * 混合编辑的代码文件里,函数内缩进的注释(`    # xxx`)经大纲往返就丢了缩进,
+ * 一保存整段注释被拉到列 0(改了用户源文件)。
+ *
+ * 只吃一个空格后,`-   text` 里的多余空格属于内容,序列化照样原样写回,往返自洽。
+ * 与续行一致:续行也是剥掉固定一级缩进、其余保留(stripIndent)。
+ */
+const LIST_RE = /^(\s*)-(?:\s(.*))?$/;
 const MARKER_RE = new RegExp(`^(${MARKERS.join('|')})\\s+(.*)$`);
 /**
  * Top-level lines that keep their verbatim raw rendering (markdown / org

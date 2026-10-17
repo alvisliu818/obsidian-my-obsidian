@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { buildCodeDoc, reconstructFromDoc, toOutlineDocText } from '../src/features/codeDoc';
 import { parseCodeFence } from '../src/blocks/codeFence';
 import { parseDocument } from '../src/core/parser';
+import { serializeDocument } from '../src/core/serializer';
 import type { Block } from '../src/types';
 
 const rt = (text: string, lang: string) => reconstructFromDoc(buildCodeDoc(text, lang));
@@ -157,7 +158,7 @@ describe('P2 混合视图链路', () => {
     expect(starts).toEqual([2, 6]);
   });
 
-  it('混合链路:toOutlineDocText → parseDocument → 重建(代码逐字,注释缩进归一)', () => {
+  it('混合链路:toOutlineDocText → parseDocument → 重建(代码与注释均逐字,缩进保留)', () => {
     const doc = parseDocument(toOutlineDocText(buildCodeDoc(py, 'python')));
     // 模拟 HybridCodeBlockEditorView.serializeDocCurrent:围栏剥壳,其余逐字,子块递归
     const walk = (bs: Block[]): string[] =>
@@ -167,16 +168,9 @@ describe('P2 混合视图链路', () => {
         return b.children.length ? [...lines, ...walk(b.children)] : lines;
       });
     const out = walk(doc.blocks).join('\n');
-    expect(out).toBe([
-      '# 顶部说明:见 [[设计笔记]]',
-      'import os',
-      '',
-      'def f(x):',
-      '# 缩进注释',
-      '    return x + 1  # 行内注释',
-      '',
-      'print(f(1))',
-    ].join('\n'));
+    // 注释行的前导缩进原样保留(不再归一到列 0):代码文件里函数内的注释
+    // 一保存就被拉到列 0,等于插件改了用户的源文件。
+    expect(out).toBe(py);
     expect(out).not.toContain('```');
   });
 
@@ -188,5 +182,67 @@ describe('P2 混合视图链路', () => {
       return (fence ? fence.content.split('\n') : b.text.split('\n'));
     });
     expect(lines.join('\n')).toBe(code);
+  });
+});
+
+/**
+ * 缩进保留(v1 边界已修):代码文件里函数内的注释是缩进的,往返必须逐字无损——
+ * 否则插件一保存就把用户的注释拉到列 0,等于改了源文件。
+ *
+ * 走的是混合视图真正的重建路径(块文本行 + 子块递归),不是 reconstructFromDoc:
+ * 注释区在编辑器里是块,保存时取的是块的文本行。
+ */
+describe('缩进往返:混合视图保存路径逐字节无损', () => {
+  const reconstructViaBlocks = (lang: string, src: string): string => {
+    const vdoc = toOutlineDocText(buildCodeDoc(src, lang));
+    const doc = parseDocument(vdoc);
+    const walk = (bs: Block[]): string[] =>
+      bs.flatMap((b) => {
+        const fence = parseCodeFence(b.text);
+        const lines = (fence ? fence.content : b.text).split('\n');
+        return b.children.length ? [...lines, ...walk(b.children)] : lines;
+      });
+    return walk(doc.blocks).join('\n');
+  };
+
+  it('python:多层缩进注释与行内注释并存', () => {
+    const src = [
+      '# 顶部说明',
+      'import os',
+      '',
+      'def f(x):',
+      '    # 缩进注释',
+      '        # 更深一层',
+      '    return x + 1  # 行内注释',
+      '',
+      'print(f(1))',
+    ].join('\n');
+    expect(reconstructViaBlocks('python', src)).toBe(src);
+  });
+
+  it('typescript:块注释与行注释混排', () => {
+    const src = [
+      '// 顶层说明',
+      'export function f() {',
+      '    /*',
+      '     * 块注释(缩进)',
+      '     */',
+      '    // 行注释',
+      '    return 1;',
+      '}',
+    ].join('\n');
+    expect(reconstructViaBlocks('typescript', src)).toBe(src);
+  });
+
+  it('Tab 缩进的注释同样逐字无损', () => {
+    const src = 'def f():\n\t# tab 注释\n\treturn 1\n';
+    expect(reconstructViaBlocks('python', src)).toBe(src);
+  });
+
+  it('parser:列表项标记后的多余空格属于内容(LIST_RE 只吃一个)', () => {
+    const doc = parseDocument('-     # x');
+    expect(doc.blocks[0].text).toBe('    # x');
+    // 序列化照样原样写回,往返自洽
+    expect(serializeDocument(doc)).toBe('-     # x');
   });
 });

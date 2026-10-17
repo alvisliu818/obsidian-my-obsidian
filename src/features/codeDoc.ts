@@ -11,6 +11,7 @@
 //
 // 边界(v1):行内注释不拆块(一行 = 半代码半注释,拆两个编辑器会破坏
 // 行对应关系);纯空行串不算注释块(归入代码段,避免面板出现空 Logseq 块)。
+// 注释行的**前导缩进逐字保留**(见 toOutlineDocText 的「缩进往返」)。
 
 /** 每语言的整行注释前缀(行首缩进后匹配) */
 const LINE_MARKERS: Record<string, string[]> = {
@@ -231,29 +232,33 @@ export function wrapCodeFence(content: string, lang: string): string {
  * 虚拟文档块 → Logseq 大纲格式文本(供 parseDocument/块编辑器消费)。
  *
  * - 代码块:围栏文本逐字(解析器把围栏整体归为一个 raw 块,内部永不解析);
- * - 注释块:首行作为顶层列表项(`- ` + 剥缩进行),后续行缩进 +2 空格 ——
- *   解析器的软换行规则会把它们合并为**一个块**(appendSoftLine 会剥掉恰好
- *   一级缩进,重建逐字无损);块内空行写成缩进空行(解析器的 indented-blank
+ * - 注释块:首行作为顶层列表项(`- ` + **原样保留缩进的行**),后续行缩进 +2
+ *   空格 —— 解析器的软换行规则会把它们合并为**一个块**(appendSoftLine 会剥掉
+ *   恰好一级缩进,重建逐字无损);块内空行写成缩进空行(解析器的 indented-blank
  *   分支保持块不闭合)。用列表项而非裸行:裸行 `# x` 会被解析器当 markdown
  *   标题(raw heading)渲染成大字标题,不符合代码注释的块观感;列表项则
  *   统一为普通 Logseq 块。
  * - 块与块之间写一个空行:解析器切分 raw 区的时机是「空行 + 下一个结构行」,
- *   且要求下一行 depth 0 —— 所以每个注释行都剥掉前导缩进后发出。
- *   (v1 边界:注释行的原始缩进不保留,首次混合保存后归一到列 0;
- *   代码段在围栏内逐字无损。)空行是合成分隔符,重建时不落盘。
+ *   且要求下一行 depth 0。空行是合成分隔符,重建时不落盘。
+ *
+ * 缩进往返(原 v1 边界,已修):以前首行要剥掉前导缩进(`strip`),因为列表项
+ * 的 `- ` 之后必须紧跟内容;而代码文件里函数内的注释是缩进的,一保存就被拉到
+ * 列 0 —— 等于插件改了用户的源文件。现在两端配合保留:parser 的 LIST_RE 只
+ * 消费 `-` 后的一个空格(其余前导空白算内容),这里也不再剥,逐字往返。
  */
 export function toOutlineDocText(blocks: CodeDocBlock[]): string {
   const out: string[] = [];
-  const strip = (s: string): string => s.replace(/^[ \t]+/, '');
   for (const b of blocks) {
     if (b.kind === 'code') {
       out.push(...b.text.split('\n'));
     } else {
       const lines = b.text.split('\n');
       if (lines.length === 0) continue;
-      out.push('- ' + strip(lines[0]));
+      // 逐字保留前导缩进(见函数注释「缩进往返」):`- ` 之后的多余空格属于
+      // 内容,LIST_RE 只消费标记后的那一个空格。
+      out.push('- ' + lines[0]);
       for (let k = 1; k < lines.length; k++) {
-        out.push(lines[k] === '' ? '  ' : '  ' + strip(lines[k]));
+        out.push(lines[k] === '' ? '  ' : '  ' + lines[k]);
       }
     }
     out.push('');
