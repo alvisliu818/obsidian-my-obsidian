@@ -685,9 +685,10 @@ export class MountPanelView extends ItemView {
     }
 
     const text = isTextMount(extOf(node.name));
-    // 文件行补一个空 caret 占位,图标与同级文件夹的图标对齐
-    // (否则文件图标顶到文件夹 caret 的位置,父子缩进看不出来)。
-    row.createSpan({ cls: 'logseq-mount-caret' });
+    // 文件行不再补空 caret 占位:paddingInlineStart 的 29px(=文件夹 14px +
+    // caret 11px + 间距 4px)本身就是给 caret 留的位置,再画一个空占位会双重
+    // 补偿,文件整体比同级文件夹右移 15px(实测报告:同级文件/文件夹不对齐)。
+    // 不占位时文件图标起点 = 29 + depth*17,正好落在文件夹图标的列上。
     // Files get the icon theme's own artwork when it is installed, so a mounted
     // tree shows the same icons the vault's files do. Folders keep a generic
     // marker: the theme resolves folder icons by vault path, which an
