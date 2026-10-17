@@ -228,6 +228,7 @@ export class Plugin extends PluginBase {
             isNote: (path: string): boolean => pluginSettingsComponent.isNoteEx(path),
             isPathIgnored: (path: string): boolean => settings.isPathIgnored(path),
             shouldDeleteConflictingAttachments: settings.shouldDeleteConflictingAttachments,
+            shouldDeleteEmptyNoteFolders: settings.shouldDeleteEmptyNoteFolders,
             shouldHandleDeletions: settings.shouldHandleDeletions,
             shouldHandleRenames: settings.shouldHandleRenames,
             shouldRenameAttachmentFiles: settings.shouldRenameAttachmentFiles,

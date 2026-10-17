@@ -165,6 +165,12 @@ export interface RenameDeleteHandlerSettings {
   shouldDeleteConflictingAttachments: boolean;
 
   /**
+   * Whether {@link emptyFolderBehavior} also applies to the folder a deleted note leaves empty. When off, only
+   * the folders of the attachments the deletion removed are candidates.
+   */
+  shouldDeleteEmptyNoteFolders: boolean;
+
+  /**
    * Whether to handle deletions.
    */
   shouldHandleDeletions: boolean;
@@ -372,7 +378,11 @@ class DeleteHandler {
       return;
     }
 
-    const parentFolderPaths = new Set<string>([dirname(this.file.path)]);
+    /*
+     * The note's own folder is a candidate only on request: it is usually a folder the user made to file notes in,
+     * which Obsidian never deletes with its last note either. A move already leaves a note's old folder alone.
+     */
+    const parentFolderPaths = new Set<string>(settings.shouldDeleteEmptyNoteFolders ? [dirname(this.file.path)] : []);
 
     if (settings.shouldHandleDeletions) {
       const cache = this.deletedMetadataCacheMap.get(this.file.path);

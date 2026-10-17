@@ -29,6 +29,7 @@ interface DemoSettingsPatch {
   shouldDeleteConflictingAttachments?: boolean;
   shouldHandleDeletions?: boolean;
   shouldHandleRenames?: boolean;
+  shouldDeleteEmptyNoteFolders?: boolean;
   shouldRenameAttachmentFiles?: boolean;
   shouldRenameAttachmentFolder?: boolean;
   shouldRescueSharedAttachments?: boolean;

@@ -214,6 +214,24 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
           }),
           this.settingEx({
             desc: createFragment((f) => {
+              f.appendText('Whether the folder a deleted note leaves empty is deleted too, the way ');
+              appendCodeBlock(f, 'Empty folder behavior');
+              f.appendText(' says.');
+              f.createEl('br');
+              f.appendText('When disabled, only the attachment folders a deletion leaves empty are deleted, and the note\'s own folder stays.');
+            }),
+            name: 'Should delete empty note folders',
+            render: (setting) => {
+              setting.addToggle((toggle) => {
+                this.bind({
+                  propertyName: 'shouldDeleteEmptyNoteFolders',
+                  valueComponent: toggle
+                });
+              });
+            }
+          }),
+          this.settingEx({
+            desc: createFragment((f) => {
               f.appendText('Whether an attachment that survives a deletion, because another note still references it, is moved into that note\'s attachment folder.');
               f.createEl('br');
               f.appendText('When disabled, the attachment stays where the deleted note had put it.');

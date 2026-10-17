@@ -153,6 +153,11 @@ export const MIGRATABLE_SETTING_DESCRIPTORS: readonly MigratableSettingDescripto
   },
   {
     kind: MigratableSettingKind.Boolean,
+    name: 'Should delete empty note folders',
+    propertyName: 'shouldDeleteEmptyNoteFolders'
+  },
+  {
+    kind: MigratableSettingKind.Boolean,
     name: 'Should rescue shared attachments',
     propertyName: 'shouldRescueSharedAttachments'
   },
@@ -414,6 +419,10 @@ function writeMigratableSetting(params: WriteMigratableSettingParams): void {
     }
     case 'shouldDeleteConflictingAttachments': {
       settings.shouldDeleteConflictingAttachments = checkBoolean(propertyName, value);
+      break;
+    }
+    case 'shouldDeleteEmptyNoteFolders': {
+      settings.shouldDeleteEmptyNoteFolders = checkBoolean(propertyName, value);
       break;
     }
     case 'shouldHandleDeletions': {

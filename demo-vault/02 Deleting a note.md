@@ -48,6 +48,27 @@ await require('/demoSetup.ts').changeSettings(app, { emptyFolderBehavior: 'Keep'
 
 Manual equivalent: pick a different **Empty folder behavior** in the plugin's settings.
 
+The folder the deleted note itself sat in is a different case. It is usually a folder you made to file notes in, and Obsidian never deletes it with its last note, so by default only the attachment folders a deletion empties are removed.
+
+- `shouldDeleteEmptyNoteFolders`
+  - Off — the default — keeps the note's own folder even when the deletion leaves it empty. On applies **Empty folder behavior** to that folder too.
+
+```code-button
+---
+caption: Also delete the note's own folder when it is left empty
+---
+await require('/demoSetup.ts').changeSettings(app, { emptyFolderBehavior: 'Delete', shouldDeleteEmptyNoteFolders: true });
+```
+
+```code-button
+---
+caption: Keep the note's own folder (the default)
+---
+await require('/demoSetup.ts').changeSettings(app, { shouldDeleteEmptyNoteFolders: false });
+```
+
+Manual equivalent: toggle **Should delete empty note folders** in the plugin's settings.
+
 ## The folders that are already empty
 
 The setting above only ever sees the folder a deletion has just emptied. A vault that has been in use for a while is usually carrying others — left by a deletion made before the setting was turned on, or by a move made outside Obsidian — and nothing goes looking for them.

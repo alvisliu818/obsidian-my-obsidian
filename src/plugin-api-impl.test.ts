@@ -178,6 +178,7 @@ describe('PluginApiImpl.getSettings', () => {
       includePaths: [],
       notePriorities: [],
       shouldDeleteConflictingAttachments: false,
+      shouldDeleteEmptyNoteFolders: false,
       shouldHandleDeletions: false,
       shouldHandleRenames: false,
       shouldRenameAttachmentFiles: false,

@@ -71,6 +71,7 @@ const SETTING_VALIDATORS: SettingValidators = {
   includePaths: isStringArray,
   notePriorities: isStringArray,
   shouldDeleteConflictingAttachments: isBoolean,
+  shouldDeleteEmptyNoteFolders: isBoolean,
   shouldHandleDeletions: isBoolean,
   shouldHandleRenames: isBoolean,
   shouldRenameAttachmentFiles: isBoolean,
