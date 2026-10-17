@@ -297,15 +297,21 @@ describe('An image pasted into an Excalidraw drawing (issue #65)', () => {
     const drawingFolder = result.drawingPath.slice(0, result.drawingPath.lastIndexOf('/'));
     const drawingFileName = result.drawingPath.slice(result.drawingPath.lastIndexOf('/') + 1, -'.md'.length);
 
-    // With `Excalidraw` not listed, the image stays exactly as `Excalidraw` named it.
-    expect(result.controlPaste?.imagePath).toMatch(/\/Pasted Image [^/]+\.png$/);
+    const expectedFolder = `${drawingFolder}/assets/${drawingFileName}`;
+
+    /*
+     * With `Excalidraw` not listed, the image stays exactly as `Excalidraw` named it. It still lands in the drawing's
+     * resolved folder, which did not exist before this paste: RainCat1998/obsidian-custom-attachment-location#244
+     * reported such a paste in the vault root.
+     */
+    expect(result.controlPaste?.imagePath.startsWith(`${expectedFolder}/`)).toBe(true);
+    expect(result.controlPaste?.imagePath.slice(expectedFolder.length)).toMatch(/^\/Pasted Image [^/]+\.png$/);
 
     /*
      * With it listed, the image carries this plugin's generated name, in the folder the drawing's own template
      * resolves to — the same folder `Excalidraw` was handed for it.
      */
     const renamedPaste = result.renamedPaste;
-    const expectedFolder = `${drawingFolder}/assets/${drawingFileName}`;
     expect(renamedPaste?.imagePath.startsWith(`${expectedFolder}/renamed-`)).toBe(true);
     const renamedName = renamedPaste?.imagePath.slice(expectedFolder.length + 1) ?? '';
 
