@@ -26,6 +26,7 @@ import {
 } from "./settings";
 
 import LogseqEditorPlugin from "../modules/logseq/src/main";
+import type LogseqEditorPluginType from "../modules/logseq/src/main";
 import BrowserPlugin from "../modules/browser/src/main";
 import JupyterNotebookPlugin from "../modules/jupyter/src/main";
 import BreadcrumbNavPlugin from "../modules/breadcrumb/src/main";
@@ -179,6 +180,7 @@ export default class MyObsidianPlugin extends Plugin {
 				descriptors: this.descriptors,
 				save: () => this.saveSettings(),
 				reload: (id) => this.enableModule(id),
+				rerenderCodeFileViews: () => this.rerenderCodeFileViews(),
 			}),
 		);
 		for (const d of this.descriptors) await this.bootModule(d);
@@ -202,7 +204,13 @@ export default class MyObsidianPlugin extends Plugin {
 		const exts = (this.settings.codeFileExtensions ?? DEFAULT_CODE_EXTENSIONS).filter(
 			(e) => !!e && !/^(md|canvas)$/i.test(e),
 		);
-		this.registerView(VIEW_TYPE_CODE_FILE, (leaf) => new CodeFileView(leaf));
+		// 混合编辑引擎长在 logseq 模块里(Monaco 初始化 + 注释区块编辑器都要
+		// 那个插件实例),所以把实例交给视图;模块被关掉时为 null,视图会安静
+		// 退回纯源码形态。懒解析:工厂在叶子真正打开时才执行,那时模块必已就绪。
+		this.registerView(VIEW_TYPE_CODE_FILE, (leaf) => {
+			const logseq = this.live.get("logseq") as unknown as LogseqEditorPluginType | undefined;
+			return new CodeFileView(leaf, logseq ?? null, this.settings);
+		});
 		if (exts.length) this.registerExtensions(exts, VIEW_TYPE_CODE_FILE);
 
 		this.addCommand({
@@ -215,6 +223,21 @@ export default class MyObsidianPlugin extends Plugin {
 				return true;
 			},
 		});
+	}
+
+	/**
+	 * Rebuild every open in-vault code file view.
+	 *
+	 * The hybrid/source choice is baked into the editor at construction, so a
+	 * settings toggle has to remount. Each view rebuilds from the text it was
+	 * last handed, so nothing is lost in the swap.
+	 */
+	rerenderCodeFileViews(): void {
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CODE_FILE)) {
+			const view = leaf.view as CodeFileView | null;
+			if (!view?.file) continue;
+			view.remount();
+		}
 	}
 
 	/** Which modules actually came up. Used by the e2e probe and handy in the
