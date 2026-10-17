@@ -92,7 +92,7 @@ const CLIP_DEFAULT_TEMPLATE = "";
 function renderClipTemplate(_t: string, d: Record<string, any>): string { return String(d?.content || ""); }
 function getDefaultClipMarkdown(_p: any, md: string): string { return String(md || ""); }
 function formatClipExcerpt(x: string): string { return String(x || ""); }
-import { CS_WORLD_PREFIX, cdpEvalOnce, cdpHttpLikelyDead, evalInSwFlat, evalInSwFlatCached, findSwFlatSession, findSwTarget, FlatCommandSender, SW_FLAT_UNAVAILABLE } from "./sw-bridge";
+import { CS_WORLD_PREFIX, cdpHttpLikelyDead, evalInSwBrowserFlat, evalInSwFlat, evalInSwFlatCached, findSwFlatSession, findSwTarget, FlatCommandSender, SW_FLAT_UNAVAILABLE } from "./sw-bridge";
 
 const BRIDGE_NAME = "__obExtHost";
 /** popup/options 页专属世界前缀（独立于 content 世界，避免顶层声明冲突） */
@@ -559,66 +559,15 @@ class CsPageSession {
             return;
         }
         if (method === "Runtime.executionContextCreated") {
-            // Electron 原生注入的扩展 CS 世界（空壳 chrome 死代码）静默化：
-            // 其周期性 chrome.runtime.sendMessage 调用会持续刷
-            // "Unchecked runtime.lastError: Could not establish connection"（用户可见噪音）
-            const c = params?.context || {};
-            const isIsolated = c.type === "isolated" || (c.auxData && c.auxData.type === "isolated");
-            const cname = String(c.name || "");
-            if (isIsolated
-                && String(c.origin || "").indexOf("chrome-extension://") === 0
-                && cname.indexOf(CS_WORLD_PREFIX) !== 0
-                && cname.indexOf(POPUP_WORLD_PREFIX) !== 0) {
-                void this.silenceNativeWorld(Number(c.id));
-            }
+            // ★ 消音器已按用户要求移除：有错误直接解决，不吞。
+            //   原生副本噪音的治本方案是 neutralizeNativeContentScripts（磁盘清空
+            //   manifest.content_scripts，Chromium 不再注入死代码副本）—— 源头
+            //   消失后本不需要消音；真错误（如扩展 boot 异常）必须可见。
             return;
         }
         if (method === "Runtime.bindingCalled" && params?.name === BRIDGE_NAME) {
             void this.onBridgeCall(Number(params.executionContextId), String(params.payload || "{}"));
         }
-    }
-
-    private silencedCtxs = new Set<number>();
-
-    /** 原生世界消音：原生 isolated world 是死代码副本（消息路由断），其周期性
-     *  chrome.runtime.sendMessage（MV3 Promise 风格）reject → unhandledrejection
-     *  → DevTools 刷 "Could not establish connection"。
-     *  注意：原生 chrome 属性是不可配置的 native accessor，defineProperty 装不上桩
-     *  （实测）—— 只能加 unhandledrejection preventDefault（隔离世界全局私有，
-     *  只消音本世界，不影响自建世界/面板世界的真实错误）。 */
-    private async silenceNativeWorld(ctxId: number): Promise<void> {
-        if (this.silencedCtxs.has(ctxId) || this.silencedCtxs.size > 200) return;
-        this.silencedCtxs.add(ctxId);
-        try {
-            await this.send(
-                "Runtime.evaluate",
-                {
-                    expression: `(function () {
-                        try {
-                            if (window.__obSilenced) return;
-                            window.__obSilenced = true;
-                            self.addEventListener("unhandledrejection", function (e) {
-                                try {
-                                    var msg = e && e.reason && (e.reason.message || String(e.reason)) || "";
-                                    // Electron 原生世界三件套噪音：消息路由断（Receiving end）、
-                                    // storage.sync 服务缺失（"sync" is not available in this
-                                    // instance of Chrome —— Chromium 152 原生副本已非空壳，
-                                    // 顶层读设置即抛）。均为死代码副本的功能性缺失，消音。
-                                    if (msg.indexOf("Receiving end") >= 0
-                                        || msg.indexOf("establish connection") >= 0
-                                        || msg.indexOf("not available in this instance of Chrome") >= 0) {
-                                        e.preventDefault();
-                                    }
-                                } catch (e2) {}
-                            });
-                        } catch (e) {}
-                    })()`,
-                    contextId: ctxId,
-                    returnByValue: false,
-                },
-                5000
-            );
-        } catch {}
     }
 
     /** 确保当前文档里所有适用扩展都有可用世界并已执行 CS */
@@ -762,8 +711,15 @@ class CsPageSession {
         }
         const ext = this.host.listNativeExts().find((e) => e.electronId === electronId);
         const result = ext
-            ? await this.route(ext, req).catch((e) => ({ err: String(e?.message || e) }))
+            ? await this.route(ext, req).catch((e: any) => {
+                console.warn("[browser-plugin] route 异常栈:", (e && e.stack) || String(e));
+                return { err: String(e?.message || e) };
+              })
             : { err: "unknown context" };
+        if (result && result.err) {
+            console.warn("[browser-plugin] bridge reply err 完整值:", JSON.stringify(result.err).slice(0, 500),
+                "| type=", req && req.type, "| eid=", String(electronId).slice(0, 14), "| reqId=", req && req.reqId);
+        }
         const replyExpr = `window.__obExtHostResolve && window.__obExtHostResolve(${JSON.stringify(
             JSON.stringify({ reqId: req.reqId, ...result })
         )})`;
@@ -1275,7 +1231,7 @@ class CsPageSession {
             let tries = 0;
             while (parsed && parsed.__noHandlers && tries < 8) {
                 tries++;
-                console.warn("[browser-plugin] SW handlers 未就绪，重试", tries + "/8");
+                console.warn("[browser-plugin] SW handlers 未就绪，重试", tries + "/8", "eid=", ext.electronId.slice(0, 12), "value头100:", String(r.value).slice(0, 100));
                 await new Promise((res) => setTimeout(res, 2000));
                 const r2 = await this.evalInSw(ext, expr);
                 if (r2.err) return { err: r2.err };
@@ -1690,10 +1646,32 @@ class CsPageSession {
                 }
             }
         }
-        if (!target) {
-            // flat 通道（正常启动）：SW 活着就直接 evaluate；不活着由 flat 内部 wake。
+        // ★ 求值一律走进程内 flat 通道（webview.debugger Target 域）。
+        //   实测（2026-10-17）：HTTP 通道的 cdpEvalOnce 直连 SW 的 page-level
+        //   WebSocket —— 握手成功但从不回帧（与 page target 同病），12s 必超时，
+        //   routeSendMessage 全链报 "CDP 会话超时"；flat 通道与 DevTools 探针同构、
+        //   稳定可用。HTTP 找到的 target 仅用于确认 SW 存活，不再承担求值。
+        {
+            // flat 通道：SW 活着就直接 evaluate；不活着由 flat 内部 wake。
             // ★ wake 必须无副作用（startWorkerForScope）—— remove+load 会把正在打开的
             //   面板世界连 binding 一起销毁，popup.js 首个 storage 调用永挂 → 面板全白
+            const wakeCb = async () => {
+                try {
+                    if (this.host.wakeSw) await this.host.wakeSw(eid);
+                    else await this.host.wakeOne(eid);
+                } catch (e: any) {
+                    console.warn("[browser-plugin] flat wake 异常 eid=", String(eid).slice(0, 12), ":", String(e && e.stack || e).slice(0, 300));
+                    throw e;
+                }
+            };
+            // ★ 通道顺序（实测 2026-10-17）：
+            //   ① browser-level flat —— 唯一落在正确 SW context 的路径（探针同构）；
+            //   ② webview.debugger flat —— 它 attach 的 SW session 求值会落在错误
+            //      context，chrome.storage 抛 Electron 内部错误 "Error: No SW"（假
+            //      错误、非 UNAVAILABLE，此前把它排在首位导致正解通道永无机会）；
+            //   ③ 主窗口 debugger 兜底。
+            const bflat = await evalInSwBrowserFlat(eid, expr, wakeCb);
+            if (bflat.err !== SW_FLAT_UNAVAILABLE) return bflat;
             const flat = await evalInSwFlat(
                 (method, params, sessionId) => Promise.race([
                     this.wc.debugger.sendCommand(method, params, sessionId),
@@ -1701,19 +1679,14 @@ class CsPageSession {
                 ]),
                 eid,
                 expr,
-                async () => {
-                    if (this.host.wakeSw) await this.host.wakeSw(eid);
-                    else await this.host.wakeOne(eid);
-                }
+                wakeCb
             );
             if (flat.err !== SW_FLAT_UNAVAILABLE) return flat;
             const alt = await evalInSwViaMainWindow(eid, expr);
             if (alt.err !== SW_FLAT_UNAVAILABLE) return alt;
             return { err: "扩展 SW 未运行且唤醒失败（CDP 不可用？）" };
         }
-        const r = await cdpEvalOnce(target.webSocketDebuggerUrl, expr, 12000);
-        if (r && typeof r === "object" && r.err) return { err: String(r.err) };
-        return { value: r };
+        void target;
     }
 }
 

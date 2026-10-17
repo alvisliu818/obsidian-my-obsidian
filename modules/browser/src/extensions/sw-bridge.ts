@@ -26,7 +26,33 @@
  */
 import { nodeRequire } from "../utils/electron";
 
-const CDP_HTTP = "http://127.0.0.1:9222";
+/**
+ * 本进程自己的 CDP HTTP 端点（remote-debugging-port）。
+ * ★ 不能写死：源侧（思源插件）宿主就是思源、9222 恒成立；本插件宿主是
+ *   Obsidian —— 写死 9222 会打到机器上**恰好开着的思源**的 CDP 上：
+ *   findSwTarget 在思源的 target 列表里找本侧扩展的 SW（永远找不到），
+ *   唤醒循环空转 20×300ms，eval 落点错乱 —— popup/boot 消息恒 __noHandlers。
+ *   从本进程命令行读 --remote-debugging-port：测试/调试启动才有，生产无 →
+ *   ECONNREFUSED → 正常熔断走进程内 flat 通道（与源侧语义一致）。
+ */
+let cdpHttpBaseCache = "";
+function cdpHttpBase(): string {
+  if (cdpHttpBaseCache) return cdpHttpBaseCache;
+  try {
+    const app = nodeRequire<any>("@electron/remote")?.app;
+    if (app?.commandLine?.hasSwitch?.("remote-debugging-port")) {
+      const port = String(app.commandLine.getSwitchValue("remote-debugging-port") || "");
+      if (port) {
+        cdpHttpBaseCache = "http://127.0.0.1:" + port;
+        return cdpHttpBaseCache;
+      }
+    }
+  } catch {
+    /* 非 Electron 环境兜底 */
+  }
+  cdpHttpBaseCache = "http://127.0.0.1:9222";
+  return cdpHttpBaseCache;
+}
 
 interface ISwTarget {
   id: string;
@@ -111,7 +137,7 @@ function wsDecodeServerFrame(buf: Buffer): { opcode: number; fin: boolean; paylo
 }
 
 export interface INodeWsSession {
-  send: (method: string, params?: any) => Promise<any>;
+  send: (method: string, params?: any, sessionId?: string) => Promise<any>;
   onMessage: (fn: (m: any) => void) => void;
   close: () => void;
 }
@@ -220,19 +246,23 @@ export function nodeWsSession(wsUrl: string, timeoutMs = 10000): Promise<INodeWs
           /* ignore */
         });
         const api: INodeWsSession = {
-          send: (method: string, params: any = {}) =>
+          send: (method: string, params: any = {}, sessionId?: string) =>
             new Promise<any>((res, rej) => {
               const id = ++seq;
+              // 30s：routeSendMessage 的 expr 内部要等扩展 handler 响应（最长 20s），
+              // 求值通道超时必须长于表达式自身的等待，否则 15s 假超时截断正常流程。
               const t = setTimeout(() => {
                 pending.delete(id);
                 rej(new Error("cdp timeout: " + method));
-              }, 15000);
+              }, 30000);
               pending.set(id, (m) => {
                 clearTimeout(t);
                 m.error ? rej(new Error(m.error.message || "cdp error")) : res(m.result);
               });
               try {
-                socket.write(wsEncodeClientFrame(Buffer.from(JSON.stringify({ id, method, params }), "utf8")));
+                const frame: any = { id, method, params };
+                if (sessionId) frame.sessionId = sessionId;
+                socket.write(wsEncodeClientFrame(Buffer.from(JSON.stringify(frame), "utf8")));
               } catch (e: any) {
                 clearTimeout(t);
                 pending.delete(id);
@@ -262,7 +292,7 @@ export function fetchTargets(): Promise<Array<Record<string, any>>> {
   return new Promise((resolve, reject) => {
     try {
       const http = nodeHttp();
-      const req = http.get(`${CDP_HTTP}/json/list`, { timeout: 4000 }, (res) => {
+      const req = http.get(`${cdpHttpBase()}/json/list`, { timeout: 4000 }, (res) => {
         let data = "";
         res.on("data", (c) => {
           data += c;
@@ -402,7 +432,9 @@ export async function evalInSwFlat(
     try {
       const r = await sendCommand("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, entry.sessionId);
       if (r && r.exceptionDetails) {
-        return { err: String(r.exceptionDetails?.exception?.description || r.exceptionDetails?.text || "SW 执行异常").slice(0, 300) };
+        const desc = String(r.exceptionDetails?.exception?.description || r.exceptionDetails?.text || "SW 执行异常");
+        console.warn("[browser-plugin] evalInSwFlat SW 异常 eid=", String(electronId).slice(0, 12), "desc=", desc.slice(0, 300));
+        return { err: desc.slice(0, 300) };
       }
       return { value: r && r.result ? r.result.value : null };
     } catch (e: any) {
@@ -475,6 +507,115 @@ export async function findSwTarget(electronId: string): Promise<ISwTarget | null
 }
 
 /** 一次性 CDP WebSocket 会话：连上后执行 expr，返回结果值 */
+// ===== browser-level flat 通道（宿主进程内，当前唯一稳定的进程内 SW 求值路径） =====
+// 实测（2026-10-17 测试库）：
+//   1) webview.debugger（page-level agent）的 Target.getTargets 看不到扩展 SW
+//      —— findSwFlatSession 恒 SW_FLAT_UNAVAILABLE（"扩展 SW 未运行且唤醒失败"）；
+//   2) HTTP /json/list（browser-level）能列出 SW，但其 page-level WebSocket
+//      握手成功后从不回帧 —— cdpEvalOnce 12s 必超时（"CDP 会话超时"）；
+//   3) browser-level WebSocket + Target.attachToTarget{flatten:true} + 内联
+//      sessionId 求值 SW —— 与 CDP 探针同构，实测稳定可读（fns/垫片标记全对）。
+let browserWsCache: INodeWsSession | null = null;
+const browserFlatSessions = new Map<string, string>(); // electronId -> flatten sessionId
+
+async function getBrowserWs(): Promise<INodeWsSession> {
+  if (browserWsCache) return browserWsCache;
+  const http = nodeHttp();
+  const version: any = await new Promise<any>((res, rej) => {
+    const req = http.get(cdpHttpBase() + "/json/version", { timeout: 4000 }, (rs: any) => {
+      let b = "";
+      rs.on("data", (c: any) => (b += c));
+      rs.on("end", () => {
+        try {
+          res(JSON.parse(b));
+        } catch (e) {
+          rej(e);
+        }
+      });
+    });
+    req.on("error", (e: any) => {
+      if (e && (e.code === "ECONNREFUSED" || e.code === "ECONNRESET")) {
+        cdpHttpDeadUntil = Date.now() + 5 * 60_000;
+      }
+      rej(e);
+    });
+    req.on("timeout", () => {
+      req.destroy();
+      rej(new Error("CDP 请求超时"));
+    });
+  });
+  const ws = await nodeWsSession(String(version.webSocketDebuggerUrl), 8000);
+  browserWsCache = ws;
+  browserFlatSessions.clear();
+  return ws;
+}
+
+/** browser-level WebSocket + flatten session 求值扩展 SW（HTTP CDP 可用时可用） */
+export async function evalInSwBrowserFlat(
+  electronId: string,
+  expr: string,
+  wake?: () => Promise<void>
+): Promise<{ value?: any; err?: string }> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let ws: INodeWsSession;
+    try {
+      ws = await getBrowserWs();
+    } catch {
+      return { err: SW_FLAT_UNAVAILABLE };
+    }
+    try {
+      let sid = browserFlatSessions.get(electronId);
+      if (!sid) {
+        const targets = await fetchTargets();
+        const t = targets.find(
+          (x) =>
+            (x.type === "service_worker" || x.type === "background_page") &&
+            String(x.url).includes(electronId)
+        );
+        console.warn("[browser-plugin] browser-flat 找 target eid=", String(electronId).slice(0, 12),
+          "| targets=", targets.length, "| sw 数=", targets.filter((x) => x.type === "service_worker" || x.type === "background_page").length,
+          "| 命中=", !!t, "| attempt=", attempt);
+        if (!t) {
+          if (attempt === 0 && wake) {
+            try {
+              await wake();
+            } catch (e: any) {
+              console.warn("[browser-plugin] browser-flat wake 失败:", String(e && e.message || e).slice(0, 120));
+            }
+            continue;
+          }
+          return { err: SW_FLAT_UNAVAILABLE };
+        }
+        const att = await ws.send("Target.attachToTarget", { targetId: t.id, flatten: true });
+        sid = String(att?.sessionId || "");
+        if (!sid) return { err: SW_FLAT_UNAVAILABLE };
+        browserFlatSessions.set(electronId, sid);
+      }
+      const r = await ws.send(
+        "Runtime.evaluate",
+        { expression: expr, returnByValue: true, awaitPromise: true },
+        sid
+      );
+      if (r && r.exceptionDetails) {
+        return {
+          err: String(r.exceptionDetails?.exception?.description || r.exceptionDetails?.text || "SW 执行异常").slice(0, 300),
+        };
+      }
+      return { value: r && r.result ? r.result.value : null };
+    } catch {
+      // session 失效（SW 重启/ws 断开）：清缓存重试一次
+      browserFlatSessions.delete(electronId);
+      try {
+        browserWsCache?.close();
+      } catch {
+        /* ignore */
+      }
+      browserWsCache = null;
+    }
+  }
+  return { err: SW_FLAT_UNAVAILABLE };
+}
+
 export function cdpEvalOnce(wsUrl: string, expr: string, timeoutMs = 8000): Promise<any> {
   return new Promise((resolve) => {
     void (async () => {
