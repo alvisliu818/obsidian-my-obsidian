@@ -184,6 +184,10 @@ describe('Moving a folder holding a note with unparseable frontmatter', () => {
         const originalAlwaysUpdateLinks = app.vault.getConfig('alwaysUpdateLinks');
         const originalConsoleError = console.error;
         const consoleErrors: string[] = [];
+        // Synchronous, so the restore cannot interleave with an await the way an assignment in the `finally` could.
+        function restoreConsoleError(): void {
+          console.error = originalConsoleError;
+        }
 
         // Everything that mutates shared state sits inside the `try`, so the `finally` below puts the vault back however this ends.
         try {
@@ -209,9 +213,9 @@ describe('Moving a folder holding a note with unparseable frontmatter', () => {
 
           const contentBefore = await app.vault.read(broken);
 
-          console.error = (...args: unknown[]): void => {
-            consoleErrors.push(args.map((arg) => arg instanceof Error ? `${arg.name}: ${arg.message}` : String(arg)).join(' '));
-            originalConsoleError.apply(console, args);
+          console.error = (...consoleArguments: unknown[]): void => {
+            consoleErrors.push(consoleArguments.map((argument) => argument instanceof Error ? `${argument.name}: ${argument.message}` : String(argument)).join(' '));
+            originalConsoleError.apply(console, consoleArguments);
           };
 
           const folder = app.vault.getFolderByPath(OLD_FOLDER);
@@ -250,7 +254,7 @@ describe('Moving a folder holding a note with unparseable frontmatter', () => {
             resolvedLinkPath: link ? app.metadataCache.getFirstLinkpathDest(link.link, brokenAfterPath)?.path ?? null : null
           };
         } finally {
-          console.error = originalConsoleError;
+          restoreConsoleError();
           app.vault.setConfig('alwaysUpdateLinks', originalAlwaysUpdateLinks);
           /*
            * Through the adapter, as the other suites do: a fixture teardown must not travel back through the
