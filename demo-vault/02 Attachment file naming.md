@@ -10,8 +10,21 @@ So a pasted image is saved as something like `file-20251231093015123.png` instea
 
 ## Try it
 
-1. Paste or drag an image into this note (you supply the file).
+1. Paste an image into this note.
 2. Check the created file name in the folder from [01 Attachment folder location](<./01 Attachment folder location.md>) - it starts with `file-` followed by a timestamp.
+
+No image to hand? The button saves a sample image as an attachment of this note, under the folder and the name a paste would give it, and names the file it saved. It puts this vault's patterns back first, in case another note changed them:
+
+```code-button
+---
+caption: Restore this vault's patterns and save a sample image
+---
+const demoSetup = require('/demoSetup.ts');
+await demoSetup.restoreDefaultPatterns(app);
+await demoSetup.saveSampleAttachment(app, { kind: 'image' });
+```
+
+Manual equivalent: paste an image into this note and look at the file it created.
 
 ## Make the name your own
 
@@ -45,6 +58,13 @@ await require('/demoSetup.ts').changeSettings(app, { generatedAttachmentFileName
 caption: Where would a pasted image go, and what would it be called?
 ---
 await require('/demoSetup.ts').previewAttachmentPath(app);
+```
+
+```code-button
+---
+caption: Save a sample image with the current pattern
+---
+await require('/demoSetup.ts').saveSampleAttachment(app, { kind: 'image' });
 ```
 
 ```code-button

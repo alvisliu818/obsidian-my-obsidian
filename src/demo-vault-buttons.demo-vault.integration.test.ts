@@ -7,4 +7,8 @@ import { registerDemoVaultButtonSuite } from '@mnaoumov/obsidian-dev-toolkit/dem
 // executes anything.
 //
 // Isolation: `npx vitest run --project integration-tests:demo-vault`.
-registerDemoVaultButtonSuite();
+registerDemoVaultButtonSuite({
+  // `05 Collect attachments` ends its note-priorities demo on the shared-attachment dialog, left open for the
+  // reader to answer. Closing it answers `Cancel`, which ends that collect and nothing else.
+  shouldDismissModals: true
+});

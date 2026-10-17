@@ -27,7 +27,31 @@ If the attachment sits in an **attachment unit folder** (see [06 Settings](<./06
 
 ## Try it
 
-1. Open [01 Attachment folder location](<./01 Attachment folder location.md>) and paste an image into it — you supply the file.
-2. Run **`Custom Attachment Location`: Go to attachment folder**. The file explorer highlights `assets/01 Attachment folder location/`.
-3. Click the pasted image to open it, then run **`Custom Attachment Location`: Go to owning note**. You are back in the note.
-4. Right-click either file in the file explorer — both commands are on the context menu too.
+The first button creates `Materials/10 Navigation/` with a note, `Navigation demo`, and an image it embeds, saved in that note's attachment folder, `assets/Navigation demo/`. It also puts back this vault's location pattern, `./assets/{{noteFileName}}`, in case another note changed it, and opens the note.
+
+```code-button
+---
+caption: Set up the navigation demo
+---
+await require('/demoSetup.ts').setUpNavigationDemo(app);
+```
+
+Run **Go to attachment folder** on the note. The file explorer highlights `Materials/10 Navigation/assets/Navigation demo/`.
+
+```code-button
+---
+caption: Go to the attachment folder of Navigation demo
+---
+await require('/demoSetup.ts').goToNavigationDemoAttachmentFolder(app);
+```
+
+Open the image and run **Go to owning note** on it. You are back in `Navigation demo`.
+
+```code-button
+---
+caption: Open the image and go to its owning note
+---
+await require('/demoSetup.ts').goToNavigationDemoOwningNote(app);
+```
+
+Manual equivalent: paste an image into a note and run **`Custom Attachment Location`: Go to attachment folder**, then click the image to open it and run **`Custom Attachment Location`: Go to owning note**. Both commands are on the file explorer's right-click menu too: right-click the note for the first and the image for the second.
