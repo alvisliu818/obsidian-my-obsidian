@@ -194,12 +194,18 @@ export function enhanceEmbeds(el: HTMLElement, host: BlockRenderHost): void {
   const targets: { node: Text; matches: RegExpMatchArray[]; kind: 'block' | 'page' }[] = [];
   let cur = walker.nextNode() as Text | null;
   while (cur) {
-    const pageM = [...(cur.data.matchAll(PAGE_EMBED_RE))];
-    if (pageM.length > 0) {
-      targets.push({ node: cur, matches: pageM, kind: 'page' });
-    } else {
-      const m = [...(cur.data.matchAll(EMBED_RE))];
-      if (m.length > 0) targets.push({ node: cur, matches: m, kind: 'block' });
+    // Skip text INSIDE an .internal-embed placeholder: for an embed whose
+    // target does not resolve, the markdown renderer emits that placeholder
+    // carrying the raw `![[...]]` text — re-matching it here would nest a
+    // page-embed box inside the renderer's own (already broken) output.
+    if (!cur.parentElement?.closest('.internal-embed')) {
+      const pageM = [...(cur.data.matchAll(PAGE_EMBED_RE))];
+      if (pageM.length > 0) {
+        targets.push({ node: cur, matches: pageM, kind: 'page' });
+      } else {
+        const m = [...(cur.data.matchAll(EMBED_RE))];
+        if (m.length > 0) targets.push({ node: cur, matches: m, kind: 'block' });
+      }
     }
     cur = walker.nextNode() as Text | null;
   }

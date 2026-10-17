@@ -40,7 +40,7 @@ import { layoutGuideLines } from './guideLayout';
 import { renderBlockView } from './blockView';
 import { isViewBlock, VIEW_COLUMNS_PROP, VIEW_PROP } from '../features/blockViews';
 import { syncPrologContainer } from './prologResults';
-import { detectBlockType } from './blockTypes';
+import { detectBlockType, mediaTypeOf } from './blockTypes';
 import { renderBlockTypeBadge } from './blockTypeMenu';
 
 const contentCache = new WeakMap<Block, { el: HTMLElement; sig: string }>();
@@ -859,8 +859,12 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
   // inner [[Page]] as an internal link BEFORE our embed pass can see the
   // raw text. Protect the page-embed syntax with a token placeholder during
   // markdown render, then swap tokens for live page-embed boxes.
+  // MEDIA targets (`![[img.png]]` / video / audio, by extension — `|W` width
+  // suffix stripped first) are NOT tokenized: the markdown renderer renders
+  // them natively (<img>/<video>/<audio>) and the enhanceImages pass picks
+  // them up; tokenizing them produced a "page not found" box instead.
   const pageEmbedTokens: { token: string; page: string }[] = [];
-  const hasPageEmbed = /!\[\[[^\[\]]+\]\]/.test(b.text);
+  const hasWikiEmbed = /!\[\[[^\[\]]+\]\]/.test(b.text);
   // HTML img 相对 src 锚定：防库内同名图片劫持（见 anchorRelativeImgSrcs 注释）
   const imgAnchorTokens: ImgAnchorToken[] = [];
   // Logseq parity: 列表块文本里的 markdown 标题行('# x')渲染为字面文本 ——
@@ -871,10 +875,11 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
   const mdSource = withTableSeparation(
     withQuoteRowSeparation(
       anchorRelativeImgSrcs(
-        hasPageEmbed
-        ? blockSource.replace(/!\[\[([^\[\]]+)\]\]/g, (_m, page: string) => {
+        hasWikiEmbed
+        ? blockSource.replace(/!\[\[([^\[\]]+)\]\]/g, (m, inner: string) => {
+            if (mediaTypeOf(inner.split('|')[0].trim())) return m; // media: native render
             const token = `LGPAGEEMBED${pageEmbedTokens.length}LGPAGEEMBED`;
-            pageEmbedTokens.push({ token, page });
+            pageEmbedTokens.push({ token, page: inner });
             return token;
           })
         : blockSource,
