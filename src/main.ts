@@ -53,7 +53,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// The id other modules look this one up by (jupyter reads
 			// `pythonEnvs` off it, breadcrumb reads its mount list).
 			legacyId: "obsidian-logseq",
-			name: "my-Logseq Editor",
+			name: "my Logseq Editor",
 			summary: "Logseq 式块大纲编辑器：折叠、缩放、块引用、任务、SQLite 索引，以及库外文件的虚拟文档树。",
 			desktopOnly: true,
 			cls: LogseqEditorPlugin as unknown as ModuleDescriptor["cls"],
@@ -61,7 +61,7 @@ export default class MyObsidianPlugin extends Plugin {
 		{
 			id: "browser",
 			legacyId: "obsidian-browser",
-			name: "my-Browser",
+			name: "my Browser",
 			summary: "库内的多标签浏览器：地址栏、书签、历史、下载、网页剪藏与 Chrome 扩展支持。",
 			desktopOnly: true,
 			cls: BrowserPlugin as unknown as ModuleDescriptor["cls"],
@@ -69,7 +69,7 @@ export default class MyObsidianPlugin extends Plugin {
 		{
 			id: "jupyter",
 			legacyId: "obsidian-jupyter-notebook",
-			name: "my-Jupyter Notebook",
+			name: "my Jupyter Notebook",
 			summary: "在库里查看、编辑并运行 .ipynb，自带常驻 Python 内核。",
 			desktopOnly: true,
 			cls: JupyterNotebookPlugin as unknown as ModuleDescriptor["cls"],
@@ -77,7 +77,7 @@ export default class MyObsidianPlugin extends Plugin {
 		{
 			id: "breadcrumb",
 			legacyId: "breadcrumb-nav",
-			name: "my-Breadcrumb Nav",
+			name: "my Breadcrumb Nav",
 			summary: "笔记顶部的面包屑（文件 › 标题 / 块层级），支持悬浮查看同级与逐级下钻。",
 			desktopOnly: false,
 			cls: BreadcrumbNavPlugin as unknown as ModuleDescriptor["cls"],
@@ -85,7 +85,7 @@ export default class MyObsidianPlugin extends Plugin {
 		{
 			id: "doc-assist",
 			legacyId: "obsidian-doc-assist",
-			name: "my-Doc Assist",
+			name: "my Doc Assist",
 			summary:
 				"文档加工流水线：剪藏清洗（多余空行 / 行尾空白 / 列表前缀 / AI 报告残留）、中英文加空格与标点互转、列表段落整理、断尾求真删区间。",
 			desktopOnly: true,
@@ -97,7 +97,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// plugin (GilbertzzzZZ, MIT) kept whole, not our own code, so the
 			// alias has to be its real upstream id.
 			legacyId: "material-icon-theme",
-			name: "my-Material Icon Theme",
+			name: "my Material Icon Theme",
 			summary:
 				"文件浏览器换上 Material Design 图标：按文件名 / 扩展名 / 文件夹名匹配，含 Obsidian 专有的 canvas、base。上游 GilbertzzzZZ（MIT）。",
 			desktopOnly: false,
@@ -107,7 +107,7 @@ export default class MyObsidianPlugin extends Plugin {
 			id: "tracetime",
 			// Third-party too (QuincySx, MIT), kept as the user's own fork of it.
 			legacyId: "tracetime",
-			name: "my-TraceTime",
+			name: "my TraceTime",
 			summary:
 				"在每个段落旁显示它最后一次被编辑的时间，编辑器与阅读模式都有；记录存在本地，不联网。上游 QuincySx（MIT）。",
 			desktopOnly: false,
@@ -118,7 +118,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// Kept whole, upstream is Swaggeroo.
 			id: "ai-image-analyzer",
 			legacyId: "ai-image-analyzer",
-			name: "my-AI image analyzer",
+			name: "my AI image analyzer",
 			summary:
 				"用 AI 给图片生成关键词：Gemini / Ollama 等接口，支持批量分析、按关键词反查图片，结果缓存本地。上游 Swaggeroo（GPL-3.0）。",
 			desktopOnly: true,
@@ -131,7 +131,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// env into simple-git (desktop) and as gitdir: into isomorphic-git
 			// (mobile). The user's vault then keeps zero .git traces.
 			legacyId: "obsidian-git",
-			name: "my-Git",
+			name: "my Git",
 			summary:
 				"库内 git 集成：自动备份/定时 pull、源管理视图、行作者标注、差异比对。支持分离布局（设置里填 gitDir 即可让仓库数据放 vault 之外）。上游 Vinzent03（MIT）。",
 			desktopOnly: false,
@@ -142,7 +142,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// through the same esbuild (see the svelte plugin in esbuild.mjs).
 			id: "omnisearch",
 			legacyId: "omnisearch",
-			name: "my-Omnisearch",
+			name: "my Omnisearch",
 			summary:
 				"库内全文搜索引擎：拼音容错、按路径/标签/区块过滤、文件内搜索与 API。上游 Simon Cambier（GPL-3）。",
 			desktopOnly: false,
@@ -153,7 +153,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// 文件支持依赖 Node fs（快照/读写），只承诺桌面端。
 			id: "save-control",
 			legacyId: "save-history",
-			name: "my-Save Control",
+			name: "my Save Control",
 			summary:
 				"自动保存节奏控制 + 文件版本历史（save-history 与 autosave-control 合并）：延迟落盘、状态栏待保存指示、标签页未保存圆点与关闭提示；虚拟文档树挂载的库外文件同样支持。上游 Sevoni（MIT）+ mihasm（MIT）。",
 			desktopOnly: true,
@@ -163,7 +163,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// Third-party (jesse-r-s-hines, MIT), kept whole.
 			id: "open-tab-settings",
 			legacyId: "open-tab-settings",
-			name: "my-Open Tab Settings",
+			name: "my Open Tab Settings",
 			summary:
 				"标签页打开方式定制：默认新标签页/新窗口打开、防止重复标签页、新标签页分组摆放，可按来源（文件列表/搜索/反链等）分别设置。上游 jesse-r-s-hines（MIT）。",
 			desktopOnly: false,
