@@ -104,7 +104,8 @@ export class CustomAttachmentLocationComponent extends LayoutReadyComponent {
     this.insertGestureTrackerComponent = new InsertGestureTrackerComponent(params.app);
     this.pastedImageMarker = new PastedImageMarker({
       arrayBufferMap: this.arrayBufferMap,
-      getScreenshotFilePaths: (): readonly string[] => this.pluginSettingsComponent.settings.screenshotFilePaths
+      getScreenshotFilePaths: (): readonly string[] => this.pluginSettingsComponent.settings.screenshotFilePaths,
+      getShouldKeepNamesOfPastedNonScreenshotFiles: (): boolean => this.pluginSettingsComponent.settings.shouldKeepNamesOfPastedNonScreenshotFiles
     });
   }
 

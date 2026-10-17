@@ -20,9 +20,11 @@ describe('PastedImageMarker', () => {
   let markAsPastedImageMock: ReturnType<typeof vi.fn<ArrayBufferMap['markAsPastedImage']>>;
   let trySetByPathMock: ReturnType<typeof vi.fn<ArrayBufferMap['trySetByPath']>>;
   let marker: PastedImageMarker;
+  let shouldKeepNamesOfPastedNonScreenshotFiles: boolean;
 
   beforeEach(() => {
     fileStatsMap = new Map();
+    shouldKeepNamesOfPastedNonScreenshotFiles = true;
     markAsPastedImageMock = vi.fn<ArrayBufferMap['markAsPastedImage']>();
     trySetByPathMock = vi.fn<ArrayBufferMap['trySetByPath']>((arrayBuffer, filePath) => {
       if (filePath.includes('old')) {
@@ -36,7 +38,8 @@ describe('PastedImageMarker', () => {
         markAsPastedImage: markAsPastedImageMock,
         trySetByPath: trySetByPathMock
       }),
-      getScreenshotFilePaths: (): readonly string[] => ['/PixPin_/']
+      getScreenshotFilePaths: (): readonly string[] => ['/PixPin_/'],
+      getShouldKeepNamesOfPastedNonScreenshotFiles: (): boolean => shouldKeepNamesOfPastedNonScreenshotFiles
     });
   });
 
@@ -68,6 +71,13 @@ describe('PastedImageMarker', () => {
     expect(markedBuffers).toHaveLength(2);
     expect(markedBuffers[0]).toBe(blob);
     expect(markedBuffers[1]).toBe(screenshot);
+  });
+
+  it('should mark a pasted real file too while the names of non-screenshot files are not kept', async () => {
+    shouldKeepNamesOfPastedNonScreenshotFiles = false;
+    const realFile = new ArrayBuffer(3);
+    await marker.record([createAttachment('C:/Pictures/old.png', realFile)], InsertGesture.Paste);
+    expect(markAsPastedImageMock.mock.calls.map((call) => call[0])).toEqual([realFile]);
   });
 
   it('should mark nothing that was dropped with a path', async () => {

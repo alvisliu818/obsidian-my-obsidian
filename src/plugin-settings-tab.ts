@@ -763,6 +763,18 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
         }
       }),
       this.settingEx({
+        desc: t(($) => $.pluginSettingsTab.shouldKeepNamesOfPastedNonScreenshotFiles.description),
+        name: t(($) => $.pluginSettingsTab.shouldKeepNamesOfPastedNonScreenshotFiles.name),
+        render: (setting) => {
+          setting.addToggle((toggle) => {
+            this.bind({
+              propertyName: 'shouldKeepNamesOfPastedNonScreenshotFiles',
+              valueComponent: toggle
+            });
+          });
+        }
+      }),
+      this.settingEx({
         desc: createFragment((f) => {
           f.appendText(t(($) => $.pluginSettingsTab.screenshotFilePaths.description.part1));
           f.createEl('br');

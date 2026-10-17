@@ -13,8 +13,9 @@ import { findPluginSettingsComponent } from '../scripts/helpers/plugin-settings-
  *
  * Some screenshot tools (PixPin with "Copy images as files", the Windows 11 Snipping Tool) put the capture on the
  * clipboard as a FILE. Obsidian keeps a pasted file's name, so the plugin decides from the gesture and the file
- * itself: a paste of a file on a screenshot path, or written moments ago, is renamed; an old file elsewhere, and
- * anything dragged in, keeps its name.
+ * itself. By default every pasted file is renamed and anything dragged in keeps its name. With
+ * shouldKeepNamesOfPastedNonScreenshotFiles on, a paste of a file on a screenshot path, or written moments ago, is
+ * renamed, and an old file elsewhere keeps its name.
  *
  * Why the paste and the drop are DISPATCHED rather than typed: a trusted paste would have to put a file on the
  * system clipboard, which belongs to the user, and a trusted drop needs an OS drag from another application. Neither
@@ -85,6 +86,7 @@ describe('Only pasted images tells a screenshot tool\'s file apart from a real f
           attachmentRenameMode: string;
           generatedAttachmentFileName: string;
           screenshotFilePaths: string[];
+          shouldKeepNamesOfPastedNonScreenshotFiles: boolean;
         }
 
         interface Scenario {
@@ -92,6 +94,7 @@ describe('Only pasted images tells a screenshot tool\'s file apart from a real f
           readonly isFresh: boolean;
           readonly name: string;
           readonly screenshotFilePaths: 'folder' | 'none';
+          readonly shouldKeepNamesOfPastedNonScreenshotFiles: boolean;
         }
 
         function isScreenshotSettings(value: unknown): value is ScreenshotSettings {
@@ -117,10 +120,13 @@ describe('Only pasted images tells a screenshot tool\'s file apart from a real f
 
         const prior = { ...settingsComponent.settings, screenshotFilePaths: [...settingsComponent.settings.screenshotFilePaths] };
         const scenarios: Scenario[] = [
-          { gesture: 'paste', isFresh: false, name: 'old-real-file-paste', screenshotFilePaths: 'none' },
-          { gesture: 'paste', isFresh: false, name: 'old-screenshot-folder-paste', screenshotFilePaths: 'folder' },
-          { gesture: 'paste', isFresh: true, name: 'fresh-file-paste', screenshotFilePaths: 'none' },
-          { gesture: 'drop', isFresh: true, name: 'fresh-screenshot-folder-drop', screenshotFilePaths: 'folder' }
+          // The default: a capture from a tool no list names is renamed however old its file is (issue #97).
+          { gesture: 'paste', isFresh: false, name: 'old-file-paste-by-default', screenshotFilePaths: 'none', shouldKeepNamesOfPastedNonScreenshotFiles: false },
+          { gesture: 'drop', isFresh: true, name: 'fresh-file-drop-by-default', screenshotFilePaths: 'none', shouldKeepNamesOfPastedNonScreenshotFiles: false },
+          { gesture: 'paste', isFresh: false, name: 'old-real-file-paste', screenshotFilePaths: 'none', shouldKeepNamesOfPastedNonScreenshotFiles: true },
+          { gesture: 'paste', isFresh: false, name: 'old-screenshot-folder-paste', screenshotFilePaths: 'folder', shouldKeepNamesOfPastedNonScreenshotFiles: true },
+          { gesture: 'paste', isFresh: true, name: 'fresh-file-paste', screenshotFilePaths: 'none', shouldKeepNamesOfPastedNonScreenshotFiles: true },
+          { gesture: 'drop', isFresh: true, name: 'fresh-screenshot-folder-drop', screenshotFilePaths: 'folder', shouldKeepNamesOfPastedNonScreenshotFiles: true }
         ];
         const results: ScenarioResult[] = [];
 
@@ -131,6 +137,7 @@ describe('Only pasted images tells a screenshot tool\'s file apart from a real f
               settings.attachmentFolderPath = './';
               settings.generatedAttachmentFileName = `renamed-${scenario.name}-{{date:{momentJsFormat:'YYYYMMDDHHmmssSSS'}}}`;
               settings.screenshotFilePaths = scenario.screenshotFilePaths === 'folder' ? [sourceFolderPath] : [];
+              settings.shouldKeepNamesOfPastedNonScreenshotFiles = scenario.shouldKeepNamesOfPastedNonScreenshotFiles;
             });
 
             const originalBaseName = `original-${scenario.name}-${stamp}`;
@@ -205,6 +212,7 @@ describe('Only pasted images tells a screenshot tool\'s file apart from a real f
             settings.attachmentFolderPath = prior.attachmentFolderPath;
             settings.generatedAttachmentFileName = prior.generatedAttachmentFileName;
             settings.screenshotFilePaths = prior.screenshotFilePaths;
+            settings.shouldKeepNamesOfPastedNonScreenshotFiles = prior.shouldKeepNamesOfPastedNonScreenshotFiles;
           });
           await fsPromises.rm(sourceFolderPath, { force: true, recursive: true }).catch(() => {
             // Best-effort temp cleanup.
@@ -218,6 +226,8 @@ describe('Only pasted images tells a screenshot tool\'s file apart from a real f
     expect(result.settingsFound).toBe(true);
     expect(result.error).toBe('');
     expect(result.scenarios).toEqual([
+      { isOriginalNameKept: false, isRenamed: true, name: 'old-file-paste-by-default' },
+      { isOriginalNameKept: true, isRenamed: false, name: 'fresh-file-drop-by-default' },
       { isOriginalNameKept: true, isRenamed: false, name: 'old-real-file-paste' },
       { isOriginalNameKept: false, isRenamed: true, name: 'old-screenshot-folder-paste' },
       { isOriginalNameKept: false, isRenamed: true, name: 'fresh-file-paste' },
@@ -241,6 +251,7 @@ describe('Only pasted images tells a screenshot tool\'s file apart from a real f
           attachmentRenameMode: string;
           generatedAttachmentFileName: string;
           screenshotFilePaths: string[];
+          shouldKeepNamesOfPastedNonScreenshotFiles: boolean;
         }
 
         function isScreenshotSettings(value: unknown): value is ScreenshotSettings {
@@ -271,6 +282,7 @@ describe('Only pasted images tells a screenshot tool\'s file apart from a real f
             settings.attachmentFolderPath = './';
             settings.generatedAttachmentFileName = 'renamed-canvas-paste-{{date:{momentJsFormat:\'YYYYMMDDHHmmssSSS\'}}}';
             settings.screenshotFilePaths = [sourceFolderPath];
+            settings.shouldKeepNamesOfPastedNonScreenshotFiles = true;
           });
 
           // An hour old, so only the screenshot folder can make it count as pasted.
@@ -331,6 +343,7 @@ describe('Only pasted images tells a screenshot tool\'s file apart from a real f
             settings.attachmentFolderPath = prior.attachmentFolderPath;
             settings.generatedAttachmentFileName = prior.generatedAttachmentFileName;
             settings.screenshotFilePaths = prior.screenshotFilePaths;
+            settings.shouldKeepNamesOfPastedNonScreenshotFiles = prior.shouldKeepNamesOfPastedNonScreenshotFiles;
           });
           await fsPromises.rm(sourceFolderPath, { force: true, recursive: true }).catch(() => {
             // Best-effort temp cleanup.
