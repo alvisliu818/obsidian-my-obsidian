@@ -1977,7 +1977,16 @@ function buildShim(ext: ICsExtInfo, messages: Record<string, any>): string {
         onRestartRequired: eventHub(),
         onMessageExternal: eventHub(),
         getBackgroundPage: function () { return Promise.resolve(undefined); },
-        openOptionsPage: function () { return Promise.resolve(); },
+        openOptionsPage: function () {
+            // AdGuard 等扩展的 popup 设置齿轮调它；原先是静默 no-op → 设置页打不开。
+            // 经宿主通道让宿主在当前页签打开 options 页（PopupLayer 消费 ob-open-options）。
+            try {
+                var req = window.require;
+                var ipc = req && req("electron") && req("electron").ipcRenderer;
+                if (ipc && ipc.sendToHost) ipc.sendToHost("ob-open-options");
+            } catch (e) {}
+            return Promise.resolve();
+        },
         setUninstallURL: function () {},
         reload: function () {},
         getPlatformInfo: function () { return Promise.resolve({ os: "win", arch: "x86-64", nacl_arch: "x86-64" }); },

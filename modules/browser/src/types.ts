@@ -98,6 +98,8 @@ export interface ExtensionRecord {
   icon?: string;
   /** browser_action / action popup html (may be empty). */
   popup?: string;
+  /** options_page / options_ui.page —— 扩展设置页（popup 齿轮与宿主菜单的打开目标）。 */
+  options?: string;
   permissions: string[];
   /**
    * Electron 原生加载后的扩展 id（`session.loadExtension` 返回）。

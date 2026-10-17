@@ -55,6 +55,11 @@ export class PopupLayer {
       } else if (e.channel === "obsidian-browser-open-new-tab") {
         this.onOpenNewTab?.(String(e.args?.[0] ?? ""));
         this.close();
+      } else if (e.channel === "ob-open-options") {
+        // 扩展 popup 里的设置齿轮（chrome.runtime.openOptionsPage）→ 宿主开设置页
+        const current = this.current?.rec ?? rec;
+        this.close();
+        this.onOpenOptions?.(current);
       }
     });
 
@@ -65,6 +70,8 @@ export class PopupLayer {
   }
 
   onOpenNewTab: ((url: string) => void) | null = null;
+  /** popup 里调用 chrome.runtime.openOptionsPage 时触发（宿主负责打开设置页） */
+  onOpenOptions: ((rec: ExtensionRecord) => void) | null = null;
 
   private outsideHandler = (e: PointerEvent) => {
     if (!this.layer) return;

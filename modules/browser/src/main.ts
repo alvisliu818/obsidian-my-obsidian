@@ -187,6 +187,11 @@ export default class BrowserPlugin extends Plugin {
         // 让 content script 拿到真实 chrome.* 绑定 —— 不做这步 cs-runtime 等于没接。
         this.extHost.ensureCsRuntime(webview);
         void this.extHost.injectDocumentEnd(webview as never, url);
+        // chrome-extension:// 整页（popup/options 直开为页签）需要扩展专属世界垫片，
+        // 否则页面脚本在受限主世界 sendMessage/storage 全失败（AdGuard 永远 loading）。
+        if (/^chrome-extension:\/\//i.test(url)) {
+          void this.extHost.injectExtensionPage(webview, url);
+        }
         // Edge 加载项商店：注入"安装到 Obsidian"按钮（点击经 ob-edge-install 回传 id）
         if (this.config.extensionsEnabled && isEdgeAddonsSiteUrl(url)) {
           void webview
@@ -249,6 +254,15 @@ export default class BrowserPlugin extends Plugin {
     if (this.popupLayer || !this.extPreloadUrl) return;
     this.popupLayer = new PopupLayer(document.body, this.extHost, this.extPreloadUrl);
     this.popupLayer.onOpenNewTab = (url) => void this.openUrl(url, true);
+    // 扩展 popup 里的设置齿轮（chrome.runtime.openOptionsPage）→ 当前页签打开设置页
+    this.popupLayer.onOpenOptions = (rec) => {
+      const url = this.extHost.optionsPageUrl(rec);
+      if (!url) {
+        new Notice(`扩展「${rec.name}」没有设置页`);
+        return;
+      }
+      void this.openUrl(url, false);
+    };
   }
 
   // ---------------- views ----------------

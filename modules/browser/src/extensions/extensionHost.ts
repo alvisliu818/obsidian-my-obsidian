@@ -7,10 +7,14 @@ import { extractExtensionArchive } from "./crx";
 import { buildShimSource } from "./cs-runtime";
 import { EDGE_ADDONS_HOME, downloadEdgeCrx, parseEdgeAddonId, toArrayBuffer } from "./edgeStore";
 import {
+  beginPopupWorld,
   disposeCsRuntime as disposeCsRt,
   ensureCsRuntime as ensureCsRt,
+  evalPopupJs,
   initCsRuntime,
+  type ICsExtInfo,
 } from "./cs-runtime";
+import { injectExtensionPageRuntime } from "./extPopup";
 
 interface RawManifest {
   name?: string;
@@ -19,6 +23,8 @@ interface RawManifest {
   manifest_version?: number;
   icons?: Record<string, string>;
   permissions?: string[];
+  options_page?: string;
+  options_ui?: { page?: string; open_in_tab?: boolean };
   content_scripts?: RawContentScript[];
   browser_action?: { default_popup?: string; default_icon?: string | Record<string, string> };
   action?: { default_popup?: string; default_icon?: string | Record<string, string> };
@@ -396,8 +402,7 @@ export class ExtensionHost {
   }
 
   /** Everything else, injected once the guest reaches dom-ready. */
-  async injectDocumentEnd(webview: { insertCSS(css: string): Promise<unknown>; executeJavaScript(code: string, userGesture?: boolean): Promise<unknown> }, url: string): Promise<void> {
-    if (!this.getEnabled()) return;
+  async injectDocumentEnd(webview: { insertCSS(css: string): Promise<unknown>; executeJavaScript(code: string, userGesture?: boolean): Promise<unknown> }, url: string): Promise<void> {    if (!this.getEnabled()) return;
     for (const rec of this.getRecords()) {
       if (!rec.enabled) continue;
       for (const cs of rec.contentScripts) {
@@ -413,6 +418,55 @@ export class ExtensionHost {
         }
       }
     }
+  }
+
+  /** 设置页 URL：优先 chrome-extension://（原生加载后可直达，整页垫片按 electronId 匹配） */
+  optionsPageUrl(rec: ExtensionRecord): string | null {
+    if (!rec.options) return null;
+    const rel = String(rec.options).replace(/^\.\//, "");
+    if (rec.electronId) return "chrome-extension://" + rec.electronId + "/" + rel;
+    return this.extensionFileUrl(rec, rel); // 退化路径：未拿到 electronId 时仅尽力打开
+  }
+
+  /**
+   * chrome-extension:// 整页（popup/options 以页签直开）的垫片注入 —— 与源侧
+   * maybeInjectExtensionPage 同语义：这种页面跑在 Electron 受限主世界，
+   * sendMessage/storage 全部不可用（AdGuard 会永远停在 loading），必须重建
+   * 扩展专属世界并按页面 HTML 重放脚本。仅处理本插件管理的扩展。
+   */
+  async injectExtensionPage(webview: IWebviewTag, url: string): Promise<void> {
+    if (!this.getEnabled()) return;
+    const m = String(url || "").match(/^chrome-extension:\/\/([^/?#\s]+)(\/[^?#]*)?/i);
+    if (!m) return;
+    const electronId = m[1];
+    const pagePath = (m[2] || "/").slice(1);
+    if (!pagePath) return;
+    const rec = this.getRecords().find((r) => r.electronId === electronId && r.enabled);
+    if (!rec) return; // 非本插件管理的扩展 —— 交给 Electron 原生行为
+    const info: ICsExtInfo = {
+      electronId,
+      path: this.dirOf(rec),
+      name: rec.name,
+      version: rec.version,
+      defaultLocale: "",
+      contentScripts: rec.contentScripts.map((cs) => ({ matches: cs.matches, js: cs.js, css: cs.css })),
+    };
+    const out = await injectExtensionPageRuntime({
+      webview,
+      extPath: info.path,
+      electronId,
+      pagePath,
+      begin: () => beginPopupWorld(webview, info),
+      evalJs: (src, relPath) => {
+        const fakeUrl = "chrome-extension://" + electronId + "/" + String(relPath).replace(/^\.\//, "");
+        const prefixed = "self.__obSetCurrentScript && self.__obSetCurrentScript(" + JSON.stringify(fakeUrl) + ");\n" + src;
+        return evalPopupJs(webview, info, prefixed).then((rr) => {
+          if (!rr.ok) throw new Error(rr.error);
+          return rr.value;
+        });
+      },
+    });
+    if (!out.ok) console.warn("[obsidian-browser] 扩展页面垫片注入失败(" + pagePath + "):", out.error);
   }
 
   /** The chrome.* shim source for this extension (popups and content scripts). */
@@ -503,6 +557,7 @@ export class ExtensionHost {
       contentScripts,
       icon,
       popup: action.default_popup,
+      options: m.options_page ?? m.options_ui?.page ?? undefined,
       permissions: m.permissions ?? [],
     };
   }
