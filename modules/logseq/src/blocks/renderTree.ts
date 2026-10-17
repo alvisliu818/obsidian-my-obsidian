@@ -220,6 +220,9 @@ function renderBlock(b: Block, host: BlockRenderHost, budget?: RenderBudget): HT
   const btype = detectBlockType(b);
   wrap.dataset.blockType = btype;
   wrap.classList.add('block-type-' + btype);
+  // 段落容器(bare)标记:styles.css 用它把 controls 改成行首覆盖层(不占布局),
+  // 段落文字因此顶格,与思源的几何一致(圆点列只属于列表块)。
+  if (b.bare) wrap.classList.add('is-bare');
   if (host.selectedBlocks.has(b)) wrap.classList.add('is-selected');
   const id = blockId(b);
   if (id) wrap.dataset.blockId = id;
@@ -242,6 +245,15 @@ function renderBlock(b: Block, host: BlockRenderHost, budget?: RenderBudget): HT
   const draggable = b.kind === 'list' || b.kind === 'raw';
   if (draggable && !nativeProps) {
     controls.setAttribute('draggable', 'true'); // block drag handle zone
+  }
+  // 段落容器(is-bare):controls 被样式改成行首覆盖层(不占布局,见
+  // styles.css 的 .is-bare 规则),折叠箭头与拖拽热区都在这一条上。单击它
+  // 按坐标落焦点——否则行首 16px 是死区,光标放不到段首。
+  if (b.bare) {
+    controls.addEventListener('click', (e) => {
+      e.stopPropagation();
+      host.focusBlockFromClick(b, e);
+    });
   }
   if (!nativeProps && host.foldEnabled && (isFoldableBody(b) || isFoldableHeading(b))) {
     // The caret belongs to EVERY foldable body, not just a list block with

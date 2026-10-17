@@ -326,6 +326,27 @@
   background: color-mix(in srgb, var(--text-normal) 40%, transparent);
 }
 
+/* ---------- 段落容器(bare)顶格 ---------- */
+/* 思源的几何:段落文字从行首开始,圆点列只属于列表块——列表文字缩进在
+   圆点之后,段落与圆点同列起排。此前 bare 行也保留 16px 空 controls 列,
+   段落文字被推到和列表文字同列,圆点孤零零悬在更左侧(用户报告:圆点比
+   段落文字靠左,样式不对)。controls 改为绝对定位覆盖行首:不再占布局,
+   但保留它的三个职责——折叠箭头锚点(高度仍钉在首行 1.55em,多行段落
+   的箭头才不会掉到块中间)、拖拽热区、单击按坐标落焦点(renderTree 里
+   给 bare 行接的),行首这一条不是死区。 */
+.block-wrap.is-bare .block-main {
+  position: relative;
+}
+.block-wrap.is-bare .block-controls {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--lgp-controls-w, 16px);
+  height: 1.55em;
+  z-index: 2;
+  cursor: text;
+}
+
 /* COLLAPSED block: Logseq's folded indicator — a light gray circular halo
    around the dot (no persistent caret; the caret stays hover-only). */
 .block-wrap.is-collapsed .block-bullet::before,
