@@ -9,8 +9,20 @@
  * dom-ready — this file is the early, reliable half of that pair.
  */
 (function () {
-  const req = (window as any).require as ((name: string) => any) | undefined;
-  const ipcRenderer = req?.("electron")?.ipcRenderer;
+  // ★ 必须用 preload 作用域的 require（Electron 注入，沙箱/非沙箱都有）；
+  //   不能读 window.require —— contextIsolation=no 时页面与 preload 共享 window，
+  //   站点自己的模块加载器（实测 tgb.cn 的 webpack require）会骗过它，
+  //   require("electron") 失败 → 拦截器静默退出 → target=_blank 点击跳系统浏览器。
+  const nodeRequire: ((name: string) => any) | undefined = (() => {
+    try {
+      // @ts-ignore —— require 由 Electron 注入 preload 作用域
+      if (typeof require === "function") return require;
+    } catch {
+      /* fallthrough */
+    }
+    return (window as any).require;
+  })();
+  const ipcRenderer = nodeRequire?.("electron")?.ipcRenderer;
   if (!ipcRenderer) return;
 
   const NEW_TAB = "obsidian-browser-open-new-tab";
