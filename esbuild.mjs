@@ -200,6 +200,14 @@ const context = await esbuild.context({
     ...builtins.map((m) => `node:${m}`),
   ],
   plugins: [cmBundlePlugin, sveltePlugin, dexiePatchPlugin, importGlobPlugin],
+  // Monaco 的 codicon.css 引用 .ttf 字体(图标字形)。内联成 dataurl:图标
+  // 只有几 KB,而少这一条整个构建会以 "No loader is configured for .ttf" 失败。
+  // (与独立插件 obsidian-logseq 的 esbuild.mjs 同款配置。)
+  loader: {
+    ".ttf": "dataurl",
+    ".woff": "dataurl",
+    ".woff2": "dataurl",
+  },
   define: {
     // wa-sqlite's Emscripten glue reads import.meta.url to locate its wasm;
     // in the CJS bundle that is `{}`, which throws before it ever looks at

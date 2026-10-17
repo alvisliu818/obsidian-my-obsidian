@@ -10,3 +10,12 @@ tests/e2e/_*.mjs
 # Material Icon Theme 的图标数据由 scripts/build-icons.mjs 生成（约 2MB
 # 内联 SVG），跟随上游做法不入库，构建前生成。
 modules/material-icon-theme/src/icon-data.ts
+# e2e 截图与一次性脚本（下划线开头 = 本地探针，沿用各插件约定）
+tests/e2e/_*.png
+tests/e2e/_*.sh
+# logseq 模块的本地探针转储 / 夹具内可再生产物
+modules/logseq/tests/_ins-*.txt
+modules/logseq/tests/_new-*.ts.txt
+modules/logseq/tests/_diag-*
+modules/logseq/tests/fixtures/edge-vault/.obsidian/plugins/obsidian-logseq/monaco.css
+modules/logseq/tests/fixtures/edge-vault/.obsidian/plugins/obsidian-logseq/monaco-workers/

@@ -5,9 +5,6 @@ import { ExtensionMarketModal } from '../extensions/marketModal';
 import { MountListModal } from '../panels/mountModals';
 import { VIEW_TYPE_MOUNT_PANEL } from '../panels/mountPanel';
 import { VIEW_TYPE_CONTENT_SEARCH } from '../panels/contentSearchPanel';
-import { VIEW_TYPE_BLOCK_EDITOR, type BlockEditorView } from '../view/BlockEditorView';
-import { VIEW_TYPE_EXTERNAL_BLOCK } from '../views/ExternalBlockView';
-import { resetReferencesCollapse } from '../features/pageReferences';
 import { OpenWithEditModal } from '../features/openWithUi';
 import { mountDisplayName, type LspServerSpec, type PagePropsEditor, type ScopeMode, type ShortcutOverrides } from '../types';
 import { effectiveLspServers } from '../lsp/serverSpecs';
@@ -81,18 +78,6 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
             }),
         );
     }
-
-    new Setting(containerEl)
-      .setName('保真模式：不自动转为大纲')
-      .setDesc(
-        '打开文件时，不以 `- ` 开头的文本行保持原文——不显示项目符号，保存时也不补 `- ` 前缀，文件字节原样保留。需要大纲时对该块做结构操作（缩进、回车、类型转换）即可。关闭则按 Logseq 原生行为把裸行一律收编成 `- ` 列表项。',
-      )
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.preservePlainText !== false).onChange(async (v) => {
-          this.plugin.settings.preservePlainText = v;
-          await this.plugin.saveSettings();
-        }),
-      );
 
     if (this.plugin.settings.takeOverByDefault && this.plugin.settings.scopeMode === 'all') {
       new Setting(containerEl)
@@ -288,46 +273,6 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
             this.plugin.refreshAllViews();
           }),
-      );
-
-    new Setting(containerEl)
-      .setName('链接引用默认折叠（Linked references）')
-      .setDesc(
-        '打开文件时，底部的 Linked references 默认收起，只留标题栏；点标题栏展开（并执行查询）。' +
-          '关闭则默认展开。折叠只是当前会话的显示状态，不会写进文件。',
-      )
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.refsLinkedDefaultCollapsed === true).onChange(async (v) => {
-          this.plugin.settings.refsLinkedDefaultCollapsed = v;
-          await this.plugin.saveSettings();
-          resetReferencesCollapse(this.plugin);
-          for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_BLOCK_EDITOR)) {
-            (leaf.view as BlockEditorView | null)?.refreshReferences?.();
-          }
-          for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_EXTERNAL_BLOCK)) {
-            (leaf.view as { blockEditor?: BlockEditorView | null } | null)?.blockEditor?.refreshReferences?.();
-          }
-        }),
-      );
-
-    new Setting(containerEl)
-      .setName('未链接引用默认折叠（Unlinked references）')
-      .setDesc(
-        '打开文件时，底部的 Unlinked references 默认收起，只留标题栏；点标题栏展开（并执行查询）。' +
-          '关闭则默认展开。与上面的 Linked references 开关互相独立。',
-      )
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.refsUnlinkedDefaultCollapsed === true).onChange(async (v) => {
-          this.plugin.settings.refsUnlinkedDefaultCollapsed = v;
-          await this.plugin.saveSettings();
-          resetReferencesCollapse(this.plugin);
-          for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_BLOCK_EDITOR)) {
-            (leaf.view as BlockEditorView | null)?.refreshReferences?.();
-          }
-          for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_EXTERNAL_BLOCK)) {
-            (leaf.view as { blockEditor?: BlockEditorView | null } | null)?.blockEditor?.refreshReferences?.();
-          }
-        }),
       );
 
     new Setting(containerEl)
@@ -549,6 +494,23 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       .addToggle((t) =>
         t.setValue(this.plugin.settings.externalCodeWrap !== false).onChange(async (v) => {
           this.plugin.settings.externalCodeWrap = v;
+          await this.plugin.saveSettings();
+          this.plugin.rerenderExternalViews();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName('代码文件注释用 Logseq 编辑器编辑')
+      .setDesc(
+        '代码文件的注释区（连续的整行注释，以及 /* */ 与 """ 块注释、docstring）' +
+          '以 Logseq 块编辑器呈现，嵌在代码行的对应位置：可编辑、按 Markdown 渲染、' +
+          '可写 [[双链]]。代码区仍由 Monaco 编辑，未编辑时保存完全无损。' +
+          '关闭则整个文件是一台 Monaco 的纯源码形态。' +
+          '单个文件可在视图头部按钮临时切换到另一种呈现。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.externalCodeHybrid !== false).onChange(async (v) => {
+          this.plugin.settings.externalCodeHybrid = v;
           await this.plugin.saveSettings();
           this.plugin.rerenderExternalViews();
         }),

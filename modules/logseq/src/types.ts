@@ -22,6 +22,17 @@ export interface Block {
   /** 'list' = outline bullet block (Logseq style); 'raw' = verbatim top-level content (headings, paragraphs, fences, quotes...) */
   kind: 'list' | 'raw';
   marker: Marker;
+  /**
+   * 段落容器标记(运行时字段,不落盘):源文件里没有列表标志(`-`)的顶层文本行。
+   *
+   * 思源式文档模型里,大纲列表只是文档的一种容器块,段落是另一种:段落不显示
+   * 圆点、序列化不带 `- ` 前缀(保存不会把段落改写成列表项)。带任务标记的
+   * 裸行(`TODO x`)语义上是任务项,不算段落。
+   *
+   * 生命周期:parser 的 flushBare 置位;Enter 分裂时继承;depth>0 时序列化回落
+   * 带 `- ` 的形式(磁盘上嵌套段必须带标记,否则重解析会并成上一块的软行)。
+   */
+  bare?: boolean;
   /** Block text without marker/props. May contain '\n' for in-block line breaks (soft wrap). */
   text: string;
   /** Logseq-style properties (`key:: value` child lines). `id` and `collapsed` live here. */
@@ -35,12 +46,6 @@ export interface Block {
    * the `---` fences, never as Logseq `key:: value` lines.
    */
   frontmatter?: boolean;
-  /**
-   * 保真模式：原文里这个块**前面**有几个空行（顶层，>=1）。序列化时补回去，
-   * 否则「段落 ↔ 列表」「段落 ↔ 标题」之间的空行会在每次保存时被吃掉。
-   * 只在 `preservePlainText` 解析时写入；默认解析路径不产生它。
-   */
-  blankBefore?: number;
 }
 
 export interface ParsedDocument {
@@ -132,21 +137,10 @@ export interface BlockEditorSettings {
   saveDebounceMs: number;
   /** Python env used to run code ('' = auto-detect). See exec/pythonEnvs.ts. */
   pythonEnvId: string;
-  /**
-   * Terminal shell: 'auto' = detect (pwsh7 → PowerShell → cmd), or an id from
-   * SHELL_CHOICES. Per-view switching still works; this is only the default.
-   */
-  terminalShell: string;
   /** Fallback interpreter path when no discovered env fits ('' = unused). */
   pythonEnvCustomPath: string;
   /** Open .md files in the block editor by default (all-intrusive take-over). */
   takeOverByDefault: boolean;
-  /**
-   * 保真模式：不以 `- ` 开头的顶层文本行保持原文——按逐字块打开（不画 bullet），
-   * 保存时原样写回，不补 `- ` 前缀。只有用户主动做结构操作（缩进/回车/转换）
-   * 才把该块变成真正的大纲块。关 = Logseq 原生行为（裸行一律收编为 `- ` 列表项）。
-   */
-  preservePlainText: boolean;
   /** Take-over scope: 'all' = every .md file (minus exclusions); 'folders' = only inside includedFolders. */
   scopeMode: ScopeMode;
   /** Folders (paths) where the block editor takes over; used when scopeMode = 'folders'. */
@@ -263,6 +257,15 @@ export interface BlockEditorSettings {
    * re-explained in the description.
    */
   externalCodeWrap: boolean;
+  /**
+   * 代码文件打开时,注释区用 Logseq 块编辑器呈现(view zone 内嵌在 Monaco
+   * 代码流里):可编辑、按 Markdown 渲染、写 [[双链]]。代码块仍由 Monaco 编辑。
+   *
+   * 默认开启——注释本来就是给人读的笔记,让它能被当成笔记编辑是这个插件的
+   * 初衷。单个文件可在视图头部临时反向覆盖(设置里的是默认值)。
+   * 关掉则回到「整文件一台 Monaco」的纯源码形态。
+   */
+  externalCodeHybrid: boolean;
   /** LSP（Python 代码文件的 pyright 补全/提示/诊断）开关 */
   lspEnabled: boolean;
   /** 用户自定义语言服务器（语言→启动命令映射）；内置 pyright 不入此表，仅可用同 id 条目覆盖 enabled */
@@ -285,16 +288,6 @@ export interface BlockEditorSettings {
    */
   externalBanner: boolean;
   /**
-   * 底部引用区默认折叠，两个区独立开关。
-   * 开 = 打开文件时该区只显示标题栏，点标题栏才展开（并触发查询）；关 = 默认展开。
-   * 折叠只是会话内的显示状态，不写进文件。refsDefaultCollapsed 是旧单开关，
-   * 迁移后保留作只读回显（不再被 UI 读写）。
-   */
-  refsLinkedDefaultCollapsed: boolean;
-  refsUnlinkedDefaultCollapsed: boolean;
-  /** 旧版单开关（1.14.x）：迁移到上面两个独立开关后仅在旧 data.json 兼容读取。 */
-  refsDefaultCollapsed: boolean;
-  /**
    * Take over Office files (.docx/.xlsx/.pptx/…) with the built-in previewer.
    * On by default: Obsidian has no viewer for these at all, so there is nothing
    * to displace — and "open with the system app" stays one click away in the
@@ -310,29 +303,10 @@ export interface BlockEditorSettings {
   imageViewerTakeOver: boolean;
   /** Configured external applications for the "open with" menu. */
   openWithApps: OpenWithApp[];
-  /**
-   * 最近使用面板的记录：库内文件与库外挂载文件都记，最新在前。
-   */
-  recentOpenFiles: RecentOpenEntry[];
+  /** Recently opened file paths, newest first (bounded by RECENT_LIMIT). */
+  recentFiles: string[];
   /** Vault-wide content search panel options. */
   contentSearch: ContentSearchOptions;
-}
-
-/**
- * One entry in the recent-files panel's list.
- *
- * `kind` decides how the row is opened: a vault path goes through
- * `openLinkText` like any note; an absolute path is resolved back to its
- * mount and opened through the external-file routes. Keeping the two apart
- * in the data (rather than sniffing the path at render time) means a vault
- * file whose name happens to look absolute still opens correctly.
- */
-export interface RecentOpenEntry {
-  /** Vault-relative path when kind is 'vault'; absolute path when 'ext'. */
-  path: string;
-  kind: 'vault' | 'ext';
-  /** Epoch ms of the last open; ordering only. */
-  at: number;
 }
 
 /**
@@ -454,6 +428,23 @@ export interface OpenWithApp {
   enabled: boolean;
 }
 
+/**
+ * One entry in the recent-files panel's list.
+ *
+ * `kind` decides how the row is opened: a vault path goes through
+ * `openLinkText` like any note; an absolute path is resolved back to its
+ * mount and opened through the external-file routes. Keeping the two apart
+ * in the data (rather than sniffing the path at render time) means a vault
+ * file whose name happens to look absolute still opens correctly.
+ */
+export interface RecentOpenEntry {
+  /** Vault-relative path when kind is 'vault'; absolute path when 'ext'. */
+  path: string;
+  kind: 'vault' | 'ext';
+  /** Epoch ms of the last open; ordering only. */
+  at: number;
+}
+
 /** Drop malformed entries — `data.json` is user-editable. */
 export function openWithAppFrom(raw: unknown): OpenWithApp | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -525,10 +516,8 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   excludedFolders: '',
   saveDebounceMs: 800,
   pythonEnvId: '',
-  terminalShell: 'auto',
   pythonEnvCustomPath: '',
   takeOverByDefault: true,
-  preservePlainText: true,
   scopeMode: 'all',
   includedFolders: '',
   journalFolder: '',
@@ -554,17 +543,15 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   mountTreeOrder: {},
   externalMounts: [],
   externalCodeWrap: true,
+  externalCodeHybrid: true,
   lspEnabled: true,
   externalSplitView: false,
   externalBanner: true,
-  refsLinkedDefaultCollapsed: false,
-  refsUnlinkedDefaultCollapsed: false,
-  refsDefaultCollapsed: false,
   officeViewerEnabled: true,
   imageViewerTakeOver: false,
   openWithApps: [],
   lspServers: [],
-  recentOpenFiles: [],
+  recentFiles: [],
   contentSearch: { ...DEFAULT_CONTENT_SEARCH },
 };
 

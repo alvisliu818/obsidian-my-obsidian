@@ -11,7 +11,6 @@ import {
   findBlockById,
   flattenVisible,
   indent,
-  indentBlock,
   insertAfter,
   insertBefore,
   isDescendant,
@@ -24,7 +23,6 @@ import {
   outdent,
   prependChild,
   prevVisible,
-  promoteRawToOutline,
   rangeAnchor,
   registerRoots,
   removeBlock,
@@ -476,66 +474,29 @@ describe('shift-click range anchor', () => {
   });
 });
 
-describe('indentBlock / promoteRawToOutline（保真模式的缩进转换）', () => {
-  const P = { preservePlainText: true };
-  const rt = (md: string): string => serializeDocument(parseDocument(md, P));
-  const setupP = (md: string) => {
-    const d = parseDocument(md, P);
-    linkParents(d.blocks);
-    registerRoots(d.blocks);
-    return d;
-  };
-
-  it('promotes a raw paragraph previous sibling before indenting', () => {
-    const doc = setupP('父段落\n\n子段落\n');
-    const [p, c] = doc.blocks;
-    expect(p.kind).toBe('raw');
-    expect(indentBlock(c)).toBe(true);
-    expect(p.kind).toBe('list');
-    expect(c.parent).toBe(p);
-    expect(rt('父段落\n\n子段落\n')).toBe('父段落\n\n子段落\n');
+describe('paragraph container propagation', () => {
+  it('splitBlock inherits the bare flag (Enter in a paragraph stays a paragraph)', () => {
+    const doc = setup('a paragraph\n');
+    const b = doc.blocks[0];
+    expect(b.bare).toBe(true);
+    const nb = splitBlock(b, 5);
+    expect(nb.bare).toBe(true);
+    expect(serializeDocument(doc)).toBe('a par\nagraph\n');
   });
 
-  it('promotes a raw CODE block (fence becomes list-item text) and round-trips', () => {
-    const doc = setupP('```python\nx = 1\n```\n\n子段落\n');
-    const [code, c] = doc.blocks;
-    expect(code.kind).toBe('raw');
-    expect(indentBlock(c)).toBe(true);
-    expect(code.kind).toBe('list');
-    const out = serializeDocument(doc);
-    expect(out).toContain('- ```python');
-    // 往返稳定：解析回来还是同一棵树
-    const again = parseDocument(out, P);
-    expect(again.blocks).toHaveLength(1);
-    expect(again.blocks[0].children).toHaveLength(1);
+  it('splitBlock does not mark list items as bare', () => {
+    const doc = setup('- a list item\n');
+    const nb = splitBlock(doc.blocks[0], 2);
+    expect(nb.bare).toBeFalsy();
   });
 
-  it('refuses when the previous sibling cannot be promoted (table)', () => {
-    const doc = setupP('| a | b |\n| --- | --- |\n| 1 | 2 |\n\n子段落\n');
-    const [table, c] = doc.blocks;
-    expect(table.kind).toBe('raw');
-    expect(indentBlock(c)).toBe(false);
-    expect(table.kind).toBe('raw'); // 预检不过不动手
-    expect(c.parent).toBeNull();
-  });
-
-  it('refuses when the block itself cannot be promoted (table)', () => {
-    const doc = setupP('父段落\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n');
-    const [p, table] = doc.blocks;
-    expect(indentBlock(table)).toBe(false);
-    expect(table.parent).toBeNull();
-    expect(p.kind).toBe('raw');
-  });
-
-  it('refuses the first sibling (nothing to nest under)', () => {
-    const doc = setupP('唯一段落\n');
-    expect(indentBlock(doc.blocks[0])).toBe(false);
-  });
-
-  it('indentBlock is transactional: nothing changes when it refuses', () => {
-    const doc = setupP('| a |\n| --- |\n| 1 |\n\n| b |\n| --- |\n| 2 |\n');
-    const before = serializeDocument(doc);
-    expect(indentBlock(doc.blocks[1])).toBe(false);
-    expect(serializeDocument(doc)).toBe(before);
+  it('cycleMarker promotes a paragraph to a task list item (bare cleared)', () => {
+    const doc = setup('buy milk\n');
+    const b = doc.blocks[0];
+    expect(b.bare).toBe(true);
+    cycleMarker(b);
+    expect(b.marker).toBe('TODO');
+    expect(b.bare).toBeFalsy();
+    expect(serializeDocument(doc)).toBe('- TODO buy milk\n');
   });
 });

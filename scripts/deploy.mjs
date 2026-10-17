@@ -48,6 +48,32 @@ for (const f of ["main.js", "manifest.json", "styles.css"]) {
 	console.log(`  ${f}`);
 }
 
+// ---- Monaco 运行时资源 ----
+// logseq 模块现在用 Monaco(开源 VS Code 内核)做代码编辑器。Monaco 的 worker
+// 与 CSS 不能打进 main.js:worker 要经 `new Worker(app:// URL)` 起(且 app://
+// 跨源,得用 blob 包 importScripts),CSS 则因为 Obsidian 的 CSP 不含 app:// 的
+// style-src,`<link rel=stylesheet>` 会被拦(控制台 security error),只能读内容
+// 注入内联 <style>。两者都在插件目录里按 manifest.dir 相对路径取。
+// 漏了它们 = Monaco 布局 CSS 全不生效、worker 起不来,表现为编辑器堆叠/无高亮。
+for (const f of ["monaco.css"]) {
+	const src = path.join(ROOT, "modules", "logseq", f);
+	if (!existsSync(src)) {
+		console.error(`缺少 modules/logseq/${f} —— Monaco 样式不会生效`);
+		process.exit(1);
+	}
+	cpSync(src, path.join(TARGET, f));
+	console.log(`  ${f}`);
+}
+{
+	const src = path.join(ROOT, "modules", "logseq", "monaco-workers");
+	if (!existsSync(src)) {
+		console.error("缺少 modules/logseq/monaco-workers/ —— Monaco worker 起不来");
+		process.exit(1);
+	}
+	cpSync(src, path.join(TARGET, "monaco-workers"), { recursive: true });
+	console.log(`  monaco-workers/`);
+}
+
 // ---- pty-helper (the terminal's native helper) ----
 // Where to look for it, in order: an explicit --from, then any old logseq
 // plugin folder in the same vault (the merge was installed alongside them).

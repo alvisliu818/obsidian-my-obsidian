@@ -12,7 +12,6 @@
 
 import { runPythonCode, stripANSI, type RunHandle } from './pythonRunner';
 import { getActivePythonEnv } from './activeEnv';
-import { resolvePythonInterpreter } from './pythonInterpreter';
 
 export type RunLang = 'python' | 'javascript' | 'shell';
 
@@ -115,35 +114,9 @@ function shellCommand(isWin: boolean): { cmd: string; args: string[]; ext: strin
   return { cmd: 'bash', args: [], ext: 'sh' };
 }
 
-/**
- * PowerShell scripts (.ps1) go to PowerShell; every other shell family member
- * goes to bash — including on Windows, where that means Git Bash or WSL.
- *
- * The old code handed EVERYTHING non-JavaScript to `powershell -File`, so a
- * `.py` was executed as a PowerShell script and died with
- * "… is not a valid Windows PowerShell script file" (the `.ps1 extension` is
- * in the message). Windows has no association between an extension and an
- * interpreter — that mapping is ours to make.
- */
-function scriptCommand(
-  file: string,
-  isWin: boolean,
-): { cmd: string; args: string[] } {
-  if (/\.ps1$/i.test(file)) {
-    const ps = shellCommand(isWin);
-    return { cmd: ps.cmd, args: [...ps.args, file] };
-  }
-  return { cmd: 'bash', args: [file] };
-}
-
 function isWindows(): boolean {
   const proc = (globalThis as { process?: { platform?: string } }).process;
   return proc?.platform === 'win32';
-}
-
-/** A handle with nothing behind it — used when the run cannot even start. */
-function emptyHandle(): RunHandle {
-  return { sendInput: () => {}, interrupt: () => {} };
 }
 
 /** 把代码落到临时文件再执行。 */
@@ -191,23 +164,10 @@ function spawnScript(opts: {
   if (opts.lang === 'javascript') {
     cmd = 'node';
     args = [opts.file];
-  } else if (opts.lang === 'python') {
-    // Same interpreter the code-block ▶ button uses — the one picked in
-    // settings, so a conda env / venv wins over whatever `python` resolves to.
-    const py = resolvePythonInterpreter(getActivePythonEnv());
-    if (!py) {
-      opts.onOutput(
-        '\n[未找到 Python] 请在设置里选择环境，或安装 Python 3 并确保它在 PATH 中。\n',
-      );
-      opts.onExit(-1);
-      return emptyHandle();
-    }
-    cmd = py.cmd;
-    args = [...py.args, opts.file];
   } else {
-    const sh = scriptCommand(opts.file, win);
+    const sh = shellCommand(win);
     cmd = sh.cmd;
-    args = sh.args;
+    args = [...sh.args, opts.file];
   }
 
   const child = cp.spawn(cmd, args, {

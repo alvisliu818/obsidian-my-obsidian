@@ -3,7 +3,7 @@
  * vault-wide block-id index, and clean uninstall (restore native views).
  */
 
-import { Menu, MarkdownView, Notice, Platform, Plugin, TAbstractFile, TFile, TextFileView, WorkspaceFloating, WorkspaceLeaf, WorkspaceRoot, debounce, normalizePath, type CachedMetadata, type ViewState } from 'obsidian';
+import { Menu, MarkdownView, Notice, Platform, Plugin, TAbstractFile, TFile, WorkspaceLeaf, debounce, normalizePath, type CachedMetadata, type ViewState } from 'obsidian';
 import { BlockEditorView, VIEW_TYPE_BLOCK_EDITOR } from './view/BlockEditorView';
 import { FragmentHost, type FragmentOptions } from './blocks/fragmentEditor';
 import { CMD_COLLAPSE_ALL, CMD_FIND, CMD_REPLACE } from './interactions/hotkeys';
@@ -21,11 +21,10 @@ import {
   type BlockEditorSettings,
   type EditorChoice,
   type ExternalMount,
-  type RecentOpenEntry,
 } from './types';
 import { mountDisplayName } from './types';
 import { isMarkdownFile } from './features/codeFileKind';
-import { isTextFileName, extOfName, isTextMount, dirPruned, entryMatches, compileFilter, EMPTY_FILTER } from './features/mountFilter';
+import { isTextFileName, extOfName } from './features/mountFilter';
 import { LogseqEditorSettingTab } from './settings/tab';
 import { BlockIndex } from './index/blockIndex';
 import {
@@ -46,13 +45,13 @@ import { MountEditorModal, MountListModal, MountPositionModal } from './panels/m
 import { MountPanelView, VIEW_TYPE_MOUNT_PANEL } from './panels/mountPanel';
 import { ExternalFileView, VIEW_TYPE_EXTERNAL_FILE } from './views/ExternalFileView';
 import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE } from './views/ExternalCodeView';
+import { CodeDocView, VIEW_TYPE_CODE_DOC } from './views/CodeDocView';
 import { ExternalBlockView, VIEW_TYPE_EXTERNAL_BLOCK } from './views/ExternalBlockView';
 import { OfficeView, VIEW_TYPE_OFFICE } from './views/OfficeView';
 import { ImageView, VIEW_TYPE_IMAGE, IMAGE_EXTENSIONS, isImageFile } from './views/ImageView';
 import { OFFICE_EXTENSIONS } from './office/types';
 import { ContentSearchPanelView, VIEW_TYPE_CONTENT_SEARCH } from './panels/contentSearchPanel';
-import { RecentPanelView, VIEW_TYPE_RECENT_PANEL } from './panels/recentPanel';
-import { RECENT_OPEN_LIMIT, pushRecentOpen, recentOpenFrom, resolveMountForAbs } from './panels/recentOpen';
+import { RecentPanelView, VIEW_TYPE_RECENT_PANEL, pushRecent } from './panels/recentPanel';
 import {
   PRESET_OPEN_WITH,
   addOpenWithMenuItems,
@@ -62,14 +61,11 @@ import {
 } from './features/openWith';
 import {
   exists,
-  isDirectory,
   linkTargetFor,
   linkVaultPath,
   readExternalText,
   safeSegment,
   sameVolume,
-  scanExternal,
-  extOf,
 } from './features/extFs';
 import type { MountNode } from './features/mountFilter';
 import { openJournal } from './features/dailyNote';
@@ -106,12 +102,6 @@ export default class LogseqEditorPlugin extends Plugin {
   opLogPending: OperationRecord[] = [];
   /** Set when a block reference should be revealed after opening a file. */
   pendingReveal: { path: string; blockId: string } | null = null;
-  /**
-   * 虚拟文档树的复制剪贴板（Ctrl+C 复制、Ctrl+V 粘贴）。挂在插件上而非面板上：
-   * 面板重开不失，跨面板/跨挂载也能粘贴。剪贴的是绝对路径——磁盘上真实的
-   * 文件，粘贴走 Node fs 的 copyEntry（文件夹递归、二进制安全）。
-   */
-  mountClipboard: { abs: string; isDir: boolean; name: string } | null = null;
   /** Constructor of Obsidian's native properties editor (grabbed off a live instance). */
   nativePropsCtor: unknown = null;
   private nativePropsCtorPromise: Promise<unknown> | null = null;
@@ -156,9 +146,6 @@ export default class LogseqEditorPlugin extends Plugin {
 
   private origSetViewState: ((this: WorkspaceLeaf, state: ViewState, eState?: unknown) => Promise<void>) | null = null;
   private statusModeEl: HTMLElement | null = null;
-  /** 字数/字符数状态项：块编辑器（含库外 shell）激活时显示。 */
-  private statusCountEl: HTMLElement | null = null;
-  private countRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -190,6 +177,7 @@ export default class LogseqEditorPlugin extends Plugin {
     this.registerView(VIEW_TYPE_MOUNT_PANEL, (leaf) => new MountPanelView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_FILE, (leaf) => new ExternalFileView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_CODE, (leaf) => new ExternalCodeView(leaf, this));
+    this.registerView(VIEW_TYPE_CODE_DOC, (leaf) => new CodeDocView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_BLOCK, (leaf) => new ExternalBlockView(leaf, this));
     this.registerView(VIEW_TYPE_OFFICE, (leaf) => new OfficeView(leaf, this));
     this.registerView(VIEW_TYPE_IMAGE, (leaf) => new ImageView(leaf, this));
@@ -212,15 +200,8 @@ export default class LogseqEditorPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on('file-open', (file) => {
         if (!file) return;
-        // 经原生编辑器打开库外文件时 fire 的也可能是 TExternalFile（path 带
-        // file: 前缀、有 getRealPath）。按库外条目记——绝对路径才是面板能
-        // 再打开的形式。
-        const asExt = file as unknown as { getRealPath?: () => string };
-        if (file.path.startsWith('file:') && typeof asExt.getRealPath === 'function') {
-          this.recordRecentOpen(asExt.getRealPath(), 'ext');
-        } else if (!file.path.startsWith('file:')) {
-          this.recordRecentOpen(file.path, 'vault');
-        }
+        this.settings.recentFiles = pushRecent(this.settings.recentFiles ?? [], file.path);
+        void this.saveSettings();
       }),
     );
 
@@ -924,15 +905,7 @@ export default class LogseqEditorPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    const raw = (await this.loadData()) as Record<string, unknown> | null;
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, raw);
-    // 旧单开关迁移：两个独立开关都未持久化过时，跟随旧 refsDefaultCollapsed 的值，
-    // 之后以各自开关为准（旧字段保留在 data.json 里但 UI 不再读写）。
-    if (raw && raw.refsLinkedDefaultCollapsed === undefined && raw.refsUnlinkedDefaultCollapsed === undefined) {
-      const legacy = raw.refsDefaultCollapsed === true;
-      this.settings.refsLinkedDefaultCollapsed = legacy;
-      this.settings.refsUnlinkedDefaultCollapsed = legacy;
-    }
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     // Sanitize numeric settings from older/corrupt data files.
     const d = Number(this.settings.saveDebounceMs);
     if (!Number.isFinite(d) || d < 0) this.settings.saveDebounceMs = DEFAULT_SETTINGS.saveDebounceMs;
@@ -1001,25 +974,9 @@ export default class LogseqEditorPlugin extends Plugin {
     const rawApps = (this.settings as { openWithApps?: unknown }).openWithApps;
     this.settings.openWithApps =
       rawApps === undefined ? PRESET_OPEN_WITH.map((a) => ({ ...a })) : openWithAppsFrom(rawApps);
-    // 最近使用面板：recentOpenFiles 是唯一列表（库内 + 库外都记）。
-    // 旧版只存库内路径的 recentFiles 在这里迁进来（递减时间戳保持原顺序），
-    // 迁完即删，data.json 不留双份。
-    const legacy = (this.settings as { recentFiles?: unknown }).recentFiles;
-    const legacyPaths = Array.isArray(legacy)
-      ? legacy.filter((p): p is string => typeof p === 'string').slice(0, RECENT_OPEN_LIMIT)
+    this.settings.recentFiles = Array.isArray(this.settings.recentFiles)
+      ? this.settings.recentFiles.filter((p): p is string => typeof p === 'string').slice(0, 60)
       : [];
-    this.settings.recentOpenFiles = recentOpenFrom(
-      (this.settings as { recentOpenFiles?: unknown }).recentOpenFiles,
-    );
-    if (this.settings.recentOpenFiles.length === 0 && legacyPaths.length > 0) {
-      const now = Date.now();
-      this.settings.recentOpenFiles = legacyPaths.map((path, i) => ({
-        path,
-        kind: 'vault' as const,
-        at: now - i * 1000,
-      }));
-    }
-    delete (this.settings as { recentFiles?: unknown }).recentFiles;
     this.settings.contentSearch = contentSearchFrom(this.settings.contentSearch);
     this.settings.officeViewerEnabled = this.settings.officeViewerEnabled !== false;
     this.settings.imageViewerTakeOver = this.settings.imageViewerTakeOver === true;
@@ -1178,8 +1135,6 @@ export default class LogseqEditorPlugin extends Plugin {
     await leaf.openFile(af);
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
     logOp(this, 'external.open', node.abs, 'ok', 'native-editor');
-    // 右键菜单直达的打开链不经过 openExternalEntry，在这里补记。
-    this.recordRecentOpen(node.abs, 'ext');
     return true;
   }
 
@@ -1307,8 +1262,6 @@ export default class LogseqEditorPlugin extends Plugin {
   private buildStatusBar(): void {
     const bar = this.addStatusBarItem();
     bar.addClass('lgp-statusbar');
-    this.statusCountEl = bar.createEl('span', { cls: 'lgp-status-count' });
-    this.statusCountEl.style.display = 'none';
     this.statusModeEl = bar.createEl('a', { cls: 'lgp-status-item' });
     this.statusModeEl.addEventListener('click', (evt) => this.showModeMenu(evt));
     // Keep the label in sync with whatever view is active. A same-leaf view
@@ -1322,9 +1275,6 @@ export default class LogseqEditorPlugin extends Plugin {
   /** Current editing mode of the active editor (menu check + chip label). */
   private currentMode(): 'edit' | 'source' | 'native' {
     if (this.app.workspace.getActiveViewOfType(BlockEditorView)) return 'edit';
-    // 库外 shell：里面托管的就是块编辑器（外层视图类型是 logseq-external-block，
-    // getActiveViewOfType(BlockEditorView) 探不到 inner）。
-    if (this.app.workspace.getActiveViewOfType(ExternalBlockView)) return 'edit';
     const md = this.app.workspace.getActiveViewOfType(MarkdownView);
     // Obsidian's own raw source mode (mode 'source' + source flag true) —
     // NOT live preview, which is also an editing mode.
@@ -1335,18 +1285,14 @@ export default class LogseqEditorPlugin extends Plugin {
   /** Click → dropdown with the three modes; a check marks the current one. */
   private showModeMenu(evt: MouseEvent): void {
     const current = this.currentMode();
-    const external = !!this.app.workspace.getActiveViewOfType(ExternalBlockView);
     const menu = new Menu();
     const entry = (title: string, icon: string, mode: 'edit' | 'source' | 'native') =>
       menu.addItem((item) =>
         item.setTitle(title).setIcon(icon).setChecked(mode === current).onClick(() => void this.applyMode(mode)),
       );
     entry('Logseq editor', 'lucide-eye', 'edit');
-    // 库外文件打不开原生编辑器（不挂 TFile），只列当前模式。
-    if (!external) {
-      entry('Page source mode', 'lucide-file-code', 'source');
-      entry('Native editor', 'lucide-pencil-line', 'native');
-    }
+    entry('Page source mode', 'lucide-file-code', 'source');
+    entry('Native editor', 'lucide-pencil-line', 'native');
     menu.showAtMouseEvent(evt);
   }
 
@@ -1383,55 +1329,12 @@ export default class LogseqEditorPlugin extends Plugin {
     const isMarkdown = !!leaf && leaf.view?.getViewType?.() === 'markdown';
     if (mode === 'native' && !isMarkdown) {
       el.style.display = 'none';
-    } else {
-      el.style.display = '';
-      el.setText(mode === 'edit' ? 'Logseq editor' : mode === 'source' ? 'Page source mode' : 'Native editor');
-      el.toggleClass('mod-active-srcmode', mode === 'source');
-      el.setAttribute('aria-label', 'Editing mode — click to switch');
-    }
-    this.refreshCountStatusBar();
-  }
-
-  // ------------------------------------------------------------------
-  // 字数/字符数：块编辑器（含库外 shell）激活时显示。原生 MarkdownView 的
-  // 字数统计只挂在自己视图上，块编辑器接管（或库外 shell）后这一栏就空了，
-  // 这里补回来。编辑侧统一走 markDirty → notifyEditorDirty 节流刷新。
-  // ------------------------------------------------------------------
-
-  /** 编辑器内容有改动（BlockEditorView.markDirty 调用）——300ms 节流刷新。 */
-  notifyEditorDirty(): void {
-    if (this.countRefreshTimer !== null) return;
-    this.countRefreshTimer = setTimeout(() => {
-      this.countRefreshTimer = null;
-      this.refreshCountStatusBar();
-    }, 300);
-  }
-
-  /** 活动编辑器（库内块编辑器或库外 shell 的 inner），没有则 null。 */
-  private activeBlockEditor(): BlockEditorView | null {
-    const direct = this.app.workspace.getActiveViewOfType(BlockEditorView);
-    if (direct) return direct;
-    const shell = this.app.workspace.getActiveViewOfType(ExternalBlockView);
-    return shell?.blockEditor ?? null;
-  }
-
-  private refreshCountStatusBar(): void {
-    const el = this.statusCountEl;
-    if (!el) return;
-    const editor = this.activeBlockEditor();
-    if (!editor) {
-      el.style.display = 'none';
       return;
     }
-    const text = editor.getViewData();
-    // CJK 字符逐字计数，其余按空白分词——与原生字数统计的中英混合口径一致。
-    const cjk = text.match(/[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/g)?.length ?? 0;
-    const latin = text
-      .replace(/[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/g, ' ')
-      .split(/\s+/)
-      .filter(Boolean).length;
     el.style.display = '';
-    el.setText(`${cjk + latin} 字数 ${text.length} 字符`);
+    el.setText(mode === 'edit' ? 'Logseq editor' : mode === 'source' ? 'Page source mode' : 'Native editor');
+    el.toggleClass('mod-active-srcmode', mode === 'source');
+    el.setAttribute('aria-label', 'Editing mode — click to switch');
   }
 
   private switchToNative(leaf: WorkspaceLeaf, sourceMode?: 'source'): void {
@@ -1547,28 +1450,8 @@ export default class LogseqEditorPlugin extends Plugin {
   refreshRecentPanels(): void {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_RECENT_PANEL)) {
       const view = leaf.view as RecentPanelView | null;
-      // 插件重载后 leaf 可能短暂挂着一个没有 render 的占位/异构视图——
-      // 这里抛错会炸掉调用链（openExternalEntry 中断 → 树节点要点两次）。
-      if (view && typeof view.render === 'function') view.render();
+      view?.render();
     }
-  }
-
-  /**
-   * 记一条「最近打开」（最近使用面板用），库内、库外都走这里。
-   *
-   * 重复打开同一个文件只更新时间、不保存不刷新：file-open 在切换标签页
-   * 时会密集触发，每次都写 data.json 会把保存变成刷屏。
-   */
-  private recordRecentOpen(path: string, kind: RecentOpenEntry['kind']): void {
-    const list = this.settings.recentOpenFiles ?? [];
-    const head = list[0];
-    if (head && head.path === path && head.kind === kind) {
-      head.at = Date.now();
-      return;
-    }
-    this.settings.recentOpenFiles = pushRecentOpen(list, path, kind, Date.now());
-    void this.saveSettings();
-    this.refreshRecentPanels();
   }
 
   async activatePanel(viewType: string): Promise<void> {
@@ -1726,65 +1609,6 @@ export default class LogseqEditorPlugin extends Plugin {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_MOUNT_PANEL)) {
       (leaf.view as MountPanelView | null)?.refreshMounts();
     }
-    // 挂载集合变了，omnisearch 的库外索引跟着重算（去抖；omnisearch 未启用时静默）。
-    this.scheduleOmnisearchExternalReindex();
-  }
-
-  /**
-   * omnisearch 索引用：枚举全部启用挂载下的文本类库外文件（全深度扫描）。
-   *
-   * 过滤语义与挂载面板一致：mountFilterEnabled 总开关 + 每个挂载的
-   * include/exclude（dirPruned/entryMatches 按累积相对路径判断）。只收文本类
-   * ——二进制没有可索引的内容；深度/数量上限防把整个盘拖进索引。
-   */
-  listExternalSearchFiles(): Array<{ abs: string; name: string; mtime: number }> {
-    const out: Array<{ abs: string; name: string; mtime: number }> = [];
-    const filtering = this.settings.mountFilterEnabled !== false;
-    for (const mount of this.settings.externalMounts ?? []) {
-      if (mount.enabled === false) continue;
-      if (!isDirectory(mount.path)) continue;
-      const f = filtering
-        ? compileFilter({ include: mount.include, exclude: mount.exclude })
-        : compileFilter(EMPTY_FILTER);
-      try {
-        const { entries } = scanExternal(mount.path, {
-          shouldEnterDir: (childRel) => !dirPruned(childRel, f),
-          keepFile: (childRel) => entryMatches(childRel, f),
-          depth: 12,
-          limit: 20000,
-        });
-        for (const e of entries) {
-          if (e.isDir || !isTextMount(extOf(e.name))) continue;
-          out.push({ abs: e.abs, name: e.name, mtime: e.mtime ?? 0 });
-        }
-      } catch (err) {
-        console.error('[logseq] external search scan failed for', mount.path, err);
-      }
-    }
-    return out;
-  }
-
-  /** omnisearch 搜库外文件后的打开路由：按绝对路径找所属挂载（最长前缀）。 */
-  resolveExternalMount(abs: string): { mount: ExternalMount; rel: string } | null {
-    return resolveMountForAbs(this.settings.externalMounts ?? [], abs);
-  }
-
-  /** omnisearch 的库外重索引（去抖 3s；挂载刷新/设置变化都会触发）。 */
-  private omnisearchReindexTimer: number | null = null;
-
-  private scheduleOmnisearchExternalReindex(): void {
-    if (this.omnisearchReindexTimer !== null) window.clearTimeout(this.omnisearchReindexTimer);
-    this.omnisearchReindexTimer = window.setTimeout(() => {
-      this.omnisearchReindexTimer = null;
-      try {
-        const omni = (
-          this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } }
-        ).plugins?.plugins?.['omnisearch'] as { reindexExternalFiles?: () => Promise<void> } | undefined;
-        void omni?.reindexExternalFiles?.();
-      } catch {
-        // omnisearch 不在（未启用/旧版）时静默——软依赖。
-      }
-    }, 3000);
   }
 
   /**
@@ -1842,13 +1666,9 @@ export default class LogseqEditorPlugin extends Plugin {
   async openExternalEntry(
     mount: ExternalMount,
     node: MountNode,
-    opts?: { readOnly?: boolean },
+    opts?: { readOnly?: boolean; forceCodeEditor?: boolean },
   ): Promise<void> {
     if (node.isDir) return;
-    // 最近使用面板的记录入口：点开一个库外文件就算最近打开，不论后面落在
-    // 块编辑器、代码编辑器、shim 视图还是系统程序上。走原生编辑器的那条
-    // 菜单链不经过这里，在 openExternalInNativeEditor 里单独记。
-    this.recordRecentOpen(node.abs, 'ext');
     // Read-only means "show me, change nothing", and it is also the fallback
     // whenever a real editor cannot be given the file. Creating a link is a
     // genuine change to the user's library, so it happens only when they ask
@@ -1893,6 +1713,10 @@ export default class LogseqEditorPlugin extends Plugin {
         this.openWithSystem(node.abs);
         return;
       }
+      // 默认:混合视图(注释区 = Logseq 块,代码段 = Monaco);右键可切纯 Monaco。
+      if (!opts?.forceCodeEditor) {
+        if (await this.openInCodeDocView(mount, node)) return;
+      }
       if (await this.openInCodeEditor(mount, node)) return;
     }
     await this.openExternalInShimView(mount, node, opts);
@@ -1915,68 +1739,32 @@ export default class LogseqEditorPlugin extends Plugin {
    * they never asked for; reusing an existing block-editor tab would silently
    * replace their work. A fresh tab is the only variant that touches nothing.
    */
-  // ------------------------------------------------------------------
-  // 外部文件的落页策略（遵循 open-tab-settings 的「未修改时在当前标签页打开」）
-  // ------------------------------------------------------------------
-
-  /** open-tab-settings 模块是否要求「未修改则复用当前页」（鸭子类型读其设置切片）。 */
-  private shouldReuseUnmodifiedLeaf(): boolean {
-    const host = (this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } }).plugins;
-    const ots = host?.plugins?.['open-tab-settings'] as
-      | { settings?: { reuseUnmodifiedTab?: boolean; openInNewTab?: boolean } }
-      | undefined;
-    return ots?.settings?.reuseUnmodifiedTab === true && ots.settings.openInNewTab !== true;
-  }
-
-  /** 该 leaf 是否有未落盘的用户编辑（与 open-tab-settings 的判定信号一致）。 */
-  private isLeafEdited(leaf: WorkspaceLeaf): boolean {
-    const duck = leaf as unknown as { openTabSettings?: { touched?: boolean } };
-    if (duck.openTabSettings?.touched) return true;
-    const view = leaf.view;
-    if (view instanceof TextFileView && (view as TextFileView & { dirty?: boolean }).dirty === true) return true;
-    // 外壳视图（ExternalBlockView 等）的真编辑器是宿主的 TextFileView 子类
-    const inner = (view as unknown as { blockEditor?: unknown } | null)?.blockEditor;
-    if (inner instanceof TextFileView && (inner as TextFileView & { dirty?: boolean }).dirty === true) return true;
-    return false;
-  }
-
-  private isMainAreaLeaf(leaf: WorkspaceLeaf): boolean {
-    const root = leaf.getRoot();
-    return root instanceof WorkspaceRoot || root instanceof WorkspaceFloating;
-  }
-
-  /**
-   * 为外部文件挑选落页：设置开启时优先复用已显示同一文件的标签页，其次复用
-   * 无编辑的当前页；设置关闭或当前页有编辑时按原样开新页（split/tab）。
-   */
-  private async pickExternalLeaf(
-    openMode: 'tab' | 'split',
-    showsSameFile: (leaf: WorkspaceLeaf) => boolean,
-  ): Promise<WorkspaceLeaf> {
-    if (this.shouldReuseUnmodifiedLeaf()) {
-      let existing: WorkspaceLeaf | undefined;
-      this.app.workspace.iterateAllLeaves((l) => {
-        if (existing) return;
-        if (this.isMainAreaLeaf(l) && showsSameFile(l)) existing = l;
-      });
-      if (existing) return existing;
-      // 不用 canNavigate()：外部 shell 是自定义 ItemView，没实现该方法恒为 false。
-      // 主区 + 非固定即可复用。
-      const active = this.app.workspace.getMostRecentLeaf();
-      if (active && !active.pinned && this.isMainAreaLeaf(active) && !this.isLeafEdited(active)) {
-        return active;
-      }
-    }
+  /** 用混合视图打开库外代码文件(注释区 = Logseq 块,代码段 = Monaco)。 */
+  private async openInCodeDocView(mount: ExternalMount, node: MountNode): Promise<boolean> {
+    if (!isTextFileName(node.name)) return false;
     try {
-      return this.app.workspace.getLeaf(openMode);
-    } catch (e) {
-      // 启动早期布局可能还没有标签组（createNewLeaf 抛 "No tab group found"），
-      // 稍等片刻重试一次；仍失败就如实抛给调用方。
-      await new Promise((r) => setTimeout(r, 400));
-      return this.app.workspace.getLeaf(openMode);
+      readExternalText(node.abs);
+    } catch {
+      return false; // 混合视图打不开时回落(代码编辑器/shim 会给出提示)
     }
+    const leaf = this.app.workspace.getLeaf(
+      this.settings.externalSplitView === true ? 'split' : 'tab',
+    );
+    await leaf.setViewState({
+      type: VIEW_TYPE_CODE_DOC,
+      active: true,
+      state: {
+        abs: node.abs,
+        name: node.name,
+        rel: node.rel,
+        mountLabel: mount.label,
+        mountPath: mount.path,
+      },
+    });
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    logOp(this, 'external.open', node.abs, 'ok', 'code-doc');
+    return true;
   }
-
   private async openInBlockEditor(mount: ExternalMount, node: MountNode): Promise<boolean> {
     if (!isMarkdownFile(node.name)) return false;
     try {
@@ -1993,20 +1781,19 @@ export default class LogseqEditorPlugin extends Plugin {
       //
       // Two things the user asked for, both here:
       //
-      //  - Never touch a leaf the user has edited. Reusing one means the note
-      //    they were writing gets replaced by the outside file — their work
-      //    disappears from the screen. isLeafEdited guards that.
-      //  - Honor open-tab-settings' "reuse unmodified tab" toggle: with it on,
-      //    the current tab is reused when it has no edits, and a tab already
-      //    showing the same file is revealed instead of stacking duplicates.
-      //    Otherwise (the old default) every open lands in a fresh tab.
+      //  - Never touch an existing leaf. Reusing one (or the current tab) means
+      //    the note they were reading gets replaced by the seed and then by the
+      //    outside file — their work disappears from the screen.
+      //  - Always a fresh tab. `getLeaf('tab')` creates one, so the seed's brief
+      //    appearance is confined to a tab that did not exist a moment ago. The
+      //    alternative, reusing a block editor already on screen, is instant
+      //    (measured: a 5 ms window) but costs that editor's tab its contents.
       // The same route the code editor takes: an ItemView mounted by
       // setViewState, which needs no file at all. BlockEditorView is a
       // TextFileView and cannot be mounted that way, so a thin shell hosts it
       // (see ExternalBlockView for the measurements behind this).
-      const leaf = await this.pickExternalLeaf(
+      const leaf = this.app.workspace.getLeaf(
         this.settings.externalSplitView === true ? 'split' : 'tab',
-        (l) => l.view instanceof ExternalBlockView && (l.view as ExternalBlockView).abs === node.abs,
       );
       await leaf.setViewState({
         type: VIEW_TYPE_EXTERNAL_BLOCK,
@@ -2050,10 +1837,7 @@ export default class LogseqEditorPlugin extends Plugin {
     // without a file — no seed needed here (measured: setViewState on a
     // TextFileView type with no TFile yields the "empty" placeholder, which is
     // why the markdown path above has to borrow a live editor).
-    const leaf = await this.pickExternalLeaf(
-      'tab',
-      (l) => l.view instanceof ExternalCodeView && (l.view as ExternalCodeView).abs === node.abs,
-    );
+    const leaf = this.app.workspace.getLeaf('tab');
     await leaf.setViewState({
       type: VIEW_TYPE_EXTERNAL_CODE,
       active: true,
@@ -2141,13 +1925,7 @@ export default class LogseqEditorPlugin extends Plugin {
         return;
       }
     }
-    const leaf = await this.pickExternalLeaf(
-      'tab',
-      (l) => {
-        const v = l.view as ExternalFileView | null;
-        return v instanceof ExternalFileView && v.abs === node.abs && v.readOnly === false;
-      },
-    );
+    const leaf = this.app.workspace.getLeaf('tab');
     await leaf.setViewState({
       type: VIEW_TYPE_EXTERNAL_FILE,
       active: true,

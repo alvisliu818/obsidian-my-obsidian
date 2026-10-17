@@ -24,6 +24,7 @@
     "@types/node": "^20.19.43",
     "builtin-modules": "^3.3.0",
     "esbuild": "^0.21.5",
+    "monaco-editor": "^0.50.0",
     "obsidian": "^1.5.7",
     "pyright": "^1.1.414",
     "tslib": "^2.6.3",

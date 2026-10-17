@@ -25,13 +25,10 @@
  * banner rather than showing the previous note's results.
  */
 
-import { ItemView, Menu, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
+import { ItemView, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import { BlockEditorView } from '../view/BlockEditorView';
 import type { MountNode } from '../features/mountFilter';
-import { relativeDisplayPath } from '../features/codeFileKind';
-import { setLeafTitle } from '../features/leafTitle';
-import { buildExternalPaneMenu } from '../features/externalPaneMenu';
 import { applyHeaderPath, headerPathSegments } from './headerPath';
 
 export const VIEW_TYPE_EXTERNAL_BLOCK = 'logseq-external-block';
@@ -57,8 +54,6 @@ export class ExternalBlockView extends ItemView {
   mountPath = '';
   /** The hosted block editor. */
   private inner: BlockEditorView | null = null;
-  /** save-control 下发的自动保存节奏：inner 重建时（改名重开等）要补发。 */
-  private lastAutoSaveCfg: { enabled: boolean; delayMs: number } | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
     super(leaf);
@@ -89,7 +84,6 @@ export class ExternalBlockView extends ItemView {
 
   async setState(state: unknown, result: ViewStateResult): Promise<void> {
     const s = (state ?? {}) as Partial<ExternalBlockViewState>;
-    const prevAbs = this.abs;
     if (typeof s.abs === 'string') this.abs = s.abs;
     if (typeof s.name === 'string') this.fileName = s.name;
     if (typeof s.rel === 'string') this.rel = s.rel;
@@ -98,12 +92,6 @@ export class ExternalBlockView extends ItemView {
     await super.setState(state, result);
     // Mounting waits for the state: Obsidian calls onOpen BEFORE setState, so the
     // path and name are not known yet at onOpen time.
-    //
-    // 复用路径（reuseUnmodifiedTab 把已有 shell 的 leaf 交给另一个文件）：abs 变了
-    // 必须先释放旧 inner（保存+卸载）再重建，否则 abs 换了内容还是旧文件。
-    if (this.abs && this.inner && prevAbs && prevAbs !== this.abs) {
-      await this.releaseInner();
-    }
     if (this.abs && !this.inner) this.hostBlockEditor();
     this.syncHeaderPath();
   }
@@ -111,44 +99,6 @@ export class ExternalBlockView extends ItemView {
   async onOpen(): Promise<void> {
     if (this.abs) this.hostBlockEditor();
     this.syncHeaderPath();
-  }
-
-  /**
-   * ⋮ 菜单 / 标签页右键菜单。
-   *
-   * 库内文件的这两类菜单由 Obsidian 的 `FileView.onPaneMenu` 提供（重命名/
-   * 删除 + `file-menu` 事件，核心与第三方插件随之补项，实测一个库内标签页
-   * 的 ⋮ 有 17 项）；库外文件由本视图承载，继承链上只剩基类的分屏项。
-   * `buildExternalPaneMenu` 把两边补齐：先以中性 source 转发 `file-menu`
-   * （hop-1 TExternalFile + hop-2 TFile 适配器），再补作用在真实绝对路径上
-   * 的自建项（重命名/删除/复制路径/资源管理器/默认应用/新窗口）。
-   *
-   * source 原样透传：'more-options'（⋮）与 'tab-header'（右键）都走这里。
-   */
-  onPaneMenu(menu: Menu, source: string): void {
-    super.onPaneMenu(menu, source);
-    if (!this.abs) return;
-    buildExternalPaneMenu(this.plugin, menu, {
-      abs: this.abs,
-      fileName: this.fileName,
-      popout: { viewType: VIEW_TYPE_EXTERNAL_BLOCK, getState: () => this.getState() },
-      onRenamed: (newAbs, newName) => {
-        this.abs = newAbs;
-        this.fileName = newName;
-        this.rel = relativeDisplayPath(newAbs, this.mountPath, newName);
-        // 托管编辑器持有自己的 abs/fileName，重定向过去保存才会落到新路径；
-        // 内容以磁盘为准重读（改名不动内容，顺带拾起别处的修改）。
-        void this.inner?.openExternalFile(newAbs, newName, this.mountPath);
-        setLeafTitle(this.leaf, newName);
-        (this.leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
-        this.syncHeaderPath();
-      },
-      onDeleted: () => {
-        // 文件已经没了，标签页没有存在意义——关掉前让托管编辑器存盘。
-        void this.onClose();
-        this.leaf.detach();
-      },
-    });
   }
 
   // ------------------------------------------------------------------
@@ -196,18 +146,13 @@ export class ExternalBlockView extends ItemView {
   async onClose(): Promise<void> {
     // The hosted view is not owned by the framework, so its teardown is ours:
     // save the outside file and release the editor.
-    await this.releaseInner();
-  }
-
-  /** Save and tear down the hosted editor (shared by close and in-place retarget). */
-  private async releaseInner(): Promise<void> {
     const inner = this.inner;
     this.inner = null;
     if (!inner) return;
     try {
       await inner.save();
     } catch {
-      /* a failed save must not block the tab closing or retargeting */
+      /* a failed save on close must not block the tab closing */
     }
     try {
       inner.onunload();
@@ -236,9 +181,6 @@ export class ExternalBlockView extends ItemView {
 
     const inner = new BlockEditorView(this.leaf, this.plugin);
     this.inner = inner;
-    // 调度器只对「配置变化」下发；shell 的 abs 没变就不会重发，inner 换人了
-    // 必须在这里补上当前节奏，否则新编辑器回到默认的自动保存开。
-    if (this.lastAutoSaveCfg) inner.configureAutoSave(this.lastAutoSaveCfg);
     // Build the editor's DOM skeleton (the same one onload() builds) and adopt
     // the outside file's content into it.
     inner.adoptIntoView();
@@ -289,20 +231,6 @@ export class ExternalBlockView extends ItemView {
   /** Save through to the original file (the editor's own redirect to fs). */
   async save(): Promise<void> {
     await this.inner?.save();
-  }
-
-  /** 托管编辑器是否有未落盘的改动（save-control 模块的脏状态探针）。 */
-  isDirty(): boolean {
-    return this.inner?.isDirty() === true;
-  }
-
-  /**
-   * save-control 的自动保存节奏下发。节奏记在 shell 上：调度器按 abs 记
-   * 「配置已发过」，inner 重建后不会重发，这里在创建时补上一次。
-   */
-  configureAutoSave(opts: { enabled: boolean; delayMs: number }): void {
-    this.lastAutoSaveCfg = { enabled: opts.enabled, delayMs: opts.delayMs };
-    this.inner?.configureAutoSave(opts);
   }
 
   getViewData(): string {

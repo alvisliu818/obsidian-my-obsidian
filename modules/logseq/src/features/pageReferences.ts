@@ -2,12 +2,8 @@
  * Bottom-of-page references section (v0.2.5): TWO collapsible subsections —
  * "Linked references" (existing backlinks) and "Unlinked references" (plain
  * text mentions with one-click convert). Each section toggles independently
- * via its header; collapsed state lives per plugin session (WeakMap), so it
+ * via its header; collapsed state lives per view session (WeakMap), so it
  * survives re-renders but resets on plugin reload (local preference only).
- *
- * The INITIAL state comes from the `refsLinkedDefaultCollapsed` /
- * `refsUnlinkedDefaultCollapsed` settings: on = that section starts folded, so
- * opening a note shows just the header (no query — expanding one runs it).
  */
 
 import { setIcon } from 'obsidian';
@@ -17,33 +13,22 @@ import { renderUnlinkedMentions } from './unlinkedMentions';
 
 export const REFERENCES_SECTION_CLASS = 'page-references';
 
-/** Collapsed state per plugin instance. */
+/** Collapsed state per view instance. */
 const collapsedByView = new WeakMap<object, { linked: boolean; unlinked: boolean }>();
 
-function stateFor(plugin: LogseqEditorPlugin): { linked: boolean; unlinked: boolean } {
-  let s = collapsedByView.get(plugin);
+function stateFor(view: object): { linked: boolean; unlinked: boolean } {
+  let s = collapsedByView.get(view);
   if (!s) {
-    s = {
-      linked: plugin.settings.refsLinkedDefaultCollapsed === true,
-      unlinked: plugin.settings.refsUnlinkedDefaultCollapsed === true,
-    };
-    collapsedByView.set(plugin, s);
+    s = { linked: false, unlinked: false }; // expanded by default
+    collapsedByView.set(view, s);
   }
   return s;
-}
-
-/** 设置变更后调用：丢掉会话状态，下次渲染按新默认值来。 */
-export function resetReferencesCollapse(plugin: LogseqEditorPlugin): void {
-  collapsedByView.delete(plugin);
 }
 
 /**
  * Render the references area: a wrapper with two toggleable subsections.
  * The linked/unlinked renderers stay unchanged — this only adds the
  * collapsible chrome around them.
- *
- * 折叠的区不渲染查询体（懒加载）：默认折叠时打开笔记只画两个标题，不跑
- * 反链/提及查询；展开的那一次（以及之后处于展开状态的每次重渲染）才查询。
  */
 export function renderPageReferences(
   containerEl: HTMLElement,
@@ -54,6 +39,7 @@ export function renderPageReferences(
   containerEl.querySelector(`:scope > .${REFERENCES_SECTION_CLASS}`)?.remove();
   if (!currentPath) return;
   const state = stateFor(plugin);
+
   const wrapper = containerEl.createEl('div', { cls: REFERENCES_SECTION_CLASS });
 
   // --- Linked references (collapsible) ---
@@ -63,7 +49,7 @@ export function renderPageReferences(
   linkedHead.createEl('span', { cls: 'refs-collapse-title', text: 'Linked references' });
   const linkedBody = wrapper.createEl('div', { cls: 'refs-collapse-body' });
   if (state.linked) linkedBody.addClass('is-collapsed');
-  else renderPageBacklinks(linkedBody, plugin, currentPath, fileBasename);
+  renderPageBacklinks(linkedBody, plugin, currentPath, fileBasename);
   linkedHead.addEventListener('click', () => {
     state.linked = !state.linked;
     renderPageReferences(containerEl, plugin, currentPath, fileBasename);
@@ -76,7 +62,7 @@ export function renderPageReferences(
   unlinkedHead.createEl('span', { cls: 'refs-collapse-title', text: 'Unlinked references' });
   const unlinkedBody = wrapper.createEl('div', { cls: 'refs-collapse-body' });
   if (state.unlinked) unlinkedBody.addClass('is-collapsed');
-  else renderUnlinkedMentions(unlinkedBody, plugin, currentPath, fileBasename);
+  renderUnlinkedMentions(unlinkedBody, plugin, currentPath, fileBasename);
   unlinkedHead.addEventListener('click', () => {
     state.unlinked = !state.unlinked;
     renderPageReferences(containerEl, plugin, currentPath, fileBasename);

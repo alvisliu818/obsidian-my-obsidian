@@ -15,7 +15,7 @@
  * copied into the vault.
  */
 
-import { ItemView, MarkdownRenderer, Menu, Notice, WorkspaceLeaf, setIcon, type ViewStateResult } from 'obsidian';
+import { ItemView, MarkdownRenderer, Notice, WorkspaceLeaf, setIcon, type ViewStateResult } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import type { Block } from '../types';
 import { parseDocument } from '../core/parser';
@@ -23,8 +23,6 @@ import { serializeDocument } from '../core/serializer';
 import { logOp } from '../features/logger';
 import { extOf, readExternalText, writeExternalText } from '../features/extFs';
 import { isTextMount } from '../features/mountFilter';
-import { setLeafTitle } from '../features/leafTitle';
-import { buildExternalPaneMenu } from '../features/externalPaneMenu';
 
 export const VIEW_TYPE_EXTERNAL_FILE = 'logseq-external-file';
 
@@ -41,17 +39,12 @@ export class ExternalFileView extends ItemView {
   abs = '';
   fileName = '';
   readOnly = false;
-  private doc = parseDocument('', { preservePlainText: true });
+  private doc = parseDocument('');
   private dirty = false;
 
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
     super(leaf);
     this.plugin = plugin;
-  }
-
-  /** 保真模式与块编辑器一致：库外文件的裸行也不转大纲。 */
-  private parseOpts(): { preservePlainText: boolean } {
-    return { preservePlainText: this.plugin.settings.preservePlainText !== false };
   }
 
   getViewType(): string {
@@ -83,7 +76,7 @@ export class ExternalFileView extends ItemView {
     this.abs = opts.abs;
     this.fileName = opts.name;
     this.readOnly = opts.readOnly === true;
-    this.doc = parseDocument(opts.content, this.parseOpts());
+    this.doc = parseDocument(opts.content);
     this.dirty = false;
     this.render();
   }
@@ -91,7 +84,7 @@ export class ExternalFileView extends ItemView {
   async onOpen(): Promise<void> {
     if (this.abs && isTextMount(extOf(this.fileName))) {
       try {
-        this.doc = parseDocument(readExternalText(this.abs), this.parseOpts());
+        this.doc = parseDocument(readExternalText(this.abs));
       } catch (e) {
         new Notice(`无法读取 ${this.fileName}：${String(e).slice(0, 100)}`);
       }
@@ -101,46 +94,6 @@ export class ExternalFileView extends ItemView {
 
   async onClose(): Promise<void> {
     await this.flush();
-  }
-
-  /**
-   * ⋮ 菜单 / 标签页右键菜单（库外文件与库内标签页对齐）。
-   *
-   * 库内文件的这类菜单由 `FileView.onPaneMenu` 提供；本视图是 ItemView，
-   * 继承链上只有分屏项。`buildExternalPaneMenu` 先以中性 source 转发
-   * `file-menu`（hop-1 TExternalFile + hop-2 TFile 适配器）让其他插件补项，
-   * 再补作用在真实绝对路径上的自建项。source 原样透传：'more-options'（⋮）
-   * 与 'tab-header'（右键）都走这里。
-   */
-  onPaneMenu(menu: Menu, source: string): void {
-    super.onPaneMenu(menu, source);
-    if (!this.abs) return;
-    buildExternalPaneMenu(this.plugin, menu, {
-      abs: this.abs,
-      fileName: this.fileName,
-      popout: { viewType: VIEW_TYPE_EXTERNAL_FILE, getState: () => this.getState() },
-      onRenamed: (newAbs, newName) => {
-        this.abs = newAbs;
-        this.fileName = newName;
-        // 改名不动内容，但按新路径重读一次最稳（拾起别处的修改）。
-        if (isTextMount(extOf(newName))) {
-          try {
-            this.doc = parseDocument(readExternalText(newAbs), this.parseOpts());
-            this.dirty = false;
-          } catch (e) {
-            new Notice(`无法读取 ${newName}：${String(e).slice(0, 100)}`);
-          }
-        }
-        setLeafTitle(this.leaf, newName);
-        (this.leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
-        this.render();
-      },
-      onDeleted: () => {
-        // 文件已经没了：先落盘再关（onClose 里 flush）。
-        void this.onClose();
-        this.leaf.detach();
-      },
-    });
   }
 
   // ------------------------------------------------------------------
@@ -257,7 +210,7 @@ export class ExternalFileView extends ItemView {
           this.dirty = true;
           // Re-parse so the stored markdown is regenerated from the tree, then
           // rebuild: a multi-line block may now split differently.
-          this.doc = parseDocument(serializeDocument(this.doc), this.parseOpts());
+          this.doc = parseDocument(serializeDocument(this.doc));
           this.render();
         } else {
           this.render();
@@ -318,17 +271,12 @@ export class ExternalFileView extends ItemView {
   /** Re-read from disk (after the file changed elsewhere). */
   reload(): void {
     try {
-      this.doc = parseDocument(readExternalText(this.abs), this.parseOpts());
+      this.doc = parseDocument(readExternalText(this.abs));
       this.dirty = false;
       this.render();
     } catch (e) {
       new Notice(`重新读取失败：${String(e).slice(0, 100)}`);
     }
-  }
-
-  /** 是否有未落盘的改动（save-control 模块的脏状态探针）。 */
-  isDirty(): boolean {
-    return this.dirty;
   }
 }
 

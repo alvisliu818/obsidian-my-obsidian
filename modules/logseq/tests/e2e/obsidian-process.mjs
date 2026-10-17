@@ -27,6 +27,11 @@ const PORT_MATCH = 'remote-debugging-port=9';
 export function prepareTestProfile() {
   if (!existsSync(TEST_VAULT)) throw new Error('test vault missing: ' + TEST_VAULT);
   mkdirSync(TEST_PROFILE, { recursive: true });
+  // Chromium 的 HTTP/Code 缓存会让 app:// 插件脚本跨运行返回旧版本
+  // (症状:改了 main.js、重启实例仍是旧代码)——每次启动前清掉。
+  for (const dir of ['Cache', 'Code Cache', 'GPUCache', 'DawnCache', 'Service Worker']) {
+    try { rmSync(join(TEST_PROFILE, dir), { recursive: true, force: true }); } catch {}
+  }
   // Reset the workspace: without this, every probe run restores ALL leaves
   // from previous runs (they accumulate across sessions and break the
   // leaf-by-file lookups). Obsidian keeps per-vault workspace state in the

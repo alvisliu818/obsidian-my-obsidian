@@ -5,7 +5,6 @@
  */
 
 import { Block, Marker, MARKERS, createBlock, ensureId } from '../types';
-import { blockTypeOf } from '../blocks/blockTypes';
 
 export function siblingsOf(b: Block): Block[] {
   if (b.parent) return b.parent.children;
@@ -244,51 +243,7 @@ export function indent(b: Block, roots?: Block[]): boolean {
   return true;
 }
 
-/**
- * 保真模式的转换点：把逐字段提升为大纲块（结构操作的转换点）。
- *
- * 放行：
- *  - paragraph / heading：文本原样变成列表项；
- *  - code：整个围栏变成列表项的文本（`- ```python ... ``` `），解析器的
- *    `- ```sql` 分支能原样读回来，往返稳定。
- * 拒绝（返回 false）：表格、公式、引用、HTML、媒体——它们没有稳定的列表项
- * 形态（缩进的表格会被解析成上一个块的软行，往返会变树）。
- * 已经是大纲块时原样返回 true。
- */
-export function promoteRawToOutline(b: Block): boolean {
-  if (!canPromoteRawToOutline(b)) return false;
-  if (b.kind === 'raw') b.kind = 'list';
-  return true;
-}
-
-/** 不改变任何状态的预检：这个逐字段能不能提升为大纲块。 */
-function canPromoteRawToOutline(b: Block): boolean {
-  if (b.kind !== 'raw') return true;
-  const t = blockTypeOf(b);
-  return t === 'paragraph' || t === 'heading' || t === 'code';
-}
-
-/**
- * 缩进，并保证父子两边都是大纲块：前一个兄弟是逐字段时先提升它，自己也是
- * 逐字段时同样先提升（Tab 是显式结构操作）。没有前一个兄弟、或某一侧是不
- * 能提升的逐字段（表格/公式/引用/媒体）时返回 false。
- */
-export function indentBlock(b: Block): boolean {
-  const sibs = siblingsOf(b);
-  const idx = sibs.indexOf(b);
-  if (idx <= 0) return false;
-  const prev = sibs[idx - 1];
-  // 先预检再动手：任一侧不能提升就整体放弃，不会留下"转了却没动"的半成品。
-  if (!canPromoteRawToOutline(prev)) return false;
-  if (!canPromoteRawToOutline(b)) return false;
-  promoteRawToOutline(prev);
-  promoteRawToOutline(b);
-  return indent(b);
-}
-
-/**
- * Resolve the sibling array of b by scanning `roots` (structure-first, no registry).
- */
+/** Resolve the sibling array of b by scanning `roots` (structure-first, no registry). */
 function siblingsIn(b: Block, roots: Block[]): Block[] | null {
   if (b.parent) return b.parent.children;
   const walk = (list: Block[]): Block[] | null => {
@@ -327,6 +282,8 @@ export function splitBlock(b: Block, offset: number): Block {
   const tail = text.slice(offset);
   b.text = head;
   const nb = createBlock(tail);
+  // 段落容器延续:在段落里回车,新块同为段落(不显示圆点、保存不带 `- `)。
+  if (b.bare) nb.bare = true;
   insertAfter(b, nb);
   return nb;
 }
@@ -373,12 +330,6 @@ export function splitRawToOutline(b: Block, offset: number): Block {
   const head = stripBlankEdges(b.text.slice(0, offset));
   const tail = stripBlankEdges(dedentCommon(b.text.slice(offset)));
   b.kind = 'list';
-  // Caret at the block start (empty head): Logseq just converts the block in
-  // place — no empty outline block is left behind, caret stays on b.
-  if (head === '') {
-    b.text = tail;
-    return b;
-  }
   b.text = head;
   const nb = createBlock(tail);
   insertAfter(b, nb);
@@ -561,6 +512,9 @@ export function cycleMarker(b: Block): Marker {
   const cur = b.marker;
   if (cur === null) {
     b.marker = 'TODO';
+    // 加上任务标记即成为任务项:清掉段落标记,磁盘上以 `- TODO` 形式往返
+    // (裸 `TODO x` 行虽也能解析回来,但列表形式才是任务的标准容器)。
+    delete b.bare;
     return 'TODO';
   }
   const idx = MARKERS.indexOf(cur);

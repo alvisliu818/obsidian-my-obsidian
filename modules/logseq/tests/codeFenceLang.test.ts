@@ -15,7 +15,7 @@
  * be tested without a DOM. The wiring is covered by e2e.
  */
 import { describe, expect, it } from 'vitest';
-import { parseCodeFence } from '../src/blocks/codeBlockEdit';
+import { parseCodeFence } from '../src/blocks/codeFence';
 
 describe('code fence language label', () => {
   it('a fence with no language and no prefix is the reported case', () => {

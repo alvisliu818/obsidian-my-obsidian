@@ -29,8 +29,8 @@ export interface NodeFsLike {
   writeFileSync(p: string, data: string, enc: 'utf8'): void;
   lstatSync(p: string): StatLike;
   realpathSync(p: string): string;
-/** Optional: only the fs-module methods the tree-file ops need. Tests that
- *  never exercise them can omit these (production Node fs always has them). */
+  /** Optional: only the fs-module methods the tree-file ops need. Tests that
+   *  never exercise them can omit these (production Node fs always has them). */
   renameSync?(from: string, to: string): void;
   mkdirSync?(p: string, opts: { recursive: true }): void;
   unlinkSync?(p: string): void;
@@ -117,7 +117,7 @@ export type FsOpResult = { ok: boolean; error?: string };
 /** 复制操作的结果：带上最终落地的路径（撞名时会加序号）。 */
 export type CopyOpResult = FsOpResult & { target?: string; count?: number };
 
-/** 单次复制允许的文件数上限，防止把整个盘拖进 UI 线程。 */
+/** 一次复制允许的文件数上限（同步 IO，大目录会占一会儿 UI 线程）。 */
 const COPY_FILE_LIMIT = 20000;
 
 /** Ensure a directory exists (recursive). */

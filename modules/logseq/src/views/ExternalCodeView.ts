@@ -16,179 +16,24 @@
  * which is what the user asked for.
  */
 
-import { ItemView, Menu, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
-import { EditorState, type Extension } from 'cm-bundle:@codemirror/state';
-import { EditorView, keymap, lineNumbers, type KeyBinding, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection, crosshairCursor, highlightSpecialChars, dropCursor } from 'cm-bundle:@codemirror/view';
-import { lspBridgeExtensions } from '../lsp/cmLspBridge';
-import { defaultKeymap, history, historyKeymap, indentWithTab } from 'cm-bundle:@codemirror/commands';
-import { searchKeymap, highlightSelectionMatches, search } from 'cm-bundle:@codemirror/search';
-import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from 'cm-bundle:@codemirror/autocomplete';
-import { bracketMatching, foldGutter, foldKeymap, indentOnInput, indentUnit, syntaxHighlighting, HighlightStyle, StreamLanguage } from 'cm-bundle:@codemirror/language';
-import { tags as t } from 'cm-bundle:@lezer/highlight';
-import { javascript } from 'cm-bundle:@codemirror/lang-javascript';
-import { markdown } from 'cm-bundle:@codemirror/lang-markdown';
-// legacy-modes 是直接依赖（package.json ^6.5.4）——每个语言家族一个
-// StreamParser，覆盖 TEXT_EXTENSIONS 能打开的绝大多数扩展名，代码文件
-// 不再打开成一片灰（用户报告：代码文件没有语法高亮）。
-// lang-html / lang-css 是完整 lezer 解析器，已在依赖树里，此处显式声明。
-import { html } from 'cm-bundle:@codemirror/lang-html';
-import { css as cssParser } from 'cm-bundle:@codemirror/lang-css';
-import { cpp, java, csharp, kotlin, objectiveC, scala, dart } from 'cm-bundle:@codemirror/legacy-modes/mode/clike';
-import { go } from 'cm-bundle:@codemirror/legacy-modes/mode/go';
-import { python } from 'cm-bundle:@codemirror/legacy-modes/mode/python';
-import { ruby } from 'cm-bundle:@codemirror/legacy-modes/mode/ruby';
-import { lua } from 'cm-bundle:@codemirror/legacy-modes/mode/lua';
-import { perl } from 'cm-bundle:@codemirror/legacy-modes/mode/perl';
-import { r } from 'cm-bundle:@codemirror/legacy-modes/mode/r';
-import { julia } from 'cm-bundle:@codemirror/legacy-modes/mode/julia';
-import { erlang } from 'cm-bundle:@codemirror/legacy-modes/mode/erlang';
-import { haskell } from 'cm-bundle:@codemirror/legacy-modes/mode/haskell';
-import { shell } from 'cm-bundle:@codemirror/legacy-modes/mode/shell';
-import { powerShell } from 'cm-bundle:@codemirror/legacy-modes/mode/powershell';
-import { diff } from 'cm-bundle:@codemirror/legacy-modes/mode/diff';
-import { standardSQL } from 'cm-bundle:@codemirror/legacy-modes/mode/sql';
-import { rust } from 'cm-bundle:@codemirror/legacy-modes/mode/rust';
-import { xml } from 'cm-bundle:@codemirror/legacy-modes/mode/xml';
-import { yaml } from 'cm-bundle:@codemirror/legacy-modes/mode/yaml';
-import { swift } from 'cm-bundle:@codemirror/legacy-modes/mode/swift';
+import { ItemView, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
+import type * as monacoNS from 'monaco-editor';
+// 代码编辑器:Monaco(开源 VS Code 内核)。语言解析/高亮/worker 见 src/editor/monaco.ts;
+// pyright LSP 的 Monaco provider 接线在 extensions/grammarLoader 侧(与 SiYuan 同源)。
+import { createEditor, setupMonaco, getLanguageByPath } from '../editor/monaco';
 import { readExternalText, writeExternalText } from '../features/extFs';
 import { logOp } from '../features/logger';
 import type LogseqEditorPlugin from '../main';
 import { relativeDisplayPath } from '../features/codeFileKind';
 import { setLeafTitle } from '../features/leafTitle';
-import { buildExternalPaneMenu } from '../features/externalPaneMenu';
 import { applyHeaderPath, headerPathSegments } from './headerPath';
+import { HybridCodeEditor } from './hybridCodeEditor';
 import { runFile, langFromExt } from '../exec/runner';
 import type { RunHandle } from '../exec/pythonRunner';
 
 export { relativeDisplayPath };
 
 export const VIEW_TYPE_EXTERNAL_CODE = 'logseq-external-code';
-
-/**
- * Languages we highlight.
- *
- * The code editor now receives every non-markdown file, so this covers config
- * formats and shell too — a YAML file that opens but renders as flat grey text
- * reads as broken, even though it is perfectly editable. Anything not listed
- * still opens fine, just without colouring.
- */
-function languageFor(ext: string): Extension[] {
-  switch (ext) {
-    // javascript() 覆盖整个 ECMAScript 家族加 JSON。
-    case 'ts': case 'tsx': case 'js': case 'jsx': case 'mjs': case 'cjs':
-    case 'mts': case 'cts': case 'json': case 'json5':
-      return [javascript()];
-    // Markdown 正常走块编辑器，只读打开的 .md 也会落到这里，顺手高亮。
-    case 'md': case 'markdown':
-      return [markdown()];
-    // HTML：完整 lezer 解析器（标签/属性/内联脚本样式都着色）。vue/svelte 模板同理。
-    case 'html': case 'htm': case 'vue': case 'svelte':
-      return [html()];
-    case 'css': case 'scss': case 'less':
-      return [cssParser()];
-    case 'py':
-      return [StreamLanguage.define(python)];
-    case 'rb':
-      return [StreamLanguage.define(ruby)];
-    case 'go':
-      return [StreamLanguage.define(go)];
-    case 'rs':
-      return [StreamLanguage.define(rust)];
-    case 'java':
-      return [StreamLanguage.define(java)];
-    case 'kt': case 'kts':
-      return [StreamLanguage.define(kotlin)];
-    case 'c': case 'h': case 'cc': case 'cpp': case 'hpp':
-      return [StreamLanguage.define(cpp)];
-    case 'cs':
-      return [StreamLanguage.define(csharp)];
-    case 'm': case 'mm':
-      return [StreamLanguage.define(objectiveC)];
-    case 'scala':
-      return [StreamLanguage.define(scala)];
-    case 'dart':
-      return [StreamLanguage.define(dart)];
-    case 'lua':
-      return [StreamLanguage.define(lua)];
-    case 'pl':
-      return [StreamLanguage.define(perl)];
-    case 'r':
-      return [StreamLanguage.define(r)];
-    case 'jl':
-      return [StreamLanguage.define(julia)];
-    case 'erl':
-      return [StreamLanguage.define(erlang)];
-    case 'hs':
-      return [StreamLanguage.define(haskell)];
-    case 'swift':
-      return [StreamLanguage.define(swift)];
-    case 'sh': case 'bash': case 'zsh': case 'fish':
-      return [StreamLanguage.define(shell)];
-    case 'ps1':
-      return [StreamLanguage.define(powerShell)];
-    case 'diff': case 'patch':
-      return [StreamLanguage.define(diff)];
-    case 'sql':
-      return [StreamLanguage.define(standardSQL)];
-    case 'xml': case 'svg':
-      return [StreamLanguage.define(xml)];
-    case 'yaml': case 'yml':
-      return [StreamLanguage.define(yaml)];
-    default:
-      // 没有现成模式的配置格式（toml/ini/cfg/conf/env/properties/log/
-      // gitignore）至少给注释/字符串/数字着色；都不在表里的仍可编辑，
-      // 只是无色（如 .bat/.cmd——legacy-modes 没有 DOS batch 模式）。
-      return streamLanguageFor(ext);
-  }
-}
-
-/** Minimal StreamLanguage definitions for formats with no bundled mode. */
-function streamLanguageFor(ext: string): Extension[] {
-  const map: Record<string, { comment: string | RegExp; string: RegExp; number: RegExp }> = {
-    toml: { comment: /#.*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
-    ini: { comment: /[;#].*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
-    conf: { comment: /[;#].*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
-    cfg: { comment: /#.*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
-    env: { comment: /#.*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
-    gitignore: { comment: /#.*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
-    properties: { comment: /[#!].*$/, string: /"[^"]*"|'[^']*'/, number: /\d+(\.\d+)?/ },
-    log: { comment: /$/, string: /"[^"]*"/, number: /\d+/ },
-  };
-  const spec = map[ext.toLowerCase()];
-  if (!spec) return [];
-  return [
-    StreamLanguage.define({
-      name: ext.toLowerCase(),
-      token(stream) {
-        if (stream.sol() && stream.match(spec.comment)) return 'comment';
-        if (stream.match(spec.string)) return 'string';
-        if (stream.match(spec.number)) return 'number';
-        stream.next();
-        return null;
-      },
-    }),
-  ];
-}
-
-/**
- * File types this view is for. Mirrors the set Code Files claims, since that is
- * what a user with it installed would expect to open here.
- */
-const highlightStyle = HighlightStyle.define([
-  { tag: t.keyword, color: 'var(--code-accent, #c792ea)' },
-  { tag: [t.name, t.deleted, t.character, t.propertyName, t.macroName], color: 'var(--text-normal)' },
-  { tag: [t.function(t.variableName), t.labelName], color: 'var(--color-blue, #82aaff)' },
-  { tag: [t.color, t.constant(t.name), t.standard(t.name)], color: 'var(--color-orange, #ffcb6b)' },
-  { tag: [t.definition(t.name), t.separator], color: 'var(--text-normal)' },
-  { tag: [t.typeName, t.className, t.number, t.changed, t.annotation, t.self, t.namespace], color: 'var(--color-cyan, #f78c6c)' },
-  { tag: [t.operator, t.operatorKeyword, t.url, t.escape, t.regexp, t.link, t.special(t.string)], color: 'var(--text-muted)' },
-  { tag: [t.string, t.inserted], color: 'var(--color-green, #c3e88d)' },
-  { tag: t.comment, color: 'var(--text-faint)', fontStyle: 'italic' },
-  { tag: [t.bool, t.null], color: 'var(--color-orange, #ffcb6b)' },
-  { tag: t.variableName, color: 'var(--text-normal)' },
-  { tag: t.invalid, color: 'var(--text-error)' },
-]);
 
 export class ExternalCodeView extends ItemView {
   plugin: LogseqEditorPlugin;
@@ -204,29 +49,6 @@ export class ExternalCodeView extends ItemView {
   /** 运行输出区(首次运行时创建) */
   private runOutputEl: HTMLPreElement | null = null;
   private runHandle: RunHandle | null = null;
-  /**
-   * 内置自动保存的开关与延时。save-control 模块（若启用）会成为唯一权威：
-   * 它通过 configureAutoSave 把这里的设置改成自己的，避免两处计时器重复
-   * 落盘；模块没启用时保持默认（开、900ms），行为与从前一致。
-   */
-  private autoSaveEnabled = true;
-  private autoSaveDelayMs = 900;
-
-  /** save-control 模块调用：接管/交还内置自动保存的节奏。 */
-  configureAutoSave(opts: { enabled: boolean; delayMs: number }): void {
-    this.autoSaveEnabled = opts.enabled;
-    this.autoSaveDelayMs = Math.max(100, Math.round(opts.delayMs));
-    if (!opts.enabled && this.saveTimer !== null) {
-      window.clearTimeout(this.saveTimer);
-      this.saveTimer = null;
-    }
-  }
-
-  /** 缓冲区相对磁盘是否有未落盘的改动（save-control 的脏状态探针）。 */
-  isDirty(): boolean {
-    if (!this.editor || !this.abs) return false;
-    return this.editor.state.doc.toString() !== this.lastDiskData;
-  }
 
   /** 老 state 没有挂载名时，按最长前缀匹配在挂载配置里找回来。 */
   private mountLabelFromSettings(): string {
@@ -245,9 +67,63 @@ export class ExternalCodeView extends ItemView {
     return best;
   }
   /** Public so the e2e probe can read the buffer without reaching into privates. */
-  editor: EditorView | null = null;
+  editor: monacoNS.editor.IStandaloneCodeEditor | null = null;
   private lastDiskData = '';
   private saveTimer: number | null = null;
+  /**
+   * 是否有未落盘的编辑。
+   *
+   * 必须有这个标记:混合模式下重建会把注释行的前导缩进归一到列 0(见
+   * features/codeDoc 的 v1 边界),所以「没动过的文件」重建结果也可能与原文件
+   * 不同。只靠「重建结果 ≠ lastDiskData」判断该不该写,会让打开即关的文件被
+   * 悄悄改格式。现在改成只写真正编辑过的。
+   */
+  private dirty = false;
+
+  /**
+   * 混合模式引擎:非 null 表示当前以「注释区 = Logseq 块编辑器(view zone 内嵌)」
+   * 呈现,此时代码区与注释区分居两处,保存要走引擎重建而不是整台 Monaco 的
+   * getValue()。纯源码模式下为 null。
+   */
+  private hybridEngine: HybridCodeEditor | null = null;
+  /**
+   * 当前文件对混合模式的临时覆盖(视图头部按钮切换)。null = 跟随设置里的默认值。
+   * 重新 mount 与 remount 都读它,所以切换后重挂载不会退回设置值。
+   */
+  private hybridOverride: boolean | null = null;
+  /** 原文件是否 CRLF(混合模式落盘时还原) */
+  private crlf = false;
+  private actionAdded = false;
+  /** 视图头部的混合模式按钮(切换后要改图标与提示) */
+  private actionEl: HTMLElement | null = null;
+
+  /** 设置里的默认值,可被本文件的临时覆盖反向取值。 */
+  private hybridDefault(): boolean {
+    return this.plugin.settings.externalCodeHybrid !== false;
+  }
+
+  /** 当前生效的混合模式(临时覆盖优先,否则设置默认) */
+  get hybrid(): boolean {
+    return this.hybridOverride ?? this.hybridDefault();
+  }
+
+  private async toggleHybrid(): Promise<void> {
+    // 先落盘:切换要重挂载,缓冲区会随引擎一起销毁。
+    await this.flush();
+    this.hybridOverride = !this.hybrid;
+    this.mount();
+  }
+
+  /** 头部按钮按当前模式改图标与提示(纯源码 → 混合,混合 → 纯源码)。 */
+  private syncAction(): void {
+    const el = this.actionEl;
+    if (!el) return;
+    const on = this.hybrid;
+    el.setAttribute('aria-label', on ? '切换为纯源码模式' : '切换为混合模式（注释可编辑）');
+    el.setAttribute('title', on ? '切换为纯源码模式' : '切换为混合模式（注释可编辑）');
+    // 混合模式图标高亮,一眼能看出当前是哪种呈现。
+    el.toggleClass('logseq-external-hybrid-on', on);
+  }
 
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
     super(leaf);
@@ -276,51 +152,21 @@ export class ExternalCodeView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    if (!this.actionAdded) {
+      this.actionAdded = true;
+      // 视图头部按钮:临时反向覆盖当前文件的呈现方式(设置里的是默认值)。
+      // 放在头部而不是提示栏里,因为提示栏可以被设置关掉——按钮得始终可达。
+      this.actionEl = this.addAction(
+        'list',
+        '混合模式：注释用 Logseq 编辑器编辑',
+        () => void this.toggleHybrid(),
+      );
+    }
     // Mounting waits for setState: Obsidian calls onOpen BEFORE setState, so
     // mounting here would build an empty editor for a file whose path and
     // content have not arrived yet — and the state that carries them is the
     // only place they exist.
     if (this.abs) this.mount();
-  }
-
-  /**
-   * ⋮ 菜单 / 标签页右键菜单（库外文件与库内标签页对齐）。
-   *
-   * 库内文件的这类菜单由 `FileView.onPaneMenu` 提供；本视图是 ItemView，
-   * 继承链上只有分屏项。`buildExternalPaneMenu` 先以中性 source 转发
-   * `file-menu`（hop-1 TExternalFile + hop-2 TFile 适配器）让其他插件补项，
-   * 再补作用在真实绝对路径上的自建项。source 原样透传：'more-options'（⋮）
-   * 与 'tab-header'（右键）都走这里。
-   */
-  onPaneMenu(menu: Menu, source: string): void {
-    super.onPaneMenu(menu, source);
-    if (!this.abs) return;
-    buildExternalPaneMenu(this.plugin, menu, {
-      abs: this.abs,
-      fileName: this.fileName,
-      popout: { viewType: VIEW_TYPE_EXTERNAL_CODE, getState: () => this.getState() },
-      onRenamed: (newAbs, newName) => {
-        this.abs = newAbs;
-        this.fileName = newName;
-        this.displayPath = relativeDisplayPath(newAbs, this.mountPath, newName);
-        // 缓冲区原样保留（改名不动内容），之后的 flush 写去新路径；语言模式
-        // 由扩展名决定，改名不改扩展名，无需 remount。
-        setLeafTitle(this.leaf, newName);
-        (this.leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
-        const segments = headerPathSegments(
-          newAbs,
-          this.displayPath || newName,
-          this.mountLabel || this.mountLabelFromSettings(),
-        );
-        if (segments.length) segments[0].isMount = true;
-        applyHeaderPath(this.containerEl, segments, this.plugin, newAbs);
-      },
-      onDeleted: () => {
-        // 文件已经没了：先落盘再关（onClose 里 flush + destroy editor）。
-        void this.onClose();
-        this.leaf.detach();
-      },
-    });
   }
 
   async setState(state: unknown, result: ViewStateResult): Promise<void> {
@@ -353,13 +199,44 @@ export class ExternalCodeView extends ItemView {
 
   async onClose(): Promise<void> {
     await this.flush();
-    this.editor?.destroy();
+    this.disposeEditors();
+  }
+
+  /** 当前缓冲区全文(混合模式按区块重建,纯源码模式取 Monaco 全文)。 */
+  private currentBuffer(): string {
+    if (this.hybridEngine) return this.hybridEngine.reconstruct();
+    return this.editor ? this.editor.getValue() : this.lastDiskData;
+  }
+
+  /** 销毁 Monaco 实例与混合引擎( FragmentHost / ResizeObserver 随引擎卸载)。 */
+  private disposeEditors(): void {
+    if (this.hybridEngine) {
+      this.hybridEngine.unload();
+      this.hybridEngine = null;
+      // 引擎的 onunload 已 dispose 自己的 editor/model
+      this.editor = null;
+      return;
+    }
+    const model = this.editor?.getModel();
+    this.editor?.dispose();
+    model?.dispose();
     this.editor = null;
+  }
+
+  /** 防抖自动保存(与库内编辑器同节奏:不是每敲一个键就写盘)。 */
+  private scheduleSave(): void {
+    this.dirty = true;
+    if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
+    this.saveTimer = window.setTimeout(() => void this.flush(), 900);
   }
 
   // ------------------------------------------------------------------
 
   private mount(): void {
+    // 重挂载(切换混合/源码、设置变更)前先销毁旧的:
+    // contentEl.empty() 只清 DOM,M Monaco 实例与 FragmentHost 组件会泄漏,
+    // 且它们的 ResizeObserver 还盯着已脱离文档的容器。
+    this.disposeEditors();
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass('logseq-external-code-view');
@@ -407,64 +284,44 @@ export class ExternalCodeView extends ItemView {
       }
     }
     this.lastDiskData = content;
+    this.crlf = content.includes('\r\n');
 
-    const ext = (this.fileName.split('.').pop() ?? '').toLowerCase();
-    const extensions: Extension[] = [
-      lineNumbers(),
-      highlightActiveLineGutter(),
-      highlightSpecialChars(),
-      history(),
-      foldGutter(),
-      drawSelection(),
-      dropCursor(),
-      EditorState.allowMultipleSelections.of(true),
-      indentOnInput(),
-      indentUnit.of('  '),
-      bracketMatching(),
-      closeBrackets(),
-      autocompletion(),
-      rectangularSelection(),
-      crosshairCursor(),
-      highlightActiveLine(),
-      highlightSelectionMatches(),
-      search(),
-      syntaxHighlighting(highlightStyle, { fallback: true }),
-      // true = wrap (the default, and what the switch label says).
-      ...(this.plugin.settings.externalCodeWrap === false ? [] : [EditorView.lineWrapping]),
-      keymap.of([
-        // Ctrl/Cmd+S saves immediately. The banner's save button is the visible
-        // route, but the banner can be switched off entirely, and a file the user
-        // is editing should never depend on a setting to be saveable.
-        { key: 'Mod-s', run: () => { void this.flush(true); return true; } },
-        ...closeBracketsKeymap,
-        ...defaultKeymap,
-        // The ambient declaration types this as unknown[]; the runtime value is
-        // a KeyBinding[], so narrow it here rather than widening the .d.ts to
-        // something it cannot actually promise.
-        ...(searchKeymap as readonly KeyBinding[]),
-        ...historyKeymap,
-        ...foldKeymap,
-        ...completionKeymap,
-        indentWithTab,
-      ]),
-      EditorView.updateListener.of((u) => {
-        if (!u.docChanged) return;
-        // Debounced like the vault editor, so typing is not a write per keystroke.
-        // The delay is the view's own unless save-control took the rhythm over
-        // (configureAutoSave) — then its setting wins.
-        if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
-        if (!this.autoSaveEnabled) return;
-        this.saveTimer = window.setTimeout(() => void this.flush(), this.autoSaveDelayMs);
-      }),
-      ...languageFor(ext),
-      ...(this.abs ? lspBridgeExtensions({ plugin: this.plugin, absPath: this.abs, languageId: ext === 'py' ? 'python' : ext }) : []),
-    ];
+    setupMonaco(this.plugin);
 
-    this.editor = new EditorView({
-      state: EditorState.create({ doc: content, extensions }),
-      parent: host,
-    });
-    this.editor.focus();
+    // 语言由路径扩展名决定(Monaco basic-languages + TS worker);高亮与
+    // VS Code 同源。保存仍走原防抖链路,Ctrl/Cmd+S 即时落盘。
+    const language = getLanguageByPath(this.abs);
+
+    if (this.hybrid) {
+      // 混合模式:注释区交给 Logseq 块编辑器(view zone 内嵌),代码区仍是这台
+      // Monaco。整文件无注释时 buildCodeDoc 只切出一个 code 区,观感与纯源码
+      // 模式一致(仅行号映射),所以不必为「没注释的文件」特判。
+      const engine = new HybridCodeEditor(this.plugin);
+      engine.load();
+      engine.mount({
+        container: host,
+        lang: language,
+        value: this.crlf ? content.replace(/\r\n/g, '\n') : content,
+        crlf: this.crlf,
+        wordWrap: this.plugin.settings.externalCodeWrap === false ? 'off' : 'on',
+        onSave: () => void this.flush(true),
+        onChange: () => this.scheduleSave(),
+      });
+      this.hybridEngine = engine;
+      this.editor = engine.getEditor();
+    } else {
+      this.hybridEngine = null;
+      this.editor = createEditor(host, {
+        value: content,
+        language,
+        wordWrap: this.plugin.settings.externalCodeWrap === false ? 'off' : 'on',
+        lineNumbers: true,
+        onSave: () => void this.flush(true),
+        onChange: () => this.scheduleSave(),
+      });
+    }
+    this.syncAction();
+    this.editor?.focus();
     // The leaf's own view header caches the name it was mounted with; on a fresh
     // mount that is nothing, on a re-mount it is the previous file. Writing it
     // here covers both.
@@ -522,11 +379,16 @@ export class ExternalCodeView extends ItemView {
       this.saveTimer = null;
     }
     if (!this.editor || !this.abs) return;
-    const data = this.editor.state.doc.toString();
-    if (data === this.lastDiskData) return;
+    // 混合模式下整台 Monaco 只有代码行,注释内容在 FragmentHost 里——必须按
+    // 区块重建,直接 getValue() 会把注释区从文件里抹掉。
+    const data = this.hybridEngine ? this.hybridEngine.reconstruct() : this.editor.getValue();
+    // 未编辑就不写盘:混合模式的重建会归一注释缩进,只看「结果 ≠ 磁盘内容」
+    // 会把没动过的文件改掉格式(见 dirty 的注释)。
+    if (!this.dirty || data === this.lastDiskData) return;
     try {
       writeExternalText(this.abs, data);
       this.lastDiskData = data;
+      this.dirty = false;
       if (notify) new Notice(`已保存 ${this.fileName}`);
       logOp(this.plugin, 'external.code.save', this.abs, 'ok');
     } catch (e) {
@@ -538,24 +400,20 @@ export class ExternalCodeView extends ItemView {
   /**
    * Rebuild the editor, keeping the current buffer.
    *
-   * The banner and the soft-wrap setting are baked into the CodeMirror
-   * extensions at construction, and an instance cannot change them afterwards,
-   * so a settings toggle has to remount. The unsaved text is carried across so
+   * The banner, the soft-wrap setting and the hybrid mode are baked into the
+   * editor at construction, and an instance cannot change them afterwards, so a
+   * settings toggle has to remount. The unsaved text is carried across so
    * nothing is lost in the swap.
    */
   remount(): void {
     if (!this.abs) return;
     try {
       // Prefer what is on screen: an autosave may not have landed yet.
-      const text = this.editor ? this.editor.state.doc.toString() : this.lastDiskData;
-      this.editor?.destroy();
-      this.editor = null;
+      this.lastDiskData = this.currentBuffer();
+      // mount() rebuilds from lastDiskData, so the live buffer travels with it
+      // in BOTH modes — in hybrid mode there is no single model to setValue()
+      // onto anyway (the code lines are only part of the file).
       this.mount();
-      // mount() rebuilds from lastDiskData, so put the live buffer back.
-      const ed = this.editor as EditorView | null;
-      if (ed && text !== this.lastDiskData) {
-        ed.dispatch({ changes: { from: 0, to: ed.state.doc.length, insert: text } });
-      }
     } catch {
       /* a failed remount leaves the previous view in place; not fatal */
     }
@@ -564,9 +422,12 @@ export class ExternalCodeView extends ItemView {
   /** Re-read from disk (the file changed elsewhere). */
   reload(): void {
     try {
-      const data = readExternalText(this.abs);
-      this.lastDiskData = data;
-      this.editor?.dispatch({ changes: { from: 0, to: this.editor.state.doc.length, insert: data } });
+      this.lastDiskData = readExternalText(this.abs);
+      // 重新读取是「放弃本地改动,以磁盘为准」,所以清掉脏标记。
+      this.dirty = false;
+      // 混合模式下给 Monaco setValue 只换掉代码行,注释区还是旧的——必须整
+      // 体重挂载,让 buildCodeDoc 重新切一遍。
+      this.mount();
     } catch (e) {
       new Notice(`重新读取失败：${String(e).slice(0, 100)}`);
     }

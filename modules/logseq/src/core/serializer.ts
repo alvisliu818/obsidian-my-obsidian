@@ -23,15 +23,6 @@ export function serializeDocument(doc: ParsedDocument): string {
   const unit = doc.indentUnit ?? '\t';
   const parts: string[] = [];
   const blocks = doc.blocks;
-  /**
-   * 顶层块入列：块前面的空行按原文逐字补回（blankBefore，所有模式）。
-   * 历史上的"相邻逐字块强制补 1 个空行"已移除——空行是否存在完全由原文决定。
-   */
-  const pushTop = (b: Block, _prev?: Block): void => {
-    const need = b.blankBefore ?? 0;
-    for (let k = 0; k < need; k++) parts.push('');
-    parts.push(serializeBlock(b, 0, undefined, unit));
-  };
   if (doc.frontmatter && !blocks[0]?.frontmatter) parts.push(doc.frontmatter);
   if (doc.pageProps) parts.push(doc.pageProps);
   // Obsidian-format page properties: a frontmatter-sourced props-only first
@@ -39,15 +30,15 @@ export function serializeDocument(doc: ParsedDocument): string {
   if (blocks[0]?.frontmatter) {
     const fm = blocks[0];
     parts.push('---', ...fm.text.split('\n'), '---');
-    fm.children.forEach((c, i) => pushTop(c, fm.children[i - 1]));
+    for (const c of fm.children) parts.push(serializeBlock(c, 0, undefined, unit));
     for (let i = 1; i < blocks.length; i++) {
       const b = blocks[i];
       // Logseq props-only blocks after the frontmatter keep their format too.
       if (isPropsOnlyBlock(b)) {
         for (const [k, v] of Object.entries(b.props)) parts.push(`${k}:: ${v}`);
-        b.children.forEach((c, j) => pushTop(c, b.children[j - 1]));
+        for (const c of b.children) parts.push(serializeBlock(c, 0, undefined, unit));
       } else {
-        pushTop(b, blocks[i - 1]);
+        parts.push(serializeBlock(b, 0, undefined, unit));
       }
     }
     return finish(parts.join('\n'));
@@ -58,14 +49,23 @@ export function serializeDocument(doc: ParsedDocument): string {
   if (isPropsOnlyBlock(blocks[0])) {
     const pb = blocks[0];
     for (const [k, v] of Object.entries(pb.props)) parts.push(`${k}:: ${v}`);
-    pb.children.forEach((c, j) => pushTop(c, pb.children[j - 1]));
+    for (const c of pb.children) parts.push(serializeBlock(c, 0, undefined, unit));
     for (let i = 1; i < blocks.length; i++) {
-      pushTop(blocks[i], blocks[i - 1]);
+      // Same raw/raw blank-line rule as the general path below.
+      if (i > 1 && blocks[i - 1].kind === 'raw' && blocks[i].kind === 'raw') parts.push('');
+      parts.push(serializeBlock(blocks[i], 0, undefined, unit));
     }
     return finish(parts.join('\n'));
   }
   for (let i = 0; i < blocks.length; i++) {
-    pushTop(blocks[i], blocks[i - 1]);
+    // Two adjacent VERBATIM blocks need a blank line between them: written
+    // back to back, two fences (or two tables) merge into one construct in
+    // CommonMark. The parser splits them on a blank line, so the writer has to
+    // put it back or the file would not survive a save. A list block's `- `
+    // marker already starts a new item, and a blank line before a nested list
+    // would change its meaning, so only raw/raw pairs get one.
+    if (i > 0 && blocks[i - 1].kind === 'raw' && blocks[i].kind === 'raw') parts.push('');
+    parts.push(serializeBlock(blocks[i], 0, undefined, unit));
   }
   return finish(parts.join('\n'));
 }
@@ -96,6 +96,28 @@ export function serializeBlock(b: Block, depth: number, skipProps?: readonly str
   const marker = b.marker ? b.marker + ' ' : '';
   const textLines = b.text.split('\n');
   const out: string[] = [];
+
+  // 段落容器(bare):源文件没有列表标志,发射时不带 `- ` 前缀——保存不会把
+  // 段落改写成列表项(圆点抑制因此在磁盘上稳定,重解析回来还是段落)。
+  // 软行与块同行深(不再 +1):普通多行段落原文件就没有缩进,加了会改字节。
+  // depth>0 时不走这条:磁盘上嵌套段必须带标记,否则重解析会把裸行并成
+  // 上一块的软行(结构拍平)——那种情况回落到下面的 `- ` 形式。
+  if (b.bare && depth === 0) {
+    out.push(textLines[0]);
+    for (let k = 1; k < textLines.length; k++) out.push(textLines[k]);
+    // 属性行仍需 depth+1:parser 只把缩进一级的 `key:: value` 认成块的属性
+    // (fold 标志就是这样往返的)。
+    const propPrefix = unit.repeat(depth + 1);
+    for (const key of Object.keys(b.props)) {
+      if (skipProps?.includes(key)) continue;
+      out.push(`${propPrefix}${key}:: ${b.props[key]}`);
+    }
+    for (const c of b.children) {
+      out.push(serializeBlock(c, depth + 1, skipProps, unit));
+    }
+    return out.join('\n');
+  }
+
   out.push(`${prefix}- ${marker}${textLines[0]}`);
   const softPrefix = unit.repeat(depth + 1);
   for (let k = 1; k < textLines.length; k++) {

@@ -16,7 +16,7 @@ import { applyBlockProps, blockEditorDoc, createBlock, docPageProps, editablePro
 import { parseDocument } from '../core/parser';
 import { clearLogseqPageProps, registerLogseqPageProps } from '../pagePropsRegistry';
 import { serializeBlock, serializeDocument } from '../core/serializer';
-import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indentBlock, isDescendant, linkParents, moveBlockGroup, moveBlockVertically, outdent, pseudoRootOf, rangeAnchor, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, visibleRange, type MovePosition } from '../core/treeOps';
+import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, isDescendant, linkParents, moveBlockGroup, moveBlockVertically, outdent, pseudoRootOf, rangeAnchor, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, visibleRange, type MovePosition } from '../core/treeOps';
 import { foldLevelOf, foldValueFor, nextFoldLevel, normFoldKey, subtreeFoldTargets, type FoldLevel } from '../core/fold';
 import { UndoStack } from '../state/undoStack';
 import {
@@ -211,15 +211,13 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
       // Page references (linked + unlinked) + the supertag collection track
       // the index. renderPageReferences owns the whole host (it clears and
       // rebuilds it), so the collection is drawn INSIDE that host, after it.
-      // refsPathFor：库外打开但实为库内的文件也能按 vault 路径查询。
-      const rp = this.refsPathFor();
       renderPageReferences(
         this.refsHostEl,
         this.plugin,
-        rp?.path,
-        rp?.basename ?? '',
+        this.file?.path,
+        this.file?.basename ?? '',
       );
-      renderSupertagCollection(this.refsHostEl, this.plugin, rp?.path);
+      renderSupertagCollection(this.refsHostEl, this.plugin, this.file?.path);
       refreshBlockBacklinkBadges(this);
     }) ?? null;
 
@@ -229,8 +227,6 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   onunload(): void {
     this.indexDisposer?.();
     this.indexDisposer = null;
-    this.clearExternalSaveTimer();
-    this.clearBaselineCheckTimer();
     this.commitFocusedText();
     this.commitEmbedEdit();
     clearAllBlockCaches(this.doc.blocks);
@@ -288,14 +284,6 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     return this.externalAbs !== '';
   }
 
-  /** 库外文档的图片基准目录（posix）；库内为 null。见 renderHost 注释。 */
-  get externalImageDir(): string | null {
-    if (!this.isExternal) return null;
-    const posix = this.externalAbs.replace(/\\/g, '/');
-    const cut = posix.lastIndexOf('/');
-    return cut > 0 ? posix.slice(0, cut) : null;
-  }
-
   /**
    * Point this view at an external file and show it.
    *
@@ -311,7 +299,6 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
    * content.
    */
   async openExternalFile(abs: string, name: string, mountPath = ''): Promise<void> {
-    this.discardPending = false;
     const data = readExternalText(abs);
     // Release the seed note's page props before retargeting, so the registry
     // entry that pointed at the borrowed file goes away with it.
@@ -339,20 +326,10 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     this.externalDirty = false;
     this.teardownNativePropsEditor();
     this.setViewData(data, false);
-    // 干净基线取「解析后序列化」的输出：撤销回编辑前状态 = 序列化回到这里。
-    this.externalCleanData = this.serializeCurrent();
     // A page banner that says "outside the vault" is the honest header, and it
     // replaces the vault-only sections with something true.
     this.renderExternalBanner();
     this.renderBreadcrumb();
-    // 库外打开但文件其实位于库内（虚拟文档树点开库内 md 就是这种情况）时，
-    // 反链/未引用面板依然有内容可查：把绝对路径换算回 vault 相对路径。
-    // 真库外文件解析不出路径，下面两个渲染自然什么都不画，banner 照旧。
-    // refs 之前只在 blockIndex 重建时刷新——新开的 leaf 在索引建成后永远
-    // 等不到 onRebuild，面板就一直是空的（实测 numpy.md 复现）。
-    const rp = this.refsPathFor();
-    renderPageReferences(this.refsHostEl, this.plugin, rp?.path, rp?.basename ?? '');
-    renderSupertagCollection(this.refsHostEl, this.plugin, rp?.path);
     // Obsidian caches a leaf's tab text when the view loads, so the retargeted
     // tab keeps showing the seed note's name until the header is re-read.
     // Measured: updateHeader() fixes it; re-calling setViewState instead drops
@@ -460,41 +437,6 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     setLeafTitle(this.leaf, this.externalName);
   }
 
-  /**
-   * refs 查询用的路径：库内文件用 file.path；库外打开时尝试把 externalAbs
-   * 换算回 vault 相对路径（挂载树点开库内 md 的场景），换算不出（真库外）
-   * 返回 null —— 调用方据此跳过 refs 渲染。
-   */
-  /**
-   * 重画底部引用区（设置默认折叠后立即生效；文件切换/索引重建也会各自刷新）。
-   * 库外 shell 里的托管编辑器与库内视图走同一条路。
-   */
-  refreshReferences(): void {
-    const rp = this.refsPathFor();
-    renderPageReferences(this.refsHostEl, this.plugin, rp?.path, rp?.basename ?? '');
-    renderSupertagCollection(this.refsHostEl, this.plugin, rp?.path);
-  }
-
-  private refsPathFor(): { path: string; basename: string } | null {
-    if (!this.isExternal) {
-      return this.file ? { path: this.file.path, basename: this.file.basename } : null;
-    }
-    try {
-      const adapter = (this.app.vault as unknown as { adapter?: { getBasePath?: () => string } }).adapter;
-      const base = adapter?.getBasePath?.();
-      if (!base || !this.externalAbs) return null;
-      const abs = this.externalAbs.replace(/\\/g, '/');
-      const baseNorm = base.replace(/\\/g, '/').replace(/\/+$/, '');
-      if (abs.toLowerCase() !== (baseNorm.toLowerCase() + '/') && !abs.toLowerCase().startsWith(baseNorm.toLowerCase() + '/')) return null;
-      const rel = abs.slice(baseNorm.length + 1);
-      const f = this.app.vault.getAbstractFileByPath(rel);
-      if (f instanceof TFile) return { path: f.path, basename: f.basename };
-    } catch (e) {
-      console.error('refsPathFor failed for', this.externalAbs, e);
-    }
-    return null;
-  }
-
   /** Banner shown instead of the vault-only backlinks / references sections. */
   private renderExternalBanner(): void {
     this.refsHostEl.empty();
@@ -539,12 +481,6 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
    * our formatting.
    */
   private externalDiskData: string | null = null;
-  /**
-   * 「干净基线」：打开或上次保存时的**序列化输出**（不是磁盘原始文本——序列化
-   * 会规范化空行，两者从打开那一刻就可能不等）。撤销（Ctrl+Z）把模型退回这个
-   * 基线时，脏状态应当消失。
-   */
-  private externalCleanData: string | null = null;
   /** Whether the MODEL changed since the file was last written. */
   private externalDirty = false;
 
@@ -563,119 +499,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
    * outside files the user only ever opened. The comparison below is the real
    * guard, and it applies either way.
    */
-  /**
-   * 关闭提示「不保存并关闭」的丢弃标记。save-control 的丢弃钩子（鸭子类型的
-   * discardPendingChanges）置位后，save() 直接跳过——卸载路径（库内 super.save）
-   * 和库外 shell 的 onClose 都不能再把缓冲区写回磁盘。
-   */
-  private discardPending = false;
-
-  /**
-   * 库外文件的自动保存开关（save-control 经 ExternalBlockView.configureAutoSave
-   * 下发）。库内文件由 save-control 的 requestSave 包装器持有，库外 inner 的
-   * file 为 null、包装器直接透传——所以库外的节奏必须自己管：关了就不定时的
-   * 写盘，脏状态留给 save-control（关闭提示 / 手动保存）决定。
-   */
-  private externalAutoSaveEnabled = true;
-  private externalAutoSaveDelayMs = 2000;
-  private externalSaveTimer: ReturnType<typeof setTimeout> | null = null;
-  /** 撤销回磁盘基线的比对定时器（编辑停止 500ms 后序列化比对一次）。 */
-  private baselineCheckTimer: ReturnType<typeof setTimeout> | null = null;
-
-  /** save-control 的库外节奏下发（鸭子类型，可选实现）。 */
-  configureAutoSave(opts: { enabled: boolean; delayMs: number }): void {
-    this.externalAutoSaveEnabled = opts.enabled;
-    this.externalAutoSaveDelayMs = Math.max(0, opts.delayMs);
-    if (!opts.enabled && this.externalSaveTimer !== null) {
-      // 关掉时撤掉已排的定时器：内容保持脏，何时落盘交给 save-control。
-      clearTimeout(this.externalSaveTimer);
-      this.externalSaveTimer = null;
-    }
-  }
-
-  /** 库外文件的延迟落盘（替代原生 requestSave 的 2s 防抖）。 */
-  private scheduleExternalSave(): void {
-    if (!this.externalAutoSaveEnabled || this.externalSaveTimer !== null) return;
-    this.externalSaveTimer = setTimeout(() => {
-      this.externalSaveTimer = null;
-      if (this.externalDirty && !this.discardPending) void this.save();
-    }, this.externalAutoSaveDelayMs);
-  }
-
-  private clearExternalSaveTimer(): void {
-    if (this.externalSaveTimer !== null) {
-      clearTimeout(this.externalSaveTimer);
-      this.externalSaveTimer = null;
-    }
-  }
-
-  /**
-   * 编辑停止后比对一次序列化结果与磁盘基线：相等（撤销把内容退回原状）就清掉
-   * 脏标记——圆点、待保存计数、关闭提示随之消失。防抖 500ms：markDirty 是每个
-   * 编辑动作都会走的口子，逐键全量序列化太贵。
-   */
-  private scheduleBaselineCheck(): void {
-    if (!this.isExternal) return;
-    if (this.baselineCheckTimer !== null) clearTimeout(this.baselineCheckTimer);
-    this.baselineCheckTimer = setTimeout(() => {
-      this.baselineCheckTimer = null;
-      if (!this.isExternal || !this.externalDirty || this.discardPending) return;
-      try {
-        const baseline = this.externalCleanData ?? this.externalDiskData;
-        if (baseline !== null && this.serializeCurrent() === baseline) {
-          this.externalDirty = false;
-          this.clearExternalSaveTimer();
-          (this as unknown as { dirty?: boolean }).dirty = false;
-          this.plugin.notifyEditorDirty();
-        }
-      } catch {
-        /* 序列化失败：保持脏状态，下轮编辑再试 */
-      }
-    }, 500);
-  }
-
-  private clearBaselineCheckTimer(): void {
-    if (this.baselineCheckTimer !== null) {
-      clearTimeout(this.baselineCheckTimer);
-      this.baselineCheckTimer = null;
-    }
-  }
-
-  /** save-control 关闭提示「不保存并关闭」时调用（鸭子类型，可选实现）。 */
-  discardPendingChanges(): void {
-    this.discardPending = true;
-    this.externalDirty = false;
-    this.clearExternalSaveTimer();
-    this.clearBaselineCheckTimer();
-    // Obsidian 自己的未保存标记一并清掉：内容既已放弃，视图不该再报脏。
-    (this as unknown as { dirty?: boolean }).dirty = false;
-  }
-
-  /**
-   * Re-read from disk (the file changed elsewhere — e.g. save-control 版本恢复
-   * 直接写回了原文件)。语义对齐 ExternalFileView / ExternalCodeView 的 reload：
-   * 以磁盘为准整体重载，脏状态清零——缓冲里的旧内容不能再被自动保存写回去。
-   */
-  reload(): void {
-    if (!this.isExternal) return;
-    this.clearExternalSaveTimer();
-    this.clearBaselineCheckTimer();
-    try {
-      const data = readExternalText(this.externalAbs);
-      this.discardPending = false;
-      this.externalDiskData = data;
-      this.externalDirty = false;
-      this.setViewData(data, false);
-      this.externalCleanData = this.serializeCurrent();
-    } catch (e) {
-      new Notice(`重新读取失败：${String(e).slice(0, 100)}`);
-    }
-  }
-
   async save(force = false): Promise<void> {
-    // 关闭提示选了「不保存并关闭」：save() 变为空操作——onUnloadFile 和库外
-    // shell 的 onClose 都走这里，不拦住的话丢弃决定之后内容照样落盘。
-    if (this.discardPending && !force) return;
     if (!this.isExternal) {
       await super.save(force);
       return;
@@ -690,17 +514,10 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     // through the edit paths, which all funnel into markDirty().
     if (!this.externalDirty && !force) return;
     const data = this.serializeCurrent();
-    if (data === this.externalDiskData) {
-      // 内容与磁盘一致（撤销退回原状后触发保存）：缓冲区其实是干净的，
-      // 脏标记一并清掉，别让圆点/计数/关闭提示挂在一个不存在的修改上。
-      this.externalDirty = false;
-      this.externalCleanData = data;
-      return;
-    }
+    if (data === this.externalDiskData) return;
     try {
       writeExternalText(this.externalAbs, data);
       this.externalDiskData = data;
-      this.externalCleanData = data;
       this.externalDirty = false;
     } catch (e) {
       new Notice(`保存失败：${String(e).slice(0, 120)}`);
@@ -708,11 +525,6 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   }
 
   // TextFileView data interface -------------------------------------------------
-
-  /** 库外文件是否有未落盘的改动（ExternalBlockView 与 save-control 的探针）。 */
-  isDirty(): boolean {
-    return this.isExternal && this.externalDirty;
-  }
 
   getViewData(): string {
     const s = this.serializeCurrent();
@@ -726,8 +538,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     // The native properties editor is bound to ONE file — drop it on any
     // (re)load; the next render re-mounts it against the fresh model.
     this.teardownNativePropsEditor();
-    // 保真模式（设置项）：顶层裸文本行按逐字块解析——不画 bullet、保存原样。
-    this.doc = parseDocument(data, { preservePlainText: this.plugin.settings.preservePlainText !== false });
+    this.doc = parseDocument(data);
     this.syncPagePropsRegistry();
     linkParents(this.doc.blocks);
     registerRoots(this.doc.blocks);
@@ -774,8 +585,6 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   }
 
   async onLoadFile(file: import('obsidian').TFile): Promise<void> {
-    // 新内容进来：丢弃标记绝不跨内容存活（同标签页切换文件 = 恢复正常保存）。
-    this.discardPending = false;
     // An external file never comes through here — it was pushed in with
     // setViewData — so there is no vault path to read and no page references
     // to resolve. Leave the model alone.
@@ -829,7 +638,6 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     this.externalName = '';
     this.externalDisplayPath = "";
     this.externalDiskData = null;
-    this.externalCleanData = null;
     this.externalDirty = false;
     if (wasExternal) {
       // While an outside file is shown, `this.file` is a STAND-IN carrying the
@@ -1027,7 +835,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     if (this.focusedCode) {
       const stale = this.focusedCode;
       this.focusedCode = null;
-      stale.view.destroy();
+      stale.view.dispose();
       if (stale.editingWrap && stale.restoreEl && stale.editingWrap.parentElement) {
         stale.editingWrap.replaceWith(stale.restoreEl);
       }
@@ -1082,26 +890,21 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
       // Cursor placement: the code editor's doc holds ONLY the fence content,
       // so whole-text positions (staticPos / numeric pos) shift by the
       // prefix + opening fence line.
-      const v = this.focusedCode.view;
+      const ed = this.focusedCode.view;
       const beforeLen =
         (codeInfo.prefix ? codeInfo.prefix.length + 1 : 0) + codeInfo.openLine.length + 1;
-      const len = v.state.doc.length;
+      const len = ed.getDocLength();
       if (pending?.clickXY) {
         // On mixed mounts the layout barely changed (only the code element
         // was swapped), so the click maps accurately onto the fresh editor.
-        let p = cursorAtCoords(v, pending.clickXY.x, pending.clickXY.y, 'start');
+        let p = ed.offsetAtCoords(pending.clickXY.x, pending.clickXY.y, 0);
         if (pending.staticPos !== null) {
-          let top: number | null = null;
-          try {
-            top = v.coordsAtPos(p)?.top ?? null;
-          } catch {
-            top = null;
-          }
+          const top = ed.topAtOffset(p);
           if (top === null || Math.abs(top - pending.clickXY.y) > 60) {
             p = Math.max(0, Math.min(pending.staticPos - beforeLen, len));
           }
         }
-        applyCursorAndScroll(v, p);
+        ed.placeCursorAndScroll(p);
       } else if (pending) {
         const p =
           pending.pos === 'start'
@@ -1109,7 +912,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
             : pending.pos === 'end'
               ? len
               : Math.max(0, Math.min(pending.pos - beforeLen, len));
-        applyCursorAndScroll(v, p);
+        ed.placeCursorAndScroll(p);
       }
       this.focusStartSnapshot = serializeDocument(this.doc);
       // The dedicated code editor bypasses the generic mount path — without
@@ -1139,8 +942,8 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
           });
           // Cursor: the doc starts at the opening fence line — whole-text
           // positions shift by the prefix (plus its newline).
-          const cv = this.focusedCode.view;
-          const len = cv.state.doc.length;
+          const ed = this.focusedCode.view;
+          const len = ed.getDocLength();
           if (pending) {
             const off = mixed.prefix.length + 1;
             const p =
@@ -1149,7 +952,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
                 : pending.pos === 'end'
                   ? len
                   : Math.max(0, Math.min(pending.pos - off, len));
-            applyCursorAndScroll(cv, p);
+            ed.placeCursorAndScroll(p);
           }
           this.focusStartSnapshot = serializeDocument(this.doc);
           this.updateOutlinePath();
@@ -1413,7 +1216,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     if (fc) {
       this.focusedCode = null;
       this.focusedBlock = null;
-      const content = fc.view.state.doc.toString();
+      const content = fc.view.getText();
       const head = fc.prefix ? fc.prefix + '\n' : '';
       // Source mode: the doc IS the fence source (markers/language possibly
       // edited) — written verbatim under the prefix. Otherwise re-wrap the
@@ -1426,7 +1229,7 @@ ${content}
 ${fc.fence}`
           : `${head}${fc.openLine}
 ${content}`;
-      fc.view.destroy();
+      fc.view.dispose();
       // Mixed-block mount: put the static code element back so the cached
       // static render (image + code) stays valid — the commit re-attaches it
       // unchanged, and nothing re-renders or flickers.
@@ -1790,7 +1593,7 @@ ${content}`;
       const t = addrRoot ? (blockAtPath(addrRoot, path) ?? (path.length === 0 ? addrRoot : null)) : null;
       if (!t) return false;
       const oldParent = t.parent;
-      view.mutate(() => (shift ? outdent(t) : indentBlock(t)), () => ({ lists: [oldParent, t.parent] }));
+      view.mutate(() => (shift ? outdent(t) : indent(t)), () => ({ lists: [oldParent, t.parent] }));
       return true;
     };
 
@@ -1842,7 +1645,7 @@ ${content}`;
     void mutatePageEmbedSource(this, src.file!, (doc) => {
       const root = src.id ? findBlockById(doc.blocks, src.id) : pseudoRootOf(doc.blocks);
       const t = root ? blockAtPath(root, path) : null;
-      if (t) (shift ? outdent(t) : indentBlock(t));
+      if (t) (shift ? outdent(t) : indent(t));
     }).then(() => {
       if (isPageEmbed) void refreshPageEmbedBox(this, box, src.file!);
       else void refreshEmbedBox(this, box, src.id);
@@ -2100,27 +1903,12 @@ ${content}`;
   mutate(fn: () => void, patch?: () => MutatePatch): void {
     const v = this.focusedView;
     const b = this.focusedBlock;
-    let committed: string | null = null;
     if (v && b) {
       commitEditorText(v, b, this.templateContext());
-      committed = b.text;
       this.savedFocusPos = v.state.selection.main.head;
     }
     this.undo.push(this.serializeCurrent());
     fn();
-    // fn() may structurally change the focused block (Enter at the block start
-    // sets b.text='' and inserts a sibling). The still-mounted editor holds
-    // the PRE-mutation text; focusBlock()'s commitFocusedText() would then
-    // write that stale content back over the mutation (measured: Enter at the
-    // start of "## 12.3 …" with a heading folded duplicated the heading). If
-    // the model moved past what was committed, drop the stale editor now.
-    if (v && b && committed !== null && this.focusedView === v && this.focusedBlock === b && b.text !== committed) {
-      v.destroy();
-      this.focusedView = null;
-      this.focusedBlock = null;
-      clearActiveBlockEditor(this.app);
-      refreshBlockContent(b, this);
-    }
     this.markDirty();
     const p = patch?.();
     if (!p || !this.renderPatched(p)) this.render();
@@ -2148,7 +1936,9 @@ ${content}`;
   }
 
   createFirstBlock(): void {
+    // 空文档的第一个块 = 段落容器(思源式默认:大纲列表只是一种容器)。
     const b = createBlock('');
+    b.bare = true;
     this.mutate(() => {
       this.doc.blocks.push(b);
     });
@@ -2162,6 +1952,8 @@ ${content}`;
     this.mutate(
       () => {
         nb = createBlock('');
+        // 与 createFirstBlock 同旨:显式新增的块默认是段落容器。
+        (nb as Block).bare = true;
         const last = this.doc.blocks[this.doc.blocks.length - 1];
         if (last) {
           const sibs = siblingsOf(last);
@@ -2468,48 +2260,24 @@ ${content}`;
   }
 
   indentSelected(shift: boolean): void {
-    const moved: Block[] = [];
-    let refused = 0;
+    const tops = this.topSelectedBlocks().filter((b) => b.kind === 'list');
+    if (tops.length === 0) return;
+    // Upward: top-down; downward: bottom-up — each block moves relative to
+    // its (possibly just-moved) previous sibling.
+    const seq = shift ? [...tops].reverse() : tops;
     this.mutate(
       () => {
-        // 缩进/取消缩进按文档顺序（outdent 反过来：每个块相对于可能刚移动过的
-        // 前一个兄弟）。indentBlock 自己会把逐字段的段落/标题/代码提升成大纲块
-        // （Tab 就是"显式结构操作"），表格/公式/引用/图片没有稳定的大纲形态，
-        // 会被拒绝并在下面统一告知原因。
-        const tops = this.topSelectedBlocks();
-        const seq = shift ? [...tops].reverse() : tops;
         for (const b of seq) {
-          if (shift ? outdent(b) : indentBlock(b)) moved.push(b);
-          else refused++;
+          if (shift) outdent(b);
+          else indent(b);
         }
       },
       () => ({ full: true }),
     );
-    // 选集收敛到**真正移动过**的块。锚点父块不动却留在选集里，会让紧接着的
-    // Shift+Tab 变成"对根级块 outdent"的空操作——取消缩进按不动的典型病因。
-    this.selectedBlocks = new Set(moved);
-    this.syncSelectionClasses();
-    if (moved.length > 0) {
-      // The patch above forces a full re-render, so the selection's keyboard
-      // focus has to be re-asserted — otherwise the SECOND Tab (and every one
-      // after it) goes nowhere and the shortcut looks like it worked only once.
-      this.focusTreeForSelection();
-      if (refused > 0) {
-        // 部分成功也要说清楚：哪类块动不了，否则用户只会觉得"时好时坏"。
-        new Notice(
-          shift
-            ? `已取消缩进 ${moved.length} 个块；${refused} 个已在最顶层。`
-            : `已缩进 ${moved.length} 个块；${refused} 个动不了（没有前一个兄弟，或是表格/公式/引用/图片等不能转大纲的块）。`,
-        );
-      }
-    } else if (refused > 0) {
-      // 静默失败是"多选缩进没反应"最大的抱怨源：说清楚为什么动不了。
-      new Notice(
-        shift
-          ? '无法取消缩进：选中的块已经在最顶层。'
-          : '无法缩进：需要一个前一个兄弟块作为父级；表格、公式、引用、图片等块不能转成大纲项。',
-      );
-    }
+    // The patch above forces a full re-render, so the selection's keyboard
+    // focus has to be re-asserted — otherwise the SECOND Tab (and every one
+    // after it) goes nowhere and the shortcut looks like it worked only once.
+    this.focusTreeForSelection();
   }
 
   /** Bulk move: up passes top-down, down passes bottom-up. */
@@ -2763,7 +2531,7 @@ ${content}`;
     this.mutate(
       () => {
         if (shift) outdent(b);
-        else indentBlock(b);
+        else indent(b);
       },
       () => ({ lists: [oldParent, b.parent] }),
     );
@@ -3008,9 +2776,7 @@ ${content}`;
 
   private restoreSnapshot(snap: string): void {
     this.commitFocusedText();
-    // 撤销/重做必须回到与当前打开方式一致的模型，否则一次 undo 就会把文件
-    // 悄悄换成另一种格式。
-    this.doc = parseDocument(snap, { preservePlainText: this.plugin.settings.preservePlainText !== false });
+    this.doc = parseDocument(snap);
     linkParents(this.doc.blocks);
     this.zoomedBlock = this.zoomedBlock && findBlockById(this.doc.blocks, zoomId(this.zoomedBlock));
     this.render();
@@ -3039,16 +2805,25 @@ ${content}`;
         const { text, props } = splitPropLines(live);
         b.text = text;
         applyBlockProps(b, props);
-        const s = serializeDocument(this.doc);
+        const s = this.serializeDocCurrent();
         b.text = savedText;
         b.props = savedProps;
         return s;
       }
     }
+    return this.serializeDocCurrent();
+  }
+
+  /**
+   * 序列化出口:库内文件 = 大纲序列化;混合视图(CodeDocView)的子类覆写它,
+   * 从块模型重建代码文本(围栏块剥围栏、其余逐字)。聚焦 CM 的活文本覆盖
+   * 已在 serializeCurrent 里完成,此处拿到的是已同步的块模型。
+   */
+  protected serializeDocCurrent(): string {
     return serializeDocument(this.doc);
   }
 
-  private markDirty(): void {
+  protected markDirty(): void {
     // While an outside file is shown, the borrowed seed note is NOT what is being
     // edited. Logging the edit against it, and snapshotting the seed as a
     // "backup", would both misattribute the change and litter the vault with a
@@ -3062,20 +2837,8 @@ ${content}`;
       // The only signal that separates "the user typed" from "the file merely
       // round-trips" — every edit funnels through here.
       this.externalDirty = true;
-      // 撤销（Ctrl+Z）也走这里：如果撤销让内容回到了磁盘基线，脏状态应当
-      // 消失——否则标签页圆点、待保存计数、关闭提示都停留在一个已经不存在的
-      // "修改"上。序列化有成本，防抖到编辑停止后再比对。
-      this.scheduleBaselineCheck();
     }
-    if (!this.isExternal) {
-      this.requestSave(); // native: sets dirty + debounced save (2s)
-    } else {
-      // 库外：原生 requestSave 的 2s 防抖会无视 save-control 的自动保存开关
-      // （file 为 null，包装器透传），改走自己的调度——关了就不定时写盘。
-      this.scheduleExternalSave();
-    }
-    // 状态栏字数刷新（main 侧节流）；所有编辑路径都汇聚到这里，一个口就够。
-    this.plugin.notifyEditorDirty();
+    this.requestSave(); // native: sets dirty + debounced save (2s)
   }
 
   private async onExternalModify(file: TAbstractFile): Promise<void> {

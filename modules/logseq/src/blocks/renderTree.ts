@@ -69,6 +69,27 @@ export function forgetBlockCache(b: Block): void {
 }
 
 /**
+ * 列表块文本:行首 markdown 标记('# x')加渲染期转义,围栏内部跳过。
+ * 只在渲染管线里用 —— 块文本本身保持原样。
+ */
+function escapeInBlockHeadings(text: string): string {
+  const lines = text.split('\n');
+  let fence: string | null = null; // 当前所处围栏串(如 ```);null = 不在围栏内
+  return lines
+    .map((line) => {
+      const m = /^(`{3,}|~{3,})/.exec(line);
+      if (m) {
+        if (!fence) fence = m[1];
+        else if (m[1][0] === fence[0] && line.trim().replace(/[`\s~]/g, '') === '') fence = null;
+        return line;
+      }
+      if (!fence && /^#{1,6}\s/.test(line)) return line.replace(/^(#{1,6}\s)/, '\\$1');
+      return line;
+    })
+    .join('\n');
+}
+
+/**
  * The cached static render for `b` when it still matches the current text
  * (NOT attached — callers attach it themselves). Used by the mixed-block
  * code editor to keep the rendered prefix (image/prose) on screen while only
@@ -260,7 +281,9 @@ function renderBlock(b: Block, host: BlockRenderHost, budget?: RenderBudget): HT
     // one row whose direction has changed.
     if (level !== 'none') caret.addClass('is-persistent');
   }
-  if (b.kind === 'list' && !nativeProps) {
+  // 大纲圆点只属于列表容器。段落容器(bare:源文件没有列表标志)不显示圆点;
+  // 但带任务标记的裸行(`TODO x`)语义上是任务项,圆点照显(复选框在下面)。
+  if (b.kind === 'list' && !b.bare && !nativeProps) {
     const bullet = controls.createEl('div', { cls: 'block-bullet' });
     bullet.setAttribute('aria-label', 'Focus this block');
     bullet.setAttribute('title', 'Click to focus · Shift/Ctrl+click to select');
@@ -840,16 +863,21 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
   const hasPageEmbed = /!\[\[[^\[\]]+\]\]/.test(b.text);
   // HTML img 相对 src 锚定：防库内同名图片劫持（见 anchorRelativeImgSrcs 注释）
   const imgAnchorTokens: ImgAnchorToken[] = [];
+  // Logseq parity: 列表块文本里的 markdown 标题行('# x')渲染为字面文本 ——
+  // Logseq 块内没有标题语义;Obsidian 渲染器会把它们 heading 化,在混合视图里
+  // 把代码注释行渲染成大字标题。仅影响渲染(块文本不变,往返无损);围栏
+  // 内部保持逐字(代码里的 # 不动)。raw 块(真标题)不受影响。
+  const blockSource = b.kind === 'list' ? escapeInBlockHeadings(b.text) : b.text;
   const mdSource = withTableSeparation(
     withQuoteRowSeparation(
       anchorRelativeImgSrcs(
         hasPageEmbed
-        ? b.text.replace(/!\[\[([^\[\]]+)\]\]/g, (_m, page: string) => {
+        ? blockSource.replace(/!\[\[([^\[\]]+)\]\]/g, (_m, page: string) => {
             const token = `LGPAGEEMBED${pageEmbedTokens.length}LGPAGEEMBED`;
             pageEmbedTokens.push({ token, page });
             return token;
           })
-        : b.text,
+        : blockSource,
         host,
         imgAnchorTokens,
       ),
@@ -927,66 +955,21 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
  * md 所在目录优先，其次库根）；渲染后用该文件的资源 URL 恢复。
  * 解析不到文件的 src 原样保留，交给 Obsidian 的默认行为。
  */
-export type ImgAnchorToken = { token: string; file: TFile | null; abs?: string };
+export type ImgAnchorToken = { token: string; file: TFile | null };
 
 const IMG_ANCHOR_PREFIX = 'LGIMGANCHOR';
 const IMG_ANCHOR_RE = /^LGIMGANCHOR(\d+)LGIMGANCHOR$/;
 const IMG_EXT_RE = /^(png|jpe?g|gif|webp|svg|bmp|avif|ico)$/i;
-const IMG_EXT_DOT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif|ico)$/i;
-
-/**
- * 库外图片的 blob URL 缓存（LRU）。磁盘二进制 → objectURL；同一个 abs 反复
- * 渲染复用，超容量淘汰并 revoke。
- */
-const absImgUrlCache = new Map<string, string>();
-const ABS_IMG_CACHE_MAX = 200;
-
-function absImgUrl(abs: string): string | null {
-	const cached = absImgUrlCache.get(abs);
-	if (cached) {
-		// LRU touch
-		absImgUrlCache.delete(abs);
-		absImgUrlCache.set(abs, cached);
-		return cached;
-	}
-	try {
-		// eslint-disable-next-line @typescript-eslint/no-var-requires
-		const fs = eval('require')('fs') as { readFileSync(p: string): Buffer };
-		const data = fs.readFileSync(abs) as unknown as BlobPart;
-		const ext = abs.split('.').pop()?.toLowerCase() ?? '';
-		const mime =
-			ext === 'svg'
-				? 'image/svg+xml'
-				: `image/${ext === 'jpg' ? 'jpeg' : ext}`;
-		const url = URL.createObjectURL(new Blob([data], { type: mime }));
-		absImgUrlCache.set(abs, url);
-		if (absImgUrlCache.size > ABS_IMG_CACHE_MAX) {
-			const oldest = absImgUrlCache.keys().next().value;
-			if (oldest !== undefined) {
-				const u = absImgUrlCache.get(oldest);
-				absImgUrlCache.delete(oldest);
-				if (u) URL.revokeObjectURL(u);
-			}
-		}
-		return url;
-	} catch {
-		return null;
-	}
-}
 
 export function anchorRelativeImgSrcs(
 	md: string,
 	host: BlockRenderHost,
 	tokens: ImgAnchorToken[],
 ): string {
-	const extDir = host.externalImageDir ?? null;
 	const file = host.file;
-	if (!file && !extDir) return md; // 片段场景无基准目录，维持现状
-	const dir = extDir ?? (file?.parent?.path ?? '');
-	// 库外模式：file 是句柄替身（path=Mounts/<name>、parent=null），vault 解析
-	// 全靠不住，三种图片构造全部锚定到磁盘目录。
-	const external = !!extDir;
-	const resolve = (raw: string): { file: TFile | null; abs?: string } | null => {
+	if (!file) return md; // 片段场景无基准目录，维持现状
+	const dir = file.parent?.path ?? '';
+	const resolve = (raw: string): TFile | null => {
 		if (!raw || /^(app|https?|data|vault|file|mailto):/i.test(raw) || raw.startsWith('/')) return null;
 		let decoded = raw;
 		try {
@@ -994,80 +977,26 @@ export function anchorRelativeImgSrcs(
 		} catch {
 			/* 保留原文 */
 		}
-		if (external) {
-			// 磁盘解析：目录优先，其次原样（尽量不再退回全库）。
-			const posix = decoded.replace(/\\/g, '/').replace(/^\.\//, '');
-			const candidates = dir ? [`${dir}/${posix}`, posix] : [posix];
-			// eslint-disable-next-line @typescript-eslint/no-var-requires
-			const fs = eval('require')('fs') as { existsSync(p: string): boolean };
-			for (const c of candidates) {
-				if (IMG_EXT_DOT_RE.test(c) && fs.existsSync(c)) return { file: null, abs: c };
-			}
-			// wiki 嵌入常省扩展名：逐个补图片扩展名探测
-			for (const c of candidates) {
-				for (const ext of ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']) {
-					const probe = `${c}.${ext}`;
-					if (fs.existsSync(probe)) return { file: null, abs: probe };
-				}
-			}
-			return null;
-		}
 		const candidates = dir ? [`${dir}/${decoded}`, decoded] : [decoded];
 		for (const p of candidates) {
 			const found = host.app.vault.getAbstractFileByPath(p);
-			if (found instanceof TFile && IMG_EXT_RE.test(found.extension)) return { file: found };
+			if (found instanceof TFile && IMG_EXT_RE.test(found.extension)) return found;
 		}
 		return null;
 	};
-	const tokenFor = (resolved: { file: TFile | null; abs?: string }): string => {
-		const token = `${IMG_ANCHOR_PREFIX}${tokens.length}${IMG_ANCHOR_PREFIX}`;
-		tokens.push({ token, file: resolved.file, abs: resolved.abs });
-		return token;
-	};
-	let out = md;
-	if (external) {
-		// HTML img（先处理，避免被 md 图规则二次命中——img 标签里不含 ![ 构造）
-		out = out.replace(
-			/(<img\b[^>]*?\bsrc=")([^"]*)(")/gi,
-			(m, pre: string, src: string, post: string) => {
-				const resolved = resolve(src);
-				return resolved ? `${pre}${tokenFor(resolved)}${post}` : m;
-			},
-		);
-		out = out.replace(
-			/(<img\b[^>]*?\bsrc=')([^']*)(')/gi,
-			(m, pre: string, src: string, post: string) => {
-				const resolved = resolve(src);
-				return resolved ? `${pre}${tokenFor(resolved)}${post}` : m;
-			},
-		);
-		// md 图：解析得到磁盘文件才转成 HTML img（带 token src），否则原样
-		out = out.replace(/!\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, (m, alt: string, src: string) => {
-			const resolved = resolve(src);
-			if (!resolved) return m;
-			const safeAlt = alt.replace(/"/g, '&quot;');
-			return `<img alt="${safeAlt}" src="${tokenFor(resolved)}">`;
-		});
-		// wiki 嵌入：同上（省扩展名的由 resolve 探测补全）
-		out = out.replace(/!\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g, (m, linktext: string) => {
-			const resolved = resolve(linktext.trim());
-			if (!resolved) return m;
-			return `<img src="${tokenFor(resolved)}">`;
-		});
-		return out;
-	}
 	const rewrite = (m: string, pre: string, src: string, post: string): string => {
 		const resolved = resolve(src);
 		if (!resolved) return m;
-		const token = tokenFor(resolved);
+		const token = `${IMG_ANCHOR_PREFIX}${tokens.length}${IMG_ANCHOR_PREFIX}`;
+		tokens.push({ token, file: resolved });
 		return `${pre}${token}${post}`;
 	};
-	return out
+	return md
 		.replace(/(<img\b[^>]*?\bsrc=")([^"]*)(")/gi, rewrite)
 		.replace(/(<img\b[^>]*?\bsrc=')([^']*)(')/gi, rewrite);
 }
 
-/** 渲染后：把 token src 恢复为真实图片 URL（库内=资源 URL，库外=blob URL）。 */
+/** 渲染后：把 token src 恢复为被锚定文件的 vault 资源 URL。 */
 export function applyAnchoredImgSrcs(
 	holder: HTMLElement,
 	host: BlockRenderHost,
@@ -1081,9 +1010,6 @@ export function applyAnchoredImgSrcs(
 		const entry = tokens[Number(m[1])];
 		if (entry?.file) {
 			img.setAttribute('src', host.app.vault.getResourcePath(entry.file));
-		} else if (entry?.abs) {
-			const url = absImgUrl(entry.abs);
-			if (url) img.setAttribute('src', url);
 		}
 	});
 }

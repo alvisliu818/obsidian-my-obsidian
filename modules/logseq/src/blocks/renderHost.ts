@@ -34,13 +34,6 @@ export interface BlockRenderHost extends Component {
   doc: ParsedDocument;
   /** 所属文件;片段场景为 null(静态渲染的相对链接 sourcePath 退化为 '') */
   file: TFile | null;
-  /**
-   * 库外文档的图片基准目录（externalAbs 的 posix 目录）。
-   * 库外文件没有真实 TFile——它的 file 是句柄替身(parent=null)，相对图片
-   * 路径既不能就近解析也会被全库模糊匹配劫持，必须锚定到这个磁盘目录。
-   * 库内场景为 null。
-   */
-  readonly externalImageDir?: string | null;
   containerEl: HTMLElement;
   /** 宿主所在工作区 leaf(文件型视图用);片段宿主为 null */
   readonly leaf: WorkspaceLeaf | null;
@@ -70,11 +63,6 @@ export interface BlockRenderHost extends Component {
   commitFocusedText(): void;
   /** 按 selectedBlocks 重刷 DOM 选中类(块级命令后同步视觉) */
   syncSelectionClasses(): void;
-  /**
-   * 多选块的批量缩进/取消缩进。编辑态按 Tab 时若存在多选，键位会把事件路由到
-   * 这里（否则 CM6 只会缩进焦点块，多选像坏了一样）。可选：片段编辑器不实现。
-   */
-  indentSelected?(shift: boolean): void;
   focusBlock(b: Block, pos?: CursorPos): void;
   focusBlockFromClick(b: Block, ev: MouseEvent): void;
   selectFromClick(b: Block, ev: MouseEvent): void;

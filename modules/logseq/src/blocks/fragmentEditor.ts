@@ -419,7 +419,9 @@ export class FragmentHost extends Component implements BlockRenderHost {
 
   createFirstBlock(): void {
     if (!this.opts.editable) return;
+    // 片段内新块同样默认段落容器(与视图同旨)。
     const b = createBlock('');
+    b.bare = true;
     this.mutate(() => {
       this.doc.blocks.push(b);
     });
@@ -432,6 +434,7 @@ export class FragmentHost extends Component implements BlockRenderHost {
     let nb: Block | null = null;
     this.mutate(() => {
       nb = createBlock('');
+      (nb as Block).bare = true;
       const last = this.doc.blocks[this.doc.blocks.length - 1];
       if (last) {
         const sibs = siblingsOf(last);

@@ -14,7 +14,7 @@
  * that implies — backlinks, block references, search.
  */
 
-import { FileSystemAdapter, ItemView, Menu, Notice, setIcon, type WorkspaceLeaf } from 'obsidian';
+import { FileSystemAdapter, ItemView, Menu, Notice, setIcon, TFile, TFolder, type WorkspaceLeaf } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import type { ExternalMount } from '../types';
 import { mountDisplayName } from '../types';
@@ -29,9 +29,9 @@ import {
 } from '../features/mountFilter';
 import {
   MOUNT_FOLDER,
-  copyEntry,
   createEmptyFile,
   createLink,
+  deletePermanent,
   ensureDirX,
   exists,
   extOf,
@@ -40,18 +40,15 @@ import {
   linkKindFor,
   linkTargetFor,
   removeLink,
+  renameEntry,
   safeSegment,
   scanExternal,
+  trashEntry,
   validateEntryName,
   linkVaultPath,
 } from '../features/extFs';
-import { NamePromptModal } from './promptModals';
+import { ConfirmModal, NamePromptModal } from './promptModals';
 import { iconForEntry } from '../features/iconTheme';
-import {
-  forwardFileMenuEvent,
-  promptExternalDelete,
-  promptExternalRename,
-} from '../features/externalPaneMenu';
 
 export const VIEW_TYPE_MOUNT_PANEL = 'logseq-mount-panel';
 
@@ -111,9 +108,6 @@ export class MountPanelView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
-    // 键盘焦点：树要能收 Ctrl+C/V，容器必须先可聚焦。点行时也会把焦点抓过来。
-    this.contentEl.tabIndex = 0;
-    this.contentEl.addEventListener('keydown', (ev) => this.onPanelKeydown(ev as KeyboardEvent));
     this.render();
   }
 
@@ -516,9 +510,7 @@ export class MountPanelView extends ItemView {
     // 定位当前文件时按挂载找到区段、再按固定行高算偏移。
     section.dataset.mountId = mount.id;
 
-    const head = section.createDiv({
-      cls: 'logseq-mount-head' + (this.current?.mountId === mount.id && this.current?.rel === null ? ' is-current' : ''),
-    });
+    const head = section.createDiv({ cls: 'logseq-mount-head' });
     const caret = head.createSpan({ cls: 'logseq-mount-caret' });
     const state = this.scan(mount);
     caret.textContent = state.open.has('') ? '▾' : '▸';
@@ -538,10 +530,6 @@ export class MountPanelView extends ItemView {
     );
     head.createSpan({ cls: 'logseq-mount-name', text: headLabel });
     if (mount.pinned) head.createSpan({ cls: 'logseq-mount-flag is-pinned', text: '已固定' });
-    head.addEventListener('mousedown', () => {
-      this.setCurrent(mount.id, null);
-      this.contentEl.focus();
-    });
     head.addEventListener('click', () => {
       if (state.open.has('')) state.open.delete('');
       else state.open.add('');
@@ -640,25 +628,20 @@ export class MountPanelView extends ItemView {
         if (n.isDir && state.open.has(n.rel)) walk(n.children, depth + 1);
       }
     };
-    walk(state.tree, 0);
+    // 根层从 depth 1 起排:挂载根是区块头(不在行流里),子项整体缩进一级,
+    // 与根形成父子缩进关系(此前 depth 0 与头完全平齐,被报告为 bug)。
+    walk(state.tree, 1);
     return out;
   }
 
   private renderNode(parent: HTMLElement, mount: ExternalMount, node: MountNode, state: MountState, depth: number): void {
     const isOpen = state.open.has(node.rel);
-    const isCurrent = this.current?.mountId === mount.id && this.current?.rel === node.rel;
     const row = parent.createDiv({
-      cls: 'logseq-mount-row ' + (node.isDir ? 'is-dir' : 'is-file') + (isCurrent ? ' is-current' : ''),
+      cls: 'logseq-mount-row ' + (node.isDir ? 'is-dir' : 'is-file'),
     });
     // 定位与测试用：行级身份（挂载 + 相对路径）。
     row.dataset.mount = mount.id;
     row.dataset.rel = node.rel;
-    // 点击/右键都会把这行设为「当前行」——Ctrl+C/V 的锚点。mousedown 而不是
-    // click：click 会打开文件/切换折叠，锚点却应该在任何按下时就位。
-    row.addEventListener('mousedown', () => {
-      this.setCurrent(mount.id, node.rel);
-      this.contentEl.focus();
-    });
     // Native-explorer rhythm, pulled 10px left as a whole (user preference):
     // folder rows carry a 14px caret gutter, FILE rows the same gutter plus
     // the caret's width (11px + 4px gap), so the file ICON aligns with the
@@ -699,6 +682,9 @@ export class MountPanelView extends ItemView {
     }
 
     const text = isTextMount(extOf(node.name));
+    // 文件行补一个空 caret 占位,图标与同级文件夹的图标对齐
+    // (否则文件图标顶到文件夹 caret 的位置,父子缩进看不出来)。
+    row.createSpan({ cls: 'logseq-mount-caret' });
     // Files get the icon theme's own artwork when it is installed, so a mounted
     // tree shows the same icons the vault's files do. Folders keep a generic
     // marker: the theme resolves folder icons by vault path, which an
@@ -767,6 +753,12 @@ export class MountPanelView extends ItemView {
             }),
         );
         if (!node.isDir) {
+          menu.addItem((item) =>
+            item
+              .setTitle('用 Monaco 打开（纯代码）')
+              .setIcon('code' as never)
+              .onClick(() => void this.plugin.openExternalEntry(mount, node, { forceCodeEditor: true })),
+          );
           menu.addItem((item) =>
             item
               .setTitle('只读打开')
@@ -1013,13 +1005,76 @@ export class MountPanelView extends ItemView {
    * Forward the native `file-menu` event so THIS menu carries everything the
    * file explorer's would — most importantly the items OTHER PLUGINS add.
    *
-   * 实现搬到了 `features/externalPaneMenu.ts`（库外标签页的 ⋮ 菜单用同一套：
-   * hop-1 TExternalFile + hop-2 TFile 伪适配器 + 标题去重 LAST wins），这里
-   * 只保留挂载面板自己的中性 source 与调用约定。返回 hop-1 是否真的跑了，
-   * 调用方据此决定要不要补「复制绝对路径」兜底。
+   * The file is resolved to its `TExternalFile` (`file:`-prefixed lookup,
+   * Obsidian 1.14.4+); handlers receive a real TAbstractFile, so items that
+   * act through the vault API work unchanged. A neutral source string keeps
+   * most core-explorer entries out — 新建 / 重命名 / 删除 already exist above
+   * via the SiYuan-parity block — but handlers otherwise append freely
+   * (Obsidian sorts the menu by section at show time, so placement is the
+   * menu's business, not ours). One broken handler must not take the whole
+   * menu down, hence the try/catch. Returns whether the forward actually
+   * happened, so callers can skip items the handlers already provide —
+   * 「复制绝对路径」 in particular is added by the open-with group.
    */
   private addFileMenuEventItems(menu: Menu, abs: string, isDir: boolean): boolean {
-    return forwardFileMenuEvent(this.plugin, menu, abs, isDir, 'logseq-mount-panel');
+    if (!this.plugin.canOpenNativeExternal()) return false;
+    // First hop: the TExternalFile lookup only resolves FILES, so folder rows
+    // get af == null here — the adapter hops below still run for them.
+    const af = this.app.vault.getAbstractFileByPath(`file:${abs.replace(/\\/g, '/')}`);
+    if (af) {
+      menu.addSeparator();
+      try {
+        this.app.workspace.trigger('file-menu', menu, af, 'logseq-mount-panel');
+      } catch (e) {
+        console.error('file-menu handler failed for', abs, e);
+        return false;
+      }
+    }
+    // Second hop: handlers that gate on `file instanceof TFile` / `TFolder`
+    // (Shell Commands among them) skip TExternalFile entirely, so re-fire the
+    // event with a matching T-shaped adapter. The adapter path is a
+    // vault-root-escaping `../` chain, NOT the absolute path: plugins like
+    // Shell Commands build variable values as
+    // `getVaultAbsolutePath() + '/' + file.path`, so an absolute path would
+    // produce `<vault>/E:/...` garbage while the `../` chain resolves to the
+    // real external file (absolute mode via the OS, relative mode via the
+    // vault-dir cwd that Shell Commands spawns with).
+    // Handlers re-fire on both hops; the title dedupe below keeps LAST wins
+    // so the adapter-path item (correct variables) survives, not the hop-1
+    // TExternalFile one (`file:`-prefixed path, garbage for variables).
+    try {
+      const adapter = isDir ? makeExternalTFolderAdapter(abs, this.app.vault) : makeExternalTFileAdapter(abs, this.app.vault);
+      if (adapter) {
+        this.app.workspace.trigger('file-menu', menu, adapter, isDir ? 'logseq-mount-panel-tfolder' : 'logseq-mount-panel-tfile');
+      }
+    } catch (e) {
+      console.error('file-menu (adapter) handler failed for', abs, e);
+    }
+    // Some handlers re-offer entries this menu already added earlier (the
+    // known case is 重命名). First occurrence wins; separators carry no title
+    // and stay. `items` is undocumented — hence the cast — and the dedupe
+    // splices IN PLACE, so the live array is the one being mutated.
+    const items = (menu as unknown as { items: Array<{ titleEl?: { textContent?: string | null }; title?: unknown } | null> }).items;
+    // Some handlers re-offer entries this menu already added earlier (each
+    // forward hop re-fires the whole handler set, so most entries land twice).
+    // MenuItems have NO `.title` field — setTitle only writes titleEl — hence
+    // the textContent read. LAST occurrence wins: the hop-1 TExternalFile pass
+    // leaves items whose captured file has a `file:`-prefixed path (Shell
+    // Commands would build garbage absolute paths from it), while the hop-2
+    // adapter carries the vault-escaping path that resolves correctly.
+    // Separators carry no title and stay.
+    const seen = new Set<string>();
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      const t = (it?.titleEl?.textContent ?? (typeof it?.title === 'string' ? it.title : '') ?? '').trim();
+      if (!t) continue;
+      if (seen.has(t)) items.splice(i, 1);
+      else seen.add(t);
+    }
+    // Report whether the TExternalFile hop actually ran (folder rows have no
+    // TExternalFile lookup): callers use it to decide whether to add their own
+    // 复制绝对路径 fallback, so it must not count adapter-only forwards.
+    return af != null;
   }
 
   // ------------------------------------------------------------------
@@ -1039,26 +1094,6 @@ export class MountPanelView extends ItemView {
     // 新建目标:文件夹节点/挂载根进它自己;文件节点进它的上级目录。
     const canNew = node === null || node.isDir || true; // 文件也能在其上级新建,始终给
     void canNew;
-
-    // ---- 复制 / 粘贴（Ctrl+C / Ctrl+V 的菜单形态，同一套代码） ----
-    if (node) {
-      menu.addItem((item) =>
-        item
-          .setTitle('复制')
-          .setIcon('copy' as never)
-          .onClick(() => this.copyNode(node)),
-      );
-    }
-    const clip = this.plugin.mountClipboard;
-    if (clip) {
-      menu.addItem((item) =>
-        item
-          .setTitle(`粘贴「${clip.name}」`)
-          .setIcon('clipboard-paste' as never)
-          .onClick(() => this.pasteInto(mount, node)),
-      );
-    }
-    if (node || clip) menu.addSeparator();
 
     menu.addItem((item) =>
       item
@@ -1096,97 +1131,6 @@ export class MountPanelView extends ItemView {
     this.render();
   }
 
-  // ------------------------------------------------------------------
-  // 复制 / 粘贴（Ctrl+C / Ctrl+V）
-  // ------------------------------------------------------------------
-
-  /** 当前焦点行（Ctrl+C/V 的锚点）；rel 为 null 表示挂载头（= 挂载根）。 */
-  private current: { mountId: string; rel: string | null } | null = null;
-
-  /** 设当前行并即时更新高亮（重渲染时 renderNode 会按 current 补类）。 */
-  private setCurrent(mountId: string, rel: string | null): void {
-    this.current = { mountId, rel };
-    // 即时反馈：不等下一次 render。旧行（包括挂载头）的高亮先全部撤掉。
-    for (const el of this.contentEl.querySelectorAll('.is-current')) {
-      el.classList.remove('is-current');
-    }
-    const root = this.contentEl.querySelector(
-      rel === null
-        ? `.logseq-mount-section[data-mount-id="${mountId}"] > .logseq-mount-head`
-        : `.logseq-mount-row[data-mount="${mountId}"][data-rel="${CSS.escape(rel)}"]`,
-    );
-    root?.classList.add('is-current');
-  }
-
-  /** 把当前行解析回挂载与节点；行已不存在（重扫描后被删）时返回 null。 */
-  private resolveCurrent(): { mount: ExternalMount; node: MountNode | null } | null {
-    if (!this.current) return null;
-    const mount = (this.plugin.settings.externalMounts ?? []).find((m) => m.id === this.current?.mountId);
-    if (!mount) return null;
-    if (this.current.rel === null) return { mount, node: null };
-    const st = this.states.get(mount.id);
-    const node = st ? findNode(st.tree, this.current.rel) : null;
-    return node ? { mount, node } : null;
-  }
-
-  private onPanelKeydown(e: KeyboardEvent): void {
-    const mod = e.ctrlKey || e.metaKey;
-    if (!mod) return;
-    const key = e.key.toLowerCase();
-    if (key === 'c') {
-      e.preventDefault();
-      this.copyCurrent();
-    } else if (key === 'v') {
-      e.preventDefault();
-      this.pasteCurrent();
-    }
-  }
-
-  private copyCurrent(): void {
-    const hit = this.resolveCurrent();
-    if (!hit?.node) {
-      new Notice('先在树上点选一个文件或文件夹。');
-      return;
-    }
-    this.copyNode(hit.node);
-  }
-
-  private copyNode(node: MountNode): void {
-    this.plugin.mountClipboard = { abs: node.abs, isDir: node.isDir, name: node.name };
-    new Notice(node.isDir ? `已复制文件夹「${node.name}」` : `已复制「${node.name}」`);
-  }
-
-  private pasteCurrent(): void {
-    const hit = this.resolveCurrent();
-    if (!hit) {
-      new Notice('先在树上点选一个粘贴位置。');
-      return;
-    }
-    this.pasteInto(hit.mount, hit.node);
-  }
-
-  /**
-   * 粘贴：文件/文件夹进目标目录（文件夹节点进它自己，文件节点进上级，
-   * 挂载根进根）。撞名自动加序号；文件夹递归、二进制安全（copyEntry）。
-   */
-  private pasteInto(mount: ExternalMount, node: MountNode | null): void {
-    const clip = this.plugin.mountClipboard;
-    if (!clip) {
-      new Notice('剪贴板是空的——先在树上 Ctrl+C 复制一个文件或文件夹。');
-      return;
-    }
-    const dirAbs = node?.isDir ? node.abs : node ? parentAbsOf(node.rel, mount.path) : mount.path;
-    const dirRel = node?.isDir ? node.rel : node ? parentRelOf(node.rel) : '';
-    const r = copyEntry(clip.abs, dirAbs);
-    if (!r.ok) {
-      new Notice(`粘贴失败：${r.error ?? '未知错误'}`);
-      return;
-    }
-    const finalName = r.target?.split(/[\\/]/).pop() ?? '';
-    new Notice(`已粘贴为「${finalName}」`);
-    this.rescan(mount, dirRel);
-  }
-
   private promptNewFile(mount: ExternalMount, dirAbs: string, dirRel: string): void {
     new NamePromptModal(
       this.app,
@@ -1222,21 +1166,76 @@ export class MountPanelView extends ItemView {
     ).open();
   }
 
-  /**
-   * 重命名：弹窗 + fs + 链接同步在 `features/externalPaneMenu.ts`（库外标签页
-   * 的 ⋮ 菜单用同一套），这里只提供挂载面板自己的收尾：刷新缓存并重绘，
-   * openRel 保证父目录仍处于展开态。
-   */
   private promptRename(mount: ExternalMount, node: MountNode): void {
-    promptExternalRename(this.plugin, node.abs, node.name, () => {
-      this.rescan(mount, parentRelOf(node.rel));
-    });
+    new NamePromptModal(
+      this.app,
+      { title: '重命名', initial: node.name, validate: validateEntryName },
+      (name) => {
+        if (!name || name === node.name) return;
+        const r = renameEntry(node.abs, name);
+        if (!r.ok) {
+          new Notice(`重命名失败：${r.error ?? '未知错误'}`);
+          return;
+        }
+        // 已链接节点跟着改名:链接名就是旧文件名,不拆链的话
+        // isLinked 会继续「看见」旧名并误报已链接。
+        // renameEntry(abs, newName) 在 abs 自己的父目录下改名,
+        // 所以这里传裸名 name 而不是完整目标路径 —— 传完整路径会被
+        // validateEntryName 的非法字符检查拒掉(实测踩过)。
+        const base = this.plugin.vaultBasePath();
+        const oldLink = base ? linkTargetFor(base, node.name, safeSegment(node.name)) : '';
+        if (base && exists(oldLink)) {
+          const rr = renameEntry(oldLink, name);
+          if (!rr.ok) new Notice(`链接未同步改名：${rr.error ?? '未知错误'}`);
+        }
+        new Notice(`已重命名为 ${name}`);
+        this.rescan(mount, parentRelOf(node.rel));
+      },
+    ).open();
   }
 
   private promptDelete(mount: ExternalMount, node: MountNode): void {
-    promptExternalDelete(this.plugin, node.abs, node.name, node.isDir, () => {
-      this.rescan(mount, parentRelOf(node.rel));
-    });
+    const typeStr = node.isDir ? '文件夹' : '文件';
+    new ConfirmModal(
+      this.app,
+      {
+        title: `删除${typeStr}`,
+        body: `确定删除${typeStr}「${node.name}」${node.isDir ? '及其全部内容' : ''}吗？将移入系统回收站。`,
+        confirmText: '删除',
+        dangerous: true,
+      },
+      (ok) => {
+        if (!ok) return;
+        // 先拆链接:硬链接删掉只是去掉目录项,但留着会指向一个不再存在的名字。
+        const base = this.plugin.vaultBasePath();
+        const oldLink = base ? linkTargetFor(base, node.name, safeSegment(node.name)) : '';
+        if (base && exists(oldLink)) removeLink(oldLink);
+        void trashEntry(node.abs).then((r) => {
+          if (r.ok) {
+            new Notice('已移入回收站');
+            this.rescan(mount, parentRelOf(node.rel));
+            return;
+          }
+          // 没有回收站(或系统拒绝):二次确认后永久删除,绝不静默。
+          new ConfirmModal(
+            this.app,
+            {
+              title: '无法移入回收站',
+              body: `${r.error ?? '此系统不支持回收站'}。要永久删除「${node.name}」吗？此操作不可恢复。`,
+              confirmText: '永久删除',
+              dangerous: true,
+            },
+            (ok2) => {
+              if (!ok2) return;
+              const rr = deletePermanent(node.abs, node.isDir);
+              if (!rr.ok) new Notice(`删除失败：${rr.error ?? '未知错误'}`);
+              else new Notice('已永久删除');
+              this.rescan(mount, parentRelOf(node.rel));
+            },
+          ).open();
+        });
+      },
+    ).open();
   }
 
   // ------------------------------------------------------------------
@@ -1345,4 +1344,99 @@ function parentRelOf(rel: string): string {
 /** 挂载根 + 父目录相对路径 → 绝对路径（与 joinAbs 一致，只是先算 rel）。 */
 function parentAbsOf(rel: string, mountRoot: string): string {
   return joinAbs(mountRoot, parentRelOf(rel));
+}
+
+/**
+ * Build a TFile-shaped adapter for an OUTSIDE-the-vault file so that
+ * `file-menu` handlers gating on `file instanceof TFile` (Shell Commands is the
+ * motivating case) accept it. `Object.create(TFile.prototype)` passes the
+ * instanceof test without registering anything in the vault; the `path` is the
+ * absolute on-disk path, so string-based variables ({{file_path:absolute}} &
+Co.) resolve to the real file. A synthetic parent TFolder backs {{folder_name}}.
+ * Nothing here touches the vault API — handlers that do will misbehave, but
+ * those handlers already cannot serve external files anyway.
+ */
+/**
+ * Path used by the T-shaped adapters: a `../` chain that walks out of the
+ * vault root and then down to the external target. Plugins that build
+ * absolute paths as `vaultBase + '/' + file.path` (Shell Commands'
+ * {{file_path:absolute}} family) end up with `E:\vault\..\Local\target`,
+ * which the OS resolves to the real file; relative mode works too because
+ * Shell Commands spawns shells with the vault dir as cwd. Cross-drive
+ * targets cannot be expressed this way — fall back to the absolute path.
+ */
+function vaultEscapePath(abs: string, vault: unknown): string {
+  try {
+    const adapter = (vault as { adapter?: unknown }).adapter as
+      | { getBasePath?: () => string }
+      | undefined;
+    const base = adapter?.getBasePath?.();
+    if (!base) return abs;
+    const a = abs.replace(/\\/g, '/').replace(/\/+$/, '');
+    const b = base.replace(/\\/g, '/').replace(/\/+$/, '');
+    const as = a.split('/');
+    const bs = b.split('/');
+    if (as[0].toLowerCase() !== bs[0].toLowerCase()) return abs; // different drive
+    let i = 0;
+    while (i < as.length && i < bs.length && as[i].toLowerCase() === bs[i].toLowerCase()) i++;
+    const ups = bs.length - i;
+    if (ups <= 0) return as.slice(i).join('/') || '/'; // inside the vault
+    return '../'.repeat(ups) + as.slice(i).join('/');
+  } catch (e) {
+    console.error('vaultEscapePath failed for', abs, e);
+    return abs;
+  }
+}
+
+function makeExternalTFileAdapter(abs: string, vault: unknown): TFile | null {
+  try {
+    const norm = abs.replace(/\\/g, '/');
+    const slash = norm.lastIndexOf('/');
+    const name = slash >= 0 ? norm.slice(slash + 1) : norm;
+    const dot = name.lastIndexOf('.');
+    const fake = Object.create(TFile.prototype) as TFile;
+    const f = fake as unknown as Record<string, unknown>;
+    f.vault = vault;
+    f.path = vaultEscapePath(abs, vault);
+    f.name = name;
+    f.basename = dot > 0 ? name.slice(0, dot) : name;
+    f.extension = dot > 0 ? name.slice(dot + 1) : '';
+    f.stat = { ctime: 0, mtime: 0, size: 0 };
+    const parent = Object.create(TFolder.prototype) as TFolder;
+    const p = parent as unknown as Record<string, unknown>;
+    p.path = slash > 0 ? norm.slice(0, slash) : '/';
+    p.name = slash > 0 ? (norm.slice(0, slash).split('/').pop() || '') : '/';
+    p.children = [];
+    f.parent = parent;
+    return fake;
+  } catch (e) {
+    console.error('makeExternalTFileAdapter failed for', abs, e);
+    return null;
+  }
+}
+
+function makeExternalTFolderAdapter(abs: string, vault: unknown): TFolder | null {
+  try {
+    const norm = abs.replace(/\\/g, '/').replace(/\/+$/, '');
+    const slash = norm.lastIndexOf('/');
+    const name = slash >= 0 ? norm.slice(slash + 1) : norm;
+    const fake = Object.create(TFolder.prototype) as TFolder;
+    const f = fake as unknown as Record<string, unknown>;
+    f.vault = vault;
+    f.path = vaultEscapePath(abs, vault);
+    f.name = name || '/';
+    f.children = [];
+    f.isRoot = () => f.path === '/';
+    const parent = Object.create(TFolder.prototype) as TFolder;
+    const p = parent as unknown as Record<string, unknown>;
+    p.path = slash > 0 ? norm.slice(0, slash) : '/';
+    p.name = slash > 0 ? (norm.slice(0, slash).split('/').pop() || '') : '/';
+    p.children = [];
+    p.isRoot = () => p.path === '/';
+    f.parent = parent;
+    return fake;
+  } catch (e) {
+    console.error('makeExternalTFolderAdapter failed for', abs, e);
+    return null;
+  }
 }

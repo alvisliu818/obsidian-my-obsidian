@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { dedentCommon, splitRawToOutline } from '../src/core/treeOps';
-import { parseCodeFence } from '../src/blocks/codeBlockEdit';
+import { parseCodeFence } from '../src/blocks/codeFence';
 import { parseDocument } from '../src/core/parser';
 import { serializeDocument } from '../src/core/serializer';
 
@@ -167,16 +167,15 @@ describe('splitRawToOutline: raw block converts to outline on Enter', () => {
     expect(doc.blocks[1].text).toBe('### 12.3.1 什么是命名空间');
   });
 
-  it('caret at block start: converts in place, NO empty outline block before', () => {
+  it('caret at block start: empty block in place, converted content below', () => {
     const doc = parseDocument('# Title\n\nbody line\n');
     const b = doc.blocks[0];
     expect(b.kind).toBe('raw');
     const nb = splitRawToOutline(b, 0);
-    // In-place conversion: b itself becomes the outline block with the full
-    // content, the returned caret target is b, and no empty block is inserted.
-    expect(nb).toBe(b);
     expect(b.kind).toBe('list');
-    expect(b.text).toBe('# Title');
+    expect(b.text).toBe('');
+    expect(nb.text).toBe('# Title');
+    expect(nb.text.startsWith('\n')).toBe(false);
   });
 
   it('caret at block end: conversion + empty sibling below (normal Enter feel)', () => {

@@ -30,13 +30,23 @@ const FENCE_OPEN_RE = /^(\s*)(`{3,}|~{3,})(.*)$/;
  */
 const MATH_FENCE_RE = /^(\s*)\$\$[ \t]*$/;
 const PROPERTY_RE = /^([A-Za-z][A-Za-z0-9_-]*)::\s*(.*)$/;
-const LIST_RE = /^(\s*)-(?:\s+(.*))?$/;
+/**
+ * 列表项。标记 `-` 后只消费**一个**空格(`\s` 而非 `\s+`),其余前导空白算内容。
+ *
+ * 用 `\s+` 会把 `-     # 注释` 的前导空格全吃掉,块文本变成 `# 注释`——
+ * 混合编辑的代码文件里,函数内缩进的注释(`    # xxx`)经大纲往返就丢了缩进,
+ * 一保存整段注释被拉到列 0(改了用户源文件)。
+ *
+ * 只吃一个空格后,`-   text` 里的多余空格属于内容,序列化照样原样写回,往返自洽。
+ * 与续行一致:续行也是剥掉固定一级缩进、其余保留(stripIndent)。
+ */
+const LIST_RE = /^(\s*)-(?:\s(.*))?$/;
 const MARKER_RE = new RegExp(`^(${MARKERS.join('|')})\\s+(.*)$`);
 /**
  * Top-level lines that keep their verbatim raw rendering (markdown / org
  * structural syntax). Every OTHER plain top-level line becomes a first-level
- * list item — the outline owns bare text lines (Logseq parity); saving
- * normalizes them to `- ` items.
+ * PARAGRAPH container (bare block) — the SiYuan-style document model treats
+ * the outline list as just one container kind; a paragraph is another.
  */
 const STRUCTURAL_RAW_RE =
   /^(?:#{1,6}\s|#\+|>|\||<|%|\$\$|:|\d{1,9}[.)]\s|[*+]\s|(?:=+|\*+|_+|~+|\++)\s*$)/;
@@ -159,19 +169,7 @@ export function stripIndent(line: string, depth: number): string {
   return rest;
 }
 
-export interface ParseOptions {
-  /**
-   * 保真模式：不以 `- ` 开头的顶层文本行走**逐字块**路径（kind: 'raw'）——
-   * 渲染不画 bullet，序列化原样输出，文件字节保持不变。
-   *
-   * 关（默认）是 Logseq 的原生语义：裸行被收编成一级 `- ` 列表项，保存时
-   * 整篇被规范化成项目符号列表。编辑视图（块编辑器 / 库外文件视图）按设置
-   * 打开此开关；索引等只读解析维持原语义。
-   */
-  preservePlainText?: boolean;
-}
-
-export function parseDocument(md: string, opts: ParseOptions = {}): ParsedDocument {
+export function parseDocument(md: string): ParsedDocument {
   // CRLF (Windows) files: every parser regex below is `$`-anchored and `.`
   // never matches `\r`, so a trailing `\r` silently breaks fence open/close,
   // list and property detection (a CRLF file parsed raw explodes — fences
@@ -251,17 +249,6 @@ export function parseDocument(md: string, opts: ParseOptions = {}): ParsedDocume
   let lastBlock: Block | null = null; // most recent 'list' block (property / soft-line target)
   let rawBuf: string[] = [];
   let bareBuf: string[] = []; // consecutive bare lines → ONE first-level block
-  // 保真模式：刚被丢弃（既不作为内容也不作为软行）的空行数——下一个块之前要
-  // 补回这么多空行，否则段落与列表/标题之间的分隔会在保存时悄悄消失。
-  let pendingBlanks = 0;
-
-  /** 把一个新块挂到顶层，并带上"前面有空行"的标记（所有模式逐字保留空行）。 */
-  const pushRoot = (b: Block) => {
-    if (pendingBlanks > 0 && doc.blocks.length > 0) b.blankBefore = pendingBlanks;
-    pendingBlanks = 0;
-    b.parent = null;
-    doc.blocks.push(b);
-  };
 
   const flushRaw = () => {
     while (rawBuf.length > 0 && rawBuf[rawBuf.length - 1].trim() === '') rawBuf.pop();
@@ -269,7 +256,8 @@ export function parseDocument(md: string, opts: ParseOptions = {}): ParsedDocume
     const b = createBlock();
     b.kind = 'raw';
     b.text = rawBuf.join('\n');
-    pushRoot(b);
+    b.parent = null;
+    doc.blocks.push(b);
     rawBuf = [];
   };
 
@@ -278,9 +266,9 @@ export function parseDocument(md: string, opts: ParseOptions = {}): ParsedDocume
     if (bareBuf.length === 0) return;
     const { marker, text } = parseMarker(bareBuf[0]);
     const b = createBlock([text, ...bareBuf.slice(1)].join('\n'), marker);
-    // 顶层挂接统一走空行记账（与 pushRoot 一致）。
-    if (pendingBlanks > 0 && doc.blocks.length > 0) b.blankBefore = pendingBlanks;
-    pendingBlanks = 0;
+    // 段落容器:没有列表标志、也没有任务标记的裸文本行。带 marker 的裸行
+    // (`TODO x`)语义上是任务项,保持列表容器(显示圆点 + 复选框)。
+    if (marker === null) b.bare = true;
     b.parent = null;
     doc.blocks.push(b);
     stack.length = 0;
@@ -355,25 +343,15 @@ export function parseDocument(md: string, opts: ParseOptions = {}): ParsedDocume
         while (j < lines.length && lines[j].trim() === '') j++;
         const next = j < lines.length ? lines[j] : '';
         const nextTrim = next.trim();
-        // 空行结束**任何**已闭合的逐字区域（属性行除外——`key:: value` 是块的
-        // 折叠标记）。两种模式一致：这样空行要么进 blankBefore 逐字补回（拆分），
-        // 要么不存在"区域吞空行"的形态。否则"段落\n\n段落"里空行进 rawBuf 后
-        // 会被 flushRaw 的尾 pop 吃掉，保存一次丢一行。
-        const endsRegion = !PROPERTY_RE.test(nextTrim);
-        if (next && isRawRegionTail(rawBuf) && depthOf(next) === 0 && endsRegion) {
+        const startsStructure =
+          STRUCTURAL_RAW_RE.test(nextTrim) || FENCE_OPEN_RE.test(next);
+        if (next && isRawRegionTail(rawBuf) && depthOf(next) === 0 && startsStructure && !PROPERTY_RE.test(nextTrim)) {
           flushRaw();
-          // 空行属于**后面**那个块，所以要在区域冲刷之后才置位；j - i 就是
-          // 这次跳过的空行数（连续空行原样保留）。注意 i 要直接跳到 j——
-          // 逐个 i++ 会把同一批空行再数一遍。所有模式都逐字保留空行。
-          pendingBlanks = Math.max(pendingBlanks, j - i);
-          i = j;
+          i++;
           continue;
         }
         rawBuf.push(line);
       }
-      // 这个空行既不是内容也不是软行，被丢弃了——记下来，下一个块之前要补回
-      // 这么多空行（否则每保存一次就吃掉一个分隔空行）。所有模式一致。
-      if (rawBuf.length === 0) pendingBlanks++;
       i++;
       continue;
     }
@@ -504,7 +482,8 @@ export function parseDocument(md: string, opts: ParseOptions = {}): ParsedDocume
         stack.length = parentIdxOf(stack, parent) + 1;
         stack.push(b);
       } else {
-        pushRoot(b);
+        b.parent = null;
+        doc.blocks.push(b);
         stack.length = 0;
         stack.push(b);
       }
@@ -617,20 +596,12 @@ export function parseDocument(md: string, opts: ParseOptions = {}): ParsedDocume
     // first-level list block; saving normalizes it to `- ` + soft lines.
     // A bare line that EXITS the current subtree stays IN POSITION as the
     // previous parsed block's raw content (the order-preservation rule).
+    flushRaw();
     if (lastBlock && stack.length > 0 && stack.length - 1 > depth) {
       appendSoftLine(lastBlock, line);
       i++;
       continue;
     }
-    if (opts.preservePlainText) {
-      // 保真模式：裸行并入当前的逐字区域（**不** flushRaw —— 段落与紧随其后
-      // 的标题/表格同属一个逐字块，序列化时原样输出，字节零改动；分开成两块
-      // 会被序列化规则强行插入空行）。逐字块渲染时不画 bullet。
-      rawBuf.push(line);
-      i++;
-      continue;
-    }
-    flushRaw();
     bareBuf.push(trimmed);
     i++;
   }
