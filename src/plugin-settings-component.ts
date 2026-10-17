@@ -31,6 +31,7 @@ import {
   PluginSettings,
   RenameAttachmentsCreatedByOtherPluginsMode
 } from './plugin-settings.ts';
+import { Substitutions } from './substitutions.ts';
 import { migrateLegacyTokenSyntax } from './token-parser.ts';
 import {
   TokenValidationMode,
@@ -451,6 +452,27 @@ export class PluginSettingsComponent extends PluginSettingsComponentBase<PluginS
 
     $string = $string.replace(this.settings.specialCharactersRegExp, () => this.settings.specialCharactersReplacement);
     return $string;
+  }
+
+  /**
+   * Registers the custom tokens the settings define, then validates them.
+   *
+   * The library validates every load and every edit here, before it saves or raises an event, so this is the one
+   * hook that reaches a template naming a token saved in the SAME edit: a `data.json` replaced by sync, or an
+   * `editAndSave` from a script. Every validation in this plugin is of the record about to become the settings.
+   *
+   * Skipped while the settings tab debounces custom-token validation, since it then registers them itself, and
+   * running half-typed code on every keystroke is what that debounce exists to avoid.
+   *
+   * @param settings - The settings.
+   * @returns The validation result.
+   */
+  public override async validate(settings: PluginSettings): ReturnType<PluginSettingsComponentBase<PluginSettings>['validate']> {
+    if (!this.shouldDebounceCustomTokensValidation) {
+      Substitutions.ensureCustomTokensRegistered(settings.customTokensStr);
+    }
+
+    return await super.validate(settings);
   }
 
   protected override registerLegacySettingsConverters(): void {

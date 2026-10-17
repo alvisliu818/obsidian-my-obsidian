@@ -64,6 +64,7 @@ interface SubstitutionsConstructorParams {
 }
 
 export class Substitutions {
+  private static registeredCustomTokensString = '';
   private static readonly registeredTokens = new Map<string, TokenBase<unknown>>();
   static {
     this.registerCustomTokens('');
@@ -137,11 +138,27 @@ export class Substitutions {
     this.tokenValidator = params.tokenValidator;
   }
 
+  /**
+   * Registers the custom tokens unless that exact code is the one registered last.
+   *
+   * Registering runs the user's code, so a caller that re-asserts an unchanged value on every validation does not
+   * re-run it. The comparison is against the last {@link registerCustomTokens} call from anywhere, so a direct
+   * registration (the settings tab's own) is never mistaken for the older value.
+   *
+   * @param customTokensString - The custom tokens code.
+   */
+  public static ensureCustomTokensRegistered(customTokensString: string): void {
+    if (customTokensString !== this.registeredCustomTokensString) {
+      this.registerCustomTokens(customTokensString);
+    }
+  }
+
   public static isRegisteredToken(token: string): boolean {
     return this.registeredTokens.has(token.toLowerCase());
   }
 
   public static registerCustomTokens(customTokensString: string): void {
+    this.registeredCustomTokensString = customTokensString;
     this.registeredTokens.clear();
     this.registerToken(new AttachmentFileSizeToken());
     this.registerToken(new DateToken());

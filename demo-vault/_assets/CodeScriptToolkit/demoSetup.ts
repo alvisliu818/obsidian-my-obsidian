@@ -516,17 +516,10 @@ export async function goToNavigationDemoOwningNote(app: App): Promise<null | str
 }
 
 /**
- * Saves custom tokens and makes the plugin register them.
- *
- * The settings tab registers a token as you type it. A token saved any other way is registered only when the
- * plugin loads, and until then a pattern naming it is refused as invalid. So this saves the tokens, then
- * disables and re-enables the plugin, which is the scripted version of what the settings tab does.
+ * Saves custom tokens. Saving them registers them, so a pattern naming one is accepted straight after.
  */
 async function applyCustomTokens(app: App, customTokensStr: string): Promise<void> {
   await configureCommunityPlugin({ app, pluginId: PLUGIN_ID, settings: { customTokensStr } });
-  await app.plugins.disablePlugin(PLUGIN_ID);
-  await app.plugins.enablePlugin(PLUGIN_ID);
-  await waitFor(() => findApi());
 }
 
 function decodeBase64(base64: string): ArrayBuffer {

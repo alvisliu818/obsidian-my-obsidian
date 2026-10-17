@@ -10,6 +10,7 @@ import { ValueWrapper } from '@mnaoumov/typescript-lib/value-wrapper';
 import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import { App } from 'obsidian-test-mocks/obsidian';
 import {
+  afterEach,
   beforeAll,
   beforeEach,
   describe,
@@ -29,6 +30,7 @@ import {
   PluginSettings,
   RenameAttachmentsCreatedByOtherPluginsMode
 } from './plugin-settings.ts';
+import { Substitutions } from './substitutions.ts';
 import { TokenValidator } from './token-validator.ts';
 
 vi.mock('@mnaoumov/typescript-lib/error', async (importOriginal) => ({
@@ -110,6 +112,11 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.useRealTimers();
+});
+
+// Validation registers the custom tokens it validates, and the registry is global.
+afterEach(() => {
+  Substitutions.registerCustomTokens('');
 });
 
 describe('PluginSettingsComponent', () => {
@@ -430,6 +437,47 @@ describe('PluginSettingsComponent', () => {
       await vi.advanceTimersByTimeAsync(2000);
       const secondResult = await component.validate(settings);
       expect(secondResult.customTokensStr).toBe('Invalid custom tokens code');
+    });
+
+    it('should accept a template naming a custom token defined in the same settings', async () => {
+      const component = await createComponent();
+      const settings = createSettings();
+      // eslint-disable-next-line unicorn/name-replacements -- `customTokensStr` is a persisted `data.json` settings key; renaming it would silently drop the user's custom tokens.
+      settings.customTokensStr = 'registerCustomToken("alpha", () => "a");';
+      settings.generatedAttachmentFileName = '{{alpha}}';
+      const result = await component.validate(settings);
+      expect(result.generatedAttachmentFileName).toBeUndefined();
+      expect(Substitutions.isRegisteredToken('alpha')).toBe(true);
+    });
+
+    it('should keep a template naming a custom token saved in the same edit', async () => {
+      const component = await createComponent();
+      await component.editAndSave((settings) => {
+        // eslint-disable-next-line unicorn/name-replacements -- `customTokensStr` is a persisted `data.json` settings key; renaming it would silently drop the user's custom tokens.
+        settings.customTokensStr = 'registerCustomToken("bravo", () => "b");';
+        settings.attachmentFolderPath = 'assets/{{bravo}}';
+      });
+      expect(component.settings.attachmentFolderPath).toBe('assets/{{bravo}}');
+    });
+
+    it('should register the custom tokens stored in data.json when it loads', async () => {
+      Substitutions.registerCustomTokens('');
+      const component = await createComponent({
+        // eslint-disable-next-line unicorn/name-replacements -- customTokensStr is a persisted data.json settings key; renaming it would silently drop the user's custom tokens.
+        customTokensStr: 'registerCustomToken("charlie", () => "c");',
+        generatedAttachmentFileName: '{{charlie}}'
+      });
+      expect(component.settings.generatedAttachmentFileName).toBe('{{charlie}}');
+    });
+
+    it('should not register custom tokens while the settings tab debounces them', async () => {
+      const component = await createComponent();
+      component.shouldDebounceCustomTokensValidation = true;
+      const settings = createSettings();
+      // eslint-disable-next-line unicorn/name-replacements -- `customTokensStr` is a persisted `data.json` settings key; renaming it would silently drop the user's custom tokens.
+      settings.customTokensStr = 'registerCustomToken("delta", () => "d");';
+      await component.validate(settings);
+      expect(Substitutions.isRegisteredToken('delta')).toBe(false);
     });
   });
 

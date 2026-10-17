@@ -85,6 +85,10 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
   public override hide(): void {
     super.hide();
     this.pluginSettingsComponent2.shouldDebounceCustomTokensValidation = false;
+    // Closing cancels a pending debounced registration, so tokens typed just before closing are registered here.
+    invokeAsyncSafely(async () => {
+      await this.pluginSettingsComponent2.revalidate();
+    });
   }
 
   protected override getSettingDefinitionItems(): SettingDefinitionItem[] {

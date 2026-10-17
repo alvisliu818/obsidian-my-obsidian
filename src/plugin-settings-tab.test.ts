@@ -650,6 +650,15 @@ describe('PluginSettingsTab', () => {
     expect(pluginSettingsComponent.shouldDebounceCustomTokensValidation).toBe(false);
   });
 
+  it('should revalidate when hidden, so tokens whose debounced registration was cancelled are registered', async () => {
+    const { pluginSettingsComponent, tab } = await createTab();
+    const revalidateSpy = vi.spyOn(pluginSettingsComponent, 'revalidate');
+    tab.hide();
+    await vi.waitFor(() => {
+      expect(revalidateSpy).toHaveBeenCalled();
+    });
+  });
+
   it('should cancel the debounced custom-token registration when the row is torn down', async () => {
     const { tab } = await createTab();
 
