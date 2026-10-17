@@ -137,6 +137,7 @@ let manager: CsRuntimeManager | null = null;
 
 export function initCsRuntime(host: ICsRuntimeHost): void {
     manager = new CsRuntimeManager(host);
+    manager.startScriptingPump();
 }
 
 export function ensureCsRuntime(webview: IWebviewTag): void {
@@ -353,6 +354,68 @@ class CsRuntimeManager {
         });
     }
 
+    /** chrome.scripting 请求泵：SW 垫片把扩展（AdGuard MV3）的 insertCSS/
+     *  executeScript 请求 push 进 __obScriptingRequests，这里轮询取走并落到
+     *  所有活跃 webview。tabId 恒 1（垫片 tabs 语义）泛指当前页 —— CSS 选择器
+     *  与 scriptlet 的域名守卫对不相关页面不命中，注入无害。
+     *  ★ peekSwNoWake：不唤醒 SW，休眠期快速跳过（避免把 MV3 SW 钉在活跃态）。 */
+    private scriptingPumpTimer: ReturnType<typeof setInterval> | null = null;
+    private scriptingPumpBusy = false;
+
+    startScriptingPump(): void {
+        if (this.scriptingPumpTimer) return;
+        this.scriptingPumpTimer = setInterval(() => {
+            void this.pumpScriptingRequests();
+        }, 1500);
+    }
+
+    private async pumpScriptingRequests(): Promise<void> {
+        if (this.scriptingPumpBusy || !this.sessions.size) return;
+        this.scriptingPumpBusy = true;
+        try {
+            const exts = this.host.listNativeExts();
+            for (const ext of exts) {
+                let raw = "";
+                try {
+                    const r = await (await this.anyAliveSession())?.peekSwNoWake(
+                        ext.electronId,
+                        `(function(){ try { return JSON.stringify((self.__obScriptingRequests || []).splice(0)); } catch (e) { return "[]"; } })()`,
+                    );
+                    if (!r || r.err) continue;
+                    raw = String(r.value || "[]");
+                } catch {
+                    continue;
+                }
+                let reqs: any[] = [];
+                try {
+                    reqs = JSON.parse(raw);
+                } catch {
+                    continue;
+                }
+                if (!Array.isArray(reqs) || !reqs.length) continue;
+                for (const req of reqs) {
+                    for (const s of this.sessions.values()) {
+                        if (!s.alive) continue;
+                        try {
+                            await s.applyScriptingRequest(req, ext);
+                        } catch {
+                            /* 单请求失败不影响其它 */
+                        }
+                    }
+                }
+            }
+        } finally {
+            this.scriptingPumpBusy = false;
+        }
+    }
+
+    private async anyAliveSession(): Promise<CsPageSession | null> {
+        for (const s of this.sessions.values()) {
+            if (s.alive) return s;
+        }
+        return null;
+    }
+
     /** 播种当前内核地址/token 到 SiYuan Clip 配置（SW storage.local 的 ip/token）：
      *  每个工作空间端口与 token 不同，静态配置必然失效 —— 按当前内核真实值填充；
      *  值已一致时跳过写。启动时 SW 冷启动窗口期内首次写入可能全链失败 →
@@ -456,6 +519,59 @@ class CsPageSession {
             this.wc.debugger.sendCommand(method, params, sessionId),
             new Promise((_, reject) => setTimeout(() => reject(new Error(`CDP ${method} 超时`)), timeoutMs)),
         ]);
+    }
+
+    /** 无唤醒的 SW 快查（chrome.scripting 泵专用）：flat 缓存 session 直接 evaluate。
+     *  SW 休眠/缓存失效立即返回 UNAVAILABLE（零重试）—— 泵绝不能常驻唤醒 SW
+     *  （把 MV3 SW 钉在活跃态的教训），休眠期本就没有 scripting 请求。 */
+    peekSwNoWake(electronId: string, expr: string): Promise<{ value?: any; err?: string }> {
+        const sender: FlatCommandSender = (method, params, sessionId) =>
+            this.send(method, params, 8000, sessionId);
+        return evalInSwFlatCached(sender, electronId, expr);
+    }
+
+    /** 落地一条 chrome.scripting 请求（SW 垫片队列 → 宿主泵）。
+     *  css → wc.insertCSS；js → world:'MAIN' 时在页面主世界执行（scriptlet
+     *  func 是 AdGuard 预构建的独立函数、可安全序列化；files 需剥掉
+     *  chrome-extension://<id>/ 前缀后从扩展目录读）。缺省 world 的调用
+     *  （keep-alive / assistant 等 ISOLATED 注入）跳过 —— 主世界执行会缺
+     *  chrome API，而它们的语义也不是过滤。 */
+    async applyScriptingRequest(req: any, ext: ICsExtInfo): Promise<void> {
+        if (!req || typeof req !== "object") return;
+        if (req.kind === "css") {
+            const css = String(req.css || "");
+            if (!css) return;
+            await this.wc.insertCSS(css);
+            return;
+        }
+        if (req.kind === "js") {
+            if (req.world && req.world !== "MAIN") return;
+            let code = "";
+            if (Array.isArray(req.files) && req.files.length) {
+                const parts: string[] = [];
+                for (const f of req.files) {
+                    let rel = String(f || "");
+                    const m = rel.match(/^chrome-extension:\/\/[^/]+\/(.*)$/);
+                    if (m) rel = m[1];
+                    try {
+                        parts.push(this.host.readFile(ext.path, rel));
+                    } catch {
+                        /* 单文件失败不影响其它 */
+                    }
+                }
+                code = parts.join("\n;\n");
+            } else if (req.func) {
+                let argsJson = "[]";
+                try {
+                    argsJson = JSON.stringify(Array.isArray(req.args) ? req.args : []);
+                } catch {
+                    /* ignore */
+                }
+                code = `(${req.func})(...${argsJson})`;
+            }
+            if (!code) return;
+            await this.wc.executeJavaScript(code, false);
+        }
     }
 
     /** Node http(s) 代发内核请求（面板/内容世界的 mixed content 绕行）。

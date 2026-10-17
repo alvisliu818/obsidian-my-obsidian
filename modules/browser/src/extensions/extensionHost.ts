@@ -309,7 +309,7 @@ export class ExtensionHost {
     private async shimBackgroundFile(rec: ExtensionRecord): Promise<boolean> {
         const fs = this.fs;
         const path = this.pathMod;
-        const SHIM_MARK = "/* ob-bg-shim:v1 */";
+        const SHIM_MARK = "/* ob-bg-shim:v2 */";
         const extPath = this.dirOf(rec);
         try {
  const manifest = JSON.parse(fs.readFileSync(path.join(extPath, "manifest.json"), "utf8"));
@@ -613,6 +613,48 @@ try {
             };
             try { Object.defineProperty(chrome.storage, "sync", { configurable: true, get: function () { return syncArea; } }); }
             catch (e2) { chrome.storage.sync = syncArea; }
+        }
+    } catch (e) {}
+    // 6) chrome.scripting 下发（AdGuard MV3 的元素隐藏 CSS 与 JS scriptlet 都
+    //    从 background 经 chrome.scripting.insertCSS/executeScript 注入 ——
+    //    Electron 不实现该 API，缺位 = AdGuard 过滤完全不生效）。这里把请求
+    //    push 进 __obScriptingRequests，宿主泵（cs-runtime startScriptingPump）
+    //    轮询取走并落到对应 webview。scriptlet func 是 AdGuard 预构建的独立
+    //    函数（无模块闭包，专为序列化设计），String() 后可在页面主世界执行。
+    try {
+        if (!chrome.scripting) {
+            var pushReq = function (payload) {
+                try {
+                    self.__obScriptingRequests = self.__obScriptingRequests || [];
+                    self.__obScriptingRequests.push(JSON.stringify(payload));
+                } catch (e2) {}
+            };
+            chrome.scripting = {
+                insertCSS: function (opts, cb) {
+                    var o = opts || {};
+                    pushReq({ kind: "css", tabId: o.target && o.target.tabId, css: String(o.css == null ? "" : o.css), origin: o.origin });
+                    if (typeof cb === "function") { try { cb(); } catch (e3) {} }
+                    return Promise.resolve();
+                },
+                executeScript: function (opts, cb) {
+                    var o = opts || {};
+                    var payload = { kind: "js", tabId: o.target && o.target.tabId, world: o.world, injectImmediately: o.injectImmediately };
+                    if (o.files) { try { payload.files = JSON.parse(JSON.stringify(o.files)); } catch (e3) {} }
+                    if (o.func) { try { payload.func = String(o.func); } catch (e3) {} }
+                    if (o.args) { try { payload.args = JSON.parse(JSON.stringify(o.args)); } catch (e3) {} }
+                    pushReq(payload);
+                    if (typeof cb === "function") { try { cb([]); } catch (e3) {} }
+                    return Promise.resolve([]);
+                },
+                registerContentScripts: function () { return Promise.resolve(); },
+                getRegisteredContentScripts: function (cb) {
+                    var v = [];
+                    if (typeof cb === "function") { try { cb(v); } catch (e3) {} }
+                    return Promise.resolve(v);
+                },
+                unregisterContentScripts: function () { return Promise.resolve(); },
+                updateContentScripts: function () { return Promise.resolve(); },
+            };
         }
     } catch (e) {}
 } catch (e) {}

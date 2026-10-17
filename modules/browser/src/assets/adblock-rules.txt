@@ -31,6 +31,10 @@ pos.baidu.com##div[class*="bdas"]
 ##div[class*="pos-baidu"]
 tgb.cn###tcAd
 tgb.cn##div[class*="tgb-ad"]
+! tgb.cn 文章页：顶部 gg 广告横条 + 相关广告位（实测 2026-10）
+tgb.cn###headerggContent
+tgb.cn###addtgbGggao
+tgb.cn###joinTGB
 ##div[class^="kp_box_"]
 ##div[id^="kp_box_"]
 zhihu.com##.Pc-word
