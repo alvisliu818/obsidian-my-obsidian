@@ -34,19 +34,18 @@ export class PastedImageMarker {
    */
   public async record(importedAttachments: readonly ImportedAttachment[], gesture: InsertGesture | null): Promise<void> {
     for (const importedAttachment of importedAttachments) {
-      // TODO: Drop the widening once obsidian-typings types `ImportedAttachment.data` as nullable. Obsidian sets it
-      // to `null` for a folder, and its promise resolves to `null` when the file cannot be read.
-      const data: Promise<ArrayBuffer | null> = importedAttachment.data;
-      const arrayBuffer = await data;
+      const arrayBuffer = await importedAttachment.data;
       if (!arrayBuffer) {
         continue;
       }
 
-      await this.arrayBufferMap.trySetByPath(arrayBuffer, importedAttachment.filepath);
+      // The clipboard-image fallback item carries no `filepath`: the clipboard held only image data.
+      const filePath = importedAttachment.filepath ?? '';
+      await this.arrayBufferMap.trySetByPath(arrayBuffer, filePath);
       if (
         isPastedImage({
           extension: importedAttachment.extension,
-          filePath: importedAttachment.filepath,
+          filePath,
           fileStats: this.arrayBufferMap.getFileStats(arrayBuffer),
           gesture,
           now: Date.now(),

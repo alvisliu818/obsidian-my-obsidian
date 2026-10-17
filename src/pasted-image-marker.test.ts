@@ -1,7 +1,6 @@
 import type { ImportedAttachment } from '@obsidian-typings/obsidian-public-latest';
 import type { FileStats } from 'obsidian';
 
-import { castTo } from '@mnaoumov/typescript-lib/object-utils';
 import { strictProxy } from '@mnaoumov/typescript-test-toolkit/strict-proxy';
 import {
   beforeEach,
@@ -41,11 +40,11 @@ describe('PastedImageMarker', () => {
     });
   });
 
-  function createAttachment(filepath: string, arrayBuffer: ArrayBuffer | null, extension = 'png'): ImportedAttachment {
+  function createAttachment(filepath: string | undefined, arrayBuffer: ArrayBuffer | null, extension = 'png'): ImportedAttachment {
     return {
-      data: Promise.resolve(castTo<ArrayBuffer>(arrayBuffer)),
+      data: Promise.resolve(arrayBuffer),
       extension,
-      filepath,
+      ...(filepath !== undefined && { filepath }),
       name: 'attachment'
     };
   }
@@ -76,8 +75,27 @@ describe('PastedImageMarker', () => {
     expect(markAsPastedImageMock).not.toHaveBeenCalled();
   });
 
-  it('should skip an attachment with no content, such as a folder', async () => {
-    await marker.record([createAttachment('C:/Folder', null)], InsertGesture.Paste);
+  it('should mark the clipboard-image fallback item, which carries no file path', async () => {
+    const blob = new ArrayBuffer(1);
+    await marker.record([createAttachment(undefined, blob)], InsertGesture.Paste);
+    expect(trySetByPathMock).toHaveBeenCalledWith(blob, '');
+    expect(markAsPastedImageMock.mock.calls.map((call) => call[0])).toEqual([blob]);
+  });
+
+  it('should skip an attachment whose content could not be read', async () => {
+    await marker.record([createAttachment('C:/Unreadable.png', null)], InsertGesture.Paste);
+    expect(trySetByPathMock).not.toHaveBeenCalled();
+    expect(markAsPastedImageMock).not.toHaveBeenCalled();
+  });
+
+  it('should skip a folder, whose data is null', async () => {
+    await marker.record([{
+      data: null,
+      extension: '',
+      filepath: 'C:/Folder',
+      isDirectory: true,
+      name: 'Folder'
+    }], InsertGesture.Paste);
     expect(trySetByPathMock).not.toHaveBeenCalled();
     expect(markAsPastedImageMock).not.toHaveBeenCalled();
   });
