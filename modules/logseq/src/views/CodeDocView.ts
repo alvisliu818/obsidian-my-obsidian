@@ -70,6 +70,10 @@ export class CodeDocView extends ItemView {
   private regions: CodeRegion[] = [];
   /** 每个 code 区在 Monaco 文档中的行数(按变更增量维护) */
   private codeCounts: number[] = [];
+  /** 每个 text 区当前已提交行数(片段提交时刷新;行号漂移用) */
+  private textCounts: number[] = [];
+  /** 上次切分时每区的行数基准(fileLineOf 的漂移分母) */
+  private baseCounts: number[] = [];
   /** 每个 text 区一个片段(挂进 view zone) */
   private fragments: Array<FragmentHost | null> = [];
   private zones: Array<NoteZone | null> = [];
@@ -79,6 +83,7 @@ export class CodeDocView extends ItemView {
   private diskData = '';
   private saveTimer: number | null = null;
   private zoneTimer = 0;
+  private gutterTimer = 0;
   private mounted = false;
 
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
@@ -168,6 +173,8 @@ export class CodeDocView extends ItemView {
     this.fragments = [];
     for (const z of this.zones) z?.ro.disconnect();
     this.zones = [];
+    if (this.gutterTimer) window.clearTimeout(this.gutterTimer);
+    this.gutterTimer = 0;
   }
 
   // ------------------------------------------------------------------
@@ -203,6 +210,8 @@ export class CodeDocView extends ItemView {
       return { kind: 'text' as const, lines: b.text.split('\n'), startLine: b.startLine };
     });
     this.codeCounts = this.regions.map((r) => (r.kind === 'code' ? r.lines.length : 0));
+    this.textCounts = this.regions.map((r) => (r.kind === 'text' ? r.lines.length : 0));
+    this.baseCounts = this.regions.map((r) => r.lines.length);
     this.fragments = this.regions.map(() => null);
     this.zones = this.regions.map(() => null);
 
@@ -216,21 +225,12 @@ export class CodeDocView extends ItemView {
       if (r.kind === 'code') codeLines.push(...r.lines);
     }
 
-    // 真实行号映射:Monaco 第 n 行 ↔ 文件行(按打开时布局)
-    const fileLineByMonaco: number[] = [];
-    {
-      let m = 0;
-      for (const r of this.regions) {
-        if (r.kind !== 'code') continue;
-        for (let i = 0; i < r.lines.length; i++) fileLineByMonaco[m++] = r.startLine + i;
-      }
-    }
-
     this.editor = createEditor(contentEl.querySelector<HTMLElement>('.logseq-code-doc-editor')!, {
       value: codeLines.join('\n'),
       language: this.lang,
       autoHeight: false,
-      lineNumbersFn: (n: number) => String(fileLineByMonaco[n - 1] ?? n),
+      // 动态行号:区行数漂移(注释区增删行、代码增删行)后仍与保存后的文件一致
+      lineNumbersFn: (n: number) => String(this.fileLineOf(n)),
       minimap: false,
       folding: true,
       onSave: () => void this.flushSave(),
@@ -251,6 +251,45 @@ export class CodeDocView extends ItemView {
       if (this.regions[k].kind === 'code') sum += this.codeCounts[k];
     }
     return sum;
+  }
+
+  /**
+   * Monaco 行 n ↔ 文件行(动态,与保存后的文件一致):
+   * 区起始行 + 前面所有区的行数漂移(当前行数 − 切分基准) + 区内偏移。
+   * 区内插入被区内偏移天然吸收,与 buildCodeDoc 的 startLine 语义吻合。
+   */
+  private fileLineOf(n: number): number {
+    let anchor = 0;
+    let drift = 0;
+    const model = this.editor?.getModel();
+    const total = model ? model.getLineCount() : 0;
+    for (let k = 0; k < this.regions.length; k++) {
+      const r = this.regions[k];
+      if (r.kind === 'code') {
+        const count = this.codeCounts[k] ?? 0;
+        if (n > anchor && n <= anchor + count) {
+          return r.startLine + drift + (n - anchor - 1);
+        }
+        anchor += count;
+      }
+      drift += (r.kind === 'code' ? this.codeCounts[k] : this.textCounts[k]) - (this.baseCounts[k] ?? 0);
+    }
+    return Math.min(Math.max(n, 1), Math.max(total, 1));
+  }
+
+  /** 注释区提交后行数变了:刷新 text 区计数 + 让 gutter 重绘新行号 */
+  private refreshTextCountAndGutter(regionIdx: number, lineCount: number): void {
+    if (this.regions[regionIdx]?.kind !== 'text') return;
+    this.textCounts[regionIdx] = lineCount;
+    if (this.gutterTimer) window.clearTimeout(this.gutterTimer);
+    this.gutterTimer = window.setTimeout(() => {
+      this.gutterTimer = 0;
+      try {
+        this.editor?.updateOptions({ lineNumbers: (n: number) => String(this.fileLineOf(n)) });
+      } catch {
+        /* 编辑器已销毁 */
+      }
+    }, 250);
   }
 
   /** text 区的大纲文本(优先取片段已提交内容;重建兜底用初始切分) */
@@ -276,7 +315,20 @@ export class CodeDocView extends ItemView {
 
     const frag = new FragmentHost(this.plugin, dom, {
       editable: true,
+      // 代码注释区:块文本行首 `#` 是注释标记,编辑态不渲染成标题。
+      codeComment: true,
       onContentChange: () => {
+        // 提交即刷新该区行数(行号漂移),再走保存链路。
+        const doc = parseDocument(this.outlineOf(regionIdx));
+        let count = 0;
+        const walk = (blocks: ReturnType<typeof parseDocument>['blocks']): void => {
+          for (const b of blocks) {
+            count += b.text.split('\n').length;
+            if (b.children.length) walk(b.children);
+          }
+        };
+        walk(doc.blocks);
+        this.refreshTextCountAndGutter(regionIdx, count);
         this.markDirty();
         this.scheduleSave();
       },

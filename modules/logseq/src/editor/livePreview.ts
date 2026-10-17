@@ -30,6 +30,7 @@ import { finishRenderMath, renderMath } from 'obsidian';
 import {
   EditorSelection,
   EditorState,
+  Facet,
   Prec,
   RangeSetBuilder,
   StateField,
@@ -45,6 +46,22 @@ export interface LiveSpec {
   /** Line decorations must sort before point decorations at the same pos. */
   lineFirst?: boolean;
 }
+
+/**
+ * Per-editor live-preview switches. 代码注释区(FragmentHost codeComment)的块
+ * 文本以 `#` 开头是**注释标记**而非 markdown 标题 —— 编辑态若走标题分支,
+ * `lgp-h1` 行装饰把注释渲染成大字标题、光标移开后 `#` 还会被藏掉。宿主在
+ * 挂载块编辑器时经 createEditorExtensions 提供本 facet 关掉标题渲染。
+ */
+export interface LivePreviewConfig {
+  heading: boolean;
+}
+
+export const livePreviewConfig: Facet<Partial<LivePreviewConfig>, LivePreviewConfig> = Facet.define({
+  combine: (vals) => ({
+    heading: !vals.some((v) => v.heading === false),
+  }),
+});
 
 const hide = Decoration.replace({});
 
@@ -290,21 +307,24 @@ export function collectLivePreview(state: EditorState): LiveSpec[] {
     }
 
     // Heading: hide the `#` prefix unless the caret is on the line.
-    const h = HEADING_RE.exec(line.text);
-    if (h) {
-      if (!onLine(line.from, line.to)) {
-        const level = h[1].length;
-        specs.push({
-          from: line.from,
-          to: line.from,
-          kind: `heading${level}`,
-          deco: headingLine[level - 1].deco,
-          lineFirst: true,
-        });
-        specs.push({ from: line.from, to: line.from + h[0].length, kind: `heading${level}`, deco: hide });
+    // 代码注释区(codeComment 宿主)关闭此分支:`#` 是注释标记,按字面渲染。
+    if (state.facet(livePreviewConfig).heading) {
+      const h = HEADING_RE.exec(line.text);
+      if (h) {
+        if (!onLine(line.from, line.to)) {
+          const level = h[1].length;
+          specs.push({
+            from: line.from,
+            to: line.from,
+            kind: `heading${level}`,
+            deco: headingLine[level - 1].deco,
+            lineFirst: true,
+          });
+          specs.push({ from: line.from, to: line.from + h[0].length, kind: `heading${level}`, deco: hide });
+        }
+        n++;
+        continue;
       }
-      n++;
-      continue;
     }
 
     // Horizontal rule: divider widget unless the caret is on the line.

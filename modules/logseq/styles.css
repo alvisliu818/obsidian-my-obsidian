@@ -4144,10 +4144,11 @@ body.lgp-table-editor-cursor * {
 }
 
 /* 注释区切成「代码编辑器」形态后的容器:高度由 Monaco 的 autoHeight 按行数
-   写进 style.height,ResizeObserver 据此把 zone 撑到内容真实高度。 */
+   写进 style.height,ResizeObserver 据此把 zone 撑到内容真实高度。
+   背景与主 Monaco(editor.background)一致 —— 整页同一张底色。 */
 .lgp-hybrid-note-code {
   width: 100%;
-  background: var(--code-background);
+  background: var(--background-primary);
 }
 
 /* 视图头部的混合模式按钮:开启时高亮,一眼能看出当前是哪种呈现。 */
@@ -4763,14 +4764,18 @@ body.lgp-table-editor-cursor * {
 .logseq-code-doc-view .logseq-code-doc-editor {
   flex: 1 1 auto;
   min-height: 0;
-  background: var(--code-background);
+  /* 与 Monaco 主题背景(--background-primary)一致:注释 zone 也用同色,
+     整页是同一张编辑器底色 */
+  background: var(--background-primary);
 }
 /* zone domNode 不裁剪:Monaco 按 heightInPx 设的内联高度在 ResizeObserver
    纠正前会短于内容,hidden 会把注释块切掉(点不到);visible 最差只是重叠一帧。 */
 .lgp-code-doc-note {
   width: 100%;
   overflow: visible;
-  background: var(--code-background);
+  /* 背景与代码编辑器(Monaco editor.background = --background-primary)一致:
+     注释区不再用 --code-background 差一截的底色,整页观感是同一张编辑器 */
+  background: var(--background-primary);
   font-family: var(--font-monospace, 'JetBrains Mono', monospace);
   font-size: var(--code-size, 13px);
   padding: 0;
@@ -4806,9 +4811,15 @@ body.lgp-table-editor-cursor * {
 .lgp-code-doc-note .block-editor-tree .block-main {
   padding-block: 1px;
 }
+/* 大纲圆点默认不显示(类思源文档观感),悬停/聚焦块时淡入恢复可点 */
 .lgp-code-doc-note .block-editor-tree .block-bullet {
   width: 8px;
   height: 8px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.lgp-code-doc-note .block-editor-tree .block-wrap:hover .block-bullet,
+.lgp-code-doc-note .block-editor-tree .block-wrap-focus .block-bullet {
   opacity: 0.5;
 }
 .lgp-code-doc-note .block-editor-tree .block-content {

@@ -101,4 +101,9 @@ export interface BlockRenderHost extends Component {
   onFocusedBlur(): void;
   autocompleteSources(embed?: boolean): CompletionSource[];
   templateContext(): TemplateContext;
+  /**
+   * 该块的编辑态是否抑制 live-preview 标题渲染(可选)。
+   * 代码注释区宿主实现为 true:块文本行首 `#` 是注释标记,不是标题。
+   */
+  suppressHeadingDecor?(b: Block): boolean;
 }

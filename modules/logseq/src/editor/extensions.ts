@@ -39,7 +39,7 @@ import type { Block } from '../types';
 import { ownedDefaultKeys } from '../interactions/defaultKeymapOwnership';
 import { commandMenuKeymap, maybeOpenMenu, closeMenu } from '../features/commandMenu';
 import { syncActiveBlockEditor } from '../interactions/textSelectionMenu';
-import { livePreviewExtension } from './livePreview';
+import { livePreviewConfig, livePreviewExtension } from './livePreview';
 import { mathSyntax } from './mathSyntax';
 import { BLOCK_PROP_LINE_RE } from '../types';
 
@@ -384,7 +384,14 @@ export function createEditorExtensions(host: BlockRenderHost, block?: Block): Ex
 
   // Live preview is always on; the block menu's "Source mode" mounts this
   // block's editor WITHOUT it for one raw-source edit session.
-  const livePreview = block && host.sourceModeBlock === block ? [] : [livePreviewExtension];
+  // 代码注释区宿主(suppressHeadingDecor)额外关掉标题渲染:块文本行首的
+  // `#` 是注释标记,不按 markdown 标题起字号/藏字符。
+  const livePreview =
+    block && host.sourceModeBlock === block
+      ? []
+      : block && host.suppressHeadingDecor?.(block)
+        ? [livePreviewExtension, livePreviewConfig.of({ heading: false })]
+        : [livePreviewExtension];
 
   const ext: Extension[] = [
     EditorView.lineWrapping,

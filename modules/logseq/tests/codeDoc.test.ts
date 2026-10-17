@@ -2,7 +2,7 @@
  * codeDoc 切分器/重建器的往返无损与结构用例。
  */
 import { describe, expect, it } from 'vitest';
-import { buildCodeDoc, reconstructFromDoc, toOutlineDocText } from '../src/features/codeDoc';
+import { buildCodeDoc, reconstructFromDoc, toOutlineDocText, toHybridRegions } from '../src/features/codeDoc';
 import { parseCodeFence } from '../src/blocks/codeFence';
 import { parseDocument } from '../src/core/parser';
 import { serializeDocument } from '../src/core/serializer';
@@ -244,5 +244,69 @@ describe('缩进往返:混合视图保存路径逐字节无损', () => {
     expect(doc.blocks[0].text).toBe('    # x');
     // 序列化照样原样写回,往返自洽
     expect(serializeDocument(doc)).toBe('-     # x');
+  });
+});
+
+/**
+ * 动态重切分布局判定(HybridCodeEditor.maybeResplit 的核心):
+ * 挂载与重切分共用 toHybridRegions;引擎比对 = 区数 + 每区 kind +
+ * 每区「当前行数」(code 区 = Monaco 活行数,text 区 = 提交时刷新的行数)。
+ * 在代码行手敲注释标记 → kind 改变 → 重挂(编辑器切换);删标记同理。
+ * 注释区内部增删行只动行数、kind 不变 → 不重挂,走行数漂移。
+ */
+describe('toHybridRegions:动态重切分布局', () => {
+  const py = ['# 顶部说明', 'import os', 'def f():', '    return 1'].join('\n');
+
+  /** 挂载时的布局与基准(py 的布局) */
+  const base = toHybridRegions(py, 'python');
+  const baseKinds = base.map((r) => r.kind);
+
+  /** 引擎的比对函数(next 来自重切分;liveCounts 是当前活行数) */
+  const layoutSame = (next: ReturnType<typeof toHybridRegions>, kinds: string[], counts: number[]) =>
+    next.length === kinds.length &&
+    next.every((r, k) => r.kind === kinds[k] && r.lines.length === counts[k]);
+
+  it('挂载布局:注释区与代码区交替,startLine 为真实文件行', () => {
+    // 连续代码行归并进同一个 code 区(中间无注释分隔)
+    expect(base).toEqual([
+      { kind: 'text', lines: ['# 顶部说明'], startLine: 1 },
+      { kind: 'code', lines: ['import os', 'def f():', '    return 1'], startLine: 2 },
+    ]);
+  });
+
+  it('代码行加注释标记 → kind 改变 → 重挂(编辑器切换为注释区)', () => {
+    const edited = ['# 顶部说明', '# import os', 'def f():', '    return 1'].join('\n');
+    const next = toHybridRegions(edited, 'python');
+    expect(next[0].lines).toEqual(['# 顶部说明', '# import os']);
+    expect(layoutSame(next, baseKinds, base.map((r) => r.lines.length))).toBe(false);
+  });
+
+  it('注释行删标记 → kind 改变 → 重挂(行搬回代码区)', () => {
+    const edited = ['顶部说明', 'import os', 'def f():', '    return 1'].join('\n');
+    const next = toHybridRegions(edited, 'python');
+    expect(next.length).toBe(1);
+    expect(next[0].kind).toBe('code');
+    expect(next[0].lines).toEqual(['顶部说明', 'import os', 'def f():', '    return 1']);
+    expect(layoutSame(next, baseKinds, base.map((r) => r.lines.length))).toBe(false);
+  });
+
+  it('常规编辑(不加/不删标记)布局不变 → 不重挂', () => {
+    const edited = ['# 顶部说明', 'import os', 'def f():', '    return 2'].join('\n');
+    expect(layoutSame(toHybridRegions(edited, 'python'), baseKinds, base.map((r) => r.lines.length))).toBe(true);
+  });
+
+  it('注释区内增行:kind 不变 + 提交后 textCounts 刷新 → 不重挂', () => {
+    const edited = ['# 顶部说明', '# 补充一行', 'import os', 'def f():', '    return 1'].join('\n');
+    const next = toHybridRegions(edited, 'python');
+    // textCounts[0] 在提交回调里已刷新为 2
+    const counts = [2, ...base.slice(1).map((r) => r.lines.length)];
+    expect(layoutSame(next, baseKinds, counts)).toBe(true);
+    expect(next[0].lines).toEqual(['# 顶部说明', '# 补充一行']);
+  });
+
+  it('行数守恒:标记增删前后总行数一致(视图状态可恢复的前提)', () => {
+    const edited = ['# 顶部说明', '# import os', 'def f():', '    return 1'].join('\n');
+    const total = (src: string) => toHybridRegions(src, 'python').reduce((s, r) => s + r.lines.length, 0);
+    expect(total(edited)).toBe(total(py));
   });
 });

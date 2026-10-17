@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { EditorState } from '@codemirror/state';
-import { EditorSelection } from '@codemirror/state';
-import { collectLivePreview } from '../src/editor/livePreview';
+import { EditorSelection, Extension } from '@codemirror/state';
+import { collectLivePreview, livePreviewConfig } from '../src/editor/livePreview';
 
-const at = (doc: string, anchor: number): ReturnType<typeof collectLivePreview> =>
-  collectLivePreview(EditorState.create({ doc, selection: EditorSelection.cursor(anchor) }));
+const at = (doc: string, anchor: number, extra?: Extension): ReturnType<typeof collectLivePreview> =>
+  collectLivePreview(EditorState.create({ doc, selection: EditorSelection.cursor(anchor), extensions: extra }));
 
 /**
  * What the user would see: the doc with every hidden (replace) range
  * removed. Mark-only ranges (dim/color) keep their text.
  */
-const visible = (doc: string, anchor: number): string => {
+const visible = (doc: string, anchor: number, extra?: Extension): string => {
   const gone = new Set<number>();
-  for (const s of at(doc, anchor)) {
+  for (const s of at(doc, anchor, extra)) {
     if (s.from === s.to || s.kind.endsWith(':mark')) continue;
     for (let i = s.from; i < s.to; i++) gone.add(i);
   }
@@ -94,6 +94,15 @@ describe('collectLivePreview — headings, hr', () => {
 
   it('treats #tag (no space) as a tag, not a heading', () => {
     expect(at('#tag text', 9)).toEqual([]);
+  });
+
+  // 代码注释区(FragmentHost codeComment):块文本行首 `#` 是注释标记,
+  // 编辑态必须按字面渲染 —— 不加 lg-h1 行装饰、不藏 `#`。
+  it('comment-mode (livePreviewConfig heading:false) renders # literally', () => {
+    const ext = livePreviewConfig.of({ heading: false });
+    const specs = at('# comment line\nbody', 18, ext);
+    expect(specs.some((s) => s.kind.startsWith('heading'))).toBe(false);
+    expect(visible('# comment line\nbody', 18, ext)).toBe('# comment line\nbody');
   });
 
   it('replaces a --- line with the hr widget when away', () => {

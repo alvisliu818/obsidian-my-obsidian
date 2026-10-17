@@ -90,6 +90,29 @@ export interface CodeDocBlock {
   startLine: number;
 }
 
+/** 混合编辑视图的一个区:code = 剥围栏后的代码行;text = 注释行原文 */
+export interface HybridRegion {
+  kind: CodeDocBlockKind;
+  lines: string[];
+  startLine: number;
+}
+
+/**
+ * buildCodeDoc 的混合视图直接消费形态:code 区剥掉合成围栏取内部行。
+ * 挂载与「注释标记增删后的动态重切分」共用 —— 保证两种路径得到同一种布局。
+ */
+export function toHybridRegions(text: string, lang: string): HybridRegion[] {
+  return buildCodeDoc(text, lang).map((b) => {
+    if (b.kind === 'code') {
+      const lines = b.text.split('\n');
+      // 首行是 ```lang 围栏,末行(若非首行)是闭围栏(与 reconstructFromDoc 同规则)
+      const inner = lines.slice(1, lines.length > 1 ? -1 : undefined);
+      return { kind: 'code' as const, lines: inner, startLine: b.startLine };
+    }
+    return { kind: 'text' as const, lines: b.text.split('\n'), startLine: b.startLine };
+  });
+}
+
 function markersFor(lang: string): { line: string[]; block: Array<[string, string]> } {
   const key = lang.toLowerCase();
   return {

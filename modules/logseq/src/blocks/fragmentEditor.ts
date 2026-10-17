@@ -70,6 +70,11 @@ export interface FragmentOptions {
   onContentChange?: (md: string) => void;
   /** 用户点击了 wiki 链接(缺省 app.workspace.openLinkText) */
   onOpenLink?: (linktext: string) => void;
+  /**
+   * 代码注释区场景(混合编辑视图的注释 zone):块文本行首的 `#` 是注释
+   * 标记而非 markdown 标题 —— 编辑态关闭 live-preview 的标题渲染。
+   */
+  codeComment?: boolean;
 }
 
 export class FragmentHost extends Component implements BlockRenderHost {
@@ -204,6 +209,9 @@ export class FragmentHost extends Component implements BlockRenderHost {
     view.destroy();
     clearActiveBlockEditor(this.app);
     if (changed) this.contentChanged(block);
+    // 未变更也要补回静态渲染:CM destroy 已移除编辑 DOM,不补显示态就空白了
+    // (与 BlockEditorView.commitViewNow 的无条件 refreshBlockContent 对齐)。
+    else refreshBlockContent(block, this);
   }
 
   /** 提交焦点块编辑文本到模型;返回是否有变化 */
@@ -558,6 +566,11 @@ export class FragmentHost extends Component implements BlockRenderHost {
 
   autocompleteSources(embed = false): CompletionSource[] {
     return autocompleteSources(this, embed);
+  }
+
+  /** 代码注释区:块文本行首 `#` 是注释标记,编辑态不按标题渲染 */
+  suppressHeadingDecor(_b: Block): boolean {
+    return this.opts.codeComment === true;
   }
 
   templateContext(): TemplateContext {
