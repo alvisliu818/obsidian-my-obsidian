@@ -226,6 +226,16 @@ describe('PluginSettingsComponent', () => {
       expect(result.attachmentFolderPath).toContain('Write it as \'{{noteFileName}}\' instead.');
     });
 
+    it('should accept the default screenshot file paths and reject an invalid regular expression among them', async () => {
+      const component = await createComponent();
+      const settings = createSettings();
+      const defaultResult = await component.validate(settings);
+      expect(defaultResult.screenshotFilePaths).toBeUndefined();
+      settings.screenshotFilePaths = ['C:/Shots', '/(/'];
+      const invalidResult = await component.validate(settings);
+      expect(invalidResult.screenshotFilePaths).toContain('/(/');
+    });
+
     it('should accept a valid collected attachment folder path with tokens', async () => {
       const component = await createComponent();
       const settings = createSettings();

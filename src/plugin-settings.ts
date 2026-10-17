@@ -170,6 +170,29 @@ export class PluginSettings {
   public renamedAttachmentFileName = '';
 
   /**
+   * Where screenshot tools leave the files they copy, so a paste of such a file counts as a pasted image.
+   *
+   * Some screenshot tools put the capture on the clipboard as a FILE rather than as image data: PixPin with
+   * `Copy images as files`, and the Windows 11 Snipping Tool, whose clipboard is backed by a file in its
+   * `TempState\ScreenClip` folder. Obsidian keeps the name of a pasted file, so without this list such a capture
+   * looks exactly like a real file copied in a file manager. A file written in the last minute counts as a
+   * screenshot anyway (see `pasted-image-classifier.ts`), so this list is what catches one pasted later than that.
+   *
+   * Same vocabulary as the path settings, except that the paths are the operating system's, not the vault's: an
+   * entry wrapped in `/` is a regular expression tested against the full path, and any other entry is a folder.
+   * A plain array rather than a {@link PathSettings} pair, because it has no include half and must not be scoped to
+   * the vault. Read by `isScreenshotFilePath`.
+   */
+  public screenshotFilePaths: string[] = [
+    String.raw`/[\\/](?:PixPin|Snipaste)_[^\\/]*$/`,
+    String.raw`/[\\/]Screenshot[^\\/]*$/`,
+    String.raw`/[\\/]TempState[\\/]ScreenClip[\\/]/`,
+    String.raw`/[\\/]AppData[\\/]Local[\\/]Temp[\\/]/`,
+    String.raw`/^\/tmp\//`,
+    String.raw`/^\/var\/folders\//`
+  ];
+
+  /**
    * Whether a note's attachments are collected each time the note changes, as if
    * `Collect attachments in current note` had been run on it.
    *
