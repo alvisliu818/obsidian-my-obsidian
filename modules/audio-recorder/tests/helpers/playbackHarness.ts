@@ -1,0 +1,232 @@
+/**
+ * Shared harness for the player integration suites: one controllable audio
+ * element installed as the global Audio factory, an in-memory sidecar store,
+ * the app, decoder, file and container a player is mounted against, and the
+ * small readers both suites use. Extracted so PlaybackSync and the pop-out
+ * suites drive the exact same real audio element instead of each
+ * hand-rolling (and drifting) their own copy.
+ * @module tests/helpers/playbackHarness
+ */
+
+import { App, Modal } from 'obsidian';
+import type { TFile } from 'obsidian';
+import type { RecordingSidecarStore } from 'src/sidecar/RecordingSidecarStore';
+import type { PlayerMarker } from 'src/markers/markerModel';
+import type { PlaybackControlsState } from 'src/player/playbackControls';
+import type { AudioDecoder } from 'src/player/WaveformData';
+import { makePlaybackDouble } from './audioPlayerHarness';
+import { partial } from './doubles';
+import { createMockApp } from './createApp';
+
+/**
+ * The app a player integration suite renders an embed against: a vault that
+ * answers the two calls a player makes, and no file behind it.
+ * @returns The mocked app handle
+ */
+export function makePlayerApp(): App {
+	return createMockApp({
+		vault: {
+			getResourcePath: () => 'app://media',
+			readBinary: () => Promise.resolve(new ArrayBuffer(0)),
+		},
+		fileManager: { generateMarkdownLink: () => '[[rec.mp4]]' },
+	}).app;
+}
+
+/**
+ * The decoder those suites install. It refuses, which keeps the progressive
+ * waveform path - and its timers - out of a suite that does not cover it.
+ * @returns A decoder that rejects every request
+ */
+export function makeRefusingDecoder(): AudioDecoder {
+	return {
+		decode: () => Promise.reject(new Error('no decode in tests')),
+	};
+}
+
+/**
+ * The recording a player integration suite mounts a player for.
+ * @param extension - Extension the file reports, mp4 by default
+ * @returns A file entry as the vault hands one out
+ */
+export function makePlayerFile(extension = 'mp4'): TFile {
+	return partial<TFile>({
+		path: `rec.${extension}`,
+		extension,
+		stat: { mtime: 1, size: 1000 },
+	});
+}
+
+/**
+ * A container attached to the document, as an embed's is. A player's mode
+ * probe reads the document its container is in, so a detached one renders as
+ * neither of the two view modes.
+ * @returns The attached container
+ */
+export function makePlayerContainer(): HTMLElement {
+	const container = new Modal(new App()).contentEl.createDiv();
+	document.body.appendChild(container);
+	return container;
+}
+
+/** Controllable audio element whose setters emit the matching media events. */
+export interface ControllableAudio extends HTMLAudioElement {
+	/** Sets the reported readyState so metadata can be made available late. */
+	setReady(value: number): void;
+	/** Sets the duration and emits durationchange, as a real load would. */
+	setDuration(value: number): void;
+	/**
+	 * Reports metadata as arrived and emits loadedmetadata, which is what a
+	 * successful load does and what the registry waits for before offering
+	 * the element to the live voice-boost chain.
+	 */
+	loadMetadata(): void;
+}
+
+/**
+ * Installs one deterministic audio element as the global Audio factory, so the
+ * registry's `new Audio()` and every player bind to the same element.
+ * @returns The shared element with test-only mutators and a restore function
+ */
+export function installSharedAudio(): {
+	audio: ControllableAudio;
+	restore(): void;
+} {
+	const el = document.createElement('audio') as ControllableAudio;
+	let paused = true;
+	let currentTime = 0;
+	let duration = NaN;
+	let ready = 0;
+	let playbackRate = 1;
+	Object.defineProperties(el, {
+		paused: { configurable: true, get: () => paused },
+		currentTime: {
+			configurable: true,
+			get: () => currentTime,
+			set: (value: number) => {
+				currentTime = value;
+				el.dispatchEvent(new Event('timeupdate'));
+			},
+		},
+		playbackRate: {
+			configurable: true,
+			get: () => playbackRate,
+			set: (value: number) => {
+				playbackRate = value;
+				el.dispatchEvent(new Event('ratechange'));
+			},
+		},
+		duration: { configurable: true, get: () => duration },
+		readyState: { configurable: true, get: () => ready },
+	});
+	jest.spyOn(el, 'play').mockImplementation(() => {
+		paused = false;
+		el.dispatchEvent(new Event('play'));
+		return Promise.resolve();
+	});
+	jest.spyOn(el, 'pause').mockImplementation(() => {
+		paused = true;
+		el.dispatchEvent(new Event('pause'));
+	});
+	jest.spyOn(el, 'load').mockImplementation(() => undefined);
+	el.setReady = (value: number) => {
+		ready = value;
+	};
+	el.setDuration = (value: number) => {
+		duration = value;
+		el.dispatchEvent(new Event('durationchange'));
+	};
+	el.loadMetadata = () => {
+		ready = 1;
+		el.dispatchEvent(new Event('loadedmetadata'));
+	};
+	jest.spyOn(globalThis, 'Audio').mockImplementation(() => el);
+	return {
+		audio: el,
+		restore: () => {},
+	};
+}
+
+/**
+ * An in-memory sidecar store the players can read and write without
+ * persistence. `updateMarkers` mutates a backing map so a write is visible to
+ * a later `getMarkers`, and the no-op rename/delete/clear methods let the
+ * registrar's vault wiring and dispose run against it.
+ * @returns A RecordingSidecarStore double backed by an in-memory map
+ */
+export function makeMarkerStore(): RecordingSidecarStore & {
+	positions: Map<string, number>;
+} {
+	const data = new Map<string, PlayerMarker[]>();
+	return {
+		...makePlaybackDouble(),
+		getMarkers: jest.fn((path: string) =>
+			Promise.resolve([...(data.get(path) ?? [])]),
+		),
+		updateMarkers: jest.fn(
+			(
+				path: string,
+				change: (
+					existing: readonly PlayerMarker[],
+				) => readonly PlayerMarker[],
+			) => {
+				const merged = [...change(data.get(path) ?? [])];
+				data.set(path, merged);
+				return Promise.resolve(merged);
+			},
+		),
+		handleRename: jest.fn().mockResolvedValue(undefined),
+		handleOutputRename: jest.fn().mockResolvedValue(undefined),
+		handleDelete: jest.fn().mockResolvedValue(undefined),
+		clearCache: jest.fn(),
+	} as unknown as RecordingSidecarStore & {
+		positions: Map<string, number>;
+	};
+}
+
+/**
+ * A complete playback snapshot with jest-backed commands, as the registry
+ * publishes it. Shared so the status bar and the palette commands are
+ * exercised against the very same contract.
+ * @param overrides - State fields to replace for a specific assertion
+ * @returns A playback snapshot every consumer accepts
+ */
+export function makePlaybackState(
+	overrides: Partial<PlaybackControlsState> = {},
+): PlaybackControlsState {
+	return {
+		currentTime: 65,
+		duration: 222,
+		paused: false,
+		volume: 0.75,
+		muted: false,
+		playbackRate: 1,
+		markersEnabled: true,
+		skipSeconds: 10,
+		chaptersEnabled: true,
+		chapterLoopEnabled: false,
+		recordingPath: 'Recordings/lecture.webm',
+		chapterLabel: null,
+		onTogglePlay: jest.fn(),
+		onStop: jest.fn(),
+		onSkip: jest.fn(),
+		onSeekTo: jest.fn(),
+		onToggleMute: jest.fn(),
+		onVolumeInput: jest.fn(),
+		onSetPlaybackRate: jest.fn(),
+		onAddMarker: jest.fn(),
+		onPreviousChapter: jest.fn(),
+		onNextChapter: jest.fn(),
+		onToggleChapterLoop: jest.fn(),
+		...overrides,
+	};
+}
+
+/** Reads the elapsed / total text the player renders. */
+export function timeText(container: HTMLElement): string {
+	return container.querySelector('.aar-player-time')?.textContent ?? '';
+}
+
+// Re-exported so a playback test needs one import; the implementation lives
+// with the other waiting primitives.
+export { tick } from './async';

@@ -1,0 +1,643 @@
+/**
+ * Unit tests for ConversionModal module.
+ * @module tests/unit/ConversionModal.test
+ */
+
+import { ConversionModal } from 'src/ui/ConversionModal';
+import { App, TFile } from 'obsidian';
+import type { AudioRecorderSettings } from 'src/settings/settingsSchema';
+import { mergeSettings } from 'src/settings/settingsSerialization';
+import { tick } from '../helpers/async';
+import {
+	allButtons,
+	capturedSettings,
+	changeSetting,
+	settingRow,
+	type CapturedButton,
+} from '../helpers/captureSettings';
+import { noticeInstances, noticeText } from '../mocks/obsidian';
+import { el } from '../helpers/dom';
+import { MODAL } from '../helpers/selectors';
+import { createMockApp } from '../helpers/createApp';
+import { updateLinksInVault } from 'src/utils/LinkUpdater';
+import { convertBlobToFormatBuffer } from 'src/audio/AudioFormatConverter';
+import {
+	getSupportedBitrates,
+	resolveBitrateOffer,
+} from 'src/audio/AudioCapabilityDetector';
+import { addObsidianDomExtensions } from '../mocks/domExtensions';
+import { defined } from '../helpers/assertions';
+
+/**
+ * Extends an HTMLElement with Obsidian's custom DOM methods.
+ */
+// The full obsidian mock with only Setting swapped for the recording double.
+// The previous inline mock stubbed Setting out entirely - its add* methods
+// never called back - so half of this dialog's wiring never ran under test.
+jest.mock('obsidian', () =>
+	require('../mocks/modules/obsidianWithCapturingSetting'),
+);
+
+// Mock LinkUpdater: the vault-wide rewrite has its own suite
+jest.mock('src/utils/LinkUpdater', () => ({
+	updateLinksInVault: jest.fn().mockResolvedValue({
+		updatedNotes: 1,
+		skippedReferences: 0,
+		frontmatterReferences: 0,
+	}),
+}));
+
+// Mock AudioFormatConverter: conversion pipelines have their own suite
+jest.mock('src/audio/AudioFormatConverter', () => ({
+	...require('../mocks/modules/audioFormatConverter'),
+	decodeAudioBlob: jest.fn().mockResolvedValue({}),
+	convertBlobToFormatBuffer: jest.fn().mockResolvedValue({
+		data: new ArrayBuffer(8),
+		sampleRateChange: null,
+	}),
+}));
+
+// Mock AudioEncoder
+jest.mock('src/audio/AudioEncoder', () => ({
+	encodeAudioBuffer: jest
+		.fn()
+		.mockResolvedValue(new Blob(['encoded'], { type: 'audio/mp3' })),
+	isOfflineEncodingSupported: jest.fn().mockReturnValue(true),
+}));
+
+// Mock AudioCapabilityDetector
+jest.mock('src/audio/AudioCapabilityDetector', () =>
+	require('../mocks/modules/audioCapabilityDetector'),
+);
+
+// Real settings rather than a two-field cast: the dialog seeds format,
+// bitrate, and link action from them, so a partial fixture only type-checks
+// by lying about what the modal actually reads.
+const mockSettings = mergeSettings({
+	deleteSourceAfterConversion: true,
+	conversionLinkAction: 'replace',
+});
+
+describe('ConversionModal', () => {
+	let mockApp: App;
+	let mockFile: TFile;
+	let createdFile: { path: string };
+
+	beforeEach(() => {
+		capturedSettings.length = 0;
+
+		createdFile = { path: 'Recordings/recording.webm' };
+		mockApp = createMockApp({
+			vault: {
+				readBinary: jest.fn().mockResolvedValue(new ArrayBuffer(100)),
+				adapter: {
+					exists: jest.fn().mockResolvedValue(false),
+				},
+				createBinary: jest.fn().mockResolvedValue(createdFile),
+			},
+			fileManager: {
+				trashFile: jest.fn().mockResolvedValue(undefined),
+			},
+		}).app;
+
+		mockFile = new TFile();
+		Object.defineProperty(mockFile, 'name', { value: 'recording.wav' });
+		Object.defineProperty(mockFile, 'basename', { value: 'recording' });
+		Object.defineProperty(mockFile, 'extension', { value: 'wav' });
+		Object.defineProperty(mockFile, 'path', {
+			value: 'Recordings/recording.wav',
+		});
+		Object.defineProperty(mockFile, 'parent', {
+			value: { path: 'Recordings' },
+		});
+	});
+
+	it('opens over the file it was given, before anything is picked', () => {
+		// Constructing proves nothing - the dialog is only wrong once it is
+		// on screen. What it must show first is the file it will convert.
+		const modal = new ConversionModal(
+			mockApp,
+			mockFile,
+			() => mockSettings,
+		);
+
+		modal.onOpen();
+
+		expect(
+			el(modal.contentEl, MODAL.conversionSource).textContent,
+		).toContain(mockFile.name);
+	});
+
+	it('initializes the channel preset through named options', () => {
+		const modal = new ConversionModal(
+			mockApp,
+			mockFile,
+			() => mockSettings,
+			{
+				initialChannelMode: 'mono-right',
+			},
+		);
+
+		expect((modal as unknown as { channelMode: string }).channelMode).toBe(
+			'mono-right',
+		);
+	});
+
+	it('sets up content on open', () => {
+		const modal = new ConversionModal(
+			mockApp,
+			mockFile,
+			() => mockSettings,
+		);
+		modal.onOpen();
+
+		// Heading is rendered via Setting.setHeading(); source file info is a <p>
+		expect(
+			el(modal.contentEl, MODAL.conversionSource).textContent,
+		).toContain('recording.wav');
+	});
+
+	it('shows source file name', () => {
+		const modal = new ConversionModal(
+			mockApp,
+			mockFile,
+			() => mockSettings,
+		);
+		modal.onOpen();
+
+		expect(
+			el(modal.contentEl, MODAL.conversionSource).textContent,
+		).toContain('recording.wav');
+	});
+
+	it('clears content on close', () => {
+		const modal = new ConversionModal(
+			mockApp,
+			mockFile,
+			() => mockSettings,
+		);
+		modal.onOpen();
+		modal.onClose();
+
+		expect(modal.contentEl.children).toHaveLength(0);
+	});
+
+	describe('runConversion', () => {
+		const runConversion = (
+			modal: ConversionModal,
+			progressEl: HTMLElement,
+		): Promise<void> =>
+			(
+				modal as unknown as {
+					runConversion(el: HTMLElement): Promise<void>;
+				}
+			).runConversion(progressEl);
+
+		const createModal = (
+			settings: Partial<AudioRecorderSettings> = {},
+		): { modal: ConversionModal; progressEl: HTMLElement } => {
+			const modal = new ConversionModal(mockApp, mockFile, () => ({
+				...mockSettings,
+				...settings,
+			}));
+			modal.onOpen();
+			// The Setting mock never invokes dropdown callbacks, so the
+			// format selection from onOpen does not run; pick the target
+			// format directly like the dropdown would
+			(modal as unknown as { targetFormat: string }).targetFormat =
+				'webm';
+			const progressEl = document.createElement('div');
+			addObsidianDomExtensions(progressEl);
+			(progressEl as unknown as Record<string, unknown>).setText = (
+				text: string,
+			): void => {
+				progressEl.textContent = text;
+			};
+			return { modal, progressEl };
+		};
+
+		it('updates links vault-wide with the created file', async () => {
+			const { modal, progressEl } = createModal();
+
+			await runConversion(modal, progressEl);
+
+			expect(mockApp.vault.createBinary).toHaveBeenCalledWith(
+				'Recordings/recording.webm',
+				expect.any(ArrayBuffer),
+			);
+			expect(jest.mocked(updateLinksInVault)).toHaveBeenCalledWith(
+				mockApp,
+				mockFile,
+				[createdFile],
+				'replace',
+			);
+			expect(mockApp.fileManager.trashFile).toHaveBeenCalledWith(
+				mockFile,
+			);
+		});
+
+		it('keeps the source when some links could not be updated', async () => {
+			jest.mocked(updateLinksInVault).mockResolvedValueOnce({
+				updatedNotes: 1,
+				skippedReferences: 2,
+				frontmatterReferences: 0,
+			});
+			const { modal, progressEl } = createModal();
+
+			await runConversion(modal, progressEl);
+
+			expect(mockApp.fileManager.trashFile).not.toHaveBeenCalled();
+			expect(
+				noticeInstances.some((n) =>
+					noticeText(n).includes('Source file kept'),
+				),
+			).toBe(true);
+		});
+
+		it('reports frontmatter links that stay on the source', async () => {
+			jest.mocked(updateLinksInVault).mockResolvedValueOnce({
+				updatedNotes: 0,
+				skippedReferences: 0,
+				frontmatterReferences: 1,
+			});
+			const { modal, progressEl } = createModal();
+
+			await runConversion(modal, progressEl);
+
+			expect(
+				noticeInstances.some((n) =>
+					noticeText(n).includes('frontmatter link'),
+				),
+			).toBe(true);
+		});
+
+		it('skips link updates and deletion for the none action', async () => {
+			const { modal, progressEl } = createModal({
+				conversionLinkAction: 'none',
+				deleteSourceAfterConversion: false,
+			});
+
+			await runConversion(modal, progressEl);
+
+			expect(jest.mocked(updateLinksInVault)).not.toHaveBeenCalled();
+			expect(mockApp.fileManager.trashFile).not.toHaveBeenCalled();
+		});
+
+		it('shows a background notice when closed mid-conversion', async () => {
+			let resolveConversion = (): void => undefined;
+			jest.mocked(convertBlobToFormatBuffer).mockReturnValueOnce(
+				new Promise((resolve) => {
+					resolveConversion = (): void => {
+						resolve({
+							data: new ArrayBuffer(8),
+							sampleRateChange: null,
+						});
+					};
+				}),
+			);
+			const { modal, progressEl } = createModal();
+
+			const conversionPromise = runConversion(modal, progressEl);
+			// Let the pipeline reach the hanging conversion step
+			await tick();
+
+			modal.onClose();
+
+			const background = noticeInstances.find((n) =>
+				noticeText(n).includes('continues in the background'),
+			);
+			expect(background).toBeDefined();
+			expect(background?.timeout).toBe(0);
+
+			resolveConversion();
+			await conversionPromise;
+
+			// Progress was mirrored into the notice and it was hidden
+			expect(background?.setMessage).toHaveBeenCalled();
+			expect(background?.hide).toHaveBeenCalled();
+		});
+
+		it('does not show a background notice when closed while idle', () => {
+			const { modal } = createModal();
+
+			modal.onClose();
+
+			expect(
+				noticeInstances.some((n) =>
+					noticeText(n).includes('continues in the background'),
+				),
+			).toBe(false);
+		});
+
+		it('passes the selected channel mode into the conversion', async () => {
+			const { modal, progressEl } = createModal();
+			(modal as unknown as { channelMode: string }).channelMode =
+				'mono-left';
+
+			await runConversion(modal, progressEl);
+
+			expect(jest.mocked(convertBlobToFormatBuffer)).toHaveBeenCalledWith(
+				expect.any(Blob),
+				'webm',
+				expect.any(Number),
+				expect.any(Function),
+				expect.objectContaining({ channelMode: 'mono-left' }),
+			);
+		});
+	});
+
+	describe('target format options', () => {
+		/** Dropdown double capturing the rebuilt option list. */
+		interface DropdownDouble {
+			selectEl: { empty: jest.Mock };
+			addOption: jest.Mock;
+			setValue: jest.Mock;
+		}
+
+		const withFormatDropdown = (modal: ConversionModal): DropdownDouble => {
+			const dropdown: DropdownDouble = {
+				selectEl: { empty: jest.fn() },
+				addOption: jest.fn(),
+				setValue: jest.fn(),
+			};
+			(
+				modal as unknown as { formatDropdown: DropdownDouble }
+			).formatDropdown = dropdown;
+			return dropdown;
+		};
+
+		const rebuild = (modal: ConversionModal): void => {
+			(
+				modal as unknown as { rebuildFormatOptions(): void }
+			).rebuildFormatOptions();
+		};
+
+		const offeredFormats = (dropdown: DropdownDouble): string[] =>
+			dropdown.addOption.mock.calls.map((call) => String(call[0]));
+
+		it('excludes the source format for channel-preserving conversions', () => {
+			const modal = new ConversionModal(
+				mockApp,
+				mockFile,
+				() => mockSettings,
+			);
+			const dropdown = withFormatDropdown(modal);
+
+			rebuild(modal);
+
+			expect(offeredFormats(dropdown)).not.toContain('wav');
+		});
+
+		it('offers the source format for mono downmixes', () => {
+			const modal = new ConversionModal(
+				mockApp,
+				mockFile,
+				() => mockSettings,
+			);
+			(modal as unknown as { channelMode: string }).channelMode =
+				'mono-mix';
+			const dropdown = withFormatDropdown(modal);
+
+			rebuild(modal);
+
+			expect(offeredFormats(dropdown)).toContain('wav');
+		});
+
+		it('falls back to the first offered format when the selection disappears', () => {
+			const modal = new ConversionModal(
+				mockApp,
+				mockFile,
+				() => mockSettings,
+			);
+			(modal as unknown as { targetFormat: string }).targetFormat = 'wav';
+			const dropdown = withFormatDropdown(modal);
+
+			// Channel mode is 'source', so wav (the source format) is gone
+			rebuild(modal);
+
+			expect(
+				(modal as unknown as { targetFormat: string }).targetFormat,
+			).not.toBe('wav');
+			expect(dropdown.setValue).toHaveBeenCalledWith(
+				(modal as unknown as { targetFormat: string }).targetFormat,
+			);
+		});
+
+		it('keeps the current selection when it is still offered', () => {
+			const modal = new ConversionModal(
+				mockApp,
+				mockFile,
+				() => mockSettings,
+			);
+			(modal as unknown as { targetFormat: string }).targetFormat = 'mp3';
+			const dropdown = withFormatDropdown(modal);
+
+			rebuild(modal);
+
+			expect(dropdown.setValue).toHaveBeenCalledWith('mp3');
+		});
+	});
+
+	// -----------------------------------------------------------------
+	// The controls a user actually touches
+	// -----------------------------------------------------------------
+
+	describe('what the user picked reaches the conversion', () => {
+		/**
+		 * Opens the dialog and returns the Convert button, so a test changes
+		 * a control and then runs the conversion the way a user does.
+		 * @returns The opened dialog and its Convert button
+		 */
+		function openDialog(): {
+			modal: ConversionModal;
+			convert: CapturedButton;
+		} {
+			const modal = new ConversionModal(
+				mockApp,
+				mockFile,
+				() => mockSettings,
+			);
+			modal.onOpen();
+			return {
+				modal,
+				convert: defined(
+					allButtons().find((entry) => entry.label === 'Convert'),
+				),
+			};
+		}
+
+		it.each([
+			{
+				name: 'a different target format',
+				row: 'Target format',
+				value: 'mp3',
+				written: /recording\.mp3$/,
+			},
+		])(
+			'carries $name into the file it writes',
+			async ({ row, value, written }) => {
+				// Each of these is a one-line handler on a control, and none of
+				// them had ever run: the suite asserted on what the dialog
+				// rendered, never on what changing it did. A handler wired to the
+				// wrong field is a setting the user picks and the conversion
+				// ignores, with the dialog still looking right.
+				const { convert } = openDialog();
+
+				changeSetting(row, 'dropdown', value);
+				convert.click();
+				await tick();
+
+				expect(
+					jest.mocked(mockApp.vault.createBinary),
+				).toHaveBeenCalledWith(
+					expect.stringMatching(written),
+					expect.anything(),
+				);
+			},
+		);
+
+		it('carries the chosen channel layout into the converter', async () => {
+			// The handler does two things: remember the layout, and re-offer
+			// the formats. This is the first half - a layout that stops here
+			// is a downmix the user asked for and never got.
+			const { convert } = openDialog();
+
+			changeSetting('Channels', 'dropdown', 'mono-left');
+			changeSetting('Target format', 'dropdown', 'mp3');
+			convert.click();
+			await tick();
+
+			expect(jest.mocked(convertBlobToFormatBuffer)).toHaveBeenCalledWith(
+				expect.anything(),
+				'mp3',
+				expect.any(Number),
+				expect.any(Function),
+				expect.objectContaining({ channelMode: 'mono-left' }),
+			);
+		});
+
+		it('deletes the source only once the toggle is on', async () => {
+			const { convert } = openDialog();
+
+			changeSetting('Delete source file', 'toggle', true);
+			changeSetting('Target format', 'dropdown', 'mp3');
+			convert.click();
+			await tick();
+
+			expect(
+				jest.mocked(mockApp.fileManager.trashFile),
+			).toHaveBeenCalled();
+		});
+
+		it('leaves the notes alone when the link action says to', async () => {
+			// 'none' is the one choice that must reach the service intact: a
+			// handler dropping it rewrites every note in the vault.
+			const { convert } = openDialog();
+
+			changeSetting('Update links in notes', 'dropdown', 'none');
+			changeSetting('Target format', 'dropdown', 'mp3');
+			convert.click();
+			await tick();
+
+			expect(jest.mocked(updateLinksInVault)).not.toHaveBeenCalled();
+		});
+
+		it('re-offers the source format once the channels change', async () => {
+			// The channel handler does two things, and the second - rebuilding
+			// the format list - is the easy one to drop.
+			openDialog();
+			const offered = (): string[] =>
+				(settingRow('Target format').dropdownOptions ?? []).map(
+					(option) => option.value,
+				);
+			expect(offered()).not.toContain('wav');
+
+			changeSetting('Channels', 'dropdown', 'mono-mix');
+
+			// wav is the source format: refused while the channels are kept,
+			// offered again the moment they are not.
+			expect(offered()).toContain('wav');
+		});
+
+		it('re-offers the bitrates the new target format reaches', () => {
+			// The bitrate row is built before a target is picked, so a target
+			// chosen later leaves it offering rates that target cannot write.
+			openDialog();
+			jest.mocked(getSupportedBitrates).mockReturnValue([32000, 64000]);
+
+			changeSetting('Target format', 'dropdown', 'mp3');
+
+			expect(jest.mocked(getSupportedBitrates)).toHaveBeenCalledWith(
+				'mp3',
+				expect.any(Number),
+			);
+			expect(
+				(settingRow('Bitrate').dropdownOptions ?? []).map(
+					(option) => option.value,
+				),
+			).toEqual(['32000', '64000']);
+		});
+
+		it('asks the encoder about the layout the conversion writes, not the one it opened with', async () => {
+			// The encoder accepts its own set of rates per layout, and
+			// mediabunny builds the codec string from the channel count, so a
+			// mono conversion is a different question than a stereo one. A
+			// format picked after the channels were changed re-stated only the
+			// format, and the row was then probed as the stereo file the
+			// dialog had opened with.
+			openDialog();
+
+			changeSetting('Channels', 'dropdown', 'mono-mix');
+			changeSetting('Target format', 'dropdown', 'm4a');
+			await tick();
+
+			expect(jest.mocked(resolveBitrateOffer)).toHaveBeenLastCalledWith(
+				'm4a',
+				expect.any(Number),
+				1,
+			);
+		});
+
+		it('hides the bitrate row for a WAV target, which discards it', () => {
+			// The bitrate reaches the encoder and is thrown away for PCM, so
+			// a live dropdown here describes a file it cannot describe.
+			openDialog();
+			expect(settingRow('Bitrate').el.style.display).not.toBe('none');
+
+			// wav is the source format, offered again only once the channels
+			// stop being kept.
+			changeSetting('Channels', 'dropdown', 'mono-mix');
+			changeSetting('Target format', 'dropdown', 'wav');
+
+			expect(settingRow('Bitrate').el.style.display).toBe('none');
+		});
+
+		it('locks the button for the length of the conversion', async () => {
+			// A second press mid-run would start a second conversion over the
+			// same file; the disabled button is the only thing stopping it.
+			let settle = (): void => undefined;
+			jest.mocked(convertBlobToFormatBuffer).mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						settle = (): void => {
+							resolve({
+								data: new ArrayBuffer(8),
+								sampleRateChange: null,
+							});
+						};
+					}),
+			);
+			const { convert } = openDialog();
+			changeSetting('Target format', 'dropdown', 'mp3');
+
+			convert.click();
+			await tick();
+			expect(convert.disabled).toBe(true);
+
+			settle();
+			await tick();
+			await tick();
+			expect(convert.disabled).toBe(false);
+		});
+	});
+});

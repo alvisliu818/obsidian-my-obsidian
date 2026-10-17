@@ -1,0 +1,322 @@
+/**
+ * Unit tests for the encoding worker handler, tested directly with mocked
+ * mediabunny, plus the onmessage glue that only installs itself inside a real
+ * worker - which is why it needed a module re-import to reach at all.
+ * @module tests/unit/encodingWorker.test
+ */
+
+import { handleEncodingMessage } from 'src/audio/encodingWorker';
+import { at } from '../helpers/assertions';
+import { tick } from '../helpers/async';
+import type { WorkerRequest, WorkerResponse } from 'src/audio/encodingWorker';
+
+const mockConversionExecute = jest.fn().mockResolvedValue(undefined);
+
+jest.mock('mediabunny', () => require('../mocks/modules/mediabunny'));
+import {
+	audioTrack,
+	conversionInit,
+	getPrimaryAudioTrack,
+	convertedBuffer,
+} from '../mocks/modules/mediabunny';
+import { encodableSampleRate } from 'src/audio/AudioEncoder';
+
+jest.mock('src/audio/AudioEncoder', () =>
+	require('../mocks/modules/streamingAudioEncoder'),
+);
+
+const createRequest = (
+	overrides: Partial<WorkerRequest> = {},
+): WorkerRequest => ({
+	id: 1,
+	kind: 'convertBlob',
+	blob: new Blob(['audio'], { type: 'audio/webm' }),
+	targetFormat: 'mp3',
+	bitrate: 128000,
+	allowRemux: false,
+	...overrides,
+});
+
+describe('handleEncodingMessage', () => {
+	let responses: {
+		response: WorkerResponse;
+		transfer?: Transferable[] | undefined;
+	}[];
+	const post = (
+		response: WorkerResponse,
+		transfer?: Transferable[],
+	): void => {
+		responses.push({ response, transfer });
+	};
+
+	beforeEach(() => {
+		responses = [];
+		conversionInit.mockImplementation(() =>
+			Promise.resolve({
+				execute: mockConversionExecute,
+				onProgress: undefined,
+				isValid: true,
+				discardedTracks: [],
+			}),
+		);
+		getPrimaryAudioTrack.mockResolvedValue(audioTrack());
+	});
+
+	it('posts the converted buffer as a transferable result', async () => {
+		await handleEncodingMessage(createRequest(), post);
+
+		const result = responses.find(
+			(entry) => entry.response.kind === 'result',
+		);
+		expect(result).toBeDefined();
+		expect(result?.response).toEqual({
+			id: 1,
+			kind: 'result',
+			data: convertedBuffer,
+			sampleRateChange: null,
+		});
+		expect(result?.transfer).toEqual([convertedBuffer]);
+	});
+
+	it('forwards whole-percent progress updates', async () => {
+		await handleEncodingMessage(createRequest(), post);
+
+		const conversion = (await at(conversionInit.mock.results, 0).value) as {
+			onProgress?: (progress: number) => void;
+		};
+		conversion.onProgress?.(0.5);
+		conversion.onProgress?.(0.504);
+
+		const progress = responses.filter(
+			(entry) => entry.response.kind === 'progress',
+		);
+		expect(progress).toHaveLength(1);
+		expect(at(progress, 0).response).toEqual({
+			id: 1,
+			kind: 'progress',
+			percent: 50,
+		});
+	});
+
+	describe('a file written at another rate than its source', () => {
+		beforeEach(() => {
+			getPrimaryAudioTrack.mockResolvedValue(
+				audioTrack({ sampleRate: 16000, numberOfChannels: 1 }),
+			);
+			jest.mocked(encodableSampleRate).mockResolvedValueOnce(44100);
+			jest.spyOn(console, 'warn').mockImplementation(() => {});
+		});
+
+		it('carries the rate in the result message', async () => {
+			await handleEncodingMessage(
+				createRequest({ targetFormat: 'm4a' }),
+				post,
+			);
+
+			expect(responses.map((entry) => entry.response)).toEqual([
+				expect.objectContaining({
+					kind: 'result',
+					sampleRateChange: { from: 16000, to: 44100 },
+				}),
+			]);
+		});
+
+		// A rate announced on its own, before the conversion ran, described a
+		// file the worker then failed to write, and the client had to be
+		// told to forget it.
+		it('says nothing about the rate when the conversion then fails', async () => {
+			mockConversionExecute.mockRejectedValueOnce(
+				new Error('encoder closed'),
+			);
+
+			await handleEncodingMessage(
+				createRequest({ targetFormat: 'm4a' }),
+				post,
+			);
+
+			expect(responses.map((entry) => entry.response)).toEqual([
+				{ id: 1, kind: 'error', message: 'encoder closed' },
+			]);
+		});
+	});
+
+	it('omits the bitrate for PCM targets', async () => {
+		await handleEncodingMessage(
+			createRequest({ targetFormat: 'wav' }),
+			post,
+		);
+
+		expect(conversionInit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				audio: { codec: 'pcm-s16' },
+			}),
+		);
+	});
+
+	it('remuxes without a bitrate when codecs match and remux is allowed', async () => {
+		await handleEncodingMessage(
+			createRequest({ targetFormat: 'webm', allowRemux: true }),
+			post,
+		);
+
+		expect(conversionInit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				audio: { codec: 'opus' },
+			}),
+		);
+	});
+
+	it('applies the requested channel mode', async () => {
+		await handleEncodingMessage(
+			createRequest({ channelMode: 'mono-mix' }),
+			post,
+		);
+
+		expect(conversionInit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				audio: expect.objectContaining({
+					process: expect.any(Function),
+					processedNumberOfChannels: 1,
+				}),
+			}),
+		);
+	});
+
+	it('normalizes an unknown channel mode to the source layout', async () => {
+		await handleEncodingMessage(
+			createRequest({
+				channelMode: 'bogus' as WorkerRequest['channelMode'],
+			}),
+			post,
+		);
+
+		const audio = (
+			conversionInit.mock.calls[0][0] as {
+				audio: Record<string, unknown>;
+			}
+		).audio;
+		expect(audio.numberOfChannels).toBeUndefined();
+		expect(audio.process).toBeUndefined();
+	});
+
+	it('posts an error for an unmapped format', async () => {
+		await handleEncodingMessage(
+			createRequest({ targetFormat: 'xyz' }),
+			post,
+		);
+
+		expect(responses).toEqual([
+			{
+				response: {
+					id: 1,
+					kind: 'error',
+					message: 'No codec mapping for format "xyz"',
+				},
+				transfer: undefined,
+			},
+		]);
+	});
+
+	it('posts an error when the audio track is discarded', async () => {
+		conversionInit.mockImplementationOnce(() =>
+			Promise.resolve({
+				execute: mockConversionExecute,
+				isValid: true,
+				discardedTracks: [
+					{ track: { isAudioTrack: (): boolean => true } },
+				],
+			}),
+		);
+
+		await handleEncodingMessage(createRequest(), post);
+
+		const error = responses.find(
+			(entry) => entry.response.kind === 'error',
+		);
+		expect(error?.response).toEqual({
+			id: 1,
+			kind: 'error',
+			message: expect.stringContaining(
+				'cannot process the input audio track',
+			),
+		});
+	});
+});
+
+describe('the worker entry point', () => {
+	/**
+	 * Re-imports the module with `self` shaped like a worker global - the only
+	 * condition under which it installs its message handler - and runs the
+	 * body while that scope is still in place, since the handler reads
+	 * `self.postMessage` when it replies, not when it is installed.
+	 * @param body - Receives the installed handler and the posted messages
+	 */
+	async function inWorkerScope(
+		body: (scope: {
+			onmessage: ((event: MessageEvent) => void) | null;
+			posted: unknown[];
+		}) => void | Promise<void>,
+	): Promise<void> {
+		const posted: unknown[] = [];
+		const scope = globalThis as unknown as Record<string, unknown>;
+		const previous = {
+			importScripts: scope.importScripts,
+			postMessage: scope.postMessage,
+			onmessage: scope.onmessage,
+		};
+		scope.importScripts = jest.fn();
+		scope.postMessage = jest.fn((message: unknown) => {
+			posted.push(message);
+		});
+		scope.onmessage = null;
+		try {
+			jest.isolateModules(() => {
+				require('src/audio/encodingWorker');
+			});
+			await body({
+				onmessage: scope.onmessage as
+					((event: MessageEvent) => void) | null,
+				posted,
+			});
+		} finally {
+			scope.importScripts = previous.importScripts;
+			scope.postMessage = previous.postMessage;
+			scope.onmessage = previous.onmessage;
+		}
+	}
+
+	it('installs a message handler when it is running as a worker', async () => {
+		await inWorkerScope(({ onmessage }) => {
+			expect(onmessage).toEqual(expect.any(Function));
+		});
+	});
+
+	it('installs nothing on the main thread', () => {
+		// The module is imported by the main thread too, to reach
+		// handleEncodingMessage and the request types; taking over
+		// window.onmessage there would break the host page.
+		const scope = globalThis as unknown as Record<string, unknown>;
+		scope.onmessage = null;
+
+		jest.isolateModules(() => {
+			require('src/audio/encodingWorker');
+		});
+
+		expect(scope.onmessage).toBeNull();
+	});
+
+	it('answers a message the host posted', async () => {
+		await inWorkerScope(async ({ onmessage, posted }) => {
+			onmessage?.({
+				data: { id: 7, type: 'nonsense' },
+			} as MessageEvent);
+			await tick();
+
+			// Whatever the request was, the worker replies: a host left
+			// waiting on a request that silently died would hang the
+			// conversion.
+			expect(posted).toHaveLength(1);
+			expect(posted[0]).toMatchObject({ id: 7 });
+		});
+	});
+});

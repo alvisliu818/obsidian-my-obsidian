@@ -1,0 +1,308 @@
+/**
+ * Regression guard for the read-only (reading view) player CSS contract.
+ * The marker label is a button, which reading-view styling would centre;
+ * the fix scopes the rule under `.aar-player` and left-aligns it. These
+ * tests parse the stylesheet so that fix cannot silently regress.
+ */
+
+import { MARKER, PLAYER } from '../helpers/selectors';
+import { stylesheet as css, ruleBodies, ruleBody } from '../helpers/stylesheet';
+
+describe('read-only player styles', () => {
+	it('left-aligns the static marker label, scoped to outrank reading-view buttons', () => {
+		const body = ruleBody(PLAYER.scopedStaticLabel);
+		expect(body).not.toBeNull();
+		expect(body).toMatch(/text-align:\s*left/);
+		expect(body).toMatch(/justify-content:\s*flex-start/);
+	});
+
+	it('hides editing-only controls in read-only mode', () => {
+		const body = ruleBody(PLAYER.readonlyEditOnly);
+		expect(body).not.toBeNull();
+		expect(body).toMatch(/display:\s*none/);
+	});
+
+	it('left-aligned label fills the row so the segment sits at the right', () => {
+		const label = ruleBody(PLAYER.scopedStaticLabel);
+		expect(label).not.toBeNull();
+		expect(label).toMatch(/flex:\s*1/);
+
+		const segment = ruleBody(MARKER.segment);
+		expect(segment).not.toBeNull();
+	});
+
+	it('makes the whole read-only row a clickable jump target', () => {
+		const row = ruleBody(MARKER.clickableRow);
+		expect(row).not.toBeNull();
+		expect(row).toMatch(/cursor:\s*pointer/);
+	});
+
+	it('highlights the currently-playing segment row', () => {
+		const active = ruleBody(MARKER.activeRow);
+		expect(active).not.toBeNull();
+		expect(active).toMatch(/background-color/);
+	});
+
+	it('leaves an uncoloured tick the colour its kind always gave it', () => {
+		const bookmark = ruleBody(MARKER.tickBookmark);
+		expect(bookmark).not.toBeNull();
+		// The property is read with a fallback, so a marker that carries no
+		// colour is drawn exactly as it was before colours existed.
+		expect(bookmark).toMatch(
+			/background-color:\s*var\(--aar-marker-color,\s*var\(--text-accent\)\)/,
+		);
+	});
+
+	it('draws a coloured row with an edge in the colour it carries', () => {
+		const row = ruleBody(MARKER.coloredRow);
+		expect(row).not.toBeNull();
+		expect(row).toMatch(/var\(--aar-marker-color\)/);
+	});
+
+	// Reading view renders the row as a button, and the button reset clears
+	// every box-shadow. A colour stated on the bare class lost to it, so a
+	// coloured marker showed its edge while editing and nothing at all when
+	// read - which is the mode a marker list is mostly looked at in.
+	it('keeps the colour edge where the row is a reading-view button', () => {
+		const reset = ruleBody(MARKER.buttonRow);
+		expect(reset).not.toBeNull();
+		expect(reset).toMatch(/box-shadow:\s*none/);
+
+		const colored = ruleBody(MARKER.coloredButtonRow);
+		expect(colored).not.toBeNull();
+		expect(colored).toMatch(
+			/box-shadow:\s*inset[^;]*var\(--aar-marker-color\)/,
+		);
+		// Specificity settles it only if the colour also comes last.
+		expect(css.indexOf(MARKER.coloredButtonRow)).toBeGreaterThan(
+			css.indexOf(MARKER.buttonRow),
+		);
+	});
+
+	// The same button carries a themed height and nowrap text, so the note
+	// that wraps onto a second line spilled over the row below it.
+	it('lets a reading-view row grow to fit the note that wrapped', () => {
+		const reset = ruleBody(MARKER.buttonRow);
+		expect(reset).not.toBeNull();
+		expect(reset).toMatch(/height:\s*auto/);
+		expect(reset).toMatch(/min-height:\s*0/);
+		expect(reset).toMatch(/white-space:\s*normal/);
+	});
+
+	// A note spanning the whole row read as a caption on the controls as much
+	// as on the marker, so an edit-mode row places it under the title.
+	it('puts the edit-mode note under the title it annotates', () => {
+		const note = ruleBody(MARKER.noteRule);
+		expect(note).not.toBeNull();
+		expect(note).toMatch(/grid-area:\s*note/);
+
+		const editable = ruleBody(MARKER.editableRow);
+		expect(editable).not.toBeNull();
+		expect(editable).toMatch(/display:\s*grid/);
+		const areas = /grid-template-areas:\s*'([^']*)'\s*'([^']*)'/.exec(
+			editable ?? '',
+		);
+		expect(areas).not.toBeNull();
+		const [titleLine, noteLine] = [areas?.[1], areas?.[2]].map((line) =>
+			(line ?? '').split(/\s+/),
+		);
+		expect(noteLine?.indexOf('note')).toBe(titleLine?.indexOf('label'));
+	});
+
+	it('still wraps a reading-view row, whose note takes a line of its own', () => {
+		const row = ruleBody(MARKER.row);
+		expect(row).toMatch(/flex-wrap:\s*wrap/);
+	});
+
+	// A note under its own timecode read as a caption on the time rather than
+	// on the marker, and the eye had nothing to run down.
+	it('starts the reading-view note where the marker icon starts', () => {
+		const line = ruleBody(MARKER.noteLine);
+		expect(line).not.toBeNull();
+		expect(line).toMatch(/flex-basis:\s*100%/);
+		expect(line).toMatch(/display:\s*flex/);
+
+		// The note follows the indent by the gap the icon follows the timecode
+		// by: a 6px gap against the row's 8px started every note 2px early.
+		const gapOf = (body: string | null): string | undefined =>
+			/(?:^|[\s;])gap:\s*([^;]+);/.exec(body ?? '')?.[1];
+		expect(gapOf(line)).toBeDefined();
+		expect(gapOf(line)).toBe(gapOf(ruleBody(MARKER.row)));
+
+		// The indent is a hidden copy of the timecode, so it is exactly as
+		// wide as the column it aligns to whatever the stamps run to
+		const indent = ruleBody(MARKER.noteIndent);
+		expect(indent).not.toBeNull();
+		expect(indent).toMatch(/visibility:\s*hidden/);
+		expect(indent).toMatch(/font-variant-numeric:\s*tabular-nums/);
+	});
+
+	// The time, the note indent under it and the segment length are each as
+	// wide as the longest timestamp, so what follows them lines up in every row.
+	// The field a time is typed into is too: at a fixed width a ten-hour
+	// recording's 10:02:03 ran past its edges. The field is styled by two
+	// rules, so every rule it is given is read.
+	it.each([
+		['time', MARKER.time],
+		['note indent', MARKER.noteIndent],
+		['segment length', MARKER.segment],
+		['time field', MARKER.timeEditRule],
+	])('sizes the %s column to the longest timestamp', (_name, selector) => {
+		expect(ruleBodies(selector).join('\n')).toMatch(
+			/min-width:\s*calc\(var\(--aar-marker-time-chars/,
+		);
+	});
+
+	// Most rows carry no note, and a second line holding only a placeholder
+	// took about a third of every row. It opens while the row is worked in.
+	it('keeps a row with an empty note to one line until the row is open', () => {
+		const note = ruleBody(MARKER.idleEmptyNote);
+		expect(note).toMatch(/(?:^|[\s;])height:\s*0;/);
+		expect(note).toMatch(/border-block-width:\s*0/);
+		expect(ruleBody(MARKER.idleEmptyNoteIcon)).toMatch(/display:\s*none/);
+
+		// A gap between the lines would stay behind the hidden note, so the
+		// row spaces its cells and not its lines
+		expect(ruleBody(MARKER.editableRow)).toMatch(/gap:\s*0\s+\d/);
+	});
+
+	// A field taken out of the layout is taken out of the tab order too, so
+	// Shift+Tab from a closed row's buttons would skip its empty note, and no
+	// button opens the row. The closed note is collapsed and kept instead.
+	it('keeps the empty note of a closed row in the tab order', () => {
+		expect(ruleBody(MARKER.idleEmptyNote)).not.toMatch(
+			/display:\s*none|visibility:\s*hidden/,
+		);
+	});
+
+	// A note typed as a list over several lines read as one run-on line.
+	it('keeps the line breaks of a reading-view note', () => {
+		const note = ruleBody(MARKER.staticNote);
+		expect(note).not.toBeNull();
+		expect(note).toMatch(/white-space:\s*pre-wrap/);
+	});
+
+	it.each(['red', 'orange', 'yellow', 'green', 'blue', 'purple'])(
+		'draws the %s option in the colour it names',
+		(name) => {
+			const swatch = ruleBody(MARKER.colorSwatch(name));
+			expect(swatch).not.toBeNull();
+			expect(swatch).toMatch(
+				new RegExp(`color:\\s*var\\(--aar-marker-${name}\\)`),
+			);
+		},
+	);
+
+	// The closed control is a dot in the row's colour, grey while it has none,
+	// with the real select laid over it transparent and the same size.
+	it('draws the colour control as a dot under a transparent select', () => {
+		const dot = ruleBody(MARKER.swatchDot);
+		expect(dot).not.toBeNull();
+		expect(dot).toMatch(/background-color:\s*var\(\s*--aar-marker-color,/);
+
+		const control = ruleBody(MARKER.colorRule);
+		expect(control).not.toBeNull();
+		expect(control).toMatch(/opacity:\s*0/);
+		expect(control).toMatch(/position:\s*absolute/);
+		expect(control).toMatch(/grid-area:\s*color/);
+		expect(ruleBody(MARKER.swatch)).toMatch(/grid-area:\s*color/);
+
+		// Absolute placement resolves against the grid area only in a
+		// positioned grid, so the row has to be one.
+		expect(ruleBody(MARKER.editableRow)).toMatch(/position:\s*relative/);
+	});
+
+	it('draws the delete icon of the playing row in red', () => {
+		const remove = ruleBody(MARKER.activeDelete);
+		expect(remove).not.toBeNull();
+		expect(remove).toMatch(/color:\s*var\(--text-error\)/);
+	});
+
+	it('draws play / pause as the accent primary button', () => {
+		const play = ruleBody(PLAYER.play);
+		expect(play).not.toBeNull();
+		expect(play).toMatch(/background-color:\s*var\(--interactive-accent\)/);
+	});
+
+	// The design draws the primary action as a circle, which sets it apart
+	// from the square buttons beside it as much as its colour does.
+	it('draws play / pause round, apart from the square buttons beside it', () => {
+		expect(ruleBody(PLAYER.play)).toMatch(/border-radius:\s*50%/);
+	});
+
+	// The player renders into Obsidian's embed element, which the app sets to
+	// display: block through a class and a :not(), outranking one class alone.
+	it('keeps the column layout inside the embed element it renders into', () => {
+		const embed = ruleBody(PLAYER.embedRoot);
+		expect(embed).not.toBeNull();
+		expect(embed).toMatch(/display:\s*flex/);
+	});
+
+	// Live Preview sets display: block on every direct child of the editor's
+	// content, with three classes, so the embed rule alone is not enough there.
+	it('keeps the column layout as a line of the Live Preview editor', () => {
+		const line = ruleBody(PLAYER.livePreviewRoot);
+		expect(line).not.toBeNull();
+		expect(line).toMatch(/display:\s*flex/);
+	});
+
+	it('frames the waveform in a padded bordered rectangle', () => {
+		const waveform = ruleBody(PLAYER.seekWaveform);
+		expect(waveform).not.toBeNull();
+		expect(waveform).toMatch(/border:/);
+		expect(waveform).toMatch(/border-radius:/);
+		expect(waveform).toMatch(/padding:/);
+		// content-box keeps the canvas height equal to the waveform height
+		expect(waveform).toMatch(/box-sizing:\s*content-box/);
+	});
+
+	it('stacks the base and played canvases in a positioned layer', () => {
+		const layer = ruleBody(PLAYER.waveform);
+		expect(layer).not.toBeNull();
+		expect(layer).toMatch(/position:\s*relative/);
+
+		const canvas = ruleBody(PLAYER.canvas);
+		expect(canvas).not.toBeNull();
+		expect(canvas).toMatch(/position:\s*absolute/);
+	});
+
+	it('reveals the played waveform with a progress-driven mask, not by redrawing', () => {
+		const played = ruleBody(PLAYER.canvasPlayed);
+		expect(played).not.toBeNull();
+		// The played layer is revealed up to the progress variable by a
+		// hard-edged mask, so moving the playhead only repaints the mask (no
+		// canvas work). A mask replaces clip-path, which is flagged as only
+		// partially supported.
+		expect(played).toMatch(/mask-image:\s*linear-gradient\(/);
+		expect(played).toMatch(/var\(--aar-progress/);
+	});
+});
+
+describe('plain seek bar (waveform off)', () => {
+	it('is a spaced, rounded track that stands out from the controls and list', () => {
+		const bar = ruleBody(PLAYER.seekBar);
+		expect(bar).not.toBeNull();
+		// Vertical margin separates it from the controls above and list below
+		expect(bar).toMatch(/margin:/);
+		expect(bar).toMatch(/height:/);
+		// Remaining (unplayed) portion is the muted track color
+		expect(bar).toMatch(
+			/background-color:\s*var\(--background-modifier-border\)/,
+		);
+	});
+
+	it('fills the played portion with the high-contrast accent, width-driven', () => {
+		const fill = ruleBody(PLAYER.progressFill);
+		expect(fill).not.toBeNull();
+		expect(fill).toMatch(/width:\s*var\(--aar-progress/);
+		expect(fill).toMatch(/background-color:\s*var\(--color-accent\)/);
+	});
+
+	it('marks the current position with an accent thumb tied to the progress', () => {
+		const thumb = ruleBody(PLAYER.progressThumb);
+		expect(thumb).not.toBeNull();
+		expect(thumb).toMatch(/left:\s*var\(--aar-progress/);
+		expect(thumb).toMatch(/background-color:\s*var\(--color-accent\)/);
+		expect(thumb).toMatch(/border-radius:\s*50%/);
+	});
+});

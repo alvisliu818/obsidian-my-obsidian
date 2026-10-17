@@ -1,0 +1,251 @@
+/**
+ * Every CSS selector the tests reach through, in one place.
+ *
+ * A test that hard-codes `.aar-player-time` is asserting on a class name, not
+ * on behaviour: renaming the class turns the suite red although nothing the
+ * user can observe changed. Naming the selectors here keeps the class strings
+ * to a single file, so a rename is one edit, and gives each one a name that
+ * says what the element *is* rather than what it is called in CSS.
+ *
+ * Selectors that are plain HTML (`button`, `input`) are not listed - those are
+ * structural, not project vocabulary, and renaming a tag is not a refactor.
+ * @module tests/helpers/selectors
+ */
+
+/** The inline player under a note's audio embed. */
+export const PLAYER = {
+	root: '.aar-player',
+	/** The player as Obsidian's embed element, for reading its CSS rule. */
+	embedRoot: '.internal-embed.aar-player',
+	/** The player as a line of the Live Preview editor, for its CSS rule. */
+	livePreviewRoot: '.markdown-source-view.mod-cm6 .cm-content > .aar-player',
+	readonly: '.aar-player-readonly',
+	editOnly: '.aar-player-edit-only',
+	controls: '.aar-player-controls',
+	controlButton: '.aar-control-btn',
+	time: '.aar-player-time',
+	speed: '.aar-player-speed',
+	volume: '.aar-player-volume',
+	seek: '.aar-player-seek',
+	seekBar: '.aar-player-seek-bar',
+	seekWaveform: '.aar-player-seek-waveform',
+	waveform: '.aar-player-waveform',
+	canvas: '.aar-player-canvas',
+	canvasPlayed: '.aar-player-canvas-played',
+	progressFill: '.aar-player-progress-fill',
+	progressThumb: '.aar-player-progress-thumb',
+	/** The round primary play / pause button. */
+	play: '.aar-player-play',
+	tick: '.aar-player-tick',
+	/** The label rule that only applies inside a player. */
+	scopedStaticLabel: '.aar-player .aar-player-marker-label-static',
+	/** The edit-only controls a read-only player hides. */
+	readonlyEditOnly: '.aar-player-readonly .aar-player-edit-only',
+} as const;
+
+/** Marker rows and their controls, both in the player and in the list view. */
+export const MARKER = {
+	row: '.aar-player-marker-row',
+	clickableRow: '.aar-player-marker-row-clickable',
+	activeRow: '.aar-player-marker-row.is-active',
+	labelInput: 'input.aar-player-marker-label',
+	/** One entry's rename field, told apart from its time field. */
+	labelOf: (id: string): string =>
+		`input.aar-player-marker-label[data-marker-id="${id}"]`,
+	staticLabel: '.aar-player-marker-label-static',
+	label: '.aar-player-marker-label',
+	segment: '.aar-player-marker-segment',
+	/** The marker's timecode as shown in reading view. */
+	time: '.aar-player-marker-time',
+	delete: '.aar-player-marker-delete',
+	/** The play button that jumps to an entry from an editable row. */
+	jump: '.aar-player-marker-jump',
+	timeEdit: 'input.aar-player-marker-time-edit',
+	/** The time field as the stylesheet scopes it, for reading its CSS rules. */
+	timeEditRule: '.aar-player .aar-player-marker-time-edit',
+	here: '.aar-player-marker-here',
+	color: 'select.aar-player-marker-color',
+	note: 'textarea.aar-player-marker-note',
+	staticNote: '.aar-player-marker-note-static',
+	/** The line the reading-view note sits on, with its alignment indent. */
+	noteLine: '.aar-player-marker-note-line',
+	/** The hidden copy of the timecode that holds the note's column open. */
+	noteIndent: '.aar-player-marker-note-indent',
+	/** One colour of the palette, on an option or on the closed control. */
+	colorSwatch: (name: string): string => `.aar-player-marker-color-${name}`,
+	searchTitle: '.aar-marker-search-title',
+	searchMeta: '.aar-marker-search-meta',
+	coloredRow: '.aar-player-marker-row-colored',
+	buttonRow: 'button.aar-player-marker-row',
+	coloredButtonRow: '.aar-player-marker-row.aar-player-marker-row-colored',
+	/** The note field by its class alone, for reading its CSS rule. */
+	noteRule: '.aar-player-marker-note',
+	/** An empty note in a row nobody is working in, for its CSS rule. */
+	idleEmptyNote:
+		'div.aar-player-marker-row:not(.aar-player-marker-row-open) .aar-player-marker-note:placeholder-shown',
+	/** The page icon of that empty note, for its CSS rule. */
+	idleEmptyNoteIcon:
+		'div.aar-player-marker-row:not(.aar-player-marker-row-open) .aar-player-marker-note:placeholder-shown + .aar-player-marker-note-icon',
+	/** An edit-mode row, which is a block rather than a button. */
+	editableRow: 'div.aar-player-marker-row',
+	/** A row being worked in, which shows its note line even when empty. */
+	openRow: '.aar-player-marker-row.aar-player-marker-row-open',
+	/** The colour control by its class alone, for reading its CSS rule. */
+	colorRule: '.aar-player-marker-color',
+	/** The drawing of the closed colour control: a dot and a chevron. */
+	swatch: '.aar-player-marker-swatch',
+	/** The dot of the closed colour control. */
+	swatchDot: '.aar-player-marker-swatch-dot',
+	/** The delete icon of the row that is playing. */
+	activeDelete: '.aar-player-marker-row.is-active .aar-player-marker-delete',
+	/** A bookmark tick on the timeline. */
+	tickBookmark: '.aar-player-tick-bookmark',
+	/** The overlay the ticks are drawn onto, over the seek area. */
+	overlay: '.aar-player-markers',
+	/** The list of marker rows under the player. */
+	list: '.aar-player-marker-list',
+	byId: (id: string): string =>
+		`.aar-player-marker-row-clickable[data-marker-id="${id}"]`,
+	tickAt: (seconds: number): string =>
+		`.aar-player-tick[data-time="${String(seconds)}"]`,
+} as const;
+
+/** The playback half of the status bar. */
+export const PLAYBACK = {
+	controls: '.aar-playback-controls',
+	toggle: '.aar-playback-toggle',
+	skipBack: '.aar-playback-skip-back',
+	skipForward: '.aar-playback-skip-forward',
+	mute: '.aar-playback-mute',
+	volume: '.aar-playback-volume',
+	markerControls: '.aar-playback-marker-controls',
+	chapterControls: '.aar-playback-chapter-controls',
+	chapterLoop: '.aar-playback-chapter-loop',
+	time: '.aar-playback-time',
+} as const;
+
+/** The recording half of the status bar, and the save progress it shows. */
+export const STATUS = {
+	recordingControls: '.aar-recording-controls',
+	recordingButtons: '.aar-recording-buttons',
+	recordingLabel: '.aar-recording-label',
+	/** The save or background-task progress bar, which carries its value. */
+	saveProgress: '.aar-save-progress',
+	actionableProgress: '.aar-status-progress-actionable',
+	live: '.aar-recording-live',
+	elapsed: '.aar-recording-time',
+	recordedSize: '.aar-recording-size',
+	inputMeter: '.aar-input-meter',
+	inputMeterFill: '.aar-input-meter-fill',
+} as const;
+
+/** Markup Obsidian's own components render, read where a test checks what they draw. */
+export const OBSIDIAN = {
+	/** The fill of a ProgressBarComponent, whose width is its value. */
+	progressFill: '.setting-progress-bar-inner',
+} as const;
+
+/** The banner the mobile build shows while recording. */
+export const BANNER = {
+	root: '.aar-recording-banner',
+	time: '.aar-recording-banner-time',
+	dot: '.aar-recording-banner-dot',
+	stop: '.aar-recording-banner-stop',
+} as const;
+
+/** Obsidian's own settings markup, plus the parts this plugin adds to it. */
+export const SETTING = {
+	item: '.setting-item',
+	name: '.setting-item-name',
+	description: '.setting-item-description',
+	checkbox: '.checkbox-container',
+	/** A toggle rendered in its on state. */
+	toggleOn: '.checkbox-container.is-enabled',
+	/** A row Obsidian draws as a section heading. */
+	heading: '.setting-item-heading',
+	/** The icon-only button a row adds with addExtraButton. */
+	extraButton: '.extra-setting-button',
+	root: '.aar-settings-root',
+	searchInput: '.mock-setting-search-row input',
+	addItemButton: '.mock-setting-add-item-row button',
+	/** The linked secret's ID, as the stand-in for the keychain picker shows it. */
+	secretValue: '.mock-setting-secret-value',
+	custom: '.aar-custom',
+	docCallout: '.aar-doc-callout',
+	docCalloutLink: '.aar-doc-callout-link',
+	testAudio: '.aar-test-audio',
+	testStatus: '.aar-test-status',
+	speakerPreview: 'button.aar-speaker-preview',
+	silentChannelConvert: '.aar-silent-channel-convert',
+	formatFallbackNote: '.aar-format-fallback-note',
+} as const;
+
+/** The recording panel, built from the classes of Obsidian's Properties block. */
+export const RECORDING_PANEL = {
+	/** One of the panel's own buttons at the end of its toolbar, by its label. */
+	button: (label: string): string =>
+		`.aar-recording-panel-tools [aria-label="${label}"]`,
+	/** The panel's own buttons, in order. */
+	buttons: '.aar-recording-panel-tools .extra-setting-button',
+	/** The icon button of a file action, by its label. */
+	action: (label: string): string =>
+		`.aar-recording-panel-toolbar > [aria-label="${label}"]`,
+	/** Every file action button, in order. */
+	actions: '.aar-recording-panel-toolbar > .extra-setting-button',
+	/** Every button of the toolbar, file actions first, in order. */
+	toolbarButtons: '.aar-recording-panel-toolbar .extra-setting-button',
+	/** A foldable section. */
+	section: '.metadata-container',
+	/** The heading that folds a section. */
+	sectionHeading: '.metadata-properties-heading',
+	/** A section's title. */
+	sectionTitle: '.metadata-properties-title',
+	/** A section's fold arrow. */
+	foldArrow: '.collapse-indicator',
+	/** One property row. */
+	property: '.metadata-property',
+	/** A property row's key field. */
+	propertyKey: '.metadata-property-key-input',
+	/** A property row's value. */
+	propertyValue: '.metadata-property-value',
+	/** A link in a property value. */
+	propertyLink: '.metadata-property-value .internal-link',
+	/** The hint shown in place of the sections. */
+	hint: '.pane-empty',
+} as const;
+
+/** Modal bodies this plugin renders. */
+export const MODAL = {
+	config: '.aar-modal-config',
+	error: '.aar-modal-error',
+	conversionSource: '.aar-conversion-source',
+	splitSource: '.aar-split-source',
+	/** The bar of a transcript line with the handles of the split selection. */
+	timeSpan: '.aar-time-span',
+	recoverySession: '.aar-recovery-session',
+	/** The running clock of a transcription in flight. */
+	transcribeElapsed: '.aar-transcribe-elapsed',
+	silentChannelConvert: '.aar-silent-channel-convert',
+	/**
+	 * The body the release notes are rendered into. Obsidian's own class for
+	 * rendered Markdown rather than one of the plugin's: the dialog adds no
+	 * styling of its own, so this is what it can be found by.
+	 */
+	releaseNotes: '.markdown-rendered',
+	/**
+	 * The footer a scrollable dialog pins under its body, holding the action
+	 * row. Obsidian's own class, for the same reason as the one above.
+	 */
+	actions: '.modal-button-container',
+	/** A dialog whose body scrolls under a title and a footer that stay put. */
+	scrollableBody: '.mod-scrollable-content',
+} as const;
+
+/** The transcription queue dialog. */
+export const QUEUE = {
+	cost: '.aar-queue-cost',
+	list: '.aar-queue-list',
+	row: '.aar-queue-row',
+	state: '.aar-queue-state',
+	remove: '.aar-queue-remove',
+} as const;

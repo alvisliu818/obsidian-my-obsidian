@@ -1,0 +1,704 @@
+/**
+ * Data model for the per-recording sidecar document (`<recording>.markers.json`).
+ * Version 2 holds three independent sections: the player markers (unchanged
+ * from version 1), a `playback` section carrying the position the recording
+ * was left at, and a `transcript` section that records the speaker roster of the
+ * last diarized transcription, the participant names the recording carries, the
+ * outputs the plugin wrote (with the render templates in effect at write time),
+ * and a short history of applied name mappings for undo. Every function here is
+ * pure (no I/O) and parsing mirrors the discipline of
+ * `markerModel.parseMarkers`: a broken part is dropped while the rest survives,
+ * so a hand-edited or corrupt file can never crash a feature or take the other
+ * section down with it.
+ * @module sidecar/recordingSidecarModel
+ */
+
+import {
+	parseMarkers,
+	serializeMarkers,
+	type PlayerMarker,
+} from '../markers/markerModel';
+import { normalizeParticipantNames } from '../speakers/participantRoster';
+import type { PartFailure } from '../transcription/partFailure';
+import { TranscriptFileFormat } from '../transcription/TranscriptTypes';
+
+/** Current on-disk sidecar schema version. */
+const SIDECAR_VERSION = 2;
+
+/** Maximum number of retained rename-history entries (oldest dropped first). */
+export const SIDECAR_HISTORY_LIMIT = 10;
+
+/**
+ * One diarized speaker: the engine's label, the user-assigned name, and where
+ * on the timeline this speaker first talks - the offsets the rename dialog
+ * plays to identify them.
+ */
+export interface SpeakerEntry {
+	/** Original engine label, e.g. "Speaker 1". */
+	label: string;
+	/** Display name assigned by the user; absent until renamed. */
+	name?: string;
+	/**
+	 * Start of this speaker's first uninterrupted turn, in seconds. Absent on
+	 * a roster written before offsets were stored, which is why the dialog
+	 * treats its preview as unavailable rather than starting from zero.
+	 */
+	firstStart?: number;
+	/** End of that first turn, in seconds; absent when only the start is known. */
+	firstEnd?: number;
+}
+
+/**
+ * Copies a roster entry, keeping only the fields it actually carries. Every
+ * writer goes through this instead of rebuilding `{ label, name }` by hand,
+ * which is what silently dropped the preview offsets on the first rename after
+ * they were introduced.
+ * @param entry - Entry to copy
+ * @returns An independent copy
+ */
+export function cloneSpeakerEntry(entry: SpeakerEntry): SpeakerEntry {
+	return {
+		label: entry.label,
+		...(entry.name ? { name: entry.name } : {}),
+		...(entry.firstStart === undefined
+			? {}
+			: { firstStart: entry.firstStart }),
+		...(entry.firstEnd === undefined ? {} : { firstEnd: entry.firstEnd }),
+	};
+}
+
+/**
+ * Returns the entry carrying a different name, everything else preserved. A
+ * blank name clears the assignment (the speaker reverts to its engine label)
+ * while the timeline offsets stay, so reverting a name never costs the user
+ * their preview.
+ * @param entry - Entry to re-name
+ * @param name - New display name ('' clears it)
+ * @returns A copy with the new name
+ */
+export function withSpeakerName(
+	entry: SpeakerEntry,
+	name: string,
+): SpeakerEntry {
+	const next = cloneSpeakerEntry(entry);
+	if (name) {
+		next.name = name;
+	} else {
+		delete next.name;
+	}
+	return next;
+}
+
+/** The in-note render templates a transcript was written with. */
+export interface NoteOutputTemplates {
+	/** Arrangement of `{timestamp}`, `{speaker}`, and `{text}` per line. */
+	lineFormat: string;
+	/** Speaker template with a `{speaker}` token. */
+	speakerFormat: string;
+	/**
+	 * Timestamp template with a `{time}` token. Absent on outputs recorded
+	 * before it was stored, which then read as the current setting.
+	 */
+	timestampFormat?: string;
+	/** Whether a timestamp fragment was written on each line. */
+	includeTimestamps: boolean;
+	/** Whether timestamps were written as timecode links. */
+	timestampLinks: boolean;
+	/** Whether consecutive same-speaker lines were merged. */
+	mergeConsecutiveSpeaker: boolean;
+}
+
+/** A note the plugin inserted a rendered transcript into. */
+export interface NoteOutput {
+	/** Vault path of the note at write time. */
+	path: string;
+	/** Render templates in effect for that run (per-run overrides included). */
+	templates: NoteOutputTemplates;
+	/** Heading the transcript was inserted under ('' when none). */
+	heading: string;
+	/** ISO-8601 timestamp of the write. */
+	writtenAt: string;
+}
+
+/** A transcript sidecar file the plugin wrote next to the recording. */
+export interface FileOutput {
+	/** Actual vault path written (collision suffixes included). */
+	path: string;
+	/** Serialization format of the file. */
+	format: TranscriptFileFormat;
+	/** ISO-8601 timestamp of the write. */
+	writtenAt: string;
+	/**
+	 * Language this file was translated into, absent for the transcript in
+	 * the recording's own language. What tells a translation apart from the
+	 * original when both were written for one run.
+	 */
+	language?: string;
+}
+
+/** Provenance of the last transcription run that wrote outputs. */
+export interface TranscriptProvenance {
+	/** Detected/declared transcript language (BCP-47 / ISO code), if known. */
+	language?: string;
+	/** Engine/model identifier that produced the transcript, if known. */
+	model?: string;
+	/** ISO-8601 timestamp of the run, if known. */
+	createdAt?: string;
+}
+
+/** One applied name mapping, recorded for undo. */
+export interface RenameHistoryEntry {
+	/** ISO-8601 timestamp of the apply. */
+	at: string;
+	/** Full label-to-name assignment after the apply (unnamed labels absent). */
+	names: Record<string, string>;
+}
+
+/** The transcript section of a recording sidecar. */
+export interface TranscriptSection {
+	/** Speaker roster of the last diarized transcription, first-seen order. */
+	speakers: SpeakerEntry[];
+	/**
+	 * Participant names this recording carries: the names of the profile a
+	 * transcription ran with, grown by every name a rename applies. The rename
+	 * dialog suggests from here by default, so the roster travels with the
+	 * recording instead of only living in a settings profile the user has to
+	 * remember to pick.
+	 */
+	participants: string[];
+	/**
+	 * Id of the settings profile the participants came from ('' or absent when
+	 * none). Only a hint: it re-selects that profile in the rename dialog, and
+	 * a stale id (profile deleted since) simply falls back to "this recording".
+	 */
+	participantProfileId?: string;
+	/** Notes the plugin wrote a transcript into, unique by path. */
+	noteOutputs: NoteOutput[];
+	/** Transcript files the plugin wrote, unique by path. */
+	fileOutputs: FileOutput[];
+	/** Applied name mappings, oldest first, capped at the history limit. */
+	history: RenameHistoryEntry[];
+	/** Provenance of the last run that wrote outputs; absent until recorded. */
+	provenance?: TranscriptProvenance;
+}
+
+/**
+ * A participant-roster change carried alongside a roster write, so the names
+ * and the speakers they were assigned to are persisted in one mutation rather
+ * than in two writes that could tear.
+ */
+export interface ParticipantUpdate {
+	/** Names to merge into the recording's participant roster. */
+	names: readonly string[];
+	/** Id of the settings profile they came from ('' when none). */
+	profileId: string;
+}
+
+/**
+ * Where playback of this recording was left off. Written when playback
+ * pauses, stops, or the player unloads, and cleared once the recording has
+ * been heard to the end, so a finished recording starts from the beginning
+ * again rather than from its last second.
+ */
+export interface PlaybackState {
+	/** Offset to resume from, in seconds. */
+	position: number;
+	/** ISO-8601 timestamp of the write. */
+	updatedAt: string;
+}
+
+/**
+ * The parts the last transcription run could not transcribe, kept so exactly
+ * those can be asked for again instead of paying for the whole recording a
+ * second time. Written by every run, so an empty list is a run that came back
+ * whole rather than a run nothing is known about.
+ */
+export interface FailedPartsSection {
+	/** The parts that failed, in the order the run attempted them. */
+	parts: PartFailure[];
+	/** ISO-8601 timestamp of the run that recorded them. */
+	recordedAt: string;
+}
+
+/** The full parsed sidecar document for one recording. */
+export interface RecordingSidecar {
+	markers: PlayerMarker[];
+	transcript: TranscriptSection;
+	/** Last playback position; absent until the recording is left part-heard. */
+	playback?: PlaybackState;
+	/** Parts the last run could not transcribe; absent when it came back whole. */
+	failedParts?: FailedPartsSection;
+}
+
+/** Returns a fresh, empty transcript section. */
+export function emptyTranscriptSection(): TranscriptSection {
+	return {
+		speakers: [],
+		participants: [],
+		noteOutputs: [],
+		fileOutputs: [],
+		history: [],
+	};
+}
+
+/** Returns a fresh, fully empty sidecar document. */
+export function emptyRecordingSidecar(): RecordingSidecar {
+	return { markers: [], transcript: emptyTranscriptSection() };
+}
+
+/**
+ * Whether a transcript section carries no data worth keeping. Provenance and
+ * the participant profile id are deliberately not counted: each only describes
+ * one of the section's substantive lists, so once those are empty there is
+ * nothing left for them to describe - counting them would keep an
+ * otherwise-empty sidecar file on disk forever after any transcription. The
+ * participant names themselves ARE counted: they are the user's own data and
+ * outlive the roster they were entered against.
+ */
+export function isTranscriptSectionEmpty(section: TranscriptSection): boolean {
+	return (
+		section.speakers.length === 0 &&
+		section.participants.length === 0 &&
+		section.noteOutputs.length === 0 &&
+		section.fileOutputs.length === 0 &&
+		section.history.length === 0
+	);
+}
+
+/**
+ * Whether a sidecar document holds nothing worth persisting: no markers, an
+ * empty transcript section, and no remembered playback position. Only then
+ * may the file be deleted.
+ *
+ * The playback position counts as content, so a recording left part-heard
+ * gets a sidecar of its own. That is the only way the position can survive
+ * for a recording that carries no markers, which is exactly the long
+ * recording the feature exists for. Clutter is bounded at the other end
+ * instead: the position is written only once playback is meaningfully into
+ * the recording and is cleared when the end is reached, which deletes the
+ * file again when nothing else is in it.
+ * @param sidecar - Parsed sidecar document
+ */
+export function isSidecarEmpty(sidecar: RecordingSidecar): boolean {
+	return (
+		sidecar.markers.length === 0 &&
+		sidecar.playback === undefined &&
+		sidecar.failedParts === undefined &&
+		isTranscriptSectionEmpty(sidecar.transcript)
+	);
+}
+
+/** Reads a string field, trimmed, or null when absent/not a string/empty. */
+function trimmedString(value: unknown): string | null {
+	if (typeof value !== 'string') {
+		return null;
+	}
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : null;
+}
+
+/** Reads a finite, non-negative number, or null when the value is neither. */
+function offsetSeconds(value: unknown): number | null {
+	return typeof value === 'number' && Number.isFinite(value) && value >= 0
+		? value
+		: null;
+}
+
+/**
+ * Parses the recorded failed parts. A part with no usable start locates
+ * nothing and is dropped; a section with no parts left, or with no write
+ * timestamp, reads as no record at all, which is the same answer as a run
+ * that came back whole.
+ * @param value - Raw `failedParts` value from the parsed JSON
+ */
+function parseFailedParts(value: unknown): FailedPartsSection | null {
+	if (typeof value !== 'object' || value === null) {
+		return null;
+	}
+	const record = value as Record<string, unknown>;
+	const recordedAt = trimmedString(record.recordedAt);
+	if (!recordedAt || !Array.isArray(record.parts)) {
+		return null;
+	}
+	const parts: PartFailure[] = [];
+	for (const entry of record.parts) {
+		if (typeof entry !== 'object' || entry === null) {
+			continue;
+		}
+		const part = entry as Record<string, unknown>;
+		const startSeconds = offsetSeconds(part.startSeconds);
+		if (startSeconds === null) {
+			continue;
+		}
+		const endSeconds = offsetSeconds(part.endSeconds);
+		parts.push({
+			label: trimmedString(part.label) ?? '',
+			message: trimmedString(part.message) ?? '',
+			startSeconds,
+			...(endSeconds === null || endSeconds <= startSeconds
+				? {}
+				: { endSeconds }),
+		});
+	}
+	return parts.length > 0 ? { parts, recordedAt } : null;
+}
+
+/**
+ * Parses the remembered playback position. A position that is missing, not a
+ * positive finite number, or carries no write timestamp yields null: resuming
+ * from the very start is what happens anyway, so a half-written section is
+ * dropped rather than resumed from.
+ * @param value - Raw `playback` value from the parsed JSON
+ */
+function parsePlaybackState(value: unknown): PlaybackState | null {
+	if (typeof value !== 'object' || value === null) {
+		return null;
+	}
+	const record = value as Record<string, unknown>;
+	const position = offsetSeconds(record.position);
+	const updatedAt = trimmedString(record.updatedAt);
+	if (position === null || position <= 0 || !updatedAt) {
+		return null;
+	}
+	return { position, updatedAt };
+}
+
+/**
+ * Parses the speaker roster: non-object entries and entries without a usable
+ * label are dropped, names equal to their label are omitted, a duplicated
+ * label keeps its first entry, and the first-turn offsets are kept only when
+ * they describe a real forward span (an end without a start, or before it, is
+ * dropped while the entry survives).
+ */
+function parseSpeakers(value: unknown): SpeakerEntry[] {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	const seen = new Set<string>();
+	const result: SpeakerEntry[] = [];
+	for (const entry of value) {
+		if (typeof entry !== 'object' || entry === null) {
+			continue;
+		}
+		const record = entry as Record<string, unknown>;
+		const label = trimmedString(record.label);
+		if (!label || seen.has(label)) {
+			continue;
+		}
+		seen.add(label);
+		const name = trimmedString(record.name);
+		const firstStart = offsetSeconds(record.firstStart);
+		const firstEnd = offsetSeconds(record.firstEnd);
+		result.push({
+			label,
+			...(name && name !== label ? { name } : {}),
+			...(firstStart === null ? {} : { firstStart }),
+			// An end without a start locates nothing, and one before the start
+			// is not a span; either way the start alone still starts a preview.
+			...(firstStart !== null &&
+			firstEnd !== null &&
+			firstEnd >= firstStart
+				? { firstEnd }
+				: {}),
+		});
+	}
+	return result;
+}
+
+/** Parses one note output's templates, or null when not template-shaped. */
+function parseTemplates(value: unknown): NoteOutputTemplates | null {
+	if (typeof value !== 'object' || value === null) {
+		return null;
+	}
+	const record = value as Record<string, unknown>;
+	const lineFormat = record.lineFormat;
+	const speakerFormat = record.speakerFormat;
+	if (typeof lineFormat !== 'string' || typeof speakerFormat !== 'string') {
+		return null;
+	}
+	// Booleans the plugin always writes; a hand-edited or missing flag falls
+	// back to the shipped defaults rather than invalidating the whole entry.
+	return {
+		lineFormat,
+		speakerFormat,
+		...(typeof record.timestampFormat === 'string'
+			? { timestampFormat: record.timestampFormat }
+			: {}),
+		includeTimestamps:
+			typeof record.includeTimestamps === 'boolean'
+				? record.includeTimestamps
+				: true,
+		timestampLinks:
+			typeof record.timestampLinks === 'boolean'
+				? record.timestampLinks
+				: true,
+		mergeConsecutiveSpeaker:
+			typeof record.mergeConsecutiveSpeaker === 'boolean'
+				? record.mergeConsecutiveSpeaker
+				: true,
+	};
+}
+
+/** Parses the note outputs list; a duplicated path keeps its first entry. */
+function parseNoteOutputs(value: unknown): NoteOutput[] {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	const seen = new Set<string>();
+	const result: NoteOutput[] = [];
+	for (const entry of value) {
+		if (typeof entry !== 'object' || entry === null) {
+			continue;
+		}
+		const record = entry as Record<string, unknown>;
+		const path = trimmedString(record.path);
+		const templates = parseTemplates(record.templates);
+		if (!path || !templates || seen.has(path)) {
+			continue;
+		}
+		seen.add(path);
+		result.push({
+			path,
+			templates,
+			heading: typeof record.heading === 'string' ? record.heading : '',
+			writtenAt:
+				typeof record.writtenAt === 'string' ? record.writtenAt : '',
+		});
+	}
+	return result;
+}
+
+/** Parses the file outputs list; a duplicated path keeps its first entry. */
+function parseFileOutputs(value: unknown): FileOutput[] {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	const seen = new Set<string>();
+	const formats: readonly string[] = Object.values(TranscriptFileFormat);
+	const result: FileOutput[] = [];
+	for (const entry of value) {
+		if (typeof entry !== 'object' || entry === null) {
+			continue;
+		}
+		const record = entry as Record<string, unknown>;
+		const path = trimmedString(record.path);
+		const format = record.format;
+		if (!path || seen.has(path) || !formats.includes(format as string)) {
+			continue;
+		}
+		seen.add(path);
+		const language = trimmedString(record.language);
+		result.push({
+			path,
+			format: format as TranscriptFileFormat,
+			writtenAt:
+				typeof record.writtenAt === 'string' ? record.writtenAt : '',
+			...(language ? { language } : {}),
+		});
+	}
+	return result;
+}
+
+/** Parses the rename history, keeping only the newest entries at the cap. */
+function parseHistory(value: unknown): RenameHistoryEntry[] {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	const result: RenameHistoryEntry[] = [];
+	for (const entry of value) {
+		if (typeof entry !== 'object' || entry === null) {
+			continue;
+		}
+		const record = entry as Record<string, unknown>;
+		const names = record.names;
+		if (typeof names !== 'object' || names === null) {
+			continue;
+		}
+		// A null-prototype object keeps hostile labels ("__proto__",
+		// "constructor") plain data keys instead of touching the prototype.
+		const mapping: Record<string, string> = emptyNameMap();
+		for (const [label, name] of Object.entries(names)) {
+			if (typeof name === 'string') {
+				mapping[label] = name;
+			}
+		}
+		result.push({
+			at: typeof record.at === 'string' ? record.at : '',
+			names: mapping,
+		});
+	}
+	return result.slice(-SIDECAR_HISTORY_LIMIT);
+}
+
+/**
+ * Parses the transcript section of a sidecar document. A missing or
+ * non-object section yields an empty one; each list inside is normalized
+ * independently so one broken part never discards the others.
+ */
+export function parseTranscriptSection(value: unknown): TranscriptSection {
+	if (typeof value !== 'object' || value === null) {
+		return emptyTranscriptSection();
+	}
+	const record = value as Record<string, unknown>;
+	const provenance = parseProvenance(record.provenance);
+	const profileId = trimmedString(record.participantProfileId);
+	return {
+		speakers: parseSpeakers(record.speakers),
+		participants: Array.isArray(record.participants)
+			? normalizeParticipantNames(record.participants)
+			: [],
+		...(profileId ? { participantProfileId: profileId } : {}),
+		noteOutputs: parseNoteOutputs(record.noteOutputs),
+		fileOutputs: parseFileOutputs(record.fileOutputs),
+		history: parseHistory(record.history),
+		...(provenance ? { provenance } : {}),
+	};
+}
+
+/** Parses the run provenance, or null when absent or not object-shaped. */
+function parseProvenance(value: unknown): TranscriptProvenance | null {
+	if (typeof value !== 'object' || value === null) {
+		return null;
+	}
+	const record = value as Record<string, unknown>;
+	const provenance: TranscriptProvenance = {};
+	const language = trimmedString(record.language);
+	const model = trimmedString(record.model);
+	const createdAt = trimmedString(record.createdAt);
+	if (language) {
+		provenance.language = language;
+	}
+	if (model) {
+		provenance.model = model;
+	}
+	if (createdAt) {
+		provenance.createdAt = createdAt;
+	}
+	return Object.keys(provenance).length > 0 ? provenance : null;
+}
+
+/**
+ * Returns a null-prototype label-to-name map, so speaker labels can never
+ * collide with inherited Object.prototype members.
+ */
+export function emptyNameMap(): Record<string, string> {
+	return Object.create(null) as Record<string, string>;
+}
+
+/**
+ * Returns a deep copy of a transcript section, so callers can hold a stable
+ * snapshot while the store keeps mutating its cached document.
+ * @param section - Section to clone
+ */
+export function cloneTranscriptSection(
+	section: TranscriptSection,
+): TranscriptSection {
+	return {
+		speakers: section.speakers.map(cloneSpeakerEntry),
+		participants: [...section.participants],
+		...(section.participantProfileId
+			? { participantProfileId: section.participantProfileId }
+			: {}),
+		noteOutputs: section.noteOutputs.map((output) => ({
+			...output,
+			templates: { ...output.templates },
+		})),
+		fileOutputs: section.fileOutputs.map((output) => ({ ...output })),
+		history: section.history.map((entry) => ({
+			at: entry.at,
+			names: Object.assign(emptyNameMap(), entry.names),
+		})),
+		...(section.provenance
+			? { provenance: { ...section.provenance } }
+			: {}),
+	};
+}
+
+/**
+ * Parses an unknown value (JSON from disk) into a sidecar document. A
+ * version-1 file contributes its markers and an empty transcript section; an
+ * unrecognizable value yields a fully empty document. Markers and the
+ * transcript section are parsed independently, so corruption in one never
+ * loses the other.
+ * @param value - Raw parsed JSON value
+ */
+export function parseRecordingSidecar(value: unknown): RecordingSidecar {
+	if (typeof value !== 'object' || value === null) {
+		return emptyRecordingSidecar();
+	}
+	const record = value as Record<string, unknown>;
+	const playback = parsePlaybackState(record.playback);
+	const failedParts = parseFailedParts(record.failedParts);
+	return {
+		markers: parseMarkers(record.markers),
+		transcript: parseTranscriptSection(record.transcript),
+		...(playback ? { playback } : {}),
+		...(failedParts ? { failedParts } : {}),
+	};
+}
+
+/**
+ * Serializes a sidecar document for storage as version 2. The transcript key
+ * is omitted while its section is empty, so a markers-only sidecar stays as
+ * small as before this section existed.
+ * @param sidecar - Document to serialize
+ */
+export function serializeRecordingSidecar(
+	sidecar: RecordingSidecar,
+): Record<string, unknown> {
+	const payload: Record<string, unknown> = {
+		version: SIDECAR_VERSION,
+		markers: serializeMarkers(sidecar.markers),
+	};
+	if (sidecar.playback) {
+		payload.playback = {
+			position: sidecar.playback.position,
+			updatedAt: sidecar.playback.updatedAt,
+		};
+	}
+	if (sidecar.failedParts) {
+		payload.failedParts = {
+			recordedAt: sidecar.failedParts.recordedAt,
+			parts: sidecar.failedParts.parts.map((part) => ({
+				label: part.label,
+				message: part.message,
+				startSeconds: part.startSeconds,
+				...(part.endSeconds === undefined
+					? {}
+					: { endSeconds: part.endSeconds }),
+			})),
+		};
+	}
+	if (!isTranscriptSectionEmpty(sidecar.transcript)) {
+		payload.transcript = {
+			speakers: sidecar.transcript.speakers.map(cloneSpeakerEntry),
+			participants: [...sidecar.transcript.participants],
+			...(sidecar.transcript.participantProfileId
+				? {
+						participantProfileId:
+							sidecar.transcript.participantProfileId,
+					}
+				: {}),
+			noteOutputs: sidecar.transcript.noteOutputs.map((output) => ({
+				path: output.path,
+				templates: { ...output.templates },
+				heading: output.heading,
+				writtenAt: output.writtenAt,
+			})),
+			fileOutputs: sidecar.transcript.fileOutputs.map((output) => ({
+				path: output.path,
+				format: output.format,
+				writtenAt: output.writtenAt,
+				...(output.language ? { language: output.language } : {}),
+			})),
+			history: sidecar.transcript.history.map((entry) => ({
+				at: entry.at,
+				names: { ...entry.names },
+			})),
+			...(sidecar.transcript.provenance
+				? { provenance: { ...sidecar.transcript.provenance } }
+				: {}),
+		};
+	}
+	return payload;
+}

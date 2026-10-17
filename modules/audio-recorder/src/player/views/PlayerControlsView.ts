@@ -1,0 +1,388 @@
+/**
+ * The enhanced player's control row: play/pause, skip, speed, mute,
+ * volume, loop, optional marker/chapter buttons, the time display, and
+ * the copy-timestamp action. Pure DOM: state changes are reported through
+ * callbacks and reflected back via the set* methods, so the player keeps
+ * ownership of the shared audio element.
+ * @module player/views/PlayerControlsView
+ */
+
+import { setIcon } from 'obsidian';
+import { PLAYER_ICONS } from '../../constants';
+import { MARKER_KIND, type MarkerKind } from '../../markers/markerModel';
+import { formatTimecode } from '../../utils/TimeUtils';
+import { createVolumeSlider } from '../../ui/volumeSlider';
+import { formatPlaybackRate } from '../playbackRate';
+
+/**
+ * Snapshot of the shared audio's state at mount time, so a player
+ * re-rendered while playback is already running (e.g. after a mode
+ * switch) reflects the live state instead of the defaults.
+ */
+export interface PlayerControlsState {
+	paused: boolean;
+	playbackRate: number;
+	volume: number;
+	muted: boolean;
+	loop: boolean;
+	/** Render the marker/chapter buttons. */
+	markersEnabled: boolean;
+	/** Seconds the skip buttons move by, and the number their labels name. */
+	skipSeconds: number;
+	/** Whether playback is repeating the chapter it is inside. */
+	chapterLoop: boolean;
+	/**
+	 * Whether this runtime can render the live cleanup chain. False hides the
+	 * control rather than offering one that could not process anything.
+	 */
+	voiceBoostAvailable: boolean;
+	/** Whether the live cleanup chain is applied to playback. */
+	voiceBoost: boolean;
+}
+
+/** What each control does (owned by the player). */
+export interface PlayerControlsCallbacks {
+	onTogglePlay(): void;
+	onSkip(deltaSeconds: number): void;
+	onSpeedMenu(event: MouseEvent): void;
+	onToggleMute(): void;
+	/** The volume slider moved; the player applies it to the audio. */
+	onVolumeInput(volume: number): void;
+	/** Toggles looping; returns the new loop state for the button. */
+	onToggleLoop(): boolean;
+	onAddMarker(kind: MarkerKind): void;
+	onPreviousChapter(): void;
+	onNextChapter(): void;
+	/**
+	 * Toggles repeating of the current chapter. Nothing is returned, and the
+	 * button is repainted by {@link PlayerControlsView.setChapterLoop}: the
+	 * status bar drives the same toggle, so the button has to follow the
+	 * player's state rather than its own click.
+	 */
+	onToggleChapterLoop(): void;
+	/**
+	 * Toggles the live cleanup chain of the playing audio. Nothing is
+	 * returned, and the button is repainted by {@link PlayerControlsView.setVoiceBoost}:
+	 * the chain is one state for the whole plugin, so a second player drives
+	 * the same state and this button has to follow the player rather than its
+	 * own click.
+	 */
+	onToggleVoiceBoost(): void;
+	onCopyTimestampLink(): void;
+}
+
+/** Render-scoped listener registration provided by the player. */
+export interface PlayerControlsHost {
+	/** Adds a DOM listener torn down with the current render pass. */
+	registerDomEvent<K extends keyof HTMLElementEventMap>(
+		el: HTMLElement,
+		type: K,
+		handler: (event: HTMLElementEventMap[K]) => void,
+	): void;
+}
+
+/**
+ * Shows a toggle button's state, to the eye and to a screen reader.
+ *
+ * The styling class alone left the state visible and unannounced: nothing said
+ * whether looping was on or the sound was off, so a listener using a reader
+ * had to play the track to find out. `aria-pressed` is what a button that
+ * stays pressed reports itself with, and it is set here rather than at each
+ * call site so the class and the attribute cannot drift apart.
+ * @param button - The toggle button
+ * @param active - Whether it is currently engaged
+ */
+function setToggleState(button: HTMLElement, active: boolean): void {
+	button.toggleClass('is-active', active);
+	button.setAttribute('aria-pressed', String(active));
+}
+
+/**
+ * Builds and updates the control row. One instance per render pass; the
+ * DOM it owns is recreated by the player's containerEl.empty().
+ */
+export class PlayerControlsView {
+	private playButton: HTMLElement | null = null;
+	private speedButton: HTMLElement | null = null;
+	private muteButton: HTMLElement | null = null;
+	private voiceBoostButton: HTMLElement | null = null;
+	private chapterLoopButton: HTMLElement | null = null;
+	private timeEl: HTMLElement | null = null;
+
+	constructor(
+		private readonly host: PlayerControlsHost,
+		private readonly callbacks: PlayerControlsCallbacks,
+	) {}
+
+	/**
+	 * Builds the control row into the container. Every control is fixed;
+	 * only the marker controls depend on the markers window being enabled.
+	 * @param container - The player's container element
+	 * @param state - Live audio state to reflect on the controls
+	 */
+	mount(container: HTMLElement, state: PlayerControlsState): void {
+		const controls = container.createDiv({
+			cls: 'aar-player-controls',
+		});
+
+		this.playButton = this.createIconButton(
+			controls,
+			PLAYER_ICONS.play,
+			'Play / pause',
+			() => {
+				this.callbacks.onTogglePlay();
+			},
+		);
+		// The primary action of the player, drawn larger than the rest.
+		this.playButton.addClass('aar-player-play');
+		// Reflect the shared audio's current state, so a player rendered while
+		// playback is already running (e.g. after a mode switch) shows the
+		// pause icon and reports it, rather than a stale play icon. Through
+		// setPlaying rather than as arguments here, the way setMuted below
+		// already does it, so the icon and the state have one place to be set.
+		this.setPlaying(!state.paused);
+
+		// The label names the step so the button says what it will do, and the
+		// handler uses the same number rather than a second copy of it.
+		const skip = state.skipSeconds;
+		this.createIconButton(
+			controls,
+			PLAYER_ICONS.skipBack,
+			`Back ${String(skip)}s`,
+			() => {
+				this.callbacks.onSkip(-skip);
+			},
+		);
+		this.createIconButton(
+			controls,
+			PLAYER_ICONS.skipForward,
+			`Forward ${String(skip)}s`,
+			() => {
+				this.callbacks.onSkip(skip);
+			},
+		);
+
+		this.speedButton = controls.createEl('button', {
+			cls: 'aar-player-btn aar-player-speed',
+			// Reflect the shared audio's current rate, not the default, so a
+			// re-render after a mode switch keeps showing the chosen speed
+			text: formatPlaybackRate(state.playbackRate),
+		});
+		this.speedButton.setAttribute('aria-label', 'Playback speed');
+		this.host.registerDomEvent(this.speedButton, 'click', (event) => {
+			this.callbacks.onSpeedMenu(event);
+		});
+
+		this.muteButton = this.createIconButton(
+			controls,
+			PLAYER_ICONS.volume,
+			'Mute / unmute',
+			() => {
+				this.callbacks.onToggleMute();
+			},
+		);
+		this.setMuted(state.muted);
+
+		// Reflects the shared audio's current volume on re-render. The
+		// slider's listeners live on its own input, which the next render
+		// pass empties out of the container along with the rest of the row.
+		createVolumeSlider(
+			controls,
+			'aar-player-volume',
+			state.volume,
+			(volume) => {
+				this.callbacks.onVolumeInput(volume);
+			},
+		);
+
+		if (state.voiceBoostAvailable) {
+			// Beside the sound controls rather than at the end of the row: it
+			// shapes what is heard, the way the volume slider does, while
+			// everything after it is about the timeline.
+			this.voiceBoostButton = this.createIconButton(
+				controls,
+				PLAYER_ICONS.voiceBoost,
+				'Voice boost',
+				() => {
+					this.callbacks.onToggleVoiceBoost();
+				},
+			);
+			// Reflect the chain the plugin is already running, so a player
+			// rendered later in the session shows the state it is playing in
+			setToggleState(this.voiceBoostButton, state.voiceBoost);
+		}
+
+		const loopButton = this.createIconButton(
+			controls,
+			PLAYER_ICONS.loop,
+			'Loop',
+			() => {
+				setToggleState(loopButton, this.callbacks.onToggleLoop());
+			},
+		);
+		setToggleState(loopButton, state.loop);
+
+		if (state.markersEnabled) {
+			// Adding markers/chapters is edit-only; hidden in reading view
+			this.createIconButton(
+				controls,
+				PLAYER_ICONS.addBookmark,
+				'Add marker at current position',
+				() => {
+					this.callbacks.onAddMarker(MARKER_KIND.bookmark);
+				},
+			).addClass('aar-player-edit-only');
+			this.createIconButton(
+				controls,
+				PLAYER_ICONS.addChapter,
+				'Add chapter at current position',
+				() => {
+					this.callbacks.onAddMarker(MARKER_KIND.chapter);
+				},
+			).addClass('aar-player-edit-only');
+			this.createIconButton(
+				controls,
+				PLAYER_ICONS.previousChapter,
+				'Previous chapter',
+				() => {
+					this.callbacks.onPreviousChapter();
+				},
+			);
+			this.createIconButton(
+				controls,
+				PLAYER_ICONS.nextChapter,
+				'Next chapter',
+				() => {
+					this.callbacks.onNextChapter();
+				},
+			);
+			this.chapterLoopButton = this.createIconButton(
+				controls,
+				PLAYER_ICONS.chapterLoop,
+				'Repeat current chapter',
+				() => {
+					this.callbacks.onToggleChapterLoop();
+				},
+			);
+			setToggleState(this.chapterLoopButton, state.chapterLoop);
+		}
+
+		this.timeEl = controls.createDiv({ cls: 'aar-player-time' });
+		this.timeEl.setText(
+			`${formatTimecode(0, 0)} / ${formatTimecode(0, 0)}`,
+		);
+
+		this.createIconButton(
+			controls,
+			PLAYER_ICONS.copyLink,
+			'Copy timestamp link',
+			() => {
+				this.callbacks.onCopyTimestampLink();
+			},
+		);
+	}
+
+	/**
+	 * Reflects the playing state on the play/pause button.
+	 *
+	 * The same gap loop and mute had, and the same answer: the icon said which
+	 * of the two states the audio was in and said it to nobody else, so a
+	 * listener using a screen reader heard one name whether the track was
+	 * running or stopped. Not through {@link setToggleState}, though, because
+	 * that also raises the accent class those two wear to show they are
+	 * engaged, and a play button is not engaged - it is the one control of the
+	 * row whose icon already carries its state to the eye.
+	 * @param playing - True while the shared audio is playing
+	 */
+	setPlaying(playing: boolean): void {
+		if (this.playButton) {
+			setIcon(
+				this.playButton,
+				playing ? PLAYER_ICONS.pause : PLAYER_ICONS.play,
+			);
+			this.playButton.setAttribute('aria-pressed', String(playing));
+		}
+	}
+
+	/**
+	 * Reflects a playback rate on the speed button.
+	 * @param rate - Playback rate multiplier
+	 */
+	setPlaybackRate(rate: number): void {
+		this.speedButton?.setText(formatPlaybackRate(rate));
+	}
+
+	/**
+	 * Reflects the muted state on the mute button.
+	 * @param muted - True while the shared audio is muted
+	 */
+	setMuted(muted: boolean): void {
+		if (this.muteButton) {
+			setIcon(
+				this.muteButton,
+				muted ? PLAYER_ICONS.muted : PLAYER_ICONS.volume,
+			);
+			setToggleState(this.muteButton, muted);
+		}
+	}
+
+	/**
+	 * Reflects the live cleanup chain on its button. Driven by the player for
+	 * the same reason the chapter repeat is: the chain is one state for the
+	 * whole plugin, so it can be turned on from another player, and the button
+	 * has to show where the state actually is.
+	 *
+	 * A player rendered where the runtime cannot host the chain has no button,
+	 * and this is then a no-op rather than a throw into the registry's own
+	 * notification loop.
+	 * @param enabled - True while the chain is applied to playback
+	 */
+	setVoiceBoost(enabled: boolean): void {
+		if (this.voiceBoostButton) {
+			setToggleState(this.voiceBoostButton, enabled);
+		}
+	}
+
+	/**
+	 * Reflects chapter repeating on its button. Driven by the player rather
+	 * than by the click, because the status-bar control toggles the same
+	 * state and this button has to show it either way.
+	 * @param active - True while the current chapter repeats
+	 */
+	setChapterLoop(active: boolean): void {
+		if (this.chapterLoopButton) {
+			setToggleState(this.chapterLoopButton, active);
+		}
+	}
+
+	/**
+	 * Updates the elapsed/total time display.
+	 * @param text - Preformatted "elapsed / total" text
+	 */
+	setTime(text: string): void {
+		this.timeEl?.setText(text);
+	}
+
+	/**
+	 * Creates an icon button in a container and wires its click handler.
+	 * @param container - Parent element
+	 * @param icon - Obsidian icon id
+	 * @param label - Accessible label / tooltip
+	 * @param onClick - Click handler
+	 * @returns The created button element
+	 */
+	private createIconButton(
+		container: HTMLElement,
+		icon: string,
+		label: string,
+		onClick: () => void,
+	): HTMLElement {
+		const button = container.createEl('button', {
+			cls: 'aar-player-btn',
+			attr: { 'aria-label': label },
+		});
+		setIcon(button, icon);
+		this.host.registerDomEvent(button, 'click', onClick);
+		return button;
+	}
+}

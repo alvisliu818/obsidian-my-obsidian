@@ -1,0 +1,1006 @@
+/**
+ * What the status bar shows for each thing the plugin can be doing.
+ *
+ * The status bar is the only feedback a user gets while a recording, a save, a
+ * transcription, or a playback is running, and all four render into the same
+ * element - so the interesting behaviour is as much what one state clears from
+ * the previous one as what it draws.
+ * @module tests/unit/StatusBar.test
+ */
+
+import {
+	updateStatusBar,
+	initializeStatusBar,
+	renderPlaybackStatusBar,
+	renderTranscriptionStatusBar,
+	renderQuickNoteStatusBar,
+	updateRecordingLiveStats,
+} from 'src/ui/StatusBar';
+import { at } from '../helpers/assertions';
+import { allEls, clickControl, control, el, maybeEl } from '../helpers/dom';
+import { OBSIDIAN, PLAYBACK, PLAYER, STATUS } from '../helpers/selectors';
+import { addObsidianDomExtensions } from '../mocks/domExtensions';
+import { makePlaybackState } from '../helpers/playbackHarness';
+import type { PlaybackControlsState } from 'src/player/playbackControls';
+import { RecordingStatus } from 'src/types';
+import type { RecordingControls } from 'src/types';
+
+/** A status bar element with the DOM extensions Obsidian adds at runtime. */
+function createStatusBar(): HTMLElement {
+	return addObsidianDomExtensions(document.createElement('div'));
+}
+
+/**
+ * The pause/stop commands the recording state renders buttons for.
+ * @param isPaused - Whether the recording is currently paused
+ * @returns Controls with jest-backed commands
+ */
+function recordingControls(isPaused = false): RecordingControls {
+	return { onPauseResume: jest.fn(), onStop: jest.fn(), isPaused };
+}
+
+/** A status bar already showing a recording with its controls. */
+function recordingWithControls(isPaused = false): {
+	statusBarItem: HTMLElement;
+	controls: RecordingControls;
+} {
+	const statusBarItem = createStatusBar();
+	const controls = recordingControls(isPaused);
+	updateStatusBar(
+		statusBarItem,
+		isPaused ? RecordingStatus.Paused : RecordingStatus.Recording,
+		undefined,
+		controls,
+	);
+	return { statusBarItem, controls };
+}
+
+/** The percentage the save or transcription progress bar reports. */
+function shownPercent(statusBarItem: HTMLElement): string | null {
+	return el(statusBarItem, STATUS.saveProgress).getAttribute('aria-valuenow');
+}
+
+/**
+ * A status bar already showing a save in progress.
+ * @param percent - How far the save reports it is
+ * @param description - What the save says it is doing
+ * @returns The status bar element
+ */
+function saving(percent: number, description = 'Writing file...'): HTMLElement {
+	const statusBarItem = createStatusBar();
+	updateStatusBar(statusBarItem, RecordingStatus.Saving, {
+		percent,
+		description,
+	});
+	return statusBarItem;
+}
+
+/** A status bar already showing a minimised transcription. */
+function transcribing(percent = 10): {
+	statusBarItem: HTMLElement;
+	onActivate: jest.Mock;
+} {
+	const statusBarItem = createStatusBar();
+	const onActivate = jest.fn();
+	renderTranscriptionStatusBar(
+		statusBarItem,
+		{ percent, description: 'Transcribing...' },
+		{ onActivate, activationLabel: 'Restore transcription window' },
+	);
+	return { statusBarItem, onActivate };
+}
+
+describe('recording status', () => {
+	it.each([
+		{
+			name: 'recording',
+			status: RecordingStatus.Recording,
+			text: 'Recording...',
+		},
+		{
+			name: 'paused',
+			status: RecordingStatus.Paused,
+			text: 'Recording paused',
+		},
+	])('says it is $name', ({ status, text }) => {
+		const statusBarItem = createStatusBar();
+
+		updateStatusBar(statusBarItem, status);
+
+		expect(statusBarItem.textContent).toContain(text);
+		expect(statusBarItem.classList.contains('is-recording')).toBe(true);
+		expect(statusBarItem.classList.contains('is-saving')).toBe(false);
+	});
+
+	it.each([
+		{ name: 'idle', status: RecordingStatus.Idle },
+		{ name: 'a status it does not know', status: 'unknown' },
+	])('clears itself when the plugin goes $name', ({ status }) => {
+		const statusBarItem = createStatusBar();
+		statusBarItem.classList.add('is-recording', 'is-saving');
+		statusBarItem.textContent = 'Something';
+
+		updateStatusBar(statusBarItem, status as RecordingStatus);
+
+		expect(statusBarItem.textContent).toBe('');
+		expect(statusBarItem.classList.contains('is-recording')).toBe(false);
+		expect(statusBarItem.classList.contains('is-saving')).toBe(false);
+	});
+
+	it.each([
+		{
+			name: 'updateStatusBar',
+			act: (): void => updateStatusBar(null, RecordingStatus.Recording),
+		},
+		{
+			name: 'initializeStatusBar',
+			act: (): void => initializeStatusBar(null),
+		},
+		{
+			name: 'renderPlaybackStatusBar',
+			act: (): void => renderPlaybackStatusBar(null, makePlaybackState()),
+		},
+		{
+			name: 'renderTranscriptionStatusBar',
+			act: (): void =>
+				renderTranscriptionStatusBar(
+					null,
+					{ percent: 10, description: 'Transcribing...' },
+					{ onActivate: jest.fn(), activationLabel: 'Restore' },
+				),
+		},
+		{
+			name: 'updateRecordingLiveStats',
+			act: (): void =>
+				updateRecordingLiveStats(null, {
+					elapsedMs: 0,
+					bytes: 0,
+					level: 0,
+				}),
+		},
+	])('$name does nothing when there is no status bar', ({ act }) => {
+		// Obsidian hands out no status bar on mobile, and every entry point is
+		// reachable from there.
+		expect(act).not.toThrow();
+	});
+
+	it('starts out cleared', () => {
+		const statusBarItem = createStatusBar();
+		statusBarItem.classList.add('is-recording');
+		statusBarItem.textContent = 'Recording...';
+
+		initializeStatusBar(statusBarItem);
+
+		expect(statusBarItem.textContent).toBe('');
+		expect(statusBarItem.classList.contains('is-recording')).toBe(false);
+	});
+});
+
+describe('saving progress', () => {
+	it('shows what it is doing and how far along it is', () => {
+		const statusBarItem = saving(40, 'Assembling audio...');
+
+		expect(statusBarItem.classList.contains('is-saving')).toBe(true);
+		expect(statusBarItem.classList.contains('is-recording')).toBe(false);
+		expect(el(statusBarItem, 'span').textContent).toBe(
+			'Assembling audio...',
+		);
+		expect(shownPercent(statusBarItem)).toBe('40');
+	});
+
+	// A save the user did not ask for reads as an ordinary one unless the bar
+	// says why, and the Notice that explained it has usually gone by then. The
+	// finalizer's own progress line used to replace the reason the moment it
+	// arrived, which is most of the save.
+	it('keeps saying the input was lost while the save runs', () => {
+		const statusBarItem = createStatusBar();
+
+		updateStatusBar(statusBarItem, RecordingStatus.Interrupted, {
+			percent: 20,
+			description: 'Assembling audio...',
+		});
+
+		expect(el(statusBarItem, 'span').textContent).toBe(
+			'Input lost: Assembling audio...',
+		);
+		expect(statusBarItem.classList.contains('is-saving')).toBe(true);
+		expect(statusBarItem.classList.contains('is-recording')).toBe(false);
+	});
+
+	it('names the lost input before any progress is reported', () => {
+		const statusBarItem = createStatusBar();
+
+		updateStatusBar(statusBarItem, RecordingStatus.Interrupted);
+
+		expect(el(statusBarItem, 'span').textContent).toBe(
+			'Input lost, saving...',
+		);
+	});
+
+	it('says a plain "Saving..." at zero when no progress was reported', () => {
+		const statusBarItem = createStatusBar();
+
+		updateStatusBar(statusBarItem, RecordingStatus.Saving);
+
+		expect(el(statusBarItem, 'span').textContent).toBe('Saving...');
+		expect(shownPercent(statusBarItem)).toBe('0');
+	});
+
+	it('fills the bar it draws to the percentage it reports', () => {
+		const statusBarItem = saving(60);
+
+		// The fill is the only part that moves: a bar that is there but never
+		// fills says nothing is happening.
+		const bar = el(statusBarItem, STATUS.saveProgress);
+		expect(el(bar, OBSIDIAN.progressFill).style.width).toBe('60%');
+	});
+
+	it('announces the save as a progress bar named for what it is doing', () => {
+		const statusBarItem = saving(60, 'Writing file...');
+
+		const bar = el(statusBarItem, STATUS.saveProgress);
+		expect(bar.getAttribute('role')).toBe('progressbar');
+		expect(bar.getAttribute('aria-label')).toBe('Writing file...');
+	});
+
+	it.each([
+		{ name: 'idle', status: RecordingStatus.Idle, text: '' },
+		{
+			name: 'recording again',
+			status: RecordingStatus.Recording,
+			text: 'Recording...',
+		},
+	])('drops the progress when it goes $name', ({ status, text }) => {
+		const statusBarItem = saving(50, 'Assembling...');
+		expect(maybeEl(statusBarItem, STATUS.saveProgress)).not.toBeNull();
+
+		updateStatusBar(statusBarItem, status);
+
+		expect(maybeEl(statusBarItem, STATUS.saveProgress)).toBeNull();
+		expect(statusBarItem.classList.contains('is-saving')).toBe(false);
+		expect(statusBarItem.textContent).toContain(text);
+	});
+});
+
+describe('transcription progress', () => {
+	it('shows the transcription and nothing from the other states', () => {
+		const { statusBarItem } = transcribing(35);
+
+		expect(statusBarItem.classList.contains('is-transcribing')).toBe(true);
+		expect(statusBarItem.classList.contains('is-recording')).toBe(false);
+		expect(statusBarItem.classList.contains('is-saving')).toBe(false);
+		expect(statusBarItem.textContent).toContain('Transcribing...');
+		expect(shownPercent(statusBarItem)).toBe('35');
+	});
+
+	it('gives way to a recording that starts under it', () => {
+		const { statusBarItem } = transcribing(50);
+
+		updateStatusBar(statusBarItem, RecordingStatus.Recording);
+
+		expect(statusBarItem.classList.contains('is-transcribing')).toBe(false);
+		expect(statusBarItem.textContent).toContain('Recording...');
+	});
+
+	it('restores the window on a single click', () => {
+		const { statusBarItem, onActivate } = transcribing();
+
+		el(statusBarItem, STATUS.actionableProgress).dispatchEvent(
+			new MouseEvent('click', { bubbles: true }),
+		);
+
+		expect(onActivate).toHaveBeenCalledTimes(1);
+	});
+
+	it('does not restore the window on a bare double click', () => {
+		// A real double click also fires the two clicks that do restore it;
+		// handling dblclick as well would restore it twice.
+		const { statusBarItem, onActivate } = transcribing();
+
+		el(statusBarItem, STATUS.actionableProgress).dispatchEvent(
+			new MouseEvent('dblclick', { bubbles: true }),
+		);
+
+		expect(onActivate).not.toHaveBeenCalled();
+	});
+
+	it('is a native button named for the restore, which the keyboard activates', () => {
+		// Enter and Space come from the platform, not from a handler of the
+		// plugin's own, so the progress behaves like any other button.
+		const { statusBarItem } = transcribing();
+
+		const restore = control(statusBarItem, 'Restore transcription window');
+
+		expect(restore).toBeInstanceOf(HTMLButtonElement);
+		expect(restore).toBe(el(statusBarItem, STATUS.actionableProgress));
+	});
+
+	it('opens its tooltip above the bar it sits on', () => {
+		const { statusBarItem } = transcribing();
+
+		expect(
+			control(statusBarItem, 'Restore transcription window').getAttribute(
+				'data-tooltip-position',
+			),
+		).toBe('top');
+	});
+
+	it('keeps the keyboard focus on the restore button across progress reports', () => {
+		// A report arrives with every stage of the run; a surface rebuilt for
+		// each one would drop the focus a keyboard user just moved there.
+		const { statusBarItem, onActivate } = transcribing(10);
+		document.body.appendChild(statusBarItem);
+		const restore = control(statusBarItem, 'Restore transcription window');
+		restore.focus();
+
+		renderTranscriptionStatusBar(
+			statusBarItem,
+			{ percent: 60, description: 'Transcribing part 2 of 3...' },
+			{ onActivate, activationLabel: 'Restore transcription window' },
+		);
+
+		expect(activeDocument.activeElement).toBe(restore);
+		expect(shownPercent(statusBarItem)).toBe('60');
+		expect(restore.textContent).toBe('Transcribing part 2 of 3...');
+		statusBarItem.remove();
+	});
+
+	it('restores through the latest action it was given', () => {
+		const { statusBarItem, onActivate } = transcribing();
+		const latest = jest.fn();
+
+		renderTranscriptionStatusBar(
+			statusBarItem,
+			{ percent: 20, description: 'Transcribing...' },
+			{
+				onActivate: latest,
+				activationLabel: 'Restore transcription window',
+			},
+		);
+		clickControl(statusBarItem, 'Restore transcription window');
+
+		expect(latest).toHaveBeenCalledTimes(1);
+		expect(onActivate).not.toHaveBeenCalled();
+	});
+
+	it('keeps the progress bar out of the button, where a screen reader would lose it', () => {
+		// A button's content is presentational to assistive technology, so a
+		// progress bar inside it would be read as nothing at all.
+		const { statusBarItem } = transcribing(35);
+
+		const bar = el(statusBarItem, STATUS.saveProgress);
+
+		expect(bar.closest('button')).toBeNull();
+		expect(bar.getAttribute('role')).toBe('progressbar');
+		expect(bar.getAttribute('aria-label')).toBe('Transcribing...');
+		expect(bar.getAttribute('aria-valuenow')).toBe('35');
+	});
+});
+
+describe('quick note status', () => {
+	const live = { showStats: true, showMeter: true };
+
+	it('shows a recording dictation like a recording, with only a stop button', () => {
+		// Pausing a dictation is not offered, and a marker has no recording
+		// to land in, so stop is the one control it carries.
+		const statusBarItem = createStatusBar();
+		const onStop = jest.fn();
+
+		renderQuickNoteStatusBar(
+			statusBarItem,
+			RecordingStatus.Recording,
+			undefined,
+			onStop,
+			live,
+		);
+		control(statusBarItem, 'Stop quick note').click();
+
+		expect(el(statusBarItem, STATUS.recordingLabel).textContent).toBe(
+			'Quick note...',
+		);
+		expect(
+			el(statusBarItem, STATUS.recordingButtons).children,
+		).toHaveLength(1);
+		expect(maybeEl(statusBarItem, STATUS.live)).not.toBeNull();
+		expect(onStop).toHaveBeenCalledTimes(1);
+	});
+
+	it('shows the stage being processed and how far along it is', () => {
+		const statusBarItem = createStatusBar();
+
+		renderQuickNoteStatusBar(
+			statusBarItem,
+			RecordingStatus.Saving,
+			{ percent: 40, description: 'Quick note: Transcribing...' },
+			jest.fn(),
+			live,
+		);
+
+		expect(statusBarItem.classList.contains('is-transcribing')).toBe(true);
+		expect(statusBarItem.textContent).toBe('Quick note: Transcribing...');
+		expect(shownPercent(statusBarItem)).toBe('40');
+	});
+
+	it('says it is transcribing before the first stage is reported', () => {
+		const statusBarItem = createStatusBar();
+
+		renderQuickNoteStatusBar(
+			statusBarItem,
+			RecordingStatus.Saving,
+			undefined,
+			jest.fn(),
+			live,
+		);
+
+		expect(statusBarItem.textContent).toBe('Transcribing quick note...');
+	});
+
+	it('draws nothing without a status bar to draw into', () => {
+		expect(() => {
+			renderQuickNoteStatusBar(
+				null,
+				RecordingStatus.Recording,
+				undefined,
+				jest.fn(),
+				live,
+			);
+		}).not.toThrow();
+	});
+});
+
+describe('playback controls', () => {
+	const TRANSPORT = [
+		'Back 10s',
+		'Pause playback',
+		'Stop playback',
+		'Forward 10s',
+		'Mute / unmute',
+		'Volume',
+		'Add marker at current position',
+		'Add chapter at current position',
+	];
+
+	it.each(TRANSPORT)('offers %s', (label) => {
+		const statusBarItem = createStatusBar();
+
+		renderPlaybackStatusBar(statusBarItem, makePlaybackState());
+
+		expect(statusBarItem).toHaveControl(label);
+	});
+
+	it('marks the status bar as showing playback', () => {
+		const statusBarItem = createStatusBar();
+
+		renderPlaybackStatusBar(statusBarItem, makePlaybackState());
+
+		expect(statusBarItem.classList.contains('is-playback')).toBe(true);
+	});
+
+	it('shows the position against the length', () => {
+		const statusBarItem = createStatusBar();
+
+		renderPlaybackStatusBar(statusBarItem, makePlaybackState());
+
+		expect(statusBarItem).toShowTime('1:05 / 3:42');
+	});
+
+	it('leaves the speed control to the inline player', () => {
+		// The status bar is a remote for whatever is playing, not a second
+		// copy of the player; speed lives where the waveform is.
+		const statusBarItem = createStatusBar();
+
+		renderPlaybackStatusBar(statusBarItem, makePlaybackState());
+
+		expect(statusBarItem).not.toHaveControl('Playback speed');
+		expect(maybeEl(statusBarItem, PLAYER.speed)).toBeNull();
+	});
+
+	it.each([
+		{ label: 'Back 10s', command: 'onSkip', args: [-10] },
+		{ label: 'Forward 10s', command: 'onSkip', args: [10] },
+		{ label: 'Pause playback', command: 'onTogglePlay', args: [] },
+		{ label: 'Stop playback', command: 'onStop', args: [] },
+		{ label: 'Mute / unmute', command: 'onToggleMute', args: [] },
+		{
+			label: 'Add marker at current position',
+			command: 'onAddMarker',
+			args: ['bookmark'],
+		},
+		{
+			label: 'Add chapter at current position',
+			command: 'onAddMarker',
+			args: ['chapter'],
+		},
+	] satisfies {
+		label: string;
+		command: keyof PlaybackControlsState;
+		args: unknown[];
+	}[])('$label calls $command', ({ label, command, args }) => {
+		const statusBarItem = createStatusBar();
+		const state = makePlaybackState();
+		renderPlaybackStatusBar(statusBarItem, state);
+
+		control(statusBarItem, label).click();
+
+		expect(state[command]).toHaveBeenCalledWith(...args);
+	});
+
+	it('reports a dragged volume slider', () => {
+		const statusBarItem = createStatusBar();
+		const state = makePlaybackState();
+		renderPlaybackStatusBar(statusBarItem, state);
+		const volume = el<HTMLInputElement>(statusBarItem, PLAYBACK.volume);
+
+		volume.value = '0.4';
+		volume.dispatchEvent(new Event('input'));
+
+		expect(state.onVolumeInput).toHaveBeenCalledWith(0.4);
+	});
+
+	// The app's slider class fills the track up to a ratio, which has to follow
+	// the slider whichever way its value changed.
+	it('fills the volume track up to the thumb from a drag and from playback', () => {
+		const statusBarItem = createStatusBar();
+		renderPlaybackStatusBar(
+			statusBarItem,
+			makePlaybackState({ volume: 0.5 }),
+		);
+		const volume = el<HTMLInputElement>(statusBarItem, PLAYBACK.volume);
+		expect(volume.style.getPropertyValue('--slider-fill-ratio')).toBe(
+			'0.5',
+		);
+
+		volume.value = '0.8';
+		volume.dispatchEvent(new Event('input'));
+		expect(volume.style.getPropertyValue('--slider-fill-ratio')).toBe(
+			'0.8',
+		);
+
+		renderPlaybackStatusBar(
+			statusBarItem,
+			makePlaybackState({ volume: 0.2 }),
+		);
+		expect(volume.style.getPropertyValue('--slider-fill-ratio')).toBe(
+			'0.2',
+		);
+	});
+
+	it('makes every transport control a native button', () => {
+		// A native button takes focus and Enter and Space from the platform,
+		// which the hand-written key handler it replaces had to imitate.
+		const statusBarItem = createStatusBar();
+
+		renderPlaybackStatusBar(statusBarItem, makePlaybackState());
+
+		const buttons = allEls(statusBarItem, PLAYER.controlButton);
+		expect(buttons.length).toBeGreaterThan(0);
+		for (const button of buttons) {
+			expect(button).toBeInstanceOf(HTMLButtonElement);
+		}
+	});
+
+	it('names the skip buttons after a changed step, tooltip included', () => {
+		const statusBarItem = createStatusBar();
+		renderPlaybackStatusBar(statusBarItem, makePlaybackState());
+
+		renderPlaybackStatusBar(
+			statusBarItem,
+			makePlaybackState({ skipSeconds: 30 }),
+		);
+
+		expect(
+			control(statusBarItem, 'Back 30s').getAttribute(
+				'data-tooltip-position',
+			),
+		).toBe('top');
+		expect(statusBarItem).toHaveControl('Forward 30s');
+	});
+
+	it('updates in place rather than rebuilding the controls', () => {
+		// Rebuilding would drop focus and interrupt a volume drag on every
+		// timeupdate, which fires several times a second.
+		const statusBarItem = createStatusBar();
+		renderPlaybackStatusBar(statusBarItem, makePlaybackState());
+		const controls = el(statusBarItem, PLAYBACK.controls);
+
+		renderPlaybackStatusBar(statusBarItem, makePlaybackState());
+
+		expect(el(statusBarItem, PLAYBACK.controls)).toBe(controls);
+	});
+
+	it('reflects a paused, muted, marker-less state on the controls it kept', () => {
+		const statusBarItem = createStatusBar();
+		renderPlaybackStatusBar(statusBarItem, makePlaybackState());
+
+		renderPlaybackStatusBar(
+			statusBarItem,
+			makePlaybackState({
+				currentTime: 5,
+				duration: 0,
+				paused: true,
+				muted: true,
+				volume: 0.2,
+				markersEnabled: false,
+			}),
+		);
+
+		expect(statusBarItem).toHaveControl('Play audio');
+		expect(
+			el(statusBarItem, PLAYBACK.mute).classList.contains('is-active'),
+		).toBe(true);
+		expect(el<HTMLInputElement>(statusBarItem, PLAYBACK.volume).value).toBe(
+			'0.2',
+		);
+		expect(el(statusBarItem, PLAYBACK.markerControls).hidden).toBe(true);
+		expect(statusBarItem).toShowTime('0:05 / 0:00');
+	});
+
+	it('leaves a focused volume slider where the user put it', () => {
+		const statusBarItem = createStatusBar();
+		document.body.appendChild(statusBarItem);
+		renderPlaybackStatusBar(statusBarItem, makePlaybackState());
+		const volume = el<HTMLInputElement>(statusBarItem, PLAYBACK.volume);
+		volume.value = '0.3';
+		volume.focus();
+
+		renderPlaybackStatusBar(
+			statusBarItem,
+			makePlaybackState({ volume: 0.9 }),
+		);
+
+		expect(volume.value).toBe('0.3');
+		statusBarItem.remove();
+	});
+
+	it('survives an external refresh that removed its controls', () => {
+		// Another plugin, or Obsidian itself, can empty the status bar between
+		// two timeupdates; the next render must rebuild rather than throw.
+		const statusBarItem = createStatusBar();
+		renderPlaybackStatusBar(statusBarItem, makePlaybackState());
+		const controls = el(statusBarItem, PLAYBACK.controls);
+		for (const part of [
+			PLAYBACK.skipBack,
+			PLAYBACK.skipForward,
+			PLAYBACK.toggle,
+			PLAYBACK.mute,
+			PLAYBACK.volume,
+			PLAYBACK.markerControls,
+			PLAYBACK.chapterControls,
+			PLAYBACK.time,
+		]) {
+			el(controls, part).remove();
+		}
+
+		expect(() => {
+			renderPlaybackStatusBar(statusBarItem, makePlaybackState());
+		}).not.toThrow();
+	});
+
+	it('gives way to a recording that starts under it', () => {
+		const statusBarItem = createStatusBar();
+		renderPlaybackStatusBar(statusBarItem, makePlaybackState());
+
+		updateStatusBar(statusBarItem, RecordingStatus.Recording);
+
+		expect(maybeEl(statusBarItem, PLAYBACK.controls)).toBeNull();
+		expect(statusBarItem.classList.contains('is-playback')).toBe(false);
+		expect(statusBarItem.textContent).toContain('Recording...');
+	});
+});
+
+describe('recording controls', () => {
+	it.each([
+		{
+			name: 'recording',
+			paused: false,
+			label: 'Recording...',
+			first: 'Pause recording',
+		},
+		{
+			name: 'paused',
+			paused: true,
+			label: 'Recording paused',
+			first: 'Resume recording',
+		},
+	])('offers $first while $name', ({ paused, label, first }) => {
+		const { statusBarItem } = recordingWithControls(paused);
+
+		expect(el(statusBarItem, STATUS.recordingLabel).textContent).toBe(
+			label,
+		);
+		expect(statusBarItem).toHaveControl(first);
+		expect(statusBarItem).toHaveControl('Stop recording');
+	});
+
+	it('groups the buttons in their own container', () => {
+		const { statusBarItem } = recordingWithControls();
+
+		expect(maybeEl(statusBarItem, STATUS.recordingControls)).not.toBeNull();
+		expect(maybeEl(statusBarItem, STATUS.recordingButtons)).not.toBeNull();
+		expect(allEls(statusBarItem, PLAYER.controlButton)).toHaveLength(2);
+	});
+
+	it.each([
+		{ label: 'Pause recording', command: 'onPauseResume' },
+		{ label: 'Stop recording', command: 'onStop' },
+	] satisfies { label: string; command: keyof RecordingControls }[])(
+		'$label calls $command',
+		({ label, command }) => {
+			const { statusBarItem, controls } = recordingWithControls();
+
+			control(statusBarItem, label).dispatchEvent(
+				new MouseEvent('click', { bubbles: true }),
+			);
+
+			expect(controls[command]).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it('keeps a button click from reaching the status bar behind it', () => {
+		// The status bar itself is clickable in Obsidian; without this a stop
+		// would also trigger whatever the bar does on click.
+		const { statusBarItem } = recordingWithControls();
+		const event = new MouseEvent('click', { bubbles: true });
+		const stopPropagation = jest.spyOn(event, 'stopPropagation');
+
+		control(statusBarItem, 'Pause recording').dispatchEvent(event);
+
+		expect(stopPropagation).toHaveBeenCalled();
+	});
+
+	it('makes every button a named native button', () => {
+		const { statusBarItem } = recordingWithControls();
+
+		for (const button of allEls(statusBarItem, PLAYER.controlButton)) {
+			expect(button).toBeInstanceOf(HTMLButtonElement);
+			expect(button.getAttribute('aria-label')).toBeTruthy();
+		}
+	});
+
+	it('shows the label but no buttons when no commands were given', () => {
+		const statusBarItem = createStatusBar();
+
+		updateStatusBar(statusBarItem, RecordingStatus.Recording);
+
+		expect(allEls(statusBarItem, PLAYER.controlButton)).toHaveLength(0);
+		expect(el(statusBarItem, STATUS.recordingLabel).textContent).toBe(
+			'Recording...',
+		);
+	});
+
+	it.each([
+		{ name: 'idle', status: RecordingStatus.Idle, progress: undefined },
+		{
+			name: 'saving',
+			status: RecordingStatus.Saving,
+			progress: { percent: 10, description: 'Saving...' },
+		},
+	])(
+		'drops the buttons when the recording goes $name',
+		({ status, progress }) => {
+			const { statusBarItem } = recordingWithControls();
+			expect(allEls(statusBarItem, PLAYER.controlButton)).toHaveLength(2);
+
+			updateStatusBar(statusBarItem, status, progress);
+
+			expect(allEls(statusBarItem, PLAYER.controlButton)).toHaveLength(0);
+		},
+	);
+
+	it('orders the buttons pause first, stop second', () => {
+		const { statusBarItem } = recordingWithControls();
+
+		const labels = allEls(statusBarItem, PLAYER.controlButton).map(
+			(button) => button.getAttribute('aria-label'),
+		);
+
+		expect(at(labels, 0)).toBe('Pause recording');
+		expect(at(labels, 1)).toBe('Stop recording');
+	});
+});
+
+describe('live recording indicators', () => {
+	/** A status bar recording with the given live indicators switched on. */
+	function recordingWithLive(options: {
+		showStats: boolean;
+		showMeter: boolean;
+	}): HTMLElement {
+		const statusBarItem = createStatusBar();
+		updateStatusBar(
+			statusBarItem,
+			RecordingStatus.Recording,
+			undefined,
+			recordingControls(),
+			options,
+		);
+		return statusBarItem;
+	}
+
+	it('offers a marker button only when dropping markers is possible', () => {
+		const statusBarItem = createStatusBar();
+		const onAddMarker = jest.fn();
+
+		updateStatusBar(statusBarItem, RecordingStatus.Recording, undefined, {
+			...recordingControls(),
+			onAddMarker,
+		});
+
+		expect(statusBarItem).toHaveControl('Add marker');
+		control(statusBarItem, 'Add marker').dispatchEvent(
+			new MouseEvent('click', { bubbles: true }),
+		);
+		expect(onAddMarker).toHaveBeenCalledTimes(1);
+	});
+
+	it('offers no marker button when the recording cannot take one', () => {
+		const { statusBarItem } = recordingWithControls();
+
+		expect(statusBarItem).not.toHaveControl('Add marker');
+	});
+
+	it('starts the elapsed time and size at zero', () => {
+		const statusBarItem = recordingWithLive({
+			showStats: true,
+			showMeter: false,
+		});
+
+		expect(el(statusBarItem, STATUS.elapsed).textContent).toBe('0:00');
+		expect(el(statusBarItem, STATUS.recordedSize).textContent).toBe('0 B');
+		expect(maybeEl(statusBarItem, STATUS.inputMeter)).toBeNull();
+	});
+
+	it('draws the input meter on its own', () => {
+		const statusBarItem = recordingWithLive({
+			showStats: false,
+			showMeter: true,
+		});
+
+		expect(maybeEl(statusBarItem, STATUS.inputMeterFill)).not.toBeNull();
+		expect(maybeEl(statusBarItem, STATUS.elapsed)).toBeNull();
+	});
+
+	it('exposes the input level as a named meter a screen reader can read', () => {
+		const statusBarItem = recordingWithLive({
+			showStats: false,
+			showMeter: true,
+		});
+
+		updateRecordingLiveStats(statusBarItem, {
+			elapsedMs: 1000,
+			bytes: 1,
+			level: 0.25,
+		});
+
+		const meter = control(statusBarItem, 'Input level');
+		expect(meter.getAttribute('role')).toBe('meter');
+		expect(meter.getAttribute('aria-valuenow')).toBe('25');
+	});
+
+	it('draws nothing live when neither indicator is asked for', () => {
+		const statusBarItem = recordingWithLive({
+			showStats: false,
+			showMeter: false,
+		});
+
+		expect(maybeEl(statusBarItem, STATUS.live)).toBeNull();
+	});
+
+	it('updates the indicators in place', () => {
+		// They tick several times a second; re-rendering would drop focus and
+		// restart the CSS transition on the meter every time.
+		const statusBarItem = recordingWithLive({
+			showStats: true,
+			showMeter: true,
+		});
+		const live = el(statusBarItem, STATUS.live);
+
+		updateRecordingLiveStats(statusBarItem, {
+			elapsedMs: 65_000,
+			bytes: 2048,
+			level: 0.5,
+		});
+
+		expect(el(statusBarItem, STATUS.live)).toBe(live);
+		expect(el(statusBarItem, STATUS.elapsed).textContent).toBe('1:05');
+		expect(el(statusBarItem, STATUS.recordedSize).textContent).toBe(
+			'2.0 KB',
+		);
+		expect(
+			el(statusBarItem, STATUS.inputMeterFill).style.getPropertyValue(
+				'--aar-meter-fill',
+			),
+		).toBe('50%');
+	});
+
+	it.each([
+		{
+			name: 'the meter is off',
+			options: { showStats: true, showMeter: false },
+			present: STATUS.elapsed,
+			absent: STATUS.inputMeterFill,
+		},
+		{
+			name: 'the stats are off',
+			options: { showStats: false, showMeter: true },
+			present: STATUS.inputMeterFill,
+			absent: STATUS.elapsed,
+		},
+	])('updates what is there when $name', ({ options, present, absent }) => {
+		// Both indicators are settings-controlled and independent, so the
+		// update has to cope with either half missing.
+		const statusBarItem = recordingWithLive(options);
+
+		expect(() => {
+			updateRecordingLiveStats(statusBarItem, {
+				elapsedMs: 1000,
+				bytes: 1,
+				level: 1,
+			});
+		}).not.toThrow();
+		expect(maybeEl(statusBarItem, present)).not.toBeNull();
+		expect(maybeEl(statusBarItem, absent)).toBeNull();
+	});
+
+	it('does nothing when the status bar is not showing a recording', () => {
+		const statusBarItem = createStatusBar();
+		updateStatusBar(statusBarItem, RecordingStatus.Idle);
+
+		updateRecordingLiveStats(statusBarItem, {
+			elapsedMs: 1000,
+			bytes: 1,
+			level: 1,
+		});
+
+		expect(statusBarItem.textContent).toBe('');
+	});
+});
+
+describe('the status-bar chapter repeat', () => {
+	const LABEL = 'Repeat current chapter';
+
+	it('hides the repeat for a recording that defines no chapters', () => {
+		const statusBarItem = createStatusBar();
+
+		renderPlaybackStatusBar(
+			statusBarItem,
+			makePlaybackState({ chaptersEnabled: false }),
+		);
+
+		expect(el(statusBarItem, PLAYBACK.chapterControls).hidden).toBe(true);
+	});
+
+	it('offers the repeat once the recording has chapters', () => {
+		const statusBarItem = createStatusBar();
+
+		renderPlaybackStatusBar(statusBarItem, makePlaybackState());
+
+		expect(el(statusBarItem, PLAYBACK.chapterControls).hidden).toBe(false);
+		expect(statusBarItem).toHaveControl(LABEL);
+	});
+
+	it.each([
+		{ state: 'engaged', enabled: true, pressed: 'true' },
+		{ state: 'off', enabled: false, pressed: 'false' },
+	])('announces the repeat as $state', ({ enabled, pressed }) => {
+		const statusBarItem = createStatusBar();
+
+		renderPlaybackStatusBar(
+			statusBarItem,
+			makePlaybackState({ chapterLoopEnabled: enabled }),
+		);
+
+		const button = el(statusBarItem, PLAYBACK.chapterLoop);
+		expect(button.getAttribute('aria-pressed')).toBe(pressed);
+		expect(button.classList.contains('is-active')).toBe(enabled);
+	});
+
+	it('asks the live playback to toggle the repeat', () => {
+		const statusBarItem = createStatusBar();
+		const state = makePlaybackState();
+		renderPlaybackStatusBar(statusBarItem, state);
+
+		el(statusBarItem, PLAYBACK.chapterLoop).click();
+
+		expect(state.onToggleChapterLoop).toHaveBeenCalledTimes(1);
+	});
+});

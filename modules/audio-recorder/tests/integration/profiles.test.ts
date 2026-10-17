@@ -1,0 +1,427 @@
+/**
+ * Tests the shared profile machinery once, and then runs the same behavioural
+ * contract against every kind of profile the plugin keeps. The kinds used to
+ * carry a copy of this logic each, with a naming convention each; these tests
+ * are what keep them on one implementation, and what makes a kind added to the
+ * registry arrive with the same rules as the rest.
+ * @module tests/integration/profiles.test
+ */
+
+import {
+	addProfile,
+	createProfile,
+	effectiveProfileId,
+	findProfile,
+	freeProfileName,
+	moveProfile,
+	profileNameRejection,
+	profilesOfKind,
+	removeAndReselectProfile,
+	removeProfile,
+	selectedProfile,
+	selectedProfileId,
+	setSelectedProfileId,
+	ProfileKindId,
+	type Profile,
+} from 'src/settings/profiles';
+import {
+	mergeSettings,
+	serializeSettings,
+} from 'src/settings/settingsSerialization';
+import type { AudioRecorderSettings } from 'src/settings/settingsSchema';
+
+/** A profile of the kind under test, so the helpers are exercised on their own. */
+const simple = (
+	id: string,
+	name: string,
+	kind: ProfileKindId = 'dictionary',
+): Profile => ({ id, kind, name, body: '' });
+
+/**
+ * Adds a profile of one kind and points that kind at it, which is what every
+ * contract below is arranged with. Two model calls rather than one, because
+ * the settings tab adopts a new profile only when nothing usable was selected
+ * and so has no use for a single "add and select" step.
+ * @param settings - The settings to arrange
+ * @param kind - Kind the profile belongs to
+ * @param name - Name for the new profile
+ * @returns The profile that was added
+ */
+const addSelected = (
+	settings: AudioRecorderSettings,
+	kind: ProfileKindId,
+	name: string,
+): Profile => {
+	const created = createProfile(kind, name);
+	settings.profiles = addProfile(settings.profiles, created);
+	setSelectedProfileId(settings, kind, created.id);
+	return created;
+};
+
+describe('profile list helpers', () => {
+	describe('addProfile', () => {
+		it('appends a named profile', () => {
+			const next = addProfile([], simple('a', 'Standup'));
+			expect(next).toHaveLength(1);
+			expect(next[0]?.name).toBe('Standup');
+		});
+
+		it('is a no-op for a blank name', () => {
+			expect(addProfile([simple('a', 'A')], simple('b', ''))).toEqual([
+				simple('a', 'A'),
+			]);
+		});
+
+		it('allows two profiles with the same name (distinct ids)', () => {
+			const next = addProfile(
+				addProfile([], simple('a', 'Legal')),
+				simple('b', 'Legal'),
+			);
+			expect(next).toHaveLength(2);
+			expect(next[0]?.id).not.toBe(next[1]?.id);
+		});
+	});
+
+	describe('removeProfile', () => {
+		const profiles = [simple('a', 'A'), simple('b', 'B')];
+
+		it('removes the profile with the given id', () => {
+			expect(removeProfile(profiles, 'a')).toEqual([simple('b', 'B')]);
+		});
+
+		it('returns an unchanged copy for an absent id', () => {
+			const next = removeProfile(profiles, 'missing');
+			expect(next).toEqual(profiles);
+			expect(next).not.toBe(profiles);
+		});
+	});
+
+	describe('profilesOfKind', () => {
+		it('returns one kind in stored order, and nothing of another', () => {
+			const profiles = [
+				simple('a', 'A'),
+				simple('p', 'P', 'participants'),
+				simple('b', 'B'),
+			];
+			expect(
+				profilesOfKind(profiles, 'dictionary').map((p) => p.id),
+			).toEqual(['a', 'b']);
+			expect(profilesOfKind(profiles, 'llmCleanup')).toEqual([]);
+		});
+	});
+
+	describe('moveProfile', () => {
+		const profiles = [simple('a', 'A'), simple('b', 'B'), simple('c', 'C')];
+
+		it('moves a profile down to the dropped position', () => {
+			expect(
+				moveProfile(profiles, 'dictionary', 0, 2).map((p) => p.id),
+			).toEqual(['b', 'c', 'a']);
+		});
+
+		it('moves a profile up to the dropped position', () => {
+			expect(
+				moveProfile(profiles, 'dictionary', 2, 0).map((p) => p.id),
+			).toEqual(['c', 'a', 'b']);
+		});
+
+		it('leaves the order alone for a drop on the same position', () => {
+			expect(
+				moveProfile(profiles, 'dictionary', 1, 1).map((p) => p.id),
+			).toEqual(['a', 'b', 'c']);
+		});
+
+		it.each([
+			['a source outside the list', 3, 0],
+			['a target outside the list', 0, 3],
+			['a negative index', -1, 0],
+		])('leaves the order alone for %s', (_case, from, to) => {
+			expect(
+				moveProfile(profiles, 'dictionary', from, to).map((p) => p.id),
+			).toEqual(['a', 'b', 'c']);
+		});
+
+		it('reorders one kind without disturbing another', () => {
+			// Every kind shares one stored list now, so a catalogue the user
+			// rearranges must rewrite only the slots its own profiles hold.
+			const mixed = [
+				simple('a', 'A'),
+				simple('p1', 'P1', 'participants'),
+				simple('b', 'B'),
+				simple('p2', 'P2', 'participants'),
+			];
+			const moved = moveProfile(mixed, 'participants', 0, 1);
+			expect(
+				moved
+					.filter((profile) => profile.kind === 'participants')
+					.map((profile) => profile.id),
+			).toEqual(['p2', 'p1']);
+			expect(
+				moved
+					.filter((profile) => profile.kind === 'dictionary')
+					.map((profile) => profile.id),
+			).toEqual(['a', 'b']);
+		});
+
+		it('returns a copy rather than reordering in place', () => {
+			const next = moveProfile(profiles, 'dictionary', 0, 1);
+			expect(next).not.toBe(profiles);
+			expect(profiles.map((profile) => profile.id)).toEqual([
+				'a',
+				'b',
+				'c',
+			]);
+		});
+	});
+
+	describe('findProfile', () => {
+		it('returns the matching profile or undefined', () => {
+			const profiles = [simple('a', 'A')];
+			expect(findProfile(profiles, 'a')?.name).toBe('A');
+			expect(findProfile(profiles, 'z')).toBeUndefined();
+		});
+	});
+
+	describe('effectiveProfileId', () => {
+		const profiles = [simple('a', 'A')];
+
+		it('keeps an id that still names a profile', () => {
+			expect(effectiveProfileId(profiles, 'a')).toBe('a');
+		});
+
+		it('reports no selection for a stale or empty id', () => {
+			expect(effectiveProfileId(profiles, 'gone')).toBe('');
+			expect(effectiveProfileId(profiles, '')).toBe('');
+			expect(effectiveProfileId([], 'a')).toBe('');
+		});
+	});
+
+	describe('freeProfileName', () => {
+		it('keeps counting until it finds a name no profile holds', () => {
+			const taken = [
+				simple('a', 'New profile'),
+				simple('b', 'New profile 2'),
+			];
+
+			expect(freeProfileName(taken, 'New profile')).toBe('New profile 3');
+			expect(freeProfileName([], 'New profile')).toBe('New profile');
+		});
+	});
+
+	describe('createProfile', () => {
+		it('creates profiles of the kind asked for, with distinct ids and a trimmed name', () => {
+			const a = createProfile('llmSummary', '  Legal  ');
+			const b = createProfile('llmSummary', 'Legal');
+			expect(a.name).toBe('Legal');
+			expect(a.kind).toBe('llmSummary');
+			expect(a.body).toBe('');
+			expect(a.id).toMatch(/[0-9a-f-]{36}/);
+			expect(a.id).not.toBe(b.id);
+		});
+	});
+});
+
+describe('profileNameRejection', () => {
+	const profiles = [
+		simple('a', 'Legal'),
+		simple('p', 'Legal', 'participants'),
+	];
+
+	it('accepts a name free within the kind, whatever another kind uses', () => {
+		// Pages are addressed per catalogue, so a roster and a glossary may
+		// share a name; two glossaries may not.
+		expect(
+			profileNameRejection(profiles, 'dictionary', '', 'Medical'),
+		).toBeUndefined();
+		expect(
+			profileNameRejection(profiles, 'participants', '', 'Legal'),
+		).toBe('Another profile already uses this name.');
+	});
+
+	it('refuses a name another profile of the kind already holds', () => {
+		expect(profileNameRejection(profiles, 'dictionary', '', 'Legal')).toBe(
+			'Another profile already uses this name.',
+		);
+		// Trimmed before comparing, so a stray space cannot smuggle a
+		// duplicate past the rule.
+		expect(
+			profileNameRejection(profiles, 'dictionary', '', '  Legal  '),
+		).toBe('Another profile already uses this name.');
+	});
+
+	it('lets a profile keep the name it already has', () => {
+		expect(
+			profileNameRejection(profiles, 'dictionary', 'a', 'Legal'),
+		).toBeUndefined();
+	});
+
+	it('refuses a name that is blank or only spaces', () => {
+		expect(profileNameRejection(profiles, 'dictionary', '', '')).toBe(
+			'Give the profile a name.',
+		);
+		expect(profileNameRejection(profiles, 'dictionary', '', '   ')).toBe(
+			'Give the profile a name.',
+		);
+	});
+});
+
+describe('a note-backed profile in data.json', () => {
+	/** Settings as the next load reads them back from what a save wrote. */
+	const reloaded = (settings: AudioRecorderSettings): AudioRecorderSettings =>
+		mergeSettings(
+			JSON.parse(
+				JSON.stringify(serializeSettings(settings)),
+			) as Partial<AudioRecorderSettings>,
+		);
+
+	it('keeps the note it is read from, and the text last read from it', () => {
+		const settings = mergeSettings({
+			profiles: [
+				{
+					id: 'note',
+					kind: 'dictionary',
+					name: 'Standup',
+					body: 'Kubernetes',
+					sourcePath: 'Glossaries/Standup.md',
+				},
+			],
+		});
+
+		expect(findProfile(reloaded(settings).profiles, 'note')).toEqual({
+			id: 'note',
+			kind: 'dictionary',
+			name: 'Standup',
+			body: 'Kubernetes',
+			sourcePath: 'Glossaries/Standup.md',
+		});
+	});
+
+	it('reads a profile stored without a note exactly as before', () => {
+		const settings = mergeSettings({
+			profiles: [
+				{ id: 'typed', kind: 'dictionary', name: 'Legal', body: 'NDA' },
+			],
+		});
+
+		const profile = findProfile(reloaded(settings).profiles, 'typed');
+
+		expect(profile).toEqual({
+			id: 'typed',
+			kind: 'dictionary',
+			name: 'Legal',
+			body: 'NDA',
+		});
+		expect(profile && 'sourcePath' in profile).toBe(false);
+	});
+
+	it('reads an empty or non-string path as no note at all', () => {
+		const settings = mergeSettings({
+			profiles: [
+				{
+					id: 'empty',
+					kind: 'dictionary',
+					name: 'Empty',
+					body: '',
+					sourcePath: '',
+				},
+				{
+					id: 'broken',
+					kind: 'dictionary',
+					name: 'Broken',
+					body: '',
+					sourcePath: 42 as unknown as string,
+				},
+			],
+		});
+
+		expect(
+			settings.profiles.map((profile) => 'sourcePath' in profile),
+		).toEqual([false, false]);
+	});
+});
+
+describe.each(
+	Object.values(ProfileKindId).map((kind) => [kind, kind] as const),
+)('%s profiles', (_name, kind) => {
+	let settings: AudioRecorderSettings;
+
+	beforeEach(() => {
+		settings = mergeSettings();
+		// The seeded profiles are what a fresh install ships; the contract
+		// below is about a catalogue the user builds, so it starts empty.
+		settings.profiles = [];
+		setSelectedProfileId(settings, kind, '');
+	});
+
+	it('adds a profile and selects it', () => {
+		const created = addSelected(settings, kind, 'Standup');
+		expect(created.name).toBe('Standup');
+		expect(created.kind).toBe(kind);
+		expect(profilesOfKind(settings.profiles, kind)).toHaveLength(1);
+		expect(selectedProfileId(settings, kind)).toBe(created.id);
+		expect(selectedProfile(settings, kind)).toEqual(created);
+	});
+
+	it('reselects the first remaining profile after a removal', () => {
+		const first = addSelected(settings, kind, 'First');
+		const second = addSelected(settings, kind, 'Second');
+		removeAndReselectProfile(settings, kind, second.id);
+		expect(profilesOfKind(settings.profiles, kind)).toHaveLength(1);
+		expect(selectedProfileId(settings, kind)).toBe(first.id);
+	});
+
+	it('leaves the selection alone when the profile removed was not in use', () => {
+		// Tidying a catalogue is not a decision about which profile a run
+		// applies; moving the selection here would change what the next
+		// run does behind the user's back. The deleted profile is neither
+		// the one in use nor the first of the list, so a reselection would
+		// land somewhere visibly wrong rather than back where it started.
+		const first = addSelected(settings, kind, 'First');
+		const inUse = addSelected(settings, kind, 'In use');
+		const spare = addSelected(settings, kind, 'Spare');
+		setSelectedProfileId(settings, kind, inUse.id);
+
+		removeAndReselectProfile(settings, kind, spare.id);
+
+		expect(selectedProfileId(settings, kind)).toBe(inUse.id);
+		expect(
+			profilesOfKind(settings.profiles, kind).map(
+				(profile) => profile.id,
+			),
+		).toEqual([first.id, inUse.id]);
+	});
+
+	it('falls back to no selection when the last profile is removed', () => {
+		const only = addSelected(settings, kind, 'Only');
+		removeAndReselectProfile(settings, kind, only.id);
+		expect(settings.profiles).toEqual([]);
+		expect(selectedProfileId(settings, kind)).toBe('');
+		expect(selectedProfile(settings, kind)).toBeUndefined();
+	});
+
+	it('resolves no profile for a selection pointing at a removed one', () => {
+		const created = addSelected(settings, kind, 'Gone');
+		settings.profiles = removeProfile(settings.profiles, created.id);
+		// The id is still stored; the resolver must treat it as no
+		// selection rather than as an error.
+		expect(settings.selectedProfileIds[kind]).toBe(created.id);
+		expect(selectedProfile(settings, kind)).toBeUndefined();
+	});
+
+	it('leaves every other kind alone while its own is edited', () => {
+		// One stored list serves them all, so an edit to one catalogue must
+		// be invisible to the others.
+		const others = Object.values(ProfileKindId).filter(
+			(other) => other !== kind,
+		);
+		for (const other of others) {
+			addSelected(settings, other, `${other} profile`);
+		}
+		const created = addSelected(settings, kind, 'Mine');
+		removeAndReselectProfile(settings, kind, created.id);
+		for (const other of others) {
+			expect(profilesOfKind(settings.profiles, other)).toHaveLength(1);
+			expect(selectedProfileId(settings, other)).not.toBe('');
+		}
+	});
+});

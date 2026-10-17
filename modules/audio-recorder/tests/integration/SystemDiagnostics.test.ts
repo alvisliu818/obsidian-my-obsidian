@@ -1,0 +1,738 @@
+/**
+ * Unit tests for SystemDiagnostics.
+ * @module tests/unit/SystemDiagnostics.test
+ */
+
+import { SystemDiagnostics } from 'src/diagnostics/SystemDiagnostics';
+import { at } from '../helpers/assertions';
+import type { AudioRecorderSettings } from 'src/settings/settingsSchema';
+import * as AudioCapabilityDetector from 'src/audio/AudioCapabilityDetector';
+import {
+	FORMAT_WEBM,
+	FORMAT_OGG,
+	FORMAT_MP4,
+	FORMAT_WAV,
+	DEFAULT_SAMPLE_RATE,
+	DEFAULT_BITRATE,
+} from 'src/constants';
+import { mergeSettings } from 'src/settings/settingsSerialization';
+import { createMockApp } from '../helpers/createApp';
+import { installAudioContextRate } from '../helpers/mediaMocks';
+import { useHostProcess } from '../helpers/hostProcess';
+import type { App } from 'obsidian';
+import { DEFAULT_MOCK_API_VERSION } from '../mocks/obsidian';
+
+// Deterministic encoder probing: this suite exercises the diagnostics
+// wiring, not the encoders. No offline encoder is available, so a
+// format is recordable only through MediaRecorder support.
+jest.mock('src/audio/AudioEncoder', () => ({
+	isOfflineEncodingSupported: jest.fn(() => false),
+	probeOfflineEncodingSupport: jest.fn(() => Promise.resolve(false)),
+}));
+
+// Helpers
+
+function makeSettings(
+	overrides: Partial<AudioRecorderSettings> = {},
+): AudioRecorderSettings {
+	// Built from the real defaults rather than a hand-listed 90-field literal,
+	// which drifted from the schema every time a setting was added and only
+	// type-checked because the drift was invisible behind Partial.
+	return {
+		...mergeSettings({
+			recordingFormat: FORMAT_WEBM,
+			bitrate: DEFAULT_BITRATE,
+			sampleRate: DEFAULT_SAMPLE_RATE,
+			saveFolder: 'recordings',
+			filePrefix: 'recording',
+			audioDeviceId: 'device-1',
+			maxTracks: 2,
+			debug: true,
+		}),
+		trackAudioSources: new Map([
+			[1, { deviceId: 'dev-a', channelMode: 'source' as const }],
+			[2, { deviceId: 'dev-b', channelMode: 'mono-left' as const }],
+		]),
+		// Overrides land on the flat fields last: the platform-scoped ones
+		// (device, channels, track sources) are what diagnostics reports, and
+		// routing them through mergeSettings would file them under perPlatform.
+		...overrides,
+	};
+}
+
+/**
+ * An App for the environment report. `collectEnvironment` reads the running
+ * Obsidian version off the app itself, so the version travels as an argument
+ * rather than through the mock's module-level state.
+ * @param apiVersion - Version the report should see
+ * @returns The App double
+ */
+function makeApp(apiVersion = '1.5.0'): App {
+	return createMockApp({ apiVersion }).app;
+}
+
+/**
+ * Points navigator.userAgent at a fixed string for one test. jsdom defines the
+ * property on the prototype, so it is redefined rather than assigned, and
+ * `configurable` leaves the next test free to redefine it again.
+ * @param value - User agent the report should see
+ */
+function withUserAgent(value: string): void {
+	Object.defineProperty(global.navigator, 'userAgent', {
+		value,
+		configurable: true,
+	});
+}
+
+// collectPluginSettings
+
+/** The layout the diagnostics cases ask the encoder about. */
+const STEREO_CHANNELS = 2;
+
+/** The rate the stubbed device's AudioContext runs at. */
+const DEVICE_RATE = 48000;
+
+/**
+ * Collects the audio capabilities the way the diagnostics report does, for the
+ * cases that differ only in what they then read off the result.
+ * @returns The capabilities descriptor
+ */
+async function collectCapabilities(): Promise<
+	Awaited<ReturnType<typeof SystemDiagnostics.collectAudioCapabilities>>
+> {
+	return SystemDiagnostics.collectAudioCapabilities(
+		DEFAULT_SAMPLE_RATE,
+		STEREO_CHANNELS,
+	);
+}
+
+describe('SystemDiagnostics.collectPluginSettings', () => {
+	it('serializes all scalar settings fields', () => {
+		const settings = makeSettings();
+		const result = SystemDiagnostics.collectPluginSettings(settings);
+
+		expect(result.recordingFormat).toBe(FORMAT_WEBM);
+		expect(result.bitrate).toBe(DEFAULT_BITRATE);
+		expect(result.sampleRate).toBe(DEFAULT_SAMPLE_RATE);
+		expect(result.saveFolder).toBe('recordings');
+		expect(result.saveNearActiveFile).toBe(false);
+		expect(result.activeFileSubfolder).toBe('');
+		expect(result.filePrefix).toBe('recording');
+		expect(result.enableMultiTrack).toBe(false);
+		expect(result.maxTracks).toBe(2);
+		expect(result.outputMode).toBe('single');
+		expect(result.audioDeviceId).toBe('device-1');
+		expect(result.debug).toBe(true);
+	});
+
+	it('serializes trackAudioSources Map to a plain Record', () => {
+		const settings = makeSettings();
+		const result = SystemDiagnostics.collectPluginSettings(settings);
+
+		expect(result.trackAudioSources).toEqual({
+			1: {
+				deviceId: 'dev-a',
+				channelMode: 'source',
+				gainDb: 0,
+				pan: 0,
+				processing: 'global',
+				kind: 'input-device',
+			},
+			2: {
+				deviceId: 'dev-b',
+				channelMode: 'mono-left',
+				gainDb: 0,
+				pan: 0,
+				processing: 'global',
+				kind: 'input-device',
+			},
+		});
+	});
+
+	it('handles empty trackAudioSources', () => {
+		const settings = makeSettings({ trackAudioSources: new Map() });
+		const result = SystemDiagnostics.collectPluginSettings(settings);
+
+		expect(result.trackAudioSources).toEqual({});
+	});
+});
+
+// collectEnvironment
+
+describe('SystemDiagnostics.collectEnvironment', () => {
+	const originalUserAgent = Object.getOwnPropertyDescriptor(
+		global.navigator,
+		'userAgent',
+	);
+	const originalNavigator = Object.getOwnPropertyDescriptor(
+		global,
+		'navigator',
+	);
+
+	afterEach(() => {
+		if (originalNavigator) {
+			Object.defineProperty(global, 'navigator', originalNavigator);
+		}
+		if (originalUserAgent) {
+			Object.defineProperty(
+				global.navigator,
+				'userAgent',
+				originalUserAgent,
+			);
+		}
+	});
+
+	it("reads the API version from obsidian's module export", () => {
+		const result = SystemDiagnostics.collectEnvironment(makeApp());
+
+		expect(result.obsidianVersion).toBe(DEFAULT_MOCK_API_VERSION);
+	});
+
+	it('reads electron, chrome and node versions from process.versions', () => {
+		useHostProcess({
+			versions: {
+				electron: '28.0.0',
+				node: '20.11.0',
+				chrome: '120.0.6099.109',
+			},
+			platform: 'win32',
+			arch: 'x64',
+		});
+
+		const result = SystemDiagnostics.collectEnvironment(makeApp());
+
+		expect(result.electronVersion).toBe('28.0.0');
+		expect(result.chromeVersion).toBe('120.0.6099.109');
+		expect(result.nodeVersion).toBe('20.11.0');
+		expect(result.platform).toBe('win32');
+		expect(result.arch).toBe('x64');
+	});
+
+	it('uses "unknown" when process.platform is absent', () => {
+		useHostProcess({ versions: { electron: '28.0.0', node: '20.11.0' } });
+
+		const result = SystemDiagnostics.collectEnvironment(makeApp());
+
+		expect(result.platform).toBe('unknown');
+	});
+
+	it('returns "unknown" for electronVersion when process is undefined', () => {
+		useHostProcess(undefined);
+
+		const result = SystemDiagnostics.collectEnvironment(makeApp());
+
+		expect(result.electronVersion).toBe('unknown');
+		expect(result.chromeVersion).toBe('unknown');
+		expect(result.nodeVersion).toBe('unknown');
+		expect(result.arch).toBe('unknown');
+	});
+
+	// The mobile shape: no process at all, so the WebView's own
+	// identification is the only version the report can carry.
+	it('reports the user agent when process is undefined', () => {
+		useHostProcess(undefined);
+		withUserAgent('Mozilla/5.0 (Linux; Android 14) obsidian/1.13.1');
+
+		const result = SystemDiagnostics.collectEnvironment(makeApp());
+
+		expect(result.userAgent).toBe(
+			'Mozilla/5.0 (Linux; Android 14) obsidian/1.13.1',
+		);
+	});
+
+	it('returns "unknown" where there is no navigator to ask', () => {
+		// Neither runtime object is guaranteed: the report is also collected
+		// from tests and from a worker-like context with neither global.
+		Object.defineProperty(global, 'navigator', {
+			value: undefined,
+			configurable: true,
+		});
+
+		const result = SystemDiagnostics.collectEnvironment(makeApp());
+
+		expect(result.userAgent).toBe('unknown');
+	});
+
+	it('returns "unknown" for an empty user agent', () => {
+		withUserAgent('');
+
+		const result = SystemDiagnostics.collectEnvironment(makeApp());
+
+		expect(result.userAgent).toBe('unknown');
+	});
+});
+
+// collectAudioDevices
+
+/** What the collector answers when the device list could not be read. */
+const UNREADABLE_DEVICE_LIST = {
+	enumerated: false,
+	devices: [],
+	loopbackInputs: [],
+};
+
+describe('SystemDiagnostics.collectAudioDevices', () => {
+	const mockEnumerate = jest.fn();
+
+	beforeEach(() => {
+		Object.defineProperty(global.navigator, 'mediaDevices', {
+			value: { enumerateDevices: mockEnumerate },
+			configurable: true,
+		});
+	});
+
+	it('returns audioinput and audiooutput devices', async () => {
+		mockEnumerate.mockResolvedValueOnce([
+			{
+				deviceId: 'in-1',
+				label: 'Mic 1',
+				groupId: 'grp-1',
+				kind: 'audioinput',
+			},
+			{
+				deviceId: 'out-1',
+				label: 'Speaker 1',
+				groupId: 'grp-2',
+				kind: 'audiooutput',
+			},
+			{
+				deviceId: 'vid-1',
+				label: 'Camera',
+				groupId: 'grp-3',
+				kind: 'videoinput',
+			},
+		]);
+
+		const result = await SystemDiagnostics.collectAudioDevices();
+
+		expect(result.enumerated).toBe(true);
+		expect(result.devices).toHaveLength(2);
+		expect(result.devices[0]).toEqual({
+			deviceId: 'in-1',
+			label: 'Mic 1',
+			groupId: 'grp-1',
+			kind: 'audioinput',
+		});
+		expect(result.devices[1]).toEqual({
+			deviceId: 'out-1',
+			label: 'Speaker 1',
+			groupId: 'grp-2',
+			kind: 'audiooutput',
+		});
+	});
+
+	// The report exists so a user can say what their machine offers without
+	// being walked through a device list, and the input carrying the far side
+	// of a call is the one that question is usually about.
+	it('names the inputs that carry the system output', async () => {
+		mockEnumerate.mockResolvedValueOnce([
+			{
+				deviceId: 'in-1',
+				label: 'Desk microphone',
+				groupId: 'grp-1',
+				kind: 'audioinput',
+			},
+			{
+				deviceId: 'in-2',
+				label: 'CABLE Output (VB-Audio Virtual Cable)',
+				groupId: 'grp-2',
+				kind: 'audioinput',
+			},
+			{
+				deviceId: 'out-1',
+				label: 'BlackHole 2ch',
+				groupId: 'grp-3',
+				kind: 'audiooutput',
+			},
+		]);
+
+		const result = await SystemDiagnostics.collectAudioDevices();
+
+		// The output side is left out: it is never something the plugin can
+		// be pointed at, whatever it is called.
+		expect(result.loopbackInputs).toEqual([
+			'CABLE Output (VB-Audio Virtual Cable)',
+		]);
+	});
+
+	// A machine with no audio hardware and a list that could not be read both
+	// end with nothing to show, and only the first of them is what an empty
+	// list is normally taken to mean.
+	it('reports an empty list it was able to read as read', async () => {
+		mockEnumerate.mockResolvedValueOnce([]);
+
+		const result = await SystemDiagnostics.collectAudioDevices();
+
+		expect(result).toEqual({
+			enumerated: true,
+			devices: [],
+			loopbackInputs: [],
+		});
+	});
+
+	// Absent outside a secure context and in some embedded WebViews, which is
+	// exactly where a user is likely to be collecting diagnostics: the report
+	// says there are no devices rather than failing to be produced at all.
+	it('reports no devices where the environment exposes no device API', async () => {
+		Object.defineProperty(global.navigator, 'mediaDevices', {
+			value: undefined,
+			configurable: true,
+		});
+
+		const result = await SystemDiagnostics.collectAudioDevices();
+
+		expect(result).toEqual(UNREADABLE_DEVICE_LIST);
+	});
+
+	// Blocked microphone access is one of the situations a user is asked for
+	// this report in, and enumeration is refused there. Letting the refusal
+	// out rejected the whole snapshot, so the report could not be produced at
+	// exactly the moment it was wanted.
+	it('reports a refused enumeration rather than failing the report', async () => {
+		const reported = jest
+			.spyOn(console, 'warn')
+			.mockImplementation(() => undefined);
+		mockEnumerate.mockRejectedValueOnce(new Error('Permission denied'));
+
+		const result = await SystemDiagnostics.collectAudioDevices();
+
+		expect(result).toEqual(UNREADABLE_DEVICE_LIST);
+		expect(reported).toHaveBeenCalled();
+	});
+
+	it('filters out videoinput devices', async () => {
+		mockEnumerate.mockResolvedValueOnce([
+			{
+				deviceId: 'vid-1',
+				label: 'Camera',
+				groupId: 'g1',
+				kind: 'videoinput',
+			},
+		]);
+
+		const result = await SystemDiagnostics.collectAudioDevices();
+
+		expect(result.devices).toHaveLength(0);
+	});
+});
+
+// collectAudioCapabilities
+
+describe('SystemDiagnostics.collectAudioCapabilities', () => {
+	// Spies are created per test: the global restoreMocks option
+	// restores them after each one
+	let mockDetectCapabilities: jest.SpyInstance;
+	let mockDetectCodecSupport: jest.SpyInstance;
+
+	beforeEach(() => {
+		mockDetectCapabilities = jest.spyOn(
+			AudioCapabilityDetector,
+			'detectCapabilities',
+		);
+		mockDetectCodecSupport = jest.spyOn(
+			AudioCapabilityDetector,
+			'detectCodecSupport',
+		);
+		mockDetectCodecSupport.mockReturnValue([]);
+	});
+
+	/**
+	 * Scripts what the detector reports, for the cases that care about one field
+	 * of it. The defaults are the empty environment; a case names only what it is
+	 * about.
+	 * @param overrides - The fields this case is asserting on
+	 */
+	function stubCapabilities(
+		overrides: {
+			supportedFormats?: string[];
+			supportedSampleRates?: number[];
+			supportedBitrates?: number[];
+		} = {},
+	): void {
+		mockDetectCapabilities.mockResolvedValueOnce({
+			supportedFormats: overrides.supportedFormats ?? [],
+			supportedSampleRates: overrides.supportedSampleRates ?? [],
+			supportedBitrates: overrides.supportedBitrates ?? [],
+			defaultFormat: FORMAT_WEBM,
+			defaultSampleRate: DEFAULT_SAMPLE_RATE,
+			defaultBitrate: DEFAULT_BITRATE,
+		});
+	}
+
+	it('maps detectCapabilities result to capabilities object', async () => {
+		stubCapabilities({
+			supportedFormats: [FORMAT_WEBM, FORMAT_OGG],
+			supportedSampleRates: [DEFAULT_SAMPLE_RATE, 48000],
+			supportedBitrates: [DEFAULT_BITRATE, 256000],
+		});
+
+		const result = await collectCapabilities();
+
+		expect(result.supportedFormats).toEqual([FORMAT_WEBM, FORMAT_OGG]);
+		expect(result.supportedSampleRates).toEqual([
+			DEFAULT_SAMPLE_RATE,
+			48000,
+		]);
+		expect(result.supportedBitrates).toEqual([DEFAULT_BITRATE, 256000]);
+	});
+
+	it('reports the bitrates each compressed format really accepts', async () => {
+		// The AAC floor differs between Windows, macOS and iOS and no
+		// declaration can stand in for it, so the report carries what the
+		// probe answered here. WAV is left out: it takes no bitrate at all.
+		const { probeOfflineEncodingSupport } = jest.requireMock(
+			'src/audio/AudioEncoder',
+		);
+		(probeOfflineEncodingSupport as jest.Mock).mockImplementation(
+			(_format: string, quality?: { bitrate?: number }) =>
+				Promise.resolve(quality?.bitrate === 320000),
+		);
+		stubCapabilities({
+			supportedFormats: [FORMAT_WEBM],
+			supportedSampleRates: [DEFAULT_SAMPLE_RATE],
+			supportedBitrates: [DEFAULT_BITRATE],
+		});
+
+		const result = await collectCapabilities();
+
+		expect(result.reachableBitrates[FORMAT_WEBM]).toEqual([320000]);
+		expect(result.reachableBitrates).not.toHaveProperty(FORMAT_WAV);
+	});
+
+	it('includes codecSupport from detectCodecSupport()', async () => {
+		stubCapabilities();
+		const fakeCodecSupport = [
+			{
+				mimeType: 'audio/webm',
+				supported: true,
+				withCodecs: [
+					{
+						codec: 'opus',
+						mimeType: 'audio/webm;codecs=opus',
+						supported: true,
+					},
+				],
+			},
+		];
+		mockDetectCodecSupport.mockReturnValueOnce(fakeCodecSupport);
+
+		const result = await collectCapabilities();
+
+		expect(result.codecSupport).toEqual(fakeCodecSupport);
+	});
+
+	it('reports mediaRecorderAvailable as true when MediaRecorder exists', async () => {
+		stubCapabilities();
+
+		// MediaRecorder appears in jsdom
+		const result = await collectCapabilities();
+
+		expect(result.mediaRecorderAvailable).toBe(
+			typeof MediaRecorder !== 'undefined',
+		);
+	});
+
+	it('reports getUserMediaAvailable based on navigator.mediaDevices', async () => {
+		stubCapabilities();
+
+		const result = await collectCapabilities();
+
+		const expected =
+			typeof navigator.mediaDevices !== 'undefined' &&
+			typeof navigator.mediaDevices.getUserMedia === 'function';
+		expect(result.getUserMediaAvailable).toBe(expected);
+	});
+});
+
+describe('SystemDiagnostics.collectActiveRecordingConfig', () => {
+	beforeEach(() => {
+		(global as Record<string, unknown>).MediaRecorder = {
+			isTypeSupported: jest.fn(
+				(type: string) => type === 'audio/mp4' || type === 'audio/webm',
+			),
+		};
+	});
+
+	it('returns correct config for a directly supported format (mp4)', async () => {
+		const settings = makeSettings({ recordingFormat: FORMAT_MP4 });
+		const result =
+			await SystemDiagnostics.collectActiveRecordingConfig(settings);
+
+		expect(result.outputFormat).toBe(FORMAT_MP4);
+		expect(result.recorderFormat).toBe(FORMAT_MP4);
+		expect(result.mimeType).toBe('audio/mp4');
+		expect(result.mimeTypeSupported).toBe(true);
+		expect(result.validationResult.valid).toBe(true);
+	});
+
+	it('resolves WAV to webm intermediate when webm is supported', async () => {
+		const settings = makeSettings({ recordingFormat: 'wav' });
+		const result =
+			await SystemDiagnostics.collectActiveRecordingConfig(settings);
+
+		expect(result.outputFormat).toBe('wav');
+		expect(result.recorderFormat).toBe(FORMAT_WEBM);
+		expect(result.mimeType).toBe('audio/webm');
+		expect(result.mimeTypeSupported).toBe(true);
+	});
+
+	it('resolves WAV to ogg when webm is unavailable but ogg is supported', async () => {
+		(global as Record<string, unknown>).MediaRecorder = {
+			isTypeSupported: jest.fn((type: string) => type === 'audio/ogg'),
+		};
+		const settings = makeSettings({ recordingFormat: 'wav' });
+		const result =
+			await SystemDiagnostics.collectActiveRecordingConfig(settings);
+
+		expect(result.recorderFormat).toBe(FORMAT_OGG);
+		expect(result.mimeTypeSupported).toBe(true);
+	});
+
+	it('reports mimeTypeSupported=false for WAV when no intermediate is available', async () => {
+		(global as Record<string, unknown>).MediaRecorder = {
+			isTypeSupported: jest.fn().mockReturnValue(false),
+		};
+		const settings = makeSettings({ recordingFormat: 'wav' });
+		const result =
+			await SystemDiagnostics.collectActiveRecordingConfig(settings);
+
+		expect(result.mimeTypeSupported).toBe(false);
+		expect(result.validationResult.valid).toBe(false);
+	});
+
+	it('reports the effective fallback format for an unencodable stored format', async () => {
+		// ogg is not directly recordable in this mock and its encoder
+		// probe fails, so recording falls back to webm. The output and
+		// recorder resolution show that effective format (webm), while
+		// validation still reports the stored ogg as unrecordable, so the
+		// fallback's cause stays visible: diagnostics mirror the pipeline.
+		const settings = makeSettings({ recordingFormat: FORMAT_OGG });
+		const result =
+			await SystemDiagnostics.collectActiveRecordingConfig(settings);
+
+		expect(result.outputFormat).toBe(FORMAT_WEBM);
+		expect(result.recorderFormat).toBe(FORMAT_WEBM);
+		expect(result.mimeTypeSupported).toBe(true);
+		expect(result.validationResult.valid).toBe(false);
+	});
+});
+
+// collect (integration)
+
+describe('SystemDiagnostics.collect', () => {
+	const mockEnumerate = jest.fn();
+	let mockDetectCapabilities: jest.SpyInstance;
+	let mockDetectCodecSupport: jest.SpyInstance;
+
+	beforeEach(() => {
+		mockDetectCapabilities = jest.spyOn(
+			AudioCapabilityDetector,
+			'detectCapabilities',
+		);
+		mockDetectCodecSupport = jest.spyOn(
+			AudioCapabilityDetector,
+			'detectCodecSupport',
+		);
+		Object.defineProperty(global.navigator, 'mediaDevices', {
+			value: { enumerateDevices: mockEnumerate },
+			configurable: true,
+		});
+		mockEnumerate.mockResolvedValue([]);
+		mockDetectCapabilities.mockReturnValue({
+			supportedFormats: [FORMAT_WEBM],
+			supportedSampleRates: [DEFAULT_SAMPLE_RATE],
+			supportedBitrates: [DEFAULT_BITRATE],
+			defaultFormat: FORMAT_WEBM,
+			defaultSampleRate: DEFAULT_SAMPLE_RATE,
+			defaultBitrate: DEFAULT_BITRATE,
+		});
+		mockDetectCodecSupport.mockReturnValue([]);
+		(global as Record<string, unknown>).MediaRecorder = {
+			isTypeSupported: jest.fn((type: string) => type === 'audio/webm'),
+		};
+	});
+
+	afterEach(() => {
+		mockDetectCapabilities.mockReset();
+		mockDetectCodecSupport.mockReset();
+	});
+
+	it('returns a complete DiagnosticsData object', async () => {
+		const settings = makeSettings();
+		const app = makeApp('1.6.0');
+
+		const result = await SystemDiagnostics.collect(settings, app);
+
+		expect(result).toHaveProperty('pluginSettings');
+		expect(result).toHaveProperty('environment');
+		expect(result).toHaveProperty('audioDevices');
+		expect(result).toHaveProperty('audioCapabilities');
+		expect(result).toHaveProperty('activeRecordingConfig');
+		expect(result.environment.obsidianVersion).toBe(
+			DEFAULT_MOCK_API_VERSION,
+		);
+		expect(result.pluginSettings.recordingFormat).toBe(FORMAT_WEBM);
+		expect(Array.isArray(result.audioDevices.devices)).toBe(true);
+	});
+
+	it('propagates audio devices collected asynchronously', async () => {
+		mockEnumerate.mockResolvedValueOnce([
+			{
+				deviceId: 'in-1',
+				label: 'Mic',
+				groupId: 'g1',
+				kind: 'audioinput',
+			},
+		]);
+
+		const result = await SystemDiagnostics.collect(
+			makeSettings(),
+			makeApp(),
+		);
+
+		expect(result.audioDevices.devices).toHaveLength(1);
+		expect(at(result.audioDevices.devices, 0).deviceId).toBe('in-1');
+	});
+
+	it('activeRecordingConfig reflects current settings format', async () => {
+		const settings = makeSettings({ recordingFormat: FORMAT_WEBM });
+		const result = await SystemDiagnostics.collect(settings, makeApp());
+
+		expect(result.activeRecordingConfig.outputFormat).toBe(FORMAT_WEBM);
+		expect(result.activeRecordingConfig.mimeType).toBe('audio/webm');
+		expect(result.activeRecordingConfig.mimeTypeSupported).toBe(true);
+	});
+
+	it('measures the bitrates at the rate an encode runs at, not the one asked for', async () => {
+		// Taking the layout from the encoding and the rate from the settings
+		// had the report describe a file nobody writes: at 22.05 kHz on a
+		// 48 kHz device the AAC probe answered for a rate no encode runs at
+		// and reported nothing reachable, while the recording encodes the
+		// 48 kHz mix and the bitrate row lists what that accepts.
+		const device = installAudioContextRate(DEVICE_RATE);
+		const { probeOfflineEncodingSupport } = jest.requireMock(
+			'src/audio/AudioEncoder',
+		);
+		const asked = probeOfflineEncodingSupport as jest.Mock;
+		asked.mockClear();
+		try {
+			await SystemDiagnostics.collect(
+				makeSettings({ sampleRate: 22050 }),
+				makeApp(),
+			);
+		} finally {
+			device.restore();
+		}
+
+		const rates = asked.mock.calls
+			.map(
+				([, quality]: [string, { sampleRate?: number } | undefined]) =>
+					quality?.sampleRate === undefined
+						? null
+						: quality.sampleRate,
+			)
+			.filter((rate: number | null): rate is number => rate !== null);
+		expect(rates.length).toBeGreaterThan(0);
+		expect([...new Set(rates)]).toEqual([DEVICE_RATE]);
+	});
+});

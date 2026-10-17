@@ -1,0 +1,270 @@
+/**
+ * Settings fixtures shared by the suites that exercise merging, validation, and
+ * serialisation.
+ *
+ * The fully populated object is long because the settings schema is long, and
+ * that length used to sit inside a single 141-line test where it buried the one
+ * thing the test asserted. Here it is a fixture with a name.
+ * @module tests/helpers/settingsFixtures
+ */
+
+import {
+	MODEL_SEED_GENERATION,
+	LLM_PROVIDER_IDS,
+	TRANSCRIPTION_PROVIDER_IDS,
+} from 'src/constants';
+import {
+	DEFAULT_SETTINGS,
+	RecordingBannerAnchor,
+	type AudioRecorderSettings,
+	type AudioSource,
+} from 'src/settings/settingsSchema';
+
+/**
+ * Copies a settings value all the way down, Maps included. jsdom exposes no
+ * structuredClone, and a settings value holds only Maps, arrays, plain
+ * objects and primitives.
+ * @param value - The value to copy
+ * @returns An equal value that shares nothing with the original
+ */
+function deepCopy<T>(value: T): T {
+	if (value instanceof Map) {
+		return new Map(
+			[...value].map(([key, entry]) => [key, deepCopy(entry)]),
+		) as T;
+	}
+	if (Array.isArray(value)) {
+		return value.map((entry: unknown) => deepCopy(entry)) as T;
+	}
+	if (value !== null && typeof value === 'object') {
+		return Object.fromEntries(
+			Object.entries(value).map(([key, entry]) => [key, deepCopy(entry)]),
+		) as T;
+	}
+	return value;
+}
+
+/**
+ * The default settings as a copy a test may edit in place.
+ *
+ * `{ ...DEFAULT_SETTINGS }` shares every Map, list and nested object with the
+ * module constant, so a settings tab writing a track's device id into it
+ * rewrote the defaults for every case that ran after it in the file.
+ * @returns Settings equal to the defaults and sharing nothing with them
+ */
+export function defaultSettings(): AudioRecorderSettings {
+	return deepCopy(DEFAULT_SETTINGS);
+}
+
+/**
+ * One track recording this machine's own output, as the settings hold it.
+ *
+ * Such a track is configured by its kind alone and carries no device id, and
+ * the suites that cover it need two of them side by side often enough that
+ * writing the literal out each time was its own small duplication.
+ * @returns The stored source of a system-audio track
+ */
+export function systemAudioTrack(): AudioSource {
+	return { deviceId: '', channelMode: 'source', kind: 'system-audio' };
+}
+
+/**
+ * Every setting set to something other than its default, so a merge that drops
+ * or overwrites any field is visible.
+ * @returns A settings object with no platform branch, as a user's stored data
+ */
+export function fullyPopulatedSettings(): Omit<
+	AudioRecorderSettings,
+	'perPlatform'
+> {
+	return {
+		recordingFormat: 'mp3',
+		saveFolder: '/recordings',
+		saveNearActiveFile: true,
+		activeFileSubfolder: 'Audio',
+		filePrefix: 'audio',
+		startStopHotkey: 'Ctrl+R',
+		pauseHotkey: 'Ctrl+P',
+		resumeHotkey: 'Ctrl+E',
+		audioDeviceId: 'test-device',
+		sampleRate: 22050,
+		recordingChannels: 'mono-left',
+		recordingBitDepth: 'float32',
+		bitrate: 64000,
+		includeSystemAudio: true,
+		enableMultiTrack: true,
+		maxTracks: 4,
+		mixAlignTrackLevels: false,
+		outputMode: 'multiple',
+		useSourceNamesForTracks: false,
+		trackAudioSources: new Map([
+			[
+				1,
+				{
+					deviceId: 'dev1',
+					channelMode: 'source' as const,
+					gainDb: 0,
+					pan: 0,
+					processing: 'voice' as const,
+					kind: 'input-device' as const,
+				},
+			],
+			[
+				2,
+				{
+					deviceId: 'dev2',
+					channelMode: 'mono-left' as const,
+					gainDb: 0,
+					pan: 0,
+					processing: 'raw' as const,
+					kind: 'system-audio' as const,
+				},
+			],
+		]),
+		debug: true,
+		showReleaseNotes: false,
+		lastReleaseNotesVersion: '2.3.1',
+		insertAtOriginalPosition: true,
+		deleteSourceAfterConversion: false,
+		conversionLinkAction: 'after',
+		autoSplitEnabled: true,
+		splitChunkMinutes: 30,
+		splitPartSuffix: 'chunk',
+		deleteSourceAfterSplit: true,
+		enhancedPlayerEnabled: true,
+		playerShowWaveform: false,
+		playerEnableMarkers: false,
+		playerSkipSeconds: 10,
+		transcriptionEnabled: true,
+		transcribeOnSave: true,
+		transcriptionShowCostEstimates: true,
+		transcriptionProvider: TRANSCRIPTION_PROVIDER_IDS.LOCAL_WHISPER,
+		transcriptionLanguage: 'ru',
+		transcriptionDiarize: true,
+		transcriptionTranslateToEnglish: true,
+		transcriptionWordTimestamps: true,
+		transcriptionAdvancedSettingsEnabled: true,
+		transcriptionAdvancedEnabled: true,
+		advancedSecondPassMinRatio: 0.7,
+		transcriptionSpeakerRenameEnabled: false,
+		transcriptionAutoChaptersEnabled: true,
+		transcriptionAutoChaptersOnTranscribe: true,
+		quickNotesEnabled: true,
+		quickNoteTranscriptionProvider: TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM,
+		transcriptionChunkMb: 10,
+		transcriptionTimeoutMinutes: 15,
+		localWhisperTimeoutMinutes: 90,
+		unconfirmedApiKeySecrets: {
+			openai: {
+				id: 'whisper-test-key',
+				key: 'sk-test',
+				device: 'test-device',
+			},
+		},
+		whisperApiBaseUrl: 'https://api.groq.com/openai/v1',
+		whisperApiKey: 'sk-test',
+		whisperApiKeySecret: 'whisper-test-key',
+		whisperApiModel: 'whisper-large-v3',
+		whisperApiModels: ['whisper-large-v3', 'whisper-1'],
+		deepgramBaseUrl: 'https://api.deepgram.com/v1',
+		deepgramApiKey: 'dg-test',
+		deepgramApiKeySecret: 'deepgram-test-key',
+		deepgramModel: 'nova-3',
+		deepgramModels: ['nova-3', 'nova-2'],
+		geminiBaseUrl: 'https://generativelanguage.googleapis.com',
+		geminiApiKey: 'gm-test',
+		geminiApiKeySecret: 'gemini-test-key',
+		geminiModel: 'gemini-2.5-flash',
+		geminiModels: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+		mistralBaseUrl: 'https://api.mistral.ai/v1',
+		mistralApiKey: 'ml-test',
+		mistralApiKeySecret: 'mistral-test-key',
+		deepSeekBaseUrl: 'https://api.deepseek.com',
+		deepSeekApiKey: 'ds-test',
+		deepSeekApiKeySecret: 'deepseek-test-key',
+		voxtralModel: 'voxtral-mini-latest',
+		voxtralModels: ['voxtral-mini-latest'],
+		localWhisperBinaryPath: '/usr/bin/whisper',
+		localWhisperModelPath: '/models/ggml.bin',
+		localWhisperExtraArgs: '-t 4',
+		transcriptDestination: 'both',
+		transcriptFileFormat: 'srt',
+		transcriptIncludeTimestamps: false,
+		transcriptTimestampLinks: false,
+		transcriptIncludeSpeakers: false,
+		transcriptMergeConsecutiveSpeaker: false,
+		transcriptTimestampFormat: '({time})',
+		transcriptSpeakerFormat: '{speaker}:',
+		transcriptLineFormat: '{speaker} {timestamp} {text}',
+		transcriptHeading: '# T',
+		llmPostProcessEnabled: true,
+		llmPostProcessTask: 'summary',
+		llmTranslateTargetLanguage: 'Spanish',
+		profiles: [
+			{ id: 'p1', kind: 'dictionary', name: 'General', body: 'Foo\nBar' },
+			{
+				id: 'c1',
+				kind: 'chapterPrompt',
+				name: 'Agenda',
+				body: 'Split by agenda item.',
+			},
+			{
+				id: 'l1',
+				kind: 'llmSummary',
+				name: 'Default',
+				body: 'summary base',
+			},
+			{
+				id: 'q1',
+				kind: 'quickNote',
+				name: 'Tidy',
+				body: 'Tidy the dictation.',
+			},
+		],
+		selectedProfileIds: {
+			participants: '',
+			dictionary: 'p1',
+			chapterPrompt: 'c1',
+			llmCleanup: '',
+			llmSummary: 'l1',
+			llmTranslate: '',
+			llmCustom: '',
+			quickNote: 'q1',
+		},
+		llmProvider: LLM_PROVIDER_IDS.ANTHROPIC,
+		chaptersLlmProvider: LLM_PROVIDER_IDS.ANTHROPIC,
+		advancedLlmProvider: LLM_PROVIDER_IDS.ANTHROPIC,
+		quickNoteLlmProvider: LLM_PROVIDER_IDS.ANTHROPIC,
+		anthropicBaseUrl: 'https://api.anthropic.com/v1',
+		anthropicApiKey: 'ak-test',
+		anthropicApiKeySecret: 'anthropic-test-key',
+		llmOpenAiModel: 'gpt-4o',
+		llmOpenAiModels: ['gpt-4o', 'gpt-4o-mini'],
+		llmAnthropicModel: 'claude-opus-4-8',
+		llmAnthropicModels: ['claude-opus-4-8', 'claude-sonnet-4-6'],
+		llmMistralModel: 'mistral-medium-latest',
+		llmMistralModels: ['mistral-medium-latest', 'mistral-small-latest'],
+		llmDeepSeekModel: 'deepseek-v4-pro',
+		llmDeepSeekModels: ['deepseek-flash', 'deepseek-v4-pro'],
+		llmOpenAiMaxTokens: 2048,
+		llmAnthropicMaxTokens: 2048,
+		geminiMaxTokens: 2048,
+		llmMistralMaxTokens: 2048,
+		llmDeepSeekMaxTokens: 2048,
+		modelSeedGeneration: MODEL_SEED_GENERATION,
+		inputNoiseSuppression: false,
+		inputEchoCancellation: false,
+		inputAutoGainControl: false,
+		showInputLevelMeter: false,
+		detectSilentChannelOnSave: false,
+		showRecordingStats: false,
+		mobileRecordingBanner: false,
+		mobileRecordingBannerPosition: RecordingBannerAnchor.BottomRight,
+		cleanupHighPassEnabled: false,
+		cleanupHighPassHz: 100,
+		cleanupNoiseGateEnabled: true,
+		cleanupNoiseGateThresholdDb: -45,
+		cleanupLevelingEnabled: true,
+		cleanupLevelingMakeupDb: 9,
+	};
+}

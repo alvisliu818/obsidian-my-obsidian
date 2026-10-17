@@ -72,6 +72,18 @@ const EXT_PRELOAD_SOURCE = await bundleVendorSource(
 );
 
 // ---------------------------------------------------------------------------
+// audio-recorder: the encoding WebWorker, bundled to an IIFE string.
+//
+// The plugin starts it via a Blob URL (workers can't be loaded from app://),
+// so like the browser scripts above it travels as source text inside the
+// bundle. Captured once at build time; editing
+// modules/audio-recorder/src/audio/encodingWorker.ts requires a rebuild.
+// ---------------------------------------------------------------------------
+const ENCODING_WORKER_SOURCE = await bundleVendorSource(
+  "modules/audio-recorder/src/audio/encodingWorker.ts",
+);
+
+// ---------------------------------------------------------------------------
 // logseq + jupyter: a PRIVATE CodeMirror copy for the code-block editor.
 //
 // `cm-bundle:` imports get their own bundled CM. Everything reachable from
@@ -219,6 +231,7 @@ const context = await esbuild.context({
     __CLIP_SOURCE__: JSON.stringify(CLIP_SOURCE),
     __PRELOAD_SOURCE__: JSON.stringify(PRELOAD_SOURCE),
     __EXT_PRELOAD_SOURCE__: JSON.stringify(EXT_PRELOAD_SOURCE),
+    __ENCODING_WORKER_SOURCE__: JSON.stringify(ENCODING_WORKER_SOURCE),
     __ADBLOCK_RULES__: JSON.stringify(
       readFileSync(`${BROWSER}/src/assets/adblock-rules.txt`, "utf8"),
     ),

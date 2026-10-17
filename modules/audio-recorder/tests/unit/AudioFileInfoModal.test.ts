@@ -1,0 +1,164 @@
+/**
+ * Unit tests for AudioFileInfoModal.
+ * @module tests/unit/AudioFileInfoModal.test
+ */
+
+import { AudioFileInfoModal } from 'src/ui/AudioFileInfoModal';
+import { at } from '../helpers/assertions';
+import type { AudioFileInfo } from 'src/utils/AudioFileAnalyzer';
+import { App } from 'obsidian';
+import { el } from '../helpers/dom';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeData(overrides: Partial<AudioFileInfo> = {}): AudioFileInfo {
+	return {
+		fileName: 'test.webm',
+		fileSize: '1.5 MB',
+		duration: '00:01:30',
+		containerFormat: 'audio/webm',
+		audioCodec: 'opus',
+		bitrate: '128 kbps',
+		sampleRate: '48000 Hz',
+		channels: '2 (Stereo)',
+		...overrides,
+	};
+}
+
+function makeModal(info: AudioFileInfo = makeData()) {
+	const app = new App();
+	const modal = new AudioFileInfoModal(app, info);
+	modal.onOpen();
+	return modal;
+}
+
+// ---------------------------------------------------------------------------
+// onOpen
+// ---------------------------------------------------------------------------
+
+describe('AudioFileInfoModal.onOpen', () => {
+	it('renders a "Copy as Markdown" button', () => {
+		const modal = makeModal();
+
+		const btn = modal.contentEl.querySelector('button');
+		expect(btn).not.toBeNull();
+		expect(btn?.textContent).toBe('Copy as Markdown');
+	});
+
+	it('renders an unordered list with expected file info', () => {
+		const modal = makeModal(makeData());
+
+		const listItems = modal.contentEl.querySelectorAll('li');
+		expect(listItems).toHaveLength(8);
+
+		expect(at(listItems, 0).textContent).toBe('File Name: test.webm');
+		expect(at(listItems, 1).textContent).toBe('File Size: 1.5 MB');
+		expect(at(listItems, 2).textContent).toBe('Duration: 00:01:30');
+		expect(at(listItems, 3).textContent).toBe(
+			'Container Format: audio/webm',
+		);
+		expect(at(listItems, 4).textContent).toBe('Audio Codec: opus');
+		expect(at(listItems, 5).textContent).toBe('Bitrate: 128 kbps');
+		expect(at(listItems, 6).textContent).toBe('Sample Rate: 48000 Hz');
+		expect(at(listItems, 7).textContent).toBe('Channels: 2 (Stereo)');
+	});
+
+	it('list element has the aar-audio-info-list CSS class', () => {
+		const modal = makeModal();
+
+		const ul = modal.contentEl.querySelector('ul');
+		expect(ul?.classList.contains('aar-audio-info-list')).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Copy button behaviour
+// ---------------------------------------------------------------------------
+
+describe('AudioFileInfoModal copy button', () => {
+	beforeEach(() => {
+		jest.useFakeTimers();
+		Object.defineProperty(global.navigator, 'clipboard', {
+			value: { writeText: jest.fn().mockResolvedValue(undefined) },
+			configurable: true,
+		});
+	});
+
+	afterEach(() => {
+		jest.useRealTimers();
+	});
+
+	it('calls clipboard.writeText with formatted Markdown on click', async () => {
+		const data = makeData();
+		const modal = makeModal(data);
+
+		const expectedMarkdown = [
+			`- **File Name:** \`${data.fileName}\``,
+			`- **File Size:** \`${data.fileSize}\``,
+			`- **Duration:** \`${data.duration}\``,
+			`- **Container Format:** \`${data.containerFormat}\``,
+			`- **Audio Codec:** \`${data.audioCodec}\``,
+			`- **Bitrate:** \`${data.bitrate}\``,
+			`- **Sample Rate:** \`${data.sampleRate}\``,
+			`- **Channels:** \`${data.channels}\``,
+		].join('\n');
+
+		const btn = modal.contentEl.querySelector(
+			'button',
+		) as HTMLButtonElement;
+		btn.click();
+		await Promise.resolve();
+
+		expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+			expectedMarkdown,
+		);
+	});
+
+	/**
+	 * Presses the copy button and lets the clipboard write settle.
+	 * @returns The button, so a test reads its state back
+	 */
+	async function pressCopy(): Promise<HTMLButtonElement> {
+		const modal = makeModal();
+		const button = el<HTMLButtonElement>(modal.contentEl, 'button');
+		button.click();
+		await Promise.resolve();
+		return button;
+	}
+
+	it.each([
+		// Both sides of the two-second revert, same as the system-info dialog:
+		// the confirmation is the only feedback a copy gives.
+		{ name: 'the moment it is pressed', afterMs: 0, copied: true },
+		{ name: 'a tick before the revert', afterMs: 1999, copied: true },
+		{ name: 'exactly on the revert', afterMs: 2000, copied: false },
+		{ name: 'well after the revert', afterMs: 5000, copied: false },
+	])('confirms the copy $name: $copied', async ({ afterMs, copied }) => {
+		const button = await pressCopy();
+
+		jest.advanceTimersByTime(afterMs);
+
+		expect(button.textContent).toBe(
+			copied ? 'Copied!' : 'Copy as Markdown',
+		);
+		expect(button.classList.contains('aar-audio-info-copied')).toBe(copied);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// onClose
+// ---------------------------------------------------------------------------
+
+describe('AudioFileInfoModal.onClose', () => {
+	it('empties contentEl on close', () => {
+		const modal = makeModal();
+
+		expect(modal.contentEl.children.length).toBeGreaterThan(0);
+
+		modal.onClose();
+
+		expect(modal.contentEl.children).toHaveLength(0);
+	});
+});

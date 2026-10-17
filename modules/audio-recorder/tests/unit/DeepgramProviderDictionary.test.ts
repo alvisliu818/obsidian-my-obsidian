@@ -1,0 +1,302 @@
+/**
+ * Tests the query the DeepgramProvider builds: the custom dictionary (keyterm
+ * for nova-3, keywords for nova-2 and older, neither when it is empty) and the
+ * per-run switches that travel beside it. The outgoing request is captured
+ * through the shared requestUrl mock (the provider has no injectable client).
+ * @module tests/unit/DeepgramProviderDictionary.test
+ */
+
+import { DeepgramProvider } from 'src/transcription/providers/DeepgramProvider';
+import { at } from '../helpers/assertions';
+import type { AudioPayload } from 'src/transcription/providers/TranscriptionProvider';
+import {
+	DEEPGRAM_KEYTERM_LIMIT,
+	DEEPGRAM_KEYTERM_TOKEN_LIMIT,
+	DEEPGRAM_KEYWORDS_LIMIT,
+	tokenUpperBound,
+} from 'src/transcription/dictionaryBias';
+// Mock-only surface: these exist on the test double, not on Obsidian's
+// API, so they are imported from the mock by path. Jest maps 'obsidian'
+// to the same module, so both imports share one instance.
+import {
+	type MockRequestUrlParam,
+	type MockRequestUrlResponse,
+} from '../mocks/obsidian';
+import { withRequestUrl } from '../helpers/network';
+
+const BASE_URL = 'https://deepgram.example';
+
+function payload(): AudioPayload {
+	return {
+		data: new ArrayBuffer(8),
+		contentType: 'audio/wav',
+		filename: 'rec.wav',
+		offsetSeconds: 0,
+	};
+}
+
+/** Records every request and returns one valid utterance. */
+function capture(): MockRequestUrlParam[] {
+	const calls: MockRequestUrlParam[] = [];
+	withRequestUrl((param): MockRequestUrlResponse => {
+		calls.push(param);
+		return {
+			status: 200,
+			headers: {},
+			text: JSON.stringify({
+				results: {
+					utterances: [{ transcript: 'hello', start: 0, end: 1 }],
+				},
+			}),
+		};
+	});
+	return calls;
+}
+
+function queryOf(calls: MockRequestUrlParam[]): URLSearchParams {
+	return new URL(at(calls, 0).url).searchParams;
+}
+
+describe('DeepgramProvider dictionary biasing', () => {
+	/** The dictionary every case-variant row below sends. */
+	const CASE_VARIANT_TERMS = ['Kubernetes', 'gRPC'];
+
+	it('sends each term as a keyterm param on nova-3', async () => {
+		const calls = capture();
+		const provider = new DeepgramProvider({
+			baseUrl: BASE_URL,
+			apiKey: 'k',
+			model: 'nova-3',
+		});
+
+		await provider.transcribe(payload(), {
+			diarize: false,
+			wordTimestamps: false,
+			dictionary: ['Kubernetes', 'gRPC'],
+		});
+
+		const params = queryOf(calls);
+		expect(params.getAll('keyterm')).toEqual(['Kubernetes', 'gRPC']);
+		expect(params.getAll('keywords')).toEqual([]);
+	});
+
+	it('sends each term as a keywords param on nova-2 and older', async () => {
+		const calls = capture();
+		const provider = new DeepgramProvider({
+			baseUrl: BASE_URL,
+			apiKey: 'k',
+			model: 'nova-2',
+		});
+
+		await provider.transcribe(payload(), {
+			diarize: false,
+			wordTimestamps: false,
+			dictionary: ['Kubernetes', 'gRPC'],
+		});
+
+		const params = queryOf(calls);
+		expect(params.getAll('keywords')).toEqual(['Kubernetes', 'gRPC']);
+		expect(params.getAll('keyterm')).toEqual([]);
+	});
+
+	it('sends no biasing param when the dictionary is empty', async () => {
+		const calls = capture();
+		const provider = new DeepgramProvider({
+			baseUrl: BASE_URL,
+			apiKey: 'k',
+			model: 'nova-3',
+		});
+
+		await provider.transcribe(payload(), {
+			diarize: false,
+			wordTimestamps: false,
+		});
+
+		const params = queryOf(calls);
+		expect(params.has('keyterm')).toBe(false);
+		expect(params.has('keywords')).toBe(false);
+	});
+
+	it('sends neither param for a hosted Whisper model that cannot bias', async () => {
+		const calls = capture();
+		const provider = new DeepgramProvider({
+			baseUrl: BASE_URL,
+			apiKey: 'k',
+			model: 'whisper-medium',
+		});
+
+		await provider.transcribe(payload(), {
+			diarize: false,
+			wordTimestamps: false,
+			dictionary: ['Kubernetes', 'gRPC'],
+		});
+
+		const params = queryOf(calls);
+		expect(params.has('keyterm')).toBe(false);
+		expect(params.has('keywords')).toBe(false);
+	});
+
+	// The model catalogue is user-editable and the add-model dialog only trims,
+	// so an id typed the way Deepgram's documentation writes it still has to
+	// reach the query param of its own generation.
+	it.each<{
+		name: string;
+		model: string;
+		keyterm: string[];
+		keywords: string[];
+	}>([
+		{
+			name: 'a capitalised Nova-3 id',
+			model: 'Nova-3',
+			keyterm: CASE_VARIANT_TERMS,
+			keywords: [],
+		},
+		{
+			name: 'an upper-cased Nova-2 id',
+			model: 'NOVA-2-MEETING',
+			keyterm: [],
+			keywords: CASE_VARIANT_TERMS,
+		},
+		{
+			name: 'a capitalised hosted Whisper id',
+			model: 'Whisper-Medium',
+			keyterm: [],
+			keywords: [],
+		},
+	])(
+		'biases $name through the param its own generation takes',
+		async ({ model, keyterm, keywords }) => {
+			const calls = capture();
+			const provider = new DeepgramProvider({
+				baseUrl: BASE_URL,
+				apiKey: 'k',
+				model,
+			});
+
+			await provider.transcribe(payload(), {
+				diarize: false,
+				wordTimestamps: false,
+				dictionary: CASE_VARIANT_TERMS,
+			});
+
+			const params = queryOf(calls);
+			expect(params.getAll('keyterm')).toEqual(keyterm);
+			expect(params.getAll('keywords')).toEqual(keywords);
+		},
+	);
+
+	it('trims keyterms to the entry and token limits on nova-3', async () => {
+		const calls = capture();
+		const provider = new DeepgramProvider({
+			baseUrl: BASE_URL,
+			apiKey: 'k',
+			model: 'nova-3',
+		});
+
+		const dictionary = Array.from(
+			{ length: 200 },
+			(_v, i) => `term-${String(i)}`,
+		);
+		await provider.transcribe(payload(), {
+			diarize: false,
+			wordTimestamps: false,
+			dictionary,
+		});
+
+		// The provider trims defensively even when handed a longer list: at most
+		// 100 keyterms and no more than the aggregate token budget Deepgram allows.
+		const keyterms = queryOf(calls).getAll('keyterm');
+		expect(keyterms.length).toBeGreaterThan(0);
+		expect(keyterms.length).toBeLessThanOrEqual(DEEPGRAM_KEYTERM_LIMIT);
+		const aggregate = keyterms.reduce(
+			(sum, term) => sum + tokenUpperBound(term),
+			0,
+		);
+		expect(aggregate).toBeLessThanOrEqual(DEEPGRAM_KEYTERM_TOKEN_LIMIT);
+	});
+
+	it('caps keywords at the provider limit on nova-2', async () => {
+		const calls = capture();
+		const provider = new DeepgramProvider({
+			baseUrl: BASE_URL,
+			apiKey: 'k',
+			model: 'nova-2',
+		});
+
+		const dictionary = Array.from(
+			{ length: DEEPGRAM_KEYWORDS_LIMIT + 30 },
+			(_v, i) => `term-${String(i)}`,
+		);
+		await provider.transcribe(payload(), {
+			diarize: false,
+			wordTimestamps: false,
+			dictionary,
+		});
+
+		expect(queryOf(calls).getAll('keywords')).toHaveLength(
+			DEEPGRAM_KEYWORDS_LIMIT,
+		);
+	});
+});
+
+describe('DeepgramProvider per-run switches', () => {
+	/** A provider on the model the switches do not depend on. */
+	function nova3(): DeepgramProvider {
+		return new DeepgramProvider({
+			baseUrl: BASE_URL,
+			apiKey: 'k',
+			model: 'nova-3',
+		});
+	}
+
+	it('asks Deepgram to diarize when the run does', async () => {
+		const calls = capture();
+
+		await nova3().transcribe(payload(), {
+			diarize: true,
+			wordTimestamps: false,
+		});
+
+		expect(queryOf(calls).get('diarize')).toBe('true');
+	});
+
+	it('leaves diarization out when the run does not', async () => {
+		const calls = capture();
+
+		await nova3().transcribe(payload(), {
+			diarize: false,
+			wordTimestamps: false,
+		});
+
+		expect(queryOf(calls).has('diarize')).toBe(false);
+	});
+
+	it('pins the language the run declared', async () => {
+		const calls = capture();
+
+		await nova3().transcribe(payload(), {
+			diarize: false,
+			wordTimestamps: false,
+			language: 'de',
+		});
+
+		const params = queryOf(calls);
+		expect(params.get('language')).toBe('de');
+		// Pinning and detecting are exclusive: sending both lets Deepgram
+		// override the language the user chose.
+		expect(params.has('detect_language')).toBe(false);
+	});
+
+	it('asks Deepgram to detect the language when the run declared none', async () => {
+		const calls = capture();
+
+		await nova3().transcribe(payload(), {
+			diarize: false,
+			wordTimestamps: false,
+		});
+
+		const params = queryOf(calls);
+		expect(params.get('detect_language')).toBe('true');
+		expect(params.has('language')).toBe(false);
+	});
+});

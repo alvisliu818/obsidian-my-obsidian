@@ -1,0 +1,493 @@
+/**
+ * Tests for the pure marker / chapter data model.
+ */
+
+import {
+	activeMarkerIndex,
+	addMarker,
+	chapters,
+	markerRows,
+	chapterSpan,
+	nextChapterTime,
+	parseMarkers,
+	previousChapterTime,
+	removeMarker,
+	serializeMarkers,
+	sortMarkers,
+	updateMarker,
+	isMarkerColor,
+	MarkerColor,
+	type PlayerMarker,
+} from 'src/markers/markerModel';
+
+function marker(
+	id: string,
+	time: number,
+	kind: PlayerMarker['kind'] = 'bookmark',
+	label = id,
+): PlayerMarker {
+	return { id, time, label, kind };
+}
+
+describe('sortMarkers / addMarker', () => {
+	it('keeps markers sorted by time', () => {
+		const list = addMarker(addMarker([], marker('b', 30)), marker('a', 10));
+		expect(list.map((m) => m.id)).toEqual(['a', 'b']);
+	});
+
+	it('does not mutate the input array', () => {
+		const input = [marker('a', 10)];
+		const result = addMarker(input, marker('b', 5));
+		expect(input).toHaveLength(1);
+		expect(result).toHaveLength(2);
+	});
+});
+
+describe('removeMarker / updateMarker', () => {
+	it('removes by id', () => {
+		const list = [marker('a', 1), marker('b', 2)];
+		expect(removeMarker(list, 'a').map((m) => m.id)).toEqual(['b']);
+	});
+
+	it('updates a label without reordering equal-kind markers', () => {
+		const list = [marker('a', 1), marker('b', 2)];
+		const updated = updateMarker(list, 'a', { label: 'renamed' });
+		expect(updated.find((m) => m.id === 'a')?.label).toBe('renamed');
+	});
+
+	it('re-sorts when the time changes', () => {
+		const list = [marker('a', 1), marker('b', 2)];
+		const updated = updateMarker(list, 'a', { time: 5 });
+		expect(updated.map((m) => m.id)).toEqual(['b', 'a']);
+	});
+});
+
+describe('chapters', () => {
+	it('returns only the chapters, time-sorted', () => {
+		const list = [
+			marker('c2', 40, 'chapter'),
+			marker('b2', 30, 'bookmark'),
+			marker('c1', 10, 'chapter'),
+			marker('b1', 5, 'bookmark'),
+		];
+		expect(chapters(list).map((m) => m.id)).toEqual(['c1', 'c2']);
+	});
+});
+
+describe('chapter navigation', () => {
+	const sorted = sortMarkers([
+		marker('c1', 0, 'chapter'),
+		marker('c2', 60, 'chapter'),
+		marker('c3', 120, 'chapter'),
+	]);
+
+	it('finds the next chapter time', () => {
+		expect(nextChapterTime(sorted, 0)).toBe(60);
+		expect(nextChapterTime(sorted, 70)).toBe(120);
+		expect(nextChapterTime(sorted, 120)).toBeNull();
+	});
+
+	it('finds the previous chapter time with a lead-in window', () => {
+		// Just after c2 (60), within the lead-in: jumps back to c1
+		expect(previousChapterTime(sorted, 61)).toBe(0);
+		// Well into c3 (120), past the lead-in: restarts the current
+		// chapter at 120
+		expect(previousChapterTime(sorted, 130)).toBe(120);
+		// Within the lead-in of c3: jumps to the previous chapter c2
+		expect(previousChapterTime(sorted, 121)).toBe(60);
+		// Before any boundary past the lead-in: null
+		expect(previousChapterTime(sorted, 1)).toBeNull();
+	});
+});
+
+describe('the stretch one chapter covers', () => {
+	const sorted = sortMarkers([
+		marker('c1', 0, 'chapter'),
+		marker('c2', 60, 'chapter'),
+		marker('c3', 120, 'chapter'),
+	]);
+
+	it.each([
+		{ where: 'at its start', time: 60 },
+		{ where: 'inside it', time: 90 },
+		{ where: 'a hair before its end', time: 119.9 },
+	])('spans the chapter from a position $where', ({ time }) => {
+		expect(chapterSpan(sorted, time)).toEqual({ start: 60, end: 120 });
+	});
+
+	it('leaves the last chapter open-ended, since the recording ends it', () => {
+		expect(chapterSpan(sorted, 200)).toEqual({ start: 120, end: null });
+	});
+
+	it.each([
+		{
+			case: 'a position before the first chapter',
+			list: sortMarkers([marker('c1', 30, 'chapter')]),
+			time: 10,
+		},
+		{ case: 'a recording with no chapters', list: [], time: 10 },
+	])('covers nothing for $case', ({ list, time }) => {
+		expect(chapterSpan(list, time)).toBeNull();
+	});
+});
+
+describe('serializeMarkers / parseMarkers', () => {
+	it('round-trips valid markers', () => {
+		const list = [marker('a', 1, 'bookmark'), marker('c', 2, 'chapter')];
+		expect(parseMarkers(serializeMarkers(list))).toEqual(sortMarkers(list));
+	});
+
+	it('drops malformed entries and non-arrays', () => {
+		expect(parseMarkers('nope')).toEqual([]);
+		expect(parseMarkers([{ time: 'x' }, null, 5])).toEqual([]);
+		expect(parseMarkers([{ id: 'a', time: 10, kind: 'invalid' }])).toEqual(
+			[],
+		);
+	});
+
+	it('clamps negative times and defaults a missing label', () => {
+		const parsed = parseMarkers([{ id: 'a', time: -5, kind: 'bookmark' }]);
+		expect(parsed).toEqual([
+			{ id: 'a', time: 0, label: '', kind: 'bookmark' },
+		]);
+	});
+});
+
+describe('markerModel - edge and negative cases', () => {
+	it('sortMarkers is stable for equal times', () => {
+		const list = [marker('a', 5), marker('b', 5), marker('c', 5)];
+		expect(sortMarkers(list).map((m) => m.id)).toEqual(['a', 'b', 'c']);
+	});
+
+	it('addMarker keeps a single merged list sorted across kinds', () => {
+		let list: PlayerMarker[] = [];
+		list = addMarker(list, marker('c', 20, 'chapter'));
+		list = addMarker(list, marker('b', 5, 'bookmark'));
+		list = addMarker(list, marker('a', 1, 'chapter'));
+		expect(list.map((m) => m.id)).toEqual(['a', 'b', 'c']);
+	});
+
+	it('removeMarker on a missing id returns the list unchanged', () => {
+		const list = [marker('a', 1)];
+		expect(removeMarker(list, 'missing')).toEqual(list);
+	});
+
+	it('updateMarker on a missing id is a no-op', () => {
+		const list = [marker('a', 1)];
+		expect(updateMarker(list, 'missing', { label: 'x' })).toEqual(list);
+	});
+
+	it('nextChapterTime returns null at or past the last chapter', () => {
+		const sorted = sortMarkers([marker('c1', 10, 'chapter')]);
+		expect(nextChapterTime(sorted, 10)).toBeNull();
+		expect(nextChapterTime([], 0)).toBeNull();
+	});
+
+	it('previousChapterTime returns null before the first chapter', () => {
+		const sorted = sortMarkers([marker('c1', 30, 'chapter')]);
+		expect(previousChapterTime(sorted, 5)).toBeNull();
+		expect(previousChapterTime([], 5)).toBeNull();
+	});
+
+	it.each([
+		{
+			name: 'a time that is not a number',
+			entry: { id: 'a', time: Number.NaN, kind: 'bookmark' },
+		},
+		{
+			name: 'a time that is infinite',
+			entry: { id: 'b', time: Number.POSITIVE_INFINITY, kind: 'chapter' },
+		},
+		{ name: 'no time at all', entry: { id: 'c', kind: 'bookmark' } },
+		{ name: 'no id', entry: { time: 1, kind: 'bookmark' } },
+		{
+			name: 'an id that is not a string',
+			entry: { id: 5, time: 1, kind: 'bookmark' },
+		},
+		{
+			name: 'a kind nothing renders',
+			entry: { id: 'd', time: 1, kind: 'segment' },
+		},
+		// The remaining shapes a hand-edited or older sidecar can hold:
+		// nothing at all where an entry should be, a negative offset the
+		// player cannot seek to, and an empty id, which is falsy and would
+		// slip past a bare truthiness check on the id.
+		{ name: 'nothing where an entry should be', entry: null },
+		{ name: 'a primitive instead of an entry', entry: 'marker' },
+	])('parseMarkers drops an entry with $name', ({ entry }) => {
+		// A sidecar can be hand-edited or written by an older version; an
+		// unusable marker has to be dropped rather than crash the player.
+		expect(parseMarkers([entry])).toEqual([]);
+	});
+
+	it.each([
+		// The two boundary offsets a sidecar can hold that are recoverable
+		// rather than unusable: a negative one clamps to the start of the
+		// recording, and zero is a real offset, not a missing one.
+		{ name: 'a negative time', time: -1, expected: 0 },
+		{ name: 'a time of exactly zero', time: 0, expected: 0 },
+		{ name: 'a fractional time', time: 0.5, expected: 0.5 },
+	])('parseMarkers clamps $name to $expected', ({ time, expected }) => {
+		expect(parseMarkers([{ id: 'a', time, kind: 'bookmark' }])).toEqual([
+			{ id: 'a', time: expected, label: '', kind: 'bookmark' },
+		]);
+	});
+
+	it('parseMarkers keeps an entry whose id is the empty string', () => {
+		// Not dropped: the id check is a type check, and an empty id still
+		// sorts and renders. It is unaddressable by id, which is why the
+		// factory never mints one - this pins what a hand-edited sidecar
+		// carrying one actually does.
+		expect(
+			parseMarkers([{ id: '', time: 1, kind: 'bookmark' }]),
+		).toHaveLength(1);
+	});
+
+	it('parseMarkers coerces a non-string label to an empty string', () => {
+		const parsed = parseMarkers([
+			{ id: 'a', time: 1, kind: 'chapter', label: 42 },
+		]);
+		expect(parsed[0]?.label).toBe('');
+	});
+
+	it('parseMarkers keeps both kinds and rejects unknown kinds', () => {
+		const parsed = parseMarkers([
+			{ id: 'a', time: 1, kind: 'bookmark' },
+			{ id: 'b', time: 2, kind: 'chapter' },
+			{ id: 'c', time: 3, kind: 'segment' },
+		]);
+		expect(parsed.map((m) => m.id)).toEqual(['a', 'b']);
+	});
+
+	it('serializeMarkers strips unknown fields', () => {
+		const list = [
+			{ id: 'a', time: 1, label: 'A', kind: 'bookmark', extra: true },
+		] as unknown as PlayerMarker[];
+		expect(serializeMarkers(list)[0]).toEqual({
+			id: 'a',
+			time: 1,
+			label: 'A',
+			kind: 'bookmark',
+		});
+	});
+});
+
+describe('markerRows - single source for both render modes', () => {
+	it('returns one list ordered by time regardless of kind', () => {
+		const list = [
+			marker('c', 30, 'chapter'),
+			marker('b', 10, 'bookmark'),
+			marker('a', 5, 'chapter'),
+		];
+		expect(markerRows(list, true).map((r) => r.id)).toEqual([
+			'a',
+			'b',
+			'c',
+		]);
+		expect(markerRows(list, false).map((r) => r.id)).toEqual([
+			'a',
+			'b',
+			'c',
+		]);
+	});
+
+	it('shows the same markers in both modes, differing only by actions', () => {
+		const list = [marker('a', 1, 'bookmark'), marker('b', 2, 'chapter')];
+		const editable = markerRows(list, true);
+		const readonly = markerRows(list, false);
+		expect(editable.map((r) => r.id)).toEqual(readonly.map((r) => r.id));
+		expect(editable[0]?.actions).toEqual([
+			'jump',
+			'rename',
+			'delete',
+			'edit-time',
+			'use-current-time',
+			'edit-note',
+			'set-color',
+		]);
+		expect(readonly[0]?.actions).toEqual(['jump']);
+	});
+
+	it('returns an empty list for no markers', () => {
+		expect(markerRows([], true)).toEqual([]);
+		expect(markerRows([], false)).toEqual([]);
+	});
+
+	it('carries each marker time, label, and kind', () => {
+		const rows = markerRows([marker('a', 7, 'chapter', 'Intro')], false);
+		expect(rows[0]).toEqual({
+			id: 'a',
+			time: 7,
+			label: 'Intro',
+			kind: 'chapter',
+			actions: ['jump'],
+			segmentSeconds: null,
+		});
+	});
+
+	it('computes each segment length as the gap to the next marker', () => {
+		const rows = markerRows(
+			[marker('a', 0), marker('b', 5), marker('c', 12)],
+			false,
+		);
+		expect(rows.map((r) => r.segmentSeconds)).toEqual([5, 7, null]);
+	});
+
+	it('uses the track duration for the last segment when provided', () => {
+		const rows = markerRows([marker('a', 0), marker('b', 5)], false, 20);
+		expect(rows.map((r) => r.segmentSeconds)).toEqual([5, 15]);
+	});
+
+	it('leaves the last segment null when the duration is before the marker', () => {
+		const rows = markerRows([marker('a', 30)], false, 10);
+		expect(rows[0]?.segmentSeconds).toBeNull();
+	});
+});
+
+describe('activeMarkerIndex', () => {
+	const sorted = sortMarkers([
+		marker('a', 0),
+		marker('b', 5),
+		marker('c', 12),
+	]);
+
+	it('returns the last marker at or before the time', () => {
+		expect(activeMarkerIndex(sorted, 0)).toBe(0);
+		expect(activeMarkerIndex(sorted, 4)).toBe(0);
+		expect(activeMarkerIndex(sorted, 5)).toBe(1);
+		expect(activeMarkerIndex(sorted, 100)).toBe(2);
+	});
+
+	it('returns -1 before the first marker or for an empty list', () => {
+		const later = sortMarkers([marker('a', 3)]);
+		expect(activeMarkerIndex(later, 1)).toBe(-1);
+		expect(activeMarkerIndex([], 5)).toBe(-1);
+	});
+});
+
+describe('editing a marker time', () => {
+	it('moves the marker and re-sorts the list around it', () => {
+		const list = [marker('a', 1), marker('b', 2), marker('c', 3)];
+
+		const moved = updateMarker(list, 'a', { time: 2.5 });
+
+		expect(moved.map((m) => m.id)).toEqual(['b', 'a', 'c']);
+		expect(moved.find((m) => m.id === 'a')?.time).toBe(2.5);
+	});
+
+	it('recomputes the segment length of the marker before the moved one', () => {
+		const list = [marker('a', 0), marker('b', 10), marker('c', 30)];
+
+		const rows = markerRows(
+			updateMarker(list, 'b', { time: 20 }),
+			false,
+			40,
+		);
+
+		expect(rows.map((row) => row.segmentSeconds)).toEqual([20, 10, 10]);
+	});
+
+	it('leaves every other field of the moved marker alone', () => {
+		const list = [
+			{ ...marker('a', 1), note: 'why', color: 'red' as const },
+		];
+
+		const [moved] = updateMarker(list, 'a', { time: 9 });
+
+		expect(moved).toEqual({
+			id: 'a',
+			time: 9,
+			label: 'a',
+			kind: 'bookmark',
+			note: 'why',
+			color: 'red',
+		});
+	});
+});
+
+describe('a marker note and colour', () => {
+	it('round-trips both through storage', () => {
+		const list = [
+			{
+				...marker('a', 1),
+				note: 'the bit about pricing',
+				color: 'blue' as const,
+			},
+		];
+
+		expect(parseMarkers(serializeMarkers(list))).toEqual(list);
+	});
+
+	it('reads a marker written before either field existed', () => {
+		const parsed = parseMarkers([
+			{ id: 'a', time: 4, label: 'old', kind: 'chapter' },
+		]);
+
+		// No key appears that the file did not carry, so writing the marker
+		// back produces the same JSON an older version would have written.
+		expect(parsed).toEqual([
+			{ id: 'a', time: 4, label: 'old', kind: 'chapter' },
+		]);
+		expect(serializeMarkers(parsed)).toEqual([
+			{ id: 'a', time: 4, label: 'old', kind: 'chapter' },
+		]);
+	});
+
+	it.each([
+		{ name: 'a colour it does not offer', value: 'chartreuse' },
+		{ name: 'a number', value: 7 },
+		{ name: 'an object', value: {} },
+	])('drops $name rather than storing it', ({ value }) => {
+		const parsed = parseMarkers([
+			{ id: 'a', time: 0, label: '', kind: 'bookmark', color: value },
+		]);
+
+		expect(parsed[0]).not.toHaveProperty('color');
+	});
+
+	// A note of only spaces read from a hand-edited sidecar showed as an empty
+	// line under its row in reading view.
+	it.each([
+		{ name: 'an empty note', note: '' },
+		{ name: 'a note of only whitespace', note: ' \n ' },
+	])('drops $name instead of keeping an empty field', ({ note }) => {
+		const parsed = parseMarkers([
+			{ id: 'a', time: 0, label: '', kind: 'bookmark', note },
+		]);
+
+		expect(parsed[0]).not.toHaveProperty('note');
+	});
+
+	it('clears a note when the patch names it undefined', () => {
+		const list = [{ ...marker('a', 1), note: 'gone soon' }];
+
+		const [cleared] = updateMarker(list, 'a', { note: undefined });
+
+		expect(cleared).not.toHaveProperty('note');
+	});
+
+	it('clears a colour when the patch names it undefined', () => {
+		const list = [{ ...marker('a', 1), color: 'green' as const }];
+
+		const [cleared] = updateMarker(list, 'a', { color: undefined });
+
+		expect(cleared).not.toHaveProperty('color');
+	});
+
+	it.each(Object.values(MarkerColor).map((color) => ({ color })))(
+		'accepts $color as one of the offered colours',
+		({ color }) => {
+			expect(isMarkerColor(color)).toBe(true);
+		},
+	);
+
+	it('carries both fields onto the row the list renders', () => {
+		const list = [
+			{ ...marker('a', 1), note: 'context', color: 'purple' as const },
+		];
+
+		const [row] = markerRows(list, true);
+
+		expect(row).toMatchObject({ note: 'context', color: 'purple' });
+	});
+});

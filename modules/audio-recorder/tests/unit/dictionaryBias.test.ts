@@ -1,0 +1,499 @@
+/**
+ * Tests the dictionary biasing planner: the single place that decides which
+ * terms each engine actually sends and which are dropped. It covers Deepgram's
+ * per-model mechanism (keyterm for Nova-3, keywords for Nova-2 and older, none
+ * for the hosted Whisper models), the Deepgram keyterm entry and aggregate
+ * token limits, the Deepgram keywords entry limit, and the Whisper prompt token
+ * window shared by the OpenAI API and local whisper.cpp.
+ * @module tests/unit/dictionaryBias.test
+ */
+
+import {
+	DEEPGRAM_KEYTERM_LIMIT,
+	DEEPGRAM_KEYTERM_TOKEN_LIMIT,
+	DEEPGRAM_KEYWORDS_LIMIT,
+	VOXTRAL_CONTEXT_BIAS_LIMIT,
+	WHISPER_PROMPT_TOKEN_LIMIT,
+	deepgramBiasMechanism,
+	describeDictionaryOmission,
+	termsWithinWhisperPrompt,
+	tokenUpperBound,
+	termsWithinVoxtralContextBias,
+	voxtralContextBiasTerms,
+} from 'src/transcription/dictionaryBias';
+import type {
+	DeepgramBiasMechanism,
+	DictionaryBiasPlan,
+} from 'src/transcription/dictionaryBias';
+import { planDictionaryBias } from 'src/transcription/providers/engines';
+import { TRANSCRIPTION_PROVIDER_IDS } from 'src/constants';
+import { EngineLabel } from 'src/providers/providers';
+
+/** Builds n unique terms, wide enough to blow past the prompt window. */
+function manyTerms(n: number): string[] {
+	return Array.from({ length: n }, (_v, i) => `Kubernetes-${String(i)}`);
+}
+
+/** Builds n very short terms so an entry count limit bites before a token one. */
+function shortTerms(n: number): string[] {
+	return Array.from({ length: n }, (_v, i) => `t${String(i)}`);
+}
+
+/** Builds n long multi-word terms so the keyterm token budget bites first. */
+function longTerms(n: number): string[] {
+	return Array.from(
+		{ length: n },
+		(_v, i) => `Distributed systems consensus protocol term ${String(i)}`,
+	);
+}
+
+describe('deepgramBiasMechanism', () => {
+	it('uses keyterm for the Nova-3 family', () => {
+		expect(deepgramBiasMechanism('nova-3')).toBe('keyterm');
+		expect(deepgramBiasMechanism('nova-3-general')).toBe('keyterm');
+		expect(deepgramBiasMechanism('nova-3-medical')).toBe('keyterm');
+	});
+
+	it('uses keywords for Nova-2, Nova, Enhanced, and Base', () => {
+		expect(deepgramBiasMechanism('nova-2')).toBe('keywords');
+		expect(deepgramBiasMechanism('nova-2-meeting')).toBe('keywords');
+		expect(deepgramBiasMechanism('nova')).toBe('keywords');
+		expect(deepgramBiasMechanism('enhanced-phonecall')).toBe('keywords');
+		expect(deepgramBiasMechanism('base')).toBe('keywords');
+	});
+
+	it('reports no mechanism for the hosted Whisper models', () => {
+		expect(deepgramBiasMechanism('whisper')).toBeNull();
+		expect(deepgramBiasMechanism('whisper-medium')).toBeNull();
+	});
+
+	// A model id arrives as the user typed it into the add-model dialog, which
+	// only trims, so a family has to be recognised whatever case the vendor's
+	// documentation spelled it in. Reading `Nova-3` as an older generation
+	// sends the dictionary under the wrong query param and trims it by the cap
+	// of a mechanism the model does not use.
+	it.each<{ name: string; model: string; mechanism: DeepgramBiasMechanism }>([
+		{ name: 'Nova-3 capitalised', model: 'Nova-3', mechanism: 'keyterm' },
+		{
+			name: 'a Nova-3 variant in upper case',
+			model: 'NOVA-3-MEDICAL',
+			mechanism: 'keyterm',
+		},
+		{
+			name: 'a Nova-2 variant in mixed case',
+			model: 'Nova-2-Meeting',
+			mechanism: 'keywords',
+		},
+		{
+			name: 'Enhanced in mixed case',
+			model: 'Enhanced-PhoneCall',
+			mechanism: 'keywords',
+		},
+		{ name: 'Base in upper case', model: 'BASE', mechanism: 'keywords' },
+		{
+			name: 'hosted Whisper capitalised',
+			model: 'Whisper',
+			mechanism: null,
+		},
+		{
+			name: 'a hosted Whisper size in upper case',
+			model: 'WHISPER-MEDIUM',
+			mechanism: null,
+		},
+	])(
+		'gives $name the mechanism of its lower-case spelling',
+		({ model, mechanism }) => {
+			expect(deepgramBiasMechanism(model)).toBe(mechanism);
+			expect(deepgramBiasMechanism(model.toLowerCase())).toBe(mechanism);
+		},
+	);
+});
+
+describe('tokenUpperBound', () => {
+	it('counts UTF-8 bytes so it never undershoots the real token count', () => {
+		expect(tokenUpperBound('')).toBe(0);
+		expect(tokenUpperBound('abcd')).toBe(4);
+	});
+
+	it('counts multi-byte scripts by byte length, not character count', () => {
+		// Each Cyrillic code point is two UTF-8 bytes, so a four-character term
+		// is eight bytes; a chars/4 average would have reported just one token.
+		expect(tokenUpperBound('тест')).toBe(8);
+	});
+});
+
+describe('termsWithinWhisperPrompt', () => {
+	it('keeps a short list intact', () => {
+		expect(termsWithinWhisperPrompt(['Kubernetes', 'gRPC'])).toEqual([
+			'Kubernetes',
+			'gRPC',
+		]);
+	});
+
+	it('stops before the joined prompt exceeds the token window', () => {
+		const applied = termsWithinWhisperPrompt(manyTerms(400));
+		expect(applied.length).toBeLessThan(400);
+		expect(tokenUpperBound(applied.join(', '))).toBeLessThanOrEqual(
+			WHISPER_PROMPT_TOKEN_LIMIT,
+		);
+	});
+
+	it('bounds a non-Latin dictionary by its real byte length', () => {
+		// Cyrillic terms cost about two bytes per character, so a modest count
+		// still overflows the 224-token window; the chars/4 average undershot it.
+		const terms = Array.from(
+			{ length: 80 },
+			(_v, i) => `Термин${String(i)}`,
+		);
+		const applied = termsWithinWhisperPrompt(terms);
+		expect(applied.length).toBeLessThan(terms.length);
+		expect(tokenUpperBound(applied.join(', '))).toBeLessThanOrEqual(
+			WHISPER_PROMPT_TOKEN_LIMIT,
+		);
+	});
+});
+
+describe('planDictionaryBias', () => {
+	const terms = ['Kubernetes', 'gRPC'];
+
+	it('drops everything for an empty dictionary', () => {
+		const plan = planDictionaryBias(
+			TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM,
+			'nova-3',
+			[],
+		);
+		expect(plan.applied).toEqual([]);
+		expect(plan.omitted).toEqual([]);
+	});
+
+	it('passes terms through for Deepgram Nova-3 within the limit', () => {
+		const plan = planDictionaryBias(
+			TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM,
+			'nova-3',
+			terms,
+		);
+		expect(plan.applied).toEqual(terms);
+		expect(plan.omitted).toEqual([]);
+		expect(plan.reason).toBeUndefined();
+	});
+
+	it('caps Deepgram Nova-3 keyterms at the entry limit', () => {
+		// Short terms stay well under the aggregate token budget, so the entry
+		// count is the bound that bites.
+		const input = shortTerms(DEEPGRAM_KEYTERM_LIMIT + 25);
+		const plan = planDictionaryBias(
+			TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM,
+			'nova-3',
+			input,
+		);
+		expect(plan.applied).toHaveLength(DEEPGRAM_KEYTERM_LIMIT);
+		expect(plan.omitted).toHaveLength(25);
+		expect(plan.reason).toBe('keyterm-limit');
+	});
+
+	it('caps Deepgram Nova-3 keyterms at the aggregate token budget', () => {
+		// A few dozen long multi-word terms breach the 500-token aggregate well
+		// before the 100-entry count, so the token budget is the binding limit.
+		const input = longTerms(60);
+		const plan = planDictionaryBias(
+			TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM,
+			'nova-3',
+			input,
+		);
+		expect(plan.applied.length).toBeGreaterThan(0);
+		expect(plan.applied.length).toBeLessThan(DEEPGRAM_KEYTERM_LIMIT);
+		expect(plan.omitted.length).toBeGreaterThan(0);
+		expect(plan.reason).toBe('keyterm-token-budget');
+		const aggregate = plan.applied.reduce(
+			(sum, term) => sum + tokenUpperBound(term),
+			0,
+		);
+		expect(aggregate).toBeLessThanOrEqual(DEEPGRAM_KEYTERM_TOKEN_LIMIT);
+	});
+
+	it('passes a short list through for a Deepgram keywords model', () => {
+		const input = manyTerms(DEEPGRAM_KEYWORDS_LIMIT - 1);
+		const plan = planDictionaryBias(
+			TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM,
+			'nova-2',
+			input,
+		);
+
+		expect(plan.applied).toEqual(input);
+		expect(plan.omitted).toEqual([]);
+		expect(plan).not.toHaveProperty('reason');
+	});
+
+	it('caps Deepgram keywords models at the entry limit', () => {
+		const input = manyTerms(DEEPGRAM_KEYWORDS_LIMIT + 25);
+		const plan = planDictionaryBias(
+			TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM,
+			'nova-2',
+			input,
+		);
+		expect(plan.applied).toHaveLength(DEEPGRAM_KEYWORDS_LIMIT);
+		expect(plan.omitted).toHaveLength(25);
+		expect(plan.reason).toBe('keywords-limit');
+	});
+
+	it('plans a capitalised Nova-3 id by the keyterm cap, not the keywords one', () => {
+		// Both mechanisms cap at 100 entries today, so the reason is what tells
+		// them apart: it names the limit the user is shown and the rule the
+		// terms were actually trimmed by.
+		const plan = planDictionaryBias(
+			TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM,
+			'Nova-3',
+			shortTerms(DEEPGRAM_KEYTERM_LIMIT + 25),
+		);
+
+		expect(plan.applied).toHaveLength(DEEPGRAM_KEYTERM_LIMIT);
+		expect(plan.reason).toBe('keyterm-limit');
+	});
+
+	it('drops the whole dictionary for a Deepgram Whisper model', () => {
+		const plan = planDictionaryBias(
+			TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM,
+			'whisper-medium',
+			terms,
+		);
+		expect(plan.applied).toEqual([]);
+		expect(plan.omitted).toEqual(terms);
+		expect(plan.reason).toBe('model-unsupported');
+	});
+
+	it('bounds the Whisper API dictionary to the prompt window', () => {
+		const input = manyTerms(400);
+		const plan = planDictionaryBias(
+			TRANSCRIPTION_PROVIDER_IDS.WHISPER_API,
+			'nova-3',
+			input,
+		);
+		expect(plan.applied.length).toBeLessThan(input.length);
+		expect(plan.omitted.length).toBeGreaterThan(0);
+		expect(plan.reason).toBe('prompt-window');
+		expect(plan.applied.length + plan.omitted.length).toBe(input.length);
+	});
+
+	it('bounds local whisper.cpp the same way as the Whisper API', () => {
+		const input = manyTerms(400);
+		const plan = planDictionaryBias(
+			TRANSCRIPTION_PROVIDER_IDS.LOCAL_WHISPER,
+			'nova-3',
+			input,
+		);
+		expect(plan.reason).toBe('prompt-window');
+		expect(tokenUpperBound(plan.applied.join(', '))).toBeLessThanOrEqual(
+			WHISPER_PROMPT_TOKEN_LIMIT,
+		);
+	});
+
+	/**
+	 * The Voxtral plan for a term list.
+	 *
+	 * The model argument is the configured Deepgram model, because that is what
+	 * the service hands every engine: a Voxtral plan that read it would be
+	 * reading another engine's setting, and this one does not.
+	 * @param terms - The dictionary as the user typed it
+	 * @returns What the run would send and what it would leave out
+	 */
+	const voxtralPlan = (terms: string[]): DictionaryBiasPlan =>
+		planDictionaryBias(TRANSCRIPTION_PROVIDER_IDS.VOXTRAL, 'nova-3', terms);
+
+	it('caps Voxtral at the context bias entry limit', () => {
+		const overBy = 12;
+		const input = shortTerms(VOXTRAL_CONTEXT_BIAS_LIMIT + overBy);
+
+		const plan = voxtralPlan(input);
+
+		expect(plan.applied).toHaveLength(VOXTRAL_CONTEXT_BIAS_LIMIT);
+		expect(plan.omitted).toHaveLength(overBy);
+		expect(plan.reason).toBe('context-bias-limit');
+	});
+
+	it('counts Voxtral entries on the wire, not terms in the list', () => {
+		// Two terms differing only in spacing become one context_bias entry,
+		// so a list one over the cap still fits. Counting raw terms reported
+		// an omission the request never made, and named a number of terms
+		// sent that was never the number of entries carried.
+		const collapsing = ['health care', 'health  care'];
+		const input = [
+			...collapsing,
+			...shortTerms(VOXTRAL_CONTEXT_BIAS_LIMIT - 1),
+		];
+		expect(input).toHaveLength(VOXTRAL_CONTEXT_BIAS_LIMIT + 1);
+
+		const plan = voxtralPlan(input);
+
+		expect(plan.applied).toEqual(input);
+		expect(plan.omitted).toEqual([]);
+		expect(plan.reason).toBeUndefined();
+		expect(voxtralContextBiasTerms(plan.applied)).toHaveLength(
+			VOXTRAL_CONTEXT_BIAS_LIMIT,
+		);
+	});
+
+	it('sends every Voxtral term that fits the entry limit', () => {
+		const input = shortTerms(VOXTRAL_CONTEXT_BIAS_LIMIT);
+
+		const plan = voxtralPlan(input);
+
+		expect(plan.applied).toEqual(input);
+		expect(plan.omitted).toEqual([]);
+		expect(plan.reason).toBeUndefined();
+	});
+
+	it('sends every term for Gemini (no hard cap)', () => {
+		const input = manyTerms(400);
+		const plan = planDictionaryBias(
+			TRANSCRIPTION_PROVIDER_IDS.GEMINI,
+			'nova-3',
+			input,
+		);
+		expect(plan.applied).toEqual(input);
+		expect(plan.omitted).toEqual([]);
+	});
+});
+
+describe('voxtralContextBiasTerms', () => {
+	it('collapses two terms that differ only in spacing', () => {
+		// Joining the words is what makes them the same entry, so the
+		// de-duplication has to run after the encoding rather than before it.
+		expect(
+			voxtralContextBiasTerms(['health  care', 'health care', 'gRPC']),
+		).toEqual(['health_care', 'gRPC']);
+	});
+
+	it('drops a term that encodes to nothing', () => {
+		expect(voxtralContextBiasTerms(['  ', ','])).toEqual([]);
+	});
+
+	it('keeps the underscores a term carries on purpose', () => {
+		// Only an entry that is nothing but separators is dropped. Trimming
+		// them off every entry instead rewrote a glossary term that spells
+		// itself with them, while the notice still showed the user the
+		// spelling they typed.
+		expect(voxtralContextBiasTerms(['__init__', '_id'])).toEqual([
+			'__init__',
+			'_id',
+		]);
+	});
+
+	it('changes nothing on a list it has already encoded', () => {
+		// Applied once by the provider and possibly again on a list the
+		// service already bounded, so it has to be idempotent.
+		const once = voxtralContextBiasTerms(['affordable health care']);
+
+		expect(voxtralContextBiasTerms(once)).toEqual(once);
+	});
+});
+
+describe('termsWithinVoxtralContextBias', () => {
+	it('keeps a term that costs no new entry', () => {
+		// The entry already on the list biases recognition toward the second
+		// spelling too, so dropping it would report a loss that did not happen.
+		expect(
+			termsWithinVoxtralContextBias(['health care', 'health  care']),
+		).toEqual(['health care', 'health  care']);
+	});
+
+	it('keeps a term that encodes to no entry at all', () => {
+		// It spends none of the hundred, so the cap is not what left it out
+		// and the omission notice must not claim it was.
+		expect(termsWithinVoxtralContextBias([',', 'gRPC'])).toEqual([
+			',',
+			'gRPC',
+		]);
+	});
+
+	it('stops at the term that would need entry one over the cap', () => {
+		const input = shortTerms(VOXTRAL_CONTEXT_BIAS_LIMIT + 3);
+
+		expect(termsWithinVoxtralContextBias(input)).toEqual(
+			input.slice(0, VOXTRAL_CONTEXT_BIAS_LIMIT),
+		);
+	});
+
+	it('changes nothing on a list it has already bounded', () => {
+		// The service bounds the dictionary and the provider re-applies the
+		// wire encoding to it, so a second pass over the result has to agree.
+		const once = termsWithinVoxtralContextBias(
+			shortTerms(VOXTRAL_CONTEXT_BIAS_LIMIT + 3),
+		);
+
+		expect(termsWithinVoxtralContextBias(once)).toEqual(once);
+	});
+});
+
+describe('describeDictionaryOmission', () => {
+	it('is null when nothing was dropped', () => {
+		expect(
+			describeDictionaryOmission({ applied: ['a'], omitted: [] }),
+		).toBeNull();
+	});
+
+	it('names the Deepgram model when biasing is unsupported', () => {
+		const message = describeDictionaryOmission({
+			applied: [],
+			omitted: ['a', 'b'],
+			reason: 'model-unsupported',
+		});
+		expect(message).toContain('Deepgram model');
+	});
+
+	it('reports the applied and total counts for the keyterm limit', () => {
+		const message = describeDictionaryOmission({
+			applied: manyTerms(DEEPGRAM_KEYTERM_LIMIT),
+			omitted: manyTerms(5),
+			reason: 'keyterm-limit',
+		});
+		expect(message).toContain(String(DEEPGRAM_KEYTERM_LIMIT));
+		expect(message).toContain(String(DEEPGRAM_KEYTERM_LIMIT + 5));
+		expect(message).toContain('keyterms');
+	});
+
+	it('names the keywords limit for keyword-boosting models', () => {
+		// The two Deepgram entry caps are separate provider limits on separate
+		// mechanisms. This message must quote the keywords cap, not the keyterm
+		// one, even while the two constants happen to hold the same value.
+		const message = describeDictionaryOmission({
+			applied: manyTerms(DEEPGRAM_KEYWORDS_LIMIT),
+			omitted: manyTerms(5),
+			reason: 'keywords-limit',
+		});
+		expect(message).toContain(String(DEEPGRAM_KEYWORDS_LIMIT));
+		expect(message).toContain(String(DEEPGRAM_KEYWORDS_LIMIT + 5));
+		expect(message).toContain('keywords');
+	});
+
+	it('names the Voxtral cap rather than a Deepgram one', () => {
+		// Reusing the keyterm reason would have shown a sentence naming
+		// Deepgram to a user whose run went to Mistral.
+		const message = describeDictionaryOmission({
+			applied: shortTerms(VOXTRAL_CONTEXT_BIAS_LIMIT),
+			omitted: shortTerms(5),
+			reason: 'context-bias-limit',
+		});
+		expect(message).toContain('Voxtral');
+		expect(message).not.toContain(EngineLabel.Deepgram);
+		expect(message).toContain(String(VOXTRAL_CONTEXT_BIAS_LIMIT));
+		expect(message).toContain(String(VOXTRAL_CONTEXT_BIAS_LIMIT + 5));
+	});
+
+	it('names the keyterm token budget when long terms did not fit', () => {
+		const message = describeDictionaryOmission({
+			applied: ['a'],
+			omitted: ['b'],
+			reason: 'keyterm-token-budget',
+		});
+		expect(message).toContain(String(DEEPGRAM_KEYTERM_TOKEN_LIMIT));
+	});
+
+	it('explains the prompt window when terms did not fit', () => {
+		const message = describeDictionaryOmission({
+			applied: ['a'],
+			omitted: ['b'],
+			reason: 'prompt-window',
+		});
+		expect(message).toContain('prompt');
+	});
+});

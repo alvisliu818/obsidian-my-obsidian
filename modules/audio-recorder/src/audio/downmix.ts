@@ -1,0 +1,171 @@
+/**
+ * Channel-layout modes and pure downmix helpers shared by every path
+ * that can reduce audio to mono: live capture (the PCM worklet and the
+ * MediaRecorder mono bridge) and file conversion (the streaming
+ * mediabunny pipeline and the decode-and-re-encode fallback).
+ *
+ * The dedicated left/right modes exist because audio interfaces with
+ * two mono inputs expose themselves as one stereo device; a voice
+ * recorded through such an interface sits entirely in one channel, and
+ * averaging it with the silent channel would lose 6 dB of level.
+ *
+ * The mix mode is defined as the plain average of all input channels,
+ * and every pipeline implements exactly that definition: this module's
+ * helpers, the PCM capture worklet (PcmStreamRecorder), the live
+ * MediaRecorder bridge (MonoCaptureBridge), and the streaming
+ * conversion hook (averageChannelsSample). For stereo it equals the
+ * Web Audio speaker rule of 0.5*(L+R); for 5.1-style layouts it
+ * deliberately differs from the speaker rules, which weight channels
+ * and drop the LFE.
+ * @module audio/downmix
+ */
+
+/**
+ * Which channels a capture or a conversion keeps.
+ *
+ * Stored in data.json, so a value is renamed only with a migration. The keys
+ * are declared in the order the dropdown offers them, which is the order
+ * `Object.values` hands them back in.
+ */
+export const ChannelMode = {
+	/** Keep the channel layout the capture device or source file provides. */
+	Source: 'source',
+	/** Mix all input channels into one (average, Web Audio downmix rule). */
+	MonoMix: 'mono-mix',
+	/** Keep only the first (left) input channel. */
+	MonoLeft: 'mono-left',
+	/** Keep only the second (right) input channel. */
+	MonoRight: 'mono-right',
+} as const;
+
+/** A channel-layout mode (derived from {@link ChannelMode}). */
+export type ChannelMode = (typeof ChannelMode)[keyof typeof ChannelMode];
+
+/**
+ * Type guard for {@link ChannelMode} values.
+ * @param value - Candidate value
+ */
+export function isChannelMode(value: unknown): value is ChannelMode {
+	return Object.values(ChannelMode).some((mode) => mode === value);
+}
+
+/**
+ * Coerces an untrusted value (settings loaded from disk, worker
+ * messages) to a valid channel mode, falling back to the pass-through
+ * source mode.
+ * @param value - Candidate value
+ */
+export function normalizeChannelMode(value: unknown): ChannelMode {
+	return isChannelMode(value) ? value : ChannelMode.Source;
+}
+
+/**
+ * Whether the mode reduces the audio to one channel.
+ * @param mode - Channel mode
+ */
+export function isMonoChannelMode(mode: ChannelMode): boolean {
+	return mode !== ChannelMode.Source;
+}
+
+/**
+ * How many channels a capture in this mode hands the encoder.
+ *
+ * An encoder answers a different question per layout - a platform AAC encoder
+ * accepts its own set of rates for each, and the codec string itself is built
+ * from the count - so anything asking what a device will accept has to say
+ * which layout it means.
+ *
+ * The pass-through mode keeps whatever the device provides, which is not known
+ * until the stream is open; two is the assumption there, because a device that
+ * turns out to be mono is the narrower case and its encoder configuration is
+ * the one a mono mode already covers.
+ * @param mode - Channel mode the capture runs in
+ * @returns Channel count to describe the output with
+ */
+export function channelCountFor(mode: ChannelMode): number {
+	return isMonoChannelMode(mode) ? 1 : 2;
+}
+
+/**
+ * Resolves which single input channel a picking mode keeps, clamped to
+ * the channels that actually exist so a right-channel pick on a mono
+ * input degrades to the only available channel instead of silence.
+ * @param mode - Channel mode
+ * @param availableChannels - Number of channels the input provides
+ * @returns Zero-based channel index, or null when the mode does not
+ * pick a single channel (source pass-through and the mono mix)
+ */
+export function monoPickIndex(
+	mode: ChannelMode,
+	availableChannels: number,
+): number | null {
+	if (mode !== ChannelMode.MonoLeft && mode !== ChannelMode.MonoRight) {
+		return null;
+	}
+	const wanted = mode === ChannelMode.MonoRight ? 1 : 0;
+	return Math.max(0, Math.min(wanted, availableChannels - 1));
+}
+
+/**
+ * Downmixes planar channel data to one channel according to the mode.
+ * Mixing averages all channels; picking modes return a copy of the kept
+ * channel. Channels are assumed to share one length (the first
+ * channel's length is used).
+ * @param channels - Per-channel samples (at least one channel)
+ * @param mode - Channel mode (must be a mono mode)
+ * @returns Mono samples
+ * @throws Error when called with the source pass-through mode or
+ * without channel data, which would silently produce wrong audio
+ */
+export function downmixChannelData(
+	channels: Float32Array[],
+	mode: ChannelMode,
+): Float32Array {
+	const first = channels[0];
+	if (!isMonoChannelMode(mode) || !first) {
+		throw new Error('downmixChannelData requires a mono mode and data');
+	}
+	const pick = monoPickIndex(mode, channels.length);
+	if (pick !== null) {
+		// The index is clamped into range, so the channel exists
+		return Float32Array.from(channels[pick] ?? first);
+	}
+	const length = first.length;
+	const mixed = new Float32Array(length);
+	for (let i = 0; i < length; i++) {
+		let sum = 0;
+		for (let channel = 0; channel < channels.length; channel++) {
+			sum += channels[channel]?.[i] ?? 0;
+		}
+		mixed[i] = sum / channels.length;
+	}
+	return mixed;
+}
+
+/**
+ * Downmixes a decoded AudioBuffer to mono according to the mode.
+ * Returns the input buffer unchanged when the mode is pass-through or
+ * the buffer is already mono, so callers can apply it unconditionally.
+ * @param buffer - Decoded audio
+ * @param mode - Channel mode
+ * @returns Mono AudioBuffer, or the input buffer when nothing changes
+ */
+export function downmixAudioBuffer(
+	buffer: AudioBuffer,
+	mode: ChannelMode,
+): AudioBuffer {
+	if (!isMonoChannelMode(mode) || buffer.numberOfChannels <= 1) {
+		return buffer;
+	}
+	const channels: Float32Array[] = [];
+	for (let i = 0; i < buffer.numberOfChannels; i++) {
+		channels.push(buffer.getChannelData(i));
+	}
+	const mono = new AudioBuffer({
+		length: buffer.length,
+		numberOfChannels: 1,
+		sampleRate: buffer.sampleRate,
+	});
+	mono.getChannelData(0).set(downmixChannelData(channels, mode));
+	return mono;
+}

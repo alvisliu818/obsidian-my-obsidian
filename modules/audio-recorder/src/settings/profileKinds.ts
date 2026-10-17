@@ -1,0 +1,298 @@
+/**
+ * The kinds of profile the plugin keeps, described once each.
+ *
+ * A glossary, a chapter-guidance prompt, a participant roster, and a
+ * post-processing prompt are the same thing four times over, and
+ * {@link module:settings/profiles} now stores them as one shape. What is left
+ * per kind is what a kind actually differs in: the copy, what an entry says
+ * about itself, and which block of the settings shows it.
+ *
+ * A kind is one descriptor, and the settings build every catalogue from this
+ * list rather than from a block per kind. Adding another kind is an entry
+ * here, and it arrives with the same rules as the rest: a dropdown that picks
+ * it, a page per profile, unique names, and the same rename and delete. The
+ * control keys a kind's rows bind to come from its id, so a kind cannot be
+ * declared with a key that collides with another's.
+ * @module settings/profileKinds
+ */
+
+import {
+	type AudioRecorderSettings,
+	quickNotesAvailable,
+} from './settingsSchema';
+import { type Profile, ProfileKindId } from './profiles';
+import { parseDictionary } from '../transcription/dictionary';
+import { LlmTask } from '../transcription/llmPostProcess';
+import { parseParticipantBody } from '../speakers/participantRoster';
+
+/**
+ * Which block of the settings a kind's catalogue belongs to. Not stored: the
+ * members only match a catalogue to the page that renders it.
+ */
+export const ProfileSection = {
+	/** The transcription page, where an engine and its inputs are chosen. */
+	Transcription: 'transcription',
+	/** The advanced transcription page, behind the main one. */
+	Advanced: 'advanced',
+	/** The automatic chapters page. */
+	Chapters: 'chapters',
+	/** The LLM post-processing page. */
+	Llm: 'llm',
+	/** The quick notes block. */
+	QuickNotes: 'quickNotes',
+} as const;
+
+/** One settings block (derived from {@link ProfileSection}). */
+export type ProfileSection =
+	(typeof ProfileSection)[keyof typeof ProfileSection];
+
+/** Everything the plugin knows about one kind of profile. */
+export interface ProfileKind {
+	/** The kind these profiles carry, and the source of its control keys. */
+	readonly id: ProfileKindId;
+	/** Block of the settings whose rows this kind belongs among. */
+	readonly section: ProfileSection;
+	/** Heading of the catalogue, e.g. "Dictionary profiles". */
+	readonly heading: string;
+	/** Description of the entry that opens the catalogue. */
+	readonly catalogueDesc: string;
+	/** Label and description of the row that picks the profile in use. */
+	readonly selectionName: string;
+	readonly selectionDesc: string;
+	/** Label and description of the body field on a profile's page. */
+	readonly bodyName: string;
+	readonly bodyDesc: string;
+	/** Control key namespace of the row that selects a profile. */
+	readonly selectionKey: string;
+	/**
+	 * Control key namespace of the Source row, which chooses per profile
+	 * whether its text is typed on its page or read from a note.
+	 */
+	readonly choiceKey: string;
+	/** Control key namespace the body is bound to, per profile. */
+	readonly bodyKey: string;
+	/** Control key namespace of the note the body is read from, per profile. */
+	readonly noteKey: string;
+	/**
+	 * What a profile holds, e.g. "12 names" or "no prompt", worded to follow
+	 * another part of its catalogue entry.
+	 */
+	readonly summary: (profile: Profile) => string;
+	/** Whether this kind is on screen at all. */
+	readonly visible: (settings: AudioRecorderSettings) => boolean;
+}
+
+/** A kind as it is declared: the keys are the id's to give, not the author's. */
+type ProfileKindSpec = Omit<
+	ProfileKind,
+	'selectionKey' | 'choiceKey' | 'bodyKey' | 'noteKey'
+>;
+
+/**
+ * Completes a declared kind with the control keys its rows bind to. The keys
+ * are derived from the id rather than written out, so two kinds can no more
+ * share a key than they can share an id.
+ * @param spec - The kind as declared
+ * @returns The kind the settings read
+ */
+function defineKind(spec: ProfileKindSpec): ProfileKind {
+	return {
+		...spec,
+		selectionKey: `profile.${spec.id}.selection`,
+		choiceKey: `profile.${spec.id}.choice`,
+		bodyKey: `profile.${spec.id}.body`,
+		noteKey: `profile.${spec.id}.note`,
+	};
+}
+
+/**
+ * What a body of one entry per line says about itself: how many entries a run
+ * would actually use, counted the way the run counts them, so a body of blank
+ * lines does not read as a full list.
+ * @param count - Entries the run would use
+ * @param one - Singular noun, e.g. "term"
+ * @param many - Plural noun, e.g. "terms"
+ */
+function countSummary(count: number, one: string, many: string): string {
+	if (count === 0) {
+		return `no ${many}`;
+	}
+	return count === 1 ? `1 ${one}` : `${String(count)} ${many}`;
+}
+
+/**
+ * What a prompt body says about itself. A prompt has no countable entries, so
+ * the entry says whether the profile carries one at all.
+ * @param profile - The profile being summarized
+ * @returns The entry's summary line
+ */
+function promptSummary(profile: Profile): string {
+	return profile.body.trim() === '' ? 'no prompt' : 'prompt set';
+}
+
+/** Whether the LLM post-processing pass runs at all, as configured. */
+function postProcessing(settings: AudioRecorderSettings): boolean {
+	return settings.transcriptionEnabled && settings.llmPostProcessEnabled;
+}
+
+/**
+ * The description of the row that picks a prompt for a task the plugin ships a
+ * prompt for. Cleanup and summary run their built-in prompt when no profile
+ * applies, so both say so in the same words.
+ * @param what - What the prompt steers, e.g. "the cleanup pass"
+ * @returns The row's description
+ */
+function promptSelectionDesc(what: string): string {
+	return `Prompt used for ${what}; None falls back to the built-in default.`;
+}
+
+/**
+ * Every kind of profile, in the order the settings show them. Which block each
+ * one belongs to is the kind's own `section`, and the settings tree filters the
+ * catalogues it built from this list by it, so there is no second answer here
+ * to the same question.
+ */
+export const PROFILE_KINDS: readonly ProfileKind[] = [
+	defineKind({
+		id: ProfileKindId.Participants,
+		section: ProfileSection.Transcription,
+		heading: 'Participant profiles',
+		catalogueDesc:
+			'Named rosters of people. The one a run carries is written into the recording, so renaming speakers suggests the right names.',
+		selectionName: 'Participant profile',
+		selectionDesc:
+			'Roster offered by default in the Transcribe dialog; None carries no names.',
+		bodyName: 'Participants',
+		bodyDesc:
+			'One name per line. Blank lines and duplicates are ignored, and a name applied in the rename dialog is added here.',
+		summary: (profile) =>
+			countSummary(
+				parseParticipantBody(profile.body).length,
+				'name',
+				'names',
+			),
+		visible: (settings) =>
+			settings.transcriptionEnabled && settings.transcriptionDiarize,
+	}),
+	defineKind({
+		id: ProfileKindId.Dictionary,
+		section: ProfileSection.Advanced,
+		heading: 'Dictionary profiles',
+		catalogueDesc:
+			'Named glossaries of names, abbreviations, and domain terms. Pick one, or None, per run in the Transcribe dialog.',
+		selectionName: 'Dictionary profile',
+		selectionDesc:
+			'Glossary offered by default in the Transcribe dialog; None applies no terms.',
+		bodyName: 'Terms',
+		bodyDesc:
+			'One term per line. A term may contain spaces; blank lines and case-insensitive duplicates are ignored.',
+		summary: (profile) =>
+			countSummary(parseDictionary(profile.body).length, 'term', 'terms'),
+		visible: (settings) =>
+			settings.transcriptionEnabled &&
+			settings.transcriptionAdvancedSettingsEnabled,
+	}),
+	defineKind({
+		id: ProfileKindId.ChapterPrompt,
+		section: ProfileSection.Chapters,
+		heading: 'Chapter guidance profiles',
+		catalogueDesc:
+			'Named prompts describing how to divide a recording into chapters. The response format is fixed, so editing one is safe.',
+		selectionName: 'Chapter guidance profile',
+		selectionDesc:
+			'Prompt used by default when chapters are generated; None leaves the base behaviour.',
+		bodyName: 'Guidance prompt',
+		bodyDesc:
+			'How to divide the recording into chapters. Appended to the fixed base prompt; blank leaves the base behaviour.',
+		summary: promptSummary,
+		// Follows the chapters switch alone: the guidance steers a generation,
+		// and a generation is offered on any recording that already has a
+		// transcript, whether or not this vault still transcribes new ones.
+		visible: (settings) => settings.transcriptionAutoChaptersEnabled,
+	}),
+	defineKind({
+		id: ProfileKindId.LlmCleanup,
+		section: ProfileSection.Llm,
+		heading: 'Cleanup prompt profiles',
+		catalogueDesc:
+			'Named system instructions for the cleanup pass. Keep one per kind of recording instead of rewriting the single prompt each time.',
+		selectionName: 'Cleanup prompt profile',
+		selectionDesc: promptSelectionDesc('the cleanup pass'),
+		bodyName: 'Cleanup prompt',
+		bodyDesc:
+			'System instruction for the cleanup pass. The transcript language is appended automatically.',
+		summary: promptSummary,
+		visible: (settings) =>
+			postProcessing(settings) &&
+			settings.llmPostProcessTask === LlmTask.Cleanup,
+	}),
+	defineKind({
+		id: ProfileKindId.LlmSummary,
+		section: ProfileSection.Llm,
+		heading: 'Summary prompt profiles',
+		catalogueDesc:
+			'Named system instructions for the summary pass, so a standup and a client call can be summarized on their own terms.',
+		selectionName: 'Summary prompt profile',
+		selectionDesc: promptSelectionDesc('the summary pass'),
+		bodyName: 'Summary prompt',
+		bodyDesc:
+			'System instruction for the summary pass. The transcript language is appended automatically.',
+		summary: promptSummary,
+		visible: (settings) =>
+			postProcessing(settings) &&
+			settings.llmPostProcessTask === LlmTask.Summary,
+	}),
+	defineKind({
+		id: ProfileKindId.LlmTranslate,
+		section: ProfileSection.Llm,
+		heading: 'Translation prompt profiles',
+		catalogueDesc:
+			'Named system instructions for the translation pass. Keep one per target audience instead of rewriting the single prompt each time.',
+		selectionName: 'Translation prompt profile',
+		selectionDesc: promptSelectionDesc('the translation pass'),
+		bodyName: 'Translation prompt',
+		bodyDesc:
+			'System instruction for the translation pass. The target language is appended automatically.',
+		summary: promptSummary,
+		visible: (settings) =>
+			postProcessing(settings) &&
+			settings.llmPostProcessTask === LlmTask.Translate,
+	}),
+	defineKind({
+		id: ProfileKindId.LlmCustom,
+		section: ProfileSection.Llm,
+		heading: 'Custom instruction profiles',
+		catalogueDesc:
+			'Named instructions applied to the transcript verbatim. One per task you run the transcript through.',
+		selectionName: 'Custom instruction profile',
+		// Not the shared sentence: the custom task ships no prompt of its own,
+		// so None leaves the model with a neutral instruction to do something
+		// unstated rather than with a default worth running.
+		selectionDesc:
+			'Instruction used for the custom task; None leaves only a neutral instruction, so the pass does little.',
+		bodyName: 'Custom instruction',
+		bodyDesc:
+			'System instruction applied to the transcript text, sent verbatim: no language clause is added.',
+		summary: promptSummary,
+		visible: (settings) =>
+			postProcessing(settings) &&
+			settings.llmPostProcessTask === LlmTask.Custom,
+	}),
+	defineKind({
+		id: ProfileKindId.QuickNote,
+		section: ProfileSection.QuickNotes,
+		heading: 'Quick note profiles',
+		catalogueDesc:
+			'Named instructions a dictated quick note is rewritten with before it is inserted: tidy it up, turn it into a list, or format it as a task.',
+		selectionName: 'Quick note profile',
+		// Not the shared sentence: quick notes ship no prompt of their own,
+		// and None is the plain dictation the feature starts out as.
+		selectionDesc:
+			'Instruction the dictated text is rewritten with; None inserts the text as it was recognized.',
+		bodyName: 'Instruction',
+		bodyDesc:
+			'System instruction applied to the dictated text, sent verbatim. Ask for the rewritten text alone, since the answer is inserted as it comes back.',
+		summary: promptSummary,
+		visible: quickNotesAvailable,
+	}),
+];

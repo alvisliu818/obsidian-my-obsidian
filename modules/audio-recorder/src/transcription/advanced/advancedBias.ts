@@ -1,0 +1,188 @@
+/**
+ * Routes the generated context of the advanced two-pass mode into the biasing
+ * channel each transcription engine actually supports: a Whisper-style prompt
+ * sentence for an engine with one free-text slot, or a flat list of terms for
+ * one that takes them as discrete entries. Which engine reads which is the
+ * capability table's answer, not this module's, so an engine added there
+ * arrives here already routed. The support check is separate from the routing
+ * so the service can skip the LLM context generation entirely - and tell the
+ * user - when the selected engine or model cannot carry any bias, instead of
+ * paying for agents whose output would be dropped.
+ * @module transcription/advanced/advancedBias
+ */
+
+import {
+	DEFAULT_ADVANCED_SECOND_PASS_MIN_RATIO,
+	MIN_ADVANCED_SECOND_PASS_MIN_RATIO,
+	MAX_ADVANCED_SECOND_PASS_MIN_RATIO,
+} from '../../constants';
+import type {
+	AudioRecorderSettings,
+	TranscriptionProviderId,
+} from '../../settings/settingsSchema';
+import { advancedTwoPassEnabled } from '../../settings/settingsSchema';
+import {
+	providerBiasChannel,
+	providerSupportsDictionary,
+} from '../providers/capabilities';
+import { transcriptionEngine } from '../providers/engines';
+import type { GeneratedContext } from './contextPipeline';
+
+/** The bias fields to add to the second pass's transcription options. */
+export interface AdvancedBiasPlan {
+	/** Prompt sentence for engines with one free-text bias slot. */
+	biasPrompt?: string;
+	/** Flat term list for engines that bias by discrete entries. */
+	keyterms?: string[];
+}
+
+/**
+ * How an engine carries the generated bias: a Whisper-style prompt sentence, or
+ * a flat keyterm list. Declared with the rest of an engine's capabilities.
+ */
+import { AdvancedBiasChannel } from '../providers/TranscriptionProvider';
+export { AdvancedBiasChannel };
+
+/**
+ * The biasing channel an engine reads. The single source of truth shared by the
+ * context pipeline - which only builds the representation the channel needs, so
+ * a keyword-biased engine does not pay for a prompt sentence it would discard -
+ * and the routing in {@link planAdvancedBias}.
+ * @param engineId - Selected transcription engine id
+ * @returns The channel the engine biases through
+ */
+export function advancedBiasChannel(
+	engineId: TranscriptionProviderId,
+): AdvancedBiasChannel {
+	return providerBiasChannel(engineId);
+}
+
+/**
+ * Why the selected engine cannot run a biased second pass, or null when it
+ * can. Checked before context generation so an unsupported engine degrades to
+ * the normal single pass without spending any LLM calls.
+ * @param engineId - Selected transcription engine id
+ * @param deepgramModel - Configured Deepgram model id (consulted only for Deepgram)
+ * @returns A user-facing reason, or null when the engine can bias
+ */
+export function advancedBiasUnsupportedReason(
+	engineId: TranscriptionProviderId,
+	deepgramModel: string,
+): string | null {
+	if (!providerSupportsDictionary(engineId)) {
+		return 'the selected engine cannot bias recognition';
+	}
+	// Whether a specific model can carry a bias is an engine-level rule (only
+	// Deepgram has one today), so the descriptor answers it.
+	return transcriptionEngine(engineId).biasUnsupportedReason(deepgramModel);
+}
+
+/**
+ * Whether a run will actually perform the biased second pass: the two-pass mode
+ * is enabled AND the selected engine/model can carry a bias. The service
+ * degrades an unsupported engine (e.g. a Deepgram hosted Whisper model) to a
+ * single plain pass before any LLM spend, so the cost estimate and the session
+ * accounting read this predicate - not the bare toggle - and never price a
+ * second pass or context agents that will not run.
+ * @param settings - The run's settings snapshot
+ * @returns True when the biased second pass and its context agents will run
+ */
+export function advancedTwoPassWillRun(
+	settings: Pick<
+		AudioRecorderSettings,
+		| 'transcriptionAdvancedSettingsEnabled'
+		| 'transcriptionAdvancedEnabled'
+		| 'transcriptionProvider'
+		| 'deepgramModel'
+	>,
+): boolean {
+	return (
+		advancedTwoPassEnabled(settings) &&
+		advancedBiasUnsupportedReason(
+			settings.transcriptionProvider,
+			settings.deepgramModel,
+		) === null
+	);
+}
+
+/**
+ * Maps the generated context onto the engine's biasing channel: an engine that
+ * takes discrete terms gets the flat keyterms, one that reads free text gets
+ * the prompt sentence. A plan with neither field set (e.g. the pipeline
+ * produced only a topic and the engine needs keyterms) means there is nothing
+ * to bias and the second pass should be skipped.
+ * @param engineId - Selected transcription engine id
+ * @param context - The generated context from the first pass
+ * @returns The bias fields for the second pass
+ */
+export function planAdvancedBias(
+	engineId: TranscriptionProviderId,
+	context: GeneratedContext,
+): AdvancedBiasPlan {
+	if (advancedBiasChannel(engineId) === AdvancedBiasChannel.Keyterm) {
+		return context.keyterms.length ? { keyterms: context.keyterms } : {};
+	}
+	return context.promptSentence ? { biasPrompt: context.promptSentence } : {};
+}
+
+/**
+ * The paper's length safeguard against over-correction: whether the biased
+ * second pass kept enough text to be trusted over the baseline. A biased
+ * decode that came back much shorter almost certainly dropped content, so
+ * the run reverts to the first pass below the ratio. A synced or hand-edited
+ * ratio outside the settings range falls back to the shipped default rather
+ * than weakening the guard: a value below the configured minimum (0 would let
+ * an empty second pass through) or above 1 (which would disable the mode) is
+ * rejected, matching what the settings-tab input allows.
+ * @param baselineText - Plain text of the first pass's transcript
+ * @param secondPassText - Plain text of the biased second pass
+ * @param minRatio - Configured minimum second-to-first length ratio
+ * @returns True when the second pass is long enough to adopt
+ */
+export function meetsLengthSafeguard(
+	baselineText: string,
+	secondPassText: string,
+	minRatio: number,
+): boolean {
+	const ratio =
+		Number.isFinite(minRatio) &&
+		minRatio >= MIN_ADVANCED_SECOND_PASS_MIN_RATIO &&
+		minRatio <= MAX_ADVANCED_SECOND_PASS_MIN_RATIO
+			? minRatio
+			: DEFAULT_ADVANCED_SECOND_PASS_MIN_RATIO;
+	return secondPassText.length >= baselineText.length * ratio;
+}
+
+/**
+ * The other half of the over-correction guard: whether the biased second pass
+ * came back in the language the first pass detected.
+ *
+ * The run asks for that language on the second pass's options, because the bias
+ * is dense with English tokens and a decode left to auto-detect can flip a
+ * Russian recording into English. Asking is not the same as getting it: an
+ * engine that does not read a language hint at all (Voxtral cannot be sent one
+ * alongside the timestamp granularity that makes its response carry segments)
+ * detects the language again, and one that does read it can still answer in
+ * another. A request field is therefore a preference, and only the answer is
+ * evidence, so the adoption decision reads the answer.
+ *
+ * Both passes run on the same engine, so the two codes are spelled the same
+ * way and compare directly; trimming and case are normalized so a cosmetic
+ * difference never costs a good pass. A pass whose language is unknown on
+ * either side is not judged here - there is nothing to compare - and is left to
+ * the length safeguard.
+ * @param baselineLanguage - Language the first pass reported, when it did
+ * @param secondPassLanguage - Language the second pass reported, when it did
+ * @returns True when the second pass may be adopted on this evidence
+ */
+export function keepsDetectedLanguage(
+	baselineLanguage: string | undefined,
+	secondPassLanguage: string | undefined,
+): boolean {
+	const baseline = baselineLanguage?.trim().toLowerCase();
+	const secondPass = secondPassLanguage?.trim().toLowerCase();
+	if (!baseline || !secondPass) {
+		return true;
+	}
+	return baseline === secondPass;
+}

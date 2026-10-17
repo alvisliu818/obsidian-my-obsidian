@@ -1,0 +1,1230 @@
+/**
+ * Modal that configures and runs transcription for a single audio file.
+ * Language, the participant profile and the destination are shown up front;
+ * every other option sits in a collapsed More options block. The per-run options
+ * (engine, language, diarization, the participant profile a diarized run
+ * stores with the recording, destination, file format, in-note
+ * toggles, the advanced settings that reveal the dictionary and two-pass mode,
+ * and LLM post-processing) default from settings and can be overridden here for
+ * this run only - the saved settings are never mutated. Shows progress and allows cancellation; the detailed
+ * in-note templates (heading, timestamp/speaker/line format) remain in the
+ * settings tab and are applied as configured there.
+ * @module ui/TranscriptionModal
+ */
+
+import { MarkdownView, Notice } from 'obsidian';
+import type { App, ButtonComponent, TFile } from 'obsidian';
+import { PluginModal } from './PluginModal';
+import type {
+	AudioRecorderSettings,
+	TranscriptionProviderId,
+} from '../settings/settingsSchema';
+import { autoChaptersAfterTranscribe } from '../settings/settingsSchema';
+import {
+	LLM_TASK_OPTIONS,
+	TRANSCRIPT_DESTINATION_OPTIONS,
+	TRANSCRIPT_FILE_FORMAT_OPTIONS,
+	TRANSCRIPTION_PROVIDER_OPTIONS,
+} from '../settings/labels';
+import {
+	addDropdown,
+	addText,
+	addToggle,
+	type SettingsSectionContext,
+} from '../settings/settingControls';
+import { ProfileTextSource } from '../settings/ProfileTextSource';
+import { formatTimecode } from '../utils/TimeUtils';
+import { readAudioMetadata } from '../utils/AudioFileAnalyzer';
+import {
+	buildCostEstimate,
+	costEstimateNeedsDuration,
+	effectiveDiarize,
+	effectiveWordTimestamps,
+	effectiveTranscriptDestination,
+	formatUsd,
+	isProviderAvailableOnPlatform,
+	languageNote,
+	providerSupportsDiarization,
+	wordTimestampsNote,
+	wordTimestampsSelectable,
+	providerSupportsDictionary,
+	transcribeFile,
+	TranscriptionCancelledError,
+	type CancellationToken,
+	CostEstimateUnpricedReason,
+	type CostEstimate,
+	type CostEstimateLine,
+	type LlmTask,
+	type SessionCostTracker,
+	type TranscribeRunCost,
+	TranscriptDestination,
+	TranscriptFileFormat,
+	type Transcript,
+	type TranscriptOutputSidecar,
+} from '../transcription/api';
+import { CancellationSource } from '../utils/cancellation';
+import {
+	profilesOfKind,
+	selectedProfile,
+	selectedProfileId,
+	setSelectedProfileId,
+	ProfileKindId,
+} from '../settings/profiles';
+import type { SaveProgress } from '../types';
+import { errorMessage } from '../errors';
+import { createProgressBar, type ProgressBar } from './progressBar';
+
+/** Default status label shown before the engine reports a finer-grained stage. */
+const DEFAULT_TRANSCRIBE_LABEL = 'Transcribing...';
+
+/**
+ * Callbacks used when the modal is minimized while transcription continues.
+ */
+export type TranscriptionBackgroundProgressCallbacks = {
+	/** Shows or updates the status-bar progress entry. */
+	show: (progress: SaveProgress, restore: () => void) => void;
+	/** Removes the status-bar progress entry owned by this modal. */
+	clear: () => void;
+};
+
+/**
+ * Options for a transcription modal instance.
+ */
+export type TranscriptionModalOptions = {
+	autoStart?: boolean;
+	notePath?: string | undefined;
+	backgroundProgress?: TranscriptionBackgroundProgressCallbacks;
+	/**
+	 * Persists the run's choice of profile for one kind, so it defaults next
+	 * time and reaches whatever runs from the plugin settings rather than from
+	 * this dialog's copy: transcribe-on-save, and the after-transcription
+	 * chapter generation. One callback for every kind, because the dialog's
+	 * pickers differ in nothing but the kind they pick.
+	 */
+	onProfileSelected?: (kind: ProfileKindId, id: string) => Promise<void>;
+	/**
+	 * Session-wide per-engine cost accumulator owned by the plugin, so the
+	 * dialog can add this run's cost and show the running session total.
+	 */
+	costTracker?: SessionCostTracker | undefined;
+	/**
+	 * Generates auto chapters from a finished run's transcript. Invoked
+	 * fire-and-forget when the run's auto-chapters toggle is on; the
+	 * implementation reports its own progress and errors via Notices.
+	 */
+	generateChapters?: (file: TFile, transcript: Transcript) => Promise<void>;
+	/**
+	 * Recording sidecar store, passed through to the run so stored speaker
+	 * names are re-applied and the written outputs are registered.
+	 */
+	sidecar?: TranscriptOutputSidecar;
+	/**
+	 * Told how each run ended, for a caller that waits on the dialog it
+	 * opened - the command line, which answers only once the run is over.
+	 */
+	onRunSettled?: (outcome: TranscriptionRunOutcome) => void;
+};
+
+/** How one run of the dialog ended. */
+export type TranscriptionRunOutcome =
+	| {
+			/** The transcript was written. */
+			readonly status: 'done';
+			/**
+			 * The destination the run was given. With no note to write into,
+			 * a run writes every destination as a file beside the recording.
+			 */
+			readonly destination: TranscriptDestination;
+			/** The note it went into or links resolve in, '' for none. */
+			readonly notePath: string;
+			/** How many parts the engine failed on and left out. */
+			readonly missingParts: number;
+	  }
+	| {
+			/** The user cancelled the run. */
+			readonly status: 'cancelled';
+	  }
+	| {
+			/** The run could not start or failed. */
+			readonly status: 'failed';
+			/** What went wrong, as the dialog reported it. */
+			readonly message: string;
+	  };
+
+/**
+ * Formats the cost value of one estimate line: the amount for a priced
+ * line, "no API cost" for the free local engine, or a short reason when it
+ * could not be priced (unknown model, or the duration could not be read).
+ * @param line - One line of the combined cost estimate
+ */
+function formatCostLine(line: CostEstimateLine): string {
+	if (line.free) {
+		return 'no API cost';
+	}
+	if (line.usd !== null) {
+		return `~${formatUsd(line.usd)}`;
+	}
+	return line.reason === CostEstimateUnpricedReason.NoDuration
+		? 'estimate unavailable (duration unreadable)'
+		: 'no built-in rate';
+}
+
+/**
+ * Transcription dialog for a single audio file.
+ */
+export class TranscriptionModal extends PluginModal {
+	/**
+	 * The run's cancellation, replaced whenever a run starts. One object
+	 * answers both halves of a cancel - the flag the run checks between parts
+	 * and the signal its requests abort on - so the two cannot disagree. Held
+	 * non-null and rebuilt in setRunning, which makes "a running job can be
+	 * cancelled" true by construction rather than by ordering.
+	 */
+	private cancellation = new CancellationSource();
+	private statusEl: HTMLElement | null = null;
+	private elapsedEl: HTMLElement | null = null;
+	/** Interval handle for the live elapsed-time counter (null when stopped). */
+	private elapsedTimer: number | null = null;
+	/** Wall-clock start of the current run, in ms, for the elapsed counter. */
+	private runStartedAt = 0;
+	private progressBar: ProgressBar | null = null;
+	private configEl: HTMLElement | null = null;
+	/** Whether the More options block is expanded; kept across config re-renders. */
+	private advancedOpen = false;
+	/** Container for the pre-run estimate and the session total lines. */
+	private costEstimateEl: HTMLElement | null = null;
+	/** Live "cost so far" line while a multi-part run is in flight. */
+	private runningCostEl: HTMLElement | null = null;
+	/** Probed audio duration in seconds; null when unknown/unreadable. */
+	private durationSeconds: number | null = null;
+	/**
+	 * Bytes read to probe the duration, kept so the run itself can reuse them
+	 * instead of reading the whole file a second time. Released once the run
+	 * consumes them or the dialog closes.
+	 */
+	private probedBytes: ArrayBuffer | null = null;
+	/** True once the duration probe was kicked off (guards a single probe). */
+	private probeStarted = false;
+	/** True once the duration probe finished (successfully or not). */
+	private probeFinished = false;
+	private runButton: ButtonComponent | null = null;
+	private minimizeButton: ButtonComponent | null = null;
+	private secondaryButton: ButtonComponent | null = null;
+	private rendered = false;
+	private minimized = false;
+	private lastProgress: SaveProgress = {
+		percent: 0,
+		description: DEFAULT_TRANSCRIBE_LABEL,
+	};
+	/** Per-run settings copy: edited here, never persisted to plugin data. */
+	private readonly runSettings: AudioRecorderSettings;
+	/**
+	 * Note the transcript is inserted into and timecode links are built
+	 * against - resolved once at construction so the run targets the right
+	 * note even if the active pane changes before it starts.
+	 */
+	private readonly notePath: string;
+
+	constructor(
+		app: App,
+		private readonly file: TFile,
+		getSettings: () => AudioRecorderSettings,
+		private readonly options: TranscriptionModalOptions = {},
+	) {
+		super(app);
+		// Shallow copy is enough: every option edited here is a primitive.
+		this.runSettings = { ...getSettings() };
+		// Prefer an explicit note (transcribe-on-save passes the note the
+		// recording embed was inserted into); otherwise the active Markdown
+		// note. When neither exists (e.g. the audio file itself is the active
+		// pane, as with the command), in-note insertion cannot work, so an
+		// in-note-only destination is downgraded to a file up front instead of
+		// always falling back with a misleading "could not insert" notice.
+		this.notePath =
+			this.options.notePath ??
+			app.workspace.getActiveViewOfType(MarkdownView)?.file?.path ??
+			'';
+		this.runSettings.transcriptDestination = effectiveTranscriptDestination(
+			this.runSettings.transcriptDestination,
+			this.notePath !== '',
+		);
+	}
+
+	override onOpen(): void {
+		if (this.rendered) {
+			this.minimized = false;
+			this.clearBackgroundProgress();
+			return;
+		}
+
+		const { contentEl } = this;
+		contentEl.empty();
+		this.setDialogTitle('Transcribe audio');
+		this.renderSource(this.file);
+
+		this.configEl = contentEl.createDiv({ cls: 'aar-transcribe-options' });
+		this.renderConfig();
+
+		// Pre-run cost estimate and session total; refreshed whenever a control
+		// changes a value, on every config re-render, and when the duration
+		// probe finishes. The probe is kicked off lazily from
+		// updateCostEstimate only when a priced line actually needs the
+		// duration, so a disabled estimate, a free local run, or an auto-run
+		// never reads the whole file for nothing.
+		this.costEstimateEl = contentEl.createDiv({
+			cls: 'aar-transcribe-cost',
+		});
+		this.updateCostEstimate();
+
+		this.statusEl = contentEl.createDiv({ cls: 'aar-modal-status' });
+		this.statusEl.setText('Ready.');
+		this.progressBar = createProgressBar(
+			contentEl,
+			'aar-transcribe-progress',
+			'Transcription progress',
+		);
+		// Live elapsed-time counter; hidden until a run starts so an idle dialog
+		// shows no stray "0:00".
+		this.elapsedEl = contentEl.createDiv({ cls: 'aar-transcribe-elapsed' });
+		// Live cumulative cost while a multi-part run is in flight.
+		this.runningCostEl = contentEl.createDiv({
+			cls: 'aar-transcribe-cost-running',
+		});
+
+		this.renderActions(
+			{
+				text: 'Transcribe',
+				cta: true,
+				ref: (button) => {
+					this.runButton = button;
+				},
+				onClick: () => this.startRun(),
+			},
+			{
+				text: 'Minimize',
+				disabled: true,
+				ref: (button) => {
+					this.minimizeButton = button;
+				},
+				onClick: () => {
+					this.minimize();
+				},
+			},
+			{
+				text: 'Close',
+				ref: (button) => {
+					this.secondaryButton = button;
+				},
+				onClick: () => {
+					if (this.busy) {
+						this.cancelRun();
+					} else {
+						this.close();
+					}
+				},
+			},
+		);
+
+		this.rendered = true;
+		// The first renderConfig() ran before the button existed; set its
+		// initial state now so a stored unavailable engine reads as blocked.
+		this.refreshRunButtonState();
+
+		if (this.options.autoStart) {
+			// Auto-run for the transcribe-on-save hook: the modal still shows
+			// progress and offers cancel, so an automatic run stays visible and
+			// interruptible instead of being a silent background job.
+			void this.startRun();
+		}
+	}
+
+	/**
+	 * Renders the editable per-run option controls into the config container.
+	 * Re-invoked when an option that reveals or hides others changes.
+	 */
+	private renderConfig(): void {
+		const container = this.configEl;
+		if (!container) {
+			return;
+		}
+		container.empty();
+		const s = this.runSettings;
+		const profileText = new ProfileTextSource(this.app.vault);
+		const ctx: SettingsSectionContext = {
+			containerEl: container,
+			settings: s,
+			// Per-run dialog: options are not persisted to plugin data.
+			save: () => Promise.resolve(),
+			rerender: () => {
+				this.renderConfig();
+			},
+			saveDebounced: () => {
+				/* no debounced persistence in the dialog */
+			},
+			// Every control here writes into the run snapshot the estimate is
+			// computed from, and the dialog persists nothing, so the two hooks
+			// that would otherwise be the refresh point are no-ops. Re-pricing
+			// therefore hangs off the one hook every control passes through,
+			// instead of a `rerender` flag each price-affecting control has to
+			// remember - which the LLM task and the two-pass toggle did not.
+			onValueChanged: () => {
+				this.updateCostEstimate();
+			},
+		};
+
+		const canDiarize = providerSupportsDiarization(s.transcriptionProvider);
+		// Whether speaker labels will actually be produced for this run; gates the
+		// Include speakers toggle below the same way it gates the toggle itself.
+		const diarizes = effectiveDiarize(
+			s.transcriptionProvider,
+			s.transcriptionDiarize,
+		);
+		addText(ctx, {
+			name: 'Language',
+			// The same sentence the settings tab shows, so one engine cannot be
+			// described two ways: on an engine that detects the language itself
+			// it says the request drops the code and that auto chapters still
+			// read it, which is also why the row is not disabled there.
+			desc: languageNote(s.transcriptionProvider),
+			get: () => s.transcriptionLanguage,
+			set: (v) => (s.transcriptionLanguage = v.trim() || 'auto'),
+		});
+		if (diarizes) {
+			// Only meaningful with diarization: the roster this profile fills is
+			// written alongside the speakers the run detects, and there are none
+			// without it.
+			const speakerProfiles = profilesOfKind(
+				s.profiles,
+				ProfileKindId.Participants,
+			);
+			// A stored id whose profile was removed reads as None here.
+			const selectedSpeakerProfileId = selectedProfileId(
+				s,
+				ProfileKindId.Participants,
+			);
+			addDropdown(ctx, {
+				name: 'Participant profile',
+				desc: profileText.describe(
+					'Names saved with this recording, so the Rename speakers dialog suggests them. Profiles are created there.',
+					selectedProfile(s, ProfileKindId.Participants),
+				),
+				options: [
+					{ value: '', label: 'None' },
+					...speakerProfiles.map((profile) => ({
+						value: profile.id,
+						label: profile.name,
+					})),
+				],
+				get: () => selectedSpeakerProfileId,
+				set: (v) => {
+					// Affects this run (runSettings clone); persist as the
+					// remembered choice for the next dialog and transcribe-on-save.
+					setSelectedProfileId(s, ProfileKindId.Participants, v);
+					void this.options.onProfileSelected?.(
+						ProfileKindId.Participants,
+						v,
+					);
+				},
+				// Re-render so the line naming the picked roster's text follows
+				// the pick.
+				rerender: true,
+			});
+		}
+		addDropdown(ctx, {
+			name: 'Destination',
+			options: TRANSCRIPT_DESTINATION_OPTIONS,
+			get: () => s.transcriptDestination,
+			set: (v) => (s.transcriptDestination = v as TranscriptDestination),
+			rerender: true,
+		});
+		// Everything past the three rows most runs touch sits in a collapsed
+		// native <details> block, so the dialog stays short enough to reach
+		// Transcribe without scrolling. Its open state survives the re-renders
+		// the controls inside trigger, and it opens by itself when the stored
+		// engine cannot run here, so the reason Transcribe is blocked is shown.
+		const advancedEl = container.createEl('details', {
+			cls: 'aar-transcribe-advanced',
+		});
+		advancedEl.open =
+			this.advancedOpen || !this.isSelectedEngineAvailable();
+		advancedEl.createEl('summary', {
+			cls: 'aar-transcribe-advanced-summary',
+			// Not "Advanced": that word already names the Advanced settings
+			// switch this block holds, which in turn reveals the two-pass mode.
+			text: 'More options',
+		});
+		advancedEl.addEventListener('toggle', () => {
+			this.advancedOpen = advancedEl.open;
+		});
+		const advancedCtx: SettingsSectionContext = {
+			...ctx,
+			containerEl: advancedEl,
+		};
+		addDropdown(advancedCtx, {
+			name: 'Engine',
+			// Explain the blocked run when the stored engine cannot execute
+			// here (a local whisper.cpp selection synced to mobile), so the
+			// disabled Transcribe button below is self-evident.
+			desc: this.isSelectedEngineAvailable()
+				? undefined
+				: 'The selected engine is not available on this device. Pick a cloud engine to transcribe here.',
+			// Engines the platform cannot run stay listed but blocked,
+			// matching the settings tab.
+			options: TRANSCRIPTION_PROVIDER_OPTIONS.map((option) => ({
+				...option,
+				disabled: !isProviderAvailableOnPlatform(option.value),
+			})),
+			get: () => s.transcriptionProvider,
+			set: (v) =>
+				(s.transcriptionProvider = v as TranscriptionProviderId),
+			// Re-render so the diarization toggle reflects the new engine's
+			// capabilities (enabled only when the engine can diarize).
+			rerender: true,
+		});
+		addToggle(advancedCtx, {
+			name: 'Speaker diarization',
+			desc: canDiarize
+				? 'Request speaker labels (providers detect the speaker count automatically).'
+				: 'Not supported by the selected engine. Use Deepgram for speaker labels.',
+			// Reflect the effective state: a stored "on" from a diarizing engine
+			// must read as off here when the chosen engine cannot diarize.
+			get: () =>
+				effectiveDiarize(
+					s.transcriptionProvider,
+					s.transcriptionDiarize,
+				),
+			set: (v) => (s.transcriptionDiarize = v),
+			disabled: !canDiarize,
+			// Re-render so the Include speakers toggle below tracks this one:
+			// without diarization there are no speaker labels to include.
+			rerender: true,
+		});
+		addToggle(advancedCtx, {
+			name: 'Word-level timestamps',
+			desc: wordTimestampsNote(s.transcriptionProvider),
+			// Reflect what this run will produce: a stored "off" reads as on
+			// for an engine that returns the words anyway, and a stored "on"
+			// as off for one that never does.
+			get: () =>
+				effectiveWordTimestamps(
+					s.transcriptionProvider,
+					s.transcriptionWordTimestamps,
+				),
+			set: (v) => (s.transcriptionWordTimestamps = v),
+			disabled: !wordTimestampsSelectable(s.transcriptionProvider),
+		});
+
+		// Advanced settings: a per-run master switch mirroring the settings tab.
+		// It reveals the dictionary term biasing and the two-pass mode; off keeps
+		// a single plain pass with no biasing. Defaults from the saved setting
+		// and, like every dialog control, never persists to plugin data.
+		addToggle(advancedCtx, {
+			name: 'Advanced settings',
+			desc: 'Reveal the dictionary and the experimental two-pass mode for this run. Off keeps a single plain pass with no term biasing.',
+			get: () => s.transcriptionAdvancedSettingsEnabled,
+			set: (v) => (s.transcriptionAdvancedSettingsEnabled = v),
+			// Re-render so the dictionary and two-pass controls appear or hide.
+			rerender: true,
+		});
+		if (s.transcriptionAdvancedSettingsEnabled) {
+			const profiles = profilesOfKind(
+				s.profiles,
+				ProfileKindId.Dictionary,
+			);
+			// A stored id whose profile was removed reads as None here.
+			const selectedDictionaryProfileId = selectedProfileId(
+				s,
+				ProfileKindId.Dictionary,
+			);
+			addDropdown(advancedCtx, {
+				name: 'Dictionary',
+				desc: profileText.describe(
+					providerSupportsDictionary(s.transcriptionProvider)
+						? 'Bias recognition toward a named glossary, or None.'
+						: 'The selected engine cannot bias recognition; the dictionary is ignored.',
+					selectedProfile(s, ProfileKindId.Dictionary),
+				),
+				options: [
+					{ value: '', label: 'None' },
+					...profiles.map((profile) => ({
+						value: profile.id,
+						label: profile.name,
+					})),
+				],
+				get: () => selectedDictionaryProfileId,
+				set: (v) => {
+					// Affects this run (runSettings clone); persist as the
+					// remembered choice for the next dialog and transcribe-on-save.
+					setSelectedProfileId(s, ProfileKindId.Dictionary, v);
+					void this.options.onProfileSelected?.(
+						ProfileKindId.Dictionary,
+						v,
+					);
+				},
+				// Re-render so the line naming the picked glossary's text
+				// follows the pick.
+				rerender: true,
+			});
+
+			// Advanced two-pass mode: the sub-toggle under the advanced settings,
+			// a per-run override of the saved setting so a pricier context-biased
+			// run can be enabled (or skipped) for this file. It reuses the
+			// Dictionary terms picked above; the length safeguard stays in the
+			// settings tab, so only the on/off decision is per-run here.
+			addToggle(advancedCtx, {
+				name: 'Advanced two-pass transcription',
+				desc: 'Transcribe twice and bias the second pass with LLM-generated context (names, jargon, English acronyms), reusing the Dictionary terms above. Roughly 2x the engine cost plus LLM calls. The length safeguard stays in settings.',
+				get: () => s.transcriptionAdvancedEnabled,
+				set: (v) => (s.transcriptionAdvancedEnabled = v),
+			});
+		}
+
+		if (s.transcriptDestination !== TranscriptDestination.Note) {
+			addDropdown(advancedCtx, {
+				name: 'File format',
+				options: TRANSCRIPT_FILE_FORMAT_OPTIONS,
+				get: () => s.transcriptFileFormat,
+				set: (v) =>
+					(s.transcriptFileFormat = v as TranscriptFileFormat),
+			});
+		}
+		// In-note formatting applies only when the transcript Markdown is
+		// rendered into the note (note/both). For file/link only the sidecar
+		// file is produced, so these toggles would have no effect.
+		if (
+			s.transcriptDestination === TranscriptDestination.Note ||
+			s.transcriptDestination === TranscriptDestination.Both
+		) {
+			addToggle(advancedCtx, {
+				name: 'Include timestamps',
+				get: () => s.transcriptIncludeTimestamps,
+				set: (v) => (s.transcriptIncludeTimestamps = v),
+			});
+			addToggle(advancedCtx, {
+				name: 'Include speakers',
+				desc: diarizes
+					? undefined
+					: 'Available only with speaker diarization.',
+				get: () => s.transcriptIncludeSpeakers,
+				set: (v) => (s.transcriptIncludeSpeakers = v),
+				disabled: !diarizes,
+			});
+		}
+
+		addToggle(advancedCtx, {
+			name: 'LLM post-processing',
+			desc: 'Clean up, summarize, or apply a custom instruction with an LLM.',
+			get: () => s.llmPostProcessEnabled,
+			set: (v) => (s.llmPostProcessEnabled = v),
+			rerender: true,
+		});
+		if (s.llmPostProcessEnabled) {
+			// Only the task is per-run here; the LLM provider, endpoint, key,
+			// and model stay in settings (a key cannot be entered safely in a
+			// transient dialog), so switching providers belongs in the tab.
+			addDropdown(advancedCtx, {
+				name: 'LLM task',
+				options: LLM_TASK_OPTIONS,
+				get: () => s.llmPostProcessTask,
+				set: (v) => (s.llmPostProcessTask = v as LlmTask),
+			});
+		}
+		if (s.transcriptionAutoChaptersEnabled) {
+			addToggle(advancedCtx, {
+				name: 'Generate chapters',
+				desc: 'After transcribing, ask the LLM to add titled chapters to the enhanced player.',
+				get: () => s.transcriptionAutoChaptersOnTranscribe,
+				set: (v) => (s.transcriptionAutoChaptersOnTranscribe = v),
+				// Re-render so the chapter-profile picker below appears or
+				// hides in step with the toggle.
+				rerender: true,
+			});
+			if (s.transcriptionAutoChaptersOnTranscribe) {
+				const chapterProfiles = profilesOfKind(
+					s.profiles,
+					ProfileKindId.ChapterPrompt,
+				);
+				// A stored id whose profile was removed reads as None here.
+				const selectedChapterProfileId = selectedProfileId(
+					s,
+					ProfileKindId.ChapterPrompt,
+				);
+				// Compact picker whose only description is the line naming the
+				// picked guidance's text, so the section does not grow tall.
+				addDropdown(advancedCtx, {
+					name: 'Chapter profile',
+					desc: profileText.status(
+						selectedProfile(s, ProfileKindId.ChapterPrompt),
+					),
+					options: [
+						{ value: '', label: 'None (base prompt)' },
+						...chapterProfiles.map((profile) => ({
+							value: profile.id,
+							label: profile.name,
+						})),
+					],
+					get: () => selectedChapterProfileId,
+					set: (v) => {
+						// Affects this run and, persisted, the after-transcription
+						// generation which reads the plugin settings.
+						setSelectedProfileId(s, ProfileKindId.ChapterPrompt, v);
+						void this.options.onProfileSelected?.(
+							ProfileKindId.ChapterPrompt,
+							v,
+						);
+					},
+					rerender: true,
+				});
+			}
+		}
+		// Re-evaluated on every rerender (the Engine dropdown triggers one),
+		// so the Transcribe button tracks the freshly selected engine.
+		this.refreshRunButtonState();
+		// The estimate is computed from the whole snapshot, so it is drawn on
+		// the first render and on any re-render; a control that changes a value
+		// without reshaping the config refreshes it through onValueChanged.
+		this.updateCostEstimate();
+	}
+
+	/**
+	 * Kicks off the duration probe at most once. Only called when a priced
+	 * estimate line actually needs the duration, so a disabled estimate or a
+	 * free local run never triggers a read.
+	 */
+	private maybeProbeDuration(): void {
+		if (this.probeStarted) {
+			return;
+		}
+		this.probeStarted = true;
+		void this.probeDuration();
+	}
+
+	/**
+	 * Reads the audio duration and refreshes the estimate once it resolves.
+	 *
+	 * Every priced line is sized by the duration, so a file whose duration
+	 * cannot be read shows no estimate at all. The container headers answer for
+	 * most files and cost nothing, but a recorder writing live leaves no
+	 * duration in the segment it has not finished, which is this plugin's own
+	 * output - so the read goes on to the browser rather than giving up on the
+	 * files the plugin produces itself. A length none of them could read stays
+	 * null and is shown as unavailable: priced as a number it would put a
+	 * confident zero on every line of the breakdown, which is the one answer
+	 * worse than no answer. Failure still leaves the duration unknown; the
+	 * estimate degrades instead of blocking the dialog.
+	 */
+	private async probeDuration(): Promise<void> {
+		try {
+			const bytes = await this.app.vault.readBinary(this.file);
+			// Keep the bytes so the imminent run reuses them rather than reading
+			// the whole file again.
+			this.probedBytes = bytes;
+			const metadata = await readAudioMetadata(bytes, this.file.path);
+			this.durationSeconds = metadata?.durationSeconds ?? null;
+		} catch {
+			this.durationSeconds = null;
+			this.probedBytes = null;
+		}
+		this.probeFinished = true;
+		this.updateCostEstimate();
+	}
+
+	/**
+	 * Renders the combined pre-run estimate (transcription plus any
+	 * post-processing pass) and the running session total. Hidden entirely
+	 * when cost estimates are off. The audio probe is deferred to here and
+	 * started only when a priced line needs the duration, so a disabled
+	 * estimate, a free local run, or an auto-run never reads the whole file
+	 * just to price it - and an auto-run, which immediately reads the file to
+	 * transcribe, never holds two copies at once.
+	 */
+	private updateCostEstimate(): void {
+		const el = this.costEstimateEl;
+		if (!el) {
+			return;
+		}
+		el.empty();
+		const s = this.runSettings;
+		if (!s.transcriptionShowCostEstimates) {
+			return;
+		}
+		if (
+			costEstimateNeedsDuration(s) &&
+			!this.probeFinished &&
+			!this.options.autoStart
+		) {
+			this.maybeProbeDuration();
+			el.createDiv({
+				cls: 'aar-transcribe-cost-title',
+				text: 'Estimating cost...',
+			});
+		} else if (!this.options.autoStart || this.probeFinished) {
+			this.renderCostEstimate(
+				el,
+				buildCostEstimate(s, this.durationSeconds),
+			);
+		}
+		this.renderSessionTotal(el);
+	}
+
+	/** Renders the estimate breakdown: a line per part, the total, and pricing links. */
+	private renderCostEstimate(el: HTMLElement, estimate: CostEstimate): void {
+		el.createDiv({
+			cls: 'aar-transcribe-cost-title',
+			text: 'Estimated cost',
+		});
+		const list = el.createEl('ul', { cls: 'aar-transcribe-cost-list' });
+		for (const line of estimate.lines) {
+			const model = line.model ? ` (${line.model})` : '';
+			list.createEl('li', {
+				text: `${line.label} - ${line.providerName}${model}: ${formatCostLine(line)}`,
+			});
+		}
+		if (estimate.totalUsd !== null) {
+			const suffix = estimate.hasUnpriced
+				? ' (excludes unpriced parts)'
+				: '';
+			// Named as this run's forecast because it sits directly above the
+			// session total, which is a different quantity: an unlabelled
+			// "estimated total" beside an accumulated one reads as a broken
+			// calculation rather than as two answers to two questions.
+			el.createDiv({
+				cls: 'aar-transcribe-cost-total',
+				text: `Estimated total for this run: ~${formatUsd(estimate.totalUsd)}${suffix}`,
+			});
+		}
+		// Every line past the transcription one is an LLM step (context agents,
+		// post-processing, chapters), billed by the LLM provider, which reports
+		// no usage. They are priced from the same step model both here and when
+		// they run, and they do reach the session total - so the only caveat
+		// left is that their share of it is an estimate rather than a
+		// provider-reported figure.
+		if (estimate.lines.length > 1) {
+			el.createDiv({
+				cls: 'aar-transcribe-cost-note',
+				text: 'The LLM steps above are billed by their own provider, which reports no usage, so their share of the session total is estimated.',
+			});
+		}
+		this.renderPricingLinks(el, estimate);
+	}
+
+	/**
+	 * Renders one "check current pricing" link per distinct provider the
+	 * estimate involves, replacing a static "verify against your provider"
+	 * caveat so the link points at whichever providers this run uses.
+	 */
+	private renderPricingLinks(el: HTMLElement, estimate: CostEstimate): void {
+		// Collect distinct providers as a definite-URL shape so the anchor below
+		// needs no fallback for a possibly-missing href.
+		const seen = new Set<string>();
+		const linked: { providerName: string; pricingUrl: string }[] = [];
+		for (const line of estimate.lines) {
+			if (!line.pricingUrl || seen.has(line.pricingUrl)) {
+				continue;
+			}
+			seen.add(line.pricingUrl);
+			linked.push({
+				providerName: line.providerName,
+				pricingUrl: line.pricingUrl,
+			});
+		}
+		if (linked.length === 0) {
+			return;
+		}
+		const note = el.createDiv({ cls: 'aar-transcribe-cost-note' });
+		note.createSpan({
+			text: 'Built-in approximate rates. Check current pricing: ',
+		});
+		linked.forEach((provider, index) => {
+			if (index > 0) {
+				note.createSpan({ text: ', ' });
+			}
+			// Open the pricing page in the browser rather than navigating the
+			// Obsidian window, matching the convention used for every other
+			// external anchor in the plugin.
+			note.createEl('a', {
+				text: provider.providerName,
+				attr: {
+					href: provider.pricingUrl,
+					target: '_blank',
+					rel: 'noopener',
+				},
+			});
+		});
+		note.createSpan({ text: '.' });
+	}
+
+	/**
+	 * Renders the running per-session spending, set under its own heading so it
+	 * reads as a second figure rather than as the tail of the estimate above it:
+	 * the two cover different spans and are never meant to be subtracted.
+	 */
+	private renderSessionTotal(el: HTMLElement): void {
+		const tracker = this.options.costTracker;
+		if (!tracker?.hasEntries()) {
+			return;
+		}
+		const notes: string[] = [];
+		const unpriced = tracker.unpricedRuns();
+		if (unpriced > 0) {
+			notes.push(
+				`${String(unpriced)} run${unpriced > 1 ? 's' : ''} not priced`,
+			);
+		}
+		// Most of the total is now what the vendors themselves reported, so
+		// the line says how much of it is not: an estimate presented as a
+		// measurement is the thing this counter exists to avoid.
+		const estimated = tracker.estimatedRuns();
+		if (estimated > 0) {
+			notes.push(
+				`${String(estimated)} step${estimated > 1 ? 's' : ''} estimated`,
+			);
+		}
+		const suffix = notes.length > 0 ? ` (${notes.join(', ')})` : '';
+		el.createDiv({
+			cls: 'aar-transcribe-cost-session-title',
+			text: 'Session spending',
+		});
+		el.createDiv({
+			cls: 'aar-transcribe-cost-session',
+			text: `Spent this session: ~${formatUsd(tracker.totalUsd())}${suffix}`,
+		});
+		el.createDiv({
+			cls: 'aar-transcribe-cost-note',
+			text: 'Everything priced since Obsidian started; this run is not counted yet.',
+		});
+	}
+
+	/**
+	 * Adds a finished run's cost to the session tracker and returns the
+	 * amount recorded. Prefers the provider-reported actuals; when the run
+	 * could not be priced from usage, falls back to the duration-based
+	 * transcription estimate so the session counter does not silently
+	 * under-count. The free local engine is never recorded.
+	 *
+	 * This accounts the transcription only. The run's LLM steps report
+	 * themselves through the cost sink as they happen (see runLlmStep), so the
+	 * session total already carries their estimated share by the time this
+	 * runs - adding them here would double-count. The caller decides whether to
+	 * surface a notice and calls this exactly once per run.
+	 * @param settings - The run's settings snapshot
+	 * @param cost - Cost summary reported for the run
+	 * @returns The USD recorded, or null when the run could not be priced
+	 */
+	private accountRunCost(
+		settings: AudioRecorderSettings,
+		cost: TranscribeRunCost,
+	): number | null {
+		// Actual multi-pass billing flows through the summed usage in cost.usd;
+		// the shared rule only estimates when the provider reported no usage to
+		// price from, and leaves out the runs that are not counted at all.
+		const usd =
+			this.options.costTracker?.recordRun(
+				cost,
+				settings,
+				this.durationSeconds,
+			) ?? null;
+		// Refresh the session line so a follow-up run sees the new total.
+		this.updateCostEstimate();
+		return usd;
+	}
+
+	/**
+	 * Whether the engine selected for this run can execute on this
+	 * platform. A stored engine synced from another platform (local
+	 * whisper.cpp on mobile) stays visible but cannot transcribe here.
+	 * @returns True when the selected engine is usable on this platform
+	 */
+	private isSelectedEngineAvailable(): boolean {
+		return isProviderAvailableOnPlatform(
+			this.runSettings.transcriptionProvider,
+		);
+	}
+
+	/**
+	 * Disables the Transcribe button while a run is in flight or when the
+	 * selected engine cannot run on this platform, so a stored engine
+	 * synced from another device cannot be launched into a doomed run.
+	 */
+	private refreshRunButtonState(): void {
+		this.runButton?.setDisabled(
+			this.busy || !this.isSelectedEngineAvailable(),
+		);
+	}
+
+	/**
+	 * Runs the transcription, updating progress and handling errors.
+	 */
+	private async startRun(): Promise<void> {
+		if (this.busy) {
+			return;
+		}
+		// Guard the run itself, not just the option's disabled state: a
+		// stored engine that cannot execute here (local whisper.cpp on
+		// mobile) stays the selected value, so without this a click would
+		// launch a doomed run that only fails with a generic error.
+		if (!this.isSelectedEngineAvailable()) {
+			const message =
+				'The selected engine is not available on this device. Pick a cloud engine to transcribe here.';
+			new Notice(message);
+			this.options.onRunSettled?.({ status: 'failed', message });
+			return;
+		}
+		this.setRunning(true);
+		this.updateProgress(0, DEFAULT_TRANSCRIBE_LABEL);
+		// Snapshot the options so a control toggled mid-run cannot change an
+		// in-flight job; edits only affect the next attempt after a failure.
+		const settings = { ...this.runSettings };
+		// Lets abort-capable providers stop an in-flight request at once, and
+		// requestUrl-only endpoints still finish or time out on their own.
+		const token: CancellationToken = this.cancellation.token;
+		this.runningCostEl?.setText('');
+		// The last cumulative cost the run reported, kept so an already-billed
+		// run is still counted when the transcript write fails after the
+		// provider call succeeded (a read-only or full vault).
+		let lastCost: TranscribeRunCost | null = null;
+		let accounted = false;
+		try {
+			const result = await transcribeFile(
+				this.app,
+				() => settings,
+				this.file,
+				{
+					notePathForLinks: this.notePath,
+					token,
+					sidecar: this.options.sidecar,
+					// Reuse the bytes read for the estimate probe so a manual run
+					// does not read the whole file twice (undefined on an auto-run,
+					// which never probes).
+					audioBytes: this.probedBytes ?? undefined,
+					onProgress: (fraction, label) => {
+						this.updateProgress(fraction, label);
+					},
+					onCost: (cost) => {
+						lastCost = cost;
+						// Live spending line: only when the parts completed so
+						// far actually priced to something.
+						if (
+							settings.transcriptionShowCostEstimates &&
+							cost.usd !== null &&
+							cost.usd > 0
+						) {
+							this.runningCostEl?.setText(
+								`Cost so far: ~${formatUsd(cost.usd)}`,
+							);
+						}
+					},
+				},
+				// The run's LLM steps (context agents, post-processing) bill the
+				// LLM provider, which reports no usage; they report their
+				// estimated cost to the same session counter.
+				{ costSink: this.options.costTracker },
+			);
+			const usd = this.accountRunCost(settings, result.cost);
+			accounted = true;
+			this.options.onRunSettled?.({
+				status: 'done',
+				destination: settings.transcriptDestination,
+				notePath: this.notePath,
+				missingParts: result.missingParts.length,
+			});
+			if (autoChaptersAfterTranscribe(settings)) {
+				// Fire-and-forget on the fresh in-memory transcript: the
+				// dialog closes normally while chapters generate in the
+				// background, reporting through their own Notices.
+				void this.options.generateChapters?.(
+					this.file,
+					result.transcript,
+				);
+			}
+			if (usd !== null) {
+				const total = this.options.costTracker?.totalUsd();
+				new Notice(
+					`Transcription cost ~${formatUsd(usd)}` +
+						(total !== undefined
+							? ` (session total ~${formatUsd(total)})`
+							: '') +
+						'.',
+				);
+			}
+			this.setRunning(false);
+			this.clearBackgroundProgress();
+			if (this.minimized) {
+				this.minimized = false;
+				this.contentEl.empty();
+				this.rendered = false;
+			} else {
+				this.close();
+			}
+		} catch (error) {
+			// The provider was billed even if writing the transcript failed
+			// afterwards (or the user cancelled after some parts completed),
+			// so count what the run reported before surfacing the error, and
+			// only once.
+			if (!accounted && lastCost) {
+				this.accountRunCost(settings, lastCost);
+				accounted = true;
+			}
+			if (error instanceof TranscriptionCancelledError) {
+				new Notice('Transcription cancelled.');
+				this.statusEl?.setText('Cancelled.');
+				this.options.onRunSettled?.({ status: 'cancelled' });
+			} else {
+				const message = errorMessage(error);
+				new Notice(`Transcription failed: ${message}`);
+				this.statusEl?.setText(`Failed: ${message}`);
+				this.options.onRunSettled?.({ status: 'failed', message });
+			}
+			if (this.minimized) {
+				this.restore();
+			}
+		} finally {
+			if (this.busy) {
+				this.setRunning(false);
+			}
+			this.clearBackgroundProgress();
+			// The run consumed the probe bytes (or failed); drop the reference so
+			// a large recording is not held after the run. A retry re-reads.
+			this.probedBytes = null;
+		}
+	}
+
+	/**
+	 * Cancels the in-flight run: flags the cooperative token and aborts the
+	 * current HTTP request where the transport supports it.
+	 */
+	private cancelRun(): void {
+		this.cancellation.cancel();
+	}
+
+	/**
+	 * Toggles the running state: disables the config and run button while a
+	 * job is in flight and switches the secondary button between cancel and
+	 * close.
+	 * @param running - Whether a transcription is in progress
+	 */
+	private setRunning(running: boolean): void {
+		this.busy = running;
+		if (running) {
+			// A fresh source per run, so a cancel from a previous attempt
+			// cannot leave this one starting out already cancelled.
+			this.cancellation = new CancellationSource();
+			this.startElapsedTimer();
+		} else {
+			this.stopElapsedTimer();
+		}
+		// Also stays disabled when the selected engine cannot run here, so
+		// finishing a run does not re-enable a doomed one.
+		this.runButton?.setDisabled(
+			running || !this.isSelectedEngineAvailable(),
+		);
+		this.minimizeButton?.setDisabled(!running);
+		this.secondaryButton?.setButtonText(running ? 'Cancel' : 'Close');
+		this.configEl?.toggleClass('aar-transcribe-options-disabled', running);
+	}
+
+	/**
+	 * Starts the live elapsed-time counter, ticking once a second. The same
+	 * element is reused across minimize/restore, so the counter keeps running
+	 * visually while the job continues.
+	 */
+	private startElapsedTimer(): void {
+		this.runStartedAt = Date.now();
+		this.renderElapsed();
+		if (this.elapsedTimer !== null) {
+			window.clearInterval(this.elapsedTimer);
+		}
+		this.elapsedTimer = window.setInterval(() => {
+			this.renderElapsed();
+		}, 1000);
+	}
+
+	/** Stops the elapsed-time counter, leaving the final value on screen. */
+	private stopElapsedTimer(): void {
+		if (this.elapsedTimer !== null) {
+			window.clearInterval(this.elapsedTimer);
+			this.elapsedTimer = null;
+		}
+	}
+
+	/** Writes the elapsed time since the run started as mm:ss (or h:mm:ss). */
+	private renderElapsed(): void {
+		if (!this.elapsedEl) {
+			return;
+		}
+		const seconds = Math.floor((Date.now() - this.runStartedAt) / 1000);
+		this.elapsedEl.setText(`Elapsed ${formatTimecode(seconds)}`);
+	}
+
+	/**
+	 * Updates the progress bar and status label.
+	 */
+	private updateProgress(fraction: number, label: string): void {
+		this.statusEl?.setText(label);
+		if (this.progressBar) {
+			// Both bars that show it bring the number into 0..100 themselves
+			const percent = fraction * 100;
+			this.lastProgress = { percent, description: label };
+			this.progressBar.setValue(percent);
+			this.reportBackgroundProgress();
+		}
+	}
+
+	/**
+	 * Minimizes the modal while keeping the current transcription running.
+	 */
+	private minimize(): void {
+		if (!this.busy || this.minimized) {
+			return;
+		}
+		this.minimized = true;
+		this.reportBackgroundProgress();
+		this.close();
+	}
+
+	/**
+	 * Restores a minimized modal.
+	 */
+	private restore(): void {
+		if (!this.minimized) {
+			return;
+		}
+		this.minimized = false;
+		this.clearBackgroundProgress();
+		this.open();
+	}
+
+	/**
+	 * Publishes the latest progress to the status bar while minimized.
+	 */
+	private reportBackgroundProgress(): void {
+		if (!this.minimized) {
+			return;
+		}
+		this.options.backgroundProgress?.show(this.lastProgress, () => {
+			this.restore();
+		});
+	}
+
+	/**
+	 * Clears this modal's background progress entry.
+	 */
+	private clearBackgroundProgress(): void {
+		this.options.backgroundProgress?.clear();
+	}
+
+	override onClose(): void {
+		if (this.minimized && this.busy) {
+			return;
+		}
+		if (this.busy) {
+			this.cancelRun();
+		}
+		this.stopElapsedTimer();
+		this.clearBackgroundProgress();
+		// Release any bytes cached for the estimate probe on close.
+		this.probedBytes = null;
+		super.onClose();
+		this.rendered = false;
+	}
+}

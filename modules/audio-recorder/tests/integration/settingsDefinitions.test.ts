@@ -1,0 +1,2696 @@
+/**
+ * Unit tests for the tab's definition tree: what each section declares, and how
+ * the rows that keep a render callback - the ones no control type covers -
+ * behave under the framework that owns them.
+ * @module tests/unit/settingsDefinitions.test
+ */
+
+import type { Setting, SettingDefinitionItem, TFile } from 'obsidian';
+import {
+	groupOf,
+	listIn,
+	pageOf,
+	renderDefinitionOf,
+	rowIn,
+	renderThroughFramework,
+	rowNamesIn,
+	rowOf,
+	type GroupDefinition,
+	type RenderDefinition,
+	type RowDefinition,
+} from '../helpers/declarativeSettings';
+import {
+	RecordingBannerAnchor,
+	type AudioRecorderSettings,
+} from 'src/settings/settingsSchema';
+import type { ProfileSection } from 'src/settings/profileKinds';
+import {
+	CHANNEL_MODE_LABELS,
+	CONVERSION_LINK_ACTION_LABELS,
+	PCM_SAMPLE_FORMAT_LABELS,
+	LLM_PROVIDER_LABELS,
+	LLM_TASK_LABELS,
+	RECORDING_BANNER_ANCHOR_LABELS,
+	TRANSCRIPTION_PROVIDER_LABELS,
+	TRANSCRIPT_DESTINATION_LABELS,
+	TRANSCRIPT_FILE_FORMAT_LABELS,
+} from 'src/settings/labels';
+import {
+	ACCOUNTS,
+	ENGINES,
+	ENGINE_IDS,
+	ENGINE_ORDER,
+	accountOf,
+	type EngineId,
+	EngineLabel,
+} from 'src/providers/providers';
+import {
+	CLEANUP_HIGHPASS_STEP_HZ,
+	MAX_CLEANUP_HIGHPASS_HZ,
+	MIN_CLEANUP_HIGHPASS_HZ,
+	MIN_SPLIT_CHUNK_MINUTES,
+	MAX_SPLIT_CHUNK_MINUTES,
+	MAX_LLM_MAX_TOKENS,
+	TRANSCRIPTION_PROVIDER_IDS,
+	WHISPER_API_MODELS_DOC_URL,
+} from 'src/constants';
+import {
+	SETTINGS_BLOCK_ROW_CLASS,
+	SETTINGS_ROOT_CLASS,
+	SETTINGS_SECTION_CLASS,
+	STACKED_TEXT_CLASS,
+	buildSettingsDefinitions,
+	collectDebouncedControlKeys,
+	type DiagnosticsActions,
+	type ProfileCatalogue,
+	type SettingsDefinitionContext,
+} from 'src/settings/settingsDefinitions';
+import { numberControlRejection } from '../mocks/settingsFramework';
+import {
+	setPlatform,
+	useDesktopPlatform,
+	useMobilePlatform,
+} from '../helpers/platform';
+import { maybeEl } from '../helpers/dom';
+import {
+	installDisplayMediaHost,
+	type DisplayMediaHost,
+	type DisplayMediaHostOptions,
+} from '../helpers/displayMediaHost';
+import { MAX_TRACK_COUNT } from 'src/settings/sections/controlKeys';
+import type { AudioSource } from 'src/settings/settingsSchema';
+import { SETTING } from '../helpers/selectors';
+import { partial } from '../helpers/doubles';
+import { at } from '../helpers/assertions';
+import { defaultSettings } from '../helpers/settingsFixtures';
+
+describe('settings definitions', () => {
+	let settings: AudioRecorderSettings;
+	let renderDocs: jest.Mock;
+	let renderFormatRow: jest.Mock;
+	let renderBitrateRow: jest.Mock;
+	let addModel: jest.Mock;
+	let addProfile: jest.Mock;
+	let renameProfile: jest.Mock;
+	let removeProfile: jest.Mock;
+	let reorderProfile: jest.Mock;
+	let openProfileSource: jest.Mock;
+	let profileSourcePath: string;
+	let profileReadsNote: boolean;
+	let profileEntries: ReturnType<ProfileCatalogue['entries']>;
+	let selectedProfileId: string;
+	let removeModel: jest.Mock;
+	let selectModel: jest.Mock;
+	let renderSummaryRow: jest.Mock;
+	let diagnostics: { [K in keyof DiagnosticsActions]: jest.Mock };
+
+	beforeEach(() => {
+		settings = defaultSettings();
+		// Stands in for the real body with one marker element, so a test can see
+		// which host it was rendered into and whether it survived.
+		renderDocs = jest.fn((host: HTMLElement) => {
+			host.createDiv({ cls: 'aar-doc-callout' });
+		});
+		renderFormatRow = jest.fn();
+		renderBitrateRow = jest.fn();
+		addModel = jest.fn();
+		addProfile = jest.fn();
+		renameProfile = jest.fn();
+		removeProfile = jest.fn();
+		reorderProfile = jest.fn();
+		openProfileSource = jest.fn();
+		profileSourcePath = '';
+		profileReadsNote = false;
+		profileEntries = [
+			{
+				id: 'a',
+				name: 'Standup',
+				summary: 'Typed text, 3 terms',
+				status: 'Uses the text typed in the settings.',
+			},
+			{
+				id: 'b',
+				name: 'Legal',
+				summary: 'In use, note, 12 terms',
+				status: 'Uses the text of Glossaries/Legal.md.',
+			},
+		];
+		selectedProfileId = 'b';
+		removeModel = jest.fn();
+		selectModel = jest.fn();
+		renderSummaryRow = jest.fn();
+		diagnostics = {
+			startTestRecording: jest.fn(),
+			releaseTestRecording: jest.fn(),
+			showSystemInfo: jest.fn(),
+		};
+	});
+
+	const createContext = (): SettingsDefinitionContext => ({
+		settings,
+		sampleRates: [44100, 48000],
+		outputFormat: {
+			renderFormatRow: renderFormatRow as (setting: Setting) => void,
+			renderBitrateRow: renderBitrateRow as (setting: Setting) => void,
+			renderSummaryRow: renderSummaryRow as (setting: Setting) => void,
+		},
+		renderDocumentationLink: renderDocs as (host: HTMLElement) => void,
+		devices: {
+			enumerated: true,
+			inputs: {
+				'mic-1': 'Built-in microphone',
+				'iface-1': 'Audio interface',
+			},
+			channelSelectable: (deviceId: string): boolean =>
+				deviceId === 'iface-1',
+		},
+		diagnostics: diagnostics,
+		profiles: [
+			catalogue('advanced', 'Dictionary profiles', 'Terms'),
+			catalogue(
+				'chapters',
+				'Chapter guidance profiles',
+				'Guidance prompt',
+			),
+			catalogue('transcription', 'Participant profiles', 'Participants'),
+			catalogue('quickNotes', 'Quick note profiles', 'Instruction'),
+		],
+		transcriptionBlocks: {
+			renderLocalWhisperFields: jest.fn(),
+			addModel: addModel as (engine: EngineId) => void,
+			removeModel: removeModel as (
+				engine: EngineId,
+				model: string,
+			) => void,
+			selectModel: selectModel as (
+				engine: EngineId,
+				model: string,
+			) => void,
+		},
+	});
+
+	/** A profile catalogue whose edits are spies. */
+	const catalogue = (
+		section: ProfileSection,
+		heading: string,
+		bodyName: string,
+	): ProfileCatalogue => ({
+		section,
+		heading,
+		selectorDesc: 'Pick the profile to use.',
+		bodyName,
+		bodyDesc: 'The profile body.',
+		selectionName: 'Use by default',
+		selectionDesc: 'Offer this profile in the Transcribe dialog.',
+		selectedId: () => selectedProfileId,
+		selectionKey: `${heading} id`,
+		choiceKey: `${heading}.choice`,
+		bodyKey: `${heading}.body`,
+		noteKey: `${heading}.note`,
+		sourcePath: () => profileSourcePath,
+		readsNote: () => profileReadsNote,
+		sourceRejection: () => undefined,
+		openSource: openProfileSource as (id: string) => void,
+		entries: () => profileEntries,
+		visible: () => true,
+		add: addProfile as () => void,
+		rename: renameProfile as (id: string) => void,
+		remove: removeProfile as (id: string) => void,
+		reorder: reorderProfile as (from: number, to: number) => void,
+	});
+
+	const build = (): SettingDefinitionItem[] =>
+		buildSettingsDefinitions(createContext());
+
+	/**
+	 * Whether a control is blocked, however the row declared it.
+	 * @param control - The row's control, when it has one
+	 */
+	const disabledOf = (
+		control: { disabled?: unknown } | undefined,
+	): boolean =>
+		typeof control?.disabled === 'function'
+			? (control.disabled as () => boolean)()
+			: control?.disabled === true;
+
+	/**
+	 * Names of a page's own children, rows and entries alike. A page whose rows
+	 * are one block declares that block itself, so what it shows is a level in.
+	 * @param name - Name on the page's entry
+	 */
+	const pageEntryNames = (name: string): string[] => {
+		const [block] = pageOf(build(), name).items as GroupDefinition[];
+		return (block?.items ?? []).map((item) => item.name ?? '');
+	};
+
+	/**
+	 * What a page's entry reports without being opened. Declared as a value or
+	 * a function by the tree, so both are read the same way here.
+	 * @param page - The page whose entry is being read
+	 */
+	const entryValueOf = (page: GroupDefinition): string | undefined =>
+		typeof page.displayValue === 'function'
+			? page.displayValue()
+			: page.displayValue;
+
+	/**
+	 * The indicator a page's entry carries, read the same way.
+	 * @param page - The page whose entry is being read
+	 */
+	const entryStatusOf = (
+		page: GroupDefinition,
+	): 'warning' | null | undefined =>
+		typeof page.status === 'function' ? page.status() : page.status;
+
+	/** The diagnostics group of a built tree. */
+	const diagnosticsGroupOf = (
+		definitions: SettingDefinitionItem[],
+	): GroupDefinition => groupOf(definitions, 'Diagnostics');
+
+	describe('the documentation row', () => {
+		it('renders the callout into the row the framework hands over', () => {
+			const { setting, containerEl } = renderThroughFramework(
+				renderDefinitionOf(build()),
+			);
+
+			expect(renderDocs).toHaveBeenCalledWith(setting.settingEl);
+			// The body survives the framework's post-render pass because it
+			// lives inside the tracked row.
+			expect(maybeEl(containerEl, SETTING.docCallout)).not.toBeNull();
+		});
+
+		it('marks the row so the stylesheet can strip its setting-row layout', () => {
+			const { setting } = renderThroughFramework(
+				renderDefinitionOf(build()),
+			);
+
+			expect(
+				setting.settingEl.classList.contains(SETTINGS_ROOT_CLASS),
+			).toBe(true);
+			expect(setting.settingEl.contains(setting.nameEl)).toBe(false);
+		});
+
+		it('stays out of the settings search, having nothing to configure', () => {
+			expect(
+				(renderDefinitionOf(build()) as { searchable?: boolean })
+					.searchable,
+			).toBe(false);
+		});
+
+		it('keeps the release notes switch beside the callout', () => {
+			// Both rows are about the plugin itself rather than about the
+			// recording being set up, which is why they share the block above
+			// everything a session is configured with.
+			const top = partial<GroupDefinition>(at(build(), 0, 'block'));
+
+			expect(rowNamesIn(top)).toEqual(['Documentation', 'Release notes']);
+			expect(rowIn(top, 'Release notes').control).toEqual(
+				expect.objectContaining({
+					type: 'toggle',
+					key: 'showReleaseNotes',
+				}),
+			);
+		});
+	});
+
+	describe('search terms', () => {
+		/** Every row in the tree, at any depth. */
+		const allRows = (
+			entries: readonly SettingDefinitionItem[],
+		): RowDefinition[] =>
+			entries.flatMap((entry) =>
+				'type' in entry
+					? allRows((entry.items ?? []) as SettingDefinitionItem[])
+					: [entry as unknown as RowDefinition],
+			);
+
+		/** The declared aliases of a row, addressed by name. */
+		const aliasesOf = (name: string): string[] => {
+			const row = allRows(build()).find((entry) => entry.name === name);
+			if (!row) {
+				throw new Error(`No "${name}" row declared`);
+			}
+			return row.aliases ?? [];
+		};
+
+		it('lets the settings search find a row by what it does', () => {
+			// The framework indexes a row by its name and its aliases, so a
+			// user who searches for the thing rather than for our word for it
+			// still lands on the row.
+			expect(aliasesOf('Input device')).toContain('microphone');
+			expect(aliasesOf('Enable transcription')).toContain(
+				'speech to text',
+			);
+			expect(aliasesOf('Loudness leveling')).toContain('normalize');
+		});
+
+		it('lets the settings search find a key row by "API key" and by the keychain', () => {
+			// The row is named for its service, so a search for the generic
+			// term or for where the key now lives reaches every one of them.
+			for (const account of Object.values(ACCOUNTS)) {
+				expect(aliasesOf(account.keyFieldName)).toEqual(
+					expect.arrayContaining(['api key', 'token', 'keychain']),
+				);
+			}
+		});
+
+		it('makes the fields inside a hand-rendered block findable', () => {
+			// The search indexes definitions, and the paths block is one
+			// definition, so its fields have no rows of their own to match.
+			expect(aliasesOf('Binary and model paths')).toContain('offline');
+		});
+
+		it('declares no alias that repeats the row name', () => {
+			for (const row of allRows(build())) {
+				expect(row.aliases ?? []).not.toContain(row.name.toLowerCase());
+			}
+		});
+	});
+
+	describe('the transcription sub-page', () => {
+		/** The transcription page entry. */
+		const transcriptionPage = (): GroupDefinition =>
+			pageOf(build(), 'Transcription');
+
+		it('gathers the transcription groups behind one entry', () => {
+			const page = transcriptionPage();
+
+			expect(page.name).toBe('Transcription');
+			// Every transcription group moved onto the page, so the main tab
+			// carries none of them.
+			expect(
+				page.items.map((item) => (item as GroupDefinition).heading),
+			).toEqual(
+				expect.arrayContaining([
+					'Transcription',
+					'Transcript output',
+					'Auto chapters',
+					'LLM post-processing',
+				]),
+			);
+			expect(
+				build().some(
+					(item) =>
+						'type' in item &&
+						item.type !== 'page' &&
+						item.heading === 'Transcript output',
+				),
+			).toBe(false);
+		});
+
+		it('keeps a collection off the page that owns it', () => {
+			settings.transcriptionEnabled = true;
+			settings.whisperApiModels = ['whisper-1', 'whisper-large-v3'];
+			settings.whisperApiModel = 'whisper-1';
+
+			// A vendor catalogue runs to thirty-odd ids, and inline that is
+			// thirty rows between the engine and everything after it. Each
+			// collection sits on a page of its own, which costs one row.
+			const inline = transcriptionPage().items.filter(
+				(item) => (item as GroupDefinition).type !== 'page',
+			);
+			for (const section of inline) {
+				expect((section as GroupDefinition).type === 'list').toBe(
+					false,
+				);
+			}
+			expect(
+				listIn(pageOf(build(), EngineLabel.WhisperApi)).items,
+			).toHaveLength(2);
+		});
+
+		it('says on the entry which model and profile are in use', () => {
+			settings.transcriptionEnabled = true;
+			settings.whisperApiModels = ['whisper-1'];
+			settings.whisperApiModel = 'whisper-1';
+			// The test catalogue keys its selection by heading, so the entry
+			// reads the same field the tree binds the picker to.
+			(settings as unknown as Record<string, string>)[
+				'Dictionary profiles id'
+			] = 'b';
+
+			// The value a page holds belongs on the entry, so opening it is a
+			// choice rather than the only way to see what is set.
+			const displayValue = (name: string): string | undefined =>
+				entryValueOf(pageOf(build(), name));
+			settings.whisperApiKey = 'sk-test';
+
+			// An engine entry reports what it holds: the model it uses once it
+			// is reachable, and what is missing until then.
+			expect(displayValue(EngineLabel.WhisperApi)).toBe('whisper-1');
+			expect(displayValue('Dictionary profiles')).toBe('Legal');
+
+			// Both halves are needed to run, so an engine reachable but with
+			// nothing to run says which half is still missing rather than
+			// reading as configured.
+			settings.whisperApiModel = '';
+
+			expect(displayValue(EngineLabel.WhisperApi)).toBe('No model');
+		});
+
+		it('says an engine has no key before anything about its model', () => {
+			settings.transcriptionEnabled = true;
+			settings.deepgramApiKey = '';
+
+			// Without a key the engine cannot be reached at all, so its model
+			// is beside the point until one is entered.
+			expect(entryValueOf(pageOf(build(), EngineLabel.Deepgram))).toBe(
+				'No key',
+			);
+		});
+
+		it('counts a configured engine by its account, not by its engines', () => {
+			// One key configures the account it belongs to. The Whisper API and
+			// OpenAI engines name the same account, so entering that one key is
+			// one answer on the entry, not two.
+			settings.transcriptionEnabled = true;
+			const engines = (): string | undefined =>
+				entryValueOf(pageOf(build(), 'Engines'));
+
+			expect(engines()).toBe('0 configured');
+
+			settings.whisperApiKey = 'sk-test';
+
+			expect(engines()).toBe('1 configured');
+
+			settings.deepgramApiKey = 'dg-test';
+
+			expect(engines()).toBe('2 configured');
+		});
+
+		it('reports on the entry whether transcription is on', () => {
+			settings.transcriptionEnabled = false;
+
+			expect(entryValueOf(transcriptionPage())).toBe('Off');
+
+			settings.transcriptionEnabled = true;
+
+			expect(entryValueOf(transcriptionPage())).toBe('On');
+		});
+	});
+
+	describe('the status a page entry carries', () => {
+		it('warns down the whole trail to the engine that cannot run', () => {
+			// An indicator the user cannot follow inwards is worse than none,
+			// so every entry on the way to the engine carries it.
+			settings.transcriptionEnabled = true;
+			settings.whisperApiKey = '';
+			const statusOf = (name: string): 'warning' | null | undefined =>
+				entryStatusOf(pageOf(build(), name));
+
+			expect(statusOf('Transcription')).toBe('warning');
+			expect(statusOf('Engines')).toBe('warning');
+			expect(statusOf(EngineLabel.WhisperApi)).toBe('warning');
+		});
+
+		it('clears the trail once the engine can run', () => {
+			settings.transcriptionEnabled = true;
+			settings.whisperApiKey = 'sk-test';
+			settings.whisperApiModels = ['whisper-1'];
+			settings.whisperApiModel = 'whisper-1';
+			const statusOf = (name: string): 'warning' | null | undefined =>
+				entryStatusOf(pageOf(build(), name));
+
+			expect(statusOf('Transcription')).toBeNull();
+			expect(statusOf('Engines')).toBeNull();
+			expect(statusOf(EngineLabel.WhisperApi)).toBeNull();
+		});
+
+		it('leaves an engine no job calls unmarked', () => {
+			// Most vaults never enter a key for the services they do not use,
+			// and an indicator that is on for all of them says nothing.
+			settings.transcriptionEnabled = true;
+			settings.whisperApiKey = 'sk-test';
+			settings.whisperApiModels = ['whisper-1'];
+			settings.whisperApiModel = 'whisper-1';
+			settings.deepgramApiKey = '';
+
+			expect(
+				entryStatusOf(pageOf(build(), EngineLabel.Deepgram)),
+			).toBeNull();
+		});
+
+		it('marks every engine page from the same answer', () => {
+			// Read through all of them rather than the one under test: each
+			// page declares its own indicator, and a page that answers from
+			// something else would only show up when it is the one missing.
+			settings.transcriptionEnabled = true;
+			settings.transcriptionProvider =
+				TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM;
+			settings.deepgramApiKey = '';
+			const engines = pageOf(build(), 'Engines');
+			const marked = (engines.items as GroupDefinition[])
+				.flatMap(
+					(section) => (section.items ?? []) as GroupDefinition[],
+				)
+				.filter((page) => entryStatusOf(page) === 'warning')
+				.map((page) => page.name);
+
+			expect(marked).toEqual([EngineLabel.Deepgram]);
+		});
+
+		it('says which half the local engine is still missing', () => {
+			// Both paths are needed to run, so a binary alone is not
+			// configured - the entry said it was.
+			settings.transcriptionEnabled = true;
+			const local = (): string | undefined =>
+				entryValueOf(pageOf(build(), EngineLabel.LocalWhisper));
+
+			expect(local()).toBe('No binary');
+
+			settings.localWhisperBinaryPath = '/opt/whisper/main';
+
+			expect(local()).toBe('No model file');
+
+			settings.localWhisperModelPath = '/opt/whisper/base.bin';
+
+			expect(local()).toBe('Configured');
+		});
+
+		it('warns on multi-track that would open no input at all', () => {
+			settings.enableMultiTrack = true;
+			settings.maxTracks = 2;
+			settings.trackAudioSources = new Map();
+			const multiTrack = (): 'warning' | null | undefined =>
+				entryStatusOf(pageOf(build(), 'Multi-track recording'));
+
+			expect(multiTrack()).toBe('warning');
+
+			// One assigned track is a session that records; the second is the
+			// user's to fill in, not something to mark the page over.
+			settings.trackAudioSources.set(1, {
+				deviceId: 'mic-1',
+				channelMode: 'source' as const,
+			});
+
+			expect(multiTrack()).toBeNull();
+		});
+	});
+
+	describe('the transcription section', () => {
+		const TRANSCRIPTION = 'Transcription';
+
+		/** Whether a row's visible predicate holds for the current settings. */
+		const isVisible = (name: string): boolean => {
+			const visible = rowOf(build(), TRANSCRIPTION, name).visible;
+			return typeof visible === 'function'
+				? visible()
+				: visible !== false;
+		};
+
+		/** Whether the row that picks the engine is shown. */
+		const engineEntryVisible = (): boolean =>
+			isVisible('Transcription engine');
+
+		it('keeps every option behind the section switch', () => {
+			// A predicate, not a re-render: the framework hides and shows these
+			// rows in place, and the legacy renderer does the same.
+			settings.transcriptionEnabled = false;
+
+			expect(isVisible('Enable transcription')).toBe(true);
+			expect(engineEntryVisible()).toBe(false);
+			expect(isVisible('Language')).toBe(false);
+
+			settings.transcriptionEnabled = true;
+
+			expect(engineEntryVisible()).toBe(true);
+			expect(isVisible('Language')).toBe(true);
+		});
+
+		it('offers the request timeout only to the engines it can bound', () => {
+			// Local whisper.cpp runs no HTTP request, so there is nothing for a
+			// request timeout to abort.
+			settings.transcriptionEnabled = true;
+			settings.transcriptionProvider =
+				TRANSCRIPTION_PROVIDER_IDS.WHISPER_API;
+			expect(isVisible('Request timeout')).toBe(true);
+
+			settings.transcriptionProvider =
+				TRANSCRIPTION_PROVIDER_IDS.LOCAL_WHISPER;
+
+			expect(isVisible('Request timeout')).toBe(false);
+		});
+
+		// Its mirror: the local engine still runs something of unpredictable
+		// length, and that something is a process rather than a request. One of
+		// the two rows is always on screen, and never both.
+		it('offers the local run timeout only to the engine that runs a process', () => {
+			settings.transcriptionEnabled = true;
+			settings.transcriptionProvider =
+				TRANSCRIPTION_PROVIDER_IDS.WHISPER_API;
+			expect(isVisible('Local run timeout')).toBe(false);
+
+			settings.transcriptionProvider =
+				TRANSCRIPTION_PROVIDER_IDS.LOCAL_WHISPER;
+
+			expect(isVisible('Local run timeout')).toBe(true);
+		});
+
+		it('lists every engine and refuses the ones this device cannot run', () => {
+			// The list reads the same on every device; picking an engine this
+			// one cannot run is refused with the reason, rather than silently
+			// blocked or missing.
+			const control = rowOf(
+				build(),
+				TRANSCRIPTION,
+				'Transcription engine',
+			).control;
+
+			expect(Object.keys(control?.options ?? {}).sort()).toEqual(
+				Object.values(TRANSCRIPTION_PROVIDER_IDS).sort(),
+			);
+			const validate = control?.validate as (
+				value: string,
+			) => string | undefined;
+			expect(
+				validate(TRANSCRIPTION_PROVIDER_IDS.WHISPER_API),
+			).toBeUndefined();
+
+			setPlatform({ isMobile: true });
+
+			expect(validate(TRANSCRIPTION_PROVIDER_IDS.LOCAL_WHISPER)).toBe(
+				'Not available on this device.',
+			);
+			setPlatform({ isMobile: false });
+		});
+
+		it('rejects a language that is not an ISO code', () => {
+			const validate = rowOf(build(), TRANSCRIPTION, 'Language').control
+				?.validate as (value: string) => string | undefined;
+
+			expect(validate('en')).toBeUndefined();
+			expect(validate('pt-BR')).toBeUndefined();
+			expect(validate('auto')).toBeUndefined();
+			// Empty means "detect", which is what the placeholder says.
+			expect(validate('  ')).toBeUndefined();
+			expect(validate('English please')).toBe(
+				'Use an ISO code such as en or ru, or "auto".',
+			);
+		});
+
+		it('keeps the language row editable on an engine that ignores it', () => {
+			// Unlike the diarization and word-timestamp rows below, this field
+			// has a reader no engine gates: auto chapters fall back to it when
+			// a transcript carries no detected language. Disabling the row on
+			// the engine that does not send it left that fallback with no way
+			// to be set at all, so the note carries the distinction instead.
+			settings.transcriptionEnabled = true;
+			settings.transcriptionProvider = TRANSCRIPTION_PROVIDER_IDS.VOXTRAL;
+			const row = rowOf(build(), TRANSCRIPTION, 'Language');
+
+			expect(isVisible('Language')).toBe(true);
+			expect(disabledOf(row.control)).toBe(false);
+			expect(row.desc).toMatch(/does not reach its request/);
+			expect(row.desc).toMatch(/Auto chapters still read it/);
+		});
+
+		it('keeps diarization visible but disabled on an engine without it', () => {
+			settings.transcriptionEnabled = true;
+			settings.transcriptionProvider =
+				TRANSCRIPTION_PROVIDER_IDS.WHISPER_API;
+			const disabled = rowOf(
+				build(),
+				TRANSCRIPTION,
+				'Speaker diarization',
+			).control?.disabled;
+
+			expect(isVisible('Speaker diarization')).toBe(true);
+			expect(typeof disabled === 'function' && disabled()).toBe(true);
+
+			settings.transcriptionProvider =
+				TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM;
+
+			expect(typeof disabled === 'function' && disabled()).toBe(false);
+		});
+
+		// Same shape as the diarization row above, for the same reason: an
+		// engine decides this for itself, so the switch is shown and locked
+		// with its description saying what the engine does instead.
+		it('leaves word timestamps selectable on the engine that reads them', () => {
+			settings.transcriptionEnabled = true;
+			settings.transcriptionProvider =
+				TRANSCRIPTION_PROVIDER_IDS.WHISPER_API;
+			const row = rowOf(build(), TRANSCRIPTION, 'Word-level timestamps');
+			const disabled = row.control?.disabled;
+
+			expect(isVisible('Word-level timestamps')).toBe(true);
+			expect(typeof disabled === 'function' && disabled()).toBe(false);
+			expect(row.desc).toMatch(/Request per-word/);
+		});
+
+		it('locks word timestamps on an engine that returns none', () => {
+			settings.transcriptionEnabled = true;
+			settings.transcriptionProvider = TRANSCRIPTION_PROVIDER_IDS.GEMINI;
+			const row = rowOf(build(), TRANSCRIPTION, 'Word-level timestamps');
+			const disabled = row.control?.disabled;
+
+			expect(typeof disabled === 'function' && disabled()).toBe(true);
+			expect(row.desc).toMatch(/segment-level/);
+		});
+
+		it('locks word timestamps on an engine that returns them anyway', () => {
+			settings.transcriptionEnabled = true;
+			settings.transcriptionProvider =
+				TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM;
+			const row = rowOf(build(), TRANSCRIPTION, 'Word-level timestamps');
+			const disabled = row.control?.disabled;
+
+			expect(typeof disabled === 'function' && disabled()).toBe(true);
+			expect(row.desc).toMatch(/on every run/);
+		});
+
+		it('hosts a provider key on that provider\u2019s page', () => {
+			// The key belongs to the service rather than to either use of it.
+			expect(pageEntryNames(EngineLabel.Deepgram)).toEqual([
+				'Base URL',
+				'Deepgram API key',
+				'Model',
+				'Model catalogue',
+			]);
+		});
+
+		it.each(
+			ENGINE_ORDER.flatMap((id) => {
+				const account = accountOf(ENGINES[id]);
+				return account ? [{ label: ENGINES[id].label, account }] : [];
+			}),
+		)(
+			'binds the key row of $label to the ID of a keychain secret',
+			({ label, account }) => {
+				// Never to the key: a secret control stores the ID, which is
+				// safe in a synced data.json, and the key stays in the keychain.
+				const row = rowOf(build(), label, account.keyFieldName);
+
+				expect(row.control).toEqual({
+					type: 'secret',
+					key: account.apiKeySecretKey,
+				});
+			},
+		);
+
+		it('says where a key is kept, how far it reaches, and that a local endpoint needs none', () => {
+			const row = rowOf(
+				build(),
+				EngineLabel.Deepgram,
+				'Deepgram API key',
+			);
+
+			expect(row.desc).toMatch(/keychain, not synced/);
+			expect(row.desc).toMatch(/once per vault/);
+			expect(row.desc).toMatch(/unlinked when .* local endpoint/);
+		});
+
+		it('picks the model in place and keeps the list behind an entry', () => {
+			// Choosing one of a handful of known ids is what a dropdown is for:
+			// the value is legible without opening anything and changing it is
+			// one tap. The catalogue is the other question - which ids exist -
+			// and that is a list, which is why it stays an entry of its own.
+			settings.deepgramModels = ['nova-3', 'nova-2-meeting'];
+			settings.deepgramModel = 'nova-3';
+			const definitions = build();
+
+			const picker = rowOf(definitions, EngineLabel.Deepgram, 'Model');
+			expect(picker.control?.type).toBe('dropdown');
+			expect(picker.control?.key).toBe('deepgramModel');
+			expect(picker.control?.options).toEqual({
+				'nova-3': 'nova-3',
+				'nova-2-meeting': 'nova-2-meeting',
+			});
+
+			const catalogue = pageOf(
+				groupOf(definitions, EngineLabel.Deepgram)
+					.items as SettingDefinitionItem[],
+				'Model catalogue',
+			);
+			expect(entryValueOf(catalogue)).toBe('2 saved');
+		});
+
+		it('disables the picker rather than offering an empty dropdown', () => {
+			// An emptied catalogue has nothing to pick, and the entry below is
+			// where ids are added; a blank dropdown would be a dead end.
+			settings.deepgramModels = [];
+			const picker = rowOf(build(), EngineLabel.Deepgram, 'Model');
+
+			expect(picker.control?.options).toEqual({});
+			expect(picker.control?.disabled).toBe(true);
+		});
+	});
+
+	describe('the multi-track section', () => {
+		const MULTI = 'Multi-track recording';
+
+		/**
+		 * The granting hosts a case installed, taken back down whatever the
+		 * case did. Drained here rather than at the end of a test body: an
+		 * assertion that fails first would otherwise leave the desktop
+		 * require in place for every later case, and the suite is randomized.
+		 */
+		let hosts: (() => void)[] = [];
+
+		afterEach(() => {
+			hosts.forEach((undo) => {
+				undo();
+			});
+			hosts = [];
+		});
+
+		/**
+		 * Installs a host that can grant the system output for this case.
+		 * @param options - Which half of the host to leave missing
+		 * @returns The installed host
+		 */
+		const withGrantingHost = (
+			options: DisplayMediaHostOptions = {},
+		): DisplayMediaHost => {
+			const host = installDisplayMediaHost(options);
+			hosts.push(host.restore);
+			return host;
+		};
+
+		/** A track map whose only track records the system output. */
+		const systemAudioOnTrackOne = (): Map<number, AudioSource> =>
+			new Map([
+				[
+					1,
+					{
+						deviceId: '',
+						channelMode: 'source' as const,
+						kind: 'system-audio' as const,
+					},
+				],
+			]);
+
+		/** Whether a row's visible predicate holds for the current settings. */
+		const isVisible = (name: string): boolean => {
+			const visible = rowOf(build(), MULTI, name).visible;
+			return typeof visible === 'function'
+				? visible()
+				: visible !== false;
+		};
+
+		it('offers a row per track and reveals only the configured ones', () => {
+			// Declared once for every track the section can offer and revealed
+			// by predicate: changing the count reveals rows instead of
+			// rebuilding the tab.
+			settings.enableMultiTrack = true;
+			settings.maxTracks = 2;
+
+			expect(isVisible('Track 2 input')).toBe(true);
+			expect(isVisible('Track 3 input')).toBe(false);
+
+			settings.maxTracks = 3;
+
+			expect(isVisible('Track 3 input')).toBe(true);
+		});
+
+		it('hides every track row while multi-track is off', () => {
+			settings.enableMultiTrack = false;
+
+			expect(isVisible('Track 1 input')).toBe(false);
+			expect(isVisible('Maximum tracks')).toBe(false);
+		});
+
+		it('lists the enumerated devices as the track input options', () => {
+			const control = rowOf(build(), MULTI, 'Track 1 input').control;
+
+			expect(control?.key).toBe('track.1.deviceId');
+			expect(control?.options).toEqual({
+				'mic-1': 'Built-in microphone',
+				'iface-1': 'Audio interface',
+			});
+		});
+
+		// A system-audio track is configured by being one: it names no
+		// device, so the rows that describe a device have nothing to say.
+		it('hides the device rows of a track that records the system output', () => {
+			settings.enableMultiTrack = true;
+			settings.trackAudioSources = systemAudioOnTrackOne();
+
+			expect(isVisible('Track 1 source')).toBe(true);
+			expect(isVisible('Track 1 input')).toBe(false);
+			expect(isVisible('Track 1 channels')).toBe(false);
+		});
+
+		// The row states which of the two answers applies here rather than
+		// offering a choice that would fail at the start of a recording.
+		it('says the system output is available where the host can grant it', () => {
+			withGrantingHost();
+			settings.enableMultiTrack = true;
+
+			const desc = rowOf(build(), MULTI, 'Track 1 source').desc;
+
+			expect(desc).toMatch(/this computer's own output/);
+			expect(desc).not.toMatch(/unavailable on this build/);
+		});
+
+		// Whether the host can grant the output is a fact of the platform
+		// and the installed build, identical on all eight source rows, and
+		// reading it costs a synchronous trip through the remote module.
+		// Asked inside the row loop it was paid once per track, on every
+		// rebuild of the settings tree - and the framework rebuilds the tree
+		// whenever the device list changes.
+		it('asks the host once for the section, not once per track', () => {
+			const host = withGrantingHost();
+			settings.enableMultiTrack = true;
+			settings.maxTracks = MAX_TRACK_COUNT;
+
+			build();
+
+			// Two lookups make one answer: the session carrying the handler,
+			// and the capturer naming a video source for the grant.
+			expect(host.probeCount()).toBe(2);
+		});
+
+		// That one answer is also what the audio-input switch reports, so a
+		// row offering the system output cannot sit in the same tab as one
+		// saying this build has not got it.
+		it('reports the host the same way on the audio-input switch', () => {
+			withGrantingHost();
+			settings.enableMultiTrack = true;
+
+			const definitions = build();
+
+			expect(
+				rowOf(definitions, MULTI, 'Track 1 source').desc,
+			).not.toMatch(/unavailable on this build/);
+			expect(
+				rowOf(definitions, 'Audio input', 'Include system audio').desc,
+			).not.toMatch(/Windows only/);
+		});
+
+		it('offers the source row for every track it offers an input for', () => {
+			settings.enableMultiTrack = true;
+			const control = rowOf(build(), MULTI, 'Track 1 source').control;
+
+			expect(control?.key).toBe('track.1.kind');
+			expect(control?.options).toEqual({
+				'input-device': 'Input device',
+				'system-audio': 'System audio (this computer)',
+			});
+		});
+
+		// Without a device there is nothing to place in the mix, unless the
+		// track is the system output, which is configured by its kind alone.
+		it.each([{ row: 'Track 1 level' }, { row: 'Track 1 position' }])(
+			'unblocks $row on a system-audio track',
+			({ row }) => {
+				settings.enableMultiTrack = true;
+				settings.outputMode = 'single';
+				settings.trackAudioSources = systemAudioOnTrackOne();
+				const disabled = rowOf(build(), MULTI, row).control?.disabled;
+
+				expect(typeof disabled === 'function' && disabled()).toBe(
+					false,
+				);
+			},
+		);
+
+		// The three filters are constraints of getUserMedia, and a
+		// system-audio track is granted by the host instead. Offered anyway,
+		// the row took an edit that reached nothing and then reported a
+		// choice the capture had never made.
+		it('hides the processing row of a track that records the system output', () => {
+			settings.enableMultiTrack = true;
+			settings.trackAudioSources = systemAudioOnTrackOne();
+
+			expect(isVisible('Track 1 processing')).toBe(false);
+		});
+
+		// The three global filters suit a microphone in a room and ruin a
+		// system-loopback input, and one session can hold both.
+		it('offers a processing profile per track and disables it without a device', () => {
+			settings.enableMultiTrack = true;
+			const control = rowOf(build(), MULTI, 'Track 1 processing').control;
+
+			expect(control?.key).toBe('track.1.processing');
+			expect(control?.options).toEqual({
+				global: 'Same as global settings',
+				voice: 'Voice (microphone in a room)',
+				raw: 'Raw (system audio or line input)',
+			});
+			expect(
+				typeof control?.disabled === 'function' && control.disabled(),
+			).toBe(true);
+
+			settings.trackAudioSources.set(1, {
+				deviceId: 'mic-1',
+				channelMode: 'source',
+			});
+			const assigned = rowOf(build(), MULTI, 'Track 1 processing').control
+				?.disabled;
+
+			expect(typeof assigned === 'function' && assigned()).toBe(false);
+		});
+
+		it('disables the channel layout of a track whose device has one channel', () => {
+			settings.enableMultiTrack = true;
+			settings.trackAudioSources.set(1, {
+				deviceId: 'mic-1',
+				channelMode: 'source',
+			});
+			const disabled = rowOf(build(), MULTI, 'Track 1 channels').control
+				?.disabled;
+
+			expect(typeof disabled === 'function' && disabled()).toBe(true);
+
+			settings.trackAudioSources.set(1, {
+				deviceId: 'iface-1',
+				channelMode: 'source',
+			});
+
+			expect(typeof disabled === 'function' && disabled()).toBe(false);
+		});
+
+		it.each(['Track 1 level', 'Track 1 position'])(
+			'disables %s while the track has no device',
+			(name) => {
+				// The writer refuses a place in the mix for a track with no
+				// input, exactly as it refuses a channel layout, so a row that
+				// took the edit anyway accepted a number and then showed the
+				// old one back.
+				settings.enableMultiTrack = true;
+				settings.outputMode = 'single';
+				// A track with no input at all, which is what every track
+				// starts as and what the writer refuses a placement for.
+				settings.trackAudioSources.delete(1);
+				const disabled = rowOf(build(), MULTI, name).control?.disabled;
+
+				expect(typeof disabled === 'function' && disabled()).toBe(true);
+
+				settings.trackAudioSources.set(1, {
+					deviceId: 'mic-1',
+					channelMode: 'source',
+				});
+
+				expect(typeof disabled === 'function' && disabled()).toBe(
+					false,
+				);
+			},
+		);
+	});
+
+	// The one switch that records a call without a track being configured for
+	// it. It sits on the audio-input block, beside the microphone it pairs the
+	// system output with, rather than on the page it stands in for.
+	describe('the system-audio switch', () => {
+		const INPUT = 'Audio input';
+		const SWITCH = 'Include system audio';
+
+		it('pairs the microphone with the system output from one row', () => {
+			const control = rowOf(build(), INPUT, SWITCH).control;
+
+			expect(control?.type).toBe('toggle');
+			expect(control?.key).toBe('includeSystemAudio');
+		});
+
+		// A per-track configuration already says what every track records, so
+		// the pairing stands down for it - and a switch still taking edits
+		// would report a second system-audio track no session would open.
+		it('stands down while the tracks are configured by hand', () => {
+			expect(disabledOf(rowOf(build(), INPUT, SWITCH).control)).toBe(
+				false,
+			);
+
+			settings.enableMultiTrack = true;
+
+			expect(disabledOf(rowOf(build(), INPUT, SWITCH).control)).toBe(
+				true,
+			);
+		});
+
+		// Said on the row rather than left to the first refused recording, and
+		// said without taking the switch away: a vault synced from a machine
+		// that can record the system output has to show the setting it carries
+		// on one that cannot, or it cannot be turned off there either.
+		it('says where this build cannot be granted the system output', () => {
+			const row = rowOf(build(), INPUT, SWITCH);
+
+			expect(row.desc).toMatch(/Windows only/);
+			expect(disabledOf(row.control)).toBe(false);
+		});
+	});
+
+	describe('the audio splitting section', () => {
+		const SPLITTING = 'Audio splitting';
+
+		it('rejects a part suffix that would not make a valid file name', () => {
+			const validate = rowOf(build(), SPLITTING, 'Part name suffix')
+				.control?.validate as (value: string) => string | undefined;
+
+			expect(validate('part')).toBeUndefined();
+			expect(validate('take_2')).toBeUndefined();
+			expect(validate('bad suffix')).toBe(
+				'Letters, digits, hyphens and underscores only.',
+			);
+			expect(validate('')).toBe(
+				'Letters, digits, hyphens and underscores only.',
+			);
+		});
+
+		it('bounds the part duration', () => {
+			expect(rowOf(build(), SPLITTING, 'Part duration').control).toEqual(
+				expect.objectContaining({
+					type: 'number',
+					key: 'splitChunkMinutes',
+					min: MIN_SPLIT_CHUNK_MINUTES,
+					max: MAX_SPLIT_CHUNK_MINUTES,
+				}),
+			);
+		});
+	});
+
+	describe('the model list', () => {
+		const seedModels = (): void => {
+			settings.transcriptionEnabled = true;
+			settings.transcriptionProvider =
+				TRANSCRIPTION_PROVIDER_IDS.WHISPER_API;
+			settings.whisperApiModels = ['whisper-1', 'whisper-large-v3'];
+			settings.whisperApiModel = 'whisper-1';
+		};
+
+		/** The engine's model list, narrowed to what these tests read. */
+		const modelList = (): {
+			type: string;
+			emptyState?: string;
+			search?: { match: (def: { name: string }, q: string) => boolean };
+			addItem?: { name: string; action: (el: HTMLElement) => void };
+			onDelete?: (index: number) => void;
+			items: Array<{
+				name: string;
+				desc?: string;
+				action?: (el: HTMLElement, index: number) => void;
+			}>;
+		} => listIn(pageOf(build(), EngineLabel.WhisperApi)) as never;
+
+		it('declares the saved models as a list the user can edit', () => {
+			seedModels();
+			const list = modelList();
+
+			// A collection with add and delete affordances is a list, not a
+			// group: the framework renders those affordances itself.
+			expect(list.type).toBe('list');
+			expect(list.items.map((item) => item.name)).toEqual([
+				'whisper-1',
+				'whisper-large-v3',
+			]);
+		});
+
+		it('makes a tapped id the model in use', () => {
+			seedModels();
+
+			// The list is the picker: the row is the choice, so there is no
+			// dropdown beside it saying the same thing.
+			modelList().items[1]?.action?.(createDiv(), 1);
+
+			expect(selectModel).toHaveBeenCalledWith(
+				ENGINE_IDS.WHISPER_API,
+				'whisper-large-v3',
+			);
+		});
+
+		it('marks which saved model is the one in use', () => {
+			seedModels();
+
+			expect(modelList().items[0]?.desc).toBe('In use');
+			expect(modelList().items[1]?.desc).toBeUndefined();
+		});
+
+		it('filters the list through the group search', () => {
+			seedModels();
+			const match = modelList().search?.match;
+
+			expect(match?.({ name: 'whisper-large-v3' }, 'large')).toBe(true);
+			expect(match?.({ name: 'whisper-1' }, 'large')).toBe(false);
+		});
+
+		it('adds and deletes through the tab, which owns the settings', () => {
+			seedModels();
+			const list = modelList();
+
+			list.addItem?.action(createDiv());
+			list.onDelete?.(1);
+
+			expect(addModel).toHaveBeenCalledWith(ENGINE_IDS.WHISPER_API);
+			// By id, not by position: the row was built from the catalogue as
+			// it stood, and the edit runs against it as it stands.
+			expect(removeModel).toHaveBeenCalledWith(
+				ENGINE_IDS.WHISPER_API,
+				'whisper-large-v3',
+			);
+		});
+
+		it('offers an empty state instead of a bare heading', () => {
+			seedModels();
+			settings.whisperApiModels = [];
+
+			expect(modelList().emptyState).toContain('No models saved yet');
+		});
+
+		it('declares no catalogue for the local engine, which serves none', () => {
+			// It runs a binary against a file on disk: there is no list of
+			// served ids to keep, so its page holds the paths instead.
+			expect(() =>
+				pageOf(build(), EngineLabel.LocalWhisper),
+			).not.toThrow();
+			expect(pageEntryNames(EngineLabel.LocalWhisper)).toEqual([
+				'Binary and model paths',
+			]);
+		});
+	});
+
+	describe('the profile catalogues', () => {
+		/** A catalogue list, narrowed to what these tests read. */
+		const listOf = (
+			heading: string,
+		): {
+			type: string;
+			emptyState?: string;
+			addItem?: { action: (el: HTMLElement) => void };
+			onDelete?: (index: number) => void;
+			onReorder?: (from: number, to: number) => void;
+			items: Array<{ name: string; desc?: string }>;
+		} => listIn(pageOf(build(), heading)) as never;
+
+		it('declares every stored profile as a page of its own', () => {
+			const list = listOf('Dictionary profiles');
+
+			expect(list.type).toBe('list');
+			expect(list.items.map((item) => item.name)).toEqual([
+				'Standup',
+				'Legal',
+			]);
+			// Each entry says what the profile holds and whether a run uses it,
+			// so opening one is a choice rather than the only way to see it.
+			expect(
+				list.items.map(
+					(item) => (item as { displayValue?: string }).displayValue,
+				),
+			).toEqual(['Typed text, 3 terms', 'In use, note, 12 terms']);
+			for (const item of list.items) {
+				expect((item as { type?: string }).type).toBe('page');
+			}
+		});
+
+		it('leaves the list without a per-row delete affordance', () => {
+			// Deleting belongs on the profile's own page: a cross on every row
+			// turns a list of names into a list of buttons.
+			expect(listOf('Dictionary profiles').onDelete).toBeUndefined();
+		});
+
+		/**
+		 * A profile's page under one catalogue. Both catalogues are seeded with
+		 * the same entries here, so the lookup has to say which one it means.
+		 * @param heading - The catalogue holding it
+		 * @param name - The profile's name
+		 */
+		const profilePageOf = (
+			heading: string,
+			name: string,
+		): GroupDefinition =>
+			pageOf(
+				partial<SettingDefinitionItem[]>(
+					listIn(pageOf(build(), heading)).items,
+				),
+				name,
+			);
+
+		it('edits each profile on its own page, keyed by that profile', () => {
+			const page = profilePageOf('Dictionary profiles', 'Standup');
+
+			expect(rowIn(page, 'Terms').control).toEqual(
+				expect.objectContaining({
+					type: 'textarea',
+					key: 'Dictionary profiles.body#a',
+				}),
+			);
+			expect(rowIn(page, 'Use by default').control).toEqual(
+				expect.objectContaining({
+					type: 'toggle',
+					key: 'Dictionary profiles id#a',
+				}),
+			);
+		});
+
+		it('lays the body out under its name across the row', () => {
+			// A glossary is edited in paragraphs; the control column a row gives
+			// a text area by default is a few characters wide.
+			const page = profilePageOf('Dictionary profiles', 'Legal');
+			const stacked = (page.items as GroupDefinition[]).find((item) =>
+				(item.cls ?? '').split(' ').includes(STACKED_TEXT_CLASS),
+			);
+
+			expect(
+				stacked?.items.map((item) => (item as RowDefinition).name),
+			).toContain('Terms');
+		});
+
+		it('says on the page where the profile text comes from, through a choice of its own', () => {
+			const page = profilePageOf('Dictionary profiles', 'Standup');
+			const source = rowIn(page, 'Source');
+
+			expect(source.control).toEqual({
+				type: 'dropdown',
+				key: 'Dictionary profiles.choice#a',
+				options: { typed: 'Typed text', note: 'Note' },
+			});
+			// The row states the text in use, so it is never inferred from
+			// which of the fields below happen to be shown.
+			expect(source.desc).toBe('Uses the text typed in the settings.');
+		});
+
+		it('shows the note rows or the editor as the page is set, never both', () => {
+			const page = profilePageOf('Dictionary profiles', 'Standup');
+			const shown = (predicate: unknown): boolean =>
+				typeof predicate === 'function'
+					? (predicate as () => boolean)()
+					: predicate !== false;
+			const stacked = (page.items as GroupDefinition[]).find((item) =>
+				(item.cls ?? '').split(' ').includes(STACKED_TEXT_CLASS),
+			);
+			const note = rowIn(page, 'Note');
+			const control = note.control as {
+				type: string;
+				key: string;
+				placeholder?: string;
+				filter?: (file: TFile) => boolean;
+			};
+
+			expect(control).toEqual(
+				expect.objectContaining({
+					type: 'file',
+					key: 'Dictionary profiles.note#a',
+					// An example path would read as a note already picked.
+					placeholder: 'Pick a note',
+				}),
+			);
+			// Only notes are offered: a body is text, and an audio file is not.
+			expect(control.filter?.(partial<TFile>({ extension: 'md' }))).toBe(
+				true,
+			);
+			expect(control.filter?.(partial<TFile>({ extension: 'wav' }))).toBe(
+				false,
+			);
+			expect(shown(stacked?.visible)).toBe(true);
+			expect(shown(note.visible)).toBe(false);
+			expect(shown(rowIn(page, 'Open note').visible)).toBe(false);
+
+			// Switched to a note that is not picked yet: the editor steps aside
+			// at once, and there is no note to open.
+			profileReadsNote = true;
+
+			expect(shown(stacked?.visible)).toBe(false);
+			expect(shown(note.visible)).toBe(true);
+			expect(shown(rowIn(page, 'Open note').visible)).toBe(false);
+
+			// The predicates read the catalogue live, so a note picked after the
+			// page was built is what they answer for.
+			profileSourcePath = 'Glossaries/Standup.md';
+
+			expect(shown(rowIn(page, 'Open note').visible)).toBe(true);
+			rowIn(page, 'Open note').action?.(createDiv(), 0);
+			expect(openProfileSource).toHaveBeenCalledWith('a');
+		});
+
+		it('names the text of the profile in use under the picker, on a line of its own', () => {
+			const picker = rowIn(
+				groupOf(build(), 'Advanced'),
+				'Use by default',
+			);
+			const desc = picker.desc as DocumentFragment;
+
+			expect(picker.control).toEqual(
+				expect.objectContaining({
+					type: 'dropdown',
+					key: 'Dictionary profiles id',
+				}),
+			);
+			expect(desc.textContent).toBe(
+				'Offer this profile in the Transcribe dialog.' +
+					'Uses the text of Glossaries/Legal.md.',
+			);
+			expect(desc.lastChild?.textContent).toBe(
+				'Uses the text of Glossaries/Legal.md.',
+			);
+
+			// None applies no text, so the picker says only what it is for.
+			selectedProfileId = '';
+
+			expect(
+				rowIn(groupOf(build(), 'Advanced'), 'Use by default').desc,
+			).toBe('Offer this profile in the Transcribe dialog.');
+			expect(entryValueOf(pageOf(build(), 'Dictionary profiles'))).toBe(
+				'None',
+			);
+		});
+
+		it('renames and deletes from the page of the profile itself', () => {
+			const page = profilePageOf('Dictionary profiles', 'Legal');
+
+			rowIn(page, 'Rename profile').action?.(createDiv(), 0);
+			rowIn(page, 'Delete profile').action?.(createDiv(), 0);
+
+			expect(renameProfile).toHaveBeenCalledWith('b');
+			expect(removeProfile).toHaveBeenCalledWith('b');
+		});
+
+		it('reorders through the tab, by position in the list it declared', () => {
+			// The order is the order the picker offers, and the indices name
+			// the items declared above - the stored order, since the list is
+			// built from it in one pass.
+			listOf('Dictionary profiles').onReorder?.(1, 0);
+
+			expect(reorderProfile).toHaveBeenCalledWith(1, 0);
+		});
+
+		it('adds through the tab, which owns the profiles', () => {
+			listOf('Chapter guidance profiles').addItem?.action(createDiv());
+
+			expect(addProfile).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	describe('what each block holds', () => {
+		/** Names of a block's own children, rows and page entries alike. */
+		const childNamesOf = (heading: string): string[] =>
+			groupOf(build(), heading).items.map((item) => item.name ?? '');
+
+		it('configures every provider on one page each, under Engines', () => {
+			// One place to set up a service, whatever it is later asked to do:
+			// the endpoint, the key, and the catalogues it serves.
+			const engines = pageOf(build(), 'Engines');
+			const providers = (engines.items[0] as GroupDefinition).items.map(
+				(item) => item.name ?? '',
+			);
+
+			expect(providers).toEqual([
+				EngineLabel.WhisperApi,
+				EngineLabel.OpenAi,
+				EngineLabel.Deepgram,
+				EngineLabel.Gemini,
+				EngineLabel.Anthropic,
+				EngineLabel.Voxtral,
+				EngineLabel.Mistral,
+				EngineLabel.DeepSeek,
+				EngineLabel.LocalWhisper,
+			]);
+			// A provider that both transcribes and answers prompts keeps one
+			// key and one endpoint, with a catalogue per capability.
+			// One catalogue for both jobs, because the ids are the same family.
+			// One catalogue for both jobs, and the ceiling of the engine that
+			// has to honour it.
+			expect(pageEntryNames(EngineLabel.Gemini)).toEqual([
+				'Base URL',
+				'Google Gemini API key',
+				'Model',
+				'Model catalogue',
+				'Max output tokens',
+			]);
+			// Two catalogues over one account, because the voxtral-* ids
+			// transcribe and the mistral-* ids write: each engine gets its own
+			// page, and both pages carry the same endpoint and key.
+			expect(pageEntryNames(EngineLabel.Voxtral)).toEqual([
+				'Base URL',
+				'Mistral API key',
+				'Model',
+				'Model catalogue',
+			]);
+			expect(pageEntryNames(EngineLabel.Mistral)).toEqual([
+				'Base URL',
+				'Mistral API key',
+				'Model',
+				'Model catalogue',
+				'Max output tokens',
+			]);
+			// A vendor that only writes gets one page with its own key, so
+			// pointing post-processing at it never touches the transcription
+			// account.
+			expect(pageEntryNames(EngineLabel.DeepSeek)).toEqual([
+				'Base URL',
+				'DeepSeek API key',
+				'Model',
+				'Model catalogue',
+				'Max output tokens',
+			]);
+		});
+
+		it('carries the catalogue link on the catalogue, not on the key field', () => {
+			// The link lists the ids the endpoint serves, so it belongs with
+			// those ids; hanging it off the API-key row put a model catalogue
+			// under a password field.
+			const picker = rowOf(build(), EngineLabel.WhisperApi, 'Model');
+			const desc = picker.desc;
+			if (!(desc instanceof DocumentFragment)) {
+				throw new Error('The picker carries no link');
+			}
+			const link = desc.querySelector('a');
+
+			expect(link?.textContent).toBe('Whisper API models');
+			expect(link?.getAttribute('href')).toBe(WHISPER_API_MODELS_DOC_URL);
+		});
+
+		it('offers a chunk size only on the engine that splits an upload', () => {
+			// A limit is the engine's own fact, and so is the field holding the
+			// chunk size, so no second engine can edit the first one's.
+			expect(pageEntryNames(EngineLabel.WhisperApi)).toContain(
+				'Upload chunk size',
+			);
+			expect(pageEntryNames(EngineLabel.Deepgram)).not.toContain(
+				'Upload chunk size',
+			);
+		});
+
+		it('leaves each use holding only the choice', () => {
+			expect(childNamesOf('Transcription')).toContain(
+				'Transcription engine',
+			);
+			// The engine is picked here; how much it may write is its own.
+			expect(childNamesOf('LLM post-processing').slice(0, 2)).toEqual([
+				'Enable LLM post-processing',
+				'Post-processing engine',
+			]);
+			expect(childNamesOf('LLM post-processing')).not.toContain(
+				'Max output tokens',
+			);
+			// The key and the endpoint are the provider's, not the use's.
+			expect(childNamesOf('LLM post-processing')).not.toContain(
+				'LLM credentials',
+			);
+			expect(childNamesOf('Transcription')).not.toContain(
+				'Transcription engine credentials',
+			);
+		});
+
+		it('keeps each profile catalogue inside the block that gates it', () => {
+			// A glossary is only reachable while the advanced settings are on,
+			// and a guidance prompt only while chapters are generated.
+			expect(childNamesOf('Advanced')).toContain('Dictionary profiles');
+			expect(childNamesOf('Auto chapters')).toContain(
+				'Chapter guidance profiles',
+			);
+		});
+
+		it('gives quick notes an entry of their own on the main tab, first among the entries', () => {
+			// A feature with a button of its own is looked for by its own
+			// name, not inside the page of the pipeline it runs through.
+			const entries = build()
+				.flatMap((item) =>
+					'type' in item && item.type === 'group'
+						? (item.items ?? [])
+						: [item],
+				)
+				.filter((item) => 'type' in item && item.type === 'page')
+				.map((item) => item.name);
+
+			expect(entries[0]).toBe('Quick notes');
+			expect(
+				pageOf(build(), 'Transcription').items.map(
+					(item) => (item as GroupDefinition).heading,
+				),
+			).not.toContain('Quick notes');
+			expect(pageEntryNames('Quick notes')).toEqual([
+				'Enable quick notes',
+				'Transcription is off',
+				'Quick note transcription engine',
+				'Quick note rewrite engine',
+				'Use by default',
+				'Quick note profiles',
+			]);
+		});
+
+		it('says on the entry and on the page when quick notes wait for transcription', () => {
+			// Switched on with transcription off, the feature has no engine to
+			// dictate through and shows no button; the entry says why instead
+			// of reading "On" over nothing.
+			const visible = (predicate: unknown): boolean =>
+				typeof predicate === 'function'
+					? (predicate as () => boolean)()
+					: predicate !== false;
+			const page = (): GroupDefinition => pageOf(build(), 'Quick notes');
+			const row = (name: string): unknown =>
+				(
+					(page().items[0] as GroupDefinition).items.find(
+						(item) => item.name === name,
+					) as { visible?: unknown }
+				).visible;
+
+			settings.quickNotesEnabled = false;
+			settings.transcriptionEnabled = false;
+			expect(entryValueOf(page())).toBe('Off');
+			expect(visible(row('Transcription is off'))).toBe(false);
+			expect(visible(row('Quick note transcription engine'))).toBe(false);
+			expect(visible(row('Quick note rewrite engine'))).toBe(false);
+
+			settings.quickNotesEnabled = true;
+			expect(entryValueOf(page())).toBe('Needs transcription');
+			expect(entryStatusOf(page())).toBe('warning');
+			expect(visible(row('Transcription is off'))).toBe(true);
+
+			settings.transcriptionEnabled = true;
+			settings.whisperApiKey = 'sk-test';
+			expect(entryValueOf(page())).toBe('On');
+			expect(entryStatusOf(page())).toBeNull();
+			expect(visible(row('Transcription is off'))).toBe(false);
+			expect(visible(row('Quick note transcription engine'))).toBe(true);
+			expect(visible(row('Quick note rewrite engine'))).toBe(true);
+		});
+
+		it('leaves the transcription page holding blocks and entries only', () => {
+			for (const item of pageOf(build(), 'Transcription').items) {
+				expect('type' in item && item.type).toMatch(/group|page/);
+			}
+		});
+
+		describe('a block that outlives transcription being turned off', () => {
+			/** Whether a named block or entry shows for the current settings. */
+			const shows = (name: string, visible?: unknown): boolean => {
+				const predicate =
+					visible ??
+					(name === 'Engines'
+						? pageOf(build(), name).visible
+						: groupOf(build(), name).visible);
+				return typeof predicate === 'function'
+					? (predicate as () => boolean)()
+					: predicate !== false;
+			};
+
+			beforeEach(() => {
+				// Chapters are offered on a recording that already has a
+				// transcript, so the action stays registered on this switch alone
+				// while nothing transcribes any more.
+				settings.transcriptionEnabled = false;
+				settings.transcriptionAutoChaptersEnabled = true;
+			});
+
+			it('keeps Engines reachable, since chapters still call one', () => {
+				// The run reports a missing key by naming the Engines page as the
+				// place to enter it, and a provider that refuses a whole region
+				// says the same thing: both are useless if the page is hidden.
+				expect(shows('Engines')).toBe(true);
+			});
+
+			it('keeps the chapters block and its engine row reachable', () => {
+				expect(shows('Auto chapters')).toBe(true);
+				expect(
+					shows(
+						'Chapters engine',
+						rowOf(build(), 'Auto chapters', 'Chapters engine')
+							.visible,
+					),
+				).toBe(true);
+			});
+
+			it('keeps the guidance profiles, which steer that generation', () => {
+				expect(
+					shows(
+						'Chapter guidance profiles',
+						pageOf(build(), 'Chapter guidance profiles').visible,
+					),
+				).toBe(true);
+			});
+
+			it('hides only the row that has no run to follow', () => {
+				// Generating after each transcription needs a transcription.
+				expect(
+					shows(
+						'Generate after transcription',
+						rowOf(
+							build(),
+							'Auto chapters',
+							'Generate after transcription',
+						).visible,
+					),
+				).toBe(false);
+			});
+
+			it('still hides everything that genuinely needs a run', () => {
+				// Post-processing rewrites a transcript a run produced and the
+				// two-pass mode is a way of transcribing, so neither outlives it.
+				expect(shows('LLM post-processing')).toBe(false);
+				expect(shows('Advanced')).toBe(false);
+				expect(shows('Transcript output')).toBe(false);
+			});
+
+			it('hides Engines once nothing calls an engine at all', () => {
+				settings.transcriptionAutoChaptersEnabled = false;
+
+				expect(shows('Engines')).toBe(false);
+				expect(shows('Auto chapters')).toBe(false);
+			});
+		});
+	});
+
+	describe('the blocks the stylesheet separates', () => {
+		/** Every group, list, and page of a tree, at any depth. */
+		const everyContainer = (
+			entries: ReadonlyArray<RowDefinition | GroupDefinition>,
+		): GroupDefinition[] =>
+			entries.flatMap((entry) =>
+				'type' in entry
+					? [entry, ...everyContainer(entry.items ?? [])]
+					: [],
+			);
+
+		it('marks every group it declares as a block', () => {
+			// The class is the only handle the stylesheet has: a group carries
+			// it, a row cannot, and a group left unmarked keeps Obsidian's
+			// divider between its rows and loses the line above itself.
+			const unmarked = everyContainer(
+				build() as Array<RowDefinition | GroupDefinition>,
+			)
+				.filter((entry) => entry.type !== 'page')
+				.filter(
+					(entry) =>
+						!(entry.cls ?? '')
+							.split(' ')
+							.includes(SETTINGS_SECTION_CLASS),
+				);
+
+			expect(unmarked).toEqual([]);
+		});
+
+		it('gives a page of loose rows a block of its own', () => {
+			// Without it the framework wraps those rows in a group of its own,
+			// which carries no class and is left ruled between every row.
+			const page = pageOf(build(), 'Audio splitting');
+
+			expect(
+				(page.items as GroupDefinition[]).map((item) => item.cls),
+			).toEqual([SETTINGS_SECTION_CLASS]);
+			expect(rowOf(build(), 'Audio splitting', 'Part duration')).toEqual(
+				expect.objectContaining({ name: 'Part duration' }),
+			);
+		});
+
+		it('leaves no row loose beside the blocks, at any level', () => {
+			// What the whole scope of those rules rests on: Obsidian collects
+			// every run of rows outside a group into a block of its own, and
+			// such a block carries no class for the stylesheet to find.
+			const tree = build() as Array<RowDefinition | GroupDefinition>;
+			const containers = [
+				{ name: 'the tab', items: tree },
+				...everyContainer(tree)
+					.filter((entry) => entry.type === 'page')
+					.map((page) => ({
+						name: page.name ?? '',
+						items: page.items,
+					})),
+			];
+
+			for (const container of containers) {
+				const loose = container.items
+					.filter((item) => !('type' in item))
+					.map((item) => item.name);
+
+				expect([container.name, loose]).toEqual([container.name, []]);
+			}
+		});
+
+		it('keeps a block of multi-line editors to text areas alone', () => {
+			// The layout that block declares applies to every row in it, so a
+			// switch or a picker sharing it would be stacked along with them.
+			const stacked = everyContainer(
+				build() as Array<RowDefinition | GroupDefinition>,
+			).filter((entry) =>
+				(entry.cls ?? '').split(' ').includes(STACKED_TEXT_CLASS),
+			);
+
+			expect(stacked.length).toBeGreaterThan(0);
+			for (const block of stacked) {
+				expect(
+					block.items.map(
+						(item) => (item as RowDefinition).control?.type,
+					),
+				).toEqual(block.items.map(() => 'textarea'));
+			}
+		});
+	});
+
+	describe('the sections that sit behind an entry', () => {
+		/** What a page's entry shows without being opened. */
+		const displayValueOf = (name: string): string | undefined =>
+			(
+				pageOf(build(), name) as {
+					displayValue?: (() => string) | string;
+				}
+			).displayValue as string | undefined;
+
+		/** The same, for the entries whose value is computed per read. */
+		const readValue = (name: string): string | undefined => {
+			const value = (
+				pageOf(build(), name) as {
+					displayValue?: (() => string) | string;
+				}
+			).displayValue;
+			return typeof value === 'function' ? value() : value;
+		};
+
+		it.each([
+			'Audio splitting',
+			'Multi-track recording',
+			'Audio player',
+			'Audio processing & feedback',
+			'Audio cleanup defaults',
+			'Mobile',
+			'Diagnostics',
+		])('declares %s behind an entry rather than inline', (name) => {
+			// Sections nobody reads on the way to something else: inline they
+			// are twenty rows between the recording settings and diagnostics.
+			expect(pageOf(build(), name).type).toBe('page');
+			expect(displayValueOf(name) ?? readValue(name)).toBeDefined();
+		});
+
+		it('says on the splitting entry whether recordings split, and how often', () => {
+			settings.autoSplitEnabled = false;
+
+			expect(readValue('Audio splitting')).toBe('Off');
+
+			settings.autoSplitEnabled = true;
+			settings.splitChunkMinutes = 23;
+
+			expect(readValue('Audio splitting')).toBe('Every 23 min');
+		});
+
+		it('says on the multi-track entry how many tracks are configured', () => {
+			settings.enableMultiTrack = false;
+
+			expect(readValue('Multi-track recording')).toBe('Off');
+
+			settings.enableMultiTrack = true;
+			settings.maxTracks = 3;
+
+			expect(readValue('Multi-track recording')).toBe('3 tracks');
+		});
+
+		it('says on the diagnostics entry whether verbose logging is on', () => {
+			settings.debug = false;
+
+			expect(readValue('Diagnostics')).toBe('Debug off');
+
+			settings.debug = true;
+
+			expect(readValue('Diagnostics')).toBe('Debug on');
+		});
+
+		it('says on the player entry whether the enhanced embed is on', () => {
+			settings.enhancedPlayerEnabled = true;
+
+			expect(readValue('Audio player')).toBe('On');
+
+			settings.enhancedPlayerEnabled = false;
+
+			expect(readValue('Audio player')).toBe('Off');
+		});
+
+		it('counts the switches that are on for the processing entry', () => {
+			settings.inputNoiseSuppression = true;
+			settings.inputEchoCancellation = true;
+			settings.inputAutoGainControl = false;
+			settings.showInputLevelMeter = false;
+			settings.showRecordingStats = false;
+			settings.detectSilentChannelOnSave = false;
+
+			// Six independent switches have no single value, so the entry
+			// reports how many of them are on.
+			expect(readValue('Audio processing & feedback')).toBe('2 of 6 on');
+		});
+
+		it('names on the mobile entry where the banner rests, or that it is off', () => {
+			settings.mobileRecordingBanner = true;
+			settings.mobileRecordingBannerPosition =
+				RecordingBannerAnchor.BottomRight;
+
+			expect(readValue('Mobile')).toBe('Bottom right');
+
+			settings.mobileRecordingBanner = false;
+
+			expect(readValue('Mobile')).toBe('Off');
+		});
+
+		it('names the stages the cleanup dialog would open with', () => {
+			settings.cleanupHighPassEnabled = true;
+			settings.cleanupNoiseGateEnabled = false;
+			settings.cleanupLevelingEnabled = true;
+
+			// A count would not say which two, and which two is the answer
+			// worth having before opening the page.
+			expect(readValue('Audio cleanup defaults')).toBe(
+				'High-pass, Leveling',
+			);
+
+			settings.cleanupHighPassEnabled = false;
+			settings.cleanupLevelingEnabled = false;
+
+			expect(readValue('Audio cleanup defaults')).toBe('Off');
+		});
+
+		it('keeps every row of those sections reachable', () => {
+			// Moving a section behind an entry must not drop a setting: the
+			// rows are the same rows, one navigation step further in.
+			expect(
+				rowOf(build(), 'Audio splitting', 'Part duration').control
+					?.type,
+			).toBe('number');
+			expect(
+				rowOf(build(), 'Audio player', 'Show waveform').control?.type,
+			).toBe('toggle');
+			expect(
+				rowOf(build(), 'Audio cleanup defaults', 'Makeup gain').control
+					?.type,
+			).toBe('number');
+		});
+	});
+
+	describe('the transcript output section', () => {
+		const OUTPUT = 'Transcript output';
+
+		it('offers the file format only when a file is written', () => {
+			settings.transcriptDestination = 'note';
+			const visible = rowOf(build(), OUTPUT, 'File format').visible;
+
+			expect(typeof visible === 'function' && visible()).toBe(false);
+
+			settings.transcriptDestination = 'file';
+
+			expect(typeof visible === 'function' && visible()).toBe(true);
+		});
+
+		it.each(['Include speakers', 'Merge speaker turns', 'Speaker format'])(
+			'disables %s without diarization in effect',
+			(rowName) => {
+				// The row exists; this engine and these settings just produce no
+				// speaker labels for it to format.
+				settings.transcriptionProvider =
+					TRANSCRIPTION_PROVIDER_IDS.WHISPER_API;
+				settings.transcriptionDiarize = true;
+				const disabled = rowOf(build(), OUTPUT, rowName).control
+					?.disabled;
+
+				expect(typeof disabled === 'function' && disabled()).toBe(true);
+
+				settings.transcriptionProvider =
+					TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM;
+
+				expect(typeof disabled === 'function' && disabled()).toBe(
+					false,
+				);
+			},
+		);
+
+		it('refuses an empty output template', () => {
+			// An empty template would render every line as nothing at all.
+			const validate = rowOf(build(), OUTPUT, 'Line format').control
+				?.validate as (value: string) => string | undefined;
+
+			expect(validate('{timestamp} {text}')).toBeUndefined();
+			expect(validate('  ')).toBe('A template cannot be empty.');
+		});
+	});
+
+	describe('the advanced transcription section', () => {
+		it('keeps the two-pass safeguard behind both switches', () => {
+			settings.transcriptionEnabled = true;
+			settings.transcriptionAdvancedSettingsEnabled = true;
+			settings.transcriptionAdvancedEnabled = false;
+			const visible = rowOf(
+				build(),
+				'Advanced',
+				'Second-pass length safeguard',
+			).visible;
+
+			expect(typeof visible === 'function' && visible()).toBe(false);
+
+			settings.transcriptionAdvancedEnabled = true;
+
+			expect(typeof visible === 'function' && visible()).toBe(true);
+		});
+
+		it('hides the whole block while transcription is off', () => {
+			settings.transcriptionEnabled = false;
+			const group = groupOf(build(), 'Advanced');
+
+			expect(typeof group.visible === 'function' && group.visible()).toBe(
+				false,
+			);
+		});
+	});
+
+	describe('the audio player section', () => {
+		const PLAYER = 'Audio player';
+
+		it('binds the player options to their settings keys', () => {
+			expect(rowNamesIn(groupOf(build(), PLAYER))).toEqual([
+				'Enhanced audio player',
+				'Show waveform',
+				'Markers and chapters',
+				'Skip step',
+			]);
+			expect(rowOf(build(), PLAYER, 'Show waveform').control).toEqual({
+				type: 'toggle',
+				key: 'playerShowWaveform',
+			});
+		});
+
+		it('reveals the player windows only while the player is on', () => {
+			settings.enhancedPlayerEnabled = false;
+			const visible = rowOf(build(), PLAYER, 'Show waveform').visible;
+
+			expect(typeof visible === 'function' && visible()).toBe(false);
+
+			settings.enhancedPlayerEnabled = true;
+
+			expect(typeof visible === 'function' && visible()).toBe(true);
+		});
+	});
+
+	describe('the audio processing section', () => {
+		it('binds every input option to its settings key', () => {
+			const rows = rowNamesIn(
+				groupOf(build(), 'Audio processing & feedback'),
+			).map((name) => [
+				name,
+				rowOf(build(), 'Audio processing & feedback', name).control,
+			]);
+
+			expect(rows).toEqual([
+				[
+					'Noise suppression',
+					{ type: 'toggle', key: 'inputNoiseSuppression' },
+				],
+				[
+					'Echo cancellation',
+					{ type: 'toggle', key: 'inputEchoCancellation' },
+				],
+				[
+					'Automatic gain control',
+					{ type: 'toggle', key: 'inputAutoGainControl' },
+				],
+				[
+					'Input level meter',
+					{ type: 'toggle', key: 'showInputLevelMeter' },
+				],
+				[
+					'Recording stats',
+					{ type: 'toggle', key: 'showRecordingStats' },
+				],
+				[
+					'Detect silent channel after recording',
+					{ type: 'toggle', key: 'detectSilentChannelOnSave' },
+				],
+			]);
+		});
+	});
+
+	describe('the mobile page', () => {
+		const MOBILE = 'Mobile';
+
+		it('holds the banner switch and its position in a block of their own', () => {
+			expect(groupOf(build(), 'Recording banner').heading).toBe(
+				'Recording banner',
+			);
+			expect(
+				rowNamesIn(groupOf(build(), MOBILE)).map((name) => [
+					name,
+					rowOf(build(), MOBILE, name).control,
+				]),
+			).toEqual([
+				[
+					'Show recording banner',
+					{ type: 'toggle', key: 'mobileRecordingBanner' },
+				],
+				[
+					'Banner position',
+					{
+						type: 'dropdown',
+						key: 'mobileRecordingBannerPosition',
+						options: RECORDING_BANNER_ANCHOR_LABELS,
+					},
+				],
+			]);
+		});
+
+		it('offers every banner anchor', () => {
+			expect(Object.keys(RECORDING_BANNER_ANCHOR_LABELS)).toEqual(
+				Object.values(RecordingBannerAnchor),
+			);
+		});
+
+		it('shows the position only while the banner is on', () => {
+			const visible = rowOf(build(), MOBILE, 'Banner position').visible;
+			settings.mobileRecordingBanner = false;
+
+			expect(typeof visible === 'function' && visible()).toBe(false);
+
+			settings.mobileRecordingBanner = true;
+
+			expect(typeof visible === 'function' && visible()).toBe(true);
+		});
+	});
+
+	describe('the audio cleanup defaults', () => {
+		const CLEANUP = 'Audio cleanup defaults';
+
+		it('gives each stage a switch and its number on rows of their own', () => {
+			// One control per row: a toggle and a number field side by side stack
+			// vertically on mobile and break the rhythm of the tab.
+			expect(rowNamesIn(groupOf(build(), CLEANUP))).toEqual([
+				'High-pass filter',
+				'High-pass cutoff',
+				'Noise gate',
+				'Noise gate threshold',
+				'Loudness leveling',
+				'Makeup gain',
+			]);
+		});
+
+		it('bounds each stage parameter the way its processor does', () => {
+			expect(rowOf(build(), CLEANUP, 'High-pass cutoff').control).toEqual(
+				expect.objectContaining({
+					type: 'number',
+					key: 'cleanupHighPassHz',
+					min: MIN_CLEANUP_HIGHPASS_HZ,
+					max: MAX_CLEANUP_HIGHPASS_HZ,
+					step: CLEANUP_HIGHPASS_STEP_HZ,
+				}),
+			);
+		});
+
+		it.each([
+			['High-pass cutoff', 'cleanupHighPassEnabled'],
+			['Noise gate threshold', 'cleanupNoiseGateEnabled'],
+			['Makeup gain', 'cleanupLevelingEnabled'],
+		])('disables %s while its stage is off', (rowName, enabledKey) => {
+			// The parameter only takes effect once the stage runs, so it
+			// reads as unavailable rather than as a value that does nothing.
+			const settingsRecord = settings as unknown as Record<
+				string,
+				unknown
+			>;
+			settingsRecord[enabledKey] = false;
+			const disabled = rowOf(build(), CLEANUP, rowName).control?.disabled;
+
+			expect(typeof disabled === 'function' && disabled()).toBe(true);
+
+			settingsRecord[enabledKey] = true;
+
+			expect(typeof disabled === 'function' && disabled()).toBe(false);
+		});
+	});
+
+	describe('the diagnostics section', () => {
+		it('declares its three rows behind one entry', () => {
+			const group = diagnosticsGroupOf(build());
+
+			// Opened when something is wrong rather than while a recording is
+			// being set up, so it costs the main tab one row.
+			expect(group.type).toBe('page');
+			expect(group.name).toBe('Diagnostics');
+			expect(rowNamesIn(group)).toEqual([
+				'Test recording',
+				'System info',
+				'Debug mode',
+			]);
+		});
+
+		it('binds debug mode to the settings key, so Obsidian owns the write', () => {
+			expect(rowOf(build(), 'Diagnostics', 'Debug mode').control).toEqual(
+				{
+					type: 'toggle',
+					key: 'debug',
+				},
+			);
+		});
+
+		it('opens the system information dialog from an action row', () => {
+			const row = rowOf(build(), 'Diagnostics', 'System info');
+
+			row.action?.(createDiv(), 1);
+
+			expect(diagnostics.showSystemInfo).toHaveBeenCalledTimes(1);
+		});
+
+		it('starts the test capture in the row that reports it', () => {
+			const definition = rowOf(build(), 'Diagnostics', 'Test recording');
+			const { setting } = renderThroughFramework(
+				definition as RenderDefinition,
+			);
+
+			setting.settingEl
+				.querySelector<HTMLButtonElement>('button')
+				?.click();
+
+			expect(diagnostics.startTestRecording).toHaveBeenCalledWith(
+				setting.settingEl,
+			);
+			// The row carries block content (status line, playback element)
+			// under its control, which the stylesheet needs to know about.
+			expect(
+				setting.settingEl.classList.contains(SETTINGS_BLOCK_ROW_CLASS),
+			).toBe(true);
+		});
+
+		it('releases the test capture through the cleanup the framework holds', () => {
+			// The framework runs this before it renders the row again and before
+			// it drops the row, which is the only teardown a render row gets
+			// while the tab stays open.
+			const definition = rowOf(build(), 'Diagnostics', 'Test recording');
+			const frame = renderThroughFramework(
+				definition as RenderDefinition,
+			);
+
+			expect(frame.cleanup).toEqual(expect.any(Function));
+			expect(diagnostics.releaseTestRecording).not.toHaveBeenCalled();
+
+			frame.cleanup?.();
+
+			expect(diagnostics.releaseTestRecording).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	describe('collectDebouncedControlKeys', () => {
+		it('collects the text-bearing controls, nested groups included', () => {
+			const keys = collectDebouncedControlKeys([
+				{
+					name: 'Prefix',
+					control: { type: 'text', key: 'filePrefix' },
+				},
+				{
+					type: 'group',
+					heading: 'Transcription',
+					items: [
+						{
+							name: 'Prompt',
+							control: { type: 'textarea', key: 'llmPrompt' },
+						},
+						{
+							name: 'Enabled',
+							control: {
+								type: 'toggle',
+								key: 'transcriptionEnabled',
+							},
+						},
+					],
+				},
+			]);
+
+			expect(keys).toEqual(new Set(['filePrefix', 'llmPrompt']));
+		});
+
+		it('walks past a group that declares no children', () => {
+			// Obsidian's own `SettingDefinitionGroup` leaves `items` optional,
+			// so a heading with nothing under it is a shape the API allows and
+			// a page can legitimately produce. The scan has to step over it
+			// rather than read a length off undefined.
+			const keys = collectDebouncedControlKeys([
+				{ type: 'group', heading: 'Nothing here yet' },
+				{
+					name: 'Prefix',
+					control: { type: 'text', key: 'filePrefix' },
+				},
+			]);
+
+			expect(keys).toEqual(new Set(['filePrefix']));
+		});
+
+		it('leaves the controls that change once per interaction alone', () => {
+			// A toggle, a dropdown, or a number field fires one change per
+			// interaction: debouncing those would only delay the write.
+			const keys = collectDebouncedControlKeys(build());
+
+			expect(keys.has('debug')).toBe(false);
+		});
+	});
+
+	describe('the output format section', () => {
+		it('draws the bitrate row by hand rather than declaring its options', () => {
+			// The list depends on the format and the sample rate chosen above
+			// it, and its options are blocked one by one against the device's
+			// encoder. A declared dropdown carries a fixed option map and
+			// disables only as a whole, so neither is expressible.
+			const row = rowOf(build(), 'Output format', 'Audio bitrate');
+			const host = {} as Setting;
+
+			row.render?.(host);
+
+			expect(row.control).toBeUndefined();
+			expect(renderBitrateRow).toHaveBeenCalledWith(host);
+		});
+
+		describe('whether the bitrate row applies to the chosen format', () => {
+			beforeEach(() => {
+				// The only container this browser records, so a lossless
+				// target goes through it rather than being written directly.
+				(global as Record<string, unknown>).MediaRecorder = {
+					isTypeSupported: (mime: string): boolean =>
+						mime === 'audio/webm',
+				};
+			});
+
+			afterEach(() => {
+				delete (global as Record<string, unknown>).MediaRecorder;
+			});
+
+			/** Whether the bitrate row's own predicate holds right now. */
+			const bitrateRowVisible = (): boolean => {
+				const { visible } = rowOf(
+					build(),
+					'Output format',
+					'Audio bitrate',
+				);
+				return typeof visible === 'function'
+					? visible()
+					: visible !== false;
+			};
+
+			it.each([
+				// Its own rate, spent on its own encoder.
+				['mp3', false, true],
+				// Captured as Opus at this rate and wrapped losslessly after
+				// the stop, so the value still decides what the file holds.
+				['flac', false, true],
+				// Mobile has no direct PCM capture, so WAV goes the same way.
+				['wav', true, true],
+				// Desktop WAV is raw PCM: nothing is encoded at any rate.
+				['wav', false, false],
+			])(
+				'recording %s with mobile=%s shows the row: %s',
+				(format, mobile, expected) => {
+					if (mobile) {
+						useMobilePlatform();
+					} else {
+						useDesktopPlatform();
+					}
+					settings.recordingFormat = format;
+
+					expect(bitrateRowVisible()).toBe(expected);
+				},
+			);
+		});
+
+		// The width is a property of the raw PCM capture, so on a platform
+		// that records WAV through a compressed intermediate there is nothing
+		// able to honour the choice. The row stays on screen all the same: a
+		// vault synced from a machine that does record raw PCM carries the
+		// setting, and a user who cannot see it cannot move it back either.
+		describe('the bit depth row', () => {
+			it('offers the width on a platform that captures raw PCM', () => {
+				useDesktopPlatform();
+				const row = rowOf(build(), 'Output format', 'Bit depth');
+
+				expect(disabledOf(row.control)).toBe(false);
+				expect(row.control?.key).toBe('recordingBitDepth');
+				expect(row.desc).toMatch(/Applies to WAV recordings only/);
+			});
+
+			it('shows it locked where WAV is not captured as raw PCM', () => {
+				useMobilePlatform();
+				const row = rowOf(build(), 'Output format', 'Bit depth');
+
+				expect(disabledOf(row.control)).toBe(true);
+				expect(row.desc).toMatch(/Not available on this device/);
+			});
+		});
+	});
+
+	describe('dropdown options', () => {
+		/**
+		 * Every dropdown whose options are a settled label map, paired with the
+		 * map they have to be. Each of these used to be spelled out as the same
+		 * map taken apart into value/label pairs and put back together, which is
+		 * a second copy of a list that already exists - and one that drifts the
+		 * moment a label is added on one side only.
+		 */
+		const labelledDropdowns: ReadonlyArray<{
+			heading: string;
+			name: string;
+			labels: Record<string, string>;
+		}> = [
+			{
+				heading: 'Output format',
+				name: 'Update links after conversion',
+				labels: CONVERSION_LINK_ACTION_LABELS,
+			},
+			{
+				heading: 'Output format',
+				name: 'Bit depth',
+				labels: PCM_SAMPLE_FORMAT_LABELS,
+			},
+			{
+				heading: 'Audio input',
+				name: 'Recording channels',
+				labels: CHANNEL_MODE_LABELS,
+			},
+			{
+				heading: 'Transcription',
+				name: 'Transcription engine',
+				labels: TRANSCRIPTION_PROVIDER_LABELS,
+			},
+			{
+				heading: 'Transcript output',
+				name: 'Destination',
+				labels: TRANSCRIPT_DESTINATION_LABELS,
+			},
+			{
+				heading: 'Transcript output',
+				name: 'File format',
+				labels: TRANSCRIPT_FILE_FORMAT_LABELS,
+			},
+			{
+				heading: 'LLM post-processing',
+				name: 'Task',
+				labels: LLM_TASK_LABELS,
+			},
+		];
+
+		it.each(labelledDropdowns)(
+			'offers $name exactly what its label map holds',
+			({ heading, name, labels }) => {
+				const control = rowOf(build(), heading, name).control;
+
+				expect(control?.options).toEqual(labels);
+			},
+		);
+
+		// The row is blocked for two different reasons, and they are not the
+		// same fix: a device that cannot choose at all, versus a chosen input
+		// that reports one layout only. The platform default has no device id
+		// to ask about, so the choice stays open rather than being blocked on
+		// an unknown.
+		it.each([
+			{
+				name: 'a device that can choose',
+				audioDeviceId: 'iface-1',
+				blocked: false,
+			},
+			{
+				name: 'an input that offers one layout',
+				audioDeviceId: 'mic-1',
+				blocked: true,
+			},
+			{
+				name: 'the platform default input',
+				audioDeviceId: '',
+				blocked: false,
+			},
+		])(
+			'blocks the channel row for $name: $blocked',
+			({ audioDeviceId, blocked }) => {
+				settings.audioDeviceId = audioDeviceId;
+
+				const control = rowOf(
+					build(),
+					'Audio input',
+					'Recording channels',
+				).control;
+
+				expect(disabledOf(control)).toBe(blocked);
+			},
+		);
+
+		it('offers the same engines on every row that picks one', () => {
+			// Three jobs pick an engine, on three pages. They are the same
+			// engines, so the list of them belongs in one place rather than
+			// once per row.
+			settings.transcriptionEnabled = true;
+			settings.transcriptionAdvancedSettingsEnabled = true;
+			settings.transcriptionAdvancedEnabled = true;
+			settings.transcriptionAutoChaptersEnabled = true;
+			const definitions = build();
+			const engineRows = [
+				rowOf(
+					definitions,
+					'LLM post-processing',
+					'Post-processing engine',
+				),
+				rowOf(definitions, 'Auto chapters', 'Chapters engine'),
+				rowOf(definitions, 'Advanced', 'Context agents engine'),
+			];
+
+			for (const row of engineRows) {
+				expect(row.control?.options).toEqual(LLM_PROVIDER_LABELS);
+			}
+		});
+	});
+
+	describe('numeric bounds', () => {
+		/** The bounds one number control declares, with the row it belongs to. */
+		interface NumericBounds {
+			name: string;
+			min: number | undefined;
+			max: number | undefined;
+			step: number | undefined;
+		}
+
+		/** Every number control in the tree, with the row that declares it. */
+		const numberControls = (): NumericBounds[] => {
+			const found: NumericBounds[] = [];
+			const walk = (
+				entries: ReadonlyArray<RowDefinition | GroupDefinition>,
+			): void => {
+				for (const entry of entries) {
+					if ('type' in entry) {
+						walk(entry.items);
+						continue;
+					}
+					if (entry.control?.type === 'number') {
+						found.push({
+							name: entry.name,
+							min: entry.control.min as number | undefined,
+							max: entry.control.max as number | undefined,
+							step: entry.control.step as number | undefined,
+						});
+					}
+				}
+			};
+			walk(build() as ReadonlyArray<RowDefinition | GroupDefinition>);
+			return found;
+		};
+
+		it('declares every bound on the grid its own step describes', () => {
+			// A number control's step is its value space, not a convenience for
+			// the stepper arrows: the framework offers exactly `min + n * step`
+			// and refuses everything between. A ceiling off that grid is a value
+			// the field shows, the arrows cannot reach, and typing will not
+			// save - which is what a 512-token grid ending at 32000 was.
+			//
+			// Asked through the rule the renderers apply, so a grid of tenths
+			// is judged the way it is enforced rather than by an exact modulo
+			// that binary arithmetic fails for values the field does accept.
+			const unreachable = numberControls().filter((control) =>
+				[control.min, control.max].some(
+					(bound) =>
+						bound !== undefined &&
+						numberControlRejection(control, bound) !== undefined,
+				),
+			);
+
+			expect(unreachable).toEqual([]);
+		});
+
+		it('finds every numeric row, so the invariant covers the tree', () => {
+			expect(numberControls().length).toBeGreaterThan(5);
+		});
+
+		it('accepts the ceiling of the answer budget an engine may write', () => {
+			// The reported defect: the row showed 32000 and refused to store it.
+			const row = rowIn(
+				pageOf(build(), EngineLabel.Anthropic),
+				'Max output tokens',
+			);
+
+			expect(
+				numberControlRejection(
+					row.control as {
+						min?: number;
+						max?: number;
+						step?: number;
+					},
+					MAX_LLM_MAX_TOKENS,
+				),
+			).toBeUndefined();
+		});
+
+		it('accepts the round numbers a model catalogue quotes', () => {
+			const row = rowIn(
+				pageOf(build(), EngineLabel.OpenAi),
+				'Max output tokens',
+			).control as { min?: number; max?: number; step?: number };
+
+			for (const tokens of [4000, 8000, 16000, 32000]) {
+				expect(numberControlRejection(row, tokens)).toBeUndefined();
+			}
+		});
+	});
+
+	describe('numberControlRejection', () => {
+		it('accepts a value inside the bounds and on the grid', () => {
+			expect(
+				numberControlRejection({ min: 1, max: 60, step: 1 }, 20),
+			).toBeUndefined();
+		});
+
+		it.each([
+			// Just outside each bound, and each bound itself: the message the
+			// row shows has to name the limit that was crossed, or the user
+			// is told "wrong" without being told what is right.
+			{ value: 0, expected: 'Enter 1 or more.' },
+			{ value: -1, expected: 'Enter 1 or more.' },
+			{ value: 61, expected: 'Enter 60 or less.' },
+			{ value: 600, expected: 'Enter 60 or less.' },
+		])('refuses $value with "$expected"', ({ value, expected }) => {
+			expect(
+				numberControlRejection({ min: 1, max: 60, step: 1 }, value),
+			).toBe(expected);
+		});
+
+		it.each([1, 60])(
+			'accepts %i, which is on the bound itself',
+			(value) => {
+				expect(
+					numberControlRejection({ min: 1, max: 60, step: 1 }, value),
+				).toBeUndefined();
+			},
+		);
+
+		it('refuses a value between two grid points', () => {
+			expect(
+				numberControlRejection({ min: 20, max: 300, step: 5 }, 137),
+			).toBeDefined();
+			expect(
+				numberControlRejection({ min: 20, max: 300, step: 5 }, 135),
+			).toBeUndefined();
+		});
+
+		it('accepts a grid point binary arithmetic cannot land on exactly', () => {
+			// 0.5 + 7 * 0.05 is not 0.85 in floating point, so the question is
+			// asked of the nearest grid point rather than of the quotient.
+			expect(
+				numberControlRejection({ min: 0.5, max: 1, step: 0.05 }, 0.85),
+			).toBeUndefined();
+			expect(
+				numberControlRejection({ min: 0.5, max: 1, step: 0.05 }, 0.87),
+			).toBeDefined();
+		});
+
+		it('constrains nothing where no grid is declared', () => {
+			expect(
+				numberControlRejection({ min: 1, max: 60 }, 20.5),
+			).toBeUndefined();
+			expect(
+				numberControlRejection({ min: 1, max: 60, step: 'any' }, 20.5),
+			).toBeUndefined();
+		});
+
+		it.each([
+			{ name: 'not a number', value: Number.NaN },
+			{ name: 'infinite', value: Number.POSITIVE_INFINITY },
+			{ name: 'negatively infinite', value: Number.NEGATIVE_INFINITY },
+		])('refuses a value that is $name', ({ value }) => {
+			// An empty or half-typed field parses to one of these, and every
+			// one of them has to read as "enter a number" rather than as a
+			// bound the user never set.
+			expect(
+				numberControlRejection({ min: 1, max: 60, step: 1 }, value),
+			).toBe('Enter a number.');
+		});
+	});
+});

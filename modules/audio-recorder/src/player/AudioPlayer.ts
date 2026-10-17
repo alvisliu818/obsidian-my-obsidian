@@ -1,0 +1,1339 @@
+/**
+ * Enhanced audio player rendered in place of Obsidian's built-in audio
+ * embed. Adds a waveform (or seek bar), playback-speed control, skip
+ * buttons, a volume control, mute, loop, a time display, per-file
+ * markers and chapters, and a "copy timestamp link" action. Implemented
+ * as a MarkdownRenderChild so its lifecycle (event listeners, audio
+ * element, registry registration, observers) is torn down automatically
+ * when the note re-renders or the leaf closes.
+ *
+ * The class is a coordinator: it owns the embed-takeover lifecycle, the
+ * shared audio element, and the #t= start hint, and wires the
+ * collaborators that do the rest - PlayerControlsView (control row),
+ * SeekController (pointer/keyboard seeking), DurationProbe
+ * (initially-unknown durations), WaveformController (progressive decode
+ * and drawing), PlayerMarkerController (marker CRUD and persistence),
+ * plus WaveformCanvas and MarkerListView for the rendered surfaces.
+ * @module player/AudioPlayer
+ */
+
+import { Component, MarkdownRenderChild, Menu, Notice } from 'obsidian';
+import type { App, TFile } from 'obsidian';
+import {
+	PLUGIN_LOG_PREFIX,
+	PLAYER_PLAYBACK_RATE_PRESETS,
+	PLAYER_LOOP,
+	PLAYER_PLAYBACK_RATE,
+} from '../constants';
+import { formatTimecode } from '../utils/TimeUtils';
+import { copyTimecodeLink } from '../obsidian/timecodeRefs';
+import { playbackProgress } from './playbackProgress';
+import {
+	playAudio,
+	resetPlayback,
+	seekAudio,
+	setAudioPlaybackRate,
+	setAudioVolume,
+	skipAudio,
+	toggleAudioMuted,
+} from './playbackCommands';
+import {
+	playerSettingsEqual,
+	type ResolvedPlayerSettings,
+} from '../player/playerSettings';
+import { WaveformPeakCache, type AudioDecoder } from './WaveformData';
+import { playbackKey } from './AudioPlayerRegistry';
+import type {
+	AudioPlayerRegistry,
+	SeekablePlayer,
+} from './AudioPlayerRegistry';
+import type { RecordingSidecarStore } from '../sidecar/RecordingSidecarStore';
+import type { ChapterSpan, MarkerKind } from '../markers/markerModel';
+import { speedMenuItems } from './playbackRate';
+import { isEditableContext } from './playerMode';
+import {
+	setPlayerEmbedActions,
+	clearPlayerEmbedActions,
+	type PlayerEmbedActions,
+} from './playerEmbedActions';
+import { DurationProbe } from './DurationProbe';
+import { SeekController } from './SeekController';
+import { WaveformController } from './WaveformController';
+import { PlayerMarkerController } from './PlayerMarkerController';
+import { PlaybackPositionMemory } from './PlaybackPositionMemory';
+import { PlayerControlsView } from './views/PlayerControlsView';
+import {
+	MarkerListView,
+	type MarkerListCallbacks,
+	type MarkerListHost,
+} from './views/MarkerListView';
+
+/**
+ * Fallback delay before rendering the player when Obsidian never signals
+ * that the embed finished loading (e.g. a broken link, or a change to
+ * Obsidian's embed markup), so the player is never left unrendered.
+ */
+const EMBED_LOAD_FALLBACK_MS = 400;
+
+/**
+ * Options passed to a player when it is created for an embed.
+ */
+export interface AudioPlayerOptions {
+	/** Offset in seconds to seek to once metadata is available. */
+	startSeconds: number | null;
+	/** Vault path of the note hosting the embed (for link generation). */
+	sourcePath: string;
+	/**
+	 * Render immediately instead of waiting for Obsidian to load the
+	 * embed. Set when the player owns its container from the start (the
+	 * embed-registry path), where no default player is ever injected.
+	 */
+	immediate?: boolean;
+}
+
+/**
+ * Renders and drives a single enhanced audio player instance.
+ */
+export class AudioPlayer extends MarkdownRenderChild implements SeekablePlayer {
+	/** Shared audio element for this embed's playback key, acquired from the
+	 * registry on render so the same embed across view modes controls one
+	 * playback while distinct embeds of the file stay independent. */
+	private audio!: HTMLAudioElement;
+	/**
+	 * Identity key of this embed's shared audio element: the file path plus
+	 * the #t= start (see playbackKey). Distinct embeds of one file get
+	 * different keys and so independent playback; the same embed re-created
+	 * across a view-mode switch re-acquires its element under this key.
+	 */
+	private readonly audioKey: string;
+	/**
+	 * The #t= start position to show for THIS embed until its playback engages.
+	 * The audio element can be shared with the same embed in another view/pane,
+	 * so moving its currentTime eagerly would drag that copy; instead the embed
+	 * shows its start here (display only) and seeks the shared element to it
+	 * just-in-time when the user plays or skips this embed. Null when the embed
+	 * has no #t= offset.
+	 */
+	private startHint: number | null = null;
+	private seekEl!: HTMLElement;
+	/** Control row for the current render, or null before the first render. */
+	private controls: PlayerControlsView | null = null;
+	/** Marker/chapter UI, or null when markers are disabled. */
+	private markerView: MarkerListView | null = null;
+	private progressFillEl: HTMLElement | null = null;
+	/** Pointer/keyboard seeking and the clientX-to-time mapping. */
+	private readonly seekCtl: SeekController;
+	/** Progressive waveform decode and rendering. */
+	private readonly waveformCtl: WaveformController;
+	/** Marker data, persistence, and chapter navigation. */
+	private readonly markerCtl: PlayerMarkerController;
+	/** Probe for sources that load without a usable duration. */
+	private durationProbe: DurationProbe | null = null;
+	/**
+	 * Guards the one-time render so onload (Reading view) and Obsidian's
+	 * loadFile (Live Preview embed widget) never both render this player.
+	 */
+	private renderStarted = false;
+	/**
+	 * Set on teardown. Async work checks this rather than
+	 * containerEl.isConnected, because the embed-registry path renders
+	 * while the container is briefly detached (not yet inserted), and
+	 * bailing then would drop the waveform and markers.
+	 */
+	private unloaded = false;
+	/**
+	 * Whether marker/chapter editing is allowed. Defaults to read-only and
+	 * is set true only once the embed is confirmed to be inside the editor
+	 * (Live Preview); Reading view stays read-only. Defaulting to false
+	 * means a missed/late detection can never wrongly show edit controls
+	 * in Reading view - the regression this guards against.
+	 */
+	private editable = false;
+	/**
+	 * Owns everything the CURRENT render pass set up (not the component
+	 * lifetime): its DOM listeners, observers and pending frames. It is a child
+	 * of this player, replaced at the start of every renderUi, so an in-place
+	 * settings re-render tears the previous pass down instead of accumulating
+	 * its listeners, and unloading the player unloads the last pass with it.
+	 * The placeholder is never loaded and nothing registers on it: the first
+	 * render replaces it before any collaborator asks for it.
+	 */
+	private renderScope = new Component();
+
+	/**
+	 * Whether playback repeats the chapter it is inside. Per player rather
+	 * than per shared element, the same way the skip step is: the status bar
+	 * asks whichever player owns the playback, so the two surfaces agree
+	 * without a second copy of the flag.
+	 */
+	private chapterLoop = false;
+
+	/**
+	 * The chapter the loop is repeating. Held rather than recomputed on every
+	 * tick, because once playback runs past the chapter's end the position
+	 * alone names the NEXT chapter, and the loop would never fire.
+	 */
+	private loopSpan: ChapterSpan | null = null;
+
+	/** Remembers where this recording was left off. */
+	private readonly positionMemory: PlaybackPositionMemory;
+
+	/**
+	 * @param containerEl - The embed element to take over
+	 * @param app - Obsidian App instance
+	 * @param file - Audio file to play
+	 * @param settings - Sanitized player settings
+	 * @param registry - Registry for timecode-link seeking
+	 * @param peakCache - Shared waveform peak cache
+	 * @param decoder - Shared audio decoder for waveform extraction
+	 * @param markerStore - Persistence for markers and chapters
+	 * @param options - Per-embed options (start offset, source note)
+	 */
+	constructor(
+		containerEl: HTMLElement,
+		private readonly app: App,
+		private readonly file: TFile,
+		private settings: ResolvedPlayerSettings,
+		private readonly registry: AudioPlayerRegistry,
+		peakCache: WaveformPeakCache,
+		decoder: AudioDecoder,
+		markerStore: RecordingSidecarStore,
+		private readonly options: AudioPlayerOptions,
+	) {
+		super(containerEl);
+		this.audioKey = playbackKey(file.path, options.startSeconds);
+		this.seekCtl = new SeekController(
+			{
+				registerDomEvent: (el, type, handler) => {
+					this.renderScope.registerDomEvent(el, type, handler);
+				},
+			},
+			{
+				onSeekToTime: (seconds) => {
+					// A user seek engages the shared timeline
+					this.engageTimeline();
+					// Before the move, not after: assigning the position
+					// fires timeupdate, and the loop would read the stretch
+					// the listener is leaving and pull them back into it.
+					this.anchorChapterLoop(seconds);
+					this.audio.currentTime = seconds;
+					this.updateProgress();
+				},
+				onSkip: (deltaSeconds) => {
+					this.skip(deltaSeconds);
+				},
+				onEngageTimeline: () => {
+					this.engageTimeline();
+				},
+				duration: () => this.audio.duration,
+			},
+		);
+		this.waveformCtl = new WaveformController(
+			app,
+			file,
+			decoder,
+			peakCache,
+			{
+				registerRenderCleanup: (cleanup) => {
+					this.renderScope.register(cleanup);
+				},
+				isUnloaded: () => this.unloaded,
+			},
+		);
+		this.positionMemory = new PlaybackPositionMemory(
+			markerStore,
+			file.path,
+		);
+		this.markerCtl = new PlayerMarkerController(markerStore, file.path, {
+			isUnloaded: () => this.unloaded,
+			renderMarkers: () => {
+				this.renderMarkers();
+			},
+			refreshTicks: () => {
+				this.markerView?.setMarkers(this.markerCtl.all);
+				this.markerView?.refreshTicks(this.knownDuration());
+			},
+			notifyOthers: () => {
+				this.registry.reloadMarkers(this.file.path, this);
+			},
+		});
+	}
+
+	/**
+	 * Defers the takeover until Obsidian has finished loading the embed,
+	 * then renders the player. Obsidian loads internal media embeds
+	 * asynchronously through its own loader, which owns the embed element
+	 * and overwrites a player built too early - notably for files it
+	 * treats as video (mp4, webm, mov, mkv, ogv). Rendering only after the
+	 * embed is populated lets empty() clear Obsidian's native element so
+	 * our player is the one that survives.
+	 */
+	override onload(): void {
+		if (this.options.immediate) {
+			// The embed-registry path hands us an owned container with no
+			// default player to wait for, so render right away
+			this.safeRenderPlayer();
+			return;
+		}
+		this.whenEmbedReady(() => {
+			this.safeRenderPlayer();
+		});
+	}
+
+	/**
+	 * Obsidian's Live Preview embed lifecycle creates the embed component and
+	 * then calls `loadFile()` on it to load the file. The enhanced player is
+	 * constructed with its file and renders through the immediate path, so
+	 * this just ensures that render ran. Its ABSENCE was the bug: the
+	 * CodeMirror embed widget called `loadFile` on a component that lacked it
+	 * ("loadFile is not a function"), which crashed the editor and blanked the
+	 * note (Obsidian then reported "Failed to open"). Reading view renders via
+	 * onload and never calls loadFile, which is why only edited notes broke.
+	 * @param file - File Obsidian asks to load (the embed's own file)
+	 */
+	loadFile(file?: TFile): void {
+		// Render only the embed-registry (immediate) path here; the
+		// post-processor path renders from onload once the embed is ready.
+		if (this.options.immediate && (!file || file.path === this.file.path)) {
+			this.safeRenderPlayer();
+		}
+	}
+
+	/**
+	 * Renders the player, but never lets a render failure escape into
+	 * Obsidian's embed loader - an uncaught throw there breaks opening the
+	 * whole note (Obsidian reports "Failed to open"). On failure the full
+	 * error is logged and the embed falls back to a plain native audio
+	 * element, so the note still opens and the audio still plays.
+	 */
+	private safeRenderPlayer(): void {
+		if (this.renderStarted) {
+			return;
+		}
+		this.renderStarted = true;
+		try {
+			this.renderPlayer();
+		} catch (error) {
+			console.error(
+				`${PLUGIN_LOG_PREFIX} Enhanced player failed to render for ${this.file.path}; falling back to the native audio element.`,
+				error,
+			);
+			this.renderNativeFallback();
+		}
+	}
+
+	/**
+	 * Replaces the container with a plain native audio element. Last-resort
+	 * fallback when the enhanced render throws, so an embed bug degrades to a
+	 * working native player instead of blanking the note.
+	 */
+	private renderNativeFallback(): void {
+		try {
+			this.containerEl.empty();
+			this.containerEl.removeClass('aar-player');
+			const audio = this.containerEl.createEl('audio');
+			audio.controls = true;
+			audio.src = this.app.vault.getResourcePath(this.file);
+		} catch (fallbackError) {
+			console.error(
+				`${PLUGIN_LOG_PREFIX} Native audio fallback also failed for ${this.file.path}.`,
+				fallbackError,
+			);
+		}
+	}
+
+	/**
+	 * Reports whether Obsidian has populated the embed: it either set the
+	 * `is-loaded` class or injected a native media element.
+	 */
+	private isEmbedLoaded(): boolean {
+		return (
+			this.containerEl.hasClass('is-loaded') ||
+			this.containerEl.querySelector('audio, video') !== null
+		);
+	}
+
+	/**
+	 * Runs the takeover once Obsidian has populated the embed, or after a
+	 * short fallback delay if that signal never arrives. The observer and
+	 * timer are torn down on unload and after firing once.
+	 * @param run - Callback that performs the takeover
+	 */
+	private whenEmbedReady(run: () => void): void {
+		if (this.isEmbedLoaded()) {
+			run();
+			return;
+		}
+		let done = false;
+		let fallback = 0;
+		let observer: MutationObserver | null = null;
+		const finish = (): void => {
+			if (done) {
+				return;
+			}
+			done = true;
+			observer?.disconnect();
+			window.clearTimeout(fallback);
+			run();
+		};
+		observer = new MutationObserver(() => {
+			if (this.isEmbedLoaded()) {
+				finish();
+			}
+		});
+		observer.observe(this.containerEl, {
+			childList: true,
+			attributes: true,
+			attributeFilter: ['class'],
+		});
+		fallback = window.setTimeout(finish, EMBED_LOAD_FALLBACK_MS);
+		this.register(() => {
+			observer?.disconnect();
+			window.clearTimeout(fallback);
+		});
+	}
+
+	/**
+	 * One-time setup: wires the audio element and events, registers with the
+	 * registry, and renders the UI. The audio element and its listeners are
+	 * created once here (never on a settings re-render) so playback is never
+	 * interrupted and listeners never duplicate. Runs once the embed is
+	 * ready (see whenEmbedReady).
+	 */
+	private renderPlayer(): void {
+		this.register(() => {
+			this.unloaded = true;
+		});
+		// The last render pass needs no registration of its own here: it is a
+		// child of this player, and unloading the player unloads it first.
+
+		// Bind to this embed's shared audio element (keyed by file path plus
+		// #t= start) so the same embed across view modes controls one playback
+		// while other embeds of the file stay independent; the registry
+		// releases it once the last player unloads
+		const { audio, isNew } = this.registry.acquireAudio(
+			this.audioKey,
+			this.app.vault.getResourcePath(this.file),
+		);
+		this.audio = audio;
+		// Apply player defaults ONLY when the shared audio is first created,
+		// never on a re-render: otherwise a mode switch or an unrelated
+		// settings save would reset the user's chosen speed and loop.
+		if (isNew) {
+			this.audio.loop = PLAYER_LOOP;
+			setAudioPlaybackRate(this.audio, PLAYER_PLAYBACK_RATE);
+			// Only the player that created the shared element resumes it. A
+			// second embed of the same file must not drag playback that is
+			// already running back to a stored offset.
+			void this.restorePosition();
+		}
+		this.register(() => {
+			// Closing the note is the other way a listener leaves a recording
+			// part-heard, and it fires no pause.
+			this.rememberPosition();
+		});
+		const unregisterPlaybackController =
+			this.registry.registerPlaybackController(this.audioKey, {
+				// Adding markers is edit-only, exactly as the embedded control
+				// row and the context menu gate it, so a Reading-view player
+				// never offers the status-bar marker actions or writes a sidecar
+				canAddMarkers: () =>
+					this.settings.enableMarkers && this.editable,
+				// Chapter navigation only reads the markers, so it stays
+				// available in reading view exactly as the embedded chapter
+				// buttons do
+				canNavigateChapters: () => this.settings.enableMarkers,
+				chapterLoopEnabled: () => this.chapterLoop,
+				toggleChapterLoop: () => {
+					this.toggleChapterLoop();
+				},
+				currentChapterLabel: () =>
+					this.markerCtl.currentChapterLabel(this.audio.currentTime),
+				skipSeconds: () => this.settings.skipSeconds,
+				togglePlay: () => {
+					this.togglePlay();
+				},
+				stop: () => {
+					this.stopPlayback();
+				},
+				skip: (deltaSeconds) => {
+					this.skip(deltaSeconds);
+				},
+				// Through the same seek a timecode link and a marker jump
+				// take, so an outside scrubber engages the timeline and moves
+				// the chapter repeat exactly as the embed's own seek bar does.
+				seekToPosition: (seconds) => {
+					this.seekTo(seconds, !this.audio.paused);
+				},
+				toggleMute: () => {
+					this.toggleMute();
+				},
+				setVolume: (volume) => {
+					this.setVolume(volume);
+				},
+				setPlaybackRate: (rate) => {
+					this.setPlaybackRate(rate);
+				},
+				addMarker: (kind) => {
+					void this.markerCtl.addAt(this.audio.currentTime, kind);
+				},
+				previousChapter: () => {
+					this.jumpToPreviousChapter();
+				},
+				nextChapter: () => {
+					this.jumpToNextChapter();
+				},
+			});
+		this.register(unregisterPlaybackController);
+		this.register(() => {
+			this.registry.releaseAudio(this.audioKey);
+		});
+
+		this.durationProbe = new DurationProbe(this.audio, () => {
+			this.renderMarkers();
+			this.updateProgress();
+		});
+		this.register(() => {
+			this.durationProbe?.cancel();
+		});
+
+		this.registerAudioEvents();
+
+		this.registry.register(this.file.path, this);
+		this.register(() => {
+			this.registry.unregister(this.file.path, this);
+		});
+
+		// Each embed shows its OWN #t= start (display only); the shared audio is
+		// never moved on render, so a second embed of the same file is not
+		// dragged to this embed's offset. renderUi's updateProgress reflects it.
+		this.startHint = this.options.startSeconds;
+
+		this.renderUi();
+	}
+
+	/**
+	 * Re-renders the player UI from the current settings. Re-runnable: called
+	 * on first render and again by applySettings when a window toggle
+	 * changes. It rebuilds only the DOM the player owns inside its container,
+	 * leaving the audio element (and playback) untouched - so toggling the
+	 * waveform or markers window applies instantly without a note re-render.
+	 */
+	private renderUi(): void {
+		// Tear down the previous render pass before rebuilding, so an in-place
+		// settings re-render never accumulates observers or listeners on the
+		// component lifetime (each is registered on the render scope).
+		this.beginRenderScope();
+
+		this.containerEl.empty();
+		this.containerEl.addClass('aar-player');
+		// The embed element keeps Obsidian's own audio loader alive; an
+		// audio child it injects later is removed so our player is the
+		// only one shown
+		this.guardAgainstDefaultEmbed();
+
+		// A fresh marker view per render (the DOM it owns is recreated by
+		// empty()); the authoritative markers stay on the marker controller
+		this.markerView = this.settings.enableMarkers
+			? this.createMarkerView()
+			: null;
+		this.markerView?.setEditable(this.editable);
+		this.markerView?.setMarkers(this.markerCtl.all);
+
+		this.buildControls();
+		this.buildSeekArea();
+		if (this.markerView) {
+			this.markerView.mountList(this.containerEl);
+		}
+
+		if (this.settings.enableMarkers) {
+			void this.markerCtl.load();
+		} else {
+			this.markerCtl.clear();
+		}
+
+		// Publish now with the default (read-only) mode; applyMode
+		// re-publishes once the real mode is known
+		this.publishContextActions();
+
+		// Editable only in Live Preview; this can be told reliably once the
+		// embed is attached, so apply the edit/read-only affordances then.
+		// Defaulting to read-only means Reading view is correct even if this
+		// never runs.
+		this.whenAttached(() => {
+			this.applyMode();
+		});
+
+		// Moving the note into a pop-out (or back) leaves this pass bound to
+		// the window it was built in: the waveform drawn at that window's
+		// pixel ratio and theme, and the marker list listening on that
+		// window's document. Rendering again in place rebinds all of it, the
+		// same way an external marker edit does: playback is untouched, and the
+		// cached peaks redraw without a second decode.
+		this.renderScope.register(
+			this.seekEl.onWindowMigrated(() => {
+				this.renderUi();
+			}),
+		);
+
+		if (this.shouldShowWaveform()) {
+			this.waveformCtl.scheduleLoad(this.containerEl);
+		}
+
+		this.updateProgress();
+	}
+
+	/**
+	 * Re-renders the player UI in place with new settings (e.g. after the
+	 * waveform or markers window is toggled, or the skip step is changed).
+	 * Does nothing when the settings are unchanged, so a save that touched
+	 * none of them - even an unrelated recording setting - never rebuilds an
+	 * open player or resets its playback. Playback continues uninterrupted
+	 * because the audio element is not rebuilt.
+	 * @param settings - The new render-ready player settings
+	 */
+	applySettings(settings: ResolvedPlayerSettings): void {
+		if (this.unloaded) {
+			return;
+		}
+		if (playerSettingsEqual(settings, this.settings)) {
+			return;
+		}
+		this.settings = settings;
+		this.renderUi();
+	}
+
+	/**
+	 * Reflects the plugin-wide voice-boost state on this player's control row.
+	 * Driven by the registry rather than by this player's own click, because
+	 * the chain is one state for every player: turning it on in one of them
+	 * has to show in the others, which their buttons cannot know about.
+	 * @param enabled - True while the chain is applied to playback
+	 */
+	setVoiceBoost(enabled: boolean): void {
+		this.controls?.setVoiceBoost(enabled);
+	}
+
+	/**
+	 * Turns the live cleanup chain on or off for every player, and says so
+	 * when it has nothing to apply.
+	 *
+	 * The stages come from the cleanup configuration, so a configuration with
+	 * every stage switched off engages a chain that passes the audio straight
+	 * through. The offline pass refuses that configuration with a message
+	 * rather than writing an identical copy; here there is no run to refuse,
+	 * so the switch engages and the message says where to turn a stage on.
+	 */
+	private toggleVoiceBoost(): void {
+		const state = this.registry.toggleVoiceBoost();
+		if (state.enabled && !state.renders) {
+			new Notice(
+				'Voice boost is on, but no cleanup stage is enabled. Turn one on under audio cleanup defaults.',
+			);
+		}
+	}
+
+	/**
+	 * Seeks to an absolute offset, optionally starting playback. Timecode
+	 * links start playback (the user clicked to listen); in-player marker and
+	 * chapter jumps preserve the current play/pause state, matching a seek-bar
+	 * drag.
+	 * @param seconds - Target offset in seconds
+	 * @param autoplay - Start playback after seeking (default true)
+	 */
+	seekTo(seconds: number, autoplay = true): void {
+		// A user seek (timecode link, marker jump) engages the shared timeline
+		this.engageTimeline();
+		// The loop follows the listener to where they are going, and is moved
+		// before the seek is applied because applying it fires timeupdate.
+		this.anchorChapterLoop(seconds);
+		seekAudio(this.audio, seconds, {
+			autoplay,
+			// Reflect the new position immediately, since a paused jump fires
+			// no timeupdate to refresh the seek visuals
+			onApplied: () => {
+				this.updateProgress();
+			},
+			// Autoplay can be blocked; the user can press play
+			onError: () => undefined,
+		});
+	}
+
+	/**
+	 * Reports whether the player is still attached to the document, so
+	 * the registry can prune stale entries.
+	 */
+	isConnected(): boolean {
+		return this.containerEl.isConnected;
+	}
+
+	/**
+	 * Re-reads this player's markers from the store and re-renders them.
+	 * Called by the registry when another view changed the same file's
+	 * markers, so reading view and Live Preview stay in sync.
+	 */
+	reloadMarkers(): void {
+		if (this.unloaded || !this.settings.enableMarkers) {
+			return;
+		}
+		// Re-render the whole player in place through the same renderUi the
+		// live settings-apply uses, not only the marker list. In Live Preview
+		// CodeMirror can shuffle or orphan the embed's DOM, so re-drawing only
+		// the markers may paint into a detached marker view and never show;
+		// renderUi recreates the marker view in the current container and
+		// re-reads the store, so an external write (generated chapters) always
+		// appears. Only this player's own container is rebuilt, never the note
+		// or the page. Playback is not interrupted (the shared audio element is
+		// not rebuilt) and cached waveform peaks are reused, so there is no
+		// flicker.
+		this.renderUi();
+	}
+
+	/**
+	 * Builds the marker view with this player's lifecycle hooks and the
+	 * callbacks that route marker edits through the marker controller.
+	 */
+	private createMarkerView(): MarkerListView {
+		// The view is rebuilt every render, so it borrows the current render
+		// scope outright: its listeners and its pending edits go with the pass
+		// that created them.
+		const host: MarkerListHost = this.renderScope;
+		const callbacks: MarkerListCallbacks = {
+			// Jumps preserve the play/pause state (do not force playback)
+			onJump: (time) => {
+				this.seekTo(time, false);
+			},
+			onDelete: (id) => {
+				void this.markerCtl.remove(id);
+			},
+			onRename: (id, label) => {
+				void this.markerCtl.rename(id, label);
+			},
+			onEditTime: (id, seconds) => {
+				// Bounded here rather than in the model: the length of the
+				// recording is something this player knows and the marker
+				// list does not. An unknown length bounds nothing, which is
+				// the honest answer before metadata has arrived.
+				const duration = this.knownDuration();
+				if (seconds < 0 || (duration !== null && seconds > duration)) {
+					new Notice(
+						'That time is outside the recording; the marker was left where it was.',
+					);
+					this.renderMarkers();
+					return;
+				}
+				void this.markerCtl.setTime(id, seconds);
+			},
+			onUseCurrentTime: (id) => {
+				void this.markerCtl.setTime(id, this.audio.currentTime);
+			},
+			onEditNote: (id, note) => {
+				void this.markerCtl.setNote(id, note);
+			},
+			onSetColor: (id, color) => {
+				void this.markerCtl.setColor(id, color);
+			},
+			onAddAt: (time, kind) => {
+				void this.markerCtl.addAt(time, kind);
+			},
+			timeAtClientX: (clientX) => this.seekCtl.timeAtClientX(clientX),
+		};
+		return new MarkerListView(host, callbacks);
+	}
+
+	/**
+	 * Removes any `audio` element Obsidian's embed loader injects after
+	 * we take over, guaranteeing our player is the only one rendered
+	 * regardless of post-processor ordering. The observer is scoped to
+	 * the embed and disconnected on unload.
+	 */
+	private guardAgainstDefaultEmbed(): void {
+		const observer = new MutationObserver((mutations) => {
+			for (const mutation of mutations) {
+				mutation.addedNodes.forEach((node) => {
+					if (
+						node.instanceOf(HTMLAudioElement) &&
+						node !== this.audio
+					) {
+						node.remove();
+					}
+				});
+			}
+		});
+		observer.observe(this.containerEl, { childList: true });
+		this.renderScope.register(() => {
+			observer.disconnect();
+		});
+	}
+
+	/**
+	 * Builds the control row for the current render, reflecting the shared
+	 * audio's live state (a player re-rendered while playback is running
+	 * must not show stale defaults).
+	 */
+	private buildControls(): void {
+		this.controls = new PlayerControlsView(
+			{
+				registerDomEvent: (el, type, handler) => {
+					this.renderScope.registerDomEvent(el, type, handler);
+				},
+			},
+			{
+				onTogglePlay: () => {
+					this.togglePlay();
+				},
+				onSkip: (deltaSeconds) => {
+					this.skip(deltaSeconds);
+				},
+				onSpeedMenu: (event) => {
+					this.showSpeedMenu(event);
+				},
+				onToggleMute: () => {
+					this.toggleMute();
+				},
+				onVolumeInput: (volume) => {
+					this.setVolume(volume);
+				},
+				onToggleVoiceBoost: () => {
+					this.toggleVoiceBoost();
+				},
+				onToggleLoop: () => {
+					this.audio.loop = !this.audio.loop;
+					return this.audio.loop;
+				},
+				onAddMarker: (kind: MarkerKind) => {
+					void this.markerCtl.addAt(this.audio.currentTime, kind);
+				},
+				onPreviousChapter: () => {
+					this.jumpToPreviousChapter();
+				},
+				onNextChapter: () => {
+					this.jumpToNextChapter();
+				},
+				onToggleChapterLoop: () => {
+					this.toggleChapterLoop();
+				},
+				onCopyTimestampLink: () => {
+					void this.copyTimestampLink();
+				},
+			},
+		);
+		const voiceBoost = this.registry.voiceBoostState();
+		this.controls.mount(this.containerEl, {
+			paused: this.audio.paused,
+			playbackRate: this.audio.playbackRate,
+			volume: this.audio.volume,
+			muted: this.audio.muted,
+			loop: this.audio.loop,
+			markersEnabled: this.settings.enableMarkers,
+			skipSeconds: this.settings.skipSeconds,
+			chapterLoop: this.chapterLoop,
+			voiceBoostAvailable: voiceBoost.available,
+			voiceBoost: voiceBoost.enabled,
+		});
+	}
+
+	/**
+	 * Builds the seek area: a waveform when enabled (and the file is small
+	 * enough), otherwise a linear progress bar. Both support click and drag
+	 * seeking through the same seek controller.
+	 */
+	private buildSeekArea(): void {
+		this.seekEl = this.containerEl.createDiv({ cls: 'aar-player-seek' });
+		// Reset the renderer refs every render. Without this, toggling the
+		// waveform off would leave a stale renderer so updateProgress would
+		// target the dead canvas and never update the new progress bar.
+		this.waveformCtl.reset();
+		this.progressFillEl = null;
+		// Expose the seek area as a keyboard-operable slider so seeking is
+		// not mouse-only (the native audio element offered this for free)
+		this.seekEl.setAttribute('role', 'slider');
+		this.seekEl.setAttribute('tabindex', '0');
+		this.seekEl.setAttribute('aria-label', 'Seek');
+		this.seekEl.setAttribute('aria-valuemin', '0');
+		if (this.shouldShowWaveform()) {
+			this.seekEl.addClass('aar-player-seek-waveform');
+			this.waveformCtl.mount(this.seekEl);
+		} else {
+			// Plain progress bar: a filled track (played, high contrast) over
+			// a muted track (remaining), with a thumb marking the position
+			this.seekEl.addClass('aar-player-seek-bar');
+			this.progressFillEl = this.seekEl.createDiv({
+				cls: 'aar-player-progress-fill',
+			});
+			this.seekEl.createDiv({ cls: 'aar-player-progress-thumb' });
+		}
+		if (this.markerView) {
+			// Ticks/dblclick overlay sits on top of the seek area
+			this.markerView.mountOverlay(this.seekEl);
+		}
+		this.seekCtl.attach(this.seekEl);
+	}
+
+	/**
+	 * Runs the callback once the embed is attached to the document (the
+	 * embed-registry path renders while still detached), so DOM-context
+	 * checks like the editor-mode probe are reliable. Until then the
+	 * editable default stays untouched.
+	 *
+	 * Obsidian's own insertion signal does the waiting. It used to be a poll
+	 * over animation frames of the main window, which gave up after a budget
+	 * and stalled altogether for an embed in a pop-out while the main window
+	 * was hidden, since a hidden window runs no frames. The signal costs
+	 * nothing while it waits, so it needs no budget, and it is removed with
+	 * the render pass on a re-render or unload.
+	 * @param run - Callback to run once attached
+	 */
+	private whenAttached(run: () => void): void {
+		if (this.containerEl.isConnected) {
+			run();
+			return;
+		}
+		this.renderScope.register(this.containerEl.onNodeInserted(run, true));
+	}
+
+	/**
+	 * Resolves the edit/read-only mode from the attached DOM and applies
+	 * it: toggles the read-only class (hides edit-only controls via CSS),
+	 * rebuilds the marker UI for the mode, and re-publishes the context
+	 * actions so add-marker entries are gated.
+	 */
+	private applyMode(): void {
+		this.editable = isEditableContext(this.containerEl);
+		this.containerEl.toggleClass('aar-player-readonly', !this.editable);
+		this.markerView?.setEditable(this.editable);
+		this.renderMarkers();
+		this.publishContextActions();
+	}
+
+	/**
+	 * Publishes position-aware actions on the embed element so the
+	 * context menu can offer marker, chapter, timestamp, and play/pause
+	 * actions on right-click. The reference is removed on unload.
+	 */
+	private publishContextActions(): void {
+		const actions: PlayerEmbedActions = {
+			// Adding markers/chapters from the context menu is edit-only
+			markersEnabled: this.settings.enableMarkers && this.editable,
+			timeAtClientX: (clientX: number) =>
+				this.seekCtl.timeAtClientX(clientX),
+			togglePlayback: () => {
+				this.togglePlay();
+			},
+		};
+		setPlayerEmbedActions(this.containerEl, actions);
+		this.renderScope.register(() => {
+			clearPlayerEmbedActions(this.containerEl);
+		});
+	}
+
+	/**
+	 * Subscribes to the audio element's lifecycle events that drive the
+	 * UI and resolves an initially-unknown (Infinity) duration.
+	 */
+	private registerAudioEvents(): void {
+		this.registerDomEvent(this.audio, 'loadedmetadata', () => {
+			// Some plugin-produced mp4 files load with no usable duration: it
+			// reads as Infinity/NaN, or as a finite 0 (a multitrack mp4 whose
+			// container never got its real length stamped). Both leave the
+			// timeline stuck at 0:00, so probe for the true length in either case.
+			if (
+				!Number.isFinite(this.audio.duration) ||
+				this.audio.duration <= 0
+			) {
+				this.durationProbe?.probe();
+			} else {
+				this.renderMarkers();
+			}
+			this.updateProgress();
+		});
+		this.registerDomEvent(this.audio, 'timeupdate', () => {
+			this.enforceChapterLoop();
+			this.updateProgress();
+		});
+		this.registerDomEvent(this.audio, 'play', () => {
+			// Any play (this player or the same embed in another view/pane)
+			// makes the timeline live, so the #t= start hint must not
+			// reappear afterwards
+			this.engageTimeline();
+			this.controls?.setPlaying(true);
+		});
+		this.registerDomEvent(this.audio, 'pause', () => {
+			// Where a listener stops is where they want to come back to, so
+			// the pause is what commits the position rather than a timer
+			// rewriting the sidecar every few seconds while it plays.
+			this.rememberPosition();
+			this.controls?.setPlaying(false);
+		});
+		this.registerDomEvent(this.audio, 'ended', () => {
+			// Heard to the end: the next open starts from the beginning, and
+			// a sidecar holding nothing else goes away with the position.
+			this.positionMemory.forget();
+			this.restartLoopedChapter();
+			this.controls?.setPlaying(false);
+		});
+	}
+
+	/**
+	 * Returns playback to the start of the repeated chapter once it runs past
+	 * the chapter's end, preserving whether the audio was playing.
+	 */
+	private enforceChapterLoop(): void {
+		if (!this.chapterLoop) {
+			return;
+		}
+		if (this.loopSpan === null) {
+			// The loop was engaged before the first chapter; playback has now
+			// reached one, so that chapter becomes the repeated stretch.
+			this.loopSpan = this.markerCtl.currentChapterSpan(
+				this.audio.currentTime,
+			);
+			return;
+		}
+		const { start, end } = this.loopSpan;
+		if (end !== null && this.audio.currentTime >= end) {
+			this.seekTo(start, !this.audio.paused);
+		}
+	}
+
+	/**
+	 * Repeats the last chapter, whose end is the end of the recording and so
+	 * is never crossed as a boundary. A no-op unless the loop is engaged on
+	 * exactly that chapter.
+	 */
+	private restartLoopedChapter(): void {
+		if (this.chapterLoop && this.loopSpan?.end === null) {
+			this.seekTo(this.loopSpan.start, true);
+		}
+	}
+
+	/**
+	 * Points the loop at the chapter covering a position, so moving to
+	 * another chapter moves what repeats instead of dragging the listener
+	 * back to where the loop was switched on. A no-op while the loop is off.
+	 * @param position - Playback offset the listener moved to, in seconds
+	 */
+	private anchorChapterLoop(position: number): void {
+		if (this.chapterLoop) {
+			this.loopSpan = this.markerCtl.currentChapterSpan(position);
+		}
+	}
+
+	/**
+	 * Turns repeating of the current chapter on or off, anchoring it to
+	 * wherever playback stands. Both the embedded button and the status-bar
+	 * control land here, so the two can never show different states.
+	 */
+	private toggleChapterLoop(): void {
+		this.chapterLoop = !this.chapterLoop;
+		this.loopSpan = this.chapterLoop
+			? this.markerCtl.currentChapterSpan(this.audio.currentTime)
+			: null;
+		this.controls?.setChapterLoop(this.chapterLoop);
+		// The status bar reports the loop but reads it from this player, and
+		// nothing on the audio element changed to make it look again.
+		this.registry.refreshPlaybackState();
+	}
+
+	/**
+	 * Reports where playback stands as the position to come back to, but only
+	 * for a playback somebody actually engaged.
+	 *
+	 * A player whose shared audio was never played or sought has no listening
+	 * position to report: what `currentTime` holds there is the embed's own
+	 * `#t=` offset, or a plain zero. Reported anyway, an offset that early
+	 * reads as "not worth resuming" and clears the recording - so merely
+	 * opening a note that embeds a timecode into a recording, and closing it
+	 * again, threw away the position an earlier session had left. The registry
+	 * already answers whether the timeline moved, which is the same question.
+	 */
+	private rememberPosition(): void {
+		if (!this.registry.isAudioEngaged(this.audioKey)) {
+			return;
+		}
+		this.positionMemory.remember(
+			this.audio.currentTime,
+			this.knownDuration(),
+		);
+	}
+
+	/**
+	 * Resumes where this recording was left off. Skipped when the embed names
+	 * a position of its own: a link that points at a moment is an explicit
+	 * request, and it outranks the remembered offset. Skipped too once the
+	 * shared audio has been touched, so a stored position never overrides a
+	 * listener who has already started playing.
+	 */
+	private async restorePosition(): Promise<void> {
+		if (this.options.startSeconds !== null) {
+			return;
+		}
+		const position = await this.positionMemory.stored();
+		if (
+			position === null ||
+			this.unloaded ||
+			this.audio.currentTime > 0 ||
+			this.registry.isAudioEngaged(this.audioKey)
+		) {
+			return;
+		}
+		seekAudio(this.audio, position, {
+			autoplay: false,
+			onApplied: () => {
+				this.updateProgress();
+			},
+		});
+	}
+
+	/**
+	 * The position to display for this embed: its #t= start hint while its
+	 * shared audio is still untouched (at the very start, paused), otherwise the
+	 * real playback position. The hint keeps the displayed start correct even
+	 * though the element itself is not moved until the user engages this embed.
+	 */
+	private currentPosition(): number {
+		if (
+			this.startHint !== null &&
+			this.audio.currentTime === 0 &&
+			this.audio.paused &&
+			!this.registry.isAudioEngaged(this.audioKey)
+		) {
+			return Number.isFinite(this.audio.duration)
+				? Math.min(this.startHint, this.audio.duration)
+				: this.startHint;
+		}
+		return this.audio.currentTime;
+	}
+
+	/**
+	 * Engages this embed's #t= start: seeks the shared audio to the hint (once,
+	 * and only while it is still at the very start) so playback begins there,
+	 * then clears the hint so the embed follows real shared playback. A no-op
+	 * once already engaged or when the embed has no #t= offset.
+	 */
+	private engageStart(): void {
+		if (this.startHint === null) {
+			return;
+		}
+		const target = this.startHint;
+		this.startHint = null;
+		if (this.audio.currentTime === 0) {
+			this.audio.currentTime = Number.isFinite(this.audio.duration)
+				? Math.min(target, this.audio.duration)
+				: target;
+		}
+	}
+
+	/**
+	 * Records that the user has engaged this embed's shared playback (played or
+	 * sought it). Consumes the #t= start hint and marks the timeline engaged in
+	 * the registry, so the hint never reappears on this embed (or its copy in
+	 * another view/pane) - even after playback later returns to 0. Other embeds
+	 * of the same file have their own playback and keep their own hints.
+	 */
+	private engageTimeline(): void {
+		this.startHint = null;
+		this.registry.markAudioEngaged(this.audioKey);
+	}
+
+	/**
+	 * Updates the seek visuals and time display from the current
+	 * playback position.
+	 */
+	private updateProgress(): void {
+		// Use the display position (the #t= start hint until this embed engages,
+		// else the real shared position) so each embed reflects its own start
+		const position = this.currentPosition();
+		const fraction = playbackProgress(position, this.audio.duration);
+		if (this.waveformCtl.isMounted()) {
+			// Cheap: only moves the clip variable, no canvas work
+			this.waveformCtl.setProgress(fraction);
+		} else if (this.progressFillEl) {
+			// Set on the seek area so both the fill (width) and the thumb
+			// (left) read the same position via the inherited variable
+			this.seekEl.setCssProps({
+				'--aar-progress': `${String(fraction * 100)}%`,
+			});
+		}
+		const total =
+			Number.isFinite(this.audio.duration) && this.audio.duration > 0
+				? this.audio.duration
+				: 0;
+		// Format elapsed against the total so both sides share one width
+		this.controls?.setTime(
+			`${formatTimecode(position, total)} / ${formatTimecode(total, total)}`,
+		);
+		// Keep the slider's accessible value in sync for screen readers
+		this.seekEl.setAttribute('aria-valuemax', String(Math.floor(total)));
+		this.seekEl.setAttribute('aria-valuenow', String(Math.floor(position)));
+		this.seekEl.setAttribute(
+			'aria-valuetext',
+			`${formatTimecode(position, total)} of ${formatTimecode(total, total)}`,
+		);
+		// Move the active-segment highlight as playback crosses boundaries
+		this.markerView?.updateActive(position);
+	}
+
+	/**
+	 * Toggles playback, swallowing autoplay-policy rejections.
+	 */
+	private togglePlay(): void {
+		if (this.audio.paused) {
+			// Begin from this embed's #t= start (if pending) rather than 0
+			this.engageStart();
+			playAudio(this.audio);
+		} else {
+			this.audio.pause();
+		}
+	}
+
+	/** Stops playback, resets the timeline, and refreshes the embedded player. */
+	private stopPlayback(): void {
+		resetPlayback(this.audio);
+		this.updateProgress();
+	}
+
+	/**
+	 * Skips playback by a relative number of seconds, clamped to the
+	 * track bounds.
+	 * @param deltaSeconds - Signed number of seconds to skip
+	 */
+	private skip(deltaSeconds: number): void {
+		// Engage the #t= start first so a skip is relative to the shown position
+		this.engageStart();
+		this.engageTimeline();
+		skipAudio(this.audio, deltaSeconds);
+		this.updateProgress();
+	}
+
+	/**
+	 * Opens a dropdown of the playback-rate presets at the speed button,
+	 * with the current rate checked, so the user can pick any speed (not
+	 * only step it upward).
+	 * @param event - The click event on the speed button
+	 */
+	private showSpeedMenu(event: MouseEvent): void {
+		const menu = new Menu();
+		for (const item of speedMenuItems(
+			this.audio.playbackRate,
+			PLAYER_PLAYBACK_RATE_PRESETS,
+		)) {
+			menu.addItem((menuItem) => {
+				menuItem
+					.setTitle(item.label)
+					.setChecked(item.checked)
+					.onClick(() => {
+						this.setPlaybackRate(item.rate);
+					});
+			});
+		}
+		menu.showAtMouseEvent(event);
+	}
+
+	/**
+	 * Applies a playback rate and reflects it on the speed button.
+	 * @param rate - Playback rate multiplier
+	 */
+	private setPlaybackRate(rate: number): void {
+		setAudioPlaybackRate(this.audio, rate);
+		this.controls?.setPlaybackRate(rate);
+	}
+
+	/**
+	 * Toggles the muted state and refreshes the mute button icon.
+	 */
+	private toggleMute(): void {
+		this.controls?.setMuted(toggleAudioMuted(this.audio));
+	}
+
+	/**
+	 * Applies a volume value and unmutes when the requested level is audible.
+	 * @param volume - Volume in the inclusive 0..1 range
+	 */
+	private setVolume(volume: number): void {
+		if (setAudioVolume(this.audio, volume)) {
+			this.controls?.setMuted(false);
+		}
+	}
+
+	/**
+	 * Jumps playback to the next chapter after the current position,
+	 * preserving the play/pause state.
+	 */
+	private jumpToNextChapter(): void {
+		const target = this.markerCtl.nextChapter(this.audio.currentTime);
+		if (target !== null) {
+			this.seekTo(target, false);
+		}
+	}
+
+	/**
+	 * Jumps playback to the previous chapter (or the start of the current
+	 * one shortly after its boundary), preserving the play/pause state.
+	 */
+	private jumpToPreviousChapter(): void {
+		const target = this.markerCtl.previousChapter(this.audio.currentTime);
+		this.seekTo(target ?? 0, false);
+	}
+
+	/**
+	 * Re-renders this player's markers (ticks and list) from the current
+	 * data and duration.
+	 */
+	private renderMarkers(): void {
+		if (!this.settings.enableMarkers) {
+			return;
+		}
+		this.markerView?.setMarkers(this.markerCtl.all);
+		this.markerView?.render(this.knownDuration(), this.audio.currentTime);
+	}
+
+	/**
+	 * Returns the track duration when known, otherwise null.
+	 */
+	private knownDuration(): number | null {
+		return Number.isFinite(this.audio.duration) && this.audio.duration > 0
+			? this.audio.duration
+			: null;
+	}
+
+	/**
+	 * Copies a timecode link to a position, respecting the vault's
+	 * link-format preference.
+	 * @param time - Offset in seconds (defaults to the current position)
+	 */
+	private copyTimestampLink(time = this.audio.currentTime): Promise<void> {
+		return copyTimecodeLink(
+			this.app,
+			this.file,
+			this.options.sourcePath,
+			time,
+		);
+	}
+
+	/**
+	 * Unloads the previous render pass and starts a fresh one. The elements a
+	 * pass listens on are recreated by every renderUi (containerEl.empty()),
+	 * and a document outlives every render, so whatever a pass registered is
+	 * removed with it rather than retained on the player until unload.
+	 */
+	private beginRenderScope(): void {
+		this.removeChild(this.renderScope);
+		this.renderScope = this.addChild(new Component());
+		// Loaded explicitly: addChild loads a child only while this player is
+		// loaded, and nothing guarantees that when a render runs - Live
+		// Preview's embed widget calls loadFile on its own schedule. A child
+		// that was never loaded runs nothing on unload, so the next render's
+		// removeChild would leave this pass's listeners behind. Once the player
+		// does load, loading the child again is a no-op.
+		this.renderScope.load();
+	}
+
+	/**
+	 * Whether the waveform should be drawn for this file (window toggle on
+	 * and the file below the decode safety ceiling).
+	 */
+	private shouldShowWaveform(): boolean {
+		return this.waveformCtl.shouldRender(this.settings.showWaveform);
+	}
+}

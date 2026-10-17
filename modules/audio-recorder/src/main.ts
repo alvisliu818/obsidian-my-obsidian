@@ -1,0 +1,1889 @@
+/**
+ * Advanced Audio Recorder plugin for Obsidian.
+ * @module main
+ */
+
+import { Notice, Plugin, normalizePath } from 'obsidian';
+import type { TFile } from 'obsidian';
+import { RecordingStatus } from './types';
+import type {
+	SaveProgress,
+	RecordingControls,
+	RecordingSaveResult,
+} from './types';
+import {
+	PLUGIN_LOG_PREFIX,
+	RECORDING_PANEL_PLACED_KEY,
+	RECORDING_PANEL_VIEW_TYPE,
+} from './constants';
+import { isRecordingBannerSupported } from './platform/capabilities';
+import type { AudioRecorderSettings } from './settings/settingsSchema';
+import { setSelectedProfileId, type ProfileKindId } from './settings/profiles';
+import {
+	mergeSettingsAsync,
+	serializeSettings,
+} from './settings/settingsSerialization';
+import { AudioRecorderSettingTab } from './settings/SettingsTab';
+import {
+	ApiKeyMigration,
+	keychainDeviceId,
+	resolveApiKeys,
+} from './settings/apiKeySecrets';
+import { ACCOUNTS, type AccountId } from './providers/providers';
+import { RecordingManager } from './recording/RecordingManager';
+import { detectSilentChannel } from './recording/silentChannelDetector';
+import type { ChannelMode } from './audio/downmix';
+import { ConversionModal } from './ui/ConversionModal';
+import { SessionJournal, JOURNAL_FILE_NAME } from './recording/SessionJournal';
+import {
+	collectRecoverableSessions,
+	recoverSession,
+	discardSession,
+} from './recording/RecoveryService';
+import { RecoveryModal } from './ui/RecoveryModal';
+import { EncodingWorkerClient } from './audio/EncodingWorkerClient';
+import {
+	updateStatusBar,
+	updateRecordingLiveStats,
+	initializeStatusBar,
+	renderPlaybackStatusBar,
+	renderTranscriptionStatusBar,
+	renderQuickNoteStatusBar,
+} from './ui/StatusBar';
+import { RecordingBanner } from './ui/RecordingBanner';
+import {
+	ICON_MIC,
+	ICON_QUICK_NOTE,
+	QUICK_NOTE_GLYPHS,
+	RIBBON_HIDDEN_CLASS,
+	updateRibbonIcon,
+} from './ui/RibbonIcon';
+import { ContextMenu, type MenuFamilies } from './ui/ContextMenu';
+import type { ActionServices, SessionServices } from './actions/PluginAction';
+import { ActionRegistry } from './actions/ActionRegistry';
+import { FILE_ACTIONS, fileActionFamily } from './actions/fileActions';
+import { sessionActionFamily } from './actions/sessionActions';
+import { transcriptActionFamily } from './actions/transcriptActions';
+import { playbackActionFamily } from './actions/playbackActions';
+import { positionActionFamily } from './actions/positionActions';
+import { folderActionFamily } from './actions/folderActions';
+import { searchActionFamily } from './actions/searchActions';
+import { helpActionFamily } from './actions/helpActions';
+import { ActionTargetModal } from './ui/ActionTargetModal';
+import { EnhancedPlayerRegistrar } from './player/EnhancedPlayerRegistrar';
+import { MediaKindStore, MEDIA_KIND_STORE_FILE } from './player/MediaKindStore';
+import { RecordingSidecarStore } from './sidecar/RecordingSidecarStore';
+import { AutoChapterService } from './chapters/AutoChapterService';
+import { RecordingMarkerModal } from './ui/MarkerModal';
+import { openPluginSettings } from './obsidian/settingsNavigation';
+import { quickNotesAvailable } from './settings/settingsSchema';
+import { QuickNoteController } from './quicknotes/QuickNoteController';
+import { MemoryRecorder } from './recording/MemoryRecorder';
+import { TranscriptionService } from './transcription/TranscriptionService';
+import { ProfileNoteStore } from './settings/ProfileNoteStore';
+import {
+	cliCommands,
+	registerCliCommands,
+	type CliHost,
+} from './obsidian/cliCommands';
+import { TranscriptionModal } from './ui/TranscriptionModal';
+import type { TranscriptionModalOptions } from './ui/TranscriptionModal';
+import {
+	isProviderAvailableOnPlatform,
+	SessionCostTracker,
+} from './transcription/api';
+import type { MarkerKind } from './markers/markerModel';
+import type { PlaybackControlsState } from './player/playbackControls';
+import { delay } from './utils/TimeUtils';
+import { QueueCoordinator } from './transcription/QueueCoordinator';
+import { QueueRunner } from './transcription/QueueRunner';
+import {
+	TranscriptionQueue,
+	TRANSCRIPTION_QUEUE_FILE,
+} from './transcription/TranscriptionQueue';
+import { QUEUE_ASSUMED_RECORDING_SECONDS } from './constants';
+import { transcribeFile } from './transcription/runTranscription';
+import { releaseNotesSince } from './release/releaseNotes';
+import { ReleaseNotesModal } from './ui/ReleaseNotesModal';
+import {
+	RecordingPanelView,
+	type RecordingPanelHost,
+} from './panel/RecordingPanelView';
+import { probeDurationSeconds } from './utils/AudioFileAnalyzer';
+
+/** Delay before retrying a failed settings read, in milliseconds. */
+const SETTINGS_READ_RETRY_DELAY_MS = 250;
+
+/** Settings file name used by Obsidian's loadData/saveData. */
+const SETTINGS_DATA_FILE = 'data.json';
+
+/** Backup file name for settings, stored next to data.json. */
+const SETTINGS_BACKUP_FILE = 'data.json.bak';
+
+/** Accessible label for the status-bar action that reopens a minimized transcription. */
+const RESTORE_TRANSCRIPTION_LABEL = 'Restore transcription window';
+
+/** Refresh interval, in ms, for the live recording stats and meter. */
+const LIVE_STATS_INTERVAL_MS = 200;
+
+/**
+ * Result of reading the stored settings from disk.
+ */
+interface StoredSettingsReadResult {
+	/**
+	 * Stored settings, null when no settings exist on disk, or
+	 * undefined when no readable settings source is available.
+	 */
+	data: Partial<AudioRecorderSettings> | null | undefined;
+	/**
+	 * True when data.json is missing and the settings were recovered
+	 * from the backup file: the caller persists them so data.json is
+	 * recreated and the backup stops being the only copy on disk.
+	 */
+	restoredFromBackup: boolean;
+	/**
+	 * True when a settings file exists on disk but could not be
+	 * read: saving stays blocked so the possibly intact (and
+	 * possibly newer) stored settings are never overwritten by
+	 * values derived from this session's fallback.
+	 */
+	blockSaving: boolean;
+}
+
+/**
+ * Status-bar state owned by a minimized transcription modal. The owning
+ * modal id is the map key, so it is not repeated here.
+ */
+interface BackgroundTranscriptionProgress {
+	progress: SaveProgress;
+	restore: () => void;
+}
+
+interface SilentChannelSuggestion {
+	file: TFile;
+	keepMode: ChannelMode;
+	silentSide: 'left' | 'right';
+}
+
+/**
+ * Advanced Audio Recorder plugin for Obsidian.
+ */
+export default class AudioRecorderPlugin extends Plugin {
+	// Obsidian 1.13 declares `settings?: unknown` on the base Plugin; narrow it
+	// to the plugin's own type. Assigned in onload via loadSettings().
+	declare settings: AudioRecorderSettings;
+	private recordingManager!: RecordingManager;
+	private statusBarItem: HTMLElement | null = null;
+	private ribbonIconEl: HTMLElement | null = null;
+	/**
+	 * The quick note button, registered the first time quick notes are on
+	 * and hidden while they are off.
+	 */
+	private quickNoteRibbonEl: HTMLElement | null = null;
+	private quickNotes!: QuickNoteController;
+	/** What the quick note is doing, as the status bar shows it. */
+	private quickNoteStatus: RecordingStatus = RecordingStatus.Idle;
+	/** The processing stage the quick note reported last. */
+	private quickNoteProgress: SaveProgress | undefined;
+	/**
+	 * Where a quick note says what it is doing on a platform with no status
+	 * bar, which is where the recording banner stands in for it.
+	 */
+	private quickNoteNotice: Notice | null = null;
+	private contextMenu!: ContextMenu;
+	private recordingBanner!: RecordingBanner;
+	private playerRegistrar!: EnhancedPlayerRegistrar;
+	private autoChapterService!: AutoChapterService;
+	/** Shared per-recording sidecar store (markers + transcript data). */
+	private sidecarStore!: RecordingSidecarStore;
+	private journal!: SessionJournal;
+	private encodingWorker: EncodingWorkerClient | null = null;
+	private recordingStatus: RecordingStatus = RecordingStatus.Idle;
+	private recordingSaveProgress: SaveProgress | undefined;
+	/** Active enhanced-player playback represented in the shared status bar. */
+	private playbackState: PlaybackControlsState | null = null;
+	/**
+	 * Minimized transcriptions reporting progress in the status bar, keyed by
+	 * a per-modal id. Insertion order is preserved, so the most recently
+	 * updated job is the one rendered; clearing it falls back to the previous
+	 * still-minimized job instead of blanking the bar.
+	 */
+	private backgroundTranscriptions = new Map<
+		number,
+		BackgroundTranscriptionProgress
+	>();
+	private nextBackgroundTranscriptionId = 0;
+	/**
+	 * Session-wide per-engine transcription spending. Lives on the plugin
+	 * (transcription services are per-run) so the running totals survive
+	 * across dialogs until Obsidian restarts.
+	 */
+	private readonly transcriptionCostTracker = new SessionCostTracker();
+
+	/**
+	 * Keeps the bodies of note-backed profiles in step with their notes. Built
+	 * with the plugin, so every path into saveSettings finds it there.
+	 */
+	private readonly profileNotes = new ProfileNoteStore(
+		this.app,
+		() => this.settings,
+		() => this.saveSettings(),
+	);
+
+	/**
+	 * The queue of recordings to transcribe. Built on load so a queue a
+	 * previous session left can be offered back, and so the folder menu has
+	 * something to queue into.
+	 *
+	 * Nullable rather than asserted, because it is built well into onload and
+	 * Obsidian still unloads a plugin whose load threw. Asserted, the first
+	 * line of the teardown raised on the missing field and took the rest of it
+	 * with it: the recorder was never stopped and the encoding worker was left
+	 * running.
+	 */
+	private transcriptionQueue: QueueCoordinator | null = null;
+
+	/** The queue itself, kept so its pending writes are flushed on unload. */
+	private queuedTranscriptions: TranscriptionQueue | null = null;
+	/** Current actionable silent-channel notice, replaced per save. */
+	private silentChannelNotice: Notice | null = null;
+	/** Invalidates an older asynchronous analysis when a newer save starts. */
+	private silentChannelSuggestionGeneration = 0;
+	/**
+	 * Whether Obsidian has unloaded this plugin. Work already in flight when
+	 * that happens must not reach back into the UI it tore down.
+	 */
+	private unloaded = false;
+	/**
+	 * True when data.json exists on disk but could not be read at load
+	 * time. While set, saveSettings refuses to write so the possibly
+	 * intact file is never overwritten with defaults.
+	 */
+	private settingsLoadFailed = false;
+	/**
+	 * True once settings have been assigned at least once. Lets a
+	 * failed reload keep the current in-memory settings instead of
+	 * replacing them with defaults.
+	 */
+	private settingsInitialized = false;
+	/**
+	 * The settings tab, kept so a change made in Obsidian's keychain page can
+	 * refresh what the tab reports about each engine's key. Public and typed
+	 * with `undefined` (not `null`) so it merges with the base `Plugin`
+	 * declaration that obsidian-typings adds (`settingTab?: SettingTab`).
+	 */
+	settingTab: AudioRecorderSettingTab | undefined = undefined;
+	/**
+	 * Moves plain-text API keys into Obsidian's keychain. Kept for the life of
+	 * the plugin, because it remembers which secrets this instance wrote, and
+	 * a later load in the same session must not take those as confirmed.
+	 */
+	private readonly apiKeyMigration = new ApiKeyMigration(
+		this.app.secretStorage,
+		keychainDeviceId(this.app),
+	);
+
+	/**
+	 * Called when the plugin is loaded.
+	 */
+	override async onload(): Promise<void> {
+		await this.loadSettings();
+		this.profileNotes.register(this);
+		// A key edited, linked, or deleted in Obsidian's keychain page changes
+		// what a run is sent with, without anything of this plugin being
+		// saved. The keys are resolved again, in place, so every reader of the
+		// live settings sees the change at once. 'changed' is fired by
+		// SecretStorage.setSecret and by the Keychain page in Obsidian 1.14.4
+		// but is not part of the public typings. If it stops firing, keys are
+		// still resolved on every load and every save, only not live.
+		this.registerEvent(
+			this.app.secretStorage.on('changed', () => {
+				this.onKeychainChanged();
+			}),
+		);
+
+		// Offload streaming conversions to a Web Worker when the build
+		// injected its source; everything falls back to the main thread
+		this.encodingWorker = new EncodingWorkerClient(
+			typeof __ENCODING_WORKER_SOURCE__ === 'string'
+				? __ENCODING_WORKER_SOURCE__
+				: null,
+		);
+		this.journal = new SessionJournal(
+			this.getPluginFilePath(JOURNAL_FILE_NAME),
+			this.app,
+		);
+		// One sidecar store owns every `<recording>.markers.json`: markers and
+		// transcript data live in the same document, so a single cache and
+		// serialized write chain keep the two sections from clobbering each
+		// other. It is shared by recording (which writes live markers at
+		// stop), the player registrar (which reads/edits them), auto
+		// chapters, transcription, and the rename dialog.
+		this.sidecarStore = new RecordingSidecarStore(this.app);
+		// Auto chapters write into the same store; the player registrar is
+		// created later, so the refresh closure resolves it lazily.
+		this.autoChapterService = new AutoChapterService(
+			this.app,
+			() => this.settings,
+			this.sidecarStore,
+			(path) => {
+				this.playerRegistrar.reloadMarkersFor(path);
+			},
+			// Chapter generation bills the LLM provider, so its estimated cost
+			// joins the same session counter the transcription runs report to.
+			{ costSink: this.transcriptionCostTracker },
+		);
+		this.recordingBanner = new RecordingBanner({
+			onStop: () => {
+				void this.recordingManager.stopRecording();
+			},
+			onAnchorChange: (anchor) => {
+				this.settings.mobileRecordingBannerPosition = anchor;
+				void this.saveSettings().catch((error: unknown) => {
+					console.warn(
+						`${PLUGIN_LOG_PREFIX} Saving the recording banner position failed:`,
+						error,
+					);
+				});
+			},
+		});
+		this.recordingManager = new RecordingManager(
+			this.app,
+			this.settings,
+			(status: RecordingStatus, saveProgress?: SaveProgress) => {
+				this.handleStatusChange(status, saveProgress);
+			},
+			this.sidecarStore,
+			this.journal,
+			(result: RecordingSaveResult) => {
+				this.handleRecordingSaved(result);
+			},
+			() => this.encodingWorker,
+			// The mirror of the quick note's own refusal: two captures of one
+			// microphone would record the same speech twice.
+			() =>
+				this.quickNotes.getStatus() === RecordingStatus.Recording
+					? 'Stop the quick note before starting a recording.'
+					: null,
+		);
+
+		this.quickNotes = new QuickNoteController({
+			app: this.app,
+			getSettings: () => this.settings,
+			recorder: new MemoryRecorder(),
+			// Its own service rather than the dialog's: a dictation reports
+			// to the same session total, and nothing else about it is shared.
+			dictate: (audio, options) =>
+				new TranscriptionService(this.app, () => this.settings, {
+					costSink: this.transcriptionCostTracker,
+				}).dictate(audio, options),
+			costs: this.transcriptionCostTracker,
+			recordingActive: () => this.recordingManager.isSessionActive(),
+			onStatusChange: (status, progress) => {
+				this.handleQuickNoteStatus(status, progress);
+			},
+		});
+
+		this.settingTab = new AudioRecorderSettingTab(this.app, this);
+		this.addSettingTab(this.settingTab);
+		const registry = new ActionRegistry(this, (targets, describe, run) => {
+			new ActionTargetModal(this.app, targets, describe, run).open();
+		});
+		// The recorder's own command-line commands first, then one per action,
+		// all under the registry's one check that no two share an id.
+		registry.addCliCommands(
+			cliCommands(this.createCliHost(), this.manifest.id),
+		);
+		const menuFamilies = this.registerCommands(registry);
+		// The desktop command line, where the app has one. Reports whether it
+		// registered, which is what the CLI-less platforms answer.
+		registerCliCommands(this, registry.cliCommands());
+		// Named after the plugin, because Obsidian's own Audio recorder puts a
+		// button with the same job in the same ribbon under the tooltip
+		// "Start/stop recording", and the ribbon's context menu, where a
+		// button is hidden, lists every button by exactly that text. The name
+		// comes from the manifest so it cannot drift from the one Obsidian
+		// shows everywhere else.
+		this.ribbonIconEl = this.addRibbonIcon(
+			ICON_MIC,
+			`${this.manifest.name}: start/stop recording`,
+			() => {
+				void this.recordingManager.toggleRecording();
+			},
+		);
+		// After the recorder's own button, so the two sit side by side with
+		// the recorder first whenever quick notes are on.
+		this.applyQuickNoteSettings();
+		this.setupStatusBar();
+
+		this.contextMenu = new ContextMenu(
+			this,
+			this.createActionServices(),
+			registry,
+			menuFamilies,
+		);
+		this.contextMenu.register();
+
+		// The panel is built by Obsidian whenever it opens one, including on
+		// startup for a panel the saved layout restores, so the factory is
+		// registered before the layout is.
+		this.registerView(
+			RECORDING_PANEL_VIEW_TYPE,
+			(leaf) =>
+				new RecordingPanelView(leaf, this.createRecordingPanelHost()),
+		);
+
+		// The queue outlives a session, so it is built before anything can
+		// queue into it and offered back once the workspace is up.
+		const queue = new TranscriptionQueue(
+			this.getPluginFilePath(TRANSCRIPTION_QUEUE_FILE),
+			this.app,
+		);
+		this.transcriptionQueue = new QueueCoordinator({
+			app: this.app,
+			queue,
+			runner: new QueueRunner({
+				app: this.app,
+				queue,
+				getSettings: () => this.settings,
+				transcribe: (file, options) =>
+					transcribeFile(
+						this.app,
+						() => this.settings,
+						file,
+						// A queued run registers what it wrote and what it
+						// lost exactly as one started from the dialog does.
+						// Without the store its outputs survive no rename, its
+						// speakers keep the engine's own labels, and the parts
+						// it failed on are never offered for a top-up: the
+						// action reports the transcript as complete instead.
+						{ ...options, sidecar: this.sidecarStore },
+						{
+							costSink: this.transcriptionCostTracker,
+						},
+					),
+				costSink: this.transcriptionCostTracker,
+				// The same assumed length the dialog prices the queue with, so
+				// what a finished run is recorded at cannot contradict what
+				// the user was quoted for it.
+				assumedSecondsPerRecording: QUEUE_ASSUMED_RECORDING_SECONDS,
+			}),
+			getSettings: () => this.settings,
+			assumedSecondsPerRecording: QUEUE_ASSUMED_RECORDING_SECONDS,
+		});
+		this.queuedTranscriptions = queue;
+		// Offered once the workspace is up, so the prompt lands on a window
+		// the user can see rather than during load. Held as a local, since the
+		// coordinator this closure resumes is the one built right here.
+		const coordinator = this.transcriptionQueue;
+		this.app.workspace.onLayoutReady(() => {
+			void coordinator.resumeIfPending();
+		});
+
+		// Media kinds persist across sessions so the first open of a note
+		// never repeats a file's probe (and the embed upgrade behind it)
+		const mediaKindStore = new MediaKindStore(
+			this.app,
+			this.getPluginFilePath(MEDIA_KIND_STORE_FILE),
+		);
+		this.playerRegistrar = new EnhancedPlayerRegistrar(
+			this,
+			this.app,
+			() => this.settings,
+			this.sidecarStore,
+			mediaKindStore,
+		);
+		this.playerRegistrar.subscribePlayback((state) => {
+			this.playbackState = state;
+			// Recording and saving own the status bar and repaint their live
+			// stats on their own cadence. A playback snapshot arrives on every
+			// timeupdate, so rendering it here while recording would rebuild the
+			// recording controls between those updates and flicker the stats.
+			// Store it and let the recording state render it once it goes idle.
+			if (this.recordingStatus === RecordingStatus.Idle) {
+				this.renderStatusBar();
+			}
+		});
+		this.playerRegistrar.register();
+
+		// Recovery runs after the workspace is ready so plugin load is
+		// never delayed; a failure here must not break the plugin
+		this.app.workspace.onLayoutReady(() => {
+			// Announced before the recovery check rather than after it: both
+			// can open a dialog, and a recording the app lost is the one the
+			// user has to answer first, so it belongs on top of the stack.
+			this.announceReleaseNotes();
+			void this.checkForInterruptedSessions();
+			void this.placeRecordingPanel();
+		});
+	}
+
+	/**
+	 * Runs once, when the user enables the plugin deliberately - an install, or
+	 * a re-enable - rather than on every start.
+	 *
+	 * It is the one moment Obsidian says a plugin may engage with the user, and
+	 * the Settings dialog is already open on Community plugins when it comes.
+	 * Switching it to this plugin's own tab puts the documentation callout and
+	 * the three rows a first recording needs (input, format, save folder) in
+	 * front of them, instead of leaving a freshly enabled recorder to be found.
+	 */
+	override onUserEnable(): void {
+		openPluginSettings(this.app, this.manifest.id);
+	}
+
+	/**
+	 * What the CLI's own commands are allowed to ask of the plugin.
+	 *
+	 * A port rather than the plugin itself: a command line reaches a running
+	 * app from outside it, and what it may do here is these few things. Every
+	 * other command is an action, and reaches the plugin through the services
+	 * every action is given.
+	 * @returns The host the CLI commands are built over
+	 */
+	private createCliHost(): CliHost {
+		return {
+			recordingStatus: (): RecordingStatus =>
+				this.recordingManager.getStatus(),
+			startRecording: (): Promise<string | null> =>
+				this.recordingManager.startRecording(),
+			stopRecording: (): Promise<string | null> =>
+				this.recordingManager.stopRecording(),
+			recordingFormat: (): string => this.settings.recordingFormat,
+			playback: () => this.playerRegistrar.currentPlaybackState(),
+		};
+	}
+
+	/**
+	 * Offers recovery for recording sessions that died mid-recording
+	 * (crash, power loss, plugin unload). Sessions whose temporary
+	 * files vanished self-clear silently; everything else opens the
+	 * recovery modal.
+	 */
+	private async checkForInterruptedSessions(): Promise<void> {
+		try {
+			const sessions = await collectRecoverableSessions(
+				this.journal,
+				this.app,
+			);
+			if (sessions.length === 0) {
+				return;
+			}
+			new RecoveryModal(this.app, sessions, {
+				onRecover: async () => {
+					const recovered: string[] = [];
+					const failed: string[] = [];
+					for (const session of sessions) {
+						// Per session, not per run: recoverSession writes the
+						// journal back when it is done, and that write can
+						// fail on a read-only or full vault. One session
+						// failing must not abandon the sessions after it, nor
+						// swallow the report of what was already brought back.
+						try {
+							const result = await recoverSession(
+								session,
+								this.journal,
+								this.app,
+							);
+							recovered.push(...result.recoveredPaths);
+							failed.push(...result.failedTracks);
+						} catch (error) {
+							console.error(
+								`${PLUGIN_LOG_PREFIX} Failed to recover session:`,
+								session.sessionId,
+								error,
+							);
+							failed.push(
+								...session.tracks.map(
+									(track) => track.fileBaseName,
+								),
+							);
+						}
+					}
+					if (recovered.length > 0) {
+						new Notice(
+							`Recovered ${String(recovered.length)} audio file(s): ${recovered.join(', ')}`,
+						);
+					}
+					if (failed.length > 0) {
+						new Notice(
+							`Could not recover ${String(failed.length)} track(s); their temporary files were kept for the next attempt.`,
+						);
+					}
+				},
+				onDiscard: async () => {
+					const failedPaths: string[] = [];
+					for (const session of sessions) {
+						// Same reasoning as the recovery loop above: a
+						// journal write that fails on one session must not
+						// leave the rest of them undiscarded and unreported.
+						try {
+							failedPaths.push(
+								...(await discardSession(
+									session,
+									this.journal,
+									this.app,
+								)),
+							);
+						} catch (error) {
+							console.error(
+								`${PLUGIN_LOG_PREFIX} Failed to discard session:`,
+								session.sessionId,
+								error,
+							);
+							failedPaths.push(
+								...session.tracks.flatMap(
+									(track) => track.segmentPaths,
+								),
+							);
+						}
+					}
+					new Notice(
+						failedPaths.length > 0
+							? `Some temporary recording files could not be removed: ${failedPaths.join(', ')}`
+							: 'Temporary recording files were discarded.',
+					);
+				},
+			}).open();
+		} catch (error) {
+			console.error(`${PLUGIN_LOG_PREFIX} Recovery check failed:`, error);
+		}
+	}
+
+	/**
+	 * Called when the plugin is unloaded.
+	 */
+	override onunload(): void {
+		// Stopped before the flush, so what goes to disk is the queue as the
+		// stop left it. A drain holds the app and the settings reader, so
+		// without this it went on calling a paid engine and writing
+		// transcripts into a vault the plugin had already been removed from.
+		this.transcriptionQueue?.stop();
+		// The queue is losable but not worth losing a change to: whatever the
+		// last state change was, it goes to disk before the plugin does.
+		void this.queuedTranscriptions?.flush();
+		// Set before anything is torn down: the recorder's stop sequence is
+		// asynchronous, so disabling the plugin mid-save leaves its status and
+		// saved-recording callbacks in flight, and both of them reach back
+		// into UI Obsidian has already detached.
+		this.unloaded = true;
+		this.silentChannelSuggestionGeneration++;
+		this.silentChannelNotice?.hide();
+		this.silentChannelNotice = null;
+		this.recordingManager.cleanup();
+		// A dictation has nowhere to go once the plugin is gone, so its
+		// microphone is closed and its run cancelled rather than finished.
+		this.quickNotes.cancel();
+		this.quickNoteNotice?.hide();
+		this.quickNoteNotice = null;
+		this.recordingBanner.hide();
+		this.playerRegistrar.dispose();
+		this.encodingWorker?.terminate();
+		this.encodingWorker = null;
+		// The status bar item and the ribbon icon are not reset here: Obsidian
+		// removes both when the plugin unloads.
+	}
+
+	/**
+	 * Loads plugin settings from storage.
+	 * Distinguishes "data.json is missing" (first install, defaults are
+	 * correct) from "data.json exists but could not be read" (transient
+	 * file lock during a plugin update, truncated file): the latter
+	 * keeps the session on the backup copy or defaults in memory and
+	 * blocks saving, so the stored settings are never overwritten by
+	 * the fallback. The two
+	 * cases are told apart by an explicit adapter.exists() check, not
+	 * by the loadData() return value: loadData() maps a missing file
+	 * to null only when the failed read carries an ENOENT error code,
+	 * and on some filesystems the read fails with a different code.
+	 */
+	async loadSettings(): Promise<void> {
+		const { data, restoredFromBackup, blockSaving } =
+			await this.readStoredSettings();
+
+		if (blockSaving) {
+			this.settingsLoadFailed = true;
+			// A readable backup keeps the session usable on the
+			// initial load; a failed reload keeps the current
+			// in-memory settings (external change while the file is
+			// locked). Saving stays blocked either way so the possibly
+			// intact and possibly newer stored settings are never
+			// overwritten by this session.
+			const backupApplies =
+				!this.settingsInitialized &&
+				data !== undefined &&
+				data !== null;
+			new Notice(
+				backupApplies
+					? 'Advanced Audio Recorder: the settings file could not ' +
+							'be read. Settings from the backup file are used ' +
+							'for this session, and saving is disabled to ' +
+							'protect the stored file. Restart Obsidian to ' +
+							'recover.'
+					: 'Advanced Audio Recorder: the settings file could not ' +
+							'be read. Settings stored on disk are untouched, ' +
+							'and saving is disabled to protect them. Restart ' +
+							'Obsidian to recover.',
+			);
+			if (backupApplies) {
+				this.settings = await mergeSettingsAsync(data);
+			} else if (!this.settingsInitialized) {
+				this.settings = await mergeSettingsAsync({});
+			}
+			// Resolved but not migrated: a key moved into the keychain is only
+			// out of data.json once data.json is written, and nothing may be
+			// written this session.
+			resolveApiKeys(this.settings, this.app.secretStorage);
+			this.settingsInitialized = true;
+			return;
+		}
+
+		this.settingsLoadFailed = false;
+		this.settings = await mergeSettingsAsync(data ?? {});
+		this.settingsInitialized = true;
+		const migration = this.apiKeyMigration.migrate(this.settings);
+		resolveApiKeys(this.settings, this.app.secretStorage);
+		if (restoredFromBackup) {
+			new Notice('Settings were restored from the backup file.');
+			// Complete the recovery: recreate the missing data.json
+			// right away instead of leaving the backup as the only
+			// copy until the user happens to change a setting.
+			// saveSettings() is not usable here: loadSettings() runs
+			// before the RecordingManager is constructed in onload.
+			await this.saveData(serializeSettings(this.settings));
+		}
+		// After the restore's own write rather than instead of it: a backup
+		// written by an earlier version holds the keys in plain text too, and
+		// the move is announced only by the write that records it.
+		if (migration.changed) {
+			await this.persistApiKeyMigration(migration.linked);
+		}
+		await this.backupSettings();
+	}
+
+	/**
+	 * Writes data.json right after a migration changed what it holds: the
+	 * links of keys just moved into the keychain, or the removal of a
+	 * plain-text copy a later start confirmed is no longer needed. The backup
+	 * written after this follows it the same way.
+	 *
+	 * A failed write is not a failed load. The secrets are in the keychain and
+	 * the settings in memory link them, while data.json still holds what it
+	 * held; the next load finds the same keys, links the secrets that already
+	 * hold them instead of creating new ones, and writes again. Nothing is
+	 * announced until a write has succeeded, so the notice never claims a move
+	 * that the file on disk does not show.
+	 * @param linked - The accounts linked to a secret by this load
+	 */
+	private async persistApiKeyMigration(linked: AccountId[]): Promise<void> {
+		try {
+			await this.saveData(serializeSettings(this.settings));
+		} catch (error) {
+			console.warn(
+				`${PLUGIN_LOG_PREFIX} The API keys were copied to Obsidian's keychain, but data.json could not be written; the move is retried on the next load:`,
+				error,
+			);
+			return;
+		}
+		if (linked.length === 0) {
+			return;
+		}
+		const names = linked.map((id) => ACCOUNTS[id].keyFieldName);
+		new Notice(
+			`Advanced Audio Recorder: ${names.join(', ')} ${names.length === 1 ? 'was' : 'were'} copied into Obsidian's keychain (Settings > Keychain). ` +
+				"The plain-text copy in the plugin's data.json is removed the next time Obsidian starts on this device and finds the key there. " +
+				'Secrets are kept on each device, and on the desktop in each vault, and are not synced, so enter the key once on your other devices and vaults.',
+			0,
+		);
+	}
+
+	/**
+	 * Answers a change in Obsidian's keychain: a secret added, edited, or
+	 * deleted, here or through another plugin. Usually only the runtime keys
+	 * move and nothing is written; the settings tab is read again so each
+	 * engine's entry reports the key it now has.
+	 *
+	 * A secret deleted before its move was confirmed is the exception. Its
+	 * plain-text copy is dropped and data.json written at once, because the
+	 * next start would otherwise take the deletion for a lost write and store
+	 * the key again. Not while saving is blocked: nothing on disk can change
+	 * then, and the copy stays until a session that can write.
+	 */
+	private onKeychainChanged(): void {
+		resolveApiKeys(this.settings, this.app.secretStorage);
+		if (
+			!this.settingsLoadFailed &&
+			this.apiKeyMigration.forgetDeletedMoves(this.settings)
+		) {
+			void this.saveSettings().catch((error: unknown) => {
+				console.warn(
+					`${PLUGIN_LOG_PREFIX} Saving the settings after a deleted keychain secret failed:`,
+					error,
+				);
+			});
+		}
+		this.settingTab?.update();
+	}
+
+	/**
+	 * Saves plugin settings to storage.
+	 */
+	async saveSettings(): Promise<void> {
+		// First, because the change being saved may be a newly linked secret:
+		// the key it names is what every subsystem told below has to see.
+		resolveApiKeys(this.settings, this.app.secretStorage);
+		// A note just picked for a profile is read before anything is written
+		// or redrawn, so the save carries its text and the tab shows it.
+		await this.profileNotes.reconcile();
+		if (this.settingsLoadFailed) {
+			// Never overwrite a possibly intact data.json with the
+			// in-memory fallback that replaced the unreadable settings
+			new Notice(
+				'Settings were not loaded correctly; changes are not saved ' +
+					'to protect your stored settings. Restart Obsidian.',
+			);
+			// The settings tab mutates the in-memory settings before
+			// calling saveSettings: propagate them so every subsystem
+			// sees the same session state even though nothing is
+			// persisted
+			this.recordingManager.updateSettings(this.settings);
+			this.applyQuickNoteSettings();
+			this.renderRecordingBanner();
+			this.playerRegistrar.refresh();
+			this.refreshRecordingPanels();
+			return;
+		}
+		await this.saveData(serializeSettings(this.settings));
+		await this.backupSettings();
+		this.recordingManager.updateSettings(this.settings);
+		this.applyQuickNoteSettings();
+		// The banner switch and position apply to a recording in progress
+		this.renderRecordingBanner();
+		// Apply player-affecting changes (enable toggle, waveform, etc.)
+		// to open embeds immediately, without re-opening the note
+		this.playerRegistrar.refresh();
+		this.refreshRecordingPanels();
+	}
+
+	/**
+	 * Called by Obsidian when data.json changes externally (sync,
+	 * manual edit) while the plugin is loaded. Reloads settings so the
+	 * stale in-memory copy does not overwrite the external change on
+	 * the next save.
+	 */
+	override async onExternalSettingsChange(): Promise<void> {
+		await this.loadSettings();
+		// The bodies that arrived were cached on another device and may be
+		// older than the notes here. Read again, and not written back: writing
+		// would send data.json straight back to the device it came from.
+		await this.profileNotes.reconcile();
+		this.recordingManager.updateSettings(this.settings);
+		this.applyQuickNoteSettings();
+		this.renderRecordingBanner();
+		this.refreshRecordingPanels();
+	}
+
+	/**
+	 * Shows the quick note button while quick notes are available and hides it
+	 * otherwise, at once rather than on the next start. Switching the feature
+	 * off also discards a dictation under way, since its button and its
+	 * command are about to disappear from under it.
+	 *
+	 * The button is registered once, the first time the feature is on, and
+	 * hidden rather than removed afterwards. The plugin API has no way to take
+	 * a ribbon action back short of unloading: detaching the element left its
+	 * registration in the ribbon, and every switch back on added another.
+	 */
+	private applyQuickNoteSettings(): void {
+		const available = quickNotesAvailable(this.settings);
+		if (!available) {
+			this.quickNotes.cancel();
+		}
+		if (available && !this.quickNoteRibbonEl) {
+			// Named after the plugin for the reason the recorder's button is:
+			// the ribbon's context menu lists every button by this text.
+			this.quickNoteRibbonEl = this.addRibbonIcon(
+				ICON_QUICK_NOTE,
+				`${this.manifest.name}: start/stop quick note`,
+				() => {
+					void this.quickNotes.toggle();
+				},
+			);
+			updateRibbonIcon(
+				this.quickNoteRibbonEl,
+				this.quickNotes.getStatus(),
+				QUICK_NOTE_GLYPHS,
+			);
+		}
+		this.quickNoteRibbonEl?.toggleClass(RIBBON_HIDDEN_CLASS, !available);
+	}
+
+	/**
+	 * Reads settings from disk. loadData() reports a missing data.json
+	 * as null only when the underlying read fails with an ENOENT error
+	 * code; other filesystems surface a different code for the same
+	 * condition and loadData() then returns undefined, exactly like a
+	 * corrupt or locked file. The adapter's exists() check is therefore
+	 * the only reliable discriminator between "file missing" and "file
+	 * exists but could not be read". A failed read of an existing file
+	 * is retried once, then the backup file is tried. The same
+	 * missing-vs-unreadable distinction applies to the backup itself:
+	 * when data.json is missing, the backup is the only copy of the
+	 * settings, so a backup that exists but cannot be read blocks
+	 * saving instead of being overwritten with defaults.
+	 * @returns Read result: stored settings, null when no settings
+	 * exist on disk, or undefined when stored settings could not be
+	 * read; blockSaving is set whenever an existing settings file
+	 * could not be read
+	 */
+	private async readStoredSettings(): Promise<StoredSettingsReadResult> {
+		let data = await this.tryLoadData();
+		if (data !== undefined && data !== null) {
+			return { data, restoredFromBackup: false, blockSaving: false };
+		}
+
+		if (!(await this.pluginFileExists(SETTINGS_DATA_FILE))) {
+			if (!(await this.pluginFileExists(SETTINGS_BACKUP_FILE))) {
+				// First install: no settings anywhere, defaults apply
+				// and saving stays enabled so data.json gets created
+				// on the next change
+				return {
+					data: null,
+					restoredFromBackup: false,
+					blockSaving: false,
+				};
+			}
+			// Missing data.json with a backup present: restore the
+			// lost settings and have the caller persist them. An
+			// unreadable backup is the only remaining copy of the
+			// settings, so it blocks saving instead.
+			const backup = await this.readSettingsBackup();
+			return {
+				data: backup,
+				restoredFromBackup: backup !== undefined,
+				blockSaving: backup === undefined,
+			};
+		}
+
+		await delay(SETTINGS_READ_RETRY_DELAY_MS);
+		data = await this.tryLoadData();
+		if (data !== undefined && data !== null) {
+			return { data, restoredFromBackup: false, blockSaving: false };
+		}
+
+		// data.json exists but is unreadable: a readable backup keeps
+		// the session usable in memory, while saving stays blocked so
+		// the possibly newer data.json is never overwritten with
+		// backup-derived values
+		return {
+			data: await this.readSettingsBackup(),
+			restoredFromBackup: false,
+			blockSaving: true,
+		};
+	}
+
+	/**
+	 * Calls loadData() and maps a rejected read to undefined. The
+	 * current Obsidian implementation never rejects (read and parse
+	 * failures are caught internally and reported as undefined), but
+	 * that behavior is undocumented; mapping a rejection to the
+	 * failed-read result keeps the missing-vs-unreadable
+	 * discrimination independent of Obsidian internals.
+	 * @returns Stored settings, null for a missing file, or undefined
+	 * when the read failed
+	 */
+	private async tryLoadData(): Promise<
+		Partial<AudioRecorderSettings> | null | undefined
+	> {
+		try {
+			return (await this.loadData()) as
+				Partial<AudioRecorderSettings> | null | undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	/**
+	 * Checks whether a file in the plugin folder is present on disk.
+	 * @param fileName - File name inside the plugin folder
+	 * @returns True when the file exists, or when its existence cannot
+	 * be determined: the protective assumption treats an unverifiable
+	 * file as present so it is never overwritten while possibly intact
+	 */
+	private async pluginFileExists(fileName: string): Promise<boolean> {
+		const filePath = this.getPluginFilePath(fileName);
+		if (!filePath) {
+			return false;
+		}
+		try {
+			return await this.app.vault.adapter.exists(filePath);
+		} catch {
+			return true;
+		}
+	}
+
+	/**
+	 * Reads and parses the settings backup file written on every
+	 * successful load and save. User-facing messaging is left to the
+	 * callers, which know whether the backup replaces a missing
+	 * data.json or only carries the session over an unreadable one.
+	 * @returns Parsed backup settings, or undefined when the backup is
+	 * missing or unreadable
+	 */
+	private async readSettingsBackup(): Promise<
+		Partial<AudioRecorderSettings> | undefined
+	> {
+		const backupPath = this.getSettingsBackupPath();
+		if (!backupPath) {
+			return undefined;
+		}
+		try {
+			const raw = await this.app.vault.adapter.read(backupPath);
+			return JSON.parse(raw) as Partial<AudioRecorderSettings>;
+		} catch {
+			return undefined;
+		}
+	}
+
+	/**
+	 * Writes the current settings to the backup file next to data.json.
+	 * Failures only log a warning: the backup is a best-effort recovery
+	 * source and must not break loading or saving.
+	 */
+	private async backupSettings(): Promise<void> {
+		const backupPath = this.getSettingsBackupPath();
+		if (!backupPath) {
+			return;
+		}
+		try {
+			await this.app.vault.adapter.write(
+				backupPath,
+				JSON.stringify(serializeSettings(this.settings)),
+			);
+		} catch (error) {
+			console.warn(
+				`${PLUGIN_LOG_PREFIX} Failed to write settings backup:`,
+				error,
+			);
+		}
+	}
+
+	/**
+	 * Resolves the vault-relative path of the settings backup file.
+	 * @returns Backup path, or null when the plugin directory is unknown
+	 */
+	private getSettingsBackupPath(): string | null {
+		return this.getPluginFilePath(SETTINGS_BACKUP_FILE);
+	}
+
+	/**
+	 * Resolves the vault-relative path of a file in the plugin folder.
+	 * @param fileName - File name inside the plugin folder
+	 * @returns File path, or null when the plugin directory is unknown
+	 */
+	private getPluginFilePath(fileName: string): string | null {
+		const pluginDir = this.manifest.dir;
+		if (!pluginDir) {
+			return null;
+		}
+		return normalizePath(`${pluginDir}/${fileName}`);
+	}
+
+	/**
+	 * Builds the shared services injected into every plugin action.
+	 * The player registrar is created after the context menu, so the
+	 * primer closure resolves it lazily when a processing run finishes.
+	 */
+	private createActionServices(): ActionServices {
+		return {
+			app: this.app,
+			getSettings: () => this.settings,
+			saveSettings: () => this.saveSettings(),
+			createTranscriptionModalOptions: () =>
+				this.createTranscriptionModalOptions(),
+			primeForEnhancement: (paths) =>
+				this.playerRegistrar.primeSavedRecordingsForEnhancement(paths),
+			getWorkerClient: () => this.encodingWorker,
+			// Read through the field rather than captured, because the queue is
+			// built after these services are: a menu entry acts long after
+			// load, and there is nothing to act on before it finished.
+			transcriptionQueue: this.createQueuePort(),
+			onMarkersChanged: (path) => {
+				this.playerRegistrar.reloadMarkersFor(path);
+			},
+			autoChapters: this.autoChapterService,
+			recordingSidecar: this.sidecarStore,
+			transcriptionCosts: this.transcriptionCostTracker,
+		};
+	}
+
+	/**
+	 * The transcription queue as the actions drive it. Read through the field
+	 * rather than captured, because the queue is built after the services
+	 * are: a menu entry acts long after load, and a load that stopped before
+	 * the queue was built leaves every entry answering as an empty queue
+	 * rather than dereferencing a field that was never assigned.
+	 * @returns The queue port
+	 */
+	private createQueuePort(): ActionServices['transcriptionQueue'] {
+		const queue = (): QueueCoordinator | null => this.transcriptionQueue;
+		return {
+			queueFolder: async (folder) => {
+				await queue()?.queueFolder(folder);
+			},
+			open: () => {
+				queue()?.open();
+			},
+			enqueueFolder: async (folder) =>
+				(await queue()?.enqueueFolder(folder)) ?? {
+					found: 0,
+					added: 0,
+				},
+			status: async () =>
+				(await queue()?.status()) ?? {
+					entries: [],
+					paused: false,
+					running: false,
+				},
+			start: () => {
+				queue()?.start();
+			},
+			pause: () => {
+				queue()?.pause();
+			},
+			clear: () => {
+				queue()?.clear();
+			},
+			remove: (path) => queue()?.remove(path) ?? false,
+		};
+	}
+
+	/**
+	 * Registers every plugin action through the action registry, which puts
+	 * each on the palette, the Hotkeys settings and the command line at once.
+	 * The families differ only in the target they resolve - the recordings of
+	 * what is active, a point of a recording, the recording session, the
+	 * playback that is running - so a feature added to a family reaches every
+	 * surface without another line here.
+	 * @param registry - The registry to add the families to
+	 * @returns The registered families the context menus render
+	 */
+	private registerCommands(registry: ActionRegistry): MenuFamilies {
+		// Each resolver runs on every palette check, so the services are
+		// built once here; they read live state through their closures.
+		const services = this.createActionServices();
+		registry.add(sessionActionFamily(this.createSessionServices()));
+		const file = registry.add(fileActionFamily(services));
+		// A transcript action acts on a selection inside a transcript line,
+		// which the active editor's selection resolves to (or does not).
+		const transcript = registry.add(transcriptActionFamily(services));
+		// The player registrar is created after this method runs, so the
+		// resolvers reach it through the field it later fills. They pull the
+		// live playback rather than reusing the snapshot the status bar was
+		// last pushed: a command has to act on the playback as it stands, and
+		// a pushed snapshot only describes it as of the last media event.
+		const playback = (): PlaybackControlsState | null =>
+			this.playerRegistrar.currentPlaybackState();
+		registry.add(playbackActionFamily(playback));
+		const position = registry.add(positionActionFamily(services, playback));
+		const folder = registry.add(folderActionFamily(services));
+		// A vault-wide search is bound to no file and no playback, so its
+		// context always resolves and the command is always offered.
+		registry.add(
+			searchActionFamily({
+				openMarkerSearch: () => this.playerRegistrar.openMarkerSearch(),
+				markerHits: () => this.playerRegistrar.markerHits(),
+				transcriptionQueue: services.transcriptionQueue,
+				openRecordingPanel: () => this.openRecordingPanel(),
+			}),
+		);
+		// Asked for deliberately rather than met after an update, so it shows
+		// every release the bundle carries notes for instead of only the ones
+		// since the last announcement.
+		registry.add(
+			helpActionFamily({
+				showReleaseNotes: () => {
+					new ReleaseNotesModal(
+						this.app,
+						releaseNotesSince(''),
+					).open();
+				},
+			}),
+		);
+		return { file, transcript, position, folder };
+	}
+
+	/**
+	 * What the recording panel is built over: the same services and file
+	 * actions the menus use, the recorder for its start/stop button, and a
+	 * length reader that stays on the cheap readers and answers null instead
+	 * of raising a notice, since the panel reads a length nobody asked for.
+	 * @returns The host every panel instance shares
+	 */
+	private createRecordingPanelHost(): RecordingPanelHost {
+		return {
+			displayName: this.manifest.name,
+			services: this.createActionServices(),
+			actions: FILE_ACTIONS,
+			recording: this.recordingManager,
+			readDuration: (file) => probeDurationSeconds(this.app, file),
+			openSettings: () => {
+				openPluginSettings(this.app, this.manifest.id);
+			},
+			openTranscriptionQueue: () => {
+				this.transcriptionQueue?.open();
+			},
+		};
+	}
+
+	/**
+	 * Puts the recording panel in the right sidebar the first time the plugin
+	 * runs with it on this device, without switching to it. After that the
+	 * saved layout owns the panel: it stays wherever the user moved it, and a
+	 * user who closed it opens it again from the palette rather than finding
+	 * it back on every start.
+	 *
+	 * That it was placed is kept in the app's local storage rather than in
+	 * data.json. The layout is per device, and data.json is synced: a flag
+	 * there would keep the panel off a phone or a second computer because it
+	 * was placed on the first one.
+	 */
+	private async placeRecordingPanel(): Promise<void> {
+		if (this.app.loadLocalStorage(RECORDING_PANEL_PLACED_KEY) !== null) {
+			return;
+		}
+		try {
+			await this.app.workspace.ensureSideLeaf(
+				RECORDING_PANEL_VIEW_TYPE,
+				'right',
+				{ active: false, reveal: false },
+			);
+			this.app.saveLocalStorage(RECORDING_PANEL_PLACED_KEY, true);
+		} catch (error) {
+			console.warn(
+				`${PLUGIN_LOG_PREFIX} Placing the recording panel failed:`,
+				error,
+			);
+		}
+	}
+
+	/**
+	 * Shows the recording panel, opening it in the right sidebar when it is
+	 * not open anywhere.
+	 */
+	private async openRecordingPanel(): Promise<void> {
+		// Finds an open panel before it creates one, and reveals it.
+		await this.app.workspace.ensureSideLeaf(
+			RECORDING_PANEL_VIEW_TYPE,
+			'right',
+			{ active: true, reveal: true },
+		);
+	}
+
+	/**
+	 * Shows what changed when the running version is not the one whose notes
+	 * were last announced.
+	 *
+	 * The version is recorded whether or not the dialog opens. A user who
+	 * turned the dialog off is therefore not shown two releases at once when
+	 * they turn it back on, and an install that has announced nothing yet -
+	 * a first install, or a config written before this field existed - starts
+	 * from the version it is running rather than from the whole history.
+	 */
+	private announceReleaseNotes(): void {
+		if (this.settingsLoadFailed) {
+			// Recording the version would be refused and would report that
+			// refusal as a Notice, which says nothing about what the user was
+			// doing. The unreadable settings file is reported on its own.
+			return;
+		}
+		const current = this.manifest.version;
+		const announced = this.settings.lastReleaseNotesVersion;
+		if (announced === current) {
+			return;
+		}
+		this.settings.lastReleaseNotesVersion = current;
+		// Through the shared save rather than a bare saveData, although this
+		// writes one bookkeeping field. Everything else saveSettings does is
+		// either wanted here or costs nothing: the backup stays in step with
+		// data.json, the player refresh returns without touching an embed when
+		// no player setting moved, and the profile-note read is idempotent and
+		// swallows its own failures. A second persistence path would drift
+		// from this one the first time the shared one gains a step.
+		void this.saveSettings().catch((error: unknown) => {
+			console.warn(
+				`${PLUGIN_LOG_PREFIX} Recording the announced version failed:`,
+				error,
+			);
+		});
+		if (announced === '' || !this.settings.showReleaseNotes) {
+			return;
+		}
+		const notes = releaseNotesSince(announced);
+		if (notes === '') {
+			// An update with nothing on record to say about it: a build from
+			// between releases, or a version so old its entry has since been
+			// pruned. A dialog saying nothing is worse than no dialog.
+			return;
+		}
+		new ReleaseNotesModal(this.app, notes).open();
+	}
+
+	/**
+	 * Builds the services injected into every recording-session action.
+	 * The recorder is handed over as the narrow port the actions declare,
+	 * so their definitions never reach into the manager itself.
+	 * @returns Session services for the action registry
+	 */
+	private createSessionServices(): SessionServices {
+		return {
+			app: this.app,
+			getSettings: () => this.settings,
+			saveSettings: () => this.saveSettings(),
+			recording: this.recordingManager,
+			quickNote: this.quickNotes,
+			openMarkerModal: (kind) => {
+				this.openMarkerModal(kind);
+			},
+		};
+	}
+
+	/**
+	 * Transcribe-on-save hook: when enabled, transcribes the first saved
+	 * audio file (`audioPaths[0]`). The transcript is targeted at the same
+	 * note the recording embed was inserted into (`result.notePath`), so the
+	 * timecode links resolve there even if the user navigated to another note
+	 * before the async job ran.
+	 *
+	 * Only the first file is transcribed by design: a multi-track session
+	 * produces several tracks of the same audio (transcribing each would be
+	 * redundant and multiply API cost), and an auto-split session would
+	 * otherwise fire one transcription request per part. For those cases the
+	 * user transcribes the desired file explicitly via the context menu or
+	 * the "Transcribe audio" command.
+	 * @param result - The saved audio paths and the note the links landed in
+	 */
+	private handleRecordingSaved(result: RecordingSaveResult): void {
+		if (this.unloaded) {
+			return;
+		}
+		this.playerRegistrar.primeSavedRecordingsForEnhancement(
+			result.audioPaths,
+		);
+
+		// Fire-and-forget lopsided-stereo check; failures never touch the
+		// stop sequence and are contained at this orchestration boundary.
+		void this.maybeSuggestMonoConversion(result).catch((error: unknown) => {
+			console.warn(
+				`${PLUGIN_LOG_PREFIX} Silent-channel suggestion failed:`,
+				error,
+			);
+		});
+
+		if (
+			!this.settings.transcriptionEnabled ||
+			!this.settings.transcribeOnSave ||
+			result.audioPaths.length === 0
+		) {
+			return;
+		}
+		// A synced desktop config may select an engine this platform
+		// cannot run (local whisper.cpp on mobile): auto-starting would
+		// pop a doomed transcription after every recording.
+		if (
+			!isProviderAvailableOnPlatform(this.settings.transcriptionProvider)
+		) {
+			new Notice(
+				'Transcription was skipped: the selected engine is not available on this device. Pick a cloud engine in settings.',
+			);
+			return;
+		}
+		const [firstAudioPath] = result.audioPaths;
+		if (!firstAudioPath) {
+			return;
+		}
+		const file = this.app.vault.getFileByPath(firstAudioPath);
+		if (!file) {
+			return;
+		}
+		this.openTranscription(file, result.notePath ?? undefined);
+	}
+
+	/**
+	 * Opens the transcription dialog on a file and starts it there.
+	 *
+	 * A transcription this plugin starts on its own after a recording goes
+	 * through here rather than in the background: the user gets visible
+	 * progress and a cancel button for what can be a long, paid job. The
+	 * command line's transcribe opens the same dialog the same way, through
+	 * its action. The dialog reports its own errors and writes the
+	 * configured outputs, with a file fallback when the note is not editable.
+	 * @param file - The audio file to transcribe
+	 * @param notePath - Note the transcript's links should resolve in, where
+	 *   the caller knows one; the dialog picks the active note otherwise
+	 */
+	private openTranscription(file: TFile, notePath?: string): void {
+		new TranscriptionModal(this.app, file, () => this.settings, {
+			...this.createTranscriptionModalOptions(),
+			autoStart: true,
+			notePath,
+		}).open();
+	}
+
+	/**
+	 * Checks a freshly saved recording for the lopsided-stereo pattern
+	 * (one silent channel, a single mic through a dual-input interface)
+	 * and, when found, shows a Notice offering a one-click conversion to
+	 * mono that keeps the channel with audio. One file per output track is
+	 * inspected (the first part for auto-split), sequentially to bound peak
+	 * decode memory. Gated by the setting; a no-op when disabled or when
+	 * nothing lopsided is found.
+	 * @param result - The saved audio paths
+	 */
+	private async maybeSuggestMonoConversion(
+		result: RecordingSaveResult,
+	): Promise<void> {
+		const generation = ++this.silentChannelSuggestionGeneration;
+		this.silentChannelNotice?.hide();
+		this.silentChannelNotice = null;
+		if (
+			!this.settings.detectSilentChannelOnSave ||
+			result.audioPaths.length === 0
+		) {
+			return;
+		}
+		const perTrackPaths = result.trackFiles
+			?.map((group) => group.files[0])
+			.filter((path): path is string => Boolean(path));
+		const candidates = Array.from(
+			new Set(
+				perTrackPaths && perTrackPaths.length > 0
+					? perTrackPaths
+					: result.audioPaths.slice(0, 1),
+			),
+		);
+		const suggestions: SilentChannelSuggestion[] = [];
+		for (const path of candidates) {
+			if (generation !== this.silentChannelSuggestionGeneration) {
+				return;
+			}
+			const file = this.app.vault.getFileByPath(path);
+			if (!file) {
+				continue;
+			}
+			const detection = await detectSilentChannel(this.app, file, {
+				knownDurationSeconds: result.durationSeconds,
+			});
+			if (detection) {
+				suggestions.push({
+					file,
+					keepMode: detection.keepMode,
+					silentSide:
+						detection.silentChannel === 1 ? 'right' : 'left',
+				});
+			}
+		}
+		if (
+			generation !== this.silentChannelSuggestionGeneration ||
+			!this.settings.detectSilentChannelOnSave ||
+			suggestions.length === 0
+		) {
+			return;
+		}
+		this.showSilentChannelNotice(suggestions);
+	}
+
+	/**
+	 * Shows the actionable lopsided-stereo Notice. Clicking "Convert to
+	 * mono" opens the conversion dialog preset to the channel that
+	 * carries audio, so the user confirms format/links and runs it.
+	 * @param suggestions - Lopsided files and the channel each should keep
+	 */
+	private showSilentChannelNotice(
+		suggestions: SilentChannelSuggestion[],
+	): void {
+		this.silentChannelNotice?.hide();
+		const fragment = createFragment();
+		if (suggestions.length > 1) {
+			fragment.append(
+				`${String(suggestions.length)} recordings have a silent channel: `,
+			);
+		}
+		for (const [index, suggestion] of suggestions.entries()) {
+			if (index > 0) {
+				fragment.append(' ');
+			}
+			if (suggestions.length === 1) {
+				fragment.append(
+					`Recording's ${suggestion.silentSide} channel is silent. `,
+				);
+			}
+			const button = createEl('button', {
+				cls: 'aar-silent-channel-convert',
+				text:
+					suggestions.length === 1
+						? 'Convert to mono'
+						: `Convert ${suggestion.file.name}`,
+				attr: { type: 'button' },
+			});
+			button.addEventListener('click', () => {
+				if (suggestions.length === 1) {
+					this.silentChannelNotice?.hide();
+					this.silentChannelNotice = null;
+				}
+				this.openMonoConversion(suggestion.file, suggestion.keepMode);
+			});
+			fragment.append(button);
+		}
+		this.silentChannelNotice = new Notice(fragment, 0);
+	}
+
+	/**
+	 * Opens the conversion dialog preset to the given channel mode and
+	 * primes the converted file for the enhanced player. Extracted so
+	 * the silent-channel prompt's action is testable without the Notice.
+	 * @param file - The file to convert
+	 * @param keepMode - Channel mode to preselect in the dialog
+	 */
+	private openMonoConversion(file: TFile, keepMode: ChannelMode): void {
+		new ConversionModal(this.app, file, () => this.settings, {
+			onConverted: (convertedPath) => {
+				this.playerRegistrar.primeSavedRecordingsForEnhancement([
+					convertedPath,
+				]);
+			},
+			getWorkerClient: () => this.encodingWorker,
+			initialChannelMode: keepMode,
+		}).open();
+	}
+
+	/**
+	 * Creates modal options that let a minimized transcription report progress
+	 * in this plugin's status bar.
+	 * @returns Transcription modal options
+	 */
+	private createTranscriptionModalOptions(): TranscriptionModalOptions {
+		const id = ++this.nextBackgroundTranscriptionId;
+		return {
+			// Remember the run's profile choices so they default next time and
+			// apply to what runs from the settings rather than from the dialog:
+			// transcribe-on-save, and the after-transcription chapters.
+			onProfileSelected: async (
+				kind: ProfileKindId,
+				profileId: string,
+			) => {
+				setSelectedProfileId(this.settings, kind, profileId);
+				await this.saveSettings();
+			},
+			costTracker: this.transcriptionCostTracker,
+			// Speaker-name continuity: the run re-applies stored names and
+			// registers the outputs it writes in the recording's sidecar.
+			sidecar: this.sidecarStore,
+			// After-transcription auto chapters: runs on the fresh in-memory
+			// transcript, reporting through its own Notices.
+			generateChapters: async (file, transcript) => {
+				await this.autoChapterService.generate(file, transcript);
+			},
+			backgroundProgress: {
+				show: (progress: SaveProgress, restore: () => void) => {
+					// Re-insert so the most recently updated job sorts last and
+					// becomes the rendered one, even when several are minimized.
+					this.backgroundTranscriptions.delete(id);
+					this.backgroundTranscriptions.set(id, {
+						progress,
+						restore,
+					});
+					this.renderStatusBar();
+				},
+				clear: () => {
+					if (this.backgroundTranscriptions.delete(id)) {
+						this.renderStatusBar();
+					}
+				},
+			},
+		};
+	}
+
+	/**
+	 * Returns the minimized transcription that should currently occupy the
+	 * status bar (the most recently updated one), or undefined when none are
+	 * minimized.
+	 * @returns The active background transcription, if any
+	 */
+	private activeBackgroundTranscription():
+		BackgroundTranscriptionProgress | undefined {
+		let active: BackgroundTranscriptionProgress | undefined;
+		for (const entry of this.backgroundTranscriptions.values()) {
+			active = entry;
+		}
+		return active;
+	}
+
+	/**
+	 * Renders the shared status bar. Recording and saving take precedence,
+	 * followed by active playback and minimized transcription progress.
+	 */
+	private renderStatusBar(): void {
+		const active = this.activeBackgroundTranscription();
+		// A dictation is what the user is doing right now, so it outranks a
+		// playback and a minimized transcription the way a recording does.
+		if (
+			this.recordingStatus === RecordingStatus.Idle &&
+			this.quickNoteStatus !== RecordingStatus.Idle
+		) {
+			renderQuickNoteStatusBar(
+				this.statusBarItem,
+				this.quickNoteStatus,
+				this.quickNoteProgress,
+				() => {
+					void this.quickNotes.toggle();
+				},
+				{
+					showStats: this.settings.showRecordingStats,
+					showMeter: this.settings.showInputLevelMeter,
+				},
+			);
+			return;
+		}
+		if (
+			this.recordingStatus === RecordingStatus.Idle &&
+			this.playbackState
+		) {
+			renderPlaybackStatusBar(this.statusBarItem, this.playbackState);
+			return;
+		}
+		if (this.recordingStatus === RecordingStatus.Idle && active) {
+			renderTranscriptionStatusBar(this.statusBarItem, active.progress, {
+				onActivate: active.restore,
+				activationLabel: RESTORE_TRANSCRIPTION_LABEL,
+			});
+			return;
+		}
+
+		const controls = this.buildRecordingControls(this.recordingStatus);
+		updateStatusBar(
+			this.statusBarItem,
+			this.recordingStatus,
+			this.recordingSaveProgress,
+			controls,
+			{
+				showStats: this.settings.showRecordingStats,
+				showMeter: this.settings.showInputLevelMeter,
+			},
+		);
+	}
+
+	/**
+	 * Builds recording control callbacks for the status bar buttons.
+	 * Returns controls only when recording is active or paused.
+	 * @param status - Current recording status
+	 * @returns RecordingControls or undefined if not in a recording state
+	 */
+	private buildRecordingControls(
+		status: RecordingStatus,
+	): RecordingControls | undefined {
+		if (
+			status !== RecordingStatus.Recording &&
+			status !== RecordingStatus.Paused
+		) {
+			return undefined;
+		}
+
+		return {
+			onPauseResume: () => {
+				this.recordingManager.togglePauseResume();
+			},
+			onStop: () => {
+				void this.recordingManager.stopRecording();
+			},
+			isPaused: status === RecordingStatus.Paused,
+			// Only offered when markers are enabled, since they are surfaced
+			// solely by the enhanced player; absent hides the status-bar button
+			onAddMarker: this.settings.playerEnableMarkers
+				? () => {
+						this.openMarkerModal();
+					}
+				: undefined,
+		};
+	}
+
+	/**
+	 * Captures a marker at the current recording position and opens the
+	 * naming modal. No-op when a marker cannot be dropped right now.
+	 * @param preselectKind - Marker kind fixed by the invoking command;
+	 *   defaults to the kind last chosen in the modal
+	 */
+	private openMarkerModal(preselectKind?: MarkerKind): void {
+		const handle = this.recordingManager.captureMarkerDraft(preselectKind);
+		if (!handle) {
+			return;
+		}
+		new RecordingMarkerModal(this.app, handle).open();
+	}
+
+	/**
+	 * Sets up the status bar item and the live-stats refresh interval.
+	 */
+	private setupStatusBar(): void {
+		this.statusBarItem = this.addStatusBarItem();
+		initializeStatusBar(this.statusBarItem);
+		// Refresh the live recording indicators a few times a second so the
+		// timer and meter stay smooth without re-rendering the status bar.
+		this.registerInterval(
+			window.setInterval(() => {
+				this.pumpLiveStats();
+			}, LIVE_STATS_INTERVAL_MS),
+		);
+	}
+
+	/**
+	 * Shows what the quick note is doing: on its ribbon button, in the status
+	 * bar the way a recording shows itself there, and, where there is no
+	 * status bar, in a notice that follows each stage.
+	 * @param status - Recording while it captures, Saving while processed
+	 * @param progress - The processing stage, while it is processed
+	 */
+	private handleQuickNoteStatus(
+		status: RecordingStatus,
+		progress: SaveProgress | undefined,
+	): void {
+		if (this.unloaded) {
+			return;
+		}
+		this.quickNoteStatus = status;
+		this.quickNoteProgress = progress;
+		updateRibbonIcon(this.quickNoteRibbonEl, status, QUICK_NOTE_GLYPHS);
+		this.renderStatusBar();
+		if (!isRecordingBannerSupported()) {
+			return;
+		}
+		if (status === RecordingStatus.Idle) {
+			this.quickNoteNotice?.hide();
+			this.quickNoteNotice = null;
+			return;
+		}
+		// A processing stage always arrives with its progress, and recording
+		// is the one state that carries none.
+		const message = progress
+			? progress.description
+			: 'Quick note: recording. Run the command again to stop.';
+		if (this.quickNoteNotice) {
+			this.quickNoteNotice.setMessage(message);
+		} else {
+			this.quickNoteNotice = new Notice(message, 0);
+		}
+	}
+
+	/**
+	 * Renders the status bar and the mobile banner for a status change.
+	 * @param status - New recording status
+	 * @param saveProgress - Optional save progress for the saving state
+	 */
+	private handleStatusChange(
+		status: RecordingStatus,
+		saveProgress?: SaveProgress,
+	): void {
+		if (this.unloaded) {
+			return;
+		}
+		this.recordingStatus = status;
+		// Whatever arrived with the status. The manager passes progress
+		// exactly when a save is in flight, so re-deriving that from the
+		// status could only disagree with it - which is what left an
+		// interrupted save rendering its bar at zero.
+		this.recordingSaveProgress = saveProgress;
+		// Route through renderStatusBar so minimized transcription progress
+		// keeps its precedence when recording returns to idle.
+		this.renderStatusBar();
+		updateRibbonIcon(this.ribbonIconEl, status);
+		this.renderRecordingBanner();
+		this.forEachRecordingPanel((panel) => {
+			panel.refreshRecordingState();
+		});
+	}
+
+	/**
+	 * Runs something against every open recording panel. A panel the saved
+	 * layout restored stays a placeholder until its tab is first shown, and
+	 * there is no view to reach yet, so those are skipped.
+	 * @param apply - What to do with each panel
+	 */
+	private forEachRecordingPanel(
+		apply: (panel: RecordingPanelView) => void,
+	): void {
+		for (const leaf of this.app.workspace.getLeavesOfType(
+			RECORDING_PANEL_VIEW_TYPE,
+		)) {
+			if (leaf.view instanceof RecordingPanelView) {
+				apply(leaf.view);
+			}
+		}
+	}
+
+	/**
+	 * Redraws the open recording panels after the settings changed: the
+	 * actions they list and the switches they show are gated by settings,
+	 * which none of the events a panel listens to carries.
+	 */
+	private refreshRecordingPanels(): void {
+		this.forEachRecordingPanel((panel) => {
+			void panel.refresh();
+		});
+	}
+
+	/**
+	 * Shows the mobile banner while a recording is active and the user wants
+	 * it, at the anchor the settings name, and hides it otherwise. Driven by
+	 * both the status and the settings, so a change to either applies at once.
+	 */
+	private renderRecordingBanner(): void {
+		// A save still settling after unload must not bring the banner back
+		if (this.unloaded) {
+			return;
+		}
+		const status = this.recordingStatus;
+		const active =
+			status === RecordingStatus.Recording ||
+			status === RecordingStatus.Paused;
+		if (
+			active &&
+			isRecordingBannerSupported() &&
+			this.settings.mobileRecordingBanner
+		) {
+			this.recordingBanner.show(
+				status === RecordingStatus.Paused,
+				this.settings.mobileRecordingBannerPosition,
+			);
+		} else {
+			this.recordingBanner.hide();
+		}
+	}
+
+	/**
+	 * Pushes live elapsed time, recorded size, and input level to the
+	 * status bar and mobile banner while a recording is active.
+	 */
+	private pumpLiveStats(): void {
+		const status = this.recordingManager.getStatus();
+		if (
+			status !== RecordingStatus.Recording &&
+			status !== RecordingStatus.Paused
+		) {
+			const dictation = this.quickNotes.liveStats();
+			if (dictation) {
+				updateRecordingLiveStats(this.statusBarItem, dictation);
+			}
+			return;
+		}
+		const elapsedMs = this.recordingManager.getElapsedMs();
+		updateRecordingLiveStats(this.statusBarItem, {
+			elapsedMs,
+			bytes: this.recordingManager.getRecordedBytes(),
+			level: this.recordingManager.getInputLevel(),
+		});
+		this.recordingBanner.update(
+			elapsedMs,
+			status === RecordingStatus.Paused,
+		);
+	}
+}

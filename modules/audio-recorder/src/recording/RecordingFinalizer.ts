@@ -1,0 +1,763 @@
+/**
+ * Finalization stage of the recording pipeline: turns flushed segment
+ * files and remaining buffers into final audio files, mixes
+ * multi-track sessions, cleans up temporary artifacts, inserts note
+ * links, and reports deduplicated save progress.
+ * @module recording/RecordingFinalizer
+ */
+
+import { Notice } from 'obsidian';
+import type { App } from 'obsidian';
+import { sessionTimestamp } from '../utils/ids';
+import type {
+	InsertionContext,
+	RecordingSaveResult,
+	RecordingSessionConfig,
+	RecordingTarget,
+	SaveProgress,
+	TrackFileGroup,
+} from '../types';
+import type { AudioRecorderSettings } from '../settings/settingsSchema';
+import { OutputMode } from '../types';
+import { PLUGIN_LOG_PREFIX, FORMAT_WAV } from '../constants';
+import { DebugLogger } from '../utils/DebugLogger';
+import {
+	assembleWavFromPcmSegmentFiles,
+	WAV_SIZE_LIMIT_MESSAGE,
+	WavSizeLimitError,
+} from '../audio/WavEncoder';
+import { isOfflineEncodingSupported } from '../audio/AudioEncoder';
+import {
+	resolveUniquePath,
+	saveAudioFile,
+	removeTemporaryArtifacts,
+	cleanupIntermediateFiles,
+} from '../audio/RecordingFileManager';
+import {
+	isOfflineOnlyFormat,
+	convertBlobToWavBuffer,
+	convertBlobToFormatBuffer,
+	mergeAudioTracks,
+	type MergePlacement,
+} from '../audio/AudioFormatConverter';
+import { INT16_MAX } from '../audio/pcm';
+import type { EncodingWorkerClient } from '../audio/EncodingWorkerClient';
+import { audioMimeForExtension } from '../audio/formatRegistry';
+import { canStreamMix, mixPcmTracksToWav } from './StreamingMixer';
+import { gainFactor, normalizeFactor, panGains } from './mixMath';
+import { buildPartFileName } from './AudioSplitter';
+import { insertFileLinks } from './NoteInserter';
+import type { TrackWriteQueue } from './TrackWriteQueue';
+import { SessionJournal } from './SessionJournal';
+
+/**
+ * Finalizes recording sessions into vault audio files.
+ */
+export class RecordingFinalizer {
+	/** Session configuration set by beginSession. */
+	private session: RecordingSessionConfig | null = null;
+	/** Last save-progress percent reported to the status bar. */
+	private lastProgressPercent = -1;
+	/** Last save-progress description reported to the status bar. */
+	private lastProgressDescription = '';
+
+	/**
+	 * Creates a new RecordingFinalizer.
+	 * @param app - The Obsidian App instance
+	 * @param settings - Plugin settings (live reference)
+	 * @param writeQueue - Write queue used to flush remaining buffers
+	 * @param debugLogger - Debug logger
+	 * @param onProgress - Receives deduplicated save-progress updates
+	 * @param journal - Crash-recovery journal tracking segment files
+	 */
+	constructor(
+		private readonly app: App,
+		private settings: AudioRecorderSettings,
+		private readonly writeQueue: TrackWriteQueue,
+		private readonly debugLogger: DebugLogger,
+		private readonly onProgress: (progress: SaveProgress) => void,
+		private readonly journal: SessionJournal = new SessionJournal(
+			null,
+			app,
+		),
+		private readonly getWorkerClient: () => EncodingWorkerClient | null = () =>
+			null,
+	) {}
+
+	/**
+	 * Updates the live settings reference.
+	 * @param settings - New settings
+	 */
+	updateSettings(settings: AudioRecorderSettings): void {
+		this.settings = settings;
+	}
+
+	/**
+	 * Starts a new recording session: stores the session snapshot and
+	 * resets the progress deduplication.
+	 * @param session - Session configuration snapshot
+	 */
+	beginSession(session: RecordingSessionConfig): void {
+		this.session = session;
+		this.lastProgressPercent = -1;
+		this.lastProgressDescription = '';
+	}
+
+	/**
+	 * Returns the active session configuration.
+	 * @throws Error when called outside a recording session
+	 */
+	private requireSession(): RecordingSessionConfig {
+		if (!this.session) {
+			throw new Error('No active recording session');
+		}
+		return this.session;
+	}
+
+	/**
+	 * Reports save progress, skipping updates whose whole percent and
+	 * description did not change. Encoders may emit progress per audio
+	 * frame (hundreds of thousands of calls for a long recording), and
+	 * every accepted update touches the DOM.
+	 * @param percent - Progress percentage (0-100)
+	 * @param description - Progress phase description
+	 */
+	reportProgress(percent: number, description: string): void {
+		const wholePercent = Math.round(percent);
+		if (
+			wholePercent === this.lastProgressPercent &&
+			description === this.lastProgressDescription
+		) {
+			return;
+		}
+		this.lastProgressPercent = wholePercent;
+		this.lastProgressDescription = description;
+		this.onProgress({ percent: wholePercent, description });
+	}
+
+	/**
+	 * Finalizes a stopped recording session: flushes remaining buffers,
+	 * produces the final file(s) - per track or mixed - and inserts the
+	 * note links.
+	 * @param targets - Recording targets of the session
+	 * @param timestamp - Session timestamp for the merged file name
+	 * @param insertionContext - Where to insert the file links
+	 * @returns The written audio paths and the note the links landed in
+	 */
+	async saveRecording(
+		targets: RecordingTarget[],
+		timestamp: string | null,
+		insertionContext: InsertionContext | null,
+	): Promise<RecordingSaveResult> {
+		const session = this.requireSession();
+		const effectiveTimestamp = timestamp ?? sessionTimestamp();
+		const fileLinks: string[] = [];
+		const trackFiles: TrackFileGroup[] = [];
+
+		this.reportProgress(20, 'Flushing buffers...');
+
+		const soloTarget = targets.length === 1 ? targets[0] : undefined;
+		if (session.outputMode === OutputMode.Single) {
+			if (soloTarget) {
+				const paths = await this.finalizeTrackFiles(soloTarget);
+				const files = [...soloTarget.partPaths, ...paths];
+				fileLinks.push(...files);
+				trackFiles.push({ trackIndex: 0, files });
+			} else {
+				if (!session.isWavPcm) {
+					await Promise.all(
+						targets.map((target) =>
+							this.writeQueue.flushChunkBuffer(target),
+						),
+					);
+				}
+				if (session.isWavPcm) {
+					await Promise.all(
+						targets.map((target) =>
+							this.writeQueue.flushPcmBuffer(target),
+						),
+					);
+				}
+				this.reportProgress(40, 'Mixing tracks...');
+				// Computed once from the session snapshot and passed all
+				// the way to the encoder, so the file extension and the
+				// encoded content can never diverge
+				const targetFormat = isOfflineEncodingSupported(
+					session.outputFormat,
+				)
+					? session.outputFormat
+					: FORMAT_WAV;
+				if (
+					targetFormat === FORMAT_WAV &&
+					session.outputFormat !== FORMAT_WAV
+				) {
+					this.debugLogger.log(
+						'Multi-track single output falls back to WAV (encoding unavailable)',
+						{
+							requestedFormat: session.outputFormat,
+						},
+					);
+					new Notice(
+						'Merged multi-track output saved as .wav (encoding unavailable for this format).',
+					);
+				}
+				// PCM sessions mixing to WAV stream from disk in bounded
+				// memory; everything else (compressed outputs, rate
+				// mismatches, MediaRecorder sessions) uses the Web Audio
+				// mix, which is also the platform's resampler
+				let mergedAudio: Blob | null = null;
+				if (session.isWavPcm && targetFormat === FORMAT_WAV) {
+					mergedAudio = await this.tryStreamMixToWav(targets);
+				}
+				mergedAudio ??= await mergeAudioTracks(
+					targets,
+					targetFormat,
+					session.bitrate,
+					session.isWavPcm,
+					(target) => this.buildPcmTrackWavBlob(target),
+					(target) => this.buildTrackBlob(target),
+					(percent, description) => {
+						this.reportProgress(percent, description);
+					},
+					this.mergePlacement(),
+				);
+				this.reportProgress(60, 'Writing file...');
+				const fileName = `${this.settings.filePrefix}-multitrack-${effectiveTimestamp}.${targetFormat}`;
+				const filePath = await saveAudioFile(
+					mergedAudio,
+					fileName,
+					this.app,
+					this.settings,
+				);
+				if (filePath) {
+					this.reportProgress(80, 'Cleaning up...');
+					await this.cleanupTemporarySegments(
+						targets.flatMap((target) => target.segmentPaths),
+						() => cleanupIntermediateFiles(targets, this.app),
+					);
+					fileLinks.push(filePath);
+					// One merged file carries every track's timeline, so all
+					// markers resolve against this single file (part ordinal 0).
+					trackFiles.push({ trackIndex: 0, files: [filePath] });
+				} else {
+					// An empty merged blob writes no final file; the
+					// segment files are the only copy of the captured
+					// audio, so they are kept and reported instead of
+					// being silently orphaned in the vault
+					const keptPaths = targets.flatMap(
+						(target) => target.segmentPaths,
+					);
+					if (keptPaths.length > 0) {
+						console.error(
+							`${PLUGIN_LOG_PREFIX} Merged output was empty; temporary segment files were kept:`,
+							keptPaths,
+						);
+						new Notice(
+							`Merged recording was empty. Temporary track files were kept: ${keptPaths.join(', ')}`,
+						);
+					}
+				}
+			}
+		} else {
+			const refusedTracks: string[] = [];
+			const keptSegments: string[] = [];
+			for (
+				let trackIndex = 0;
+				trackIndex < targets.length;
+				trackIndex++
+			) {
+				const target = targets[trackIndex];
+				if (!target) {
+					continue;
+				}
+				// A track the container cannot hold is that track's problem
+				// and no sibling's: each writes its own file, each faces the
+				// ceiling alone, and a mono track beside a stereo one reaches
+				// it hours later. Letting the first refusal end the loop cost
+				// every track after it a save it had already earned. Only this
+				// one failure is caught, because only this one is about the
+				// track: a vault that will not take the write is about the
+				// session and still ends it.
+				try {
+					const paths = await this.finalizeTrackFiles(target);
+					const files = [...target.partPaths, ...paths];
+					fileLinks.push(...files);
+					trackFiles.push({ trackIndex, files });
+				} catch (error) {
+					if (!(error instanceof WavSizeLimitError)) {
+						throw error;
+					}
+					refusedTracks.push(target.fileBaseName);
+					keptSegments.push(...target.segmentPaths);
+				}
+			}
+			if (refusedTracks.length > 0) {
+				// The refusal happens before the assembly removes anything, so
+				// this track's PCM segments are still on disk and are the only
+				// copy of its audio. Reported the way the merged branch above
+				// reports its own leftovers: the paths to the console, where a
+				// list of them fits, and the reason to the user.
+				console.error(
+					`${PLUGIN_LOG_PREFIX} Track too long for a WAV container; its PCM segments were kept:`,
+					keptSegments,
+				);
+				new Notice(
+					`${refusedTracks.join(', ')}: ${WAV_SIZE_LIMIT_MESSAGE}`,
+				);
+			}
+		}
+
+		let notePath: string | null = null;
+		if (fileLinks.length > 0) {
+			notePath = insertFileLinks(fileLinks, insertionContext, this.app);
+			new Notice(`Saved ${String(fileLinks.length)} audio file(s)`);
+		} else {
+			new Notice('No audio data recorded');
+		}
+		return { audioPaths: fileLinks, notePath, trackFiles };
+	}
+
+	/**
+	 * Builds the final track file name, appending the part suffix when
+	 * the session was auto-split (the residual after the last rotation
+	 * becomes the next part number). Uses the base name snapshotted at
+	 * session start so the residual matches its sibling part files even
+	 * when the file prefix setting changed mid-recording.
+	 * @param target - Recording target
+	 * @param extension - File extension without the dot
+	 */
+	private buildTrackFileName(
+		target: RecordingTarget,
+		extension: string,
+	): string {
+		const session = this.requireSession();
+		if (target.partIndex > 0) {
+			return buildPartFileName(
+				target.fileBaseName,
+				session.partSuffix,
+				target.partIndex + 1,
+				extension,
+			);
+		}
+		return `${target.fileBaseName}.${extension}`;
+	}
+
+	/**
+	 * Finalizes one track into its final file(s) at session stop.
+	 * @param target - Recording target to finalize
+	 * @returns Paths of the created files
+	 */
+	private async finalizeTrackFiles(
+		target: RecordingTarget,
+	): Promise<string[]> {
+		const session = this.requireSession();
+		const fileLinks: string[] = [];
+		if (session.isWavPcm) {
+			this.reportProgress(20, 'Flushing buffers...');
+			await this.writeQueue.flushPcmBuffer(target);
+			if (target.segmentPaths.length === 0) {
+				return fileLinks;
+			}
+			this.reportProgress(40, 'Assembling audio...');
+			const fileName = this.buildTrackFileName(target, FORMAT_WAV);
+			const filePath = await resolveUniquePath(
+				fileName,
+				this.app,
+				this.settings,
+			);
+			this.reportProgress(60, 'Writing file...');
+			await this.assembleWavFile(target, filePath);
+			fileLinks.push(filePath);
+			return fileLinks;
+		}
+
+		const fileName = this.buildTrackFileName(target, session.outputFormat);
+		const filePath = await this.finalizeMediaTrackToFile(
+			target,
+			fileName,
+			true,
+		);
+		if (filePath) {
+			fileLinks.push(filePath);
+		}
+		return fileLinks;
+	}
+
+	/**
+	 * Finalizes buffered MediaRecorder data of one track into a final
+	 * audio file: flushes the chunk buffer to segment files and hands
+	 * them to finalizeSegmentsToFile. Used at stop; part rotation
+	 * finalizes detached snapshots directly instead.
+	 * @param target - Recording target to finalize
+	 * @param fileName - Final file name
+	 * @param reportProgress - Whether to emit save-progress status updates
+	 * @returns Final file path, or null when no audio data is buffered
+	 */
+	private async finalizeMediaTrackToFile(
+		target: RecordingTarget,
+		fileName: string,
+		reportProgress: boolean = false,
+	): Promise<string | null> {
+		await this.writeQueue.flushChunkBuffer(target);
+		const filePath = await this.finalizeSegmentsToFile(
+			target.segmentPaths,
+			fileName,
+			reportProgress,
+		);
+		if (filePath) {
+			target.segmentPaths = [];
+			target.segmentIndex = 0;
+		}
+		return filePath;
+	}
+
+	/**
+	 * Transcodes and writes a list of raw segment files into one final
+	 * audio file in the session output format, then removes the
+	 * temporary segments (segments that cannot be removed are reported
+	 * and left on disk; the final file is always kept). Operates on an
+	 * explicit segment list so part rotation can finalize a detached
+	 * snapshot while the next part is recording.
+	 * @param segmentPaths - Segment files in capture order
+	 * @param fileName - Final file name
+	 * @param reportProgress - Whether to emit save-progress status
+	 * updates (must stay false during rotation: the Saving status would
+	 * tear down the status bar recording controls)
+	 * @returns Final file path, or null when the segments hold no data
+	 */
+	async finalizeSegmentsToFile(
+		segmentPaths: string[],
+		fileName: string,
+		reportProgress: boolean = false,
+	): Promise<string | null> {
+		const session = this.requireSession();
+		if (segmentPaths.length === 0) {
+			return null;
+		}
+		const blob = await this.readSegmentsAsBlob(
+			segmentPaths,
+			session.recorderMimeType,
+		);
+		if (blob.size === 0) {
+			return null;
+		}
+
+		const outputFormat = session.outputFormat;
+		const filePath = await resolveUniquePath(
+			fileName,
+			this.app,
+			this.settings,
+		);
+
+		if (outputFormat === FORMAT_WAV) {
+			if (reportProgress) {
+				this.reportProgress(40, 'Assembling audio...');
+			}
+			const wavData = await convertBlobToWavBuffer(blob, {
+				workerClient: this.getWorkerClient(),
+			});
+			if (reportProgress) {
+				this.reportProgress(60, 'Writing file...');
+			}
+			await this.app.vault.createBinary(filePath, wavData);
+		} else if (isOfflineOnlyFormat(outputFormat, session.recorderFormat)) {
+			// Offline-only format: decode intermediate blob, re-encode to target
+			if (reportProgress) {
+				this.reportProgress(40, 'Encoding audio...');
+			}
+			// A rate change is logged where it is made. The intermediate is
+			// recorded at the device's rate, which the encoders here take.
+			const { data: outputData } = await convertBlobToFormatBuffer(
+				blob,
+				outputFormat,
+				session.bitrate,
+				(percent) => {
+					if (reportProgress) {
+						this.reportProgress(
+							40 + Math.round(percent * 0.2),
+							'Encoding audio...',
+						);
+					}
+				},
+				// The intermediate blob was recorded at the session
+				// bitrate, so a codec-matching remux preserves it
+				{ allowRemux: true, workerClient: this.getWorkerClient() },
+			);
+			if (reportProgress) {
+				this.reportProgress(60, 'Writing file...');
+			}
+			await this.app.vault.createBinary(filePath, outputData);
+		} else {
+			if (reportProgress) {
+				this.reportProgress(60, 'Writing file...');
+			}
+			await this.app.vault.createBinary(
+				filePath,
+				await blob.arrayBuffer(),
+			);
+		}
+
+		if (reportProgress) {
+			this.reportProgress(80, 'Cleaning up...');
+		}
+		await this.cleanupTemporarySegments(segmentPaths, () =>
+			removeTemporaryArtifacts(
+				segmentPaths,
+				'Failed to remove segment file after finalization',
+				this.app,
+			),
+		);
+
+		return filePath;
+	}
+
+	/**
+	 * Assembles the flushed PCM segments of a target into a WAV file
+	 * and removes the consumed segments.
+	 * @param target - Recording target whose segments to assemble
+	 * @param filePath - Path of the WAV file to create
+	 */
+	async assembleWavFile(
+		target: RecordingTarget,
+		filePath: string,
+	): Promise<void> {
+		const wavBuffer = await assembleWavFromPcmSegmentFiles(
+			target.segmentPaths,
+			target.pcmChannels,
+			target.pcmSampleRate,
+			this.app,
+			target.pcmFormat,
+		);
+
+		await this.app.vault.createBinary(filePath, wavBuffer);
+
+		await this.cleanupTemporarySegments(target.segmentPaths, () =>
+			removeTemporaryArtifacts(
+				target.segmentPaths,
+				'Failed to remove PCM segment file after WAV assembly',
+				this.app,
+			),
+		);
+	}
+
+	/**
+	 * Removes a finished session's temporary segments, strikes the ones that
+	 * went from the recovery journal, and reports the ones that stayed.
+	 *
+	 * The saved file is kept whatever happens here. It already contains all
+	 * captured audio, while a segment that was removed exists nowhere else, so
+	 * rolling the file back would lose that audio permanently and leave part
+	 * bookkeeping pointing at files that are gone. A segment that refused to go
+	 * stays journaled instead, and the next launch offers it for recovery.
+	 * @param paths - Segment paths the removal was asked to take
+	 * @param remove - Removal to run, which answers with the paths it could not
+	 * take
+	 */
+	private async cleanupTemporarySegments(
+		paths: readonly string[],
+		remove: () => Promise<string[]>,
+	): Promise<void> {
+		const failedPaths = await remove();
+		this.journal.removeSegments(
+			paths.filter((path) => !failedPaths.includes(path)),
+		);
+		if (failedPaths.length > 0) {
+			console.error(
+				`${PLUGIN_LOG_PREFIX} Temporary segment files could not be removed:`,
+				failedPaths,
+			);
+			new Notice(
+				`Recording saved, but temporary files could not be removed: ${failedPaths.join(', ')}`,
+			);
+		}
+	}
+
+	/**
+	 * Where this session's tracks sit in a merged file, in the terms the Web
+	 * Audio merge takes them.
+	 *
+	 * Derived from the rules the streaming mixer applies rather than written
+	 * again, so a session is placed the same by either route: the level in
+	 * decibels through {@link gainFactor}, the position through the balance law
+	 * of {@link panGains}, and the alignment through {@link normalizeFactor}.
+	 * Only the unit differs, because the mixer reads a level on the scale the
+	 * captured representation works in while a decoded buffer is always a share
+	 * of full scale, which is why the level is put on the sixteen-bit scale
+	 * {@link normalizeFactor} answers on by default.
+	 *
+	 * The placement is the same; the final level is not, once levels are
+	 * aligned. This route renders the mix and measures the peak it actually
+	 * reached, while the streaming one cannot: its measuring pass runs before
+	 * the alignment figures exist, so it bounds the sum by the tracks' separate
+	 * peaks and comes out quieter by however far apart they peak. Closing that
+	 * would cost the streaming route a third full read of the session, which is
+	 * the memory-bounded route's whole reason for existing.
+	 * @returns The placement for this session's merge
+	 */
+	private mergePlacement(): MergePlacement {
+		const session = this.requireSession();
+		return {
+			levels: session.trackMix.map((mix) => {
+				const level = gainFactor(mix.gainDb);
+				const pan = panGains(mix.pan);
+				return {
+					left: level * pan.left,
+					right: level * pan.right,
+				};
+			}),
+			...(session.alignTrackLevels
+				? {
+						normalize: (rms: number): number =>
+							normalizeFactor(rms * INT16_MAX),
+					}
+				: {}),
+		};
+	}
+
+	/**
+	 * Attempts the bounded-memory streaming mix of flushed PCM tracks
+	 * into a WAV blob. Returns null when the tracks cannot be
+	 * stream-mixed (rate mismatch, no data, adapter without stat) or
+	 * the mix fails - the caller then uses the Web Audio path.
+	 * @param targets - Recording targets with flushed PCM segments
+	 * @returns Mixed WAV blob, or null to fall back
+	 */
+	private async tryStreamMixToWav(
+		targets: RecordingTarget[],
+	): Promise<Blob | null> {
+		const session = this.requireSession();
+		const tracks = targets
+			// The placement is read before the filter, because it is aligned
+			// with the session's tracks and a track that flushed nothing must
+			// not shift the one after it into its place.
+			.map((target, index) => ({
+				segmentPaths: target.segmentPaths,
+				channels: target.pcmChannels,
+				sampleRate: target.pcmSampleRate,
+				...(session.trackMix[index] ?? {}),
+			}))
+			.filter((track) => track.segmentPaths.length > 0);
+		if (!canStreamMix(tracks)) {
+			this.debugLogger.log('Mixing through the Web Audio route', {
+				reason: 'the streaming mixer does not take these tracks',
+				tracks: tracks.length,
+			});
+			return null;
+		}
+		try {
+			const wavBuffer = await mixPcmTracksToWav(tracks, this.app, {
+				onProgress: (percent) => {
+					this.reportProgress(
+						40 + Math.round(percent * 0.2),
+						'Mixing tracks...',
+					);
+				},
+				alignLevels: session.alignTrackLevels,
+				format: session.pcmFormat,
+			});
+			this.debugLogger.log('Mixed through the streaming route', {
+				tracks: tracks.length,
+				alignLevels: session.alignTrackLevels,
+			});
+			return new Blob([wavBuffer], {
+				type: audioMimeForExtension(FORMAT_WAV),
+			});
+		} catch (error) {
+			// The one failure the fallback cannot answer. Every other reason
+			// the streaming mix gives up is a property of the route - a rate
+			// mismatch, an adapter without stat - and the Web Audio mix takes
+			// another route to the same file. The container ceiling is a
+			// property of the audio: that mix encodes through mediabunny,
+			// which is outside the check entirely, so it would spend the
+			// decode only to write a file whose stated sizes have wrapped.
+			// The refusal names auto-split, which is what the user can act on.
+			if (error instanceof WavSizeLimitError) {
+				throw error;
+			}
+			console.warn(
+				`${PLUGIN_LOG_PREFIX} Streaming mix failed, falling back to the Web Audio mix:`,
+				error,
+			);
+			return null;
+		}
+	}
+
+	/**
+	 * Builds a WAV blob from the flushed PCM segments of a target,
+	 * flushing any remaining buffered PCM data first.
+	 * @param target - Recording target
+	 * @returns WAV blob, or null when the target holds no audio
+	 */
+	private async buildPcmTrackWavBlob(
+		target: RecordingTarget,
+	): Promise<Blob | null> {
+		if (
+			target.segmentPaths.length === 0 &&
+			target.pcmBuffers.length === 0
+		) {
+			return null;
+		}
+
+		await this.writeQueue.flushPcmBuffer(target);
+
+		if (target.segmentPaths.length === 0) {
+			return null;
+		}
+
+		const wavBuffer = await assembleWavFromPcmSegmentFiles(
+			target.segmentPaths,
+			target.pcmChannels,
+			target.pcmSampleRate,
+			this.app,
+			target.pcmFormat,
+		);
+		return new Blob([wavBuffer], {
+			type: audioMimeForExtension(FORMAT_WAV),
+		});
+	}
+
+	/**
+	 * Builds a single blob from the flushed segments and remaining
+	 * buffered chunks of a MediaRecorder target.
+	 * @param target - Recording target
+	 * @returns Combined blob, or null when the target holds no audio
+	 */
+	private async buildTrackBlob(
+		target: RecordingTarget,
+	): Promise<Blob | null> {
+		const session = this.requireSession();
+		if (
+			target.segmentPaths.length === 0 &&
+			target.bufferedChunks.length === 0
+		) {
+			return null;
+		}
+
+		const type = session.recorderMimeType;
+		const blob = await this.readSegmentsAsBlob(target.segmentPaths, type);
+
+		return new Blob([blob, ...target.bufferedChunks], { type });
+	}
+
+	/**
+	 * Reads segment files sequentially and accumulates them into one
+	 * Blob. Appending each segment to a growing Blob (a lazy
+	 * concatenation in Chromium) keeps at most one raw segment buffer
+	 * alive at a time, instead of fanning out every read at once and
+	 * holding the whole recording as ArrayBuffers.
+	 * @param segmentPaths - Segment files in capture order
+	 * @param type - MIME type for the resulting Blob
+	 * @returns Concatenated segment data
+	 */
+	private async readSegmentsAsBlob(
+		segmentPaths: string[],
+		type: string,
+	): Promise<Blob> {
+		let blob = new Blob([], { type });
+		for (const path of segmentPaths) {
+			const segment = await this.app.vault.adapter.readBinary(path);
+			blob = new Blob([blob, segment], { type });
+		}
+		return blob;
+	}
+}

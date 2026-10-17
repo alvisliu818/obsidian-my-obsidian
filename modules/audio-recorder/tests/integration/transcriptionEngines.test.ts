@@ -1,0 +1,452 @@
+/**
+ * Tests for the transcription engine registry: it must describe every engine id
+ * the settings can hold, and the cost model, labels, factory, and dictionary
+ * planner must all resolve an engine through it rather than falling through to
+ * the Whisper API for an id they do not recognise.
+ */
+
+import {
+	TRANSCRIPTION_ENGINE_IDS,
+	TRANSCRIPTION_ENGINES,
+	createTranscriptionProvider,
+	localWhisperTimeoutMs,
+	matchRate,
+	selectedTranscriptionEngine,
+	transcriptionEngine,
+} from 'src/transcription/providers/engines';
+import { ProviderConfigError } from 'src/transcription/providerConfigError';
+import {
+	DEEPGRAM_MODEL_SUGGESTIONS,
+	DEFAULT_LOCAL_WHISPER_TIMEOUT_MINUTES,
+	GEMINI_MODEL_SUGGESTIONS,
+	VOXTRAL_MODEL_SUGGESTIONS,
+	MAX_LOCAL_WHISPER_TIMEOUT_MINUTES,
+	MIN_LOCAL_WHISPER_TIMEOUT_MINUTES,
+	MS_PER_MINUTE,
+	TRANSCRIPTION_PROVIDER_IDS,
+	WHISPER_API_MODEL_SUGGESTIONS,
+} from 'src/constants';
+import { mergeSettings } from 'src/settings/settingsSerialization';
+import {
+	resolveEnginePricing,
+	selectedEngineModel,
+} from 'src/transcription/costs';
+import {
+	TRANSCRIPTION_PROVIDER_LABELS,
+	TRANSCRIPTION_PROVIDER_OPTIONS,
+	TRANSCRIPTION_PROVIDER_PRICING_URLS,
+} from 'src/settings/labels';
+import { providerBiasChannel } from 'src/transcription/providers/capabilities';
+import { advancedBiasChannel } from 'src/transcription/advanced/advancedBias';
+import { transcriptionRefusal } from 'src/settings/settingsAttention';
+import { useMobilePlatform } from '../helpers/platform';
+import { installNodeSurface } from '../helpers/nodeSurface';
+import {
+	ENGINE_IDS,
+	engineAccess,
+	missingModelMessage,
+	type EngineDescriptor,
+	type EngineId,
+	type ProviderConnection,
+} from 'src/providers/providers';
+import type {
+	AudioRecorderSettings,
+	TranscriptionProviderId,
+} from 'src/settings/settingsSchema';
+import { defined } from '../helpers/assertions';
+
+/** The engines a transcription run reaches over an account. */
+const CLOUD_ENGINES: EngineId[] = [
+	ENGINE_IDS.WHISPER_API,
+	ENGINE_IDS.DEEPGRAM,
+	ENGINE_IDS.GEMINI,
+	ENGINE_IDS.VOXTRAL,
+];
+
+/**
+ * The transcription id a registry engine is stored under, asserted rather than
+ * assumed so a mis-declared engine fails here instead of silently testing the
+ * wrong one.
+ * @param engine - The engine being addressed
+ */
+const transcriptionIdOf = (
+	engine: EngineDescriptor,
+): TranscriptionProviderId => {
+	if (!engine.transcriptionId) {
+		throw new Error(`Engine "${engine.id}" does not transcribe`);
+	}
+	return engine.transcriptionId;
+};
+
+/** Every id the settings type admits, listed independently of the registry. */
+const EVERY_ENGINE_ID: TranscriptionProviderId[] = [
+	TRANSCRIPTION_PROVIDER_IDS.WHISPER_API,
+	TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM,
+	TRANSCRIPTION_PROVIDER_IDS.GEMINI,
+	TRANSCRIPTION_PROVIDER_IDS.VOXTRAL,
+	TRANSCRIPTION_PROVIDER_IDS.LOCAL_WHISPER,
+];
+
+/**
+ * Settings that select one cloud engine with its key field emptied, which is
+ * the starting point of both key questions: whether the run is refused, and
+ * whether a repointed endpoint makes the refusal wrong.
+ * @param engineId - The cloud engine to select
+ * @returns The engine, its account, and the settings selecting it
+ */
+function selectedWithNoKey(engineId: EngineId): {
+	engine: EngineDescriptor;
+	account: ProviderConnection;
+	settings: AudioRecorderSettings;
+} {
+	const { engine, account } = engineAccess(engineId);
+	const settings = mergeSettings({
+		transcriptionProvider: transcriptionIdOf(engine),
+	});
+	account.setApiKey(settings, '');
+	return { engine, account, settings };
+}
+
+describe('transcription engine registry', () => {
+	it('describes every engine id', () => {
+		expect(TRANSCRIPTION_ENGINE_IDS.slice().sort()).toEqual(
+			EVERY_ENGINE_ID.slice().sort(),
+		);
+		for (const id of EVERY_ENGINE_ID) {
+			expect(transcriptionEngine(id).id).toBe(id);
+		}
+	});
+
+	it('reads a cloud engine field set from the provider registry alone', () => {
+		// The descriptor used to mirror the endpoint, the key, and the
+		// catalogue that the registry already declares, and nothing outside
+		// its own tests ever read the copy.
+		const settings = mergeSettings();
+		for (const id of CLOUD_ENGINES) {
+			const { account, models } = engineAccess(id);
+			account.setBaseUrl(settings, `url-${id}`);
+			account.setApiKey(settings, `key-${id}`);
+			models.setModel(settings, `model-${id}`);
+			models.setModels(settings, [`model-${id}`]);
+		}
+		// Writing every engine's fields must not have them overwrite each other.
+		for (const id of CLOUD_ENGINES) {
+			const { account, models } = engineAccess(id);
+			expect(account.baseUrl(settings)).toBe(`url-${id}`);
+			expect(account.apiKey(settings)).toBe(`key-${id}`);
+			expect(models.models(settings)).toEqual([`model-${id}`]);
+			expect(models.model(settings)).toBe(`model-${id}`);
+		}
+	});
+
+	it('reaches the two OpenAI engines through one account', () => {
+		// Whisper ids and chat ids are different catalogues over one endpoint
+		// and one key, which is why the key is entered once and read twice.
+		const speech = engineAccess(ENGINE_IDS.WHISPER_API);
+		const chat = engineAccess(ENGINE_IDS.OPENAI_LLM);
+
+		expect(chat.account).toBe(speech.account);
+		expect(chat.models).not.toBe(speech.models);
+	});
+
+	it('treats the local engine as free with no billed model or account', () => {
+		const engine = transcriptionEngine(
+			TRANSCRIPTION_PROVIDER_IDS.LOCAL_WHISPER,
+		);
+		expect(engine.pricingUrl).toBeUndefined();
+		expect(engine.model(mergeSettings())).toBe('');
+		expect(engine.pricing('anything')).toEqual({ kind: 'free' });
+		expect(() => engineAccess(ENGINE_IDS.LOCAL_WHISPER)).toThrow(
+			/not reached over an account/,
+		);
+	});
+});
+
+describe('registry-derived consumers stay in step', () => {
+	it('derives the labels, options, and pricing URLs from the registry', () => {
+		for (const id of TRANSCRIPTION_ENGINE_IDS) {
+			expect(TRANSCRIPTION_PROVIDER_LABELS[id]).toBe(
+				TRANSCRIPTION_ENGINES[id].label,
+			);
+			expect(TRANSCRIPTION_PROVIDER_PRICING_URLS[id]).toBe(
+				TRANSCRIPTION_ENGINES[id].pricingUrl,
+			);
+		}
+		expect(TRANSCRIPTION_PROVIDER_OPTIONS.map((o) => o.value)).toEqual(
+			TRANSCRIPTION_ENGINE_IDS,
+		);
+	});
+
+	it('prices and selects the model of the engine actually configured', () => {
+		for (const id of TRANSCRIPTION_ENGINE_IDS) {
+			const engine = TRANSCRIPTION_ENGINES[id];
+			const settings = mergeSettings({ transcriptionProvider: id });
+			expect(selectedEngineModel(settings, id)).toBe(
+				engine.model(settings),
+			);
+			expect(selectedTranscriptionEngine(settings)).toBe(engine);
+			expect(resolveEnginePricing(id, engine.model(settings))).toEqual(
+				engine.pricing(engine.model(settings)),
+			);
+		}
+	});
+
+	it('routes the advanced bias channel through the engine capabilities', () => {
+		for (const id of TRANSCRIPTION_ENGINE_IDS) {
+			expect(advancedBiasChannel(id)).toBe(providerBiasChannel(id));
+		}
+		// Deepgram is the keyword-biased outlier; the rest read a prompt.
+		expect(providerBiasChannel(TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM)).toBe(
+			'keyterm',
+		);
+	});
+
+	it('refuses to build a cloud engine with no key, in the account wording', () => {
+		for (const engineId of CLOUD_ENGINES) {
+			const { account, settings } = selectedWithNoKey(engineId);
+
+			expect(() => createTranscriptionProvider(settings)).toThrow(
+				ProviderConfigError,
+			);
+			// The key is entered on a row the account labels, so the message
+			// names that field rather than the engine that happened to need it.
+			expect(() => createTranscriptionProvider(settings)).toThrow(
+				account.missingKeyMessage,
+			);
+		}
+	});
+
+	// The Base URL row exists so a run can be sent to a compatible endpoint,
+	// and a local one wants no key. Refusing before the client was built left
+	// that endpoint unreachable unless the user typed a decoy key, which then
+	// travelled in a real Authorization header.
+	it("builds a cloud engine with no key once the endpoint is the user's own", () => {
+		for (const engineId of CLOUD_ENGINES) {
+			const { engine, account, settings } = selectedWithNoKey(engineId);
+			account.setBaseUrl(settings, 'http://localhost:1234/v1');
+
+			expect(createTranscriptionProvider(settings).id).toBe(
+				transcriptionIdOf(engine),
+			);
+		}
+	});
+
+	// The refusal a surface with nobody in front of it answers with - the
+	// command line, transcribe-on-save - is a second reading of the same two
+	// facts the factory reads. It was left behind when the key rule moved onto
+	// the endpoint, so a run the factory would have started was refused a
+	// level above it and the local endpoint stayed unreachable that way.
+	it('refuses a run exactly where the factory would refuse to build one', () => {
+		const buildFails = (settings: AudioRecorderSettings): boolean => {
+			try {
+				createTranscriptionProvider(settings);
+				return false;
+			} catch {
+				return true;
+			}
+		};
+		for (const engineId of CLOUD_ENGINES) {
+			const { account, settings } = selectedWithNoKey(engineId);
+			// The refusal answers for the feature as well as the engine, and
+			// a vault with transcription switched off is refused for that
+			// before the key is ever looked at.
+			settings.transcriptionEnabled = true;
+
+			expect(transcriptionRefusal(settings)).toBe(
+				account.missingKeyMessage,
+			);
+			expect(buildFails(settings)).toBe(true);
+
+			account.setBaseUrl(settings, 'http://localhost:1234/v1');
+
+			expect(transcriptionRefusal(settings)).toBeNull();
+			expect(buildFails(settings)).toBe(false);
+		}
+	});
+
+	it('refuses to build a cloud engine whose catalogue holds no model', () => {
+		// A request naming no model cannot succeed; it used to be sent anyway
+		// and fail at the endpoint in the provider's own wording.
+		for (const engineId of CLOUD_ENGINES) {
+			const { engine, account, models } = engineAccess(engineId);
+			const settings = mergeSettings({
+				transcriptionProvider: transcriptionIdOf(engine),
+			});
+			account.setApiKey(settings, 'token');
+			models.setModel(settings, '');
+
+			expect(() => createTranscriptionProvider(settings)).toThrow(
+				missingModelMessage(engine),
+			);
+		}
+	});
+
+	it('builds each configured cloud engine with its own id', () => {
+		for (const engineId of CLOUD_ENGINES) {
+			const { engine, account } = engineAccess(engineId);
+			const id = transcriptionIdOf(engine);
+			const settings = mergeSettings({ transcriptionProvider: id });
+			account.setApiKey(settings, 'token');
+
+			expect(createTranscriptionProvider(settings).id).toBe(id);
+		}
+	});
+
+	describe('the local engine, which is desktop-only', () => {
+		/** Settings selecting local whisper.cpp, with both paths filled. */
+		const configured = (): ReturnType<typeof mergeSettings> =>
+			mergeSettings({
+				transcriptionProvider: TRANSCRIPTION_PROVIDER_IDS.LOCAL_WHISPER,
+				localWhisperBinaryPath: '/bin/whisper',
+				localWhisperModelPath: '/models/ggml.bin',
+			});
+
+		it('refuses to build it on a device that cannot run a binary', () => {
+			useMobilePlatform();
+
+			expect(() => createTranscriptionProvider(configured())).toThrow(
+				`${TRANSCRIPTION_ENGINES[TRANSCRIPTION_PROVIDER_IDS.LOCAL_WHISPER].label} is not available on this device.`,
+			);
+		});
+
+		it.each([
+			{
+				name: 'no binary path',
+				overrides: { localWhisperBinaryPath: '' },
+			},
+			{ name: 'no model path', overrides: { localWhisperModelPath: '' } },
+			{
+				name: 'neither path',
+				overrides: {
+					localWhisperBinaryPath: '',
+					localWhisperModelPath: '',
+				},
+			},
+		])('points at the setup instructions given $name', ({ overrides }) => {
+			const settings = { ...configured(), ...overrides };
+
+			expect(() => createTranscriptionProvider(settings)).toThrow(
+				ProviderConfigError,
+			);
+		});
+
+		// The desktop check is the provider's own: it looks for the Node
+		// modules Obsidian only exposes there, which jsdom does not have.
+		it('refuses to build it where the desktop modules are unreachable', () => {
+			expect(() => createTranscriptionProvider(configured())).toThrow(
+				'Local transcription is only available in the desktop app.',
+			);
+		});
+
+		it('builds it where the desktop modules are reachable', () => {
+			const node = installNodeSurface();
+
+			try {
+				expect(createTranscriptionProvider(configured()).id).toBe(
+					TRANSCRIPTION_PROVIDER_IDS.LOCAL_WHISPER,
+				);
+			} finally {
+				node.restore();
+			}
+		});
+	});
+});
+
+// The row that declares the range is not the only way a value reaches the
+// field: a data.json edited by hand or synced from another install never
+// passes it, and the load path normalises no number it finds there. Node arms
+// no kill timer at all below one millisecond, so an out-of-range value would
+// hand back the unbounded run this setting exists to end, and hand it back
+// without a word - a process nobody kills reports nothing.
+describe('the limit one local whisper.cpp run is given', () => {
+	it('keeps a configured limit as the minutes it names', () => {
+		expect(localWhisperTimeoutMs(30)).toBe(30 * MS_PER_MINUTE);
+	});
+
+	it.each([
+		{ name: 'no limit at all', stored: 0 },
+		{ name: 'a negative limit', stored: -5 },
+		{ name: 'a fraction of a minute', stored: 0.5 },
+	])('bounds $name to something Node will act on', ({ stored }) => {
+		expect(localWhisperTimeoutMs(stored)).toBe(
+			MIN_LOCAL_WHISPER_TIMEOUT_MINUTES * MS_PER_MINUTE,
+		);
+	});
+
+	it('bounds a limit past the ceiling to the ceiling', () => {
+		expect(
+			localWhisperTimeoutMs(MAX_LOCAL_WHISPER_TIMEOUT_MINUTES + 1),
+		).toBe(MAX_LOCAL_WHISPER_TIMEOUT_MINUTES * MS_PER_MINUTE);
+	});
+
+	it.each([
+		{ name: 'a field holding nothing numeric', stored: Number.NaN },
+		{ name: 'a field holding no end', stored: Number.POSITIVE_INFINITY },
+	])('falls back to the default for $name', ({ stored }) => {
+		expect(localWhisperTimeoutMs(stored)).toBe(
+			DEFAULT_LOCAL_WHISPER_TIMEOUT_MINUTES * MS_PER_MINUTE,
+		);
+	});
+});
+
+describe('every seeded model has a built-in rate', () => {
+	// The seed lists and the rate tables are separate data; a model offered in
+	// the picker with no rate shows "no built-in rate" in the cost estimate.
+	const cases: [TranscriptionProviderId, readonly string[]][] = [
+		[TRANSCRIPTION_PROVIDER_IDS.WHISPER_API, WHISPER_API_MODEL_SUGGESTIONS],
+		[TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM, DEEPGRAM_MODEL_SUGGESTIONS],
+		[TRANSCRIPTION_PROVIDER_IDS.GEMINI, GEMINI_MODEL_SUGGESTIONS],
+		[TRANSCRIPTION_PROVIDER_IDS.VOXTRAL, VOXTRAL_MODEL_SUGGESTIONS],
+	];
+	it.each(cases)('prices every seeded %s model', (id, models) => {
+		for (const model of models) {
+			// Not merely "there is a price": the estimate multiplies these
+			// numbers, so a rate of zero or a NaN reads to the user as a free
+			// run they are about to be billed for.
+			const pricing = defined(transcriptionEngine(id).pricing(model));
+			const rates = Object.values(pricing).filter(
+				(value): value is number => typeof value === 'number',
+			);
+
+			expect(rates.length).toBeGreaterThan(0);
+			for (const rate of rates) {
+				expect(rate).toBeGreaterThan(0);
+				expect(Number.isFinite(rate)).toBe(true);
+			}
+		}
+	});
+});
+
+describe('a model no rate card knows', () => {
+	// A model the user typed by hand, or one the vendor shipped after this
+	// release. The estimate must read "no price" rather than invent a zero,
+	// which would show the run as free right before it is billed.
+	it.each([
+		{ engineId: TRANSCRIPTION_PROVIDER_IDS.WHISPER_API },
+		{ engineId: TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM },
+		{ engineId: TRANSCRIPTION_PROVIDER_IDS.GEMINI },
+	])('prices $engineId at nothing at all', ({ engineId }) => {
+		expect(
+			transcriptionEngine(engineId).pricing('made-up-model'),
+		).toBeNull();
+	});
+});
+
+describe('matchRate', () => {
+	it('prefers the longest matching fragment', () => {
+		const rates: [string, number][] = [
+			['whisper-large-v3', 1],
+			['whisper-large-v3-turbo', 2],
+		];
+		expect(matchRate(rates, 'whisper-large-v3-turbo')).toBe(2);
+		expect(matchRate(rates, 'whisper-large-v3')).toBe(1);
+	});
+
+	it('normalizes case and surrounding whitespace', () => {
+		expect(matchRate([['nova-3', 7]], '  NOVA-3  ')).toBe(7);
+	});
+
+	it('returns undefined when nothing matches', () => {
+		expect(matchRate([['nova-3', 7]], 'mystery')).toBeUndefined();
+	});
+});

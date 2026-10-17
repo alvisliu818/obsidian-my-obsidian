@@ -1,0 +1,550 @@
+/**
+ * Everything the player does when its marker window is open.
+ *
+ * The marker window is where a user edits a recording: jumping to a chapter,
+ * renaming one, deleting one, dropping a new one on the seek bar. All of it
+ * reaches the player through closures it hands the marker view and the control
+ * row, and those closures were the largest untested part of the file - a wrong
+ * one silently disconnects an edit while every unit suite stays green.
+ * @module tests/integration/AudioPlayer.markers.test
+ */
+
+import { AudioPlayer } from 'src/player/AudioPlayer';
+import {
+	getPlayerEmbedActions,
+	type PlayerEmbedActions,
+} from 'src/player/playerEmbedActions';
+import { WaveformPeakCache } from 'src/player/WaveformData';
+import type { ResolvedPlayerSettings } from 'src/player/playerSettings';
+import type { PlayerMarker } from 'src/markers/markerModel';
+import { at } from '../helpers/assertions';
+import { tick } from '../helpers/async';
+import { allEls, clickControl, control, el, maybeEl } from '../helpers/dom';
+import { noticeMessages } from '../mocks/obsidian';
+import { MARKER, PLAYER } from '../helpers/selectors';
+import {
+	app,
+	decoder,
+	makeContainer,
+	makeEditableContainer,
+	makeFakeAudio,
+	makeFile,
+	makeMarkerStore,
+	makeRegistry,
+	type FakeAudio,
+} from '../helpers/audioPlayerHarness';
+
+const WITH_MARKERS: ResolvedPlayerSettings = {
+	showWaveform: false,
+	enableMarkers: true,
+	skipSeconds: 10,
+};
+
+const MARKERS: PlayerMarker[] = [
+	{ id: 'a', time: 10, label: 'Intro', kind: 'chapter' },
+	{ id: 'b', time: 30, label: 'Question', kind: 'bookmark' },
+];
+
+/** What a rendered player hands a test to drive and observe it. */
+interface OpenPlayer {
+	player: AudioPlayer;
+	container: HTMLElement;
+	audio: FakeAudio;
+	store: ReturnType<typeof makeMarkerStore>;
+}
+
+/** A rendered player in reading view, where the whole row is the jump target. */
+async function openReadingWithMarkers(
+	markers: PlayerMarker[] = MARKERS,
+): Promise<OpenPlayer> {
+	return openWithMarkers(markers, makeContainer());
+}
+
+/**
+ * A rendered player with the given markers already stored, in edit mode
+ * unless the caller supplies a container of its own.
+ * @param markers - What the store holds for this recording
+ * @param host - The element the player renders into
+ * @returns The player and what a test drives it through
+ */
+async function openWithMarkers(
+	markers: PlayerMarker[] = MARKERS,
+	host: HTMLElement = makeEditableContainer(),
+): Promise<OpenPlayer> {
+	const audio = makeFakeAudio();
+	audio.duration = 60;
+	const store = makeMarkerStore();
+	store.data.set('rec.wav', [...markers]);
+	const container = host;
+	const player = new AudioPlayer(
+		container,
+		app,
+		makeFile(1000, 'wav'),
+		WITH_MARKERS,
+		makeRegistry(audio),
+		new WaveformPeakCache(),
+		decoder,
+		store,
+		{ startSeconds: null, sourcePath: 'note.md', immediate: true },
+	);
+	// load(), not onload(): Component only runs its registered teardowns when
+	// it believes it was loaded, so a test that unloads needs the real pair.
+	player.load();
+	await tick();
+	return { player, container, audio, store };
+}
+
+afterEach(() => {
+	document.body.innerHTML = '';
+});
+
+describe('the marker list', () => {
+	it('shows a row per stored marker', async () => {
+		const { container } = await openWithMarkers();
+
+		expect(allEls(container, MARKER.row)).toHaveLength(2);
+	});
+
+	it('jumps to a marker without starting playback', async () => {
+		// A jump from the list is navigation; a paused player must stay
+		// paused, or reading through a transcript starts the audio.
+		const { container, audio } = await openWithMarkers();
+
+		el(container, '[data-action="jump"][data-marker-id="b"]').dispatchEvent(
+			new MouseEvent('click', { bubbles: true }),
+		);
+
+		expect(audio.currentTime).toBe(30);
+		expect(audio.play).not.toHaveBeenCalled();
+	});
+
+	it('deletes a marker from the store', async () => {
+		const { container, store } = await openWithMarkers();
+
+		el(
+			container,
+			'[data-action="delete"][data-marker-id="a"]',
+		).dispatchEvent(new MouseEvent('click', { bubbles: true }));
+		await tick();
+
+		expect((store.data.get('rec.wav') ?? []).map((m) => m.id)).toEqual([
+			'b',
+		]);
+	});
+
+	it('renames a marker in the store', async () => {
+		const { container, store } = await openWithMarkers();
+		const input = el<HTMLInputElement>(container, MARKER.labelOf('b'));
+
+		input.value = 'Follow-up';
+		input.dispatchEvent(new Event('change', { bubbles: true }));
+		await tick();
+
+		expect(at(store.data.get('rec.wav') ?? [], 1).label).toBe('Follow-up');
+	});
+
+	it('drops a new bookmark where the seek bar was double-clicked', async () => {
+		const { container, store } = await openWithMarkers();
+		const seek = el(container, PLAYER.seek);
+		seek.getBoundingClientRect = (): DOMRect =>
+			({ left: 0, width: 100, top: 0, height: 10 }) as DOMRect;
+
+		seek.dispatchEvent(
+			new MouseEvent('dblclick', { clientX: 50, bubbles: true }),
+		);
+		await tick();
+
+		expect(store.data.get('rec.wav')).toHaveLength(3);
+	});
+
+	it('puts a tick on the seek bar for every marker', async () => {
+		const { container } = await openWithMarkers();
+
+		expect(container).toHaveMarkerAt(10, 'Intro');
+		expect(container).toHaveMarkerAt(30, 'Question');
+	});
+
+	it('shows the new tick as soon as a marker is added', async () => {
+		// The list and the overlay are refreshed by two different callbacks;
+		// only one of them firing leaves the seek bar a marker behind.
+		const { container, player } = await openWithMarkers();
+
+		player.reloadMarkers();
+		await tick();
+
+		expect(allEls(container, PLAYER.tick)).toHaveLength(2);
+	});
+
+	it('reads no markers after the player is gone', async () => {
+		// A sidecar write can land just after a note is closed; re-reading it
+		// into a detached player would rebuild DOM nobody will ever see.
+		const { player, store } = await openWithMarkers();
+		player.unload();
+		jest.mocked(store.getMarkers).mockClear();
+
+		player.reloadMarkers();
+		await tick();
+
+		expect(store.getMarkers).not.toHaveBeenCalled();
+	});
+
+	it('takes the list document listeners away when the player unloads', async () => {
+		// A marker row is closed by click and keyup listeners on the document,
+		// which outlives the player. A capture listener is removed only by a
+		// call that names capture as well, so an unload has to hand back
+		// exactly what the list added, or every later click in the window
+		// still walks the rows of a player nobody shows.
+		const added = jest.spyOn(document, 'addEventListener');
+		const removed = jest.spyOn(document, 'removeEventListener');
+		const { player } = await openWithMarkers();
+		// Other capture listeners can be added on the first render in a run,
+		// once for the whole document, so only the list's two are picked out
+		const captured = added.mock.calls.filter(
+			([type, , options]) =>
+				(type === 'click' || type === 'keyup') && options === true,
+		);
+		expect(captured.map(([type]) => type)).toEqual(['click', 'keyup']);
+
+		player.unload();
+
+		for (const [type, listener] of captured) {
+			expect(removed).toHaveBeenCalledWith(type, listener, true);
+		}
+	});
+
+	it('reads no markers while the marker window is off', async () => {
+		const { player, store } = await openWithMarkers();
+		player.applySettings({
+			showWaveform: false,
+			enableMarkers: false,
+			skipSeconds: 10,
+		});
+		jest.mocked(store.getMarkers).mockClear();
+
+		player.reloadMarkers();
+		await tick();
+
+		expect(store.getMarkers).not.toHaveBeenCalled();
+	});
+});
+
+// Reading view is where a recording is listened to rather than edited, and
+// where the whole row is the jump target. It used to be a block element with a
+// data attribute on it: tab skipped it and Enter did nothing, so the chapters
+// of a recording could only be reached with a pointer. Driven here against the
+// real audio element, because what has to move is the playback position and
+// not a callback.
+describe('reaching a chapter from the keyboard in reading view', () => {
+	it('offers the marker row as a focusable control', async () => {
+		const { container } = await openReadingWithMarkers();
+
+		const row = el(container, MARKER.byId('b'));
+		row.focus();
+
+		expect(document.activeElement).toBe(row);
+	});
+
+	it('moves the playback position when a focused row is activated', async () => {
+		const { container, audio } = await openReadingWithMarkers();
+		const row = el(container, MARKER.byId('b'));
+
+		row.focus();
+		// What Enter and Space do to a focused button, which is the whole
+		// reason the row is one.
+		row.click();
+
+		expect(audio.currentTime).toBe(30);
+		expect(audio.play).not.toHaveBeenCalled();
+	});
+
+	// Driven through the real audio element rather than through updateActive,
+	// because the mark has to follow the position the element reports as it
+	// plays. A row announced by name alone told a listener which chapters
+	// exist and never which one they were in.
+	it('marks the chapter the position is inside as the audio plays', async () => {
+		const { container, audio } = await openReadingWithMarkers();
+
+		audio.currentTime = 15;
+		audio.emit('timeupdate');
+
+		expect(
+			el(container, MARKER.byId('a')).getAttribute('aria-current'),
+		).toBe('true');
+		expect(
+			el(container, MARKER.byId('b')).hasAttribute('aria-current'),
+		).toBe(false);
+	});
+
+	it('moves the mark on as the position reaches the next chapter', async () => {
+		const { container, audio } = await openReadingWithMarkers();
+
+		audio.currentTime = 15;
+		audio.emit('timeupdate');
+		audio.currentTime = 45;
+		audio.emit('timeupdate');
+
+		expect(
+			el(container, MARKER.byId('a')).hasAttribute('aria-current'),
+		).toBe(false);
+		expect(
+			el(container, MARKER.byId('b')).getAttribute('aria-current'),
+		).toBe('true');
+	});
+});
+
+describe('the chapter controls', () => {
+	it.each([
+		{ name: 'Next chapter', from: 0, expected: 10 },
+		{ name: 'Previous chapter', from: 35, expected: 10 },
+	])('$name moves to $expected seconds', async ({ name, from, expected }) => {
+		const { container, audio } = await openWithMarkers();
+		audio.currentTime = from;
+
+		clickControl(container, name);
+
+		expect(audio.currentTime).toBe(expected);
+	});
+
+	it('mutes and unmutes from the control row', async () => {
+		const { container, audio } = await openWithMarkers();
+
+		clickControl(container, 'Mute / unmute');
+
+		expect(audio.muted).toBe(true);
+	});
+
+	it('shows a pause icon once the audio starts, whoever started it', async () => {
+		// The same file can be playing from another pane; the button follows
+		// the element, not this player's own click.
+		const { container, audio } = await openWithMarkers();
+
+		audio.paused = false;
+		audio.emit('play');
+
+		expect(
+			control(container, 'Play / pause').getAttribute('data-icon'),
+		).toBe('pause');
+	});
+
+	it.each(['pause', 'ended'])(
+		'shows a play icon again on %s',
+		async (event) => {
+			const { container, audio } = await openWithMarkers();
+			audio.paused = false;
+			audio.emit('play');
+
+			audio.paused = true;
+			audio.emit(event);
+
+			expect(
+				control(container, 'Play / pause').getAttribute('data-icon'),
+			).toBe('play');
+		},
+	);
+
+	it('follows the position as the audio plays', async () => {
+		const { container, audio } = await openWithMarkers();
+
+		audio.currentTime = 25;
+		audio.emit('timeupdate');
+
+		expect(container).toShowTime('0:25 / 1:00');
+	});
+});
+
+describe('the actions the note context menu offers', () => {
+	/** The embed actions the player published on its container. */
+	function actionsOn(container: HTMLElement): PlayerEmbedActions {
+		return getPlayerEmbedActions(container) as PlayerEmbedActions;
+	}
+
+	// What the menu does at the point it reads off the player is the
+	// position actions' own business, tested with them; the player only says
+	// where the point is and whether a marker may go there.
+	it('offers marker creation in an editable note', async () => {
+		const { container } = await openWithMarkers();
+
+		expect(actionsOn(container).markersEnabled).toBe(true);
+	});
+
+	it('reads a position off the seek bar for the menu', async () => {
+		const { container } = await openWithMarkers();
+		const seek = el(container, PLAYER.seek);
+		seek.getBoundingClientRect = (): DOMRect =>
+			({ left: 0, width: 100, top: 0, height: 10 }) as DOMRect;
+
+		expect(actionsOn(container).timeAtClientX(50)).toBe(30);
+	});
+
+	it('starts and stops playback from the menu', async () => {
+		const { container, audio } = await openWithMarkers();
+
+		actionsOn(container).togglePlayback();
+
+		expect(audio.play).toHaveBeenCalled();
+	});
+});
+
+describe('a length the container never carried', () => {
+	it('probes for the real one instead of leaving the timeline at zero', async () => {
+		// A webm written by MediaRecorder carries no duration until it is
+		// fully read; the element reports Infinity and every timestamp in the
+		// player would be wrong.
+		const { container, audio } = await openWithMarkers();
+		audio.duration = Number.POSITIVE_INFINITY;
+
+		audio.emit('loadedmetadata');
+
+		expect(audio.currentTime).toBeGreaterThan(1e100);
+		expect(maybeEl(container, PLAYER.time)).not.toBeNull();
+	});
+});
+
+describe('jumping between chapters at the edges', () => {
+	it('stays put when there is no chapter after the position', async () => {
+		// Past the last chapter there is nowhere to go; jumping to the end
+		// would look like the button skipped the rest of the recording.
+		const { container, audio } = await openWithMarkers();
+		audio.currentTime = 55;
+
+		clickControl(container, 'Next chapter');
+
+		expect(audio.currentTime).toBe(55);
+	});
+
+	it('goes back to the start when there is no chapter before the position', async () => {
+		const { container, audio } = await openWithMarkers();
+		audio.currentTime = 5;
+
+		clickControl(container, 'Previous chapter');
+
+		expect(audio.currentTime).toBe(0);
+	});
+
+	it('unmutes when the volume is raised off zero', async () => {
+		// Dragging the slider up is how a muted player is expected to come
+		// back; leaving it muted makes the slider look broken.
+		const { container, audio } = await openWithMarkers();
+		audio.muted = true;
+		const volume = el<HTMLInputElement>(container, PLAYER.volume);
+
+		volume.value = '0.6';
+		volume.dispatchEvent(new Event('input'));
+
+		expect(audio.volume).toBe(0.6);
+		expect(audio.muted).toBe(false);
+	});
+});
+
+describe('moving, noting and colouring a marker from the list', () => {
+	/** Commits a value into one of a row's fields. */
+	function commit(
+		container: HTMLElement,
+		selector: string,
+		index: number,
+		value: string,
+	): void {
+		const field = at(
+			allEls<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+				container,
+				selector,
+			),
+			index,
+		);
+		field.value = value;
+		field.dispatchEvent(new Event('change', { bubbles: true }));
+	}
+
+	it('moves a marker to a typed time and stores it there', async () => {
+		const { container, store } = await openWithMarkers();
+
+		commit(container, MARKER.timeEdit, 0, '0:45');
+		await tick();
+
+		expect(store.data.get('rec.wav')?.find((m) => m.id === 'a')?.time).toBe(
+			45,
+		);
+	});
+
+	it('refuses a time past the end of the recording and says so', async () => {
+		const { container, store } = await openWithMarkers();
+
+		// The recording is sixty seconds; ninety is not a place in it.
+		commit(container, MARKER.timeEdit, 0, '1:30');
+		await tick();
+
+		expect(store.data.get('rec.wav')?.find((m) => m.id === 'a')?.time).toBe(
+			10,
+		);
+		expect(noticeMessages()).toContainEqual(
+			expect.stringContaining('outside the recording'),
+		);
+	});
+
+	it('moves a marker to where playback currently is', async () => {
+		const { container, audio, store } = await openWithMarkers();
+		audio.currentTime = 22;
+
+		at(allEls(container, MARKER.here), 0).click();
+		await tick();
+
+		expect(store.data.get('rec.wav')?.find((m) => m.id === 'a')?.time).toBe(
+			22,
+		);
+	});
+
+	it('stores a note typed against a marker', async () => {
+		const { container, store } = await openWithMarkers();
+
+		commit(container, MARKER.note, 0, 'the bit about pricing');
+		await tick();
+
+		expect(store.data.get('rec.wav')?.find((m) => m.id === 'a')?.note).toBe(
+			'the bit about pricing',
+		);
+	});
+
+	it('stores a colour chosen for a marker', async () => {
+		const { container, store } = await openWithMarkers();
+
+		commit(container, MARKER.color, 0, 'blue');
+		await tick();
+
+		expect(
+			store.data.get('rec.wav')?.find((m) => m.id === 'a')?.color,
+		).toBe('blue');
+	});
+
+	it('clears a colour when the empty choice is made', async () => {
+		const { container, store } = await openWithMarkers([
+			{
+				id: 'a',
+				time: 10,
+				label: 'Intro',
+				kind: 'chapter',
+				color: 'red',
+			},
+		]);
+
+		commit(container, MARKER.color, 0, '');
+		await tick();
+
+		expect(
+			store.data.get('rec.wav')?.find((m) => m.id === 'a'),
+		).not.toHaveProperty('color');
+	});
+
+	it('accepts any time while the recording length is still unknown', async () => {
+		const { container, audio, store } = await openWithMarkers();
+		// A webm written by MediaRecorder carries no duration until it is
+		// probed, and a marker must still be movable in the meantime.
+		audio.duration = Number.NaN;
+
+		commit(container, MARKER.timeEdit, 0, '5:00');
+		await tick();
+
+		expect(store.data.get('rec.wav')?.find((m) => m.id === 'a')?.time).toBe(
+			300,
+		);
+	});
+});

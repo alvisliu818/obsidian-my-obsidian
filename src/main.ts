@@ -38,6 +38,7 @@ import OmnisearchPlugin from "../modules/omnisearch/src/main";
 import ObsidianGitPlugin from "../modules/obsidian-git/src/main";
 import SaveControlPlugin from "../modules/save-control/src/main";
 import OpenTabSettingsPlugin from "../modules/open-tab-settings/src/main";
+import AudioRecorderPlugin from "../modules/audio-recorder/src/main";
 import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
 
 export default class MyObsidianPlugin extends Plugin {
@@ -169,6 +170,17 @@ export default class MyObsidianPlugin extends Plugin {
 				"标签页打开方式定制：默认新标签页/新窗口打开、防止重复标签页、新标签页分组摆放，可按来源（文件列表/搜索/反链等）分别设置。上游 jesse-r-s-hines（MIT）。",
 			desktopOnly: false,
 			cls: OpenTabSettingsPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Third-party (Anatol Khmialeuski, MIT), kept whole — see
+			// modules/audio-recorder/NOTICE.
+			id: "audio-recorder",
+			legacyId: "advanced-audio-recorder",
+			name: "my Audio Recorder",
+			summary:
+				"库内录音与语音转写：多轨（麦克风+系统声）录音、带书签/章节/波形的高级播放器、格式转换、降噪清理与说话人分离转写（Whisper / Deepgram / Gemini / 本地 whisper.cpp）。上游 Anatol Khmialeuski（MIT）。",
+			desktopOnly: false,
+			cls: AudioRecorderPlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 

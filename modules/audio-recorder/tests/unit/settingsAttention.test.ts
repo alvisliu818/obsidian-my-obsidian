@@ -1,0 +1,635 @@
+/**
+ * Tests the predicates behind the status indicator a page entry carries: which
+ * engines a vault actually calls, whether each of them could run, and the
+ * multi-track state a recording is refused on.
+ * @module tests/unit/settingsAttention.test
+ */
+
+import {
+	engineNeedsSetup,
+	engineSetupReason,
+	engineStatus,
+	enginesInUse,
+	enginesStatus,
+	multiTrackStatus,
+	quickNoteRefusal,
+	transcriptionRefusal,
+} from 'src/settings/settingsAttention';
+import {
+	ENGINES,
+	ENGINE_IDS,
+	missingModelMessage,
+} from 'src/providers/providers';
+import {
+	LOCAL_WHISPER_SETUP_MESSAGE,
+	TRANSCRIPTION_PROVIDER_IDS,
+	LLM_PROVIDER_IDS,
+} from 'src/constants';
+import {
+	DEFAULT_SETTINGS,
+	type AudioRecorderSettings,
+} from 'src/settings/settingsSchema';
+import { setPlatform } from '../helpers/platform';
+import { systemAudioTrack } from '../helpers/settingsFixtures';
+
+/**
+ * Settings for one case, over the shipped defaults.
+ * @param overrides - Fields this case cares about
+ */
+function makeSettings(
+	overrides: Partial<AudioRecorderSettings> = {},
+): AudioRecorderSettings {
+	return { ...DEFAULT_SETTINGS, ...overrides };
+}
+
+describe('engineNeedsSetup', () => {
+	const whisper = ENGINES[ENGINE_IDS.WHISPER_API];
+	const local = ENGINES[ENGINE_IDS.LOCAL_WHISPER];
+
+	it('reports an account engine with no key', () => {
+		expect(
+			engineNeedsSetup(makeSettings({ whisperApiKey: '' }), whisper),
+		).toBe(true);
+	});
+
+	it('reports an account engine whose catalogue holds no choice', () => {
+		expect(
+			engineNeedsSetup(
+				makeSettings({ whisperApiKey: 'sk-1', whisperApiModel: '' }),
+				whisper,
+			),
+		).toBe(true);
+	});
+
+	it('accepts an account engine with both halves', () => {
+		expect(
+			engineNeedsSetup(makeSettings({ whisperApiKey: 'sk-1' }), whisper),
+		).toBe(false);
+	});
+
+	it.each([
+		['neither path', '', ''],
+		['no model file', '/bin/whisper', ''],
+		['no binary', '', '/models/base.bin'],
+	])('reports the local engine with %s', (_case, binary, model) => {
+		expect(
+			engineNeedsSetup(
+				makeSettings({
+					localWhisperBinaryPath: binary,
+					localWhisperModelPath: model,
+				}),
+				local,
+			),
+		).toBe(true);
+	});
+
+	it('accepts the local engine with both paths', () => {
+		expect(
+			engineNeedsSetup(
+				makeSettings({
+					localWhisperBinaryPath: '/bin/whisper',
+					localWhisperModelPath: '/models/base.bin',
+				}),
+				local,
+			),
+		).toBe(false);
+	});
+});
+
+describe('engineSetupReason', () => {
+	// The sentence a run throws, so a caller outside the settings can answer
+	// with the reason rather than starting something that cannot work.
+	it('names the key an account engine is missing', () => {
+		expect(
+			engineSetupReason(
+				makeSettings({ whisperApiKey: '' }),
+				ENGINES[ENGINE_IDS.WHISPER_API],
+			),
+		).toBe('Set the OpenAI API key in settings.');
+	});
+
+	it('names the model a reachable engine has none of', () => {
+		expect(
+			engineSetupReason(
+				makeSettings({ whisperApiKey: 'sk-1', whisperApiModel: '' }),
+				ENGINES[ENGINE_IDS.WHISPER_API],
+			),
+		).toBe(missingModelMessage(ENGINES[ENGINE_IDS.WHISPER_API]));
+	});
+
+	it('names both paths the local engine needs', () => {
+		expect(
+			engineSetupReason(
+				makeSettings({ localWhisperBinaryPath: '/bin/whisper' }),
+				ENGINES[ENGINE_IDS.LOCAL_WHISPER],
+			),
+		).toBe(LOCAL_WHISPER_SETUP_MESSAGE);
+	});
+
+	it('answers with nothing for an engine that could run', () => {
+		expect(
+			engineSetupReason(
+				makeSettings({ whisperApiKey: 'sk-1' }),
+				ENGINES[ENGINE_IDS.WHISPER_API],
+			),
+		).toBeNull();
+	});
+});
+
+describe('transcriptionRefusal', () => {
+	it('refuses while transcription is switched off', () => {
+		expect(
+			transcriptionRefusal(
+				makeSettings({
+					transcriptionEnabled: false,
+					whisperApiKey: 'sk-1',
+				}),
+			),
+		).toBe('Transcription is switched off in settings.');
+	});
+
+	it('refuses an engine this device cannot run', () => {
+		setPlatform({ isMobile: true, isMobileApp: true });
+
+		expect(
+			transcriptionRefusal(
+				makeSettings({
+					transcriptionEnabled: true,
+					transcriptionProvider:
+						TRANSCRIPTION_PROVIDER_IDS.LOCAL_WHISPER,
+					localWhisperBinaryPath: '/bin/whisper',
+					localWhisperModelPath: '/models/base.bin',
+				}),
+			),
+		).toContain('not available on this device');
+	});
+
+	it('refuses an engine that is not configured, in its own words', () => {
+		expect(
+			transcriptionRefusal(
+				makeSettings({
+					transcriptionEnabled: true,
+					whisperApiKey: '',
+				}),
+			),
+		).toBe('Set the OpenAI API key in settings.');
+	});
+
+	it('refuses a stored engine no engine claims', () => {
+		// data.json is a file a sync conflict or a hand edit can leave holding
+		// an id this plugin has no engine for.
+		expect(
+			transcriptionRefusal(
+				makeSettings({
+					transcriptionEnabled: true,
+					transcriptionProvider:
+						'nonesuch' as AudioRecorderSettings['transcriptionProvider'],
+				}),
+			),
+		).toBe(
+			'The selected transcription engine is not one this plugin serves.',
+		);
+	});
+
+	it('answers with nothing where a transcription could run', () => {
+		expect(
+			transcriptionRefusal(
+				makeSettings({
+					transcriptionEnabled: true,
+					whisperApiKey: 'sk-1',
+				}),
+			),
+		).toBeNull();
+	});
+});
+
+describe('enginesInUse', () => {
+	it('is empty where nothing calls an engine', () => {
+		expect(
+			enginesInUse(
+				makeSettings({
+					transcriptionEnabled: false,
+					transcriptionAutoChaptersEnabled: false,
+				}),
+			),
+		).toEqual([]);
+	});
+
+	it('holds the speech engine transcription is set to', () => {
+		expect(
+			enginesInUse(makeSettings({ transcriptionEnabled: true })),
+		).toEqual([ENGINES[ENGINE_IDS.WHISPER_API]]);
+	});
+
+	// data.json is a file a sync conflict or a hand edit can leave holding a
+	// transcription id no engine claims; nothing is called for it.
+	it('holds no speech engine for an id no engine claims', () => {
+		expect(
+			enginesInUse(
+				makeSettings({
+					transcriptionEnabled: true,
+					transcriptionProvider:
+						'nonesuch' as AudioRecorderSettings['transcriptionProvider'],
+				}),
+			),
+		).toEqual([]);
+	});
+
+	it('holds a job engine only while that job is switched on', () => {
+		const off = enginesInUse(
+			makeSettings({
+				transcriptionEnabled: true,
+				llmPostProcessEnabled: false,
+				llmProvider: LLM_PROVIDER_IDS.ANTHROPIC,
+			}),
+		);
+		const on = enginesInUse(
+			makeSettings({
+				transcriptionEnabled: true,
+				llmPostProcessEnabled: true,
+				llmProvider: LLM_PROVIDER_IDS.ANTHROPIC,
+			}),
+		);
+
+		expect(off).not.toContain(ENGINES[ENGINE_IDS.ANTHROPIC]);
+		expect(on).toContain(ENGINES[ENGINE_IDS.ANTHROPIC]);
+	});
+
+	it('names an engine once when two jobs call it', () => {
+		const called = enginesInUse(
+			makeSettings({
+				transcriptionEnabled: true,
+				llmPostProcessEnabled: true,
+				llmProvider: LLM_PROVIDER_IDS.ANTHROPIC,
+				transcriptionAutoChaptersEnabled: true,
+				chaptersLlmProvider: LLM_PROVIDER_IDS.ANTHROPIC,
+			}),
+		);
+
+		expect(
+			called.filter((engine) => engine === ENGINES[ENGINE_IDS.ANTHROPIC]),
+		).toHaveLength(1);
+	});
+
+	// Chapters are generated on a transcript that already exists, so the job
+	// outlives the switch that transcribes new recordings.
+	it('holds the chapters engine with transcription off', () => {
+		expect(
+			enginesInUse(
+				makeSettings({
+					transcriptionEnabled: false,
+					transcriptionAutoChaptersEnabled: true,
+					chaptersLlmProvider: LLM_PROVIDER_IDS.GEMINI,
+				}),
+			),
+		).toEqual([ENGINES[ENGINE_IDS.GEMINI]]);
+	});
+});
+
+/**
+ * Settings with quick notes on over a transcribing vault, and a quick note
+ * profile selected when an instruction is given.
+ * @param instruction - The profile's body, or undefined for None
+ * @param overrides - Fields this case cares about
+ */
+function quickNoteSettings(
+	instruction: string | undefined,
+	overrides: Partial<AudioRecorderSettings> = {},
+): AudioRecorderSettings {
+	return makeSettings({
+		transcriptionEnabled: true,
+		quickNotesEnabled: true,
+		whisperApiKey: 'sk-test',
+		quickNoteLlmProvider: LLM_PROVIDER_IDS.ANTHROPIC,
+		...(instruction === undefined
+			? {}
+			: {
+					profiles: [
+						{
+							id: 'q1',
+							kind: 'quickNote',
+							name: 'List',
+							body: instruction,
+						},
+					],
+					selectedProfileIds: {
+						...DEFAULT_SETTINGS.selectedProfileIds,
+						quickNote: 'q1',
+					},
+				}),
+		...overrides,
+	});
+}
+
+describe('quick notes and the engines they call', () => {
+	it('calls the quick note engine only while a profile rewrites the dictation', () => {
+		// Plain dictation is transcription alone, so an LLM engine it never
+		// calls must not be reported as needing a key.
+		expect(enginesInUse(quickNoteSettings(undefined))).not.toContain(
+			ENGINES[ENGINE_IDS.ANTHROPIC],
+		);
+		expect(enginesInUse(quickNoteSettings('Make a list.'))).toContain(
+			ENGINES[ENGINE_IDS.ANTHROPIC],
+		);
+	});
+
+	it('calls nothing for quick notes while they are switched off', () => {
+		expect(
+			enginesInUse(
+				quickNoteSettings('Make a list.', { quickNotesEnabled: false }),
+			),
+		).not.toContain(ENGINES[ENGINE_IDS.ANTHROPIC]);
+	});
+
+	it('refuses a quick note while the feature is off', () => {
+		expect(
+			quickNoteRefusal(
+				quickNoteSettings(undefined, { quickNotesEnabled: false }),
+			),
+		).toBe('Quick notes are switched off in settings.');
+	});
+
+	it('refuses a quick note for every reason a transcription is refused', () => {
+		const settings = quickNoteSettings(undefined, { whisperApiKey: '' });
+
+		expect(quickNoteRefusal(settings)).toBe(transcriptionRefusal(settings));
+		expect(quickNoteRefusal(settings)).not.toBeNull();
+	});
+
+	it('refuses a rewritten quick note whose engine has no key, and allows plain dictation', () => {
+		expect(quickNoteRefusal(quickNoteSettings('Make a list.'))).toBe(
+			engineSetupReason(
+				quickNoteSettings('Make a list.'),
+				ENGINES[ENGINE_IDS.ANTHROPIC],
+			),
+		);
+		expect(quickNoteRefusal(quickNoteSettings(undefined))).toBeNull();
+		expect(
+			quickNoteRefusal(
+				quickNoteSettings('Make a list.', { anthropicApiKey: 'ak' }),
+			),
+		).toBeNull();
+	});
+});
+
+describe('quick notes transcribed by an engine of their own', () => {
+	it('calls the quick note transcription engine while quick notes are on', () => {
+		// A key missing on the engine that hears dictations is as much a
+		// fault as one missing on the engine that hears recordings.
+		const settings = quickNoteSettings(undefined, {
+			quickNoteTranscriptionProvider: TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM,
+		});
+
+		expect(enginesInUse(settings)).toEqual([
+			ENGINES[ENGINE_IDS.WHISPER_API],
+			ENGINES[ENGINE_IDS.DEEPGRAM],
+		]);
+		expect(
+			enginesInUse({ ...settings, quickNotesEnabled: false }),
+		).not.toContain(ENGINES[ENGINE_IDS.DEEPGRAM]);
+	});
+
+	it('refuses a quick note on the setup of its own engine, not the recordings engine', () => {
+		const settings = quickNoteSettings(undefined, {
+			quickNoteTranscriptionProvider: TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM,
+			deepgramApiKey: '',
+		});
+
+		expect(transcriptionRefusal(settings)).toBeNull();
+		expect(quickNoteRefusal(settings)).toBe(
+			engineSetupReason(settings, ENGINES[ENGINE_IDS.DEEPGRAM]),
+		);
+		expect(quickNoteRefusal(settings)).not.toBeNull();
+		expect(
+			quickNoteRefusal({
+				...settings,
+				whisperApiKey: '',
+				deepgramApiKey: 'dg-test',
+			}),
+		).toBeNull();
+	});
+});
+
+describe('quick notes on an engine the plugin does not serve', () => {
+	it('refuses with the reason rather than starting a dictation it cannot rewrite', () => {
+		// data.json is not type-checked; a stored id no vendor claims must
+		// stop the dictation before the microphone opens.
+		expect(
+			quickNoteRefusal(
+				quickNoteSettings('Make a list.', {
+					quickNoteLlmProvider:
+						'gone' as AudioRecorderSettings['quickNoteLlmProvider'],
+				}),
+			),
+		).toBe('The quick note rewrite engine is not one this plugin serves.');
+	});
+});
+
+describe('engineStatus', () => {
+	it('warns on an engine a job calls that cannot run', () => {
+		expect(
+			engineStatus(
+				makeSettings({
+					transcriptionEnabled: true,
+					whisperApiKey: '',
+				}),
+				ENGINES[ENGINE_IDS.WHISPER_API],
+			),
+		).toBe('warning');
+	});
+
+	it('stays quiet on an unconfigured engine nobody calls', () => {
+		expect(
+			engineStatus(
+				makeSettings({
+					transcriptionEnabled: true,
+					whisperApiKey: 'sk-1',
+					deepgramApiKey: '',
+				}),
+				ENGINES[ENGINE_IDS.DEEPGRAM],
+			),
+		).toBeNull();
+	});
+
+	it('stays quiet on a configured engine', () => {
+		expect(
+			engineStatus(
+				makeSettings({
+					transcriptionEnabled: true,
+					whisperApiKey: 'sk-1',
+				}),
+				ENGINES[ENGINE_IDS.WHISPER_API],
+			),
+		).toBeNull();
+	});
+});
+
+describe('enginesStatus', () => {
+	it('warns when any engine in use cannot run', () => {
+		expect(
+			enginesStatus(
+				makeSettings({
+					transcriptionEnabled: true,
+					whisperApiKey: 'sk-1',
+					llmPostProcessEnabled: true,
+					llmProvider: LLM_PROVIDER_IDS.ANTHROPIC,
+					anthropicApiKey: '',
+				}),
+			),
+		).toBe('warning');
+	});
+
+	it('stays quiet when every engine in use can run', () => {
+		expect(
+			enginesStatus(
+				makeSettings({
+					transcriptionEnabled: true,
+					whisperApiKey: 'sk-1',
+				}),
+			),
+		).toBeNull();
+	});
+});
+
+describe('multiTrackStatus', () => {
+	beforeEach(() => {
+		setPlatform({ isMobile: false, isMobileApp: false });
+	});
+
+	/**
+	 * Track sources as a configured section holds them.
+	 * @param deviceIds - One device id per track, in order
+	 */
+	const sources = (
+		...deviceIds: string[]
+	): AudioRecorderSettings['trackAudioSources'] =>
+		new Map(
+			deviceIds.map((deviceId, index) => [
+				index + 1,
+				{ deviceId, channelMode: 'source' as const },
+			]),
+		);
+
+	it('stays quiet while multi-track is off', () => {
+		expect(
+			multiTrackStatus(
+				makeSettings({
+					enableMultiTrack: false,
+					maxTracks: 2,
+					trackAudioSources: sources(),
+				}),
+			),
+		).toBeNull();
+	});
+
+	it('warns where no track has an input, which records nothing', () => {
+		expect(
+			multiTrackStatus(
+				makeSettings({
+					enableMultiTrack: true,
+					maxTracks: 2,
+					trackAudioSources: sources(),
+				}),
+			),
+		).toBe('warning');
+	});
+
+	// One session captures the machine's own output once: the handler that
+	// answers the grant lives on the Electron session, which holds one at a
+	// time. Capture refuses such a session outright, so the entry has to say
+	// so while there is still a settings row in front of the user.
+	it('warns where two tracks both record the system output', () => {
+		expect(
+			multiTrackStatus(
+				makeSettings({
+					enableMultiTrack: true,
+					maxTracks: 2,
+					trackAudioSources: new Map([
+						[1, systemAudioTrack()],
+						[2, systemAudioTrack()],
+					]),
+				}),
+			),
+		).toBe('warning');
+	});
+
+	it('stays quiet where one track records the system output', () => {
+		expect(
+			multiTrackStatus(
+				makeSettings({
+					enableMultiTrack: true,
+					maxTracks: 2,
+					trackAudioSources: new Map([
+						[
+							1,
+							{
+								deviceId: 'mic-1',
+								channelMode: 'source' as const,
+							},
+						],
+						[2, systemAudioTrack()],
+					]),
+				}),
+			),
+		).toBeNull();
+	});
+
+	// Capture opens the tracks that have an input and skips the rest, so a
+	// partly configured section records - and an indicator would sit on it
+	// permanently.
+	it('stays quiet on a track left unassigned below the count', () => {
+		expect(
+			multiTrackStatus(
+				makeSettings({
+					enableMultiTrack: true,
+					maxTracks: 3,
+					trackAudioSources: sources('mic-1', 'iface-1'),
+				}),
+			),
+		).toBeNull();
+	});
+
+	it('stays quiet once every offered track has an input', () => {
+		expect(
+			multiTrackStatus(
+				makeSettings({
+					enableMultiTrack: true,
+					maxTracks: 2,
+					trackAudioSources: sources('mic-1', 'iface-1'),
+				}),
+			),
+		).toBeNull();
+	});
+
+	// A track configured above the count in use is not opened at all.
+	it('warns where the only assigned track is beyond the count', () => {
+		const configured = sources('mic-1', 'iface-1');
+		configured.delete(1);
+
+		expect(
+			multiTrackStatus(
+				makeSettings({
+					enableMultiTrack: true,
+					maxTracks: 1,
+					trackAudioSources: configured,
+				}),
+			),
+		).toBe('warning');
+	});
+
+	// The capture is unavailable there, so the section is not what a failed
+	// recording would be about.
+	it('stays quiet on a platform without multi-track capture', () => {
+		setPlatform({ isMobile: true, isMobileApp: true });
+
+		expect(
+			multiTrackStatus(
+				makeSettings({
+					enableMultiTrack: true,
+					maxTracks: 2,
+					trackAudioSources: sources(),
+				}),
+			),
+		).toBeNull();
+	});
+});

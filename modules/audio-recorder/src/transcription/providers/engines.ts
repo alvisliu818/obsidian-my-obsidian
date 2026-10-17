@@ -1,0 +1,537 @@
+/**
+ * The transcription engine registry: the one place that knows everything
+ * engine-specific about turning audio into timed segments.
+ *
+ * {@link TranscriptionProvider} is the bottom layer - a single `transcribe`
+ * call whose implementations differ only in wire format - and
+ * {@link ProviderCapabilities} already described what an engine accepts. This
+ * module is the top layer: for each engine it names the label, the pricing
+ * page, the rate table, which settings fields hold its endpoint, key, and
+ * model, how a custom dictionary is applied within that engine's limits, and
+ * how to construct it. Everything above (cost model, factory, settings UI,
+ * dictionary planning) reads a descriptor instead of branching on the engine
+ * id, so adding an engine is one entry here.
+ *
+ * Typed as `Record<TranscriptionProviderId, ...>`, so a missing engine is a
+ * compile error rather than a silent fall-through to the Whisper API.
+ * @module transcription/providers/engines
+ */
+
+import {
+	DEFAULT_LOCAL_WHISPER_TIMEOUT_MINUTES,
+	LOCAL_WHISPER_SETUP_MESSAGE,
+	MAX_LOCAL_WHISPER_TIMEOUT_MINUTES,
+	MIN_LOCAL_WHISPER_TIMEOUT_MINUTES,
+	MS_PER_MINUTE,
+	TRANSCRIPTION_PROVIDER_IDS,
+} from '../../constants';
+import {
+	accountKeyMissing,
+	ENGINE_IDS,
+	EngineLabel,
+	engineAccess,
+	missingModelMessage,
+	type EngineId,
+} from '../../providers/providers';
+import type {
+	AudioRecorderSettings,
+	TranscriptionProviderId,
+} from '../../settings/settingsSchema';
+import { ProviderConfigError } from '../providerConfigError';
+import {
+	DEEPGRAM_KEYTERM_LIMIT,
+	DEEPGRAM_KEYWORDS_LIMIT,
+	deepgramBiasMechanism,
+	DeepgramBiasMechanism,
+	termsWithinDeepgramKeyterm,
+	termsWithinVoxtralContextBias,
+	termsWithinWhisperPrompt,
+	type DictionaryBiasPlan,
+} from '../dictionaryBias';
+import { DeepgramProvider } from './DeepgramProvider';
+import { GeminiProvider } from './GeminiProvider';
+import { LocalWhisperProvider } from './LocalWhisperProvider';
+import { VoxtralProvider } from './VoxtralProvider';
+import { WhisperApiProvider } from './WhisperApiProvider';
+import { GEMINI_TOKEN_RATES, type TokenRate } from './geminiRates';
+import type { TranscriptionProvider } from './TranscriptionProvider';
+import {
+	effectiveDictionary,
+	isProviderAvailableOnPlatform,
+} from './capabilities';
+
+/**
+ * How an engine bills a request. A token-billed engine prices the audio and
+ * text portions of the prompt separately, because providers such as Gemini
+ * charge audio input at a higher rate than text input.
+ */
+export type EnginePricing =
+	| { kind: 'free' }
+	| { kind: 'perMinute'; usdPerMinute: number }
+	| {
+			kind: 'perToken';
+			usdPerMillionAudioInput: number;
+			usdPerMillionTextInput: number;
+			usdPerMillionOutput: number;
+	  };
+
+/** What a cloud engine's client is built from, once its settings check out. */
+interface CloudEngineConfig {
+	baseUrl: string;
+	apiKey: string;
+	model: string;
+	requestTimeoutMs: number;
+}
+
+/**
+ * The `create` of an engine reached over the network. The three cloud engines
+ * differ only in the client that speaks their wire format: where the endpoint,
+ * the key, and the model are stored, and what a run says when one of them is
+ * missing, are facts of the account and the catalogue, so they are read from
+ * the provider registry once here instead of being restated per engine.
+ *
+ * Both halves are required. A key was always checked; a model was not, so an
+ * emptied catalogue (or a hand-edited `data.json`) sent a request naming no
+ * model and failed at the endpoint with the provider's own wording.
+ * @param id - The engine being built
+ * @param build - Constructs the client for that engine
+ * @returns The descriptor's `create`
+ */
+function cloudEngineFactory(
+	id: EngineId,
+	build: (config: CloudEngineConfig) => TranscriptionProvider,
+): TranscriptionEngineDescriptor['create'] {
+	return (settings, requestTimeoutMs) => {
+		const { engine, account, models } = engineAccess(id);
+		const apiKey = account.apiKey(settings);
+		// Only the vendor's own endpoint is refused without a key. A user who
+		// repointed the Base URL at a local server is reached by a request
+		// that carries no Authorization header at all.
+		if (accountKeyMissing(account, settings)) {
+			throw new ProviderConfigError(account.missingKeyMessage);
+		}
+		const model = models.model(settings);
+		if (!model) {
+			throw new ProviderConfigError(missingModelMessage(engine));
+		}
+		return build({
+			baseUrl: account.baseUrl(settings),
+			apiKey,
+			model,
+			requestTimeoutMs,
+		});
+	};
+}
+
+/** Everything the plugin knows about one transcription engine. */
+export interface TranscriptionEngineDescriptor {
+	readonly id: TranscriptionProviderId;
+	/** Display label, used in dropdowns and cost-estimate lines. */
+	readonly label: EngineLabel;
+	/** Public pricing page; absent for the free local engine. */
+	readonly pricingUrl?: string;
+	/**
+	 * The model id the settings select for this engine, '' for the local
+	 * engine, which has no billed model.
+	 */
+	model(settings: AudioRecorderSettings): string;
+	/** Resolves the rate for a model id, or null when none is built in. */
+	pricing(model: string): EnginePricing | null;
+	/**
+	 * Plans how the user's dictionary terms are applied within this engine's
+	 * mechanism and request limits. The per-engine rules live with the engine
+	 * rather than in a switch the caller has to keep in step.
+	 */
+	planDictionary(model: string, terms: string[]): DictionaryBiasPlan;
+	/**
+	 * Why this engine and model cannot carry generated biasing context, or null
+	 * when they can. Checked before the advanced mode spends any LLM call.
+	 */
+	biasUnsupportedReason(model: string): string | null;
+	/**
+	 * Builds the provider, validating the settings it needs. Throws
+	 * {@link ProviderConfigError} when they are incomplete or the engine cannot
+	 * run on this platform.
+	 */
+	create(
+		settings: AudioRecorderSettings,
+		requestTimeoutMs: number,
+	): TranscriptionProvider;
+}
+
+/**
+ * Approximate per-minute Whisper API rates by model-id fragment. Values are
+ * USD per audio minute.
+ */
+const WHISPER_API_RATES: readonly [string, number][] = [
+	// Groq-hosted Whisper models (priced per hour: $0.04 / $0.111).
+	['whisper-large-v3-turbo', 0.04 / 60],
+	['whisper-large-v3', 0.111 / 60],
+	// OpenAI whisper-1.
+	['whisper-1', 0.006],
+];
+
+/**
+ * Approximate Deepgram pre-recorded pay-as-you-go rates, USD per minute.
+ * Enhanced and Base are published per hour ($0.99 and $0.87) and converted
+ * here.
+ */
+const DEEPGRAM_RATES: readonly [string, number][] = [
+	['enhanced', 0.0165],
+	['whisper', 0.0048],
+	['nova-3', 0.0043],
+	['nova-2', 0.0043],
+	['nova', 0.0043],
+	['base', 0.0145],
+];
+
+/**
+ * Approximate Voxtral rates, USD per audio minute.
+ *
+ * The realtime fragment is longer than the batch one, so a saved
+ * `voxtral-mini-transcribe-realtime-2602` never resolves through the cheaper
+ * batch rate under the longest-match rule below. Only the batch catalogue is
+ * seeded, but a user may type either id.
+ */
+const VOXTRAL_RATES: readonly [string, number][] = [
+	['voxtral-mini-transcribe-realtime', 0.006],
+	['voxtral-mini', 0.003],
+];
+
+/**
+ * Finds the rate whose model-id fragment appears in the (normalized) model id,
+ * preferring the longest fragment so more specific entries win: a
+ * `whisper-large-v3-turbo` id never resolves through the dearer
+ * `whisper-large-v3` rate, and a `claude-opus-5-5` id never resolves through
+ * `claude-opus-5`.
+ * @param rates - Rate table as (model-id fragment, rate) pairs
+ * @param model - The model id to price
+ */
+export function matchRate<T>(
+	rates: readonly [string, T][],
+	model: string,
+): T | undefined {
+	const normalized = model.trim().toLowerCase();
+	let best: { length: number; value: T } | undefined;
+	for (const [fragment, value] of rates) {
+		if (
+			normalized.includes(fragment) &&
+			(!best || fragment.length > best.length)
+		) {
+			best = { length: fragment.length, value };
+		}
+	}
+	return best?.value;
+}
+
+/** Wraps a per-minute rate as pricing, or null when unmatched. */
+function perMinutePricing(rate: number | undefined): EnginePricing | null {
+	return rate === undefined
+		? null
+		: { kind: 'perMinute', usdPerMinute: rate };
+}
+
+/** Wraps a matched {@link TokenRate} as per-token pricing, or null when unmatched. */
+function perTokenPricing(rate: TokenRate | undefined): EnginePricing | null {
+	return rate === undefined
+		? null
+		: {
+				kind: 'perToken',
+				usdPerMillionAudioInput: rate.audioInput,
+				usdPerMillionTextInput: rate.textInput,
+				usdPerMillionOutput: rate.output,
+			};
+}
+
+/**
+ * Applies the Whisper prompt window: terms beyond the ~224-token window the
+ * decoder actually reads are reported as omitted rather than silently dropped.
+ * Shared by the Whisper API and local whisper.cpp, which use the same field.
+ */
+function planWhisperPromptDictionary(terms: string[]): DictionaryBiasPlan {
+	const applied = termsWithinWhisperPrompt(terms);
+	if (applied.length < terms.length) {
+		return {
+			applied,
+			omitted: terms.slice(applied.length),
+			reason: 'prompt-window',
+		};
+	}
+	return { applied, omitted: [] };
+}
+
+/**
+ * Every transcription engine, keyed by its settings id. Insertion order is the
+ * order the engine dropdown offers them.
+ */
+export const TRANSCRIPTION_ENGINES: Record<
+	TranscriptionProviderId,
+	TranscriptionEngineDescriptor
+> = {
+	[TRANSCRIPTION_PROVIDER_IDS.WHISPER_API]: {
+		id: TRANSCRIPTION_PROVIDER_IDS.WHISPER_API,
+		// The engine is named for what it does; the service behind it is named
+		// once in the provider registry.
+		label: EngineLabel.WhisperApi,
+		pricingUrl: 'https://openai.com/api/pricing/',
+		model: (s) => s.whisperApiModel,
+		pricing: (model) =>
+			perMinutePricing(matchRate(WHISPER_API_RATES, model)),
+		planDictionary: (_model, terms) => planWhisperPromptDictionary(terms),
+		biasUnsupportedReason: () => null,
+		create: cloudEngineFactory(
+			ENGINE_IDS.WHISPER_API,
+			(config) => new WhisperApiProvider(config),
+		),
+	},
+	[TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM]: {
+		id: TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM,
+		label: EngineLabel.Deepgram,
+		pricingUrl: 'https://deepgram.com/pricing',
+		model: (s) => s.deepgramModel,
+		pricing: (model) => perMinutePricing(matchRate(DEEPGRAM_RATES, model)),
+		// Deepgram's mechanism, and therefore its limits, depend on the model:
+		// Nova-3 keyterm prompting is bounded by both an entry count and an
+		// aggregate token budget, Nova-2 and older keyword boosting only by an
+		// entry count, and the hosted Whisper models cannot bias at all.
+		planDictionary: (model, terms) => {
+			const mechanism = deepgramBiasMechanism(model);
+			if (mechanism === null) {
+				return {
+					applied: [],
+					omitted: terms,
+					reason: 'model-unsupported',
+				};
+			}
+			if (mechanism === DeepgramBiasMechanism.Keyterm) {
+				const applied = termsWithinDeepgramKeyterm(terms);
+				if (applied.length < terms.length) {
+					return {
+						applied,
+						omitted: terms.slice(applied.length),
+						// Stopping at the entry cap means the count bound bit;
+						// stopping earlier means the aggregate token budget did.
+						reason:
+							applied.length >= DEEPGRAM_KEYTERM_LIMIT
+								? 'keyterm-limit'
+								: 'keyterm-token-budget',
+					};
+				}
+				return { applied, omitted: [] };
+			}
+			if (terms.length > DEEPGRAM_KEYWORDS_LIMIT) {
+				return {
+					applied: terms.slice(0, DEEPGRAM_KEYWORDS_LIMIT),
+					omitted: terms.slice(DEEPGRAM_KEYWORDS_LIMIT),
+					reason: 'keywords-limit',
+				};
+			}
+			return { applied: terms, omitted: [] };
+		},
+		biasUnsupportedReason: (model) =>
+			deepgramBiasMechanism(model) === null
+				? `the Deepgram model "${model}" cannot bias recognition (choose a Nova model)`
+				: null,
+		create: cloudEngineFactory(
+			ENGINE_IDS.DEEPGRAM,
+			(config) => new DeepgramProvider(config),
+		),
+	},
+	[TRANSCRIPTION_PROVIDER_IDS.GEMINI]: {
+		id: TRANSCRIPTION_PROVIDER_IDS.GEMINI,
+		label: EngineLabel.Gemini,
+		pricingUrl: 'https://ai.google.dev/gemini-api/docs/pricing',
+		model: (s) => s.geminiModel,
+		pricing: (model) =>
+			perTokenPricing(matchRate(GEMINI_TOKEN_RATES, model)),
+		// Gemini folds terms into a large instruction context with no hard cap.
+		planDictionary: (_model, terms) => ({ applied: terms, omitted: [] }),
+		biasUnsupportedReason: () => null,
+		create: cloudEngineFactory(
+			ENGINE_IDS.GEMINI,
+			(config) => new GeminiProvider(config),
+		),
+	},
+	[TRANSCRIPTION_PROVIDER_IDS.VOXTRAL]: {
+		id: TRANSCRIPTION_PROVIDER_IDS.VOXTRAL,
+		label: EngineLabel.Voxtral,
+		pricingUrl: 'https://mistral.ai/pricing/api',
+		model: (s) => s.voxtralModel,
+		pricing: (model) => perMinutePricing(matchRate(VOXTRAL_RATES, model)),
+		// One flat cap on the number of context_bias entries, the same shape
+		// Deepgram's keyterm mechanism has, and the same for every model in the
+		// catalogue - so the model argument is deliberately unread: the service
+		// passes the configured Deepgram model id into it, which is only ever
+		// the right answer for Deepgram. The cap counts entries on the wire
+		// rather than terms in the list, because the encoding decides how many
+		// entries a list becomes, and a notice built on any other count reports
+		// a number the request never carried.
+		planDictionary: (_model, terms) => {
+			const applied = termsWithinVoxtralContextBias(terms);
+			if (applied.length < terms.length) {
+				return {
+					applied,
+					omitted: terms.slice(applied.length),
+					reason: 'context-bias-limit',
+				};
+			}
+			return { applied, omitted: [] };
+		},
+		biasUnsupportedReason: () => null,
+		create: cloudEngineFactory(
+			ENGINE_IDS.VOXTRAL,
+			(config) => new VoxtralProvider(config),
+		),
+	},
+	[TRANSCRIPTION_PROVIDER_IDS.LOCAL_WHISPER]: {
+		id: TRANSCRIPTION_PROVIDER_IDS.LOCAL_WHISPER,
+		label: EngineLabel.LocalWhisper,
+		// Runs on the user's machine, so there is no rate card to link.
+		model: () => '',
+		pricing: () => ({ kind: 'free' }),
+		planDictionary: (_model, terms) => planWhisperPromptDictionary(terms),
+		biasUnsupportedReason: () => null,
+		create: (settings) => {
+			if (
+				!settings.localWhisperBinaryPath ||
+				!settings.localWhisperModelPath
+			) {
+				throw new ProviderConfigError(LOCAL_WHISPER_SETUP_MESSAGE);
+			}
+			const provider = new LocalWhisperProvider({
+				binaryPath: settings.localWhisperBinaryPath,
+				modelPath: settings.localWhisperModelPath,
+				extraArgs: parseArgs(settings.localWhisperExtraArgs),
+				// Its own limit rather than the shared per-request one: the
+				// work here is a process on this machine, and the CPU takes an
+				// order of time an accelerator behind an API does not.
+				processTimeoutMs: localWhisperTimeoutMs(
+					settings.localWhisperTimeoutMinutes,
+				),
+			});
+			if (!provider.isAvailable()) {
+				throw new ProviderConfigError(
+					'Local transcription is only available in the desktop app.',
+				);
+			}
+			return provider;
+		},
+	},
+};
+
+/** Every engine id, in the order the engine dropdown offers them. */
+export const TRANSCRIPTION_ENGINE_IDS = Object.keys(
+	TRANSCRIPTION_ENGINES,
+) as TranscriptionProviderId[];
+
+/**
+ * The descriptor for an engine id.
+ * @param id - Transcription engine id
+ */
+export function transcriptionEngine(
+	id: TranscriptionProviderId,
+): TranscriptionEngineDescriptor {
+	return TRANSCRIPTION_ENGINES[id];
+}
+
+/**
+ * The descriptor for the engine the settings currently select.
+ * @param settings - Plugin settings
+ */
+export function selectedTranscriptionEngine(
+	settings: AudioRecorderSettings,
+): TranscriptionEngineDescriptor {
+	return transcriptionEngine(settings.transcriptionProvider);
+}
+
+/**
+ * Builds the configured transcription provider from the selected engine's
+ * descriptor, which owns the fields it reads and the errors it raises.
+ * @param settings - Plugin settings
+ */
+export function createTranscriptionProvider(
+	settings: AudioRecorderSettings,
+): TranscriptionProvider {
+	const engine = selectedTranscriptionEngine(settings);
+	if (!isProviderAvailableOnPlatform(engine.id)) {
+		throw new ProviderConfigError(
+			`${engine.label} is not available on this device.`,
+		);
+	}
+	// Per-request timeout cap shared by every network provider, from the
+	// user-configured limit (minutes). Local whisper.cpp makes no HTTP request,
+	// so its descriptor ignores this and reads its own run limit instead.
+	return engine.create(
+		settings,
+		settings.transcriptionTimeoutMinutes * MS_PER_MINUTE,
+	);
+}
+
+/**
+ * Plans the dictionary biasing for a run: which terms are sent to the engine
+ * and which are dropped because it cannot bias or a request limit is exceeded.
+ * The model-independent capability gate is applied first, then the engine's own
+ * per-model rules. The service runs every dictionary through this, so the terms
+ * it sends and the terms it warns about never diverge.
+ * @param engineId - Selected transcription engine id
+ * @param model - Configured model id for that engine
+ * @param terms - The user's parsed, de-duplicated dictionary terms
+ * @returns The applied and omitted terms, with the reason when any were dropped
+ */
+export function planDictionaryBias(
+	engineId: TranscriptionProviderId,
+	model: string,
+	terms: string[],
+): DictionaryBiasPlan {
+	// An engine with supportsDictionary=false drops everything here.
+	const gated = effectiveDictionary(engineId, terms);
+	if (!gated.length) {
+		return { applied: [], omitted: [] };
+	}
+	// The mechanism and its limits are engine facts, so the descriptor plans
+	// them; only the model-independent capability gate above is shared.
+	return transcriptionEngine(engineId).planDictionary(model, gated);
+}
+
+/**
+ * Splits a space-separated argument string into individual arguments,
+ * dropping empty tokens. (Quoting is intentionally not supported - paths
+ * with spaces should be configured via the dedicated path fields.)
+ * @param raw - Raw argument string
+ */
+export function parseArgs(raw: string): string[] {
+	return raw
+		.split(/\s+/)
+		.map((part) => part.trim())
+		.filter((part) => part.length > 0);
+}
+
+/**
+ * The time limit for one local whisper.cpp run, in milliseconds.
+ *
+ * Clamped rather than read straight through, for the reason the auto-split
+ * part length is: the row declaring the range is not the only way a value
+ * reaches the field. A data.json edited by hand or synced from another install
+ * never passes that row, and the load path fills a missing field from the
+ * defaults without normalising any number it does find.
+ *
+ * What makes an out-of-range value worth guarding here rather than leaving to
+ * the process is where it lands. Node arms no kill timer at all for a limit at
+ * or below zero, so a stored 0 would restore the unbounded run this setting
+ * exists to end, and restore it silently: a process nobody ever kills reports
+ * nothing at all.
+ * @param minutes - The configured limit in minutes
+ * @returns Whole minutes within the supported range, as milliseconds, or the
+ *   default for a value that is not a number
+ */
+export function localWhisperTimeoutMs(minutes: number): number {
+	if (!Number.isFinite(minutes)) {
+		return DEFAULT_LOCAL_WHISPER_TIMEOUT_MINUTES * MS_PER_MINUTE;
+	}
+	return (
+		Math.min(
+			MAX_LOCAL_WHISPER_TIMEOUT_MINUTES,
+			Math.max(MIN_LOCAL_WHISPER_TIMEOUT_MINUTES, Math.floor(minutes)),
+		) * MS_PER_MINUTE
+	);
+}

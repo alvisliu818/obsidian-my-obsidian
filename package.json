@@ -1,7 +1,7 @@
 {
   "name": "obsidian-my-obsidian",
   "version": "0.1.0",
-  "description": "One plugin bundling the author's Obsidian add-ons: Logseq block editor, Browser, Jupyter Notebook, Breadcrumb Nav, Doc Assist, Material Icon Theme, TraceTime, Git, AI image analyzer, Omnisearch and Save Control — each switchable from the settings.",
+  "description": "One plugin bundling the author's Obsidian add-ons: Logseq block editor, Browser, Jupyter Notebook, Breadcrumb Nav, Doc Assist, Material Icon Theme, TraceTime, Git, AI image analyzer, Omnisearch, Save Control, Open Tab Settings and Advanced Audio Recorder — each switchable from the settings.",
   "main": "main.js",
   "type": "module",
   "scripts": {
@@ -16,6 +16,7 @@
     "test:doc-assist": "cd modules/doc-assist && npm test",
     "test:icons": "cd modules/material-icon-theme && npm test",
     "test:omnisearch": "cd modules/omnisearch && npx vitest run",
+    "test:audio-recorder": "cd modules/audio-recorder && npm test",
     "e2e:merge": "node tests/e2e/_merge-smoke.mjs",
     "e2e": "playwright test -c modules/logseq/tests/e2e/playwright.config.ts"
   },
@@ -29,7 +30,9 @@
     "doc-assist",
     "material-icons",
     "time-tracking",
-    "git"
+    "git",
+    "audio-recorder",
+    "transcription"
   ],
   "author": "alvisliu",
   "authorUrl": "https://github.com/alvisliu818",
@@ -49,6 +52,8 @@
     "@codemirror/view": "^6.34.0",
     "@google/genai": "^1.32.0",
     "@lezer/highlight": "^1.2.1",
+    "@mediabunny/flac-encoder": "1.61.4",
+    "@mediabunny/mp3-encoder": "1.61.4",
     "@mozilla/readability": "^0.5.0",
     "@msgpack/msgpack": "^3.0.2",
     "@types/prismjs": "^1.26.6",
@@ -70,6 +75,7 @@
     "jszip": "^3.10.2",
     "mammoth": "^1.13.0",
     "markdown-link-extractor": "^4.0.4",
+    "mediabunny": "1.61.4",
     "minisearch": "7.1.0",
     "monkey-around": "^3.0.0",
     "node-pty": "^1.1.0",

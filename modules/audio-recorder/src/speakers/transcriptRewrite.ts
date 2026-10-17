@@ -1,0 +1,289 @@
+/**
+ * Pure rewriting of speaker names inside already-written transcript outputs:
+ * note Markdown (rendered speaker fragments), SRT/VTT subtitle bodies,
+ * plain-text transcripts, and transcript JSON sidecars. Note rewriting is
+ * line-scoped, so only the lines that belong to a given recording
+ * (identified by the caller through their timecode link) are touched, which
+ * keeps a second transcript in the same note untouched. All replacements
+ * within one document happen simultaneously, so swapping two names (A -> B
+ * while B -> A) can never chain. The module also answers whether a note still
+ * shows a rendered speaker at all, since that is what tells an output that is
+ * already up to date from one whose labels are gone. No DOM or I/O; unit
+ * tested directly.
+ * @module speakers/transcriptRewrite
+ */
+
+import { renderSpeakerFragment } from '../transcription/transcriptFormat';
+import { escapeRegExp } from '../utils/regex';
+import type { SpeakerRename } from './speakerRename';
+
+/**
+ * Builds a longest-first alternation of the given keys, so a name that is a
+ * prefix of another ("Anna" / "Anna Lee") can never shadow the longer match.
+ */
+function alternation(keys: Iterable<string>): string {
+	return [...keys]
+		.sort((a, b) => b.length - a.length)
+		.map(escapeRegExp)
+		.join('|');
+}
+
+/** Builds the simultaneous from -> to lookup, dropping no-op renames. */
+function renameMap(renames: readonly SpeakerRename[]): Map<string, string> {
+	const map = new Map<string, string>();
+	for (const rename of renames) {
+		if (rename.from && rename.from !== rename.to) {
+			map.set(rename.from, rename.to);
+		}
+	}
+	return map;
+}
+
+/**
+ * Maps each rename onto its fully rendered speaker fragment (the speaker
+ * template applied to the name, e.g. `**Speaker 1**`), so ordinary prose is
+ * only touched when it looks exactly like a rendered speaker label.
+ */
+function fragmentMap(
+	speakerFormat: string,
+	renames: readonly SpeakerRename[],
+): Map<string, string> {
+	const fragments = new Map<string, string>();
+	for (const [from, to] of renameMap(renames)) {
+		const fromFragment = renderSpeakerFragment(speakerFormat, from);
+		const toFragment = renderSpeakerFragment(speakerFormat, to);
+		if (fromFragment && fromFragment !== toFragment) {
+			fragments.set(fromFragment, toFragment);
+		}
+	}
+	return fragments;
+}
+
+/**
+ * Rewrites rendered speaker fragments in note Markdown, but only on the lines
+ * the caller marks as belonging to this recording (the lines whose timecode
+ * link resolves to the audio). A second transcript in the same note, and any
+ * prose that merely looks like a speaker label, is left untouched.
+ * @param content - Note Markdown
+ * @param speakerFormat - Speaker template the transcript was rendered with
+ * @param renames - Display-name renames to apply
+ * @param audioLines - Zero-based indices of lines that belong to the audio
+ * @returns The rewritten content (unchanged when nothing matched)
+ */
+export function renameSpeakersInNoteLines(
+	content: string,
+	speakerFormat: string,
+	renames: readonly SpeakerRename[],
+	audioLines: ReadonlySet<number>,
+): string {
+	const fragments = fragmentMap(speakerFormat, renames);
+	if (fragments.size === 0 || audioLines.size === 0) {
+		return content;
+	}
+	const regex = new RegExp(alternation(fragments.keys()), 'g');
+	const lines = content.split('\n');
+	for (let index = 0; index < lines.length; index++) {
+		const line = lines[index];
+		if (line !== undefined && audioLines.has(index)) {
+			lines[index] = line.replace(
+				regex,
+				(match) => fragments.get(match) ?? match,
+			);
+		}
+	}
+	return lines.join('\n');
+}
+
+/**
+ * Rewrites rendered speaker fragments across the whole note, used only after
+ * the user confirms a rename on a transcript that carries no timecode links
+ * and therefore cannot be scoped to a single recording.
+ * @param content - Note Markdown
+ * @param speakerFormat - Speaker template the transcript was rendered with
+ * @param renames - Display-name renames to apply
+ * @returns The rewritten content (unchanged when nothing matched)
+ */
+export function renameSpeakersInMarkdown(
+	content: string,
+	speakerFormat: string,
+	renames: readonly SpeakerRename[],
+): string {
+	const fragments = fragmentMap(speakerFormat, renames);
+	if (fragments.size === 0) {
+		return content;
+	}
+	const regex = new RegExp(alternation(fragments.keys()), 'g');
+	return content.replace(regex, (match) => fragments.get(match) ?? match);
+}
+
+/**
+ * Whether a note still shows any of these speakers as a rendered fragment,
+ * within the lines the caller scopes to (or anywhere, when it has no scope).
+ * A rewrite that changed nothing has two opposite causes - the note already
+ * shows the names being applied, or it shows no speaker label at all - and
+ * only reading it back tells them apart, so a caller can report the second
+ * without accusing the first.
+ * @param content - Note Markdown
+ * @param speakerFormat - Speaker template the transcript was rendered with
+ * @param speakers - Display texts to look for
+ * @param audioLines - Zero-based indices of the lines that belong to the
+ *   audio, or null to search the whole note
+ * @returns True when at least one rendered fragment is present in scope
+ */
+export function noteShowsAnySpeaker(
+	content: string,
+	speakerFormat: string,
+	speakers: readonly string[],
+	audioLines: ReadonlySet<number> | null,
+): boolean {
+	const fragments = speakers
+		.filter((speaker) => speaker.length > 0)
+		.map((speaker) => renderSpeakerFragment(speakerFormat, speaker))
+		.filter((fragment) => fragment.length > 0);
+	if (fragments.length === 0) {
+		return false;
+	}
+	// Deliberately not global: the regex is reused across the lines below, and
+	// a sticky lastIndex would make every other test miss.
+	const regex = new RegExp(alternation(fragments));
+	if (!audioLines) {
+		return regex.test(content);
+	}
+	return content
+		.split('\n')
+		.some((line, index) => audioLines.has(index) && regex.test(line));
+}
+
+/**
+ * Rewrites `Speaker: ` prefixes in SRT/VTT subtitle bodies. The prefix is
+ * anchored to the start of a cue text line, matching how the serializer
+ * writes it, so speaker names inside spoken text are left alone.
+ * @param content - SRT or VTT file content
+ * @param renames - Display-name renames to apply
+ * @returns The rewritten content (unchanged when nothing matched)
+ */
+export function renameSpeakersInSubtitles(
+	content: string,
+	renames: readonly SpeakerRename[],
+): string {
+	const map = renameMap(renames);
+	if (map.size === 0) {
+		return content;
+	}
+	const regex = new RegExp(`^(${alternation(map.keys())}): `, 'gm');
+	return content.replace(
+		regex,
+		(_match, name: string) => `${map.get(name) ?? name}: `,
+	);
+}
+
+/**
+ * Rewrites `[time] Speaker: ` prefixes in plain-text transcripts, anchored to
+ * the timecode that starts each line so names inside spoken text are left
+ * alone.
+ * @param content - Plain-text transcript content
+ * @param renames - Display-name renames to apply
+ * @returns The rewritten content (unchanged when nothing matched)
+ */
+export function renameSpeakersInPlainText(
+	content: string,
+	renames: readonly SpeakerRename[],
+): string {
+	const map = renameMap(renames);
+	if (map.size === 0) {
+		return content;
+	}
+	const regex = new RegExp(
+		`^(\\[[^\\]\\n]*\\] )(${alternation(map.keys())}): `,
+		'gm',
+	);
+	return content.replace(
+		regex,
+		(_match, prefix: string, name: string) =>
+			`${prefix}${map.get(name) ?? name}: `,
+	);
+}
+
+/**
+ * Rewrites the speaker fields of a transcript JSON sidecar, renaming each
+ * segment's speaker and re-deriving the speaker list. The document is
+ * re-serialized with the same indentation the writer uses.
+ * @param raw - Raw JSON sidecar content
+ * @param renames - Display-name renames to apply
+ * @returns The rewritten JSON, or null when the content is not a
+ * transcript-shaped JSON document
+ */
+export function renameSpeakersInTranscriptJson(
+	raw: string,
+	renames: readonly SpeakerRename[],
+): string | null {
+	const map = renameMap(renames);
+	const document = parseTranscriptJson(raw);
+	if (!document) {
+		return null;
+	}
+	if (map.size === 0) {
+		return raw;
+	}
+	// Entries are handled defensively (a sidecar can be hand-edited): only
+	// object segments with a mapped string speaker are rewritten, everything
+	// else passes through untouched.
+	const segments = (document.segments as unknown[]).map((entry) => {
+		if (typeof entry !== 'object' || entry === null) {
+			return entry;
+		}
+		const record = entry as Record<string, unknown>;
+		const speaker = record.speaker;
+		if (typeof speaker === 'string' && map.has(speaker)) {
+			return { ...record, speaker: map.get(speaker) };
+		}
+		return entry;
+	});
+	// Preserve the original key layout: only segments (and, when present, the
+	// derived speaker list) change.
+	const output: Record<string, unknown> = {
+		...document,
+		segments,
+		...(Array.isArray(document.speakers)
+			? { speakers: distinctSegmentSpeakers(segments) }
+			: {}),
+	};
+	return JSON.stringify(output, null, 2);
+}
+
+/**
+ * Parses raw JSON and returns it only when it is a transcript-shaped document
+ * (an object with a `segments` array), otherwise null.
+ */
+function parseTranscriptJson(raw: string): Record<string, unknown> | null {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		return null;
+	}
+	if (
+		typeof parsed !== 'object' ||
+		parsed === null ||
+		!Array.isArray((parsed as { segments?: unknown }).segments)
+	) {
+		return null;
+	}
+	return parsed as Record<string, unknown>;
+}
+
+/** Distinct string speakers across segments, in first-seen order. */
+function distinctSegmentSpeakers(segments: readonly unknown[]): string[] {
+	// A native Set preserves insertion order, so first-seen order is free.
+	const speakers = new Set<string>();
+	for (const entry of segments) {
+		if (typeof entry !== 'object' || entry === null) {
+			continue;
+		}
+		const speaker = (entry as Record<string, unknown>).speaker;
+		if (typeof speaker === 'string') {
+			speakers.add(speaker);
+		}
+	}
+	return [...speakers];
+}

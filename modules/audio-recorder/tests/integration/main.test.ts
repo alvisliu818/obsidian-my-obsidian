@@ -1,0 +1,1869 @@
+/**
+ * Tests for the plugin entry point: settings load/save resilience.
+ * @module tests/unit/main.test
+ */
+
+import { App, Notice } from 'obsidian';
+import { at } from '../helpers/assertions';
+import AudioRecorderPlugin from 'src/main';
+import { DEFAULT_SETTINGS } from 'src/settings/settingsSchema';
+import { RecordingStatus } from 'src/types';
+import type { SaveProgress } from 'src/types';
+import type { PlaybackControlsState } from 'src/player/playbackControls';
+import type { TranscriptionModalOptions } from 'src/ui/TranscriptionModal';
+import type { PluginManifest, TFile } from 'obsidian';
+import { createFile } from '../helpers/createApp';
+import { allEls, el, textOf } from '../helpers/dom';
+import { MODAL } from '../helpers/selectors';
+import { internalsOf, partial } from '../helpers/doubles';
+import { asMockPlugin, asMockVault } from '../helpers/obsidianMock';
+import { modalInstances } from '../mocks/obsidian';
+import { ReleaseNotesModal } from 'src/ui/ReleaseNotesModal';
+import { ActionTargetModal } from 'src/ui/ActionTargetModal';
+import { makePlaybackState } from '../helpers/playbackHarness';
+import { COMMAND_IDS, TRANSCRIPTION_PROVIDER_IDS } from 'src/constants';
+import { RecordingManager } from 'src/recording/RecordingManager';
+import { EnhancedPlayerRegistrar } from 'src/player/EnhancedPlayerRegistrar';
+import { detectSilentChannel } from 'src/recording/silentChannelDetector';
+import { RecoveryModal } from 'src/ui/RecoveryModal';
+import {
+	collectRecoverableSessions,
+	recoverSession,
+} from 'src/recording/RecoveryService';
+import { updateStatusBar } from 'src/ui/StatusBar';
+import { ConversionModal } from 'src/ui/ConversionModal';
+import type { JournalSession } from 'src/recording/SessionJournal';
+import { QueueCoordinator } from 'src/transcription/QueueCoordinator';
+import { QueueRunner } from 'src/transcription/QueueRunner';
+import { ContextMenu } from 'src/ui/ContextMenu';
+import type { ActionServices } from 'src/actions/PluginAction';
+import type { TFolder } from 'obsidian';
+import type { AudioRecorderSettings } from 'src/settings/settingsSchema';
+
+/**
+ * The catalogue the announcement tests run against, named here rather than
+ * read from the module.
+ *
+ * Reading the real one would tie these tests to which releases are currently
+ * bundled, and that catalogue drops its oldest entries as new ones arrive. The
+ * pruning would then break a test about the plugin's lifecycle, several files
+ * away from its cause. Which versions the shipped catalogue holds is asserted
+ * where it belongs, in tests/unit/releaseNotes.test.ts.
+ *
+ * The fixture lives inside the factory because jest hoists the call above every
+ * declaration in this file, and src/main.ts reads the module as it is imported.
+ */
+jest.mock('src/release/releaseNotes', () => {
+	const actual = jest.requireActual<
+		typeof import('src/release/releaseNotes')
+	>('src/release/releaseNotes');
+	const notes = {
+		'1.0.2': 'notes of 1.0.2',
+		'1.0.1': 'notes of 1.0.1',
+		'1.0.0': 'notes of 1.0.0',
+	};
+	return {
+		...actual,
+		RELEASE_NOTES: notes,
+		// The selection itself is the real one, run over the fixture: its
+		// default argument closes over the module's own catalogue, which
+		// replacing the export does not reach.
+		releaseNotesSince: (previousVersion: string): string =>
+			actual.releaseNotesSince(previousVersion, notes),
+	};
+});
+
+jest.mock('src/recording/RecordingManager', () => ({
+	RecordingManager: jest.fn().mockImplementation(() => ({
+		toggleRecording: jest.fn(),
+		togglePauseResume: jest.fn(),
+		stopRecording: jest.fn(),
+		cleanup: jest.fn(),
+		updateSettings: jest.fn(),
+		getStatus: jest.fn(),
+	})),
+}));
+
+jest.mock('src/ui/ContextMenu', () => ({
+	ContextMenu: jest.fn().mockImplementation(() => ({
+		register: jest.fn(),
+	})),
+}));
+
+jest.mock('src/player/EnhancedPlayerRegistrar', () => ({
+	EnhancedPlayerRegistrar: jest.fn().mockImplementation(() => ({
+		register: jest.fn(),
+		dispose: jest.fn(),
+		refresh: jest.fn(),
+		subscribePlayback: jest.fn(),
+		currentPlaybackState: jest.fn(() => null),
+		primeSavedRecordingsForEnhancement: jest.fn(),
+		openMarkerSearch: jest.fn().mockResolvedValue(undefined),
+		markerHits: jest.fn().mockResolvedValue([]),
+		reloadMarkersFor: jest.fn(),
+	})),
+}));
+
+jest.mock('src/transcription/runTranscription', () => ({
+	transcribeFile: jest.fn(),
+}));
+
+jest.mock('src/transcription/QueueRunner', () => ({
+	QueueRunner: jest.fn().mockImplementation(() => ({
+		drain: jest.fn().mockResolvedValue(undefined),
+		isRunning: jest.fn(() => false),
+	})),
+}));
+
+jest.mock('src/transcription/QueueCoordinator', () => ({
+	QueueCoordinator: jest.fn().mockImplementation(() => ({
+		queueFolder: jest.fn().mockResolvedValue(undefined),
+		open: jest.fn(),
+		resumeIfPending: jest.fn().mockResolvedValue(undefined),
+		enqueueFolder: jest.fn().mockResolvedValue({ found: 2, added: 1 }),
+		status: jest
+			.fn()
+			.mockResolvedValue({ entries: [], paused: true, running: false }),
+		start: jest.fn(),
+		pause: jest.fn(),
+		clear: jest.fn(),
+		remove: jest.fn(() => true),
+	})),
+}));
+
+jest.mock('src/ui/StatusBar', () => ({
+	updateStatusBar: jest.fn(),
+	initializeStatusBar: jest.fn(),
+	renderPlaybackStatusBar: jest.fn(),
+	renderTranscriptionStatusBar: jest.fn(),
+}));
+
+jest.mock('src/ui/RibbonIcon', () => ({
+	updateRibbonIcon: jest.fn(),
+}));
+
+jest.mock('src/ui/DeviceSelectionModal', () => ({
+	showDeviceSelectionModal: jest.fn(),
+}));
+
+jest.mock('src/recording/RecoveryService', () => ({
+	collectRecoverableSessions: jest.fn().mockResolvedValue([]),
+	recoverSession: jest
+		.fn()
+		.mockResolvedValue({ recoveredPaths: [], failedTracks: [] }),
+	discardSession: jest.fn().mockResolvedValue([]),
+}));
+
+jest.mock('src/ui/RecoveryModal', () => ({
+	RecoveryModal: jest.fn().mockImplementation(() => ({
+		open: jest.fn(),
+	})),
+}));
+
+jest.mock('src/recording/silentChannelDetector', () => ({
+	detectSilentChannel: jest.fn(),
+}));
+
+const mockConversionModalOpen = jest.fn();
+jest.mock('src/ui/ConversionModal', () => ({
+	ConversionModal: jest.fn().mockImplementation(() => ({
+		open: mockConversionModalOpen,
+	})),
+}));
+
+interface SilentChannelHooks {
+	settings: typeof DEFAULT_SETTINGS;
+	playerRegistrar: { primeSavedRecordingsForEnhancement: jest.Mock };
+	encodingWorker: unknown;
+	maybeSuggestMonoConversion(result: {
+		audioPaths: string[];
+		notePath: null;
+		trackFiles?: { trackIndex: number; files: string[] }[];
+		durationSeconds?: number;
+	}): Promise<void>;
+	showSilentChannelNotice(
+		suggestions: {
+			file: { path: string; name: string };
+			keepMode: string;
+			silentSide: string;
+		}[],
+	): void;
+	openMonoConversion(file: unknown, keepMode: string): void;
+}
+
+// Fixture path: in production the directory comes from manifest.dir
+const PLUGIN_DIR = 'config-dir/plugins/advanced-audio-recorder';
+const DATA_PATH = `${PLUGIN_DIR}/data.json`;
+const BACKUP_PATH = `${PLUGIN_DIR}/data.json.bak`;
+const RETRY_DELAY_MS = 250;
+
+const MANIFEST = {
+	id: 'advanced-audio-recorder',
+	name: 'Advanced Audio Recorder',
+	version: '1.3.3',
+	dir: PLUGIN_DIR,
+};
+
+type LoadDataResult = Record<string, unknown> | null | undefined;
+
+interface PluginHarness {
+	plugin: AudioRecorderPlugin;
+	loadData: jest.Mock;
+	saveData: jest.Mock;
+	adapterRead: jest.Mock;
+	adapterWrite: jest.Mock;
+	adapterExists: jest.Mock;
+}
+
+/**
+ * Creates a plugin instance with mocked persistence functions.
+ * data.json does not exist by default; tests that model an existing
+ * but unreadable file flip adapterExists to true.
+ * @param loadDataResults - Sequence of loadData results per call
+ * @param version - The version the manifest carries, for the tests that turn
+ * on which version is running
+ */
+function createPlugin(
+	loadDataResults: LoadDataResult[],
+	version: string = MANIFEST.version,
+): PluginHarness {
+	const app = new App();
+	const plugin = new AudioRecorderPlugin(
+		app,
+		partial<PluginManifest>({ ...MANIFEST, version }),
+	);
+
+	const loadData = jest.fn();
+	for (const result of loadDataResults) {
+		loadData.mockResolvedValueOnce(result);
+	}
+	const saveData = jest.fn().mockResolvedValue(undefined);
+	(plugin as unknown as Record<string, unknown>).loadData = loadData;
+	(plugin as unknown as Record<string, unknown>).saveData = saveData;
+
+	const adapterRead = jest.fn().mockResolvedValue('');
+	const adapterWrite = jest.fn().mockResolvedValue(undefined);
+	const adapterExists = jest.fn().mockResolvedValue(false);
+	plugin.app.vault.adapter.read = adapterRead;
+	plugin.app.vault.adapter.write = adapterWrite;
+	plugin.app.vault.adapter.exists = adapterExists;
+
+	return {
+		plugin,
+		loadData,
+		saveData,
+		adapterRead,
+		adapterWrite,
+		adapterExists,
+	};
+}
+
+/**
+ * Runs plugin.onload while advancing the retry timer, so loads that
+ * hit the retry path resolve under fake timers.
+ */
+async function onloadWithTimers(plugin: AudioRecorderPlugin): Promise<void> {
+	const promise = plugin.onload();
+	await jest.advanceTimersByTimeAsync(RETRY_DELAY_MS);
+	await promise;
+}
+
+/**
+ * Drives a settings save and answers how many writes it put on disk.
+ *
+ * The first run of a version records it as announced, which is a write of its
+ * own during load. Forgetting that one is what leaves the count belonging to
+ * the save the test drives. The count is returned rather than asserted here,
+ * so each test states its own expectation and reads as a test rather than as
+ * a call.
+ * @param plugin - The loaded plugin
+ * @param saveData - Its persistence spy
+ * @returns Writes that reached data.json because of this save
+ */
+async function writesDrivenBySave(
+	plugin: AudioRecorderPlugin,
+	saveData: jest.Mock,
+): Promise<number> {
+	saveData.mockClear();
+	await plugin.saveSettings();
+	return saveData.mock.calls.length;
+}
+
+describe('AudioRecorderPlugin settings persistence', () => {
+	beforeEach(() => {
+		jest.useFakeTimers();
+	});
+
+	afterEach(() => {
+		jest.useRealTimers();
+	});
+
+	it('merges stored settings with defaults and writes a backup', async () => {
+		const { plugin, adapterWrite, loadData } = createPlugin([
+			{ filePrefix: 'meeting', sampleRate: 22050 },
+		]);
+
+		await onloadWithTimers(plugin);
+
+		expect(loadData).toHaveBeenCalledTimes(1);
+		expect(plugin.settings.filePrefix).toBe('meeting');
+		expect(plugin.settings.sampleRate).toBe(22050);
+		expect(plugin.settings.recordingFormat).toBe(
+			DEFAULT_SETTINGS.recordingFormat,
+		);
+		expect(adapterWrite).toHaveBeenCalledWith(
+			BACKUP_PATH,
+			expect.stringContaining('"filePrefix":"meeting"'),
+		);
+	});
+
+	it('uses defaults when data.json is missing and allows saving', async () => {
+		const { plugin, saveData } = createPlugin([null]);
+
+		await onloadWithTimers(plugin);
+
+		expect(plugin.settings.filePrefix).toBe(DEFAULT_SETTINGS.filePrefix);
+
+		expect(await writesDrivenBySave(plugin, saveData)).toBe(1);
+	});
+
+	it('allows saving when a missing data.json is reported as a failed read', async () => {
+		// On some filesystems reading a missing file fails with a
+		// non-ENOENT code, so loadData() returns undefined instead of
+		// null. The file's absence must still enable saving, otherwise
+		// data.json can never be created.
+		const { plugin, loadData, saveData, adapterExists } = createPlugin([
+			undefined,
+		]);
+
+		await onloadWithTimers(plugin);
+
+		expect(adapterExists).toHaveBeenCalledWith(DATA_PATH);
+		// No retry for a file that does not exist
+		expect(loadData).toHaveBeenCalledTimes(1);
+		expect(plugin.settings.filePrefix).toBe(DEFAULT_SETTINGS.filePrefix);
+
+		expect(await writesDrivenBySave(plugin, saveData)).toBe(1);
+	});
+
+	it('restores settings from the backup when data.json is missing', async () => {
+		const { plugin, adapterRead, adapterExists, saveData } = createPlugin([
+			null,
+		]);
+		adapterExists.mockImplementation((path: string) =>
+			Promise.resolve(path === BACKUP_PATH),
+		);
+		adapterRead.mockResolvedValue(
+			JSON.stringify({ filePrefix: 'from-backup' }),
+		);
+
+		await onloadWithTimers(plugin);
+
+		expect(adapterRead).toHaveBeenCalledWith(BACKUP_PATH);
+		expect(plugin.settings.filePrefix).toBe('from-backup');
+		// The restore is persisted right away: data.json is recreated
+		// so the backup stops being the only copy on disk
+		expect(saveData).toHaveBeenCalledWith(
+			expect.objectContaining({ filePrefix: 'from-backup' }),
+		);
+
+		expect(await writesDrivenBySave(plugin, saveData)).toBe(1);
+	});
+
+	it('blocks saving when data.json is missing and the backup cannot be read', async () => {
+		// With data.json missing, the backup is the only remaining
+		// copy of the settings: a transient read failure must block
+		// saving instead of letting the defaults overwrite it
+		const { plugin, adapterRead, adapterWrite, adapterExists, saveData } =
+			createPlugin([null]);
+		adapterExists.mockImplementation((path: string) =>
+			Promise.resolve(path === BACKUP_PATH),
+		);
+		adapterRead.mockRejectedValue(new Error('EBUSY'));
+
+		await onloadWithTimers(plugin);
+
+		// Defaults are active in memory only
+		expect(plugin.settings.filePrefix).toBe(DEFAULT_SETTINGS.filePrefix);
+
+		await plugin.saveSettings();
+		expect(saveData).not.toHaveBeenCalled();
+		// The possibly intact backup is never overwritten with defaults
+		expect(adapterWrite).not.toHaveBeenCalled();
+	});
+
+	it('retries a failed read once and uses the second result', async () => {
+		const { plugin, loadData, saveData, adapterExists } = createPlugin([
+			undefined,
+			{ filePrefix: 'recovered' },
+		]);
+		adapterExists.mockResolvedValue(true);
+
+		await onloadWithTimers(plugin);
+
+		expect(loadData).toHaveBeenCalledTimes(2);
+		expect(plugin.settings.filePrefix).toBe('recovered');
+
+		expect(await writesDrivenBySave(plugin, saveData)).toBe(1);
+	});
+
+	it('uses the backup for the session and blocks saving when data.json is unreadable', async () => {
+		const { plugin, adapterRead, adapterWrite, saveData, adapterExists } =
+			createPlugin([undefined, undefined]);
+		adapterExists.mockResolvedValue(true);
+		adapterRead.mockResolvedValue(
+			JSON.stringify({ filePrefix: 'from-backup' }),
+		);
+
+		await onloadWithTimers(plugin);
+
+		// The readable backup keeps the session usable in memory
+		expect(adapterRead).toHaveBeenCalledWith(BACKUP_PATH);
+		expect(plugin.settings.filePrefix).toBe('from-backup');
+
+		// The unreadable data.json may be intact and newer than the
+		// backup (settings synced while the plugin was unloaded), so
+		// saving stays blocked instead of overwriting it with
+		// backup-derived values
+		await plugin.saveSettings();
+		expect(saveData).not.toHaveBeenCalled();
+		expect(adapterWrite).not.toHaveBeenCalled();
+	});
+
+	it('blocks saving when neither data.json nor the backup is readable', async () => {
+		const { plugin, adapterRead, saveData, adapterWrite, adapterExists } =
+			createPlugin([undefined, undefined]);
+		adapterExists.mockResolvedValue(true);
+		adapterRead.mockRejectedValue(new Error('EBUSY'));
+
+		await onloadWithTimers(plugin);
+
+		// Defaults are active in memory only
+		expect(plugin.settings.filePrefix).toBe(DEFAULT_SETTINGS.filePrefix);
+
+		await plugin.saveSettings();
+		expect(saveData).not.toHaveBeenCalled();
+		// No backup written either: it would capture the defaults
+		expect(adapterWrite).not.toHaveBeenCalled();
+	});
+
+	it('blocks saving when the backup contains invalid JSON', async () => {
+		const { plugin, adapterRead, saveData, adapterExists } = createPlugin([
+			undefined,
+			undefined,
+		]);
+		adapterExists.mockResolvedValue(true);
+		adapterRead.mockResolvedValue('{ truncated');
+
+		await onloadWithTimers(plugin);
+
+		await plugin.saveSettings();
+		expect(saveData).not.toHaveBeenCalled();
+	});
+
+	it('treats a file it cannot ask about as present, rather than overwriting it', async () => {
+		// An adapter that throws on exists() says nothing about the file. The
+		// protective reading is "it is there": overwriting a possibly intact
+		// data.json with defaults loses the user's settings for good.
+		const { plugin, saveData, adapterExists } = createPlugin([
+			undefined,
+			undefined,
+		]);
+		adapterExists.mockRejectedValue(new Error('EACCES'));
+
+		await onloadWithTimers(plugin);
+
+		await plugin.saveSettings();
+		expect(saveData).not.toHaveBeenCalled();
+	});
+
+	it('carries on when the backup cannot be written', async () => {
+		// The backup is best-effort. A read-only plugin folder must not stop
+		// the settings themselves from being saved.
+		const warn = jest
+			.spyOn(console, 'warn')
+			.mockImplementation(() => undefined);
+		const { plugin, saveData, adapterWrite } = createPlugin([null]);
+		adapterWrite.mockRejectedValue(new Error('EROFS'));
+
+		await onloadWithTimers(plugin);
+		await plugin.saveSettings();
+
+		expect(saveData).toHaveBeenCalled();
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining('Failed to write settings backup'),
+			expect.any(Error),
+		);
+	});
+
+	it('skips the backup entirely when the plugin folder is unknown', async () => {
+		// manifest.dir is optional in Obsidian's own types; with no folder
+		// there is nowhere to put a backup and nothing to check for.
+		const app = new App();
+		const plugin = new AudioRecorderPlugin(
+			app,
+			partial<PluginManifest>({
+				...MANIFEST,
+				dir: undefined,
+			}),
+		);
+		const store = plugin as unknown as Record<string, unknown>;
+		store.loadData = jest.fn().mockResolvedValue(undefined);
+		store.saveData = jest.fn().mockResolvedValue(undefined);
+		const adapterWrite = jest.fn().mockResolvedValue(undefined);
+		const adapterExists = jest.fn().mockResolvedValue(false);
+		plugin.app.vault.adapter.write = adapterWrite;
+		plugin.app.vault.adapter.exists = adapterExists;
+
+		await onloadWithTimers(plugin);
+		await plugin.saveSettings();
+
+		expect(adapterExists).not.toHaveBeenCalled();
+		expect(adapterWrite).not.toHaveBeenCalled();
+		expect(store.saveData).toHaveBeenCalled();
+	});
+
+	it('propagates in-memory settings to the recording manager while saving is blocked', async () => {
+		const { plugin, saveData, adapterExists } = createPlugin([
+			undefined,
+			undefined,
+		]);
+		adapterExists.mockResolvedValue(true);
+
+		await onloadWithTimers(plugin);
+
+		const manager = at((RecordingManager as jest.Mock).mock.results, 0)
+			.value as { updateSettings: jest.Mock };
+
+		// The settings tab mutates the in-memory settings before
+		// calling saveSettings; with persistence blocked, the change
+		// must still reach the recording manager so the whole session
+		// sees one consistent state
+		plugin.settings.filePrefix = 'changed-in-session';
+		await plugin.saveSettings();
+
+		expect(saveData).not.toHaveBeenCalled();
+		expect(manager.updateSettings).toHaveBeenCalledWith(plugin.settings);
+	});
+
+	it('primes saved recordings for enhanced player rendering', async () => {
+		const { plugin } = createPlugin([null]);
+
+		await onloadWithTimers(plugin);
+
+		const onRecordingSaved = (RecordingManager as jest.Mock).mock
+			.calls[0][5] as (result: {
+			audioPaths: string[];
+			notePath: string | null;
+		}) => void;
+		const registrar = at(
+			(EnhancedPlayerRegistrar as jest.Mock).mock.results,
+			0,
+		).value as {
+			primeSavedRecordingsForEnhancement: jest.Mock;
+		};
+
+		onRecordingSaved({
+			audioPaths: ['recordings/fresh.webm'],
+			notePath: 'notes/daily.md',
+		});
+
+		expect(
+			registrar.primeSavedRecordingsForEnhancement,
+		).toHaveBeenCalledWith(['recordings/fresh.webm']);
+	});
+
+	it('finishes the save even when the lopsided-stereo check throws', async () => {
+		// The check is a fire-and-forget nicety at the end of a recording. A
+		// failure there must not surface as an unhandled rejection, and must
+		// not stop the rest of the save from being reported.
+		const warn = jest
+			.spyOn(console, 'warn')
+			.mockImplementation(() => undefined);
+		const { plugin } = createPlugin([null]);
+		await onloadWithTimers(plugin);
+		plugin.settings.detectSilentChannelOnSave = true;
+		plugin.app.vault.getFileByPath = jest
+			.fn()
+			.mockReturnValue(createFile('rec.wav'));
+		(detectSilentChannel as jest.Mock).mockRejectedValue(
+			new Error('decode failed'),
+		);
+		const onRecordingSaved = at(
+			(
+				jest.requireMock('src/recording/RecordingManager')
+					.RecordingManager as jest.Mock
+			).mock.calls,
+			0,
+		)[5] as (result: {
+			audioPaths: string[];
+			notePath: string | null;
+		}) => void;
+
+		onRecordingSaved({ audioPaths: ['rec.wav'], notePath: null });
+		await jest.advanceTimersByTimeAsync(0);
+
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining('Silent-channel suggestion failed'),
+			expect.any(Error),
+		);
+	});
+
+	it('treats a rejected settings read as a failed read', async () => {
+		// The current Obsidian loadData() never rejects, but that is
+		// undocumented internal behavior; a rejection must degrade to
+		// the failed-read path instead of breaking onload
+		const { plugin, loadData, saveData } = createPlugin([]);
+		loadData.mockRejectedValue(new Error('read failure'));
+
+		await onloadWithTimers(plugin);
+
+		// data.json does not exist: defaults apply and saving stays
+		// enabled so the file gets created on the next change
+		expect(plugin.settings.filePrefix).toBe(DEFAULT_SETTINGS.filePrefix);
+		expect(await writesDrivenBySave(plugin, saveData)).toBe(1);
+	});
+
+	it('blocks saving when a rejected read hits an existing data.json', async () => {
+		const { plugin, loadData, saveData, adapterExists } = createPlugin([]);
+		adapterExists.mockResolvedValue(true);
+		loadData.mockRejectedValue(new Error('read failure'));
+
+		await onloadWithTimers(plugin);
+
+		await plugin.saveSettings();
+		expect(saveData).not.toHaveBeenCalled();
+	});
+
+	it('keeps the in-memory settings when a reload read fails', async () => {
+		const { plugin, loadData, saveData, adapterExists } = createPlugin([
+			{ filePrefix: 'loaded' },
+		]);
+
+		await onloadWithTimers(plugin);
+		expect(plugin.settings.filePrefix).toBe('loaded');
+		// The load recorded the running version as announced; what this
+		// test is about is that nothing is written after the reload fails.
+		saveData.mockClear();
+
+		// External change arrives while the file is locked: every
+		// subsequent read fails
+		adapterExists.mockResolvedValue(true);
+		loadData.mockResolvedValue(undefined);
+		const changePromise = plugin.onExternalSettingsChange();
+		await jest.advanceTimersByTimeAsync(RETRY_DELAY_MS);
+		await changePromise;
+
+		// The previously loaded settings stay active instead of being
+		// replaced with defaults
+		expect(plugin.settings.filePrefix).toBe('loaded');
+
+		// Saving stays blocked until a successful reload
+		await plugin.saveSettings();
+		expect(saveData).not.toHaveBeenCalled();
+	});
+
+	it('reloads settings on external settings change', async () => {
+		const { plugin, loadData } = createPlugin([
+			{ filePrefix: 'before' },
+			{ filePrefix: 'after-sync' },
+		]);
+
+		await onloadWithTimers(plugin);
+		expect(plugin.settings.filePrefix).toBe('before');
+
+		await plugin.onExternalSettingsChange();
+
+		expect(loadData).toHaveBeenCalledTimes(2);
+		expect(plugin.settings.filePrefix).toBe('after-sync');
+	});
+
+	describe('a profile whose body is read from a note', () => {
+		const NOTE = 'Glossaries/Standup.md';
+
+		/** The glossary as data.json stores it, cached as the given text. */
+		const storedGlossary = (body: string): Record<string, unknown> => ({
+			profiles: [
+				{
+					id: 'g1',
+					kind: 'dictionary',
+					name: 'Standup',
+					body,
+					sourcePath: NOTE,
+				},
+			],
+		});
+
+		it('reads the note once the vault is up, and saves what it read', async () => {
+			const { plugin, saveData } = createPlugin([
+				storedGlossary('Older'),
+			]);
+			asMockVault(plugin.app.vault).seed([
+				{
+					path: NOTE,
+					content: '---\ntags: [glossary]\n---\n- Kubernetes',
+				},
+			]);
+
+			await onloadWithTimers(plugin);
+			await jest.advanceTimersByTimeAsync(0);
+
+			expect(at(plugin.settings.profiles, 0).body).toBe('- Kubernetes');
+			expect(saveData).toHaveBeenCalledWith(
+				expect.objectContaining({
+					profiles: [
+						expect.objectContaining({
+							body: '- Kubernetes',
+							sourcePath: NOTE,
+						}),
+					],
+				}),
+			);
+		});
+
+		it('reads the notes again after an external change, and writes nothing back', async () => {
+			const { plugin, saveData } = createPlugin([
+				storedGlossary('- Kubernetes'),
+				// Cached on another device, before the note was last edited.
+				storedGlossary('Older'),
+			]);
+			asMockVault(plugin.app.vault).seed([
+				{ path: NOTE, content: '- Kubernetes' },
+			]);
+			await onloadWithTimers(plugin);
+			await jest.advanceTimersByTimeAsync(0);
+			saveData.mockClear();
+
+			await plugin.onExternalSettingsChange();
+
+			expect(at(plugin.settings.profiles, 0).body).toBe('- Kubernetes');
+			expect(saveData).not.toHaveBeenCalled();
+		});
+	});
+
+	it('recovers saving after a successful reload', async () => {
+		const { plugin, adapterRead, saveData, loadData, adapterExists } =
+			createPlugin([undefined, undefined]);
+		adapterExists.mockResolvedValue(true);
+		adapterRead.mockRejectedValue(new Error('EBUSY'));
+
+		await onloadWithTimers(plugin);
+		await plugin.saveSettings();
+		expect(saveData).not.toHaveBeenCalled();
+
+		// The file becomes readable again (lock released)
+		loadData.mockResolvedValue({ filePrefix: 'recovered' });
+		await plugin.onExternalSettingsChange();
+
+		expect(plugin.settings.filePrefix).toBe('recovered');
+		await plugin.saveSettings();
+		expect(saveData).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('AudioRecorderPlugin crash recovery wiring', () => {
+	beforeEach(() => {
+		jest.useFakeTimers();
+	});
+
+	afterEach(() => {
+		jest.useRealTimers();
+	});
+
+	const createTestSession = (): JournalSession => ({
+		sessionId: 'session-1',
+		startedAt: 1765533600000,
+		outputFormat: 'webm',
+		recorderFormat: 'webm',
+		bitrate: 128000,
+		tracks: [],
+	});
+
+	it('passes the journal to the RecordingManager', async () => {
+		const { plugin } = createPlugin([null]);
+
+		await onloadWithTimers(plugin);
+
+		const journalArg = (RecordingManager as jest.Mock).mock.calls[0][4] as {
+			readJournal?: unknown;
+		};
+		expect(typeof journalArg.readJournal).toBe('function');
+	});
+
+	it('passes one shared sidecar store to every consumer', async () => {
+		// A second RecordingSidecarStore would mean a second cache and a
+		// second write chain clobbering the same files, so the manager and
+		// the player registrar must receive the very same instance.
+		const { plugin } = createPlugin([null]);
+
+		await onloadWithTimers(plugin);
+
+		const managerStore = (RecordingManager as jest.Mock).mock
+			.calls[0][3] as unknown;
+		const registrarStore = (EnhancedPlayerRegistrar as jest.Mock).mock
+			.calls[0][3] as unknown;
+		expect(managerStore).toBeDefined();
+		expect(managerStore).toBe(registrarStore);
+	});
+
+	it('does not open the recovery modal when nothing is recoverable', async () => {
+		const { plugin } = createPlugin([null]);
+
+		await onloadWithTimers(plugin);
+		await jest.advanceTimersByTimeAsync(0);
+
+		expect(jest.mocked(RecoveryModal)).not.toHaveBeenCalled();
+	});
+
+	it('opens the recovery modal for recoverable sessions', async () => {
+		const session = createTestSession();
+		jest.mocked(collectRecoverableSessions).mockResolvedValueOnce([
+			session,
+		]);
+		const { plugin } = createPlugin([null]);
+
+		await onloadWithTimers(plugin);
+		await jest.advanceTimersByTimeAsync(0);
+
+		expect(jest.mocked(RecoveryModal)).toHaveBeenCalledWith(
+			plugin.app,
+			[session],
+			expect.objectContaining({
+				onRecover: expect.any(Function),
+				onDiscard: expect.any(Function),
+			}),
+		);
+		const modalInstance = at((RecoveryModal as jest.Mock).mock.results, 0)
+			.value as { open: jest.Mock };
+		expect(modalInstance.open).toHaveBeenCalled();
+	});
+
+	it('recovers every offered session through the callback', async () => {
+		const sessions = [createTestSession(), createTestSession()];
+		jest.mocked(collectRecoverableSessions).mockResolvedValueOnce(sessions);
+		const { plugin } = createPlugin([null]);
+
+		await onloadWithTimers(plugin);
+		await jest.advanceTimersByTimeAsync(0);
+
+		const callbacks = (RecoveryModal as jest.Mock).mock.calls[0][2] as {
+			onRecover: () => Promise<void>;
+		};
+		await callbacks.onRecover();
+
+		expect(jest.mocked(recoverSession)).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not break onload when the recovery check fails', async () => {
+		const consoleErrorSpy = jest
+			.spyOn(console, 'error')
+			.mockImplementation();
+		jest.mocked(collectRecoverableSessions).mockRejectedValueOnce(
+			new Error('journal exploded'),
+		);
+		const { plugin } = createPlugin([null]);
+
+		await expect(onloadWithTimers(plugin)).resolves.toBeUndefined();
+		await jest.advanceTimersByTimeAsync(0);
+
+		expect(consoleErrorSpy).toHaveBeenCalledWith(
+			expect.stringContaining('Recovery check failed'),
+			expect.any(Error),
+		);
+	});
+});
+
+/** The services the plugin handed its menus, every action's. */
+function menuServices(): ActionServices {
+	return at((ContextMenu as jest.Mock).mock.calls, 0)[1] as ActionServices;
+}
+
+/** Loads a plugin with no saved data and hands back its action services. */
+async function loadedServices(): Promise<ActionServices> {
+	const { plugin } = createPlugin([null]);
+	await onloadWithTimers(plugin);
+	return menuServices();
+}
+
+/** The slice of the mocked player registrar these cases drive. */
+interface PlayerRegistrarDouble {
+	subscribePlayback: jest.Mock;
+	currentPlaybackState: jest.Mock;
+	openMarkerSearch: jest.Mock;
+	markerHits: jest.Mock;
+	reloadMarkersFor: jest.Mock;
+}
+
+/**
+ * Loads a plugin and hands back the two playback paths the registrar gives
+ * it: the listener it pushes snapshots to, which is what the status bar
+ * renders, and the reader the palette commands pull from.
+ * @returns The loaded plugin, its playback listener, and its registrar double
+ */
+async function pluginWithPlayback(): Promise<{
+	plugin: AudioRecorderPlugin;
+	onPlayback: (state: PlaybackControlsState | null) => void;
+	registrar: PlayerRegistrarDouble;
+}> {
+	const { plugin } = createPlugin([null]);
+	await onloadWithTimers(plugin);
+	const registrar = at((EnhancedPlayerRegistrar as jest.Mock).mock.results, 0)
+		.value as PlayerRegistrarDouble;
+	return {
+		plugin,
+		registrar,
+		onPlayback: registrar.subscribePlayback.mock.calls[0][0] as (
+			state: PlaybackControlsState | null,
+		) => void,
+	};
+}
+
+describe('AudioRecorderPlugin background transcription status bar', () => {
+	beforeEach(() => {
+		jest.useFakeTimers();
+	});
+
+	afterEach(() => {
+		jest.useRealTimers();
+	});
+
+	/** Builds per-modal background-progress callbacks via the private factory. */
+	const buildBackgroundProgress = (
+		plugin: AudioRecorderPlugin,
+	): NonNullable<TranscriptionModalOptions['backgroundProgress']> => {
+		const factory = plugin as unknown as {
+			createTranscriptionModalOptions: () => TranscriptionModalOptions;
+		};
+		const options = factory.createTranscriptionModalOptions();
+		if (!options.backgroundProgress) {
+			throw new Error('Expected background progress callbacks');
+		}
+		return options.backgroundProgress;
+	};
+
+	const progress = (percent: number, description: string): SaveProgress => ({
+		percent,
+		description,
+	});
+
+	it('renders the most recent minimized transcription and falls back when it clears', async () => {
+		const { plugin } = createPlugin([null]);
+		await onloadWithTimers(plugin);
+
+		const { renderTranscriptionStatusBar, updateStatusBar } =
+			jest.requireMock('src/ui/StatusBar');
+		(renderTranscriptionStatusBar as jest.Mock).mockClear();
+
+		const first = buildBackgroundProgress(plugin);
+		const second = buildBackgroundProgress(plugin);
+		const restoreFirst = jest.fn();
+		const restoreSecond = jest.fn();
+
+		first.show(progress(10, 'First job'), restoreFirst);
+		second.show(progress(60, 'Second job'), restoreSecond);
+
+		// The most recently updated job occupies the single status-bar slot.
+		expect(renderTranscriptionStatusBar).toHaveBeenLastCalledWith(
+			expect.anything(),
+			progress(60, 'Second job'),
+			expect.objectContaining({ onActivate: restoreSecond }),
+		);
+
+		// Clearing the active job falls back to the other still-minimized job
+		// instead of blanking the bar.
+		second.clear();
+		expect(renderTranscriptionStatusBar).toHaveBeenLastCalledWith(
+			expect.anything(),
+			progress(10, 'First job'),
+			expect.objectContaining({ onActivate: restoreFirst }),
+		);
+
+		// Clearing the last job releases the slot to the idle renderer.
+		(updateStatusBar as jest.Mock).mockClear();
+		first.clear();
+		expect(jest.mocked(updateStatusBar)).toHaveBeenCalled();
+	});
+
+	it('keeps the active job displayed when a superseded job clears', async () => {
+		const { plugin } = createPlugin([null]);
+		await onloadWithTimers(plugin);
+
+		const { renderTranscriptionStatusBar } =
+			jest.requireMock('src/ui/StatusBar');
+
+		const first = buildBackgroundProgress(plugin);
+		const second = buildBackgroundProgress(plugin);
+		const restoreSecond = jest.fn();
+
+		first.show(progress(10, 'First job'), jest.fn());
+		second.show(progress(60, 'Second job'), restoreSecond);
+
+		(renderTranscriptionStatusBar as jest.Mock).mockClear();
+		// The earlier job finishes while the later one still owns the slot.
+		first.clear();
+		expect(renderTranscriptionStatusBar).toHaveBeenLastCalledWith(
+			expect.anything(),
+			progress(60, 'Second job'),
+			expect.objectContaining({ onActivate: restoreSecond }),
+		);
+	});
+
+	it('prioritizes recording, then playback, then minimized transcription', async () => {
+		const { plugin, onPlayback } = await pluginWithPlayback();
+		const { renderPlaybackStatusBar, renderTranscriptionStatusBar } =
+			jest.requireMock('src/ui/StatusBar');
+		const playbackState = makePlaybackState();
+
+		onPlayback(playbackState);
+		expect(renderPlaybackStatusBar).toHaveBeenLastCalledWith(
+			expect.anything(),
+			playbackState,
+		);
+
+		const background = buildBackgroundProgress(plugin);
+		background.show(progress(40, 'Background job'), jest.fn());
+		expect(renderPlaybackStatusBar).toHaveBeenLastCalledWith(
+			expect.anything(),
+			playbackState,
+		);
+
+		const hooks = plugin as unknown as {
+			handleStatusChange(status: RecordingStatus): void;
+		};
+		hooks.handleStatusChange(RecordingStatus.Recording);
+		expect(jest.mocked(updateStatusBar)).toHaveBeenLastCalledWith(
+			expect.anything(),
+			RecordingStatus.Recording,
+			undefined,
+			expect.anything(),
+			expect.anything(),
+		);
+
+		hooks.handleStatusChange(RecordingStatus.Idle);
+		expect(renderPlaybackStatusBar).toHaveBeenLastCalledWith(
+			expect.anything(),
+			playbackState,
+		);
+
+		onPlayback(null);
+		expect(renderTranscriptionStatusBar).toHaveBeenLastCalledWith(
+			expect.anything(),
+			progress(40, 'Background job'),
+			expect.anything(),
+		);
+	});
+
+	it('does not rebuild recording controls when playback updates mid-recording', async () => {
+		const { plugin, onPlayback } = await pluginWithPlayback();
+		const { renderPlaybackStatusBar, updateStatusBar } =
+			jest.requireMock('src/ui/StatusBar');
+
+		const hooks = plugin as unknown as {
+			handleStatusChange(status: RecordingStatus): void;
+		};
+		hooks.handleStatusChange(RecordingStatus.Recording);
+		(updateStatusBar as jest.Mock).mockClear();
+		(renderPlaybackStatusBar as jest.Mock).mockClear();
+
+		// A timeupdate-driven playback snapshot arrives while recording owns the
+		// status bar. It must be stored without repainting, so the recording
+		// controls (and their live stats) are never rebuilt out from under the
+		// 200 ms live-stat cadence.
+		const playbackState = makePlaybackState({
+			markersEnabled: false,
+			chaptersEnabled: false,
+		});
+		onPlayback(playbackState);
+
+		expect(jest.mocked(updateStatusBar)).not.toHaveBeenCalled();
+		expect(renderPlaybackStatusBar).not.toHaveBeenCalled();
+	});
+
+	it('drives the playback the registry reports, not the one on screen', async () => {
+		const { plugin, onPlayback, registrar } = await pluginWithPlayback();
+		const rendered = makePlaybackState();
+		const live = makePlaybackState();
+
+		// The status bar is still showing a playback the registry has since
+		// let go of, so the command has nothing to drive and says so
+		onPlayback(rendered);
+		expect(
+			asMockPlugin(plugin).invokeCommand(COMMAND_IDS.togglePlayback),
+		).toBe(false);
+
+		registrar.currentPlaybackState.mockReturnValue(live);
+
+		expect(
+			asMockPlugin(plugin).invokeCommand(COMMAND_IDS.togglePlayback),
+		).toBe(true);
+		// The pushed snapshot is never what a command acts on
+		expect(live.onTogglePlay).toHaveBeenCalledTimes(1);
+		expect(rendered.onTogglePlay).not.toHaveBeenCalled();
+
+		registrar.currentPlaybackState.mockReturnValue(null);
+		expect(
+			asMockPlugin(plugin).invokeCommand(COMMAND_IDS.togglePlayback),
+		).toBe(false);
+	});
+});
+
+describe('AudioRecorderPlugin silent-channel suggestion', () => {
+	function primedPlugin(overrides?: Partial<typeof DEFAULT_SETTINGS>): {
+		plugin: AudioRecorderPlugin;
+		hooks: SilentChannelHooks;
+		file: TFile;
+	} {
+		const { plugin } = createPlugin([{}]);
+		const file = createFile('rec.wav');
+		plugin.app.vault.getFileByPath = jest.fn().mockReturnValue(file);
+		const hooks = plugin as unknown as SilentChannelHooks;
+		hooks.settings = {
+			...DEFAULT_SETTINGS,
+			detectSilentChannelOnSave: true,
+			...overrides,
+		};
+		hooks.playerRegistrar = {
+			primeSavedRecordingsForEnhancement: jest.fn(),
+		};
+		hooks.encodingWorker = null;
+		return { plugin, hooks, file };
+	}
+
+	beforeEach(() => {
+		(detectSilentChannel as jest.Mock).mockReset();
+		mockConversionModalOpen.mockClear();
+		(ConversionModal as jest.Mock).mockClear();
+	});
+
+	it('prompts a mono conversion for a lopsided stereo recording', async () => {
+		const { hooks, file } = primedPlugin();
+		(detectSilentChannel as jest.Mock).mockResolvedValue({
+			silentChannel: 1,
+			audioChannel: 0,
+			keepMode: 'mono-left',
+		});
+		// The Notice/DOM path is exercised through showSilentChannelNotice;
+		// here we assert the detection-to-prompt wiring without the Notice
+		const noticeSpy = jest
+			.spyOn(hooks, 'showSilentChannelNotice')
+			.mockImplementation(() => undefined);
+
+		await hooks.maybeSuggestMonoConversion({
+			audioPaths: ['rec.wav'],
+			notePath: null,
+		});
+
+		expect(jest.mocked(detectSilentChannel)).toHaveBeenCalledWith(
+			expect.anything(),
+			file,
+			{ knownDurationSeconds: undefined },
+		);
+		expect(noticeSpy).toHaveBeenCalledWith([
+			{ file, keepMode: 'mono-left', silentSide: 'right' },
+		]);
+	});
+
+	it('labels a silent left channel and keeps the right', async () => {
+		const { hooks, file } = primedPlugin();
+		(detectSilentChannel as jest.Mock).mockResolvedValue({
+			silentChannel: 0,
+			audioChannel: 1,
+			keepMode: 'mono-right',
+		});
+		const noticeSpy = jest
+			.spyOn(hooks, 'showSilentChannelNotice')
+			.mockImplementation(() => undefined);
+
+		await hooks.maybeSuggestMonoConversion({
+			audioPaths: ['rec.wav'],
+			notePath: null,
+		});
+
+		expect(noticeSpy).toHaveBeenCalledWith([
+			{ file, keepMode: 'mono-right', silentSide: 'left' },
+		]);
+	});
+
+	it('checks the first saved file of every track sequentially', async () => {
+		const { plugin, hooks } = primedPlugin();
+		const first = { path: 'loopback.webm', name: 'loopback.webm' };
+		const second = { path: 'mic.webm', name: 'mic.webm' };
+		plugin.app.vault.getFileByPath = jest.fn((path: string) =>
+			path === first.path ? first : second,
+		) as unknown as (path: string) => TFile | null;
+		(detectSilentChannel as jest.Mock)
+			.mockResolvedValueOnce(null)
+			.mockResolvedValueOnce({
+				silentChannel: 1,
+				audioChannel: 0,
+				keepMode: 'mono-left',
+			});
+		const noticeSpy = jest
+			.spyOn(hooks, 'showSilentChannelNotice')
+			.mockImplementation(() => undefined);
+
+		await hooks.maybeSuggestMonoConversion({
+			audioPaths: [first.path, second.path],
+			notePath: null,
+			durationSeconds: 30,
+			trackFiles: [
+				{ trackIndex: 0, files: [first.path, 'loopback-part2.webm'] },
+				{ trackIndex: 1, files: [second.path, 'mic-part2.webm'] },
+			],
+		});
+
+		expect(jest.mocked(detectSilentChannel)).toHaveBeenNthCalledWith(
+			1,
+			expect.anything(),
+			first,
+			{ knownDurationSeconds: 30 },
+		);
+		expect(jest.mocked(detectSilentChannel)).toHaveBeenNthCalledWith(
+			2,
+			expect.anything(),
+			second,
+			{ knownDurationSeconds: 30 },
+		);
+		expect(noticeSpy).toHaveBeenCalledWith([
+			{ file: second, keepMode: 'mono-left', silentSide: 'right' },
+		]);
+	});
+
+	it('does nothing when the setting is disabled', async () => {
+		const { hooks } = primedPlugin({ detectSilentChannelOnSave: false });
+
+		await hooks.maybeSuggestMonoConversion({
+			audioPaths: ['rec.wav'],
+			notePath: null,
+		});
+
+		expect(jest.mocked(detectSilentChannel)).not.toHaveBeenCalled();
+	});
+
+	it('does nothing when no lopsided channel is detected', async () => {
+		const { hooks } = primedPlugin();
+		(detectSilentChannel as jest.Mock).mockResolvedValue(null);
+		const noticeSpy = jest.spyOn(hooks, 'showSilentChannelNotice');
+
+		await hooks.maybeSuggestMonoConversion({
+			audioPaths: ['rec.wav'],
+			notePath: null,
+		});
+
+		expect(noticeSpy).not.toHaveBeenCalled();
+	});
+
+	it('does nothing when there are no saved files', async () => {
+		const { hooks } = primedPlugin();
+
+		await hooks.maybeSuggestMonoConversion({
+			audioPaths: [],
+			notePath: null,
+		});
+
+		expect(jest.mocked(detectSilentChannel)).not.toHaveBeenCalled();
+	});
+
+	it('abandons a run that a newer recording superseded', async () => {
+		// Two recordings finishing close together: the older scan must not
+		// prompt about a file the user has already moved past, and must stop
+		// before spending another decode on it.
+		const { plugin, hooks } = primedPlugin();
+		let superseded = false;
+		(detectSilentChannel as jest.Mock).mockImplementation(async () => {
+			if (!superseded) {
+				// A second save lands while the first scan is mid-file.
+				superseded = true;
+				await hooks.maybeSuggestMonoConversion({
+					audioPaths: ['newer.wav'],
+					notePath: null,
+				});
+			}
+			return null;
+		});
+		plugin.app.vault.getFileByPath = jest
+			.fn()
+			.mockReturnValue(createFile('rec.wav'));
+
+		await hooks.maybeSuggestMonoConversion({
+			audioPaths: ['a.wav', 'b.wav'],
+			notePath: null,
+			trackFiles: [
+				{ trackIndex: 0, files: ['a.wav'] },
+				{ trackIndex: 1, files: ['b.wav'] },
+			],
+		});
+
+		// The superseded run stops after its first candidate rather than
+		// scanning the second.
+		expect(jest.mocked(detectSilentChannel)).toHaveBeenCalledTimes(2);
+	});
+
+	it('skips a path whose file is gone by the time the scan reaches it', async () => {
+		const { plugin, hooks } = primedPlugin();
+		plugin.app.vault.getFileByPath = jest.fn().mockReturnValue(null);
+
+		await hooks.maybeSuggestMonoConversion({
+			audioPaths: ['deleted.wav'],
+			notePath: null,
+		});
+
+		expect(jest.mocked(detectSilentChannel)).not.toHaveBeenCalled();
+	});
+
+	it('opens the conversion dialog preset to the kept channel', () => {
+		const { hooks, file } = primedPlugin();
+
+		hooks.openMonoConversion(file, 'mono-left');
+
+		expect(jest.mocked(ConversionModal)).toHaveBeenCalledTimes(1);
+		expect(at((ConversionModal as jest.Mock).mock.calls, 0)[3]).toEqual(
+			expect.objectContaining({ initialChannelMode: 'mono-left' }),
+		);
+		expect(mockConversionModalOpen).toHaveBeenCalled();
+	});
+
+	it('gives the dialog the encoder the rest of the plugin shares', () => {
+		// A second worker would spin up a second encoder process for what is
+		// the same session's work.
+		const { hooks, file } = primedPlugin();
+
+		hooks.openMonoConversion(file, 'mono-left');
+		const options = at((ConversionModal as jest.Mock).mock.calls, 0)[3] as {
+			getWorkerClient: () => unknown;
+		};
+
+		expect(options.getWorkerClient()).toBe(hooks.encodingWorker);
+	});
+
+	it('enhances the converted file, so its player appears without a reload', () => {
+		const { hooks, file } = primedPlugin();
+		hooks.openMonoConversion(file, 'mono-left');
+		const options = at((ConversionModal as jest.Mock).mock.calls, 0)[3] as {
+			onConverted: (path: string) => void;
+		};
+
+		options.onConverted('Recordings/take-mono.wav');
+
+		expect(
+			hooks.playerRegistrar.primeSavedRecordingsForEnhancement,
+		).toHaveBeenCalledWith(['Recordings/take-mono.wav']);
+	});
+
+	it('renders a native keyboard-accessible action and hides a single notice on click', () => {
+		const { hooks, file } = primedPlugin();
+		const openSpy = jest
+			.spyOn(hooks, 'openMonoConversion')
+			.mockImplementation(() => undefined);
+
+		hooks.showSilentChannelNotice([
+			{ file, keepMode: 'mono-left', silentSide: 'right' },
+		]);
+
+		const notice = (Notice as jest.Mock).mock.instances.at(
+			-1,
+		) as unknown as {
+			message: DocumentFragment;
+			hide: jest.Mock;
+		};
+		const button = el<HTMLButtonElement>(
+			notice.message,
+			MODAL.silentChannelConvert,
+		);
+		expect(button.tagName).toBe('BUTTON');
+		expect(button.type).toBe('button');
+		button.click();
+		expect(notice.hide).toHaveBeenCalled();
+		expect(openSpy).toHaveBeenCalledWith(file, 'mono-left');
+	});
+
+	it('replaces a previous persistent silent-channel notice', () => {
+		const { hooks, file } = primedPlugin();
+		hooks.showSilentChannelNotice([
+			{ file, keepMode: 'mono-left', silentSide: 'right' },
+		]);
+		const first = (Notice as jest.Mock).mock.instances.at(
+			-1,
+		) as unknown as {
+			hide: jest.Mock;
+		};
+
+		hooks.showSilentChannelNotice([
+			{ file, keepMode: 'mono-left', silentSide: 'right' },
+		]);
+
+		expect(first.hide).toHaveBeenCalled();
+	});
+
+	it('renders one conversion action per affected track', () => {
+		const { hooks, file } = primedPlugin();
+		const second = { path: 'mic-2.wav', name: 'mic-2.wav' };
+		const openSpy = jest
+			.spyOn(hooks, 'openMonoConversion')
+			.mockImplementation(() => undefined);
+
+		hooks.showSilentChannelNotice([
+			{ file, keepMode: 'mono-left', silentSide: 'right' },
+			{ file: second, keepMode: 'mono-right', silentSide: 'left' },
+		]);
+
+		const notice = (Notice as jest.Mock).mock.instances.at(
+			-1,
+		) as unknown as {
+			message: DocumentFragment;
+			hide: jest.Mock;
+		};
+		const buttons = allEls<HTMLButtonElement>(
+			notice.message,
+			MODAL.silentChannelConvert,
+		);
+		expect(buttons).toHaveLength(2);
+		at(buttons, 1).click();
+		expect(openSpy).toHaveBeenCalledWith(second, 'mono-right');
+		// Keep the aggregate notice available so the other file can be fixed.
+		expect(notice.hide).not.toHaveBeenCalled();
+	});
+});
+
+describe('AudioRecorderPlugin searching the vault for a marker', () => {
+	it('offers the search from any note, and opens it on the registrar', async () => {
+		const { plugin, registrar } = await pluginWithPlayback();
+
+		// Bound to no file and no playback, so unlike the file and playback
+		// commands it is available with nothing open at all
+		expect(
+			asMockPlugin(plugin).invokeCommand(COMMAND_IDS.searchMarkers),
+		).toBe(true);
+		expect(registrar.openMarkerSearch).toHaveBeenCalledTimes(1);
+	});
+
+	it('lists the markers on the command line from the same index', async () => {
+		const { plugin, registrar } = await pluginWithPlayback();
+
+		await asMockPlugin(plugin).invokeCliCommand(`${MANIFEST.id}:markers`);
+
+		expect(registrar.markerHits).toHaveBeenCalledTimes(1);
+	});
+
+	it('reloads the markers a player shows once an action changed them', async () => {
+		const { registrar } = await pluginWithPlayback();
+		const services = menuServices();
+
+		services.onMarkersChanged('Recordings/a.webm');
+
+		expect(registrar.reloadMarkersFor).toHaveBeenCalledWith(
+			'Recordings/a.webm',
+		);
+	});
+});
+
+describe('AudioRecorderPlugin asking which target a command is for', () => {
+	it('opens a picker when the command could run on several', async () => {
+		const { plugin } = createPlugin([{ transcriptionEnabled: true }]);
+		asMockVault(plugin.app.vault).seed([
+			{ path: 'Recordings/a.webm', data: new ArrayBuffer(8) },
+			{ path: 'Archive/b.webm', data: new ArrayBuffer(8) },
+		]);
+		await onloadWithTimers(plugin);
+
+		expect(
+			asMockPlugin(plugin).invokeCommand(COMMAND_IDS.transcribeFolder),
+		).toBe(true);
+
+		const picker = modalInstances.at(-1);
+		if (!(picker instanceof ActionTargetModal)) {
+			throw new Error('The palette opened no target picker');
+		}
+		expect(
+			picker.getItems().map((target) => picker.getItemText(target)),
+		).toEqual(['the whole vault', 'Archive', 'Recordings']);
+	});
+});
+
+// The queue is wired in three places - the folder menu, the palette command,
+// and the offer to carry on after a restart - and each is a closure that has
+// to reach the one coordinator the plugin built.
+describe('AudioRecorderPlugin transcription queue', () => {
+	/** The coordinator the plugin built on load. */
+	/** The coordinator the plugin built, every method a spy. */
+	type CoordinatorDouble = Record<
+		| 'queueFolder'
+		| 'open'
+		| 'resumeIfPending'
+		| 'enqueueFolder'
+		| 'status'
+		| 'start'
+		| 'pause'
+		| 'clear'
+		| 'remove',
+		jest.Mock
+	>;
+
+	function coordinator(): CoordinatorDouble {
+		return at((QueueCoordinator as jest.Mock).mock.results, 0)
+			.value as CoordinatorDouble;
+	}
+
+	it('offers to carry on with a queue a previous session left', async () => {
+		const { plugin } = createPlugin([null]);
+		await onloadWithTimers(plugin);
+
+		expect(coordinator().resumeIfPending).toHaveBeenCalledTimes(1);
+	});
+
+	it('shows the queue from the palette', async () => {
+		const { plugin } = createPlugin([null]);
+		await onloadWithTimers(plugin);
+
+		expect(
+			asMockPlugin(plugin).invokeCommand(
+				COMMAND_IDS.openTranscriptionQueue,
+			),
+		).toBe(true);
+
+		expect(coordinator().open).toHaveBeenCalledTimes(1);
+	});
+
+	it('gives the runner the live settings and the transcribe entry point', async () => {
+		const { transcribeFile } = jest.requireMock<{
+			transcribeFile: jest.Mock;
+		}>('src/transcription/runTranscription');
+		let settingsFromRun: unknown = null;
+		transcribeFile.mockImplementation(
+			(_app: unknown, getSettings: () => AudioRecorderSettings) => {
+				// The run reads the settings when it runs, not when it was
+				// wired, so a change during a long queue reaches it
+				settingsFromRun = getSettings();
+				return Promise.resolve({
+					cost: {
+						engineId: TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM,
+						usd: 0,
+						usage: {},
+					},
+				});
+			},
+		);
+		const { plugin } = createPlugin([null]);
+		await onloadWithTimers(plugin);
+		const deps = at((QueueRunner as jest.Mock).mock.calls, 0)[0] as {
+			getSettings: () => AudioRecorderSettings;
+			transcribe: (file: TFile, options: unknown) => Promise<unknown>;
+		};
+
+		// Read live rather than captured, so a settings change during a long
+		// queue reaches the recordings still to run
+		expect(deps.getSettings()).toBe(plugin.settings);
+		await deps.transcribe(partial<TFile>({ path: 'a.webm' }), {
+			notePathForLinks: 'a.webm',
+		});
+
+		expect(transcribeFile).toHaveBeenCalledTimes(1);
+		expect(settingsFromRun).toBe(plugin.settings);
+	});
+
+	// A queued run was the only run wired without the sidecar store, so it
+	// registered neither the files it wrote nor the parts it lost: a rename
+	// afterwards could not follow its transcript, its speakers kept the
+	// engine's labels, and "Transcribe the parts that failed" answered that
+	// nothing was missing from a transcript with a hole in it.
+	it('gives a queued run the same sidecar store the rest of the plugin writes through', async () => {
+		const { transcribeFile } = jest.requireMock<{
+			transcribeFile: jest.Mock;
+		}>('src/transcription/runTranscription');
+		transcribeFile.mockResolvedValue({
+			cost: {
+				engineId: TRANSCRIPTION_PROVIDER_IDS.DEEPGRAM,
+				usd: 0,
+				usage: {},
+			},
+		});
+		const { plugin } = createPlugin([null]);
+		await onloadWithTimers(plugin);
+		const deps = at((QueueRunner as jest.Mock).mock.calls, 0)[0] as {
+			transcribe: (file: TFile, options: unknown) => Promise<unknown>;
+		};
+		const services = menuServices();
+
+		await deps.transcribe(partial<TFile>({ path: 'a.webm' }), {
+			notePathForLinks: 'a.webm',
+		});
+
+		// The same store, not merely a store: every writer of a recording's
+		// sidecar has to serialize on one write chain.
+		expect(at(transcribeFile.mock.calls, 0)[3]).toEqual(
+			expect.objectContaining({
+				notePathForLinks: 'a.webm',
+				sidecar: services.recordingSidecar,
+			}),
+		);
+	});
+
+	it('gives the coordinator the live settings too', async () => {
+		const { plugin } = createPlugin([null]);
+		await onloadWithTimers(plugin);
+		const deps = at((QueueCoordinator as jest.Mock).mock.calls, 0)[0] as {
+			getSettings: () => AudioRecorderSettings;
+		};
+
+		expect(deps.getSettings()).toBe(plugin.settings);
+	});
+
+	it('hands the folder menu the same queue', async () => {
+		const services = await loadedServices();
+
+		await services.transcriptionQueue.queueFolder(
+			partial<TFolder>({ path: 'Recordings' }),
+		);
+		services.transcriptionQueue.open();
+
+		expect(coordinator().queueFolder).toHaveBeenCalledWith(
+			expect.objectContaining({ path: 'Recordings' }),
+		);
+		expect(coordinator().open).toHaveBeenCalledTimes(1);
+	});
+
+	it('hands the command line the same queue', async () => {
+		const services = await loadedServices();
+		const queue = services.transcriptionQueue;
+		const folder = partial<TFolder>({ path: 'Recordings' });
+
+		await expect(queue.enqueueFolder(folder)).resolves.toEqual({
+			found: 2,
+			added: 1,
+		});
+		await expect(queue.status()).resolves.toEqual({
+			entries: [],
+			paused: true,
+			running: false,
+		});
+		queue.start();
+		queue.pause();
+		queue.clear();
+		expect(queue.remove('a.webm')).toBe(true);
+
+		expect(coordinator().enqueueFolder).toHaveBeenCalledWith(folder);
+		expect(coordinator().start).toHaveBeenCalledTimes(1);
+		expect(coordinator().pause).toHaveBeenCalledTimes(1);
+		expect(coordinator().clear).toHaveBeenCalledTimes(1);
+		expect(coordinator().remove).toHaveBeenCalledWith('a.webm');
+	});
+
+	it('answers the command line as an empty queue before it has been built', async () => {
+		const { plugin } = createPlugin([null]);
+		const queue = internalsOf<{ createActionServices(): ActionServices }>(
+			plugin,
+		).createActionServices().transcriptionQueue;
+
+		await expect(
+			queue.enqueueFolder(partial<TFolder>({ path: 'Recordings' })),
+		).resolves.toEqual({ found: 0, added: 0 });
+		await expect(queue.status()).resolves.toEqual({
+			entries: [],
+			paused: false,
+			running: false,
+		});
+		expect(queue.remove('a.webm')).toBe(false);
+		expect(() => {
+			queue.start();
+			queue.pause();
+			queue.clear();
+		}).not.toThrow();
+	});
+
+	it('answers the folder menu before the queue has been built', async () => {
+		// The menu is wired during load, ahead of the queue, and its entries
+		// read the field when they are clicked rather than when they were
+		// wired. A load that stopped in between left them dereferencing a
+		// field that was never assigned.
+		const { plugin } = createPlugin([null]);
+		const services = internalsOf<{
+			createActionServices(): ActionServices;
+		}>(plugin).createActionServices();
+
+		expect(() => {
+			services.transcriptionQueue.open();
+		}).not.toThrow();
+		await expect(
+			services.transcriptionQueue.queueFolder(
+				partial<TFolder>({ path: 'Recordings' }),
+			),
+		).resolves.toBeUndefined();
+	});
+});
+
+// The dialog that says what changed. Most of its outcomes show nothing, and
+// each of them is a different reason, so the version that gets recorded
+// matters as much as the dialog that opens.
+describe('AudioRecorderPlugin announcing what changed', () => {
+	/** The version the tests run the plugin as. */
+	const RUNNING_VERSION = '1.0.2';
+
+	/**
+	 * Loads a plugin and lets the announcement settle.
+	 *
+	 * The version is recorded through saveSettings, which is started and not
+	 * awaited so that a slow write never holds up the workspace.
+	 * @param plugin - The plugin to load
+	 */
+	async function settle(plugin: AudioRecorderPlugin): Promise<void> {
+		await plugin.onload();
+		await Promise.resolve();
+		await Promise.resolve();
+	}
+
+	/**
+	 * Loads the plugin over a stored config and lets the announcement settle.
+	 * @param stored - What data.json holds
+	 * @returns The loaded plugin and its persistence spies
+	 */
+	async function announceOver(
+		stored: Record<string, unknown>,
+	): Promise<PluginHarness> {
+		const harness = createPlugin([stored], RUNNING_VERSION);
+		await settle(harness.plugin);
+		return harness;
+	}
+
+	/**
+	 * The dialog the plugin opened, asserting it is the release notes.
+	 * @returns What the dialog is showing
+	 */
+	function announcedNotes(): string {
+		const dialog = at(modalInstances, modalInstances.length - 1, 'dialog');
+		expect(dialog).toBeInstanceOf(ReleaseNotesModal);
+		return textOf(dialog.contentEl, MODAL.releaseNotes);
+	}
+
+	/**
+	 * The version the last write to data.json recorded as announced.
+	 * @param saveData - The persistence spy of the loaded plugin
+	 * @returns What that write stated, so each test asserts it itself
+	 */
+	function announcedVersion(saveData: jest.Mock): unknown {
+		const [written] = at(
+			saveData.mock.calls,
+			saveData.mock.calls.length - 1,
+			'write',
+		) as [{ lastReleaseNotesVersion?: unknown }];
+		return written.lastReleaseNotesVersion;
+	}
+
+	it('shows what changed since the version last announced', async () => {
+		await announceOver({ lastReleaseNotesVersion: '1.0.0' });
+
+		expect(announcedNotes()).toContain('# 1.0.1');
+	});
+
+	it('records the version it announced, so the next start is quiet', async () => {
+		const { saveData } = await announceOver({
+			lastReleaseNotesVersion: '1.0.0',
+		});
+
+		expect(modalInstances).toHaveLength(1);
+		expect(announcedVersion(saveData)).toBe(RUNNING_VERSION);
+	});
+
+	it('still shows what changed when recording the version fails', async () => {
+		// data.json can be unwritable: a full disk, a sync lock. The dialog is
+		// what the update was about, and the bookkeeping failing is no reason
+		// to withhold it.
+		const harness = createPlugin(
+			[{ lastReleaseNotesVersion: '1.0.0' }],
+			RUNNING_VERSION,
+		);
+		harness.saveData.mockRejectedValue(new Error('disk full'));
+
+		await settle(harness.plugin);
+
+		expect(announcedNotes()).toContain('# 1.0.1');
+	});
+
+	it('says nothing when the running version is the one on record', async () => {
+		const { saveData } = await announceOver({
+			lastReleaseNotesVersion: RUNNING_VERSION,
+		});
+
+		expect(modalInstances).toHaveLength(0);
+		expect(saveData).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		// Both look the same from here: nothing has been announced in this
+		// vault yet. Neither is an update, so neither is greeted with the
+		// history of a plugin the user has not been running.
+		{ name: 'a first install', stored: {} },
+		{
+			name: 'a config written before the dialog existed',
+			stored: { recordingFormat: 'mp3' },
+		},
+	])(
+		'shows nothing on $name, and records where it starts',
+		async ({ stored }) => {
+			const { saveData } = await announceOver(stored);
+
+			expect(modalInstances).toHaveLength(0);
+			expect(announcedVersion(saveData)).toBe(RUNNING_VERSION);
+		},
+	);
+
+	it('records the version even when the dialog is turned off', async () => {
+		// Otherwise turning it back on months later opens on every release
+		// since, which is the flood the switch was thrown to avoid.
+		const { saveData } = await announceOver({
+			lastReleaseNotesVersion: '1.0.0',
+			showReleaseNotes: false,
+		});
+
+		expect(modalInstances).toHaveLength(0);
+		expect(announcedVersion(saveData)).toBe(RUNNING_VERSION);
+	});
+
+	it('opens no dialog when there is nothing on record to say', async () => {
+		// A build from between releases, or a version so old its entry has
+		// since been pruned from the catalogue. Here it is a config naming a
+		// version the installed plugin has never heard of.
+		const { saveData } = await announceOver({
+			lastReleaseNotesVersion: '9.9.9',
+		});
+
+		expect(modalInstances).toHaveLength(0);
+		expect(announcedVersion(saveData)).toBe(RUNNING_VERSION);
+	});
+
+	it('stays out of the way while the settings file is unreadable', async () => {
+		// Saving is blocked in that state, so recording the version would fail
+		// and report itself as a Notice about settings, next to a dialog the
+		// user would meet again on the next start anyway.
+		jest.useFakeTimers();
+		try {
+			const harness = createPlugin(
+				[undefined, undefined],
+				RUNNING_VERSION,
+			);
+			harness.adapterExists.mockResolvedValue(true);
+			harness.adapterRead.mockRejectedValue(new Error('locked'));
+
+			await onloadWithTimers(harness.plugin);
+			await jest.advanceTimersByTimeAsync(0);
+
+			expect(modalInstances).toHaveLength(0);
+			expect(harness.saveData).not.toHaveBeenCalled();
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	it('offers every release on record from the palette', async () => {
+		// Asked for rather than met after an update, so what it shows is not
+		// bounded by what was last announced.
+		const { plugin } = await announceOver({
+			lastReleaseNotesVersion: RUNNING_VERSION,
+		});
+
+		expect(
+			asMockPlugin(plugin).invokeCommand(COMMAND_IDS.showReleaseNotes),
+		).toBe(true);
+
+		expect(announcedNotes()).toContain(`# ${RUNNING_VERSION}`);
+	});
+});

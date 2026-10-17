@@ -1,0 +1,260 @@
+/**
+ * What the OpenAI-compatible Whisper provider puts in its request.
+ *
+ * Everything the run asked for has to survive the trip into a multipart body -
+ * the dictionary as the `prompt` field, the language, the timing granularity -
+ * and everything it did not ask for has to stay out of it, since a stray
+ * `language` field turns off detection and word granularity multiplies the
+ * response. The provider builds the body by hand, so the outgoing request is
+ * captured through the shared requestUrl mock and decoded back to text.
+ * @module tests/unit/WhisperApiProvider.test
+ */
+
+import { WhisperApiProvider } from 'src/transcription/providers/WhisperApiProvider';
+import { at } from '../helpers/assertions';
+import { transcribeOptions } from '../helpers/providerFixtures';
+import type { AudioPayload } from 'src/transcription/providers/TranscriptionProvider';
+// Mock-only surface: these exist on the test double, not on Obsidian's
+// API, so they are imported from the mock by path. Jest maps 'obsidian'
+// to the same module, so both imports share one instance.
+import {
+	type MockRequestUrlParam,
+	type MockRequestUrlResponse,
+} from '../mocks/obsidian';
+import { requestBodyText, withRequestUrl } from '../helpers/network';
+import { WHISPER_PROMPT_TOKEN_LIMIT } from 'src/transcription/dictionaryBias';
+
+const BASE_URL = 'https://whisper.example';
+
+function payload(): AudioPayload {
+	return {
+		data: new ArrayBuffer(8),
+		contentType: 'audio/wav',
+		filename: 'rec.wav',
+		offsetSeconds: 0,
+	};
+}
+
+/** Records every request and returns a minimal transcript. */
+function capture(): MockRequestUrlParam[] {
+	const calls: MockRequestUrlParam[] = [];
+	withRequestUrl((param): MockRequestUrlResponse => {
+		calls.push(param);
+		return {
+			status: 200,
+			headers: {},
+			text: JSON.stringify({ text: 'hi' }),
+		};
+	});
+	return calls;
+}
+
+function provider(): WhisperApiProvider {
+	return new WhisperApiProvider({
+		baseUrl: BASE_URL,
+		apiKey: 'k',
+		model: 'whisper-1',
+	});
+}
+
+// An empty key used to be sent anyway, as a bare `Bearer ` with nothing after
+// it. A local server ignores the header, but a header that carries nothing is
+// still a header claiming an identity that does not exist, so it is left off.
+describe('the authorization header', () => {
+	it('carries the key when one is configured', async () => {
+		const calls = capture();
+
+		await provider().transcribe(payload(), transcribeOptions());
+
+		expect(at(calls, 0).headers?.Authorization).toBe('Bearer k');
+	});
+
+	it('is absent when no key is configured', async () => {
+		const calls = capture();
+
+		await new WhisperApiProvider({
+			baseUrl: BASE_URL,
+			apiKey: '',
+			model: 'whisper-1',
+		}).transcribe(payload(), transcribeOptions());
+
+		expect(at(calls, 0).headers).not.toHaveProperty('Authorization');
+	});
+});
+
+describe('WhisperApiProvider request fields', () => {
+	it('sends the dictionary as a comma-joined prompt field', async () => {
+		const calls = capture();
+
+		await provider().transcribe(payload(), {
+			diarize: false,
+			wordTimestamps: false,
+			dictionary: ['Kubernetes', 'gRPC'],
+		});
+
+		const decoded = requestBodyText(calls);
+		expect(decoded).toContain('name="prompt"');
+		expect(decoded).toContain('Kubernetes, gRPC');
+	});
+
+	it('omits the prompt field when the dictionary is empty', async () => {
+		const calls = capture();
+
+		await provider().transcribe(payload(), {
+			diarize: false,
+			wordTimestamps: false,
+		});
+
+		expect(requestBodyText(calls)).not.toContain('name="prompt"');
+	});
+
+	// The service bounds the dictionary and warns about what it dropped, but
+	// a directly driven provider has to bound it too - and a single term
+	// longer than the window leaves nothing at all to send.
+	it('omits the prompt field when no term fits the prompt window', async () => {
+		const calls = capture();
+
+		await provider().transcribe(
+			payload(),
+			transcribeOptions({
+				dictionary: ['x'.repeat(WHISPER_PROMPT_TOKEN_LIMIT + 1)],
+			}),
+		);
+
+		expect(requestBodyText(calls)).not.toContain('name="prompt"');
+	});
+
+	it('asks for word timings only when the run wants them', async () => {
+		// Word granularity multiplies the response size; requesting it for
+		// every run would slow the ones that never read it.
+		const calls = capture();
+
+		await provider().transcribe(
+			payload(),
+			transcribeOptions({ wordTimestamps: true }),
+		);
+
+		expect(requestBodyText(calls)).toContain('word');
+	});
+
+	it('asks for segment timings alone by default', async () => {
+		const calls = capture();
+
+		await provider().transcribe(payload(), transcribeOptions());
+
+		expect(requestBodyText(calls)).not.toContain(
+			'name="timestamp_granularities[]"\r\n\r\nword',
+		);
+	});
+
+	it('names the language when the run declares one', async () => {
+		const calls = capture();
+
+		await provider().transcribe(
+			payload(),
+			transcribeOptions({ language: 'ru' }),
+		);
+
+		expect(requestBodyText(calls)).toContain('ru');
+	});
+
+	it('lets the service detect the language when the run declares none', async () => {
+		// "auto" is the plugin's own word for it; sending it as a language
+		// code would be rejected by the service.
+		const calls = capture();
+
+		await provider().transcribe(payload(), transcribeOptions());
+
+		expect(requestBodyText(calls)).not.toContain('name="language"');
+	});
+});
+
+// The endpoint has a second operation that translates the speech into English
+// while transcribing it. It answers in the same shape but takes a narrower set
+// of fields - file, model, prompt, response_format, temperature - so what the
+// request carries changes with the path and not only the path itself.
+describe('asking the endpoint to translate the speech', () => {
+	it('posts to the translations operation instead of transcriptions', async () => {
+		const calls = capture();
+
+		await provider().transcribe(
+			payload(),
+			transcribeOptions({ translateToEnglish: true }),
+		);
+
+		expect(at(calls, 0).url).toBe(`${BASE_URL}/audio/translations`);
+	});
+
+	it('posts to transcriptions when the run asked for no translation', async () => {
+		const calls = capture();
+
+		await provider().transcribe(payload(), transcribeOptions());
+
+		expect(at(calls, 0).url).toBe(`${BASE_URL}/audio/transcriptions`);
+	});
+
+	it('drops the language hint, which describes the audio and not the answer', async () => {
+		const calls = capture();
+
+		await provider().transcribe(
+			payload(),
+			transcribeOptions({ language: 'ru', translateToEnglish: true }),
+		);
+
+		expect(requestBodyText(calls)).not.toContain('name="language"');
+	});
+
+	it('keeps the language hint for a plain transcription', async () => {
+		const calls = capture();
+
+		await provider().transcribe(
+			payload(),
+			transcribeOptions({ language: 'ru' }),
+		);
+
+		expect(requestBodyText(calls)).toContain('name="language"');
+	});
+
+	// A timestamp granularity is not one of the translation operation's
+	// fields, so sending one is refused exactly as the language hint is. It
+	// went out on every request, which cost the whole feature: every part of
+	// every recording was rejected before a word of it was translated.
+	it('asks for no timing granularity, which the operation does not take', async () => {
+		const calls = capture();
+
+		await provider().transcribe(
+			payload(),
+			transcribeOptions({
+				translateToEnglish: true,
+				wordTimestamps: true,
+			}),
+		);
+
+		expect(requestBodyText(calls)).not.toContain('timestamp_granularities');
+	});
+
+	it('keeps asking for one on a plain transcription', async () => {
+		const calls = capture();
+
+		await provider().transcribe(payload(), transcribeOptions());
+
+		expect(requestBodyText(calls)).toContain('timestamp_granularities');
+	});
+
+	it('sends the same model, format, and bias fields either way', async () => {
+		const calls = capture();
+
+		await provider().transcribe(
+			payload(),
+			transcribeOptions({
+				translateToEnglish: true,
+				dictionary: ['Kubernetes'],
+			}),
+		);
+
+		const body = requestBodyText(calls);
+		expect(body).toContain('whisper-1');
+		expect(body).toContain('verbose_json');
+		expect(body).toContain('Kubernetes');
+	});
+});

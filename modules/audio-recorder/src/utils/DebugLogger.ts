@@ -1,0 +1,91 @@
+/**
+ * Debug logging utility for the Audio Recorder plugin.
+ * @module utils/DebugLogger
+ */
+
+import { PLUGIN_LOG_PREFIX } from '../constants';
+
+/**
+ * The one settings field the logger reads. Structural, so callers pass
+ * the full plugin settings without this utility depending on the
+ * settings module.
+ */
+export interface DebugLoggingSettings {
+	readonly debug: boolean;
+}
+
+/**
+ * The generic logging method most callers need. Structural, so a helper that
+ * only writes free-form debug lines states that in its signature instead of
+ * demanding the whole logger - which is also what lets a test pass a one-method
+ * double without claiming to be a DebugLogger.
+ */
+export interface DebugLogSink {
+	log(message: string, ...args: unknown[]): void;
+}
+
+/**
+ * DebugLogger provides conditional logging based on settings.debug flag.
+ */
+export class DebugLogger implements DebugLogSink {
+	private enabled: boolean;
+
+	constructor(settings: DebugLoggingSettings) {
+		this.enabled = settings.debug;
+	}
+
+	/**
+	 * Updates the debug enabled state.
+	 */
+	updateSettings(settings: DebugLoggingSettings): void {
+		this.enabled = settings.debug;
+	}
+
+	/**
+	 * Logs the selected MIME type for recording.
+	 */
+	logMimeType(mimeType: string): void {
+		if (!this.enabled) return;
+		console.debug(`${PLUGIN_LOG_PREFIX} Selected MIME type:`, mimeType);
+	}
+
+	/**
+	 * Logs available audio input devices.
+	 */
+	logDevices(devices: MediaDeviceInfo[]): void {
+		if (!this.enabled) return;
+		console.debug(
+			`${PLUGIN_LOG_PREFIX} Available audio devices:`,
+			devices.map((d) => ({ id: d.deviceId, label: d.label })),
+		);
+	}
+
+	/**
+	 * Logs the size of a received audio chunk.
+	 */
+	logChunkSize(trackIndex: number, size: number): void {
+		if (!this.enabled) return;
+		console.debug(
+			`${PLUGIN_LOG_PREFIX} Track ${String(trackIndex)} chunk size: ${String(size)} bytes`,
+		);
+	}
+
+	/**
+	 * Logs recording duration and estimated memory usage.
+	 */
+	logRecordingStats(durationMs: number, totalChunks: number): void {
+		if (!this.enabled) return;
+		const durationSec = (durationMs / 1000).toFixed(1);
+		console.debug(
+			`${PLUGIN_LOG_PREFIX} Recording stats: ${durationSec}s, ${String(totalChunks)} chunks`,
+		);
+	}
+
+	/**
+	 * Logs generic debug information.
+	 */
+	log(message: string, ...args: unknown[]): void {
+		if (!this.enabled) return;
+		console.debug(`${PLUGIN_LOG_PREFIX} ${message}`, ...args);
+	}
+}

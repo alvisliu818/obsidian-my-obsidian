@@ -1,0 +1,326 @@
+/**
+ * Orchestrates auto-chapter generation for one recording: verify a
+ * transcript exists (in memory from a just-finished transcription run, or
+ * discovered among the recording's existing outputs), ask the configured
+ * LLM for chapter boundaries, validate its response, and write the result
+ * into the recording's marker sidecar - replacing only previously
+ * generated chapters so bookmarks and manual chapters survive a re-run.
+ * All outcomes surface as Notices and the entry point never throws, so
+ * both the context-menu action and the after-transcription hook can call
+ * it fire-and-forget.
+ * @module chapters/AutoChapterService
+ */
+
+import type { App, TFile } from 'obsidian';
+import { PLUGIN_LOG_PREFIX } from '../constants';
+import { showNotice, type Notify } from '../utils/notify';
+import { ProfileKindId } from '../settings/profiles';
+import type {
+	AudioRecorderSettings,
+	LlmProviderId,
+} from '../settings/settingsSchema';
+import { resolveChapterGuidance } from '../settings/profileResolution';
+import { ProfileTextSource } from '../settings/ProfileTextSource';
+import { readProfileNotes } from '../settings/ProfileNoteStore';
+import { createLlmProvider } from '../transcription/factories';
+import { vendorMaxTokens } from '../providers/providers';
+import { probeMediaDurationSeconds } from '../utils/mediaDuration';
+import { jobVendorId, LlmJobId } from '../transcription/llm/vendors';
+import { configuredLanguageHint } from '../transcription/providers/capabilities';
+import type { LlmProvider } from '../transcription/llm/LlmProvider';
+import { runLlmStep, type LlmCostSink } from '../transcription/llm/llmStep';
+import type { Transcript } from '../transcription/TranscriptTypes';
+import type { RecordingSidecarStore } from '../sidecar/RecordingSidecarStore';
+import { generateMarkerId } from '../markers/markerFactory';
+import {
+	applyGeneratedChapters,
+	buildChapterPrompt,
+	isAutoChapterId,
+	minChapterSecondsFor,
+	parseChapterResponse,
+	type TimedLine,
+} from './chapterGeneration';
+import {
+	loadTranscriptLines,
+	timedLinesFromTranscript,
+	type TranscriptLinesSource,
+} from './transcriptSources';
+import { errorMessage } from '../errors';
+
+/** Dependencies injectable for tests; defaults build the real LLM provider. */
+export interface AutoChapterServiceDeps {
+	/**
+	 * Where the generation reports its estimated cost. Absent, chapters still
+	 * generate and simply account nothing.
+	 */
+	costSink?: LlmCostSink;
+	/** Builds the LLM provider for the engine this job names. */
+	createLlm?: (
+		settings: AudioRecorderSettings,
+		vendorId: LlmProviderId,
+	) => LlmProvider;
+	/** Probes a recording's real duration in seconds (null when unknown). */
+	probeDuration?: (file: TFile) => Promise<number | null>;
+}
+
+/** Timed lines plus the transcript language, when a source carried one. */
+interface ResolvedLines {
+	lines: TimedLine[];
+	language?: string;
+}
+
+/**
+ * Generates and stores LLM-derived chapters for recordings.
+ */
+export class AutoChapterService {
+	private readonly createLlm: (
+		settings: AudioRecorderSettings,
+		vendorId: LlmProviderId,
+	) => LlmProvider;
+	private readonly probeDuration: (file: TFile) => Promise<number | null>;
+	/** Where LLM spending is reported; undefined when nothing accounts it. */
+	private readonly costSink: LlmCostSink | undefined;
+
+	/**
+	 * @param app - Obsidian App
+	 * @param getSettings - Returns current plugin settings
+	 * @param markerStore - Marker sidecar store shared with the player
+	 * @param onChaptersWritten - Called with the recording path after a
+	 *   successful write, so open players can re-read their markers
+	 * @param deps - Optional provider factory and duration probe (for tests)
+	 */
+	constructor(
+		private readonly app: App,
+		private readonly getSettings: () => AudioRecorderSettings,
+		private readonly markerStore: RecordingSidecarStore,
+		private readonly onChaptersWritten?: (path: string) => void,
+		deps: AutoChapterServiceDeps = {},
+	) {
+		this.createLlm = deps.createLlm ?? createLlmProvider;
+		// The shared media read, which resolves a length a streamed container
+		// never stamped: this plugin's own recordings are exactly those, and a
+		// chapter written past a length that read as unknown lands where the
+		// player cannot reach it.
+		this.probeDuration =
+			deps.probeDuration ??
+			((file) =>
+				probeMediaDurationSeconds(
+					this.app.vault.getResourcePath(file),
+				));
+		this.costSink = deps.costSink;
+	}
+
+	/**
+	 * Whether the recording already has generated (auto) chapters, so a
+	 * caller can warn that regenerating will replace them. Returns false on a
+	 * read error rather than blocking the flow.
+	 * @param file - The recording to check
+	 */
+	async hasExistingChapters(file: TFile): Promise<boolean> {
+		try {
+			const existing = await this.markerStore.getMarkers(file.path);
+			return existing.some((marker) => isAutoChapterId(marker.id));
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Generates chapters for a recording and writes them to its marker
+	 * sidecar. Every outcome (no transcript, unusable LLM output, provider
+	 * error, success) is reported through the reporter; the method never
+	 * throws.
+	 * @param file - The audio file to chapter
+	 * @param transcript - In-memory transcript from a just-finished run;
+	 *   omitted, the recording's existing outputs are searched
+	 * @param preloaded - Transcript lines the caller already located (the
+	 *   on-demand dialog loads them to show the source and cost estimate), so
+	 *   the sidecar/notes are not read a second time here
+	 * @param signal - Ends the run when the caller cancels. Generation is a
+	 *   paid call on a transcript that can run to thousands of lines, so the
+	 *   dialog that starts one offers a Cancel and this is what it pulls
+	 * @param notify - Where every outcome is told to the user: a notice, or
+	 *   a notice and the answer of the command line that started the run
+	 * @returns True when chapters were written
+	 */
+	async generate(
+		file: TFile,
+		transcript?: Transcript,
+		preloaded?: TranscriptLinesSource,
+		signal?: AbortSignal,
+		notify: Notify = showNotice,
+	): Promise<boolean> {
+		try {
+			// The transcription check: without a transcript (given or found)
+			// there is nothing to derive chapters from, so stop with guidance
+			// instead of sending an empty prompt to a paid API.
+			const resolved = await this.resolveLines(
+				file,
+				transcript,
+				preloaded,
+			);
+			if (!resolved || resolved.lines.length === 0) {
+				notify(
+					`No transcript found for ${file.name}. Transcribe the ` +
+						'audio first, then generate chapters.',
+				);
+				return false;
+			}
+			const { lines } = resolved;
+			notify(`Generating chapters for ${file.name}...`);
+			// Guidance kept in a note is read now, so the note applies as it
+			// stands when generation starts.
+			const { settings, unread } = await readProfileNotes(
+				this.app,
+				this.getSettings(),
+			);
+			// The engine this job names, not the one post-processing points at:
+			// chapters are configured on a row of their own.
+			const vendorId = jobVendorId(settings, LlmJobId.AutoChapters);
+			const llm = this.createLlm(settings, vendorId);
+			const lastSegment = transcript?.segments.at(-1);
+			// Bound everything by the recording's REAL length. Prefer the
+			// in-memory transcript's own end; otherwise probe the audio's
+			// duration; only as a last resort use the last transcript line,
+			// which can run past a trimmed recording and place a chapter
+			// beyond its end (the "last chapter shows 0:00" symptom).
+			const durationSeconds =
+				lastSegment?.end ??
+				(await this.probeDuration(file)) ??
+				lines[lines.length - 1]?.time ??
+				null;
+			// Keep chapters spread out and long enough: the prompt states this
+			// minimum and parseChapterResponse drops anything bunched closer.
+			const minGap = minChapterSecondsFor(durationSeconds);
+			// Snap starts onto real transcript lines that fall inside the
+			// recording, so a boundary lands on a spoken line and never past
+			// the audio's end.
+			const snapTimes =
+				durationSeconds === null
+					? lines.map((line) => line.time)
+					: lines
+							.map((line) => line.time)
+							.filter((time) => time <= durationSeconds);
+			// The prompt's language is the transcript's own when known (the
+			// in-memory run's detected language, else the JSON sidecar's).
+			// When neither carries one (note-derived lines, or a subtitle/text
+			// sidecar), fall back to the configured transcription language so
+			// generation still names the language instead of letting the model
+			// guess it, which otherwise produced wrong-language titles. What the
+			// field means by "auto" is read from the one place that owns that
+			// rule, so this hint and the one a transcription request carries
+			// can never disagree about the same typed value.
+			const language =
+				resolved.language ??
+				configuredLanguageHint(settings.transcriptionLanguage);
+			// The selected chapter profile steers how the recording is split;
+			// an empty selection appends no guidance and keeps the base prompt.
+			const guidance = resolveChapterGuidance(settings);
+			// Guidance kept in a note that went missing or could not be read is
+			// the text last read from it, and the run says so instead of passing
+			// it off as current.
+			const lostSourceNotice = new ProfileTextSource(
+				this.app.vault,
+				unread,
+			).lostNotesNotice(settings, [ProfileKindId.ChapterPrompt]);
+			if (lostSourceNotice) {
+				notify(lostSourceNotice);
+			}
+			const prompt = buildChapterPrompt(lines, {
+				...(language ? { language } : {}),
+				...(guidance ? { guidance } : {}),
+				...(durationSeconds !== null ? { durationSeconds } : {}),
+			});
+			const output = await runLlmStep({
+				step: LlmJobId.AutoChapters,
+				llm,
+				prompt,
+				maxTokens: vendorMaxTokens(settings, vendorId),
+				settings,
+				durationSeconds,
+				costSink: this.costSink,
+				signal,
+			});
+			const chapters = parseChapterResponse(
+				output,
+				durationSeconds,
+				minGap,
+				snapTimes,
+			);
+			if (chapters.length === 0) {
+				notify(
+					'The LLM returned no usable chapters; markers were not changed.',
+				);
+				return false;
+			}
+			// Atomic read-modify-write: a bookmark added while the LLM was
+			// generating is merged into the result, not clobbered by it.
+			await this.markerStore.updateMarkers(file.path, (existing) =>
+				applyGeneratedChapters(existing, chapters, generateMarkerId),
+			);
+			this.onChaptersWritten?.(file.path);
+			notify(
+				`Added ${String(chapters.length)} chapter` +
+					`${chapters.length > 1 ? 's' : ''} to ${file.name}. ` +
+					'They appear in the enhanced player.',
+			);
+			return true;
+		} catch (error) {
+			// A cancel is what the user asked for, so it is reported as one.
+			// Calling it a failure would be the plugin telling them something
+			// went wrong with the thing they just did on purpose.
+			if (signal?.aborted) {
+				notify('Chapter generation cancelled.');
+				return false;
+			}
+			const message = errorMessage(error);
+			console.warn(
+				`${PLUGIN_LOG_PREFIX} Chapter generation failed for ${file.path}:`,
+				error,
+			);
+			notify(`Chapter generation failed: ${message}`);
+			return false;
+		}
+	}
+
+	/**
+	 * Resolves the timed transcript lines and their language: from the
+	 * in-memory transcript when one was handed over, then from lines the caller
+	 * already located, otherwise from the recording's existing transcript
+	 * outputs. The language rides along so the prompt can request titles in the
+	 * transcript's language even on the on-demand path, where only the JSON
+	 * sidecar carries one.
+	 */
+	private async resolveLines(
+		file: TFile,
+		transcript?: Transcript,
+		preloaded?: TranscriptLinesSource,
+	): Promise<ResolvedLines | null> {
+		if (transcript) {
+			return {
+				lines: timedLinesFromTranscript(transcript),
+				...(transcript.language
+					? { language: transcript.language }
+					: {}),
+			};
+		}
+		if (preloaded) {
+			return {
+				lines: preloaded.lines,
+				...(preloaded.language ? { language: preloaded.language } : {}),
+			};
+		}
+		const found = await loadTranscriptLines(
+			this.app,
+			file,
+			this.markerStore,
+		);
+		if (!found) {
+			return null;
+		}
+		return {
+			lines: found.lines,
+			...(found.language ? { language: found.language } : {}),
+		};
+	}
+}
