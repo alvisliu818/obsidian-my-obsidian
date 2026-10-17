@@ -848,6 +848,45 @@ describe('AttachmentPathManager', () => {
       expect(result).toBe('assets/img.png');
     });
 
+    describe('special characters in a kept file name', () => {
+      async function resolveKept(attachmentFileBaseName: string, shouldReplaceSpecialCharactersInKeptFileName = false): Promise<string> {
+        context.settings.attachmentFolderPath = 'assets';
+        context.settings.specialCharacters = '#';
+        const noteFile = createTFile({ path: 'note.md' });
+        mockGetFileOrNull.mockReturnValue(noteFile);
+        mockIsNote.mockReturnValue(true);
+        return await context.manager.getAvailablePathForAttachments({
+          attachmentFileBaseName,
+          attachmentFileExtension: 'txt',
+          context: AttachmentPathContext.Unknown,
+          notePathOrFile: 'note.md',
+          oldAttachmentPathOrFile: 'old.txt',
+          readAttachmentFileContent: null,
+          shouldReplaceSpecialCharactersInKeptFileName,
+          shouldSkipDuplicateCheck: true,
+          shouldSkipGeneratedAttachmentFileName: true,
+          shouldSkipMissingAttachmentFolderCreation: true
+        });
+      }
+
+      it('should replace them when asked', async () => {
+        expect(await resolveKept('foo#bar', true)).toBe('assets/foo-bar.txt');
+      });
+
+      it('should keep them when not asked', async () => {
+        expect(await resolveKept('foo#bar')).toBe('assets/foo#bar.txt');
+      });
+
+      it('should keep a name that would clean to nothing', async () => {
+        context.settings.specialCharactersReplacement = '';
+        expect(await resolveKept('#', true)).toBe('assets/#.txt');
+      });
+
+      it('should not clean a share-sheet import, whose name is already generated', async () => {
+        expect(await resolveKept(`${IMPORT_FILES_PREFIX}foo#bar`, true)).toBe('assets/foo#bar.txt');
+      });
+    });
+
     it('should keep the attachment file name on a note rename when renaming attachment files is off', async () => {
       context.settings.attachmentFolderPath = 'assets';
       context.settings.renamedAttachmentFileName = '';

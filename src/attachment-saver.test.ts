@@ -188,6 +188,32 @@ describe('AttachmentSaver', () => {
       expect(context.getGeneratedAttachmentFileBaseName).toHaveBeenCalled();
     });
 
+    it('should ask for special characters to be replaced in a name it keeps', async () => {
+      context.settings.attachmentRenameMode = AttachmentRenameMode.OnlyPastedImages;
+      await context.saver.saveAttachment({
+        attachmentFileBaseName: 'foo#bar',
+        attachmentFileContent: new ArrayBuffer(0),
+        attachmentFileExtension: 'txt'
+      });
+      expect(context.getAvailablePathForAttachments).toHaveBeenCalledWith(expect.objectContaining({
+        attachmentFileBaseName: 'foo#bar',
+        shouldReplaceSpecialCharactersInKeptFileName: true
+      }));
+    });
+
+    it('should not ask for special characters to be replaced in a name it generated', async () => {
+      context.settings.attachmentRenameMode = AttachmentRenameMode.All;
+      await context.saver.saveAttachment({
+        attachmentFileBaseName: 'img',
+        attachmentFileContent: new ArrayBuffer(0),
+        attachmentFileExtension: 'png'
+      });
+      expect(context.getAvailablePathForAttachments).toHaveBeenCalledWith(expect.objectContaining({
+        attachmentFileBaseName: 'generated',
+        shouldReplaceSpecialCharactersInKeptFileName: false
+      }));
+    });
+
     it('should rename a recently pasted image when the rename mode is OnlyPastedImages', async () => {
       context.settings.attachmentRenameMode = AttachmentRenameMode.OnlyPastedImages;
       const timestamp = moment().format('YYYYMMDDHHmmss');

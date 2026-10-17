@@ -50,6 +50,7 @@ interface AttachmentSaverSaveAttachmentCoreParams {
   readonly attachmentFileBaseName: string;
   readonly attachmentFileContent: ArrayBuffer;
   readonly attachmentFileExtension: string;
+  readonly shouldReplaceSpecialCharactersInKeptFileName?: boolean;
 }
 
 interface AttachmentSaverSaveAttachmentParams {
@@ -160,7 +161,8 @@ export class AttachmentSaver {
     const attachmentFile = await this.saveAttachmentCore({
       attachmentFileBaseName,
       attachmentFileContent,
-      attachmentFileExtension
+      attachmentFileExtension,
+      shouldReplaceSpecialCharactersInKeptFileName: !shouldRename
     });
     if (this.pluginSettingsComponent.settings.markdownUrlFormat) {
       const markdownUrl = await new Substitutions({
@@ -201,6 +203,7 @@ export class AttachmentSaver {
         fileExtension: params.attachmentFileExtension
       }),
       readAttachmentFileContent: (): Promise<ArrayBuffer> => Promise.resolve(attachmentFileContent),
+      shouldReplaceSpecialCharactersInKeptFileName: params.shouldReplaceSpecialCharactersInKeptFileName ?? false,
       shouldSkipDuplicateCheck: false,
       shouldSkipGeneratedAttachmentFileName: true,
       shouldSkipMissingAttachmentFolderCreation: false

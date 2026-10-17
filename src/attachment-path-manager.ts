@@ -66,6 +66,12 @@ import {
 
 const ORIGINAL_ATTACHMENT_FILE_NAME_TEMPLATE = '{{originalAttachmentFileName}}';
 
+interface AttachmentPathManagerCleanKeptFileBaseNameParams {
+  readonly fileBaseName: string;
+  readonly isGeneratedByShareReceiver: boolean;
+  readonly shouldReplace: boolean | undefined;
+}
+
 interface AttachmentPathManagerConstructorParams {
   readonly app: App;
   readonly getAvailablePathForAttachmentsOriginal: GetAvailablePathForAttachmentsFunction;
@@ -94,6 +100,7 @@ interface AttachmentPathManagerGetAvailablePathForAttachmentsParams {
   readonly oldAttachmentPathOrFile: PathOrFile;
   readonly oldNotePathOrFile?: PathOrFile | undefined;
   readonly readAttachmentFileContent: (() => Promise<ArrayBuffer>) | null;
+  readonly shouldReplaceSpecialCharactersInKeptFileName?: boolean;
   readonly shouldSkipDuplicateCheck?: boolean;
   readonly shouldSkipGeneratedAttachmentFileName?: boolean;
   readonly shouldSkipMissingAttachmentFolderCreation: boolean | undefined;
@@ -189,16 +196,24 @@ export class AttachmentPathManager {
     const noteFilePath = params.notePathOrFile ? getPath(this.app, params.notePathOrFile) : undefined;
     const oldNoteFilePath = params.oldNotePathOrFile ? getPath(this.app, params.oldNotePathOrFile) : undefined;
 
+    let isGeneratedByShareReceiver = false;
     if (attachmentFileBaseName.startsWith(IMPORT_FILES_PREFIX)) {
       attachmentFileBaseName = trimStart({
         $string: attachmentFileBaseName,
         prefix: IMPORT_FILES_PREFIX
       });
       shouldSkipGeneratedAttachmentFileName = true;
+      isGeneratedByShareReceiver = true;
     }
     if (noteFile && this.handedOverSettingsComponent.isPathIgnored(noteFile.path)) {
       return this.getAvailablePathForAttachmentsOriginal(attachmentFileBaseName, params.attachmentFileExtension, noteFile);
     }
+
+    attachmentFileBaseName = this.cleanKeptFileBaseName({
+      fileBaseName: attachmentFileBaseName,
+      isGeneratedByShareReceiver,
+      shouldReplace: params.shouldReplaceSpecialCharactersInKeptFileName
+    });
 
     let attachmentPath: string;
     // Plain `isNote`, not `isNoteEx`, on purpose: a drawing the user treats as an attachment still OWNS an
@@ -485,6 +500,24 @@ export class AttachmentPathManager {
     cleanPart = cleanPart.replace(/[\s.]+$/, '');
     cleanPart = this.pluginSettingsComponent.replaceSpecialCharacters(cleanPart);
     return cleanPart;
+  }
+
+  /**
+   * Replaces special characters in the name a new attachment keeps.
+   *
+   * Such a name (a file dropped under `Only pasted images`, or one imported through the patched
+   * `getAvailablePathForAttachments`) never meets the template, which is where special characters are otherwise
+   * replaced. Left alone, a `#` or `^` in it breaks the link to the attachment
+   * (https://github.com/RainCat1998/obsidian-custom-attachment-location/issues/141). A name that would clean to
+   * nothing is kept, since an attachment needs a name more than it needs a clean one.
+   *
+   * The share-sheet import's name is already generated, so it is not a kept one.
+   *
+   * @param params - The name the attachment arrived with, and whether it is a kept one.
+   * @returns The name to use.
+   */
+  private cleanKeptFileBaseName(params: AttachmentPathManagerCleanKeptFileBaseNameParams): string {
+    return !params.shouldReplace || params.isGeneratedByShareReceiver ? params.fileBaseName : this.pluginSettingsComponent.replaceSpecialCharacters(params.fileBaseName) || params.fileBaseName;
   }
 
   private async getAttachmentFolderPath(substitutions: Substitutions): Promise<string> {
