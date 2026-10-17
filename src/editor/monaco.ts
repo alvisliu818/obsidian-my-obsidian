@@ -56,6 +56,26 @@ const LANG_MAP: Record<string, string> = {
   '.zsh': 'shell',
   '.php': 'php',
   '.rb': 'ruby',
+  // 下面这些扩展名在库内/库外代码视图的接管清单里(DEFAULT_CODE_EXTENSIONS),
+  // 缺了它们会退成 plaintext —— 不但没高亮,连注释区都识别不出来
+  // (buildCodeDoc 按这个 id 查注释标记表)。
+  '.lua': 'lua',
+  '.pl': 'perl',
+  '.r': 'r',
+  '.jl': 'julia',
+  '.swift': 'swift',
+  '.kt': 'kotlin',
+  '.scala': 'scala',
+  '.dart': 'dart',
+  '.hs': 'haskell',
+  '.erl': 'erlang',
+  '.ex': 'elixir',
+  '.exs': 'elixir',
+  '.toml': 'toml',
+  '.ini': 'ini',
+  '.ps1': 'powershell',
+  '.bat': 'bat',
+  '.cmd': 'bat',
 };
 
 /** 围栏语言名(代码块 ```lang)→ Monaco language id */

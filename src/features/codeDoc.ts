@@ -47,6 +47,8 @@ const LINE_MARKERS: Record<string, string[]> = {
   lua: ['--'],
   haskell: ['--'],
   ini: [';', '#'],
+  erlang: ['%'],
+  powershell: ['#'],
 };
 
 /** 每语言的块注释/docstring 定界符(开、闭);按行首(缩进后)匹配开标记 */
