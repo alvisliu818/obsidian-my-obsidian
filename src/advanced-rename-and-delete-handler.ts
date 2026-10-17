@@ -35,7 +35,7 @@ import { ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT } from './advanced-rena
 /**
  * `Advanced Rename and Delete Handler`'s public API, as this plugin compiles against it.
  *
- * It publishes contract version `1.1.0`, so consumers ask for `^1`. The reads are SYNCHRONOUS by design:
+ * It publishes contract version `1.2.0` (`1.1.0` before its 2.3.0), so consumers ask for `^1`. The reads are SYNCHRONOUS by design:
  * this plugin calls them from `checkCallback(isChecking): boolean`, from settings-row `disabled` predicates,
  * and from loops over vault files — none of which can await.
  *
@@ -177,6 +177,11 @@ export type AdvancedRenameAndDeleteHandlerReadBackApi = Pick<ProviderApi, 'getSe
  * be handed an API with no `getSettings` and every read would throw. With it, the record fails the shape
  * check, `PluginApiRef.value` stays `null`, and this plugin falls back to
  * {@link DEFAULT_HANDED_OVER_SETTINGS} until the provider is new enough.
+ *
+ * Its `getSettings` output schema is contract `1.2.0`'s, which requires `shouldDeleteEmptyNoteFolders`. A `1.1.0`
+ * provider (2.2.x) does not return it, so with the `obsidian-lib:validate-plugin-api-payloads` debug switch on, its
+ * reads are refused. The gate still admits `1.1.0` on purpose: this plugin never reads that key, and forcing every
+ * 2.2.x user to update for a developer-only switch is the worse trade.
  */
 export const ADVANCED_RENAME_AND_DELETE_HANDLER_READ_BACK_API_CONTRACT: ApiContract<AdvancedRenameAndDeleteHandlerReadBackApi> = {
   getSettings: ADVANCED_RENAME_AND_DELETE_HANDLER_API_CONTRACT.getSettings,
