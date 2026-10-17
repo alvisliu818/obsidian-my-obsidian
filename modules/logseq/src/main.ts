@@ -352,6 +352,8 @@ export default class LogseqEditorPlugin extends Plugin {
       name: '打开扩展市场',
       callback: () => this.extMarket.open(),
     });
+    // 功能区图标入口（lucide package：与源侧市场卡片的默认扩展图标同源）
+    this.addRibbonIcon('package', '打开扩展市场', () => this.extMarket.open());
     this.addCommand({
       id: CMD_FIND,
       name: 'Find in current file (outline)',
