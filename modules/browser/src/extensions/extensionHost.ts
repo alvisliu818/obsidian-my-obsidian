@@ -227,11 +227,22 @@ export class ExtensionHost {
     if (!ses?.loadExtension) return null;
     // 单扩展垫片（install/enable 路径；启动路径由 syncNativeOnStartup 全局做）：
     // SW 文件被垫后必须卸掉重载，Electron 才会从磁盘拉新脚本 —— 否则垫了也白垫。
+    let shimmed = false;
     try {
       if (await this.shimBackgroundFile(rec)) {
+        shimmed = true;
         try { await this.unloadNative(rec); } catch { /* 此前未加载 */ }
       }
     } catch { /* 垫片失败不阻断加载 */ }
+    if (shimmed) {
+      // ★ 分区持久化的 SW 注册/脚本缓存不随 loadExtension 更新（实测：垫片已写盘、
+      //   重载后 SW 仍执行无垫片旧脚本 → __obOnMessageHandlers 缺失 → AdGuard 设置页
+      //   boot 挂死打不开）。安装/启用路径垫片后同样要清 SW 存储，与启动路径
+      //   injectBackgroundShims 对齐；仅垫片变更时执行，无感。
+      if (ses?.clearStorageData) {
+        try { await ses.clearStorageData({ storages: ["serviceworkers"] }); } catch { /* ignore */ }
+      }
+    }
     try {
       const info = await ses.loadExtension(this.dirOf(rec), { allowFileAccess: true });
       const id = info?.id ? String(info.id) : "";
