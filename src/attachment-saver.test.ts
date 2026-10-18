@@ -301,6 +301,36 @@ describe('AttachmentSaver', () => {
       expect(await params?.readAttachmentFileContent?.()).toBe(convertedContent);
     });
 
+    it('should hand over the name the file arrived with, before the rename and the conversion', async () => {
+      context.settings.attachmentRenameMode = AttachmentRenameMode.All;
+      context.convertToJpeg.mockResolvedValue({
+        attachmentFileContent: new ArrayBuffer(8),
+        attachmentFileExtension: 'jpg'
+      });
+      await context.saver.saveAttachment({
+        attachmentFileBaseName: 'Pasted image 1',
+        attachmentFileContent: new ArrayBuffer(0),
+        attachmentFileExtension: 'png'
+      });
+      expect(context.getAvailablePathForAttachments).toHaveBeenCalledWith(expect.objectContaining({
+        attachmentFileBaseName: 'generated',
+        attachmentFileExtension: 'jpg',
+        originalAttachmentFileName: 'Pasted image 1.png'
+      }));
+    });
+
+    it('should hand over the arrival name when there is no active note file', async () => {
+      context.getActiveFile.mockReturnValue(null);
+      await context.saver.saveAttachment({
+        attachmentFileBaseName: 'img',
+        attachmentFileContent: new ArrayBuffer(0),
+        attachmentFileExtension: 'png'
+      });
+      expect(context.getAvailablePathForAttachments).toHaveBeenCalledWith(expect.objectContaining({
+        originalAttachmentFileName: 'img.png'
+      }));
+    });
+
     it('should set the markdown url when a markdown url format is configured', async () => {
       context.settings.markdownUrlFormat = 'plain-url';
       const result = await context.saver.saveAttachment({

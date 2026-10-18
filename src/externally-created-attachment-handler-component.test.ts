@@ -26,6 +26,7 @@ import {
 
 import type { AttachmentPathManager } from './attachment-path-manager.ts';
 import type { HandedOverSettingsComponent } from './handed-over-settings-component.ts';
+import type { OriginalAttachmentNamesComponent } from './original-attachment-names-component.ts';
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';
 import type { TokenValidator } from './token-validator.ts';
 
@@ -83,6 +84,7 @@ const mockPrintError = vi.mocked(printError);
 describe('ExternallyCreatedAttachmentHandlerComponent', () => {
   let app: App;
   let component: ExternallyCreatedAttachmentHandlerComponent;
+  let originalAttachmentNames: Map<string, string>;
   let renameFileSpy: MockInstance<(file: TAbstractFile, newPath: string) => Promise<void>>;
 
   beforeEach(() => {
@@ -118,12 +120,19 @@ describe('ExternallyCreatedAttachmentHandlerComponent', () => {
   }
 
   async function setUp(overrides?: SetupOverrides): Promise<void> {
+    originalAttachmentNames = new Map<string, string>();
     const attachmentPathManager = strictProxy<AttachmentPathManager>({
       getAttachmentFolderFullPathForPath: (params: GetAttachmentFolderFullPathForPathParams): Promise<string> => {
         overrides?.onGetAttachmentFolderFullPathForPath?.(params);
         return Promise.resolve('notes/assets');
       },
-      getGeneratedAttachmentFileBaseName: (): Promise<string> => Promise.resolve(overrides?.generatedAttachmentFileBaseName ?? 'renamed')
+      getGeneratedAttachmentFileBaseName: (): Promise<string> => Promise.resolve(overrides?.generatedAttachmentFileBaseName ?? 'renamed'),
+      originalAttachmentNamesComponent: strictProxy<OriginalAttachmentNamesComponent>({
+        get: (path: string) => originalAttachmentNames.get(path),
+        set: (path: string, fileName: string): void => {
+          originalAttachmentNames.set(path, fileName);
+        }
+      })
     });
 
     const pluginSettingsComponent = strictProxy<PluginSettingsComponent>({
@@ -202,6 +211,23 @@ describe('ExternallyCreatedAttachmentHandlerComponent', () => {
 
     expect(renameFileSpy).toHaveBeenCalledOnce();
     expect(renameFileSpy.mock.calls[0]?.[1]).toBe('notes/assets/renamed.png');
+  });
+
+  it('should remember the name the attachment arrived with before renaming it', async () => {
+    await setUp();
+
+    await createForeignAttachment();
+
+    expect(originalAttachmentNames.get(FOREIGN_ATTACHMENT_PATH)).toBe('mx-img-abc.png');
+  });
+
+  it('should keep an arrival name already on record for the path', async () => {
+    await setUp();
+    originalAttachmentNames.set(FOREIGN_ATTACHMENT_PATH, 'asked-for.png');
+
+    await createForeignAttachment();
+
+    expect(originalAttachmentNames.get(FOREIGN_ATTACHMENT_PATH)).toBe('asked-for.png');
   });
 
   it('should merge into an identical file already at the destination instead of renaming beside it', async () => {
@@ -575,6 +601,23 @@ describe('ExternallyCreatedAttachmentHandlerComponent', () => {
 
     expect(renameFileSpy).toHaveBeenCalledOnce();
     expect(renameFileSpy.mock.calls[0]?.[1]).toBe('notes/assets/renamed.png');
+  });
+
+  it('should remember the name the attachment arrived with before renaming it', async () => {
+    await setUp();
+
+    await createForeignAttachment();
+
+    expect(originalAttachmentNames.get(FOREIGN_ATTACHMENT_PATH)).toBe('mx-img-abc.png');
+  });
+
+  it('should keep an arrival name already on record for the path', async () => {
+    await setUp();
+    originalAttachmentNames.set(FOREIGN_ATTACHMENT_PATH, 'asked-for.png');
+
+    await createForeignAttachment();
+
+    expect(originalAttachmentNames.get(FOREIGN_ATTACHMENT_PATH)).toBe('asked-for.png');
   });
 
   it('should pick the MOST recently active markdown leaf, not merely the first open one', async () => {

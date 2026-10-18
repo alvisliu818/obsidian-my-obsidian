@@ -23,7 +23,7 @@ export class PromptToken extends TokenBase<Format> {
   }
 
   protected override async evaluateImpl(context: TokenEvaluatorContext, format: Format): Promise<string> {
-    if (isNonInteractiveActionContext(context.actionContext) || context.originalAttachmentFileName === DUMMY_PATH) {
+    if (isNonInteractiveActionContext(context.actionContext) || context.attachmentFileName === DUMMY_PATH) {
       return DUMMY_PATH;
     }
 

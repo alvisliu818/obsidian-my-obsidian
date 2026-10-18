@@ -157,8 +157,8 @@ export class TokenValidator {
     const FAKE_SUBSTITUTION = new Substitutions({
       actionContext: ActionContext.ValidateTokens,
       app: this.app,
+      attachmentFileName: DUMMY_PATH,
       noteFilePath: DUMMY_PATH,
-      originalAttachmentFileName: DUMMY_PATH,
       pluginSettingsComponent: this.pluginSettingsComponent,
       tokenValidator: this
     });

@@ -25,6 +25,18 @@ interface ShareReceiverImportFilesPatchComponentConstructorParams {
 
 export const IMPORT_FILES_PREFIX = '__IMPORT_FILES__';
 
+/**
+ * How many shared files' original names are kept. A share sheet hands over a handful at a time, so this only bounds
+ * what a long session could otherwise accumulate.
+ */
+const MAX_SHARE_IMPORT_ORIGINAL_FILE_NAMES = 100;
+
+/**
+ * The name each shared file arrived with, keyed by the name this patch generated for it. The import renames the
+ * file before it reaches the resolver, which would otherwise see only the generated name.
+ */
+const shareImportOriginalFileNames = new Map<string, string>();
+
 export class ShareReceiverImportFilesPatchComponent extends MonkeyAroundComponent {
   private readonly app: App;
   private readonly attachmentPathManager: AttachmentPathManager;
@@ -66,14 +78,37 @@ export class ShareReceiverImportFilesPatchComponent extends MonkeyAroundComponen
           });
           const attachmentFileBaseName = await this.attachmentPathManager.getGeneratedAttachmentFileBaseName(substitutions);
           const attachmentFileExtension = extname(file.name).slice(1);
-          file.name = IMPORT_FILES_PREFIX + makeFileName({
+          const generatedFileName = makeFileName({
             fileBaseName: attachmentFileBaseName,
             fileExtension: attachmentFileExtension
           });
+          rememberShareImportOriginalFileName(generatedFileName, file.name);
+          file.name = IMPORT_FILES_PREFIX + generatedFileName;
         }
 
         return fallback();
       }
     });
+  }
+}
+
+/**
+ * The name a shared file arrived with.
+ *
+ * @param generatedFileName - The name this patch generated for it, extension included.
+ * @returns The name it arrived with, or `undefined` when the file did not come through the share sheet.
+ */
+export function getShareImportOriginalFileName(generatedFileName: string): string | undefined {
+  return shareImportOriginalFileNames.get(generatedFileName);
+}
+
+function rememberShareImportOriginalFileName(generatedFileName: string, originalFileName: string): void {
+  shareImportOriginalFileNames.delete(generatedFileName);
+  shareImportOriginalFileNames.set(generatedFileName, originalFileName);
+  for (const oldestGeneratedFileName of shareImportOriginalFileNames.keys()) {
+    if (shareImportOriginalFileNames.size <= MAX_SHARE_IMPORT_ORIGINAL_FILE_NAMES) {
+      break;
+    }
+    shareImportOriginalFileNames.delete(oldestGeneratedFileName);
   }
 }

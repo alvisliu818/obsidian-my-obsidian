@@ -19,8 +19,12 @@ import {
 import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
 import { PluginBase } from '@mnaoumov/obsidian-lib/plugin/plugin';
 import { PluginEventSourceImpl } from '@mnaoumov/obsidian-lib/plugin/plugin-event-source';
+import { join } from '@mnaoumov/typescript-lib/path';
 import { ValueWrapper } from '@mnaoumov/typescript-lib/value-wrapper';
-import { Component } from 'obsidian';
+import {
+  Component,
+  normalizePath
+} from 'obsidian';
 
 import type {
   AdvancedRenameAndDeleteHandlerMigratableSettings,
@@ -48,6 +52,9 @@ import { DeleteUnusedAttachmentsInFileCommandHandler } from './command-handlers/
 import { GoToAttachmentFolderCommandHandler } from './command-handlers/go-to-attachment-folder-command-handler.ts';
 import { GoToOwningNoteCommandHandler } from './command-handlers/go-to-owning-note-command-handler.ts';
 import { MoveAttachmentToProperFolderCommandHandler } from './command-handlers/move-attachment-to-proper-folder-command-handler.ts';
+import { PruneOriginalAttachmentNamesCommandHandler } from './command-handlers/prune-original-attachment-names-command-handler.ts';
+import { RememberCurrentNameAsOriginalCommandHandler } from './command-handlers/remember-current-name-as-original-command-handler.ts';
+import { ShowOriginalAttachmentNamesCommandHandler } from './command-handlers/show-original-attachment-names-command-handler.ts';
 import {
   CONSISTENT_ATTACHMENTS_AND_LINKS_COLLECTING_VERSION_RANGE,
   CONSISTENT_ATTACHMENTS_AND_LINKS_PLUGIN_ID,
@@ -61,6 +68,10 @@ import { ImageSizeMap } from './image-size-map.ts';
 import { MarkdownUrlMap } from './markdown-url-map.ts';
 import { NetworkImageDownloader } from './network-image-downloader.ts';
 import { NoteOwnerResolver } from './note-owner-resolver.ts';
+import {
+  ORIGINAL_ATTACHMENT_NAMES_FILE_NAME,
+  OriginalAttachmentNamesComponent
+} from './original-attachment-names-component.ts';
 import { AppSaveAttachmentPatchComponent } from './patches/app-save-attachment-patch-component.ts';
 import { PluginApiImpl } from './plugin-api-impl.ts';
 import {
@@ -217,10 +228,22 @@ export class Plugin extends PluginBase {
 
     const getAvailablePathForAttachmentsOriginal = this.app.vault.getAvailablePathForAttachments.bind(this.app.vault);
 
+    // Read before anything can ask for a name, and kept in a file of its own: it grows with the vault, the settings do not.
+    const originalAttachmentNamesComponent = new OriginalAttachmentNamesComponent({
+      app: this.app,
+      consoleDebugComponent: this.consoleDebugComponent,
+      pluginNoticeComponent: this.pluginNoticeComponent,
+      pluginSettingsComponent,
+      storeFilePath: normalizePath(join(this.manifest.dir ?? '', ORIGINAL_ATTACHMENT_NAMES_FILE_NAME))
+    });
+    await originalAttachmentNamesComponent.loadFromDisk();
+    this.addChild(originalAttachmentNamesComponent);
+
     const attachmentPathManager = new AttachmentPathManager({
       app: this.app,
       getAvailablePathForAttachmentsOriginal,
       handedOverSettingsComponent,
+      originalAttachmentNamesComponent,
       pluginNoticeComponent: this.pluginNoticeComponent,
       pluginSettingsComponent,
       tokenValidator: validator
@@ -391,6 +414,21 @@ export class Plugin extends PluginBase {
       new GoToOwningNoteCommandHandler({
         app: this.app,
         noteOwnerResolver,
+        pluginNoticeComponent: this.pluginNoticeComponent,
+        pluginSettingsComponent
+      }),
+      new ShowOriginalAttachmentNamesCommandHandler({
+        app: this.app,
+        originalAttachmentNamesComponent,
+        tokenValidator: validator
+      }),
+      new PruneOriginalAttachmentNamesCommandHandler({
+        app: this.app,
+        originalAttachmentNamesComponent,
+        pluginNoticeComponent: this.pluginNoticeComponent
+      }),
+      new RememberCurrentNameAsOriginalCommandHandler({
+        originalAttachmentNamesComponent,
         pluginNoticeComponent: this.pluginNoticeComponent,
         pluginSettingsComponent
       }),

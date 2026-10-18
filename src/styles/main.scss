@@ -30,6 +30,61 @@
     }
   }
 
+  &.original-attachment-names-modal {
+    .original-attachment-names-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--size-4-2);
+      margin-bottom: var(--size-4-3);
+    }
+
+    .original-attachment-names-row {
+      display: flex;
+      align-items: center;
+      gap: var(--size-4-2);
+      padding: var(--size-4-1) 0;
+      border-bottom: 1px solid var(--background-modifier-border);
+    }
+
+    .original-attachment-names-text {
+      flex: 1;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .original-attachment-names-path {
+      color: var(--text-muted);
+    }
+
+    .original-attachment-names-name {
+      font-weight: var(--font-semibold);
+    }
+
+    .original-attachment-names-missing {
+      margin-left: var(--size-4-2);
+      padding: 0 var(--size-4-1);
+      border-radius: var(--radius-s);
+      background-color: var(--background-modifier-error);
+      color: var(--text-on-accent);
+      font-size: var(--font-ui-smaller);
+    }
+
+    .original-attachment-names-editor {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: var(--size-4-1);
+    }
+
+    .original-attachment-names-error {
+      flex-basis: 100%;
+      color: var(--text-error);
+    }
+
+    .original-attachment-names-actions {
+      display: flex;
+    }
+  }
+
   .highlighted-token {
     color: var(--text-accent);
   }

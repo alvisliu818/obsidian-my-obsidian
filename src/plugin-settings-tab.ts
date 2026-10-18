@@ -487,6 +487,26 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
             });
           });
         }
+      }),
+      this.settingEx({
+        desc: createFragment((f) => {
+          appendCodeBlock(f, '{{originalAttachmentFileName}}');
+          f.appendText(' ');
+          f.appendText(t(($) => $.pluginSettingsTab.shouldWarnWhenOriginalAttachmentNameIsUnknown.description.part1));
+          f.appendText(' ');
+          appendCodeBlock(f, '{{attachmentFileName}}');
+          f.appendText(' ');
+          f.appendText(t(($) => $.pluginSettingsTab.shouldWarnWhenOriginalAttachmentNameIsUnknown.description.part2));
+        }),
+        name: t(($) => $.pluginSettingsTab.shouldWarnWhenOriginalAttachmentNameIsUnknown.name),
+        render: (setting) => {
+          setting.addToggle((toggle) => {
+            this.bind({
+              propertyName: 'shouldWarnWhenOriginalAttachmentNameIsUnknown',
+              valueComponent: toggle
+            });
+          });
+        }
       })
     ];
   }

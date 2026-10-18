@@ -281,3 +281,74 @@ describe('Substitutions', () => {
     });
   });
 });
+
+describe('Substitutions, original and current attachment names', () => {
+  function createNameSubstitutions(params: Pick<ConstructorParameters<typeof Substitutions>[0], 'attachmentFileName' | 'onOriginalAttachmentFileNameUnknown' | 'originalAttachmentFileName'>): Substitutions {
+    return new Substitutions({
+      actionContext: ActionContext.CollectAttachments,
+      app: createApp(),
+      noteFilePath: 'folder/my-note.md',
+      pluginSettingsComponent: strictProxy<PluginSettingsComponent>({}),
+      tokenValidator: strictProxy<TokenValidator>({}),
+      ...params
+    });
+  }
+
+  beforeEach(() => {
+    Substitutions.registerCustomTokens('');
+  });
+
+  it('should read the current name and the arrival name separately', async () => {
+    const substitutions = createNameSubstitutions({ attachmentFileName: 'my-note-img.jpg', originalAttachmentFileName: 'img.png' });
+
+    expect(await substitutions.fillTemplate(`${tk('attachmentFileName')}.${tk('attachmentFileExtension')}`)).toBe('my-note-img.jpg');
+    expect(await substitutions.fillTemplate(`${tk('originalAttachmentFileName')}.${tk('originalAttachmentFileExtension')}`)).toBe('img.png');
+  });
+
+  it('should let either name stand in for the other when only one is given', async () => {
+    expect(await createNameSubstitutions({ attachmentFileName: 'a.png' }).fillTemplate(tk('originalAttachmentFileName'))).toBe('a');
+    expect(await createNameSubstitutions({ originalAttachmentFileName: 'b.png' }).fillTemplate(tk('attachmentFileName'))).toBe('b');
+  });
+
+  it('should report an unknown original once, and only when a template reads it', async () => {
+    const onOriginalAttachmentFileNameUnknown = vi.fn<() => void>();
+    const substitutions = createNameSubstitutions({ attachmentFileName: 'img.png', onOriginalAttachmentFileNameUnknown });
+
+    expect(await substitutions.fillTemplate(tk('attachmentFileName'))).toBe('img');
+    expect(onOriginalAttachmentFileNameUnknown).not.toHaveBeenCalled();
+
+    expect(await substitutions.fillTemplate(`${tk('originalAttachmentFileName')}-${tk('originalAttachmentFileExtension')}`)).toBe('img-png');
+    expect(await substitutions.fillTemplate(tk('originalAttachmentFileName'))).toBe('img');
+    expect(onOriginalAttachmentFileNameUnknown).toHaveBeenCalledOnce();
+  });
+
+  it('should report an unknown original when the extension is the first thing read', async () => {
+    const onOriginalAttachmentFileNameUnknown = vi.fn<() => void>();
+    const substitutions = createNameSubstitutions({ attachmentFileName: 'img.png', onOriginalAttachmentFileNameUnknown });
+
+    expect(await substitutions.fillTemplate(tk('originalAttachmentFileExtension'))).toBe('png');
+    expect(onOriginalAttachmentFileNameUnknown).toHaveBeenCalledOnce();
+  });
+
+  it('should never report when the original is known', async () => {
+    const onOriginalAttachmentFileNameUnknown = vi.fn<() => void>();
+    const substitutions = createNameSubstitutions({ attachmentFileName: 'x.png', onOriginalAttachmentFileNameUnknown, originalAttachmentFileName: 'img.png' });
+
+    expect(await substitutions.fillTemplate(tk('originalAttachmentFileName'))).toBe('img');
+    expect(onOriginalAttachmentFileNameUnknown).not.toHaveBeenCalled();
+  });
+
+  it('should keep the file dates under both token names', async () => {
+    const substitutions = new Substitutions({
+      actionContext: ActionContext.CollectAttachments,
+      app: createApp(),
+      attachmentFileStats: { ctime: Date.UTC(2020, 0, 2), mtime: Date.UTC(2021, 0, 2), size: 0 },
+      noteFilePath: 'folder/my-note.md',
+      pluginSettingsComponent: strictProxy<PluginSettingsComponent>({}),
+      tokenValidator: strictProxy<TokenValidator>({})
+    });
+
+    expect(await substitutions.fillTemplate(tk('attachmentFileCreationDate:YYYY'))).toBe(await substitutions.fillTemplate(tk('originalAttachmentFileCreationDate:YYYY')));
+    expect(await substitutions.fillTemplate(tk('attachmentFileModificationDate:YYYY'))).toBe(await substitutions.fillTemplate(tk('originalAttachmentFileModificationDate:YYYY')));
+  });
+});

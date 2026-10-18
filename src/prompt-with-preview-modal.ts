@@ -61,14 +61,14 @@ class PreviewModal extends Modal {
   }
 
   private async onOpenAsync(): Promise<void> {
-    const embeddableCreator = this.app.embedRegistry.embedByExtension[this.params.context.originalAttachmentFileExtension];
+    const embeddableCreator = this.app.embedRegistry.embedByExtension[this.params.context.attachmentFileExtension];
     const attachmentFileContent = await this.params.context.getAttachmentFileContent();
 
     if (!embeddableCreator || !attachmentFileContent) {
       return;
     }
 
-    const fullFileName = `${this.params.context.originalAttachmentFileName}.${this.params.context.originalAttachmentFileExtension}`;
+    const fullFileName = `${this.params.context.attachmentFileName}.${this.params.context.attachmentFileExtension}`;
 
     this.titleEl.setText(t(($) => $.promptWithPreviewModal.previewModal.title, { fullFileName }));
 
@@ -217,7 +217,7 @@ class PromptWithPreviewModal extends Modal {
     previewButton.setButtonText(t(($) => $.buttons.previewAttachmentFile));
     previewButton.onClick(this.preview.bind(this));
 
-    const embeddableCreator = this.app.embedRegistry.embedByExtension[this.context.originalAttachmentFileExtension];
+    const embeddableCreator = this.app.embedRegistry.embedByExtension[this.context.attachmentFileExtension];
     const attachmentFileContent = await this.context.getAttachmentFileContent();
 
     if (!attachmentFileContent || !embeddableCreator) {
