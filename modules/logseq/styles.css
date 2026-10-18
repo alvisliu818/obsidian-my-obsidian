@@ -4811,16 +4811,29 @@ body.lgp-table-editor-cursor * {
 .lgp-code-doc-note .block-editor-tree .block-main {
   padding-block: 1px;
 }
-/* 大纲圆点默认不显示(类思源文档观感),悬停/聚焦块时淡入恢复可点 */
-.lgp-code-doc-note .block-editor-tree .block-bullet {
-  width: 8px;
-  height: 8px;
-  opacity: 0;
-  transition: opacity 120ms ease;
+/* 注释区 = 段落几何(用户要的「默认块类型为段落」):圆点/任务框/类型徽标/
+   折叠箭头一律不画 —— 注释区不是大纲,没有列表语义。controls 列改作
+   **行号 gutter**:每个注释块(一行)在原来圆点的位置显示真实文件行号,
+   与代码编辑器的行号列同一职责(数字取代圆点,文字列位置不变,行号列
+   宽度由 HybridCodeEditor 按本区最大行号位数写 --lgp-note-gutter-w)。 */
+.lgp-code-doc-note .block-editor-tree .block-bullet,
+.lgp-code-doc-note .block-editor-tree .block-marker,
+.lgp-code-doc-note .block-editor-tree .block-type-badge,
+.lgp-code-doc-note .block-editor-tree .block-caret {
+  display: none;
 }
-.lgp-code-doc-note .block-editor-tree .block-wrap:hover .block-bullet,
-.lgp-code-doc-note .block-editor-tree .block-wrap-focus .block-bullet {
-  opacity: 0.5;
+.lgp-code-doc-note .block-editor-tree .block-controls {
+  width: var(--lgp-note-gutter-w, 34px);
+}
+.lgp-code-doc-note .block-editor-tree .block-line-no {
+  width: 100%;
+  padding-right: 8px;
+  text-align: right;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
 }
 .lgp-code-doc-note .block-editor-tree .block-content {
   line-height: 1.55;

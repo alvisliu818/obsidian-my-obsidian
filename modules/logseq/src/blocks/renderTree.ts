@@ -240,6 +240,14 @@ function renderBlock(b: Block, host: BlockRenderHost, budget?: RenderBudget): HT
 
   // --- controls ---
   const controls = main.createEl('div', { cls: 'block-controls' });
+  // 注释区(混合编辑视图)行号:块 ↔ 文件行,渲染在 controls 列 —— 段落几何
+  // 下圆点列改作行号 gutter(数字取代圆点,文字列位置不变,与代码编辑器
+  // 的行号列同一职责)。普通大纲不传,行为零变化。
+  const noteLine = host.noteLineNumberOf?.(b) ?? null;
+  if (noteLine !== null) {
+    const ln = controls.createEl('div', { cls: 'block-line-no' });
+    ln.textContent = String(noteLine);
+  }
   // Raw (verbatim) blocks get the drag handle too: a table, divider, formula
   // or media embed is real content the user expects to be able to move.
   const draggable = b.kind === 'list' || b.kind === 'raw';
@@ -299,7 +307,8 @@ function renderBlock(b: Block, host: BlockRenderHost, budget?: RenderBudget): HT
   }
   // 大纲圆点只属于列表容器。段落容器(bare:源文件没有列表标志)不显示圆点;
   // 但带任务标记的裸行(`TODO x`)语义上是任务项,圆点照显(复选框在下面)。
-  if (b.kind === 'list' && !b.bare && !nativeProps) {
+  // 注释区(noteLine 非 null)同样不画圆点:那一列是行号 gutter。
+  if (b.kind === 'list' && !b.bare && !nativeProps && noteLine === null) {
     const bullet = controls.createEl('div', { cls: 'block-bullet' });
     bullet.setAttribute('aria-label', 'Focus this block');
     bullet.setAttribute('title', 'Click to focus · Shift/Ctrl+click to select');

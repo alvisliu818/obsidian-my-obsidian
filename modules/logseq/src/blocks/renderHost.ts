@@ -106,4 +106,10 @@ export interface BlockRenderHost extends Component {
    * 代码注释区宿主实现为 true:块文本行首 `#` 是注释标记,不是标题。
    */
   suppressHeadingDecor?(b: Block): boolean;
+  /**
+   * 注释区(混合编辑视图的 note zone):该块对应的**文件行号**;null = 普通
+   * 大纲行。renderTree 在 controls 列渲染 `.block-line-no`(行号 gutter),
+   * 并跳过圆点 —— 注释区是段落几何,圆点列改作行号列。
+   */
+  noteLineNumberOf?(b: Block): number | null;
 }

@@ -75,6 +75,12 @@ export interface FragmentOptions {
    * 标记而非 markdown 标题 —— 编辑态关闭 live-preview 的标题渲染。
    */
   codeComment?: boolean;
+  /**
+   * 注释区行号(混合编辑视图的注释 zone):每个块在 controls 列显示
+   * **文件行号**而非大纲圆点。基准由宿主通过 lineNumberBase 维护
+   * (区起始行 + 区前漂移),块序号 k ↔ 文件行 lineNumberBase + k。
+   */
+  noteLineNumbers?: boolean;
 }
 
 export class FragmentHost extends Component implements BlockRenderHost {
@@ -91,6 +97,11 @@ export class FragmentHost extends Component implements BlockRenderHost {
   sourceModeBlock: Block | null = null;
   selectedBlocks = new Set<Block>();
   renderGeneration = 0;
+  /**
+   * 注释区行号基准:块序号 k ↔ 文件行 lineNumberBase + k。
+   * 由混合编辑视图(HybridCodeEditor)写入/刷新;noteLineNumbers 关时无意义。
+   */
+  lineNumberBase = 1;
   /** 片段很小:免虚拟化,整棵渲染 */
   scrollCap = 1e9;
   readonly leaf: WorkspaceLeaf | null = null;
@@ -571,6 +582,57 @@ export class FragmentHost extends Component implements BlockRenderHost {
   /** 代码注释区:块文本行首 `#` 是注释标记,编辑态不按标题渲染 */
   suppressHeadingDecor(_b: Block): boolean {
     return this.opts.codeComment === true;
+  }
+
+  // ------------------------------------------------------------------
+  // 注释区行号(混合编辑视图)
+  // ------------------------------------------------------------------
+
+  /**
+   * 块 → 文件行号(renderTree 在 controls 列渲染 .block-line-no)。
+   * 非注释区场景(noteLineNumbers 关)返回 null,渲染行为零变化。
+   * 行号与 outlineTextToLines 同行序:文档顺序(父先子后)的第 k 个块。
+   */
+  noteLineNumberOf(b: Block): number | null {
+    if (this.opts.noteLineNumbers !== true) return null;
+    return this.lineNumberBase + this.blockIndexOf(b);
+  }
+
+  /** 块在文档顺序(父先子后)中的下标;找不到时 0(防御,不该发生) */
+  private blockIndexOf(b: Block): number {
+    let idx = 0;
+    const walk = (blocks: Block[]): number => {
+      for (const x of blocks) {
+        if (x === b) return idx;
+        idx++;
+        const hit = walk(x.children);
+        if (hit >= 0) return hit;
+      }
+      return -1;
+    };
+    const hit = walk(this.doc.blocks);
+    return hit >= 0 ? hit : 0;
+  }
+
+  /**
+   * 行号基准漂移后**原地**刷新行号 span(不重渲染整棵树)。
+   * span 的 DOM 顺序 = 文档顺序(父先子后),与一次 walk 对齐即可。
+   */
+  refreshLineNumbers(): void {
+    if (this.opts.noteLineNumbers !== true) return;
+    const spans = this.treeEl.querySelectorAll<HTMLElement>('.block-line-no');
+    if (spans.length === 0) return;
+    let i = 0; // span 游标(DOM 顺序 = 文档顺序)
+    let idx = 0; // 块序号游标
+    const walk = (blocks: Block[]): void => {
+      for (const x of blocks) {
+        const el = spans[i++];
+        if (el) el.textContent = String(this.lineNumberBase + idx);
+        idx++;
+        walk(x.children);
+      }
+    };
+    walk(this.doc.blocks);
   }
 
   templateContext(): TemplateContext {

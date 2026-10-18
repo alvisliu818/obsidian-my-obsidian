@@ -37,7 +37,7 @@ import { Component, Menu } from 'obsidian';
 import type * as monacoNS from 'monaco-editor';
 import type LogseqEditorPlugin from '../main';
 import { createEditor, setupMonaco } from '../editor/monaco';
-import { toHybridRegions, toOutlineDocText, type HybridRegion } from '../features/codeDoc';
+import { toHybridRegions, toOutlineDocText, unescapeNoteLine, type HybridRegion } from '../features/codeDoc';
 import { FragmentHost } from '../blocks/fragmentEditor';
 import { parseDocument } from '../core/parser';
 
@@ -78,15 +78,21 @@ export interface HybridMountOpts {
 /**
  * Logseq 大纲文本 → 原文行序列(剥掉列表标记与软行缩进)。
  *
- * 注释区在文档编辑器里以 `- ` 列表项呈现,取回内容时要把块文本行还原成
- * 文件里的样子(注释标记本身留在块文本里,不在这里剥)。
+ * 注释区在大纲里是**一行一个列表项**(toOutlineDocText),取回内容时要把
+ * 块文本行还原成文件里的样子:
+ *   - 任务标记(TODO/DOING/DONE)被 parser 剥出块文本存在 b.marker 里,
+ *     拼回行首(仅防御性路径:进大纲时已转义,正常不会有 marker);
+ *   - 行首零宽空格是 toOutlineDocText 的转义前缀,剥掉。
+ * 注释标记本身(`#` / `//`)留在块文本里,不在这里剥。
  */
 function outlineTextToLines(outline: string): string[] {
   const doc = parseDocument(outline);
   const out: string[] = [];
   const walk = (blocks: ReturnType<typeof parseDocument>['blocks']): void => {
     for (const b of blocks) {
-      out.push(...b.text.split('\n'));
+      const lines = unescapeNoteLine(b.text).split('\n');
+      if (b.marker && lines.length > 0) lines[0] = b.marker + ' ' + lines[0];
+      out.push(...lines);
       if (b.children.length) walk(b.children);
     }
   };
@@ -227,7 +233,32 @@ export class HybridCodeEditor extends Component {
         } catch {
         /* 编辑器已销毁 */
       }
+      // doc 形态注释区的行号 span 不在 Monaco 里,同样跟着漂移刷新
+      this.syncNoteLineNumbers();
     }, 250);
+  }
+
+  /**
+   * 把各注释区(doc 形态)的行号基准与 span 刷新到当前漂移。
+   * 基准 = noteFileLine(区, 1) = 区起始行 + 区前所有区的行数漂移;
+   * 块序号 k ↔ 文件行 基准 + k(FragmentHost.noteLineNumberOf)。
+   * 区自己的行数变化不进基准(被块序号天然吸收),只影响 gutter 宽度。
+   */
+  private syncNoteLineNumbers(): void {
+    for (let k = 0; k < this.regions.length; k++) {
+      const frag = this.fragments[k];
+      if (!frag || (this.noteModes[k] ?? 'doc') !== 'doc') continue;
+      const dom = this.zones[k]?.dom;
+      if (dom) dom.style.setProperty('--lgp-note-gutter-w', this.noteGutterWidth(k));
+      frag.lineNumberBase = this.noteFileLine(k, 1);
+      frag.refreshLineNumbers();
+    }
+  }
+
+  /** 注释区行号 gutter 宽度:按本区最大文件行号的位数给(数字右对齐,文字列才能对齐) */
+  private noteGutterWidth(regionIdx: number): string {
+    const last = this.noteFileLine(regionIdx, Math.max(1, this.textCounts[regionIdx] ?? 1));
+    return `${Math.max(24, String(last).length * 8 + 10)}px`;
   }
 
   // ------------------------------------------------------------------
@@ -359,6 +390,8 @@ export class HybridCodeEditor extends Component {
         editable: true,
         // 代码注释区:块文本行首 `#` 是注释标记,编辑态不渲染成标题。
         codeComment: true,
+        // 注释区行号:每个块(一行)在 controls 列显示真实文件行号。
+        noteLineNumbers: true,
         onContentChange: () => {
           if (this.resplitActive) return;
           // 提交即刷新行数(行号漂移),并检查标记增删是否改变了区分类。
@@ -367,6 +400,9 @@ export class HybridCodeEditor extends Component {
           this.scheduleResplit();
         },
       });
+      // 行号基准要先于首渲染设好(renderBlock 当场读)
+      frag.lineNumberBase = this.noteFileLine(regionIdx, 1);
+      dom.style.setProperty('--lgp-note-gutter-w', this.noteGutterWidth(regionIdx));
       frag.setMarkdown(
         toOutlineDocText([{ kind: 'text', text: r.lines.join('\n'), startLine: r.startLine }]),
       );
@@ -578,6 +614,9 @@ export class HybridCodeEditor extends Component {
       }
     }
     this.scheduleZoneRelayout();
+    // 代码区行数变了 → 下游注释区的文件行号漂移,gutter 与行号 span 一起刷新
+    // (防抖 250ms;doc 形态注释区的 span 在 scheduleGutterRefresh 里同步)
+    this.scheduleGutterRefresh();
     this.opts?.onChange?.();
   }
 
