@@ -192,6 +192,8 @@ export default class LogseqEditorPlugin extends Plugin {
     this.registerView(VIEW_TYPE_MOUNT_PANEL, (leaf) => new MountPanelView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_FILE, (leaf) => new ExternalFileView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_CODE, (leaf) => new ExternalCodeView(leaf, this));
+    // CodeDocView 是旧混合视图(已被 ExternalCodeView 的新混合引擎取代,不再是
+    // 打开入口);保留注册只为恢复旧 workspace 布局里已存在的 leaf。
     this.registerView(VIEW_TYPE_CODE_DOC, (leaf) => new CodeDocView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_BLOCK, (leaf) => new ExternalBlockView(leaf, this));
     this.registerView(VIEW_TYPE_OFFICE, (leaf) => new OfficeView(leaf, this));
@@ -1760,11 +1762,16 @@ export default class LogseqEditorPlugin extends Plugin {
    * they never asked for; reusing an existing block-editor tab would silently
    * replace their work. A fresh tab is the only variant that touches nothing.
    */
-  /** 用混合视图打开库外代码文件(注释区 = Logseq 块,代码段 = Monaco)。 */
+  /**
+   * 用混合视图打开库外代码文件。与库内代码文件同走 ExternalCodeView 的新混合
+   * 引擎(HybridCodeEditor:类思源注释区、动态行号、# 不渲染标题、加/删标记
+   * 自动重切分)——旧 CodeDocView 混合视图不再作为打开入口,注释区体验两边一致。
+   */
   private async openInCodeDocView(mount: ExternalMount, node: MountNode): Promise<boolean> {
     if (!isTextFileName(node.name)) return false;
+    let data: string;
     try {
-      readExternalText(node.abs);
+      data = readExternalText(node.abs);
     } catch {
       return false; // 混合视图打不开时回落(代码编辑器/shim 会给出提示)
     }
@@ -1772,18 +1779,18 @@ export default class LogseqEditorPlugin extends Plugin {
       this.settings.externalSplitView === true ? 'split' : 'tab',
     );
     await leaf.setViewState({
-      type: VIEW_TYPE_CODE_DOC,
+      type: VIEW_TYPE_EXTERNAL_CODE,
       active: true,
       state: {
         abs: node.abs,
         name: node.name,
-        rel: node.rel,
-        mountLabel: mount.label,
+        content: data,
         mountPath: mount.path,
+        mountLabel: mount.label,
       },
     });
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
-    logOp(this, 'external.open', node.abs, 'ok', 'code-doc');
+    logOp(this, 'external.open', node.abs, 'ok', 'code-editor');
     return true;
   }
   private async openInBlockEditor(mount: ExternalMount, node: MountNode): Promise<boolean> {
@@ -1868,6 +1875,8 @@ export default class LogseqEditorPlugin extends Plugin {
         content: data,
         mountPath: mount.path,
         mountLabel: mount.label,
+        // 右键「纯代码编辑器」入口:该文件覆盖为纯源码呈现(可头部按钮切回)
+        hybrid: false,
       },
     });
     this.app.workspace.setActiveLeaf(leaf, { focus: true });

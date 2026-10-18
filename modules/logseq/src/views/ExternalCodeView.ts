@@ -148,12 +148,15 @@ export class ExternalCodeView extends ItemView {
   }
 
   getState(): Record<string, unknown> {
-    return {
+    const state: Record<string, unknown> = {
       abs: this.abs,
       name: this.fileName,
       mountPath: this.mountPath,
       mountLabel: this.mountLabel,
     };
+    // 临时覆盖随 state 持久化:布局恢复时纯源码/混合不退回设置默认值
+    if (this.hybridOverride !== null) state.hybrid = this.hybridOverride;
+    return state;
   }
 
   async onOpen(): Promise<void> {
@@ -183,12 +186,16 @@ export class ExternalCodeView extends ItemView {
       mountLabel?: string;
       /** 库内文件:Obsidian 的 registerExtensions 路径传的是 {file}(vault 相对路径)。 */
       file?: string;
+      /** 打开入口的呈现覆盖(false = 纯源码;缺省跟随设置) */
+      hybrid?: boolean;
     };
     if (typeof s.abs === 'string') this.abs = s.abs;
     if (typeof s.name === 'string') this.fileName = s.name;
     if (typeof s.content === 'string') this.lastDiskData = s.content;
     if (typeof s.mountPath === 'string') this.mountPath = s.mountPath;
     if (typeof s.mountLabel === 'string') this.mountLabel = s.mountLabel;
+    // 打开入口的呈现覆盖(右键「纯代码编辑器」传 false;缺省跟随设置)
+    if (typeof s.hybrid === 'boolean') this.hybridOverride = s.hybrid;
     // 库内文件:宿主把代码扩展名 registerExtensions 到本视图,Obsidian 传
     // {file}(vault 相对路径)。解析成真实路径 + 标记来源,徽标与提示随之区分。
     if (!this.abs && typeof s.file === 'string' && s.file) {
