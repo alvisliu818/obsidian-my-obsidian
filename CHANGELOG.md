@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 16.0.0
+
+- feat(settings)!: merge taking obsidian-lib 5.0.0 path settings with globs and case-insensitive matching
+- docs: mark plugin names as code
+- fix(tokens): merge registering custom tokens whenever the settings are validated
+
 ## 15.1.1
 
 - docs(api): merge naming the validation debug switch in the contract
