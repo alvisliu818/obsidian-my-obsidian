@@ -194,7 +194,6 @@ export const enGB = {
         part2: 'Collect attachments',
         part3: 'command is executed.',
         part4: 'Insert each path on a new line.',
-        part5: 'You can use path string or',
         part6: 'If the setting is empty, no paths are excluded from attachment collecting.'
       },
       name: 'Exclude paths from attachment collecting'

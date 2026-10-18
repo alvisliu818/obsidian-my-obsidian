@@ -194,7 +194,6 @@ export const fr = {
         part2: 'Collecter les pièces jointes',
         part3: 'est exécutée.',
         part4: 'Insérez chaque chemin sur une nouvelle ligne.',
-        part5: 'Vous pouvez utiliser une chaîne de chemin ou',
         part6: 'Si le paramètre est vide, aucun chemin n\'est exclu de la collecte de pièces jointes.'
       },
       name: 'Chemins exclus de la collecte de pièces jointes'

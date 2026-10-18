@@ -283,27 +283,39 @@ describe('PluginSettingsComponent', () => {
       expect(result.generatedAttachmentFileName).toBeUndefined();
     });
 
-    it('should accept valid regular expressions and plain paths in the exclude lists', async () => {
+    it('should accept every entry form in the vault path lists', async () => {
       const component = await createComponent();
       const settings = createSettings();
-      // Both shapes in one list: a plain path, which the validator skips, and a regular expression, which
-      // it compiles.
-      settings.excludePathsFromMultipleNotesCheck = ['plain/path', String.raw`/\.excalidraw\.md$/`];
+      // All three forms in one list: a plain path, a glob, and a regular expression with a flag.
+      settings.excludePathsFromMultipleNotesCheck = ['plain/path', '**/*.excalidraw.md', String.raw`/\.excalidraw\.md$/u`];
       const result = await component.validate(settings);
       expect(result.excludePathsFromMultipleNotesCheck).toBeUndefined();
     });
 
-    it('should reject an invalid regular expression in an exclude list', async () => {
+    it.each(
+      [
+        'attachmentUnitFolderPaths',
+        'excludePathsFromAttachmentCollecting',
+        'excludePathsFromMultipleNotesCheck',
+        'orphanAttachmentScanPaths'
+      ] as const
+    )('should reject an invalid regular expression or glob in %s', async (propertyName) => {
       const component = await createComponent();
-      // The real PluginSettings setter eagerly compiles the regex and would throw, so the getter is
-      // overridden to feed the validator an invalid pattern directly.
       const settings = createSettings();
-      Object.defineProperty(settings, 'excludePathsFromMultipleNotesCheck', {
-        configurable: true,
-        get: (): string[] => ['/[/']
-      });
+      settings[propertyName] = ['/[/'];
+      const regExpResult = await component.validate(settings);
+      expect(regExpResult[propertyName]).toContain('/[/');
+      settings[propertyName] = ['*.[pdf'];
+      const globResult = await component.validate(settings);
+      expect(globResult[propertyName]).toContain('*.[pdf');
+    });
+
+    it('should reject an unknown regular expression flag rather than ignore it', async () => {
+      const component = await createComponent();
+      const settings = createSettings();
+      settings.orphanAttachmentScanPaths = ['/files/q'];
       const result = await component.validate(settings);
-      expect(result.excludePathsFromMultipleNotesCheck).toBe('Invalid regular expression /[/');
+      expect(result.orphanAttachmentScanPaths).toContain('/files/q');
     });
   });
 

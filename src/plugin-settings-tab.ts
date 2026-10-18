@@ -949,12 +949,7 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
           f.createEl('br');
           f.appendText(t(($) => $.pluginSettingsTab.attachmentUnitFolderPaths.description.part5));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.attachmentUnitFolderPaths.description.part6));
-          f.appendText(' ');
-          appendCodeBlock(f, t(($) => $.regularExpression));
-          f.appendText('.');
-          f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.attachmentUnitFolderPaths.description.part7));
+          appendPathEntrySyntax(f);
           f.createEl('br');
           f.appendText(t(($) => $.pluginSettingsTab.attachmentUnitFolderPaths.description.part8));
         }),
@@ -978,10 +973,7 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
           f.createEl('br');
           f.appendText(t(($) => $.pluginSettingsTab.excludePathsFromAttachmentCollecting.description.part4));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.excludePathsFromAttachmentCollecting.description.part5));
-          f.appendText(' ');
-          appendCodeBlock(f, t(($) => $.regularExpression));
-          f.appendText('.');
+          appendPathEntrySyntax(f);
           f.createEl('br');
           f.appendText(t(($) => $.pluginSettingsTab.excludePathsFromAttachmentCollecting.description.part6));
         }),
@@ -1039,10 +1031,7 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
           f.createEl('br');
           f.appendText(t(($) => $.pluginSettingsTab.excludePathsFromMultipleNotesCheck.description.part6));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.excludePathsFromMultipleNotesCheck.description.part7));
-          f.appendText(' ');
-          appendCodeBlock(f, t(($) => $.regularExpression));
-          f.appendText('.');
+          appendPathEntrySyntax(f);
           f.createEl('br');
           f.appendText(t(($) => $.pluginSettingsTab.excludePathsFromMultipleNotesCheck.description.part8));
         }),
@@ -1109,12 +1098,7 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
           f.createEl('br');
           f.appendText(t(($) => $.pluginSettingsTab.orphanAttachmentScanPaths.description.part2));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.orphanAttachmentScanPaths.description.part3));
-          f.appendText(' ');
-          appendCodeBlock(f, t(($) => $.regularExpression));
-          f.appendText('.');
-          f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.orphanAttachmentScanPaths.description.part4));
+          appendPathEntrySyntax(f);
           f.createEl('br');
           f.appendText(t(($) => $.pluginSettingsTab.orphanAttachmentScanPaths.description.part5));
         }),
@@ -1208,6 +1192,35 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       })
     ];
   }
+}
+
+/**
+ * Explains the entry syntax every vault path list shares, which is `@mnaoumov/obsidian-lib`'s `PathSettings`.
+ *
+ * One helper for the four lists, so their descriptions cannot drift from each other or from what the library matches.
+ *
+ * @param f - The description fragment to append to.
+ */
+function appendPathEntrySyntax(f: DocumentFragment): void {
+  f.appendText(t(($) => $.pluginSettingsTab.pathEntrySyntax.intro));
+  f.createEl('br');
+  appendCodeBlock(f, 'Archive/Old');
+  f.appendText(' ');
+  f.appendText(t(($) => $.pluginSettingsTab.pathEntrySyntax.plainPath));
+  f.createEl('br');
+  appendCodeBlock(f, '*.pdf');
+  f.appendText(', ');
+  appendCodeBlock(f, 'Archive/**/*.png');
+  f.appendText(', ');
+  appendCodeBlock(f, '*_files/');
+  f.appendText(' ');
+  f.appendText(t(($) => $.pluginSettingsTab.pathEntrySyntax.glob));
+  f.createEl('br');
+  appendCodeBlock(f, String.raw`/^Archive\/\d{4}\//`);
+  f.appendText(' ');
+  f.appendText(t(($) => $.pluginSettingsTab.pathEntrySyntax.regularExpression));
+  f.createEl('br');
+  f.appendText(t(($) => $.pluginSettingsTab.pathEntrySyntax.escape));
 }
 
 function generateJpegQualityOptions(): Record<string, string> {

@@ -193,7 +193,6 @@ export const pt = {
         part2: 'Recolher anexos',
         part3: 'for executado.',
         part4: 'Introduza cada caminho numa nova linha.',
-        part5: 'Pode usar cadeias de caminho ou',
         part6: 'Se a configuração ficar vazia, nenhum anexo será excluído da recolha.'
       },
       name: 'Excluir caminhos da recolha de anexos'

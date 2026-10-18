@@ -193,7 +193,6 @@ export const pl = {
         part2: 'Zbierz załączniki',
         part3: '.',
         part4: 'Wstaw każdą ścieżkę w nowej linii.',
-        part5: 'Możesz użyć ciągu ścieżki lub wyrażenia regularnego.',
         part6: 'Jeśli ustawienie jest puste, żadne ścieżki nie są wykluczane ze zbierania załączników.'
       },
       name: 'Wyklucz ścieżki ze zbierania załączników'

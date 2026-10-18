@@ -194,7 +194,6 @@ export const de = {
         part2: 'Anhänge sammeln',
         part3: 'Befehl ausgeführt wird.',
         part4: 'Jeden Pfad in eine neue Zeile einfügen.',
-        part5: 'Sie können Pfad-String oder',
         part6: 'Wenn die Einstellung leer ist, werden keine Pfade vom Sammeln von Anhängen ausgeschlossen.'
       },
       name: 'Pfade vom Sammeln von Anhängen ausschließen'

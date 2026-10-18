@@ -10,6 +10,7 @@ import {
   isNote
 } from '@mnaoumov/obsidian-lib/file-system';
 import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
+import { pathsValidator } from '@mnaoumov/obsidian-lib/path-settings';
 import { getOsUnsafePathCharsRegExp } from '@mnaoumov/obsidian-lib/validation';
 import { EmptyFolderBehavior } from '@mnaoumov/obsidian-lib/vault';
 import { castTo } from '@mnaoumov/typescript-lib/object-utils';
@@ -525,6 +526,15 @@ export class PluginSettingsComponent extends PluginSettingsComponentBase<PluginS
       return extensionsValidator(value);
     });
 
+    // The vault path lists are `PathSettings`, so the library that matches them is the one that says which entries are valid.
+    this.registerValidator('attachmentUnitFolderPaths', (value): MaybeReturn<string> => {
+      return pathsValidator(value);
+    });
+
+    this.registerValidator('excludePathsFromAttachmentCollecting', (value): MaybeReturn<string> => {
+      return pathsValidator(value);
+    });
+
     this.registerValidator('excludePathsFromMultipleNotesCheck', (value): MaybeReturn<string> => {
       return pathsValidator(value);
     });
@@ -534,7 +544,7 @@ export class PluginSettingsComponent extends PluginSettingsComponentBase<PluginS
     });
 
     this.registerValidator('screenshotFilePaths', (value): MaybeReturn<string> => {
-      return pathsValidator(value);
+      return screenshotFilePathsValidator(value);
     });
 
     this.registerValidator('customTokensStr', (value): MaybeReturn<string> => {
@@ -607,7 +617,16 @@ function extensionsValidator(extensions: string[]): MaybeReturn<string> {
   }
 }
 
-function pathsValidator(paths: string[]): MaybeReturn<string> {
+/**
+ * Rejects an invalid regular expression in {@link PluginSettings.screenshotFilePaths}.
+ *
+ * That list holds operating-system paths and is matched by `isScreenshotFilePath`, not by `PathSettings`, so it keeps
+ * its own two forms - a folder, or an entry wrapped in `/` - and the library's validator does not apply to it.
+ *
+ * @param paths - The raw entries as typed.
+ * @returns The validation message, or nothing when every entry is usable.
+ */
+function screenshotFilePathsValidator(paths: string[]): MaybeReturn<string> {
   for (const path of paths) {
     if (!(path.startsWith('/') && path.endsWith('/'))) {
       continue;

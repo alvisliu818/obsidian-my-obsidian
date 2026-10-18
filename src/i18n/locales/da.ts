@@ -194,7 +194,6 @@ export const da = {
         part2: 'Saml vedhæftninger',
         part3: 'kommandoen udføres.',
         part4: 'Indsæt hver sti på en ny linje.',
-        part5: 'Du kan bruge stistreng eller',
         part6: 'Hvis indstillingen er tom, udelukkes ingen stier fra vedhæftningssamling.'
       },
       name: 'Udeluk stier fra vedhæftningssamling'

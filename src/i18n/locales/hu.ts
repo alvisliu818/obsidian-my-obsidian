@@ -194,7 +194,6 @@ export const hu = {
         part2: 'Mellékletek gyűjtése',
         part3: 'parancs végrehajtódik.',
         part4: 'Minden útvonalat új sorba írj.',
-        part5: 'Használhatsz útvonal stringet vagy',
         part6: 'Ha a beállítás üres, egyetlen útvonal sem kerül kizárásra a melléklet gyűjtésből.'
       },
       name: 'Útvonalak kizárása a melléklet gyűjtésből'

@@ -193,7 +193,6 @@ export const tr = {
         part2: 'Ekleri topla',
         part3: 'komutu çalıştırıldığında.',
         part4: 'Her yolu yeni satıra yazın.',
-        part5: 'Yol dizisi veya',
         part6: 'Eğer ayar boşsa, hiç bir yol hariç tutulmaz.'
       },
       name: 'Ek toplarken hariç tutulan yollar'

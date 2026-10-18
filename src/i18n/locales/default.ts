@@ -308,8 +308,6 @@ export const defaultTranslations = {
         part3: 'moves an attachment from one of them, the whole folder moves along with it.',
         part4: 'Use this for attachments that are really a folder: a saved page next to its files folder, a drawing next to the images it references.',
         part5: 'Insert each path on a new line.',
-        part6: 'You can use path string or',
-        part7: 'A plain path is matched from the vault root. To match a folder name wherever it appears, use a regular expression.',
         part8: 'If the setting is empty, every attachment is moved on its own, which is the behavior without this setting.'
       },
       name: 'Attachment unit folders'
@@ -398,7 +396,6 @@ export const defaultTranslations = {
         part2: 'Collect attachments',
         part3: 'command is executed.',
         part4: 'Insert each path on a new line.',
-        part5: 'You can use path string or',
         part6: 'If the setting is empty, no paths are excluded from attachment collecting.'
       },
       name: 'Exclude paths from attachment collecting'
@@ -411,7 +408,6 @@ export const defaultTranslations = {
         part4: 'Move attachment to proper folder',
         part5: 'commands.',
         part6: 'Insert each path on a new line.',
-        part7: 'You can use path string or',
         part8: 'If the setting is empty, no notes are ignored.'
       },
       name: 'Exclude paths from multiple notes check'
@@ -486,8 +482,6 @@ export const defaultTranslations = {
       description: {
         part1: 'The folders the pass above looks in.',
         part2: 'Insert each path on a new line.',
-        part3: 'You can use path string or',
-        part4: 'A plain path is matched from the vault root. To match a folder name wherever it appears, use a regular expression.',
         part5: 'If the setting is empty, nothing is checked and the pass does nothing.'
       },
       name: 'Paths to look in'
@@ -521,6 +515,13 @@ export const defaultTranslations = {
       specialCharacters: {
         description: 'Characters stripped from generated names, and what replaces them.'
       }
+    },
+    pathEntrySyntax: {
+      escape: 'To use *, ? or [ literally, put a backslash before it.',
+      glob: 'are globs: * matches within a name, ** across folders, ? one character and [abc] one of a set. A glob without a / matches a file or folder name at any depth, a glob with a / is matched from the vault root, and a trailing / matches folders only.',
+      intro: 'Each line is a plain path, a glob or a regular expression. Matching ignores case.',
+      plainPath: 'is a plain path: it matches that path from the vault root, and everything inside it.',
+      regularExpression: 'is a regular expression, tested against the full path. Its flags are honored.'
     },
     renameAttachmentsCreatedByOtherPluginsMode: {
       description: {

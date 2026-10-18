@@ -193,7 +193,6 @@ export const no = {
         part2: 'Samle vedlegg',
         part3: 'kommando utføres.',
         part4: 'Sett inn hver sti på en ny linje.',
-        part5: 'Du kan bruke stistreng eller',
         part6: 'Hvis innstillingen er tom, ekskluderes ingen stier fra vedleggsinnsamling.'
       },
       name: 'Ekskluder stier fra vedleggsinnsamling'

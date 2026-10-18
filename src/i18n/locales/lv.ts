@@ -193,7 +193,6 @@ export const lv = {
         part2: 'Apkopot pielikumus',
         part3: 'komanda tiek izpildīta.',
         part4: 'Ievadiet katru ceļu jaunā rindā.',
-        part5: 'Varat izmantot ceļa virkni vai',
         part6: 'Ja iestatījums ir tukšs, ceļi netiek izslēgti no pielikumu apkopošanas.'
       },
       name: 'Izslēgt ceļus no pielikumu apkopošanas'

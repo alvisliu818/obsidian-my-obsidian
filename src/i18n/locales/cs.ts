@@ -194,7 +194,6 @@ export const cs = {
         part2: 'Shromáždit přílohy',
         part3: 'příkaz je spuštěn.',
         part4: 'Vložte každou cestu na nový řádek.',
-        part5: 'Můžete použít řetězec cesty nebo',
         part6: 'Pokud je nastavení prázdné, žádné cesty nejsou vyloučeny ze shromažďování příloh.'
       },
       name: 'Vyloučit cesty ze shromažďování příloh'

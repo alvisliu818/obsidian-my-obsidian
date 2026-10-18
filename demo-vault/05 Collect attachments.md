@@ -208,7 +208,13 @@ Some attachments are a directory tree rather than a file: a page saved from a br
 
 List those folders under **Attachment unit folders** (`attachmentUnitFolderPaths`) and the whole folder travels whenever collecting moves any attachment inside it. The folder lands in the note's attachment folder under its own name, so its internal shape - and the relative links inside it - keep working.
 
-Entries use the same vocabulary as the include / exclude path settings: a plain entry is a path from the vault root, while an entry wrapped in `/` is a regular expression. To designate a folder by *name* wherever it appears, use the regular-expression form, e.g. `/(^|\/)[^/]+_files(\/|$)/`.
+Entries use the same vocabulary as the include / exclude path settings, and every form ignores case:
+
+- a plain entry is a path from the vault root, and matches that folder and everything inside it, e.g. `Archive/Old`;
+- an entry holding `*`, `?` or `[` is a glob: `*` matches within a name, `**` across folders, `?` one character and `[abc]` one of a set. A glob without a `/` matches a file or folder *name* wherever it appears, one with a `/` is matched from the vault root, and a trailing `/` matches folders only. To designate every `_files` folder in the vault, write `*_files/`;
+- an entry shaped `/pattern/flags` is a regular expression tested against the full path, e.g. `/(^|\/)[^/]+_files(\/|$)/`.
+
+To use `*`, `?` or `[` literally in a path, put a backslash before it: `Notes \[old\]`.
 
 Two things worth knowing:
 

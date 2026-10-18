@@ -259,9 +259,10 @@ export class PluginSettings {
   /**
    * Folders whose whole hierarchy travels as one attachment.
    *
-   * Same vocabulary as the include / exclude path settings: a plain entry is a path from the vault
-   * root, and an entry wrapped in `/` is a regular expression. Matching a folder *name* wherever it
-   * appears therefore needs the regular-expression form, e.g. `/(^|\/)[^/]+_files(\/|$)/`.
+   * Same vocabulary as the include / exclude path settings (`@mnaoumov/obsidian-lib/path-settings`), all
+   * matched case-insensitively: a plain entry is a path from the vault root, an entry holding `*`, `?` or
+   * `[` is a glob, and an entry shaped `/pattern/flags` is a regular expression. A glob with no `/` matches
+   * a folder *name* wherever it appears, e.g. `*_files`.
    */
   public get attachmentUnitFolderPaths(): string[] {
     return this._attachmentUnitFolderPaths.excludePaths;
@@ -301,9 +302,9 @@ export class PluginSettings {
   /**
    * The folders {@link OrphanAttachmentScanMode.ListedPaths} confines the attachment-driven pass to.
    *
-   * Same vocabulary as {@link attachmentUnitFolderPaths}: a plain entry is a path from the vault root, and
-   * an entry wrapped in `/` is a regular expression, which is what matching a folder *name* wherever it
-   * appears needs — e.g. `/\/!!files\//`.
+   * Same vocabulary as {@link attachmentUnitFolderPaths}: a plain entry is a path from the vault root, a
+   * glob that opens with a `**` segment reaches a folder *name* wherever it appears (`!!files` alone holds no
+   * glob character, so it is a plain path), and `/pattern/flags` is a regular expression.
    */
   public get orphanAttachmentScanPaths(): string[] {
     return this._orphanAttachmentScanPaths.excludePaths;
@@ -338,7 +339,8 @@ export class PluginSettings {
   }
 
   public isAttachmentUnitFolder(path: string): boolean {
-    return this._attachmentUnitFolderPaths.isPathIgnored(path);
+    // The path is always a folder's, so a folder-only glob (`*_files/`) matches the folder itself, not just its contents.
+    return this._attachmentUnitFolderPaths.isPathIgnored(path, true);
   }
 
   public isExcludedFromAttachmentCollecting(path: string): boolean {
