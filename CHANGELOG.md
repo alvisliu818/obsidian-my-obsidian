@@ -6,6 +6,8 @@
 - docs: mark plugin names as code
 - fix(tokens): merge registering custom tokens whenever the settings are validated
 
+Migration: every entry in a path list (attachment unit folders, the two exclude lists, the orphan-scan paths) now matches case-insensitively. An unescaped `*`, `?` or `[` makes an entry a glob (`*.pdf`, `Archive/**/*.png`, `*_files/`), so a plain path that holds one of those characters literally must escape it (`Notes \[old\]`). An entry shaped `/pattern/flags` is a regular expression whose flags are honoured; an unknown flag is reported as invalid.
+
 ## 15.1.1
 
 - docs(api): merge naming the validation debug switch in the contract
