@@ -16,6 +16,7 @@ import { NotebookView, VIEW_TYPE_NOTEBOOK } from './notebookView';
 import { disposeAllKernels } from './kernel/registry';
 import { setPythonInterpreterOverride } from './pythonInterpreter';
 import { discoverPythonEnvs, setActiveEnv, type PythonEnv } from './pythonEnvs';
+import { registerFreeExtensions } from '../../../src/extensionRegistry';
 
 export interface JupyterSettings {
 	/** 代码/Markdown 编辑器自动换行 */
@@ -45,8 +46,11 @@ export default class JupyterNotebookPlugin extends Plugin {
 
 		// 点击 .ipynb 直接进 Notebook 视图。Obsidian 默认把未知扩展名当二进制，
 		// 不 registerExtensions 时只能靠右键菜单/命令打开。开关切换需重载插件。
+		// registerFreeExtensions:registerExtensions 整批原子,别的插件(或本插件
+		// 别处)已占用 ipynb 时会抛异常打死 onload,这里跳过并记录,详见
+		// extensionRegistry.ts。
 		if (this.settings.openIpynbWithPlugin) {
-			this.registerExtensions(['ipynb'], VIEW_TYPE_NOTEBOOK);
+			registerFreeExtensions(this, ['ipynb'], VIEW_TYPE_NOTEBOOK, "notebook");
 		}
 
 		// 右键 .ipynb:用 Notebook 打开

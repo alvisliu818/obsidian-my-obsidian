@@ -41,6 +41,7 @@ import OpenTabSettingsPlugin from "../modules/open-tab-settings/src/main";
 import AudioRecorderPlugin from "../modules/audio-recorder/src/main";
 import MediaJournalPlugin from "../modules/media-journal/src/main";
 import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
+import { registerFreeExtensions } from "./extensionRegistry";
 
 export default class MyObsidianPlugin extends Plugin {
 	settings: MyObsidianSettings = DEFAULT_SETTINGS;
@@ -243,7 +244,12 @@ export default class MyObsidianPlugin extends Plugin {
 		// —— Obsidian 打开 .py 时按该 type 建视图,setState 会带上 {file}(库内
 		// 相对路径),ExternalCodeView.setState 已兼容并解析为真实路径。
 		// 因此宿主不再注册自己的 CodeFileView(旧整台 CM 方案)。
-		if (exts.length) this.registerExtensions(exts, VIEW_TYPE_EXTERNAL_CODE);
+		//
+		// 必须走 registerFreeExtensions:Obsidian 的 registerExtensions 是整批
+		// 原子的,只要有一个扩展名已被占用(核心的图片/pdf/md、office 模块先行
+		// 注册的 csv、或库外别的插件)就整体抛异常 —— 那会打死 onload,样式全毁。
+		// 详见 extensionRegistry.ts 的文件头。
+		registerFreeExtensions(this, exts, VIEW_TYPE_EXTERNAL_CODE, "code files");
 
 		this.addCommand({
 			id: "run-code-file",

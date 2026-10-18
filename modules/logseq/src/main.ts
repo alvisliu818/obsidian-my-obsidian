@@ -50,6 +50,7 @@ import { ExternalBlockView, VIEW_TYPE_EXTERNAL_BLOCK } from './views/ExternalBlo
 import { OfficeView, VIEW_TYPE_OFFICE } from './views/OfficeView';
 import { ImageView, VIEW_TYPE_IMAGE, IMAGE_EXTENSIONS, isImageFile } from './views/ImageView';
 import { OFFICE_EXTENSIONS } from './office/types';
+import { registerFreeExtensions } from '../../../src/extensionRegistry';
 import { ContentSearchPanelView, VIEW_TYPE_CONTENT_SEARCH } from './panels/contentSearchPanel';
 import { RecentPanelView, VIEW_TYPE_RECENT_PANEL, pushRecent } from './panels/recentPanel';
 import {
@@ -204,12 +205,16 @@ export default class LogseqEditorPlugin extends Plugin {
     // Hand Office files to the previewer. Obsidian has no viewer for these at
     // all (it offers "open in default app" and nothing else), so taking the
     // extension costs nothing and gains an in-app read path.
+    // 走 registerFreeExtensions:registerExtensions 整批原子,一个已占用扩展名
+    // (核心的、别的插件的、或本插件宿主随后要注册的)就会整体抛异常打死
+    // onload。跳过已占用项 + 兜底,详见 extensionRegistry.ts。
     if (this.settings.officeViewerEnabled) {
-      this.registerExtensions(OFFICE_EXTENSIONS, VIEW_TYPE_OFFICE);
+      registerFreeExtensions(this, OFFICE_EXTENSIONS, VIEW_TYPE_OFFICE, "office viewer");
     }
     // Images are different: Obsidian already previews them, so this is opt-in.
+    // svg 之类核心已占用,同样靠 registerFreeExtensions 跳过。
     if (this.settings.imageViewerTakeOver) {
-      this.registerExtensions(IMAGE_EXTENSIONS, VIEW_TYPE_IMAGE);
+      registerFreeExtensions(this, IMAGE_EXTENSIONS, VIEW_TYPE_IMAGE, "image viewer");
     }
 
     // Recent-files tracking. `file-open` fires for every file the user lands
