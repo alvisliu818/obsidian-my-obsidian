@@ -4773,11 +4773,21 @@ body.lgp-table-editor-cursor * {
 .lgp-code-doc-note {
   width: 100%;
   overflow: visible;
+  /* view zone 的 domNode 从**内容列**左缘开始(zone 左缘 = Monaco .margin
+     右缘):左移一个 gutter 宽、宽度补回来,controls 列才落在 Monaco 行号列
+     (.margin)正上方,文字列右缘也与 Monaco 内容列右缘重合 —— 行号同列、
+     注释行与代码行同宽,都是这两行撑起来的。 */
+  margin-left: calc(-1 * var(--lgp-note-gutter-w, 0px));
+  width: calc(100% + var(--lgp-note-gutter-w, 0px));
   /* 背景与代码编辑器(Monaco editor.background = --background-primary)一致:
      注释区不再用 --code-background 差一截的底色,整页观感是同一张编辑器 */
   background: var(--background-primary);
-  font-family: var(--font-monospace, 'JetBrains Mono', monospace);
-  font-size: var(--code-size, 13px);
+  /* 字体栈跟主 Monaco 的行号实测值(HybridCodeEditor.measureMonacoNoteMetrics
+     写入宿主根 --lgp-note-* 变量,继承进每个 zone):等宽字体间字符宽不同
+     (JetBrains Mono 0.6em vs Consolas 0.55em),不统一则注释行永远窄一截 */
+  font-family: var(--lgp-note-ff, var(--font-monospace, 'JetBrains Mono', monospace));
+  /* 字号跟主 Monaco 的行号实测值:字号一致,行高才能对齐 */
+  font-size: var(--lgp-note-fs, var(--code-size, 13px));
   padding: 0;
 }
 /* 断开高度钳制传导:Monaco 给 zone domNode 设的内联高度(heightInPx)会经
@@ -4791,6 +4801,10 @@ body.lgp-table-editor-cursor * {
 }
 .lgp-code-doc-note .block-editor-scroller {
   overflow: visible;
+  /* 块编辑器默认左内边距(scroller 6 + tree 16 = 22px)是大纲缩进,注释区
+     是代码附属、不需要:不清零则注释文字列整体右移 22px,与代码文字列错位 */
+  padding-left: 0;
+  padding-right: 0;
 }
 /* Monaco 的 DOM 顺序:.view-zones 排在 .view-lines 之前,而 .view-lines 是
    覆盖整个内容区的盒子(高度 = scrollHeight)——它会把注释 zone 的鼠标事件
@@ -4808,14 +4822,22 @@ body.lgp-table-editor-cursor * {
 .lgp-code-doc-note .block-editor-tree .block-wrap {
   margin-block: 0;
 }
-.lgp-code-doc-note .block-editor-tree .block-main {
-  padding-block: 1px;
+/* tree 默认字号是 --font-text-size(16px)、默认字体是 --font-text,两者都会
+   覆盖 zone 上的继承 —— 注释文字必须与代码同为 Monaco 行号实测字号/字体;
+   padding-left 16px 一并清零。 */
+.lgp-code-doc-note .block-editor-tree {
+  padding-left: 0;
+  font-size: var(--lgp-note-fs, var(--code-size, 13px));
+  font-family: var(--lgp-note-ff, var(--font-monospace, 'JetBrains Mono', monospace));
 }
 /* 注释区 = 段落几何(用户要的「默认块类型为段落」):圆点/任务框/类型徽标/
    折叠箭头一律不画 —— 注释区不是大纲,没有列表语义。controls 列改作
-   **行号 gutter**:每个注释块(一行)在原来圆点的位置显示真实文件行号,
-   与代码编辑器的行号列同一职责(数字取代圆点,文字列位置不变,行号列
-   宽度由 HybridCodeEditor 按本区最大行号位数写 --lgp-note-gutter-w)。 */
+   **行号 gutter**:每个注释块(一行)在原来圆点的位置显示真实文件行号。
+   与代码编辑器的行号列**同一列、同颜色、同宽度**——列宽 = 主 Monaco 的
+   .margin 宽(行号列+折叠槽),数字右垫 = 数字右缘到内容列起点的距离,
+   颜色/字号 = 行号 computed 实测,行高 = 代码行行高;全部由
+   HybridCodeEditor.measureMonacoNoteMetrics 写入宿主根 --lgp-note-* 变量,
+   变量继承进每个 zone domNode(布局变化时经 onDidLayoutChange 续测)。 */
 .lgp-code-doc-note .block-editor-tree .block-bullet,
 .lgp-code-doc-note .block-editor-tree .block-marker,
 .lgp-code-doc-note .block-editor-tree .block-type-badge,
@@ -4824,17 +4846,40 @@ body.lgp-table-editor-cursor * {
 }
 .lgp-code-doc-note .block-editor-tree .block-controls {
   width: var(--lgp-note-gutter-w, 34px);
+  /* 默认 height:1.55em 跟 tree 字号走;行号列逐行对齐代码行,高度也钉死 */
+  height: var(--lgp-note-line-h, 1.55em);
 }
 .lgp-code-doc-note .block-editor-tree .block-line-no {
   width: 100%;
-  padding-right: 8px;
+  /* 数字右缘 = Monaco 行号数字右缘:右垫 = margin 右缘 − 数字右缘 */
+  padding-right: var(--lgp-note-num-pad, 8px);
   text-align: right;
-  font-size: 11px;
-  line-height: 1.55;
-  color: var(--text-faint);
+  /* 颜色/字号与 Monaco 行号完全一致(computed 实测值,跟随明暗/扩展主题) */
+  font-size: var(--lgp-note-fs, 11px);
+  /* 行高 = 代码行行高:注释行号与代码行号逐行不错位 */
+  line-height: var(--lgp-note-line-h, 1.55);
+  color: var(--lgp-note-color, var(--text-faint));
   font-variant-numeric: tabular-nums;
   user-select: none;
 }
+.lgp-code-doc-note .block-editor-tree .block-main {
+  /* 行高由 --lgp-note-line-h 兜齐,不再加 1px 内边距(每行累积会漂移) */
+  padding-block: 0;
+}
 .lgp-code-doc-note .block-editor-tree .block-content {
-  line-height: 1.55;
+  line-height: var(--lgp-note-line-h, 1.55);
+  min-height: var(--lgp-note-line-h, 1.55em);
+  /* 左垫清零(文字起点 = controls 右缘 = Monaco 文字列起点);右侧补当前
+     滚动条宽:注释文字列右缘 = Monaco 内容列右缘,换行宽度一致 */
+  padding: 0 var(--lgp-note-pad-right, 0);
+}
+/* Obsidian 渲染态 p 自带 line-height(--line-height-normal),注释行逐行
+   对齐代码行高必须显式压掉 */
+.lgp-code-doc-note .block-content-static,
+.lgp-code-doc-note .block-content-static p {
+  line-height: var(--lgp-note-line-h, 1.55);
+}
+/* 空行的 caret 底线跟随注释行高(否则空注释块比代码行矮一截) */
+.lgp-code-doc-note .block-content .cm-line:empty {
+  min-height: var(--lgp-note-line-h, 1.55em);
 }

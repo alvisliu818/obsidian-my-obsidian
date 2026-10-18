@@ -102,6 +102,8 @@ function outlineTextToLines(outline: string): string[] {
 
 export class HybridCodeEditor extends Component {
   private plugin: LogseqEditorPlugin;
+  /** 宿主根(.lgp-hybrid-editor):几何对齐变量挂这里,继承进各 zone domNode */
+  private rootEl: HTMLElement | null = null;
   private opts: HybridMountOpts | null = null;
   private editor: monacoNS.editor.IStandaloneCodeEditor | null = null;
   private regions: HybridRegion[] = [];
@@ -156,6 +158,7 @@ export class HybridCodeEditor extends Component {
     this.noteEditors = this.regions.map(() => null);
 
     const host = container.createDiv({ cls: 'lgp-hybrid-editor' });
+    this.rootEl = host;
 
     const codeLines: string[] = [];
     for (const r of this.regions) {
@@ -186,6 +189,11 @@ export class HybridCodeEditor extends Component {
     for (let k = 0; k < this.regions.length; k++) {
       if (this.regions[k].kind === 'text') this.addNoteZone(k);
     }
+
+    // 注释区与代码编辑器几何对齐:先实测一次,之后布局变化(resize /
+    // 行号位数增加 / 滚动条出现)经 onDidLayoutChange 续测(250ms 防抖)。
+    this.editor.onDidLayoutChange(() => this.scheduleGutterRefresh());
+    this.measureMonacoNoteMetrics();
   }
 
   // ------------------------------------------------------------------
@@ -228,6 +236,8 @@ export class HybridCodeEditor extends Component {
     if (this.gutterTimer) window.clearTimeout(this.gutterTimer);
     this.gutterTimer = window.setTimeout(() => {
       this.gutterTimer = 0;
+      // 布局度量先行:行号位数/滚动条/字号可能刚变,注释区对齐值跟着续测
+      this.measureMonacoNoteMetrics();
       try {
           this.editor?.updateOptions({ lineNumbers: (n: number) => String(this.fileLineOf(n)) });
         } catch {
@@ -248,17 +258,65 @@ export class HybridCodeEditor extends Component {
     for (let k = 0; k < this.regions.length; k++) {
       const frag = this.fragments[k];
       if (!frag || (this.noteModes[k] ?? 'doc') !== 'doc') continue;
-      const dom = this.zones[k]?.dom;
-      if (dom) dom.style.setProperty('--lgp-note-gutter-w', this.noteGutterWidth(k));
       frag.lineNumberBase = this.noteFileLine(k, 1);
       frag.refreshLineNumbers();
     }
   }
 
-  /** 注释区行号 gutter 宽度:按本区最大文件行号的位数给(数字右对齐,文字列才能对齐) */
-  private noteGutterWidth(regionIdx: number): string {
-    const last = this.noteFileLine(regionIdx, Math.max(1, this.textCounts[regionIdx] ?? 1));
-    return `${Math.max(24, String(last).length * 8 + 10)}px`;
+  /**
+   * 实测主 Monaco 的几何,写进宿主根(.lgp-hybrid-editor)的 CSS 变量,
+   * 注释区(doc 形态)据此与代码编辑器对齐——同一列、同颜色、同宽度:
+   *   --lgp-note-gutter-w  .margin 宽(行号列+折叠槽)→ controls 列宽,
+   *                      注释文字起点 = Monaco 文字起点
+   *   --lgp-note-num-pad  行号数字右缘到内容列起点的距离 → 行号右垫,
+   *                      注释行号数字右缘 = Monaco 行号数字右缘
+   *   --lgp-note-color    行号文字颜色(computed 实测,跟随明暗/扩展主题)
+   *   --lgp-note-fs       行号字号
+   *   --lgp-note-ff       行号字体栈(Monaco 默认 Consolas…;注释区正文字体
+   *                      也跟它,否则等宽字体间字符宽不同,注释行仍窄一截)
+   *   --lgp-note-line-h   代码行行高 → 注释区行高,行号逐行不错位
+   *   --lgp-note-pad-right 垂直滚动条宽 → 注释内容列右侧补垫,换行宽度一致
+   * 触发:mount 末一次 + onDidLayoutChange/编辑提交(走 250ms 防抖)。
+   * 元素找不到就跳过(首次渲染前的竞态)——onDidLayoutChange 一定会补测。
+   *
+   * 类名按 Monaco 0.50 实测:行号是**每个可见行一个 `.line-numbers` 元素**
+   * (没有 `.line-number`;早期版本的命名早没了),第一个即可代表整列;
+   * 代码行是 `.view-line`;行号列总宽看 `.margin`。
+   */
+  private measureMonacoNoteMetrics(): void {
+    const root = this.rootEl;
+    const domNode = this.editor?.getDomNode();
+    if (!root || !domNode) return;
+    const q = <T extends HTMLElement>(sel: string): T | null => domNode.querySelector<T>(sel);
+    const margin = q('.margin');
+    const number = q('.line-numbers');
+    const line = q('.view-line');
+    const s = root.style;
+    if (margin) s.setProperty('--lgp-note-gutter-w', `${margin.offsetWidth}px`);
+    if (margin && number) {
+      // 数字右缘 = margin 右缘 − (行号列右垫 + 折叠槽宽);注释区行号
+      // 用同一右垫,数字才与 Monaco 行号数字落在同一垂直线上。
+      const pad = Math.round(margin.getBoundingClientRect().right - number.getBoundingClientRect().right);
+      s.setProperty('--lgp-note-num-pad', `${Math.max(0, pad)}px`);
+    }
+    if (number) {
+      const cs = getComputedStyle(number);
+      s.setProperty('--lgp-note-color', cs.color);
+      s.setProperty('--lgp-note-fs', cs.fontSize);
+      s.setProperty('--lgp-note-ff', cs.fontFamily);
+    }
+    if (line) s.setProperty('--lgp-note-line-h', `${line.offsetHeight}px`);
+    // 滚动条宽:Monaco 自绘滚动条不占 DOM 宽度,但 layoutInfo 的 contentWidth
+    // 已扣掉它 —— width − contentLeft − contentWidth 即当前滚动条占位。
+    try {
+      const li = this.editor?.getLayoutInfo();
+      if (li) {
+        const sbw = Math.max(0, Math.round(li.width - li.contentLeft - li.contentWidth));
+        s.setProperty('--lgp-note-pad-right', `${sbw}px`);
+      }
+    } catch {
+      /* 编辑器已销毁 */
+    }
   }
 
   // ------------------------------------------------------------------
@@ -402,7 +460,6 @@ export class HybridCodeEditor extends Component {
       });
       // 行号基准要先于首渲染设好(renderBlock 当场读)
       frag.lineNumberBase = this.noteFileLine(regionIdx, 1);
-      dom.style.setProperty('--lgp-note-gutter-w', this.noteGutterWidth(regionIdx));
       frag.setMarkdown(
         toOutlineDocText([{ kind: 'text', text: r.lines.join('\n'), startLine: r.startLine }]),
       );
