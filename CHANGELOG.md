@@ -5,7 +5,7 @@
 - docs(api): merge naming the validation debug switch in the contract
 - fix(paste): merge renaming every pasted image file again under Only pasted images
 - chore(deps): merge bumping obsidian-test-mocks to ^7.2.3
-- refactor(api): merge refreshing the Advanced Rename and Delete Handler contract copy
+- refactor(api): merge refreshing the `Advanced Rename and Delete Handler` contract copy
 - chore(github): merge linking Discussions from the issue chooser
 - refactor(paste): merge using the nullable ImportedAttachment typings
 - docs(agents): merge saying how a demo-vault Try it promise is asserted
@@ -26,7 +26,7 @@
 - feat(collect): merge an opt-in setting that merges byte-identical attachments
 - build(deps): merge taking obsidian-dev-toolkit 3.1.0 without the obsidian-lib override
 - ci: merge attesting release assets through the toolkit's reusable workflow
-- feat(dependency): merge requiring Advanced Rename and Delete Handler 2.2.0 or later
+- feat(dependency): merge requiring `Advanced Rename and Delete Handler` 2.2.0 or later
 
 ## 15.0.0
 
@@ -35,8 +35,8 @@
   - BREAKING: `app.vault.getAvailablePathForAttachments.checkIsAttachmentUnitFolder` is removed. Use the plugin API's `isAttachmentUnitFolder` (contract `1.3.0`).
   - `obsidian-dev-utils` 107.4.1 and older read these members; `@mnaoumov/obsidian-lib` 2.0.0 and later read the plugin API.
   - `Advanced Rename and Delete Handler` needs 2.2.0 or later to keep an attachment unit folder whole when it rescues attachments out of a deleted folder.
-- test: merge seeding Advanced Rename and Delete Handler 2.2.1, which reads the designation through the API
-- build(demo-vault): merge requiring CodeScript Toolkit 13.8.0 for the obsidian-lib demo script
+- test: merge seeding `Advanced Rename and Delete Handler` 2.2.1, which reads the designation through the API
+- build(demo-vault): merge requiring `CodeScript Toolkit` 13.8.0 for the obsidian-lib demo script
 - fix(ui): merge marking the plugin names in the dependency reason as code
 - refactor(demo-vault): merge importing the community-plugin helpers from @mnaoumov/obsidian-lib
 
@@ -44,7 +44,7 @@
 
 - refactor: merge moving off obsidian-dev-utils onto the @mnaoumov packages
 - refactor(api): merge building the API contract on @mnaoumov/typescript-lib/api-contract
-- feat(api): merge taking Advanced Rename and Delete Handler's own contract, with full schemas
+- feat(api): merge taking `Advanced Rename and Delete Handler`'s own contract, with full schemas
 - feat(api): merge the copyable api-contract.ts with full schemas
 - feat(ui): merge marking plugin names as code in UI, markdown and comments
 
@@ -1341,7 +1341,7 @@ Upgrading from `${...}`: your saved patterns are rewritten to `{{...}}` automati
 
 ## 4.14.0
 
-- Proper integration with Better Markdown Links
+- Proper integration with `Better Markdown Links`
 
 ## 4.13.0
 
