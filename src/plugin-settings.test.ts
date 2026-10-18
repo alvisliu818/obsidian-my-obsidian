@@ -78,6 +78,15 @@ describe('PluginSettings', () => {
       expect(settings.isOrphanAttachmentScanCandidate('Books/files/cover.png')).toBe(false);
     });
 
+    it('should match a folder name anywhere via a glob, ignoring case', () => {
+      const settings = new PluginSettings();
+      settings.orphanAttachmentScanMode = OrphanAttachmentScanMode.ListedPaths;
+      settings.orphanAttachmentScanPaths = ['**/!!files'];
+      expect(settings.isOrphanAttachmentScanCandidate('!!files/cover.png')).toBe(true);
+      expect(settings.isOrphanAttachmentScanCandidate('Notes/deep/!!FILES/scan.pdf')).toBe(true);
+      expect(settings.isOrphanAttachmentScanCandidate('Books/files/cover.png')).toBe(false);
+    });
+
     it('should admit everything under the entire-vault mode, listing nothing', () => {
       const settings = new PluginSettings();
       settings.orphanAttachmentScanMode = OrphanAttachmentScanMode.EntireVault;
@@ -173,6 +182,20 @@ describe('PluginSettings', () => {
       expect(settings.isAttachmentUnitFolder('assets/page_files')).toBe(true);
       expect(settings.isAttachmentUnitFolder('deeply/nested/other_files')).toBe(true);
       expect(settings.isAttachmentUnitFolder('assets/plain')).toBe(false);
+    });
+
+    it('should match a folder name anywhere via a glob, ignoring case', () => {
+      const settings = new PluginSettings();
+      settings.attachmentUnitFolderPaths = ['*_files'];
+      expect(settings.isAttachmentUnitFolder('assets/page_files')).toBe(true);
+      expect(settings.isAttachmentUnitFolder('deeply/nested/Other_FILES')).toBe(true);
+      expect(settings.isAttachmentUnitFolder('assets/plain')).toBe(false);
+    });
+
+    it('should match the folder itself with a folder-only glob, since the path asked about is always a folder', () => {
+      const settings = new PluginSettings();
+      settings.attachmentUnitFolderPaths = ['*_files/'];
+      expect(settings.isAttachmentUnitFolder('assets/page_files')).toBe(true);
     });
   });
 

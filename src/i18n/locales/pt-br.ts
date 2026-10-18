@@ -193,7 +193,6 @@ export const ptBR = {
         part2: 'Coletar anexos',
         part3: 'for executado.',
         part4: 'Insira cada caminho em uma nova linha.',
-        part5: 'Você pode usar string de caminho ou',
         part6: 'Se a configuração estiver vazia, nenhum caminho será excluído da coleta de anexos.'
       },
       name: 'Excluir caminhos da coleta de anexos'

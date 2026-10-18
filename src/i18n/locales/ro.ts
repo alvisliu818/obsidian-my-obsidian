@@ -193,7 +193,6 @@ export const ro = {
         part2: 'Colectează atașamente',
         part3: '.',
         part4: 'Introduceți fiecare cale pe o linie nouă.',
-        part5: 'Puteți folosi șir de cale sau',
         part6: 'Dacă setarea este goală, nu se exclud căi din colectarea atașamentelor.'
       },
       name: 'Excludere căi pentru colectarea atașamentelor'

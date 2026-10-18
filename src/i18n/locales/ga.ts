@@ -194,7 +194,6 @@ export const ga = {
         part2: 'Bailigh ceangaltáin',
         part3: 'a fhorghníomhaítear an t-ordú.',
         part4: 'Cuir isteach gach conair ar líne nua.',
-        part5: 'Is féidir leat teaghrán conair nó',
         part6: 'a úsáid. Má tá an socrú folamh, ní eisítear aon chonairí ó bhailiú ceangaltán.'
       },
       name: 'Conairí a eisíomh ó bhailiú ceangaltán'

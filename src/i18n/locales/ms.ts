@@ -193,7 +193,6 @@ export const ms = {
         part2: 'Kumpul lampiran',
         part3: 'arahan dilaksanakan.',
         part4: 'Masukkan setiap laluan pada baris baru.',
-        part5: 'Anda boleh menggunakan rentetan laluan atau',
         part6: 'Jika tetapan kosong, tiada laluan dikecualikan dari pengumpulan lampiran.'
       },
       name: 'Kecualikan laluan dari pengumpulan lampiran'

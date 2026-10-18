@@ -194,7 +194,6 @@ export const id = {
         part2: 'Kumpulkan lampiran',
         part3: 'perintah dijalankan.',
         part4: 'Masukkan setiap jalur pada baris baru.',
-        part5: 'Anda dapat menggunakan string jalur atau',
         part6: 'Jika pengaturan kosong, tidak ada jalur yang dikecualikan dari pengumpulan lampiran.'
       },
       name: 'Kecualikan jalur dari pengumpulan lampiran'

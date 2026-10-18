@@ -193,7 +193,6 @@ export const uz = {
         part2: 'Qo\'shimchalarni yig\'ish',
         part3: '',
         part4: 'Har bir yo\'lni yangi qatorda yozing.',
-        part5: 'Yo\'l satridan yoki',
         part6: 'Sozlama bo\'sh bo\'lsa, hech qanday yo\'l chiqarilmaydi.'
       },
       name: 'Qo\'shimcha yig\'ishda chiqarib tashlangan yo\'llar'

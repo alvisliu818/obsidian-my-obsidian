@@ -193,7 +193,6 @@ export const sq = {
         part2: 'Mblidh bashkëngjitjet',
         part3: 'ekzekutohet.',
         part4: 'Futni çdo shteg në një rresht të ri.',
-        part5: 'Mund të përdorni vargun e shtegut ose',
         part6: 'Nëse cilësimi është bosh, asnjë shteg nuk përjashtohet nga mbledhja.'
       },
       name: 'Përjashto shtigje nga mbledhja e bashkëngjitjeve'

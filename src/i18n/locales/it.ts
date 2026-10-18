@@ -194,7 +194,6 @@ export const it = {
         part2: 'Raccogli allegati',
         part3: 'viene eseguito.',
         part4: 'Inserisci ogni percorso su una nuova riga.',
-        part5: 'Puoi usare stringa percorso o',
         part6: 'Se l\'impostazione è vuota, nessun percorso viene escluso dalla raccolta allegati.'
       },
       name: 'Percorsi esclusi dalla raccolta allegati'

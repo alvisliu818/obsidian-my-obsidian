@@ -194,7 +194,6 @@ export const ca = {
         part2: 'Recollir adjunts',
         part3: 's\'executa la comanda.',
         part4: 'Inseriu cada camí en una línia nova.',
-        part5: 'Podeu utilitzar cadena de camí o',
         part6: 'Si la configuració està buida, cap camí no s\'exclou de la recollida d\'adjunts.'
       },
       name: 'Excloure camins de la recollida d\'adjunts'

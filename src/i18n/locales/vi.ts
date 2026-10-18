@@ -193,7 +193,6 @@ export const vi = {
         part2: 'lệnh Thu thập tệp đính kèm',
         part3: 'được thực thi.',
         part4: 'Nhập mỗi đường dẫn trên một dòng mới.',
-        part5: 'Bạn có thể sử dụng chuỗi đường dẫn hoặc',
         part6: 'Nếu cài đặt để trống, không đường dẫn nào bị loại trừ.'
       },
       name: 'Loại trừ đường dẫn khi thu thập tệp đính kèm'

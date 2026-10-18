@@ -193,7 +193,6 @@ export const nl = {
         part2: 'Verzamel bijlagen',
         part3: 'commando wordt uitgevoerd.',
         part4: 'Voeg elk pad toe op een nieuwe regel.',
-        part5: 'Je kunt pad string of',
         part6: 'gebruiken. Als de instelling leeg is, worden geen paden uitgesloten van bijlage verzamelen.'
       },
       name: 'Uitgesloten paden van bijlage verzamelen'

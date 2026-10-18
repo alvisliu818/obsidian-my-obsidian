@@ -194,7 +194,6 @@ export const es = {
         part2: 'Recopilar archivos adjuntos',
         part3: 'comando es ejecutado.',
         part4: 'Inserta cada ruta en una nueva línea.',
-        part5: 'Puedes usar cadena de ruta o',
         part6: 'Si la configuración está vacía, no se excluyen rutas de la recopilación de archivos adjuntos.'
       },
       name: 'Excluir rutas de la recopilación de archivos adjuntos'
