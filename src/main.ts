@@ -222,12 +222,22 @@ export default class MyObsidianPlugin extends Plugin {
 	 * The extension list is a setting, not a constant: the point is that these
 	 * files currently open as an empty placeholder, so claiming them costs
 	 * nothing — but a user who wants `.json` handled by something else can drop
-	 * it without rebuilding Markdown is never in the list.
+	 * it from the setting. Markdown files are never in the list: they have a
+	 * perfectly good native editor.
+	 *
+	 * The default list is the mount-side TEXT_MOUNT_EXTENSIONS minus
+	 * md/markdown/canvas, i.e. in-vault code files and mounted (out-of-vault)
+	 * code files get exactly the same coverage — and the same editor.
+	 *
+	 * An empty setting falls back to the default list (the settings UI promises
+	 * "leave empty to use the default", and loadSettings() never populates it
+	 * from a previous version's raw value, so [] must not mean "nothing").
 	 */
 	private registerCodeFiles(): void {
-		const exts = (this.settings.codeFileExtensions ?? DEFAULT_CODE_EXTENSIONS).filter(
-			(e) => !!e && !/^(md|canvas)$/i.test(e),
-		);
+		const configured = this.settings.codeFileExtensions;
+		const exts = (
+			configured && configured.length > 0 ? configured : DEFAULT_CODE_EXTENSIONS
+		).filter((e) => !!e && !/^(md|markdown|canvas)$/i.test(e));
 		// 库内代码文件与库外用**同一个编辑器**(用户要求):logseq 模块已在自己的
 		// onload 里 registerView(VIEW_TYPE_EXTERNAL_CODE),宿主只把扩展名映射过去
 		// —— Obsidian 打开 .py 时按该 type 建视图,setState 会带上 {file}(库内

@@ -134,7 +134,9 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 			.setDesc("英文逗号分隔。留空则用默认清单；Markdown 与 canvas 永远不会被接管。")
 			.addText((text) =>
 				text
-					.setPlaceholder(DEFAULT_CODE_EXTENSIONS.join(","))
+					.setPlaceholder(
+						`默认清单（${DEFAULT_CODE_EXTENSIONS.length} 个，含 ${DEFAULT_CODE_EXTENSIONS.slice(0, 8).join(", ")} …）`,
+					)
 					.setValue((this.host.settings.codeFileExtensions ?? []).join(","))
 					.onChange(async (value) => {
 						const list = value

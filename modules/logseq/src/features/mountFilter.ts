@@ -244,6 +244,17 @@ export function isTextMount(ext: string): boolean {
 }
 
 /**
+ * 挂载侧文本扩展名清单的导出形式(排序去重)。
+ *
+ * 宿主(库内 registerExtensions)用它对齐「库内与库外同一编辑器」的覆盖面:
+ * 库外按内容路由的全部文本文件,库内也要能用同一个混合编辑器打开 ——
+ * 此前库内只认一小撮「代码」扩展名,库外的 .json/.csv/.log/.vue/.env …
+ * 在库内会落到 Obsidian 默认查看器,同一文件两个编辑器。
+ * md/markdown/canvas 由调用方排除(它们有各自的编辑器)。
+ */
+export const TEXT_MOUNT_EXTENSIONS: readonly string[] = [...TEXT_EXTENSIONS].sort();
+
+/**
  * True when a filename is text, judged by BOTH extension and whole name.
  *
  * `ext` alone is not enough: extension-less source files exist and are common

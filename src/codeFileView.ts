@@ -66,24 +66,27 @@ import { toml } from "cm-bundle:@codemirror/legacy-modes/mode/toml";
 import { xml } from "cm-bundle:@codemirror/legacy-modes/mode/xml";
 import { yaml } from "cm-bundle:@codemirror/legacy-modes/mode/yaml";
 import { runFile, langFromExt } from "../modules/logseq/src/exec/runner";
+import { TEXT_MOUNT_EXTENSIONS } from "../modules/logseq/src/features/mountFilter";
 import type { RunHandle } from "../modules/logseq/src/exec/pythonRunner";
 
 export const VIEW_TYPE_CODE_FILE = "lgp-code-file";
 
 /**
- * Extensions this view takes over.
+ * Extensions this plugin claims INSIDE the vault.
  *
- * Editable in the settings — the point of this list is that Obsidian has no
- * view for these files at all, so claiming them costs nothing; but a user who
- * wants `.json` handled elsewhere can drop it. Markdown is never included.
+ * 库内与库外**同一个编辑器**(用户要求):清单 = 挂载侧按内容路由的文本
+ * 扩展名(modules/logseq 的 TEXT_EXTENSIONS),只排除 Markdown 与 canvas
+ * —— 它们各有自己的编辑器(块编辑器 / Obsidian 原生画布)。
+ * 此前这里是一小撮「代码」扩展名,库外能混合编辑的 .json/.csv/.log/.vue/
+ * .env … 在库内只能落到 Obsidian 默认查看器:同一份文件,两个编辑器。
+ *
+ * Obsidian 对这些扩展名本来大多没有视图(点了是一片空白),所以claim 它们
+ * 不损失什么;用户不想要的可以在设置里删掉(留空 = 用本清单)。
+ * Markdown is never included.
  */
-export const DEFAULT_CODE_EXTENSIONS = [
-	"py", "js", "mjs", "cjs", "jsx", "ts", "tsx",
-	"sh", "bash", "zsh", "ps1", "bat", "cmd",
-	"rs", "go", "java", "c", "h", "cpp", "hpp", "cs", "rb", "lua", "pl", "r",
-	"jl", "swift", "kt", "scala", "dart", "erl", "hs",
-	"sql", "css", "scss", "less", "html", "xml", "yaml", "yml", "toml", "ini",
-];
+export const DEFAULT_CODE_EXTENSIONS = TEXT_MOUNT_EXTENSIONS.filter(
+	(e) => !!e && !/^(md|markdown|canvas)$/i.test(e),
+);
 
 
 
