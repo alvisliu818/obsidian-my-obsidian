@@ -102,9 +102,11 @@ export class ExternalCodeView extends ItemView {
   /** 视图头部的混合模式按钮(切换后要改图标与提示) */
   private actionEl: HTMLElement | null = null;
 
-  /** 设置里的默认值,可被本文件的临时覆盖反向取值。 */
+  /** 设置里的默认值,可被本文件的临时覆盖反向取值。
+   *  默认纯代码编辑器(用户 2026-10-18 决策):externalCodeHybrid 缺省/为 false
+   *  都走纯源码;显式存过 true 的老设置仍可翻回混合模式。 */
   private hybridDefault(): boolean {
-    return this.plugin.settings.externalCodeHybrid !== false;
+    return this.plugin.settings.externalCodeHybrid === true;
   }
 
   /** 当前生效的混合模式(临时覆盖优先,否则设置默认) */

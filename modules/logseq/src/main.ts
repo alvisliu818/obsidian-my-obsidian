@@ -1768,9 +1768,10 @@ export default class LogseqEditorPlugin extends Plugin {
    * replace their work. A fresh tab is the only variant that touches nothing.
    */
   /**
-   * 用混合视图打开库外代码文件。与库内代码文件同走 ExternalCodeView 的新混合
-   * 引擎(HybridCodeEditor:类思源注释区、动态行号、# 不渲染标题、加/删标记
-   * 自动重切分)——旧 CodeDocView 混合视图不再作为打开入口,注释区体验两边一致。
+   * 用 ExternalCodeView 打开库外代码文件(默认纯 Monaco 代码编辑器,见
+   * externalCodeHybrid 默认 false;用户 2026-10-18 决策「代码文件不用混合
+   * 编辑器了」)。混合模式(注释区 = Logseq 块编辑器)仍可在设置或视图头部
+   * 按钮按文件开启。库内代码文件经 registerExtensions 同走本视图。
    */
   private async openInCodeDocView(mount: ExternalMount, node: MountNode): Promise<boolean> {
     if (!isTextFileName(node.name)) return false;

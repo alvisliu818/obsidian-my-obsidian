@@ -564,7 +564,9 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   mountTreeOrder: {},
   externalMounts: [],
   externalCodeWrap: true,
-  externalCodeHybrid: true,
+  // 代码文件默认纯 Monaco 编辑器(用户 2026-10-18 决策);混合模式(注释区 =
+  // Logseq 块编辑器)保留为设置/头部按钮可选,不再作为默认。
+  externalCodeHybrid: false,
   lspEnabled: true,
   lspServers: [],
   codeThemePref: '',
