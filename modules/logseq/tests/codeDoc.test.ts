@@ -2,7 +2,7 @@
  * codeDoc 切分器/重建器的往返无损与结构用例。
  */
 import { describe, expect, it } from 'vitest';
-import { buildCodeDoc, reconstructFromDoc, toOutlineDocText, toHybridRegions } from '../src/features/codeDoc';
+import { buildCodeDoc, escapeNoteLine, reconstructFromDoc, toOutlineDocText, toHybridRegions, unescapeNoteLine } from '../src/features/codeDoc';
 import { parseCodeFence } from '../src/blocks/codeFence';
 import { parseDocument } from '../src/core/parser';
 import { serializeDocument } from '../src/core/serializer';
@@ -308,5 +308,104 @@ describe('toHybridRegions:动态重切分布局', () => {
     const edited = ['# 顶部说明', '# import os', 'def f():', '    return 1'].join('\n');
     const total = (src: string) => toHybridRegions(src, 'python').reduce((s, r) => s + r.lines.length, 0);
     expect(total(edited)).toBe(total(py));
+  });
+});
+
+/**
+ * 注释区 = 段落观感 + 行号:每行一个顶层列表项(块序号即行偏移,行号才能
+ * 逐行正确),行首两类危险模式用零宽空格转义,取回时剥掉。
+ *
+ * 取回路径模拟 HybridCodeEditor.outlineTextToLines(unescapeNoteLine +
+ * marker 拼回),不是测试自己的简化 walk —— 转义 bugs 必须在真路径上现形。
+ */
+describe('注释区:一行一项 + 行首转义往返', () => {
+  // 全文件保存路径的模拟:注释行走片段编辑器(outlineTextToLines 同款:
+  // unescapeNoteLine + marker 拼回),代码段在大纲里是围栏块、剥壳取内容。
+  const outlineToText = (outline: string): string => {
+    const doc = parseDocument(outline);
+    const out: string[] = [];
+    const walk = (bs: Block[]): void => {
+      for (const b of bs) {
+        const fence = parseCodeFence(b.text);
+        if (fence) {
+          out.push(...fence.content.split('\n'));
+        } else {
+          const lines = unescapeNoteLine(b.text).split('\n');
+          if (b.marker && lines.length > 0) lines[0] = b.marker + ' ' + lines[0];
+          out.push(...lines);
+        }
+        if (b.children.length) walk(b.children);
+      }
+    };
+    walk(doc.blocks);
+    return out.join('\n');
+  };
+
+  it('注释块每行一个顶层列表项(块序号 = 行偏移)', () => {
+    const src = ['# 第一行', '# 第二行', 'code();', '# 第三行'].join('\n');
+    const vdoc = toOutlineDocText(buildCodeDoc(src, 'python'));
+    const items = vdoc.split('\n').filter((l) => /^-( |$)/.test(l));
+    expect(items).toEqual(['- # 第一行', '- # 第二行', '- # 第三行']);
+  });
+
+  it('行首 TODO/DOING/DONE:转义后 parser 不剥标记,往返逐字', () => {
+    // docstring 里的行没有任何注释标记保护,行首就是 TODO
+    const src = ['"""', 'TODO 这是文档字符串里的待办', '"""', 'print(1)'].join('\n');
+    const vdoc = toOutlineDocText(buildCodeDoc(src, 'python'));
+    expect(vdoc).toContain('- \u200BTODO 这是文档字符串里的待办');
+    expect(parseDocument(vdoc).blocks.every((b) => !b.marker)).toBe(true);
+    expect(outlineToText(vdoc)).toBe(src);
+  });
+
+  it('行首围栏(```/~~~):转义后不当 opening,后续行不被吞', () => {
+    const src = ['"""', '```python', 'docstring 里的围栏示例', '"""', 'print(1)'].join('\n');
+    const vdoc = toOutlineDocText(buildCodeDoc(src, 'python'));
+    expect(vdoc).toContain('- \u200B```python');
+    // 结构没坏:注释区是 4 个一行块,代码段 1 个;不转义时围栏会吞到 EOF
+    expect(parseDocument(vdoc).blocks.length).toBe(5);
+    expect(outlineToText(vdoc)).toBe(src);
+  });
+
+  it('反面对照:不转义时 TODO 被剥出块文本(往返丢字)', () => {
+    const doc = parseDocument('- TODO 修一下');
+    expect(doc.blocks[0].marker).toBe('TODO');
+    expect(doc.blocks[0].text).toBe('修一下');
+  });
+
+  it('反面对照:不转义时行首围栏吞掉后续行(结构错位)', () => {
+    const doc = parseDocument(['- ```python', '- 第二行'].join('\n'));
+    expect(doc.blocks.length).toBe(1);
+    expect(doc.blocks[0].text).toContain('第二行');
+  });
+
+  it('escapeNoteLine/unescapeNoteLine:只动行首命中模式', () => {
+    expect(escapeNoteLine('TODO x')).toBe('\u200BTODO x');
+    expect(escapeNoteLine('DONE x')).toBe('\u200BDONE x');
+    expect(escapeNoteLine('  ~~~')).toBe('\u200B  ~~~');
+    expect(escapeNoteLine('```py')).toBe('\u200B```py');
+    expect(escapeNoteLine('todo x')).toBe('todo x'); // 小写不命中
+    expect(escapeNoteLine('TODOX')).toBe('TODOX'); // 标记后无空白不命中
+    expect(escapeNoteLine('   TODO x')).toBe('   TODO x'); // 前导空白已躲开 MARKER_RE
+    expect(escapeNoteLine('# 普通注释')).toBe('# 普通注释'); // 注释标记本身即保护
+    expect(unescapeNoteLine('\u200BTODO x')).toBe('TODO x');
+    expect(unescapeNoteLine('TODO x')).toBe('TODO x');
+    expect(unescapeNoteLine('')).toBe('');
+  });
+
+  it('真实注释文件往返:缩进 / docstring / 转义行并存', () => {
+    const src = [
+      '"""模块说明',
+      'TODO 待办条目',
+      '```python',
+      '"""',
+      'import os',
+      '',
+      'def f(x):',
+      '    # 缩进注释',
+      '    return x + 1',
+      '',
+      'print(f(1))',
+    ].join('\n');
+    expect(outlineToText(toOutlineDocText(buildCodeDoc(src, 'python')))).toBe(src);
   });
 });

@@ -1,10 +1,12 @@
 // 代码文件 → 虚拟 Logseq 文档 的切分器/重建器(混合编辑模式的核心)。
 //
 // 模型:代码文件按行扫描出三类区域,映射为虚拟文档的块:
-//   1. 整行注释(连续的合并为一个块,含中间空行)→ Logseq 块,
-//      块文本 = 原文行逐字保留(含 `# ` 前缀与缩进)——自描述,重建逐字输出;
-//   2. 块注释 /* */ 与 docstring """ ''' → 整段一个 Logseq 块,定界符同样
-//      保留在块文本里(Enter 拆分后重建仍逐字,无损);
+//   1. 整行注释(连续的合并为一个区,含中间空行)→ 大纲文本里**每行一个
+//      列表项**(块文本 = 原文行逐字,含 `# ` 前缀与缩进)——自描述,重建
+//      逐字输出;一行一项是为了行号:注释区的文件行号按块序号算,一块一行
+//      时块序号即行偏移(见 HybridCodeEditor 的注释区行号);
+//   2. 块注释 /* */ 与 docstring """ ''' → 整段一个 text 区,定界符同样
+//      保留在行文本里(进入大纲后同样每行一项,重建仍逐字,无损);
 //   3. 代码段(其余行,含行内注释)→ 围栏块(```lang ... ```),由块编辑器的
 //      代码编辑器(Monaco)编辑;重建时剥掉围栏还原。
 // 重建 = 依序输出:围栏块剥围栏、其余逐字 —— 未编辑文件字节级无损。
@@ -257,19 +259,27 @@ export function wrapCodeFence(content: string, lang: string): string {
  * 虚拟文档块 → Logseq 大纲格式文本(供 parseDocument/块编辑器消费)。
  *
  * - 代码块:围栏文本逐字(解析器把围栏整体归为一个 raw 块,内部永不解析);
- * - 注释块:首行作为顶层列表项(`- ` + **原样保留缩进的行**),后续行缩进 +2
- *   空格 —— 解析器的软换行规则会把它们合并为**一个块**(appendSoftLine 会剥掉
- *   恰好一级缩进,重建逐字无损);块内空行写成缩进空行(解析器的 indented-blank
- *   分支保持块不闭合)。用列表项而非裸行:裸行 `# x` 会被解析器当 markdown
- *   标题(raw heading)渲染成大字标题,不符合代码注释的块观感;列表项则
- *   统一为普通 Logseq 块。
+ * - 注释块:**每一行一个顶层列表项**(`- ` + 原样保留缩进与注释标记的行)。
+ *   一行一块是为了行号:注释区的文件行号 = 区起始行 + 漂移 + 块序号,
+ *   一块一行时块序号恰好是行偏移,行号才能逐行正确(见 HybridCodeEditor)。
+ *   用列表项而非裸行(段落):裸行 `# x` 会被解析器当 markdown 标题(raw 块)
+ *   渲染成大字标题,裸行串里的空行会拆块、前导缩进会被 stripIndent 剥掉 —
+ *   都破坏往返;列表项则统一为普通块,且 LIST_RE 只消费 `- ` 后的一个空格,
+ *   字节级往返。段落观感由渲染层给(注释区宿主不画圆点,圆点列改作行号
+ *   gutter,见 renderTree 的 noteLineNumberOf)。
+ *   行首两类模式必须加零宽空格转义(否则往返丢字/结构损坏):
+ *     · `TODO/DOING/DONE` + 空白 —— parser 当任务标记从块文本里剥掉
+ *       (outlineTextToLines 只取块文本),重建时丢这几个字;
+ *     · ``` / ~~~(可带前导空白)—— parser 的列表分支把该项当成围栏
+ *       opening,后续行被吞进块文本(结构错位)。
+ *   取回时统一剥掉零宽空格(unescapeNoteLine / outlineTextToLines)。
  * - 块与块之间写一个空行:解析器切分 raw 区的时机是「空行 + 下一个结构行」,
  *   且要求下一行 depth 0。空行是合成分隔符,重建时不落盘。
  *
- * 缩进往返(原 v1 边界,已修):以前首行要剥掉前导缩进(`strip`),因为列表项
- * 的 `- ` 之后必须紧跟内容;而代码文件里函数内的注释是缩进的,一保存就被拉到
- * 列 0 —— 等于插件改了用户的源文件。现在两端配合保留:parser 的 LIST_RE 只
- * 消费 `-` 后的一个空格(其余前导空白算内容),这里也不再剥,逐字往返。
+ * 缩进往返(v1 边界,已修):首行不剥前导缩进 —— 列表项 `- ` 之后的多余
+ * 空格属于内容,LIST_RE 只消费标记后那一个空格;代码文件里函数内的注释
+ * 是缩进的,一保存就被拉到列 0 等于插件改了用户的源文件。现在两端配合
+ * 保留,逐字往返。
  */
 export function toOutlineDocText(blocks: CodeDocBlock[]): string {
   const out: string[] = [];
@@ -277,17 +287,32 @@ export function toOutlineDocText(blocks: CodeDocBlock[]): string {
     if (b.kind === 'code') {
       out.push(...b.text.split('\n'));
     } else {
-      const lines = b.text.split('\n');
-      if (lines.length === 0) continue;
-      // 逐字保留前导缩进(见函数注释「缩进往返」):`- ` 之后的多余空格属于
-      // 内容,LIST_RE 只消费标记后的那一个空格。
-      out.push('- ' + lines[0]);
-      for (let k = 1; k < lines.length; k++) {
-        out.push(lines[k] === '' ? '  ' : '  ' + lines[k]);
+      for (const line of b.text.split('\n')) {
+        out.push('- ' + escapeNoteLine(line));
       }
     }
     out.push('');
   }
   while (out.length > 0 && out[out.length - 1] === '') out.pop();
   return out.join('\n');
+}
+
+/** 零宽空格:注释行进列表项时的转义前缀(不可见,不影响渲染) */
+export const NOTE_ZWSP = '\u200B';
+
+/**
+ * 行首需要转义的两种模式(理由见 toOutlineDocText 注释):
+ * 任务标记(`^(TODO|DOING|DONE)\s`,parser 会剥出块文本)与围栏
+ * (`^\s*(`{3,}|~{3,})`,parser 的列表分支会当成 opening 吞后续行)。
+ */
+const NOTE_ESCAPE_RE = /^(?:\s*(?:`{3,}|~{3,})|(?:TODO|DOING|DONE)\s)/;
+
+/** 注释行 → 列表项内容:命中行首模式时加零宽空格挡住 parser 的特殊分支 */
+export function escapeNoteLine(line: string): string {
+  return NOTE_ESCAPE_RE.test(line) ? NOTE_ZWSP + line : line;
+}
+
+/** 列表项内容 → 注释行:剥掉转义用的零宽空格(只可能在行首) */
+export function unescapeNoteLine(text: string): string {
+  return text.startsWith(NOTE_ZWSP) ? text.slice(1) : text;
 }
