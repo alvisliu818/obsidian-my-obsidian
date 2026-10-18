@@ -1,5 +1,7 @@
 node_modules/
 main.js
+# 聚合宿主 build 的副产物(esbuild 每次 build 都生成在仓库根,不部署、不入库)
+main.css
 styles.css.map
 *.log
 .workbuddy/
