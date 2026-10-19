@@ -213,6 +213,30 @@ interface MonacoPluginHost {
 let cssInjectStarted = false;
 
 /**
+ * 浮层(补全建议 / hover 提示 / 查找框)的外挂宿主。
+ *
+ * 坑:这些浮层默认渲染在 `.monaco-editor` 内部,而块内代码块上面压着三层
+ * 裁剪 —— `.lgp-code-block .monaco-editor{overflow:hidden}`(圆角需要)、
+ * `.block-editor-scroller{overflow:auto}`(大纲滚动容器)、
+ * `.workspace-leaf{contain:strict}`。实测补全是**渲染出来了但被裁掉**:
+ * 建议框一超过编辑器高度就消失,看着像"没弹出来"。
+ *
+ * Monaco 给的官方解法就是 `overflowWidgetsDomNode`:把会溢出的浮层挂到
+ * 一个裁剪链之外的节点上(VS Code 自己就这么干)。挂 document.body 下、
+ * position:absolute,Monaco 用视口坐标定位它。
+ */
+let overflowWidgetsHost: HTMLElement | null = null;
+
+function getOverflowWidgetsDomNode(): HTMLElement {
+  if (overflowWidgetsHost?.isConnected) return overflowWidgetsHost;
+  const el = document.createElement('div');
+  el.className = 'lgp-monaco-overflow';
+  document.body.appendChild(el);
+  overflowWidgetsHost = el;
+  return el;
+}
+
+/**
  * 初始化 Monaco:worker 路径 + TS 诊断开关 + 主题 + 布局 CSS 注入。
  *
  * 两个资源路径的坑(都实测踩过):
@@ -230,6 +254,13 @@ export function setupMonaco(plugin: MonacoPluginHost): void {
   getResourcePath = (p: string) => plugin.app.vault.adapter.getResourcePath(rel(p));
 
   injectMonacoCss(plugin, rel('monaco.css'));
+
+  // 一次性初始化。阅读态每个代码块都会建实例、都会走到这里,而 setTheme
+  // 会对**所有已建编辑器**重放全部令牌色 —— 重复调用是 O(编辑器数²) 的
+  // (几十个代码块的文档直接把主线程拖死),所以必须只做一次。
+  // 主题后续变化走 applyTheme / applyCodeThemePreference,不经这里。
+  if (initialized) return;
+  initialized = true;
 
   (self as unknown as { MonacoEnvironment: unknown }).MonacoEnvironment = {
     getWorker(_moduleId: unknown, label: string): Worker {
@@ -350,6 +381,41 @@ export function currentMonacoTheme(): string {
 }
 
 /**
+ * 阅读态静态着色:与编辑器**同一个** Monarch 分词器 + 同一套主题规则
+ * (colorize 产出带 mtk 类的 HTML,颜色由主题服务注入的 CSS 决定,明暗切换
+ * 自动跟着变)。零编辑器实例 —— 文档里有再多代码块也不驻留 Monaco,
+ * 只在聚焦编辑时才建实例(见 codeBlockEdit.mountCodeEditor)。
+ *
+ * tabSize 与编辑器的默认值对齐(4);返回值末尾会多一个 <br/>(Monaco 逐行
+ * 都加),调用方按需剥掉, otherwise 盒子比编辑态高一行。
+ */
+export function colorizeCode(text: string, languageId: string): Promise<string> {
+  return monaco.editor.colorize(text, languageId, { tabSize: 4 });
+}
+
+/**
+ * 块内代码块关闭括号配对着色(model 级)。编辑器级选项到不了 model ——
+ * modelService 按**全局** config 计算 bracketPairColorizationOptions(默认
+ * 开着),create 时传的编辑器级选项被忽略,括号一直是 VS Code 的 #0431FA 蓝,
+ * 与阅读态(colorize)的 punctuation 灰不一致。样式表里另有按装饰类名的兜底
+ * (.lgp-code-block 段的 bracket-highlighting)。
+ */
+export function disableBlockBracketColorization(
+  editor: monaco.editor.IStandaloneCodeEditor,
+): void {
+  try {
+    editor.getModel()?.updateOptions({
+      bracketColorizationOptions: {
+        enabled: false,
+        independentColorPoolPerBracketType: false,
+      },
+    });
+  } catch {
+    /* 老版本 monaco 没有该 model 选项时忽略 */
+  }
+}
+
+/**
  * 按设置偏好应用扩展代码主题（themeLoader 侧 setTheme 是全局的，会覆盖所有编辑器）。
  * 无可用扩展主题（未装/偏好 '__none__'/指定主题已被卸载）时回退内置 Obsidian 配色。
  */
@@ -417,10 +483,22 @@ export function createEditor(
             ? (n: number) => String(opts.lineNumbersStart! + n - 1)
             : 'on',
     lineDecorationsWidth: blockMode ? 0 : undefined,
-    // 括号对着色是 Monaco 特有的,阅读态的 Prism 只有一种 punctuation 色。
+    // 括号对着色是 Monaco 特有的,阅读态(colorize)只有一种 punctuation 色。
+    // 注意:create 的这个选项**到不了 model**——model 的
+    // bracketPairColorizationOptions 在 modelService.createModel 时按**全局**
+    // config.editor 计算(默认 enabled:true),编辑器级选项被忽略。曾经块内
+    // 传 enabled:false 完全无效,括号一直是 VS Code 的 #0431FA 蓝。真正生效
+    // 的是创建后对 model updateOptions(见下)。
     bracketPairColorization: { enabled: !blockMode },
     folding: opts.folding ?? !blockMode,
     minimap: { enabled: opts.minimap === true },
+    // 补全 / hover / 查找浮层挂到裁剪链之外(见 getOverflowWidgetsDomNode)。
+    // fixedOverflowWidgets 必须一起开:浮层默认按**编辑器相对**坐标 + absolute
+    // 定位(contentWidgets.js:setPosition 只在 _fixedOverflowWidgets &&
+    // allowEditorOverflow 时才用 fixed + 视口坐标),外挂宿主却在 body 下、
+    // 原点不同 —— 不开就整体偏移到左上角(实测建议框落在 28,30 而编辑器在 413)。
+    overflowWidgetsDomNode: getOverflowWidgetsDomNode(),
+    fixedOverflowWidgets: true,
     automaticLayout: true,
     scrollBeyondLastLine: !opts.autoHeight,
     smoothScrolling: true,
@@ -428,6 +506,11 @@ export function createEditor(
     renderWhitespace: 'selection',
     padding: { top: padTop, bottom: padBottom },
   });
+  // 块内模式在 MODEL 级关掉括号配对着色(编辑器级选项无效,见上)。
+  // 颜色回落到主题规则的 delimiter → --code-punctuation,与阅读态一致。
+  // 注意 updateOptions 的入参键名是 bracketColorizationOptions(历史拼写),
+  // 只读侧才是 bracketPairColorizationOptions。
+  if (blockMode) disableBlockBracketColorization(editor);
 
   if (opts.autoHeight) {
     const updateHeight = () => {
@@ -441,8 +524,6 @@ export function createEditor(
     editor.onDidChangeConfiguration(updateHeight);
   }
 
-  // 块内代码块:补上「函数调用」着色(见 installCallHighlight 的说明)。
-  if (blockMode) installCallHighlight(editor);
 
   if (opts.onSave) {
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => opts.onSave?.());
@@ -461,8 +542,28 @@ export function createEditor(
     });
   }
 
-  // Obsidian/外层会拦截 Ctrl+V/C/X:编辑器持焦时在 capture 阶段接管剪贴板
-  // (SiYuan 侧同款修复:拦 keydown 后走 navigator.clipboard + executeEdits)
+  installClipboardBridge(container, editor);
+
+  return editor;
+}
+
+/**
+ * Obsidian/外层会拦截 Ctrl+V/C/X:编辑器持焦时在 capture 阶段接管剪贴板
+ * (SiYuan 侧同款修复:拦 keydown 后走 navigator.clipboard + executeEdits)。
+ *
+ * 抽出来是因为块内代码块的单例也要用同一套逻辑;单例永不 dispose,所以它的
+ * listener 只在插件卸载时随 disposeMonaco 一起摘掉,这里统一登记。
+ */
+const clipboardBridges: Array<{
+  editor: monaco.editor.IStandaloneCodeEditor;
+  handler: (e: KeyboardEvent) => void;
+  detach: () => void;
+}> = [];
+
+function installClipboardBridge(
+  container: HTMLElement,
+  editor: monaco.editor.IStandaloneCodeEditor,
+): void {
   const isEditorFocused = (): boolean => {
     if (editor.hasTextFocus()) return true;
     const active = document.activeElement;
@@ -515,83 +616,224 @@ export function createEditor(
     }
   };
   window.addEventListener('keydown', keydownHandler, true);
-  editor.onDidDispose(() => {
+  // 外部代码文件 / CodeDoc 的编辑器会随视图关闭而 dispose,监听必须跟着摘,
+  // 否则每次开关一个代码页签就多一个指向已死实例的 keydown(它还会去调
+  // editor.hasTextFocus())。单例永不 dispose,只有它靠这里的 detach 兜底。
+  const detach = (): void => {
     window.removeEventListener('keydown', keydownHandler, true);
-  });
+    const i = clipboardBridges.findIndex((b) => b.handler === keydownHandler);
+    if (i >= 0) clipboardBridges.splice(i, 1);
+  };
+  editor.onDidDispose(detach);
+  clipboardBridges.push({ editor, handler: keydownHandler, detach });
+}
 
-  return editor;
+
+// ---------------------------------------------------------------------
+// 块内代码块:全局单例(聚焦搬进来,提交搬回池,不销毁)
+// ---------------------------------------------------------------------
+/**
+ * 原来是「聚焦 → createEditor,提交 → dispose」。建一个 Monaco 实例是整个
+ * 插件里最贵的一步(初始化 + 布局 + 字体测量),点进每个代码块都要付一遍,
+ * 退出还要销毁 —— 反复编辑代码块时这些开销全是白付的。
+ *
+ * 现在块内代码块共用一个全局实例:
+ * - 实例只建一次,停放在 body 下的隐藏「池」里(.lgp-monaco-pool);
+ * - 聚焦时把它的容器(root)搬进该块的 .lgp-code-editor-host,提交后搬回池里,
+ *   **不销毁** —— 之后点进任何代码块都只是搬 DOM + setValue + layout;
+ * - 单例只能服务一个块。分栏里两个视图同时聚焦代码块时,后挂载的一方**抢占**:
+ *   先回调上一个占用者的 onPreempt(让它提交并还原 DOM),再搬走容器。
+ *   抢占发生在新内容 setValue **之前**,所以上一个块读到的仍是自己的文本。
+ *
+ * 外部代码文件 / CodeDoc / 混合视图仍是各自独立的实例(它们同时存在且长驻),
+ * 只有块内这一条路径走单例。
+ */
+interface SharedBlockEditor {
+  editor: monaco.editor.IStandaloneCodeEditor;
+  /** Monaco 的容器:在池与目标 host 之间搬移(Monaco 只认这一个节点) */
+  root: HTMLElement;
+  /** 当前占用者被抢占时的处理;null = 空闲 */
+  lease: { onPreempt: (() => void) | null; lease: SharedBlockLease } | null;
+  /** Esc 命令只能 addCommand 一次,回调经这个 ctx 每次挂载换 */
+  esc: { onEscape?: () => void };
+  /** autoHeight 的上下内边距:每次挂载按宿主字号重算 */
+  pad: { top: number; bottom: number };
+}
+
+let sharedBlock: SharedBlockEditor | null = null;
+let sharedPool: HTMLElement | null = null;
+
+/**
+ * 停放容器:在屏幕外保持真实尺寸(600×200)。
+ * 不用 display:none —— 尺寸为 0 时 Monaco 的内部布局算不出来,搬出后需要更多
+ * 次 layout 才稳定;visibility:hidden 既不可见也保留盒模型。
+ */
+function getSharedPool(): HTMLElement {
+  if (sharedPool?.isConnected) return sharedPool;
+  const el = document.createElement('div');
+  el.className = 'lgp-monaco-pool';
+  document.body.appendChild(el);
+  sharedPool = el;
+  return el;
+}
+
+function ensureSharedBlockEditor(): SharedBlockEditor {
+  if (sharedBlock) return sharedBlock;
+  const root = document.createElement('div');
+  root.className = 'lgp-monaco-root';
+  getSharedPool().appendChild(root);
+  const esc: { onEscape?: () => void } = {};
+  const pad = { top: 8, bottom: 8 };
+  const editor = monaco.editor.create(root, {
+    value: '',
+    language: 'plaintext',
+    theme: currentMonacoTheme(),
+    // 块内形态(与 createEditor 的 blockMode 同套参数):无行号、折叠槽清零、
+    // 无 minimap、关括号彩虹 —— 都要和阅读态 colorize 的输出对齐。
+    lineNumbers: 'off',
+    lineDecorationsWidth: 0,
+    folding: false,
+    minimap: { enabled: false },
+    wordWrap: 'off',
+    bracketPairColorization: { enabled: false },
+    overflowWidgetsDomNode: getOverflowWidgetsDomNode(),
+    fixedOverflowWidgets: true,
+    automaticLayout: true,
+    scrollBeyondLastLine: false,
+    smoothScrolling: true,
+    cursorBlinking: 'smooth',
+    renderWhitespace: 'selection',
+    padding: { top: pad.top, bottom: pad.bottom },
+  });
+  disableBlockBracketColorization(editor);
+  editor.addCommand(monaco.KeyCode.Escape, () => esc.onEscape?.());
+  // 高度自适应容器(块内永远 autoHeight):root 就是被搬来搬去的那个节点,
+  // 高度写在它身上,搬进 host 后盒子自然跟着内容长高。
+  const updateHeight = (): void => {
+    const lineCount = editor.getModel()?.getLineCount() ?? 1;
+    const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
+    root.style.height = `${lineCount * lineHeight + pad.top + pad.bottom}px`;
+  };
+  updateHeight();
+  editor.onDidChangeModelContent(updateHeight);
+  editor.onDidChangeConfiguration(updateHeight);
+  installClipboardBridge(root, editor);
+  sharedBlock = { editor, root, lease: null, esc, pad };
+  return sharedBlock;
+}
+
+export interface SharedMountOpts {
+  value: string;
+  language: string;
+  fontSize?: number;
+  fontFamily?: string;
+  lineHeight?: number;
+  vPadding?: number;
+  onEscape?: () => void;
+  /** 被另一个块抢占时的处理(通常是让当前宿主提交编辑) */
+  onPreempt?: () => void;
 }
 
 /**
- * 函数调用着色:补齐 Monaco 与阅读态的最后一处差异。
- *
- * 阅读态(Prism)里 `print(` 的 `print` 是 `.token.function`,用 --code-function
- * 色(见 enhanceCodeTokens 与 styles.css 的 token 映射)。Monaco 内置的
- * monarch 词法**没有** function-call 这一档 token——紧跟 `(` 的标识符就是普通
- * identifier,所以调用名在编辑态一直是普通色。
- *
- * 主题规则做不到(Monaco 的 token 规则只按 scope 前缀匹配,无法表达"后面跟
- * 着左括号"),于是走第二遍:`monaco.editor.tokenize` 拿到每行的 token 序列
- * (用它而不是正则,好处是注释/字符串里的 `foo(` 不会被误判——那些 token 不是
- * identifier),凡 identifier 后面紧跟以 `(` 开头的 delimiter,就给该标识符
- * 加一个内联类;颜色与阅读态同一组变量(styles.css 的 .lgp-mtk-function)。
- * 只对块内小块代码启用(文本短、重算便宜),外部代码文件保持原样。
+ * 一次挂载的租约。只有持有者 `release()` 才真的归还 —— 视图 A 的重渲染路径
+ * 清自己的 stale handle 时,不会把已经属于视图 B 的实例搬回池里。
  */
-function installCallHighlight(editor: monaco.editor.IStandaloneCodeEditor): void {
-  const model = editor.getModel();
-  if (!model) return;
-  const coll = editor.createDecorationsCollection([]);
-  const refresh = (): void => {
-    const lang = model.getLanguageId();
-    const lines = model.getLinesContent();
-    const out: monaco.editor.IModelDeltaDecoration[] = [];
-    let tokenized: monaco.Token[][];
+export interface SharedBlockLease {
+  editor: monaco.editor.IStandaloneCodeEditor;
+  release(): void;
+}
+
+/** 把单例搬进 `container` 并按块配置。 */
+export function mountSharedBlockEditor(
+  container: HTMLElement,
+  opts: SharedMountOpts,
+): SharedBlockLease {
+  const s = ensureSharedBlockEditor();
+  // 抢占:先让上一个占用者落地(它自己会走 releaseSharedBlockEditor,不会
+  // 递归回到这里 —— lease 已经摘掉了)。
+  if (s.lease) {
+    const prev = s.lease;
+    s.lease = null;
     try {
-      // 整篇一起 tokenize(而不是逐行):跨行状态(块注释/三引号字符串)才能
-      // 延续,否则续行会被当成普通代码。
-      tokenized = monaco.editor.tokenize(lines.join('\n'), lang);
-    } catch {
-      return;
+      prev.onPreempt?.();
+    } catch (e) {
+      console.warn('[obsidian-logseq] 代码块编辑器抢占失败:', e);
     }
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const toks = tokenized[i];
-      if (!line || !toks) continue;
-      for (let k = 0; k + 1 < toks.length; k++) {
-        const t = toks[k];
-        const nx = toks[k + 1];
-        if (!/^identifier/.test(t.type)) continue;
-        if (!/^delimiter/.test(nx.type)) continue;
-        const end = k + 2 < toks.length ? toks[k + 2].offset : line.length;
-        const nextText = line.slice(nx.offset, end);
-        if (!nextText.trimStart().startsWith('(')) continue;
-        out.push({
-          range: new monaco.Range(i + 1, t.offset + 1, i + 1, nx.offset + 1),
-          options: { inlineClassName: 'lgp-mtk-function' },
-        });
-      }
-    }
-    coll.set(out);
-  };
-  refresh();
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const schedule = (): void => {
-    if (timer) clearTimeout(timer);
-    // 打字时不必逐字符重算(tokenize 整篇有成本),落笔 120ms 后补一次。
-    timer = setTimeout(refresh, 120);
-  };
-  const d1 = editor.onDidChangeModelContent(schedule);
-  const d2 = editor.onDidChangeModelLanguage?.(refresh);
-  editor.onDidDispose(() => {
-    if (timer) clearTimeout(timer);
-    d1.dispose();
-    d2?.dispose();
+  }
+  void registerTmGrammarForMonaco(opts.language).catch(() => {});
+  container.appendChild(s.root); // 池 → 目标 host
+  s.pad.top = opts.vPadding ?? 8;
+  s.pad.bottom = opts.vPadding ?? 8;
+  s.esc.onEscape = opts.onEscape;
+  s.editor.updateOptions({
+    fontSize: opts.fontSize ?? 13,
+    ...(opts.fontFamily ? { fontFamily: opts.fontFamily } : {}),
+    ...(opts.lineHeight ? { lineHeight: opts.lineHeight } : {}),
+    padding: { top: s.pad.top, bottom: s.pad.bottom },
   });
+  s.editor.setValue(opts.value);
+  const model = s.editor.getModel();
+  if (model) monaco.editor.setModelLanguage(model, opts.language);
+  const lease: SharedBlockLease = {
+    editor: s.editor,
+    release: () => {
+      // 已被抢占(别的块拿到了租约)→ 这次归还作废,不能把人家的编辑器搬走
+      if (sharedBlock?.lease !== s.lease) return;
+      s.lease = null; // 归还路径不触发 onPreempt
+      s.esc.onEscape = undefined;
+      const pool = getSharedPool();
+      if (s.root.parentElement !== pool) pool.appendChild(s.root);
+    },
+  };
+  s.lease = { onPreempt: opts.onPreempt ?? null, lease };
+  // 容器换了父节点,尺寸可能变:显式 layout 一次(automaticLayout 的
+  // ResizeObserver 也会触发,但那一帧是异步的,首屏会闪一下旧宽度)。
+  s.editor.layout();
+  return lease;
+}
+
+/** 单例是否已被某个块占用(e2e/诊断用)。 */
+export function sharedBlockEditorBusy(): boolean {
+  return !!sharedBlock?.lease;
+}
+
+/**
+ * 启动预热:提前把单例建好,省掉「第一次点进代码块」那一下创建成本。
+ * 由设置项控制(默认关 —— 启动时多建一个编辑器是有代价的,交给用户决定)。
+ */
+export function warmUpSharedBlockEditor(plugin: MonacoPluginHost): void {
+  setupMonaco(plugin);
+  try {
+    ensureSharedBlockEditor();
+  } catch (e) {
+    console.warn('[obsidian-logseq] 预建代码块编辑器失败:', e);
+  }
 }
 
 // 全局清理(onunload 时调用)
 export function disposeMonaco(): void {
   initialized = false;
+  // 浮层宿主是挂在 body 上的全局节点:插件重载会再建一个,旧的必须摘掉
+  // (空 div 本身无害,但热重载多了就是一堆尸体)。
+  overflowWidgetsHost?.remove();
+  overflowWidgetsHost = null;
+  for (const b of [...clipboardBridges]) b.detach();
+  if (sharedBlock) {
+    try {
+      sharedBlock.editor.getModel()?.dispose();
+    } catch {
+      /* ignore */
+    }
+    try {
+      sharedBlock.editor.dispose();
+    } catch {
+      /* ignore */
+    }
+    sharedBlock.root.remove();
+    sharedBlock = null;
+  }
+  sharedPool?.remove();
+  sharedPool = null;
 }
 
 // 把 minimap 开关即时应用到所有已打开的编辑器(设置保存后调用)

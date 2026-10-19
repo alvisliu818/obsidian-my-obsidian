@@ -558,6 +558,21 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName('启动时预建代码块编辑器')
+      .setDesc(
+        '文档里的代码块共用一个 Monaco 编辑器实例（聚焦时搬进来、提交后搬回池里，' +
+          '不销毁），但第一次使用前实例还不存在——那一次创建是插件里最贵的一步，' +
+          '表现为「第一次点进代码块要顿一下」。开启后 Obsidian 启动完成就把实例建好，' +
+          '第一次点进代码块也就是搬一下 DOM。代价是启动阶段多占一份内存。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.codeBlockPrewarm === true).onChange(async (v) => {
+          this.plugin.settings.codeBlockPrewarm = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName('代码文件注释用 Logseq 编辑器编辑（可选）')
       .setDesc(
         '默认关闭：代码文件整台是一个 Monaco 纯代码编辑器，注释即语法高亮。' +

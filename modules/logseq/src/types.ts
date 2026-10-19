@@ -268,6 +268,18 @@ export interface BlockEditorSettings {
    */
   externalCodeWrap: boolean;
   /**
+   * 启动时预建块内代码块的 Monaco 单例(预热)。
+   *
+   * 块内代码块是全局单例:聚焦时搬进来、提交后搬回池里,不销毁。但**第一次**
+   * 搬进来之前实例还不存在,那一下创建(初始化 + 布局 + 字体测量)是插件里最贵
+   * 的一步,表现为「第一次点进代码块要顿一下,之后都很快」。开着这一项,Obsidian
+   * 布局就绪后就把实例建好放在池里,第一次点进代码块也变成纯搬 DOM。
+   *
+   * 默认关闭:启动阶段多建一个编辑器是有成本的(内存 + 一次初始化),而只有
+   * 常写代码块的人才吃得到那份收益。
+   */
+  codeBlockPrewarm: boolean;
+  /**
    * 代码文件打开时,注释区用 Logseq 块编辑器呈现(view zone 内嵌在 Monaco
    * 代码流里):可编辑、按 Markdown 渲染、写 [[双链]]。代码块仍由 Monaco 编辑。
    *
@@ -564,6 +576,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   mountTreeOrder: {},
   externalMounts: [],
   externalCodeWrap: true,
+  codeBlockPrewarm: false,
   // 代码文件默认纯 Monaco 编辑器(用户 2026-10-18 决策);混合模式(注释区 =
   // Logseq 块编辑器)保留为设置/头部按钮可选,不再作为默认。
   externalCodeHybrid: false,

@@ -77,7 +77,7 @@ import { restoreAllExtensions, registerExtensionConsumer, search as extSearch, i
 import { isExtensionInstalled } from './extensions/extensionStore';
 import { hasGrammarForFence } from './extensions/tmEngine';
 import { activateIconThemeByPreference, ICON_THEME_CHANGED_EVENT } from './extensions/iconThemeLoader';
-import { applyCodeThemePreference } from './editor/monaco';
+import { applyCodeThemePreference, warmUpSharedBlockEditor, disposeMonaco } from './editor/monaco';
 import { TerminalView, VIEW_TYPE_TERMINAL } from './terminal/terminalView';
 import { shutdownPtyHelper } from './terminal/ptyClient';
 import { shutdownAllLsp } from './lsp/lspHost';
@@ -239,6 +239,11 @@ export default class LogseqEditorPlugin extends Plugin {
       void this.startSqliteIndex();
       if (this.settings.pagePropsEditor === 'native') void this.resolveNativePropsCtor();
       this.convertOpenMarkdownLeaves();
+      // 预热块内代码块的 Monaco 单例:延后一拍再建,不与启动期的布局/索引
+      // 抢主线程(建实例是一次性的,晚 1.5s 不影响「第一次点进代码块」的体验)。
+      if (this.settings.codeBlockPrewarm) {
+        window.setTimeout(() => warmUpSharedBlockEditor(this), 1500);
+      }
     });
 
     this.patchSetViewState();
@@ -853,6 +858,9 @@ export default class LogseqEditorPlugin extends Plugin {
   }
 
   onunload(): void {
+    // 块内代码块的 Monaco 单例常驻在 body 的隐藏池里,不显式销毁会随插件
+    // 禁用/重载泄漏(外部代码视图的实例由各自的 view 自己 dispose)。
+    disposeMonaco();
     void shutdownAllLsp();
     shutdownPtyHelper();
     logOp(this, 'plugin.unload', '', 'ok');
