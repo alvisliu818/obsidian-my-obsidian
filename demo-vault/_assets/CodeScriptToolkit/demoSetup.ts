@@ -46,8 +46,8 @@ registerCustomToken('bravo', async (ctx) => {
 
 const IMAGES_ONLY_TOKEN = `registerCustomToken('imagesOnly', async (ctx) => {
   const imageExtensions = ['avif', 'bmp', 'gif', 'jpeg', 'jpg', 'png', 'svg', 'webp'];
-  if (!imageExtensions.includes(ctx.originalAttachmentFileExtension.toLowerCase())) {
-    return ctx.originalAttachmentFileName;
+  if (!imageExtensions.includes(ctx.attachmentFileExtension.toLowerCase())) {
+    return ctx.attachmentFileName;
   }
 
   return await ctx.fillTemplate('{{noteFileName}}-{{date:YYYYMMDDHHmmssSSS}}');

@@ -146,16 +146,24 @@ export class OriginalAttachmentNamesComponent extends Component {
     this.pluginNoticeComponent = params.pluginNoticeComponent;
     this.pluginSettingsComponent = params.pluginSettingsComponent;
     this.storeFilePath = params.storeFilePath;
-    this.saveDebounced = debounce(() => {
-      invokeAsyncSafely(() => this.save());
-    }, SAVE_DEBOUNCE_IN_MILLISECONDS, true);
+    this.saveDebounced = debounce(
+      () => {
+        invokeAsyncSafely(() => this.save());
+      },
+      SAVE_DEBOUNCE_IN_MILLISECONDS,
+      true
+    );
     /*
      * Debounced rather than shown per call: one collect over a folder asks for dozens of names, and the warning
      * must be ONE notice per operation, never one per file. The quiet period is what ends an operation.
      */
-    this.showWarningDebounced = debounce(() => {
-      this.showWarning();
-    }, WARNING_DEBOUNCE_IN_MILLISECONDS, true);
+    this.showWarningDebounced = debounce(
+      () => {
+        this.showWarning();
+      },
+      WARNING_DEBOUNCE_IN_MILLISECONDS,
+      true
+    );
   }
 
   /**
@@ -393,26 +401,29 @@ export class OriginalAttachmentNamesComponent extends Component {
     const paths = [...this.unknownPaths].sort((a, b) => a.localeCompare(b));
     this.unknownPaths.clear();
 
-    this.pluginNoticeComponent.showNotice(createFragment((f) => {
-      appendCodeBlock(f, '{{originalAttachmentFileName}}');
-      f.appendText(t(($) => $.originalAttachmentNames.unknownNotice.message, { count: paths.length }));
-      f.appendText(' ');
-      const detailsButton = new ButtonComponent(f.createSpan());
-      detailsButton.setButtonText(t(($) => $.originalAttachmentNames.unknownNotice.details));
-      detailsButton.onClick(convertAsyncToSync(async () => {
-        await alert({
-          app: this.app,
-          message: createFragment((messageFragment) => {
-            messageFragment.createEl('p', { text: t(($) => $.originalAttachmentNames.unknownDetails.explanation) });
-            const listEl = messageFragment.createEl('ul');
-            for (const path of paths) {
-              listEl.createEl('li', { text: path });
-            }
-          }),
-          title: t(($) => $.originalAttachmentNames.unknownDetails.title)
-        });
-      }));
-    }), { mode: PluginNoticeMode.Separate });
+    this.pluginNoticeComponent.showNotice(
+      createFragment((f) => {
+        appendCodeBlock(f, '{{originalAttachmentFileName}}');
+        f.appendText(t(($) => $.originalAttachmentNames.unknownNotice.message, { count: paths.length }));
+        f.appendText(' ');
+        const detailsButton = new ButtonComponent(f.createSpan());
+        detailsButton.setButtonText(t(($) => $.originalAttachmentNames.unknownNotice.details));
+        detailsButton.onClick(convertAsyncToSync(async () => {
+          await alert({
+            app: this.app,
+            message: createFragment((messageFragment) => {
+              messageFragment.createEl('p', { text: t(($) => $.originalAttachmentNames.unknownDetails.explanation) });
+              const listEl = messageFragment.createEl('ul');
+              for (const path of paths) {
+                listEl.createEl('li', { text: path });
+              }
+            }),
+            title: t(($) => $.originalAttachmentNames.unknownDetails.title)
+          });
+        }));
+      }),
+      { mode: PluginNoticeMode.Separate }
+    );
   }
 }
 

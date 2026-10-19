@@ -57,7 +57,7 @@ function getContentText(): string {
 }
 
 function getModal(): Modal | undefined {
-  return openSpy.mock.contexts.at(-1);
+  return castTo<Modal | undefined>(openSpy.mock.contexts.at(-1));
 }
 
 beforeAll(async () => {

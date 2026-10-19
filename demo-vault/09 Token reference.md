@@ -8,7 +8,7 @@ Token strings:
 
 - `{{token}}`: Use token default format (`null`).
 - `{{token:{...}}}`: Use explicit format parsed as a **JSON5 object** (single-line).
-- `{{token:text}}`: The scalar shorthand, text free of `{` and `}`. The five date tokens take it as their Moment.js format, so `{{date:YYYY-MM-DD}}` means `{{date:{momentJsFormat:'YYYY-MM-DD'}}}` - the same form core's Templates plugin uses. A custom token receives the text itself as `ctx.format`; every other built-in token rejects it.
+- `{{token:text}}`: The scalar shorthand, text free of `{` and `}`. The seven date tokens take it as their Moment.js format, so `{{date:YYYY-MM-DD}}` means `{{date:{momentJsFormat:'YYYY-MM-DD'}}}` - the same form core's Templates plugin uses. A custom token receives the text itself as `ctx.format`; every other built-in token rejects it.
 
 `token` is case-insensitive. Format object keys and values are case-sensitive.
 
@@ -41,6 +41,106 @@ Each token validates its own `format` shape at runtime. Unknown object propertie
 Example (error):
 
 `❌ {{attachmentFileSize:{unit:'B',decimalPoints:3,unknownProperty:'alpha'}}}`
+
+## Two families: the attachment as it is now, and as it arrived
+
+`{{attachmentFileName}}` and `{{attachmentFileExtension}}` read the attachment **as it is right now**: the incoming file's name while you paste or drop it, the file's current name when a collect or a note rename moves it.
+
+`{{originalAttachmentFileName}}` and `{{originalAttachmentFileExtension}}` read the name the attachment **arrived with**. The plugin remembers it when it saves a pasted, dropped, shared or downloaded attachment, and keeps it through every rename and move Obsidian reports, its own and yours. So a collect template such as `{{noteFileName}}-{{originalAttachmentFileName}}` gives `Note-img` on the first collect and still `Note-img` on the next one, instead of `Note-Note-img`.
+
+When the original name is not known — the file predates the record, was renamed outside Obsidian, or was synced from another device with no record — the current name is used, it is remembered as the original from then on, and one notice per operation says so. Its **Details** button lists the attachments. Turn the notice off with `shouldWarnWhenOriginalAttachmentNameIsUnknown`. The commands **Show original attachment names**, **Prune original attachment names** and **Remember current name as original** let you look at the remembered names and correct them; see [05 Collect attachments](<./05 Collect attachments.md#original-attachment-names>).
+
+The dates are the file's own, which a rename does not change, so `{{attachmentFileCreationDate}}` and `{{originalAttachmentFileCreationDate}}` read the same value, and so do the two modification-date tokens.
+
+## `{{attachmentFileCreationDate}}`
+
+Creation date/time of the attachment file. The same value as `{{originalAttachmentFileCreationDate}}`.
+
+### Format schema
+
+```ts
+{
+  momentJsFormat: string;
+  valueWhenUnknown?: 'empty' | 'now'; // default: 'empty'
+}
+```
+
+`momentJsFormat` uses [Moment.js format].
+
+### Default (omitted) format
+
+`null`, invalid.
+
+### Examples
+
+- `{{attachmentFileCreationDate:YYYY-MM-DD}}`: `2025-12-31`.
+- `{{attachmentFileCreationDate:{momentJsFormat:'YYYY-MM-DD',valueWhenUnknown:'now'}}}`: today's date when the file has no creation date yet.
+
+## `{{attachmentFileExtension}}`
+
+Extension of the attachment file as it is now, without its dot. While pasting, the incoming file's — after any conversion to JPEG.
+
+### Format schema
+
+*(No format for this token)*.
+
+### Default (omitted) format
+
+`null`.
+
+### Examples
+
+- `{{attachmentFileExtension}}`: `alpha.bravo.pdf -> pdf`.
+
+## `{{attachmentFileModificationDate}}`
+
+Modification date/time of the attachment file. The same value as `{{originalAttachmentFileModificationDate}}`.
+
+### Format schema
+
+```ts
+{
+  momentJsFormat: string;
+  valueWhenUnknown?: 'empty' | 'now'; // default: 'empty'
+}
+```
+
+`momentJsFormat` uses [Moment.js format].
+
+### Default (omitted) format
+
+`null`, invalid.
+
+### Examples
+
+- `{{attachmentFileModificationDate:YYYY-MM-DD}}`: `2025-12-31`.
+
+## `{{attachmentFileName}}`
+
+File name of the attachment as it is now, without its extension: the incoming file's while pasting, the current one when a collect or a note rename moves it. Use it where you mean the current name; `{{originalAttachmentFileName}}` is the name it arrived with.
+
+### Format schema
+
+```ts
+{
+  case?: 'lower' | 'title' | 'upper';
+  collapseWhitespace?: boolean; // default: false
+  slugify?: boolean; // default: false
+  trim?: {
+    length: number;
+    side: 'left' | 'right';
+  };
+}
+```
+
+### Default (omitted) format
+
+`null`, equivalent to `{}`.
+
+### Examples
+
+- `{{attachmentFileName}}`: `Note-img.png -> Note-img`.
+- `{{attachmentFileName:{case:'lower'}}}`: `Note-IMG.png -> note-img`.
 
 ## `{{attachmentFileSize}}`
 
@@ -327,7 +427,7 @@ Current note's folder full path.
 
 ## `{{originalAttachmentFileCreationDate}}`
 
-Original attachment file creation date/time.
+Creation date/time of the attachment file. The file's own date, which a rename does not change, so it reads the same as `{{attachmentFileCreationDate}}`; the name is kept for the templates that already use it.
 
 ### Format schema
 
@@ -351,7 +451,7 @@ Original attachment file creation date/time.
 
 ## `{{originalAttachmentFileExtension}}`
 
-Extension of the original attachment file.
+Extension of the name the attachment arrived with, without its dot. Pairs with `{{originalAttachmentFileName}}`, and falls back the same way. `{{attachmentFileExtension}}` is the current one.
 
 ### Format schema
 
@@ -367,7 +467,7 @@ Extension of the original attachment file.
 
 ## `{{originalAttachmentFileModificationDate}}`
 
-Original attachment file modification date/time.
+Modification date/time of the attachment file. The file's own date, so it reads the same as `{{attachmentFileModificationDate}}`; the name is kept for the templates that already use it.
 
 ### Format schema
 
@@ -391,7 +491,9 @@ Original attachment file modification date/time.
 
 ## `{{originalAttachmentFileName}}`
 
-File name of the original attachment file.
+File name the attachment arrived with, without its extension: the name it had when it was pasted, dropped, shared or downloaded, kept through every rename and move Obsidian reports. When that name is not known, the current name is used, with a warning; see [Two families](#two-families-the-attachment-as-it-is-now-and-as-it-arrived). `{{attachmentFileName}}` is the current name.
+
+Up to 16.0.0 this token read the current name, so a template that prepends to it stacked on every collect. Existing templates keep working and get the new meaning. A template that really wants the current name uses `{{attachmentFileName}}`.
 
 ### Format schema
 

@@ -102,11 +102,13 @@ describe('ShowOriginalAttachmentNamesCommandHandler', () => {
 
 describe('PruneOriginalAttachmentNamesCommandHandler', () => {
   function createHandler(): TestableExecute {
-    return castTo<TestableExecute>(new PruneOriginalAttachmentNamesCommandHandler({
-      app,
-      originalAttachmentNamesComponent,
-      pluginNoticeComponent: strictProxy<PluginNoticeComponent>({ showNotice })
-    }));
+    return castTo<TestableExecute>(
+      new PruneOriginalAttachmentNamesCommandHandler({
+        app,
+        originalAttachmentNamesComponent,
+        pluginNoticeComponent: strictProxy<PluginNoticeComponent>({ showNotice })
+      })
+    );
   }
 
   it('should remove the stale records and keep the live ones when the user prunes', async () => {
@@ -146,13 +148,15 @@ describe('PruneOriginalAttachmentNamesCommandHandler', () => {
 
 describe('RememberCurrentNameAsOriginalCommandHandler', () => {
   function createHandler(): TestableFileHandler {
-    return castTo<TestableFileHandler>(new RememberCurrentNameAsOriginalCommandHandler({
-      originalAttachmentNamesComponent,
-      pluginNoticeComponent: strictProxy<PluginNoticeComponent>({ showNotice }),
-      pluginSettingsComponent: strictProxy<PluginSettingsComponent>({
-        isNoteEx: (pathOrFile: unknown) => castTo<TFile>(pathOrFile).extension === 'md'
+    return castTo<TestableFileHandler>(
+      new RememberCurrentNameAsOriginalCommandHandler({
+        originalAttachmentNamesComponent,
+        pluginNoticeComponent: strictProxy<PluginNoticeComponent>({ showNotice }),
+        pluginSettingsComponent: strictProxy<PluginSettingsComponent>({
+          isNoteEx: (pathOrFile: unknown) => castTo<TFile>(pathOrFile).extension === 'md'
+        })
       })
-    }));
+    );
   }
 
   function createFile(path: string): TFile {

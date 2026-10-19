@@ -172,7 +172,6 @@ interface ResolvedOriginalAttachmentFileName {
   readonly originalAttachmentFileNameParams: OriginalAttachmentFileNameParams;
 }
 
-
 export class AttachmentPathManager {
   /**
    * The arrival names `{{originalAttachmentFileName}}` reads.
