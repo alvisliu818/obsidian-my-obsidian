@@ -21,8 +21,8 @@ import { PromptToken } from './prompt-token.ts';
 
 interface CreateContextParams {
   readonly actionContext: ActionContext;
+  readonly attachmentFileName: string;
   readonly format: TokenEvaluatorContext['format'];
-  readonly originalAttachmentFileName: string;
   readonly validatePath?: ValidatePathFunction;
 }
 
@@ -46,8 +46,8 @@ function createContext(params: CreateContextParams): TokenEvaluatorContext {
   return castTo<TokenEvaluatorContext>({
     actionContext: params.actionContext,
     app,
+    attachmentFileName: params.attachmentFileName,
     format: params.format,
-    originalAttachmentFileName: params.originalAttachmentFileName,
     pluginSettingsComponent,
     tokenValidator: strictProxy<TokenValidator>({
       validatePath
@@ -69,19 +69,19 @@ describe('PromptToken', () => {
     const token = new PromptToken();
     const result = await token.evaluate(createContext({
       actionContext: ActionContext.ValidateTokens,
-      format: null,
-      originalAttachmentFileName: 'image.png'
+      attachmentFileName: 'image.png',
+      format: null
     }));
     expect(result).toBe(DUMMY_PATH);
     expect(promptWithPreview).not.toHaveBeenCalled();
   });
 
-  it('should return the dummy path when the original attachment file name is the dummy path', async () => {
+  it('should return the dummy path when the attachment file name is the dummy path', async () => {
     const token = new PromptToken();
     const result = await token.evaluate(createContext({
       actionContext: ActionContext.SaveAttachment,
-      format: null,
-      originalAttachmentFileName: DUMMY_PATH
+      attachmentFileName: DUMMY_PATH,
+      format: null
     }));
     expect(result).toBe(DUMMY_PATH);
     expect(promptWithPreview).not.toHaveBeenCalled();
@@ -92,8 +92,8 @@ describe('PromptToken', () => {
     const token = new PromptToken();
     const result = await token.evaluate(createContext({
       actionContext: ActionContext.SaveAttachment,
-      format: { case: 'upper' },
-      originalAttachmentFileName: 'image.png'
+      attachmentFileName: 'image.png',
+      format: { case: 'upper' }
     }));
     expect(result).toBe('MY VALUE');
   });
@@ -109,8 +109,8 @@ describe('PromptToken', () => {
     const token = new PromptToken();
     const result = await token.evaluate(createContext({
       actionContext: ActionContext.SaveAttachment,
+      attachmentFileName: 'image.png',
       format: null,
-      originalAttachmentFileName: 'image.png',
       validatePath
     }));
 
@@ -127,8 +127,8 @@ describe('PromptToken', () => {
     const token = new PromptToken();
     await expect(token.evaluate(createContext({
       actionContext: ActionContext.SaveAttachment,
-      format: null,
-      originalAttachmentFileName: 'image.png'
+      attachmentFileName: 'image.png',
+      format: null
     }))).rejects.toThrow('Prompt cancelled');
   });
 });

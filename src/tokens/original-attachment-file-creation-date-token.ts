@@ -1,31 +1,11 @@
-import { z } from 'zod';
+import { AttachmentFileCreationDateToken } from './attachment-file-creation-date-token.ts';
 
-import type { TokenEvaluatorContext } from '../token-evaluator-context.ts';
-
-import {
-  formatDate,
-  formatNow,
-  momentJsFormatSchema,
-  withMomentJsFormatShorthand
-} from './moment-js-token-base.ts';
-import { TokenBase } from './token-base.ts';
-
-const formatSchema = withMomentJsFormatShorthand(z.strictObject({
-  ...momentJsFormatSchema.shape,
-  valueWhenUnknown: z.enum(['empty', 'now']).optional().default('empty')
-}));
-type Format = z.output<typeof formatSchema>;
-
-export class OriginalAttachmentFileCreationDateToken extends TokenBase<Format> {
+/**
+ * The name this token had before `{{attachmentFileCreationDate}}` existed. It reads the same date: the file's own,
+ * which a rename does not change.
+ */
+export class OriginalAttachmentFileCreationDateToken extends AttachmentFileCreationDateToken {
   public constructor() {
-    super('originalAttachmentFileCreationDate', formatSchema);
-  }
-
-  protected override evaluateImpl(context: TokenEvaluatorContext, format: Format): string {
-    if (context.attachmentFileStats?.ctime !== undefined) {
-      return formatDate(context.attachmentFileStats.ctime, format);
-    }
-
-    return format.valueWhenUnknown === 'now' ? formatNow(format) : '';
+    super('originalAttachmentFileCreationDate');
   }
 }

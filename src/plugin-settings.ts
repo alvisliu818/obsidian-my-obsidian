@@ -251,6 +251,12 @@ export class PluginSettings {
   public shouldRenameCollectedAttachments = false;
   public shouldSetLinkDisplayTextToAttachmentFileName = false;
   public shouldSkipCollectingAttachmentsReferencedByRawPath = false;
+
+  /**
+   * Whether a template that reads `{{originalAttachmentFileName}}` for an attachment with no recorded original warns
+   * that the current name was used instead. One notice per operation, never one per file.
+   */
+  public shouldWarnWhenOriginalAttachmentNameIsUnknown = true;
   public specialCharacters = String.raw`#^[]|*\<>:?/`;
   public specialCharactersReplacement = '-';
   // eslint-disable-next-line no-magic-numbers -- Magic numbers are OK in settings.

@@ -48,10 +48,15 @@ import {
 import { normalizePath } from 'obsidian';
 
 import type { HandedOverSettingsComponent } from './handed-over-settings-component.ts';
+import type { OriginalAttachmentNamesComponent } from './original-attachment-names-component.ts';
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';
+import type { OriginalAttachmentFileNameParams } from './substitutions.ts';
 
 import { findIdenticalAttachmentFile } from './identical-attachment.ts';
-import { IMPORT_FILES_PREFIX } from './patches/share-receiver-import-files-patch-component.ts';
+import {
+  getShareImportOriginalFileName,
+  IMPORT_FILES_PREFIX
+} from './patches/share-receiver-import-files-patch-component.ts';
 import { selfWriteRegistry } from './self-write-registry.ts';
 import { Substitutions } from './substitutions.ts';
 import {
@@ -76,6 +81,7 @@ interface AttachmentPathManagerConstructorParams {
   readonly app: App;
   readonly getAvailablePathForAttachmentsOriginal: GetAvailablePathForAttachmentsFunction;
   readonly handedOverSettingsComponent: HandedOverSettingsComponent;
+  readonly originalAttachmentNamesComponent: OriginalAttachmentNamesComponent;
   readonly pluginNoticeComponent: PluginNoticeComponent;
   readonly pluginSettingsComponent: PluginSettingsComponent;
   readonly tokenValidator: TokenValidator;
@@ -88,6 +94,7 @@ interface AttachmentPathManagerGetAttachmentFolderFullPathForPathParams {
   readonly attachmentFileStats?: FileStats | undefined;
   readonly notePath: string;
   readonly oldNoteFilePath?: string | undefined;
+  readonly originalAttachmentFileNameParams?: OriginalAttachmentFileNameParams | undefined;
   readonly readAttachmentFileContent?: (() => Promise<ArrayBuffer>) | undefined;
 }
 
@@ -99,6 +106,12 @@ interface AttachmentPathManagerGetAvailablePathForAttachmentsParams {
   readonly notePathOrFile: null | PathOrFile;
   readonly oldAttachmentPathOrFile: PathOrFile;
   readonly oldNotePathOrFile?: PathOrFile | undefined;
+
+  /**
+   * The name a NEW attachment arrives with, extension included, when it differs from the name being placed — a
+   * paste the saver has already renamed. Defaults to that name.
+   */
+  readonly originalAttachmentFileName?: string | undefined;
   readonly readAttachmentFileContent: (() => Promise<ArrayBuffer>) | null;
   readonly shouldReplaceSpecialCharactersInKeptFileName?: boolean;
   readonly shouldSkipDuplicateCheck?: boolean;
@@ -122,6 +135,12 @@ interface AttachmentPathManagerGetProperAttachmentPathParams {
   readonly sequenceNumber: number;
 }
 
+interface AttachmentPathManagerResolveOriginalAttachmentFileNameParams {
+  readonly attachmentFileBaseName: string;
+  readonly isGeneratedByShareReceiver: boolean;
+  readonly params: AttachmentPathManagerGetAvailablePathForAttachmentsParams;
+}
+
 interface AttachmentPathManagerResolvePathTemplateParams {
   readonly isFileNamePart: boolean;
   readonly substitutions: Substitutions;
@@ -140,7 +159,24 @@ interface NoteLinkWalkResult {
   readonly sequenceNumberByAttachmentPath: Map<string, number>;
 }
 
+interface ResolvedOriginalAttachmentFileName {
+  /**
+   * The name a NEW attachment arrives with. Unused for an existing one.
+   */
+  readonly arrivalFileName: string;
+
+  /**
+   * The attachment asked about, when it already exists.
+   */
+  readonly existingAttachmentFile: null | TFile;
+  readonly originalAttachmentFileNameParams: OriginalAttachmentFileNameParams;
+}
+
 export class AttachmentPathManager {
+  /**
+   * The arrival names `{{originalAttachmentFileName}}` reads.
+   */
+  public readonly originalAttachmentNamesComponent: OriginalAttachmentNamesComponent;
   private readonly app: App;
   private readonly getAvailablePathForAttachmentsOriginal: GetAvailablePathForAttachmentsFunction;
   private readonly handedOverSettingsComponent: HandedOverSettingsComponent;
@@ -152,6 +188,7 @@ export class AttachmentPathManager {
     this.app = params.app;
     this.getAvailablePathForAttachmentsOriginal = params.getAvailablePathForAttachmentsOriginal;
     this.handedOverSettingsComponent = params.handedOverSettingsComponent;
+    this.originalAttachmentNamesComponent = params.originalAttachmentNamesComponent;
     this.pluginNoticeComponent = params.pluginNoticeComponent;
     this.pluginSettingsComponent = params.pluginSettingsComponent;
     this.tokenValidator = params.tokenValidator;
@@ -166,7 +203,8 @@ export class AttachmentPathManager {
         attachmentFileStats: params.attachmentFileStats,
         noteFilePath: params.notePath,
         oldNoteFilePath: params.oldNoteFilePath,
-        originalAttachmentFileName: params.attachmentFileName,
+        ...params.originalAttachmentFileNameParams,
+        attachmentFileName: params.attachmentFileName,
         pluginSettingsComponent: this.pluginSettingsComponent,
         readAttachmentFileContent: params.readAttachmentFileContent,
         tokenValidator: this.tokenValidator
@@ -205,6 +243,13 @@ export class AttachmentPathManager {
       shouldSkipGeneratedAttachmentFileName = true;
       isGeneratedByShareReceiver = true;
     }
+
+    const resolvedOriginalAttachmentFileName = this.resolveOriginalAttachmentFileName({
+      attachmentFileBaseName,
+      isGeneratedByShareReceiver,
+      params
+    });
+    const { originalAttachmentFileNameParams } = resolvedOriginalAttachmentFileName;
     if (noteFile && this.handedOverSettingsComponent.isPathIgnored(noteFile.path)) {
       return this.getAvailablePathForAttachmentsOriginal(attachmentFileBaseName, params.attachmentFileExtension, noteFile);
     }
@@ -240,6 +285,7 @@ export class AttachmentPathManager {
         attachmentFileStats,
         notePath: noteFilePath,
         oldNoteFilePath,
+        originalAttachmentFileNameParams,
         readAttachmentFileContent
       });
       let generatedAttachmentFileName: string;
@@ -255,7 +301,8 @@ export class AttachmentPathManager {
             cursorLine,
             noteFilePath,
             oldNoteFilePath,
-            originalAttachmentFileName: attachmentFileName,
+            ...originalAttachmentFileNameParams,
+            attachmentFileName,
             pluginSettingsComponent: this.pluginSettingsComponent,
             readAttachmentFileContent,
             sequenceNumber,
@@ -293,6 +340,8 @@ export class AttachmentPathManager {
      * while core Obsidian is the writer (issue #65).
      */
     selfWriteRegistry.register(attachmentPath);
+
+    this.expectArrivalOfNewAttachment(attachmentPath, resolvedOriginalAttachmentFileName);
 
     if (!params.shouldSkipMissingAttachmentFolderCreation) {
       const folderPath = parentFolderPath(attachmentPath);
@@ -361,6 +410,7 @@ export class AttachmentPathManager {
     const directory = dirname(generatedAttachmentFileNamePath);
     const generatedAttachmentFileNameBaseName = basename(generatedAttachmentFileNamePath, params.fileExtension ? `.${params.fileExtension}` : '');
     const attachmentPath = this.app.vault.getAvailablePath(join(directory, generatedAttachmentFileNameBaseName), params.fileExtension);
+    this.originalAttachmentNamesComponent.expectArrival(attachmentPath, attachmentFileName);
 
     const folderPath = parentFolderPath(attachmentPath);
     if (!await this.app.vault.exists(folderPath)) {
@@ -424,8 +474,34 @@ export class AttachmentPathManager {
     return path;
   }
 
+  /**
+   * What a template reads as the original name of an attachment that already exists: the arrival name on record,
+   * or, when there is none, a report that its current name stood in.
+   *
+   * @param attachmentFile - The attachment.
+   * @param actionContext - The action the name is needed for.
+   * @returns The parameters to hand {@link Substitutions}.
+   */
+  public getOriginalAttachmentFileNameParams(attachmentFile: TFile, actionContext: ActionContext): OriginalAttachmentFileNameParams {
+    const originalAttachmentFileName = this.originalAttachmentNamesComponent.get(attachmentFile.path);
+    if (originalAttachmentFileName !== undefined) {
+      return { originalAttachmentFileName };
+    }
+
+    return {
+      onOriginalAttachmentFileNameUnknown: (): void => {
+        this.originalAttachmentNamesComponent.reportUnknown({
+          actionContext,
+          currentFileName: attachmentFile.name,
+          path: attachmentFile.path
+        });
+      }
+    };
+  }
+
   public async getProperAttachmentPath(params: AttachmentPathManagerGetProperAttachmentPathParams): Promise<null | string> {
     const attachmentFileContent = await this.app.vault.readBinary(params.attachmentFile);
+    const originalAttachmentFileNameParams = this.getOriginalAttachmentFileNameParams(params.attachmentFile, params.actionContext);
     const newAttachmentName = this.pluginSettingsComponent.settings.shouldRenameCollectedAttachments
       ? makeFileName({
         fileBaseName: await this.getGeneratedAttachmentFileBaseName(
@@ -436,7 +512,8 @@ export class AttachmentPathManager {
             attachmentFileStats: params.attachmentFile.stat,
             cursorLine: isReferenceCache(params.reference) ? params.reference.position.start.line : 0,
             noteFilePath: params.noteFilePath,
-            originalAttachmentFileName: params.attachmentFile.name,
+            ...originalAttachmentFileNameParams,
+            attachmentFileName: params.attachmentFile.name,
             pluginSettingsComponent: this.pluginSettingsComponent,
             sequenceNumber: params.sequenceNumber,
             tokenValidator: this.tokenValidator
@@ -451,7 +528,8 @@ export class AttachmentPathManager {
       attachmentFileContent,
       attachmentFileName: newAttachmentName,
       attachmentFileStats: params.attachmentFile.stat,
-      notePath: params.noteFilePath
+      notePath: params.noteFilePath,
+      originalAttachmentFileNameParams
     });
     const newAttachmentPath = join(newAttachmentFolderPath, newAttachmentName);
 
@@ -518,6 +596,20 @@ export class AttachmentPathManager {
    */
   private cleanKeptFileBaseName(params: AttachmentPathManagerCleanKeptFileBaseNameParams): string {
     return !params.shouldReplace || params.isGeneratedByShareReceiver ? params.fileBaseName : this.pluginSettingsComponent.replaceSpecialCharacters(params.fileBaseName) || params.fileBaseName;
+  }
+
+  /**
+   * Waits for a NEW attachment to be created at the path handed out, so its arrival name is recorded then. A dry
+   * resolution never writes the path, and the expectation expires on its own. An existing attachment already has its
+   * record, which follows it through the rename.
+   *
+   * @param attachmentPath - The path handed out.
+   * @param resolvedOriginalAttachmentFileName - What the request was resolved to.
+   */
+  private expectArrivalOfNewAttachment(attachmentPath: string, resolvedOriginalAttachmentFileName: ResolvedOriginalAttachmentFileName): void {
+    if (!resolvedOriginalAttachmentFileName.existingAttachmentFile) {
+      this.originalAttachmentNamesComponent.expectArrival(attachmentPath, resolvedOriginalAttachmentFileName.arrivalFileName);
+    }
   }
 
   private async getAttachmentFolderPath(substitutions: Substitutions): Promise<string> {
@@ -622,6 +714,38 @@ export class AttachmentPathManager {
           isCaseInsensitive: true,
           pathOrFile: properPath
         }) !== null;
+  }
+
+  /**
+   * What a template reads as the original name of the attachment `getAvailablePathForAttachments` is asked about.
+   *
+   * A note rename or delete asks about an attachment that already exists, so its original name is the one on record.
+   * Every other context places a new attachment, which arrives with the name it is asked about, unless the caller
+   * already renamed it — the saver, or the share sheet, whose import renames each file before it gets here.
+   *
+   * @param resolveParams - The request, and the base name with any share-import prefix removed.
+   * @returns The existing attachment, if any, and what to hand {@link Substitutions}.
+   */
+  private resolveOriginalAttachmentFileName(resolveParams: AttachmentPathManagerResolveOriginalAttachmentFileNameParams): ResolvedOriginalAttachmentFileName {
+    const { params } = resolveParams;
+    const existingAttachmentFile = params.context === AttachmentPathContext.RenameNote || params.context === AttachmentPathContext.DeleteNote
+      ? getFileOrNull({ app: this.app, pathOrFile: params.oldAttachmentPathOrFile })
+      : null;
+    const incomingAttachmentFileName = makeFileName({
+      fileBaseName: resolveParams.attachmentFileBaseName,
+      fileExtension: params.attachmentFileExtension
+    });
+    const arrivalFileName = resolveParams.isGeneratedByShareReceiver
+      ? getShareImportOriginalFileName(incomingAttachmentFileName) ?? incomingAttachmentFileName
+      : params.originalAttachmentFileName ?? incomingAttachmentFileName;
+
+    return {
+      arrivalFileName,
+      existingAttachmentFile,
+      originalAttachmentFileNameParams: existingAttachmentFile
+        ? this.getOriginalAttachmentFileNameParams(existingAttachmentFile, attachmentPathContextToActionContext(params.context))
+        : { originalAttachmentFileName: arrivalFileName }
+    };
   }
 
   private async resolvePathTemplate(params: AttachmentPathManagerResolvePathTemplateParams): Promise<string> {

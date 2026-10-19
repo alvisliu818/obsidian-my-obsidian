@@ -112,6 +112,18 @@ export interface TokenEvaluatorContext {
   app: App;
 
   /**
+   * An extension of the attachment file as it is right now, without its dot. For a paste or a drop, the incoming
+   * file's.
+   */
+  attachmentFileExtension: string;
+
+  /**
+   * A name of the attachment file as it is right now, without its extension. For a paste or a drop, the incoming
+   * file's.
+   */
+  attachmentFileName: string;
+
+  /**
    * Stats of the attachment file.
    *
    * `undefined` if the attachment file stats is not known.
@@ -217,12 +229,17 @@ export interface TokenEvaluatorContext {
   oldNoteFolderPath: string;
 
   /**
-   * An extension of the original attachment file.
+   * An extension of the name the attachment arrived with, without its dot. Pairs with
+   * {@link originalAttachmentFileName}.
    */
   originalAttachmentFileExtension: string;
 
   /**
-   * A name of the original attachment file.
+   * A name the attachment arrived with, without its extension: the name it had when it was pasted, dropped, shared or
+   * downloaded, kept across every rename this plugin sees.
+   *
+   * When it is not known — the file predates the record, or was renamed outside Obsidian — this is
+   * {@link attachmentFileName}, and the plugin warns that it used the current name.
    */
   originalAttachmentFileName: string;
 

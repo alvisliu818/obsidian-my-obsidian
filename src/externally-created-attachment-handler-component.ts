@@ -233,13 +233,22 @@ export class ExternallyCreatedAttachmentHandlerComponent extends Component {
   private async moveToProperPath(attachmentFile: TFile, noteFile: TFile): Promise<void> {
     const readAttachmentFileContent = (): Promise<ArrayBuffer> => this.app.vault.readBinary(attachmentFile);
 
+    /*
+     * The file has only just been created, so the name the creating plugin gave it IS the one it arrived with. A
+     * plugin that asked this plugin for the path has had it recorded already, under the same name.
+     */
+    const originalAttachmentNamesComponent = this.attachmentPathManager.originalAttachmentNamesComponent;
+    const originalAttachmentFileName = originalAttachmentNamesComponent.get(attachmentFile.path) ?? attachmentFile.name;
+    originalAttachmentNamesComponent.set(attachmentFile.path, originalAttachmentFileName);
+
     const generatedAttachmentFileBaseName = await this.attachmentPathManager.getGeneratedAttachmentFileBaseName(
       new Substitutions({
         actionContext: ActionContext.ExternalAttachmentCreated,
         app: this.app,
+        attachmentFileName: attachmentFile.name,
         attachmentFileStats: attachmentFile.stat,
         noteFilePath: noteFile.path,
-        originalAttachmentFileName: attachmentFile.name,
+        originalAttachmentFileName,
         pluginSettingsComponent: this.pluginSettingsComponent,
         readAttachmentFileContent,
         tokenValidator: this.tokenValidator
@@ -256,6 +265,7 @@ export class ExternallyCreatedAttachmentHandlerComponent extends Component {
       attachmentFileName: generatedAttachmentFileName,
       attachmentFileStats: attachmentFile.stat,
       notePath: noteFile.path,
+      originalAttachmentFileNameParams: { originalAttachmentFileName },
       readAttachmentFileContent
     });
 

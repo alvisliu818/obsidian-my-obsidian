@@ -114,6 +114,23 @@ await require('/demoSetup.ts').pasteIntoDestinationDemo(app);
 
 Manual equivalent: set the two settings in **Settings -> Community plugins -> `Custom Attachment Location`**, paste an image into a note, and run **Collect attachments in current note** after each change.
 
+## Original attachment names
+
+A collect that renames (`shouldRenameCollectedAttachments`) builds the new name from `collectedAttachmentFileName`, and a pattern such as `{{noteFileName}}-{{originalAttachmentFileName}}` reads the name the attachment **arrived with**. The plugin remembers that name when it saves a pasted, dropped, shared or downloaded attachment, and keeps it through every rename and move Obsidian reports. So collecting `img.png` into `Note` gives `Note-img.png`, and collecting again leaves it there, instead of making it `Note-Note-img.png`. `{{attachmentFileName}}` is there for a pattern that wants the current name instead; both are in [09 Token reference](<./09 Token reference.md#two-families-the-attachment-as-it-is-now-and-as-it-arrived>).
+
+An attachment the plugin never saw arrive has no remembered name: one that predates the plugin, one renamed outside Obsidian, one synced from another device. Its current name is used, it is remembered from then on, and one notice per collect says how many there were. Its **Details** button lists them. `shouldWarnWhenOriginalAttachmentNameIsUnknown` turns that notice off.
+
+The names are kept in `original-attachment-names.json`, in the plugin's folder beside its settings. Three commands look after them:
+
+- **Show original attachment names**
+  - lists every remembered name as `current path → original name`, sorted by path, with a filter box, the totals, a *missing* badge on a path with no file any more, and **Copy as CSV**. Each row can be edited, forgotten, or set to the file's current name, and several selected rows can be forgotten or set at once. That is how a pasted screenshot remembered as `Pasted image 20250101120000.png`, which you have since renamed to something meaningful, gets the meaningful name to build on.
+- **Prune original attachment names**
+  - removes the remembered names whose file no longer exists, after listing them. The same dialog has **Forget all**, which asks once more before throwing every name away.
+- **Remember current name as original**
+  - in an attachment's file menu, the multi-file menu, and the command palette for the active file: makes the current name the one patterns build on.
+
+Manual walkthrough: set `collectedAttachmentFileName` to `{{noteFileName}}-{{originalAttachmentFileName}}` and turn on `shouldRenameCollectedAttachments`. Paste an image into a note, run **Collect attachments in current note** twice, and the image keeps the name the first collect gave it. Then run **Show original attachment names** to see the name it arrived with.
+
 ## Safety net for non-standard references
 
 The plugin only sees attachment references that Obsidian indexes - traditional `[[wikilink]]` / `![](markdown)` embeds. If another plugin renders images through its own syntax (a raw `<img src="...">`, a custom code block, an image-slider list, etc.), those references are invisible to collecting, so an attachment used only that way could be moved to an unexpected place and later lost.

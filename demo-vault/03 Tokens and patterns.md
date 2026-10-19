@@ -17,9 +17,11 @@ Example folder pattern:
 - `{{noteFolderName}}` / `{{noteFolderPath}}`
   - the note's folder name / full folder path.
 - `{{originalAttachmentFileName}}`
-  - the pasted/dragged file's original name.
+  - the name the attachment arrived with when it was pasted or dragged in, remembered through every later rename, so a collect never stacks the note name onto it twice.
 - `{{originalAttachmentFileExtension}}`
   - its extension.
+- `{{attachmentFileName}}` / `{{attachmentFileExtension}}`
+  - the attachment's name and extension as they are right now.
 - `{{date:{momentJsFormat:'YYYY-MM-DD'}}}`
   - current date/time in [Moment.js](https://momentjs.com/docs/#/displaying/format/) format.
 - `{{uuid}}` / `{{random:{length:6}}}`

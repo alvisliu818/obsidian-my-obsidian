@@ -44,7 +44,10 @@ export const defaultTranslations = {
     deleteUnusedAttachmentsEntireVault: 'Delete unused attachments in entire vault',
     goToAttachmentFolder: 'Go to attachment folder',
     goToOwningNote: 'Go to owning note',
-    moveAttachmentToProperFolder: 'Move attachment to proper folder'
+    moveAttachmentToProperFolder: 'Move attachment to proper folder',
+    pruneOriginalAttachmentNames: 'Prune original attachment names',
+    rememberCurrentNameAsOriginal: 'Remember current name as original',
+    showOriginalAttachmentNames: 'Show original attachment names'
   },
   coreFilesSettingTab: {
     controlledByPlugin: 'Controlled by {{pluginName}}, so the value stored here is not in effect. To let this setting decide again, turn on Follow Obsidian attachment location in that plugin.',
@@ -88,7 +91,9 @@ export const defaultTranslations = {
     deleteUnusedAttachmentsInFile: 'Delete unused attachments in file',
     deleteUnusedAttachmentsInFiles: 'Delete unused attachments in files',
     goToAttachmentFolder: 'Go to attachment folder',
-    goToOwningNote: 'Go to owning note'
+    goToOwningNote: 'Go to owning note',
+    rememberCurrentNameAsOriginal: 'Remember current name as original',
+    rememberCurrentNamesAsOriginals: 'Remember current names as originals'
   },
   moveAttachmentToProperFolder: {
     progressBar: {
@@ -130,6 +135,48 @@ export const defaultTranslations = {
       part3: 'is empty, which keeps each attachment\'s current name, so there is nothing left for the collect to change.'
     },
     noUnusedAttachments: 'No unused attachments found.'
+  },
+  originalAttachmentNames: {
+    forgotAllNotice: 'Forgot {{count}} original attachment name(s).',
+    prunedNotice: 'Removed {{count}} original attachment name(s) whose file no longer exists.',
+    pruneModal: {
+      forgetAll: 'Forget all',
+      forgetAllConfirm: {
+        part1: 'All {{count}} remembered original attachment name(s) will be forgotten.',
+        part2: 'will then fall back to each attachment\'s current name, with a warning, the next time a template reads it.',
+        title: 'Forget all original attachment names?'
+      },
+      noStale: 'Every remembered name belongs to a file that still exists, so there is nothing to prune.',
+      prune: 'Prune',
+      staleCount: '{{count}} remembered name(s) belong to a path that no longer exists, and will be removed:',
+      title: 'Prune original attachment names'
+    },
+    rememberedNotice: 'Remembered the current name of {{count}} attachment(s) as the original.',
+    showModal: {
+      copiedNotice: 'Copied {{count}} record(s) as CSV.',
+      copyAsCsv: 'Copy as CSV',
+      edit: 'Edit',
+      empty: 'No original attachment names are remembered yet.',
+      filterPlaceholder: 'Filter by path or name',
+      forget: 'Forget',
+      forgetSelected: 'Forget selected',
+      missingBadge: 'missing',
+      missingTooltip: 'No file exists at this path any more.',
+      noMatches: 'No record matches the filter.',
+      save: 'Save',
+      title: 'Original attachment names',
+      totals: '{{count}} record(s), {{missingCount}} of them missing.',
+      useCurrentName: 'Use current name',
+      useCurrentNameForSelected: 'Use current name for selected'
+    },
+    unknownDetails: {
+      explanation: 'These attachments had no remembered original name: they predate the record, were renamed outside Obsidian, or were synced from another device. Their current name was used, and is now remembered as their original. To change one, run Show original attachment names.',
+      title: 'Attachments whose original name is unknown'
+    },
+    unknownNotice: {
+      details: 'Details',
+      message: ': the original name of {{count}} attachment(s) is unknown, so their current name was used.'
+    }
   },
   pluginConflict: {
     consistentAttachmentsAndLinks: {
@@ -599,6 +646,13 @@ export const defaultTranslations = {
     shouldSkipCollectingAttachmentsReferencedByRawPath: {
       description: 'When collecting an attachment, also scan every note\'s raw text for the attachment\'s path or file name. If another note references it in a format Obsidian does not index (e.g. via other plugins\' custom syntaxes or raw HTML), the attachment is treated as still used and is left in place. This prevents losing attachments referenced by non-standard syntaxes, at the cost of a slower collect.',
       name: 'Skip collecting attachments referenced by a raw path'
+    },
+    shouldWarnWhenOriginalAttachmentNameIsUnknown: {
+      description: {
+        part1: 'is the name an attachment arrived with, remembered across every rename this plugin sees. When it is not known — the file predates the record, was renamed outside Obsidian, or was synced from another device — the current name is used instead, and this warns once per operation. A template that wants the current name uses',
+        part2: 'and never warns.'
+      },
+      name: 'Warn when an original attachment name is unknown'
     },
     specialCharacters: {
       description: {

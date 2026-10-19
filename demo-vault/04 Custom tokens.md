@@ -79,8 +79,8 @@ Its full shape is documented in the plugin's [`token-evaluator-context.ts`](http
 ```javascript
 registerCustomToken('imagesOnly', async (ctx) => {
   const imageExtensions = ['avif', 'bmp', 'gif', 'jpeg', 'jpg', 'png', 'svg', 'webp'];
-  if (!imageExtensions.includes(ctx.originalAttachmentFileExtension.toLowerCase())) {
-    return ctx.originalAttachmentFileName;
+  if (!imageExtensions.includes(ctx.attachmentFileExtension.toLowerCase())) {
+    return ctx.attachmentFileName;
   }
 
   return await ctx.fillTemplate('{{noteFileName}}-{{date:YYYYMMDDHHmmssSSS}}');
@@ -117,7 +117,7 @@ await require('/demoSetup.ts').saveSampleAttachment(app, { kind: 'pdf' });
 
 **Remove the example tokens** above puts all three settings back. Manual equivalent: paste the token into **Custom tokens**, do the two steps, then paste an image and drag a PDF into a note.
 
-`ctx.originalAttachmentFileName` is the name **without** its extension, and `ctx.originalAttachmentFileExtension` is the extension without its dot. The plugin adds the extension back itself, so neither branch returns one. Swap the `fillTemplate` pattern for whatever an image should be called, and the list for the extensions that count as images to you; to do the reverse - keep the original names of a few types, say `pdf`, and rename the rest - flip the test to `['pdf'].includes(...)`.
+`ctx.attachmentFileName` is the attachment's name as it is now, **without** its extension, and `ctx.attachmentFileExtension` is its extension without the dot. While a file is being saved that is the incoming file's. `ctx.originalAttachmentFileName` and `ctx.originalAttachmentFileExtension` are the name and extension it arrived with, which differ once the file has been renamed; a token that reads them gets the same fallback, and the same warning, as the built-in token. The plugin adds the extension back itself, so neither branch returns one. Swap the `fillTemplate` pattern for whatever an image should be called, and the list for the extensions that count as images to you; to do the reverse - keep the original names of a few types, say `pdf`, and rename the rest - flip the test to `['pdf'].includes(...)`.
 
 ## Reading the attachment's bytes
 

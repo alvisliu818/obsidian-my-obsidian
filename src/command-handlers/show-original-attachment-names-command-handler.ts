@@ -1,0 +1,43 @@
+import type { App } from 'obsidian';
+
+import { GlobalCommandHandler } from '@mnaoumov/obsidian-lib/command-handlers/global-command-handler';
+import { t } from '@mnaoumov/obsidian-lib/i18n/i18n';
+
+import type { OriginalAttachmentNamesComponent } from '../original-attachment-names-component.ts';
+import type { TokenValidator } from '../token-validator.ts';
+
+import { showOriginalAttachmentNamesModal } from '../modals/original-attachment-names-modal.ts';
+
+interface ShowOriginalAttachmentNamesCommandHandlerConstructorParams {
+  readonly app: App;
+  readonly originalAttachmentNamesComponent: OriginalAttachmentNamesComponent;
+  readonly tokenValidator: TokenValidator;
+}
+
+/**
+ * Lists every remembered original attachment name, where each can be edited, forgotten or reset.
+ */
+export class ShowOriginalAttachmentNamesCommandHandler extends GlobalCommandHandler {
+  private readonly app: App;
+  private readonly originalAttachmentNamesComponent: OriginalAttachmentNamesComponent;
+  private readonly tokenValidator: TokenValidator;
+
+  public constructor(params: ShowOriginalAttachmentNamesCommandHandlerConstructorParams) {
+    super({
+      icon: 'list',
+      id: 'show-original-attachment-names',
+      name: t(($) => $.commands.showOriginalAttachmentNames)
+    });
+    this.app = params.app;
+    this.originalAttachmentNamesComponent = params.originalAttachmentNamesComponent;
+    this.tokenValidator = params.tokenValidator;
+  }
+
+  protected override async execute(): Promise<void> {
+    await showOriginalAttachmentNamesModal({
+      app: this.app,
+      originalAttachmentNamesComponent: this.originalAttachmentNamesComponent,
+      tokenValidator: this.tokenValidator
+    });
+  }
+}

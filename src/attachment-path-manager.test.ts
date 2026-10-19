@@ -45,6 +45,7 @@ import {
 
 import type { HandedOverSettings } from './advanced-rename-and-delete-handler.ts';
 import type { HandedOverSettingsComponent } from './handed-over-settings-component.ts';
+import type { OriginalAttachmentNamesComponent } from './original-attachment-names-component.ts';
 import type { PluginSettingsComponent } from './plugin-settings-component.ts';
 import type { PluginSettings } from './plugin-settings.ts';
 import type { TokenValidator } from './token-validator.ts';
@@ -137,6 +138,7 @@ interface MutableHandedOverSettings {
 interface TestContext {
   create: ReturnType<typeof vi.fn<Vault['create']>>;
   exists: ReturnType<typeof vi.fn<Vault['exists']>>;
+  expectArrival: ReturnType<typeof vi.fn<OriginalAttachmentNamesComponent['expectArrival']>>;
   getAvailablePath: ReturnType<typeof vi.fn<Vault['getAvailablePath']>>;
   getAvailablePathForAttachmentsOriginal: ReturnType<typeof vi.fn<Vault['getAvailablePathForAttachments']>>;
   getConfig: ReturnType<typeof vi.fn<(name: string) => unknown>>;
@@ -144,8 +146,10 @@ interface TestContext {
   isNoteEx: ReturnType<typeof vi.fn<PluginSettingsComponent['isNoteEx']>>;
   isPathIgnored: ReturnType<typeof vi.fn<HandedOverSettingsComponent['isPathIgnored']>>;
   manager: AttachmentPathManager;
+  originalAttachmentNames: Map<string, string>;
   pluginSettingsComponent: PluginSettingsComponent;
   readBinary: ReturnType<typeof vi.fn<Vault['readBinary']>>;
+  reportUnknown: ReturnType<typeof vi.fn<OriginalAttachmentNamesComponent['reportUnknown']>>;
   settings: PluginSettings;
   tokenValidator: TokenValidator;
   validateFileName: ReturnType<typeof vi.fn<TokenValidator['validateFileName']>>;
@@ -213,10 +217,20 @@ function createManager(): TestContext {
     validatePath
   });
 
+  const originalAttachmentNames = new Map<string, string>();
+  const expectArrival = vi.fn<OriginalAttachmentNamesComponent['expectArrival']>();
+  const reportUnknown = vi.fn<OriginalAttachmentNamesComponent['reportUnknown']>();
+  const originalAttachmentNamesComponent = strictProxy<OriginalAttachmentNamesComponent>({
+    expectArrival,
+    get: (path: string) => originalAttachmentNames.get(path),
+    reportUnknown
+  });
+
   const manager = new AttachmentPathManager({
     app,
     getAvailablePathForAttachmentsOriginal,
     handedOverSettingsComponent,
+    originalAttachmentNamesComponent,
     pluginNoticeComponent: new PluginNoticeComponent({ app, pluginName: 'Custom Attachment Location' }),
     pluginSettingsComponent,
     tokenValidator
@@ -225,6 +239,7 @@ function createManager(): TestContext {
   return {
     create,
     exists,
+    expectArrival,
     getAvailablePath,
     getAvailablePathForAttachmentsOriginal,
     getConfig,
@@ -232,8 +247,10 @@ function createManager(): TestContext {
     isNoteEx,
     isPathIgnored,
     manager,
+    originalAttachmentNames,
     pluginSettingsComponent,
     readBinary,
+    reportUnknown,
     settings,
     tokenValidator,
     validateFileName,
@@ -706,6 +723,158 @@ describe('AttachmentPathManager', () => {
     });
   });
 
+  describe('original attachment names', () => {
+    const STACKING_TEMPLATE = '{{noteFileName}}-{{originalAttachmentFileName}}';
+
+    function createAttachmentFile(path: string): TFile {
+      const name = path.split('/').at(-1) ?? path;
+      return createTFile({
+        extension: 'png',
+        name,
+        path,
+        stat: strictProxy<FileStats>({ ctime: 0, mtime: 0, size: 0 })
+      });
+    }
+
+    async function collect(attachmentFile: TFile): Promise<null | string> {
+      return await context.manager.getProperAttachmentPath({
+        actionContext: ActionContext.CollectAttachments,
+        attachmentFile,
+        noteFilePath: 'note.md',
+        reference: castTo<Reference>({ link: 'x', original: 'x' }),
+        sequenceNumber: 0
+      });
+    }
+
+    beforeEach(() => {
+      context.settings.attachmentFolderPath = 'assets';
+      context.settings.shouldRenameCollectedAttachments = true;
+      context.settings.collectedAttachmentFileName = STACKING_TEMPLATE;
+    });
+
+    it('should build a collected name on the recorded original, so a second collect does not stack the note name', async () => {
+      // The first collect moved `img.png` to `assets/note-img.png`, and the record followed it there.
+      context.originalAttachmentNames.set('assets/note-img.png', 'img.png');
+
+      expect(await collect(createAttachmentFile('assets/note-img.png'))).toBeNull();
+      expect(context.reportUnknown).not.toHaveBeenCalled();
+    });
+
+    it('should fall back to the current name and report it when no original is on record', async () => {
+      expect(await collect(createAttachmentFile('old/img.png'))).toBe('assets/note-img.png');
+      expect(context.reportUnknown).toHaveBeenCalledExactlyOnceWith({
+        actionContext: ActionContext.CollectAttachments,
+        currentFileName: 'img.png',
+        path: 'old/img.png'
+      });
+    });
+
+    it('should not report an unknown original when the template never reads it', async () => {
+      context.settings.collectedAttachmentFileName = 'collected';
+
+      expect(await collect(createAttachmentFile('old/img.png'))).toBe('assets/collected.png');
+      expect(context.reportUnknown).not.toHaveBeenCalled();
+    });
+
+    it('should read the current name through {{attachmentFileName}}, whatever the record says', async () => {
+      context.settings.collectedAttachmentFileName = '{{attachmentFileName}}';
+      context.originalAttachmentNames.set('old/img.png', 'arrived.png');
+
+      expect(await collect(createAttachmentFile('old/img.png'))).toBe('assets/img.png');
+    });
+
+    it('should read the recorded original in the folder template too', async () => {
+      context.settings.attachmentFolderPath = 'assets/{{originalAttachmentFileName}}';
+      context.settings.collectedAttachmentFileName = '{{attachmentFileName}}';
+      context.originalAttachmentNames.set('old/img.png', 'arrived.png');
+
+      expect(await collect(createAttachmentFile('old/img.png'))).toBe('assets/arrived/img.png');
+    });
+
+    it('should expect a new attachment to arrive under the name the caller says it arrived with', async () => {
+      const noteFile = createTFile({ path: 'note.md' });
+      mockGetFileOrNull.mockImplementation(({ pathOrFile }) => pathOrFile === 'note.md' ? noteFile : null);
+      context.settings.generatedAttachmentFileName = '{{originalAttachmentFileName}}';
+
+      const result = await context.manager.getAvailablePathForAttachments({
+        attachmentFileBaseName: 'note-Pasted image',
+        attachmentFileExtension: 'png',
+        context: AttachmentPathContext.Unknown,
+        notePathOrFile: 'note.md',
+        oldAttachmentPathOrFile: 'note-Pasted image.png',
+        originalAttachmentFileName: 'Pasted image.png',
+        readAttachmentFileContent: null,
+        shouldSkipGeneratedAttachmentFileName: true,
+        shouldSkipMissingAttachmentFolderCreation: true
+      });
+
+      expect(result).toBe('assets/note-Pasted image.png');
+      expect(context.expectArrival).toHaveBeenCalledExactlyOnceWith('assets/note-Pasted image.png', 'Pasted image.png');
+    });
+
+    it('should expect a new attachment to arrive under the name it is asked about by default', async () => {
+      const noteFile = createTFile({ path: 'note.md' });
+      mockGetFileOrNull.mockImplementation(({ pathOrFile }) => pathOrFile === 'note.md' ? noteFile : null);
+      context.settings.generatedAttachmentFileName = '{{noteFileName}}-{{originalAttachmentFileName}}';
+
+      const result = await context.manager.getAvailablePathForAttachments({
+        attachmentFileBaseName: 'Recording 1',
+        attachmentFileExtension: 'webm',
+        context: AttachmentPathContext.Unknown,
+        notePathOrFile: 'note.md',
+        oldAttachmentPathOrFile: 'Recording 1.webm',
+        readAttachmentFileContent: null,
+        shouldSkipMissingAttachmentFolderCreation: true
+      });
+
+      expect(result).toBe('assets/note-Recording 1.webm');
+      expect(context.expectArrival).toHaveBeenCalledExactlyOnceWith('assets/note-Recording 1.webm', 'Recording 1.webm');
+      expect(context.reportUnknown).not.toHaveBeenCalled();
+    });
+
+    it('should expect a downloaded image to arrive under its downloaded name', async () => {
+      await context.manager.getDownloadedImagePath({
+        actionContext: ActionContext.SaveAttachment,
+        downloadedContent: new ArrayBuffer(4),
+        fileExtension: 'png',
+        fileName: 'my-image',
+        noteFilePath: 'note.md'
+      });
+
+      expect(context.expectArrival).toHaveBeenCalledExactlyOnceWith('assets/generated.png', 'my-image.png');
+    });
+
+    it('should read the recorded original of an existing attachment on a note rename, and expect no arrival', async () => {
+      context.handedOverSettings.shouldRenameAttachmentFiles = true;
+      context.settings.renamedAttachmentFileName = STACKING_TEMPLATE;
+      const noteFile = createTFile({ path: 'new-note.md' });
+      const attachmentFile = createAttachmentFile('assets/note-img.png');
+      context.originalAttachmentNames.set(attachmentFile.path, 'img.png');
+      mockGetFileOrNull.mockImplementation(({ pathOrFile }) => {
+        if (pathOrFile === 'new-note.md') {
+          return noteFile;
+        }
+        return pathOrFile === attachmentFile.path ? attachmentFile : null;
+      });
+
+      const result = await context.manager.getAvailablePathForAttachments({
+        attachmentFileBaseName: 'note-img',
+        attachmentFileExtension: 'png',
+        context: AttachmentPathContext.RenameNote,
+        notePathOrFile: 'new-note.md',
+        oldAttachmentPathOrFile: attachmentFile.path,
+        oldNotePathOrFile: 'note.md',
+        readAttachmentFileContent: null,
+        shouldSkipDuplicateCheck: true,
+        shouldSkipMissingAttachmentFolderCreation: true
+      });
+
+      expect(result).toBe('assets/new-note-img.png');
+      expect(context.expectArrival).not.toHaveBeenCalled();
+      expect(context.reportUnknown).not.toHaveBeenCalled();
+    });
+  });
+
   describe('getProperAttachmentPath, for an attachment parked under a duplicate suffix', () => {
     function createParkedFile(basename: string): TFile {
       return createTFile({
@@ -893,7 +1062,7 @@ describe('AttachmentPathManager', () => {
       context.handedOverSettings.shouldRenameAttachmentFiles = false;
       context.settings.generatedAttachmentFileName = '{{prompt}}';
       const noteFile = createTFile({ path: 'note.md' });
-      mockGetFileOrNull.mockReturnValue(noteFile);
+      mockGetFileOrNull.mockImplementation(({ pathOrFile }) => pathOrFile === 'note.md' ? noteFile : null);
       mockIsNote.mockReturnValue(true);
       const result = await context.manager.getAvailablePathForAttachments({
         attachmentFileBaseName: 'img',
@@ -916,7 +1085,7 @@ describe('AttachmentPathManager', () => {
       context.handedOverSettings.shouldRenameAttachmentFiles = true;
       context.settings.generatedAttachmentFileName = '{{prompt}}';
       const noteFile = createTFile({ path: 'note.md' });
-      mockGetFileOrNull.mockReturnValue(noteFile);
+      mockGetFileOrNull.mockImplementation(({ pathOrFile }) => pathOrFile === 'note.md' ? noteFile : null);
       mockIsNote.mockReturnValue(true);
       const result = await context.manager.getAvailablePathForAttachments({
         attachmentFileBaseName: 'img',

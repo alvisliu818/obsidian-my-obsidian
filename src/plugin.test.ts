@@ -60,6 +60,9 @@ import { DeleteUnusedAttachmentsInFileCommandHandler } from './command-handlers/
 import { GoToAttachmentFolderCommandHandler } from './command-handlers/go-to-attachment-folder-command-handler.ts';
 import { GoToOwningNoteCommandHandler } from './command-handlers/go-to-owning-note-command-handler.ts';
 import { MoveAttachmentToProperFolderCommandHandler } from './command-handlers/move-attachment-to-proper-folder-command-handler.ts';
+import { PruneOriginalAttachmentNamesCommandHandler } from './command-handlers/prune-original-attachment-names-command-handler.ts';
+import { RememberCurrentNameAsOriginalCommandHandler } from './command-handlers/remember-current-name-as-original-command-handler.ts';
+import { ShowOriginalAttachmentNamesCommandHandler } from './command-handlers/show-original-attachment-names-command-handler.ts';
 import { CustomAttachmentLocationComponent } from './custom-attachment-location-component.ts';
 import { HandedOverSettingsComponent } from './handed-over-settings-component.ts';
 import { ImageManager } from './image-manager.ts';
@@ -411,6 +414,9 @@ describe('Plugin', () => {
       expect.any(MoveAttachmentToProperFolderCommandHandler),
       expect.any(GoToAttachmentFolderCommandHandler),
       expect.any(GoToOwningNoteCommandHandler),
+      expect.any(ShowOriginalAttachmentNamesCommandHandler),
+      expect.any(PruneOriginalAttachmentNamesCommandHandler),
+      expect.any(RememberCurrentNameAsOriginalCommandHandler),
       expect.any(OpenDemoVaultCommandHandler)
     ]);
     expect(AppSaveAttachmentPatchComponent).toHaveBeenCalledOnce();

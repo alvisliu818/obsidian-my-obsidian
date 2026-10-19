@@ -50,6 +50,7 @@ interface AttachmentSaverSaveAttachmentCoreParams {
   readonly attachmentFileBaseName: string;
   readonly attachmentFileContent: ArrayBuffer;
   readonly attachmentFileExtension: string;
+  readonly originalAttachmentFileName: string;
   readonly shouldReplaceSpecialCharactersInKeptFileName?: boolean;
 }
 
@@ -87,13 +88,19 @@ export class AttachmentSaver {
     let attachmentFileBaseName = params.attachmentFileBaseName;
     let attachmentFileContent = params.attachmentFileContent;
     let attachmentFileExtension = params.attachmentFileExtension;
+    // Before the JPEG conversion and the rename, both of which change what the file is called.
+    const originalAttachmentFileName = makeFileName({
+      fileBaseName: params.attachmentFileBaseName,
+      fileExtension: params.attachmentFileExtension
+    });
 
     const activeNoteFile = this.app.workspace.getActiveFile();
     if (!activeNoteFile || this.handedOverSettingsComponent.isPathIgnored(activeNoteFile.path)) {
       return await this.saveAttachmentCore({
         attachmentFileBaseName,
         attachmentFileContent,
-        attachmentFileExtension
+        attachmentFileExtension,
+        originalAttachmentFileName
       });
     }
 
@@ -146,12 +153,13 @@ export class AttachmentSaver {
           actionContext: ActionContext.SaveAttachment,
           app: this.app,
           attachmentFileContent,
-          attachmentFileStats: this.arrayBufferMap.getFileStats(attachmentFileContent),
-          noteFilePath: activeNoteFile.path,
-          originalAttachmentFileName: makeFileName({
+          attachmentFileName: makeFileName({
             fileBaseName: attachmentFileBaseName,
             fileExtension: attachmentFileExtension
           }),
+          attachmentFileStats: this.arrayBufferMap.getFileStats(attachmentFileContent),
+          noteFilePath: activeNoteFile.path,
+          originalAttachmentFileName,
           pluginSettingsComponent: this.pluginSettingsComponent,
           tokenValidator: this.tokenValidator
         })
@@ -162,6 +170,7 @@ export class AttachmentSaver {
       attachmentFileBaseName,
       attachmentFileContent,
       attachmentFileExtension,
+      originalAttachmentFileName,
       shouldReplaceSpecialCharactersInKeptFileName: !shouldRename
     });
     if (this.pluginSettingsComponent.settings.markdownUrlFormat) {
@@ -169,14 +178,15 @@ export class AttachmentSaver {
         actionContext: ActionContext.SaveAttachment,
         app: this.app,
         attachmentFileContent,
+        attachmentFileName: makeFileName({
+          fileBaseName: attachmentFileBaseName,
+          fileExtension: attachmentFileExtension
+        }),
         attachmentFileStats: this.arrayBufferMap.getFileStats(attachmentFileContent) ?? undefined,
         generatedAttachmentFileName: attachmentFile.name,
         generatedAttachmentFilePath: attachmentFile.path,
         noteFilePath: activeNoteFile.path,
-        originalAttachmentFileName: makeFileName({
-          fileBaseName: attachmentFileBaseName,
-          fileExtension: attachmentFileExtension
-        }),
+        originalAttachmentFileName,
         pluginSettingsComponent: this.pluginSettingsComponent,
         tokenValidator: this.tokenValidator
       }).fillTemplate(this.pluginSettingsComponent.settings.markdownUrlFormat);
@@ -202,6 +212,7 @@ export class AttachmentSaver {
         fileBaseName: params.attachmentFileBaseName,
         fileExtension: params.attachmentFileExtension
       }),
+      originalAttachmentFileName: params.originalAttachmentFileName,
       readAttachmentFileContent: (): Promise<ArrayBuffer> => Promise.resolve(attachmentFileContent),
       shouldReplaceSpecialCharactersInKeptFileName: params.shouldReplaceSpecialCharactersInKeptFileName ?? false,
       shouldSkipDuplicateCheck: false,

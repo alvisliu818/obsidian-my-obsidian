@@ -39,7 +39,7 @@ Open **Settings -> Community plugins -> `Custom Attachment Location`** to config
 
 - `markdownUrlFormat`
   - a pattern for the link text inserted into the note. Leave blank for the default; setting it forces Markdown links even when Obsidian is configured for wikilinks.
-  - it applies **when the attachment is added, and only then**. A link that is rewritten later, because the note or the attachment was renamed or moved, gets the default format. A rename cannot rebuild the URL: the pattern may use what existed only at insert time (`{{originalAttachmentFileName}}`, the pasted content, a `{{prompt}}` answer), and a link carries no mark saying the pattern produced it, so reapplying it would also rewrite links you wrote by hand.
+  - it applies **when the attachment is added, and only then**. A link that is rewritten later, because the note or the attachment was renamed or moved, gets the default format. A rename cannot rebuild the URL: the pattern may use what existed only at insert time (the pasted content, a `{{prompt}}` answer), and a link carries no mark saying the pattern produced it, so reapplying it would also rewrite links you wrote by hand.
 
 ## Link display text
 
@@ -58,7 +58,9 @@ Open **Settings -> Community plugins -> `Custom Attachment Location`** to config
 - `shouldRenameCollectedAttachments`
   - rename attachments processed by the **Collect attachments** commands.
 - `collectedAttachmentFileName`
-  - the name pattern used for collected attachments.
+  - the name pattern used for collected attachments. `{{originalAttachmentFileName}}` in it is the name the attachment arrived with, so a pattern that prepends the note name does not stack on the next collect; `{{attachmentFileName}}` is the current name. See [05 Collect attachments](<./05 Collect attachments.md#original-attachment-names>).
+- `shouldWarnWhenOriginalAttachmentNameIsUnknown`
+  - **On by default.** When a pattern reads `{{originalAttachmentFileName}}` for an attachment whose arrival name was never recorded - it predates the record, was renamed outside Obsidian, or was synced from another device - its current name is used and remembered from then on. This setting shows one notice per operation saying how many attachments that was, with a **Details** list. Turn it off to keep the fallback and lose the notice. Each fallback is still logged to the debug console.
 - `collectedAttachmentFolderPath`
   - the folder the **Collect attachments** commands put an attachment into (a pattern), when that is not where *new* attachments go. Empty by default, which means collecting uses `attachmentFolderPath` exactly as it always has. Set it to decouple the two destinations - a shared `_Attachments` folder while you are working on a note, and `./{{noteFileName}}.assets` beside the note once you collect it for export. Only the collecting commands read it; **Move attachment to proper folder** keeps using `attachmentFolderPath`, because it answers where an attachment *belongs*, which is the new-attachment location. See [05 Collect attachments](<./05 Collect attachments.md>).
 - `collectAttachmentUsedByMultipleNotesMode`

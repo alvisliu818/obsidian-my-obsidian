@@ -24,6 +24,10 @@ import {
   parseTokenFormat,
   scanTokens
 } from './token-parser.ts';
+import { AttachmentFileCreationDateToken } from './tokens/attachment-file-creation-date-token.ts';
+import { AttachmentFileExtensionToken } from './tokens/attachment-file-extension-token.ts';
+import { AttachmentFileModificationDateToken } from './tokens/attachment-file-modification-date-token.ts';
+import { AttachmentFileNameToken } from './tokens/attachment-file-name-token.ts';
 import { AttachmentFileSizeToken } from './tokens/attachment-file-size-token.ts';
 import { CustomToken } from './tokens/custom-token.ts';
 import { DateToken } from './tokens/date-token.ts';
@@ -46,17 +50,38 @@ import { RandomToken } from './tokens/random-token.ts';
 import { SequenceNumberToken } from './tokens/sequence-number-token.ts';
 import { UuidToken } from './tokens/uuid-token.ts';
 
+/**
+ * What a template reads as an attachment's original name: the name on record, or a report to make when it is not
+ * known and the current name stands in.
+ */
+export type OriginalAttachmentFileNameParams = Pick<SubstitutionsConstructorParams, 'onOriginalAttachmentFileNameUnknown' | 'originalAttachmentFileName'>;
+
 interface SubstitutionsConstructorParams {
   readonly actionContext: ActionContext;
   readonly app: App;
   readonly attachmentFileContent?: ArrayBuffer | undefined;
+
+  /**
+   * The attachment's name as it is right now, extension included. Defaults to {@link originalAttachmentFileName}.
+   */
+  readonly attachmentFileName?: string | undefined;
   readonly attachmentFileStats?: FileStats | undefined;
   readonly cursorLine?: number | undefined;
   readonly generatedAttachmentFileName?: string;
   readonly generatedAttachmentFilePath?: string;
   readonly noteFilePath: string;
   readonly oldNoteFilePath?: string | undefined;
-  readonly originalAttachmentFileName?: string;
+
+  /**
+   * Called the first time a template reads the original name while it is not known, which is when the current
+   * name stands in for it. Leave it out where the current name IS the original, as it is for a file arriving now.
+   */
+  readonly onOriginalAttachmentFileNameUnknown?: (() => void) | undefined;
+
+  /**
+   * The name the attachment arrived with, extension included. Defaults to {@link attachmentFileName}.
+   */
+  readonly originalAttachmentFileName?: string | undefined;
   readonly pluginSettingsComponent: PluginSettingsComponent;
   readonly readAttachmentFileContent?: (() => Promise<ArrayBuffer>) | undefined;
   readonly sequenceNumber?: number | undefined;
@@ -76,6 +101,8 @@ export class Substitutions {
   private readonly app: App;
   private readonly attachmentFileContent: ArrayBuffer | undefined;
   private attachmentFileContentPromise: Promise<ArrayBuffer | undefined> | undefined;
+  private readonly attachmentFileExtension: string;
+  private readonly attachmentFileName: string;
   private readonly attachmentFileStats: FileStats | undefined;
   private readonly cursorLine: null | number;
   private readonly generatedAttachmentFileName: string;
@@ -87,6 +114,7 @@ export class Substitutions {
   private readonly oldNoteFilePath: string;
   private readonly oldNoteFolderName: string;
   private readonly oldNoteFolderPath: string;
+  private onOriginalAttachmentFileNameUnknown: (() => void) | undefined;
   private readonly originalAttachmentFileExtension: string;
   private readonly originalAttachmentFileName: string;
   private readonly pluginSettingsComponent: PluginSettingsComponent;
@@ -109,10 +137,16 @@ export class Substitutions {
     this.oldNoteFolderName = dotToEmpty(basename(dirname(this.oldNoteFilePath)));
     this.oldNoteFolderPath = dotToEmpty(dirname(this.oldNoteFilePath));
 
-    const originalAttachmentFileName = params.originalAttachmentFileName ?? '';
+    const attachmentFileName = params.attachmentFileName ?? params.originalAttachmentFileName ?? '';
+    const attachmentFileExtension = extname(attachmentFileName);
+    this.attachmentFileName = basename(attachmentFileName, attachmentFileExtension);
+    this.attachmentFileExtension = attachmentFileExtension.slice(1);
+
+    const originalAttachmentFileName = params.originalAttachmentFileName ?? attachmentFileName;
     const originalAttachmentFileExtension = extname(originalAttachmentFileName);
     this.originalAttachmentFileName = basename(originalAttachmentFileName, originalAttachmentFileExtension);
     this.originalAttachmentFileExtension = originalAttachmentFileExtension.slice(1);
+    this.onOriginalAttachmentFileNameUnknown = params.originalAttachmentFileName === undefined ? params.onOriginalAttachmentFileNameUnknown : undefined;
 
     this.attachmentFileContent = params.attachmentFileContent;
     this.readAttachmentFileContent = params.readAttachmentFileContent;
@@ -160,6 +194,10 @@ export class Substitutions {
   public static registerCustomTokens(customTokensString: string): void {
     this.registeredCustomTokensString = customTokensString;
     this.registeredTokens.clear();
+    this.registerToken(new AttachmentFileCreationDateToken());
+    this.registerToken(new AttachmentFileExtensionToken());
+    this.registerToken(new AttachmentFileModificationDateToken());
+    this.registerToken(new AttachmentFileNameToken());
     this.registerToken(new AttachmentFileSizeToken());
     this.registerToken(new DateToken());
     this.registerToken(new FrontmatterToken());
@@ -217,6 +255,8 @@ export class Substitutions {
         abortSignal,
         actionContext: this.actionContext,
         app: this.app,
+        attachmentFileExtension: this.attachmentFileExtension,
+        attachmentFileName: this.attachmentFileName,
         attachmentFileStats: this.attachmentFileStats,
         cursorLine: this.cursorLine,
         /*
@@ -250,6 +290,7 @@ export class Substitutions {
         tokenValidator: this.tokenValidator,
         tokenWithFormat: scannedToken.raw
       };
+      this.reportOriginalAttachmentFileNameUnknownOnRead(context);
 
       const evaluated = await token.evaluate(context);
       abortSignal.throwIfAborted();
@@ -269,6 +310,42 @@ export class Substitutions {
       ? this.readAttachmentFileContent?.() ?? Promise.resolve(undefined)
       : Promise.resolve(this.attachmentFileContent);
     return this.attachmentFileContentPromise;
+  }
+
+  private reportOriginalAttachmentFileNameUnknown(): void {
+    const onOriginalAttachmentFileNameUnknown = this.onOriginalAttachmentFileNameUnknown;
+    this.onOriginalAttachmentFileNameUnknown = undefined;
+    onOriginalAttachmentFileNameUnknown?.();
+  }
+
+  /**
+   * Turns the original-name fields into getters, so the fallback is reported only when a template actually reads
+   * the original name. Reporting it for every attachment a collect looks at would warn about templates that never
+   * use the token.
+   *
+   * @param context - The context about to be handed to a token.
+   */
+  private reportOriginalAttachmentFileNameUnknownOnRead(context: TokenEvaluatorContext): void {
+    if (!this.onOriginalAttachmentFileNameUnknown) {
+      return;
+    }
+
+    Object.defineProperties(context, {
+      originalAttachmentFileExtension: {
+        enumerable: true,
+        get: (): string => {
+          this.reportOriginalAttachmentFileNameUnknown();
+          return this.originalAttachmentFileExtension;
+        }
+      },
+      originalAttachmentFileName: {
+        enumerable: true,
+        get: (): string => {
+          this.reportOriginalAttachmentFileNameUnknown();
+          return this.originalAttachmentFileName;
+        }
+      }
+    });
   }
 }
 

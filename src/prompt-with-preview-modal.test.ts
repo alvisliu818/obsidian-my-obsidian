@@ -80,11 +80,11 @@ function createApp(overrides: StrictProxyPartial<App>): App {
 function createContext(overrides: StrictProxyPartial<TokenEvaluatorContext>): TokenEvaluatorContext {
   return strictProxy<TokenEvaluatorContext>({
     app: createApp({}),
+    attachmentFileExtension: 'png',
+    attachmentFileName: 'image',
     fillTemplate: vi.fn((template: string): Promise<string> => Promise.resolve(template)),
     fullTemplate: 'before{{token}}after',
     getAttachmentFileContent: vi.fn((): Promise<ArrayBuffer | undefined> => Promise.resolve(undefined)),
-    originalAttachmentFileExtension: 'png',
-    originalAttachmentFileName: 'image',
     templatePart: TemplatePart.Other,
     tokenEndOffset: 13,
     tokenStartOffset: 6,
