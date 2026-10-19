@@ -19,6 +19,7 @@
  */
 
 import { mountSharedBlockEditor, setupMonaco, getLanguageByFence, colorizeCode } from '../editor/monaco';
+import { getEditorSettings } from '../editor/editorSettings';
 import { monacoLspAttach } from '../lsp/monacoLspBridge';
 import { encodeFileUri } from '../lsp/lspHost';
 import { blockId } from '../types';
@@ -348,8 +349,11 @@ export function mountCodeEditor(
   // 度量对齐阅读态:pre 是 font-size 1em / line-height 1.5 / 内边距 0.4em 0.9em
   // (styles.css 钉死的值)。字号取宿主计算值,行高与上下内边距按同一字号折算,
   // 编辑态打开/提交时文字与盒子都不跳。
+  // 用户编辑器设置哨兵感知(fontSize>0 / lineHeight>=8 / fontFamily 非空 =
+  // 全局统一覆盖,含块内代码块);哨兵(0/''/<8)时保持上面的「跟阅读态」折算。
   const cs = getComputedStyle(body);
-  const fontSize = Math.round((parseFloat(cs.fontSize) || 13) * 10) / 10;
+  const user = getEditorSettings();
+  const fontSize = user.fontSize > 0 ? user.fontSize : Math.round((parseFloat(cs.fontSize) || 13) * 10) / 10;
   const codeLease = mountSharedBlockEditor(body, {
     value: doc,
     language: getLanguageByFence(info.lang),
@@ -357,9 +361,9 @@ export function mountCodeEditor(
     // 身份(如 `笔记-<blockId>.py`),同目录意味着 pyright 解析 import 时与真实
     // 文件一致;名字跟块 id 绑定,反复聚焦同一块能命中同一文档,不重复分析。
     uri: blockDocUri(host, info.lang, block),
-    fontFamily: 'var(--font-monospace)',
+    fontFamily: user.fontFamily || 'var(--font-monospace)',
     fontSize,
-    lineHeight: Math.round(fontSize * 1.5),
+    lineHeight: user.lineHeight >= 8 ? user.lineHeight : Math.round(fontSize * 1.5),
     vPadding: Math.round(fontSize * 0.4),
     onEscape: () => host.commitFocusedText(),
     // 分栏里另一个视图聚焦了别的代码块 → 单例要搬走:先把这一块的编辑

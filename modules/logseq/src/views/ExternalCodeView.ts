@@ -345,7 +345,6 @@ export class ExternalCodeView extends ItemView {
         lang: language,
         value: this.crlf ? content.replace(/\r\n/g, '\n') : content,
         crlf: this.crlf,
-        wordWrap: this.plugin.settings.externalCodeWrap === false ? 'off' : 'on',
         onSave: () => void this.flush(true),
         onChange: () => this.scheduleSave(),
       });
@@ -356,7 +355,6 @@ export class ExternalCodeView extends ItemView {
       this.editor = createEditor(host, {
         value: content,
         language,
-        wordWrap: this.plugin.settings.externalCodeWrap === false ? 'off' : 'on',
         lineNumbers: true,
         onSave: () => void this.flush(true),
         onChange: () => this.scheduleSave(),

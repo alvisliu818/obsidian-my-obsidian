@@ -12,6 +12,7 @@ import { OpenWithEditModal } from '../features/openWithUi';
 import { mountDisplayName, type LspServerSpec, type PagePropsEditor, type ScopeMode, type ShortcutOverrides } from '../types';
 import { effectiveLspServers } from '../lsp/serverSpecs';
 import { LspServerEditModal } from './lspServerModal';
+import { renderEditorSettingsRows } from './editorSettingsUI';
 import { SHORTCUT_GROUP_LABELS } from '../types';
 
 export class LogseqEditorSettingTab extends PluginSettingTab {
@@ -37,7 +38,34 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+    // Obsidian 原生平铺布局:各分节拆成独立方法(按早期 h3 小节边界),这里
+    // 顺序铺 h3 标题 + 调 builder。设置项多的插件同款做法。
+    this.renderBlocksSection(containerEl);
+    containerEl.createEl('h3', { text: '扩展市场' });
+    this.renderMarketSection(containerEl);
+    containerEl.createEl('h3', { text: 'LSP 语言服务器' });
+    this.renderLspSection(containerEl);
+    containerEl.createEl('h3', { text: '快捷键' });
+    this.renderHotkeysSection(containerEl);
+    containerEl.createEl('h3', { text: '安全（备份与日志）' });
+    this.renderSafetySection(containerEl);
+    containerEl.createEl('h3', { text: '日记（每日笔记）' });
+    this.renderJournalSection(containerEl);
+    containerEl.createEl('h3', { text: '外部挂载' });
+    this.renderMountsSection(containerEl);
+    containerEl.createEl('h3', { text: '查看器与搜索' });
+    this.renderViewersSection(containerEl);
+    containerEl.createEl('h3', { text: '模板' });
+    this.renderTemplatesSection(containerEl);
+    containerEl.createEl('h3', { text: 'SQLite 二级索引' });
+    this.renderSqliteSection(containerEl);
+    containerEl.createEl('h3', { text: '代码运行' });
+    this.renderCodeRunSection(containerEl);
+    containerEl.createEl('h3', { text: '代码编辑器' });
+    this.renderEditorSettingsSection(containerEl);
+  }
 
+  private renderBlocksSection(containerEl: HTMLElement): void {
     new Setting(containerEl)
       .setName('接管 Markdown 文件')
       .setDesc('默认用 Logseq 式块编辑器打开所有 .md 文件。单个文件随时可以切回原生编辑器。')
@@ -115,8 +143,9 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
           }),
       );
 
-    // ---------- Extensions ----------
-    containerEl.createEl('h3', { text: '扩展市场' });
+  }
+
+  private renderMarketSection(containerEl: HTMLElement): void {
 
     new Setting(containerEl)
       .setName('扩展市场')
@@ -160,9 +189,9 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         });
       });
 
-    // ---------- Shortcuts ----------
-    // ---------- LSP ----------
-    containerEl.createEl('h3', { text: 'LSP 语言服务器' });
+  }
+
+  private renderLspSection(containerEl: HTMLElement): void {
 
     new Setting(containerEl)
       .setName('LSP（补全/悬停/诊断）')
@@ -244,7 +273,9 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         }),
     );
 
-    containerEl.createEl('h3', { text: '快捷键' });
+  }
+
+  private renderHotkeysSection(containerEl: HTMLElement): void {
 
     new Setting(containerEl)
       .setName('Logseq 快捷键')
@@ -382,8 +413,9 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
           }),
       );
 
-    // ---------- Safety: backups & operation log ----------
-    containerEl.createEl('h3', { text: '安全（备份与日志）' });
+  }
+
+  private renderSafetySection(containerEl: HTMLElement): void {
 
     new Setting(containerEl)
       .setName('自动备份')
@@ -405,8 +437,9 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         }),
       );
 
-    // ---------- Journal (daily notes) ----------
-    containerEl.createEl('h3', { text: '日记（每日笔记）' });
+  }
+
+  private renderJournalSection(containerEl: HTMLElement): void {
 
     new Setting(containerEl)
       .setName('日记文件夹')
@@ -446,8 +479,9 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         t.inputEl.cols = 40;
       });
 
-    // ---------- External mounts ----------
-    containerEl.createEl('h3', { text: '外部挂载' });
+  }
+
+  private renderMountsSection(containerEl: HTMLElement): void {
     containerEl.createEl('p', {
       cls: 'setting-item-description',
       text:
@@ -544,20 +578,6 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
     mountActions.addButton((b) => b.setButtonText('重新扫描').onClick(() => this.plugin.refreshMounts()));
 
     new Setting(containerEl)
-      .setName('代码编辑器自动换行')
-      .setDesc(
-        '默认开启：长行自动折行，宽度始终适应窗口。关闭后改为横向滚动而不折行，' +
-          '深层缩进的代码更易读。',
-      )
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.externalCodeWrap !== false).onChange(async (v) => {
-          this.plugin.settings.externalCodeWrap = v;
-          await this.plugin.saveSettings();
-          this.plugin.rerenderExternalViews();
-        }),
-      );
-
-    new Setting(containerEl)
       .setName('启动时预建代码块编辑器')
       .setDesc(
         '文档里的代码块共用一个 Monaco 编辑器实例（聚焦时搬进来、提交后搬回池里，' +
@@ -618,8 +638,9 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         }),
       );
 
-    // ---------- Viewers & content search ----------
-    containerEl.createEl('h3', { text: '查看器与搜索' });
+  }
+
+  private renderViewersSection(containerEl: HTMLElement): void {
 
     new Setting(containerEl)
       .setName('接管 Office 文件')
@@ -753,8 +774,9 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       }),
     );
 
-    // ---------- Templates ----------
-    containerEl.createEl('h3', { text: '模板' });
+  }
+
+  private renderTemplatesSection(containerEl: HTMLElement): void {
 
     new Setting(containerEl)
       .setName('自定义模板变量')
@@ -768,8 +790,9 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         t.inputEl.cols = 40;
       });
 
-    // ---------- SQLite secondary index ----------
-    containerEl.createEl('h3', { text: 'SQLite 二级索引' });
+  }
+
+  private renderSqliteSection(containerEl: HTMLElement): void {
     containerEl.createEl('p', {
       cls: 'setting-item-description',
       text:
@@ -851,8 +874,9 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
     }
 
-    // ------------------------------------------------------------------
-    containerEl.createEl('h3', { text: '代码运行' });
+  }
+
+  private renderCodeRunSection(containerEl: HTMLElement): void {
     containerEl.createEl('p', {
       text: '代码块与代码文件的 ▶ 运行使用这里选中的 Python 环境（conda / venv / 系统）。切换后对下一次运行生效。',
       cls: 'setting-item-description',
@@ -899,6 +923,12 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
             this.plugin.applyPythonEnv();
           }),
       );
+
+  }
+
+  private renderEditorSettingsSection(containerEl: HTMLElement): void {
+    // 编辑器设置(25 行 + settings.json 操作行),平铺 Setting 行,Obsidian 原生观感
+    renderEditorSettingsRows(containerEl, this.plugin);
   }
 }
 

@@ -231,7 +231,6 @@ export class CodeDocView extends ItemView {
       autoHeight: false,
       // 动态行号:区行数漂移(注释区增删行、代码增删行)后仍与保存后的文件一致
       lineNumbersFn: (n: number) => String(this.fileLineOf(n)),
-      minimap: false,
       folding: true,
       onSave: () => void this.flushSave(),
       onChange: (_value, changes) => this.onCodeChanged(changes),

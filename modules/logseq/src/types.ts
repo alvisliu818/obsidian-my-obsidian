@@ -265,6 +265,10 @@ export interface BlockEditorSettings {
    * earlier version named it `externalCodeWrap: true` but did NOT add
    * lineWrapping, so the switch read backwards and the label had to be
    * re-explained in the description.
+   *
+   * @deprecated 2026-10:唯一入口已迁到编辑器设置(settings.json 的 wordWrap 键,
+   * 设置页「代码编辑器 → 自动换行」)。本字段只在启动时读一次做迁移播种
+   * (false → wordWrap:'off'),此后不再有运行时读者。
    */
   externalCodeWrap: boolean;
   /**

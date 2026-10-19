@@ -69,7 +69,6 @@ export interface HybridMountOpts {
   value: string;
   /** 原文件是否 CRLF(落盘时还原) */
   crlf: boolean;
-  wordWrap?: 'on' | 'off';
   onSave?: () => void;
   /** 代码或注释任一处发生变化(调用方据此标脏并排自动保存) */
   onChange?: () => void;
@@ -170,9 +169,7 @@ export class HybridCodeEditor extends Component {
       language: lang,
       autoHeight: false,
       lineNumbersFn: (n: number) => String(this.fileLineOf(n)),
-      minimap: false,
       folding: true,
-      wordWrap: opts.wordWrap ?? 'on',
       onSave: () => {
         // Ctrl+S 保存前同样做一次重切分检查(用户可能没失焦直接保存)。
         this.scheduleResplit();
@@ -480,8 +477,6 @@ export class HybridCodeEditor extends Component {
         // 注释行号 = 文件真实行号(区起始行 + 区前漂移 + 区内偏移,每次现算,
         // 不闭包 —— 上方区域增删行后漂移会平移)。
         lineNumbersFn: (n: number) => String(this.noteFileLine(regionIdx, n)),
-        minimap: false,
-        wordWrap: this.opts?.wordWrap ?? 'on',
         onSave: () => this.opts?.onSave?.(),
         onChange: (v) => {
           this.refreshTextCountAndGutter(regionIdx, v.split('\n'));

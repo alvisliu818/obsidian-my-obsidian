@@ -26,6 +26,7 @@ import { mountDisplayName } from './types';
 import { isMarkdownFile } from './features/codeFileKind';
 import { isTextFileName, extOfName } from './features/mountFilter';
 import { LogseqEditorSettingTab } from './settings/tab';
+import { initEditorSettingsStore, loadEditorSettings, saveEditorSettings } from './settings/editorSettingsStore';
 import { BlockIndex } from './index/blockIndex';
 import {
   SqliteIndex,
@@ -998,6 +999,15 @@ export default class LogseqEditorPlugin extends Plugin {
       (this.settings as { mountTreeOrder?: unknown }).mountTreeOrder,
     );
     this.settings.externalCodeWrap = this.settings.externalCodeWrap !== false;
+    // 编辑器设置:settings.json 是唯一存储(<configDir>/plugins/<dir>/settings.json),
+    // 缺失即按默认创建。旧「代码编辑器自动换行」开关迁移:首次创建 settings.json
+    // 时,若 data.json 里用户明确关过换行(externalCodeWrap === false),把
+    // wordWrap:'off' 播种进去 —— 此后 data.json 里的 externalCodeWrap 不再被读取。
+    initEditorSettingsStore(this);
+    const editorSettings = loadEditorSettings(this);
+    if (editorSettings.created && this.settings.externalCodeWrap === false) {
+      saveEditorSettings({ ...editorSettings.settings, wordWrap: 'off' });
+    }
     this.settings.lspEnabled = this.settings.lspEnabled !== false;
     if (!Array.isArray(this.settings.lspServers)) this.settings.lspServers = [];
     this.settings.externalBanner = this.settings.externalBanner !== false;

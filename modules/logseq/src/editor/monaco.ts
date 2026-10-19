@@ -14,6 +14,14 @@ import * as monaco from 'monaco-editor';
 import { normalizePath, type App } from 'obsidian';
 import { registerTmGrammarForMonaco } from '../extensions/monacoGrammarBridge';
 import { applyThemeByPreference, getActiveThemeName } from '../extensions/themeLoader';
+import {
+  buildEditorOptionOverrides,
+  buildModelOverrides,
+  effectiveFontSize,
+  getEditorSettings,
+  suggestLineHeightFor,
+  type EditorScope,
+} from './editorSettings';
 
 let initialized = false;
 let getResourcePath: ((rel: string) => string) | null = null;
@@ -397,7 +405,7 @@ export function colorizeCode(text: string, languageId: string): Promise<string> 
  * (.lgp-code-block 段的 bracket-highlighting)。
  */
 export function disableBlockBracketColorization(
-  editor: monaco.editor.IStandaloneCodeEditor,
+  editor: monaco.editor.ICodeEditor,
 ): void {
   try {
     editor.getModel()?.updateOptions({
@@ -421,6 +429,9 @@ export function applyCodeThemePreference(pref: string): boolean {
   return false;
 }
 
+/** 活跃编辑器 → 作用域(file/block):applyEditorSettings 按作用域重放覆盖表。 */
+const editorScopes = new WeakMap<monaco.editor.ICodeEditor, EditorScope>();
+
 export interface CreateEditorOptions {
   value: string;
   language: string;
@@ -431,10 +442,8 @@ export interface CreateEditorOptions {
   lineHeight?: number;
   /** 覆盖默认的上下内边距(px);不传 8 / autoHeight?8:24 */
   vPadding?: number;
-  wordWrap?: 'on' | 'off';
   /** 行号:代码文件开,块内代码块关(与块宽对齐) */
   lineNumbers?: boolean;
-  minimap?: boolean;
   /** 高度:块内自适应内容(滚动关),文件视图撑满容器 */
   autoHeight?: boolean;
   /** 行号起点(1 基):混合视图的代码段显示真实文件行号 */
@@ -460,16 +469,19 @@ export function createEditor(
   // 代码整体往右推一格——阅读态没有这条槽,这就是「编辑态比阅读态多一层缩进」
   // 的来源。块内把槽清零,折叠也一并关掉(阅读态同样没有折叠箭头)。
   const blockMode = opts.lineNumbers === false;
+  const scope: EditorScope = blockMode ? 'block' : 'file';
   const padTop = opts.vPadding ?? 8;
   const padBottom = opts.vPadding ?? (opts.autoHeight ? 8 : 24);
-  const editor = monaco.editor.create(container, {
+  const options: monaco.editor.IStandaloneEditorConstructionOptions = {
     value: opts.value,
     language: opts.language,
     theme: currentMonacoTheme(),
     fontSize: opts.fontSize ?? 13,
     fontFamily: opts.fontFamily,
     lineHeight: opts.lineHeight,
-    wordWrap: opts.wordWrap ?? 'off',
+    // 换行/缩略地图的调用方默认(关);用户设置(settings.json,换行默认开)在
+    // 覆盖层统一接管,file 作用域必定覆盖这两个键。
+    wordWrap: 'off',
     lineNumbers:
       opts.lineNumbers === false
         ? 'off'
@@ -487,7 +499,7 @@ export function createEditor(
     // 的是创建后对 model updateOptions(见下)。
     bracketPairColorization: { enabled: !blockMode },
     folding: opts.folding ?? !blockMode,
-    minimap: { enabled: opts.minimap === true },
+    minimap: { enabled: false },
     // 浮层(fixedOverflowWidgets)按视口坐标 fixed 定位,contentWidgets.js 只在
     // _fixedOverflowWidgets && allowEditorOverflow 时才用 fixed + 视口坐标;
     // 不开就按编辑器相对坐标 + absolute 定位,会被外层 overflow 裁剪。
@@ -496,7 +508,7 @@ export function createEditor(
     fixedOverflowWidgets: true,
     // 补全面板行高:0 会跟编辑器行高走(块内 1.5×字号,行太挤),钉一个
     // 稍宽松的值(28px 起,字号大时随字号放大),列表更透气。
-    suggestLineHeight: Math.max(28, Math.round((opts.fontSize ?? 13) * 1.8)),
+    suggestLineHeight: suggestLineHeightFor(opts.fontSize ?? 13),
     // ---- 补全程显式配置 ----
     // 尤其是 acceptSuggestionOnEnter:'off':Monaco 默认 'on'/smart 会在补全
     // 弹开时抢走 Enter(那是"插入选中项"的语义),而块编辑器的 Enter 是**新建/
@@ -517,7 +529,19 @@ export function createEditor(
     cursorBlinking: 'smooth',
     renderWhitespace: 'selection',
     padding: { top: padTop, bottom: padBottom },
-  });
+  };
+  // ---- 用户编辑器设置覆盖层(settings.json) ----
+  // 结构锁死 > 用户设置 > 调用方默认:上面的字面量是"调用方默认",这里整体
+  // 覆盖;块内锁死键不在覆盖表里(见 editorSettings.buildEditorOptionOverrides)。
+  Object.assign(options, buildEditorOptionOverrides(scope, getEditorSettings()));
+  // autoHeight 是结构意图(容器贴内容,滚动无意义),复位掉覆盖层可能给的 true。
+  if (opts.autoHeight) options.scrollBeyondLastLine = false;
+  const editor = monaco.editor.create(container, options);
+  editorScopes.set(editor, scope);
+  // model 级选项(缩进/括号着色)编辑器级到不了,创建后立即套用。
+  const modelOverrides = buildModelOverrides(scope, getEditorSettings());
+  const model = editor.getModel();
+  if (model && Object.keys(modelOverrides).length) model.updateOptions(modelOverrides as never);
   // 块内模式在 MODEL 级关掉括号配对着色(编辑器级选项无效,见上)。
   // 颜色回落到主题规则的 delimiter → --code-punctuation,与阅读态一致。
   // 注意 updateOptions 的入参键名是 bracketColorizationOptions(历史拼写),
@@ -707,7 +731,7 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
   getSharedPool().appendChild(root);
   const esc: { onEscape?: () => void } = {};
   const pad = { top: 8, bottom: 8 };
-  const editor = monaco.editor.create(root, {
+  const options: monaco.editor.IStandaloneEditorConstructionOptions = {
     value: '',
     language: 'plaintext',
     theme: currentMonacoTheme(),
@@ -721,14 +745,19 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
     bracketPairColorization: { enabled: false },
     // 不传 overflowWidgetsDomNode(浮层留编辑器内,见文件顶部注释)
     fixedOverflowWidgets: true,
-    suggestLineHeight: 28,
+    suggestLineHeight: suggestLineHeightFor(13),
     automaticLayout: true,
     scrollBeyondLastLine: false,
     smoothScrolling: true,
     cursorBlinking: 'smooth',
     renderWhitespace: 'selection',
     padding: { top: pad.top, bottom: pad.bottom },
-  });
+  };
+  // 用户设置覆盖层:block 作用域只含字体/光标/渲染/补全键,上面的锁死键
+  // (行号/折叠/minimap/换行/括号色)不在覆盖表里,不会被穿透。
+  Object.assign(options, buildEditorOptionOverrides('block', getEditorSettings()));
+  const editor = monaco.editor.create(root, options);
+  editorScopes.set(editor, 'block');
   disableBlockBracketColorization(editor);
   editor.addCommand(monaco.KeyCode.Escape, () => esc.onEscape?.());
   // 高度自适应容器(块内永远 autoHeight):root 就是被搬来搬去的那个节点,
@@ -864,8 +893,8 @@ export function mountSharedBlockEditor(
     fontSize: opts.fontSize ?? 13,
     ...(opts.fontFamily ? { fontFamily: opts.fontFamily } : {}),
     ...(opts.lineHeight ? { lineHeight: opts.lineHeight } : {}),
-    // 补全面板行高跟字号走(与 createEditor 同公式)
-    suggestLineHeight: Math.max(28, Math.round((opts.fontSize ?? 13) * 1.8)),
+    // 补全面板行高跟字号走(与 createEditor 同一出处,见 suggestLineHeightFor)
+    suggestLineHeight: suggestLineHeightFor(opts.fontSize ?? 13),
     padding: { top: s.pad.top, bottom: s.pad.bottom },
   });
   s.applyDoc(opts.value, opts.language, opts.uri);
@@ -934,14 +963,37 @@ export function disposeMonaco(): void {
   sharedPool = null;
 }
 
-// 把 minimap 开关即时应用到所有已打开的编辑器(设置保存后调用)
-export function applyMinimapSetting(enabled: boolean): void {
-  try {
-    monaco.editor.getEditors().forEach(ed => {
-      ed.updateOptions({ minimap: { enabled } });
+/**
+ * 用户编辑器设置(settings.json)变化后即时生效:对所有活着的编辑器实例
+ * 按作用域重放覆盖表(取代旧的一次性 applyMinimapSetting —— 它全仓零调用,
+ * 且只会一个键;这里一条管道覆盖全部用户键)。
+ *
+ * - 字号哨兵(0)时覆盖表不出 fontSize,各编辑器保持自己的现值 —— 与
+ *   createEditor 的「调用方默认」路径完全一致,重开文件/重载后外观不变;
+ * - block 作用域:覆盖表只含字体/光标/渲染/补全键,锁死键(行号/折叠/minimap/
+ *   换行)不在表里,updateOptions 是部分更新,碰不到它们。
+ */
+export function applyEditorSettings(): void {
+  const s = getEditorSettings();
+  for (const ed of monaco.editor.getEditors()) {
+    const scope = editorScopes.get(ed) ?? 'file';
+    ed.updateOptions(buildEditorOptionOverrides(scope, s) as unknown as monaco.editor.IEditorOptions);
+    // 补全面板行高跟字号联动:在 updateOptions **之后**读字号,用户改了字号
+    // 这里拿到的就是新值;哨兵时以编辑器当前字号为基准。
+    ed.updateOptions({
+      suggestLineHeight: suggestLineHeightFor(
+        effectiveFontSize(ed.getOption(monaco.editor.EditorOption.fontSize)),
+      ),
     });
-  } catch (e) {
-    console.warn('[obsidian-logseq] 应用 minimap 设置失败:', e);
+    if (scope === 'block') {
+      // 块内当前 model 若是挂载时新建的(uri 虚拟文档),model 级的括号配对
+      // 默认跟全局 config(开),这里再按一次关 —— 幂等,与创建路径一致。
+      disableBlockBracketColorization(ed);
+    }
+    // model 级选项(缩进/括号着色)编辑器级到不了,单独重放;block 作用域
+    // 的 buildModelOverrides 返回空表,块内 model 不动。
+    const mo = buildModelOverrides(scope, s);
+    if (Object.keys(mo).length) ed.getModel()?.updateOptions(mo as never);
   }
 }
 

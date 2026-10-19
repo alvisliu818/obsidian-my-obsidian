@@ -10404,3 +10404,13 @@ button.aar-silent-channel-convert:not(.clickable-icon):focus-visible {
 .media-journal-resizable:hover .media-journal-resize-handle {
 	opacity: 1;
 }
+
+
+
+/* ===== 代码编辑器设置(设置页「代码编辑器」节) =====
+   Obsidian 原生平铺 Setting 行;仅约束本节文本/数字输入框宽度。 */
+.lgp-editor-settings-rows .setting-item-control input[type='text'],
+.lgp-editor-settings-rows .setting-item-control input[type='number'],
+.lgp-editor-settings-rows .setting-item-control select {
+  width: 180px;
+}
