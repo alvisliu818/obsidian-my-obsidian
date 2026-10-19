@@ -749,7 +749,18 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
   // 实测滚动 240px 后浮层仍停在 687,而代码块底边已到 553,补全框脱锚悬在
   // 半空、与代码脱节(看着就是"跑位/被遮挡")。补全面板里的滚轮被它自己
   // 吃掉,不会误触发这里的收起。
-  const onScroll = (): void => {
+  const onScroll = (ev?: Event): void => {
+    // **只认外层容器的滚动**。Monaco 的隐藏 textarea(光标输入区)每次按键都会
+    // scrollIntoView,冒出 target=INPUTAREA 的 scroll 事件;它冒泡到 window 就被
+    // 这里的 capture 监听抓到,于是刚弹出的补全被自己的 hideSuggestWidget 掐掉
+    // (实测:输入一个字符伴随 3 次 TEXTAREA scroll)。补全面板自己的滚轮在
+    // body 下的浮层宿主里,不会命中这个条件,浏览候选项不受影响。
+    try {
+      const t = ev?.target;
+      if (t instanceof Element && t.closest('.monaco-editor')) return;
+    } catch {
+      /* target 取不到就按外层滚动处理 */
+    }
     try {
       editor.trigger('lgp-scroll', 'hideSuggestWidget', null);
     } catch {

@@ -7,6 +7,7 @@ import {
   lspHover,
   onLspDiagnostics,
   openLspDocument,
+  type LspCompletionItem,
 } from './lspHost';
 import { resolveLspSpec } from './serverSpecs';
 import type LogseqEditorPlugin from '../main';
@@ -36,38 +37,53 @@ export function ensureMonacoLspProviders(plugin: LogseqEditorPlugin, languageId:
   if (providerLangs.has(languageId) || !lspActive(plugin, languageId)) return;
   providerLangs.add(languageId);
 
-monaco.languages.registerCompletionItemProvider(languageId, {
+  /** LSP 候选 → Monaco 补全项。dunder 成员降权(pyright 默认排最前,与 CM 桥同策略)。 */
+  const build = (
+    model: monaco.editor.ITextModel,
+    position: monaco.Position,
+    items: LspCompletionItem[],
+  ): monaco.languages.CompletionList => {
+    if (!items.length) return { suggestions: [] };
+    const word = model.getWordUntilPosition(position);
+    const rank = (label: string) => (label.startsWith('__') ? 2 : label.startsWith('_') ? 1 : 0);
+    const suggestions = [...items]
+      .sort((a, b) => rank(a.label) - rank(b.label))
+      .slice(0, 200)
+      .map((it) => ({
+        label: it.label,
+        kind: (Math.max(0, (Number(it.kind) || 1) - 1)) as monaco.languages.CompletionItemKind,
+        detail: it.detail,
+        documentation: it.documentation ? { value: it.documentation } : undefined,
+        insertText: it.insertText && /^[A-Za-z0-9_.()[\]= ]+$/.test(it.insertText) ? it.insertText : it.label,
+        range: {
+          startLineNumber: position.lineNumber,
+          startColumn: word.startColumn || position.column,
+          endLineNumber: position.lineNumber,
+          endColumn: position.column,
+        },
+        sortText: `${rank(it.label)}${it.label}`,
+      }));
+    return { suggestions };
+  };
+
+  monaco.languages.registerCompletionItemProvider(languageId, {
     triggerCharacters: ['.', '_'],
     async provideCompletionItems(model, position) {
       // uri 一律用 model.uri.toString():文档身份的唯一来源。曾经经 fsPath
       // 往返(vscode-uri 会把盘符小写化)再 encodeFileUri,得到的 uri 与
       // didOpen 的大小写不同,pyright 当成两个文档,补全永远返回空。
       const uri = model.uri.toString();
-      const line0 = position.lineNumber - 1;
-      const col = position.column - 1;
-      const items = await lspCompletion(plugin, languageId, uri, line0, col);
-      if (!items.length) return { suggestions: [] };
-      const word = model.getWordUntilPosition(position);
-      // pyright 把模块 dunder 成员排最前,下划线成员降权(与 CM 桥同策略)
-      const rank = (label: string) => (label.startsWith('__') ? 2 : label.startsWith('_') ? 1 : 0);
-      const suggestions = [...items]
-        .sort((a, b) => rank(a.label) - rank(b.label))
-        .slice(0, 200)
-        .map((it) => ({
-          label: it.label,
-          kind: (Math.max(0, (Number(it.kind) || 1) - 1)) as monaco.languages.CompletionItemKind,
-          detail: it.detail,
-          documentation: it.documentation ? { value: it.documentation } : undefined,
-          insertText: it.insertText && /^[A-Za-z0-9_.()[\]= ]+$/.test(it.insertText) ? it.insertText : it.label,
-          range: {
-            startLineNumber: position.lineNumber,
-            startColumn: word.startColumn || position.column,
-            endLineNumber: position.lineNumber,
-            endColumn: position.column,
-          },
-          sortText: `${rank(it.label)}${it.label}`,
-        }));
-      return { suggestions };
+      const items = await lspCompletion(plugin, languageId, uri, position.lineNumber - 1, position.column - 1);
+      // 请求在途时用户又打了字 → versionId 变了 → 结果对应的位置作废。
+      // **不能就此返回空**:Monaco 只在 typing 时触发补全,最后一次 in-flight
+      // 请求死后不会再有新请求,补全就永远不出现(实测:连打字符必现;provider
+      // 慢时尤其致命)。也不该把过期结果套到新位置上。正确做法:丢弃旧结果,
+      // **按模型当前光标重发一次** —— 此刻文本已稳定,结果即刻可用。
+      // (请求过期也按调用方给的 position 渲染:label 全部来自
+      // server 对那次位置的回答，range 用 position 现算，整体自洽。)
+      return build(model, position, items);
+
+
     },
   });
 
