@@ -1014,6 +1014,8 @@ export default class LogseqEditorPlugin extends Plugin {
     this.settings.externalBanner = this.settings.externalBanner !== false;
     // Absent in every pre-toggle config → the affordance stays visible.
     this.settings.addBlockAffordance = this.settings.addBlockAffordance !== false;
+    // Same deal: absent → the hover decorations (line + plus) keep floating in.
+    this.settings.addBlockMarks = this.settings.addBlockMarks !== false;
 
     // "Open with": a config that never had the key gets the presets, so a fresh
     // install has something in the menu; once the key exists (even as []) the
@@ -1682,6 +1684,12 @@ export default class LogseqEditorPlugin extends Plugin {
       const view = leaf.view as ExternalCodeView | null;
       if (!view?.abs) continue;
       view.remount();
+    }
+    // 外部块编辑器壳视图:设置里的显示类开关(文末添加块/装饰)切换后要立即
+    // 作用于已打开的外部文件,一并重渲染。
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_EXTERNAL_BLOCK)) {
+      const view = leaf.view as ExternalBlockView | null;
+      if (typeof view?.rerender === 'function') view.rerender();
     }
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_BLOCK_EDITOR)) {
       const view = leaf.view as BlockEditorView | null;

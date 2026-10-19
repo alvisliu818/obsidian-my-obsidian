@@ -361,8 +361,34 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
             this.plugin.settings.addBlockAffordance = v;
             await this.plugin.saveSettings();
             this.plugin.refreshAllViews();
+            // 外部视图(壳/code/外部段)不归 refreshAllViews 管——一并重渲染,
+            // 让开关立即作用于已打开的外部文件。
+            this.plugin.rerenderExternalViews();
+            // 下一项（装饰开关）只在总开关开启时渲染——切换后重建设置页，
+            // 让它跟着出现/消失（同「接管 Markdown」的做法）。
+            this.display();
           }),
       );
+
+    if (this.plugin.settings.addBlockAffordance !== false) {
+      new Setting(containerEl)
+        .setName('文末加号与横线')
+        .setDesc(
+          '上面那条文末空白行里的提示装饰——鼠标移过去浮现的一条横线和一个加号。' +
+            '关掉后空白行保留，仍可点击在文末追加新块并聚焦，只是不再显示装饰。',
+        )
+        .addToggle((t) =>
+          t
+            .setValue(this.plugin.settings.addBlockMarks !== false)
+            .onChange(async (v) => {
+              this.plugin.settings.addBlockMarks = v;
+              await this.plugin.saveSettings();
+              this.plugin.refreshAllViews();
+              // 同总开关:外部视图立即生效
+              this.plugin.rerenderExternalViews();
+            }),
+        );
+    }
 
     new Setting(containerEl)
       .setName('隐藏的块属性')

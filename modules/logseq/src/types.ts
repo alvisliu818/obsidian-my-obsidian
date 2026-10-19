@@ -202,6 +202,12 @@ export interface BlockEditorSettings {
    */
   addBlockAffordance: boolean;
   /**
+   * 文末添加块行上的装饰——鼠标悬停时浮现的那条横线和一个加号。默认开启；
+   * 关掉后行本身保留（仍可点击在文末追加新块），只是不再画横线和加号，
+   * 底部回到一条安静的空白行。仅在 addBlockAffordance 开启时有意义。
+   */
+  addBlockMarks: boolean;
+  /**
    * Block properties that stay in the markdown but are NOT drawn as a
    * `key:: value` row. Hiding is view-only: the property is still written,
    * still parsed back, still queryable, and still editable from the block
@@ -599,6 +605,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   sqliteAutoSync: true,
   foldEnabled: true,
   addBlockAffordance: true,
+  addBlockMarks: true,
   hiddenProps: 'collapsed',
   mountFilterEnabled: false,
   mountLinkEnabled: true,
