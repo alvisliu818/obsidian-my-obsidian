@@ -146,9 +146,21 @@ export class MountPanelView extends ItemView {
     return null;
   }
 
-  /** Forget every cached scan, so the next paint re-reads from disk. */
+  /**
+   * Re-read every mount from disk on the next paint.
+   *
+   * 只丢磁盘扫描缓存,展开状态(open 集合)原样保留——否则卸载/新增/重扫
+   * 一次,整棵树全部回落「根展开」,用户折叠好的层级全没了(实测报障)。
+   * scan(force) 重建 state 时本就走 `cached?.open` 恢复,这里逐个 force
+   * 重扫后 render 命中新缓存即可;已卸载的挂载残留 state 顺手清掉。
+   */
   refreshMounts(): void {
-    this.states.clear();
+    const mounts = this.plugin.settings.externalMounts ?? [];
+    const alive = new Set(mounts.map((m) => m.id));
+    for (const id of [...this.states.keys()]) {
+      if (!alive.has(id)) this.states.delete(id);
+    }
+    for (const m of mounts) this.scan(m, true);
     this.render();
   }
 
