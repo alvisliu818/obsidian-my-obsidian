@@ -658,6 +658,8 @@ interface SharedBlockEditor {
   esc: { onEscape?: () => void };
   /** autoHeight 的上下内边距:每次挂载按宿主字号重算 */
   pad: { top: number; bottom: number };
+  /** 卸载时摘掉滚动监听(单例常驻,只在 disposeMonaco 时调) */
+  detachScroll: () => void;
 }
 
 let sharedBlock: SharedBlockEditor | null = null;
@@ -718,7 +720,29 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
   editor.onDidChangeModelContent(updateHeight);
   editor.onDidChangeConfiguration(updateHeight);
   installClipboardBridge(root, editor);
-  sharedBlock = { editor, root, lease: null, esc, pad };
+  // 滚动即收起补全。块内编辑器的高度贴着内容、自身从不滚动 —— 滚的是外层
+  // 大纲容器(.block-editor-scroller),而 fixedOverflowWidgets 让浮层按
+  // **视口坐标**定位,Monaco 只在编辑器自己滚动时才重算,外层滚动它感知不到:
+  // 实测滚动 240px 后浮层仍停在 687,而代码块底边已到 553,补全框脱锚悬在
+  // 半空、与代码脱节(看着就是"跑位/被遮挡")。补全面板里的滚轮被它自己
+  // 吃掉,不会误触发这里的收起。
+  const onScroll = (): void => {
+    try {
+      editor.trigger('lgp-scroll', 'hideSuggestWidget', null);
+    } catch {
+      /* 无补全时命令不存在,忽略 */
+    }
+    // hover 走同一个外挂宿主,一样会僵住;Monaco 没有对应的公开命令,直接把
+    // 元素收起来(下次显示时它会自己设回 visible,不会永久隐藏)。
+    const host = getOverflowWidgetsDomNode();
+    if (!host.childElementCount) return;
+    for (const el of host.querySelectorAll<HTMLElement>('.monaco-hover')) {
+      if (el.style.visibility !== 'hidden') el.style.visibility = 'hidden';
+    }
+  };
+  // scroll 不冒泡,capture 阶段才能在 window 上收到后代容器的滚动。
+  window.addEventListener('scroll', onScroll, true);
+  sharedBlock = { editor, root, lease: null, esc, pad, detachScroll: () => window.removeEventListener('scroll', onScroll, true) };
   return sharedBlock;
 }
 
@@ -819,6 +843,7 @@ export function disposeMonaco(): void {
   overflowWidgetsHost = null;
   for (const b of [...clipboardBridges]) b.detach();
   if (sharedBlock) {
+    sharedBlock.detachScroll();
     try {
       sharedBlock.editor.getModel()?.dispose();
     } catch {
