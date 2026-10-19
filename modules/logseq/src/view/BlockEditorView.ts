@@ -92,7 +92,11 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   /** Last block the caret lived in — keeps the outline path shown after blur. */
   lastEditedBlock: Block | null = null;
   focusedView: EditorView | null = null;
-  /** Dedicated code-block edit mode (Logseq parity) — mounted instead of the raw editor. */
+  /**
+   * Dedicated code-block edit mode (Logseq parity) — a Monaco instance mounted
+   * instead of the raw editor while the block is focused. The READING state
+   * is static (Monaco colorize, same tokenizer/theme) — one instance at a time.
+   */
   focusedCode: MountedCodeEditor | null = null;
   /**
    * Set by the block menu's "Source mode": the next editor mounted for THIS
@@ -828,7 +832,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     const b = this.focusedBlock;
     if (!b) return;
     // A re-render while a code editor was already mounted (scroll-cap bump,
-    // index rebuild, ...) would leak the old CM6 instance and leave its dead
+    // index rebuild, ...) would leak the old instance and leave its dead
     // wrap inside the cached static render — destroy & restore first. The
     // restored code element is exactly what the source-mode branch below
     // swaps out next.
