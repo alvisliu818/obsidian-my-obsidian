@@ -5009,3 +5009,17 @@ body.lgp-table-editor-cursor * {
   padding: 8px;
   color: var(--text-faint);
 }
+
+/* 标签页主题文件图标(虚拟文档树打开的库外文件;tabIcon.ts 注入) */
+.workspace-tab-header-inner-icon .lgp-tab-theme-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+.workspace-tab-header-inner-icon .lgp-tab-theme-icon svg,
+.workspace-tab-header-inner-icon .lgp-tab-theme-icon img {
+  width: 16px;
+  height: 16px;
+}

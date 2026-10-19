@@ -73,6 +73,7 @@ import type { MountNode } from './features/mountFilter';
 import { openJournal } from './features/dailyNote';
 import { BackupManager } from './core/backup';
 import { registerNativeImgFix } from './features/nativeImgFix';
+import { applyMarkedTabIcons, markLeafTabIcon } from './features/tabIcon';
 import { ExtensionMarketModal } from './extensions/marketModal';
 import { restoreAllExtensions, registerExtensionConsumer, search as extSearch, installExtension, uninstallExtension, toggleExtension, reinstallExtension, getInstalledExtensions } from './extensions/extensionManager';
 import { isExtensionInstalled } from './extensions/extensionStore';
@@ -1315,6 +1316,10 @@ export default class LogseqEditorPlugin extends Plugin {
     // also listen to layout-change.
     this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.updateStatusBar()));
     this.registerEvent(this.app.workspace.on('layout-change', () => this.updateStatusBar()));
+    // 库外文件标签页的主题图标:标签页头重建/被 setIcon 重设后丢失,借这两个
+    // 事件重应用(applyMarkedTabIcons 有 marker 判断,重复触发代价可忽略)
+    this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.refreshTabIcons()));
+    this.registerEvent(this.app.workspace.on('layout-change', () => this.refreshTabIcons()));
     this.updateStatusBar();
   }
 
@@ -1717,6 +1722,27 @@ export default class LogseqEditorPlugin extends Plugin {
    * measured, `leaf.openFile(fake)` resolves and then mounts the "empty"
    * placeholder, so the content never appears.
    */
+  /**
+   * 给打开库外文件的标签页补主题文件图标(虚拟文档树同款)。
+   * 标签页头重建/setIcon 重设后 marker 元素丢失,layout-change 时重应用。
+   */
+  private refreshTabIcons(): void {
+    const leaves = [
+      VIEW_TYPE_EXTERNAL_CODE,
+      VIEW_TYPE_EXTERNAL_BLOCK,
+      VIEW_TYPE_EXTERNAL_FILE,
+    ].flatMap((t) => this.app.workspace.getLeavesOfType(t));
+    applyMarkedTabIcons(this.app, leaves);
+  }
+
+  /**
+   * setIcon(view.getIcon()) 会在 setViewState 之后的某个时点覆盖标签页图标
+   * (实测:立即应用的主题图标被清掉),延迟补一次;applyMarkedTabIcons 幂等。
+   */
+  private refreshTabIconsSoon(): void {
+    window.setTimeout(() => this.refreshTabIcons(), 120);
+  }
+
   async openExternalEntry(
     mount: ExternalMount,
     node: MountNode,
@@ -1810,6 +1836,7 @@ export default class LogseqEditorPlugin extends Plugin {
     const leaf = this.app.workspace.getLeaf(
       this.settings.externalSplitView === true ? 'split' : 'tab',
     );
+    markLeafTabIcon(leaf, { name: node.name, rel: node.rel });
     await leaf.setViewState({
       type: VIEW_TYPE_EXTERNAL_CODE,
       active: true,
@@ -1822,6 +1849,8 @@ export default class LogseqEditorPlugin extends Plugin {
       },
     });
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    this.refreshTabIcons();
+    this.refreshTabIconsSoon();
     logOp(this, 'external.open', node.abs, 'ok', 'code-editor');
     return true;
   }
@@ -1855,20 +1884,23 @@ export default class LogseqEditorPlugin extends Plugin {
       const leaf = this.app.workspace.getLeaf(
         this.settings.externalSplitView === true ? 'split' : 'tab',
       );
+      markLeafTabIcon(leaf, { name: node.name, rel: node.rel });
       await leaf.setViewState({
-        type: VIEW_TYPE_EXTERNAL_BLOCK,
-        active: true,
-        state: {
-          abs: node.abs,
-          name: node.name,
-          rel: node.rel,
-          mountLabel: mount.label,
-          mountPath: mount.path,
-        },
-      });
-      this.app.workspace.setActiveLeaf(leaf, { focus: true });
-      logOp(this, 'external.open', node.abs, 'ok', 'block-editor');
-      return true;
+      type: VIEW_TYPE_EXTERNAL_BLOCK,
+      active: true,
+      state: {
+        abs: node.abs,
+        name: node.name,
+        rel: node.rel,
+        mountLabel: mount.label,
+        mountPath: mount.path,
+      },
+    });
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    this.refreshTabIcons();
+    this.refreshTabIconsSoon();
+    logOp(this, 'external.open', node.abs, 'ok', 'block-editor');
+    return true;
     } catch (e) {
       logOp(this, 'external.open', node.abs, 'error', String(e).slice(0, 160));
       return false;
@@ -1898,6 +1930,7 @@ export default class LogseqEditorPlugin extends Plugin {
     // TextFileView type with no TFile yields the "empty" placeholder, which is
     // why the markdown path above has to borrow a live editor).
     const leaf = this.app.workspace.getLeaf('tab');
+    markLeafTabIcon(leaf, { name: node.name, rel: node.rel });
     await leaf.setViewState({
       type: VIEW_TYPE_EXTERNAL_CODE,
       active: true,
@@ -1912,6 +1945,8 @@ export default class LogseqEditorPlugin extends Plugin {
       },
     });
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    this.refreshTabIcons();
+    this.refreshTabIconsSoon();
     logOp(this, 'external.open', node.abs, 'ok', 'code-editor');
     return true;
   }
@@ -1988,6 +2023,7 @@ export default class LogseqEditorPlugin extends Plugin {
       }
     }
     const leaf = this.app.workspace.getLeaf('tab');
+    markLeafTabIcon(leaf, { name: node.name, rel: node.rel });
     await leaf.setViewState({
       type: VIEW_TYPE_EXTERNAL_FILE,
       active: true,
@@ -1995,6 +2031,8 @@ export default class LogseqEditorPlugin extends Plugin {
     });
     const view = leaf.view as ExternalFileView | null;
     if (view) await view.openExternal({ abs: node.abs, name: node.name, content, readOnly: opts?.readOnly });
+    this.refreshTabIcons();
+    this.refreshTabIconsSoon();
   }
 
   /** Hand a path to the OS default program. */
