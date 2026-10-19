@@ -1637,17 +1637,25 @@ export default class LogseqEditorPlugin extends Plugin {
     return mount;
   }
 
-  /** Remove a mount. Never touches the target folder. */
+  /** Remove a mount. Never touches the target folder.
+   *  嵌套在其下的挂载提升为顶层(各自有独立真实路径,不连带删除)。 */
   async removeMount(mount: ExternalMount): Promise<void> {
     const list = this.settings.externalMounts;
     const i = list.findIndex((m) => m.id === mount.id);
     if (i < 0) return;
     list.splice(i, 1);
+    let promoted = 0;
+    for (const m of list) {
+      if (m.attachTo === mount.id) {
+        delete m.attachTo;
+        promoted++;
+      }
+    }
     await this.saveSettings();
     this.startMountRefresh();
     this.refreshMounts();
     logOp(this, 'mount.remove', mount.path, 'ok');
-    new Notice(`已卸载 ${mountDisplayName(mount)}`);
+    new Notice(promoted > 0 ? `已卸载 ${mountDisplayName(mount)}（${promoted} 个嵌套挂载已移到顶层）` : `已卸载 ${mountDisplayName(mount)}`);
   }
 
   /** Re-scan every open mount panel. */

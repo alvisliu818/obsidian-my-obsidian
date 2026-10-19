@@ -44,21 +44,30 @@ function clearErrors(modal: Modal): void {
   modal.contentEl.querySelectorAll('.logseq-mount-modal-error').forEach((n) => n.remove());
 }
 
-/** Add a new mount, or edit `mount` when one is given. */
+/** Add a new mount, or edit `mount` when one is given.
+ *  `attachTo` 非空时 = 嵌套挂载:保存后渲染在该宿主挂载项之下
+ *  (si-yuan 虚拟文档树的「挂载文件/文件夹…「xxx」下」语义)。 */
 export class MountEditorModal extends Modal {
   plugin: LogseqEditorPlugin;
   private draft: MountDraft;
   private editing: ExternalMount | null;
+  private attachTo?: string;
 
-  constructor(plugin: LogseqEditorPlugin, mount?: ExternalMount) {
+  constructor(plugin: LogseqEditorPlugin, mount?: ExternalMount, attachTo?: string) {
     super(plugin.app);
     this.plugin = plugin;
     this.editing = mount ?? null;
+    this.attachTo = attachTo;
     this.draft = draftFrom(mount);
   }
 
   onOpen(): void {
-    this.titleEl.setText(this.editing ? '编辑外部挂载' : '挂载外部文件夹');
+    const host = this.attachTo
+      ? (this.plugin.settings.externalMounts ?? []).find((m) => m.id === this.attachTo)
+      : null;
+    this.titleEl.setText(
+      this.editing ? '编辑外部挂载' : host ? `挂载到「${mountDisplayName(host)}」下` : '挂载外部文件夹',
+    );
     this.display();
   }
 
@@ -198,6 +207,7 @@ export class MountEditorModal extends Modal {
       exclude: this.draft.exclude,
       refreshSeconds: Math.min(secs, 3600),
       pinned: false,
+      ...(this.attachTo ? { attachTo: this.attachTo } : {}),
     });
     new Notice('挂载已保存');
     return true;
@@ -237,6 +247,10 @@ export class MountListModal extends Modal {
       const head = row.createDiv({ cls: 'logseq-mount-list-head' });
       head.createSpan({ cls: 'logseq-mount-list-name', text: mountDisplayName(m) });
       if (!m.enabled) head.createSpan({ cls: 'logseq-mount-list-off', text: '已停用' });
+      if (m.attachTo) {
+        const host = mounts.find((h) => h.id === m.attachTo);
+        head.createSpan({ cls: 'logseq-mount-list-off', text: `嵌套于 ${host ? mountDisplayName(host) : m.attachTo}` });
+      }
       if (!isDirectory(m.path)) head.createSpan({ cls: 'logseq-mount-list-warn', text: '路径不存在' });
       row.createDiv({ cls: 'logseq-mount-list-path', text: m.path });
 

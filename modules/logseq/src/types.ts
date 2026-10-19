@@ -369,6 +369,12 @@ export interface ExternalMount {
   enabled: boolean;
   /** Keep the mount at the top of the panel regardless of drag order. */
   pinned: boolean;
+  /**
+   * 嵌套挂载:宿主挂载 id。设置后本挂载渲染在该挂载项之下(si-yuan 虚拟文档树
+   * 的 MountItem.children 语义:显式嵌套挂载在前,宿主的真实内容在后),
+   * 而不是面板顶层。undefined = 顶层挂载。宿主被卸载/停用时兜底渲染为顶层。
+   */
+  attachTo?: string;
 }
 
 /** Drop anything malformed — `data.json` is user-editable. */
@@ -378,6 +384,8 @@ export function mountFrom(raw: unknown): ExternalMount | null {
   if (typeof m.id !== 'string' || !m.id.trim()) return null;
   if (typeof m.path !== 'string' || !m.path.trim()) return null;
   const secs = Number(m.refreshSeconds);
+  // attachTo 非空字符串才保留(自引用丢弃),其余形态按顶层渲染;data.json 用户可编辑
+  const at = typeof m.attachTo === 'string' && m.attachTo.trim() && m.attachTo !== m.id ? m.attachTo.trim() : undefined;
   return {
     id: m.id.trim(),
     path: m.path.trim(),
@@ -388,6 +396,7 @@ export function mountFrom(raw: unknown): ExternalMount | null {
     // absent = enabled, so a config written before this field existed still works
     enabled: m.enabled !== false,
     pinned: m.pinned === true,
+    ...(at ? { attachTo: at } : {}),
   };
 }
 
@@ -398,6 +407,24 @@ export function mountsFrom(raw: unknown): ExternalMount[] {
   for (const item of raw) {
     const m = mountFrom(item);
     if (m) out.push(m);
+  }
+  // 环检测:attachTo 链走回自己(A→B→A,手改 data.json 才可能)整环降为顶层,
+  // 否则渲染会双显/死循环
+  const byId = new Map(out.map((m) => [m.id, m]));
+  for (const m of out) {
+    if (!m.attachTo) continue;
+    const seen = new Set<string>([m.id]);
+    let cur = byId.get(m.attachTo);
+    let cyclic = false;
+    while (cur) {
+      if (seen.has(cur.id)) {
+        cyclic = true;
+        break;
+      }
+      seen.add(cur.id);
+      cur = cur.attachTo ? byId.get(cur.attachTo) : undefined;
+    }
+    if (cyclic) delete m.attachTo;
   }
   return out;
 }

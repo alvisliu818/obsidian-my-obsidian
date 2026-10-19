@@ -48,6 +48,7 @@ import {
   linkVaultPath,
 } from '../features/extFs';
 import { ConfirmModal, NamePromptModal } from './promptModals';
+import { MountEditorModal } from './mountModals';
 import { iconForEntry } from '../features/iconTheme';
 
 export const VIEW_TYPE_MOUNT_PANEL = 'logseq-mount-panel';
@@ -72,6 +73,17 @@ interface MountState {
   scannedAt: number;
   error?: string;
 }
+
+/**
+ * 拍平后的一个树行。嵌套挂载(si-yuan MountItem.children 语义)与宿主的
+ * 真实文件行混排在同一条虚拟滚动流里:
+ *   - `node`      宿主(或某个嵌套挂载)树里的真实文件/文件夹行;
+ *   - `mountHead` 嵌套挂载的头行(点击展开它自己的子树)。
+ * 显式嵌套挂载行排在宿主自动子项**之前**(与 si-yuan buildRows 同序)。
+ */
+type FlattenRow =
+  | { kind: 'node'; node: MountNode; mount: ExternalMount; state: MountState; depth: number }
+  | { kind: 'mountHead'; mount: ExternalMount; depth: number };
 
 export class MountPanelView extends ItemView {
   plugin: LogseqEditorPlugin;
@@ -339,15 +351,32 @@ export class MountPanelView extends ItemView {
     }
     const norm = (p: string): string => p.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
     const target = norm(abs);
-    const mount = (this.plugin.settings.externalMounts ?? []).find((m) => {
-      if (m.enabled === false) return false;
-      const root = norm(m.path);
-      return target === root || target.startsWith(root + '/');
-    });
+    const all = (this.plugin.settings.externalMounts ?? []).filter((m) => m.enabled !== false);
+    // 候选含嵌套挂载:命中后沿 attachTo 链回溯,把宿主头行逐级展开,
+    // 否则嵌套挂载行根本不渲染,定位无从谈起。
+    // 同一文件同时落在宿主与嵌套挂载范围内时取**最长前缀**(更具体的根)。
+    const mount = all
+      .slice()
+      .sort((a, b) => b.path.length - a.path.length)
+      .find((m) => {
+        const root = norm(m.path);
+        return target === root || target.startsWith(root + '/');
+      });
     if (!mount) {
       new Notice('当前文件不在任何挂载目录内');
       return;
     }
+    // 宿主链:嵌套挂载 → … → 顶层,顺序展开头行(环被 mountsFrom 清过,但仍设防)。
+    const byId = new Map(all.map((m) => [m.id, m]));
+    const chain: ExternalMount[] = [];
+    let cur: ExternalMount | undefined = mount;
+    const seen = new Set<string>();
+    while (cur && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      chain.unshift(cur);
+      cur = cur.attachTo ? byId.get(cur.attachTo) : undefined;
+    }
+    for (const m of chain) this.scan(m).open.add('');
     const rootSlash = mount.path.replace(/[\\/]+$/, '').replace(/\\/g, '/');
     const absSlash = abs.replace(/\\/g, '/');
     const rel = absSlash.toLowerCase().startsWith(rootSlash.toLowerCase())
@@ -384,12 +413,23 @@ export class MountPanelView extends ItemView {
         return;
       }
       // 目标行在视口带外：用固定行高算出它在滚动容器里的位置。
-      const section = this.contentEl.querySelector(`.logseq-mount-section[data-mount-id="${CSS.escape(pend.mountId)}"]`);
-      const st = this.states.get(pend.mountId);
+      // 嵌套挂载的行渲染在其顶层祖先的区段里,section 按宿主链向上找。
+      const allMounts = this.plugin.settings.externalMounts ?? [];
+      const byId = new Map(allMounts.map((m) => [m.id, m]));
+      let sectionId = pend.mountId;
+      const seenIds = new Set<string>([sectionId]);
+      while (byId.get(sectionId)?.attachTo && byId.has(byId.get(sectionId)!.attachTo!) && !seenIds.has(byId.get(sectionId)!.attachTo!)) {
+        sectionId = byId.get(sectionId)!.attachTo!;
+        seenIds.add(sectionId);
+      }
+      const section = this.contentEl.querySelector(`.logseq-mount-section[data-mount-id="${CSS.escape(sectionId)}"]`);
+      const sectionState = this.states.get(sectionId);
+      const sectionMount = byId.get(sectionId);
       const scroller = this.scrollEl;
-      if (!section || !st || !scroller) return;
-      const rows = this.flatten(st);
-      const idx = rows.findIndex((r) => r.node.rel === pend.rel);
+      if (!section || !sectionState || !sectionMount || !scroller) return;
+      // 用宿主区段自己的 state 拍平;嵌套子树(含目标行)由 emitMountHead 编织进来
+      const rows = this.flatten(sectionMount, sectionState);
+      const idx = rows.findIndex((r) => r.kind === 'node' && r.mount.id === pend.mountId && r.node.rel === pend.rel);
       if (idx < 0) return;
       const spacer = section.querySelector('.logseq-mount-spacer') as HTMLElement | null;
       if (!spacer) return;
@@ -447,8 +487,16 @@ export class MountPanelView extends ItemView {
 
     // Pinned mounts float to the top; everything else keeps the order the user
     // dragged it into (see `wireDragReorder`).
-    const mounts = (this.plugin.settings.externalMounts ?? [])
+    // 嵌套挂载(attachTo 指向存在的启用宿主)不在此渲染——它们编进宿主的行流;
+    // 宿主被卸载/停用时兜底回落顶层,配置不丢。
+    const all = this.plugin.settings.externalMounts ?? [];
+    const mounts = all
       .filter((m) => m.enabled)
+      .filter((m) => {
+        if (!m.attachTo) return true;
+        const host = all.find((h) => h.id === m.attachTo);
+        return !host || !host.enabled;
+      })
       .slice()
       .sort((a, b) => Number(b.pinned === true) - Number(a.pinned === true));
     if (mounts.length === 0) {
@@ -578,7 +626,7 @@ export class MountPanelView extends ItemView {
    * band is repainted by the panel scroll listener (`onScrollRepaint`).
    */
   private renderRows(section: HTMLElement, mount: ExternalMount, state: MountState): void {
-    const rows = this.flatten(state);
+    const rows = this.flatten(mount, state);
     const spacer = section.createDiv({ cls: 'logseq-mount-spacer' });
     spacer.style.position = 'relative';
     spacer.style.height = `${rows.length * MOUNT_ROW_HEIGHT}px`;
@@ -612,19 +660,84 @@ export class MountPanelView extends ItemView {
         const r = rows[i];
         const row = band.createDiv({ cls: 'logseq-mount-row-wrap' });
         row.style.height = `${MOUNT_ROW_HEIGHT}px`;
-        this.renderNode(row, mount, r.node, state, r.depth);
+        if (r.kind === 'mountHead') this.renderMountHeadRow(row, r.mount, r.depth);
+        else this.renderNode(row, r.mount, r.node, r.state, r.depth);
       }
     };
     this.rowPainters.push(paint);
     paint();
   }
 
-  /** Flatten the loaded tree into draw order, honouring which folders are open. */
-  private flatten(state: MountState): Array<{ node: MountNode; depth: number }> {
-    const out: Array<{ node: MountNode; depth: number }> = [];
+  /**
+   * 嵌套挂载的头行:树行形态的挂载入口(点击展开它自己的子树),右键复用
+   * 挂载头菜单(编辑/卸载/在此挂载…)。不接行拖拽(嵌套排序 v1 不做)。
+   */
+  private renderMountHeadRow(parent: HTMLElement, mount: ExternalMount, depth: number): void {
+    const st = this.states.get(mount.id) ?? this.scan(mount);
+    const isOpen = st.open.has('');
+    const row = parent.createDiv({ cls: 'logseq-mount-row is-dir is-nested-mount' });
+    // 行身份 = 嵌套挂载自己的 id + 空 rel(头行);定位选择器靠它唯一。
+    row.dataset.mount = mount.id;
+    row.dataset.rel = '';
+    // 与文件夹行同款缩进节奏(14px caret gutter + 每级 17px)。
+    row.style.paddingInlineStart = `${14 + depth * 17}px`;
+    const caret = row.createSpan({ cls: 'logseq-mount-caret' });
+    caret.textContent = isOpen ? '▾' : '▸';
+    row.appendChild(
+      iconForEntry(this.plugin.app, {
+        name: mountDisplayName(mount),
+        isDir: true,
+        mountPath: mount.path,
+        rel: '',
+        collapsed: !isOpen,
+        fallback: '📁',
+      }),
+    );
+    row.createSpan({ cls: 'logseq-mount-name', text: mountDisplayName(mount) });
+    row.addEventListener('click', () => {
+      if (st.open.has('')) st.open.delete('');
+      else st.open.add('');
+      this.render();
+    });
+    this.wireMenu(row, mount, null);
+  }
+
+  /** Attach 到某挂载之下的嵌套挂载(enabled 才渲染)。 */
+  private nestedMountsOf(hostId: string): ExternalMount[] {
+    return (this.plugin.settings.externalMounts ?? []).filter((m) => m.enabled && m.attachTo === hostId);
+  }
+
+  /**
+   * 一个嵌套挂载的头行,展开时再追加它自己的子树(先嵌套子挂载,后自动子项,
+   * 与顶层 flatten 同序)。`chain` 是从顶层下来的宿主 id 链,防手改 data.json
+   * 造出的 A→B→A 环把渲染打死循环。
+   */
+  private emitMountHead(m: ExternalMount, depth: number, out: FlattenRow[], chain: Set<string>): void {
+    out.push({ kind: 'mountHead', mount: m, depth });
+    if (chain.has(m.id)) return;
+    const st = this.scan(m);
+    if (!st.open.has('')) return;
+    const next = new Set(chain).add(m.id);
+    for (const child of this.nestedMountsOf(m.id)) this.emitMountHead(child, depth + 1, out, next);
+    const walk = (list: MountNode[], d: number): void => {
+      for (const n of list) {
+        out.push({ kind: 'node', node: n, mount: m, state: st, depth: d });
+        if (n.isDir && st.open.has(n.rel)) walk(n.children, d + 1);
+      }
+    };
+    walk(st.tree, depth + 1);
+  }
+
+  /**
+   * Flatten the loaded tree into draw order, honouring which folders are open.
+   * 显式嵌套挂载行插在宿主自己的树行之前(si-yuan:显式 children 先于自动子项)。
+   */
+  private flatten(mount: ExternalMount, state: MountState): FlattenRow[] {
+    const out: FlattenRow[] = [];
+    for (const child of this.nestedMountsOf(mount.id)) this.emitMountHead(child, 1, out, new Set([mount.id]));
     const walk = (list: MountNode[], depth: number): void => {
       for (const n of list) {
-        out.push({ node: n, depth });
+        out.push({ kind: 'node', node: n, mount, state, depth });
         if (n.isDir && state.open.has(n.rel)) walk(n.children, depth + 1);
       }
     };
@@ -869,6 +982,14 @@ export class MountPanelView extends ItemView {
         // Mount header: directory-level ops land on the mount ROOT, matching
         // how the SiYuan file tree exposes 新建 on the tree root.
         this.addTreeFileMenuItems(menu, mount, null);
+        // 在此挂载(si-yuan「挂载文件/文件夹…「xxx」下」):把库外路径嵌套挂到
+        // 本挂载项之下;嵌套挂载行渲染在本挂载的真实内容之前。
+        menu.addItem((item) =>
+          item
+            .setTitle('在此挂载文件夹/文件…')
+            .setIcon('folder-symlink' as never)
+            .onClick(() => new MountEditorModal(this.plugin, undefined, mount.id).open()),
+        );
         menu.addSeparator();
         this.addFileMenuEventItems(menu, mount.path, true);
         menu.addItem((item) =>
