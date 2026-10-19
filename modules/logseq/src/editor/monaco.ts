@@ -213,28 +213,24 @@ interface MonacoPluginHost {
 let cssInjectStarted = false;
 
 /**
- * 浮层(补全建议 / hover 提示 / 查找框)的外挂宿主。
+ * 浮层(补全建议 / hover 提示)**必须**留在 `.monaco-editor` 内部,
+ * 只靠 `fixedOverflowWidgets: true` 逃逸裁剪。**不要**改回
+ * `overflowWidgetsDomNode` 外挂宿主!
  *
- * 坑:这些浮层默认渲染在 `.monaco-editor` 内部,而块内代码块上面压着三层
- * 裁剪 —— `.lgp-code-block .monaco-editor{overflow:hidden}`(圆角需要)、
- * `.block-editor-scroller{overflow:auto}`(大纲滚动容器)、
- * `.workspace-leaf{contain:strict}`。实测补全是**渲染出来了但被裁掉**:
- * 建议框一超过编辑器高度就消失,看着像"没弹出来"。
- *
- * Monaco 给的官方解法就是 `overflowWidgetsDomNode`:把会溢出的浮层挂到
- * 一个裁剪链之外的节点上(VS Code 自己就这么干)。挂 document.body 下、
- * position:absolute,Monaco 用视口坐标定位它。
+ * 两段历史,别只记住后半段:
+ *  - 曾经块内代码块上面压着三层裁剪(`.lgp-code-block .monaco-editor` 的
+ *    overflow:hidden、`.block-editor-scroller` 的 overflow:auto、
+ *    `.workspace-leaf` 的 contain:strict),当时浮层是 absolute 定位,
+ *    被裁得"弹出来就消失",于是引入了 body 下的外挂宿主。
+ *  - 2026-10 定谳:外挂宿主在本环境(Obsidian 的 Electron/Chromium)触发
+ *    渲染器绘制缺陷 —— suggest 列表行的**文字层初始绘制从不被记录**:
+ *    行背景/容器照画,DOM 与几何完全正常,文字永远不画,只有对行做 DOM
+ *    结构变异(替换 textContent)才会补绘,样式变异全部无效 —— 用户看到的
+ *    「补全框弹出但行空白」。把浮层搬回 `.monaco-editor` 内部立即恢复。
+ *    且实测 `.workspace-leaf{contain:strict}` **不裁** fixed 后代(浮层画出
+ *    leaf 边界仍有内容),overflow:hidden 也裁不掉 fixed —— 外挂宿主的
+ *    裁剪理由已不成立,留着只剩绘制缺陷。
  */
-let overflowWidgetsHost: HTMLElement | null = null;
-
-function getOverflowWidgetsDomNode(): HTMLElement {
-  if (overflowWidgetsHost?.isConnected) return overflowWidgetsHost;
-  const el = document.createElement('div');
-  el.className = 'lgp-monaco-overflow';
-  document.body.appendChild(el);
-  overflowWidgetsHost = el;
-  return el;
-}
 
 /**
  * 初始化 Monaco:worker 路径 + TS 诊断开关 + 主题 + 布局 CSS 注入。
@@ -492,13 +488,15 @@ export function createEditor(
     bracketPairColorization: { enabled: !blockMode },
     folding: opts.folding ?? !blockMode,
     minimap: { enabled: opts.minimap === true },
-    // 补全 / hover / 查找浮层挂到裁剪链之外(见 getOverflowWidgetsDomNode)。
-    // fixedOverflowWidgets 必须一起开:浮层默认按**编辑器相对**坐标 + absolute
-    // 定位(contentWidgets.js:setPosition 只在 _fixedOverflowWidgets &&
-    // allowEditorOverflow 时才用 fixed + 视口坐标),外挂宿主却在 body 下、
-    // 原点不同 —— 不开就整体偏移到左上角(实测建议框落在 28,30 而编辑器在 413)。
-    overflowWidgetsDomNode: getOverflowWidgetsDomNode(),
+    // 浮层(fixedOverflowWidgets)按视口坐标 fixed 定位,contentWidgets.js 只在
+    // _fixedOverflowWidgets && allowEditorOverflow 时才用 fixed + 视口坐标;
+    // 不开就按编辑器相对坐标 + absolute 定位,会被外层 overflow 裁剪。
+    // 刻意**不传** overflowWidgetsDomNode:外挂宿主会触发行文字不绘制的渲染
+    // 缺陷(见文件顶部「浮层」注释)。
     fixedOverflowWidgets: true,
+    // 补全面板行高:0 会跟编辑器行高走(块内 1.5×字号,行太挤),钉一个
+    // 稍宽松的值(28px 起,字号大时随字号放大),列表更透气。
+    suggestLineHeight: Math.max(28, Math.round((opts.fontSize ?? 13) * 1.8)),
     // ---- 补全程显式配置 ----
     // 尤其是 acceptSuggestionOnEnter:'off':Monaco 默认 'on'/smart 会在补全
     // 弹开时抢走 Enter(那是"插入选中项"的语义),而块编辑器的 Enter 是**新建/
@@ -721,8 +719,9 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
     minimap: { enabled: false },
     wordWrap: 'off',
     bracketPairColorization: { enabled: false },
-    overflowWidgetsDomNode: getOverflowWidgetsDomNode(),
+    // 不传 overflowWidgetsDomNode(浮层留编辑器内,见文件顶部注释)
     fixedOverflowWidgets: true,
+    suggestLineHeight: 28,
     automaticLayout: true,
     scrollBeyondLastLine: false,
     smoothScrolling: true,
@@ -766,11 +765,11 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
     } catch {
       /* 无补全时命令不存在,忽略 */
     }
-    // hover 走同一个外挂宿主,一样会僵住;Monaco 没有对应的公开命令,直接把
-    // 元素收起来(下次显示时它会自己设回 visible,不会永久隐藏)。
-    const host = getOverflowWidgetsDomNode();
-    if (!host.childElementCount) return;
-    for (const el of host.querySelectorAll<HTMLElement>('.monaco-hover')) {
+    // hover 浮层(fixed 定位)同样会随外层滚动脱锚;Monaco 没有对应的公开
+    // 命令,直接把元素收起来(下次显示时它会自己设回 visible,不会永久隐藏)。
+    const dom = editor.getDomNode();
+    if (!dom) return;
+    for (const el of dom.querySelectorAll<HTMLElement>('.monaco-hover')) {
       if (el.style.visibility !== 'hidden') el.style.visibility = 'hidden';
     }
   };
@@ -865,6 +864,8 @@ export function mountSharedBlockEditor(
     fontSize: opts.fontSize ?? 13,
     ...(opts.fontFamily ? { fontFamily: opts.fontFamily } : {}),
     ...(opts.lineHeight ? { lineHeight: opts.lineHeight } : {}),
+    // 补全面板行高跟字号走(与 createEditor 同公式)
+    suggestLineHeight: Math.max(28, Math.round((opts.fontSize ?? 13) * 1.8)),
     padding: { top: s.pad.top, bottom: s.pad.bottom },
   });
   s.applyDoc(opts.value, opts.language, opts.uri);
@@ -910,10 +911,9 @@ export function warmUpSharedBlockEditor(plugin: MonacoPluginHost): void {
 // 全局清理(onunload 时调用)
 export function disposeMonaco(): void {
   initialized = false;
-  // 浮层宿主是挂在 body 上的全局节点:插件重载会再建一个,旧的必须摘掉
-  // (空 div 本身无害,但热重载多了就是一堆尸体)。
-  overflowWidgetsHost?.remove();
-  overflowWidgetsHost = null;
+  // 旧版本曾把浮层宿主(.lgp-monaco-overflow)挂在 body 上:热重载后会留尸体,
+  // 这里顺手清掉(新版已不再创建,此清理保留一个版本周期)。
+  document.querySelectorAll('.lgp-monaco-overflow').forEach((el) => el.remove());
   for (const b of [...clipboardBridges]) b.detach();
   if (sharedBlock) {
     sharedBlock.detachScroll();
