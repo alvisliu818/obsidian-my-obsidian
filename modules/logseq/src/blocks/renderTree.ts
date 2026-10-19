@@ -185,8 +185,14 @@ export function renderBlockTree(container: HTMLElement, roots: Block[], host: Bl
   // 设置 → 文末添加块, which drops the whole row: the page then ends at the
   // last bullet (the row is display-level only — nothing else depends on it).
   if (host.plugin.settings.addBlockAffordance !== false) {
+    // 装饰细分开关(设置 → 文末加号与横线):关掉后行保留——仍可点击在文末
+    // 追加块,只是不再画横线和加号(.lgp-addblock-no-marks 隐藏两个伪元素)。
+    const cls =
+      host.plugin.settings.addBlockMarks !== false
+        ? 'block-editor-addblock'
+        : 'block-editor-addblock lgp-addblock-no-marks';
     container
-      .createEl('div', { cls: 'block-editor-addblock' })
+      .createEl('div', { cls })
       .addEventListener('click', (e) => {
         e.stopPropagation();
         host.addBlockAtEnd();

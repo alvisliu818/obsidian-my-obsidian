@@ -2474,6 +2474,13 @@ body.block-touch-dragging {
   opacity: 1;
 }
 
+/* 设置 → 「文末加号与横线」关闭:行保留(仍可点击追加块),装饰不再画。
+   必须排在 hover 规则之后——同优先级下后者胜,保证 no-marks 恒隐藏。 */
+.block-editor-addblock.lgp-addblock-no-marks::before,
+.block-editor-addblock.lgp-addblock-no-marks::after {
+  display: none;
+}
+
 /* ---------- Code block: ONE engine, two states (Logseq parity) ---------- */
 /* 阅读态 = Monaco colorize 的静态 HTML(同一个 Monarch 分词器 + 同一套主题
    规则,mtk 类的颜色由主题服务注入的 CSS 决定,明暗切换自动跟随),零编辑器
@@ -2528,6 +2535,17 @@ body.block-touch-dragging {
    margin-right:auto,两个 auto 会平分剩余空间,编辑态的复制/运行按钮就被顶到
    工具栏中间(实测 copy 落在 620px 而右边缘在 855px)。靠右靠 lang 那一个
    auto 就够,右侧三个元素(copy / run / Esc)自然成组贴边。 */
+/* 横向滚动条:Monaco(编辑态)的滚动条是**浮层**、不占布局,而静态阅读态的
+   pre 用 overflow-x:auto 会为经典滚动条留出 ~12px —— 长行时阅读态比编辑态
+   高一截。这里把条高归零,两态盒子才逐像素相等(横向滚动照常可用:滚轮 /
+   Shift+滚轮 / 触摸板)。 */
+.lgp-code-block pre::-webkit-scrollbar:horizontal {
+  height: 0;
+}
+.lgp-code-block pre {
+  scrollbar-width: none;
+}
+
 .lgp-code-edit-hint {
   display: none;
   color: var(--text-faint);

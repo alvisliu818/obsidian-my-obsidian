@@ -19,7 +19,7 @@
  */
 
 import { mountSharedBlockEditor, setupMonaco, getLanguageByFence, colorizeCode } from '../editor/monaco';
-import { getEditorSettings } from '../editor/editorSettings';
+import { effectiveFontSize, getEditorSettings } from '../editor/editorSettings';
 import { monacoLspAttach } from '../lsp/monacoLspBridge';
 import { encodeFileUri } from '../lsp/lspHost';
 import { blockId } from '../types';
@@ -178,12 +178,70 @@ export function syntheticFenceInfo(lang: string, content: string): CodeFenceInfo
   return { prefix: '', lang, content, fence: '', openLine: '', closed: false };
 }
 
+// ---------------------------------------------------------------------
+// 度量:两态共用同一份计算(字号/行高/内边距)
+//
+// 编辑态的 Monaco 会被「用户编辑器设置」覆盖层改字号/行高(settings.json,
+// 见 editorSettings.ts)——只算阅读态的 CSS 默认(1em/1.5)就会两态不一样高、
+// 字不一样大。所以这里按**编辑器最终生效的那个字号**折算行高与内边距,
+// 静态阅读渲染也用同一组数,两态盒子才逐像素吻合。
+// ---------------------------------------------------------------------
+
+interface BlockCodeMetrics {
+  /** 编辑器最终生效字号(设置里 0 = 跟随宿主计算值) */
+  fontSize: number;
+  lineHeight: number;
+  /** 字体族(设置里 '' = 走 Obsidian 等宽变量) */
+  fontFamily: string;
+  /** 上下内边距(0.4×字号,与旧阅读态 pre 的 0.4em 同源) */
+  vPadding: number;
+  /** 左右内边距:0.9em,em 取**宿主**字号(与 .lgp-code-editor-host 的 CSS 一致) */
+  hPadding: number;
+}
+
+/**
+ * 与 mountCodeEditor 里传给 mountSharedBlockEditor 的那几个度量**逐项同式**
+ * (编辑态是单例 + 用户设置覆盖层,这里必须算出同一组数,两态才逐像素吻合)。
+ */
+function blockCodeMetrics(hostFontSize: number): BlockCodeMetrics {
+  const s = getEditorSettings();
+  const fontSize = effectiveFontSize(hostFontSize);
+  return {
+    fontSize,
+    lineHeight: s.lineHeight >= 8 ? s.lineHeight : Math.round(fontSize * 1.5),
+    fontFamily: s.fontFamily || 'var(--font-monospace)',
+    vPadding: Math.round(fontSize * 0.4),
+    hPadding: Math.round(hostFontSize * 0.9 * 10) / 10,
+  };
+}
+
+/** 宿主字号:编辑态取 .lgp-code-editor-host,阅读态取 wrap 本身(同一上下文)。 */
+function hostFontSizeOf(el: HTMLElement): number {
+  const px = parseFloat(getComputedStyle(el).fontSize);
+  return Number.isFinite(px) && px > 0 ? px : 13;
+}
+
+/** 把度量钉到静态阅读渲染的 pre/code 上(覆盖 styles.css 的 em 版默认值)。 */
+function applyMetricsToPre(pre: HTMLElement, m: BlockCodeMetrics): void {
+  const st = pre.style;
+  st.setProperty('font-size', `${m.fontSize}px`, 'important');
+  st.setProperty('font-family', m.fontFamily, 'important');
+  st.setProperty('line-height', `${m.lineHeight}px`, 'important');
+  st.setProperty('padding', `${m.vPadding}px ${m.hPadding}px`, 'important');
+  const code = pre.querySelector('code');
+  if (code) {
+    code.style.setProperty('font-size', `${m.fontSize}px`, 'important');
+    code.style.setProperty('font-family', m.fontFamily, 'important');
+    code.style.setProperty('line-height', `${m.lineHeight}px`, 'important');
+  }
+}
+
 /**
  * 静态渲染(阅读态)挂一个代码块:工具栏 + Obsidian 渲染出来的 `<pre>`,
  * 再用 Monaco colorize 把 pre 的内容换成**编辑器同款**着色(mtk 类,
  * 颜色由主题 CSS 决定)。colorize 失败时保留 Prism 的原样输出(优雅降级)。
  *
- * `pre` 已被调用方换成的 `wrap` 里(或直接传入 wrap 由本函数接管)。
+ * 度量与编辑器同源(blockCodeMetrics),盒子逐像素一致。
  */
 export function mountCodeBlockReadOnly(
   wrap: HTMLElement,
@@ -205,6 +263,8 @@ export function mountCodeBlockReadOnly(
   wrap.appendChild(pre);
   registerCodeWrap(block, wrap);
   mountRunUi(wrap, lang, block);
+  // 度量:与编辑态同一份计算(覆盖层改过字号/行高时,阅读态跟着变)
+  applyMetricsToPre(pre, blockCodeMetrics(hostFontSizeOf(wrap)));
   // 静态着色:同一 Monarch 分词器 + 同一主题规则 → 与编辑态同色。
   // 异步;期间 pre 里是 Obsidian 的 Prism 输出(失败也就保留这样)。
   setupMonaco(host.plugin);
