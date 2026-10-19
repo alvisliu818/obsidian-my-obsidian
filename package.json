@@ -95,6 +95,7 @@
     "@playwright/test": "1.48",
     "@types/node": "^20.19.43",
     "@types/turndown": "^5.0.5",
+    "basedpyright": "^1.40.2",
     "builtin-modules": "^3.3.0",
     "esbuild": "^0.21.5",
     "esbuild-svelte": "^0.9.5",

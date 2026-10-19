@@ -2558,6 +2558,96 @@ body.block-touch-dragging {
 }
 
 /* ------------------------------------------------------------------
+   Monaco 浮层外观(补全框 / hover / 查找框)—— 挂在 .lgp-monaco-overflow 下的
+   那些 widget 直接用 VS Code 的 vs 配色,和 Obsidian 主题摆在一起很出戏。
+   这里按 Obsidian 变量重画:圆角、边框、投影、选中项、状态栏。
+   选择器都带 .lgp-monaco-overflow 前缀且命中 !important:monaco.css 是运行时
+   异步注入的 <style>,加载顺序在我们之后,特异性相同的规则会被它盖回去。 */
+
+.lgp-monaco-overflow .suggest-widget,
+.lgp-monaco-overflow .monaco-hover {
+  border-radius: 8px !important;
+  border: 1px solid var(--background-modifier-border) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18), 0 1px 3px rgba(0, 0, 0, 0.12) !important;
+  overflow: hidden !important;
+  font-size: var(--font-ui-small) !important;
+  color: var(--text-normal) !important;
+}
+
+/* 补全体左侧的重音条:把选中项和列表其余部分分开,别让整行高亮块太糊 */
+.lgp-monaco-overflow .suggest-widget > .monaco-list:focus .monaco-list-row.focused,
+.lgp-monaco-overflow .suggest-widget .monaco-list-row.focused {
+  background: var(--background-modifier-hover) !important;
+  outline: none !important;
+}
+.lgp-monaco-overflow .suggest-widget .monaco-list-row {
+  border-radius: 0 !important;
+  padding: 0 2px 0 0 !important;
+}
+.lgp-monaco-overflow .suggest-widget .monaco-list-row.focused::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--text-accent);
+  border-radius: 1px;
+}
+/* 左侧图标列:图标是 Monaco 内置彩色 SVG,压小一点并留气 */
+.lgp-monaco-overflow .suggest-widget .monaco-list-row .suggest-icon {
+  width: 20px !important;
+  height: 22px !important;
+  font-size: 13px !important;
+  line-height: 22px !important;
+}
+/* 补全项的第二列(类型/来源)淡一档,别抢主标签 */
+.lgp-monaco-overflow .suggest-widget .monaco-list-row .details-label {
+  opacity: 0.55;
+  font-size: 0.92em;
+}
+.lgp-monaco-overflow .suggest-widget .monaco-list-row .monaco-icon-label .monaco-icon-label-description-container {
+  opacity: 0.6;
+}
+
+/* 底部状态栏(Insert / show more):与列表同宽,细线分清 */
+.lgp-monaco-overflow .suggest-widget .suggest-status-bar {
+  border-top: 1px solid var(--background-modifier-border) !important;
+  padding: 0 6px 0 10px !important;
+  font-size: 11px !important;
+  line-height: 20px !important;
+  color: var(--text-muted) !important;
+  background: var(--background-secondary) !important;
+}
+.lgp-monaco-overflow .suggest-widget .suggest-status-bar .monaco-button,
+.lgp-monaco-overflow .suggest-widget .suggest-status-bar a {
+  color: var(--text-accent) !important;
+}
+
+/* 详情侧栏(展开 more 时的文档说明) */
+.lgp-monaco-overflow .suggest-details {
+  border-radius: 0 8px 8px 0 !important;
+  border-left: 1px solid var(--background-modifier-border) !important;
+}
+
+/* hover 卡片:略竖的内边距 + 代码字体 */
+.lgp-monaco-overflow .monaco-hover {
+  padding: 4px 8px !important;
+  font-family: var(--font-interface) !important;
+  max-width: 560px !important;
+}
+.lgp-monaco-overflow .monaco-hover code,
+.lgp-monaco-overflow .monaco-hover pre {
+  font-family: var(--font-monospace) !important;
+  font-size: 0.95em;
+}
+.lgp-monaco-overflow .monaco-hover .hover-row {
+  padding: 1px 0 !important;
+}
+
+
+
+/* ------------------------------------------------------------------
    Visual table editing (block editor)
 
    Obsidian's own table editor is a private CM6 extension, so the outline

@@ -658,6 +658,15 @@ interface SharedBlockEditor {
   esc: { onEscape?: () => void };
   /** autoHeight 的上下内边距:每次挂载按宿主字号重算 */
   pad: { top: number; bottom: number };
+  /**
+   * 写入当前块内容并按需切换 model。
+   * `uri` 给了就换成带该 uri 的 model(语言服务按路径定位文档,所以块内代码块
+   * 用"宿主笔记同目录的虚拟文件"当身份,见 codeBlockEdit);没给就原地 setValue
+   * (语言不可能有 LSP,或 LSP 关闭时)。
+   */
+  applyDoc(value: string, language: string, uri?: string): void;
+  /** dispose 当前 model(带 uri 的虚拟文档不可复用,归还时清掉) */
+  disposeModel(): void;
   /** 卸载时摘掉滚动监听(单例常驻,只在 disposeMonaco 时调) */
   detachScroll: () => void;
 }
@@ -742,13 +751,51 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
   };
   // scroll 不冒泡,capture 阶段才能在 window 上收到后代容器的滚动。
   window.addEventListener('scroll', onScroll, true);
-  sharedBlock = { editor, root, lease: null, esc, pad, detachScroll: () => window.removeEventListener('scroll', onScroll, true) };
+  sharedBlock = {
+    editor,
+    root,
+    lease: null,
+    esc,
+    pad,
+    applyDoc: (value, language, uri) => {
+      const prev = editor.getModel();
+      if (!uri) {
+        if (prev && prev.isDisposed() === false) {
+          // 同一个默认 model 反复用:撤销栈按块独立,每次挂载是新的编辑会话
+          editor.setValue(value);
+          monaco.editor.setModelLanguage(prev, language);
+        } else {
+          const m = editor.getModel() ?? monaco.editor.createModel(value, language);
+          editor.setModel(m);
+        }
+        return;
+      }
+      const target = monaco.Uri.parse(uri);
+      const existing = monaco.editor.getModel(target);
+      const next = existing && !existing.isDisposed() ? existing : monaco.editor.createModel(value, language, target);
+      if (next.getValue() !== value) next.setValue(value);
+      editor.setModel(next);
+    },
+    disposeModel: () => {
+      const m = editor.getModel();
+      if (!m) return;
+      editor.setModel(monaco.editor.createModel('', 'plaintext'));
+      try {
+        m.dispose();
+      } catch {
+        /* 已销毁 */
+      }
+    },
+    detachScroll: () => window.removeEventListener('scroll', onScroll, true),
+  };
   return sharedBlock;
 }
 
 export interface SharedMountOpts {
   value: string;
   language: string;
+  /** 带身份标识的虚拟文档路径(file:/// 形式);给了就切到该 model,不给原地 setValue */
+  uri?: string;
   fontSize?: number;
   fontFamily?: string;
   lineHeight?: number;
@@ -795,9 +842,7 @@ export function mountSharedBlockEditor(
     ...(opts.lineHeight ? { lineHeight: opts.lineHeight } : {}),
     padding: { top: s.pad.top, bottom: s.pad.bottom },
   });
-  s.editor.setValue(opts.value);
-  const model = s.editor.getModel();
-  if (model) monaco.editor.setModelLanguage(model, opts.language);
+  s.applyDoc(opts.value, opts.language, opts.uri);
   const lease: SharedBlockLease = {
     editor: s.editor,
     release: () => {
@@ -805,6 +850,9 @@ export function mountSharedBlockEditor(
       if (sharedBlock?.lease !== s.lease) return;
       s.lease = null; // 归还路径不触发 onPreempt
       s.esc.onEscape = undefined;
+      // 归还时把这块的 model dispose 掉:换了 uri 的 model 不可复用,留着只会
+      // 在 monaco.editor.getModel(uri) 里堆积(每个块一个,没人回收)。
+      s.disposeModel();
       const pool = getSharedPool();
       if (s.root.parentElement !== pool) pool.appendChild(s.root);
     },

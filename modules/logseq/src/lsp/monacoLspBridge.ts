@@ -39,10 +39,13 @@ export function ensureMonacoLspProviders(plugin: LogseqEditorPlugin, languageId:
 monaco.languages.registerCompletionItemProvider(languageId, {
     triggerCharacters: ['.', '_'],
     async provideCompletionItems(model, position) {
-      const abs = model.uri.fsPath;
+      // uri 一律用 model.uri.toString():文档身份的唯一来源。曾经经 fsPath
+      // 往返(vscode-uri 会把盘符小写化)再 encodeFileUri,得到的 uri 与
+      // didOpen 的大小写不同,pyright 当成两个文档,补全永远返回空。
+      const uri = model.uri.toString();
       const line0 = position.lineNumber - 1;
       const col = position.column - 1;
-      const items = await lspCompletion(plugin, languageId, abs, line0, col);
+      const items = await lspCompletion(plugin, languageId, uri, line0, col);
       if (!items.length) return { suggestions: [] };
       const word = model.getWordUntilPosition(position);
       // pyright 把模块 dunder 成员排最前,下划线成员降权(与 CM 桥同策略)
@@ -70,7 +73,7 @@ monaco.languages.registerCompletionItemProvider(languageId, {
 
   monaco.languages.registerHoverProvider(languageId, {
     async provideHover(model, position) {
-      const md = await lspHover(plugin, languageId, model.uri.fsPath, position.lineNumber - 1, position.column - 1);
+      const md = await lspHover(plugin, languageId, model.uri.toString(), position.lineNumber - 1, position.column - 1);
       if (!md) return null;
       return { contents: [{ value: md }] };
     },
@@ -84,18 +87,18 @@ monaco.languages.registerCompletionItemProvider(languageId, {
 export function monacoLspAttach(
   plugin: LogseqEditorPlugin,
   editor: monaco.editor.IStandaloneCodeEditor,
-  absPath: string,
   languageId: string,
+  docUri: string,
 ): monaco.IDisposable[] {
   const disposables: monaco.IDisposable[] = [];
   if (!lspActive(plugin, languageId)) return disposables;
   ensureMonacoLspProviders(plugin, languageId);
 
-  const uriTail = absPath.toLowerCase().replace(/\\/g, '/');
+  const uriTail = docUri.toLowerCase();
   const model = editor.getModel();
 
   const sync = (): void => {
-    void openLspDocument(plugin, languageId, absPath, editor.getValue());
+    void openLspDocument(plugin, docUri, languageId, editor.getValue());
   };
   sync();
   const contentSub = editor.onDidChangeModelContent(sync);
@@ -136,6 +139,6 @@ export function monacoLspAttach(
       },
     });
   }
-  disposables.push({ dispose: () => closeLspDocument(absPath) });
+  disposables.push({ dispose: () => closeLspDocument(docUri) });
   return disposables;
 }

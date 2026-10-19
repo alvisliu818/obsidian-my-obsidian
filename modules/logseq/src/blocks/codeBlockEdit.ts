@@ -19,6 +19,9 @@
  */
 
 import { mountSharedBlockEditor, setupMonaco, getLanguageByFence, colorizeCode } from '../editor/monaco';
+import { monacoLspAttach } from '../lsp/monacoLspBridge';
+import { encodeFileUri } from '../lsp/lspHost';
+import { blockId } from '../types';
 import { setIcon } from 'obsidian';
 import type { Block } from '../types';
 import type { BlockRenderHost } from './renderHost';
@@ -218,6 +221,75 @@ export function mountCodeBlockReadOnly(
 }
 
 // ---------------------------------------------------------------------
+// 语言服务:块内代码的虚拟文档身份
+// ---------------------------------------------------------------------
+
+/** languageId → 文件扩展名(与 serverSpecs 的语言路由对齐) */
+const LANG_EXT: Record<string, string> = {
+  python: 'py',
+  javascript: 'js',
+  typescript: 'ts',
+  json: 'json',
+  css: 'css',
+  html: 'html',
+  yaml: 'yaml',
+  markdown: 'md',
+};
+
+/** 稳定的短 id：块属性里的 id 优先，否则按文本取哈希（同一段内容始终同一身份）。 */
+function stableBlockKey(text: string): string {
+  let h = 0;
+  for (let i = 0; i < text.length; i++) h = (Math.imul(31, h) + text.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+/** 文件名里不能出现的字符 → 连字符；过长截断。 */
+function safeName(s: string, max = 40): string {
+  return s
+    .replace(/[\\/:*?"<>|#^[\]]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max) || 'note';
+}
+
+/**
+ * 块内代码块在语言服务眼里的身份 —— 一个**宿主笔记同目录**的虚拟文件。
+ *
+ * 同目录是关键：basedpyright 解析 `import xxx` 时按文件所在目录找
+ * site-packages / 相对导入，虚拟文件跟 .md 同级，解析结果与用户自己在这个
+ * 目录放一个同名 .py 完全一致。名字带块 id，反复聚焦同一块命中同一文档。
+ */
+function blockDocIdentities(
+  host: BlockRenderHost,
+  lang: string,
+  block: Block,
+): { abs: string | null; uri: string | null } {
+  const languageId = getLanguageByFence(lang);
+  const ext = LANG_EXT[languageId];
+  if (!ext) return { abs: null, uri: null }; // 无对应类型/无 server 的语言不接
+  const notePath = host.file?.path ?? '';
+  if (!notePath) return { abs: null, uri: null };
+  const dir = notePath.includes('/') ? notePath.slice(0, notePath.lastIndexOf('/')) : '';
+  const base = safeName(notePath.slice(notePath.lastIndexOf('/') + 1).replace(/\.md$/i, ''));
+  const key = blockId(block) || stableBlockKey(block.text);
+  const rel = `${dir ? `${dir}/` : ''}${base}-${key}.${ext}`;
+  // vault.adapter 是 VaultAdapter,BaseAdapter 上都有 getFullPath(vault 相对 → 绝对)
+  let abs = rel;
+  try {
+    const adapter = host.app.vault.adapter as unknown as { getFullPath?: (p: string) => string };
+    if (typeof adapter?.getFullPath === 'function') abs = adapter.getFullPath(rel);
+  } catch {
+    /* 拿不到绝对路径就退回相对路径（虚拟路径仍唯一，只是 import 解析少一环） */
+  }
+  return { abs, uri: encodeFileUri(abs) };
+}
+
+/** Monaco model 的 uri（虚拟文件身份）。 */
+function blockDocUri(host: BlockRenderHost, lang: string, block: Block): string {
+  return blockDocIdentities(host, lang, block).uri ?? '';
+}
+
+// ---------------------------------------------------------------------
 // 编辑态:聚焦时才建的 Monaco 实例
 // ---------------------------------------------------------------------
 
@@ -281,6 +353,10 @@ export function mountCodeEditor(
   const codeLease = mountSharedBlockEditor(body, {
     value: doc,
     language: getLanguageByFence(info.lang),
+    // 语言服务按**路径**定位文档:给块内容造一个「宿主笔记同目录」的虚拟文件
+    // 身份(如 `笔记-<blockId>.py`),同目录意味着 pyright 解析 import 时与真实
+    // 文件一致;名字跟块 id 绑定,反复聚焦同一块能命中同一文档,不重复分析。
+    uri: blockDocUri(host, info.lang, block),
     fontFamily: 'var(--font-monospace)',
     fontSize,
     lineHeight: Math.round(fontSize * 1.5),
@@ -290,6 +366,20 @@ export function mountCodeEditor(
     // 落地(提交 + 还原 DOM),否则它的文本会跟着实例一起被覆盖。
     onPreempt: () => host.commitFocusedText(),
   });
+  // 语言服务:补全 / hover / 诊断波浪线。LSP 关闭或该语言没有 server 时
+  // monacoLspAttach 返回空数组,零开销;归还单例时一并摘掉。
+  const blockLang = getLanguageByFence(info.lang);
+  const lspDisposables = monacoLspAttach(host.plugin, codeLease.editor, blockLang, blockDocUri(host, info.lang, block));
+  const releaseEditor = (): void => {
+    codeLease.release();
+    for (const d of lspDisposables) {
+      try {
+        d.dispose();
+      } catch {
+        /* 已销毁 */
+      }
+    }
+  };
   const mEditor = codeLease.editor;
   const model = mEditor.getModel();
   const handle: CodeEditorHandle = {
@@ -297,8 +387,9 @@ export function mountCodeEditor(
     getDocLength: () => model?.getValueLength() ?? 0,
     focus: () => mEditor.focus(),
     dom: body,
-    // 单例:不销毁,只把容器搬回池里复用(见 monaco.ts 的全局单例段)。
-    dispose: () => codeLease.release(),
+    // 单例:不销毁,只把容器搬回池里复用(见 monaco.ts 的全局单例段),同时
+    // 摘掉这块的语言服务订阅。
+    dispose: () => releaseEditor(),
     offsetAtCoords: (x, y, fallback) => {
       if (!model) return fallback;
       const t = mEditor.getTargetAtClientPoint(x, y);
@@ -325,6 +416,7 @@ export function mountCodeEditor(
   };
   // Debug handle for e2e verification (same convention as the outline editor).
   (body as HTMLElement & { __lgCode?: CodeEditorHandle }).__lgCode = handle;
+  (body as HTMLElement & { __lgEditor?: unknown }).__lgEditor = mEditor;
   viewRef = handle;
   handle.focus();
   return {

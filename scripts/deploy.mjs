@@ -74,6 +74,21 @@ for (const f of ["monaco.css"]) {
 	console.log(`  monaco-workers/`);
 }
 
+// ---- basedpyright(语言服务)----
+// 块内代码块的语言服务走这个:随插件部署,启动时不依赖 PATH / 网络 / uv。
+// 整个 basedpyright 目录都要带 —— dist/pyright-langserver.js 运行时读
+// 同目录的 typeshed-fallback(lspHost 的 resolvePyrightLaunch 优先用它)。
+// 36MB,和 pty-helper 一样不进 git。
+{
+	const src = path.join(ROOT, "node_modules", "basedpyright");
+	if (!existsSync(src)) {
+		console.error("缺少 node_modules/basedpyright —— 先 npm i -D basedpyright");
+		process.exit(1);
+	}
+	cpSync(src, path.join(TARGET, "basedpyright"), { recursive: true, verbatimSymlinks: true });
+	console.log(`  basedpyright/`);
+}
+
 // ---- pty-helper (the terminal's native helper) ----
 // Where to look for it, in order: an explicit --from, then any old logseq
 // plugin folder in the same vault (the merge was installed alongside them).

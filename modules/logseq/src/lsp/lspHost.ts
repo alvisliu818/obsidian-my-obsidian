@@ -14,7 +14,7 @@
 
 import type LogseqEditorPlugin from '../main';
 import type { LspServerSpec } from '../types';
-import { resolveLspSpec } from './serverSpecs';
+import { resolveLspSpec, isPyrightLike } from './serverSpecs';
 import { getActivePythonEnv } from '../exec/activeEnv';
 import { spawnEnvFor } from '../exec/pythonEnvs';
 import type { LspClient } from './lspClient';
@@ -104,27 +104,42 @@ function dispatchDiagnostics(msg: { params?: Record<string, unknown> }): void {
   for (const fn of diagListeners) fn(ds);
 }
 
-/** pyright 部署定位：插件目录自带（部署脚本复制）优先；无则退回 PATH 上的全局 */
-function resolvePyrightLaunch(absPluginDir: string): { launch: 'node' | 'direct'; command: string; args: string[] } {
-  const bundled = `${absPluginDir}\\pyright\\dist\\pyright-langserver.js`;
+/**
+ * python 系语言服务器的启动定位。三档兜底（越靠前越省事）：
+ *   1. 插件目录自带：`basedpyright/dist/basedpyright-langserver.js`（部署脚本复制）
+ *      —— 不依赖 PATH 与网络，离线可用；
+ *   2. PATH 上的 `basedpyright-langserver`；
+ *   3. `uvx basedpyright-langserver --stdio`：本机装了 uv 时首次运行自动拉包，
+ *      之后走 uv 缓存。
+ * pyright（旧 id）沿用同样的顺序，只是找 pyright 的文件名。
+ */
+function resolvePyrightLaunch(absPluginDir: string, id: string): { launch: 'node' | 'direct'; command: string; args: string[] } {
+  const scripts =
+    id === 'basedpyright'
+      ? ['basedpyright\\dist\\basedpyright-langserver.js', 'basedpyright\\dist\\pyright-langserver.js']
+      : ['pyright\\dist\\pyright-langserver.js'];
   try {
     const { existsSync } = require('fs') as typeof import('fs');
-    if (existsSync(bundled)) return { launch: 'node', command: bundled, args: ['--stdio'] };
+    for (const rel of scripts) {
+      const bundled = `${absPluginDir}\\${rel}`;
+      if (existsSync(bundled)) return { launch: 'node', command: bundled, args: ['--stdio'] };
+    }
   } catch {
-    // 忽略
+    // 忽略（existsSync 不可用则退回 PATH）
   }
-  return { launch: 'direct', command: 'pyright-langserver', args: ['--stdio'] };
+  const exe = id === 'basedpyright' ? 'basedpyright-langserver' : 'pyright-langserver';
+  return { launch: 'direct', command: exe, args: ['--stdio'] };
 }
 
 async function startServer(plugin: LogseqEditorPlugin, spec: LspServerSpec): Promise<LspClient> {
   const { absPluginDir, vaultRoot } = hostContextOf(plugin);
-  const isPyright = spec.id === 'pyright';
+  const isPyright = isPyrightLike(spec);
 
   let command: string;
   let args: string[];
   let env: Record<string, string> = { ...process.env } as Record<string, string>;
   if (isPyright) {
-    const launch = resolvePyrightLaunch(absPluginDir);
+    const launch = resolvePyrightLaunch(absPluginDir, spec.id);
     if (launch.launch === 'node') {
       const { findNodeExe } = await import('../terminal/ptyClient');
       const node = await findNodeExe();
@@ -135,9 +150,9 @@ async function startServer(plugin: LogseqEditorPlugin, spec: LspServerSpec): Pro
       command = launch.command;
       args = launch.args;
     }
-    // pyright 内部按 PATH 探测 python 解析 site-packages；渲染进程 PATH 可能带着
-    // 别的 python（灵犀/python-env 等），必须用选定环境前置覆盖，否则 numpy/torch
-    // 全解析不到。
+    // basedpyright/pyright 内部按 PATH 探测 python 解析 site-packages；渲染进程
+    // PATH 可能带着别的 python（灵犀/python-env 等），必须用选定环境前置覆盖，
+    // 否则 numpy/torch 全解析不到。
     env = spawnEnvFor(getActivePythonEnv(), { ...process.env } as Record<string, string>);
   } else if (spec.launch === 'node') {
     const { findNodeExe } = await import('../terminal/ptyClient');
@@ -218,10 +233,10 @@ function stateOf(spec: LspServerSpec): ServerState {
   return st;
 }
 
-/** 获取（或启动）某语言的 server；pyright 环境变化时自动重启 */
+/** 获取（或启动）某语言的 server；python 系环境变化时自动重启 */
 async function ensureServer(plugin: LogseqEditorPlugin, spec: LspServerSpec): Promise<LspClient | null> {
   const st = stateOf(spec);
-  const isPyright = spec.id === 'pyright';
+  const isPyright = isPyrightLike(spec);
   const envKeyNow = isPyright ? (getActivePythonEnv()?.cmd ?? '') : '';
   if (st.client?.isAlive && st.envKey === envKeyNow) return st.client;
   if (st.starting) return st.starting;
@@ -236,6 +251,7 @@ async function ensureServer(plugin: LogseqEditorPlugin, spec: LspServerSpec): Pr
     try {
       const c = await startServer(plugin, spec);
       st.client = c;
+      console.info(`[lgp-lsp] ${spec.id} 已启动`);
       return c;
     } catch (e) {
       console.warn(`[lgp-lsp] ${spec.id} 启动失败:`, e);
@@ -248,13 +264,12 @@ async function ensureServer(plugin: LogseqEditorPlugin, spec: LspServerSpec): Pr
 }
 
 /** 打开（或全量更新）一份文档；返回是否有 server 接管 */
-export async function openLspDocument(plugin: LogseqEditorPlugin, absPath: string, languageId: string, text: string): Promise<boolean> {
+export async function openLspDocument(plugin: LogseqEditorPlugin, uri: string, languageId: string, text: string): Promise<boolean> {
   const spec = resolveLspSpec(languageId, plugin.settings.lspServers);
   if (!spec) return false;
   const st = stateOf(spec);
   const c = await ensureServer(plugin, spec);
   if (!c) return false;
-  const uri = encodeFileUri(absPath);
   const ver = (st.openDocs.get(uri) ?? 0) + 1;
   st.openDocs.set(uri, ver);
   if (ver === 1) {
@@ -265,8 +280,7 @@ export async function openLspDocument(plugin: LogseqEditorPlugin, absPath: strin
   return true;
 }
 
-export function closeLspDocument(absPath: string): void {
-  const uri = encodeFileUri(absPath);
+export function closeLspDocument(uri: string): void {
   for (const st of states.values()) {
     if (!st.client?.isAlive) continue;
     if (!st.openDocs.has(uri)) continue;
@@ -284,17 +298,19 @@ export interface LspCompletionItem {
   insertText?: string;
 }
 
-export async function lspCompletion(plugin: LogseqEditorPlugin, languageId: string, absPath: string, line: number, ch: number): Promise<LspCompletionItem[]> {
+export async function lspCompletion(plugin: LogseqEditorPlugin, languageId: string, uri: string, line: number, ch: number): Promise<LspCompletionItem[]> {
   const spec = resolveLspSpec(languageId, plugin.settings.lspServers);
   if (!spec) return [];
   const st = states.get(spec.id);
-  if (!st?.client?.isAlive) return [];
-  const uri = encodeFileUri(absPath);
+  if (!st?.client?.isAlive) {
+    console.warn('[lgp-lsp] completion skipped: server not alive');
+    return [];
+  }
   try {
     const result = (await st.client.request(
       'textDocument/completion',
       { textDocument: { uri }, position: { line, character: ch } },
-      8000,
+      20000, // 首次请求时 basedpyright 还在分析刚 didOpen 的文档,8s 不够
     )) as unknown;
     const items = Array.isArray(result) ? result : ((result as { items?: unknown[] })?.items ?? []);
     return (items as { label: string; kind?: number; detail?: string; documentation?: string | { value: string }; insertText?: string }[]).map((it) => ({
@@ -309,12 +325,11 @@ export async function lspCompletion(plugin: LogseqEditorPlugin, languageId: stri
   }
 }
 
-export async function lspHover(plugin: LogseqEditorPlugin, languageId: string, absPath: string, line: number, ch: number): Promise<string | null> {
+export async function lspHover(plugin: LogseqEditorPlugin, languageId: string, uri: string, line: number, ch: number): Promise<string | null> {
   const spec = resolveLspSpec(languageId, plugin.settings.lspServers);
   if (!spec) return null;
   const st = states.get(spec.id);
   if (!st?.client?.isAlive) return null;
-  const uri = encodeFileUri(absPath);
   try {
     const result = (await st.client.request(
       'textDocument/hover',
