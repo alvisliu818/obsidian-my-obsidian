@@ -12,7 +12,7 @@
  *  - 「重载」从磁盘重读 settings.json(外部手改后用)。
  */
 
-import { Notice, Setting } from 'obsidian';
+import { Notice, Setting, TextComponent } from 'obsidian';
 import { getEditorSettings, type EditorSettings } from '../editor/editorSettings';
 import { applyEditorSettings } from '../editor/monaco';
 import {
@@ -21,6 +21,7 @@ import {
   settingsJsonPath,
   type EditorSettingsHost,
 } from './editorSettingsStore';
+import { enumFontFamiliesViaFs } from './fontsEnum';
 
 // electron shell 懒加载(同 openWith.ts 的理由:顶层 require 会拖 node 内建进单测)
 type Requirer = (id: string) => unknown;
@@ -43,6 +44,8 @@ interface RowDef {
   min?: number;
   max?: number;
   placeholder?: string;
+  /** 文本输入框尾部带"+"按钮,弹出系统字体列表选中追加(字体族专用) */
+  fontPicker?: true;
 }
 
 /** 行分组仅为了源码可读性,渲染时按顺序拍平。 */
@@ -61,8 +64,9 @@ const ROW_GROUPS: RowDef[][] = [
       key: 'fontFamily',
       name: '字体族',
       type: 'text',
+      fontPicker: true,
       placeholder: '如 Cascadia Code, Consolas',
-      desc: '编辑器字体。留空 = 跟随（块内代码块用等宽字体）。可填本机已安装的字体名，逗号分隔多个回退。',
+      desc: '编辑器字体。留空 = 跟随（块内代码块用等宽字体）。可填本机已安装的字体名，逗号分隔多个回退；点右侧 + 从系统字体列表选取。',
     },
     {
       key: 'lineHeight',
@@ -306,6 +310,123 @@ async function openSettingsJson(plugin: EditorSettingsHost): Promise<void> {
   }
 }
 
+// ---------- 字体族"+"选择器(自绘浮层:搜索框 + 滚动列表) ----------
+
+// 当前打开的字体选择浮层(同一时间只有一个)
+let fontPanel: HTMLElement | null = null;
+let fontPanelDismiss: ((e: Event) => void) | null = null;
+
+function closeFontPanel(): void {
+  if (fontPanelDismiss) {
+    document.removeEventListener('mousedown', fontPanelDismiss, true);
+    document.removeEventListener('keydown', fontPanelDismiss, true);
+    fontPanelDismiss = null;
+  }
+  fontPanel?.remove();
+  fontPanel = null;
+}
+
+/** 把选中的字体名追加到字体族输入框:带空格的名字自动加引号,已存在(不区分引号)不重复 */
+function appendFontFamily(input: HTMLInputElement, font: string): void {
+  const token = /\s/.test(font) ? `'${font}'` : font;
+  const cur = input.value.trim();
+  const exists = cur.split(',').some((part) => part.trim().replace(/^['"]|['"]$/g, '') === font);
+  if (exists) {
+    new Notice(`字体族里已有 ${font}`);
+    return;
+  }
+  input.value = cur ? `${cur.replace(/,\s*$/, '')}, ${token}` : token;
+  // 派发 input+change,命中 TextComponent onChange 的防抖保存路径(注册哪个都命中)
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function showFontPanel(input: HTMLInputElement, btn: HTMLElement, families: string[]): void {
+  closeFontPanel();
+  const panel = document.createElement('div');
+  panel.className = 'lgp-font-panel';
+  const filter = document.createElement('input');
+  filter.type = 'text';
+  filter.placeholder = `搜索字体(${families.length})…`;
+  const listEl = document.createElement('div');
+  listEl.className = 'lgp-font-list';
+  const render = () => {
+    const kw = filter.value.trim().toLowerCase();
+    listEl.empty();
+    const hit = families.filter((f) => !kw || f.toLowerCase().includes(kw));
+    for (const fam of hit.slice(0, 500)) {
+      const item = document.createElement('div');
+      item.className = 'lgp-font-item';
+      item.textContent = fam;
+      // 用该字体自身渲染,所见即所得
+      item.style.fontFamily = `"${fam}", monospace`;
+      item.addEventListener('click', () => {
+        appendFontFamily(input, fam);
+        closeFontPanel();
+      });
+      listEl.appendChild(item);
+    }
+    if (!hit.length) {
+      const empty = document.createElement('div');
+      empty.className = 'lgp-font-empty';
+      empty.textContent = '无匹配字体';
+      listEl.appendChild(empty);
+    }
+  };
+  filter.addEventListener('input', render);
+  render();
+  panel.appendChild(filter);
+  panel.appendChild(listEl);
+  document.body.appendChild(panel);
+
+  // 定位:按钮下方,右缘对齐按钮(窄屏时左移防溢出)
+  const rect = btn.getBoundingClientRect();
+  const width = 300;
+  panel.style.top = `${rect.bottom + 4}px`;
+  panel.style.left = `${Math.max(8, rect.right - width)}px`;
+
+  fontPanel = panel;
+  // Esc 关闭;点击浮层外(非按钮)关闭
+  const handler = (e: Event) => {
+    if (e instanceof KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        closeFontPanel();
+      }
+      return;
+    }
+    if (panel.contains(e.target as Node)) return;
+    if (e.target === btn) return;
+    closeFontPanel();
+  };
+  fontPanelDismiss = handler;
+  // 延迟到当前点击事件派发完再挂监听,否则本次点击会立即关掉面板
+  setTimeout(() => {
+    document.addEventListener('mousedown', handler, true);
+    document.addEventListener('keydown', handler, true);
+  }, 0);
+  filter.focus();
+}
+
+/** 点击"+":Node 枚举系统字体(扫字体目录解析 name 表)后弹浮层 */
+async function openFontPicker(input: HTMLInputElement, btn: HTMLElement): Promise<void> {
+  if (fontPanel) {
+    closeFontPanel();
+    return;
+  }
+  let families: string[] = [];
+  try {
+    families = await enumFontFamiliesViaFs();
+  } catch {
+    families = [];
+  }
+  if (!families.length) {
+    new Notice('无法枚举系统字体（仅桌面端可用）。');
+    return;
+  }
+  showFontPanel(input, btn, families);
+}
+
 /** 渲染一条设置行。返回 Setting 以便上层(壳)收集行名/描述做树与搜索。 */
 function renderRow(container: HTMLElement, def: RowDef): Setting {
   const s = getEditorSettings();
@@ -348,7 +469,9 @@ function renderRow(container: HTMLElement, def: RowDef): Setting {
       });
     });
   } else {
+    let text: TextComponent | null = null;
     setting.addText((t) => {
+      text = t;
       if (def.placeholder) t.setPlaceholder(def.placeholder);
       t.setValue(String(s[def.key]));
       let timer: number | null = null;
@@ -360,6 +483,14 @@ function renderRow(container: HTMLElement, def: RowDef): Setting {
         }, 500);
       });
     });
+    if (def.fontPicker) {
+      setting.addExtraButton((cb) => {
+        cb.setIcon('plus').setTooltip('从系统字体列表添加');
+        cb.onClick(() => {
+          if (text) void openFontPicker(text.inputEl, cb.extraSettingsEl);
+        });
+      });
+    }
   }
   return setting;
 }

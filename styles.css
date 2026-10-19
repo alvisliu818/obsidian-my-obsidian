@@ -10414,3 +10414,45 @@ button.aar-silent-channel-convert:not(.clickable-icon):focus-visible {
 .lgp-editor-settings-rows .setting-item-control select {
   width: 180px;
 }
+
+/* 字体族"+"选择浮层:搜索框 + 系统字体滚动列表(挂在 body,主题变量配色) */
+.lgp-font-panel {
+  position: fixed;
+  /* 写死不赌主题变量:Obsidian 内建层级 modal=50/menu=65/tooltip=70,
+     calc(var(--layer-modal)+10) 在变量被主题重定义为非数字时整条 invalid
+     → z-index auto,浮层会被设置模态(50)压住(实测踩坑) */
+  z-index: 100;
+  width: 300px;
+  max-height: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m, 8px);
+  box-shadow: var(--shadow-s);
+}
+.lgp-font-panel input[type='text'] {
+  width: 100%;
+}
+.lgp-font-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.lgp-font-item {
+  padding: 4px 8px;
+  border-radius: var(--radius-s, 4px);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lgp-font-item:hover {
+  background: var(--background-modifier-hover);
+}
+.lgp-font-empty {
+  padding: 8px;
+  color: var(--text-faint);
+}
