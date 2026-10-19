@@ -148,7 +148,9 @@ describe('P2 混合视图链路', () => {
 
   it('toOutlineDocText:注释块序列化为列表项(非标题),代码段为围栏', () => {
     const vdoc = toOutlineDocText(buildCodeDoc(py, 'python'));
-    expect(vdoc.split('\n')[0]).toBe('- # 顶部说明:见 [[设计笔记]]');
+    // 行首 `#` 要打零宽空格:大纲现在把块第 0 行的 `#` 当标题渲染
+    // (- ## 标题 = 二级标题),不挡住的话 Python 注释会变成大字标题。
+    expect(vdoc.split('\n')[0]).toBe('- \u200B# 顶部说明:见 [[设计笔记]]');
     expect(vdoc).toContain('```python');
     expect(vdoc.split('\n').filter((l) => l.startsWith('# ') && !l.startsWith('# 顶部')).length).toBe(0);
   });
@@ -161,10 +163,12 @@ describe('P2 混合视图链路', () => {
   it('混合链路:toOutlineDocText → parseDocument → 重建(代码与注释均逐字,缩进保留)', () => {
     const doc = parseDocument(toOutlineDocText(buildCodeDoc(py, 'python')));
     // 模拟 HybridCodeBlockEditorView.serializeDocCurrent:围栏剥壳,其余逐字,子块递归
+    // 取回走真实路径:注释块的文本要先 unescapeNoteLine(行首零宽空格是
+    // 进大纲时的转义,不能写回源文件)。
     const walk = (bs: Block[]): string[] =>
       bs.flatMap((b) => {
         const fence = parseCodeFence(b.text);
-        const lines = fence ? fence.content.split('\n') : b.text.split('\n');
+        const lines = fence ? fence.content.split('\n') : unescapeNoteLine(b.text).split('\n');
         return b.children.length ? [...lines, ...walk(b.children)] : lines;
       });
     const out = walk(doc.blocks).join('\n');
@@ -199,7 +203,7 @@ describe('缩进往返:混合视图保存路径逐字节无损', () => {
     const walk = (bs: Block[]): string[] =>
       bs.flatMap((b) => {
         const fence = parseCodeFence(b.text);
-        const lines = (fence ? fence.content : b.text).split('\n');
+        const lines = (fence ? fence.content : unescapeNoteLine(b.text)).split('\n');
         return b.children.length ? [...lines, ...walk(b.children)] : lines;
       });
     return walk(doc.blocks).join('\n');
@@ -345,7 +349,8 @@ describe('注释区:一行一项 + 行首转义往返', () => {
     const src = ['# 第一行', '# 第二行', 'code();', '# 第三行'].join('\n');
     const vdoc = toOutlineDocText(buildCodeDoc(src, 'python'));
     const items = vdoc.split('\n').filter((l) => /^-( |$)/.test(l));
-    expect(items).toEqual(['- # 第一行', '- # 第二行', '- # 第三行']);
+    // 行首 `#` 带零宽空格转义(防标题化),取回时由 unescapeNoteLine 剥掉
+    expect(items).toEqual(['- \u200B# 第一行', '- \u200B# 第二行', '- \u200B# 第三行']);
   });
 
   it('行首 TODO/DOING/DONE:转义后 parser 不剥标记,往返逐字', () => {
@@ -386,7 +391,12 @@ describe('注释区:一行一项 + 行首转义往返', () => {
     expect(escapeNoteLine('todo x')).toBe('todo x'); // 小写不命中
     expect(escapeNoteLine('TODOX')).toBe('TODOX'); // 标记后无空白不命中
     expect(escapeNoteLine('   TODO x')).toBe('   TODO x'); // 前导空白已躲开 MARKER_RE
-    expect(escapeNoteLine('# 普通注释')).toBe('# 普通注释'); // 注释标记本身即保护
+    // `#` 行首曾靠渲染层的 escapeInBlockHeadings 兜底;现在块第 0 行按标题
+    // 渲染(- ## 标题 = 二级标题),注释行必须自己挡住,否则会变成大字标题。
+    expect(escapeNoteLine('# 普通注释')).toBe('\u200B# 普通注释');
+    expect(escapeNoteLine('## 也不是标题')).toBe('\u200B## 也不是标题');
+    expect(escapeNoteLine('#标签不是标题')).toBe('#标签不是标题'); // 井号后无空白
+    expect(unescapeNoteLine('\u200B# 普通注释')).toBe('# 普通注释');
     expect(unescapeNoteLine('\u200BTODO x')).toBe('TODO x');
     expect(unescapeNoteLine('TODO x')).toBe('TODO x');
     expect(unescapeNoteLine('')).toBe('');

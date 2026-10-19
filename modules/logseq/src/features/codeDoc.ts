@@ -301,11 +301,17 @@ export function toOutlineDocText(blocks: CodeDocBlock[]): string {
 export const NOTE_ZWSP = '\u200B';
 
 /**
- * 行首需要转义的两种模式(理由见 toOutlineDocText 注释):
- * 任务标记(`^(TODO|DOING|DONE)\s`,parser 会剥出块文本)与围栏
- * (`^\s*(`{3,}|~{3,})`,parser 的列表分支会当成 opening 吞后续行)。
+ * 行首需要转义的三种模式(理由见 toOutlineDocText 注释):
+ * 任务标记(`^(TODO|DOING|DONE)\s`,parser 会剥出块文本)、围栏
+ * (`^\s*(`{3,}|~{3,})`,parser 的列表分支会当成 opening 吞后续行),以及
+ * **标题**(`^#{1,6}\s`)。
+ *
+ * 第三条是 2026-10-19 补的:块第 0 行的 `#` 现在按标题渲染(大纲里
+ * `- ## 标题` 就该是二级标题),而 Python / Shell / YAML 的注释行恰好也以
+ * `#` 开头 —— 不挡住的话,代码注释会变成大字标题。零宽空格不可见,取回时
+ * 由 unescapeNoteLine 剥掉,文件里一个字节都不多。
  */
-const NOTE_ESCAPE_RE = /^(?:\s*(?:`{3,}|~{3,})|(?:TODO|DOING|DONE)\s)/;
+const NOTE_ESCAPE_RE = /^(?:\s*(?:`{3,}|~{3,})|(?:TODO|DOING|DONE)\s|#{1,6}\s)/;
 
 /** 注释行 → 列表项内容:命中行首模式时加零宽空格挡住 parser 的特殊分支 */
 export function escapeNoteLine(line: string): string {

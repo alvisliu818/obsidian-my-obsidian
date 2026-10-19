@@ -16,8 +16,8 @@
  * async markdown renderer for untouched blocks.
  */
 
-import { MarkdownRenderer, setIcon, TFile } from 'obsidian';
-import { createRunButton, mountRunUi, registerCodeWrap } from '../exec/codeBlockRun';
+import { MarkdownRenderer, TFile } from 'obsidian';
+import { mountCodeBlockReadOnly, parseCodeFence, syntheticFenceInfo } from './codeBlockEdit';
 import { enhanceTable } from './tableEditor';
 import { hasTable } from './tableModel';
 import type { BlockRenderHost } from '../blocks/renderHost';
@@ -72,18 +72,32 @@ export function forgetBlockCache(b: Block): void {
  * 列表块文本:行首 markdown 标记('# x')加渲染期转义,围栏内部跳过。
  * 只在渲染管线里用 —— 块文本本身保持原样。
  */
-function escapeInBlockHeadings(text: string): string {
+/**
+ * 列表块文本 → 交给 Obsidian 渲染的 markdown。
+ *
+ * 规则:**第 0 行保留标题语义,只转义续行里的 `#`**。
+ *
+ * - 第 0 行的 `#{1,6} ` 是块自己的标题 —— Logseq 里 `- ## 标题` 就是一个带
+ *   圆点的二级标题,必须让渲染器把整块渲染成 <h2>。曾经这里连第 0 行一起
+ *   转义,结果 `- ## 标题` 在大纲里原样显示成 `## 标题`(实机反馈)。
+ * - 续行(startLine > 0)的 `#` 是普通文本 —— 多行块里第二行写 `# 备注` 被
+ *   heading 化会把半行正文变成大字标题,那才是要防的。
+ * - 围栏内部一律逐字(代码里的 `#` 不动)。
+ * - 代码注释行不再靠这里兜底:它们进大纲时由 `escapeNoteLine` 打零宽空格
+ *   (见 features/codeDoc.ts),所以第 0 行也不再以 `#` 开头。
+ */
+export function escapeInBlockHeadings(text: string): string {
   const lines = text.split('\n');
   let fence: string | null = null; // 当前所处围栏串(如 ```);null = 不在围栏内
   return lines
-    .map((line) => {
+    .map((line, i) => {
       const m = /^(`{3,}|~{3,})/.exec(line);
       if (m) {
         if (!fence) fence = m[1];
         else if (m[1][0] === fence[0] && line.trim().replace(/[`\s~]/g, '') === '') fence = null;
         return line;
       }
-      if (!fence && /^#{1,6}\s/.test(line)) return line.replace(/^(#{1,6}\s)/, '\\$1');
+      if (!fence && i > 0 && /^#{1,6}\s/.test(line)) return line.replace(/^(#{1,6}\s)/, '\\$1');
       return line;
     })
     .join('\n');
@@ -892,10 +906,10 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
   const hasWikiEmbed = /!\[\[[^\[\]]+\]\]/.test(b.text);
   // HTML img 相对 src 锚定：防库内同名图片劫持（见 anchorRelativeImgSrcs 注释）
   const imgAnchorTokens: ImgAnchorToken[] = [];
-  // Logseq parity: 列表块文本里的 markdown 标题行('# x')渲染为字面文本 ——
-  // Logseq 块内没有标题语义;Obsidian 渲染器会把它们 heading 化,在混合视图里
-  // 把代码注释行渲染成大字标题。仅影响渲染(块文本不变,往返无损);围栏
-  // 内部保持逐字(代码里的 # 不动)。raw 块(真标题)不受影响。
+  // Logseq parity: 列表块**第 0 行**的 `# 标题` 就是要渲染成标题(带圆点的
+  // h1-h6),只有续行里的 `#` 才转义成字面文本。代码注释行不进这条路径 ——
+  // 它们在 features/codeDoc.ts 的 escapeNoteLine 里就被零宽空格挡住了。
+  // 仅影响渲染(块文本不变,往返无损);围栏内部保持逐字。raw 块不受影响。
   const blockSource = b.kind === 'list' ? escapeInBlockHeadings(b.text) : b.text;
   const mdSource = withTableSeparation(
     withQuoteRowSeparation(
@@ -1127,105 +1141,22 @@ function writeImageWidth(b: Block, index: number, width: number, natural: number
 }
 
 function enhanceCodeBlocks(holder: HTMLElement, b: Block, host: BlockRenderHost): void {
-  for (const pre of holder.querySelectorAll('pre')) {
+  const pres = holder.querySelectorAll<HTMLPreElement>('pre');
+  if (!pres.length) return;
+  // 阅读态 = Monaco colorize 的静态 HTML(与编辑态同一个分词器/同一套主题),
+  // 零编辑器实例;聚焦编辑时才建实例(见 codeBlockEdit)。围栏信息取自块文本
+  // 解析 —— 单围栏块(纯/混合)用它(源码模式偏移、提交重裹都靠它);多围栏/
+  // 围栏后有内容的块合成只读信息,编辑走通用编辑器(与既有行为一致)。
+  const info = parseCodeFence(b.text);
+  const single = pres.length === 1 && info ? info : null;
+  for (const pre of pres) {
     if (pre.closest('.lgp-code-block')) continue;
     const code = pre.querySelector('code');
     const lang = /language-([\w#+-]+)/.exec(code?.className ?? '')?.[1] ?? '';
-    if (code) enhanceCodeTokens(code);
     const wrap = document.createElement('div');
     wrap.className = 'lgp-code-block';
     pre.replaceWith(wrap);
-    const bar = wrap.createDiv({ cls: 'lgp-code-toolbar' });
-    // The label renders for EVERY fence, in BOTH states (reading and
-    // code-editing): it is the only way into source mode, and source mode is
-    // the only way to set a language. It used to be gated on
-    // `lang || isMixed`, so a plain fence with no language offered no target
-    // at all and its language could never be set. A languageless fence shows
-    // a dimmed 'text' placeholder instead of no label.
-    const lines = b.text.split('\n');
-    const fenceIdx = lines.findIndex((l) => /^(`{3,}|~{3,})/.test(l));
-    {
-      const langEl = bar.createEl('span', {
-        cls: lang ? 'lgp-code-lang' : 'lgp-code-lang lgp-code-lang-empty',
-        text: lang || 'text',
-      });
-      langEl.title = 'Edit as source (change language)';
-      langEl.addEventListener('click', (e) => {
-        e.stopPropagation();
-        e.preventDefault();
-        // One-shot source mode: the raw fence is edited with the caret at the
-        // end of the opening fence line. Mixed blocks (image/prose prefix):
-        // the fence line is NOT line 0 — offset past the prefix lines.
-        // `fenceIdx < 0` means there is no fence line at all (a `pre` we did
-        // not produce); put the caret at the very start rather than computing
-        // `lines[-1]` into a bogus offset.
-        const off =
-          fenceIdx < 0
-            ? 0
-            : (fenceIdx > 0 ? lines.slice(0, fenceIdx).join('\n').length + 1 : 0) +
-              (lines[fenceIdx]?.length ?? 0);
-        host.sourceModeBlock = b;
-        host.focusBlock(b, Math.min(off, b.text.length));
-      });
-    }
-    const btn = bar.createEl('span', { cls: 'lgp-code-copy', attr: { 'aria-label': 'Copy code' } });
-    setIcon(btn, 'copy');
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      void navigator.clipboard
-        .writeText(code?.textContent ?? pre.textContent ?? '')
-        .then(() => {
-          setIcon(btn, 'check');
-          setTimeout(() => setIcon(btn, 'copy'), 1200);
-        })
-        .catch(() => {});
-    });
-    // 「▶ 运行」+ 输出面板(仅 python;按块记状态,重渲染后重挂)
-    const runBtn = createRunButton(lang, () => code?.textContent ?? pre.textContent ?? '', b);
-    if (runBtn) bar.appendChild(runBtn);
-    registerCodeWrap(b, wrap);
-    mountRunUi(wrap, lang, b);
-    wrap.appendChild(pre);
-  }
-}
-
-/**
- * Fill the syntax-coloring gap between the reading render and the editor:
- * Prism's grammars leave function calls as plain text (`TensorDataset(x, y)`,
- * `torch.randn(100, 1)` — every identifier but keywords/strings/numbers), so
- * most of a code block reads as one color while the CM6 editor colors calls.
- * Conservative fix-up: wrap a trailing identifier in `.token.function` when
- * the next sibling is the call's `(` punctuation span. Text inside existing
- * tokens (strings, comments, keywords — anything `.token`) is never touched;
- * render-only, the block model and the saved file stay untouched.
- */
-function enhanceCodeTokens(code: HTMLElement): void {
-  const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
-  const targets: Text[] = [];
-  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-    const text = n.textContent ?? '';
-    if (!/[A-Za-z_$][\w$]*\s*$/.test(text)) continue;
-    if ((n.parentElement)?.closest('.token')) continue; // inside a string/comment/keyword
-    const next = n.nextSibling;
-    if (next?.nodeType !== Node.ELEMENT_NODE) continue;
-    const el = next as HTMLElement;
-    if (!(el.classList.contains('token') && el.textContent?.startsWith('('))) continue;
-    targets.push(n as Text);
-  }
-  for (const node of targets) {
-    const text = node.textContent ?? '';
-    const m = /([A-Za-z_$][\w$]*)(\s*)$/.exec(text);
-    if (!m) continue;
-    const span = document.createElement('span');
-    span.className = 'token function';
-    span.textContent = m[1];
-    node.textContent = text.slice(0, text.length - m[0].length);
-    const tail = document.createTextNode(m[2]);
-    const parent = node.parentNode;
-    if (!parent) continue;
-    parent.insertBefore(span, node.nextSibling);
-    parent.insertBefore(tail, span.nextSibling);
+    mountCodeBlockReadOnly(wrap, b, lang, single ?? syntheticFenceInfo(lang, code?.textContent ?? pre.textContent ?? ''), host, pre);
   }
 }
 
