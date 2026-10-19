@@ -758,6 +758,9 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
   Object.assign(options, buildEditorOptionOverrides('block', getEditorSettings()));
   const editor = monaco.editor.create(root, options);
   editorScopes.set(editor, 'block');
+  // e2e/诊断句柄(与 codeBlockEdit 的 __lgEditor 同级):页面侧直接调
+  // monaco 静态 API(如 setModelMarkers)复现 markers 重建等场景。
+  (root as HTMLElement & { __lgMonaco?: unknown }).__lgMonaco = monaco;
   disableBlockBracketColorization(editor);
   editor.addCommand(monaco.KeyCode.Escape, () => esc.onEscape?.());
   // 高度自适应容器(块内永远 autoHeight):root 就是被搬来搬去的那个节点,
