@@ -499,6 +499,20 @@ export function createEditor(
     // 原点不同 —— 不开就整体偏移到左上角(实测建议框落在 28,30 而编辑器在 413)。
     overflowWidgetsDomNode: getOverflowWidgetsDomNode(),
     fixedOverflowWidgets: true,
+    // ---- 补全程显式配置 ----
+    // 尤其是 acceptSuggestionOnEnter:'off':Monaco 默认 'on'/smart 会在补全
+    // 弹开时抢走 Enter(那是"插入选中项"的语义),而块编辑器的 Enter 是**新建/
+    // 提交**。输入半截按 Enter 结果往代码里插了个标识符、块却没提交 —— 这个
+    // 冲突此前靠 Esc 兜底掩盖着。
+    suggestOnTriggerCharacters: true,
+    quickSuggestions: { other: true, comments: false, strings: false },
+    wordBasedSuggestions: 'currentDocument',
+    suggestSelection: 'first',
+    acceptSuggestionOnEnter: 'off',
+    acceptSuggestionOnCommitCharacter: true,
+    // 补完按 Enter 不应该插入选项(那是快捷键的语义);块提交走键盘层显式
+    // 检查 suggestController.model.state === Idle 再放行(见 keyboard 2)。
+    hover: { enabled: true, delay: 200 },
     automaticLayout: true,
     scrollBeyondLastLine: !opts.autoHeight,
     smoothScrolling: true,
