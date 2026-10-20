@@ -229,7 +229,8 @@ export function renderTasks(view: HomeView, card: DashboardCard, body: HTMLEleme
  * plugin's command ids have shifted between versions) and fall back to the
  * conventional id. */
 export function taskNotesCreateCommandId(view: HomeView): string {
-	const commands = view.app.commands.listCommands();
+	const commands = (view.app.commands as unknown as { listCommands(): { id: string; name: string }[] })
+		.listCommands();
 	const match =
 		commands.find((c) => /^tasknotes[:.]/i.test(c.id) && /create.*task/i.test(c.name)) ??
 		commands.find((c) => /tasknotes/i.test(c.id) && /create.*task/i.test(c.name));
@@ -248,7 +249,7 @@ function taskNotesAddButton(view: HomeView, parent: HTMLElement): void {
 	btn.addEventListener("click", (e) => {
 		e.stopPropagation();
 		const id = taskNotesCreateCommandId(view);
-		if (!view.app.commands.executeCommandById(id)) {
+		if (!(view.app.commands.executeCommandById(id) as unknown as boolean)) {
 			new Notice(t().notices.taskNotesCreateFailed);
 		}
 	});
@@ -4887,7 +4888,7 @@ export async function setTaskNotesStatus(
 ): Promise<void> {
 	const field = taskNotesFieldName(view.plugin.settings, cfg, "status", "status");
 	try {
-		await view.app.fileManager.processFrontMatter(hit.file, (fm) => {
+		await view.app.fileManager.processFrontMatter(hit.file, (fm: Record<string, unknown>) => {
 			fm[field] = value;
 		});
 	} catch {
@@ -4987,7 +4988,7 @@ export async function completeRecurringInstance(view: HomeView, hit: TaskHit, ta
 	const today: string = moment().format("YYYY-MM-DD");
 	const next = nextRecurrenceDate(hit.recurrence, today);
 	try {
-		await view.app.fileManager.processFrontMatter(targetFile ?? hit.file, (fm) => {
+		await view.app.fileManager.processFrontMatter(targetFile ?? hit.file, (fm: Record<string, unknown>) => {
 			const cur = typeof fm["scheduled"] === "string" ? String(fm["scheduled"]) : null;
 			const timeMatch = cur ? /T(\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?Z?)\s*$/.exec(cur) : null;
 			const instances = Array.isArray(fm["complete_instances"])
@@ -5016,7 +5017,7 @@ export async function uncompleteRecurringInstance(view: HomeView, hit: TaskHit, 
 	if (!hit.recurrence) return;
 	const today: string = moment().format("YYYY-MM-DD");
 	try {
-		await view.app.fileManager.processFrontMatter(targetFile ?? hit.file, (fm) => {
+		await view.app.fileManager.processFrontMatter(targetFile ?? hit.file, (fm: Record<string, unknown>) => {
 			const cur = typeof fm["scheduled"] === "string" ? String(fm["scheduled"]) : null;
 			const timeMatch = cur ? /T(\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?Z?)\s*$/.exec(cur) : null;
 			const instances = Array.isArray(fm["complete_instances"])

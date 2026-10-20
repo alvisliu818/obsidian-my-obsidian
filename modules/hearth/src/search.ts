@@ -52,9 +52,6 @@ export class SearchSection {
 	private inputEl!: HTMLInputElement;
 	private resultsEl!: HTMLElement;
 	private resultsId = `hearth-results-${resultsIdSeq++}`;
-	/** The whole search section (bar + results + filters) — used to decide when
-	 * a click counts as "outside" and should close the dropdown. */
-	private rootEl: HTMLElement | null = null;
 	private rows: { el: HTMLElement; open: () => void }[] = [];
 	private selected = -1;
 	/** Bumped on every query so a slow async content search can't render results
@@ -170,7 +167,6 @@ export class SearchSection {
 	): void {
 		this.hiddenFilters = opts.hiddenFilters ?? [];
 		this.hiddenInstant = opts.hiddenInstantAnswers ?? [];
-		this.rootEl = boundary;
 		this.resultsEl = overlayParent.createDiv("hearth-search-results");
 		this.resultsEl.id = this.resultsId;
 		this.resultsEl.setAttribute("role", "listbox");
@@ -507,7 +503,7 @@ export class SearchSection {
 	}
 
 	private searchCommands(query: string): Command[] {
-		const commands = this.view.app.commands.listCommands();
+		const commands = (this.view.app.commands as unknown as { listCommands(): Command[] }).listCommands();
 		if (!query) return commands.slice(0, MAX_RESULTS);
 		const q = query.toLowerCase();
 		return commands

@@ -1055,7 +1055,7 @@ export async function applyCompletion(
 	if (!(file instanceof TFile)) return false;
 	const edit = completionEdit(setup, task, dayKey, complete);
 	try {
-		await app.fileManager.processFrontMatter(file, (fm) => {
+		await app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
 			for (const [key, value] of Object.entries(edit)) {
 				// An empty completion date means "clear it" rather than "store ''".
 				if (value === "") delete fm[key];

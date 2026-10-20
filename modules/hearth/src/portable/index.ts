@@ -259,7 +259,8 @@ export function vaultEnvironment(app: App): ImportEnvironment {
 		// here the only question is whether *something* has registered the type,
 		// since a package naming a view nothing provides is what needs saying.
 		viewTypeKnown: (viewType) => {
-			const byType = app.viewRegistry?.viewByType;
+			const byType = (app.viewRegistry as unknown as { viewByType?: Record<string, unknown> } | undefined)
+				?.viewByType;
 			return Boolean(byType && viewType in byType);
 		},
 	};

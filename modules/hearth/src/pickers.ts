@@ -88,7 +88,7 @@ export class CommandPickerModal extends HearthFuzzySuggestModal<Command> {
 	}
 
 	getItems(): Command[] {
-		return this.app.commands.listCommands();
+		return (this.app.commands as unknown as { listCommands(): Command[] }).listCommands();
 	}
 
 	getItemText(command: Command): string {

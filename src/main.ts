@@ -45,6 +45,7 @@ import AudioPlayerPlugin from "../modules/audio-player/src/main";
 import ScrollingPlugin from "../modules/scrolling/src/core/main";
 import AbstractFolderPlugin from "../modules/abstract-folder/main";
 import MomentumPlugin from "../modules/momentum/src/main";
+import HearthPlugin from "../modules/hearth/src/main";
 // media-extended v3 自带 obsidian@1.5.7 类型与自己的 "@/..." 别名（与
 // music-player 的 @/ 同名冲突），经 require 桥接进 bundle：不进宿主 tsc
 // 程序（类型由模块自带 tsconfig 独立校验），运行时打包不受影响。
@@ -290,6 +291,16 @@ export default class MyObsidianPlugin extends Plugin {
 				"生活仪表盘：习惯/任务/健身/营养/学习看板、Google Tasks 与 Google Drive 同步、快速访问面板；并入 WorkLife Calendar 后另有日历/日程/看板/习惯分析/财务/天气视图与 dashboard、hello 代码块。上游 jnagase + atinss（均 MIT）。",
 			desktopOnly: false,
 			cls: MomentumPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// 库首页（ondreu/Hearth，MIT）——搜索/仪表盘/启动器三合一。
+			id: "hearth",
+			legacyIds: ["hearth"],
+			name: "my Hearth",
+			summary:
+				"库首页：全局搜索与快速切换器、仪表盘卡片（日记/任务/看板/日历/RSS 阅读/天气/书签/最近文件/画册/启动器/集成 Dataview 等）、工作区布局与壁纸外观，移动端可用。上游 ondreu/Hearth（MIT）。",
+			desktopOnly: false,
+			cls: HearthPlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 

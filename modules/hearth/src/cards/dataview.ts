@@ -124,7 +124,7 @@ function dataviewColgroup(table: HTMLTableElement, count: number, widths: number
 
 /** Attach resize handles and (re-)apply stored widths to one Dataview table. */
 function decorateDataviewTable(
-	card: DashboardCard,
+	_card: DashboardCard,
 	cfg: NonNullable<DashboardCard["dataview"]>,
 	table: HTMLTableElement,
 	persist: () => void,

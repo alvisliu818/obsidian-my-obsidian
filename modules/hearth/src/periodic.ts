@@ -140,7 +140,9 @@ export function isPeriodicNotesEnabled(app: App): boolean {
  * `listCommands` is the one thing here that reads the whole command registry. */
 function commandIds(app: App): string[] {
 	try {
-		return app.commands?.listCommands?.().map((cmd) => cmd.id) ?? [];
+		return (
+			(app.commands as unknown as { listCommands?: () => { id: string }[] })?.listCommands?.().map((cmd) => cmd.id) ?? []
+		);
 	} catch {
 		return [];
 	}
@@ -244,7 +246,7 @@ export async function createPeriodicNote(
 	const command = periodicOpenCommandId(commandIds(app), granularity);
 	if (!command) return { ran: false, file: null };
 	try {
-		return { ran: app.commands.executeCommandById(command) === true, file: null };
+		return { ran: (app.commands.executeCommandById(command) as unknown as boolean) === true, file: null };
 	} catch {
 		return { ran: false, file: null };
 	}

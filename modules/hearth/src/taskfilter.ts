@@ -121,7 +121,7 @@ export function formatTagInput(tags: string[]): string {
  * this card". */
 export function stripInlineTags(text: string): string {
 	return text
-		.replace(INLINE_TAG_RE, (whole, lead: string, tag: string) => (usableTag(tag) ? "" : whole))
+		.replace(INLINE_TAG_RE, (whole, _lead: string, tag: string) => (usableTag(tag) ? "" : whole))
 		.replace(/\s+/g, " ")
 		.trim();
 }
@@ -149,7 +149,7 @@ export function applyInlineTags(text: string, tags: string[]): string {
 		if (clean) wanted.set(clean.toLowerCase(), clean);
 	}
 	const held = new Set<string>();
-	const kept = text.replace(INLINE_TAG_RE, (whole, lead: string, raw: string) => {
+	const kept = text.replace(INLINE_TAG_RE, (whole, _lead: string, raw: string) => {
 		const tag = usableTag(raw);
 		if (!tag) return whole;
 		const key = tag.toLowerCase();

@@ -49,7 +49,7 @@ export function renderDaily(
 		create.addEventListener("click", () => {
 			// The core "Open today's daily note" command creates it from the
 			// configured template and opens it.
-			if (!view.app.commands.executeCommandById("daily-notes")) {
+			if (!(view.app.commands.executeCommandById("daily-notes") as unknown as boolean)) {
 				new Notice(t().notices.couldNotOpenDaily);
 			}
 		});

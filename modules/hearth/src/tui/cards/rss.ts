@@ -39,8 +39,10 @@ function openCtx(ctx: TuiContext): RssOpenContext {
 	return { app: ctx.view.app, settings: ctx.view.plugin.settings, opener: ctx.view };
 }
 
+const moment = createMoment as unknown as (input: Date) => { fromNow(): string };
+
 function ago(ms: number): string {
-	return (createMoment(new Date(ms)) as unknown as { fromNow(): string }).fromNow();
+	return moment(new Date(ms)).fromNow();
 }
 
 /** When the feeds were fetched, so a load can tell whether it brought

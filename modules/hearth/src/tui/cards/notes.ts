@@ -90,7 +90,7 @@ export const dailyTui: TuiRenderer = {
 		const file = todaysDaily(view);
 		if (!file) {
 			const create = () => {
-				if (!view.app.commands.executeCommandById("daily-notes")) ctx.view.tuiSay?.(t().notices.couldNotOpenDaily);
+				if (!(view.app.commands.executeCommandById("daily-notes") as unknown as boolean)) ctx.view.tuiSay?.(t().notices.couldNotOpenDaily);
 			};
 			return listOutput([{ lines: [button(t().cards.daily.createToday, create)], activate: create }], {
 				lines: [...message(t().cards.daily.noNoteYet, ctx.cols), []],

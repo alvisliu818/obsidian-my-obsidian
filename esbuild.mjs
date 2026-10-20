@@ -359,6 +359,8 @@ const context = await esbuild.context({
     // media-extended: svg/ejs 按上游以文本内联
     ".svg": "text",
     ".ejs": "text",
+    // hearth: whatsnew.ts 打包上游 CHANGELOG.md 原文（上游 loader 同款）
+    ".md": "text",
   },
   define: {
     // wa-sqlite's Emscripten glue reads import.meta.url to locate its wasm;

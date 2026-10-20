@@ -58,7 +58,7 @@ function leafIsVisible(leaf: WorkspaceLeaf): boolean {
 }
 
 export default class HearthPlugin extends Plugin {
-	settings: HomeSettings;
+	settings!: HomeSettings;
 	/** True when this load had no persisted data at all (a brand-new install),
 	 * as opposed to an existing vault that simply predates a given setting.
 	 * Used so the "What's new" dialog greets upgraders but not first-timers. */
@@ -444,10 +444,12 @@ export default class HearthPlugin extends Plugin {
 			new Notice(t().notices.enableExcalidraw);
 			return;
 		}
-		const cmd = this.app.commands
+		// `listCommands`/executeCommandById 的返回值在钉版的 obsidian 类型里
+		// 缺席/标 void，运行时两者都在（聚合仓 strict 适配，见 NOTICE）。
+		const cmd = (this.app.commands as unknown as { listCommands(): { id: string; name: string }[] })
 			.listCommands()
 			.find((c) => c.id.startsWith(`${EXCALIDRAW_PLUGIN_ID}:`) && /new/i.test(c.name));
-		if (!cmd || !this.app.commands.executeCommandById(cmd.id)) {
+		if (!cmd || !(this.app.commands.executeCommandById(cmd.id) as unknown as boolean)) {
 			new Notice(t().notices.excalidrawCommandMissing);
 		}
 	}
@@ -459,10 +461,10 @@ export default class HearthPlugin extends Plugin {
 			new Notice(t().notices.enableAudioRecorder);
 			return;
 		}
-		const cmd = this.app.commands
+		const cmd = (this.app.commands as unknown as { listCommands(): { id: string; name: string }[] })
 			.listCommands()
 			.find((c) => c.id.startsWith(`${AUDIO_RECORDER_PLUGIN_ID}:`));
-		if (!cmd || !this.app.commands.executeCommandById(cmd.id)) {
+		if (!cmd || !(this.app.commands.executeCommandById(cmd.id) as unknown as boolean)) {
 			new Notice(t().notices.couldNotRecordVoice);
 		}
 	}
@@ -474,7 +476,7 @@ export default class HearthPlugin extends Plugin {
 			new Notice(t().notices.enableDailyNotes);
 			return;
 		}
-		if (!this.app.commands.executeCommandById("daily-notes")) {
+		if (!(this.app.commands.executeCommandById("daily-notes") as unknown as boolean)) {
 			new Notice(t().notices.couldNotOpenDaily);
 		}
 	}
@@ -482,7 +484,7 @@ export default class HearthPlugin extends Plugin {
 	/** Run any command by id, surfacing a Notice if it no longer resolves (e.g.
 	 * the plugin providing it was disabled). Used by the mobile action bar. */
 	runCommandOrNotice(commandId: string) {
-		if (!commandId || !this.app.commands.executeCommandById(commandId)) {
+		if (!commandId || !(this.app.commands.executeCommandById(commandId) as unknown as boolean)) {
 			new Notice(t().notices.commandNotFound(commandId));
 		}
 	}

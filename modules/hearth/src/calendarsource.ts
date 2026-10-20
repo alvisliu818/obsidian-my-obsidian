@@ -464,7 +464,7 @@ export function openDailyNote(
 	} else if (!options) {
 		// Calendar-only card: nothing to open or create.
 	} else if (isToday) {
-		if (!view.app.commands.executeCommandById("daily-notes")) {
+		if (!(view.app.commands.executeCommandById("daily-notes") as unknown as boolean)) {
 			new Notice(t().notices.couldNotOpenDaily);
 		}
 	} else {

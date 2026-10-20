@@ -40,12 +40,6 @@ declare module "obsidian" {
 		customCss?: {
 			theme?: string;
 		};
-		/** Registry of every view type registered via `registerView` (core and
-		 * community). `viewByType` is keyed by the view-type id. Used by the
-		 * "leaf" card to discover hostable side-panel views. */
-		viewRegistry?: {
-			viewByType?: Record<string, unknown>;
-		};
 	}
 
 	/**

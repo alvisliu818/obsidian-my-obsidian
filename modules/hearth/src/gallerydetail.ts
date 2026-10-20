@@ -803,7 +803,6 @@ export function openGalleryProfile(
 }
 
 class GalleryProfileModal extends HearthModal {
-	private plugin: HearthPlugin;
 	private client: GalleryClient;
 	private publicKey: string;
 	private hooks: ProfileViewHooks;
@@ -817,7 +816,6 @@ class GalleryProfileModal extends HearthModal {
 		hooks: ProfileViewHooks,
 	) {
 		super(plugin.app);
-		this.plugin = plugin;
 		this.client = client;
 		this.publicKey = publicKey;
 		this.hooks = hooks;

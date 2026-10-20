@@ -95,7 +95,6 @@ export class WhatsNewModal extends HearthModal {
 	/** Set when every row is open, so the toolbar button can say which way it
 	 * now goes. */
 	private allExpanded = false;
-	private expandAllEl?: HTMLElement;
 	private emptyEl?: HTMLElement;
 
 	constructor(app: App, entries: ChangelogEntry[]) {
@@ -169,7 +168,6 @@ export class WhatsNewModal extends HearthModal {
 		}
 
 		const toggle = bar.createDiv({ cls: "hearth-whatsnew-expand-all" });
-		this.expandAllEl = toggle;
 		toggle.setText(t().whatsNew.expandAll);
 		const flip = () => {
 			this.setAllExpanded(!this.allExpanded);

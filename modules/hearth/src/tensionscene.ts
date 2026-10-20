@@ -477,7 +477,7 @@ function flowers(o: Required<SceneOptions>): SceneNode[] {
 	];
 }
 
-function wire(o: Required<SceneOptions>, y: number): SceneNode {
+function wire(_o: Required<SceneOptions>, y: number): SceneNode {
 	const posts: SceneNode[] = [];
 	let coil = `M0 ${y - 5}`;
 	for (let x = 0; x <= SCENE_W; x += 6) coil += ` Q ${x + 3} ${y - 10} ${x + 6} ${y - 5} Q ${x + 3} ${y} ${x} ${y - 5}`;
@@ -485,7 +485,7 @@ function wire(o: Required<SceneOptions>, y: number): SceneNode {
 	return g("ts-wire", [...posts, path("ts-coil", coil)]);
 }
 
-function sandbags(o: Required<SceneOptions>, x: number, y: number): SceneNode {
+function sandbags(_o: Required<SceneOptions>, x: number, y: number): SceneNode {
 	const bags: SceneNode[] = [];
 	const rows = [[0, 6], [3, 5], [6, 4]];
 	rows.forEach(([dx, count], r) => {

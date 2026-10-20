@@ -62,7 +62,8 @@ function isHiddenType(type: string, scope: LeafViewScope | undefined): boolean {
  * (a future Obsidian could move it). Never throws. */
 function viewByType(app: App): Record<string, unknown> | null {
 	try {
-		const byType = app.viewRegistry?.viewByType;
+		const byType = (app.viewRegistry as unknown as { viewByType?: Record<string, unknown> } | undefined)
+			?.viewByType;
 		return byType && typeof byType === "object" ? byType : null;
 	} catch {
 		return null;

@@ -1692,7 +1692,9 @@ export class HomeSettingTab extends PluginSettingTab {
 				// command a button runs — and how to change it — is always visible.
 				row.addButton((b) => {
 					const current = currentTarget
-						? this.app.commands.listCommands().find((c) => c.id === currentTarget)
+						? (this.app.commands as unknown as { listCommands(): { id: string; name: string }[] })
+								.listCommands()
+								.find((c) => c.id === currentTarget)
 						: undefined;
 					b.setButtonText(current ? current.name : t().settings.mobileActions.pickCommand);
 					b.setTooltip(currentTarget ? t().settings.mobileActions.commandTooltip(currentTarget) : t().settings.mobileActions.pickCommand);

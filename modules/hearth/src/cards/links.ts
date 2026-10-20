@@ -161,7 +161,9 @@ export function linksEditor(ctx: CardEditorContext, containerEl: HTMLElement): v
 			// makes command links actually fire.
 			row.addButton((b) => {
 				const current = link.target
-					? ctx.app.commands.listCommands().find((c) => c.id === link.target)
+					? (ctx.app.commands as unknown as { listCommands(): { id: string; name: string }[] })
+							.listCommands()
+							.find((c) => c.id === link.target)
 					: undefined;
 				b.setButtonText(
 					current ? current.name : t().editors.links.pickCommand,

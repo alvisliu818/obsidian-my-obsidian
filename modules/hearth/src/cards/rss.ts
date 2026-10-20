@@ -48,6 +48,8 @@ interface RelativeMoment {
 	fromNow(): string;
 }
 
+const moment = createMoment as unknown as (input: Date) => RelativeMoment;
+
 
 export function renderRss(
 	view: HomeView,
@@ -128,7 +130,7 @@ export function renderRss(
 		if (merged) metaBits.push(entry.feed);
 		if (cfg.showDate !== false && item.published) {
 			metaBits.push(
-				(createMoment(new Date(item.published)) as unknown as RelativeMoment).fromNow(),
+				moment(new Date(item.published)).fromNow(),
 			);
 		}
 		if (metaBits.length) {

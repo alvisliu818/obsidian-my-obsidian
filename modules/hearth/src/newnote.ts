@@ -180,7 +180,7 @@ async function createBlankNote(
 		await openNewNote(app, from, file, false);
 	} catch (err) {
 		// Fall back to the core command if the internal API shape changes.
-		if (!app.commands.executeCommandById("file-explorer:new-file")) {
+		if (!(app.commands.executeCommandById("file-explorer:new-file") as unknown as boolean)) {
 			new Notice(t().notices.couldNotCreateNote);
 			console.error("Hearth new note error", err);
 		}

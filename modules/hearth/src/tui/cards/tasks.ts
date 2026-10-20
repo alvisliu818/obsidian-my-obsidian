@@ -234,7 +234,7 @@ function refreshOf(ctx: TuiContext): () => void {
 function addTask(ctx: TuiContext, cfg: TasksConfig, load: Extract<TaskLoad, { kind: "ok" }>, column?: TaskBoardColumn, board?: TaskBoard): void {
 	const { view } = ctx;
 	if (load.source === "tasknotes") {
-		if (!view.app.commands.executeCommandById(taskNotesCreateCommandId(view))) new Notice(t().notices.taskNotesCreateFailed);
+		if (!(view.app.commands.executeCommandById(taskNotesCreateCommandId(view)) as unknown as boolean)) new Notice(t().notices.taskNotesCreateFailed);
 		return;
 	}
 	if (load.source !== "kanban" || !load.boardColumns?.length) {

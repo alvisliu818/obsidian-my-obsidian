@@ -498,7 +498,7 @@ export function enableStackedResize(
  * magnetically to neighbouring cards and the board, with alignment guides shown.
  */
 export function enableDragResize(
-	view: HomeView,
+	_view: HomeView,
 	cardEl: HTMLElement,
 	gridEl: HTMLElement,
 	card: DashboardCard,
