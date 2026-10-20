@@ -23,3 +23,8 @@ modules/logseq/tests/fixtures/edge-vault/.obsidian/plugins/obsidian-logseq/monac
 modules/logseq/tests/fixtures/edge-vault/.obsidian/plugins/obsidian-logseq/monaco-workers/
 # 各模块的一次性探针脚本(下划线开头,含 e2e 子目录)
 modules/*/tests/**/_probe-*.mjs
+
+# ts 增量构建信息(各模块 tsconfig.tsbuildinfo)
+*.tsbuildinfo
+# media-extended 收编的 cm-language fork 需要自带构建产物(dist 被 dist 规则挡掉,白名单放行)
+!modules/media-extended/packages/cm-language/dist/

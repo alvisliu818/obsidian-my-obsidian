@@ -41,6 +41,14 @@ import OpenTabSettingsPlugin from "../modules/open-tab-settings/src/main";
 import AudioRecorderPlugin from "../modules/audio-recorder/src/main";
 import MediaJournalPlugin from "../modules/media-journal/src/main";
 import MusicPlayerPlugin from "../modules/music-player/src/main";
+// media-extended v3 自带 obsidian@1.5.7 类型与自己的 "@/..." 别名（与
+// music-player 的 @/ 同名冲突），经 require 桥接进 bundle：不进宿主 tsc
+// 程序（类型由模块自带 tsconfig 独立校验），运行时打包不受影响。
+const MediaExtendedPlugin = (
+	require("../modules/media-extended/apps/app/src/mx-main") as {
+		default: new (app: unknown, manifest: unknown) => SubPluginLike;
+	}
+).default;
 import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
 import { registerFreeExtensions } from "./extensionRegistry";
 
@@ -210,6 +218,18 @@ export default class MyObsidianPlugin extends Plugin {
 				"侧栏音乐播放器：扫描库内音频按艺术家/专辑整理，歌词滚动与卡拉OK逐字、播放队列与收藏、封面自动匹配，库外文件不支持。上游 TracingOrigins（MIT）。",
 			desktopOnly: false,
 			cls: MusicPlayerPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Third-party (AidenLx / PKM-er, MIT), absorbed at the v3 line —
+			// see modules/media-extended/NOTICE. 4.x is closed-source; v3
+			// (3.2.6) is the last open build. Desktop-only per its manifest.
+			id: "media-extended",
+			legacyId: "media-extended",
+			name: "my Media Extended",
+			summary:
+				"库内媒体播放增强：本地/YouTube/B站视频与音频的嵌入式播放器、时间戳链接与截图、媒体笔记工作流。上游 AidenLx（MIT；v3 3.2.6 为最后的开源版本）。",
+			desktopOnly: true,
+			cls: MediaExtendedPlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 

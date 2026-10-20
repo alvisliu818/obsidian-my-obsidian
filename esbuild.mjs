@@ -14,6 +14,7 @@ import process from "process";
 import builtins from "builtin-modules";
 import { createRequire } from "node:module";
 import { readFileSync, globSync as fsGlobSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 const nodeRequire = createRequire(import.meta.url);
@@ -215,6 +216,73 @@ const musicPlayerShimsPlugin = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// media-extended: 上游 esbuild 配置三个插件的移植（运行时语义不变）。
+//
+// ① inline:* —— webview 预载脚本/油猴脚本在构建期打成 CJS 字符串内联。
+//    external 集合与上游一致；minify 上游硬编码 true。
+// ② media-captions 补丁 —— 上游把该包源码里的 ` instanceof HTMLElement `
+//    替换为 arktype 的 `.instanceOf(HTMLElement)`，不套用会运行时报错。
+//    上游 filter 用正斜杠，Windows 路径是反斜杠，此处两种都匹配。
+// ③ NODE_ENV 作用域替换 —— 上游用 define，但聚合的 define 是全局的，会连带
+//    改 omnisearch 等模块的运行时分支；改为只对 modules/media-extended/ 下
+//    （含其 node_modules 里的 react/vidstack）文件做文本替换。
+// ---------------------------------------------------------------------------
+const mxInlinePlugin = {
+  name: "mx-inline-code",
+  setup(build) {
+    build.onResolve({ filter: /^inline:/ }, (args) => ({
+      path: path.resolve(args.resolveDir, args.path.replace(/^inline:/, "")),
+      namespace: "mx-inline",
+    }));
+    build.onLoad({ filter: /.*/, namespace: "mx-inline" }, async (args) => {
+      const r = await esbuild.build({
+        entryPoints: [args.path],
+        write: false,
+        bundle: true,
+        minify: true,
+        format: "cjs",
+        target: "es2022",
+        external: ["media-extended", "fs/promises", "electron", "path"],
+        ...(prod ? { drop: ["console"] } : {}),
+        logLevel: "silent",
+      });
+      return { contents: r.outputFiles[0].text, loader: "text" };
+    });
+  },
+};
+const mxCaptionsPlugin = {
+  name: "mx-fix-media-captions",
+  setup(build) {
+    build.onLoad({ filter: /media-captions[\\/]/ }, async (args) => {
+      const code = await readFile(args.path, "utf8");
+      return {
+        contents: code.replaceAll(/\b instanceof HTMLElement\b/g, ".instanceOf(HTMLElement)"),
+        loader: "js",
+        resolveDir: path.dirname(args.path),
+      };
+    });
+  },
+};
+const mxNodeEnvPlugin = {
+  name: "mx-node-env",
+  setup(build) {
+    build.onLoad({ filter: /media-extended[\\/]/ }, async (args) => {
+      const contents = await readFile(args.path, "utf8");
+      if (!contents.includes("process.env.NODE_ENV")) return undefined;
+      const ext = path.extname(args.path);
+      return {
+        contents: contents.replaceAll(
+          "process.env.NODE_ENV",
+          JSON.stringify(prod ? "production" : "development"),
+        ),
+        loader: ext === ".tsx" ? "tsx" : ext === ".ts" ? "ts" : "js",
+        resolveDir: path.dirname(args.path),
+      };
+    });
+  },
+};
+
 const context = await esbuild.context({
   banner: { js: banner },
   entryPoints: ["src/main.ts"],
@@ -240,7 +308,7 @@ const context = await esbuild.context({
     // ollama 等包用 `node:fs` 带前缀的写法，裸名列表罩不住
     ...builtins.map((m) => `node:${m}`),
   ],
-  plugins: [cmBundlePlugin, sveltePlugin, dexiePatchPlugin, importGlobPlugin, musicPlayerShimsPlugin],
+  plugins: [cmBundlePlugin, sveltePlugin, dexiePatchPlugin, importGlobPlugin, musicPlayerShimsPlugin, mxInlinePlugin, mxCaptionsPlugin, mxNodeEnvPlugin],
   // Monaco 的 codicon.css 引用 .ttf 字体(图标字形)。内联成 dataurl:图标
   // 只有几 KB,而少这一条整个构建会以 "No loader is configured for .ttf" 失败。
   // (与独立插件 obsidian-logseq 的 esbuild.mjs 同款配置。)
@@ -252,6 +320,10 @@ const context = await esbuild.context({
     // styles.css 的 Music Player 分段，JS 侧按上游同款空模块处理，不产 main.css）
     ".tsx": "tsx",
     ".css": "empty",
+    ".less": "empty",
+    // media-extended: svg/ejs 按上游以文本内联
+    ".svg": "text",
+    ".ejs": "text",
   },
   define: {
     // wa-sqlite's Emscripten glue reads import.meta.url to locate its wasm;
