@@ -21,5 +21,5 @@ modules/logseq/tests/_new-*.ts.txt
 modules/logseq/tests/_diag-*
 modules/logseq/tests/fixtures/edge-vault/.obsidian/plugins/obsidian-logseq/monaco.css
 modules/logseq/tests/fixtures/edge-vault/.obsidian/plugins/obsidian-logseq/monaco-workers/
-# 各模块的一次性探针脚本(下划线开头)
-modules/*/tests/_probe-*.mjs
+# 各模块的一次性探针脚本(下划线开头,含 e2e 子目录)
+modules/*/tests/**/_probe-*.mjs

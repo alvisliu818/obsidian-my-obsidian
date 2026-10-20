@@ -8,7 +8,7 @@
 import { MarkdownRenderer, TFile, Notice, setIcon } from 'obsidian';
 import type { Completion, CompletionContext, CompletionResult, CompletionSource } from '@codemirror/autocomplete';
 import type { BlockRenderHost } from '../blocks/renderHost';
-import { blockSummary } from '../types';
+import { blockId, blockSummary } from '../types';
 import { parseDocument } from '../core/parser';
 import { serializeDocument } from '../core/serializer';
 import { blockAtPath, findBlockById, linkParents, pathToRoot, pseudoRootOf, registerRoots } from '../core/treeOps';
@@ -619,20 +619,30 @@ function crumbsFor(b: Block, fileLabel: string): string[] {
 
 
 /**
- * Find the embed row rendering `target` (by model identity) inside `box`,
- * with its addressing info — used to re-open the in-place editor on a row
- * after the box re-renders (Tab indent inside embeds).
+ * Find the embed row rendering `target` inside `box`, with its addressing
+ * info — used to re-open the in-place editor on a row after the box
+ * re-renders (Tab indent inside embeds).
+ *
+ * 匹配用**稳定 key**(块 id,缺 id 退回整段文本)而不是对象身份:页面嵌入
+ * 重渲染会把源文件重新解析、块对象全是新建的,按 `b === target` 永远匹配
+ * 不上 —— Tab 缩进后就再也找不回那一行,编辑器重开失败、焦点直接丢
+ * (实测:嵌入页面里按 Tab 失焦)。同文件模型对象身份不灭,`b === target`
+ * 保留为快路径。
  */
 export function findEmbedRowForBlock(
   box: HTMLElement,
   target: Block,
 ): { row: HTMLElement; src: EmbedSource; path: number[] } | null {
+  const key = blockId(target) || target.text;
   for (const rowEl of Array.from(box.querySelectorAll<HTMLElement>('.embed-row'))) {
     const reg = embedRows.get(rowEl);
     if (!reg) continue;
     let b: Block | null = reg.src.block;
     for (const i of reg.path) b = b?.children[i] ?? null;
-    if (b === target) return { row: rowEl, src: reg.src, path: reg.path };
+    if (!b) continue;
+    if (b === target || (blockId(b) || b.text) === key) {
+      return { row: rowEl, src: reg.src, path: reg.path };
+    }
   }
   return null;
 }

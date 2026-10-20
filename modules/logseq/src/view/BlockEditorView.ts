@@ -1576,9 +1576,11 @@ ${content}`;
     const path = this.embedEdit?.path ?? null;
     const editRow = this.embedEdit?.row ?? null;
     if (!src || !path || !editRow) return false;
-    void this.commitEmbedEdit().then(() => {
-      this.commitEmbedEditTabInner(src, path, editRow, shift);
-    });
+    void this.commitEmbedEdit()
+      .then(() => {
+        this.commitEmbedEditTabInner(src, path, editRow, shift);
+      })
+      .catch((e) => console.warn('[logseq] embed tab chain failed:', String(e)));
     return true;
   }
 
@@ -1641,6 +1643,8 @@ ${content}`;
         if (!fresh) return;
         const freshSrc: EmbedSource = { block: fresh, crumbs: src.crumbs, file: src.file, id: src.id };
         renderEmbedBodyFrom(box, freshSrc, src.id, this);
+        // 源视图重渲染后同样要把编辑器开回去(Tab = 缩进后继续编辑,不失焦)。
+        editIndentedWhenReady();
       }
       return;
     }
@@ -1648,11 +1652,24 @@ ${content}`;
     // Nobody has the source open: patch the file on disk (guarded write).
     void mutatePageEmbedSource(this, src.file!, (doc) => {
       const root = src.id ? findBlockById(doc.blocks, src.id) : pseudoRootOf(doc.blocks);
+      // 重解析的 doc 没有注册 root,顶层块 parent=null —— indent/outdent 的
+      // 兄弟查找(siblingsOf)落空会**静默失败**(返回 false,结构不变),表现为
+      // Tab 后既没缩进、编辑器也重开失败(焦点丢失)。以 addr root 为顶重连
+      // 父子指针,兄弟查找才有落点。
+      if (root) linkParents([root]);
       const t = root ? blockAtPath(root, path) : null;
       if (t) (shift ? outdent(t) : indent(t));
     }).then(() => {
-      if (isPageEmbed) void refreshPageEmbedBox(this, box, src.file!);
-      else void refreshEmbedBox(this, box, src.id);
+      // 磁盘模式:写入 + 重渲染完成后把编辑器开回缩进后的那一行。
+      // 必须等重渲染 resolve 后再找行:refresh 是异步的(cachedRead 之后才
+      // box.empty() 重建行),若立即轮询,第一次 tryFind 会命中重渲染前的
+      // 旧行(旧对象身份快路径立即匹配成功),把编辑器开在旧行上,随后
+      // box.empty() 把它连同编辑器一起拆掉 —— Tab 后编辑器闪现即失焦。
+      // (与 commitEmbedEditAndNewInner 磁盘分支同一等待模式。)
+      const refreshed = isPageEmbed
+        ? refreshPageEmbedBox(this, box, src.file!)
+        : refreshEmbedBox(this, box, src.id);
+      void refreshed.then(() => editIndentedWhenReady());
     });
   }
 
@@ -1769,6 +1786,8 @@ ${content}`;
     let npDisk: number[] | null = null;
     void mutatePageEmbedSource(this, src.file, (doc) => {
       const addrRoot = isPageEmbed ? pseudoRootOf(doc.blocks) : findBlockById(doc.blocks, src.id);
+      // 同 commitEmbedEditTabInner:重连父子指针,嵌套行的兄弟查找才不落空。
+      if (addrRoot) linkParents([addrRoot]);
       const plan = planInsert(doc.blocks, addrRoot);
       if (!plan) return;
       const nb = createBlock('');
