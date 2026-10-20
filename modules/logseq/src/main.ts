@@ -24,7 +24,7 @@ import {
 } from './types';
 import { mountDisplayName } from './types';
 import { isMarkdownFile } from './features/codeFileKind';
-import { isTextFileName, extOfName } from './features/mountFilter';
+import { compileFilter, isTextFileName, extOfName } from './features/mountFilter';
 import { LogseqEditorSettingTab } from './settings/tab';
 import { initEditorSettingsStore, loadEditorSettings, saveEditorSettings } from './settings/editorSettingsStore';
 import { BlockIndex } from './index/blockIndex';
@@ -68,8 +68,9 @@ import {
   readExternalText,
   safeSegment,
   sameVolume,
+  scanExternal,
 } from './features/extFs';
-import type { MountNode } from './features/mountFilter';
+import type { MountNode, ScanEntry } from './features/mountFilter';
 import { openJournal } from './features/dailyNote';
 import { BackupManager } from './core/backup';
 import { registerNativeImgFix } from './features/nativeImgFix';
@@ -1670,6 +1671,9 @@ export default class LogseqEditorPlugin extends Plugin {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_MOUNT_PANEL)) {
       (leaf.view as MountPanelView | null)?.refreshMounts();
     }
+    // 广播「挂载已刷新」：omnisearch 据此重索引库外文件。不广播的话，
+    // 会话中新增/删除的库外文件要等下次重启才会进索引。
+    this.app.workspace.trigger('logseq:external-mounts-refreshed');
   }
 
   /**
@@ -1749,6 +1753,74 @@ export default class LogseqEditorPlugin extends Plugin {
    */
   private refreshTabIconsSoon(): void {
     window.setTimeout(() => this.refreshTabIcons(), 120);
+  }
+
+  /**
+   * 供其它模块（omnisearch）列举库外可搜索文件——「库外搜索」的数据源。
+   *
+   * 返回扁平的 `{abs, name, mtime}`（绝对路径）。纯只读：不打开、不建链接、
+   * 不写盘；调用方自己转成 `ext:` 伪路径并判断是否可索引。
+   *
+   * 走与面板同源的 `scanExternal` + mount 的 include/exclude 过滤，保证
+   * 「能搜到的」与「面板里看得见的」是同一批文件。单个挂载扫描失败只跳过
+   * 它，不影响其余挂载，也绝不抛给调用方。
+   */
+  public listExternalSearchFiles(): Array<{ abs: string; name: string; mtime: number }> {
+    const out: Array<{ abs: string; name: string; mtime: number }> = [];
+    const mounts = this.settings.externalMounts ?? [];
+    for (const mount of mounts) {
+      if (!mount?.enabled || !mount.path) continue;
+      const filter = compileFilter({
+        include: mount.include ?? '',
+        exclude: mount.exclude ?? '',
+      });
+      // exclude 优先、其次 include —— 与 buildTree 的判定保持一致。
+      const keep = (rel: string): boolean => {
+        if (filter.exclude?.test(rel)) return false;
+        if (filter.include && !filter.include.test(rel)) return false;
+        return true;
+      };
+      let entries: ScanEntry[];
+      try {
+        entries = scanExternal(mount.path, {
+          shouldEnterDir: () => true,
+          keepFile: keep,
+        }).entries;
+      } catch (e) {
+        console.warn('[logseq] listExternalSearchFiles: scan failed for', mount.path, e);
+        continue;
+      }
+      for (const entry of entries) {
+        if (entry.isDir) continue;
+        out.push({ abs: entry.abs, name: entry.name, mtime: entry.mtime ?? 0 });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 反查一个绝对路径属于哪个挂载，返回 `{mount, rel}`（rel 用 `/` 分隔）。
+   * omnisearch 打开库外搜索结果时用它拼 `openExternalEntry` 需要的
+   * mount + node。不在任何启用挂载下（或就是挂载根本身）返回 null。
+   *
+   * 嵌套挂载取**最长匹配**（最具体的那个），比较按 Windows 习惯忽略大小写。
+   */
+  public resolveExternalMount(abs: string): { mount: ExternalMount; rel: string } | null {
+    const norm = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '');
+    const target = norm(abs);
+    const targetLower = target.toLowerCase();
+    let best: { mount: ExternalMount; rel: string } | null = null;
+    for (const mount of this.settings.externalMounts ?? []) {
+      if (!mount?.enabled || !mount.path) continue;
+      const root = norm(mount.path);
+      if (!targetLower.startsWith(root.toLowerCase())) continue;
+      const rel = target.slice(root.length).replace(/^\//, '');
+      if (!rel) continue; // 挂载根本身不是文件
+      if (!best || root.length > norm(best.mount.path).length) {
+        best = { mount, rel };
+      }
+    }
+    return best;
   }
 
   async openExternalEntry(

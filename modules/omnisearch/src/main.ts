@@ -1,5 +1,6 @@
 import {
   App,
+  type EventRef,
   Notice,
   Platform,
   Plugin,
@@ -178,6 +179,18 @@ export default class OmnisearchPlugin extends Plugin {
       await this.executeFirstLaunchTasks()
       await this.populateIndex()
 
+      // 库外文件（虚拟文档树挂载）：初始索引后立刻重索引一次，并订阅 logseq
+      // 的挂载刷新广播——否则会话中新增/删除的库外文件不会进索引。
+      void this.reindexExternalFiles()
+      // 自定义事件名不在 obsidian.d.ts 的 on() 重载里（那里只列举内置事件），
+      // 故走一次窄化的 any 通道；registerEvent 仍负责卸载时注销。
+      const ws = this.app.workspace as unknown as {
+        on(name: string, cb: () => void): EventRef
+      }
+      this.registerEvent(
+        ws.on('logseq:external-mounts-refreshed', () => this.scheduleExternalReindex()),
+      )
+
       if (this.apiHttpServer && settings.httpApiEnabled) {
         this.apiHttpServer.listen(settings.httpApiPort)
       }
@@ -277,6 +290,21 @@ export default class OmnisearchPlugin extends Plugin {
    * getDocumentsToReindex，那会把「不在清单里的所有库内文档」都判成已删除
    * 而清掉整个库内索引（e2e 的金丝雀探针逮到过）。
    */
+  /**
+   * 挂载刷新广播可能很频繁（logseq 的 refreshSeconds 定时轮询），
+   * 防抖后再重扫——每次全量列举挂载树在大目录上不便宜。
+   */
+  private externalReindexTimer: number | null = null;
+  private scheduleExternalReindex(): void {
+    if (this.externalReindexTimer !== null) {
+      window.clearTimeout(this.externalReindexTimer);
+    }
+    this.externalReindexTimer = window.setTimeout(() => {
+      this.externalReindexTimer = null;
+      void this.reindexExternalFiles();
+    }, 2000);
+  }
+
   public async reindexExternalFiles(): Promise<void> {
     try {
       const ext = this.getExternalIndexableFiles()
