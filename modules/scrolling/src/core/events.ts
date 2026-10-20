@@ -121,7 +121,12 @@ export class Events {
                         plugin.events.isOpeningWithLink = true;
 
                         const args = [linktext, sourcePath, newLeaf, openViewState];
-                        const result = await oldOpenLinkText.apply(this, args);
+                        // 聚合主仓的 obsidian 类型把 openLinkText 的形参定成元组；
+                        // args 是同一组实参，运行时行为不变。
+                        const result = await oldOpenLinkText.apply(
+                            this,
+                            args as Parameters<Workspace["openLinkText"]>,
+                        );
 
                         plugin.events.isOpeningWithLink = false;
 

@@ -160,7 +160,8 @@ export class CenteredCursorFeature implements Feature {
     private cursorInTable(editor: Editor): boolean {
         const { from } = editor.cm.state.selection.main;
         const tree = syntaxTree(editor.cm.state);
-        let node = tree.resolve(from, -1);
+        // 聚合主仓开了 strictNullChecks：parent 可能是 null，循环条件已判空。
+        let node: ReturnType<typeof tree.resolve> | null = tree.resolve(from, -1);
 
         while (node) {
             if (node.name.startsWith("HyperMD-table")) {

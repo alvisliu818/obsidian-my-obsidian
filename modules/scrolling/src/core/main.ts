@@ -7,7 +7,9 @@ import { ScrollingPluginSettings } from "@core/feature.schema";
 import type { SettingsStore } from "@core/SettingsStore";
 
 export default class ScrollingPlugin extends Plugin {
-    settings: ScrollingPluginSettings;
+    // 聚合主仓打开 strictPropertyInitialization：settings 由 loadSettings() 填充，
+    // 语义与上游一致（上游未开该开关，靠约定保证）。
+    settings!: ScrollingPluginSettings;
     events!: Events;
     featureRegistry!: FeatureRegistry;
     settingsStore!: SettingsStore;

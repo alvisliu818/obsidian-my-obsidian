@@ -42,6 +42,7 @@ import AudioRecorderPlugin from "../modules/audio-recorder/src/main";
 import MediaJournalPlugin from "../modules/media-journal/src/main";
 import MusicPlayerPlugin from "../modules/music-player/src/main";
 import AudioPlayerPlugin from "../modules/audio-player/src/main";
+import ScrollingPlugin from "../modules/scrolling/src/core/main";
 // media-extended v3 自带 obsidian@1.5.7 类型与自己的 "@/..." 别名（与
 // music-player 的 @/ 同名冲突），经 require 桥接进 bundle：不进宿主 tsc
 // 程序（类型由模块自带 tsconfig 独立校验），运行时打包不受影响。
@@ -248,6 +249,18 @@ export default class MyObsidianPlugin extends Plugin {
 				"转录文稿时间戳点击即播：自定义播放器（进度/音量/倍速/字幕/画中画/全屏）、贴边媒体、字幕歌词、快捷键、循环区间、时间戳插入；同笔记多录音可用 %%audio-id%% 显式绑定，播放跨视图切换存活（悬浮播放器）。上游 blontern（MIT）+ ITNQ18（0BSD）+ zhoulianglen（MIT）。",
 			desktopOnly: false,
 			cls: AudioPlayerPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Third-party (omeyenburg / Oskar Meyenburg, MIT), kept whole — see
+			// modules/scrolling/NOTICE. Upstream history (369 commits) was grafted
+			// into this repo, so `git log --follow modules/scrolling` still works.
+			id: "scrolling",
+			legacyId: "scrolling",
+			name: "my Scrolling",
+			summary:
+				"滚动与导航增强：光标居中（typewriter 模式）、记住并恢复滚动/光标位置、代码块不换行横向滚动、行内 MathJax 与文件树横向滚动、置顶/置底按钮与快捷命令、阅读模式 Vim 式快捷键、滚动条显隐策略、正文最大行宽。上游 omeyenburg（MIT）。",
+			desktopOnly: false,
+			cls: ScrollingPlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 

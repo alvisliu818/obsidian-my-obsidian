@@ -46,7 +46,15 @@ export class ScrollButtonsFeature implements Feature {
     public onload(plugin: ScrollingPlugin): void {
         this.plugin = plugin;
         this.plugin.events.onLayoutReady(this.setup.bind(this));
-        this.plugin.events.onLeafChange(this.leafChangeHandler.bind(this));
+        // onLeafChange 的回调按 WorkspaceLeaf 声明（active-leaf-change 传叶子），
+        // 而本文件的处理器按 MarkdownView 取 view.leaf —— 上游本就如此，
+        // 这里只补类型、保持运行时行为原样（view.leaf 为 undefined 时走
+        // getActiveViewOfType 兜底分支）。
+        this.plugin.events.onLeafChange(
+            this.leafChangeHandler.bind(this) as unknown as (
+                leaf: WorkspaceLeaf | null,
+            ) => void,
+        );
     }
 
     public onunload(): void {

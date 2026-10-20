@@ -25,7 +25,9 @@ interface EphemeralState {
 }
 
 class FileLeaf extends WorkspaceLeaf {
-    view: FileView;
+    // 聚合主仓开了 strictPropertyInitialization：这里只是收窄 WorkspaceLeaf
+    // 的 view 类型（不产生运行时字段，故用 declare）。
+    declare view: FileView;
 }
 
 export class RememberFileStateFeature implements Feature {
@@ -197,7 +199,8 @@ export class RememberFileStateFeature implements Feature {
 
     private openLeafIds = new Set();
 
-    private workspaceInitialized: boolean;
+    // 由 onload 赋值（聚合主仓开了 strictPropertyInitialization）。
+    private workspaceInitialized!: boolean;
 
     // Prime numbers :)
     private readonly STORE_INTERVAL = 97;
@@ -427,7 +430,13 @@ export class RememberFileStateFeature implements Feature {
     /**
      * On cursor update.
      */
-    private cursorUpdateHandler(_editor: Editor, _docChanged: boolean, vimModeChanged: boolean) {
+    // 形参放宽为可选：events.onLayoutReady 的回调是 () => void，
+    // 带可选形参的函数可赋给它，运行时调用不变。
+    private cursorUpdateHandler(
+        _editor?: Editor,
+        _docChanged?: boolean,
+        vimModeChanged?: boolean,
+    ) {
         if (vimModeChanged) return;
         this.storeStateDebounced();
     }
@@ -440,7 +449,8 @@ export class RememberFileStateFeature implements Feature {
      * Does not restore if heading link is used or links are disabled and any link is used.
      * Might break if the same file is opened twice in different tabs simultaneously .
      */
-    private fileOpenHandler(_file: TFile): void {
+    // events.onFileOpen 传入 TFile | null；上游只按非空使用，此处仅放宽签名。
+    private fileOpenHandler(_file: TFile | null): void {
         // Do not restore on initial load. Responsiblity of layoutReadyHandler.
         if (!this.workspaceInitialized) return;
         if (this.plugin.settings.restoreScrollInitialOnly) return;
@@ -560,7 +570,7 @@ export class RememberFileStateFeature implements Feature {
             ) {
                 continue;
             }
-            if (leaf.view.file.path == sibling.view.file.path) return true;
+            if (leaf.view.file!.path == sibling.view.file!.path) return true;
         }
 
         return false;
@@ -574,7 +584,11 @@ export class RememberFileStateFeature implements Feature {
         // Mode top means feature is disabled.
         if (this.plugin.settings.restoreScrollMode === "top") return;
 
-        let cursor: EditorRange, scroll: number, scrollTop: number;
+        // 上游三个变量在 bottom 分支里不赋值（类型上就是“可能未定义”），
+        // 聚合主仓开了严格空检查，故显式声明为可空。
+        let cursor: EditorRange | undefined;
+        let scroll: number | undefined;
+        let scrollTop: number | undefined;
         if (this.plugin.settings.restoreScrollMode === "bottom") {
             // For bottom mode use same logic as for scroll mode.
             scroll = Infinity;
@@ -754,9 +768,9 @@ export class RememberFileStateFeature implements Feature {
     private getFileId(view: FileView): string {
         const splitId = this.getSplitIdOfLeaf(view.leaf);
         if (splitId === "") {
-            return view.file.path;
+            return view.file!.path;
         } else {
-            return view.file.path + "#" + splitId;
+            return view.file!.path + "#" + splitId;
         }
     }
 
@@ -773,7 +787,7 @@ export class RememberFileStateFeature implements Feature {
         // If element is provided, find matching view. Otherwise use active view.
         // Not active leaves can be scrolled.
         // Blocked while loading (leaf.working) or not rendered (leaf.width is zero).
-        let view: FileView = null;
+        let view: FileView | null = null;
         if (el) {
             this.plugin.app.workspace.iterateRootLeaves((leaf) => {
                 if (

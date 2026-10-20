@@ -178,7 +178,8 @@ export class SettingsTranslator {
             setting.addText((component) => {
                 text = component;
                 component
-                    .setPlaceholder(placeholder)
+                    // placeholder 可能是 undefined（上游同款）；此处只补类型。
+                    .setPlaceholder(placeholder!)
                     .setValue(format(last))
                     .onChange((raw: string) => {
                         const value = parse(raw);
@@ -220,7 +221,8 @@ export class SettingsTranslator {
             const isLiveDesc = typeof item.desc === "function";
             const applyDesc = (): void => {
                 if (isLiveDesc) {
-                    setting.setDesc(resolveDesc(item.desc));
+                    // 同上：desc 可能是 undefined，运行时行为不变。
+                    setting.setDesc(resolveDesc(item.desc)!);
                 }
             };
             applyDesc();

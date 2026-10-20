@@ -77,7 +77,12 @@ export class CodeBlockFeature implements Feature {
         this.plugin.events.onScrollEnd(this.scrollEndHandler.bind(this));
         this.plugin.events.onTouchMove(this.touchMoveHandler.bind(this));
         this.plugin.events.onLeafChange(this.leafChangeHandler.bind(this));
-        this.plugin.events.onWheelCancelling(this.wheelHandler.bind(this), 9);
+        // onWheelCancelling 的回调按 Event 声明，实际只会收到 wheel 事件
+        // （wheelHandler 需要 WheelEvent 的 deltaX/deltaY）。
+        this.plugin.events.onWheelCancelling(
+            this.wheelHandler.bind(this) as unknown as (event: Event) => boolean,
+            9,
+        );
         this.plugin.events.onCursorUpdate(this.cursorUpdateHandler.bind(this));
     }
 
@@ -413,7 +418,8 @@ export class CodeBlockFeature implements Feature {
         if (!this.codeBlockLines.length) return;
         if (editor && editor !== this.plugin.app.workspace.activeEditor?.editor) return;
 
-        const cursorEl = this.getCursorEl(editor);
+        // editor 可能是 null（上游同款调用）；这里只补类型，空值行为保持原样。
+        const cursorEl = this.getCursorEl(editor!);
         if (!cursorEl) return;
         cursorEl.detach();
     }

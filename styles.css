@@ -13399,3 +13399,167 @@ a[data-href*="#video-time="] {
         display: none;
     }
 }
+
+
+/* ==================== Scrolling (modules/scrolling) ==================== */
+/* 上游 omeyenburg/obsidian-scrolling v1.4.0（MIT）原样合并；模块目录里的
+   styles.css 仅留档，聚合构建对 .css 按 empty 处理，不产独立产物。 */
+/*
+ *
+ * name: Scrolling
+ * id: scrolling
+ *
+ */
+
+/* --- Scrollbar --- */
+/* hide specific scrollbars in files */
+body.scrolling-visibility-hide *::-webkit-scrollbar {
+    display: none;
+}
+
+/* hide scrollbar temporarily */
+body.scrolling-visibility-scroll *:not(.scrolling-show-temporary)::-webkit-scrollbar:not(:hover),
+body.scrolling-visibility-scroll *:not(.scrolling-show-temporary)::-webkit-scrollbar-thumb:not(:hover),
+body.scrolling-visibility-scroll *:not(.scrolling-show-temporary)::-webkit-scrollbar-track:not(:hover) {
+    background: transparent;
+}
+
+/* scrollbar width */
+body.scrolling-scrollbar-width *::-webkit-scrollbar {
+    width: var(--scrolling-scrollbar-width);
+    height: var(--scrolling-scrollbar-width);
+}
+
+/* --- Code blocks --- */
+/* source view */
+body.scrolling-horizontal-code-blocks .markdown-source-view .HyperMD-codeblock.cm-line:not(.HyperMD-codeblock-begin):not(.HyperMD-codeblock-end) {
+    overflow-x: hidden;
+    white-space: nowrap;
+    position: relative;
+    will-change: scroll-position;
+    touch-action: pan-y pinch-zoom;
+}
+
+body.scrolling-horizontal-code-blocks .markdown-source-view .HyperMD-codeblock.cm-line:not(.HyperMD-codeblock-begin):not(.HyperMD-codeblock-end)::after {
+    content: '';
+    display: inline-block;
+    width: calc(var(--scrolling-extra-line-length) + var(--size-4-4));
+    height: 0;
+    cursor: text;
+}
+
+body.scrolling-horizontal-code-blocks .markdown-source-view .HyperMD-codeblock.cm-line:not(.HyperMD-codeblock-begin):not(.HyperMD-codeblock-end):has(> br) {
+    max-height: calc(1em * var(--line-height-normal));
+}
+
+.HyperMD-codeblock .cm-line>.cm-hmd-codeblock {
+    display: inline-block;
+    vertical-align: top;
+}
+
+body.scrolling-horizontal-code-blocks .markdown-source-view .cm-indent::before {
+    cursor: text;
+}
+
+body.scrolling-horizontal-code-blocks .markdown-source-view .HyperMD-codeblock.cm-line::-webkit-scrollbar {
+    display: none;
+}
+
+body.scrolling-horizontal-code-blocks .markdown-source-view .HyperMD-codeblock.cm-line br {
+    height: 0px;
+    content: "";
+}
+
+body.scrolling-horizontal-code-blocks .markdown-source-view .HyperMD-codeblock.HyperMD-codeblock-begin.cm-line {
+    padding-bottom: 0.3rem;
+}
+
+/* preview view */
+body.scrolling-horizontal-code-blocks .markdown-preview-view pre>code {
+    white-space: pre;
+    overflow-x: auto;
+    display: block;
+    cursor: text;
+}
+
+/* --- Mathjax --- */
+/* scrollable inline mathjax if exceeding view */
+body.scrolling-horizontal-mathjax span.math {
+    overflow: auto;
+    max-width: 100%;
+    display: inline-block;
+    vertical-align: top;
+}
+
+/* --- File tree --- */
+body.scrolling-horizontal-filetree .nav-files-container {
+    overflow: auto;
+}
+
+body.scrolling-horizontal-filetree .nav-files-container>div {
+    min-width: max-content;
+    min-height: max-content;
+}
+
+body.scrolling-horizontal-filetree .tree-item-self.nav-file-title,
+body.scrolling-horizontal-filetree .tree-item-self.nav-folder-title {
+    flex-shrink: 0;
+}
+
+/* --- Scroll buttons --- */
+.scrolling-overlay-button-container {
+    position: absolute;
+    bottom: 40px;
+    right: var(--size-4-3);
+    z-index: 9999;
+    gap: 10px;
+    display: flex;
+    flex-direction: column;
+}
+
+.scrolling-overlay-button-container svg {
+    width: 100%;
+    height: 100%;
+}
+
+.scrolling-overlay-button {
+    width: 40px;
+    height: 40px;
+}
+
+/* optional setting `scrolling-overlay-buttons-top` */
+body.scrolling-overlay-buttons-top .scrolling-overlay-button-container,
+body.scrolling-overlay-buttons-top .scrolling-overlay-button-container {
+    top: calc(var(--header-height) + var(--size-4-3));
+    bottom: unset;
+}
+
+/* mobile version */
+body.is-mobile .scrolling-overlay-button,
+body.is-tablet .scrolling-overlay-button {
+    width: var(--view-header-height);
+    height: var(--view-header-height);
+    border-radius: 0;
+}
+
+body.is-mobile .scrolling-overlay-button-container,
+body.is-tablet .scrolling-overlay-button-container {
+    border-radius: var(--button-radius);
+    overflow: hidden;
+    gap: 0;
+    bottom: calc(var(--navbar-bottom-offset) - var(--keyboard-height) - 2px + var(--navbar-height) + var(--size-4-3));
+}
+
+/* mobile version: optional setting `scrolling-overlay-buttons-top` */
+body.is-mobile.scrolling-overlay-buttons-top .scrolling-overlay-button-container,
+body.is-tablet.scrolling-overlay-buttons-top .scrolling-overlay-button-container {
+    top: calc(var(--view-header-height) + var(--view-header-top-offset) + var(--size-4-3));
+    bottom: unset;
+}
+
+/* Setting descriptions that use `\n` for a hard line break.
+   Obsidian collapses whitespace in `.setting-item-description`, so opt back in.
+   Scoped to the groups this plugin renders to avoid affecting other plugins. */
+.scrolling-setting-group .setting-item-description {
+    white-space: pre-line;
+}

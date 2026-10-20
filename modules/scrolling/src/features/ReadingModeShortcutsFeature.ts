@@ -42,7 +42,8 @@ export class ReadingModeShortcutsFeature implements Feature {
     private scroller: Element | null = null;
 
     private lastKeyPress = 0;
-    private animationFrame: number;
+    // 聚合主仓开了 strictPropertyInitialization；由 animateScrollLine 赋值。
+    private animationFrame!: number;
 
     public onload(plugin: ScrollingPlugin): void {
         this.plugin = plugin;
@@ -110,12 +111,12 @@ export class ReadingModeShortcutsFeature implements Feature {
         if (!this.plugin.settings.readingLineScrollEnabled) return;
 
         if (this.goal !== null) {
-            this.scroller.scrollTo({ top: this.goal });
+            this.scroller!.scrollTo({ top: this.goal });
         }
 
         const deltaTimeNormalization = deltaTime < 200 ? deltaTime * 0.02 : 1;
         const change = this.getLineHeight() * direction * deltaTimeNormalization;
-        this.goal = this.scroller.scrollTop + change;
+        this.goal = this.scroller!.scrollTop + change;
 
         const steps = 5;
         window.cancelAnimationFrame(this.animationFrame);
@@ -125,8 +126,8 @@ export class ReadingModeShortcutsFeature implements Feature {
     private scrollHalfPage(direction: -1 | 1) {
         if (!this.plugin.settings.readingHalfPageScrollEnabled) return;
 
-        const change = (this.scroller.clientHeight * direction) / 2;
-        const goal = this.scroller.scrollTop + change;
+        const change = (this.scroller!.clientHeight * direction) / 2;
+        const goal = this.scroller!.scrollTop + change;
 
         const steps = 5;
         this.animateScrollLine(goal, change / steps, steps);
@@ -135,13 +136,13 @@ export class ReadingModeShortcutsFeature implements Feature {
     private scrollToTop() {
         if (!this.plugin.settings.readingTopBottomScrollEnabled) return;
 
-        this.scroller.scrollTo({ top: 0 });
+        this.scroller!.scrollTo({ top: 0 });
     }
 
     private scrollToBottom() {
         if (!this.plugin.settings.readingTopBottomScrollEnabled) return;
 
-        this.scroller.scrollTo({ top: 1000000000 });
+        this.scroller!.scrollTo({ top: 1000000000 });
         window.requestAnimationFrame(() => {
             if (this.scroller) {
                 this.scroller.scrollTo({ top: 1000000000 });
@@ -152,7 +153,7 @@ export class ReadingModeShortcutsFeature implements Feature {
     private animateScrollLine(goal: number, stepSize: number, step: number): void {
         if (step <= 0) return;
 
-        this.scroller.scrollTo({ top: goal - stepSize * (step - 1) });
+        this.scroller!.scrollTo({ top: goal - stepSize * (step - 1) });
         this.animationFrame = window.requestAnimationFrame(() =>
             this.animateScrollLine(goal, stepSize, step - 1),
         );
