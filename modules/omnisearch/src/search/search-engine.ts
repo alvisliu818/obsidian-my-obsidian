@@ -13,7 +13,6 @@ import { isExternalDocPath } from '../tools/externalDocs'
 
 import {
   chunkArray,
-  countError,
   logVerbose,
   normalizeExactMatchContent,
   removeDiacritics,
@@ -370,16 +369,50 @@ export class SearchEngine {
 
     if (results.length) logVerbose('First result:', results[0])
 
-    const documents = await Promise.all(
+    // 取结果对应的文档（Promise.all 保序）。
+    // 取不到有两种原因：文件已删（索引里的陈旧条目），或网盘挂载下被锁定 /
+    // 临时不可读（瞬态失败）。两者都不是「缓存损坏」——原先这里用
+    // countError(true)，immediate 会跳过 5 次阈值直接弹「请清理缓存」，
+    // 百度网盘挂载下每次重启都误报。改为只记 verbose 并剔除该结果。
+    const docs = await Promise.all(
       results.map(async result => {
         const doc = await this.plugin.documentsRepository.getDocument(result.id)
         if (!doc) {
-          console.warn(`Omnisearch - Note "${result.id}" not in the live cache`)
-          countError(true)
+          logVerbose(`Omnisearch - Note "${result.id}" not in the live cache`)
         }
         return doc
       })
     )
+
+    // 剔除没取到文档的条目，顺手清理确实已消失的文件（自愈，避免反复命中）。
+    // 同时保证 documents 里不混入 undefined —— 下面
+    // documents.find(d => d.path === ...) 否则会对 undefined 取属性抛异常。
+    const documents: IndexedDocument[] = []
+    const keptResults: SearchResult[] = []
+    const stalePaths: string[] = []
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i]
+      const doc = docs[i]
+      if (!doc) {
+        if (
+          !isExternalDocPath(result.id) &&
+          !this.plugin.app.vault.getAbstractFileByPath(result.id)
+        ) {
+          stalePaths.push(result.id)
+        }
+        continue
+      }
+      documents.push(doc)
+      keptResults.push(result)
+    }
+    if (stalePaths.length) {
+      logVerbose('Omnisearch - pruning stale index entries:', stalePaths)
+      this.removeFromPaths(stalePaths)
+      for (const p of stalePaths) {
+        this.plugin.documentsRepository.removeDocument(p)
+      }
+    }
+    results = keptResults
 
     // If the search query contains quotes, filter out results that don't have the exact match
     const exactTerms = query.getExactTerms()
