@@ -20,7 +20,7 @@ import {
   type KeyBinding,
   type ViewUpdate,
 } from '@codemirror/view';
-import { EditorState, Prec, RangeSetBuilder, type Extension } from '@codemirror/state';
+import { EditorState, Prec, RangeSetBuilder, StateField, type Extension } from '@codemirror/state';
 import { caretOverlay } from './caretOverlay';
 import { defaultKeymap, history, historyKeymap, insertNewline } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
@@ -33,7 +33,7 @@ import {
   moveCompletionSelection,
 } from '@codemirror/autocomplete';
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { editorInfoField, editorLivePreviewField, renderMath, finishRenderMath } from 'obsidian';
+import { editorInfoField, editorLivePreviewField, editorEditorField, renderMath, finishRenderMath } from 'obsidian';
 import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Block } from '../types';
 import { ownedDefaultKeys } from '../interactions/defaultKeymapOwnership';
@@ -105,15 +105,60 @@ export function mathLiveBlockPreview(): Extension {
  * ALWAYS live preview, so its `create` is patched to report true. Plugins
  * like latex-suite gate their live math preview on it.
  */
+/**
+ * 兼容性甄别:外来扩展能否在大纲 CM 里跑。在一次性状态里试一次 docChanged
+ * 事务——依赖原生编辑器专属上下文的扩展(读 editorEditorField 里的 Editor
+ * 实例等)会在这里抛错,原样拼进大纲就会让每次按键的事务被炸掉(DOM/state
+ * 永久分裂,打字丢内容)。结果按扩展对象身份缓存(编辑器每次聚焦都挂载)。
+ */
+const outlineCompatCache = new WeakMap<object, boolean>();
+
+function survivesOutlineDocChange(ext: Extension): boolean {
+  if (typeof ext !== 'object' && typeof ext !== 'function') return true;
+  const cached = outlineCompatCache.get(ext as object);
+  if (cached !== undefined) return cached;
+  let ok = true;
+  try {
+    const probe = StateField.define<{ n: number }>({
+      create: () => ({ n: 0 }),
+      update: (v, tr) => (tr.docChanged ? { n: v.n + 1 } : v),
+    });
+    const st = EditorState.create({ doc: 'ab', extensions: [probe, ext] });
+    st.update({ changes: { from: 1, insert: 'c' } });
+  } catch (e) {
+    ok = false;
+    console.debug('[lgp-extensions] outline-incompatible editor extension excluded:', e);
+  }
+  outlineCompatCache.set(ext as object, ok);
+  return ok;
+}
+
 function thirdPartyEditorExtensions(): Extension[] {
   const lpf = editorLivePreviewField as unknown as { create: (st: unknown) => boolean };
   if (lpf && typeof lpf.create === 'function') {
     lpf.create = () => true;
   }
-  const exts: Extension[] = [editorInfoField as unknown as Extension, editorLivePreviewField as unknown as Extension];
+  // Obsidian 导出的编辑器 StateField 必须补齐到列表里:收编模块自己的编辑器
+  // 扩展会经 registerEditorExtension 汇进 workspace.editorExtensions 被这里
+  // 原样拼入(如 obsidian-git 的 signs、media-extended 的 embed widget),
+  // 它们的 update 在 docChanged 时读 editorEditorField(取 composing 态)——
+  // 字段缺席时 .field() 抛 "Field is not present in this state",**整个事务
+  // 被丢弃**:打字的 DOM 原生改动永远进不了 state(DOM/state 分裂 → 光标
+  // 消失、回车按旧模型分裂丢内容,实测 2026-10-20 media-extended 收编后)。
+  const exts: Extension[] = [
+    editorInfoField as unknown as Extension,
+    editorLivePreviewField as unknown as Extension,
+    editorEditorField as unknown as Extension,
+  ];
   const ws = (window as unknown as { app?: { workspace?: { editorExtensions?: unknown[] } } }).app?.workspace;
   if (Array.isArray(ws?.editorExtensions)) {
-    exts.push(...(ws!.editorExtensions as Extension[]));
+    // 兼容性甄别:外来扩展先在一次性 CM 状态里跑一次 docChanged 事务,会炸的
+    // (依赖原生编辑器专属上下文,如 editorEditorField 里的 Editor 实例——它在
+    // 大纲 CM 里恒为 null/缺席)直接排除,否则每次按键的事务都会被它炸掉。
+    // 大纲编辑器每次聚焦都挂载,结果按扩展对象身份缓存。
+    for (const ext of ws!.editorExtensions as Extension[]) {
+      if (survivesOutlineDocChange(ext)) exts.push(ext);
+    }
   }
   // Debug handle for e2e verification of third-party plugin integration.
   (window as unknown as { __lgDebug?: unknown }).__lgDebug = {
@@ -349,7 +394,13 @@ export function createEmbedExtensions(
         ),
       ]
     : [];
+  // 嵌入编辑器同样补齐 Obsidian 导出的编辑器字段(与主编辑器
+  // thirdPartyEditorExtensions 同源),防止任何共用扩展在 docChanged 时
+  // 读缺席字段炸掉事务。
   return [
+    editorInfoField as unknown as Extension,
+    editorLivePreviewField as unknown as Extension,
+    editorEditorField as unknown as Extension,
     ...tabKeymap,
     ...mergeKeymap,
     EditorView.lineWrapping,
