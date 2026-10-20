@@ -25,6 +25,7 @@ import {
 import { mountDisplayName } from './types';
 import { isMarkdownFile } from './features/codeFileKind';
 import { compileFilter, isTextFileName, extOfName } from './features/mountFilter';
+import { FileExplorerLocateButton } from './features/fileExplorerLocate';
 import { LogseqEditorSettingTab } from './settings/tab';
 import { initEditorSettingsStore, loadEditorSettings, saveEditorSettings } from './settings/editorSettingsStore';
 import { BlockIndex } from './index/blockIndex';
@@ -99,6 +100,8 @@ import type { OperationRecord } from './core/operationLog';
 
 export default class LogseqEditorPlugin extends Plugin {
   settings: BlockEditorSettings = DEFAULT_SETTINGS;
+  /** 核心文件浏览器工具栏上的「定位当前文件」按钮（注入式 UI，需自行装卸）。 */
+  fileExplorerLocate: FileExplorerLocateButton | null = null;
   blockIndex: BlockIndex | null = null;
   slashSuggest: NativeSlashSuggest | null = null;
   /** Automatic pre-write backups for user-visible .md files. */
@@ -1323,6 +1326,15 @@ export default class LogseqEditorPlugin extends Plugin {
     // 事件重应用(applyMarkedTabIcons 有 marker 判断,重复触发代价可忽略)
     this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.refreshTabIcons()));
     this.registerEvent(this.app.workspace.on('layout-change', () => this.refreshTabIcons()));
+
+    // 核心文件浏览器：工具栏注入「定位当前文件」按钮。布局变化会重建面板，
+    // 故每次都要重新注入（install 幂等）；register() 保证卸载时把自己摘掉。
+    this.fileExplorerLocate = new FileExplorerLocateButton(this.app);
+    this.register(() => this.fileExplorerLocate?.uninstall());
+    this.app.workspace.onLayoutReady(() => this.fileExplorerLocate?.installAll());
+    this.registerEvent(
+      this.app.workspace.on('layout-change', () => this.fileExplorerLocate?.installAll()),
+    );
     this.updateStatusBar();
   }
 
