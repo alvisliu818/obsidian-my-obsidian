@@ -60,7 +60,7 @@ export class DragManager {
         setTimeout(() => dragIcon.remove(), 0);
     }
 
-    public handleDragEnd(event: DragEvent) {
+    public handleDragEnd(_event: DragEvent) {
         this.cleanup();
     }
 

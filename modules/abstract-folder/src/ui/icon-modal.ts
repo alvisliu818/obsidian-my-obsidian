@@ -92,7 +92,7 @@ export class IconModal extends Modal {
   result: string;
   onSubmit: (result: string) => void;
   private searchInput: string;
-  private iconGrid: HTMLElement;
+  private iconGrid!: HTMLElement;
 
   constructor(app: App, onSubmit: (result: string) => void, initialValue = "") {
     super(app);

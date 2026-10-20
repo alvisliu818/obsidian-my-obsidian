@@ -40,7 +40,7 @@ export class PathInputSuggest extends AbstractInputSuggest<string> {
 		el.setText(value);
 	}
 
-	selectSuggestion(value: string, evt: MouseEvent | KeyboardEvent): void {
+	selectSuggestion(value: string, _evt: MouseEvent | KeyboardEvent): void {
 		this.inputEl.value = value;
 		this.inputEl.trigger("input");
 		this.close();
@@ -310,8 +310,8 @@ export class AbstractFolderSettingTab extends PluginSettingTab {
 					.addOption("left", "Left")
 					.addOption("right", "Right")
 					.setValue(this.plugin.settings.openSide)
-					.onChange(async (value: "left" | "right") => {
-						this.plugin.settings.openSide = value;
+					.onChange(async (value: string) => {
+						this.plugin.settings.openSide = value as "left" | "right";
 						await this.plugin.saveSettings();
 					}),
 			);
@@ -360,8 +360,8 @@ export class AbstractFolderSettingTab extends PluginSettingTab {
 					.addOption("pastel", "Pastel")
 					.addOption("neon", "Neon")
 					.setValue(this.plugin.settings.rainbowPalette)
-					.onChange(async (value: "classic" | "pastel" | "neon") => {
-						this.plugin.settings.rainbowPalette = value;
+					.onChange(async (value: string) => {
+						this.plugin.settings.rainbowPalette = value as "classic" | "pastel" | "neon";
 						await this.plugin.saveSettings();
 						// Trigger view refresh to apply new styling
 						this.plugin.indexer.updateSettings(
@@ -579,8 +579,8 @@ export class AbstractFolderSettingTab extends PluginSettingTab {
 					.addOption("parent", "Use parent name")
 					.addOption("ancestor", "Use highest ancestor name")
 					.setValue(this.plugin.settings.namingConflictStrategy)
-					.onChange(async (value: "parent" | "ancestor" | "none") => {
-						this.plugin.settings.namingConflictStrategy = value;
+					.onChange(async (value: string) => {
+						this.plugin.settings.namingConflictStrategy = value as "parent" | "ancestor" | "none";
 						await this.plugin.saveSettings();
 					}),
 			);
@@ -595,8 +595,8 @@ export class AbstractFolderSettingTab extends PluginSettingTab {
 					.addOption("-", "Dash (e.g., parent - name)")
 					.addOption("brackets", "Brackets (e.g., name [parent])")
 					.setValue(this.plugin.settings.namingConflictSeparator)
-					.onChange(async (value: "-" | "brackets") => {
-						this.plugin.settings.namingConflictSeparator = value;
+					.onChange(async (value: string) => {
+						this.plugin.settings.namingConflictSeparator = value as "-" | "brackets";
 						await this.plugin.saveSettings();
 					}),
 			);
@@ -614,8 +614,8 @@ export class AbstractFolderSettingTab extends PluginSettingTab {
 					)
 					.addOption("name-first", "Name first (e.g., name - parent)")
 					.setValue(this.plugin.settings.namingConflictOrder)
-					.onChange(async (value: "parent-first" | "name-first") => {
-						this.plugin.settings.namingConflictOrder = value;
+					.onChange(async (value: string) => {
+						this.plugin.settings.namingConflictOrder = value as "parent-first" | "name-first";
 						await this.plugin.saveSettings();
 					}),
 			);

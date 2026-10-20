@@ -219,7 +219,7 @@ aliases:
         app.workspace.trigger('abstract-folder:graph-updated');
     } catch (error) {
         new Notice(`Failed to create file: ${error}`);
-        Logger.error(error);
+        Logger.error(String(error));
     }
 }
 
@@ -467,7 +467,7 @@ export async function moveFiles(
     files: TFile[],
     targetParentPath: string,
     sourceParentPath: string | null,
-    indexer: FolderIndexer,
+    _indexer: FolderIndexer,
     isCopy: boolean
 ) {
     const targetParentFile = app.vault.getAbstractFileByPath(targetParentPath);

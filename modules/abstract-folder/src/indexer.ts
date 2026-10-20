@@ -444,7 +444,7 @@ export class FolderIndexer {
       }
   }
 
-  private updateFileIncremental(file: TFile, cache: CachedMetadata, suppressTrigger: boolean = false) {
+  private updateFileIncremental(file: TFile, _cache: CachedMetadata, suppressTrigger: boolean = false) {
       if (this.isExcluded(file.path)) return;
       
       const oldRelationships = this.fileRelationships.get(file.path) || { definedParents: new Set(), definedChildren: new Set() };
@@ -483,69 +483,6 @@ export class FolderIndexer {
       if (!this.isBuilding && !this.isBatchUpdating && !suppressTrigger) {
           this.app.workspace.trigger('abstract-folder:graph-updated');
       }
-  }
-
-  private resolveLinkToPath(link: string, containingFilePath: string): string | null {
-    // 1. Remove outer quotes (YAML string behavior)
-    let cleaned = link.replace(/^["']+|["']+$|^\s+|[\s]+$/g, '');
-
-    // Check for Markdown link [Alias](Path)
-    const mdLinkMatch = cleaned.match(/^\[([^\]]*)\]\(([^)]*)\)$/);
-    if (mdLinkMatch) {
-        // Decode URI component because Markdown links might be encoded (e.g. %20 for spaces)
-        try {
-            cleaned = decodeURI(mdLinkMatch[2]);
-        } catch {
-            cleaned = mdLinkMatch[2];
-        }
-    } else {
-        // 2. Remove wiki-link brackets
-        cleaned = cleaned.replace(/\[\[|\]\]/g, '');
-
-        // 3. Handle Pipe aliases [[Link|Alias]] -> Link
-        cleaned = cleaned.split('|')[0];
-    }
-
-    // 4. Trim again
-    const cleanedTrimmed = cleaned.trim();
-
-    // 5. Remove internal quotes that might have been inside the brackets (e.g. [["Work"]])
-    const finalCleaned = cleanedTrimmed.replace(/^["']+|["']+$/g, '');
-    const finalCleanedUntrimmed = cleaned.replace(/^["']+|["']+$/g, ''); // Keep original cleaned for untrimmed check
-
-    if (!finalCleaned && !finalCleanedUntrimmed) return null;
-
-    let resolvedFile: TFile | null = null;
-
-    // First, try resolving with the trimmed and fully cleaned version (standard behavior)
-    if (finalCleaned) {
-        resolvedFile = this.app.metadataCache.getFirstLinkpathDest(finalCleaned, containingFilePath);
-    }
-    
-    // If that fails, and there's a difference, try resolving with the untrimmed version
-    if (!resolvedFile && finalCleanedUntrimmed && finalCleaned !== finalCleanedUntrimmed) {
-        resolvedFile = this.app.metadataCache.getFirstLinkpathDest(finalCleanedUntrimmed, containingFilePath);
-    }
-
-    // If Obsidian couldn't resolve it via metadataCache,
-    // we should check if the path directly corresponds to an existing file of any type.
-    if (!resolvedFile) {
-        // Try with trimmed version first for direct path check
-        let abstractFile = this.app.vault.getAbstractFileByPath(finalCleaned);
-        if (abstractFile instanceof TFile) {
-            return abstractFile.path;
-        }
-
-        // If trimmed version doesn't work, try with untrimmed version for direct path check
-        if (finalCleaned !== finalCleanedUntrimmed) {
-            abstractFile = this.app.vault.getAbstractFileByPath(finalCleanedUntrimmed);
-            if (abstractFile instanceof TFile) {
-                return abstractFile.path;
-            }
-        }
-    }
-    
-    return resolvedFile ? resolvedFile.path : null;
   }
 
   private async deleteFileFromGraph(file: TAbstractFile) {

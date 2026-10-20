@@ -342,7 +342,7 @@ async function processInBatches(
  */
 export function generateFolderStructurePlan(
     app: App,
-    settings: AbstractFolderPluginSettings,
+    _settings: AbstractFolderPluginSettings,
     indexer: FolderIndexer,
     destinationPath: string,
     placeIndexFileInside: boolean,

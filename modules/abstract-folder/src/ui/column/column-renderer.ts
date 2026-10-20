@@ -4,13 +4,12 @@ import { VIEW_TYPE_ABSTRACT_FOLDER, AbstractFolderView } from "../view/abstract-
 import { AbstractFolderPluginSettings } from "../../settings";
 import AbstractFolderPlugin from "../../../main";
 import { ContextMenuHandler } from "../context-menu";
-import { FolderIndexer } from "src/indexer";
+import { FolderIndexer } from "../../indexer";
 import { DragManager } from "../dnd/drag-manager";
 import { Logger } from "../../utils/logger";
 
 export class ColumnRenderer {
     private app: App;
-    private settings: AbstractFolderPluginSettings;
     private plugin: AbstractFolderPlugin;
     public selectionPath: string[];
     private multiSelectedPaths: Set<string>;
@@ -18,8 +17,7 @@ export class ColumnRenderer {
     private handleColumnNodeClick: (node: FolderNode, depth: number, event?: MouseEvent) => void;
     private handleColumnExpand: (node: FolderNode, depth: number) => void;
     private contextMenuHandler: ContextMenuHandler;
-    private dragManager: DragManager;
-    private getContentEl: () => HTMLElement;
+    private dragManager: DragManager;
 
     constructor(
         app: App,
@@ -31,11 +29,9 @@ export class ColumnRenderer {
         handleColumnNodeClick: (node: FolderNode, depth: number, event?: MouseEvent) => void,
         handleColumnExpand: (node: FolderNode, depth: number) => void,
         indexer: FolderIndexer,
-        dragManager: DragManager,
-        getContentEl: () => HTMLElement
+        dragManager: DragManager
     ) {
-        this.app = app;
-        this.settings = settings;
+        this.app = app;
         this.plugin = plugin;
         this.selectionPath = selectionPath;
         this.multiSelectedPaths = multiSelectedPaths;
@@ -52,7 +48,6 @@ export class ColumnRenderer {
            }
         });
         this.dragManager = dragManager;
-        this.getContentEl = getContentEl;
     }
 
     public setSelectionPath(path: string[]) {

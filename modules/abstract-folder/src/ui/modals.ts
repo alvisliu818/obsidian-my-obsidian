@@ -20,22 +20,20 @@ export class ParentPickerModal extends FuzzySuggestModal<TFile> {
     return file.path;
   }
 
-  onChooseItem(file: TFile, evt: MouseEvent | KeyboardEvent) {
+  onChooseItem(file: TFile, _evt: MouseEvent | KeyboardEvent) {
     this.onChoose(file);
   }
 }
 
 export type ChildFileType = 'note' | 'canvas' | 'base';
 
-export class CreateAbstractChildModal extends Modal {
-  private settings: AbstractFolderPluginSettings;
+export class CreateAbstractChildModal extends Modal {
   private childName = "";
   private childType: ChildFileType;
   private onSubmit: (childName: string, childType: ChildFileType) => void;
 
-  constructor(app: App, settings: AbstractFolderPluginSettings, onSubmit: (childName: string, childType: ChildFileType) => void, initialChildType: ChildFileType = 'note') {
+  constructor(app: App, _settings: AbstractFolderPluginSettings, onSubmit: (childName: string, childType: ChildFileType) => void, initialChildType: ChildFileType = 'note') {
     super(app);
-    this.settings = settings;
     this.onSubmit = onSubmit;
     this.childType = initialChildType;
   }
@@ -67,8 +65,8 @@ export class CreateAbstractChildModal extends Modal {
         dropdown.addOption('canvas', 'Canvas');
         dropdown.addOption('base', 'Bases');
         dropdown.setValue(this.childType);
-        dropdown.onChange((value: ChildFileType) => {
-          this.childType = value;
+        dropdown.onChange((value: string) => {
+          this.childType = value as ChildFileType;
         });
       });
 
@@ -162,7 +160,7 @@ export class RenameModal extends Modal {
             this.close();
         } catch (error) {
             new Notice(`Failed to rename: ${error}`);
-            Logger.error(error);
+            Logger.error(String(error));
         }
     }
 
@@ -302,7 +300,7 @@ export class FolderSelectionModal extends FuzzySuggestModal<TFolder> {
         return folder.path;
     }
 
-    onChooseItem(folder: TFolder, evt: MouseEvent | KeyboardEvent) {
+    onChooseItem(folder: TFolder, _evt: MouseEvent | KeyboardEvent) {
         this.onChoose(folder);
     }
 }
@@ -341,7 +339,7 @@ export class ConversionOptionsModal extends Modal {
                 .addOption('append', 'Append new parents')
                 .addOption('replace', 'Replace existing parents')
                 .setValue(this.options.existingRelationshipsStrategy)
-                .onChange((value: 'append' | 'replace') => this.options.existingRelationshipsStrategy = value));
+                .onChange((value: string) => this.options.existingRelationshipsStrategy = value as 'append' | 'replace'));
 
         new Setting(contentEl)
             .setName("Folder note strategy")
@@ -350,7 +348,7 @@ export class ConversionOptionsModal extends Modal {
                 .addOption('outside', 'Outside (Sibling note, e.g. "Folder.md" next to "Folder/")')
                 .addOption('inside', 'Inside (Index note, e.g. "Folder/Folder.md")')
                 .setValue(this.options.folderNoteStrategy)
-                .onChange((value: 'outside' | 'inside') => this.options.folderNoteStrategy = value));
+                .onChange((value: string) => this.options.folderNoteStrategy = value as 'outside' | 'inside'));
 
         new Setting(contentEl)
             .addButton(btn => btn
@@ -426,7 +424,7 @@ export class DestinationPickerModal extends FuzzySuggestModal<TFolder> {
         return folder.path;
     }
 
-    onChooseItem(folder: TFolder, evt: MouseEvent | KeyboardEvent) {
+    onChooseItem(folder: TFolder, _evt: MouseEvent | KeyboardEvent) {
         this.onChoose(folder);
     }
 }

@@ -3,8 +3,7 @@ import { AbstractFolderPluginSettings } from "../../settings";
 import { Group } from "../../types";
 import { PathInputSuggest } from "../settings-tab";
 
-export class CreateEditGroupModal extends Modal {
-  private settings: AbstractFolderPluginSettings;
+export class CreateEditGroupModal extends Modal {
   private existingGroup: Group | null;
   private onSubmit: (group: Group) => void;
 
@@ -13,9 +12,8 @@ export class CreateEditGroupModal extends Modal {
   private parentFolders: string[];
   private newParentFolderInput: HTMLInputElement | null = null;
 
-  constructor(app: App, settings: AbstractFolderPluginSettings, existingGroup: Group | null, onSubmit: (group: Group) => void) {
-    super(app);
-    this.settings = settings;
+  constructor(app: App, _settings: AbstractFolderPluginSettings, existingGroup: Group | null, onSubmit: (group: Group) => void) {
+    super(app);
     this.existingGroup = existingGroup;
     this.onSubmit = onSubmit;
 
@@ -84,7 +82,7 @@ export class CreateEditGroupModal extends Modal {
         this.newParentFolderInput = text.inputEl;
         new PathInputSuggest(this.app, text.inputEl); // Use PathInputSuggest
         text.setPlaceholder("Note path (e.g. folder/note.md)")
-          .onChange(value => {
+          .onChange(_value => {
             // No direct update here, wait for add button or enter
           });
         text.inputEl.addEventListener("keydown", (e) => {

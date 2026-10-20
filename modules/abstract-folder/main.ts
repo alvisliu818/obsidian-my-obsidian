@@ -22,9 +22,9 @@ import { Group } from './src/types';
 import './src/styles/index.css';
 
 export default class AbstractFolderPlugin extends Plugin {
-	settings: AbstractFolderPluginSettings;
-	indexer: FolderIndexer;
-	metricsManager: MetricsManager;
+	settings!: AbstractFolderPluginSettings;
+	indexer!: FolderIndexer;
+	metricsManager!: MetricsManager;
 	ribbonIconEl: HTMLElement | null = null;
 
 	async onload() {
@@ -188,7 +188,7 @@ this.addCommand({
 
 						const rootScope = (scope instanceof TFile) ? scope : undefined;
 						const plan = generateFolderStructurePlan(this.app, this.settings, this.indexer, destinationPath, placeIndexFileInside, rootScope);
-						new SimulationModal(this.app, plan.conflicts, (resolvedConflicts) => {
+						new SimulationModal(this.app, plan.conflicts, () => {
 							executeFolderGeneration(this.app, plan).catch((error) => console.error(error));
 						}).open();
 					}).open();

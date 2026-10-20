@@ -221,7 +221,7 @@ export class PathSuggest extends AbstractInputSuggest<string> {
 		}
 	}
 
-	selectSuggestion(value: string, evt: MouseEvent | KeyboardEvent): void {
+	selectSuggestion(value: string, _evt: MouseEvent | KeyboardEvent): void {
 		this.inputEl.value = value;
 		this.inputEl.trigger("input");
 		this.close();

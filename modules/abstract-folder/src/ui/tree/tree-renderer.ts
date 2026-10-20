@@ -332,7 +332,7 @@ if (activeFile && activeFile.path === node.path) {
         }
     }
 
-    private handleNodeMiddleClick(node: FolderNode, e: MouseEvent) {
+    private handleNodeMiddleClick(node: FolderNode, _e: MouseEvent) {
         if (node.file) {
             const fileExists = this.app.vault.getAbstractFileByPath(node.file.path);
             if (fileExists) {

@@ -62,7 +62,7 @@ export class MetricsManager {
         const decayRate = 0.8;
         const msPerDay = 24 * 60 * 60 * 1000;
 
-        this.metrics.forEach((m, path) => {
+        this.metrics.forEach((m, _path) => {
             const daysPassed = (now - m.lastInteraction) / msPerDay;
             if (daysPassed > 0) {
                 m.thermal = m.thermal * Math.pow(decayRate, daysPassed);

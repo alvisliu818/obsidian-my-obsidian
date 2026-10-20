@@ -10,7 +10,6 @@ import { AncestryEngine } from "./utils/ancestry";
 import { getContextualId } from "./utils/context-utils";
 
 export class FileRevealManager {
-    private app: App;
     private settings: AbstractFolderPluginSettings;
     private contentEl: HTMLElement;
     private viewState: ViewState;
@@ -22,7 +21,7 @@ export class FileRevealManager {
     private isInternalClick: boolean = false;
 
     constructor(
-        app: App,
+        _app: App,
         settings: AbstractFolderPluginSettings,
         contentEl: HTMLElement,
         viewState: ViewState,
@@ -32,7 +31,6 @@ export class FileRevealManager {
         plugin: AbstractFolderPlugin,
         virtualTreeManager: VirtualTreeManager
     ) {
-        this.app = app;
         this.settings = settings;
         this.contentEl = contentEl;
         this.viewState = viewState;

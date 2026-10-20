@@ -43,6 +43,7 @@ import MediaJournalPlugin from "../modules/media-journal/src/main";
 import MusicPlayerPlugin from "../modules/music-player/src/main";
 import AudioPlayerPlugin from "../modules/audio-player/src/main";
 import ScrollingPlugin from "../modules/scrolling/src/core/main";
+import AbstractFolderPlugin from "../modules/abstract-folder/main";
 // media-extended v3 自带 obsidian@1.5.7 类型与自己的 "@/..." 别名（与
 // music-player 的 @/ 同名冲突），经 require 桥接进 bundle：不进宿主 tsc
 // 程序（类型由模块自带 tsconfig 独立校验），运行时打包不受影响。
@@ -261,6 +262,19 @@ export default class MyObsidianPlugin extends Plugin {
 				"滚动与导航增强：光标居中（typewriter 模式）、记住并恢复滚动/光标位置、代码块不换行横向滚动、行内 MathJax 与文件树横向滚动、置顶/置底按钮与快捷命令、阅读模式 Vim 式快捷键、滚动条显隐策略、正文最大行宽。上游 omeyenburg（MIT）。",
 			desktopOnly: false,
 			cls: ScrollingPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Third-party (Erfan Rahmani, GPL-3.0), kept whole — see
+			// modules/abstract-folder/NOTICE. Upstream history (161 commits) was
+			// grafted into this repo, so `git log --follow
+			// modules/abstract-folder` still works.
+			id: "abstract-folder",
+			legacyId: "abstract-folder",
+			name: "my Abstract Folder",
+			summary:
+				"动态虚拟文件夹：按父级关系把散落各处的笔记聚成虚拟文件夹，树形/列式两种版式、拖拽整理、文件夹结构生成与转换（冲突消解、分组管理）、图标与配色自定义。上游 Erfan Rahmani（GPL-3.0）。",
+			desktopOnly: true,
+			cls: AbstractFolderPlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 

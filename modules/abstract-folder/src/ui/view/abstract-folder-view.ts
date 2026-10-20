@@ -30,17 +30,17 @@ export class AbstractFolderView extends ItemView {
   private indexer: FolderIndexer;
   private metricsManager: MetricsManager;
   private settings: AbstractFolderPluginSettings;
-  contentEl: HTMLElement;
+  contentEl!: HTMLElement;
 
   private viewState: ViewState;
   private treeRenderer: TreeRenderer;
   private columnRenderer: ColumnRenderer;
   private contextMenuHandler: ContextMenuHandler;
-  private toolbar: AbstractFolderViewToolbar;
+  private toolbar!: AbstractFolderViewToolbar;
   private fileRevealManager: FileRevealManager | undefined;
   private dragManager: DragManager;
   private resizeObserver: ResizeObserver | undefined;
-  private virtualTreeManager: VirtualTreeManager;
+  private virtualTreeManager!: VirtualTreeManager;
 
   private isLoading = true;
   private isConverting = false;
@@ -49,9 +49,7 @@ export class AbstractFolderView extends ItemView {
   private virtualContainer: HTMLElement | null = null;
   private virtualSpacer: HTMLElement | null = null;
   
-  private searchHeaderEl: HTMLElement | null = null;
   private searchInputEl: HTMLInputElement | null = null;
-  private isSearchVisible = true;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -88,8 +86,7 @@ export class AbstractFolderView extends ItemView {
       this.getDisplayName,
       (node, depth, event) => this.handleColumnNodeClick(node, depth, event),
       (node, depth) => this.handleColumnExpand(node, depth),
-      this.indexer, this.dragManager,
-      () => this.contentEl
+      this.indexer, this.dragManager
     );
 
     this.contextMenuHandler = new ContextMenuHandler(this.app, this.settings, this.plugin, this.indexer, (path: string) => this.focusFile(path));
@@ -106,9 +103,7 @@ export class AbstractFolderView extends ItemView {
     const toolbarEl = this.contentEl.createDiv({ cls: "abstract-folder-toolbar-container" });
     this.toolbar = new AbstractFolderViewToolbar(
        this.app, this.settings, this.plugin, this.viewState, toolbarEl,
-       () => { this.renderView(); }, () => { void this.expandAll(); }, () => { void this.collapseAll(); },
-       () => {}, // Callback for search toggle (deprecated but kept for compat)
-       () => this.focusSearch(),
+       () => { void this.expandAll(); }, () => { void this.collapseAll(); },
        () => this.focusActiveFile()
     );
 
@@ -405,7 +400,6 @@ export class AbstractFolderView extends ItemView {
     
     if (this.settings.viewStyle !== 'tree' || !this.settings.showSearchHeader) {
         if (searchHeader) searchHeader.remove();
-        this.searchHeaderEl = null;
         this.searchInputEl = null;
         return;
     }
@@ -516,9 +510,7 @@ export class AbstractFolderView extends ItemView {
              // Since we modified PathSuggest to add 'abstract-folder-suggestion-container', we can now style it in global styles.
         }
         
-        this.searchHeaderEl = searchHeader;
     } else {
-        this.searchHeaderEl = searchHeader;
         this.searchInputEl = searchHeader.querySelector(".ancestry-search-input") as HTMLInputElement;
         
         // Re-inject PathSuggest if it's not active (though PathSuggest usually stays)
@@ -864,17 +856,6 @@ export class AbstractFolderView extends ItemView {
     
     if (this.settings.rememberExpanded) await this.plugin.saveSettings();
     this.renderView();
-  }
-
-  private toggleSearch() {
-    this.isSearchVisible = !this.isSearchVisible;
-    if (!this.isSearchVisible && this.searchInputEl) {
-        this.searchInputEl.value = "";
-    }
-    this.renderView();
-    if (this.isSearchVisible && this.searchInputEl) {
-        this.searchInputEl.focus();
-    }
   }
 
   public focusSearch() {

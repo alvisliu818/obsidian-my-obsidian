@@ -21,11 +21,8 @@ export class AbstractFolderViewToolbar {
         private plugin: AbstractFolderPlugin,
         private viewState: ViewState,
         private containerEl: HTMLElement,
-        private renderView: () => void,
         private expandAllView: () => void,
         private collapseAllView: () => void,
-        private toggleSearch: () => void,
-        private focusSearch: () => void,
         private focusActiveFile: () => void,
     ) {}
 

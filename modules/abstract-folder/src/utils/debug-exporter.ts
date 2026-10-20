@@ -22,7 +22,11 @@ interface VaultConfig {
     getConfig(key: string): unknown;
 }
 
-interface AppWithInternal extends App {
+// 不继承 App：聚合宿主程序里 App 的真实类型比上游独立编译时宽得多（其它模块
+// 自带的 obsidian 类型给它增补了 plugins/customCss 等内部成员），extends App
+// 会与这里的窄化逐个冲突（TS2430/TS2352）。这里只描述本模块真正读取的内部
+// 形状，转换处走 unknown——同文件里 AbstractFolderViewInternal 的同款做法。
+interface AppWithInternal {
     version: string;
     isMobile: boolean;
     plugins: {
@@ -123,7 +127,7 @@ class Anonymizer {
 }
 
 export async function exportDebugDetails(app: App, settings: AbstractFolderPluginSettings, indexer: FolderIndexer) {
-    const internalApp = app as AppWithInternal;
+    const internalApp = app as unknown as AppWithInternal;
     const anonymizer = new Anonymizer(settings.anonymizeDebugExport);
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const debugFolderName = `abstract-folder-debug-${timestamp}`;
