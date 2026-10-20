@@ -67,6 +67,12 @@ export interface OmnisearchSettings extends WeightingSettings {
   indexedFileTypes: string[]
   /** Index files without extension */
   indexFilesWithoutExtension: boolean
+  /** 索引所有纯文本文件：除已知二进制扩展名外一律按明文索引（.ts/.json/.yaml/.csv/.log 等） */
+  indexAllPlaintext: boolean
+  /** 路径正则白名单：非空时只有匹配的路径才会被索引。空 = 不限制。 */
+  pathWhitelist: string
+  /** 路径正则黑名单：匹配的路径不索引，优先于白名单。默认忽略 node_modules。 */
+  pathBlacklist: string
   /** Custom title field */
   displayTitle: string
   /** Enable PDF indexing */

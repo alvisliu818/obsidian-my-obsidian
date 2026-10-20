@@ -124,6 +124,10 @@ export function getDefaultSettings(app: App): OmnisearchSettings {
     ignoreDiacritics: true,
     ignoreArabicDiacritics: false,
     indexedFileTypes: [] as string[],
+    indexAllPlaintext: false,
+    pathWhitelist: '',
+    // 默认忽略 node_modules：库里若有前端项目，它们的依赖不该进搜索索引
+    pathBlacklist: '(^|/)node_modules(/|$)',
     indexFilesWithoutExtension: false,
     displayTitle: '',
     PDFIndexing: false,

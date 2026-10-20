@@ -169,4 +169,56 @@ export function injectSettingsIndexing(
         await saveSettings(plugin)
       })
     })
+
+  // Index all plaintext files
+  new Setting(containerEl)
+    .setName('Index all plaintext files')
+    .setDesc(
+      htmlDescription(`Index <strong style="color: var(--text-accent)">every plaintext file</strong>, whatever its extension — <code>.ts</code>, <code>.json</code>, <code>.yaml</code>, <code>.csv</code>, <code>.log</code> and so on.<br/>
+      Known binary files (images, PDFs, audio/video, archives, fonts…) are still skipped.<br/>
+      ⚠️ <span style="color: var(--text-accent)">Indexing a huge dependency folder bloats the cache — pair it with the blacklist below.</span>`)
+    )
+    .addToggle(toggle => {
+      toggle.setValue(settings.indexAllPlaintext).onChange(async v => {
+        await database.clearCache()
+        settings.indexAllPlaintext = v
+        await saveSettings(plugin)
+      })
+    })
+
+  // Path whitelist (regex)
+  new Setting(containerEl)
+    .setName('Path whitelist (regex)')
+    .setDesc(
+      htmlDescription(`Only index paths matching this <strong style="color: var(--text-accent)">regular expression</strong>. Leave empty to allow everything.<br/>
+      Example: <code>^projects/</code> keeps just one folder.`)
+    )
+    .addText(component => {
+      component
+        .setValue(settings.pathWhitelist)
+        .setPlaceholder('Example: ^projects/')
+        .onChange(async v => {
+          await database.clearCache()
+          settings.pathWhitelist = v
+          await saveSettings(plugin)
+        })
+    })
+
+  // Path blacklist (regex)
+  new Setting(containerEl)
+    .setName('Path blacklist (regex)')
+    .setDesc(
+      htmlDescription(`Never index paths matching this <strong style="color: var(--text-accent)">regular expression</strong>. Takes priority over the whitelist.<br/>
+      Default <code>(^|/)node_modules(/|$)</code> keeps dependency folders out of the index.`)
+    )
+    .addText(component => {
+      component
+        .setValue(settings.pathBlacklist)
+        .setPlaceholder('Example: (^|/)node_modules(/|$)')
+        .onChange(async v => {
+          await database.clearCache()
+          settings.pathBlacklist = v
+          await saveSettings(plugin)
+        })
+    })
 }
