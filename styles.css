@@ -6063,6 +6063,23 @@ body.lgp-table-editor-cursor * {
   display: block;
 }
 
+/* 编辑器标签页上的主题文件图标（main.ts syncTabIcons 注入 .mfi-tab-icon）：
+   .workspace-tab-header-inner-icon 是 flex 容器，裸 inline span 包着 block
+   svg 会按行盒基线排版，与旁边的标题文字垂直错位——按 flex 子项处理居中，
+   与库外标签页的 .lgp-tab-theme-icon 同款对齐。 */
+.workspace-tab-header-inner-icon .mfi-tab-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+.workspace-tab-header-inner-icon .mfi-tab-icon svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
 /* Hide default Obsidian collapse indicator and file tag when our icon is present */
 .nav-file-title[data-mfi-applied] .nav-file-tag {
   display: none;
