@@ -13,6 +13,10 @@ node_modules
 # Output
 build
 dist
+# 收编适配: cm-language fork 的 dist 入库（apps/app 的 @codemirror/language
+# 指向本 fork，缺 dist 会让 fresh clone 后聚合构建断）；apps/app/dist 照常排除。
+!packages/cm-language/dist/
+!packages/cm-language/dist/**
 
 # Debug
 npm-debug.log*
