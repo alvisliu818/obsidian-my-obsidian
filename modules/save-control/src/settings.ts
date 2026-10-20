@@ -39,6 +39,13 @@ export interface SaveControlSettings {
   saveDelaySeconds: number;
   deferWorkspaceLayoutSaves: boolean;
   workspaceLayoutSaveDelaySeconds: number;
+  /**
+   * 更激进的延迟：workspace.json / workspace-mobile.json 只在**关闭 Obsidian
+   * 时**才真正写盘。开启后忽略 workspaceLayoutSaveDelaySeconds（不设定时器），
+   * 布局改动全程缓冲在内存里，由 quit 钩子在退出前落盘。
+   * 注意：进程被强杀（崩溃 / 任务管理器结束）会丢失最后一次布局改动。
+   */
+  deferWorkspaceLayoutUntilQuit: boolean;
   savedStatusColor: string;
   pendingStatusColor: string;
   statusIconSizePx: number;
@@ -81,6 +88,8 @@ export const DEFAULT_SETTINGS: SaveControlSettings = {
   saveDelaySeconds: 10,
   deferWorkspaceLayoutSaves: false,
   workspaceLayoutSaveDelaySeconds: 60,
+  // 默认开启：workspace.json 只在关闭 Obsidian 时落盘（可在设置里关掉）。
+  deferWorkspaceLayoutUntilQuit: true,
   savedStatusColor: "#32cd32",
   pendingStatusColor: "#00bfff",
   statusIconSizePx: 16,

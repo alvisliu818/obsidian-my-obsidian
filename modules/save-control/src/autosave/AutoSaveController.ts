@@ -244,6 +244,7 @@ export class AutoSaveController {
       this.app,
       () => this.getSettings().deferWorkspaceLayoutSaves,
       () => this.getSettings().workspaceLayoutSaveDelaySeconds,
+      () => this.getSettings().deferWorkspaceLayoutUntilQuit,
     );
   }
 

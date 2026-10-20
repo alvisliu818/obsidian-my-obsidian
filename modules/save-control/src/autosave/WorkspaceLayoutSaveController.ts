@@ -35,7 +35,22 @@ export class WorkspaceLayoutSaveController {
     private readonly app: App,
     private readonly isEnabled: () => boolean,
     private readonly getDelaySeconds: () => number,
+    /**
+     * 「直到关闭 Obsidian 才写盘」。开启后不设定时器，布局改动一直缓冲在
+     * 内存，由 quit 钩子（AutoSaveController 的 workspace 'quit' 监听，
+     * 那里已无条件 flush）在退出前落盘。
+     */
+    private readonly isUntilQuit: () => boolean,
   ) {}
+
+  /**
+   * 是否延迟写盘：两个开关任一开启即可——
+   * deferWorkspaceLayoutSaves = 延迟 N 秒；deferWorkspaceLayoutUntilQuit =
+   * 更强形式（一直缓冲到退出）。让后者自洽，不必先开前者。
+   */
+  private shouldDefer(): boolean {
+    return this.isEnabled() || this.isUntilQuit();
+  }
 
   enable() {
     const adapterWithWrite = this.app.vault.adapter as typeof this.app.vault.adapter & { write?: AdapterWriteFn };
@@ -49,6 +64,11 @@ export class WorkspaceLayoutSaveController {
   }
 
   disable() {
+    // 卸载 / 关闭功能前先把缓冲的布局改动落盘：until-quit 模式下它是唯一的
+    // 写盘机会，而 cancel() 会直接丢弃 pendingWrite。退出路径上 quit 钩子
+    // 已经 flush 过，这里变成 no-op（pendingWrite 已空）。
+    void this.flush();
+
     const adapterWithWrite = this.app.vault.adapter as typeof this.app.vault.adapter & { write?: AdapterWriteFn };
     if (this.originalAdapterWrite && adapterWithWrite.write === this.installedAdapterWriteWrapper) {
       adapterWithWrite.write = this.originalAdapterWrite;
@@ -64,7 +84,7 @@ export class WorkspaceLayoutSaveController {
       return;
     }
 
-    if (!this.isEnabled()) {
+    if (!this.shouldDefer()) {
       void this.flush();
       return;
     }
@@ -81,13 +101,23 @@ export class WorkspaceLayoutSaveController {
       return;
     }
 
-    if (!this.isEnabled()) {
+    // 不论哪种模式，先清掉可能残留的旧定时器：从「延迟 N 秒」切到
+    // 「直到退出」时，旧的到期写盘必须撤销，否则会提前落盘。
+    if (this.flushTimeoutId !== null) {
+      window.clearTimeout(this.flushTimeoutId);
+      this.flushTimeoutId = null;
+    }
+
+    if (!this.shouldDefer()) {
       void this.flush();
       return;
     }
 
-    if (this.flushTimeoutId !== null) {
-      window.clearTimeout(this.flushTimeoutId);
+    // 「直到关闭才写」：不排任何定时器，一直缓冲在内存，
+    // 等 quit 钩子（AutoSaveController 里已无条件 flush）在退出前落盘。
+    if (this.isUntilQuit()) {
+      dlog("Deferred workspace layout write until app quit", this.pendingWrite.normalizedPath);
+      return;
     }
 
     this.flushTimeoutId = window.setTimeout(() => {
@@ -133,7 +163,8 @@ export class WorkspaceLayoutSaveController {
   }
 
   private createAdapterWriteWrapper(originalAdapterWrite: AdapterWriteFn): AdapterWriteFn {
-    const isEnabled = this.isEnabled;
+    // until-quit 开关自洽：单独打开它也要能缓冲（判定见 shouldDefer）。
+    const shouldDefer = () => this.shouldDefer();
     const isWorkspaceLayoutPath = (normalizedPath: string) => this.isWorkspaceLayoutPath(normalizedPath);
     const schedule = () => this.schedule();
     const allowImmediateWrite = () => this.allowImmediateWrite;
@@ -149,7 +180,7 @@ export class WorkspaceLayoutSaveController {
     ) {
       if (
         allowImmediateWrite() ||
-        !isEnabled() ||
+        !shouldDefer() ||
         !isWorkspaceLayoutPath(normalizedPath)
       ) {
         await callAdapterWrite(originalAdapterWrite, this, normalizedPath, data, options);

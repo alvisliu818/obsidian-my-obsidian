@@ -163,6 +163,32 @@ export class SaveControlSettingTab extends PluginSettingTab {
       500,
     );
 
+    // ----------------------------------------------------------------
+    // 工作区布局（workspace.json）写盘时机
+    // ----------------------------------------------------------------
+    new Setting(containerEl).setName("工作区布局写盘").setHeading();
+
+    toggle(
+      "延迟写入 workspace.json",
+      "布局变动（开/关标签页、拖分栏等）不立即写 workspace.json，先缓冲再写，减少磁盘写入与网盘同步抖动。",
+      () => this.plugin.settings.deferWorkspaceLayoutSaves,
+      (v) => (this.plugin.settings.deferWorkspaceLayoutSaves = v),
+    );
+    seconds(
+      "缓冲多久后写（秒）",
+      "「延迟写入 workspace.json」打开时，缓冲多少秒后才真正写盘。",
+      () => this.plugin.settings.workspaceLayoutSaveDelaySeconds,
+      (v) => (this.plugin.settings.workspaceLayoutSaveDelaySeconds = v),
+      1,
+      3600,
+    );
+    toggle(
+      "直到关闭 Obsidian 才写入",
+      "更激进：workspace.json 全程只在内存里缓冲，关闭 Obsidian 时才真正写盘（忽略上面的秒数）。注意：进程被强杀（崩溃、任务管理器结束）会丢失最后一次布局改动。",
+      () => this.plugin.settings.deferWorkspaceLayoutUntilQuit,
+      (v) => (this.plugin.settings.deferWorkspaceLayoutUntilQuit = v),
+    );
+
     new Setting(containerEl)
       .setName("允许的扩展名")
       .setDesc("md 之外也要做版本历史的扩展名，逗号分隔（如 txt,md,toml）。库外文件同样按此过滤。")
