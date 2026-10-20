@@ -29,6 +29,7 @@ import { ItemView, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian'
 import type LogseqEditorPlugin from '../main';
 import { BlockEditorView } from '../view/BlockEditorView';
 import type { MountNode } from '../features/mountFilter';
+import { installExternalAttachmentHandlers } from '../features/externalAttachment';
 import { applyHeaderPath, headerPathSegments } from './headerPath';
 
 export const VIEW_TYPE_EXTERNAL_BLOCK = 'logseq-external-block';
@@ -188,7 +189,34 @@ export class ExternalBlockView extends ItemView {
     const innerEl = (inner.containerEl as unknown as HTMLElement[] | undefined)?.[0] ?? inner.containerEl;
     if (innerEl) host.appendChild(innerEl);
 
+    // 库外笔记的附件（粘贴图片 / 拖入文件）：目标目录按 CAL 的模板解析，
+    // 落盘走 Node fs —— 详见 features/externalAttachment.ts 的头部说明。
+    const detach = installExternalAttachmentHandlers(host, {
+      app: this.plugin.app,
+      noteAbs: () => this.abs,
+      mountRoot: () => this.mountPath || this.mountRootFromSettings(),
+      editor: () => this.inner,
+    });
+    this.register(detach);
+
     void this.pushContent(inner);
+  }
+
+  /** 老 state 没有挂载根时，按最长前缀匹配在挂载配置里找回来。 */
+  private mountRootFromSettings(): string {
+    const mounts = this.plugin.settings.externalMounts ?? [];
+    const full = this.abs.replace(/\\/g, '/').toLowerCase();
+    let best = '';
+    let bestLen = -1;
+    for (const m of mounts) {
+      const root = String(m.path ?? '').replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
+      if (!root || !full.startsWith(root + '/')) continue;
+      if (root.length > bestLen) {
+        bestLen = root.length;
+        best = m.path ?? '';
+      }
+    }
+    return best;
   }
 
   private async pushContent(inner: BlockEditorView): Promise<void> {

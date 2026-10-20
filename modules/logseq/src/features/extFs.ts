@@ -93,6 +93,18 @@ export function joinAbs(root: string, rel: string): string {
   return root.replace(/[\\/]+$/, '') + sep + rel.split('/').join(sep);
 }
 
+/** 父目录（原生分隔符；无分隔符时返回空串）。 */
+export function dirOf(abs: string): string {
+  const i = Math.max(abs.lastIndexOf('\\'), abs.lastIndexOf('/'));
+  return i > 0 ? abs.slice(0, i) : '';
+}
+
+/** 文件名部分（含扩展名）。 */
+export function baseOf(abs: string): string {
+  const i = Math.max(abs.lastIndexOf('\\'), abs.lastIndexOf('/'));
+  return i >= 0 ? abs.slice(i + 1) : abs;
+}
+
 /**
  * Validate a user-typed file/folder name for the tree-file ops.
  *
@@ -389,6 +401,24 @@ export function readExternalText(abs: string): string {
 /** Overwrite a text file outside the vault. Throws on failure. */
 export function writeExternalText(abs: string, data: string): void {
   fsMod().writeFileSync(abs, data, 'utf8');
+}
+
+/**
+ * 写二进制文件（粘贴/拖入的图片等）到库外，返回可诊断的结果而非抛异常。
+ *
+ * 为什么单独一个函数：`NodeFsLike` 的文本接口会按 utf8 编码，图片会被写坏，
+ * 必须走 writeFileSync 的 Buffer 分支（生产 Node fs 原生支持）。
+ */
+export function writeExternalBinary(abs: string, data: Uint8Array): FsOpResult {
+  try {
+    const fs = fsMod() as unknown as {
+      writeFileSync(p: string, d: Uint8Array): void;
+    };
+    fs.writeFileSync(abs, data);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: errorMessage(e) };
+  }
 }
 
 /** True when the path exists and is a directory. */
