@@ -1,0 +1,119 @@
+# NOTICE — modules/audio-player
+
+本模块是三个第三方 Obsidian 插件的合并收编成果，非本仓自有代码。三家上游
+许可证均与 GPL-3.0 兼容，按其要求原样保留并注明出处（完整许可证文本见文末）。
+
+## 一、三家上游出处
+
+| 上游 | 作者 | 收编快照 | 贡献 |
+|---|---|---|---|
+| obsidian-media-marker v1.0.4 | Blontern（MIT） | master `bba4e83c` | **基底**：全部既有功能（可点击时间戳 / 循环区间 / 自定义播放器 / 步进 seek / 时间戳插入 / 贴边媒体 / 字幕歌词 / 快捷键 / 播放设置） |
+| obsidian-audio-timestamp-player v1.2.0 | ITNQ18 / IT039（0BSD） | main `813210b2` | 移植：同笔记多录音显式绑定、跨视图存活悬浮播放器 + 切页三态、源码模式链接时间戳点击 |
+| obsidian-timestamp-player v1.1.0 | zhoulianglen / Len Zhou（MIT） | master `c9395729` | 无可移植代码：其两项特性（说话人时间戳、多音频区段作用域）均已被基底涵盖（见下） |
+
+- 上游仓库：
+  - https://github.com/blontern/obsidian-media-marker
+  - https://github.com/ITNQ18/obsidian-audio-timestamp-player
+  - https://github.com/zhoulianglen/obsidian-timestamp-player
+- 演进链推测：timestamp-player（2026-03，仅音频）→ audio-timestamp-player
+  （2026-07，加视频）→ media-marker（2026-10，功能最全）。media-marker 的
+  说话人正则 `^(.+?)\s+((?:(?:\d{1,3}:)?\d{1,3}:\d{2}(?:\.\d{1,3})?))\s*$`
+  是 timestamp-player `^(.+?)\s+(\d{1,3}):(\d{2})\s*$` 的超集；区段作用域
+   likewise（`findMediaForElement` / `getTimestampsForMedia` 文档序区段，
+  兼容 sticky anchor）。故 timestamp-player 仅存档不留码。
+
+## 二、合并后的插件标识
+
+- 聚合内模块 id：`audio-player`（设置页显示名 `Audio Player`）
+- 宿主 `ModuleDescriptor` 挂三个 legacyId 别名：`media-marker`、
+  `audio-timestamp-player`、`timestamp-player` —— 三者的旧 id 在
+  `app.plugins.plugins` 中均可继续解析（数据互不迁移：三个上游的
+  data.json / player-settings.json 边车互不兼容，重新配置即可；
+  基底 media-marker 原本就不用 data.json）。
+- manifest 版本从 1.0.0 起算（新身份）；上游 media-marker 1.0.4 的
+  versions.json 历史不再延续。
+
+## 三、移植矩阵（行为对齐，非代码搬移）
+
+| 移植项 | 来源 | 落点 | 方式 |
+|---|---|---|---|
+| 同笔记多录音显式绑定 | audio-tp | `src/media-binding.ts`（新）+ `timestamps.ts` 别名解析 + 阅读态链接按钮化 | `![[part1.mp3]] %%audio-id: part1%%` 声明 + `[00:13](#audio-time=00:13&audio=part1)` 引用；重复/未知/歧义别名有 Notice 反馈 |
+| 跨视图存活悬浮播放器 | audio-tp | `src/floating-player.ts`（新）+ `src/settings.ts` + `main.ts` | 单实例挂 leaf 容器（脱离笔记内容子树），跨模式切换/长笔记滚动/分栏重渲染/切页存活；切页行为 continue/pause/close 可配（默认 continue）；视频按宽高比拖拽缩放并持久化 |
+| 源码模式链接时间戳点击 | audio-tp | `src/editor-extension.ts` + `src/timestamp-target.ts`（新） | CM6 `domEventHandlers` 点击拦截，Live Preview 与纯源码模式均覆盖 |
+| （参考）说话人时间戳 / 区段作用域 | timestamp-player | — | 基底已覆盖，未引入代码 |
+
+## 四、不移植项（留档说明）
+
+- **language override 设置**（audio-tp 的 auto/zh-CN/en 下拉）：基底 i18n
+  自动识别 Obsidian 语言且多一个 zh-TW，覆盖更全，故不引入该设置。
+- **videoDisplayMode compact/expanded**（audio-tp 悬浮播放器的紧凑/展开
+  切换）：基底 in-place 自定义播放器 UI 更完整；悬浮播放器在本合并中定位
+  为「存活兜底」，不做双形态，仅保留视频默认尺寸 + 拖拽缩放。
+- **pauseNativePlayers**（audio-tp 播放时暂停视图内其它原生 embed）：基底
+  `TimestampManager.activateMedia` 已是单活语义，无需额外逻辑。
+- **audio-tp 的 audio-index.ts / audio-player.ts**：上游历史遗留薄门面
+  （审计报告附录 A 标注可弃），不收编。
+- **三上游的 data.json 设置**：不迁移。合并模块的设置经宿主持有的
+  loadData/saveData 分片持久化（`audioNavigationBehavior` 等新增项），
+  基底原有的 `player-settings.json` 边车机制原样保留。
+
+## 五、收编适配（均不改运行时语义）
+
+- manifest id 改为 `audio-player`，name 改 `Audio Player`，版本 1.0.0 起算。
+- CSS 不走上游「独立 styles.css 产物」路径：模块本地 `styles.css` 保留为
+  上游参考副本（tracetime/breadcrumb 先例），内容合并进聚合根 styles.css 的
+  `Audio Player (modules/audio-player)` 分段（含移植新增的
+  `tsp-floating-*` 样式）；esbuild 侧 `.css` 按 empty 处理。
+- `@codemirror/state` / `@codemirror/view` 在聚合构建中为 external（与
+  Obsidian 自带 CM6 实例共享），模块 package.json 保留二者仅为独立 tsc 校验。
+- 宿主 tsconfig include 增加 `modules/audio-player/src/**/*.ts`。
+- 宿主 `ModuleDescriptor` 扩展 `legacyIds?: string[]`（向后兼容单值
+  `legacyId`），audio-player 一个模块挂三个旧 id。
+
+## 六、许可证全文
+
+### MIT License — media-marker（基底）
+
+Copyright (c) 2026 Blontern
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+### MIT License — timestamp-player
+
+Copyright (c) 2026 Len Zhou
+
+（许可条款同上，全文见上游仓库 LICENSE；本 NOTICE 按其要求收录版权声明与许可声明。）
+
+### 0BSD — audio-timestamp-player
+
+Copyright (C) 2020-2025 by Dynalist Inc.
+
+（注：该版权抬头为 Obsidian 示例模板残留，非插件作者 IT039 的声明；文本为
+零条款 BSD，允许任意使用/复制/修改/分发，无需保留版权声明。）
+
+Permission to use, copy, modify, and/or distribute this software for any purpose
+with or without fee is hereby granted.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
