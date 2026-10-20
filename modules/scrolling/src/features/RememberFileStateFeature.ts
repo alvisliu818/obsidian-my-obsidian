@@ -168,6 +168,26 @@ export class RememberFileStateFeature implements Feature {
                 },
             },
             {
+                // 聚合主仓新增（上游没有）：写盘时机开关。
+                name: "Write file only on exit",
+                desc:
+                    "Keep positions in memory and write the storage file only when Obsidian closes " +
+                    "(or when this module is disabled/reloaded) instead of after every scroll. " +
+                    "Fewer disk writes, at the cost of losing the current session's positions " +
+                    "if Obsidian is killed without a clean exit.",
+                control: {
+                    type: "toggle",
+                    key: "restoreScrollWriteOnExitOnly",
+                    defaultValue: false,
+                    disabled: (): boolean => {
+                        return this.plugin.settings.restoreScrollMode === "top";
+                    },
+                },
+                visible: (): boolean => {
+                    return this.plugin.settings.restoreScrollFileEnabled;
+                },
+            },
+            {
                 name: "Storage file path",
                 desc: "File for persistent storage of scrolling positions across sessions.",
                 control: {
@@ -227,6 +247,18 @@ export class RememberFileStateFeature implements Feature {
             this.FILE_WRITE_INTERVAL,
             true,
         );
+
+        // 聚合主仓新增：只在退出时落盘。'quit' 是 Obsidian 关闭（含关窗/退出）时
+        // 发的最后一次事件；模块被禁用/重载时 unload 也会冲一次，避免白丢。
+        // 两者共用同一个 flush，重复调用无害（writeStatesFile 只是整表重写）。
+        plugin.registerEvent(
+            this.plugin.app.workspace.on("quit", () => {
+                void this.flushStatesFile();
+            }),
+        );
+        plugin.register(() => {
+            void this.flushStatesFile();
+        });
 
         // TODO: consider simply patching into WorkspaceLeaf.setViewState. It contains info about flashing element
         // see core/events for monkey patching
@@ -417,7 +449,7 @@ export class RememberFileStateFeature implements Feature {
         if (!this.workspaceInitialized || this.numOpeningFiles > 0) return;
 
         this.storeStateDebounced(event.target as HTMLElement);
-        this.writeStatesFileDebounced();
+        this.scheduleWrite();
     }
 
     /**
@@ -509,7 +541,7 @@ export class RememberFileStateFeature implements Feature {
         };
         iter();
 
-        this.writeStatesFileDebounced();
+        this.scheduleWrite();
     }
 
     /**
@@ -664,6 +696,27 @@ export class RememberFileStateFeature implements Feature {
         }
         const dirPath = filePath.substring(0, lastSlashIndex);
         return await this.plugin.app.vault.adapter.exists(dirPath);
+    }
+
+    /**
+     * 计划一次落盘（聚合主仓新增的调度层）。
+     *
+     * 上游每次滚动/打开文件都会防抖写盘（293ms），库里文件多或开着同步盘时写
+     * 得很勤。开了「Write file only on exit」后这里直接返回，写盘只由退出/卸载
+     * 时的 flush 触发。
+     */
+    private scheduleWrite(): void {
+        if (this.plugin.settings.restoreScrollWriteOnExitOnly) return;
+        this.writeStatesFileDebounced();
+    }
+
+    /**
+     * 立即把内存里的整张位置表写进文件（退出 / 模块卸载时调用）。
+     * 取消在途的防抖任务，避免退出时又排一次已经不需要的写。
+     */
+    private async flushStatesFile(): Promise<void> {
+        this.writeStatesFileDebounced?.cancel();
+        await this.writeStatesFile();
     }
 
     /**
