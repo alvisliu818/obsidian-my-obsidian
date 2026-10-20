@@ -143,10 +143,13 @@ export function enhanceTable(table: HTMLTableElement, b: Block, host: BlockRende
     on(cell, 'blur', () => {
       const cur = cursorOf(t, cell as HTMLElement);
       if (!cur) return;
-      // Read the cell's TEXT, never its innerHTML: drag handles and other
-      // decorations live in the DOM around the text and must not be persisted
-      // into the markdown.
-      const value = readCellText(cell as HTMLElement);
+      // Read the cell back as MARKDOWN, never as plain text / innerHTML:
+      //  - innerHTML 会把拖动手柄等编辑器 chrome 一并写进 markdown;
+      //  - 纯 textContent 会吃掉行内标记(`**加粗**` 渲染成 <strong> 后就
+      //    只剩「加粗」),只是点进单元格再点开,格式也会被抹掉。
+      // 无法忠实还原的内容(图片/嵌入等)返回 null → 直接不提交。
+      const value = readCellMarkdown(cell as HTMLElement);
+      if (value === null) return;
       const m = model();
       const existing = cur.kind === 'header' ? m.header.cells[cur.col]?.text : m.body[cur.row]?.cells[cur.col]?.text;
       if (existing === value) return;
@@ -445,6 +448,95 @@ function readCellText(cell: HTMLElement): string {
   // The zero-width space is a caret anchor, never content — strip it (and any
   // other invisible formatting char) so it can never reach the markdown.
   return out.replace(/[\u200b-\u200f\ufeff]/g, '').replace(/\s*\n\s*/g, ' ').trim();
+}
+
+/** 单元格里这些元素无法忠实回写成 markdown(渲染物,不是行内标记)。 */
+const UNREPRESENTABLE = 'IMG, IFRAME, VIDEO, AUDIO, SVG, CANVAS, INPUT, BUTTON, SELECT, TEXTAREA, TABLE';
+
+/**
+ * 单元格内容 → markdown。
+ *
+ * 为什么不能只读纯文本:单元格是 MarkdownRenderer 的渲染结果,`**加粗**`
+ * 在 DOM 里是 `<strong>加粗</strong>` —— 只取 textContent 会拿到「加粗」,
+ * 拿去覆盖模型里的原始 `**加粗**`,粗体(以及斜体/行内代码/链接)就在
+ * 失焦提交的那一刻丢了:用户只是点了单元格又点开,格式也没了。
+ *
+ * 这里把能忠实还原的行内标记翻回 markdown;遇到无法回写的渲染物(图片/
+ * 嵌入/公式/嵌套表格等)返回 null —— 调用方据此**不动模型**,宁可不提交
+ * 也不能把用户的东西写成一坨纯文本。
+ */
+function cellDomToMarkdown(cell: HTMLElement): string | null {
+  let out = '';
+  for (const node of Array.from(cell.childNodes)) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      out += (node.nodeValue ?? '').replace(/\|/g, '\\|');
+      continue;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) continue;
+    const el = node as HTMLElement;
+    // 编辑器 chrome(行列手柄/工具条)不是单元格内容
+    if (el.closest(`.${CLS}-col-handle, .${CLS}-row-handle, .${CLS}-bar`)) continue;
+    if (el.matches(UNREPRESENTABLE)) return null;
+    // 嵌入类容器(块嵌入/页面嵌入/查询结果等)一律不碰
+    if (el.classList.contains('block-embed') || el.classList.contains('internal-embed')) return null;
+    const inner = cellDomToMarkdown(el);
+    if (inner === null) return null;
+    if (!inner.trim()) continue;
+    switch (el.tagName) {
+      case 'STRONG':
+      case 'B':
+        out += `**${inner}**`;
+        break;
+      case 'EM':
+      case 'I':
+        out += `*${inner}*`;
+        break;
+      case 'DEL':
+      case 'S':
+      case 'STRIKE':
+        out += `~~${inner}~~`;
+        break;
+      case 'CODE':
+        out += `\`${inner}\``;
+        break;
+      case 'MARK':
+        out += `==${inner}==`;
+        break;
+      case 'BR':
+        out += ' ';
+        break;
+      case 'A': {
+        const cls = el.className || '';
+        // 标签(#tag)渲染成锚点,但它本身就是纯文本标记,原样写回
+        if (/\btag\b/.test(cls) || inner.startsWith('#')) {
+          out += inner;
+          break;
+        }
+        // 内部链接:还原 wikilink(带 |别名 时保留别名)
+        const dataHref = el.getAttribute('data-href');
+        if (dataHref) {
+          out += inner === dataHref ? `[[${dataHref}]]` : `[[${dataHref}|${inner}]]`;
+          break;
+        }
+        const href = el.getAttribute('href') ?? '';
+        out += href ? `[${inner}](${href})` : inner;
+        break;
+      }
+      default:
+        out += inner;
+        break;
+    }
+  }
+  return out;
+}
+
+/**
+ * 提交用的单元格值(markdown)。null = 无法忠实回写,调用方应跳过本次提交。
+ */
+function readCellMarkdown(cell: HTMLElement): string | null {
+  const md = cellDomToMarkdown(cell);
+  if (md === null) return null;
+  return md.replace(/[\u200b-\u200f\ufeff]/g, '').replace(/\s*\n\s*/g, ' ').trim();
 }
 
 function caretOffset(el: HTMLElement): number {
