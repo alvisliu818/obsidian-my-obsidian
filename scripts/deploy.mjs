@@ -7,9 +7,10 @@
  *  - pty-helper/ — the logseq module's terminal needs a real OS pty, which
  *    means a native module (node-pty). That cannot be bundled into main.js,
  *    so it lives in its own folder that a system node.exe spawns. It is NOT
- *    in git (31MB of platform binaries); this script takes it from wherever
- *    it already lives — the old logseq plugin folder — and copies it next to
- *    the merged plugin.
+ *    in git (platform binaries); this script takes it from wherever it
+ *    already lives — the old logseq plugin folder, or the obsidian-myterminal
+ *    repo next to this one (same helper, .pdb stripped) — and copies it next
+ *    to the merged plugin.
  *
  * Without that second step the terminal comes up as an empty box with
  * "PTY helper 启动失败" in it, which is exactly how the bug looked before the
@@ -18,7 +19,7 @@
  * Usage:
  *   node scripts/deploy.mjs --vault "<库路径>" [--from "<旧 logseq 插件目录>"]
  */
-import { existsSync, mkdirSync, cpSync } from "node:fs";
+import { existsSync, mkdirSync, cpSync, rmSync } from "node:fs";
 import path from "node:path";
 
 const args = process.argv.slice(2);
@@ -91,12 +92,16 @@ for (const f of ["monaco.css"]) {
 
 // ---- pty-helper (the terminal's native helper) ----
 // Where to look for it, in order: an explicit --from, then any old logseq
-// plugin folder in the same vault (the merge was installed alongside them).
+// plugin folder in the same vault (the merge was installed alongside them),
+// then the obsidian-myterminal repo sitting next to this one — it carries the
+// same helper with the .pdb debug symbols already stripped (3.8M instead of
+// 31M; the symbols are build artifacts, never loaded at runtime).
 const candidates = [];
 if (fromFlag >= 0 && args[fromFlag + 1]) candidates.push(args[fromFlag + 1]);
 for (const dir of ["obsidian-logseq", "obsidian-logseq-public"]) {
 	candidates.push(path.join(VAULT, ".obsidian", "plugins", dir));
 }
+candidates.push(path.resolve(ROOT, "..", "obsidian-myterminal"));
 
 let helper = null;
 for (const c of candidates) {
@@ -107,8 +112,14 @@ for (const c of candidates) {
 }
 
 if (helper) {
+	// 找到源就整体替换：cpSync 不删源里没有的文件，不清掉目标里的旧 .pdb
+	// 副本会永远比源胖 24MB。
+	rmSync(path.join(TARGET, "pty-helper"), { recursive: true, force: true });
 	cpSync(helper, path.join(TARGET, "pty-helper"), { recursive: true });
 	console.log(`  pty-helper/  ← ${helper}`);
+} else if (existsSync(path.join(TARGET, "pty-helper", "pty-helper.js"))) {
+	// 目标已有一份（上次部署带过来的）——够了，别再喊。
+	console.log("  pty-helper/ 已在目标目录（未找到源，跳过）");
 } else {
 	console.warn(
 		"  ! 没找到 pty-helper（终端会打不开）。用 --from 指定旧 logseq 插件目录，\n" +
