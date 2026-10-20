@@ -3065,6 +3065,13 @@ ${content}`;
       // round-trips" — every edit funnels through here.
       this.externalDirty = true;
     }
+    // open-tab-settings 的 reuseUnmodifiedTab 靠 editor-change → touched 认「这个
+    // tab 被用户编辑过」，但 editor-change 只为原生 MarkdownView 触发，本视图
+    // 的编辑进不了那条链——只剩 TextFileView.dirty 一个信号，而 save-control
+    // 自动落盘后 dirty 就复位了，tab 随即失去保护、被新打开的文件复用顶掉。
+    // 在这里补上 touch：语义对齐原生 md——编辑过即保持，落盘不清。
+    const leafEx = this.leaf as unknown as { openTabSettings?: Record<string, unknown> | undefined };
+    leafEx.openTabSettings = { ...leafEx.openTabSettings, touched: true };
     this.requestSave(); // native: sets dirty + debounced save (2s)
   }
 
