@@ -1,0 +1,31 @@
+import { Callout, Steps } from "nextra/components";
+import { ObsidianInfo } from "./info";
+
+<ObsidianInfo channel="beta" lang="en" />
+
+<Callout type="warning">
+  Beta versions are not production-ready, make sure to make proper backup before
+  preceeding.
+</Callout>
+
+You can use the Beta Reviewers Auto-update Tester (BRAT) plugin to install a pre-release version of the plugin.
+
+<Steps>
+
+### Install BRAT
+
+Download [BRAT](https://obsidian.md/plugins?id=obsidian42-brat) and enable it
+
+### Add a beta plugin for testing
+
+1. Open [link to BRAT](obsidian://brat?plugin=PKM-er/media-extended), it will open BRAT and ask you to add the plugin. 
+   Of course, you can manually add the plugin by using the `Add Beta Plugin` command and enter `PKM-er/media-extended`.
+2. Click on `Add Plugin` -- wait a few seconds and BRAT will tell you what is going on
+
+### Enable the beta plugin
+
+1. After BRAT confirms the installation, Open `Settings` > `Community plugin`
+2. Refresh the list of plugins
+3. Find the beta plugin you just installed and Enable it.
+
+</Steps>

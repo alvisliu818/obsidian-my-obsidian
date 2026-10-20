@@ -1,0 +1,47 @@
+# NOTICE — modules/media-extended
+
+本模块是第三方插件 **Media Extended**（AidenLx / PKM-er）开源版（v3 线）的
+整体收编副本，非本仓自有代码，按其上游许可证（MIT，见 apps/app 同级
+LICENSE；cm-language fork 同为 MIT）原样保留并注明出处。
+
+- 上游仓库: https://github.com/aidenlx/media-extended
+- 收编快照: origin/v3 分支 tip `06544f6708a032b1c3425f87121348d1bfd1b4f1`
+  （3.2.6 发布后的最后一次重构提交）。**4.x（含当前 4.2.9）闭源**，
+  main 分支历史上从未包含源码，故收编止于 v3。
+- monorepo 形态原样保留：apps/app（插件本体，入口 src/mx-main.ts）、
+  packages/*、pnpm/turbo 等仓库机制文件原样在位（聚合构建不经它们）。
+- manifest id: `media-extended`（id 与 legacyId 同为真实上游 id）。
+
+收编适配（均为构建/接线机械适配，不改运行时语义）:
+1. **cm-language submodule 实体化**: 上游 packages/cm-language 是指向
+   lishid/cm-language @ `2644bfc27afda707a7e1f3aedaf3ca7120f63cd9` 的
+   gitlink；已拉取该 commit 的文件树实体化（其 dist 构建产物一并入库，
+   白名单见根 .gitignore），`.gitmodules` 移除。重建命令:
+   `cd packages/cm-language && npm install --ignore-scripts && npx cm-buildhelper src/index.ts`
+2. **workspace 依赖去 pnpm 化**: apps/app 的 `@mx/config: workspace:*`
+   依赖移除，tsconfig extends 改为相对路径
+   `../../packages/tooling-config/tsconfig.json`（npm 的 file: 拷贝会丢
+   tsconfig.json，相对 extends 自包含）。
+3. **obsidian 类型保持 1.5.7-1**（模块自带 devDep），与宿主 1.14.4 并存：
+   模块经 require 桥接入 bundle（见下），不进宿主 tsc 程序，两套类型互不
+   污染；`cls` 处以 unknown 转接（extensionRegistry 同款先例）。
+4. **require 桥**: 宿主 src/main.ts 用 `require(...).default` 引入 MxPlugin
+   —— 模块源码的 `@/...` 别名与 music-player 的 `@/` 同名，宿主 tsconfig
+   paths 无法按 importer 区分，故 mx 源码不进宿主 tsc include；类型校验由
+   模块自带 tsconfig 独立完成（`npx tsc --noEmit -p apps/app/tsconfig.json`
+   = 0 error，ai-image-analyzer 排除先例的收紧版）。
+5. **CSS**: 上游 postcss 管线（tailwind + nesting + autoprefixer +
+   discard + `.mx` 前缀隔离，含 vidstack base.css）在收编时跑上游自家构建
+   一次，产物 dist/styles.css 并入根 styles.css 的
+   `Media Extended (modules/media-extended)` 分段；聚合构建侧 `.css/.less`
+   按 empty 处理。上游 postcss 配置加载的 Windows ESM 路径 bug 已在
+   apps/app/esbuild.config.mjs 内修（pathToFileURL）。重建 CSS:
+   `cd apps/app && $env:BUILD='production'; node esbuild.config.mjs`，
+   再把 dist/styles.css 内容并回根 styles.css 分段。
+6. **根 esbuild.mjs 三插件移植**: `inline:*` 子打包（webview 预载/油猴
+   脚本，external 与上游一致）、media-captions 的 `instanceof HTMLElement`
+   → arktype 补丁（Windows 路径反斜杠兼容）、`process.env.NODE_ENV` 仅对
+   modules/media-extended/ 作用域替换（避免全局 define 连带改 omnisearch
+   等模块的运行时分支）。另加 `.svg/.ejs` text loader。
+7. 上游已知怪值沿用: 视图类型 `mx-*` 系列；`@electron/remote` 聚合侧
+   直接打包（自包含）。
