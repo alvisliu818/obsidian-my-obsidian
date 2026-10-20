@@ -1,0 +1,116 @@
+/**
+ * 逐字时间歌词三行组件样式文件
+ * 
+ * 包含逐字时间歌词三行显示的所有样式，包括：
+ * - 逐字歌词文本样式
+ * - 逐字字符容器样式
+ * - 背景文字（未填充部分）样式
+ * - 填充文字（已填充部分）样式
+ * - 当前行高亮样式
+ * - 卡拉OK 逐字高亮效果
+ */
+
+/* ========== 逐字歌词文本样式 ========== */
+.music-player .lyrics-extended-triplet-text {
+	cursor: pointer;
+	color: var(--text-muted);
+	transition: color 0.2s ease;
+	user-select: none;
+	display: inline-block;
+	text-align: center;
+}
+
+/* 保留英文词间空格与连续空格 */
+.music-player .lyrics-extended-triplet-plain,
+.music-player .lyrics-extended-triplet-karaoke {
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+/* 中英文统一字格：略增字距，拉丁与汉字节奏接近 */
+.music-player .lyrics-extended-triplet-karaoke {
+	letter-spacing: 0.04em;
+}
+
+.music-player .lyrics-extended-triplet-char {
+	display: inline-block;
+	position: relative;
+	vertical-align: baseline;
+	line-height: inherit;
+	padding: 0 0.06em;
+	box-sizing: content-box;
+}
+
+.music-player .lyrics-extended-triplet-char.is-ws {
+	min-width: 0.35em;
+}
+
+/* 背景层（未唱到部分） */
+.music-player .lyrics-extended-triplet-char-bg {
+	display: inline-block;
+	position: relative;
+	z-index: 0;
+	color: var(--text-muted);
+	opacity: 0.5;
+	font-weight: 600;
+}
+
+/* 从左向右揭示：用宽度裁剪，避免 scaleX 横向拉伸字形 */
+.music-player .lyrics-extended-triplet-char-fill-clip {
+	position: absolute;
+	left: 0;
+	top: 0;
+	bottom: 0;
+	overflow: hidden;
+	max-width: 100%;
+	z-index: 1;
+	pointer-events: none;
+	will-change: width;
+}
+
+.music-player .lyrics-extended-triplet-char-fill {
+	position: absolute;
+	left: 0;
+	top: 0;
+	display: inline-block;
+	white-space: nowrap;
+	line-height: inherit;
+	color: var(--interactive-accent);
+	font-weight: 600;
+}
+
+/* 当前行：背景与填充层同一字重，保证叠字宽度一致 */
+.music-player .lyric-line-current .lyrics-extended-triplet-char-bg,
+.music-player .lyric-line-current .lyrics-extended-triplet-char-fill {
+	color: var(--interactive-accent);
+	font-weight: 600;
+}
+
+.music-player .lyric-line-current .lyrics-extended-triplet-char-bg {
+	opacity: 0.45;
+}
+
+.music-player .lyric-line-current .lyrics-extended-triplet-char-fill {
+	opacity: 1;
+}
+
+/* 上一行的文字颜色 */
+.music-player .lyric-line-prev .lyrics-extended-triplet-text {
+	color: var(--interactive-accent);
+	font-weight: 600;
+	opacity: 0.5;
+}
+
+/* 当前行的文字颜色和样式 */
+.music-player .lyric-line-current .lyrics-extended-triplet-text {
+	color: var(--interactive-accent);
+	font-weight: 600;
+	font-size: 1.15em;
+}
+
+/* 英文整词一格：取消字距拉伸，略增词左右留白 */
+.music-player .lyrics-extended-triplet-char.is-word-unit {
+	letter-spacing: normal;
+	padding: 0 0.1em;
+}
+

@@ -1,0 +1,107 @@
+/**
+ * 播放控制组件样式文件
+ * 
+ * 包含播放控制按钮的所有样式，包括：
+ * - 控制按钮布局
+ * - 播放/暂停按钮样式
+ * - 上一首/下一首按钮样式
+ * - 播放模式按钮样式
+ * - 按钮悬停和激活状态
+ * - 播放模式提示框样式
+ */
+
+/* ========== 控制按钮样式 ========== */
+.music-player .controls-row {
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	gap: 16px;
+	margin-bottom: 20px;
+}
+
+.music-player button.play-control-btn.clickable-icon {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 44px;
+	height: 44px;
+	border: 1px solid;
+	background: transparent;
+	border-radius: 50%;
+	cursor: pointer;
+	color: var(--icon-color);
+	transition: all 0.2s ease;
+	padding: 0;
+}
+
+.music-player button.play-control-btn.clickable-icon:hover {
+	color: var(--interactive-accent);
+	transform: scale(1.1);
+	background: transparent;
+}
+
+.music-player button.play-control-btn.clickable-icon:active {
+	background: transparent;
+}
+
+.music-player button.play-control-btn.clickable-icon.active {
+	color: var(--interactive-accent);
+	background: transparent;
+}
+
+.music-player button.play-control-btn.clickable-icon svg {
+	background: transparent;
+}
+
+.music-player button.play-control-btn.clickable-icon.play-pause-btn {
+	width: 64px;
+	height: 64px;
+	background: transparent;
+	color: var(--icon-color);
+}
+
+.music-player button.play-control-btn.clickable-icon.play-pause-btn:hover {
+	background: transparent;
+}
+
+.music-player button.play-control-btn.clickable-icon.play-pause-btn:active {
+	background: transparent;
+}
+
+.music-player button.play-control-btn.clickable-icon.play-pause-btn svg {
+	width: 32px;
+	height: 32px;
+	background: transparent;
+}
+
+.music-player button.play-control-btn.clickable-icon.mode-normal,
+.music-player button.play-control-btn.clickable-icon.mode-repeat-all,
+.music-player button.play-control-btn.clickable-icon.mode-repeat-one,
+.music-player button.play-control-btn.clickable-icon.mode-shuffle {
+	position: relative;
+}
+
+.music-player .mode-tooltip {
+	position: absolute;
+	bottom: -28px;
+	left: 50%;
+	transform: translateX(-50%);
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	padding: 4px 8px;
+	border-radius: 6px;
+	border: 1px solid var(--background-modifier-border);
+	font-size: 11px;
+	white-space: nowrap;
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity 0.15s ease;
+	z-index: 5;
+}
+
+.music-player button.play-control-btn.clickable-icon.mode-normal:hover .mode-tooltip,
+.music-player button.play-control-btn.clickable-icon.mode-repeat-all:hover .mode-tooltip,
+.music-player button.play-control-btn.clickable-icon.mode-repeat-one:hover .mode-tooltip,
+.music-player button.play-control-btn.clickable-icon.mode-shuffle:hover .mode-tooltip {
+	opacity: 1;
+}

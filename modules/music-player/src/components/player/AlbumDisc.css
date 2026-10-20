@@ -1,0 +1,174 @@
+/**
+ * 专辑唱片组件样式文件
+ * 
+ * 包含专辑唱片组件的所有样式，包括：
+ * - 唱片容器和布局样式
+ * - 唱片旋转动画
+ * - 唱针动画（播放/暂停时的移动）
+ * - 切换动画（上一首/下一首时的滑动效果）
+ * - 唱片阴影效果
+ * - 拖动进度功能样式
+ * - 移动端适配样式
+ */
+
+/* ========== 容器样式 ========== */
+.music-player .album-container-wrapper {
+    position: relative;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    overflow: hidden;
+    min-height: 405px;
+	max-height: 450px;
+    min-width: 320px;
+	margin-bottom: 32px;
+}
+
+.music-player .disc-shadow {
+	position: absolute;
+	width: 320px;
+	height: 320px;
+	border-radius: 50%;
+	/* 浅色模式：黑色半透明 */
+	background: rgba(0, 0, 0, 0.03);
+	/* 只让内圈（290px）之外的圆环显示：用遮罩把中心挖掉，
+	   遮罩会连同背景填充一起裁剪 */
+	-webkit-mask-image: radial-gradient(circle closest-side, transparent 0 89%, #000 91%);
+	mask-image: radial-gradient(circle closest-side, transparent 0 89%, #000 91%);
+	bottom: 0;
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: 0;
+	pointer-events: none;
+}
+
+/* 深色模式：白色半透明 */
+.theme-dark .music-player .disc-shadow {
+	background: rgba(255, 255, 255, 0.03);
+}
+
+.music-player .pan-container {
+	position: relative;
+	width: 300px;
+	height: 300px;
+	display: flex;
+	align-items: flex-end;
+	justify-content: center;
+	z-index: 1;
+}
+
+.music-player .needle {
+	position: absolute;
+	top: -107px;
+	left: 50%;
+	transform-origin: 18px 10px;
+	transform: translateX(-18px) rotate(-30deg);
+	transition: transform 0.3s ease;
+	z-index: 10;
+	pointer-events: none;
+}
+
+.music-player .needle.playing {
+	transform: translateX(-18px) rotate(0deg);
+}
+
+.music-player .needle-image {
+	display: block;
+	width: 100px;
+	height: 167px;
+	filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+	user-select: none;
+	pointer-events: none;
+	object-fit: contain;
+	transform-origin: 18px 10px;
+}
+
+.music-player .needle-image.needle-image-embedded {
+	object-fit: unset;
+	background-size: contain;
+	background-repeat: no-repeat;
+	background-position: center;
+}
+
+.music-player .album-container {
+	position: relative;
+	width: 300px;
+	height: 300px;
+	margin: 0 auto;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	touch-action: pan-y;
+}
+
+.music-player .disc-background {
+	position: absolute;
+	width: 300px;
+	height: 300px;
+	border-radius: 50%;
+	object-fit: contain;
+	user-select: none;
+	pointer-events: none;
+	z-index: 0;
+	opacity: 0.9;
+}
+
+/* 由构建注入 background-image（data URL），替代 <img src>，大图不进 main.js */
+.music-player .disc-background.disc-background-embedded {
+	object-fit: unset;
+	background-size: contain;
+	background-repeat: no-repeat;
+	background-position: center;
+}
+
+.music-player .album-image {
+	position: relative;
+	width: 200px;
+	height: 200px;
+	border-radius: 50%;
+	background-size: cover;
+	background-position: center;
+	background-color: var(--background-modifier-border);
+	box-shadow:
+		0 4px 16px rgba(0, 0, 0, 0.3),
+		inset 0 0 0 2px rgba(0, 0, 0, 0.1);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--text-muted);
+	z-index: 1;
+	overflow: hidden;
+}
+
+.music-player .album-image.playing {
+	animation: rotate 20s linear infinite;
+}
+
+.music-player .album-image.dragging {
+	animation-play-state: paused;
+}
+
+.music-player .shadow-disc {
+	opacity: 0;
+	pointer-events: none;
+}
+
+@keyframes rotate {
+	from {
+		transform: rotate(0deg);
+	}
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+.music-player .album-placeholder {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	height: 100%;
+	color: var(--text-muted);
+	font-size: 32px;
+}
+

@@ -1,0 +1,77 @@
+/**
+ * 播放指示器组件样式文件
+ * 
+ * 包含播放指示器的所有样式，包括：
+ * - 播放指示器容器样式
+ * - 柱状图动画效果
+ * - 不同位置的播放指示器样式（列表项、分类标题、标签页）
+ */
+
+/* ========== 播放指示器（柱状图动画） ========== */
+.music-player .playing-indicator {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	height: 12px;
+	margin-right: 4px;
+	vertical-align: middle;
+}
+
+.music-player .equalizer-bar {
+	width: 2px;
+	background: var(--interactive-accent);
+	border-radius: 1px;
+	animation: equalizer-animation 1s ease-in-out infinite;
+}
+
+.music-player .equalizer-bar:nth-child(1) {
+	height: 4px;
+}
+
+.music-player .equalizer-bar:nth-child(2) {
+	height: 8px;
+}
+
+.music-player .equalizer-bar:nth-child(3) {
+	height: 12px;
+}
+
+.music-player .equalizer-bar:nth-child(4) {
+	height: 8px;
+}
+
+@keyframes equalizer-animation {
+	0%, 100% {
+		transform: scaleY(0.3);
+		opacity: 0.7;
+	}
+	50% {
+		transform: scaleY(1);
+		opacity: 1;
+	}
+}
+
+/* 列表项中的播放指示器 */
+.music-player .track-playing-indicator {
+	display: inline-flex;
+	align-items: center;
+	flex-shrink: 0;
+}
+
+/* 分类标题中的播放指示器 */
+.music-player .section-playing-indicator {
+	display: inline-flex;
+	align-items: center;
+	margin-right: 4px;
+	flex-shrink: 0;
+}
+
+/* 标签页中的播放指示器 */
+.music-player .tab-playing-indicator {
+	display: inline-flex;
+	align-items: center;
+	flex-shrink: 0;
+	margin-right: 4px;
+	vertical-align: middle;
+}
+

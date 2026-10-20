@@ -1,0 +1,34 @@
+
+/* ========== 导航栏图标 ========== */
+
+.music-player .nav-buttons-container {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.music-player .nav-icon-wrapper {
+	position: relative;
+	display: inline-flex;
+}
+
+.music-player .nav-action-button.is-disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+	pointer-events: none;
+}
+
+/* ========== 导航栏提示圆点 ========== */
+
+.music-player .nav-icon-badge {
+	position: absolute;
+	top: 2px;
+	right: 2px;
+	width: 8px;
+	height: 8px;
+	background-color: var(--text-accent, #7f6df2);
+	border-radius: 50%;
+	border: 1px solid var(--background-primary, #ffffff);
+	pointer-events: none;
+	z-index: 1;
+}

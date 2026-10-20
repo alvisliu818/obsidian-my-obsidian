@@ -1,0 +1,41 @@
+{
+	"compilerOptions": {
+		"baseUrl": "src",
+		"paths": {
+			"@/*": ["*"],
+			"buffer-polyfill": ["../node_modules/buffer"]
+		},
+		"inlineSourceMap": true,
+		"inlineSources": true,
+		"module": "ESNext",
+		"target": "ESNext",
+		"allowJs": true,
+		"noImplicitAny": true,
+		"noImplicitThis": true,
+		"noImplicitReturns": true,
+		"moduleResolution": "bundler",
+		"types": ["node"],
+		"noUncheckedIndexedAccess": true,
+		"isolatedModules": true,
+		"strictNullChecks": true,
+		"strictBindCallApply": true,
+		"allowSyntheticDefaultImports": true,
+		"useUnknownInCatchVariables": true,
+		"esModuleInterop": true,
+		"resolveJsonModule": true,
+		"jsx": "react-jsx",
+		"jsxImportSource": "react",
+		"lib": [
+			"DOM",
+			"ES2018"
+		]
+	},
+	"include": [
+		"src/**/*.ts",
+		"src/**/*.tsx"
+	],
+	"exclude": [
+		"node_modules"
+	]
+}
+

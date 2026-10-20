@@ -1,0 +1,157 @@
+/**
+ * 逐字时间歌词完整列表组件样式文件
+ * 
+ * 包含逐字时间歌词完整列表的所有样式，包括：
+ * - 歌词列表容器和滚动样式
+ * - 歌词行样式
+ * - 当前播放行高亮样式
+ * - 播放过的歌词行样式
+ * - 逐字字符样式
+ * - 卡拉OK 逐字高亮效果
+ * - 空状态样式
+ */
+
+/* ========== 逐字歌词列表容器 ========== */
+.music-player .lyrics-extended {
+	width: 100%;
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: flex-start;
+}
+
+.music-player .lyrics-extended-scroll {
+	overflow-y: auto;
+	overflow-x: hidden;
+	scroll-behavior: smooth;
+	width: 100%;
+	height: 100%;
+	/* 与普通歌词视图（LyricsFull.css）一致：隐藏滚动条 */
+	scrollbar-width: none;
+	-ms-overflow-style: none;
+}
+
+.music-player .lyrics-extended-scroll::-webkit-scrollbar {
+	display: none;
+	width: 0;
+	height: 0;
+}
+
+.music-player .lyrics-extended-line {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	padding: 8px 0;
+	text-align: center;
+	transition: all 0.3s ease;
+	opacity: 0.5;
+}
+
+.music-player .lyrics-extended-line.is-active .lyrics-extended-text {
+	color: var(--interactive-accent);
+}
+
+.music-player .lyrics-extended-line.is-played .lyrics-extended-text {
+	color: var(--interactive-accent);
+}
+
+.music-player .lyrics-extended-line.is-playing {
+	opacity: 1;
+}
+
+.music-player .lyrics-extended-text {
+	cursor: pointer;
+	color: var(--text-normal);
+	transition: color 0.2s ease;
+	user-select: none;
+	display: inline-block;
+	white-space: pre-wrap;
+	word-break: break-word;
+	letter-spacing: 0.04em;
+}
+
+.music-player .lyrics-extended-line.is-playing .lyrics-extended-text {
+	color: var(--interactive-accent);
+	font-size: 1.15em;
+	font-weight: 600;
+}
+
+.music-player .lyrics-extended-char {
+	display: inline-block;
+	position: relative;
+	vertical-align: baseline;
+	line-height: inherit;
+	padding: 0 0.06em;
+	box-sizing: content-box;
+}
+
+.music-player .lyrics-extended-char.is-ws {
+	min-width: 0.35em;
+}
+
+/* 背景层 */
+.music-player .lyrics-extended-char-bg {
+	display: inline-block;
+	position: relative;
+	z-index: 0;
+	color: var(--text-normal);
+	opacity: 0.5;
+	font-weight: 600;
+}
+
+/* 播放过的歌词和当前行的背景文字颜色 */
+.music-player .lyrics-extended-line.is-played .lyrics-extended-char-bg,
+.music-player .lyrics-extended-line.is-playing .lyrics-extended-char-bg {
+	color: var(--interactive-accent);
+	opacity: 0.45;
+}
+
+/* 从左向右揭示（裁剪宽度，避免 scaleX 拉伸） */
+.music-player .lyrics-extended-char-fill-clip {
+	position: absolute;
+	left: 0;
+	top: 0;
+	bottom: 0;
+	overflow: hidden;
+	max-width: 100%;
+	z-index: 1;
+	pointer-events: none;
+	will-change: width;
+}
+
+.music-player .lyrics-extended-char-fill {
+	position: absolute;
+	left: 0;
+	top: 0;
+	display: inline-block;
+	white-space: nowrap;
+	line-height: inherit;
+	color: var(--interactive-accent);
+	font-weight: 600;
+}
+
+.music-player .lyrics-extended-line.is-playing .lyrics-extended-char-bg,
+.music-player .lyrics-extended-line.is-playing .lyrics-extended-char-fill {
+	font-weight: 600;
+}
+
+.music-player .lyrics-extended-char.is-word-unit {
+	letter-spacing: normal;
+	padding: 0 0.1em;
+}
+
+.music-player .lyrics-extended-empty {
+	width: 100%;
+	height: 100%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.music-player .lyrics-extended-empty-text {
+	color: var(--text-faint);
+	font-size: 0.9em;
+}
+

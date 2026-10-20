@@ -1,0 +1,66 @@
+/**
+ * 基础模态框组件公共样式文件
+ * 
+ * 包含所有模态框共享的样式，包括：
+ * - 按钮容器布局
+ * - 确定和取消按钮样式
+ * - 移动端适配
+ * 
+ * 注意：所有样式都限制在 .music-player-modal 类名下，避免影响 Obsidian 原生界面
+ */
+
+/* ========== 按钮容器样式 ========== */
+.music-player-modal .prompt-button-container {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 12px;
+	order: 2; /* 确保按钮在内容下方 */
+	flex-shrink: 0; /* 防止按钮被压缩 */
+}
+
+.music-player-modal .prompt-button-container button {
+	padding: 6px 16px;
+	border: none;
+	cursor: pointer;
+	font-size: 14px;
+	transition: background-color 0.2s;
+}
+
+.music-player-modal .prompt-button-container button.mod-cta {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.music-player-modal .prompt-button-container button.mod-cta:hover {
+	background: var(--interactive-accent-hover);
+}
+
+.music-player-modal .prompt-button-container button:not(.mod-cta) {
+	background: var(--interactive-normal);
+	color: var(--text-normal);
+}
+
+.music-player-modal .prompt-button-container button:not(.mod-cta):hover {
+	background: var(--background-modifier-hover);
+}
+
+/* ========== 移动端适配 ========== */
+/* 确保 Modal 内容区域使用 flex 布局，保持正确的顺序 - 仅限插件自己的 Modal */
+/* .modal.music-player-modal 提高特异性，压过 Obsidian 默认模态样式 */
+.is-phone .modal.music-player-modal .modal-content {
+	display: flex;
+	flex-direction: column;
+}
+
+/* 移动端按钮容器样式 */
+.is-phone .modal.music-player-modal .prompt-button-container {
+	margin-top: 16px;
+	margin-bottom: 0;
+	flex-direction: row;
+	justify-content: flex-end;
+	order: 2;
+	width: 100%;
+	flex-shrink: 0;
+}
+

@@ -1,0 +1,29 @@
+/**
+ * 曲目标题头部组件样式文件
+ * 
+ * 包含曲目标题和艺术家名称的样式，支持左对齐和居中对齐两种布局。
+ */
+
+/* ========== 标题头部样式 ========== */
+.music-player .track-header {
+	text-align: center;
+	margin-bottom: 24px;
+}
+
+.music-player .track-title {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	text-align: center;
+	color: var(--interactive-accent);
+}
+
+.music-player .artist-name {
+	font-size: 14px;
+	color: var(--interactive-accent);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	text-align: center;
+	opacity: 0.8;
+}

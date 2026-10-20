@@ -1,0 +1,22 @@
+/**
+ * 音乐播放器根组件样式文件
+ * 
+ * 包含根组件的所有样式，包括：
+ * - 主容器布局
+ * - Obsidian 视图外壳（.view-content.music-player，类名由 ViewSetupService 添加）
+ * - 移动端适配样式
+ */
+
+/* ========== Obsidian 视图内容区（与 ViewSetupService 中 addClass 对应）========== */
+.view-content.music-player {
+	padding: var(--size-4-1) var(--size-4-2) var(--size-4-8);
+}
+
+/* ========== 主容器 ========== */
+.music-player-container {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	padding: 0;
+	position: relative;
+}

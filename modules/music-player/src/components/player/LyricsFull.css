@@ -1,0 +1,98 @@
+/**
+ * 完整歌词列表组件样式文件
+ * 
+ * 包含完整歌词列表的所有样式，包括：
+ * - 歌词列表容器和滚动样式
+ * - 歌词行样式
+ * - 当前播放行高亮样式
+ * - 播放过的歌词行样式
+ * - 卡拉OK 效果样式（逐字高亮）
+ * - 空状态样式
+ */
+
+/* ========== 歌词列表容器（同时作为滚动容器） ========== */
+.music-player .lyrics {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	cursor: pointer;
+	margin-bottom: 16px;
+}
+
+/* 滚动容器样式 */
+.music-player .lyrics-scroll {
+	overflow-y: auto;
+	align-items: center;
+	padding: 0 16px;
+	position: relative;
+	scroll-behavior: smooth;
+	scrollbar-width: none;
+	-ms-overflow-style: none;
+}
+
+.music-player .lyrics-scroll::-webkit-scrollbar {
+	display: none;
+	width: 0;
+	height: 0;
+}
+
+/* 歌词行 */
+.music-player .lyrics-line {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	padding: 8px 0;
+	text-align: center;
+}
+
+/* 顶部/底部占位空白：高度等于容器可视高度一半，确保首行与尾行都能居中显示。
+   普通歌词视图（LyricsFull）与逐字歌词视图（LyricsExtendedFull）共用 */
+.music-player .lyrics-spacer {
+	flex: 0 0 auto;
+	width: 100%;
+	pointer-events: none;
+}
+
+/* 歌词文本 */
+.music-player .lyrics-text {
+	cursor: pointer;
+	color: var(--text-muted);
+	transition: color 0.2s ease;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+/* 中心高亮行（当前播放行）：只改变颜色 */
+.music-player .lyrics-line.is-active .lyrics-text {
+	color: var(--interactive-accent);
+}
+
+/* 播放过的歌词行：保持高亮颜色（与逐字歌词的上一行样式一致） */
+.music-player .lyrics-line.is-played .lyrics-text {
+	font-weight: 600;
+	color: var(--interactive-accent);
+	opacity: 0.5;
+}
+
+/* 当前正在播放的行：在高亮基础上放大字号、加粗 */
+.music-player .lyrics-line.is-playing .lyrics-text {
+	color: var(--interactive-accent);
+	font-weight: 600;
+	font-size: 1.15em;
+}
+
+/* 空状态 */
+.music-player .lyrics-empty {
+	align-items: center;
+	justify-content: center;
+	min-height: 200px;
+}
+
+.music-player .lyrics-empty-text {
+	color: var(--text-muted);
+	font-size: 16px;
+	text-align: center;
+}
+

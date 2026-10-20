@@ -1,0 +1,113 @@
+/**
+ * 曲目列表项样式
+ * 
+ * 用于音乐播放器中的曲目列表项显示，包括：
+ * - 封面图片
+ * - 曲目标题
+ * - 艺术家和专辑信息
+ * - 激活状态和悬停效果
+ */
+
+/* 曲目列表项容器 */
+.music-player .playlist-item {
+	padding: 8px 12px;
+	min-height: 64px;
+	display: flex;
+	align-items: center;
+}
+
+/* 当前激活的曲目项样式 */
+.music-player .playlist-item.is-active {
+	border-left: 3px solid var(--interactive-accent);
+}
+
+/* 曲目项内容容器 */
+.music-player .playlist-item-container {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	width: 100%;
+}
+
+/* 封面图片容器 */
+.music-player .playlist-item-cover {
+	width: 48px;
+	height: 48px;
+	flex-shrink: 0;
+	border-radius: 6px;
+	overflow: hidden;
+	background: var(--background-modifier-border);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+/* 封面图片样式 */
+.music-player .playlist-item-cover img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+/* 封面占位符（当没有封面图片时显示） */
+.music-player .playlist-item-placeholder {
+	width: 100%;
+	height: 100%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--text-muted);
+}
+
+/* 封面占位符中的图标 */
+.music-player .playlist-item-placeholder svg {
+	width: 24px;
+	height: 24px;
+}
+
+/* 文本信息容器（标题和元数据） */
+.music-player .playlist-item-text {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+/* 曲目标题样式 */
+.music-player .playlist-item-title {
+	font-size: 14px;
+	font-weight: 500;
+	color: var(--text-normal);
+	line-height: 1.4;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	display: flex;
+	align-items: center;
+}
+
+/* 激活状态下的标题样式 */
+.music-player .playlist-item.is-active .playlist-item-title {
+	color: var(--interactive-accent);
+	font-weight: 600;
+}
+
+/* 元数据样式（艺术家、专辑等信息） */
+.music-player .playlist-item-meta {
+	font-size: 12px;
+	line-height: 1.4;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.music-player .playlist-item.is-active .playlist-item-meta {
+	color: var(--interactive-accent);
+}
+
+/* 悬停效果 */
+.music-player .playlist-item:hover:not(.is-active) {
+	background: var(--background-modifier-hover);
+}
+

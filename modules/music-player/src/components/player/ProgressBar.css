@@ -1,0 +1,92 @@
+/**
+ * 播放进度条组件样式文件
+ *
+ * 包含进度条布局、底条与已播放填充、时间文字样式。
+ */
+
+/* ========== 进度条样式 ========== */
+.music-player .play-progress-container {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin: 0 auto 24px;
+	width: 100%;
+	max-width: 400px;
+}
+
+.music-player .play-progress-bar {
+	flex: 1;
+	height: 2px;
+	padding: 4px 0;
+	box-sizing: content-box;
+	/* 背景只画在 content-box（中间 2px），padding 带透明「空气层」可点但不可见 */
+	background: var(--background-modifier-border);
+	background-clip: content-box;
+	background-origin: content-box;
+	border-radius: 2px;
+	cursor: grab;
+	touch-action: none;
+	-webkit-tap-highlight-color: transparent;
+	user-select: none;
+	position: relative;
+	overflow: visible;
+}
+
+@media (pointer: coarse) {
+	.music-player .play-progress-bar {
+		padding: 4px 0;
+	}
+}
+
+.music-player .play-progress-bar.is-dragging {
+	cursor: grabbing;
+}
+
+.music-player .play-progress-fill {
+	height: 100%;
+	background: var(--interactive-accent);
+	border-radius: 2px;
+	width: 0%;
+	min-width: 0;
+	/* 非拖动时略有过渡；拖动时由 .is-dragging 关闭过渡以立即跟随 */
+	transition: width 0.04s linear;
+	position: relative;
+}
+
+.music-player .play-progress-bar.is-dragging .play-progress-fill {
+	transition: none;
+}
+
+/* 当前播放位置：小圆点（略大于条高，便于辨认） */
+.music-player .play-progress-fill::after {
+	content: "";
+	position: absolute;
+	right: 0;
+	top: 50%;
+	width: 7px;
+	height: 7px;
+	transform: translate(50%, -50%);
+	border-radius: 50%;
+	background: var(--interactive-accent);
+	border: 1px solid var(--background-primary);
+	pointer-events: none;
+	box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+	transition: transform 0.12s ease;
+}
+
+.music-player .play-progress-bar.is-dragging .play-progress-fill::after {
+	transform: translate(50%, -50%) scale(2);
+}
+
+.music-player .play-time.current-time,
+.music-player .play-time.duration {
+	cursor: pointer;
+}
+
+.music-player .play-time {
+	font-size: 12px;
+	color: var(--text-muted);
+	min-width: 40px;
+	text-align: center;
+	font-variant-numeric: tabular-nums;
+}

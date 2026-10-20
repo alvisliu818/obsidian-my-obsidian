@@ -1,0 +1,19 @@
+# NOTICE — modules/music-player
+
+本模块是第三方插件 **Music Player**（TracingOrigins / Kevin）的整体收编副本，
+非本仓自有代码，按其上游许可证（MIT，见同目录 LICENSE）原样保留并注明出处。
+
+- 上游仓库: https://github.com/tracingorigins/obsidian-music-player-plugin
+- 收编版本: v1.3.8（commit 7b4d220eff54c3c4700407a1c8d19c9d6639ac6c，main 分支）
+- 收编方式: 工作区整体拷贝（与上游 HEAD 逐文件一致，未改源码语义）
+- manifest id: `music-player`（聚合内 id 与 legacyId 均保持此真实上游 id，
+  使 `app.plugins.plugins["music-player"]` 继续可解析）
+
+并入时的适配（均不改语义）:
+- 根 `package.json` 的 `obsidian: latest` 钉为 `1.14.4`（与聚合宿主类型版本一致）。
+- CSS 不走上游「独立 styles.css 产物」路径：合并进聚合根 styles.css 的
+  `Music Player (modules/music-player)` 分段（含 buildVinylEmbeddedCssFragment
+  生成的唱片/唱针 PNG base64 内联规则）；esbuild 侧 `.css` 按 empty 处理。
+- `buffer`/`events`/`process`/`string_decoder` 沿用上游「打包而非 external」
+  的移动端策略，由根 esbuild.mjs 的 music-player 专属 onResolve 覆盖实现。
+- 视图类型沿用上游字面值 `"view"`（不重命名以免破坏已保存布局）。
