@@ -11,6 +11,7 @@
     "build:fast": "node esbuild.mjs production",
     "typecheck": "tsc -noEmit -skipLibCheck",
     "test": "vitest run --root modules/logseq",
+    "test:audio-player": "vitest run --root modules/audio-player",
     "test:watch": "vitest --root modules/logseq",
     "test:breadcrumb": "cd modules/breadcrumb && npm run test",
     "test:doc-assist": "cd modules/doc-assist && npm test",

@@ -38,6 +38,12 @@ export interface ModuleDescriptor {
 	 * other plugin that integrated with them — keep working untouched.
 	 */
 	legacyId?: string;
+	/**
+	 * Extra pre-merge ids to keep alive (modules merged from SEVERAL upstream
+	 * plugins, e.g. audio-player = media-marker + audio-timestamp-player +
+	 * timestamp-player). Takes precedence over `legacyId` when present.
+	 */
+	legacyIds?: string[];
 	/** Shown as this module's settings-tab name. */
 	name: string;
 	summary: string;

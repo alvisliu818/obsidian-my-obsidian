@@ -41,6 +41,7 @@ import OpenTabSettingsPlugin from "../modules/open-tab-settings/src/main";
 import AudioRecorderPlugin from "../modules/audio-recorder/src/main";
 import MediaJournalPlugin from "../modules/media-journal/src/main";
 import MusicPlayerPlugin from "../modules/music-player/src/main";
+import AudioPlayerPlugin from "../modules/audio-player/src/main";
 // media-extended v3 自带 obsidian@1.5.7 类型与自己的 "@/..." 别名（与
 // music-player 的 @/ 同名冲突），经 require 桥接进 bundle：不进宿主 tsc
 // 程序（类型由模块自带 tsconfig 独立校验），运行时打包不受影响。
@@ -231,6 +232,23 @@ export default class MyObsidianPlugin extends Plugin {
 			desktopOnly: true,
 			cls: MediaExtendedPlugin as unknown as ModuleDescriptor["cls"],
 		},
+		{
+			// Three third-party plugins merged into one module — see
+			// modules/audio-player/NOTICE. media-marker (MIT, Blontern) is the
+			// base; audio-timestamp-player (0BSD, ITNQ18) contributed explicit
+			// multi-recording bindings, the cross-view floating player and
+			// source-mode link clicks; timestamp-player (MIT, Len Zhou) needed
+			// no code — its speaker/section features are covered by the base.
+			id: "audio-player",
+			// All three upstream ids stay resolvable in the plugin table
+			// (first use of legacyIds — their data.json files are NOT migrated).
+			legacyIds: ["media-marker", "audio-timestamp-player", "timestamp-player"],
+			name: "my Audio Player",
+			summary:
+				"转录文稿时间戳点击即播：自定义播放器（进度/音量/倍速/字幕/画中画/全屏）、贴边媒体、字幕歌词、快捷键、循环区间、时间戳插入；同笔记多录音可用 %%audio-id%% 显式绑定，播放跨视图切换存活（悬浮播放器）。上游 blontern（MIT）+ ITNQ18（0BSD）+ zhoulianglen（MIT）。",
+			desktopOnly: false,
+			cls: AudioPlayerPlugin as unknown as ModuleDescriptor["cls"],
+		},
 	];
 
 	async onload(): Promise<void> {
@@ -410,12 +428,15 @@ export default class MyObsidianPlugin extends Plugin {
 	 * resolve again for the modules (and third-party plugins) that look it up.
 	 */
 	private aliasLegacyId(d: ModuleDescriptor, inst: SubPluginLike): void {
-		if (!d.legacyId) return;
+		const ids = d.legacyIds ?? (d.legacyId ? [d.legacyId] : []);
+		if (ids.length === 0) return;
 		const table = (
 			this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } }
 		).plugins?.plugins;
 		if (!table) return;
-		table[d.legacyId] = inst;
-		this.aliases.push(d.legacyId);
+		for (const id of ids) {
+			table[id] = inst;
+			this.aliases.push(id);
+		}
 	}
 }
