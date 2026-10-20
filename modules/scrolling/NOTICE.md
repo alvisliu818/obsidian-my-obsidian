@@ -5,7 +5,10 @@
 
 - 上游仓库: https://github.com/omeyenburg/obsidian-scrolling
 - 收编版本: v1.4.0（master 分支 tip `bd1565759c9a849ed723db2a71952d7373b7fb72`，
-  共 369 次提交历史已连合进本仓，可 `git log --follow modules/scrolling` 追溯）
+  共 369 次提交历史已连合进本仓——嫁接提交的第二父提交即上游 master tip。
+  注意 `git log --follow` 会在嫁接提交处断开（上游路径与仓内
+  `modules/scrolling/` 不同），查上游历史用 `git log bd156575 -- <上游路径>`；
+  本仓路径下的变更从嫁接提交起）
 - 收编方式: 工作区整体拷贝（`src/`、`preview/`、`LICENSE`、`README.md`、
   `manifest.json`、`versions.json`、`tsconfig.json`、`package.json`、`styles.css`
   与上游 HEAD 逐文件一致），未改源码语义

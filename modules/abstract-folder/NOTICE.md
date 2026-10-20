@@ -5,7 +5,10 @@
 
 - 上游仓库: https://github.com/erfyan-rahmani/obsidian-abstract-folder
 - 收编版本: v1.14.0（master 分支 tip `56b82e7b9c1e9b0ebf7d756f337d34fe3626c1c4`，
-  共 161 次提交历史已连合进本仓，可 `git log --follow modules/abstract-folder` 追溯）
+  共 161 次提交历史已连合进本仓——嫁接提交 `37e7a313` 的第二父提交即上游 tip。
+  注意 `git log --follow` 会在嫁接提交处断开（上游路径 `main.ts` 与仓内
+  `modules/abstract-folder/main.ts` 不同），查上游历史用
+  `git log 56b82e7 -- <上游路径>`；本仓路径下的变更从嫁接提交起）
 - 收编方式: 工作区整体拷贝（`src/`、`main.ts`、`LICENSE`、`README.md`、
   `manifest.json`、`versions.json`、`tsconfig.json`、`package.json`），
   嫁接提交的树与上游 HEAD 逐文件一致
