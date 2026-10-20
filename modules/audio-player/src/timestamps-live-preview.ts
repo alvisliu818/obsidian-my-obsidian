@@ -6,27 +6,41 @@ import { Prec } from "@codemirror/state";
 import { TimestampManager } from "./timestamps";
 import { parseTimestamp, createInlineTsRegex, createLoopRangeRegex } from "./utils/time";
 import { buildTimestampButton, buildLoopButton } from "./utils/ts-button";
+import { parseTimestampLink } from "./media-binding";
+import type { MediaType } from "./media-binding";
+import { MARKDOWN_LINK_PATTERN } from "./timestamp-target";
 
 class TimestampWidget extends WidgetType {
     constructor(
         private timeStr: string,
         private totalSeconds: number,
-        private manager: TimestampManager
+        private manager: TimestampManager,
+        /** 显式绑定别名（链接语法时间戳携带；裸时间戳为 null） */
+        private mediaId: string | null = null,
+        private mediaType: MediaType = "audio",
     ) {
         super();
     }
 
     eq(other: TimestampWidget): boolean {
         return this.timeStr === other.timeStr
-            && this.totalSeconds === other.totalSeconds;
+            && this.totalSeconds === other.totalSeconds
+            && this.mediaId === other.mediaId
+            && this.mediaType === other.mediaType;
     }
 
     toDOM(_view: EditorView): HTMLElement {
-        return buildTimestampButton(this.timeStr, this.totalSeconds, (btn, e) => {
+        const btn = buildTimestampButton(this.timeStr, this.totalSeconds, (btn, e) => {
             e.preventDefault();
             e.stopPropagation();
-            this.manager.togglePlay(btn, this.totalSeconds);
+            void this.manager.togglePlay(btn, this.totalSeconds, this.mediaId, this.mediaType);
         });
+        if (this.mediaId) {
+            btn.addClass("tsp-link-timestamp");
+            btn.setAttribute("data-media-id", this.mediaId);
+            btn.setAttribute("data-media-type", this.mediaType);
+        }
+        return btn;
     }
 
     ignoreEvent(): boolean {
@@ -82,6 +96,20 @@ function isLoopRangeEndpoint(view: EditorView, from: number, to: number): boolea
     return false;
 }
 
+/** 时间戳是否落在 `[label](#audio-time=…)` 链接语法内（整条链接由链接装饰接管） */
+function isLinkTimestampEndpoint(view: EditorView, from: number, to: number): boolean {
+    const line = view.state.doc.lineAt(from);
+    const regex = new RegExp(MARKDOWN_LINK_PATTERN.source, MARKDOWN_LINK_PATTERN.flags);
+    let m: RegExpExecArray | null;
+
+    while ((m = regex.exec(line.text)) !== null) {
+        const start = line.from + m.index;
+        const end = start + m[0].length;
+        if (from >= start && to <= end) return true;
+    }
+    return false;
+}
+
 function createDecorationPlugin(matcher: MatchDecorator) {
     return Prec.high(ViewPlugin.fromClass(
         class {
@@ -117,6 +145,9 @@ export function createLivePreviewTimestampExtension(manager: TimestampManager) {
             // 循环区间的两个端点不参与普通时间戳渲染
             if (isLoopRangeEndpoint(view, from, to)) return;
 
+            // 链接语法内的时间戳由链接装饰接管，避免双重渲染
+            if (isLinkTimestampEndpoint(view, from, to)) return;
+
             const timeStr = match[0];
             const totalSeconds = parseTimestamp(timeStr);
             add(from, to, Decoration.replace({
@@ -142,8 +173,27 @@ export function createLivePreviewTimestampExtension(manager: TimestampManager) {
         },
     });
 
+    // 链接语法时间戳：`[label](#audio-time=…)` 整条替换为按钮 widget
+    // （移植自 audio-timestamp-player 的显式绑定语法；非时间戳锚点链接不动）
+    const linkMatcher = new MatchDecorator({
+        regexp: new RegExp(MARKDOWN_LINK_PATTERN.source, MARKDOWN_LINK_PATTERN.flags),
+        decorate: (add, from, to, match, view) => {
+            const cursor = view.state.selection.main;
+            if (cursor.from <= to && cursor.to >= from) return;
+
+            const parsed = parseTimestampLink(match[1] ?? "");
+            if (!parsed) return;
+
+            add(from, to, Decoration.replace({
+                widget: new TimestampWidget(parsed.label, parsed.seconds, manager, parsed.mediaId, parsed.mediaType),
+                inclusive: false,
+            }));
+        },
+    });
+
     return [
         createDecorationPlugin(timestampMatcher),
         createDecorationPlugin(loopMatcher),
+        createDecorationPlugin(linkMatcher),
     ];
 }

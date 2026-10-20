@@ -5,6 +5,32 @@ export type Locale = "en" | "zh-CN" | "zh-TW";
 
 /** 英文字典为准，键集即 StringKey */
 const en = {
+    "media.audio": "Audio",
+    "media.video": "Video",
+
+    "notice.noEmbeddedMedia": "No {media} is embedded in this note",
+    "notice.ambiguousMedia": "Multiple {media} are embedded in this note; declare one with %%audio-id: alias%% or reference it with &audio=alias",
+    "notice.duplicateAlias": "Alias {id} is declared by more than one {media}",
+    "notice.unknownAlias": "No {media} with alias {id} is embedded in this note",
+    "notice.mediaLoadFailed": "Failed to load {media}",
+    "notice.playbackBlocked": "Playback was blocked by the system",
+
+    "nav.behavior": "When switching pages",
+    "nav.behaviorDesc": "What happens to {media} playback when you open another note",
+    "nav.continue": "Keep playing in a floating player",
+    "nav.pause": "Pause",
+    "nav.close": "Stop and close",
+
+    "video.size": "Floating video size",
+    "video.sizeDesc": "Default size of the floating player when a video starts playing outside the note content",
+    "video.resetSize": "Reset to default",
+    "video.resize": "Allow resizing the floating video player",
+    "video.resizeDesc": "Drag the bottom-right corner of the floating video player to resize; the size is remembered",
+
+    "aria.floatingPlayer": "Floating media player",
+    "aria.closeFloating": "Close the floating player",
+    "aria.resizeVideo": "Resize the floating video player",
+
     "menu.ms": "Timestamp includes milliseconds",
     "menu.copy": "Copy current timestamp",
     "menu.insert": "Insert current timestamp into queue",
@@ -70,6 +96,32 @@ const en = {
 export type StringKey = keyof typeof en;
 
 const zhCN: Record<StringKey, string> = {
+    "media.audio": "音频",
+    "media.video": "视频",
+
+    "notice.noEmbeddedMedia": "本笔记中没有嵌入{media}",
+    "notice.ambiguousMedia": "本笔记嵌入了多个{media}：请用 %%audio-id: 别名%% 声明，或在链接里用 &audio=别名 指定",
+    "notice.duplicateAlias": "别名 {id} 被多个{media}重复声明",
+    "notice.unknownAlias": "本笔记中没有嵌入别名为 {id} 的{media}",
+    "notice.mediaLoadFailed": "{media}加载失败",
+    "notice.playbackBlocked": "播放被系统拦截",
+
+    "nav.behavior": "切换页面时",
+    "nav.behaviorDesc": "打开其它笔记时，正在播放的{media}会怎样",
+    "nav.continue": "继续播放（悬浮播放器）",
+    "nav.pause": "暂停",
+    "nav.close": "停止并关闭",
+
+    "video.size": "悬浮视频尺寸",
+    "video.sizeDesc": "在笔记内容之外启动视频播放时，悬浮播放器的默认大小",
+    "video.resetSize": "恢复默认",
+    "video.resize": "允许调整悬浮视频大小",
+    "video.resizeDesc": "拖动悬浮播放器右下角可缩放，尺寸会被记住",
+
+    "aria.floatingPlayer": "悬浮媒体播放器",
+    "aria.closeFloating": "关闭悬浮播放器",
+    "aria.resizeVideo": "调整悬浮视频大小",
+
     "menu.ms": "时间戳包含毫秒",
     "menu.copy": "复制当前时间戳",
     "menu.insert": "插入当前时间戳到队列",
@@ -133,6 +185,32 @@ const zhCN: Record<StringKey, string> = {
 };
 
 const zhTW: Record<StringKey, string> = {
+    "media.audio": "音訊",
+    "media.video": "視訊",
+
+    "notice.noEmbeddedMedia": "本筆記中沒有嵌入{media}",
+    "notice.ambiguousMedia": "本筆記嵌入了多個{media}：請用 %%audio-id: 別名%% 宣告，或在連結裡用 &audio=別名 指定",
+    "notice.duplicateAlias": "別名 {id} 被多個{media}重複宣告",
+    "notice.unknownAlias": "本筆記中沒有嵌入別名為 {id} 的{media}",
+    "notice.mediaLoadFailed": "{media}載入失敗",
+    "notice.playbackBlocked": "播放被系統攔截",
+
+    "nav.behavior": "切換頁面時",
+    "nav.behaviorDesc": "開啟其它筆記時，正在播放的{media}會怎樣",
+    "nav.continue": "繼續播放（懸浮播放器）",
+    "nav.pause": "暫停",
+    "nav.close": "停止並關閉",
+
+    "video.size": "懸浮視訊尺寸",
+    "video.sizeDesc": "在筆記內容之外啟動視訊播放時，懸浮播放器的預設大小",
+    "video.resetSize": "恢復預設",
+    "video.resize": "允許調整懸浮視訊大小",
+    "video.resizeDesc": "拖曳懸浮播放器右下角可縮放，尺寸會被記住",
+
+    "aria.floatingPlayer": "懸浮媒體播放器",
+    "aria.closeFloating": "關閉懸浮播放器",
+    "aria.resizeVideo": "調整懸浮視訊大小",
+
     "menu.ms": "時間戳包含毫秒",
     "menu.copy": "複製目前時間戳",
     "menu.insert": "將目前時間戳插入佇列",

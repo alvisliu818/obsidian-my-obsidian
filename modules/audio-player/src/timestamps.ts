@@ -1,8 +1,19 @@
-import { App, MarkdownView, setIcon } from "obsidian";
+import { App, MarkdownView, Notice, TFile, setIcon } from "obsidian";
 import { StickyMediaManager } from "./sticky-media";
 import { CustomMediaPlayer } from "./custom-player";
 import { parseTimestamp, createInlineTsRegex, createLoopRangeRegex } from "./utils/time";
 import { buildTimestampButton, buildLoopButton } from "./utils/ts-button";
+import { t } from "./i18n";
+import type { StringKey } from "./i18n";
+import {
+    MediaBindingIndex,
+    parseTimestampLink,
+    selectMediaBinding,
+} from "./media-binding";
+import type { MediaType } from "./media-binding";
+import { FloatingPlayerManager } from "./floating-player";
+import { getNavigationBehavior } from "./settings";
+import type { AudioPlayerSettings } from "./settings";
 
 const SPEAKER_LINE_RE = /^(.+?)\s+((?:(?:\d{1,3}:)?\d{1,3}:\d{2}(?:\.\d{1,3})?))\s*$/;
 const INLINE_TS_RE = createInlineTsRegex();
@@ -14,6 +25,8 @@ export class TimestampManager {
     private activeBtn: HTMLElement | null = null;
     private activeMedia: HTMLMediaElement | null = null;
     private activeContainer: HTMLElement | null = null;
+    /** 当前激活媒体的所属笔记路径（切页行为决策用） */
+    private activeNotePath: string | null = null;
     /** 当前激活的循环区间（全插件同时只允许一个） */
     private activeLoop: { media: HTMLMediaElement; start: number; end: number; btn: HTMLElement } | null = null;
     private boundTimeUpdate: (() => void) | null = null;
@@ -21,11 +34,21 @@ export class TimestampManager {
     private boundPause: (() => void) | null = null;
     private boundPlay: (() => void) | null = null;
     private readonly players = new Set<CustomMediaPlayer>();
+    /** 显式绑定解析后，媒体 → 别名（用于跟随高亮的按别名分组） */
+    private readonly mediaAliases = new WeakMap<HTMLMediaElement, string>();
 
     constructor(
         private app: App,
-        private stickyManager: StickyMediaManager
+        private stickyManager: StickyMediaManager,
+        private bindingIndex: MediaBindingIndex,
+        private floatingPlayer: FloatingPlayerManager,
+        private getSettings: () => AudioPlayerSettings,
     ) {}
+
+    /** 当前活跃媒体（宿主据此检测断连收养） */
+    get activeMediaElement(): HTMLMediaElement | null {
+        return this.activeMedia;
+    }
 
     processTimestamps(el: HTMLElement) {
         for (const p of Array.from(el.querySelectorAll<HTMLElement>("p"))) {
@@ -48,6 +71,31 @@ export class TimestampManager {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * 阅读模式：把 `[mm:ss](#audio-time=…[&audio=别名])` 链接替换为时间戳按钮
+     * （移植自 audio-timestamp-player 的显式绑定；链接形态由 Obsidian 原生渲染，
+     * 这里只做按钮化并携带别名 / 媒体类型，点击走显式绑定解析）。
+     */
+    processLinkTimestamps(el: HTMLElement) {
+        const links = el.querySelectorAll<HTMLAnchorElement>("a[data-href], a[href]");
+        for (const link of Array.from(links)) {
+            const href = link.getAttribute("data-href") ?? link.getAttribute("href") ?? "";
+            const parsed = parseTimestampLink(href);
+            if (!parsed) continue;
+
+            const label = (link.textContent ?? "").trim() || parsed.label;
+            const btn = buildTimestampButton(label, parsed.seconds, (b, e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                void this.togglePlay(b, parsed.seconds, parsed.mediaId, parsed.mediaType);
+            });
+            btn.addClass("tsp-link-timestamp");
+            if (parsed.mediaId) btn.setAttribute("data-media-id", parsed.mediaId);
+            btn.setAttribute("data-media-type", parsed.mediaType);
+            link.replaceWith(btn);
         }
     }
 
@@ -173,11 +221,16 @@ export class TimestampManager {
         return buildTimestampButton(timeStr, totalSeconds, (btn, e) => {
             e.preventDefault();
             e.stopPropagation();
-            this.togglePlay(btn, totalSeconds);
+            void this.togglePlay(btn, totalSeconds);
         });
     }
 
-    public togglePlay(btn: HTMLElement, seconds: number) {
+    public async togglePlay(
+        btn: HTMLElement,
+        seconds: number,
+        mediaId?: string | null,
+        mediaType?: MediaType,
+    ): Promise<void> {
         // 普通时间戳跳转与循环播放互斥
         this.stopLoop();
 
@@ -194,6 +247,18 @@ export class TimestampManager {
         if (!view) return;
 
         const container = view.containerEl;
+
+        if (mediaId) {
+            // 显式绑定：按别名解析归属媒体（视图内没有该嵌入时走悬浮播放器）
+            const note = this.findNoteForElement(btn) ?? view.file;
+            if (!note) return;
+            const type = mediaType
+                ?? (btn.getAttribute("data-media-type") as MediaType | null)
+                ?? "audio";
+            await this.playExplicit(container, note, seconds, type, mediaId, btn);
+            return;
+        }
+
         const media = this.findMediaForElement(container, btn);
         if (!media) return;
 
@@ -286,7 +351,43 @@ export class TimestampManager {
         return lastMedia;
     }
 
+    /** 按嵌入链接反查视图内的媒体元素（显式绑定的落地） */
+    private findMediaByFile(container: HTMLElement, file: TFile): HTMLMediaElement | null {
+        const note = this.findNoteForElement(container) ?? this.app.workspace.getActiveFile();
+        for (const media of Array.from(container.querySelectorAll<HTMLMediaElement>("audio, video"))) {
+            if (media.closest(".tsp-floating-player")) continue;
+            const src = media.closest<HTMLElement>(".internal-embed, .media-embed")?.getAttribute("src")
+                ?? media.getAttribute("src");
+            if (!src) continue;
+            const raw = src.split("#")[0].split("|")[0].trim();
+            if (!raw) continue;
+            let linkpath = raw;
+            try { linkpath = decodeURIComponent(raw); } catch { /* 保持原值 */ }
+            const dest = this.app.metadataCache.getFirstLinkpathDest(linkpath, note?.path ?? "");
+            if (dest && dest.path === file.path) return media;
+            if (raw === file.name || raw === file.path) return media;
+        }
+        return null;
+    }
+
+    /** 查找包含目标元素的 Markdown 视图所属笔记（分屏友好） */
+    private findNoteForElement(el: Element): TFile | null {
+        for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+            const view = leaf.view;
+            if (view instanceof MarkdownView && view.containerEl.contains(el)) return view.file;
+        }
+        return null;
+    }
+
     private getTimestampsForMedia(container: HTMLElement, media: HTMLMediaElement): HTMLElement[] {
+        // 显式绑定：同一别名的时间戳归为一段（与文档顺序无关）
+        const alias = this.mediaAliases.get(media);
+        if (alias) {
+            return Array.from(container.querySelectorAll<HTMLElement>(
+                `.tsp-timestamp[data-media-id="${alias}"]`,
+            ));
+        }
+
         const representative = this.stickyManager.getAnchorForMedia(media) || media;
         const all = container.querySelectorAll<HTMLElement>(MEDIA_SECTION_SELECTOR);
 
@@ -409,6 +510,7 @@ export class TimestampManager {
         this.releaseCurrentMedia();
         this.activeMedia = null;
         this.activeContainer = null;
+        this.activeNotePath = null;
     }
 
     /** 插件卸载：解除全部自定义播放器包装，恢复原生媒体元素 */
@@ -453,14 +555,22 @@ export class TimestampManager {
     private activateMedia(media: HTMLMediaElement, container: HTMLElement | null) {
         // 切换媒体时结束旧循环，同一媒体内则由调用方决定是否保留
         if (this.activeLoop && this.activeLoop.media !== media) this.stopLoop();
+        const previous = this.activeMedia;
         this.releaseCurrentMedia();
 
-        if (this.activeMedia && this.activeMedia !== media && !this.activeMedia.paused) {
-            this.activeMedia.pause();
+        if (previous && previous !== media) {
+            // 从悬浮播放器切走时关掉它，避免残留一个暂停的悬浮层
+            if (previous.closest(".tsp-floating-player")) {
+                this.floatingPlayer.closeIfMedia(previous);
+            } else if (!previous.paused) {
+                previous.pause();
+            }
         }
 
         this.activeMedia = media;
         this.activeContainer = container;
+        const note = container ? this.findNoteForElement(container) : null;
+        if (note) this.activeNotePath = note.path;
         this.bindMediaListeners(media);
     }
 
@@ -472,5 +582,156 @@ export class TimestampManager {
             const target = this.findActiveTimestamp(this.activeContainer, media);
             if (target) this.setActiveBtn(target);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 移植自 audio-timestamp-player：显式绑定 / 链接点击 / 跨视图存活
+    // ------------------------------------------------------------------
+
+    /**
+     * 编辑态（Live Preview 行内文本 / 纯源码模式）与阅读态未按钮化链接的
+     * 统一入口：解析链接目标 → 定位笔记 → 显式绑定播放。
+     */
+    public async handleLinkClick(
+        event: MouseEvent,
+        targetElement: Element,
+        linkTarget: string,
+    ): Promise<void> {
+        const parsed = parseTimestampLink(linkTarget);
+        if (!parsed) return;
+
+        const view = targetElement.closest<HTMLElement>(".markdown-preview-view, .markdown-source-view")
+            ?? targetElement.closest<HTMLElement>(".workspace-leaf-content");
+        if (!view) return;
+
+        const note = this.findNoteForElement(view) ?? this.app.workspace.getActiveFile();
+        if (!note) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        await this.playExplicit(view, note, parsed.seconds, parsed.mediaType, parsed.mediaId, null);
+    }
+
+    /** 显式绑定播放：视图内有该嵌入 → in-place；否则 → 悬浮播放器按文件创建 */
+    private async playExplicit(
+        view: HTMLElement,
+        note: TFile,
+        seconds: number,
+        mediaType: MediaType,
+        mediaId: string | null,
+        btn: HTMLElement | null,
+    ): Promise<void> {
+        const bindings = await this.bindingIndex.getBindings(note, mediaType);
+        const selection = selectMediaBinding(bindings, mediaId);
+        if (!selection.binding) {
+            this.showSelectionError(selection.error, mediaType, mediaId);
+            return;
+        }
+
+        const binding = selection.binding;
+        const media = this.findMediaByFile(view, binding.file);
+
+        if (media) {
+            this.activateMedia(media, view);
+            media.currentTime = Math.min(seconds, media.duration || Infinity);
+            media.play().catch(() => {});
+            if (binding.id) this.mediaAliases.set(media, binding.id);
+        } else {
+            const floatingMedia = await this.floatingPlayer.playFromFile(
+                binding,
+                { seconds, label: "", mediaType, mediaId: binding.id },
+                view,
+                note,
+            );
+            if (floatingMedia) {
+                this.activateMedia(floatingMedia, view);
+                if (binding.id) this.mediaAliases.set(floatingMedia, binding.id);
+            }
+        }
+
+        if (btn) this.setActiveBtn(btn);
+    }
+
+    /** 绑定选择失败的 Notice 映射（none / ambiguous / duplicate / unknown） */
+    private showSelectionError(
+        error: string,
+        mediaType: MediaType,
+        mediaId: string | null,
+    ): void {
+        const mediaName = t(mediaType === "audio" ? "media.audio" : "media.video");
+        const keys: Record<string, StringKey> = {
+            none: "notice.noEmbeddedMedia",
+            ambiguous: "notice.ambiguousMedia",
+            duplicate: "notice.duplicateAlias",
+            unknown: "notice.unknownAlias",
+        };
+        new Notice(t(keys[error] ?? "notice.unknownAlias", {
+            media: mediaName,
+            id: mediaId ?? "",
+        }));
+    }
+
+    /**
+     * 切页 / 文件打开时的 in-place 播放存活策略：
+     * 仍是所属笔记 → 不动；pause → 暂停；close → 停止释放；
+     * continue → 收养进悬浮播放器，跨页继续播放。
+     */
+    public handleNavigation(activeFile: TFile | null): void {
+        const media = this.activeMedia;
+        if (!media || !this.activeContainer) return;
+        if (media.closest(".tsp-floating-player")) return;
+        if (activeFile && this.activeNotePath && activeFile.path === this.activeNotePath) return;
+
+        const mediaType: MediaType = media.tagName === "VIDEO" ? "video" : "audio";
+        const behavior = getNavigationBehavior(this.getSettings(), mediaType);
+        if (behavior === "pause") {
+            media.pause();
+            return;
+        }
+        if (behavior === "close") {
+            this.clearPlaybackState();
+            return;
+        }
+        this.adoptIntoFloating(media, mediaType);
+    }
+
+    /**
+     * 活跃媒体与笔记内容断连（重渲染 / CM 虚拟化 / 模式切换）且仍在播放：
+     * 按切页行为处理 —— continue 收养续播，pause 暂停，close 停止。
+     */
+    public handleDisconnect(): void {
+        const media = this.activeMedia;
+        if (!media || media.paused) return;
+        if (media.closest(".tsp-floating-player")) return;
+
+        const mediaType: MediaType = media.tagName === "VIDEO" ? "video" : "audio";
+        const behavior = getNavigationBehavior(this.getSettings(), mediaType);
+        if (behavior === "pause") {
+            media.pause();
+            return;
+        }
+        if (behavior === "close") {
+            this.clearPlaybackState();
+            return;
+        }
+        this.adoptIntoFloating(media, mediaType);
+    }
+
+    private adoptIntoFloating(media: HTMLMediaElement, mediaType: MediaType): void {
+        const notePath = this.activeNotePath;
+        const note = notePath ? this.app.vault.getAbstractFileByPath(notePath) : null;
+        this.floatingPlayer.adopt(media, {
+            sourceNotePath: notePath ?? "",
+            sourceNoteName: note instanceof TFile ? note.basename : "",
+            mediaType,
+            mediaId: this.mediaAliases.get(media) ?? null,
+            sourceView: this.activeContainer ?? this.app.workspace.containerEl,
+        });
+    }
+
+    /** 悬浮播放器关闭时调用：若关闭的正是活跃媒体，同步清理播放状态 */
+    public releaseIfMedia(media: HTMLMediaElement | null): void {
+        if (media && this.activeMedia === media) this.clearPlaybackState();
     }
 }

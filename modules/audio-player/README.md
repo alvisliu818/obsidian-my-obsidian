@@ -31,6 +31,24 @@ There are three granularities: frame / keyframe / 5 seconds.
 
 Insert the current playback position as a timestamp with a single action. New timestamps are inserted in correct chronological order into the "timestamp queue" below the media source line.
 
+## Link-Style Timestamps and Multi-Recording Bindings
+
+Besides plain-text timestamps, link syntax works too — in reading mode, Live Preview and plain source mode:
+
+```
+![[part1.mp3]] %%audio-id: part1%%
+![[part2.mp3]] %%audio-id: part2%%
+
+[00:13](#audio-time=00:13&audio=part1)
+[01:40:05](#video-time=1:40:05)
+```
+
+The `%%audio-id: alias%%` comment declares an explicit binding for the embed on the same line; `&audio=alias` in the link picks the recording (case-insensitive, `[A-Za-z0-9_-]{1,32}`). When a note embeds several recordings, a link without an alias is refused with a notice instead of guessing — declare an alias or add `&audio=…`. Duplicate or unknown aliases are reported the same way. Timestamps bound to the same alias form one follow-along group, wherever they appear in the note.
+
+## Floating Player (Survives View Switches)
+
+Playback is not tied to the note content subtree: when the playing media is torn down by a re-render, a mode switch, long-note scrolling (editor virtualization) or a page switch, it moves into a small floating player pinned to the top of the pane and keeps playing. What happens on a page switch is configurable per media type (Audio Player settings): **keep playing** (default, floating player), **pause**, or **stop and close**. Floating videos remember their size and can be resized by the bottom-right corner (aspect ratio preserved); the close button dismisses the player. When a link timestamp is clicked in plain source mode — where embeds are not rendered at all — the floating player is created directly from the bound file.
+
 ## Media Pinning
 
 While scrolling a long transcription, the player pins to the top of the pane and follows the page down. It automatically releases when the next media block or the end of the current timestamp section is reached. The feature can be toggled per view via the pin button in the view header.

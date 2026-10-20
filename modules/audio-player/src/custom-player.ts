@@ -13,15 +13,15 @@ export type StepSize = "frame" | "keyframe" | "5s";
 const STEP_ORDER: readonly StepSize[] = ["frame", "keyframe", "5s"];
 
 export class CustomMediaPlayer {
-    private container: HTMLElement;
-    private controls: HTMLElement;
-    private progressBar: HTMLInputElement;
-    private currentTimeLabel: HTMLElement;
-    private durationLabel: HTMLElement;
-    private playBtn: HTMLElement;
+    private container!: HTMLElement;
+    private controls!: HTMLElement;
+    private progressBar!: HTMLInputElement;
+    private currentTimeLabel!: HTMLElement;
+    private durationLabel!: HTMLElement;
+    private playBtn!: HTMLElement;
     private tooltip: HTMLElement | null = null;
-    private volumeBtn: HTMLElement;
-    private volumeSlider: HTMLInputElement;
+    private volumeBtn!: HTMLElement;
+    private volumeSlider!: HTMLInputElement;
     private pipBtn: HTMLElement | null = null;
     private fullscreenBtn: HTMLElement | null = null;
     private stepBtn: HTMLElement | null = null;
@@ -40,7 +40,7 @@ export class CustomMediaPlayer {
     /** formatTime 是否输出毫秒（默认携带） */
     private timestampWithMs: boolean = true;
 
-    private subtitleManager: SubtitleManager;
+    private subtitleManager!: SubtitleManager;
 
     /**
      * 关键帧时间表（秒，升序）：

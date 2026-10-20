@@ -69,6 +69,12 @@
 - 宿主 tsconfig include 增加 `modules/audio-player/src/**/*.ts`。
 - 宿主 `ModuleDescriptor` 扩展 `legacyIds?: string[]`（向后兼容单值
   `legacyId`），audio-player 一个模块挂三个旧 id。
+- **依赖版本对齐宿主**（沿用 jupyter/breadcrumb 先例）：`obsidian` 钉
+  `1.14.4`（与聚合宿主类型一致），`@codemirror/state` / `@codemirror/view`
+  取根 package.json 同款区间（^6.4.1 / ^6.34.0）；模块**不本地安装**
+  node_modules —— 本地副本会在宿主 tsc 里遮蔽根依赖、造成双份 CM 类型，
+  类型校验统一走聚合 `npm run build`（根 node_modules 单一供给）。
+  模块内独立 `npx tsc --noEmit` 需先本地安装，仅作辅助手段。
 
 ## 六、许可证全文
 
