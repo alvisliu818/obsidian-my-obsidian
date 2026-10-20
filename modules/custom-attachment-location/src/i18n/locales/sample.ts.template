@@ -1,0 +1,13 @@
+/* Partial locale definition (you can omit some keys) */
+
+import type { Translations } from "@mnaoumov/obsidian-lib/i18n/i18n";
+import type { PluginTypes } from "../../PluginTypes.ts";
+
+export const yourLanguageLocale = {};
+
+/* Partial locale definition (you have to define all keys) */
+
+import type { FullTranslations } from "@mnaoumov/obsidian-lib/i18n/i18n";
+import type { PluginTypes } from "../../PluginTypes.ts";
+
+export const yourLanguageLocale: FullTranslations<PluginTypes> = {};

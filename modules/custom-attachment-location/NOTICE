@@ -1,0 +1,40 @@
+Custom Attachment Location
+==========================
+
+出处
+----
+- 上游仓库：<https://github.com/mnaoumov/obsidian-custom-attachment-location>
+- 版本：v16.0.0
+- 作者：RainCat1998（原始作者），Michael Naumov（维护者）
+- 许可证：**MIT**（见同目录 LICENSE）—— 与聚合宿主 GPL-3.0 兼容
+- minAppVersion：1.14.4；isDesktopOnly：false
+
+上游历史已通过 `git bundle create` + `bundle unbundle` 嫁接进本仓，
+`git log --follow modules/custom-attachment-location` 可追溯上游提交。
+
+并入方式：require 桥（不进宿主 tsc）
+-----------------------------------
+- 体量：147 个源文件、约 2.8 万行。
+- 在宿主 strict 配置（`tsconfig.json`）下实测 **1673 处类型错误**，其中：
+  - TS7006（隐式 any 形参）586、TS2307（找不到模块）354、TS2339 323、
+    TS5097（导入路径带 .ts 扩展名）236、TS4112 68、TS7031 45 …
+  - 绝大部分是宿主严格度差异与上游自带 `.ts` 扩展名导入，非逻辑缺陷。
+- 按本仓收编判据（几百处 → 走桥接），采用与 media-extended 相同的 **require 桥**：
+  - `src/main.ts` 用 `require("../modules/custom-attachment-location/src/main")`
+    引入，模块**不加入**宿主 `tsconfig.json` 的 include；
+  - 类型由模块自带 tsconfig 独立校验；esbuild 打包不受影响（不做类型检查）。
+
+构建相关
+--------
+- 依赖：`@mnaoumov/obsidian-lib@^5.0.0`、`@mnaoumov/typescript-lib@^1.5.0`
+  （已装在**根** node_modules；模块自身 package.json 含上游 `$typescript`
+  这类 npm 无法解析的引用，无法在模块目录内直接 `npm install`）。
+- 样式：`src/main.ts` 直接 `import './styles/main.scss'`。聚合 esbuild 里
+  `.scss` 按 empty 处理（与 .css/.less 同款），实际样式用 sass 编译后并入
+  **根 `styles.css`** 的 “Custom Attachment Location” 分段。
+  改动上游 scss 后需重新编译并同步两边。
+
+库外文件支持（合并新增）
+------------------------
+见 README / 源码中 `ext:` 相关分支：附件路径解析与落盘对虚拟文档树挂载的
+库外文件同样生效（与 omnisearch 的 `ext:` 伪路径约定一致）。

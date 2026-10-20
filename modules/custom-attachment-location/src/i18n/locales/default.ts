@@ -1,0 +1,724 @@
+import type { DefaultTranslationsBase } from '@mnaoumov/obsidian-lib/i18n/default-translations';
+
+import { en as obsidianDevUtilsEn } from '@mnaoumov/obsidian-lib/i18n/locales/en';
+
+export const defaultTranslations = {
+  ...obsidianDevUtilsEn,
+  attachmentCollector: {
+    confirm: {
+      part1: 'Do you want to collect attachments for all notes in folders recursively?',
+      part2: 'This operation cannot be undone.'
+    },
+    progressBar: {
+      message: 'Collecting attachments {{iterationString}} - \'{{noteFilePath}}\'.',
+      title: 'Collecting attachments...'
+    }
+  },
+  buttons: {
+    copy: 'Copy',
+    copyAll: 'Copy all',
+    create: 'Create',
+    move: 'Move',
+    previewAttachmentFile: 'Preview attachment file',
+    select: 'Select',
+    skip: 'Skip'
+  },
+  collectAttachmentUsedByMultipleNotesModal: {
+    content: {
+      part1: 'Attachment',
+      part2: 'is referenced by multiple notes.'
+    },
+    heading: 'Collecting attachment used by multiple notes',
+    noPriorityWinnerReason: {
+      EmptyList: 'It was not moved because the {{settingName}} setting is empty, so nothing decides which of these notes owns it.',
+      NoMatch: 'It was not moved because none of these notes matches any entry in the {{settingName}} setting.',
+      Tie: 'It was not moved because several of these notes match the {{settingName}} setting equally well, so it names no single owner.'
+    },
+    shouldUseSameActionForOtherProblematicAttachmentsToggle: 'Should use the same action for other problematic attachments'
+  },
+  commands: {
+    collectAttachmentsCurrentFolder: 'Collect attachments in current folder',
+    collectAttachmentsCurrentNote: 'Collect attachments in current note',
+    collectAttachmentsEntireVault: 'Collect attachments in entire vault',
+    deleteUnusedAttachmentsCurrentNote: 'Delete unused attachments in current note',
+    deleteUnusedAttachmentsEntireVault: 'Delete unused attachments in entire vault',
+    goToAttachmentFolder: 'Go to attachment folder',
+    goToOwningNote: 'Go to owning note',
+    moveAttachmentToProperFolder: 'Move attachment to proper folder',
+    pruneOriginalAttachmentNames: 'Prune original attachment names',
+    rememberCurrentNameAsOriginal: 'Remember current name as original',
+    showOriginalAttachmentNames: 'Show original attachment names'
+  },
+  coreFilesSettingTab: {
+    controlledByPlugin: 'Controlled by {{pluginName}}, so the value stored here is not in effect. To let this setting decide again, turn on Follow Obsidian attachment location in that plugin.',
+    openPluginSettings: 'Open'
+  },
+  deleteUnusedAttachments: {
+    confirm: {
+      andMore: '... and {{count}} more.',
+      count: '{{count}} attachment(s) will be moved to the trash.',
+      part1: 'The following unused attachments will be moved to the trash:',
+      part2: 'This operation cannot be undone.',
+      partUnitFolders: 'Nothing outside the following attachment unit folders references anything inside them, so each of them will be moved to the trash whole:',
+      unitFolderCount: '{{count}} attachment unit folder(s) will be moved to the trash with everything inside them.'
+    },
+    orphanProgressBar: {
+      message: 'Scanning for attachments no note owns {{iterationString}} - \'{{attachmentFilePath}}\'.',
+      title: 'Scanning for attachments no note owns...'
+    },
+    progressBar: {
+      message: 'Scanning for unused attachments {{iterationString}} - \'{{noteFilePath}}\'.',
+      title: 'Scanning for unused attachments...'
+    }
+  },
+  goToAttachmentFolder: {
+    doesNotExist: {
+      part1: 'The attachment folder',
+      part2: 'does not exist yet.'
+    }
+  },
+  goToOwningNote: {
+    noPriorityWinnerReason: {
+      EmptyList: 'The {{settingName}} setting is empty, so nothing decides which of them owns it.',
+      NoMatch: 'None of them matches any entry in the {{settingName}} setting.',
+      Tie: 'Several of them match the {{settingName}} setting equally well, so it names no single owner.'
+    },
+    selectPlaceholder: 'Which note owns \'{{attachmentPath}}\'?'
+  },
+  menuItems: {
+    collectAttachmentsInFile: 'Collect attachments in file',
+    collectAttachmentsInFiles: 'Collect attachments in files',
+    deleteUnusedAttachmentsInFile: 'Delete unused attachments in file',
+    deleteUnusedAttachmentsInFiles: 'Delete unused attachments in files',
+    goToAttachmentFolder: 'Go to attachment folder',
+    goToOwningNote: 'Go to owning note',
+    rememberCurrentNameAsOriginal: 'Remember current name as original',
+    rememberCurrentNamesAsOriginals: 'Remember current names as originals'
+  },
+  moveAttachmentToProperFolder: {
+    progressBar: {
+      message: 'Moving attachment to proper folder {{iterationString}} - \'{{attachmentFilePath}}\'.',
+      title: 'Moving attachment to proper folder...'
+    },
+    unusedAttachment: 'Attachment {{attachmentPath}} is not used by any note. It will not be moved.'
+  },
+  moveAttachmentToProperFolderUsedByMultipleNotesModal: {
+    content: {
+      part1: 'Attachment',
+      part2: 'is referenced by multiple notes.',
+      part3: 'Select notes to copy the attachment to.'
+    },
+    heading: 'Collecting attachment used by multiple notes',
+    shouldUseSameActionForOtherProblematicAttachmentsToggle: 'Should use the same action for other problematic attachments'
+  },
+  notice: {
+    attachmentFolderDependsOnAttachment: 'The attachment folder for \'{{notePath}}\' depends on the attachment being saved, so there is no single folder to navigate to.',
+    attachmentReferencedByHigherPriorityNotes: {
+      part1: 'Attachment',
+      part2: 'is also referenced by notes of higher priority:'
+    },
+    attachmentReferencedByRawPath: 'Skipping collecting attachment \'{{attachmentPath}}\' because it is referenced by a raw path in \'{{noteFilePath}}\'.',
+    attachmentUnitFolderUsedByMultipleNotes: 'Skipping collecting attachment \'{{attachmentPath}}\' because its attachment unit folder \'{{unitFolderPath}}\' is referenced by multiple notes.',
+    collectingAttachments: 'Collecting attachments for \'{{noteFilePath}}\'',
+    collectingAttachmentsCancelled: 'Collecting attachments cancelled. See console for details.',
+    couldNotResolveTemplatePath: 'Could not resolve template path \'{{template}}\'. See console for details.',
+    fileExplorerDisabled: 'Cannot reveal \'{{path}}\' because the File explorer core plugin is disabled.',
+    generatedAttachmentFileNameIsInvalid: {
+      part1: 'Generated attachment file name \'{{path}}\' is invalid.\n{{validationMessage}}\nCheck your',
+      part2: 'setting.'
+    },
+    noOwningNote: 'No note references the attachment \'{{attachmentPath}}\'.',
+    notePathIsIgnored: 'Note path is ignored',
+    nothingToCollect: {
+      part1: 'Nothing to collect in \'{{noteFilePath}}\': every attachment it could move is already in its destination folder.',
+      part2: 'Collected attachments are set to be renamed, but',
+      part3: 'is empty, which keeps each attachment\'s current name, so there is nothing left for the collect to change.'
+    },
+    noUnusedAttachments: 'No unused attachments found.'
+  },
+  originalAttachmentNames: {
+    forgotAllNotice: 'Forgot {{count}} original attachment name(s).',
+    prunedNotice: 'Removed {{count}} original attachment name(s) whose file no longer exists.',
+    pruneModal: {
+      forgetAll: 'Forget all',
+      forgetAllConfirm: {
+        part1: 'All {{count}} remembered original attachment name(s) will be forgotten.',
+        part2: 'will then fall back to each attachment\'s current name, with a warning, the next time a template reads it.',
+        title: 'Forget all original attachment names?'
+      },
+      noStale: 'Every remembered name belongs to a file that still exists, so there is nothing to prune.',
+      prune: 'Prune',
+      staleCount: '{{count}} remembered name(s) belong to a path that no longer exists, and will be removed:',
+      title: 'Prune original attachment names'
+    },
+    rememberedNotice: 'Remembered the current name of {{count}} attachment(s) as the original.',
+    showModal: {
+      copiedNotice: 'Copied {{count}} record(s) as CSV.',
+      copyAsCsv: 'Copy as CSV',
+      edit: 'Edit',
+      empty: 'No original attachment names are remembered yet.',
+      filterPlaceholder: 'Filter by path or name',
+      forget: 'Forget',
+      forgetSelected: 'Forget selected',
+      missingBadge: 'missing',
+      missingTooltip: 'No file exists at this path any more.',
+      noMatches: 'No record matches the filter.',
+      save: 'Save',
+      title: 'Original attachment names',
+      totals: '{{count}} record(s), {{missingCount}} of them missing.',
+      useCurrentName: 'Use current name',
+      useCurrentNameForSelected: 'Use current name for selected'
+    },
+    unknownDetails: {
+      explanation: 'These attachments had no remembered original name: they predate the record, were renamed outside Obsidian, or were synced from another device. Their current name was used, and is now remembered as their original. To change one, run Show original attachment names.',
+      title: 'Attachments whose original name is unknown'
+    },
+    unknownNotice: {
+      details: 'Details',
+      message: ': the original name of {{count}} attachment(s) is unknown, so their current name was used.'
+    }
+  },
+  pluginConflict: {
+    consistentAttachmentsAndLinks: {
+      reason: 'Both plugins add the same attachment collecting commands, under the same names:'
+        + ' Collect attachments in entire vault, Collect attachments in current folder,'
+        + ' Collect attachments in current note and Move attachment to proper folder.'
+        + ' Each one appears twice in the command palette, and running either copy does the work twice.'
+    }
+  },
+  pluginDependency: {
+    advancedRenameAndDeleteHandler: {
+      reason: '{{pluginName}} no longer handles renames and deletions itself.'
+        + ' {{dependencyPluginName}} does: it moves a note\'s attachments with the note and cleans up after'
+        + ' a deleted one, and it holds the settings this plugin\'s commands read, such as which paths to skip.'
+    }
+  },
+  pluginSettings: {
+    attachmentRenameMode: {
+      all: {
+        description: 'all files are renamed.',
+        displayText: 'All'
+      },
+      none: {
+        description: 'their names are preserved.',
+        displayText: 'None'
+      },
+      onlyPastedImages: {
+        description: 'only pasted images are renamed, typically screenshots. That is image content pasted from the clipboard, or an image file pasted from it. An image file you drag in keeps its name, and so does an old image file you copy in a file manager and paste, if Keep the names of pasted image files that are not screenshots is on.',
+        displayText: 'Only pasted images'
+      }
+    },
+    collectAttachmentUsedByMultipleNotesMode: {
+      cancel: {
+        description: 'cancel the attachment collecting.',
+        displayText: 'Cancel'
+      },
+      copy: {
+        description: 'copy the attachment to the new location.',
+        displayText: 'Copy'
+      },
+      move: {
+        description: 'move the attachment to the new location.',
+        displayText: 'Move'
+      },
+      prompt: {
+        description: 'prompt the user to choose the action.',
+        displayText: 'Prompt'
+      },
+      skip: {
+        description: 'skip the attachment and proceed to the next one.',
+        displayText: 'Skip'
+      }
+    },
+    convertImagesToJpegMode: {
+      allImages: {
+        description: 'all images are converted to JPEG.',
+        displayText: 'All images'
+      },
+      allImagesExceptAlreadyJpeg: {
+        description: 'all images except already JPEG files are converted to JPEG.',
+        displayText: 'All images except already JPEG'
+      },
+      none: {
+        description: 'do not convert images to JPEG.',
+        displayText: 'None'
+      },
+      onlyPastedClipboardPngImages: {
+        description: 'only convert pasted clipboard PNG images to JPEG.',
+        displayText: 'Only pasted clipboard PNG images'
+      }
+    },
+    defaultImageSizeDimension: {
+      height: 'Height',
+      width: 'Width'
+    },
+    moveAttachmentToProperFolderUsedByMultipleNotesMode: {
+      cancel: {
+        description: 'cancel the attachment collecting.',
+        displayText: 'Cancel'
+      },
+      copyAll: {
+        description: 'copy the attachment to the new location for all notes.',
+        displayText: 'Copy all'
+      },
+      prompt: {
+        description: 'prompt the user to choose the action.',
+        displayText: 'Prompt'
+      },
+      skip: {
+        description: 'skip the attachment and proceed to the next one.',
+        displayText: 'Skip'
+      }
+    },
+    orphanAttachmentScanMode: {
+      entireVault: {
+        description: 'every file in the vault that is not a note is checked. The widest reach, and the one to read the confirmation dialog carefully for: a file you keep deliberately without linking it anywhere is an unused attachment by this definition.',
+        displayText: 'Entire vault'
+      },
+      listedPaths: {
+        description: 'only files under the paths listed below are checked.',
+        displayText: 'Listed paths'
+      },
+      none: {
+        description: 'no extra pass. Attachments are found only through the notes that own them, so an attachment folder whose note has been deleted is never looked at.',
+        displayText: 'None'
+      }
+    },
+    renameAttachmentsCreatedByOtherPluginsMode: {
+      all: {
+        description: 'attachments created by any plugin are renamed.',
+        displayText: 'All'
+      },
+      allExceptListedPlugins: {
+        description: 'attachments created by any plugin are renamed, except those created by the plugins listed below.',
+        displayText: 'All except listed plugins'
+      },
+      none: {
+        description: 'attachments created by other plugins are left alone.',
+        displayText: 'None'
+      },
+      onlyListedPlugins: {
+        description: 'only attachments created by the plugins listed below are renamed.',
+        displayText: 'Only listed plugins'
+      }
+    }
+  },
+  pluginSettingsManager: {
+    customToken: {
+      codeComment: '// Custom tokens were commented out as they have to be updated to the new format introduced in plugin version 9.0.0.\n// Refer to the documentation (https://github.com/mnaoumov/obsidian-custom-attachment-location?tab=readme-ov-file#custom-tokens) for more information.',
+      deprecated: {
+        part1: 'The format of custom token registration changed. Please update your tokens accordingly. Refer to the',
+        part2: 'documentation',
+        part3: 'for more information'
+      }
+    },
+    legacyRenameAttachmentsToLowerCase: {
+      part1: 'The',
+      part2: 'setting is deprecated. Use',
+      part3: 'format instead. See',
+      part4: 'documentation',
+      part5: 'for more information'
+    },
+    markdownUrlFormat: {
+      deprecated: {
+        part1: 'You have potentially incorrect value set for the',
+        part2: 'format. Please refer to the',
+        part3: 'documentation',
+        part4: 'for more information',
+        part5: 'This message will not be shown again.'
+      }
+    },
+    specialCharacters: {
+      part1: 'The',
+      part2: 'default setting value was changed. Your setting value was updated to the new default value.'
+    },
+    validation: {
+      defaultImageSizeMustBePercentageOrPixels: 'Default image size must be in pixels or percentage',
+      invalidCustomTokensCode: 'Invalid custom tokens code',
+      invalidRegularExpression: 'Invalid regular expression {{regExp}}',
+      multipleNotesCheckExtensionMustNotBeAPath: 'Extension {{extension}} must not contain a path separator. List a file extension, e.g. af, not a path - paths belong in "Exclude paths from multiple notes check".',
+      specialCharactersMustNotContainSlash: 'Special characters must not contain /',
+      specialCharactersReplacementMustNotContainInvalidFileNamePathCharacters: 'Special character replacement must not contain invalid file name path characters.'
+    }
+  },
+  pluginSettingsTab: {
+    attachmentRenameMode: {
+      description: {
+        part1: 'When attaching files:'
+      },
+      name: 'Attachment rename mode'
+    },
+    attachmentUnitFolderPaths: {
+      description: {
+        part1: 'Treat the following folders as a single attachment. When',
+        part2: 'Collect attachments',
+        part3: 'moves an attachment from one of them, the whole folder moves along with it.',
+        part4: 'Use this for attachments that are really a folder: a saved page next to its files folder, a drawing next to the images it references.',
+        part5: 'Insert each path on a new line.',
+        part8: 'If the setting is empty, every attachment is moved on its own, which is the behavior without this setting.'
+      },
+      name: 'Attachment unit folders'
+    },
+    collectAttachmentUsedByMultipleNotesMode: {
+      description: {
+        part1: 'When the collected attachment is used by multiple notes:'
+      },
+      name: 'Collect attachment used by multiple notes mode'
+    },
+    collectedAttachmentFileName: {
+      description: {
+        part1: 'See available',
+        part2: 'tokens',
+        part3: 'Leave empty to keep the original attachment file name.'
+      },
+      name: 'Collected attachment file name'
+    },
+    collectedAttachmentFolderPath: {
+      description: {
+        part1: 'Where the',
+        part2: 'Collect attachments',
+        part3: 'commands put an attachment. Start with',
+        part4: 'for paths relative to parent folder of note.',
+        part5: 'See available',
+        part6: 'tokens',
+        part7: 'Leave empty to use the same folder as new attachments.'
+      },
+      name: 'Collected attachment folder path'
+    },
+    convertImagesToJpegMode: {
+      description: {
+        part1: 'Which images to convert to JPEG:'
+      },
+      name: 'Convert images to JPEG mode'
+    },
+    customTokens: {
+      description: {
+        part1: 'Custom tokens to be used.',
+        part2: 'See',
+        part3: 'documentation',
+        part4: 'for more information.',
+        part5: '⚠️ Custom tokens can be an arbitrary JavaScript code. If poorly written, it can cause the data loss. Use it at your own risk.'
+      },
+      name: 'Custom tokens'
+    },
+    defaultImageSize: {
+      description: {
+        part1: 'The default image size.',
+        part2: 'Can be specified in pixels',
+        part3: 'or percentage of the full image size',
+        part4: 'Leave blank to use the original image size.'
+      },
+      name: 'Default image size'
+    },
+    downloadNetworkImages: {
+      description: 'When collecting attachments, automatically download network images referenced in markdown and save them locally.',
+      name: 'Download network images'
+    },
+    duplicateNameSeparator: {
+      description: {
+        part1: 'When you are pasting/dragging a file with the same name as an existing file, this separator will be added to the file name.',
+        part2: 'E.g., when you are dragging file',
+        part3: ', it will be renamed to ',
+        part4: ', etc, getting the first name available.'
+      },
+      name: 'Duplicate name separator'
+    },
+    excludeExtensionsFromMultipleNotesCheck: {
+      description: {
+        part1: 'Skip the multiple notes check entirely for attachments with the following file extensions, during the',
+        part2: 'Collect attachments',
+        part3: 'and',
+        part4: 'Move attachment to proper folder',
+        part5: 'commands. Use it for file types that are shared between notes on purpose, so they are collected like any other attachment instead of asking every time.',
+        part6: 'Insert each extension on a new line, with or without the leading dot. Matching ignores case, and a compound extension such as',
+        part7: 'excalidraw.md',
+        part8: 'works too.',
+        part9: 'The Delete unused attachments command is deliberately not affected: it keeps counting every note that references the attachment, so a shared file is never trashed. If the setting is empty, no attachments are exempt.'
+      },
+      name: 'Exclude extensions from multiple notes check'
+    },
+    excludePathsFromAttachmentCollecting: {
+      description: {
+        part1: 'Exclude attachments from the following paths when',
+        part2: 'Collect attachments',
+        part3: 'command is executed.',
+        part4: 'Insert each path on a new line.',
+        part6: 'If the setting is empty, no paths are excluded from attachment collecting.'
+      },
+      name: 'Exclude paths from attachment collecting'
+    },
+    excludePathsFromMultipleNotesCheck: {
+      description: {
+        part1: 'Ignore notes from the following paths when checking whether an attachment is used by multiple notes during the',
+        part2: 'Collect attachments',
+        part3: 'and',
+        part4: 'Move attachment to proper folder',
+        part5: 'commands.',
+        part6: 'Insert each path on a new line.',
+        part8: 'If the setting is empty, no notes are ignored.'
+      },
+      name: 'Exclude paths from multiple notes check'
+    },
+    generatedAttachmentFileName: {
+      description: {
+        part1: 'See available',
+        part2: 'tokens'
+      },
+      name: 'Generated attachment file name'
+    },
+    groups: {
+      advanced: 'Advanced',
+      collectedAttachments: 'Collected attachments',
+      core: 'Core',
+      customTokens: 'Custom tokens',
+      images: 'Images',
+      moveRenames: 'Move/renames',
+      path: 'Path',
+      specialCharacters: 'Special characters'
+    },
+    jpegQuality: {
+      description: 'The smaller the quality, the greater the compression ratio.',
+      name: 'JPEG Quality'
+    },
+    locationForNewAttachments: {
+      description: {
+        part1: 'Start with',
+        part2: 'for paths relative to parent folder of note.',
+        part3: 'See available',
+        part4: 'tokens',
+        part5: 'Dot-folders like',
+        part6: 'are not recommended, because Obsidian does not track them. You might need to use',
+        part7: 'Plugin to manage them.'
+      },
+      name: 'Location for new attachments'
+    },
+    markdownUrlFormat: {
+      description: {
+        part1: 'Format for the URL that will be inserted into Markdown when an attachment is added. It is applied at that moment only: a link Obsidian rewrites later, when a note or an attachment is renamed or moved, gets the default format.',
+        part2: 'See available',
+        part3: 'tokens',
+        part4: 'Leave blank to use the default format.'
+      },
+      name: 'Markdown URL format'
+    },
+    moveAttachmentToProperFolderUsedByMultipleNotesMode: {
+      description: {
+        part1: 'When the attachment is used by multiple notes:'
+      },
+      name: 'Move attachment to proper folder used by multiple notes mode'
+    },
+    networkImageDownloadTimeoutInSeconds: {
+      description: 'The timeout in seconds for downloading each network image.',
+      name: 'Network image download timeout in seconds'
+    },
+    notePriorities: {
+      name: 'Note priorities'
+    },
+    orphanAttachmentScanMode: {
+      description: {
+        part1: 'Whether',
+        part2: 'Delete unused attachments in entire vault',
+        part3: 'also looks for attachments no note owns at all.',
+        part4: 'The sweep normally reaches an attachment folder through the note that owns it, so a folder whose note has been deleted - by a sync client, say, which fires no event this plugin can see - is never visited and its files stay forever.',
+        part5: 'The folders to look in have to be named, because the attachment folder setting is a template that cannot be run backwards: there is no single place attachments live that this plugin could work out on its own.',
+        part6: 'Applies only to the whole-vault command. Nothing is ever deleted without the confirmation dialog first listing it.'
+      },
+      name: 'Find attachments no note owns'
+    },
+    orphanAttachmentScanPaths: {
+      description: {
+        part1: 'The folders the pass above looks in.',
+        part2: 'Insert each path on a new line.',
+        part5: 'If the setting is empty, nothing is checked and the pass does nothing.'
+      },
+      name: 'Paths to look in'
+    },
+    otherPluginIdsForAttachmentRename: {
+      description: {
+        part1: 'The plugins the mode above is scoped to. Pick them by name; only plugins currently installed can be picked.',
+        part2: 'A plugin that is disabled or uninstalled keeps its place in the list, shown by its id, so re-enabling it needs no change here.'
+      },
+      name: 'Plugins'
+    },
+    pages: {
+      advanced: {
+        description: 'Link format, display text, and the operation timeout.'
+      },
+      collectedAttachments: {
+        description: 'How attachments are gathered into a note\'s folder, including network images and shared attachments.'
+      },
+      customTokens: {
+        description: 'JavaScript tokens you define yourself for use in the path and file name templates.'
+      },
+      images: {
+        description: 'Default size, JPEG conversion, and metadata handling for images.'
+      },
+      moveRenames: {
+        description: 'How attachments follow their note when it is renamed or moved.'
+      },
+      path: {
+        description: 'Which notes and folders the plugin acts on, and which extensions count as attachments.'
+      },
+      specialCharacters: {
+        description: 'Characters stripped from generated names, and what replaces them.'
+      }
+    },
+    pathEntrySyntax: {
+      escape: 'To use *, ? or [ literally, put a backslash before it.',
+      glob: 'are globs: * matches within a name, ** across folders, ? one character and [abc] one of a set. A glob without a / matches a file or folder name at any depth, a glob with a / is matched from the vault root, and a trailing / matches folders only.',
+      intro: 'Each line is a plain path, a glob or a regular expression. Matching ignores case.',
+      plainPath: 'is a plain path: it matches that path from the vault root, and everything inside it.',
+      regularExpression: 'is a regular expression, tested against the full path. Its flags are honored.'
+    },
+    renameAttachmentsCreatedByOtherPluginsMode: {
+      description: {
+        part1: 'Whether to apply the attachment folder and file name settings to attachments that OTHER plugins create.',
+        part2: 'Some plugins write an attachment into the vault under a name of their own, without asking Obsidian where it belongs. When this is on, such a file is moved and renamed right after it appears.',
+        part3: 'Only files created while a note is open, and linked from a note, are touched: a file no note links to is data another plugin keeps for itself and stays where it was written. Files arriving from a sync or a vault import are never touched.',
+        part4: 'The creating plugin is identified from the call stack of the write. That is best-effort: no plugin is identified for a file written by Obsidian itself, by a sync client, or by a plugin that defers its write. Such a file counts as NOT being in the list below.'
+      },
+      name: 'Rename attachments created by other plugins'
+    },
+    renameAttachmentsToLowerCase: 'Rename attachments to lower case',
+    renamedAttachmentFileName: {
+      description: {
+        part1: 'See available',
+        part2: 'tokens',
+        part3: 'Leave empty to keep the original attachment file name.'
+      },
+      name: 'Renamed attachment file name'
+    },
+    resetToSampleCustomTokens: {
+      message: 'Are you sure you want to reset the custom tokens to the sample custom tokens? Your changes will be lost.',
+      title: 'Reset to sample custom tokens'
+    },
+    screenshotFilePaths: {
+      description: {
+        part1: 'Used only while Keep the names of pasted image files that are not screenshots is on. Some screenshot tools copy the capture to the clipboard as a file, for example PixPin with Copy images as files, or the Windows Snipping Tool. A pasted image file on one of these paths counts as a pasted image. So does any image file written less than a minute before it is pasted.',
+        part2: 'Insert each path on a new line.',
+        part3: 'You can use a folder path, or',
+        part4: 'A folder path is a full path on your computer, not a vault path; on macOS and Linux, leave off its trailing slash. A regular expression is tested against the full path of the file, ignoring case.',
+        part5: 'An image you drag in is never a pasted image, whatever its path.'
+      },
+      name: 'Screenshot file paths'
+    },
+    shouldCollectAttachmentsAutomatically: {
+      description: 'Collect a note\'s attachments each time the note changes, as if Collect attachments in current note had been run on it. This moves files without asking, on every save of the note, so it is off by default.',
+      name: 'Collect attachments automatically'
+    },
+    shouldConvertPastedImagesToJpeg: {
+      description: 'Whether to convert pasted images to JPEG. Applies only when the PNG image content is pasted from the clipboard directly. Typically, for pasting screenshots.',
+      name: 'Should convert pasted images to JPEG'
+    },
+    shouldDeduplicateIdenticalAttachments: {
+      description: 'When an attachment is collected, moved to its proper folder, or renamed after another plugin created it, and its destination already holds a file with exactly the same content, keep only that file: every link to the incoming attachment is pointed at it, and the incoming attachment is moved to the trash. A destination holding different content still gets the duplicate-name suffix.',
+      name: 'Deduplicate identical attachments'
+    },
+    shouldFollowObsidianAttachmentLocation: {
+      description: 'If enabled, new attachments go wherever Obsidian\'s own Files and links > Default location for new attachments says, and Location for new attachments below is not used. The file name settings still apply.',
+      name: 'Follow Obsidian attachment location'
+    },
+    shouldKeepNamesOfPastedNonScreenshotFiles: {
+      description: 'If enabled, Only pasted images keeps the name of a pasted image file unless it looks like a screenshot: it was written less than a minute before it is pasted, or it matches Screenshot file paths. Turn it on if you copy real image files in a file manager and want their names kept. If disabled, every pasted image is renamed, whichever screenshot tool copied it.',
+      name: 'Keep the names of pasted image files that are not screenshots'
+    },
+    shouldPreserveImageMetadata: {
+      description: {
+        part1: 'If enabled, the EXIF, GPS, XMP and ICC profile data of a converted image is carried into the JPEG. Only works when the original is already a JPEG; nothing else stores that data in a form that can be copied across.',
+        part2: 'Enable it if you rely on the geolocation of your photos, for example to plot them on a map. Leave it off if you share your vault, since the same data also carries camera serial numbers and the times and places the photos were taken.',
+        part3: 'The orientation is always reset, because the conversion has already rotated the pixels.'
+      },
+      name: 'Should preserve image metadata'
+    },
+    shouldRenameCollectedAttachments: {
+      description: {
+        part1: 'If enabled, attachments processed via',
+        part2: 'Collect attachments',
+        part3: 'commands will be renamed according to the',
+        part4: 'setting.'
+      },
+      name: 'Should rename collected attachments'
+    },
+    shouldSetLinkDisplayTextToAttachmentFileName: {
+      description: 'If enabled, when a link to an attachment is inserted, its display text is set to the attachment file name (without extension). Does not affect links between notes.',
+      name: 'Set link display text to attachment file name'
+    },
+    shouldSkipCollectingAttachmentsReferencedByRawPath: {
+      description: 'When collecting an attachment, also scan every note\'s raw text for the attachment\'s path or file name. If another note references it in a format Obsidian does not index (e.g. via other plugins\' custom syntaxes or raw HTML), the attachment is treated as still used and is left in place. This prevents losing attachments referenced by non-standard syntaxes, at the cost of a slower collect.',
+      name: 'Skip collecting attachments referenced by a raw path'
+    },
+    shouldWarnWhenOriginalAttachmentNameIsUnknown: {
+      description: {
+        part1: 'is the name an attachment arrived with, remembered across every rename this plugin sees. When it is not known — the file predates the record, was renamed outside Obsidian, or was synced from another device — the current name is used instead, and this warns once per operation. A template that wants the current name uses',
+        part2: 'and never warns.'
+      },
+      name: 'Warn when an original attachment name is unknown'
+    },
+    specialCharacters: {
+      description: {
+        part1: 'Special characters in attachment folder and file name to be replaced or removed.',
+        part2: 'Leave blank to preserve special characters.'
+      },
+      name: 'Special characters'
+    },
+    specialCharactersReplacement: {
+      description: {
+        part1: 'Replacement string for special characters in attachment folder and file name.',
+        part2: 'Leave blank to remove special characters.'
+      },
+      name: 'Special characters replacement'
+    },
+    timeoutInSeconds: {
+      description: {
+        part1: 'The timeout in seconds for all operations.',
+        part2: 'If',
+        part3: 'is set, the operations execution timeout is disabled.'
+      },
+      name: 'Timeout in seconds'
+    }
+  },
+  promptWithPreviewModal: {
+    fileNameTitle: 'Rename attachment file',
+    folderTitle: 'Choose attachment folder',
+    previewModal: {
+      title: 'Preview attachment file \'{{fullFileName}}\''
+    },
+    title: 'Provide a value for the prompt token'
+  },
+  regularExpression: '/regular expression/',
+  releaseNotes: {
+    versionMismatch: {
+      part1: 'Your settings file ',
+      part2: 'has version',
+      part3: 'which is newer than the current plugin version',
+      part4: 'The plugin might not work as expected. Please update the plugin to the latest version or ensure that the settings are correct.',
+      title: '{{pluginName}} version mismatch'
+    },
+    versions: {
+      '10.0.0': {
+        part1: 'The format of tokens has been changed. Please update your tokens accordingly. See',
+        part2: 'documentation',
+        part3: 'for more information.'
+      },
+      '11.0.0': {
+        part1: 'Custom tokens that read the attachment content must be updated. The synchronous',
+        part2: 'property was replaced with the lazy',
+        part3: 'method. See',
+        part4: 'documentation',
+        part5: 'for migration details.'
+      }
+    }
+  },
+  settingsMigrationModal: {
+    currentValue: 'Currently: {{value}}',
+    disabled: 'Disabled',
+    emptyList: '(empty)',
+    enabled: 'Enabled',
+    explanation: {
+      part1: '{{sourcePluginName}} used to collect attachments itself and no longer does. It proposes the settings it held, so this vault keeps behaving the way it did.',
+      part2: 'Each row shows what this plugin holds now and what is proposed. Edit a suggested value, or reset a row to keep the current one. Nothing is written until you press OK.'
+    },
+    resetTooltip: 'Reset to the current value, leaving this setting as it is',
+    title: 'Settings proposed by {{sourcePluginName}}'
+  }
+} as const satisfies DefaultTranslationsBase;

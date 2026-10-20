@@ -54,6 +54,15 @@ const MediaExtendedPlugin = (
 		default: new (app: unknown, manifest: unknown) => SubPluginLike;
 	}
 ).default;
+// custom-attachment-location v16 体量大（147 文件 / 约 2.8 万行），在宿主
+// strict 配置下有 1673 处类型错误（多为隐式 any、上游自带 .ts 扩展名导入与类型
+// 差异），按收编判据走 require 桥：不进宿主 tsc 程序，类型由模块自带 tsconfig
+// 独立校验，运行时照常打进 bundle。
+const CustomAttachmentLocationPlugin = (
+	require("../modules/custom-attachment-location/src/main") as {
+		default: new (app: unknown, manifest: unknown) => SubPluginLike;
+	}
+).default;
 import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
 import { registerFreeExtensions } from "./extensionRegistry";
 
@@ -252,6 +261,20 @@ export default class MyObsidianPlugin extends Plugin {
 				"转录文稿时间戳点击即播：自定义播放器（进度/音量/倍速/字幕/画中画/全屏）、贴边媒体、字幕歌词、快捷键、循环区间、时间戳插入；同笔记多录音可用 %%audio-id%% 显式绑定，播放跨视图切换存活（悬浮播放器）。上游 blontern（MIT）+ ITNQ18（0BSD）+ zhoulianglen（MIT）。",
 			desktopOnly: false,
 			cls: AudioPlayerPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Third-party (RainCat1998 / mnaoumov, MIT), kept whole — see
+			// modules/custom-attachment-location/NOTICE. Large surface (147
+			// files / ~28k lines, 1673 errors under the host's strict config):
+			// wired through a require bridge, so it is type-checked by its own
+			// tsconfig instead of joining the host tsc program.
+			id: "custom-attachment-location",
+			legacyId: "obsidian-custom-attachment-location",
+			name: "my Custom Attachment Location",
+			summary:
+				"自定义附件存放位置：用 {{noteFileName}}、{{date:format}} 等变量拼出目标路径，支持笔记子文件夹/同名文件夹归档、粘贴即自动归位、批量收集与清理未使用附件、重命名删除时同步更新链接。上游 RainCat1998 + mnaoumov（MIT）。",
+			desktopOnly: false,
+			cls: CustomAttachmentLocationPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
 			// Third-party (omeyenburg / Oskar Meyenburg, MIT), kept whole — see

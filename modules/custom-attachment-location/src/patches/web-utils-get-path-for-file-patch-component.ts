@@ -1,0 +1,33 @@
+import { MonkeyAroundComponent } from '@mnaoumov/obsidian-lib/components/monkey-around-component';
+
+interface FileEx {
+  path: string;
+}
+
+interface WebUtilsGetPathForFilePatchComponentConstructorParams {
+  readonly webUtils: Electron.WebUtils;
+}
+
+export class WebUtilsGetPathForFilePatchComponent extends MonkeyAroundComponent {
+  private readonly webUtils: Electron.WebUtils;
+
+  public constructor(params: WebUtilsGetPathForFilePatchComponentConstructorParams) {
+    super();
+    this.webUtils = params.webUtils;
+  }
+
+  public override onload(): void {
+    this.registerMethodPatch({
+      $object: this.webUtils,
+      methodName: 'getPathForFile',
+      patchHandler: ({
+        fallback,
+        originalArguments: [file]
+      }) => {
+        const fileEx = file as Partial<FileEx>;
+        // An empty `path` names no file on disk, so it falls back exactly as a missing one does.
+        return fileEx.path === undefined || fileEx.path === '' ? fallback() : fileEx.path;
+      }
+    });
+  }
+}

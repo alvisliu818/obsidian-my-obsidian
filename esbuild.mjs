@@ -356,6 +356,10 @@ const context = await esbuild.context({
     ".tsx": "tsx",
     ".css": "empty",
     ".less": "empty",
+    // custom-attachment-location: src/main.ts 直接 import 的 SCSS（设置项控件
+    // 尺寸、弹窗样式）。与 .css/.less 同款按空模块处理，实际样式用 sass 编译后
+    // 并入根 styles.css 的对应分段。
+    ".scss": "empty",
     // media-extended: svg/ejs 按上游以文本内联
     ".svg": "text",
     ".ejs": "text",

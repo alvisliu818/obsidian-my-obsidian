@@ -1,0 +1,299 @@
+export const da = {
+  attachmentCollector: {
+    confirm: {
+      part1: 'Vil du indsamle vedhæftninger for alle noter i mapper rekursivt?',
+      part2: 'Denne handling kan ikke fortrydes.'
+    },
+    progressBar: {
+      message: 'Samler vedhæftninger {{iterationString}} - \'{{noteFilePath}}\'.',
+      title: 'Samler vedhæftninger...'
+    }
+  },
+  buttons: {
+    copy: 'Kopier',
+    move: 'Flyt',
+    previewAttachmentFile: 'Forhåndsvis vedhæftningsfil',
+    skip: 'Spring over'
+  },
+  collectAttachmentUsedByMultipleNotesModal: {
+    content: {
+      part1: 'Vedhæftning',
+      part2: 'refereres af flere noter.'
+    },
+    heading: 'Samler vedhæftning brugt af flere noter',
+    noPriorityWinnerReason: {
+      EmptyList: 'Den blev ikke flyttet, fordi indstillingen {{settingName}} er tom, så intet afgør, hvilken af disse noter der ejer den.',
+      NoMatch: 'Den blev ikke flyttet, fordi ingen af disse noter matcher nogen post i indstillingen {{settingName}}.',
+      Tie: 'Den blev ikke flyttet, fordi flere af disse noter matcher indstillingen {{settingName}} lige godt, så den udpeger ingen enkelt ejer.'
+    },
+    shouldUseSameActionForOtherProblematicAttachmentsToggle: 'Skal bruge samme handling for andre problematiske vedhæftninger'
+  },
+  commands: {
+    collectAttachmentsCurrentFolder: 'Saml vedhæftninger i nuværende mappe',
+    collectAttachmentsCurrentNote: 'Saml vedhæftninger i nuværende note',
+    collectAttachmentsEntireVault: 'Saml vedhæftninger i hele vault'
+  },
+  menuItems: {
+    collectAttachmentsInFile: 'Indsaml vedhæftninger i fil',
+    collectAttachmentsInFiles: 'Indsaml vedhæftninger i filer'
+  },
+  notice: {
+    collectingAttachments: 'Samler vedhæftninger for \'{{noteFilePath}}\'',
+    collectingAttachmentsCancelled: 'Samling af vedhæftninger annulleret. Se konsol for detaljer.',
+    generatedAttachmentFileNameIsInvalid: {
+      part1: 'Genereret vedhæftningsfilnavn \'{{path}}\' er ugyldigt.\n{{validationMessage}}\nTjek din',
+      part2: 'indstilling.'
+    },
+    notePathIsIgnored: 'Notesti er ignoreret'
+  },
+  obsidianDevUtils: {
+    buttons: {
+      cancel: 'Annuller',
+      ok: 'OK'
+    },
+    dataview: {
+      itemsPerPage: 'Elementer per side:',
+      jumpToPage: 'Hop til side:'
+    },
+    notices: {
+      attachmentIsStillUsed: 'Vedhæftning {{attachmentPath}} bruges stadig af andre noter. Den vil ikke blive slettet.',
+      unhandledError: 'Der opstod en ubehandlet fejl. Tjek venligst konsollen for flere oplysninger.'
+    }
+  },
+  pluginSettings: {
+    attachmentRenameMode: {
+      all: {
+        description: 'alle filer omdøbes.',
+        displayText: 'Alle'
+      },
+      none: {
+        description: 'deres navne bevares.',
+        displayText: 'Ingen'
+      },
+      onlyPastedImages: {
+        description: 'kun indsatte billeder omdøbes. Gælder kun når PNG-billedindholdet indsættes direkte fra udklipsholderen. Typisk til indsættelse af skærmbilleder.',
+        displayText: 'Kun indsatte billeder'
+      }
+    },
+    collectAttachmentUsedByMultipleNotesMode: {
+      cancel: {
+        description: 'annuller samling af vedhæftninger.',
+        displayText: 'Annuller'
+      },
+      copy: {
+        description: 'kopier vedhæftningen til den nye placering.',
+        displayText: 'Kopier'
+      },
+      move: {
+        description: 'flyt vedhæftningen til den nye placering.',
+        displayText: 'Flyt'
+      },
+      prompt: {
+        description: 'bed brugeren om at vælge handlingen.',
+        displayText: 'Anmodning'
+      },
+      skip: {
+        description: 'spring vedhæftningen over og fortsæt til den næste.',
+        displayText: 'Spring over'
+      }
+    },
+    defaultImageSizeDimension: {
+      height: 'Højde',
+      width: 'Bredde'
+    }
+  },
+  pluginSettingsManager: {
+    customToken: {
+      codeComment: '// Brugerdefinerede tokens blev kommenteret ud, da de skal opdateres til det nye format introduceret i plugin version 9.0.0.\n// Se dokumentationen (https://github.com/mnaoumov/obsidian-custom-attachment-location?tab=readme-ov-file#custom-tokens) for flere oplysninger.',
+      deprecated: {
+        part1: 'I plugin version 9.0.0 ændrede formatet for brugerdefineret token-registrering sig. Opdater venligst dine tokens i overensstemmelse hermed. Se',
+        part2: 'dokumentationen',
+        part3: 'for flere oplysninger'
+      }
+    },
+    legacyRenameAttachmentsToLowerCase: {
+      part1: 'I plugin version 9.0.0 er',
+      part2: 'indstillingen forældet. Brug',
+      part3: 'format i stedet. Se',
+      part4: 'dokumentationen',
+      part5: 'for flere oplysninger'
+    },
+    markdownUrlFormat: {
+      deprecated: {
+        part1: 'Du har potentielt forkert værdi sat for',
+        part2: 'formatet. Se venligst',
+        part3: 'dokumentationen',
+        part4: 'for flere oplysninger',
+        part5: 'Denne besked vil ikke blive vist igen.'
+      }
+    },
+    specialCharacters: {
+      part1: 'I plugin version 9.16.0 blev',
+      part2: 'standardindstillingsværdien ændret. Din indstillingsværdi blev opdateret til den nye standardværdi.'
+    },
+    validation: {
+      defaultImageSizeMustBePercentageOrPixels: 'Standardbilledstørrelsen skal angives i pixels eller procent',
+      invalidCustomTokensCode: 'Ugyldig brugerdefineret tokens-kode',
+      invalidRegularExpression: 'Ugyldigt regulært udtryk {{regExp}}',
+      specialCharactersMustNotContainSlash: 'Særlige tegn må ikke indeholde /',
+      specialCharactersReplacementMustNotContainInvalidFileNamePathCharacters: 'Erstatning af særlige tegn må ikke indeholde ugyldige filnavnsti-tegn.'
+    }
+  },
+  pluginSettingsTab: {
+    attachmentRenameMode: {
+      description: {
+        part1: 'Når der vedhæftes filer:'
+      },
+      name: 'Vedhæftningsomdøbningstilstand'
+    },
+    collectAttachmentUsedByMultipleNotesMode: {
+      description: {
+        part1: 'Når den samlede vedhæftning bruges af flere noter:'
+      },
+      name: 'Saml vedhæftning brugt af flere noter tilstand'
+    },
+    collectedAttachmentFileName: {
+      description: {
+        part1: 'Se tilgængelige',
+        part2: 'tokens',
+        part3: 'Lad stå tomt for at beholde det oprindelige vedhæftningsfilnavn.'
+      },
+      name: 'Samlet vedhæftningsfilnavn'
+    },
+    customTokens: {
+      description: {
+        part1: 'Brugerdefinerede tokens der skal bruges.',
+        part2: 'Se',
+        part3: 'dokumentationen',
+        part4: 'for flere oplysninger.',
+        part5: '⚠️ Brugerdefinerede tokens kan være vilkårlig JavaScript-kode. Hvis de er dårligt skrevet, kan de forårsage datatab. Brug dem på egen risiko.'
+      },
+      name: 'Brugerdefinerede tokens'
+    },
+    defaultImageSize: {
+      description: {
+        part1: 'Standardbilledstørrelsen.',
+        part2: 'Kan angives i pixels',
+        part3: 'eller i procent af den fulde billedstørrelse',
+        part4: 'Lad stå tomt for at bruge den originale billedstørrelse.'
+      },
+      name: 'Standardbilledstørrelse'
+    },
+    duplicateNameSeparator: {
+      description: {
+        part1: 'Når du indsætter/trækker en fil med samme navn som en eksisterende fil, vil denne separator blive tilføjet til filnavnet.',
+        part2: 'F.eks., når du trækker fil',
+        part3: ', vil den blive omdøbt til',
+        part4: ', osv., og få det første tilgængelige navn.'
+      },
+      name: 'Duplikatnavnseparator'
+    },
+    excludePathsFromAttachmentCollecting: {
+      description: {
+        part1: 'Udeluk vedhæftninger fra følgende stier når',
+        part2: 'Saml vedhæftninger',
+        part3: 'kommandoen udføres.',
+        part4: 'Indsæt hver sti på en ny linje.',
+        part6: 'Hvis indstillingen er tom, udelukkes ingen stier fra vedhæftningssamling.'
+      },
+      name: 'Udeluk stier fra vedhæftningssamling'
+    },
+    generatedAttachmentFileName: {
+      description: {
+        part1: 'Se tilgængelige',
+        part2: 'tokens'
+      },
+      name: 'Genereret vedhæftningsfilnavn'
+    },
+    jpegQuality: {
+      description: 'Jo mindre kvaliteten, jo større kompressionsforhold.',
+      name: 'JPEG-kvalitet'
+    },
+    locationForNewAttachments: {
+      description: {
+        part1: 'Start med',
+        part2: 'for at bruge relativ sti.',
+        part3: 'Se tilgængelige',
+        part4: 'tokens',
+        part5: 'Punktmapper som',
+        part6: 'anbefales ikke, fordi Obsidian ikke sporer dem. Du skal muligvis bruge et',
+        part7: 'Plugin til at administrere dem.'
+      },
+      name: 'Placering for nye vedhæftninger'
+    },
+    markdownUrlFormat: {
+      description: {
+        part1: 'Format for URL\'en der vil blive indsat i Markdown.',
+        part2: 'Se tilgængelige',
+        part3: 'tokens',
+        part4: 'Lad stå tomt for at bruge standardformatet.'
+      },
+      name: 'Markdown URL-format'
+    },
+    renameAttachmentsCreatedByOtherPluginsMode: {
+      description: {
+        part1: 'Om indstillingerne for vedhæftningsmappe og filnavn skal anvendes på vedhæftninger, som ANDRE plugins opretter.',
+        part2: 'Nogle plugins skriver en vedhæftning direkte i boksen under deres eget navn uden at spørge Obsidian, hvor den hører hjemme. Med dette slået til flyttes og omdøbes en sådan fil, så snart den dukker op.',
+        part3: 'Kun filer oprettet, mens en note er åben, berøres — aldrig filer, der kommer fra en synkronisering eller en boks-import.'
+      },
+      name: 'Omdøb vedhæftninger oprettet af andre plugins'
+    },
+    renameAttachmentsToLowerCase: 'Omdøb vedhæftninger til små bogstaver',
+    renamedAttachmentFileName: {
+      description: {
+        part1: 'Se tilgængelige',
+        part2: 'tokens',
+        part3: 'Lad stå tomt for at beholde det oprindelige vedhæftningsfilnavn.'
+      },
+      name: 'Omdøbt vedhæftningsfilnavn'
+    },
+    resetToSampleCustomTokens: {
+      message: 'Er du sikker på, at du vil nulstille de brugerdefinerede tokens til de eksempel-brugerdefinerede tokens? Dine ændringer vil gå tabt.',
+      title: 'Nulstil til eksempel-brugerdefinerede tokens'
+    },
+    shouldConvertPastedImagesToJpeg: {
+      description: 'Om indsatte billeder skal konverteres til JPEG. Gælder kun når PNG-billedindholdet indsættes direkte fra udklipsholderen. Typisk til indsættelse af skærmbilleder.',
+      name: 'Skal konvertere indsatte billeder til JPEG'
+    },
+    shouldRenameCollectedAttachments: {
+      description: {
+        part1: 'Hvis aktiveret, vedhæftninger behandlet via',
+        part2: 'Saml vedhæftninger',
+        part3: 'kommandoer vil blive omdøbt i henhold til',
+        part4: 'indstillingen.'
+      },
+      name: 'Skal omdøbe samlede vedhæftninger'
+    },
+    specialCharacters: {
+      description: {
+        part1: 'Særlige tegn i vedhæftningsmappe og filnavn der skal erstattes eller fjernes.',
+        part2: 'Lad stå tomt for at bevare særlige tegn.'
+      },
+      name: 'Særlige tegn'
+    },
+    specialCharactersReplacement: {
+      description: {
+        part1: 'Erstatningsstreng for særlige tegn i vedhæftningsmappe og filnavn.',
+        part2: 'Lad stå tomt for at fjerne særlige tegn.'
+      },
+      name: 'Særlige tegn-erstatning'
+    },
+    timeoutInSeconds: {
+      description: {
+        part1: 'Timeout i sekunder for alle operationer.',
+        part2: 'Hvis',
+        part3: 'er sat, er operationernes udførelsestimeout deaktiveret.'
+      },
+      name: 'Timeout i sekunder'
+    }
+  },
+  promptWithPreviewModal: {
+    fileNameTitle: 'Omdøb vedhæftningsfil',
+    folderTitle: 'Vælg vedhæftningsmappe',
+    previewModal: {
+      title: 'Forhåndsvis vedhæftningsfil \'{{fullFileName}}\''
+    },
+    title: 'Angiv en værdi for prompt-tokenet'
+  },
+  regularExpression: '/regulært udtryk/'
+};

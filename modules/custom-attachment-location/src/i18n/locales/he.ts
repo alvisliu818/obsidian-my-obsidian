@@ -1,0 +1,299 @@
+export const he = {
+  attachmentCollector: {
+    confirm: {
+      part1: 'האם ברצונך לאסוף קבצים מצורפים לכל ההערות בתיקיות באופן רקורסיבי?',
+      part2: 'לא ניתן לבטל פעולה זו.'
+    },
+    progressBar: {
+      message: 'אוסף קבצים מצורפים {{iterationString}} - \'{{noteFilePath}}\'.',
+      title: 'אוסף קבצים מצורפים...'
+    }
+  },
+  buttons: {
+    copy: 'העתק',
+    move: 'העבר',
+    previewAttachmentFile: 'תצוגה מקדימה של קובץ מצורף',
+    skip: 'דלג'
+  },
+  collectAttachmentUsedByMultipleNotesModal: {
+    content: {
+      part1: 'קובץ מצורף',
+      part2: 'משומש על ידי מספר רשימות.'
+    },
+    heading: 'איסוף קובץ מצורף המשומש על ידי מספר רשימות',
+    noPriorityWinnerReason: {
+      EmptyList: 'הוא לא הועבר משום שההגדרה {{settingName}} ריקה, ולכן דבר אינו קובע לאיזו מהפתקים הללו הוא שייך.',
+      NoMatch: 'הוא לא הועבר משום שאף אחד מהפתקים הללו אינו תואם לאף רשומה בהגדרה {{settingName}}.',
+      Tie: 'הוא לא הועבר משום שכמה מהפתקים הללו תואמים להגדרה {{settingName}} במידה שווה, ולכן היא אינה קובעת בעלים יחיד.'
+    },
+    shouldUseSameActionForOtherProblematicAttachmentsToggle: 'יש להשתמש באותה פעולה עבור קבצים מצורפים בעייתיים אחרים'
+  },
+  commands: {
+    collectAttachmentsCurrentFolder: 'אסוף קבצים מצורפים בתיקייה הנוכחית',
+    collectAttachmentsCurrentNote: 'אסוף קבצים מצורפים ברשימה הנוכחית',
+    collectAttachmentsEntireVault: 'אסוף קבצים מצורפים בכל הכספת'
+  },
+  menuItems: {
+    collectAttachmentsInFile: 'איסוף קבצים מצורפים בקובץ',
+    collectAttachmentsInFiles: 'איסוף קבצים מצורפים בקבצים'
+  },
+  notice: {
+    collectingAttachments: 'אוסף קבצים מצורפים עבור \'{{noteFilePath}}\'',
+    collectingAttachmentsCancelled: 'איסוף קבצים מצורפים בוטל. ראה קונסול לפרטים.',
+    generatedAttachmentFileNameIsInvalid: {
+      part1: 'שם קובץ מצורף שנוצר \'{{path}}\' אינו תקף.\n{{validationMessage}}\nבדוק את',
+      part2: 'ההגדרה שלך.'
+    },
+    notePathIsIgnored: 'נתיב רשימה מתעלם'
+  },
+  obsidianDevUtils: {
+    buttons: {
+      cancel: 'ביטול',
+      ok: 'אישור'
+    },
+    dataview: {
+      itemsPerPage: 'פריטים לעמוד:',
+      jumpToPage: 'קפוץ לעמוד:'
+    },
+    notices: {
+      attachmentIsStillUsed: 'קבץ מצורף {{attachmentPath}} עדיין משומש על ידי רשימות אחרות. הוא לא ימחק.',
+      unhandledError: 'אירעה שגיאה לא מטופלת. אנא בדוק את הקונסול למידע נוסף.'
+    }
+  },
+  pluginSettings: {
+    attachmentRenameMode: {
+      all: {
+        description: 'כל הקבצים יקבלו שמות חדשים.',
+        displayText: 'הכל'
+      },
+      none: {
+        description: 'השמות שלהם נשמרים.',
+        displayText: 'כלום'
+      },
+      onlyPastedImages: {
+        description: 'רק תמונות שהודבקו יקבלו שמות חדשים. חל רק כאשר תוכן תמונת PNG מודבק ישירות מהלוח. בדרך כלל, להדבקת צילומי מסך.',
+        displayText: 'רק תמונות שהודבקו'
+      }
+    },
+    collectAttachmentUsedByMultipleNotesMode: {
+      cancel: {
+        description: 'בטל את איסוף הקבצים המצורפים.',
+        displayText: 'ביטול'
+      },
+      copy: {
+        description: 'העתק את הקובץ המצורף למיקום החדש.',
+        displayText: 'העתקה'
+      },
+      move: {
+        description: 'העבר את הקובץ המצורף למיקום החדש.',
+        displayText: 'העברה'
+      },
+      prompt: {
+        description: 'הנחה את המשתמש לבחור את הפעולה.',
+        displayText: 'הנחיה'
+      },
+      skip: {
+        description: 'דלג על הקובץ המצורף והמשך לבא.',
+        displayText: 'דילוג'
+      }
+    },
+    defaultImageSizeDimension: {
+      height: 'גובה',
+      width: 'רוחב'
+    }
+  },
+  pluginSettingsManager: {
+    customToken: {
+      codeComment: '// טוקנים מותאמים אישיים הועברו להערה מכיוון שהם צריכים להיות מעודכנים לפורמט החדש שהוצג בגרסת תוסף 9.0.0.\n// פנה לתיעוד (https://github.com/mnaoumov/obsidian-custom-attachment-location?tab=readme-ov-file#custom-tokens) למידע נוסף.',
+      deprecated: {
+        part1: 'בגרסת תוסף 9.0.0, הפורמט של רישום טוקנים מותאמים אישיים השתנה. אנא עדכן את הטוקנים שלך בהתאם. פנה ל',
+        part2: 'תיעוד',
+        part3: 'למידע נוסף'
+      }
+    },
+    legacyRenameAttachmentsToLowerCase: {
+      part1: 'בגרסת תוסף 9.0.0, ההגדרה',
+      part2: 'היא מיושנת. השתמש ב',
+      part3: 'פורמט במקום. ראה',
+      part4: 'תיעוד',
+      part5: 'למידע נוסף'
+    },
+    markdownUrlFormat: {
+      deprecated: {
+        part1: 'יש לך ערך פוטנציאלית שגוי עבור',
+        part2: 'הפורמט. אנא פנה ל',
+        part3: 'תיעוד',
+        part4: 'למידע נוסף',
+        part5: 'הודעה זו לא תוצג שוב.'
+      }
+    },
+    specialCharacters: {
+      part1: 'בגרסת תוסף 9.16.0, ערך',
+      part2: 'ההגדרה ברירת המחדל השתנה. ערך ההגדרה שלך עודכן לערך ברירת המחדל החדש.'
+    },
+    validation: {
+      defaultImageSizeMustBePercentageOrPixels: 'גודל התמונה ברירת המחדל חייב להיות בפיקסלים או באחוזים',
+      invalidCustomTokensCode: 'קוד טוקנים מותאמים אישיים לא תקף',
+      invalidRegularExpression: 'ביטוי רגולרי לא תקף {{regExp}}',
+      specialCharactersMustNotContainSlash: 'תווים מיוחדים לא יכולים להכיל /',
+      specialCharactersReplacementMustNotContainInvalidFileNamePathCharacters: 'החלפת תווים מיוחדים לא יכולה להכיל תווים לא תקפים של נתיב שם קובץ.'
+    }
+  },
+  pluginSettingsTab: {
+    attachmentRenameMode: {
+      description: {
+        part1: 'כאשר מצרפים קבצים:'
+      },
+      name: 'מצב שינוי שם קבצים מצורפים'
+    },
+    collectAttachmentUsedByMultipleNotesMode: {
+      description: {
+        part1: 'כאשר הקובץ המצורף שנאסף משמש מספר רשימות:'
+      },
+      name: 'מצב איסוף קובץ מצורף המשמש מספר רשימות'
+    },
+    collectedAttachmentFileName: {
+      description: {
+        part1: 'ראה',
+        part2: 'טוקנים זמינים',
+        part3: 'השאר ריק כדי לשמור על שם הקובץ המצורף המקורי.'
+      },
+      name: 'שם קובץ מצורף שנאסף'
+    },
+    customTokens: {
+      description: {
+        part1: 'טוקנים מותאמים אישיים לשימוש.',
+        part2: 'ראה',
+        part3: 'תיעוד',
+        part4: 'למידע נוסף.',
+        part5: '⚠️ טוקנים מותאמים אישיים יכולים להיות קוד JavaScript שרירותי. אם הם כתובים בצורה גרועה, הם עלולים לגרום לאובדן נתונים. השתמש בהם על אחריותך.'
+      },
+      name: 'טוקנים מותאמים אישיים'
+    },
+    defaultImageSize: {
+      description: {
+        part1: 'גודל התמונה ברירת המחדל.',
+        part2: 'ניתן לציין בפיקסלים',
+        part3: 'או באחוז מגודל התמונה המלא',
+        part4: 'השאר ריק כדי להשתמש בגודל המקורי.'
+      },
+      name: 'גודל התמונה ברירת המחדל'
+    },
+    duplicateNameSeparator: {
+      description: {
+        part1: 'כאשר אתה מדביק/גורר קובץ עם אותו שם כמו קובץ קיים, המפריד הזה יתווסף לשם הקובץ.',
+        part2: 'לדוגמה, כאשר אתה גורר קובץ',
+        part3: ', הוא יקבל שם חדש ל',
+        part4: ', וכו, לקבלת השם הראשון הזמין.'
+      },
+      name: 'מפריד שמות כפולים'
+    },
+    excludePathsFromAttachmentCollecting: {
+      description: {
+        part1: 'הדר קבצים מצורפים מהנתיבים הבאים כאשר',
+        part2: 'אסוף קבצים מצורפים',
+        part3: 'הפקודה מבוצעת.',
+        part4: 'הכנס כל נתיב בשורה חדשה.',
+        part6: 'אם ההגדרה ריקה, אף נתיב לא מודר מאיסוף קבצים מצורפים.'
+      },
+      name: 'הדר נתיבים מאיסוף קבצים מצורפים'
+    },
+    generatedAttachmentFileName: {
+      description: {
+        part1: 'ראה',
+        part2: 'טוקנים זמינים'
+      },
+      name: 'שם קובץ מצורף שנוצר'
+    },
+    jpegQuality: {
+      description: 'ככל שהאיכות קטנה יותר, יחס הדחיסה גדול יותר.',
+      name: 'איכות JPEG'
+    },
+    locationForNewAttachments: {
+      description: {
+        part1: 'התחל עם',
+        part2: 'לשימוש בנתיב יחסי.',
+        part3: 'ראה',
+        part4: 'טוקנים זמינים',
+        part5: 'תיקיות נקודה כמו',
+        part6: 'לא מומלצות, כי Obsidian לא עוקב אחריהן. ייתכן שתצטרך להשתמש ב',
+        part7: 'תוסף לניהול אותן.'
+      },
+      name: 'מיקום לקבצים מצורפים חדשים'
+    },
+    markdownUrlFormat: {
+      description: {
+        part1: 'פורמט עבור ה-URL שיוכנס ל-Markdown.',
+        part2: 'ראה',
+        part3: 'טוקנים זמינים',
+        part4: 'השאר ריק לשימוש בפורמט ברירת המחדל.'
+      },
+      name: 'פורמט URL Markdown'
+    },
+    renameAttachmentsCreatedByOtherPluginsMode: {
+      description: {
+        part1: 'האם להחיל את הגדרות תיקיית הקבצים המצורפים ושם הקובץ על קבצים מצורפים שתוספים אחרים יוצרים.',
+        part2: 'חלק מהתוספים כותבים קובץ מצורף אל הכספת בשם משלהם, בלי לשאול את Obsidian לאן הוא שייך. כשאפשרות זו מופעלת, קובץ כזה מועבר ומשנה את שמו מיד עם הופעתו.',
+        part3: 'רק קבצים שנוצרים בזמן שפתקה פתוחה מטופלים, לעולם לא קבצים המגיעים מסנכרון או מייבוא כספת.'
+      },
+      name: 'שנה שם של קבצים מצורפים שיצרו תוספים אחרים'
+    },
+    renameAttachmentsToLowerCase: 'שנה שמות קבצים מצורפים לאותיות קטנות',
+    renamedAttachmentFileName: {
+      description: {
+        part1: 'ראה',
+        part2: 'טוקנים זמינים',
+        part3: 'השאר ריק כדי לשמור על שם הקובץ המצורף המקורי.'
+      },
+      name: 'שם קובץ מצורף ששמו שונה'
+    },
+    resetToSampleCustomTokens: {
+      message: 'האם אתה בטוח שברצונך לאפס את הטוקנים המותאמים אישיים לטוקנים המותאמים אישיים לדוגמה? השינויים שלך יאבדו.',
+      title: 'אפס לטוקנים מותאמים אישיים לדוגמה'
+    },
+    shouldConvertPastedImagesToJpeg: {
+      description: 'האם להמיר תמונות שהודבקו ל-JPEG. חל רק כאשר תוכן תמונת PNG מודבק ישירות מהלוח. בדרך כלל, להדבקת צילומי מסך.',
+      name: 'האם להמיר תמונות שהודבקו ל-JPEG'
+    },
+    shouldRenameCollectedAttachments: {
+      description: {
+        part1: 'אם מופעל, קבצים מצורפים המעובדים דרך',
+        part2: 'אסוף קבצים מצורפים',
+        part3: 'פקודות יקבלו שמות חדשים לפי',
+        part4: 'ההגדרה.'
+      },
+      name: 'האם לשנות שמות קבצים מצורפים שנאספו'
+    },
+    specialCharacters: {
+      description: {
+        part1: 'תווים מיוחדים בתיקיית קבצים מצורפים ושם קובץ להחלפה או הסרה.',
+        part2: 'השאר ריק לשימור תווים מיוחדים.'
+      },
+      name: 'תווים מיוחדים'
+    },
+    specialCharactersReplacement: {
+      description: {
+        part1: 'מחרוזת החלפה עבור תווים מיוחדים בתיקיית קבצים מצורפים ושם קובץ.',
+        part2: 'השאר ריק להסרת תווים מיוחדים.'
+      },
+      name: 'החלפת תווים מיוחדים'
+    },
+    timeoutInSeconds: {
+      description: {
+        part1: 'הזמן הקצוב בשניות עבור כל הפעולות.',
+        part2: 'אם',
+        part3: 'מוגדר, זמן הקצוב לביצוע פעולות מבוטל.'
+      },
+      name: 'זמן קצוב בשניות'
+    }
+  },
+  promptWithPreviewModal: {
+    fileNameTitle: 'שנה שם של קובץ מצורף',
+    folderTitle: 'בחר תיקיית קבצים מצורפים',
+    previewModal: {
+      title: 'תצוגה מקדימה של קובץ מצורף \'{{fullFileName}}\''
+    },
+    title: 'ספק ערך עבור טוקן ההנחיה'
+  },
+  regularExpression: '/ביטוי רגולרי/'
+};
