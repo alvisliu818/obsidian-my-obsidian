@@ -300,14 +300,20 @@ function completionYieldKeymap(): Extension {
  * Escape / blur just commit. Autocompletion ([[wiki]], #tag, ((ref))) is
  * included; block-model slash commands are filtered out (no outline focus).
  *
- * The commit is deferred to a task: CM6 keeps touching the view right after a
- * key or blur handler returns, so destroying it synchronously is unsafe.
+ * Backspace/Delete DO carry outline semantics when the blockMerge shortcut
+ * group is on: at the text edge they merge the row into the previous/next
+ * visible block of the embed (empty row = delete), exactly like the main
+ * editor — see `onMergeBlocks`. Anywhere else the key falls through to CM6
+ * (delete char / selection). The commit is deferred to a task: CM6 keeps
+ * touching the view right after a key or blur handler returns, so destroying
+ * it synchronously is unsafe.
  */
 export function createEmbedExtensions(
   host: BlockRenderHost,
   onCommit: () => void,
   onCommitAndNew?: () => void,
   onTab?: (shift: boolean) => boolean,
+  onMergeBlocks?: (forward: boolean) => boolean,
 ): Extension[] {
   const commit = (): boolean => {
     window.setTimeout(onCommit, 0);
@@ -329,8 +335,23 @@ export function createEmbedExtensions(
         ]),
       ]
     : [];
+  // Backspace/Delete 归属 blockMerge 组（与主编辑器、与下面 defaultKeymap
+  // 剥离规则同源）：组关着时不绑定，按键落 CM6 默认（删字符）。
+  // Prec.high 不能省：Delete 不在 ownedDefaultKeys 剥离名单里，默认键位的
+  // deleteForward 同优先级竞争，不提前级会整键失效（主编辑器同款结论）。
+  const mergeKeymap: Extension[] = onMergeBlocks && host.plugin.settings.shortcuts.blockMerge
+    ? [
+        Prec.high(
+          keymap.of([
+            { key: 'Backspace', run: (v: EditorView) => mergeAtEdge(v, false, onMergeBlocks) },
+            { key: 'Delete', run: (v: EditorView) => mergeAtEdge(v, true, onMergeBlocks) },
+          ]),
+        ),
+      ]
+    : [];
   return [
     ...tabKeymap,
+    ...mergeKeymap,
     EditorView.lineWrapping,
     highlightSpecialChars(),
     history(),
@@ -361,12 +382,36 @@ export function createEmbedExtensions(
     ),
     keymap.of(historyKeymap),
     EditorView.domEventHandlers({
-      blur: () => {
-        window.setTimeout(onCommit, 0);
+      blur: (_event, view) => {
+        // 延迟一 tick，让 CM6 在按键处理器返回后的 DOM 操作落地。但到执行
+        // 时可能已有新编辑器挂上来：点另一个嵌入行会在 click 处理器里同步
+        // 提交旧编辑并开新编辑器，此时旧会话的延迟提交必须作废——否则会把
+        // 新编辑器一起提交掉（实测：A 行编辑器开着直接点 B 行，B 编辑器
+        // 瞬间打开即消失）。按 view 身份校验会话。
+        window.setTimeout(() => {
+          if (host.embedEdit?.view === view) onCommit();
+        }, 0);
         return false;
       },
     }),
   ];
+}
+
+/**
+ * Backspace/Delete 的块合并接管判定：光标位于文本首（Backspace）或尾
+ * （Delete）且无选区时才交给合并回调；其余位置返回 false，按键落 CM6
+ * 默认行为（删字符 / 删选区）。
+ */
+function mergeAtEdge(
+  view: EditorView,
+  forward: boolean,
+  cb: (forward: boolean) => boolean,
+): boolean {
+  const sel = view.state.selection.main;
+  const len = view.state.doc.length;
+  if (!sel.empty) return false;
+  if (forward ? sel.head !== len : sel.head !== 0) return false;
+  return cb(forward);
 }
 
 export function createEditorExtensions(host: BlockRenderHost, block?: Block): Extension[] {

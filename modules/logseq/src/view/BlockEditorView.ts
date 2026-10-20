@@ -12,11 +12,11 @@ import type { CompletionSource } from '@codemirror/autocomplete';
 import type LogseqEditorPlugin from '../main';
 import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Block, ParsedDocument } from '../types';
-import { applyBlockProps, blockEditorDoc, createBlock, docPageProps, editableProps, isPagePropsBlock, propsShallowEqual, setCollapsed, splitPropLines, syncFrontmatterProps } from '../types';
+import { applyBlockProps, blockEditorDoc, blockId, createBlock, docPageProps, editableProps, isPagePropsBlock, propsShallowEqual, setCollapsed, splitPropLines, syncFrontmatterProps } from '../types';
 import { parseDocument } from '../core/parser';
 import { clearLogseqPageProps, registerLogseqPageProps } from '../pagePropsRegistry';
 import { serializeBlock, serializeDocument } from '../core/serializer';
-import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, isDescendant, linkParents, moveBlockGroup, moveBlockVertically, outdent, pseudoRootOf, rangeAnchor, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, visibleRange, type MovePosition } from '../core/treeOps';
+import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, isDescendant, linkParents, mergeWithNext, mergeWithPrev, moveBlockGroup, moveBlockVertically, nextVisible, outdent, prevVisible, pseudoRootOf, rangeAnchor, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, unregisterRoots, visibleRange, type MovePosition } from '../core/treeOps';
 import { foldLevelOf, foldValueFor, nextFoldLevel, normFoldKey, subtreeFoldTargets, type FoldLevel } from '../core/fold';
 import { UndoStack } from '../state/undoStack';
 import {
@@ -40,6 +40,7 @@ import { createEmbedExtensions } from '../editor/extensions';
 import {
   findEmbedBox,
   findEmbedRow,
+  findEmbedRowByKey,
   findEmbedRowForBlock,
   getEmbedRowSource,
   mutatePageEmbedSource,
@@ -1505,11 +1506,44 @@ ${content}`;
    * clicked row swaps to a CM6 editor, the rest of the embed stays visible.
    * `path` is the child-index path from the embedded root (`[]` = the root).
    * Works for blocks of this file and of any other file (see writeEmbedText).
+   * `cursor` positions the caret after mount ('end' default; a number is the
+   * merge seam offset used by Backspace/Delete block merges).
    */
-  startEmbedEdit(row: HTMLElement, source: EmbedSource, path: number[] = []): void {
-    this.commitEmbedEdit(); // finish a previous in-place edit first
+  startEmbedEdit(row: HTMLElement, source: EmbedSource, path: number[] = [], cursor?: CursorPos): void {
+    // 提交会把被编辑行整行重渲（含它的子孙行），而且是**异步**的（写盘/写模型
+    // 之后才 rerenderEmbedRow）。所以目标行若落在正在编辑行的子树里，同步挂上
+    // 的编辑器会随那次重渲被换成新 DOM —— 视觉上就是“点了子行/空行打不开”。
+    // 有前序会话时先等提交落地，再按 (box, path) 重新解析行元素。
+    // box 必须在提交之前取：文本没变时提交是同步完成的（无 await），
+    // rerenderEmbedRow 会当场把整行（含子孙）换掉——之后 row 已脱离文档，
+    // closest('.block-embed') 只会拿到 null（实测：点编辑态行的空子行时
+    // 编辑器挂进 detached 节点，视觉上“点不开”）。
+    const box = row.closest('.block-embed') as HTMLElement | null;
+    const pending = this.embedEdit ? this.commitEmbedEdit() : null;
     this.commitFocusedText(); // ...and any outline edit
     this.clearSelection();
+    const mount = (): void => {
+      let live = row;
+      const fresh = box ? findEmbedRow(box, path) : null;
+      if (fresh) live = fresh;
+      // 重渲后 path 已不存在（块被删/结构变了）或行已脱离文档：放弃，
+      // 绝不把编辑器挂进 detached 节点。
+      else if (!live.isConnected) return;
+      // 期间若已有新会话开起来（连点、或合并/tab 的重开），别抢。
+      if (this.embedEdit) return;
+      this.mountEmbedEdit(live, source, path, cursor);
+    };
+    if (pending) void pending.then(mount);
+    else mount();
+  }
+
+  /** 在给定行上挂 CM6 就地编辑器（startEmbedEdit 的落地步骤）。 */
+  private mountEmbedEdit(
+    row: HTMLElement,
+    source: EmbedSource,
+    path: number[],
+    cursor?: CursorPos,
+  ): void {
     const content = row.querySelector(':scope > .embed-main > .embed-content') as HTMLElement | null;
     if (!content) return;
     const target = blockAtPath(source.block, path) ?? source.block;
@@ -1524,9 +1558,10 @@ ${content}`;
         () => this.commitEmbedEdit(),
         () => this.commitEmbedEditAndNew(source, path),
         (shift) => this.handleEmbedTab(shift),
+        (forward) => this.handleEmbedMerge(forward),
       ),
     });
-    applyCursor(view, 'end');
+    applyCursor(view, cursor ?? 'end');
     view.focus();
     syncActiveBlockEditor(this.app, this, view);
     // Real Escape keystrokes never reach CM6's keymap: CM6's capture-phase
@@ -1670,6 +1705,175 @@ ${content}`;
         ? refreshPageEmbedBox(this, box, src.file!)
         : refreshEmbedBox(this, box, src.id);
       void refreshed.then(() => editIndentedWhenReady());
+    });
+  }
+
+  /**
+   * Backspace（行首）/ Delete（行尾）在嵌入就地编辑里的块合并 —— 与主编辑器
+   * blockMerge 组同语义：当前行合并进上一个可见块 / 下一个并入当前（空行即
+   * 删除）。合并后把编辑器开回合并行、光标落在接缝点。
+   *
+   * 三态写入与 Tab 同构：同文件走模型（undo/patch）；源文件在别的块编辑器
+   * 视图里开着就走那个视图；都没开则磁盘补丁（guarded write）。嵌入首/末行
+   * 没有可合并对象时静默消费（主编辑器同行为——嵌入是一个独立作用域，
+   * 不能把宿主笔记的块拖进来）。
+   */
+  handleEmbedMerge(forward: boolean): boolean {
+    const src = this.embedEdit?.source ?? null;
+    const path = this.embedEdit?.path ?? null;
+    const editRow = this.embedEdit?.row ?? null;
+    if (!src || !path || !editRow) return false;
+    void this.commitEmbedEdit()
+      .then(() => this.commitEmbedEditMergeInner(src, path, editRow, forward))
+      .catch((e) => console.warn('[logseq] embed merge chain failed:', String(e)));
+    return true;
+  }
+
+  private async commitEmbedEditMergeInner(
+    src: EmbedSource,
+    path: number[],
+    editRow: HTMLElement | null,
+    forward: boolean,
+  ): Promise<void> {
+    const isPageEmbed = src.id === '';
+    const box = isPageEmbed
+      ? ((editRow?.closest('.block-embed.block-page-embed') as HTMLElement | null) ??
+         (this.treeEl.querySelector('.block-embed.block-page-embed') as HTMLElement | null))
+      : findEmbedBox(this, src.id);
+    if (!box) return;
+
+    /**
+     * 在指定视图的模型里按 path 重寻址目标块，并给出该视图里的合并作用域
+     * （页嵌入 = 页面顶层块；块嵌入 = 嵌入根本子树）。src.block 可能来自
+     * 磁盘解析的副本（页嵌入初渲、跨文件嵌入），不能直接在它上面改。
+     */
+    const addressIn = (view: BlockEditorView): { scope: Block[]; target: Block } | null => {
+      const addrRoot = isPageEmbed ? pseudoRootOf(view.doc.blocks) : findBlockById(view.doc.blocks, src.id);
+      if (!addrRoot) return null;
+      const t = blockAtPath(addrRoot, path) ?? (path.length === 0 ? addrRoot : null);
+      if (!t) return null;
+      return { scope: isPageEmbed ? view.doc.blocks : [addrRoot], target: t };
+    };
+
+    // 合并对象与接缝光标从「行渲染所依据的树」上算：页嵌入的 src.block 可能
+    // 是磁盘解析副本，但行的 path 就是以它为基准登记的；跨文件嵌入时宿主
+    // 模型里根本没有这些块，绝不能拿 addressIn(this) 预览。
+    const scopeRoots = isPageEmbed ? src.block.children : [src.block];
+    const rowTarget = blockAtPath(src.block, path) ?? src.block;
+    const rowNeighbor = forward
+      ? nextVisible(scopeRoots, rowTarget)
+      : prevVisible(scopeRoots, rowTarget);
+    if (!rowNeighbor) return; // 嵌入首/末行：无可合并对象，消费
+    // Backspace：接缝在对方原文本末尾；Delete：接缝在当前文本末尾（光标原位）
+    const joinOffset = forward ? rowTarget.text.length : rowNeighbor.text.length;
+
+    /** 在视图模型里执行合并，返回合并后的块（Backspace=prev，Delete=target） */
+    const mergeViaView = (view: BlockEditorView): Block | null => {
+      const addr = addressIn(view);
+      if (!addr) return null;
+      const { scope, target } = addr;
+      const bParent = target.parent;
+      const neighbor = forward ? nextVisible(scope, target) : prevVisible(scope, target);
+      if (!neighbor) return null;
+      const nParent = neighbor.parent;
+      let merged: Block | null = null;
+      view.mutate(
+        () => {
+          merged = forward ? mergeWithNext(scope, target) : mergeWithPrev(scope, target);
+        },
+        // 合并可能跨兄弟数组（prev 与 b 不同父）；两边的列表都要补丁
+        () => ({ lists: [bParent, nParent] }),
+      );
+      return merged;
+    };
+
+    /** 合并后把编辑器开回合并行（接缝光标）；行是异步重建的，轮询等待 */
+    const reopenWhenReady = (merged: Block): void => {
+      const t0 = Date.now();
+      const tryFind = (): void => {
+        const hit = findEmbedRowForBlock(box, merged);
+        if (hit) {
+          this.startEmbedEdit(hit.row, hit.src, hit.path, joinOffset);
+          return;
+        }
+        if (Date.now() - t0 < 4000) window.setTimeout(tryFind, 60);
+      };
+      tryFind();
+    };
+
+    const isLocal = !src.file || src.file.path === this.file?.path;
+    if (isLocal) {
+      const merged = mergeViaView(this);
+      if (!merged) return;
+      if (isPageEmbed) {
+        void refreshPageEmbedBox(this, box, src.file!).then(() => reopenWhenReady(merged));
+      } else {
+        const fresh = findBlockById(this.doc.blocks, src.id);
+        if (!fresh) return;
+        const freshSrc: EmbedSource = { block: fresh, crumbs: src.crumbs, file: src.file, id: src.id };
+        renderEmbedBodyFrom(box, freshSrc, src.id, this);
+        reopenWhenReady(merged);
+      }
+      return;
+    }
+
+    const other = src.file ? this.findOpenBlockEditor(src.file.path) : null;
+    if (other) {
+      const merged = mergeViaView(other);
+      if (!merged) return;
+      if (isPageEmbed) {
+        void refreshPageEmbedBox(this, box, src.file!).then(() => reopenWhenReady(merged));
+      } else {
+        const fresh = findBlockById(other.doc.blocks, src.id);
+        if (!fresh) return;
+        const freshSrc: EmbedSource = { block: fresh, crumbs: src.crumbs, file: src.file, id: src.id };
+        renderEmbedBodyFrom(box, freshSrc, src.id, this);
+        reopenWhenReady(merged);
+      }
+      return;
+    }
+
+    // Nobody has the source open: patch the file on disk (guarded write).
+    // 重新解析的 doc 没有注册 root——页嵌入作用域（doc.blocks）里的顶层块
+    // 会因 siblingsOf 落空而被 removeBlock **静默漏删**（序列化回去行还在），
+    // 所以页嵌入分支临时注册/注销 roots。（块嵌入的目标必在嵌入根子树内、
+    // 有父指针，不受影响。）
+    let mergedKey: string | null = null;
+    const ok = await mutatePageEmbedSource(this, src.file!, (doc) => {
+      const root = src.id ? findBlockById(doc.blocks, src.id) : pseudoRootOf(doc.blocks);
+      if (!root) return;
+      linkParents([root]);
+      const t = blockAtPath(root, path) ?? (path.length === 0 ? root : null);
+      if (!t) return;
+      const scope = isPageEmbed ? doc.blocks : [root];
+      const neighbor = forward ? nextVisible(scope, t) : prevVisible(scope, t);
+      if (!neighbor) return;
+      if (isPageEmbed) registerRoots(doc.blocks);
+      try {
+        const merged = forward ? mergeWithNext(scope, t) : mergeWithPrev(scope, t);
+        if (merged) mergedKey = blockId(merged) || merged.text;
+      } finally {
+        if (isPageEmbed) unregisterRoots(doc.blocks);
+      }
+    });
+    if (!ok || !mergedKey) return;
+    // 磁盘模式：合并行对象来自重解析的 doc（盒重渲染后全是新对象），按稳定
+    // key 找行；必须等重渲染 resolve 后再找（同 Tab 磁盘分支的等待模式）。
+    const key = mergedKey;
+    const refreshed = isPageEmbed
+      ? refreshPageEmbedBox(this, box, src.file!)
+      : refreshEmbedBox(this, box, src.id);
+    void refreshed.then(() => {
+      const t0 = Date.now();
+      const tryFind = (): void => {
+        const hit = findEmbedRowByKey(box, key);
+        if (hit) {
+          this.startEmbedEdit(hit.row, hit.src, hit.path, joinOffset);
+          return;
+        }
+        if (Date.now() - t0 < 4000) window.setTimeout(tryFind, 60);
+      };
+      tryFind();
     });
   }
 

@@ -246,12 +246,14 @@ export function createPageEmbedBox(pageName: string, host: BlockRenderHost): HTM
     const t = e.target instanceof HTMLElement ? e.target : null;
     if (!t) return;
     e.stopPropagation();
-    if (t.closest('.embed-row.is-editing')) return;
+    // 只保护「正被编辑的那一行」：点它的后代行也要能切换编辑器过去
+    // （closest('.embed-row.is-editing') 会爬到祖先编辑行，把子行点击吞掉）。
+    const clickedRow = t.closest('.embed-row') as HTMLElement | null;
+    if (clickedRow?.classList.contains('is-editing')) return;
     if (t.closest('a') || t.closest('.block-embed-header')) return;
-    const row = t.closest('.embed-row') as HTMLElement | null;
-    if (!row) return;
-    const hit = embedRows.get(row);
-    if (hit) host.startEmbedEdit(row, hit.src, hit.path);
+    if (!clickedRow) return;
+    const hit = embedRows.get(clickedRow);
+    if (hit) host.startEmbedEdit(clickedRow, hit.src, hit.path);
   });
   void renderPageEmbedInto(box, pageName, host);
   return box;
@@ -353,7 +355,6 @@ function createEmbedBox(uuid: string, host: BlockRenderHost): HTMLElement {
     e.stopPropagation();
     // The CM6 editor (when open) and inner links / chips / the breadcrumb own
     // their clicks 鈥?never re-mount the editor from a click inside it.
-    if (t.closest('.embed-row.is-editing')) return;
     if (t.closest('a') || t.closest('.block-ref') || t.closest('.block-embed-header')) return;
     const src = embedSources.get(box);
     if (!src) {
@@ -363,8 +364,12 @@ function createEmbedBox(uuid: string, host: BlockRenderHost): HTMLElement {
     }
     // Clicking a row edits THAT block of the embedded sub-tree (rows carry
     // their child-index path); clicking elsewhere edits the root row.
+    // NOTE: only the row BEING EDITED is protected (see createPageEmbedBox) —
+    // a click on one of its DESCENDANT rows must still switch editors there.
+    const clickedRow = t.closest('.embed-row') as HTMLElement | null;
+    if (clickedRow?.classList.contains('is-editing')) return;
     const row =
-      (t.closest('.embed-row') as HTMLElement | null) ??
+      clickedRow ??
       (box.querySelector('.embed-row') as HTMLElement | null);
     if (!row) return;
     const hit = embedRows.get(row);
@@ -629,20 +634,39 @@ function crumbsFor(b: Block, fileLabel: string): string[] {
  * (实测:嵌入页面里按 Tab 失焦)。同文件模型对象身份不灭,`b === target`
  * 保留为快路径。
  */
-export function findEmbedRowForBlock(
+/**
+ * Find the embed row whose block matches a stable key (id, or full text when
+ * id-less). Used after a disk write re-parses the source: the merged block
+ * object from the mutation callback no longer exists in the fresh tree.
+ */
+export function findEmbedRowByKey(
   box: HTMLElement,
-  target: Block,
+  key: string,
 ): { row: HTMLElement; src: EmbedSource; path: number[] } | null {
-  const key = blockId(target) || target.text;
   for (const rowEl of Array.from(box.querySelectorAll<HTMLElement>('.embed-row'))) {
     const reg = embedRows.get(rowEl);
     if (!reg) continue;
     let b: Block | null = reg.src.block;
     for (const i of reg.path) b = b?.children[i] ?? null;
     if (!b) continue;
-    if (b === target || (blockId(b) || b.text) === key) {
+    if ((blockId(b) || b.text) === key) {
       return { row: rowEl, src: reg.src, path: reg.path };
     }
   }
   return null;
+}
+
+export function findEmbedRowForBlock(
+  box: HTMLElement,
+  target: Block,
+): { row: HTMLElement; src: EmbedSource; path: number[] } | null {
+  // 身份快路径：同文件模型对象在 box 重渲染中不灭，精确匹配优先于文本键
+  for (const rowEl of Array.from(box.querySelectorAll<HTMLElement>('.embed-row'))) {
+    const reg = embedRows.get(rowEl);
+    if (!reg) continue;
+    let b: Block | null = reg.src.block;
+    for (const i of reg.path) b = b?.children[i] ?? null;
+    if (b === target) return { row: rowEl, src: reg.src, path: reg.path };
+  }
+  return findEmbedRowByKey(box, blockId(target) || target.text);
 }
