@@ -1,6 +1,7 @@
 /node_modules
 package-lock.json
-/dist
+# 聚合收编时 dist 需要入库（apps/app 的 @codemirror/language 指向本 fork，
+# 缺 dist 会让 fresh clone 后聚合构建断）；上游的 /dist 排除见 git 历史。
 /test/*.js
 /test/*.d.ts
 /test/*.d.ts.map
