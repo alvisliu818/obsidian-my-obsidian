@@ -1,0 +1,453 @@
+import {
+    Platform,
+    WorkspaceLeaf,
+    Editor,
+    TFile,
+    TAbstractFile,
+    OpenViewState,
+    Workspace,
+} from "obsidian";
+import { EditorView, ViewUpdate } from "@codemirror/view";
+import { Transaction } from "@codemirror/state";
+import { around } from "monkey-around";
+
+import { ScrollGestureAnalyzer } from "@core/ScrollGestureAnalyzer";
+import type { default as ScrollingPlugin } from "@core/main";
+
+/**
+ * Checks whether a given element is scrolled to the top.
+ * @param el The element to check.
+ * @returns True if the element's scrollTop is 0.
+ */
+function isScrolledToTop(el: HTMLElement): boolean {
+    return el.scrollTop == 0;
+}
+
+/**
+ * Checks whether a given element is scrolled to the bottom.
+ * @param el The element to check.
+ * @returns True if the element's scroll position is at or past the bottom.
+ */
+function isScrolledToBottom(el: HTMLElement): boolean {
+    return Math.ceil(el.scrollTop + el.clientHeight) >= el.scrollHeight;
+}
+
+export class Events {
+    private readonly plugin: ScrollingPlugin;
+
+    public readonly scrollAnalyzer = new ScrollGestureAnalyzer();
+
+    private lastTouchX = 0;
+    private lastTouchY = 0;
+
+    private lastWheelEventTime = 0;
+    private lastWheelScrollElement: HTMLElement | null = null;
+
+    /**
+     * Indicates whether Obsidian is opening a link right now.
+     */
+    public isOpeningWithLink = false;
+
+    private skipViewUpdate = false;
+    private shouldSkipNextViewUpdate = false;
+
+    private cursorUpdateHandlers: Set<
+        (editor: Editor, docChanged: boolean, vimModeChanged: boolean) => void
+    > = new Set();
+    private resizeHandlers: Set<() => void> = new Set();
+    private touchHandlers: Set<(event: TouchEvent, deltaX: number, deltaY: number) => void> =
+        new Set();
+    private wheelCancellingHandlers: { callback: (event: Event) => boolean; priority: number }[] =
+        [];
+    private wheelExtendedHandlers: Set<(event: Event, el: HTMLElement) => void> = new Set();
+
+    constructor(plugin: ScrollingPlugin) {
+        this.plugin = plugin;
+
+        const workspace = this.plugin.app.workspace;
+
+        plugin.registerDomEvent(workspace.containerEl, "wheel", this.wheelHandler.bind(this), {
+            capture: true,
+            passive: false,
+        });
+
+        plugin.registerDomEvent(
+            workspace.containerEl,
+            "touchstart",
+            this.touchStartHandler.bind(this),
+            {
+                capture: true,
+                passive: true,
+            },
+        );
+
+        plugin.registerDomEvent(
+            workspace.containerEl,
+            "touchmove",
+            this.touchMoveHandler.bind(this),
+            {
+                capture: true,
+                passive: true,
+            },
+        );
+
+        this.onLayoutReady(() => {
+            // Wait for containerEl before attaching resize observer.
+            const observer = new ResizeObserver(() => {
+                this.resizeHandlers.forEach((callback) => callback());
+            });
+
+            const containerEl = plugin.app.workspace.containerEl;
+            const workspaceTabContainer =
+                containerEl.getElementsByClassName("workspace-tab-container")[0];
+            observer.observe(workspaceTabContainer);
+
+            plugin.register(() => {
+                observer.disconnect();
+            });
+        });
+
+        // Monkey-patch the OpenLinkText function to mark interaction as link use.
+        plugin.register(
+            around(Workspace.prototype, {
+                openLinkText(oldOpenLinkText) {
+                    return async function (
+                        this: Workspace,
+                        linktext: string,
+                        sourcePath: string,
+                        newLeaf?: boolean,
+                        openViewState?: OpenViewState,
+                    ) {
+                        plugin.events.isOpeningWithLink = true;
+
+                        const args = [linktext, sourcePath, newLeaf, openViewState];
+                        const result = await oldOpenLinkText.apply(this, args);
+
+                        plugin.events.isOpeningWithLink = false;
+
+                        return result;
+                    };
+                },
+            }),
+        );
+    }
+
+    /**
+     * Called after all components have been initialized.
+     */
+    public postInit(): void {
+        this.plugin.registerEditorExtension(
+            EditorView.updateListener.of(this.viewUpdateHandler.bind(this)),
+        );
+    }
+
+    /**
+     * Skip next view update.
+     */
+    public skipNextViewUpdate() {
+        this.shouldSkipNextViewUpdate = true;
+    }
+
+    /**
+     * Registers a callback for cursor updates in the editor.
+     * @param callback Called with the editor, whether the activeDocument changed, and whether Vim mode switched.
+     */
+    public onCursorUpdate(
+        callback: (editor: Editor, docChanged: boolean, vimModeChanged: boolean) => void,
+    ): void {
+        this.cursorUpdateHandlers.add(callback);
+    }
+
+    /**
+     * Registers a callback that is triggered when a file is deleted from the vault.
+     * @param callback Receives the deleted file.
+     */
+    public onFileDelete(callback: (file: TAbstractFile) => void): void {
+        this.plugin.registerEvent(this.plugin.app.vault.on("delete", callback));
+    }
+
+    /**
+     * Registers a callback that is triggered when a file is opened in the workspace.
+     * @param callback Receives the opened file, or null if no file is active.
+     */
+    public onFileOpen(callback: (file: TFile | null) => void): void {
+        this.plugin.registerEvent(this.plugin.app.workspace.on("file-open", callback));
+    }
+
+    /**
+     * Registers a callback that is triggered when a file is renamed in the vault.
+     * @param callback Receives the renamed file and its previous path.
+     */
+    public onFileRename(callback: (file: TAbstractFile, oldPath: string) => void): void {
+        this.plugin.registerEvent(this.plugin.app.vault.on("rename", callback));
+    }
+
+    /**
+     * Registers a callback for keydown events.
+     * @param callback Receives the KeyboardEvent.
+     */
+    public onKeyDown(callback: (ev: KeyboardEvent) => void): void {
+        this.plugin.registerDomEvent(this.plugin.getMainDoc(), "keydown", callback, { passive: true });
+    }
+
+    /**
+     * Registers a callback for keyup events.
+     * @param callback Receives the KeyboardEvent.
+     */
+    public onKeyUp(callback: (ev: KeyboardEvent) => void): void {
+        this.plugin.registerDomEvent(this.plugin.getMainDoc(), "keyup", callback, { passive: true });
+    }
+
+    /**
+     * Registers a callback to run once when the workspace layout is ready.
+     * @param callback Function to run after layout initialization.
+     */
+    public onLayoutReady(callback: () => void): void {
+        this.plugin.app.workspace.onLayoutReady(callback);
+    }
+
+    /**
+     * Registers a callback when the active workspace leaf changes.
+     * @param callback Receives the new active leaf or null.
+     */
+    public onLeafChange(callback: (leaf: WorkspaceLeaf | null) => void): void {
+        this.plugin.registerEvent(this.plugin.app.workspace.on("active-leaf-change", callback));
+    }
+
+    /**
+     * Registers a callback for mouseup events.
+     * Also works and fires on mobile.
+     * @param callback Receives the MouseEvent.
+     */
+    public onMouseUp(callback: (ev: MouseEvent) => void): void {
+        this.plugin.registerDomEvent(this.plugin.getMainDoc(), "mouseup", callback, { passive: true });
+    }
+
+    /**
+     * Registers a callback for resize events on the workspace.
+     * @param callback Called whenever a resize is detected.
+     */
+    public onResize(callback: () => void): void {
+        this.resizeHandlers.add(callback);
+    }
+
+    /**
+     * Registers a callback for scroll events anywhere in the activeDocument.
+     * @param callback Receives the scroll Event.
+     */
+    public onScroll(callback: (ev: Event) => void): void {
+        this.plugin.registerDomEvent(this.plugin.getMainDoc(), "scroll", callback, {
+            capture: true,
+            passive: true,
+        });
+    }
+
+    /**
+     * Registers a callback for scroll-end events anywhere in the activeDocument.
+     * @param callback Receives the scrollend Event.
+     */
+    public onScrollEnd(callback: (ev: Event) => void): void {
+        this.plugin.registerDomEvent(this.plugin.getMainDoc(), "scrollend", callback, {
+            capture: true,
+            passive: true,
+        });
+    }
+
+    /**
+     * Registers a callback for touch move events.
+     * @param callback Receives the TouchEvent and the deltaX/deltaY since the last touch event.
+     */
+    public onTouchMove(
+        callback: (event: TouchEvent, deltaX: number, deltaY: number) => void,
+    ): void {
+        this.touchHandlers.add(callback);
+    }
+
+    /**
+     * Registers a callback for wheel events that can cancel further processing.
+     * @param callback Should return true if the event should not be handled further.
+     * @param priority Higher-priority callbacks run first.
+     */
+    public onWheelCancelling(callback: (event: Event) => boolean, priority: number): void {
+        // Append new callback and sort in descending order by priority.
+        this.wheelCancellingHandlers.push({ callback, priority });
+        this.wheelCancellingHandlers.sort((a, b) => b.priority - a.priority);
+    }
+
+    /**
+     * Registers a callback to run on a wheel event along the y-axis, with the
+     * element that would actually scroll. The callback will not run on horizontal
+     * movement, and is skipped entirely if a cancelling handler claims the event
+     * first, so a feature that owns a region of the UI can opt out of it.
+     * @param callback Receives the wheel event and the resolved scrollable element.
+     */
+    public onWheelExtended(callback: (event: Event, el: HTMLElement) => void): void {
+        this.wheelExtendedHandlers.add(callback);
+    }
+
+    /**
+     * Handles touchstart events to record the initial touch position.
+     * @param event The TouchEvent from the DOM.
+     */
+    private touchStartHandler(event: TouchEvent): void {
+        this.lastTouchX = event.touches[0].clientX;
+        this.lastTouchY = event.touches[0].clientY;
+    }
+
+    /**
+     * Handles touchmove events to calculate deltas and invoke registered touch callbacks.
+     * @param event The TouchEvent from the DOM.
+     */
+    private touchMoveHandler(event: TouchEvent): void {
+        const touchX = event.touches[0].clientX;
+        const touchY = event.touches[0].clientY;
+
+        const deltaX = this.lastTouchX - touchX;
+        const deltaY = this.lastTouchY - touchY;
+
+        this.lastTouchX = touchX;
+        this.lastTouchY = touchY;
+
+        for (const callback of this.touchHandlers) {
+            callback(event, deltaX, deltaY);
+        }
+    }
+
+    /**
+     * Handles updates from CodeMirror views, triggering cursor update callbacks.
+     * @param update The ViewUpdate provided by CodeMirror.
+     */
+    private viewUpdateHandler(update: ViewUpdate): void {
+        if (this.isOpeningWithLink) {
+            return;
+        }
+
+        if (this.shouldSkipNextViewUpdate) {
+            this.shouldSkipNextViewUpdate = false;
+            return;
+        }
+
+        // Always cancel if event was caused by mouse down/movement.
+        // This only checks if this update was caused by a mouse down event,
+        // but can't detect mouse up.
+        for (const tr of update.transactions) {
+            const event = tr.annotation(Transaction.userEvent);
+            if (event === "select.pointer") {
+                return;
+            }
+        }
+
+        if (this.skipViewUpdate && !update.docChanged && !update.selectionSet) return;
+        this.skipViewUpdate = true;
+        window.requestAnimationFrame(() => (this.skipViewUpdate = false));
+
+        // Cursor updated in the active editor.
+        const editor = this.plugin.app.workspace.activeEditor?.editor;
+        if (!editor) return;
+
+        // Only proceed if its a cursor or edit event
+        if (!update.selectionSet && !update.docChanged) {
+            return;
+        }
+
+        // Cancel if selection change is irrelevant.
+        // e.g. user copies selected text or changes vim mode.
+        let vimModeSwitch = false;
+        if (!update.docChanged) {
+            const selection = update.state.selection.main;
+            const previousSelection = update.startState.selection.main;
+
+            if (selection.head === previousSelection.head) {
+                if (selection.anchor !== previousSelection.anchor) return; // copy
+            } else if (selection.head === previousSelection.head - 1) {
+                if (previousSelection.from < previousSelection.to) return; // copy downwards in normal mode
+                if (selection.assoc === 0 && previousSelection.assoc === 1) {
+                    // insert -> normal mode
+                    vimModeSwitch = true;
+                }
+            } else if (selection.head === previousSelection.head + 1) {
+                if (selection.assoc === 1 && previousSelection.assoc === 0) {
+                    // normal -> insert mode
+                    vimModeSwitch = true;
+                }
+            }
+        }
+
+        for (const callback of this.cursorUpdateHandlers) {
+            callback(editor, update.docChanged, vimModeSwitch);
+        }
+    }
+
+    /**
+     * Handles wheel events on desktop, invoking cancelling and extended wheel callbacks.
+     * Traverses DOM to find the actual scrollable element and respects scroll bounds.
+     * @param event The WheelEvent from the DOM.
+     */
+    private wheelHandler(event: WheelEvent): void {
+        if (Platform.isMobile) return;
+
+        // Run cancelling callbacks.
+        // As soon as one callback returns true abort handling event.
+        for (const { callback } of this.wheelCancellingHandlers) {
+            if (callback(event)) {
+                event.preventDefault();
+                return;
+            }
+        }
+
+        if (!event.deltaY) return;
+
+        let el: HTMLElement | null = event.target as HTMLElement;
+
+        const now = performance.now();
+        const deltaTime = now - this.lastWheelEventTime;
+        this.lastWheelEventTime = now;
+
+        const isStart = this.scrollAnalyzer.analyzeDelay(deltaTime);
+
+        // Attempt to use cached scroller
+        if (
+            !isStart &&
+            this.lastWheelScrollElement &&
+            (el === this.lastWheelScrollElement || this.lastWheelScrollElement.contains(el)) &&
+            ((event.deltaY < 0 && !isScrolledToTop(this.lastWheelScrollElement)) ||
+                (event.deltaY > 0 && !isScrolledToBottom(this.lastWheelScrollElement)))
+        ) {
+            for (const callback of this.wheelExtendedHandlers) {
+                callback(event, this.lastWheelScrollElement);
+            }
+
+            return;
+        }
+
+        // Traverse DOM to find actual scrollable element
+        while (el && el != activeDocument.body) {
+            const { overflowY } = getComputedStyle(el);
+            if (
+                (overflowY === "auto" || overflowY === "scroll") &&
+                el.scrollHeight > el.clientHeight
+            ) {
+                // Handle nested scroll containers
+                if (isStart) {
+                    if (event.deltaY < 0 && isScrolledToTop(el)) {
+                        el = el.parentElement;
+                        continue;
+                    }
+                    if (event.deltaY > 0 && isScrolledToBottom(el)) {
+                        el = el.parentElement;
+                        continue;
+                    }
+                }
+
+                for (const callback of this.wheelExtendedHandlers) {
+                    callback(event, el);
+                }
+
+                this.lastWheelScrollElement = el;
+                return;
+            }
+
+            el = el.parentElement;
+        }
+    }
+}

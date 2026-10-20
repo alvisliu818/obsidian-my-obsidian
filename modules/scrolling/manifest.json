@@ -1,0 +1,10 @@
+{
+  "id": "scrolling",
+  "name": "Scrolling",
+  "version": "1.4.0",
+  "minAppVersion": "1.13.0",
+  "description": "Keep the cursor centered, disable code wrapping, remember scroll position and more.",
+  "author": "omeyenburg",
+  "authorUrl": "https://github.com/omeyenburg",
+  "isDesktopOnly": false
+}

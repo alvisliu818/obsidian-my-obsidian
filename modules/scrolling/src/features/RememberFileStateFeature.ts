@@ -1,0 +1,867 @@
+import {
+    Debouncer,
+    Editor,
+    EditorRange,
+    FileView,
+    MarkdownView,
+    Notice,
+    Platform,
+    TAbstractFile,
+    TFile,
+    WorkspaceLeaf,
+    debounce,
+    normalizePath,
+    setIcon,
+} from "obsidian";
+import type { Setting, TextComponent } from "obsidian";
+import type { Feature, FeatureSettingsDefinition, ScrollingPlugin } from "@core/Feature";
+import type { CustomRenderContext } from "@core/settings.schema";
+
+interface EphemeralState {
+    timestamp: number;
+    scroll?: number;
+    scrollTop?: number;
+    cursor?: EditorRange;
+}
+
+class FileLeaf extends WorkspaceLeaf {
+    view: FileView;
+}
+
+export class RememberFileStateFeature implements Feature {
+    public readonly settings = {
+        items: [
+            {
+                name: "Mode",
+                desc: "Start at the top/bottom of the file, or restore the cursor or scroll position.",
+                control: {
+                    type: "dropdown",
+                    key: "restoreScrollMode",
+                    defaultValue: "top",
+                    options: {
+                        top: "Start at top (Obsidian's default)",
+                        bottom: "Start at bottom",
+                        cursor: "Restore Cursor position",
+                        scroll: "Restore scroll position",
+                    },
+                },
+            },
+            {
+                name: "Saved positions limit",
+                desc: (): string => {
+                    const count = this.getNumEphemeralStates();
+                    return (
+                        `Number of files to remember scroll positions for. ` +
+                        `Leave empty for unlimited.\n` +
+                        `Currently positions for ${count} file${count === 1 ? "" : "s"} are stored.`
+                    );
+                },
+                control: {
+                    type: "number",
+                    key: "restoreScrollLimit",
+                    defaultValue: -1,
+                    placeholder: "Unlimited",
+                    displayFormat: (value): string => {
+                        return value > 0 ? value.toString() : "";
+                    },
+                    // `null` rejects the edit and keeps the stored value.
+                    parse: (value): number | null => {
+                        const limit = +value;
+                        if (isNaN(limit) || limit.toString().includes(".")) {
+                            return null;
+                        }
+                        return limit <= 0 ? -1 : limit;
+                    },
+                    disabled: (): boolean => {
+                        return this.plugin.settings.restoreScrollMode === "top";
+                    },
+                },
+            },
+            {
+                name: "Keep oldest scroll positions",
+                desc: "When the limit is reached, keep the oldest saved positions instead of the most recent ones (default).",
+                control: {
+                    type: "toggle",
+                    key: "restoreScrollAge",
+                    defaultValue: false,
+                    disabled: (): boolean => {
+                        return this.plugin.settings.restoreScrollMode === "top";
+                    },
+                },
+            },
+            {
+                name: "Enable in PDFs",
+                desc: "Enable restoring position in PDF files.",
+                control: {
+                    type: "toggle",
+                    key: "restoreScrollPdf",
+                    defaultValue: false,
+                    disabled: (): boolean => {
+                        return this.plugin.settings.restoreScrollMode === "top";
+                    },
+                },
+            },
+            {
+                name: "Enable in Bases",
+                desc: "Enable restoring position in Bases.",
+                control: {
+                    type: "toggle",
+                    key: "restoreScrollBases",
+                    defaultValue: false,
+                    disabled: (): boolean => {
+                        return this.plugin.settings.restoreScrollMode === "top";
+                    },
+                },
+            },
+            {
+                name: "Enable for link use",
+                desc: "Enable restoring position when clicking links to files (not headings).",
+                control: {
+                    type: "toggle",
+                    key: "restoreScrollFileLink",
+                    defaultValue: true,
+                    disabled: (): boolean => {
+                        return this.plugin.settings.restoreScrollMode === "top";
+                    },
+                },
+            },
+            {
+                name: "Enable only on launch",
+                desc: "Only restore position once per file per session.",
+                control: {
+                    type: "toggle",
+                    key: "restoreScrollInitialOnly",
+                    defaultValue: false,
+                    disabled: (): boolean => {
+                        return this.plugin.settings.restoreScrollMode === "top";
+                    },
+                },
+            },
+            {
+                name: "Delay after opening a note",
+                desc: "Number of milliseconds to wait before restoring position.\nUse if restoring works unreliably.",
+                control: {
+                    type: "slider",
+                    key: "restoreScrollDelay",
+                    defaultValue: 5,
+                    min: 0,
+                    max: 300,
+                    step: 5,
+                    disabled: (): boolean => {
+                        return this.plugin.settings.restoreScrollMode === "top";
+                    },
+                },
+            },
+            {
+                name: "Store positions in file",
+                desc: "Save positions inside a file to keep them after Obsidian restarts.",
+                aliases: ["Storage file path"],
+                control: {
+                    type: "toggle",
+                    key: "restoreScrollFileEnabled",
+                    defaultValue: true,
+                    disabled: (): boolean => {
+                        return this.plugin.settings.restoreScrollMode === "top";
+                    },
+                },
+            },
+            {
+                name: "Storage file path",
+                desc: "File for persistent storage of scrolling positions across sessions.",
+                control: {
+                    type: "text",
+                    key: "restoreScrollFilePath",
+                    disabled: (): boolean => {
+                        return this.plugin.settings.restoreScrollMode === "top";
+                    },
+                },
+                visible: (): boolean => {
+                    return this.plugin.settings.restoreScrollFileEnabled;
+                },
+                render: (setting, ctx): (() => void) =>
+                    this.renderStatesFilePathRow(setting, ctx),
+            },
+        ],
+    } as const satisfies FeatureSettingsDefinition;
+
+    private plugin!: ScrollingPlugin;
+
+    private ephemeralStates: Record<string, EphemeralState> = {};
+
+    // Number of files that are currently opening.
+    // If atleast one file is opening, no file states will be saved.
+    private numOpeningFiles = 0;
+
+    private storeStateDebounced!: Debouncer<[HTMLElement?, Event?], void>;
+    private writeStatesFileDebounced!: Debouncer<[], void>;
+
+    private openLeafIds = new Set();
+
+    private workspaceInitialized: boolean;
+
+    // Prime numbers :)
+    private readonly STORE_INTERVAL = 97;
+    private readonly FILE_WRITE_INTERVAL = 293;
+
+    async onload(plugin: ScrollingPlugin): Promise<void> {
+        this.plugin = plugin;
+
+        if (plugin.settings.restoreScrollFilePath === undefined) {
+            void plugin.settingsStore.set("restoreScrollFilePath", this.getDefaultStateFilePath());
+        }
+
+        // True when plugin is reloaded.
+        this.workspaceInitialized = this.plugin.app.workspace.layoutReady;
+
+        this.storeStateDebounced = debounce(
+            this.storeFileState.bind(this),
+            this.STORE_INTERVAL,
+            false,
+        );
+
+        this.writeStatesFileDebounced = debounce(
+            this.writeStatesFile.bind(this),
+            this.FILE_WRITE_INTERVAL,
+            true,
+        );
+
+        // TODO: consider simply patching into WorkspaceLeaf.setViewState. It contains info about flashing element
+        // see core/events for monkey patching
+
+        plugin.events.onScroll(this.scrollHandler.bind(this));
+        plugin.events.onMouseUp(this.mouseUpHandler.bind(this));
+        plugin.events.onFileOpen(this.fileOpenHandler.bind(this));
+        plugin.events.onFileDelete(this.fileDeleteHandler.bind(this));
+        plugin.events.onFileRename(this.fileRenameHandler.bind(this));
+        plugin.events.onLayoutReady(this.layoutReadyHandler.bind(this));
+        plugin.events.onLayoutReady(this.cursorUpdateHandler.bind(this));
+
+        // Read the positions file here rather than from the plugin, so this feature
+        // owns its whole startup. `FeatureRegistry.loadAll` awaits `onload`, so the
+        // states are in memory before the feature returns. Deliberately not gated on
+        // `restoreScrollFileEnabled`: having storage turned off should not discard the
+        // file, or re-enabling it later would start from an empty table.
+        await this.loadStatesFile();
+    }
+
+    onunload(): void {}
+
+    /**
+     * Returns the number of stored file states.
+     * Used in the settings menu to display the status.
+     */
+    public getNumEphemeralStates(): number {
+        return Object.keys(this.ephemeralStates).length;
+    }
+
+    /**
+     * Reads the state file on disk into memory.
+     *
+     * Returns without touching the in-memory states when there is no file to read,
+     * so a missing file cannot discard positions this session has already recorded.
+     */
+    public async loadStatesFile(): Promise<void> {
+        const exists = await this.checkStatesFileLoadPath();
+        if (!exists) return;
+        const filePath = this.plugin.settings.restoreScrollFilePath;
+
+        try {
+            const data = await this.plugin.app.vault.adapter.read(filePath);
+            if (data) {
+                this.ephemeralStates = JSON.parse(data);
+            } else {
+                this.ephemeralStates = {};
+            }
+        } catch {
+            console.warn("Failed to load scroll positions file:", filePath);
+            this.ephemeralStates = {};
+        }
+    }
+
+    /**
+     * Returns the valid normalized path or nothing.
+     * Emits notices to the user on success or failure.
+     * Used in the settings menu.
+     * Do not confuse with renameFileHandler.
+     */
+    public async renameStatesFile(newPath: string | null): Promise<string | undefined> {
+        if (!this.plugin.settings.restoreScrollFileEnabled) return;
+
+        if (newPath === null) {
+            new Notice("Path unchanged.");
+            return;
+        }
+
+        // Check empty/invalid paths before normalizing.
+        if (!newPath || newPath.trim() === "" || newPath === "." || newPath === "..") {
+            new Notice("Invalid file path!");
+            return;
+        }
+
+        // Assuming this.plugin.settings.restoreScrollStoreFile is valid
+        const newNormalizedPath = normalizePath(newPath);
+        const oldNormalizedPath = normalizePath(this.plugin.settings.restoreScrollFilePath);
+
+        if (!newNormalizedPath) {
+            new Notice("Invalid file path!");
+            return;
+        }
+
+        const adapter = this.plugin.app.vault.adapter;
+
+        if (!(await this.directoryOfFileExists(newNormalizedPath))) {
+            new Notice(`Directory of file does not exist.`);
+            return;
+        }
+
+        if (await adapter.exists(newNormalizedPath)) {
+            new Notice(`File already exists: ${newNormalizedPath}`);
+            return;
+        }
+
+        if (oldNormalizedPath && (await adapter.exists(oldNormalizedPath))) {
+            try {
+                await adapter.rename(oldNormalizedPath, newNormalizedPath);
+            } catch {
+                new Notice("Invalid file path!");
+                return;
+            }
+        }
+
+        new Notice(`Renamed storage file to: ${newNormalizedPath}`);
+        return newNormalizedPath;
+    }
+
+    /**
+     * Renders the storage path row, which stages edits until they are confirmed.
+     *
+     * Confirming renames the existing positions file first, so a path change can
+     * never orphan the file the user already has. The stored value only moves
+     * once the rename succeeded, which is why this row builds its own DOM
+     * instead of using the declarative text control.
+     * @param setting The row to build the control in.
+     * @param ctx Store access for reading and committing the path.
+     * @returns A cleanup that detaches the listeners this row added.
+     */
+    private renderStatesFilePathRow(setting: Setting, ctx: CustomRenderContext): () => void {
+        // `null` means "no pending change", which is distinct from a staged empty string.
+        let staged: string | null = null;
+        let text!: TextComponent;
+
+        // `ctx.current()` is untyped because the context erases the key/value
+        // correlation; this row is a text control, so anything else means no path.
+        const stored = (): string => {
+            const value = ctx.current();
+            return typeof value === "string" ? value : "";
+        };
+
+        const confirm = async (): Promise<void> => {
+            if (ctx.isDisabled() || staged === null) return;
+
+            const newPath = await this.renameStatesFile(staged);
+            if (newPath === undefined) return;
+
+            staged = null;
+            text.setValue(newPath);
+            ctx.commit(newPath);
+        };
+
+        const discard = (): void => {
+            if (staged === null) return;
+
+            staged = null;
+            text.setValue(stored());
+        };
+
+        setting.addText((component) => {
+            text = component;
+            component.setValue(stored()).onChange((raw: string) => {
+                staged = raw;
+            });
+        });
+
+        const onKeydown = (event: KeyboardEvent): void => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                void confirm();
+            }
+        };
+        text.inputEl.addEventListener("keydown", onKeydown);
+
+        const discardButton = setting.controlEl.createDiv({
+            cls: "clickable-icon extra-setting-button",
+        });
+        discardButton.setAttr("aria-label", "Discard path change");
+        setIcon(discardButton, "reset");
+        discardButton.onclick = discard;
+
+        const confirmButton = setting.controlEl.createEl("button", { text: "Confirm" });
+        confirmButton.onclick = (): void => void confirm();
+        confirmButton.disabled = ctx.isDisabled();
+
+        return () => {
+            text.inputEl.removeEventListener("keydown", onKeydown);
+            discardButton.onclick = null;
+            confirmButton.onclick = null;
+        };
+    }
+
+    /**
+     * On scroll event.
+     * Requests to save the file scroll state & store it in a file.
+     */
+    private scrollHandler(event: Event): void {
+        if (!this.workspaceInitialized || this.numOpeningFiles > 0) return;
+
+        this.storeStateDebounced(event.target as HTMLElement);
+        this.writeStatesFileDebounced();
+    }
+
+    /**
+     * On mouse up event.
+     */
+    private mouseUpHandler(event: MouseEvent) {
+        this.storeStateDebounced(event.target as HTMLElement);
+    }
+
+    /**
+     * On cursor update.
+     */
+    private cursorUpdateHandler(_editor: Editor, _docChanged: boolean, vimModeChanged: boolean) {
+        if (vimModeChanged) return;
+        this.storeStateDebounced();
+    }
+
+    /**
+     * On file open.
+     * Restores file state of the opened file.
+     * Does not restore on initial load.
+     * Does not restore if the same file is opened in the same split already.
+     * Does not restore if heading link is used or links are disabled and any link is used.
+     * Might break if the same file is opened twice in different tabs simultaneously .
+     */
+    private fileOpenHandler(_file: TFile): void {
+        // Do not restore on initial load. Responsiblity of layoutReadyHandler.
+        if (!this.workspaceInitialized) return;
+        if (this.plugin.settings.restoreScrollInitialOnly) return;
+
+        // Do not restore if heading link/search is used.
+        // BUG: is-flashing might be still active on an element in the previous view
+        // NOTE: can be avoided by hooking into WorkspaceLeaf.setViewState directly
+        const headingLinkUsed = this.plugin.app.workspace.containerEl.querySelector(".is-flashing");
+        if (headingLinkUsed) return;
+
+        // Do not restore if any link was used and links are disabled.
+        if (this.plugin.events.isOpeningWithLink && !this.plugin.settings.restoreScrollFileLink)
+            return;
+
+        // Mode top means feature is disabled.
+        if (this.plugin.settings.restoreScrollMode === "top") return;
+
+        // Get the currently opened leaf
+        let fileLeaf = (this.plugin.app.workspace.getActiveFileView()?.leaf as FileLeaf) || null;
+        if (fileLeaf === null) return;
+
+        // File-open event is invoked on switching tabs!
+        // This keeps track of all currently opened leafs.
+        // Might make the isFileOpenedInSplit redundant.
+        let isOpened = this.openLeafIds.has(this.getFileId(fileLeaf.view));
+        this.openLeafIds.clear();
+        this.plugin.app.workspace.iterateRootLeaves((leaf) => {
+            if (leaf.view instanceof FileView) this.openLeafIds.add(this.getFileId(leaf.view));
+        });
+        if (isOpened) return;
+
+        // Check whether the same file is already opened in other tab of the same split.
+        if (this.isFileOpenedInSplit(fileLeaf)) return;
+
+        // Must be reset in iter!
+        this.numOpeningFiles += 1;
+
+        // Restore state as soon as file finished loading.
+        let numFrames = 0;
+        const MAX_ATTEMPTS = 100;
+        const iter = () => {
+            // Check again if heading link/search was used, in case file loads slowly.
+            const headingLinkUsed =
+                this.plugin.app.workspace.containerEl.querySelector(".is-flashing");
+            if (headingLinkUsed) return;
+
+            if (fileLeaf && fileLeaf.working && numFrames++ < MAX_ATTEMPTS) {
+                window.requestAnimationFrame(iter);
+            } else {
+                this.restoreFileState(fileLeaf.view);
+
+                // File is opened and does not prohibit state saving anymore.
+                // Maybe add some edge case handling.
+                this.numOpeningFiles -= 1;
+            }
+        };
+        iter();
+
+        this.writeStatesFileDebounced();
+    }
+
+    /**
+     * On Obsidian layout ready or plugin reload.
+     * Restores visible leaves across all splits.
+     */
+    private layoutReadyHandler() {
+        // Skip if plugin is reloaded.
+        if (this.workspaceInitialized) return;
+
+        this.plugin.app.workspace.iterateRootLeaves((leaf) => {
+            if (leaf.view instanceof FileView) {
+                this.restoreFileState(leaf.view);
+            }
+        });
+
+        // Mark as initialized, because Workspace.layoutReady is set to true too early.
+        this.workspaceInitialized = true;
+    }
+
+    /**
+     * On file deletion.
+     * Updates file cache.
+     */
+    private fileDeleteHandler(file: TAbstractFile): void {
+        delete this.ephemeralStates[file.path];
+    }
+
+    /**
+     * On file rename.
+     * Updates file cache.
+     * Marks file as not to be restored.
+     * Do not confuse with renameStatesFile.
+     */
+    private fileRenameHandler(file: TAbstractFile, old: string): void {
+        this.ephemeralStates[file.path] = this.ephemeralStates[old];
+        delete this.ephemeralStates[old];
+    }
+
+    /**
+     * Do not confuse with renameStatesFile.
+     */
+    private getDefaultStateFilePath(): string {
+        return this.plugin.manifest.dir + "/scrolling-positions.json";
+    }
+
+    /**
+     * Checks whether the file of the specified leaf is already opened in a different tab of the same split.
+     */
+    private isFileOpenedInSplit(leaf: WorkspaceLeaf): boolean {
+        if (!(leaf.view instanceof FileView)) return false;
+
+        for (let sibling of leaf.parentSplit.children) {
+            if (
+                !(sibling instanceof WorkspaceLeaf) ||
+                !(sibling.view instanceof FileView) ||
+                sibling.view === leaf.view
+            ) {
+                continue;
+            }
+            if (leaf.view.file.path == sibling.view.file.path) return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Restores the file state without extra checks.
+     * Whether the state should be restored must be decided in advance.
+     */
+    private restoreFileState(view: FileView): void {
+        // Mode top means feature is disabled.
+        if (this.plugin.settings.restoreScrollMode === "top") return;
+
+        let cursor: EditorRange, scroll: number, scrollTop: number;
+        if (this.plugin.settings.restoreScrollMode === "bottom") {
+            // For bottom mode use same logic as for scroll mode.
+            scroll = Infinity;
+            scrollTop = Infinity;
+        } else {
+            // Read state of file with split id.
+            const fileId = this.getFileId(view);
+            const ephemeralState = this.ephemeralStates[fileId];
+            if (!ephemeralState) return;
+            ({ cursor, scroll, scrollTop } = ephemeralState);
+        }
+
+        if (view instanceof MarkdownView && view.getMode() === "source" && (scroll || cursor)) {
+            if (cursor && this.plugin.settings.restoreScrollMode === "cursor") {
+                view.editor.setCursor(cursor.from);
+                view.setEphemeralState({ cursor, scroll, focus: true });
+                view.editor.scrollIntoView(cursor, true);
+                window.setTimeout(() => {
+                    view.setEphemeralState({ cursor, focus: true });
+                    view.editor.scrollIntoView(cursor, true);
+                }, this.plugin.settings.restoreScrollDelay);
+            } else {
+                view.setEphemeralState({ scroll });
+                window.setTimeout(() => {
+                    view.setEphemeralState({ scroll });
+                }, this.plugin.settings.restoreScrollDelay);
+            }
+        } else if (scrollTop) {
+            const scroller = this.getScroller(view);
+            if (!scroller) return;
+
+            // Bases content loads in late.
+            let numFrames = 0;
+            const MAX_ATTEMPTS = 100;
+            const iter = () => {
+                scroller.scrollTop = scrollTop;
+
+                if (scroller.scrollTop !== scrollTop && numFrames++ < MAX_ATTEMPTS) {
+                    window.requestAnimationFrame(iter);
+                }
+            };
+            iter();
+        }
+    }
+
+    /**
+     * Returns the scroller Element for pdf files, bases and markdown previews.
+     * Markdown source must be checked and handled separately.
+     * Pdf is only enabled on mobile.
+     */
+    private getScroller(view: FileView): HTMLElement | null {
+        switch (view.getViewType()) {
+            case "markdown":
+                return view.containerEl.querySelector(".markdown-preview-view");
+            case "pdf":
+                if (!Platform.isMobile || !this.plugin.settings.restoreScrollPdf) return null;
+                return view.containerEl.querySelector(".pdf-viewer-container");
+            case "bases":
+                if (!this.plugin.settings.restoreScrollBases) return null;
+                return view.containerEl.querySelector(".bases-view");
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * Checks asynchronously whether the directory of a file path exists.
+     */
+    private async directoryOfFileExists(filePath: string): Promise<boolean> {
+        const lastSlashIndex = filePath.lastIndexOf("/");
+        if (lastSlashIndex === -1) {
+            return true;
+        }
+        const dirPath = filePath.substring(0, lastSlashIndex);
+        return await this.plugin.app.vault.adapter.exists(dirPath);
+    }
+
+    /**
+     * Validates or updates the path to the storage file on disk for writing (not reading).
+     * Attempts "scrolling" and "obsidian-scrolling" as fallback directory names of this plugin.
+     */
+    private async checkStatesFileWritePath(): Promise<void> {
+        // Check saved path
+        if (await this.directoryOfFileExists(this.plugin.settings.restoreScrollFilePath)) return;
+
+        // Check default path
+        let default_path = this.getDefaultStateFilePath();
+        if (await this.directoryOfFileExists(default_path)) {
+            await this.plugin.settingsStore.set("restoreScrollFilePath", default_path);
+            return;
+        }
+    }
+
+    /**
+     * Updates the state file path.
+     * Writes the state file on disk asynchronously.
+     *  TODO: should write to a temporary file to avoid interrupt corruptions.
+     */
+    private async writeStatesFile(): Promise<void> {
+        if (!this.plugin.settings.restoreScrollFileEnabled) return;
+
+        await this.checkStatesFileWritePath();
+        const filePath = this.plugin.settings.restoreScrollFilePath;
+
+        try {
+            const data = JSON.stringify(this.ephemeralStates);
+            await this.plugin.app.vault.adapter.write(filePath, data);
+        } catch {
+            new Notice("Failed to write scroll positions file. Disabling disk storage.");
+            console.error("Failed to write scroll positions file:", filePath);
+            await this.plugin.settingsStore.set("restoreScrollFileEnabled", false);
+        }
+    }
+
+    /**
+     * Validates or updates the path to the storage file on disk for reading (not writing).
+     * Attempts "scrolling" and "obsidian-scrolling" as fallback directory names of this plugin.
+     */
+    private async checkStatesFileLoadPath(): Promise<boolean> {
+        // Check saved path
+        if (await this.plugin.app.vault.adapter.exists(this.plugin.settings.restoreScrollFilePath))
+            return true;
+
+        // Check default path
+        let default_path = this.getDefaultStateFilePath();
+        if (await this.directoryOfFileExists(default_path)) {
+            await this.plugin.settingsStore.set("restoreScrollFilePath", default_path);
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Get id of the split that contains a given leaf.
+     * Returns a string with the nested split indices concatinated with -.
+     * Returns an empty string for the zero indexed leaf.
+     * Example: '1-0-2'
+     */
+    private getSplitIdOfLeaf(leaf: WorkspaceLeaf): string {
+        /*
+         * Example hierarchy:
+         *
+         * [container leaf]
+         *   [container leaf]
+         *     [tab leaf]
+         *     [tab leaf]
+         *   [container leaf]
+         *     [container leaf]
+         *       [tab leaf]
+         *       [tab leaf]
+         *     [container leaf]
+         *       [tab leaf]
+         *       [tab leaf]
+         *
+         * We expect the input leaf to be a tab. The parent of the leaf is a container.
+         */
+
+        if (!leaf?.parentSplit?.parentSplit) return "";
+
+        const path: number[] = [];
+        let current = leaf.parentSplit;
+
+        while (current.parentSplit) {
+            path.unshift(current.parentSplit.children.indexOf(current));
+            current = current.parentSplit;
+        }
+
+        if (path.every((index) => index === 0)) return "";
+
+        return path.join("-");
+    }
+
+    /**
+     * Returns the file id based on the file path and split id.
+     */
+    private getFileId(view: FileView): string {
+        const splitId = this.getSplitIdOfLeaf(view.leaf);
+        if (splitId === "") {
+            return view.file.path;
+        } else {
+            return view.file.path + "#" + splitId;
+        }
+    }
+
+    /**
+     * Checks and saves current scroll & cursor position in state cache.
+     * Discards old states if number of stored states is limited.
+     */
+    private storeFileState(el?: Element, _event?: Event): void {
+        const mode = this.plugin.settings.restoreScrollMode;
+        if (mode === "top" || mode === "bottom") return;
+
+        if (!this.workspaceInitialized || this.numOpeningFiles > 0) return;
+
+        // If element is provided, find matching view. Otherwise use active view.
+        // Not active leaves can be scrolled.
+        // Blocked while loading (leaf.working) or not rendered (leaf.width is zero).
+        let view: FileView = null;
+        if (el) {
+            this.plugin.app.workspace.iterateRootLeaves((leaf) => {
+                if (
+                    !leaf.working &&
+                    leaf.width &&
+                    leaf.view instanceof FileView &&
+                    leaf.view.containerEl.contains(el)
+                ) {
+                    view = leaf.view;
+                }
+            });
+        } else {
+            view = this.plugin.app.workspace.getActiveViewOfType(FileView);
+        }
+        if (!view) return;
+
+        const fileId = this.getFileId(view);
+
+        const timestamp = Date.now();
+
+        if (view instanceof MarkdownView && view.getMode() == "source") {
+            const scrollTop = view.editor.getScrollInfo().top;
+            const { cursor, scroll } = view.getEphemeralState() as {
+                cursor?: EditorRange;
+                scroll?: number;
+            };
+
+            // This function is also invoked on file load when using the file tree.
+            // Simple to filter out by checking for undefined.
+            if (cursor === undefined || scroll === undefined) return;
+
+            this.ephemeralStates[fileId] = {
+                timestamp,
+                cursor,
+                scroll,
+                scrollTop,
+            };
+        } else {
+            const scrollTop = this.getScroller(view)?.scrollTop;
+            if (scrollTop) this.ephemeralStates[fileId] = { timestamp, scrollTop };
+        }
+
+        if (this.plugin.settings.restoreScrollAge) {
+            this.discardNewStates();
+        } else {
+            this.discardOldStates();
+        }
+    }
+
+    /**
+     * Limits the number of stored file states by timestamp and discards the oldest.
+     */
+    private discardOldStates() {
+        const entries = Object.entries(this.ephemeralStates);
+        if (
+            this.plugin.settings.restoreScrollLimit <= 0 ||
+            entries.length <= this.plugin.settings.restoreScrollLimit
+        )
+            return;
+
+        entries.sort(([, a], [, b]) => b.timestamp - a.timestamp);
+
+        this.ephemeralStates = Object.fromEntries(
+            entries.slice(0, this.plugin.settings.restoreScrollLimit),
+        );
+    }
+
+    /**
+     * Limits the number of stored file states by timestamp and discards the newest.
+     * but will allow existing file states to be updated.
+     */
+    private discardNewStates() {
+        const entries = Object.entries(this.ephemeralStates);
+        const limit = this.plugin.settings.restoreScrollLimit;
+
+        if (limit <= 0 || entries.length <= limit) return;
+
+        entries.sort(([, a], [, b]) => a.timestamp - b.timestamp);
+
+        const oldestStates = entries.slice(0, limit);
+        const newestStates = entries.slice(limit);
+
+        // Update states of existing old files to register new scroll positions
+        const statesToKeep = new Map(oldestStates);
+        for (const [fileTitle, state] of newestStates) {
+            if (statesToKeep.has(fileTitle)) statesToKeep.set(fileTitle, state);
+        }
+
+        this.ephemeralStates = Object.fromEntries(statesToKeep.entries());
+    }
+}
