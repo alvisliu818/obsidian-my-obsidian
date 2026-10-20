@@ -40,6 +40,7 @@ import SaveControlPlugin from "../modules/save-control/src/main";
 import OpenTabSettingsPlugin from "../modules/open-tab-settings/src/main";
 import AudioRecorderPlugin from "../modules/audio-recorder/src/main";
 import MediaJournalPlugin from "../modules/media-journal/src/main";
+import MusicPlayerPlugin from "../modules/music-player/src/main";
 import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
 import { registerFreeExtensions } from "./extensionRegistry";
 
@@ -195,6 +196,20 @@ export default class MyObsidianPlugin extends Plugin {
 				"侧栏里的录像/录屏/录音机：三档画质、画中画预览、计时与暂停续录，录完的 .webm 存进库并可自动嵌入当前笔记（或指定笔记）；嵌入后的视频能拖拽改宽度并写回原文。上游 Alaxanalax10（0-BSD）。",
 			desktopOnly: true,
 			cls: MediaJournalPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Third-party (TracingOrigins / Kevin, MIT), kept whole — see
+			// modules/music-player/NOTICE. React UI builds through the same
+			// esbuild (tsx loader + node-shim overrides for its mobile polyfills).
+			id: "music-player",
+			// Same id before and after the merge: keeps the real upstream id
+			// alive in the plugin table (same precedent as material-icon-theme).
+			legacyId: "music-player",
+			name: "my Music Player",
+			summary:
+				"侧栏音乐播放器：扫描库内音频按艺术家/专辑整理，歌词滚动与卡拉OK逐字、播放队列与收藏、封面自动匹配，库外文件不支持。上游 TracingOrigins（MIT）。",
+			desktopOnly: false,
+			cls: MusicPlayerPlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 

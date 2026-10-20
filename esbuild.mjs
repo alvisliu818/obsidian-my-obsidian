@@ -186,6 +186,35 @@ const importGlobPlugin = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// music-player: buffer/events/process/string_decoder 打包而非 external。
+//
+// 上游 esbuild 配置特意把这四个（含 node: 前缀写法）从 builtin external 里
+// 摘出来打进 bundle，让 music-metadata 这类库的 require('process/')、
+// require('buffer') 在移动端（无 nodeIntegration）也能工作。聚合的 external
+// 列表是全局的，罩不到模块粒度 —— 所以用 onResolve 按 importer 路径覆盖：
+// 只对 modules/music-player/ 下的导入返回 npm shim 包的真实路径（进 bundle），
+// 其余 importer 返回 undefined 走默认解析（维持 external 语义不变）。
+// ---------------------------------------------------------------------------
+const musicPlayerRequire = createRequire(
+  path.resolve("modules/music-player/package.json"),
+);
+const NODE_SHIM_RE = /^(node:)?(buffer|events|process|string_decoder)$/;
+const musicPlayerShimsPlugin = {
+  name: "music-player-node-shims",
+  setup(build) {
+    build.onResolve({ filter: NODE_SHIM_RE }, (args) => {
+      if (!args.importer.split(path.sep).join("/").startsWith("modules/music-player/"))
+        return undefined;
+      try {
+        return { path: musicPlayerRequire.resolve(args.path.replace(/^node:/, "")) };
+      } catch {
+        return undefined; // 解析不到就交回默认流程（external），构建期会再报错定位
+      }
+    });
+  },
+};
+
 const context = await esbuild.context({
   banner: { js: banner },
   entryPoints: ["src/main.ts"],
@@ -211,7 +240,7 @@ const context = await esbuild.context({
     // ollama 等包用 `node:fs` 带前缀的写法，裸名列表罩不住
     ...builtins.map((m) => `node:${m}`),
   ],
-  plugins: [cmBundlePlugin, sveltePlugin, dexiePatchPlugin, importGlobPlugin],
+  plugins: [cmBundlePlugin, sveltePlugin, dexiePatchPlugin, importGlobPlugin, musicPlayerShimsPlugin],
   // Monaco 的 codicon.css 引用 .ttf 字体(图标字形)。内联成 dataurl:图标
   // 只有几 KB,而少这一条整个构建会以 "No loader is configured for .ttf" 失败。
   // (与独立插件 obsidian-logseq 的 esbuild.mjs 同款配置。)
@@ -219,6 +248,10 @@ const context = await esbuild.context({
     ".ttf": "dataurl",
     ".woff": "dataurl",
     ".woff2": "dataurl",
+    // music-player: React 组件入口（tsx）+ 组件内 css import（样式统一走根
+    // styles.css 的 Music Player 分段，JS 侧按上游同款空模块处理，不产 main.css）
+    ".tsx": "tsx",
+    ".css": "empty",
   },
   define: {
     // wa-sqlite's Emscripten glue reads import.meta.url to locate its wasm;
