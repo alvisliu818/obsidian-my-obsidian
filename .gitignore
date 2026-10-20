@@ -26,3 +26,6 @@ modules/*/tests/**/_probe-*.mjs
 
 # ts 增量构建信息(各模块 tsconfig.tsbuildinfo)
 *.tsbuildinfo
+
+# e2e 探针输出日志（重定向 .out，配合 _*.mjs 探针）
+tests/e2e/_*.out

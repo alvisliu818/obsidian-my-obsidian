@@ -351,10 +351,21 @@ export class TimestampManager {
         return lastMedia;
     }
 
-    /** 按嵌入链接反查视图内的媒体元素（显式绑定的落地） */
+    /** 按嵌入链接反查视图内的媒体元素（显式绑定的落地）。
+     *  只认当前可见渲染区里的媒体：MarkdownView 内容区同时挂着预览与 CM6
+     *  编辑器两个渲染器，不可见那个里的嵌入是「幽灵副本」（Live Preview
+     *  也会渲染嵌入），按文档序取第一个会激活到幽灵上。吸附中的媒体被搬进
+     *  sticky 层（view-content 下），同样可见，一并纳入。 */
     private findMediaByFile(container: HTMLElement, file: TFile): HTMLMediaElement | null {
         const note = this.findNoteForElement(container) ?? this.app.workspace.getActiveFile();
-        for (const media of Array.from(container.querySelectorAll<HTMLMediaElement>("audio, video"))) {
+        const candidates: HTMLMediaElement[] = [
+            ...this.visibleRoot(container).querySelectorAll<HTMLMediaElement>("audio, video"),
+        ];
+        for (const layer of Array.from(container.querySelectorAll<HTMLElement>(".tsp-sticky-media-layer"))) {
+            candidates.push(...layer.querySelectorAll<HTMLMediaElement>("audio, video"));
+        }
+
+        for (const media of candidates) {
             if (media.closest(".tsp-floating-player")) continue;
             const src = media.closest<HTMLElement>(".internal-embed, .media-embed")?.getAttribute("src")
                 ?? media.getAttribute("src");
@@ -370,6 +381,15 @@ export class TimestampManager {
         return null;
     }
 
+    /** 当前可见的渲染区根节点（预览 / 源码编辑器二者之一，另一个是幽灵） */
+    private visibleRoot(container: HTMLElement): HTMLElement {
+        for (const sel of [".markdown-preview-view", ".markdown-source-view"]) {
+            const el = container.querySelector<HTMLElement>(sel);
+            if (el && el.offsetParent !== null) return el;
+        }
+        return container;
+    }
+
     /** 查找包含目标元素的 Markdown 视图所属笔记（分屏友好） */
     private findNoteForElement(el: Element): TFile | null {
         for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
@@ -380,10 +400,11 @@ export class TimestampManager {
     }
 
     private getTimestampsForMedia(container: HTMLElement, media: HTMLMediaElement): HTMLElement[] {
-        // 显式绑定：同一别名的时间戳归为一段（与文档顺序无关）
+        // 显式绑定：同一别名的时间戳归为一段（与文档顺序无关）。
+        // 同样只取可见渲染区里的按钮——隐藏编辑器里的装饰副本是幽灵。
         const alias = this.mediaAliases.get(media);
         if (alias) {
-            return Array.from(container.querySelectorAll<HTMLElement>(
+            return Array.from(this.visibleRoot(container).querySelectorAll<HTMLElement>(
                 `.tsp-timestamp[data-media-id="${alias}"]`,
             ));
         }
@@ -716,6 +737,21 @@ export class TimestampManager {
             return;
         }
         this.adoptIntoFloating(media, mediaType);
+    }
+
+    /**
+     * 活跃媒体是否已脱离可见渲染区、需要救援：
+     *  - 被重渲染 / CM 虚拟化拆走（isConnected=false），或
+     *  - 所在渲染器被模式切换隐藏（Obsidian 切模式只切 display，不拆 DOM）
+     * 暂停中的媒体不救（用户主动停的，切回来还在原地）。
+     */
+    public needsRescue(): boolean {
+        const media = this.activeMedia;
+        if (!media || media.paused) return false;
+        if (media.closest(".tsp-floating-player")) return false;
+        if (!media.isConnected) return true;
+        const renderer = media.closest<HTMLElement>(".markdown-preview-view, .markdown-source-view");
+        return renderer !== null && renderer.offsetParent === null;
     }
 
     private adoptIntoFloating(media: HTMLMediaElement, mediaType: MediaType): void {

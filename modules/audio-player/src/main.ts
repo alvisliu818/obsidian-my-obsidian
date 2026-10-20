@@ -84,6 +84,8 @@ export default class TimestampPlayerPlugin extends Plugin {
             this.app.workspace.on("layout-change", () => {
                 this.stickyManager.scan();
                 this.instrumentStickyToggle();
+                // 模式切换只切渲染器 display（不拆 DOM），也在这里检测救援
+                this.checkActiveMediaDisconnect();
             })
         );
 
@@ -214,19 +216,17 @@ export default class TimestampPlayerPlugin extends Plugin {
     }
 
     /**
-     * 活跃媒体被重渲染 / CM 虚拟化拆走且仍在播放 → 按切页行为处理
-     * （continue = 收养进悬浮播放器续播）。延迟一个 tick 复核，
-     * 避免节点被临时搬移又被放回时误判。
+     * 活跃媒体脱离可见渲染区（被重渲染 / CM 虚拟化拆走，或所在渲染器被
+     * 模式切换隐藏）且仍在播放 → 按切页行为处理（continue = 收养进悬浮
+     * 播放器续播）。延迟一个 tick 复核，避免节点被临时搬移又被放回时误判。
      */
     private checkActiveMediaDisconnect() {
-        const media = this.timestampManager.activeMediaElement;
-        if (!media || media.paused || media.isConnected) return;
+        if (!this.timestampManager.needsRescue()) return;
         if (this.disconnectCheckScheduled) return;
         this.disconnectCheckScheduled = true;
         window.setTimeout(() => {
             this.disconnectCheckScheduled = false;
-            const current = this.timestampManager.activeMediaElement;
-            if (!current || current.paused || current.isConnected) return;
+            if (!this.timestampManager.needsRescue()) return;
             this.timestampManager.handleDisconnect();
         }, 0);
     }
