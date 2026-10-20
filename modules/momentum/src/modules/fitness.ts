@@ -1,0 +1,584 @@
+import { PAContext } from "../context";
+import { Exercise, ExerciseKind, Split, Workout, WorkoutExercise, DEFAULT_SPLITS } from "../types";
+import { ConfirmModal, FieldSpec, FormModal, toast, appendSidebarBtn } from "../ui";
+import { todayLocal, ymd } from "../util";
+import { drawRing, drawLineChart, LineSeries } from "../charts";
+import { computePace } from "../data";
+
+const SERIES_COLORS = ["#7c3aed", "#f59e0b", "#16a34a", "#3b82f6", "#ec4899", "#0ea5e9", "#ef4444", "#10b981", "#a855f7"];
+
+/** Renders the Fitness page: monthly rings, workout plan, stats, calendar, weight progress and an active-workout flow. */
+export class FitnessModule {
+  private ctx: PAContext;
+  private selectedSplit: string | null = null; // open workout (edit mode)
+  private workoutActive = false;                // timer running / logging session
+  private selectedDate: string | null = null;  // calendar day detail
+  private weightSplit = "A";                    // weight-progress chart
+  private startTime: number | null = null;
+  private pastDuration = 0;             // session duration (min) for the no-timer "log for a past date" flow
+  private checked = new Set<string>();
+  private timerId: number | null = null;
+  private timerEl: HTMLElement | null = null;
+  private calMonth: number;
+  private calYear: number;
+
+  constructor(ctx: PAContext) {
+    this.ctx = ctx;
+    const now = new Date();
+    this.calMonth = now.getMonth();
+    this.calYear = now.getFullYear();
+    this.selectedDate = todayLocal(); // show today's log by default
+  }
+
+  destroy(): void { this.stopTimer(); }
+  private stopTimer(): void { if (this.timerId != null) { window.clearInterval(this.timerId); this.timerId = null; } }
+
+  private getSplits(): Split[] {
+    const map = new Map<string, Split>();
+    DEFAULT_SPLITS.forEach((s) => map.set(s.id, { ...s }));
+    this.ctx.store.loadSplits().forEach((s) => map.set(s.id, s));
+    this.ctx.config.customSplits.forEach((s) => map.set(s.id, s));
+    return Array.from(map.values());
+  }
+
+  render(root: HTMLElement): void {
+    this.stopTimer();
+    root.empty();
+
+    const exercises = this.ctx.store.loadExercises();
+    const workouts = this.ctx.store.loadWorkouts();
+    const gymLog = new Set(workouts.map((w) => w.date));
+
+    this.renderHeader(root, workouts);
+    this.renderStats(root, workouts, gymLog);
+
+    const cols = root.createDiv({ cls: "pa-two-col" });
+    this.renderCalendar(cols, workouts);
+    this.renderWeightProgress(cols, exercises, workouts);
+    this.renderCardioProgress(cols, exercises, workouts);
+
+    this.renderWorkoutPlan(root, exercises);
+    if (this.selectedSplit) this.renderWorkoutEditor(root, exercises);
+
+    if (this.selectedDate) this.renderDayDetail(root, workouts);
+  }
+
+  // ---- Header with 3 monthly rings ----
+  private renderHeader(root: HTMLElement, workouts: Workout[]): void {
+    const head = root.createDiv({ cls: "pa-ht-header" });
+    const left = head.createDiv();
+    left.createDiv({ text: "🏋️ Fitness", cls: "pa-h1" });
+    left.createDiv({ text: "Workouts & progress", cls: "pa-muted" });
+    appendSidebarBtn(left, this.ctx.openSidePanel);
+
+    const rings = head.createDiv({ cls: "pa-ht-rings" });
+    const now = new Date();
+    const monthAbbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    for (let m = 2; m >= 0; m--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - m, 1);
+      const y = d.getFullYear();
+      const mon = d.getMonth();
+      const prefix = `${y}-${String(mon + 1).padStart(2, "0")}`;
+      const isCurrent = m === 0;
+      const daysElapsed = isCurrent ? now.getDate() : new Date(y, mon + 1, 0).getDate();
+      const workoutDays = new Set(workouts.filter((w) => w.date.startsWith(prefix)).map((w) => w.date)).size;
+      const pct = daysElapsed ? Math.round((workoutDays / daysElapsed) * 100) : 0;
+      const color = pct >= 70 ? "#16a34a" : pct >= 30 ? "#7c3aed" : "#d97706";
+      drawRing(rings, pct, color, `${monthAbbr[mon]} ${String(y).slice(2)} · ${workoutDays}/${daysElapsed}d`, 58);
+    }
+  }
+
+  // ---- Workout plan cards ----
+  private renderWorkoutPlan(root: HTMLElement, exercises: Exercise[]): void {
+    const splits = this.getSplits();
+    const panel = root.createDiv({ cls: "pa-panel" });
+    panel.createEl("h3", { text: `📋 Workout Plan — ${splits.length} slots · tap a card to edit`, cls: "pa-panel-title" });
+
+    const grid = panel.createDiv({ cls: "pa-plan-grid" });
+    splits.forEach((s) => {
+      const exs = exercises.filter((e) => e.split === s.id);
+      const card = grid.createDiv({ cls: "pa-plan-card pa-clickable" + (this.selectedSplit === s.id ? " on" : "") });
+      card.onclick = () => {
+        if (this.selectedSplit === s.id) { this.endWorkout(); }
+        else { this.selectedSplit = s.id; this.weightSplit = s.id; this.workoutActive = false; this.startTime = null; this.checked.clear(); }
+        this.ctx.refresh();
+      };
+      const ch = card.createDiv({ cls: "pa-plan-head" });
+      ch.createSpan({ text: `${s.id} - ${s.name} (${exs.length} ex)`, cls: "pa-plan-title" });
+      const listEl = card.createDiv({ cls: "pa-plan-list" });
+      if (!exs.length) listEl.createDiv({ cls: "pa-muted", text: "No exercises" });
+      else exs.forEach((ex) => listEl.createDiv({ cls: "pa-plan-ex", text: `${ex.name} — ${ex.sets}${ex.weight ? ` · ${ex.weight}kg` : ""}` }));
+    });
+  }
+
+  private endWorkout(): void { this.stopTimer(); this.selectedSplit = null; this.workoutActive = false; this.startTime = null; this.pastDuration = 0; this.checked.clear(); }
+
+  // ---- Stats ----
+  private renderStats(root: HTMLElement, workouts: Workout[], gymLog: Set<string>): void {
+    const total = workouts.length;
+    const last = workouts.length ? workouts[workouts.length - 1].date : "—";
+    let streak = 0;
+    for (let i = 0; i < 60; i++) { const d = new Date(); d.setDate(d.getDate() - i); if (gymLog.has(ymd(d))) streak++; else if (i > 0) break; }
+    const durations = workouts.map((w) => w.duration).filter((d) => d > 0);
+    const avg = durations.length ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length) : 0;
+
+    const row = root.createDiv({ cls: "pa-stats-row" });
+    const stat = (label: string, value: string) => {
+      const c = row.createDiv({ cls: "pa-stat" });
+      c.createDiv({ text: value, cls: "pa-stat-value" });
+      c.createDiv({ text: label, cls: "pa-stat-label" });
+    };
+    stat("🏋️ SESSIONS", String(total));
+    stat("🔥 STREAK", String(streak));
+    stat("⏱ AVG MIN", String(avg));
+    stat("📅 LAST", last !== "—" ? last.slice(5) : "—");
+  }
+
+  // ---- Calendar ----
+  private renderCalendar(root: HTMLElement, workouts: Workout[]): void {
+    const splitsByDay = new Map<string, string[]>();
+    workouts.forEach((w) => {
+      const arr = splitsByDay.get(w.date) || [];
+      if (!arr.includes(w.split)) arr.push(w.split);
+      splitsByDay.set(w.date, arr);
+    });
+
+    const card = root.createDiv({ cls: "pa-panel" });
+    card.createEl("h3", { text: "📅 Workout calendar", cls: "pa-panel-title" });
+    const header = card.createDiv({ cls: "pa-cal-head" });
+    const prev = header.createEl("button", { text: "←", cls: "pa-icon-btn" });
+    header.createSpan({ text: new Date(this.calYear, this.calMonth, 1).toLocaleString("default", { month: "long", year: "numeric" }), cls: "pa-cal-title" });
+    const next = header.createEl("button", { text: "→", cls: "pa-icon-btn" });
+    prev.onclick = () => { this.calMonth--; if (this.calMonth < 0) { this.calMonth = 11; this.calYear--; } this.ctx.refresh(); };
+    next.onclick = () => { this.calMonth++; if (this.calMonth > 11) { this.calMonth = 0; this.calYear++; } this.ctx.refresh(); };
+
+    const dow = card.createDiv({ cls: "pa-cal-dow-row" });
+    ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].forEach((d) => dow.createDiv({ text: d, cls: "pa-cal-dow" }));
+    const days = card.createDiv({ cls: "pa-cal-grid pa-cal-days" });
+    const firstDow = new Date(this.calYear, this.calMonth, 1).getDay();
+    const daysInMonth = new Date(this.calYear, this.calMonth + 1, 0).getDate();
+    for (let i = 0; i < firstDow; i++) days.createDiv({ cls: "pa-cal-cell empty" });
+    const today = todayLocal();
+    for (let day = 1; day <= daysInMonth; day++) {
+      const ds = `${this.calYear}-${String(this.calMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      const cell = days.createDiv({ cls: "pa-cal-cell" });
+      cell.createDiv({ text: String(day), cls: "pa-cal-day" });
+      const sp = splitsByDay.get(ds);
+      if (sp && sp.length) {
+        cell.addClass("worked");
+        cell.createDiv({ text: sp.join(" "), cls: "pa-cal-tag" });
+      }
+      cell.addClass("pa-clickable");
+      cell.onclick = () => { this.selectedDate = ds; this.ctx.refresh(); };
+      if (ds === today) cell.addClass("today");
+      if (ds === this.selectedDate) cell.addClass("selected");
+    }
+  }
+
+  // ---- Weight progress (strength exercises only) ----
+  private renderWeightProgress(root: HTMLElement, exercises: Exercise[], workouts: Workout[]): void {
+    const card = root.createDiv({ cls: "pa-panel" });
+    const head = card.createDiv({ cls: "pa-section-head" });
+    head.createEl("h3", { text: "📈 Weight progress", cls: "pa-panel-title" });
+    const sel = head.createEl("select", { cls: "pa-select" });
+    this.getSplits().forEach((s) => { const o = sel.createEl("option", { text: `Workout ${s.id}`, value: s.id }); if (s.id === this.weightSplit) o.selected = true; });
+    sel.onchange = () => { this.weightSplit = sel.value; this.ctx.refresh(); };
+
+    const splitWorkouts = workouts.filter((w) => w.split === this.weightSplit).sort((a, b) => a.date.localeCompare(b.date));
+    const labels = splitWorkouts.map((w) => w.date.slice(5));
+    const exs = exercises.filter((e) => e.split === this.weightSplit && e.kind !== "cardio");
+    const series: LineSeries[] = exs.map((ex, i) => ({
+      name: ex.name,
+      color: SERIES_COLORS[i % SERIES_COLORS.length],
+      values: splitWorkouts.map((w) => {
+        const found = w.exercises.find((we) => we.exercise === ex.name);
+        return found ? found.weight : null;
+      }),
+    })).filter((s) => s.values.some((v) => v != null));
+
+    drawLineChart(card, labels, series, { height: 220 });
+  }
+
+  // ---- Cardio progress (distance over time, cardio exercises only) — sibling to weight progress ----
+  private renderCardioProgress(root: HTMLElement, exercises: Exercise[], workouts: Workout[]): void {
+    const card = root.createDiv({ cls: "pa-panel" });
+    card.createEl("h3", { text: "🏃 Cardio progress", cls: "pa-panel-title" });
+
+    const splitWorkouts = workouts.filter((w) => w.split === this.weightSplit).sort((a, b) => a.date.localeCompare(b.date));
+    const labels = splitWorkouts.map((w) => w.date.slice(5));
+    const exs = exercises.filter((e) => e.split === this.weightSplit && e.kind === "cardio");
+    const series: LineSeries[] = exs.map((ex, i) => ({
+      name: ex.name,
+      color: SERIES_COLORS[i % SERIES_COLORS.length],
+      values: splitWorkouts.map((w) => {
+        const found = w.exercises.find((we) => we.exercise === ex.name);
+        return found && found.distance != null ? found.distance : null;
+      }),
+    })).filter((s) => s.values.some((v) => v != null));
+
+    drawLineChart(card, labels, series, { height: 220 }); // empty series -> empty chart when the split has no cardio
+  }
+
+  // ---- Calendar day detail ----
+  private renderDayDetail(root: HTMLElement, workouts: Workout[]): void {
+    const ds = this.selectedDate!;
+    const dayWorkouts = workouts.filter((w) => w.date === ds);
+    const panel = root.createDiv({ cls: "pa-panel pa-active" });
+    const top = panel.createDiv({ cls: "pa-active-top" });
+    top.createEl("h3", { text: `🏋️ ${ds} — ${dayWorkouts.length} workout${dayWorkouts.length === 1 ? "" : "s"}`, cls: "pa-panel-title" });
+    const headActions = top.createDiv({ cls: "pa-active-actions" });
+    if (dayWorkouts.length) {
+      const delDay = headActions.createEl("button", { text: "🗑", cls: "pa-icon-btn" });
+      delDay.setAttr("aria-label", "Delete this day's workout logs");
+      delDay.onclick = () => new ConfirmModal(this.ctx.app, `Delete all ${dayWorkouts.length} workout log${dayWorkouts.length === 1 ? "" : "s"} for ${ds}?`, async () => {
+        for (const w of dayWorkouts) await this.ctx.store.deleteWorkout(w);
+        this.selectedDate = null;
+        this.ctx.refresh();
+      }).open();
+    }
+    const close = headActions.createEl("button", { text: "✕", cls: "pa-icon-btn" });
+    close.setAttr("aria-label", "Close");
+    close.onclick = () => { this.selectedDate = null; this.ctx.refresh(); };
+
+    if (!dayWorkouts.length) { panel.createEl("p", { cls: "pa-muted", text: "No workouts logged this day. Tap a workout card in the plan above to log one for this date." }); return; }
+    dayWorkouts.forEach((w) => this.renderLoggedWorkout(panel, w));
+  }
+
+  private renderLoggedWorkout(panel: HTMLElement, w: Workout): void {
+    const split = this.getSplits().find((s) => s.id === w.split);
+    const card = panel.createDiv({ cls: "pa-card" });
+    const head = card.createDiv({ cls: "pa-card-title-row" });
+    head.createEl("strong", { text: `${w.split} - ${split?.name || ""}` });
+    // Editable duration for an already-logged session — previously shown as plain text
+    // with no way to correct it (e.g. a past-date log that was saved with duration 0).
+    const durWrap = head.createDiv({ cls: "pa-logged-dur-wrap" });
+    const durInput = durWrap.createEl("input", { cls: "pa-fit-input pa-logged-dur" });
+    durInput.type = "number";
+    durInput.value = String(w.duration);
+    durWrap.createSpan({ text: "min" });
+    const del = head.createEl("button", { text: "🗑", cls: "pa-icon-btn" });
+    del.setAttr("aria-label", "Delete this workout log");
+    del.onclick = () => new ConfirmModal(this.ctx.app, `Delete this ${split?.name || w.split} workout (${w.duration}min)?`, async () => {
+      await this.ctx.store.deleteWorkout(w);
+      this.ctx.refresh();
+    }).open();
+
+    if (!w.exercises.length) { card.createEl("p", { cls: "pa-muted", text: "No exercises." }); return; }
+    const table = card.createEl("table", { cls: "pa-fit-table" });
+    const thr = table.createEl("thead").createEl("tr");
+    const hasCardio = w.exercises.some((we) => (we.kind ?? "strength") === "cardio");
+    const hasStrength = w.exercises.some((we) => (we.kind ?? "strength") === "strength");
+    const headers = ["Exercise"];
+    if (hasStrength) headers.push("Weight", "Sets");
+    if (hasCardio) headers.push("Distance (km)", "Duration (min)", "Pace");
+    headers.forEach((h) => thr.createEl("th", { text: h }));
+    const tbody = table.createEl("tbody");
+    w.exercises.forEach((we, idx) => {
+      const kind: ExerciseKind = we.kind ?? "strength";
+      const tr = tbody.createEl("tr");
+      tr.dataset.idx = String(idx);
+      tr.createEl("td", { text: we.exercise, cls: "pa-fit-name" });
+      if (kind === "cardio") {
+        if (hasStrength) { tr.createEl("td", { text: "—" }); tr.createEl("td", { text: "—" }); }
+        const dIn = tr.createEl("td").createEl("input", { cls: "pa-fit-input pa-log-dist" });
+        dIn.type = "number"; dIn.value = String(we.distance ?? 0);
+        const durIn = tr.createEl("td").createEl("input", { cls: "pa-fit-input pa-log-dur" });
+        durIn.type = "number"; durIn.value = String(we.duration ?? 0);
+        const paceTd = tr.createEl("td", { cls: "pa-fit-pace" });
+        const pace = computePace(we.distance ?? 0, we.duration ?? 0);
+        paceTd.setText(pace != null ? `${pace} min/km` : "—");
+      } else {
+        const wIn = tr.createEl("td").createEl("input", { cls: "pa-fit-input pa-log-w" });
+        wIn.type = "number"; wIn.value = String(we.weight);
+        const sIn = tr.createEl("td").createEl("input", { cls: "pa-fit-input pa-log-s" });
+        sIn.value = we.sets;
+        if (hasCardio) { tr.createEl("td", { text: "—" }); tr.createEl("td", { text: "—" }); tr.createEl("td", { text: "—" }); }
+      }
+    });
+
+    const save = card.createEl("button", { text: "💾 Save changes", cls: "pa-mini-btn" });
+    save.onclick = async () => {
+      const updated: WorkoutExercise[] = w.exercises.map((we, idx) => {
+        const kind: ExerciseKind = we.kind ?? "strength";
+        const tr = tbody.querySelector(`tr[data-idx="${idx}"]`);
+        if (kind === "cardio") {
+          const dv = tr?.querySelector("input.pa-log-dist") as HTMLInputElement | null;
+          const durv = tr?.querySelector("input.pa-log-dur") as HTMLInputElement | null;
+          return { ...we, distance: dv ? parseFloat(dv.value) || 0 : we.distance, duration: durv ? parseFloat(durv.value) || 0 : we.duration };
+        }
+        const wv = tr?.querySelector("input.pa-log-w") as HTMLInputElement | null;
+        const sv = tr?.querySelector("input.pa-log-s") as HTMLInputElement | null;
+        return { ...we, weight: wv ? parseFloat(wv.value) || 0 : we.weight, sets: sv ? (sv.value.trim() || we.sets) : we.sets };
+      });
+      const newDuration = parseFloat(durInput.value) || 0;
+      await this.ctx.store.updateWorkoutExercises(w, updated, newDuration);
+      this.ctx.refresh();
+      toast("💾 Workout updated");
+    };
+  }
+
+  // ---- Workout editor (edit mode + optional active session) ----
+  private renderWorkoutEditor(root: HTMLElement, exercises: Exercise[]): void {
+    const splitId = this.selectedSplit!;
+    const exs = exercises.filter((e) => e.split === splitId);
+    const panel = root.createDiv({ cls: "pa-panel pa-active" });
+
+    const top = panel.createDiv({ cls: "pa-active-top" });
+    const split = this.getSplits().find((s) => s.id === splitId);
+    const titleWrap = top.createDiv({ cls: "pa-editor-title" });
+    titleWrap.createEl("h3", { text: `${splitId} - ${split?.name || ""}`, cls: "pa-panel-title" });
+    if (split) {
+      const rename = titleWrap.createEl("button", { text: "✏️", cls: "pa-icon-btn" });
+      rename.onclick = () => this.openSplitRename(split);
+    }
+    if (this.workoutActive) {
+      this.timerEl = top.createSpan({ text: "⏱ 00:00", cls: "pa-timer" });
+      this.startTimer();
+    }
+
+    if (!exs.length) {
+      panel.createEl("p", { cls: "pa-muted", text: "No exercises in this workout. Add some with + exercise." });
+    } else {
+      const hasStrength = exs.some((e) => e.kind !== "cardio");
+      const hasCardio = exs.some((e) => e.kind === "cardio");
+      const table = panel.createEl("table", { cls: "pa-fit-table" });
+      const cols = [
+        ...(this.workoutActive ? ["✓"] : []),
+        "Exercise",
+        ...(hasStrength ? ["Weight", "Sets"] : []),
+        ...(hasCardio ? ["Distance (km)", "Duration (min)", "Pace"] : []),
+        "How-to", "",
+      ];
+      const thead = table.createEl("thead").createEl("tr");
+      cols.forEach((h) => thead.createEl("th", { text: h }));
+      const tbody = table.createEl("tbody");
+      exs.forEach((ex) => this.renderExerciseRow(tbody, ex, hasStrength, hasCardio));
+    }
+
+    const actions = panel.createDiv({ cls: "pa-active-actions" });
+    if (this.workoutActive) {
+      const finish = actions.createEl("button", { text: "✅ Finish workout", cls: "pa-btn" });
+      finish.onclick = () => this.finishWorkout(splitId, exs, panel);
+    } else {
+      const past = this.selectedDate && this.selectedDate !== todayLocal() ? this.selectedDate : null;
+      if (past) {
+        // No live timer makes sense for a past date, so the session duration needs a
+        // plain input instead — this was previously hardcoded to 0 with no way to set it.
+        const durLabel = actions.createEl("label", { cls: "pa-past-dur-label", text: "Duration (min)" });
+        const durInput = durLabel.createEl("input", { cls: "pa-fit-input pa-past-dur" });
+        durInput.type = "number";
+        durInput.value = String(this.pastDuration || 0);
+        durInput.oninput = () => { this.pastDuration = parseFloat(durInput.value) || 0; };
+        const logPast = actions.createEl("button", { text: `✔ Log for ${past}`, cls: "pa-btn" });
+        logPast.onclick = () => this.logWorkoutForDate(splitId, exs, panel, past);
+      } else {
+        const start = actions.createEl("button", { text: "▶ Start workout", cls: "pa-btn" });
+        start.onclick = async () => {
+          await this.persistRowEdits(exs, panel); // keep edits before timing begins
+          this.workoutActive = true;
+          this.startTime = Date.now();
+          this.checked.clear();
+          this.ctx.refresh();
+        };
+      }
+      const addEx = actions.createEl("button", { text: "+ exercise", cls: "pa-mini-btn" });
+      addEx.onclick = () => this.openExerciseModal(null);
+      const save = actions.createEl("button", { text: "💾 Save changes", cls: "pa-mini-btn" });
+      save.onclick = async () => { const n = await this.persistRowEdits(exs, panel); toast(n ? `💾 Saved (${n})` : "💾 Saved"); };
+    }
+    const close = actions.createEl("button", { text: "Close", cls: "pa-mini-btn" });
+    close.onclick = () => { this.endWorkout(); this.ctx.refresh(); };
+  }
+
+  /** Persist edited weight/sets (strength) or targetDistance/targetDuration (cardio) back
+   *  to the exercise files. Returns number changed. */
+  private async persistRowEdits(exs: Exercise[], panel: HTMLElement): Promise<number> {
+    let changed = 0;
+    for (const ex of exs) {
+      if (ex.kind === "cardio") {
+        const dInput = panel.querySelector<HTMLInputElement>(`input.pa-target-dist[data-ex="${CSS.escape(ex.name)}"]`);
+        const durInput = panel.querySelector<HTMLInputElement>(`input.pa-target-dur[data-ex="${CSS.escape(ex.name)}"]`);
+        const newDist = dInput ? parseFloat(dInput.value) || 0 : ex.targetDistance ?? 0;
+        const newDur = durInput ? parseFloat(durInput.value) || 0 : ex.targetDuration ?? 0;
+        if (newDist !== (ex.targetDistance ?? 0) || newDur !== (ex.targetDuration ?? 0)) {
+          await this.ctx.store.saveExercise({ ...ex, targetDistance: newDist, targetDuration: newDur });
+          changed++;
+        }
+        continue;
+      }
+      const wInput = panel.querySelector<HTMLInputElement>(`input.pa-weight-input[data-ex="${CSS.escape(ex.name)}"]`);
+      const sInput = panel.querySelector<HTMLInputElement>(`input.pa-sets-input[data-ex="${CSS.escape(ex.name)}"]`);
+      const newWeight = wInput ? parseFloat(wInput.value) || 0 : ex.weight;
+      const newSets = sInput ? (sInput.value.trim() || ex.sets) : ex.sets;
+      if (newWeight !== ex.weight || newSets !== ex.sets) { await this.ctx.store.saveExercise({ ...ex, weight: newWeight, sets: newSets }); changed++; }
+    }
+    return changed;
+  }
+
+  private renderExerciseRow(tbody: HTMLElement, ex: Exercise, hasStrength: boolean, hasCardio: boolean): void {
+    const tr = tbody.createEl("tr");
+    if (this.workoutActive) {
+      const check = tr.createEl("td").createEl("input");
+      check.type = "checkbox";
+      check.checked = this.checked.has(ex.name);
+      check.onchange = () => { if (check.checked) this.checked.add(ex.name); else this.checked.delete(ex.name); tr.toggleClass("done", check.checked); };
+      tr.toggleClass("done", check.checked);
+    }
+
+    const nameTd = tr.createEl("td", { cls: "pa-fit-name" });
+    nameTd.createDiv({ text: ex.name });
+    if (ex.howto) nameTd.setAttr("title", ex.howto);
+
+    if (ex.kind === "cardio") {
+      if (hasStrength) { tr.createEl("td", { text: "—" }); tr.createEl("td", { text: "—" }); }
+      const dInput = tr.createEl("td").createEl("input", { cls: "pa-fit-input pa-target-dist" });
+      dInput.type = "number"; dInput.value = String(ex.targetDistance ?? 0); dInput.dataset.ex = ex.name;
+      const durInput = tr.createEl("td").createEl("input", { cls: "pa-fit-input pa-target-dur" });
+      durInput.type = "number"; durInput.value = String(ex.targetDuration ?? 0); durInput.dataset.ex = ex.name; durInput.addClass("pa-target-dur");
+      dInput.addClass("pa-target-dist");
+      const paceTd = tr.createEl("td", { cls: "pa-fit-pace" });
+      const pace = computePace(ex.targetDistance ?? 0, ex.targetDuration ?? 0);
+      paceTd.setText(pace != null ? `${pace} min/km` : "—");
+    } else {
+      const wInput = tr.createEl("td").createEl("input", { cls: "pa-fit-input" });
+      wInput.type = "number"; wInput.value = String(ex.weight); wInput.dataset.ex = ex.name; wInput.addClass("pa-weight-input");
+
+      const setsInput = tr.createEl("td").createEl("input", { cls: "pa-fit-input" });
+      setsInput.value = ex.sets; setsInput.dataset.ex = ex.name; setsInput.addClass("pa-sets-input");
+      if (hasCardio) { tr.createEl("td", { text: "—" }); tr.createEl("td", { text: "—" }); tr.createEl("td", { text: "—" }); }
+    }
+
+    tr.createEl("td", { text: ex.howto || "—", cls: "pa-fit-howto" });
+
+    const actionsTd = tr.createEl("td");
+    const edit = actionsTd.createEl("button", { text: "✏️", cls: "pa-icon-btn" });
+    edit.setAttr("aria-label", "Edit exercise");
+    edit.onclick = () => this.openExerciseModal(ex);
+    const del = actionsTd.createEl("button", { text: "🗑", cls: "pa-icon-btn" });
+    del.setAttr("aria-label", "Delete exercise");
+    del.onclick = () => new ConfirmModal(this.ctx.app, `Delete exercise "${ex.name}"?`, async () => {
+      await this.ctx.store.deleteExercise(ex);
+      this.ctx.refresh();
+    }).open();
+  }
+
+  private startTimer(): void {
+    this.stopTimer();
+    const tick = () => {
+      if (!this.startTime || !this.timerEl) return;
+      const diff = Math.floor((Date.now() - this.startTime) / 1000);
+      this.timerEl.setText(`⏱ ${String(Math.floor(diff / 60)).padStart(2, "0")}:${String(diff % 60).padStart(2, "0")}`);
+    };
+    tick();
+    this.timerId = window.setInterval(tick, 1000);
+  }
+
+  /** Reads one exercise's row inputs and builds its WorkoutExercise entry (or null if a
+   *  cardio row's distance/duration is not greater than zero — rejected per Req 2.4). */
+  private readLoggedEntry(ex: Exercise, panel: HTMLElement): WorkoutExercise | null {
+    if (ex.kind === "cardio") {
+      const dInput = panel.querySelector<HTMLInputElement>(`input.pa-target-dist[data-ex="${CSS.escape(ex.name)}"]`);
+      const durInput = panel.querySelector<HTMLInputElement>(`input.pa-target-dur[data-ex="${CSS.escape(ex.name)}"]`);
+      const distance = dInput ? parseFloat(dInput.value) || 0 : ex.targetDistance ?? 0;
+      const duration = durInput ? parseFloat(durInput.value) || 0 : ex.targetDuration ?? 0;
+      if (!(distance > 0) || !(duration > 0)) return null; // Req 2.4: reject, leave unchanged
+      return { exercise: ex.name, weight: 0, sets: "", kind: "cardio", distance, duration };
+    }
+    const wInput = panel.querySelector<HTMLInputElement>(`input.pa-weight-input[data-ex="${CSS.escape(ex.name)}"]`);
+    const sInput = panel.querySelector<HTMLInputElement>(`input.pa-sets-input[data-ex="${CSS.escape(ex.name)}"]`);
+    const weight = wInput ? parseFloat(wInput.value) || 0 : ex.weight;
+    const sets = sInput ? (sInput.value.trim() || ex.sets) : ex.sets;
+    return { exercise: ex.name, weight, sets, kind: "strength", feel: "good", oldWeight: ex.weight };
+  }
+
+  private async finishWorkout(splitId: string, exs: Exercise[], panel: HTMLElement): Promise<void> {
+    if (!this.startTime) return;
+    const duration = Math.max(1, Math.floor((Date.now() - this.startTime) / 1000 / 60));
+    const logged: WorkoutExercise[] = [];
+    let rejected = 0;
+    for (const ex of exs) {
+      if (!this.checked.has(ex.name)) continue;
+      const entry = this.readLoggedEntry(ex, panel);
+      if (!entry) { rejected++; continue; } // cardio row with invalid distance/duration
+      if (ex.kind === "cardio") {
+        if (entry.distance !== ex.targetDistance || entry.duration !== ex.targetDuration) {
+          await this.ctx.store.saveExercise({ ...ex, targetDistance: entry.distance, targetDuration: entry.duration });
+        }
+      } else if (entry.weight !== ex.weight || entry.sets !== ex.sets) {
+        await this.ctx.store.saveExercise({ ...ex, weight: entry.weight, sets: entry.sets });
+      }
+      logged.push(entry);
+    }
+    if (!logged.length) { toast(rejected ? "Enter a distance and duration greater than zero for checked cardio exercises." : "Check at least one exercise to log."); return; }
+    await this.ctx.store.logWorkout(splitId, duration, logged);
+    this.endWorkout();
+    this.selectedDate = todayLocal(); // show the just-logged workout as a log at the bottom
+    this.ctx.refresh();
+    toast(`💪 Workout logged (${logged.length} exercises, ${duration}min)${rejected ? `, ${rejected} skipped` : ""}`);
+  }
+
+  /** Log the editor's workout (with current row weights/sets or distance/duration) to a
+   *  specific date, no live timer. Cardio rows with invalid distance/duration are skipped
+   *  (Req 2.4) rather than blocking the rest of the workout from being logged. */
+  private async logWorkoutForDate(splitId: string, exs: Exercise[], panel: HTMLElement, date: string): Promise<void> {
+    await this.persistRowEdits(exs, panel);
+    const logged: WorkoutExercise[] = [];
+    let rejected = 0;
+    for (const ex of exs) {
+      const entry = this.readLoggedEntry(ex, panel);
+      if (!entry) { rejected++; continue; }
+      logged.push(entry);
+    }
+    if (!logged.length) { toast(rejected ? "Enter a distance and duration greater than zero for cardio exercises." : "This workout has no exercises to log."); return; }
+    await this.ctx.store.logWorkout(splitId, this.pastDuration, logged, date);
+    this.pastDuration = 0;
+    this.endWorkout();
+    this.selectedDate = date;
+    this.ctx.refresh();
+    toast(`💪 ${splitId} logged for ${date}${rejected ? ` (${rejected} skipped)` : ""}`);
+  }
+
+  // ---- Modals ----
+  private openSplitRename(s: Split): void {
+    new FormModal(this.ctx.app, "Rename workout", [{ key: "name", label: "Workout name", type: "text", value: s.name }], async (v) => {
+      const name = (v.name || "").trim();
+      if (!name) return;
+      const splits = this.getSplits().map((x) => (x.id === s.id ? { ...x, name } : x));
+      await this.ctx.store.saveSplits(splits);
+      this.ctx.refresh();
+    }, "Save").open();
+  }
+
+  private openExerciseModal(ex: Exercise | null): void {
+    const splitOptions = this.getSplits().map((s) => ({ value: s.id, label: `${s.id} — ${s.name}` }));
+    const fields: FieldSpec[] = [
+      { key: "name", label: "Name", type: "text", value: ex?.name || "" },
+      { key: "split", label: "Workout", type: "dropdown", options: splitOptions, value: ex?.split || (this.selectedSplit || "A") },
+      {
+        key: "kind", label: "Kind", type: "dropdown",
+        options: [{ value: "strength", label: "Strength" }, { value: "cardio", label: "Cardio" }],
+        value: ex?.kind || "strength",
+      },
+      { key: "sets", label: "Sets x reps", type: "text", value: ex?.sets || "3x10", visibleWhen: (v) => v.kind !== "cardio" },
+      { key: "weight", label: "Weight (kg)", type: "number", value: ex?.weight ?? 0, visibleWhen: (v) => v.kind !== "cardio" },
+      { key: "targetDistance", label: "Target distance (km)", type: "number", value: ex?.targetDistance ?? 0, visibleWhen: (v) => v.kind === "cardio" },
+      { key: "targetDuration", label: "Target duration (min)", type: "number", value: ex?.targetDuration ?? 0, visibleWhen: (v) => v.kind === "cardio" },
+      { key: "howto", label: "How-to", type: "textarea", value: ex?.howto || "" },
+    ];
+    new FormModal(this.ctx.app, ex ? "Edit exercise" : "New exercise", fields, async (v) => {
+      const name = (v.name || "").trim();
+      if (!name) return;
+      const kind: ExerciseKind = v.kind === "cardio" ? "cardio" : "strength";
+      const ok = await this.ctx.store.saveExercise({
+        name, split: v.split, kind,
+        sets: v.sets || "3x10", weight: parseFloat(v.weight) || 0,
+        targetDistance: parseFloat(v.targetDistance) || 0, targetDuration: parseFloat(v.targetDuration) || 0,
+        howto: v.howto || "",
+        // preserve metadata not edited here
+        muscle: ex?.muscle || "", type: ex?.type || "machine",
+      }, ex?.name);
+      if (!ok) { toast(`An exercise named "${name}" already exists.`); return; }
+      this.ctx.refresh();
+    }, ex ? "Save" : "Create").open();
+  }
+}

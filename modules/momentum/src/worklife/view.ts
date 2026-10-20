@@ -1,0 +1,215 @@
+import { momentFn, type Moment } from "./utils/moment";
+import {
+  getDailyNote,
+  getDailyNoteSettings,
+  getDateFromFile,
+  getDateUID,
+  getWeeklyNote,
+  getWeeklyNoteSettings,
+} from "obsidian-daily-notes-interface";
+import { FileView, TFile, TAbstractFile, ItemView, WorkspaceLeaf } from "obsidian";
+import { get } from "svelte/store";
+
+import { TRIGGER_ON_OPEN, VIEW_TYPE_CALENDAR, VIEW_TYPE_TASKS, VIEW_TYPE_MOBILE_TASKS } from "./constants";
+import type CalendarPlugin from "./main";
+
+import Calendar from "./ui/Calendar.svelte";
+import { showNoteContextMenu } from "./ui/fileMenu";
+import { activeFile, dailyNotes, weeklyNotes } from "./ui/stores";
+import { customTagsSource, streakSource, wordCountSource } from "./ui/sources";
+
+import { tasks, selectedDate } from "./task-tracker/stores";
+import { taskDotSource } from "./task-tracker/taskDotSource";
+import { habitSource } from "./habit-tracker/habitSource";
+import { QuickAddModal } from "./task-tracker/QuickAddModal";
+
+export default class CalendarView extends ItemView {
+  private calendar: Calendar | null = null;
+  private plugin: CalendarPlugin | undefined;
+  private tasksUnsub: (() => void) | null = null;
+
+  constructor(leaf: WorkspaceLeaf, plugin?: CalendarPlugin) {
+    super(leaf);
+    this.plugin = plugin;
+
+    this.registerEvent(
+      (this.app.workspace as unknown as { on: (name: string, cb: () => void) => import("obsidian").EventRef })
+        .on("periodic-notes:settings-updated", this.onNoteSettingsUpdate),
+    );
+    this.registerEvent(this.app.vault.on("create", this.onFileCreated as unknown as (file: TAbstractFile) => void));
+    this.registerEvent(this.app.vault.on("delete", this.onFileDeleted as unknown as (file: TAbstractFile) => void));
+    this.registerEvent(this.app.vault.on("modify", this.onFileModified as unknown as (file: TAbstractFile) => void));
+    this.registerEvent(this.app.workspace.on("file-open", this.onFileOpen as unknown as (file: TFile | null) => void));
+
+  }
+
+  getViewType(): string { return VIEW_TYPE_CALENDAR; }
+  getDisplayText(): string { return "Calendar"; }
+  getIcon(): string { return "calendar-with-checkmark"; }
+
+  onClose(): Promise<void> {
+    this.removeTooltip();
+    if (this.tasksUnsub) { this.tasksUnsub(); this.tasksUnsub = null; }
+    if (this.calendar) { this.calendar.$destroy(); }
+    return Promise.resolve();
+  }
+
+  onOpen(): Promise<void> {
+    this.contentEl.empty();
+    if (this.calendar) { this.calendar.$destroy(); this.calendar = null; }
+    selectedDate.set(getDateUID(momentFn(), "day"));
+
+    const sources = [customTagsSource, streakSource, wordCountSource, taskDotSource, habitSource];
+    this.app.workspace.trigger(TRIGGER_ON_OPEN, sources);
+
+    this.calendar = new Calendar({
+      target: this.contentEl,
+      props: {
+        onClickDay: this.selectDateForDay,
+        onClickWeek: this.selectDateForWeek,
+        onHoverDay: this.onHoverDay,
+        onHoverWeek: this.onHoverWeek,
+        onContextMenuDay: this.onContextMenuDay,
+        onContextMenuWeek: this.onContextMenuWeek,
+        onWeatherDayClick: this.openWeatherDetail,
+        sources,
+      },
+    });
+
+    this.tasksUnsub = tasks.subscribe(() => {
+      if (this.calendar) this.calendar.$set({});
+    });
+    return Promise.resolve();
+  }
+
+  private activeTooltip: HTMLElement | null = null;
+
+  onHoverDay = (date: Moment, targetEl: EventTarget, isMetaPressed: boolean): void => {
+    if (isMetaPressed) {
+      const { format } = getDailyNoteSettings();
+      const dailyNotesMap: Record<string, TFile> = get(dailyNotes);
+      const note: TFile | null = getDailyNote(date, dailyNotesMap);
+      this.app.workspace.trigger("link-hover", this, targetEl, date.format(format), note?.path);
+    }
+  };
+
+  private removeTooltip(): void {
+    if (this.activeTooltip) { this.activeTooltip.remove(); this.activeTooltip = null; }
+  }
+
+  onHoverWeek = (date: Moment, targetEl: EventTarget, isMetaPressed: boolean): void => {
+    if (!isMetaPressed) return;
+    const weeklyNotesMap: Record<string, TFile> = get(weeklyNotes);
+    const note: TFile | null = getWeeklyNote(date, weeklyNotesMap);
+    const { format } = getWeeklyNoteSettings();
+    this.app.workspace.trigger("link-hover", this, targetEl, date.format(format), note?.path);
+  };
+
+  private onContextMenuDay = (date: Moment, event: MouseEvent): void => {
+    const dailyNotesMap: Record<string, TFile> = get(dailyNotes);
+    const note: TFile | null = getDailyNote(date, dailyNotesMap);
+    const onQuickAdd = () => {
+      new QuickAddModal(this.app, date).open();
+    };
+    showNoteContextMenu(this.app, note || null, { x: event.pageX, y: event.pageY }, onQuickAdd);
+  };
+
+  private onContextMenuWeek = (date: Moment, event: MouseEvent): void => {
+    const weeklyNotesMap: Record<string, TFile> = get(weeklyNotes);
+    const note: TFile | null = getWeeklyNote(date, weeklyNotesMap);
+    if (!note) return;
+    showNoteContextMenu(this.app, note, { x: event.pageX, y: event.pageY });
+  };
+
+  private onNoteSettingsUpdate = (): void => {
+    dailyNotes.reindex();
+    weeklyNotes.reindex();
+  };
+
+  private onFileDeleted = (file: TFile): void => {
+    const dayDate: Moment | null = getDateFromFile(file, "day");
+    if (dayDate) dailyNotes.reindex();
+    const weekDate: Moment | null = getDateFromFile(file, "week");
+    if (weekDate) weeklyNotes.reindex();
+    this.updateActiveFile();
+  };
+
+  private onFileModified = (_file: TFile): void => {
+    // Calendar reactivity handles display update
+  };
+
+  private onFileCreated = (file: TFile): void => {
+    if (this.app.workspace.layoutReady) {
+      const dayDate: Moment | null = getDateFromFile(file, "day");
+      if (dayDate) dailyNotes.reindex();
+      const weekDate: Moment | null = getDateFromFile(file, "week");
+      if (weekDate) weeklyNotes.reindex();
+    }
+  };
+
+  public onFileOpen = (_file: TFile): void => {
+    if (this.app.workspace.layoutReady) this.updateActiveFile();
+  };
+
+  private updateActiveFile(): void {
+    const leaf = this.app.workspace.getMostRecentLeaf();
+    if (!leaf) return;
+    const { view } = leaf;
+    if (view instanceof FileView && view.file) {
+      activeFile.setFile(view.file);
+    }
+  }
+
+  public revealActiveNote(): void {
+    const activeLeaf = this.app.workspace.getMostRecentLeaf();
+    if (!activeLeaf) return;
+    if (activeLeaf.view instanceof FileView) {
+      let date: Moment | null = getDateFromFile(activeLeaf.view.file!, "day");
+      if (date) { this.calendar!.$set({ displayedMonth: date }); return; }
+      const { format } = getWeeklyNoteSettings();
+      date = momentFn(activeLeaf.view.file!.basename, format, true);
+      if (date.isValid()) { this.calendar!.$set({ displayedMonth: date }); return; }
+    }
+  }
+
+  selectDateForWeek = (date: Moment): void => {
+    const dateUID = getDateUID(date, "week");
+    selectedDate.set(dateUID);
+    activeFile.setUID(dateUID);
+  };
+
+  selectDateForDay = (date: Moment): void => {
+    const dateUID = getDateUID(date, "day");
+    const current: string | null = get(selectedDate);
+    if (current === dateUID) {
+      selectedDate.set(null);
+      activeFile.setUID("");
+    } else {
+      selectedDate.set(dateUID);
+      activeFile.setUID(dateUID);
+      this.openTasksView();
+    }
+  };
+
+  private openTasksView(): void {
+    const { workspace } = this.app;
+    const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
+    const viewType = isMobile ? VIEW_TYPE_MOBILE_TASKS : VIEW_TYPE_TASKS;
+    const existing = workspace.getLeavesOfType(viewType);
+    if (existing.length) {
+      void workspace.revealLeaf(existing[0]);
+      return;
+    }
+    const leaf = workspace.getLeaf("tab");
+    if (leaf) {
+      void leaf.setViewState({ type: viewType, active: true });
+      void workspace.revealLeaf(leaf);
+    }
+  }
+
+  openWeatherDetail = (date: string): void => {
+    if (this.plugin) {
+      void this.plugin.activateWeatherDetailView(date);
+    }
+  };
+}

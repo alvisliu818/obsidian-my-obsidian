@@ -44,6 +44,7 @@ import MusicPlayerPlugin from "../modules/music-player/src/main";
 import AudioPlayerPlugin from "../modules/audio-player/src/main";
 import ScrollingPlugin from "../modules/scrolling/src/core/main";
 import AbstractFolderPlugin from "../modules/abstract-folder/main";
+import MomentumPlugin from "../modules/momentum/src/main";
 // media-extended v3 自带 obsidian@1.5.7 类型与自己的 "@/..." 别名（与
 // music-player 的 @/ 同名冲突），经 require 桥接进 bundle：不进宿主 tsc
 // 程序（类型由模块自带 tsconfig 独立校验），运行时打包不受影响。
@@ -275,6 +276,20 @@ export default class MyObsidianPlugin extends Plugin {
 				"动态虚拟文件夹：按父级关系把散落各处的笔记聚成虚拟文件夹，树形/列式两种版式、拖拽整理、文件夹结构生成与转换（冲突消解、分组管理）、图标与配色自定义。上游 Erfan Rahmani（GPL-3.0）。",
 			desktopOnly: true,
 			cls: AbstractFolderPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Two upstreams merged into one project (see modules/momentum/NOTICE):
+			// Momentum Life (jnagase, MIT) is the base; WorkLife Calendar (atinss,
+			// MIT, 145 commits grafted as a second parent) runs inside it as an
+			// in-process sub-plugin — one manifest, one data.json, the calendar's
+			// settings living under a "worklife" key of this module's slice.
+			id: "momentum",
+			legacyIds: ["momentum-life", "worklife-calendar"],
+			name: "my Momentum",
+			summary:
+				"生活仪表盘：习惯/任务/健身/营养/学习看板、Google Tasks 与 Google Drive 同步、快速访问面板；并入 WorkLife Calendar 后另有日历/日程/看板/习惯分析/财务/天气视图与 dashboard、hello 代码块。上游 jnagase + atinss（均 MIT）。",
+			desktopOnly: false,
+			cls: MomentumPlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 

@@ -1,0 +1,56 @@
+import { ItemView, WorkspaceLeaf } from "obsidian";
+
+import type CalendarPlugin from "../main";
+import HabitPanel from "../habit-tracker/HabitPanel.svelte";
+import { tRaw } from "../i18n";
+import { VIEW_TYPE_HABIT_PANEL } from "../constants";
+import { createViewSwitcher, markViewEnter } from "./viewSwitch";
+
+export default class HabitPanelView extends ItemView {
+  private plugin: CalendarPlugin;
+  private svelteComponent: HabitPanel | null = null;
+
+  constructor(leaf: WorkspaceLeaf, plugin: CalendarPlugin) {
+    super(leaf);
+    this.plugin = plugin;
+  }
+
+  getViewType(): string {
+    return VIEW_TYPE_HABIT_PANEL;
+  }
+
+  getDisplayText(): string {
+    return tRaw("habits.panel.title");
+  }
+
+  getIcon(): string {
+    return "flame";
+  }
+
+  onOpen(): Promise<void> {
+    if (this.svelteComponent) {
+      this.svelteComponent.$destroy();
+      this.svelteComponent = null;
+    }
+    const container: HTMLElement = this.containerEl.children[1] as HTMLElement;
+    container.empty();
+    container.addClass("habit-panel-view-container");
+    markViewEnter(container);
+
+    createViewSwitcher(container, "habits", this.leaf);
+
+    this.svelteComponent = new HabitPanel({
+      target: container,
+      props: { appInstance: this.plugin.app, showAnalytics: true },
+    });
+    return Promise.resolve();
+  }
+
+  onClose(): Promise<void> {
+    if (this.svelteComponent) {
+      this.svelteComponent.$destroy();
+      this.svelteComponent = null;
+    }
+    return Promise.resolve();
+  }
+}

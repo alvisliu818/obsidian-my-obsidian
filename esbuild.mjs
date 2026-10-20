@@ -120,12 +120,47 @@ const cmBundlePlugin = {
 // other modules; Svelte 5's `mount`/`unmount` runtime comes in through
 // node_modules and bundles alongside. `css: injected` matches the upstream
 // config (styles end up inline in the DOM rather than a separate css file).
+//
+// momentum 的 .svelte 不归这个插件管——见下面 momentumSveltePlugin（Svelte 4）。
 // ---------------------------------------------------------------------------
 const sveltePlugin = esbuildSvelte({
   compilerOptions: { css: "injected", dev: !prod },
   // obsidian-git 的组件带大量 a11y 提示，上游也是这么过滤的
   filterWarnings: (warning) => !warning.code.startsWith("a11y-"),
   preprocess: sveltePreprocess(),
+});
+
+// ---------------------------------------------------------------------------
+// momentum（含并入的 WorkLife Calendar）: Svelte 4 组件。
+//
+// 为什么是 4 而不是根仓的 5：WorkLife 的视图用 Svelte 3 的
+// `new Component({ target, props })` 实例化（配 $destroy/$set），且
+// ui/Calendar.svelte 把 obsidian-calendar-ui 的预编译 Svelte 3 class 当子组件
+// 用。Svelte 4 与 Svelte 3 的 class 组件 API、`new Child({...})` 子组件约定
+// 一致；Svelte 5 默认编译成函数组件，两条路都炸（前者 `$.prop()` 内部
+// `Symbol($state) in undefined`，后者 "Class constructor cannot be invoked
+// without 'new'"；componentApi:4 兼容模式只包根组件，子组件仍是函数约定）。
+//
+// 实现：modules/momentum/node_modules 下嵌套装着 svelte@4 + esbuild-svelte
+// （该模块自包含依赖，与独立项目 obsidian-momentum 一致；根 node_modules 的
+// svelte@5 供 omnisearch/obsidian-git 使用）。用 createRequire 从模块目录
+// 解析出这份 esbuild-svelte——它 require("svelte/compiler") 时自然落到嵌套
+// 的 svelte@4。include 只罩 momentum 下的 .svelte，且必须注册在根
+// sveltePlugin 之前（onLoad 按插件顺序先到先得）。
+//
+// verbatimModuleSyntax 同样只经 options 传（不动 tsconfig）：没有它
+// ts.transpileModule 会把「只被 $store 引用」的 import 当未使用删掉，
+// Svelte 编译器随即报 `global_reference_invalid`。
+// ---------------------------------------------------------------------------
+const momentumRequire = createRequire(path.resolve("modules/momentum/package.json"));
+const esbuildSvelte4 = momentumRequire("esbuild-svelte");
+const momentumSveltePlugin = esbuildSvelte4({
+  include: /momentum.*\.svelte$/,
+  compilerOptions: { css: "injected", dev: !prod },
+  filterWarnings: (warning) => !warning.code.startsWith("a11y-"),
+  preprocess: sveltePreprocess({
+    typescript: { compilerOptions: { verbatimModuleSyntax: true } },
+  }),
 });
 
 // ---------------------------------------------------------------------------
@@ -308,7 +343,7 @@ const context = await esbuild.context({
     // ollama 等包用 `node:fs` 带前缀的写法，裸名列表罩不住
     ...builtins.map((m) => `node:${m}`),
   ],
-  plugins: [cmBundlePlugin, sveltePlugin, dexiePatchPlugin, importGlobPlugin, musicPlayerShimsPlugin, mxInlinePlugin, mxCaptionsPlugin, mxNodeEnvPlugin],
+  plugins: [cmBundlePlugin, momentumSveltePlugin, sveltePlugin, dexiePatchPlugin, importGlobPlugin, musicPlayerShimsPlugin, mxInlinePlugin, mxCaptionsPlugin, mxNodeEnvPlugin],
   // Monaco 的 codicon.css 引用 .ttf 字体(图标字形)。内联成 dataurl:图标
   // 只有几 KB,而少这一条整个构建会以 "No loader is configured for .ttf" 失败。
   // (与独立插件 obsidian-logseq 的 esbuild.mjs 同款配置。)

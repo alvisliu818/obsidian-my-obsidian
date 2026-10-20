@@ -1,0 +1,59 @@
+import { ItemView, WorkspaceLeaf } from "obsidian";
+import { VIEW_TYPE_WEATHER_DETAIL } from "../constants";
+import type CalendarPlugin from "../main";
+import WeatherDetail from "../components/WeatherDetail.svelte";
+import { tRaw } from "../i18n";
+
+export default class WeatherDetailView extends ItemView {
+  private svelteComponent: WeatherDetail | null = null;
+  private _date = "";
+
+  constructor(leaf: WorkspaceLeaf, _plugin: CalendarPlugin) {
+    super(leaf);
+  }
+
+  getViewType(): string {
+    return VIEW_TYPE_WEATHER_DETAIL;
+  }
+
+  getDisplayText(): string {
+    return tRaw("weather.detailTitle");
+  }
+
+  getIcon(): string {
+    return "cloud-sun";
+  }
+
+  setDate(date: string): void {
+    this._date = date;
+    if (this.svelteComponent) {
+      this.svelteComponent.$set({ date });
+    }
+  }
+
+  onOpen(): Promise<void> {
+    if (this.svelteComponent) {
+      this.svelteComponent.$destroy();
+      this.svelteComponent = null;
+    }
+    const container: HTMLElement = this.containerEl.children[1] as HTMLElement;
+    container.empty();
+    container.addClass("weather-detail-container");
+
+    this.svelteComponent = new WeatherDetail({
+      target: container,
+      props: {
+        date: this._date,
+      },
+    });
+    return Promise.resolve();
+  }
+
+  onClose(): Promise<void> {
+    if (this.svelteComponent) {
+      this.svelteComponent.$destroy();
+      this.svelteComponent = null;
+    }
+    return Promise.resolve();
+  }
+}

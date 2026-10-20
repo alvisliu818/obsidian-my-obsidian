@@ -1,0 +1,59 @@
+import { ItemView, WorkspaceLeaf } from "obsidian";
+
+import { VIEW_TYPE_MOBILE_SCHEDULE } from "../constants";
+import type CalendarPlugin from "../main";
+import MobileSchedule from "../components/MobileSchedule.svelte";
+import { tRaw } from "../i18n";
+import { createViewSwitcher, markViewEnter } from "./viewSwitch";
+
+export default class MobileScheduleView extends ItemView {
+  private plugin: CalendarPlugin;
+  private svelteComponent: MobileSchedule | null = null;
+
+  constructor(leaf: WorkspaceLeaf, plugin: CalendarPlugin) {
+    super(leaf);
+    this.plugin = plugin;
+  }
+
+  getViewType(): string {
+    return VIEW_TYPE_MOBILE_SCHEDULE;
+  }
+
+  getDisplayText(): string {
+    return tRaw("hello.navSchedule");
+  }
+
+  getIcon(): string {
+    return "calendar-range";
+  }
+
+  onOpen(): Promise<void> {
+    if (this.svelteComponent) { this.svelteComponent.$destroy(); this.svelteComponent = null; }
+    const container: HTMLElement = this.containerEl.children[1] as HTMLElement;
+    container.empty();
+    container.addClass("mobile-schedule-view-container");
+    markViewEnter(container);
+
+    createViewSwitcher(container, "schedule", this.leaf);
+
+    this.svelteComponent = new MobileSchedule({
+      target: container,
+      props: {
+        plugin: this.plugin,
+        onClose: () => {
+          // Close this leaf
+          this.app.workspace.getActiveViewOfType(MobileScheduleView)?.leaf.detach();
+        },
+      },
+    });
+    return Promise.resolve();
+  }
+
+  onClose(): Promise<void> {
+    if (this.svelteComponent) {
+      this.svelteComponent.$destroy();
+      this.svelteComponent = null;
+    }
+    return Promise.resolve();
+  }
+}

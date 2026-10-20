@@ -1,0 +1,507 @@
+// Lightweight inline-SVG charts. No external dependencies, theme-aware.
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function svgEl<K extends keyof SVGElementTagNameMap>(
+  tag: K,
+  attrs: Record<string, string | number>
+): SVGElementTagNameMap[K] {
+  const el = activeDocument.createElementNS(SVG_NS, tag);
+  for (const k of Object.keys(attrs)) el.setAttribute(k, String(attrs[k]));
+  return el;
+}
+
+/** Round a step size up to a "nice" 1/2/5 × 10^n value (the standard axis-tick algorithm),
+ *  so gridlines land on numbers like 5000/10000/25000 instead of arbitrary ones. */
+function niceStep(rough: number): number {
+  if (rough <= 0) return 1;
+  const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough / mag;
+  const nice = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+  return nice * mag;
+}
+
+/** Round-number gridline values spanning [min, max], using roughly `targetCount` steps
+ *  (e.g. 0/15000/30000/45000/60000 instead of the raw min/max split into equal chunks). */
+function niceTicks(min: number, max: number, targetCount: number): number[] {
+  if (max <= min) return [min];
+  const step = niceStep((max - min) / targetCount);
+  const start = Math.floor(min / step) * step;
+  const end = Math.ceil(max / step) * step;
+  const ticks: number[] = [];
+  for (let v = start; v <= end + step / 2; v += step) ticks.push(Math.round(v));
+  return ticks;
+}
+
+/** A circular progress ring with a centered percentage and an optional label. */
+export function drawRing(
+  parent: HTMLElement,
+  percent: number,
+  color: string,
+  label?: string,
+  size = 66
+): void {
+  const wrap = parent.createDiv({ cls: "pa-ring" });
+  const r = (size - 10) / 2;
+  const cx = size / 2;
+  const circ = 2 * Math.PI * r;
+  const pct = Math.max(0, Math.min(100, percent));
+  const offset = circ * (1 - pct / 100);
+
+  const svg = svgEl("svg", { width: size, height: size, viewBox: `0 0 ${size} ${size}` });
+  svg.appendChild(svgEl("circle", {
+    cx, cy: cx, r, fill: "none", stroke: "var(--background-modifier-border)", "stroke-width": 7,
+  }));
+  const arc = svgEl("circle", {
+    cx, cy: cx, r, fill: "none", stroke: color, "stroke-width": 7, "stroke-linecap": "round",
+    "stroke-dasharray": circ, "stroke-dashoffset": offset,
+    transform: `rotate(-90 ${cx} ${cx})`,
+  });
+  svg.appendChild(arc);
+  const text = svgEl("text", {
+    x: cx, y: cx, "text-anchor": "middle", "dominant-baseline": "central",
+    "font-size": 14, "font-weight": 700, fill: "var(--text-normal)",
+  });
+  text.textContent = pct + "%";
+  svg.appendChild(text);
+  wrap.appendChild(svg);
+  if (label) wrap.createDiv({ text: label, cls: "pa-ring-label" });
+}
+
+/** SVG path for a pie wedge sweeping CLOCKWISE from 12 o'clock, covering `fraction` (0..1). */
+function wedgePath(cx: number, cy: number, r: number, fraction: number): string {
+  const f = Math.max(0, Math.min(1, fraction));
+  if (f <= 0) return "";
+  if (f >= 1) {
+    // Two half-arcs make a full disc (a single arc can't close a 360° sweep).
+    return `M ${cx} ${cy - r} A ${r} ${r} 0 1 1 ${cx - 0.001} ${cy - r} Z`;
+  }
+  const angle = f * 2 * Math.PI;
+  const endX = cx + r * Math.sin(angle);
+  const endY = cy - r * Math.cos(angle);
+  const large = f > 0.5 ? 1 : 0;
+  return `M ${cx} ${cy} L ${cx} ${cy - r} A ${r} ${r} 0 ${large} 1 ${endX} ${endY} Z`;
+}
+
+/**
+ * A clock-style progress disc: a circular track that fills with color CLOCKWISE from the top
+ * as work completes. Returns an `update(fraction)` so a caller can drive it live during a sync.
+ */
+export function drawClockProgress(
+  parent: HTMLElement,
+  size = 40,
+  color = "#7c3aed",
+): { el: HTMLElement; update: (fraction: number) => void } {
+  const r = size / 2 - 2;
+  const cx = size / 2;
+  const cy = size / 2;
+  const wrap = parent.createDiv({ cls: "pa-clock-wrap" });
+  const svg = svgEl("svg", { width: size, height: size, viewBox: `0 0 ${size} ${size}` });
+  svg.appendChild(svgEl("circle", {
+    cx, cy, r, fill: "var(--background-modifier-border)", stroke: color, "stroke-width": 1.5,
+  }));
+  const wedge = svgEl("path", { d: "", fill: color });
+  svg.appendChild(wedge);
+  wrap.appendChild(svg);
+  const update = (fraction: number): void => { wedge.setAttribute("d", wedgePath(cx, cy, r, fraction)); };
+  update(0);
+  return { el: wrap, update };
+}
+
+/** A simple vertical bar chart.
+ *
+ *  Supports negative values: when any value is below zero the chart grows a zero baseline
+ *  and negative bars hang below it, while positive bars rise from it. Before this, a
+ *  negative value produced a negative bar height — so no rect was drawn AND its value
+ *  label was positioned below the baseline, off-canvas. The month simply vanished from the
+ *  chart (a month that closed in the red looked identical to a month with no data at all,
+ *  which is how the Cockpit's balance chart came to disagree with the real numbers).
+ *
+ *  With all-positive data the geometry is unchanged: `lo` collapses to 0 and the zero line
+ *  lands on the bottom of the chart area, exactly the previous layout. */
+export function drawBars(
+  parent: HTMLElement,
+  data: Array<{ label: string; value: number }>,
+  max: number,
+  color: string,
+  height = 120,
+  format?: (n: number) => string
+): void {
+  const wrap = parent.createDiv({ cls: "pa-bars" });
+  const w = Math.max(data.length * 44, 120);
+  const barW = 26;
+  const gap = (w - data.length * barW) / (data.length + 1);
+  const values = data.map((d) => d.value);
+  const hasNegative = values.some((v) => v < 0);
+  // Reserve room above the tallest possible bar for its value label — without this, a
+  // bar reaching (near) the chart's max height pushes its label above y=0, clipping it
+  // (this was cutting off values like "38" and "15854" at the top of the card). When
+  // negative bars are in play, reserve extra room at the bottom for THEIR value labels so
+  // they can't overlap the category labels sitting on the axis.
+  const top = 16;
+  const bottom = hasNegative ? 26 : 16;
+  const chartH = height - top - bottom;
+  // Value domain. `max` stays the top of the scale — callers may deliberately pass a
+  // target above the data (e.g. the calorie goal) so bars read against that target — and
+  // the floor is the lowest value, which is 0 whenever nothing is negative.
+  const hi = Math.max(max, 0, ...values);
+  const lo = Math.min(0, ...values);
+  const span = hi - lo || 1;
+  const zeroY = top + (chartH * hi) / span;
+  const svg = svgEl("svg", { width: "100%", height, viewBox: `0 0 ${w} ${height}` });
+  svg.setAttribute("preserveAspectRatio", "none");
+  const fmt = format ?? ((n: number) => String(n));
+
+  // Only drawn when it isn't already implied by the bottom of the chart area.
+  if (hasNegative) {
+    svg.appendChild(svgEl("line", {
+      x1: 0, y1: zeroY, x2: w, y2: zeroY,
+      stroke: "var(--background-modifier-border)", "stroke-width": 1,
+    }));
+  }
+
+  data.forEach((d, i) => {
+    const x = gap + i * (barW + gap);
+    const h = Math.round((Math.abs(d.value) / span) * chartH);
+    const negative = d.value < 0;
+    const barTop = negative ? zeroY : zeroY - h;
+    if (h > 0) svg.appendChild(svgEl("rect", { x, y: barTop, width: barW, height: h, rx: 4, fill: color }));
+    // Value label: just outside the bar (above a positive one, below a negative one),
+    // clamped so it always stays inside the chart and clear of the category labels.
+    const valY = negative ? Math.min(barTop + h + 9, height - 13) : Math.max(barTop - 4, 10);
+    const val = svgEl("text", { x: x + barW / 2, y: valY, "text-anchor": "middle", "font-size": 9, fill: "var(--text-muted)" });
+    val.textContent = fmt(d.value);
+    svg.appendChild(val);
+    const lab = svgEl("text", { x: x + barW / 2, y: height - 3, "text-anchor": "middle", "font-size": 9, fill: "var(--text-muted)" });
+    lab.textContent = d.label;
+    svg.appendChild(lab);
+  });
+  wrap.appendChild(svg);
+}
+
+/** A multi-segment donut chart with a centered total and a legend. */
+export function drawDonut(
+  parent: HTMLElement,
+  segments: Array<{ label: string; value: number; color: string }>,
+  size = 150,
+  format?: (n: number) => string,
+  centerFormat?: (n: number) => string
+): void {
+  const fmt = format ?? ((n: number) => String(n));
+  const centerFmt = centerFormat ?? fmt;
+  const wrap = parent.createDiv({ cls: "pa-donut-wrap" });
+  const total = segments.reduce((a, s) => a + s.value, 0);
+  const r = (size - 22) / 2;
+  const cx = size / 2;
+  const circ = 2 * Math.PI * r;
+
+  const svg = svgEl("svg", { width: size, height: size, viewBox: `0 0 ${size} ${size}` });
+  if (!total) {
+    svg.appendChild(svgEl("circle", { cx, cy: cx, r, fill: "none", stroke: "var(--background-modifier-border)", "stroke-width": 16 }));
+  } else {
+    let cumulative = 0;
+    segments.forEach((s) => {
+      if (s.value <= 0) return;
+      const segLen = (s.value / total) * circ;
+      const arc = svgEl("circle", {
+        cx, cy: cx, r, fill: "none", stroke: s.color, "stroke-width": 16,
+        "stroke-dasharray": `${segLen} ${circ - segLen}`,
+        "stroke-dashoffset": -cumulative,
+        transform: `rotate(-90 ${cx} ${cx})`,
+      });
+      svg.appendChild(arc);
+      cumulative += segLen;
+    });
+  }
+  const totalText = svgEl("text", { x: cx, y: cx - 4, "text-anchor": "middle", "dominant-baseline": "central", "font-size": centerFormat ? 17 : (format ? 13 : 22), "font-weight": 700, fill: "var(--text-normal)" });
+  totalText.textContent = centerFmt(total);
+  svg.appendChild(totalText);
+  const labelText = svgEl("text", { x: cx, y: cx + 14, "text-anchor": "middle", "dominant-baseline": "central", "font-size": 10, fill: "var(--text-muted)" });
+  labelText.textContent = "Total";
+  svg.appendChild(labelText);
+  wrap.appendChild(svg);
+
+  const legend = wrap.createDiv({ cls: "pa-donut-legend" });
+  segments.filter((s) => s.value > 0).forEach((s) => {
+    const item = legend.createDiv({ cls: "pa-legend-item" });
+    const dot = item.createSpan({ cls: "pa-legend-dot" });
+    dot.style.background = s.color;
+    item.createSpan({ text: `${s.label} (${fmt(s.value)})` });
+  });
+}
+
+/** A line sparkline for a series of numeric values. */
+export function drawSparkline(
+  parent: HTMLElement,
+  values: number[],
+  color: string,
+  height = 80
+): void {
+  const wrap = parent.createDiv({ cls: "pa-spark" });
+  if (values.length < 2) {
+    wrap.createDiv({ cls: "pa-muted", text: "Not enough data yet." });
+    return;
+  }
+  const w = 280;
+  const pad = 8;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const step = (w - pad * 2) / (values.length - 1);
+  const points = values.map((v, i) => {
+    const x = pad + i * step;
+    const y = pad + (height - pad * 2) * (1 - (v - min) / range);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const svg = svgEl("svg", { width: "100%", height, viewBox: `0 0 ${w} ${height}` });
+  svg.setAttribute("preserveAspectRatio", "none");
+  const poly = svgEl("polyline", { fill: "none", stroke: color, "stroke-width": 2, points: points.join(" ") });
+  svg.appendChild(poly);
+  values.forEach((_v, i) => {
+    const [x, y] = points[i].split(",");
+    svg.appendChild(svgEl("circle", { cx: x, cy: y, r: 2.5, fill: color }));
+  });
+  wrap.appendChild(svg);
+}
+
+export interface LineSeries {
+  name: string;
+  color: string;
+  values: Array<number | null>;
+}
+
+/** A multi-series line chart with axis labels, an optional dashed goal line and a legend. */
+export function drawLineChart(
+  parent: HTMLElement,
+  labels: string[],
+  series: LineSeries[],
+  opts: { goal?: number; goalColor?: string; height?: number; format?: (n: number) => string } = {}
+): void {
+  const wrap = parent.createDiv({ cls: "pa-linechart" });
+  const height = opts.height ?? 220;
+  if (!labels.length || !series.length) {
+    wrap.createDiv({ cls: "pa-muted", text: "Not enough data yet." });
+    return;
+  }
+  const fmt = opts.format ?? ((n: number) => String(n));
+  const tooltip = wrap.createDiv({ cls: "pa-chart-tooltip" });
+  // The SVG renders at width:100% (variable px) but its viewBox width is the fixed `w`
+  // below, so x must be converted to a percentage of the container; the SVG's height
+  // attribute equals the viewBox height, so y maps 1:1 to rendered pixels.
+  const showTip = (xPct: number, yPx: number, text: string) => {
+    tooltip.setText(text);
+    tooltip.style.left = `${xPct}%`;
+    tooltip.style.top = `${yPx}px`;
+    tooltip.addClass("visible");
+  };
+  const hideTip = () => tooltip.removeClass("visible");
+  const w = 520;
+  const padL = 34;
+  const padR = 10;
+  const padT = 10;
+  const padB = 26;
+
+  let max = opts.goal ?? 0;
+  let min = Infinity;
+  series.forEach((s) => s.values.forEach((v) => { if (v != null) { if (v > max) max = v; if (v < min) min = v; } }));
+  if (!isFinite(min)) min = 0;
+  min = Math.min(min, 0);
+  if (max <= min) max = min + 1;
+  // Expand the plotted range to match the rounded gridline extents (computed below), so
+  // the axis and the plotted lines stay in the same coordinate space — otherwise a value
+  // could fall outside [min, max] once the ticks round outward past the raw data range.
+  const ticks = niceTicks(min, max, 4);
+  min = Math.min(min, ticks[0]);
+  max = Math.max(max, ticks[ticks.length - 1]);
+  if (max <= min) max = min + 1;
+
+  const plotW = w - padL - padR;
+  const plotH = height - padT - padB;
+  const xAt = (i: number) => padL + (labels.length === 1 ? plotW / 2 : (i / (labels.length - 1)) * plotW);
+  const yAt = (v: number) => padT + plotH * (1 - (v - min) / (max - min));
+
+  const svg = svgEl("svg", { width: "100%", height, viewBox: `0 0 ${w} ${height}` });
+  // Stretch to fill the rendered box exactly (matches the other chart helpers below), so
+  // tooltip positions computed in viewBox units map 1:1 onto the rendered pixel box.
+  svg.setAttribute("preserveAspectRatio", "none");
+
+  // Y gridlines + labels, snapped to "nice" round numbers (e.g. 60000/45000/30000/15000/0
+  // instead of raw values like 60474/45356/...) so the axis reads at a glance.
+  ticks.forEach((val) => {
+    const y = yAt(val);
+    svg.appendChild(svgEl("line", { x1: padL, y1: y, x2: w - padR, y2: y, stroke: "var(--background-modifier-border)", "stroke-width": 1 }));
+    const lab = svgEl("text", { x: padL - 4, y, "text-anchor": "end", "dominant-baseline": "central", "font-size": 9, fill: "var(--text-muted)" });
+    lab.textContent = String(Math.round(val));
+    svg.appendChild(lab);
+  });
+
+  // Goal line
+  if (opts.goal != null) {
+    const y = yAt(opts.goal);
+    svg.appendChild(svgEl("line", { x1: padL, y1: y, x2: w - padR, y2: y, stroke: opts.goalColor || "#dc2626", "stroke-width": 1.5, "stroke-dasharray": "5 4" }));
+  }
+
+  // X labels
+  labels.forEach((lab, i) => {
+    const t = svgEl("text", { x: xAt(i), y: height - 8, "text-anchor": "middle", "font-size": 9, fill: "var(--text-muted)" });
+    t.textContent = lab;
+    svg.appendChild(t);
+  });
+
+  // Series
+  series.forEach((s) => {
+    const pts: string[] = [];
+    s.values.forEach((v, i) => { if (v != null) pts.push(`${xAt(i).toFixed(1)},${yAt(v).toFixed(1)}`); });
+    if (pts.length) {
+      svg.appendChild(svgEl("polyline", { fill: "none", stroke: s.color, "stroke-width": 2, points: pts.join(" ") }));
+      s.values.forEach((v, i) => {
+        if (v == null) return;
+        const cx = xAt(i);
+        const cy = yAt(v);
+        // Small visible dot + a larger invisible hit-area circle on top, so hovering
+        // near a point (not just the exact 2.5px dot) still triggers the tooltip.
+        svg.appendChild(svgEl("circle", { cx, cy, r: 2.5, fill: s.color }));
+        const hit = svgEl("circle", { cx, cy, r: 8, fill: "transparent", cursor: "pointer" });
+        const label = series.length > 1 ? `${s.name}: ${fmt(v)}` : `${labels[i]}: ${fmt(v)}`;
+        hit.addEventListener("mouseenter", () => showTip((cx / w) * 100, cy, label));
+        hit.addEventListener("mouseleave", hideTip);
+        svg.appendChild(hit);
+      });
+    }
+  });
+
+  wrap.appendChild(svg);
+
+  if (series.length > 1 || series[0]?.name) {
+    const legend = wrap.createDiv({ cls: "pa-donut-legend" });
+    series.forEach((s) => {
+      const item = legend.createDiv({ cls: "pa-legend-item" });
+      const dot = item.createSpan({ cls: "pa-legend-dot" });
+      dot.style.background = s.color;
+      item.createSpan({ text: s.name });
+    });
+  }
+}
+
+export interface ScatterPoint {
+  x: number; // 0..1 (left..right)
+  y: number; // 0..1 (bottom..top)
+  color: string;
+  title: string;
+  onClick?: () => void;
+}
+
+/** A 2x2 quadrant scatter plot (used for the Eisenhower chart). x/y are 0..1. */
+export function drawScatter(
+  parent: HTMLElement,
+  points: ScatterPoint[],
+  opts: { xLabel?: string; yLabel?: string; corners?: [string, string, string, string]; height?: number } = {}
+): void {
+  const wrap = parent.createDiv({ cls: "pa-scatter" });
+  const height = opts.height ?? 460;
+  const w = 520;
+  const padL = 40, padR = 18, padT = 20, padB = 36;
+  const plotW = w - padL - padR;
+  const plotH = height - padT - padB;
+  const x0 = padL, y0 = padT, x1 = padL + plotW, y1 = padT + plotH;
+  const midX = padL + plotW / 2, midY = padT + plotH / 2;
+
+  const svg = svgEl("svg", { width: "100%", height, viewBox: `0 0 ${w} ${height}` });
+
+  // Quadrant tints: [top-right, top-left, bottom-right, bottom-left]
+  const tints = [
+    { x: midX, y: y0, w: x1 - midX, h: midY - y0, color: "#ef4444" },
+    { x: x0, y: y0, w: midX - x0, h: midY - y0, color: "#3b82f6" },
+    { x: midX, y: midY, w: x1 - midX, h: y1 - midY, color: "#f59e0b" },
+    { x: x0, y: midY, w: midX - x0, h: y1 - midY, color: "#6b7280" },
+  ];
+  tints.forEach((r) => svg.appendChild(svgEl("rect", { x: r.x, y: r.y, width: r.w, height: r.h, fill: r.color, "fill-opacity": 0.08 })));
+
+  svg.appendChild(svgEl("rect", { x: x0, y: y0, width: plotW, height: plotH, fill: "none", stroke: "var(--background-modifier-border)", "stroke-width": 1 }));
+  svg.appendChild(svgEl("line", { x1: midX, y1: y0, x2: midX, y2: y1, stroke: "var(--background-modifier-border)", "stroke-width": 1, "stroke-dasharray": "4 4" }));
+  svg.appendChild(svgEl("line", { x1: x0, y1: midY, x2: x1, y2: midY, stroke: "var(--background-modifier-border)", "stroke-width": 1, "stroke-dasharray": "4 4" }));
+
+  const corners = opts.corners ?? ["Do first", "Schedule", "Delegate", "Eliminate"];
+  const corner = (text: string, tx: number, ty: number, anchor: string) => {
+    const el = svgEl("text", { x: tx, y: ty, "text-anchor": anchor, "font-size": 12, "font-weight": 700, fill: "var(--text-muted)" });
+    el.textContent = text;
+    svg.appendChild(el);
+  };
+  corner(corners[0], x1 - 6, y0 + 16, "end");
+  corner(corners[1], x0 + 6, y0 + 16, "start");
+  corner(corners[2], x1 - 6, y1 - 7, "end");
+  corner(corners[3], x0 + 6, y1 - 7, "start");
+
+  const xlab = svgEl("text", { x: midX, y: height - 7, "text-anchor": "middle", "font-size": 12, fill: "var(--text-muted)" });
+  xlab.textContent = opts.xLabel ?? "";
+  svg.appendChild(xlab);
+  const ylab = svgEl("text", { x: 13, y: midY, "text-anchor": "middle", "font-size": 12, fill: "var(--text-muted)", transform: `rotate(-90 13 ${midY})` });
+  ylab.textContent = opts.yLabel ?? "";
+  svg.appendChild(ylab);
+
+  points.forEach((p) => {
+    const cx = x0 + Math.max(0, Math.min(1, p.x)) * plotW;
+    const cy = y1 - Math.max(0, Math.min(1, p.y)) * plotH;
+    const attrs: Record<string, string | number> = { cx, cy, r: 9, fill: p.color, "fill-opacity": 0.85, stroke: "var(--background-primary)", "stroke-width": 2 };
+    if (p.onClick) attrs.class = "pa-scatter-dot";
+    const dot = svgEl("circle", attrs);
+    const title = svgEl("title", {});
+    title.textContent = p.title;
+    dot.appendChild(title);
+    if (p.onClick) dot.addEventListener("click", p.onClick);
+    svg.appendChild(dot);
+  });
+
+  wrap.appendChild(svg);
+}
+
+/** One tile of a treemap. */
+export interface TreemapTile { label: string; value: number; color: string; onClick?: () => void; }
+
+/**
+ * A WinDirStat-style treemap: area of each tile ∝ value. Uses a simple slice-and-dice split
+ * (alternating horizontal/vertical) — good enough for a folder/type size overview, no SVG.
+ * Renders nested absolutely-positioned divs inside a fixed-height box.
+ */
+export function drawTreemap(parent: HTMLElement, tiles: TreemapTile[], height = 220): void {
+  const box = parent.createDiv({ cls: "pa-treemap" });
+  box.style.height = `${height}px`;
+  const items = tiles.filter((t) => t.value > 0).sort((a, b) => b.value - a.value);
+  if (!items.length) { box.createDiv({ cls: "pa-muted", text: "No data yet." }); return; }
+
+  const layout = (list: TreemapTile[], x: number, y: number, w: number, h: number, horizontal: boolean) => {
+    const total = list.reduce((s, t) => s + t.value, 0);
+    if (total <= 0) return;
+    let offset = 0;
+    for (const t of list) {
+      const frac = t.value / total;
+      const tileEl = box.createDiv({ cls: "pa-treemap-tile" });
+      let tw: number, th: number, tx: number, ty: number;
+      if (horizontal) { tw = w * frac; th = h; tx = x + offset; ty = y; offset += tw; }
+      else { tw = w; th = h * frac; tx = x; ty = y + offset; offset += th; }
+      tileEl.style.left = `${tx}%`; tileEl.style.top = `${ty}%`;
+      tileEl.style.width = `${tw}%`; tileEl.style.height = `${th}%`;
+      tileEl.style.background = t.color;
+      tileEl.setAttr("title", `${t.label}: ${t.value}`);
+      if (t.value / total > 0.06) tileEl.createSpan({ cls: "pa-treemap-lbl", text: t.label });
+      if (t.onClick) { tileEl.addClass("pa-clickable"); tileEl.onclick = t.onClick; }
+    }
+  };
+  // Split largest-first into two balanced halves recursively for a squarified feel.
+  const recurse = (list: TreemapTile[], x: number, y: number, w: number, h: number, horizontal: boolean) => {
+    if (list.length <= 2 || (w < 12 || h < 12)) { layout(list, x, y, w, h, horizontal); return; }
+    const total = list.reduce((s, t) => s + t.value, 0);
+    let acc = 0, i = 0;
+    while (i < list.length - 1 && acc + list[i].value < total / 2) { acc += list[i].value; i++; }
+    const a = list.slice(0, i + 1), b = list.slice(i + 1);
+    const aFrac = acc + list[i].value ? (acc + list[i].value) / total : 0.5;
+    if (horizontal) {
+      recurse(a, x, y, w * aFrac, h, !horizontal);
+      recurse(b, x + w * aFrac, y, w * (1 - aFrac), h, !horizontal);
+    } else {
+      recurse(a, x, y, w, h * aFrac, !horizontal);
+      recurse(b, x, y + h * aFrac, w, h * (1 - aFrac), !horizontal);
+    }
+  };
+  recurse(items, 0, 0, 100, 100, true);
+}

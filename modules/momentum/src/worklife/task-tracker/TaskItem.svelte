@@ -1,0 +1,500 @@
+<script lang="ts">
+  import { createEventDispatcher, onMount, onDestroy } from "svelte";
+  import type { App } from "obsidian";
+  import type { ITask, TaskStatus } from "./types";
+  import { updateTask, updateTaskStatus, removeTask, resetTaskTimer, projects, activeTab, checklists, toggleChecklistItem, addChecklistItem, removeChecklistItem, updateChecklistItem } from "./stores";
+  import { get } from "svelte/store";
+  import { getActiveTimer, formatDuration, formatEstimate } from "./TimerManager";
+  import { TaskModal } from "./TaskModal";
+  import { t } from "../i18n";
+  import { settings } from "../ui/stores";
+  import { errorMessage } from "../utils/sanitize";
+
+  export let task: ITask;
+  export let appInstance: App;
+
+  $: isWorkoutTask = task.kind === "workout" || !!task.workoutDayKey;
+
+  const dispatch = createEventDispatcher();
+
+  let isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
+  let mqlMobile: MediaQueryList | null = null;
+  let mqlHandler: ((e: MediaQueryListEvent) => void) | null = null;
+
+  onMount(() => {
+    if (typeof window !== "undefined" && window.matchMedia) {
+      mqlMobile = window.matchMedia("(max-width: 768px)");
+      isMobile = mqlMobile.matches;
+      mqlHandler = (e: MediaQueryListEvent) => { isMobile = e.matches; };
+      mqlMobile.addEventListener("change", mqlHandler);
+    }
+    timerInterval = setInterval(updateTimerDisplay, 1000);
+    updateTimerDisplay();
+  });
+
+  onDestroy(() => {
+    if (timerInterval) clearInterval(timerInterval);
+    if (mqlMobile && mqlHandler) mqlMobile.removeEventListener("change", mqlHandler);
+  });
+
+  // Checklist
+  $: taskChecklistItems = $checklists.filter((c) => c.taskId === task.id).sort((a, b) => a.sortOrder - b.sortOrder);
+  $: checklistDone = taskChecklistItems.filter((c) => c.checked).length;
+  $: checklistTotal = taskChecklistItems.length;
+  $: taskProject = task.projectId ? $projects.find((p) => p.id === task.projectId) : null;
+  let showChecklist = false;
+  let newChecklistTitle = "";
+  let showDescription = false;
+  // Mobile: description always expanded
+  $: if (isMobile) showDescription = true;
+  // Inline title editing — draft avoids store round-trips that collapse the card
+  let editingChecklistId: string | null = null;
+  let editingChecklistTitle = "";
+
+  function handleToggleChecklist(id: string) { toggleChecklistItem(id); }
+  function handleAddChecklistItem() {
+    const title = newChecklistTitle.trim();
+    if (!title) return;
+    addChecklistItem(task.id, title);
+    newChecklistTitle = "";
+  }
+  function handleRemoveChecklistItem(id: string) { removeChecklistItem(id); }
+  function startChecklistEdit(id: string, title: string) {
+    editingChecklistId = id;
+    editingChecklistTitle = title;
+  }
+  function commitChecklistEdit() {
+    if (!editingChecklistId) return;
+    const title = editingChecklistTitle.trim();
+    if (title) updateChecklistItem(editingChecklistId, { title });
+    editingChecklistId = null;
+    editingChecklistTitle = "";
+  }
+  function cancelChecklistEdit() {
+    editingChecklistId = null;
+    editingChecklistTitle = "";
+  }
+  function focusChecklistInput(el: HTMLInputElement) {
+    el.focus();
+    el.select();
+  }
+  function onChecklistKeydown(e: Event) {
+    const ke = e as KeyboardEvent;
+    if (ke.key === "Escape") {
+      ke.preventDefault();
+      ke.stopPropagation();
+      cancelChecklistEdit();
+      return;
+    }
+    if (ke.key !== "Enter") {
+      ke.stopPropagation();
+      return;
+    }
+    ke.preventDefault();
+    ke.stopPropagation();
+    (ke.currentTarget as HTMLInputElement | null)?.blur();
+  }
+
+  function openNote(e: MouseEvent) {
+    e.preventDefault();
+    if (task.boundNotePath && appInstance) {
+      appInstance.workspace.openLinkText(task.boundNotePath, "", true);
+    }
+  }
+
+  // Timer
+  let timerInterval: ReturnType<typeof setInterval> | null = null;
+  let timerDisplay = "";
+
+  function updateTimerDisplay() {
+    const elapsed = getActiveTimer(task.id);
+    if (elapsed !== null && elapsed > 0) {
+      timerDisplay = formatDuration(elapsed + (task.totalWorkTime || 0));
+    } else {
+      timerDisplay = "";
+    }
+  }
+
+  // Computed
+  $: hasDeadline = !!task.deadline;
+  $: scheduledTimePassed = (() => {
+    if (!task.scheduledTime || task.status === "done" || task.status === "paused" || task.status === "progress") return false;
+    const today = window.moment?.().format("YYYY-MM-DD");
+    if (!today) return false;
+    const taskDate = task.dateUID?.match(/^day-(\d{4}-\d{2}-\d{2})/)?.[1];
+    if (taskDate !== today) return false;
+    const [h, m] = task.scheduledTime.split(":").map(Number);
+    const now = new Date();
+    return now.getHours() > h || (now.getHours() === h && now.getMinutes() >= m);
+  })();
+
+  $: deadlineOverdue = (() => {
+    if (!task.deadline || task.status === "done") return false;
+    const match = task.deadline.match(/(\d{4}-\d{2}-\d{2})/);
+    if (!match) return false;
+    const deadline = new Date(match[1]);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return deadline < today;
+  })();
+
+  $: deadlineLabel = (() => {
+    if (!task.deadline) return "";
+    const match = task.deadline.match(/(\d{4}-\d{2}-\d{2})/);
+    if (!match) return task.deadline;
+    return new Date(match[1]).toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+  })();
+
+  $: hasEstimate = !!task.estimatedTime;
+  $: hasActual = !!(task.totalWorkTime && task.totalWorkTime > 0);
+  $: estimateOver = hasEstimate && hasActual && task.totalWorkTime > task.estimatedTime;
+  $: isCarriedOver = !!task.carriedOverFrom && task.status !== "done";
+  $: carriedOverLabel = (() => {
+    if (!task.carriedOverFrom) return "";
+    const m = task.carriedOverFrom.match(/^day-(\d{4}-\d{2}-\d{2})/);
+    if (!m) return "";
+    return new Date(m[1] + "T12:00:00").toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+  })();
+
+  function quickStatus(status: TaskStatus) {
+    updateTaskStatus(task.id, status);
+    if (status === "todo") resetTaskTimer(task.id);
+  }
+
+  function handleEdit() {
+    const modal = new TaskModal(appInstance, async (data) => {
+      updateTask(task.id, data);
+    }, task);
+    modal.open();
+  }
+
+  async function handleDelete() {
+    removeTask(task.id);
+  }
+
+  // Actions menu
+  let showActionsMenu = false;
+  let actionsMenuEl: HTMLDivElement | null = null;
+  let splittingSubtasks = false;
+
+  function optsAiSubtasksEnabled(): boolean {
+    if (typeof window !== "undefined" && window.innerWidth <= 768) return false;
+    const opts = get(settings) as { ollamaEnabled?: boolean; aiSubtasksEnabled?: boolean };
+    return opts.ollamaEnabled === true && opts.aiSubtasksEnabled !== false;
+  }
+
+  function optsAiWorkoutEnabled(): boolean {
+    if (typeof window !== "undefined" && window.innerWidth <= 768) return false;
+    const opts = get(settings) as { ollamaEnabled?: boolean; aiWorkoutEnabled?: boolean };
+    return opts.ollamaEnabled === true && opts.aiWorkoutEnabled !== false;
+  }
+
+  async function handleAiSubtasks() {
+    if (splittingSubtasks) return;
+    splittingSubtasks = true;
+    try {
+      const { splitTaskIntoSubtasks } = await import("../services/aiSubtasks");
+      await splitTaskIntoSubtasks(appInstance, task);
+    } catch (e) {
+      alert(get(t)("ai.summaryError", { error: errorMessage(e) }));
+    } finally {
+      splittingSubtasks = false;
+    }
+  }
+
+  async function handleCreateTasksAi() {
+    try {
+      const { openWorkoutPlanModal } = await import("../workout/WorkoutPlanModal");
+      const plugin = (
+        appInstance as unknown as {
+          plugins?: { getPlugin?: (id: string) => { writeOptions?: (c: Record<string, unknown>) => Promise<void> } | undefined };
+        }
+      ).plugins?.getPlugin?.("worklife-calendar");
+      await openWorkoutPlanModal(appInstance, async (changes) => {
+        if (plugin?.writeOptions) await plugin.writeOptions(changes);
+      });
+    } catch (e) {
+      alert(get(t)("ai.summaryError", { error: errorMessage(e) }));
+    }
+  }
+
+  function openContextMenu(e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleActionsMenuAt(e.clientX, e.clientY);
+  }
+
+  function toggleActionsMenuAt(x: number, y: number) {
+    closeActionsMenu();
+    showActionsMenu = true;
+
+    const el = document.createElement("div");
+    el.className = "sch-ctx-overlay";
+    const close = (e?: Event) => {
+      e?.preventDefault();
+      e?.stopPropagation();
+      closeActionsMenu();
+    };
+    el.addEventListener("mousedown", close);
+    el.addEventListener("click", close);
+    el.addEventListener("contextmenu", close);
+
+    const menu = document.createElement("div");
+    menu.className = "task-actions-menu sch-float-menu";
+    menu.style.position = "fixed";
+    menu.style.zIndex = "9999";
+    menu.style.top = `${Math.min(y, Math.max(8, window.innerHeight - 240))}px`;
+    menu.style.left = `${Math.min(x, Math.max(8, window.innerWidth - 200))}px`;
+    menu.style.bottom = "auto";
+    menu.style.right = "auto";
+    menu.style.maxHeight = "min(70vh, 480px)";
+    menu.style.overflowY = "auto";
+
+    const translate = get(t);
+    type MenuItem = { label: string; action?: () => void; danger?: boolean } | { divider: true };
+    const items: MenuItem[] = [];
+
+    if (task.status === "done" || task.status === "failed") {
+      items.push({ label: translate("tasks.item.returnToTodo"), action: () => { quickStatus("todo"); } });
+      items.push({ label: translate("tasks.item.returnToWork"), action: () => { quickStatus("progress"); } });
+      items.push({ divider: true });
+      items.push({ label: showChecklist ? translate("tasks.item.hideSubtasks") : translate("tasks.item.subtasks"), action: () => { showChecklist = !showChecklist; } });
+      items.push({ label: translate("tasks.item.delete"), action: () => { handleDelete(); }, danger: true });
+    } else {
+      if (task.status !== "progress" && task.status !== "paused")
+        items.push({ label: translate("tasks.item.toWork"), action: () => { quickStatus("progress"); } });
+      if (task.status === "progress")
+        items.push({ label: translate("tasks.item.toPause"), action: () => { quickStatus("paused"); } });
+      if (task.status === "paused")
+        items.push({ label: translate("tasks.item.continue"), action: () => { quickStatus("progress"); } });
+      items.push({ label: translate("tasks.item.markDone"), action: () => { dispatch("complete", { task }); } });
+      items.push({ label: translate("tasks.item.markFailed"), action: () => { quickStatus("failed"); } });
+      items.push({ divider: true });
+      if (optsAiSubtasksEnabled()) {
+        items.push({ label: translate("ai.contextMenuSubtasks"), action: () => { void handleAiSubtasks(); } });
+      }
+      if (optsAiWorkoutEnabled()) {
+        items.push({ label: translate("workout.menuCreateTasksAi"), action: () => { void handleCreateTasksAi(); } });
+      }
+      items.push({ label: showChecklist ? translate("tasks.item.hideSubtasks") : translate("tasks.item.subtasks"), action: () => { showChecklist = !showChecklist; } });
+      items.push({ label: translate("tasks.item.edit"), action: () => { handleEdit(); } });
+      items.push({ label: translate("tasks.item.delete"), action: () => { handleDelete(); }, danger: true });
+    }
+
+    for (const item of items) {
+      if ("divider" in item && item.divider) {
+        const d = document.createElement("div");
+        d.style.height = "1px";
+        d.style.background = "rgba(255,255,255,0.06)";
+        d.style.margin = "4px 8px";
+        menu.appendChild(d);
+      } else if ("label" in item) {
+        const btn = document.createElement("button");
+        btn.textContent = item.label;
+        btn.style.width = "100%";
+        btn.style.textAlign = "left";
+        btn.style.padding = "8px 12px";
+        btn.style.border = "none";
+        btn.style.background = "none";
+        btn.style.color = item.danger ? "var(--mcp-danger)" : "var(--text-normal, var(--mcp-text))";
+        btn.style.cursor = "pointer";
+        btn.style.borderRadius = "6px";
+        btn.style.transition = "background 0.15s";
+        btn.addEventListener("mouseenter", () => { btn.style.background = "rgba(255,255,255,0.06)"; });
+        btn.addEventListener("mouseleave", () => { btn.style.background = "none"; });
+        btn.addEventListener("click", () => { item.action?.(); closeActionsMenu(); });
+        menu.appendChild(btn);
+      }
+    }
+
+    document.body.appendChild(el);
+    document.body.appendChild(menu);
+    actionsMenuEl = el;
+  }
+
+  function toggleActionsMenu(e: MouseEvent) {
+    e.stopPropagation();
+    if (showActionsMenu) { closeActionsMenu(); return; }
+    const btn = e.currentTarget as HTMLElement;
+    const rect = btn.getBoundingClientRect();
+    toggleActionsMenuAt(rect.right - 8, rect.bottom + 4);
+  }
+
+  function closeActionsMenu() {
+    showActionsMenu = false;
+    if (actionsMenuEl) {
+      actionsMenuEl.remove();
+      const menu = document.querySelector(".task-actions-menu");
+      if (menu) menu.remove();
+      actionsMenuEl = null;
+    }
+  }
+</script>
+
+<div
+  class="task-item"
+  class:completed={task.status === "done"}
+  class:failed={task.status === "failed"}
+  class:carried-over={isCarriedOver}
+  class:workout-session={isWorkoutTask}
+  data-status={task.status}
+  draggable={!isMobile}
+  role="listitem"
+  aria-label={task.title}
+  style="--task-color: {task.projectId ? ($projects.find(p => p.id === task.projectId)?.color || 'var(--mcp-accent)') : 'var(--mcp-accent)'}"
+  on:dragstart
+  on:contextmenu={openContextMenu}
+>
+  <div class="task-item-row-main">
+    <button class="task-status-btn status-{task.status}" disabled={task.status === "done" || task.status === "failed"} on:click|stopPropagation={() => { if (task.status !== "done" && task.status !== "failed") quickStatus("done"); }}>
+      {#if task.status === "todo"}
+        <svg class="check-hover" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6.5L5 9l4.5-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      {:else if task.status === "progress"}
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v4l3 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1.5" opacity="0.4"/></svg>
+      {:else if task.status === "done"}
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6.5L5 9l4.5-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      {:else if task.status === "failed"}
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3L3 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      {:else if task.status === "paused"}
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="3" y="2.5" width="2" height="7" rx="1" fill="currentColor"/><rect x="7" y="2.5" width="2" height="7" rx="1" fill="currentColor"/></svg>
+      {/if}
+    </button>
+
+    <div class="task-main-text">
+      {#if task.boundNotePath}
+        <a class="task-title note-link" class:strikethrough={task.status === "done" || task.status === "failed"} href={task.boundNotePath} on:click|preventDefault={openNote}>{task.title}</a>
+      {:else}
+        <span class="task-title" class:strikethrough={task.status === "done" || task.status === "failed"}>{task.title}</span>
+      {/if}
+
+      <!-- Meta + controls under the title -->
+      <div class="task-sub-row">
+        {#if taskProject}
+          <span class="task-project-chip" style="--pc:{taskProject.color}">
+            <span class="task-project-chip-dot"></span>
+            {taskProject.icon || "📁"} {taskProject.name}
+          </span>
+        {/if}
+
+        {#if $activeTab === "all" && task.status !== "done" && task.status !== "failed"}
+          <span class="task-status-badge status-badge-{task.status}">
+            {#if task.status === "todo"}{$t("tasks.tabs.todo")}{:else if task.status === "progress"}{$t("tasks.item.progress")}{:else if task.status === "paused"}{$t("tasks.item.paused")}{/if}
+          </span>
+        {/if}
+
+        {#if isWorkoutTask}
+          <span class="task-workout-badge">💪</span>
+        {/if}
+
+        {#if task.isWorkTask}
+          <span class="task-work-badge">{$t("tasks.item.workBadge")}</span>
+        {/if}
+
+        {#if isCarriedOver}
+          <span class="task-carried-over-badge">⚠ {carriedOverLabel}</span>
+        {/if}
+
+        {#if task.recurrence}
+          <span class="task-recurring-icon" title={$t("tasks.item.recurring")}>🔄</span>
+        {/if}
+
+        {#if task.scheduledTime && task.status !== "done" && task.status !== "failed"}
+          <span class="task-scheduled {scheduledTimePassed ? 'passed' : ''}">
+            {scheduledTimePassed ? "⚠" : "🕐"} {task.scheduledTime}{#if task.endTime}–{task.endTime}{/if}
+          </span>
+        {:else if task.scheduledTime}
+          <span class="task-scheduled {task.status}">{$t(task.status === "done" ? "tasks.item.done" : "tasks.item.failed")}</span>
+        {/if}
+
+        {#if hasDeadline && task.status !== "done" && task.status !== "failed"}
+          <span class="task-deadline {deadlineOverdue ? 'overdue' : ''}">⏰ {deadlineLabel}</span>
+        {/if}
+
+        {#if timerDisplay}
+          <span class="task-timer">⏱ {timerDisplay}</span>
+        {:else if hasEstimate && !hasActual}
+          <span class="task-estimate">⏱ {formatEstimate(task.estimatedTime)}</span>
+        {:else if task.status === "done" && hasEstimate && hasActual}
+          <span class="task-estimate-compare {estimateOver ? 'over' : 'under'}">
+            ⏱ {formatEstimate(task.estimatedTime)} → ✓ {formatDuration(task.totalWorkTime)}
+          </span>
+        {:else if hasActual}
+          <span class="task-timer total">⏱ {formatDuration(task.totalWorkTime)}</span>
+        {/if}
+
+        {#if task.priority === "high"}
+          <span class="task-priority high">!</span>
+        {:else if task.priority === "medium"}
+          <span class="task-priority medium">~</span>
+        {/if}
+
+        {#if !isMobile && task.description}
+          <button class="task-icon-btn" class:active={showDescription} on:click|stopPropagation={() => showDescription = !showDescription} title={$t("tasks.item.description")}>
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><rect x="1" y="1" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.2"/><line x1="3" y1="4" x2="9" y2="4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><line x1="3" y1="6.5" x2="7.5" y2="6.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+          </button>
+        {/if}
+
+        {#if !isMobile}
+          <button class="task-icon-btn" class:active={showChecklist} on:click|stopPropagation={() => showChecklist = !showChecklist} title={$t("tasks.item.checklist")}>
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><rect x="1" y="1" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.2"/><path d="M3.5 6l1.5 1.5L8.5 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            {#if checklistTotal > 0}<span class="task-icon-count">{checklistDone}/{checklistTotal}</span>{/if}
+          </button>
+        {/if}
+      </div>
+    </div>
+
+    <div class="task-actions-dropdown">
+      <button class="task-actions-toggle" on:click={toggleActionsMenu}>⋮</button>
+    </div>
+  </div>
+
+  {#if showDescription && task.description}
+    <div class="wf-task-description">{task.description}</div>
+  {/if}
+
+  {#if showChecklist}
+    <div class="checklist-section" on:click|stopPropagation on:keydown|stopPropagation>
+      {#each taskChecklistItems as item (item.id)}
+        <div class="checklist-item" class:checked={item.checked} class:editing={editingChecklistId === item.id}>
+          <button
+            type="button"
+            class="check-box"
+            class:checked={item.checked}
+            role="checkbox"
+            aria-checked={item.checked}
+            on:click|stopPropagation={() => handleToggleChecklist(item.id)}
+          >
+            {#if item.checked}
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5.2L4.2 7.4 8 2.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            {/if}
+          </button>
+          {#if editingChecklistId === item.id}
+            <input
+              type="text"
+              class="checklist-title checklist-title-input"
+              bind:value={editingChecklistTitle}
+              use:focusChecklistInput
+              on:click|stopPropagation
+              on:keydown|stopPropagation={onChecklistKeydown}
+              on:blur={commitChecklistEdit}
+            />
+          {:else}
+            <span
+              class="checklist-title"
+              class:strike={item.checked}
+              role="button"
+              tabindex="0"
+              on:click|stopPropagation={() => startChecklistEdit(item.id, item.title)}
+              on:keydown|stopPropagation={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startChecklistEdit(item.id, item.title); } }}
+            >{item.title}</span>
+          {/if}
+          <button class="checklist-remove" on:click|stopPropagation={() => handleRemoveChecklistItem(item.id)} title={$t("common.delete")}>✕</button>
+        </div>
+      {/each}
+      <div class="checklist-add">
+        <input type="text" placeholder={$t("tasks.item.checkistNew")} bind:value={newChecklistTitle} on:keydown|stopPropagation={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddChecklistItem(); } }} on:click|stopPropagation />
+        <button on:click|stopPropagation={handleAddChecklistItem}>+</button>
+      </div>
+    </div>
+  {/if}
+</div>

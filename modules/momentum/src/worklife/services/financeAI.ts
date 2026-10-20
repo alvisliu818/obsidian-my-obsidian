@@ -1,0 +1,359 @@
+import { get } from "svelte/store";
+import { streamOllamaChat, parseOllamaJson, resolveModel, type ModelRole } from "./OllamaService";
+import { isDesktopAI } from "./aiQuickAdd";
+import { settings } from "../ui/stores";
+import {
+  type ExpenseCategoryDef,
+  guessCategory,
+  categoryByName,
+} from "../finance/expenseCategories";
+import { computeMonthRemainder, resolveSpentForRemainder } from "../finance/types";
+
+export interface ParsedExpense {
+  name: string;
+  icon: string;
+  amount: number;
+  /** Existing category name to credit, or empty for a new category */
+  categoryName: string;
+  selected: boolean;
+}
+
+export interface FinanceSummary {
+  monthlyIncome: number;
+  /** Budget plan total (main-account categories). */
+  mainTotal: number;
+  /** Actual expense-log total (0 when the log is empty). */
+  actualTotal: number;
+  goalContributions: number;
+  /** income − actualTotal (or plan if no log) − goalContributions. */
+  balance: number;
+  savingsTotal: number;
+  daysLeftInMonth: number;
+  /** Budget plan by category. */
+  categories: Array<{ name: string; icon: string; amount: number }>;
+  /** Actual spending by category (from the expense log). */
+  actualCategories: Array<{ name: string; icon: string; amount: number }>;
+  goals: Array<{ name: string; current: number; target: number }>;
+  savings: Array<{ name: string; amount: number; percent: number }>;
+  rules: string[];
+}
+
+export interface DistributionSuggestion {
+  rules: string[];
+  categoryPercents: Array<{ name: string; percent: number }>;
+  explanation: string;
+}
+
+function daysLeftInMonth(): number {
+  const now = new Date();
+  const last = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  return Math.max(1, last - now.getDate() + 1);
+}
+
+export function buildFinanceSummary(input: {
+  monthlyIncome: number;
+  mainCategories: Array<{ name: string; icon: string; amount: number }>;
+  goals: Array<{ name: string; currentAmount: number; targetAmount: number; broughtForward?: number }>;
+  savings: Array<{ name: string; amount: number; percent: number }>;
+  rules: string[];
+  goalContribution: number;
+  /** Actual expense log (optional). When present, balance uses it instead of the plan. */
+  actualCategories?: Array<{ name: string; icon: string; amount: number }>;
+}): FinanceSummary {
+  const mainTotal = input.mainCategories.reduce((s, c) => s + (c.amount || 0), 0);
+  const actualCategories = input.actualCategories || [];
+  const actualTotal = actualCategories.reduce((s, c) => s + (c.amount || 0), 0);
+  const spent = resolveSpentForRemainder(actualTotal, mainTotal);
+  const savingsTotal = input.savings.reduce((s, c) => s + (c.amount || 0), 0);
+  return {
+    monthlyIncome: input.monthlyIncome || 0,
+    mainTotal,
+    actualTotal,
+    goalContributions: input.goalContribution || 0,
+    balance: computeMonthRemainder(
+      input.monthlyIncome || 0,
+      spent,
+      input.goalContribution || 0,
+    ),
+    savingsTotal,
+    daysLeftInMonth: daysLeftInMonth(),
+    categories: input.mainCategories.map((c) => ({
+      name: c.name,
+      icon: c.icon || "📦",
+      amount: c.amount || 0,
+    })),
+    actualCategories: actualCategories.map((c) => ({
+      name: c.name,
+      icon: c.icon || "📦",
+      amount: c.amount || 0,
+    })),
+    goals: input.goals.map((g) => ({
+      name: g.name,
+      current: g.currentAmount || 0,
+      target: g.targetAmount || 0,
+    })),
+    savings: input.savings.map((s) => ({
+      name: s.name,
+      amount: s.amount || 0,
+      percent: s.percent || 0,
+    })),
+    rules: input.rules || [],
+  };
+}
+
+function ollamaOpts(role: ModelRole = "reason"): { url: string; model: string; enabled: boolean } {
+  const s = get(settings) as {
+    ollamaEnabled?: boolean;
+    ollamaUrl?: string;
+    ollamaModel?: string;
+    ollamaModelMode?: "single" | "dual";
+    ollamaModelExtract?: string;
+  };
+  return {
+    enabled: s.ollamaEnabled === true && isDesktopAI(),
+    url: s.ollamaUrl || "http://localhost:11434",
+    model: resolveModel(role, s),
+  };
+}
+
+export function getFinanceAiConfig(): { url: string; model: string; enabled: boolean } {
+  return ollamaOpts("reason");
+}
+
+// ── 1. Parse expenses from free text ──────────────────────────────────────────
+
+const PARSE_SYSTEM = `You extract expense line items from free-form text (Russian or English).
+Return ONLY valid JSON.
+
+Rules:
+- Each expense: name (short clean title), amount (number, no currency), category (id from the provided list), icon (single emoji).
+- The user provides fixed category ids with names and emoji. ALWAYS pick one of those ids.
+- Examples: "штаны 2000" → clothing, "продукты" → food, "такси" → transport (when those ids exist).
+- Use the category's default emoji unless the item clearly has a better one.
+- Merge same name by summing amounts.
+- Amounts like "1.2к", "1200р", "1 200 ₽" → number.
+
+OUTPUT:
+{"expenses":[{"name":"string","amount":number,"category":"<id from list>","icon":"emoji"}]}`;
+
+export async function parseExpensesFromText(
+  text: string,
+  categories: ExpenseCategoryDef[],
+  signal?: AbortSignal,
+): Promise<ParsedExpense[]> {
+  const { url, model, enabled } = ollamaOpts("extract");
+
+  const catList = categories.map((c) => `${c.id}=${c.name} ${c.icon}`).join(", ");
+  const userContent = `Categories: ${catList}\n\nText:\n${text.slice(0, 8000)}`;
+
+  let raw = "";
+  if (enabled) {
+    try {
+      raw = await streamOllamaChat(
+        url,
+        model,
+        [
+          { role: "system", content: PARSE_SYSTEM },
+          { role: "user", content: userContent },
+        ],
+        { signal, temperature: 0.1 },
+      );
+    } catch {
+      raw = "";
+    }
+  }
+
+  const parsed = parseOllamaJson(raw) as {
+    expenses?: Array<{
+      name?: string;
+      amount?: number;
+      icon?: string;
+      category?: string;
+      categoryName?: string;
+    }>;
+  };
+
+  let list = Array.isArray(parsed.expenses) ? parsed.expenses : [];
+
+  // Fallback: rule-based extraction when AI is off or returned nothing
+  if (!enabled || list.length === 0) {
+    list = parseExpensesRuleBased(text, categories);
+  }
+
+  return list
+    .filter((e) => e && typeof e.name === "string" && String(e.name).trim())
+    .map((e) => {
+      const name = String(e.name || "").trim();
+      const cat =
+        categoryByName(categories, String(e.category || e.categoryName || "")) ||
+        guessCategory(categories, name + " " + text);
+      return {
+        name,
+        icon: String(e.icon || cat.icon).slice(0, 4) || cat.icon,
+        amount: Math.max(0, Math.round(Number(e.amount) || 0)),
+        categoryName: cat.name,
+        selected: true,
+      };
+    })
+    .filter((e) => e.amount > 0 && e.name);
+}
+
+/** Simple offline parser: "такси 350, кофе 250" → entries with guessed categories. */
+function parseExpensesRuleBased(
+  text: string,
+  categories: ExpenseCategoryDef[],
+): Array<{
+  name: string;
+  amount: number;
+  icon: string;
+  category: string;
+}> {
+  const out: Array<{ name: string; amount: number; icon: string; category: string }> = [];
+  const parts = text.split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean);
+  for (const part of parts) {
+    const m = part.match(/^(.*?)(?:\s+|:|—|-)?(\d[\d\s]*(?:[.,]\d{1,2})?)\s*(?:р|руб|₽|р\.|рублей)?$/i);
+    if (!m) continue;
+    const name = m[1].replace(/[:\-—]\s*$/, "").trim();
+    const amount = Math.round(parseFloat(m[2].replace(/\s/g, "").replace(",", ".")));
+    if (!name || !isFinite(amount) || amount <= 0) continue;
+    const cat = guessCategory(categories, part);
+    out.push({ name, amount, icon: cat.icon, category: cat.id });
+  }
+  return out;
+}
+
+// ── 2. Forecast remainder ────────────────────────────────────────────────────
+
+const FORECAST_SYSTEM = `You are a personal finance assistant. Analyze the month snapshot and forecast the remainder.
+Write in the SAME language as the category names (Russian if they are Russian).
+Return ONLY markdown (no code fences). Be concrete with numbers. Structure:
+## Прогноз
+- 2–4 sentences: will the month close, what is left, pace per day
+## Риски
+- 2–4 bullets
+## Что сделать
+- 3 short actionable tips
+Keep it under 200 words.`;
+
+export async function forecastBalance(
+  summary: FinanceSummary,
+  signal?: AbortSignal,
+  onDelta?: (full: string) => void,
+): Promise<string> {
+  const { url, model, enabled } = ollamaOpts("reason");
+  if (!enabled) throw new Error("ollama-disabled");
+
+  const payload = JSON.stringify(summary);
+  return streamOllamaChat(
+    url,
+    model,
+    [
+      { role: "system", content: FORECAST_SYSTEM },
+      { role: "user", content: `Month snapshot:\n${payload}` },
+    ],
+    {
+      signal,
+      temperature: 0.3,
+      onDelta: (_d, full) => onDelta?.(full),
+    },
+  );
+}
+
+// ── 3. Smart distribution rules ──────────────────────────────────────────────
+
+const RULES_SYSTEM = `You suggest a money-distribution plan for a monthly budget.
+Return ONLY valid JSON.
+
+RULES:
+- "rules": 3–6 short allocation rules as strings (percentages must sum conceptually to 100 of the remainder).
+- "categoryPercents": suggest percent of REMAINDER (balance after expenses and goal deposits) for each savings category name provided; names must match exactly.
+- "explanation": 2–3 sentences in the same language as category names.
+
+OUTPUT:
+{"rules":["..."],"categoryPercents":[{"name":"...","percent":number}],"explanation":"..."}`;
+
+export async function suggestDistribution(
+  summary: FinanceSummary,
+  signal?: AbortSignal,
+): Promise<DistributionSuggestion> {
+  const { url, model, enabled } = ollamaOpts("reason");
+  if (!enabled) throw new Error("ollama-disabled");
+
+  const raw = await streamOllamaChat(
+    url,
+    model,
+    [
+      { role: "system", content: RULES_SYSTEM },
+      { role: "user", content: `Month snapshot:\n${JSON.stringify(summary)}` },
+    ],
+    { signal, temperature: 0.2 },
+  );
+
+  const parsed = parseOllamaJson(raw) as {
+    rules?: unknown;
+    categoryPercents?: unknown;
+    explanation?: unknown;
+  };
+  const rules = Array.isArray(parsed.rules)
+    ? parsed.rules.map((r) => String(r)).filter(Boolean).slice(0, 8)
+    : [];
+  const categoryPercents = Array.isArray(parsed.categoryPercents)
+    ? parsed.categoryPercents
+        .map((c) => ({
+          name: String((c as { name?: string }).name || "").trim(),
+          percent: Math.max(0, Math.min(100, Math.round(Number((c as { percent?: number }).percent) || 0))),
+        }))
+        .filter((c) => c.name)
+    : [];
+  return {
+    rules,
+    categoryPercents,
+    explanation: typeof parsed.explanation === "string" ? parsed.explanation : "",
+  };
+}
+
+// ── 4. Month insights (tips for the MD summary) ─────────────────────────────
+
+const INSIGHTS_SYSTEM = `You are a personal finance assistant. Analyze the month snapshot and write short tips.
+Write in the SAME language as the category names (Russian if they are Russian).
+Return ONLY markdown bullets (no code fences, no heading).
+- 3–5 bullets, each one sentence
+- Be concrete with numbers from the snapshot
+- Fields: monthlyIncome, actualTotal (real spending), mainTotal (budget plan), actualCategories, categories (plan), balance, goalContributions
+- Base spending facts on actualCategories/actualTotal — NOT on the budget plan
+- If actualCategories is empty, say the expense log is empty and only plan is known
+- Cover: what stands out, where money actually went, one risk, one actionable tip
+- No fluff, no "consider reviewing your budget" clichés
+Keep it under 120 words.`;
+
+/**
+ * Generate short AI tips for the month summary.
+ * Returns markdown bullets (without heading). Throws when Ollama is off.
+ */
+export async function suggestMonthInsights(
+  summary: FinanceSummary,
+  signal?: AbortSignal,
+): Promise<string> {
+  const { url, model, enabled } = ollamaOpts("reason");
+  if (!enabled) throw new Error("ollama-disabled");
+
+  const raw = await streamOllamaChat(
+    url,
+    model,
+    [
+      { role: "system", content: INSIGHTS_SYSTEM },
+      { role: "user", content: `Month snapshot:\n${JSON.stringify(summary)}` },
+    ],
+    { signal, temperature: 0.4 },
+  );
+  return raw.trim();
+}
+
+/** Whether AI tips should be generated for the month summary. */
+export function isFinanceInsightsEnabled(): boolean {
+  const s = get(settings) as {
+    ollamaEnabled?: boolean;
+    aiFinanceInsightsEnabled?: boolean;
+  };
+  return s.ollamaEnabled === true && s.aiFinanceInsightsEnabled !== false && isDesktopAI();
+}

@@ -1,0 +1,720 @@
+import { App, Modal } from "obsidian";
+
+export interface ChangeSection { title: string; items: string[]; }
+export interface ChangeEntry { version: string; sections: ChangeSection[]; }
+
+/** Release notes shown in the "What's new" dialog, newest first. */
+export const CHANGELOG: ChangeEntry[] = [
+  {
+    version: "0.8.11",
+    sections: [
+      {
+        title: "Fixed — safer, consistent task sync across devices",
+        items: [
+          "Your devices now share one setting for who owns your tasks (Google Tasks or Google Drive), synced automatically. Before, one device on Google Tasks and another on Drive could disagree and, in the worst case, silently delete a board's tasks. Now every device follows the same policy — set it once in Settings, it applies everywhere.",
+          "Added a safety guard: a sync will never delete a Google Tasks list that still has tasks without asking you first — so a board that merely looks missing on one device can no longer wipe its tasks.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.8.10",
+    sections: [
+      {
+        title: "Improved — Google Drive sync setup (beta)",
+        items: [
+          "Whole vault is now the default: when you turn on Drive sync, your notes actually sync out of the box. Before, the default pointed at a local folder named \"Drive\" that a fresh vault didn't have — so a first sync could silently do nothing. If you were on that stale default with no \"Drive\" folder, you're switched to whole vault automatically (a folder you deliberately mirror is left alone).",
+          "Automatic sync is on by default now (sync on startup and after edits, using the fast incremental check). You can still turn any of it off.",
+          "The binary-files toggle is now clearly labelled as a Google Drive pro feature, with a plain explanation: text and Markdown always sync for free; pro adds images, PDFs and every other file type.",
+          "The Drive settings are reorganised into clear groups (what syncs, automatic sync, advanced, actions) and the alarming red warning is now a calm info note.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.8.9",
+    sections: [
+      {
+        title: "Improved — better theme compatibility",
+        items: [
+          "Dropped the last few forced style overrides so your theme and CSS snippets can style Momentum's controls more predictably. No visual change with the default appearance; behaviour is unchanged.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.8.8",
+    sections: [
+      {
+        title: "Improved — Google Drive sync (beta)",
+        items: [
+          "Faster everyday sync: opening the app and editing/deleting a file locally now use an incremental sync (checks Drive's change feed and skips the full scan when nothing changed remotely). The first sync — and anything that actually changed on Drive — still does a full pass, so nothing is missed.",
+          "Duplicate cleanup: if the same file ends up as two copies on Drive (e.g. a folder dropped in that merged with already-synced content), the extra copy is now consolidated — the newest is kept, identical copies are removed, and any differing copy is preserved as a .conflict. A manual Full sync cleans them all in one pass.",
+          "Deleting on Drive takes effect in one confirmation (a second safety limit was double-counting deletions), and when a deletion empties a folder, the empty folder is removed from your vault too instead of being left behind.",
+          "Fixed a case-only folder mismatch (e.g. \"Skill\" vs \"skill\") that could error repeatedly on macOS.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.8.7",
+    sections: [
+      {
+        title: "Fixed — deleting a folder on Google Drive now removes it locally",
+        items: [
+          "When you delete a folder (or file) directly on Google Drive and run a full sync, it's now removed from your vault too. Before, a folder trashed on Drive didn't propagate because Drive doesn't emit a per-file event for the files inside it — a full sync now treats what's genuinely gone from Drive as deleted (soft-delete, reversible; a large batch still asks first).",
+          "This applies to a full sync (which reads Drive's complete state). Automatic/incremental syncs stay conservative — they only act on explicit change events — so a device that's merely behind never triggers a wrong deletion.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.8.6",
+    sections: [
+      {
+        title: "Improved — Google Drive sync robustness (beta)",
+        items: [
+          "Much steadier on flaky connections and large vaults: Drive requests now retry with backoff when Google rate-limits (429) or hiccups (5xx), instead of failing that file until the next sync.",
+          "Safer conflict default: \"keep both\" is the default again (never loses data). \"Newer wins\" is still there as an option, but across devices with slightly different clocks it can drop the genuinely newer edit — so it's opt-in.",
+          "A file being renamed on Drive can no longer momentarily duplicate if the network blips mid-operation — the rename is applied atomically or safely retried next sync.",
+          "A file you edited locally is never overwritten by a stale copy if another device wrote to it during the same sync; the change is reconciled next run instead.",
+          "Identical duplicate copies on Drive are now just removed (one kept), without leaving a redundant .conflict file behind.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.8.5",
+    sections: [
+      {
+        title: "Improved — Google Drive sync (beta)",
+        items: [
+          "Renaming or moving a file directly on Google Drive now flows into your vault: the file is renamed/moved to match Drive (the source of truth) instead of just being left under its old name. No duplicate, and if the content changed too it's pulled as well.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.8.4",
+    sections: [
+      {
+        title: "Improved — Google Drive sync across devices (beta)",
+        items: [
+          "Google Drive is now the source of truth. Changes made on Drive win and flow to every device — including deletions (delete a file on Drive and it's removed on your devices too). Please back up your vault before enabling Drive sync (there's a reminder in Settings).",
+          "Deletions are driven by real events, not guesswork. A file that's simply missing on one device (still downloading, or a device that hasn't caught up) is no longer mistaken for a deletion — so notes stop coming back or getting removed unexpectedly. A file is only removed when Drive reports it deleted, or when you delete it here.",
+          "No more duplicates from renames: files now carry a stable identity, so renaming or moving a file on Drive is recognised as the same file instead of spawning a copy. Existing duplicates from earlier multi-device races are consolidated automatically — the newest is kept and the other is preserved as a .conflict copy.",
+          "Far fewer deletion prompts, and if you decline one, Momentum remembers and stops asking about the same files.",
+          "Conflicts settle instead of piling up, and the default resolution is now \"newer wins\" (Drive's clock decides). You can change it — including \"keep both\" — under Settings → Conflict resolution.",
+          "Faster, more reliable incremental sync: the change cursor is tracked correctly, so a routine sync only looks at what actually changed and never skips a change that landed mid-sync.",
+          "Heads-up: still beta. Delete or rename files from within Obsidian so the change is captured, and keep Drive sync active on a single device while this settles.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.8.2",
+    sections: [
+      {
+        title: "Fixed — Momentum pro on a second device",
+        items: [
+          "Pro now unlocks reliably on another device: once your license syncs across, it's adopted right away, and a flaky connection or a brief store outage no longer blocks activation or locks Pro. Your license is only ever turned off if the store says it's genuinely invalid.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.8.1",
+    sections: [
+      {
+        title: "New — Pro & beta terms",
+        items: [
+          "Added clear terms for Momentum pro, linked from Settings → Momentum pro. In short: beta, provided as-is, no guaranteed support — and if the project is ever discontinued, the intent is to open-source it (Pro becomes free for everyone) or hand it to a new maintainer. Your free, local features never depend on us.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.8.0",
+    sections: [
+      {
+        title: "Join the beta — Momentum pro free for the first 100",
+        items: [
+          "Momentum pro is a one-time unlock (Google Drive sync of your images, pdfs and other binaries). The first 100 beta testers get it free — a perpetual license that stays yours. Open Settings → Momentum pro to grab your key.",
+          "Come kick the tyres and tell us what breaks: your notes always sync for free; pro just adds binary files on top.",
+        ],
+      },
+      {
+        title: "Improved — Google Drive sync you can actually watch",
+        items: [
+          "The sync card shows exactly what's happening — scanning, comparing files, applying changes — with a progress bar that moves and per-folder cards that fill in and settle green (in sync), yellow (has differences) or red (error).",
+          "It now reflects every sync, including the automatic one on startup — not only syncs you start from the card.",
+          "Two explicit buttons: Incremental (fast — checks only what changed on Drive) and Full sync (a complete two-way scan). When an incremental run has to fall back to full, it tells you why.",
+          "A Stop button (with confirmation) to end a running sync safely — it finishes the current file, keeps everything already synced, and the next sync picks up the rest.",
+          "Faster routine syncs on large vaults: unchanged files are no longer re-read to check them.",
+        ],
+      },
+      {
+        title: "Improved — File manager",
+        items: [
+          "The storage overview, folder map and activity chart now refresh on their own as files change — no need to reopen the tab.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.7.16",
+    sections: [
+      {
+        title: "Improved — Google Drive sync",
+        items: [
+          "Your folders now live inside the Google Drive card, each colour-coded by sync status: the fill advances as it syncs and settles green (fully synced), yellow (has differences) or red (error). A header shows \"Syncing…\" while it runs and \"synced\" when done.",
+          "Each folder's legend shows how many of its files have reached Drive, as \"local / drive items\".",
+          "Faster syncs on large vaults: a file that hasn't changed since the last sync is no longer re-read to check it — the mtime is enough — so a routine sync does far less work.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.7.15",
+    sections: [
+      {
+        title: "Improved — Google Drive sync progress",
+        items: [
+          "The sync card now shows what's actually happening, with a progress bar that moves: scanning Drive (and whether it's a full or an incremental check), comparing files one by one, then applying changes — instead of a single stuck \"Syncing…\".",
+          "The Sync now button clearly shows \"Syncing…\" and is disabled while a sync runs, so you don't fire it several times by accident.",
+          "The old \"Check drive\" button is now \"Compare\", with a note that it just shows what differs from Drive and makes no changes.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.7.14",
+    sections: [
+      {
+        title: "Improved — Google Drive sync",
+        items: [
+          "Whole-vault sync now includes your Momentum data too (journal, fitness, nutrition, finance, studies, habits and settings), so it travels across your devices — the plugin only skips its own volatile logs.",
+          "Your Momentum pro license now rides the sync as well, so activating on one device unlocks the others once the sync catches up.",
+          "Task notes stay owned by Google Tasks sync when that's on (no double-sync); with Google Tasks off, Drive syncs your tasks too.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.7.13",
+    sections: [
+      {
+        title: "Improved — Google Drive sync",
+        items: [
+          "Text notes now sync on every plan — no license needed. Momentum pro is only required to also sync binary files like images, pdfs and other file types.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.7.12",
+    sections: [
+      {
+        title: "New — Journal",
+        items: [
+          "A new Journal tab: pick a template (five-minute journal, gratitude or free writing) and a quick check-in captures your mood, energy, connection and stress. Entries are plain notes in your vault, so you can write, add images and format them like any other note.",
+          "A month calendar tinted by your mood and a history table of past entries, each shown as colour chips.",
+          "You can keep more than one entry per day — starting another never overwrites the first, it just gets a numbered name.",
+          "A delete button on each history row moves that entry to your system trash (recoverable).",
+        ],
+      },
+      {
+        title: "Improved — Momentum Pro across devices",
+        items: [
+          "Your Pro license now travels with your vault: activate on one device and, once Obsidian Sync catches up, Pro unlocks on your other devices on its own — no need to paste the key again. Nothing is required from you; your existing license keeps working.",
+        ],
+      },
+      {
+        title: "Fixed",
+        items: [
+          "The File Manager tab now opens in place instead of stacking a new pane, and Momentum starts a touch faster on large vaults.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.7.11",
+    sections: [
+      {
+        title: "Maintenance",
+        items: [
+          "Internal code tidy-up to keep Momentum aligned with the Obsidian community review guidelines. No changes to features or your data.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.7.10",
+    sections: [
+      {
+        title: "Improved — Google Drive sync",
+        items: [
+          "The Drive status card now tells the whole story: a multi-colour bar and clickable pills for synced, held, errors, skipped and conflicts. Click any pill to see exactly which files fell into it, and why.",
+          "Live progress while syncing (\"Syncing… 12/40\"), and an honest in-sync percentage that no longer shows 100% when something is still held back.",
+          "A first sync, or turning on binary files, no longer trips the safety pause: brand-new uploads flow freely, and only bulk overwrites or deletions ask you to confirm.",
+          "Google Drive sync now clearly shows as a Momentum Pro feature, with a plain list of what Pro unlocks.",
+        ],
+      },
+      {
+        title: "Fixed — faster startup",
+        items: [
+          "Momentum no longer runs its task-inbox check once per existing file when Obsidian first loads, and defers its background housekeeping a moment so the app opens quicker on large vaults.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.7.9",
+    sections: [
+      {
+        title: "New — Google Drive sync (beta, Pro)",
+        items: [
+          "Two-way sync between a Google Drive folder and a folder in your vault (or your whole vault). It uses a separate Google sign-in from Tasks and never touches your Tasks data — the plugin's own data folder is always excluded to stay safe.",
+          "Text notes sync on every plan. With Momentum Pro, images, PDFs and any other file type sync too, as real binary uploads/downloads.",
+          "Momentum Pro is a one-time unlock for Drive sync. It's free for the first 100 beta testers — open Settings → Momentum pro to grab your license key.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.7.6",
+    sections: [
+      {
+        title: "Fixed — stuck cards and lost tasks",
+        items: [
+          "Cards that refused to move between columns or be completed are unstuck. When the same vault syncs on two devices, Obsidian Sync could leave conflict markers inside a note's frontmatter, which quietly broke every update to that card. The plugin now repairs those automatically on load.",
+          "Tasks named with a trailing number (\"teste 1\", \"teste 2\", \"Cap 1\", \"Cap 2\"…) are no longer treated as duplicates of each other. They used to be collapsed and the extras deleted on sync; now only cards with the exact same title are ever merged.",
+          "Creating a note whose name differs only in capitalization from an existing one (\"teste\" next to \"Teste\") no longer collides — it becomes a separate note instead of silently failing.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.7.5",
+    sections: [
+      {
+        title: "New — File Manager",
+        items: [
+          "A new File Manager tab gives you a visual overview of your vault: a storage breakdown by file type, a WinDirStat-style treemap of space by folder, per-folder cards, an activity chart of files changed per month, and side-by-side Recently modified / Pinned / Recently opened lists. Pin the files you keep coming back to, and click a folder to reveal it in the file explorer. It works entirely on your local vault — no account or network needed.",
+        ],
+      },
+      {
+        title: "Fixed — Google Tasks sync",
+        items: [
+          "A list you create directly in Google Tasks now shows up as a board in Obsidian even when it's still empty (previously it only appeared once it had its first task).",
+          "Creating a task through the MCP tools now respects the requested column: asking for \"in-progress\" no longer drops the card into Backlog.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.7.1",
+    sections: [
+      {
+        title: "Added — more Google Tasks sync intervals",
+        items: [
+          "You can now set the Google Tasks auto-sync to run every hour, 2 hours, 5 hours, 12 hours or 24 hours, in addition to the existing 5 / 10 / 15 minute options.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.7.0",
+    sections: [
+      {
+        title: "Fixed — Google tasks sync across devices",
+        items: [
+          "A task you left in a column like \"in progress\" no longer jumps back to \"backlog\" after another device syncs. Google tasks has no concept of columns, so a task rebuilt from the Google side used to land in the first column — now it keeps its column (inherited from the matching note, and preserved when duplicate copies are merged).",
+          "Deleting a board now sticks, whichever way you delete it. Removing a board's folder (from another app, the file explorer, or your phone) used to leave the matching Google list alive, so the board reappeared on the next sync. The plugin now notices a board that disappeared and removes its Google list — with a safety check so a folder that's merely mid-download during a sync is never mistaken for a deletion.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.6.9",
+    sections: [
+      {
+        title: "🎉 Google tasks integration is now free and in production",
+        items: [
+          "The two-way Google tasks sync is fully live and free for everyone in 0.6.9. It's out of beta and Google's verification is complete, so connecting is just the normal Google consent screen — no \"unverified app\" warning, no account limit, and nothing you need to do.",
+        ],
+      },
+      {
+        title: "New — Cockpit Life",
+        items: [
+          "A new landing tab, Cockpit Life, consolidates the whole day in one place: quick task capture for today/overdue, habits with streaks, study progress, and a full list of open tasks filterable by board.",
+          "Evolution charts for tasks, workouts, calories and finances live side by side with one-tap quick actions (log water, add income/expense, add a task) — no need to leave the page.",
+          "Four status donuts (workouts, studies, tasks, habits) and the daily greeting moved here from the Habit Tracker.",
+        ],
+      },
+      {
+        title: "Improved — Habit Tracker",
+        items: [
+          "Reformatted as a bullet-journal-style monthly tracker: a clickable dot per day (so you can log a day you forgot to mark), a weekly consistency bar, and a rolling 7-day completion-rate line, for every habit.",
+          "Dots are sized for reliable tapping and can be edited for any past or current day.",
+        ],
+      },
+      {
+        title: "Changed",
+        items: [
+          "The Tasks page dropped its List view — Kanban and Matrix cover the same ground without the extra tab.",
+        ],
+      },
+      {
+        title: "Fixed",
+        items: [
+          "On mobile, searching for a food in Nutrition no longer closes the keyboard mid-typing — background data refreshes now skip re-rendering while you're actively typing in a field.",
+          "Bar charts now show negative values. A month that closed in the red used to draw no bar at all and looked exactly like a month with no data, which made the Cockpit's balance chart disagree with your actual numbers.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.6.2",
+    sections: [
+      {
+        title: "Fixed",
+        items: [
+          "Google Tasks sync no longer resurrects tasks you deleted on the other side — a deletion is now remembered so it doesn't get pulled back in on the next sync.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.6.1",
+    sections: [
+      {
+        title: "New — Fitness cardio support",
+        items: [
+          "Exercises can now be marked as strength or cardio. Cardio exercises track distance and duration instead of weight and sets, with pace (min/km) computed automatically.",
+          "A new cardio progress chart sits next to the weight progress chart, plotting distance over time per split.",
+          "The monthly fitness summary now shows total distance for months with cardio activity.",
+          "Existing exercises and workouts keep working exactly as before — nothing to migrate.",
+        ],
+      },
+      {
+        title: "New — Finance net worth trends",
+        items: [
+          "A new net worth card on the Finance page shows your accumulated balance since you started tracking, with an optional starting balance for money you already had.",
+          "Two small yearly donuts show how past years closed and how the current year is going so far.",
+          "Line charts across the app now show the exact value when you hover a point.",
+        ],
+      },
+      {
+        title: "Fixed",
+        items: [
+          "Confirming a meal for a past day in Nutrition no longer logs it to today by mistake.",
+          "You can now delete a single meal log or a single workout for a day, instead of clearing the whole day.",
+          "Habits can be marked, unmarked, or have a relapse toggled on any past day, not just today — tap any day on the heatmap.",
+        ],
+      },
+      {
+        title: "Support the project",
+        items: [
+          "If Momentum Life has been useful, consider [buying me a coffee](https://buymeacoffee.com/jnagase) — it helps keep this plugin free and actively maintained. No pressure, just genuinely appreciated 🙏",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.6.0",
+    sections: [
+      {
+        title: "Improved — Google tasks (beta)",
+        items: [
+          "Your Google connection keeps working exactly as before: this release moves the sign-in service to its own address, and **nothing is required from you** — no reconnecting, no settings to change.",
+          "Disconnecting now really disconnects: it asks Google to revoke the app's access instead of only forgetting the token locally, so no stale authorisation is left behind in your Google account. Your task notes are always kept.",
+          "Clearer errors when Google refuses: an expired session now says so and tells you to reconnect, instead of a generic failure.",
+        ],
+      },
+      {
+        title: "New — privacy policy",
+        items: [
+          "Momentum Life now has a published privacy policy describing exactly what the Google tasks sync touches: your tasks stay in your vault, and the sign-in service never sees their content. Linked from the README.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.5.9",
+    sections: [
+      {
+        title: "New — find and arrange your tasks",
+        items: [
+          "Search tasks from the Tasks & Lists header: type a couple of words (title, board, group or due date) and the card is opened on its board and briefly highlighted, so you can see exactly where it lives.",
+          "Reorder your board tabs by dragging them. \"My Tasks\" stays pinned first; the order is remembered in your settings note. Keyboard users can use \"Move board left/right\" in the board menu.",
+          "\"Sync now\" button for Google tasks (beta) right in the header. If sync isn't set up yet, it shows a short walkthrough instead of doing nothing.",
+        ],
+      },
+      {
+        title: "Fixed",
+        items: [
+          "Tasks created by hand no longer get stuck as \"Untitled\": the note's filename is now the task title, and titles are realigned automatically — including renames that arrive from another device.",
+          "Adding a card with an empty title now tells you a title is required instead of silently closing.",
+          "Cards could get stuck in their column when a note's properties were malformed (duplicate keys, or a value containing \": \"). Those are repaired automatically now.",
+        ],
+      },
+      {
+        title: "Improved — safer Google tasks sync (beta)",
+        items: [
+          "A task is never deleted from Google just because its note momentarily fails to load (for example a file still syncing between devices) — the sync now double-checks the files first.",
+          "Duplicates created by syncing on two devices at once are reconciled automatically: one task and one note survive, chosen the same way on every device.",
+          "The sync log now records what was deleted or archived and why.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.5.1",
+    sections: [
+      {
+        title: "New — Google Tasks sync (BETA)",
+        items: [
+          "Two-way sync between your boards and Google Tasks. ⚠️ This feature is BETA — expect rough edges and please keep a backup of your vault. Enable it under Settings → Google tasks (beta).",
+          "Sign-in works the same on desktop and mobile and no credentials are shipped in the plugin (auth goes through a hosted broker).",
+          "Destructive changes are guarded: if an unusual number of tasks vanish at once, the sync asks you before deleting anything on either side.",
+        ],
+      },
+      {
+        title: "Changed — boards are folders",
+        items: [
+          "Each board is now a folder under Tasks/, so you can create a task by hand just by dropping a note into Tasks/<Board>/. The default board is \"My Tasks\" (paired with Google's default list). Your existing tasks are migrated automatically, backlink-safe.",
+          "Marking a task done sends it to the top of the Done column; in the Done column the button reopens the task.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.3.0",
+    sections: [
+      {
+        title: "New — readable notes & monthly hubs",
+        items: [
+          "Finance transactions, Nutrition logs and Fitness workouts now save with human-readable filenames (for example Groceries-Market-84.20-2026-06-30, Lunch-620cal-2026-06-30, PushDay-45min-2026-06-30) so your file list and Graph View stay legible.",
+          "Each module gets a monthly hub note (Finance / Nutrition / Fitness 2026-06 June) summarizing the month and linking that month's items, so the Graph View clusters your notes by module and month.",
+          "New command \"Momentum: migrate notes to readable names\" renames your existing notes to the new scheme in one pass. It's backlink-aware, keeps any lines you added by hand, and is safe to run more than once. Tip: back up or commit your vault first; removed hub notes go to Obsidian's trash so you can recover them.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.2.10",
+    sections: [
+      {
+        title: "Fixed",
+        items: [
+          "Adding a card from a quadrant in the Eisenhower matrix now creates the task in that quadrant, instead of always landing in Eliminate.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.2.9",
+    sections: [
+      {
+        title: "Fixed",
+        items: [
+          "The Eisenhower quadrant grid now matches the scatter chart's axes: urgent on the right, important on top (Do first top-right, Schedule top-left, Delegate bottom-right, Eliminate bottom-left).",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.2.8",
+    sections: [
+      {
+        title: "Improved",
+        items: [
+          "Data files now read as plain markdown. Recurring tasks, recurring costs, boards and workout splits show a human-readable list in the note body, so you can read them without the plugin. The plugin still keeps the exact data in the note properties.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.2.6",
+    sections: [
+      {
+        title: "New",
+        items: [
+          "Weekly recurring tasks can now repeat every 1, 2, 3 or 4 weeks. For longer cycles, use the monthly option.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.2.5",
+    sections: [
+      {
+        title: "New",
+        items: [
+          "Recurring tasks: open the 🔁 Recurring panel in the Tasks tab to set up tasks that repeat daily, weekly or monthly. They're created automatically on schedule while the app is open.",
+          "Optional desktop notifications (Settings → Task notifications) for new recurring tasks and tasks due today. Desktop only, and only while the app is running.",
+        ],
+      },
+      {
+        title: "Improved",
+        items: [
+          "Matrix cards now have the same quick actions as the Kanban cards: a done button plus a menu to open, edit or delete the task.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.2.4",
+    sections: [
+      {
+        title: "New",
+        items: [
+          "The Eisenhower view now includes a scatter chart: each open task is a dot placed by urgency (x) and importance (y), on top of the four quadrants. Click a dot to open the task.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.2.3",
+    sections: [
+      {
+        title: "New",
+        items: [
+          "Tasks now have an Eisenhower matrix view (📋 Kanban / 📃 List / 🎯 Matrix). It sorts your open tasks into four quadrants by urgency and importance; drag a task between quadrants to set it, or pick a quadrant when editing a task.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.1.9",
+    sections: [
+      {
+        title: "Fixed",
+        items: [
+          "Duplicated dashboard panels in the sidebar are now removed automatically on startup. They could pile up when the workspace synced between desktop and mobile; the plugin now keeps a single panel of each type.",
+        ],
+      },
+      {
+        title: "New",
+        items: [
+          "This dialog. After every update you'll see a short summary of what changed since the last version you opened.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.1.8",
+    sections: [
+      {
+        title: "New — personal finances",
+        items: [
+          "A full finances module with a ledger and monthly stats: income, expenses and balance.",
+          "A category donut (with currency values and a compact center label such as R$8.4k or R$1.2M) and a 6-month trend chart.",
+          "An add-transaction bar with a date field, month navigation, and a settings gear.",
+          "Recurring costs organized as a month made of weeks (week 1: days 1–7 … week 4: 22–end). Weeks are collapsible and collapsed by default, each showing an income, expense and net summary.",
+          "Apply a single week or the whole month of recurring items at once, plus starter templates on the empty state to get going fast.",
+          "A currency selector in the main plugin settings that updates the whole dashboard live.",
+        ],
+      },
+      {
+        title: "New — AI assistant",
+        items: [
+          "A right-sidebar chat panel (ribbon icon plus an \"open AI assistant\" command) that reads a snapshot of your data to give grounded answers.",
+          "Multiple providers: Google Gemini, Anthropic Claude, xAI Grok, and any OpenAI-compatible endpoint, with an optional desktop-only local command.",
+          "Settings show only the fields each provider needs, and API mode and local mode are mutually exclusive.",
+          "The assistant can propose changes to your data (create, complete or delete a task, add a transaction, or add a recurring cost) and always shows a confirmation before anything is applied.",
+        ],
+      },
+      {
+        title: "New — tasks as Markdown lists",
+        items: [
+          "Each board mirrors to a Markdown checkbox list, so other plugins (for example Hearth) can read and edit the same tasks.",
+          "Board changes update the list and editing the list updates the board, guarded so there is no sync loop.",
+        ],
+      },
+      {
+        title: "Improved",
+        items: [
+          "Fitness and Nutrition calendars are fully clickable, so you can log workouts and meals on past dates directly.",
+          "A per-day delete in the day-detail header for both Fitness and Nutrition.",
+          "Clearer calendar states (today, selected and hover) so the selected day is never ambiguous.",
+          "The data folder now defaults to the plugin name; existing installs keep their previous folder automatically.",
+        ],
+      },
+      {
+        title: "Fixed",
+        items: [
+          "Entries logged close together could overwrite each other; each file now gets a unique name.",
+          "Currency changes now apply to data you already entered instead of showing raw numbers.",
+          "Meal-plan edits no longer land in the wrong meal (for example dinner edits showing up in lunch).",
+          "Task board labels no longer disappear when navigating between boards, kanban and lists.",
+        ],
+      },
+    ],
+  },
+];
+
+/** Compare two dotted version strings; returns 1, -1 or 0. */
+export function cmpVersion(a: string, b: string): number {
+  const pa = a.split(".").map((x) => parseInt(x, 10) || 0);
+  const pb = b.split(".").map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d !== 0) return d > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+/** A simple "what changed" dialog, styled after common plugin update notices. */
+export class WhatsNewModal extends Modal {
+  private appName: string;
+  private entries: ChangeEntry[];
+
+  constructor(app: App, appName: string, entries: ChangeEntry[]) {
+    super(app);
+    this.appName = appName;
+    this.entries = entries;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.addClass("pa-whatsnew");
+    contentEl.createEl("h2", { text: `What's new in ${this.appName}` });
+    contentEl.createDiv({ cls: "pa-whatsnew-intro pa-muted", text: "Thanks for updating. Here's what changed since you last checked." });
+
+    this.entries.forEach((e) => {
+      contentEl.createEl("h3", { cls: "pa-whatsnew-version", text: e.version });
+      e.sections.forEach((sec) => {
+        contentEl.createDiv({ cls: "pa-whatsnew-section", text: sec.title });
+        const ul = contentEl.createEl("ul", { cls: "pa-whatsnew-list" });
+        sec.items.forEach((it) => ul.createEl("li", {}, (li) => this.renderItemText(li, it)));
+      });
+    });
+  }
+
+  /** Renders one changelog item's text, turning `[label](url)` into a real clickable link
+   *  and `**bold**` into a real <strong> — a minimal inline-markdown subset, since these
+   *  items are plain strings rendered outside Obsidian's Markdown renderer. */
+  private renderItemText(li: HTMLElement, text: string): void {
+    const pattern = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)|\*\*([^*]+)\*\*/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text))) {
+      if (match.index > lastIndex) li.appendText(text.slice(lastIndex, match.index));
+      if (match[1] != null) {
+        const a = li.createEl("a", { text: match[1], href: match[2] });
+        a.setAttr("target", "_blank");
+        a.setAttr("rel", "noopener");
+      } else if (match[3] != null) {
+        li.createEl("strong", { text: match[3] });
+      }
+      lastIndex = pattern.lastIndex;
+    }
+    if (lastIndex < text.length) li.appendText(text.slice(lastIndex));
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+}

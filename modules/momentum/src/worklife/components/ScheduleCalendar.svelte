@@ -1,0 +1,3771 @@
+<script lang="ts">
+  import { onMount, onDestroy } from "svelte";
+  import { get } from "svelte/store";
+  import { Calendar } from "@fullcalendar/core";
+  import dayGridPlugin from "@fullcalendar/daygrid";
+  import timeGridPlugin from "@fullcalendar/timegrid";
+  import interactionPlugin from "@fullcalendar/interaction";
+  import luxonPlugin from "@fullcalendar/luxon3";
+
+  import { configureGlobalMomentLocale } from "obsidian-calendar-ui";
+  import { tRaw, locale } from "../i18n";
+  import { settings } from "../ui/stores";
+  import type CalendarPlugin from "../main";
+  import type { ITask, IChecklistItem } from "../task-tracker/types";
+  import {
+    tasks,
+    projects,
+    checklists,
+    updateTask,
+    updateTaskStatus,
+    removeTask,
+    resetTaskTimer,
+    carryOverOverdueTasks,
+  } from "../task-tracker/stores";
+  import { TaskModal } from "../task-tracker/TaskModal";
+  import { getDateUID } from "obsidian-daily-notes-interface";
+  import { tasksToEvents, getStatusColor } from "./scheduleUtils";
+  import { getTaskSlotEndMs } from "../task-tracker/overdue";
+  import {
+    fetchWeekWeather,
+    type DayWeather,
+  } from "../services/weatherService";
+  import { isDesktopAI } from "../services/aiQuickAdd";
+  import { app } from "../stores/appStore";
+  // holidays —暂时隐藏
+  export let plugin: CalendarPlugin;
+  export let scheduleDisplay: {
+    scheduleShowTime?: boolean;
+    scheduleShowStatus?: boolean;
+    scheduleShowPriority?: boolean;
+    scheduleShowWorkBadge?: boolean;
+    scheduleShowNoteBadge?: boolean;
+    scheduleShowDeadline?: boolean;
+    scheduleShowOverdue?: boolean;
+    scheduleShowDescription?: boolean;
+    scheduleShowNowIndicator?: boolean;
+    scheduleShowDeadlineEvents?: boolean;
+  } = {};
+  export let weatherEnabled: boolean = false;
+  export let weatherLatitude: number = 55.75;
+  export let weatherLongitude: number = 37.62;
+  export let weatherProvider: string = "open-meteo";
+  export let weatherApiKey: string | undefined = undefined;
+
+  let calendarEl: HTMLDivElement;
+  let calendar: Calendar;
+  let refetchTimer: ReturnType<typeof setTimeout> | null = null;
+  let destroyed = false;
+  let skipNextRefetch = false;
+  let isDragging = false;
+  let suppressRefetch = false;
+  let currentViewType = "dayGridMonth";
+
+  // Reactive start of week — depends on settings and locale
+  let startOfWeek = 1;
+  let currentLocale = "ru";
+  $: {
+    const sow = $settings.startOfWeek || "system";
+    if (sow === "monday") startOfWeek = 1;
+    else if (sow === "sunday") startOfWeek = 0;
+    else startOfWeek = $locale === "en" ? 0 : 1;
+  }
+  $: currentLocale = $locale === "en" ? "en" : "ru";
+  $: if (calendar && $locale) {
+    const sow = $settings.startOfWeek || "system";
+    let momentFirstDay: "monday" | "sunday";
+    if (sow === "monday") momentFirstDay = "monday";
+    else if (sow === "sunday") momentFirstDay = "sunday";
+    else momentFirstDay = $locale === "en" ? "sunday" : "monday";
+    configureGlobalMomentLocale(currentLocale, momentFirstDay);
+    calendar.setOption("firstDay", startOfWeek);
+    calendar.setOption("locale", currentLocale);
+  }
+
+  // Weather state
+  let weatherByDate: Map<string, DayWeather> = new Map();
+  let weatherLoading = false;
+
+  // Accessibility: live region for announcing view changes
+  let ariaLiveEl: HTMLDivElement | null = null;
+
+  function announceView(text: string) {
+    if (!ariaLiveEl) {
+      ariaLiveEl = document.createElement("div");
+      ariaLiveEl.setAttribute("role", "status");
+      ariaLiveEl.setAttribute("aria-live", "polite");
+      ariaLiveEl.setAttribute("aria-atomic", "true");
+      ariaLiveEl.style.cssText =
+        "position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;";
+      document.body.appendChild(ariaLiveEl);
+    }
+    ariaLiveEl.textContent = text;
+  }
+
+  // Мобильное определение — реактивное через matchMedia
+  const mqlMobile =
+    typeof window !== "undefined"
+      ? window.matchMedia("(max-width: 768px)")
+      : null;
+  const mqlSmallPhone =
+    typeof window !== "undefined"
+      ? window.matchMedia("(max-width: 480px)")
+      : null;
+  let isMobile = mqlMobile?.matches ?? false;
+  let isSmallPhone = mqlSmallPhone?.matches ?? false;
+
+  function handleBreakpointChange(): void {
+    isMobile = mqlMobile?.matches ?? false;
+    isSmallPhone = mqlSmallPhone?.matches ?? false;
+  }
+
+  // Touch/swipe state (reference: SWIPE_MIN_DISTANCE=60, SWIPE_DIRECTION_RATIO=1.2)
+  let touchStartX = 0;
+  let touchStartY = 0;
+  let touchEndX = 0;
+  let touchEndY = 0;
+  let isSwiping = false;
+  const SWIPE_THRESHOLD = 60;
+  const SWIPE_DIRECTION_RATIO = 1.2;
+
+  /** Ключ снапшота событий — чтобы не перерисовывать календарь без изменений */
+  function computeEventsKey(
+    events: ReturnType<typeof tasksToEvents>,
+  ): string {
+    const taskById = new Map(get(tasks).map((t) => [t.id, t]));
+    return JSON.stringify({
+      loc: get(locale),
+      d: [
+        scheduleDisplay.scheduleShowTime,
+        scheduleDisplay.scheduleShowStatus,
+        scheduleDisplay.scheduleShowPriority,
+        scheduleDisplay.scheduleShowWorkBadge,
+        scheduleDisplay.scheduleShowNoteBadge,
+        scheduleDisplay.scheduleShowDeadline,
+        scheduleDisplay.scheduleShowOverdue,
+        scheduleDisplay.scheduleShowDescription,
+        scheduleDisplay.scheduleShowDeadlineEvents,
+      ],
+      e: events.map((ev) => {
+        const t = taskById.get(ev.extendedProps?.taskId || ev.id);
+        return [
+          ev.id,
+          ev.title,
+          ev.start,
+          ev.end,
+          ev.allDay,
+          ev.backgroundColor,
+          ev.extendedProps?.isDeadlineEvent ? 1 : 0,
+          t?.status,
+          t?.scheduledTime,
+          t?.endTime,
+          t?.priority,
+          t?.isWorkTask,
+          t?.boundNotePath,
+          t?.deadline,
+          t?.deadlineTime,
+          t?.description,
+          t?.estimatedTime,
+          t?.recurrence
+            ? `${t.recurrence.type}:${t.recurrence.until || ""}`
+            : "",
+        ];
+      }),
+    });
+  }
+
+  let lastEventsKey = "";
+
+  /** Применить события: refetch только если данные действительно изменились */
+  function applyEventsUpdate(): void {
+    if (destroyed || !calendar || suppressRefetch) return;
+    try {
+      const allTasks = get(tasks);
+      const allProjects = get(projects);
+      let events = tasksToEvents(allTasks, allProjects);
+      if (scheduleDisplay.scheduleShowDeadlineEvents === false) {
+        events = events.filter((e) => !e.extendedProps?.isDeadlineEvent);
+      }
+      const key = computeEventsKey(events);
+      if (key === lastEventsKey) return;
+      lastEventsKey = key;
+      calendar.batchRendering(() => {
+        calendar.refetchEvents();
+      });
+    } catch (e) {
+      console.error("[ScheduleCalendar] applyEventsUpdate error:", e);
+    }
+  }
+
+  /** Пересчитать ключ без refetch — после точечных мутаций (drag / delete). */
+  function syncEventsKey(): void {
+    if (destroyed || !calendar) return;
+    try {
+      const allTasks = get(tasks);
+      const allProjects = get(projects);
+      let events = tasksToEvents(allTasks, allProjects);
+      if (scheduleDisplay.scheduleShowDeadlineEvents === false) {
+        events = events.filter((e) => !e.extendedProps?.isDeadlineEvent);
+      }
+      lastEventsKey = computeEventsKey(events);
+    } catch (e) {
+      console.error("[ScheduleCalendar] syncEventsKey error:", e);
+    }
+  }
+
+  /**
+   * Точечная мутация из drag/resize/delete: не даём store-подписке
+   * устроить полный refetchEvents (мигание всего расписания).
+   */
+  function commitLocalMutation(fn: () => void): void {
+    suppressRefetch = true;
+    try {
+      fn();
+    } finally {
+      syncEventsKey();
+      suppressRefetch = false;
+    }
+  }
+
+  /** Перерисовать контент одного события из актуальных event + store. */
+  function refreshEventContent(taskId: string): void {
+    if (destroyed || !calendar || !calendarEl) return;
+    try {
+      const ev = calendar.getEventById(taskId);
+      if (!ev) return;
+      const el = calendarEl.querySelector(
+        `[data-event-id="${CSS.escape(taskId)}"]`,
+      );
+      if (!el) return;
+      const rendered = renderEventContent({
+        event: ev,
+        timeText: ev.allDay ? "" : fmtClock(ev.start),
+      } as any);
+      if (rendered?.html != null) {
+        const root = el.querySelector(".fc-event-main") ?? el;
+        root.innerHTML = rendered.html;
+      }
+    } catch (e) {
+      console.error("[ScheduleCalendar] refreshEventContent error:", e);
+    }
+  }
+
+  /** Debounced refetch — предотвращает каскадное обновление */
+  function scheduleRefetch(): void {
+    if (destroyed) return;
+    if (isDragging) return;
+    if (suppressRefetch) return;
+    if (skipNextRefetch) {
+      skipNextRefetch = false;
+      return;
+    }
+    if (refetchTimer) clearTimeout(refetchTimer);
+    refetchTimer = setTimeout(() => {
+      refetchTimer = null;
+      applyEventsUpdate();
+    }, 250);
+  }
+
+  async function loadWeather(
+    startDate: string,
+    endDate: string,
+  ): Promise<void> {
+    if (!weatherEnabled) return;
+    if (destroyed || weatherLoading) return;
+    weatherLoading = true;
+    try {
+      const days = await fetchWeekWeather(
+        weatherLatitude,
+        weatherLongitude,
+        startDate,
+        endDate,
+        weatherProvider as any,
+        weatherApiKey,
+      );
+      if (destroyed) return;
+      const map = new Map<string, DayWeather>();
+      for (const d of days) {
+        map.set(d.date, d);
+      }
+      weatherByDate = map;
+      if (calendar) {
+        requestAnimationFrame(() => calendar.render());
+      }
+    } catch (e) {
+      console.error("[ScheduleCalendar] weather load error:", e);
+    } finally {
+      weatherLoading = false;
+    }
+  }
+
+  // Подписываемся и на tasks, и на projects
+  const unsubTasks = tasks.subscribe(() => scheduleRefetch());
+  const unsubProjects = projects.subscribe(() => scheduleRefetch());
+
+  // Re-render events when schedule display settings change
+  $: if (scheduleDisplay && calendar) {
+    scheduleDisplay; // track dependency
+    scheduleRefetch();
+  }
+
+  // Toggle now-indicator visibility via class
+  $: if (calendarEl && scheduleDisplay) {
+    const show = scheduleDisplay.scheduleShowNowIndicator !== false;
+    calendarEl.classList.toggle("now-indicator-hidden", !show);
+  }
+
+  // Обработчик ресайза — переключаем вид при переходе через брейкпоинт
+  let lastWidth = typeof window !== "undefined" ? window.innerWidth : 1024;
+  function handleResize(): void {
+    if (destroyed || !calendar) return;
+    const w = window.innerWidth;
+    const crossed =
+      (lastWidth > 480 && w <= 480) ||
+      (lastWidth <= 480 && w > 480) ||
+      (lastWidth > 768 && w <= 768) ||
+      (lastWidth <= 768 && w > 768);
+    lastWidth = w;
+    if (crossed) {
+      // Only auto-switch from time-based views; respect user's month view choice
+      const currentType = calendar.view.type;
+      if (currentType === "dayGridMonth") return;
+      const newView = w <= 480 ? "timeGridDay" : "timeGridWeek";
+      if (currentType !== newView) {
+        calendar.changeView(newView);
+      }
+    }
+  }
+
+  // ResizeObserver for container size changes (reference pattern)
+  let resizeObserver: ResizeObserver | null = null;
+
+  // Event highlighting (reference pattern)
+  let currentHighlightIds = new Set<string>();
+  let highlightInterval: ReturnType<typeof setInterval> | null = null;
+
+  function updateEventHighlight(): void {
+    if (!calendar || destroyed) return;
+    const nowMs = Date.now();
+    let current: string | null = null;
+    let currentEnd = Infinity;
+    let next: string | null = null;
+    let nextStart = Infinity;
+
+    for (const ev of calendar.getEvents()) {
+      if (ev.allDay || !ev.start) continue;
+      const s = ev.start.getTime();
+      const e = ev.end?.getTime() ?? s;
+      if (s <= nowMs && nowMs < e && e < currentEnd) {
+        current = ev.id;
+        currentEnd = e;
+      }
+      if (s > nowMs && s < nextStart) {
+        next = ev.id;
+        nextStart = s;
+      }
+    }
+
+    const active = current ?? next;
+    const nextIds = active ? new Set([active]) : new Set<string>();
+
+    for (const id of currentHighlightIds) {
+      if (!nextIds.has(id))
+        calendarEl
+          ?.querySelectorAll(`[data-event-id="${CSS.escape(id)}"]`)
+          .forEach((el) => el.classList.remove("sch-event-active"));
+    }
+    for (const id of nextIds) {
+      calendarEl
+        ?.querySelectorAll(`[data-event-id="${CSS.escape(id)}"]`)
+        .forEach((el) => el.classList.add("sch-event-active"));
+    }
+    currentHighlightIds = nextIds;
+  }
+
+  function handleKeyNav(e: KeyboardEvent) {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    const target = e.target as HTMLElement;
+    if (
+      target?.tagName === "INPUT" ||
+      target?.tagName === "TEXTAREA" ||
+      target?.isContentEditable
+    )
+      return;
+    e.preventDefault();
+    if (e.key === "ArrowLeft") calendar?.prev();
+    else calendar?.next();
+  }
+
+  function getLocalDateKey(date: Date = new Date()): string {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  function handleDeadlineClick(e: MouseEvent) {
+    const target = e.target as HTMLElement;
+    const deadlineSpan = target.closest(
+      ".sch-deadline[data-deadline-date]",
+    ) as HTMLElement | null;
+    if (!deadlineSpan) return;
+    e.stopPropagation();
+    const dateStr = deadlineSpan.dataset.deadlineDate;
+    if (!dateStr) return;
+    // Switch to month view
+    if (calendar) {
+      calendar.changeView("dayGridMonth");
+      const m = window.moment(dateStr, "YYYY-MM-DD");
+      calendar.gotoDate(m.toDate());
+    }
+    // Blink the day cell after navigation
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        const dayCell = document.querySelector(
+          `#calendar-container .day[data-date="${dateStr}"]`,
+        );
+        if (dayCell) {
+          dayCell.classList.add("deadline-highlight");
+          setTimeout(
+            () => dayCell.classList.remove("deadline-highlight"),
+            5000,
+          );
+        }
+      }, 150);
+    });
+  }
+
+  /** Повесить подсветку на слот, в который попадает y (координата экрана). */
+  function setHotSlotAtY(y: number): void {
+    const body = calendarEl?.querySelector(".fc-timegrid-body");
+    if (!body) return;
+    const slots = body.querySelectorAll<HTMLElement>(".fc-timegrid-slot");
+    let hot: HTMLElement | null = null;
+    for (const slot of slots) {
+      const r = slot.getBoundingClientRect();
+      if (y >= r.top && y < r.bottom) {
+        hot = slot;
+        break;
+      }
+    }
+    calendarEl
+      ?.querySelectorAll(".fc-timegrid-slot.sch-slot-hot")
+      .forEach((el) => {
+        if (el !== hot) el.classList.remove("sch-slot-hot");
+      });
+    hot?.classList.add("sch-slot-hot");
+  }
+
+  /**
+   * Во время растягивания выделения конечное время — это selectInfo.end
+   * (нижняя граница .fc-highlight), а не слот под курсором.
+   * Курсор в 17:30–18:00 даёт end=18:00 — и должна загораться метка 18:00.
+   * Внутри зеркала выделения показываем диапазон времени вместо «?».
+   */
+  function highlightSelectionEnd(): void {
+    const highlight = calendarEl?.querySelector(".fc-highlight, .fc-select-mirror");
+    if (!highlight) return;
+    const hr = highlight.getBoundingClientRect();
+    // Нижняя граница = время окончания (18:00). Метка этого времени —
+    // слот, который на ней начинается (18:00–18:30 → «18:00»).
+    const endY = hr.bottom + 1;
+    setHotSlotAtY(endY);
+
+    // Время диапазона внутри зеркала выделения
+    const body = calendarEl?.querySelector(".fc-timegrid-body");
+    if (body) {
+      const slots = body.querySelectorAll<HTMLElement>(".fc-timegrid-slot");
+      const timeAtY = (y: number): string | null => {
+        for (const slot of slots) {
+          const r = slot.getBoundingClientRect();
+          if (y >= r.top - 1 && y < r.bottom + 1) {
+            const label = slot
+              .querySelector(".fc-timegrid-slot-label-cushion")
+              ?.textContent?.trim();
+            return label || null;
+          }
+        }
+        return null;
+      };
+      const tStart = timeAtY(hr.top + 1);
+      const tEnd = timeAtY(hr.bottom + 1);
+      const label = tStart && tEnd && tStart !== tEnd ? `${tStart} — ${tEnd}` : tStart || "";
+      if (label) {
+        highlight.setAttribute("data-sch-select-time", label);
+        highlight.classList.add("sch-select-with-time");
+      }
+    }
+
+    // Дополнительно помечаем слот, с которого начинается время конца
+    calendarEl
+      ?.querySelectorAll(".fc-timegrid-slot.sch-slot-end")
+      .forEach((el) => el.classList.remove("sch-slot-end"));
+    if (!body) return;
+    for (const slot of body.querySelectorAll<HTMLElement>(".fc-timegrid-slot")) {
+      const r = slot.getBoundingClientRect();
+      if (endY >= r.top && endY < r.bottom) {
+        slot.classList.add("sch-slot-end");
+        break;
+      }
+    }
+  }
+
+  /** Подсветка тайм-слота + его метки времени при наведении (точное создание задач). */
+  function handleTimegridHover(e: MouseEvent): void {
+    const isTimeGrid =
+      currentViewType === "timeGridWeek" || currentViewType === "timeGridDay";
+    if (!calendarEl || !isTimeGrid) {
+      clearTimegridHover();
+      return;
+    }
+
+    // Растягивание выделения — подсвечиваем КОНЕЦ, не позицию курсора
+    if (calendarEl.querySelector(".fc-highlight, .fc-select-mirror")) {
+      highlightSelectionEnd();
+      return;
+    }
+
+    // Без выделения — убираем маркер конца
+    calendarEl
+      .querySelectorAll(".fc-timegrid-slot.sch-slot-end")
+      .forEach((el) => el.classList.remove("sch-slot-end"));
+
+    const body = calendarEl.querySelector(".fc-timegrid-body");
+    if (!body) return;
+
+    const y = e.clientY;
+    const bodyRect = body.getBoundingClientRect();
+    if (y < bodyRect.top || y >= bodyRect.bottom) {
+      clearTimegridHover();
+      return;
+    }
+
+    setHotSlotAtY(y);
+  }
+
+  function clearTimegridHover(): void {
+    calendarEl
+      ?.querySelectorAll(".fc-timegrid-slot.sch-slot-hot, .fc-timegrid-slot.sch-slot-end")
+      .forEach((el) => el.classList.remove("sch-slot-hot", "sch-slot-end"));
+    calendarEl
+      ?.querySelectorAll(".fc-highlight.sch-select-with-time, .fc-select-mirror.sch-select-with-time")
+      .forEach((el) => {
+        el.classList.remove("sch-select-with-time");
+        el.removeAttribute("data-sch-select-time");
+      });
+  }
+
+  onMount(() => {
+    carryOverOverdueTasks();
+    initCalendar();
+    setupTouchNavigation();
+    window.addEventListener("resize", handleResize);
+    mqlMobile?.addEventListener("change", handleBreakpointChange);
+    mqlSmallPhone?.addEventListener("change", handleBreakpointChange);
+    // Keyboard navigation
+    calendarEl?.addEventListener("keydown", handleKeyNav);
+    if (calendarEl && !calendarEl.hasAttribute("tabindex")) {
+      calendarEl.setAttribute("tabindex", "0");
+      calendarEl.setAttribute("role", "application");
+      calendarEl.setAttribute(
+        "aria-label",
+        tRaw("schedule.ariaLabel"),
+      );
+    }
+    // Delegate deadline click → navigate to month view + blink
+    calendarEl?.addEventListener("click", handleDeadlineClick);
+    // Right-click context menu on events
+    calendarEl?.addEventListener("contextmenu", handleEventContextMenu);
+    // Hover on time slots — highlight slot + time label for precise task creation
+    calendarEl?.addEventListener("mousemove", handleTimegridHover);
+    calendarEl?.addEventListener("mouseleave", clearTimegridHover);
+    // ResizeObserver
+    if (calendarEl) {
+      resizeObserver = new ResizeObserver(() => {
+        if (!destroyed && calendar) calendar.updateSize();
+      });
+      resizeObserver.observe(calendarEl);
+    }
+    // Event highlighting — update every 60s
+    highlightInterval = setInterval(updateEventHighlight, 60_000);
+    document.addEventListener("visibilitychange", updateEventHighlight);
+  });
+
+  onDestroy(() => {
+    destroyed = true;
+    if (refetchTimer) clearTimeout(refetchTimer);
+    if (dropDebounceTimer) clearTimeout(dropDebounceTimer);
+    unsubTasks();
+    unsubProjects();
+    window.removeEventListener("resize", handleResize);
+    mqlMobile?.removeEventListener("change", handleBreakpointChange);
+    mqlSmallPhone?.removeEventListener("change", handleBreakpointChange);
+    calendarEl?.removeEventListener("keydown", handleKeyNav);
+    calendarEl?.removeEventListener("click", handleDeadlineClick);
+    calendarEl?.removeEventListener("contextmenu", handleEventContextMenu);
+    calendarEl?.removeEventListener("mousemove", handleTimegridHover);
+    calendarEl?.removeEventListener("mouseleave", clearTimegridHover);
+    resizeObserver?.disconnect();
+    if (highlightInterval) clearInterval(highlightInterval);
+    document.removeEventListener("visibilitychange", updateEventHighlight);
+    closeContextMenu();
+    if (ariaLiveEl) {
+      ariaLiveEl.remove();
+      ariaLiveEl = null;
+    }
+    if (calendarEl) {
+      calendarEl.removeEventListener("touchstart", handleTouchStart);
+      calendarEl.removeEventListener("touchmove", handleTouchMove);
+      calendarEl.removeEventListener("touchend", handleTouchEnd);
+    }
+    if (calendar) {
+      calendar.destroy();
+      calendar = null;
+    }
+  });
+
+  function setupTouchNavigation(): void {
+    if (!calendarEl) return;
+
+    calendarEl.addEventListener("touchstart", handleTouchStart, {
+      passive: true,
+    });
+    calendarEl.addEventListener("touchmove", handleTouchMove, {
+      passive: true,
+    });
+    calendarEl.addEventListener("touchend", handleTouchEnd, { passive: true });
+  }
+
+  function handleTouchStart(e: TouchEvent): void {
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+    isSwiping = false;
+  }
+
+  function handleTouchMove(e: TouchEvent): void {
+    touchEndX = e.touches[0].clientX;
+    touchEndY = e.touches[0].clientY;
+
+    const dx = Math.abs(touchEndX - touchStartX);
+    const dy = Math.abs(touchEndY - touchStartY);
+
+    if (dx > 20 && dx > dy * SWIPE_DIRECTION_RATIO && dy < 100) {
+      isSwiping = true;
+    }
+  }
+
+  function handleTouchEnd(): void {
+    if (!isSwiping || !calendar) return;
+
+    const dx = touchEndX - touchStartX;
+
+    if (Math.abs(dx) >= SWIPE_THRESHOLD) {
+      if (dx > 0) {
+        calendar.prev();
+      } else {
+        calendar.next();
+      }
+    }
+
+    isSwiping = false;
+  }
+
+  function initCalendar(): void {
+    const initialView = isSmallPhone ? "timeGridDay" : "timeGridWeek";
+    const aiEnabled =
+      ($settings as { ollamaEnabled?: boolean }).ollamaEnabled === true &&
+      ($settings as { aiScheduleActionsEnabled?: boolean }).aiScheduleActionsEnabled !== false &&
+      isDesktopAI();
+    const headerToolbar = {
+      left: "prev,next",
+      center: "title",
+      right: aiEnabled
+        ? "aiActions,dayGridMonth,timeGridWeek,timeGridDay"
+        : "dayGridMonth,timeGridWeek,timeGridDay",
+    };
+    const mirrorParent = document.body;
+
+    calendar = new Calendar(calendarEl, {
+      plugins: [dayGridPlugin, timeGridPlugin, interactionPlugin, luxonPlugin],
+      initialView,
+      // Named timeZone requires luxonPlugin — without it FullCalendar cannot
+      // resolve offsets and event.start is shifted by the UTC offset.
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      locale: tRaw("locale.momentLocale"),
+      headerToolbar,
+      customButtons: {
+        aiActions: {
+          text: `✨ ${tRaw("schedule.aiActions")}`,
+          click: () => openAiScheduleActions(),
+        },
+      },
+      buttonText: {
+        month: tRaw("schedule.month"),
+        week: tRaw("schedule.week"),
+        day: tRaw("schedule.day"),
+        aiActions: tRaw("schedule.aiActions"),
+      },
+      slotMinTime: "06:00:00",
+      slotMaxTime: "30:00:00",
+      allDaySlot: true,
+      allDayText: tRaw("schedule.untimed"),
+      slotDuration: isSmallPhone ? "00:15:00" : "00:30:00",
+      // 15-min snap: create tasks at :00/:15/:30/:45 while keeping a readable grid
+      snapDuration: "00:15:00",
+      slotLabelInterval: "00:30:00",
+      editable: !isMobile,
+      fixedMirrorParent: mirrorParent,
+      longPressDelay: 250,
+      selectable: true,
+      selectAllow: (selectInfo) => {
+        const ok =
+          !selectInfo.end?.getTime ||
+          selectInfo.end.getTime() - selectInfo.start.getTime() < 86400000 * 7;
+        // Подсветка конца выделения (18:00, а не слот 17:30 под курсором)
+        if (ok) requestAnimationFrame(highlightSelectionEnd);
+        return ok;
+      },
+      selectMirror: true,
+      select: handleCalendarSelect,
+      dayMaxEvents: true,
+      moreLinkClassNames: ["sch-more-link"],
+      moreLinkContent: (arg: { num: number; shortText: string }) => ({
+        html: `<span class="sch-more-pill"><span class="sch-more-count">${arg.shortText}</span><span class="sch-more-label">${tRaw("schedule.more")}</span></span>`,
+      }),
+      moreLinkHint: (count: number) =>
+        tRaw("schedule.moreHint", { count: String(count) }),
+      moreLinkClick: () => (isSmallPhone ? "timeGridDay" : "popover"),
+      dayPopoverFormat: {
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+      },
+      weekends: true,
+      firstDay: Number(tRaw("locale.startOfWeek")),
+      height: "100%",
+      nowIndicator: true,
+      scrollTimeReset: false,
+      eventTimeFormat: { hour: "numeric", minute: "2-digit", hour12: false },
+      slotLabelFormat: { hour: "numeric", minute: "2-digit", hour12: false },
+      // Hour labels bold (18:00), half-hour quieter (18:30) — easier to place tasks
+      slotLabelContent: (arg: { date: Date; text: string }) => {
+        const d = arg.date;
+        const isHalf = d.getMinutes() !== 0;
+        const text =
+          arg.text ||
+          `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+        return {
+          html: `<span class="sch-slot-label ${isHalf ? "sch-slot-label-half" : "sch-slot-label-hour"}">${text}</span>`,
+        };
+      },
+      dayHeaderFormat: { weekday: "short", day: "numeric", month: "numeric" },
+      dayHeaderContent: (arg: any) => {
+        const dateStr = arg.date
+          ? `${arg.date.getFullYear()}-${String(arg.date.getMonth() + 1).padStart(2, "0")}-${String(arg.date.getDate()).padStart(2, "0")}`
+          : null;
+        const weather = dateStr ? weatherByDate.get(dateStr) : null;
+        const headerText = arg.text || "";
+        const isToday = dateStr === getLocalDateKey();
+        const todayClass = isToday ? " fc-day-header-today" : "";
+
+        if (weather) {
+          return {
+            html: `
+              <div class="fc-day-header-content${todayClass}">
+                <div class="fc-day-header-top">
+                  <span class="fc-day-header-text">${headerText}</span>
+                </div>
+                <div class="fc-day-header-weather">
+                  <span class="fc-weather-icon">${weather.icon}</span>
+                  <span class="fc-weather-temp">${weather.tempMax}°/${weather.tempMin}°</span>
+                </div>
+              </div>
+            `,
+          };
+        }
+        return {
+          html: `
+            <div class="fc-day-header-content${todayClass}">
+              <div class="fc-day-header-top">
+                <span class="fc-day-header-text">${headerText}</span>
+              </div>
+            </div>
+          `,
+        };
+      },
+      // На телефоне — list view по умолчанию не используем
+      views: isSmallPhone
+        ? {
+            timeGridDay: {
+              titleFormat: { day: "numeric", month: "short" },
+              buttonText: tRaw("schedule.day"),
+            },
+            timeGridWeek: {
+              titleFormat: { day: "numeric", month: "short" },
+              buttonText: tRaw("schedule.week"),
+            },
+            dayGridMonth: {
+              titleFormat: { month: "long", year: "numeric" },
+              buttonText: tRaw("schedule.month"),
+            },
+          }
+        : {},
+      eventSources: [
+        {
+          events: fetchEvents,
+          id: "task-source",
+        },
+      ],
+      eventContent: renderEventContent,
+      eventClick: handleEventClick,
+      eventDragStart: () => {
+        isDragging = true;
+      },
+      eventDragStop: () => {
+        isDragging = false;
+      },
+      eventDrop: handleEventDrop,
+      eventResize: handleEventResize,
+      eventDidMount: handleEventDidMount,
+      dayHeaderDidMount: (info: any) => {
+        // Add weather tooltip on hover for day headers in time-based views
+        if (!weatherEnabled) return;
+        const el = info.el as HTMLElement;
+        const date = info.date as Date;
+        if (!date) return;
+        const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+
+        el.style.cursor = "default";
+        el.addEventListener("mouseenter", (_e: MouseEvent) => {
+          const weather = weatherByDate.get(dateKey);
+          if (!weather) return;
+          const tooltip = document.createElement("div");
+          tooltip.className = "sch-weather-tooltip";
+          const iconSpan = document.createElement("span");
+          iconSpan.textContent = weather.icon;
+          tooltip.appendChild(iconSpan);
+          tooltip.appendChild(document.createTextNode(" "));
+          const tempSpan = document.createElement("span");
+          tempSpan.textContent = `${weather.tempMin}°..${weather.tempMax}°`;
+          tooltip.appendChild(tempSpan);
+          if (weather.label) {
+            tooltip.appendChild(document.createTextNode(" "));
+            const labelSpan = document.createElement("span");
+            labelSpan.style.opacity = "0.7";
+            labelSpan.textContent = weather.label;
+            tooltip.appendChild(labelSpan);
+          }
+          document.body.appendChild(tooltip);
+          const rect = el.getBoundingClientRect();
+          tooltip.style.left = `${rect.left + rect.width / 2}px`;
+          tooltip.style.top = `${rect.bottom + 4}px`;
+          el.addEventListener("mouseleave", () => tooltip.remove(), {
+            once: true,
+          });
+        });
+      },
+      eventClassNames: (arg: any) => {
+        if (arg.event.extendedProps?.isDeadlineEvent)
+          return ["sch-event-deadline-marker"];
+        return [];
+      },
+      datesSet: (info: any) => {
+        const view = info.view;
+        currentViewType = view.type;
+        const viewType =
+          view.type === "dayGridMonth"
+            ? tRaw("schedule.month")
+            : view.type === "timeGridWeek"
+              ? tRaw("schedule.week")
+              : tRaw("schedule.day");
+        announceView(`${viewType}: ${view.title}`);
+
+        // Load weather for the visible date range
+        if (weatherEnabled && view.type !== "dayGridMonth") {
+          const startStr = info.startStr
+            ? info.startStr.slice(0, 10)
+            : `${info.start.getFullYear()}-${String(info.start.getMonth() + 1).padStart(2, "0")}-${String(info.start.getDate()).padStart(2, "0")}`;
+          const endStr = info.endStr
+            ? info.endStr.slice(0, 10)
+            : `${info.end.getFullYear()}-${String(info.end.getMonth() + 1).padStart(2, "0")}-${String(info.end.getDate()).padStart(2, "0")}`;
+          loadWeather(startStr, endStr);
+        }
+      },
+    });
+
+    calendar.render();
+  }
+
+  async function fetchEvents(
+    _fetchInfo: { start: Date; end: Date },
+    successCallback: (events: any[]) => void,
+  ): Promise<void> {
+    try {
+      const allTasks = get(tasks);
+      const allProjects = get(projects);
+      let events = tasksToEvents(allTasks, allProjects);
+      if (scheduleDisplay.scheduleShowDeadlineEvents === false) {
+        events = events.filter((e) => !e.extendedProps?.isDeadlineEvent);
+      }
+
+      const appInstance = get(app);
+      if (appInstance) {
+        // Weather fetching handled elsewhere
+      }
+
+      successCallback(events);
+    } catch (e) {
+      console.error("[ScheduleCalendar] fetchEvents error:", e);
+      successCallback([]);
+    }
+  }
+
+  /** FullCalendar v6 + luxon3 не сохраняет complex objects в extendedProps.
+   *  Всегда предпочитаем live-store: extendedProps.task — устаревший снапшот
+   *  из tasksToEvents и после drag/resize тянет старое время. */
+  function resolveTask(event: any): ITask | null {
+    const taskId = event.extendedProps?.taskId || event.id;
+    if (taskId) {
+      const live = get(tasks).find((t) => t.id === taskId);
+      if (live) return live;
+    }
+    return (event.extendedProps?.task as ITask | undefined) || null;
+  }
+
+  /** Получить чек-лист для задачи */
+  function getTaskChecklist(taskId: string): IChecklistItem[] {
+    return get(checklists)
+      .filter((c) => c.taskId === taskId)
+      .sort((a, b) => a.sortOrder - b.sortOrder);
+  }
+
+  /** "HH:MM" from a Date (local). */
+  function fmtClock(d: Date | null | undefined): string {
+    if (!d) return "";
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  }
+
+  /** Time range for a mirror/unknown event: "10:00 — 12:30" or just start. */
+  function eventTimeLabel(event: any): string {
+    const start = event?.start as Date | null | undefined;
+    const end = event?.end as Date | null | undefined;
+    const s = fmtClock(start);
+    if (!s) return "";
+    const e = fmtClock(end);
+    return e && e !== s ? `${s} — ${e}` : s;
+  }
+
+  function renderEventContent(eventInfo: any) {
+    // FullCalendar v6 передаёт timeText (не time). Раньше time был всегда
+    // undefined — метка времени бралась из task.scheduledTime и после drag
+    // «залипала» на старом значении, пока не было refetch.
+    const event = eventInfo.event;
+    const timeText: string = (eventInfo.timeText ?? eventInfo.time ?? "").trim();
+
+    const task = resolveTask(event);
+    if (!task) {
+      // Select-mirror / provisional event while stretching a new task:
+      // show the time range instead of a bare "?".
+      const label = eventTimeLabel(event) || event.title || "";
+      return {
+        html: `<div class="sch-event sch-event-compact"><span class="sch-event-title">${label}</span></div>`,
+      };
+    }
+    const isDeadlineEvent = event.extendedProps?.isDeadlineEvent as boolean;
+
+    if (isDeadlineEvent) {
+      if (currentViewType === "dayGridMonth") {
+        return {
+          html: `<div class="sch-event-inline sch-event-inline-deadline"><span class="sch-inline-time">⏰</span></div>`,
+        };
+      }
+      return {
+        html: `
+          <div class="sch-event sch-event-compact sch-event-deadline">
+            <span class="sch-deadline-icon">&#9200;</span>
+            <span class="sch-event-title">${event.title}</span>
+          </div>
+        `,
+      };
+    }
+
+    // Month view: compact inline badge — only time + status
+    if (currentViewType === "dayGridMonth") {
+      // Время берём из диапазона события — оно обновляется сразу при drag,
+      // в отличие от task.scheduledTime (store ещё не обновлён).
+      const displayTime = event.allDay
+        ? ""
+        : fmtClock(event.start) || task.scheduledTime || "";
+      const statusIcon = task.status === "progress" ? "🔥"
+        : task.status === "paused" ? "☕"
+        : task.status === "done" ? "✓"
+        : task.status === "failed" ? "✕"
+        : "";
+      const statusClass = `sch-inline-${task.status}`;
+      const timeHtml = displayTime ? `<span class="sch-inline-time">${displayTime}</span>` : "";
+      const statusHtml = statusIcon ? `<span class="sch-inline-status ${statusClass}">${statusIcon}</span>` : "";
+      return {
+        html: `<div class="sch-event-inline">${timeHtml}${statusHtml}<span class="sch-inline-title">${event.title}</span></div>`,
+      };
+    }
+
+    const showTime = scheduleDisplay.scheduleShowTime !== false;
+    const showStatus = scheduleDisplay.scheduleShowStatus !== false;
+    const showPriority = scheduleDisplay.scheduleShowPriority !== false;
+    const showWorkBadge = scheduleDisplay.scheduleShowWorkBadge !== false;
+    const showNoteBadge = scheduleDisplay.scheduleShowNoteBadge !== false;
+    const showDeadline = scheduleDisplay.scheduleShowDeadline !== false;
+    const showOverdue = scheduleDisplay.scheduleShowOverdue !== false;
+    const showDescription = scheduleDisplay.scheduleShowDescription !== false;
+
+    // Старт/финиш — из диапазона события (актуален сразу после drag/resize).
+    // task.scheduledTime / endTime — fallback и флаг «явный конец».
+    // allDay: время не показываем, даже если store ещё не обновился.
+    const startClock = !event.allDay && event.start ? fmtClock(event.start) : "";
+    const endClock = !event.allDay && event.end ? fmtClock(event.end) : "";
+    const startTime = showTime && !event.allDay
+      ? startClock || timeText || task.scheduledTime || ""
+      : "";
+    const hasExplicitEnd = !!task.endTime;
+    const endTimeStr =
+      showTime && startTime && hasExplicitEnd && endClock && endClock !== startTime
+        ? endClock
+        : "";
+    const displayTime = endTimeStr ? `${startTime} — ${endTimeStr}` : startTime;
+    const statusLabel = showStatus
+      ? task.status === "progress"
+        ? tRaw("schedule.statusInProgress")
+        : task.status === "paused"
+          ? tRaw("schedule.statusPaused")
+          : task.status === "done"
+            ? tRaw("schedule.statusDone")
+            : task.status === "failed"
+              ? tRaw("schedule.statusFailed")
+              : ""
+      : "";
+    const statusHtml = statusLabel
+      ? `<span class="sch-event-status sch-status-${task.status}" data-action="toggle-status" title="${tRaw("schedule.clickToChange")}">${statusLabel}</span>`
+      : "";
+    const priorityBadge = showPriority
+      ? task.priority === "high"
+        ? '<span class="sch-priority sch-priority-high">!</span>'
+        : task.priority === "medium"
+          ? '<span class="sch-priority sch-priority-mid">~</span>'
+          : ""
+      : "";
+    const workBadge =
+      showWorkBadge && task.isWorkTask
+        ? `<span class="sch-work-badge" title="${tRaw("schedule.workTask")}">&#128188;</span>`
+        : "";
+    const noteBadge =
+      showNoteBadge && task.boundNotePath
+        ? `<span class="sch-note-badge" data-action="open-note" title="${tRaw("schedule.openNote")}">&#128279;</span>`
+        : "";
+
+    let deadlineHtml = "";
+    if (showDeadline && task.deadline && task.status !== "done") {
+      const match = task.deadline.match(/^day-(\d{4})-(\d{2})-(\d{2})/);
+      if (match) {
+        const [, y, m, d] = match;
+        const now = new Date();
+        const dl = new Date(`${y}-${m}-${d}T00:00:00`);
+        const today = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate(),
+        );
+        const diffDays = Math.round(
+          (dl.getTime() - today.getTime()) / 86400000,
+        );
+        let dlLabel = "";
+        if (diffDays < 0) dlLabel = tRaw("schedule.overdueDays", {days: Math.abs(diffDays)});
+        else if (diffDays === 0) dlLabel = tRaw("schedule.today");
+        else if (diffDays === 1) dlLabel = tRaw("schedule.tomorrow");
+        else dlLabel = `${diffDays}${tRaw("schedule.days")}`;
+        if (task.deadlineTime) dlLabel += ` ${task.deadlineTime}`;
+        const isOverdue = diffDays < 0;
+        deadlineHtml = `<span class="sch-deadline sch-deadline-transparent ${isOverdue ? "sch-deadline-overdue" : ""}" title="${tRaw("components.showInCalendar")}" data-deadline-date="${y}-${m}-${d}" style="cursor:pointer">${dlLabel}</span>`;
+      }
+    }
+
+    let overdueHtml = "";
+    if (
+      showOverdue &&
+      task.status === "todo" &&
+      task.scheduledTime &&
+      task.dateUID
+    ) {
+      // Просрочка — после конца слота (endTime / estimate / +60 мин), не с начала.
+      const endMs = getTaskSlotEndMs(task);
+      const now = Date.now();
+      if (endMs !== null && now > endMs) {
+        const diffMs = now - endMs;
+        const diffMin = Math.floor(diffMs / 60000);
+        const diffH = Math.floor(diffMin / 60);
+        const diffD = Math.floor(diffH / 24);
+        let overdueLabel = "";
+        if (diffD > 0) overdueLabel = `${diffD}${tRaw("schedule.days")} ${diffH % 24}${tRaw("schedule.hours")}`;
+        else if (diffH > 0) overdueLabel = `${diffH}${tRaw("schedule.hours")} ${diffMin % 60}${tRaw("schedule.minutes")}`;
+        else overdueLabel = `${diffMin}${tRaw("schedule.minutes")}`;
+        overdueHtml = `<span class="sch-overdue" title="${tRaw("schedule.overdue")}">⚠ ${overdueLabel}</span>`;
+      }
+    }
+
+    const checklistItems = getTaskChecklist(task.id);
+    const checklistDone = checklistItems.filter((c) => c.checked).length;
+    const checklistTotal = checklistItems.length;
+    const checklistBadge = checklistTotal > 0
+      ? `<span class="sch-checklist-badge" title="${tRaw("schedule.checklist")}: ${checklistDone}/${checklistTotal}">☑ ${checklistDone}/${checklistTotal}</span>`
+      : "";
+
+    const descriptionHtml =
+      showDescription && task.description
+        ? `<span class="sch-event-description">${task.description}</span>`
+        : "";
+
+    return {
+      html: `
+        <div class="sch-event sch-event-compact">
+          <div class="sch-event-header">
+            ${displayTime ? `<span class="sch-event-time${overdueHtml ? " sch-time-overdue" : ""}">${displayTime}</span>` : ""}
+            <span class="sch-event-title">${event.title}</span>
+          </div>
+          <div class="sch-event-badges">
+            ${statusHtml}
+            ${checklistBadge}
+            ${workBadge}
+            ${noteBadge}
+            ${priorityBadge}
+            ${overdueHtml}
+            ${deadlineHtml}
+          </div>
+          ${descriptionHtml}
+        </div>
+      `,
+    };
+  }
+
+  function handleEventDidMount(info: any): void {
+    const el = info.el;
+    el.setAttribute("data-event-id", info.event.id);
+
+    const projectColor = info.event.extendedProps?.projectColor as
+      | string
+      | null;
+    const isDeadlineEvent = info.event.extendedProps
+      ?.isDeadlineEvent as boolean;
+    const task = resolveTask(info.event);
+
+    // Цвет всегда до early return: CSS :has() с !important иначе
+    // перекрывает backgroundColor и задачи визуально «теряют» окраску.
+    if (isDeadlineEvent) {
+      el.style.setProperty("--event-project-color", "#b43c3c");
+      el.style.backgroundColor = "rgba(180, 60, 60, 0.85)";
+    } else {
+      const accent =
+        projectColor ||
+        (info.event.backgroundColor as string) ||
+        getStatusColor(task?.status || "todo");
+      el.style.setProperty("--event-project-color", accent);
+      el.style.backgroundColor = projectColor || accent;
+    }
+
+    if (!task) return;
+
+    if (isDeadlineEvent) {
+      const deadlineDateStr = info.event.start
+        ? `${info.event.start.getFullYear()}-${String(info.event.start.getMonth() + 1).padStart(2, "0")}-${String(info.event.start.getDate()).padStart(2, "0")}`
+        : "";
+      el.setAttribute(
+        "title",
+        `${tRaw("schedule.deadlineTask", {title: task.title})}\n${tRaw("schedule.dateLabel", {date: deadlineDateStr})}${task.deadlineTime ? " " + task.deadlineTime : ""}\n${tRaw("components.clickToFindTask")}`,
+      );
+      return;
+    }
+
+    // Completed / not-done task strikethrough
+    if (task.status === "done") {
+      el.classList.add("sch-event-done");
+    } else if (task.status === "failed") {
+      el.classList.add("sch-event-failed");
+    }
+
+    // Tooltip: full title + description + recurrence + estimated time
+    const lines: string[] = [];
+    lines.push(task.title);
+    if (task.description) {
+      lines.push(task.description);
+    }
+    if (task.recurrence) {
+      const recMap: Record<string, string> = {
+        daily: tRaw("schedule.recurrenceDaily"),
+        weekly: tRaw("schedule.recurrenceWeekly"),
+        monthly: tRaw("schedule.recurrenceMonthly"),
+      };
+      let recText = `${tRaw("schedule.recurrenceLabel")} ${recMap[task.recurrence.type] || task.recurrence.type}`;
+      if (task.recurrence.until) {
+        const untilDate = task.recurrence.until.replace(/^day-/, "");
+        recText += ` (до ${untilDate})`;
+      }
+      lines.push(recText);
+    }
+    if (task.estimatedTime) {
+      const h = Math.floor(task.estimatedTime / 60);
+      const m = task.estimatedTime % 60;
+      lines.push(`${tRaw("schedule.expected")} ${h > 0 ? h + tRaw("schedule.hours") + " " : ""}${m > 0 ? m + tRaw("schedule.minutes") : ""}`);
+    }
+    if (lines.length > 0) {
+      el.setAttribute("title", lines.join("\n"));
+    }
+
+    // Hover on checklist badge → show checklist tooltip
+    const checklistItems = getTaskChecklist(task.id);
+    if (checklistItems.length > 0) {
+      const badge = el.querySelector(".sch-checklist-badge") as HTMLElement | null;
+      if (badge) {
+        badge.removeAttribute("title");
+        badge.addEventListener("mouseenter", () => {
+          const tooltip = document.createElement("div");
+          tooltip.className = "sch-checklist-tooltip";
+
+          const done = checklistItems.filter((c) => c.checked).length;
+          const titleDiv = document.createElement("div");
+          titleDiv.className = "sch-checklist-tooltip-title";
+          titleDiv.textContent = `${tRaw("schedule.checklist")} (${done}/${checklistItems.length}):`;
+          tooltip.appendChild(titleDiv);
+
+          for (const item of checklistItems) {
+            const itemDiv = document.createElement("div");
+            itemDiv.className = "sch-checklist-tooltip-item";
+            if (item.checked) {
+              itemDiv.style.textDecoration = "line-through";
+              itemDiv.style.opacity = "0.6";
+            }
+            const iconSpan = document.createElement("span");
+            iconSpan.textContent = item.checked ? "✅" : "⬜";
+            itemDiv.appendChild(iconSpan);
+            itemDiv.appendChild(document.createTextNode(` ${item.title}`));
+            tooltip.appendChild(itemDiv);
+          }
+
+          document.body.appendChild(tooltip);
+          const rect = badge.getBoundingClientRect();
+          tooltip.style.left = `${rect.right + 8}px`;
+          tooltip.style.top = `${rect.top}px`;
+
+          requestAnimationFrame(() => {
+            const tr = tooltip.getBoundingClientRect();
+            if (tr.right > window.innerWidth) {
+              tooltip.style.left = `${rect.left - tr.width - 8}px`;
+            }
+            if (tr.bottom > window.innerHeight) {
+              tooltip.style.top = `${Math.max(4, window.innerHeight - tr.height - 8)}px`;
+            }
+          });
+
+          const removeTooltip = () => {
+            tooltip.remove();
+            badge.removeEventListener("mouseleave", removeTooltip);
+          };
+          badge.addEventListener("mouseleave", removeTooltip);
+        });
+      }
+    }
+
+    // Task editor is now opened on single left-click via eventClick handler
+  }
+
+  function handleEventClick(info: any): void {
+    // Deadline event → blink the parent task in the schedule
+    if (info.event.extendedProps?.isDeadlineEvent) {
+      const task = resolveTask(info.event);
+      if (!task) return;
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          const taskEl = calendarEl?.querySelector(
+            `[data-event-id="${CSS.escape(task.id)}"]`,
+          );
+          if (taskEl) {
+            taskEl.classList.add("sch-event-blink");
+            setTimeout(() => taskEl.classList.remove("sch-event-blink"), 3000);
+          }
+        }, 50);
+      });
+      return;
+    }
+    const task = resolveTask(info.event);
+    if (!task) return;
+
+    // If clicked on a sub-element with data-action, handle it directly
+    const target = info.jsEvent?.target as HTMLElement;
+    if (target) {
+      const actionEl = target.closest("[data-action]") as HTMLElement | null;
+      if (actionEl) {
+        const action = actionEl.dataset.action;
+        if (action === "toggle-status") {
+          cycleTaskStatus(task);
+          info.jsEvent.stopPropagation();
+          return;
+        }
+        if (action === "open-note" && task.boundNotePath) {
+          plugin.app.workspace.openLinkText(task.boundNotePath, "", false);
+          info.jsEvent.stopPropagation();
+          return;
+        }
+      }
+    }
+    // Left-click on event — open task editor
+    openTaskEditor(task);
+  }
+
+  function handleEventContextMenu(e: MouseEvent): void {
+    e.preventDefault();
+    // Find the FullCalendar event element under the cursor
+    const target = e.target as HTMLElement;
+    const eventEl = target.closest(".fc-event") as HTMLElement | null;
+    if (!eventEl) return;
+
+    // Get the event ID from FullCalendar's data attribute
+    const eventId = eventEl.dataset.eventId || eventEl.getAttribute("data-event-id");
+    if (!eventId) return;
+
+    const allEvents = calendar?.getEvents() || [];
+    const fcEvent = allEvents.find((ev) => ev.id === eventId);
+    if (!fcEvent) return;
+
+    const task = resolveTask(fcEvent);
+    if (!task) return;
+
+    const menuWidth = 220;
+    const menuHeight = 260;
+    let x = e.clientX;
+    let y = e.clientY;
+    if (x + menuWidth > window.innerWidth) x = window.innerWidth - menuWidth - 8;
+    if (x < 8) x = 8;
+    if (y + menuHeight > window.innerHeight) y = Math.max(8, y - menuHeight - 4);
+
+    openContextMenu(task, x, y);
+  }
+
+  function cycleTaskStatus(task: ITask): void {
+    const statusOrder: Array<"todo" | "progress" | "paused" | "done"> = [
+      "todo",
+      "progress",
+      "paused",
+      "done",
+    ];
+    // failed is terminal via context menu; click cycles through the main flow
+    const currentStatus = task.status === "all" || task.status === "failed" ? "todo" : task.status;
+    const currentIdx = statusOrder.indexOf(currentStatus);
+    const nextStatus = statusOrder[(currentIdx + 1) % statusOrder.length];
+    updateTaskStatus(task.id, nextStatus);
+    if (nextStatus === "todo") {
+      resetTaskTimer(task.id);
+    }
+  }
+
+  function handleCalendarSelect(info: any): void {
+    if (!info.start || !calendar) return;
+
+    // Use startStr for reliable timezone handling
+    const startStr = info.startStr || "";
+    const match = startStr.match(/^(\d{4}-\d{2}-\d{2})T?(\d{2}:\d{2})?/);
+    let dateStr: string;
+    let initialTime: string | undefined;
+
+    if (match) {
+      dateStr = match[1];
+      initialTime = match[2] || undefined;
+    } else {
+      const date = info.start as Date;
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      dateStr = `${year}-${month}-${day}`;
+      initialTime = undefined;
+    }
+
+    const viewType = calendar.view?.type || "";
+    const isTimeView = viewType.startsWith("timeGrid");
+    const isAllDay = info.allDay === true;
+
+    let estimatedTime: number | undefined;
+    let initialEndTime: string | undefined;
+
+    if (isTimeView && !isAllDay) {
+      if (!initialTime) {
+        // Fallback to date parsing
+        const date = info.start as Date;
+        initialTime = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+      }
+
+      if (info.end && info.start.getTime() !== info.end.getTime()) {
+        const durationMin = Math.round(
+          (info.end.getTime() - info.start.getTime()) / 1000 / 60,
+        );
+        if (durationMin > 0) {
+          estimatedTime = durationMin;
+        }
+        // Prefer endStr (calendar timezone) so start/end stay consistent;
+        // fall back to local getters on the Date objects.
+        const endStr = info.endStr || "";
+        const endMatch = endStr.match(/T(\d{2}):(\d{2})/);
+        if (endMatch) {
+          initialEndTime = `${endMatch[1]}:${endMatch[2]}`;
+        } else {
+          const endDate = info.end as Date;
+          initialEndTime = `${String(endDate.getHours()).padStart(2, "0")}:${String(endDate.getMinutes()).padStart(2, "0")}`;
+        }
+      }
+    }
+
+    calendar.unselect();
+    openTaskCreator(dateStr, initialTime, estimatedTime, initialEndTime);
+  }
+
+  let dropDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function handleEventDrop(info: any): void {
+    if (info.event.extendedProps?.isDeadlineEvent) return;
+    const task = resolveTask(info.event);
+    if (!task) {
+      info.revert();
+      return;
+    }
+
+    const startStr = info.event.startStr as string;
+    if (!startStr) {
+      info.revert();
+      return;
+    }
+
+    const allDay = info.event.allDay;
+    let dateStr: string | null = null;
+    let newTime: string | undefined;
+
+    if (allDay) {
+      // Dragged to "Без времени" — startStr is just "YYYY-MM-DD"
+      const dayMatch = startStr.match(/^(\d{4}-\d{2}-\d{2})$/);
+      if (!dayMatch) {
+        info.revert();
+        return;
+      }
+      dateStr = dayMatch[1];
+      newTime = undefined;
+    } else {
+      // Dragged within time grid — startStr is "YYYY-MM-DDTHH:MM..."
+      const match = startStr.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+      if (!match) {
+        info.revert();
+        return;
+      }
+      dateStr = match[1];
+      newTime = match[2];
+    }
+
+    if (!dateStr) {
+      info.revert();
+      return;
+    }
+    const m = window.moment(dateStr, "YYYY-MM-DD", true);
+    if (!m.isValid()) {
+      info.revert();
+      return;
+    }
+
+    const newDateUID = getDateUID(m, "day");
+
+    // Debounce data update — let FullCalendar finish its animation first.
+    // FullCalendar уже отрисовал событие на новом месте — НЕ делаем полный refetch.
+    if (dropDebounceTimer) clearTimeout(dropDebounceTimer);
+    dropDebounceTimer = setTimeout(() => {
+      dropDebounceTimer = null;
+      try {
+        const taskChanges: Record<string, any> = {
+          dateUID: newDateUID,
+          scheduledTime: newTime ?? null,
+        };
+        if (allDay) {
+          taskChanges.estimatedTime = null;
+          taskChanges.endTime = null;
+        } else if (newTime && task.endTime && task.scheduledTime) {
+          // Recalculate endTime to preserve the original duration (incl. overnight)
+          const [oh, om] = task.scheduledTime.split(":").map(Number);
+          const [eh, em] = task.endTime.split(":").map(Number);
+          let durationMin = eh * 60 + em - (oh * 60 + om);
+          if (durationMin <= 0) durationMin += 24 * 60;
+          if (durationMin > 0) {
+            const [nh, nm] = newTime.split(":").map(Number);
+            const totalMin = nh * 60 + nm + durationMin;
+            const newEndH = Math.floor(totalMin / 60) % 24;
+            const newEndM = totalMin % 60;
+            taskChanges.endTime = `${String(newEndH).padStart(2, "0")}:${String(newEndM).padStart(2, "0")}`;
+          }
+        }
+        commitLocalMutation(() => {
+          updateTask(task.id, taskChanges);
+        });
+        refreshEventContent(task.id);
+      } catch (e) {
+        /* ignore */
+      }
+    }, 100);
+  }
+
+  function handleEventResize(info: any): void {
+    const task = resolveTask(info.event);
+    if (!task) {
+      info.revert();
+      return;
+    }
+
+    const startStr = info.event.startStr as string;
+    const endStr = info.event.endStr as string;
+
+    if (!startStr || !endStr) {
+      info.revert();
+      return;
+    }
+
+    // Try to parse time from ISO strings
+    const startTimeMatch = startStr.match(/T(\d{2}):(\d{2})/);
+    const endTimeMatch = endStr.match(/T(\d{2}):(\d{2})/);
+
+    if (!startTimeMatch || !endTimeMatch) {
+      info.revert();
+      return;
+    }
+
+    const scheduledTime = `${startTimeMatch[1]}:${startTimeMatch[2]}`;
+    const endTime = `${endTimeMatch[1]}:${endTimeMatch[2]}`;
+
+    const durationMin = Math.round(
+      (info.event.end.getTime() - info.event.start.getTime()) / 1000 / 60,
+    );
+
+    if (dropDebounceTimer) clearTimeout(dropDebounceTimer);
+    dropDebounceTimer = setTimeout(() => {
+      dropDebounceTimer = null;
+      try {
+        // Stretch/resize always locks the visible slot: start + end + duration.
+        // FullCalendar уже перерисовал событие — без полного refetch.
+        const updates: Record<string, any> = {
+          scheduledTime,
+          endTime,
+          estimatedTime: durationMin > 0 ? durationMin : undefined,
+        };
+        commitLocalMutation(() => {
+          updateTask(task.id, updates);
+        });
+        refreshEventContent(task.id);
+      } catch (e) {
+        console.error("[handleEventResize] error:", e);
+      }
+    }, 100);
+  }
+
+  async function openTaskEditor(task: ITask): Promise<void> {
+    suppressRefetch = true;
+    new TaskModal(
+      plugin.app,
+      async (updates) => {
+        updateTask(task.id, updates);
+        suppressRefetch = false;
+        scheduleRefetch();
+      },
+      task,
+    ).open();
+    // If modal is closed without submitting, restore refetch
+    setTimeout(() => {
+      suppressRefetch = false;
+    }, 500);
+  }
+
+  async function openTaskCreator(
+    dateStr: string,
+    timeStr?: string,
+    _prefillEstimatedTime?: number,
+    endTimeStr?: string,
+  ): Promise<void> {
+    const moment = window.moment(dateStr, "YYYY-MM-DD", true);
+    if (!moment.isValid()) return;
+
+    // Time-based create (week/day drag or click) keeps the stretched slot.
+    const viewType = calendar?.view?.type || "";
+    const isTimeView = viewType.startsWith("timeGrid");
+    const initialTime = isTimeView ? timeStr : undefined;
+
+    suppressRefetch = true;
+    const { QuickAddModal } = await import("../task-tracker/QuickAddModal");
+    new QuickAddModal(
+      plugin.app,
+      moment,
+      () => {
+        suppressRefetch = false;
+        applyEventsUpdate();
+      },
+      {
+        scheduledTime: initialTime ?? null,
+        endTime: endTimeStr ?? null,
+        onTaskCreated: () => {
+          /* list is store-driven */
+        },
+      },
+    ).open();
+    // If modal is closed without submitting, restore refetch
+    setTimeout(() => {
+      suppressRefetch = false;
+    }, 500);
+  }
+
+  // Контекстное меню задачи — рендерим в document.body,
+  // чтобы position:fixed работал относительно viewport,
+  // а не относительно schedule-view-container с backdrop-filter
+  let contextMenuTask: ITask | null = null;
+  let contextMenuEl: HTMLDivElement | null = null;
+
+  function openContextMenu(task: ITask, x: number, y: number): void {
+    closeContextMenu(); // убираем предыдущее, если есть
+    suppressRefetch = true;
+    contextMenuTask = task;
+
+    // Создаём DOM-элемент в document.body, минуя backdrop-filter containing block
+    const el = document.createElement("div");
+    el.className = "sch-context-overlay";
+    el.addEventListener("click", closeContextMenu);
+    el.addEventListener("keydown", closeContextMenu);
+
+    const menu = document.createElement("div");
+    menu.className = "sch-context-menu";
+    menu.style.position = "fixed";
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+    menu.style.zIndex = "9999";
+
+    // Кнопки меню
+    const priorityIcon = task.priority === "high" ? "!" : task.priority === "medium" ? "~" : "";
+    const priorityPrefix = priorityIcon ? `${priorityIcon} ` : "";
+
+    const items = [
+      // Редактирование только для незавершённых задач
+      ...(task.status !== "done"
+        ? [{ label: `${priorityPrefix}${tRaw("schedule.edit")}`, action: () => contextEditTask() }]
+        : []),
+      ...(task.boundNotePath
+        ? [
+            {
+              label: `${priorityPrefix}${tRaw("schedule.openNote")}`,
+              action: () => contextOpenNote(),
+            },
+          ]
+        : []),
+      { label: tRaw("schedule.changeStatus"), disabled: true },
+      ...(task.status !== "todo"
+        ? [
+            {
+              label: ` ${tRaw("schedule.statusTodo")}`,
+              action: () => contextChangeStatus("todo"),
+            },
+          ]
+        : []),
+      ...(task.status !== "progress"
+        ? [
+            {
+              label: ` ${tRaw("schedule.statusToWork")}`,
+              action: () => contextChangeStatus("progress"),
+            },
+          ]
+        : []),
+      ...(task.status !== "paused"
+        ? [
+            {
+              label: `${tRaw("schedule.statusToPause")}`,
+              action: () => contextChangeStatus("paused"),
+            },
+          ]
+        : []),
+      ...(task.status !== "done"
+        ? [
+            {
+              label: ` ${tRaw("schedule.statusToDone")}`,
+              action: () => contextChangeStatus("done"),
+            },
+          ]
+        : []),
+      ...(task.status !== "failed"
+        ? [
+            {
+              label: ` ${tRaw("schedule.statusToFailed")}`,
+              action: () => contextChangeStatus("failed"),
+            },
+          ]
+        : []),
+      { divider: true },
+      ...(!isMobile &&
+      ($settings as { ollamaEnabled?: boolean }).ollamaEnabled === true &&
+      ($settings as { aiSubtasksEnabled?: boolean }).aiSubtasksEnabled !== false &&
+      isDesktopAI()
+        ? [
+            {
+              label: tRaw("ai.contextMenuSubtasks"),
+              action: () => void contextAiSubtasks(),
+            },
+            { divider: true },
+          ]
+        : []),
+      {
+        label: ` ${tRaw("schedule.deleteEvent")}`,
+        action: () => contextDeleteTask(),
+        danger: true,
+      },
+    ];
+
+    for (const item of items) {
+      if ("divider" in item && item.divider) {
+        const div = document.createElement("div");
+        div.className = "sch-context-divider";
+        menu.appendChild(div);
+      } else if ("disabled" in item && item.disabled) {
+        const lbl = document.createElement("div");
+        lbl.className = "sch-context-label";
+        lbl.textContent = item.label;
+        menu.appendChild(lbl);
+      } else if ("action" in item) {
+        const btn = document.createElement("button");
+        btn.className =
+          "sch-context-item" +
+          ("danger" in item && item.danger ? " sch-context-danger" : "");
+        btn.textContent = item.label;
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          item.action();
+        });
+        menu.appendChild(btn);
+      }
+    }
+
+    el.appendChild(menu);
+    document.body.appendChild(el);
+    contextMenuEl = el;
+
+    // Границы viewport — сдвигаем меню, если не помещается
+    requestAnimationFrame(() => {
+      const rect = menu.getBoundingClientRect();
+      if (rect.right > window.innerWidth) {
+        menu.style.left = `${Math.max(8, window.innerWidth - rect.width - 8)}px`;
+      }
+      if (rect.bottom > window.innerHeight) {
+        menu.style.top = `${Math.max(8, window.innerHeight - rect.height - 8)}px`;
+      }
+    });
+  }
+
+  function closeContextMenu(): void {
+    if (contextMenuEl) {
+      contextMenuEl.remove();
+      contextMenuEl = null;
+    }
+    contextMenuTask = null;
+    suppressRefetch = false;
+  }
+
+  function contextEditTask(): void {
+    if (contextMenuTask) {
+      openTaskEditor(contextMenuTask);
+    }
+    closeContextMenu();
+  }
+
+  async function contextOpenNote(): Promise<void> {
+    if (!contextMenuTask?.boundNotePath) return;
+    try {
+      plugin.app.workspace.openLinkText(
+        contextMenuTask.boundNotePath,
+        "",
+        false,
+      );
+    } catch (error) {
+      console.error("[ScheduleCalendar] failed to open note:", error);
+    }
+    closeContextMenu();
+  }
+
+  function contextChangeStatus(
+    newStatus: "todo" | "progress" | "done" | "paused" | "failed",
+  ): void {
+    if (contextMenuTask) {
+      updateTaskStatus(contextMenuTask.id, newStatus);
+      if (newStatus === "todo") {
+        resetTaskTimer(contextMenuTask.id);
+      }
+    }
+    closeContextMenu();
+  }
+
+  async function contextAiSubtasks(): Promise<void> {
+    const task = contextMenuTask;
+    closeContextMenu();
+    if (!task) return;
+    const { splitTaskIntoSubtasks } = await import("../services/aiSubtasks");
+    await splitTaskIntoSubtasks(plugin.app, task);
+    scheduleRefetch();
+  }
+
+  async function contextDeleteTask(): Promise<void> {
+    const task = contextMenuTask;
+    closeContextMenu();
+    if (!task) return;
+    // Точечное удаление событий задачи (включая дедлайн) без полного refetch.
+    commitLocalMutation(() => {
+      if (calendar) {
+        for (const ev of calendar.getEvents()) {
+          const tid = ev.extendedProps?.taskId || ev.id;
+          const isDeadline = ev.id === `deadline-${task.id}` || ev.extendedProps?.isDeadlineEvent;
+          if (tid === task.id || (isDeadline && ev.extendedProps?.taskId === task.id)) {
+            ev.remove();
+          }
+        }
+      }
+      removeTask(task.id);
+    });
+  }
+
+  export function refresh(): void {
+    scheduleRefetch();
+  }
+
+  async function openAiScheduleActions(): Promise<void> {
+    const appInst = get(app) ?? plugin?.app;
+    if (!appInst) return;
+    const view = calendar?.view;
+    const start = view?.activeStart ?? null;
+    const end = view?.activeEnd ?? null;
+    const { AIScheduleModal } = await import("../services/AIScheduleModal");
+    new AIScheduleModal(appInst, start, end, {
+      saveOptions: (changes) => plugin.writeOptions(changes as Record<string, unknown>),
+    }).open();
+  }
+</script>
+
+<div class="schedule-calendar-wrapper">
+  {#if isSwiping}
+    <div
+      class="swipe-indicator"
+      class:swipe-left={touchEndX < touchStartX}
+      class:swipe-right={touchEndX > touchStartX}
+    >
+      <span class="swipe-arrow"
+        >{touchEndX < touchStartX ? "&#8250;" : "&#8249;"}</span
+      >
+    </div>
+  {/if}
+  <div bind:this={calendarEl} class="schedule-calendar"></div>
+
+  <!-- Контекстное меню теперь рендерится в document.body через DOM API,
+       чтобы position:fixed работал корректно (backdrop-filter на
+       schedule-view-container создаёт containing block) -->
+</div>
+
+<style>
+  .schedule-calendar-wrapper {
+    flex: 1;
+    height: 100%;
+    width: 100%;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .schedule-calendar {
+    height: 100%;
+    width: 100%;
+    touch-action: pan-y pinch-zoom;
+  }
+
+  .swipe-indicator {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 100;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    animation: swipeHint 0.3s ease;
+  }
+
+  .swipe-indicator.swipe-left {
+    right: 8px;
+  }
+
+  .swipe-indicator.swipe-right {
+    left: 8px;
+  }
+
+  .swipe-arrow {
+    font-size: 24px;
+    color: var(--mcp-accent);
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  }
+
+  @keyframes swipeHint {
+    0% {
+      opacity: 0;
+      transform: translateY(-50%) scale(0.8);
+    }
+    50% {
+      opacity: 0.8;
+    }
+    100% {
+      opacity: 0;
+      transform: translateY(-50%) scale(1);
+    }
+  }
+
+  /* Контекстное меню задачи — global, т.к. рендерится в document.body */
+  :global(.sch-context-overlay) {
+    position: fixed;
+    inset: 0;
+    z-index: 9998;
+    background: transparent;
+  }
+
+  :global(.sch-context-menu) {
+    position: fixed;
+    z-index: 9999;
+    min-width: 200px;
+    max-width: min(320px, calc(100vw - 24px));
+    max-height: min(70vh, 480px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--background-primary, #1e1e2e);
+    border: 1px solid
+      var(--background-modifier-border, rgba(255, 255, 255, 0.08));
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+    padding: 6px;
+    font-family: var(--font-interface);
+    font-size: 13px;
+  }
+
+  :global(.sch-context-item) {
+    display: block;
+    width: 100%;
+    padding: 7px 12px;
+    border: none;
+    background: transparent;
+    color: var(--text-normal, #e8ecf0);
+    text-align: left;
+    cursor: pointer;
+    border-radius: 5px;
+    transition: background 0.15s;
+    font-family: var(--font-interface);
+    font-size: 13px;
+  }
+
+  :global(.sch-context-item:hover) {
+    background: var(--background-modifier-hover, rgba(255, 255, 255, 0.06));
+  }
+
+  :global(.sch-context-divider) {
+    height: 1px;
+    background: var(--background-modifier-border, rgba(255, 255, 255, 0.06));
+    margin: 3px 8px;
+  }
+
+  :global(.sch-context-label) {
+    padding: 4px 12px 2px;
+    font-size: 11px;
+    color: var(--text-faint, rgba(200, 210, 220, 0.4));
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  :global(.sch-context-danger) {
+    color: var(--text-error, #ef4444);
+  }
+
+  :global(.sch-context-danger:hover) {
+    background: rgba(239, 68, 68, 0.12);
+  }
+
+  /* ===== FullCalendar — Glassmorphism тема ===== */
+
+  :global(.fc) {
+    height: 100%;
+    font-family: var(--font-interface);
+    /* Obsidian theme variable mapping (reference pattern) */
+    --fc-button-text-color: var(--text-normal);
+    --fc-button-bg-color: var(--interactive-normal, rgba(255, 255, 255, 0.05));
+    --fc-button-border-color: var(
+      --interactive-normal,
+      rgba(255, 255, 255, 0.08)
+    );
+    --fc-button-hover-bg-color: var(
+      --interactive-hover,
+      rgba(255, 255, 255, 0.1)
+    );
+    --fc-button-hover-border-color: var(
+      --interactive-hover,
+      rgba(255, 255, 255, 0.14)
+    );
+    --fc-button-active-bg-color: var(
+      --interactive-accent,
+      rgba(95, 153, 225, 0.5)
+    );
+    --fc-button-active-border-color: var(
+      --interactive-accent,
+      rgba(95, 153, 225, 0.5)
+    );
+    --fc-event-text-color: var(--text-on-accent, #fff);
+    --fc-border-color: var(
+      --background-modifier-border,
+      rgba(255, 255, 255, 0.06)
+    );
+    --fc-today-bg-color: transparent;
+    --fc-page-bg-color: transparent;
+    --fc-neutral-bg-color: rgba(255, 255, 255, 0.03);
+    --fc-list-event-hover-bg-color: var(
+      --background-secondary,
+      rgba(255, 255, 255, 0.04)
+    );
+    --fc-now-indicator-color: var(--text-error, #ef4444);
+    --fc-highlight-color: var(--text-highlight-bg, rgba(95, 153, 225, 0.08));
+  }
+
+  /* Контейнер расписания — стеклянная панель */
+  :global(.schedule-view-container) {
+    height: 100%;
+    overflow: hidden;
+    background: var(--mcp-glass-bg, rgba(35, 40, 55, 0.4));
+    backdrop-filter: var(--mcp-blur, blur(20px));
+    -webkit-backdrop-filter: var(--mcp-blur, blur(20px));
+    border: 1px solid var(--mcp-glass-border, rgba(255, 255, 255, 0.06));
+    border-radius: var(--mcp-radius, 14px);
+    box-shadow: var(--mcp-shadow, 0 8px 32px rgba(0, 0, 0, 0.15)),
+      var(--mcp-shadow-glow, 0 0 40px rgba(80, 170, 210, 0.06));
+  }
+
+  /* Тулбар — стекло */
+  :global(.fc .fc-toolbar) {
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    border-radius: var(--mcp-radius-sm, 10px);
+    margin: 8px 8px 0;
+  }
+
+  :global(.fc .fc-toolbar-title) {
+    color: var(--mcp-text, var(--text-normal));
+    font-size: 1.15em;
+    font-weight: 600;
+  }
+
+  /* AI actions button in toolbar */
+  :global(.fc .fc-button.fc-aiActions-button) {
+    background: color-mix(in srgb, var(--mcp-accent, #7c5cfc) 22%, transparent);
+    border-color: color-mix(in srgb, var(--mcp-accent, #7c5cfc) 45%, transparent);
+    color: var(--mcp-text, var(--text-normal));
+  }
+
+  :global(.fc .fc-button.fc-aiActions-button:hover) {
+    background: color-mix(in srgb, var(--mcp-accent, #7c5cfc) 38%, transparent);
+    border-color: var(--mcp-accent, #7c5cfc);
+    box-shadow: 0 0 12px var(--mcp-accent-faint);
+  }
+
+  :global(.fc .fc-button) {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--mcp-text, var(--text-normal));
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: var(--mcp-radius-sm, 10px);
+    font-size: 0.82em;
+    padding: 5px 14px;
+    transition: all var(--mcp-transition, 0.3s cubic-bezier(0.4, 0, 0.2, 1));
+    font-weight: 500;
+  }
+
+  :global(.fc .fc-button:hover) {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+
+  :global(.fc .fc-button-active) {
+    background: var(--mcp-accent) !important;
+    color: var(--mcp-text, var(--text-normal)) !important;
+    border-color: var(--mcp-accent-faint) !important;
+    box-shadow: 0 0 12px var(--mcp-accent-faint);
+  }
+
+  :global(.fc .fc-button:disabled) {
+    background: rgba(255, 255, 255, 0.02);
+    color: var(--mcp-text-faint, rgba(200, 210, 220, 0.25));
+    border-color: transparent;
+  }
+
+  /* Сетка — полупрозрачные линии */
+  :global(.fc .fc-scrollgrid) {
+    border-color: rgba(255, 255, 255, 0.04);
+  }
+
+  :global(.fc td),
+  :global(.fc th) {
+    border-color: rgba(255, 255, 255, 0.04);
+  }
+
+  :global(.fc .fc-col-header-cell) {
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  :global(.fc .fc-col-header-cell-cushion) {
+    color: var(--mcp-text-muted, var(--text-muted));
+    padding: 8px 0;
+    font-weight: 500;
+    font-size: 0.85em;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  /* Weather in day headers */
+  :global(.fc .fc-day-header-content) {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 4px 8px;
+    border-radius: 8px;
+  }
+
+  :global(.fc .fc-day-header-content.fc-day-header-today) {
+    background: var(--mcp-accent, rgba(95, 153, 225, 0.55));
+    color: #fff;
+  }
+
+  :global(.fc .fc-day-header-top) {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  :global(.fc .fc-day-header-text) {
+    font-size: 0.85em;
+    font-weight: 600;
+    text-transform: capitalize;
+  }
+
+  :global(.fc .fc-day-header-weather) {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 0.78em;
+    font-weight: 400;
+    opacity: 0.85;
+  }
+
+  :global(
+      .fc .fc-day-header-content.fc-day-header-today .fc-day-header-weather
+    ) {
+    opacity: 1;
+  }
+
+  :global(.fc .fc-weather-icon) {
+    font-size: 1em;
+    line-height: 1;
+  }
+
+  :global(.fc .fc-weather-temp) {
+    font-size: 0.9em;
+    color: var(--mcp-text, var(--text-normal));
+    white-space: nowrap;
+  }
+
+  :global(.fc .fc-day-header-content.fc-day-header-today .fc-weather-temp) {
+    color: #fff;
+  }
+
+  :global(.fc .fc-timegrid-axis-cushion),
+  :global(.fc .fc-timegrid-slot-label-cushion) {
+    color: var(--mcp-text-faint, var(--text-faint));
+    font-size: 11px;
+    font-weight: 500;
+    transition: color 0.2s ease;
+  }
+
+  /* 18:00 — accent hour; 18:30 — quieter half-hour */
+  :global(.sch-slot-label-hour) {
+    color: var(--mcp-text, var(--text-normal));
+    font-weight: 650;
+    font-size: 11.5px;
+  }
+
+  :global(.sch-slot-label-half) {
+    color: var(--mcp-text-faint, var(--text-faint));
+    font-weight: 500;
+    font-size: 10.5px;
+    opacity: 0.85;
+  }
+
+  :global(.fc .fc-timegrid-slot) {
+    transition: background-color 0.18s ease;
+  }
+
+  /* Half-hour separator slightly softer than the hour line */
+  :global(.fc .fc-timegrid-slot.fc-timegrid-slot-minor) {
+    border-top-color: rgba(255, 255, 255, 0.03);
+  }
+
+  /* Не переопределяем height слотов — FullCalendar рассчитывает
+     позиции highlight/drag/snap на основе slotDuration,
+     а CSS height создаёт рассинхрон */
+
+  :global(.fc .fc-daygrid-day-number) {
+    color: var(--mcp-text, var(--text-normal));
+    padding: 4px 8px;
+    font-size: 0.85em;
+  }
+
+  /* Сегодня — в month view */
+
+  :global(.fc .fc-timegrid .fc-day-today) {
+    background: rgba(95, 153, 225, 0.06) !important;
+  }
+
+  /* Только колонки в timegrid body, не header/all-day slot */
+  :global(.fc .fc-timegrid-body .fc-timegrid-col.fc-day-today) {
+    border-left: 2px solid var(--mcp-accent) !important;
+    border-right: 2px solid var(--mcp-accent) !important;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Верхняя/нижняя рамка today — через pseudo-элементы на колонке */
+  :global(.fc .fc-timegrid-body .fc-timegrid-col.fc-day-today::before),
+  :global(.fc .fc-timegrid-body .fc-timegrid-col.fc-day-today::after) {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--mcp-accent);
+    z-index: 2;
+  }
+
+  :global(.fc .fc-timegrid-body .fc-timegrid-col.fc-day-today::before) {
+    top: 0;
+  }
+
+  :global(.fc .fc-timegrid-body .fc-timegrid-col.fc-day-today::after) {
+    bottom: 0;
+  }
+
+  /* Заголовок today — выделяем рамкой */
+  :global(.fc .fc-col-header-cell.fc-day-today) {
+    border-left: 2px solid var(--mcp-accent) !important;
+    border-right: 2px solid var(--mcp-accent) !important;
+    border-top: 2px solid var(--mcp-accent) !important;
+    position: relative;
+    z-index: 1;
+  }
+
+  :global(.fc .fc-col-header-cell.fc-day-today::after) {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
+    background: var(--mcp-accent);
+    z-index: 2;
+  }
+
+  /* Сегодня в day header — уже стилизован через fc-day-header-today */
+
+  /* Now indicator */
+  :global(.fc .fc-timegrid-now-indicator-line) {
+    border-color: var(--mcp-accent);
+    z-index: 10;
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+
+  :global(.now-indicator-hidden .fc .fc-timegrid-now-indicator-line),
+  :global(.now-indicator-hidden .fc .fc-timegrid-now-indicator-arrow),
+  :global(.now-indicator-hidden .fc .fc-timegrid-now-indicator-container),
+  :global(.now-indicator-hidden .fc .fc-timegrid-now-indicator-now) {
+    display: none !important;
+  }
+
+  :global(.fc .fc-timegrid-now-indicator-arrow) {
+    border-color: var(--mcp-accent);
+    z-index: 11;
+    position: relative;
+    visibility: visible !important;
+    opacity: 1 !important;
+    display: block !important;
+  }
+
+  :global(.fc .fc-timegrid-now-indicator-container) {
+    overflow: visible;
+  }
+
+  :global(.fc .fc-timegrid-now-indicator-now) {
+    color: var(--mcp-accent);
+    font-weight: 600;
+    font-size: 10px;
+    z-index: 11;
+  }
+
+  /* Выделение */
+  :global(.fc .fc-highlight) {
+    background: var(--mcp-accent-dim);
+    border-radius: 4px;
+    transition: background-color 0.15s ease;
+    animation: sch-select-in 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+    position: relative;
+  }
+
+  /* Время диапазона внутри зеркала выделения (вместо «?») */
+  :global(.fc .fc-highlight.sch-select-with-time::after),
+  :global(.fc .fc-select-mirror.sch-select-with-time::after) {
+    content: attr(data-sch-select-time);
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-normal, #e8ecf0);
+    pointer-events: none;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  @keyframes sch-select-in {
+    from {
+      opacity: 0.4;
+      transform: scaleY(0.92);
+    }
+    to {
+      opacity: 1;
+      transform: scaleY(1);
+    }
+  }
+
+  /* Плавное появление тела календарной сетки */
+  :global(.fc .fc-timegrid-body),
+  :global(.fc .fc-daygrid-body) {
+    animation: sch-view-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  @keyframes sch-view-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :global(.fc .fc-event),
+    :global(.fc .fc-timegrid-body),
+    :global(.fc .fc-daygrid-body),
+    :global(.fc .fc-highlight) {
+      animation: none !important;
+    }
+  }
+
+  /* Hover на слотах времени */
+  :global(.fc .fc-timegrid-slot) {
+    transition: background-color 0.15s ease;
+  }
+
+  :global(.fc .fc-timegrid-slot:hover),
+  :global(.fc .fc-timegrid-slot-lane:hover) {
+    background: var(--mcp-amber-dim, rgba(245, 166, 35, 0.12));
+  }
+
+  /* Активный слот под курсором — подсветка строки + метки времени */
+  :global(.fc .fc-timegrid-slot.sch-slot-hot),
+  :global(.fc .fc-timegrid-slot.sch-slot-hot .fc-timegrid-slot-lane) {
+    background: var(--mcp-amber-dim, rgba(245, 166, 35, 0.14));
+  }
+
+  :global(.fc .fc-timegrid-slot.sch-slot-hot .fc-timegrid-slot-label-cushion),
+  :global(.fc .fc-timegrid-slot.sch-slot-hot .fc-timegrid-axis-cushion) {
+    color: var(--mcp-amber, #f5a623) !important;
+    font-weight: 700;
+    text-shadow: 0 0 10px var(--mcp-amber-dim, rgba(245, 166, 35, 0.45));
+  }
+
+  /* Конец выделения при создании задачи — резкая линия на времени конца (18:00) */
+  :global(.fc .fc-timegrid-slot.sch-slot-end) {
+    border-top: 2px solid var(--mcp-amber, #f5a623) !important;
+  }
+
+  :global(.fc .fc-timegrid-slot.sch-slot-end .fc-timegrid-slot-label-cushion),
+  :global(.fc .fc-timegrid-slot.sch-slot-end .fc-timegrid-axis-cushion) {
+    color: var(--mcp-amber, #f5a623) !important;
+    font-weight: 800;
+    text-shadow: 0 0 12px rgba(245, 166, 35, 0.55);
+  }
+
+  :global(.fc .fc-daygrid-day:hover) {
+    background: var(--mcp-accent-ultra-dim);
+  }
+
+  /* ===== +N more — пилюля и поповер ===== */
+  :global(.fc .fc-daygrid-more-link) {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    margin-top: 2px;
+    padding: 0;
+    color: var(--mcp-text-muted, var(--text-muted));
+    font-size: 11px;
+    text-decoration: none;
+    border-radius: 999px;
+    transition:
+      transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
+      filter 0.18s ease,
+      opacity 0.18s ease;
+    animation: sch-more-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  :global(.fc .fc-daygrid-more-link:hover) {
+    background: transparent;
+    transform: translateY(-1px);
+    filter: brightness(1.08);
+  }
+
+  :global(.fc .fc-daygrid-more-link:active) {
+    transform: translateY(0) scale(0.97);
+  }
+
+  :global(.sch-more-pill) {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 100%;
+    padding: 1px 7px 1px 5px;
+    border-radius: 999px;
+    border: 1px solid var(--mcp-glass-border, rgba(255, 255, 255, 0.1));
+    background: linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.08),
+      rgba(255, 255, 255, 0.03)
+    );
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    line-height: 1.35;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  :global(.sch-more-count) {
+    font-weight: 700;
+    font-size: 10px;
+    color: var(--mcp-accent, var(--interactive-accent, #5f99e1));
+    letter-spacing: 0.02em;
+    flex-shrink: 0;
+  }
+
+  :global(.sch-more-label) {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--mcp-text-muted, var(--text-muted));
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0.9;
+  }
+
+  @keyframes sch-more-in {
+    from {
+      opacity: 0;
+      transform: translateY(3px) scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  /* Поповер «+N more» — glassmorphism + плавное появление */
+  :global(.fc .fc-popover) {
+    min-width: 220px;
+    max-width: min(320px, calc(100vw - 24px));
+    background: var(--mcp-glass-bg, rgba(30, 30, 46, 0.92));
+    border: 1px solid var(--mcp-glass-border, rgba(255, 255, 255, 0.1));
+    border-radius: 12px;
+    box-shadow:
+      0 12px 40px rgba(0, 0, 0, 0.35),
+      0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+    backdrop-filter: blur(16px) saturate(1.2);
+    -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    overflow: hidden;
+    animation: sch-popover-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+    transform-origin: top center;
+  }
+
+  :global(.fc .fc-popover-header) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 12px 8px;
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.06),
+      transparent
+    );
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  :global(.fc .fc-popover-title) {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--mcp-text, var(--text-normal));
+    letter-spacing: 0.01em;
+  }
+
+  :global(.fc .fc-popover-close) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    color: var(--mcp-text-muted, var(--text-muted));
+    cursor: pointer;
+    opacity: 0.75;
+    transition:
+      background 0.15s ease,
+      opacity 0.15s ease,
+      transform 0.15s ease;
+  }
+
+  :global(.fc .fc-popover-close:hover) {
+    background: rgba(255, 255, 255, 0.08);
+    opacity: 1;
+    transform: scale(1.06);
+  }
+
+  :global(.fc .fc-popover-body) {
+    padding: 6px 8px 8px;
+    max-height: min(320px, 50vh);
+    overflow-y: auto;
+    scrollbar-width: thin;
+  }
+
+  :global(.fc .fc-popover .fc-event) {
+    margin: 3px 2px;
+    border-radius: 8px !important;
+  }
+
+  :global(.fc .fc-popover .sch-event),
+  :global(.fc .fc-popover .sch-event-compact) {
+    padding: 4px 8px;
+  }
+
+  @keyframes sch-popover-in {
+    from {
+      opacity: 0;
+      transform: translateY(-6px) scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :global(.fc .fc-daygrid-more-link),
+    :global(.fc .fc-popover) {
+      animation: none;
+      transition: none;
+    }
+  }
+
+  /* ===== Glassmorphism события ===== */
+
+  :global(.fc .fc-event) {
+    cursor: pointer;
+    border: none !important;
+    border-radius: 8px !important;
+    transition:
+      background-color 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+      box-shadow 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+      filter 0.22s ease,
+      transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1),
+      opacity 0.22s ease;
+    box-shadow:
+      inset 3px 0 0 var(--event-project-color, rgba(120, 145, 175, 1)),
+      0 2px 8px rgba(0, 0, 0, 0.12);
+    animation: sch-event-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  @keyframes sch-event-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  :global(.fc .fc-event:hover) {
+    filter: brightness(1.08);
+    transform: translateY(-1px) scale(1.01);
+    box-shadow:
+      inset 3px 0 0 var(--event-project-color, rgba(120, 145, 175, 1)),
+      0 6px 16px rgba(0, 0, 0, 0.22);
+    z-index: 3;
+  }
+
+  :global(.fc .fc-event:has(.sch-event)) {
+    background-color: var(
+      --event-project-color,
+      rgba(110, 130, 160, 0.8)
+    ) !important;
+    box-shadow:
+      inset 3px 0 0 var(--event-project-color, rgba(120, 145, 175, 1)),
+      0 2px 8px rgba(0, 0, 0, 0.12) !important;
+  }
+
+  :global(.fc .fc-event:has(.sch-event-compact)) {
+    background-color: var(
+      --event-project-color,
+      rgba(110, 130, 160, 0.8)
+    ) !important;
+    box-shadow:
+      inset 3px 0 0 var(--event-project-color, rgba(120, 145, 175, 1)),
+      0 2px 8px rgba(0, 0, 0, 0.12) !important;
+  }
+
+  /* Месячный вид — .sch-event-inline, иначе цвета из CSS не применяются */
+  :global(.fc .fc-event:has(.sch-event-inline)) {
+    background-color: var(
+      --event-project-color,
+      rgba(110, 130, 160, 0.8)
+    ) !important;
+    box-shadow:
+      inset 3px 0 0 var(--event-project-color, rgba(120, 145, 175, 1)),
+      0 2px 8px rgba(0, 0, 0, 0.12) !important;
+  }
+
+  :global(.sch-event) {
+    padding: 4px 8px;
+    line-height: 1.35;
+    min-width: 0;
+  }
+
+  :global(.fc .fc-timegrid-event) {
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    pointer-events: auto;
+    cursor: pointer;
+  }
+
+  /* Pass clicks through overlay harnesses to actual event elements */
+  :global(.fc .fc-timegrid-event-harness) {
+    pointer-events: none;
+  }
+
+  :global(.fc .fc-timegrid-event-harness-inset) {
+    pointer-events: none;
+  }
+
+  /* Active/current event highlight — multi-layered glow (reference pattern) */
+  :global(.fc .fc-event.sch-event-active) {
+    box-shadow:
+      0 0 0 2px rgba(255, 255, 255, 0.85),
+      0 0 24px 8px var(--mcp-accent-faint),
+      0 0 56px 24px var(--mcp-accent-dim);
+    outline: none;
+    overflow: visible;
+    isolation: isolate;
+    z-index: 3;
+    filter: none;
+  }
+  :global(.fc .fc-timegrid-event.sch-event-active) {
+    box-shadow:
+      inset 3px 0 0 var(--event-project-color, rgba(120, 145, 175, 1)),
+      0 0 0 2px rgba(255, 255, 255, 0.85),
+      0 0 24px 8px var(--mcp-accent-faint);
+  }
+  :global(.fc .fc-daygrid-event.sch-event-active) {
+    background: var(--mcp-accent-dim) !important;
+    border: 1px solid var(--mcp-accent) !important;
+  }
+
+  :global(.fc .fc-event.fc-dragging),
+  :global(.fc .fc-event-event-dragging),
+  :global(.fc .fc-event-mirror) {
+    transition: none !important;
+    will-change: auto;
+    opacity: 0.9;
+    z-index: 9999;
+    box-shadow: none !important;
+    filter: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  :global(.fc .fc-event-main) {
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  :global(.sch-event-compact) {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 4px 8px;
+    line-height: 1.35;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  /* Month view inline badge */
+  :global(.sch-event-inline) {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 4px;
+    font-size: 10px;
+    line-height: 1.3;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  :global(.sch-event-inline .sch-inline-time) {
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.9);
+    flex-shrink: 0;
+    font-size: 10px;
+  }
+  :global(.sch-event-inline .sch-inline-status) {
+    flex-shrink: 0;
+    font-size: 10px;
+  }
+  :global(.sch-event-inline .sch-inline-title) {
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.85);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+    font-size: 10px;
+  }
+  :global(.sch-event-inline .sch-inline-done) {
+    color: rgba(130, 220, 170, 0.95);
+  }
+  :global(.sch-event-inline .sch-inline-failed) {
+    color: rgba(230, 120, 120, 0.95);
+  }
+  :global(.sch-event-inline .sch-inline-progress) {
+    color: rgba(255, 200, 100, 0.95);
+  }
+  :global(.sch-event-inline .sch-inline-paused) {
+    color: rgba(200, 180, 140, 0.9);
+  }
+  :global(.sch-event-inline-deadline .sch-inline-time) {
+    color: rgba(255, 150, 150, 0.95);
+  }
+
+  :global(.sch-event-compact .sch-event-header) {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+  }
+
+  :global(.sch-event-compact .sch-event-time) {
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.85);
+    flex-shrink: 0;
+  }
+
+  :global(.sch-event-compact .sch-event-title) {
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #fff;
+    min-width: 0;
+  }
+
+  :global(.sch-event-compact .sch-event-description) {
+    font-size: 10px;
+    font-weight: 400;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: rgba(255, 255, 255, 0.7);
+    display: block;
+    line-height: 1.2;
+    margin-top: 1px;
+  }
+
+  :global(.sch-recurrence) {
+    font-size: 11px;
+    flex-shrink: 0;
+    opacity: 0.85;
+  }
+
+  :global(.sch-deadline) {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(251, 191, 36, 0.3);
+    color: rgba(255, 230, 150, 0.95);
+    flex-shrink: 0;
+    white-space: nowrap;
+    transition:
+      background 0.15s ease,
+      transform 0.15s ease;
+  }
+
+  :global(.sch-deadline:hover) {
+    background: rgba(251, 191, 36, 0.5);
+    transform: scale(1.05);
+  }
+
+  :global(.sch-deadline-transparent) {
+    background: transparent !important;
+    color: rgba(255, 230, 150, 0.4) !important;
+    border: 1px dashed rgba(251, 191, 36, 0.25) !important;
+    font-weight: 400;
+  }
+
+  :global(.sch-deadline-overdue) {
+    background: rgba(220, 100, 100, 0.4);
+    color: rgba(255, 180, 180, 0.95);
+  }
+
+  :global(.sch-event-deadline-marker),
+  :global(.fc .fc-event.sch-event-deadline-marker),
+  :global(.fc .fc-daygrid-event.sch-event-deadline-marker),
+  :global(.fc .fc-timegrid-event.sch-event-deadline-marker) {
+    background: rgba(180, 60, 60, 0.35) !important;
+    border-color: rgba(220, 100, 100, 0.6) !important;
+    border-left: 3px solid rgba(220, 100, 100, 0.8) !important;
+    box-shadow: none !important;
+    cursor: pointer !important;
+  }
+
+  :global(.sch-event-deadline-marker .fc-event-main),
+  :global(.sch-event-deadline-marker .fc-event-main-frame),
+  :global(.sch-event-deadline-marker .fc-event-bg),
+  :global(.sch-event-deadline-marker .fc-daygrid-event-dot) {
+    background: transparent !important;
+    border-color: transparent !important;
+  }
+
+  :global(.fc .fc-list-event.sch-event-deadline-marker td) {
+    background: rgba(180, 60, 60, 0.2) !important;
+  }
+
+  :global(.sch-event-blink) {
+    animation: sch-blink 0.5s ease-in-out 5;
+  }
+
+  @keyframes sch-blink {
+    0%,
+    100% {
+      opacity: 1;
+      box-shadow: none;
+    }
+    50% {
+      opacity: 0.5;
+      box-shadow: 0 0 12px 2px rgba(251, 191, 36, 0.6);
+    }
+  }
+
+  :global(.sch-overdue) {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(220, 80, 80, 0.35);
+    color: rgba(255, 160, 160, 0.95);
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  :global(.sch-time-overdue) {
+    color: rgba(255, 130, 130, 0.95) !important;
+  }
+
+  :global(.sch-event-deadline) {
+    opacity: 0.9;
+  }
+
+  :global(.sch-event-deadline .sch-event-title) {
+    color: #fff;
+    font-style: italic;
+  }
+
+  :global(.sch-deadline-icon) {
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+
+  /* ===== Кастомный контент события ===== */
+
+  :global(.sch-event) {
+    padding: 4px 8px;
+    line-height: 1.35;
+    min-width: 0;
+  }
+
+  :global(.sch-event-header) {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  :global(.sch-event-badges) {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    margin-top: 2px;
+    min-width: 0;
+  }
+
+  :global(.sch-event-title) {
+    font-size: 11.5px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--mcp-text, var(--text-normal));
+  }
+
+  :global(.sch-priority) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    font-size: 9px;
+    font-weight: 700;
+    flex-shrink: 0;
+    transition: transform 0.15s ease;
+  }
+
+  :global(.sch-priority:hover) {
+    transform: scale(1.15);
+  }
+
+  :global(.sch-priority-high) {
+    background: rgba(220, 150, 150, 0.35);
+    color: rgba(240, 170, 170, 0.95);
+  }
+
+  :global(.sch-priority-mid) {
+    background: rgba(220, 190, 130, 0.25);
+    color: rgba(230, 210, 150, 0.85);
+  }
+
+  :global(.sch-note-icon) {
+    font-size: 10px;
+    opacity: 0.6;
+    flex-shrink: 0;
+  }
+
+  :global(.sch-event-meta) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 1px;
+    flex-wrap: wrap;
+  }
+
+  :global(.sch-event-time) {
+    font-size: 10px;
+    color: var(--mcp-text-muted, rgba(200, 210, 220, 0.5));
+    font-weight: 500;
+  }
+
+  :global(.sch-event-status) {
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    transition:
+      filter 0.15s ease,
+      transform 0.15s ease;
+  }
+
+  :global(.sch-event-status:hover) {
+    filter: brightness(1.3);
+    transform: scale(1.05);
+  }
+
+  :global(.sch-event-status:active) {
+    transform: scale(0.95);
+  }
+
+  :global(.sch-status-todo) {
+    background: rgba(140, 160, 190, 0.15);
+    color: rgba(180, 195, 215, 0.8);
+  }
+
+  :global(.sch-status-progress) {
+    background: rgba(214, 178, 108, 0.15);
+    color: rgba(225, 195, 130, 0.85);
+  }
+
+  :global(.sch-status-done) {
+    background: rgba(110, 190, 160, 0.12);
+    color: rgba(140, 205, 175, 0.75);
+  }
+
+  :global(.sch-status-failed) {
+    background: rgba(220, 100, 100, 0.15);
+    color: rgba(230, 120, 120, 0.9);
+  }
+
+  /* Task completed strikethrough (reference pattern) */
+  :global(.fc .fc-event.sch-event-done .fc-event-title) {
+    background-image: linear-gradient(currentColor, currentColor);
+    background-position: 0 50%;
+    background-repeat: no-repeat;
+    background-size: 100% 1px;
+    opacity: 0.6;
+  }
+  :global(.fc .fc-list-event.sch-event-done .fc-list-event-title a) {
+    text-decoration: none;
+    background-image: linear-gradient(currentColor, currentColor);
+    background-position: 0 50%;
+    background-repeat: no-repeat;
+    background-size: 100% 1px;
+    opacity: 0.6;
+  }
+
+  /* Not-done (failed) task strikethrough + dim */
+  :global(.fc .fc-event.sch-event-failed .fc-event-title) {
+    background-image: linear-gradient(currentColor, currentColor);
+    background-position: 0 50%;
+    background-repeat: no-repeat;
+    background-size: 100% 1px;
+    opacity: 0.5;
+    text-decoration: line-through;
+  }
+  :global(.fc .fc-list-event.sch-event-failed .fc-list-event-title a) {
+    text-decoration: line-through;
+    opacity: 0.5;
+  }
+
+  :global(.sch-status-paused) {
+    background: rgba(180, 150, 100, 0.15);
+    color: rgba(200, 170, 110, 0.85);
+  }
+
+  :global(.sch-duration) {
+    font-size: 9px;
+    color: var(--mcp-text-faint, rgba(200, 210, 220, 0.25));
+  }
+
+  :global(.sch-work-badge) {
+    font-size: 10px;
+    opacity: 0.8;
+    flex-shrink: 0;
+    transition: opacity 0.15s ease;
+  }
+
+  :global(.sch-work-badge:hover) {
+    opacity: 1;
+  }
+
+  :global(.sch-note-badge) {
+    font-size: 10px;
+    opacity: 0.85;
+    flex-shrink: 0;
+    cursor: pointer;
+    transition:
+      opacity 0.15s ease,
+      transform 0.15s ease;
+  }
+
+  :global(.sch-note-badge:hover) {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+
+  :global(.sch-note-badge:active) {
+    transform: scale(0.9);
+  }
+
+  /* ===== List view ===== */
+
+  :global(.fc .fc-list-event:hover td) {
+    background-color: rgba(255, 255, 255, 0.03);
+  }
+
+  :global(.fc .fc-list-event-title a) {
+    color: var(--mcp-text, var(--text-normal));
+  }
+
+  :global(.fc .fc-list-event-time a) {
+    color: var(--mcp-text-muted, var(--text-muted));
+  }
+
+  /* ===== Header / day cells ===== */
+
+  :global(.fc .fc-day-header) {
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  :global(.fc .fc-timegrid-header) {
+    border-bottom-color: rgba(255, 255, 255, 0.04);
+  }
+
+  /* ===== Мобильная адаптация — планшет (≤768px) ===== */
+  @media (max-width: 768px) {
+    /* Контейнер — убираем скругления и тени на мобилке */
+    :global(.schedule-view-container) {
+      border-radius: 0;
+      border: none;
+      box-shadow: none;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      background: transparent;
+    }
+
+    /* Тулбар — двухстрочный, компактный */
+    :global(.fc .fc-toolbar) {
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 6px 8px;
+      margin: 4px 4px 0;
+    }
+
+    :global(.fc .fc-toolbar-title) {
+      font-size: 13px;
+      order: -1;
+      width: 100%;
+      text-align: center;
+      margin-bottom: 2px;
+      font-weight: 700;
+    }
+
+    :global(.fc .fc-toolbar-chunk) {
+      display: flex;
+      gap: 4px;
+      min-height: 36px;
+    }
+
+    :global(.fc .fc-toolbar-chunk:last-child) {
+      margin-left: auto;
+    }
+
+    :global(.fc .fc-button) {
+      font-size: 11px;
+      padding: 6px 10px;
+      min-height: 36px;
+      min-width: 40px;
+      border-radius: 8px;
+    }
+
+    :global(.fc .fc-col-header-cell-cushion) {
+      font-size: 10.5px;
+      padding: 6px 0;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    :global(.fc .fc-timegrid-slot-label-cushion) {
+      font-size: 9.5px;
+    }
+
+    /* Боковая ось — шире */
+    :global(.fc .fc-timegrid-axis) {
+      width: 34px;
+    }
+
+    /* События — компактнее */
+    :global(.sch-event) {
+      padding: 3px 6px;
+    }
+
+    :global(.sch-event-title) {
+      font-size: 11px;
+    }
+
+    :global(.sch-event-meta) {
+      gap: 4px;
+    }
+
+    :global(.sch-event-badges) {
+      gap: 4px;
+      margin-top: 1px;
+    }
+
+    :global(.sch-event-status) {
+      font-size: 8.5px;
+      padding: 1px 4px;
+    }
+
+    :global(.sch-priority) {
+      width: 13px;
+      height: 13px;
+      font-size: 8.5px;
+    }
+
+    /* Touch scroll */
+    :global(.fc .fc-scrollgrid) {
+      -webkit-overflow-scrolling: touch;
+    }
+
+    :global(.fc .fc-timegrid-body) {
+      min-height: 400px;
+    }
+  }
+
+  /* ===== Телефон (≤480px) ===== */
+  @media (max-width: 480px) {
+    :global(.fc .fc-toolbar) {
+      padding: 4px 6px;
+      margin: 2px 2px 0;
+      gap: 3px;
+      flex-wrap: wrap;
+    }
+
+    :global(.fc .fc-toolbar-title) {
+      font-size: 11px;
+    }
+
+    :global(.fc .fc-button) {
+      font-size: 10px;
+      padding: 6px 8px;
+      min-height: 32px;
+      min-width: 36px;
+      border-radius: 7px;
+    }
+
+    :global(.fc .fc-toolbar-chunk:last-child) {
+      flex-wrap: wrap;
+      gap: 2px;
+    }
+
+    :global(.fc .fc-button-active) {
+      box-shadow: 0 0 8px var(--mcp-accent-dim);
+    }
+
+    /* Заголовки дней — компактные */
+    :global(.fc .fc-col-header-cell-cushion) {
+      font-size: 9.5px;
+      padding: 5px 0;
+    }
+
+    :global(.fc .fc-daygrid-day-number) {
+      font-size: 11px;
+      padding: 3px 5px;
+    }
+
+    /* Сетка времени — FullCalendar сам управляет высотой слотов */
+
+    :global(.fc .fc-timegrid-axis-cushion),
+    :global(.fc .fc-timegrid-slot-label-cushion) {
+      font-size: 10px;
+      padding-right: 2px;
+    }
+
+    /* Боковая ось — шире для читаемости */
+    :global(.fc .fc-timegrid-axis) {
+      width: 36px;
+    }
+
+    /* События — крупные тап-таргеты, читаемый контент */
+    :global(.fc .fc-event) {
+      border-radius: 6px !important;
+      min-height: 32px;
+    }
+
+    :global(.sch-event) {
+      padding: 2px 5px;
+      line-height: 1.3;
+    }
+
+    :global(.sch-event-header) {
+      gap: 3px;
+    }
+
+    :global(.sch-event-badges) {
+      gap: 3px;
+      margin-top: 1px;
+    }
+
+    :global(.sch-event-title) {
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    :global(.sch-event-meta) {
+      gap: 3px;
+      margin-top: 0;
+    }
+
+    :global(.sch-event-time) {
+      font-size: 9px;
+    }
+
+    /* Скрываем статус и приоритет на телефоне — избыточно */
+    :global(.sch-event-status) {
+      display: none;
+    }
+
+    :global(.sch-priority) {
+      width: 12px;
+      height: 12px;
+      font-size: 8px;
+      border-radius: 3px;
+    }
+
+    :global(.sch-note-icon) {
+      font-size: 9px;
+    }
+
+    :global(.sch-note-badge) {
+      font-size: 9px;
+    }
+
+    :global(.sch-overdue) {
+      font-size: 8px;
+      padding: 1px 4px;
+    }
+
+    :global(.sch-checklist-badge) {
+      font-size: 8px;
+      padding: 1px 3px;
+    }
+
+    :global(.sch-duration) {
+      font-size: 8px;
+    }
+
+    :global(.fc .fc-timegrid-event .sch-event) {
+      padding: 2px 5px;
+    }
+
+    /* Now indicator — заметнее */
+    :global(.fc .fc-timegrid-now-indicator-line) {
+      border-width: 2px;
+    }
+
+    :global(.fc .fc-timegrid-now-indicator-arrow) {
+      border-width: 2px;
+    }
+
+    :global(.fc .fc-timegrid-now-indicator-now) {
+      display: none;
+    }
+
+    /* Выделение при тапе */
+    :global(.fc .fc-highlight) {
+      background: var(--mcp-accent-dim);
+      border-radius: 4px;
+    }
+
+    /* Day grid — крупные ячейки */
+    :global(.fc .fc-daygrid-day) {
+      min-height: 48px;
+    }
+
+    :global(.fc .fc-daygrid-more-link) {
+      font-size: 10px;
+      padding: 0;
+    }
+
+    :global(.sch-more-pill) {
+      padding: 1px 6px 1px 4px;
+    }
+
+    :global(.sch-more-count),
+    :global(.sch-more-label) {
+      font-size: 9px;
+    }
+
+    /* List view */
+    :global(.fc .fc-list-event-title a) {
+      font-size: 12px;
+    }
+
+    :global(.fc .fc-list-event-time a) {
+      font-size: 10.5px;
+    }
+
+    :global(.fc .fc-list-day-cushion) {
+      padding: 4px 8px;
+    }
+
+    /* Горизонтальный скролл timegrid — если колонки не помещаются */
+    :global(.fc .fc-timegrid-scroll) {
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: thin;
+    }
+
+    /* Месяц — события читаемые */
+    :global(.fc .fc-daygrid-event) {
+      font-size: 10px;
+      margin: 1px 1px;
+      padding: 1px 4px;
+    }
+
+    :global(.fc .fc-daygrid-event .sch-event-title) {
+      font-size: 10px;
+    }
+
+    :global(.fc .fc-daygrid-more-link) {
+      font-size: 9px;
+    }
+
+    :global(.sch-more-count),
+    :global(.sch-more-label) {
+      font-size: 9px;
+    }
+  }
+
+  /* ===== Мобильная сетка месяца (dayGridMonth) ===== */
+  @media (max-width: 768px) {
+    /* Сетка месяца — полная 7x5/7x6 сетка */
+    :global(.fc .fc-daygrid) {
+      min-height: 280px;
+    }
+
+    :global(.fc .fc-daygrid-day) {
+      min-height: 42px;
+      padding: 2px;
+    }
+
+    :global(.fc .fc-daygrid-day-number) {
+      font-size: 12px;
+      padding: 3px 6px;
+      min-width: 24px;
+      text-align: center;
+    }
+
+    /* События в ячейках месяца — компактные полоски */
+    :global(.fc .fc-daygrid-event) {
+      margin: 1px 2px;
+      padding: 1px 4px;
+      font-size: 10px;
+      border-radius: 3px;
+      line-height: 1.3;
+    }
+
+    :global(.fc .fc-daygrid-event .sch-event) {
+      padding: 1px 3px;
+      line-height: 1.25;
+    }
+
+    :global(.fc .fc-daygrid-event .sch-event-title) {
+      font-size: 10px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    :global(.fc .fc-daygrid-event .sch-priority) {
+      width: 10px;
+      height: 10px;
+      font-size: 7px;
+    }
+
+    :global(.fc .fc-daygrid-more-link) {
+      font-size: 9px;
+      padding: 0;
+      color: var(--mcp-accent);
+    }
+
+    :global(.sch-more-pill) {
+      padding: 1px 5px 1px 4px;
+      border-color: rgba(95, 153, 225, 0.25);
+    }
+
+    :global(.sch-more-count) {
+      color: var(--mcp-accent);
+    }
+
+    /* Заголовки дней месяца */
+    :global(.fc .fc-col-header-cell-cushion) {
+      font-size: 10px;
+      padding: 5px 0;
+    }
+
+    /* Сегодня в timegrid на мобилке — рамка как на десктопе */
+    :global(.fc .fc-timegrid .fc-day-today) {
+      background: rgba(95, 153, 225, 0.06) !important;
+    }
+
+    :global(.fc .fc-timegrid-body .fc-timegrid-col.fc-day-today) {
+      border-left: 2px solid var(--mcp-accent) !important;
+      border-right: 2px solid var(--mcp-accent) !important;
+    }
+
+    :global(.fc .fc-col-header-cell.fc-day-today) {
+      border-left: 2px solid var(--mcp-accent) !important;
+      border-right: 2px solid var(--mcp-accent) !important;
+      border-top: 2px solid var(--mcp-accent) !important;
+    }
+  }
+
+  /* ===== Маленький телефон (≤360px) ===== */
+  @media (max-width: 360px) {
+    :global(.fc .fc-toolbar-title) {
+      font-size: 10px;
+    }
+
+    :global(.fc .fc-button) {
+      font-size: 9px;
+      padding: 4px 5px;
+      min-height: 30px;
+      min-width: 30px;
+    }
+
+    :global(.fc .fc-col-header-cell-cushion) {
+      font-size: 9px;
+    }
+
+    :global(.fc .fc-timegrid-axis) {
+      width: 32px;
+    }
+
+    :global(.fc .fc-timegrid-axis-cushion) {
+      font-size: 9px;
+    }
+
+    :global(.sch-event-title) {
+      font-size: 10px;
+    }
+
+    :global(.fc .fc-daygrid-day-number) {
+      font-size: 10px;
+      padding: 2px 4px;
+    }
+
+    /* Месяц — компактные ячейки */
+    :global(.fc .fc-daygrid-day) {
+      min-height: 40px;
+    }
+
+    :global(.fc .fc-daygrid-event) {
+      font-size: 9px;
+      padding: 1px 3px;
+      margin: 0 1px;
+    }
+
+    :global(.fc .fc-daygrid-event .sch-event-title) {
+      font-size: 9px;
+    }
+
+    :global(.fc .fc-daygrid-event .sch-priority) {
+      display: none;
+    }
+
+    :global(.fc .fc-daygrid-more-link) {
+      font-size: 8px;
+      padding: 0;
+    }
+
+    :global(.sch-more-pill) {
+      padding: 1px 4px;
+      gap: 2px;
+    }
+
+    :global(.fc .fc-timegrid-event) {
+      min-height: 28px;
+    }
+
+    :global(.sch-event) {
+      padding: 1px 4px;
+    }
+
+    :global(.sch-event-title) {
+      font-size: 10px;
+    }
+  }
+
+  /* ===== Checklist badge ===== */
+  :global(.sch-checklist-badge) {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(100, 200, 140, 0.2);
+    color: rgba(150, 220, 180, 0.9);
+    flex-shrink: 0;
+    white-space: nowrap;
+    line-height: 1.3;
+  }
+
+  /* ===== Checklist hover tooltip ===== */
+  :global(.sch-checklist-tooltip) {
+    position: fixed;
+    z-index: 10001;
+    min-width: 160px;
+    max-width: 280px;
+    max-height: 240px;
+    overflow-y: auto;
+    padding: 8px 10px;
+    background: var(--background-primary, #1e1e2e);
+    border: 1px solid var(--background-modifier-border, rgba(255, 255, 255, 0.1));
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    font-family: var(--font-interface);
+    font-size: 12px;
+    color: var(--text-normal, #e8ecf0);
+    pointer-events: none;
+  }
+
+  :global(.sch-checklist-tooltip-title) {
+    font-weight: 600;
+    font-size: 11px;
+    color: var(--text-muted, rgba(200, 210, 220, 0.6));
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  :global(.sch-checklist-tooltip-item) {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 0;
+    font-size: 12px;
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Weather tooltip on day header hover */
+  :global(.sch-weather-tooltip) {
+    position: fixed;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 10px;
+    background: var(--background-primary, #1e1e2e);
+    border: 1px solid
+      var(--background-modifier-border, rgba(255, 255, 255, 0.1));
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-normal, #e8ecf0);
+    pointer-events: none;
+    white-space: nowrap;
+    transform: translateX(-50%);
+  }
+
+  /* ===== Альбомная ориентация ===== */
+  @media (max-width: 768px) and (orientation: landscape) {
+    :global(.fc .fc-toolbar) {
+      flex-direction: row;
+      flex-wrap: nowrap;
+      gap: 6px;
+      align-items: center;
+    }
+
+    :global(.fc .fc-toolbar-title) {
+      width: auto;
+      order: 0;
+      font-size: 12px;
+    }
+
+    :global(.sch-event) {
+      padding: 2px 5px;
+    }
+  }
+
+  /* ===== Touch-устройства — улучшенные тап-таргеты ===== */
+  @media (hover: none) and (pointer: coarse) {
+    :global(.fc .fc-button) {
+      min-height: 40px;
+      min-width: 40px;
+    }
+
+    :global(.fc .fc-event) {
+      min-height: 32px;
+    }
+
+    :global(.fc .fc-daygrid-day) {
+      min-height: 44px;
+    }
+
+    :global(.fc .fc-daygrid-more-link) {
+      padding: 0;
+    }
+
+    :global(.sch-more-pill) {
+      padding: 4px 10px 4px 8px;
+    }
+
+    :global(.sch-more-count),
+    :global(.sch-more-label) {
+      font-size: 11px;
+    }
+
+    /* Убираем hover-эффекты на тач */
+    :global(.fc .fc-event:hover) {
+      transform: none;
+      filter: none;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    }
+
+    /* Увеличиваем область тапа на заголовки дней */
+    :global(.fc .fc-col-header-cell) {
+      padding: 4px 0;
+    }
+
+    :global(.fc .fc-col-header-cell-cushion) {
+      padding: 6px 0;
+    }
+
+    /* Увеличиваем тап-таргеты для месячного вида */
+    :global(.fc .fc-daygrid-day) {
+      min-height: 48px;
+    }
+
+    :global(.fc .fc-daygrid-event) {
+      min-height: 20px;
+      padding: 2px 4px;
+    }
+
+    /* Увеличиваем кнопки навигации */
+    :global(.fc .fc-prev-button),
+    :global(.fc .fc-next-button) {
+      min-height: 44px;
+      min-width: 44px;
+    }
+  }
+
+  /* ===== Safe area (iOS notch / home indicator) ===== */
+  @supports (padding: env(safe-area-inset-bottom)) {
+    :global(.schedule-view-container) {
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    :global(.fc .fc-toolbar) {
+      padding-top: calc(6px + env(safe-area-inset-top));
+    }
+  }
+</style>
