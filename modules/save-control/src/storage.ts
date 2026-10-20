@@ -205,20 +205,37 @@ export async function deleteSnapshotFile(
   return false;
 }
 
+/**
+ * 按快照名滚转：只动这个名字的快照，超出 keepCount 的最旧一批被删。
+ *
+ * `protectFavorites` 默认 true —— 收藏是用户显式的「别删」信号，滚转不该
+ * 越过它；autosave 的滚转沿用上游旧行为（不保护），故显式传 false。
+ * 列表已是按时间戳降序，所以直接切尾。
+ */
+export async function deleteOldestSnapshotsByName(
+  plugin: SaveControlPlugin,
+  vaultRelativePath: string,
+  keepCount: number,
+  name: string,
+  protectFavorites = true
+): Promise<void> {
+  const snapshots = await listSnapshotsForFile(plugin, vaultRelativePath);
+  const pool = snapshots.filter(s => s.name === name && (!protectFavorites || !s.favorite));
+
+  if (pool.length <= keepCount) return;
+
+  const toDelete = pool.slice(keepCount);
+  for (const s of toDelete) {
+    await deleteSnapshotFile(plugin, s.filePath);
+  }
+}
+
 export async function deleteOldestAutosaves(
   plugin: SaveControlPlugin,
   vaultRelativePath: string,
   keepCount: number
 ): Promise<void> {
-  const snapshots = await listSnapshotsForFile(plugin, vaultRelativePath);
-  const autosaves = snapshots.filter(s => s.name === "autosave");
-
-  if (autosaves.length <= keepCount) return;
-
-  const toDelete = autosaves.slice(keepCount);
-  for (const s of toDelete) {
-    await deleteSnapshotFile(plugin, s.filePath);
-  }
+  await deleteOldestSnapshotsByName(plugin, vaultRelativePath, keepCount, "autosave", false);
 }
 
 async function removeEmptySnapshotDirs(plugin: SaveControlPlugin, filePath: string) {

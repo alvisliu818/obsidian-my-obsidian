@@ -21,6 +21,7 @@ Obsidian plugin for saving and restoring file versions.
 - **Autosave on tab close** — save a version when closing a file tab
 - **Per-file settings** — override autosave interval, autosave on tab close, max autosave versions, and grouping per file
 - **Max autosave versions** — limit how many autosaved versions are kept per file
+- **Version on write** — automatically keep a version every time a tracked file is written to disk (max N per file, configurable)
 - **Allowed file extensions** — choose which file types are tracked (`.md` always included)
 - **Multi-language** — English, Russian, and Spanish interface
 - **Customizable snapshot folder** — change where versions are stored in the vault

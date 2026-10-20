@@ -179,6 +179,34 @@ export class SaveControlSettingTab extends PluginSettingTab {
     // ----------------------------------------------------------------
     new Setting(containerEl).setName("版本历史").setHeading();
 
+    toggle(
+      "写盘自动存版本",
+      "任意文本文件写入磁盘时自动留一个版本副本（与下方的定时 autosave 互补：那个按时间取样，这个按每次写盘取样）。",
+      () => this.plugin.settings.versionOnWriteEnabled,
+      (v) => (this.plugin.settings.versionOnWriteEnabled = v),
+    );
+
+    new Setting(containerEl)
+      .setName("写盘版本保留数")
+      .setDesc("每个文件最多保留多少个「写盘」版本（1-50）。超出后删最旧的（收藏的不删）。只滚转「写盘」本身，不动手动/定时版本。")
+      .addText((text) => {
+        text.inputEl.type = "number";
+        text.inputEl.min = "1";
+        text.inputEl.max = "50";
+        text.setValue(String(this.plugin.settings.maxOnWriteVersions));
+        text.onChange((v) => {
+          const n = Number(v);
+          if (Number.isFinite(n) && n >= 1 && n <= 50) {
+            this.plugin.settings.maxOnWriteVersions = Math.trunc(n);
+            void this.plugin.saveSettings();
+          }
+        });
+        text.inputEl.addEventListener("blur", () => {
+          void this.plugin.saveSettings();
+          this.display();
+        });
+      });
+
     new Setting(containerEl)
       .setName(translate("groupVersionsBy"))
       .setDesc(translate("groupVersionsDesc"))

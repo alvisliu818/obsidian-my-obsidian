@@ -13,10 +13,14 @@
  *      自动保存对两类文件一视同仁；
  *   2. **标签页未保存圆点 + 关闭提示**：Obsidian 原生不给自定义视图标未保存
  *      状态，本模块轮询各标签页的待保存状态，在标签页状态区画圆点，关闭有
- *      未保存更改的标签页前弹出「保存 / 不保存 / 取消」（可用开关关掉）。
+ *      未保存更改的标签页前弹出「保存 / 不保存 / 取消」（可用开关关掉）；
+ *   3. **写盘自动存版本**（autoVersion.ts）：任意文本文件落盘时自动留一个
+ *      版本副本（与按时间取样的 autosave 互补），每文件最多保留 N 个
+ *      （默认 10，钳制 1-50，收藏的不滚转）。
  *
  * 开关（都在设置页）：autosaveEnabled / versionHistoryEnabled /
- * externalFilesEnabled / statusIndicatorEnabled / promptUnsavedOnClose；
+ * externalFilesEnabled / statusIndicatorEnabled / promptUnsavedOnClose /
+ * versionOnWriteEnabled；
  * 模块总开关在宿主「My Obsidian」设置页。
  */
 
@@ -43,6 +47,7 @@ import {
   getExportFolderPath,
 } from "./storage";
 import { AutosaveManager } from "./autosave";
+import { AutoVersionManager } from "./autoVersion";
 import { AutoSaveController } from "./autosave/AutoSaveController";
 import { SaveStatusIndicator } from "./autosave-ui/StatusIndicator";
 import { ExternalSaveScheduler } from "./externalScheduler";
@@ -80,6 +85,8 @@ export class SaveControlPlugin extends Plugin {
   externalScheduler: ExternalSaveScheduler | null = null;
   /** 标签页未保存圆点（本模块新增）。 */
   unsavedDots: UnsavedDotMonitor | null = null;
+  /** 写盘自动存版本（本模块新增）：任意文本文件落盘时留一个副本。 */
+  autoVersion: AutoVersionManager | null = null;
   versioning!: ReturnType<typeof setupVersioning>;
   saveStatusIndicator: SaveStatusIndicator | null = null;
   tempVersionFiles: Map<string, string> = new Map();
@@ -99,6 +106,11 @@ export class SaveControlPlugin extends Plugin {
     await this.loadSettings();
 
     this.versioning = setupVersioning(this);
+
+    // 写盘自动存版本：事件常驻（写在文件落盘时发生，没法按需挂载），
+    // 记不记由 versionOnWriteEnabled 在处理器里门控。
+    this.autoVersion = new AutoVersionManager(this);
+    this.autoVersion.start();
 
     if (this.settings.versionHistoryEnabled) {
       this.registerView(VIEW_TYPE_SAVE_HISTORY, (leaf) => new SaveHistoryView(leaf, this, this.versioning));
@@ -820,6 +832,9 @@ export class SaveControlPlugin extends Plugin {
       this.externalScheduler = null;
     }
     this.externalScheduler?.refresh();
+    // 写盘自动存版本：开关只切门控，事件监听常驻（见 onload 注释）。
+    if (this.settings.versionOnWriteEnabled) this.autoVersion?.start();
+    else this.autoVersion?.stop();
   }
 
   // ------------------------------------------------------------------

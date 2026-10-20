@@ -54,6 +54,10 @@ export interface SaveControlSettings {
   autosaveOnTabClose: boolean;
   maxAutosaveVersions: number;
   allowedExtensions: string;
+  /** 写盘自动存版本：任意文本文件落盘时自动留一个版本副本。 */
+  versionOnWriteEnabled: boolean;
+  /** 每个文件最多保留多少个「写盘」版本（1-50，越界按边界钳制）。 */
+  maxOnWriteVersions: number;
   previewMode: PreviewMode;
   perFileSettings: Record<string, PerFileSettings>;
 
@@ -92,6 +96,8 @@ export const DEFAULT_SETTINGS: SaveControlSettings = {
   maxAutosaveVersions: 0,
   allowedExtensions: "",
   previewMode: "modal",
+  versionOnWriteEnabled: true,
+  maxOnWriteVersions: 10,
   perFileSettings: {},
 
   externalSnapshotFolder: "",
