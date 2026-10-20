@@ -47,6 +47,7 @@ const bundle = await build({
             export class Setting {}
             export class WorkspaceLeaf {}
             export function getLanguage() { return 'en'; }
+            export function setIcon() {}
           `,
           loader: 'js',
         }));
@@ -198,6 +199,7 @@ async function createLoadedThemePlugin(initialDark) {
   const plugin = createPlugin();
   const events = new Map();
   const cleanups = [];
+  const leaves = []; // 标签页图标遍历用的假 leaf 集(需要时可 push)
   let dark = initialDark;
   plugin.bootTimers = [];
   plugin.app = {
@@ -208,6 +210,10 @@ async function createLoadedThemePlugin(initialDark) {
         return { name };
       },
       onLayoutReady() {},
+      // syncTabIcons/resetTabIcons 遍历所有 leaf;测试里没有真实 leaf,给空集。
+      iterateAllLeaves(callback) {
+        for (const leaf of leaves) callback(leaf);
+      },
     },
   };
   plugin.loadSettings = async () => {};

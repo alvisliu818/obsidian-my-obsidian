@@ -7,6 +7,7 @@ import {
   Setting,
   WorkspaceLeaf,
   getLanguage,
+  setIcon,
   type SettingDefinitionItem,
 } from 'obsidian';
 import {
@@ -27,6 +28,7 @@ const APPLIED_ATTR = 'data-mfi-applied';
 const OBSERVED_ATTR = 'data-mfi-obs';
 const ICON_CLASS = 'mfi-icon';
 const FOLDER_ICON_CLASS = 'mfi-folder-icon';
+const TAB_ICON_CLASS = 'mfi-tab-icon';
 
 // Upper bound for the refresh debounce. Vault indexing fires `create` once per
 // existing file on startup, which would otherwise defer every pending refresh
@@ -145,6 +147,7 @@ interface Strings {
   language: string; languageDesc: string; languageAuto: string;
   applyFiles: string; applyFilesDesc: string;
   applyFolders: string; applyFoldersDesc: string;
+  applyTabs: string; applyTabsDesc: string;
   customRules: string; customRulesDesc: string;
   noRules: string; addRuleBtn: string; rulesHeading: string; extExists: string;
   edit: string; delete: string;
@@ -162,6 +165,7 @@ const STRINGS: Record<Lang, Strings> = {
     language: 'Language', languageDesc: 'Interface language', languageAuto: 'Follow Obsidian',
     applyFiles: 'Apply file icons', applyFilesDesc: 'Show Material icons for files by extension, use theme icons when disabled',
     applyFolders: 'Apply folder icons', applyFoldersDesc: 'Show Material icons for folders, use theme icons when disabled',
+    applyTabs: 'Apply tab icons', applyTabsDesc: 'Show the same Material icon on editor tabs as in the file list',
     customRules: 'Custom rules', customRulesDesc: 'When enabled, custom rules take priority over default icon matching',
     noRules: 'No rules yet', addRuleBtn: 'Add rule', rulesHeading: 'Rules', extExists: 'Rule for .{ext} already exists',
     edit: 'Edit', delete: 'Delete',
@@ -177,6 +181,7 @@ const STRINGS: Record<Lang, Strings> = {
     language: '语言', languageDesc: '界面语言', languageAuto: '跟随 Obsidian',
     applyFiles: '应用文件图标', applyFilesDesc: '根据扩展名为文件显示 Material 图标，关闭后使用主题自带图标',
     applyFolders: '应用文件夹图标', applyFoldersDesc: '为文件夹显示 Material 图标，关闭后使用主题自带图标',
+    applyTabs: '应用标签页图标', applyTabsDesc: '编辑器标签页显示与文件列表一致的 Material 图标',
     customRules: '自定义规则', customRulesDesc: '开启后，自定义规则优先于默认图标匹配',
     noRules: '暂无规则', addRuleBtn: '添加规则', rulesHeading: '规则', extExists: '后缀 .{ext} 的规则已存在',
     edit: '编辑', delete: '删除',
@@ -192,6 +197,7 @@ const STRINGS: Record<Lang, Strings> = {
     language: '語言', languageDesc: '介面語言', languageAuto: '跟隨 Obsidian',
     applyFiles: '套用檔案圖示', applyFilesDesc: '根據副檔名為檔案顯示 Material 圖示，關閉後使用佈景主題圖示',
     applyFolders: '套用資料夾圖示', applyFoldersDesc: '為資料夾顯示 Material 圖示，關閉後使用佈景主題圖示',
+    applyTabs: '套用分頁圖示', applyTabsDesc: '編輯器分頁顯示與檔案列表一致的 Material 圖示',
     customRules: '自訂規則', customRulesDesc: '啟用後，自訂規則優先於預設圖示匹配',
     noRules: '尚無規則', addRuleBtn: '新增規則', rulesHeading: '規則', extExists: '副檔名 .{ext} 的規則已存在',
     edit: '編輯', delete: '刪除',
@@ -207,6 +213,7 @@ const STRINGS: Record<Lang, Strings> = {
     language: '言語', languageDesc: 'インターフェース言語', languageAuto: 'Obsidian に従う',
     applyFiles: 'ファイルアイコンを適用', applyFilesDesc: '拡張子に基づきファイルに Material アイコンを表示、無効時はテーマアイコンを使用',
     applyFolders: 'フォルダーアイコンを適用', applyFoldersDesc: 'フォルダーに Material アイコンを表示、無効時はテーマアイコンを使用',
+    applyTabs: 'タブアイコンを適用', applyTabsDesc: 'エディタータブにファイル一覧と同じ Material アイコンを表示',
     customRules: 'カスタムルール', customRulesDesc: '有効にすると、カスタムルールがデフォルトより優先されます',
     noRules: 'ルールがありません', addRuleBtn: 'ルールを追加', rulesHeading: 'ルール', extExists: '.{ext} のルールはすでに存在します',
     edit: '編集', delete: '削除',
@@ -222,6 +229,7 @@ const STRINGS: Record<Lang, Strings> = {
     language: '언어', languageDesc: '인터페이스 언어', languageAuto: 'Obsidian 따르기',
     applyFiles: '파일 아이콘 적용', applyFilesDesc: '확장자에 따라 파일에 Material 아이콘 표시, 비활성화 시 테마 아이콘 사용',
     applyFolders: '폴더 아이콘 적용', applyFoldersDesc: '폴더에 Material 아이콘 표시, 비활성화 시 테마 아이콘 사용',
+    applyTabs: '탭 아이콘 적용', applyTabsDesc: '편집기 탭에 파일 목록과 동일한 Material 아이콘 표시',
     customRules: '사용자 정의 규칙', customRulesDesc: '활성화 시 사용자 정의 규칙이 기본 아이콘 매칭보다 우선됩니다',
     noRules: '규칙이 없습니다', addRuleBtn: '규칙 추가', rulesHeading: '규칙', extExists: '.{ext} 규칙이 이미 존재합니다',
     edit: '편집', delete: '삭제',
@@ -237,6 +245,7 @@ const STRINGS: Record<Lang, Strings> = {
     language: 'Sprache', languageDesc: 'Benutzeroberflächen-Sprache', languageAuto: 'Obsidian folgen',
     applyFiles: 'Datei-Symbole anwenden', applyFilesDesc: 'Material-Symbole für Dateien nach Endung anzeigen, bei Deaktivierung Theme-Symbole verwenden',
     applyFolders: 'Ordner-Symbole anwenden', applyFoldersDesc: 'Material-Symbole für Ordner anzeigen, bei Deaktivierung Theme-Symbole verwenden',
+    applyTabs: 'Tab-Symbole anwenden', applyTabsDesc: 'Material-Symbole in Editor-Tabs wie in der Dateiliste anzeigen',
     customRules: 'Benutzerdefinierte Regeln', customRulesDesc: 'Bei Aktivierung haben benutzerdefinierte Regeln Vorrang vor Standard-Zuordnungen',
     noRules: 'Noch keine Regeln', addRuleBtn: 'Regel hinzufügen', rulesHeading: 'Regeln', extExists: 'Regel für .{ext} existiert bereits',
     edit: 'Bearbeiten', delete: 'Löschen',
@@ -252,6 +261,7 @@ const STRINGS: Record<Lang, Strings> = {
     language: 'Langue', languageDesc: "Langue de l'interface", languageAuto: 'Suivre Obsidian',
     applyFiles: 'Appliquer les icônes de fichiers', applyFilesDesc: "Afficher les icônes Material pour les fichiers selon l'extension, utiliser les icônes du thème si désactivé",
     applyFolders: 'Appliquer les icônes de dossiers', applyFoldersDesc: 'Afficher les icônes Material pour les dossiers, utiliser les icônes du thème si désactivé',
+    applyTabs: "Appliquer les icônes d'onglets", applyTabsDesc: 'Afficher dans les onglets la même icône Material que dans la liste de fichiers',
     customRules: 'Règles personnalisées', customRulesDesc: "Si activé, les règles personnalisées ont la priorité sur la correspondance d'icônes par défaut",
     noRules: 'Aucune règle', addRuleBtn: 'Ajouter une règle', rulesHeading: 'Règles', extExists: 'Une règle pour .{ext} existe déjà',
     edit: 'Modifier', delete: 'Supprimer',
@@ -267,6 +277,7 @@ const STRINGS: Record<Lang, Strings> = {
     language: 'Idioma', languageDesc: 'Idioma de la interfaz', languageAuto: 'Seguir a Obsidian',
     applyFiles: 'Aplicar iconos de archivos', applyFilesDesc: 'Mostrar iconos Material para archivos según extensión, usar iconos del tema si está desactivado',
     applyFolders: 'Aplicar iconos de carpetas', applyFoldersDesc: 'Mostrar iconos Material para carpetas, usar iconos del tema si está desactivado',
+    applyTabs: 'Aplicar iconos de pestañas', applyTabsDesc: 'Mostrar en las pestañas el mismo icono Material que en la lista de archivos',
     customRules: 'Reglas personalizadas', customRulesDesc: 'Si está activado, las reglas personalizadas tienen prioridad sobre la asignación predeterminada',
     noRules: 'Sin reglas', addRuleBtn: 'Añadir regla', rulesHeading: 'Reglas', extExists: 'Ya existe una regla para .{ext}',
     edit: 'Editar', delete: 'Eliminar',
@@ -282,6 +293,7 @@ const STRINGS: Record<Lang, Strings> = {
     language: 'Язык', languageDesc: 'Язык интерфейса', languageAuto: 'Как в Obsidian',
     applyFiles: 'Применить иконки файлов', applyFilesDesc: 'Показывать Material-иконки для файлов по расширению, при отключении использовать иконки темы',
     applyFolders: 'Применить иконки папок', applyFoldersDesc: 'Показывать Material-иконки для папок, при отключении использовать иконки темы',
+    applyTabs: 'Применить иконки вкладок', applyTabsDesc: 'Показывать на вкладках ту же Material-иконку, что и в списке файлов',
     customRules: 'Пользовательские правила', customRulesDesc: 'При включении пользовательские правила имеют приоритет над стандартным сопоставлением',
     noRules: 'Правил нет', addRuleBtn: 'Добавить правило', rulesHeading: 'Правила', extExists: 'Правило для .{ext} уже существует',
     edit: 'Изменить', delete: 'Удалить',
@@ -297,6 +309,7 @@ const STRINGS: Record<Lang, Strings> = {
     language: 'Idioma', languageDesc: 'Idioma da interface', languageAuto: 'Seguir o Obsidian',
     applyFiles: 'Aplicar ícones de arquivos', applyFilesDesc: 'Mostrar ícones Material para arquivos por extensão, usar ícones do tema se desativado',
     applyFolders: 'Aplicar ícones de pastas', applyFoldersDesc: 'Mostrar ícones Material para pastas, usar ícones do tema se desativado',
+    applyTabs: 'Aplicar ícones de abas', applyTabsDesc: 'Mostrar nas abas o mesmo ícone Material da lista de arquivos',
     customRules: 'Regras personalizadas', customRulesDesc: 'Se ativado, regras personalizadas têm prioridade sobre a correspondência padrão',
     noRules: 'Sem regras', addRuleBtn: 'Adicionar regra', rulesHeading: 'Regras', extExists: 'Regra para .{ext} já existe',
     edit: 'Editar', delete: 'Excluir',
@@ -320,6 +333,7 @@ interface CustomRule {
 interface MfiSettings {
   applyToFiles: boolean;
   applyToFolders: boolean;
+  applyToTabs: boolean;
   enableCustomRules: boolean;
   customRules: CustomRule[];
   language: LanguageSetting;
@@ -328,6 +342,7 @@ interface MfiSettings {
 const DEFAULT_SETTINGS: MfiSettings = {
   applyToFiles: true,
   applyToFolders: true,
+  applyToTabs: true,
   enableCustomRules: false,
   customRules: [],
   language: 'auto',
@@ -541,6 +556,11 @@ class MfiSettingTab extends PluginSettingTab {
         control: { type: 'toggle', key: 'applyToFolders' },
       },
       {
+        name: t.applyTabs,
+        desc: t.applyTabsDesc,
+        control: { type: 'toggle', key: 'applyToTabs' },
+      },
+      {
         name: t.customRules,
         desc: t.customRulesDesc,
         control: { type: 'toggle', key: 'enableCustomRules' },
@@ -689,6 +709,10 @@ export default class MaterialFileIconsPlugin extends Plugin {
     this.addSettingTab(new MfiSettingTab(this.app, this));
 
     this.registerEvent(this.app.workspace.on('layout-change', () => this.syncLeaves()));
+    // 打开文件时标签页头会被 Obsidian 用 view.getIcon() 重画,稍等一拍再补。
+    this.registerEvent(
+      this.app.workspace.on('file-open', () => window.setTimeout(() => this.syncTabIcons(), 60)),
+    );
 
     this.app.workspace.onLayoutReady(() => {
       this.syncLeaves();
@@ -745,6 +769,50 @@ export default class MaterialFileIconsPlugin extends Plugin {
     }
 
     this.refreshIcons();
+    this.syncTabIcons();
+  }
+
+  /**
+   * 编辑器标签页也用主题图标(与文件列表一致)。
+   *
+   * 只处理**有 file 的 leaf** —— 也就是库内文件(原生 md 视图、本聚合的块
+   * 编辑器、图片/PDF 等文件型视图);库外视图没有 TFile,自动跳过。图标解析
+   * 与文件浏览器同一出处(getFileIconSvg),所以标签页和列表天然一致;解析不到
+   * 时保留 Obsidian 原图标。
+   *
+   * 标签页头会随布局变化重建,也会被 Obsidian 用 view.getIcon() 重设 —— 两种
+   * 丢法都靠 marker 子元素(mfi-tab-icon)判断:不在位就重贴,幂等。
+   */
+  private syncTabIcons() {
+    if (!this.settings.applyToTabs) {
+      this.resetTabIcons();
+      return;
+    }
+    this.app.workspace.iterateAllLeaves((leaf: WorkspaceLeaf) => {
+      const iconEl = (leaf as unknown as { tabHeaderInnerIconEl?: HTMLElement }).tabHeaderInnerIconEl;
+      if (!iconEl || !iconEl.isConnected) return;
+      if (iconEl.querySelector(`.${TAB_ICON_CLASS}`)) return;
+      const file = (leaf.view as unknown as { file?: { path: string } }).file;
+      if (!file?.path) return;
+      const svg = this.getFileIconSvg(file.path);
+      if (!svg) return;
+      const holder = iconEl.ownerDocument.createElement('span');
+      holder.className = TAB_ICON_CLASS;
+      renderIconInto(holder, svg, 16);
+      iconEl.empty();
+      iconEl.appendChild(holder);
+    });
+  }
+
+  /** 撤掉标签页上的主题图标,还原成 Obsidian 按 view.getIcon() 画的原图标。 */
+  private resetTabIcons() {
+    this.app.workspace.iterateAllLeaves((leaf: WorkspaceLeaf) => {
+      const iconEl = (leaf as unknown as { tabHeaderInnerIconEl?: HTMLElement }).tabHeaderInnerIconEl;
+      if (!iconEl?.querySelector(`.${TAB_ICON_CLASS}`)) return;
+      iconEl.empty();
+      const icon = (leaf.view as unknown as { getIcon?: () => string }).getIcon?.();
+      setIcon(iconEl, icon || 'file');
+    });
   }
 
   private observeContainer(container: HTMLElement): MutationObserver {
@@ -1109,11 +1177,13 @@ export default class MaterialFileIconsPlugin extends Plugin {
 
     this.folderObservers.forEach(obs => obs.disconnect());
     this.folderObservers.clear();
+    this.resetTabIcons();
   }
 
   resetAndRefresh() {
     this.resetAllIcons();
     this.refreshIcons();
+    this.syncTabIcons();
   }
 
   async loadSettings() {
