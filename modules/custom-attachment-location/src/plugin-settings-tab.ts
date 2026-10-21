@@ -111,49 +111,49 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
         visible: () => this.getPluginGateComponent().hasActiveWarningConflicts()
       }),
       this.settingGroupEx({
-        heading: t(($) => $.pluginSettingsTab.groups.core),
+        heading: t(($: any) => $.pluginSettingsTab.groups.core),
         items: this.getCoreItems()
       }),
       {
-        desc: t(($) => $.pluginSettingsTab.pages.moveRenames.description),
+        desc: t(($: any) => $.pluginSettingsTab.pages.moveRenames.description),
         items: this.getMoveRenamesItems(),
-        name: t(($) => $.pluginSettingsTab.groups.moveRenames),
+        name: t(($: any) => $.pluginSettingsTab.groups.moveRenames),
         type: 'page'
       },
       {
-        desc: t(($) => $.pluginSettingsTab.pages.specialCharacters.description),
+        desc: t(($: any) => $.pluginSettingsTab.pages.specialCharacters.description),
         items: this.getSpecialCharactersItems(),
-        name: t(($) => $.pluginSettingsTab.groups.specialCharacters),
+        name: t(($: any) => $.pluginSettingsTab.groups.specialCharacters),
         type: 'page'
       },
       {
-        desc: t(($) => $.pluginSettingsTab.pages.collectedAttachments.description),
+        desc: t(($: any) => $.pluginSettingsTab.pages.collectedAttachments.description),
         items: this.getCollectedAttachmentsItems(),
-        name: t(($) => $.pluginSettingsTab.groups.collectedAttachments),
+        name: t(($: any) => $.pluginSettingsTab.groups.collectedAttachments),
         type: 'page'
       },
       {
-        desc: t(($) => $.pluginSettingsTab.pages.images.description),
+        desc: t(($: any) => $.pluginSettingsTab.pages.images.description),
         items: this.getImagesItems(),
-        name: t(($) => $.pluginSettingsTab.groups.images),
+        name: t(($: any) => $.pluginSettingsTab.groups.images),
         type: 'page'
       },
       {
-        desc: t(($) => $.pluginSettingsTab.pages.path.description),
+        desc: t(($: any) => $.pluginSettingsTab.pages.path.description),
         items: this.getPathItems(),
-        name: t(($) => $.pluginSettingsTab.groups.path),
+        name: t(($: any) => $.pluginSettingsTab.groups.path),
         type: 'page'
       },
       {
-        desc: t(($) => $.pluginSettingsTab.pages.customTokens.description),
+        desc: t(($: any) => $.pluginSettingsTab.pages.customTokens.description),
         items: this.getCustomTokensItems(),
-        name: t(($) => $.pluginSettingsTab.groups.customTokens),
+        name: t(($: any) => $.pluginSettingsTab.groups.customTokens),
         type: 'page'
       },
       {
-        desc: t(($) => $.pluginSettingsTab.pages.advanced.description),
+        desc: t(($: any) => $.pluginSettingsTab.pages.advanced.description),
         items: this.getAdvancedItems(),
-        name: t(($) => $.pluginSettingsTab.groups.advanced),
+        name: t(($: any) => $.pluginSettingsTab.groups.advanced),
         type: 'page'
       }
     ];
@@ -163,19 +163,19 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
     return [
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.markdownUrlFormat.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.markdownUrlFormat.description.part1));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.markdownUrlFormat.description.part2));
+          f.appendText(t(($: any) => $.pluginSettingsTab.markdownUrlFormat.description.part2));
           f.appendText(' ');
           f.createEl('a', {
             href: 'https://github.com/mnaoumov/obsidian-custom-attachment-location?tab=readme-ov-file#tokens',
-            text: t(($) => $.pluginSettingsTab.markdownUrlFormat.description.part3)
+            text: t(($: any) => $.pluginSettingsTab.markdownUrlFormat.description.part3)
           });
           f.appendText('.');
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.markdownUrlFormat.description.part4));
+          f.appendText(t(($: any) => $.pluginSettingsTab.markdownUrlFormat.description.part4));
         }),
-        name: t(($) => $.pluginSettingsTab.markdownUrlFormat.name),
+        name: t(($: any) => $.pluginSettingsTab.markdownUrlFormat.name),
         render: (setting) => {
           setting.addCodeHighlighter((codeHighlighter) => {
             codeHighlighter.setLanguage(TOKENIZED_STRING_LANGUAGE);
@@ -189,8 +189,8 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
         }
       }),
       this.settingEx({
-        desc: t(($) => $.pluginSettingsTab.shouldSetLinkDisplayTextToAttachmentFileName.description),
-        name: t(($) => $.pluginSettingsTab.shouldSetLinkDisplayTextToAttachmentFileName.name),
+        desc: t(($: any) => $.pluginSettingsTab.shouldSetLinkDisplayTextToAttachmentFileName.description),
+        name: t(($: any) => $.pluginSettingsTab.shouldSetLinkDisplayTextToAttachmentFileName.name),
         render: (setting) => {
           setting.addToggle((toggle) => {
             this.bind({
@@ -202,15 +202,15 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.timeoutInSeconds.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.timeoutInSeconds.description.part1));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.timeoutInSeconds.description.part2));
+          f.appendText(t(($: any) => $.pluginSettingsTab.timeoutInSeconds.description.part2));
           f.appendText(' ');
           appendCodeBlock(f, '0');
           f.appendText(' ');
-          f.appendText(t(($) => $.pluginSettingsTab.timeoutInSeconds.description.part3));
+          f.appendText(t(($: any) => $.pluginSettingsTab.timeoutInSeconds.description.part3));
         }),
-        name: t(($) => $.pluginSettingsTab.timeoutInSeconds.name),
+        name: t(($: any) => $.pluginSettingsTab.timeoutInSeconds.name),
         render: (setting) => {
           setting.addNumber((number) => {
             number.setMin(0);
@@ -227,8 +227,8 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
   private getCollectedAttachmentsItems(): SettingDefinitionRender[] {
     return [
       this.settingEx({
-        desc: t(($) => $.pluginSettingsTab.downloadNetworkImages.description),
-        name: t(($) => $.pluginSettingsTab.downloadNetworkImages.name),
+        desc: t(($: any) => $.pluginSettingsTab.downloadNetworkImages.description),
+        name: t(($: any) => $.pluginSettingsTab.downloadNetworkImages.name),
         render: (setting) => {
           setting.addToggle((toggle) => {
             this.bind({
@@ -243,8 +243,8 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
         }
       }),
       this.settingEx({
-        desc: t(($) => $.pluginSettingsTab.networkImageDownloadTimeoutInSeconds.description),
-        name: t(($) => $.pluginSettingsTab.networkImageDownloadTimeoutInSeconds.name),
+        desc: t(($: any) => $.pluginSettingsTab.networkImageDownloadTimeoutInSeconds.description),
+        name: t(($: any) => $.pluginSettingsTab.networkImageDownloadTimeoutInSeconds.name),
         render: (setting) => {
           setting.addNumber((number) => {
             number.setMin(1);
@@ -258,17 +258,17 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.shouldRenameCollectedAttachments.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.shouldRenameCollectedAttachments.description.part1));
           f.appendText(' ');
-          appendCodeBlock(f, t(($) => $.pluginSettingsTab.shouldRenameCollectedAttachments.description.part2));
+          appendCodeBlock(f, t(($: any) => $.pluginSettingsTab.shouldRenameCollectedAttachments.description.part2));
           f.appendText(' ');
-          f.appendText(t(($) => $.pluginSettingsTab.shouldRenameCollectedAttachments.description.part3));
+          f.appendText(t(($: any) => $.pluginSettingsTab.shouldRenameCollectedAttachments.description.part3));
           f.appendText(' ');
-          appendCodeBlock(f, t(($) => $.pluginSettingsTab.collectedAttachmentFileName.name));
+          appendCodeBlock(f, t(($: any) => $.pluginSettingsTab.collectedAttachmentFileName.name));
           f.appendText(' ');
-          f.appendText(t(($) => $.pluginSettingsTab.shouldRenameCollectedAttachments.description.part4));
+          f.appendText(t(($: any) => $.pluginSettingsTab.shouldRenameCollectedAttachments.description.part4));
         }),
-        name: t(($) => $.pluginSettingsTab.shouldRenameCollectedAttachments.name),
+        name: t(($: any) => $.pluginSettingsTab.shouldRenameCollectedAttachments.name),
         render: (setting) => {
           setting.addToggle((toggle) => {
             this.bind({
@@ -280,17 +280,17 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.collectedAttachmentFileName.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.collectedAttachmentFileName.description.part1));
           f.appendText(' ');
           f.createEl('a', {
             href: 'https://github.com/mnaoumov/obsidian-custom-attachment-location?tab=readme-ov-file#tokens',
-            text: t(($) => $.pluginSettingsTab.collectedAttachmentFileName.description.part2)
+            text: t(($: any) => $.pluginSettingsTab.collectedAttachmentFileName.description.part2)
           });
           f.appendText('.');
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.collectedAttachmentFileName.description.part3));
+          f.appendText(t(($: any) => $.pluginSettingsTab.collectedAttachmentFileName.description.part3));
         }),
-        name: t(($) => $.pluginSettingsTab.collectedAttachmentFileName.name),
+        name: t(($: any) => $.pluginSettingsTab.collectedAttachmentFileName.name),
         render: (setting) => {
           setting.addCodeHighlighter((codeHighlighter) => {
             codeHighlighter.setLanguage(TOKENIZED_STRING_LANGUAGE);
@@ -305,27 +305,27 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.collectedAttachmentFolderPath.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.collectedAttachmentFolderPath.description.part1));
           f.appendText(' ');
-          appendCodeBlock(f, t(($) => $.pluginSettingsTab.collectedAttachmentFolderPath.description.part2));
+          appendCodeBlock(f, t(($: any) => $.pluginSettingsTab.collectedAttachmentFolderPath.description.part2));
           f.appendText(' ');
-          f.appendText(t(($) => $.pluginSettingsTab.collectedAttachmentFolderPath.description.part3));
+          f.appendText(t(($: any) => $.pluginSettingsTab.collectedAttachmentFolderPath.description.part3));
           f.appendText(' ');
           appendCodeBlock(f, './');
           f.appendText(' ');
-          f.appendText(t(($) => $.pluginSettingsTab.collectedAttachmentFolderPath.description.part4));
+          f.appendText(t(($: any) => $.pluginSettingsTab.collectedAttachmentFolderPath.description.part4));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.collectedAttachmentFolderPath.description.part5));
+          f.appendText(t(($: any) => $.pluginSettingsTab.collectedAttachmentFolderPath.description.part5));
           f.appendText(' ');
           f.createEl('a', {
             href: 'https://github.com/mnaoumov/obsidian-custom-attachment-location?tab=readme-ov-file#tokens',
-            text: t(($) => $.pluginSettingsTab.collectedAttachmentFolderPath.description.part6)
+            text: t(($: any) => $.pluginSettingsTab.collectedAttachmentFolderPath.description.part6)
           });
           f.appendText('.');
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.collectedAttachmentFolderPath.description.part7));
+          f.appendText(t(($: any) => $.pluginSettingsTab.collectedAttachmentFolderPath.description.part7));
         }),
-        name: t(($) => $.pluginSettingsTab.collectedAttachmentFolderPath.name),
+        name: t(($: any) => $.pluginSettingsTab.collectedAttachmentFolderPath.name),
         render: (setting) => {
           setting.addCodeHighlighter((codeHighlighter) => {
             codeHighlighter.setLanguage(TOKENIZED_STRING_LANGUAGE);
@@ -340,38 +340,38 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.collectAttachmentUsedByMultipleNotesMode.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.collectAttachmentUsedByMultipleNotesMode.description.part1));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.skip.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.skip.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.skip.description));
+          f.appendText(t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.skip.description));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.move.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.move.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.move.description));
+          f.appendText(t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.move.description));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.copy.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.copy.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.copy.description));
+          f.appendText(t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.copy.description));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.cancel.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.cancel.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.cancel.description));
+          f.appendText(t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.cancel.description));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.prompt.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.prompt.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.prompt.description));
+          f.appendText(t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.prompt.description));
         }),
-        name: t(($) => $.pluginSettingsTab.collectAttachmentUsedByMultipleNotesMode.name),
+        name: t(($: any) => $.pluginSettingsTab.collectAttachmentUsedByMultipleNotesMode.name),
         render: (setting) => {
           setting.addDropdown((dropdown) => {
             dropdown.addOptions({
               /* eslint-disable perfectionist/sort-objects -- Need to keep enum order. */
-              [CollectAttachmentUsedByMultipleNotesMode.Skip]: t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.skip.displayText),
-              [CollectAttachmentUsedByMultipleNotesMode.Move]: t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.move.displayText),
-              [CollectAttachmentUsedByMultipleNotesMode.Copy]: t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.copy.displayText),
-              [CollectAttachmentUsedByMultipleNotesMode.Cancel]: t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.cancel.displayText),
-              [CollectAttachmentUsedByMultipleNotesMode.Prompt]: t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.prompt.displayText)
+              [CollectAttachmentUsedByMultipleNotesMode.Skip]: t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.skip.displayText),
+              [CollectAttachmentUsedByMultipleNotesMode.Move]: t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.move.displayText),
+              [CollectAttachmentUsedByMultipleNotesMode.Copy]: t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.copy.displayText),
+              [CollectAttachmentUsedByMultipleNotesMode.Cancel]: t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.cancel.displayText),
+              [CollectAttachmentUsedByMultipleNotesMode.Prompt]: t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.prompt.displayText)
               /* eslint-enable perfectionist/sort-objects -- Need to keep enum order. */
             });
             this.bind({
@@ -382,8 +382,8 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
         }
       }),
       this.settingEx({
-        desc: t(($) => $.pluginSettingsTab.shouldSkipCollectingAttachmentsReferencedByRawPath.description),
-        name: t(($) => $.pluginSettingsTab.shouldSkipCollectingAttachmentsReferencedByRawPath.name),
+        desc: t(($: any) => $.pluginSettingsTab.shouldSkipCollectingAttachmentsReferencedByRawPath.description),
+        name: t(($: any) => $.pluginSettingsTab.shouldSkipCollectingAttachmentsReferencedByRawPath.name),
         render: (setting) => {
           setting.addToggle((toggle) => {
             this.bind({
@@ -394,8 +394,8 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
         }
       }),
       this.settingEx({
-        desc: t(($) => $.pluginSettingsTab.shouldCollectAttachmentsAutomatically.description),
-        name: t(($) => $.pluginSettingsTab.shouldCollectAttachmentsAutomatically.name),
+        desc: t(($: any) => $.pluginSettingsTab.shouldCollectAttachmentsAutomatically.description),
+        name: t(($: any) => $.pluginSettingsTab.shouldCollectAttachmentsAutomatically.name),
         render: (setting) => {
           setting.addToggle((toggle) => {
             this.bind({
@@ -411,8 +411,8 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
   private getCoreItems(): SettingDefinitionRender[] {
     return [
       this.settingEx({
-        desc: t(($) => $.pluginSettingsTab.shouldFollowObsidianAttachmentLocation.description),
-        name: t(($) => $.pluginSettingsTab.shouldFollowObsidianAttachmentLocation.name),
+        desc: t(($: any) => $.pluginSettingsTab.shouldFollowObsidianAttachmentLocation.description),
+        name: t(($: any) => $.pluginSettingsTab.shouldFollowObsidianAttachmentLocation.name),
         render: (setting) => {
           setting.addToggle((toggle) => {
             this.bind({
@@ -428,30 +428,30 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.locationForNewAttachments.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.locationForNewAttachments.description.part1));
           f.appendText(' ');
           appendCodeBlock(f, '.');
           f.appendText(' ');
-          f.appendText(t(($) => $.pluginSettingsTab.locationForNewAttachments.description.part2));
+          f.appendText(t(($: any) => $.pluginSettingsTab.locationForNewAttachments.description.part2));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.locationForNewAttachments.description.part3));
+          f.appendText(t(($: any) => $.pluginSettingsTab.locationForNewAttachments.description.part3));
           f.appendText(' ');
           f.createEl('a', {
             href: 'https://github.com/mnaoumov/obsidian-custom-attachment-location?tab=readme-ov-file#tokens',
-            text: t(($) => $.pluginSettingsTab.locationForNewAttachments.description.part4)
+            text: t(($: any) => $.pluginSettingsTab.locationForNewAttachments.description.part4)
           });
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.locationForNewAttachments.description.part5));
+          f.appendText(t(($: any) => $.pluginSettingsTab.locationForNewAttachments.description.part5));
           f.appendText(' ');
           appendCodeBlock(f, '.attachments');
           f.appendText(' ');
-          f.appendText(t(($) => $.pluginSettingsTab.locationForNewAttachments.description.part6));
+          f.appendText(t(($: any) => $.pluginSettingsTab.locationForNewAttachments.description.part6));
           f.appendText(' ');
           f.createEl('a', { href: 'https://community.obsidian.md/plugins/unhide', text: 'Unhide' });
           f.appendText(' ');
-          f.appendText(t(($) => $.pluginSettingsTab.locationForNewAttachments.description.part7));
+          f.appendText(t(($: any) => $.pluginSettingsTab.locationForNewAttachments.description.part7));
         }),
-        name: t(($) => $.pluginSettingsTab.locationForNewAttachments.name),
+        name: t(($: any) => $.pluginSettingsTab.locationForNewAttachments.name),
         render: (setting) => {
           setting.addCodeHighlighter((codeHighlighter) => {
             codeHighlighter.setLanguage(TOKENIZED_STRING_LANGUAGE);
@@ -467,15 +467,15 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.generatedAttachmentFileName.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.generatedAttachmentFileName.description.part1));
           f.appendText(' ');
           f.createEl('a', {
             href: 'https://github.com/mnaoumov/obsidian-custom-attachment-location?tab=readme-ov-file#tokens',
-            text: t(($) => $.pluginSettingsTab.generatedAttachmentFileName.description.part2)
+            text: t(($: any) => $.pluginSettingsTab.generatedAttachmentFileName.description.part2)
           });
           f.appendText('.');
         }),
-        name: t(($) => $.pluginSettingsTab.generatedAttachmentFileName.name),
+        name: t(($: any) => $.pluginSettingsTab.generatedAttachmentFileName.name),
         render: (setting) => {
           setting.addCodeHighlighter((codeHighlighter) => {
             codeHighlighter.setLanguage(TOKENIZED_STRING_LANGUAGE);
@@ -492,13 +492,13 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
         desc: createFragment((f) => {
           appendCodeBlock(f, '{{originalAttachmentFileName}}');
           f.appendText(' ');
-          f.appendText(t(($) => $.pluginSettingsTab.shouldWarnWhenOriginalAttachmentNameIsUnknown.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.shouldWarnWhenOriginalAttachmentNameIsUnknown.description.part1));
           f.appendText(' ');
           appendCodeBlock(f, '{{attachmentFileName}}');
           f.appendText(' ');
-          f.appendText(t(($) => $.pluginSettingsTab.shouldWarnWhenOriginalAttachmentNameIsUnknown.description.part2));
+          f.appendText(t(($: any) => $.pluginSettingsTab.shouldWarnWhenOriginalAttachmentNameIsUnknown.description.part2));
         }),
-        name: t(($) => $.pluginSettingsTab.shouldWarnWhenOriginalAttachmentNameIsUnknown.name),
+        name: t(($: any) => $.pluginSettingsTab.shouldWarnWhenOriginalAttachmentNameIsUnknown.name),
         render: (setting) => {
           setting.addToggle((toggle) => {
             this.bind({
@@ -515,20 +515,20 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
     return [
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.customTokens.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.customTokens.description.part1));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.customTokens.description.part2));
+          f.appendText(t(($: any) => $.pluginSettingsTab.customTokens.description.part2));
           f.appendText(' ');
           f.createEl('a', {
             href: 'https://github.com/mnaoumov/obsidian-custom-attachment-location?tab=readme-ov-file#custom-tokens',
-            text: t(($) => $.pluginSettingsTab.customTokens.description.part3)
+            text: t(($: any) => $.pluginSettingsTab.customTokens.description.part3)
           });
           f.appendText(' ');
-          f.appendText(t(($) => $.pluginSettingsTab.customTokens.description.part4));
+          f.appendText(t(($: any) => $.pluginSettingsTab.customTokens.description.part4));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.customTokens.description.part5));
+          f.appendText(t(($: any) => $.pluginSettingsTab.customTokens.description.part5));
         }),
-        name: t(($) => $.pluginSettingsTab.customTokens.name),
+        name: t(($: any) => $.pluginSettingsTab.customTokens.name),
         render: (setting) => {
           // Render-time setup: the builder must stay pure, because Obsidian calls it at plugin load to
           // index the settings for search. `hide()` clears the flag again.
@@ -562,16 +562,16 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
         name: '',
         render: (setting) => {
           setting.addButton((button) => {
-            button.setButtonText(t(($) => $.pluginSettingsTab.resetToSampleCustomTokens.title));
+            button.setButtonText(t(($: any) => $.pluginSettingsTab.resetToSampleCustomTokens.title));
             button.setDestructive();
             button.onClick(convertAsyncToSync(async () => {
               if (
                 (this.pluginSettingsComponent.settings.customTokensStr === SAMPLE_CUSTOM_TOKENS) || (this.pluginSettingsComponent.settings.customTokensStr !== '' && !await confirm({
                   app: this.app,
-                  cancelButtonText: t(($) => $.obsidianDevUtils.buttons.cancel),
-                  message: t(($) => $.pluginSettingsTab.resetToSampleCustomTokens.message),
-                  okButtonText: t(($) => $.obsidianDevUtils.buttons.ok),
-                  title: t(($) => $.pluginSettingsTab.resetToSampleCustomTokens.title)
+                  cancelButtonText: t(($: any) => $.obsidianDevUtils.buttons.cancel),
+                  message: t(($: any) => $.pluginSettingsTab.resetToSampleCustomTokens.message),
+                  okButtonText: t(($: any) => $.obsidianDevUtils.buttons.ok),
+                  title: t(($: any) => $.pluginSettingsTab.resetToSampleCustomTokens.title)
                 }))
               ) {
                 return;
@@ -595,20 +595,20 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
     return [
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.defaultImageSize.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.defaultImageSize.description.part1));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.defaultImageSize.description.part2));
+          f.appendText(t(($: any) => $.pluginSettingsTab.defaultImageSize.description.part2));
           f.appendText(' (');
           appendCodeBlock(f, '300px');
           f.appendText(') ');
-          f.appendText(t(($) => $.pluginSettingsTab.defaultImageSize.description.part3));
+          f.appendText(t(($: any) => $.pluginSettingsTab.defaultImageSize.description.part3));
           f.appendText(' (');
           appendCodeBlock(f, '50%');
           f.appendText(').');
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.defaultImageSize.description.part4));
+          f.appendText(t(($: any) => $.pluginSettingsTab.defaultImageSize.description.part4));
         }),
-        name: t(($) => $.pluginSettingsTab.defaultImageSize.name),
+        name: t(($: any) => $.pluginSettingsTab.defaultImageSize.name),
         render: (setting) => {
           setting
             .addText((text) => {
@@ -621,8 +621,8 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
               dropdown.selectEl.addClass('default-image-size-dimension-setting-control');
               dropdown.addOptions({
                 /* eslint-disable perfectionist/sort-objects -- Need to keep enum order. */
-                [DefaultImageSizeDimension.Width]: t(($) => $.pluginSettings.defaultImageSizeDimension.width),
-                [DefaultImageSizeDimension.Height]: t(($) => $.pluginSettings.defaultImageSizeDimension.height)
+                [DefaultImageSizeDimension.Width]: t(($: any) => $.pluginSettings.defaultImageSizeDimension.width),
+                [DefaultImageSizeDimension.Height]: t(($: any) => $.pluginSettings.defaultImageSizeDimension.height)
                 /* eslint-enable perfectionist/sort-objects -- Need to keep enum order. */
               });
               this.bind({
@@ -634,33 +634,33 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.convertImagesToJpegMode.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.convertImagesToJpegMode.description.part1));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.convertImagesToJpegMode.none.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.convertImagesToJpegMode.none.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.convertImagesToJpegMode.none.description));
+          f.appendText(t(($: any) => $.pluginSettings.convertImagesToJpegMode.none.description));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.convertImagesToJpegMode.onlyPastedClipboardPngImages.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.convertImagesToJpegMode.onlyPastedClipboardPngImages.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.convertImagesToJpegMode.onlyPastedClipboardPngImages.description));
+          f.appendText(t(($: any) => $.pluginSettings.convertImagesToJpegMode.onlyPastedClipboardPngImages.description));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.convertImagesToJpegMode.allImagesExceptAlreadyJpeg.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.convertImagesToJpegMode.allImagesExceptAlreadyJpeg.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.convertImagesToJpegMode.allImagesExceptAlreadyJpeg.description));
+          f.appendText(t(($: any) => $.pluginSettings.convertImagesToJpegMode.allImagesExceptAlreadyJpeg.description));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.convertImagesToJpegMode.allImages.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.convertImagesToJpegMode.allImages.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.convertImagesToJpegMode.allImages.description));
+          f.appendText(t(($: any) => $.pluginSettings.convertImagesToJpegMode.allImages.description));
         }),
-        name: t(($) => $.pluginSettingsTab.convertImagesToJpegMode.name),
+        name: t(($: any) => $.pluginSettingsTab.convertImagesToJpegMode.name),
         render: (setting) => {
           setting.addDropdown((dropdown) => {
             dropdown.addOptions({
               /* eslint-disable perfectionist/sort-objects -- Need to keep enum order. */
-              [ConvertImagesToJpegMode.None]: t(($) => $.pluginSettings.convertImagesToJpegMode.none.displayText),
-              [ConvertImagesToJpegMode.OnlyPastedClipboardPngImages]: t(($) => $.pluginSettings.convertImagesToJpegMode.onlyPastedClipboardPngImages.displayText),
-              [ConvertImagesToJpegMode.AllImagesExceptAlreadyJpegFiles]: t(($) => $.pluginSettings.convertImagesToJpegMode.allImagesExceptAlreadyJpeg.displayText),
-              [ConvertImagesToJpegMode.AllImages]: t(($) => $.pluginSettings.convertImagesToJpegMode.allImages.displayText)
+              [ConvertImagesToJpegMode.None]: t(($: any) => $.pluginSettings.convertImagesToJpegMode.none.displayText),
+              [ConvertImagesToJpegMode.OnlyPastedClipboardPngImages]: t(($: any) => $.pluginSettings.convertImagesToJpegMode.onlyPastedClipboardPngImages.displayText),
+              [ConvertImagesToJpegMode.AllImagesExceptAlreadyJpegFiles]: t(($: any) => $.pluginSettings.convertImagesToJpegMode.allImagesExceptAlreadyJpeg.displayText),
+              [ConvertImagesToJpegMode.AllImages]: t(($: any) => $.pluginSettings.convertImagesToJpegMode.allImages.displayText)
               /* eslint-enable perfectionist/sort-objects -- Need to keep enum order. */
             });
             this.bind({
@@ -675,8 +675,8 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
         }
       }),
       this.settingEx({
-        desc: t(($) => $.pluginSettingsTab.jpegQuality.description),
-        name: t(($) => $.pluginSettingsTab.jpegQuality.name),
+        desc: t(($: any) => $.pluginSettingsTab.jpegQuality.description),
+        name: t(($: any) => $.pluginSettingsTab.jpegQuality.name),
         render: (setting) => {
           setting.addDropdown((dropDown) => {
             dropDown.addOptions(generateJpegQualityOptions());
@@ -691,14 +691,14 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.shouldPreserveImageMetadata.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.shouldPreserveImageMetadata.description.part1));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.shouldPreserveImageMetadata.description.part2));
+          f.appendText(t(($: any) => $.pluginSettingsTab.shouldPreserveImageMetadata.description.part2));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.shouldPreserveImageMetadata.description.part3));
+          f.appendText(t(($: any) => $.pluginSettingsTab.shouldPreserveImageMetadata.description.part3));
         }),
         disabled: () => this.pluginSettingsComponent.settings.convertImagesToJpegMode === ConvertImagesToJpegMode.None,
-        name: t(($) => $.pluginSettingsTab.shouldPreserveImageMetadata.name),
+        name: t(($: any) => $.pluginSettingsTab.shouldPreserveImageMetadata.name),
         render: (setting) => {
           setting.addToggle((toggle) => {
             this.bind({
@@ -715,19 +715,19 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
     return [
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.duplicateNameSeparator.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.duplicateNameSeparator.description.part1));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.duplicateNameSeparator.description.part2));
+          f.appendText(t(($: any) => $.pluginSettingsTab.duplicateNameSeparator.description.part2));
           f.appendText(' ');
           appendCodeBlock(f, 'existingFile.pdf');
-          f.appendText(t(($) => $.pluginSettingsTab.duplicateNameSeparator.description.part3));
+          f.appendText(t(($: any) => $.pluginSettingsTab.duplicateNameSeparator.description.part3));
           f.appendText(' ');
           appendCodeBlock(f, 'existingFile 1.pdf');
           f.appendText(', ');
           appendCodeBlock(f, 'existingFile 2.pdf');
-          f.appendText(t(($) => $.pluginSettingsTab.duplicateNameSeparator.description.part4));
+          f.appendText(t(($: any) => $.pluginSettingsTab.duplicateNameSeparator.description.part4));
         }),
-        name: t(($) => $.pluginSettingsTab.duplicateNameSeparator.name),
+        name: t(($: any) => $.pluginSettingsTab.duplicateNameSeparator.name),
         render: (setting) => {
           setting.addText((text) => {
             this.bind({
@@ -742,8 +742,8 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
         }
       }),
       this.settingEx({
-        desc: t(($) => $.pluginSettingsTab.shouldDeduplicateIdenticalAttachments.description),
-        name: t(($) => $.pluginSettingsTab.shouldDeduplicateIdenticalAttachments.name),
+        desc: t(($: any) => $.pluginSettingsTab.shouldDeduplicateIdenticalAttachments.description),
+        name: t(($: any) => $.pluginSettingsTab.shouldDeduplicateIdenticalAttachments.name),
         render: (setting) => {
           setting.addToggle((toggle) => {
             this.bind({
@@ -755,28 +755,28 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.attachmentRenameMode.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.attachmentRenameMode.description.part1));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.attachmentRenameMode.none.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.attachmentRenameMode.none.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.attachmentRenameMode.none.description));
+          f.appendText(t(($: any) => $.pluginSettings.attachmentRenameMode.none.description));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.attachmentRenameMode.onlyPastedImages.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.attachmentRenameMode.onlyPastedImages.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.attachmentRenameMode.onlyPastedImages.description));
+          f.appendText(t(($: any) => $.pluginSettings.attachmentRenameMode.onlyPastedImages.description));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.attachmentRenameMode.all.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.attachmentRenameMode.all.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.attachmentRenameMode.all.description));
+          f.appendText(t(($: any) => $.pluginSettings.attachmentRenameMode.all.description));
         }),
-        name: t(($) => $.pluginSettingsTab.attachmentRenameMode.name),
+        name: t(($: any) => $.pluginSettingsTab.attachmentRenameMode.name),
         render: (setting) => {
           setting.addDropdown((dropdown) => {
             dropdown.addOptions({
               /* eslint-disable perfectionist/sort-objects -- Need to keep enum order. */
-              [AttachmentRenameMode.None]: t(($) => $.pluginSettings.attachmentRenameMode.none.displayText),
-              [AttachmentRenameMode.OnlyPastedImages]: t(($) => $.pluginSettings.attachmentRenameMode.onlyPastedImages.displayText),
-              [AttachmentRenameMode.All]: t(($) => $.pluginSettings.attachmentRenameMode.all.displayText)
+              [AttachmentRenameMode.None]: t(($: any) => $.pluginSettings.attachmentRenameMode.none.displayText),
+              [AttachmentRenameMode.OnlyPastedImages]: t(($: any) => $.pluginSettings.attachmentRenameMode.onlyPastedImages.displayText),
+              [AttachmentRenameMode.All]: t(($: any) => $.pluginSettings.attachmentRenameMode.all.displayText)
               /* eslint-enable perfectionist/sort-objects -- Need to keep enum order. */
             });
             this.bind({
@@ -787,8 +787,8 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
         }
       }),
       this.settingEx({
-        desc: t(($) => $.pluginSettingsTab.shouldKeepNamesOfPastedNonScreenshotFiles.description),
-        name: t(($) => $.pluginSettingsTab.shouldKeepNamesOfPastedNonScreenshotFiles.name),
+        desc: t(($: any) => $.pluginSettingsTab.shouldKeepNamesOfPastedNonScreenshotFiles.description),
+        name: t(($: any) => $.pluginSettingsTab.shouldKeepNamesOfPastedNonScreenshotFiles.name),
         render: (setting) => {
           setting.addToggle((toggle) => {
             this.bind({
@@ -800,20 +800,20 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.screenshotFilePaths.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.screenshotFilePaths.description.part1));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.screenshotFilePaths.description.part2));
+          f.appendText(t(($: any) => $.pluginSettingsTab.screenshotFilePaths.description.part2));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.screenshotFilePaths.description.part3));
+          f.appendText(t(($: any) => $.pluginSettingsTab.screenshotFilePaths.description.part3));
           f.appendText(' ');
-          appendCodeBlock(f, t(($) => $.regularExpression));
+          appendCodeBlock(f, t(($: any) => $.regularExpression));
           f.appendText('.');
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.screenshotFilePaths.description.part4));
+          f.appendText(t(($: any) => $.pluginSettingsTab.screenshotFilePaths.description.part4));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.screenshotFilePaths.description.part5));
+          f.appendText(t(($: any) => $.pluginSettingsTab.screenshotFilePaths.description.part5));
         }),
-        name: t(($) => $.pluginSettingsTab.screenshotFilePaths.name),
+        name: t(($: any) => $.pluginSettingsTab.screenshotFilePaths.name),
         render: (setting) => {
           setting.addMultipleText((multipleText) => {
             this.bind({
@@ -825,39 +825,39 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.renameAttachmentsCreatedByOtherPluginsMode.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.renameAttachmentsCreatedByOtherPluginsMode.description.part1));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.renameAttachmentsCreatedByOtherPluginsMode.description.part2));
+          f.appendText(t(($: any) => $.pluginSettingsTab.renameAttachmentsCreatedByOtherPluginsMode.description.part2));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.renameAttachmentsCreatedByOtherPluginsMode.description.part3));
+          f.appendText(t(($: any) => $.pluginSettingsTab.renameAttachmentsCreatedByOtherPluginsMode.description.part3));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.none.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.none.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.none.description));
+          f.appendText(t(($: any) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.none.description));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.all.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.all.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.all.description));
+          f.appendText(t(($: any) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.all.description));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.onlyListedPlugins.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.onlyListedPlugins.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.onlyListedPlugins.description));
+          f.appendText(t(($: any) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.onlyListedPlugins.description));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.allExceptListedPlugins.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.allExceptListedPlugins.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.allExceptListedPlugins.description));
+          f.appendText(t(($: any) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.allExceptListedPlugins.description));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.renameAttachmentsCreatedByOtherPluginsMode.description.part4));
+          f.appendText(t(($: any) => $.pluginSettingsTab.renameAttachmentsCreatedByOtherPluginsMode.description.part4));
         }),
-        name: t(($) => $.pluginSettingsTab.renameAttachmentsCreatedByOtherPluginsMode.name),
+        name: t(($: any) => $.pluginSettingsTab.renameAttachmentsCreatedByOtherPluginsMode.name),
         render: (setting) => {
           setting.addDropdown((dropdown) => {
             dropdown.addOptions({
               /* eslint-disable perfectionist/sort-objects -- Need to keep enum order. */
-              [RenameAttachmentsCreatedByOtherPluginsMode.None]: t(($) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.none.displayText),
-              [RenameAttachmentsCreatedByOtherPluginsMode.All]: t(($) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.all.displayText),
-              [RenameAttachmentsCreatedByOtherPluginsMode.OnlyListedPlugins]: t(($) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.onlyListedPlugins.displayText),
-              [RenameAttachmentsCreatedByOtherPluginsMode.AllExceptListedPlugins]: t(($) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.allExceptListedPlugins.displayText)
+              [RenameAttachmentsCreatedByOtherPluginsMode.None]: t(($: any) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.none.displayText),
+              [RenameAttachmentsCreatedByOtherPluginsMode.All]: t(($: any) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.all.displayText),
+              [RenameAttachmentsCreatedByOtherPluginsMode.OnlyListedPlugins]: t(($: any) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.onlyListedPlugins.displayText),
+              [RenameAttachmentsCreatedByOtherPluginsMode.AllExceptListedPlugins]: t(($: any) => $.pluginSettings.renameAttachmentsCreatedByOtherPluginsMode.allExceptListedPlugins.displayText)
               /* eslint-enable perfectionist/sort-objects -- Need to keep enum order. */
             });
             this.bind({
@@ -873,11 +873,11 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.otherPluginIdsForAttachmentRename.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.otherPluginIdsForAttachmentRename.description.part1));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.otherPluginIdsForAttachmentRename.description.part2));
+          f.appendText(t(($: any) => $.pluginSettingsTab.otherPluginIdsForAttachmentRename.description.part2));
         }),
-        name: t(($) => $.pluginSettingsTab.otherPluginIdsForAttachmentRename.name),
+        name: t(($: any) => $.pluginSettingsTab.otherPluginIdsForAttachmentRename.name),
         render: (setting) => {
           setting.addMultipleDropdown((multipleDropdown) => {
             multipleDropdown.addOptions(this.getSelectablePluginOptions());
@@ -891,17 +891,17 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.renamedAttachmentFileName.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.renamedAttachmentFileName.description.part1));
           f.appendText(' ');
           f.createEl('a', {
             href: 'https://github.com/mnaoumov/obsidian-custom-attachment-location?tab=readme-ov-file#tokens',
-            text: t(($) => $.pluginSettingsTab.renamedAttachmentFileName.description.part2)
+            text: t(($: any) => $.pluginSettingsTab.renamedAttachmentFileName.description.part2)
           });
           f.appendText('.');
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.renamedAttachmentFileName.description.part3));
+          f.appendText(t(($: any) => $.pluginSettingsTab.renamedAttachmentFileName.description.part3));
         }),
-        name: t(($) => $.pluginSettingsTab.renamedAttachmentFileName.name),
+        name: t(($: any) => $.pluginSettingsTab.renamedAttachmentFileName.name),
         render: (setting) => {
           setting.addCodeHighlighter((codeHighlighter) => {
             codeHighlighter.setLanguage(TOKENIZED_STRING_LANGUAGE);
@@ -916,33 +916,33 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.moveAttachmentToProperFolderUsedByMultipleNotesMode.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.moveAttachmentToProperFolderUsedByMultipleNotesMode.description.part1));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.skip.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.skip.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.skip.description));
+          f.appendText(t(($: any) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.skip.description));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.copyAll.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.copyAll.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.copyAll.description));
+          f.appendText(t(($: any) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.copyAll.description));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.cancel.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.cancel.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.cancel.description));
+          f.appendText(t(($: any) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.cancel.description));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.prompt.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.prompt.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.prompt.description));
+          f.appendText(t(($: any) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.prompt.description));
         }),
-        name: t(($) => $.pluginSettingsTab.moveAttachmentToProperFolderUsedByMultipleNotesMode.name),
+        name: t(($: any) => $.pluginSettingsTab.moveAttachmentToProperFolderUsedByMultipleNotesMode.name),
         render: (setting) => {
           setting.addDropdown((dropdown) => {
             dropdown.addOptions({
               /* eslint-disable perfectionist/sort-objects -- Need to keep enum order. */
-              [MoveAttachmentToProperFolderUsedByMultipleNotesMode.Skip]: t(($) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.skip.displayText),
-              [MoveAttachmentToProperFolderUsedByMultipleNotesMode.CopyAll]: t(($) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.copyAll.displayText),
-              [MoveAttachmentToProperFolderUsedByMultipleNotesMode.Cancel]: t(($) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.cancel.displayText),
-              [MoveAttachmentToProperFolderUsedByMultipleNotesMode.Prompt]: t(($) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.prompt.displayText)
+              [MoveAttachmentToProperFolderUsedByMultipleNotesMode.Skip]: t(($: any) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.skip.displayText),
+              [MoveAttachmentToProperFolderUsedByMultipleNotesMode.CopyAll]: t(($: any) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.copyAll.displayText),
+              [MoveAttachmentToProperFolderUsedByMultipleNotesMode.Cancel]: t(($: any) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.cancel.displayText),
+              [MoveAttachmentToProperFolderUsedByMultipleNotesMode.Prompt]: t(($: any) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.prompt.displayText)
               /* eslint-enable perfectionist/sort-objects -- Need to keep enum order. */
             });
             this.bind({
@@ -959,21 +959,21 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
     return [
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.attachmentUnitFolderPaths.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.attachmentUnitFolderPaths.description.part1));
           f.appendText(' ');
-          appendCodeBlock(f, t(($) => $.pluginSettingsTab.attachmentUnitFolderPaths.description.part2));
+          appendCodeBlock(f, t(($: any) => $.pluginSettingsTab.attachmentUnitFolderPaths.description.part2));
           f.appendText(' ');
-          f.appendText(t(($) => $.pluginSettingsTab.attachmentUnitFolderPaths.description.part3));
+          f.appendText(t(($: any) => $.pluginSettingsTab.attachmentUnitFolderPaths.description.part3));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.attachmentUnitFolderPaths.description.part4));
+          f.appendText(t(($: any) => $.pluginSettingsTab.attachmentUnitFolderPaths.description.part4));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.attachmentUnitFolderPaths.description.part5));
+          f.appendText(t(($: any) => $.pluginSettingsTab.attachmentUnitFolderPaths.description.part5));
           f.createEl('br');
           appendPathEntrySyntax(f);
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.attachmentUnitFolderPaths.description.part8));
+          f.appendText(t(($: any) => $.pluginSettingsTab.attachmentUnitFolderPaths.description.part8));
         }),
-        name: t(($) => $.pluginSettingsTab.attachmentUnitFolderPaths.name),
+        name: t(($: any) => $.pluginSettingsTab.attachmentUnitFolderPaths.name),
         render: (setting) => {
           setting.addMultipleText((multipleText) => {
             this.bind({
@@ -985,19 +985,19 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.excludePathsFromAttachmentCollecting.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.excludePathsFromAttachmentCollecting.description.part1));
           f.appendText(' ');
-          appendCodeBlock(f, t(($) => $.pluginSettingsTab.excludePathsFromAttachmentCollecting.description.part2));
+          appendCodeBlock(f, t(($: any) => $.pluginSettingsTab.excludePathsFromAttachmentCollecting.description.part2));
           f.appendText(' ');
-          f.appendText(t(($) => $.pluginSettingsTab.excludePathsFromAttachmentCollecting.description.part3));
+          f.appendText(t(($: any) => $.pluginSettingsTab.excludePathsFromAttachmentCollecting.description.part3));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.excludePathsFromAttachmentCollecting.description.part4));
+          f.appendText(t(($: any) => $.pluginSettingsTab.excludePathsFromAttachmentCollecting.description.part4));
           f.createEl('br');
           appendPathEntrySyntax(f);
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.excludePathsFromAttachmentCollecting.description.part6));
+          f.appendText(t(($: any) => $.pluginSettingsTab.excludePathsFromAttachmentCollecting.description.part6));
         }),
-        name: t(($) => $.pluginSettingsTab.excludePathsFromAttachmentCollecting.name),
+        name: t(($: any) => $.pluginSettingsTab.excludePathsFromAttachmentCollecting.name),
         render: (setting) => {
           setting.addMultipleText((multipleText) => {
             this.bind({
@@ -1009,25 +1009,25 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.description.part1));
           f.appendText(' ');
-          appendCodeBlock(f, t(($) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.description.part2));
+          appendCodeBlock(f, t(($: any) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.description.part2));
           f.appendText(' ');
-          f.appendText(t(($) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.description.part3));
+          f.appendText(t(($: any) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.description.part3));
           f.appendText(' ');
-          appendCodeBlock(f, t(($) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.description.part4));
+          appendCodeBlock(f, t(($: any) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.description.part4));
           f.appendText(' ');
-          f.appendText(t(($) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.description.part5));
+          f.appendText(t(($: any) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.description.part5));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.description.part6));
+          f.appendText(t(($: any) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.description.part6));
           f.appendText(' ');
-          appendCodeBlock(f, t(($) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.description.part7));
+          appendCodeBlock(f, t(($: any) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.description.part7));
           f.appendText(' ');
-          f.appendText(t(($) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.description.part8));
+          f.appendText(t(($: any) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.description.part8));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.description.part9));
+          f.appendText(t(($: any) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.description.part9));
         }),
-        name: t(($) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.name),
+        name: t(($: any) => $.pluginSettingsTab.excludeExtensionsFromMultipleNotesCheck.name),
         render: (setting) => {
           setting.addMultipleText((multipleText) => {
             this.bind({
@@ -1039,23 +1039,23 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.excludePathsFromMultipleNotesCheck.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.excludePathsFromMultipleNotesCheck.description.part1));
           f.appendText(' ');
-          appendCodeBlock(f, t(($) => $.pluginSettingsTab.excludePathsFromMultipleNotesCheck.description.part2));
+          appendCodeBlock(f, t(($: any) => $.pluginSettingsTab.excludePathsFromMultipleNotesCheck.description.part2));
           f.appendText(' ');
-          f.appendText(t(($) => $.pluginSettingsTab.excludePathsFromMultipleNotesCheck.description.part3));
+          f.appendText(t(($: any) => $.pluginSettingsTab.excludePathsFromMultipleNotesCheck.description.part3));
           f.appendText(' ');
-          appendCodeBlock(f, t(($) => $.pluginSettingsTab.excludePathsFromMultipleNotesCheck.description.part4));
+          appendCodeBlock(f, t(($: any) => $.pluginSettingsTab.excludePathsFromMultipleNotesCheck.description.part4));
           f.appendText(' ');
-          f.appendText(t(($) => $.pluginSettingsTab.excludePathsFromMultipleNotesCheck.description.part5));
+          f.appendText(t(($: any) => $.pluginSettingsTab.excludePathsFromMultipleNotesCheck.description.part5));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.excludePathsFromMultipleNotesCheck.description.part6));
+          f.appendText(t(($: any) => $.pluginSettingsTab.excludePathsFromMultipleNotesCheck.description.part6));
           f.createEl('br');
           appendPathEntrySyntax(f);
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.excludePathsFromMultipleNotesCheck.description.part8));
+          f.appendText(t(($: any) => $.pluginSettingsTab.excludePathsFromMultipleNotesCheck.description.part8));
         }),
-        name: t(($) => $.pluginSettingsTab.excludePathsFromMultipleNotesCheck.name),
+        name: t(($: any) => $.pluginSettingsTab.excludePathsFromMultipleNotesCheck.name),
         render: (setting) => {
           setting.addMultipleText((multipleText) => {
             this.bind({
@@ -1067,38 +1067,38 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.orphanAttachmentScanMode.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.orphanAttachmentScanMode.description.part1));
           f.appendText(' ');
-          appendCodeBlock(f, t(($) => $.pluginSettingsTab.orphanAttachmentScanMode.description.part2));
+          appendCodeBlock(f, t(($: any) => $.pluginSettingsTab.orphanAttachmentScanMode.description.part2));
           f.appendText(' ');
-          f.appendText(t(($) => $.pluginSettingsTab.orphanAttachmentScanMode.description.part3));
+          f.appendText(t(($: any) => $.pluginSettingsTab.orphanAttachmentScanMode.description.part3));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.orphanAttachmentScanMode.description.part4));
+          f.appendText(t(($: any) => $.pluginSettingsTab.orphanAttachmentScanMode.description.part4));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.orphanAttachmentScanMode.description.part5));
+          f.appendText(t(($: any) => $.pluginSettingsTab.orphanAttachmentScanMode.description.part5));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.orphanAttachmentScanMode.none.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.orphanAttachmentScanMode.none.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.orphanAttachmentScanMode.none.description));
+          f.appendText(t(($: any) => $.pluginSettings.orphanAttachmentScanMode.none.description));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.orphanAttachmentScanMode.listedPaths.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.orphanAttachmentScanMode.listedPaths.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.orphanAttachmentScanMode.listedPaths.description));
+          f.appendText(t(($: any) => $.pluginSettings.orphanAttachmentScanMode.listedPaths.description));
           f.createEl('br');
-          appendCodeBlock(f, t(($) => $.pluginSettings.orphanAttachmentScanMode.entireVault.displayText));
+          appendCodeBlock(f, t(($: any) => $.pluginSettings.orphanAttachmentScanMode.entireVault.displayText));
           f.appendText(' - ');
-          f.appendText(t(($) => $.pluginSettings.orphanAttachmentScanMode.entireVault.description));
+          f.appendText(t(($: any) => $.pluginSettings.orphanAttachmentScanMode.entireVault.description));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.orphanAttachmentScanMode.description.part6));
+          f.appendText(t(($: any) => $.pluginSettingsTab.orphanAttachmentScanMode.description.part6));
         }),
-        name: t(($) => $.pluginSettingsTab.orphanAttachmentScanMode.name),
+        name: t(($: any) => $.pluginSettingsTab.orphanAttachmentScanMode.name),
         render: (setting) => {
           setting.addDropdown((dropdown) => {
             dropdown.addOptions({
               /* eslint-disable perfectionist/sort-objects -- Need to keep enum order. */
-              [OrphanAttachmentScanMode.None]: t(($) => $.pluginSettings.orphanAttachmentScanMode.none.displayText),
-              [OrphanAttachmentScanMode.ListedPaths]: t(($) => $.pluginSettings.orphanAttachmentScanMode.listedPaths.displayText),
-              [OrphanAttachmentScanMode.EntireVault]: t(($) => $.pluginSettings.orphanAttachmentScanMode.entireVault.displayText)
+              [OrphanAttachmentScanMode.None]: t(($: any) => $.pluginSettings.orphanAttachmentScanMode.none.displayText),
+              [OrphanAttachmentScanMode.ListedPaths]: t(($: any) => $.pluginSettings.orphanAttachmentScanMode.listedPaths.displayText),
+              [OrphanAttachmentScanMode.EntireVault]: t(($: any) => $.pluginSettings.orphanAttachmentScanMode.entireVault.displayText)
               /* eslint-enable perfectionist/sort-objects -- Need to keep enum order. */
             });
             this.bind({
@@ -1114,15 +1114,15 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.orphanAttachmentScanPaths.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.orphanAttachmentScanPaths.description.part1));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.orphanAttachmentScanPaths.description.part2));
+          f.appendText(t(($: any) => $.pluginSettingsTab.orphanAttachmentScanPaths.description.part2));
           f.createEl('br');
           appendPathEntrySyntax(f);
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.orphanAttachmentScanPaths.description.part5));
+          f.appendText(t(($: any) => $.pluginSettingsTab.orphanAttachmentScanPaths.description.part5));
         }),
-        name: t(($) => $.pluginSettingsTab.orphanAttachmentScanPaths.name),
+        name: t(($: any) => $.pluginSettingsTab.orphanAttachmentScanPaths.name),
         render: (setting) => {
           setting.addMultipleText((multipleText) => {
             this.bind({
@@ -1170,11 +1170,11 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
     return [
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.specialCharacters.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.specialCharacters.description.part1));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.specialCharacters.description.part2));
+          f.appendText(t(($: any) => $.pluginSettingsTab.specialCharacters.description.part2));
         }),
-        name: t(($) => $.pluginSettingsTab.specialCharacters.name),
+        name: t(($: any) => $.pluginSettingsTab.specialCharacters.name),
         render: (setting) => {
           setting.addText((text) => {
             this.bind({
@@ -1192,11 +1192,11 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
       }),
       this.settingEx({
         desc: createFragment((f) => {
-          f.appendText(t(($) => $.pluginSettingsTab.specialCharactersReplacement.description.part1));
+          f.appendText(t(($: any) => $.pluginSettingsTab.specialCharactersReplacement.description.part1));
           f.createEl('br');
-          f.appendText(t(($) => $.pluginSettingsTab.specialCharactersReplacement.description.part2));
+          f.appendText(t(($: any) => $.pluginSettingsTab.specialCharactersReplacement.description.part2));
         }),
-        name: t(($) => $.pluginSettingsTab.specialCharactersReplacement.name),
+        name: t(($: any) => $.pluginSettingsTab.specialCharactersReplacement.name),
         render: (setting) => {
           setting.addText((text) => {
             this.bind({
@@ -1222,11 +1222,11 @@ export class PluginSettingsTab extends PluginSettingsTabBase<PluginSettings> {
  * @param f - The description fragment to append to.
  */
 function appendPathEntrySyntax(f: DocumentFragment): void {
-  f.appendText(t(($) => $.pluginSettingsTab.pathEntrySyntax.intro));
+  f.appendText(t(($: any) => $.pluginSettingsTab.pathEntrySyntax.intro));
   f.createEl('br');
   appendCodeBlock(f, 'Archive/Old');
   f.appendText(' ');
-  f.appendText(t(($) => $.pluginSettingsTab.pathEntrySyntax.plainPath));
+  f.appendText(t(($: any) => $.pluginSettingsTab.pathEntrySyntax.plainPath));
   f.createEl('br');
   appendCodeBlock(f, '*.pdf');
   f.appendText(', ');
@@ -1234,13 +1234,13 @@ function appendPathEntrySyntax(f: DocumentFragment): void {
   f.appendText(', ');
   appendCodeBlock(f, '*_files/');
   f.appendText(' ');
-  f.appendText(t(($) => $.pluginSettingsTab.pathEntrySyntax.glob));
+  f.appendText(t(($: any) => $.pluginSettingsTab.pathEntrySyntax.glob));
   f.createEl('br');
   appendCodeBlock(f, String.raw`/^Archive\/\d{4}\//`);
   f.appendText(' ');
-  f.appendText(t(($) => $.pluginSettingsTab.pathEntrySyntax.regularExpression));
+  f.appendText(t(($: any) => $.pluginSettingsTab.pathEntrySyntax.regularExpression));
   f.createEl('br');
-  f.appendText(t(($) => $.pluginSettingsTab.pathEntrySyntax.escape));
+  f.appendText(t(($: any) => $.pluginSettingsTab.pathEntrySyntax.escape));
 }
 
 function generateJpegQualityOptions(): Record<string, string> {

@@ -1,16 +1,21 @@
 /**
- * The SQLite secondary index against a REAL wa-sqlite wasm (loaded from
- * node_modules) and a fake vault. The point of these tests is the contract:
- * markdown is the truth, the database is a rebuildable cache of it.
+ * The SQLite secondary index against a REAL wa-sqlite wasm (resolved through
+ * PnP) and a fake vault. The point of these tests is the contract: markdown is
+ * the truth, the database is a rebuildable cache of it.
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { setWasmProvider } from '../src/index/waSqlite';
 import { SqliteIndex, type SqliteFileSource, type SqliteSnapshotStore } from '../src/index/sqliteIndex';
 
 beforeAll(() => {
-  setWasmProvider(() => new Uint8Array(readFileSync('node_modules/wa-sqlite/dist/wa-sqlite.wasm')));
+  // PnP 下没有 node_modules 目录——用包说明符解析出 wa-sqlite 的实际位置
+  // （unplugged 实路径），而不是写死的相对路径。
+  const pnpRequire = createRequire(import.meta.url);
+  const wasmPath = pnpRequire.resolve('wa-sqlite/dist/wa-sqlite.wasm');
+  setWasmProvider(() => new Uint8Array(readFileSync(wasmPath)));
 });
 
 const ID_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';

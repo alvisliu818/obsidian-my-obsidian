@@ -1,3 +1,3 @@
-import { SaveHistoryPlugin } from "./src/main";
+import { SaveControlPlugin } from "./src/main";
 
-export default SaveHistoryPlugin;
+export default SaveControlPlugin;

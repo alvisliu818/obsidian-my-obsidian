@@ -26,7 +26,7 @@ export class ShowOriginalAttachmentNamesCommandHandler extends GlobalCommandHand
     super({
       icon: 'list',
       id: 'show-original-attachment-names',
-      name: t(($) => $.commands.showOriginalAttachmentNames)
+      name: t(($: any) => $.commands.showOriginalAttachmentNames)
     });
     this.app = params.app;
     this.originalAttachmentNamesComponent = params.originalAttachmentNamesComponent;

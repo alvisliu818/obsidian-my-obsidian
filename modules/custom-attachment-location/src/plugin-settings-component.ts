@@ -204,7 +204,7 @@ class LegacySettingsConverter {
   private convertCustomTokensString(): void {
     if (this.legacySettings.customTokensStr && this.legacySettings.version && compare(this.legacySettings.version, '9.0.0') < 0) {
       // eslint-disable-next-line unicorn/name-replacements -- `customTokensStr` is a persisted `data.json` settings key; renaming it would silently drop the user's custom tokens.
-      this.legacySettings.customTokensStr = `${t(($) => $.pluginSettingsManager.customToken.codeComment)}
+      this.legacySettings.customTokensStr = `${t(($: any) => $.pluginSettingsManager.customToken.codeComment)}
 
 ${commentOut(this.legacySettings.customTokensStr)}
 `;
@@ -502,14 +502,14 @@ export class PluginSettingsComponent extends PluginSettingsComponentBase<PluginS
 
     this.registerValidator('specialCharactersReplacement', (value): MaybeReturn<string> => {
       if (getOsUnsafePathCharsRegExp().test(value)) {
-        return t(($) => $.pluginSettingsManager.validation.specialCharactersReplacementMustNotContainInvalidFileNamePathCharacters);
+        return t(($: any) => $.pluginSettingsManager.validation.specialCharactersReplacementMustNotContainInvalidFileNamePathCharacters);
       }
     });
 
     this.registerValidator('defaultImageSize', (value): MaybeReturn<string> => {
       const REG_EXP = /^(?:\d+(?:px|%))?$/g;
       if (!REG_EXP.test(value)) {
-        return t(($) => $.pluginSettingsManager.validation.defaultImageSizeMustBePercentageOrPixels);
+        return t(($: any) => $.pluginSettingsManager.validation.defaultImageSizeMustBePercentageOrPixels);
       }
     });
 
@@ -564,7 +564,7 @@ export class PluginSettingsComponent extends PluginSettingsComponentBase<PluginS
 
   private customTokensValidatorImpl(customTokensString: string): void {
     const customTokens = CustomToken.parse(customTokensString);
-    this.lastCustomTokenValidatorResult = customTokens === null ? t(($) => $.pluginSettingsManager.validation.invalidCustomTokensCode) : undefined;
+    this.lastCustomTokenValidatorResult = customTokens === null ? t(($: any) => $.pluginSettingsManager.validation.invalidCustomTokensCode) : undefined;
   }
 }
 
@@ -612,7 +612,7 @@ function commentOut($string: string): string {
 function extensionsValidator(extensions: string[]): MaybeReturn<string> {
   for (const extension of extensions) {
     if (/[/\\]/.test(extension)) {
-      return t(($) => $.pluginSettingsManager.validation.multipleNotesCheckExtensionMustNotBeAPath, { extension });
+      return t(($: any) => $.pluginSettingsManager.validation.multipleNotesCheckExtensionMustNotBeAPath, { extension });
     }
   }
 }
@@ -634,7 +634,7 @@ function screenshotFilePathsValidator(paths: string[]): MaybeReturn<string> {
 
     const regExp = path.slice(1, -1);
     if (!isValidRegExp(regExp)) {
-      return t(($) => $.pluginSettingsManager.validation.invalidRegularExpression, { regExp: path });
+      return t(($: any) => $.pluginSettingsManager.validation.invalidRegularExpression, { regExp: path });
     }
   }
 }

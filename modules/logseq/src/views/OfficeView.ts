@@ -36,7 +36,7 @@ export class OfficeView extends ItemView {
   private engine: OfficeEngine | null = null;
   private bodyEl!: HTMLElement;
   private toolbarEl!: HTMLElement;
-  private titleEl!: HTMLElement;
+  // titleEl: 基类 View 自带 public titleEl（obsidian ^1.14 typings），直接用
 
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
     super(leaf);

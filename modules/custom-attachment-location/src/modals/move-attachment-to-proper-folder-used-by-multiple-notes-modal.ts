@@ -62,12 +62,12 @@ class MoveAttachmentToProperFolderUsedByMultipleNotesModal extends Modal {
 
   private async onOpenAsync(): Promise<void> {
     new Setting(this.contentEl)
-      .setName(t(($) => $.moveAttachmentToProperFolderUsedByMultipleNotesModal.heading))
+      .setName(t(($: any) => $.moveAttachmentToProperFolderUsedByMultipleNotesModal.heading))
       .setHeading();
 
     this.contentEl.append(
       await createFragmentAsync(async (f) => {
-        f.appendText(t(($) => $.moveAttachmentToProperFolderUsedByMultipleNotesModal.content.part1));
+        f.appendText(t(($: any) => $.moveAttachmentToProperFolderUsedByMultipleNotesModal.content.part1));
         f.appendText(' ');
         f.append(
           await renderInternalLink({
@@ -76,9 +76,9 @@ class MoveAttachmentToProperFolderUsedByMultipleNotesModal extends Modal {
           })
         );
         f.appendText(' ');
-        f.appendText(t(($) => $.moveAttachmentToProperFolderUsedByMultipleNotesModal.content.part2));
+        f.appendText(t(($: any) => $.moveAttachmentToProperFolderUsedByMultipleNotesModal.content.part2));
         f.createEl('br');
-        f.appendText(t(($) => $.moveAttachmentToProperFolderUsedByMultipleNotesModal.content.part3));
+        f.appendText(t(($: any) => $.moveAttachmentToProperFolderUsedByMultipleNotesModal.content.part3));
         f.createEl('br');
         for (const backlink of this.backlinks) {
           this.selectedBacklinks.add(backlink);
@@ -100,7 +100,7 @@ class MoveAttachmentToProperFolderUsedByMultipleNotesModal extends Modal {
 
     if (!this.isCancelMode) {
       new Setting(this.contentEl)
-        .setName(t(($) => $.moveAttachmentToProperFolderUsedByMultipleNotesModal.shouldUseSameActionForOtherProblematicAttachmentsToggle))
+        .setName(t(($: any) => $.moveAttachmentToProperFolderUsedByMultipleNotesModal.shouldUseSameActionForOtherProblematicAttachmentsToggle))
         .addToggle((toggle) => {
           toggle.setValue(false);
           toggle.onChange((value) => {
@@ -113,19 +113,19 @@ class MoveAttachmentToProperFolderUsedByMultipleNotesModal extends Modal {
     if (!this.isCancelMode) {
       buttonsSetting
         .addButton((button) => {
-          button.setButtonText(t(($) => $.buttons.skip));
+          button.setButtonText(t(($: any) => $.buttons.skip));
           button.onClick(() => {
             this.select(MoveAttachmentToProperFolderUsedByMultipleNotesMode.Skip, shouldUseSameActionForOtherProblematicAttachments);
           });
         })
         .addButton((button) => {
-          button.setButtonText(t(($) => $.buttons.copyAll));
+          button.setButtonText(t(($: any) => $.buttons.copyAll));
           button.onClick(() => {
             this.select(MoveAttachmentToProperFolderUsedByMultipleNotesMode.CopyAll, shouldUseSameActionForOtherProblematicAttachments);
           });
         })
         .addButton((button) => {
-          button.setButtonText(t(($) => $.buttons.select));
+          button.setButtonText(t(($: any) => $.buttons.select));
           button.onClick(() => {
             this.select(MoveAttachmentToProperFolderUsedByMultipleNotesMode.Prompt, shouldUseSameActionForOtherProblematicAttachments);
           });
@@ -134,7 +134,7 @@ class MoveAttachmentToProperFolderUsedByMultipleNotesModal extends Modal {
 
     buttonsSetting
       .addButton((button) => {
-        button.setButtonText(t(($) => $.obsidianDevUtils.buttons.cancel));
+        button.setButtonText(t(($: any) => $.obsidianDevUtils.buttons.cancel));
         button.onClick(() => {
           this.select(MoveAttachmentToProperFolderUsedByMultipleNotesMode.Cancel, shouldUseSameActionForOtherProblematicAttachments);
         });

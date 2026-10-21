@@ -22,7 +22,7 @@ export class DeleteUnusedAttachmentsEntireVaultCommandHandler extends GlobalComm
     super({
       icon: 'trash-2',
       id: 'delete-unused-attachments-entire-vault',
-      name: t(($) => $.commands.deleteUnusedAttachmentsEntireVault)
+      name: t(($: any) => $.commands.deleteUnusedAttachmentsEntireVault)
     });
     this.unusedAttachmentsRemover = params.unusedAttachmentsRemover;
   }

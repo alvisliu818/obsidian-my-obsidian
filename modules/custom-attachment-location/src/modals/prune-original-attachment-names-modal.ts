@@ -76,13 +76,13 @@ class PruneOriginalAttachmentNamesModal extends ModalBase<PruneOriginalAttachmen
   }
 
   public override onOpen(): void {
-    this.titleEl.setText(t(($) => $.originalAttachmentNames.pruneModal.title));
+    this.titleEl.setText(t(($: any) => $.originalAttachmentNames.pruneModal.title));
 
     const staleRecords = this.originalAttachmentNamesComponent.getRecords().filter((record) => record.isMissing);
     if (staleRecords.length === 0) {
-      this.contentEl.createEl('p', { text: t(($) => $.originalAttachmentNames.pruneModal.noStale) });
+      this.contentEl.createEl('p', { text: t(($: any) => $.originalAttachmentNames.pruneModal.noStale) });
     } else {
-      this.contentEl.createEl('p', { text: t(($) => $.originalAttachmentNames.pruneModal.staleCount, { count: staleRecords.length }) });
+      this.contentEl.createEl('p', { text: t(($: any) => $.originalAttachmentNames.pruneModal.staleCount, { count: staleRecords.length }) });
       const listEl = this.contentEl.createEl('ul');
       for (const record of staleRecords) {
         listEl.createEl('li', { text: `${record.path} → ${record.originalFileName}` });
@@ -93,7 +93,7 @@ class PruneOriginalAttachmentNamesModal extends ModalBase<PruneOriginalAttachmen
 
     if (staleRecords.length > 0) {
       new ButtonComponent(buttonsEl)
-        .setButtonText(t(($) => $.originalAttachmentNames.pruneModal.prune))
+        .setButtonText(t(($: any) => $.originalAttachmentNames.pruneModal.prune))
         .setCta()
         .onClick(() => {
           this.choice = PruneOriginalAttachmentNamesChoice.Prune;
@@ -102,7 +102,7 @@ class PruneOriginalAttachmentNamesModal extends ModalBase<PruneOriginalAttachmen
     }
 
     new ButtonComponent(buttonsEl)
-      .setButtonText(t(($) => $.originalAttachmentNames.pruneModal.forgetAll))
+      .setButtonText(t(($: any) => $.originalAttachmentNames.pruneModal.forgetAll))
       .setDestructive()
       .setDisabled(this.originalAttachmentNamesComponent.size === 0)
       .onClick(convertAsyncToSync(async () => {
@@ -115,7 +115,7 @@ class PruneOriginalAttachmentNamesModal extends ModalBase<PruneOriginalAttachmen
       }));
 
     new ButtonComponent(buttonsEl)
-      .setButtonText(t(($) => $.obsidianDevUtils.buttons.cancel))
+      .setButtonText(t(($: any) => $.obsidianDevUtils.buttons.cancel))
       .onClick(this.close.bind(this));
   }
 }
@@ -131,14 +131,14 @@ export async function isForgetAllConfirmed(app: App, count: number): Promise<boo
   return await confirm({
     app,
     message: createFragment((f) => {
-      f.appendText(t(($) => $.originalAttachmentNames.pruneModal.forgetAllConfirm.part1, { count }));
+      f.appendText(t(($: any) => $.originalAttachmentNames.pruneModal.forgetAllConfirm.part1, { count }));
       f.appendText(' ');
       appendCodeBlock(f, '{{originalAttachmentFileName}}');
       f.appendText(' ');
-      f.appendText(t(($) => $.originalAttachmentNames.pruneModal.forgetAllConfirm.part2));
+      f.appendText(t(($: any) => $.originalAttachmentNames.pruneModal.forgetAllConfirm.part2));
     }),
-    okButtonText: t(($) => $.originalAttachmentNames.pruneModal.forgetAll),
-    title: t(($) => $.originalAttachmentNames.pruneModal.forgetAllConfirm.title)
+    okButtonText: t(($: any) => $.originalAttachmentNames.pruneModal.forgetAll),
+    title: t(($: any) => $.originalAttachmentNames.pruneModal.forgetAllConfirm.title)
   });
 }
 

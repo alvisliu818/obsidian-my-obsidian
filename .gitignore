@@ -34,3 +34,10 @@ tests/e2e/_*.out
 /_ins-*.mjs
 /_probe-*.mjs
 /_diag-*
+
+# Yarn 4 PnP：cache 在 globalFolder（E:/HOME/Code/.yarn-global，不在仓内）；
+# 解析映射与解包产物本地再生成，公开仓不入库。
+.pnp.cjs
+.pnp.loader.mjs
+.yarn/install-state.gz
+.yarn/unplugged/

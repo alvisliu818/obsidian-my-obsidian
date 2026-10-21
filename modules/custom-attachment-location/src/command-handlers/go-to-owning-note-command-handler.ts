@@ -34,10 +34,10 @@ export class GoToOwningNoteCommandHandler extends FileCommandHandler {
 
   public constructor(params: GoToOwningNoteCommandHandlerConstructorParams) {
     super({
-      fileMenuItemName: t(($) => $.menuItems.goToOwningNote),
+      fileMenuItemName: t(($: any) => $.menuItems.goToOwningNote),
       icon: 'file-symlink',
       id: 'go-to-owning-note',
-      name: t(($) => $.commands.goToOwningNote)
+      name: t(($: any) => $.commands.goToOwningNote)
     });
 
     this.app = params.app;
@@ -54,7 +54,7 @@ export class GoToOwningNoteCommandHandler extends FileCommandHandler {
     const candidateNotePaths = await this.noteOwnerResolver.findCandidateNotePaths(file);
 
     if (candidateNotePaths.length === 0) {
-      this.pluginNoticeComponent.showNotice(t(($) => $.notice.noOwningNote, { attachmentPath: file.path }));
+      this.pluginNoticeComponent.showNotice(t(($: any) => $.notice.noOwningNote, { attachmentPath: file.path }));
       return;
     }
 
@@ -95,10 +95,10 @@ export class GoToOwningNoteCommandHandler extends FileCommandHandler {
       app: this.app,
       items: this.noteOwnerResolver.filterTopRankNotePaths(candidateNotePaths),
       itemTextFunction: (notePath) => notePath,
-      placeholder: `${t(($) => $.goToOwningNote.selectPlaceholder, { attachmentPath: attachmentFile.path })} ${
-        t(($) => $.goToOwningNote.noPriorityWinnerReason[reason], {
+      placeholder: `${t(($: any) => $.goToOwningNote.selectPlaceholder, { attachmentPath: attachmentFile.path })} ${
+        t(($: any) => $.goToOwningNote.noPriorityWinnerReason[reason], {
           // Qualified with the owning plugin since 12.0.0 — see the same call in the collect modal.
-          settingName: `${ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_NAME} → ${t(($) => $.pluginSettingsTab.notePriorities.name)}`
+          settingName: `${ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_NAME} → ${t(($: any) => $.pluginSettingsTab.notePriorities.name)}`
         })
       }`
     });

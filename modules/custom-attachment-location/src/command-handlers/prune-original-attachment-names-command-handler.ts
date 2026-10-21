@@ -30,7 +30,7 @@ export class PruneOriginalAttachmentNamesCommandHandler extends GlobalCommandHan
     super({
       icon: 'eraser',
       id: 'prune-original-attachment-names',
-      name: t(($) => $.commands.pruneOriginalAttachmentNames)
+      name: t(($: any) => $.commands.pruneOriginalAttachmentNames)
     });
     this.app = params.app;
     this.originalAttachmentNamesComponent = params.originalAttachmentNamesComponent;
@@ -49,12 +49,12 @@ export class PruneOriginalAttachmentNamesCommandHandler extends GlobalCommandHan
       }
       case PruneOriginalAttachmentNamesChoice.ForgetAll: {
         const count = this.originalAttachmentNamesComponent.forgetAll();
-        this.pluginNoticeComponent.showNotice(t(($) => $.originalAttachmentNames.forgotAllNotice, { count }));
+        this.pluginNoticeComponent.showNotice(t(($: any) => $.originalAttachmentNames.forgotAllNotice, { count }));
         return;
       }
       case PruneOriginalAttachmentNamesChoice.Prune: {
         const count = this.originalAttachmentNamesComponent.prune().length;
-        this.pluginNoticeComponent.showNotice(t(($) => $.originalAttachmentNames.prunedNotice, { count }));
+        this.pluginNoticeComponent.showNotice(t(($: any) => $.originalAttachmentNames.prunedNotice, { count }));
         return;
       }
       default: {

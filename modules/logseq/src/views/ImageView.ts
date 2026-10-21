@@ -74,7 +74,7 @@ export class ImageView extends ItemView {
   private stageEl!: HTMLElement;
   private imgEl!: HTMLImageElement;
   private toolbarEl!: HTMLElement;
-  private titleEl!: HTMLElement;
+  // titleEl: 基类 View 自带 public titleEl（obsidian ^1.14 typings），直接用
   private zoomLabelEl!: HTMLElement;
 
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {

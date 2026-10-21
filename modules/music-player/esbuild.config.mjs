@@ -16,9 +16,6 @@ if you want to view the source, please visit the github repository of this plugi
 const prod = (process.argv[2] === "production");
 const outDir = "dist";
 
-/** npm 包 `buffer` 的入口；用别名避免源码写 `from "buffer"` 触发「Node 内置 buffer」类 lint */
-const bufferPolyfillEntry = path.join(process.cwd(), "node_modules", "buffer", "index.js");
-
 // 路径常量
 const cssRoot = path.join(process.cwd(), 'src');
 const cssDest = path.join(process.cwd(), outDir, 'styles.css');
@@ -233,9 +230,6 @@ const context = await esbuild.context({
 	plugins: [stripEvalRequirePlugin()],
 	entryPoints: ["src/main.ts"],
 	bundle: true,
-	alias: {
-		"buffer-polyfill": bufferPolyfillEntry,
-	},
 	loader: {
 		'.ts': 'ts',
 		'.tsx': 'tsx',

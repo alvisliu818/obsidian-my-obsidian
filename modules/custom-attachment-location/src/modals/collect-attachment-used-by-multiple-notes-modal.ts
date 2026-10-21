@@ -90,11 +90,11 @@ class CollectAttachmentUsedByMultipleNotesModal extends Modal {
 
     const reason = this.noPriorityWinnerReason;
     this.contentEl.createEl('p', { cls: 'custom-attachment-location-no-priority-winner-reason' }, (p) => {
-      p.append(createFragmentWithCodeBlocks(t(($) => $.collectAttachmentUsedByMultipleNotesModal.noPriorityWinnerReason[reason], {
+      p.append(createFragmentWithCodeBlocks(t(($: any) => $.collectAttachmentUsedByMultipleNotesModal.noPriorityWinnerReason[reason], {
         // Qualified with the owning plugin since 12.0.0: the setting lives in
         // `Advanced Rename and Delete Handler` now, so naming it alone would send the user looking through this plugin's tab for a row
         // that is not there. An arrow rather than a possessive, which reads the same in every locale.
-        settingName: `${asCodeBlock(ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_NAME)} → ${t(($) => $.pluginSettingsTab.notePriorities.name)}`
+        settingName: `${asCodeBlock(ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_NAME)} → ${t(($: any) => $.pluginSettingsTab.notePriorities.name)}`
       })));
     });
   }
@@ -102,12 +102,12 @@ class CollectAttachmentUsedByMultipleNotesModal extends Modal {
   private async onOpenAsync(): Promise<void> {
     super.onOpen();
     new Setting(this.contentEl)
-      .setName(t(($) => $.collectAttachmentUsedByMultipleNotesModal.heading))
+      .setName(t(($: any) => $.collectAttachmentUsedByMultipleNotesModal.heading))
       .setHeading();
 
     this.contentEl.append(
       await createFragmentAsync(async (f) => {
-        f.appendText(t(($) => $.collectAttachmentUsedByMultipleNotesModal.content.part1));
+        f.appendText(t(($: any) => $.collectAttachmentUsedByMultipleNotesModal.content.part1));
         f.appendText(' ');
         f.append(
           await renderInternalLink({
@@ -116,7 +116,7 @@ class CollectAttachmentUsedByMultipleNotesModal extends Modal {
           })
         );
         f.appendText(' ');
-        f.appendText(t(($) => $.collectAttachmentUsedByMultipleNotesModal.content.part2));
+        f.appendText(t(($: any) => $.collectAttachmentUsedByMultipleNotesModal.content.part2));
         f.append(
           // The class carries no styling; it is how an integration test addresses the list, as for
           // `custom-attachment-location-no-priority-winner-reason` above.
@@ -144,7 +144,7 @@ class CollectAttachmentUsedByMultipleNotesModal extends Modal {
 
     if (!this.isCancelMode) {
       new Setting(this.contentEl)
-        .setName(t(($) => $.collectAttachmentUsedByMultipleNotesModal.shouldUseSameActionForOtherProblematicAttachmentsToggle))
+        .setName(t(($: any) => $.collectAttachmentUsedByMultipleNotesModal.shouldUseSameActionForOtherProblematicAttachmentsToggle))
         .addToggle((toggle) => {
           toggle.setValue(false);
           toggle.onChange((value) => {
@@ -157,19 +157,19 @@ class CollectAttachmentUsedByMultipleNotesModal extends Modal {
     if (!this.isCancelMode) {
       buttonsSetting
         .addButton((button) => {
-          button.setButtonText(t(($) => $.buttons.skip));
+          button.setButtonText(t(($: any) => $.buttons.skip));
           button.onClick(() => {
             this.select(CollectAttachmentUsedByMultipleNotesMode.Skip, shouldUseSameActionForOtherProblematicAttachments);
           });
         })
         .addButton((button) => {
-          button.setButtonText(t(($) => $.buttons.move));
+          button.setButtonText(t(($: any) => $.buttons.move));
           button.onClick(() => {
             this.select(CollectAttachmentUsedByMultipleNotesMode.Move, shouldUseSameActionForOtherProblematicAttachments);
           });
         })
         .addButton((button) => {
-          button.setButtonText(t(($) => $.buttons.copy));
+          button.setButtonText(t(($: any) => $.buttons.copy));
           button.onClick(() => {
             this.select(CollectAttachmentUsedByMultipleNotesMode.Copy, shouldUseSameActionForOtherProblematicAttachments);
           });
@@ -178,7 +178,7 @@ class CollectAttachmentUsedByMultipleNotesModal extends Modal {
 
     buttonsSetting
       .addButton((button) => {
-        button.setButtonText(t(($) => $.obsidianDevUtils.buttons.cancel));
+        button.setButtonText(t(($: any) => $.obsidianDevUtils.buttons.cancel));
         button.onClick(() => {
           this.select(CollectAttachmentUsedByMultipleNotesMode.Cancel, shouldUseSameActionForOtherProblematicAttachments);
         });

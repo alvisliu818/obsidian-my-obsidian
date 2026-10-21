@@ -16,7 +16,7 @@ export class CollectAttachmentsInCurrentFolderCommandHandler extends FolderComma
     super({
       icon: 'download',
       id: 'collect-attachments-in-current-folder',
-      name: t(($) => $.commands.collectAttachmentsCurrentFolder)
+      name: t(($: any) => $.commands.collectAttachmentsCurrentFolder)
     });
 
     this.attachmentCollector = params.attachmentCollector;

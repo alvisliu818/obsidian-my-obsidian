@@ -80,7 +80,7 @@ export class MoveAttachmentToProperFolderCommandHandler extends AbstractFileComm
     super({
       icon: 'move',
       id: 'move-attachment-to-proper-folder',
-      name: t(($) => $.commands.moveAttachmentToProperFolder)
+      name: t(($: any) => $.commands.moveAttachmentToProperFolder)
     });
 
     this.abortSignalComponent = params.abortSignalComponent;
@@ -140,7 +140,7 @@ export class MoveAttachmentToProperFolderCommandHandler extends AbstractFileComm
 
     await loop({
       abortSignal: combinedAbortSignal,
-      buildNoticeMessage: ({ item, iterationString }) => t(($) => $.moveAttachmentToProperFolder.progressBar.message, { attachmentFilePath: item.path, iterationString }),
+      buildNoticeMessage: ({ item, iterationString }) => t(($: any) => $.moveAttachmentToProperFolder.progressBar.message, { attachmentFilePath: item.path, iterationString }),
       items: attachmentFiles,
       pluginNoticeComponent: this.pluginNoticeComponent,
       processItem: async (attachmentFile) => {
@@ -154,7 +154,7 @@ export class MoveAttachmentToProperFolderCommandHandler extends AbstractFileComm
         }
         combinedAbortSignal.throwIfAborted();
       },
-      progressBarTitle: `${this.pluginName}: ${t(($) => $.moveAttachmentToProperFolder.progressBar.title)}`,
+      progressBarTitle: `${this.pluginName}: ${t(($: any) => $.moveAttachmentToProperFolder.progressBar.title)}`,
       shouldContinueOnError: true,
       shouldShowProgressBar: true
     });
@@ -176,7 +176,7 @@ export class MoveAttachmentToProperFolderCommandHandler extends AbstractFileComm
       pathOrFile: attachmentFile
     });
     if (backlinks.keys().length === 0) {
-      this.pluginNoticeComponent.showNotice(t(($) => $.moveAttachmentToProperFolder.unusedAttachment, { attachmentPath: attachmentFile.path }));
+      this.pluginNoticeComponent.showNotice(t(($: any) => $.moveAttachmentToProperFolder.unusedAttachment, { attachmentPath: attachmentFile.path }));
       return true;
     }
 

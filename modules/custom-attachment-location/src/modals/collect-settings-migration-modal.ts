@@ -86,13 +86,13 @@ class CollectSettingsMigrationModal extends ModalBase<null | SettingsMigrationRo
   }
 
   public override onOpen(): void {
-    this.titleEl.setText(t(($) => $.settingsMigrationModal.title, { sourcePluginName: this.sourcePluginName }));
+    this.titleEl.setText(t(($: any) => $.settingsMigrationModal.title, { sourcePluginName: this.sourcePluginName }));
 
     this.contentEl.createEl('p', {
-      text: t(($) => $.settingsMigrationModal.explanation.part1, { sourcePluginName: this.sourcePluginName })
+      text: t(($: any) => $.settingsMigrationModal.explanation.part1, { sourcePluginName: this.sourcePluginName })
     });
     this.contentEl.createEl('p', {
-      text: t(($) => $.settingsMigrationModal.explanation.part2)
+      text: t(($: any) => $.settingsMigrationModal.explanation.part2)
     });
 
     for (const row of this.rows) {
@@ -102,7 +102,7 @@ class CollectSettingsMigrationModal extends ModalBase<null | SettingsMigrationRo
     const buttonsEl = this.contentEl.createDiv();
 
     const okButton = new ButtonComponent(buttonsEl);
-    okButton.setButtonText(t(($) => $.obsidianDevUtils.buttons.ok));
+    okButton.setButtonText(t(($: any) => $.obsidianDevUtils.buttons.ok));
     okButton.setCta();
     okButton.onClick(() => {
       this.approvedRows = this.rows.map((row) => ({
@@ -113,7 +113,7 @@ class CollectSettingsMigrationModal extends ModalBase<null | SettingsMigrationRo
     });
 
     const cancelButton = new ButtonComponent(buttonsEl);
-    cancelButton.setButtonText(t(($) => $.obsidianDevUtils.buttons.cancel));
+    cancelButton.setButtonText(t(($: any) => $.obsidianDevUtils.buttons.cancel));
     cancelButton.onClick(this.close.bind(this));
   }
 
@@ -141,7 +141,7 @@ class CollectSettingsMigrationModal extends ModalBase<null | SettingsMigrationRo
   private renderRow(row: SettingsMigrationRow): void {
     const setting = new Setting(this.contentEl);
     setting.setName(row.descriptor.getName());
-    setting.setDesc(t(($) => $.settingsMigrationModal.currentValue, {
+    setting.setDesc(t(($: any) => $.settingsMigrationModal.currentValue, {
       value: formatMigratableSettingValue(row.descriptor.kind, row.currentValue)
     }));
 
@@ -149,7 +149,7 @@ class CollectSettingsMigrationModal extends ModalBase<null | SettingsMigrationRo
 
     const resetButton = new ExtraButtonComponent(setting.controlEl);
     resetButton.setIcon('rotate-ccw');
-    resetButton.setTooltip(t(($) => $.settingsMigrationModal.resetTooltip));
+    resetButton.setTooltip(t(($: any) => $.settingsMigrationModal.resetTooltip));
     resetButton.onClick(() => {
       this.editedValues.set(row.descriptor.propertyName, row.currentValue);
       resetToCurrentValue();

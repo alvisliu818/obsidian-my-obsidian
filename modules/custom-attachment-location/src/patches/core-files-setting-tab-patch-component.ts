@@ -113,11 +113,11 @@ export class CoreFilesSettingTabPatchComponent extends MonkeyAroundComponent {
 
   private createControlledRow(originalDefinition: SettingDefinitionRender): SettingDefinitionRender {
     return {
-      desc: createFragmentWithCodeBlocks(t(($) => $.coreFilesSettingTab.controlledByPlugin, { pluginName: asCodeBlock(this.pluginName) })),
+      desc: createFragmentWithCodeBlocks(t(($: any) => $.coreFilesSettingTab.controlledByPlugin, { pluginName: asCodeBlock(this.pluginName) })),
       name: originalDefinition.name,
       render: (setting): void => {
         setting.addButton((button) => {
-          button.setButtonText(t(($) => $.coreFilesSettingTab.openPluginSettings));
+          button.setButtonText(t(($: any) => $.coreFilesSettingTab.openPluginSettings));
           button.onClick(() => {
             this.app.setting.openTabById(this.pluginId);
           });

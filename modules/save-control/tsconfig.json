@@ -9,8 +9,7 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "outDir": "dist",
-    "sourceMap": true,
-    "ignoreDeprecations": "6.0"
+    "sourceMap": true
   },
-  "include": ["src/**/*.ts", "main.ts", "types/**/*.d.ts", "manifest.json"]
+  "include": ["src/**/*.ts", "main.ts", "manifest.json"]
 }

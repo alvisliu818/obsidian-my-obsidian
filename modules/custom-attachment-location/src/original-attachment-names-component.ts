@@ -404,21 +404,21 @@ export class OriginalAttachmentNamesComponent extends Component {
     this.pluginNoticeComponent.showNotice(
       createFragment((f) => {
         appendCodeBlock(f, '{{originalAttachmentFileName}}');
-        f.appendText(t(($) => $.originalAttachmentNames.unknownNotice.message, { count: paths.length }));
+        f.appendText(t(($: any) => $.originalAttachmentNames.unknownNotice.message, { count: paths.length }));
         f.appendText(' ');
         const detailsButton = new ButtonComponent(f.createSpan());
-        detailsButton.setButtonText(t(($) => $.originalAttachmentNames.unknownNotice.details));
+        detailsButton.setButtonText(t(($: any) => $.originalAttachmentNames.unknownNotice.details));
         detailsButton.onClick(convertAsyncToSync(async () => {
           await alert({
             app: this.app,
             message: createFragment((messageFragment) => {
-              messageFragment.createEl('p', { text: t(($) => $.originalAttachmentNames.unknownDetails.explanation) });
+              messageFragment.createEl('p', { text: t(($: any) => $.originalAttachmentNames.unknownDetails.explanation) });
               const listEl = messageFragment.createEl('ul');
               for (const path of paths) {
                 listEl.createEl('li', { text: path });
               }
             }),
-            title: t(($) => $.originalAttachmentNames.unknownDetails.title)
+            title: t(($: any) => $.originalAttachmentNames.unknownDetails.title)
           });
         }));
       }),

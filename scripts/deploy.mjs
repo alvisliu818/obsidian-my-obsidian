@@ -21,6 +21,7 @@
  */
 import { existsSync, mkdirSync, cpSync, rmSync } from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 
 const args = process.argv.slice(2);
 const vaultFlag = args.indexOf("--vault");
@@ -81,12 +82,26 @@ for (const f of ["monaco.css"]) {
 // 同目录的 typeshed-fallback(lspHost 的 resolvePyrightLaunch 优先用它)。
 // 36MB,和 pty-helper 一样不进 git。
 {
-	const src = path.join(ROOT, "node_modules", "basedpyright");
-	if (!existsSync(src)) {
-		console.error("缺少 node_modules/basedpyright —— 先 npm i -D basedpyright");
+	// PnP:依赖躺在全局 cache 的 zip 里,必须 unplugged(见 package.json
+	// dependenciesMeta)才能整目录复制;没有 PnP 时回落到老 node_modules 布局。
+	let basedpyrightDir;
+	try {
+		const pnpFile = path.join(ROOT, ".pnp.cjs");
+		if (existsSync(pnpFile)) {
+			createRequire(import.meta.url)(pnpFile).setup();
+			createRequire(path.join(ROOT, "package.json")).resolve("basedpyright/package.json");
+		}
+		basedpyrightDir = path.dirname(
+			createRequire(path.join(ROOT, "index.js")).resolve("basedpyright/package.json"),
+		);
+	} catch {
+		basedpyrightDir = path.join(ROOT, "node_modules", "basedpyright");
+	}
+	if (!existsSync(basedpyrightDir)) {
+		console.error(`缺少 basedpyright 依赖目录(${basedpyrightDir})—— 先 yarn install`);
 		process.exit(1);
 	}
-	cpSync(src, path.join(TARGET, "basedpyright"), { recursive: true, verbatimSymlinks: true });
+	cpSync(basedpyrightDir, path.join(TARGET, "basedpyright"), { recursive: true, verbatimSymlinks: true });
 	console.log(`  basedpyright/`);
 }
 

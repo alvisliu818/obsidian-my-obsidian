@@ -4,11 +4,12 @@
  * 为移动端提供 Buffer polyfill
  * music-metadata-browser 库内部使用了 Buffer，需要在全局作用域中提供
  *
- * 使用别名 buffer-polyfill（见 tsconfig paths + esbuild alias）指向 npm 包 buffer，
- * 避免 `from "buffer"` 被误判为 Node 内置模块。
+ * 直接 import npm 包 buffer（根依赖，PnP 解析）。esbuild 的 external 列表
+ * 把 buffer 从 Node 内置模块中排除了，所以这里不会被误判为 builtin，
+ * 而是打包进 bundle（移动端需要）。
  */
 
-import { Buffer } from "buffer-polyfill";
+import { Buffer } from "buffer";
 
 type WindowWithBuffer = Window & { Buffer?: typeof Buffer; activeWindow?: Window };
 

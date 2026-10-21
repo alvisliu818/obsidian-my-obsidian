@@ -146,7 +146,7 @@ export class Plugin extends PluginBase {
         conflictingVersionRange: CONSISTENT_ATTACHMENTS_AND_LINKS_COLLECTING_VERSION_RANGE,
         pluginId: CONSISTENT_ATTACHMENTS_AND_LINKS_PLUGIN_ID,
         pluginName: CONSISTENT_ATTACHMENTS_AND_LINKS_PLUGIN_NAME,
-        reason: t(($) => $.pluginConflict.consistentAttachmentsAndLinks.reason),
+        reason: t(($: any) => $.pluginConflict.consistentAttachmentsAndLinks.reason),
         severity: PluginConflictSeverity.Warn
       }
     ];
@@ -169,7 +169,7 @@ export class Plugin extends PluginBase {
         minPluginVersion: ADVANCED_RENAME_AND_DELETE_HANDLER_MIN_PLUGIN_VERSION,
         pluginId: ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_ID,
         pluginName: ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_NAME,
-        reason: createFragmentWithCodeBlocks(t(($) => $.pluginDependency.advancedRenameAndDeleteHandler.reason, {
+        reason: createFragmentWithCodeBlocks(t(($: any) => $.pluginDependency.advancedRenameAndDeleteHandler.reason, {
           dependencyPluginName: asCodeBlock(ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_NAME),
           pluginName: asCodeBlock(this.manifest.name)
         }))

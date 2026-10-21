@@ -20,11 +20,11 @@ export class CollectAttachmentsInFileCommandHandler extends AbstractFileCommandH
 
   public constructor(params: CollectAttachmentsInFileCommandHandlerConstructorParams) {
     super({
-      fileMenuItemName: t(($) => $.menuItems.collectAttachmentsInFile),
-      filesMenuItemName: t(($) => $.menuItems.collectAttachmentsInFiles),
+      fileMenuItemName: t(($: any) => $.menuItems.collectAttachmentsInFile),
+      filesMenuItemName: t(($: any) => $.menuItems.collectAttachmentsInFiles),
       icon: 'download',
       id: 'collect-attachments-in-file',
-      name: t(($) => $.commands.collectAttachmentsCurrentNote)
+      name: t(($: any) => $.commands.collectAttachmentsCurrentNote)
     });
 
     this.attachmentCollector = params.attachmentCollector;

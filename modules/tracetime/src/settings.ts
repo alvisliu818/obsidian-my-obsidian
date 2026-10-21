@@ -27,8 +27,12 @@ function parseNonNegativeInt(value: string, fallback: number): number {
 }
 
 export class TraceTimeSettingTab extends PluginSettingTab {
-	constructor(app: App, private plugin: TraceTimePlugin) {
+	// 基类的 plugin 是 public Plugin；这里收窄为具体插件类型（新 typings 下
+	// 参数属性 private 会与基类 public 冲突，TS2415）
+	plugin: TraceTimePlugin;
+	constructor(app: App, plugin: TraceTimePlugin) {
 		super(app, plugin);
+		this.plugin = plugin;
 	}
 
 	display(): void {

@@ -34,31 +34,8 @@ declare module '@codemirror/search' {
 }
 
 /**
- * Same minimal surface for the `cm-bundle:` copy: the external code editor
- * mounts its OWN CodeMirror (cm-bundle namespace, see esbuild.mjs), because
- * the shared instance's StreamLanguage highlighting silently produced no
- * tokens (the 报告: 代码文件没有语法高亮). The API is identical, only the
- * module specifier differs.
+ * The `cm-bundle:` copy (the external code editor mounts its OWN CodeMirror —
+ * see esbuild.mjs — because the shared instance's StreamLanguage highlighting
+ * silently produced no tokens: 报告: 代码文件没有语法高亮) is typed by
+ * src/cm-bundle.d.ts at the repo root, which re-exports the real packages.
  */
-declare module 'cm-bundle:@codemirror/search' {
-  import type { Extension } from '@codemirror/state';
-  /** Panel + keymap for the search box (Ctrl+F). */
-  export function search(config?: {
-    top?: boolean;
-    caseSensitive?: boolean;
-    literal?: boolean;
-    regexp?: boolean;
-    wholeWord?: boolean;
-  }): Extension;
-  /** Key bindings for the search panel. */
-  export const searchKeymap: readonly unknown[];
-  /** Highlight every occurrence of the selection. */
-  export function highlightSelectionMatches(config?: {
-    caseSensitive?: boolean;
-    literal?: boolean;
-    regexp?: boolean;
-    wholeWord?: boolean;
-    minMatches?: number;
-    maxMatches?: number;
-  }): Extension;
-}

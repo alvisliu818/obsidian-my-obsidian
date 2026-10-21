@@ -235,7 +235,7 @@ export class AttachmentCollector {
           context: { isAutomaticRun: true },
           note
         }),
-      operationName: t(($) => $.menuItems.collectAttachmentsInFile),
+      operationName: t(($: any) => $.menuItems.collectAttachmentsInFile),
       timeoutInMilliseconds: this.pluginSettingsComponent.settings.getTimeoutInMilliseconds()
     });
   }
@@ -248,7 +248,7 @@ export class AttachmentCollector {
           [this.app.vault.getRoot()],
           abortSignal
         ),
-      operationName: t(($) => $.commands.collectAttachmentsEntireVault),
+      operationName: t(($: any) => $.commands.collectAttachmentsEntireVault),
       timeoutInMilliseconds: this.pluginSettingsComponent.settings.getTimeoutInMilliseconds()
     });
   }
@@ -257,7 +257,7 @@ export class AttachmentCollector {
     addToQueue({
       abortSignal: this.abortSignalComponent.abortSignal,
       operationFunction: (abortSignal) => this.collectAttachmentsInAbstractFilesImpl(abstractFiles, abortSignal),
-      operationName: t(($) => $.menuItems.collectAttachmentsInFile),
+      operationName: t(($: any) => $.menuItems.collectAttachmentsInFile),
       timeoutInMilliseconds: this.pluginSettingsComponent.settings.getTimeoutInMilliseconds()
     });
   }
@@ -273,7 +273,7 @@ export class AttachmentCollector {
     await addToQueueAndWait({
       abortSignal: this.abortSignalComponent.abortSignal,
       operationFunction: (abortSignal) => this.collectAttachmentsInAbstractFilesImpl(abstractFiles, abortSignal),
-      operationName: t(($) => $.menuItems.collectAttachmentsInFile),
+      operationName: t(($: any) => $.menuItems.collectAttachmentsInFile),
       timeoutInMilliseconds: this.pluginSettingsComponent.settings.getTimeoutInMilliseconds()
     });
   }
@@ -288,7 +288,7 @@ export class AttachmentCollector {
    */
   private buildHigherPriorityNotesNoticeMessage(attachmentPath: string, notePaths: readonly string[]): Promise<DocumentFragment> {
     return createFragmentAsync(async (f) => {
-      f.appendText(t(($) => $.notice.attachmentReferencedByHigherPriorityNotes.part1));
+      f.appendText(t(($: any) => $.notice.attachmentReferencedByHigherPriorityNotes.part1));
       f.appendText(' ');
       f.append(
         await renderInternalLink({
@@ -297,7 +297,7 @@ export class AttachmentCollector {
         })
       );
       f.appendText(' ');
-      f.appendText(t(($) => $.notice.attachmentReferencedByHigherPriorityNotes.part2));
+      f.appendText(t(($: any) => $.notice.attachmentReferencedByHigherPriorityNotes.part2));
       f.append(
         // The class carries no styling; it is how an integration test addresses the list.
         await createElAsync('ul', { cls: 'custom-attachment-location-higher-priority-notes-list' }, async (ul) => {
@@ -334,18 +334,18 @@ export class AttachmentCollector {
   private buildNothingToCollectNoticeMessage(notePath: string): DocumentFragment {
     const settings = this.pluginSettingsComponent.settings;
     return createFragment((f) => {
-      f.appendText(t(($) => $.notice.nothingToCollect.part1, { noteFilePath: notePath }));
+      f.appendText(t(($: any) => $.notice.nothingToCollect.part1, { noteFilePath: notePath }));
 
       if (!settings.shouldRenameCollectedAttachments || settings.collectedAttachmentFileName) {
         return;
       }
 
       f.createEl('br');
-      f.appendText(t(($) => $.notice.nothingToCollect.part2));
+      f.appendText(t(($: any) => $.notice.nothingToCollect.part2));
       f.appendText(' ');
-      appendCodeBlock(f, t(($) => $.pluginSettingsTab.collectedAttachmentFileName.name));
+      appendCodeBlock(f, t(($: any) => $.pluginSettingsTab.collectedAttachmentFileName.name));
       f.appendText(' ');
-      f.appendText(t(($) => $.notice.nothingToCollect.part3));
+      f.appendText(t(($: any) => $.notice.nothingToCollect.part3));
     });
   }
 
@@ -576,7 +576,7 @@ export class AttachmentCollector {
                     `Skipping collecting attachment ${result.oldAttachmentPath} as it belongs to the attachment unit folder ${result.unitFolderPath}`
                       + ` and is referenced by multiple notes.\n${backlinksString}`
                   );
-                  pluginNoticeComponent.showNotice(t(($) => $.notice.attachmentUnitFolderUsedByMultipleNotes, {
+                  pluginNoticeComponent.showNotice(t(($: any) => $.notice.attachmentUnitFolderUsedByMultipleNotes, {
                     attachmentPath: result.oldAttachmentPath,
                     unitFolderPath: result.unitFolderPath
                   }));
@@ -836,16 +836,16 @@ export class AttachmentCollector {
     const singleFile: null | TFile = abstractFiles.length === 1 && isFile(abstractFiles[0]) ? abstractFiles[0] : null;
 
     if (singleFile && this.handedOverSettingsComponent.isPathIgnored(singleFile.path)) {
-      this.pluginNoticeComponent.showNotice(t(($) => $.notice.notePathIsIgnored));
+      this.pluginNoticeComponent.showNotice(t(($: any) => $.notice.notePathIsIgnored));
       console.warn(`Cannot collect attachments in the note as note path is ignored: ${singleFile.path}.`);
       return;
     }
 
     const canCollectAttachments = !!singleFile || (await confirm({
       app: this.app,
-      cancelButtonText: t(($) => $.obsidianDevUtils.buttons.cancel),
+      cancelButtonText: t(($: any) => $.obsidianDevUtils.buttons.cancel),
       message: createFragment((f) => {
-        f.appendText(t(($) => $.attachmentCollector.confirm.part1));
+        f.appendText(t(($: any) => $.attachmentCollector.confirm.part1));
         f.createEl('br');
         f.createEl('ul', {}, (ul) => {
           for (const abstractFile of abstractFiles) {
@@ -855,13 +855,13 @@ export class AttachmentCollector {
           }
         });
         f.createEl('br');
-        f.appendText(t(($) => $.attachmentCollector.confirm.part2));
+        f.appendText(t(($: any) => $.attachmentCollector.confirm.part2));
       }),
-      okButtonText: t(($) => $.obsidianDevUtils.buttons.ok),
+      okButtonText: t(($: any) => $.obsidianDevUtils.buttons.ok),
       title: createFragment((f) => {
         setIcon(f.createSpan(), 'lucide-alert-triangle');
         f.appendText(' ');
-        f.appendText(t(($) => $.menuItems.collectAttachmentsInFiles));
+        f.appendText(t(($: any) => $.menuItems.collectAttachmentsInFiles));
       })
     }));
 
@@ -896,7 +896,7 @@ export class AttachmentCollector {
 
     await loop({
       abortSignal: combinedAbortSignal,
-      buildNoticeMessage: ({ item, iterationString }) => t(($) => $.attachmentCollector.progressBar.message, { iterationString, noteFilePath: item.path }),
+      buildNoticeMessage: ({ item, iterationString }) => t(($: any) => $.attachmentCollector.progressBar.message, { iterationString, noteFilePath: item.path }),
       items: noteFiles,
       pluginNoticeComponent: this.pluginNoticeComponent,
       processItem: async (noteFile) => {
@@ -915,7 +915,7 @@ export class AttachmentCollector {
           abortController.abort();
         }
       },
-      progressBarTitle: `${this.pluginName}: ${t(($) => $.attachmentCollector.progressBar.title)}`,
+      progressBarTitle: `${this.pluginName}: ${t(($: any) => $.attachmentCollector.progressBar.title)}`,
       shouldContinueOnError: true,
       shouldShowProgressBar: true
     });
@@ -1131,7 +1131,7 @@ export class AttachmentCollector {
       return noop;
     }
 
-    const notice = this.pluginNoticeComponent.showNotice(t(($) => $.notice.collectingAttachments, { noteFilePath: notePath }), {
+    const notice = this.pluginNoticeComponent.showNotice(t(($: any) => $.notice.collectingAttachments, { noteFilePath: notePath }), {
       isPermanent: true
     });
     return () => {
@@ -1159,7 +1159,7 @@ export class AttachmentCollector {
       console.warn(
         `Skipping collecting attachment ${params.attachmentPath} as it is referenced by a raw path (not an indexed link) in ${noteFile.path}.`
       );
-      this.pluginNoticeComponent.showNotice(t(($) => $.notice.attachmentReferencedByRawPath, {
+      this.pluginNoticeComponent.showNotice(t(($: any) => $.notice.attachmentReferencedByRawPath, {
         attachmentPath: params.attachmentPath,
         noteFilePath: noteFile.path
       }));

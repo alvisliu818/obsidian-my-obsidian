@@ -20,11 +20,11 @@ export class DeleteUnusedAttachmentsInFileCommandHandler extends AbstractFileCom
 
   public constructor(params: DeleteUnusedAttachmentsInFileCommandHandlerConstructorParams) {
     super({
-      fileMenuItemName: t(($) => $.menuItems.deleteUnusedAttachmentsInFile),
-      filesMenuItemName: t(($) => $.menuItems.deleteUnusedAttachmentsInFiles),
+      fileMenuItemName: t(($: any) => $.menuItems.deleteUnusedAttachmentsInFile),
+      filesMenuItemName: t(($: any) => $.menuItems.deleteUnusedAttachmentsInFiles),
       icon: 'trash-2',
       id: 'delete-unused-attachments-in-file',
-      name: t(($) => $.commands.deleteUnusedAttachmentsCurrentNote)
+      name: t(($: any) => $.commands.deleteUnusedAttachmentsCurrentNote)
     });
 
     this.pluginSettingsComponent = params.pluginSettingsComponent;

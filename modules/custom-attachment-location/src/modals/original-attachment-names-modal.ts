@@ -78,27 +78,27 @@ class OriginalAttachmentNamesModal extends ModalBase<undefined> {
   }
 
   public override onOpen(): void {
-    this.titleEl.setText(t(($) => $.originalAttachmentNames.showModal.title));
+    this.titleEl.setText(t(($: any) => $.originalAttachmentNames.showModal.title));
     this.contentEl.append(this.totalsEl);
 
     const toolbarEl = this.contentEl.createDiv('original-attachment-names-toolbar');
     const filterComponent = new TextComponent(toolbarEl);
-    filterComponent.setPlaceholder(t(($) => $.originalAttachmentNames.showModal.filterPlaceholder));
+    filterComponent.setPlaceholder(t(($: any) => $.originalAttachmentNames.showModal.filterPlaceholder));
     filterComponent.onChange((value) => {
       this.filter = value;
       this.render();
     });
 
     new ButtonComponent(toolbarEl)
-      .setButtonText(t(($) => $.originalAttachmentNames.showModal.copyAsCsv))
+      .setButtonText(t(($: any) => $.originalAttachmentNames.showModal.copyAsCsv))
       .onClick(convertAsyncToSync(async () => {
         const records = this.getShownRecords();
         await this.contentEl.win.navigator.clipboard.writeText(formatOriginalAttachmentNamesAsCsv(records));
-        new Notice(t(($) => $.originalAttachmentNames.showModal.copiedNotice, { count: records.length }));
+        new Notice(t(($: any) => $.originalAttachmentNames.showModal.copiedNotice, { count: records.length }));
       }));
 
     new ButtonComponent(toolbarEl)
-      .setButtonText(t(($) => $.originalAttachmentNames.showModal.forgetSelected))
+      .setButtonText(t(($: any) => $.originalAttachmentNames.showModal.forgetSelected))
       .onClick(() => {
         this.originalAttachmentNamesComponent.forget([...this.selectedPaths]);
         this.selectedPaths.clear();
@@ -106,7 +106,7 @@ class OriginalAttachmentNamesModal extends ModalBase<undefined> {
       });
 
     new ButtonComponent(toolbarEl)
-      .setButtonText(t(($) => $.originalAttachmentNames.showModal.useCurrentNameForSelected))
+      .setButtonText(t(($: any) => $.originalAttachmentNames.showModal.useCurrentNameForSelected))
       .onClick(() => {
         useCurrentNamesAsOriginals(this.originalAttachmentNamesComponent, this.app, [...this.selectedPaths]);
         this.selectedPaths.clear();
@@ -130,20 +130,20 @@ class OriginalAttachmentNamesModal extends ModalBase<undefined> {
       }
     }
 
-    this.totalsEl.setText(t(($) => $.originalAttachmentNames.showModal.totals, {
+    this.totalsEl.setText(t(($: any) => $.originalAttachmentNames.showModal.totals, {
       count: records.length,
       missingCount: records.filter((record) => record.isMissing).length
     }));
 
     this.listEl.empty();
     if (records.length === 0) {
-      this.listEl.createEl('p', { text: t(($) => $.originalAttachmentNames.showModal.empty) });
+      this.listEl.createEl('p', { text: t(($: any) => $.originalAttachmentNames.showModal.empty) });
       return;
     }
 
     const shownRecords = records.filter((record) => isOriginalAttachmentNameRecordMatch(record, this.filter));
     if (shownRecords.length === 0) {
-      this.listEl.createEl('p', { text: t(($) => $.originalAttachmentNames.showModal.noMatches) });
+      this.listEl.createEl('p', { text: t(($: any) => $.originalAttachmentNames.showModal.noMatches) });
       return;
     }
 
@@ -185,11 +185,11 @@ class OriginalAttachmentNamesModal extends ModalBase<undefined> {
     });
 
     new ButtonComponent(editorEl)
-      .setButtonText(t(($) => $.originalAttachmentNames.showModal.save))
+      .setButtonText(t(($: any) => $.originalAttachmentNames.showModal.save))
       .setCta()
       .onClick(save);
     new ButtonComponent(editorEl)
-      .setButtonText(t(($) => $.obsidianDevUtils.buttons.cancel))
+      .setButtonText(t(($: any) => $.obsidianDevUtils.buttons.cancel))
       .onClick(() => {
         this.editingPath = null;
         this.render();
@@ -223,16 +223,16 @@ class OriginalAttachmentNamesModal extends ModalBase<undefined> {
 
     if (record.isMissing) {
       textEl.createSpan({
-        attr: { 'aria-label': t(($) => $.originalAttachmentNames.showModal.missingTooltip) },
+        attr: { 'aria-label': t(($: any) => $.originalAttachmentNames.showModal.missingTooltip) },
         cls: 'original-attachment-names-missing',
-        text: t(($) => $.originalAttachmentNames.showModal.missingBadge)
+        text: t(($: any) => $.originalAttachmentNames.showModal.missingBadge)
       });
     }
 
     const actionsEl = rowEl.createDiv('original-attachment-names-actions');
     new ExtraButtonComponent(actionsEl)
       .setIcon('pencil')
-      .setTooltip(t(($) => $.originalAttachmentNames.showModal.edit))
+      .setTooltip(t(($: any) => $.originalAttachmentNames.showModal.edit))
       .onClick(() => {
         this.editingPath = record.path;
         this.render();
@@ -240,7 +240,7 @@ class OriginalAttachmentNamesModal extends ModalBase<undefined> {
 
     const useCurrentNameButton = new ExtraButtonComponent(actionsEl)
       .setIcon('rotate-ccw')
-      .setTooltip(t(($) => $.originalAttachmentNames.showModal.useCurrentName))
+      .setTooltip(t(($: any) => $.originalAttachmentNames.showModal.useCurrentName))
       .onClick(() => {
         useCurrentNamesAsOriginals(this.originalAttachmentNamesComponent, this.app, [record.path]);
         this.render();
@@ -249,7 +249,7 @@ class OriginalAttachmentNamesModal extends ModalBase<undefined> {
 
     new ExtraButtonComponent(actionsEl)
       .setIcon('trash')
-      .setTooltip(t(($) => $.originalAttachmentNames.showModal.forget))
+      .setTooltip(t(($: any) => $.originalAttachmentNames.showModal.forget))
       .onClick(() => {
         this.originalAttachmentNamesComponent.forget([record.path]);
         this.render();

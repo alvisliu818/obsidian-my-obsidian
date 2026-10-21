@@ -78,76 +78,76 @@ function buildReleaseNotes(): ReleaseNotes {
   return {
     /* eslint-disable perfectionist/sort-objects -- Need to keep versions in order. */
     '9.0.0': createFragment((f) => {
-      f.appendText(t(($) => $.pluginSettingsManager.customToken.deprecated.part1));
+      f.appendText(t(($: any) => $.pluginSettingsManager.customToken.deprecated.part1));
       f.createEl('a', {
         href: 'https://github.com/mnaoumov/obsidian-custom-attachment-location?tab=readme-ov-file#custom-tokens',
-        text: t(($) => $.pluginSettingsManager.customToken.deprecated.part2)
+        text: t(($: any) => $.pluginSettingsManager.customToken.deprecated.part2)
       });
       f.appendText(' ');
-      f.appendText(t(($) => $.pluginSettingsManager.customToken.deprecated.part3));
+      f.appendText(t(($: any) => $.pluginSettingsManager.customToken.deprecated.part3));
       f.createEl('br');
-      f.appendText(t(($) => $.pluginSettingsManager.legacyRenameAttachmentsToLowerCase.part1));
+      f.appendText(t(($: any) => $.pluginSettingsManager.legacyRenameAttachmentsToLowerCase.part1));
       f.appendText(' ');
-      appendCodeBlock(f, t(($) => $.pluginSettingsTab.renameAttachmentsToLowerCase));
+      appendCodeBlock(f, t(($: any) => $.pluginSettingsTab.renameAttachmentsToLowerCase));
       f.appendText(' ');
-      f.appendText(t(($) => $.pluginSettingsManager.legacyRenameAttachmentsToLowerCase.part2));
+      f.appendText(t(($: any) => $.pluginSettingsManager.legacyRenameAttachmentsToLowerCase.part2));
       f.appendText(' ');
       appendCodeBlock(f, 'lower');
       f.appendText(' ');
-      f.appendText(t(($) => $.pluginSettingsManager.legacyRenameAttachmentsToLowerCase.part3));
+      f.appendText(t(($: any) => $.pluginSettingsManager.legacyRenameAttachmentsToLowerCase.part3));
       f.appendText(' ');
       f.createEl('a', {
         href: 'https://github.com/mnaoumov/obsidian-custom-attachment-location?tab=readme-ov-file#tokens',
-        text: t(($) => $.pluginSettingsManager.legacyRenameAttachmentsToLowerCase.part4)
+        text: t(($: any) => $.pluginSettingsManager.legacyRenameAttachmentsToLowerCase.part4)
       });
       f.appendText(' ');
-      f.appendText(t(($) => $.pluginSettingsManager.legacyRenameAttachmentsToLowerCase.part5));
+      f.appendText(t(($: any) => $.pluginSettingsManager.legacyRenameAttachmentsToLowerCase.part5));
     }),
     '9.2.0': createFragment((f) => {
-      f.appendText(t(($) => $.pluginSettingsManager.markdownUrlFormat.deprecated.part1));
-      appendCodeBlock(f, t(($) => $.pluginSettingsTab.markdownUrlFormat.name));
-      f.appendText(t(($) => $.pluginSettingsManager.markdownUrlFormat.deprecated.part2));
+      f.appendText(t(($: any) => $.pluginSettingsManager.markdownUrlFormat.deprecated.part1));
+      appendCodeBlock(f, t(($: any) => $.pluginSettingsTab.markdownUrlFormat.name));
+      f.appendText(t(($: any) => $.pluginSettingsManager.markdownUrlFormat.deprecated.part2));
       f.createEl('a', {
         href: 'https://github.com/mnaoumov/obsidian-custom-attachment-location?tab=readme-ov-file#markdown-url-format',
-        text: t(($) => $.pluginSettingsManager.markdownUrlFormat.deprecated.part3)
+        text: t(($: any) => $.pluginSettingsManager.markdownUrlFormat.deprecated.part3)
       });
       f.appendText(' ');
-      f.appendText(t(($) => $.pluginSettingsManager.markdownUrlFormat.deprecated.part4));
+      f.appendText(t(($: any) => $.pluginSettingsManager.markdownUrlFormat.deprecated.part4));
       f.appendText(' ');
-      f.appendText(t(($) => $.pluginSettingsManager.markdownUrlFormat.deprecated.part5));
+      f.appendText(t(($: any) => $.pluginSettingsManager.markdownUrlFormat.deprecated.part5));
     }),
     '9.16.0': createFragment((f) => {
-      f.appendText(t(($) => $.pluginSettingsManager.specialCharacters.part1));
-      appendCodeBlock(f, t(($) => $.pluginSettingsTab.specialCharacters.name));
-      f.appendText(t(($) => $.pluginSettingsManager.specialCharacters.part2));
+      f.appendText(t(($: any) => $.pluginSettingsManager.specialCharacters.part1));
+      appendCodeBlock(f, t(($: any) => $.pluginSettingsTab.specialCharacters.name));
+      f.appendText(t(($: any) => $.pluginSettingsManager.specialCharacters.part2));
     }),
     '10.0.0': createFragment((f) => {
-      f.appendText(t(($) => $.releaseNotes.versions['10.0.0'].part1));
+      f.appendText(t(($: any) => $.releaseNotes.versions['10.0.0'].part1));
       f.appendText(' ');
       f.createEl('a', {
         href: 'https://github.com/mnaoumov/obsidian-custom-attachment-location?tab=readme-ov-file#tokens',
-        text: t(($) => $.releaseNotes.versions['10.0.0'].part2)
+        text: t(($: any) => $.releaseNotes.versions['10.0.0'].part2)
       });
       f.appendText(' ');
-      f.appendText(t(($) => $.releaseNotes.versions['10.0.0'].part3));
+      f.appendText(t(($: any) => $.releaseNotes.versions['10.0.0'].part3));
     }),
     '11.0.0': createFragment((f) => {
-      f.appendText(t(($) => $.releaseNotes.versions['11.0.0'].part1));
+      f.appendText(t(($: any) => $.releaseNotes.versions['11.0.0'].part1));
       f.appendText(' ');
       appendCodeBlock(f, 'context.attachmentFileContent');
       f.appendText(' ');
-      f.appendText(t(($) => $.releaseNotes.versions['11.0.0'].part2));
+      f.appendText(t(($: any) => $.releaseNotes.versions['11.0.0'].part2));
       f.appendText(' ');
       appendCodeBlock(f, 'await context.getAttachmentFileContent()');
       f.appendText(' ');
-      f.appendText(t(($) => $.releaseNotes.versions['11.0.0'].part3));
+      f.appendText(t(($: any) => $.releaseNotes.versions['11.0.0'].part3));
       f.appendText(' ');
       f.createEl('a', {
         href: 'https://github.com/mnaoumov/obsidian-custom-attachment-location?tab=readme-ov-file#custom-tokens',
-        text: t(($) => $.releaseNotes.versions['11.0.0'].part4)
+        text: t(($: any) => $.releaseNotes.versions['11.0.0'].part4)
       });
       f.appendText(' ');
-      f.appendText(t(($) => $.releaseNotes.versions['11.0.0'].part5));
+      f.appendText(t(($: any) => $.releaseNotes.versions['11.0.0'].part5));
     })
     /* eslint-enable perfectionist/sort-objects -- Need to keep versions in order. */
   };
@@ -159,20 +159,20 @@ async function showVersionMismatchWarning(params: ShowVersionMismatchWarningPara
   await alert({
     app,
     message: createFragment((f) => {
-      f.appendText(t(($) => $.releaseNotes.versionMismatch.part1));
+      f.appendText(t(($: any) => $.releaseNotes.versionMismatch.part1));
       f.appendText(' ');
       appendCodeBlock(f, `${pluginDirectory}/data.json`);
       f.appendText(' ');
-      f.appendText(t(($) => $.releaseNotes.versionMismatch.part2));
+      f.appendText(t(($: any) => $.releaseNotes.versionMismatch.part2));
       f.appendText(' ');
       appendCodeBlock(f, storedVersion);
       f.appendText(', ');
-      f.appendText(t(($) => $.releaseNotes.versionMismatch.part3));
+      f.appendText(t(($: any) => $.releaseNotes.versionMismatch.part3));
       f.appendText(' ');
       appendCodeBlock(f, pluginVersion);
       f.appendText('. ');
-      f.appendText(t(($) => $.releaseNotes.versionMismatch.part4));
+      f.appendText(t(($: any) => $.releaseNotes.versionMismatch.part4));
     }),
-    title: t(($) => $.releaseNotes.versionMismatch.title, { pluginName })
+    title: t(($: any) => $.releaseNotes.versionMismatch.title, { pluginName })
   });
 }

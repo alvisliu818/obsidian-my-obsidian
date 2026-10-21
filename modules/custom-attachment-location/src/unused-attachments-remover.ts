@@ -181,7 +181,7 @@ export class UnusedAttachmentsRemover {
           abstractFiles: [this.app.vault.getRoot()],
           shouldScanOrphanAttachments: true
         }),
-      operationName: t(($) => $.commands.deleteUnusedAttachmentsEntireVault),
+      operationName: t(($: any) => $.commands.deleteUnusedAttachmentsEntireVault),
       timeoutInMilliseconds: this.pluginSettingsComponent.settings.getTimeoutInMilliseconds()
     });
   }
@@ -204,7 +204,7 @@ export class UnusedAttachmentsRemover {
            */
           shouldScanOrphanAttachments: false
         }),
-      operationName: t(($) => $.menuItems.deleteUnusedAttachmentsInFile),
+      operationName: t(($: any) => $.menuItems.deleteUnusedAttachmentsInFile),
       timeoutInMilliseconds: this.pluginSettingsComponent.settings.getTimeoutInMilliseconds()
     });
   }
@@ -452,11 +452,11 @@ export class UnusedAttachmentsRemover {
     if (noteFiles.length > 1) {
       await loop({
         abortSignal,
-        buildNoticeMessage: ({ item, iterationString }) => t(($) => $.deleteUnusedAttachments.progressBar.message, { iterationString, noteFilePath: item.path }),
+        buildNoticeMessage: ({ item, iterationString }) => t(($: any) => $.deleteUnusedAttachments.progressBar.message, { iterationString, noteFilePath: item.path }),
         items: noteFiles,
         pluginNoticeComponent: this.pluginNoticeComponent,
         processItem: scanNote,
-        progressBarTitle: `${this.pluginName}: ${t(($) => $.deleteUnusedAttachments.progressBar.title)}`,
+        progressBarTitle: `${this.pluginName}: ${t(($: any) => $.deleteUnusedAttachments.progressBar.title)}`,
         shouldContinueOnError: true,
         shouldShowProgressBar: true
       });
@@ -541,7 +541,7 @@ export class UnusedAttachmentsRemover {
       .sort((a, b) => a.path.localeCompare(b.path));
 
     if (attachmentsToDelete.length === 0 && unitFoldersToDelete.length === 0) {
-      this.pluginNoticeComponent.showNotice(t(($) => $.notice.noUnusedAttachments));
+      this.pluginNoticeComponent.showNotice(t(($: any) => $.notice.noUnusedAttachments));
       return;
     }
 
@@ -552,17 +552,17 @@ export class UnusedAttachmentsRemover {
      */
     const isConfirmed = await confirmMinimizable({
       app: this.app,
-      cancelButtonText: t(($) => $.obsidianDevUtils.buttons.cancel),
+      cancelButtonText: t(($: any) => $.obsidianDevUtils.buttons.cancel),
       message: await createFragmentAsync(async (f) => {
         if (attachmentsToDelete.length > 0) {
-          f.appendText(t(($) => $.deleteUnusedAttachments.confirm.part1));
+          f.appendText(t(($: any) => $.deleteUnusedAttachments.confirm.part1));
           f.createEl('br');
           /*
            * The COUNT, always, and before the list. Vault-wide this dialog can be asked to name
            * thousands of files, at which point an unbounded list is not a safety check — it is a wall
            * the user scrolls past. The number is the part they can actually weigh.
            */
-          f.createEl('strong', { text: t(($) => $.deleteUnusedAttachments.confirm.count, { count: attachmentsToDelete.length }) });
+          f.createEl('strong', { text: t(($: any) => $.deleteUnusedAttachments.confirm.count, { count: attachmentsToDelete.length }) });
           f.createEl('br');
           await appendPathList(this.app, f, attachmentsToDelete);
         }
@@ -574,21 +574,21 @@ export class UnusedAttachmentsRemover {
          * has to say plainly that a whole folder goes, and name it.
          */
         if (unitFoldersToDelete.length > 0) {
-          f.appendText(t(($) => $.deleteUnusedAttachments.confirm.partUnitFolders));
+          f.appendText(t(($: any) => $.deleteUnusedAttachments.confirm.partUnitFolders));
           f.createEl('br');
-          f.createEl('strong', { text: t(($) => $.deleteUnusedAttachments.confirm.unitFolderCount, { count: unitFoldersToDelete.length }) });
+          f.createEl('strong', { text: t(($: any) => $.deleteUnusedAttachments.confirm.unitFolderCount, { count: unitFoldersToDelete.length }) });
           f.createEl('br');
           await appendPathList(this.app, f, unitFoldersToDelete);
         }
 
         f.createEl('br');
-        f.appendText(t(($) => $.deleteUnusedAttachments.confirm.part2));
+        f.appendText(t(($: any) => $.deleteUnusedAttachments.confirm.part2));
       }),
-      okButtonText: t(($) => $.obsidianDevUtils.buttons.ok),
+      okButtonText: t(($: any) => $.obsidianDevUtils.buttons.ok),
       title: createFragment((f) => {
         setIcon(f.createSpan(), 'lucide-alert-triangle');
         f.appendText(' ');
-        f.appendText(t(($) => $.menuItems.deleteUnusedAttachmentsInFile));
+        f.appendText(t(($: any) => $.menuItems.deleteUnusedAttachmentsInFile));
       })
     });
 
@@ -836,11 +836,11 @@ export class UnusedAttachmentsRemover {
     if (params.shouldShowProgressBar && perFileCandidates.length > 1) {
       await loop({
         abortSignal,
-        buildNoticeMessage: ({ item, iterationString }) => t(($) => $.deleteUnusedAttachments.orphanProgressBar.message, { attachmentFilePath: item.path, iterationString }),
+        buildNoticeMessage: ({ item, iterationString }) => t(($: any) => $.deleteUnusedAttachments.orphanProgressBar.message, { attachmentFilePath: item.path, iterationString }),
         items: perFileCandidates,
         pluginNoticeComponent: this.pluginNoticeComponent,
         processItem: judgeCandidate,
-        progressBarTitle: `${this.pluginName}: ${t(($) => $.deleteUnusedAttachments.orphanProgressBar.title)}`,
+        progressBarTitle: `${this.pluginName}: ${t(($: any) => $.deleteUnusedAttachments.orphanProgressBar.title)}`,
         shouldContinueOnError: true,
         shouldShowProgressBar: true
       });
@@ -884,7 +884,7 @@ async function appendPathList(app: App, parentEl: DocumentFragment, abstractFile
   }
   if (abstractFiles.length > CONFIRM_LIST_LIMIT) {
     ul.createEl('li', {
-      text: t(($) => $.deleteUnusedAttachments.confirm.andMore, { count: abstractFiles.length - CONFIRM_LIST_LIMIT })
+      text: t(($: any) => $.deleteUnusedAttachments.confirm.andMore, { count: abstractFiles.length - CONFIRM_LIST_LIMIT })
     });
   }
 }

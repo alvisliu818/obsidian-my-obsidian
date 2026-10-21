@@ -70,7 +70,7 @@ class PreviewModal extends Modal {
 
     const fullFileName = `${this.params.context.attachmentFileName}.${this.params.context.attachmentFileExtension}`;
 
-    this.titleEl.setText(t(($) => $.promptWithPreviewModal.previewModal.title, { fullFileName }));
+    this.titleEl.setText(t(($: any) => $.promptWithPreviewModal.previewModal.title, { fullFileName }));
 
     const temporaryPath = `__temp${String(Date.now())}__${fullFileName}`;
     /*
@@ -131,13 +131,13 @@ class PromptWithPreviewModal extends Modal {
   private getHeading(): string {
     switch (this.context.templatePart) {
       case TemplatePart.FileName: {
-        return t(($) => $.promptWithPreviewModal.fileNameTitle);
+        return t(($: any) => $.promptWithPreviewModal.fileNameTitle);
       }
       case TemplatePart.Folder: {
-        return t(($) => $.promptWithPreviewModal.folderTitle);
+        return t(($: any) => $.promptWithPreviewModal.folderTitle);
       }
       default: {
-        return t(($) => $.promptWithPreviewModal.title);
+        return t(($: any) => $.promptWithPreviewModal.title);
       }
     }
   }
@@ -202,19 +202,19 @@ class PromptWithPreviewModal extends Modal {
     inputEl.addEventListener('focus', convertAsyncToSync(validate));
     invokeAsyncSafely(validate);
     const okButton = new ButtonComponent(this.contentEl);
-    okButton.setButtonText(t(($) => $.obsidianDevUtils.buttons.ok));
+    okButton.setButtonText(t(($: any) => $.obsidianDevUtils.buttons.ok));
     okButton.setCta();
     okButton.onClick((event) => {
       this.handleOk(event, textComponent);
     });
     okButton.setClass(CssClass.OkButton);
     const cancelButton = new ButtonComponent(this.contentEl);
-    cancelButton.setButtonText(t(($) => $.obsidianDevUtils.buttons.cancel));
+    cancelButton.setButtonText(t(($: any) => $.obsidianDevUtils.buttons.cancel));
     cancelButton.onClick(this.close.bind(this));
     cancelButton.setClass(CssClass.CancelButton);
 
     const previewButton = new ButtonComponent(this.contentEl);
-    previewButton.setButtonText(t(($) => $.buttons.previewAttachmentFile));
+    previewButton.setButtonText(t(($: any) => $.buttons.previewAttachmentFile));
     previewButton.onClick(this.preview.bind(this));
 
     const embeddableCreator = this.app.embedRegistry.embedByExtension[this.context.attachmentFileExtension];

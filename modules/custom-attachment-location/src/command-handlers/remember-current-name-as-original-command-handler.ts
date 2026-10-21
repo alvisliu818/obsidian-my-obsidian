@@ -26,11 +26,11 @@ export class RememberCurrentNameAsOriginalCommandHandler extends FileCommandHand
 
   public constructor(params: RememberCurrentNameAsOriginalCommandHandlerConstructorParams) {
     super({
-      fileMenuItemName: t(($) => $.menuItems.rememberCurrentNameAsOriginal),
-      filesMenuItemName: t(($) => $.menuItems.rememberCurrentNamesAsOriginals),
+      fileMenuItemName: t(($: any) => $.menuItems.rememberCurrentNameAsOriginal),
+      filesMenuItemName: t(($: any) => $.menuItems.rememberCurrentNamesAsOriginals),
       icon: 'bookmark-check',
       id: 'remember-current-name-as-original',
-      name: t(($) => $.commands.rememberCurrentNameAsOriginal)
+      name: t(($: any) => $.commands.rememberCurrentNameAsOriginal)
     });
     this.originalAttachmentNamesComponent = params.originalAttachmentNamesComponent;
     this.pluginNoticeComponent = params.pluginNoticeComponent;
@@ -49,7 +49,7 @@ export class RememberCurrentNameAsOriginalCommandHandler extends FileCommandHand
     for (const file of files) {
       this.originalAttachmentNamesComponent.set(file.path, file.name);
     }
-    this.pluginNoticeComponent.showNotice(t(($) => $.originalAttachmentNames.rememberedNotice, { count: files.length }));
+    this.pluginNoticeComponent.showNotice(t(($: any) => $.originalAttachmentNames.rememberedNotice, { count: files.length }));
   }
 
   protected override shouldAddToFileMenu(): boolean {

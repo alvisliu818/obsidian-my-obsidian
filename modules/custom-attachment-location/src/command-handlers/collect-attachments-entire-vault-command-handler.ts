@@ -15,7 +15,7 @@ export class CollectAttachmentsEntireVaultCommandHandler extends GlobalCommandHa
     super({
       icon: 'download',
       id: 'collect-attachments-entire-vault',
-      name: t(($) => $.commands.collectAttachmentsEntireVault)
+      name: t(($: any) => $.commands.collectAttachmentsEntireVault)
     });
     this.attachmentCollector = params.attachmentCollector;
   }

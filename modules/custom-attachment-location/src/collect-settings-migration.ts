@@ -134,27 +134,27 @@ type ApiMoveAttachmentToProperFolderUsedByMultipleNotesMode = NonNullable<Migrat
  */
 export const MIGRATABLE_SETTING_DESCRIPTORS: readonly MigratableSettingDescriptor[] = [
   {
-    getName: () => t(($) => $.pluginSettingsTab.collectAttachmentUsedByMultipleNotesMode.name),
+    getName: () => t(($: any) => $.pluginSettingsTab.collectAttachmentUsedByMultipleNotesMode.name),
     kind: MigratableSettingKind.CollectMode,
     propertyName: 'collectAttachmentUsedByMultipleNotesMode'
   },
   {
-    getName: () => t(($) => $.pluginSettingsTab.shouldCollectAttachmentsAutomatically.name),
+    getName: () => t(($: any) => $.pluginSettingsTab.shouldCollectAttachmentsAutomatically.name),
     kind: MigratableSettingKind.Boolean,
     propertyName: 'shouldCollectAttachmentsAutomatically'
   },
   {
-    getName: () => t(($) => $.pluginSettingsTab.moveAttachmentToProperFolderUsedByMultipleNotesMode.name),
+    getName: () => t(($: any) => $.pluginSettingsTab.moveAttachmentToProperFolderUsedByMultipleNotesMode.name),
     kind: MigratableSettingKind.MoveMode,
     propertyName: 'moveAttachmentToProperFolderUsedByMultipleNotesMode'
   },
   {
-    getName: () => t(($) => $.pluginSettingsTab.attachmentUnitFolderPaths.name),
+    getName: () => t(($: any) => $.pluginSettingsTab.attachmentUnitFolderPaths.name),
     kind: MigratableSettingKind.StringList,
     propertyName: 'attachmentUnitFolderPaths'
   },
   {
-    getName: () => t(($) => $.pluginSettingsTab.excludePathsFromAttachmentCollecting.name),
+    getName: () => t(($: any) => $.pluginSettingsTab.excludePathsFromAttachmentCollecting.name),
     kind: MigratableSettingKind.StringList,
     propertyName: 'excludePathsFromAttachmentCollecting'
   }
@@ -248,7 +248,7 @@ export function buildSettingsMigrationRows(params: BuildSettingsMigrationRowsPar
  */
 export function formatMigratableSettingValue(kind: MigratableSettingKind, value: MigratableSettingValue): string {
   if (typeof value === 'boolean') {
-    return t(($) => value ? $.settingsMigrationModal.enabled : $.settingsMigrationModal.disabled);
+    return t(($: any) => value ? $.settingsMigrationModal.enabled : $.settingsMigrationModal.disabled);
   }
 
   if (typeof value === 'string') {
@@ -257,7 +257,7 @@ export function formatMigratableSettingValue(kind: MigratableSettingKind, value:
       : getCollectModeLabel(ensureCollectMode('collectAttachmentUsedByMultipleNotesMode', value));
   }
 
-  return value.length === 0 ? t(($) => $.settingsMigrationModal.emptyList) : value.join(', ');
+  return value.length === 0 ? t(($: any) => $.settingsMigrationModal.emptyList) : value.join(', ');
 }
 
 /**
@@ -279,19 +279,19 @@ export function formatStringListForEditing(value: MigratableSettingValue): strin
 export function getCollectModeLabel(mode: CollectAttachmentUsedByMultipleNotesMode): string {
   switch (mode) {
     case CollectAttachmentUsedByMultipleNotesMode.Cancel: {
-      return t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.cancel.displayText);
+      return t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.cancel.displayText);
     }
     case CollectAttachmentUsedByMultipleNotesMode.Copy: {
-      return t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.copy.displayText);
+      return t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.copy.displayText);
     }
     case CollectAttachmentUsedByMultipleNotesMode.Move: {
-      return t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.move.displayText);
+      return t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.move.displayText);
     }
     case CollectAttachmentUsedByMultipleNotesMode.Prompt: {
-      return t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.prompt.displayText);
+      return t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.prompt.displayText);
     }
     case CollectAttachmentUsedByMultipleNotesMode.Skip: {
-      return t(($) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.skip.displayText);
+      return t(($: any) => $.pluginSettings.collectAttachmentUsedByMultipleNotesMode.skip.displayText);
     }
     default: {
       return assertNever(mode);
@@ -308,16 +308,16 @@ export function getCollectModeLabel(mode: CollectAttachmentUsedByMultipleNotesMo
 export function getMoveModeLabel(mode: MoveAttachmentToProperFolderUsedByMultipleNotesMode): string {
   switch (mode) {
     case MoveAttachmentToProperFolderUsedByMultipleNotesMode.Cancel: {
-      return t(($) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.cancel.displayText);
+      return t(($: any) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.cancel.displayText);
     }
     case MoveAttachmentToProperFolderUsedByMultipleNotesMode.CopyAll: {
-      return t(($) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.copyAll.displayText);
+      return t(($: any) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.copyAll.displayText);
     }
     case MoveAttachmentToProperFolderUsedByMultipleNotesMode.Prompt: {
-      return t(($) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.prompt.displayText);
+      return t(($: any) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.prompt.displayText);
     }
     case MoveAttachmentToProperFolderUsedByMultipleNotesMode.Skip: {
-      return t(($) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.skip.displayText);
+      return t(($: any) => $.pluginSettings.moveAttachmentToProperFolderUsedByMultipleNotesMode.skip.displayText);
     }
     default: {
       return assertNever(mode);

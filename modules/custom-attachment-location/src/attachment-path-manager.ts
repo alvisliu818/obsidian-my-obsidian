@@ -461,11 +461,11 @@ export class AttachmentPathManager {
     }
     if (validationMessage) {
       this.pluginNoticeComponent.showNotice(createFragment((f) => {
-        f.appendText(t(($) => $.notice.generatedAttachmentFileNameIsInvalid.part1, { path, validationMessage }));
+        f.appendText(t(($: any) => $.notice.generatedAttachmentFileNameIsInvalid.part1, { path, validationMessage }));
         f.appendText(' ');
-        appendCodeBlock(f, t(($) => $.pluginSettingsTab.generatedAttachmentFileName.name));
+        appendCodeBlock(f, t(($: any) => $.pluginSettingsTab.generatedAttachmentFileName.name));
         f.appendText(' ');
-        f.appendText(t(($) => $.notice.generatedAttachmentFileNameIsInvalid.part2));
+        f.appendText(t(($: any) => $.notice.generatedAttachmentFileNameIsInvalid.part2));
       }));
       const errorMessage = `Generated attachment file name "${path}" is invalid.\n${validationMessage}\nCheck your 'Generated attachment file name' setting.`;
       console.error(errorMessage, substitutions);
@@ -781,7 +781,7 @@ export class AttachmentPathManager {
 
       return resolvedPath;
     } catch (error) {
-      this.pluginNoticeComponent.showNotice(t(($) => $.notice.couldNotResolveTemplatePath, { template }));
+      this.pluginNoticeComponent.showNotice(t(($: any) => $.notice.couldNotResolveTemplatePath, { template }));
       console.error('Could not resolve template path', {
         substitutions,
         template

@@ -19,10 +19,9 @@
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
     "paths": {
-      "cm-bundle:*": ["./node_modules/*"],
       "src/*": ["modules/obsidian-git/src/*"],
       "@/*": ["modules/music-player/src/*"],
-      "buffer-polyfill": ["modules/music-player/node_modules/buffer"],
+      "cm-bundle:@codemirror/legacy-modes/mode/*": [".yarn/unplugged/@codemirror-legacy-modes-npm-6.5.5-23395d6ece/node_modules/@codemirror/legacy-modes/mode/*"],
       "@core/*": ["modules/scrolling/src/core/*"],
       "@features/*": ["modules/scrolling/src/features/*"],
       "@typings/*": ["modules/scrolling/src/typings/*"]

@@ -2,8 +2,7 @@
 	"compilerOptions": {
 		"baseUrl": "src",
 		"paths": {
-			"@/*": ["*"],
-			"buffer-polyfill": ["../node_modules/buffer"]
+			"@/*": ["*"]
 		},
 		"inlineSourceMap": true,
 		"inlineSources": true,

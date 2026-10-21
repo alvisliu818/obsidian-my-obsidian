@@ -43,10 +43,10 @@ export class GoToAttachmentFolderCommandHandler extends FileCommandHandler {
 
   public constructor(params: GoToAttachmentFolderCommandHandlerConstructorParams) {
     super({
-      fileMenuItemName: t(($) => $.menuItems.goToAttachmentFolder),
+      fileMenuItemName: t(($: any) => $.menuItems.goToAttachmentFolder),
       icon: 'folder-open',
       id: 'go-to-attachment-folder',
-      name: t(($) => $.commands.goToAttachmentFolder)
+      name: t(($: any) => $.commands.goToAttachmentFolder)
     });
 
     this.app = params.app;
@@ -77,7 +77,7 @@ export class GoToAttachmentFolderCommandHandler extends FileCommandHandler {
      * folder to go to.
      */
     if (attachmentFolderPath.includes(DUMMY_PATH)) {
-      this.pluginNoticeComponent.showNotice(t(($) => $.notice.attachmentFolderDependsOnAttachment, { notePath: file.path }));
+      this.pluginNoticeComponent.showNotice(t(($: any) => $.notice.attachmentFolderDependsOnAttachment, { notePath: file.path }));
       return;
     }
 
@@ -97,7 +97,7 @@ export class GoToAttachmentFolderCommandHandler extends FileCommandHandler {
   private reveal(abstractFile: TAbstractFile): void {
     const fileExplorer = this.app.internalPlugins.getEnabledPluginById(InternalPluginName.FileExplorer);
     if (!fileExplorer) {
-      this.pluginNoticeComponent.showNotice(t(($) => $.notice.fileExplorerDisabled, { path: abstractFile.path }));
+      this.pluginNoticeComponent.showNotice(t(($: any) => $.notice.fileExplorerDisabled, { path: abstractFile.path }));
       return;
     }
 
@@ -110,15 +110,15 @@ export class GoToAttachmentFolderCommandHandler extends FileCommandHandler {
    */
   private showCreateFolderNotice(attachmentFolderPath: string): void {
     const button = new ButtonComponent(createDiv());
-    button.setButtonText(t(($) => $.buttons.create));
+    button.setButtonText(t(($: any) => $.buttons.create));
 
     const notice = this.pluginNoticeComponent.showNotice(
       createFragment((f) => {
-        f.appendText(t(($) => $.goToAttachmentFolder.doesNotExist.part1));
+        f.appendText(t(($: any) => $.goToAttachmentFolder.doesNotExist.part1));
         f.appendText(' ');
         appendCodeBlock(f, attachmentFolderPath);
         f.appendText(' ');
-        f.appendText(t(($) => $.goToAttachmentFolder.doesNotExist.part2));
+        f.appendText(t(($: any) => $.goToAttachmentFolder.doesNotExist.part2));
         f.createEl('br');
         f.append(button.buttonEl);
       }),
