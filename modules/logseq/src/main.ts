@@ -75,6 +75,7 @@ import type { MountNode, ScanEntry } from './features/mountFilter';
 import { openJournal } from './features/dailyNote';
 import { BackupManager } from './core/backup';
 import { registerNativeImgFix } from './features/nativeImgFix';
+import { registerParenMath } from './features/parenMath';
 import { applyMarkedTabIcons, markLeafTabIcon } from './features/tabIcon';
 import { ExtensionMarketModal } from './extensions/marketModal';
 import { restoreAllExtensions, registerExtensionConsumer, search as extSearch, installExtension, uninstallExtension, toggleExtension, reinstallExtension, getInstalledExtensions } from './extensions/extensionManager';
@@ -235,6 +236,8 @@ export default class LogseqEditorPlugin extends Plugin {
 
     // Native-view HTML img 相对 src 锚定（防库内同名劫持，见 features/nativeImgFix）
     registerNativeImgFix(this);
+    // `\(…\)` 内联公式：原生编辑器与大纲编辑器（编辑态）+ 所有阅读渲染
+    registerParenMath(this);
 
     // Vault-wide ((block-id)) index
     this.blockIndex = new BlockIndex(this.app);

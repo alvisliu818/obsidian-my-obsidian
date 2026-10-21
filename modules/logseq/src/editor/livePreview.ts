@@ -393,7 +393,8 @@ function mathBody(state: EditorState, node: { from: number; to: number; name: st
   return { body: text.slice(dLen, Math.max(dLen, text.length - dLen)), display: node.name === 'DollarDisplayMath' };
 }
 
-class MathPreviewWidget extends WidgetType {
+/** Shared by the `$…$` widgets below and the `\(…\)` ones in features/parenMath. */
+export class MathPreviewWidget extends WidgetType {
   constructor(
     readonly body: string,
     readonly display: boolean,
