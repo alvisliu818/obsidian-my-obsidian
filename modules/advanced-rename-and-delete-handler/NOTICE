@@ -9,8 +9,14 @@ Advanced Rename and Delete Handler
 - 许可证：**MIT**（见同目录 LICENSE）—— 与聚合宿主 GPL-3.0 兼容
 - minAppVersion：1.14.4；isDesktopOnly：false
 
-上游历史未嫁接（本次为平铺拷贝收编；如需追溯上游提交，可后补
-`git bundle` 嫁接，参照 modules/custom-attachment-location 的做法）。
+上游历史已通过 `git bundle create 2.3.0`（必须用 ref 名）+ `bundle unbundle`
+嫁接进本仓：双父 merge commit `2bee2ba4`（树与父①一致，纯历史嫁接），
+父② = 上游 tag 2.3.0（`998cee43`，即收编源码对应的发布提交）。
+
+- 追溯上游提交：`git log 998cee43 -- <上游路径>`（注意 `git log --follow`
+  会在嫁接提交处断开——上游路径 `src/...` 与仓内
+  `modules/advanced-rename-and-delete-handler/src/...` 不同）
+- 本仓路径下的变更从嫁接提交起
 
 并入方式：require 桥（不进宿主 tsc）
 -----------------------------------
