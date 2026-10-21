@@ -1,16 +1,27 @@
 /**
  * Modals for configuring mounts: add/edit one, and manage the list.
  *
- * A Modal rather than a native picker because Obsidian's `showFolderPicker` and
- * `showOpenDialog` are both `undefined` in this build (measured), so the path is
- * typed or pasted. The regex fields are validated with the SAME compiler the
- * tree uses, so a pattern accepted here cannot behave differently there.
+ * The path can be typed OR picked: the 浏览 buttons open the real Windows
+ * Explorer through Electron's remote dialog (see `features/systemDialog`), and
+ * the folder the dialog was last left in is remembered per vault, so a second
+ * mount in the same area starts where the first one ended. Typing stays
+ * supported — the picker is an addition, not a replacement.
+ *
+ * The regex fields are validated with the SAME compiler the tree uses, so a
+ * pattern accepted here cannot behave differently there.
  */
 
-import { Modal, Notice, Setting } from 'obsidian';
+import { Modal, Notice, Setting, TextComponent } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import { compileFilter, validateMountPath } from '../features/mountFilter';
-import { isDirectory } from '../features/extFs';
+import { exists, isDirectory } from '../features/extFs';
+import {
+  hasSystemPicker,
+  pickExternalPath,
+  rememberedDirFor,
+  startDirFor,
+  type PickKind,
+} from '../features/systemDialog';
 import { mountDisplayName, mountHostLabel, mountHostOf, type ExternalMount } from '../types';
 
 /** Form state (everything is a string until it is committed). */
@@ -52,6 +63,8 @@ export class MountEditorModal extends Modal {
   private draft: MountDraft;
   private editing: ExternalMount | null;
   private attachTo?: string;
+  /** The path field, so a pick can write straight back into it. */
+  private pathInput: TextComponent | null = null;
 
   constructor(plugin: LogseqEditorPlugin, mount?: ExternalMount, attachTo?: string) {
     super(plugin.app);
@@ -69,7 +82,11 @@ export class MountEditorModal extends Modal {
       : null;
     const hostLabel = host ? mountHostLabel({ ...host, attachTo: this.attachTo }, this.plugin.settings.externalMounts ?? []) : '';
     this.titleEl.setText(
-      this.editing ? '编辑外部挂载' : hostLabel ? `挂载到「${hostLabel}」下` : '挂载外部文件夹',
+      this.editing
+        ? '编辑外部挂载'
+        : hostLabel
+          ? `挂载到「${hostLabel}」下`
+          : '挂载外部文件或文件夹',
     );
     this.display();
   }
@@ -78,24 +95,39 @@ export class MountEditorModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
     clearErrors(this);
+    this.pathInput = null;
 
     contentEl.createEl('p', {
       cls: 'setting-item-description',
-      text: '把库外的文件夹显示到挂载面板。Markdown 会在原地编辑并存回原文件，不会复制进库。',
+      text: '把库外的文件夹或单个文件挂到挂载面板。Markdown 会在原地编辑并存回原文件，不会复制进库。',
     });
 
-    new Setting(contentEl)
-      .setName('文件夹路径')
-      .setDesc('库外的绝对路径，例如 D:\\notes\\inbox')
-      .addText((t) =>
+    const pathSetting = new Setting(contentEl)
+      .setName('文件或文件夹路径')
+      .setDesc('库外的绝对路径，例如 D:\\notes\\inbox。也可以直接挂单个文件。')
+      .addText((t) => {
+        this.pathInput = t;
         t.setPlaceholder('D:\\notes\\inbox').setValue(this.draft.path).onChange((v) => {
           this.draft.path = v;
-        }),
-      );
+        });
+      });
+    if (hasSystemPicker()) {
+      pathSetting
+        .addButton((b) =>
+          b.setButtonText('浏览文件夹').setTooltip('打开系统资源管理器选择文件夹').onClick(() => {
+            void this.browse('folder');
+          }),
+        )
+        .addButton((b) =>
+          b.setButtonText('选择文件').setTooltip('打开系统资源管理器选择文件').onClick(() => {
+            void this.browse('file');
+          }),
+        );
+    }
 
     new Setting(contentEl)
       .setName('显示名称')
-      .setDesc('在面板中显示的名称。留空则使用文件夹自身的名字。')
+      .setDesc('在面板中显示的名称。留空则使用文件或文件夹自身的名字。')
       .addText((t) =>
         t.setPlaceholder('收件箱').setValue(this.draft.label).onChange((v) => {
           this.draft.label = v;
@@ -160,6 +192,29 @@ export class MountEditorModal extends Modal {
     actions.addButton((b) => b.setButtonText('取消').onClick(() => this.close()));
   }
 
+  /**
+   * Open the OS picker and drop the result into the path field.
+   *
+   * The location is remembered as soon as something is chosen (not only when
+   * the mount is saved), so a cancelled mount still leaves the dialog where
+   * the user was working.
+   */
+  private async browse(kind: PickKind): Promise<void> {
+    const current = this.draft.path.trim();
+    const picked = await pickExternalPath({
+      kind,
+      startDir: startDirFor(current, isDirectory(current), this.plugin.settings.mountPickDir ?? ''),
+    });
+    if (!picked) return;
+    this.draft.path = picked;
+    this.pathInput?.setValue(picked);
+    const dir = rememberedDirFor(picked, kind);
+    if (dir && dir !== this.plugin.settings.mountPickDir) {
+      this.plugin.settings.mountPickDir = dir;
+      void this.plugin.saveSettings();
+    }
+  }
+
   private async commit(): Promise<boolean> {
     clearErrors(this);
     const pathError = validateMountPath(this.draft.path);
@@ -178,9 +233,11 @@ export class MountEditorModal extends Modal {
       showError(this, `排除正则无效：/${compiled.errors.exclude}/`);
       return false;
     }
+    // A mounted FILE is legal too (the panel renders it as a single row), so
+    // existence is the only check here — a directory is not required.
     const trimmed = this.draft.path.trim().replace(/[\\/]+$/, '');
-    if (!isDirectory(trimmed)) {
-      showError(this, `文件夹不存在：${trimmed}`);
+    if (!exists(trimmed)) {
+      showError(this, `路径不存在：${trimmed}`);
       return false;
     }
     const secs = Number(this.draft.refreshSeconds);

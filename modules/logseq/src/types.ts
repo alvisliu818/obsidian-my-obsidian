@@ -255,6 +255,14 @@ export interface BlockEditorSettings {
    */
   mountTreeOrder: Record<string, Record<string, string[]>>;
   /**
+   * 系统文件对话框（挂载编辑里的「浏览文件夹 / 选择文件」）上次停留的目录。
+   *
+   * 只在用户真的用系统对话框选过东西之后才写入，空串 = 用系统默认位置。
+   * 下一次打开对话框就从这里起步：同一片目录里连续挂几个东西时不用每次都
+   * 从「此电脑」重新点进去。手动输入路径不受影响（那是用户自己指的地方）。
+   */
+  mountPickDir: string;
+  /**
    * Folders OUTSIDE the vault listed in the mount panel. Each is shown as a
    * virtual tree; any entry can also be linked into the vault as a real path
    * (junction for folders, hard link for files), which makes it open in the
@@ -675,6 +683,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   mountShowLoadedCount: true,
   mountDragMode: false,
   mountTreeOrder: {},
+  mountPickDir: '',
   externalMounts: [],
   externalCodeWrap: true,
   codeBlockPrewarm: false,

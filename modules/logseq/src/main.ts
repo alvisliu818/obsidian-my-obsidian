@@ -1022,6 +1022,9 @@ export default class LogseqEditorPlugin extends Plugin {
     this.settings.mountTreeOrder = mountTreeOrderFrom(
       (this.settings as { mountTreeOrder?: unknown }).mountTreeOrder,
     );
+    // 系统文件对话框上次停留的目录：data.json 可手动编辑，非字符串一律回到
+    // 默认（空串 = 让系统自己挑起始位置）。
+    if (typeof this.settings.mountPickDir !== 'string') this.settings.mountPickDir = '';
     this.settings.externalCodeWrap = this.settings.externalCodeWrap !== false;
     // 编辑器设置:settings.json 是唯一存储(<configDir>/plugins/<dir>/settings.json),
     // 缺失即按默认创建。旧「代码编辑器自动换行」开关迁移:首次创建 settings.json
