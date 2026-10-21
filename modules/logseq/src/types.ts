@@ -404,11 +404,43 @@ export interface ExternalMount {
   /** Keep the mount at the top of the panel regardless of drag order. */
   pinned: boolean;
   /**
-   * 嵌套挂载:宿主挂载 id。设置后本挂载渲染在该挂载项之下(si-yuan 虚拟文档树
+   * 嵌套挂载:宿主位置。设置后本挂载渲染在该位置之下(si-yuan 虚拟文档树
    * 的 MountItem.children 语义:显式嵌套挂载在前,宿主的真实内容在后),
-   * 而不是面板顶层。undefined = 顶层挂载。宿主被卸载/停用时兜底渲染为顶层。
+   * 而不是面板顶层。宿主被卸载/停用时兜底渲染为顶层。
+   *
+   * 两种形态(以第一个 `/` 分隔,挂载 id 由 safeSegment 生成、不含 `/`):
+   *   - `hostId`            挂到宿主挂载项的**根部**
+   *   - `hostId/sub/dir`    挂到宿主内部某个**子文件夹**下
+   *   - `hostId/file.md`    挂到宿主内部某个**文件**下
+   * 于是挂载的文件或文件夹、以及它们下面的子文件或子文件夹,都可以再挂载。
    */
   attachTo?: string;
+}
+
+/**
+ * Split an `attachTo` into the host mount id and the path inside that host.
+ *
+ * Mount ids are produced by `safeSegment` and so never contain a slash, which
+ * makes the FIRST slash an unambiguous separator. An empty or malformed value
+ * degrades to `hostRel: ''` (the host's own root) rather than throwing —
+ * `data.json` is user-editable.
+ */
+export function mountHostOf(attachTo: string): { hostId: string; hostRel: string } {
+  const slash = attachTo.indexOf('/');
+  if (slash < 0) return { hostId: attachTo, hostRel: '' };
+  return {
+    hostId: attachTo.slice(0, slash),
+    hostRel: attachTo.slice(slash + 1).replace(/^\/+/, '').replace(/\/+$/, ''),
+  };
+}
+
+/** Human-readable host label for the mount lists: `Folder / sub / dir`. */
+export function mountHostLabel(m: ExternalMount, mounts: readonly ExternalMount[]): string {
+  if (!m.attachTo) return '';
+  const { hostId, hostRel } = mountHostOf(m.attachTo);
+  const host = mounts.find((h) => h.id === hostId);
+  const name = host ? mountDisplayName(host) : hostId;
+  return hostRel ? `${name} / ${hostRel}` : name;
 }
 
 /** Drop anything malformed — `data.json` is user-editable. */
@@ -418,8 +450,11 @@ export function mountFrom(raw: unknown): ExternalMount | null {
   if (typeof m.id !== 'string' || !m.id.trim()) return null;
   if (typeof m.path !== 'string' || !m.path.trim()) return null;
   const secs = Number(m.refreshSeconds);
-  // attachTo 非空字符串才保留(自引用丢弃),其余形态按顶层渲染;data.json 用户可编辑
-  const at = typeof m.attachTo === 'string' && m.attachTo.trim() && m.attachTo !== m.id ? m.attachTo.trim() : undefined;
+  // attachTo 保留三种形态:裸 hostId、hostId/子路径。自引用(宿主是自己)丢弃,
+  // 其余按顶层渲染;data.json 用户可编辑,故一律容错。
+  const at = typeof m.attachTo === 'string' && m.attachTo.trim() ? m.attachTo.trim().replace(/\/+$/, '') : undefined;
+  const selfHost = at ? mountHostOf(at).hostId === m.id.trim() : false;
+  const attachTo = at && !selfHost ? at : undefined;
   return {
     id: m.id.trim(),
     path: m.path.trim(),
@@ -430,7 +465,7 @@ export function mountFrom(raw: unknown): ExternalMount | null {
     // absent = enabled, so a config written before this field existed still works
     enabled: m.enabled !== false,
     pinned: m.pinned === true,
-    ...(at ? { attachTo: at } : {}),
+    ...(attachTo ? { attachTo } : {}),
   };
 }
 
@@ -442,13 +477,13 @@ export function mountsFrom(raw: unknown): ExternalMount[] {
     const m = mountFrom(item);
     if (m) out.push(m);
   }
-  // 环检测:attachTo 链走回自己(A→B→A,手改 data.json 才可能)整环降为顶层,
-  // 否则渲染会双显/死循环
+  // 环检测:attachTo 的宿主链走回自己(A→B→A,手改 data.json 才可能)整环降为顶层,
+  // 否则渲染会双显/死循环。按 hostId 追(子路径只是宿主内的位置,不影响归属)。
   const byId = new Map(out.map((m) => [m.id, m]));
   for (const m of out) {
     if (!m.attachTo) continue;
     const seen = new Set<string>([m.id]);
-    let cur = byId.get(m.attachTo);
+    let cur = byId.get(mountHostOf(m.attachTo).hostId);
     let cyclic = false;
     while (cur) {
       if (seen.has(cur.id)) {
@@ -456,7 +491,7 @@ export function mountsFrom(raw: unknown): ExternalMount[] {
         break;
       }
       seen.add(cur.id);
-      cur = cur.attachTo ? byId.get(cur.attachTo) : undefined;
+      cur = cur.attachTo ? byId.get(mountHostOf(cur.attachTo).hostId) : undefined;
     }
     if (cyclic) delete m.attachTo;
   }

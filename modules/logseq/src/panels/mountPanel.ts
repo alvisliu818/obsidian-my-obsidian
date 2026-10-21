@@ -17,7 +17,7 @@
 import { FileSystemAdapter, ItemView, Menu, Notice, setIcon, TFile, TFolder, type WorkspaceLeaf } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import type { ExternalMount } from '../types';
-import { mountDisplayName } from '../types';
+import { mountDisplayName, mountHostOf } from '../types';
 import {
   compileFilter,
   countTree,
@@ -379,6 +379,7 @@ export class MountPanelView extends ItemView {
       return;
     }
     // 宿主链:嵌套挂载 → … → 顶层,顺序展开头行(环被 mountsFrom 清过,但仍设防)。
+    // attachTo 可能是 `hostId/rel`,归属看 hostId。
     const byId = new Map(all.map((m) => [m.id, m]));
     const chain: ExternalMount[] = [];
     let cur: ExternalMount | undefined = mount;
@@ -386,7 +387,7 @@ export class MountPanelView extends ItemView {
     while (cur && !seen.has(cur.id)) {
       seen.add(cur.id);
       chain.unshift(cur);
-      cur = cur.attachTo ? byId.get(cur.attachTo) : undefined;
+      cur = cur.attachTo ? byId.get(mountHostOf(cur.attachTo).hostId) : undefined;
     }
     for (const m of chain) this.scan(m).open.add('');
     const rootSlash = mount.path.replace(/[\\/]+$/, '').replace(/\\/g, '/');
@@ -430,8 +431,8 @@ export class MountPanelView extends ItemView {
       const byId = new Map(allMounts.map((m) => [m.id, m]));
       let sectionId = pend.mountId;
       const seenIds = new Set<string>([sectionId]);
-      while (byId.get(sectionId)?.attachTo && byId.has(byId.get(sectionId)!.attachTo!) && !seenIds.has(byId.get(sectionId)!.attachTo!)) {
-        sectionId = byId.get(sectionId)!.attachTo!;
+      while (byId.get(sectionId)?.attachTo && byId.has(mountHostOf(byId.get(sectionId)!.attachTo!).hostId) && !seenIds.has(mountHostOf(byId.get(sectionId)!.attachTo!).hostId)) {
+        sectionId = mountHostOf(byId.get(sectionId)!.attachTo!).hostId;
         seenIds.add(sectionId);
       }
       const section = this.contentEl.querySelector(`.logseq-mount-section[data-mount-id="${CSS.escape(sectionId)}"]`);
@@ -499,14 +500,15 @@ export class MountPanelView extends ItemView {
 
     // Pinned mounts float to the top; everything else keeps the order the user
     // dragged it into (see `wireDragReorder`).
-    // 嵌套挂载(attachTo 指向存在的启用宿主)不在此渲染——它们编进宿主的行流;
+    // 嵌套挂载(attachTo 的宿主存在且启用)不在此渲染——它们编进宿主内部的行流;
     // 宿主被卸载/停用时兜底回落顶层,配置不丢。
     const all = this.plugin.settings.externalMounts ?? [];
     const mounts = all
       .filter((m) => m.enabled)
       .filter((m) => {
         if (!m.attachTo) return true;
-        const host = all.find((h) => h.id === m.attachTo);
+        const { hostId } = mountHostOf(m.attachTo);
+        const host = all.find((h) => h.id === hostId);
         return !host || !host.enabled;
       })
       .slice()
@@ -714,9 +716,16 @@ export class MountPanelView extends ItemView {
     this.wireMenu(row, mount, null);
   }
 
-  /** Attach 到某挂载之下的嵌套挂载(enabled 才渲染)。 */
-  private nestedMountsOf(hostId: string): ExternalMount[] {
-    return (this.plugin.settings.externalMounts ?? []).filter((m) => m.enabled && m.attachTo === hostId);
+  /**
+   * 挂到 `hostId` 内 `hostRel` 这个节点之下的嵌套挂载(enabled 才渲染)。
+   * `hostRel` 为 '' = 挂载项根部,可以是子文件夹或文件的 rel。
+   */
+  private nestedMountsOf(hostId: string, hostRel = ''): ExternalMount[] {
+    return (this.plugin.settings.externalMounts ?? []).filter((m) => {
+      if (!m.enabled || !m.attachTo) return false;
+      const h = mountHostOf(m.attachTo);
+      return h.hostId === hostId && h.hostRel === hostRel;
+    });
   }
 
   /**
@@ -730,10 +739,15 @@ export class MountPanelView extends ItemView {
     const st = this.scan(m);
     if (!st.open.has('')) return;
     const next = new Set(chain).add(m.id);
-    for (const child of this.nestedMountsOf(m.id)) this.emitMountHead(child, depth + 1, out, next);
+    for (const child of this.nestedMountsOf(m.id, '')) this.emitMountHead(child, depth + 1, out, next);
+    // 这个嵌套挂载自己也是一棵树,它内部的节点同样可以再挂(递归)。
     const walk = (list: MountNode[], d: number): void => {
       for (const n of list) {
         out.push({ kind: 'node', node: n, mount: m, state: st, depth: d });
+        const nested = this.nestedMountsOf(m.id, n.rel);
+        if (nested.length > 0 && st.open.has(n.rel)) {
+          for (const child of nested) this.emitMountHead(child, d + 1, out, next);
+        }
         if (n.isDir && st.open.has(n.rel)) walk(n.children, d + 1);
       }
     };
@@ -742,15 +756,27 @@ export class MountPanelView extends ItemView {
 
   /**
    * Flatten the loaded tree into draw order, honouring which folders are open.
-   * 显式嵌套挂载行插在宿主自己的树行之前(si-yuan:显式 children 先于自动子项)。
+   * 显式嵌套挂载行插在宿主自己那一层的最前(si-yuan:显式 children 先于自动子项)。
+   *
+   * 嵌套挂载可以挂在**任意节点**下——挂载项根部、子文件夹、乃至单个文件
+   * (attachTo = `hostId/rel`),所以在 walk 里逐节点查一次,而不是只在开头查
+   * 根部。文件原本没有 children,但挂了下游挂载后它就是一个可展开的容器:
+   * flatten 照常织入子行,由 renderNode 补出 caret。
    */
   private flatten(mount: ExternalMount, state: MountState): FlattenRow[] {
     const out: FlattenRow[] = [];
-    for (const child of this.nestedMountsOf(mount.id)) this.emitMountHead(child, 1, out, new Set([mount.id]));
+    for (const child of this.nestedMountsOf(mount.id, '')) this.emitMountHead(child, 1, out, new Set([mount.id]));
     const walk = (list: MountNode[], depth: number): void => {
       for (const n of list) {
         out.push({ kind: 'node', node: n, mount, state, depth });
-        if (n.isDir && state.open.has(n.rel)) walk(n.children, depth + 1);
+        // 挂在这个节点之下的嵌套挂载:与真实子项同级,但排在它们之前。
+        const nested = this.nestedMountsOf(mount.id, n.rel);
+        if (nested.length === 0) continue;
+        if (!state.open.has(n.rel)) continue;
+        const chain = new Set<string>([mount.id]);
+        for (const child of nested) this.emitMountHead(child, depth + 1, out, chain);
+        // 文件夹才继续下潜真实子项;文件没有 children,到此为止。
+        if (n.isDir) walk(n.children, depth + 1);
       }
     };
     // 根层从 depth 1 起排:挂载根是区块头(不在行流里),子项整体缩进一级,
@@ -831,6 +857,20 @@ export class MountPanelView extends ItemView {
     // Linked state is the only flair a file row carries: type pills (png /
     // 二进制 / …) read as noise repeated on half the rows, so they are gone.
     if (this.isLinked(node)) row.createSpan({ cls: 'logseq-mount-flag is-linked', text: '已链接' });
+    // A FILE with mounts under it is a container too, so it needs a caret to
+    // open them. The caret is a separate click target: the row itself keeps
+    // opening the file, which is what a file row has always done.
+    const nested = this.nestedMountsOf(mount.id, node.rel);
+    if (nested.length > 0) {
+      const caret = row.createSpan({ cls: 'logseq-mount-caret logseq-mount-caret-file' });
+      caret.textContent = isOpen ? '▾' : '▸';
+      caret.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (isOpen) state.open.delete(node.rel);
+        else state.open.add(node.rel);
+        this.render();
+      });
+    }
     row.addEventListener('click', () => {
       void this.plugin.openExternalEntry(mount, node);
     });
@@ -968,6 +1008,14 @@ export class MountPanelView extends ItemView {
                 pinned: false,
               });
             }),
+        );
+        // 挂到这个节点之下（si-yuan「挂载文件/文件夹…「xxx」下」）：attachTo 写成
+        // `hostId/rel`，于是挂载项内部的任意子文件夹、乃至单个文件，都能再挂载。
+        menu.addItem((item) =>
+          item
+            .setTitle('在此挂载文件夹/文件…')
+            .setIcon('folder-symlink' as never)
+            .onClick(() => new MountEditorModal(this.plugin, undefined, `${mount.id}/${node.rel}`).open()),
         );
         menu.addSeparator();
         menu.addItem((item) =>

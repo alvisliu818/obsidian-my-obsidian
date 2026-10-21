@@ -22,7 +22,7 @@ import {
   type EditorChoice,
   type ExternalMount,
 } from './types';
-import { mountDisplayName } from './types';
+import { mountDisplayName, mountHostOf } from './types';
 import { isMarkdownFile } from './features/codeFileKind';
 import { compileFilter, isTextFileName, extOfName } from './features/mountFilter';
 import { FileExplorerLocateButton } from './features/fileExplorerLocate';
@@ -1685,7 +1685,9 @@ export default class LogseqEditorPlugin extends Plugin {
     list.splice(i, 1);
     let promoted = 0;
     for (const m of list) {
-      if (m.attachTo === mount.id) {
+      // 卸一个宿主，它上面（含内部任意子节点上）的嵌套挂载一并回落顶层：
+      // attachTo 现在可能是 `hostId/rel`，所以按 hostId 判。
+      if (m.attachTo && mountHostOf(m.attachTo).hostId === mount.id) {
         delete m.attachTo;
         promoted++;
       }

@@ -11,7 +11,7 @@ import { Modal, Notice, Setting } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import { compileFilter, validateMountPath } from '../features/mountFilter';
 import { isDirectory } from '../features/extFs';
-import { mountDisplayName, type ExternalMount } from '../types';
+import { mountDisplayName, mountHostLabel, mountHostOf, type ExternalMount } from '../types';
 
 /** Form state (everything is a string until it is committed). */
 interface MountDraft {
@@ -62,11 +62,14 @@ export class MountEditorModal extends Modal {
   }
 
   onOpen(): void {
+    // attachTo 现在是 `hostId` 或 `hostId/子路径`，所以宿主标签要带上子路径，
+    // 否则用户看不出「到底挂在了哪个文件夹/文件下面」。
     const host = this.attachTo
-      ? (this.plugin.settings.externalMounts ?? []).find((m) => m.id === this.attachTo)
+      ? (this.plugin.settings.externalMounts ?? []).find((m) => m.id === mountHostOf(this.attachTo!).hostId)
       : null;
+    const hostLabel = host ? mountHostLabel({ ...host, attachTo: this.attachTo }, this.plugin.settings.externalMounts ?? []) : '';
     this.titleEl.setText(
-      this.editing ? '编辑外部挂载' : host ? `挂载到「${mountDisplayName(host)}」下` : '挂载外部文件夹',
+      this.editing ? '编辑外部挂载' : hostLabel ? `挂载到「${hostLabel}」下` : '挂载外部文件夹',
     );
     this.display();
   }
@@ -248,8 +251,7 @@ export class MountListModal extends Modal {
       head.createSpan({ cls: 'logseq-mount-list-name', text: mountDisplayName(m) });
       if (!m.enabled) head.createSpan({ cls: 'logseq-mount-list-off', text: '已停用' });
       if (m.attachTo) {
-        const host = mounts.find((h) => h.id === m.attachTo);
-        head.createSpan({ cls: 'logseq-mount-list-off', text: `嵌套于 ${host ? mountDisplayName(host) : m.attachTo}` });
+        head.createSpan({ cls: 'logseq-mount-list-off', text: `嵌套于 ${mountHostLabel(m, mounts)}` });
       }
       if (!isDirectory(m.path)) head.createSpan({ cls: 'logseq-mount-list-warn', text: '路径不存在' });
       row.createDiv({ cls: 'logseq-mount-list-path', text: m.path });
