@@ -1025,6 +1025,8 @@ export default class LogseqEditorPlugin extends Plugin {
     // 系统文件对话框上次停留的目录：data.json 可手动编辑，非字符串一律回到
     // 默认（空串 = 让系统自己挑起始位置）。
     if (typeof this.settings.mountPickDir !== 'string') this.settings.mountPickDir = '';
+    // 新建笔记的落盘目录：空串 = 库根（运行时解析，见 mountPanel）。
+    if (typeof this.settings.mountNewNotePath !== 'string') this.settings.mountNewNotePath = '';
     this.settings.externalCodeWrap = this.settings.externalCodeWrap !== false;
     // 编辑器设置:settings.json 是唯一存储(<configDir>/plugins/<dir>/settings.json),
     // 缺失即按默认创建。旧「代码编辑器自动换行」开关迁移:首次创建 settings.json

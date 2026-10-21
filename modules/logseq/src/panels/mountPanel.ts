@@ -1292,6 +1292,15 @@ export class MountPanelView extends ItemView {
         .setIcon('folder-plus' as never)
         .onClick(() => this.promptNewFolder(mount, newDirAbs, dirNode?.rel ?? (node ? parentRelOf(node.rel) : ''))),
     );
+    // 新建笔记:文件落在一个**另外配置**的目录里(设置 → 外部挂载 → 新建笔记
+    // 的位置),再挂成这里右键条目的子文档 —— 磁盘位置与树上的位置解耦,
+    // 与思源「新建笔记」一致(普通"新建文件"才是就地建在挂载目录里)。
+    menu.addItem((item) =>
+      item
+        .setTitle('新建笔记…')
+        .setIcon('pencil' as never)
+        .onClick(() => this.promptNewNote(mount, node)),
+    );
     if (node) {
       menu.addItem((item) =>
         item
@@ -1347,6 +1356,59 @@ export class MountPanelView extends ItemView {
         }
         new Notice(`已创建 ${name}`);
         this.rescan(mount, dirRel);
+      },
+    ).open();
+  }
+
+  /**
+   * 新建笔记：文件建在「新建笔记的位置」那个目录下，再挂成当前条目的子文档。
+   *
+   * 为什么不是就地新建（那是「新建文件」的活）：笔记要归一个固定的笔记目录
+   * 管（备份/同步/全库搜索都指着它），而它在树上出现的位置由右键那一刻决定
+   * —— 两边是独立的，所以一边是 path，一边是 attachTo。
+   *
+   * `attachTo` 写 `hostId/子路径`：文件夹节点挂进它里面，文件节点挂在它下面
+   * （挂载项内部的任意节点都能再挂载），挂载头则挂到挂载根。
+   */
+  private promptNewNote(mount: ExternalMount, node: MountNode | null): void {
+    const attachTo = node ? `${mount.id}/${node.rel}` : mount.id;
+    new NamePromptModal(
+      this.app,
+      { title: '新建笔记', placeholder: 'untitled', validate: validateEntryName },
+      (name) => {
+        if (!name) return;
+        const fileName = /\.(md|markdown)$/i.test(name) ? name : `${name}.md`;
+        const dir = this.plugin.settings.mountNewNotePath?.trim() || this.plugin.vaultBasePath();
+        if (!dir) {
+          new Notice('没有可写入的笔记目录：请在设置 → 外部挂载 → 新建笔记的位置 里指定。');
+          return;
+        }
+        const abs = joinAbs(dir, fileName);
+        if (exists(abs)) {
+          new Notice(`已存在同名笔记：${fileName}`);
+          return;
+        }
+        const r = createEmptyFile(abs);
+        if (!r.ok) {
+          new Notice(`创建失败：${r.error ?? '未知错误'}`);
+          return;
+        }
+        void this.plugin
+          .addMount({
+            path: abs,
+            label: name.replace(/\.(md|markdown)$/i, ''),
+            include: '',
+            exclude: '',
+            refreshSeconds: 0,
+            pinned: false,
+            attachTo,
+          })
+          .then((m) => {
+            // 挂上去之后把宿主那一层展开，否则新笔记藏在折叠的父节点里。
+            this.states.get(mount.id)?.open.add(node?.rel ?? '');
+            this.render();
+            new Notice(`已新建笔记「${mountDisplayName(m)}」`);
+          });
       },
     ).open();
   }

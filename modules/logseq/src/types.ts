@@ -255,6 +255,14 @@ export interface BlockEditorSettings {
    */
   mountTreeOrder: Record<string, Record<string, string[]>>;
   /**
+   * 虚拟文档树「新建笔记」的落盘目录。
+   *
+   * 笔记不一定和它挂载到的位置在同一棵磁盘树里：文件写在**这个**目录下，
+   * 再以 attachTo 挂成右键那个条目的子文档（思源「新建笔记」就是这个语义
+   * ——文档归库管，位置归树管）。留空 = 落到库根目录。
+   */
+  mountNewNotePath: string;
+  /**
    * 系统文件对话框（挂载编辑里的「浏览文件夹 / 选择文件」）上次停留的目录。
    *
    * 只在用户真的用系统对话框选过东西之后才写入，空串 = 用系统默认位置。
@@ -684,6 +692,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   mountDragMode: false,
   mountTreeOrder: {},
   mountPickDir: '',
+  mountNewNotePath: '',
   externalMounts: [],
   externalCodeWrap: true,
   codeBlockPrewarm: false,

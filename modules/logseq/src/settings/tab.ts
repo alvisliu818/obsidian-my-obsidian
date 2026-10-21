@@ -17,6 +17,13 @@ import { effectiveLspServers } from '../lsp/serverSpecs';
 import { LspServerEditModal } from './lspServerModal';
 import { renderEditorSettingsRows } from './editorSettingsUI';
 import { SHORTCUT_GROUP_LABELS } from '../types';
+import { isDirectory } from '../features/extFs';
+import {
+  hasSystemPicker,
+  pickExternalPath,
+  rememberedDirFor,
+  startDirFor,
+} from '../features/systemDialog';
 
 export class LogseqEditorSettingTab extends PluginSettingTab {
   plugin: LogseqEditorPlugin;
@@ -589,6 +596,43 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
               this.display();
             }),
         );
+    }
+
+    // 新建笔记的落盘目录：与它在树上出现的位置解耦（attachTo 决定位置，
+    // 这里只决定文件写在哪 —— 见 features/extFs 与 mountPanel.promptNewNote）。
+    const noteDir = new Setting(containerEl)
+      .setName('新建笔记的位置')
+      .setDesc(
+        '虚拟文档树右键「新建笔记…」时，文件实际写入的目录；留空 = 库根目录。' +
+          '新建的笔记同时挂成你右键那个条目的子文档，所以磁盘位置和树上的位置互不牵连。',
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder('留空 = 库根目录')
+          .setValue(this.plugin.settings.mountNewNotePath ?? '')
+          .onChange(async (v) => {
+            this.plugin.settings.mountNewNotePath = v;
+            await this.plugin.saveSettings();
+          }),
+      );
+    if (hasSystemPicker()) {
+      noteDir.addButton((b) =>
+        b.setButtonText('浏览').setTooltip('打开系统资源管理器选择目录').onClick(() => {
+          void (async () => {
+            const current = this.plugin.settings.mountNewNotePath ?? '';
+            const picked = await pickExternalPath({
+              kind: 'folder',
+              title: '选择新建笔记的保存目录',
+              startDir: startDirFor(current, isDirectory(current), this.plugin.settings.mountPickDir ?? ''),
+            });
+            if (!picked) return;
+            this.plugin.settings.mountNewNotePath = picked;
+            this.plugin.settings.mountPickDir = rememberedDirFor(picked, 'folder') || this.plugin.settings.mountPickDir;
+            await this.plugin.saveSettings();
+            this.display();
+          })();
+        }),
+      );
     }
 
     const mountActions = new Setting(containerEl).setName('管理');
