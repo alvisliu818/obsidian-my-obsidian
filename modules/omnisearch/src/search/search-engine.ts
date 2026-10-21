@@ -13,6 +13,7 @@ import { isExternalDocPath } from '../tools/externalDocs'
 
 import {
   chunkArray,
+  countError,
   logVerbose,
   normalizeExactMatchContent,
   removeDiacritics,
@@ -49,14 +50,24 @@ export class SearchEngine {
    */
   async loadCache(): Promise<boolean> {
     await this.plugin.embedsRepository.loadFromCache()
-    const cache = await this.plugin.database.getMinisearchCache()
-    if (cache) {
-      this.minisearch = await MiniSearch.loadJSAsync(
-        cache.data,
-        this.getOptions()
-      )
-      this.indexedDocuments = new Map(cache.paths.map(o => [o.path, o.mtime]))
-      return true
+    try {
+      const cache = await this.plugin.database.getMinisearchCache()
+      if (cache) {
+        this.minisearch = await MiniSearch.loadJSAsync(
+          cache.data,
+          this.getOptions()
+        )
+        this.indexedDocuments = new Map(cache.paths.map(o => [o.path, o.mtime]))
+        return true
+      }
+    } catch (e) {
+      // 持久化索引反序列化失败（数据损坏）——这才是「清理缓存并重启」
+      // 告警的正确归属：immediate 单次即弹。缓存存在 IndexedDB（本地盘），
+      // 与网盘挂载无关，不存在瞬态误报。随后按无缓存处理，populateIndex
+      // 全量重建，搜索自愈，不会卡在加载半途。
+      console.error('Omnisearch - Failed to load the search index cache', e)
+      countError(true)
+      return false
     }
     console.log('Omnisearch - No cache found')
     return false
@@ -525,7 +536,7 @@ export class SearchEngine {
     // Map the raw results to get usable suggestions
     const resultNotes = results.map((result, index) => {
       logVerbose('Locating matches for', result.id)
-      let note = documents.find(d => d.path === result.id)
+      let note = documents.find(d => d?.path === result.id)
       if (!note) {
         // throw new Error(`Omnisearch - Note "${result.id}" not indexed`)
         console.warn(`Omnisearch - Note "${result.id}" not in the live cache`)
