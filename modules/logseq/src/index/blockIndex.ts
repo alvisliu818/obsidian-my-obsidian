@@ -169,6 +169,14 @@ export class BlockIndex {
     return this.cards;
   }
 
+  /**
+   * Diagnostics from the last full rebuild. `longestSliceMs` is the number
+   * that matters: it is the longest the main thread was ever held without
+   * yielding, i.e. the worst stall the UI can see. A one-task rebuild reports
+   * one slice the size of the whole build.
+   */
+  lastBuild = { files: 0, slices: 0, longestSliceMs: 0, slowSlices: 0 };
+
   /** Subscribe to index rebuilds; returns a disposer. */
   onRebuild(cb: () => void): () => void {
     this.listeners.add(cb);
@@ -334,6 +342,29 @@ export class BlockIndex {
   }
 
   /**
+   * Build every file's signature ahead of time, so the first time the user
+   * expands Unlinked references they get ~10ms instead of paying ~0.5s to
+   * build all 8.4k groups right then.
+   *
+   * Same slicing discipline as `doBuildAll`, because "background" is not the
+   * same as "free": ~0.5s of continuous CPU would still be felt. Aborts if the
+   * index is rebuilt underneath us — that work is already garbage.
+   */
+  async prewarmSignatures(): Promise<void> {
+    const born = this.version;
+    let slice = performance.now();
+    for (const [path, blocks] of this.blocksByPath) {
+      if (performance.now() - slice >= YIELD_BUDGET_MS) {
+        await yieldToBrowser();
+        if (this.version !== born) return; // index rebuilt: start over later
+        slice = performance.now();
+      }
+      if (this.fileSig.has(path)) continue;
+      this.fileSig.set(path, buildSignatures(blocks));
+    }
+  }
+
+  /**
    * The path when `file` is a markdown note, else null (folders, attachments).
    * Duck-typed rather than `instanceof TFile` so it also holds under the unit
    * test stub, where TFile is an empty class and files are plain objects.
@@ -354,6 +385,14 @@ export class BlockIndex {
     this.blocksByPath.clear();
     this.fileSig.clear();
     const files = this.app.vault.getMarkdownFiles();
+    // Sliced, not running to completion in one task: see `yieldToBrowser`.
+    // Budget by ELAPSED CPU time rather than a file count, so a fat file can't
+    // blow the budget on its own and a folder of empty notes can't make us
+    // yield every other file.
+    let slice = performance.now();
+    let slices = 0;
+    let longest = 0;
+    let slow = 0;
     for (const f of files) {
       let content: string;
       try {
@@ -363,7 +402,24 @@ export class BlockIndex {
       }
       if (content.length > 2_000_000) continue; // skip huge files
       this.indexContent(f.path, content);
+      const spent = performance.now() - slice;
+      if (spent >= YIELD_BUDGET_MS) {
+        if (spent > longest) longest = spent;
+        // Budget is checked BETWEEN files, so one enormous file is one slice:
+        // a 2MB note costs what it costs and cannot be interrupted mid-parse.
+        // Counting them separately keeps that honest.
+        if (spent > 33) slow++;
+        slices++;
+        await yieldToBrowser();
+        slice = performance.now();
+      }
     }
+    this.lastBuild = {
+      files: files.length,
+      slices,
+      longestSliceMs: Math.round(longest),
+      slowSlices: slow,
+    };
     this.notify();
   }
 
@@ -514,6 +570,68 @@ export class BlockIndex {
       }),
     );
   }
+}
+
+// ----------------------------------------------------------------------
+// Cooperative multitasking
+// ----------------------------------------------------------------------
+
+/**
+ * How long a single slice may run before handing the thread back — one frame.
+ *
+ * Deliberately not smaller: slicing is not free. At 8ms the main vault needed
+ * ~1000 slices and the rebuild took roughly twice as long end to end, because
+ * each yield costs far more than the ~0.1ms a browser message task should
+ * (measured ~8.7ms under Node). The worst slice is set by the biggest single
+ * file either way — a 2MB note cannot be interrupted mid-parse — so shrinking
+ * the budget below that buys nothing and costs real time.
+ */
+const YIELD_BUDGET_MS = 16;
+
+/**
+ * Hand the main thread back for one task, then resume.
+ *
+ * Why this exists: `vault.cachedRead` resolves out of an in-memory WeakMap, so
+ * awaiting it is a MICROtask — and microtasks never let the browser paint or
+ * process input. Every other await in this file is likewise microtask-only.
+ * That is why parsing the whole vault froze Obsidian solid for ~7 seconds even
+ * though the code looks politely asynchronous. `yieldToBrowser` is the only
+ * real yield here.
+ *
+ * Three tiers, best first:
+ *
+ * 1. `requestIdleCallback` — the real target (Chromium/Electron). Resumes in
+ *    the browser's own spare time, so slicing costs nothing noticeable and
+ *    never competes with input. The timeout guarantees forward progress even
+ *    if the user keeps the main thread busy.
+ * 2. `MessageChannel` — fallback. Nested `setTimeout(0)` is clamped to ~4ms,
+ *    which at ~600 slices would add seconds to every rebuild; a message task
+ *    is scheduled promptly. NOTE: measured ~8-12ms per call under Node, so
+ *    tests here run slower than Obsidian will.
+ * 3. `setTimeout` — last resort where neither exists.
+ */
+let channel: MessageChannel | null | undefined;
+
+function yieldToBrowser(): Promise<void> {
+  const idle = (globalThis as {
+    requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+  }).requestIdleCallback;
+  if (typeof idle === 'function') {
+    return new Promise<void>((resolve) => {
+      idle(() => resolve(), { timeout: 250 });
+    });
+  }
+  if (channel === undefined) {
+    channel = typeof MessageChannel === 'function' ? new MessageChannel() : null;
+    channel?.port1.start();
+  }
+  if (!channel) return new Promise<void>((r) => setTimeout(r, 0));
+  return new Promise<void>((resolve) => {
+    // Safe to overwrite: callers await serially, so at most one handler is
+    // ever pending at a time.
+    channel!.port1.onmessage = () => resolve();
+    channel!.port2.postMessage(null);
+  });
 }
 
 // ----------------------------------------------------------------------

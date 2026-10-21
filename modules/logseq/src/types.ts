@@ -302,6 +302,19 @@ export interface BlockEditorSettings {
    */
   refsLinkedDefaultCollapsed: boolean;
   refsUnlinkedDefaultCollapsed: boolean;
+  /**
+   * 布局就绪后后台预热未链接引用的签名索引。
+   *
+   * 未链接引用靠「按文件分片的 128 位字符签名」剪枝（见 BlockIndex）。分片
+   * 是懒建的：第一次展开某个区时才建，主库实测首次约 0.5 秒，之后每次查询
+   * 约 10~30ms。开了这一项，插件在 layout-ready 之后把全部分片提前建好，
+   * 于是「首次展开」也没有那 0.5 秒。
+   *
+   * 预热同样按 8ms 分片让出主线程（background ≠ free，连续 0.5 秒的 CPU
+   * 一样能被感觉到），所以开着也不影响操作；代价只有那十几 MB 常驻内存和
+   * 启动后一小会儿的后台占用。关掉则退回懒建。
+   */
+  unlinkedScanPrewarm: boolean;
   /** 旧版单开关（1.14.x）：迁移到上面两个独立开关后仅在旧 data.json 兼容读取。 */
   refsDefaultCollapsed: boolean;
   /**
@@ -635,6 +648,9 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   // （打开时不跑查询，点标题栏展开才跑）。需要默认展开的在设置里关掉本项。
   refsUnlinkedDefaultCollapsed: true,
   refsDefaultCollapsed: false,
+  // 预热的成本是按 8ms 分片让出主线程的后台 CPU，用户几乎无感，换来首次
+  // 展开 Unlinked references 也是 ~10ms。不想常驻那点内存的可关掉。
+  unlinkedScanPrewarm: true,
   // 代码文件默认纯 Monaco 编辑器(用户 2026-10-18 决策);混合模式(注释区 =
   // Logseq 块编辑器)保留为设置/头部按钮可选,不再作为默认。
   externalCodeHybrid: false,

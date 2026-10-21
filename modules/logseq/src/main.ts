@@ -250,6 +250,14 @@ export default class LogseqEditorPlugin extends Plugin {
       if (this.settings.codeBlockPrewarm) {
         window.setTimeout(() => warmUpSharedBlockEditor(this), 1500);
       }
+      // 未链接引用的签名索引：建好之后每次查询十几毫秒，但第一次建在主库
+      // 要 ~0.5 秒。延后一拍在后台分片建完（让出主线程，不与启动争抢），
+      // 于是用户第一次展开那个区也是十几毫秒。
+      if (this.settings.unlinkedScanPrewarm !== false) {
+        void this.blockIndex?.buildAll().then(() => {
+          window.setTimeout(() => void this.blockIndex?.prewarmSignatures(), 1500);
+        });
+      }
     });
 
     this.patchSetViewState();

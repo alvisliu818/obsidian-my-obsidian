@@ -710,6 +710,22 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         }),
       );
 
+    new Setting(containerEl)
+      .setName('后台预热未链接引用索引')
+      .setDesc(
+        '布局就绪后，在后台把未链接引用的查询索引提前建好，这样第一次展开该区也不用多等。' +
+          '预热按 8 毫秒分片让出主线程，开着不影响操作；代价是十几 MB 常驻内存。' +
+          '关掉则回到「第一次展开时才建」，那一次在主库约 0.5 秒，之后每次查询仍是十几毫秒。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.unlinkedScanPrewarm !== false).onChange(async (v) => {
+          this.plugin.settings.unlinkedScanPrewarm = v;
+          await this.plugin.saveSettings();
+          // 打开时立刻补做一次（原来为了省内存而没建的，现在建）。
+          if (v) void this.plugin.blockIndex?.prewarmSignatures();
+        }),
+      );
+
   }
 
   private renderViewersSection(containerEl: HTMLElement): void {
