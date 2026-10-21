@@ -137,6 +137,12 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   private savedFocusPos: CursorPos = 'end';
   private indexDisposer: (() => void) | null = null;
   private searchBar: PageSearchBar | null = null;
+  /**
+   * Bumped on unload. Deferred refs renders capture it and drop themselves
+   * when it moved — a tab closed in the same tick as its open must not
+   * render into a dead view.
+   */
+  private refsEpoch = 0;
 
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
     super(leaf);
@@ -216,13 +222,17 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
       // Page references (linked + unlinked) + the supertag collection track
       // the index. renderPageReferences owns the whole host (it clears and
       // rebuilds it), so the collection is drawn INSIDE that host, after it.
-      renderPageReferences(
-        this.refsHostEl,
-        this.plugin,
-        this.file?.path,
-        this.file?.basename ?? '',
-      );
-      renderSupertagCollection(this.refsHostEl, this.plugin, this.file?.path);
+      // Deferred: an expanded Unlinked section re-scans the whole index and
+      // rebuilds fire every ~2s while editing — inline, the UI stutters on
+      // the save cadence. Badges stay inline (cheap DOM writes).
+      const refsPath = this.file?.path;
+      const refsName = this.file?.basename ?? '';
+      const refsEpoch = this.refsEpoch;
+      window.setTimeout(() => {
+        if (this.refsEpoch !== refsEpoch) return;
+        if (this.file?.path !== refsPath) return;
+        this.renderReferences(refsPath, refsName);
+      }, 0);
       refreshBlockBacklinkBadges(this);
     }) ?? null;
 
@@ -230,6 +240,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   }
 
   onunload(): void {
+    this.refsEpoch++;
     this.indexDisposer?.();
     this.indexDisposer = null;
     this.commitFocusedText();
@@ -614,19 +625,49 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     // rebuilds only; a file SWITCH must also refresh them, otherwise the
     // section shows the previous file's stale content (or an empty scan
     // from before the index existed) until the next unrelated rebuild.
-    renderPageReferences(
-      this.refsHostEl,
-      this.plugin,
-      this.file?.path,
-      this.file?.basename ?? '',
-    );
-    renderSupertagCollection(this.refsHostEl, this.plugin, this.file?.path);
+    //
+    // Deferred one tick on purpose: the Unlinked-references query is a
+    // linear scan over every indexed block — on the main vault (~8.7k
+    // notes) that measured 9.3s for a title with no mentions. Inline, it
+    // froze the tab open itself; now the page paints first and the
+    // references fill in immediately after. The epoch + path guards drop
+    // renders for views closed or re-targeted in the same tick.
+    const refsPath = this.file?.path;
+    const refsName = this.file?.basename ?? '';
+    const refsEpoch = this.refsEpoch;
+    window.setTimeout(() => {
+      if (this.refsEpoch !== refsEpoch) return;
+      if (this.file?.path !== refsPath) return;
+      this.renderReferences(refsPath, refsName);
+    }, 0);
     // Reveal a pending block reference (opened from another file via ((id))).
     const pending = this.plugin.pendingReveal;
     if (pending && pending.path === file.path) {
       this.plugin.pendingReveal = null;
       this.revealBlock(pending.blockId);
     }
+  }
+
+  /**
+   * Draw the page-references host: linked + unlinked mentions and the
+   * supertag collection. renderPageReferences owns the whole host (it
+   * clears and rebuilds it), so the collection is drawn INSIDE that host,
+   * after it. Called deferred from onLoadFile / the index-rebuild
+   * listener, and directly by the settings tab's default-collapse toggles.
+   */
+  renderReferences(currentPath?: string, fileBasename?: string): void {
+    renderPageReferences(
+      this.refsHostEl,
+      this.plugin,
+      currentPath ?? this.file?.path,
+      fileBasename ?? this.file?.basename ?? '',
+    );
+    renderSupertagCollection(this.refsHostEl, this.plugin, currentPath ?? this.file?.path);
+  }
+
+  /** Alias used by the settings tab (default-collapse toggles). */
+  refreshReferences(): void {
+    this.renderReferences();
   }
 
   async onUnloadFile(file: import('obsidian').TFile): Promise<void> {

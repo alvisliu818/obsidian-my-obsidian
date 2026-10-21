@@ -290,6 +290,21 @@ export interface BlockEditorSettings {
    */
   codeBlockPrewarm: boolean;
   /**
+   * 底部引用区默认折叠，两个区独立开关。
+   * 开 = 打开文件时该区只显示标题栏，点标题栏才展开（并触发查询）；关 = 默认展开。
+   * 折叠只是会话内的显示状态，不写进文件。refsDefaultCollapsed 是旧单开关，
+   * 迁移后保留作只读回显（不再被 UI 读写）。
+   *
+   * 为什么要默认值：Unlinked references 的查询是**全库 block 线性扫描**
+   * （标题作为子串逐块匹配），主库 8.6k 笔记 / ~150 万 block 实测每次
+   * 400ms~9s（稀有标题无早退）= 打开标签页卡死的元凶，故该项默认折叠
+   * （不查询）；Linked references 走反链索引 Map 查找，默认展开。
+   */
+  refsLinkedDefaultCollapsed: boolean;
+  refsUnlinkedDefaultCollapsed: boolean;
+  /** 旧版单开关（1.14.x）：迁移到上面两个独立开关后仅在旧 data.json 兼容读取。 */
+  refsDefaultCollapsed: boolean;
+  /**
    * 代码文件打开时,注释区用 Logseq 块编辑器呈现(view zone 内嵌在 Monaco
    * 代码流里):可编辑、按 Markdown 渲染、写 [[双链]]。代码块仍由 Monaco 编辑。
    *
@@ -615,6 +630,11 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   externalMounts: [],
   externalCodeWrap: true,
   codeBlockPrewarm: false,
+  refsLinkedDefaultCollapsed: false,
+  // Unlinked references 是全库线性扫描，大库上每次开页几百 ms~数秒，默认折叠
+  // （打开时不跑查询，点标题栏展开才跑）。需要默认展开的在设置里关掉本项。
+  refsUnlinkedDefaultCollapsed: true,
+  refsDefaultCollapsed: false,
   // 代码文件默认纯 Monaco 编辑器(用户 2026-10-18 决策);混合模式(注释区 =
   // Logseq 块编辑器)保留为设置/头部按钮可选,不再作为默认。
   externalCodeHybrid: false,

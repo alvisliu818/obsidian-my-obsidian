@@ -18,6 +18,36 @@ export const UNLINKED_SECTION_CLASS = 'page-unlinked';
 const MAX_ITEMS = 50;
 
 /**
+ * Per-block normalized (lowercase) forms for the mention scan, memoized on
+ * the block object itself.
+ *
+ * The index replaces block objects wholesale on every rebuild
+ * (`indexContent` pushes fresh ones; `forgetFile` drops the old), so a
+ * WeakMap keyed by the block can never go stale — while a rebuild that
+ * produced identical text still gets fresh objects and simply re-pays the
+ * one-time lowercase pass.
+ *
+ * Without this, every scan lowercases EVERY block's path + text + links:
+ * on the main vault (8.7k notes / ~1.5M indexed blocks) that is millions of
+ * string allocations per file open — measured 9.3s for a title with no
+ * mentions, which is what made opening a tab look like a dead loop.
+ */
+const normCache = new WeakMap<IndexedBlock, { path: string; text: string; links: string[] }>();
+
+function normsOf(b: IndexedBlock): { path: string; text: string; links: string[] } {
+  let n = normCache.get(b);
+  if (!n) {
+    n = {
+      path: b.path.toLowerCase(),
+      text: b.text.toLowerCase(),
+      links: b.links.map((l) => l.toLowerCase()),
+    };
+    normCache.set(b, n);
+  }
+  return n;
+}
+
+/**
  * Render the unlinked-mentions section under the backlinks area.
  * Idempotent; no-ops when the title is too short to match meaningfully.
  */
@@ -36,15 +66,20 @@ export function renderUnlinkedMentions(
   const idx = plugin.blockIndex;
   if (!idx) return;
 
+  const cl = currentPath.toLowerCase();
   const hits: Array<{ entry: IndexedBlock; count: number }> = [];
   for (const b of idx.allBlocks()) {
-    if (b.path.toLowerCase() === currentPath.toLowerCase()) continue;
-    const lower = b.text.toLowerCase();
-    if (!lower.includes(q)) continue;
+    // Substring test FIRST: it rejects nearly every block with one scan,
+    // so the same-file / already-linked checks (and their rare lowercase
+    // work) only run for genuine candidates. Conditions are conjunctive,
+    // so the reorder is semantics-preserving.
+    const n = normsOf(b);
+    if (!n.text.includes(q)) continue;
+    if (n.path === cl) continue;
     // Skip blocks that already link the page.
-    if (b.links.some((l) => l.toLowerCase() === q)) continue;
+    if (n.links.includes(q)) continue;
     // Count plain occurrences of the title (rough, for the badge).
-    const count = lower.split(q).length - 1;
+    const count = n.text.split(q).length - 1;
     hits.push({ entry: b, count });
     if (hits.length >= MAX_ITEMS) break;
   }
