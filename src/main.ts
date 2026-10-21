@@ -63,6 +63,15 @@ const CustomAttachmentLocationPlugin = (
 		default: new (app: unknown, manifest: unknown) => SubPluginLike;
 	}
 ).default;
+// advanced-rename-and-delete-handler v2.3：custom-attachment-location v12+
+// 声明的伴生依赖（附件跟随重命名/删除的真正执行者）。同款 require 桥；
+// descriptor 里的 manifest 覆盖（id/version 特制成上游值）是 CAL 门禁能
+// 打开的关键，见 modules/advanced-rename-and-delete-handler/NOTICE。
+const AdvancedRenameAndDeleteHandlerPlugin = (
+	require("../modules/advanced-rename-and-delete-handler/src/main") as {
+		default: new (app: unknown, manifest: unknown) => SubPluginLike;
+	}
+).default;
 import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
 import { registerFreeExtensions } from "./extensionRegistry";
 
@@ -263,17 +272,47 @@ export default class MyObsidianPlugin extends Plugin {
 			cls: AudioPlayerPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
+			// Third-party (mnaoumov, MIT), kept whole — see
+			// modules/advanced-rename-and-delete-handler/NOTICE. Wired through
+			// a require bridge like custom-attachment-location (upstream imports
+			// with .ts extensions; obsidian-lib range ^4.2.1 vs root 5.1.0).
+			//
+			// It is custom-attachment-location v12+'s declared companion: CAL's
+			// dependency gate consumes its API through watchPluginApi keyed by
+			// the UPSTREAM plugin id, and version-gates it through the plugin
+			// table. Hence the manifest override — publishPluginApi registers
+			// under plugin.manifest.id, so `id` must be the upstream id, and
+			// `version` must satisfy CAL's minPluginVersion 2.2.0 (host is 0.1.0).
+			// Listed BEFORE custom-attachment-location: provider first.
+			id: "advanced-rename-and-delete-handler",
+			legacyId: "advanced-rename-and-delete-handler",
+			name: "my Advanced Rename and Delete Handler",
+			summary:
+				"全库统一接管重命名/删除：更新链接、移动附件文件与文件夹、清理删除残留（空文件夹处理、挽救路径解析）。默认所有开关关闭，装上不改变现有行为；开启后 custom-attachment-location 的「附件跟随重命名」也由它完成。上游 mnaoumov（MIT）。",
+			desktopOnly: false,
+			manifest: { id: "advanced-rename-and-delete-handler", version: "2.3.0" },
+			cls: AdvancedRenameAndDeleteHandlerPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
 			// Third-party (RainCat1998 / mnaoumov, MIT), kept whole — see
 			// modules/custom-attachment-location/NOTICE. Large surface (147
 			// files / ~28k lines, 1673 errors under the host's strict config):
 			// wired through a require bridge, so it is type-checked by its own
 			// tsconfig instead of joining the host tsc program.
+			//
+			// manifest.version is overridden to the upstream 16.0.0: ARDH
+			// declares a BLOCKING conflict against obsidian-custom-attachment-
+			// location <12.0.0 (old versions owned a rename handler of their
+			// own) and reads the version off the alias-table instance — with
+			// the host's 0.1.0 it would read the co-bundled CAL as an OLD CAL,
+			// block itself, and dead-lock the CAL gate that depends on it.
 			id: "custom-attachment-location",
 			legacyId: "obsidian-custom-attachment-location",
 			name: "my Custom Attachment Location",
 			summary:
 				"自定义附件存放位置：用 {{noteFileName}}、{{date:format}} 等变量拼出目标路径，支持笔记子文件夹/同名文件夹归档、粘贴即自动归位、批量收集与清理未使用附件、重命名删除时同步更新链接。上游 RainCat1998 + mnaoumov（MIT）。",
 			desktopOnly: false,
+			manifest: { version: "16.0.0" },
 			cls: CustomAttachmentLocationPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
@@ -482,7 +521,7 @@ export default class MyObsidianPlugin extends Plugin {
 	 *    name would show five tabs all called "My Obsidian".
 	 */
 	private async startModule(d: ModuleDescriptor, state: ModuleState): Promise<void> {
-		const manifest = { ...this.manifest, name: d.name } as PluginManifest;
+		const manifest = { ...this.manifest, ...d.manifest, name: d.name } as PluginManifest;
 		const inst = new d.cls(this.app as App, manifest);
 		const host = this;
 		inst.loadData = async (): Promise<unknown> => state.data ?? {};

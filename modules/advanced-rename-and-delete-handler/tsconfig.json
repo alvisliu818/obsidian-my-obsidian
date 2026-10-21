@@ -1,0 +1,41 @@
+{
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "allowJs": true,
+    "allowSyntheticDefaultImports": true,
+    "exactOptionalPropertyTypes": true,
+    "forceConsistentCasingInFileNames": true,
+    "importHelpers": true,
+    "inlineSourceMap": true,
+    "inlineSources": true,
+    "isolatedModules": true,
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ES2022"
+    ],
+    "module": "node16",
+    "moduleResolution": "node16",
+    "noEmit": true,
+    "noImplicitAny": true,
+    "noUncheckedIndexedAccess": true,
+    "noUncheckedSideEffectImports": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "strictBuiltinIteratorReturn": true,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "strictPropertyInitialization": true,
+    "target": "es2022",
+    "types": [
+      "@obsidian-typings/obsidian-public-latest",
+      "node"
+    ],
+    "verbatimModuleSyntax": true
+  },
+  "include": [
+    "./api-contract.ts",
+    "./api.d.ts",
+    "./src/**/*.ts"
+  ]
+}

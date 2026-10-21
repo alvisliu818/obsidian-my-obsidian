@@ -1,0 +1,60 @@
+Advanced Rename and Delete Handler
+==================================
+
+出处
+----
+- 上游仓库：<https://github.com/mnaoumov/obsidian-advanced-rename-and-delete-handler>
+- 版本：v2.3.0
+- 作者：Michael Naumov（mnaoumov）
+- 许可证：**MIT**（见同目录 LICENSE）—— 与聚合宿主 GPL-3.0 兼容
+- minAppVersion：1.14.4；isDesktopOnly：false
+
+上游历史未嫁接（本次为平铺拷贝收编；如需追溯上游提交，可后补
+`git bundle` 嫁接，参照 modules/custom-attachment-location 的做法）。
+
+并入方式：require 桥（不进宿主 tsc）
+-----------------------------------
+- 体量：24 个源文件（上游另带大量集成测试，未收）。
+- 上游 import 全部带 `.ts` 扩展名、且 obsidian-lib 版本区间为 ^4.2.1
+  （根 node_modules 实装 5.1.0，供 custom-attachment-location 使用），
+  与宿主 strict 配置不合；按本仓收编判据走与 custom-attachment-location
+  相同的 **require 桥**：
+  - `src/main.ts` 用 `require("../modules/advanced-rename-and-delete-handler/src/main")`
+    引入，模块**不加入**宿主 `tsconfig.json` 的 include；
+  - 类型由模块自带 tsconfig 独立校验；esbuild 打包不受影响。
+
+manifest 特制副本（本模块与 CAL 门禁的关键）
+------------------------------------------
+上游把「重命名/删除时附件跟随」拆给本插件，custom-attachment-location
+v12+ 经 `watchPluginApi` 按 **pluginId** 消费它的 API（obsidian-lib 的
+`publishPluginApi` 用 `plugin.manifest.id` 作注册键），宿主别名表只解
+「插件表查找」，解不了 API 协商。因此本模块的 descriptor 带了
+`manifest` 覆盖：
+
+- `id: 'advanced-rename-and-delete-handler'` —— 让 API 发布对上键；
+- `version: '2.3.0'` —— CAL 门禁按插件表里的 `manifest.version` 校验
+  `minPluginVersion: 2.2.0`，宿主版本号（0.1.0）过不了。
+
+同理，custom-attachment-location 的 descriptor 补了
+`manifest: { version: '16.0.0' }`：本插件声明对 `<12.0.0` 的
+`obsidian-custom-attachment-location` 为 BLOCKING 冲突（老版本自带
+rename handler），查的是别名表实例的 `manifest.version` —— 宿主
+0.1.0 会被误判成老 CAL，反过来把自己 block 死，形成死锁。
+
+构建相关
+--------
+- 依赖：`@mnaoumov/obsidian-lib`、`@mnaoumov/typescript-lib`
+  （已装在**根** node_modules，版本 5.1.0 / 1.6.1，高于上游声明区间，
+  实测兼容；无需新增依赖）。
+- 样式：`src/styles/main.scss`（rescue 弹窗与设置说明样式）。聚合
+  esbuild 里 `.scss` 按 empty 处理，实际样式用 sass 编译后并入
+  **根 `styles.css`** 的 "Advanced Rename and Delete Handler" 分段。
+
+默认行为
+--------
+上游默认所有开关全关（shouldHandleRenames / shouldHandleDeletions /
+shouldRenameAttachmentFiles / shouldRenameAttachmentFolder /
+shouldDeleteEmptyNoteFolders / shouldDeleteConflictingAttachments 均
+false，emptyFolderBehavior 为 Keep）——装上不改变任何现有行为。
+在设置里打开开关后它才接管重命名/删除（届时 custom-attachment-location
+的「附件跟随重命名」也由它完成）。

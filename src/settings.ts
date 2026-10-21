@@ -8,7 +8,7 @@
  * each with its own settings shape, share one data.json without any of them
  * having to know they were merged.
  */
-import type { App } from "obsidian";
+import type { App, PluginManifest } from "obsidian";
 import { Notice, PluginSettingTab, Setting as SettingCtor } from "obsidian";
 import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
 
@@ -49,6 +49,19 @@ export interface ModuleDescriptor {
 	summary: string;
 	/** Desktop-only modules are refused when Obsidian has no Node/electron. */
 	desktopOnly: boolean;
+	/**
+	 * Per-module manifest overrides, merged over the host's manifest before
+	 * the copy is handed to the instance.
+	 *
+	 * Mostly identity fields (`id` / `version`) for modules that take part in
+	 * mnaoumov-style cross-plugin API negotiation: `publishPluginApi` registers
+	 * under `plugin.manifest.id`, and version gates read
+	 * `app.plugins.plugins[id].manifest.version` — both must be the UPSTREAM
+	 * values for a co-bundled provider/consumer pair to find each other.
+	 * `dir` must never be overridden (sidecar paths land in the real plugin
+	 * folder); `name` is always taken from the descriptor.
+	 */
+	manifest?: Partial<PluginManifest>;
 	/** The module's own Plugin class, imported from modules/<id>/src/main. */
 	cls: new (app: App, manifest: unknown) => SubPluginLike;
 }

@@ -58515,3 +58515,29 @@ body.hearth-snapshot-capturing .hearth-view:not(#hearth-boost) {
 .obsidian-custom-attachment-location .default-image-size-dimension-setting-control {
   margin-left: 5px;
 }
+
+/* ==================== Advanced Rename and Delete Handler (modules/advanced-rename-and-delete-handler) ==================== */
+/* 由 src/styles/main.scss 用 sass 编译并入；模块本地 .scss 为参考副本，改动需同步两边。 */
+.advanced-rename-and-delete-handler.rescue-ambiguity-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+  justify-content: flex-end;
+  /* A label that had to grow a path to stay distinguishable wraps inside its own button, rather than
+     widening the dialog past the screen. */
+}
+.advanced-rename-and-delete-handler.rescue-ambiguity-buttons button {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.advanced-rename-and-delete-handler.rescue-ambiguity-notes {
+  max-height: 12em;
+  overflow-y: auto;
+}
+.advanced-rename-and-delete-handler.rescue-ambiguity-reason {
+  color: var(--text-muted);
+}
+.advanced-rename-and-delete-handler.settings-note {
+  color: var(--text-muted);
+}
