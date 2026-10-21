@@ -169,6 +169,37 @@ export function stripIndent(line: string, depth: number): string {
   return rest;
 }
 
+/**
+ * Fold a lone `>` line (an empty quote ROW) into the neighboring quote
+ * block. A blank line ends a quote run in the parser, so `> a\n\n>\n\n> b`
+ * parses as three blocks — but the empty row belongs to the quote, not on
+ * its own: Logseq renders it inside the quote box (renderTree
+ * .withQuoteRowSeparation makes it visible there). Merge it into the quote
+ * ABOVE when there is one, otherwise into the quote BELOW; an empty quote
+ * with no quote neighbor stays its own block.
+ *
+ * Raw blocks are always top-level (flushRaw pushes with parent null), so a
+ * single pass over doc.blocks covers every parser-produced quote.
+ */
+function mergeEmptyQuoteRows(doc: ParsedDocument): void {
+  for (let k = 0; k < doc.blocks.length; k++) {
+    const b = doc.blocks[k];
+    if (b.kind !== 'raw' || !/^>\s*$/.test(b.text)) continue;
+    const prev = doc.blocks[k - 1];
+    const next = doc.blocks[k + 1];
+    const isQuote = (x: Block | undefined): boolean => !!x && x.kind === 'raw' && /^>/.test(x.text);
+    if (isQuote(prev)) {
+      prev.text += '\n' + b.text;
+      doc.blocks.splice(k, 1);
+      k--;
+    } else if (isQuote(next)) {
+      next.text = b.text + '\n' + next.text;
+      doc.blocks.splice(k, 1);
+      k--;
+    }
+  }
+}
+
 export function parseDocument(md: string): ParsedDocument {
   // CRLF (Windows) files: every parser regex below is `$`-anchored and `.`
   // never matches `\r`, so a trailing `\r` silently breaks fence open/close,
@@ -577,16 +608,14 @@ export function parseDocument(md: string): ParsedDocument {
         i++;
         continue;
       }
-      if (/^>\s*$/.test(trimmed)) {
-        // An EMPTY quote line is its own block (Logseq: it renders as a
-        // visible empty quote row). Merging it into the neighboring quote
-        // block made CommonMark drop it silently — the row vanished.
-        flushRaw();
-        rawBuf.push(line);
-        flushRaw();
-      } else {
-        rawBuf.push(line);
-      }
+      // An EMPTY quote line (`>` with no content) is a visible empty quote
+      // ROW of the quote run, not a block of its own: pushing it like any
+      // other structural line folds it into the quote block, where
+      // renderTree.withQuoteRowSeparation keeps the row visible. A blank
+      // line still ends the run, so a `>` separated from every quote stays
+      // its own block — mergeEmptyQuoteRows below folds THOSE into the
+      // neighboring quote (Logseq: one quote box, never a stray empty row).
+      rawBuf.push(line);
       i++;
       continue;
     }
@@ -608,6 +637,7 @@ export function parseDocument(md: string): ParsedDocument {
 
   flushRaw();
   flushBare();
+  mergeEmptyQuoteRows(doc);
   return doc;
 }
 

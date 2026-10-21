@@ -271,6 +271,7 @@ describe('round-trip invariants', () => {
     ['soft lines', '- first\n\tsecond\n- other'],
     ['frontmatter+pageprops', '---\nkey: v\n---\ntitle:: p\n\n- a'],
     ['raw heading', '# H1\npara\n\n- a'],
+    ['quote empty row', '> a\n>\n> b'],
     ['top-level fence', '```js\n- fake\n```\n- real'],
     ['in-block fence', '- code\n\t```js\n\tconst x;\n\t```\n- next'],
     ['nested fence column body', '- parent\n\t- ```python\n\t\tx = 1\n\t\t```\n- next'],
@@ -324,23 +325,61 @@ describe('serializeBlock', () => {
   });
 });
 
-describe('empty quote line is its own block', () => {
-  it('splits the trailing ">" off the quote block (Logseq: visible empty quote row)', () => {
+describe('empty quote row joins the neighboring quote block', () => {
+  it('folds the trailing ">" into the quote block (one quote box)', () => {
     const doc = parseDocument('> 示例代码：创建一个列表\n>');
-    expect(doc.blocks.map((b) => b.kind)).toEqual(['raw', 'raw']);
-    expect(doc.blocks[0].text).toBe('> 示例代码：创建一个列表');
-    expect(doc.blocks[1].text).toBe('>');
+    expect(doc.blocks.map((b) => b.kind)).toEqual(['raw']);
+    expect(doc.blocks[0].text).toBe('> 示例代码：创建一个列表\n>');
   });
 
-  it('an empty quote between two quote lines separates them', () => {
+  it('an empty quote between two quote lines joins the same block', () => {
     const doc = parseDocument('> a\n>\n> b');
-    expect(doc.blocks.map((b) => b.text)).toEqual(['> a', '>', '> b']);
+    expect(doc.blocks).toHaveLength(1);
+    expect(doc.blocks[0].text).toBe('> a\n>\n> b');
   });
 
   it('multi-line quotes still merge (no empty lines between)', () => {
     const doc = parseDocument('> a\n> b');
     expect(doc.blocks).toHaveLength(1);
     expect(doc.blocks[0].text).toBe('> a\n> b');
+  });
+
+  it('an empty quote separated by a blank line merges into the quote above', () => {
+    const doc = parseDocument('> 示例代码：浅拷贝\n\n>\n\n```python\nx = 1\n```');
+    expect(doc.blocks.map((b) => [b.kind, b.text])).toEqual([
+      ['raw', '> 示例代码：浅拷贝\n>'],
+      ['raw', '```python\nx = 1\n```'],
+    ]);
+  });
+
+  it('an empty quote with no quote above merges into the quote below', () => {
+    const doc = parseDocument('para\n\n>\n\n> b');
+    expect(doc.blocks.map((b) => [b.kind, b.text])).toEqual([
+      ['list', 'para'],
+      ['raw', '>\n> b'],
+    ]);
+  });
+
+  it('an isolated empty quote (no quote neighbor) stays its own block', () => {
+    const doc = parseDocument('para\n\n>\n\npara2');
+    expect(doc.blocks.map((b) => b.text)).toEqual(['para', '>', 'para2']);
+  });
+
+  it('a blank line between two non-empty quotes still separates them', () => {
+    const doc = parseDocument('> a\n\n> b');
+    expect(doc.blocks.map((b) => b.text)).toEqual(['> a', '> b']);
+  });
+
+  it('round-trips byte-stably once merged', () => {
+    const src = '> a\n>\n> b';
+    expect(serializeDocument(parseDocument(src))).toBe(src);
+  });
+
+  it('the blank-separated merge normalizes on save and is stable after', () => {
+    const src = '> a\n\n>\n\n> b';
+    const once = serializeDocument(parseDocument(src));
+    expect(once).toBe('> a\n>\n\n> b');
+    expect(serializeDocument(parseDocument(once))).toBe(once);
   });
 
   it('round-trips: serialize(parse(x)) re-parses to the same model', () => {
