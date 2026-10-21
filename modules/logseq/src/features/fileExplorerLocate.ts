@@ -64,8 +64,11 @@ export class FileExplorerLocateButton {
   /** 幂等地把按钮补到工具栏末尾。 */
   private inject(bar: HTMLElement): void {
     if (bar.querySelector('.logseq-locate-active-file')) return;
-    const btn = document.createElement('button');
-    btn.className = 'nav-action-button logseq-locate-active-file';
+    // 与官方 addNavButton 同构：div.clickable-icon.nav-action-button，
+    // 缺 clickable-icon 或用原生 <button> 都会导致样式与邻排按钮不一致。
+    const btn = bar.createDiv(
+      'clickable-icon nav-action-button logseq-locate-active-file',
+    );
     btn.setAttribute('aria-label', '定位当前文件');
     btn.title = '定位当前文件';
     setIcon(btn, 'crosshair');
