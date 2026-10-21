@@ -118,7 +118,14 @@ export class MetricsManager {
                 // We'll use direct children for complexity as per "abstract logic" prompt
                 m.rot = daysSinceEdit * directChildren;
             } else {
-                m.rot = 0;
+                // 库外文件：用索引时的 mtime；没有 mtime（读不到）则不参与 rot
+                const externalMtime = this.indexer.getExternalEntry(path)?.mtime;
+                if (externalMtime !== undefined) {
+                    const daysSinceEdit = (now - externalMtime) / msPerDay;
+                    m.rot = daysSinceEdit * directChildren;
+                } else {
+                    m.rot = 0;
+                }
             }
         });
     }

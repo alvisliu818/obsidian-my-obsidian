@@ -61,10 +61,11 @@ export function createSortComparator(
         } else if (sortBy === 'mtime' || sortBy === 'ctime') {
             const fileA = a.file ? app.vault.getAbstractFileByPath(a.path) : null;
             const fileB = b.file ? app.vault.getAbstractFileByPath(b.path) : null;
-            
-            const timeA = (fileA instanceof TFile) ? getFileTime(app, settings, fileA, sortBy) : 0;
-            const timeB = (fileB instanceof TFile) ? getFileTime(app, settings, fileB, sortBy) : 0;
-            
+
+            // 库外文件没有 vault stat，用索引时的 mtime 兜底（ctime 无来源，按 0 处理）
+            const timeA = a.externalMtime ?? ((fileA instanceof TFile) ? getFileTime(app, settings, fileA, sortBy) : 0);
+            const timeB = b.externalMtime ?? ((fileB instanceof TFile) ? getFileTime(app, settings, fileB, sortBy) : 0);
+
             compareResult = timeA - timeB;
         } else if (sortBy === 'thermal') {
             compareResult = metricsManager.getMetrics(a.path).thermal - metricsManager.getMetrics(b.path).thermal;

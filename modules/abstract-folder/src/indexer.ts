@@ -1,10 +1,20 @@
-import { App, TFile, CachedMetadata, TAbstractFile, Notice } from "obsidian";
+import { App, TFile, CachedMetadata, TAbstractFile, Notice, EventRef } from "obsidian";
 import { AbstractFolderPluginSettings } from "./settings";
 import { FileGraph, ParentChildMap, HIDDEN_FOLDER_ID, Cycle, AbstractFolderFrontmatter } from "./types";
 import AbstractFolderPlugin from '../main';
 import { debounce, Debouncer } from 'obsidian';
 import { updateAbstractLinksOnRename, updateGroupsOnRename } from "./utils/file-operations";
 import { Logger } from "./utils/logger";
+import {
+  ExternalFileEntry,
+  ExternalMountLite,
+  buildExternalLinkIndex,
+  extractLinkTexts,
+  iconFromFrontmatter,
+  listExternalMarkdownFiles,
+  readExternalFrontmatter,
+  resolveExternalLink,
+} from "./utils/externalIndex";
 
 interface FileDefinedRelationships {
     definedParents: Set<string>;
@@ -34,6 +44,12 @@ export class FolderIndexer {
   private pendingRebuild = false;
   private hasBuiltGraph = false;
 
+  // 库外文件（logseq 模块的 external mounts）：键 = abs。索引是异步慢更新的，
+  // graph 每次全量重建时从这里把库外关系织进去。
+  private externalEntries = new Map<string, ExternalFileEntry>();
+  private externalIndexing = false;
+  private pendingExternalIndex = false;
+
   constructor(app: App, settings: AbstractFolderPluginSettings, plugin: AbstractFolderPlugin) {
     this.app = app;
     this.settings = settings;
@@ -46,6 +62,7 @@ export class FolderIndexer {
       childToParents: this.childToParents,
       allFiles: this.allFiles,
       roots: new Set(),
+      externalFiles: this.externalEntries,
     };
     this.debouncedRebuildGraphAndTriggerUpdate = debounce(() => this.rebuildGraphAndTriggerUpdateImpl(), 1000, true);
   }
@@ -59,6 +76,17 @@ export class FolderIndexer {
   initializeIndexer() {
     this.initializePropertyNames();
     this.registerEvents();
+    this.indexExternalFiles();
+    // logseq 模块的挂载列表变化（新增/删除/启用）后重扫库外文件
+    // （自定义事件，Obsidian 的 Workspace.on 重载不认识，需按 omnisearch 的方式断言）
+    const ws = this.app.workspace as unknown as {
+      on(name: string, cb: () => void): EventRef;
+    };
+    this.plugin.registerEvent(
+      ws.on('logseq:external-mounts-refreshed', () => {
+        this.indexExternalFiles();
+      })
+    );
     this.debouncedRebuildGraphAndTriggerUpdate(); // Initial graph build
   }
 
@@ -185,6 +213,90 @@ export class FolderIndexer {
     );
   }
 
+  /**
+   * 库外文件索引：扫 logseq 模块的挂载 → 读 frontmatter → 存 externalEntries
+   * → 重建 graph。读文件分块让出主线程；防重入（期间再触发记 pending，
+   * 本轮跑完后再来一遍）。模块未启用/无挂载时清空索引并重建——挂载被删
+   * 之后图里不能残留库外节点。
+   */
+  private async indexExternalFiles() {
+    if (this.externalIndexing) {
+      this.pendingExternalIndex = true;
+      return;
+    }
+    this.externalIndexing = true;
+    try {
+      do {
+        this.pendingExternalIndex = false;
+        const mounts = this.readExternalMounts();
+        let files: ReturnType<typeof listExternalMarkdownFiles>['files'] = [];
+        if (mounts.length > 0) {
+          try {
+            files = listExternalMarkdownFiles(mounts).files;
+          } catch (error) {
+            Logger.warn("Indexer - external mounts scan failed", error);
+          }
+        }
+
+        this.externalEntries.clear();
+        const CHUNK = 200;
+        for (let i = 0; i < files.length; i += CHUNK) {
+          for (const f of files.slice(i, i + CHUNK)) {
+            const frontmatter = readExternalFrontmatter(f.abs);
+            const entry: ExternalFileEntry = {
+              abs: f.abs,
+              name: f.name,
+              rel: f.rel,
+              mountId: f.mountId,
+              mtime: f.mtime,
+              size: f.size,
+              frontmatter,
+              icon: iconFromFrontmatter(frontmatter),
+            };
+            this.externalEntries.set(entry.abs, entry);
+          }
+          // Yield to main thread
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+
+        this.rebuildGraphAndTriggerUpdate();
+      } while (this.pendingExternalIndex);
+    } finally {
+      this.externalIndexing = false;
+    }
+  }
+
+  /**
+   * 从 logseq 模块（软依赖）拿启用的库外挂载。字段全部容错：模块未安装、
+   * 设置缺失、形状不对都返回空数组——库外支持静默降级，绝不能拖垮索引。
+   */
+  private readExternalMounts(): ExternalMountLite[] {
+    const plugins = (this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } }).plugins?.plugins;
+    const logseq = plugins?.['obsidian-logseq'] as
+      | { settings?: { externalMounts?: Array<{ id?: unknown; path?: unknown; include?: unknown; exclude?: unknown; enabled?: unknown }> } }
+      | undefined;
+    const raw = logseq?.settings?.externalMounts;
+    if (!Array.isArray(raw)) return [];
+
+    const mounts: ExternalMountLite[] = [];
+    for (const m of raw) {
+      if (!m || m.enabled === false) continue; // 与 logseq mountFrom 一致：缺省 = 启用
+      if (typeof m.id !== 'string' || !m.id || typeof m.path !== 'string' || !m.path) continue;
+      mounts.push({
+        id: m.id,
+        path: m.path,
+        include: typeof m.include === 'string' ? m.include : '',
+        exclude: typeof m.exclude === 'string' ? m.exclude : '',
+      });
+    }
+    return mounts;
+  }
+
+  /** 查一个库外文件的条目（path = abs）。渲染层/打开逻辑用。 */
+  getExternalEntry(path: string): ExternalFileEntry | undefined {
+    return this.externalEntries.get(path);
+  }
+
   private async buildGraph() {
     this.parentToChildren = {};
     this.childToParents = new Map();
@@ -214,7 +326,11 @@ export class FolderIndexer {
         // Yield to main thread
         await new Promise(resolve => setTimeout(resolve, 0));
     }
-    
+
+    // 库外文件：关系在每次全量重建时从 externalEntries 重新织入
+    // （键 = abs，与 vault 路径同处一个 graph；两边命名空间不会撞）。
+    this.applyExternalFilesToGraph();
+
     this.recalculateAllRoots();
 
     this.graph = {
@@ -222,10 +338,109 @@ export class FolderIndexer {
       childToParents: this.childToParents,
       allFiles: this.allFiles,
       roots: this.graph.roots,
+      externalFiles: this.externalEntries,
     };
     
     this.cycles = []; // Clear previous cycles
     this.detectCycles(); // Call after graph is built
+  }
+
+  /**
+   * 把库外文件织进 graph：与 getFileRelationships 同一套语义，只是数据源从
+   * metadataCache 换成自己解析的 frontmatter，链接经 resolveLinkTargetForExternal
+   * （库外优先、vault 兜底）。fileRelationships 也以 abs 为键登记，周期检测、
+   * roots 计算、metrics 天然覆盖库外节点。
+   */
+  private applyExternalFilesToGraph() {
+    const linkIndex = buildExternalLinkIndex(
+      Array.from(this.externalEntries.values(), (e) => ({ rel: e.rel, abs: e.abs }))
+    );
+
+    for (const entry of this.externalEntries.values()) {
+      if (this.isExcluded(entry.rel)) continue;
+      const relationships = this.getExternalRelationships(entry, linkIndex);
+      this.fileRelationships.set(entry.abs, relationships);
+      this.applyRelationshipsToGraph(entry.abs, relationships);
+      this.allFiles.add(entry.abs);
+    }
+  }
+
+  /** 镜像 getFileRelationships：hidden 归入隐藏根；hidden 时不再算 parent；children 照算。 */
+  private getExternalRelationships(
+    entry: ExternalFileEntry,
+    linkIndex: ReturnType<typeof buildExternalLinkIndex>
+  ): FileDefinedRelationships {
+    const relationships: FileDefinedRelationships = {
+      definedParents: new Set(),
+      definedChildren: new Set(),
+    };
+
+    let isHidden = false;
+
+    // 1. parent 属性值含 'hidden'（大小写不敏感，数组逐项展开）
+    for (const propName of this.PARENT_PROPERTIES_TO_CHECK_FOR_CHILD_DEFINED_PARENTS) {
+      const parentProperty = entry.frontmatter[propName] as unknown;
+      if (parentProperty) {
+        const values = Array.isArray(parentProperty) ? parentProperty as unknown[] : [parentProperty];
+        for (const val of values) {
+          if (typeof val === 'string' && val.toLowerCase().trim() === 'hidden') {
+            isHidden = true;
+            break;
+          }
+        }
+      }
+      if (isHidden) break;
+    }
+
+    if (isHidden) {
+      relationships.definedParents.add(HIDDEN_FOLDER_ID);
+    }
+
+    // 2. 链接属性：先解析到库外，解析不到再走 vault 的 metadataCache
+    for (const propName of [...this.PARENT_PROPERTIES_TO_CHECK_FOR_CHILD_DEFINED_PARENTS, ...this.CHILD_PROPERTIES_TO_CHECK_FOR_PARENT_DEFINED_CHILDREN]) {
+      const isParentProp = this.PARENT_PROPERTIES_TO_CHECK_FOR_CHILD_DEFINED_PARENTS.includes(propName);
+      if (isParentProp && isHidden) continue; // 与库内一致：hidden 的文件不算 parent 挂靠
+
+      const values = extractLinkTexts(entry.frontmatter[propName]);
+      for (const link of values) {
+        const target = this.resolveLinkTargetForExternal(link, entry.rel, linkIndex);
+        if (!target || target === entry.abs) continue;
+
+        if (isParentProp) {
+          relationships.definedParents.add(target);
+        } else {
+          relationships.definedChildren.add(target);
+        }
+      }
+    }
+
+    return relationships;
+  }
+
+  /**
+   * 库外文件的链接解析：库外优先（resolveExternalLink：挂载内相对路径 →
+   * 源目录相对 → 文件名）；都没有再按 vault 链接解析（getFirstLinkpathDest
+   * 以空源路径起查，等效库内 wikilink 语义），排除路径里的结果丢弃。
+   */
+  private resolveLinkTargetForExternal(
+    link: string,
+    sourceRel: string,
+    linkIndex: ReturnType<typeof buildExternalLinkIndex>
+  ): string | null {
+    const external = resolveExternalLink(link, sourceRel, linkIndex);
+    if (external) return external;
+
+    const cleaned = link
+      .replace(/^["']+|["']+$/g, '')
+      .replace(/\[\[|\]\]/g, '')
+      .split('|')[0]
+      .split('#')[0]
+      .trim();
+    if (!cleaned) return null;
+
+    const resolved = this.app.metadataCache.getFirstLinkpathDest(cleaned, '');
+    if (resolved && !this.isExcluded(resolved.path)) return resolved.path;
+    return null;
   }
 
   private recalculateAllRoots() {

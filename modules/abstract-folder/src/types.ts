@@ -1,4 +1,5 @@
 import { TFile } from "obsidian";
+import { ExternalFileEntry } from "./utils/externalIndex";
 
 // Extend the App interface to include the 'commands' property,
 // which is available in Obsidian's internal API but might not be in default types.
@@ -27,6 +28,9 @@ export interface FileGraph {
   childToParents: Map<string, Set<string>>; // Child path -> Set of parent paths (for easier updates)
   allFiles: Set<string>; // All files encountered (parents or children)
   roots: Set<string>; // Root files (those without parents in the graph)
+  // 库外文件（vault 外的 md，键 = 磁盘绝对路径）。渲染层用它把 abs 路径
+  // 解析成可点击节点；vault 侧逻辑一律不读这个字段。
+  externalFiles: Map<string, ExternalFileEntry>;
 }
 
 export interface FolderNode {
@@ -36,6 +40,8 @@ export interface FolderNode {
   isFolder: boolean;
   icon?: string; // Optional icon or emoji from frontmatter
   isHidden?: boolean; // Whether this node should be considered "hidden" from the main tree
+  isExternal?: boolean; // 库外文件（path = 磁盘绝对路径，file 恒为 null）
+  externalMtime?: number; // 库外文件的修改时间（排序/metrics 用，vault 文件不走这里）
 }
 
 export interface Group {

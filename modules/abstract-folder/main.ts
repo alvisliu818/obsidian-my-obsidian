@@ -218,6 +218,40 @@ this.addCommand({
 		}
 	}
 
+	/**
+	 * 打开抽象文件夹里的库外文件：转发给 logseq 模块的 openExternalEntry
+	 * （软依赖——模块未启用/挂载已删时提示，不静默失败）。
+	 */
+	async openExternalAbstractNode(abs: string) {
+		const entry = this.indexer.getExternalEntry(abs);
+		if (!entry) return;
+
+		const logseq = (this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } }).plugins?.plugins?.['obsidian-logseq'] as
+			| {
+					settings?: { externalMounts?: Array<{ id?: string } & Record<string, unknown>> };
+					openExternalEntry?: (mount: unknown, node: unknown) => Promise<void>;
+			  }
+			| undefined;
+		if (!logseq?.openExternalEntry) {
+			new Notice("my Logseq Editor 模块未启用，无法打开库外文件。");
+			return;
+		}
+
+		const mount = (logseq.settings?.externalMounts ?? []).find((m) => m && m.id === entry.mountId);
+		if (!mount) {
+			new Notice("找不到该文件所属的库外挂载，请到 my Logseq Editor 检查挂载设置。");
+			return;
+		}
+
+		await logseq.openExternalEntry(mount, {
+			name: entry.name,
+			rel: entry.rel,
+			abs: entry.abs,
+			isDir: false,
+			children: [],
+		});
+	}
+
 	async activateView() {
 		let leaf: WorkspaceLeaf | null = null;
 		const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_ABSTRACT_FOLDER);

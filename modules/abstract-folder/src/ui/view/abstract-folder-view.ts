@@ -915,6 +915,23 @@ export class AbstractFolderView extends ItemView {
 
   private getDisplayName = (node: FolderNode): string => {
     if (node.path === HIDDEN_FOLDER_ID) return "Hidden";
+    if (node.isExternal) {
+      const entry = this.plugin.indexer.getExternalEntry(node.path);
+      const fallback = entry?.name || node.path.split('\\').pop()?.split('/').pop() || node.path;
+      for (const priority of this.settings.displayNameOrder) {
+        if (priority === 'basename') return fallback;
+        if (priority === 'aliases') {
+          if (!this.settings.showAliases) continue;
+          const aliases = entry?.frontmatter?.aliases;
+          if (Array.isArray(aliases) && aliases.length > 0 && typeof aliases[0] === 'string') return aliases[0];
+          if (typeof aliases === 'string' && aliases.trim()) return aliases;
+          continue;
+        }
+        const value = entry?.frontmatter?.[priority];
+        if (typeof value === 'string' && value.trim().length > 0) return value;
+      }
+      return fallback;
+    }
     if (node.file) {
       const cache = this.app.metadataCache.getFileCache(node.file);
       const frontmatter = cache?.frontmatter;
@@ -961,9 +978,11 @@ export class AbstractFolderView extends ItemView {
     if (node.file) {
       const fileExists = this.app.vault.getAbstractFileByPath(node.file.path);
       if (fileExists) this.app.workspace.getLeaf(false).openFile(node.file).catch(Logger.error);
+    } else if (node.isExternal) {
+      this.plugin.openExternalAbstractNode(node.path).catch(Logger.error);
     }
 
-    if (node.isFolder || node.file) {
+    if (node.isFolder || node.file || node.isExternal) {
       const currentColumnPath = this.viewState.selectionPath.slice(0, depth);
       const newSelectionPath = [...currentColumnPath, node.path];
       this.viewState.selectionPath = newSelectionPath;

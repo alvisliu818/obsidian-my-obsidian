@@ -16,8 +16,25 @@ export function createFolderNode(app: App, path: string, graph: FileGraph): Fold
         };
     }
 
-    const file = app.vault.getAbstractFileByPath(path);
     const parentToChildren = graph.parentToChildren;
+
+    // 库外文件：path = 磁盘绝对路径，vault 里查不到，先于 vault 查找拦截。
+    const external = graph.externalFiles.get(path);
+    if (external) {
+        const hasChildren = parentToChildren[path] && parentToChildren[path].size > 0;
+        return {
+            file: null,
+            path: path,
+            children: [],
+            isFolder: hasChildren,
+            icon: external.icon,
+            isExternal: true,
+            externalMtime: external.mtime,
+            isHidden: false
+        };
+    }
+
+    const file = app.vault.getAbstractFileByPath(path);
 
     // Determine if it is a folder (has children in graph)
     const hasChildren = parentToChildren[path] && parentToChildren[path].size > 0;

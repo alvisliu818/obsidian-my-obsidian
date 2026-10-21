@@ -90,9 +90,12 @@ itemEl._folderNode = node;
 // @ts-ignore - Storing ancestors data on element for recursive rendering
 itemEl._ancestors = ancestors;
 
-itemEl.draggable = true;
+// 库外文件不可作为拖拽源（abs 路径没法参与 vault 的移动/重命名）
+itemEl.draggable = !node.isExternal;
 
-itemEl.addEventListener("dragstart", (e) => this.dragManager.handleDragStart(e, node, parentPath || "", this.multiSelectedPaths));
+if (!node.isExternal) {
+    itemEl.addEventListener("dragstart", (e) => this.dragManager.handleDragStart(e, node, parentPath || "", this.multiSelectedPaths));
+}
 itemEl.addEventListener("dragover", (e) => this.dragManager.handleDragOver(e, node));
 itemEl.addEventListener("dragleave", (e) => this.dragManager.handleDragLeave(e));
 itemEl.addEventListener("drop", (e) => {
@@ -251,9 +254,12 @@ if (activeFile && activeFile.path === node.path) {
         // @ts-ignore
         itemEl._contextId = contextId;
 
-        itemEl.draggable = true;
+        // 库外文件不可作为拖拽源（abs 路径没法参与 vault 的移动/重命名）
+        itemEl.draggable = !node.isExternal;
 
-        itemEl.addEventListener("dragstart", (e) => this.dragManager.handleDragStart(e, node, item.parentPath || "", this.multiSelectedPaths));
+        if (!node.isExternal) {
+            itemEl.addEventListener("dragstart", (e) => this.dragManager.handleDragStart(e, node, item.parentPath || "", this.multiSelectedPaths));
+        }
         itemEl.addEventListener("dragover", (e) => this.dragManager.handleDragOver(e, node));
         itemEl.addEventListener("dragleave", (e) => this.dragManager.handleDragLeave(e));
         itemEl.addEventListener("drop", (e) => {
@@ -339,6 +345,8 @@ if (activeFile && activeFile.path === node.path) {
                 // Open in new tab (true = split leaf)
                 this.app.workspace.getLeaf('tab').openFile(node.file).catch(Logger.error);
             }
+        } else if (node.isExternal) {
+            this.plugin.openExternalAbstractNode(node.path).catch(Logger.error);
         }
     }
 
@@ -392,6 +400,16 @@ if (activeFile && activeFile.path === node.path) {
                     if (itemEl) {
                         await this.toggleCollapse(itemEl, node.path, (itemEl as ExtendedHTMLElement)._contextId);
                     }
+                }
+            }
+        } else if (node.isExternal) {
+            // 库外文件：交给 logseq 模块打开；有子节点时与 vault 文件一样联动展开
+            this.plugin.openExternalAbstractNode(node.path).catch(Logger.error);
+            if (this.settings.autoExpandChildren && node.children.length > 0) {
+                const selfEl = e.currentTarget as HTMLElement;
+                const itemEl = selfEl.parentElement; // The .abstract-folder-item
+                if (itemEl) {
+                    await this.toggleCollapse(itemEl, node.path, (itemEl as ExtendedHTMLElement)._contextId);
                 }
             }
         } else if (node.isFolder) {

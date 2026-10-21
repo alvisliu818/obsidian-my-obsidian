@@ -139,6 +139,9 @@ export class DragManager {
     }
 
     public async handleDrop(event: DragEvent, targetNode: FolderNode | null) {
+        // 库外文件不是 vault 里的实体，不能作为移动/复制目标
+        if (targetNode?.isExternal) return;
+
         const targetEl = event.currentTarget as HTMLElement;
         targetEl.removeClass("abstract-folder-drag-over");
         targetEl.removeClass("abstract-folder-drag-invalid");
