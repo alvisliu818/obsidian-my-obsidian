@@ -279,13 +279,17 @@ function printVerbose(fn: (...args: any[]) => any, ...args: any[]): void {
 export const countError = (() => {
   let counter = 0
   let alreadyWarned = false
-  setTimeout(() => {
+  // 每秒衰减 1：只有「1 秒内凑满阈值」的突发错误才告警。
+  // 曾经是单次 setTimeout——跑完一次就没了，计数器全程最多减 1，
+  // 语义退化成「整个会话累计 5 次」：网盘挂载下的瞬态读失败
+  // （EBUSY/EPERM/ENOENT）攒够数就弹「请清理缓存」误报。
+  window.setInterval(() => {
     if (counter > 0) {
       --counter
     }
   }, 1000)
   return (immediate = false) => {
-    // 3 errors in 1 second, there's probably something wrong
+    // 5 errors in 1 second, there's probably something wrong
     if ((++counter >= 5 || immediate) && !alreadyWarned) {
       alreadyWarned = true
       new Notice(

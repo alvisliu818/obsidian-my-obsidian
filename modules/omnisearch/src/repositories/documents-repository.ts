@@ -4,7 +4,6 @@ import type { IndexedDocument } from '../globals'
 import type OmnisearchPlugin from '../main'
 import { absFromExternalDocPath, isExternalDocPath } from '../tools/externalDocs'
 import {
-  countError,
   extractHeadingsFromCache,
   getAliasesFromMetadata,
   getTagsFromMetadata,
@@ -23,17 +22,8 @@ export class DocumentsRepository {
    * in the form of IndexedDocuments
    */
   private documents: Map<string, IndexedDocument> = new Map()
-  private errorsCount = 0
 
-  constructor(private plugin: OmnisearchPlugin) {
-    this.plugin.registerInterval(
-    window.setInterval(() => {
-      if (this.errorsCount > 0) {
-        --this.errorsCount
-        }
-      }, 1000)
-    )
-  }
+  constructor(private plugin: OmnisearchPlugin) {}
 
   /**
    * Set or update the live cache with the content of the given file.
@@ -43,10 +33,12 @@ export class DocumentsRepository {
     try {
       const doc = await this.getAndMapIndexedDocument(path)
       if (!doc) {
-        // 库外文件读不了（被网盘客户端锁定/替换、临时消失等）——静默跳过。
-        // 这些是瞬态失败，不是缓存损坏；计入 countError 只会造成
-        // 「请清理缓存」的误报（百度盘挂载下每次重启都会凑满阈值）。
-        // 文件真正删除由下一轮 reconcile 从索引里清掉。
+        // 读不到内容：库外文件被网盘客户端锁定/替换（getExternalIndexedDocument
+        // 返回 null），或库内文件已被静默删除 / 读取瞬态失败。都是瞬态或可自愈
+        // 场景，不是缓存损坏——摘掉 live cache 条目即可，不计 countError
+        // （计入只会造成「请清理缓存」的误报，百度盘挂载下每次重启都凑满阈值）。
+        // 文件下次可读时会被 diff / refreshIndex 重新收录。
+        logVerbose('Omnisearch: no readable content for', path, '- skipping')
         this.removeDocument(path)
         return
       }
@@ -59,10 +51,18 @@ export class DocumentsRepository {
       this.documents.set(path, doc)
       this.plugin.embedsRepository.refreshEmbedsForNote(path)
     } catch (e) {
-      console.warn(`Omnisearch: Error while adding "${path}" to live cache`, e)
+      // getAndMapIndexedDocument 抛错只剩两类，都不是「缓存损坏」：
+      // ① 文件已不存在——库外进程静默删除/改名（Obsidian 没发 delete 事件）
+      //    留下的陈旧条目，自愈摘除即可；
+      // ② 读取抛错——网盘客户端锁定/替换（EBUSY/EPERM/ENOENT）等瞬态故障，
+      //    或 canvas 解析失败这类文件级问题。清理缓存都解决不了这些问题，
+      //    计 countError 只会造成「请清理缓存」的误报（百度盘挂载下每次
+      //    重启都凑满阈值）。改为 verbose 日志：默认不刷屏，排查时打开
+      //    verboseLogging 即能看到。文件下次可读时会被 diff / refreshIndex
+      //    重新收录。
+      logVerbose(`Omnisearch: skipping "${path}"`, e)
       // Shouldn't be needed, but...
       this.removeDocument(path)
-      countError()
     }
   }
 
@@ -78,8 +78,8 @@ export class DocumentsRepository {
     await this.addDocument(path)
     const document = this.documents.get(path)
 
-    // 库外瞬态跳过（被锁定/替换中的网盘文件）：给空壳文档，不计错误——
-    // 文件下次可读时会被 diff 重新收录。真正的缓存损坏才走 countError。
+    // 库外瞬态读失败（被锁定/替换中的网盘文件）：给空壳文档——文件下次
+    // 可读时会被 diff 重新收录，搜索结果暂时少一条，不计任何错误。
     if (!document && isExternalDocPath(path)) {
       return {
         basename: '',
@@ -96,13 +96,10 @@ export class DocumentsRepository {
       }
     }
 
-    // Only happens if the cache is corrupted
-    if (!document) {
-      console.error('Omnisearch', path, 'cannot be read')
-      countError()
-    }
-
-    // The document might be undefined, but this shouldn't stop the search from mostly working
+    // 库内文件取不到：陈旧条目（调用方按「文件已不存在」自愈摘除）或
+    // 瞬态读失败（下次 refresh/search 重试）。两者都不是「缓存损坏」——
+    // 原先这里在 addDocument 已计过一次之后又计一次（同一失败双计），
+    // 且 console.error 每刷一次搜索结果就刷一遍，一并去掉。
     return document!
   }
 
