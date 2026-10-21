@@ -7,7 +7,11 @@ import { EditActivityTracker } from "./EditActivityTracker";
 import { PendingSaveQueue } from "./PendingSaveQueue";
 import { WorkspaceLayoutSaveController } from "./WorkspaceLayoutSaveController";
 
-type SaveFn = (this: MarkdownView, ...args: unknown[]) => Promise<void> | void;
+// 补丁层级是 TextFileView.prototype.save：MarkdownView 没有自有 save（经原型链
+// 继承），块编辑器 BlockEditorView extends TextFileView 的 super.save() 也落在这里。
+// 早年只打 MarkdownView.prototype 会在其上造一个遮蔽属性，块编辑器的保存整条
+// 绕过包装器——文件落了盘但待保存队列条目永不 clear，标签页圆点常亮（#dot）。
+type SaveFn = (this: TextFileView, ...args: unknown[]) => Promise<void> | void;
 type RequestSaveFn = (this: TextFileView, ...args: unknown[]) => void;
 type OpenFileFn = (this: WorkspaceLeaf, ...args: unknown[]) => Promise<unknown>;
 type OnUnloadFileFn = (this: TextFileView, file: TFile) => Promise<void>;
@@ -295,8 +299,8 @@ export class AutoSaveController {
       return;
     }
 
-    const markdownViewPrototype = MarkdownView.prototype as unknown as { save: SaveFn };
     const textFileViewPrototype = TextFileView.prototype as unknown as {
+      save: SaveFn;
       requestSave?: RequestSaveFn;
       onUnloadFile: OnUnloadFileFn;
     };
@@ -316,9 +320,9 @@ export class AutoSaveController {
     };
     const writableFileManagerWithTrashFile = fileManagerWithTrashFile;
 
-    this.originalSave = this.unwrapWrappedFunction(markdownViewPrototype.save);
+    this.originalSave = this.unwrapWrappedFunction(textFileViewPrototype.save);
     this.installedSaveWrapper = this.createSaveWrapper(this.originalSave);
-    markdownViewPrototype.save = this.installedSaveWrapper;
+    textFileViewPrototype.save = this.installedSaveWrapper;
 
     if (typeof textFileViewPrototype.requestSave === "function") {
       this.originalRequestSave = this.unwrapWrappedFunction(textFileViewPrototype.requestSave);
@@ -492,8 +496,8 @@ export class AutoSaveController {
   }
 
   disable() {
-    const markdownViewPrototype = MarkdownView.prototype as unknown as { save: SaveFn };
     const textFileViewPrototype = TextFileView.prototype as unknown as {
+      save: SaveFn;
       requestSave?: RequestSaveFn;
       onUnloadFile: OnUnloadFileFn;
     };
@@ -513,8 +517,8 @@ export class AutoSaveController {
     };
     const writableFileManagerWithTrashFile = fileManagerWithTrashFile;
 
-    if (this.originalSave && markdownViewPrototype.save === this.installedSaveWrapper) {
-      markdownViewPrototype.save = this.originalSave;
+    if (this.originalSave && textFileViewPrototype.save === this.installedSaveWrapper) {
+      textFileViewPrototype.save = this.originalSave;
     }
     this.originalSave = null;
     this.installedSaveWrapper = null;
@@ -620,7 +624,7 @@ export class AutoSaveController {
     const markViewDirty = (view: TextFileView) => this.markViewDirty(view);
     const { discardedViews, pendingSaveQueue, workspaceLayoutSaveController } = this;
 
-    const wrappedSave = function wrappedSave(this: MarkdownView, ...args: unknown[]) {
+    const wrappedSave = function wrappedSave(this: TextFileView, ...args: unknown[]) {
       const filePath = this.file?.path;
       if (!filePath) {
         return callWithArgs(originalSave, this, ...args);
@@ -2228,13 +2232,21 @@ export class AutoSaveController {
   }
 
   private markActiveFileManualSaveRequested(): void {
-    const activeMarkdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-    const filePath = activeMarkdownView?.file?.path;
+    // 任何 TextFileView 都算。块编辑器（BlockEditorView extends TextFileView，
+    // 不是 MarkdownView）的 Ctrl+S 走的是同一条 editor:save-file 命令；只认
+    // MarkdownView 会漏标记它，保存随即掉进持有分支被压制——文件不写、圆点
+    // 不消，与「显式保存不受持有语义约束」的设计相悖。
+    const activeFileView = this.app.workspace.getActiveViewOfType(TextFileView);
+    const filePath = activeFileView?.file?.path;
     if (!filePath) {
       return;
     }
 
     this.markManualSaveRequested(filePath);
+    // 显式保存作废会话基线：用户主动按下的内容就是想要的内容，之后「不保存
+    // 并关闭」不应把它回滚掉（与 EditActivityTracker.handleManualSaveShortcut
+    // 对 MarkdownView 做的事对齐；基线是会话级只捕一次，漏清就会滚掉已存内容）。
+    this.pendingSaveQueue.clearBaseline(filePath);
   }
 
   private getSaveCommandDefinition(): { checkCallback?: SaveCommandCheckCallback } | null {

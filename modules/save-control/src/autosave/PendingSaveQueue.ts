@@ -1,7 +1,9 @@
-import { App, FileSystemAdapter, MarkdownView, TextFileView, TFile } from "obsidian";
+import { App, FileSystemAdapter, TextFileView, TFile } from "obsidian";
 import { dlog } from "../debug";
 
-type SaveFn = (this: MarkdownView, ...args: unknown[]) => Promise<void> | void;
+// 补丁层级是 TextFileView.prototype.save：MarkdownView 与块编辑器
+// （BlockEditorView extends TextFileView）都经原型链继承它。
+type SaveFn = (this: TextFileView, ...args: unknown[]) => Promise<void> | void;
 const PENDING_RAM_REFRESH_INTERVAL_MS = 2000;
 
 type PendingSaveEntry = {
@@ -283,9 +285,10 @@ export class PendingSaveQueue {
       // status indicator never reports "saved" while changes are still pending.
       const attachedViewFilePath = pendingSave.view.file?.path;
       if (!this.shouldWriteDirectlyToVault() && attachedViewFilePath === filePath) {
-        // originalSave 是 MarkdownView.prototype.save 的原始实现；调用方保证
-        // 传进来的视图确实来自那条原型链（TextFileView 只是队列的宽类型）。
-        await originalSave.call(pendingSave.view as unknown as MarkdownView);
+        // originalSave 是 TextFileView.prototype.save 的原始实现。补丁就打在这一层：
+        // MarkdownView 与块编辑器（BlockEditorView extends TextFileView）都经原型链
+        // 继承它，块编辑器的 super.save() 同样落在这里——getViewData 按视图多态分发。
+        await originalSave.call(pendingSave.view);
       } else {
         const fileSystemAdapter = this.app.vault.adapter;
         if (fileSystemAdapter instanceof FileSystemAdapter) {
