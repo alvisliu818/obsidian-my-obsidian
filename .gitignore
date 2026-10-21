@@ -34,6 +34,10 @@ tests/e2e/_*.out
 /_ins-*.mjs
 /_probe-*.mjs
 /_diag-*
+# 仓库根探针的输出日志（重定向 .out，配合上面的 _probe-*.mjs）
+/_probe-*.out
+# 会话过程留档（待办/收尾笔记，自行注明"本文件不入库"）
+/WIP-*.md
 
 # Yarn 4 PnP：cache 在 globalFolder（E:/HOME/Code/.yarn-global，不在仓内）；
 # 解析映射与解包产物本地再生成，公开仓不入库。
@@ -41,3 +45,5 @@ tests/e2e/_*.out
 .pnp.loader.mjs
 .yarn/install-state.gz
 .yarn/unplugged/
+# packageManager 钉版本的 yarn release 二进制，yarn 首次运行时自动落地，可再生
+.yarn/releases/
