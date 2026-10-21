@@ -677,6 +677,16 @@ export default class OpenTabSettingsPlugin extends Plugin {
                 (group.children[group.currentTab] === l || (group instanceof WorkspaceTabs && group.isStacked)) &&
                 (!leaf || leaf.activeTime < l.activeTime)
             ) {
+              // reuseUnmodifiedTab: never hand back a tab with unsaved edits —
+              // same rule as the canNavigate branch above. Clicking the file
+              // explorer moves focus to a sidebar leaf (canNavigate()=false),
+              // which lands here; without this check the "most recent
+              // navigable leaf" is exactly the tab the user is editing, and
+              // openFile clobbers it in place. Skipped edited candidates fall
+              // through to an unedited tab, or to createNewLeaf if none is left.
+              if (settings.reuseUnmodifiedTab && this.isLeafEdited(l)) {
+                return;
+              }
               leaf = l;
             }
           }
