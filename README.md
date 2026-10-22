@@ -17,6 +17,7 @@
 | Omnisearch | obsidian-omnisearch | 库内全文搜索引擎（第三方） |
 | Save Control | save-history + autosave-control | 库外文件的自动保存、版本快照、未保存圆点与关闭提示（两 MIT 插件合并） |
 | Git | obsidian-git | 库内 git 集成：自动备份、源管理视图、行作者标注（第三方，支持分离布局） |
+| Vault Explorer | obsidian-vault-explorer | frontmatter 可视化库浏览器：网格/列表/表格/动态四种版式、属性过滤与自定义过滤器（第三方） |
 
 历史用 `git subtree` 挂在 `modules/<子功能>/` 下，各插件原来的提交都能追溯。
 
@@ -39,6 +40,7 @@ GPL-3 是强 copyleft——衍生作品必须整体以 GPL-3 分发，这不是�
 | Save Control（save-history） | Sevoni | MIT | 见 `modules/save-control/NOTICE.md` |
 | Save Control（autosave-control） | mihasm | MIT | 见 `modules/save-control/NOTICE.md` |
 | Git | Vinzent03 | MIT | https://github.com/Vinzent03/obsidian-git |
+| Vault Explorer | DecafDev | MIT | https://github.com/decaf-dev/obsidian-vault-explorer |
 
 - **Material Icon Theme** 另外打包了 Material Icon Theme 的图标美术资源（来源
   `material-icon-theme` npm 包），其许可声明见

@@ -72,6 +72,15 @@ const AdvancedRenameAndDeleteHandlerPlugin = (
 		default: new (app: unknown, manifest: unknown) => SubPluginLike;
 	}
 ).default;
+// vault-explorer v1.47.4（DecafDev，MIT）：同款 require 桥——它的源码用 `src/...`
+// 非相对导入（上游 baseUrl 约定），而宿主 tsconfig 的 `src/*` 别名已被 obsidian-git
+// 占用，不能让它进宿主 tsc 程序；类型由模块自带 tsconfig 独立校验，运行时照常
+// 打进 bundle（.svelte 组件由根 esbuild 的 svelte 插件编译）。
+const VaultExplorerPlugin = (
+	require("../modules/vault-explorer/src/main") as {
+		default: new (app: unknown, manifest: unknown) => SubPluginLike;
+	}
+).default;
 import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
 import { registerFreeExtensions } from "./extensionRegistry";
 
@@ -385,6 +394,29 @@ export default class MyObsidianPlugin extends Plugin {
 				"库首页：全局搜索与快速切换器、仪表盘卡片（日记/任务/看板/日历/RSS 阅读/天气/书签/最近文件/画册/启动器/集成 Dataview 等）、工作区布局与壁纸外观，移动端可用。上游 ondreu/Hearth（MIT）。",
 			desktopOnly: false,
 			cls: HearthPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Third-party (DecafDev, MIT), kept whole — see
+			// modules/vault-explorer/NOTICE. Wired through a require bridge like
+			// media-extended: its `src/...` imports rely on the upstream baseUrl
+			// convention and the host tsconfig's `src/*` alias already points at
+			// obsidian-git.
+			id: "vault-explorer",
+			legacyId: "vault-explorer",
+			name: "my Vault Explorer",
+			// manifest.version MUST be the upstream value: the module saves
+			// manifest.version into its own data as pluginVersion, and on every
+			// later boot preformMigrations() runs the whole 0.3.3 -> 1.46 chain
+			// whenever isVersionLessThan(loadedVersion, to) is true — with the
+			// host's 0.1.0 that mangles DEFAULT_SETTINGS into a shape whose
+			// search filter has { isEnabled: true, value: undefined }, and the
+			// view dies on its first effect (e.toLowerCase crash, empty view).
+			// Same reason ARDH/CAL override their id/version.
+			manifest: { id: "vault-explorer", version: "1.47.4" },
+			summary:
+				"可视化库浏览器：以 frontmatter 属性与文件元数据过滤、排序，网格/列表/表格/动态（feed）四种版式展示，自定义过滤器可保存复用，卡片支持封面图与正文预览。上游 DecafDev（MIT）。",
+			desktopOnly: true,
+			cls: VaultExplorerPlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 

@@ -1,19 +1,23 @@
 {
-	"extends": "@tsconfig/svelte/tsconfig.json",
 	"compilerOptions": {
-		"types": ["svelte", "node", "jest"],
-		"baseUrl": ".",
-		"inlineSources": false,
+		"target": "ES2021",
 		"module": "ESNext",
-		"target": "ES6",
-		"allowJs": true,
-		"allowSyntheticDefaultImports": true,
+		"moduleResolution": "bundler",
+		"paths": {
+			"src/*": ["./src/*"]
+		},
+		"lib": ["DOM", "ES2021", "DOM.Iterable"],
+		"types": ["svelte", "node"],
 		"noImplicitAny": true,
-		"moduleResolution": "node",
-		"importHelpers": true,
-		"isolatedModules": true,
 		"strictNullChecks": true,
-		"lib": ["DOM", "ES5", "ES6", "ES7"]
+		"noEmit": true,
+		"skipLibCheck": true,
+		"esModuleInterop": true,
+		"allowSyntheticDefaultImports": true,
+		"resolveJsonModule": true,
+		"isolatedModules": true,
+		"verbatimModuleSyntax": true,
+		"forceConsistentCasingInFileNames": true
 	},
-	"include": ["**/*.ts", "**/*.svelte"]
+	"include": ["src/**/*.ts", "svelte-shims.d.ts"]
 }
