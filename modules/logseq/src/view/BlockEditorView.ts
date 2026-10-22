@@ -69,7 +69,7 @@ import { applySupertags, normalizeTag, removeSupertags } from '../features/super
 import { collectBlockTags, removeTagFromText } from '../features/supertagText';
 import { mountCodeEditor, parseCodeFence, type MountedCodeEditor } from '../blocks/codeBlockEdit';
 import { unwatchGuideLayout, watchGuideLayout } from '../blocks/guideLayout';
-import { MOUNT_FOLDER, readExternalText, writeExternalText } from '../features/extFs';
+import { baseOf, MOUNT_FOLDER, readExternalText, writeExternalText } from '../features/extFs';
 import { relativeDisplayPath } from '../features/codeFileKind';
 import { setLeafTitle } from '../features/leafTitle';
 
@@ -552,6 +552,15 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
       writeExternalText(this.externalAbs, data);
       this.externalDiskData = data;
       this.externalDirty = false;
+      // 库外写盘绕过 vault,save-control 的 versionOnWrite(监听 vault modify)
+      // 收不到——显式通知它记一个「写盘」版本(同内容去重在那边做)。
+      const sc = (
+        this.plugin.app.plugins as Record<
+          string,
+          { onExternalSaved?: (abs: string, fileName: string) => void } | undefined
+        >
+      )['save-control'];
+      sc?.onExternalSaved?.(this.externalAbs, baseOf(this.externalAbs));
     } catch (e) {
       new Notice(`保存失败：${String(e).slice(0, 120)}`);
     }

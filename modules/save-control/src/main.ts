@@ -53,6 +53,7 @@ import { SaveStatusIndicator } from "./autosave-ui/StatusIndicator";
 import { ExternalSaveScheduler } from "./externalScheduler";
 import { UnsavedDotMonitor } from "./tabUnsavedDot";
 import { resolveExternalSnapshotRoot } from "./externalStore";
+import { ON_WRITE_SNAPSHOT_NAME } from "./autoVersion";
 import {
   asExternalSaveHandle,
   externalTarget,
@@ -279,6 +280,17 @@ export class SaveControlPlugin extends Plugin {
       // 显式保存：会话基线作废——之后「不保存并关闭」不能回滚这次保存。
       this.autosaveController?.clearSessionBaseline(path);
     }
+  }
+
+  /** 库外文件落盘后的「写盘」版本:external 写盘不走 vault,autoVersion 的
+   *  vault.on('modify') 收不到——由写盘方(BlockEditorView.save)显式通知。
+   *  同内容去重与间隔策略都在 saveNowForTarget 里。 */
+  onExternalSaved(abs: string, fileName: string): void {
+    if (!this.settings.versionOnWriteEnabled) return;
+    const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+    if (!this.isExtensionAllowed(ext)) return;
+    const target = externalTarget(abs, fileName);
+    void this.versioning.saveNowForTarget(target, ON_WRITE_SNAPSHOT_NAME).catch(() => undefined);
   }
 
   /**
