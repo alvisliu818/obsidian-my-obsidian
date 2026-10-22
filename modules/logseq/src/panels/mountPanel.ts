@@ -769,14 +769,19 @@ export class MountPanelView extends ItemView {
     const walk = (list: MountNode[], depth: number): void => {
       for (const n of list) {
         out.push({ kind: 'node', node: n, mount, state, depth });
+        const isOpen = state.open.has(n.rel);
         // 挂在这个节点之下的嵌套挂载:与真实子项同级,但排在它们之前。
+        // ⚠️ 不能写成 `nested.length === 0 → continue`:真实子项的下潜在
+        // 它后面,没有嵌套挂载的普通文件夹会被整棵藏掉——展开后 caret 翻了、
+        // loadLayer 也读了盘,却一个子行都不织(实测:挂载项子目录打不开)。
+        // 与 emitMountHead 的 walk 保持同构:挂载头与真实子项各自独立判定。
         const nested = this.nestedMountsOf(mount.id, n.rel);
-        if (nested.length === 0) continue;
-        if (!state.open.has(n.rel)) continue;
-        const chain = new Set<string>([mount.id]);
-        for (const child of nested) this.emitMountHead(child, depth + 1, out, chain);
+        if (nested.length > 0 && isOpen) {
+          const chain = new Set<string>([mount.id]);
+          for (const child of nested) this.emitMountHead(child, depth + 1, out, chain);
+        }
         // 文件夹才继续下潜真实子项;文件没有 children,到此为止。
-        if (n.isDir) walk(n.children, depth + 1);
+        if (n.isDir && isOpen) walk(n.children, depth + 1);
       }
     };
     // 根层从 depth 1 起排:挂载根是区块头(不在行流里),子项整体缩进一级,

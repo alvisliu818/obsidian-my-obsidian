@@ -144,3 +144,32 @@ describe('flatten — nesting is recursive', () => {
     expect(describe2(rows)).toEqual(['HEAD:child@1', 'DIR:sub@2', 'HEAD:grand@3', 'FILE:host.md@1']);
   });
 });
+
+describe('flatten — a plain folder with NO nested mounts still descends', () => {
+  // 回归:8cc0db9b 曾把 descend 放在 `nested.length === 0 → continue` 之后,
+  // 于是没有挂嵌套挂载的普通文件夹被整棵藏掉——点击展开时 caret 翻转、
+  // loadLayer 也读了盘,却一个子行都不织(实测:挂载项子目录打不开)。
+  const tree = [
+    node('sub', 'sub', true, [
+      node('inner.md', 'sub/inner.md', false),
+      node('deep', 'sub/deep', true, [node('x.md', 'sub/deep/x.md', false)]),
+    ]),
+    node('top.md', 'top.md', false),
+  ];
+
+  it('shows the real children of an expanded folder, recursively', () => {
+    const panel = panelWith([mount('host')]);
+    const state = { open: new Set(['', 'sub', 'sub/deep']), tree, loaded: new Set(['']), truncated: false, scannedAt: 0 };
+    const rows = (panel as unknown as { flatten(m: ExternalMount, s: unknown): Row[] }).flatten(mount('host'), state);
+
+    expect(describe2(rows)).toEqual(['DIR:sub@1', 'FILE:sub/inner.md@2', 'DIR:sub/deep@2', 'FILE:sub/deep/x.md@3', 'FILE:top.md@1']);
+  });
+
+  it('hides them again while collapsed', () => {
+    const panel = panelWith([mount('host')]);
+    const state = { open: new Set(['']), tree, loaded: new Set(['']), truncated: false, scannedAt: 0 };
+    const rows = (panel as unknown as { flatten(m: ExternalMount, s: unknown): Row[] }).flatten(mount('host'), state);
+
+    expect(describe2(rows)).toEqual(['DIR:sub@1', 'FILE:top.md@1']);
+  });
+});
