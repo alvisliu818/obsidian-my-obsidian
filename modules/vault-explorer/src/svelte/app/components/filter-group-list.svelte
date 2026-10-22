@@ -1,0 +1,51 @@
+<script lang="ts">
+	import VaultExplorerPlugin from "src/main";
+	import Stack from "src/svelte/shared/components/stack.svelte";
+	import store from "src/svelte/shared/services/store";
+	import type { TFilterGroup } from "src/types";
+	import FilterGroup from "./filter-group.svelte";
+
+	export let groups: TFilterGroup[] = [];
+
+	let plugin: VaultExplorerPlugin;
+
+	store.plugin.subscribe((p) => {
+		plugin = p;
+	});
+</script>
+
+<div class="vault-explorer-filter-group-list">
+	<Stack spacing="md" width="fit-content">
+		{#if groups.length > 0}
+			{#each groups as group (group.id)}
+				<FilterGroup
+					id={group.id}
+					name={group.name}
+					isSelected={group.isEnabled}
+					isSticky={group.isSticky}
+					on:groupClick
+					on:groupDrop
+					on:groupDragOver
+					on:groupDragStart
+					on:groupContextMenu
+				/>
+			{/each}
+		{/if}
+		{#if groups.length === 0}
+			<span class="vault-explorer-empty-label">No groups to display</span>
+		{/if}
+	</Stack>
+</div>
+
+<style>
+	.vault-explorer-filter-group-list {
+		width: min(100%, 700px);
+		overflow-x: auto;
+	}
+
+	.vault-explorer-empty-label {
+		color: var(--text-faint);
+		font-size: var(--font-md);
+		margin-left: 4px;
+	}
+</style>
