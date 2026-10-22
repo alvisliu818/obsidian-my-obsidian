@@ -80,7 +80,11 @@ export function normalizeKey(abs: string): string {
  *  返回的句柄按需查询 isDirty——调用方拿到的是一扇活窗口，不是快照。 */
 export function asExternalSaveHandle(view: unknown): ExternalSaveHandle | null {
   if (!view || typeof view !== "object") return null;
-  const v = view as {
+  // ExternalBlockView 是包装壳:leaf.view 是壳,真正的 BlockEditorView 在
+  // blockEditor getter 里——探针一律对内层做,壳上没有 abs/isDirty/save。
+  const inner = (view as { blockEditor?: unknown }).blockEditor;
+  const source: object = inner && typeof inner === "object" ? (inner as object) : (view as object);
+  const v = source as {
     getViewType?: () => string;
     abs?: unknown;
     fileName?: unknown;
