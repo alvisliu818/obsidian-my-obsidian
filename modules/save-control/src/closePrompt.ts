@@ -15,28 +15,36 @@ export type UnsavedCloseChoice = "save" | "discard" | "cancel";
 
 export class UnsavedCloseModal extends Modal {
   private readonly resolve: (choice: UnsavedCloseChoice) => void;
+  /** tab = 关闭标签页；quit = 退出 Obsidian（标题/按钮文案不同，三选一同款）。 */
+  private readonly kind: "tab" | "quit";
 
   constructor(
     app: App,
     private readonly displayName: string,
     resolve: (choice: UnsavedCloseChoice) => void,
+    kind: "tab" | "quit" = "tab",
   ) {
     super(app);
     this.resolve = resolve;
+    this.kind = kind;
   }
 
   onOpen(): void {
     const { contentEl } = this;
     contentEl.addClass("sc-unsaved-close");
-    contentEl.createEl("h3", { text: "关闭标签页" });
+    contentEl.createEl("h3", { text: this.kind === "quit" ? "退出 Obsidian" : "关闭标签页" });
     contentEl.createEl("p", {
-      text: `「${this.displayName}」有未保存的更改。要如何处理？`,
+      text: this.kind === "quit"
+        ? `有未保存的更改（${this.displayName}）。要如何处理？`
+        : `「${this.displayName}」有未保存的更改。要如何处理？`,
     });
 
     const row = contentEl.createDiv({ cls: "sc-unsaved-close__row" });
-    const saveBtn = row.createEl("button", { cls: "mod-cta", text: "保存并关闭" });
+    const saveLabel = this.kind === "quit" ? "保存并退出" : "保存并关闭";
+    const discardLabel = this.kind === "quit" ? "不保存并退出" : "不保存并关闭";
+    const saveBtn = row.createEl("button", { cls: "mod-cta", text: saveLabel });
     saveBtn.addEventListener("click", () => this.finish("save"));
-    const discardBtn = row.createEl("button", { cls: "mod-warning", text: "不保存并关闭" });
+    const discardBtn = row.createEl("button", { cls: "mod-warning", text: discardLabel });
     discardBtn.addEventListener("click", () => this.finish("discard"));
     const cancelBtn = row.createEl("button", { text: "取消" });
     cancelBtn.addEventListener("click", () => this.finish("cancel"));
@@ -61,9 +69,13 @@ export class UnsavedCloseModal extends Modal {
   }
 }
 
-/** 弹出提示并等待用户决定。 */
-export function askUnsavedClose(app: App, displayName: string): Promise<UnsavedCloseChoice> {
+/** 弹出提示并等待用户决定。kind = tab（关标签页）/ quit（退出 Obsidian）。 */
+export function askUnsavedClose(
+  app: App,
+  displayName: string,
+  kind: "tab" | "quit" = "tab",
+): Promise<UnsavedCloseChoice> {
   return new Promise((resolve) => {
-    new UnsavedCloseModal(app, displayName, resolve).open();
+    new UnsavedCloseModal(app, displayName, resolve, kind).open();
   });
 }

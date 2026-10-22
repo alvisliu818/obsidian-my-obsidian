@@ -3138,9 +3138,16 @@ ${content}`;
       const f = this.file;
       if (f) void this.plugin.backups.ensureSessionBackup(f);
     } else {
-      // The only signal that separates "the user typed" from "the file merely
-      // round-trips" — every edit funnels through here.
-      this.externalDirty = true;
+      // 库外的脏不是「发生过编辑事件」而是「内容偏离磁盘基线」——每次文档
+      // 变更后重算，而不是单向置 true：
+      //   ① 撤销（Ctrl+Z）回到已保存内容 → 圆点熄灭（撤销本身也是 docChanged）；
+      //   ② save 把活文本并进磁盘基线后，后续聚焦提交的 round-trip 回写不再
+      //      点亮圆点（幻影脏的结构性免疫）；
+      //   ③ 真正偏离基线的编辑照常点亮。
+      // serializeCurrent 与 save 的写入内容完全同源（含聚焦活文本覆盖、不含
+      // 模板展开），比较结果就是「现在保存会不会写出不同内容」。成本与
+      // getViewData 同级——原生 TextFileView 的脏跟踪同样按变更序列化。
+      this.externalDirty = this.serializeCurrent() !== this.externalDiskData;
     }
     // open-tab-settings 的 reuseUnmodifiedTab 靠 editor-change → touched 认「这个
     // tab 被用户编辑过」，但 editor-change 只为原生 MarkdownView 触发，本视图

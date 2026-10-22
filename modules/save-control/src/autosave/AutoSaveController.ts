@@ -206,6 +206,15 @@ export class AutoSaveController {
     discardLeaf?: (leaf: WorkspaceLeaf) => void;
     /** 是否弹提示（设置开关）。 */
     promptOnClose?: () => boolean;
+    /** 退出/关窗决策：库外（调度器待写 + 视图脏缓冲）是否有未落盘内容。 */
+    hasExternalUnsaved?: () => boolean;
+    /** 退出/关窗选「保存」或自动模式静默冲刷：写掉库外待写内容。 */
+    flushExternalUnsaved?: () => Promise<void>;
+    /** 退出/关窗选「不保存」：丢弃库外脏缓冲（并拦住视图卸载时的无条件落盘）。 */
+    discardExternalUnsaved?: () => void;
+    /** 退出三选一提示（保存并退出/不保存并退出/取消）；缺省回落上游原生
+     *  confirm（只有丢弃/取消）。 */
+    quitPrompt?: () => Promise<"save" | "discard" | "cancel">;
   };
 
   constructor(
@@ -216,6 +225,10 @@ export class AutoSaveController {
       flushLeaf?: (leaf: WorkspaceLeaf) => Promise<void>;
       discardLeaf?: (leaf: WorkspaceLeaf) => void;
       promptOnClose?: () => boolean;
+      hasExternalUnsaved?: () => boolean;
+      flushExternalUnsaved?: () => Promise<void>;
+      discardExternalUnsaved?: () => void;
+      quitPrompt?: () => Promise<"save" | "discard" | "cancel">;
     } = {},
   ) {
     this.closeHooks = closeHooks;
@@ -410,7 +423,10 @@ export class AutoSaveController {
         this.pendingSaveQueue.refreshAllLatestData();
         const shortcut = this.wasQuitShortcutIntentRecentlyMarked();
         const manual = this.isHoldMode();
-        const hasPending = this.pendingSaveQueue.hasAny();
+        // 库外未保存（调度器待写 + 视图脏缓冲）与库内队列同一决策面：
+        // 退出与关窗都要把它算进「有待保存」。
+        const hasPending =
+          this.pendingSaveQueue.hasAny() || this.closeHooks.hasExternalUnsaved?.() === true;
 
         // MANUAL mode (issue #26): plain window close (the X button, not the
         // Cmd+Q/menu quit shortcut) with unsaved changes. Prompt exactly like the
@@ -420,9 +436,15 @@ export class AutoSaveController {
         // needed.
         if (manual && !shortcut && hasPending) {
           tasks.add(async () => {
-            const decision = await this.askManualCloseDecision();
-            if (decision === "discard") {
-              this.discardAllPendingChanges();
+            // 合并新增：接入三选一退出提示（保存并退出/不保存并退出/取消），
+            // 与关标签页同款 UX——上游原生 confirm 只有「丢弃/取消」，而库外
+            // 脏缓冲一旦丢弃不可恢复。未注入 quitPrompt 时回落上游确认框。
+            const decision = this.closeHooks.quitPrompt
+              ? await this.closeHooks.quitPrompt()
+              : ((await this.askManualCloseDecision()) === "discard" ? "discard" : "cancel");
+            if (decision === "save") {
+              await this.pendingSaveQueue.flushAll();
+              await this.closeHooks.flushExternalUnsaved?.();
               await this.workspaceLayoutSaveController.flush();
               // On a real app quit (Cmd+Q / menu Quit) a background vault's close
               // was preventDefault'd to give its prompt unlimited time, which
@@ -430,6 +452,14 @@ export class AutoSaveController {
               // would re-quit, so the app would just sit with all windows closed
               // (issue #28). Record this vault's decision; the last vault to
               // answer completes the set and exits the whole app.
+              if (this.appIsQuitting) {
+                this.finalizeQuitFromThisWindow();
+              }
+              // Otherwise: task resolves -> Obsidian closes this window / quits.
+            } else if (decision === "discard") {
+              this.discardAllPendingChanges();
+              this.closeHooks.discardExternalUnsaved?.();
+              await this.workspaceLayoutSaveController.flush();
               if (this.appIsQuitting) {
                 this.finalizeQuitFromThisWindow();
               }
@@ -1066,7 +1096,9 @@ export class AutoSaveController {
       this.pendingSaveQueue.refreshAllLatestData();
 
       const shortcut = this.wasQuitShortcutIntentRecentlyMarked();
-      const hasPending = this.pendingSaveQueue.hasAny();
+      // 库外未保存与库内队列同一决策面（退出/关窗都算「有待保存」）。
+      const hasPending =
+        this.pendingSaveQueue.hasAny() || this.closeHooks.hasExternalUnsaved?.() === true;
       const manual = this.isHoldMode();
 
       if (!shortcut && hasPending) {
@@ -1100,7 +1132,9 @@ export class AutoSaveController {
 
       this.pendingSaveQueue.refreshAllLatestData();
       const shortcut = this.wasQuitShortcutIntentRecentlyMarked();
-      const hasPending = this.pendingSaveQueue.hasAny();
+      // 库外未保存与库内队列同一决策面（退出/关窗都算「有待保存」）。
+      const hasPending =
+        this.pendingSaveQueue.hasAny() || this.closeHooks.hasExternalUnsaved?.() === true;
       const manual = this.isHoldMode();
 
       if (!shortcut && hasPending) {
@@ -1950,6 +1984,8 @@ export class AutoSaveController {
       if (this.pendingSaveQueue.hasAny()) {
         await this.pendingSaveQueue.flushAll();
       }
+      // 库外待写（调度器队列 + 仍脏的视图缓冲）一并冲掉，再关窗。
+      await this.closeHooks.flushExternalUnsaved?.();
 
       await this.workspaceLayoutSaveController.flush();
       this.clearQuitShortcutIntent();

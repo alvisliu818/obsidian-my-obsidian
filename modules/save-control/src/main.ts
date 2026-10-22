@@ -49,6 +49,7 @@ import {
 import { AutosaveManager } from "./autosave";
 import { AutoVersionManager } from "./autoVersion";
 import { AutoSaveController } from "./autosave/AutoSaveController";
+import { askUnsavedClose } from "./closePrompt";
 import { SaveStatusIndicator } from "./autosave-ui/StatusIndicator";
 import { ExternalSaveScheduler } from "./externalScheduler";
 import { UnsavedDotMonitor } from "./tabUnsavedDot";
@@ -143,6 +144,12 @@ export class SaveControlPlugin extends Plugin {
       flushLeaf: (leaf) => this.flushLeafUnsaved(leaf),
       discardLeaf: (leaf) => this.discardLeafUnsaved(leaf),
       promptOnClose: () => this.settings.promptUnsavedOnClose,
+      // 退出/关窗：库外未保存与库内队列同一决策面——hasExternalUnsaved 计入
+      // 「有待保存」，三选一提示与冲刷/丢弃由下面三个钩子落地。
+      hasExternalUnsaved: () => this.hasExternalUnsaved(),
+      flushExternalUnsaved: () => this.flushExternalUnsaved(),
+      discardExternalUnsaved: () => this.discardAllDirtyExternalViews(),
+      quitPrompt: () => this.askQuitUnsavedClose(),
     });
     this.autosaveController.setPendingSaveCountChangeHandler(() => this.emitPendingCount());
     this.autosaveController.enable();
@@ -150,13 +157,11 @@ export class SaveControlPlugin extends Plugin {
       this.autosaveManager = new AutosaveManager(this, this.versioning);
       this.autosaveManager.start();
     }
-    // 退出前冲刷库外的待保存更改（库内的由控制器自己的 quit 处理）。退出即写：
-    // 静默丢弃会丢数据；持有语义只约束「后台自动写」，不约束显式退出。
-    this.registerEvent(
-      this.app.workspace.on("quit", () => {
-        void this.externalScheduler?.flushAll();
-      }),
-    );
+    // 库外的退出处理已并入 AutoSaveController 的 quit 决策（closeHooks:
+    // hasExternalUnsaved / flushExternalUnsaved / discardExternalUnsaved /
+    // quitPrompt）：持有模式下退出弹三选一（保存并退出/不保存并退出/取消），
+    // 自动模式静默冲刷。原先这里的无条件 flushAll 会绕过提示把脏缓冲直接
+    // 写盘（正是「关闭 Obsidian 没有提示保存」的根源），已删除。
     if (this.settings.externalFilesEnabled) {
       this.externalScheduler = new ExternalSaveScheduler(this);
       this.externalScheduler.setPendingSaveCountChangeHandler(() => this.emitPendingCount());
@@ -280,6 +285,77 @@ export class SaveControlPlugin extends Plugin {
       // 显式保存：会话基线作废——之后「不保存并关闭」不能回滚这次保存。
       this.autosaveController?.clearSessionBaseline(path);
     }
+  }
+
+  // ------------------------------------------------------------------
+  // 退出/关窗：库外未保存的发现、落盘与丢弃
+  // ------------------------------------------------------------------
+
+  /** 库外是否有未落盘内容：调度器待写队列（自动模式）+ 仍脏的视图缓冲（持有模式）。 */
+  private hasExternalUnsaved(): boolean {
+    if ((this.externalScheduler?.getPendingCount() ?? 0) > 0) return true;
+    let found = false;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (found) return;
+      const h = this.externalHandleOf(leaf.view);
+      if (h?.isDirty?.()) found = true;
+    });
+    return found;
+  }
+
+  /** 退出/关窗选「保存」（或自动模式静默冲刷）：调度器待写 + 仍脏的视图缓冲全部落盘。 */
+  private async flushExternalUnsaved(): Promise<void> {
+    await this.externalScheduler?.flushAll();
+    const dirty: NonNullable<ReturnType<typeof asExternalSaveHandle>>[] = [];
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const h = this.externalHandleOf(leaf.view);
+      if (h?.isDirty?.()) dirty.push(h);
+    });
+    for (const handle of dirty) {
+      try {
+        await handle.save();
+      } catch (e) {
+        console.error("[save-control] external flush on quit failed", handle.abs, e);
+      }
+    }
+  }
+
+  /** 退出/关窗选「不保存」：丢弃仍脏的库外视图缓冲——实现了
+   *  discardPendingChanges 的视图会在卸载时跳过自己的无条件落盘。 */
+  private discardAllDirtyExternalViews(): void {
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const h = this.externalHandleOf(leaf.view);
+      if (!h?.isDirty?.()) return;
+      const view = leaf.view as {
+        discardPendingChanges?: () => void;
+        blockEditor?: { discardPendingChanges?: () => void } | null;
+      };
+      view.discardPendingChanges?.();
+      view.blockEditor?.discardPendingChanges?.();
+    });
+  }
+
+  /** 退出三选一（保存并退出/不保存并退出/取消）。名单 = 库内待保存队列 +
+   *  库外调度器待写 + 仍脏的库外视图缓冲，与状态栏/标签页提示同源。 */
+  private async askQuitUnsavedClose(): Promise<"save" | "discard" | "cancel"> {
+    const names = [...new Set([
+      ...(this.autosaveController?.getPendingNoteNames() ?? []),
+      ...(this.externalScheduler?.getPendingNames() ?? []),
+      ...this.collectDirtyExternalViewNames(),
+    ])];
+    const label = names.length === 0
+      ? "未保存更改"
+      : names.slice(0, 5).join("、") + (names.length > 5 ? ` 等 ${names.length} 个文件` : "");
+    return askUnsavedClose(this.app, label, "quit");
+  }
+
+  private collectDirtyExternalViewNames(): string[] {
+    const names: string[] = [];
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const h = this.externalHandleOf(leaf.view);
+      if (h?.isDirty?.()) names.push(h.fileName);
+    });
+    return names;
   }
 
   /** 库外文件落盘后的「写盘」版本:external 写盘不走 vault,autoVersion 的
