@@ -172,7 +172,11 @@ export class MountPanelView extends ItemView {
     for (const id of [...this.states.keys()]) {
       if (!alive.has(id)) this.states.delete(id);
     }
-    for (const m of mounts) this.scan(m, true);
+    for (const m of mounts) {
+      const st = this.scan(m, true);
+      // open 保留只是集合还在:层必须重读,否则展开中的文件夹内容为空。
+      this.reloadOpenLayers(m, st);
+    }
     this.render();
   }
 
@@ -1432,11 +1436,28 @@ export class MountPanelView extends ItemView {
     }
   }
 
+  /**
+   * 强制重扫后，把已展开的层逐一重读。
+   *
+   * scan(force) 保留了 open 集合，但 tree/loaded 清空后只重读根层——展开中
+   * 的文件夹 children 全是空数组，caret 还朝下、内容却没了，看起来就像整棵
+   * 被折叠（新建文件/文件夹、重命名、删除、⟳ 重扫全都中招）。按路径深度从
+   * 浅到深 loadLayer：祖先层先就位，findNode 才找得到深层父节点；失效 rel
+   * （目录已删/改名）由 findNode 返回 null 自然跳过，open 里的陈项无需清理。
+   */
+  private reloadOpenLayers(mount: ExternalMount, st: MountState): void {
+    const rels = [...st.open].sort(
+      (a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b),
+    );
+    for (const rel of rels) this.loadLayer(mount, rel, st);
+  }
+
   /** 刷新扫描缓存并重绘;openRel 非空时确保该目录处于展开态。 */
   private rescan(mount: ExternalMount, openRel = ''): void {
     const st = this.states.get(mount.id);
     if (openRel) st?.open.add(openRel);
-    this.scan(mount, true);
+    const fresh = this.scan(mount, true);
+    this.reloadOpenLayers(mount, fresh);
     this.render();
   }
 
