@@ -903,27 +903,40 @@ export class NotebookView extends ItemView {
 
   /** 执行第 idx 个代码单元格,结果写回 cell.outputs / execution_count */
   private async runCell(idx: number): Promise<void> {
-    if (!this.canRun() || this.rawMode || this.disposed) return;
+    // 三条静默 return 以前都「点了没反应」:用户既看不到原因也拿不到出口
+    // (尤其 runningIdx 卡住时,点别的格子永远无声返回值)。逐个给出明确提示。
+    if (!this.canRun()) {
+      new Notice('这个笔记本没声明 Python(language_info/kernelspec),暂不支持运行', 5000);
+      return;
+    }
+    if (this.rawMode) {
+      new Notice('当前是原始 JSON 编辑模式,无法运行单元格', 4000);
+      return;
+    }
+    if (this.disposed) return;
     const cell = this.nb?.cells[idx];
     if (!cell || cell.cell_type !== 'code') return;
     // 正在跑一格时:再点就是「中断」
     if (this.runningIdx !== null) {
       if (this.runningIdx === idx) await this.interrupt();
+      else new Notice(`正在执行第 ${this.runningIdx + 1} 格,点它自己的 ▶ 可中断`);
       return;
     }
-    // 先把这格的编辑内容提交回 cell,否则跑的是旧代码
-    if (this.editIdx === idx && this.editEditor) {
-      setSourceText(cell, this.editEditor.state.doc.toString());
-    }
-    const code = getSourceText(cell);
-    if (!code.trim()) {
-      new Notice('空单元格,没有可执行的代码');
-      return;
-    }
-    const kernel = this.kernelFor();
-    this.runningIdx = idx;
-    this.setCellRunning(idx, true);
+    // 以下整段包进 try:以前这里任何一步抛异常都会被 `void runCell()` 吞掉
+    // → 「点了完全没反应」,连转圈都没有(转圈在 setCellRunning 里)。
     try {
+      // 先把这格的编辑内容提交回 cell,否则跑的是旧代码
+      if (this.editIdx === idx && this.editEditor) {
+        setSourceText(cell, this.editEditor.state.doc.toString());
+      }
+      const code = getSourceText(cell);
+      if (!code.trim()) {
+        new Notice('空单元格,没有可执行的代码');
+        return;
+      }
+      const kernel = this.kernelFor();
+      this.runningIdx = idx;
+      this.setCellRunning(idx, true);
       const outcome = await kernel.execute(code);
       if (outcome) {
         cell.outputs = outcomeToOutputs({
@@ -939,6 +952,9 @@ export class NotebookView extends ItemView {
       } else if (kernel.currentStatus !== 'ready') {
         new Notice('内核不可用,详见工具栏内核状态提示');
       }
+    } catch (e) {
+      new Notice(`执行失败:${(e as Error)?.message ?? String(e)}`, 6000);
+      console.error('[notebook] runCell 抛异常:', e);
     } finally {
       this.runningIdx = null;
       this.setCellRunning(idx, false);
