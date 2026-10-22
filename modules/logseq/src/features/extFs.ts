@@ -421,6 +421,17 @@ export function writeExternalBinary(abs: string, data: Uint8Array): FsOpResult {
   }
 }
 
+/** 读库外二进制文件(图片等),供 blob URL 渲染;不存在/失败抛异常由调用方接。
+ *  拷贝进干净的 ArrayBuffer:Node Buffer 的 buffer 是 ArrayBufferLike,
+ *  直接塞 Blob 会撞 TS 的 ArrayBuffer/SharedArrayBuffer 不兼容。 */
+export function readExternalBinary(abs: string): Uint8Array<ArrayBuffer> {
+  const fs = fsMod() as unknown as { readFileSync(p: string): Uint8Array };
+  const buf = fs.readFileSync(abs);
+  const out = new Uint8Array(buf.byteLength);
+  out.set(buf);
+  return out;
+}
+
 /** True when the path exists and is a directory. */
 export function isDirectory(abs: string): boolean {
   try {

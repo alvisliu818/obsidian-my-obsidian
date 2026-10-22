@@ -20,6 +20,7 @@ import { MarkdownRenderer, TFile } from 'obsidian';
 import { mountCodeBlockReadOnly, parseCodeFence, syntheticFenceInfo } from './codeBlockEdit';
 import { enhanceTable } from './tableEditor';
 import { hasTable } from './tableModel';
+import { baseOf, exists, extOf, readExternalBinary } from '../features/extFs';
 import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Block } from '../types';
 import { blockId } from '../types';
@@ -1005,11 +1006,74 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
  * md 所在目录优先，其次库根）；渲染后用该文件的资源 URL 恢复。
  * 解析不到文件的 src 原样保留，交给 Obsidian 的默认行为。
  */
-export type ImgAnchorToken = { token: string; file: TFile | null };
+export type ImgAnchorToken = { token: string; url: string };
 
 const IMG_ANCHOR_PREFIX = 'LGIMGANCHOR';
 const IMG_ANCHOR_RE = /^LGIMGANCHOR(\d+)LGIMGANCHOR$/;
 const IMG_EXT_RE = /^(png|jpe?g|gif|webp|svg|bmp|avif|ico)$/i;
+
+const IMG_MIME: Record<string, string> = {
+	png: 'image/png',
+	jpg: 'image/jpeg',
+	jpeg: 'image/jpeg',
+	gif: 'image/gif',
+	webp: 'image/webp',
+	svg: 'image/svg+xml',
+	bmp: 'image/bmp',
+	avif: 'image/avif',
+	ico: 'image/x-icon',
+};
+
+/** 库外图片的 blob URL 缓存(ImageView 同款机制):同一文件多次渲染复用,
+ *  上限 80 张,超出撤销最旧的,防长编辑会话内存膨胀。 */
+const externalImgUrls = new Map<string, string>();
+
+function externalImgUrl(abs: string): string {
+	const hit = externalImgUrls.get(abs);
+	if (hit) return hit;
+	const mime = IMG_MIME[extOf(baseOf(abs))] ?? 'application/octet-stream';
+	const url = URL.createObjectURL(new Blob([readExternalBinary(abs)], { type: mime }));
+	externalImgUrls.set(abs, url);
+	if (externalImgUrls.size > 80) {
+		const oldest = externalImgUrls.keys().next().value as string;
+		const old = externalImgUrls.get(oldest);
+		if (old) URL.revokeObjectURL(old);
+		externalImgUrls.delete(oldest);
+	}
+	return url;
+}
+
+/** 文件所在目录(库外 abs;两种分隔符都认)。 */
+function externalBaseDir(abs: string): string {
+	const norm = abs.replace(/[\\/]+$/, '');
+	const idx = Math.max(norm.lastIndexOf('\\'), norm.lastIndexOf('/'));
+	return idx > 0 ? norm.slice(0, idx) : norm;
+}
+
+/**
+ * 库外图片解析:src 相对 externalAbs 所在目录,一层层往上找(用户指定顺序,
+ * 附件目录挂在任意祖先都命中),Node fs 在盘上探测;命中即建 blob URL。
+ * 全部未命中返回 null,src 原样保留交还默认行为。
+ */
+function resolveExternalImgUrl(raw: string, baseDir: string): string | null {
+	if (!raw || /^(app|https?|data|vault|file|mailto):/i.test(raw) || raw.startsWith('/')) return null;
+	let decoded = raw;
+	try {
+		decoded = decodeURIComponent(raw);
+	} catch {
+		/* 保留原文 */
+	}
+	const name = decoded.split(/[\\/]/).pop() ?? '';
+	if (!IMG_EXT_RE.test(extOf(name))) return null;
+	const parts = baseDir.split(/[\\/]/).filter(Boolean);
+	const tail = decoded.split('/').join('\\');
+	for (let i = parts.length; i >= 0; i--) {
+		const dir = parts.slice(0, i).join('\\');
+		const candidate = dir ? `${dir}\\${tail}` : tail;
+		if (exists(candidate)) return externalImgUrl(candidate);
+	}
+	return null;
+}
 
 export function anchorRelativeImgSrcs(
 	md: string,
@@ -1018,35 +1082,23 @@ export function anchorRelativeImgSrcs(
 ): string {
 	const file = host.file;
 	if (!file) return md; // 片段场景无基准目录，维持现状
-	const dir = file.parent?.path ?? '';
-	const resolve = (raw: string): TFile | null => {
-		if (!raw || /^(app|https?|data|vault|file|mailto):/i.test(raw) || raw.startsWith('/')) return null;
-		let decoded = raw;
-		try {
-			decoded = decodeURIComponent(raw);
-		} catch {
-			/* 保留原文 */
-		}
-		// 一层层往上找:md 所在目录 → 逐级父目录 → 库根,首个命中即用
-	// (用户指定顺序;附件目录不必与笔记同级,挂在任意祖先下都能命中)。
-	const parts = dir ? dir.split('/') : [];
-	for (let i = parts.length; i >= 0; i--) {
-		const base = parts.slice(0, i).join('/');
-		const p = base ? `${base}/${decoded}` : decoded;
-		const found = host.app.vault.getAbstractFileByPath(p);
-		if (found instanceof TFile && IMG_EXT_RE.test(found.extension)) return found;
-	}
-	// 全都没命中:退回 Obsidian 自己的链接解析(sourcePath 感知),解析不到
-	// 才交还全局默认行为——漏出的 src 会被全库模糊匹配劫持成同名图片。
-	const dest = host.app.metadataCache.getFirstLinkpathDest(decoded, file.path);
-	if (dest instanceof TFile && IMG_EXT_RE.test(dest.extension)) return dest;
-	return null;
-};
+	// 库外文件(挂载树打开):host.file 是种子笔记,其目录不可信——以
+	// externalAbs 所在目录为基准解析。否则锚定整个失效,src 漏给全局模糊
+	// 匹配,被库内同名图片劫持(实测:库外 NLP 笔记被别的笔记的截图顶替)。
+	const ext = host as { isExternal?: boolean; externalAbs?: string };
+	const externalBase =
+		ext.isExternal === true && ext.externalAbs ? externalBaseDir(ext.externalAbs) : null;
 	const rewrite = (m: string, pre: string, src: string, post: string): string => {
-		const resolved = resolve(src);
-		if (!resolved) return m;
+		let url: string | null = null;
+		if (externalBase) {
+			url = resolveExternalImgUrl(src, externalBase);
+		} else {
+			const resolved = resolveVaultImgUrl(src, file, host);
+			url = resolved ? host.app.vault.getResourcePath(resolved) : null;
+		}
+		if (!url) return m;
 		const token = `${IMG_ANCHOR_PREFIX}${tokens.length}${IMG_ANCHOR_PREFIX}`;
-		tokens.push({ token, file: resolved });
+		tokens.push({ token, url });
 		return `${pre}${token}${post}`;
 	};
 	return md
@@ -1054,10 +1106,33 @@ export function anchorRelativeImgSrcs(
 		.replace(/(<img\b[^>]*?\bsrc=')([^']*)(')/gi, rewrite);
 }
 
-/** 渲染后：把 token src 恢复为被锚定文件的 vault 资源 URL。 */
+/** 库内解析:md 所在目录 → 逐级父目录 → 库根(用户指定顺序),再退
+ * getFirstLinkpathDest(sourcePath 感知);全未命中返回 null。 */
+function resolveVaultImgUrl(raw: string, file: TFile, host: BlockRenderHost): TFile | null {
+	if (!raw || /^(app|https?|data|vault|file|mailto):/i.test(raw) || raw.startsWith('/')) return null;
+	let decoded = raw;
+	try {
+		decoded = decodeURIComponent(raw);
+	} catch {
+		/* 保留原文 */
+	}
+	const dir = file.parent?.path ?? '';
+	const parts = dir.split('/');
+	for (let i = parts.length; i >= 0; i--) {
+		const base = parts.slice(0, i).join('/');
+		const p = base ? `${base}/${decoded}` : decoded;
+		const found = host.app.vault.getAbstractFileByPath(p);
+		if (found instanceof TFile && IMG_EXT_RE.test(found.extension)) return found;
+	}
+	const dest = host.app.metadataCache.getFirstLinkpathDest(decoded, file.path);
+	if (dest instanceof TFile && IMG_EXT_RE.test(dest.extension)) return dest;
+	return null;
+}
+
+/** 渲染后：把 token src 恢复为锚定文件的资源 URL(库内 app://,库外 blob)。 */
 export function applyAnchoredImgSrcs(
 	holder: HTMLElement,
-	host: BlockRenderHost,
+	_host: BlockRenderHost,
 	tokens: ImgAnchorToken[],
 ): void {
 	if (!tokens.length) return;
@@ -1066,8 +1141,8 @@ export function applyAnchoredImgSrcs(
 		const m = IMG_ANCHOR_RE.exec(src);
 		if (!m) return;
 		const entry = tokens[Number(m[1])];
-		if (entry?.file) {
-			img.setAttribute('src', host.app.vault.getResourcePath(entry.file));
+		if (entry?.url) {
+			img.setAttribute('src', entry.url);
 		}
 	});
 }
