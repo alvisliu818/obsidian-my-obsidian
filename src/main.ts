@@ -75,6 +75,18 @@ const AdvancedRenameAndDeleteHandlerPlugin = (
 import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
 import { registerFreeExtensions } from "./extensionRegistry";
 
+/**
+ * Reached through a require bridge rather than imported, because the bridge's
+ * own module explains why: `@mnaoumov/obsidian-lib`'s typings contain a
+ * `declare global` that widens Obsidian's `App`, and importing them here breaks
+ * unrelated modules. The bridge must ALSO use import internally — the package
+ * is dual-published and `require` would resolve to the CJS build, a SECOND
+ * module instance with its own singleton, so patching it would do nothing.
+ */
+const { allowReentrantLibraryInit } = require("./libraryInitPatch") as {
+	allowReentrantLibraryInit: () => void;
+};
+
 export default class MyObsidianPlugin extends Plugin {
 	settings: MyObsidianSettings = DEFAULT_SETTINGS;
 
@@ -306,13 +318,23 @@ export default class MyObsidianPlugin extends Plugin {
 			// own) and reads the version off the alias-table instance — with
 			// the host's 0.1.0 it would read the co-bundled CAL as an OLD CAL,
 			// block itself, and dead-lock the CAL gate that depends on it.
+			//
+			// manifest.id MUST also be the upstream id. Obsidian's
+			// PluginSettingTab takes its id from `plugin.manifest.id`, so
+			// leaving it as the host's gave CAL a settings tab literally called
+			// "obsidian-my-obsidian" — the same id as the host's own tab, which
+			// Obsidian indexes by id. One of the two vanished from the settings
+			// sidebar, and `openTabById` (the button the core Files-and-links
+			// patch uses) could only ever reach the host's. Same reason ARDH
+			// overrides its id above. `dir` deliberately stays the host's: CAL
+			// writes its sidecar files next to the real plugin folder.
 			id: "custom-attachment-location",
 			legacyId: "obsidian-custom-attachment-location",
 			name: "my Custom Attachment Location",
 			summary:
 				"自定义附件存放位置：用 {{noteFileName}}、{{date:format}} 等变量拼出目标路径，支持笔记子文件夹/同名文件夹归档、粘贴即自动归位、批量收集与清理未使用附件、重命名删除时同步更新链接。上游 RainCat1998 + mnaoumov（MIT）。",
 			desktopOnly: false,
-			manifest: { version: "16.0.0" },
+			manifest: { id: "obsidian-custom-attachment-location", version: "16.0.0" },
 			cls: CustomAttachmentLocationPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
@@ -367,6 +389,9 @@ export default class MyObsidianPlugin extends Plugin {
 	];
 
 	async onload(): Promise<void> {
+		// Must precede every module load: the mnaoumov modules call these during
+		// their own onload, and the second one to arrive used to throw.
+		allowReentrantLibraryInit();
 		await this.loadSettings();
 		this.addSettingTab(
 			new MyObsidianSettingTab(this.app, this, {
