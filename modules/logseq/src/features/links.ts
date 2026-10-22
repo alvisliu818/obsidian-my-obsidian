@@ -13,6 +13,7 @@ import { parseDocument } from '../core/parser';
 import { serializeDocument } from '../core/serializer';
 import { blockAtPath, findBlockById, linkParents, pathToRoot, pseudoRootOf, registerRoots } from '../core/treeOps';
 import { slashMenuSource } from './slashMenu';
+import { toObsidianMath } from './latexSource';
 import type { Block } from '../types';
 
 const BLOCK_REF_RE = /\(\(([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\)\)/g;
@@ -486,7 +487,9 @@ function renderEmbedRow(
 
   const content = main.createEl('div', { cls: 'embed-content' });
   const gen = host.renderGeneration;
-  void MarkdownRenderer.render(host.app, b.text, content, host.file?.path ?? '', host).then(() => {
+  // LaTeX 分隔符 → `$…$`:这里掌握块原文但没有 section 信息,
+  // 见 features/latexSource。
+  void MarkdownRenderer.render(host.app, toObsidianMath(b.text, host.app), content, host.file?.path ?? '', host).then(() => {
     if (host.renderGeneration !== gen) return; // stale: file switched
     enhanceBlockRefs(content, host);
   });

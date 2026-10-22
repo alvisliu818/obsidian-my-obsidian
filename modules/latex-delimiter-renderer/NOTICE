@@ -1,0 +1,117 @@
+latex-delimiter-renderer v1.0.4
+================================
+
+Upstream    https://github.com/BurgerAndreas/latex-delimiter-renderer
+Author      Andreas Burger
+License     MIT (see LICENSE) — the aggregate plugin is GPL-3.0; MIT is
+            permissive and may be redistributed inside it provided this
+            notice and the upstream license travel with the code.
+Version     1.0.4, minAppVersion 1.5.0
+
+What it does
+------------
+Renders the standard LaTeX math delimiters — inline `\(…\)` and display
+`\[…\]` — alongside Obsidian's native `$…$` / `$$…$$`, without ever rewriting
+the note on disk.
+
+Why it is imported directly instead of through a require bridge
+---------------------------------------------------------------
+The whole module is two files, and it compiles with ZERO errors under the
+host's much stricter tsconfig (`strict`, `noUnusedLocals`,
+`noUnusedParameters` — the upstream one only sets `noImplicitAny` and
+`strictNullChecks`). That is the "source-direct" verdict from the merge
+playbook, so it is a plain `import` in src/main.ts rather than a `require`
+bridge.
+
+Changes relative to upstream
+----------------------------
+Kept whole: parser.ts, the Live Preview StateField, the widget behaviour,
+the reading-view DOM surgery (Range + deleteContents + insertNode), the
+`data-latex-delimiter-renderer-section` re-entry guard.
+
+1. Reading View positioning (`src/main.ts`).
+
+   Upstream located a formula with `rendered.text.indexOf(visibleSource)` —
+   a plain search from offset 0. Right almost always, wrong twice, and both
+   failures are invisible to upstream's suite because it never runs a real
+   markdown parser:
+
+     a. A literal `(…)` appearing EARLIER in the section is found first and
+        gets turned into math. Example: `(c) 是记号，公式是 \(c\)` renders
+        the ordinary `(c)` as a formula.
+
+     b. A body markdown rewrote into elements is never found at all, so the
+        formula silently stays raw. `\(a_1 + b_2\)` reaches the DOM as
+        `(a<em>1 + b</em>2)` — the underscores are gone. LaTeX subscripts
+        make this the COMMON case, not a corner one.
+
+   Replaced with `locateVisible()`, three bounded tries:
+
+     1. exact match at/after the predicted position — nearly every formula;
+     2. the same, backed up by DRIFT_WINDOW (120) — for emphasis lost in the
+        prose in front of the formula, which pushes it EARLIER than predicted;
+     3. a normalised match (`stripEmphasis`) for emphasis inside the body.
+
+   The predicted position comes from `stripMarkdownEscapes` applied to the
+   section source in front of the match, and the needle is
+   `visibleForm()` — the shape the formula has AFTER markdown ate the
+   backslashes (`\(` is a legal CommonMark escape, since `(` is ASCII
+   punctuation). Also slices `getSectionInfo().text` by
+   `lineStart`/`lineEnd`; upstream searched whole-document text, which makes
+   offsets unusable for positioning.
+
+   A miss degrades to "not rendered", never to "the wrong text became math".
+   `locateVisible` returns `to` separately because a normalised match can be
+   SHORTER than the needle.
+
+2. An API published on `app` (key `latex-delimiter-renderer`).
+
+   Reading View and Live Preview are covered by the two registrations, but
+   the Logseq module renders several surfaces from markdown it owns ITSELF:
+   static blocks, block embeds, native embeds, flashcards, a code block's
+   prefix, and the out-of-vault file view. Those call
+   `MarkdownRenderer.render` into a plain container, where `getSectionInfo`
+   returns null (it needs the reading view's section map), so the post
+   processor cannot reach them. They convert the source instead, via
+   `convertForObsidianRender`.
+
+   Publishing rather than having Logseq import the module keeps the
+   dependency one-way, and makes the host's on/off switch darken every
+   surface at once — a static import would leave those six rendering math
+   while Live Preview and Reading View had stopped.
+
+3. `stripMarkdownEscapes`, `stripEmphasis`, `sectionTextOf`, `visibleForm`
+   and `locateVisible` are exported so they can be unit-tested
+   (`tests/readingMatch.test.ts`). Nothing else was made public.
+
+4. Upstream's tests were `node:test` + tsx; re-expressed in vitest to match
+   the host (`tests/parser.test.ts`). The assertions are unchanged.
+
+5. styles.css is merged into the host's styles.css under
+   `/* ==================== LaTeX Delimiter Renderer (modules/latex-delimiter-renderer) ==================== */`.
+   The host stylesheet is hand-maintained and must be merged into, never
+   overwritten.
+
+Surfaces covered
+----------------
+  Live Preview (native editor)  registerEditorExtension
+  Reading View (native)         registerMarkdownPostProcessor
+  Logseq block editor           same extension — the outline pulls in
+                                workspace.editorExtensions
+  Logseq static blocks          convertForObsidianRender (renderTree)
+  Block embeds                  convertForObsidianRender (links)
+  Native embeds                 convertForObsidianRender (nativeEmbed)
+  Flashcards                    convertForObsidianRender (flashcardPanel)
+  Code-block prefix             convertForObsidianRender (BlockEditorView)
+  Out-of-vault files            convertForObsidianRender (ExternalFileView)
+
+Verification
+------------
+Unit tests (vitest, `--root modules/latex-delimiter-renderer`): 18 pass —
+upstream's parser contract plus the positioning rules above.
+
+End-to-end probes (jsdom + real markdown-it + real CM6, driven through the
+real `onload()`): 18 cases — Reading View incl. subscripts, disambiguation,
+emphasis drift, `\[…\]`; Live Preview caret matrix (start / inside /
+between / touching the endpoint). See the daily memory note for how the
+probes are built.

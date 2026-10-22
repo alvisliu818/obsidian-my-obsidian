@@ -46,6 +46,10 @@ import ScrollingPlugin from "../modules/scrolling/src/core/main";
 import AbstractFolderPlugin from "../modules/abstract-folder/main";
 import MomentumPlugin from "../modules/momentum/src/main";
 import HearthPlugin from "../modules/hearth/src/main";
+// latex-delimiter-renderer v1.0.4（Andreas Burger，MIT）：只有两个文件，且在
+// 宿主严格配置（strict + noUnusedLocals）下零错误 → 按收编判据走**源码直连**，
+// 不需要 require 桥。它是 `\(…\)` / `\[…\]` 公式渲染的正主，见模块内 NOTICE。
+import LatexDelimiterRendererPlugin from "../modules/latex-delimiter-renderer/src/main";
 // media-extended v3 自带 obsidian@1.5.7 类型与自己的 "@/..." 别名（与
 // music-player 的 @/ 同名冲突），经 require 桥接进 bundle：不进宿主 tsc
 // 程序（类型由模块自带 tsconfig 独立校验），运行时打包不受影响。
@@ -417,6 +421,22 @@ export default class MyObsidianPlugin extends Plugin {
 				"可视化库浏览器：以 frontmatter 属性与文件元数据过滤、排序，网格/列表/表格/动态（feed）四种版式展示，自定义过滤器可保存复用，卡片支持封面图与正文预览。上游 DecafDev（MIT）。",
 			desktopOnly: true,
 			cls: VaultExplorerPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Third-party (Andreas Burger, MIT), kept whole — see
+			// modules/latex-delimiter-renderer/LICENSE. Straight `import`, no
+			// require bridge: it compiles clean under the host tsconfig.
+			id: "latex-delimiter-renderer",
+			legacyId: "latex-delimiter-renderer",
+			name: "my LaTeX Delimiters",
+			// `id` MUST be part of the override — a copy without it keeps the
+			// HOST's id, and anything keyed on manifest.id (setting tabs,
+			// cross-plugin lookups) would then collide with the host.
+			manifest: { id: "latex-delimiter-renderer", version: "1.0.4" },
+			summary:
+				"渲染标准 LaTeX 公式分隔符：行内 \\(…\\) 与独立 \\[...\\]，不改动笔记源文件。原生编辑器的实时预览与阅读模式、logseq 块编辑器（含库外文件）均可；公式里的下标不会把强调漏进正文。上游 Andreas Burger（MIT）。",
+			desktopOnly: false,
+			cls: LatexDelimiterRendererPlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 

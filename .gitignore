@@ -23,8 +23,10 @@ modules/logseq/tests/fixtures/edge-vault/.obsidian/plugins/obsidian-logseq/monac
 modules/logseq/tests/fixtures/edge-vault/.obsidian/plugins/obsidian-logseq/monaco-workers/
 # 各模块的一次性探针脚本(下划线开头,含 e2e 子目录)
 modules/*/tests/**/_probe-*.mjs
-# 本地性能基准脚本（一次性测量，不入库）
-modules/*/tests/**/_bench-*.mjs
+# 本地性能基准脚本（一次性测量，不入库；含 vitest 版 _bench-*.test.ts）
+modules/*/tests/**/_bench-*
+# 会话期临时产物（一次性 markdown-it 打包等）
+/tmp/
 
 # ts 增量构建信息(各模块 tsconfig.tsbuildinfo)
 *.tsbuildinfo
@@ -35,6 +37,7 @@ tests/e2e/_*.out
 # 仓库根的一次性诊断/插桩脚本（下划线开头不入库）
 /_ins-*.mjs
 /_probe-*.mjs
+/_probe-*.ts
 /_diag-*
 # 仓库根探针的输出日志（重定向 .out，配合上面的 _probe-*.mjs）
 /_probe-*.out

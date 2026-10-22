@@ -23,6 +23,7 @@ import { serializeDocument } from '../core/serializer';
 import { logOp } from '../features/logger';
 import { extOf, readExternalText, writeExternalText } from '../features/extFs';
 import { isTextMount } from '../features/mountFilter';
+import { toObsidianMath } from '../features/latexSource';
 
 export const VIEW_TYPE_EXTERNAL_FILE = 'logseq-external-file';
 
@@ -237,7 +238,10 @@ export class ExternalFileView extends ItemView {
   private async renderRaw(host: HTMLElement, text: string): Promise<void> {
     if (!text.trim()) return;
     try {
-      await MarkdownRenderer.render(this.app, text, host, '', this.plugin);
+      // 与静态块同理:这里掌握源文本但没有 section 信息(getSectionInfo 是
+      // 阅读视图的设施),所以渲染前把 LaTeX 分隔符转成 `$…$` / `$$…$$` 交给
+      // Obsidian 原生数学。仅影响渲染 —— 落盘回写用的仍是原 `text`。
+      await MarkdownRenderer.render(this.app, toObsidianMath(text, this.app), host, '', this.plugin);
       host.addClass('logseq-external-raw');
     } catch {
       host.setText(text);

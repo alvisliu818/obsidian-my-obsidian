@@ -9,6 +9,7 @@ import type { CardEntry } from '../index/blockIndex';
 import { isDue, stateFromProps, type Grade } from '../features/srs';
 import { applyReview } from '../features/flashcards';
 import { plainText } from '../features/query';
+import { toObsidianMath } from '../features/latexSource';
 
 export const VIEW_TYPE_FLASHCARD_PANEL = 'logseq-flashcard-panel';
 
@@ -133,7 +134,7 @@ export class FlashcardPanelView extends ItemView {
     const q = el.createEl('div', { cls: 'fc-question' });
     void MarkdownRenderer.render(
       this.app,
-      card.question,
+      toObsidianMath(card.question, this.app),
       q,
       card.path,
       this,
@@ -151,7 +152,7 @@ export class FlashcardPanelView extends ItemView {
       reveal.style.display = 'none';
       a.style.display = '';
       if (card.answer) {
-        void MarkdownRenderer.render(this.app, card.answer, a, card.path, this);
+        void MarkdownRenderer.render(this.app, toObsidianMath(card.answer, this.app), a, card.path, this);
       } else {
         a.setText(plainText(card.question)); // cloze-style: question is the answer
       }

@@ -43,6 +43,7 @@ import { isViewBlock, VIEW_COLUMNS_PROP, VIEW_PROP } from '../features/blockView
 import { syncPrologContainer } from './prologResults';
 import { detectBlockType, mediaTypeOf } from './blockTypes';
 import { renderBlockTypeBadge } from './blockTypeMenu';
+import { toObsidianMath } from '../features/latexSource';
 
 const contentCache = new WeakMap<Block, { el: HTMLElement; sig: string }>();
 const queryCache = new WeakMap<Block, { el: HTMLElement; sig: string; version: number }>();
@@ -892,16 +893,23 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
   // 它们在 features/codeDoc.ts 的 escapeNoteLine 里就被零宽空格挡住了。
   // 仅影响渲染(块文本不变,往返无损);围栏内部保持逐字。raw 块不受影响。
   const blockSource = b.kind === 'list' ? escapeInBlockHeadings(b.text) : b.text;
+  // `\(x\)` / `\[x\]` 是 LaTeX 的数学写法,Obsidian 只认 `$…$` / `$$…$$`。
+  // 这条路径掌握 mdSource 但没有 getSectionInfo(它是阅读视图的设施),所以
+  // 在渲染前转换,交给 Obsidian 原生数学渲染 —— 得到的是它给手写 `$…$` 的那个
+  // 元素,主题/复制/导出行为都一致。仅影响渲染:块模型与磁盘仍是 `\(…\)`,
+  // 代码围栏与行内代码里保持逐字。正主是 latex-delimiter-renderer 模块
+  // (见 features/latexSource)。
+  const mathSource = toObsidianMath(blockSource, host.app);
   const mdSource = withTableSeparation(
     anchorRelativeImgSrcs(
       hasWikiEmbed
-        ? blockSource.replace(/!\[\[([^\[\]]+)\]\]/g, (m, inner: string) => {
+        ? mathSource.replace(/!\[\[([^\[\]]+)\]\]/g, (m, inner: string) => {
             if (mediaTypeOf(inner.split('|')[0].trim())) return m; // media: native render
             const token = `LGPAGEEMBED${pageEmbedTokens.length}LGPAGEEMBED`;
             pageEmbedTokens.push({ token, page: inner });
             return token;
           })
-        : blockSource,
+        : mathSource,
       host,
       imgAnchorTokens,
     ),

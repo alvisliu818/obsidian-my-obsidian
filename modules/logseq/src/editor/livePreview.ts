@@ -393,7 +393,7 @@ function mathBody(state: EditorState, node: { from: number; to: number; name: st
   return { body: text.slice(dLen, Math.max(dLen, text.length - dLen)), display: node.name === 'DollarDisplayMath' };
 }
 
-/** Shared by the `$…$` widgets below and the `\(…\)` ones in features/parenMath. */
+/** Shared by the `$…$` widgets below. (`\(…\)` is owned by latex-delimiter-renderer.) */
 export class MathPreviewWidget extends WidgetType {
   constructor(
     readonly body: string,

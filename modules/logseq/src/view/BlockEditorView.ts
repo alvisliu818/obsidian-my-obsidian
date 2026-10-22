@@ -72,6 +72,7 @@ import { unwatchGuideLayout, watchGuideLayout } from '../blocks/guideLayout';
 import { baseOf, MOUNT_FOLDER, readExternalText, writeExternalText } from '../features/extFs';
 import { relativeDisplayPath } from '../features/codeFileKind';
 import { setLeafTitle } from '../features/leafTitle';
+import { toObsidianMath } from '../features/latexSource';
 
 export const VIEW_TYPE_BLOCK_EDITOR = 'logseq-block-editor';
 
@@ -959,7 +960,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
           const imgAnchorTokens: ImgAnchorToken[] = [];
           void MarkdownRenderer.render(
             this.app,
-            anchorRelativeImgSrcs(codeInfo.prefix, this, imgAnchorTokens),
+            toObsidianMath(anchorRelativeImgSrcs(codeInfo.prefix, this, imgAnchorTokens), this.app),
             ph,
             this.file?.path ?? '',
             this,

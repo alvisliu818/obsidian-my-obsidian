@@ -75,7 +75,6 @@ import type { MountNode, ScanEntry } from './features/mountFilter';
 import { openJournal } from './features/dailyNote';
 import { BackupManager } from './core/backup';
 import { registerNativeImgFix } from './features/nativeImgFix';
-import { registerParenMath } from './features/parenMath';
 import { applyMarkedTabIcons, markLeafTabIcon } from './features/tabIcon';
 import { ExtensionMarketModal } from './extensions/marketModal';
 import { restoreAllExtensions, registerExtensionConsumer, search as extSearch, installExtension, uninstallExtension, toggleExtension, reinstallExtension, getInstalledExtensions } from './extensions/extensionManager';
@@ -236,8 +235,10 @@ export default class LogseqEditorPlugin extends Plugin {
 
     // Native-view HTML img 相对 src 锚定（防库内同名劫持，见 features/nativeImgFix）
     registerNativeImgFix(this);
-    // `\(…\)` 内联公式：原生编辑器与大纲编辑器（编辑态）+ 所有阅读渲染
-    registerParenMath(this);
+    // `\(…\)` / `\[…\]` 公式渲染**不在这里注册**：正主是 latex-delimiter-renderer
+    // 模块（宿主里单独一个开关），它自己注册实时预览与阅读模式两条路。本模块
+    // 只负责那些「自己掌握源但没有 section 信息」的渲染面 —— 静态块、内嵌、
+    // 闪卡、代码块前缀、库外文件 —— 通过 features/latexSource 转发。
 
     // Vault-wide ((block-id)) index
     this.blockIndex = new BlockIndex(this.app);

@@ -15,6 +15,7 @@ import { EditorState, RangeSetBuilder, StateField, type Extension } from '@codem
 import { MarkdownRenderer, editorInfoField } from 'obsidian';
 import type { SyntaxNode } from '@lezer/common';
 import type { Plugin } from 'obsidian';
+import { toObsidianMath } from './features/latexSource';
 
 type LogseqEditorPlugin = Plugin;
 
@@ -36,7 +37,13 @@ class NativeEmbedWidget extends WidgetType {
     // the host editor's DOM build (a throwing toDOM kills the view).
     queueMicrotask(() => {
       try {
-        MarkdownRenderer.render(this.plugin.app, this.content, el, this.path, this.plugin).catch(() => {
+        MarkdownRenderer.render(
+          this.plugin.app,
+          toObsidianMath(this.content, this.plugin.app),
+          el,
+          this.path,
+          this.plugin,
+        ).catch(() => {
           el.textContent = this.content;
         });
       } catch (e) {
