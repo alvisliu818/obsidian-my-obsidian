@@ -48,7 +48,7 @@ import {
   linkVaultPath,
 } from '../features/extFs';
 import { ConfirmModal, NamePromptModal } from './promptModals';
-import { MountEditorModal } from './mountModals';
+import { MountEditorModal, MountTargetPickerModal } from './mountModals';
 import { iconForEntry } from '../features/iconTheme';
 
 export const VIEW_TYPE_MOUNT_PANEL = 'logseq-mount-panel';
@@ -1075,6 +1075,34 @@ export class MountPanelView extends ItemView {
             .setIcon('folder-symlink' as never)
             .onClick(() => new MountEditorModal(this.plugin, undefined, `${mount.id}/${node.rel}`).open()),
         );
+        // 挂载到…（si-yuan「挂载到」）：方向反过来——以**这个**节点为源，在树形
+        // 选择器里挑虚拟文档树的另一个位置，把它以嵌套挂载引用过去。
+        menu.addItem((item) =>
+          item
+            .setTitle('挂载到…')
+            .setIcon('corner-down-right' as never)
+            .onClick(() =>
+              new MountTargetPickerModal(this.plugin, {
+                sourceName: node.name,
+                sourceAbs: node.abs,
+                onPick: (t) => {
+                  void this.plugin
+                    .addMount({
+                      path: node.abs,
+                      label: safeSegment(node.name) || node.name,
+                      include: '',
+                      exclude: 'node_modules|[\\\\/]\\.git[\\\\/]',
+                      refreshSeconds: 0,
+                      pinned: false,
+                      attachTo: t.attachTo,
+                    })
+                    .then((m) => {
+                      new Notice(`已把「${mountDisplayName(m)}」挂到 ${t.label}`);
+                      this.revealMountLocation(t.attachTo);
+                    });
+                },
+              }).open()),
+        );
         menu.addSeparator();
         menu.addItem((item) =>
           item
@@ -1243,6 +1271,26 @@ export class MountPanelView extends ItemView {
       // A cancelled drag can leave highlights behind (dragleave never fired).
       this.contentEl.querySelectorAll('.is-drop-row').forEach((n) => n.classList.remove('is-drop-row'));
     });
+  }
+
+  /**
+   * 「挂载到…」落地后，把目标分支展开到可见：逐级 loadLayer + open，直达
+   * attachTo 的宿主位置，新挂载头一渲染就在眼前。嵌套宿主链（A 里挂 B、B 里
+   * 又挂到 C）只展开到直接宿主，更上层用户自己点开——罕见路径，不做递归。
+   */
+  private revealMountLocation(attachTo: string): void {
+    const { hostId, hostRel } = mountHostOf(attachTo);
+    const host = (this.plugin.settings.externalMounts ?? []).find((m) => m.id === hostId);
+    if (!host) return;
+    const st = this.scan(host);
+    st.open.add('');
+    let acc = '';
+    for (const seg of hostRel ? hostRel.split('/') : []) {
+      acc = acc ? `${acc}/${seg}` : seg;
+      this.loadLayer(host, acc, st);
+      st.open.add(acc);
+    }
+    this.render();
   }
 
   private toggleNode(mount: ExternalMount, rel: string): void {
