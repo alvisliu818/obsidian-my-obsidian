@@ -46,6 +46,24 @@ const DEFAULT_EXECUTE_TIMEOUT = 300000;
 
 type Requirer = (id: string) => unknown;
 
+/** 内核脚本文件名(<插件目录>/syfe-kernel.py) */
+const KERNEL_SCRIPT = 'syfe-kernel.py';
+
+/** 宿主注入的插件目录(this.manifest.dir),见 setKernelPluginDir。 */
+let kernelPluginDir = '';
+
+/**
+ * 告诉内核「我这个插件装在哪个目录」。
+ *
+ * 为什么必须注入:以前这里写死 `.obsidian/plugins/obsidian-jupyter-notebook`,
+ * 独立插件时代没问题;但本模块并入聚合宿主(obsidian-my-obsidian)后,插件目录
+ * 换成了宿主的那个,写死的路径永远找不到脚本 → 「内核不可用」。
+ * manifest.dir 由宿主保留(只有 name/id/version 被覆盖),是唯一可靠的来源。
+ */
+export function setKernelPluginDir(dir: string | undefined): void {
+  if (dir) kernelPluginDir = dir;
+}
+
 function nodeRequire(id: string): unknown {
   const r = (globalThis as { require?: Requirer }).require;
   if (typeof r === 'function') return r(id);
@@ -144,7 +162,11 @@ export class LegacyPythonKernel implements KernelClient {
   private async doStart(): Promise<boolean> {
     const script = this.findKernelScript();
     if (!script) {
-      this.setStatus('error', '找不到内核脚本 syfe-kernel.py(插件目录不完整?)');
+      const tried = this.lastScriptProbe.length ? ` 已尝试:${this.lastScriptProbe.join(' / ')}。` : '';
+      this.setStatus(
+        'error',
+        `找不到内核脚本 syfe-kernel.py。${tried}请把它部署到插件目录(仓库 modules/jupyter/tools/syfe-kernel.py)`,
+      );
       return false;
     }
 
@@ -254,22 +276,50 @@ export class LegacyPythonKernel implements KernelClient {
     return true;
   }
 
-  /** 内核脚本位置:<插件目录>/syfe-kernel.py(esbuild 打包时复制进去)。 */
+  /** 内核脚本位置:<插件目录>/syfe-kernel.py(部署时复制进去)。 */
+  /** 上一次查找尝试过的路径(报错时贴给用户,省得靠猜) */
+  private lastScriptProbe: string[] = [];
+
   private findKernelScript(): string | null {
-    const fs = nodeRequire('fs') as { existsSync(p: string): boolean };
-    const path = nodeRequire('path') as { join(...p: string[]): string };
+    const fs = nodeRequire('fs') as { existsSync(p: string): boolean; readdirSync(p: string): string[] };
+    const path = nodeRequire('path') as {
+      join(...p: string[]): string;
+      isAbsolute(p: string): boolean;
+    };
     // Obsidian 桌面端:adapter.basePath = 库根;插件在 .obsidian/plugins/<id>/。
     const adapter = (
       globalThis as { app?: { vault?: { adapter?: { basePath?: string; getBasePath?: () => string } } } }
     ).app?.vault?.adapter;
     const base = adapter?.basePath ?? adapter?.getBasePath?.() ?? '';
     if (!base) return null;
-    const p = path.join(base, '.obsidian', 'plugins', 'obsidian-jupyter-notebook', 'syfe-kernel.py');
+
+    // manifest.dir 是库根相对路径(如 .obsidian/plugins/xxx),已是绝对路径则原样用
+    const absFromVault = (rel: string): string =>
+      path.isAbsolute(rel) ? rel : path.join(base, rel);
+
+    const candidates: string[] = [];
+    if (kernelPluginDir) candidates.push(path.join(absFromVault(kernelPluginDir), KERNEL_SCRIPT));
+    // 独立插件时代的固定 id(用户可能仍把脚本放在那里)
+    candidates.push(path.join(base, '.obsidian', 'plugins', 'obsidian-jupyter-notebook', KERNEL_SCRIPT));
+    // 兜底:扫一遍已安装插件,谁带 syfe-kernel.py 就用谁
     try {
-      return fs.existsSync(p) ? p : null;
+      const pluginsRoot = path.join(base, '.obsidian', 'plugins');
+      for (const entry of fs.readdirSync(pluginsRoot)) {
+        candidates.push(path.join(pluginsRoot, entry, KERNEL_SCRIPT));
+      }
     } catch {
-      return null;
+      // 读不了就放弃这条搜索路径
     }
+
+    this.lastScriptProbe = candidates.slice(0, 3);
+    for (const p of candidates) {
+      try {
+        if (p && fs.existsSync(p)) return p;
+      } catch {
+        // 非法路径字符等,跳过
+      }
+    }
+    return null;
   }
 
   private waitForReady(timeoutMs: number): Promise<boolean> {

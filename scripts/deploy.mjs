@@ -105,6 +105,21 @@ for (const f of ["monaco.css"]) {
 	console.log(`  basedpyright/`);
 }
 
+// ---- syfe-kernel.py(持久 Python 内核本体)----
+// notebook 的「运行」完全依赖它:运行时以子进程拉起这个脚本。它既不是源码
+// ( esbuild 只在**独立**构建 jupyter 时才复制到模块根目录)、也必须跟插件同
+// 目录,所以这里从源 tools/ 取。漏了它 = 点运行弹「内核不可用」,工具栏
+// 内核状态 hover 显示「找不到内核脚本」。
+{
+	const src = path.join(ROOT, "modules", "jupyter", "tools", "syfe-kernel.py");
+	if (!existsSync(src)) {
+		console.error("缺少 modules/jupyter/tools/syfe-kernel.py —— notebook 无法运行单元格");
+		process.exit(1);
+	}
+	cpSync(src, path.join(TARGET, "syfe-kernel.py"));
+	console.log("  syfe-kernel.py");
+}
+
 // ---- pty-helper (the terminal's native helper) ----
 // Where to look for it, in order: an explicit --from, then any old logseq
 // plugin folder in the same vault (the merge was installed alongside them),

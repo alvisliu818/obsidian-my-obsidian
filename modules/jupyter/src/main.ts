@@ -14,6 +14,7 @@
 import { Menu, Notice, Plugin, PluginSettingTab, App, Setting, TFile, WorkspaceLeaf } from 'obsidian';
 import { NotebookView, VIEW_TYPE_NOTEBOOK } from './notebookView';
 import { disposeAllKernels } from './kernel/registry';
+import { setKernelPluginDir } from './kernel/legacyPython';
 import { setPythonInterpreterOverride } from './pythonInterpreter';
 import { discoverPythonEnvs, setActiveEnv, type PythonEnv } from './pythonEnvs';
 import { registerFreeExtensions } from '../../../src/extensionRegistry';
@@ -41,6 +42,9 @@ export default class JupyterNotebookPlugin extends Plugin {
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
+		// 内核脚本按插件目录找;并入聚合宿主后目录名不再是 jupyter,必须运行时
+		// 注入 manifest.dir,否则一律「内核不可用」
+		setKernelPluginDir(this.manifest.dir);
 		this.addSettingTab(new JupyterNotebookSettingTab(this.app, this));
 		this.registerView(VIEW_TYPE_NOTEBOOK, (leaf: WorkspaceLeaf) => new NotebookView(leaf, this));
 
