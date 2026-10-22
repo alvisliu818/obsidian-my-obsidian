@@ -25,6 +25,8 @@ interface TabIconInfo {
 interface LeafLike {
   __lgTabIconInfo?: TabIconInfo;
   tabHeaderInnerIconEl?: HTMLElement;
+  /** TextFileView.dirty(原生未保存)/BlockEditorView.externalDirty(库外编辑未落盘)。 */
+  view?: { dirty?: boolean; externalDirty?: boolean } | null;
 }
 
 /** 打开外部文件后调用:把这个 leaf 的标签页图标标记为主题图标候选。 */
@@ -43,6 +45,9 @@ export function applyMarkedTabIcons(app: unknown, leaves: unknown[]): number {
     const info = l.__lgTabIconInfo;
     const iconEl = l.tabHeaderInnerIconEl;
     if (!info || !iconEl) continue;
+    // 视图有未保存改动时 Obsidian 会把图标换成修改标记(铅笔),此时绝不能
+    // 重应用主题图标盖掉它——否则"修改图标标记"永远看不见(实测报告)。
+    if (l.view?.dirty === true || l.view?.externalDirty === true) continue;
     // marker 元素还在 = 当前 DOM 已是我们的主题图标,跳过
     if (iconEl.querySelector(`.${TAB_THEME_ICON_CLASS}`)) continue;
     const decision = decideIcon(app, {

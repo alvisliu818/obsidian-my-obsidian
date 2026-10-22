@@ -1027,13 +1027,21 @@ export function anchorRelativeImgSrcs(
 		} catch {
 			/* 保留原文 */
 		}
-		const candidates = dir ? [`${dir}/${decoded}`, decoded] : [decoded];
-		for (const p of candidates) {
-			const found = host.app.vault.getAbstractFileByPath(p);
-			if (found instanceof TFile && IMG_EXT_RE.test(found.extension)) return found;
-		}
-		return null;
-	};
+		// 一层层往上找:md 所在目录 → 逐级父目录 → 库根,首个命中即用
+	// (用户指定顺序;附件目录不必与笔记同级,挂在任意祖先下都能命中)。
+	const parts = dir ? dir.split('/') : [];
+	for (let i = parts.length; i >= 0; i--) {
+		const base = parts.slice(0, i).join('/');
+		const p = base ? `${base}/${decoded}` : decoded;
+		const found = host.app.vault.getAbstractFileByPath(p);
+		if (found instanceof TFile && IMG_EXT_RE.test(found.extension)) return found;
+	}
+	// 全都没命中:退回 Obsidian 自己的链接解析(sourcePath 感知),解析不到
+	// 才交还全局默认行为——漏出的 src 会被全库模糊匹配劫持成同名图片。
+	const dest = host.app.metadataCache.getFirstLinkpathDest(decoded, file.path);
+	if (dest instanceof TFile && IMG_EXT_RE.test(dest.extension)) return dest;
+	return null;
+};
 	const rewrite = (m: string, pre: string, src: string, post: string): string => {
 		const resolved = resolve(src);
 		if (!resolved) return m;
