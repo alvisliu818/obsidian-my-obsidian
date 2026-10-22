@@ -248,10 +248,13 @@ export interface BlockEditorSettings {
    */
   mountDragMode: boolean;
   /**
-   * Display-order overrides for the tree, `mountId -> dir rel -> names`.
-   * Only names the user actually dragged are recorded; anything unlisted
-   * keeps the default sort after them. Stale names (renamed/deleted on
-   * disk) are skipped at apply time, so no cleanup pass is needed.
+   * Display-order overrides for the tree, `mountId -> dir rel -> keys`.
+   * A key is a real child's NAME, or `mount:<id>` for a nested mount head
+   * hanging at that level — both share one key space so drags can interleave
+   * mounts among real siblings. Only keys the user actually dragged are
+   * recorded; anything unlisted keeps the default sort after them. Stale
+   * keys (renamed/deleted/unmounted) are skipped at apply time, so no
+   * cleanup pass is needed.
    */
   mountTreeOrder: Record<string, Record<string, string[]>>;
   /**

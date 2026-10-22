@@ -31,11 +31,11 @@ const node = (name: string, rel: string, isDir: boolean, children: MountNode[] =
   children,
 });
 
-function mount(id: string, attachTo?: string): ExternalMount {
+function mount(id: string, attachTo?: string, label?: string): ExternalMount {
   return {
     id,
     path: `D:\\m${id}`,
-    label: '',
+    label: label ?? '',
     include: '',
     exclude: '',
     refreshSeconds: 0,
@@ -162,7 +162,9 @@ describe('flatten — a plain folder with NO nested mounts still descends', () =
     const state = { open: new Set(['', 'sub', 'sub/deep']), tree, loaded: new Set(['']), truncated: false, scannedAt: 0 };
     const rows = (panel as unknown as { flatten(m: ExternalMount, s: unknown): Row[] }).flatten(mount('host'), state);
 
-    expect(describe2(rows)).toEqual(['DIR:sub@1', 'FILE:sub/inner.md@2', 'DIR:sub/deep@2', 'FILE:sub/deep/x.md@3', 'FILE:top.md@1']);
+    // orderedLevel 按显示约定重排每层(容器类在前、A→Z),深度优先摊平:
+    // deep 的子树紧跟 deep,先于同层的 inner.md。
+    expect(describe2(rows)).toEqual(['DIR:sub@1', 'DIR:sub/deep@2', 'FILE:sub/deep/x.md@3', 'FILE:sub/inner.md@2', 'FILE:top.md@1']);
   });
 
   it('hides them again while collapsed', () => {
@@ -171,5 +173,94 @@ describe('flatten — a plain folder with NO nested mounts still descends', () =
     const rows = (panel as unknown as { flatten(m: ExternalMount, s: unknown): Row[] }).flatten(mount('host'), state);
 
     expect(describe2(rows)).toEqual(['DIR:sub@1', 'FILE:top.md@1']);
+  });
+});
+
+describe('flatten — nested mounts interleave with real siblings by name', () => {
+  // 混排:挂载头按容器类参与名称排序,不再硬钉在同层最前(容器类仍整体
+  // 领先文件类,与真实文件夹/文件的既有排序规则一致)。
+  const tree = [
+    node('a.md', 'a.md', false),
+    node('sub', 'sub', true, [node('inner.md', 'sub/inner.md', false)]),
+    node('z.md', 'z.md', false),
+  ];
+
+  it('a mount named after the folder sorts below it, above the files', () => {
+    const panel = panelWith([mount('host'), mount('late', 'host', 'wedge')]);
+    const state = { open: new Set(['']), tree, loaded: new Set(['']), truncated: false, scannedAt: 0 };
+    const rows = (panel as unknown as { flatten(m: ExternalMount, s: unknown): Row[] }).flatten(mount('host'), state);
+
+    expect(describe2(rows)).toEqual(['DIR:sub@1', 'HEAD:late@1', 'FILE:a.md@1', 'FILE:z.md@1']);
+  });
+
+  it('a mount named before the folder sorts above it', () => {
+    const panel = panelWith([mount('host'), mount('early', 'host', 'alpha')]);
+    const state = { open: new Set(['']), tree, loaded: new Set(['']), truncated: false, scannedAt: 0 };
+    const rows = (panel as unknown as { flatten(m: ExternalMount, s: unknown): Row[] }).flatten(mount('host'), state);
+
+    expect(describe2(rows)).toEqual(['HEAD:early@1', 'DIR:sub@1', 'FILE:a.md@1', 'FILE:z.md@1']);
+  });
+});
+
+describe('flatten — drag order (mountTreeOrder) interleaves mount heads', () => {
+  it('raises saved keys (`mount:<id>`) within their class', () => {
+    const panel = panelWith([mount('host'), mount('m1', 'host'), mount('m2', 'host')]);
+    (panel as unknown as { plugin: { settings: { mountTreeOrder: Record<string, Record<string, string[]>> } } }).plugin.settings.mountTreeOrder = {
+      host: { '': ['mount:m2', 'mount:m1'] },
+    };
+    const state = { open: new Set(['']), tree: [node('top.md', 'top.md', false)], loaded: new Set(['']), truncated: false, scannedAt: 0 };
+    const rows = (panel as unknown as { flatten(m: ExternalMount, s: unknown): Row[] }).flatten(mount('host'), state);
+
+    expect(describe2(rows)).toEqual(['HEAD:m2@1', 'HEAD:m1@1', 'FILE:top.md@1']);
+  });
+});
+
+describe('reorderLevelRow — persists the merged sibling key list', () => {
+  /** A panel whose host level holds one real file and two nested mounts. */
+  function droppablePanel(): MountPanelView {
+    const panel = panelWith([mount('host'), mount('m1', 'host'), mount('m2', 'host')]);
+    (panel as unknown as { states: Map<string, unknown> }).states = new Map([
+      ['host', { open: new Set(['']), tree: [node('s.md', 's.md', false)], loaded: new Set(['']), truncated: false, scannedAt: 0 }],
+    ]);
+    (panel as unknown as { render(): void }).render = () => {};
+    (panel as unknown as { plugin: { saveSettings(): Promise<void> } }).plugin.saveSettings = () => Promise.resolve();
+    return panel;
+  }
+
+  const savedOrder = (panel: MountPanelView): string[] =>
+    (panel as unknown as { plugin: { settings: { mountTreeOrder: Record<string, Record<string, string[]>> } } }).plugin.settings
+      .mountTreeOrder.host[''];
+
+  it('a mount head dropped above another writes `mount:` keys in full', () => {
+    const panel = droppablePanel();
+    (panel as unknown as { reorderLevelRow(h: string, rel: string, d: string, t: string): void }).reorderLevelRow(
+      'host',
+      '',
+      'mount:m2',
+      'mount:m1',
+    );
+    // 保存的是完整同层键表:拖拽序 + 未触碰的真实子项,挂载用 mount:<id>。
+    expect(savedOrder(panel)).toEqual(['mount:m2', 'mount:m1', 's.md']);
+  });
+
+  it('a real child dropped between mount heads saves the intent but the class rule holds', () => {
+    const panel = droppablePanel();
+    (panel as unknown as { reorderLevelRow(h: string, rel: string, d: string, t: string): void }).reorderLevelRow(
+      'host',
+      '',
+      's.md',
+      'mount:m2',
+    );
+    // 文件类不越过容器类:保存序记下意图,显示仍保持容器在前(与既有
+    // 「文件夹恒在文件前、拖拽仅在同类内生效」的规则一致)。
+    expect(savedOrder(panel)).toEqual(['mount:m1', 's.md', 'mount:m2']);
+    const rows = (panel as unknown as { flatten(m: ExternalMount, s: unknown): Row[] }).flatten(mount('host'), {
+      open: new Set(['']),
+      tree: [node('s.md', 's.md', false)],
+      loaded: new Set(['']),
+      truncated: false,
+      scannedAt: 0,
+    });
+    expect(describe2(rows)).toEqual(['HEAD:m1@1', 'HEAD:m2@1', 'FILE:s.md@1']);
   });
 });

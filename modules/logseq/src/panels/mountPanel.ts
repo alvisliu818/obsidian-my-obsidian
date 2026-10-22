@@ -85,13 +85,25 @@ type FlattenRow =
   | { kind: 'node'; node: MountNode; mount: ExternalMount; state: MountState; depth: number }
   | { kind: 'mountHead'; mount: ExternalMount; depth: number };
 
+/**
+ * 一层（某个父节点之下）的显示条目：真实子项或嵌套挂载头。
+ *
+ * `key` 是排序/拖拽身份：节点用自己的名字，挂载头用 `mount:<id>` ——挂载 id
+ * 稳定（改名、换 label 都不影响），且带 `mount:` 前缀后绝不与真实文件名相撞。
+ * 挂载头按容器（isDir: true）参与排序，与文件夹同类。
+ */
+type MountLevelEntry =
+  | { kind: 'node'; node: MountNode; key: string; name: string; isDir: boolean }
+  | { kind: 'mount'; m: ExternalMount; key: string; name: string; isDir: true };
+
 export class MountPanelView extends ItemView {
   plugin: LogseqEditorPlugin;
   private states = new Map<string, MountState>();
   /** Per-render viewport painters; the panel's scroll runs them all. */
   private rowPainters: Array<() => void> = [];
   /** The tree row being dragged (mountId + parent dir + name), if any. */
-  private draggedRow: { mountId: string; parentRel: string; name: string } | null = null;
+  /** 正在被拖的树行（真实子项或嵌套挂载头）。`key`：节点名或 `mount:<id>`。 */
+  private draggedRow: { mountId: string; parentRel: string; key: string } | null = null;
   /** The mount being dragged by its header, if any. */
   private draggedMountId: string | null = null;
   /** 待定位目标行（挂载 + 相对路径），渲染后由 consumePendingReveal 消费。 */
@@ -290,43 +302,51 @@ export class MountPanelView extends ItemView {
   }
 
   /**
-   * Persist a drag reorder: put `draggedName` just above `targetName` in the
-   * DISPLAY order of `parentRel`, update the in-memory tree so the very next
-   * paint reflects it (loadLayer is cached — a rescan is NOT needed), and
-   * save. Display order only; the filesystem is never touched.
+   * Persist a drag reorder at one LEVEL: put `draggedKey` just above
+   * `targetKey` in the DISPLAY order of `parentRel`, save, and re-render.
+   * Display order only; the filesystem is never touched.
+   *
+   * Keys are the merged sibling identities (`orderedLevel`): a real child is
+   * its name, a nested mount is `mount:<id>` — so a mount head can be dropped
+   * between real siblings and vice versa with one shared key space.
    *
    * The saved order is the FULL sibling list as currently displayed, not a
    * sparse "names the user touched" list: splicing into a sparse list put
    * unsaved targets' positions out of reach (a drop on a name the list did
    * not yet contain pushed the dragged name to the END, so items visibly
    * jumped to wrong slots — the 乱跑 report). Full lists stay small, stale
-   * names are skipped at apply time, and files created later still append
+   * keys are skipped at apply time, and entries created later still append
    * after the saved ones.
    */
-  private reorderTreeRow(mount: ExternalMount, parentRel: string, draggedName: string, targetName: string): void {
-    if (draggedName === targetName) return;
-    const st = this.states.get(mount.id);
-    const list = parentRel ? (this.findNode(st?.tree ?? [], parentRel)?.children ?? null) : st?.tree ?? null;
-    if (!list || list.length === 0) return;
+  private reorderLevelRow(hostId: string, parentRel: string, draggedKey: string, targetKey: string): void {
+    if (draggedKey === targetKey) return;
+    const st = this.states.get(hostId);
+    const list = parentRel ? this.findNode(st?.tree ?? [], parentRel)?.children ?? null : st?.tree ?? null;
+    if (!list) return;
 
-    // Rebuild the display order: current visual order minus the dragged name,
-    // with the dragged name re-inserted just above its drop target.
-    const names = list.map((c) => c.name).filter((n) => n !== draggedName);
-    const ti = names.indexOf(targetName);
+    // Rebuild the display order from what is actually shown right now (real
+    // children AND nested mount heads), then splice the dragged key in.
+    const display = this.orderedLevel(hostId, parentRel, list);
+    if (display.length < 2) return;
+    const keys = display.map((e) => e.key).filter((k) => k !== draggedKey);
+    const ti = keys.indexOf(targetKey);
     if (ti < 0) return;
-    names.splice(ti, 0, draggedName);
+    keys.splice(ti, 0, draggedKey);
 
     const all = this.plugin.settings.mountTreeOrder ?? {};
     this.plugin.settings.mountTreeOrder = {
       ...all,
-      [mount.id]: { ...(all[mount.id] ?? {}), [parentRel]: names },
+      [hostId]: { ...(all[hostId] ?? {}), [parentRel]: keys },
     };
     void this.plugin.saveSettings();
 
-    // Reorder the live tree in place so the next paint already matches.
-    const byName = new Map(list.map((c) => [c.name, c]));
-    const ordered = names.map((n) => byName.get(n)).filter((c): c is MountNode => !!c);
-    for (const c of list) if (!names.includes(c.name)) ordered.push(c);
+    // Mirror the new order onto the live node array so the cached tree stays
+    // tidy (mount heads live in settings and need no mirror). flatten re-derives
+    // the display order from `mountTreeOrder` anyway; this only keeps the two
+    // in sync for anything that still reads the raw array.
+    const byKey = new Map(display.filter((e) => e.kind === 'node').map((e) => [e.key, e.node]));
+    const ordered = keys.map((k) => byKey.get(k)).filter((n): n is MountNode => !!n);
+    for (const c of list) if (!keys.includes(c.name)) ordered.push(c);
     list.length = 0;
     list.push(...ordered);
     this.render();
@@ -684,7 +704,7 @@ export class MountPanelView extends ItemView {
 
   /**
    * 嵌套挂载的头行:树行形态的挂载入口(点击展开它自己的子树),右键复用
-   * 挂载头菜单(编辑/卸载/在此挂载…)。不接行拖拽(嵌套排序 v1 不做)。
+   * 挂载头菜单(编辑/卸载/在此挂载…)。拖拽排序与真实子项同一套(wireLevelRowDrag)。
    */
   private renderMountHeadRow(parent: HTMLElement, mount: ExternalMount, depth: number): void {
     const st = this.states.get(mount.id) ?? this.scan(mount);
@@ -714,6 +734,13 @@ export class MountPanelView extends ItemView {
       this.render();
     });
     this.wireMenu(row, mount, null);
+    // 嵌套头行也参与所在层的拖拽排序(⇅ 开时):以 `mount:<id>` 记入宿主那一层
+    // 的显示序,与真实子项同一套键空间;身份键取 mountHostOf 切出的 hostId/
+    // hostRel(挂载 id 不含 `/`,首个斜杠即无歧义分隔)。
+    if (mount.attachTo) {
+      const { hostId, hostRel } = mountHostOf(mount.attachTo);
+      this.wireLevelRowDrag(row, hostId, hostRel, `mount:${mount.id}`, mountDisplayName(mount));
+    }
   }
 
   /**
@@ -729,65 +756,91 @@ export class MountPanelView extends ItemView {
   }
 
   /**
-   * 一个嵌套挂载的头行,展开时再追加它自己的子树(先嵌套子挂载,后自动子项,
-   * 与顶层 flatten 同序)。`chain` 是从顶层下来的宿主 id 链,防手改 data.json
-   * 造出的 A→B→A 环把渲染打死循环。
+   * 一个嵌套挂载的头行,展开时再追加它自己的子树(与顶层 flatten 共用
+   * flattenHost,同一套混排)。`chain` 是从顶层下来的宿主 id 链,防手改
+   * data.json 造出的 A→B→A 环把渲染打死循环。
    */
   private emitMountHead(m: ExternalMount, depth: number, out: FlattenRow[], chain: Set<string>): void {
     out.push({ kind: 'mountHead', mount: m, depth });
     if (chain.has(m.id)) return;
     const st = this.scan(m);
     if (!st.open.has('')) return;
-    const next = new Set(chain).add(m.id);
-    for (const child of this.nestedMountsOf(m.id, '')) this.emitMountHead(child, depth + 1, out, next);
-    // 这个嵌套挂载自己也是一棵树,它内部的节点同样可以再挂(递归)。
-    const walk = (list: MountNode[], d: number): void => {
-      for (const n of list) {
-        out.push({ kind: 'node', node: n, mount: m, state: st, depth: d });
-        const nested = this.nestedMountsOf(m.id, n.rel);
-        if (nested.length > 0 && st.open.has(n.rel)) {
-          for (const child of nested) this.emitMountHead(child, d + 1, out, next);
+    this.flattenHost(m, st, new Set(chain).add(m.id), out, depth + 1);
+  }
+
+  /**
+   * 把宿主 `host` 已加载的树摊平进 `out`:每一层由 orderedLevel **混排**(真实
+   * 子项 + 嵌套挂载头),挂载头排在同层什么位置不再写死。只下潜 open 的节点;
+   * 文件没有真实子项,但挂了下游挂载后就是可展开容器,walkLevel 照常进——
+   * orderedLevel 对空 children 也能返回它名下的挂载头。
+   */
+  private flattenHost(host: ExternalMount, st: MountState, chain: Set<string>, out: FlattenRow[], baseDepth: number): void {
+    const walkLevel = (parentRel: string, children: MountNode[], depth: number): void => {
+      for (const e of this.orderedLevel(host.id, parentRel, children)) {
+        if (e.kind === 'mount') {
+          this.emitMountHead(e.m, depth, out, chain);
+          continue;
         }
-        if (n.isDir && st.open.has(n.rel)) walk(n.children, d + 1);
+        const n = e.node;
+        out.push({ kind: 'node', node: n, mount: host, state: st, depth });
+        if (st.open.has(n.rel)) walkLevel(n.rel, n.children, depth + 1);
       }
     };
-    walk(st.tree, depth + 1);
+    walkLevel('', st.tree, baseDepth);
   }
 
   /**
    * Flatten the loaded tree into draw order, honouring which folders are open.
-   * 显式嵌套挂载行插在宿主自己那一层的最前(si-yuan:显式 children 先于自动子项)。
    *
    * 嵌套挂载可以挂在**任意节点**下——挂载项根部、子文件夹、乃至单个文件
-   * (attachTo = `hostId/rel`),所以在 walk 里逐节点查一次,而不是只在开头查
-   * 根部。文件原本没有 children,但挂了下游挂载后它就是一个可展开的容器:
-   * flatten 照常织入子行,由 renderNode 补出 caret。
+   * (attachTo = `hostId/rel`)。文件原本没有 children,但挂了下游挂载后它就是
+   * 一个可展开的容器:flatten 照常织入子行,由 renderNode 补出 caret。
+   * 嵌套挂载头与同层真实子项的先后由 orderedLevel 决定(按名称或拖拽序),
+   * 不再像早期版本那样硬钉在最前。
    */
   private flatten(mount: ExternalMount, state: MountState): FlattenRow[] {
     const out: FlattenRow[] = [];
-    for (const child of this.nestedMountsOf(mount.id, '')) this.emitMountHead(child, 1, out, new Set([mount.id]));
-    const walk = (list: MountNode[], depth: number): void => {
-      for (const n of list) {
-        out.push({ kind: 'node', node: n, mount, state, depth });
-        const isOpen = state.open.has(n.rel);
-        // 挂在这个节点之下的嵌套挂载:与真实子项同级,但排在它们之前。
-        // ⚠️ 不能写成 `nested.length === 0 → continue`:真实子项的下潜在
-        // 它后面,没有嵌套挂载的普通文件夹会被整棵藏掉——展开后 caret 翻了、
-        // loadLayer 也读了盘,却一个子行都不织(实测:挂载项子目录打不开)。
-        // 与 emitMountHead 的 walk 保持同构:挂载头与真实子项各自独立判定。
-        const nested = this.nestedMountsOf(mount.id, n.rel);
-        if (nested.length > 0 && isOpen) {
-          const chain = new Set<string>([mount.id]);
-          for (const child of nested) this.emitMountHead(child, depth + 1, out, chain);
-        }
-        // 文件夹才继续下潜真实子项;文件没有 children,到此为止。
-        if (n.isDir && isOpen) walk(n.children, depth + 1);
-      }
-    };
+    // 宿主自身不查 open(''):renderMount 在折叠时根本不会走到这里;不设防才能
+    // 让 consumePendingReveal 折叠态也量出行偏移(见 mountNestedFlatten 测试)。
     // 根层从 depth 1 起排:挂载根是区块头(不在行流里),子项整体缩进一级,
     // 与根形成父子缩进关系(此前 depth 0 与头完全平齐,被报告为 bug)。
-    walk(state.tree, 1);
+    this.flattenHost(mount, state, new Set([mount.id]), out, 1);
     return out;
+  }
+
+  /**
+   * 一层的显示序:真实子项 + 嵌套挂载头按名称混排(容器类在前、A→Z,挂载头按
+   * 容器参与),拖拽序(mountTreeOrder,`mountId -> dir rel -> keys`)在同类内
+   * 生效——与 sortChildren 对真实子项的规则完全一致,只是键空间扩到挂载头。
+   *
+   * 挂载条目的 key 是 `mount:<id>`:改名/换 label 不影响已保存的拖拽序,也绝不
+   * 与真实文件名相撞。未列入保存序的条目保持名称序、排在已列之后;陈旧条目
+   * (已删除/卸载)在 rank 表里查不到,自动失效,无需清理。
+   */
+  private orderedLevel(mountId: string, rel: string, children: MountNode[]): MountLevelEntry[] {
+    const entries: MountLevelEntry[] = children.map((n) => ({
+      kind: 'node',
+      node: n,
+      key: n.name,
+      name: n.name,
+      isDir: n.isDir,
+    }));
+    for (const m of this.nestedMountsOf(mountId, rel)) {
+      entries.push({ kind: 'mount', m, key: `mount:${m.id}`, name: mountDisplayName(m), isDir: true });
+    }
+    entries.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+    const order = this.plugin.settings.mountTreeOrder?.[mountId]?.[rel];
+    if (order && order.length > 0) {
+      const rank = new Map(order.map((k, i) => [k, i]));
+      const last = order.length;
+      entries.sort((a, b) => {
+        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+        const ra = rank.get(a.key) ?? last;
+        const rb = rank.get(b.key) ?? last;
+        return ra !== rb ? ra - rb : a.name.localeCompare(b.name);
+      });
+    }
+    return entries;
   }
 
   private renderNode(parent: HTMLElement, mount: ExternalMount, node: MountNode, state: MountState, depth: number): void {
@@ -1150,19 +1203,28 @@ export class MountPanelView extends ItemView {
    * out of each other's way.
    */
   private wireRowDrag(row: HTMLElement, mount: ExternalMount, node: MountNode): void {
+    this.wireLevelRowDrag(row, mount.id, parentRelOf(node.rel), node.name, node.name);
+  }
+
+  /**
+   * 行拖拽排序的共用接线,真实子项行与嵌套挂载头行都走这里:身份 =
+   * `(mountId, parentRel, key)`,key 是节点名或 `mount:<id>`。dragover 只认
+   * mountId + parentRel 一致,不看 key 是哪类——所以挂载头可以落到真实子项
+   * 之间,真实子项也可以落到挂载头之间,同一层一把尺子。
+   */
+  private wireLevelRowDrag(row: HTMLElement, mountId: string, parentRel: string, key: string, payload: string): void {
     if (this.plugin.settings.mountDragMode !== true) return;
     row.draggable = true;
-    const parentRel = parentRelOf(node.rel);
     row.addEventListener('dragstart', (e) => {
-      this.draggedRow = { mountId: mount.id, parentRel, name: node.name };
+      this.draggedRow = { mountId, parentRel, key };
       // Firefox refuses to start a drag without a payload being set.
-      e.dataTransfer?.setData('text/plain', node.name);
+      e.dataTransfer?.setData('text/plain', payload);
       e.dataTransfer!.effectAllowed = 'move';
       row.addClass('is-dragging-row');
     });
     row.addEventListener('dragover', (e) => {
       const d = this.draggedRow;
-      if (!d || d.mountId !== mount.id || d.parentRel !== parentRel || d.name === node.name) return;
+      if (!d || d.mountId !== mountId || d.parentRel !== parentRel || d.key === key) return;
       e.preventDefault();
       e.dataTransfer!.dropEffect = 'move';
       row.addClass('is-drop-row');
@@ -1171,9 +1233,9 @@ export class MountPanelView extends ItemView {
     row.addEventListener('drop', (e) => {
       row.removeClass('is-drop-row');
       const d = this.draggedRow;
-      if (!d || d.mountId !== mount.id || d.parentRel !== parentRel) return; // cross-directory: ignored
+      if (!d || d.mountId !== mountId || d.parentRel !== parentRel) return; // cross-directory: ignored
       e.preventDefault();
-      this.reorderTreeRow(mount, parentRel, d.name, node.name);
+      this.reorderLevelRow(mountId, parentRel, d.key, key);
     });
     row.addEventListener('dragend', () => {
       this.draggedRow = null;
