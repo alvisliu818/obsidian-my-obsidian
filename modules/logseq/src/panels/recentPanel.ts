@@ -84,9 +84,11 @@ export class RecentPanelView extends ItemView {
 
     for (const file of rows) {
       const row = this.listEl.createDiv({ cls: 'lg-recent__row' });
-      row.createSpan({ cls: 'lg-recent__name', text: file.basename });
-      const folder = file.parent && file.parent.path !== '/' ? file.parent.path : '';
-      row.createSpan({ cls: 'lg-recent__path', text: folder || file.path });
+      const text = row.createDiv({ cls: 'lg-recent__text' });
+      text.createDiv({ cls: 'lg-recent__name', text: file.basename });
+      // 第二行只显示所在目录，文件名已经占第一行；根目录文件显示 "/"
+      const dir = file.parent && file.parent.path !== '/' ? file.parent.path : '/';
+      text.createDiv({ cls: 'lg-recent__path', text: dir });
       row.title = file.path;
       row.addEventListener('click', () => {
         void this.app.workspace.openLinkText(file.path, '', false);

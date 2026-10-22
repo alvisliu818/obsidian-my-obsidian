@@ -5047,9 +5047,9 @@ body.lgp-table-editor-cursor * {
 /* 文件行：图标 + 两行文字（名称 / 路径），库外行带标记 */
 .lg-recent__row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
-  padding: 4px 6px;
+  padding: 5px 6px;
   border-radius: var(--nav-item-radius, 4px);
   cursor: pointer;
 }
@@ -5087,19 +5087,33 @@ body.lgp-table-editor-cursor * {
   flex-direction: column;
 }
 
+/* 名称弱化一档（比正文浅），路径再弱化一档，两层层次由颜色+字号共同承担 */
 .lg-recent__name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text-normal);
+  line-height: 1.35;
+  color: var(--text-muted);
 }
 
 .lg-recent__path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--font-ui-smaller);
+  font-size: var(--font-smallest);
+  line-height: 1.3;
   color: var(--text-faint);
+}
+
+/* 常态压暗之后，悬停/聚焦时提亮一档，保证指向的行仍然看得清 */
+.lg-recent__row:hover .lg-recent__name,
+.lg-recent__row:focus-visible .lg-recent__name {
+  color: var(--text-normal);
+}
+
+.lg-recent__row:hover .lg-recent__path,
+.lg-recent__row:focus-visible .lg-recent__path {
+  color: var(--text-muted);
 }
 
 .lg-recent__flag {
