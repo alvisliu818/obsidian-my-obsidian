@@ -30,6 +30,12 @@ import { VIEW_TYPE_SAVE_HISTORY, SaveHistoryView } from "./ui";
 /** 写盘版本的快照名（侧栏里显示的版本标签）。 */
 export const ON_WRITE_SNAPSHOT_NAME = "写盘";
 
+/** 写盘**前**那一刻的版本标签：库外文件没有库内的「首次标脏建会话备份」，
+ *  历史若从写盘后开始，被编辑前的原始内容就永远丢失——由 onExternalSaved
+ *  用写盘方递来的磁盘基线补记。同内容去重使它只在信息真正新的时候落一条
+ *  （通常就是该文件的第一条）。 */
+export const ON_WRITE_PREVIOUS_NAME = "写盘前";
+
 /** 单文件超过这个体积就不做副本（字节）。 */
 const MAX_AUTO_VERSION_BYTES = 2 * 1024 * 1024;
 

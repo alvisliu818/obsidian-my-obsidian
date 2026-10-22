@@ -14,10 +14,22 @@ import { saveSnapshotContent, listSnapshotsForFile, readSnapshotContent, Snapsho
 import { readTargetContent, writeTargetContent, EXTERNAL_VIEW_TYPES, normalizeKey, type SaveTarget } from "./targets";
 
 export function setupVersioning(plugin: SaveControlPlugin) {
-  async function saveNowForTarget(target: SaveTarget, name: string): Promise<"saved" | "no_change"> {
-    if (!target) return "no_change";
-    const content = await readTargetContent(plugin.app, target);
-    if (content === null) return "no_change";
+  /**
+   * 把**给定内容**记为目标的一个版本（同内容去重与 saveNowForTarget 一致）。
+   *
+   * 与 saveNowForTarget 的差别只在内容来源：那边读目标当前状态，这边由调用
+   * 方递入——「写盘前」版本就靠它：等 onExternalSaved 通知到时磁盘已经被
+   * 覆盖，写盘前的内容只能由写盘方在覆盖前从自己的磁盘基线里递出来。
+   * `timestamp` 供调用方控制记录时刻（写盘前/写盘要保证先后有序且快照
+   * 文件键不相撞——快照文件名就是时间戳）。
+   */
+  async function saveContentForTarget(
+    target: SaveTarget,
+    content: string,
+    name: string,
+    timestamp?: string,
+  ): Promise<"saved" | "no_change"> {
+    if (!target || typeof content !== "string") return "no_change";
 
     const snapshotPath = plugin.snapshotPathFor(target);
     const snapshots = await listSnapshotsForFile(plugin, snapshotPath);
@@ -31,9 +43,15 @@ export function setupVersioning(plugin: SaveControlPlugin) {
       }
     }
 
-    const timestamp = new Date().toISOString();
-    await saveSnapshotContent(plugin, snapshotPath, timestamp, content, name);
+    await saveSnapshotContent(plugin, snapshotPath, timestamp ?? new Date().toISOString(), content, name);
     return "saved";
+  }
+
+  async function saveNowForTarget(target: SaveTarget, name: string): Promise<"saved" | "no_change"> {
+    if (!target) return "no_change";
+    const content = await readTargetContent(plugin.app, target);
+    if (content === null) return "no_change";
+    return saveContentForTarget(target, content, name);
   }
 
   async function restoreFromTarget(target: SaveTarget, snapshot: SnapshotRecord) {
@@ -114,6 +132,7 @@ export function setupVersioning(plugin: SaveControlPlugin) {
 
   return {
     saveNowForTarget,
+    saveContentForTarget,
     restoreFromTarget,
     readCurrentContentForFile,
     saveNowForFile: async (file: TFile, name: string): Promise<"saved" | "no_change"> => {

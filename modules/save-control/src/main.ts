@@ -53,7 +53,7 @@ import { SaveStatusIndicator } from "./autosave-ui/StatusIndicator";
 import { ExternalSaveScheduler } from "./externalScheduler";
 import { UnsavedDotMonitor } from "./tabUnsavedDot";
 import { resolveExternalSnapshotRoot } from "./externalStore";
-import { ON_WRITE_SNAPSHOT_NAME } from "./autoVersion";
+import { ON_WRITE_PREVIOUS_NAME, ON_WRITE_SNAPSHOT_NAME } from "./autoVersion";
 import {
   asExternalSaveHandle,
   externalTarget,
@@ -284,13 +284,26 @@ export class SaveControlPlugin extends Plugin {
 
   /** 库外文件落盘后的「写盘」版本:external 写盘不走 vault,autoVersion 的
    *  vault.on('modify') 收不到——由写盘方(BlockEditorView.save)显式通知。
-   *  同内容去重与间隔策略都在 saveNowForTarget 里。 */
-  onExternalSaved(abs: string, fileName: string): void {
+   *  同内容去重与间隔策略都在 saveNowForTarget 里。
+   *
+   *  previousContent = 写盘前的磁盘内容(写盘方在覆盖前从自己的磁盘基线取,
+   *  与本次写盘内容必然不同)。库外没有库内那套「首次标脏建会话备份」,历史
+   *  若从写盘后开始,被编辑前的原始内容整段丢失——这里先记「写盘前」再记
+   *  「写盘」;时间戳 -1ms 保证两条先后有序且快照文件键(=时间戳)不相撞。
+   *  去重使得「写盘前」只在信息真正新时落一条(通常是该文件的第一条)。 */
+  onExternalSaved(abs: string, fileName: string, previousContent?: string | null): void {
     if (!this.settings.versionOnWriteEnabled) return;
     const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
     if (!this.isExtensionAllowed(ext)) return;
     const target = externalTarget(abs, fileName);
-    void this.versioning.saveNowForTarget(target, ON_WRITE_SNAPSHOT_NAME).catch(() => undefined);
+    void (async () => {
+      if (typeof previousContent === "string") {
+        await this.versioning
+          .saveContentForTarget(target, previousContent, ON_WRITE_PREVIOUS_NAME, new Date(Date.now() - 1).toISOString())
+          .catch(() => undefined);
+      }
+      await this.versioning.saveNowForTarget(target, ON_WRITE_SNAPSHOT_NAME).catch(() => undefined);
+    })();
   }
 
   /**
