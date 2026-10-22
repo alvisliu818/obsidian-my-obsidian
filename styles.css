@@ -1295,24 +1295,30 @@
   margin-inline: 0;
 }
 
-/* A quote block whose content is only `>` markers renders a zero-height
-   blockquote — invisible. Give it a row so the empty quote shows its bar. */
+/* ---------- 空行渲染(empty line rendering) ---------- */
+/* `>` 无内容 = 空引述块:它就是引述块,按引述块的样式渲染(框 + 竖条),
+   只是零高度会让它看不见——给一个行高让它可见。 */
 .block-content blockquote:not(:has(*)),
 .block-content blockquote > p:only-child:empty {
   min-height: 1.4em;
 }
 
-/* The render pass splits an empty quote row into its own blockquote — kill
-   the junction (gap + rounded corners) so consecutive blockquotes read as
-   ONE continuous quote box. */
-.block-content blockquote + blockquote {
-  margin-top: 0;
-  border-top-left-radius: 0;
+/* 阅读视图/实时预览:独立空 `>` 行(空引述块)同样给一个行高 */
+.markdown-preview-view blockquote:not(:has(*)),
+.markdown-source-view .cm-previewContent blockquote:not(:has(*)) {
+  min-height: 1.4em;
 }
 
-.block-content blockquote:has(+ blockquote) {
-  margin-bottom: 0;
-  border-bottom-left-radius: 0;
+/* 空段落块 = 原生式空行(引述块之间的空行由 parser 物化而来):参考原生
+   编辑器——空行就是一行,点击即可编辑。给它一个行高让它成为可见的一行。 */
+.block-wrap.is-empty-line {
+  min-height: 1.6em;
+}
+
+/* 阅读视图:两个引述块之间的空行也渲染成可见空行 */
+.markdown-preview-view blockquote + blockquote,
+.markdown-source-view .cm-previewContent blockquote + blockquote {
+  margin-top: 1.6em;
 }
 
 .block-content blockquote > :first-child {
@@ -58549,3 +58555,4 @@ body.hearth-snapshot-capturing .hearth-view:not(#hearth-boost) {
 .vault-explorer-status-bar {
 	display: none;
 }
+

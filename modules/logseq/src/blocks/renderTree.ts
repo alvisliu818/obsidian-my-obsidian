@@ -244,6 +244,9 @@ function renderBlock(b: Block, host: BlockRenderHost, budget?: RenderBudget): HT
   // 段落容器(bare)标记:styles.css 用它把 controls 改成行首覆盖层(不占布局),
   // 段落文字因此顶格,与思源的几何一致(圆点列只属于列表块)。
   if (b.bare) wrap.classList.add('is-bare');
+  // 空段落块 = 原生式空行(引述块之间的空行物化而来):一行可点击的空白,
+  // styles.css 给它一个行高,让它成为可见、可编辑的一行。
+  if (b.bare && b.text === '') wrap.classList.add('is-empty-line');
   if (host.selectedBlocks.has(b)) wrap.classList.add('is-selected');
   const id = blockId(b);
   if (id) wrap.dataset.blockId = id;
@@ -835,35 +838,6 @@ export function withTableSeparation(text: string): string {
   return out.join('\n');
 }
 
-/**
- * A lone `>` line inside a block (Logseq's empty quote row) is dropped by
- * CommonMark when it trails the quote and renders as an invisible gap when it
- * sits between quote lines. Insert a render-only blank line before it so it
- * becomes its own empty blockquote (styled visible via the CSS min-height).
- * Never inside a code fence; the block model and the saved file stay untouched.
- */
-export function withQuoteRowSeparation(text: string): string {
-  if (!/^\s*>\s*$/m.test(text)) return text;
-  const lines = text.split('\n');
-  const out: string[] = [];
-  let inFence = false;
-  let fenceMarker = '';
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const fenceOpen = /^\s*(```|~~~)/.exec(line);
-    if (fenceOpen && !inFence) {
-      inFence = true;
-      fenceMarker = fenceOpen[1];
-    } else if (inFence && line.trimStart().startsWith(fenceMarker)) {
-      inFence = false;
-    }
-    const prevIsQuote = out.length > 0 && /^>/.test(out[out.length - 1].trimStart());
-    if (!inFence && /^\s*>\s*$/.test(line) && prevIsQuote) out.push('');
-    out.push(line);
-  }
-  return out.join('\n');
-}
-
 /** Render static content with cache reuse when the block text is unchanged. */
 function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHost): void {
   const sig = contentSig(b);
@@ -919,9 +893,8 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
   // 仅影响渲染(块文本不变,往返无损);围栏内部保持逐字。raw 块不受影响。
   const blockSource = b.kind === 'list' ? escapeInBlockHeadings(b.text) : b.text;
   const mdSource = withTableSeparation(
-    withQuoteRowSeparation(
-      anchorRelativeImgSrcs(
-        hasWikiEmbed
+    anchorRelativeImgSrcs(
+      hasWikiEmbed
         ? blockSource.replace(/!\[\[([^\[\]]+)\]\]/g, (m, inner: string) => {
             if (mediaTypeOf(inner.split('|')[0].trim())) return m; // media: native render
             const token = `LGPAGEEMBED${pageEmbedTokens.length}LGPAGEEMBED`;
@@ -929,9 +902,8 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
             return token;
           })
         : blockSource,
-        host,
-        imgAnchorTokens,
-      ),
+      host,
+      imgAnchorTokens,
     ),
   );
   MarkdownRenderer.render(host.app, mdSource, holder, host.file?.path ?? '', host).then(() => {

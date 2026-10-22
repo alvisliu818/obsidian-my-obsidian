@@ -325,38 +325,40 @@ describe('serializeBlock', () => {
   });
 });
 
-describe('empty quote row joins the neighboring quote block', () => {
-  it('folds the trailing ">" into the quote block (one quote box)', () => {
+describe('empty quote rows stay separate blocks and render as visible empty boxes', () => {
+  it('a trailing ">" inside a quote block stays in that block', () => {
     const doc = parseDocument('> 示例代码：创建一个列表\n>');
     expect(doc.blocks.map((b) => b.kind)).toEqual(['raw']);
     expect(doc.blocks[0].text).toBe('> 示例代码：创建一个列表\n>');
   });
 
-  it('an empty quote between two quote lines joins the same block', () => {
+  it('an empty quote between two quote lines stays in the same block', () => {
     const doc = parseDocument('> a\n>\n> b');
     expect(doc.blocks).toHaveLength(1);
     expect(doc.blocks[0].text).toBe('> a\n>\n> b');
   });
 
-  it('multi-line quotes still merge (no empty lines between)', () => {
+  it('multi-line quotes still form one block (no empty lines between)', () => {
     const doc = parseDocument('> a\n> b');
     expect(doc.blocks).toHaveLength(1);
     expect(doc.blocks[0].text).toBe('> a\n> b');
   });
 
-  it('an empty quote separated by a blank line merges into the quote above', () => {
+  it('a blank-separated empty quote stays its own block (no merging)', () => {
     const doc = parseDocument('> 示例代码：浅拷贝\n\n>\n\n```python\nx = 1\n```');
     expect(doc.blocks.map((b) => [b.kind, b.text])).toEqual([
-      ['raw', '> 示例代码：浅拷贝\n>'],
+      ['raw', '> 示例代码：浅拷贝'],
+      ['raw', '>'],
       ['raw', '```python\nx = 1\n```'],
     ]);
   });
 
-  it('an empty quote with no quote above merges into the quote below', () => {
+  it('an empty quote between two quotes stays its own block between them', () => {
     const doc = parseDocument('para\n\n>\n\n> b');
     expect(doc.blocks.map((b) => [b.kind, b.text])).toEqual([
       ['list', 'para'],
-      ['raw', '>\n> b'],
+      ['raw', '>'],
+      ['raw', '> b'],
     ]);
   });
 
@@ -365,31 +367,48 @@ describe('empty quote row joins the neighboring quote block', () => {
     expect(doc.blocks.map((b) => b.text)).toEqual(['para', '>', 'para2']);
   });
 
-  it('a blank line between two non-empty quotes still separates them', () => {
-    const doc = parseDocument('> a\n\n> b');
-    expect(doc.blocks.map((b) => b.text)).toEqual(['> a', '> b']);
-  });
-
-  it('round-trips byte-stably once merged', () => {
-    const src = '> a\n>\n> b';
-    expect(serializeDocument(parseDocument(src))).toBe(src);
-  });
-
-  it('the blank-separated merge normalizes on save and is stable after', () => {
+  it('round-trips byte-stably for the blank-separated empty quote', () => {
     const src = '> a\n\n>\n\n> b';
-    const once = serializeDocument(parseDocument(src));
-    expect(once).toBe('> a\n>\n\n> b');
-    expect(serializeDocument(parseDocument(once))).toBe(once);
-  });
-
-  it('round-trips: serialize(parse(x)) re-parses to the same model', () => {
-    const src = '- 使用 copy 模块\n> 示例代码：浅拷贝\n>\n\n```python\nx = 1\n```';
-    const doc = parseDocument(src);
-    const again = parseDocument(serializeDocument(doc));
-    expect(again.blocks.map((b) => [b.kind, b.text])).toEqual(doc.blocks.map((b) => [b.kind, b.text]));
+    expect(serializeDocument(parseDocument(src))).toBe(src);
+    expect(serializeDocument(parseDocument(src))).toBe(src);
   });
 });
 
+describe('blank lines between quote blocks become empty paragraph blocks (native-style empty lines)', () => {
+  it('a blank line between two quote blocks becomes an empty paragraph block', () => {
+    const doc = parseDocument('> a\n\n> b');
+    expect(doc.blocks.map((b) => [b.kind, b.text, b.bare])).toEqual([
+      ['raw', '> a', undefined],
+      ['list', '', true],
+      ['raw', '> b', undefined],
+    ]);
+  });
+
+  it('the empty paragraph block round-trips as a blank line (byte-stable)', () => {
+    const src = '> a\n\n> b';
+    const once = serializeDocument(parseDocument(src));
+    expect(once).toBe(src);
+    expect(serializeDocument(parseDocument(once))).toBe(once);
+  });
+
+  it('idempotent: an existing empty quote block is not given a second one', () => {
+    const doc = parseDocument('> a\n\n>\n\n> b');
+    expect(doc.blocks.map((b) => b.text)).toEqual(['> a', '>', '> b']);
+  });
+
+  it('a run of blank-separated quotes gets one empty line per gap', () => {
+    const doc = parseDocument('> a\n\n> b\n\n> c');
+    expect(doc.blocks.map((b) => b.text)).toEqual(['> a', '', '> b', '', '> c']);
+  });
+
+  it('no empty line between a quote and a non-quote block', () => {
+    const doc = parseDocument('> a\n\npara');
+    expect(doc.blocks.map((b) => [b.kind, b.text])).toEqual([
+      ['raw', '> a'],
+      ['list', 'para'],
+    ]);
+  });
+});
 describe('indented blank soft lines', () => {
   it('keeps the gap in a $$…$$ math block as an empty soft line', () => {
     const doc = parseDocument('- $$\n\t\n\t$$');

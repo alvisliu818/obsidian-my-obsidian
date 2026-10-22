@@ -170,32 +170,34 @@ export function stripIndent(line: string, depth: number): string {
 }
 
 /**
- * Fold a lone `>` line (an empty quote ROW) into the neighboring quote
- * block. A blank line ends a quote run in the parser, so `> a\n\n>\n\n> b`
- * parses as three blocks — but the empty row belongs to the quote, not on
- * its own: Logseq renders it inside the quote box (renderTree
- * .withQuoteRowSeparation makes it visible there). Merge it into the quote
- * ABOVE when there is one, otherwise into the quote BELOW; an empty quote
- * with no quote neighbor stays its own block.
- *
- * Raw blocks are always top-level (flushRaw pushes with parent null), so a
- * single pass over doc.blocks covers every parser-produced quote.
+ * True when a raw block is a run of empty quote rows (`>` / `> `) — an
+ * "empty quote block", which the user wants rendered as a plain quote block.
  */
-function mergeEmptyQuoteRows(doc: ParsedDocument): void {
-  for (let k = 0; k < doc.blocks.length; k++) {
-    const b = doc.blocks[k];
-    if (b.kind !== 'raw' || !/^>\s*$/.test(b.text)) continue;
-    const prev = doc.blocks[k - 1];
-    const next = doc.blocks[k + 1];
-    const isQuote = (x: Block | undefined): boolean => !!x && x.kind === 'raw' && /^>/.test(x.text);
-    if (isQuote(prev)) {
-      prev.text += '\n' + b.text;
-      doc.blocks.splice(k, 1);
-      k--;
-    } else if (isQuote(next)) {
-      next.text = b.text + '\n' + next.text;
-      doc.blocks.splice(k, 1);
-      k--;
+function isEmptyQuoteBlock(text: string): boolean {
+  return text.split('\n').every((line) => /^>\s*$/.test(line));
+}
+
+/**
+ * Materialize the blank line between two quote blocks as an EMPTY PARAGRAPH
+ * block (bare, no marker, no text). The user's call: an empty line should
+ * behave like the NATIVE editor's — one blank line that you can click and
+ * edit. In the block model that is exactly an empty paragraph block: it
+ * renders as one blank row (is-empty-line CSS gives it a line height),
+ * clicking it focuses the editor, and serializing it writes back a blank
+ * line — so `> a\n\n> b` round-trips byte-stably.
+ *
+ * Only NON-EMPTY quote blocks get a separator; an empty quote block IS a
+ * separator already (and stays a quote block). Idempotent.
+ */
+function materializeQuoteBlankLines(doc: ParsedDocument): void {
+  const isQuote = (x: Block | undefined): boolean =>
+    !!x && x.kind === 'raw' && /^>/.test(x.text) && !isEmptyQuoteBlock(x.text);
+  for (let k = 0; k < doc.blocks.length - 1; k++) {
+    if (isQuote(doc.blocks[k]) && isQuote(doc.blocks[k + 1])) {
+      const blank = createBlock('');
+      blank.bare = true; // 段落容器:序列化不带 `- ` 前缀,写回就是空行
+      doc.blocks.splice(k + 1, 0, blank);
+      k++; // step over the inserted blank line
     }
   }
 }
@@ -381,7 +383,10 @@ export function parseDocument(md: string): ParsedDocument {
           i++;
           continue;
         }
+        // raw 区内部的空行(verbatim 内容)
         rawBuf.push(line);
+        i++;
+        continue;
       }
       i++;
       continue;
@@ -608,13 +613,14 @@ export function parseDocument(md: string): ParsedDocument {
         i++;
         continue;
       }
-      // An EMPTY quote line (`>` with no content) is a visible empty quote
-      // ROW of the quote run, not a block of its own: pushing it like any
-      // other structural line folds it into the quote block, where
-      // renderTree.withQuoteRowSeparation keeps the row visible. A blank
-      // line still ends the run, so a `>` separated from every quote stays
-      // its own block — mergeEmptyQuoteRows below folds THOSE into the
-      // neighboring quote (Logseq: one quote box, never a stray empty row).
+      // An EMPTY quote line (`>` with no content) is an empty quote BLOCK
+      // (the user's terms: `>` with no content is an empty quote block, NOT
+      // an empty line). Pushing it like any other structural line keeps the
+      // quote run in one block when adjacent, and a `>` separated from every
+      // quote stays its own block — rendered as a quote block with the CSS
+      // min-height row. Blank lines BETWEEN quote blocks are the rendered
+      // empty lines: materializeQuoteBlankLines turns those into empty
+      // paragraph blocks (see that function).
       rawBuf.push(line);
       i++;
       continue;
@@ -637,7 +643,7 @@ export function parseDocument(md: string): ParsedDocument {
 
   flushRaw();
   flushBare();
-  mergeEmptyQuoteRows(doc);
+  materializeQuoteBlankLines(doc);
   return doc;
 }
 
