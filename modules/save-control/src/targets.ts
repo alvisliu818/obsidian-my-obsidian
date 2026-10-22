@@ -90,7 +90,11 @@ export function asExternalSaveHandle(view: unknown): ExternalSaveHandle | null {
     flush?: unknown;
   };
   const type = typeof v.getViewType === "function" ? v.getViewType() : "";
-  if (!EXTERNAL_VIEW_TYPES.includes(type as (typeof EXTERNAL_VIEW_TYPES)[number])) return null;
+  // BlockEditorView 的库外模式(挂载树打开的 md)复用自家视图类型,靠
+  // isExternal 标记放行——它的 abs/isDirty/save 都按本探针的形状暴露。
+  const isExternalEditor = (v as { isExternal?: unknown }).isExternal === true;
+  if (!EXTERNAL_VIEW_TYPES.includes(type as (typeof EXTERNAL_VIEW_TYPES)[number]) && !isExternalEditor)
+    return null;
   if (typeof v.abs !== "string" || !v.abs) return null;
   const save = typeof v.save === "function" ? (v.save as () => Promise<void>).bind(v)
     : typeof v.flush === "function" ? (v.flush as () => Promise<void>).bind(v)
@@ -101,7 +105,10 @@ export function asExternalSaveHandle(view: unknown): ExternalSaveHandle | null {
   const handle: ExternalSaveHandle = {
     abs: v.abs,
     fileName,
-    isDirty: () => (typeof v.isDirty === "function" ? (v.isDirty as () => boolean).call(v) : false),
+    isDirty: () =>
+      typeof v.isDirty === "function"
+        ? (v.isDirty as () => boolean).call(v)
+        : (v as { externalDirty?: unknown }).externalDirty === true,
     save: async () => {
       await save();
     },

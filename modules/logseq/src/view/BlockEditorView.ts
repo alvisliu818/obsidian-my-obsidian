@@ -499,6 +499,8 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   private externalDiskData: string | null = null;
   /** Whether the MODEL changed since the file was last written. */
   private externalDirty = false;
+  /** save-control 接管配置:自动落盘开关(关=只标脏,何时写由手动保存/关闭提示决定)。 */
+  private externalAutoSaveEnabled = true;
 
   /**
    * Persist the current content.
@@ -515,6 +517,21 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
    * outside files the user only ever opened. The comparison below is the real
    * guard, and it applies either way.
    */
+  /** save-control 的库外保存探针:isExternal 模式下报告未落盘的编辑。 */
+  isDirty(): boolean {
+    return this.isExternal && this.externalDirty;
+  }
+
+  /** 探针句柄要求的绝对路径(库外=真实文件;库内模式为空,探针不放行)。 */
+  get abs(): string {
+    return this.externalAbs;
+  }
+
+  /** save-control 接管配置:关闭自动落盘时,external 编辑只标脏不自动写。 */
+  configureAutoSave(o: { enabled: boolean; delayMs: number }): void {
+    this.externalAutoSaveEnabled = o.enabled;
+  }
+
   async save(force = false): Promise<void> {
     if (!this.isExternal) {
       await super.save(force);
@@ -3113,7 +3130,11 @@ ${content}`;
     // 在这里补上 touch：语义对齐原生 md——编辑过即保持，落盘不清。
     const leafEx = this.leaf as unknown as { openTabSettings?: Record<string, unknown> | undefined };
     leafEx.openTabSettings = { ...leafEx.openTabSettings, touched: true };
-    this.requestSave(); // native: sets dirty + debounced save (2s)
+    // 库外模式:自动落盘开关由 save-control 的 configureAutoSave 接管——
+    // 关闭时只标脏(圆点/关闭提示/手动保存走 save-control),不自动写盘。
+    if (!this.isExternal || this.externalAutoSaveEnabled) {
+      this.requestSave(); // native: sets dirty + debounced save (2s)
+    }
   }
 
   private async onExternalModify(file: TAbstractFile): Promise<void> {
