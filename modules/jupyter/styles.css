@@ -137,7 +137,8 @@
 .lgp-nb__spacer { flex: 1 1 auto; }
 .lgp-nb__cellbtn {
   cursor: pointer;
-  color: var(--text-faint);
+  /* 原为 --text-faint：淡到几乎看不见，尤其在浅色主题下像禁用态 */
+  color: var(--text-muted);
   font-size: 12px;
   line-height: 1;
   padding: 3px 5px;
@@ -148,6 +149,15 @@
 .lgp-nb__cellbtn:hover {
   background-color: var(--background-modifier-hover);
   color: var(--text-normal);
+}
+/* 运行：Jupyter 习惯的绿色，和「上移/下移/删除」这组灰操作区分开 */
+.lgp-nb__cellbtn--run {
+  color: var(--color-green, #4caf50);
+  font-size: 13px;
+}
+.lgp-nb__cellbtn--run:hover {
+  background-color: var(--background-modifier-hover);
+  color: var(--color-green, #4caf50);
 }
 .lgp-nb__cellbtn--del:hover {
   color: var(--text-error);
