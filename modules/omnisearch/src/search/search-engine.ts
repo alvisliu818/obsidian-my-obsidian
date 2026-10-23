@@ -12,7 +12,6 @@ import {
 import { isExternalDocPath } from '../tools/externalDocs'
 
 import {
-  chunkArray,
   countError,
   logVerbose,
   normalizeExactMatchContent,
@@ -104,42 +103,46 @@ export class SearchEngine {
    */
   public async addFromPaths(paths: string[]): Promise<void> {
     logVerbose('Adding files', paths)
-    let documents = (
-      await Promise.all(
-        paths.map(
-          async path => await this.plugin.documentsRepository.getDocument(path)
+    // markdown 优先（保持原语义：md 先进索引），其余按原顺序
+    const sorted = sortBy(paths, p => (p.endsWith('.md') ? 0 : 1))
+
+    /**
+     * 流式分批：读一批 → 索引一批 → 释放 → 让出主线程一拍。
+     *
+     * 旧实现 `Promise.all(paths.map(getDocument))` 把全部文档（每个含全文
+     * content）同时拉进内存后才分批进 minisearch——一万文件时启动峰值
+     * 直冲 2.5GB+（实测与 renderer 白屏崩溃直接相关）。分批后任意时刻
+     * 只有单批文档驻留，GC 在批间有喘息窗口。
+     *
+     * 「已索引的先删再重加」的语义保持在批内：每批读取后先移除本批中
+     * 已存在的条目再重加，避免先全量删除后中途失败留下索引空洞。
+     */
+    const CHUNK = 300
+    for (let i = 0; i < sorted.length; i += CHUNK) {
+      const slice = sorted.slice(i, i + CHUNK)
+      const documents = (
+        await Promise.all(
+          slice.map(async path => await this.plugin.documentsRepository.getDocument(path))
         )
-      )
-    ).filter(d => !!d?.path)
-    logVerbose('Sorting documents to first index markdown')
-    // Index markdown files first
-    documents = sortBy(documents, d => (d.path.endsWith('.md') ? 0 : 1))
+      ).filter(d => !!d?.path)
+      logVerbose('Indexing into search engine', documents)
 
-    // If a document is already added, discard it
-    this.removeFromPaths(
-      documents.filter(d => this.indexedDocuments.has(d.path)).map(d => d.path)
-    )
-
-    // Split the documents in smaller chunks to add them to minisearch
-    const chunkedDocs = chunkArray(documents, 500)
-    for (const docs of chunkedDocs) {
-      logVerbose('Indexing into search engine', docs)
       // Update the list of indexed docs
-      docs.forEach(doc => this.indexedDocuments.set(doc.path, doc.mtime))
+      documents.forEach(doc => this.indexedDocuments.set(doc.path, doc.mtime))
 
       // Discard files that may have been already added (though it shouldn't happen)
-      const alreadyAdded = docs.filter(doc => this.minisearch.has(doc.path))
+      const alreadyAdded = documents.filter(doc => this.minisearch.has(doc.path))
       this.removeFromPaths(alreadyAdded.map(o => o.path))
 
       // Add docs to minisearch
-      await this.minisearch.addAllAsync(docs)
+      await this.minisearch.addAllAsync(documents)
 
       // A file may have been deleted while we were reading/indexing it.
       // Its delete handler ran before the doc was in minisearch,
       // so it couldn't discard it.
       // Remove vanished files now to avoid keeping stale entries.
       // 库外文件（ext: 伪路径）不在 vault 里，豁免这条“文件已消失”的清理。
-      const deleted = docs.filter(
+      const deleted = documents.filter(
         doc =>
           !isExternalDocPath(doc.path) &&
           !this.plugin.app.vault.getAbstractFileByPath(doc.path)
@@ -147,6 +150,9 @@ export class SearchEngine {
       if (deleted.length) {
         this.removeFromPaths(deleted.map(doc => doc.path))
       }
+
+      // 批间让出一拍：microtask 不让 GC/渲染喘息，真实宏任务才有效
+      await new Promise(resolve => setTimeout(resolve, 0))
     }
   }
 
