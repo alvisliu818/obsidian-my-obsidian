@@ -3162,6 +3162,18 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@types/jsdom@npm:^30":
+  version: 30.0.0
+  resolution: "@types/jsdom@npm:30.0.0"
+  dependencies:
+    "@types/node": "npm:*"
+    "@types/tough-cookie": "npm:*"
+    parse5: "npm:^8.0.0"
+    undici-types: "npm:^8.9.0"
+  checksum: 10c0/5489ff43ccaaaa473c1a0f10f623e6329a57234454203f557d0ff3bff28e51423b20219ff5c1c8f3d3552c862b36576c25340724b6e93d283c759b8db6868422
+  languageName: node
+  linkType: hard
+
 "@types/lodash@npm:^4.17.16":
   version: 4.17.26
   resolution: "@types/lodash@npm:4.17.26"
@@ -5223,6 +5235,13 @@ __metadata:
   version: 7.0.1
   resolution: "entities@npm:7.0.1"
   checksum: 10c0/b4fb9937bb47ecb00aaaceb9db9cdd1cc0b0fb649c0e843d05cf5dbbd2e9d2df8f98721d8b1b286445689c72af7b54a7242fc2d63ef7c9739037a8c73363e7ca
+  languageName: node
+  linkType: hard
+
+"entities@npm:^8.0.0":
+  version: 8.1.0
+  resolution: "entities@npm:8.1.0"
+  checksum: 10c0/da0bf22912c19d2a4707783e1b905d3f6a977e93e0655a8d2c526455eb3996f668f9f2e4c2a07af8d6927d232c41b6e929a7044df0236c7bf6e9c38e070e3719
   languageName: node
   linkType: hard
 
@@ -8235,6 +8254,7 @@ __metadata:
     "@tsconfig/strictest": "npm:^2.0.8"
     "@types/debug": "npm:^4.1.13"
     "@types/diff3": "npm:^0.0.2"
+    "@types/jsdom": "npm:^30"
     "@types/lodash": "npm:^4.17.16"
     "@types/moment": "npm:^2.13.0"
     "@types/node": "npm:^22.0.0"
@@ -8280,6 +8300,7 @@ __metadata:
     jest-environment-jsdom: "npm:^30.5.2"
     js-logger: "npm:^1.6.1"
     js-sha256: "npm:^1.0.0"
+    jsdom: "npm:^26.1.0"
     json5: "npm:^2.2.3"
     jszip: "npm:^3.10.2"
     lodash: "npm:^4.17.21"
@@ -8363,6 +8384,8 @@ __metadata:
     "@codemirror/state@6.7.6":
       unplugged: true
     "@codemirror/view@6.43.15":
+      unplugged: true
+    "@exodus/bytes":
       unplugged: true
     "@lezer/common@1.5.3":
       unplugged: true
@@ -8581,6 +8604,15 @@ __metadata:
   dependencies:
     entities: "npm:^6.0.0"
   checksum: 10c0/7fd2e4e247e85241d6f2a464d0085eed599a26d7b0a5233790c49f53473232eb85350e8133344d9b3fd58b89339e7ad7270fe1f89d28abe50674ec97b87f80b5
+  languageName: node
+  linkType: hard
+
+"parse5@npm:^8.0.0":
+  version: 8.0.1
+  resolution: "parse5@npm:8.0.1"
+  dependencies:
+    entities: "npm:^8.0.0"
+  checksum: 10c0/c3c1c5aab55f6e4be5245599790e56e64be7764a4a0edd7f98db4fe3bb380f63add752fa047dff0496446c25f4104f0c7c1967723de640bde92306a7bb67ed2f
   languageName: node
   linkType: hard
 
@@ -9989,6 +10021,13 @@ __metadata:
   version: 7.24.6
   resolution: "undici-types@npm:7.24.6"
   checksum: 10c0/d9cd8befb643ac904615c280a095ba4240531f6bb4a5e75a22a7483630ca8d3f1016d2ab6ace6ceda1f63b3a2db2fe037fafe121d6917a0187573aa548ff78ca
+  languageName: node
+  linkType: hard
+
+"undici-types@npm:^8.9.0":
+  version: 8.12.3
+  resolution: "undici-types@npm:8.12.3"
+  checksum: 10c0/e50cec68758ffd658286f4bbf75fb9c26b6855bee2b36b7335ac394231ddf42250500ecdafbff682b1e65f5112f8e32be1ee719862f89561724aee1da122df3a
   languageName: node
   linkType: hard
 

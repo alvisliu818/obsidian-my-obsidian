@@ -10,14 +10,14 @@
     "build": "yarn run build:icons && tsc -noEmit -skipLibCheck && node esbuild.mjs production",
     "build:fast": "node esbuild.mjs production",
     "typecheck": "tsc -noEmit -skipLibCheck",
-    "test": "vitest run --root modules/logseq && vitest run --root modules/abstract-folder && vitest run --root modules/latex-delimiter-renderer",
+    "test": "vitest run --root modules/logseq && vitest run --root modules/abstract-folder && vitest run --root modules/latex-delimiter-renderer && vitest run --root modules/omnisearch",
     "test:audio-player": "vitest run --root modules/audio-player",
     "test:abstract-folder": "vitest run --root modules/abstract-folder",
     "test:watch": "vitest --root modules/logseq",
     "test:breadcrumb": "cd modules/breadcrumb && yarn test",
     "test:doc-assist": "cd modules/doc-assist && yarn test",
     "test:icons": "cd modules/material-icon-theme && yarn test",
-    "test:omnisearch": "cd modules/omnisearch && yarn vitest run",
+    "test:omnisearch": "vitest run --root modules/omnisearch",
     "test:audio-recorder": "cd modules/audio-recorder && yarn test",
     "e2e:merge": "node tests/e2e/_merge-smoke.mjs",
     "e2e": "playwright test -c modules/logseq/tests/e2e/playwright.config.ts"
@@ -181,6 +181,7 @@
     "@tsconfig/strictest": "^2.0.8",
     "@types/debug": "^4.1.13",
     "@types/diff3": "^0.0.2",
+    "@types/jsdom": "^30",
     "@types/lodash": "^4.17.16",
     "@types/moment": "^2.13.0",
     "@types/node": "^22.0.0",
@@ -198,6 +199,7 @@
     "happy-dom": "^20.11.6",
     "jest": "^30.5.2",
     "jest-environment-jsdom": "^30.5.2",
+    "jsdom": "^26.1.0",
     "json5": "^2.2.3",
     "material-icon-theme": "5.38.1",
     "obsidian": "^1.14.4",
@@ -247,6 +249,9 @@
       "unplugged": true
     },
     "@codemirror/view@6.43.15": {
+      "unplugged": true
+    },
+    "@exodus/bytes": {
       "unplugged": true
     },
     "@lezer/common@1.5.3": {
