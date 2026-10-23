@@ -206,6 +206,8 @@ export class SqliteService {
     if (!this.db) return;
     this.db.exec("PRAGMA journal_mode=WAL");
     this.db.exec("PRAGMA synchronous=NORMAL");
+    // 采样上限让大库 ANALYZE 秒级（默认全扫是启动期磁盘风暴元凶之一）
+    this.db.exec("PRAGMA analysis_limit=1000");
     this.db.exec("ANALYZE");
   }
 

@@ -352,13 +352,26 @@ export class UnifiedSearchPlugin extends Plugin {
 			// 1GB 库跑 ANALYZE（全索引扫描+统计写回）——启动期磁盘风暴的写侧元凶。
 			const fileCount = (svc.prepare("SELECT count(*) AS c FROM files").get() as { c: number }).c;
 			const firstBuild = fileCount === 0;
-			if (firstBuild) svc.beginBulk();
+			if (firstBuild) {
+				svc.beginBulk();
+				// 重建后必须补 ANALYZE：若本轮中途崩溃/重启，续建走增量路径（firstBuild=false），
+				// commitBulk 的 ANALYZE 永远不跑——查询计划裸奔。门在扫描完成处结清。
+				svc.metaSet("analyze_pending", "1");
+			}
 			this.scanWritten = 0;
 			await this.reindexFiles(files);
 			await this.reindexAttachments(attachments);
 			await this.reindexExtFiles(true);
 			if (firstBuild) {
 				svc.commitBulk();
+			}
+			// 续建补 ANALYZE（analysis_limit 让大库秒级）：门在即跑，一轮扫描跑完即结清
+			if (svc.metaGet("analyze_pending") === "1") {
+				const tA = Date.now();
+				svc.prepare("PRAGMA analysis_limit=1000").run();
+				svc.prepare("ANALYZE").run();
+				svc.metaSet("analyze_pending", "0");
+				console.debug(`[unified-search] ANALYZE 完成 ${Date.now() - tA}ms`);
 			}
 			console.debug(
 				`[unified-search] 扫描完成：写入 ${this.scanWritten}，${Date.now() - t0}ms` +
@@ -444,9 +457,17 @@ export class UnifiedSearchPlugin extends Plugin {
 						// stat 门（size→mtime 先于 hash，设计 §4.3）：未变文件不读盘。
 						// cachedRead 首读必然落磁盘（网盘 1.2 万文件），这是启动读风暴主力。
 						if (this.getWriter().statUnchanged(meta.path, meta.mtime, meta.size)) return;
-						const raw = await this.app.vault.cachedRead(file);
-						const done = this.getWriter().upsertFile(meta, raw);
-						if (!done.skipped) this.scanWritten++;
+						// adapter.read 绕过 Obsidian 文件缓存：cachedRead 把全部内容驻留在
+						// TFile 缓存里，7.5 万文件全量重建 = 内存涨到 GB 级（2026-10-23 实证
+						// 3.5GB 且持续增长）。重建/增量反正每次真读，缓存只有害处。
+						try {
+							const raw = await this.app.vault.adapter.read(file.path);
+							const done = this.getWriter().upsertFile(meta, raw);
+							if (!done.skipped) this.scanWritten++;
+						} catch (e) {
+							// 网盘云占位/文件锁定：单文件失败跳过，不中断整轮重建
+							console.warn(`[unified-search] 读取失败跳过 ${meta.path}`, e);
+						}
 					}),
 				);
 			} finally {
