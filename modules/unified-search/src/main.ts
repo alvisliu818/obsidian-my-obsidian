@@ -49,7 +49,7 @@ export class UnifiedSearchPlugin extends Plugin {
 			id: "refresh-ext",
 			name: "刷新挂载文件索引（ext 域）",
 			callback: () => {
-				void this.reindexExtFiles(true);
+				void this.withWriteLock(() => this.reindexExtFiles(true));
 				new Notice("挂载文件索引刷新中");
 			},
 		});
@@ -92,8 +92,8 @@ export class UnifiedSearchPlugin extends Plugin {
 		const minutes = this.settings.indexExt ? this.settings.extRefreshMinutes : 0;
 		if (!minutes) return;
 		this.extTimer = window.setInterval(() => {
-			if (this.scanning || this.unloaded) return; // 首建扫描进行中让路
-			void this.reindexExtFiles();
+			if (this.scanning || this.flushing || this.unloaded) return; // 首建扫描/flush 进行中让路
+			void this.withWriteLock(() => this.reindexExtFiles());
 		}, minutes * 60_000);
 	}
 
@@ -166,9 +166,11 @@ export class UnifiedSearchPlugin extends Plugin {
 
 	/** 全量重建：清库重扫（设置页按钮入口） */
 	async rebuild(): Promise<void> {
-		this.getWriter().clearAll();
-		await this.initialScan();
-		new Notice("统一索引已重建");
+		await this.withWriteLock(async () => {
+			this.getWriter().clearAll();
+			await this.runInitialScan();
+			new Notice("统一索引已重建");
+		});
 	}
 
 	// ------------------------------------------------------------------
@@ -200,16 +202,34 @@ export class UnifiedSearchPlugin extends Plugin {
 		}, 2500);
 	}
 
+	/**
+	 * 写会话互斥：flush / 全量扫描 / ext 刷新串行化。批量事务跨 yield 持有，
+	 * 两个写会话交错会让 begin/endBatch 深度计数互相踩（一方归零 COMMIT 时
+	 * 另一方还以为在批内）。读路径不受影响——搜索走同一连接，WAL 快照语义。
+	 */
+	private writeLock: Promise<unknown> = Promise.resolve();
+
+	private withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+		const run = this.writeLock.then(fn, fn);
+		this.writeLock = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		return run;
+	}
+
 	private async flushDirty(): Promise<void> {
 		if (this.flushing) return;
 		this.flushing = true;
 		try {
-			do {
-				this.flushQueued = false;
-				const paths = [...this.dirty];
-				this.dirty.clear();
-				await this.reindexPaths(paths);
-			} while (this.flushQueued && !this.unloaded);
+			await this.withWriteLock(async () => {
+				do {
+					this.flushQueued = false;
+					const paths = [...this.dirty];
+					this.dirty.clear();
+					await this.reindexPaths(paths);
+				} while (this.flushQueued && !this.unloaded);
+			});
 		} finally {
 			this.flushing = false;
 		}
@@ -220,16 +240,28 @@ export class UnifiedSearchPlugin extends Plugin {
 	 * 去抖 flush：对 dirty 快照逐个收敛到磁盘真相（设计 §4.1 权威=磁盘）——
 	 * 可索引文件 upsert（stat 门免读未变）、附件 upsertAttachment（自带 size 门）、
 	 * 其余（已删除/文件夹/不可索引）removeFile 清理旧行（无旧行时空转，幂等）。
-	 * 时间预算让出：外部同步几千文件时，同步事务每 ≤24ms 让 8ms——单块不卡帧，
-	 * UI/输入始终可响应，整体只是慢（可让路给 Obsidian 自身的 metadata cache）。
+	 * 时间预算让出：外部同步几千文件时让出主线程，UI/输入始终可响应。
+	 * 批量事务：64 项或 300ms 才 COMMIT 一轮。逐文件事务时 WAL 自动检查点随机
+	 * 落进某次 COMMIT（1GB 库+网盘目录上是不可让出的长阻塞，新增文件卡死元凶），
+	 * 批量化把检查点频率降到 1/N，也让单个 COMMIT 的 WAL 写量按批摊薄。
 	 */
 	private async reindexPaths(paths: string[]): Promise<void> {
 		if (this.unloaded || !paths.length) return;
+		const svc = this.getService();
+		const writer = this.getWriter();
+		const t0 = performance.now();
+		let lastYield = t0;
+		let batchAt = t0;
+		let batchCount = 0;
+		let written = 0;
+		let slowest = 0;
+		let slowPath = "";
+		let failed = false;
 		try {
-			const writer = this.getWriter();
-			let lastYield = performance.now();
+			svc.beginBatch();
 			for (const p of paths) {
 				if (this.unloaded) return;
+				const unitT0 = performance.now();
 				const file = this.app.vault.getAbstractFileByPath(p);
 				if (file instanceof TFile && isIndexable(file)) {
 					const meta = fileToMeta(file);
@@ -237,23 +269,61 @@ export class UnifiedSearchPlugin extends Plugin {
 						const raw = await this.app.vault.cachedRead(file);
 						if (this.unloaded) return;
 						writer.upsertFile(meta, raw);
+						written++;
 					}
 				} else if (file instanceof TFile && isAttachment(file)) {
 					writer.upsertAttachment(fileToMeta(file));
+					written++;
 				} else {
 					writer.removeFile(p);
+					written++;
 				}
-				if (performance.now() - lastYield >= 24) {
+				batchCount++;
+				const unitMs = performance.now() - unitT0;
+				if (unitMs > slowest) {
+					slowest = unitMs;
+					slowPath = p;
+				}
+				const now = performance.now();
+				if (now - lastYield >= 24) {
+					if (batchCount >= 64 || now - batchAt >= 300) {
+						svc.endBatch();
+						svc.beginBatch();
+						batchAt = performance.now();
+						batchCount = 0;
+					}
 					await new Promise((resolve) => window.setTimeout(resolve, 8));
 					lastYield = performance.now();
 				}
 			}
 		} catch (e) {
+			failed = true;
 			console.error("[unified-search] 增量索引失败", e);
+		} finally {
+			if (svc.inBatch) {
+				try {
+					svc.endBatch(failed);
+				} catch (e) {
+					console.error("[unified-search] flush 事务收尾失败", e);
+				}
+			}
 		}
+		if (failed) {
+			// 整批已回滚：路径回灌 dirty，等下轮按磁盘真相重收敛（stat 门免重复读）
+			for (const p of paths) this.dirty.add(p);
+		}
+		console.debug(
+			`[unified-search] flush ${paths.length} 项：落库 ${written}，${Math.round(performance.now() - t0)}ms` +
+				(slowest > 100 ? `，最慢单项 ${Math.round(slowest)}ms（${slowPath}）` : ""),
+		);
 	}
 
+	/** 全量扫描（写锁串行化入口：与 flush / ext 刷新互斥） */
 	private async initialScan(): Promise<void> {
+		await this.withWriteLock(() => this.runInitialScan());
+	}
+
+	private async runInitialScan(): Promise<void> {
 		if (this.unloaded || this.scanning) return;
 		this.scanning = true;
 		const t0 = Date.now();
@@ -308,73 +378,103 @@ export class UnifiedSearchPlugin extends Plugin {
 		const list = logseq?.listExternalSearchFiles?.() ?? [];
 		if (!list.length) return;
 		console.debug(`[unified-search] ext 域 ${list.length} 个文件…`);
+		const svc = this.getService();
 		const CHUNK = 200;
 		let indexed = 0;
 		for (let i = 0; i < list.length; i += CHUNK) {
 			if (this.unloaded) return;
 			const slice = list.slice(i, i + CHUNK);
-			await Promise.all(
-				slice.map(async (entry) => {
-					const norm = entry.abs.replace(/\\/g, "/");
-					// stat 门：mtime 未变免读（ext 清单只有 mtime，没有 size）
-					if (this.getWriter().statUnchanged(norm, entry.mtime)) return;
-					const read = readExternalText(entry.abs);
-					if (!read) return;
-					const done = this.getWriter().upsertFile(
-						{
-							path: norm,
-							domain: "ext",
-							mtime: read.mtime || entry.mtime,
-							size: read.size,
-							ext: (entry.name.split(".").pop() ?? "").toLowerCase(),
-							title: entry.name.replace(/\.\w+$/, ""),
-						},
-						read.content,
-					);
-					if (!done.skipped) this.scanWritten++;
-					indexed++;
-				}),
-			);
+			svc.beginBatch();
+			try {
+				await Promise.all(
+					slice.map(async (entry) => {
+						const norm = entry.abs.replace(/\\/g, "/");
+						// stat 门：mtime 未变免读（ext 清单只有 mtime，没有 size）
+						if (this.getWriter().statUnchanged(norm, entry.mtime)) return;
+						const read = readExternalText(entry.abs);
+						if (!read) return;
+						const done = this.getWriter().upsertFile(
+							{
+								path: norm,
+								domain: "ext",
+								mtime: read.mtime || entry.mtime,
+								size: read.size,
+								ext: (entry.name.split(".").pop() ?? "").toLowerCase(),
+								title: entry.name.replace(/\.\w+$/, ""),
+							},
+							read.content,
+						);
+						if (!done.skipped) this.scanWritten++;
+						indexed++;
+					}),
+				);
+			} finally {
+				if (svc.inBatch) svc.endBatch();
+			}
 			await new Promise((resolve) => window.setTimeout(resolve, 0));
 		}
 		console.debug(`[unified-search] ext 域完成：${indexed}/${list.length}`);
 	}
 
-	/** 灌库：300/批流式（读一批→索引一批→让出主线程一拍）。stat 门免读未变文件 */
+	/** 灌库：300/批流式（读一批→索引一批→让出主线程一拍）。stat 门免读未变文件。
+	 *  每批一个批量事务：COMMIT/WAL 检查点成本按批摊薄（reindexExtFiles 同理） */
 	private async reindexFiles(files: TFile[]): Promise<void> {
+		const svc = this.getService();
 		const CHUNK = 300;
 		for (let i = 0; i < files.length; i += CHUNK) {
 			if (this.unloaded) return;
 			const slice = files.slice(i, i + CHUNK);
-			await Promise.all(
-				slice.map(async (file) => {
-					const meta = fileToMeta(file);
-					// stat 门（size→mtime 先于 hash，设计 §4.3）：未变文件不读盘。
-					// cachedRead 首读必然落磁盘（网盘 1.2 万文件），这是启动读风暴主力。
-					if (this.getWriter().statUnchanged(meta.path, meta.mtime, meta.size)) return;
-					const raw = await this.app.vault.cachedRead(file);
-					const done = this.getWriter().upsertFile(meta, raw);
-					if (!done.skipped) this.scanWritten++;
-				}),
-			);
+			svc.beginBatch();
+			try {
+				await Promise.all(
+					slice.map(async (file) => {
+						const meta = fileToMeta(file);
+						// stat 门（size→mtime 先于 hash，设计 §4.3）：未变文件不读盘。
+						// cachedRead 首读必然落磁盘（网盘 1.2 万文件），这是启动读风暴主力。
+						if (this.getWriter().statUnchanged(meta.path, meta.mtime, meta.size)) return;
+						const raw = await this.app.vault.cachedRead(file);
+						const done = this.getWriter().upsertFile(meta, raw);
+						if (!done.skipped) this.scanWritten++;
+					}),
+				);
+			} finally {
+				if (svc.inBatch) svc.endBatch();
+			}
 			await new Promise((resolve) => window.setTimeout(resolve, 0));
 		}
 	}
 
 	/**
 	 * 附件灌库（M2-1）：不读内容，纯元数据行。upsertAttachment 自带 size 门，
-	 * stat 未变的附件连事务都不开（只有一次 SELECT）。时间预算让出同 reindexPaths。
+	 * stat 未变的附件连事务都不开（只有一次 SELECT）。批量事务 + 时间预算让出
+	 * 同 reindexPaths——首启扫描要灌几千附件行，逐文件 COMMIT 会让启动卡很久。
 	 */
 	private async reindexAttachments(files: TFile[]): Promise<void> {
+		const svc = this.getService();
 		let lastYield = performance.now();
-		for (const file of files) {
-			if (this.unloaded) return;
-			const done = this.getWriter().upsertAttachment(fileToMeta(file));
-			if (!done.skipped) this.scanWritten++;
-			if (performance.now() - lastYield >= 24) {
-				await new Promise((resolve) => window.setTimeout(resolve, 8));
-				lastYield = performance.now();
+		let batchAt = lastYield;
+		let batchCount = 0;
+		svc.beginBatch();
+		try {
+			for (const file of files) {
+				if (this.unloaded) return;
+				const done = this.getWriter().upsertAttachment(fileToMeta(file));
+				if (!done.skipped) this.scanWritten++;
+				batchCount++;
+				const now = performance.now();
+				if (now - lastYield >= 24) {
+					if (batchCount >= 64 || now - batchAt >= 300) {
+						svc.endBatch();
+						svc.beginBatch();
+						batchAt = performance.now();
+						batchCount = 0;
+					}
+					await new Promise((resolve) => window.setTimeout(resolve, 8));
+					lastYield = performance.now();
+				}
 			}
+		} finally {
+			if (svc.inBatch) svc.endBatch();
 		}
 	}
 }

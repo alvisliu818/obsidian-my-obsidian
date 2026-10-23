@@ -386,3 +386,72 @@ describe("IndexWriter / search 集成", () => {
     );
   });
 });
+
+describe("批量事务（外部 CRUD 风暴摊薄 COMMIT）", () => {
+  let dbDir: string;
+  let svc: SqliteService;
+  let writer: IndexWriter;
+
+  beforeEach(() => {
+    dbDir = makeDir();
+    svc = new SqliteService({ dbDir, vaultSlug: "bt", fingerprint: "fp" });
+    writer = new IndexWriter(svc, {});
+  });
+
+  it("批量内写入正常生效；endBatch 提交、rollback 整批丢弃", () => {
+    svc.beginBatch();
+    expect(svc.inBatch).toBe(true);
+    writer.upsertFile(meta({ path: "a.md" }), "alpha 内容");
+    writer.upsertFile(meta({ path: "b.md" }), "beta 内容");
+    svc.endBatch();
+    expect(svc.inBatch).toBe(false);
+    expect(search(svc, compileQuery("alpha")).map((h) => h.path)).toEqual(["a.md"]);
+    // 第二批 rollback：整批不可见
+    svc.beginBatch();
+    writer.upsertFile(meta({ path: "c.md" }), "gamma 内容");
+    svc.endBatch(true);
+    expect(search(svc, compileQuery("gamma"))).toHaveLength(0);
+    expect(search(svc, compileQuery("alpha"))).toHaveLength(1); // 已提交的不受影响
+  });
+
+  it("批量内 transaction() 以 SAVEPOINT 并入：单文件出错只回滚自己，整批其余保留", () => {
+    svc.beginBatch();
+    writer.upsertFile(meta({ path: "ok.md" }), "keep 内容");
+    expect(() =>
+      svc.transaction(() => {
+        svc.prepare("INSERT INTO files (path, domain, title) VALUES ('half.md', 'vault', '半')").run();
+        throw new Error("boom");
+      }),
+    ).toThrow("boom");
+    // 出错后批量仍可用（SAVEPOINT 已回退到该文件写入前）
+    writer.upsertFile(meta({ path: "z.md" }), "zeta 内容");
+    svc.endBatch();
+    expect(search(svc, compileQuery("keep")).map((h) => h.path)).toEqual(["ok.md"]);
+    expect(search(svc, compileQuery("zeta")).map((h) => h.path)).toEqual(["z.md"]);
+    const half = svc.prepare("SELECT count(*) c FROM files WHERE path='half.md'").get() as { c: number };
+    expect(half.c).toBe(0);
+  });
+
+  it("嵌套 beginBatch 配对：归零才真正提交", () => {
+    svc.beginBatch();
+    svc.beginBatch();
+    writer.upsertFile(meta({ path: "n.md" }), "nested 内容");
+    svc.endBatch();
+    expect(svc.inBatch).toBe(true); // 外层还开着
+    svc.endBatch();
+    expect(svc.inBatch).toBe(false);
+    expect(search(svc, compileQuery("nested")).map((h) => h.path)).toEqual(["n.md"]);
+  });
+
+  it("批量中 upsertFile / upsertAttachment / removeFile 混合写入与逐文件事务等价", () => {
+    svc.beginBatch();
+    writer.upsertFile(meta({ path: "m.md" }), "看图 ![[i.png]]");
+    writer.upsertAttachment(meta({ path: "assets/i.png", size: 3 }));
+    writer.removeFile("m.md");
+    svc.endBatch();
+    expect(search(svc, compileQuery("看图"))).toHaveLength(0);
+    expect(search(svc, compileQuery("i")).map((h) => h.path)).toEqual(["assets/i.png"]);
+    const links = svc.prepare("SELECT count(*) c FROM links").get() as { c: number };
+    expect(links.c).toBe(0); // m.md 的出链随级联消失
+  });
+});

@@ -30,6 +30,12 @@ export class SqliteService {
   private readonly stmts = new Map<string, StatementSync>();
   private readonly opts: SqliteServiceOptions;
   private dbPath = "";
+  /** 批量事务深度（beginBatch/endBatch 严格配对；>0 时 transaction() 走 SAVEPOINT） */
+  private batchDepth = 0;
+
+  get inBatch(): boolean {
+    return this.batchDepth > 0;
+  }
 
   constructor(opts: SqliteServiceOptions) {
     this.opts = opts;
@@ -77,6 +83,7 @@ export class SqliteService {
 
   close(): void {
     if (!this.db) return;
+    this.batchDepth = 0; // 批量中强关：open transaction 随 close 自动回滚
     try {
       // 收尾：WAL checkpoint 回主库 + 增量清理，文件不留胖尾巴
       this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
@@ -100,9 +107,29 @@ export class SqliteService {
     return stmt;
   }
 
-  /** 单文件原子事务：BEGIN IMMEDIATE / COMMIT / ROLLBACK。不支持嵌套（调用方保证） */
+  /**
+   * 单文件原子事务：BEGIN IMMEDIATE / COMMIT / ROLLBACK。批量模式（inBatch）
+   * 期间以 SAVEPOINT 并入外层批量事务：单文件原子性保留，出错只回滚本文件，
+   * 整批落盘时机归 beginBatch/endBatch 持有方。
+   */
   transaction<T>(fn: () => T): T {
     this.ensureOpen();
+    if (this.batchDepth > 0) {
+      this.db!.exec("SAVEPOINT file_unit");
+      try {
+        const result = fn();
+        this.db!.exec("RELEASE file_unit");
+        return result;
+      } catch (e) {
+        try {
+          this.db!.exec("ROLLBACK TO file_unit");
+          this.db!.exec("RELEASE file_unit");
+        } catch {
+          // 库已损坏时的兜底，向上抛原始错误
+        }
+        throw e;
+      }
+    }
     this.db!.exec("BEGIN IMMEDIATE");
     try {
       const result = fn();
@@ -113,6 +140,36 @@ export class SqliteService {
         this.db!.exec("ROLLBACK");
       } catch {
         // 已自动回滚
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * 批量事务（外部 CRUD 风暴摊薄落盘开销）：跨多次写入共享 COMMIT。逐文件
+   * 事务时 WAL 自动检查点随机落进某次 COMMIT——1GB 库 + 网盘目录上是一段
+   * 不可让出的长阻塞（「新增文件卡死」元凶），批量化后同量检查点频率降为
+   * 1/N。可配对嵌套（深度计数），归零才真正 COMMIT/ROLLBACK。
+   */
+  beginBatch(): void {
+    this.ensureOpen();
+    if (this.batchDepth++ === 0) this.db!.exec("BEGIN IMMEDIATE");
+  }
+
+  /** 结束批量事务；rollback=true 整批丢弃。与 beginBatch 严格配对 */
+  endBatch(rollback = false): void {
+    if (!this.db || this.batchDepth === 0) return;
+    this.batchDepth--;
+    if (this.batchDepth > 0) return;
+    try {
+      this.db.exec(rollback ? "ROLLBACK" : "COMMIT");
+    } catch (e) {
+      if (!rollback) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch {
+          // 已自动回滚
+        }
       }
       throw e;
     }
