@@ -56,13 +56,39 @@ export class UnifiedSearchPlugin extends Plugin {
 			this.queueReindex(f);
 		}));
 
-		// 首建让路启动：等一拍再扫全库（DB 懒打开 + beginBulk 疾速档）
-		window.setTimeout(() => void this.initialScan(), 0);
+		// 首建让路启动（设计 §7）：等布局就绪 + 10s 空闲再扫全库。vault 在网盘上时
+		// 启动期 Obsidian 自身要过 metadata cache，扫描立刻开跑会抢满磁盘队列，
+		// 表现为「一直加载中」。延迟期间搜索照常可用（查的是库内已有数据）。
+		this.registerEvent(this.app.workspace.on("layout-change", this.onLayoutSettle, this));
+		this.app.workspace.onLayoutReady(() => {
+			this.scanArmedAt = Date.now();
+			this.scanTimer = window.setTimeout(() => {
+				this.scanTimer = null;
+				void this.initialScan();
+			}, 10_000);
+		});
+	}
+
+	private scanTimer: number | null = null;
+	/** 本次启动首次布防时间：layout-change 顺延有 60s 硬上限，防持续变动下永不扫描 */
+	private scanArmedAt = 0;
+
+	private onLayoutSettle(): void {
+		// 布局仍频繁变动（启动中/切工作区）→ 顺延空闲计时，真正安定后才扫；
+		// 但距首次布防超 60s 就不再顺延（stat 门下扫描很轻，晚扫不如扫）
+		if (this.scanTimer === null) return;
+		if (Date.now() - this.scanArmedAt > 60_000) return;
+		window.clearTimeout(this.scanTimer);
+		this.scanTimer = window.setTimeout(() => {
+			this.scanTimer = null;
+			void this.initialScan();
+		}, 10_000);
 	}
 
 	onunload(): void {
 		this.unloaded = true;
 		if (this.dirtyTimer !== null) window.clearTimeout(this.dirtyTimer);
+		if (this.scanTimer !== null) window.clearTimeout(this.scanTimer);
 		this.svc?.close();
 		this.svc = null;
 		this.writer = null;
