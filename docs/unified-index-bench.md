@@ -46,3 +46,28 @@ node _diag-us-bench.mjs
 
 预期：MATCH 中文 ≥2 字从 0 命中/5.8s LIKE 变为 ms 级 FTS 命中；库体积因
 bigram token（CJK token 量 ≈ 字数）显著增长。
+
+## 复测（2026-10-23 21:0x，指纹 usc2|chs=1，cm-chs-patch 真分词 + ANALYZE 已补）
+
+重建基本完成的库：vault md/org 5,748 全建 + 附件占位 1.2 万（ext 域 0）。
+采样改为从 t_content 抽真 token（保证 MATCH 命中索引里的真实词）。
+
+| 查询 | 基线（整块降级） | 复测 | 提升 |
+| --- | --- | --- | --- |
+| MATCH 2字CJK | 0 命中 → LIKE 5.8s | **6.7ms，50 命中** | 检索可用 |
+| MATCH 4字CJK | 0 命中 | **0.1ms，25 命中** | — |
+| MATCH latin | 223ms | **0.1ms** | ~2000× |
+| LIKE 兜底 2字CJK | 5,796ms | **59.5ms**（且基本不再触发） | ~100× |
+| backlink EXISTS | 958ms | **73ms** | ~13× |
+| 前缀展开 | 30ms | 0.1ms（低频词无命中） | — |
+
+ANALYZE：`analysis_limit=1000` 下 13s（全量扫描模式下大库不可用）。
+
+### 遗留事项
+
+- **库文件收缩**：rebuildInPlace drop 后 3.4GB 文件里 92%（3.1GB）是 freelist
+  空闲页，实际数据 ~250-400MB。SQLite 不自动归还——择机（关 Obsidian 或
+  空闲时）手动 `VACUUM` 一次即可缩回，之后网盘/备份成本大降。重建期间
+  主线程同步 VACUUM 会冻结，**不要放进启动路径**。
+- 重建期间 vault 仍在被网盘同步（新 md 持续进入，flushDirty 实时跟建），
+  「重建完成」是动态稳态而非一次性事件；built==total 即为健康。
