@@ -1826,6 +1826,22 @@ export default class LogseqEditorPlugin extends Plugin {
   }
 
   /**
+   * 库根的绝对路径（小写、正斜杠、无尾斜杠）。挂载指向库内（例如直接挂了
+   * vault 根）时，扫出来的「库外文件」其实是库内文件——它们已由 vault 路径
+   * 进过 omnisearch 索引，再以 ext: 伪路径进第二遍纯属翻倍内存与索引时间
+   * （实测 minisearch 倒排 Map 分配 477MB，是 renderer 崩溃主力之一）。
+   */
+  private vaultRootNorm(): string {
+    try {
+      const base =
+        (this.app.vault.adapter as unknown as { basePath?: string }).basePath ?? '';
+      return base.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    } catch {
+      return '';
+    }
+  }
+
+  /**
    * 供其它模块（omnisearch）列举库外可搜索文件——「库外搜索」的数据源。
    *
    * 返回扁平的 `{abs, name, mtime}`（绝对路径）。纯只读：不打开、不建链接、
@@ -1834,10 +1850,15 @@ export default class LogseqEditorPlugin extends Plugin {
    * 走与面板同源的 `scanExternal` + mount 的 include/exclude 过滤，保证
    * 「能搜到的」与「面板里看得见的」是同一批文件。单个挂载扫描失败只跳过
    * 它，不影响其余挂载，也绝不抛给调用方。
+   *
+   * 挂载指向库内（整库/子目录挂载）时，扫出的库内文件在这里被剔除：它们
+   * 走 vault 路径已被索引，以 ext: 伪路径再来一遍是双重索引。挂载树
+   * （buildTree）不受影响——那是统一的树视图功能。
    */
   public listExternalSearchFiles(): Array<{ abs: string; name: string; mtime: number }> {
     const out: Array<{ abs: string; name: string; mtime: number }> = [];
     const mounts = this.settings.externalMounts ?? [];
+    const vaultRoot = this.vaultRootNorm();
     for (const mount of mounts) {
       if (!mount?.enabled || !mount.path) continue;
       const filter = compileFilter({
@@ -1862,6 +1883,12 @@ export default class LogseqEditorPlugin extends Plugin {
       }
       for (const entry of entries) {
         if (entry.isDir) continue;
+        if (
+          vaultRoot &&
+          entry.abs.replace(/\\/g, '/').toLowerCase().startsWith(`${vaultRoot}/`)
+        ) {
+          continue;
+        }
         out.push({ abs: entry.abs, name: entry.name, mtime: entry.mtime ?? 0 });
       }
     }
