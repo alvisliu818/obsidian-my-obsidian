@@ -9,6 +9,7 @@ import { compileQuery, parseQuery } from "../query";
 import { getItemContent, search } from "../searcher";
 import { hasCJK, tokenizeForIndexing, type ChsSegmenter } from "../tokenize";
 import { parseLinks, resolveKeyOf } from "../links";
+import { extractBlocks } from "../blocks";
 import { SCHEMA_VERSION } from "../schema";
 
 const dirs: string[] = [];
@@ -177,6 +178,44 @@ describe("parseLinks / resolveKeyOf", () => {
   });
 });
 
+describe("extractBlocks（M2-2 块级拆分）", () => {
+  it("md 列表块：id:: 行提取（剥 ^）、属性行不进 content、无 id 块不产出", () => {
+    const content = [
+      "alias:: 页属性",
+      "- 普通块 无 id",
+      "- 有 id 块",
+      "  id:: ^abc",
+      "  续行内容",
+      "- 空行前块",
+      "",
+      "- 空行后块",
+      "  id:: 123e4567-e89b-12d3-a456-426614174000",
+    ].join("\n");
+    const blocks = extractBlocks(content, "md");
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toMatchObject({ title: "有 id 块", blockId: "abc" });
+    expect(blocks[0].content).toBe("- 有 id 块\n  续行内容");
+    expect(blocks[0].content).not.toContain("id::");
+    expect(blocks[1].blockId).toBe("123e4567-e89b-12d3-a456-426614174000");
+  });
+
+  it("org 星标块：到下一标题收块，id:: 行剥离", () => {
+    const blocks = extractBlocks("* 一级\n id:: ^o1\n正文\n** 二级\n id:: ^o2\n** 三级\n", "org");
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toMatchObject({ title: "一级", blockId: "o1", content: "* 一级\n正文" });
+    expect(blocks[1]).toMatchObject({ title: "二级", blockId: "o2", content: "** 二级" });
+  });
+
+  it("嵌套列表各自成块；无 id:: 短路返回空；同 id 只保首个；CRLF 尾巴容忍", () => {
+    const nested = "- 父\n  id:: ^p\n  - 子\n    id:: ^c\n";
+    expect(extractBlocks(nested, "md").map((b) => b.blockId)).toEqual(["p", "c"]);
+    expect(extractBlocks("普通 md 没有 id 属性\n- 列表也不拆", "md")).toEqual([]);
+    const dup = "- a\n  id:: ^x\n- b\n  id:: ^x\n";
+    expect(extractBlocks(dup, "md").map((b) => b.title)).toEqual(["a"]);
+    expect(extractBlocks("- win 块\r\n  id:: ^w\r\n", "md")[0]?.blockId).toBe("w");
+  });
+});
+
 describe("全域 links / names（schema v2）", () => {
   let dbDir: string;
   let svc: SqliteService;
@@ -270,6 +309,36 @@ describe("全域 links / names（schema v2）", () => {
     writer.backfillLinks();
     const links2 = svc.prepare("SELECT count(*) c FROM links").get() as { c: number };
     expect(links2.c).toBe(2);
+  });
+
+  it("backfillBlocks：存量 file-level item 从库内 content 补块 item，blockref 重解析升级块级（幂等）", () => {
+    // 模拟 M2-1 时代存量：直插 file-level item + 已解析到文件级的 blockref
+    svc.transaction(() => {
+      svc.prepare("INSERT INTO files (path, domain, title) VALUES ('老.md', 'vault', '老')").run();
+      svc.prepare("INSERT INTO items (file_rowid, content, format) VALUES (1, '- 块\n  id:: ^a\n  内容', 'md')").run();
+      svc.prepare("INSERT INTO files (path, domain, title) VALUES ('引.md', 'vault', '引')").run();
+      svc.prepare("INSERT INTO items (file_rowid, content, format) VALUES (2, '见 [[老#^a]]', 'md')").run();
+      svc.prepare("INSERT INTO names (name, original, item_rowid, precedence) VALUES ('老', '老', 1, 0)").run();
+      svc.prepare(
+        `INSERT INTO links (src_item, raw, target_path, target_item, target_root, anchor, kind, resolved, resolve_key)
+         VALUES (2, '[[老#^a]]', '老.md', 1, 1, '^a', 'blockref', 1, '老')`,
+      ).run();
+    });
+    writer.backfillBlocks();
+    const blk = svc.prepare("SELECT rowid, parent_rowid FROM items WHERE block_id = 'a'").get() as {
+      rowid: number;
+      parent_rowid: number;
+    };
+    expect(blk).toMatchObject({ parent_rowid: 1 });
+    const link = svc.prepare("SELECT target_item, target_root FROM links").get() as {
+      target_item: number;
+      target_root: number;
+    };
+    expect(link).toEqual({ target_item: blk.rowid, target_root: 1 });
+    // 幂等：再跑一遍块不翻倍
+    writer.backfillBlocks();
+    const c = svc.prepare("SELECT count(*) c FROM items WHERE block_id IS NOT NULL").get() as { c: number };
+    expect(c.c).toBe(1);
   });
 });
 
@@ -392,6 +461,54 @@ describe("IndexWriter / search 集成", () => {
     const after = svc.prepare("SELECT resolved, raw FROM links").get() as { resolved: number; raw: string };
     expect(after.resolved).toBe(0);
     expect(after.raw).toBe("![[pic.png]]");
+  });
+
+  it("M2-2 块级拆分：文件 item + 带 id 块 item；搜索命中块级并去重；重写全量重建", () => {
+    writer.upsertFile(meta({ path: "日.md", title: "日" }), "- 块甲\n  id:: ^a\n  甲内容\n- 块乙\n  id:: ^b\n");
+    const items = svc
+      .prepare("SELECT rowid, block_id, parent_rowid, ord FROM items ORDER BY rowid")
+      .all() as Array<{ rowid: number; block_id: string | null; parent_rowid: number | null; ord: number }>;
+    expect(items).toHaveLength(3);
+    expect(items[0]).toMatchObject({ block_id: null, parent_rowid: null });
+    expect(items[1]).toMatchObject({ block_id: "a", parent_rowid: items[0].rowid, ord: 0 });
+    expect(items[2]).toMatchObject({ block_id: "b", parent_rowid: items[0].rowid, ord: 1 });
+    // 块内容可搜，命中块 item（blockId 非空）
+    expect(search(svc, compileQuery("甲内容"))[0]).toMatchObject({ path: "日.md", blockId: "a" });
+    // 同文件双命中去重：块级优先，文件级不重复出现
+    expect(search(svc, compileQuery("块甲")).map((h) => h.blockId)).toEqual(["a"]);
+    // 文件重写：块 item 全量重建，旧块退场
+    writer.upsertFile(meta({ path: "日.md", title: "日" }), "- 只有块丙\n  id:: ^c\n");
+    const after = svc.prepare("SELECT block_id FROM items ORDER BY rowid").all() as Array<{
+      block_id: string | null;
+    }>;
+    expect(after.map((r) => r.block_id)).toEqual([null, "c"]);
+    expect(search(svc, compileQuery("甲内容"))).toHaveLength(0);
+  });
+
+  it("M2-2 块引用 [[页#^id]]：解析到块 item（target_root 留文件级），缺块回退文件级", () => {
+    writer.upsertFile(meta({ path: "目标.md", title: "目标" }), "- 块\n  id:: ^a\n  内容\n");
+    writer.upsertFile(meta({ path: "引.md" }), "引 [[目标#^a]] 与 [[目标#^zz]] 与 [[目标]]");
+    const rows = svc
+      .prepare("SELECT raw, target_item, target_root, resolved FROM links ORDER BY raw")
+      .all() as Array<{ raw: string; target_item: number; target_root: number; resolved: number }>;
+    expect(rows).toHaveLength(3);
+    const blockRowid = (svc.prepare("SELECT rowid FROM items WHERE block_id = 'a'").get() as { rowid: number })
+      .rowid;
+    const fileRowid = (
+      svc
+        .prepare(
+          "SELECT i.rowid AS r FROM items i JOIN files f ON f.rowid = i.file_rowid WHERE f.path = '目标.md' AND i.parent_rowid IS NULL",
+        )
+        .get() as { r: number }
+    ).r;
+    expect(rows.find((r) => r.raw === "[[目标#^a]]")).toMatchObject({
+      resolved: 1,
+      target_item: blockRowid,
+      target_root: fileRowid,
+    });
+    // 块不存在：回退文件级
+    expect(rows.find((r) => r.raw === "[[目标#^zz]]")!.target_item).toBe(fileRowid);
+    expect(rows.find((r) => r.raw === "[[目标]]")!.target_item).toBe(fileRowid);
   });
 
   it("fast-check：任意串编译出的 MATCH 在真库上必可执行（注入安全）", () => {

@@ -21,6 +21,8 @@ export interface SearchHit {
   ext: string;
   domain: string;
   mtime: number;
+  /** 块级 item 的 block_id（M2-2；文件级 item 为 null）。块命中打开/定位锚点用 */
+  blockId: string | null;
   /** 综合得分，越大越好 */
   score: number;
 }
@@ -35,7 +37,7 @@ export interface SearchOptions {
 }
 
 const HIT_FIELDS =
-  "i.rowid AS rowid, f.path AS path, f.title AS title, f.ext AS ext, f.domain AS domain, i.mtime AS mtime";
+  "i.rowid AS rowid, f.path AS path, f.title AS title, f.ext AS ext, f.domain AS domain, i.mtime AS mtime, i.block_id AS blockId";
 const JOINS = "FROM items_fts JOIN items i ON i.rowid = items_fts.rowid JOIN files f ON f.rowid = i.file_rowid";
 
 /** LIKE 通配符转义（配 ESCAPE '\'） */
@@ -146,7 +148,18 @@ export function search(svc: SqliteService, q: CompiledQuery, options: SearchOpti
     return { ...h, score: h.score + recencyBoost * Math.max(0, 1 - ageDays / 90) };
   });
   out.sort((a, b) => b.score - a.score);
-  return out.slice(0, limit);
+  // 同文件去重（M2-2）：文件级 item 索引全文，块命中时文件级必然同中——
+  // 不去重结果列表双份刷屏。块级命中优先（更精准、打开带锚点），分数取两者
+  // 较高者保排名；纯文件级命中维持原样。
+  const byPath = new Map<string, SearchHit & { score: number }>();
+  for (const h of out) {
+    const prev = byPath.get(h.path);
+    if (!prev) byPath.set(h.path, h);
+    else if (prev.blockId === null && h.blockId !== null) {
+      byPath.set(h.path, { ...h, score: Math.max(prev.score, h.score) });
+    }
+  }
+  return [...byPath.values()].slice(0, limit);
 }
 
 /** 按 rowid 单查原文（列表查询禁取 content 的配套出口） */

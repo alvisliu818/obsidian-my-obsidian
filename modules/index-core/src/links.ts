@@ -6,10 +6,14 @@
  * 之后任何文件落地（新增/改名），按 resolve_key 部分索引 O(log n) 回查补解析。
  * 名字解析经 names 表：basename(lower) → 文件级 item，vault(0) 优先 ext(1)。
  *
- * M1 只做 md/org 的链接语法；解析粒度是文件级（target_item = target_root =
- * 目标文件的文件级 item）。块级锚点解析（#^block-id）等块级拆分（M2）。
+ * 链接语法：md/org 的 wiki/embed/md/blockref。解析粒度：默认文件级
+ * （target_item = target_root = 目标文件的文件级 item）；blockref（#^block-id）
+ * 命中目标文件的块级 item 时 target_item 升到块级，target_root 保持文件级
+ * （root 聚合语义，M2-2）。链接只挂在文件级 item 上（块级 item 不重复提取，
+ * 防 backlink: 双计）。
  */
 
+import { normalizeBlockId } from "./blocks";
 import type { SqliteService } from "./sqlite-service";
 
 export type LinkKind = "wiki" | "md" | "embed" | "blockref";
@@ -82,17 +86,19 @@ function basenameKey(key: string): string {
   return (dot > 0 ? base.slice(0, dot) : base).toLowerCase();
 }
 
-/** 解析结果（文件级 item 的定位信息） */
+/** 解析结果（目标文件的定位信息） */
 export interface Resolved {
   targetPath: string;
   targetItem: number;
+  /** 目标文件行（blockref 的块级解析用它查 items.block_id） */
+  fileRowid: number;
 }
 
-/** 文件级 item 的 rowid（M1 每文件一个 item，即 file_rowid 下唯一 item） */
+/** 文件级 item 的 rowid（块级拆分后：parent_rowid IS NULL 的那个） */
 function fileLevelItem(svc: SqliteService, fileRowid: number): number | null {
-  const row = svc.prepare("SELECT rowid FROM items WHERE file_rowid = ? LIMIT 1").get(fileRowid) as
-    | { rowid: number }
-    | undefined;
+  const row = svc
+    .prepare("SELECT rowid FROM items WHERE file_rowid = ? AND parent_rowid IS NULL LIMIT 1")
+    .get(fileRowid) as { rowid: number } | undefined;
   return row?.rowid ?? null;
 }
 
@@ -103,16 +109,18 @@ export function resolveTarget(svc: SqliteService, key: string): Resolved | null 
     | undefined;
   if (byPath) {
     const item = fileLevelItem(svc, byPath.rowid);
-    if (item) return { targetPath: byPath.path, targetItem: item };
+    if (item) return { targetPath: byPath.path, targetItem: item, fileRowid: byPath.rowid };
   }
   const byName = svc
     .prepare("SELECT item_rowid FROM names WHERE name = ? ORDER BY precedence, item_rowid LIMIT 1")
     .get(basenameKey(key)) as { item_rowid: number } | undefined;
   if (byName) {
-    const path = svc
-      .prepare("SELECT f.path FROM files f JOIN items i ON i.file_rowid = f.rowid WHERE i.rowid = ?")
-      .get(byName.item_rowid) as { path: string } | undefined;
-    if (path) return { targetPath: path.path, targetItem: byName.item_rowid };
+    const row = svc
+      .prepare(
+        "SELECT f.path AS p, f.rowid AS fid FROM files f JOIN items i ON i.file_rowid = f.rowid WHERE i.rowid = ?",
+      )
+      .get(byName.item_rowid) as { p: string; fid: number } | undefined;
+    if (row) return { targetPath: row.p, targetItem: byName.item_rowid, fileRowid: row.fid };
   }
   return null;
 }
@@ -121,8 +129,8 @@ export class LinkResolver {
   constructor(private readonly svc: SqliteService) {}
 
   /**
-   * 单条链接落表：先按当前全库立即解析（files.path 精确 → names basename），
-   * 解析不了留悬空（resolve_key 已备好，等目标文件落地回查）。
+   * 单条链接落表：先按当前全库立即解析（files.path 精确 → names basename →
+   * blockref 块级），解析不了留悬空（resolve_key 已备好，等目标落地回查）。
    */
   insertLinks(itemRowid: number, links: RawLink[]): void {
     if (!links.length) return;
@@ -132,19 +140,56 @@ export class LinkResolver {
     );
     for (const l of links) {
       const key = resolveKeyOf(l.target);
-      const hit = resolveTarget(this.svc, key);
+      const hit = this.resolveLink(key, l.anchor ?? null);
       insert.run(
         itemRowid,
         l.raw,
         hit?.targetPath ?? null,
         hit?.targetItem ?? null,
-        hit?.targetItem ?? null, // M1 文件级 item：target_root 同 target_item
+        hit?.targetRoot ?? null,
         l.anchor ?? null,
         l.kind,
         hit ? 1 : 0,
         key,
       );
     }
+  }
+
+  /**
+   * 解析一条链接到 item 级：默认文件级；blockref（anchor ^id）命中目标文件
+   * 的块级 item 时 target_item 升到块级、target_root 保持文件级。块缺失
+   * （未拆/被删/obsidian 原生行尾 ^id）回退文件级——链接至少指向文件。
+   */
+  private resolveLink(
+    key: string,
+    anchor: string | null,
+  ): { targetPath: string; targetItem: number; targetRoot: number } | null {
+    const hit = resolveTarget(this.svc, key);
+    if (!hit) return null;
+    let item = hit.targetItem;
+    if (anchor && anchor.startsWith("^")) {
+      const b = this.svc
+        .prepare("SELECT rowid FROM items WHERE file_rowid = ? AND block_id = ? LIMIT 1")
+        .get(hit.fileRowid, normalizeBlockId(anchor)) as { rowid: number } | undefined;
+      if (b) item = b.rowid;
+    }
+    return { targetPath: hit.targetPath, targetItem: item, targetRoot: hit.targetItem };
+  }
+
+  /**
+   * 块级感知的补解析 UPDATE：已解析走文件级 item；blockref 行按 anchor 在
+   * 目标文件的块级 item 里升级（COALESCE 缺块回退文件级）。调用方保证
+   * fileItem/fileRowid 来自 resolveTarget。
+   */
+  private blockAwareUpdate(): ReturnType<SqliteService["prepare"]> {
+    return this.svc.prepare(
+      `UPDATE links SET target_path = ?, target_root = ?, resolved = 1,
+         target_item = CASE WHEN kind = 'blockref' THEN COALESCE(
+           (SELECT ib.rowid FROM items ib WHERE ib.file_rowid = ? AND ib.block_id = substr(links.anchor, 2) LIMIT 1),
+           ?)
+         ELSE ? END
+       WHERE resolved = 0 AND resolve_key = ?`,
+    );
   }
 
   /**
@@ -164,11 +209,8 @@ export class LinkResolver {
     if (!fileRow) return;
     const item = fileLevelItem(this.svc, fileRow.rowid);
     if (!item) return;
-    const upd = this.svc.prepare(
-      `UPDATE links SET target_path = ?, target_item = ?, target_root = ?, resolved = 1
-       WHERE resolved = 0 AND resolve_key = ?`,
-    );
-    for (const k of keys) upd.run(fileRow.path, item, item, k);
+    const upd = this.blockAwareUpdate();
+    for (const k of keys) upd.run(fileRow.path, item, fileRow.rowid, item, item, k);
   }
 
   /** 全量补解析（重建/回填后入口）：逐唯一 resolve_key 解析并回写 */
@@ -176,14 +218,11 @@ export class LinkResolver {
     const keys = this.svc
       .prepare("SELECT DISTINCT resolve_key AS k FROM links WHERE resolved = 0")
       .all() as Array<{ k: string | null }>;
-    const upd = this.svc.prepare(
-      `UPDATE links SET target_path = ?, target_item = ?, target_root = ?, resolved = 1
-       WHERE resolved = 0 AND resolve_key = ?`,
-    );
+    const upd = this.blockAwareUpdate();
     for (const { k } of keys) {
       if (!k) continue;
       const hit = resolveTarget(this.svc, k);
-      if (hit) upd.run(hit.targetPath, hit.targetItem, hit.targetItem, k);
+      if (hit) upd.run(hit.targetPath, hit.targetItem, hit.fileRowid, hit.targetItem, hit.targetItem, k);
     }
   }
 }

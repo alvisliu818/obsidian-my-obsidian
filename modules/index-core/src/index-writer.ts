@@ -8,12 +8,13 @@
  *    → 插新 → 更新 sync_state，同事务原子完成
  *  - FTS 同步全部由 items 上的触发器完成，写入端**不得**直接触碰 items_fts
  *
- * M1 粒度：整文件一个 item（t_title=文件名、t_headings=标题行、t_tags=标签）。
- * items 的 parent_rowid/ord/block_id 已为块级拆分（M2）备好。
+ * M2-2 粒度：1 文件 = 1 文件级 item（整文索引）+ N 块级 item（仅带 `id:: `
+ * 属性行的块，parent_rowid/ord/block_id 挂靠）。links/names 只挂文件级 item。
  */
 
 import { contentHash } from "./fnv";
 import { tokenizeForIndexing, type TokenizeOptions } from "./tokenize";
+import { extractBlocks } from "./blocks";
 import { LinkResolver, parseLinks, resolveKeyOf } from "./links";
 import type { SqliteService } from "./sqlite-service";
 
@@ -152,6 +153,13 @@ export class IndexWriter {
         format: meta.ext === "org" ? "org" : "md",
         mtime: meta.mtime,
       });
+      this.insertBlocks(
+        fileRowid,
+        itemRowid,
+        rawContent,
+        meta.ext === "org" ? "org" : "md",
+        meta.mtime,
+      );
       // 名字解析表：basename(lower) → 文件级 item，vault(0) 优先 ext(1)
       this.svc
         .prepare("INSERT INTO names (name, original, item_rowid, precedence) VALUES (?, ?, ?, ?)")
@@ -281,14 +289,14 @@ export class IndexWriter {
          VALUES (?, ?, ?, ?, 0, ?)`,
       );
       const CHUNK = 500;
-      // 第一遍：全量 names（basename 解析要跨文件，必须先齐）
+      // 第一遍：全量 names（basename 解析要跨文件，必须先齐；只文件级 item）
       let last = 0;
       for (;;) {
         const rows = this.svc
           .prepare(
             `SELECT i.rowid AS rid, f.title AS title, f.domain AS domain
              FROM items i JOIN files f ON f.rowid = i.file_rowid
-             WHERE i.rowid > ? ORDER BY i.rowid LIMIT ?`,
+             WHERE i.rowid > ? AND i.parent_rowid IS NULL ORDER BY i.rowid LIMIT ?`,
           )
           .all(last, CHUNK) as Array<{ rid: number; title: string; domain: string }>;
         if (!rows.length) break;
@@ -297,12 +305,13 @@ export class IndexWriter {
           insertName.run(r.title.toLowerCase(), r.title, r.rid, r.domain === "vault" ? 0 : 1);
         }
       }
-      // 第二遍：落 raw + resolve_key（解析延后统一做）
+      // 第二遍：落 raw + resolve_key（解析延后统一做；只文件级 item——块级
+      // item 的链接与文件级重复，落了会让 backlink: 双计）
       last = 0;
       for (;;) {
         const rows = this.svc
           .prepare(
-            "SELECT rowid AS rid, content AS content, format AS format FROM items WHERE rowid > ? ORDER BY rowid LIMIT ?",
+            "SELECT rowid AS rid, content AS content, format AS format FROM items WHERE rowid > ? AND parent_rowid IS NULL ORDER BY rowid LIMIT ?",
           )
           .all(last, CHUNK) as Array<{ rid: number; content: string; format: string }>;
         if (!rows.length) break;
@@ -318,6 +327,84 @@ export class IndexWriter {
       this.svc.metaSet("links_v2", "1");
     });
     console.debug(`[unified-search] links 回填完成 ${Date.now() - t0}ms`);
+  }
+
+  /**
+   * M2-2 升级补齐：存量文件级 item 从库内 content 解析块级 item（不重读盘，
+   * hash 门下未变文件也补上），再把已解析的 blockref 链接打回悬空统一重解析
+   * （target_item 从文件级升级到块级）。幂等（meta 门）。
+   */
+  backfillBlocks(): void {
+    if (this.svc.metaGet("blocks_m2") === "1") return;
+    const t0 = Date.now();
+    this.svc.transaction(() => {
+      const CHUNK = 200;
+      let last = 0;
+      for (;;) {
+        const rows = this.svc
+          .prepare(
+            `SELECT i.rowid AS rid, i.content AS content, i.format AS format, i.mtime AS mtime,
+                    i.file_rowid AS fid
+             FROM items i JOIN files f ON f.rowid = i.file_rowid
+             WHERE i.rowid > ? AND i.parent_rowid IS NULL ORDER BY i.rowid LIMIT ?`,
+          )
+          .all(last, CHUNK) as Array<{
+          rid: number;
+          content: string;
+          format: string;
+          mtime: number | null;
+          fid: number;
+        }>;
+        if (!rows.length) break;
+        for (const r of rows) {
+          last = r.rid;
+          // items.format 是权威（回填不走 ext 推断）
+          this.insertBlocks(r.fid, r.rid, r.content, r.format === "org" ? "org" : "md", r.mtime ?? 0);
+        }
+      }
+      // 已解析的块引用统一重解析（块缺失自动回退文件级，语义不变）
+      this.svc
+        .prepare(
+          `UPDATE links SET resolved = 0, target_path = NULL, target_item = NULL, target_root = NULL
+           WHERE kind = 'blockref' AND resolved = 1`,
+        )
+        .run();
+      this.resolver.resolveAllPending();
+      this.svc.metaSet("blocks_m2", "1");
+    });
+    console.debug(`[unified-search] 块级回填完成 ${Date.now() - t0}ms`);
+  }
+
+  /**
+   * 文件级 item 之下补挂带 id 的块级 item（M2-2：1 文件 = 1 文件 item + N 块
+   * item）。无 id:: 的文件零成本短路。block_id UNIQUE 冲突（跨文件复制模板、
+   * 回填与增量竞态）只跳过该块：statement 级回滚不伤事务，文件级照常写入。
+   */
+  private insertBlocks(
+    fileRowid: number,
+    parentRowid: number,
+    content: string,
+    format: "md" | "org",
+    mtime: number,
+  ): void {
+    const blocks = extractBlocks(content, format);
+    if (!blocks.length) return;
+    let ord = 0;
+    for (const b of blocks) {
+      try {
+        this.insertItem(fileRowid, {
+          title: b.title,
+          content: b.content,
+          format,
+          mtime,
+          blockId: b.blockId,
+          parentRowid,
+          ord: ord++,
+        });
+      } catch {
+        // block_id UNIQUE 冲突：块级 item 跳过（文件级已索引全文，检索不受损）
+      }
+    }
   }
 
   private insertItem(fileRowid: number, item: ItemInput): number {

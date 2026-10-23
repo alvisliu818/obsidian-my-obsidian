@@ -76,6 +76,14 @@ function buildSnippet(el: HTMLElement, content: string, tokens: string[]): void 
   if (cursor < window.length) el.createSpan({ text: window.slice(cursor) });
 }
 
+/** 块级 item 的展示标题：块内容首行去列表/星标标记（M2-2） */
+function blockTitleOf(content: string): string | null {
+  const first = content.split("\n", 1)[0]?.trim() ?? "";
+  const m = /^[-*+][ \t]+|^\*{1,6}[ \t]+/.exec(first);
+  const t = (m ? first.slice(m[0].length) : first).trim();
+  return t || null;
+}
+
 export class UnifiedSearchModal extends SuggestModal<Suggestion> {
   private lastCompiled: CompiledQuery | null = null;
   /** 搜索历史（新在前，去重，≤20 条），localStorage 按 vault 隔离 */
@@ -115,11 +123,13 @@ export class UnifiedSearchModal extends SuggestModal<Suggestion> {
       return;
     }
     const head = el.createDiv({ cls: "unified-search-head" });
-    head.createSpan({ cls: "unified-search-title", text: s.title });
-    head.createSpan({ cls: "unified-search-ext", text: s.ext });
-    el.createDiv({ cls: "unified-search-path", text: s.path });
     const tokens = this.lastCompiled?.tokens ?? [];
     const content = getItemContent(this.plugin.getService(), s.rowid);
+    // 块级命中（M2-2）：标题用块首行，徽标区分；摘要来自块内容天然更聚焦
+    const title = s.blockId ? (blockTitleOf(content) ?? s.title) : s.title;
+    head.createSpan({ cls: "unified-search-title", text: title });
+    head.createSpan({ cls: "unified-search-ext", text: s.blockId ? `块·${s.ext}` : s.ext });
+    el.createDiv({ cls: "unified-search-path", text: s.path });
     if (content) buildSnippet(el.createDiv({ cls: "unified-search-snippet" }), content, tokens);
   }
 
@@ -143,7 +153,12 @@ export class UnifiedSearchModal extends SuggestModal<Suggestion> {
     }
     const file = this.plugin.app.vault.getAbstractFileByPath(s.path);
     if (file instanceof TFile) {
-      void this.plugin.app.workspace.getLeaf("tab").openFile(file);
+      if (s.blockId) {
+        // 块级命中：带 #^id 锚点打开，Obsidian 定位到块（锚点解析不出时回落开文件）
+        void this.plugin.app.workspace.openLinkText(`${s.path}#^${s.blockId}`, "");
+      } else {
+        void this.plugin.app.workspace.getLeaf("tab").openFile(file);
+      }
     }
   }
 

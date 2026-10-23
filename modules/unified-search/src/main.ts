@@ -338,6 +338,8 @@ export class UnifiedSearchPlugin extends Plugin {
 			const svc = this.getService();
 			// v2 升级一次性补齐存量 items 的 links/names（幂等；hash 门跳过的老文件靠它）
 			this.getWriter().backfillLinks();
+			// M2-2 升级一次性补齐存量文件的块级 item + blockref 块级解析（幂等，库内解析不重读盘）
+			this.getWriter().backfillBlocks();
 			// 疾速档只服务真首建（空库）。增量扫描走常规 WAL：否则每次启动都对
 			// 1GB 库跑 ANALYZE（全索引扫描+统计写回）——启动期磁盘风暴的写侧元凶。
 			const fileCount = (svc.prepare("SELECT count(*) AS c FROM files").get() as { c: number }).c;
