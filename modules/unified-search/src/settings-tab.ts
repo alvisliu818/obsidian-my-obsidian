@@ -46,7 +46,7 @@ export class UnifiedSearchSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("收录库外挂载文件")
 			.setDesc(
-				"把 logseq 模块挂载的库外文本文件纳入索引（>1MB 只索引头部 1MB；挂载内容按下方间隔周期刷新，也可用命令手动刷新）。",
+				"把 logseq 模块挂载的库外文本文件纳入索引。只收文本/源码类（md、txt、json、ts、py…），跳过二进制与依赖构建目录（node_modules、.git、__pycache__、dist…），单轮最多 5000 个（最近修改优先）、单文件 2MB 封顶。索引按浏览器空闲节奏推进，不与滚动/输入抢主线程。",
 			)
 			.addToggle((toggle) =>
 				toggle.setValue(this.plugin.settings.indexExt).onChange(async (value) => {

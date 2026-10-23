@@ -11,6 +11,15 @@ import { openSync, readSync, closeSync, statSync, readFileSync } from "node:fs";
 
 const HEAD_LIMIT = 1_000_000;
 
+/** 只读 stat：体积门用（>上限的文件连读都不读，省掉挂载里的大日志/数据集 IO） */
+export function statExternalSize(abs: string): number | null {
+	try {
+		return statSync(abs).size;
+	} catch {
+		return null; // 锁定/消失：调用方跳过
+	}
+}
+
 /** 读库外文本文件全文；>1MB 读头部。失败（锁定/消失）返回 null */
 export function readExternalText(abs: string): { content: string; mtime: number; size: number } | null {
   try {

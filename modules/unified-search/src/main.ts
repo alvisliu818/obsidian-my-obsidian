@@ -10,11 +10,31 @@ import type { FileSystemAdapter } from "obsidian";
 import { SqliteService, vaultSlugOf } from "../../index-core/src/sqlite-service";
 import { IndexWriter } from "../../index-core/src/index-writer";
 import type { TokenizeOptions } from "../../index-core/src/tokenize";
-import { readExternalText } from "./extfs";
+import { readExternalText, statExternalSize } from "./extfs";
+import { EXT_MAX_BYTES, EXT_MAX_FILES, selectExternalFiles } from "./extpolicy";
 import { DEFAULT_SETTINGS, type UnifiedSearchSettings } from "./settings";
 import { UnifiedSearchSettingTab } from "./settings-tab";
 import { fileToMeta, isAttachment, isIndexable } from "./indexer";
 import { UnifiedSearchModal } from "./modal";
+
+/**
+ * 让出主线程：优先 requestIdleCallback（UI 忙——滚动/输入——时自动延后，交互绝对
+ * 优先），退化到 setTimeout。参考 VS Code 后台索引的节流思路：索引永远不与交互
+ * 抢主线程。2026-10-23 事故：一批 200 个文件同步 read+upsert 连着跑，滚动文件
+ * 列表都卡死，改成单文件粒度 + 空闲调度。
+ */
+function nextIdle(fallbackMs = 16, timeout = 150): Promise<void> {
+	return new Promise((resolve) => {
+		const w = window as unknown as {
+			requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+		};
+		if (typeof w.requestIdleCallback === "function") {
+			w.requestIdleCallback(() => resolve(), { timeout });
+		} else {
+			window.setTimeout(resolve, fallbackMs);
+		}
+	});
+}
 
 export class UnifiedSearchPlugin extends Plugin {
 	settings: UnifiedSearchSettings = DEFAULT_SETTINGS;
@@ -299,7 +319,7 @@ export class UnifiedSearchPlugin extends Plugin {
 						batchAt = performance.now();
 						batchCount = 0;
 					}
-					await new Promise((resolve) => window.setTimeout(resolve, 8));
+					await nextIdle();
 					lastYield = performance.now();
 				}
 			}
@@ -409,82 +429,123 @@ export class UnifiedSearchPlugin extends Plugin {
 			.plugins?.plugins?.["obsidian-logseq"] as
 			| { listExternalSearchFiles?: () => ExtEntry[] }
 			| undefined;
-		const list = logseq?.listExternalSearchFiles?.() ?? [];
+		const rawList = logseq?.listExternalSearchFiles?.() ?? [];
+		// 策略闸门（extpolicy）：文本白名单 + 依赖/构建目录排除 + 数量与体积上限。
+		// 挂载清单失控时（实测 4 万+ 个 py/pyc/ts）这里就把绝大多数挡在门外。
+		const list = selectExternalFiles(rawList);
 		if (!list.length) return;
-		console.debug(`[unified-search] ext 域 ${list.length} 个文件…`);
+		console.debug(
+			`[unified-search] ext 域 ${list.length}/${rawList.length} 个文件` +
+				(list.length < rawList.length
+					? `（策略过滤 ${rawList.length - list.length}，上限 ${EXT_MAX_FILES}）`
+					: "") +
+				"…",
+		);
 		const svc = this.getService();
-		const CHUNK = 200;
+		const writer = this.getWriter();
+		const t0 = Date.now();
 		let indexed = 0;
-		for (let i = 0; i < list.length; i += CHUNK) {
-			if (this.unloaded) return;
-			const slice = list.slice(i, i + CHUNK);
-			svc.beginBatch();
-			try {
-				await Promise.all(
-					slice.map(async (entry) => {
-						const norm = entry.abs.replace(/\\/g, "/");
-						// stat 门：mtime 未变免读（ext 清单只有 mtime，没有 size）
-						if (this.getWriter().statUnchanged(norm, entry.mtime)) return;
+		let batchCount = 0;
+		let batchAt = t0;
+		svc.beginBatch();
+		try {
+			// 单文件粒度 + 空闲调度：绝不一批 200 个连着读+写（主线程冻结元凶）
+			for (const entry of list) {
+				if (this.unloaded) return;
+				const norm = entry.abs.replace(/\\/g, "/");
+				// stat 门：mtime 未变免读（ext 清单只有 mtime，没有 size）
+				if (!writer.statUnchanged(norm, entry.mtime)) {
+					// 体积门：大于上限的（日志/数据集）连读都不读
+					const size = statExternalSize(entry.abs);
+					if (size !== null && size <= EXT_MAX_BYTES) {
 						const read = readExternalText(entry.abs);
-						if (!read) return;
-						const done = this.getWriter().upsertFile(
-							{
-								path: norm,
-								domain: "ext",
-								mtime: read.mtime || entry.mtime,
-								size: read.size,
-								ext: (entry.name.split(".").pop() ?? "").toLowerCase(),
-								title: entry.name.replace(/\.\w+$/, ""),
-							},
-							read.content,
-						);
-						if (!done.skipped) this.scanWritten++;
-						indexed++;
-					}),
-				);
-			} finally {
-				if (svc.inBatch) svc.endBatch();
+						if (read) {
+							const done = writer.upsertFile(
+								{
+									path: norm,
+									domain: "ext",
+									mtime: read.mtime || entry.mtime,
+									size: read.size,
+									ext: (entry.name.split(".").pop() ?? "").toLowerCase(),
+									title: entry.name.replace(/\.\w+$/, ""),
+								},
+								read.content,
+							);
+							if (!done.skipped) this.scanWritten++;
+							indexed++;
+						}
+					}
+					batchCount++;
+				}
+				const now = Date.now();
+				if (batchCount >= 32 || now - batchAt >= 300) {
+					if (batchCount) {
+						svc.endBatch();
+						svc.beginBatch();
+						batchAt = Date.now();
+						batchCount = 0;
+					} else {
+						batchAt = now;
+					}
+				}
+				await nextIdle();
 			}
-			await new Promise((resolve) => window.setTimeout(resolve, 0));
+		} finally {
+			if (svc.inBatch) svc.endBatch();
 		}
-		console.debug(`[unified-search] ext 域完成：${indexed}/${list.length}`);
+		console.debug(`[unified-search] ext 域完成：${indexed}/${list.length}，${Date.now() - t0}ms`);
 	}
 
-	/** 灌库：64/批流式（读一批→索引一批→让出主线程一拍）。stat 门免读未变文件。
-	 *  每批一个批量事务：COMMIT/WAL 检查点成本按批摊薄（reindexExtFiles 同理） */
+	/**
+	 * 库内文件灌库：stat 门免读未变文件。**单文件粒度 + 空闲调度**——原实现一批
+	 * 64 个并发 read+upsert，同步段连着跑会冻结主线程数秒（滚动卡死，2026-10-23
+	 * 实证）。每批一个事务：COMMIT/WAL 检查点成本按批摊薄。
+	 */
 	private async reindexFiles(files: TFile[]): Promise<void> {
 		const svc = this.getService();
-		// 64/批 + 批间 24ms 让步：批量内 upsertFile（分词+FTS 写）是同步 CPU 段，
-		// 300/批的首建会让主线程冻结秒级（usc2 重建白屏风险），小批+让步换 UI 呼吸
-		const CHUNK = 64;
-		for (let i = 0; i < files.length; i += CHUNK) {
-			if (this.unloaded) return;
-			const slice = files.slice(i, i + CHUNK);
-			svc.beginBatch();
-			try {
-				await Promise.all(
-					slice.map(async (file) => {
-						const meta = fileToMeta(file);
-						// stat 门（size→mtime 先于 hash，设计 §4.3）：未变文件不读盘。
-						// cachedRead 首读必然落磁盘（网盘 1.2 万文件），这是启动读风暴主力。
-						if (this.getWriter().statUnchanged(meta.path, meta.mtime, meta.size)) return;
-						// adapter.read 绕过 Obsidian 文件缓存：cachedRead 把全部内容驻留在
-						// TFile 缓存里，7.5 万文件全量重建 = 内存涨到 GB 级（2026-10-23 实证
-						// 3.5GB 且持续增长）。重建/增量反正每次真读，缓存只有害处。
-						try {
-							const raw = await this.app.vault.adapter.read(file.path);
-							const done = this.getWriter().upsertFile(meta, raw);
-							if (!done.skipped) this.scanWritten++;
-						} catch (e) {
-							// 网盘云占位/文件锁定：单文件失败跳过，不中断整轮重建
-							console.warn(`[unified-search] 读取失败跳过 ${meta.path}`, e);
-						}
-					}),
-				);
-			} finally {
-				if (svc.inBatch) svc.endBatch();
+		const writer = this.getWriter();
+		let lastYield = performance.now();
+		let batchAt = lastYield;
+		let batchCount = 0;
+		svc.beginBatch();
+		try {
+			for (const file of files) {
+				if (this.unloaded) return;
+				const meta = fileToMeta(file);
+				// stat 门（size→mtime 先于 hash，设计 §4.3）：未变文件不读盘。
+				// cachedRead 首读必然落磁盘（网盘 1.2 万文件），这是启动读风暴主力。
+				if (!writer.statUnchanged(meta.path, meta.mtime, meta.size)) {
+					// adapter.read 绕过 Obsidian 文件缓存：cachedRead 把全部内容驻留在
+					// TFile 缓存里，7.5 万文件全量重建 = 内存涨到 GB 级（2026-10-23 实证
+					// 3.5GB 且持续增长）。重建/增量反正每次真读，缓存只有害处。
+					try {
+						const raw = await this.app.vault.adapter.read(file.path);
+						const done = writer.upsertFile(meta, raw);
+						if (!done.skipped) this.scanWritten++;
+					} catch (e) {
+						// 网盘云占位/文件锁定：单文件失败跳过，不中断整轮重建
+						console.warn(`[unified-search] 读取失败跳过 ${meta.path}`, e);
+					}
+					batchCount++;
+				}
+				const now = performance.now();
+				if (batchCount >= 32 || now - batchAt >= 300) {
+					if (batchCount) {
+						svc.endBatch();
+						svc.beginBatch();
+						batchAt = performance.now();
+						batchCount = 0;
+					} else {
+						batchAt = now;
+					}
+				}
+				if (now - lastYield >= 24) {
+					await nextIdle();
+					lastYield = performance.now();
+				}
 			}
-			await new Promise((resolve) => window.setTimeout(resolve, 24));
+		} finally {
+			if (svc.inBatch) svc.endBatch();
 		}
 	}
 
@@ -513,7 +574,7 @@ export class UnifiedSearchPlugin extends Plugin {
 						batchAt = performance.now();
 						batchCount = 0;
 					}
-					await new Promise((resolve) => window.setTimeout(resolve, 8));
+					await nextIdle();
 					lastYield = performance.now();
 				}
 			}

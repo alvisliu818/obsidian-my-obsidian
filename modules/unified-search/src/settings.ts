@@ -5,7 +5,8 @@ export interface UnifiedSearchSettings {
 	splitCamel: boolean;
 	/** 收录库外挂载文件（logseq 模块的挂载清单；>1MB 只索引头部，仅全量扫描时刷新） */
 	indexExt: boolean;
-	/** ext 域周期刷新间隔（分钟，0=关）。stat 门下未变文件免读，开销是清单 stat 一轮 */
+	/** ext 域周期刷新间隔（分钟，0=关）。stat 门下未变文件免读，开销是清单 stat 一轮。
+	 *  默认放宽到 30 分钟：挂载清单动辄上万文件，5 分钟一轮会持续吃磁盘（2026-10-23） */
 	extRefreshMinutes: number;
 }
 
@@ -15,5 +16,5 @@ export const DEFAULT_SETTINGS: UnifiedSearchSettings = {
 	sqliteDbDir: "E:\\HOME\\Runtime\\unified-index",
 	splitCamel: false,
 	indexExt: true,
-	extRefreshMinutes: 5,
+	extRefreshMinutes: 30,
 };
