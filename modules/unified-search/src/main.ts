@@ -345,8 +345,9 @@ export class UnifiedSearchPlugin extends Plugin {
 			const svc = this.getService();
 			// v2 升级一次性补齐存量 items 的 links/names（幂等；hash 门跳过的老文件靠它）
 			this.getWriter().backfillLinks();
-			// M2-2 升级一次性补齐存量文件的块级 item + blockref 块级解析（幂等，库内解析不重读盘）
-			this.getWriter().backfillBlocks();
+			// M2-2 升级一次性补齐存量文件的块级 item + blockref 块级解析（幂等，库内解析不重读盘；
+			// 分批让步——巨型事务冻结主线程 = 白屏，2026-10-23 实证）
+			await this.getWriter().backfillBlocks();
 			// 疾速档只服务真首建（空库）。增量扫描走常规 WAL：否则每次启动都对
 			// 1GB 库跑 ANALYZE（全索引扫描+统计写回）——启动期磁盘风暴的写侧元凶。
 			const fileCount = (svc.prepare("SELECT count(*) AS c FROM files").get() as { c: number }).c;
@@ -425,11 +426,13 @@ export class UnifiedSearchPlugin extends Plugin {
 		console.debug(`[unified-search] ext 域完成：${indexed}/${list.length}`);
 	}
 
-	/** 灌库：300/批流式（读一批→索引一批→让出主线程一拍）。stat 门免读未变文件。
+	/** 灌库：64/批流式（读一批→索引一批→让出主线程一拍）。stat 门免读未变文件。
 	 *  每批一个批量事务：COMMIT/WAL 检查点成本按批摊薄（reindexExtFiles 同理） */
 	private async reindexFiles(files: TFile[]): Promise<void> {
 		const svc = this.getService();
-		const CHUNK = 300;
+		// 64/批 + 批间 24ms 让步：批量内 upsertFile（分词+FTS 写）是同步 CPU 段，
+		// 300/批的首建会让主线程冻结秒级（usc2 重建白屏风险），小批+让步换 UI 呼吸
+		const CHUNK = 64;
 		for (let i = 0; i < files.length; i += CHUNK) {
 			if (this.unloaded) return;
 			const slice = files.slice(i, i + CHUNK);
@@ -449,7 +452,7 @@ export class UnifiedSearchPlugin extends Plugin {
 			} finally {
 				if (svc.inBatch) svc.endBatch();
 			}
-			await new Promise((resolve) => window.setTimeout(resolve, 0));
+			await new Promise((resolve) => window.setTimeout(resolve, 24));
 		}
 	}
 

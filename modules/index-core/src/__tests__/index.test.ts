@@ -323,7 +323,7 @@ describe("全域 links / names（schema v2）", () => {
     expect(links2.c).toBe(2);
   });
 
-  it("backfillBlocks：存量 file-level item 从库内 content 补块 item，blockref 重解析升级块级（幂等）", () => {
+  it("backfillBlocks：存量 file-level item 从库内 content 补块 item，blockref 重解析升级块级（幂等）", async () => {
     // 模拟 M2-1 时代存量：直插 file-level item + 已解析到文件级的 blockref
     svc.transaction(() => {
       svc.prepare("INSERT INTO files (path, domain, title) VALUES ('老.md', 'vault', '老')").run();
@@ -336,7 +336,7 @@ describe("全域 links / names（schema v2）", () => {
          VALUES (2, '[[老#^a]]', '老.md', 1, 1, '^a', 'blockref', 1, '老')`,
       ).run();
     });
-    writer.backfillBlocks();
+    await writer.backfillBlocks();
     const blk = svc.prepare("SELECT rowid, parent_rowid FROM items WHERE block_id = 'a'").get() as {
       rowid: number;
       parent_rowid: number;
@@ -348,7 +348,7 @@ describe("全域 links / names（schema v2）", () => {
     };
     expect(link).toEqual({ target_item: blk.rowid, target_root: 1 });
     // 幂等：再跑一遍块不翻倍
-    writer.backfillBlocks();
+    await writer.backfillBlocks();
     const c = svc.prepare("SELECT count(*) c FROM items WHERE block_id IS NOT NULL").get() as { c: number };
     expect(c.c).toBe(1);
   });

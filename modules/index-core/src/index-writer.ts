@@ -333,36 +333,49 @@ export class IndexWriter {
    * M2-2 升级补齐：存量文件级 item 从库内 content 解析块级 item（不重读盘，
    * hash 门下未变文件也补上），再把已解析的 blockref 链接打回悬空统一重解析
    * （target_item 从文件级升级到块级）。幂等（meta 门）。
+   *
+   * **分批 + 让步**（启动路径上的 CPU 大户）：200 文件/批一个事务，批间让出
+   * 主线程 24ms——一个巨型事务跑 7 万文件会把 Obsidian 主线程冻结到白屏
+   * （2026-10-23 实证）。中途崩溃：已提交批保留，重跑靠 block_id UNIQUE
+   * 冲突跳过已回填文件（statement 级容错）。
    */
-  backfillBlocks(): void {
+  async backfillBlocks(): Promise<void> {
     if (this.svc.metaGet("blocks_m2") === "1") return;
     const t0 = Date.now();
-    this.svc.transaction(() => {
-      const CHUNK = 200;
-      let last = 0;
-      for (;;) {
-        const rows = this.svc
-          .prepare(
-            `SELECT i.rowid AS rid, i.content AS content, i.format AS format, i.mtime AS mtime,
-                    i.file_rowid AS fid
-             FROM items i JOIN files f ON f.rowid = i.file_rowid
-             WHERE i.rowid > ? AND i.parent_rowid IS NULL ORDER BY i.rowid LIMIT ?`,
-          )
-          .all(last, CHUNK) as Array<{
-          rid: number;
-          content: string;
-          format: string;
-          mtime: number | null;
-          fid: number;
-        }>;
-        if (!rows.length) break;
+    const CHUNK = 200;
+    let last = 0;
+    let total = 0;
+    for (;;) {
+      const rows = this.svc
+        .prepare(
+          `SELECT i.rowid AS rid, i.content AS content, i.format AS format, i.mtime AS mtime,
+                  i.file_rowid AS fid
+           FROM items i WHERE i.rowid > ? AND i.parent_rowid IS NULL ORDER BY i.rowid LIMIT ?`,
+        )
+        .all(last, CHUNK) as Array<{
+        rid: number;
+        content: string;
+        format: string;
+        mtime: number | null;
+        fid: number;
+      }>;
+      if (!rows.length) break;
+      this.svc.beginBatch();
+      try {
         for (const r of rows) {
           last = r.rid;
           // items.format 是权威（回填不走 ext 推断）
           this.insertBlocks(r.fid, r.rid, r.content, r.format === "org" ? "org" : "md", r.mtime ?? 0);
         }
+      } finally {
+        this.svc.endBatch();
       }
-      // 已解析的块引用统一重解析（块缺失自动回退文件级，语义不变）
+      total += rows.length;
+      await new Promise((resolve) => setTimeout(resolve, 24));
+    }
+    // blockref 打回重解析（块级 item 全部就位后统一做；块缺失自动回退文件级）
+    this.svc.beginBatch();
+    try {
       this.svc
         .prepare(
           `UPDATE links SET resolved = 0, target_path = NULL, target_item = NULL, target_root = NULL
@@ -371,8 +384,10 @@ export class IndexWriter {
         .run();
       this.resolver.resolveAllPending();
       this.svc.metaSet("blocks_m2", "1");
-    });
-    console.debug(`[unified-search] 块级回填完成 ${Date.now() - t0}ms`);
+    } finally {
+      this.svc.endBatch();
+    }
+    console.debug(`[unified-search] 块级回填完成 ${total} 文件，${Date.now() - t0}ms`);
   }
 
   /**
