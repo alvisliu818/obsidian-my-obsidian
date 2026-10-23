@@ -46,13 +46,29 @@ export class UnifiedSearchSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("收录库外挂载文件")
 			.setDesc(
-				"把 logseq 模块挂载的库外文本文件纳入索引（>1MB 只索引头部 1MB；挂载内容无实时监听，改动后用「重建索引」刷新）。",
+				"把 logseq 模块挂载的库外文本文件纳入索引（>1MB 只索引头部 1MB；挂载内容按下方间隔周期刷新，也可用命令手动刷新）。",
 			)
 			.addToggle((toggle) =>
 				toggle.setValue(this.plugin.settings.indexExt).onChange(async (value) => {
 					this.plugin.settings.indexExt = value;
 					await this.plugin.saveData(this.plugin.settings);
+					this.plugin.rearmExtRefresh();
 				}),
+			);
+
+		new Setting(containerEl)
+			.setName("挂载文件刷新间隔（分钟）")
+			.setDesc("库外挂载文件无实时监听，按此间隔周期重扫（stat 门：未变文件免读）。0 = 关闭周期刷新。")
+			.addText((text) =>
+				text
+					.setPlaceholder(String(DEFAULT_SETTINGS.extRefreshMinutes))
+					.setValue(String(this.plugin.settings.extRefreshMinutes))
+					.onChange(async (value) => {
+						const n = Math.max(0, Math.floor(Number(value) || 0));
+						this.plugin.settings.extRefreshMinutes = n;
+						await this.plugin.saveData(this.plugin.settings);
+						this.plugin.rearmExtRefresh();
+					}),
 			);
 
 		new Setting(containerEl)

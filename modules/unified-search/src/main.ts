@@ -45,6 +45,14 @@ export class UnifiedSearchPlugin extends Plugin {
 			name: "统一索引搜索",
 			callback: () => new UnifiedSearchModal(this).open(),
 		});
+		this.addCommand({
+			id: "refresh-ext",
+			name: "刷新挂载文件索引（ext 域）",
+			callback: () => {
+				void this.reindexExtFiles(true);
+				new Notice("挂载文件索引刷新中");
+			},
+		});
 
 		this.registerEvent(this.app.vault.on("create", (f) => this.queueReindex(f)));
 		this.registerEvent(this.app.vault.on("modify", (f) => this.queueReindex(f)));
@@ -70,6 +78,23 @@ export class UnifiedSearchPlugin extends Plugin {
 				void this.initialScan();
 			}, 10_000);
 		});
+		// ext 域周期刷新（M2-3）：挂载树无 vault 事件，用周期重扫替代 fs.watch。
+		// stat 门下未变文件免读，一轮开销只是清单 stat + 变文件重索引
+		this.rearmExtRefresh();
+	}
+
+	private extTimer: number | null = null;
+
+	/** ext 域刷新布防（设置变更时重排；间隔 0 或 ext 关 = 不布防） */
+	rearmExtRefresh(): void {
+		if (this.extTimer !== null) window.clearInterval(this.extTimer);
+		this.extTimer = null;
+		const minutes = this.settings.indexExt ? this.settings.extRefreshMinutes : 0;
+		if (!minutes) return;
+		this.extTimer = window.setInterval(() => {
+			if (this.scanning || this.unloaded) return; // 首建扫描进行中让路
+			void this.reindexExtFiles();
+		}, minutes * 60_000);
 	}
 
 	private scanTimer: number | null = null;
@@ -92,6 +117,7 @@ export class UnifiedSearchPlugin extends Plugin {
 		this.unloaded = true;
 		if (this.dirtyTimer !== null) window.clearTimeout(this.dirtyTimer);
 		if (this.scanTimer !== null) window.clearTimeout(this.scanTimer);
+		if (this.extTimer !== null) window.clearInterval(this.extTimer);
 		this.svc?.close();
 		this.svc = null;
 		this.writer = null;
@@ -250,7 +276,7 @@ export class UnifiedSearchPlugin extends Plugin {
 			this.scanWritten = 0;
 			await this.reindexFiles(files);
 			await this.reindexAttachments(attachments);
-			await this.reindexExtFiles();
+			await this.reindexExtFiles(true);
 			if (firstBuild) {
 				svc.commitBulk();
 			}
@@ -267,11 +293,13 @@ export class UnifiedSearchPlugin extends Plugin {
 
 	/**
 	 * 库外挂载文件（ext 域）：清单元数据来自 logseq 模块的 listExternalSearchFiles
-	 * （已剔除 vault 根、应用挂载 include/exclude）。M1 只在全量扫描时刷新
-	 * （挂载树无 vault 事件，fs.watch 不做——索引是可重建投影）。
+	 * （已剔除 vault 根、应用挂载 include-exclude）。无挂载树事件：initialScan 强制
+	 * 刷 + 周期重扫（extTimer）+ 命令手动刷。force 越过 scanning 门（initialScan/
+	 * 手动命令持有方各自保证语义，周期路径不带 force 会被门挡住让路）。
 	 */
-	private async reindexExtFiles(): Promise<void> {
+	private async reindexExtFiles(force = false): Promise<void> {
 		if (!this.settings.indexExt || this.unloaded) return;
+		if (!force && this.scanning) return;
 		type ExtEntry = { abs: string; name: string; mtime: number };
 		const logseq = (this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } })
 			.plugins?.plugins?.["obsidian-logseq"] as
