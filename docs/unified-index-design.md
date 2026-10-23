@@ -126,7 +126,8 @@ PRAGMA auto_vacuum=INCREMENTAL; -- 高频删插防碎片
 
 ## 7. 布局与文件名
 
-- 库文件：`<sqliteDbDir>/<vault-slug>.db`（vault 路径 sanitize，多库互不踩）
+- 库文件：`<sqliteDbDir>/<vault-slug>.db`（vault 路径 sanitize，多库互不踩；
+  sqliteDbDir 默认 `E:\HOME\Runtime\unified-index`——专用子目录，不与 Runtime 根混放）
 - DB **懒打开**（首次索引/搜索操作才 open，避开启动内存峰——白屏高危窗口让路）
 - 健康指标进 meta（item/links 数、上次全建/增量时间、指纹）；`fts5vocab` 白嫖索引自检
 

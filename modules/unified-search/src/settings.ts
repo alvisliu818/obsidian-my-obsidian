@@ -6,6 +6,8 @@ export interface UnifiedSearchSettings {
 }
 
 export const DEFAULT_SETTINGS: UnifiedSearchSettings = {
-	sqliteDbDir: "E:\\HOME\\Runtime",
+	// 统一索引专用子目录：不与 Runtime 根下其他模块的文件混放
+	// （SqliteService.ensureOpen 会 recursive mkdir，目录不存在自动建）
+	sqliteDbDir: "E:\\HOME\\Runtime\\unified-index",
 	splitCamel: false,
 };

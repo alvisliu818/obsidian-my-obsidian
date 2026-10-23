@@ -11,7 +11,7 @@ import { META_TABLE_DDL, MIGRATIONS, SCHEMA_VERSION } from "./schema";
 const CORRUPT_CODES = new Set(["SQLITE_CORRUPT", "SQLITE_NOTADB"]);
 
 export interface SqliteServiceOptions {
-  /** 索引文件目录（对应设置 sqliteDbDir，默认 E:\HOME\Runtime） */
+  /** 索引文件目录（对应设置 sqliteDbDir，默认 E:\HOME\Runtime\unified-index） */
   dbDir: string;
   /** vault 身份（sanitize 后进文件名，多库互不踩） */
   vaultSlug: string;
