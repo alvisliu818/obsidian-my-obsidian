@@ -174,10 +174,11 @@ export function compileQuery(input: string, opts: TokenizeOptions = {}): Compile
     const expr = termToExpr(term, opts);
     if (expr) positives.push(expr);
     positiveTexts.push(term.text);
-    // LIKE 兜底触发词：中文裸词——unicode61 对「短词/降级整块」必然漏
-    if (term.kind === "term" && !term.field && hasCJK(term.text)) {
-      const segmented = opts.chsSegmenter != null;
-      if (term.text.length <= 2 || !segmented) likeTerms.push(term.text);
+    // LIKE 兜底触发词：≤2 字中文裸词——单字 FTI 不产 token 必漏；≥3 字依赖
+    // bigram/分词器命中 FTS，不进兜底（大库上 LIKE 全表扫秒级，逐查询触发
+    // 不可用，M2-5 基准实证）
+    if (term.kind === "term" && !term.field && hasCJK(term.text) && term.text.length <= 2) {
+      likeTerms.push(term.text);
     }
     tokens.push(...tokenizeForSearch(term.text, opts));
     if (term.kind === "term" && term.prefix) tokens.push(term.text);

@@ -105,7 +105,11 @@ export class UnifiedSearchModal extends SuggestModal<Suggestion> {
       const compiled = compileQuery(q, this.plugin.getTokenizerOpts());
       if (compiled.isEmpty) return [];
       this.lastCompiled = compiled;
-      return search(this.plugin.getService(), compiled, { limit: 50 }).map((hit) => ({
+      // 写会话（扫描/flush）中关 LIKE 兜底：部分索引必然落空，兜底只会白扫大库
+      return search(this.plugin.getService(), compiled, {
+        limit: 50,
+        likeThreshold: this.plugin.isWriteSession ? 0 : undefined,
+      }).map((hit) => ({
         kind: "hit" as const,
         ...hit,
       }));

@@ -71,8 +71,19 @@ describe("tokenize", () => {
     ]);
   });
 
-  it("CJK 降级：无分词器时整块保留", () => {
-    expect(tokenizeForIndexing("黑板报 前端开发")).toEqual(["黑板报", "前端开发"]);
+  it("CJK 降级：无分词器时内置 bigram（全偏移 2 字滑窗 + 整词）", () => {
+    expect(tokenizeForIndexing("黑板报 前端开发")).toEqual([
+      "黑板",
+      "板报",
+      "黑板报",
+      "前端",
+      "端开",
+      "开发",
+      "前端开发",
+    ]);
+    expect(tokenizeForIndexing("中文")).toEqual(["中文"]); // ≤2 字整词即可
+    // 奇数长：滑窗到末位 + 整词；去重
+    expect(tokenizeForIndexing("一三三")).toEqual(["一三", "三三", "一三三"]);
   });
 
   it("CJK 分词器：产出子词 + 整词", () => {
@@ -122,10 +133,11 @@ describe("parseQuery", () => {
 });
 
 describe("compileQuery", () => {
-  it("LIKE 兜底候选：短中文必有；降级模式长中文也入列", () => {
+  it("LIKE 兜底候选：仅 ≤2 字中文（单字必漏进兜底；≥3 字靠 bigram 命中 FTS，不再兜底）", () => {
     expect(compileQuery("黑板").likeTerms).toEqual(["黑板"]);
-    expect(compileQuery("前端开发").likeTerms).toEqual(["前端开发"]); // 降级模式
-    expect(compileQuery("前端开发", { chsSegmenter: fakeSegmenter }).likeTerms).toEqual([]); // 有分词器则靠分词
+    expect(compileQuery("板").likeTerms).toEqual(["板"]); // 单字
+    expect(compileQuery("前端开发").likeTerms).toEqual([]); // bigram 覆盖
+    expect(compileQuery("前端开发", { chsSegmenter: fakeSegmenter }).likeTerms).toEqual([]);
   });
 
   it("纯过滤查询 match 为 null，非空判定正确", () => {
@@ -359,14 +371,14 @@ describe("IndexWriter / search 集成", () => {
     const hits = search(svc, compileQuery("unified"));
     expect(hits.map((h) => h.path)).toEqual(["a.md", "b.md"]);
     expect(hits[0].score).toBeGreaterThan(hits[1].score);
-    // 中文整词（降级模式：内容含空格才切开，整块 token 可查）
+    // 中文（bigram 降级：整词变体 + 窗口均可查）
     writer.upsertFile(meta({ path: "c.md" }), "黑板报 前端开发");
     expect(search(svc, compileQuery("黑板报")).map((h) => h.path)).toEqual(["c.md"]);
   });
 
-  it("2 字中文子串走 LIKE 兜底", () => {
+  it("单字中文走 LIKE 兜底（bigram 无单字 token）", () => {
     writer.upsertFile(meta({ path: "c.md" }), "黑板报 前端开发");
-    const hits = search(svc, compileQuery("黑板"));
+    const hits = search(svc, compileQuery("板"));
     expect(hits.map((h) => h.path)).toContain("c.md");
     // 兜底结果不带高亮 token 影响不了正确性：原文可回查
     expect(getItemContent(svc, hits[0].rowid)).toContain("黑板报");

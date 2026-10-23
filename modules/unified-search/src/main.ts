@@ -139,7 +139,8 @@ export class UnifiedSearchPlugin extends Plugin {
 	getWriter(): IndexWriter {
 		const dir = this.settings.sqliteDbDir || DEFAULT_SETTINGS.sqliteDbDir;
 		const chs = this.getChsSegmenter() != null;
-		const fp = `usc1|chs=${chs ? 1 : 0}|camel=${this.settings.splitCamel ? 1 : 0}`;
+		// usc2：降级分词从「CJK 整块」改为内置 bigram（M2-5），指纹升级触发旧库重建
+		const fp = `usc2|chs=${chs ? 1 : 0}|camel=${this.settings.splitCamel ? 1 : 0}`;
 		if (!this.writer || this.svcDir !== dir || this.fingerprint !== fp) {
 			this.svc?.close();
 			this.svc = new SqliteService({
@@ -189,6 +190,12 @@ export class UnifiedSearchPlugin extends Plugin {
 	/** 2.5s 去抖：窗口内事件合并，flush 一次按磁盘真相收敛。flushing 防两轮并发交错 */
 	private flushing = false;
 	private flushQueued = false;
+
+	/** 写会话进行中（首建扫描/flush）：部分数据必然 FTS 落空，此时 LIKE 兜底
+	 *  只会白扫大库卡死主线程（M2-5）——搜索侧据此临时关闭兜底 */
+	get isWriteSession(): boolean {
+		return this.scanning || this.flushing;
+	}
 
 	private armFlush(): void {
 		if (this.flushing) {

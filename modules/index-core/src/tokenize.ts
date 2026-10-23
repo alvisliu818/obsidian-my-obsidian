@@ -4,9 +4,11 @@
  * 设计要点（docs/unified-index-design.md）：
  *  - FTS5 unicode61 不切 CJK（连续中文成一个 token），分词必须在应用侧完成，
  *    产出写进 items.t_* 列（= FTS external-content 的数据源）。
- *  - 中文分词依赖可选的 cm-chs-patch（外部插件）。缺席时降级：CJK 连续块原样
- *    保留为一个 token（整词可查，2 字子串靠查询层 LIKE 兜底）——行为对齐
- *    omnisearch 的降级路径。
+ *  - 中文分词优先用可选的 cm-chs-patch（外部插件）。缺席时**内置 bigram 降级**
+ *    （M2-5 基准实证：整块保留的旧降级在 7.5 万 item 大库上，≥2 字查询 FTS
+ *    必然落空、每次搜索都跌进 5-6s 的全表 LIKE，主线程不可用）。bigram =
+ *    2 字滑窗（步长 1）+ 整词：任意 ≥2 字子串查询经窗口短语/OR 命中 FTS，
+ *    单字仍靠 ≤2 字 LIKE 兜底。代价是 CJK token 量 ≈ 字数（索引变大）。
  *  - 拉丁词处理：非字母数字一律作分隔符（含连字符，无需单独拆连字符），
  *    camelCase 拆分可选（索引/查询两侧必须同开关，否则查不中）。
  */
@@ -17,7 +19,7 @@ export interface ChsSegmenter {
 }
 
 export interface TokenizeOptions {
-  /** cm-chs-patch segmenter（可选）。缺席 = 降级模式 */
+  /** cm-chs-patch segmenter（可选）。缺席/不合规 = 内置 bigram 降级 */
   chsSegmenter?: ChsSegmenter | null;
   /** 拆 camelCase（默认关） */
   splitCamel?: boolean;
@@ -38,14 +40,32 @@ function camelSplit(word: string): string[] {
   return parts.length > 1 ? parts.filter(Boolean) : [];
 }
 
+/**
+ * 内置 bigram 降级切分：2 字滑窗（步长 1，全偏移覆盖）+ 整词，去重。
+ * 全偏移是关键——步长 2 只覆盖偶对齐，一半的长查询会 FTS 落空跌进 LIKE。
+ * 窗口按序产出：FTS 相邻位置使「整词查询的窗口序列」构成短语命中。
+ */
+function bigramCut(word: string): string[] {
+  if (word.length <= 2) return [word];
+  const chunks: string[] = [];
+  for (let i = 0; i + 2 <= word.length; i++) chunks.push(word.slice(i, i + 2));
+  chunks.push(word);
+  return [...new Set(chunks)];
+}
+
 /** 词块切分 + 可选的中文分词 / camelCase 拆分 */
 function tokenize(text: string, opts: TokenizeOptions): string[] {
   const raw = text.split(TOKEN_SPLIT).filter(Boolean);
   const out: string[] = [];
   for (const word of raw) {
-    if (opts.chsSegmenter && CJK_RE.test(word)) {
-      // search:true = 粒度更细的检索模式切分（含子词），索引查询两侧一致
-      for (const seg of opts.chsSegmenter.cut(word, { search: true })) {
+    if (CJK_RE.test(word)) {
+      // search:true = 粒度更细的检索模式切分（含子词），索引查询两侧一致；
+      // segmenter 不合规（插件实例没有 cut）同样走 bigram 降级
+      const segs =
+        typeof opts.chsSegmenter?.cut === "function"
+          ? opts.chsSegmenter.cut(word, { search: true })
+          : bigramCut(word);
+      for (const seg of segs) {
         out.push(seg);
         if (opts.splitCamel) out.push(...camelSplit(seg));
       }
