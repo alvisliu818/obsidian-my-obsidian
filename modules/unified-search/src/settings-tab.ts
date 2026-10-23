@@ -1,6 +1,42 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import { DEFAULT_SETTINGS } from "./settings";
+import { searchAnyTxt, searchEverything } from "./providers";
 import type { UnifiedSearchPlugin } from "./main";
+
+/** 自检：Everything 用一次极小查询验证端口与鉴权 */
+async function probeEverything(cfg: UnifiedSearchPlugin["settings"]["everything"]): Promise<boolean> {
+	try {
+		const hits: unknown[] = await searchEverything("a", {
+			baseUrl: cfg.baseUrl,
+			limit: 1,
+			username: cfg.username,
+			password: cfg.password,
+			timeoutMs: 3000,
+		});
+		// 拿到数组（哪怕 0 条）就说明服务端活着；连不上会 throw
+		return Array.isArray(hits);
+	} catch {
+		return false;
+	}
+}
+
+/** 自检：AnyTXT 发一次 GetResult，顺带回命中数 */
+async function probeAnyTxt(
+	cfg: UnifiedSearchPlugin["settings"]["anytxt"],
+): Promise<{ ok: boolean; count: number }> {
+	try {
+		const hits = await searchAnyTxt("the", {
+			url: cfg.url,
+			limit: 1,
+			filterDir: cfg.filterDir,
+			filterExt: cfg.filterExt,
+			timeoutMs: 3000,
+		});
+		return { ok: true, count: hits.length };
+	} catch {
+		return { ok: false, count: 0 };
+	}
+}
 
 export class UnifiedSearchSettingTab extends PluginSettingTab {
 	constructor(
@@ -102,6 +138,104 @@ export class UnifiedSearchSettingTab extends PluginSettingTab {
 						this.plugin.settings.maxAttachments = Math.max(0, Math.floor(Number(value) || 0));
 						await this.plugin.saveData(this.plugin.settings);
 					}),
+			);
+
+		containerEl.createEl("h3", { text: "外部搜索引擎（文件名 / 全文）" });
+		containerEl.createEl("p", {
+			text: "磁盘索引之外再挂两个本机引擎：Everything 秒搜全盘文件名，AnyTXT 搜文件内容（含 docx/pdf/图片 OCR）。结果合并进统一搜索面板，可用 ev: 只搜 Everything、at: 只搜 AnyTXT。工具没开或超时都不影响本地索引。",
+			cls: "setting-item-description",
+		});
+
+		new Setting(containerEl)
+			.setName("Everything（文件名）")
+			.setDesc("需要先在 Everything 里启用 HTTP 服务器：工具 → 选项 → HTTP 服务器，记下端口填这里。")
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.everything.enabled).onChange(async (v) => {
+					this.plugin.settings.everything.enabled = v;
+					await this.plugin.saveData(this.plugin.settings);
+					this.display();
+				}),
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder(DEFAULT_SETTINGS.everything.baseUrl)
+					.setValue(this.plugin.settings.everything.baseUrl)
+					.onChange(async (v) => {
+						this.plugin.settings.everything.baseUrl = v.trim();
+						await this.plugin.saveData(this.plugin.settings);
+					}),
+			)
+			.addButton((btn) =>
+				btn
+					.setButtonText("连通性自检")
+					.onClick(async () => {
+						const ok = await probeEverything(this.plugin.settings.everything);
+						new Notice(
+							ok
+								? "Everything 已连通"
+								: "Everything 连不上：确认已启用 HTTP 服务器且端口一致（工具→选项→HTTP 服务器）",
+						);
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName("AnyTXT（全文内容）")
+			.setDesc("ATGUI 运行时自带 JSON-RPC（默认 9920）。目录过滤填盘符或路径，如 E: ；留空则用服务端默认（实测默认 C:）。")
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.anytxt.enabled).onChange(async (v) => {
+					this.plugin.settings.anytxt.enabled = v;
+					await this.plugin.saveData(this.plugin.settings);
+					this.display();
+				}),
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder(DEFAULT_SETTINGS.anytxt.url)
+					.setValue(this.plugin.settings.anytxt.url)
+					.onChange(async (v) => {
+						this.plugin.settings.anytxt.url = v.trim();
+						await this.plugin.saveData(this.plugin.settings);
+					}),
+			)
+			.addButton((btn) =>
+				btn
+					.setButtonText("连通性自检")
+					.onClick(async () => {
+						const r = await probeAnyTxt(this.plugin.settings.anytxt);
+						new Notice(
+							r.ok
+								? `AnyTXT 已连通（试搜命中 ${r.count} 条）`
+								: "AnyTXT 连不上：确认 ATGUI 正在运行（RPC 在 ATGUI 进程内）",
+						);
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName("AnyTXT 目录过滤 / 扩展名过滤 / 取内容片段")
+			.setDesc("片段会逐条再请求一次，只对前 5 条做，开启后会明显变慢。")
+			.addText((text) =>
+				text
+					.setPlaceholder("E:")
+					.setValue(this.plugin.settings.anytxt.filterDir)
+					.onChange(async (v) => {
+						this.plugin.settings.anytxt.filterDir = v.trim();
+						await this.plugin.saveData(this.plugin.settings);
+					}),
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("*")
+					.setValue(this.plugin.settings.anytxt.filterExt)
+					.onChange(async (v) => {
+						this.plugin.settings.anytxt.filterExt = v.trim();
+						await this.plugin.saveData(this.plugin.settings);
+					}),
+			)
+			.addToggle((t) =>
+				t.setValue(this.plugin.settings.anytxt.snippet).onChange(async (v) => {
+					this.plugin.settings.anytxt.snippet = v;
+					await this.plugin.saveData(this.plugin.settings);
+				}),
 			);
 
 		new Setting(containerEl)

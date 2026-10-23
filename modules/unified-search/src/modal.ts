@@ -1,7 +1,11 @@
 import { SuggestModal, TFile } from "obsidian";
 import { compileQuery, type CompiledQuery } from "../../index-core/src/query";
 import { getItemContent, search, type SearchHit } from "../../index-core/src/searcher";
+import { searchExternal, type ExternalHit } from "./providers";
 import type { UnifiedSearchPlugin } from "./main";
+
+/** 只走某个外部源的前缀：`ev:` Everything（文件名）、`at:` AnyTXT（全文） */
+const PREFIX_RE = /^(ev|at):\s*(.+)$/s;
 
 /** 原文里定位 token 出现的区间（大小写不敏感），供高亮 */
 function findRanges(text: string, tokens: string[]): [number, number][] {
@@ -21,8 +25,11 @@ function findRanges(text: string, tokens: string[]): [number, number][] {
   return ranges;
 }
 
-/** 建议条目：真实命中 或 搜索历史（空查询时展示，选择后回填重搜） */
-export type Suggestion = ({ kind: "hit" } & SearchHit) | { kind: "history"; query: string };
+/** 建议条目：本地索引命中 / 外部源命中 / 搜索历史（空查询时展示） */
+export type Suggestion =
+	| ({ kind: "hit" } & SearchHit)
+	| ({ kind: "external" } & ExternalHit)
+	| { kind: "history"; query: string };
 
 /** 滑窗取 token 命中最密的 240 字符窗口起点（M2-4：多命中摘要，替代取首个命中） */
 function bestSnippetStart(content: string, tokens: string[], win = 240): number {
@@ -97,35 +104,79 @@ export class UnifiedSearchModal extends SuggestModal<Suggestion> {
     this.history = loadHistory(plugin.app.vault.getName());
   }
 
-  getSuggestions(query: string): Suggestion[] {
-    const q = query.trim();
-    // 空查询 → 历史（选择后回填输入框重搜，不关闭）
-    if (!q) return this.history.map((query) => ({ kind: "history" as const, query }));
-    try {
-      const compiled = compileQuery(q, this.plugin.getTokenizerOpts());
-      if (compiled.isEmpty) return [];
-      this.lastCompiled = compiled;
-      // 写会话（扫描/flush）中关 LIKE 兜底：部分索引必然落空，兜底只会白扫大库
-      return search(this.plugin.getService(), compiled, {
-        limit: 50,
-        likeThreshold: this.plugin.isWriteSession ? 0 : undefined,
-      }).map((hit) => ({
-        kind: "hit" as const,
-        ...hit,
-      }));
-    } catch (e) {
-      console.error("[unified-search] 搜索失败", e);
-      return [];
-    }
-  }
+	async getSuggestions(query: string): Promise<Suggestion[]> {
+		const q = query.trim();
+		// 空查询 → 历史（选择后回填输入框重搜，不关闭）
+		if (!q) return this.history.map((query) => ({ kind: "history" as const, query }));
+
+		// 前缀语法：`ev:` 只搜 Everything、`at:` 只搜 AnyTXT（跳过本地索引）
+		const prefix = PREFIX_RE.exec(q);
+		const onlySource = prefix ? (prefix[1] === "ev" ? "everything" : "anytxt") : null;
+		const text = prefix ? prefix[2].trim() : q;
+		if (!text) return [];
+
+		const local: Suggestion[] = [];
+		if (!onlySource) {
+			try {
+				const compiled = compileQuery(text, this.plugin.getTokenizerOpts());
+				if (!compiled.isEmpty) {
+					this.lastCompiled = compiled;
+					// 写会话（扫描/flush）中关 LIKE 兜底：部分索引必然落空，兜底只会白扫大库
+					local.push(
+						...search(this.plugin.getService(), compiled, {
+							limit: 50,
+							likeThreshold: this.plugin.isWriteSession ? 0 : undefined,
+						}).map((hit) => ({ kind: "hit" as const, ...hit })),
+					);
+				}
+			} catch (e) {
+				console.error("[unified-search] 搜索失败", e);
+			}
+		}
+
+		// 外部源：并行跑，单个源未开/超时一律空结果，绝不影响本地
+		const s = this.plugin.settings;
+		const wantEverything = onlySource ? onlySource === "everything" : s.everything.enabled;
+		const wantAnyTxt = onlySource ? onlySource === "anytxt" : s.anytxt.enabled;
+		let ext: ExternalHit[] = [];
+		if (wantEverything || wantAnyTxt) {
+			ext = await searchExternal(text, {
+				everything: { ...s.everything, enabled: wantEverything },
+				anytxt: { ...s.anytxt, enabled: wantAnyTxt },
+			});
+		}
+		const extHits: Suggestion[] = ext.map((hit) => ({ kind: "external" as const, ...hit }));
+		// 外部结果里的库内文件也能直接跳转：交给渲染层判断（路径转 vault 相对）
+		return [...local, ...extHits];
+	}
 
   renderSuggestion(s: Suggestion, el: HTMLElement): void {
-    if (s.kind === "history") {
-      const head = el.createDiv({ cls: "unified-search-head" });
-      head.createSpan({ cls: "unified-search-title", text: s.query });
-      head.createSpan({ cls: "unified-search-ext", text: "历史" });
-      return;
-    }
+		if (s.kind === "external") {
+			const head = el.createDiv({ cls: "unified-search-head" });
+			head.createSpan({ cls: "unified-search-title", text: s.name });
+			head.createSpan({
+				cls: "unified-search-ext",
+				text: s.source === "everything" ? "Everything" : "AnyTXT",
+			});
+			el.createDiv({ cls: "unified-search-path", text: s.path });
+			const meta = [
+				typeof s.size === "number" ? formatSize(s.size) : "",
+				typeof s.mtime === "number" ? formatDate(s.mtime) : "",
+			]
+				.filter(Boolean)
+				.join(" · ");
+			if (meta) el.createDiv({ cls: "unified-search-snippet", text: meta });
+			if (s.snippet) {
+				el.createDiv({ cls: "unified-search-snippet", text: s.snippet });
+			}
+			return;
+		}
+		if (s.kind === "history") {
+			const head = el.createDiv({ cls: "unified-search-head" });
+			head.createSpan({ cls: "unified-search-title", text: s.query });
+			head.createSpan({ cls: "unified-search-ext", text: "历史" });
+			return;
+		}
     const head = el.createDiv({ cls: "unified-search-head" });
     const tokens = this.lastCompiled?.tokens ?? [];
     const content = getItemContent(this.plugin.getService(), s.rowid);
@@ -144,17 +195,23 @@ export class UnifiedSearchModal extends SuggestModal<Suggestion> {
       this.inputEl.dispatchEvent(new Event("input"));
       return;
     }
-    this.recordHistory(this.inputEl.value.trim());
-    if (s.domain === "ext") {
-      // 库外文件：绝对路径，系统默认应用打开（deep 集成挂载树是 M2 的事）
-      const shell = (
-        (window as unknown as { require?: (m: string) => unknown }).require?.("electron") as
-          | { shell?: { openPath(p: string): Promise<string> } }
-          | undefined
-      )?.shell;
-      if (shell) void shell.openPath(s.path);
-      return;
-    }
+		this.recordHistory(this.inputEl.value.trim());
+		// 外部源命中：能用 Obsidian 打开的（库内文件）就内部打开，否则交给系统
+		if (s.kind === "external") {
+			const rel = this.toVaultRelative(s.path);
+			const file = rel ? this.plugin.app.vault.getAbstractFileByPath(rel) : null;
+			if (file instanceof TFile) {
+				void this.plugin.app.workspace.getLeaf("tab").openFile(file);
+				return;
+			}
+			openExternal(s.path);
+			return;
+		}
+		if (s.domain === "ext") {
+			// 库外文件：绝对路径，系统默认应用打开（deep 集成挂载树是 M2 的事）
+			openExternal(s.path);
+			return;
+		}
     const file = this.plugin.app.vault.getAbstractFileByPath(s.path);
     if (file instanceof TFile) {
       if (s.blockId) {
@@ -166,6 +223,16 @@ export class UnifiedSearchModal extends SuggestModal<Suggestion> {
     }
   }
 
+  /** 绝对路径 → vault 相对路径（不属于本库返回 null） */
+  private toVaultRelative(abs: string): string | null {
+    const base = (this.plugin.app.vault.adapter as unknown as { basePath?: string }).basePath;
+    if (!base) return null;
+    const normBase = base.replace(/\\/g, "/").replace(/\/+$/, "");
+    const normAbs = abs.replace(/\\/g, "/");
+    if (!normAbs.toLowerCase().startsWith(normBase.toLowerCase() + "/")) return null;
+    return normAbs.slice(normBase.length + 1);
+  }
+
   private recordHistory(query: string): void {
     if (!query) return;
     this.history = [query, ...this.history.filter((h) => h !== query)].slice(0, 20);
@@ -175,6 +242,29 @@ export class UnifiedSearchModal extends SuggestModal<Suggestion> {
       // 存储满等异常不影响搜索
     }
   }
+}
+
+/** 系统默认应用打开（Electron shell；不可用时静默失败） */
+function openExternal(path: string): void {
+  const shell = (
+    (window as unknown as { require?: (m: string) => unknown }).require?.("electron") as
+      | { shell?: { openPath(p: string): Promise<string> } }
+      | undefined
+  )?.shell;
+  if (shell) void shell.openPath(path);
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1048576).toFixed(1)} MB`;
+  return `${(bytes / 1073741824).toFixed(1)} GB`;
+}
+
+function formatDate(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function historyKey(vault: string): string {
