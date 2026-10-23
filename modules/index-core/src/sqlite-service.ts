@@ -235,7 +235,9 @@ export class SqliteService {
     db.exec("PRAGMA synchronous=NORMAL");
     db.exec("PRAGMA cache_size=-8000"); // 8MB 页缓存上限
     try {
-      db.exec("PRAGMA mmap_size=268435456"); // 读路径走 OS 页缓存
+      // 读路径走 OS 页缓存。64MB 而非 256MB：mmap 常驻计入 renderer 工作集，
+      // 索引是磁盘常驻设计，不该为读性能长期占着几百 MB（2026-10-24 内存实测）。
+      db.exec("PRAGMA mmap_size=67108864");
     } catch {
       // ignore
     }

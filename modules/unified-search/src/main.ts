@@ -23,6 +23,10 @@ import { UnifiedSearchModal } from "./modal";
  * 抢主线程。2026-10-23 事故：一批 200 个文件同步 read+upsert 连着跑，滚动文件
  * 列表都卡死，改成单文件粒度 + 空闲调度。
  */
+/** 单轮 flush 处理上限：网盘同步风暴/挂载批量落地时 dirty 可能几千条，一轮全做完
+ *  会连续吃 IO 与主线程好几分钟——只处理最近修改的一批，其余留 dirty 等下一轮 */
+const FLUSH_BUDGET = 800;
+
 function nextIdle(fallbackMs = 16, timeout = 150): Promise<void> {
 	return new Promise((resolve) => {
 		const w = window as unknown as {
@@ -201,6 +205,20 @@ export class UnifiedSearchPlugin extends Plugin {
 		return adapter.basePath ?? this.app.vault.getName();
 	}
 
+	/** 路径 → mtime（已删除/非文件返回 null） */
+	private mtimeOf(path: string): number | null {
+		const f = this.app.vault.getAbstractFileByPath(path);
+		return f instanceof TFile ? f.stat.mtime : null;
+	}
+
+	/**
+	 * 最近修改优先排序：正在编辑/刚改过的文件先收敛进索引，老文件让位。
+	 * 取不到 mtime（已删除）的排最后——它们只是走 removeFile 清理，很快。
+	 */
+	private sortPathsByRecent(paths: string[]): string[] {
+		return [...paths].sort((a, b) => (this.mtimeOf(b) ?? -Infinity) - (this.mtimeOf(a) ?? -Infinity));
+	}
+
 	private queueReindex(f: TAbstractFile): void {
 		if (!(f instanceof TFile) || (!isIndexable(f) && !isAttachment(f))) return;
 		this.dirty.add(f.path);
@@ -254,7 +272,16 @@ export class UnifiedSearchPlugin extends Plugin {
 					this.flushQueued = false;
 					const paths = [...this.dirty];
 					this.dirty.clear();
-					await this.reindexPaths(paths);
+					// 最近修改优先：正在编辑/刚同步进来的文件先收敛，老文件让位。
+					// 网盘同步风暴时 dirty 可能几千条——只处理最近的一批，其余回灌
+					// dirty 等下一轮（一轮跑完会持续吃 IO 与主线程好几分钟）
+					const ordered = this.sortPathsByRecent(paths);
+					const todo = ordered.length > FLUSH_BUDGET ? ordered.slice(0, FLUSH_BUDGET) : ordered;
+					if (todo.length < ordered.length) {
+						const keep = new Set(todo);
+						for (const p of ordered) if (!keep.has(p)) this.dirty.add(p);
+					}
+					await this.reindexPaths(todo);
 				} while (this.flushQueued && !this.unloaded);
 			});
 		} finally {
@@ -361,6 +388,11 @@ export class UnifiedSearchPlugin extends Plugin {
 				if (isIndexable(f)) files.push(f);
 				else if (isAttachment(f)) attachments.push(f);
 			}
+			// 最近修改优先：重建/首扫时先让最近在用的文件可搜，老文件排后面。
+			// 与 ext 域策略一致（用户偏好：最近文件优先，2026-10-24）
+			const byRecent = (a: TFile, b: TFile) => b.stat.mtime - a.stat.mtime;
+			files.sort(byRecent);
+			attachments.sort(byRecent);
 			console.debug(`[unified-search] 全量索引 ${files.length} 个文件 + ${attachments.length} 个附件…`);
 			const svc = this.getService();
 			// v2 升级一次性补齐存量 items 的 links/names（幂等；hash 门跳过的老文件靠它）
