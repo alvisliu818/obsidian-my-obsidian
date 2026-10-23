@@ -171,36 +171,43 @@ export async function searchAnyTxt(query: string, opts: AnyTxtOptions): Promise<
     },
     opts.timeoutMs,
   );
-  const files = (output?.files as Array<Record<string, unknown>> | undefined) ?? [];
-  const out: ExternalHit[] = [];
-  for (const f of files) {
-    const path = String(f.file ?? f.path ?? "");
+  // files 有两种形态（实测 1.3.x 给的是**二维数组 + field 表头**，老版本给对象
+  // 数组）：两种都兼容，否则整个结果集会被静默丢弃
+  const field = (output?.field as string[] | undefined) ?? [];
+  const rows = (output?.files as Array<unknown> | undefined) ?? [];
+  const out = new Map<string, ExternalHit & { fid?: string }>();
+  for (const raw of rows) {
+    const rec: Record<string, unknown> = Array.isArray(raw)
+      ? Object.fromEntries(field.map((k, i) => [k, (raw as unknown[])[i]]))
+      : (raw as Record<string, unknown>);
+    const path = String(rec.file ?? rec.path ?? "");
     if (!path) continue;
-    const size = Number(f.size);
-    const lm = Number(f.lastModify);
-    out.push({
+    const size = Number(rec.size);
+    const lm = Number(rec.lastModify);
+    const hit: ExternalHit & { fid?: string } = {
       source: "anytxt",
       path,
       name: path.split(/[\\/]/).pop() ?? path,
       size: Number.isFinite(size) ? size : undefined,
       mtime: lm > 1e12 ? lm : lm > 1e9 ? Math.round(lm * 1000) : undefined,
-      fid: String(f.fid ?? ""),
-    } as ExternalHit & { fid: string });
+      fid: String(rec.fid ?? ""),
+    };
+    out.set(path, hit);
   }
+  const hits = [...out.values()];
   // 片段：每条一次 RPC，只对前几条做（多了会明显变慢）
   if (opts.withSnippet) {
-    const n = Math.min(out.length, opts.snippetCount ?? 5);
+    const n = Math.min(hits.length, opts.snippetCount ?? 5);
     await Promise.all(
-      out.slice(0, n).map(async (hit) => {
-        const fid = (hit as unknown as { fid?: string }).fid;
-        if (!fid) return;
-        const frag = await anytxtRpc(opts.url, "GetFragment", { fid, pattern: query }, opts.timeoutMs);
+      hits.slice(0, n).map(async (hit) => {
+        if (!hit.fid) return;
+        const frag = await anytxtRpc(opts.url, "GetFragment", { fid: hit.fid, pattern: query }, opts.timeoutMs);
         const text = frag?.text;
         if (typeof text === "string" && text) hit.snippet = text.replace(/\s+/g, " ").slice(0, 240);
       }),
     );
   }
-  return out;
+  return hits;
 }
 
 /** 触发 AnyTXT 索引同步（新文件搜不到时用；无返回体，失败静默） */
