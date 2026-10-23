@@ -31,6 +31,23 @@ export type IndexedBlock = QueryBlock & {
   parentId: string;
 };
 
+/**
+ * Frozen empty-container singletons for the indexed pool.
+ *
+ * Measured on the main vault (8k-block sample of 986k): 100% of indexed
+ * blocks carry empty `tags`/`links`/`props`, 99% empty `blockProps`, 100%
+ * null `marker`. A fresh `[]`/`{}` per block costs ~50-70B of container
+ * overhead each — ~190MB of pure ballast at ~986k blocks. Sharing ONE frozen
+ * instance per container removes it; `Object.freeze` means an accidental
+ * mutation throws in strict mode instead of silently corrupting the shared
+ * pool (all consumers only read these — verified: no in-place mutation of
+ * `tags`/`links`/`props`/`blockProps` anywhere in the module).
+ */
+const EMPTY_TAGS = Object.freeze([]) as unknown as string[];
+const EMPTY_LINKS = Object.freeze([]) as unknown as string[];
+const EMPTY_PROPS = Object.freeze({}) as unknown as Record<string, string>;
+const EMPTY_BLOCK_PROPS = Object.freeze({}) as unknown as Record<string, string>;
+
 /** A flashcard: any block tagged #card. Children are the answer side. */
 export interface CardEntry {
   path: string;
@@ -464,10 +481,12 @@ export class BlockIndex {
         blockId: bf.id,
         text: bf.text,
         marker: bf.marker,
-        tags: bf.tags,
-        links: bf.links,
-        props: bf.props,
-        blockProps: bf.blockProps,
+        // Empty containers become shared frozen singletons — see the comment
+        // on EMPTY_TAGS above. Non-empty blocks keep their own instances.
+        tags: bf.tags.length ? bf.tags : EMPTY_TAGS,
+        links: bf.links.length ? bf.links : EMPTY_LINKS,
+        props: hasOwnKeys(bf.props) ? bf.props : EMPTY_PROPS,
+        blockProps: hasOwnKeys(bf.blockProps) ? bf.blockProps : EMPTY_BLOCK_PROPS,
         parentId: bf.parentId,
       };
       this.all.push(ib);
@@ -699,4 +718,10 @@ function buildSignatures(blocks: IndexedBlock[]): Uint32Array {
     }
   }
   return sig;
+}
+
+/** `Object.keys(o).length` without allocating the key array. */
+function hasOwnKeys(o: Record<string, string>): boolean {
+  for (const _ in o) return true;
+  return false;
 }
