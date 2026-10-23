@@ -65,9 +65,7 @@ ANALYZE：`analysis_limit=1000` 下 13s（全量扫描模式下大库不可用�
 
 ### 遗留事项
 
-- **库文件收缩**：rebuildInPlace drop 后 3.4GB 文件里 92%（3.1GB）是 freelist
-  空闲页，实际数据 ~250-400MB。SQLite 不自动归还——择机（关 Obsidian 或
-  空闲时）手动 `VACUUM` 一次即可缩回，之后网盘/备份成本大降。重建期间
-  主线程同步 VACUUM 会冻结，**不要放进启动路径**。
+- ✅ **库文件收缩（2026-10-23 21:2x 已做）**：退出 Obsidian 后 `VACUUM`
+  5.5s，**3388MB → 324MB**，freelist 清零，quick_check ok。
 - 重建期间 vault 仍在被网盘同步（新 md 持续进入，flushDirty 实时跟建），
   「重建完成」是动态稳态而非一次性事件；built==total 即为健康。
