@@ -1,6 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import { DEFAULT_SETTINGS } from "./settings";
-import { searchAnyTxt, searchEverything } from "./providers";
+import { searchAnyTxt, searchEverything, syncAnyTxtIndex } from "./providers";
 import type { UnifiedSearchPlugin } from "./main";
 
 /** 自检：Everything 用一次极小查询验证端口与鉴权 */
@@ -207,6 +207,18 @@ export class UnifiedSearchSettingTab extends PluginSettingTab {
 								? `AnyTXT 已连通（试搜命中 ${r.count} 条）`
 								: "AnyTXT 连不上：确认 ATGUI 正在运行（RPC 在 ATGUI 进程内）",
 						);
+					}),
+			)
+			.addButton((btn) =>
+				btn
+					.setButtonText("同步索引")
+					.setTooltip("新文件或目录刚加进索引范围时，先同步一次才搜得到（等价 AnyTXT 的「立即更新索引」）")
+					.onClick(async () => {
+						const ok = await syncAnyTxtIndex(
+							this.plugin.settings.anytxt.url,
+							this.plugin.settings.anytxt.filterDir,
+						);
+						new Notice(ok ? "AnyTXT 索引同步已触发" : "同步失败：ATGUI 未运行？");
 					}),
 			);
 
