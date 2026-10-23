@@ -73,13 +73,43 @@ export class IndexWriter {
     this.resolver = new LinkResolver(svc);
   }
 
+  /**
+   * stat 门（设计 §4.3：size → mtime 先于 content_hash）：files 表里记的
+   * mtime/size 与当前一致 → 内容必然已索引，调用方**免读文件**。启动扫描
+   * 全量重读盘（网盘上 1.2 万文件）就是漏了这层门导致的。
+   * size 未提供（ext 域清单只有 mtime）时只比 mtime。
+   */
+  statUnchanged(path: string, mtime: number, size?: number): boolean {
+    const row = this.svc.prepare("SELECT mtime, size FROM files WHERE path = ?").get(path) as
+      | { mtime: number | null; size: number | null }
+      | undefined;
+    if (!row || row.mtime === null || row.mtime !== mtime) return false;
+    if (size !== undefined && row.size !== null && row.size !== size) return false;
+    return true;
+  }
+
   /** 覆盖式写入一个文件（全删全插）。内容未变（hash 门）时零写入 */
   upsertFile(meta: FileMeta, rawContent: string): UpsertResult {
     const fileHash = contentHash(rawContent);
     const prev = this.svc.prepare("SELECT content_hash FROM sync_state WHERE path = ?").get(
       meta.path,
     ) as { content_hash: string } | undefined;
-    if (prev && prev.content_hash === fileHash) return { skipped: true };
+    if (prev && prev.content_hash === fileHash) {
+      // mtime/size 与库内不一致（同步盘 touch、mtime 抖动）：回写一行让
+      // statUnchanged 收敛——否则这种文件每次启动都会被重读+重 hash。
+      // 只动 files 行，不碰 items（UPDATE 会触发 FTS 触发器，代价不成比例）。
+      const stat = this.svc.prepare("SELECT mtime, size FROM files WHERE path = ?").get(meta.path) as
+        | { mtime: number | null; size: number | null }
+        | undefined;
+      if (stat && (stat.mtime !== meta.mtime || stat.size !== meta.size)) {
+        this.svc.prepare("UPDATE files SET mtime = ?, size = ? WHERE path = ?").run(
+          meta.mtime,
+          meta.size,
+          meta.path,
+        );
+      }
+      return { skipped: true };
+    }
 
     this.svc.transaction(() => {
       const existing = this.svc.prepare("SELECT rowid FROM files WHERE path = ?").get(meta.path) as

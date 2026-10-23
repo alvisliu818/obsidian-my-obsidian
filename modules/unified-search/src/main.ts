@@ -29,6 +29,8 @@ export class UnifiedSearchPlugin extends Plugin {
 	private dirtyTimer: number | null = null;
 	private scanning = false;
 	private unloaded = false;
+	/** 本次扫描实际写入的文件数（日志用；0 = stat 门下全程免读免写） */
+	private scanWritten = 0;
 
 	async onload(): Promise<void> {
 		const raw = (await this.loadData()) as Partial<UnifiedSearchSettings> | null;
@@ -159,11 +161,21 @@ export class UnifiedSearchPlugin extends Plugin {
 			const svc = this.getService();
 			// v2 升级一次性补齐存量 items 的 links/names（幂等；hash 门跳过的老文件靠它）
 			this.getWriter().backfillLinks();
-			svc.beginBulk();
+			// 疾速档只服务真首建（空库）。增量扫描走常规 WAL：否则每次启动都对
+			// 1GB 库跑 ANALYZE（全索引扫描+统计写回）——启动期磁盘风暴的写侧元凶。
+			const fileCount = (svc.prepare("SELECT count(*) AS c FROM files").get() as { c: number }).c;
+			const firstBuild = fileCount === 0;
+			if (firstBuild) svc.beginBulk();
+			this.scanWritten = 0;
 			await this.reindexFiles(files);
 			await this.reindexExtFiles();
-			svc.commitBulk();
-			console.debug(`[unified-search] 全量索引完成，${Date.now() - t0}ms`);
+			if (firstBuild) {
+				svc.commitBulk();
+			}
+			console.debug(
+				`[unified-search] 扫描完成：写入 ${this.scanWritten}，${Date.now() - t0}ms` +
+					(firstBuild ? "（首建疾速档）" : "（增量，stat 门免读未变文件）"),
+			);
 		} catch (e) {
 			console.error("[unified-search] 全量索引失败", e);
 		} finally {
@@ -193,11 +205,14 @@ export class UnifiedSearchPlugin extends Plugin {
 			const slice = list.slice(i, i + CHUNK);
 			await Promise.all(
 				slice.map(async (entry) => {
+					const norm = entry.abs.replace(/\\/g, "/");
+					// stat 门：mtime 未变免读（ext 清单只有 mtime，没有 size）
+					if (this.getWriter().statUnchanged(norm, entry.mtime)) return;
 					const read = readExternalText(entry.abs);
 					if (!read) return;
-					this.getWriter().upsertFile(
+					const done = this.getWriter().upsertFile(
 						{
-							path: entry.abs.replace(/\\/g, "/"),
+							path: norm,
 							domain: "ext",
 							mtime: read.mtime || entry.mtime,
 							size: read.size,
@@ -206,6 +221,7 @@ export class UnifiedSearchPlugin extends Plugin {
 						},
 						read.content,
 					);
+					if (!done.skipped) this.scanWritten++;
 					indexed++;
 				}),
 			);
@@ -214,7 +230,7 @@ export class UnifiedSearchPlugin extends Plugin {
 		console.debug(`[unified-search] ext 域完成：${indexed}/${list.length}`);
 	}
 
-	/** 灌库：300/批流式（读一批→索引一批→让出主线程一拍） */
+	/** 灌库：300/批流式（读一批→索引一批→让出主线程一拍）。stat 门免读未变文件 */
 	private async reindexFiles(files: TFile[]): Promise<void> {
 		const CHUNK = 300;
 		for (let i = 0; i < files.length; i += CHUNK) {
@@ -222,8 +238,13 @@ export class UnifiedSearchPlugin extends Plugin {
 			const slice = files.slice(i, i + CHUNK);
 			await Promise.all(
 				slice.map(async (file) => {
+					const meta = fileToMeta(file);
+					// stat 门（size→mtime 先于 hash，设计 §4.3）：未变文件不读盘。
+					// cachedRead 首读必然落磁盘（网盘 1.2 万文件），这是启动读风暴主力。
+					if (this.getWriter().statUnchanged(meta.path, meta.mtime, meta.size)) return;
 					const raw = await this.app.vault.cachedRead(file);
-					this.getWriter().upsertFile(fileToMeta(file), raw);
+					const done = this.getWriter().upsertFile(meta, raw);
+					if (!done.skipped) this.scanWritten++;
 				}),
 			);
 			await new Promise((resolve) => window.setTimeout(resolve, 0));
