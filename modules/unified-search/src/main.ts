@@ -34,8 +34,11 @@ export class UnifiedSearchPlugin extends Plugin {
 		this.settings = { ...DEFAULT_SETTINGS, ...raw };
 
 		this.addSettingTab(new UnifiedSearchSettingTab(this.app, this));
+		// id 不能用 "open"：无 manifest.id 覆盖的模块共用宿主命名空间
+		// （obsidian-my-obsidian:open 已被 momentum 占用，vault-explorer 的
+		// NOTICE.md 有记录）。open-search 避开。
 		this.addCommand({
-			id: "open",
+			id: "open-search",
 			name: "统一索引搜索",
 			callback: () => new UnifiedSearchModal(this).open(),
 		});
