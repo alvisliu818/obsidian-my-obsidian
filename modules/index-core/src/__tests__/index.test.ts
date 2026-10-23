@@ -8,12 +8,27 @@ import { IndexWriter, extractHeadings, extractTags, type FileMeta } from "../ind
 import { compileQuery, parseQuery } from "../query";
 import { getItemContent, search } from "../searcher";
 import { hasCJK, tokenizeForIndexing, type ChsSegmenter } from "../tokenize";
+import { parseLinks, resolveKeyOf } from "../links";
+import { SCHEMA_VERSION } from "../schema";
 
 const dirs: string[] = [];
 function makeDir(): string {
   const d = mkdtempSync(path.join(tmpdir(), "idx-core-idx-"));
   dirs.push(d);
   return d;
+}
+
+/** 测试文件元数据（path 必填，其余可覆盖） */
+function meta(partial: Partial<FileMeta> & { path: string }): FileMeta {
+  const title = partial.title ?? partial.path.split("/").pop()!.replace(/\.\w+$/, "");
+  return {
+    domain: "vault",
+    mtime: Date.now(),
+    size: 100,
+    ext: partial.path.split(".").pop()!.toLowerCase(),
+    title,
+    ...partial,
+  };
 }
 afterAll(() => {
   for (const d of dirs) {
@@ -133,6 +148,125 @@ describe("compileQuery", () => {
   });
 });
 
+describe("parseLinks / resolveKeyOf", () => {
+  it("wiki/embed/blockref/md 行内/org 提取；外部协议与纯锚点跳过", () => {
+    const links = parseLinks(
+      "[[笔记A]] ![[图.png]] [[笔记B#^abc]] [t](./子/笔记C.md) [外](https://x.y) [[#^self]] [[org页][o]]",
+      "md",
+    );
+    const kinds = links.map((l) => `${l.kind}:${l.target}`);
+    expect(kinds).toContain("wiki:笔记A");
+    expect(kinds).toContain("embed:图.png");
+    expect(kinds).toContain("blockref:笔记B");
+    expect(kinds).toContain("md:./子/笔记C.md");
+    expect(kinds.some((k) => k.includes("x.y"))).toBe(false);
+    expect(links.find((l) => l.target === "笔记B")?.anchor).toBe("^abc");
+    const org = parseLinks("[[org页][o]]", "org");
+    expect(org[0]).toMatchObject({ kind: "wiki", target: "org页" });
+  });
+
+  it("resolveKey：反斜杠归一、锚点剥离、小写、URL 解码", () => {
+    expect(resolveKeyOf("子dir/笔记 C.md#^x")).toBe("子dir/笔记 c.md");
+    expect(resolveKeyOf("A%20B.md")).toBe("a b.md");
+  });
+});
+
+describe("全域 links / names（schema v2）", () => {
+  let dbDir: string;
+  let svc: SqliteService;
+  let writer: IndexWriter;
+
+  beforeEach(() => {
+    dbDir = makeDir();
+    svc = new SqliteService({ dbDir, vaultSlug: "lk", fingerprint: "fp" });
+    writer = new IndexWriter(svc, {});
+  });
+
+  const linkRows = () =>
+    svc
+      .prepare(
+        "SELECT l.raw, l.kind, l.resolved, l.target_path, l.target_item, l.resolve_key FROM links l",
+      )
+      .all() as Array<Record<string, unknown>>;
+
+  it("schema v2：新库带 resolve_key 列；v1 库重开自动迁移", () => {
+    expect(svc.metaGet("schema_version")).toBe(String(SCHEMA_VERSION));
+    const cols = svc.prepare("PRAGMA table_info(links)").all() as Array<{ name: string }>;
+    expect(cols.some((c) => c.name === "resolve_key")).toBe(true);
+    // 模拟 v1 旧库：去掉列和版本，重开应自动补
+    svc.close();
+    const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
+    const raw = new DatabaseSync(path.join(dbDir, "lk.db"));
+    raw.exec("DROP INDEX IF EXISTS idx_links_rkey; ALTER TABLE links DROP COLUMN resolve_key;");
+    raw.prepare("UPDATE meta SET value='1' WHERE key='schema_version'").run();
+    raw.close();
+    const svc2 = new SqliteService({ dbDir, vaultSlug: "lk", fingerprint: "fp" });
+    const cols2 = svc2.prepare("PRAGMA table_info(links)").all() as Array<{ name: string }>;
+    expect(cols2.some((c) => c.name === "resolve_key")).toBe(true);
+    svc2.close();
+  });
+
+  it("链接立即解析（路径精确与 basename）+ vault 优先 ext", () => {
+    writer.upsertFile(meta({ path: "notes/目标.md", title: "目标" }), "内容");
+    writer.upsertFile(meta({ path: "ext/E:/other/目标.md", domain: "ext", title: "目标" }), "ext 内容");
+    writer.upsertFile(meta({ path: "src.md" }), "链接 [[目标]] 和 [md](notes/目标.md)");
+    const rows = linkRows();
+    expect(rows).toHaveLength(2);
+    for (const r of rows) {
+      expect(r.resolved).toBe(1);
+      expect(r.target_path).toBe("notes/目标.md"); // vault(0) 赢 ext(1)
+    }
+  });
+
+  it("悬空链接：目标落地后回查补解析；目标删除留 raw", () => {
+    writer.upsertFile(meta({ path: "a.md" }), "引用 [[缺失页]]");
+    expect(linkRows()[0].resolved).toBe(0);
+    writer.upsertFile(meta({ path: "dir/缺失页.md", title: "缺失页" }), "出现了");
+    expect(linkRows()[0].resolved).toBe(1);
+    expect(linkRows()[0].target_path).toBe("dir/缺失页.md");
+    // 删除目标：links 随其 items 级联消失的是它自己的出链；a.md 的入链留在悬空态
+    writer.removeFile("dir/缺失页.md");
+    const dangling = linkRows()[0];
+    expect(dangling.resolved).toBe(0);
+    expect(dangling.raw).toBe("[[缺失页]]");
+  });
+
+  it("removeFile 清 names；重名文件改名不残留", () => {
+    writer.upsertFile(meta({ path: "x/同名.md" }), "v1");
+    writer.upsertFile(meta({ path: "y/同名.md", title: "同名" }), "v2");
+    const names = svc.prepare("SELECT n.name, n.original, f.path FROM names n JOIN items i ON i.rowid=n.item_rowid JOIN files f ON f.rowid=i.file_rowid").all() as Array<Record<string, unknown>>;
+    expect(names).toHaveLength(2);
+    writer.removeFile("x/同名.md");
+    const left = svc.prepare("SELECT count(*) c FROM names").get() as { c: number };
+    expect(left.c).toBe(1);
+  });
+
+  it("backfillLinks：幂等，存量 items 补齐 links/names（模拟 v1 老库升级）", () => {
+    // 直插两个 item（绕过 writer 的 links 写入路径，模拟 v1 时代的存量数据）
+    svc.transaction(() => {
+      svc.prepare("INSERT INTO files (path, domain, title) VALUES ('p/甲.md', 'vault', '甲')").run();
+      svc.prepare("INSERT INTO files (path, domain, title) VALUES ('q/乙.md', 'vault', '乙')").run();
+      svc.prepare("INSERT INTO items (file_rowid, content, format) VALUES (1, '见 [[乙]] 和 [[无处]]', 'md')").run();
+      svc.prepare("INSERT INTO items (file_rowid, content, format) VALUES (2, '孤岛', 'md')").run();
+    });
+    writer.backfillLinks();
+    const rows = svc
+      .prepare("SELECT raw, resolved, target_path, resolve_key FROM links ORDER BY raw")
+      .all() as Array<{ raw: string; resolved: number; target_path: string | null; resolve_key: string }>;
+    expect(rows).toHaveLength(2);
+    const hit = rows.find((r) => r.raw === "[[乙]]")!;
+    expect(hit.resolved).toBe(1);
+    expect(hit.target_path).toBe("q/乙.md");
+    expect(rows.find((r) => r.raw === "[[无处]]")!.resolved).toBe(0);
+    const names = svc.prepare("SELECT count(*) c FROM names").get() as { c: number };
+    expect(names.c).toBe(2);
+    // 幂等：再跑一遍不重复
+    writer.backfillLinks();
+    const links2 = svc.prepare("SELECT count(*) c FROM links").get() as { c: number };
+    expect(links2.c).toBe(2);
+  });
+});
+
 describe("IndexWriter / search 集成", () => {
   let dbDir: string;
   let svc: SqliteService;
@@ -143,18 +277,6 @@ describe("IndexWriter / search 集成", () => {
     svc = new SqliteService({ dbDir, vaultSlug: "it", fingerprint: "fp" });
     writer = new IndexWriter(svc, {}); // 降级模式（无分词器）
   });
-
-  function meta(partial: Partial<FileMeta> & { path: string }): FileMeta {
-    const title = partial.title ?? partial.path.split("/").pop()!.replace(/\.\w+$/, "");
-    return {
-      domain: "vault",
-      mtime: Date.now(),
-      size: 100,
-      ext: partial.path.split(".").pop()!.toLowerCase(),
-      title,
-      ...partial,
-    };
-  }
 
   it("英文/中文整词命中；bm25 排序 title 优先", () => {
     writer.upsertFile(meta({ path: "a.md", title: "Unified notes" }), "unified search engine 正文");

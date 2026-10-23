@@ -83,6 +83,16 @@ export class UnifiedSearchModal extends SuggestModal<SearchHit> {
   }
 
   onChooseSuggestion(hit: SearchHit): void {
+    if (hit.domain === "ext") {
+      // 库外文件：绝对路径，系统默认应用打开（deep 集成挂载树是 M2 的事）
+      const shell = (
+        (window as unknown as { require?: (m: string) => unknown }).require?.("electron") as
+          | { shell?: { openPath(p: string): Promise<string> } }
+          | undefined
+      )?.shell;
+      if (shell) void shell.openPath(hit.path);
+      return;
+    }
     const file = this.plugin.app.vault.getAbstractFileByPath(hit.path);
     if (file instanceof TFile) {
       void this.plugin.app.workspace.getLeaf("tab").openFile(file);

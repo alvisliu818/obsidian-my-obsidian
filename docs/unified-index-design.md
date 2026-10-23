@@ -9,6 +9,14 @@
 > FTS 同步改 items 触发器自动维护（官方 external-content 触发器模式，应用层禁写
 > items_fts）；「MATCH 双跑」取消——查询编译器全权转译，用户输入永不直通 MATCH，
 > 注入安全由 fast-check 真库执行属性测试兜底；PRAGMA 增补 busy_timeout=3000。
+>
+> **2026-10-23 二修（M1 收尾）**：schema v2——links 增 `resolve_key` 列 + 未解析
+> 部分索引（悬空回查 O(log n)）；删除/覆盖写把目标文件的入链**退回悬空**（留 raw 等
+> re-resolve）；存量库升级走 `backfillLinks()`（三步：全量 names → 分块落
+> raw+key → resolveAllPending，内容已在库不重读文件，meta 门幂等）。ext 域接入：
+> 清单来自 logseq 模块 `listExternalSearchFiles()`（已剔除 vault 根/应用 include-
+> exclude），>1MB 头部 1MB，**仅全量扫描时刷新**（无 fs.watch，索引可重建）；
+> 索引库默认目录 `E:\HOME\Runtime\unified-index`。
 
 ## 0. 一句话
 

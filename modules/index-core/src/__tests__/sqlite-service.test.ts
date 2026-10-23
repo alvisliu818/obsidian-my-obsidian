@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { SqliteService, vaultSlugOf } from "../sqlite-service";
 import { contentHash } from "../fnv";
+import { SCHEMA_VERSION } from "../schema";
 
 const dirs: string[] = [];
 function makeDir(): string {
@@ -40,7 +41,7 @@ describe("SqliteService", () => {
     svc.ensureOpen();
     expect(svc.isOpen).toBe(true);
     expect(existsSync(svc.filePath)).toBe(true);
-    expect(svc.metaGet("schema_version")).toBe("1");
+    expect(svc.metaGet("schema_version")).toBe(String(SCHEMA_VERSION));
     expect(svc.metaGet("fingerprint")).toBe("fp1");
     svc.close();
   });
@@ -90,7 +91,7 @@ describe("SqliteService", () => {
     });
     probed.ensureOpen();
     expect(rebuilt).toBe(true);
-    expect(probed.metaGet("schema_version")).toBe("1");
+    expect(probed.metaGet("schema_version")).toBe(String(SCHEMA_VERSION));
     probed.close();
   });
 

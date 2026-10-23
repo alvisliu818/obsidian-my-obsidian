@@ -2,7 +2,7 @@
 // 设计见 docs/unified-index-design.md（external-content 列必须与 items 分词列同名同内容）
 
 /** 当前 schema 版本。每次破坏性变更 +1 并在 MIGRATIONS 追加迁移。 */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /** v1 全量建表。exec 支持多语句，按对象分组便于将来迁移逐个 drop/create。 */
 export const SCHEMA_OBJECTS: Record<string, string> = {
@@ -86,6 +86,15 @@ export const MIGRATIONS: { toVersion: number; statements: string[] }[] = [
   {
     toVersion: 1,
     statements: [...Object.values(SCHEMA_OBJECTS)],
+  },
+  {
+    // v2：links 增加解析键列 + 未解析部分索引（悬空回查 O(log n)，设计 §4.4）。
+    // resolve_key = 目标名 lower（相对路径或 basename），写入时预提取。
+    toVersion: 2,
+    statements: [
+      `ALTER TABLE links ADD COLUMN resolve_key TEXT;`,
+      `CREATE INDEX IF NOT EXISTS idx_links_rkey ON links(resolve_key) WHERE resolved = 0;`,
+    ],
   },
 ];
 

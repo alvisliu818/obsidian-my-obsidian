@@ -44,6 +44,18 @@ export class UnifiedSearchSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName("收录库外挂载文件")
+			.setDesc(
+				"把 logseq 模块挂载的库外文本文件纳入索引（>1MB 只索引头部 1MB；挂载内容无实时监听，改动后用「重建索引」刷新）。",
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.indexExt).onChange(async (value) => {
+					this.plugin.settings.indexExt = value;
+					await this.plugin.saveData(this.plugin.settings);
+				}),
+			);
+
+		new Setting(containerEl)
 			.setName("重建索引")
 			.setDesc("清空索引库并重新扫描全库（文件本身不会被改动）。")
 			.addButton((btn) =>

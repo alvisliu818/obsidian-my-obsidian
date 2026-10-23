@@ -10,6 +10,7 @@ import type { FileSystemAdapter } from "obsidian";
 import { SqliteService, vaultSlugOf } from "../../index-core/src/sqlite-service";
 import { IndexWriter } from "../../index-core/src/index-writer";
 import type { TokenizeOptions } from "../../index-core/src/tokenize";
+import { readExternalText } from "./extfs";
 import { DEFAULT_SETTINGS, type UnifiedSearchSettings } from "./settings";
 import { UnifiedSearchSettingTab } from "./settings-tab";
 import { fileToMeta, isIndexable } from "./indexer";
@@ -156,8 +157,11 @@ export class UnifiedSearchPlugin extends Plugin {
 			const files = this.app.vault.getFiles().filter((f) => isIndexable(f));
 			console.debug(`[unified-search] 全量索引 ${files.length} 个文件…`);
 			const svc = this.getService();
+			// v2 升级一次性补齐存量 items 的 links/names（幂等；hash 门跳过的老文件靠它）
+			this.getWriter().backfillLinks();
 			svc.beginBulk();
 			await this.reindexFiles(files);
+			await this.reindexExtFiles();
 			svc.commitBulk();
 			console.debug(`[unified-search] 全量索引完成，${Date.now() - t0}ms`);
 		} catch (e) {
@@ -165,6 +169,49 @@ export class UnifiedSearchPlugin extends Plugin {
 		} finally {
 			this.scanning = false;
 		}
+	}
+
+	/**
+	 * 库外挂载文件（ext 域）：清单元数据来自 logseq 模块的 listExternalSearchFiles
+	 * （已剔除 vault 根、应用挂载 include/exclude）。M1 只在全量扫描时刷新
+	 * （挂载树无 vault 事件，fs.watch 不做——索引是可重建投影）。
+	 */
+	private async reindexExtFiles(): Promise<void> {
+		if (!this.settings.indexExt || this.unloaded) return;
+		type ExtEntry = { abs: string; name: string; mtime: number };
+		const logseq = (this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } })
+			.plugins?.plugins?.["obsidian-logseq"] as
+			| { listExternalSearchFiles?: () => ExtEntry[] }
+			| undefined;
+		const list = logseq?.listExternalSearchFiles?.() ?? [];
+		if (!list.length) return;
+		console.debug(`[unified-search] ext 域 ${list.length} 个文件…`);
+		const CHUNK = 200;
+		let indexed = 0;
+		for (let i = 0; i < list.length; i += CHUNK) {
+			if (this.unloaded) return;
+			const slice = list.slice(i, i + CHUNK);
+			await Promise.all(
+				slice.map(async (entry) => {
+					const read = readExternalText(entry.abs);
+					if (!read) return;
+					this.getWriter().upsertFile(
+						{
+							path: entry.abs.replace(/\\/g, "/"),
+							domain: "ext",
+							mtime: read.mtime || entry.mtime,
+							size: read.size,
+							ext: (entry.name.split(".").pop() ?? "").toLowerCase(),
+							title: entry.name.replace(/\.\w+$/, ""),
+						},
+						read.content,
+					);
+					indexed++;
+				}),
+			);
+			await new Promise((resolve) => window.setTimeout(resolve, 0));
+		}
+		console.debug(`[unified-search] ext 域完成：${indexed}/${list.length}`);
 	}
 
 	/** 灌库：300/批流式（读一批→索引一批→让出主线程一拍） */
