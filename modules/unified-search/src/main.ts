@@ -13,7 +13,7 @@ import type { TokenizeOptions } from "../../index-core/src/tokenize";
 import { readExternalText } from "./extfs";
 import { DEFAULT_SETTINGS, type UnifiedSearchSettings } from "./settings";
 import { UnifiedSearchSettingTab } from "./settings-tab";
-import { fileToMeta, isIndexable } from "./indexer";
+import { fileToMeta, isAttachment, isIndexable } from "./indexer";
 import { UnifiedSearchModal } from "./modal";
 
 export class UnifiedSearchPlugin extends Plugin {
@@ -48,11 +48,14 @@ export class UnifiedSearchPlugin extends Plugin {
 
 		this.registerEvent(this.app.vault.on("create", (f) => this.queueReindex(f)));
 		this.registerEvent(this.app.vault.on("modify", (f) => this.queueReindex(f)));
+		// delete/rename 一律进 dirty 去抖（flush 时按磁盘真相收敛）：外部 CRUD
+		// （网盘同步）会风暴式触发，同步 removeFile 每事件一个 SQLite 事务会卡死主线程
 		this.registerEvent(this.app.vault.on("delete", (f) => {
-			this.writer?.removeFile(f.path);
+			this.dirty.add(f.path);
+			this.armFlush();
 		}));
 		this.registerEvent(this.app.vault.on("rename", (f, oldPath) => {
-			this.writer?.removeFile(oldPath);
+			this.dirty.add(oldPath);
 			this.queueReindex(f);
 		}));
 
@@ -150,26 +153,73 @@ export class UnifiedSearchPlugin extends Plugin {
 	}
 
 	private queueReindex(f: TAbstractFile): void {
-		if (!(f instanceof TFile) || !isIndexable(f)) return;
+		if (!(f instanceof TFile) || (!isIndexable(f) && !isAttachment(f))) return;
 		this.dirty.add(f.path);
+		this.armFlush();
+	}
+
+	/** 2.5s 去抖：窗口内事件合并，flush 一次按磁盘真相收敛。flushing 防两轮并发交错 */
+	private flushing = false;
+	private flushQueued = false;
+
+	private armFlush(): void {
+		if (this.flushing) {
+			this.flushQueued = true;
+			return;
+		}
 		if (this.dirtyTimer !== null) return;
 		this.dirtyTimer = window.setTimeout(() => {
 			this.dirtyTimer = null;
-			const paths = [...this.dirty];
-			this.dirty.clear();
-			void this.reindexPaths(paths);
+			void this.flushDirty();
 		}, 2500);
 	}
 
+	private async flushDirty(): Promise<void> {
+		if (this.flushing) return;
+		this.flushing = true;
+		try {
+			do {
+				this.flushQueued = false;
+				const paths = [...this.dirty];
+				this.dirty.clear();
+				await this.reindexPaths(paths);
+			} while (this.flushQueued && !this.unloaded);
+		} finally {
+			this.flushing = false;
+		}
+		if (this.dirty.size) this.armFlush();
+	}
+
+	/**
+	 * 去抖 flush：对 dirty 快照逐个收敛到磁盘真相（设计 §4.1 权威=磁盘）——
+	 * 可索引文件 upsert（stat 门免读未变）、附件 upsertAttachment（自带 size 门）、
+	 * 其余（已删除/文件夹/不可索引）removeFile 清理旧行（无旧行时空转，幂等）。
+	 * 时间预算让出：外部同步几千文件时，同步事务每 ≤24ms 让 8ms——单块不卡帧，
+	 * UI/输入始终可响应，整体只是慢（可让路给 Obsidian 自身的 metadata cache）。
+	 */
 	private async reindexPaths(paths: string[]): Promise<void> {
-		if (this.unloaded) return;
+		if (this.unloaded || !paths.length) return;
 		try {
 			const writer = this.getWriter();
+			let lastYield = performance.now();
 			for (const p of paths) {
+				if (this.unloaded) return;
 				const file = this.app.vault.getAbstractFileByPath(p);
 				if (file instanceof TFile && isIndexable(file)) {
-					const raw = await this.app.vault.cachedRead(file);
-					writer.upsertFile(fileToMeta(file), raw);
+					const meta = fileToMeta(file);
+					if (!writer.statUnchanged(meta.path, meta.mtime, meta.size)) {
+						const raw = await this.app.vault.cachedRead(file);
+						if (this.unloaded) return;
+						writer.upsertFile(meta, raw);
+					}
+				} else if (file instanceof TFile && isAttachment(file)) {
+					writer.upsertAttachment(fileToMeta(file));
+				} else {
+					writer.removeFile(p);
+				}
+				if (performance.now() - lastYield >= 24) {
+					await new Promise((resolve) => window.setTimeout(resolve, 8));
+					lastYield = performance.now();
 				}
 			}
 		} catch (e) {
@@ -182,8 +232,13 @@ export class UnifiedSearchPlugin extends Plugin {
 		this.scanning = true;
 		const t0 = Date.now();
 		try {
-			const files = this.app.vault.getFiles().filter((f) => isIndexable(f));
-			console.debug(`[unified-search] 全量索引 ${files.length} 个文件…`);
+			const files: TFile[] = [];
+			const attachments: TFile[] = [];
+			for (const f of this.app.vault.getFiles()) {
+				if (isIndexable(f)) files.push(f);
+				else if (isAttachment(f)) attachments.push(f);
+			}
+			console.debug(`[unified-search] 全量索引 ${files.length} 个文件 + ${attachments.length} 个附件…`);
 			const svc = this.getService();
 			// v2 升级一次性补齐存量 items 的 links/names（幂等；hash 门跳过的老文件靠它）
 			this.getWriter().backfillLinks();
@@ -194,6 +249,7 @@ export class UnifiedSearchPlugin extends Plugin {
 			if (firstBuild) svc.beginBulk();
 			this.scanWritten = 0;
 			await this.reindexFiles(files);
+			await this.reindexAttachments(attachments);
 			await this.reindexExtFiles();
 			if (firstBuild) {
 				svc.commitBulk();
@@ -274,6 +330,23 @@ export class UnifiedSearchPlugin extends Plugin {
 				}),
 			);
 			await new Promise((resolve) => window.setTimeout(resolve, 0));
+		}
+	}
+
+	/**
+	 * 附件灌库（M2-1）：不读内容，纯元数据行。upsertAttachment 自带 size 门，
+	 * stat 未变的附件连事务都不开（只有一次 SELECT）。时间预算让出同 reindexPaths。
+	 */
+	private async reindexAttachments(files: TFile[]): Promise<void> {
+		let lastYield = performance.now();
+		for (const file of files) {
+			if (this.unloaded) return;
+			const done = this.getWriter().upsertAttachment(fileToMeta(file));
+			if (!done.skipped) this.scanWritten++;
+			if (performance.now() - lastYield >= 24) {
+				await new Promise((resolve) => window.setTimeout(resolve, 8));
+				lastYield = performance.now();
+			}
 		}
 	}
 }

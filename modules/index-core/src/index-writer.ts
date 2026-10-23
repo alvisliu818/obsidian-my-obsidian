@@ -167,6 +167,70 @@ export class IndexWriter {
     return { skipped: false };
   }
 
+  /**
+   * 附件占位行（M2-1）：图片/PDF 等非可索引文件落 files 行 + 一个占位 item
+   * （content=""，t_title=文件名分词），names 照常注册 basename——LinkResolver
+   * 零改动即可把 ![[img.png]] embed 解析到目标（悬空大头），附件名也进 FTS 可搜。
+   * 不读文件内容、不入 sync_state：变更门只用 size（附件内容不进索引，变了
+   * 只是占位行元数据）。stat 门：size 未变只回写 mtime（同步盘 touch 收敛）。
+   */
+  upsertAttachment(meta: FileMeta): UpsertResult {
+    const existing = this.svc
+      .prepare("SELECT rowid, mtime, size FROM files WHERE path = ?")
+      .get(meta.path) as { rowid: number; mtime: number | null; size: number | null } | undefined;
+    if (existing && existing.size !== null && existing.size === meta.size) {
+      if (existing.mtime !== meta.mtime) {
+        this.svc
+          .prepare("UPDATE files SET mtime = ? WHERE rowid = ?")
+          .run(meta.mtime, existing.rowid);
+      }
+      return { skipped: true };
+    }
+    this.svc.transaction(() => {
+      let fileRowid: number;
+      if (existing) {
+        fileRowid = existing.rowid;
+        // 同 upsertFile 的重灌路径：names 手工清、入链退回悬空、items 级联退场
+        this.svc
+          .prepare("DELETE FROM names WHERE item_rowid IN (SELECT rowid FROM items WHERE file_rowid = ?)")
+          .run(fileRowid);
+        this.svc
+          .prepare(
+            `UPDATE links SET resolved = 0, target_path = NULL, target_item = NULL, target_root = NULL
+             WHERE resolved = 1 AND target_item IN (SELECT rowid FROM items WHERE file_rowid = ?)`,
+          )
+          .run(fileRowid);
+        this.svc.prepare("DELETE FROM items WHERE file_rowid = ?").run(fileRowid);
+        this.svc.prepare("UPDATE files SET mtime=?, size=?, ext=?, title=? WHERE rowid=?").run(
+          meta.mtime,
+          meta.size,
+          meta.ext,
+          meta.title,
+          fileRowid,
+        );
+      } else {
+        const info = this.svc
+          .prepare(
+            "INSERT INTO files (path, domain, mtime, size, ext, title) VALUES (?, ?, ?, ?, ?, ?)",
+          )
+          .run(meta.path, meta.domain, meta.mtime, meta.size, meta.ext, meta.title);
+        fileRowid = Number(info.lastInsertRowid);
+      }
+      const itemRowid = this.insertItem(fileRowid, {
+        title: meta.title,
+        content: "",
+        format: "md",
+        mtime: meta.mtime,
+      });
+      this.svc
+        .prepare("INSERT INTO names (name, original, item_rowid, precedence) VALUES (?, ?, ?, ?)")
+        .run(meta.title.toLowerCase(), meta.title, itemRowid, meta.domain === "vault" ? 0 : 1);
+      // 附件落地补解析指向它的悬空 embed/wiki（idx_links_rkey 回查）
+      this.resolver.resolvePendingFor(meta.path, meta.title);
+    });
+    return { skipped: false };
+  }
+
   removeFile(path: string): void {
     this.svc.transaction(() => {
       // names 无外键，先手工清（须在 files 删除、items 级联消失之前）

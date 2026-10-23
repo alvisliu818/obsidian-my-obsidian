@@ -154,7 +154,10 @@ export class LinkResolver {
   resolvePendingFor(path: string, title: string): void {
     const norm = path.trim().replace(/\\/g, "/").toLowerCase();
     const base = basenameKey(norm) || title.toLowerCase();
-    const keys = new Set([norm, base].filter(Boolean));
+    // 带扩展名 basename：`![[pic.png]]`/`[[note.md]]` 的 resolve_key 是它，
+    // 附件场景两头对不上就永远悬空（测试抓过）
+    const baseExt = norm.split("/").pop() ?? "";
+    const keys = new Set([norm, base, baseExt].filter(Boolean));
     const fileRow = this.svc.prepare("SELECT rowid, path FROM files WHERE lower(path) = ?").get(norm) as
       | { rowid: number; path: string }
       | undefined;

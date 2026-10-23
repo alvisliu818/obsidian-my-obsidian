@@ -338,6 +338,36 @@ describe("IndexWriter / search 集成", () => {
     expect(search(svc, compileQuery("path:y"))).toHaveLength(0);
   });
 
+  it("附件占位 item：embed 解析 + 附件名可搜 + size 门 + 删除退回悬空", () => {
+    writer.upsertFile(meta({ path: "n.md" }), "看图 ![[pic.png]]");
+    let link = svc.prepare("SELECT resolved, target_path FROM links").get() as {
+      resolved: number;
+      target_path: string | null;
+    };
+    expect(link.resolved).toBe(0); // 附件未落，悬空
+    writer.upsertAttachment(meta({ path: "assets/pic.png", size: 7 }));
+    link = svc.prepare("SELECT resolved, target_path FROM links").get() as typeof link;
+    expect(link.resolved).toBe(1);
+    expect(link.target_path).toBe("assets/pic.png");
+    // 附件名进 t_title 可搜（title 权重高排在前）；n.md 正文含 pic.png 原文也命中
+    const attHits = search(svc, compileQuery("pic")).map((h) => h.path);
+    expect(attHits[0]).toBe("assets/pic.png");
+    expect(attHits).toContain("n.md");
+    // size 门：同 size 跳过（mtime 抖动免疫），items/names 不翻倍
+    expect(writer.upsertAttachment(meta({ path: "assets/pic.png", size: 7, mtime: 999 })).skipped).toBe(true);
+    // size 变更：占位重建，仍恰一个 item
+    writer.upsertAttachment(meta({ path: "assets/pic.png", size: 8 }));
+    const c = svc
+      .prepare("SELECT count(*) c FROM items i JOIN files f ON f.rowid = i.file_rowid WHERE f.path = 'assets/pic.png'")
+      .get() as { c: number };
+    expect(c.c).toBe(1);
+    // 删除附件：入链退回悬空留 raw（同 md 文件语义）
+    writer.removeFile("assets/pic.png");
+    const after = svc.prepare("SELECT resolved, raw FROM links").get() as { resolved: number; raw: string };
+    expect(after.resolved).toBe(0);
+    expect(after.raw).toBe("![[pic.png]]");
+  });
+
   it("fast-check：任意串编译出的 MATCH 在真库上必可执行（注入安全）", () => {
     writer.upsertFile(meta({ path: "seed.md", title: "种子" }), "seed content 种子 内容 #tag");
     const queryChars = "abZ01 中文测试 #\"-*!():_.".split("");
