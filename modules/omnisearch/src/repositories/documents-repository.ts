@@ -16,6 +16,41 @@ import {
   warnVerbose,
 } from '../tools/utils'
 
+/**
+ * Read at most `limit` bytes from the head of `abs`, decoded as UTF-8.
+ * A truncated read may split one code point at the boundary — non-fatal
+ * decoding degrades the tail to a replacement char, irrelevant for search.
+ */
+function readHeadUtf8(
+  fs: {
+    openSync(p: string, flags: string): number
+    readSync(
+      fd: number,
+      buffer: Uint8Array,
+      offset: number,
+      length: number,
+      position: number | null,
+    ): number
+    closeSync(fd: number): void
+  },
+  abs: string,
+  limit: number,
+): string {
+  const buf = new Uint8Array(limit)
+  let fd = -1
+  try {
+    fd = fs.openSync(abs, 'r')
+    const n = fs.readSync(fd, buf, 0, limit, 0)
+    return new TextDecoder('utf8', { fatal: false }).decode(buf.subarray(0, n))
+  } finally {
+    try {
+      if (fd >= 0) fs.closeSync(fd)
+    } catch {
+      // close failure must not mask the read result
+    }
+  }
+}
+
 export class DocumentsRepository {
   /**
    * The "live cache", containing all indexed vault files
@@ -291,14 +326,36 @@ export class DocumentsRepository {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const fs = eval('require')('fs') as {
       readFileSync(p: string, enc: 'utf8'): string
-      statSync(p: string): { mtimeMs?: number }
+      statSync(p: string): { mtimeMs?: number; size?: number }
+      openSync?(p: string, flags: string): number
+      readSync?(
+        fd: number,
+        buffer: Uint8Array,
+        offset: number,
+        length: number,
+        position: number | null,
+      ): number
+      closeSync?(fd: number): void
     }
     const abs = absFromExternalDocPath(path)
+    // 大文件读头部 1MB 而非全文：外部挂载目录（实测有人挂整个盘/代码目录）
+    // 里混着大 md 时，启动期逐个 readFileSync 把 renderer 堆顶崩（readFileSync
+    // + toString 累计分配 ~380MB）。搜索覆盖头部 1MB 正文，尾部不进索引。
+    const HEAD_LIMIT = 1_000_000
     // 百度盘等网盘挂载下，文件随时可能被客户端锁定（EBUSY/EPERM）或正处于
     // 替换中（ENOENT）——读取失败不抛，返回 null 让调用方静默跳过。
     let content: string
     try {
-      content = fs.readFileSync(abs, 'utf8')
+      const size = fs.statSync(abs).size ?? 0
+      if (size > HEAD_LIMIT && fs.openSync && fs.readSync && fs.closeSync) {
+        content = readHeadUtf8(
+          { openSync: fs.openSync, readSync: fs.readSync, closeSync: fs.closeSync },
+          abs,
+          HEAD_LIMIT,
+        )
+      } else {
+        content = fs.readFileSync(abs, 'utf8')
+      }
     } catch {
       return null
     }

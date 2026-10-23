@@ -242,7 +242,7 @@ export class FolderIndexer {
         const CHUNK = 200;
         for (let i = 0; i < files.length; i += CHUNK) {
           for (const f of files.slice(i, i + CHUNK)) {
-            const frontmatter = readExternalFrontmatter(f.abs);
+            const frontmatter = readExternalFrontmatter(f.abs, f.size);
             const entry: ExternalFileEntry = {
               abs: f.abs,
               name: f.name,

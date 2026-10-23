@@ -14,7 +14,7 @@
  *     import 纯函数，extFs 对 Node 模块是懒加载的，插件加载时安全）。
  */
 
-import { scanExternal, readExternalText } from '../../../logseq/src/features/extFs';
+import { scanExternal, readExternalText, readExternalTextHead } from '../../../logseq/src/features/extFs';
 import { compileFilter, entryMatches, dirPruned } from '../../../logseq/src/features/mountFilter';
 
 /** 一个参与抽象文件夹图的库外文件。键（FileGraph 里的 key）= abs。 */
@@ -310,10 +310,22 @@ export function listExternalMarkdownFiles(
   return { files, truncated };
 }
 
-/** 读一个库外 md 的 frontmatter；读不到/解析不了返回 {}。 */
-export function readExternalFrontmatter(abs: string): Record<string, unknown> {
+/**
+ * 读一个库外 md 的 frontmatter；读不到/解析不了返回 {}。
+ *
+ * 这里只需要文件头部的 YAML 块，但旧实现 readFileSync 全文——外部挂载
+ * 目录里混着大 md 时，启动期全量索引把 renderer 堆顶崩（readFileSync +
+ * toString 累计分配 ~380MB，白屏主因之一）。超过 512KB 的文件只读头部
+ * 256KB：frontmatter 在文件头，功能无损；截断可能切坏一个码点，对
+ * YAML 扫描无影响。
+ */
+export function readExternalFrontmatter(abs: string, size?: number): Record<string, unknown> {
   try {
-    return parseFrontmatterBlock(readExternalText(abs)) ?? {};
+    const text =
+      size != null && size > 512_000
+        ? readExternalTextHead(abs, 262_144)
+        : readExternalText(abs);
+    return parseFrontmatterBlock(text) ?? {};
   } catch {
     return {};
   }

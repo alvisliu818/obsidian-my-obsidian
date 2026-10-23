@@ -38,6 +38,18 @@ export interface NodeFsLike {
   /** Binary-safe single-file copy (Node fs.copyFileSync)。文本接口会把
    *  二进制文件写坏，复制必须走这个。 */
   copyFileSync?(from: string, to: string): void;
+  /** Optional: partial read for large files (head only). Production Node fs
+   *  always has these; structural fakes in tests that never exercise them
+   *  can omit them. */
+  openSync?(p: string, flags: string): number;
+  readSync?(
+    fd: number,
+    buffer: Uint8Array,
+    offset: number,
+    length: number,
+    position: number | null,
+  ): number;
+  closeSync?(fd: number): void;
 }
 
 export interface DirentLike {
@@ -398,10 +410,51 @@ export function readExternalText(abs: string): string {
   return fsMod().readFileSync(abs, 'utf8');
 }
 
+/**
+ * Read at most `limit` bytes from the HEAD of a file, decoded as UTF-8.
+ *
+ * Why: external-mount indexing only needs each file's frontmatter / heading
+ * region, but the naive `readFileSync(abs, 'utf8')` pulls the WHOLE file —
+ * measured ~380MB of transient allocations when a mount contains large
+ * markdown, which is what pushed the main-vault renderer over the edge.
+ *
+ * A truncated read may split one UTF-8 code point at the boundary; the
+ * decoder is non-fatal so the tail degrades to a replacement character —
+ * irrelevant for frontmatter/YAML scanning.
+ *
+ * Throws when the injected fs fake lacks the partial-read methods (tests that
+ * never exercise large files) — callers must treat that as "not read".
+ */
+export function readExternalTextHead(abs: string, limit: number): string {
+  const fs = fsMod();
+  if (!fs.openSync || !fs.readSync || !fs.closeSync) {
+    throw new Error('readExternalTextHead: fs lacks partial-read methods');
+  }
+  const buf = new Uint8Array(limit);
+  let fd = -1;
+  try {
+    fd = fs.openSync(abs, 'r');
+    const n = fs.readSync(fd, buf, 0, limit, 0);
+    return new TextDecoder('utf8', { fatal: false }).decode(buf.subarray(0, n));
+  } finally {
+    try {
+      if (fd >= 0) fs.closeSync(fd);
+    } catch {
+      /* close failure must not mask the read result */
+    }
+  }
+}
+
 /** Overwrite a text file outside the vault. Throws on failure. */
 export function writeExternalText(abs: string, data: string): void {
   fsMod().writeFileSync(abs, data, 'utf8');
 }
+
+// ---------------------------------------------------------------------------
+// Binary files at arbitrary absolute paths (SQLite index snapshot 等)。
+// vault.adapter 的路径全部相对库根解析（见文件头注释），绝对路径必须走
+// Node fs —— readExternalBinary / writeExternalBinary（下方原有）即是。
+// ---------------------------------------------------------------------------
 
 /**
  * 写二进制文件（粘贴/拖入的图片等）到库外，返回可诊断的结果而非抛异常。
