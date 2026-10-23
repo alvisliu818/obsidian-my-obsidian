@@ -52,7 +52,8 @@ export const DEFAULT_SETTINGS: UnifiedSearchSettings = {
 	maxAttachments: 5000,
 	everything: {
 		enabled: false,
-		baseUrl: "http://127.0.0.1:8080",
+		// 端口与 Everything 的 HTTP 服务器设置一致（Everything 默认是 80）
+		baseUrl: "http://127.0.0.1:80",
 		username: "",
 		password: "",
 		limit: 20,

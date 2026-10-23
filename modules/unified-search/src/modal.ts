@@ -201,7 +201,7 @@ export class UnifiedSearchModal extends SuggestModal<Suggestion> {
 			const rel = this.toVaultRelative(s.path);
 			const file = rel ? this.plugin.app.vault.getAbstractFileByPath(rel) : null;
 			if (file instanceof TFile) {
-				void this.plugin.app.workspace.getLeaf("tab").openFile(file);
+				this.openFileReuse(file);
 				return;
 			}
 			openExternal(s.path);
@@ -218,9 +218,26 @@ export class UnifiedSearchModal extends SuggestModal<Suggestion> {
         // 块级命中：带 #^id 锚点打开，Obsidian 定位到块（锚点解析不出时回落开文件）
         void this.plugin.app.workspace.openLinkText(`${s.path}#^${s.blockId}`, "");
       } else {
-        void this.plugin.app.workspace.getLeaf("tab").openFile(file);
+        this.openFileReuse(file);
       }
     }
+  }
+
+  /**
+   * 打开文件：已打开的（含库外挂载文件在库内的映射）直接激活原标签，不再新建。
+   * 原实现每次都 `getLeaf("tab").openFile()`，反复点同一条结果会堆出一排重复
+   * 标签页（2026-10-24）。
+   */
+  private openFileReuse(file: TFile): void {
+    const ws = this.plugin.app.workspace;
+    const existing = ws
+      .getLeavesOfType("markdown")
+      .find((l) => (l.view as unknown as { file?: TFile }).file?.path === file.path);
+    if (existing) {
+      void ws.setActiveLeaf(existing, { focus: true });
+      return;
+    }
+    void ws.getLeaf("tab").openFile(file);
   }
 
   /** 绝对路径 → vault 相对路径（不属于本库返回 null） */
