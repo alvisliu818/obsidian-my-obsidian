@@ -406,6 +406,54 @@ describe("schema v3：files(lower(path)) 表达式索引（防链接解析全表
   });
 });
 
+describe("附件占位行上限（pruneAttachments）", () => {
+  let dbDir: string;
+  let svc: SqliteService;
+  let writer: IndexWriter;
+
+  beforeEach(() => {
+    dbDir = makeDir();
+    svc = new SqliteService({ dbDir, vaultSlug: "at", fingerprint: "fp" });
+    writer = new IndexWriter(svc, {});
+  });
+
+  it("只保留最近 N 条；names 不残留、指向被裁附件的入链退回悬空", async () => {
+    writer.upsertAttachment(meta({ path: "a/1.png", title: "1", mtime: 100 }));
+    writer.upsertAttachment(meta({ path: "a/2.png", title: "2", mtime: 200 }));
+    writer.upsertAttachment(meta({ path: "a/3.png", title: "3", mtime: 300 }));
+    // 一条指向最老附件的 embed：裁剪后应退回悬空（附件只留元数据，无内容可查）
+    writer.upsertFile(meta({ path: "n.md" }), "见图 ![[1.png]]");
+    expect(
+      (svc.prepare("SELECT count(*) AS c FROM links WHERE resolved=1").get() as { c: number }).c,
+    ).toBe(1);
+
+    const removed = await writer.pruneAttachments(2);
+    expect(removed).toBe(1);
+    const left = svc
+      .prepare("SELECT path FROM files WHERE domain='vault' AND ext='png' ORDER BY mtime")
+      .all() as Array<{ path: string }>;
+    expect(left.map((r) => r.path)).toEqual(["a/2.png", "a/3.png"]);
+    // names 无外键：必须被手工清掉，否则留下悬空名字行
+    expect(
+      (svc.prepare("SELECT count(*) AS c FROM names WHERE name='1'").get() as { c: number }).c,
+    ).toBe(0);
+    const link = svc.prepare("SELECT resolved, raw FROM links").get() as {
+      resolved: number;
+      raw: string;
+    };
+    expect(link.resolved).toBe(0);
+    expect(link.raw).toBe("![[1.png]]"); // raw 保留，等附件重新落地可回查
+  });
+
+  it("未超限不动库；md/org 文件不受附件裁剪影响", async () => {
+    writer.upsertFile(meta({ path: "note.md" }), "正文");
+    writer.upsertAttachment(meta({ path: "a/1.png", title: "1", mtime: 100 }));
+    expect(await writer.pruneAttachments(10)).toBe(0);
+    const files = svc.prepare("SELECT path FROM files ORDER BY path").all() as Array<{ path: string }>;
+    expect(files.map((f) => f.path)).toEqual(["a/1.png", "note.md"]);
+  });
+});
+
 describe("IndexWriter / search 集成", () => {
   let dbDir: string;
   let svc: SqliteService;

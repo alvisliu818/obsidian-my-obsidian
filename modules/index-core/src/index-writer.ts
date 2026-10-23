@@ -239,6 +239,45 @@ export class IndexWriter {
     return { skipped: false };
   }
 
+  /**
+   * 附件占位行上限治理（用户偏好：索引一律设上限，2026-10-24）。只保留最近
+   * 修改的 keep 条 vault 附件行，超出的删除：names 无外键要手工清、指向它们的
+   * 入链退回悬空、items 随外键级联退场（FTS 随触发器退场）。
+   *
+   * 代价：被裁掉的旧附件 `![[img.png]]` embed 会退回悬空态（附件不读内容，
+   * 占位行的唯一价值就是给 embed 提供解析目标）。分批 + 让步：一次删几万行
+   * 会把主线程冻结（白屏纪律）。
+   */
+  async pruneAttachments(keep: number): Promise<number> {
+    if (keep < 0) return 0;
+    const where = "domain='vault' AND ext NOT IN ('md','org')";
+    const doomed = this.svc
+      .prepare(`SELECT rowid FROM files WHERE ${where} ORDER BY mtime DESC LIMIT -1 OFFSET ?`)
+      .all(keep) as Array<{ rowid: number }>;
+    if (!doomed.length) return 0;
+    const CHUNK = 500;
+    let removed = 0;
+    for (let i = 0; i < doomed.length; i += CHUNK) {
+      const ids = doomed.slice(i, i + CHUNK).map((r) => r.rowid);
+      const ph = ids.map(() => "?").join(",");
+      const itemsOf = `SELECT rowid FROM items WHERE file_rowid IN (${ph})`;
+      this.svc.transaction(() => {
+        this.svc.prepare(`DELETE FROM names WHERE item_rowid IN (${itemsOf})`).run(...ids);
+        this.svc
+          .prepare(
+            `UPDATE links SET resolved = 0, target_path = NULL, target_item = NULL, target_root = NULL
+             WHERE resolved = 1 AND target_item IN (${itemsOf})`,
+          )
+          .run(...ids);
+        this.svc.prepare(`DELETE FROM files WHERE rowid IN (${ph})`).run(...ids);
+      });
+      removed += ids.length;
+      await new Promise((resolve) => setTimeout(resolve, 8));
+    }
+    console.debug(`[unified-search] 附件行裁剪：删除 ${removed} 条（保留最近 ${keep}）`);
+    return removed;
+  }
+
   removeFile(path: string): void {
     this.svc.transaction(() => {
       // names 无外键，先手工清（须在 files 删除、items 级联消失之前）

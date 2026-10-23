@@ -72,6 +72,39 @@ export class UnifiedSearchSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName("收录上限：库外挂载文件 / 库内文件 / 附件")
+			.setDesc(
+				"各类索引的数量上限，一律「最近修改优先」，超出部分不索引（附件的超限旧行会被裁掉，其 embed 链接退回悬空）。0 = 不限。改动后重启 Obsidian 或重建索引生效。",
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder(String(DEFAULT_SETTINGS.maxExtFiles))
+					.setValue(String(this.plugin.settings.maxExtFiles))
+					.onChange(async (value) => {
+						this.plugin.settings.maxExtFiles = Math.max(0, Math.floor(Number(value) || 0));
+						await this.plugin.saveData(this.plugin.settings);
+					}),
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder(String(DEFAULT_SETTINGS.maxVaultFiles))
+					.setValue(String(this.plugin.settings.maxVaultFiles))
+					.onChange(async (value) => {
+						this.plugin.settings.maxVaultFiles = Math.max(0, Math.floor(Number(value) || 0));
+						await this.plugin.saveData(this.plugin.settings);
+					}),
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder(String(DEFAULT_SETTINGS.maxAttachments))
+					.setValue(String(this.plugin.settings.maxAttachments))
+					.onChange(async (value) => {
+						this.plugin.settings.maxAttachments = Math.max(0, Math.floor(Number(value) || 0));
+						await this.plugin.saveData(this.plugin.settings);
+					}),
+			);
+
+		new Setting(containerEl)
 			.setName("重建索引")
 			.setDesc("清空索引库并重新扫描全库（文件本身不会被改动）。")
 			.addButton((btn) =>

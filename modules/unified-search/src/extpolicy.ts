@@ -67,9 +67,10 @@ export function isExtIndexable(abs: string): boolean {
  * 清单 → 实际收录清单：过滤 → 最近修改优先 → 截断到上限。
  * 返回项保持 `{abs, name, mtime}`，调用方再按 mtime 走 stat 门。
  */
-export function selectExternalFiles(list: ExtEntry[]): ExtEntry[] {
+export function selectExternalFiles(list: ExtEntry[], max = EXT_MAX_FILES): ExtEntry[] {
   const kept = list.filter((e) => e.abs && isExtIndexable(e.abs));
   // mtime 倒序：上限截断时保留最近改动的（比按目录顺序截断有用得多）
   kept.sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0));
-  return kept.length > EXT_MAX_FILES ? kept.slice(0, EXT_MAX_FILES) : kept;
+  const limit = max > 0 ? max : kept.length; // 0 = 不限
+  return kept.length > limit ? kept.slice(0, limit) : kept;
 }

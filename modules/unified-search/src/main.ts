@@ -11,7 +11,7 @@ import { SqliteService, vaultSlugOf } from "../../index-core/src/sqlite-service"
 import { IndexWriter } from "../../index-core/src/index-writer";
 import type { TokenizeOptions } from "../../index-core/src/tokenize";
 import { readExternalText, statExternalSize } from "./extfs";
-import { EXT_MAX_BYTES, EXT_MAX_FILES, selectExternalFiles } from "./extpolicy";
+import { EXT_MAX_BYTES, selectExternalFiles } from "./extpolicy";
 import { DEFAULT_SETTINGS, type UnifiedSearchSettings } from "./settings";
 import { UnifiedSearchSettingTab } from "./settings-tab";
 import { fileToMeta, isAttachment, isIndexable } from "./indexer";
@@ -393,6 +393,17 @@ export class UnifiedSearchPlugin extends Plugin {
 			const byRecent = (a: TFile, b: TFile) => b.stat.mtime - a.stat.mtime;
 			files.sort(byRecent);
 			attachments.sort(byRecent);
+			// 收录上限（最近修改优先）：保护性闸门，防清单异常膨胀把库撑爆
+			const maxVault = this.settings.maxVaultFiles;
+			const maxAtt = this.settings.maxAttachments;
+			const todoFiles = maxVault > 0 ? files.slice(0, maxVault) : files;
+			const todoAtt = maxAtt > 0 ? attachments.slice(0, maxAtt) : attachments;
+			if (todoFiles.length < files.length || todoAtt.length < attachments.length) {
+				console.warn(
+					`[unified-search] 收录上限生效：文件 ${todoFiles.length}/${files.length}` +
+						`，附件 ${todoAtt.length}/${attachments.length}（只索引最近修改的）`,
+				);
+			}
 			console.debug(`[unified-search] 全量索引 ${files.length} 个文件 + ${attachments.length} 个附件…`);
 			const svc = this.getService();
 			// v2 升级一次性补齐存量 items 的 links/names（幂等；hash 门跳过的老文件靠它）
@@ -419,8 +430,10 @@ export class UnifiedSearchPlugin extends Plugin {
 			if (!rebuilding) {
 				await this.getWriter().backfillBlocks();
 			}
-			await this.reindexFiles(files);
-			await this.reindexAttachments(attachments);
+			await this.reindexFiles(todoFiles);
+			await this.reindexAttachments(todoAtt);
+			// 附件超限治理：库里存量超限的老附件行裁掉（只保留最近 max 条）
+			if (maxAtt > 0) await this.getWriter().pruneAttachments(maxAtt);
 			await this.reindexExtFiles(true);
 			if (rebuilding) {
 				svc.commitBulk();
@@ -462,14 +475,15 @@ export class UnifiedSearchPlugin extends Plugin {
 			| { listExternalSearchFiles?: () => ExtEntry[] }
 			| undefined;
 		const rawList = logseq?.listExternalSearchFiles?.() ?? [];
+		const maxExt = this.settings.maxExtFiles;
 		// 策略闸门（extpolicy）：文本白名单 + 依赖/构建目录排除 + 数量与体积上限。
 		// 挂载清单失控时（实测 4 万+ 个 py/pyc/ts）这里就把绝大多数挡在门外。
-		const list = selectExternalFiles(rawList);
+		const list = selectExternalFiles(rawList, maxExt);
 		if (!list.length) return;
 		console.debug(
 			`[unified-search] ext 域 ${list.length}/${rawList.length} 个文件` +
 				(list.length < rawList.length
-					? `（策略过滤 ${rawList.length - list.length}，上限 ${EXT_MAX_FILES}）`
+					? `（策略过滤 ${rawList.length - list.length}，上限 ${maxExt || "不限"}）`
 					: "") +
 				"…",
 		);
