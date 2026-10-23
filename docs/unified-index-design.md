@@ -170,6 +170,29 @@ fts5vocab）；验收 1（fast-check 真库执行取代 oracle diff）；容错 
 
 ## 11. M2 待办（2026-10-23 M1 交付后盘点）
 
+**M2 已全部交付（2026-10-23）**，落地记录：
+
+1. ✅ 附件 files 行（85e8960c 前的 M2-1，占位 item 方案）——附件 embed 解析、
+   附件名可搜；实测消解悬空链接大头
+2. ✅ 块级拆分（85e8960c）——blocks.ts 解析器（只拆带 `id::` 的块）、
+   `[[file#^id]]` 解析到块 item（target_root=文件级）、搜索同文件去重块命中优先、
+   modal 块级徽标 + `#^id` 锚点定位、存量库 backfillBlocks（分批让步）
+3. ✅ ext 域增量（M2-3）——周期刷新 + 设置 + 手动命令
+4. ✅ 反链查询与 UI 深化（M2-4）——`backlink:` 语法（target_item/悬空键双路）、
+   搜索历史（localStorage ≤20 条）、snippet 多命中窗口
+5. ✅ 大库性能基准（M2-5，eaef434d）——`_diag-us-bench.mjs`，结果与修复见
+   [unified-index-bench.md](unified-index-bench.md)：降级分词根治（内置 bigram/
+   指纹 usc2）、真分词后 MATCH CJK 6.7ms、LIKE 59ms、backlink 73ms
+6. ✅ logseq 快照迁移 node:sqlite（d2e505bc）——SqliteRuntimeLike 抽象 +
+   NodeSqliteRuntime 桌面直连（免镜像导入导出），移动端自动降级 wa-sqlite
+7. ⬜ **移动端后端**（三期）：wa-sqlite/官方 wasm + OPFS VFS，repository 接口已预留
+   WasmSqliteBackend 位。
+
+M2 交付过程的工程教训（白屏/内存/重建调度）与实测数据见
+[unified-index-bench.md](unified-index-bench.md) 与 memory/2026-10-23.md。
+
+---
+
 M1 已交付：index-core 本体（v2 schema/触发器 FTS/分词/查询编译器/写入/检索/links）、
 unified-search 模块（模态框/vault 事件/ext 域/设置页）。主库实测：12619 items
 （vault 8419 + ext 4200）、links 59722（resolved 30.5%）、DB 956MB、静息堆较
