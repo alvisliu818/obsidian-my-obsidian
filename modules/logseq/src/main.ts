@@ -1270,6 +1270,11 @@ export default class LogseqEditorPlugin extends Plugin {
     this.sqliteIndex = new SqliteIndex({
       source,
       snapshot: this.settings.sqlitePersist ? snapshot : null,
+      // 桌面端 node:sqlite 直连（M2-6）：磁盘文件即库，免快照镜像导入导出；
+      // node:sqlite 缺席（移动端/旧 Electron）时 doOpen 自动降级回 wa-sqlite，
+      // 降级后 snapshot 照常接管（快照路径 = nodeDbPath 同一文件）
+      useNodeSqlite: Platform.isDesktopApp,
+      nodeDbPath: this.sqliteDbPath,
     });
     if (!this.settings.sqliteAutoSync) return;
 

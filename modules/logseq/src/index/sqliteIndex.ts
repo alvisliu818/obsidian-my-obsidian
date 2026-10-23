@@ -17,6 +17,8 @@
  */
 
 import { extractFile, type FileFacts } from './fileFacts';
+import { destroyNodeSqliteFile, NodeSqliteRuntime } from './nodeSqlite';
+import type { SqliteRuntimeLike } from './sqliteRuntime';
 import { SqliteRuntime } from './waSqlite';
 import {
   DB_FILE,
@@ -51,6 +53,14 @@ export interface SqliteIndexOptions {
   snapshot?: SqliteSnapshotStore | null;
   onProgress?: (done: number, total: number) => void;
   maxFileBytes?: number;
+  /**
+   * 桌面端 node:sqlite 直连（M2-6）：直接读写 `nodeDbPath` 磁盘文件，跳过
+   * 快照镜像导入导出。node:sqlite 不可用（移动端/旧 Electron）时 doOpen
+   * 自动降级回 wa-sqlite 路线，调用方无须预检。
+   */
+  useNodeSqlite?: boolean;
+  /** node 直连的库文件绝对路径（通常即快照路径 sqliteDbPath） */
+  nodeDbPath?: string;
 }
 
 export interface SqliteIndexStats {
@@ -111,7 +121,7 @@ const EMPTY_STATS: SqliteIndexStats = {
 };
 
 export class SqliteIndex {
-  private rt: SqliteRuntime | null = null;
+  private rt: SqliteRuntimeLike | null = null;
   private opening: Promise<void> | null = null;
   /** Serializes every mutating/reading operation (one connection, one queue). */
   private queue: Promise<unknown> = Promise.resolve();
@@ -163,6 +173,26 @@ export class SqliteIndex {
   }
 
   private async doOpen(): Promise<void> {
+    // 桌面直连优先（M2-6）：磁盘文件即库，免镜像导入导出；快照路径与本路径
+    // 是同一个文件（wa-sqlite 写的镜像 = 合法 SQLite 文件，天然迁移）。
+    // node:sqlite 缺席（移动端/旧 Electron）→ 降级 wa-sqlite 内存路线。
+    if (this.opts.useNodeSqlite && this.opts.nodeDbPath) {
+      try {
+        const nodePath = this.opts.nodeDbPath;
+        let nodeRt = await NodeSqliteRuntime.open(nodePath);
+        if (!(await nodeRt.integrityCheck())) {
+          await nodeRt.close().catch(() => undefined);
+          destroyNodeSqliteFile(nodePath);
+          nodeRt = await NodeSqliteRuntime.open(nodePath);
+        }
+        this.discarded = await this.ensureSchema(nodeRt);
+        this.rt = nodeRt;
+        this.lastError = '';
+        return;
+      } catch (err) {
+        console.warn('[logseq] node:sqlite 直连不可用，回退 wa-sqlite:', String(err instanceof Error ? err.message : err));
+      }
+    }
     const seed = this.opts.snapshot ? await this.opts.snapshot.load().catch(() => null) : null;
     let rt = await SqliteRuntime.open(DB_FILE, seed);
     // A snapshot that does not pass integrity_check is worthless — the index
@@ -181,7 +211,7 @@ export class SqliteIndex {
   }
 
   /** Create the schema; returns true when the database had to be discarded. */
-  private async ensureSchema(rt: SqliteRuntime): Promise<boolean> {
+  private async ensureSchema(rt: SqliteRuntimeLike): Promise<boolean> {
     const version = await this.readMeta(rt, META_SCHEMA_KEY);
     if (version === String(SCHEMA_VERSION)) {
       for (const sql of SCHEMA_SQL) await rt.run(sql);
@@ -196,11 +226,11 @@ export class SqliteIndex {
     return true;
   }
 
-  private async dropAll(rt: SqliteRuntime): Promise<void> {
+  private async dropAll(rt: SqliteRuntimeLike): Promise<void> {
     for (const t of TABLE_NAMES) await rt.run(`DROP TABLE IF EXISTS ${t}`);
   }
 
-  private async readMeta(rt: SqliteRuntime, key: string): Promise<string | null> {
+  private async readMeta(rt: SqliteRuntimeLike, key: string): Promise<string | null> {
     try {
       const res = await rt.all('SELECT value FROM meta WHERE key = ?', [key], 1);
       const v = res.rows[0]?.[0];
@@ -220,10 +250,10 @@ export class SqliteIndex {
     await rt.close().catch(() => undefined);
   }
 
-  private async persist(rt: SqliteRuntime): Promise<boolean> {
+  private async persist(rt: SqliteRuntimeLike): Promise<boolean> {
     if (!this.opts.snapshot) return false;
     const image = rt.exportImage();
-    if (image.byteLength === 0) return false;
+    if (image.byteLength === 0) return false; // node 直连模式：数据在盘上，无镜像可导
     await this.opts.snapshot.save(image);
     this.stats = { ...this.stats, bytes: image.byteLength, persisted: true };
     return true;
@@ -378,7 +408,7 @@ export class SqliteIndex {
    * Read the markdown, derive its facts, and replace every row for that path
    * inside one transaction. Returns false when the file was skipped.
    */
-  private async indexOne(rt: SqliteRuntime, meta: SqliteFileMeta): Promise<boolean> {
+  private async indexOne(rt: SqliteRuntimeLike, meta: SqliteFileMeta): Promise<boolean> {
     const max = this.opts.maxFileBytes ?? MAX_FILE_BYTES;
     if (meta.size > max) return false;
     let content: string;
@@ -396,7 +426,7 @@ export class SqliteIndex {
     return rc === 0;
   }
 
-  private async forgetFile(rt: SqliteRuntime, path: string): Promise<void> {
+  private async forgetFile(rt: SqliteRuntimeLike, path: string): Promise<void> {
     const stmts = deleteFileStatements(path);
     await rt.batch(
       stmts.map((s) => s.sql),
@@ -404,7 +434,7 @@ export class SqliteIndex {
     );
   }
 
-  private async indexedFiles(rt: SqliteRuntime): Promise<IndexedFileRow[]> {
+  private async indexedFiles(rt: SqliteRuntimeLike): Promise<IndexedFileRow[]> {
     const res = await rt.all('SELECT path, mtime, size, hash, blocks FROM files', undefined, 500_000);
     return res.rows.map((r) => ({
       path: String(r[0] ?? ''),
@@ -415,7 +445,7 @@ export class SqliteIndex {
     }));
   }
 
-  private async counts(rt: SqliteRuntime): Promise<Omit<SqliteIndexStats, 'added' | 'changed' | 'removed' | 'unchanged' | 'fullRebuild' | 'skipped' | 'bytes' | 'persisted' | 'ms'>> {
+  private async counts(rt: SqliteRuntimeLike): Promise<Omit<SqliteIndexStats, 'added' | 'changed' | 'removed' | 'unchanged' | 'fullRebuild' | 'skipped' | 'bytes' | 'persisted' | 'ms'>> {
     // Sequential on purpose: one connection, and wa-sqlite's prepare/step
     // cycles must not interleave (Promise.all here corrupted the WASM heap).
     const count = async (sql: string): Promise<number> => {

@@ -17,6 +17,9 @@
 import ModuleFactory from 'wa-sqlite/dist/wa-sqlite.mjs';
 import { Factory, SQLITE_ROW } from 'wa-sqlite';
 import { MemoryVFS } from 'wa-sqlite/src/examples/MemoryVFS.js';
+import type { SqliteQueryResult, SqliteRuntimeLike } from './sqliteRuntime';
+
+export type { SqliteQueryResult };
 
 /** `SQLiteAPI` is not exported by wa-sqlite's .d.ts — derive it instead. */
 export type Sqlite3Api = ReturnType<typeof Factory>;
@@ -58,18 +61,13 @@ async function defaultWasm(): Promise<Uint8Array> {
   return base64ToBytes(b64);
 }
 
-export interface SqliteQueryResult {
-  columns: string[];
-  rows: unknown[][];
-}
-
 /** Flags: SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE. */
 const OPEN_FLAGS = 0x4 | 0x2;
 
 /**
  * A live SQLite database over a memory VFS. Exposes only what the index needs.
  */
-export class SqliteRuntime {
+export class SqliteRuntime implements SqliteRuntimeLike {
   readonly sqlite3: Sqlite3Api;
   readonly db: number;
   private vfs: MemoryVFS;
