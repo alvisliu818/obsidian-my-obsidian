@@ -167,3 +167,27 @@ fts5vocab）；验收 1（fast-check 真库执行取代 oracle diff）；容错 
 参采思源：hash 门/refs 冗余/指纹重建/readonly；logseq：LIKE 兜底/坏库即删/
 独立派生库/original 双列/retract 迁移；共同印证：items 统一模型（思源 blocks、logseq
 "page is a special block"）。
+
+## 11. M2 待办（2026-10-23 M1 交付后盘点）
+
+M1 已交付：index-core 本体（v2 schema/触发器 FTS/分词/查询编译器/写入/检索/links）、
+unified-search 模块（模态框/vault 事件/ext 域/设置页）。主库实测：12619 items
+（vault 8419 + ext 4200）、links 59722（resolved 30.5%）、DB 956MB、静息堆较
+omnisearch 时代 -42%。以下按优先级：
+
+1. **附件 files 行**：给图片/PDF 等非 md 附件建轻量 `files` 行（无 item，或 item 只
+   存占位）——当前 `![[image.png]]` 的 embed 全部悬空，是悬空链接 69.5% 的大头；
+   解析后反链/聚合才完整。改动小、收益直接，建议 M2 首项。
+2. **块级拆分**：logseq/org 文件按块入 items（parent_rowid/ord/block_id 列已备），
+   `[[file#^block-id]]` 锚点解析到块 item，搜索结果块级定位与高亮。依赖与
+   logseq BlockIndex 的职责再划分（索引本体是可重建投影，不与 BlockIndex 抢权威）。
+3. **ext 域增量**：目前仅全量扫描时刷新（无 fs.watch）。选项：logseq 模块挂载刷新
+   事件联动 / 对挂载目录受限 fs.watch（只 watch 文件 mtime 目录项）。
+4. **反链查询与 UI 深化**：links.target_item 反查（反向链接面板/搜索语法
+   `backlink:`）；搜索历史；snippet 高亮精修（多命中窗口）。
+5. **大库性能基准**：956MB 库上做查询基准（MATCH/bm25/LIKE 兜底/前缀展开），
+   验证 ANALYZE 后计划；必要时调 prefix 索引与 LIKE 触发阈值。
+6. **logseq 快照迁移 node:sqlite**（原一期遗留）：logseq 模块 SQLite 索引改为
+   共享 index-core 的 SqliteService（本轮只共享底座，未迁移）。
+7. **移动端后端**（三期）：wa-sqlite/官方 wasm + OPFS VFS，repository 接口已预留
+   WasmSqliteBackend 位。
