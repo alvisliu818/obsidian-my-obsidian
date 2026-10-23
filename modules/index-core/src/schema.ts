@@ -2,7 +2,7 @@
 // 设计见 docs/unified-index-design.md（external-content 列必须与 items 分词列同名同内容）
 
 /** 当前 schema 版本。每次破坏性变更 +1 并在 MIGRATIONS 追加迁移。 */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /** v1 全量建表。exec 支持多语句，按对象分组便于将来迁移逐个 drop/create。 */
 export const SCHEMA_OBJECTS: Record<string, string> = {
@@ -94,6 +94,17 @@ export const MIGRATIONS: { toVersion: number; statements: string[] }[] = [
     statements: [
       `ALTER TABLE links ADD COLUMN resolve_key TEXT;`,
       `CREATE INDEX IF NOT EXISTS idx_links_rkey ON links(resolve_key) WHERE resolved = 0;`,
+    ],
+  },
+  {
+    // v3：files(lower(path)) 表达式索引。resolveTarget/resolvePendingFor 按
+    // lower(path) 精确匹配（files.path 的 UNIQUE 索引对函数调用无效），大库
+    // 上每条链接解析都在扫 7 万行——实测单次 ~20ms，230 条链接的文件编辑
+    // 一次 upsert 主线程冻结 6-7s（2026-10-23 诊断，tmp/diag/）。表达式索引
+    // 后单次 0.02ms，230 条循环 5.9s → 5ms。
+    toVersion: 3,
+    statements: [
+      `CREATE INDEX IF NOT EXISTS idx_files_path_lower ON files(lower(path));`,
     ],
   },
 ];

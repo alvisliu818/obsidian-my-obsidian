@@ -354,6 +354,58 @@ describe("全域 links / names（schema v2）", () => {
   });
 });
 
+// 大库实证（2026-10-23，7.3 万 files）：链接解析逐条 `WHERE lower(path)=?`，
+// files.path 的 UNIQUE 索引服务不了函数调用 → 全表扫 ~8ms/条，一个上百链接的
+// 文件每次 upsert 冻结近 1s（编辑保存即卡顿）。表达式索引后 ~0.02ms/条。
+describe("schema v3：files(lower(path)) 表达式索引（防链接解析全表扫）", () => {
+  let dbDir: string;
+  let svc: SqliteService;
+
+  beforeEach(() => {
+    dbDir = makeDir();
+    svc = new SqliteService({ dbDir, vaultSlug: "v3", fingerprint: "fp" });
+  });
+
+  const indexCount = (s: SqliteService): number =>
+    (
+      s
+        .prepare(
+          "SELECT count(*) AS c FROM sqlite_master WHERE type='index' AND name='idx_files_path_lower'",
+        )
+        .get() as { c: number }
+    ).c;
+
+  it("新库带索引；lower(path) 查询走索引不扫表", () => {
+    expect(svc.metaGet("schema_version")).toBe(String(SCHEMA_VERSION));
+    expect(indexCount(svc)).toBe(1);
+    // 优化器要有数据才倾向索引：灌 200 行 + ANALYZE（空表 plan 不稳定）
+    svc.transaction(() => {
+      const ins = svc.prepare("INSERT INTO files (path, domain) VALUES (?, 'vault')");
+      for (let i = 0; i < 200; i++) ins.run(`notes/n${i}.md`);
+    });
+    svc.prepare("ANALYZE").run();
+    const plan = svc
+      .prepare("EXPLAIN QUERY PLAN SELECT path, rowid FROM files WHERE lower(path) = 'notes/n1.md' LIMIT 1")
+      .all() as Array<{ detail: string }>;
+    expect(plan.map((p) => p.detail).join(" | ")).toContain("idx_files_path_lower");
+  });
+
+  it("v2 存量库重开自动补索引（离线补过的线上库不受影响）", () => {
+    // 懒打开：先读一次把库真正建出来，再模拟「v2 时代落地的老库」
+    expect(svc.metaGet("schema_version")).toBe(String(SCHEMA_VERSION));
+    svc.close();
+    const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
+    const raw = new DatabaseSync(path.join(dbDir, "v3.db"));
+    raw.exec("DROP INDEX IF EXISTS idx_files_path_lower;");
+    raw.prepare("UPDATE meta SET value='2' WHERE key='schema_version'").run();
+    raw.close();
+    const svc2 = new SqliteService({ dbDir, vaultSlug: "v3", fingerprint: "fp" });
+    expect(indexCount(svc2)).toBe(1);
+    expect(svc2.metaGet("schema_version")).toBe(String(SCHEMA_VERSION));
+    svc2.close();
+  });
+});
+
 describe("IndexWriter / search 集成", () => {
   let dbDir: string;
   let svc: SqliteService;
