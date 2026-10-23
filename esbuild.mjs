@@ -328,6 +328,10 @@ const context = await esbuild.context({
   external: [
     "obsidian",
     "electron",
+    // node:sqlite（unified-search 的索引库）：builtin-modules@3.3.0 早于
+    // Node 22.5 新增的 sqlite，罩不住，需显式 external（运行时由 Electron 提供）
+    "sqlite",
+    "node:sqlite",
     "@codemirror/state",
     "@codemirror/view",
     "@codemirror/commands",

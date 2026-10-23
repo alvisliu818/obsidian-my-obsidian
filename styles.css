@@ -6529,9 +6529,51 @@ button.mfi-picker-item:focus-visible {
 }
 
 
-/* ============================================================
-   save-control 模块（save-history + autosave-control 合并）
-   ============================================================ */
+/* ==================== Unified Search (modules/unified-search) ==================== */
+.unified-search-head {
+  display: flex;
+  align-items: baseline;
+  column-gap: 6px;
+  flex-wrap: wrap;
+}
+
+.unified-search-title {
+  font-weight: 600;
+  white-space: pre-wrap;
+}
+
+.unified-search-ext {
+  font-size: 0.72em;
+  color: var(--text-muted);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  padding: 0 4px;
+  text-transform: uppercase;
+}
+
+.unified-search-path {
+  font-size: 0.82em;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unified-search-snippet {
+  font-size: 0.85em;
+  color: var(--text-muted);
+  white-space: normal;
+  word-break: break-word;
+}
+
+.unified-search-snippet mark {
+  background: var(--text-highlight-bg);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* ==================== save-control（save-history + autosave-control 合并） ==================== */
 .save-status-icon {
   font-size: var(--asc-icon-size, 16px);
 }

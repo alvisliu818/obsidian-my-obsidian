@@ -50,6 +50,9 @@ import HearthPlugin from "../modules/hearth/src/main";
 // 宿主严格配置（strict + noUnusedLocals）下零错误 → 按收编判据走**源码直连**，
 // 不需要 require 桥。它是 `\(…\)` / `\[…\]` 公式渲染的正主，见模块内 NOTICE。
 import LatexDelimiterRendererPlugin from "../modules/latex-delimiter-renderer/src/main";
+// 自研统一索引搜索（modules/index-core 的消费层）：node:sqlite 磁盘索引，
+// 与 omnisearch（minisearch/内存）平行，桌面端专用（node:sqlite 需要 Electron）。
+import UnifiedSearchPlugin from "../modules/unified-search/src/main";
 // media-extended v3 自带 obsidian@1.5.7 类型与自己的 "@/..." 别名（与
 // music-player 的 @/ 同名冲突），经 require 桥接进 bundle：不进宿主 tsc
 // 程序（类型由模块自带 tsconfig 独立校验），运行时打包不受影响。
@@ -437,6 +440,16 @@ export default class MyObsidianPlugin extends Plugin {
 				"渲染标准 LaTeX 公式分隔符：行内 \\(…\\) 与独立 \\[...\\]，不改动笔记源文件。原生编辑器的实时预览与阅读模式、logseq 块编辑器（含库外文件）均可；公式里的下标不会把强调漏进正文。上游 Andreas Burger（MIT）。",
 			desktopOnly: false,
 			cls: LatexDelimiterRendererPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// 自研（无上游）：索引本体在 modules/index-core，本模块只是它的
+			// Obsidian 消费层。设计见 docs/unified-index-design.md。
+			id: "unified-search",
+			name: "my Unified Search",
+			summary:
+				"统一索引搜索：node:sqlite（FTS5）磁盘索引，JS 堆零驻留；短语/排除/title:/tag:/path:/ext: 过滤与前缀语法，中文可选接入 cm-chs-patch 分词（缺席自动降级+LIKE 兜底）。库内 md/org，桌面端专用；与 Omnisearch 互不影响，可二选一启用。",
+			desktopOnly: true,
+			cls: UnifiedSearchPlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 
