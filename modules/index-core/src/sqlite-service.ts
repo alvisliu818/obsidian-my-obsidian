@@ -164,6 +164,9 @@ export class SqliteService {
 
   private applyPragmas(db: DatabaseSync): void {
     db.exec("PRAGMA foreign_keys=ON"); // 级联生效前提（不显式开=静默孤儿行）
+    // 默认 busy_timeout=0：任何锁竞争立即 SQLITE_BUSY。插件重载期间新旧连接
+    // 可能短暂并存，给 3 秒重试窗口比直接报错稳妥。
+    db.exec("PRAGMA busy_timeout=3000");
     db.exec("PRAGMA temp_store=MEMORY");
     try {
       db.exec("PRAGMA journal_mode=WAL"); // 网络盘等场景可能拒绝，降级默认 journal

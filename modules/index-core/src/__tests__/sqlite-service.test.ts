@@ -26,14 +26,6 @@ function makeService(dbDir: string, fingerprint = "fp1"): SqliteService {
   return new SqliteService({ dbDir, vaultSlug: "testvault", fingerprint });
 }
 
-/** external-content FTS 无自动同步——索引写入方必须手动同事务维护（设计纪律 6.2） */
-function syncFts(svc: SqliteService, itemRowid: number): void {
-  svc.prepare(
-    `INSERT INTO items_fts (rowid, t_title, t_headings, t_tags, t_content)
-     SELECT rowid, t_title, t_headings, t_tags, t_content FROM items WHERE rowid = ?`,
-  ).run(itemRowid);
-}
-
 describe("SqliteService", () => {
   let dbDir: string;
 
@@ -136,7 +128,7 @@ describe("SqliteService", () => {
     svc.close();
   });
 
-  it("FTS5 external-content：手动同事务同步 FTS 后 match 可查、回表正确", () => {
+  it("FTS5 触发器自动同步：insert 后可查、update 重分词、delete 后消失", () => {
     const svc = makeService(dbDir);
     svc.ensureOpen();
     svc.transaction(() => {
@@ -144,7 +136,6 @@ describe("SqliteService", () => {
       svc.prepare(
         "INSERT INTO items (file_rowid, content, t_content, format) VALUES (1, ?, ?, 'md')",
       ).run("黑板报 前端开发", "黑板报 前端开发");
-      syncFts(svc, 1);
     });
     // 整词命中（unicode61 把连续 CJK 视为一个 token，「前端开发」是整词），回表内容来自 items 分词列
     const hit = svc
@@ -155,6 +146,19 @@ describe("SqliteService", () => {
     // 2 字中文子串：unicode61 下 match 不中（探针实证）→ 上层 LIKE 限域兜底
     const miss = svc.prepare("SELECT rowid FROM items_fts WHERE items_fts MATCH '前端'").all();
     expect(miss).toHaveLength(0);
+
+    // update：旧 token 退场，新 token 进场（触发器 delete+insert 对）
+    svc.transaction(() => {
+      svc.prepare(
+        "UPDATE items SET content = ?, t_content = ? WHERE rowid = 1",
+      ).run("黑板报 后端开发", "黑板报 后端开发");
+    });
+    expect(svc.prepare("SELECT rowid FROM items_fts WHERE items_fts MATCH '前端开发'").all()).toHaveLength(0);
+    expect(svc.prepare("SELECT rowid FROM items_fts WHERE items_fts MATCH '后端开发'").all()).toHaveLength(1);
+
+    // delete：索引行随触发器退场，不残留
+    svc.prepare("DELETE FROM items WHERE rowid = 1").run();
+    expect(svc.prepare("SELECT rowid FROM items_fts WHERE items_fts MATCH '后端开发'").all()).toHaveLength(0);
     svc.close();
   });
 

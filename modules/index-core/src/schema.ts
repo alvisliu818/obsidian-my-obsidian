@@ -35,6 +35,22 @@ export const SCHEMA_OBJECTS: Record<string, string> = {
   content='items', content_rowid='rowid',
   tokenize='unicode61', prefix='2,3', detail=full
 );`,
+  // external-content FTS 无自动同步——由触发器在同事务内维护（SQLite 官方推荐的
+  // external-content 触发器模式）。应用层一律不直接写 items_fts，杜绝漏同步。
+  items_fts_triggers: `CREATE TRIGGER IF NOT EXISTS items_fts_ai AFTER INSERT ON items BEGIN
+  INSERT INTO items_fts(rowid, t_title, t_headings, t_tags, t_content)
+  VALUES (new.rowid, new.t_title, new.t_headings, new.t_tags, new.t_content);
+END;
+CREATE TRIGGER IF NOT EXISTS items_fts_ad AFTER DELETE ON items BEGIN
+  INSERT INTO items_fts(items_fts, rowid, t_title, t_headings, t_tags, t_content)
+  VALUES ('delete', old.rowid, old.t_title, old.t_headings, old.t_tags, old.t_content);
+END;
+CREATE TRIGGER IF NOT EXISTS items_fts_au AFTER UPDATE ON items BEGIN
+  INSERT INTO items_fts(items_fts, rowid, t_title, t_headings, t_tags, t_content)
+  VALUES ('delete', old.rowid, old.t_title, old.t_headings, old.t_tags, old.t_content);
+  INSERT INTO items_fts(rowid, t_title, t_headings, t_tags, t_content)
+  VALUES (new.rowid, new.t_title, new.t_headings, new.t_tags, new.t_content);
+END;`,
   links: `CREATE TABLE IF NOT EXISTS links (
   rowid INTEGER PRIMARY KEY,
   src_item INTEGER NOT NULL REFERENCES items(rowid) ON DELETE CASCADE,
@@ -47,14 +63,17 @@ export const SCHEMA_OBJECTS: Record<string, string> = {
   resolved INTEGER NOT NULL
 );`,
   links_indexes: `CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_item);
-CREATE INDEX IF NOT EXISTS idx_links_tpath ON links(target_path);`,
+CREATE INDEX IF NOT EXISTS idx_links_tpath ON links(target_path);
+CREATE INDEX IF NOT EXISTS idx_links_src ON links(src_item);`,
+  items_file_index: `CREATE INDEX IF NOT EXISTS idx_items_file ON items(file_rowid);`,
   names: `CREATE TABLE IF NOT EXISTS names (
   name TEXT NOT NULL,
   original TEXT NOT NULL,
   item_rowid INTEGER NOT NULL,
   precedence INTEGER NOT NULL
 );`,
-  names_index: `CREATE INDEX IF NOT EXISTS idx_names ON names(name, precedence);`,
+  names_index: `CREATE INDEX IF NOT EXISTS idx_names ON names(name, precedence);
+CREATE INDEX IF NOT EXISTS idx_names_item ON names(item_rowid);`,
   sync_state: `CREATE TABLE IF NOT EXISTS sync_state (
   path TEXT PRIMARY KEY,
   content_hash TEXT NOT NULL,
