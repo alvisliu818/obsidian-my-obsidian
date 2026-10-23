@@ -946,6 +946,22 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
 
     if (this.plugin.settings.sqliteIndexEnabled) {
       new Setting(containerEl)
+        .setName('索引文件位置')
+        .setDesc(
+          '数据库快照的存放目录（绝对路径）。留空 = E:\\HOME\\Runtime。' +
+            '改动后立即用新位置重开索引；与磁盘上的旧快照不迁移——删掉旧文件即可。',
+        )
+        .addText((t) => {
+          t.setPlaceholder('E:\\HOME\\Runtime');
+          t.setValue(this.plugin.settings.sqliteDbDir);
+          t.onChange(async (v) => {
+            this.plugin.settings.sqliteDbDir = v.trim();
+            await this.plugin.saveSettings();
+            this.plugin.restartSqliteIndex();
+          });
+        });
+
+      new Setting(containerEl)
         .setName('在磁盘保留快照')
         .setDesc('把数据库保存到会话之间，让重启只重新索引变化的部分。')
         .addToggle((t) =>

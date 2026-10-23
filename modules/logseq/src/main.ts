@@ -3,7 +3,7 @@
  * vault-wide block-id index, and clean uninstall (restore native views).
  */
 
-import { Menu, MarkdownView, Notice, Platform, Plugin, TAbstractFile, TFile, WorkspaceLeaf, debounce, normalizePath, type CachedMetadata, type ViewState } from 'obsidian';
+import { Menu, MarkdownView, Notice, Platform, Plugin, TAbstractFile, TFile, WorkspaceLeaf, debounce, type CachedMetadata, type ViewState } from 'obsidian';
 import { BlockEditorView, VIEW_TYPE_BLOCK_EDITOR } from './view/BlockEditorView';
 import { FragmentHost, type FragmentOptions } from './blocks/fragmentEditor';
 import { CMD_COLLAPSE_ALL, CMD_FIND, CMD_REPLACE } from './interactions/hotkeys';
@@ -63,13 +63,17 @@ import {
   revealInSystemExplorer,
 } from './features/openWith';
 import {
+  dirOf,
+  ensureDirX,
   exists,
   linkTargetFor,
   linkVaultPath,
+  readExternalBinary,
   readExternalText,
   safeSegment,
   sameVolume,
   scanExternal,
+  writeExternalBinary,
 } from './features/extFs';
 import type { MountNode, ScanEntry } from './features/mountFilter';
 import { openJournal } from './features/dailyNote';
@@ -1223,9 +1227,15 @@ export default class LogseqEditorPlugin extends Plugin {
   // SQLite secondary index (markdown is the source of truth)
   // ------------------------------------------------------------------
 
-  /** Where the disposable database image is kept (inside the plugin folder). */
+  /**
+   * Where the disposable database image is kept. Configurable via settings
+   * (`sqliteDbDir`), default `E:\HOME\Runtime` — an arbitrary Node-fs
+   * absolute path, because vault.adapter resolves every path against the
+   * vault root and cannot reach outside it.
+   */
   private get sqliteDbPath(): string {
-    return normalizePath(`${this.manifest.dir}/logseq-index.sqlite`);
+    const dir = (this.settings.sqliteDbDir || '').trim().replace(/[\\/]+$/, '');
+    return `${dir || 'E:/HOME/Runtime'}/logseq-index.sqlite`;
   }
 
   /**
@@ -1244,14 +1254,17 @@ export default class LogseqEditorPlugin extends Plugin {
     const snapshot: SqliteSnapshotStore = {
       load: async () => {
         try {
-          if (!(await this.app.vault.adapter.exists(this.sqliteDbPath))) return null;
-          return new Uint8Array(await this.app.vault.adapter.readBinary(this.sqliteDbPath));
+          // Node fs 绝对路径——vault.adapter 解析不了配置目录（见 sqliteDbPath）
+          if (!exists(this.sqliteDbPath)) return null;
+          return readExternalBinary(this.sqliteDbPath);
         } catch {
           return null;
         }
       },
       save: async (bytes) => {
-        await this.app.vault.adapter.writeBinary(this.sqliteDbPath, bytes.slice().buffer);
+        ensureDirX(dirOf(this.sqliteDbPath));
+        const r = writeExternalBinary(this.sqliteDbPath, bytes);
+        if (!r.ok) console.warn('[logseq] sqlite snapshot save failed:', r.error);
       },
     };
     this.sqliteIndex = new SqliteIndex({
@@ -1329,6 +1342,21 @@ export default class LogseqEditorPlugin extends Plugin {
       this.attachSqliteIndex();
       void this.startSqliteIndex();
     }
+  }
+
+  /**
+   * 数据库位置（sqliteDbDir）变更后调用：关掉旧实例，按新路径重开。
+   * 旧位置的快照文件不迁移、不删除——用户自己处置。
+   */
+  restartSqliteIndex(): void {
+    if (!this.settings.sqliteIndexEnabled) return;
+    if (this.sqliteIndex) {
+      const idx = this.sqliteIndex;
+      this.sqliteIndex = null;
+      void idx.close();
+    }
+    this.attachSqliteIndex();
+    void this.startSqliteIndex();
   }
 
   // ------------------------------------------------------------------

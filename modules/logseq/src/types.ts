@@ -186,6 +186,12 @@ export interface BlockEditorSettings {
   /** Re-index files when they change on disk (including edits from outside). */
   sqliteAutoSync: boolean;
   /**
+   * Directory for the SQLite index file (logseq-index.sqlite). Empty = the
+   * built-in default `E:\HOME\Runtime`. Node-fs absolute path — vault.adapter
+   * resolves every path against the vault root and cannot reach it.
+   */
+  sqliteDbDir: string;
+  /**
    * Offer the collapse caret on every block whose body spans more than one
    * rendered line — not just list blocks with children. Off = the caret only
    * appears where it always did (list blocks with children).
@@ -685,6 +691,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   sqliteIndexEnabled: false,
   sqlitePersist: true,
   sqliteAutoSync: true,
+  sqliteDbDir: '',
   foldEnabled: true,
   addBlockAffordance: true,
   addBlockMarks: true,
