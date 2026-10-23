@@ -146,6 +146,12 @@ describe("compileQuery", () => {
     expect(q.match).not.toContain('foo"bar'); // 原样必然不存在
     expect(q.match).toContain('"bar"');
   });
+
+  it("backlink: 解析为反链过滤键（resolveKeyOf 归一：剥锚点、小写）", () => {
+    expect(compileQuery("backlink:子dir/目标.md#^x").backlinkFilters).toEqual(["子dir/目标.md"]);
+    expect(compileQuery("backlink:目标").match).toBeNull(); // 纯过滤查询
+    expect(compileQuery("backlink:目标").isEmpty).toBe(false);
+  });
 });
 
 describe("parseLinks / resolveKeyOf", () => {
@@ -336,6 +342,26 @@ describe("IndexWriter / search 集成", () => {
     writer.removeFile("y.md");
     expect(search(svc, compileQuery("要被删除"))).toHaveLength(0);
     expect(search(svc, compileQuery("path:y"))).toHaveLength(0);
+  });
+
+  it("backlink: 反链过滤——已解析 target_item 与悬空 resolve_key 双路命中", () => {
+    writer.upsertFile(meta({ path: "目标.md", title: "目标" }), "目标 内容");
+    writer.upsertFile(meta({ path: "a.md" }), "引用 [[目标]]");
+    writer.upsertFile(meta({ path: "b.md" }), "提到 [[缺失页]]");
+    writer.upsertFile(meta({ path: "c.md" }), "无链接 内容");
+    // 已解析路：a.md → 目标.md（键「目标」经 names 解析出 target_item）
+    expect(search(svc, compileQuery("backlink:目标")).map((h) => h.path)).toEqual(["a.md"]);
+    // 悬空路：b.md → 缺失页（目标不存在仍可查到引用方）
+    expect(search(svc, compileQuery("backlink:缺失页")).map((h) => h.path)).toEqual(["b.md"]);
+    // 组合正词：FTS + 过滤叠加
+    expect(search(svc, compileQuery("backlink:目标 引用")).map((h) => h.path)).toEqual(["a.md"]);
+    // 目标落地后，悬空路收敛为解析路，结果不变
+    writer.upsertFile(meta({ path: "dir/缺失页.md", title: "缺失页" }), "出现了");
+    expect(search(svc, compileQuery("backlink:缺失页")).map((h) => h.path)).toEqual(["b.md"]);
+    // 纯过滤直接列文件，无链接文档不混入
+    expect(search(svc, compileQuery("backlink:目标"))).not.toContain(
+      expect.objectContaining({ path: "c.md" }),
+    );
   });
 
   it("附件占位 item：embed 解析 + 附件名可搜 + size 门 + 删除退回悬空", () => {

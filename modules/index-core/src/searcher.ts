@@ -10,6 +10,7 @@
  */
 
 import type { CompiledQuery } from "./query";
+import { resolveTarget } from "./links";
 import type { SqliteService } from "./sqlite-service";
 
 export interface SearchHit {
@@ -63,6 +64,17 @@ export function search(svc: SqliteService, q: CompiledQuery, options: SearchOpti
       where.push(`(${q.extFilters.map(() => "f.ext = ?").join(" OR ")})`);
       params.push(...q.extFilters);
     }
+    // 反链过滤（M2-4）双路：已解析链接按 target_item 命中（idx_links_target），
+    // 悬空链接按 resolve_key 命中（idx_links_rkey 部分索引）——目标不存在时
+    // 引用它的文档照样能被 backlink: 查到。目标解析不出时 item 参数给 -1（永不命中）
+    for (const k of q.backlinkFilters) {
+      const hit = resolveTarget(svc, k);
+      where.push(
+        `(EXISTS (SELECT 1 FROM links l WHERE l.src_item = i.rowid AND ` +
+          `((l.resolved = 1 AND l.target_item = ?) OR (l.resolved = 0 AND l.resolve_key = ?))))`,
+      );
+      params.push(hit?.targetItem ?? -1, k);
+    }
     return { where, params };
   };
 
@@ -83,8 +95,8 @@ export function search(svc: SqliteService, q: CompiledQuery, options: SearchOpti
     for (const r of rows) hits.set(r.rowid, r);
   }
 
-  // 纯过滤查询（只有 path:/ext:，无正负词）：直接列文件
-  if (!q.match && (q.pathFilters.length || q.extFilters.length)) {
+  // 纯过滤查询（只有 path:/ext:/backlink:，无正负词）：直接列文件
+  if (!q.match && (q.pathFilters.length || q.extFilters.length || q.backlinkFilters.length)) {
     const { where, params } = filterWhere();
     const rows = svc
       .prepare(

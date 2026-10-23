@@ -83,9 +83,38 @@ function basenameKey(key: string): string {
 }
 
 /** 解析结果（文件级 item 的定位信息） */
-interface Resolved {
+export interface Resolved {
   targetPath: string;
   targetItem: number;
+}
+
+/** 文件级 item 的 rowid（M1 每文件一个 item，即 file_rowid 下唯一 item） */
+function fileLevelItem(svc: SqliteService, fileRowid: number): number | null {
+  const row = svc.prepare("SELECT rowid FROM items WHERE file_rowid = ? LIMIT 1").get(fileRowid) as
+    | { rowid: number }
+    | undefined;
+  return row?.rowid ?? null;
+}
+
+/** 解析键 → 目标（导出给查询端 backlink: 用）。相对路径精确匹配优先，其次 names */
+export function resolveTarget(svc: SqliteService, key: string): Resolved | null {
+  const byPath = svc.prepare("SELECT path, rowid FROM files WHERE lower(path) = ? LIMIT 1").get(key) as
+    | { path: string; rowid: number }
+    | undefined;
+  if (byPath) {
+    const item = fileLevelItem(svc, byPath.rowid);
+    if (item) return { targetPath: byPath.path, targetItem: item };
+  }
+  const byName = svc
+    .prepare("SELECT item_rowid FROM names WHERE name = ? ORDER BY precedence, item_rowid LIMIT 1")
+    .get(basenameKey(key)) as { item_rowid: number } | undefined;
+  if (byName) {
+    const path = svc
+      .prepare("SELECT f.path FROM files f JOIN items i ON i.file_rowid = f.rowid WHERE i.rowid = ?")
+      .get(byName.item_rowid) as { path: string } | undefined;
+    if (path) return { targetPath: path.path, targetItem: byName.item_rowid };
+  }
+  return null;
 }
 
 export class LinkResolver {
@@ -103,7 +132,7 @@ export class LinkResolver {
     );
     for (const l of links) {
       const key = resolveKeyOf(l.target);
-      const hit = this.resolveKey(key);
+      const hit = resolveTarget(this.svc, key);
       insert.run(
         itemRowid,
         l.raw,
@@ -116,35 +145,6 @@ export class LinkResolver {
         key,
       );
     }
-  }
-
-  /** 解析键 → 目标。相对路径精确匹配优先，其次 names（vault 0 > ext 1） */
-  private resolveKey(key: string): Resolved | null {
-    const byPath = this.svc.prepare("SELECT path, rowid FROM files WHERE lower(path) = ? LIMIT 1").get(key) as
-      | { path: string; rowid: number }
-      | undefined;
-    if (byPath) {
-      const item = this.fileLevelItem(byPath.rowid);
-      if (item) return { targetPath: byPath.path, targetItem: item };
-    }
-    const byName = this.svc
-      .prepare("SELECT item_rowid FROM names WHERE name = ? ORDER BY precedence, item_rowid LIMIT 1")
-      .get(basenameKey(key)) as { item_rowid: number } | undefined;
-    if (byName) {
-      const path = this.svc
-        .prepare("SELECT f.path FROM files f JOIN items i ON i.file_rowid = f.rowid WHERE i.rowid = ?")
-        .get(byName.item_rowid) as { path: string } | undefined;
-      if (path) return { targetPath: path.path, targetItem: byName.item_rowid };
-    }
-    return null;
-  }
-
-  /** 文件级 item 的 rowid（M1 每文件一个 item，即 file_rowid 下唯一 item） */
-  private fileLevelItem(fileRowid: number): number | null {
-    const row = this.svc.prepare("SELECT rowid FROM items WHERE file_rowid = ? LIMIT 1").get(fileRowid) as
-      | { rowid: number }
-      | undefined;
-    return row?.rowid ?? null;
   }
 
   /**
@@ -162,7 +162,7 @@ export class LinkResolver {
       | { rowid: number; path: string }
       | undefined;
     if (!fileRow) return;
-    const item = this.fileLevelItem(fileRow.rowid);
+    const item = fileLevelItem(this.svc, fileRow.rowid);
     if (!item) return;
     const upd = this.svc.prepare(
       `UPDATE links SET target_path = ?, target_item = ?, target_root = ?, resolved = 1
@@ -182,7 +182,7 @@ export class LinkResolver {
     );
     for (const { k } of keys) {
       if (!k) continue;
-      const hit = this.resolveKey(k);
+      const hit = resolveTarget(this.svc, k);
       if (hit) upd.run(hit.targetPath, hit.targetItem, hit.targetItem, k);
     }
   }

@@ -13,12 +13,14 @@
  *   tag:foo          限标签列（# 可省）
  *   path:2024        路径子串过滤（files.path）
  *   ext:md           扩展名过滤
+ *   backlink:笔记    反链过滤：链接指向该目标的文档（target_item/悬空键双路）
  *   uni*             前缀（按设计仅 title/tags 列展开，content 前缀噪音大）
  */
 
 import { hasCJK, tokenizeForSearch, type TokenizeOptions } from "./tokenize";
+import { resolveKeyOf } from "./links";
 
-export type QueryField = "title" | "tag" | "path" | "ext";
+export type QueryField = "title" | "tag" | "path" | "ext" | "backlink";
 
 export interface QueryTerm {
   kind: "term" | "phrase";
@@ -30,7 +32,7 @@ export interface QueryTerm {
   prefix: boolean;
 }
 
-const FIELD_NAMES: ReadonlySet<string> = new Set(["title", "tag", "path", "ext"]);
+const FIELD_NAMES: ReadonlySet<string> = new Set(["title", "tag", "path", "ext", "backlink"]);
 const FIELD_PREFIX_RE = /^([a-zA-Z]+):(.*)$/;
 
 /** 解析查询串。宽松容错：未闭合引号视为短语开头吃到串尾；未知 field: 前缀按裸词处理 */
@@ -90,6 +92,9 @@ export interface CompiledQuery {
   pathFilters: string[];
   /** 扩展名过滤（lowercase，OR 语义） */
   extFilters: string[];
+  /** 反链过滤键（resolveKeyOf 归一，lowercase，AND 语义）：命中「链接指向该键」
+   *  的文档——已解析走 target_item，悬空走 resolve_key 双路（M2-4） */
+  backlinkFilters: string[];
   /** LIKE 兜底触发词：短中文（≤2 字）或降级模式（无分词器）下的中文词 */
   likeTerms: string[];
   /** 全部正向词原文（LIKE 兜底的 AND 约束，保证兜底结果满足完整查询） */
@@ -138,6 +143,7 @@ export function compileQuery(input: string, opts: TokenizeOptions = {}): Compile
   const negatives: string[] = [];
   const pathFilters: string[] = [];
   const extFilters: string[] = [];
+  const backlinkFilters: string[] = [];
   const likeTerms: string[] = [];
   const positiveTexts: string[] = [];
   const excludeTexts: string[] = [];
@@ -151,6 +157,12 @@ export function compileQuery(input: string, opts: TokenizeOptions = {}): Compile
     if (term.field === "ext") {
       const e = term.text.replace(/^\./, "").toLowerCase();
       if (e) extFilters.push(e);
+      continue;
+    }
+    if (term.field === "backlink") {
+      // 反链过滤项：键走 resolveKeyOf 归一（剥锚点/解码/小写），searcher 双路命中
+      const key = resolveKeyOf(term.text);
+      if (key) backlinkFilters.push(key);
       continue;
     }
     if (term.exclude) {
@@ -182,10 +194,15 @@ export function compileQuery(input: string, opts: TokenizeOptions = {}): Compile
     match,
     pathFilters,
     extFilters,
+    backlinkFilters,
     likeTerms,
     positiveTexts,
     excludeTexts,
     tokens: [...new Set(tokens)],
-    isEmpty: match === null && pathFilters.length === 0 && extFilters.length === 0,
+    isEmpty:
+      match === null &&
+      pathFilters.length === 0 &&
+      extFilters.length === 0 &&
+      backlinkFilters.length === 0,
   };
 }
