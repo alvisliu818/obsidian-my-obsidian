@@ -345,28 +345,39 @@ export class UnifiedSearchPlugin extends Plugin {
 			const svc = this.getService();
 			// v2 升级一次性补齐存量 items 的 links/names（幂等；hash 门跳过的老文件靠它）
 			this.getWriter().backfillLinks();
-			// M2-2 升级一次性补齐存量文件的块级 item + blockref 块级解析（幂等，库内解析不重读盘；
-			// 分批让步——巨型事务冻结主线程 = 白屏，2026-10-23 实证）
-			await this.getWriter().backfillBlocks();
-			// 疾速档只服务真首建（空库）。增量扫描走常规 WAL：否则每次启动都对
-			// 1GB 库跑 ANALYZE（全索引扫描+统计写回）——启动期磁盘风暴的写侧元凶。
-			const fileCount = (svc.prepare("SELECT count(*) AS c FROM files").get() as { c: number }).c;
-			const firstBuild = fileCount === 0;
-			if (firstBuild) {
+			// 重建判定（含续建）：vault 域已建可索引数 < 待索引数 = 重建未完。续建也走
+			// 疾速档——WAL 档下续建实测比 MEMORY journal 慢 20 倍（2026-10-23 实证）。
+			// 重建可弃（崩溃大不了重扫），疾速档的代价为零。ext 域行不计（排除干扰）。
+			const builtCount = (
+				svc
+					.prepare(
+						`SELECT count(*) AS c FROM files
+					 WHERE domain='vault' AND ext IN ('md','org') AND path IN (SELECT path FROM sync_state)`,
+					)
+					.get() as { c: number }
+			).c;
+			const rebuilding = builtCount < files.length;
+			if (rebuilding) {
 				svc.beginBulk();
-				// 重建后必须补 ANALYZE：若本轮中途崩溃/重启，续建走增量路径（firstBuild=false），
-				// commitBulk 的 ANALYZE 永远不跑——查询计划裸奔。门在扫描完成处结清。
 				svc.metaSet("analyze_pending", "1");
 			}
 			this.scanWritten = 0;
+			// 块级回填只服务「存量库升级」（M2-2 之前的库）：重建路径的 upsertFile
+			// 本来就产块 item，回填是全量重解析白烧 CPU——重建中跳过，完成时补门。
+			if (!rebuilding) {
+				await this.getWriter().backfillBlocks();
+			}
 			await this.reindexFiles(files);
 			await this.reindexAttachments(attachments);
 			await this.reindexExtFiles(true);
-			if (firstBuild) {
+			if (rebuilding) {
 				svc.commitBulk();
+				// 重建库自带块级 item，回填门直接置位（防下次启动全量重解析）
+				svc.metaSet("blocks_m2", "1");
+				svc.metaSet("analyze_pending", "0");
 			}
-			// 续建补 ANALYZE（analysis_limit 让大库秒级）：门在即跑，一轮扫描跑完即结清
-			if (svc.metaGet("analyze_pending") === "1") {
+			// 存量升级路径的补 ANALYZE（analysis_limit 让大库秒级）
+			if (!rebuilding && svc.metaGet("analyze_pending") === "1") {
 				const tA = Date.now();
 				svc.prepare("PRAGMA analysis_limit=1000").run();
 				svc.prepare("ANALYZE").run();
@@ -375,7 +386,7 @@ export class UnifiedSearchPlugin extends Plugin {
 			}
 			console.debug(
 				`[unified-search] 扫描完成：写入 ${this.scanWritten}，${Date.now() - t0}ms` +
-					(firstBuild ? "（首建疾速档）" : "（增量，stat 门免读未变文件）"),
+					(rebuilding ? "（重建疾速档完成）" : "（增量，stat 门免读未变文件）"),
 			);
 		} catch (e) {
 			console.error("[unified-search] 全量索引失败", e);
