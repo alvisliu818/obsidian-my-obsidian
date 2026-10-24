@@ -63,21 +63,6 @@ export class UnsavedCloseModal extends Modal {
     this.resolve("cancel");
   }
 
-  override open(): void {
-    super.open();
-    // 退出流程中 Obsidian 会盖一层全屏的「Saving…」进度浮层
-    // (.progress-bar-container + body.in-progress),它把本模态完全盖住——
-    // 用户看到的是「一直 Saving、没有提示」,而任务在等一个点不到的按钮
-    // (2026-10-24 用户三连报)。模态期间摘掉浮层,选完后剩余流程照旧。
-    activeDocument.querySelectorAll(".progress-bar-container").forEach((el) => el.remove());
-    activeDocument.body.removeClass("in-progress");
-    // activeDocument 可能漂移到非主窗口文档(弹窗/焦点切换):模态挂错了地方
-    // 就永远不可见——强制挂回主窗口 document。
-    if (this.containerEl.ownerDocument !== document) {
-      document.body.appendChild(this.containerEl);
-    }
-  }
-
   private finish(choice: UnsavedCloseChoice): void {
     this.resolve(choice);
     this.close();

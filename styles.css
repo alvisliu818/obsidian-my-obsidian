@@ -6642,6 +6642,16 @@ body.asc-hide-saving-overlay.is-frameless {
 }
 
 /* save-control：标签页未保存圆点与关闭提示 */
+/* 退出三选一模态必须压过 Obsidian 的 Saving 进度浮层(quit 时挂在 body 上、
+   z-index 10000 全屏白底,模态默认 z 50 会被完全盖住——2026-10-24 用户报
+   「一直 Saving 没有提示」) */
+.modal-container:has(.sc-unsaved-close) {
+  z-index: 10001;
+}
+/* 退出三选一模态开着时,Saving 进度浮层整个取消显示(display: none) */
+body:has(.modal-container .sc-unsaved-close) .progress-bar-container {
+  display: none !important;
+}
 .sc-unsaved-dot {
   width: 6px;
   height: 6px;
