@@ -1402,11 +1402,23 @@ export default class LogseqEditorPlugin extends Plugin {
   /** Current editing mode of the active editor (menu check + chip label). */
   private currentMode(): 'edit' | 'source' | 'native' {
     if (this.app.workspace.getActiveViewOfType(BlockEditorView)) return 'edit';
+    // 库外壳视图(logseq-external-block)内持块编辑器,同属 Logseq 编辑模式——
+    // 不认它的话,库外文件的状态栏模式芯片直接隐身。
+    if (this.app.workspace.getActiveViewOfType(ExternalBlockView)) return 'edit';
     const md = this.app.workspace.getActiveViewOfType(MarkdownView);
     // Obsidian's own raw source mode (mode 'source' + source flag true) —
     // NOT live preview, which is also an editing mode.
     if (md && md.getMode() === 'source' && md.getState()['source'] === true) return 'source';
     return 'native';
+  }
+
+  /**
+   * 活动原生 Markdown 视图里的文件是不是库外文件（TExternalFile，path 带
+   * `file:` 前缀）。是 → 返回磁盘绝对路径；库内文件/非外部 → null。
+   */
+  private externalMarkdownAbs(md: MarkdownView): string | null {
+    const p = md.file?.path ?? '';
+    return this.isExternalVaultPath(p) ? p.slice('file:'.length) : null;
   }
 
   /** Click → dropdown with the three modes; a check marks the current one. */
@@ -1433,19 +1445,53 @@ export default class LogseqEditorPlugin extends Plugin {
     const leaf = this.app.workspace.activeLeaf;
     if (!leaf) return;
     const blockView = this.app.workspace.getActiveViewOfType(BlockEditorView);
+    // 库外壳视图:内持块编辑器,与库内 BlockEditorView 同属「Logseq 编辑」档。
+    const shell = this.app.workspace.getActiveViewOfType(ExternalBlockView);
     const md = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const mdExtAbs = md ? this.externalMarkdownAbs(md) : null;
     if (mode === 'edit') {
-      if (!blockView && md) await this.switchToBlockEditor(leaf);
+      if (shell) return;
+      if (mdExtAbs) await this.switchExternalToBlockEditor(leaf, mdExtAbs);
+      else if (!blockView && md) await this.switchToBlockEditor(leaf);
     } else if (mode === 'source') {
       if (blockView) this.switchToNative(leaf, 'source');
+      else if (shell) this.switchExternalToNativeEditor(leaf, 'source');
       else if (md && !(md.getState()['source'] === true)) await this.setNativeSourceMode(leaf, true);
     } else {
       if (blockView) this.switchToNative(leaf);
+      else if (shell) this.switchExternalToNativeEditor(leaf);
       else if (md && md.getState()['source'] === true) await this.setNativeSourceMode(leaf, false);
     }
     // In-view mode flips fire neither active-leaf-change nor layout-change —
     // refresh the chip explicitly.
     this.updateStatusBar();
+  }
+
+  /**
+   * 库外壳视图 → Obsidian 原生编辑器（库外 TExternalFile 原生可编辑，1.14.4+）。
+   * `sourceMode` 传 'source' 时直接落在整文件源码形态。
+   */
+  private switchExternalToNativeEditor(leaf: WorkspaceLeaf, sourceMode?: 'source'): void {
+    const shell = leaf.view as ExternalBlockView | null;
+    const abs = shell?.abs;
+    if (!abs || !this.canOpenNativeExternal()) return;
+    const state: Record<string, unknown> = { file: 'file:' + abs };
+    if (sourceMode) {
+      state.mode = 'source';
+      state.source = true;
+    }
+    // file: 前缀会让接管补丁自己走原生分支；bypass 双保险。
+    void this.bypassingSetViewState(leaf, { type: 'markdown', state, active: true } as ViewState);
+  }
+
+  /** 库外文件的原生编辑器 → 回 Logseq 块编辑器（壳视图按 abs 重建）。 */
+  private async switchExternalToBlockEditor(leaf: WorkspaceLeaf, abs: string): Promise<void> {
+    const name = abs.split(/[\\/]/).pop() ?? abs;
+    await leaf.setViewState({
+      type: VIEW_TYPE_EXTERNAL_BLOCK,
+      state: { abs, name },
+      active: true,
+    } as ViewState);
   }
 
   private updateStatusBar(): void {
