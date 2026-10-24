@@ -425,8 +425,8 @@ export class AutoSaveController {
         const manual = this.isHoldMode();
         // 库外未保存（调度器待写 + 视图脏缓冲）与库内队列同一决策面：
         // 退出与关窗都要把它算进「有待保存」。
-        const hasPending =
-          this.pendingSaveQueue.hasAny() || this.closeHooks.hasExternalUnsaved?.() === true;
+        const externalUnsaved = this.closeHooks.hasExternalUnsaved?.() === true;
+        const hasPending = this.pendingSaveQueue.hasAny() || externalUnsaved;
 
         // MANUAL mode (issue #26): plain window close (the X button, not the
         // Cmd+Q/menu quit shortcut) with unsaved changes. Prompt exactly like the
@@ -434,7 +434,9 @@ export class AutoSaveController {
         // awaits this task before calling window.close(), and the close listener
         // disabled its 3s force-destroy, so the prompt holds the close as long as
         // needed.
-        if (manual && !shortcut && hasPending) {
+        // 快捷键标记原本无条件跳过提示——但 handleQuitShortcut 的原生 confirm
+        // 不覆盖库外缓冲,库外有未保存时必须照常出三选一(2026-10-24)。
+        if (manual && hasPending && (!shortcut || externalUnsaved)) {
           tasks.add(async () => {
             // 合并新增：接入三选一退出提示（保存并退出/不保存并退出/取消），
             // 与关标签页同款 UX——上游原生 confirm 只有「丢弃/取消」，而库外
@@ -1097,11 +1099,12 @@ export class AutoSaveController {
 
       const shortcut = this.wasQuitShortcutIntentRecentlyMarked();
       // 库外未保存与库内队列同一决策面（退出/关窗都算「有待保存」）。
-      const hasPending =
-        this.pendingSaveQueue.hasAny() || this.closeHooks.hasExternalUnsaved?.() === true;
+      const externalUnsaved = this.closeHooks.hasExternalUnsaved?.() === true;
+      const hasPending = this.pendingSaveQueue.hasAny() || externalUnsaved;
       const manual = this.isHoldMode();
 
-      if (!shortcut && hasPending) {
+      // 快捷键标记不再掩盖库外未保存(见 workspace quit 分支的注释)。
+      if (hasPending && (!shortcut || externalUnsaved)) {
         if (manual) {
           // Manual mode (issue #26) is handled by the awaited workspace 'quit'
           // task. Do NOT mark isUnloading here: if the user picks "keep editing"
@@ -1133,11 +1136,12 @@ export class AutoSaveController {
       this.pendingSaveQueue.refreshAllLatestData();
       const shortcut = this.wasQuitShortcutIntentRecentlyMarked();
       // 库外未保存与库内队列同一决策面（退出/关窗都算「有待保存」）。
-      const hasPending =
-        this.pendingSaveQueue.hasAny() || this.closeHooks.hasExternalUnsaved?.() === true;
+      const externalUnsaved = this.closeHooks.hasExternalUnsaved?.() === true;
+      const hasPending = this.pendingSaveQueue.hasAny() || externalUnsaved;
       const manual = this.isHoldMode();
 
-      if (!shortcut && hasPending) {
+      // 快捷键标记不再掩盖库外未保存(见 workspace quit 分支的注释)。
+      if (hasPending && (!shortcut || externalUnsaved)) {
         // CRITICAL (issue #26): Obsidian's main process force-destroys the window
         // 3s after the close event UNLESS the close event's defaultPrevented is
         // set ( obsidian.asar main.js: setTimeout(() => !h.defaultPrevented &&
@@ -1403,6 +1407,14 @@ export class AutoSaveController {
     }
 
     this.markQuitShortcutIntent();
+
+    // 库外有未保存内容时不在这里处理:下面的原生 confirm 只覆盖库内队列,
+    // 而快捷键标记会让 quit/beforeunload 关窗分支跳过三选一模态——两下一凑,
+    // 库外脏缓冲就静默丢弃了(2026-10-24 用户报「库外修改关闭无提示」)。
+    // 直接让位:quit 任务的 quitPrompt 三选一对库内+库外统一决策。
+    if (this.closeHooks.hasExternalUnsaved?.() === true) {
+      return;
+    }
 
     if (!this.isHoldMode() || !this.pendingSaveQueue.hasAny()) {
       return;
