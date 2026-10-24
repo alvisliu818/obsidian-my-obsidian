@@ -2543,7 +2543,10 @@ body.block-touch-dragging {
    它上面会左右各窄 0.9em —— 实测编辑态背景比阅读态每边少 14.4px(16px 字号),
    看着像"盒子缩了一圈"。 */
 .lgp-code-block .lgp-code-editor-host {
-  padding: 0 0.9em;
+  /* 左侧 0.9em 保留(首字符与阅读态对齐);右侧归零——Monaco 的竖向滚动条
+     贴盒子右缘,与工具条右缘对齐。右内边距曾把整个编辑器从右缘缩进,
+     滚动条右侧留出一条 0.9em 空白(2026-10-24 用户报,以工具条为参照)。 */
+  padding: 0 0 0 0.9em;
   background: var(--code-background, var(--background-secondary));
   border-radius: 0 0 var(--code-radius, 6px) var(--code-radius, 6px);
   overflow: hidden;
