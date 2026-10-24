@@ -14,6 +14,19 @@ export interface LoadedTheme {
   base: 'vs' | 'vs-dark';
   /** 注册到 Monaco 的主题名 */
   name: string;
+  /**
+   * 规范化后的 VSCode token 规则（scope 已拆分、颜色已归一为 #RRGGBB）。
+   * Monaco 之外的编辑器（如 jupyter 的 CodeMirror 视图）用它做自己的
+   * token→颜色映射 —— Monaco 的 rules 无法反向导出，所以加载时留底。
+   */
+  tokenRules?: NbTokenRule[];
+}
+
+/** 一条拆分后的 token 着色规则 */
+export interface NbTokenRule {
+  scope: string;
+  foreground: string;
+  fontStyle?: string;
 }
 
 const loadedThemes: LoadedTheme[] = [];
@@ -46,6 +59,7 @@ export function loadThemes(extension: InstalledExtension): number {
         label: themeContribution.label,
         base,
         name: themeName,
+        tokenRules: collectTokenRules(themeData),
       });
       count++;
     } catch {
@@ -73,8 +87,7 @@ function safeSetTheme(themeName: string): boolean {
 }
 
 /** 将 VSCode 主题转换为 Monaco 主题 */
-function convertThemeToMonaco(themeData: any, themeName: string, base: 'vs' | 'vs-dark'): void {
-  const colors: Record<string, string> = {};
+function convertThemeToMonaco(themeData: any, themeName: string, base: 'vs' | 'vs-dark'): void {  const colors: Record<string, string> = {};
   const rules: monaco.editor.ITokenThemeRule[] = [];
 
   // 编辑器颜色：走 Monaco 的 CSS 生成路径，支持带 alpha 的 8 位 hex
@@ -113,6 +126,30 @@ function convertThemeToMonaco(themeData: any, themeName: string, base: 'vs' | 'v
   }
 
   monaco.editor.defineTheme(themeName, { base, inherit: true, rules, colors });
+}
+
+/**
+ * 收集规范化 token 规则（供 Monaco 之外的编辑器复用，如 jupyter 的 CM 视图）。
+ * 与 convertThemeToMonaco 的解析保持同构：scope 按空格/逗号拆分、颜色归一为
+ * #RRGGBB（token 前景丢弃 alpha）、无 foreground 的规则跳过。
+ */
+function collectTokenRules(themeData: any): NbTokenRule[] {
+  const out: NbTokenRule[] = [];
+  if (!Array.isArray(themeData?.tokenColors)) return out;
+  for (const tokenColor of themeData.tokenColors) {
+    const rawScopes = Array.isArray(tokenColor.scope) ? tokenColor.scope : [tokenColor.scope];
+    const settings = tokenColor.settings || {};
+    const foreground = settings.foreground ? normalizeHex(settings.foreground) : '';
+    const fontStyle = typeof settings.fontStyle === 'string' ? settings.fontStyle : undefined;
+    if (!foreground) continue;
+    for (const rawScope of rawScopes) {
+      if (!rawScope || typeof rawScope !== 'string') continue;
+      for (const scope of rawScope.split(/[\s,]+/).filter(Boolean)) {
+        out.push({ scope, foreground, fontStyle });
+      }
+    }
+  }
+  return out;
 }
 
 /** 规范化颜色为 hex（无法识别时返回 ''，调用方据此跳过） */

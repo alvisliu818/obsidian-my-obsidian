@@ -28,7 +28,7 @@ import {
 } from 'cm-bundle:@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from 'cm-bundle:@codemirror/commands';
 import {
-  bracketMatching, indentOnInput, indentUnit, syntaxHighlighting,
+  bracketMatching, indentOnInput, indentUnit,
   HighlightStyle, StreamLanguage, foldGutter, foldKeymap, type StreamParser,
 } from 'cm-bundle:@codemirror/language';
 import { searchKeymap } from 'cm-bundle:@codemirror/search';
@@ -50,6 +50,7 @@ import {
   renderOutputsHTML, outcomeToOutputs, makeCell, cellBadge, notebookLang,
 } from './notebook';
 import { getKernel, peekKernel, disposeKernel } from './kernel/registry';
+import { nbSyntaxHighlighting } from './nbTheme';
 import type { KernelClient, KernelStatus } from './kernel/types';
 import type JupyterNotebookPlugin from './main';
 
@@ -131,7 +132,8 @@ function cellExtensions(
     indentOnInput(),
     indentUnit.of('    '),
     bracketMatching(),
-    syntaxHighlighting(highlightStyle, { fallback: true }),
+    // 有 VS Code 扩展代码主题时跟随主题配色（logseq 的 themeLoader），否则用内置配色
+    nbSyntaxHighlighting(highlightStyle),
     EditorView.lineWrapping,
     ...(readonly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
     keymap.of([
