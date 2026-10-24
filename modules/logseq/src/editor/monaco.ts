@@ -545,11 +545,14 @@ export function createEditor(
     options.scrollBeyondLastLine = false;
     // 块内同样不留末列空位(同 pooled 路径的注释)
     options.scrollBeyondLastColumn = 0;
-  }
-  // 块内:横向滚动条尺寸与静态阅读态的细条一致(条带高度见 CODE_HSCROLL_STRIP),
-  // 两态的条粗细相同。
-  if (opts.autoHeight) {
-    options.scrollbar = { ...options.scrollbar, horizontalScrollbarSize: CODE_HSCROLL_STRIP };
+    // 滚轮还给页面:块内编辑器贴内容、自身纵向无溢出,Monaco 默认
+    // alwaysConsumeMouseWheel:true 会把滚轮吞掉(页面不动)——关掉后
+    // Monaco 滚不动时滚轮透传给外层大纲容器(2026-10-24 用户报)。
+    options.scrollbar = {
+      ...options.scrollbar,
+      horizontalScrollbarSize: CODE_HSCROLL_STRIP,
+      alwaysConsumeMouseWheel: false,
+    };
   }
   const editor = monaco.editor.create(container, options);
   editorScopes.set(editor, scope);
@@ -769,6 +772,9 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
     // 滚到最右不留 5 列空位(Monaco 默认 scrollBeyondLastColumn:5 会在末列后
     // 留 ~50px 空白,滚到头就是一条空白带——2026-10-24 用户报)
     scrollBeyondLastColumn: 0,
+    // 滚轮还给页面(同 createEditor autoHeight 分支的论证);横向滚动条
+    // 尺寸与静态阅读态细条一致。
+    scrollbar: { horizontalScrollbarSize: CODE_HSCROLL_STRIP, alwaysConsumeMouseWheel: false },
     smoothScrolling: true,
     cursorBlinking: 'smooth',
     renderWhitespace: 'selection',
