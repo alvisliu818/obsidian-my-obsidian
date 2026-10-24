@@ -541,7 +541,11 @@ export function createEditor(
   // 覆盖;块内锁死键不在覆盖表里(见 editorSettings.buildEditorOptionOverrides)。
   Object.assign(options, buildEditorOptionOverrides(scope, getEditorSettings()));
   // autoHeight 是结构意图(容器贴内容,滚动无意义),复位掉覆盖层可能给的 true。
-  if (opts.autoHeight) options.scrollBeyondLastLine = false;
+  if (opts.autoHeight) {
+    options.scrollBeyondLastLine = false;
+    // 块内同样不留末列空位(同 pooled 路径的注释)
+    options.scrollBeyondLastColumn = 0;
+  }
   // 块内:横向滚动条尺寸与静态阅读态的细条一致(条带高度见 CODE_HSCROLL_STRIP),
   // 两态的条粗细相同。
   if (opts.autoHeight) {
@@ -762,6 +766,9 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
     suggestLineHeight: suggestLineHeightFor(13),
     automaticLayout: true,
     scrollBeyondLastLine: false,
+    // 滚到最右不留 5 列空位(Monaco 默认 scrollBeyondLastColumn:5 会在末列后
+    // 留 ~50px 空白,滚到头就是一条空白带——2026-10-24 用户报)
+    scrollBeyondLastColumn: 0,
     smoothScrolling: true,
     cursorBlinking: 'smooth',
     renderWhitespace: 'selection',
