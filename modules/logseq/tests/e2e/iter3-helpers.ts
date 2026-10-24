@@ -7,7 +7,7 @@
  */
 
 import { test, expect, chromium, type Browser, type Page } from '@playwright/test';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execSync, spawn } from 'node:child_process';
 
@@ -61,26 +61,36 @@ export async function launchObsidian(ctx: Ctx, fixtures: Record<string, string>)
   // Pin the take-over settings: the vault is shared with manual testing, and
   // a hand-tuned scope (folders / exclusions) would silently un-take-over the
   // fixture folders and fail every suite at the openFile step.
-  writeFileSync(
-    join(VAULT, '.obsidian', 'plugins', 'obsidian-logseq', 'data.json'),
-    JSON.stringify(
-      {
-        excludedFolders: '',
-        saveDebounceMs: 800,
-        takeOverByDefault: true,
-        scopeMode: 'all',
-        includedFolders: '',
-        journalFolder: '',
-        journalFormat: '',
-        journalTemplate: '',
-        customTemplateVars: '',
-        backupsEnabled: true,
-        opLogEnabled: true,
-      },
-      null,
-      2,
-    ),
-  );
+  const pinned = {
+    excludedFolders: '',
+    saveDebounceMs: 800,
+    takeOverByDefault: true,
+    scopeMode: 'all',
+    includedFolders: '',
+    journalFolder: '',
+    journalFormat: '',
+    journalTemplate: '',
+    customTemplateVars: '',
+    backupsEnabled: true,
+    opLogEnabled: true,
+  };
+  // 宿主合并后模块数据在 obsidian-my-obsidian 的切片里；旧独立插件路径的
+  // data.json 同步钉一份（目录可能不存在，模块迁移逻辑还会读它）。
+  const legacyDir = join(VAULT, '.obsidian', 'plugins', 'obsidian-logseq');
+  mkdirSync(legacyDir, { recursive: true });
+  writeFileSync(join(legacyDir, 'data.json'), JSON.stringify(pinned, null, 2));
+  const hostDataPath = join(VAULT, '.obsidian', 'plugins', 'obsidian-my-obsidian', 'data.json');
+  try {
+    const hostData = JSON.parse(readFileSync(hostDataPath, 'utf8')) as {
+      modules?: Record<string, { data?: Record<string, unknown> }>;
+    };
+    if (hostData.modules?.logseq) {
+      hostData.modules.logseq.data = { ...hostData.modules.logseq.data, ...pinned };
+      writeFileSync(hostDataPath, JSON.stringify(hostData, null, 2));
+    }
+  } catch {
+    /* 宿主切片不存在时由旧路径兜底 */
+  }
   // Dedicated user-data-dir: Obsidian is single-instance per profile, so the
   // test instance can never interact with (or forward into) the user's main
   // vault instance. The profile's registry opens the test vault directly.
@@ -133,6 +143,7 @@ export async function launchObsidian(ctx: Ctx, fixtures: Record<string, string>)
     await sleep(500);
   }
   if (!onTestVault) throw new Error('Connected Obsidian is NOT the test vault — aborting');
+  restoreTestWindow();
   // Trust dialog (click trust — Escape means safe mode = plugin disabled).
   for (let k = 0; k < 10; k++) {
     const modal = await page.locator('.modal-container.mod-dim').first().isVisible().catch(() => false);
@@ -156,6 +167,25 @@ export async function launchObsidian(ctx: Ctx, fixtures: Record<string, string>)
   }
 }
 
+/**
+ * Restore + focus the TEST instance's window. A minimized Electron window
+ * stops laying out — every element reports zero-size/"hidden" to Playwright
+ * (and screenshots time out on fonts), so minimize must be undone before any
+ * DOM assertion. Title-filtered to the test vault so the user's main-vault
+ * window stays untouched.
+ */
+function restoreTestWindow(): void {
+  try {
+    execSync(
+      'powershell -NoProfile -ExecutionPolicy Bypass -File "' +
+        join(__dirname, '_restore-e2e-window.ps1') + '"',
+      { stdio: 'ignore', timeout: 15_000 },
+    );
+  } catch {
+    /* best effort */
+  }
+}
+
 export async function closeObsidian(ctx: Ctx): Promise<void> {
   try {
     ctx.browser?.close();
@@ -168,9 +198,18 @@ export async function closeObsidian(ctx: Ctx): Promise<void> {
 /** Open a file and wait for the block editor container + dismiss any modal. */
 export async function openFile(ctx: Ctx, link: string): Promise<void> {
   const { page } = ctx;
+  restoreTestWindow();
   await page.evaluate(async (l: string) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (window as any).app.workspace.openLinkText(l, '', false);
+    const app = (window as any).app;
+    // 旧的块编辑器叶子（restore 布局里的后台标签）会让 DOM 里出现多个
+    // .block-editor-container，locator 命中的第一个可能是 display:none 的——
+    // 先全部 detach，再开一个确定可见的新叶。
+    for (const leaf of app.workspace.getLeavesOfType('logseq-block-editor')) leaf.detach();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const leaf = (window as any).app.workspace.getLeaf(true);
+    await leaf.setViewState({ type: 'logseq-block-editor', state: { file: l + '.md' } });
+    app.workspace.revealLeaf(leaf);
   }, link);
   await expect(page.locator('.block-editor-container').first()).toBeVisible({ timeout: 60_000 });
   await page.bringToFront();

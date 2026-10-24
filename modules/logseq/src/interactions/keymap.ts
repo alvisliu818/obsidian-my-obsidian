@@ -35,9 +35,46 @@ function deleteSelection(view: EditorView): { text: string; offset: number } {
   return { text: text.slice(0, sel.from) + text.slice(sel.to), offset: sel.from };
 }
 
-/** Enter: split block at caret; tail becomes a new sibling below. */
-export function handleEnter(view: EditorView, host: BlockRenderHost): boolean {
+/**
+ * 段落容器(bare)行首敲出 `-`/`*`/`+` 后按空格 → 立即转成大纲块。
+ *
+ * 思源/Typora 的即时转换：不等回车，圆点马上出现、样式与原生大纲块一致
+ * （此前要等回车才转，转出来的块还残留段落容器的 bare 样式）。
+ *
+ * 空格本身不消费（照常插入），转换推迟一个宏任务——等 CM 把空格落进文档、
+ * 事务收尾后再经 mutate 重建块；在 CM 的按键/更新回调里同步重建编辑器会
+ * 炸掉进行中的事务。
+ */
+export function handleSpace(view: EditorView, host: BlockRenderHost): boolean {
   const b = focusedBlock(host);
+  if (!b || b.kind !== 'list' || !b.bare) return false;
+  const sel = view.state.selection.main;
+  if (!sel.empty) return false;
+  const text = view.state.doc.toString();
+  const lineStart = text.lastIndexOf('\n', Math.max(0, sel.head - 1)) + 1;
+  // 只认块首行行首的单个列表标记（软行/续行的列表化是另一档语义，不在这里做）。
+  if (lineStart !== 0 || !/^[*+-]$/.test(text.slice(0, sel.head))) return false;
+  setTimeout(() => {
+    const now = view.state.doc.toString();
+    if (!/^[*+-]\s/.test(now)) return;
+    const parent = b.parent;
+    const pos = Math.min(view.state.selection.main.head, now.length);
+    host.mutate(
+      () => {
+        // 缓冲区 → 模型一并同步（mutate 会重建 wrap，重建读的是模型；
+        // 不同步的话刚敲的标记会随重渲染丢掉）。
+        b.text = now;
+        b.bare = false;
+      },
+      () => ({ lists: [parent] }),
+    );
+    host.focusBlock(b, pos);
+  }, 0);
+  return false; // 空格照常插入
+}
+
+/** Enter: split block at caret; tail becomes a new sibling below. */
+export function handleEnter(view: EditorView, host: BlockRenderHost): boolean {  const b = focusedBlock(host);
   if (!b) return false;
   // 思源交互:空的列表块(同级末尾)上回车 → 退出列表、转成段落容器。
   // 常见路径是"在有内容的块上回车得到空的列表块,再回车变成段落"——

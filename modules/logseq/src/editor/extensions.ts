@@ -215,6 +215,7 @@ import {
   handleEscape,
   handleJumpBlock,
   handleMoveBlock,
+  handleSpace,
   handleTab,
   handleWrapChar,
 } from '../interactions/keymap';
@@ -252,6 +253,8 @@ export function createBlockKeymap(host: BlockRenderHost): KeyBinding[] {
 
   if (on.newBlock) {
     bindings.push({ key: 'Enter', run: (v) => handleEnter(v, host) });
+    // 段落容器行首敲列表标记后按空格 → 立即转大纲块（不等回车）。
+    bindings.push({ key: ' ', run: (v) => handleSpace(v, host) });
   }
   if (on.selectionWrap) {
     bindings.push(
