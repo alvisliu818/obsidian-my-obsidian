@@ -1109,6 +1109,12 @@ export class AutoSaveController {
           // Manual mode (issue #26) is handled by the awaited workspace 'quit'
           // task. Do NOT mark isUnloading here: if the user picks "keep editing"
           // the window stays open and the next close must still be intercepted.
+          // 取消过一次退出后再次关窗:上一个 quit 任务还挂在三选一的取消分支上
+          // (设计如此——resolve 会让 Obsidian 关窗),Obsidian 的 Saving 浮层会
+          // 因新 quit 流程再次出现且无人清——这里先摘浮层+重挂钩子,让这次
+          // 关窗能重新走完整 quit 流程(再次弹三选一)。
+          this.removeOrphanedSavingOverlay();
+          this.reArmObsidianQuitHook();
           return;
         }
         event.preventDefault();
