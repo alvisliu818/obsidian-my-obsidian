@@ -996,16 +996,28 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
         (codeInfo.prefix ? codeInfo.prefix.length + 1 : 0) + codeInfo.openLine.length + 1;
       const len = ed.getDocLength();
       if (pending?.clickXY) {
+        const click = pending.clickXY;
         // On mixed mounts the layout barely changed (only the code element
         // was swapped), so the click maps accurately onto the fresh editor.
-        let p = ed.offsetAtCoords(pending.clickXY.x, pending.clickXY.y, 0);
-        if (pending.staticPos !== null) {
-          const top = ed.topAtOffset(p);
-          if (top === null || Math.abs(top - pending.clickXY.y) > 60) {
-            p = Math.max(0, Math.min(pending.staticPos - beforeLen, len));
+        //
+        // getTargetAtClientPoint 基于实时 DOM 几何,挂载后即正确(实测与布局
+        // 稳定后的映射一致)。不要用「映射位置的纵向坐标 vs 点击 Y」做校验:
+        // 自动布局收敛期 top 会漂移,误判触发 staticPos 回退 → 光标跳行尾
+        // (2026-10-24 用户报)。点击落在代码区外(p<0)重试几帧后落到
+        // staticPos 的行尾。
+        let tries = 0;
+        const tick = (): void => {
+          tries++;
+          const p = ed.offsetAtCoords(click.x, click.y, -1);
+          if (p < 0 && tries < 6) {
+            requestAnimationFrame(tick);
+            return;
           }
-        }
-        ed.placeCursorAndScroll(p);
+          const fallback =
+            pending.staticPos !== null ? Math.max(0, Math.min(pending.staticPos - beforeLen, len)) : len;
+          ed.placeCursorAndScroll(p >= 0 ? p : fallback);
+        };
+        tick();
       } else if (pending) {
         const p =
           pending.pos === 'start'
