@@ -344,24 +344,24 @@ export class SaveControlSettingTab extends PluginSettingTab {
       });
 
     // ----------------------------------------------------------------
-    // 库外文件
+    // 版本存储
     // ----------------------------------------------------------------
-    new Setting(containerEl).setName("库外文件").setHeading();
+    new Setting(containerEl).setName("版本存储").setHeading();
 
-    const extSetting = new Setting(containerEl)
-      .setName("库外快照目录")
-      .setDesc("库外文件的版本快照存放位置。留空 = 插件目录下的 save-control-snapshots；绝对路径按原样用；相对路径相对库根。改动只影响之后的新快照。");
-    let extText: TextComponent;
-    extSetting.addText((t) => {
-      extText = t;
-      t.setValue(this.plugin.settings.externalSnapshotFolder);
+    const rootSetting = new Setting(containerEl)
+      .setName("版本存储位置")
+      .setDesc("历史版本（库内 + 库外）的存放根目录，按文件的绝对路径分文件夹。留空 = E:\\HOME\\Runtime\\save-control-versions；绝对路径按原样用；相对路径相对库根。改动只影响之后的新快照（旧根里的数据不搬动）。");
+    let rootText: TextComponent;
+    rootSetting.addText((t) => {
+      rootText = t;
+      t.setValue(this.plugin.settings.versionStorageFolder);
       t.inputEl.addClass("sh-settings-input");
     });
-    extSetting.addExtraButton((b) => {
+    rootSetting.addExtraButton((b) => {
       b.setIcon("save").setTooltip("保存");
       b.onClick(() => {
         void (async () => {
-          this.plugin.settings.externalSnapshotFolder = extText.getValue().trim();
+          this.plugin.settings.versionStorageFolder = rootText.getValue().trim();
           await this.plugin.saveSettings();
           this.plugin.toast("已保存（现有快照不搬动）。");
         })();

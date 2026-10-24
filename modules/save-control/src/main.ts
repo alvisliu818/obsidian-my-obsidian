@@ -38,8 +38,9 @@ import { SaveControlSettingTab } from "./settingsTab";
 import { setLanguage, translate } from "./locale";
 import {
   getSnapshotDirPath,
-  renameSnapshotFolder,
-  removeEmptyParentDirs,
+  keyUnderRoot,
+  getVersionRoot,
+  migrateLegacySnapshots,
   deleteSnapshotDirForFile,
   listSnapshotsForFile,
   saveSnapshotContent,
@@ -53,7 +54,7 @@ import { askUnsavedClose } from "./closePrompt";
 import { SaveStatusIndicator } from "./autosave-ui/StatusIndicator";
 import { ExternalSaveScheduler } from "./externalScheduler";
 import { UnsavedDotMonitor } from "./tabUnsavedDot";
-import { resolveExternalSnapshotRoot } from "./externalStore";
+import { renameExternalSnapshotDir, pruneEmptyDirs } from "./externalStore";
 import { ON_WRITE_PREVIOUS_NAME, ON_WRITE_SNAPSHOT_NAME } from "./autoVersion";
 import {
   asExternalSaveHandle,
@@ -65,7 +66,6 @@ import {
   vaultTarget,
   type SaveTarget,
 } from "./targets";
-import { renameExternalSnapshotDir } from "./externalStore";
 import { extOfName } from "./fileKind";
 
 export type { SaveControlSettings, PerFileSettings, GroupByMode };
@@ -212,6 +212,16 @@ export class SaveControlPlugin extends Plugin {
         this.onExternalDeleted(args[0] as string);
       }),
     );
+
+    // 旧库内快照（.versions(SH)）一次性迁到统一版本存储根。必须在 vault
+    // 事件挂上之前完成：迁移未完成时到来的改名事件会在新布局上寻址，把
+    // 旧布局里的数据留在旧名字下。失败也不能炸掉模块加载——旧数据留在
+    // 原地，下次启动重试。
+    try {
+      await migrateLegacySnapshots(this);
+    } catch (e) {
+      console.error("[save-control] 旧快照迁移失败（下次启动重试）", e);
+    }
 
     this.restoreTempVersionFiles();
     this.registerVaultEventHandlers();
@@ -468,24 +478,10 @@ export class SaveControlPlugin extends Plugin {
     return file instanceof TFile ? vaultTarget(file) : null;
   }
 
-  /** 快照存储寻址：库内 = vault 路径；库外 = 快照目录(绝对路径)。 */
+  /** 快照存储寻址：库内 = vault 路径（storage 映射进版本存储根）；库外 = 快照目录(绝对路径)。 */
   snapshotPathFor(target: SaveTarget): string {
     if (target.kind === "vault") return target.key;
-    return `${this.getExternalSnapshotRoot()}/${snapshotKeyFor(target)}`;
-  }
-
-  getExternalSnapshotRoot(): string {
-    const adapter = this.app.vault.adapter as unknown as {
-      basePath?: string;
-      getBasePath?: () => string;
-    };
-    const vaultBase =
-      (typeof adapter.getBasePath === "function" ? adapter.getBasePath() : adapter.basePath) ?? "";
-    return resolveExternalSnapshotRoot({
-      configured: this.settings.externalSnapshotFolder,
-      vaultBase,
-      pluginDir: this.manifest.dir ?? "",
-    });
+    return `${getVersionRoot(this)}/${snapshotKeyFor(target)}`;
   }
 
   private registerExternalTarget(target: SaveTarget): void {
@@ -526,7 +522,7 @@ export class SaveControlPlugin extends Plugin {
   private onExternalRenamed(oldAbs: string, newAbs: string): void {
     const oldTarget = externalTarget(oldAbs);
     const newTarget = externalTarget(newAbs);
-    const root = this.getExternalSnapshotRoot();
+    const root = getVersionRoot(this);
     renameExternalSnapshotDir(root, snapshotKeyFor(oldTarget), snapshotKeyFor(newTarget));
     // 按文件设置的键跟着搬（键 = 快照目录）。
     const oldKey = this.snapshotPathFor(oldTarget);
@@ -543,7 +539,7 @@ export class SaveControlPlugin extends Plugin {
 
   private onExternalDeleted(abs: string): void {
     const target = externalTarget(abs);
-    const root = this.getExternalSnapshotRoot();
+    const root = getVersionRoot(this);
     const dir = `${root}/${snapshotKeyFor(target)}`;
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -574,8 +570,14 @@ export class SaveControlPlugin extends Plugin {
         const oldDir = getSnapshotDirPath(this, oldPath);
         const newDir = getSnapshotDirPath(this, file.path);
 
-        // Don't await rename — it can be slow on Windows
-        const renamePromise = renameSnapshotFolder(this.app.vault.adapter, oldDir, newDir);
+        // Don't await rename — it can be slow on Windows。统一存储后两个目录
+        // 都是版本存储根下的绝对目录，改名 = fs 目录树整体搬移（同盘瞬间）。
+        const root = getVersionRoot(this);
+        const oldKey = keyUnderRoot(root, oldDir);
+        const newKey = keyUnderRoot(root, newDir);
+        const renamePromise = Promise.resolve().then(() =>
+          renameExternalSnapshotDir(root, oldKey, newKey),
+        );
 
         const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_SAVE_HISTORY);
         const refreshViews = () => {
@@ -603,8 +605,9 @@ export class SaveControlPlugin extends Plugin {
 
         void renamePromise.then(refreshViews).catch(() => {});
 
-        const parentDir = oldDir.substring(0, oldDir.lastIndexOf("/"));
-        void removeEmptyParentDirs(this, parentDir);
+        // 旧名字这棵树搬空后清掉空壳目录（绝不越过多半还在用的根）。
+        const parentDir = oldDir.replace(/[\\/]+/g, "/").split("/").slice(0, -1).join("/");
+        pruneEmptyDirs(root, parentDir);
       }),
     );
     this.registerEvent(

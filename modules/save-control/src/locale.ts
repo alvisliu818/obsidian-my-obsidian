@@ -286,7 +286,7 @@ const en: TranslationKeys = {
   groupVersionsBy: "Group versions by",
   groupVersionsDesc: "Group saved versions in the sidebar by time period.",
   snapshotFolder: "Snapshot folder",
-  snapshotFolderDesc: "Folder in the vault root where versions are stored. Start with \".\" to hide it from Obsidian's file explorer.",
+  snapshotFolderDesc: "Legacy in-vault snapshot folder. New snapshots live outside the vault (see Version storage location); this folder only keeps preview temp files and pre-migration data.",
   snapshotFolderRenamed: "Folder renamed successfully.",
   snapshotFolderRenameFailed: "Failed to rename folder.",
 
@@ -444,7 +444,7 @@ const ru: TranslationKeys = {
   groupVersionsBy: "Группировка версий",
   groupVersionsDesc: "Группировать версии в боковой панели по периодам.",
   snapshotFolder: "Папка снимков",
-  snapshotFolderDesc: "Папка в корне хранилища, где хранятся версии. Начните с \".\", чтобы скрыть её из проводника Obsidian.",
+  snapshotFolderDesc: "Устаревшая папка снимков внутри хранилища. Новые снимки хранятся вне хранилища (см. \"Расположение хранилища версий\"); здесь остаются только временные файлы предпросмотра и данные до миграции.",
   snapshotFolderRenamed: "Папка успешно переименована.",
   snapshotFolderRenameFailed: "Не удалось переименовать папку.",
 
@@ -602,7 +602,7 @@ const es: TranslationKeys = {
   groupVersionsBy: "Agrupar versiones por",
   groupVersionsDesc: "Agrupar versiones guardadas en el panel lateral por período de tiempo.",
   snapshotFolder: "Carpeta de instantáneas",
-  snapshotFolderDesc: "Carpeta en la raíz del vault donde se almacenan las versiones. Comienza con \".\" para ocultarla del explorador de Obsidian.",
+  snapshotFolderDesc: "Carpeta de instantáneas antigua dentro del vault. Las nuevas instantáneas se guardan fuera del vault (ver \"Ubicación del almacenamiento de versiones\"); aquí solo quedan archivos temporales de vista previa y datos previos a la migración.",
   snapshotFolderRenamed: "Carpeta renombrada correctamente.",
   snapshotFolderRenameFailed: "Error al renombrar la carpeta.",
 

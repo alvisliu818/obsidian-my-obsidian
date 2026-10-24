@@ -68,12 +68,13 @@ export interface SaveControlSettings {
   previewMode: PreviewMode;
   perFileSettings: Record<string, PerFileSettings>;
 
-  // ---- 库外文件 ----
+  // ---- 版本存储 ----
   /**
-   * 库外文件快照的根目录。空 = 插件目录下的 save-control-snapshots；
-   * 绝对路径按原样用；相对路径相对库根解析。
+   * 历史版本的存储根目录（库内 + 库外统一）。空 =
+   * E:/HOME/Runtime/save-control-versions；绝对路径按原样用；相对路径相对
+   * 库根解析。快照按文件的绝对路径镜像分文件夹。
    */
-  externalSnapshotFolder: string;
+  versionStorageFolder: string;
 }
 
 export const DEFAULT_SETTINGS: SaveControlSettings = {
@@ -109,7 +110,7 @@ export const DEFAULT_SETTINGS: SaveControlSettings = {
   maxOnWriteVersions: 10,
   perFileSettings: {},
 
-  externalSnapshotFolder: "",
+  versionStorageFolder: "",
 };
 
 /**

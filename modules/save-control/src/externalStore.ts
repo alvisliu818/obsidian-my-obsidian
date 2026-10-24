@@ -1,15 +1,16 @@
 /**
- * 库外文件的快照存储：Node fs 版的上游 storage.ts。
+ * 版本快照存储：Node fs 版的上游 storage.ts。
  *
  * 上游把快照放在库内 `<snapshotFolder>/<vault 路径>/<时间戳>.json`，靠
- * vault adapter 读写。库外文件没有 vault 路径，也不能往用户的文件夹里塞
- * `.versions(SH)`，于是落到插件目录（或设置指定的目录）下：
+ * vault adapter 读写。统一后（库内 + 库外）快照全部落在一个**版本存储根**
+ * （默认 E:/HOME/Runtime/save-control-versions，设置可改）下，按文件绝对
+ * 路径镜像出的目录树分文件夹：
  *
- *   <root>/<snapshotKey>/<时间戳>.json
+ *   <root>/<absPathKey>/<时间戳>.json
  *
- * snapshotKey 由 targets.snapshotKeyFor 产生（转义路径 + 8 位哈希），记录
- * 格式与库内完全相同（{timestamp, content, name, favorite?}），所以列举、
- * 恢复、对比的代码两边共用。
+ * key 由 targets.snapshotKeyFor / absPathKey 产生，记录格式与上游完全相同
+ * （{timestamp, content, name, favorite?}），所以列举、恢复、对比的代码
+ * 两边共用。
  *
  * fs 走可注入的 NodeFsLike：单测不碰真盘，生产用真 fs。
  */
@@ -31,6 +32,8 @@ export interface ExternalFsLike {
   unlinkSync?(p: string): void;
   renameSync?(from: string, to: string): void;
   rmSync?(p: string, opts: { recursive: true; force: true }): void;
+  /** 目录/文件甄别用；缺省时按「不以 .json 结尾 = 目录」兜底。 */
+  statSync?(p: string): { isDirectory(): boolean };
 }
 
 const hooks: { fs?: ExternalFsLike } = {};
@@ -46,6 +49,11 @@ function fsMod(): ExternalFsLike {
   return eval("require")("fs") as ExternalFsLike;
 }
 
+/** 生产用 Node fs、测试用注入 fs 的统一出口（storage 的迁移/清理也走这里）。 */
+export function fsLike(): ExternalFsLike {
+  return fsMod();
+}
+
 function join(...parts: string[]): string {
   return parts
     .join("/")
@@ -53,27 +61,30 @@ function join(...parts: string[]): string {
     .replace(/^\/\//, "/");
 }
 
-/** 解析库外快照根目录（绝对路径）。 */
-export function resolveExternalSnapshotRoot(opts: {
-  /** 设置里的 externalSnapshotFolder：空 = 插件目录下默认名。 */
+/** 版本存储根的默认位置：E:\HOME\Runtime 下的子文件夹（机器本地运行数据）。 */
+export const DEFAULT_VERSION_ROOT = "E:/HOME/Runtime/save-control-versions";
+
+/**
+ * 解析版本存储根目录（绝对路径）。
+ *
+ * 设置留空 = 默认根（E:/HOME/Runtime/save-control-versions）；绝对路径按
+ * 原样用；相对路径相对库根解析。
+ */
+export function resolveVersionRoot(opts: {
+  /** 设置里的 versionStorageFolder：空 = 默认根。 */
   configured: string;
-  /** 库根（vault.adapter.basePath）。 */
+  /** 库根（vault.adapter.basePath），相对路径与某些兜底要用。 */
   vaultBase: string;
-  /** 插件目录（manifest.dir，可能相对库根）。 */
-  pluginDir: string;
 }): string {
   const configured = (opts.configured ?? "").trim();
   if (configured) {
-    if (/^[A-Za-z]:[\\/]/.test(configured) || configured.startsWith("/")) return configured.replace(/[\\/]+$/, "");
+    if (/^[A-Za-z]:[\\/]/.test(configured) || configured.startsWith("/")) {
+      return configured.replace(/[\\/]+$/, "");
+    }
     const base = opts.vaultBase.replace(/[\\/]+$/, "");
     return `${base}/${configured.replace(/^[\\/]+/, "")}`;
   }
-  const dir = opts.pluginDir.replace(/[\\/]+$/, "");
-  const base = opts.vaultBase.replace(/[\\/]+$/, "");
-  // manifest.dir 通常是 `.obsidian/plugins/<id>`（相对库根）；极端情况下是
-  // 绝对路径，那时直接用。
-  const abs = /^[A-Za-z]:[\\/]/.test(dir) || dir.startsWith("/") ? dir : `${base}/${dir}`;
-  return join(abs, "save-control-snapshots");
+  return DEFAULT_VERSION_ROOT;
 }
 
 export function externalSnapshotDir(root: string, key: string): string {
@@ -94,7 +105,8 @@ export function normalizeRecord(raw: Record<string, unknown>): SnapshotRecord {
   };
 }
 
-function ensureDir(dir: string): void {
+/** 逐级建目录（绝对路径两种形态都要保住前缀）。 */
+export function ensureDir(dir: string): void {
   const fs = fsMod();
   if (fs.existsSync(dir)) return;
   const parts = dir.replace(/[\\/]+/g, "/").split("/");
@@ -168,7 +180,7 @@ export function deleteExternalSnapshot(root: string, filePath: string): boolean 
     const fs = fsMod();
     if (!fs.existsSync(filePath)) return false;
     fs.unlinkSync?.(filePath);
-    removeEmptyDirs(root, filePath);
+    pruneEmptyDirs(root, filePath.replace(/[\\/]+/g, "/").split("/").slice(0, -1).join("/"));
     return true;
   } catch (e) {
     console.error("[save-control] external snapshot delete failed", filePath, e);
@@ -202,10 +214,10 @@ export function renameExternalSnapshotDir(root: string, oldKey: string, newKey: 
   }
 }
 
-/** 从被删快照向上清理空目录，但绝不删根。 */
-function removeEmptyDirs(root: string, filePath: string): void {
+/** 从 startDir 向上清理空目录，但绝不删根（root 本身与根之外的都不动）。 */
+export function pruneEmptyDirs(root: string, startDir: string): void {
   const fs = fsMod();
-  let dir = filePath.replace(/[\\/]+/g, "/").split("/").slice(0, -1).join("/");
+  let dir = startDir.replace(/[\\/]+/g, "/").replace(/\/+$/, "");
   while (dir && dir !== root && dir.startsWith(root + "/")) {
     let names: string[] = [];
     try {
@@ -220,5 +232,62 @@ function removeEmptyDirs(root: string, filePath: string): void {
       break;
     }
     dir = dir.split("/").slice(0, -1).join("/");
+  }
+}
+
+/**
+ * 把目录 from 整体搬到 to（迁移用，可重入）：
+ *
+ *   - to 不存在 → 直接 rename（同盘瞬间完成）；
+ *   - to 已存在（上次迁移中断）→ 逐文件补齐缺的，齐全后删空源目录；
+ *   - rename 失败（跨盘等）→ 复制内容到 to 再删源，逐文件进行，
+ *     失败的文件留在原地，下次启动重试。
+ *
+ * 返回是否全部搬完（源目录已消失）。
+ */
+export function moveDirFs(from: string, to: string): boolean {
+  const fs = fsMod();
+  const norm = (p: string) => p.replace(/[\\/]+/g, "/").replace(/\/+$/, "");
+  const src = norm(from);
+  const dst = norm(to);
+  if (src === dst) return true;
+  try {
+    if (!fs.existsSync(src)) return true;
+    if (!fs.existsSync(dst)) {
+      ensureDir(dst.split("/").slice(0, -1).join("/"));
+      try {
+        fs.renameSync?.(src, dst);
+        return true;
+      } catch {
+        ensureDir(dst); // 跨盘 rename 失败：落个目录接着按文件复制
+      }
+    }
+    let allMoved = true;
+    for (const n of fs.readdirSync(src)) {
+      const s = `${src}/${n}`;
+      const d = `${dst}/${n}`;
+      const isDir = fs.statSync ? fs.statSync(s).isDirectory() : !n.endsWith(".json");
+      if (isDir) {
+        if (!moveDirFs(s, d)) allMoved = false;
+        continue;
+      }
+      if (fs.existsSync(d)) continue; // 目标已有同名快照：不覆盖，源里的稍后随目录清掉
+      try {
+        fs.writeFileSync(d, fs.readFileSync(s, "utf8"), "utf8");
+      } catch {
+        allMoved = false;
+      }
+    }
+    if (allMoved) {
+      try {
+        fs.rmSync?.(src, { recursive: true, force: true });
+      } catch {
+        allMoved = false;
+      }
+    }
+    return allMoved;
+  } catch (e) {
+    console.error("[save-control] move dir failed", src, dst, e);
+    return false;
   }
 }

@@ -5,8 +5,9 @@
  * 事件处理都是）。虚拟文档树里的库外文件没有 vault 路径，于是有这一层：
  *
  *   - vault    目标带 TFile，读写走 vault API，快照落在库内快照文件夹；
- *   - external 目标带绝对路径，读写走 Node fs，快照落在插件目录（或设置指定
- *              的目录）下，以转义 + 哈希的目录名存放。
+ *   - external 目标带绝对路径，读写走 Node fs，快照落在统一的版本存储根
+ *              （默认 E:/HOME/Runtime/save-control-versions）下，以绝对路径
+ *              镜像出的目录树存放。
  *
  * 其余代码（版本历史 UI、自动保存、间隔快照）只面对 SaveTarget，不关心文件
  * 在库里还是库外。
@@ -178,29 +179,34 @@ export async function writeTargetContent(app: App, target: SaveTarget, content: 
 }
 
 /**
- * 快照存储键：库内直接用 vault 路径（与上游布局完全一致，老快照接着用）；
- * 库外是绝对路径，不能当文件夹名，转义成 `盘符_路径` 再补 8 位哈希——
- * 可读enough以便人工排查，又不会因为大小写或个别字符撞车。
+ * 快照存储键：库内直接用 vault 路径（上游布局）；库外是绝对路径，按目录树
+ * 镜像编码（absPathKey）——一个文件一个文件夹，路径即键，人工可查、无哈希、
+ * 不撞车（绝对路径到树位置是一一映射）。
  */
 export function snapshotKeyFor(target: SaveTarget): string {
   if (target.kind === "vault") return target.key;
-  const raw = target.abs ?? target.key;
-  const escaped = raw
-    .replace(/[\\/:*?"<>|]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_|_$/g, "")
-    .slice(0, 120);
-  return `ext_${escaped}_${hash8(raw)}`;
+  return absPathKey(target.abs ?? target.key);
 }
 
-/** 稳定的小哈希（FNV-1a 变体），只用于目录名去撞，不用于安全。 */
-export function hash8(input: string): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < input.length; i++) {
-    h ^= input.charCodeAt(i);
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return h.toString(16).padStart(8, "0");
+/**
+ * 绝对路径 → 快照根下的目录树键：反斜杠转正斜杠，去掉盘符冒号
+ * （Windows 目录名不允许 `E:`），逐段兜底替换非法字符。
+ *
+ * `E:\a\b.md` → `E/a/b.md`；POSIX `/a/b` → `/a/b`。
+ * 段尾的点和空格会被去掉（Windows 会静默剥掉它们，留着会造成寻址不一致）。
+ */
+export function absPathKey(abs: string): string {
+  const s = abs.replace(/\\/g, "/");
+  const noDrive = /^[A-Za-z]:\//.test(s) ? `${s[0]}${s.slice(2)}` : s;
+  return noDrive
+    .split("/")
+    .map((seg) => seg.replace(/[*?<>|:"]+/g, "_").replace(/[. ]+$/, ""))
+    .join("/");
+}
+
+/** absPathKey 的逆映射（尽力）：补回盘符冒号。 */
+export function decodeAbsKey(key: string): string {
+  return /^[A-Za-z]\//.test(key) ? `${key[0]}:${key.slice(1)}` : key;
 }
 
 /** 库外视图的挂载文件夹（logseq 的 MOUNT_FOLDER）： minted handle 的 path 前缀，
