@@ -150,11 +150,8 @@ function buildCodeToolbar(wrap: HTMLElement, ctx: ToolbarCtx): HTMLElement {
   // 「▶ 运行」+ 输出面板(仅 python/js/shell;按块记状态,重渲染后重挂)
   const runBtn = createRunButton(ctx.info.lang, ctx.getCode, ctx.block);
   if (runBtn) bar.appendChild(runBtn);
-  // Esc hint: only meaningful while editing (CSS hides it in the reading state).
-  const hint = document.createElement('span');
-  hint.className = 'lgp-code-edit-hint';
-  hint.textContent = 'Esc';
-  bar.appendChild(hint);
+  // Esc 提示已按用户要求移除(2026-10-24):Esc 提交编辑的语义不变,只是不再
+  // 在工具栏上显示按钮。
   return bar;
 }
 
