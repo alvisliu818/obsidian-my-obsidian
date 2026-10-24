@@ -51,6 +51,12 @@ export class AutoVersionManager {
   private plugin: SaveControlPlugin;
   private enabled = false;
   private registered = false;
+  /**
+   * 「不保存并关闭」的基线回滚会把磁盘写回会话前的字节 —— 那次写盘触发的
+   * modify 不是用户保存，不能记版本（否则丢弃动作自己制造一条新快照）。
+   * path → 抑制窗口截止时间；窗口内该路径的 modify 一律跳过。
+   */
+  private readonly suppressed = new Map<string, number>();
   /** 每个文件一条串行链（path → 进行中的 promise）。 */
   private readonly queues = new Map<string, Promise<void>>();
   /**
@@ -92,12 +98,22 @@ export class AutoVersionManager {
     this.enabled = false;
   }
 
+  /** 基线回滚写盘前调用：窗口内该路径的 modify 不记版本（回滚≠用户保存）。 */
+  suppressNextModify(path: string): void {
+    this.suppressed.set(path, Date.now() + 15_000);
+  }
+
   /** 连写不并发：同一文件排队，跨文件互不影响。 */
   private enqueue(file: TAbstractFile): void {
     if (!this.enabled || !this.plugin.settings.versionOnWriteEnabled) return;
     if (!(file instanceof TFile)) return;
     if (!this.plugin.isExtensionAllowed(file.extension)) return;
     if (this.isOwnArtifact(file.path)) return;
+    const until = this.suppressed.get(file.path);
+    if (until !== undefined) {
+      if (Date.now() <= until) return; // 回滚写盘窗口：静默
+      this.suppressed.delete(file.path);
+    }
 
     const key = file.path;
     const prev = this.queues.get(key) ?? Promise.resolve();

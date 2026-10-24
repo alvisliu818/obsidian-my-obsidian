@@ -55,6 +55,8 @@ export class ExternalBlockView extends ItemView {
   mountPath = '';
   /** The hosted block editor. */
   private inner: BlockEditorView | null = null;
+  /** 「不保存并关闭」丢弃请求:置位后 onClose 不再保存。 */
+  private discardRequested = false;
 
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
     super(leaf);
@@ -147,13 +149,17 @@ export class ExternalBlockView extends ItemView {
   async onClose(): Promise<void> {
     // The hosted view is not owned by the framework, so its teardown is ours:
     // save the outside file and release the editor.
+    // 丢弃请求（save-control 的「不保存并关闭」）在身时绝不 save——那会把用户
+    // 刚决定扔掉的编辑写回磁盘并记一条版本（2026-10-24）。
     const inner = this.inner;
     this.inner = null;
     if (!inner) return;
-    try {
-      await inner.save();
-    } catch {
-      /* a failed save on close must not block the tab closing */
+    if (!this.discardRequested) {
+      try {
+        await inner.save();
+      } catch {
+        /* a failed save on close must not block the tab closing */
+      }
     }
     try {
       inner.onunload();
@@ -161,6 +167,16 @@ export class ExternalBlockView extends ItemView {
       /* already torn down */
     }
     inner.containerEl?.detach?.();
+  }
+
+  /**
+   * save-control「不保存并关闭」的鸭子类型入口：转发给托管的块编辑器，
+   * 并让本 shell 的 onClose 跳过保存。
+   */
+  discardPendingChanges(): void {
+    this.discardRequested = true;
+    const inner = this.inner as { discardPendingChanges?: () => void } | null;
+    inner?.discardPendingChanges?.();
   }
 
   // ------------------------------------------------------------------

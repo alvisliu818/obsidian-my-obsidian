@@ -406,7 +406,12 @@ export class SaveControlPlugin extends Plugin {
     const handle = asExternalSaveHandle(leaf.view);
     if (handle) return; // 库外：没有要丢的队列状态，拆掉即丢弃
     const path = (leaf.view as { file?: { path?: string } } | null)?.file?.path ?? "";
-    if (path) void this.autosaveController?.discardAndRevertPath(path);
+    if (path) {
+      // 基线回滚也是一次写盘:先给 autoVersion 挂抑制,否则丢弃动作自己会
+      // 制造一条「写盘」版本（2026-10-24）
+      this.autoVersion?.suppressNextModify(path);
+      void this.autosaveController?.discardAndRevertPath(path);
+    }
   }
 
   // ------------------------------------------------------------------

@@ -500,6 +500,8 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   private externalDiskData: string | null = null;
   /** Whether the MODEL changed since the file was last written. */
   private externalDirty = false;
+  /** 「不保存并关闭」丢弃请求:置位后 save() 一律空操作(见 discardPendingChanges)。 */
+  private externalDiscardRequested = false;
   /** save-control 接管配置:自动落盘开关(关=只标脏,何时写由手动保存/关闭提示决定)。 */
   private externalAutoSaveEnabled = true;
 
@@ -533,11 +535,27 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     this.externalAutoSaveEnabled = o.enabled;
   }
 
+  /**
+   * 「不保存并关闭」的丢弃请求（save-control 鸭子类型调用）。
+   *
+   * 必须由视图自己携带状态:save-control 的 save 拦截包装只在自动保存开启时
+   * 安装（autosaveEnabled=false 时没有任何拦截消费 discardedViews 标记）,
+   * 而卸载/关闭路径的 save() 无条件执行——不在这里短路的后果是:用户明确
+   * 选了丢弃,关闭时缓冲仍被写盘 + onExternalSaved 照记版本（2026-10-24）。
+   * 清掉 externalDirty 让后续一切 save 路径都变成空操作。
+   */
+  discardPendingChanges(): void {
+    this.externalDiscardRequested = true;
+    this.externalDirty = false;
+  }
+
   async save(force = false): Promise<void> {
     if (!this.isExternal) {
       await super.save(force);
       return;
     }
+    // 丢弃请求在身:本次以及之后的 save 都是空操作(视图马上销毁)。
+    if (this.externalDiscardRequested) return;
     // Nothing was edited, so nothing is written.
     //
     // The test is NOT "does the serialization differ from the file" — the
