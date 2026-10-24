@@ -1873,7 +1873,9 @@ body.block-touch-dragging {
 .fc-question pre,
 .fc-answer pre {
   white-space: pre !important;
-  overflow-x: auto;
+  /* scroll(非 auto):条带常驻——短代码块也留 10px 底带,与编辑态
+     (CODE_HSCROLL_STRIP)任何情况下等高 */
+  overflow-x: scroll;
   overflow-y: hidden;
   /* 横向滚动条必须可见:全局/主题常有 `scrollbar-width: none` 或
      `::-webkit-scrollbar { display:none }`（实测 barHeight=0，能滚但看不到
@@ -2562,9 +2564,9 @@ body.block-touch-dragging {
    auto 就够,右侧三个元素(copy / run / Esc)自然成组贴边。 */
 /* 横向滚动条:曾经为了「阅读态与编辑态盒子逐像素等高」把它高度归零
    (Monaco 的滚动条是浮层不占布局,经典条会给静态态多 ~10px)——结果长行
-   能滚却看不到条。2026-10-24 用户要求显示横向滚动条:静态态给 10px 细条
-   (见上方 scrollbar-width:thin + ::-webkit-scrollbar 规则),代价是溢出时
-   阅读态比编辑态高一截条高(Monaco 的条仍浮层不占位)——已知取舍。 */
+   能滚却看不到条。2026-10-24 用户要求显示横向滚动条:静态条带常驻
+   (overflow-x:scroll),编辑态盒子加同高条带(monaco.ts 的
+   CODE_HSCROLL_STRIP,Monaco 的条落在条带里)——两态任何情况下等高。 */
 /* Monaco 浮层(补全建议 / hover)留在 .monaco-editor 内部 + fixedOverflowWidgets,
    **不设**外挂宿主(.lgp-monaco-overflow):外挂宿主在本环境触发渲染器缺陷 ——
    补全行的文字层初始绘制从不被记录(行背景照画、DOM/几何正常、文字永远不画),

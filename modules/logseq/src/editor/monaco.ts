@@ -459,6 +459,12 @@ export interface CreateEditorOptions {
 }
 
 // 创建编辑器实例(两个代码面共用:外部代码文件 / 块内代码块)
+/** 块内代码块底部预留的横向滚动条条带(px):与静态阅读态的条高一致
+ *  (styles.css 的 ::-webkit-scrollbar height:10px),两态盒子才等高——
+ *  Monaco 自己的条是浮层不占布局,不预留的话编辑态比阅读态矮一截。
+ *  仅 autoHeight(块内)生效;代码文件编辑器是整页滚动,不受影响。 */
+const CODE_HSCROLL_STRIP = 10;
+
 export function createEditor(
   container: HTMLElement,
   opts: CreateEditorOptions,
@@ -536,6 +542,11 @@ export function createEditor(
   Object.assign(options, buildEditorOptionOverrides(scope, getEditorSettings()));
   // autoHeight 是结构意图(容器贴内容,滚动无意义),复位掉覆盖层可能给的 true。
   if (opts.autoHeight) options.scrollBeyondLastLine = false;
+  // 块内:横向滚动条尺寸与静态阅读态的细条一致(条带高度见 CODE_HSCROLL_STRIP),
+  // 两态的条粗细相同。
+  if (opts.autoHeight) {
+    options.scrollbar = { ...options.scrollbar, horizontalScrollbarSize: CODE_HSCROLL_STRIP };
+  }
   const editor = monaco.editor.create(container, options);
   editorScopes.set(editor, scope);
   // model 级选项(缩进/括号着色)编辑器级到不了,创建后立即套用。
@@ -553,7 +564,8 @@ export function createEditor(
       const lineCount = editor.getModel()?.getLineCount() ?? 1;
       const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
       const pad = padTop + padBottom;
-      container.style.height = `${lineCount * lineHeight + pad}px`;
+      // + 条带:横向滚动条落在条带里(盒子底边),与阅读态等高
+      container.style.height = `${lineCount * lineHeight + pad + CODE_HSCROLL_STRIP}px`;
     };
     updateHeight();
     editor.onDidChangeModelContent(updateHeight);
@@ -768,7 +780,8 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
   const updateHeight = (): void => {
     const lineCount = editor.getModel()?.getLineCount() ?? 1;
     const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
-    root.style.height = `${lineCount * lineHeight + pad.top + pad.bottom}px`;
+    // + 条带:横向滚动条落在条带里(盒子底边),与阅读态等高
+    root.style.height = `${lineCount * lineHeight + pad.top + pad.bottom + CODE_HSCROLL_STRIP}px`;
   };
   updateHeight();
   editor.onDidChangeModelContent(updateHeight);
