@@ -1875,6 +1875,31 @@ body.block-touch-dragging {
   white-space: pre !important;
   overflow-x: auto;
   overflow-y: hidden;
+  /* 横向滚动条必须可见:全局/主题常有 `scrollbar-width: none` 或
+     `::-webkit-scrollbar { display:none }`（实测 barHeight=0，能滚但看不到
+     条）。两套都要钉——Chromium 121+ 里 scrollbar-width 一旦非 none 就
+     压过 ::-webkit-scrollbar。thin 在两个机制下都是窄条。 */
+  scrollbar-width: thin;
+  scrollbar-color: var(--background-modifier-border) transparent;
+}
+
+/* ::-webkit-scrollbar 一族负责 scrollbar-width:thin 尚未生效的旧内核,以及
+   覆盖只写 display:none 的 ::-webkit-scrollbar 主题规则(选择器带类,特异性
+   高于主题的通配规则)。 */
+:is(.block-content-static:not(.block-dataview), .embed-content, .fc-question, .fc-answer) pre::-webkit-scrollbar {
+  height: 10px;
+  -webkit-appearance: none;
+  display: block;
+}
+:is(.block-content-static:not(.block-dataview), .embed-content, .fc-question, .fc-answer) pre::-webkit-scrollbar-thumb {
+  background: var(--background-modifier-border);
+  border-radius: 5px;
+}
+:is(.block-content-static:not(.block-dataview), .embed-content, .fc-question, .fc-answer) pre::-webkit-scrollbar-thumb:hover {
+  background: var(--background-modifier-border-hover);
+}
+:is(.block-content-static:not(.block-dataview), .embed-content, .fc-question, .fc-answer) pre::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 :is(.block-content-static:not(.block-dataview), .embed-content, .fc-question, .fc-answer) pre {
@@ -2535,17 +2560,11 @@ body.block-touch-dragging {
    margin-right:auto,两个 auto 会平分剩余空间,编辑态的复制/运行按钮就被顶到
    工具栏中间(实测 copy 落在 620px 而右边缘在 855px)。靠右靠 lang 那一个
    auto 就够,右侧三个元素(copy / run / Esc)自然成组贴边。 */
-/* 横向滚动条:Monaco(编辑态)的滚动条是**浮层**、不占布局,而静态阅读态的
-   pre 用 overflow-x:auto 会为经典滚动条留出 ~12px —— 长行时阅读态比编辑态
-   高一截。这里把条高归零,两态盒子才逐像素相等(横向滚动照常可用:滚轮 /
-   Shift+滚轮 / 触摸板)。 */
-.lgp-code-block pre::-webkit-scrollbar:horizontal {
-  height: 0;
-}
-.lgp-code-block pre {
-  scrollbar-width: none;
-}
-
+/* 横向滚动条:曾经为了「阅读态与编辑态盒子逐像素等高」把它高度归零
+   (Monaco 的滚动条是浮层不占布局,经典条会给静态态多 ~10px)——结果长行
+   能滚却看不到条。2026-10-24 用户要求显示横向滚动条:静态态给 10px 细条
+   (见上方 scrollbar-width:thin + ::-webkit-scrollbar 规则),代价是溢出时
+   阅读态比编辑态高一截条高(Monaco 的条仍浮层不占位)——已知取舍。 */
 .lgp-code-edit-hint {
   display: none;
   color: var(--text-faint);
