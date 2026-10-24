@@ -54,6 +54,17 @@ export function setupVersioning(plugin: SaveControlPlugin) {
     return saveContentForTarget(target, content, name);
   }
 
+  /**
+   * 该目标是否已经有过任何版本记录。「写盘前」的补记只在没有记录时做：
+   * 它的价值是捕获版本史开始前的原始内容；文件已有版本史后再补「写盘前」，
+   * 补的只是未保存的中间状态——用户看到的就是「写盘一次出现两条」。
+   */
+  async function hasAnySnapshots(target: SaveTarget): Promise<boolean> {
+    if (!target) return false;
+    const snapshots = await listSnapshotsForFile(plugin, plugin.snapshotPathFor(target));
+    return snapshots.length > 0;
+  }
+
   async function restoreFromTarget(target: SaveTarget, snapshot: SnapshotRecord) {
     if (!target) return;
     // 空字符串也是合法版本（原 `!snapshot?.content` 会把空版本静默吞掉）。
@@ -133,6 +144,7 @@ export function setupVersioning(plugin: SaveControlPlugin) {
   return {
     saveNowForTarget,
     saveContentForTarget,
+    hasAnySnapshots,
     restoreFromTarget,
     readCurrentContentForFile,
     saveNowForFile: async (file: TFile, name: string): Promise<"saved" | "no_change"> => {

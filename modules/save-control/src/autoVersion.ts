@@ -190,6 +190,9 @@ export class AutoVersionManager {
     if (prev === undefined || current === null || prev === current) return;
     const target = this.plugin.targetForSnapshotPath(file.path);
     if (!target) return;
+    // 「写盘前」只在该文件尚无任何版本时补记（捕获版本史开始前的原始内容）。
+    // 已有版本史再补，补的只是未保存的中间状态——写盘一次出现两条。
+    if (await this.plugin.versioning.hasAnySnapshots(target)) return;
     const res = await this.plugin.versioning.saveContentForTarget(
       target,
       prev,

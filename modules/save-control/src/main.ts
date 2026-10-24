@@ -376,14 +376,16 @@ export class SaveControlPlugin extends Plugin {
    *  与本次写盘内容必然不同)。库外没有库内那套「首次标脏建会话备份」,历史
    *  若从写盘后开始,被编辑前的原始内容整段丢失——这里先记「写盘前」再记
    *  「写盘」;时间戳 -1ms 保证两条先后有序且快照文件键(=时间戳)不相撞。
-   *  去重使得「写盘前」只在信息真正新时落一条(通常是该文件的第一条)。 */
+   *  「写盘前」只在该文件尚无任何版本时补记(捕获版本史开始前的原始内容);
+   *  已有版本史再补,补的只是未保存的中间状态——用户看到「写盘一次出现
+   *  两条」。 */
   onExternalSaved(abs: string, fileName: string, previousContent?: string | null): void {
     if (!this.settings.versionOnWriteEnabled) return;
     const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
     if (!this.isExtensionAllowed(ext)) return;
     const target = externalTarget(abs, fileName);
     void (async () => {
-      if (typeof previousContent === "string") {
+      if (typeof previousContent === "string" && !(await this.versioning.hasAnySnapshots(target))) {
         await this.versioning
           .saveContentForTarget(target, previousContent, ON_WRITE_PREVIOUS_NAME, new Date(Date.now() - 1).toISOString())
           .catch(() => undefined);
