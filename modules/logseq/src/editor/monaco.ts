@@ -561,11 +561,9 @@ export function createEditor(
 
   if (opts.autoHeight) {
     const updateHeight = () => {
-      const lineCount = editor.getModel()?.getLineCount() ?? 1;
-      const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
-      const pad = padTop + padBottom;
-      // + 条带:横向滚动条落在条带里(盒子底边),与阅读态等高
-      container.style.height = `${lineCount * lineHeight + pad + CODE_HSCROLL_STRIP}px`;
+      // getContentHeight 是 Monaco 自己的内容高度(含内边距,含小数行高)——
+      // 比 lineCount×lineHeight 的手工公式稳(公式差 1px 竖向滚动条就现身)。
+      container.style.height = `${editor.getContentHeight() + CODE_HSCROLL_STRIP}px`;
     };
     updateHeight();
     editor.onDidChangeModelContent(updateHeight);
@@ -755,6 +753,10 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
     minimap: { enabled: false },
     wordWrap: 'off',
     bracketPairColorization: { enabled: false },
+    // 块内没有 overview ruler 的消费者(诊断角标只有 LSP markers,阅读态也
+    // 不渲染它)——留着会在竖向滚动条右侧占一条空白车道(2026-10-24 用户报)。
+    overviewRulerLanes: 0,
+    hideCursorInOverviewRuler: true,
     // 不传 overflowWidgetsDomNode(浮层留编辑器内,见文件顶部注释)
     fixedOverflowWidgets: true,
     suggestLineHeight: suggestLineHeightFor(13),
@@ -778,10 +780,8 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
   // 高度自适应容器(块内永远 autoHeight):root 就是被搬来搬去的那个节点,
   // 高度写在它身上,搬进 host 后盒子自然跟着内容长高。
   const updateHeight = (): void => {
-    const lineCount = editor.getModel()?.getLineCount() ?? 1;
-    const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
-    // + 条带:横向滚动条落在条带里(盒子底边),与阅读态等高
-    root.style.height = `${lineCount * lineHeight + pad.top + pad.bottom + CODE_HSCROLL_STRIP}px`;
+    // getContentHeight + 条带:见上方 autoHeight 分支的论证
+    root.style.height = `${editor.getContentHeight() + CODE_HSCROLL_STRIP}px`;
   };
   updateHeight();
   editor.onDidChangeModelContent(updateHeight);
