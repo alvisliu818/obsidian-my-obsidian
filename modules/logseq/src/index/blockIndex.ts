@@ -114,7 +114,18 @@ export class BlockIndex {
   private dirty = new Set<string>();
   private flush: () => void;
 
-  constructor(private app: App) {
+  /**
+   * 排除谓词:返回 true 的路径不进索引(块级反链/标签/卡片都不含它)。
+   * 注入宿主的 isExcluded(excludedFolders 设置)——备份/参考资料目录不该
+   * 吃索引内存,也不该以副本身份污染反链面板(2026-10-24:~99 万块常驻
+   * ~250-300MB,用户主库 excludedFolders 此前为空,索引全量)。
+   */
+  private readonly isExcluded: (path: string) => boolean;
+  private readonly app: App;
+
+  constructor(app: App, isExcluded?: (path: string) => boolean) {
+    this.app = app;
+    this.isExcluded = isExcluded ?? (() => false);
     this.flush = debounce(() => void this.flushDirty(), 2000, true);
   }
 
@@ -401,7 +412,11 @@ export class BlockIndex {
     this.supertags = new Map();
     this.blocksByPath.clear();
     this.fileSig.clear();
-    const files = this.app.vault.getMarkdownFiles();
+    const files = this.app.vault
+      .getMarkdownFiles()
+      // excludedFolders 的目录不进索引(见构造器注释):全量索引 ~99 万块里,
+      // 备份/参考目录贡献的是纯内存负担 + 反链面板里的副本噪音。
+      .filter((f) => !this.isExcluded(f.path));
     // Sliced, not running to completion in one task: see `yieldToBrowser`.
     // Budget by ELAPSED CPU time rather than a file count, so a fat file can't
     // blow the budget on its own and a folder of empty notes can't make us
@@ -553,7 +568,7 @@ export class BlockIndex {
   attach(plugin: { registerEvent: (eventRef: EventRef) => void }): void {
     const touch = (file: TAbstractFile): void => {
       const p = this.notePath(file);
-      if (p !== null) this.markDirty(p);
+      if (p !== null && !this.isExcluded(p)) this.markDirty(p);
     };
     plugin.registerEvent(
       this.app.vault.on('modify', (file) => {

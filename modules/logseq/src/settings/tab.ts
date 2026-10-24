@@ -135,6 +135,22 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         );
     }
 
+    // ---------- Block index ----------
+    new Setting(containerEl)
+      .setName('索引排除的文件夹')
+      .setDesc(
+        '这些目录不进块索引（块级反链/标签/卡片不含它们），逗号分隔。备份和参考资料目录建议排除：省内存（每文件平均 ~117 块常驻），反链面板也不再出现备份副本的噪音。改动后运行命令「Rebuild block reference index」生效。',
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder('backups, courses')
+          .setValue(this.plugin.settings.indexExcludedFolders ?? '')
+          .onChange(async (v) => {
+            this.plugin.settings.indexExcludedFolders = v;
+            await this.plugin.saveSettings();
+          }),
+      );
+
     // ---------- Page properties editor ----------
     new Setting(containerEl)
       .setName('页面属性编辑器')

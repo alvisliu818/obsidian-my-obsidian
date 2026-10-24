@@ -133,6 +133,12 @@ export function shortcutOverridesFrom(raw: unknown): ShortcutOverrides {
 export interface BlockEditorSettings {
   /** Folders (paths) where .md files keep opening with the native editor. */
   excludedFolders: string;
+  /**
+   * Folders (paths) excluded from the block index: no block-level
+   * backlinks/tags/cards from them (~117 blocks/file resident otherwise).
+   * Independent of excludedFolders (which is about editor take-over).
+   */
+  indexExcludedFolders: string;
   /** Debounce delay (ms) before writing edits to disk. */
   saveDebounceMs: number;
   /** Python env used to run code ('' = auto-detect). See exec/pythonEnvs.ts. */
@@ -671,6 +677,7 @@ export interface RefFilter {
 
 export const DEFAULT_SETTINGS: BlockEditorSettings = {
   excludedFolders: '',
+  indexExcludedFolders: '',
   saveDebounceMs: 800,
   pythonEnvId: '',
   pythonEnvCustomPath: '',

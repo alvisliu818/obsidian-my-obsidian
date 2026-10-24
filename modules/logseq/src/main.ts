@@ -244,8 +244,10 @@ export default class LogseqEditorPlugin extends Plugin {
     // 只负责那些「自己掌握源但没有 section 信息」的渲染面 —— 静态块、内嵌、
     // 闪卡、代码块前缀、库外文件 —— 通过 features/latexSource 转发。
 
-    // Vault-wide ((block-id)) index
-    this.blockIndex = new BlockIndex(this.app);
+    // Vault-wide ((block-id)) index。indexExcludedFolders 的目录不进索引:
+    // 备份/参考资料不吃索引内存(~99 万块 ≈ 250-300MB),反链面板也没有副本噪音。
+    // 谓词直读设置(每次调用现取),设置热改后「重建块索引」即生效。
+    this.blockIndex = new BlockIndex(this.app, (path) => this.isIndexExcluded(path));
     this.blockIndex.attach(this);
     this.attachSqliteIndex();
     this.app.workspace.onLayoutReady(() => {
@@ -975,6 +977,7 @@ export default class LogseqEditorPlugin extends Plugin {
     const d = Number(this.settings.saveDebounceMs);
     if (!Number.isFinite(d) || d < 0) this.settings.saveDebounceMs = DEFAULT_SETTINGS.saveDebounceMs;
     if (typeof this.settings.excludedFolders !== 'string') this.settings.excludedFolders = '';
+    if (typeof this.settings.indexExcludedFolders !== 'string') this.settings.indexExcludedFolders = '';
     // Take-over scope defaults to 'all' so pre-scope configs keep the old behavior.
     if (this.settings.scopeMode !== 'all' && this.settings.scopeMode !== 'folders') {
       this.settings.scopeMode = 'all';
@@ -1092,6 +1095,11 @@ export default class LogseqEditorPlugin extends Plugin {
 
   isExcluded(file: string): boolean {
     return pathInFolders(file, parseFolderList(this.settings.excludedFolders));
+  }
+
+  /** 索引排除(独立于编辑器排除):这些目录不进块索引/块级反链。 */
+  isIndexExcluded(file: string): boolean {
+    return pathInFolders(file, parseFolderList(this.settings.indexExcludedFolders ?? ''));
   }
 
   /**
