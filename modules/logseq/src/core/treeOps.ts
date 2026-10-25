@@ -7,8 +7,7 @@
 import { Block, Marker, MARKERS, createBlock, ensureId } from '../types';
 
 export function siblingsOf(b: Block): Block[] {
-  if (b.parent) return b.parent.children;
-  // Top-level block: resolve its container array via the registry below.
+  if (b.parent) return b.parent.children;  // Top-level block: resolve its container array via the registry below.
   const cached = forestRootsCache.get(b);
   if (cached) return cached;
   // Last-node indent fix: blocks CREATED or PROMOTED after the last
@@ -23,6 +22,25 @@ export function siblingsOf(b: Block): Block[] {
     }
   }
   return [];
+}
+
+/**
+ * b 所在的「列表运行」:同级数组里与 b 相邻连续的非 bare 列表块
+ * (bare/raw 打断即止)。模型没有列表容器节点——序列化与渲染都按
+ * 连续段分组,容器块的判定同源(思源交互的「同列表兄弟」以此为准,
+ * 而非整个兄弟数组:段落与列表混排时它们不是同一个列表)。
+ */
+export function listRunOf(b: Block): Block[] {
+  const sibs = siblingsOf(b);
+  const idx = sibs.indexOf(b);
+  if (idx < 0) return [b];
+  const inList = (x: Block) => x.kind === 'list' && !x.bare;
+  if (!inList(b)) return [b];
+  let lo = idx;
+  let hi = idx;
+  while (lo > 0 && inList(sibs[lo - 1])) lo--;
+  while (hi < sibs.length - 1 && inList(sibs[hi + 1])) hi++;
+  return sibs.slice(lo, hi + 1);
 }
 
 /** Depth-first search for the sibling list that contains b. */
@@ -285,6 +303,34 @@ export function splitBlock(b: Block, offset: number): Block {
   // 段落容器延续:在段落里回车,新块同为段落(不显示圆点、保存不带 `- `)。
   if (b.bare) nb.bare = true;
   insertAfter(b, nb);
+  return nb;
+}
+
+/**
+ * 思源容器交互(用户指令 2026-10-25,protyle enter.ts listEnter 的
+ * 「文字中间换行」分支):有子块的列表项**中间**回车——尾部文本成为新的
+ * 同级项,子块**跟尾部**(思源把子列表搬进新项)。返回新项(光标落点)。
+ */
+export function splitListFollowTail(b: Block, offset: number): Block {
+  const tail = b.text.slice(offset);
+  b.text = b.text.slice(0, offset);
+  const nb = createBlock(tail);
+  const kids = b.children;
+  b.children = [];
+  nb.children = kids;
+  for (const k of kids) k.parent = nb;
+  insertAfter(b, nb);
+  return nb;
+}
+
+/**
+ * 思源容器交互(listEnter 的「段末换行在子列表最前插入」分支):有子块的
+ * 列表项**末尾**回车——新空项成为**第一个子项**。返回新子项(光标落点)。
+ */
+export function insertFirstChild(b: Block): Block {
+  const nb = createBlock('');
+  b.children.unshift(nb);
+  nb.parent = b;
   return nb;
 }
 

@@ -9,21 +9,27 @@ import type { EditorView } from '@codemirror/view';
 import type { BlockRenderHost } from '../blocks/renderHost';
 import {
   indent,
+  insertAfter,
+  insertBefore,
+  insertFirstChild,
+  listRunOf,
   mergeWithNext,
   mergeWithPrev,
   moveBlockVertically,
   nextVisible,
   outdent,
   prevVisible,
+  removeBlock,
   shouldExitListOnEnter,
   splitBlock,
   splitHeadingRaw,
+  splitListFollowTail,
   splitRawToOutline,
   toBareParagraph,
 } from '../core/treeOps';
 import { cycleMarker } from '../core/treeOps';
 import { headingLevel } from '../core/fold';
-import { applyBlockProps, applyEditorMarker, splitPropLines, type Block } from '../types';
+import { applyBlockProps, applyEditorMarker, createBlock, splitPropLines, type Block } from '../types';
 
 function focusedBlock(host: BlockRenderHost): Block | null {
   return host.focusedBlock;
@@ -120,6 +126,7 @@ export function handleEnter(view: EditorView, host: BlockRenderHost): boolean { 
   const { text, offset } = deleteSelection(view);
   const parent = b.parent;
   let nb: Block | null = null;
+  let stay = false; // 光标留在原块(段首回车)时置位
   host.mutate(
     () => {
       // 符号即文本:编辑文档带 `- `[TODO ] 前缀——先解析进模型(剥符号,
@@ -129,14 +136,55 @@ export function handleEnter(view: EditorView, host: BlockRenderHost): boolean { 
       const { text: clean, props } = splitPropLines(marked.text);
       applyBlockProps(b, props);
       b.text = clean;
-      nb = splitBlock(b, Math.min(marked.offset, clean.length));
+      const pos = Math.min(marked.offset, clean.length);
+      // ---- 思源容器块交互(用户指令 2026-10-25,protyle enter.ts/listEnter)----
+      // 我们模型的 children 同时承载思源的「li 内子块」与「子列表」,以
+      // bare 区分:bare 子块=li 内段落子块,非 bare 子块=子列表的项。
+      if (b.kind === 'list' && !b.bare) {
+        // 有子块的项**末尾**回车 → 新空项成为第一个子项(listEnter:段末
+        // 换行在子列表最前插入)。
+        if (pos === clean.length && b.children.length > 0) {
+          nb = insertFirstChild(b);
+          return;
+        }
+        // 有子块的项**中间**回车 → 尾部成新项,子块跟尾部(思源把子列表
+        // 搬进新项)。
+        if (pos > 0 && pos < clean.length && b.children.length > 0) {
+          nb = splitListFollowTail(b, pos);
+          return;
+        }
+      }
+      // bare 空子块(li 内空段落)回车 → 删掉空块,在父项之后建新的列表项
+      // (思源:空子块再次回车时仍创建后续列表项)。非最后的空子块照旧分裂。
+      const parentBlock = b.parent;
+      if (
+        b.bare && clean === '' && b.children.length === 0 && parentBlock &&
+        parentBlock.children[parentBlock.children.length - 1] === b
+      ) {
+        removeBlock(b);
+        nb = createBlock('');
+        insertAfter(parentBlock, nb);
+        return;
+      }
+      // **段首**回车(非空)→ 上面插空块,光标留在原块(enter.ts 段首换行
+      // 分支:新块 beforebegin,原块光标原位不动)。
+      if (pos === 0 && clean.length > 0) {
+        nb = createBlock('');
+        if (b.bare) nb.bare = true;
+        insertBefore(b, nb);
+        stay = true;
+        return;
+      }
+      nb = splitBlock(b, pos);
     },
     () => ({ lists: [parent] }),
   );
   // Children stay with the head block (Logseq behavior); caret goes to new block.
   const target = nb as Block | null;
-  if (target) {
+  if (target && !stay) {
     host.focusBlock(target, 0);
+  } else if (target && stay) {
+    host.focusBlock(b, 0);
   }
   return true;
 }
@@ -231,6 +279,34 @@ export function handleBackspace(view: EditorView, host: BlockRenderHost): boolea
   const sel = view.state.selection.main;
   if (!sel.empty) return false;
   if (sel.head !== 0) return false;
+  // ---- 思源容器块退格(用户指令 2026-10-25,protyle remove.ts 的 removeLi)----
+  if (b.kind === 'list' && !b.bare) {
+    // 「同列表兄弟」按连续非 bare 列表段算(listRunOf),不是整个兄弟
+    // 数组——段落与列表混排时它们不是同一个列表。
+    const run = listRunOf(b);
+    // 唯一列表项 → 拆壳变段落(listOutdent 的唯一项路径:列表拆除,内容
+    // 变普通块;此前这里会错误地合进列表外的上一块)。符号即文本:剥符号
+    // 进模型并置 bare——无论文档里符号删没删(块首可能在 `- ` 之前)。
+    if (run.length === 1) {
+      const parent = b.parent;
+      host.mutate(
+        () => {
+          const marked = applyEditorMarker(b, view.state.doc.toString(), 0);
+          b.text = marked.text;
+          b.bare = true;
+          b.marker = null;
+        },
+        () => ({ lists: [parent] }),
+      );
+      host.focusBlock(b, 0);
+      return true;
+    }
+    // 顶级列表**首项**(有兄弟)→ no-op(remove.ts:顶层列表首项退格无动作,
+    // 嵌套首项才向前合并)。
+    if (b.parent === null && run[0] === b) {
+      return true;
+    }
+  }
   // Raw blocks merge too (Logseq: Backspace at a block's start joins the
   // previous block — the old raw guard made e.g. a table's first line an
   // undeletable dead end).
