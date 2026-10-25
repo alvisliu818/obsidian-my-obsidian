@@ -1351,13 +1351,14 @@ export default class LogseqEditorPlugin extends Plugin {
   private get sqliteDbPath(): string {
     const dir = (this.settings.sqliteDbDir || '').trim().replace(/[\\/]+$/, '');
     // 命名沿 unified-index 惯例(vaultSlugOf,2026-10-25 用户指定):
-    // E__HOME_BaiduSyncdisk-9d1843.db——slug 后缀哈希可反查归属库。
+    // E__HOME_BaiduSyncdisk-9d1843.sqlite——slug 后缀哈希可反查归属库
+    // (后缀用 .sqlite,用户 2026-10-25 指定,unified-index 本体是 .db)。
     // 目录仍是 logseq-index 专属:unified-search 的同库 .db 就在
     // unified-index,同文件双写者(渲染内 node:sqlite + 守护进程
     // better-sqlite3)会互踩 schema;两库同跑也各用各的文件(共享文件
     // 会把对方文件全当"已删除"清,e2e daemon 清主库 1.43GB 索引实测)。
     const base = (this.app.vault.adapter as { getBasePath?: () => string }).getBasePath?.() ?? '';
-    return `${dir || 'E:/HOME/Runtime/logseq-index'}/${vaultSlugOf(base)}.db`;
+    return `${dir || 'E:/HOME/Runtime/logseq-index'}/${vaultSlugOf(base)}.sqlite`;
   }
 
   /**
