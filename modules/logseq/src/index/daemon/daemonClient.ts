@@ -62,6 +62,8 @@ export class BlockIndexDaemonClient {
   private restarting = false;
   private readonly spawnImpl: SpawnFn;
   private readonly opts: DaemonClientOptions;
+  /** 狂暴模式进度回调(turbo 重建/增量期间的 progress 事件)。 */
+  onTurboProgress: ((done: number, total: number) => void) | null = null;
   private disposed = false;
 
   // ---- 小常驻缓存（changed 时作废，懒加载） ----
@@ -103,8 +105,10 @@ export class BlockIndexDaemonClient {
     if (ex.length) args.push('--exclude', ex.join(','));
     this.spawnDaemon(node, args);
     await this.call('ping');
-    // 启动即同步一次（daemon 侧 sync 只处理变更文件,已同步则秒回）。
-    await this.call('sync');
+    // 启动同步放后台：主库首次 sync 是全量解析（分钟级），start() 等
+    // 它必撞 60s 超时 → daemon 明明活着却被误回落内存索引（2026-10-25
+    // 实测）。daemon 完成后广播 changed，缓存自会预热。
+    void this.call('sync').catch(() => {});
   }
 
   private spawnDaemon(node: string, args: string[]): void {
@@ -158,7 +162,7 @@ export class BlockIndexDaemonClient {
       const line = this.buf.slice(0, nl).trim();
       this.buf = this.buf.slice(nl + 1);
       if (!line) continue;
-      let msg: { id?: number; ok?: boolean; data?: unknown; ev?: string; version?: number };
+      let msg: { id?: number; ok?: boolean; data?: unknown; ev?: string; version?: number; done?: number; total?: number };
       try {
         msg = JSON.parse(line) as typeof msg;
       } catch {
@@ -170,7 +174,12 @@ export class BlockIndexDaemonClient {
         this.opts.onChange();
         continue;
       }
-      if (msg.ev) continue; // progress/hello/fts 暂不消费
+      if (msg.ev === 'progress' && typeof msg.done === 'number' && typeof msg.total === 'number') {
+        // progress 事件结构在 onStdout 的解析里:这里补齐字段读取
+        this.onTurboProgress?.(Number((msg as unknown as { done: number }).done), Number((msg as unknown as { total: number }).total));
+        continue;
+      }
+      if (msg.ev) continue; // hello/fts 暂不消费
       if (typeof msg.id === 'number' && this.pending.has(msg.id)) {
         const p = this.pending.get(msg.id)!;
         this.pending.delete(msg.id);
@@ -252,13 +261,24 @@ export class BlockIndexDaemonClient {
   /** 单文件全部块（编辑器视图用）——缓存 + 异步补。 */
   blocksByPathSync(path: string): IndexedBlock[] {
     const hit = this.cacheFileBlocks.get(path);
-    if (!hit) void this.query<IndexedBlock[]>('blocksByPath', { path }).then((bs) => {
-      if (bs && bs.length) {
+    if (!hit) void this.fillFileBlocks(path);
+    return hit ?? [];
+  }
+
+  private async fillFileBlocks(path: string): Promise<void> {
+    const v0 = this.version;
+    try {
+      const bs = await this.query<IndexedBlock[]>('blocksByPath', { path });
+      // 期间 daemon 又广播过 changed → 拿到的已过期：不写缓存、不再触发
+      // onChange（否则 消费方→查询→onChange→消费方 成反馈环，daemon 频繁
+      // 变更时滚雪球吃内存，2026-10-25）。
+      if (this.version === v0 && bs && bs.length) {
         this.cacheFileBlocks.set(path, bs);
         this.opts.onChange();
       }
-    }).catch(() => {});
-    return hit ?? [];
+    } catch {
+      /* daemon 忙/挂，下次访问再试 */
+    }
   }
 
   // ------------------------------------------------------------------
@@ -308,6 +328,26 @@ export class BlockIndexDaemonClient {
 
   async rebuild(): Promise<void> {
     await this.call('rebuild');
+  }
+
+  /** 狂暴全量重建:并发池=os.cpus()*2,PRAGMA synchronous=OFF。 */
+  async turboRebuild(onProgress?: (done: number, total: number) => void): Promise<{ files: number; blocks: number; ms: number }> {
+    this.onTurboProgress = onProgress ?? null;
+    try {
+      return await this.call<{ files: number; blocks: number; ms: number }>('turbo', { mode: 'rebuild' });
+    } finally {
+      this.onTurboProgress = null;
+    }
+  }
+
+  /** 狂暴增量:只补变更文件,同一并发池(日常编辑后的补索引)。 */
+  async turboSync(onProgress?: (done: number, total: number) => void): Promise<{ files: number; blocks: number; ms: number }> {
+    this.onTurboProgress = onProgress ?? null;
+    try {
+      return await this.call<{ files: number; blocks: number; ms: number }>('turbo', { mode: 'sync' });
+    } finally {
+      this.onTurboProgress = null;
+    }
   }
 
   /** 设置热改排除目录后调用。 */

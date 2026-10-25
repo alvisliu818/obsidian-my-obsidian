@@ -28,6 +28,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { SqliteIndex, type SqliteFileSource } from '../sqliteIndex';
+import { buildFileStatements, deleteFileStatements, type Stmt } from '../sqliteIndex';
+import { extractFile } from '../fileFacts';
+import { hashText } from '../sqliteSchema';
+import { SCHEMA_SQL, FTS_STATEMENTS } from '../sqliteSchema';
+import * as os from 'os';
 import type { SqliteFileMeta } from '../sqliteSchema';
 import type { SqliteRuntimeLike } from '../sqliteRuntime';
 
@@ -469,6 +474,168 @@ async function main(): Promise<void> {
     return r;
   };
 
+  /**
+   * 狂暴重建:读+解析并发(纯函数,无共享状态),写入侧单线程批量事务。
+   * 与 idx.rebuild() 的差别:不排队(enqueue 直接短路)、并发池吃满 CPU、
+   * PRAGMA synchronous=OFF(崩溃也只是索引重建,可丢)。结果 stats 同形。
+   */
+  const turboRebuild = async (
+    idxT: SqliteIndex,
+    src: FsSource,
+    onProgress: (done: number, total: number) => void,
+  ): Promise<{ files: number; blocks: number }> => {
+    await idxT.open();
+    if (idxT.lastError) throw new Error(String(idxT.lastError));
+    const rt = (idxT as unknown as { rt?: SqliteRuntimeLike }).rt;
+    if (!rt) throw new Error('runtime unavailable');
+    const fts = (idxT as unknown as { ftsEnabled?: boolean }).ftsEnabled === true;
+    // 狂暴 pragma:重建期间允许丢(索引可重建),换最大写入吞吐。
+    await rt.run('PRAGMA synchronous=OFF').catch(() => {});
+    await rt.run('PRAGMA cache_size=-262144').catch(() => {}); // 256MB 页缓存
+    await (idxT as unknown as { dropAll?: (rt: SqliteRuntimeLike) => Promise<void> }).dropAll?.(rt);
+    for (const sql of SCHEMA_SQL) await rt.run(sql);
+    await rt.run('PRAGMA user_version = 0').catch(() => {});
+    await rt.run('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', ['schema_version', '3']).catch(() => {});
+    if (fts) {
+      for (const sql of FTS_STATEMENTS) await rt.run(sql).catch(() => {});
+    }
+
+    const files = src.listMarkdownFiles();
+    let done = 0;
+    let blocks = 0;
+    let okFiles = 0;
+    // 并发读+解析(纯 CPU,extractFile 无状态)。解析结果**流式进库**:
+    // 旧实现把全库语句攒在 parsed[] 里最后统一写——主库(1.43GB)实测
+    // daemon 内存涨到 GB 级。现在走写链串行 batch,读快于写时用
+    // outstanding 上限做背压,内存有界。
+    const concurrency = Math.max(4, Math.min(32, (os.cpus()?.length ?? 8) * 2));
+    let writeChain: Promise<void> = Promise.resolve();
+    let outstanding = 0;
+    let writeFailed: string | null = null;
+    const enqueueWrite = (stmts: Stmt[]): void => {
+      outstanding++;
+      writeChain = writeChain
+        .then(async () => {
+          await rt.batch(stmts.map((st) => st.sql), stmts.map((st) => st.params));
+          okFiles++;
+        })
+        .catch((e) => {
+          writeFailed = writeFailed ?? String(e).slice(0, 200);
+        })
+        .finally(() => {
+          outstanding--;
+        });
+    };
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < files.length) {
+        const i = cursor++;
+        const f = files[i];
+        try {
+          if (f.size <= 2_000_000) {
+            const content = await src.read(f.path);
+            const facts = extractFile(f.path, content);
+            enqueueWrite(buildFileStatements(facts, f, hashText(content), fts));
+          }
+        } catch {
+          /* 单文件失败不挡全库(与渲染内路径同语义) */
+        }
+        done++;
+        if (done % 25 === 0 || done === files.length) onProgress(done, files.length);
+        if (outstanding > 128) await writeChain; // 背压:写入落后就等一等
+      }
+    };
+    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    await writeChain;
+    if (writeFailed) throw new Error(`turbo write failed: ${writeFailed}`);
+    const counts = await rt.all('SELECT (SELECT COUNT(*) FROM blocks) b, (SELECT COUNT(*) FROM files) f', [], 4);
+    blocks = Number(counts.rows[0]?.[0] ?? 0);
+    const totalFiles = Number(counts.rows[0]?.[1] ?? okFiles);
+    // 恢复安全 pragma + 记录完成时间。
+    await rt.run('PRAGMA synchronous=NORMAL').catch(() => {});
+    await rt.run('PRAGMA cache_size=-2000').catch(() => {});
+    await rt.run('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', ['built_at', String(Date.now())]).catch(() => {});
+    return { files: totalFiles, blocks };
+  };
+
+  /**
+   * 狂暴增量(sync):files 表对 mtime/size,只重读变更文件——变更集同样走
+   * 并发读+解析池。日常编辑后的补索引用这条(几百 ms 级),全量重建才用
+   * turboRebuild。
+   */
+  const turboSync = async (
+    idxS: SqliteIndex,
+    src: FsSource,
+    onProgress: (done: number, total: number) => void,
+  ): Promise<{ files: number; blocks: number }> => {
+    await idxS.open();
+    if (idxS.lastError) throw new Error(String(idxS.lastError));
+    const rt = (idxS as unknown as { rt?: SqliteRuntimeLike }).rt;
+    if (!rt) throw new Error('runtime unavailable');
+    const fts = (idxS as unknown as { ftsEnabled?: boolean }).ftsEnabled === true;
+    await rt.run('PRAGMA synchronous=OFF').catch(() => {});
+    const vault = src.listMarkdownFiles();
+    const idxRes = await rt.all('SELECT path, mtime, size FROM files', undefined, 500_000);
+    const known = new Map<string, [number, number]>();
+    for (const r of idxRes.rows) known.set(String(r[0]), [Number(r[1]), Number(r[2])]);
+    const pending = vault.filter((f) => {
+      const k = known.get(f.path);
+      return !k || k[0] !== f.mtime || k[1] !== f.size;
+    });
+    // 删除:库里有而盘上没有的。
+    const onDisk = new Set(vault.map((f) => f.path));
+    for (const [p] of known) {
+      if (!onDisk.has(p)) {
+        const stmts = deleteFileStatements(p);
+        await rt.batch(stmts.map((st) => st.sql), stmts.map((st) => st.params));
+      }
+    }
+    let done = 0;
+    const concurrency = Math.max(4, Math.min(32, (os.cpus()?.length ?? 8) * 2));
+    // 同 turboRebuild:流式进库 + 背压,不全库攒语句。
+    let writeChain: Promise<void> = Promise.resolve();
+    let outstanding = 0;
+    let writeFailed: string | null = null;
+    const enqueueWrite = (stmts: Stmt[]): void => {
+      outstanding++;
+      writeChain = writeChain
+        .then(async () => {
+          await rt.batch(stmts.map((st) => st.sql), stmts.map((st) => st.params));
+        })
+        .catch((e) => {
+          writeFailed = writeFailed ?? String(e).slice(0, 200);
+        })
+        .finally(() => {
+          outstanding--;
+        });
+    };
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < pending.length) {
+        const i = cursor++;
+        const f = pending[i];
+        try {
+          if (f.size <= 2_000_000) {
+            const content = await src.read(f.path);
+            const facts = extractFile(f.path, content);
+            enqueueWrite(buildFileStatements(facts, f, hashText(content), fts));
+          }
+        } catch {
+          /* 单文件失败不挡全库 */
+        }
+        done++;
+        if (done % 10 === 0 || done === pending.length) onProgress(done, pending.length);
+        if (outstanding > 128) await writeChain;
+      }
+    };
+    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    await writeChain;
+    if (writeFailed) throw new Error(`turbo write failed: ${writeFailed}`);
+    await rt.run('PRAGMA synchronous=NORMAL').catch(() => {});
+    const counts = await rt.all('SELECT (SELECT COUNT(*) FROM blocks) b, (SELECT COUNT(*) FROM files) f', [], 4);
+    return { files: Number(counts.rows[0]?.[1] ?? 0), blocks: Number(counts.rows[0]?.[0] ?? 0) };
+  };
+
   const handle = async (msg: {
     id?: number;
     op?: string;
@@ -483,6 +650,25 @@ async function main(): Promise<void> {
         return 'pong';
       case 'rebuild':
         return mutate(() => idx.rebuild());
+      case 'turbo': {
+        // 狂暴模式(用户指定,2026-10-25):尽可能占资源跑索引——读+解析全并发
+        // (extractFile 是纯函数,Promise 池=os.cpus()*2),写入是大批量事务,
+        // PRAGMA synchronous=OFF 让盘也狂。mode=sync 走增量(只补变更文件),
+        // 否则全量重建。两条路径同一个并发池。
+        const mode = (msg as { mode?: string }).mode ?? 'rebuild';
+        return mutate(async () => {
+          const t0 = Date.now();
+          const r =
+            mode === 'sync'
+              ? await turboSync(idx, source, (done, total) => {
+                  if (!args.oneShot) write({ ev: 'progress', done, total });
+                })
+              : await turboRebuild(idx, source, (done, total) => {
+                  if (!args.oneShot) write({ ev: 'progress', done, total });
+                });
+          return { ...r, ms: Date.now() - t0 };
+        });
+      }
       case 'sync':
         return mutate(() => idx.sync());
       case 'upsert': {

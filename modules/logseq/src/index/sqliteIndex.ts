@@ -591,7 +591,7 @@ export class SqliteIndex {
   }
 }
 
-interface Stmt {
+export interface Stmt {
   sql: string;
   params: unknown[];
 }
@@ -601,7 +601,7 @@ interface Stmt {
  * the `files` row last so a crash mid-batch never leaves a file claiming to be
  * indexed while its blocks are gone.
  */
-function deleteFileStatements(path: string, fts = false): Stmt[] {
+export function deleteFileStatements(path: string, fts = false): Stmt[] {
   const owned = 'SELECT bkey FROM blocks WHERE path = ?';
   const ftsDel: Stmt[] = fts
     ? [{ sql: `DELETE FROM blocks_fts WHERE bkey IN (${owned})`, params: [path] }]

@@ -29,6 +29,7 @@ import { FileExplorerLocateButton } from './features/fileExplorerLocate';
 import { LogseqEditorSettingTab } from './settings/tab';
 import { initEditorSettingsStore, loadEditorSettings, saveEditorSettings } from './settings/editorSettingsStore';
 import { BlockIndex } from './index/blockIndex';
+import { vaultSlugOf } from '../../index-core/src/sqlite-service';
 import { BlockIndexDaemonClient, forwardVaultEvents } from './index/daemon/daemonClient';
 import {
   SqliteIndex,
@@ -279,11 +280,13 @@ export default class LogseqEditorPlugin extends Plugin {
       this.blockIndex = new BlockIndex(this.app, (path) => this.isIndexExcluded(path));
       this.blockIndex.attach(this);
     }
-    this.attachSqliteIndex();
+    // daemon 模式下渲染内 sqliteIndex 整条链不启动:守护进程独占库文件,
+    // 渲染内第二个写者既冲突又会同步阻塞主线程(实测真库启动卡顿的根源)。
+    if (!this.daemonIndex) this.attachSqliteIndex();
     this.app.workspace.onLayoutReady(() => {
       if (this.blockIndex) void this.blockIndex.buildAll();
       if (this.daemonIndex) void this.daemonIndex.upsertFiles([]); // 触发一次 changed→缓存预热
-      void this.startSqliteIndex();
+      if (!this.daemonIndex) void this.startSqliteIndex();
       if (this.settings.pagePropsEditor === 'native') void this.resolveNativePropsCtor();
       this.convertOpenMarkdownLeaves();
       // 预热块内代码块的 Monaco 单例:延后一拍再建,不与启动期的布局/索引
@@ -489,6 +492,18 @@ export default class LogseqEditorPlugin extends Plugin {
           void this.blockIndex?.buildAll().then(() => new Notice('Block index rebuilt.'));
         }
       },
+    });
+
+    this.addCommand({
+      id: 'turbo-rebuild-block-index',
+      name: 'Turbo rebuild the block index (max resources)',
+      callback: () => void this.runTurbo('rebuild'),
+    });
+
+    this.addCommand({
+      id: 'turbo-sync-block-index',
+      name: 'Turbo sync the block index (incremental, max resources)',
+      callback: () => void this.runTurbo('sync'),
     });
 
     this.addCommand({
@@ -1335,7 +1350,14 @@ export default class LogseqEditorPlugin extends Plugin {
    */
   private get sqliteDbPath(): string {
     const dir = (this.settings.sqliteDbDir || '').trim().replace(/[\\/]+$/, '');
-    return `${dir || 'E:/HOME/Runtime'}/logseq-index.sqlite`;
+    // 命名沿 unified-index 惯例(vaultSlugOf,2026-10-25 用户指定):
+    // E__HOME_BaiduSyncdisk-9d1843.db——slug 后缀哈希可反查归属库。
+    // 目录仍是 logseq-index 专属:unified-search 的同库 .db 就在
+    // unified-index,同文件双写者(渲染内 node:sqlite + 守护进程
+    // better-sqlite3)会互踩 schema;两库同跑也各用各的文件(共享文件
+    // 会把对方文件全当"已删除"清,e2e daemon 清主库 1.43GB 索引实测)。
+    const base = (this.app.vault.adapter as { getBasePath?: () => string }).getBasePath?.() ?? '';
+    return `${dir || 'E:/HOME/Runtime/logseq-index'}/${vaultSlugOf(base)}.db`;
   }
 
   /**
@@ -1434,6 +1456,41 @@ export default class LogseqEditorPlugin extends Plugin {
     await idx.persistNow();
   }
 
+  /**
+   * 狂暴索引(用户指定,2026-10-25):rebuild=全量重建 / sync=增量补索引。
+   * 进度条用可更新 Notice;结束后报耗时与规模。仅 daemon 模式(内存索引
+   * 没有这条路径)。
+   */
+  private async runTurbo(mode: 'rebuild' | 'sync'): Promise<void> {
+    const d = this.daemonIndex;
+    if (!d) {
+      new Notice('狂暴索引需要守护进程模式(设置里开启 SQLite 索引并重启)。');
+      return;
+    }
+    const label = mode === 'rebuild' ? '狂暴重建' : '狂暴增量';
+    const progressNotice: { current: Notice | null } = { current: null };
+    let lastText = '';
+    const show = (done: number, total: number): void => {
+      const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+      const text = `${label}: ${done}/${total} (${pct}%)`;
+      if (text !== lastText) {
+        lastText = text;
+        progressNotice.current?.hide();
+        progressNotice.current = new Notice(text, 0);
+      }
+    };
+    show(0, 0);
+    try {
+      const r = await (mode === 'rebuild' ? d.turboRebuild(show) : d.turboSync(show));
+      progressNotice.current?.hide();
+      new Notice(`${label}完成: ${r.files} 文件 / ${r.blocks} 块 / ${r.ms}ms`);
+      this.notifyBlockIndexConsumers();
+    } catch (e) {
+      progressNotice.current?.hide();
+      new Notice(`${label}失败: ${String(e).slice(0, 120)}`);
+    }
+  }
+
   /** Called by the settings tab when the SQLite toggles change. */
   applySqliteSettings(): void {
     const want = this.settings.sqliteIndexEnabled;
@@ -1443,7 +1500,7 @@ export default class LogseqEditorPlugin extends Plugin {
       void idx.close();
       return;
     }
-    if (want && !this.sqliteIndex) {
+    if (want && !this.sqliteIndex && !this.daemonIndex) {
       this.attachSqliteIndex();
       void this.startSqliteIndex();
     }
