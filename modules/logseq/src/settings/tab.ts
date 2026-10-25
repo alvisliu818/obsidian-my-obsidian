@@ -11,7 +11,7 @@ import { OpenWithEditModal } from '../features/openWithUi';
 import { resetReferencesCollapse } from '../features/pageReferences';
 import { VIEW_TYPE_BLOCK_EDITOR, type BlockEditorView } from '../view/BlockEditorView';
 import { VIEW_TYPE_EXTERNAL_BLOCK } from '../views/ExternalBlockView';
-import { mountDisplayName, type LspServerSpec, type PagePropsEditor, type ScopeMode, type ShortcutOverrides } from '../types';
+import { mountDisplayName, type EditorChoice, type LspServerSpec, type PagePropsEditor, type ScopeMode, type ShortcutOverrides } from '../types';
 import { effectiveLspServers } from '../lsp/serverSpecs';
 import { LspServerEditModal } from './lspServerModal';
 import { renderEditorSettingsRows } from './editorSettingsUI';
@@ -540,6 +540,26 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         '每个挂载可以用包含 / 排除两条正则过滤；在面板里右键任意条目还可以把它链接进库，' +
         '之后就能用原生块编辑器打开（反链、块引用、搜索全部生效）。',
     });
+
+    new Setting(containerEl)
+      .setName('库外 Markdown 默认编辑器')
+      .setDesc(
+        '点击挂载面板（及搜索结果）里的库外 .md 文件时用哪个编辑器打开。"Obsidian 原生编辑器"走' +
+          'Obsidian 自己的库外文件打开路线（需要 1.14.4+ 桌面版安装器，反链、大纲、链接解析都是原生行为）；' +
+          '"Logseq 块编辑器"是本插件的块编辑器（折叠 / 缩放 / 块引用可用，没有反链）。' +
+          '单个文件可在自己的属性里覆盖此默认：frontmatter 写 editor: logseq 或 editor: native，' +
+          'Logseq 格式写文件顶部的 editor:: 同样有效。' +
+          '本机不支持库外原生打开时，选了原生也会落回块编辑器。',
+      )
+      .addDropdown((d) =>
+        d
+          .addOptions({ native: 'Obsidian 原生编辑器', logseq: 'Logseq 块编辑器' })
+          .setValue(this.plugin.settings.externalMarkdownEditor ?? 'native')
+          .onChange(async (v) => {
+            this.plugin.settings.externalMarkdownEditor = v as EditorChoice;
+            await this.plugin.saveSettings();
+          }),
+      );
 
     new Setting(containerEl)
       .setName('启用挂载过滤')

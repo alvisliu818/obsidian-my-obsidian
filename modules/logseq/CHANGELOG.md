@@ -5,6 +5,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
 
 ## [Unreleased]
 
+### Added
+
+- **库外 markdown 文件也有默认编辑器了，默认 Obsidian 原生。** 挂载面板（及一切走 `openExternalEntry` 的入口，含搜索结果、最近打开）点击库外 `.md` 时不再一律进块编辑器壳，而是按新设置「库外 Markdown 默认编辑器」（设置 → 外部挂载，默认 **Obsidian 原生编辑器**，即 1.14.4+ 的 TExternalFile 原生路线）路由；本机不支持库外原生打开时自动落回块编辑器，原生打开失败（文件刚被移走）也一样。单个文件可以用自己的属性覆盖默认值——frontmatter `editor: logseq|native` 或文件顶部 `editor:: logseq|native`（`editorChoiceFromExternalText`，与库内页面的 `editor` 属性同一套语义；库外文件没有 metadataCache 和页面注册表，文件自身是唯一来源）。右键菜单的主项标题跟着实际路由走（默认原生时如实显示「用原生编辑器打开」），块编辑器保留显式入口（`forceBlockEditor`）。已链接进库的 md 不受影响：它们已是库内文件，走原有接管规则。
+
 ### Fixed
 
 - **Completion popup renders blank rows no more.** The suggest widget's list rows appeared in the DOM with correct geometry but their text layer was never painted — the popup showed as an empty white box ("弹出但行空白"). Root cause, established by a bisect of DOM experiments in the e2e vault: keeping the popup in an external host node (`overflowWidgetsDomNode`, mounted on `document.body` to escape the block editor's clip chain) triggers a Chromium paint-recording defect in this Obsidian/Electron build — row backgrounds and containers paint, but the text layer's initial paint is never recorded; style mutations on the rows never invalidate it, only DOM structure changes force a repaint. The widgets now live back inside `.monaco-editor` (the upstream arrangement) with `fixedOverflowWidgets` keeping them clip-safe — `overflow: hidden` does not clip fixed descendants, and `.workspace-leaf`'s `contain: strict` turned out to be harmless for painting. That containment DID break positioning though: it became the containing block for the fixed popup, shifting it by the leaf's offset — leaves hosting a Monaco editor now opt out via `.workspace-leaf:has(.monaco-editor) { contain: none }`. The popup/hover appearance overrides moved from the (now gone) `.lgp-monaco-overflow` prefix to `.monaco-editor`. Verified in e2e: `os.` completes to real basedpyright members, painted, at the cursor.

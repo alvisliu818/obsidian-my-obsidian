@@ -9,6 +9,7 @@ import { FragmentHost, type FragmentOptions } from './blocks/fragmentEditor';
 import { CMD_COLLAPSE_ALL, CMD_FIND, CMD_REPLACE } from './interactions/hotkeys';
 import {
   DEFAULT_SETTINGS,
+  editorChoiceFromExternalText,
   editorChoiceFromProps,
   mountTreeOrderFrom,
   mountsFrom,
@@ -1019,6 +1020,8 @@ export default class LogseqEditorPlugin extends Plugin {
     this.settings.lspEnabled = this.settings.lspEnabled !== false;
     if (!Array.isArray(this.settings.lspServers)) this.settings.lspServers = [];
     this.settings.externalBanner = this.settings.externalBanner !== false;
+    // 库外 md 默认编辑器:只认两个值,手改坏 data.json 一律回到默认原生。
+    if (this.settings.externalMarkdownEditor !== 'logseq') this.settings.externalMarkdownEditor = 'native';
     // Absent in every pre-toggle config → the affordance stays visible.
     this.settings.addBlockAffordance = this.settings.addBlockAffordance !== false;
     // Same deal: absent → the hover decorations (line + plus) keep floating in.
@@ -1272,6 +1275,30 @@ export default class LogseqEditorPlugin extends Plugin {
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
     logOp(this, 'external.open', node.abs, 'ok', 'native-editor');
     return true;
+  }
+
+  /**
+   * 库外 markdown 文件的默认编辑器决策（openExternalEntry 与挂载面板菜单共用）。
+   *
+   * 文件自己的 `editor` 属性最优先 —— 库外文件没有 metadataCache 条目也没有
+   * 页面属性注册表，唯一的来源是文件本身（frontmatter `editor:` 或顶部
+   * `editor::`，见 editorChoiceFromExternalText）；读不出来按无属性处理。
+   * 没有属性时用设置 externalMarkdownEditor，未设置 = 'native'
+   * （用户 2026-10-25 决策：库外 md 默认 Obsidian 原生编辑器）。
+   *
+   * 同步读整个文件：菜单构建（contextmenu）也会调它来让主项标题跟上实际
+   * 行为，挂载面板已有的 isLinked 等菜单期检查本来就是同步 fs，量级相同。
+   */
+  externalMarkdownChoice(node: Pick<MountNode, 'abs' | 'name'>): EditorChoice {
+    if (isMarkdownFile(node.name)) {
+      try {
+        const fromFile = editorChoiceFromExternalText(readExternalText(node.abs));
+        if (fromFile) return fromFile;
+      } catch {
+        /* 读不了按无属性处理，走设置 */
+      }
+    }
+    return this.settings.externalMarkdownEditor === 'logseq' ? 'logseq' : 'native';
   }
 
   // ------------------------------------------------------------------
@@ -1966,7 +1993,7 @@ export default class LogseqEditorPlugin extends Plugin {
   async openExternalEntry(
     mount: ExternalMount,
     node: MountNode,
-    opts?: { readOnly?: boolean; forceCodeEditor?: boolean },
+    opts?: { readOnly?: boolean; forceCodeEditor?: boolean; forceBlockEditor?: boolean },
   ): Promise<void> {
     if (node.isDir) return;
     // Read-only means "show me, change nothing", and it is also the fallback
@@ -1983,12 +2010,16 @@ export default class LogseqEditorPlugin extends Plugin {
       await this.app.workspace.openLinkText(linkVaultPath(safeSegment(node.name)), '', false);
       return;
     }
-    // Routing is by CONTENT, not by file type: markdown is prose and belongs in
-    // the block editor; everything else — code, config, `.gitignore`, `.env`,
-    // plain text — is something you read line by line and belongs in the code
-    // editor. An allowlist of "code extensions" was the wrong shape: it sends
-    // every file the list forgot to the wrong editor, which is how a
-    // `.gitignore` ended up rendered as a document with headings.
+    // Routing is by CONTENT, not by file type: markdown is prose. Its default
+    // editor is externalMarkdownChoice — the file's own `editor` property
+    // first, then the setting (default 'native', the TExternalFile route that
+    // Obsidian itself uses; the block editor shell is what this plugin used to
+    // send every outside file to). Everything else — code, config,
+    // `.gitignore`, `.env`, plain text — is something you read line by line
+    // and belongs in the code editor. An allowlist of "code extensions" was
+    // the wrong shape: it sends every file the list forgot to the wrong
+    // editor, which is how a `.gitignore` ended up rendered as a document with
+    // headings.
     // .ipynb 优先交给 jupyter notebook 插件（库外绝对路径 fs 直读直写）。
     // 未装/未启用时走原路由（通常被二进制门控交给系统）。
     if (extOfName(node.name) === 'ipynb') {
@@ -2003,6 +2034,16 @@ export default class LogseqEditorPlugin extends Plugin {
       }
     }
     if (isMarkdownFile(node.name)) {
+      // 默认原生时先试原生编辑器；打开失败（文件刚被移走等）落回块编辑器。
+      // 本机不支持库外原生打开（pre-1.14.4）时直接走块编辑器——shim 是只读兜底,
+      // 不该成为可编辑 md 的默认目的地。
+      if (
+        !opts?.forceBlockEditor &&
+        this.externalMarkdownChoice(node) === 'native' &&
+        this.canOpenNativeExternal()
+      ) {
+        if (await this.openExternalInNativeEditor(node)) return;
+      }
       if (await this.openInBlockEditor(mount, node)) return;
     } else {
       // Real binaries have nothing to edit, so hand them to the system. Judged

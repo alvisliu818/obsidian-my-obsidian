@@ -961,16 +961,25 @@ export class MountPanelView extends ItemView {
       if (node) {
         const text = !node.isDir && isTextMount(extOf(node.name));
         const linked = this.isLinked(node);
+        const md = !node.isDir && node.name.toLowerCase().endsWith('.md');
+        // 未链接 md 的主项标题跟上实际路由（externalMarkdownChoice = 文件自身
+        // editor 属性 ?? 设置，见 main.ts）：默认原生就如实写「用原生编辑器
+        // 打开」，并把块编辑器保留为下面的显式入口。只对未链接生效——已链接
+        // 的文件走 openLinkText，由库内接管规则决定编辑器。
+        const nativeDefault =
+          md && !linked && this.plugin.externalMarkdownChoice(node) === 'native' && this.plugin.canOpenNativeExternal();
         // Name the destination honestly, and never promise a vault link the user
         // did not ask for: opening a file writes nothing to the vault.
         const primaryTitle = node.isDir
           ? '展开 / 折叠'
           : linked
-            ? node.name.toLowerCase().endsWith('.md')
+            ? md
               ? '在 Logseq 块编辑器中打开（已链接）'
               : '用已安装的编辑器打开（已链接）'
-            : node.name.toLowerCase().endsWith('.md')
-              ? '在块编辑器中打开'
+            : md
+              ? nativeDefault
+                ? '用原生编辑器打开'
+                : '在块编辑器中打开'
               : text
                 ? '在块编辑器中打开'
                 : '用系统程序打开';
@@ -984,6 +993,16 @@ export class MountPanelView extends ItemView {
             }),
         );
         if (!node.isDir) {
+          // 默认编辑器是原生时，块编辑器保留一个显式入口（forceBlockEditor
+          // 跳过默认决策直进块编辑器壳）。
+          if (nativeDefault) {
+            menu.addItem((item) =>
+              item
+                .setTitle('在块编辑器中打开')
+                .setIcon('file-text' as never)
+                .onClick(() => void this.plugin.openExternalEntry(mount, node, { forceBlockEditor: true })),
+            );
+          }
           menu.addItem((item) =>
             item
               .setTitle('用 Monaco 打开（纯代码）')

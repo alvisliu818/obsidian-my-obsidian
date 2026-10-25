@@ -5,7 +5,13 @@
 
 import { describe, expect, it } from 'vitest';
 import { parseDocument } from '../src/core/parser';
-import { docPageProps, editorChoiceFromProps, takeOverForFile, type BlockEditorSettings } from '../src/types';
+import {
+  docPageProps,
+  editorChoiceFromExternalText,
+  editorChoiceFromProps,
+  takeOverForFile,
+  type BlockEditorSettings,
+} from '../src/types';
 
 describe('editorChoiceFromProps', () => {
   it('maps the two known values', () => {
@@ -71,6 +77,44 @@ describe('takeOverForFile', () => {
     expect(t(null, all, 'excluded/page.md')).toBe(false);
     expect(t(null, foldersIn, 'notes/page.md')).toBe(true);
     expect(t(null, foldersIn, 'other/page.md')).toBe(false);
+  });
+});
+
+describe('editorChoiceFromExternalText', () => {
+  it('reads frontmatter editor: (Obsidian style)', () => {
+    expect(editorChoiceFromExternalText('---\ntitle: x\neditor: native\n---\n# hi')).toBe('native');
+    expect(editorChoiceFromExternalText('---\neditor: logseq\n---\nbody')).toBe('logseq');
+    expect(editorChoiceFromExternalText('---\nEditor: Native\n---\nbody')).toBe('native');
+  });
+
+  it('reads top-of-file Logseq page properties (editor::)', () => {
+    expect(editorChoiceFromExternalText('editor:: logseq\ntype:: book\n- a block')).toBe('logseq');
+    expect(editorChoiceFromExternalText('editor:: native\n- a block')).toBe('native');
+  });
+
+  it('parses CRLF files the same', () => {
+    expect(editorChoiceFromExternalText('---\r\ntitle: x\r\neditor: native\r\n---\r\n\r\nbody')).toBe('native');
+    expect(editorChoiceFromExternalText('editor:: logseq\r\n- a block')).toBe('logseq');
+  });
+
+  it('no property, unknown value, unclosed fence → null', () => {
+    expect(editorChoiceFromExternalText('# just a note\n\nsome text')).toBeNull();
+    expect(editorChoiceFromExternalText('---\ntitle: x\n---\nbody')).toBeNull();
+    expect(editorChoiceFromExternalText('editor:: maybe\n- a block')).toBeNull();
+    expect(editorChoiceFromExternalText('---\neditor: native\nno closing fence')).toBeNull();
+  });
+
+  it('indented editor:: inside a block is NOT a page property', () => {
+    expect(editorChoiceFromExternalText('- a block\n  editor:: logseq')).toBeNull();
+  });
+
+  it('a content line ends the page-properties run', () => {
+    expect(editorChoiceFromExternalText('some prose\neditor:: logseq')).toBeNull();
+  });
+
+  it('frontmatter wins and post-fence editor:: is not consulted (matches docPageProps)', () => {
+    expect(editorChoiceFromExternalText('---\ntitle: x\n---\neditor:: native\n- a block')).toBeNull();
+    expect(editorChoiceFromExternalText('---\neditor: logseq\n---\neditor:: native\n- a block')).toBe('logseq');
   });
 });
 

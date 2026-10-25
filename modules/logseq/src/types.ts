@@ -389,6 +389,21 @@ export interface BlockEditorSettings {
    */
   externalBanner: boolean;
   /**
+   * 库外 markdown 文件的默认编辑器（挂载面板点击、搜索结果等一切走
+   * openExternalEntry 的入口）。'native' = Obsidian 原生编辑器（1.14.4+ 的
+   * TExternalFile 路线，反链/大纲/链接解析都是原生行为）；'logseq' = 插件的
+   * ExternalBlockView 壳（折叠/缩放/块引用，但没有反链）。
+   *
+   * 单个文件可以用自己的属性覆盖这里：frontmatter `editor: logseq|native` 或
+   * 文件顶部 `editor:: logseq|native`（见 editorChoiceFromExternalText）——
+   * 与库内页面的 `editor` 属性同一套语义。本机不支持库外原生打开
+   * （canOpenNativeExternal 为 false）时，选了 'native' 也会落回块编辑器。
+   *
+   * 默认 'native'（用户 2026-10-25 决策）：原生编辑器是 Obsidian 自己的路径，
+   * 块编辑器始终在右键菜单里保留一个显式入口。
+   */
+  externalMarkdownEditor: EditorChoice;
+  /**
    * Take over Office files (.docx/.xlsx/.pptx/…) with the built-in previewer.
    * On by default: Obsidian has no viewer for these at all, so there is nothing
    * to displace — and "open with the system app" stays one click away in the
@@ -730,6 +745,9 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   iconThemePref: '',
   externalSplitView: false,
   externalBanner: true,
+  // 库外 md 默认 Obsidian 原生编辑器(用户 2026-10-25 决策);块编辑器保留在
+  // 右键菜单,文件自己的 editor 属性可逐文件覆盖。
+  externalMarkdownEditor: 'native',
   officeViewerEnabled: true,
   imageViewerTakeOver: false,
   openWithApps: [],
@@ -800,6 +818,14 @@ export function shouldTakeOver(
   return !pathInFolders(file, parseFolderList(excludedFolders));
 }
 
+/** Normalize one raw property value to an editor choice (unknown → null). */
+function editorChoiceValue(raw: unknown): EditorChoice | null {
+  const v = String(raw).trim().toLowerCase();
+  if (v === 'logseq') return 'logseq';
+  if (v === 'native') return 'native';
+  return null;
+}
+
 /**
  * The per-page default-editor property: `editor:: logseq|native` (Logseq
  * page properties) or `editor: logseq|native` (frontmatter). Key and value
@@ -817,9 +843,50 @@ export function editorChoiceFromProps(props: Record<string, unknown> | undefined
     }
   }
   if (raw === undefined || raw === null) return null;
-  const v = String(raw).trim().toLowerCase();
-  if (v === 'logseq') return 'logseq';
-  if (v === 'native') return 'native';
+  return editorChoiceValue(raw);
+}
+
+/**
+ * The per-FILE default-editor property of an OUT-OF-VAULT markdown file, read
+ * from the file's own text — it has no metadataCache entry and no page
+ * registry, so the file itself is the only source. Same two channels and the
+ * same value rules as the per-page property: frontmatter `editor: logseq|native`
+ * and top-of-file Logseq page properties `editor:: logseq|native`. No property
+ * (or an unknown value) yields null.
+ *
+ * This mirrors the parser's two channels without running the full parser
+ * (parser.ts:227 frontmatter, :249 page properties): frontmatter is a leading
+ * `---` fence that actually closes, page properties are the run of UNindented
+ * `key:: value` lines before any block content. CRLF is normalized first for
+ * the same reason the parser does it — `$`-anchored matches never see `\r`.
+ * When frontmatter exists, `editor:` inside it decides and the post-fence
+ * `editor::` run is not consulted (the parser parks those in a second props
+ * block that docPageProps never reads, so vault files behave the same).
+ */
+export function editorChoiceFromExternalText(text: string): EditorChoice | null {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  // --- frontmatter (`editor:`): leading fence, only when it closes ---
+  if ((lines[0] ?? '').trim() === '---') {
+    let close = -1;
+    for (let j = 1; j < lines.length; j++) {
+      if (lines[j].trim() === '---') {
+        close = j;
+        break;
+      }
+    }
+    for (let j = 1; close > 0 && j < close; j++) {
+      const m = /^editor[ \t]*:[ \t]*(.*)$/i.exec(lines[j]);
+      if (m) return editorChoiceValue(m[1]);
+    }
+  }
+  // --- Logseq page properties (`editor::`): unindented run before content ---
+  for (const line of lines) {
+    if (line.trim() === '') continue;
+    if (/^[\t ]/.test(line)) break; // indented = inside a block, not a page prop
+    const m = /^editor[ \t]*::[ \t]*(.*)$/i.exec(line);
+    if (m) return editorChoiceValue(m[1]);
+    if (!/^[A-Za-z][A-Za-z0-9_-]*::/.test(line)) break; // real content ends the run
+  }
   return null;
 }
 
