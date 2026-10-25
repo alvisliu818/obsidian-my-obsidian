@@ -16,7 +16,7 @@ import { Menu, Notice } from 'obsidian';
 import type { BlockEditorView } from '../view/BlockEditorView';
 import { blockFromEl } from '../blocks/renderTree';
 import { blockId, ensureId, isCollapsed, setCollapsed, type Block } from '../types';
-import { cycleMarker, duplicateBlock, isDescendant, removeBlock } from '../core/treeOps';
+import { cycleMarker, duplicateBlock, flattenVisible, indent, isDescendant, moveBlockVertically, outdent, removeBlock } from '../core/treeOps';
 import { blocksEmbedSyntax, blocksMarkdown } from '../features/copyFormats';
 import { openMoveToFileModal } from '../features/moveToFile';
 import { openExtractToPageModal } from '../features/extractToPage';
@@ -244,6 +244,73 @@ function buildBlockMenu(b: Block, host: BlockEditorView, fromBullet: boolean): M
         );
       }),
   );
+
+  // 思源 gutter 的层级组(2026-10-26):缩进/反缩进/上移/下移进块菜单——
+  // 此前单块的层级操作只有快捷键,多选菜单反而有缩进。
+  const oldParent = b.parent;
+  const sibs = oldParent ? oldParent.children : flattenVisible(host.visibleRoots);
+  const flat = flattenVisible(host.visibleRoots);
+  const fIdx = flat.indexOf(b);
+  menu.addItem((item) =>
+    item
+      .setTitle('Indent block')
+      .setIcon('indent-increase')
+      .setDisabled(sibs[0] === b)
+      .onClick(() => {
+        commitIfFocused(b, host);
+        host.mutate(
+          () => {
+            indent(b);
+          },
+          () => ({ lists: [oldParent, b.parent] }),
+        );
+      }),
+  );
+  menu.addItem((item) =>
+    item
+      .setTitle('Outdent block')
+      .setIcon('indent-decrease')
+      .setDisabled(!b.parent)
+      .onClick(() => {
+        commitIfFocused(b, host);
+        host.mutate(
+          () => {
+            outdent(b);
+          },
+          () => ({ lists: [oldParent, b.parent] }),
+        );
+      }),
+  );
+  menu.addItem((item) =>
+    item
+      .setTitle('Move up')
+      .setIcon('arrow-up')
+      .setDisabled(fIdx <= 0)
+      .onClick(() => {
+        commitIfFocused(b, host);
+        host.mutate(
+          () => {
+            moveBlockVertically(host.visibleRoots, b, -1);
+          },
+          () => ({ lists: [oldParent] }),
+        );
+      }),
+  );
+  menu.addItem((item) =>
+    item
+      .setTitle('Move down')
+      .setIcon('arrow-down')
+      .setDisabled(fIdx < 0 || fIdx >= flat.length - 1)
+      .onClick(() => {
+        commitIfFocused(b, host);
+        host.mutate(
+          () => {
+            moveBlockVertically(host.visibleRoots, b, 1);
+          },
+          () => ({ lists: [oldParent] }),
+        );
+      }),
+  );
   menu.addItem((item) =>
     item
       .setTitle('Delete block')
@@ -316,6 +383,13 @@ function buildBlockMenu(b: Block, host: BlockEditorView, fromBullet: boolean): M
             () => ({ subtree: b }),
           );
         }),
+    );
+    // 思源折叠组:一键折叠全部后代(手柄 Alt+点击的菜单等价物)。
+    menu.addItem((item) =>
+      item
+        .setTitle('Fold all children')
+        .setIcon('chevrons-down')
+        .onClick(() => host.foldSubtree(b)),
     );
     menu.addItem((item) =>
       item

@@ -1498,6 +1498,19 @@
   text-overflow: ellipsis;
   pointer-events: none;
   z-index: 100;
+}
+
+/* 思源 gutter ghost(2026-10-26):真块克隆形态——浮卡承载块 DOM,禁掉
+   标签形态的 nowrap/ellipsis。 */
+.block-drag-ghost.is-blocks {
+  max-width: 480px;
+  max-height: 40vh;
+  padding: 2px;
+  background: var(--background-primary);
+  white-space: normal;
+  text-overflow: clip;
+  overflow: hidden;
+}
   opacity: 0.95;
 }
 

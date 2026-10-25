@@ -219,8 +219,17 @@ export function attachDnd(treeEl: HTMLElement, host: BlockEditorView): void {
     // pointer only, which misleads when the payload is a group.
     if (dragged.length > 1) {
       const ghost = document.createElement('div');
-      ghost.className = 'block-drag-ghost';
-      ghost.setText(`${dragged.length} blocks`);
+      ghost.className = 'block-drag-ghost is-blocks';
+      // 思源 gutter ghost(2026-10-26):克隆**真实块**做拖拽预览,而不是
+      // "N blocks"标签——预览与落点内容一致。
+      for (const db of dragged.slice(0, 8)) {
+        const el = findBlockEl(db)?.cloneNode(true) as HTMLElement | null;
+        if (!el) continue;
+        el.classList.remove('is-dragging-src', 'lg-editing-list', 'lg-no-symbol', 'is-editing');
+        el.querySelectorAll('.cm-editor').forEach((e) => e.remove());
+        ghost.appendChild(el);
+      }
+      if (!ghost.children.length) ghost.setText(`${dragged.length} blocks`);
       ghost.style.transform = 'translate(-9999px, -9999px)';
       document.body.appendChild(ghost);
       ev.dataTransfer?.setDragImage(ghost, 10, 10);
