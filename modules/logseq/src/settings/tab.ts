@@ -1015,6 +1015,21 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
           new Notice('已触发守护进程全量重建');
         }),
       );
+      // 狂暴模式(用户指定,2026-10-25):尽可能多占资源跑索引,进度在
+      // 可更新 Notice 里(狂暴重建: 123/456 (27%))。与命令面板同一条
+      // runTurbo 路径(daemon 并发池 os.cpus()*2 + synchronous=OFF)。
+      actions.addButton((b) =>
+        b.setButtonText('狂暴重建').onClick(async () => {
+          if (!this.plugin.daemonIndex) return;
+          void this.plugin.runTurbo('rebuild');
+        }),
+      );
+      actions.addButton((b) =>
+        b.setButtonText('狂暴增量').onClick(async () => {
+          if (!this.plugin.daemonIndex) return;
+          void this.plugin.runTurbo('sync');
+        }),
+      );
     }
 
   }

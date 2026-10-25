@@ -1298,9 +1298,9 @@ export default class LogseqEditorPlugin extends Plugin {
   /**
    * 狂暴索引(用户指定,2026-10-25):rebuild=全量重建 / sync=增量补索引。
    * 进度条用可更新 Notice;结束后报耗时与规模。仅 daemon 模式(内存索引
-   * 没有这条路径)。
+   * 没有这条路径)。public:设置页的狂暴按钮也走这里。
    */
-  private async runTurbo(mode: 'rebuild' | 'sync'): Promise<void> {
+  async runTurbo(mode: 'rebuild' | 'sync'): Promise<void> {
     const d = this.daemonIndex;
     if (!d) {
       new Notice('狂暴索引需要守护进程模式(设置里开启 SQLite 索引并重启)。');
