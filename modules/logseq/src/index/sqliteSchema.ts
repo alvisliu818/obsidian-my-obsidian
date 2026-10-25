@@ -93,6 +93,36 @@ export const SCHEMA_SQL: readonly string[] = [
      value TEXT NOT NULL DEFAULT ''
    )`,
   `CREATE INDEX IF NOT EXISTS idx_page_props_path ON page_props(path)`,
+
+  // ---- 物化表(2026-10-25 守护进程方案):块索引查询层需要的派生数据在写入时
+  // 算好,查询就是纯 SQL——渲染进程不再驻留 99 万块的对象图(思源同款模式)。
+
+  // 每块的有效反链目标(自身 links+tags,加祖先继承,加所在页)——BacklinkEntry.refs。
+  `CREATE TABLE IF NOT EXISTS eff_refs (
+     bkey TEXT NOT NULL,
+     target TEXT NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_eff_refs_bkey ON eff_refs(bkey)`,
+  `CREATE INDEX IF NOT EXISTS idx_eff_refs_target ON eff_refs(target)`,
+
+  // 闪卡(块 tagged #card;question/answer 在写入时从块树组装)。
+  `CREATE TABLE IF NOT EXISTS cards (
+     bkey TEXT PRIMARY KEY,
+     path TEXT NOT NULL,
+     block_id TEXT NOT NULL DEFAULT '',
+     question TEXT NOT NULL DEFAULT '',
+     answer TEXT NOT NULL DEFAULT '',
+     marker TEXT,
+     props_json TEXT NOT NULL DEFAULT '{}'
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_cards_path ON cards(path)`,
+
+  // 超标签定义(标签页自身带属性 → 模板)。
+  `CREATE TABLE IF NOT EXISTS supertags (
+     name TEXT PRIMARY KEY,
+     path TEXT NOT NULL,
+     props_json TEXT NOT NULL DEFAULT '{}'
+   )`,
 ];
 
 export const TABLE_NAMES: readonly string[] = [
@@ -104,6 +134,9 @@ export const TABLE_NAMES: readonly string[] = [
   'links',
   'refs',
   'page_props',
+  'eff_refs',
+  'cards',
+  'supertags',
 ];
 
 export interface SqliteFileMeta {
@@ -185,3 +218,21 @@ export function hashText(text: string): number {
   }
   return h >>> 0;
 }
+
+/**
+ * FTS5 全文索引(2026-10-25,用户指定「上 FTS5」):trigram 分词器支持中文子串
+ * 匹配(>=3 字)。SQLite 构建未编 FTS5 时(node:sqlite/wa-sqlite 默认都没编,
+ * 实测 2026-10-25)整个列表跳过,查询层回落 LIKE——不是错误路径。
+ *
+ * 常规 fts5 表(非 external content):DELETE/INSERT 与 blocks 同批维护。
+ * trigram 索引体积 ≈ 文本 3 倍(主库 618K 块 ≈ 25MB 文本 → ~75MB 磁盘),
+ * 换未连提及/块搜索从 237ms 全库 LIKE 变毫秒级。
+ */
+export const FTS_STATEMENTS: readonly string[] = [
+  `CREATE VIRTUAL TABLE IF NOT EXISTS blocks_fts USING fts5(
+     bkey UNINDEXED,
+     path UNINDEXED,
+     text,
+     tokenize = 'trigram'
+   )`,
+];
