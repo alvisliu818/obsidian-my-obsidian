@@ -14,7 +14,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { EditorSelection, EditorState } from '@codemirror/state';
-import { handleBackspace, handleEnter, handleSpace } from '../src/interactions/keymap';
+import { handleBackspace, handleEnter, handlePaste, handleSpace } from '../src/interactions/keymap';
 import { linkParents, registerRoots } from '../src/core/treeOps';
 import { parseDocument } from '../src/core/parser';
 import { blockEditorDoc, editorMarkerLen, type Block } from '../src/types';
@@ -236,5 +236,63 @@ describe('思源输入转换 — `#`+空格 转标题', () => {
     expect(handleSpace(liveView(ref2), env2.host)).toBe(false);
     await sleep(20);
     expect(it0.kind).toBe('list');
+  });
+});
+
+describe('思源粘贴决策树 — 多行 markdown 拆块插入', () => {
+  function pasteEnv(markdown: string) {
+    const env = makeEnv(markdown);
+    const ref = { doc: '', head: 0 };
+    const view = () =>
+      ({
+        state: {
+          get doc() {
+            return { toString: () => ref.doc, length: ref.doc.length, lineAt: (p: number) => ({ text: ref.doc.split('\n')[ref.doc.slice(0, p).split('\n').length - 1] ?? '', from: 0, to: ref.doc.length, number: 1 }) };
+          },
+          get selection() {
+            return { main: { head: ref.head, empty: true, from: ref.head, to: ref.head } };
+          },
+        },
+      }) as never;
+    return { env, ref, view };
+  }
+
+  it('段落里粘贴多行列表 → 拆块插入中间,光标落末尾', async () => {
+    const ev = { stopPropagation: () => {} } as unknown as ClipboardEvent;
+    const { env, ref, view } = pasteEnv('para\n');
+    const a = env.doc.blocks[0];
+    env.focus(a, 5); // 末尾
+    ref.doc = 'para';
+    ref.head = 4;
+    expect(handlePaste(view(), env.host, ev, '- x\n- y\n')).toBe(true);
+    expect(env.doc.blocks.map((b) => b.text)).toEqual(['para', 'x', 'y']);
+    expect(env.doc.blocks[1].bare).toBeFalsy(); // 列表项
+    expect(env.focusTargets.at(-1)?.text).toBe('y');
+  });
+
+  it('光标在文本中间粘贴 → 头留在原块,尾成延续块(段落 bare 语义)', () => {
+    const ev = { stopPropagation: () => {} } as unknown as ClipboardEvent;
+    const { env, ref, view } = pasteEnv('abcdef\n');
+    const a = env.doc.blocks[0];
+    env.focus(a, 3);
+    ref.doc = 'abcdef';
+    ref.head = 3;
+    handlePaste(view(), env.host, ev, '- x\n');
+    expect(a.text).toBe('abc');
+    expect(env.doc.blocks.map((b) => b.text)).toEqual(['abc', 'x', 'def']);
+    expect(env.doc.blocks[2].bare).toBe(true); // bare 段落延续
+  });
+
+  it('列表项里粘贴 → 粘贴块成同级项,尾部列表语义延续', () => {
+    const ev = { stopPropagation: () => {} } as unknown as ClipboardEvent;
+    const { env, ref, view } = pasteEnv('- one\n- two\n');
+    const one = env.doc.blocks[0];
+    env.focus(one, 3); // 'one' 末尾
+    ref.doc = '- one'; // 编辑文档带符号
+    ref.head = 5;
+    handlePaste(view(), env.host, ev, '- x\n');
+    expect(env.doc.blocks.map((b) => b.text)).toEqual(['one', 'x', 'two']);
+    expect(env.doc.blocks[1].bare).toBeFalsy();
+    expect(env.doc.blocks[2].bare).toBeFalsy(); // 列表延续(非 bare)
   });
 });

@@ -10,6 +10,7 @@ import type { BlockRenderHost } from '../blocks/renderHost';
 import {
   flattenVisible,
   indent,
+  linkParents,
   insertAfter,
   insertBefore,
   insertFirstChild,
@@ -30,6 +31,7 @@ import {
 } from '../core/treeOps';
 import { cycleMarker } from '../core/treeOps';
 import { headingLevel } from '../core/fold';
+import { parseDocument } from '../core/parser';
 import { applyBlockProps, applyEditorMarker, createBlock, splitPropLines, type Block } from '../types';
 
 function focusedBlock(host: BlockRenderHost): Block | null {
@@ -152,6 +154,7 @@ export function handleEnter(view: EditorView, host: BlockRenderHost): boolean { 
   const parent = b.parent;
   let nb: Block | null = null;
   let stay = false; // 光标留在原块(段首回车)时置位
+  let fenceConverted = false;
   host.mutate(
     () => {
       // 符号即文本:编辑文档带 `- `[TODO ] 前缀——先解析进模型(剥符号,
@@ -176,6 +179,28 @@ export function handleEnter(view: EditorView, host: BlockRenderHost): boolean { 
         // 搬进新项)。
         if (pos > 0 && pos < clean.length && b.children.length > 0) {
           nb = splitListFollowTail(b, pos);
+          return;
+        }
+      }
+      // 思源 turnIntoCode/codeBlockEnter(2026-10-26):光标停在 ``` 行
+      // (围栏标记之后)回车 → 该块转代码块(自动补闭合围栏),光标后文本
+      // 成新段落块。限 bare 段落(列表项里 ``` 是字面文本,与 # 同规);
+      // 行内还有其他文字(围栏后非行尾)不转换。
+      if (b.bare && b.children.length === 0) {
+        const headText = clean.slice(0, pos);
+        const fence = /(?:^|\n)[ 	]*(`{3,}|~{3,})(\w*)$/.exec(headText);
+        if (fence) {
+          b.kind = 'raw';
+          b.bare = false;
+          b.text = headText + '\n' + fence[1];
+          const tail = clean.slice(pos);
+          if (tail) {
+            const tb = createBlock(tail);
+            tb.bare = true;
+            insertAfter(b, tb);
+          }
+          nb = b;
+          fenceConverted = true;
           return;
         }
       }
@@ -206,6 +231,16 @@ export function handleEnter(view: EditorView, host: BlockRenderHost): boolean { 
   );
   // Children stay with the head block (Logseq behavior); caret goes to new block.
   const target = nb as Block | null;
+  if (target && fenceConverted) {
+    // 思源 turnIntoCode:转换后**立即**进代码编辑器。当前 CM 还开着
+    // (快速路径会挡住重挂),摘掉焦点态让 focusBlock 走慢路径经
+    // parseCodeFence 挂代码编辑器。旧视图直接销毁(其 DOM 由重挂清掉)。
+    host.focusedView?.destroy();
+    host.focusedView = null;
+    host.focusedBlock = null;
+    host.focusBlock(target, 'end');
+    return true;
+  }
   if (target && !stay) {
     host.focusBlock(target, 0);
   } else if (target && stay) {
@@ -272,14 +307,19 @@ export function handleArrow(view: EditorView, host: BlockRenderHost, dir: 'up' |
     if (!atFirstVisualLine(view)) return false;
     const prev = prevVisible(roots, b);
     if (!prev) return true; // consume: nothing above
+    // 思源 verticalCaret goalX(2026-10-26):跨块上移保持目标 X 列
+    const goalX = view.coordsAtPos(sel.head)?.left ?? null;
     host.focusBlock(prev, 'end');
+    if (goalX !== null) caretAtGoalX(host, goalX, true);
     return true;
   }
   if (dir === 'down') {
     if (!atLastVisualLine(view)) return false;
     const next = nextVisible(roots, b);
     if (!next) return true;
+    const goalX = view.coordsAtPos(sel.head)?.left ?? null;
     host.focusBlock(next, 0);
+    if (goalX !== null) caretAtGoalX(host, goalX, false);
     return true;
   }
   if (dir === 'left') {
@@ -304,6 +344,67 @@ export function handleDocJump(_view: EditorView, host: BlockRenderHost, end: boo
   const flat = flattenVisible(host.visibleRoots);
   if (!flat.length) return false;
   host.focusBlock(end ? flat[flat.length - 1] : flat[0], end ? 'end' : 0);
+  return true;
+}
+
+/** 思源 verticalCaret 的 goalX(2026-10-26):块间上/下移后,把光标放到
+ *  目标块末行/首行上与 goalX(出发列的视口 X)最近的文本位。CM 挂载同步,
+ *  坐标下一帧量;块已不在(被提交/换块)就放弃。 */
+function caretAtGoalX(host: BlockRenderHost, goalX: number, atEnd: boolean): void {
+  requestAnimationFrame(() => {
+    const v = host.focusedView;
+    if (!v || !v.dom.isConnected) return;
+    const len = v.state.doc.length;
+    const c = v.coordsAtPos(atEnd ? len : 0);
+    if (!c) return;
+    const y = (c.top + c.bottom) / 2;
+    const p = v.posAtCoords({ x: goalX, y });
+    if (p == null) return;
+    v.dispatch({ selection: { anchor: Math.max(0, Math.min(p, len)) } });
+  });
+}
+
+/**
+ * 思源粘贴决策树的多行分支(2026-10-26):多行文本进块模型——当前块在
+ * 光标处切开,粘贴文本经 parseDocument 解析成块序列插进中间(结构自带:
+ * 列表/缩进/围栏),光标后的尾部文本留在原容器的延续块里,光标落末尾。
+ * 单行粘贴不进这里(CM 默认纯文本插入)。
+ */
+export function handlePaste(view: EditorView, host: BlockRenderHost, event: ClipboardEvent, text: string): boolean {
+  const b = focusedBlock(host);
+  if (!b) return false;
+  event.stopPropagation(); // 我们完全接管多行粘贴,气泡不再惊动应用层处理器
+  deleteSelection(view); // 选区先删(粘贴语义)
+  const docText = view.state.doc.toString();
+  const head = view.state.selection.main.head;
+  const parent = b.parent;
+  let last: Block | null = null;
+  host.mutate(
+    () => {
+      const marked = applyEditorMarker(b, docText, head);
+      const { text: clean, props } = splitPropLines(marked.text);
+      applyBlockProps(b, props);
+      const pos = Math.min(marked.offset, clean.length);
+      const tailText = clean.slice(pos);
+      b.text = clean.slice(0, pos);
+      const pasted = parseDocument(text).blocks;
+      linkParents(pasted);
+      let anchor: Block = b;
+      for (const pb of pasted) {
+        insertAfter(anchor, pb);
+        anchor = pb;
+      }
+      if (tailText.length > 0 || pasted.length === 0) {
+        const tb = createBlock(tailText);
+        if (b.bare) tb.bare = true;
+        insertAfter(anchor, tb);
+        anchor = tb;
+      }
+      last = anchor;
+    },
+    () => ({ lists: [parent] }),
+  );
+  host.focusBlock(last ?? b, 'end');
   return true;
 }
 

@@ -216,6 +216,7 @@ import {
   handleEscape,
   handleJumpBlock,
   handleMoveBlock,
+  handlePaste,
   handleSpace,
   handleTab,
   handleWrapChar,
@@ -479,6 +480,16 @@ function mergeAtEdge(
 
 export function createEditorExtensions(host: BlockRenderHost, block?: Block): Extension[] {
   const blockKeymap = keymap.of(createBlockKeymap(host));
+  // 思源粘贴决策树的多行分支(2026-10-26):多行纯文本进块模型拆块插入;
+  // 单行与含文件的粘贴落 CM 默认。
+  const pasteHandler = EditorView.domEventHandlers({
+    paste: (event, view) => {
+      if (event.clipboardData?.files.length) return false;
+      const text = event.clipboardData?.getData('text/plain') ?? '';
+      if (!text.includes('\n')) return false;
+      return handlePaste(view, host, event, text);
+    },
+  });
   // NB: this extension is only ever mounted on a FOCUSED (editing) block, so
   // Ctrl+A / Ctrl+Z intentionally stay local here. The non-editing case is
   // owned by the capture-phase handler in BlockEditorView.
@@ -502,6 +513,7 @@ export function createEditorExtensions(host: BlockRenderHost, block?: Block): Ex
         : [livePreviewExtension];
 
   const ext: Extension[] = [
+    pasteHandler,
     EditorView.lineWrapping,
     highlightSpecialChars(),
     history(),
