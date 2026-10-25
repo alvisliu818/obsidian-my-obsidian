@@ -51,98 +51,13 @@ export class UnifiedSearchSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		containerEl.createEl("h2", { text: "my Unified Search" });
 		containerEl.createEl("p", {
-			text: "基于 node:sqlite（FTS5）的磁盘索引搜索。JS 堆不驻留索引；库文件可随时删除重建。语法：词与词 AND、\"短语\"、-排除、title:/tag:/path:/ext: 过滤、uni* 前缀（标题/标签）。",
+			text: "统一搜索 = 索引守护进程（logseq 模块拉起,better-sqlite3 + FTS5,库文件在 E:\\HOME\\Runtime\\unified-index）。守护进程没运行时无本地结果。语法：词与词 AND、\"短语\"、-排除、tag:/path:/ext:/backlink: 过滤。本地索引的重建/开关在 logseq 模块设置里。",
 			cls: "setting-item-description",
 		});
 
-		new Setting(containerEl)
-			.setName("索引库存放目录")
-			.setDesc("每个库以 vault 路径命名，多库互不踩。改动后需重启 Obsidian 生效。")
-			.addText((text) =>
-				text
-					.setPlaceholder(DEFAULT_SETTINGS.sqliteDbDir)
-					.setValue(this.plugin.settings.sqliteDbDir)
-					.onChange(async (value) => {
-						this.plugin.settings.sqliteDbDir = value.trim();
-						await this.plugin.saveData(this.plugin.settings);
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName("拆分 camelCase")
-			.setDesc("把 unifiedIndex 拆出 unified/Index。开关变更会触发全量重建索引。")
-			.addToggle((toggle) =>
-				toggle.setValue(this.plugin.settings.splitCamel).onChange(async (value) => {
-					this.plugin.settings.splitCamel = value;
-					await this.plugin.saveData(this.plugin.settings);
-					this.display();
-				}),
-			);
-
-		new Setting(containerEl)
-			.setName("收录库外挂载文件")
-			.setDesc(
-				"把 logseq 模块挂载的库外文本文件纳入索引。只收文本/源码类（md、txt、json、ts、py…），跳过二进制与依赖构建目录（node_modules、.git、__pycache__、dist…），单轮最多 5000 个（最近修改优先）、单文件 2MB 封顶。索引按浏览器空闲节奏推进，不与滚动/输入抢主线程。",
-			)
-			.addToggle((toggle) =>
-				toggle.setValue(this.plugin.settings.indexExt).onChange(async (value) => {
-					this.plugin.settings.indexExt = value;
-					await this.plugin.saveData(this.plugin.settings);
-					this.plugin.rearmExtRefresh();
-				}),
-			);
-
-		new Setting(containerEl)
-			.setName("挂载文件刷新间隔（分钟）")
-			.setDesc("库外挂载文件无实时监听，按此间隔周期重扫（stat 门：未变文件免读）。0 = 关闭周期刷新。")
-			.addText((text) =>
-				text
-					.setPlaceholder(String(DEFAULT_SETTINGS.extRefreshMinutes))
-					.setValue(String(this.plugin.settings.extRefreshMinutes))
-					.onChange(async (value) => {
-						const n = Math.max(0, Math.floor(Number(value) || 0));
-						this.plugin.settings.extRefreshMinutes = n;
-						await this.plugin.saveData(this.plugin.settings);
-						this.plugin.rearmExtRefresh();
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName("收录上限：库外挂载文件 / 库内文件 / 附件")
-			.setDesc(
-				"各类索引的数量上限，一律「最近修改优先」，超出部分不索引（附件的超限旧行会被裁掉，其 embed 链接退回悬空）。0 = 不限。改动后重启 Obsidian 或重建索引生效。",
-			)
-			.addText((text) =>
-				text
-					.setPlaceholder(String(DEFAULT_SETTINGS.maxExtFiles))
-					.setValue(String(this.plugin.settings.maxExtFiles))
-					.onChange(async (value) => {
-						this.plugin.settings.maxExtFiles = Math.max(0, Math.floor(Number(value) || 0));
-						await this.plugin.saveData(this.plugin.settings);
-					}),
-			)
-			.addText((text) =>
-				text
-					.setPlaceholder(String(DEFAULT_SETTINGS.maxVaultFiles))
-					.setValue(String(this.plugin.settings.maxVaultFiles))
-					.onChange(async (value) => {
-						this.plugin.settings.maxVaultFiles = Math.max(0, Math.floor(Number(value) || 0));
-						await this.plugin.saveData(this.plugin.settings);
-					}),
-			)
-			.addText((text) =>
-				text
-					.setPlaceholder(String(DEFAULT_SETTINGS.maxAttachments))
-					.setValue(String(this.plugin.settings.maxAttachments))
-					.onChange(async (value) => {
-						this.plugin.settings.maxAttachments = Math.max(0, Math.floor(Number(value) || 0));
-						await this.plugin.saveData(this.plugin.settings);
-					}),
-			);
-
 		containerEl.createEl("h3", { text: "外部搜索引擎（文件名 / 全文）" });
 		containerEl.createEl("p", {
-			text: "磁盘索引之外再挂两个本机引擎：Everything 秒搜全盘文件名，AnyTXT 搜文件内容（含 docx/pdf/图片 OCR）。结果合并进统一搜索面板，可用 ev: 只搜 Everything、at: 只搜 AnyTXT。工具没开或超时都不影响本地索引。",
+			text: "守护进程索引之外再挂两个本机引擎：Everything 秒搜全盘文件名，AnyTXT 搜文件内容（含 docx/pdf/图片 OCR）。结果合并进统一搜索面板，可用 ev: 只搜 Everything、at: 只搜 AnyTXT。工具没开或超时都不影响本地搜索。",
 			cls: "setting-item-description",
 		});
 
@@ -247,15 +162,6 @@ export class UnifiedSearchSettingTab extends PluginSettingTab {
 				t.setValue(this.plugin.settings.anytxt.snippet).onChange(async (v) => {
 					this.plugin.settings.anytxt.snippet = v;
 					await this.plugin.saveData(this.plugin.settings);
-				}),
-			);
-
-		new Setting(containerEl)
-			.setName("重建索引")
-			.setDesc("清空索引库并重新扫描全库（文件本身不会被改动）。")
-			.addButton((btn) =>
-				btn.setButtonText("重建").onClick(() => {
-					void this.plugin.rebuild();
 				}),
 			);
 	}

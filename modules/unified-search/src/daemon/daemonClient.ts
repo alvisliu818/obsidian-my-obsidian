@@ -14,12 +14,12 @@
  */
 
 import { App, TAbstractFile, TFile, EventRef, Platform } from 'obsidian';
-import type { BacklinkEntry } from '../blockIndex';
+import type { BacklinkEntry } from '../../../logseq/src/index/blockIndex';
 
 // 复用 BlockIndex 的公开类型，消费方零改动。
-export type { IndexedBlock, BacklinkEntry, CardEntry } from '../blockIndex';
-import type { CardEntry, IndexedBlock } from '../blockIndex';
-import type { SupertagDef } from '../../features/supertags';
+export type { IndexedBlock, BacklinkEntry, CardEntry } from '../../../logseq/src/index/blockIndex';
+import type { CardEntry, IndexedBlock } from '../../../logseq/src/index/blockIndex';
+import type { SupertagDef } from '../../../logseq/src/features/supertags';
 
 interface DaemonChild {
   pid: number | undefined;
@@ -311,6 +311,14 @@ export class BlockIndexDaemonClient {
     return this.query<{ bkey: string; path: string; text: string }[]>('scan', { pattern, excludePath, limit });
   }
 
+  /**
+   * 统一搜索查询面:调用方编译好的 FTS5 MATCH 表达式(token 已安全引用,
+   * 见 unified-search/src/matchBuilder),返回带 block_id 的块命中(供 #^锚点)。
+   */
+  async ftsSearch(match: string, excludePath = '', limit = 50): Promise<{ bkey: string; path: string; blockId: string; text: string }[]> {
+    return this.query<{ bkey: string; path: string; blockId: string; text: string }[]>('fts', { match, excludePath, limit });
+  }
+
   // ------------------------------------------------------------------
   // 变更通道（main.ts 的 vault 事件转发进来）
   // ------------------------------------------------------------------
@@ -328,6 +336,11 @@ export class BlockIndexDaemonClient {
 
   async rebuild(): Promise<void> {
     await this.call('rebuild');
+  }
+
+  /** 增量同步（daemon 侧只处理变更文件,已同步则秒回）。 */
+  async sync(): Promise<void> {
+    await this.call('sync');
   }
 
   /** 狂暴全量重建:并发池=os.cpus()*2,PRAGMA synchronous=OFF。 */

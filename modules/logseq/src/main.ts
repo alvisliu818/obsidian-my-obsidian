@@ -3,7 +3,7 @@
  * vault-wide block-id index, and clean uninstall (restore native views).
  */
 
-import { Menu, MarkdownView, Notice, Platform, Plugin, TAbstractFile, TFile, WorkspaceLeaf, debounce, type CachedMetadata, type ViewState } from 'obsidian';
+import { Menu, MarkdownView, Notice, Platform, Plugin, TAbstractFile, TFile, WorkspaceLeaf, type CachedMetadata, type ViewState } from 'obsidian';
 import { BlockEditorView, VIEW_TYPE_BLOCK_EDITOR } from './view/BlockEditorView';
 import { FragmentHost, type FragmentOptions } from './blocks/fragmentEditor';
 import { CMD_COLLAPSE_ALL, CMD_FIND, CMD_REPLACE } from './interactions/hotkeys';
@@ -30,13 +30,7 @@ import { LogseqEditorSettingTab } from './settings/tab';
 import { initEditorSettingsStore, loadEditorSettings, saveEditorSettings } from './settings/editorSettingsStore';
 import { BlockIndex } from './index/blockIndex';
 import { vaultSlugOf } from '../../index-core/src/sqlite-service';
-import { BlockIndexDaemonClient, forwardVaultEvents } from './index/daemon/daemonClient';
-import {
-  SqliteIndex,
-  type SqliteFileSource,
-  type SqliteSnapshotStore,
-} from './index/sqliteIndex';
-import { SqliteConsoleModal } from './features/sqliteConsole';
+import { BlockIndexDaemonClient, forwardVaultEvents } from '../../unified-search/src/daemon/daemonClient';
 import { PrologQueryBuilderModal } from './features/prologBuilder';
 import { prologTemplate } from './features/prologQuery';
 import { TodoPanelView, VIEW_TYPE_TODO_PANEL } from './panels/todoPanel';
@@ -65,17 +59,13 @@ import {
   revealInSystemExplorer,
 } from './features/openWith';
 import {
-  dirOf,
-  ensureDirX,
   exists,
   linkTargetFor,
   linkVaultPath,
-  readExternalBinary,
   readExternalText,
   safeSegment,
   sameVolume,
   scanExternal,
-  writeExternalBinary,
 } from './features/extFs';
 import type { MountNode, ScanEntry } from './features/mountFilter';
 import { openJournal } from './features/dailyNote';
@@ -124,14 +114,6 @@ export default class LogseqEditorPlugin extends Plugin {
   /** Constructor of Obsidian's native properties editor (grabbed off a live instance). */
   nativePropsCtor: unknown = null;
   private nativePropsCtorPromise: Promise<unknown> | null = null;
-  /**
-   * Secondary index over the vault. Markdown stays the source of truth: this
-   * is a rebuildable cache, never an authority (see `index/sqliteIndex.ts`).
-   */
-  sqliteIndex: SqliteIndex | null = null;
-  /** Paths waiting for an incremental re-index; flushed on a debounce. */
-  private sqlitePending = new Set<string>();
-  private sqliteFlush: (() => void) | null = null;
   /** Timer id for the mount panel's optional auto-refresh; 0 = not scheduled. */
   private mountRefreshTimer = 0;
 
@@ -259,48 +241,20 @@ export default class LogseqEditorPlugin extends Plugin {
     // 缓存(byId 池 ~90 块/标签/卡片),JS 堆 -160~190MB。失败自动回落内存索引。
     const daemonMode = Platform.isDesktopApp && this.settings.sqliteIndexEnabled;
     if (daemonMode) {
-      this.daemonIndex = new BlockIndexDaemonClient({
-        app: this.app,
-        pluginDir: this.manifest.dir ?? '',
-        dbPath: this.sqliteDbPath,
-        findNode: findNodeExe,
-        excludes: () => parseFolderList(this.settings.indexExcludedFolders),
-        onChange: () => this.notifyBlockIndexConsumers(),
-      });
-      try {
-        await this.daemonIndex.start();
-        forwardVaultEvents(this, this.daemonIndex);
-      } catch (e) {
-        console.warn('[logseq] index daemon failed to start, falling back to in-memory index:', e);
-        this.daemonIndex?.dispose();
-        this.daemonIndex = null;
-      }
+      this.daemonIndex = await this.startDaemonIndex();
     }
-    if (!this.daemonIndex) {
-      this.blockIndex = new BlockIndex(this.app, (path) => this.isIndexExcluded(path));
-      this.blockIndex.attach(this);
-    }
-    // daemon 模式下渲染内 sqliteIndex 整条链不启动:守护进程独占库文件,
-    // 渲染内第二个写者既冲突又会同步阻塞主线程(实测真库启动卡顿的根源)。
-    if (!this.daemonIndex) this.attachSqliteIndex();
+    // daemon-only(2026-10-25 用户指定「daemon 起不来时就不要索引」):内存
+    // blockIndex 与渲染内 sqliteIndex 两层回落全部退役——索引要么在独立
+    // 守护进程里,要么没有(旧兜底正是双启动 OOM 白屏的半个根源)。
+    // daemon 起不来时 syncIndex=null,消费方(全是 ?. 调用)渲染空。
     this.app.workspace.onLayoutReady(() => {
-      if (this.blockIndex) void this.blockIndex.buildAll();
       if (this.daemonIndex) void this.daemonIndex.upsertFiles([]); // 触发一次 changed→缓存预热
-      if (!this.daemonIndex) void this.startSqliteIndex();
       if (this.settings.pagePropsEditor === 'native') void this.resolveNativePropsCtor();
       this.convertOpenMarkdownLeaves();
       // 预热块内代码块的 Monaco 单例:延后一拍再建,不与启动期的布局/索引
       // 抢主线程(建实例是一次性的,晚 1.5s 不影响「第一次点进代码块」的体验)。
       if (this.settings.codeBlockPrewarm) {
         window.setTimeout(() => warmUpSharedBlockEditor(this), 1500);
-      }
-      // 未链接引用的签名索引：建好之后每次查询十几毫秒，但第一次建在主库
-      // 要 ~0.5 秒。延后一拍在后台分片建完（让出主线程，不与启动争抢），
-      // 于是用户第一次展开那个区也是十几毫秒。
-      if (this.settings.unlinkedScanPrewarm !== false) {
-        void this.blockIndex?.buildAll().then(() => {
-          window.setTimeout(() => void this.blockIndex?.prewarmSignatures(), 1500);
-        });
       }
     });
 
@@ -489,7 +443,7 @@ export default class LogseqEditorPlugin extends Plugin {
         if (this.daemonIndex) {
           void this.daemonIndex.rebuild().then(() => new Notice('Block index rebuilt (daemon).'));
         } else {
-          void this.blockIndex?.buildAll().then(() => new Notice('Block index rebuilt.'));
+          new Notice('索引守护进程未运行(daemon-only,无索引可重建)。');
         }
       },
     });
@@ -507,61 +461,22 @@ export default class LogseqEditorPlugin extends Plugin {
     });
 
     this.addCommand({
-      id: 'open-sqlite-console',
-      name: 'Open the SQLite index console',
-      callback: () => new SqliteConsoleModal(this).open(),
-    });
-
-    this.addCommand({
       id: 'sync-sqlite-index',
       name: 'Sync the SQLite index with the vault files',
-      callback: () => {
-        const idx = this.sqliteIndex;
-        if (!idx) {
-          new Notice('The SQLite index is disabled.');
-          return;
-        }
-        void idx.sync().then((s) => {
-          new Notice(
-            `SQLite index synced: +${s.added} new, ~${s.changed} changed, -${s.removed} removed (${s.unchanged} unchanged, ${s.ms} ms)`,
-          );
-        });
+      checkCallback: (checking) => {
+        if (!this.daemonIndex) return false;
+        if (!checking) void this.daemonIndex.sync();
+        return true;
       },
     });
 
     this.addCommand({
       id: 'rebuild-sqlite-index',
       name: 'Rebuild the SQLite index from markdown',
-      callback: () => {
-        const idx = this.sqliteIndex;
-        if (!idx) {
-          new Notice('The SQLite index is disabled.');
-          return;
-        }
-        void idx.rebuild().then((s) => {
-          new Notice(`SQLite index rebuilt from markdown: ${s.files} files, ${s.blocks} blocks (${s.ms} ms)`);
-        });
-      },
-    });
-
-    this.addCommand({
-      id: 'verify-sqlite-index',
-      name: 'Check the SQLite index against the files',
-      callback: () => {
-        const idx = this.sqliteIndex;
-        if (!idx) {
-          new Notice('The SQLite index is disabled.');
-          return;
-        }
-        void idx.verify().then((v) => {
-          if (v.drift.length === 0 && v.missing.length === 0) {
-            new Notice(`SQLite index matches the files (${v.checked} checked, ${v.ms} ms)`);
-          } else {
-            new Notice(
-              `SQLite index is stale — drift: ${v.drift.slice(0, 5).join(', ') || 'none'}; missing: ${v.missing.slice(0, 5).join(', ') || 'none'}`,
-            );
-          }
-        });
+      checkCallback: (checking) => {
+        if (!this.daemonIndex) return false;
+        if (!checking) void this.daemonIndex.rebuild();
+        return true;
       },
     });
 
@@ -600,7 +515,7 @@ export default class LogseqEditorPlugin extends Plugin {
           const view = this.app.workspace.getActiveViewOfType(BlockEditorView);
           if (!view) return false;
           const path = view.file?.path;
-          if (!path || !this.blockIndex?.supertagDef(path)) return false;
+          if (!path || !this.syncIndex?.supertagDef(path)) return false;
           if (!checking) run(view);
           return true;
         },
@@ -946,7 +861,6 @@ export default class LogseqEditorPlugin extends Plugin {
       window.clearInterval(this.mountRefreshTimer);
       this.mountRefreshTimer = 0;
     }
-    void this.sqliteIndex?.close();
     // Flush pending log records before the adapter access goes away.
     void flushOpLog(this);
     // Restore the patched method...
@@ -1163,6 +1077,28 @@ export default class LogseqEditorPlugin extends Plugin {
    * 统一的同步索引访问面(消费方用):daemon 模式返回客户端(小缓存同步 API),
    * 否则返回内存 blockIndex。两者同形(withIds/get/allTags/allCards/supertag*)。
    */
+  /** 组装并启动守护进程索引客户端(桌面 + sqliteIndexEnabled)。失败返回 null——
+   *  daemon-only:没有第二层索引兜底,失败即「无索引」。 */
+  private async startDaemonIndex(): Promise<BlockIndexDaemonClient | null> {
+    const client = new BlockIndexDaemonClient({
+      app: this.app,
+      pluginDir: this.manifest.dir ?? '',
+      dbPath: this.sqliteDbPath,
+      findNode: findNodeExe,
+      excludes: () => parseFolderList(this.settings.indexExcludedFolders),
+      onChange: () => this.notifyBlockIndexConsumers(),
+    });
+    try {
+      await client.start();
+      forwardVaultEvents(this, client);
+      return client;
+    } catch (e) {
+      console.warn('[logseq] index daemon failed to start (no fallback index):', e);
+      client.dispose();
+      return null;
+    }
+  }
+
   get syncIndex(): {
     withIds(): import('./index/blockIndex').IndexedBlock[];
     get(id: string): import('./index/blockIndex').IndexedBlock | null;
@@ -1352,109 +1288,11 @@ export default class LogseqEditorPlugin extends Plugin {
     const dir = (this.settings.sqliteDbDir || '').trim().replace(/[\\/]+$/, '');
     // 命名沿 unified-index 惯例(vaultSlugOf,2026-10-25 用户指定):
     // E__HOME_BaiduSyncdisk-9d1843.sqlite——slug 后缀哈希可反查归属库
-    // (后缀用 .sqlite,用户 2026-10-25 指定,unified-index 本体是 .db)。
-    // 目录仍是 logseq-index 专属:unified-search 的同库 .db 就在
-    // unified-index,同文件双写者(渲染内 node:sqlite + 守护进程
-    // better-sqlite3)会互踩 schema;两库同跑也各用各的文件(共享文件
-    // 会把对方文件全当"已删除"清,e2e daemon 清主库 1.43GB 索引实测)。
+    // (后缀 .sqlite,用户 2026-10-25 指定)。目录 = unified-index(unified-search
+    // 的旧 .db 已退役删除,新索引独占该目录;命名沿 unified-index 的
+    // vaultSlugOf 惯例,可反查归属库;每库一个文件,共享文件会互清索引)。
     const base = (this.app.vault.adapter as { getBasePath?: () => string }).getBasePath?.() ?? '';
-    return `${dir || 'E:/HOME/Runtime/logseq-index'}/${vaultSlugOf(base)}.sqlite`;
-  }
-
-  /**
-   * Build the index over the vault's markdown. The vault is reached through
-   * two tiny interfaces so `SqliteIndex` itself stays obsidian-free.
-   */
-  private attachSqliteIndex(): void {
-    if (!this.settings.sqliteIndexEnabled) return;
-    const source: SqliteFileSource = {
-      listMarkdownFiles: () =>
-        this.app.vault
-          .getMarkdownFiles()
-          .map((f) => ({ path: f.path, mtime: f.stat.mtime, size: f.stat.size })),
-      read: (path) => this.app.vault.adapter.read(path),
-    };
-    const snapshot: SqliteSnapshotStore = {
-      load: async () => {
-        try {
-          // Node fs 绝对路径——vault.adapter 解析不了配置目录（见 sqliteDbPath）
-          if (!exists(this.sqliteDbPath)) return null;
-          return readExternalBinary(this.sqliteDbPath);
-        } catch {
-          return null;
-        }
-      },
-      save: async (bytes) => {
-        ensureDirX(dirOf(this.sqliteDbPath));
-        const r = writeExternalBinary(this.sqliteDbPath, bytes);
-        if (!r.ok) console.warn('[logseq] sqlite snapshot save failed:', r.error);
-      },
-    };
-    this.sqliteIndex = new SqliteIndex({
-      source,
-      snapshot: this.settings.sqlitePersist ? snapshot : null,
-      // 桌面端 node:sqlite 直连（M2-6）：磁盘文件即库，免快照镜像导入导出；
-      // node:sqlite 缺席（移动端/旧 Electron）时 doOpen 自动降级回 wa-sqlite，
-      // 降级后 snapshot 照常接管（快照路径 = nodeDbPath 同一文件）
-      useNodeSqlite: Platform.isDesktopApp,
-      nodeDbPath: this.sqliteDbPath,
-    });
-    if (!this.settings.sqliteAutoSync) return;
-
-    this.sqliteFlush = debounce(() => void this.flushSqlite(), 1500, true);
-    const watch = (path: string): void => {
-      if (!path.toLowerCase().endsWith('.md') || !this.sqliteIndex) return;
-      this.sqlitePending.add(path);
-      this.sqliteFlush?.();
-    };
-    // Auto-unregistered on unload; the handlers no-op while the index is off.
-    this.registerEvent(this.app.vault.on('modify', (f) => f instanceof TFile && watch(f.path)));
-    this.registerEvent(this.app.vault.on('create', (f) => f instanceof TFile && watch(f.path)));
-    this.registerEvent(
-      this.app.vault.on('delete', (f) => {
-        if (f instanceof TFile && f.path.toLowerCase().endsWith('.md')) {
-          this.sqlitePending.delete(f.path);
-          void this.sqliteIndex?.forget(f.path);
-        }
-      }),
-    );
-    this.registerEvent(
-      this.app.vault.on('rename', (f, oldPath) => {
-        if (f instanceof TFile && f.path.toLowerCase().endsWith('.md')) {
-          this.sqlitePending.delete(oldPath);
-          void this.sqliteIndex?.forget(oldPath);
-          watch(f.path);
-        }
-      }),
-    );
-  }
-
-  /** Open + catch up with anything that changed while Obsidian was closed. */
-  private async startSqliteIndex(): Promise<void> {
-    const idx = this.sqliteIndex;
-    if (!idx) return;
-    await idx.open();
-    if (idx.lastError) {
-      new Notice(`SQLite index could not start: ${idx.lastError}`);
-      return;
-    }
-    // A sync (not a rebuild) is exactly the right catch-up: the `files` table
-    // knows each file's mtime/size, so only real changes are re-read — and a
-    // discarded database is empty, which makes this a full derive instead.
-    const s = await idx.sync();
-    if (s.added + s.changed > 0 && s.unchanged === 0) {
-      logOp(this, 'sqlite.sync', '', 'ok', `+${s.added} ~${s.changed} ${s.ms}ms`);
-    }
-  }
-
-  /** Re-index just the files that moved (debounced by the vault events). */
-  private async flushSqlite(): Promise<void> {
-    const paths = [...this.sqlitePending];
-    this.sqlitePending.clear();
-    const idx = this.sqliteIndex;
-    if (!idx || paths.length === 0) return;
-    for (const p of paths) await idx.syncFile(p);
-    await idx.persistNow();
+    return `${dir || 'E:/HOME/Runtime/unified-index'}/${vaultSlugOf(base)}.sqlite`;
   }
 
   /**
@@ -1492,34 +1330,30 @@ export default class LogseqEditorPlugin extends Plugin {
     }
   }
 
-  /** Called by the settings tab when the SQLite toggles change. */
+  /** Called by the settings tab when the SQLite toggles change. daemon-only:
+   *  关 = 停守护进程(无兜底索引);开 = 现场拉起。 */
   applySqliteSettings(): void {
     const want = this.settings.sqliteIndexEnabled;
-    if (!want && this.sqliteIndex) {
-      const idx = this.sqliteIndex;
-      this.sqliteIndex = null;
-      void idx.close();
+    if (!want && this.daemonIndex) {
+      this.daemonIndex.dispose();
+      this.daemonIndex = null;
+      this.notifyBlockIndexConsumers();
       return;
     }
-    if (want && !this.sqliteIndex && !this.daemonIndex) {
-      this.attachSqliteIndex();
-      void this.startSqliteIndex();
+    if (want && !this.daemonIndex && Platform.isDesktopApp) {
+      void this.startDaemonIndex().then((c) => {
+        if (c) void this.daemonIndex?.upsertFiles([]); // 触发 changed→缓存预热
+        this.notifyBlockIndexConsumers();
+      });
     }
   }
 
   /**
-   * 数据库位置（sqliteDbDir）变更后调用：关掉旧实例，按新路径重开。
-   * 旧位置的快照文件不迁移、不删除——用户自己处置。
+   * 数据库位置（sqliteDbDir）变更后调用：daemon 的库文件路径在启动时定格，
+   * 热改不重开——提示重启生效。旧位置的索引文件不迁移、不删除——用户自己处置。
    */
   restartSqliteIndex(): void {
-    if (!this.settings.sqliteIndexEnabled) return;
-    if (this.sqliteIndex) {
-      const idx = this.sqliteIndex;
-      this.sqliteIndex = null;
-      void idx.close();
-    }
-    this.attachSqliteIndex();
-    void this.startSqliteIndex();
+    new Notice('索引库位置变更后需重启 Obsidian 生效。');
   }
 
   // ------------------------------------------------------------------
@@ -1843,7 +1677,7 @@ export default class LogseqEditorPlugin extends Plugin {
   }
 
   async openBlockRef(blockId: string): Promise<void> {
-    const info = this.blockIndex?.get(blockId);
+    const info = this.syncIndex?.get(blockId);
     if (!info) {
       new Notice(`Block not found: ${blockId}`);
       return;

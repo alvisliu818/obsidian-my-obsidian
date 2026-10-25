@@ -1,6 +1,5 @@
 import { PluginSettingTab, Setting, Notice, type App } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
-import { SqliteConsoleModal } from '../features/sqliteConsole';
 import { ExtensionMarketModal } from '../extensions/marketModal';
 import { getLoadedThemes } from '../extensions/themeLoader';
 import { getLoadedIconThemes, activateIconThemeByPreference } from '../extensions/iconThemeLoader';
@@ -997,43 +996,23 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
           }),
         );
 
-      const stats = this.plugin.sqliteIndex?.stats;
-      const detail = stats
-        ? `${stats.files} 个文件 · ${stats.blocks} 个块 · ${stats.tags} 个标签 · ${stats.links} 条链接 · ${stats.refs} 处引用（上次运行 ${stats.ms} 毫秒）`
-        : '尚未开始';
-      new Setting(containerEl).setName('索引').setDesc(detail).addButton((b) =>
-        b.setButtonText('控制台').onClick(() => new SqliteConsoleModal(this.plugin).open()),
-      );
-
-      const actions = new Setting(containerEl).setName('Markdown → 数据库');
+      const d = this.plugin.daemonIndex;
+      const detail = d
+        ? '索引守护进程运行中（独立 node 进程,库文件在 unified-index）。'
+        : '索引守护进程未运行——daemon-only 模式下没有索引（反链/标签/搜索不可用）。';
+      const actions = new Setting(containerEl).setName('索引守护进程').setDesc(detail);
       actions.addButton((b) =>
         b.setButtonText('同步').onClick(async () => {
-          const idx = this.plugin.sqliteIndex;
-          if (!idx) return;
-          const s = await idx.sync();
-          new Notice(`已同步：+${s.added} ~${s.changed} -${s.removed}（${s.unchanged} 个未变）`);
-          this.display();
+          if (!this.plugin.daemonIndex) return;
+          await this.plugin.daemonIndex.sync();
+          new Notice('已触发守护进程增量同步');
         }),
       );
       actions.addButton((b) =>
         b.setButtonText('重建').onClick(async () => {
-          const idx = this.plugin.sqliteIndex;
-          if (!idx) return;
-          const s = await idx.rebuild();
-          new Notice(`已从 Markdown 重建：${s.files} 个文件，${s.blocks} 个块（${s.ms} 毫秒）`);
-          this.display();
-        }),
-      );
-      actions.addButton((b) =>
-        b.setButtonText('校验').onClick(async () => {
-          const idx = this.plugin.sqliteIndex;
-          if (!idx) return;
-          const v = await idx.verify();
-          new Notice(
-            v.drift.length === 0 && v.missing.length === 0
-              ? `与文件一致（已校验 ${v.checked} 个）`
-              : `已过期——不一致 ${v.drift.length} 处，缺失 ${v.missing.length} 处`,
-          );
+          if (!this.plugin.daemonIndex) return;
+          await this.plugin.daemonIndex.rebuild();
+          new Notice('已触发守护进程全量重建');
         }),
       );
     }

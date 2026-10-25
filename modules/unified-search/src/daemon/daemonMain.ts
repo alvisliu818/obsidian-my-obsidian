@@ -27,14 +27,14 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { SqliteIndex, type SqliteFileSource } from '../sqliteIndex';
-import { buildFileStatements, deleteFileStatements, type Stmt } from '../sqliteIndex';
-import { extractFile } from '../fileFacts';
-import { hashText } from '../sqliteSchema';
-import { SCHEMA_SQL, FTS_STATEMENTS } from '../sqliteSchema';
+import { SqliteIndex, type SqliteFileSource } from '../../../logseq/src/index/sqliteIndex';
+import { buildFileStatements, deleteFileStatements, type Stmt } from '../../../logseq/src/index/sqliteIndex';
+import { extractFile } from '../../../logseq/src/index/fileFacts';
+import { hashText } from '../../../logseq/src/index/sqliteSchema';
+import { SCHEMA_SQL, FTS_STATEMENTS } from '../../../logseq/src/index/sqliteSchema';
 import * as os from 'os';
-import type { SqliteFileMeta } from '../sqliteSchema';
-import type { SqliteRuntimeLike } from '../sqliteRuntime';
+import type { SqliteFileMeta } from '../../../logseq/src/index/sqliteSchema';
+import type { SqliteRuntimeLike } from '../../../logseq/src/index/sqliteRuntime';
 
 // ---------------------------------------------------------------------
 // argv
@@ -152,7 +152,9 @@ async function openRuntime(file: string): Promise<SqliteRuntimeLike> {
     process.stderr.write(
       `[index-daemon] better-sqlite3 unavailable (${String(e).slice(0, 90)}), fallback node:sqlite (no FTS5)\n`,
     );
-    const { NodeSqliteRuntime } = (await import('../nodeSqlite')) as typeof import('../nodeSqlite');
+    const { NodeSqliteRuntime } = (await import(
+      '../../../logseq/src/index/nodeSqlite'
+    )) as typeof import('../../../logseq/src/index/nodeSqlite');
     return NodeSqliteRuntime.open(file);
   }
 }
@@ -406,6 +408,28 @@ class Queries {
    * 未连提及/块搜索扫描。FTS5 可用且 >=3 字符 → trigram MATCH(中文子串,
    * 毫秒级);否则 LIKE 全库扫(~237ms,可接受——老内存版 scanFor 也是全库扫)。
    */
+  /**
+   * 统一搜索(unified-search modal)的查询面:调用方把用户查询编译成 FTS5
+   * MATCH 表达式(所有 token 已双引号包裹、内部引号转义——用户输入永不直通,
+   * 见 unified-search/src/matchBuilder)。JOIN blocks 取 block_id 供 #^锚点
+   * 打开;trigram tokenizer,子串命中,中文毫秒级。
+   */
+  async fts(match: string, excludePath: string, limit: number): Promise<{ bkey: string; path: string; blockId: string; text: string }[]> {
+    const lim = Math.max(1, Math.min(limit || 50, 500));
+    const rs = await this.rows(
+      `SELECT s.bkey, s.path, s.text, b.block_id FROM
+         (SELECT bkey, path, text FROM blocks_fts WHERE blocks_fts MATCH ? AND path != ? LIMIT ?) s
+       JOIN blocks b ON b.bkey = s.bkey`,
+      [match, excludePath, lim],
+    );
+    return rs.map((r) => ({
+      bkey: String(r.bkey ?? ''),
+      path: String(r.path ?? ''),
+      blockId: String(r.block_id ?? ''),
+      text: String(r.text ?? ''),
+    }));
+  }
+
   async scan(pattern: string, excludePath: string, limit: number, fts: boolean): Promise<{ bkey: string; path: string; text: string }[]> {
     const lim = Math.max(1, Math.min(limit || 200, 2000));
     let rs: Record<string, unknown>[];
@@ -712,6 +736,8 @@ async function main(): Promise<void> {
         if (msg.q === 'supertagInstances') return fn.call(queries, String(a.tag ?? ''));
         if (msg.q === 'scan')
           return fn.call(queries, String(a.pattern ?? ''), String(a.excludePath ?? ''), Number(a.limit ?? 200), ftsEnabled());
+        if (msg.q === 'fts')
+          return fn.call(queries, String(a.match ?? ''), String(a.excludePath ?? ''), Number(a.limit ?? 50));
         return fn.call(queries);
       }
       default:

@@ -405,7 +405,7 @@ const context = await esbuild.context({
 // wa-sqlite 经 __WA_SQLITE_WASM_B64__ define 内联(同主 bundle),node builtin
 // 由 platform:'node' 自动 external。
 const daemon = await esbuild.context({
-  entryPoints: ["modules/logseq/src/index/daemon/daemonMain.ts"],
+  entryPoints: ["modules/unified-search/src/daemon/daemonMain.ts"],
   bundle: true,
   platform: "node",
   // 原生模块不可 bundle:运行时从插件目录 node_modules 解析(deploy 边车)
