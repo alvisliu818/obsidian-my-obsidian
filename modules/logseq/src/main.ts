@@ -216,6 +216,11 @@ export default class LogseqEditorPlugin extends Plugin {
       registerFreeExtensions(this, IMAGE_EXTENSIONS, VIEW_TYPE_IMAGE, "image viewer");
     }
 
+    // 库内 .code-workspace 等代码扩展名的注册**不在这里**做:宿主 onload 的
+    // registerCodeFiles() 会按 TEXT_MOUNT_EXTENSIONS 派生的 DEFAULT_CODE_EXTENSIONS
+    // 统一注册到本模块的 ExternalCodeView(用户指令 2026-10-25:库内库外同一
+    // 编辑器)。这里再注册一遍是冗余,还抢在宿主前面占坑。
+
     // Recent-files tracking. `file-open` fires for every file the user lands
     // on, which is exactly the notion of "recent" the panel wants.
     this.registerEvent(
@@ -753,6 +758,22 @@ export default class LogseqEditorPlugin extends Plugin {
                 .setTitle('用 Office 预览器打开')
                 .setIcon('file-text' as never)
                 .onClick(() => void this.openInView(VIEW_TYPE_OFFICE, file)),
+            );
+          }
+          // 库内文本文件(Obsidian 没有应用内编辑器,默认只能丢给系统)给一个
+          // 代码编辑器入口——与库外「同一文件同一编辑器」对齐(用户指令
+          // 2026-10-25:Code.code-workspace 类型文件)。md 有块编辑器、canvas
+          // 有自己的视图,不在此列。
+          if (
+            isTextFileName(file.name) &&
+            !isMarkdownFile(file.name) &&
+            file.extension.toLowerCase() !== 'canvas'
+          ) {
+            menu.addItem((item) =>
+              item
+                .setTitle('用代码编辑器打开')
+                .setIcon('code' as never)
+                .onClick(() => void this.openVaultFileInCodeEditor(file)),
             );
           }
         }
@@ -1613,6 +1634,28 @@ export default class LogseqEditorPlugin extends Plugin {
     const leaf = workspace.getLeaf(false);
     await leaf.setViewState({ type: viewType, state: { path: file.path }, active: true });
     workspace.revealLeaf(leaf);
+  }
+
+  /**
+   * 库内文件 → ExternalCodeView(用户指令 2026-10-25:Code.code-workspace
+   * 类型文件等 Obsidian 没有应用内编辑器的文本,给一个代码编辑器入口)。
+   * 视图的 setState 认 `{file}`(vault 相对路径),自己解析真实路径并挂
+   * inVault 徽标;叶策略与库外 openInCodeDocView 同(设置分屏否则新标签)。
+   */
+  async openVaultFileInCodeEditor(file: TFile): Promise<void> {
+    const leaf = this.app.workspace.getLeaf(
+      this.settings.externalSplitView === true ? 'split' : 'tab',
+    );
+    markLeafTabIcon(leaf, { name: file.name, rel: file.path });
+    await leaf.setViewState({
+      type: VIEW_TYPE_EXTERNAL_CODE,
+      active: true,
+      state: { file: file.path },
+    });
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    this.refreshTabIcons();
+    this.refreshTabIconsSoon();
+    logOp(this, 'vault.open', file.path, 'ok', 'code-editor');
   }
 
   /** Move a mount so that `fromId` sits immediately before `toId`. */

@@ -221,6 +221,10 @@ const TEXT_EXTENSIONS = new Set([
   'css', 'scss', 'less', 'html', 'htm', 'xml', 'svg', 'vue', 'svelte',
   'sql', 'graphql', 'proto', 'lua', 'r', 'jl', 'pl', 'php', 'ex', 'exs', 'erl', 'hs',
   'diff', 'patch', 'lock', 'gitignore', 'npmrc', 'nvmrc', 'editorconfig',
+  // VS Code 工作区文件(JSONC 文本)。用户指定 2026-10-25:库内库外都能用
+  // 代码编辑器打开——此前不在清单里,库外默认整个丢给系统(默认 VS Code),
+  // 连右键「用 Monaco 打开」都被 isTextFileName 门挡住到不了编辑器。
+  'code-workspace',
 ]);
 
 /**
@@ -270,9 +274,13 @@ export function isTextFileName(name: string): boolean {
   return isTextMount(extOfName(base));
 }
 
-/** Extension of a bare filename, lowercase, '' when there is none. */
+/** Extension of a bare filename, lowercase, '' when there is none.
+ *
+ *  连字符也是扩展名的合法字符(`.code-workspace`/`.code-snippets`)——正则
+ *  只认 `[A-Za-z0-9]+` 时 `Code.code-workspace` 解析不出扩展名,被当成
+ *  二进制丢给系统(2026-10-25 用户报)。 */
 export function extOfName(base: string): string {
-  const m = /\.([A-Za-z0-9]+)$/.exec(base);
+  const m = /\.([A-Za-z0-9_-]+)$/.exec(base);
   return m ? m[1].toLowerCase() : '';
 }
 

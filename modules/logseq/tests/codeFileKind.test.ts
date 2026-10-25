@@ -97,6 +97,16 @@ describe('isTextFileName — extension-less files are text, not binaries', () =>
     }
   });
 
+  it('recognises .code-workspace as text (user ask, 2026-10-25)', () => {
+    // VS Code 工作区文件(JSONC):此前不在清单里,库外默认整个丢给系统
+    // (默认 VS Code),连右键「用 Monaco 打开」都被 isTextFileName 门挡住。
+    for (const n of ['Code.code-workspace', 'my notes.code-workspace', 'x.code-workspace']) {
+      expect(isTextFileName(n)).toBe(true);
+    }
+    // 真二进制不沾边
+    expect(isTextFileName('x.code-workspace.bak.exe')).toBe(false);
+  });
+
   it('uses the last path segment', () => {
     expect(isTextFileName('some.md/inner/Dockerfile')).toBe(true);
     // A folder named Dockerfile must not make its contents binary — routing
