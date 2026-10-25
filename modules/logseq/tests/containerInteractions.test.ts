@@ -14,7 +14,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { EditorSelection, EditorState } from '@codemirror/state';
-import { handleBackspace, handleEnter } from '../src/interactions/keymap';
+import { handleBackspace, handleEnter, handleSpace } from '../src/interactions/keymap';
 import { linkParents, registerRoots } from '../src/core/treeOps';
 import { parseDocument } from '../src/core/parser';
 import { blockEditorDoc, editorMarkerLen, type Block } from '../src/types';
@@ -181,5 +181,60 @@ describe('思源容器块交互 — Backspace 块首', () => {
     expect(handleBackspace(env.view(), env.host)).toBe(true);
     expect(p.text).toBe('pa');
     expect(p.children.map((c) => c.text)).toEqual(['c']);
+  });
+});
+
+describe('思源输入转换 — `#`+空格 转标题', () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  // handleSpace 的转换在 setTimeout 里重读 view.state——真实编辑器的
+  // state 是活的;测试桩用带 getter 的持久 view 模拟。
+  function liveView(ref: { doc: string; head: number }): never {
+    return {
+      state: {
+        get doc() {
+          return { toString: () => ref.doc, length: ref.doc.length };
+        },
+        get selection() {
+          return { main: { head: ref.head, empty: true, from: ref.head, to: ref.head } };
+        },
+      },
+    } as never;
+  }
+
+  it('bare 段落行首 `# `+空格 → kind=raw 标题,光标落前缀后', async () => {
+    const env = makeEnv('hello\n');
+    const a = env.doc.blocks[0];
+    env.focus(a, 0);
+    const ref = { doc: '#', head: 1 };
+    expect(handleSpace(liveView(ref), env.host)).toBe(false);
+    ref.doc = '# '; // 空格落盘
+    ref.head = 2;
+    await sleep(20);
+    expect(a.kind).toBe('raw');
+    expect(a.text).toBe('# ');
+    expect(a.bare).toBe(false);
+    expect(env.focusTargets.at(-1)).toBe(a);
+  });
+
+  it('`## ` 转二级标题;列表项里敲 # 不转换', async () => {
+    const env = makeEnv('hello\n');
+    const a = env.doc.blocks[0];
+    env.focus(a, 0);
+    const ref = { doc: '##', head: 2 };
+    handleSpace(liveView(ref), env.host);
+    ref.doc = '## body';
+    ref.head = 7;
+    await sleep(20);
+    expect(a.kind).toBe('raw');
+    expect(a.text).toBe('## body');
+
+    const env2 = makeEnv('- item\n');
+    const it0 = env2.doc.blocks[0];
+    env2.focus(it0);
+    // 列表项非 bare:handleSpace 直接 return false,不转换
+    const ref2 = { doc: '- # ', head: 4 };
+    expect(handleSpace(liveView(ref2), env2.host)).toBe(false);
+    await sleep(20);
+    expect(it0.kind).toBe('list');
   });
 });

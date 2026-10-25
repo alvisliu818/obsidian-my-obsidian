@@ -8,6 +8,7 @@ import { insertTab } from '@codemirror/commands';
 import type { EditorView } from '@codemirror/view';
 import type { BlockRenderHost } from '../blocks/renderHost';
 import {
+  flattenVisible,
   indent,
   insertAfter,
   insertBefore,
@@ -45,6 +46,7 @@ function deleteSelection(view: EditorView): { text: string; offset: number } {
 
 /**
  * 段落容器(bare)行首敲出 `-`/`*`/`+` 后按空格 → 立即转成大纲块。
+ * 行首 `#`×1-6 后按空格 → 立即转成标题块(思源输入转换)。
  *
  * 思源/Typora 的即时转换：不等回车，圆点马上出现、样式与原生大纲块一致
  * （此前要等回车才转，转出来的块还残留段落容器的 bare 样式）。
@@ -60,8 +62,31 @@ export function handleSpace(view: EditorView, host: BlockRenderHost): boolean {
   if (!sel.empty) return false;
   const text = view.state.doc.toString();
   const lineStart = text.lastIndexOf('\n', Math.max(0, sel.head - 1)) + 1;
-  // 只认块首行行首的单个列表标记（软行/续行的列表化是另一档语义，不在这里做）。
-  if (lineStart !== 0 || !/^[*+-]$/.test(text.slice(0, sel.head))) return false;
+  // 只认块首行行首的单个标记（软行/续行的转换是另一档语义，不在这里做）。
+  if (lineStart !== 0) return false;
+  // `#`×1-6 + 空格 → 标题(思源 turnIntoList 同款的输入转换层;列表项里
+  // 敲 # 是字面文本,列表↔标题走手柄菜单)。
+  if (/^#{1,6}$/.test(text.slice(0, sel.head))) {
+    setTimeout(() => {
+      const now = view.state.doc.toString();
+      const m = /^(#{1,6})\s/.exec(now);
+      if (!m) return;
+      const parent = b.parent;
+      host.mutate(
+        () => {
+          // 标题模型的正文含 `# ` 前缀(与 parseDocument 对齐):kind 换
+          // raw,缓冲区原文整体落进 text。
+          b.kind = 'raw';
+          b.bare = false;
+          b.text = now;
+        },
+        () => ({ lists: [parent] }),
+      );
+      host.focusBlock(b, m[0].length); // 光标落前缀之后
+    }, 0);
+    return false; // 空格照常插入
+  }
+  if (!/^[*+-]$/.test(text.slice(0, sel.head))) return false;
   setTimeout(() => {
     const now = view.state.doc.toString();
     if (!/^[*+-]\s/.test(now)) return;
@@ -269,6 +294,16 @@ export function handleArrow(view: EditorView, host: BlockRenderHost, dir: 'up' |
   const next = nextVisible(roots, b);
   if (!next) return true;
   host.focusBlock(next, 0);
+  return true;
+}
+
+/** Mod+Home/End: jump to the first/last visible block(思源文档级 goHome/goEnd). */
+export function handleDocJump(_view: EditorView, host: BlockRenderHost, end: boolean): boolean {
+  const b = focusedBlock(host);
+  if (!b) return false;
+  const flat = flattenVisible(host.visibleRoots);
+  if (!flat.length) return false;
+  host.focusBlock(end ? flat[flat.length - 1] : flat[0], end ? 'end' : 0);
   return true;
 }
 

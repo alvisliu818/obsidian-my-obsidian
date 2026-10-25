@@ -41,7 +41,7 @@ import { commandMenuKeymap, maybeOpenMenu, closeMenu } from '../features/command
 import { syncActiveBlockEditor } from '../interactions/textSelectionMenu';
 import { livePreviewConfig, livePreviewExtension } from './livePreview';
 import { mathSyntax } from './mathSyntax';
-import { BLOCK_PROP_LINE_RE } from '../types';
+import { BLOCK_PROP_LINE_RE, editorMarkerLen } from '../types';
 
 /**
  * In-flow live math preview for pure display-math blocks (the whole doc is
@@ -211,6 +211,7 @@ import {
   handleBackspace,
   handleCycleMarker,
   handleDelete,
+  handleDocJump,
   handleEnter,
   handleEscape,
   handleJumpBlock,
@@ -267,9 +268,15 @@ export function createBlockKeymap(host: BlockRenderHost): KeyBinding[] {
   if (on.newBlock) {
     // Shift-Enter is a soft line break inside a block — it belongs to the
     // same group as Enter (both are about splitting/continuing a block).
+    // 思源 softEnter 守卫(2026-10-26):块首(含空块)不插软换行——行首
+    // 空行只会在下一个 Enter 时变成意外分块;列表块的"块首"是符号之后
+    // (editorMarkerLen)。
     bindings.push({
       key: 'Shift-Enter',
       run: (v) => {
+        const head = v.state.selection.main.head;
+        const mlen = host.focusedBlock ? editorMarkerLen(host.focusedBlock) : 0;
+        if (head <= mlen) return true;
         insertNewline(v);
         return true;
       },
@@ -305,6 +312,8 @@ export function createBlockKeymap(host: BlockRenderHost): KeyBinding[] {
       { key: 'Mod-Shift-ArrowDown', run: (v) => handleMoveBlock(v, host, 1) },
       { key: 'Alt-ArrowUp', run: (v) => handleJumpBlock(v, host, -1) },
       { key: 'Alt-ArrowDown', run: (v) => handleJumpBlock(v, host, 1) },
+      { key: 'Mod-Home', run: (v) => handleDocJump(v, host, false) },
+      { key: 'Mod-End', run: (v) => handleDocJump(v, host, true) },
       { key: 'Alt-Shift-ArrowUp', run: (v) => handleMoveBlock(v, host, -1) },
       { key: 'Alt-Shift-ArrowDown', run: (v) => handleMoveBlock(v, host, 1) },
     );

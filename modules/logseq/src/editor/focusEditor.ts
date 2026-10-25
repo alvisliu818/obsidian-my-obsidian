@@ -164,6 +164,9 @@ export function mountFocusedEditor(
   // true, so the blur-commit path never fires and the edit never lands).
   const escHandler = (e: KeyboardEvent): void => {
     if (e.key !== 'Escape' || e.repeat) return;
+    // IME 组合期间 Esc 是取消候选窗口(思源 keydown.ts 同规,isComposing
+    // 不落任何编辑行为)——此时提交会把半截组合文本当正式内容落盘。
+    if (e.isComposing || e.keyCode === 229) return;
     // The NATIVE slash-command suggest is showing: Esc belongs to it (hides
     // the popup via its keymap scope) — do not commit the edit.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

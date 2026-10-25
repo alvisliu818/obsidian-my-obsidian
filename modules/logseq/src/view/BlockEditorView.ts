@@ -1206,7 +1206,18 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     // editor much shorter, so post-mount posAtCoords maps the stale Y far off
     // (usually clamping to doc end) and the caret "disappears" from the click
     // point — e.g. clicking right before a rendered fence.
-    const staticPos = this.staticClickPos(b, ev.clientY);
+    let staticPos = this.staticClickPos(b, ev.clientY)?.pos ?? null;
+    // 思源 blockEdgeCaret 的左缘落点(2026-10-26):点击落在内容左缘之外
+    // (段落左边距/圆点列一带)→ 光标落**行首**而不是行尾——Y 定行、X 定
+    // 行首/行尾。右缘之外维持行尾(staticClickPos 的默认)。contentLeft 取
+    // 静态渲染首个子块的左缘(bare 块被负边距拉进圆点列,子块左缘才是
+    // 文本真正的起点)。
+    const holder = findBlockEl(b)?.querySelector(':scope > .block-main > .block-content > .block-content-static');
+    const contentLeft = (holder?.firstElementChild as HTMLElement | null)?.getBoundingClientRect().left ?? null;
+    const lineStart = this.staticClickPos(b, ev.clientY)?.lineStart ?? null;
+    if (staticPos !== null && lineStart !== null && contentLeft !== null && ev.clientX < contentLeft - 4) {
+      staticPos = lineStart;
+    }
     this.commitFocusedText();
     this.focusedBlock = b;
     this.lastEditedBlock = b;
@@ -1227,7 +1238,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
    * the editor shows, so the mapping is what makes clicking a rendered
    * heading land on the right source line at all.
    */
-  private staticClickPos(b: Block, y: number): number | null {
+  private staticClickPos(b: Block, y: number): { pos: number; lineStart: number } | null {
     const wrap = findBlockEl(b);
     const holder = wrap?.querySelector(':scope > .block-main > .block-content > .block-content-static') as HTMLElement | null;
     if (!holder || !holder.children.length) return null;
@@ -1288,7 +1299,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
       if (y < r.top) break;
       pick = i;
     }
-    if (pick < 0) return 0;
+    if (pick < 0) return { pos: 0, lineStart: 0 };
     const [startLine, endLine] = runs[pick];
     let line = endLine;
     let atLineStart = false;
@@ -1306,7 +1317,9 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     }
     let pos = 0;
     for (let i = 0; i < line; i++) pos += lines[i].length + 1;
-    return atLineStart ? pos : pos + lines[line].length;
+    // 思源 blockEdgeCaret(2026-10-26):X 轴落点由调用方按内容左右缘决定
+    // ——这里同时给出行尾(pos,默认)与行首两个候选。
+    return { pos: atLineStart ? pos : pos + lines[line].length, lineStart: pos };
   }
 
   /**
