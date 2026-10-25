@@ -123,6 +123,18 @@ export const SCHEMA_SQL: readonly string[] = [
      path TEXT NOT NULL,
      props_json TEXT NOT NULL DEFAULT '{}'
    )`,
+
+  // ---- ext 域(挂载库外文件,2026-10-25):清单与整文件一行索引 ----
+  // 不进 TABLE_NAMES:dropAll/全量重建只管 vault 域,ext 由 setExt/syncExt
+  // 自己维护(重建 vault 索引时 ext 索引原地保留)。
+  // 注意 ext_fts 不在这里——FTS5 虚拟表必须走 FTS_STATEMENTS(applyFts 容错
+  // 路径):node:sqlite/wa-sqlite 没编 FTS5,放 SCHEMA_SQL 会让整个 open 失败
+  // (实测 16 个单测炸「sqlite index is not available」)。
+  `CREATE TABLE IF NOT EXISTS ext_files (
+     path TEXT PRIMARY KEY,
+     mtime INTEGER NOT NULL,
+     size INTEGER NOT NULL
+   )`,
 ];
 
 export const TABLE_NAMES: readonly string[] = [
@@ -230,6 +242,14 @@ export function hashText(text: string): number {
  */
 export const FTS_STATEMENTS: readonly string[] = [
   `CREATE VIRTUAL TABLE IF NOT EXISTS blocks_fts USING fts5(
+     bkey UNINDEXED,
+     path UNINDEXED,
+     text,
+     tokenize = 'trigram'
+   )`,
+  // ext 域(挂载库外文件)的整文件索引——必须在 FTS_STATEMENTS(容错路径),
+  // 不能进 SCHEMA_SQL:node:sqlite/wa-sqlite 没编 FTS5,放那里整个 open 都会挂。
+  `CREATE VIRTUAL TABLE IF NOT EXISTS ext_fts USING fts5(
      bkey UNINDEXED,
      path UNINDEXED,
      text,

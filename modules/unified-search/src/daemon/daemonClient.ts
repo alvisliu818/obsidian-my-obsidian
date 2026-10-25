@@ -343,6 +343,16 @@ export class BlockIndexDaemonClient {
     await this.call('sync');
   }
 
+  /** 挂载库外文件候选清单(ext 域):daemon 落 meta 后自行 stat 门控增量索引。 */
+  async setExtFiles(files: { path: string; mtime: number }[]): Promise<{ files: number; updated: number; removed: number }> {
+    return this.call('setExt', { files });
+  }
+
+  /** ext 域查询:token 逐个 MATCH/LIKE 后按 bkey 交集,排除项服务端过滤。 */
+  async extSearch(tokens: string[], not: string[] = [], limit = 30): Promise<{ path: string; text: string }[]> {
+    return this.call<{ path: string; text: string }[]>('extSearch', { tokens, not, limit });
+  }
+
   /** 狂暴全量重建:并发池=os.cpus()*2,PRAGMA synchronous=OFF。 */
   async turboRebuild(onProgress?: (done: number, total: number) => void): Promise<{ files: number; blocks: number; ms: number }> {
     this.onTurboProgress = onProgress ?? null;

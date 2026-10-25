@@ -25,9 +25,10 @@ function findRanges(text: string, tokens: string[]): [number, number][] {
   return ranges;
 }
 
-/** 建议条目：daemon 块命中 / 外部源命中 / 搜索历史（空查询时展示） */
+/** 建议条目：daemon 块命中 / ext 域(挂载库外文件)命中 / 外部源命中 / 搜索历史 */
 export type Suggestion =
   | { kind: "hit"; path: string; blockId: string | null; text: string }
+  | { kind: "ext"; path: string; text: string }
   | ({ kind: "external" } & ExternalHit)
   | { kind: "history"; query: string };
 
@@ -204,9 +205,31 @@ export class UnifiedSearchModal extends SuggestModal<Suggestion> {
       }
       hits = hits.filter((h) => sources.has(h.path.toLowerCase()));
     }
-    return hits
+    const out: Suggestion[] = hits
       .slice(0, 50)
       .map((h) => ({ kind: "hit" as const, path: h.path, blockId: h.blockId || null, text: h.text }));
+    // ext 域(挂载库外文件):整文件一行,daemon 侧逐 token 交集;失败静默
+    try {
+      let extHits = await daemon.extSearch(plan.positive, plan.negative, 30);
+      if (plan.pathSubs.length) {
+        extHits = extHits.filter((h) => {
+          const p = h.path.toLowerCase();
+          return plan.pathSubs.every((s) => p.includes(s));
+        });
+      }
+      if (plan.exts.length) {
+        extHits = extHits.filter((h) => {
+          const p = h.path.toLowerCase();
+          return plan.exts.some((e) => p.endsWith("." + e));
+        });
+      }
+      out.push(
+        ...extHits.slice(0, 20).map((h) => ({ kind: "ext" as const, path: h.path, text: h.text })),
+      );
+    } catch {
+      /* ext 域可选 */
+    }
+    return out;
   }
 
   renderSuggestion(s: Suggestion, el: HTMLElement): void {
@@ -228,6 +251,15 @@ export class UnifiedSearchModal extends SuggestModal<Suggestion> {
       if (s.snippet) {
         el.createDiv({ cls: "unified-search-snippet", text: s.snippet });
       }
+      return;
+    }
+    if (s.kind === "ext") {
+      // 挂载库外文件:标题=文件名,徽标 ext,摘要来自全文
+      const head = el.createDiv({ cls: "unified-search-head" });
+      head.createSpan({ cls: "unified-search-title", text: s.path.split("/").pop() ?? s.path });
+      head.createSpan({ cls: "unified-search-ext", text: "ext" });
+      el.createDiv({ cls: "unified-search-path", text: s.path });
+      if (s.text) buildSnippet(el.createDiv({ cls: "unified-search-snippet" }), s.text, this.lastTokens);
       return;
     }
     if (s.kind === "history") {
@@ -253,6 +285,17 @@ export class UnifiedSearchModal extends SuggestModal<Suggestion> {
       return;
     }
     this.recordHistory(this.inputEl.value.trim());
+    // ext 域命中:绝对路径——能映射进 vault 的内部打开,否则系统默认应用
+    if (s.kind === "ext") {
+      const rel = this.toVaultRelative(s.path);
+      const file = rel ? this.plugin.app.vault.getAbstractFileByPath(rel) : null;
+      if (file instanceof TFile) {
+        this.openFileReuse(file);
+        return;
+      }
+      openExternal(s.path);
+      return;
+    }
     // 外部源命中：能用 Obsidian 打开的（库内文件）就内部打开，否则交给系统
     if (s.kind === "external") {
       const rel = this.toVaultRelative(s.path);

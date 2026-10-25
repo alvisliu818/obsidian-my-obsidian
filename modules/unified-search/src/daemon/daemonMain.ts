@@ -660,6 +660,127 @@ async function main(): Promise<void> {
     return { files: Number(counts.rows[0]?.[1] ?? 0), blocks: Number(counts.rows[0]?.[0] ?? 0) };
   };
 
+  // ------------------------------------------------------------------
+  // ext 域(挂载库外文件,2026-10-25):候选清单由客户端推送(unified-search
+  // 的 extpolicy 过滤后),daemon 自己 stat 门控增量读;索引在 ext_files +
+  // ext_fts,与 vault 域完全独立(dropAll/rebuild 不碰)。
+  // ------------------------------------------------------------------
+
+  const EXT_LIST_KEY = 'ext_list';
+  const EXT_MAX_BYTES = 2_000_000;
+  const normPath = (p: string): string => p.replace(/\\/g, '/');
+
+  const rtOf = async (): Promise<SqliteRuntimeLike> => {
+    await ensureOpen();
+    const rt = (idx as unknown as { rt?: SqliteRuntimeLike | null }).rt;
+    if (!rt) throw new Error('runtime unavailable');
+    return rt;
+  };
+
+  const metaGetRaw = async (rt: SqliteRuntimeLike, key: string): Promise<string | null> => {
+    const res = await rt.all('SELECT value FROM meta WHERE key = ?', [key], 1);
+    return (res.rows[0]?.[0] as string) ?? null;
+  };
+
+  const deleteExtRows = async (rt: SqliteRuntimeLike, p: string): Promise<void> => {
+    await rt.run('DELETE FROM ext_files WHERE path = ?', [p]);
+    await rt.run('DELETE FROM ext_fts WHERE path = ?', [p]);
+  };
+
+  const syncExt = async (): Promise<{ files: number; updated: number; removed: number }> => {
+    const rt = await rtOf();
+    let cands: { path: string; mtime: number }[] = [];
+    try {
+      cands = JSON.parse((await metaGetRaw(rt, EXT_LIST_KEY)) ?? '[]') as { path: string; mtime: number }[];
+    } catch {
+      cands = [];
+    }
+    const keep = new Map(cands.map((c) => [normPath(c.path), c]));
+    const known = new Map<string, [number, number]>();
+    const kres = await rt.all('SELECT path, mtime, size FROM ext_files', [], 500_000);
+    for (const r of kres.rows) known.set(String(r[0]), [Number(r[1]), Number(r[2])]);
+    let updated = 0;
+    let removed = 0;
+    // 已索引但不在候选清单(策略滤掉/挂载移除/盘上消失)→ 删
+    for (const p of [...known.keys()]) {
+      if (!keep.has(p)) {
+        await deleteExtRows(rt, p);
+        known.delete(p);
+        removed++;
+      }
+    }
+    for (const [p, c] of keep) {
+      let st: fs.Stats | null = null;
+      try {
+        st = fs.statSync(c.path);
+      } catch {
+        st = null;
+      }
+      if (!st?.isFile() || st.size > EXT_MAX_BYTES) {
+        if (known.has(p)) {
+          await deleteExtRows(rt, p);
+          known.delete(p);
+          removed++;
+        }
+        continue;
+      }
+      const mtime = Math.floor(st.mtimeMs);
+      const k = known.get(p);
+      if (k && k[0] === mtime && k[1] === st.size) continue; // stat 门:未变免读
+      let content: string;
+      try {
+        content = await fs.promises.readFile(c.path, 'utf8');
+      } catch {
+        continue;
+      }
+      await deleteExtRows(rt, p);
+      await rt.batch(
+        [
+          'INSERT OR REPLACE INTO ext_files (path, mtime, size) VALUES (?, ?, ?)',
+          'INSERT INTO ext_fts (bkey, path, text) VALUES (?, ?, ?)',
+        ],
+        [[p, mtime, st.size], ['ext:' + p, p, content]],
+      );
+      known.set(p, [mtime, st.size]);
+      updated++;
+    }
+    return { files: known.size, updated, removed };
+  };
+
+  const likeEscape = (s: string): string => s.replace(/([%_\\])/g, '\\$1');
+
+  /**
+   * ext 域查询:token 逐个命中(trigram ≥3 字符走 MATCH,否则 LIKE)后按
+   * bkey 交集,排除项客户端语义(text 不含)。整文件一行,text 是全文——
+   * LIMIT 放大倍数给交集留余量。
+   */
+  const extSearch = async (tokens: string[], not: string[], limit: number): Promise<{ path: string; text: string }[]> => {
+    const rt = await rtOf();
+    const lim = Math.max(1, Math.min(limit || 30, 200));
+    const fetch = Math.min(lim * 6, 2000);
+    let base: Map<string, { bkey: string; path: string; text: string }> | null = null;
+    for (const t of tokens) {
+      let rows: { bkey: string; path: string; text: string }[];
+      if (t.length >= 3) {
+        const res = await rt.all('SELECT bkey, path, text FROM ext_fts WHERE ext_fts MATCH ? LIMIT ?', [JSON.stringify(t).slice(1, -1).replace(/"/g, '""'), fetch]);
+        rows = res.rows.map((r) => ({ bkey: String(r[0]), path: String(r[1]), text: String(r[2]) }));
+      } else {
+        const res = await rt.all("SELECT bkey, path, text FROM ext_fts WHERE text LIKE ? ESCAPE '\\' LIMIT ?", [`%${likeEscape(t)}%`, fetch]);
+        rows = res.rows.map((r) => ({ bkey: String(r[0]), path: String(r[1]), text: String(r[2]) }));
+      }
+      const m = new Map(rows.map((r) => [r.bkey, r]));
+      if (base === null) base = m;
+      else for (const k of [...base.keys()]) if (!m.has(k)) base.delete(k);
+      if (base.size === 0) return [];
+    }
+    let out = [...(base ?? new Map()).values()];
+    for (const n of not) {
+      const ln = n.toLowerCase();
+      out = out.filter((r) => !r.text.toLowerCase().includes(ln));
+    }
+    return out.slice(0, lim).map((r) => ({ path: r.path, text: r.text }));
+  };
+
   const handle = async (msg: {
     id?: number;
     op?: string;
@@ -714,6 +835,22 @@ async function main(): Promise<void> {
       case 'setExclude':
         source.setExcludes(msg.folders ?? []);
         return { ok: true };
+      case 'setExt': {
+        // 候选清单落 meta(守护进程重启后不需要客户端重推也能自愈重扫)
+        const files = (msg as { files?: { path: string; mtime: number }[] }).files ?? [];
+        const rt = await rtOf();
+        await rt.run('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [
+          EXT_LIST_KEY,
+          JSON.stringify(files.map((f) => ({ path: normPath(String(f.path)), mtime: Number(f.mtime) || 0 }))),
+        ]);
+        return syncExt();
+      }
+      case 'extSearch':
+        return extSearch(
+          ((msg as { tokens?: unknown }).tokens ?? []) as string[],
+          ((msg as { not?: unknown }).not ?? []) as string[],
+          Number((msg as { limit?: unknown }).limit ?? 30),
+        );
       case 'stats': {
         await ensureOpen();
         const files = (await idx as unknown as { stats?(): Promise<unknown> }).stats?.();
@@ -775,6 +912,12 @@ async function main(): Promise<void> {
 
   // ---- 守护模式：stdio JSON 行协议 ----
   write({ ev: 'hello', proto: 1, pid: process.pid });
+  // ext 域周期重扫(30min):stat 门下未变文件免读,开销是清单 stat 一轮;
+  // 挂载文件无 vault 事件,靠这个兜底(与旧 unified-search 引擎同语义)。
+  const extTimer = setInterval(() => {
+    void syncExt().catch(() => {});
+  }, 30 * 60_000);
+  extTimer.unref?.();
   let buf = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk: string) => {
