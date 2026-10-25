@@ -5,7 +5,7 @@
  */
 
 import { insertTab } from '@codemirror/commands';
-import type { EditorView } from '@codemirror/view';
+import { EditorView } from '@codemirror/view';
 import type { BlockRenderHost } from '../blocks/renderHost';
 import {
   flattenVisible,
@@ -327,6 +327,7 @@ export function handleArrow(view: EditorView, host: BlockRenderHost, dir: 'up' |
     const prev = prevVisible(roots, b);
     if (!prev) return true;
     host.focusBlock(prev, 'end');
+    scrollCaretIntoViewSoon(host);
     return true;
   }
   // right
@@ -334,6 +335,7 @@ export function handleArrow(view: EditorView, host: BlockRenderHost, dir: 'up' |
   const next = nextVisible(roots, b);
   if (!next) return true;
   host.focusBlock(next, 0);
+  scrollCaretIntoViewSoon(host);
   return true;
 }
 
@@ -345,6 +347,16 @@ export function handleDocJump(_view: EditorView, host: BlockRenderHost, end: boo
   if (!flat.length) return false;
   host.focusBlock(end ? flat[flat.length - 1] : flat[0], end ? 'end' : 0);
   return true;
+}
+
+/** 跨块移动后光标滚入视口(思源 caretScroll 的覆盖面:CM 只滚块内,
+ *  focusBlock 重挂后的光标可能留在屏外——下一帧按 nearest 滚最小量)。 */
+function scrollCaretIntoViewSoon(host: BlockRenderHost): void {
+  requestAnimationFrame(() => {
+    const v = host.focusedView;
+    if (!v || !v.dom.isConnected) return;
+    v.dispatch({ effects: EditorView.scrollIntoView(v.state.selection.main.head, { y: 'nearest' }) });
+  });
 }
 
 /** 思源 verticalCaret 的 goalX(2026-10-26):块间上/下移后,把光标放到
@@ -360,7 +372,10 @@ function caretAtGoalX(host: BlockRenderHost, goalX: number, atEnd: boolean): voi
     const y = (c.top + c.bottom) / 2;
     const p = v.posAtCoords({ x: goalX, y });
     if (p == null) return;
-    v.dispatch({ selection: { anchor: Math.max(0, Math.min(p, len)) } });
+    v.dispatch({
+      selection: { anchor: Math.max(0, Math.min(p, len)) },
+      effects: EditorView.scrollIntoView(Math.max(0, Math.min(p, len)), { y: 'nearest' }),
+    });
   });
 }
 
