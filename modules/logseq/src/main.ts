@@ -29,6 +29,7 @@ import { FileExplorerLocateButton } from './features/fileExplorerLocate';
 import { LogseqEditorSettingTab } from './settings/tab';
 import { initEditorSettingsStore, loadEditorSettings, saveEditorSettings } from './settings/editorSettingsStore';
 import { BlockIndex } from './index/blockIndex';
+import { BlockIndexDaemonClient, forwardVaultEvents } from './index/daemon/daemonClient';
 import {
   SqliteIndex,
   type SqliteFileSource,
@@ -87,7 +88,7 @@ import { hasGrammarForFence } from './extensions/tmEngine';
 import { activateIconThemeByPreference, ICON_THEME_CHANGED_EVENT } from './extensions/iconThemeLoader';
 import { applyCodeThemePreference, warmUpSharedBlockEditor, disposeMonaco } from './editor/monaco';
 import { TerminalView, VIEW_TYPE_TERMINAL } from './terminal/terminalView';
-import { shutdownPtyHelper } from './terminal/ptyClient';
+import { shutdownPtyHelper, findNodeExe } from './terminal/ptyClient';
 import { shutdownAllLsp } from './lsp/lspHost';
 import type { ExtensionSource } from './extensions/types';
 import { registerGrammarFromExtension, unregisterGrammarFromExtension, ensureTmEngineReady } from './extensions/tmEngine';
@@ -107,6 +108,10 @@ export default class LogseqEditorPlugin extends Plugin {
   /** 核心文件浏览器工具栏上的「定位当前文件」按钮（注入式 UI，需自行装卸）。 */
   fileExplorerLocate: FileExplorerLocateButton | null = null;
   blockIndex: BlockIndex | null = null;
+  /** 守护进程索引客户端(档位 2):桌面 + sqliteIndexEnabled 时取代内存 blockIndex。 */
+  daemonIndex: BlockIndexDaemonClient | null = null;
+  /** daemon 模式下的索引变更监听器(等价 blockIndex.onRebuild 的 listener 集)。 */
+  private readonly daemonIndexListeners = new Set<() => void>();
   slashSuggest: NativeSlashSuggest | null = null;
   /** Automatic pre-write backups for user-visible .md files. */
   backups: BackupManager = new BackupManager(this);
@@ -247,11 +252,37 @@ export default class LogseqEditorPlugin extends Plugin {
     // Vault-wide ((block-id)) index。indexExcludedFolders 的目录不进索引:
     // 备份/参考资料不吃索引内存(~99 万块 ≈ 250-300MB),反链面板也没有副本噪音。
     // 谓词直读设置(每次调用现取),设置热改后「重建块索引」即生效。
-    this.blockIndex = new BlockIndex(this.app, (path) => this.isIndexExcluded(path));
-    this.blockIndex.attach(this);
+    //
+    // 档位 2(2026-10-25):桌面 + sqliteIndexEnabled 时改走守护进程——
+    // 独立 node 进程独占 SQLite(better-sqlite3,FTS5),渲染进程只留小常驻
+    // 缓存(byId 池 ~90 块/标签/卡片),JS 堆 -160~190MB。失败自动回落内存索引。
+    const daemonMode = Platform.isDesktopApp && this.settings.sqliteIndexEnabled;
+    if (daemonMode) {
+      this.daemonIndex = new BlockIndexDaemonClient({
+        app: this.app,
+        pluginDir: this.manifest.dir ?? '',
+        dbPath: this.sqliteDbPath,
+        findNode: findNodeExe,
+        excludes: () => parseFolderList(this.settings.indexExcludedFolders),
+        onChange: () => this.notifyBlockIndexConsumers(),
+      });
+      try {
+        await this.daemonIndex.start();
+        forwardVaultEvents(this, this.daemonIndex);
+      } catch (e) {
+        console.warn('[logseq] index daemon failed to start, falling back to in-memory index:', e);
+        this.daemonIndex?.dispose();
+        this.daemonIndex = null;
+      }
+    }
+    if (!this.daemonIndex) {
+      this.blockIndex = new BlockIndex(this.app, (path) => this.isIndexExcluded(path));
+      this.blockIndex.attach(this);
+    }
     this.attachSqliteIndex();
     this.app.workspace.onLayoutReady(() => {
-      void this.blockIndex?.buildAll();
+      if (this.blockIndex) void this.blockIndex.buildAll();
+      if (this.daemonIndex) void this.daemonIndex.upsertFiles([]); // 触发一次 changed→缓存预热
       void this.startSqliteIndex();
       if (this.settings.pagePropsEditor === 'native') void this.resolveNativePropsCtor();
       this.convertOpenMarkdownLeaves();
@@ -452,7 +483,11 @@ export default class LogseqEditorPlugin extends Plugin {
       id: 'rebuild-block-index',
       name: 'Rebuild block reference index',
       callback: () => {
-        void this.blockIndex?.buildAll().then(() => new Notice('Block index rebuilt.'));
+        if (this.daemonIndex) {
+          void this.daemonIndex.rebuild().then(() => new Notice('Block index rebuilt (daemon).'));
+        } else {
+          void this.blockIndex?.buildAll().then(() => new Notice('Block index rebuilt.'));
+        }
       },
     });
 
@@ -882,6 +917,10 @@ export default class LogseqEditorPlugin extends Plugin {
   }
 
   onunload(): void {
+    // 守护进程收尾:先停事件再 dispose(退出流会把 in-flight 请求全 reject)。
+    this.daemonIndex?.dispose();
+    this.daemonIndex = null;
+
     // 块内代码块的 Monaco 单例常驻在 body 的隐藏池里,不显式销毁会随插件
     // 禁用/重载泄漏(外部代码视图的实例由各自的 view 自己 dispose)。
     disposeMonaco();
@@ -1095,6 +1134,59 @@ export default class LogseqEditorPlugin extends Plugin {
 
   isExcluded(file: string): boolean {
     return pathInFolders(file, parseFolderList(this.settings.excludedFolders));
+  }
+
+  /** daemon 模式:订阅索引变更(与 blockIndex.onRebuild 同语义)。 */
+  onDaemonIndexChange(cb: () => void): () => void {
+    this.daemonIndexListeners.add(cb);
+    return () => {
+      this.daemonIndexListeners.delete(cb);
+    };
+  }
+
+  /**
+   * 统一的同步索引访问面(消费方用):daemon 模式返回客户端(小缓存同步 API),
+   * 否则返回内存 blockIndex。两者同形(withIds/get/allTags/allCards/supertag*)。
+   */
+  get syncIndex(): {
+    withIds(): import('./index/blockIndex').IndexedBlock[];
+    get(id: string): import('./index/blockIndex').IndexedBlock | null;
+    allTags(): string[];
+    allCards(): import('./index/blockIndex').CardEntry[];
+    supertagRegistry(): Map<string, import('./features/supertags').SupertagDef>;
+    supertagDef(name: string): import('./features/supertags').SupertagDef | null;
+    supertagInstances(tag: string): import('./index/blockIndex').IndexedBlock[];
+    onRebuild(cb: () => void): () => void;
+    readonly version: number;
+  } | null {
+    // daemon 客户端没有 onRebuild(监听器住在 plugin 上)——包一层同形适配。
+    const d = this.daemonIndex;
+    if (!d) return this.blockIndex;
+    return {
+      withIds: () => d.withIds(),
+      get: (id: string) => d.get(id),
+      allTags: () => d.allTags(),
+      allCards: () => d.allCards(),
+      supertagRegistry: () => d.supertagRegistry(),
+      supertagDef: (name: string) => d.supertagDef(name),
+      supertagInstances: (_tag: string) => [], // 异步查询,同步面禁用(调用方直接用 daemonIndex)
+      onRebuild: (cb: () => void) => this.onDaemonIndexChange(cb),
+      get version() { return d.version; },
+    } as unknown as NonNullable<ReturnType<() => LogseqEditorPlugin['syncIndex']>>;
+  }
+
+  /** badge 预取缓存(daemon 模式):当前打开文件的块引用反链,打开/变更时刷新。 */
+  daemonPrefetchedRefs: Map<string, import('./index/blockIndex').BacklinkEntry[]> = new Map();
+
+  /** daemon changed 事件落地:唤醒全部消费方缓存。 */
+  notifyBlockIndexConsumers(): void {
+    for (const cb of [...this.daemonIndexListeners]) {
+      try {
+        cb();
+      } catch {
+        /* 同 blockIndex.notify:监听器错误不外溢 */
+      }
+    }
   }
 
   /** 索引排除(独立于编辑器排除):这些目录不进块索引/块级反链。 */

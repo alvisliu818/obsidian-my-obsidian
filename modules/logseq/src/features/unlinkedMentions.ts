@@ -11,7 +11,6 @@
 
 import { setIcon, TFile } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
-import type { IndexedBlock } from '../index/blockIndex';
 
 export const UNLINKED_SECTION_CLASS = 'page-unlinked';
 
@@ -21,26 +20,42 @@ const MAX_ITEMS = 50;
  * Render the unlinked-mentions section under the backlinks area.
  * Idempotent; no-ops when the title is too short to match meaningfully.
  */
-export function renderUnlinkedMentions(
+export async function renderUnlinkedMentions(
   containerEl: HTMLElement,
   plugin: LogseqEditorPlugin,
   currentPath: string | undefined,
   title: string,
-): void {
+): Promise<void> {
   containerEl.querySelector(`:scope > .${UNLINKED_SECTION_CLASS}`)?.remove();
   if (!currentPath) return;
   const q = title.trim().toLowerCase();
   // Meaningful matching only: >= 3 chars so single-letter pages don't spam.
   if (q.length < 3) return;
 
-  const idx = plugin.blockIndex;
-  if (!idx) return;
-
-  // The scan itself lives on the index: it owns the blocks, and it can prune
-  // them with per-file character signatures (see BlockIndex.unlinkedMentions),
-  // which turns a full walk of ~983k blocks into a ~10ms pass. The `MAX_ITEMS`
-  // cap still applies, so the cost of a popular title stays bounded.
-  const hits = idx.unlinkedMentions(title, currentPath, MAX_ITEMS);
+  // daemon 模式:FTS5 trigram 毫秒级;内存索引:签名剪枝(~10ms)。
+  // 双模态,结果形状统一后再渲染。
+  const daemon = plugin.daemonIndex;
+  type Hit = { entry: { path: string; text: string; marker: string | null; blockId: string }; count: number };
+  let hits: Hit[];
+  if (daemon) {
+    const rows = await daemon.scan(q, currentPath, MAX_ITEMS * 3).catch(() => []);
+    hits = [];
+    const byPath = new Map<string, Hit>();
+    for (const r of rows) {
+      const k = r.path + '\u0000' + r.bkey;
+      const existing = byPath.get(k);
+      if (existing) existing.count++;
+      else {
+        const e = { entry: { path: r.path, text: r.text, marker: null, blockId: '' }, count: 1 };
+        byPath.set(k, e);
+        hits.push(e);
+      }
+    }
+  } else {
+    const idx = plugin.blockIndex;
+    if (!idx) return;
+    hits = idx.unlinkedMentions(title, currentPath, MAX_ITEMS);
+  }
 
   const section = containerEl.createEl('div', { cls: UNLINKED_SECTION_CLASS });
   const header = section.createEl('div', { cls: 'page-backlinks-header' });
@@ -57,7 +72,7 @@ export function renderUnlinkedMentions(
   // Group by source file (same layout as the linked-mentions section); the
   // group header opens the file, rows view the source, the row-end link
   // icon converts the mention to a [[link]].
-  const groups = new Map<string, Array<{ entry: IndexedBlock; count: number }>>();
+  const groups = new Map<string, Array<Hit>>();
   for (const h of hits) {
     const arr = groups.get(h.entry.path) ?? [];
     arr.push(h);
@@ -118,7 +133,7 @@ function plainPreview(text: string, title: string): string {
  */
 async function convertMention(
   plugin: LogseqEditorPlugin,
-  entry: IndexedBlock,
+  entry: { path: string },
   title: string,
 ): Promise<void> {
   const af = plugin.app.vault.getAbstractFileByPath(entry.path);

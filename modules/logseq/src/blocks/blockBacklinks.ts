@@ -49,7 +49,7 @@ function updateBadge(view: BlockEditorView, block: Block, wrap: HTMLElement): vo
   const main = wrap.querySelector(':scope > .block-main');
   if (!main) return;
   const id = blockId(block);
-  const refs = id ? view.plugin.blockIndex?.refsToBlock(id) ?? [] : [];
+  const refs = id ? refsOf(view.plugin, id) ?? [] : [];
   let badge = main.querySelector(`:scope > .${BADGE_CLASS}`) as HTMLElement | null;
   if (refs.length === 0) {
     badge?.remove();
@@ -85,7 +85,7 @@ function togglePanel(view: BlockEditorView, block: Block, wrap: HTMLElement): vo
     return;
   }
   set.add(id);
-  const refs = view.plugin.blockIndex?.refsToBlock(id) ?? [];
+  const refs = refsOf(view.plugin, id) ?? [];
   renderPanel(view, block, wrap, refs);
 }
 
@@ -120,4 +120,12 @@ function renderPanel(view: BlockEditorView, block: Block, wrap: HTMLElement, ref
   if (refs.length > 50) {
     panel.createEl('div', { cls: 'block-backlinks-more', text: '… more not shown' });
   }
+}
+
+
+// 双模态 refs 查询:daemon 模式走预取缓存(由 refreshBacklinkPrefetch 维护),
+// 内存索引走同步 refsToBlock。badge 是同步渲染路径,不允许 await。
+function refsOf(plugin: { daemonIndex: { } | null; daemonPrefetchedRefs?: Map<string, BacklinkEntry[]>; blockIndex?: { refsToBlock(id: string): BacklinkEntry[] } | null }, id: string): BacklinkEntry[] {
+  if (plugin.daemonIndex) return plugin.daemonPrefetchedRefs?.get(id) ?? [];
+  return plugin.blockIndex?.refsToBlock(id) ?? [];
 }
