@@ -159,6 +159,7 @@
   position: relative; /* anchors the floating caret */
   display: flex;
   align-items: center;
+  justify-content: center; /* 6px 圆点居中在 16px 列:圆点中心=列中线 */
   flex: none;
   height: 1.55em;
   width: var(--lgp-controls-w, 32px);
@@ -293,48 +294,30 @@
   white-space: nowrap;
 }
 
-/* bullet */
+/* bullet — 元素即圆点(用户指定,2026-10-25:聚焦命中范围缩到圆点本体)。
+   6px 圆点自身就是元素,控件列 justify-content 居中让它保持在 16px 列
+   的中线上(辅助线/加号锚点不动)。不再有 16px 盒与 ::after 隐形热区:
+   点圆点之外不再误触聚焦/多选,落空交给行的常规点击(进编辑)。 */
 .block-bullet {
-  position: relative; /* anchors the invisible touch-area extension */
-  width: 16px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  border-radius: 50%;
-}
-
-/* invisible tap-area extension: bigger touch target WITHOUT widening the box
-   — the dot must stay centered in the 16px column (the guide line and the
-   add-block plus anchor to that exact center) */
-.block-bullet::after {
-  content: '';
-  position: absolute;
-  top: -6px;
-  bottom: -6px;
-  left: -4px;
-  right: -4px;
-}
-
-.block-bullet::before {
-  content: '';
+  position: relative; /* anchors the collapsed halo */
   width: 6px;
   height: 6px;
   border-radius: 50%;
+  cursor: pointer;
   /* light gray, theme-adaptive (Logseq's dots are very faint) */
   background: color-mix(in srgb, var(--text-normal) 22%, transparent);
 }
 
-/* row hover darkens the dot a step (affordance survives the lighter base) */
-.block-main:hover .block-bullet::before {
+/* row hover (or direct dot hover) darkens the dot a step */
+.block-main:hover .block-bullet,
+.block-bullet:hover {
   background: color-mix(in srgb, var(--text-normal) 40%, transparent);
 }
 
 /* COLLAPSED block: Logseq's folded indicator — a light gray circular halo
    around the dot (no persistent caret; the caret stays hover-only). */
-.block-wrap.is-collapsed .block-bullet::before,
-.embed-row.is-collapsed .block-bullet::before {
+.block-wrap.is-collapsed .block-bullet,
+.embed-row.is-collapsed .block-bullet {
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--text-normal) 9%, transparent);
 }
 
@@ -933,6 +916,7 @@
   position: relative; /* anchors the floating caret */
   display: flex;
   align-items: center;
+  justify-content: center; /* 6px 圆点居中(与 .block-controls 同规) */
   flex: none;
   height: 1.55em;
   width: 16px; /* bullet only — the caret floats over the left margin */
@@ -1624,16 +1608,11 @@ body.block-touch-dragging {
   }
 
   /* Bigger touch targets on the block controls: the CARET widens (it floats
-     in the margin), the bullet keeps its 16px box — the dot must stay
-     centered in the column the guide line and add-block plus anchor to —
-     and gains tap room via its invisible ::after extension instead. */
+     in the margin). The bullet stays its 6px self — 命中范围缩到圆点本体
+     (用户指定,2026-10-25),触屏也不再放大热区。 */
   .block-caret {
     min-height: 32px;
     min-width: 24px;
-  }
-
-  .block-bullet {
-    min-height: 32px;
   }
 
   /* the enlarged floating caret sits fully left of the bullet column */

@@ -1116,11 +1116,22 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
         const mlen = editorMarkerLen(b);
         const pStatRaw = Math.max(0, Math.min(pending.staticPos, v.state.doc.length - mlen));
         const pStat = Math.min(pStatRaw + mlen, v.state.doc.length);
-        // Raw blocks always take the static line mapping: the rendered text
-        // hides the `## `/`>` markers the editor shows, so posAtCoords skews
-        // by the marker width (clicking a heading's first character landed
-        // INSIDE `## ` — Enter then produced an empty-looking heading block).
-        if (b.kind === 'raw' || v.state.doc.lineAt(p).number !== v.state.doc.lineAt(pStat).number) {
+        // Raw blocks: the rendered text hides the markers the editor shows
+        // (`## `, `> `), so posAtCoords skews by the marker width. 标题点击
+        // 光标落在点击位置(用户反馈,2026-10-25):编辑态挂进同一 h1-h6 后
+        // 盒几何一致、posAtCoords 的 Y 可靠——X 映射补回前缀长度,钳在
+        // 「前缀之后 ~ 点击行行尾」。非标题 raw(引述等多行 blob,渲染少
+        // 了空行会让 Y 映射错位)沿用 staticClickPos 的行映射(行尾)。
+        if (b.kind === 'raw' && pending.clickXY) {
+          const lineObj = v.state.doc.lineAt(pStat);
+          const mm = /^(#{1,6}\s)/.exec(lineObj.text);
+          if (mm) {
+            const d = cursorAtCoords(v, pending.clickXY.x, pending.clickXY.y, pStat);
+            p = Math.min(Math.max(d + mm[1].length, lineObj.from + mm[1].length), lineObj.to);
+          } else {
+            p = pStat;
+          }
+        } else if (v.state.doc.lineAt(p).number !== v.state.doc.lineAt(pStat).number) {
           p = pStat;
         }
       }
