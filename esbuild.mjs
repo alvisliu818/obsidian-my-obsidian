@@ -399,9 +399,32 @@ const context = await esbuild.context({
   minify: prod,
 });
 
+// ---- 索引守护进程(档位 2):独立 Node 进程独占 logseq-index.sqlite。
+// 裸 node 运行(无 Electron/无 PnP)——bundle 必须自包含:obsidian 不可达
+// (依赖链已验证纯净:fileFacts/parser/serializer/types 均无 obsidian import),
+// wa-sqlite 经 __WA_SQLITE_WASM_B64__ define 内联(同主 bundle),node builtin
+// 由 platform:'node' 自动 external。
+const daemon = await esbuild.context({
+  entryPoints: ["modules/logseq/src/index/daemon/daemonMain.ts"],
+  bundle: true,
+  platform: "node",
+  // 原生模块不可 bundle:运行时从插件目录 node_modules 解析(deploy 边车)
+  external: ["better-sqlite3"],
+  format: "cjs",
+  target: "node22",
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  define: { __WA_SQLITE_WASM_B64__: JSON.stringify(WA_SQLITE_WASM_B64) },
+  logLevel: "info",
+  sourcemap: false,
+  outfile: "index-daemon.cjs",
+  minify: prod,
+});
+
 if (prod) {
   await context.rebuild();
+  await daemon.rebuild();
   process.exit(0);
 } else {
   await context.watch();
+  await daemon.watch();
 }

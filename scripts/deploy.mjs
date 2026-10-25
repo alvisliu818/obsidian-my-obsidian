@@ -19,9 +19,10 @@
  * Usage:
  *   node scripts/deploy.mjs --vault "<库路径>" [--from "<旧 logseq 插件目录>"]
  */
-import { existsSync, mkdirSync, cpSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, cpSync, rmSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { execSync } from "node:child_process";
 
 const args = process.argv.slice(2);
 const vaultFlag = args.indexOf("--vault");
@@ -155,6 +156,86 @@ if (helper) {
 		"  ! 没找到 pty-helper（终端会打不开）。用 --from 指定旧 logseq 插件目录，\n" +
 			"    或手动把 pty-helper/ 拷到插件目录下。",
 	);
+}
+
+// ---- index-daemon(索引守护进程) + better-sqlite3 边车 ----
+// 守护进程是独立 node 进程,无 PnP——better-sqlite3(原生模块,FTS5 预编译)
+// 以传统 node_modules 布局放插件目录,从 unplugged 取(构建产物不进 git)。
+const daemonJs = path.join(ROOT, "index-daemon.cjs");
+if (existsSync(daemonJs)) {
+	cpSync(daemonJs, path.join(TARGET, "index-daemon.cjs"));
+	console.log("  index-daemon.cjs");
+} else {
+	console.warn("  ! 缺少 index-daemon.cjs(先 yarn node esbuild.mjs production)");
+}
+
+const unplugged = path.join(ROOT, ".yarn", "unplugged");
+const bs3Dir = existsSync(unplugged)
+	? readdirSync(unplugged).find((d) => d.startsWith("better-sqlite3-npm-"))
+	: null;
+if (bs3Dir) {
+	const src = path.join(unplugged, bs3Dir, "node_modules", "better-sqlite3");
+	const dst = path.join(TARGET, "node_modules", "better-sqlite3");
+	rmSync(dst, { recursive: true, force: true });
+	cpSync(src, dst, {
+		recursive: true,
+		// 只带运行时需要的:lib/index/package.json + 编译产物。prebuild-install
+		// 是装包期工具,deps/** 是 sqlite 源码(几 MB),都不要。
+		filter: (f) => {
+			const rel = path.relative(src, f).split(path.sep).join("/");
+			return (
+				rel === "" ||
+				rel === "package.json" ||
+				rel === "index.js" ||
+				rel === "LICENSE" ||
+				rel === "lib" ||
+				rel === "build" ||
+				rel.startsWith("lib/") ||
+				rel.startsWith("build/") ||
+				rel.startsWith("deps/license")
+			);
+		},
+	});
+	// better-sqlite3 的运行时依赖 bindings(定位 .node)——纯 JS,住在全局
+	// cache zip 里(不 unplugged),解包到边车 node_modules。
+	const cacheDir = path.join(ROOT, "..", "..", ".yarn-global", "cache");
+	const bindingsZip = existsSync(cacheDir)
+		? readdirSync(cacheDir).find((d) => d.startsWith("bindings-npm-") && d.endsWith(".zip"))
+		: null;
+	if (bindingsZip) {
+		const bDst = path.join(TARGET, "node_modules", "bindings");
+		const tmp = path.join(TARGET, "node_modules", ".bindings-tmp");
+		rmSync(bDst, { recursive: true, force: true });
+		rmSync(tmp, { recursive: true, force: true });
+		// yarn cache zip 内部是 node_modules/<pkg>/ 布局
+		execSync(
+			`powershell -NoProfile -Command "Expand-Archive -Force -Path '${path.join(cacheDir, bindingsZip)}' -DestinationPath '${tmp}'"`,
+			{ stdio: "ignore" },
+		);
+		cpSync(path.join(tmp, "node_modules", "bindings"), bDst, { recursive: true });
+		rmSync(tmp, { recursive: true, force: true });
+		// bindings 的运行时依赖 file-uri-to-path(纯 JS,同住 cache zip)
+		const f2pZip = readdirSync(cacheDir).find(
+			(d) => d.startsWith("file-uri-to-path-npm-") && d.endsWith(".zip"),
+		);
+		if (f2pZip) {
+			const fDst = path.join(TARGET, "node_modules", "file-uri-to-path");
+			const fTmp = path.join(TARGET, "node_modules", ".f2p-tmp");
+			rmSync(fDst, { recursive: true, force: true });
+			rmSync(fTmp, { recursive: true, force: true });
+			execSync(
+				`powershell -NoProfile -Command "Expand-Archive -Force -Path '${path.join(cacheDir, f2pZip)}' -DestinationPath '${fTmp}'"`,
+				{ stdio: "ignore" },
+			);
+			cpSync(path.join(fTmp, "node_modules", "file-uri-to-path"), fDst, { recursive: true });
+			rmSync(fTmp, { recursive: true, force: true });
+		}
+		console.log("  node_modules/better-sqlite3 + bindings  (FTS5)");
+	} else {
+		console.warn("  ! bindings 未找到(better-sqlite3 运行时定位 .node 需要)");
+	}
+} else {
+	console.warn("  ! better-sqlite3 未 unplugged(守护进程将回落 node:sqlite,无 FTS5)");
 }
 
 console.log(`\n已部署到 ${TARGET}`);
