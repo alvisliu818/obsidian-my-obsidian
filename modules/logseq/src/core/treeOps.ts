@@ -306,7 +306,10 @@ export function splitBlock(b: Block, offset: number): Block {
  */
 export function shouldExitListOnEnter(b: Block, text: string): boolean {
   if (b.kind !== 'list' || b.bare) return false;
-  if (text.trim() !== '') return false;
+  // 符号即文本(2026-10-25):编辑文档以 `- `[TODO ] 开头——空列表块的
+  // 编辑文档是 `- ` 而非空串,剥掉符号再判空。
+  const body = text.replace(/^[-*+]\s+/, '').replace(/^(TODO|DOING|DONE)\s+/, '');
+  if (body.trim() !== '') return false;
   if (b.marker) return false;
   if (b.children.length > 0) return false;
   const sibs = siblingsOf(b);
@@ -367,6 +370,23 @@ export function splitRawToOutline(b: Block, offset: number): Block {
   b.kind = 'list';
   b.text = head;
   const nb = createBlock(tail);
+  insertAfter(b, nb);
+  return nb;
+}
+
+/**
+ * Enter on a raw HEADING block (思源交互,用户指定 2026-10-25):标题回车
+ * **不转大纲**——头部保持标题(# 前缀与光标前内容不动),光标之后的尾部
+ * 成为新的**段落块**(raw,无圆点)。标题末尾回车 = 下方新建空段落,
+ * 与思源一致。返回尾部块(光标落点)。
+ */
+export function splitHeadingRaw(b: Block, offset: number): Block {
+  const m = /^#{1,6}\s+/.exec(b.text);
+  const prefix = m?.[0] ?? '';
+  const cut = Math.min(Math.max(offset - prefix.length, 0), Math.max(b.text.length - prefix.length, 0));
+  b.text = prefix + b.text.slice(prefix.length, prefix.length + cut);
+  const nb = createBlock(b.text.slice(prefix.length + cut));
+  nb.kind = 'raw';
   insertAfter(b, nb);
   return nb;
 }

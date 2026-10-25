@@ -12,12 +12,12 @@ import type { CompletionSource } from '@codemirror/autocomplete';
 import type LogseqEditorPlugin from '../main';
 import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Block, ParsedDocument } from '../types';
-import { applyBlockProps, blockEditorDoc, blockId, createBlock, docPageProps, editableProps, isPagePropsBlock, propsShallowEqual, setCollapsed, splitPropLines, syncFrontmatterProps } from '../types';
+import { applyBlockProps, blockEditorDoc, blockId, createBlock, docPageProps, editableProps, editorMarkerLen, isPagePropsBlock, propsShallowEqual, setCollapsed, splitPropLines, syncFrontmatterProps } from '../types';
 import { parseDocument } from '../core/parser';
 import { clearLogseqPageProps, registerLogseqPageProps } from '../pagePropsRegistry';
 import { serializeBlock, serializeDocument } from '../core/serializer';
 import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, isDescendant, linkParents, mergeWithNext, mergeWithPrev, moveBlockGroup, moveBlockVertically, nextVisible, outdent, prevVisible, pseudoRootOf, rangeAnchor, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, unregisterRoots, visibleRange, type MovePosition } from '../core/treeOps';
-import { foldLevelOf, foldValueFor, nextFoldLevel, normFoldKey, subtreeFoldTargets, type FoldLevel } from '../core/fold';
+import { foldLevelOf, foldValueFor, headingLevel, nextFoldLevel, normFoldKey, subtreeFoldTargets, type FoldLevel } from '../core/fold';
 import { UndoStack } from '../state/undoStack';
 import {
   renderBlockTree,
@@ -1076,7 +1076,27 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     const pending = this.pendingFocus;
     const pos: CursorPos = pending?.pos ?? this.savedFocusPos;
     this.pendingFocus = null;
-    const v = mountFocusedEditor(content, b, pos, this);
+    // 一套渲染器(用户指定,2026-10-26):标题编辑态复用**阅读态的标题元素**
+    // ——从缓存静态渲染浅克隆 h1-h6(tag/类/属性保留,渲染子树丢弃),CM 挂进
+    // 标题元素内部:字号/字重/行高/边距全部由同一条 CSS 链(主题 h1-h6 +
+    // .block-content-static h1-h6)级联进编辑器,阅读态↔编辑态零跳动。
+    // (此前量测 computedStyle 拷 CSS 变量的方案依赖缓存就绪,未就绪时落
+    // 兜底值导致编辑态掉级抖动——同一元素同一选择器后没有第二套排版来源。)
+    let mountParent: HTMLElement = content;
+    const hLevel = b.kind === 'raw' ? headingLevel(b) : 0;
+    if (hLevel > 0) {
+      const holder = content.createEl('div', { cls: 'block-content-static' });
+      const src = cachedStaticEl(b)?.querySelector<HTMLElement>('h1, h2, h3, h4, h5, h6');
+      const h =
+        src ? (src.cloneNode(false) as HTMLElement) : document.createElement(`h${hLevel}`);
+      holder.appendChild(h);
+      mountParent = h;
+    }
+    // 一套渲染器:编辑中的列表块不再隐藏装饰圆点、也不再拉内容——静态
+    // .block-bullet 元素就位在控件列,CM 内容就位在列右侧,与阅读态完全
+    // 同一套布局;光标钻进符号区/符号被删时由 focusEditor 的 lg-no-symbol
+    // 类接管(圆点退场+内容拉进列)。
+    const v = mountFocusedEditor(mountParent, b, pos, this);
     this.focusedView = v;
     if (pending?.clickXY) {
       // posAtCoords on the fresh view uses the CLICK's page coords, but the
@@ -1090,7 +1110,12 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
       // (x-axis) precision.
       let p = cursorAtCoords(v, pending.clickXY.x, pending.clickXY.y, 'end');
       if (pending.staticPos !== null) {
-        const pStat = Math.max(0, Math.min(pending.staticPos, v.state.doc.length));
+        // 列表块编辑文档带 `- ` 符号前缀(符号即文本,2026-10-25),静态渲染
+        // 不含符号——staticPos 是文本内偏移,换算进编辑文档坐标(0=文本开头
+        // 也落在符号之后,与 mount 数值 pos 同一语义)。
+        const mlen = editorMarkerLen(b);
+        const pStatRaw = Math.max(0, Math.min(pending.staticPos, v.state.doc.length - mlen));
+        const pStat = Math.min(pStatRaw + mlen, v.state.doc.length);
         // Raw blocks always take the static line mapping: the rendered text
         // hides the `## `/`>` markers the editor shows, so posAtCoords skews
         // by the marker width (clicking a heading's first character landed
@@ -1117,7 +1142,10 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
       return;
     }
     if (this.focusedBlock === b && this.focusedView) {
-      applyCursor(this.focusedView, pos);
+      // 符号即文本:数值 pos 是文本内偏移——与 mount 同一换算(0=文本开头
+      // 落在符号后),否则段落敲 `- ` 转列表后光标跳到行首(实测)。
+      const mlen = editorMarkerLen(b);
+      applyCursor(this.focusedView, typeof pos === 'number' && mlen > 0 ? (pos > 0 ? pos + mlen : mlen) : pos);
       this.focusedView.focus();
       return;
     }
@@ -1316,6 +1344,9 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     }
     view.destroy();
     clearActiveBlockEditor(this.app);
+    // Escape 路径与 commitFocusedText 同规:摘掉编辑态 chrome 标记,
+    // 否则圆点在提交后仍被 lg-no-symbol 藏着。
+    document.querySelector('.block-wrap.lg-no-symbol')?.classList.remove('lg-no-symbol');
     if (changed) {
       this.undo.push(this.focusStartSnapshot);
       this.markDirty();
@@ -1371,7 +1402,16 @@ ${content}`;
     // must not clear the just-set flag. (The early return above matters too:
     // nothing focused → keep the flag.)
     if (this.sourceModeBlock === b) this.sourceModeBlock = null;
+    // 摘掉编辑态 chrome 标记(静态圆点恢复显示;wrap 跨提交存活,类不摘
+    // 会让提交后的块永远没有圆点)。
+    document.querySelector('.block-wrap.lg-no-symbol')?.classList.remove('lg-no-symbol');
+    // 符号即文本:提交可能改变块的形态(bare/任务标记)——圆点在 controls
+    // 列里,refreshBlockContent 只换 content 换不掉,形态变了就整树重渲染
+    // (圆点随之出现/消失)。
+    const wasBare = b.bare;
+    const wasMarker = b.marker;
     const changed = commitEditorText(v, b, this.templateContext());
+    const shapeChanged = wasBare !== b.bare || wasMarker !== b.marker;
     if (isPagePropsBlock(b) && this.doc.blocks[0] === b && this.file) registerLogseqPageProps(this.file.path, b.props);
     else clearLogseqPageProps(this.file?.path ?? '');
     v.destroy();
@@ -1380,9 +1420,13 @@ ${content}`;
       this.undo.push(this.focusStartSnapshot);
       this.markDirty();
     }
-    // Always restore static content: the CM6 DOM was removed by destroy(),
-    // and the cached static el re-attaches synchronously when unchanged.
-    refreshBlockContent(b, this);
+    if (shapeChanged) {
+      this.render();
+    } else {
+      // Always restore static content: the CM6 DOM was removed by destroy(),
+      // and the cached static el re-attaches synchronously when unchanged.
+      refreshBlockContent(b, this);
+    }
     this.updateOutlinePath();
   }
 

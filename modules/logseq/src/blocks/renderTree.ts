@@ -333,6 +333,12 @@ function renderBlock(b: Block, host: BlockRenderHost, budget?: RenderBudget): HT
   // 大纲圆点只属于列表容器。段落容器(bare:源文件没有列表标志)不显示圆点;
   // 但带任务标记的裸行(`TODO x`)语义上是任务项,圆点照显(复选框在下面)。
   // 注释区(noteLine 非 null)同样不画圆点:那一列是行号 gutter。
+  //
+  // 编辑中的块圆点**照画照显**——一套渲染器(2026-10-26):静态
+  // .block-bullet 就是唯一的圆点渲染器,阅读态/编辑态同元素同一条 CSS;
+  // 符号现形/符号被删时由 lg-no-symbol 类经 CSS 隐藏。不能在这里跳过:
+  // 聚焦结束后 refreshBlockContent 只换 content 不重建 controls,跳过会让
+  // 提交后的块永远没有圆点元素可恢复。
   if (b.kind === 'list' && !b.bare && !nativeProps && noteLine === null) {
     const bullet = controls.createEl('div', { cls: 'block-bullet' });
     bullet.setAttribute('aria-label', 'Focus this block');

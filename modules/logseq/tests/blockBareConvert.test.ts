@@ -70,7 +70,7 @@ describe('handleSpace — 段落容器行首列表标记即时转大纲块', () 
 
     expect(b.bare).toBe(false);
     expect(b.kind).toBe('list');
-    expect(b.text).toBe('- 甲有内容');
+    expect(b.text).toBe('甲有内容');
   });
 
   it('"*" 与 "+" 同样触发', async () => {

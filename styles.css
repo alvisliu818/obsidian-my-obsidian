@@ -365,6 +365,28 @@
   cursor: default;
 }
 
+/* 思源版式(用户指定,2026-10-25):圆点是列表符号 `- `/`* ` 的渲染形态,
+   落在内容列——段落块(bare)的文本左缘与**圆点左缘**对齐(用户指定:
+   应和圆点的左侧比),列表文字在圆点右侧。 */
+.block-wrap.is-bare > .block-main > .block-content,
+/* raw 块(标题/段落/围栏)同列:标题左缘=段落左缘=圆点左缘(用户指定) */
+.block-wrap.block-raw > .block-main > .block-content,
+/* 编辑中的列表块,符号现形(光标钻进符号区)或符号已删(mlen=0,退成
+   段落几何)时内容同样拉进圆点列——类由 focusEditor 的装饰插件开关。 */
+.block-wrap.lg-no-symbol > .block-main > .block-content {
+  margin-left: calc(-1 * var(--lgp-controls-w, 16px));
+}
+
+/* 一套渲染器(用户指定,2026-10-26):编辑中的列表块圆点**照画照显**——
+   静态 .block-bullet 就是唯一的圆点渲染器,阅读态/编辑态同元素同一条
+   CSS,零跳动。只有符号现形(文本 `- ` 已在编辑器里可见)或符号被删时
+   lg-no-symbol 才让圆点退场(任务标记同理:`TODO ` 以文本现形时隐藏
+   复选框,避免双重显示);提交路径负责摘类恢复。 */
+.block-wrap.lg-no-symbol .block-bullet,
+.block-wrap.lg-no-symbol .block-marker {
+  display: none;
+}
+
 /* marker checkbox (TODO / DOING / DONE) */
 .block-marker {
   display: inline-flex;

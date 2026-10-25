@@ -994,15 +994,55 @@ export function propsShallowEqual(a: Record<string, string>, b: Record<string, s
 }
 
 /**
- * Editor document for a block: its text, then one `key:: value` line per
- * editable prop — properties are edited as text, Logseq-style.
+ * 编辑器文档:其文本 + 每个可编辑 prop 一行 `key:: value`(Logseq 惯例)。
+ *
+ * 列表块的行首符号(`- `,任务标记跟在后面)作为**可编辑文本**进文档
+ * (用户指定,2026-10-25):圆点即符号的渲染形态,编辑态删掉符号 = 变段落,
+ * 段落行首敲出符号 = 变列表;符号写错(`*`/`+`/`1.`)提交时规范化回 `- `。
  */
+export const EDITOR_BULLET_RE = /^([-*+]|\d{1,9}[.)])\s+/;
+export const EDITOR_TASK_RE = /^(TODO|DOING|DONE)\s+/;
+
+/** 编辑文档里符号段的长度(`- ` + 任务标记),供光标坐标换算。 */
+export function editorMarkerLen(b: Block): number {
+  if (b.kind !== 'list' || b.bare || b.frontmatter) return 0;
+  return 2 + (b.marker ? b.marker.length + 1 : 0);
+}
+
+/**
+ * 符号即文本(2026-10-25):把编辑文档行首的符号解析进模型——列表块删了
+ * 符号 → 退成段落(bare);符号还在 → 规范化回 `- `(写 `*`/`+`/`1.` 也收),
+ * 任务标记照旧解析;段落行首出现符号 → 变列表。返回剥掉符号后的正文与
+ * 同步偏移(光标坐标换算)。commit 与 keymap 的 Enter/Backspace/Delete
+ * 路径共用——所有「编辑文档 → 模型」的写入都必须过这里,否则 `- ` 会漏
+ * 进 text(静态多出一个 `-`)。
+ */
+export function applyEditorMarker(b: Block, text: string, offset: number): { text: string; offset: number } {
+  if (b.kind !== 'list' || b.frontmatter) return { text, offset };
+  const m = EDITOR_BULLET_RE.exec(text);
+  if (m) {
+    const afterBullet = text.slice(m[0].length);
+    const tm = EDITOR_TASK_RE.exec(afterBullet);
+    b.bare = false;
+    b.marker = tm ? (tm[1] as Block['marker']) : null;
+    const strip = m[0].length + (tm ? tm[0].length : 0);
+    const body = afterBullet.slice(tm ? tm[0].length : 0);
+    return { text: body, offset: Math.min(Math.max(offset - strip, 0), body.length) };
+  }
+  if (!b.bare) {
+    b.bare = true;
+    b.marker = null;
+  }
+  return { text, offset };
+}
+
 export function blockEditorDoc(b: Block): string {
   // Obsidian-format page properties: the editor shows the frontmatter body
   // verbatim (`key: value` lines), never converted to Logseq `key:: value`.
   if (b.frontmatter) return b.text;
+  const head = b.kind === 'list' && !b.bare ? `- ${b.marker ? b.marker + ' ' : ''}` : '';
   const entries = Object.entries(b.props).filter(([k]) => !STRUCTURAL_PROPS.has(k));
-  if (entries.length === 0) return b.text;
+  if (entries.length === 0) return head + b.text;
   const propLines = entries.map(([k, v]) => `${k}:: ${v}`.trimEnd());
-  return b.text ? `${b.text}\n${propLines.join('\n')}` : propLines.join('\n');
+  return head + (b.text ? `${b.text}\n${propLines.join('\n')}` : propLines.join('\n'));
 }

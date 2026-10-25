@@ -86,17 +86,24 @@ describe('applyBlockProps', () => {
 
 describe('blockEditorDoc', () => {
   it('appends one `key:: value` line per editable prop', () => {
+    // 符号即文本(2026-10-25):列表块的编辑文档带 `- ` 行首符号
     expect(blockEditorDoc(block('body', { priority: 'high', empty: '' }))).toBe(
-      'body\npriority:: high\nempty::',
+      '- body\npriority:: high\nempty::',
     );
   });
 
   it('omits structural props (they have their own UI)', () => {
-    expect(blockEditorDoc(block('body', { id: 'abc-1', collapsed: 'true' }))).toBe('body');
+    expect(blockEditorDoc(block('body', { id: 'abc-1', collapsed: 'true' }))).toBe('- body');
   });
 
   it('returns only prop lines for a props-only block', () => {
-    expect(blockEditorDoc(block('', { type: 'book' }))).toBe('type:: book');
+    expect(blockEditorDoc(block('', { type: 'book' }))).toBe('- type:: book');
+  });
+
+  it('bare blocks carry no marker in the doc', () => {
+    const b = block('body', {});
+    b.bare = true;
+    expect(blockEditorDoc(b)).toBe('body');
   });
 });
 

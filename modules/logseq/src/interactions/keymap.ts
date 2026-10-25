@@ -17,11 +17,13 @@ import {
   prevVisible,
   shouldExitListOnEnter,
   splitBlock,
+  splitHeadingRaw,
   splitRawToOutline,
   toBareParagraph,
 } from '../core/treeOps';
 import { cycleMarker } from '../core/treeOps';
-import { applyBlockProps, splitPropLines, type Block } from '../types';
+import { headingLevel } from '../core/fold';
+import { applyBlockProps, applyEditorMarker, splitPropLines, type Block } from '../types';
 
 function focusedBlock(host: BlockRenderHost): Block | null {
   return host.focusedBlock;
@@ -58,13 +60,15 @@ export function handleSpace(view: EditorView, host: BlockRenderHost): boolean {
     const now = view.state.doc.toString();
     if (!/^[*+-]\s/.test(now)) return;
     const parent = b.parent;
-    const pos = Math.min(view.state.selection.main.head, now.length);
+    let pos = Math.min(view.state.selection.main.head, now.length);
     host.mutate(
       () => {
         // 缓冲区 → 模型一并同步（mutate 会重建 wrap，重建读的是模型；
-        // 不同步的话刚敲的标记会随重渲染丢掉）。
-        b.text = now;
-        b.bare = false;
+        // 不同步的话刚敲的标记会随重渲染丢掉）。符号即文本:刚敲的 `- `
+        // 剥进符号状态(否则重建文档双重符号)。
+        const marked = applyEditorMarker(b, now, pos);
+        b.text = marked.text;
+        pos = marked.offset;
       },
       () => ({ lists: [parent] }),
     );
@@ -93,13 +97,17 @@ export function handleEnter(view: EditorView, host: BlockRenderHost): boolean { 
     // converts to a list block, the tail becomes a new list sibling; edge
     // blank lines and the common indent never survive (splitRawToOutline).
     // Shift+Enter stays the soft newline.
+    //
+    // 标题块除外(用户指定,2026-10-25 思源交互):标题回车**不转大纲**——
+    // splitHeadingRaw:头部保持标题,尾部(光标之后)成为新的段落块(raw,
+    // 无圆点),标题末尾回车 = 下方新建空段落。
     const { text, offset } = deleteSelection(view);
     const parent = b.parent;
     let nb: Block | null = null;
     host.mutate(
       () => {
         b.text = text;
-        nb = splitRawToOutline(b, offset);
+        nb = headingLevel(b) === 0 ? splitRawToOutline(b, offset) : splitHeadingRaw(b, offset);
       },
       () => ({ lists: [parent] }),
     );
@@ -114,11 +122,14 @@ export function handleEnter(view: EditorView, host: BlockRenderHost): boolean { 
   let nb: Block | null = null;
   host.mutate(
     () => {
+      // 符号即文本:编辑文档带 `- `[TODO ] 前缀——先解析进模型(剥符号,
+      // 同步 bare/任务标记),否则符号会漏进 text(静态多出一个 `-`)。
+      const marked = applyEditorMarker(b, text, offset);
       // Trailing `key:: value` lines stay with the head block as properties.
-      const { text: clean, props } = splitPropLines(text);
+      const { text: clean, props } = splitPropLines(marked.text);
       applyBlockProps(b, props);
       b.text = clean;
-      nb = splitBlock(b, Math.min(offset, clean.length));
+      nb = splitBlock(b, Math.min(marked.offset, clean.length));
     },
     () => ({ lists: [parent] }),
   );
@@ -232,7 +243,8 @@ export function handleBackspace(view: EditorView, host: BlockRenderHost): boolea
   const parent = b.parent;
   host.mutate(
     () => {
-      b.text = view.state.doc.toString();
+      // 符号即文本:合并前进模型先剥符号(否则 `- ` 漏进 text)
+      b.text = applyEditorMarker(b, view.state.doc.toString(), 0).text;
       mergeWithPrev(roots, b);
     },
     () => ({ lists: [parent] }),
@@ -261,7 +273,8 @@ export function handleDelete(view: EditorView, host: BlockRenderHost): boolean {
   const nextParent = next.parent;
   host.mutate(
     () => {
-      b.text = text;
+      // 符号即文本:合并前进模型先剥符号(否则 `- ` 漏进 text)
+      b.text = applyEditorMarker(b, text, 0).text;
       mergeWithNext(roots, b);
     },
     // The merge may pull a block from a different sibling list — patch both.

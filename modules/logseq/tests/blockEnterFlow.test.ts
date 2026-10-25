@@ -14,7 +14,7 @@ import { EditorSelection, EditorState } from '@codemirror/state';
 import { handleEnter } from '../src/interactions/keymap';
 import { linkParents, registerRoots } from '../src/core/treeOps';
 import { parseDocument } from '../src/core/parser';
-import type { Block } from '../src/types';
+import { blockEditorDoc, editorMarkerLen, type Block } from '../src/types';
 import type { BlockEditorView } from '../src/view/BlockEditorView';
 
 function makeEnv(markdown: string) {
@@ -22,7 +22,8 @@ function makeEnv(markdown: string) {
   linkParents(doc.blocks);
   registerRoots(doc.blocks);
   let focused: Block | null = doc.blocks[0] ?? null;
-  let cmText = focused?.text ?? '';
+  // 符号即文本:初始 CM 文档 = blockEditorDoc(带 `- ` 前缀)
+  let cmText = focused ? blockEditorDoc(focused) : '';
   let cmPos = cmText.length;
   const focusTargets: Block[] = [];
   const host = {
@@ -36,15 +37,19 @@ function makeEnv(markdown: string) {
     },
     focusBlock(b: Block, pos: number | string = 'end') {
       focused = b;
-      cmText = b.text;
-      cmPos = typeof pos === 'number' ? pos : b.text.length;
+      // 符号即文本(2026-10-25):编辑文档 = blockEditorDoc(带 `- ` 前缀),
+      // 数值 pos 是文本内偏移——与 mountFocusedEditor 同一换算。
+      cmText = blockEditorDoc(b);
+      const mlen = editorMarkerLen(b);
+      cmPos = typeof pos === 'number' ? (pos > 0 ? pos + mlen : mlen) : cmText.length;
       focusTargets.push(b);
     },
-    /** 模拟用户点击某块进入编辑（焦点 + CM 文档 = 块文本） */
+    /** 模拟用户点击某块进入编辑（焦点 + CM 文档 = blockEditorDoc） */
     focus(b: Block, pos?: number) {
       focused = b;
-      cmText = b.text;
-      cmPos = pos ?? b.text.length;
+      cmText = blockEditorDoc(b);
+      const mlen = editorMarkerLen(b);
+      cmPos = pos === undefined ? cmText.length : pos > 0 ? pos + mlen : mlen;
       focusTargets.push(b);
     },
   };
@@ -57,8 +62,9 @@ function makeEnv(markdown: string) {
     doc,
     focus(b: Block, pos?: number) {
       focused = b;
-      cmText = b.text;
-      cmPos = pos ?? b.text.length;
+      cmText = blockEditorDoc(b);
+      const mlen = editorMarkerLen(b);
+      cmPos = pos === undefined ? cmText.length : pos > 0 ? pos + mlen : mlen;
       focusTargets.push(b);
     },
   };
