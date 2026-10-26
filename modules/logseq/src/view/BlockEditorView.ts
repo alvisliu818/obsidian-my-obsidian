@@ -40,6 +40,7 @@ import {
 import { applyCursor, applyCursorAndScroll, commitEditorText, cursorAtCoords, mountFocusedEditor, type CursorPos } from '../editor/focusEditor';
 import { createEmbedExtensions } from '../editor/extensions';
 import { bindBlockDragSelect } from '../interactions/blockDragSelect';
+import { deactivatePainter, hideFormatToolbar } from '../interactions/formatToolbar';
 import {
   findEmbedBox,
   findEmbedRow,
@@ -212,6 +213,12 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     watchGuideLayout(this.treeEl);
     this.register(() => unwatchGuideLayout(this.treeEl));
 
+    this.register(() => {
+      // 思源 destroy 清单的我们侧等价:视图关闭时收掉 body 级浮层(格式条
+      // 常驻 body、格式刷是全局单例)——否则孤儿条/陈旧快照跨视图存活。
+      hideFormatToolbar();
+      deactivatePainter();
+    });
     this.registerEvent(
       this.app.vault.on('modify', (file: TAbstractFile) => {
         void this.onExternalModify(file);
@@ -3400,20 +3407,37 @@ ${content}`;
     return flattenVisible(this.visibleRoots).filter((b) => sel.has(b));
   }
 
-  private undoRestore(): boolean {
+  private undoRestore(anchor?: { index: number; caret: number | null } | null): boolean {
     const cur = this.serializeCurrent();
     const snap = this.undo.undoPop(cur);
     if (snap === null) return false;
-    this.restoreSnapshot(snap);
+    this.restoreSnapshot(snap, anchor ?? null);
     return true;
   }
 
-  private redoRestore(): boolean {
+  private redoRestore(anchor?: { index: number; caret: number | null } | null): boolean {
     const cur = this.serializeCurrent();
     const snap = this.undo.redoPop(cur);
     if (snap === null) return false;
-    this.restoreSnapshot(snap);
+    this.restoreSnapshot(snap, anchor ?? null);
     return true;
+  }
+
+  /**
+   * 焦点恢复锚（思源 restoreUndoFocus 的块级等价，2026-10-26）：焦点块引用
+   * 序列里的位置 + 编辑文档
+   * 内光标偏移。必须在 commitFocusedText **之前**捕获——commit 会把
+   * focusedBlock/focusedView 清空。位置语义是刻意取舍：快照式撤销没有逐操作块身份
+   * （思源靠 undoFocusId），按位对回已覆盖主要场景（移动类撤销落相邻位，可接受）。
+   */
+  private captureUndoFocusAnchor(): { index: number; caret: number | null } | null {
+    const seq = flattenVisible(this.visibleRoots);
+    const index = this.focusedBlock ? seq.indexOf(this.focusedBlock) : -1;
+    if (index < 0) return null;
+    return {
+      index,
+      caret: this.focusedView ? this.focusedView.state.selection.main.head : null,
+    };
   }
 
   /**
@@ -3423,16 +3447,27 @@ ${content}`;
    * 编辑态不可达（Ctrl+Z 被 CM history 吃掉而它是空的）。
    */
   undoBeyondText(): boolean {
+    const anchor = this.captureUndoFocusAnchor();
     this.commitFocusedText();
-    return this.undoRestore();
+    return this.undoRestore(anchor);
   }
 
   /** 编辑态 Ctrl+Shift+Z / Ctrl+Y 的全局兜底（同 undoBeyondText）。 */
   redoBeyondText(): boolean {
-    return this.redoRestore();
+    const anchor = this.captureUndoFocusAnchor();
+    return this.redoRestore(anchor);
   }
 
-  private restoreSnapshot(snap: string): void {
+  private restoreSnapshot(snap: string, anchor?: { index: number; caret: number | null } | null): void {
+    // 思源 undo renderLocal 清单（2026-10-26）：清浮层 → 应用 → 恢复焦点 →
+    // scrollCenter。preventScroll 不需要（滚动容器不重建，scrollTop 自然保持）；
+    // 同步 range 的等价物是下面的焦点恢复（CM 挂载即同步 activeEditor）。
+    // 焦点恢复锚由调用方在 commit 前捕获（captureUndoFocusAnchor）：焦点块在
+    // 可见序列里的位置 + 编辑文档内光标偏移——新树里块对象全换，按位对回，
+    // 偏移由挂载时铁到新文档长度。
+    // 清浮层：浮出格式条与格式刷（文档被替换，旧快照失效）。
+    hideFormatToolbar();
+    deactivatePainter();
     // 锚点/标记集指向的是被替换掉的旧树——不清的话 undo 后选中态持 stale
     // 引用（实测 selectionAnchor 指向旧块）。
     this.clearSelection();
@@ -3441,6 +3476,18 @@ ${content}`;
     linkParents(this.doc.blocks);
     this.zoomedBlock = this.zoomedBlock && findBlockById(this.doc.blocks, zoomId(this.zoomedBlock));
     this.render();
+    // 恢复焦点（思源 restoreUndoFocus + setRange 的块级等价）：新树同位置的
+    // 块，光标铁到新编辑文档；scrollIntoView nearest 等价 scrollCenter（不跳
+    // 中心，少晃动——记档的刻意取舍）。位置语义是刻意取舍：快照式撤销没有
+    // 逐操作块身份（思源靠 undoFocusId），按位对回已覆盖主要场景。
+    if (anchor && anchor.index >= 0) {
+      const seq2 = flattenVisible(this.visibleRoots);
+      const target = seq2[Math.min(anchor.index, seq2.length - 1)];
+      if (target) {
+        this.focusBlock(target, anchor.caret ?? 0);
+        findBlockEl(target)?.scrollIntoView({ block: 'nearest' });
+      }
+    }
     this.markDirty();
     this.focusStartSnapshot = serializeDocument(this.doc);
   }

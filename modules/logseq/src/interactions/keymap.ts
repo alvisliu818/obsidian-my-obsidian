@@ -623,7 +623,9 @@ export function handleMoveBlock(view: EditorView, host: BlockRenderHost, dir: -1
   let ok = false;
   host.mutate(
     () => {
-      b.text = text;
+      // 符号即文本:先剥行首符号再入模型——裸 text 会把 `- 乙` 泄漏进模型
+      // (序列化写出 `- - 乙`,undo 锚文本同步被污染;2026-10-26 实测)。
+      b.text = applyEditorMarker(b, text, 0).text;
       ok = moveBlockVertically(roots, b, dir);
     },
     // Nothing moved 鈫?nothing to re-render.
