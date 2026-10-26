@@ -27,6 +27,7 @@ import {
   clearAllBlockCaches,
   cachedStaticEl,
   anchorRelativeImgSrcs,
+  blockFromEl,
   type ImgAnchorToken,
   applyAnchoredImgSrcs,
   findBlockEl,
@@ -38,6 +39,7 @@ import {
 } from '../blocks/renderTree'
 import { applyCursor, applyCursorAndScroll, commitEditorText, cursorAtCoords, mountFocusedEditor, type CursorPos } from '../editor/focusEditor';
 import { createEmbedExtensions } from '../editor/extensions';
+import { bindBlockDragSelect } from '../interactions/blockDragSelect';
 import {
   findEmbedBox,
   findEmbedRow,
@@ -226,6 +228,41 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     this.editorContainerEl.addEventListener('keydown', (ev) => this.handleGlobalKeydown(ev), true);
     attachDnd(this.treeEl, this);
     attachContextMenu(this.treeEl, this);
+    // 思源框选(gesture)入口(2026-10-26):静态树裸拖跨块 → 可见序列切片进选择态。
+    // 编辑中的块不启动(那是 CM 文本选区);圆点/按钮/链接上的按下不启动。
+    this.register(
+      bindBlockDragSelect(this.treeEl, {
+        canStart: () => !this.focusedView && !this.embedEdit,
+        getStartBlock: (target) => {
+          if (target.closest('button, input, textarea, a, .block-bullet, .block-gutter')) return null;
+          const b = blockFromEl(target);
+          if (!b) return null;
+          return { block: b, el: (findBlockEl(b) as HTMLElement | null) ?? target };
+        },
+        getBlockAtPoint: (x, y) => {
+          const hit = document.elementFromPoint(x, y);
+          if (!hit || !this.treeEl.contains(hit)) return null;
+          const b = blockFromEl(hit as HTMLElement);
+          if (!b) return null;
+          return { block: b, el: (findBlockEl(b) as HTMLElement | null) ?? (hit as HTMLElement) };
+        },
+        select: (start, end) => {
+          const range = visibleRange(this.visibleRoots, start, end);
+          if (!range) return;
+          this.selectedBlocks = new Set(range);
+          // 思源 setBlockSelectionModeElement(element, activeBlock):模式锚点
+          // 落末端块——后续 Shift 扩选/Esc 链都从它接续。
+          this.selectionAnchor = end;
+          this.selExtendEnd = null;
+          this.lastClicked = end;
+          this.syncSelectionClasses();
+          this.focusTreeForSelection();
+        },
+        finish: (cancelled) => {
+          if (cancelled) this.clearSelection();
+        },
+      }),
+    );
     this.searchBar = new PageSearchBar(this, this.editorContainerEl);
     // Live {{query}} blocks: refresh when the vault-wide index rebuilds.
     this.indexDisposer = this.plugin.blockIndex?.onRebuild(() => {
@@ -2576,6 +2613,19 @@ ${content}`;
     else this.treeEl?.blur();
   }
 
+  /**
+   * 编辑态 Ctrl+A 第二段（思源 selectAll 的块级分支，2026-10-26）：文本已
+   * 全选时再按 → 提交编辑 + 全部可见块进选择态（与全局 select-all 同一口径，
+   * 不设锚点——批量操作按顶层走）。返回 true=已接管。
+   */
+  selectAllIntoBlockSelection(): boolean {
+    this.commitFocusedText();
+    this.selectedBlocks = new Set(flattenVisible(this.visibleRoots));
+    this.syncSelectionClasses();
+    this.focusTreeForSelection();
+    return true;
+  }
+
   clearSelection(): void {
     const had = this.selectedBlocks.size > 0 || this.selectionAnchor !== null;
     this.selExtendEnd = null;
@@ -3179,7 +3229,11 @@ ${content}`;
     switch (action.kind) {
       case 'bulk':
         if (action.op === 'select-all') {
-          this.selectedBlocks = new Set(flattenVisible(this.visibleRoots));
+          const all = flattenVisible(this.visibleRoots);
+          // 思源 getSelectAllBlockAction 的 keep 分支:已全选再按 no-op,
+          // 不重置标记集(重接 Ctrl+A 不清已有选择)。
+          if (this.selectedBlocks.size === all.length && all.every((b) => this.selectedBlocks.has(b))) return;
+          this.selectedBlocks = new Set(all);
           this.syncSelectionClasses();
           // Same reason as the click path: an empty selection owns no keyboard.
           this.focusTreeForSelection();

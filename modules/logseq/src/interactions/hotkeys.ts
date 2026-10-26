@@ -178,7 +178,15 @@ export function classifySelectionModeKey(
   key: string,
   m: HotkeyModifiers,
 ): SelectionModeAction {
-  if (hasMod(m) || m.alt) return { kind: 'none' };
+  if (hasMod(m)) return { kind: 'none' };
+  // Alt+Shift+↑/↓ 在选择态 = 扩选同义键（思源 expandUp/Down ⌥⇧↑↓ 的键位；
+  // 编辑态同名键已被 move-block 占用，文本→块的转换由 Esc 链承担）。
+  if (m.alt) {
+    if (!m.shift) return { kind: 'none' };
+    if (key === 'ArrowUp') return { kind: 'extend', dir: -1 };
+    if (key === 'ArrowDown') return { kind: 'extend', dir: 1 };
+    return { kind: 'none' };
+  }
   switch (key) {
     case 'ArrowUp':
       return m.shift ? { kind: 'extend', dir: -1 } : { kind: 'anchor-move', dir: -1 };

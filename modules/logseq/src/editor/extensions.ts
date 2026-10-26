@@ -324,6 +324,19 @@ export function createBlockKeymap(host: BlockRenderHost): KeyBinding[] {
       { key: 'Alt-Shift-ArrowDown', run: (v) => handleMoveBlock(v, host, 1) },
     );
   }
+  // Ctrl+A 二段式(思源 selectAll + getSelectAllBlockAction,2026-10-26):
+  // 第一段放给 CM 默认(块内文本全选);文本已全选再按 → 全部可见块进选择态。
+  // bulkSelection 关闭时不绑,键自然回落 CM 默认。
+  if (on.bulkSelection) {
+    bindings.push({
+      key: 'Mod-a',
+      run: (v) => {
+        const sel = v.state.selection.main;
+        if (sel.empty || sel.from !== 0 || sel.to !== v.state.doc.length) return false;
+        return host.selectAllIntoBlockSelection?.() ?? false;
+      },
+    });
+  }
   // Escape always exits editing — with navigation off there is otherwise no
   // reliable way back to the rendered tree.
   bindings.push({ key: 'Escape', run: (v) => handleEscape(v, host) });

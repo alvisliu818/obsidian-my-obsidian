@@ -73,6 +73,12 @@ export interface BlockRenderHost extends Component {
    */
   enterBlockSelection?(b: Block): void;
   /**
+   * 编辑态 Ctrl+A 第二段（文本已全选，思源 selectAll 的块级分支）：提交编辑
+   * + 全部可见块进选择态。返回 false = 未接管（调用方回落 CM 默认）。
+   * 可选：片段宿主无块选择面。
+   */
+  selectAllIntoBlockSelection?(): boolean;
+  /**
    * 编辑态 Ctrl+Z 的全局兜底（块键面 CM history 耗尽后调用）：提交当前
    * 文本再走全局撤销。可选：片段宿主无结构撤销。
    */
