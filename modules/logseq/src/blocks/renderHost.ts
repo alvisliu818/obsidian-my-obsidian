@@ -72,6 +72,13 @@ export interface BlockRenderHost extends Component {
    * 可选：片段宿主没有选择模式，嵌入场景 Esc 只提交不锚住。
    */
   enterBlockSelection?(b: Block): void;
+  /**
+   * 编辑态 Ctrl+Z 的全局兜底（块键面 CM history 耗尽后调用）：提交当前
+   * 文本再走全局撤销。可选：片段宿主无结构撤销。
+   */
+  undoBeyondText?(): boolean;
+  /** 编辑态 Ctrl+Shift+Z / Ctrl+Y 的全局兜底。可选：片段宿主无结构撤销。 */
+  redoBeyondText?(): boolean;
   zoomIn(b: Block): void;
   cycleFold(b: Block): void;
   foldSubtree(b: Block): void;

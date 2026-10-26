@@ -4,10 +4,12 @@
  */
 
 import { describe, expect, it, vi, afterEach } from 'vitest';
+import { EditorSelection, EditorState } from '@codemirror/state';
+import { history } from '@codemirror/commands';
 import type { EditorView } from '@codemirror/view';
 import { linkParents } from '../src/core/treeOps';
 import { parseDocument } from '../src/core/parser';
-import { handleEscape } from '../src/interactions/keymap';
+import { handleEscape, handleRedo, handleUndo } from '../src/interactions/keymap';
 import type { BlockRenderHost } from '../src/blocks/renderHost';
 import {
   blockContains,
@@ -126,6 +128,61 @@ function prevOf(seq: Block[]): (b: Block) => Block | null {
     return i > 0 ? seq[i - 1] : null;
   };
 }
+
+describe('handleUndo/handleRedo 混合撤销链', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** 带 history 扩展的 EditorState + 最小 view 桩(cmUndo/cmRedo 只用这两样)。 */
+  function undoableView(text: string, change?: { from: number; insert: string }) {
+    let state = EditorState.create({ doc: text, extensions: [history()] });
+    if (change) state = state.update({ changes: change, userEvent: 'input.type' }).state;
+    const dispatched: unknown[] = [];
+    const view = {
+      state,
+      dispatch: (spec: unknown) => dispatched.push(spec),
+    } as unknown as EditorView;
+    return { view, dispatched };
+  }
+
+  it('CM history 有可撤销时只走 CM，不落全局', () => {
+    const { view, dispatched } = undoableView('- hello\n', { from: 7, insert: 'X' });
+    let globalCalled = 0;
+    const host = { undoBeyondText: () => { globalCalled++; return true; } } as unknown as BlockRenderHost;
+    expect(handleUndo(view, host)).toBe(true);
+    expect(globalCalled).toBe(0);
+    expect(dispatched.length).toBeGreaterThan(0); // CM 撤销 effect 派发了
+  });
+
+  it('CM history 为空时落全局兕底（选中态删块后进编辑的场景）', () => {
+    const { view } = undoableView('- hello\n'); // 无任何变更
+    let globalCalled = 0;
+    const host = {
+      undoBeyondText: () => {
+        globalCalled++;
+        return true;
+      },
+    } as unknown as BlockRenderHost;
+    expect(handleUndo(view, host)).toBe(true);
+    expect(globalCalled).toBe(1);
+  });
+
+  it('宿主无兕底（片段场景）且 CM 空时返回 false', () => {
+    const { view } = undoableView('- hello\n');
+    const host = {} as unknown as BlockRenderHost;
+    expect(handleUndo(view, host)).toBe(false);
+  });
+
+  it('redo 同链：CM 可走则不落全局', () => {
+    const { view } = undoableView('- hello\n', { from: 7, insert: 'X' });
+    let globalCalled = 0;
+    const host = { redoBeyondText: () => { globalCalled++; return true; } } as unknown as BlockRenderHost;
+    // 未撤销过,redo 无事可做 → 落全局兕底
+    expect(handleRedo(view, host)).toBe(true);
+    expect(globalCalled).toBe(1);
+  });
+});
 
 describe('handleEscape 升级链（思源兕底块选中）', () => {
   afterEach(() => {

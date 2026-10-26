@@ -3360,7 +3360,26 @@ ${content}`;
     return true;
   }
 
+  /**
+   * 编辑态 Ctrl+Z 的全局兜底（块键面 CM history 耗尽后调用，2026-10-26 用户报
+   * 「ctrl z 不能撤销」）：先提交当前文本（focusStartSnapshot 入栈）再走全局
+   * 撤销——选中态删除/插块后进入编辑、Tab 缩进等 mutate 操作的撤销此前在
+   * 编辑态不可达（Ctrl+Z 被 CM history 吃掉而它是空的）。
+   */
+  undoBeyondText(): boolean {
+    this.commitFocusedText();
+    return this.undoRestore();
+  }
+
+  /** 编辑态 Ctrl+Shift+Z / Ctrl+Y 的全局兜底（同 undoBeyondText）。 */
+  redoBeyondText(): boolean {
+    return this.redoRestore();
+  }
+
   private restoreSnapshot(snap: string): void {
+    // 锚点/标记集指向的是被替换掉的旧树——不清的话 undo 后选中态持 stale
+    // 引用（实测 selectionAnchor 指向旧块）。
+    this.clearSelection();
     this.commitFocusedText();
     this.doc = parseDocument(snap);
     linkParents(this.doc.blocks);

@@ -217,8 +217,10 @@ import {
   handleJumpBlock,
   handleMoveBlock,
   handlePaste,
+  handleRedo,
   handleSpace,
   handleTab,
+  handleUndo,
   handleWrapChar,
 } from '../interactions/keymap';
 import { formatToolbarExtension } from '../interactions/formatToolbar';
@@ -323,6 +325,14 @@ export function createBlockKeymap(host: BlockRenderHost): KeyBinding[] {
   // Escape always exits editing — with navigation off there is otherwise no
   // reliable way back to the rendered tree.
   bindings.push({ key: 'Escape', run: (v) => handleEscape(v, host) });
+  // 混合撤销链(2026-10-26 用户报「ctrl z 不能撤销」):CM history 耗尽后落
+  // 全局 UndoStack。历史键面在 historyKeymap 之上(Prec.high)——行为与
+  // historyKeymap 相同(cmUndo),只是多了兕底分支。
+  bindings.push(
+    { key: 'Mod-z', run: (v) => handleUndo(v, host) },
+    { key: 'Mod-y', run: (v) => handleRedo(v, host) },
+    { key: 'Mod-Shift-z', run: (v) => handleRedo(v, host) },
+  );
 
   return bindings;
 }

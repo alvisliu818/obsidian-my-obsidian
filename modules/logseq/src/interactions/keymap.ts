@@ -4,7 +4,7 @@
  * returning true consumes the key (prevents CM6 default), false falls through.
  */
 
-import { insertTab } from '@codemirror/commands';
+import { insertTab, redo as cmRedo, undo as cmUndo } from '@codemirror/commands';
 import { EditorView } from '@codemirror/view';
 import type { BlockRenderHost } from '../blocks/renderHost';
 import {
@@ -583,6 +583,23 @@ export function handleWrapChar(view: EditorView, host: BlockRenderHost, open: st
 /** Backtick = inline code. Kept as the named entry point for the keymap/test. */
 export function handleBacktick(view: EditorView, host: BlockRenderHost): boolean {
   return handleWrapChar(view, host, '`', '`');
+}
+
+/**
+ * Mod+Z（混合撤销链，2026-10-26 用户报「ctrl z 不能撤销」）：先走 CM 文本
+ * history；耗尽后落全局 UndoStack——选中态删除/插块后进入编辑、编辑中 Tab
+ * 缩进等 mutate 操作的撤销此前在编辑态不可达（Ctrl+Z 被 CM history 吃掉而
+ * 它是空的）。兜底先提交当前文本（快照入栈）再全局回退，撤销链跨态连续。
+ */
+export function handleUndo(view: EditorView, host: BlockRenderHost): boolean {
+  if (cmUndo(view)) return true;
+  return host.undoBeyondText?.() ?? false;
+}
+
+/** Mod+Y / Mod+Shift+Z 的全局兜底（同 handleUndo 的链路，方向相反）。 */
+export function handleRedo(view: EditorView, host: BlockRenderHost): boolean {
+  if (cmRedo(view)) return true;
+  return host.redoBeyondText?.() ?? false;
 }
 
 /**
