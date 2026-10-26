@@ -18,6 +18,7 @@ import { blockFromEl } from '../blocks/renderTree';
 import { blockId, ensureId, isCollapsed, setCollapsed, type Block } from '../types';
 import { cycleMarker, duplicateBlock, flattenVisible, indent, isDescendant, moveBlockVertically, outdent, removeBlock } from '../core/treeOps';
 import { blocksEmbedSyntax, blocksMarkdown } from '../features/copyFormats';
+import { writeMarkdownWithInternalFormat } from '../features/internalClipboard';
 import { openMoveToFileModal } from '../features/moveToFile';
 import { openExtractToPageModal } from '../features/extractToPage';
 import { openTextSelectionMenu } from './textSelectionMenu';
@@ -421,7 +422,9 @@ function copyBlocksAsEmbed(blocks: Block[], host: BlockEditorView): void {
 function copyBlocksAsMarkdown(blocks: Block[], host: BlockEditorView): void {
   for (const b of blocks) commitIfFocused(b, host);
   const md = blocksMarkdown(blocks);
-  void navigator.clipboard.writeText(md);
+  // 内部格式夹带(internalClipboard.ts):text/html 里同时夹带 base64 原文,
+  // 粘贴回来时无条件按 markdown 拆块,不经过外部剪贴板启发式。
+  void writeMarkdownWithInternalFormat(md);
   new Notice(
     blocks.length > 1 ? `${blocks.length} blocks copied as markdown` : 'Block copied as markdown',
   );

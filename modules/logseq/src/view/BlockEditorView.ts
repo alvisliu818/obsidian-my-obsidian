@@ -16,6 +16,7 @@ import { applyBlockProps, blockEditorDoc, blockId, createBlock, docPageProps, ed
 import { parseDocument } from '../core/parser';
 import { clearLogseqPageProps, registerLogseqPageProps } from '../pagePropsRegistry';
 import { serializeBlock, serializeDocument } from '../core/serializer';
+import { writeMarkdownWithInternalFormat } from '../features/internalClipboard';
 import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, insertAfter, insertBefore, isDescendant, linkParents, mergeWithNext, mergeWithPrev, moveBlockGroup, moveBlockVertically, nextVisible, outdent, prevVisible, pseudoRootOf, rangeAnchor, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, unregisterRoots, visibleRange, type MovePosition } from '../core/treeOps';
 import { foldLevelOf, foldValueFor, headingLevel, nextFoldLevel, normFoldKey, subtreeFoldTargets, type FoldLevel } from '../core/fold';
 import { UndoStack } from '../state/undoStack';
@@ -3206,7 +3207,8 @@ ${content}`;
     const md = this.topSelectedBlocks()
       .map((b) => serializeBlock(b, 0))
       .join('\n');
-    if (md) await navigator.clipboard.writeText(md);
+    // 内部格式夹带(internalClipboard.ts):同 contextMenu 的复制出口。
+    if (md) await writeMarkdownWithInternalFormat(md);
   }
 
   /**

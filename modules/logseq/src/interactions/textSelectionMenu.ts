@@ -39,6 +39,7 @@ import {
 import { EditorSelection } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
 import type { BlockRenderHost } from '../blocks/renderHost';
+import { capturePasteInsertPosition, isPasteInsertPositionAlive, type PasteInsertPosition } from '../features/insertPosition';
 
 type EditorCommand = (view: EditorView) => boolean;
 
@@ -112,8 +113,16 @@ export function openTextSelectionMenu(ev: MouseEvent, host: BlockRenderHost): bo
   const menu = new Menu();
   const sel = view.state.selection.main;
   const hasSel = !sel.empty;
+  // 思源 upload/insertPosition.ts：异步工作前捕获插入位（菜单打开时焦点
+  // 还在编辑器上），点击后读剪贴板回来验活；embed 会话验活退化为 CM 连通性。
+  const embedSession = host.embedEdit?.view === view;
+  const capPos = capturePasteInsertPosition(host, view);
+  const cap: PasteCapture | null =
+    capPos && capPos.view === view
+      ? { pos: capPos, from: sel.from, to: sel.to, embed: embedSession }
+      : null;
 
-  buildClipboardSection(menu, view, hasSel);
+  buildClipboardSection(menu, view, host, cap, hasSel);
   if (!hasSel) {
     triggerEditorMenu(menu, view, host);
     menu.showAtMouseEvent(ev);
@@ -153,7 +162,13 @@ export function openTextSelectionMenu(ev: MouseEvent, host: BlockRenderHost): bo
 // clipboard
 // ---------------------------------------------------------------------------
 
-function buildClipboardSection(menu: Menu, view: EditorView, hasSel: boolean): void {
+function buildClipboardSection(
+  menu: Menu,
+  view: EditorView,
+  host: BlockRenderHost,
+  cap: PasteCapture | null,
+  hasSel: boolean,
+): void {
   const selected = () => {
     const s = view.state.selection.main;
     return view.state.sliceDoc(s.from, s.to);
@@ -190,14 +205,14 @@ function buildClipboardSection(menu: Menu, view: EditorView, hasSel: boolean): v
       .setSection('clipboard')
       .setTitle('Paste')
       .setIcon('lucide-clipboard-check')
-      .onClick(() => void pasteFromClipboard(view, true)),
+      .onClick(() => void pasteFromClipboard(host, view, cap, true)),
   );
   menu.addItem((item) =>
     item
       .setSection('clipboard')
       .setTitle('Paste as plain text')
       .setIcon('lucide-clipboard-type')
-      .onClick(() => void pasteFromClipboard(view, false)),
+      .onClick(() => void pasteFromClipboard(host, view, cap, false)),
   );
   menu.addItem((item) =>
     item
@@ -211,14 +226,34 @@ function buildClipboardSection(menu: Menu, view: EditorView, hasSel: boolean): v
   );
 }
 
-async function pasteFromClipboard(view: EditorView, keepPosition: boolean): Promise<void> {
+/** 菜单粘贴的捕获：插入位骨架 + 替换区间（打开菜单时刻的选区）。 */
+interface PasteCapture {
+  pos: PasteInsertPosition;
+  from: number;
+  to: number;
+  embed: boolean;
+}
+
+async function pasteFromClipboard(
+  host: BlockRenderHost,
+  view: EditorView,
+  cap: PasteCapture | null,
+  keepPosition: boolean,
+): Promise<void> {
   try {
     const text = await navigator.clipboard.readText();
     if (!text) return;
-    const s = view.state.selection.main;
+    // 验活（insertPosition.ts 骨架）：无法稳定捕获、捕获的是另一个 CM、
+    // CM 已被 blur 提交链卸载、或焦点块被重建掉——都不做不确定的插入。
+    if (!cap || cap.pos.view !== view) return;
+    const alive = cap.embed ? view.dom.isConnected : isPasteInsertPositionAlive(host, cap.pos);
+    if (!alive) return;
+    const len = view.state.doc.length;
+    const from = Math.min(cap.from, len);
+    const to = Math.min(cap.to, len);
     view.dispatch({
-      changes: { from: s.from, to: s.to, insert: text },
-      selection: { anchor: s.from + text.length },
+      changes: { from, to, insert: text },
+      selection: { anchor: from + text.length },
       userEvent: 'input.paste',
     });
     view.focus();

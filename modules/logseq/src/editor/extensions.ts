@@ -38,6 +38,8 @@ import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Block } from '../types';
 import { ownedDefaultKeys } from '../interactions/defaultKeymapOwnership';
 import { commandMenuKeymap, maybeOpenMenu, closeMenu } from '../features/commandMenu';
+import { getInternalFromClipboardData } from '../features/internalClipboard';
+import { shouldPasteMarkdownFromHTML } from '../features/markdownClipboard';
 import { syncActiveBlockEditor } from '../interactions/textSelectionMenu';
 import { livePreviewConfig, livePreviewExtension } from './livePreview';
 import { mathSyntax } from './mathSyntax';
@@ -491,13 +493,22 @@ function mergeAtEdge(
 
 export function createEditorExtensions(host: BlockRenderHost, block?: Block): Extension[] {
   const blockKeymap = keymap.of(createBlockKeymap(host));
-  // 思源粘贴决策树的多行分支(2026-10-26):多行纯文本进块模型拆块插入;
-  // 单行与含文件的粘贴落 CM 默认。
+  // 思源粘贴决策树(2026-10-26 补完三件):①自家复制的块带内部夹带注释,
+  // 先于一切判定提取,无条件按 markdown 拆(internalClipboard.ts);②外部
+  // html 剪贴板过 markdownClipboard 启发式——HTML 可见文本 == markdown 渲染
+  // 文本才认 md 源,否则字面粘贴(落 CM 默认);③纯文本多行照旧拆块。单行
+  // 与含文件的粘贴仍落 CM 默认。
   const pasteHandler = EditorView.domEventHandlers({
     paste: (event, view) => {
-      if (event.clipboardData?.files.length) return false;
-      const text = event.clipboardData?.getData('text/plain') ?? '';
-      if (!text.includes('\n')) return false;
+      const d = event.clipboardData;
+      if (!d || d.files.length) return false;
+      const text = d.getData('text/plain') ?? '';
+      const internal = getInternalFromClipboardData(d);
+      const effective = internal || text;
+      if (!effective.includes('\n')) return false;
+      if (internal) return handlePaste(view, host, event, internal);
+      const html = d.getData('text/html') ?? '';
+      if (html && !shouldPasteMarkdownFromHTML(html, text)) return false;
       return handlePaste(view, host, event, text);
     },
   });
