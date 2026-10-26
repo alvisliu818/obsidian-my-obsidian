@@ -7,6 +7,7 @@ import type { Completion, CompletionContext, CompletionResult, CompletionSource 
 import type { EditorView } from '@codemirror/view';
 import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Marker } from '../types';
+import { hintSuppressedAt, isCaretInTag } from './hintGuards';
 
 interface SlashCommand extends Completion {
   group: string;
@@ -328,6 +329,9 @@ const COMMANDS: SlashCommand[] = [
 
 export function slashMenuSource(host: BlockRenderHost, embed = false): CompletionSource {
   return (ctx: CompletionContext): CompletionResult | null => {
+    // 思源守卫:行内代码/tag 记号内不触发;未收口块提示不抢焦点(2026-10-26)
+    if (hintSuppressedAt(ctx.state, ctx.pos, false)) return null;
+    if (isCaretInTag(ctx.state, ctx.pos)) return null;
     const before = ctx.matchBefore(/(?:^|\s)\/[\w-]*$/);
     if (!before) return null;
     const slashIdx = before.text.lastIndexOf('/');

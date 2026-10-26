@@ -22,6 +22,7 @@ import { openBlockTypePicker } from '../blocks/blockTypeMenu';
 import { openInsertMediaBlock } from './mediaBlock';
 import { extractCandidates, openExtractToPageModal } from './extractToPage';
 import { openMoveToFileModal } from './moveToFile';
+import { isCaretInInlineCode, isCaretInTag, unfinishedBlockHintAt } from './hintGuards';
 
 export type MenuKind = 'slash' | 'angle';
 
@@ -299,6 +300,18 @@ export function maybeOpenMenu(view: EditorView, host: BlockRenderHost): void {
     return;
   }
   const head = view.state.selection.main.head;
+  // 思源 hint 守卫（hint/index.ts:300-304 + blockHintRange shouldIgnoreHintTrigger，
+  // 2026-10-26 第五批）：行内代码内不触发；tag 记号内不触发 `/`；未收口的
+  // `((`/`[[` 查询不得被 slash/angle 抢焦点（已开着就继续走 updateFilter 分支，
+  // 这里只挡新触发）。
+  if (isCaretInInlineCode(view.state, head) || isCaretInTag(view.state, head) ||
+      unfinishedBlockHintAt(view.state, head) !== null) {
+    if (nativeSlashActive) {
+      closeNativeSlash();
+      nativeSlashActive = false;
+    }
+    return;
+  }
   // Logseq parity: `/` (line-start or after whitespace) plus any query chars
   // opens the NATIVE slash-command menu; typing re-filters it, and removing
   // the `/` closes it — checked against the FULL line before the caret

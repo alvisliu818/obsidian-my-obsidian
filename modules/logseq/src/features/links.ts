@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Link-related editing features:
  * - CM6 autocomplete sources: [[wiki links]], #tags, ((block references))
  * - Static render enhancement: ((uuid)) text 鈫?clickable block-ref chips
@@ -13,6 +13,7 @@ import { parseDocument } from '../core/parser';
 import { serializeDocument } from '../core/serializer';
 import { blockAtPath, findBlockById, linkParents, pathToRoot, pseudoRootOf, registerRoots } from '../core/treeOps';
 import { slashMenuSource } from './slashMenu';
+import { hintSuppressedAt, isCaretInHeadingPrefix } from './hintGuards';
 import { toObsidianMath } from './latexSource';
 import type { Block } from '../types';
 
@@ -44,8 +45,11 @@ export function wikiLinkSource(host: BlockRenderHost): CompletionSource {
     // (page names never contain `[[`) and no popup would ever show.
     const before = ctx.matchBefore(/!?\[\[[^\[\]]*$/);
     if (!before) return null;
+    if (hintSuppressedAt(ctx.state, ctx.pos, true)) return null; // 思源:行内代码内不触发
     const from = before.from + before.text.lastIndexOf('[[') + 2;
     const query = ctx.state.sliceDoc(from, ctx.pos).toLowerCase();
+    // 思源 isBlockHintQueryAtCaret:查询不以空白开头(`[[ foo` 不是合法查询)
+    if (/^\s/.test(query)) return null;
     const files = host.app.vault.getMarkdownFiles();
     const options: Completion[] = [];
     for (const f of files) {
@@ -68,6 +72,10 @@ export function wikiLinkSource(host: BlockRenderHost): CompletionSource {
 
 export function tagSource(host: BlockRenderHost): CompletionSource {
   return (ctx: CompletionContext): CompletionResult | null => {
+    // 思源守卫:行内代码内不触发;未收口 `((`/`[[` 查询不得被打断;标题前缀
+    // 的 # 数内不触发 tag(issue 7933)。
+    if (hintSuppressedAt(ctx.state, ctx.pos, false)) return null;
+    if (isCaretInHeadingPrefix(ctx.state, ctx.pos)) return null;
     const before = ctx.matchBefore(/#[\p{L}\d_\/-]*$/u);
     if (!before) return null;
     const from = before.from + 1; // filter range starts after the '#'
@@ -99,8 +107,11 @@ export function blockRefSource(host: BlockRenderHost): CompletionSource {
     const before =
       ctx.matchBefore(/\{\{embed\s*\(\([^)]*$/i) ?? ctx.matchBefore(/\(\([^)]*$/);
     if (!before) return null;
+    if (hintSuppressedAt(ctx.state, ctx.pos, true)) return null; // 思源:行内代码内不触发
     const from = before.from + before.text.lastIndexOf('((') + 2;
     const query = ctx.state.sliceDoc(from, ctx.pos).toLowerCase();
+    // 思源 isBlockHintQueryAtCaret:查询不以空白开头
+    if (/^\s/.test(query)) return null;
     const inEmbed = /^\{\{embed/i.test(before.text);
     const blocks = host.plugin.blockIndex?.withIds() ?? [];
     const options: Completion[] = [];
