@@ -485,6 +485,23 @@ export function readExternalBinary(abs: string): Uint8Array<ArrayBuffer> {
   return out;
 }
 
+/**
+ * 二进制安全地把一个库外文件复制到**指定的完整目标路径**（另存为语义：路径
+ * 由用户在系统保存对话框里给定，不做去重改名——对话框确认覆盖即覆盖）。
+ * copyEntry 是「复制进目录」语义（自动改名），不适用。
+ */
+export function copyExternalFile(from: string, to: string): FsOpResult {
+  try {
+    const fs = fsMod();
+    if (!fs.copyFileSync) return { ok: false, error: '当前环境不支持复制文件。' };
+    if (!exists(from)) return { ok: false, error: '源文件不存在。' };
+    fs.copyFileSync(from, to);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: errorMessage(e) };
+  }
+}
+
 /** True when the path exists and is a directory. */
 export function isDirectory(abs: string): boolean {
   try {

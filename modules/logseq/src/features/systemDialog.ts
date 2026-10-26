@@ -47,11 +47,26 @@ export interface PickOptions {
 /** The one Electron dialog shape used here (async, options object). */
 export interface DialogLike {
   showOpenDialog(...args: unknown[]): Promise<DialogResult> | DialogResult;
+  showSaveDialog?(...args: unknown[]): Promise<DialogResult> | DialogResult;
+  showSaveDialogSync?(...args: unknown[]): DialogResult | undefined;
 }
 
 export interface DialogResult {
   canceled?: boolean;
   filePaths?: string[];
+  filePath?: string;
+}
+
+/** Options for the save dialog (另存为). */
+export interface SaveOptions {
+  /** Dialog caption. */
+  title?: string;
+  /** Pre-filled file name (with extension). */
+  defaultName?: string;
+  /** Directory the dialog opens in. '' = whatever the OS picks. */
+  startDir?: string;
+  /** e.g. [{ name: '图片', extensions: ['png'] }]; empty = every file. */
+  filters?: { name: string; extensions: string[] }[];
 }
 
 /** child_process.execFile surface — injected so tests never spawn a process. */
@@ -163,6 +178,19 @@ export function resolveDialog(): DialogLike | null {
   return null;
 }
 
+/**
+ * The save-dialog to use, or null when this environment cannot show one.
+ * Same lookup chain as `resolveDialog` — the remote dialog object carries both.
+ */
+function resolveSaveDialog(): DialogLike | null {
+  const dlg = resolveDialog();
+  if (!dlg) return null;
+  if (typeof dlg.showSaveDialog !== 'function' && typeof dlg.showSaveDialogSync !== 'function') {
+    return null;
+  }
+  return dlg;
+}
+
 /** True when the 浏览 buttons are worth rendering at all. */
 export function hasSystemPicker(): boolean {
   if (resolveDialog()) return true;
@@ -230,6 +258,93 @@ export async function pickExternalPath(opts: PickOptions): Promise<string> {
     if (viaElectron.ok) return viaElectron.path;
   }
   return pickWithPowerShell(opts);
+}
+
+/**
+ * Open the system SAVE dialog (另存为). Resolves to the chosen absolute path,
+ * or '' when nothing was chosen / no dialog could be opened. Same two-tier
+ * strategy as `pickExternalPath`: Electron remote dialog first, WinForms
+ * SaveFileDialog through PowerShell as the fallback.
+ */
+export async function pickSavePath(opts: SaveOptions): Promise<string> {
+  const dlg = resolveSaveDialog();
+  if (dlg) {
+    const viaElectron = await callSaveElectron(dlg, opts);
+    if (viaElectron.ok) return viaElectron.path;
+  }
+  return saveWithPowerShell(opts);
+}
+
+async function callSaveElectron(dlg: DialogLike, opts: SaveOptions): Promise<{ ok: boolean; path: string }> {
+  const options: Record<string, unknown> = {
+    title: opts.title ?? '另存为',
+    ...(opts.defaultName ? { defaultPath: opts.defaultName } : {}),
+    ...(opts.startDir ? { defaultPath: opts.startDir } : {}),
+    ...(opts.filters?.length ? { filters: opts.filters } : {}),
+  };
+  try {
+    let res: DialogResult | undefined;
+    if (typeof dlg.showSaveDialog === 'function') {
+      res = await dlg.showSaveDialog(options);
+      if (!res) {
+        const win = (globalObj() as { electron?: { remote?: { getCurrentWindow?: () => unknown } } })
+          .electron?.remote?.getCurrentWindow?.();
+        if (win) res = await dlg.showSaveDialog(win, options);
+      }
+    } else if (typeof dlg.showSaveDialogSync === 'function') {
+      res = dlg.showSaveDialogSync(options);
+    }
+    if (!res || res.canceled) return { ok: true, path: '' };
+    const p = res.filePath ?? res.filePaths?.[0] ?? '';
+    return { ok: true, path: String(p).trim() };
+  } catch {
+    return { ok: false, path: '' };
+  }
+}
+
+async function saveWithPowerShell(opts: SaveOptions): Promise<string> {
+  if (platform() !== 'win32') return '';
+  const exec = resolveExec();
+  if (!exec) return '';
+  const script = buildSavePsScript(opts);
+  return new Promise<string>((resolve) => {
+    try {
+      exec.execFile(
+        'powershell.exe',
+        ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', script],
+        { timeout: PS_TIMEOUT_MS, windowsHide: true, encoding: 'utf8' },
+        (_err, stdout) => {
+          const out = typeof stdout === 'string' ? stdout : String(stdout ?? '');
+          const line = out.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
+          resolve(line ?? '');
+        },
+      );
+    } catch {
+      resolve('');
+    }
+  });
+}
+
+/** The PowerShell script for one save pick. Exported so it can be asserted on. */
+export function buildSavePsScript(opts: SaveOptions): string {
+  const q = (s: string): string => `'${(s ?? '').replace(/'/g, "''")}'`;
+  const lines = [
+    '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8',
+    'Add-Type -AssemblyName System.Windows.Forms | Out-Null',
+    '$d = New-Object System.Windows.Forms.SaveFileDialog',
+    `$d.Title = ${q(opts.title ?? '另存为')}`,
+    ...(opts.defaultName ? [`$d.FileName = ${q(opts.defaultName)}`] : []),
+    ...(opts.startDir ? [`$d.InitialDirectory = ${q(opts.startDir)}`] : []),
+    // The WinForms filter pairs a label with a pattern list; a media/image
+    // filter list from Electron translates directly.
+    `$d.Filter = ${q(
+      opts.filters?.length
+        ? `${opts.filters[0].name}|*.${opts.filters[0].extensions.join(';*.')}|所有文件 (*.*)|*.*`
+        : '所有文件 (*.*)|*.*',
+    )}`,
+    'if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.FileName }',
+  ];
+  return lines.join('; ');
 }
 
 async function callElectron(dlg: DialogLike, opts: PickOptions): Promise<{ ok: boolean; path: string }> {

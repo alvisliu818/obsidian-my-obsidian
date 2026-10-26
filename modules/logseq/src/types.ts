@@ -417,6 +417,13 @@ export interface BlockEditorSettings {
    * The command and the file-menu entry work either way.
    */
   imageViewerTakeOver: boolean;
+  /**
+   * Take over video files with the enhanced player (speed / loop / snapshot /
+   * prev-next). Off by default for the same reason — Obsidian already previews
+   * bare video. Out-of-vault videos (mount tree, system picker) always open
+   * in the player regardless of this setting.
+   */
+  videoPlayerTakeOver: boolean;
   /** Configured external applications for the "open with" menu. */
   openWithApps: OpenWithApp[];
   /** Recently opened file paths, newest first (bounded by RECENT_LIMIT). */
@@ -750,6 +757,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   externalMarkdownEditor: 'native',
   officeViewerEnabled: true,
   imageViewerTakeOver: false,
+  videoPlayerTakeOver: false,
   openWithApps: [],
   recentFiles: [],
   contentSearch: { ...DEFAULT_CONTENT_SEARCH },

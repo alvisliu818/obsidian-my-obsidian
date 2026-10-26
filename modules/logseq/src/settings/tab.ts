@@ -838,6 +838,21 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName('接管视频文件')
+      .setDesc(
+        '用内置视频播放器打开视频：倍速（0.5–2x）、循环、截图到剪贴板、' +
+          '同目录上一个 / 下一个、另存为。Obsidian 自带裸视频预览，因此默认关闭；' +
+          '库外视频（挂载树、命令面板的「打开库外视频…」）始终走内置播放器，不受此开关影响。' +
+          '修改后需重启 Obsidian 生效。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.videoPlayerTakeOver === true).onChange(async (v) => {
+          this.plugin.settings.videoPlayerTakeOver = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName('文件内容搜索')
       .setDesc(
         '跨整个库搜索文件内容：支持正则表达式、区分大小写、全词匹配，可按文件夹与扩展名过滤，' +

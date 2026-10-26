@@ -50,6 +50,8 @@ import {
 import { ConfirmModal, NamePromptModal } from './promptModals';
 import { MountEditorModal, MountTargetPickerModal } from './mountModals';
 import { iconForEntry } from '../features/iconTheme';
+import { isImageFile } from '../views/ImageView';
+import { isVideoFile } from '../views/VideoView';
 
 export const VIEW_TYPE_MOUNT_PANEL = 'logseq-mount-panel';
 
@@ -962,6 +964,9 @@ export class MountPanelView extends ItemView {
         const text = !node.isDir && isTextMount(extOf(node.name));
         const linked = this.isLinked(node);
         const md = !node.isDir && node.name.toLowerCase().endsWith('.md');
+        // 媒体文件(图片/视频)走应用内增强查看器(库外 abs 模式),不再丢给系统。
+        const image = !node.isDir && isImageFile(node.name);
+        const video = !node.isDir && isVideoFile(node.name);
         // 未链接 md 的主项标题跟上实际路由（externalMarkdownChoice = 文件自身
         // editor 属性 ?? 设置，见 main.ts）：默认原生就如实写「用原生编辑器
         // 打开」，并把块编辑器保留为下面的显式入口。只对未链接生效——已链接
@@ -975,23 +980,40 @@ export class MountPanelView extends ItemView {
           : linked
             ? md
               ? '在 Logseq 块编辑器中打开（已链接）'
-              : '用已安装的编辑器打开（已链接）'
+              : image
+                ? '在图片查看器中打开（已链接）'
+                : video
+                  ? '在视频播放器中打开（已链接）'
+                  : '用已安装的编辑器打开（已链接）'
             : md
               ? nativeDefault
                 ? '用原生编辑器打开'
                 : '在块编辑器中打开'
-              : text
-                ? '在块编辑器中打开'
-                : '用系统程序打开';
+              : image
+                ? '在图片查看器中打开'
+                : video
+                  ? '在视频播放器中打开'
+                  : text
+                    ? '在块编辑器中打开'
+                    : '用系统程序打开';
         menu.addItem((item) =>
           item
             .setTitle(primaryTitle)
-            .setIcon('file-text' as never)
+            .setIcon(image ? 'image' : video ? 'play' : 'file-text')
             .onClick(() => {
               if (node.isDir) this.toggleNode(mount, node.rel);
               else void this.plugin.openExternalEntry(mount, node);
             }),
         );
+        // 媒体文件的主项已是应用内查看器,系统程序降为次级入口。
+        if (image || video) {
+          menu.addItem((item) =>
+            item
+              .setTitle('用系统程序打开')
+              .setIcon('arrow-up-right' as never)
+              .onClick(() => this.plugin.openWithSystem(node.abs)),
+          );
+        }
         if (!node.isDir) {
           // 默认编辑器是原生时，块编辑器保留一个显式入口（forceBlockEditor
           // 跳过默认决策直进块编辑器壳）。

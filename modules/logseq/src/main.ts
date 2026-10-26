@@ -48,10 +48,12 @@ import { CodeDocView, VIEW_TYPE_CODE_DOC } from './views/CodeDocView';
 import { ExternalBlockView, VIEW_TYPE_EXTERNAL_BLOCK } from './views/ExternalBlockView';
 import { OfficeView, VIEW_TYPE_OFFICE } from './views/OfficeView';
 import { ImageView, VIEW_TYPE_IMAGE, IMAGE_EXTENSIONS, isImageFile } from './views/ImageView';
+import { VideoView, VIEW_TYPE_VIDEO, VIDEO_EXTENSIONS, isVideoFile } from './views/VideoView';
 import { OFFICE_EXTENSIONS } from './office/types';
 import { registerFreeExtensions } from '../../../src/extensionRegistry';
 import { ContentSearchPanelView, VIEW_TYPE_CONTENT_SEARCH } from './panels/contentSearchPanel';
 import { RecentPanelView, VIEW_TYPE_RECENT_PANEL, pushRecent } from './panels/recentPanel';
+import { pickExternalPath } from './features/systemDialog';
 import {
   PRESET_OPEN_WITH,
   addOpenWithMenuItems,
@@ -198,6 +200,7 @@ export default class LogseqEditorPlugin extends Plugin {
     this.registerView(VIEW_TYPE_EXTERNAL_BLOCK, (leaf) => new ExternalBlockView(leaf, this));
     this.registerView(VIEW_TYPE_OFFICE, (leaf) => new OfficeView(leaf, this));
     this.registerView(VIEW_TYPE_IMAGE, (leaf) => new ImageView(leaf, this));
+    this.registerView(VIEW_TYPE_VIDEO, (leaf) => new VideoView(leaf, this));
     this.registerView(VIEW_TYPE_CONTENT_SEARCH, (leaf) => new ContentSearchPanelView(leaf, this));
     this.registerView(VIEW_TYPE_RECENT_PANEL, (leaf) => new RecentPanelView(leaf, this));
 
@@ -214,6 +217,12 @@ export default class LogseqEditorPlugin extends Plugin {
     // svg 之类核心已占用,同样靠 registerFreeExtensions 跳过。
     if (this.settings.imageViewerTakeOver) {
       registerFreeExtensions(this, IMAGE_EXTENSIONS, VIEW_TYPE_IMAGE, "image viewer");
+    }
+    // Videos: same opt-in story (Obsidian previews bare <video>); enhanced
+    // player = speed / loop / same-folder navigation. mkv 之类核心未占用;
+    // mp4 等被占用时靠 registerFreeExtensions 跳过。
+    if (this.settings.videoPlayerTakeOver) {
+      registerFreeExtensions(this, VIDEO_EXTENSIONS, VIEW_TYPE_VIDEO, "video player");
     }
 
     // 库内 .code-workspace 等代码扩展名的注册**不在这里**做:宿主 onload 的
@@ -698,6 +707,48 @@ export default class LogseqEditorPlugin extends Plugin {
         return true;
       },
     });
+    this.addCommand({
+      id: 'open-in-video-view',
+      name: 'Open this video in the video player',
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || !isVideoFile(file.name)) return false;
+        if (checking) return true;
+        void this.openInView(VIEW_TYPE_VIDEO, file);
+        return true;
+      },
+    });
+
+    // ---------- 库外媒体:任意磁盘路径的图片/视频,系统文件选择器 ----------
+    // 不限于挂载目录:picker 直达盘上任何位置,选中即开增强查看器。
+    const openExternalMedia = async (kind: 'image' | 'video'): Promise<void> => {
+      const exts = kind === 'image' ? IMAGE_EXTENSIONS : VIDEO_EXTENSIONS;
+      const picked = await pickExternalPath({
+        kind: 'file',
+        title: kind === 'image' ? '选择要打开的图片' : '选择要打开的视频',
+        filters: [{ name: kind === 'image' ? '图片' : '视频', extensions: exts }],
+      });
+      if (!picked) return;
+      if (kind === 'image' && !isImageFile(picked)) {
+        new Notice('所选文件不是可显示的图片格式。');
+        return;
+      }
+      if (kind === 'video' && !isVideoFile(picked)) {
+        new Notice('所选文件不是支持的视频格式。');
+        return;
+      }
+      await this.openExternalInView(kind === 'image' ? VIEW_TYPE_IMAGE : VIEW_TYPE_VIDEO, { abs: picked, name: picked.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? picked });
+    };
+    this.addCommand({
+      id: 'open-external-image',
+      name: '打开库外图片…（任意磁盘路径）',
+      callback: () => void openExternalMedia('image'),
+    });
+    this.addCommand({
+      id: 'open-external-video',
+      name: '打开库外视频…（任意磁盘路径）',
+      callback: () => void openExternalMedia('video'),
+    });
 
     // ---------- External applications ----------
     this.addCommand({
@@ -750,6 +801,14 @@ export default class LogseqEditorPlugin extends Plugin {
                 .setTitle('在增强图片查看器中打开')
                 .setIcon('image' as never)
                 .onClick(() => void this.openInView(VIEW_TYPE_IMAGE, file)),
+            );
+          }
+          if (isVideoFile(file.name)) {
+            menu.addItem((item) =>
+              item
+                .setTitle('在视频播放器中打开')
+                .setIcon('play' as never)
+                .onClick(() => void this.openInView(VIEW_TYPE_VIDEO, file)),
             );
           }
           if (this.settings.officeViewerEnabled && OFFICE_EXTENSIONS.includes(file.extension.toLowerCase())) {
@@ -1060,6 +1119,7 @@ export default class LogseqEditorPlugin extends Plugin {
     this.settings.contentSearch = contentSearchFrom(this.settings.contentSearch);
     this.settings.officeViewerEnabled = this.settings.officeViewerEnabled !== false;
     this.settings.imageViewerTakeOver = this.settings.imageViewerTakeOver === true;
+    this.settings.videoPlayerTakeOver = this.settings.videoPlayerTakeOver === true;
   }
 
   async saveSettings(): Promise<void> {
@@ -1637,6 +1697,39 @@ export default class LogseqEditorPlugin extends Plugin {
   }
 
   /**
+   * 库外媒体（图片/视频）→ ImageView / VideoView 的库外模式。
+   *
+   * 叶策略与库外代码/块编辑器一致（externalSplitView ? 'split' : 'tab'），
+   * 同一文件已开着时复用叶而不是叠标签；媒体文件没有「接管」包袱，也不进
+   * setViewState 补丁的路径（ItemView 自有 state）。
+   */
+  async openExternalInView(
+    viewType: string,
+    spec: { abs: string; name?: string },
+  ): Promise<void> {
+    const state = { abs: spec.abs, name: spec.name ?? '' };
+    // 复用同一文件的同型视图叶。
+    for (const leaf of this.app.workspace.getLeavesOfType(viewType)) {
+      const vs = leaf.getViewState().state as { abs?: string } | undefined;
+      if (vs?.abs && vs.abs.toLowerCase() === spec.abs.toLowerCase()) {
+        await leaf.setViewState({ type: viewType, state, active: true });
+        this.app.workspace.setActiveLeaf(leaf, { focus: true });
+        return;
+      }
+    }
+    const leaf = this.app.workspace.getLeaf(
+      this.settings.externalSplitView === true ? 'split' : 'tab',
+    );
+    const name = spec.name ?? spec.abs.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? spec.abs;
+    markLeafTabIcon(leaf, { name, rel: name });
+    await leaf.setViewState({ type: viewType, state, active: true });
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    this.refreshTabIcons();
+    this.refreshTabIconsSoon();
+    logOp(this, 'external.open', spec.abs, 'ok', viewType === VIEW_TYPE_IMAGE ? 'image-viewer' : 'video-player');
+  }
+
+  /**
    * 库内文件 → ExternalCodeView(用户指令 2026-10-25:Code.code-workspace
    * 类型文件等 Obsidian 没有应用内编辑器的文本,给一个代码编辑器入口)。
    * 视图的 setState 认 `{file}`(vault 相对路径),自己解析真实路径并挂
@@ -1677,6 +1770,15 @@ export default class LogseqEditorPlugin extends Plugin {
       // Obsidian caches the tab label; assigning the display text again is not
       // enough, so the leaf's own title element is refreshed through the
       // workspace's update path.
+      (leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
+    }
+  }
+
+  /** Keep every open video player's tab title in sync after prev/next. */
+  refreshVideoViewTitles(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_VIDEO)) {
+      const view = leaf.view as VideoView | null;
+      if (!view) continue;
       (leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
     }
   }
@@ -2089,6 +2191,17 @@ export default class LogseqEditorPlugin extends Plugin {
       }
       if (await this.openInBlockEditor(mount, node)) return;
     } else {
+      // 媒体文件先给应用内查看器（增强图片查看器 / 视频播放器,库外 abs 模式
+      // 经 Node fs 直读),不再一律丢给系统——这是「打开库外图片和视频」的主
+      // 路由;用户明确要系统程序时用查看器工具栏或右键菜单的 open-with。
+      if (isImageFile(node.name)) {
+        await this.openExternalInView(VIEW_TYPE_IMAGE, { abs: node.abs, name: node.name });
+        return;
+      }
+      if (isVideoFile(node.name)) {
+        await this.openExternalInView(VIEW_TYPE_VIDEO, { abs: node.abs, name: node.name });
+        return;
+      }
       // Real binaries have nothing to edit, so hand them to the system. Judged
       // by whole name as well as extension: `Dockerfile` and friends have no
       // extension and were being treated as binary, which sent them off to some

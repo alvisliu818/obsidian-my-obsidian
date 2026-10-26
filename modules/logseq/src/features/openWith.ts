@@ -65,9 +65,14 @@ export function absolutePath(app: App, file: TAbstractFile): string {
   return `${base.replace(/[\\/]+$/, '')}${sep}${file.path.split('/').join(sep)}`;
 }
 
-/** Open with the OS default handler for the file type. */
-export async function openWithSystemDefault(app: App, file: TFile): Promise<void> {
-  const abs = absolutePath(app, file);
+// ---------------------------------------------------------------------------
+// abs-path cores. Vault files are converted to an absolute path and routed
+// here, so out-of-vault media (ImageView/VideoView 的库外模式) shares the
+// exact same "open with" surface as vault files.
+// ---------------------------------------------------------------------------
+
+/** Open with the OS default handler for an ABSOLUTE path. */
+export async function openWithSystemDefaultAt(abs: string): Promise<void> {
   if (!abs) {
     new Notice('无法确定文件在磁盘上的绝对路径。');
     return;
@@ -81,9 +86,13 @@ export async function openWithSystemDefault(app: App, file: TFile): Promise<void
   if (err) new Notice(`打开失败：${err}`);
 }
 
-/** Reveal the file in the OS file manager. */
-export function revealInSystemExplorer(app: App, file: TAbstractFile): void {
-  const abs = absolutePath(app, file);
+/** Open with the OS default handler for the file type. */
+export async function openWithSystemDefault(app: App, file: TFile): Promise<void> {
+  await openWithSystemDefaultAt(absolutePath(app, file));
+}
+
+/** Reveal an ABSOLUTE path in the OS file manager. */
+export function revealAbs(abs: string): void {
   if (!abs) {
     new Notice('无法确定文件在磁盘上的绝对路径。');
     return;
@@ -97,6 +106,26 @@ export function revealInSystemExplorer(app: App, file: TAbstractFile): void {
   // platform's file manager directly.
   const cmd = process.platform === 'win32' ? 'explorer' : process.platform === 'darwin' ? 'open' : 'xdg-open';
   void spawnDetached(cmd, [process.platform === 'win32' ? `/select,${abs}` : abs]);
+}
+
+/** Reveal the file in the OS file manager. */
+export function revealInSystemExplorer(app: App, file: TAbstractFile): void {
+  revealAbs(absolutePath(app, file));
+}
+
+/** Launch one configured external app against an ABSOLUTE path. */
+export async function openWithAppAt(abs: string, target: OpenWithApp): Promise<void> {
+  if (!abs) {
+    new Notice('无法确定文件在磁盘上的绝对路径。');
+    return;
+  }
+  const sep = abs.includes('\\') ? '\\' : '/';
+  const dir = abs.slice(0, abs.lastIndexOf(sep));
+  const argv = substitute(target.args, abs, dir)
+    .split(/\s+(?=(?:[^"]*"[^"]*")*[^"]*$)/)
+    .map((s) => s.replace(/^"(.*)"$/, '$1'))
+    .filter(Boolean);
+  await spawnDetached(target.command, argv);
 }
 
 function substitute(tpl: string, abs: string, dir: string): string {
@@ -131,18 +160,7 @@ function spawnDetached(command: string, args: string[]): Promise<void> {
 
 /** Launch one configured external app against a file. */
 export async function openWithApp(app: App, file: TFile, target: OpenWithApp): Promise<void> {
-  const abs = absolutePath(app, file);
-  if (!abs) {
-    new Notice('无法确定文件在磁盘上的绝对路径。');
-    return;
-  }
-  const sep = abs.includes('\\') ? '\\' : '/';
-  const dir = abs.slice(0, abs.lastIndexOf(sep));
-  const argv = substitute(target.args, abs, dir)
-    .split(/\s+(?=(?:[^"]*"[^"]*")*[^"]*$)/)
-    .map((s) => s.replace(/^"(.*)"$/, '$1'))
-    .filter(Boolean);
-  await spawnDetached(target.command, argv);
+  await openWithAppAt(absolutePath(app, file), target);
 }
 
 /** Launch a configured app by id (used by the command-palette entries). */
@@ -161,12 +179,11 @@ export async function openWithAppById(
 }
 
 /**
- * Copy the file's absolute path to the clipboard.
+ * Copy an ABSOLUTE path to the clipboard.
  * Useful on its own, and it is the only recovery route when a configured
  * command turns out to be wrong.
  */
-export async function copyAbsolutePath(app: App, file: TAbstractFile): Promise<void> {
-  const abs = absolutePath(app, file);
+export async function copyAbsolutePathAt(abs: string): Promise<void> {
   if (!abs) {
     new Notice('无法确定文件在磁盘上的绝对路径。');
     return;
@@ -179,6 +196,41 @@ export async function copyAbsolutePath(app: App, file: TAbstractFile): Promise<v
   }
 }
 
+/** Copy the file's absolute path to the clipboard. */
+export async function copyAbsolutePath(app: App, file: TAbstractFile): Promise<void> {
+  await copyAbsolutePathAt(absolutePath(app, file));
+}
+
+/** Attach the "open with" entries to an Obsidian `Menu` for an ABSOLUTE path. */
+export function addOpenWithMenuItemsAt(
+  abs: string,
+  menu: { addItem(cb: (item: { setTitle(t: string): void; setIcon(i: string): void; onClick(cb: () => void): void }) => void): void },
+  apps: OpenWithApp[],
+): void {
+  for (const a of apps.filter((x) => x.enabled)) {
+    menu.addItem((item) => {
+      item.setTitle(`用 ${a.name} 打开`);
+      item.setIcon('external-link');
+      item.onClick(() => void openWithAppAt(abs, a));
+    });
+  }
+  menu.addItem((item) => {
+    item.setTitle('用系统默认应用打开');
+    item.setIcon('arrow-up-right');
+    item.onClick(() => void openWithSystemDefaultAt(abs));
+  });
+  menu.addItem((item) => {
+    item.setTitle('在文件管理器中显示');
+    item.setIcon('folder-open');
+    item.onClick(() => revealAbs(abs));
+  });
+  menu.addItem((item) => {
+    item.setTitle('复制绝对路径');
+    item.setIcon('clipboard-copy');
+    item.onClick(() => void copyAbsolutePathAt(abs));
+  });
+}
+
 /** Attach the "open with" entries to an Obsidian `Menu`. */
 export function addOpenWithMenuItems(
   app: App,
@@ -186,27 +238,5 @@ export function addOpenWithMenuItems(
   menu: { addItem(cb: (item: { setTitle(t: string): void; setIcon(i: string): void; onClick(cb: () => void): void }) => void): void },
   apps: OpenWithApp[],
 ): void {
-  const enabled = apps.filter((a) => a.enabled);
-  for (const a of enabled) {
-    menu.addItem((item) => {
-      item.setTitle(`用 ${a.name} 打开`);
-      item.setIcon('external-link');
-      item.onClick(() => void openWithApp(app, file, a));
-    });
-  }
-  menu.addItem((item) => {
-    item.setTitle('用系统默认应用打开');
-    item.setIcon('arrow-up-right');
-    item.onClick(() => void openWithSystemDefault(app, file));
-  });
-  menu.addItem((item) => {
-    item.setTitle('在文件管理器中显示');
-    item.setIcon('folder-open');
-    item.onClick(() => revealInSystemExplorer(app, file));
-  });
-  menu.addItem((item) => {
-    item.setTitle('复制绝对路径');
-    item.setIcon('clipboard-copy');
-    item.onClick(() => void copyAbsolutePath(app, file));
-  });
+  addOpenWithMenuItemsAt(absolutePath(app, file), menu, apps);
 }

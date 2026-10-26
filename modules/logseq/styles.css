@@ -5098,3 +5098,110 @@ body.lgp-table-editor-cursor * {
   width: 16px;
   height: 16px;
 }
+
+/* ==========================================================================
+   增强媒体查看器（ImageView / VideoView，库内库外同一套壳）
+   ========================================================================== */
+.lg-image-view,
+.lg-video-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 0;
+}
+.lg-image-view__toolbar,
+.lg-video-view__toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+}
+.lg-image-view__title,
+.lg-video-view__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+.lg-image-view__group,
+.lg-video-view__group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.lg-image-view__btn,
+.lg-video-view__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-s, 4px);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  box-shadow: none;
+}
+.lg-image-view__btn:hover,
+.lg-video-view__btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+.lg-video-view__btn.is-active {
+  color: var(--text-accent);
+  background: var(--background-modifier-active-hover);
+}
+.lg-image-view__zoom {
+  min-width: 44px;
+  text-align: center;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+.lg-video-view__speed {
+  height: 26px;
+  font-size: var(--font-ui-smaller);
+}
+.lg-image-view__stage,
+.lg-video-view__stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--background-primary-alt);
+}
+.lg-image-view__img {
+  max-width: 100%;
+  max-height: 100%;
+  transform-origin: center center;
+  user-select: none;
+}
+.lg-image-view__img.is-dragging {
+  cursor: grabbing;
+}
+.lg-video-view__video {
+  max-width: 100%;
+  max-height: 100%;
+  outline: none;
+}
+.lg-video-view__fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 24px;
+  color: var(--text-muted);
+}
+.lg-video-view__fallback-actions {
+  display: flex;
+  gap: 8px;
+}

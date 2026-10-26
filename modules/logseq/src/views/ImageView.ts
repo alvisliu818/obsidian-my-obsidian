@@ -15,9 +15,7 @@
 import {
   ItemView,
   Menu,
-  Modal,
   Notice,
-  Setting,
   TFile,
   TFolder,
   setIcon,
@@ -26,8 +24,14 @@ import {
   type ViewStateResult,
 } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
-import { extOf } from '../features/extFs';
-import { addOpenWithMenuItems, revealInSystemExplorer } from '../features/openWith';
+import { baseOf, copyExternalFile, dirOf, extOf, readExternalBinary, scanExternal } from '../features/extFs';
+import {
+  absolutePath,
+  addOpenWithMenuItems,
+  addOpenWithMenuItemsAt,
+  revealInSystemExplorer,
+} from '../features/openWith';
+import { pickSavePath } from '../features/systemDialog';
 
 export const VIEW_TYPE_IMAGE = 'logseq-image';
 
@@ -51,12 +55,17 @@ export function isImageFile(name: string): boolean {
 }
 
 export interface ImageViewState {
+  /** Vault-relative path (库内). */
   path?: string;
+  /** Absolute path OUTSIDE the vault (库外,挂载树/任意磁盘位置). */
+  abs?: string;
 }
 
 export class ImageView extends ItemView {
   plugin: LogseqEditorPlugin;
   private path = '';
+  /** 库外绝对路径;与 path 互斥(库外模式下 path 恒为空)。 */
+  private abs = '';
   private objectUrl = '';
   /** Current zoom factor (1 = natural size). */
   private zoom = 1;
@@ -86,8 +95,14 @@ export class ImageView extends ItemView {
     return VIEW_TYPE_IMAGE;
   }
 
+  /** 当前文件名（两种模式统一）。 */
+  private get fileName(): string {
+    return this.abs ? baseOf(this.abs) : this.path.split('/').pop() || this.path;
+  }
+
   getDisplayText(): string {
-    return this.path ? this.path.split('/').pop() || this.path : '图片查看器';
+    const n = this.fileName;
+    return n || '图片查看器';
   }
 
   getIcon(): string {
@@ -95,16 +110,17 @@ export class ImageView extends ItemView {
   }
 
   getState(): Record<string, unknown> {
-    return { path: this.path };
+    return this.abs ? { abs: this.abs } : { path: this.path };
   }
 
   async setState(state: unknown, _result: ViewStateResult): Promise<void> {
     const s = (state ?? {}) as ImageViewState;
-    const next = typeof s.path === 'string' ? s.path : '';
-    if (next !== this.path) {
-      this.path = next;
-      await this.load();
-    }
+    const nextAbs = typeof s.abs === 'string' ? s.abs : '';
+    const nextPath = typeof s.path === 'string' ? s.path : '';
+    if (nextAbs === this.abs && nextPath === this.path) return;
+    this.abs = nextAbs;
+    this.path = nextAbs ? '' : nextPath;
+    await this.load();
   }
 
   async onOpen(): Promise<void> {
@@ -213,6 +229,27 @@ export class ImageView extends ItemView {
     this.panY = 0;
     this.fitted = true;
 
+    // 库外模式：abs 优先，Node fs 直读（vault.adapter 会把绝对路径解析成
+    // `<库根>\E:\...`，见 extFs.ts 文件头）。
+    if (this.abs) {
+      this.titleEl.textContent = baseOf(this.abs);
+      try {
+        const data = readExternalBinary(this.abs);
+        const mime = MIME[extOf(baseOf(this.abs))] || 'application/octet-stream';
+        this.objectUrl = URL.createObjectURL(new Blob([data], { type: mime }));
+        this.imgEl.src = this.objectUrl;
+        this.imgEl.onload = () => {
+          this.naturalW = this.imgEl.naturalWidth;
+          this.naturalH = this.imgEl.naturalHeight;
+          this.fitToWindow();
+        };
+      } catch (e) {
+        this.imgEl.removeAttribute('src');
+        new Notice(`无法读取图片：${String(e).slice(0, 120)}`);
+      }
+      return;
+    }
+
     const file = this.path ? this.app.vault.getAbstractFileByPath(this.path) : null;
     if (!(file instanceof TFile)) {
       this.titleEl.textContent = this.path || '未选择图片';
@@ -268,22 +305,37 @@ export class ImageView extends ItemView {
     this.applyTransform();
   }
 
-  /** Image files in the same folder, sorted — the prev/next ring. */
-  private siblings(): TFile[] {
+  /** Image files in the same folder, sorted — the prev/next ring. 库外时是同目录的绝对路径列表。 */
+  private siblings(): string[] {
+    if (this.abs) {
+      const dir = dirOf(this.abs);
+      if (!dir) return [];
+      // shouldEnterDir=false: 只列本层,不递归(同目录导航语义)。
+      const { entries } = scanExternal(dir, {
+        shouldEnterDir: () => false,
+        keepFile: (_rel, name) => isImageFile(name),
+      });
+      return entries
+        .map((e) => e.abs)
+        .sort((a, b) => baseOf(a).localeCompare(baseOf(b), undefined, { numeric: true }));
+    }
     const file = this.app.vault.getAbstractFileByPath(this.path);
     if (!(file instanceof TFile) || !file.parent) return [];
     return file.parent.children
       .filter((c): c is TFile => c instanceof TFile && isImageFile(c.name))
-      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+      .map((f) => f.path);
   }
 
   private async step(dir: -1 | 1): Promise<void> {
     const list = this.siblings();
     if (list.length === 0) return;
-    const i = list.findIndex((f) => f.path === this.path);
+    const cur = this.abs || this.path;
+    const i = list.indexOf(cur);
     const next = list[(i + dir + list.length) % list.length];
-    if (next && next.path !== this.path) {
-      this.path = next.path;
+    if (next && next !== cur) {
+      if (this.abs) this.abs = next;
+      else this.path = next;
       await this.load();
       this.plugin.refreshImageViewTitles();
     }
@@ -297,82 +349,53 @@ export class ImageView extends ItemView {
       new Notice('图片已复制到剪贴板');
     } catch (e) {
       // Chrome refuses ClipboardItem for some MIME types (notably image/avif),
-      // so fall back to copying the markdown embed — still useful.
+      // so fall back to copying a reference — still useful.
       try {
-        await navigator.clipboard.writeText(`![[${this.path.split('/').pop()}]]`);
-        new Notice('已复制为 Obsidian 嵌入语法');
+        const text = this.abs || `![[${this.path.split('/').pop()}]]`;
+        await navigator.clipboard.writeText(text);
+        new Notice('已复制图片引用');
       } catch {
         new Notice(`复制失败：${String(e)}`);
       }
     }
   }
 
-  private saveAs(): void {
-    const file = this.app.vault.getAbstractFileByPath(this.path);
-    if (!(file instanceof TFile)) return;
-    new SaveAsModal(this.app, file.name, async (target) => {
-      try {
-        const data = await this.app.vault.adapter.readBinary(file.path);
-        await this.app.vault.adapter.writeBinary(target, data);
-        new Notice(`已保存到 ${target}`);
-      } catch (e) {
-        new Notice(`保存失败：${String(e)}`);
-      }
-    }).open();
+  private async saveAs(): Promise<void> {
+    // 两种模式统一走系统保存对话框 + Node fs 二进制复制：库内文件在桌面端
+    // 也是真实磁盘文件（vault.adapter 只在移动端不是）。
+    const src = this.abs
+      ? this.abs
+      : (() => {
+          const file = this.app.vault.getAbstractFileByPath(this.path);
+          return file instanceof TFile ? absolutePath(this.app, file) : '';
+        })();
+    if (!src) return;
+    const target = await pickSavePath({
+      title: '图片另存为',
+      defaultName: this.fileName,
+      filters: [{ name: '图片', extensions: IMAGE_EXTENSIONS }],
+    });
+    if (!target) return;
+    const r = copyExternalFile(src, target);
+    if (r.ok) new Notice(`已保存到 ${target}`);
+    else new Notice(`保存失败：${r.error ?? ''}`);
   }
 
   private showOpenWith(): void {
-    const file = this.app.vault.getAbstractFileByPath(this.path);
-    if (!(file instanceof TFile)) return;
     const menu = new Menu();
-    addOpenWithMenuItems(this.plugin.app, file, menu, this.plugin.settings.openWithApps);
+    if (this.abs) {
+      addOpenWithMenuItemsAt(this.abs, menu, this.plugin.settings.openWithApps);
+    } else {
+      const file = this.app.vault.getAbstractFileByPath(this.path);
+      if (!(file instanceof TFile)) return;
+      addOpenWithMenuItems(this.plugin.app, file, menu, this.plugin.settings.openWithApps);
+    }
     menu.showAtPosition({ x: this.toolbarEl.getBoundingClientRect().left, y: this.toolbarEl.getBoundingClientRect().bottom });
   }
 
   /** Context menu hook used by the file explorer integration. */
   static reveal(app: App, file: TFile): void {
     revealInSystemExplorer(app, file);
-  }
-}
-
-class SaveAsModal extends Modal {
-  private name: string;
-  private onOk: (path: string) => void;
-
-  constructor(app: App, initial: string, onOk: (path: string) => void) {
-    super(app);
-    this.name = initial;
-    this.onOk = onOk;
-  }
-
-  onOpen(): void {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.createEl('h3', { text: '另存为' });
-    let value = this.name;
-    new Setting(contentEl).setName('文件名').addText((t) =>
-      t
-        .setValue(this.name)
-        .onChange((v) => {
-          value = v.trim();
-        }),
-    );
-    new Setting(contentEl)
-      .addButton((b) =>
-        b.setButtonText('保存').setCta().onClick(() => {
-          if (!value) {
-            new Notice('请输入文件名');
-            return;
-          }
-          this.close();
-          this.onOk(value);
-        }),
-      )
-      .addButton((b) => b.setButtonText('取消').onClick(() => this.close()));
-  }
-
-  onClose(): void {
-    this.contentEl.empty();
   }
 }
 
