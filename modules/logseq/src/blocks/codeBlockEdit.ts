@@ -23,6 +23,8 @@ import { effectiveFontSize, getEditorSettings } from '../editor/editorSettings';
 import { monacoLspAttach } from '../lsp/monacoLspBridge';
 import { encodeFileUri } from '../lsp/lspHost';
 import { blockId } from '../types';
+import { nextVisible, prevVisible } from '../core/treeOps';
+import { caretAtGoalX } from '../interactions/keymap';
 import { setIcon } from 'obsidian';
 import type { Block } from '../types';
 import type { BlockRenderHost } from './renderHost';
@@ -423,6 +425,18 @@ export function mountCodeEditor(
     lineHeight: user.lineHeight >= 8 ? user.lineHeight : Math.round(fontSize * 1.5),
     vPadding: Math.round(fontSize * 0.4),
     onEscape: () => host.commitFocusedText(),
+    // 原子块边界导航(思源 verticalNavigation,2026-10-26):↑ 首行 / ↓ 末行 /
+    // ← 偏移 0 / → 文档末 → 提交代码编辑并落到相邻可见块(上下保 goalX 列)。
+    // 文档边界吞键(与 CM 边界一致)。
+    onEdgeNav: (dir, goalX) => {
+      const target = dir === 'up' || dir === 'left' ? prevVisible(host.visibleRoots, block) : nextVisible(host.visibleRoots, block);
+      if (!target) return true;
+      host.commitFocusedText(); // 退出代码编辑态(块回静态)
+      if (dir === 'down' || dir === 'right') host.focusBlock(target, 0);
+      else host.focusBlock(target, 'end');
+      if (goalX !== null && (dir === 'up' || dir === 'down')) caretAtGoalX(host, goalX, dir === 'up');
+      return true;
+    },
     // 分栏里另一个视图聚焦了别的代码块 → 单例要搬走:先把这一块的编辑
     // 落地(提交 + 还原 DOM),否则它的文本会跟着实例一起被覆盖。
     onPreempt: () => host.commitFocusedText(),

@@ -709,6 +709,8 @@ interface SharedBlockEditor {
   lease: { onPreempt: (() => void) | null; lease: SharedBlockLease } | null;
   /** Esc 命令只能 addCommand 一次,回调经这个 ctx 每次挂载换 */
   esc: { onEscape?: () => void };
+  /** 原子块边界导航(↑首行/↓末行/←偏移0/→文末),回调经这个 ctx 每次挂载换 */
+  edge: { onEdgeNav?: (dir: 'up' | 'down' | 'left' | 'right', goalX: number | null) => boolean };
   /** autoHeight 的上下内边距:每次挂载按宿主字号重算 */
   pad: { top: number; bottom: number };
   /**
@@ -747,6 +749,7 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
   root.className = 'lgp-monaco-root';
   getSharedPool().appendChild(root);
   const esc: { onEscape?: () => void } = {};
+  const edge: { onEdgeNav?: (dir: 'up' | 'down' | 'left' | 'right', goalX: number | null) => boolean } = {};
   const pad = { top: 8, bottom: 8 };
   const options: monaco.editor.IStandaloneEditorConstructionOptions = {
     value: '',
@@ -790,6 +793,37 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
   (root as HTMLElement & { __lgMonaco?: unknown }).__lgMonaco = monaco;
   disableBlockBracketColorization(editor);
   editor.addCommand(monaco.KeyCode.Escape, () => esc.onEscape?.());
+  // 原子块边界导航(思源 verticalNavigation 原子语义,2026-10-26):↑ 首行 /
+  // ↓ 末行 / ← 偏移 0 / → 文档末 → 交由宿主退出代码块;preventDefault 拦下
+  // Monaco 自己的光标移动。补全面板打开时箭头归它,不抢。上下方向携带
+  // 光标视口 X(goalX),与 CM 跨块导航的列保持同机制。
+  editor.onKeyDown((e) => {
+    const cb = edge.onEdgeNav;
+    if (!cb) return;
+    const dir =
+      e.keyCode === monaco.KeyCode.UpArrow ? 'up' :
+      e.keyCode === monaco.KeyCode.DownArrow ? 'down' :
+      e.keyCode === monaco.KeyCode.LeftArrow ? 'left' :
+      e.keyCode === monaco.KeyCode.RightArrow ? 'right' : null;
+    if (!dir) return;
+    if (root.querySelector('.suggest-widget.visible')) return;
+    const pos = editor.getPosition();
+    const model = editor.getModel();
+    if (!pos || !model) return;
+    let atEdge = false;
+    let goalX: number | null = null;
+    if (dir === 'up') atEdge = pos.lineNumber === 1;
+    else if (dir === 'down') atEdge = pos.lineNumber === model.getLineCount();
+    else if (dir === 'left') atEdge = model.getOffsetAt(pos) === 0;
+    else atEdge = model.getOffsetAt(pos) === model.getValueLength();
+    if (!atEdge) return;
+    if (dir === 'up' || dir === 'down') {
+      const svp = editor.getScrolledVisiblePosition(pos);
+      const rect = editor.getDomNode()?.getBoundingClientRect();
+      if (svp && rect) goalX = svp.left + rect.left;
+    }
+    if (cb(dir, goalX)) e.preventDefault();
+  });
   // 高度自适应容器(块内永远 autoHeight):root 就是被搬来搬去的那个节点,
   // 高度写在它身上,搬进 host 后盒子自然跟着内容长高。
   const updateHeight = (): void => {
@@ -838,6 +872,7 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
     root,
     lease: null,
     esc,
+    edge,
     pad,
     applyDoc: (value, language, uri) => {
       const prev = editor.getModel();
@@ -885,6 +920,8 @@ export interface SharedMountOpts {
   onEscape?: () => void;
   /** 被另一个块抢占时的处理(通常是让当前宿主提交编辑) */
   onPreempt?: () => void;
+  /** 原子块边界导航:返回 true = 已退出代码块(调用方 preventDefault) */
+  onEdgeNav?: (dir: 'up' | 'down' | 'left' | 'right', goalX: number | null) => boolean;
 }
 
 /**
@@ -918,6 +955,7 @@ export function mountSharedBlockEditor(
   s.pad.top = opts.vPadding ?? 8;
   s.pad.bottom = opts.vPadding ?? 8;
   s.esc.onEscape = opts.onEscape;
+  s.edge.onEdgeNav = opts.onEdgeNav;
   s.editor.updateOptions({
     fontSize: opts.fontSize ?? 13,
     ...(opts.fontFamily ? { fontFamily: opts.fontFamily } : {}),
@@ -934,6 +972,7 @@ export function mountSharedBlockEditor(
       if (sharedBlock?.lease !== s.lease) return;
       s.lease = null; // 归还路径不触发 onPreempt
       s.esc.onEscape = undefined;
+      s.edge.onEdgeNav = undefined;
       // 归还时把这块的 model dispose 掉:换了 uri 的 model 不可复用,留着只会
       // 在 monaco.editor.getModel(uri) 里堆积(每个块一个,没人回收)。
       s.disposeModel();

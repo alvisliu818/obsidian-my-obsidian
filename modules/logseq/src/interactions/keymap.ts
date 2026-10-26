@@ -445,8 +445,9 @@ function scrollCaretIntoViewSoon(host: BlockRenderHost): void {
 
 /** 思源 verticalCaret 的 goalX(2026-10-26):块间上/下移后,把光标放到
  *  目标块末行/首行上与 goalX(出发列的视口 X)最近的文本位。CM 挂载同步,
- *  坐标下一帧量;块已不在(被提交/换块)就放弃。 */
-function caretAtGoalX(host: BlockRenderHost, goalX: number, atEnd: boolean): void {
+ *  坐标下一帧量;块已不在(被提交/换块)就放弃。Monaco 原子边界导航
+ *  (batch 17)也走这把——列保持跨编辑器一致。 */
+export function caretAtGoalX(host: BlockRenderHost, goalX: number, atEnd: boolean): void {
   requestAnimationFrame(() => {
     const v = host.focusedView;
     if (!v || !v.dom.isConnected) return;
