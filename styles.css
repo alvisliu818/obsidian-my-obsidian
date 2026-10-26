@@ -1537,6 +1537,41 @@ body.block-touch-dragging {
   box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--interactive-accent) 65%, transparent);
 }
 
+/* ---------- 选区浮出格式工具栏（思源 protyle-toolbar，2026-10-26） ---------- */
+.lg-fmt-bar {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  box-shadow: var(--shadow-s);
+}
+.lg-fmt-bar__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-normal);
+}
+.lg-fmt-bar__btn:hover {
+  background: var(--background-modifier-hover);
+}
+.lg-fmt-bar__btn.is-current {
+  background: color-mix(in srgb, var(--interactive-accent) 22%, transparent);
+  color: var(--interactive-accent);
+}
+.lg-fmt-bar__btn svg {
+  width: 15px;
+  height: 15px;
+}
+
 /* ---------- Dataview coexistence ---------- */
 .block-content.has-dataview .block-content-static {
   width: 100%;

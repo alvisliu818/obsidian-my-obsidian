@@ -232,7 +232,7 @@ async function pasteFromClipboard(view: EditorView, keepPosition: boolean): Prom
 // ---------------------------------------------------------------------------
 
 /** Wrap the selection with a marker pair; unwrap when already wrapped. */
-function wrapSelection(view: EditorView, mark: string, markEnd = mark): void {
+export function wrapSelection(view: EditorView, mark: string, markEnd = mark): void {
   const sel = view.state.selection.main;
   const text = view.state.sliceDoc(sel.from, sel.to);
   const before = view.state.sliceDoc(Math.max(0, sel.from - mark.length), sel.from);
@@ -256,7 +256,7 @@ function wrapSelection(view: EditorView, mark: string, markEnd = mark): void {
   view.focus();
 }
 
-function isWrapped(view: EditorView, mark: string, markEnd = mark): boolean {
+export function isWrapped(view: EditorView, mark: string, markEnd = mark): boolean {
   const sel = view.state.selection.main;
   return (
     view.state.sliceDoc(Math.max(0, sel.from - mark.length), sel.from) === mark &&
@@ -264,7 +264,78 @@ function isWrapped(view: EditorView, mark: string, markEnd = mark): boolean {
   );
 }
 
-const FORMAT_MARKS: Array<[string, string, string, string]> = [
+/**
+ * Toggle a marker pair around the selection / word under the caret (native
+ * Obsidian `toggleMarkdownFormatting` parity; shared by the right-click menu
+ * and the floating format toolbar).
+ */
+export function toggleMarkerPairFor(view: EditorView, mark: string, alt?: string): void {
+  const state = view.state;
+  const sel = state.selection.main;
+  const word = sel.empty ? state.wordAt(sel.head) : null;
+  const probe = word ?? sel;
+  const wrappedWith = (m: string): boolean => {
+    if (state.doc.sliceString(Math.max(0, probe.from - m.length), probe.from) !== m) return false;
+    if (state.doc.sliceString(probe.to, Math.min(state.doc.length, probe.to + m.length)) !== m) return false;
+    // A single-char marker hugging a double-char one (the '*' inside '**')
+    // is not a toggle hit — native resolves this via the syntax tree.
+    if (m.length === 1) {
+      if (state.doc.sliceString(Math.max(0, probe.from - 2), probe.from - 1) === m) return false;
+      if (state.doc.sliceString(probe.to + 1, Math.min(state.doc.length, probe.to + 2)) === m) return false;
+    }
+    return true;
+  };
+  for (const m of alt ? [mark, alt] : [mark]) {
+    if (wrappedWith(m)) {
+      view.dispatch({
+        changes: [
+          { from: probe.from - m.length, to: probe.from },
+          { from: probe.to, to: probe.to + m.length },
+        ],
+        selection: {
+          anchor: probe.from - m.length,
+          head: probe.from - m.length + (probe.to - probe.from),
+        },
+        userEvent: 'input.format',
+      });
+      return;
+    }
+  }
+  if (word) {
+    view.dispatch({
+      changes: {
+        from: word.from,
+        to: word.to,
+        insert: mark + state.sliceDoc(word.from, word.to) + mark,
+      },
+      selection: {
+        anchor: word.from + mark.length,
+        head: word.from + mark.length + (word.to - word.from),
+      },
+      userEvent: 'input.format',
+    });
+    return;
+  }
+  if (sel.empty) {
+    // No word under the caret: drop an empty pair, caret inside.
+    view.dispatch({
+      changes: { from: sel.from, to: sel.to, insert: mark + mark },
+      selection: { anchor: sel.from + mark.length },
+      userEvent: 'input.format',
+    });
+    return;
+  }
+  view.dispatch({
+    changes: { from: sel.from, to: sel.to, insert: mark + state.sliceDoc(sel.from, sel.to) + mark },
+    selection: {
+      anchor: sel.from + mark.length,
+      head: sel.from + mark.length + (sel.to - sel.from),
+    },
+    userEvent: 'input.format',
+  });
+}
+
+export const FORMAT_MARKS: Array<[string, string, string, string]> = [
   // [title, icon, mark, markEnd]
   ['Bold', 'lucide-bold', '**', '**'],
   ['Italic', 'lucide-italic', '*', '*'],
@@ -308,7 +379,7 @@ function buildFormattingSubmenu(menu: Menu, view: EditorView): void {
 }
 
 /** Strip the known marker pairs hugging (or inside) the selection. */
-function clearFormatting(view: EditorView): void {
+export function clearFormatting(view: EditorView): void {
   let guard = 0;
   for (;;) {
     if (guard++ > 12) break;
@@ -533,71 +604,7 @@ export function createEditorAdapter(view: EditorView, host?: BlockRenderHost): R
     });
   };
   /** Toggle a marker pair around the selection / word under the caret. */
-  const toggleMarkerPair = (mark: string, alt?: string): void => {
-    const state = view.state;
-    const sel = state.selection.main;
-    const word = sel.empty ? state.wordAt(sel.head) : null;
-    const probe = word ?? sel;
-    const wrappedWith = (m: string): boolean => {
-      if (state.doc.sliceString(Math.max(0, probe.from - m.length), probe.from) !== m) return false;
-      if (state.doc.sliceString(probe.to, Math.min(state.doc.length, probe.to + m.length)) !== m) return false;
-      // A single-char marker hugging a double-char one (the '*' inside '**')
-      // is not a toggle hit — native resolves this via the syntax tree.
-      if (m.length === 1) {
-        if (state.doc.sliceString(Math.max(0, probe.from - 2), probe.from - 1) === m) return false;
-        if (state.doc.sliceString(probe.to + 1, Math.min(state.doc.length, probe.to + 2)) === m) return false;
-      }
-      return true;
-    };
-    for (const m of alt ? [mark, alt] : [mark]) {
-      if (wrappedWith(m)) {
-        view.dispatch({
-          changes: [
-            { from: probe.from - m.length, to: probe.from },
-            { from: probe.to, to: probe.to + m.length },
-          ],
-          selection: {
-            anchor: probe.from - m.length,
-            head: probe.from - m.length + (probe.to - probe.from),
-          },
-          userEvent: 'input.format',
-        });
-        return;
-      }
-    }
-    if (word) {
-      view.dispatch({
-        changes: {
-          from: word.from,
-          to: word.to,
-          insert: mark + state.sliceDoc(word.from, word.to) + mark,
-        },
-        selection: {
-          anchor: word.from + mark.length,
-          head: word.from + mark.length + (word.to - word.from),
-        },
-        userEvent: 'input.format',
-      });
-      return;
-    }
-    if (sel.empty) {
-      // No word under the caret: drop an empty pair, caret inside.
-      view.dispatch({
-        changes: { from: sel.from, to: sel.to, insert: mark + mark },
-        selection: { anchor: sel.from + mark.length },
-        userEvent: 'input.format',
-      });
-      return;
-    }
-    view.dispatch({
-      changes: { from: sel.from, to: sel.to, insert: mark + state.sliceDoc(sel.from, sel.to) + mark },
-      selection: {
-        anchor: sel.from + mark.length,
-        head: sel.from + mark.length + (sel.to - sel.from),
-      },
-      userEvent: 'input.format',
-    });
-  };
+  const toggleMarkerPair = (mark: string, alt?: string): void => toggleMarkerPairFor(view, mark, alt);
   const selectedLineNumbers = (): [number, number] => {
     const sel = view.state.selection.main;
     return [view.state.doc.lineAt(sel.from).number, view.state.doc.lineAt(sel.to).number];

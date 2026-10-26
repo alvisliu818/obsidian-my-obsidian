@@ -221,6 +221,7 @@ import {
   handleTab,
   handleWrapChar,
 } from '../interactions/keymap';
+import { formatToolbarExtension } from '../interactions/formatToolbar';
 
 /**
  * Selection-wrapping pairs: typing the key with a selection wraps it. */
@@ -490,6 +491,9 @@ export function createEditorExtensions(host: BlockRenderHost, block?: Block): Ex
       return handlePaste(view, host, event, text);
     },
   });
+  // 思源选区浮出格式工具栏(2026-10-26 第四批):mouseup 非空选区弹条,
+  // 选区塌缩/blur/滚动/点外即隐;按钮复用右键菜单同套 toggle/clear。
+  const formatBar = formatToolbarExtension();
   // NB: this extension is only ever mounted on a FOCUSED (editing) block, so
   // Ctrl+A / Ctrl+Z intentionally stay local here. The non-editing case is
   // owned by the capture-phase handler in BlockEditorView.
@@ -514,6 +518,7 @@ export function createEditorExtensions(host: BlockRenderHost, block?: Block): Ex
 
   const ext: Extension[] = [
     pasteHandler,
+    formatBar,
     EditorView.lineWrapping,
     highlightSpecialChars(),
     history(),
