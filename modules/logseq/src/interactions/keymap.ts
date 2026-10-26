@@ -126,6 +126,57 @@ export function handleEnter(view: EditorView, host: BlockRenderHost): boolean { 
     return true;
   }
   if (b.kind === 'raw') {
+    const { text, offset } = deleteSelection(view);
+    const parent = b.parent;
+    // 引述块(用户指定,2026-10-26):非空引述末尾回车 → 新建同级引述块;
+    // 内容中间回车 → 拆成两个引述块(Logseq 同款,尾部补 '> ');caret 在
+    // '>' 标记上/前 → 上方插空段落块(引述保持原样);空引述回车 → 退出
+    // 引述变空段落。此前走 splitRawToOutline 会把引述拆成大纲块,丢失
+    // 引述形态。'> ' 是 raw 块文本内嵌标记(位置绝对),库内库外编辑器
+    // 同走本分支(fragmentEditor 也挂 createEditorExtensions)。
+    if (/^>/.test(text)) {
+      if (text.slice(1).trim() === '') {
+        // 空引述('> '/'>'/纯空白)回车 → 退出引述:剥掉标记变空段落块
+        host.mutate(
+          () => {
+            b.text = '';
+          },
+          () => ({ lists: [parent] }),
+        );
+        host.focusBlock(b, 0);
+        return true;
+      }
+      let qn: Block | null = null;
+      let above = false;
+      host.mutate(
+        () => {
+          if (offset > 1) {
+            // 末尾(offset===len,tail 空 → 空同级引述)与内容中间(尾部补 '> ')
+            const tail = text.slice(offset);
+            b.text = text.slice(0, offset);
+            qn = createBlock(/^>/.test(tail) ? tail : '> ' + tail);
+            qn.kind = 'raw'; // 引述形态必须是 raw(list 序列化会加 '- ' 前缀)
+            insertAfter(b, qn);
+          } else {
+            // caret 在 '>' 上/前:上方插空段落容器,引述原样(Logseq 同款)
+            b.text = text;
+            qn = createBlock('');
+            qn.bare = true;
+            insertBefore(b, qn);
+            above = true;
+          }
+        },
+        () => ({ lists: [parent] }),
+      );
+      const target = qn as Block | null;
+      if (target) {
+        // raw 块无符号前缀换算(mlen=0),位置是文档绝对偏移:新引述的光标
+        // 落在标记之后('> '→2,'>'→1),空段落落行首。
+        const qpos = above ? 0 : target.text.startsWith('> ') ? 2 : target.text.startsWith('>') ? 1 : 0;
+        host.focusBlock(target, qpos);
+      }
+      return true;
+    }
     // Logseq parity: Enter turns the raw block into outline blocks — the head
     // converts to a list block, the tail becomes a new list sibling; edge
     // blank lines and the common indent never survive (splitRawToOutline).
@@ -134,8 +185,7 @@ export function handleEnter(view: EditorView, host: BlockRenderHost): boolean { 
     // 标题块除外(用户指定,2026-10-25 思源交互):标题回车**不转大纲**——
     // splitHeadingRaw:头部保持标题,尾部(光标之后)成为新的段落块(raw,
     // 无圆点),标题末尾回车 = 下方新建空段落。
-    const { text, offset } = deleteSelection(view);
-    const parent = b.parent;
+    // (text/offset 已在引述分支前取好。)
     let nb: Block | null = null;
     host.mutate(
       () => {
