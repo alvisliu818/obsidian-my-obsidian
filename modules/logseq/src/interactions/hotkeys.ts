@@ -153,3 +153,49 @@ export function classifyGlobalKey(
   // and whatever the user bound themselves) belongs to Obsidian.
   return { kind: 'none' };
 }
+
+/**
+ * 块选择模式的裸键分类（思源 keydown.ts:503/574/677/838/1281，2026-10-26）。
+ *
+ * 选中态（锚点存在 && 非编辑中）下这些裸键归我们：此前它们 classify 为
+ * `none` 漏给 Obsidian——选中块后按 ↑↓ 毫无反应，正是这批要补的缺口。
+ * 与 classifyGlobalKey 分开：那是 Mod 组合键的领地，裸键=打字的哲学
+ * 不动；这里只在块选择模式下被征用，门在调用方（handleGlobalKeydown）。
+ *
+ * caller 还需自带的两道门：`ev.repeat`（思源 Space 防连发 keydown.ts:578）
+ * 与 IME（isComposing 时整段跳过）。
+ */
+export type SelectionModeAction =
+  | { kind: 'none' }
+  | { kind: 'anchor-move'; dir: -1 | 1 }
+  | { kind: 'extend'; dir: -1 | 1 }
+  | { kind: 'toggle' }
+  | { kind: 'enter' }
+  | { kind: 'delete'; key: 'Backspace' | 'Delete' }
+  | { kind: 'insert-block'; side: 'after' | 'before' };
+
+export function classifySelectionModeKey(
+  key: string,
+  m: HotkeyModifiers,
+): SelectionModeAction {
+  if (hasMod(m) || m.alt) return { kind: 'none' };
+  switch (key) {
+    case 'ArrowUp':
+      return m.shift ? { kind: 'extend', dir: -1 } : { kind: 'anchor-move', dir: -1 };
+    case 'ArrowDown':
+      return m.shift ? { kind: 'extend', dir: 1 } : { kind: 'anchor-move', dir: 1 };
+    case ' ':
+      return m.shift ? { kind: 'none' } : { kind: 'toggle' };
+    case 'Enter':
+      return m.shift ? { kind: 'none' } : { kind: 'enter' };
+    case 'Backspace':
+    case 'Delete':
+      return { kind: 'delete', key };
+    case 'a':
+      return m.shift ? { kind: 'none' } : { kind: 'insert-block', side: 'after' };
+    case 'b':
+      return m.shift ? { kind: 'none' } : { kind: 'insert-block', side: 'before' };
+    default:
+      return { kind: 'none' };
+  }
+}

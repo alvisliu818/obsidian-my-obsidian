@@ -16,7 +16,7 @@ import { applyBlockProps, blockEditorDoc, blockId, createBlock, docPageProps, ed
 import { parseDocument } from '../core/parser';
 import { clearLogseqPageProps, registerLogseqPageProps } from '../pagePropsRegistry';
 import { serializeBlock, serializeDocument } from '../core/serializer';
-import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, isDescendant, linkParents, mergeWithNext, mergeWithPrev, moveBlockGroup, moveBlockVertically, nextVisible, outdent, prevVisible, pseudoRootOf, rangeAnchor, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, unregisterRoots, visibleRange, type MovePosition } from '../core/treeOps';
+import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, insertAfter, insertBefore, isDescendant, linkParents, mergeWithNext, mergeWithPrev, moveBlockGroup, moveBlockVertically, nextVisible, outdent, prevVisible, pseudoRootOf, rangeAnchor, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, unregisterRoots, visibleRange, type MovePosition } from '../core/treeOps';
 import { foldLevelOf, foldValueFor, headingLevel, nextFoldLevel, normFoldKey, subtreeFoldTargets, type FoldLevel } from '../core/fold';
 import { UndoStack } from '../state/undoStack';
 import {
@@ -56,7 +56,8 @@ import { buildTraceTimeIndex, formatTraceTimestamp, traceTimeModifiedAt, traceTi
 import { breadcrumbFor, restoreZoomed, visibleRootsFor, zoomId } from '../interactions/zoom';
 import { attachDnd } from '../interactions/dnd';
 import { attachContextMenu } from '../interactions/contextMenu';
-import { classifyGlobalKey, modifiersOf } from '../interactions/hotkeys';
+import { classifyGlobalKey, classifySelectionModeKey, modifiersOf, type SelectionModeAction } from '../interactions/hotkeys';
+import { deleteCandidate, isContinuousSelection, toggleBlockSelection } from '../interactions/blockSelection';
 import { clearActiveBlockEditor, syncActiveBlockEditor } from '../interactions/textSelectionMenu';
 import { autocompleteSources } from '../features/links';
 import { PageSearchBar } from '../features/pageSearch';
@@ -120,6 +121,14 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   /** Multi-selection (Shift/Ctrl+click); only top-level members act in bulk. */
   selectedBlocks = new Set<Block>();
   private lastClicked: Block | null = null;
+  /**
+   * 块选择模式锚点（思源 select-mode 类，2026-10-26）：↑↓ 移动 / Space 切换 /
+   * Enter 进入编辑都围着它转；null = 不在模式。Esc 兜底（handleEscape →
+   * enterBlockSelection）与点击选择（selectFromClick）都会设。
+   */
+  selectionAnchor: Block | null = null;
+  /** Shift+方向的移动端（思源 select-end 属性）：扩选只从它续，锚点跟随端点。 */
+  private selExtendEnd: Block | null = null;
   /** Last content handed to disk (getViewData/setViewData) — external-change baseline. */
   private lastDiskData: string | null = null;
 
@@ -2541,6 +2550,9 @@ ${content}`;
       if (range) {
         this.selectedBlocks.clear();
         for (const member of range) this.selectedBlocks.add(member);
+        // 思源 syncBlockSelectionModeToSelectionEnd：范围选中后锚点落点击端。
+        this.selectionAnchor = b;
+        this.selExtendEnd = null;
         this.syncSelectionClasses();
         this.focusTreeForSelection();
         return;
@@ -2554,6 +2566,8 @@ ${content}`;
       this.selectedBlocks.add(b);
     }
     this.lastClicked = b;
+    this.selectionAnchor = b;
+    this.selExtendEnd = null;
     this.syncSelectionClasses();
     // Ctrl+click empties the selection (last one deselected) — nothing owns the
     // keyboard then, so release the tree instead of leaving focus parked.
@@ -2562,7 +2576,10 @@ ${content}`;
   }
 
   clearSelection(): void {
-    if (this.selectedBlocks.size === 0) return;
+    const had = this.selectedBlocks.size > 0 || this.selectionAnchor !== null;
+    this.selExtendEnd = null;
+    this.selectionAnchor = null;
+    if (!had) return;
     this.selectedBlocks.clear();
     this.lastClicked = null;
     this.syncSelectionClasses();
@@ -2575,7 +2592,24 @@ ${content}`;
   syncSelectionClasses(): void {
     for (const [b, wrap] of this.selectionElIterator()) {
       wrap.classList.toggle('is-selected', this.selectedBlocks.has(b));
+      // 锚点环（思源 select-mode 类的视觉）：标记集为空时它就是唯一的
+      // 视觉指示——Esc 兜底进入模式后块只亮环不亮选中底色。
+      wrap.classList.toggle('is-anchor', this.selectionAnchor === b);
     }
+  }
+
+  /**
+   * 进入块选择模式，锚点=b（思源「兜底块选中」，keydown.ts:1937-1941：
+   * 只设模式锚点不标记）。handleEscape 提交后经 rAF 调用；片段宿主无此
+   * 方法（renderHost 可选成员），嵌入场景 Esc 行为不变。
+   */
+  enterBlockSelection(b: Block): void {
+    this.clearSelection();
+    this.selectionAnchor = b;
+    this.lastClicked = b;
+    this.syncSelectionClasses();
+    this.focusTreeForSelection();
+    findBlockEl(b)?.scrollIntoView({ block: 'nearest' });
   }
 
   /**
@@ -3106,13 +3140,27 @@ ${content}`;
    * listener never sees it. See `src/interactions/hotkeys.ts`.
    */
   private handleGlobalKeydown(ev: KeyboardEvent): void {
-    // Escape exits multi-selection first. While a block or an embed row is
+    // Escape exits multi-selection first (思源 Esc 链清除步：锚点或标记
+    // 存在即整个退出模式). While a block or an embed row is
     // being edited we must NOT touch it: those editors install their own
     // capture handler on their own DOM (commit on Escape) which runs AFTER
     // ours (we are on an ancestor), so preventing the default here would drop
     // whatever the user just typed.
     const editing = !!(this.focusedView || this.focusedCode || this.embedEdit);
-    if (ev.key === 'Escape' && this.selectedBlocks.size > 0 && !editing) {
+    // 块选择模式（思源 keydown.ts:503-592/677-836/838/1281，2026-10-26）：
+    // 锚点存在且非编辑中，裸键归我们——此前 classify 为 none 漏给
+    // Obsidian，选中块后 ↑↓/Space/Enter/Backspace 全部无反应。
+    if (!editing && this.selectionAnchor && !ev.isComposing) {
+      const act = classifySelectionModeKey(ev.key, modifiersOf(ev));
+      if (act.kind !== 'none') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        // Space 防连发（思源 keydown.ts:578 !event.repeat）。
+        if (act.kind !== 'toggle' || !ev.repeat) this.applySelectionModeAction(act);
+        return;
+      }
+    }
+    if (ev.key === 'Escape' && (this.selectedBlocks.size > 0 || this.selectionAnchor) && !editing) {
       ev.preventDefault();
       this.clearSelection();
       return;
@@ -3159,6 +3207,141 @@ ${content}`;
       .map((b) => serializeBlock(b, 0))
       .join('\n');
     if (md) await navigator.clipboard.writeText(md);
+  }
+
+  /**
+   * 块选择模式的键动作（思源 keydown.ts 的对应分支，2026-10-26）。
+   * 调用方已挡 editing/IME/Mod 组合键与 Space 连发。
+   */
+  private applySelectionModeAction(act: SelectionModeAction): void {
+    const anchor = this.selectionAnchor;
+    if (!anchor) return;
+    const roots = this.visibleRoots;
+    switch (act.kind) {
+      case 'anchor-move': {
+        // 思源 keydown.ts:503-571：锚点沿可见块移动，标记集不动。
+        const nb = act.dir === 1 ? nextVisible(roots, anchor) : prevVisible(roots, anchor);
+        if (!nb) return;
+        this.selectionAnchor = nb;
+        this.lastClicked = nb;
+        this.syncSelectionClasses();
+        findBlockEl(nb)?.scrollIntoView({ block: 'nearest' });
+        return;
+      }
+      case 'extend': {
+        // 思源 keydown.ts:677-688 归一化：标记集不是「含锚点的连续可见
+        // 区间且端点=锚点」时，扩选从锚点单块重来。
+        const marks = this.orderedVisibleMarks();
+        const seq = flattenVisible(roots);
+        const nextInSeq = (b: Block): Block | null => {
+          const i = seq.indexOf(b);
+          return i >= 0 && i < seq.length - 1 ? seq[i + 1] : null;
+        };
+        const midExtend =
+          marks.length > 0 &&
+          this.selExtendEnd === anchor &&
+          isContinuousSelection(marks, nextInSeq);
+        if (!midExtend) {
+          this.selectedBlocks.clear();
+          this.selectedBlocks.add(anchor);
+          this.selExtendEnd = anchor;
+        }
+        const neighbor =
+          act.dir === 1 ? nextVisible(roots, anchor) : prevVisible(roots, anchor);
+        if (!neighbor) return;
+        if (midExtend && marks.length > 1) {
+          // 端点在起点对侧时是收缩（思源 ⇧↑/⇧↓ 的 else 分支：去掉当前
+          // 端点标记，端点退一格——那格本来就在标记集里）。
+          const start = marks[0] === anchor ? marks[marks.length - 1] : marks[0];
+          const shrinking =
+            (act.dir === 1 && seq.indexOf(start) < seq.indexOf(anchor)) ||
+            (act.dir === -1 && seq.indexOf(start) > seq.indexOf(anchor));
+          if (shrinking) {
+            this.selectedBlocks.delete(anchor);
+            this.selExtendEnd = neighbor;
+            this.selectionAnchor = neighbor;
+            this.lastClicked = neighbor;
+            this.syncSelectionClasses();
+            findBlockEl(neighbor)?.scrollIntoView({ block: 'nearest' });
+            return;
+          }
+        }
+        this.selectedBlocks.add(neighbor);
+        this.selExtendEnd = neighbor;
+        this.selectionAnchor = neighbor;
+        this.lastClicked = neighbor;
+        this.syncSelectionClasses();
+        findBlockEl(neighbor)?.scrollIntoView({ block: 'nearest' });
+        return;
+      }
+      case 'toggle': {
+        // 思源 Space 切换（keydown.ts:574-592）：锚点进出标记集，
+        // 祖先/后代互斥（toggleBlockSelection 纯函数）。
+        this.selectedBlocks = new Set(toggleBlockSelection([...this.selectedBlocks], anchor));
+        this.syncSelectionClasses();
+        return;
+      }
+      case 'enter': {
+        // 思源 enter 命令（keydown.ts:838）：进入锚点块编辑。
+        this.clearSelection();
+        this.focusBlock(anchor, 'end');
+        return;
+      }
+      case 'delete': {
+        // 思源 removeBlock 分支（keydown.ts:1297-1306）：删除前先算光标
+        // 候选；无标记时删除的是锚点块本尊（思源同款）。
+        const tops = this.topSelectedBlocks();
+        const targets = tops.length > 0 ? tops : [anchor];
+        const candidate = deleteCandidate(
+          targets,
+          act.key,
+          (b) => prevVisible(roots, b),
+          (b) => nextVisible(roots, b),
+        );
+        this.mutate(
+          () => {
+            for (const b of targets) {
+              const z = this.zoomedBlock;
+              if (z && (z === b || isDescendant(b, z))) this.zoomedBlock = null;
+              removeBlock(b);
+            }
+          },
+          () => ({ full: true }),
+        );
+        this.selectedBlocks.clear();
+        this.selExtendEnd = null;
+        this.selectionAnchor = null;
+        this.syncSelectionClasses();
+        if (candidate) {
+          // side before = 删除区间之前 = 前块行尾；after = 后块行首
+          // （focusBlock 的 0 = 符号后内容首）。
+          this.focusBlock(candidate.block, candidate.side === 'after' ? 0 : 'end');
+        }
+        return;
+      }
+      case 'insert-block': {
+        // 思源 a/b（keydown.ts:388-412）：清选，锚点后/前插空块并进入编辑。
+        const nb = createBlock('');
+        nb.kind = anchor.kind;
+        this.clearSelection();
+        this.mutate(
+          () => {
+            if (act.side === 'after') insertAfter(anchor, nb);
+            else insertBefore(anchor, nb);
+          },
+          () => ({ lists: [anchor.parent ?? anchor] }),
+        );
+        this.focusBlock(nb, 0);
+        return;
+      }
+    }
+  }
+
+  /** selectedBlocks 按可见顺序排列（扩选的连续性/收缩判定要序）。 */
+  private orderedVisibleMarks(): Block[] {
+    const sel = this.selectedBlocks;
+    if (sel.size === 0) return [];
+    return flattenVisible(this.visibleRoots).filter((b) => sel.has(b));
   }
 
   private undoRestore(): boolean {

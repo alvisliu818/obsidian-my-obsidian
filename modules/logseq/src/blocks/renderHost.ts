@@ -67,6 +67,11 @@ export interface BlockRenderHost extends Component {
   focusBlockFromClick(b: Block, ev: MouseEvent): void;
   selectFromClick(b: Block, ev: MouseEvent): void;
   captureRangeAnchor(ev: MouseEvent): void;
+  /**
+   * 进入块选择模式，锚点=b（思源「兜底块选中」，Esc 链 keydown.ts:1937）。
+   * 可选：片段宿主没有选择模式，嵌入场景 Esc 只提交不锚住。
+   */
+  enterBlockSelection?(b: Block): void;
   zoomIn(b: Block): void;
   cycleFold(b: Block): void;
   foldSubtree(b: Block): void;

@@ -585,10 +585,20 @@ export function handleBacktick(view: EditorView, host: BlockRenderHost): boolean
   return handleWrapChar(view, host, '`', '`');
 }
 
-/** Escape: commit + leave the block (Logseq exits editing). */
-export function handleEscape(view: EditorView, _host: BlockRenderHost): boolean {
-  void _host;
+/**
+ * Escape（思源 keydown.ts:1905 链的我们版，2026-10-26）：提交编辑 →
+ * 进入块选择模式（思源「兜底块选中」：锚点=刚提交的块，不标记）。
+ * 再按一次 Esc 在树焦点态清锚点完全退出（BlockEditorView 全局分支）。
+ * IME 守卫：组合期间 Esc 是取消候选（思源同规），吞掉不做任何事。
+ */
+export function handleEscape(view: EditorView, host: BlockRenderHost): boolean {
+  if (view.composing) return true;
+  const b = host.focusedBlock;
   view.contentDOM.blur();
+  if (b && host.enterBlockSelection) {
+    // 等 blur→提交→重渲染收尾，下一帧挂锚点（思源 insertEmptyBlock 同款延迟）。
+    requestAnimationFrame(() => host.enterBlockSelection?.(b));
+  }
   return true;
 }
 

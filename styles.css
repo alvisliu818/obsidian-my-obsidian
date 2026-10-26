@@ -1530,6 +1530,13 @@ body.block-touch-dragging {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 45%, transparent);
 }
 
+/* 块选择模式锚点环（思源 select-mode 类，2026-10-26）：Esc 兜底进入模式后
+   只亮环不亮选中底色——它是 ↑↓/Space 的当前操作对象，标记集是操作范围。 */
+.block-wrap.is-anchor > .block-main {
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--interactive-accent) 65%, transparent);
+}
+
 /* ---------- Dataview coexistence ---------- */
 .block-content.has-dataview .block-content-static {
   width: 100%;

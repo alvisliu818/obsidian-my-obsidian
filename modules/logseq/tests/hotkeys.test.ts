@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   classifyGlobalKey,
+  classifySelectionModeKey,
   modifiersOf,
   qualifiedCommandId,
   CMD_FIND,
@@ -172,6 +173,29 @@ describe('modifiersOf', () => {
 
   it('reports no modifiers for a bare key', () => {
     expect(modifiersOf({ ctrlKey: false, metaKey: false, shiftKey: false, altKey: false })).toEqual(NONE);
+  });
+});
+
+describe('classifySelectionModeKey', () => {
+  it('claims the bare selection-mode keys (思源 keydown.ts 对应分支)', () => {
+    expect(classifySelectionModeKey('ArrowUp', NONE)).toEqual({ kind: 'anchor-move', dir: -1 });
+    expect(classifySelectionModeKey('ArrowDown', NONE)).toEqual({ kind: 'anchor-move', dir: 1 });
+    expect(classifySelectionModeKey('ArrowUp', { ...NONE, shift: true })).toEqual({ kind: 'extend', dir: -1 });
+    expect(classifySelectionModeKey('ArrowDown', { ...NONE, shift: true })).toEqual({ kind: 'extend', dir: 1 });
+    expect(classifySelectionModeKey(' ', NONE)).toEqual({ kind: 'toggle' });
+    expect(classifySelectionModeKey('Enter', NONE)).toEqual({ kind: 'enter' });
+    expect(classifySelectionModeKey('Backspace', NONE)).toEqual({ kind: 'delete', key: 'Backspace' });
+    expect(classifySelectionModeKey('Delete', NONE)).toEqual({ kind: 'delete', key: 'Delete' });
+    expect(classifySelectionModeKey('a', NONE)).toEqual({ kind: 'insert-block', side: 'after' });
+    expect(classifySelectionModeKey('b', NONE)).toEqual({ kind: 'insert-block', side: 'before' });
+  });
+
+  it('leaves Mod/Alt combos and shifted bare keys to Obsidian', () => {
+    expect(classifySelectionModeKey(' ', mod()).kind).toBe('none');
+    expect(classifySelectionModeKey('ArrowDown', { ...NONE, alt: true }).kind).toBe('none');
+    expect(classifySelectionModeKey(' ', { ...NONE, shift: true }).kind).toBe('none');
+    expect(classifySelectionModeKey('c', NONE).kind).toBe('none');
+    expect(classifySelectionModeKey('Escape', NONE).kind).toBe('none');
   });
 });
 

@@ -185,6 +185,12 @@ export function mountFocusedEditor(
     closeCompletion(view);
     view.contentDOM.blur();
     host.commitViewNow(view, block);
+    // 思源「兕底块选中」（Esc 链 keydown.ts:1937，2026-10-26）：提交后锚住
+    // 刚提交的块进入块选择模式（只设锚点不标记，↑↓/Space 的起点）。
+    // rAF 等提交后的重渲染收尾；片段宿主无此方法，嵌入场景行为不变。
+    if (host.enterBlockSelection) {
+      requestAnimationFrame(() => host.enterBlockSelection?.(block));
+    }
   };
   view.dom.addEventListener('keydown', escHandler, true);
   // The native slash-menu suggest requires the triggering keyboard event.
