@@ -2141,6 +2141,16 @@ export default class LogseqEditorPlugin extends Plugin {
     opts?: { readOnly?: boolean; forceCodeEditor?: boolean; forceBlockEditor?: boolean },
   ): Promise<void> {
     if (node.isDir) return;
+    // 媒体文件最先路由(先于 readOnly):查看器/播放器本身就是只读的,
+    // 「只读打开」对二进制塞文本 shim 只会得到乱码。
+    if (isImageFile(node.name)) {
+      await this.openExternalInView(VIEW_TYPE_IMAGE, { abs: node.abs, name: node.name });
+      return;
+    }
+    if (isVideoFile(node.name)) {
+      await this.openExternalInView(VIEW_TYPE_VIDEO, { abs: node.abs, name: node.name });
+      return;
+    }
     // Read-only means "show me, change nothing", and it is also the fallback
     // whenever a real editor cannot be given the file. Creating a link is a
     // genuine change to the user's library, so it happens only when they ask
@@ -2191,17 +2201,7 @@ export default class LogseqEditorPlugin extends Plugin {
       }
       if (await this.openInBlockEditor(mount, node)) return;
     } else {
-      // 媒体文件先给应用内查看器（增强图片查看器 / 视频播放器,库外 abs 模式
-      // 经 Node fs 直读),不再一律丢给系统——这是「打开库外图片和视频」的主
-      // 路由;用户明确要系统程序时用查看器工具栏或右键菜单的 open-with。
-      if (isImageFile(node.name)) {
-        await this.openExternalInView(VIEW_TYPE_IMAGE, { abs: node.abs, name: node.name });
-        return;
-      }
-      if (isVideoFile(node.name)) {
-        await this.openExternalInView(VIEW_TYPE_VIDEO, { abs: node.abs, name: node.name });
-        return;
-      }
+      // (媒体文件已在函数开头路由进应用内查看器。)
       // Real binaries have nothing to edit, so hand them to the system. Judged
       // by whole name as well as extension: `Dockerfile` and friends have no
       // extension and were being treated as binary, which sent them off to some
