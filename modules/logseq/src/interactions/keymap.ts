@@ -32,7 +32,7 @@ import {
 import { cycleMarker } from '../core/treeOps';
 import { headingLevel } from '../core/fold';
 import { parseDocument } from '../core/parser';
-import { applyBlockProps, applyEditorMarker, createBlock, splitPropLines, type Block } from '../types';
+import { applyBlockProps, applyEditorMarker, createBlock, splitEditorDocForCommit, splitPropLines, type Block } from '../types';
 
 function focusedBlock(host: BlockRenderHost): Block | null {
   return host.focusedBlock;
@@ -116,13 +116,47 @@ export function handleEnter(view: EditorView, host: BlockRenderHost): boolean { 
   // 思源交互:空的列表块(同级末尾)上回车 → 退出列表、转成段落容器。
   // 常见路径是"在有内容的块上回车得到空的列表块,再回车变成段落"——
   // 与思源一致(顶层 listOutdent / 嵌套 breakList,都是同层换容器)。
-  // 页面属性块除外:它是文件头的属性容器,回车该往下新建块(同 isPropsBlock)。
+  // 页面属性块除外:它是文件头的属性容器,回车 = 属性行提交 + 往下新建块。
   const isPageProps = host.doc.blocks[0] === b && (b.text === '' || b.frontmatter === true);
   if (!isPageProps && shouldExitListOnEnter(b, view.state.doc.toString())) {
     const parent = b.parent;
     // mutate 内部会重渲染(圆点随之消失);焦点块还是它,所以只把光标放回块首。
     host.mutate(() => toBareParagraph(b), () => ({ lists: [parent] }));
     host.focusBlock(b, 0);
+    return true;
+  }
+  // 页面属性块回车(2026-10-26 修复,库内库外同链):Logseq 形态的编辑文档是
+  // `- editor:: x\nstatus:: y`——通用路径 applyEditorMarker 剥 `- ` 后
+  // splitPropLines 只回收**尾**连续属性段,首行属性掉进 text,splitBlock 再把
+  // 剩余属性行拦腰拆成普通列表块(实测:props 块解散、序列化写出
+  // `- status:: active`)。正确语义 = 编辑中的属性行提交进模型 + **下方新建
+  // 块**(上面守卫注释声明的意图,此前只挡了退出列表分支,拆分路径漏了)。
+  // frontmatter 块的单冒号行不匹配 splitPropLines,中途回车会把 frontmatter
+  // 文本拆出块外——两种形态一并归到「下方新建块」。
+  if (isPageProps) {
+    const { text: live } = deleteSelection(view);
+    const parent = b.parent;
+    let nb: Block | null = null;
+    host.mutate(
+      () => {
+        if (b.frontmatter) {
+          // frontmatter 的编辑文档即正文(blockEditorDoc 原样返回)
+          b.text = live;
+        } else {
+          // 提交口径统一入口(splitEditorDocForCommit):属性块形态先剥 `- `
+          // 再切属性行,与 commitEditorText/保存期覆盖同口径(三条路径幂等,
+          // props 键序翻转不再反向污染模型)。
+          const { text: clean, props } = splitEditorDocForCommit(b, live);
+          applyBlockProps(b, props);
+          b.text = clean;
+        }
+        nb = createBlock('');
+        insertAfter(b, nb);
+      },
+      () => ({ lists: [parent] }),
+    );
+    const target = nb as Block | null;
+    if (target) host.focusBlock(target, 0);
     return true;
   }
   if (b.kind === 'raw') {

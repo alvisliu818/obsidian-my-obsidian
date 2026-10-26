@@ -987,6 +987,28 @@ export function editableProps(b: Block): Record<string, string> {
   return out;
 }
 
+/**
+ * 编辑文档 → {text, props}（提交口径统一入口，2026-10-26 属性块 Enter 链）。
+ *
+ * 属性块形态（text 空的列表块，编辑文档 = `- key:: v` + 后续属性行）必须
+ * **先剥行首符号再切尾随属性段**：`- editor:: x` 带符号的首行会被
+ * splitPropLines 的尾随判定拒收，属性掉进 text——预提交/焦点切换再提交/
+ * 保存期覆盖三条路径都会中招（实测：props 键序翻转后重挂文档，再提交时
+ * status 掉回 text）。先剥符号后，无论 props 键序如何，整条提交链幂等。
+ * 普通块维持原序：先切尾随属性段，再对正文剥符号。
+ */
+export function splitEditorDocForCommit(b: Block, live: string): { text: string; props: Record<string, string> } {
+  const propsShaped = b.kind === 'list' && b.text === '';
+  if (!propsShaped) {
+    const { text, props } = splitPropLines(live);
+    const marked = applyEditorMarker(b, text, 0);
+    return { text: marked.text, props };
+  }
+  const marked = applyEditorMarker(b, live, 0);
+  const { text, props } = splitPropLines(marked.text);
+  return { text, props };
+}
+
 export function propsShallowEqual(a: Record<string, string>, b: Record<string, string>): boolean {
   const ka = Object.keys(a);
   const kb = Object.keys(b);

@@ -52,7 +52,7 @@ import {
   type EmbedSource,
 } from '../features/links';
 import { collapseLevels, expandLevels, isSubtreeFullyFolded, toggleCollapse } from '../interactions/collapse';
-import { isCollapsed } from '../types';
+import { isCollapsed, splitEditorDocForCommit } from '../types';
 import { buildTraceTimeIndex, formatTraceTimestamp, traceTimeModifiedAt, traceTimePluginOf, type TraceTimeIndex, type TraceTimeState } from '../features/tracetime';
 import { breadcrumbFor, restoreZoomed, visibleRootsFor, zoomId } from '../interactions/zoom';
 import { attachDnd } from '../interactions/dnd';
@@ -3409,7 +3409,10 @@ ${content}`;
       if (live !== blockEditorDoc(b)) {
         const savedText = b.text;
         const savedProps = b.props;
-        const { text, props } = splitPropLines(live);
+        // 提交口径统一入口(2026-10-26 属性块 Enter 链):属性块形态先剥行首
+        // 符号再切尾随属性段——否则保存期覆盖把 `- editor:: x` 留在 text 里,
+        // 序列化写出双符号/解散属性块。普通块同口径(先切属性再剥符号)。
+        const { text, props } = splitEditorDocForCommit(b, live);
         b.text = text;
         applyBlockProps(b, props);
         const s = this.serializeDocCurrent();

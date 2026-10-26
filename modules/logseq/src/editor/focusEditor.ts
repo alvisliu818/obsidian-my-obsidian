@@ -12,14 +12,13 @@ import { createEditorExtensions } from './extensions';
 import { expandTemplates, type TemplateContext } from '../features/template';
 import {
   applyBlockProps,
-  applyEditorMarker,
   blockEditorDoc,
   editableProps,
   EDITOR_BULLET_RE,
   EDITOR_TASK_RE,
   editorMarkerLen,
   propsShallowEqual,
-  splitPropLines,
+  splitEditorDocForCommit,
   syncFrontmatterProps,
   type Block,
 } from '../types';
@@ -280,11 +279,10 @@ export function commitEditorText(view: EditorView, block: Block, ctx?: TemplateC
     syncFrontmatterProps(block);
     return true;
   }
-  const { text, props } = splitPropLines(raw);
-  // 符号即文本:行首符号解析进模型(删符号→段落/规范化/任务标记),与
-  // keymap 的 Enter/Backspace/Delete 路径共用 applyEditorMarker。
-  const marked = applyEditorMarker(block, text, 0);
-  const committed = marked.text;
+  // 提交口径统一入口(2026-10-26 属性块 Enter 链):属性块形态先剥行首符号
+  // 再切尾随属性段(带符号首行会被尾随判定拒收),普通块维持原序;两条路径
+  // 内部都过 applyEditorMarker(符号即文本)。
+  const { text: committed, props } = splitEditorDocForCommit(block, raw);
   if (committed === block.text && propsShallowEqual(editableProps(block), props)) return false;
   block.text = committed;
   applyBlockProps(block, props);
