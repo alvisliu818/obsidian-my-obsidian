@@ -300,6 +300,38 @@ export function isWrapped(view: EditorView, mark: string, markEnd = mark): boole
 }
 
 /**
+ * 当前选区上「点击会命中解包」的标记集（toggleMarkerPairFor 的 wrappedWith
+ * 判定，含单字符标记嵌在双字符内的排除——`**x**` 只算 bold 不算 italic）。
+ * 格式刷取色与工具栏按钮态共用此口径：亮着的按钮 = 取走的格式 = 点击会
+ * 发生的事。返回规范形式（bold 无论 ** 或 __ 都归 '**'）。
+ */
+export function activeMarksAt(view: EditorView): string[] {
+  const state = view.state;
+  const sel = state.selection.main;
+  const word = sel.empty ? state.wordAt(sel.head) : null;
+  const probe = word ?? sel;
+  const hit = (m: string, markEnd = m): boolean => {
+    if (state.doc.sliceString(Math.max(0, probe.from - m.length), probe.from) !== m) return false;
+    if (state.doc.sliceString(probe.to, Math.min(state.doc.length, probe.to + markEnd.length)) !== markEnd) return false;
+    if (m.length === 1) {
+      // 单字符标记紧贴双字符标记('*' 在 '**' 内)不算命中——与
+      // toggleMarkerPairFor 的 wrappedWith 同一守卫。
+      if (state.doc.sliceString(Math.max(0, probe.from - 2), probe.from - 1) === m) return false;
+      if (state.doc.sliceString(probe.to + 1, Math.min(state.doc.length, probe.to + 2)) === m) return false;
+    }
+    return true;
+  };
+  const hits: string[] = [];
+  if (hit('**') || hit('__')) hits.push('**');
+  if (hit('*') || hit('_')) hits.push('*');
+  if (hit('~~')) hits.push('~~');
+  if (hit('==')) hits.push('==');
+  if (hit('`')) hits.push('`');
+  if (hit('%%')) hits.push('%%');
+  return hits;
+}
+
+/**
  * Toggle a marker pair around the selection / word under the caret (native
  * Obsidian `toggleMarkdownFormatting` parity; shared by the right-click menu
  * and the floating format toolbar).

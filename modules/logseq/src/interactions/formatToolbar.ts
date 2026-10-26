@@ -19,14 +19,15 @@
  * 视觉层无需本模块负责：livePreview 已把 `**x**` 渲染成粗体并隐藏标记符。
  */
 
-import { setIcon } from 'obsidian';
+import { Notice, setIcon } from 'obsidian';
 import { EditorView } from '@codemirror/view';
 import type { Extension } from '@codemirror/state';
 import {
   FORMAT_MARKS,
+  activeMarksAt,
   clearFormatting,
-  isWrapped,
   toggleMarkerPairFor,
+  wrapSelection,
 } from './textSelectionMenu';
 
 // ---------------------------------------------------------------------------
@@ -118,14 +119,72 @@ export function isFormatToolbarVisible(): boolean {
   return bar !== null;
 }
 
+// ---------------------------------------------------------------------------
+// 格式刷（思源 FormatPainter.ts 流程 + formatPainterCore 语义，类型口径）
+// ---------------------------------------------------------------------------
+//
+// 思源取色按 DOM 分段求交集（FORMAT_PAINTER_TYPES + 内联样式）；我们无样式
+// 表示（纯 markdown），快照 = 当前选区的标记 hug 判定（与按钮态同一口径：
+// 亮着的按钮就是会被取走的格式）。应用 = clearFormatting + 逐类型重放，与
+// 思源 applyMark("clear") + applyMark(type) 同序。已知口径局限沿用批次 11
+// 记录：`**b**` 的 hug 判定会同时命中 bold/italic（与按钮态一致，不另立）。
+// 字体族/字号/颜色等样式刷不移植——模型无对应表示。
+
+let painterMarks: string[] | null = null; // null = 未激活
+let painterContinuous = false;
+let painterOffEsc: (() => void) | null = null;
+
+/** 格式刷是否激活（once 取色后 / continuous 期间）。 */
+export function isFormatPainterActive(): boolean {
+  return painterMarks !== null;
+}
+
+/** 取色：选区上的标记集（activeMarksAt 口径 = 按钮态口径，含嵌套排除）。 */
+export function takePainterSnapshot(view: EditorView): string[] {
+  return activeMarksAt(view);
+}
+
+/** 应用：先清空目标格式再重放快照（思源 applyMark("clear") + applyMark(type) 同序）。 */
+export function applyPainter(view: EditorView, marks: string[]): void {
+  clearFormatting(view);
+  for (const m of marks) {
+    if (m === COMMENT_MARK) {
+      toggleMarkerPairFor(view, COMMENT_MARK);
+      continue;
+    }
+    const btn = FORMAT_BUTTONS.find((x) => x.mark === m);
+    if (btn) toggleMarkerPairFor(view, btn.mark, btn.alt);
+  }
+}
+
+/** 激活（思源 activate）：隐藏条，下一次选区直接应用。 */
+export function activatePainter(view: EditorView, continuous: boolean): void {
+  painterMarks = takePainterSnapshot(view);
+  painterContinuous = continuous;
+  hideFormatToolbar();
+  painterOffEsc = attach(document, 'keydown', (ev: KeyboardEvent) => {
+    if (ev.key === 'Escape') deactivatePainter();
+  }, true);
+  new Notice(continuous ? '格式刷：连续模式（Esc 退出）' : '格式刷已取格式，选中文本即应用');
+}
+
+export function deactivatePainter(): void {
+  painterMarks = null;
+  painterContinuous = false;
+  painterOffEsc?.();
+  painterOffEsc = null;
+}
+
 /** 逐按钮刷新 is-current（与点击动作的 hug 判定同口径）。 */
 function refreshStates(view: EditorView): void {
   if (!bar) return;
+  const active = activeMarksAt(view); // 与点击动作的解包判定同口径(含嵌套排除)
   bar.querySelectorAll<HTMLElement>('.lg-fmt-bar__btn').forEach((btn) => {
     const mark = btn.dataset.mark ?? '';
-    const markEnd = btn.dataset.markEnd ?? '';
-    const on = btn.dataset.kind === 'comment' ? isWrapped(view, COMMENT_MARK) : isWrapped(view, mark, markEnd);
-    btn.classList.toggle('is-current', on);
+    const kind = btn.dataset.kind ?? '';
+    // 无标记按钮（link/blockref/painter/clear）没有亮灭态可刷新。
+    if (!mark && kind !== 'comment') return;
+    btn.classList.toggle('is-current', active.includes(mark));
   });
 }
 
@@ -153,7 +212,29 @@ function buildBar(view: EditorView): HTMLElement {
     addBtn(b.icon, b.title, 'md', () => toggleMarkerPairFor(view, b.mark, b.alt), b.mark, b.markEnd);
   }
   addBtn('lucide-percent', 'Comment', 'comment', () => toggleMarkerPairFor(view, COMMENT_MARK), COMMENT_MARK, COMMENT_MARK);
+  // 链接/块引用(思源工具栏 a / block-ref 按钮的我们侧等价):包裹后光标落在
+  // 标记内,URL/引用目标由用户接着键入(块引用内键入会触发块提示补全)。
+  addBtn('lucide-link', 'Link', 'link', () => wrapSelection(view, '[', ']()'));
+  addBtn('lucide-link-2', 'Block ref', 'blockref', () => wrapSelection(view, '((', '))'));
   addBtn('lucide-eraser', 'Clear formatting', 'clear', () => clearFormatting(view));
+  // 格式刷:单击一次 / 双击连续(思源 FormatPainter 的 TIMEOUT_DBLCLICK 区分)。
+  // 独立建钮:click 事件需要 detail,addBtn 的闭包不带。
+  const painterBtn = document.createElement('div');
+  painterBtn.className = 'lg-fmt-bar__btn';
+  painterBtn.dataset.kind = 'painter';
+  painterBtn.setAttribute('aria-label', 'Format painter(双击连续模式)');
+  setIcon(painterBtn, 'lucide-paint-roller');
+  let clickTimer: number | undefined;
+  painterBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    window.clearTimeout(clickTimer);
+    if (e.detail > 1) {
+      activatePainter(view, true);
+      return;
+    }
+    clickTimer = window.setTimeout(() => activatePainter(view, false), 250);
+  });
+  el.appendChild(painterBtn);
   document.body.appendChild(el);
   return el;
 }
@@ -163,6 +244,13 @@ function buildBar(view: EditorView): HTMLElement {
  * coordsAtPos 返回视口坐标，scrollDOM 的 rect 也是，fixed 定位直接可用。
  */
 export function showFormatToolbar(view: EditorView, multiClick: boolean): void {
+  // 格式刷激活中：这次 mouseup 选区就是应用目标（思源激活后隐藏工具条，
+  // 下一次选区直接 applyFormatPainter）；once 应用即退出，continuous 继续。
+  if (painterMarks !== null) {
+    applyPainter(view, painterMarks);
+    if (!painterContinuous) deactivatePainter();
+    return;
+  }
   const sel = view.state.selection.main;
   if (sel.empty) {
     hideFormatToolbar();
@@ -209,9 +297,9 @@ export function showFormatToolbar(view: EditorView, multiClick: boolean): void {
   bar.classList.remove('fn__none');
 }
 
-function attach(target: EventTarget, type: string, fn: (ev: never) => void): () => void {
-  target.addEventListener(type, fn as EventListener);
-  return () => target.removeEventListener(type, fn as EventListener);
+function attach(target: EventTarget, type: string, fn: (ev: never) => void, capture = false): () => void {
+  target.addEventListener(type, fn as EventListener, capture);
+  return () => target.removeEventListener(type, fn as EventListener, capture);
 }
 
 // ---------------------------------------------------------------------------
