@@ -2943,6 +2943,17 @@ ${content}`;
     );
   }
 
+  /** 任务状态直设（批次 29，思源 taskStatusDialog setMarker 语义）。 */
+  setTaskMarker(b: Block, marker: string): void {
+    this.mutate(
+      () => {
+        b.task = marker;
+        return b.task;
+      },
+      () => ({ subtree: b }),
+    );
+  }
+
   /** 标题编号（批次 24）：renderBlock 查询当前块显示编号。 */
   headingNumberOf(b: Block): string | null {
     return this.headingNumberMap.get(b) ?? null;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   getTaskListMarker,
+  getTaskStatusItems,
   isTaskListMarker,
   nextTaskListMarker,
   nextTaskListStatus,
@@ -120,5 +121,38 @@ describe('GFM task parse + serialize round-trip', () => {
     expect(doc.blocks[0].marker).toBe('TODO');
     expect(doc.blocks[0].task).toBe(' ');
     expect(rt('- TODO [ ] stacked')).toBe('- TODO [ ] stacked');
+  });
+});
+
+/* 批次 29：getTaskStatusItems（思源 taskStatusDialog.ts getTaskStatusItems 1:1）。 */
+describe('getTaskStatusItems (思源: task status menu items)', () => {
+  const ids = ['taskStatusTodo', 'taskStatusInProgress', 'taskStatusDone', 'taskStatusCanceled', 'customTaskStatus'];
+
+  it('five items with stable ids and markers', () => {
+    const items = getTaskStatusItems(' ');
+    expect(items.map((i) => i.id)).toEqual(ids);
+    expect(items.map((i) => i.marker)).toEqual([' ', '/', 'X', '-', ' ']);
+  });
+
+  it('checks the built-in state matching the marker (case-insensitive)', () => {
+    expect(getTaskStatusItems(' ').filter((i) => i.checked).map((i) => i.id)).toEqual(['taskStatusTodo']);
+    expect(getTaskStatusItems('/').filter((i) => i.checked).map((i) => i.id)).toEqual(['taskStatusInProgress']);
+    expect(getTaskStatusItems('X').filter((i) => i.checked).map((i) => i.id)).toEqual(['taskStatusDone']);
+    expect(getTaskStatusItems('x').filter((i) => i.checked).map((i) => i.id)).toEqual(['taskStatusDone']); // 思源 toUpperCase 语义
+    expect(getTaskStatusItems('-').filter((i) => i.checked).map((i) => i.id)).toEqual(['taskStatusCanceled']);
+  });
+
+  it('custom marker: no built-in checked, custom checked, marker echoed back', () => {
+    const items = getTaskStatusItems('?');
+    expect(items.filter((i) => i.checked).map((i) => i.id)).toEqual(['customTaskStatus']);
+    expect(items.find((i) => i.id === 'customTaskStatus')?.marker).toBe('?');
+  });
+
+  it('null/empty marker: nothing built-in checked, custom checked with " " fallback', () => {
+    for (const m of [null, undefined, '']) {
+      const items = getTaskStatusItems(m);
+      expect(items.filter((i) => i.checked).map((i) => i.id)).toEqual(['customTaskStatus']);
+      expect(items.find((i) => i.id === 'customTaskStatus')?.marker).toBe(' '); // 思源 marker || ' '
+    }
   });
 });

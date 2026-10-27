@@ -27,6 +27,7 @@ import {
   type BlockShape,
   type ConvertOptions,
 } from './blockTypeConvert';
+import { getTaskStatusItems, isTaskListMarker } from '../core/taskMarker';
 
 /** Common fence languages offered before the free-text prompt. */
 const COMMON_LANGS: readonly string[] = [
@@ -144,6 +145,35 @@ export function openBlockTypeMenu(
       );
     });
   }
+  // Task status (SiYuan taskStatusDialog parity, batch 29): four-state items
+  // + free-text custom marker, only when this block IS a task.
+  if (b.task !== undefined) {
+    hasParams = true;
+    const icons: Record<string, string> = {
+      taskStatusTodo: 'square',
+      taskStatusInProgress: 'circle-dot',
+      taskStatusDone: 'check',
+      taskStatusCanceled: 'minus',
+      customTaskStatus: 'pencil',
+    };
+    addSubmenu(menu, 'Task status', 'check-circle', at, (sub) => {
+      for (const item of getTaskStatusItems(b.task)) {
+        sub.addItem((sub2) =>
+          sub2
+            .setTitle(item.label)
+            .setIcon(icons[item.id] ?? 'square')
+            .setChecked(item.checked)
+            .onClick(() => {
+              if (item.id === 'customTaskStatus') {
+                new TaskMarkerPromptModal(host, b, item.marker).open();
+              } else {
+                host.setTaskMarker(b, item.marker);
+              }
+            }),
+        );
+      }
+    });
+  }
   if (current === 'code') {
     hasParams = true;
     const lang = (b.text.match(/^(`{3,}|~{3,})(\S*)/)?.[2] ?? '').toLowerCase();
@@ -239,6 +269,50 @@ class CalloutKindPromptModal extends Modal {
             return;
           }
           applyRewrite(this.host, this.block, next);
+        }),
+    );
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+}
+
+/** Free-text task status marker (SiYuan openTaskStatusDialog parity, batch 29):
+ * one character, empty input normalizes to ' ' (Todo), an invalid marker keeps
+ * the dialog open with an error — mirroring showMessage(invalid). */
+class TaskMarkerPromptModal extends Modal {
+  constructor(
+    private host: BlockRenderHost,
+    private block: Block,
+    private current: string,
+  ) {
+    super(host.app);
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    let value = this.current === ' ' ? '' : this.current;
+    new Setting(contentEl).setName('Task status marker (single character)').addText((t) => {
+      t.setValue(value).onChange((v) => {
+        value = v;
+      });
+      t.inputEl.maxLength = 1;
+      return t;
+    });
+    new Setting(contentEl).addButton((btn) =>
+      btn
+        .setButtonText('Apply')
+        .setCta()
+        .onClick(() => {
+          const next = value === '' ? ' ' : value;
+          if (!isTaskListMarker(next)) {
+            new Notice('Invalid task marker — one character other than [ and ].');
+            return;
+          }
+          this.close();
+          this.host.setTaskMarker(this.block, next);
         }),
     );
   }

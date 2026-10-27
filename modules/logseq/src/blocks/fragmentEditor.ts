@@ -440,6 +440,13 @@ export class FragmentHost extends Component implements BlockRenderHost {
     });
   }
 
+  setTaskMarker(b: Block, marker: string): void {
+    this.mutate(() => {
+      b.task = marker;
+      return b.task;
+    });
+  }
+
   // ------------------------------------------------------------------
   // 块结构操作(slash 菜单块级命令)
   // ------------------------------------------------------------------

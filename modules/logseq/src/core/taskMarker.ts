@@ -51,3 +51,44 @@ export const getTaskListMarker = (
 /** 渲染 class 映射：' '/'X'/'/'/'-' → empty/x/slash/dash（'/' 不能进 class）。 */
 export const taskStatusClass = (t: string): string =>
   t === ' ' ? 'empty' : t === '/' ? 'slash' : t === '-' ? 'dash' : t.toLowerCase();
+
+// ---------------------------------------------------------------------------
+// 任务状态菜单（批次 29，思源 wysiwyg/taskStatusDialog.ts getTaskStatusItems
+// 1:1 去 UI 化）：四态项 + Custom 项的 checked 判定是纯逻辑，抽出来供
+// blockTypeMenu 消费与单测；菜单层只做 icon/onClick 接线。
+// ---------------------------------------------------------------------------
+
+export type TaskStatusItemId =
+  | 'taskStatusTodo'
+  | 'taskStatusInProgress'
+  | 'taskStatusDone'
+  | 'taskStatusCanceled'
+  | 'customTaskStatus';
+
+export interface TaskStatusItem {
+  id: TaskStatusItemId;
+  /** 该项写入 Block.task 的单字符标记（Custom 项是当前标记的回显）。 */
+  marker: string;
+  label: string;
+  checked: boolean;
+}
+
+const TASK_STATUS_BASE: ReadonlyArray<{ id: TaskStatusItemId; marker: string; label: string }> = [
+  { id: 'taskStatusTodo', marker: ' ', label: 'Todo' },
+  { id: 'taskStatusInProgress', marker: '/', label: 'In Progress' },
+  { id: 'taskStatusDone', marker: 'X', label: 'Done' },
+  { id: 'taskStatusCanceled', marker: '-', label: 'Canceled' },
+];
+
+export const getTaskStatusItems = (marker: string | null | undefined): TaskStatusItem[] => {
+  const upper = (marker ?? '').toUpperCase();
+  return [
+    ...TASK_STATUS_BASE.map((item) => ({ ...item, checked: upper === item.marker })),
+    {
+      id: 'customTaskStatus' as const,
+      marker: (marker ?? ' ') || ' ',
+      label: 'Custom status',
+      checked: ![' ', '/', 'X', '-'].includes(upper),
+    },
+  ];
+};
