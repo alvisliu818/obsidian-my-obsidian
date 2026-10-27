@@ -52,3 +52,5 @@ tests/e2e/_*.out
 .yarn/unplugged/
 # packageManager 钉版本的 yarn release 二进制，yarn 首次运行时自动落地，可再生
 .yarn/releases/
+# Monaco worker 构建产物（仓库根级，deploy 部署面；fixture 路径单列在上）
+monaco-workers/

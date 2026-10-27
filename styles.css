@@ -3920,6 +3920,9 @@ body.lgp-table-editor-cw-cursor * {
   border-color: var(--color-accent);
 }
 
+/* ---------- modules/doc-tree（虚拟文档树，2026-10-27 拆分）：下面的挂载面板 /
+   库外媒体查看器 / 挂载弹窗样式段归属 doc-tree 模块；styles.css 仍是单一
+   部署文件，段界只标注归属不拆文件。 ---------- */
 /* ==========================================================================
    Mount panel — a self-contained sidebar view for folders outside the vault.
 

@@ -77,7 +77,7 @@ for (const f of ["monaco.css"]) {
 	console.log(`  monaco-workers/`);
 }
 
-// ---- basedpyright(语言服务)----
+// ---- basedpyright(语言服务；宿主 = modules/code-editor 的 lsp/，2026-10-27 拆分)----
 // 块内代码块的语言服务走这个:随插件部署,启动时不依赖 PATH / 网络 / uv。
 // 整个 basedpyright 目录都要带 —— dist/pyright-langserver.js 运行时读
 // 同目录的 typeshed-fallback(lspHost 的 resolvePyrightLaunch 优先用它)。
