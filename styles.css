@@ -3140,6 +3140,61 @@ body.lgp-table-editor-cursor * {
 }
 
 /* ------------------------------------------------------------------ */
+/* Grow handle (siyuan batch 19): a grip at the table's bottom-right  */
+/* corner. Dragging grows/shrinks the table by whole rows/columns;    */
+/* the preview label reuses the drag ghost's floating look so every   */
+/* table affordance reads the same.                                   */
+/* ------------------------------------------------------------------ */
+.lgp-table-editor-grow {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  /* Pure mouse affordance: never receives text, never selectable. */
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.lgp-table-editor-grow::before {
+  content: '';
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  /* A small right-angled triangle drawn with borders — no icon font
+     needed for a 10px glyph. */
+  border-right: 8px solid var(--text-faint);
+  border-bottom: 8px solid transparent;
+  transition: border-right-color 120ms ease;
+}
+
+.lgp-table-editor-grow:hover::before,
+.lgp-table-editor-grow.dragging::before {
+  border-right-color: var(--interactive-accent);
+}
+
+/* The global grab cursor must not override the resize affordance while
+   a grow drag is in flight (both rules are !important; this one wins by
+   specificity). */
+body.lgp-table-editor-cursor .lgp-table-editor-grow {
+  cursor: nwse-resize !important;
+}
+
+.lgp-table-editor-grow-preview {
+  position: fixed;
+  z-index: 1000;
+  padding: 2px 8px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 28%);
+  font-size: var(--font-smallest);
+  color: var(--text-normal);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0.95;
+}
+
+/* ------------------------------------------------------------------ */
 /* Linked-references filter (Logseq parity): funnel button next to the */
 /* "N linked mentions" count + its dialog.                            */
 /* ------------------------------------------------------------------ */

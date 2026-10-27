@@ -32,6 +32,7 @@ import {
   addRow,
   editTableInText,
   findTable,
+  growTo,
   moveColumn,
   moveRow,
   removeColumn,
@@ -43,6 +44,14 @@ import {
   type BoundTable,
   type ParsedTable,
 } from './tableModel';
+import {
+  constrainTableResizeCount,
+  getTableResizeCount,
+  tableResizeLimits,
+  TABLE_ADD_CONTROL_THICKNESS,
+  TABLE_DEFAULT_COLUMN_WIDTH,
+  TABLE_RESIZE_DRAG_THRESHOLD,
+} from './tableResizeCore';
 
 const CLS = 'lgp-table-editor';
 
@@ -357,11 +366,13 @@ export function enhanceTable(table: HTMLTableElement, b: Block, host: BlockRende
   // `bText` gives the ghost the current text (the block may have been edited
   // since the table was rendered).
   const drag = makeDragHandles(t, apply, () => b.text);
+  const grow = makeGrowHandle(t, apply, () => b.text);
 
   return {
     destroy() {
       for (const fn of cleanups) fn();
       drag();
+      grow();
     },
   };
 }
@@ -966,6 +977,210 @@ function makeDragHandles(
 
   return () => {
     finish();
+    for (const d of disposers) d();
+  };
+}
+
+/**
+ * The grow handle: a small grip at the table's bottom-right corner.
+ *
+ * Dragging it grows/shrinks the table by whole rows/columns (siyuan batch
+ * 19): the pixel delta becomes a target COUNT via `getTableResizeCount` —
+ * growing rounds against the added item size, while shrinking follows the
+ * REAL row/column boundaries, so the table collapses in visible steps and
+ * never halfway into a row. The target is then clamped by
+ * `tableResizeLimits`, so a shrink can never delete a row/column that holds
+ * content. The commit happens once, on release, through `apply(growTo(...))`
+ * — one undo step per gesture, matching the toolbar's add/remove buttons.
+ *
+ * ## Why a fixed preview label, not a live-resized table
+ *
+ * SiYuan re-renders the table at the target size on every pointermove. It
+ * can afford that because it owns the whole renderer; for us each preview
+ * generation would go through MarkdownRenderer plus re-enhancement, far too
+ * heavy per move. A `rows × columns` label following the pointer carries the
+ * same information at zero re-layout cost.
+ *
+ * ## Why the handle lives on the wrapper, not in a cell
+ *
+ * It targets the table as a WHOLE (both axes), so no cell owns it. It is
+ * absolutely positioned at the table's bottom-right corner; the offset is
+ * only correct after layout, so a ResizeObserver keeps it pinned (same
+ * pattern as `alignHandles` above).
+ */
+function makeGrowHandle(
+  t: BoundTable,
+  apply: (fn: (x: ParsedTable) => ParsedTable) => void,
+  bText: () => string,
+): () => void {
+  const table = t.root;
+  const wrap = table.closest(`.${CLS}`) as HTMLElement | null;
+  if (!wrap) return () => {}; // defensive: enhanceTable always wraps
+  const disposers: (() => void)[] = [];
+  const on = (el: HTMLElement, type: string, fn: (e: Event) => void): void => {
+    el.addEventListener(type, fn);
+    disposers.push(() => el.removeEventListener(type, fn));
+  };
+
+  const handle = document.createElement('div');
+  handle.className = `${CLS}-grow`;
+  handle.title = 'Drag to resize the table (rows × columns)';
+  handle.setAttribute('contenteditable', 'false');
+  // A pure mouse affordance, like the reorder handles: not focusable,
+  // not selectable, and its glyph comes from CSS, so it can never end up
+  // inside a cell value (there IS no owning cell).
+  handle.setAttribute('tabindex', '-1');
+  handle.setAttribute('aria-hidden', 'true');
+  wrap.appendChild(handle);
+
+  /** Keep the handle pinned to the table's bottom-right corner. */
+  const place = (): void => {
+    const tableRect = table.getBoundingClientRect();
+    const wrapRect = wrap.getBoundingClientRect();
+    // Half outside the corner so it never covers the last cell's content.
+    handle.style.left = `${tableRect.right - wrapRect.left - 7}px`;
+    handle.style.top = `${tableRect.bottom - wrapRect.top - 7}px`;
+  };
+  place();
+  if (typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(() => place());
+    ro.observe(table);
+    disposers.push(() => ro.disconnect());
+  }
+
+  interface GrowState {
+    pointerId: number;
+    startX: number;
+    startY: number;
+    startRows: number;
+    startColumns: number;
+    targetRows: number;
+    targetColumns: number;
+    /** Live row heights / column widths, measured at pointerdown. */
+    rowSizes: number[];
+    columnSizes: number[];
+    /** Size that one ADDED row/column costs while growing. */
+    addedRowSize: number;
+    addedColumnSize: number;
+    /** Content protection floors, from `tableResizeLimits`. */
+    minRows: number;
+    minColumns: number;
+    /** True once the pointer passed the drag threshold. */
+    active: boolean;
+  }
+  let state: GrowState | null = null;
+  let preview: HTMLElement | null = null;
+
+  const cleanup = (): void => {
+    state = null;
+    preview?.remove();
+    preview = null;
+    handle.classList.remove('dragging');
+    document.body.classList.remove(`${CLS}-cursor`);
+  };
+
+  const movePreview = (x: number, y: number, label: string): void => {
+    if (!preview) return;
+    preview.textContent = label;
+    preview.style.left = `${x + 14}px`;
+    preview.style.top = `${y + 14}px`;
+  };
+
+  on(handle, 'pointerdown', (e) => {
+    const ev = e as PointerEvent;
+    if (ev.button !== 0) return;
+    // Re-parse from the LIVE block text: the block may have been edited
+    // since this table was rendered (same reasoning as the ghost's bText).
+    const source = findTable(bText());
+    if (!source) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    // Measure the LIVE table: SiYuan feeds real row heights and column
+    // widths into the shrink math, and so do we. Growing a row costs the
+    // smallest existing row height (what a new row looks like); growing a
+    // column costs the table's default column width (SiYuan's choice).
+    const rowEls = [...(table.tBodies[0]?.rows ?? [])] as HTMLTableRowElement[];
+    const rowSizes = rowEls.map((r) => r.getBoundingClientRect().height);
+    const positive = rowSizes.filter((s) => s > 0);
+    const headerCells = [...(table.tHead?.rows[0]?.cells ?? [])] as HTMLTableCellElement[];
+    const columnSizes = headerCells.map((c) => c.getBoundingClientRect().width);
+    const limits = tableResizeLimits(
+      headerCells.map((c) => c.textContent ?? ''),
+      rowEls.map((r) => [...r.cells].map((c) => c.textContent ?? '')),
+    );
+
+    state = {
+      pointerId: ev.pointerId,
+      startX: ev.clientX,
+      startY: ev.clientY,
+      startRows: source.body.length,
+      startColumns: source.columns,
+      targetRows: source.body.length,
+      targetColumns: source.columns,
+      rowSizes,
+      columnSizes,
+      addedRowSize: positive.length > 0 ? Math.min(...positive) : TABLE_ADD_CONTROL_THICKNESS,
+      addedColumnSize: TABLE_DEFAULT_COLUMN_WIDTH,
+      minRows: limits.minRows,
+      minColumns: limits.minColumns,
+      active: false,
+    };
+    handle.classList.add('dragging');
+    // Suppress text selection for the whole gesture (same as the reorder
+    // handles).
+    document.body.classList.add(`${CLS}-cursor`);
+    preview = document.createElement('div');
+    preview.className = `${CLS}-grow-preview`;
+    document.body.appendChild(preview);
+    // Capture the pointer so the drag keeps tracking even when the pointer
+    // leaves the small handle.
+    handle.setPointerCapture?.(ev.pointerId);
+  });
+
+  on(handle, 'pointermove', (e) => {
+    if (!state || (e as PointerEvent).pointerId !== state.pointerId) return;
+    const ev = e as PointerEvent;
+    ev.preventDefault();
+    const dx = ev.clientX - state.startX;
+    const dy = ev.clientY - state.startY;
+    // Micro-jitter must not count as a drag (SiYuan's threshold).
+    if (!state.active && Math.hypot(dx, dy) < TABLE_RESIZE_DRAG_THRESHOLD) return;
+    state.active = true;
+    const requestedRows = getTableResizeCount(state.startRows, dy, state.addedRowSize, state.rowSizes);
+    const targetRows = constrainTableResizeCount(requestedRows, state.startRows, state.minRows, new Set());
+    const requestedCols = getTableResizeCount(state.startColumns, dx, state.addedColumnSize, state.columnSizes);
+    const targetCols = constrainTableResizeCount(requestedCols, state.startColumns, state.minColumns, new Set());
+    state.targetRows = targetRows;
+    state.targetColumns = targetCols;
+    // The label counts the header row too, so it reads like SiYuan's `R × C`.
+    movePreview(ev.clientX, ev.clientY, `${targetRows + 1} × ${targetCols}`);
+  });
+
+  const finish = (ev: PointerEvent | null): void => {
+    if (!state) return;
+    const s = state;
+    const committed =
+      s.active && (s.targetRows !== s.startRows || s.targetColumns !== s.startColumns);
+    cleanup();
+    if (!ev || !committed) return;
+    apply((x) => growTo(x, s.targetRows, s.targetColumns));
+  };
+
+  on(handle, 'pointerup', (e) => {
+    if (!state || (e as PointerEvent).pointerId !== state.pointerId) return;
+    e.preventDefault();
+    finish(e as PointerEvent);
+  });
+  on(handle, 'pointercancel', () => finish(null));
+  // Releasing the capture without a pointerup (alt-tab, devtools) cancels.
+  on(handle, 'lostpointercapture', () => finish(null));
+
+  disposers.push(() => {
+    cleanup();
+    handle.remove();
+  });
+  return () => {
     for (const d of disposers) d();
   };
 }

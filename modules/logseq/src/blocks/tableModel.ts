@@ -351,6 +351,26 @@ export function removeRow(t: ParsedTable, row: number): ParsedTable {
   return next;
 }
 
+/**
+ * Grow/shrink the table to exactly `rows` body rows and `columns` columns.
+ *
+ * The resize handle's commit step: the drag math produces a TARGET size, and
+ * this composes the existing single-step primitives into that target. Order
+ * matters only for readability — columns first so added rows are born with
+ * the final width (addRow fills `columns` cells). Removals always take the
+ * LAST row/column, which is why the drag side constrains the target through
+ * `tableResizeLimits` before calling this: deleting a non-empty trailing
+ * row/column would silently destroy content.
+ */
+export function growTo(t: ParsedTable, rows: number, columns: number): ParsedTable {
+  let next = t;
+  while (next.columns < columns) next = addColumn(next);
+  while (next.columns > columns) next = removeColumn(next, next.columns - 1);
+  while (next.body.length < rows) next = addRow(next);
+  while (next.body.length > rows) next = removeRow(next, next.body.length - 1);
+  return next;
+}
+
 /** Set a column's alignment. */
 export function setColumnAlign(t: ParsedTable, col: number, align: AlignKind): ParsedTable {
   const next = cloneTable(t);
