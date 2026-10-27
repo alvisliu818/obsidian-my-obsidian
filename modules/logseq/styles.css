@@ -677,6 +677,18 @@
 .block-ref:hover {
   background: var(--background-modifier-hover);
 }
+/* ---------- Inline memo（思源 ((text)) 行内备注，批次 27）---------- */
+/* 淡黄底+虚线下划线的备注片；无独立点击行为——点击冒泡进块编辑。 */
+.inline-memo {
+  background: rgba(255, 208, 0, 0.16);
+  border-bottom: 1px dashed rgba(196, 143, 0, 0.7);
+  padding: 0 1px;
+  border-radius: 2px;
+}
+.inline-memo:hover {
+  background: rgba(255, 208, 0, 0.30);
+}
+
 
 .block-ref-embed {
   padding: 2px 8px;

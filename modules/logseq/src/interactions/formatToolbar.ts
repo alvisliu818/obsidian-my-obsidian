@@ -26,9 +26,11 @@ import {
   FORMAT_MARKS,
   activeMarksAt,
   clearFormatting,
+  memoToggleSelection,
   toggleMarkerPairFor,
   wrapSelection,
 } from './textSelectionMenu';
+import { isMemoSpanAt } from './inlineMemo';
 
 // ---------------------------------------------------------------------------
 // 定位纯函数（思源 selectionElementPosition.ts 移植，坐标一律视口系）
@@ -179,9 +181,17 @@ export function deactivatePainter(): void {
 function refreshStates(view: EditorView): void {
   if (!bar) return;
   const active = activeMarksAt(view); // 与点击动作的解包判定同口径(含嵌套排除)
+  const sel = view.state.selection.main;
+  // memo 按钮态=选区精确落在 ((...)) 对内（isMemoSpanAt 口径 = 点击动作的
+  // unwrap 判定同口径）。
+  const memoActive = !sel.empty && isMemoSpanAt(view.state.doc, sel.from, sel.to);
   bar.querySelectorAll<HTMLElement>('.lg-fmt-bar__btn').forEach((btn) => {
     const mark = btn.dataset.mark ?? '';
     const kind = btn.dataset.kind ?? '';
+    if (kind === 'memo') {
+      btn.classList.toggle('is-current', memoActive);
+      return;
+    }
     // 无标记按钮（link/blockref/painter/clear）没有亮灭态可刷新。
     if (!mark && kind !== 'comment') return;
     btn.classList.toggle('is-current', active.includes(mark));
@@ -216,6 +226,9 @@ function buildBar(view: EditorView): HTMLElement {
   // 标记内,URL/引用目标由用户接着键入(块引用内键入会触发块提示补全)。
   addBtn('lucide-link', 'Link', 'link', () => wrapSelection(view, '[', ']()'));
   addBtn('lucide-link-2', 'Block ref', 'blockref', () => wrapSelection(view, '((', '))'));
+  // 行内备注（思源 InlineMemo 按钮对应，批次 27）：与块引用共享 `((...))` 语法
+  // 对，按内容形态区分——UUID 是块引用，其余是备注（见 interactions/inlineMemo）。
+  addBtn('lucide-sticky-note', 'Memo', 'memo', () => memoToggleSelection(view));
   addBtn('lucide-eraser', 'Clear formatting', 'clear', () => clearFormatting(view));
   // 格式刷:单击一次 / 双击连续(思源 FormatPainter 的 TIMEOUT_DBLCLICK 区分)。
   // 独立建钮:click 事件需要 detail,addBtn 的闭包不带。

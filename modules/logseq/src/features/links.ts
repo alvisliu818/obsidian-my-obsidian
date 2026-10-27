@@ -13,6 +13,7 @@ import { parseDocument } from '../core/parser';
 import { serializeDocument } from '../core/serializer';
 import { blockAtPath, findBlockById, linkParents, pathToRoot, pseudoRootOf, registerRoots } from '../core/treeOps';
 import { slashMenuSource } from './slashMenu';
+import { isMemoPayload } from '../interactions/inlineMemo';
 import { hintSuppressedAt, isCaretInHeadingPrefix } from './hintGuards';
 import { toObsidianMath } from './latexSource';
 import type { Block } from '../types';
@@ -21,6 +22,8 @@ const BLOCK_REF_RE = /\(\(([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA
 const EMBED_RE = /\{\{embed\s*\(\(([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\)\)\}\}/g;
 /** Page embed: ![[Page Name]] 鈥?embeds the WHOLE page (all top-level blocks). */
 const PAGE_EMBED_RE = /!\[\[([^\[\]|]+)\]\]/g;
+/** Inline memo: `((text))` with a NON-UUID payload (block refs own the UUID form). */
+const INLINE_MEMO_RE = /\(\(([^()\n]+)\)\)/g;
 
 // ---------------------------------------------------------------------------
 // Autocomplete sources
@@ -170,6 +173,46 @@ export function enhanceBlockRefs(el: HTMLElement, host: BlockRenderHost): void {
     if (lastIdx < value.length) {
       frag.appendChild(document.createTextNode(value.slice(lastIdx)));
     }
+    node.replaceWith(frag);
+  }
+}
+
+/**
+ * Inline memo chips (SiYuan InlineMemo parity, batch 27): `((text))` with a
+ * non-UUID payload renders as a highlighted memo span. UUID form is taken by
+ * enhanceBlockRefs (run first — matched pairs are already chips here, and the
+ * payload guard skips them anyway). The chip has NO click handler: the click
+ * bubbles to the holder's wireContentEvents, entering the block editor with
+ * the cursor at the click point — SiYuan's "click a memo to edit" semantics.
+ */
+export function enhanceInlineMemos(el: HTMLElement): void {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const targets: { node: Text; matches: RegExpMatchArray[] }[] = [];
+  let cur = walker.nextNode() as Text | null;
+  while (cur) {
+    // Verbatim inside inline code / code fences; skip ref chips, other memos,
+    // page-embed placeholders and query output (same spirit as enhanceEmbeds).
+    if (!cur.parentElement?.closest('code, pre, .lgp-code-block, .internal-embed, .block-ref, .inline-memo, .dataview-missing, .block-query-table-wrap')) {
+      const m = [...(cur.data.matchAll(INLINE_MEMO_RE))].filter((x) => isMemoPayload(x[1]));
+      if (m.length > 0) targets.push({ node: cur, matches: m });
+    }
+    cur = walker.nextNode() as Text | null;
+  }
+  for (const { node, matches } of targets) {
+    const value = node.data;
+    let lastIdx = 0;
+    const frag = document.createDocumentFragment();
+    for (const m of matches) {
+      const idx = m.index ?? 0;
+      if (idx > lastIdx) frag.appendChild(document.createTextNode(value.slice(lastIdx, idx)));
+      const chip = document.createElement('span');
+      chip.className = 'inline-memo';
+      chip.textContent = m[1];
+      chip.setAttribute('aria-label', `备注：${m[1]}`);
+      frag.appendChild(chip);
+      lastIdx = idx + m[0].length;
+    }
+    if (lastIdx < value.length) frag.appendChild(document.createTextNode(value.slice(lastIdx)));
     node.replaceWith(frag);
   }
 }

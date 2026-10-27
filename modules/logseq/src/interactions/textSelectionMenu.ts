@@ -20,6 +20,7 @@
  */
 
 import { Menu, Notice } from 'obsidian';
+import { isMemoPayload } from './inlineMemo';
 import {
   redo as cmRedo,
   undo as cmUndo,
@@ -289,6 +290,29 @@ export function wrapSelection(view: EditorView, mark: string, markEnd = mark): v
     });
   }
   view.focus();
+}
+
+/**
+ * Inline memo toggle (SiYuan InlineMemo.ts parity, batch 27): wrap the
+ * selection in `((...))`, or unwrap when the selection spans exactly one memo
+ * pair. Guards: an exact `((uuid))` selection is a BLOCK REF — the memo
+ * button leaves it alone; a selection flush against a half pair (`(m` / `o)`)
+ * would only produce garbage — also left alone. UUID / paren / newline
+ * payloads never get wrapped.
+ */
+export function memoToggleSelection(view: EditorView): void {
+  const sel = view.state.selection.main;
+  const text = view.state.sliceDoc(sel.from, sel.to);
+  if (text === '') return;
+  const before = view.state.sliceDoc(Math.max(0, sel.from - 2), sel.from);
+  const after = view.state.sliceDoc(sel.to, Math.min(view.state.doc.length, sel.to + 2));
+  if (before === '((' && after === '))') {
+    if (isMemoPayload(text)) wrapSelection(view, '((', '))');
+    return;
+  }
+  if (before.endsWith('(') || after.startsWith(')')) return;
+  if (!isMemoPayload(text)) return;
+  wrapSelection(view, '((', '))');
 }
 
 export function isWrapped(view: EditorView, mark: string, markEnd = mark): boolean {

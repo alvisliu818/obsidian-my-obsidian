@@ -31,7 +31,7 @@ import { setCalloutFold } from './blockTypeConvert';
 import { headingNumberNeedsSpacing } from '../core/headingNumber';
 import { blockId } from '../types';
 import { foldLevelOf, foldSummary, headingLevel, isFoldableBody, isFoldableHeading, isInsideFoldedSection, isMediaOnlyBlock, normFoldKey } from '../core/fold';
-import { createPageEmbedBox, enhanceBlockRefs, enhanceEmbeds } from '../features/links';
+import { createPageEmbedBox, enhanceBlockRefs, enhanceEmbeds, enhanceInlineMemos } from '../features/links';
 import {
   buildQueryTableModel,
   execQuery,
@@ -1004,6 +1004,9 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
         }
       }
       enhanceBlockRefs(holder, host);
+      // 行内备注 chip（思源 InlineMemo 渲染语义，批次 27）：非 UUID 的
+      // ((text)) 包成 .inline-memo；无点击行为（冒泡进块编辑）。
+      enhanceInlineMemos(holder);
     }
   });
   contentCache.set(b, { el: holder, sig });
