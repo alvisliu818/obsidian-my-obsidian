@@ -381,8 +381,10 @@ function renderBlock(b: Block, host: BlockRenderHost, budget?: RenderBudget): HT
       e.stopPropagation();
       host.toggleMarker(b);
     });
-  } else if (b.kind === 'list' && b.task !== undefined) {
+  } else if (b.kind === 'list' && !b.bare && b.task !== undefined) {
     // GFM 任务 checkbox（思源 .protyle-action--task 同位，批次 23）：点击两态 toggle。
+    // !b.bare：bare 段落容器无 marker 位且磁盘裸行存不住 task——渲染出来
+    // 只是与文字重叠的假象（批次 30 转换回滚 bug 的历史残留防御）。
     const mk = main.createEl('div', { cls: 'block-marker task task-' + taskStatusClass(b.task) });
     mk.setAttribute('aria-label', b.task === ' ' ? '[ ]' : `[${b.task}]`);
     mk.addEventListener('click', (e) => {

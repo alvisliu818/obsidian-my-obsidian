@@ -32,7 +32,8 @@ import {
 import { cycleMarker } from '../core/treeOps';
 import { headingLevel } from '../core/fold';
 import { parseDocument } from '../core/parser';
-import { applyBlockProps, applyEditorMarker, createBlock, splitEditorDocForCommit, splitPropLines, type Block } from '../types';
+import { getTaskListMarker } from '../core/taskMarker';
+import { applyBlockProps, applyEditorMarker, createBlock, editorMarkerLen, splitEditorDocForCommit, splitPropLines, type Block } from '../types';
 
 function focusedBlock(host: BlockRenderHost): Block | null {
   return host.focusedBlock;
@@ -87,6 +88,42 @@ export function handleSpace(view: EditorView, host: BlockRenderHost): boolean {
       host.focusBlock(b, m[0].length); // 光标落前缀之后
     }, 0);
     return false; // 空格照常插入
+  }
+  // 思源 turnIntoTaskList(批次 30):块首 [m] + 空格 → 任务块。标记经
+  // getTaskListMarker 解析(含 `[]` 短写与全角),剥标记进 b.task、正文
+  // 吃掉分隔空格(与 parser stripTaskPrefix 同规);编辑文档不含任务前缀
+  // (editorMarkerLen 不算 task),重建后光标落 `- ` 之后。
+  {
+    const probe = text.slice(0, sel.head);
+    const tm = getTaskListMarker(probe, true);
+    if (tm && tm.contentStartIndex === probe.length) {
+      setTimeout(() => {
+        const now = view.state.doc.toString();
+        const tm2 = getTaskListMarker(now, true);
+        if (!tm2) return;
+        const parent = b.parent;
+        const rest = now.substring(tm2.contentStartIndex);
+        const body = rest.startsWith(' ') ? rest.slice(1) : rest;
+        // 先把 CM 文档同步成任务块编辑形态（`- body`）：mutate 开头的
+        // commitEditorText 与 patch 内的同步都按 CM 文档走 applyEditorMarker
+        // （bare=false、text=body，幂等）——若不先同步，mutate 读到的还是
+        // 旧文档 `[m] …`（无 bullet），会把 bare 化回去、task 随之丢失。
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: `- ${body}` },
+          selection: { anchor: 2 },
+        });
+        host.mutate(
+          () => {
+            b.task = tm2.marker;
+            b.bare = false;
+            b.text = body;
+          },
+          () => ({ lists: [parent] }),
+        );
+        host.focusBlock(b, editorMarkerLen(b));
+      }, 0);
+      return false; // 空格照常插入
+    }
   }
   if (!/^[*+-]$/.test(text.slice(0, sel.head))) return false;
   setTimeout(() => {

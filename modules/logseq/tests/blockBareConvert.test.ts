@@ -48,6 +48,19 @@ function makeEnv(markdown: string) {
     get state() {
       return EditorState.create({ doc: cmText, selection: EditorSelection.cursor(cmPos) });
     },
+    // 批次 30：handleSpace 任务分支先 dispatch 同步 CM 文档再 mutate——
+    // 桩按 {from,to,insert} 形态应用变更（全量替换即可覆盖用例）。
+    dispatch(spec: { changes: { from?: number; to?: number; insert?: string } | Array<{ from?: number; to?: number; insert?: string }>; selection?: { anchor: number } }) {
+      const changes = Array.isArray(spec.changes) ? spec.changes : [spec.changes];
+      let text = cmText;
+      for (const c of changes) {
+        const from = c.from ?? 0;
+        const to = c.to ?? 0;
+        text = text.slice(0, from) + (c.insert ?? '') + text.slice(to);
+      }
+      cmText = text;
+      if (spec.selection) cmPos = spec.selection.anchor;
+    },
   } as never;
   return { host: host as unknown as BlockEditorView, view, doc, type, focus: (b: Block, pos?: number) => {
     focused = b;
@@ -123,5 +136,58 @@ describe('handleSpace — 段落容器行首列表标记即时转大纲块', () 
     env.type(' ');
     await new Promise((r) => setTimeout(r, 0));
     expect(b.bare).toBe(false);
+  });
+});
+
+describe('handleSpace — 任务标记即时转任务块（批次 30，思源 turnIntoTaskList）', () => {
+  it('`[ ]` + 空格 → b.task=" "，正文剥标记与分隔空格', async () => {
+    const env = makeEnv('甲有内容\n');
+    const b = env.doc.blocks[0];
+    env.focus(b, 0);
+    env.type('[ ]');
+    expect(handleSpace(env.view, env.host)).toBe(false); // 空格不消费
+    env.type(' ');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(b.task).toBe(' ');
+    expect(b.bare).toBe(false); // 任务块=列表项形态（否则磁盘裸行丢 task）
+    expect(b.text).toBe('甲有内容');
+  });
+
+  it('`[x]` 小写保留、`[?]` 自定义单字符都转', async () => {
+    for (const [typed, task] of [['[x]', 'x'], ['[X]', 'X'], ['[?]', '?'], ['[-]', '-'], ['[/]', '/']] as const) {
+      const env = makeEnv('内容\n');
+      const b = env.doc.blocks[0];
+      env.focus(b, 0);
+      env.type(typed);
+      handleSpace(env.view, env.host);
+      env.type(' ');
+      await new Promise((r) => setTimeout(r, 0));
+      expect(b.task).toBe(task);
+      expect(b.text).toBe('内容');
+    }
+  });
+
+  it('`[]` 短写 + 空格 → task=" "（getTaskListMarker 短写分支）', async () => {
+    const env = makeEnv('内容\n');
+    const b = env.doc.blocks[0];
+    env.focus(b, 0);
+    env.type('[]');
+    handleSpace(env.view, env.host);
+    env.type(' ');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(b.task).toBe(' ');
+    expect(b.text).toBe('内容');
+  });
+
+  it('标记后有其他文字（probe 不占满前缀）不转换', async () => {
+    const env = makeEnv('abc\n');
+    const b = env.doc.blocks[0];
+    env.focus(b, 1); // "a|bc"
+    env.type('[ ]'); // "a[ ]bc" — 标记不在行首
+    handleSpace(env.view, env.host);
+    env.type(' ');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(b.task).toBeUndefined();
+    expect(b.text).toBe('abc');
   });
 });
