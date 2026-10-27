@@ -18,7 +18,7 @@ import { clearLogseqPageProps, registerLogseqPageProps } from '../pagePropsRegis
 import { serializeBlock, serializeDocument } from '../core/serializer';
 import { writeMarkdownWithInternalFormat } from '../features/internalClipboard';
 import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, insertAfter, insertBefore, isDescendant, linkParents, mergeWithNext, mergeWithPrev, moveBlockGroup, moveBlockVertically, nextVisible, outdent, prevVisible, pseudoRootOf, rangeAnchor, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, unregisterRoots, visibleRange, type MovePosition } from '../core/treeOps';
-import { capForIndex, planScrollRestore, scrollHeightReady, SCROLL_READY_MAX_TRIES, type PersistedScroll } from '../core/scrollRestore';
+import { capForIndex, planFocusRestore, planScrollRestore, scrollHeightReady, SCROLL_READY_MAX_TRIES, type PersistedFocus, type PersistedScroll } from '../core/scrollRestore';
 import { nextTaskListMarker } from '../core/taskMarker';
 import { buildHeadingNumbers } from '../core/headingNumber';
 import { foldLevelOf, foldValueFor, headingLevel, nextFoldLevel, normFoldKey, subtreeFoldTargets, type FoldLevel } from '../core/fold';
@@ -129,6 +129,8 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   /** setState 带入、渲染高度就绪后应用的滚动恢复计划（批次 22）。 */
   private pendingScroll: PersistedScroll | null = null;
   private pendingScrollTries = 0;
+  /** 重载/重开文件时的光标恢复锚（批次 24）：滚动恢复就绪时一并消费。 */
+  private pendingCursorRestore: PersistedFocus | null = null;
   /** Multi-selection (Shift/Ctrl+click); only top-level members act in bulk. */
   selectedBlocks = new Set<Block>();
   private lastClicked: Block | null = null;
@@ -858,6 +860,8 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     } else {
       const saved = this.captureScrollState();
       if (saved) s.state = { ...(s.state ?? {}), scroll: saved };
+      const focus = this.captureFocusState();
+      if (focus) s.state = { ...(s.state ?? {}), focus };
     }
     return s as unknown as Record<string, unknown>;
   }
@@ -881,13 +885,32 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     return { top: sc.scrollTop, idx };
   }
 
+  /**
+   * 采集光标焦点（getState 用，批次 24）：编辑中的块 + 光标在块文本内的 offset。
+   * CM6 selection 相对编辑器 doc（含符号前缀与 props 行），换算回块文本 offset
+   * （减符号前缀 mlen，与 mount 的 +mlen 对称）；props 行上的光标减完超出文本
+   * 长度，恢复时钳制。只在编辑态（CM6 挂载）采集——阅读态无光标可存。
+   */
+  private captureFocusState(): PersistedFocus | null {
+    const b = this.focusedBlock;
+    const v = this.focusedView;
+    if (!b || !v) return null;
+    const seq = flattenVisible(this.visibleRoots);
+    const idx = seq.indexOf(b);
+    if (idx < 0) return null;
+    const pos = Math.max(0, v.state.selection.main.head - editorMarkerLen(b));
+    return { idx, pos };
+  }
+
   async setState(state: Record<string, unknown>, result: ViewStateResult): Promise<void> {
     await super.setState(state, result);
     const st = state as unknown as ViewState;
     const zid = (st.state as Record<string, unknown> | undefined)?.zoomedBlockId;
     const plan = planScrollRestore((st.state as Record<string, unknown> | undefined)?.scroll);
+    this.pendingCursorRestore = planFocusRestore((st.state as Record<string, unknown> | undefined)?.focus);
     if (typeof zid === 'string' && zid) {
       this.pendingScroll = null; // zoom 态滚动语义错位，恢复缩放即够
+      this.pendingCursorRestore = null; // 同上：缩放后可见序列换了，锚失效
       this.zoomedBlock = restoreZoomed(this.doc, zid);
       this.render();
       return;
@@ -900,6 +923,10 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
       // 应用，pendingScroll 就要等到下一次 render（可能永远不会来）。高度
       // 不够时 applyPendingScroll 自己 bumpScrollCap→render 自续到就绪。
       this.applyPendingScroll();
+    } else if (this.pendingCursorRestore) {
+      // 无滚动锚但存了焦点（离开时在顶部）：渲染链刚同步跑完，块已在窗口内，
+      // 直接恢复光标。
+      this.consumePendingCursor();
     }
   }
 
@@ -919,15 +946,32 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
       sc.scrollTop = plan.top;
       this.pendingScroll = null;
       this.pendingScrollTries = 0;
+      this.consumePendingCursor(); // 滚动就绪 = 渲染就绪，光标一并静默落位
       return;
     }
     this.pendingScrollTries += 1;
     if (this.pendingScrollTries > SCROLL_READY_MAX_TRIES) {
       this.pendingScroll = null;
       this.pendingScrollTries = 0;
+      // 滚动锚失效（文档被外部改短）但焦点块可能仍在窗口内——尽力恢复。
+      this.consumePendingCursor();
       return;
     }
     this.bumpScrollCap(); // render() 会再次走到这里重试
+  }
+
+  /**
+   * 消费挂起的光标恢复（批次 24）：滚动就绪（= 目标块所在窗口已渲染）时调用。
+   * focusBlock 的数值 pos 语义就是块文本 offset（mount 时 +mlen 换算回来）；
+   * 锚块不在可见序列（文档被外部改短/zoom 残留）时静默放弃。
+   */
+  private consumePendingCursor(): void {
+    const pf = this.pendingCursorRestore;
+    if (!pf) return;
+    this.pendingCursorRestore = null;
+    const b = flattenVisible(this.visibleRoots)[pf.idx];
+    if (!b) return;
+    this.focusBlock(b, Math.min(pf.pos, b.text.length));
   }
 
   // ------------------------------------------------------------------

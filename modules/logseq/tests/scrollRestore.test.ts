@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   capForIndex,
+  planFocusRestore,
   planScrollRestore,
   scrollHeightReady,
   SCROLL_READY_MAX_TRIES,
@@ -65,5 +66,31 @@ describe('retry bound constant', () => {
   it('bounded so a shrunken doc cannot loop bumpScrollCap forever', () => {
     expect(SCROLL_READY_MAX_TRIES).toBeGreaterThan(0);
     expect(SCROLL_READY_MAX_TRIES).toBeLessThanOrEqual(20);
+  });
+});
+
+describe('planFocusRestore (批次 24: 光标焦点恢复锚)', () => {
+  it('accepts a well-formed focus state', () => {
+    expect(planFocusRestore({ idx: 4, pos: 12 })).toEqual({ idx: 4, pos: 12 });
+  });
+  it('floors a fractional idx but keeps pos', () => {
+    expect(planFocusRestore({ idx: 3.7, pos: 5.2 })).toEqual({ idx: 3, pos: 5.2 });
+  });
+  it('rejects non-object / missing fields', () => {
+    expect(planFocusRestore(null)).toBeNull();
+    expect(planFocusRestore(undefined)).toBeNull();
+    expect(planFocusRestore('focus')).toBeNull();
+    expect(planFocusRestore({})).toBeNull();
+    expect(planFocusRestore({ idx: 1 })).toBeNull();
+    expect(planFocusRestore({ pos: 1 })).toBeNull();
+  });
+  it('rejects negative / non-finite values', () => {
+    expect(planFocusRestore({ idx: -1, pos: 0 })).toBeNull();
+    expect(planFocusRestore({ idx: 0, pos: -5 })).toBeNull();
+    expect(planFocusRestore({ idx: Number.NaN, pos: 0 })).toBeNull();
+    expect(planFocusRestore({ idx: 0, pos: Number.POSITIVE_INFINITY })).toBeNull();
+  });
+  it('accepts pos 0 (block start)', () => {
+    expect(planFocusRestore({ idx: 0, pos: 0 })).toEqual({ idx: 0, pos: 0 });
   });
 });
