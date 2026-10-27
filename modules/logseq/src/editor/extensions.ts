@@ -43,6 +43,7 @@ import { shouldPasteMarkdownFromHTML } from '../features/markdownClipboard';
 import { syncActiveBlockEditor } from '../interactions/textSelectionMenu';
 import { livePreviewConfig, livePreviewExtension } from './livePreview';
 import { mathSyntax } from './mathSyntax';
+import { obsidianInlineSyntax } from './obsidianInlineSyntax';
 import { BLOCK_PROP_LINE_RE, editorMarkerLen } from '../types';
 
 /**
@@ -448,7 +449,7 @@ export function createEmbedExtensions(
     drawSelection(),
     dropCursor(),
     caretOverlay(),
-    markdown({ base: markdownLanguage, addKeymap: false, extensions: [mathSyntax()] }),
+    markdown({ base: markdownLanguage, addKeymap: false, extensions: [mathSyntax(), obsidianInlineSyntax()] }),
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     propLineHighlighter,
     livePreviewExtension,
@@ -563,7 +564,7 @@ export function createEditorExtensions(host: BlockRenderHost, block?: Block): Ex
     rectangularSelection(),
     crosshairCursor(),
     indentUnit.of('    '),
-    markdown({ base: markdownLanguage, addKeymap: false, extensions: [mathSyntax()] }),
+    markdown({ base: markdownLanguage, addKeymap: false, extensions: [mathSyntax(), obsidianInlineSyntax()] }),
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     propLineHighlighter,
     ...livePreview,

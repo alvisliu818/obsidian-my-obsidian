@@ -1,8 +1,13 @@
 // @vitest-environment jsdom
 // 格式刷:取色(按钮态同口径)/once 应用即退/continuous 连续/Esc 退出/
 // 清除后重放(目标多余格式被刷掉)。
+// 批次 28 起取色走语法树交集口径,mkView 装上生产同款 markdown 语言。
 import { describe, expect, it } from 'vitest';
 import { EditorView } from '@codemirror/view';
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
+import type { Extension } from '@codemirror/state';
+import { mathSyntax } from '../editor/mathSyntax';
+import { obsidianInlineSyntax } from '../editor/obsidianInlineSyntax';
 import {
   activatePainter,
   applyPainter,
@@ -12,8 +17,14 @@ import {
   takePainterSnapshot,
 } from './formatToolbar';
 
+const lang: Extension = markdown({
+  base: markdownLanguage,
+  addKeymap: false,
+  extensions: [mathSyntax(), obsidianInlineSyntax()],
+});
+
 function mkView(doc: string): EditorView {
-  return new EditorView({ doc, parent: document.body });
+  return new EditorView({ doc, parent: document.body, extensions: [lang] });
 }
 const select = (v: EditorView, from: number, to: number) =>
   v.dispatch({ selection: { anchor: from, head: to } });

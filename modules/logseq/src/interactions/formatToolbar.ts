@@ -9,9 +9,10 @@
  * - 定位：优先选区上方 gap=4（多击 2），放不下翻到下方，越界钳回滚动容器
  *   （getSelectionElementY 纯函数移植，含既有工具栏避让的参数位——我们只有
  *   一层，toolbarTop/Bottom 留空即可）。
- * - 按钮态：isWrapped（与 wrapSelection 的解包条件一致——按钮亮灭必须
+ * - 按钮态：activeMarksAt（批次 28 起为语法树交集正解——按钮亮灭必须
  *   等于点击会发生什么）。思源 inlineFormat.ts 的交集算法按 DOM data-type
- *   算覆盖，我们侧动作按 hug 边界判，交集口径与动作对齐才是诚实状态。
+ *   算覆盖，我们侧用 Lezer 语法树对每个文本段求覆盖节点类型交集，
+ *   `**x**` 双亮等 hug 近似病例已系统性根治。
  * - 隐藏：选区塌缩（updateListener 守卫）/ 编辑器 blur / 滚动 / 点击工具栏外。
  *   点击按钮不触发这些（bar 上 mousedown preventDefault 保住焦点与选区），
  *   连续套格式时条不消失、按钮态即时刷新（思源同款链式体验）。
@@ -126,10 +127,9 @@ export function isFormatToolbarVisible(): boolean {
 // ---------------------------------------------------------------------------
 //
 // 思源取色按 DOM 分段求交集（FORMAT_PAINTER_TYPES + 内联样式）；我们无样式
-// 表示（纯 markdown），快照 = 当前选区的标记 hug 判定（与按钮态同一口径：
-// 亮着的按钮就是会被取走的格式）。应用 = clearFormatting + 逐类型重放，与
-// 思源 applyMark("clear") + applyMark(type) 同序。已知口径局限沿用批次 11
-// 记录：`**b**` 的 hug 判定会同时命中 bold/italic（与按钮态一致，不另立）。
+// 表示（纯 markdown），快照 = 当前选区的标记集（批次 28 起与按钮态同为
+// 语法树交集口径：亮着的按钮就是会被取走的格式）。应用 = clearFormatting +
+// 逐类型重放，与思源 applyMark("clear") + applyMark(type) 同序。
 // 字体族/字号/颜色等样式刷不移植——模型无对应表示。
 
 let painterMarks: string[] | null = null; // null = 未激活

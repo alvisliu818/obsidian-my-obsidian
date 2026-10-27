@@ -21,6 +21,16 @@
 
 import { Menu, Notice } from 'obsidian';
 import { isMemoPayload } from './inlineMemo';
+import { syntaxTree } from '@codemirror/language';
+import type { SyntaxNode } from '@lezer/common';
+import {
+  INLINE_FORMAT_MARKS,
+  INLINE_NODE_MARKS,
+  formatNodeAt,
+  formatNodesIntersecting,
+  inlineFormatsAcross,
+  normalizeMark,
+} from './inlineFormats';
 import {
   redo as cmRedo,
   undo as cmUndo,
@@ -315,78 +325,68 @@ export function memoToggleSelection(view: EditorView): void {
   wrapSelection(view, '((', '))');
 }
 
-export function isWrapped(view: EditorView, mark: string, markEnd = mark): boolean {
-  const sel = view.state.selection.main;
-  return (
-    view.state.sliceDoc(Math.max(0, sel.from - mark.length), sel.from) === mark &&
-    view.state.sliceDoc(sel.to, Math.min(view.state.doc.length, sel.to + markEnd.length)) === markEnd
-  );
+/**
+ * Whether a click on `mark` would unwrap (batch 28: syntax-tree truth).
+ * Kept for call-site compatibility; `markEnd` is ignored — the tree resolves
+ * the pair by node type, not by hugging strings.
+ */
+export function isWrapped(view: EditorView, mark: string, _markEnd = mark): boolean {
+  return activeMarksAt(view).includes(normalizeMark(mark));
 }
 
 /**
- * 当前选区上「点击会命中解包」的标记集（toggleMarkerPairFor 的 wrappedWith
- * 判定，含单字符标记嵌在双字符内的排除——`**x**` 只算 bold 不算 italic）。
- * 格式刷取色与工具栏按钮态共用此口径：亮着的按钮 = 取走的格式 = 点击会
- * 发生的事。返回规范形式（bold 无论 ** 或 __ 都归 '**'）。
+ * 当前选区上「点击会命中解包」的标记集（批次 28 语法树正解，思源
+ * inlineFormat.ts 交集口径：probe 触及的每个文本段求类型交集）。空选区沿用
+ * word 探测（点击动作同 probe），词探测失败退化光标点判定（resolveInner 偏
+ * 左向上）。返回规范形式（bold 无论 ** 或 __ 都归 '**'）。
  */
 export function activeMarksAt(view: EditorView): string[] {
   const state = view.state;
   const sel = state.selection.main;
   const word = sel.empty ? state.wordAt(sel.head) : null;
   const probe = word ?? sel;
-  const hit = (m: string, markEnd = m): boolean => {
-    if (state.doc.sliceString(Math.max(0, probe.from - m.length), probe.from) !== m) return false;
-    if (state.doc.sliceString(probe.to, Math.min(state.doc.length, probe.to + markEnd.length)) !== markEnd) return false;
-    if (m.length === 1) {
-      // 单字符标记紧贴双字符标记('*' 在 '**' 内)不算命中——与
-      // toggleMarkerPairFor 的 wrappedWith 同一守卫。
-      if (state.doc.sliceString(Math.max(0, probe.from - 2), probe.from - 1) === m) return false;
-      if (state.doc.sliceString(probe.to + 1, Math.min(state.doc.length, probe.to + 2)) === m) return false;
-    }
-    return true;
-  };
-  const hits: string[] = [];
-  if (hit('**') || hit('__')) hits.push('**');
-  if (hit('*') || hit('_')) hits.push('*');
-  if (hit('~~')) hits.push('~~');
-  if (hit('==')) hits.push('==');
-  if (hit('`')) hits.push('`');
-  if (hit('%%')) hits.push('%%');
-  return hits;
+  if (probe.to > probe.from) return inlineFormatsAcross(state, [probe]);
+  // 词探测失败（光标在空白/标点上）：光标点判定——思源 collapsed range 在
+  // 格式内按钮照样亮（DOM 语义），对应树上 resolveInner(-1) 向上收集。
+  const found = new Set<string>();
+  let node: SyntaxNode | null = syntaxTree(state).resolveInner(sel.head, -1);
+  while (node) {
+    const mark = INLINE_NODE_MARKS[node.name];
+    if (mark) found.add(mark);
+    node = node.parent;
+  }
+  return INLINE_FORMAT_MARKS.filter((m) => found.has(m));
 }
 
 /**
  * Toggle a marker pair around the selection / word under the caret (native
  * Obsidian `toggleMarkdownFormatting` parity; shared by the right-click menu
  * and the floating format toolbar).
+ *
+ * Batch 28: the unwrap side is resolved via the syntax tree — when the probe
+ * sits inside a format node of the requested type the WHOLE node unwraps
+ * (marks stripped at the node edges, selection mapped back), not just when
+ * markers hug the probe exactly. Same interrogation as activeMarksAt, so the
+ * lit button always describes what clicking will do.
  */
 export function toggleMarkerPairFor(view: EditorView, mark: string, alt?: string): void {
   const state = view.state;
   const sel = state.selection.main;
   const word = sel.empty ? state.wordAt(sel.head) : null;
   const probe = word ?? sel;
-  const wrappedWith = (m: string): boolean => {
-    if (state.doc.sliceString(Math.max(0, probe.from - m.length), probe.from) !== m) return false;
-    if (state.doc.sliceString(probe.to, Math.min(state.doc.length, probe.to + m.length)) !== m) return false;
-    // A single-char marker hugging a double-char one (the '*' inside '**')
-    // is not a toggle hit — native resolves this via the syntax tree.
-    if (m.length === 1) {
-      if (state.doc.sliceString(Math.max(0, probe.from - 2), probe.from - 1) === m) return false;
-      if (state.doc.sliceString(probe.to + 1, Math.min(state.doc.length, probe.to + 2)) === m) return false;
-    }
-    return true;
-  };
   for (const m of alt ? [mark, alt] : [mark]) {
-    if (wrappedWith(m)) {
+    const node = formatNodeAt(state, probe.from, probe.to, m);
+    if (node) {
+      // 实测标记长（__ 与 ** 同型节点但都是 2；$ 是 1）。
+      const first = node.firstChild;
+      const mLen = first ? first.to - first.from : normalizeMark(m).length;
+      // 选区不手动指定：CM 按 changes 自动映射旧选区（删除区内 assoc -1
+      // 落到删除点），光标在内容/标记内/词中间的解包语义全部自然成立。
       view.dispatch({
         changes: [
-          { from: probe.from - m.length, to: probe.from },
-          { from: probe.to, to: probe.to + m.length },
+          { from: node.from, to: node.from + mLen },
+          { from: node.to - mLen, to: node.to },
         ],
-        selection: {
-          anchor: probe.from - m.length,
-          head: probe.from - m.length + (probe.to - probe.from),
-        },
         userEvent: 'input.format',
       });
       return;
@@ -441,23 +441,24 @@ function buildFormattingSubmenu(menu: Menu, view: EditorView): void {
     item.setTitle('Formatting').setIcon('lucide-paintbrush');
     const sub = submenuOf(item);
     if (!sub) return;
-    for (const [title, icon, mark, markEnd] of FORMAT_MARKS) {
+    for (const [title, icon, mark] of FORMAT_MARKS) {
+      const alt = title === 'Bold' ? '__' : title === 'Italic' ? '_' : undefined;
       sub.addItem((sub2) =>
         sub2
           .setSection('selection.format.basic')
           .setTitle(title)
           .setIcon(icon)
-          .setChecked(isWrapped(view, mark, markEnd))
-          .onClick(() => wrapSelection(view, mark, markEnd)),
+          .setChecked(isWrapped(view, mark))
+          .onClick(() => toggleMarkerPairFor(view, mark, alt)),
       );
     }
     sub.addItem((sub2) =>
       sub2
-        .setSection('selection.format.advanced')
+        .setSection('selection.format.basic')
         .setTitle('Comment')
         .setIcon('lucide-percent')
         .setChecked(isWrapped(view, '%%'))
-        .onClick(() => wrapSelection(view, '%%')),
+        .onClick(() => toggleMarkerPairFor(view, '%%')),
     );
     sub.addItem((sub2) =>
       sub2
@@ -471,32 +472,42 @@ function buildFormattingSubmenu(menu: Menu, view: EditorView): void {
 
 /** Strip the known marker pairs hugging (or inside) the selection. */
 export function clearFormatting(view: EditorView): void {
+  // Batch 28 树清理：选区相交的每个格式节点的首尾标记全删（思源/原生
+  // "clear" 语义——选区内的格式无论是否紧贴都清掉），一次 dispatch。
+  const sel = view.state.selection.main;
+  if (!sel.empty) {
+    const nodes = formatNodesIntersecting(view.state, sel.from, sel.to);
+    if (nodes.length > 0) {
+      const changes: Array<{ from: number; to: number }> = [];
+      for (const node of nodes) {
+        const first = node.firstChild;
+        const mLen = first ? first.to - first.from : 1;
+        changes.push({ from: node.from, to: node.from + mLen });
+        changes.push({ from: node.to - mLen, to: node.to });
+      }
+      changes.sort((a, b) => a.from - b.from);
+      view.dispatch({ changes, userEvent: 'input.format' });
+    }
+  }
   let guard = 0;
   for (;;) {
     if (guard++ > 12) break;
-    const sel = view.state.selection.main;
+    const cur = view.state.selection.main;
     const doc = view.state.doc;
     let changed = false;
     const pairs: Array<[string, string]> = [
-      ['**', '**'],
-      ['~~', '~~'],
-      ['==', '=='],
-      ['%%', '%%'],
-      ['*', '*'],
-      ['`', '`'],
-      ['$', '$'],
       ['<u>', '</u>'],
     ];
     for (const [open, close] of pairs) {
-      const before = doc.sliceString(Math.max(0, sel.from - open.length), sel.from);
-      const after = doc.sliceString(sel.to, Math.min(doc.length, sel.to + close.length));
+      const before = doc.sliceString(Math.max(0, cur.from - open.length), cur.from);
+      const after = doc.sliceString(cur.to, Math.min(doc.length, cur.to + close.length));
       if (before === open && after === close) {
         view.dispatch({
           changes: [
-            { from: sel.from - open.length, to: sel.from },
-            { from: sel.to, to: sel.to + close.length },
+            { from: cur.from - open.length, to: cur.from },
+            { from: cur.to, to: cur.to + close.length },
           ],
-          selection: { anchor: sel.from - open.length, head: sel.from - open.length + (sel.to - sel.from) },
+          selection: { anchor: cur.from - open.length, head: cur.from - open.length + (cur.to - cur.from) },
           userEvent: 'input.format',
         });
         changed = true;
