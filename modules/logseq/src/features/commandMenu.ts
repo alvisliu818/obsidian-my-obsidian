@@ -16,6 +16,7 @@ import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Extension } from '@codemirror/state';
 import { Marker } from '../types';
 import { createEditorAdapter } from '../interactions/textSelectionMenu';
+import { searchCommands } from './commandSearch';
 import { prologTemplate } from './prologQuery';
 import { BLOCK_TYPES } from '../blocks/blockTypes';
 import { openBlockTypePicker } from '../blocks/blockTypeMenu';
@@ -439,12 +440,13 @@ function updateFilter(view: EditorView): void {
 }
 
 function filteredItems(state: MenuState): CommandItem[] {
-  const q = state.query.toLowerCase().replace(/^[\/<]/, '');
+  const q = state.query.replace(/^[\/<]/, '');
   const all = sourceItems(state.kind);
-  if (!q) return all;
-  return all.filter(
-    (c) => c.label.toLowerCase().includes(q) || c.group.toLowerCase().includes(q) || c.detail.toLowerCase().includes(q),
-  );
+  // 批次 34：思源 command/search.ts 评分搜索（NFKC+驼峰拆分归一、多字段
+  // +去空格变体、token 全命中守卫、精确 300/前缀 200/包含 100 分层，同分
+  // 保原始序）——替换原单一 includes 过滤。
+  if (!q.trim()) return all;
+  return searchCommands(all, q);
 }
 
 function renderMenu(): void {
