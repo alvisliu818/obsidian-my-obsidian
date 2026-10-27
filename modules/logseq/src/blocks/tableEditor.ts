@@ -25,6 +25,7 @@
  * Every mutation goes through `host.mutate`, so undo, save-debounce and
  * re-render all keep working with no extra bookkeeping here.
  */
+import { Menu } from 'obsidian';
 import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Block } from '../types';
 import {
@@ -33,11 +34,13 @@ import {
   editTableInText,
   findTable,
   growTo,
+  insertRowAt,
   moveColumn,
   moveRow,
   removeColumn,
   removeRow,
   serializeTable,
+  transposeTable,
   setCell,
   setColumnAlign,
   type AlignKind,
@@ -134,6 +137,21 @@ export function enhanceTable(table: HTMLTableElement, b: Block, host: BlockRende
       b.text = editTableInText(b.text, mutate);
     });
   };
+
+  // 表格右键（批次 32，思源 tableControl 右键格操作）：定位行列开结构菜单。
+  // 有非塌缩文本选区时不拦（用户在复制文字），塌缩光标才接管。
+  on(table, 'contextmenu', (e: MouseEvent) => {
+    const cellEl = (e.target as HTMLElement).closest('td, th') as HTMLTableCellElement | null;
+    if (!cellEl) return;
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed && table.contains(sel.anchorNode)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const tr = cellEl.parentElement as HTMLTableRowElement;
+    const isHead = cellEl.tagName === 'TH' || !!cellEl.closest('thead');
+    const row = isHead ? -1 : Array.from((tr.parentElement as HTMLTableSectionElement).rows).indexOf(tr);
+    openTableOpsMenu(b, host, { x: e.clientX, y: e.clientY }, { row, col: cellEl.cellIndex, isHead });
+  });
 
   // ------------------------------------------------------------- editing
   table.classList.add(`${CLS}-table`);
@@ -1389,6 +1407,70 @@ export function deleteRowAt(b: Block, row: number): string {
 /** Remove a column (exposed for the context menu). */
 export function deleteColumnAt(b: Block, col: number): string {
   return editTableInText(b.text, (x) => removeColumn(x, col));
+}
+
+// ---------------------------------------------------------------------------
+// 表格操作菜单（批次 32，思源 tableControl 右键格操作的 GFM 集）：右键
+// 单元格 → 行列插删 + 转置。操作全是 tableModel 纯函数经 editTableInText
+// 落回块文本；转置清 table-widths（列数/语义全变，对位兜底无意义）。
+// ---------------------------------------------------------------------------
+
+export function openTableOpsMenu(
+  b: Block,
+  host: BlockRenderHost,
+  at: { x: number; y: number },
+  cell: { row: number; col: number; isHead: boolean },
+): void {
+  const menu = new Menu();
+  const t = findTable(b.text);
+  if (!t) return;
+  const apply = (fn: (x: ParsedTable) => ParsedTable, clearWidths = false): void => {
+    host.mutate(
+      () => {
+        b.text = editTableInText(b.text, fn);
+        if (clearWidths) delete b.props['table-widths'];
+      },
+      () => ({ subtree: b }),
+    );
+  };
+  const atRow = cell.isHead ? 0 : cell.row; // 表头行右键时行操作以首行 body 为锚
+  menu.addItem((item) =>
+    item.setTitle('Insert row above').setIcon('arrow-up').onClick(() =>
+      apply((x) => insertRowAt(x, atRow))),
+  );
+  menu.addItem((item) =>
+    item.setTitle('Insert row below').setIcon('arrow-down').onClick(() =>
+      apply((x) => insertRowAt(x, atRow + 1))),
+  );
+  menu.addItem((item) =>
+    item.setTitle('Insert column left').setIcon('arrow-left').onClick(() =>
+      apply((x) => addColumn(x, cell.col))),
+  );
+  menu.addItem((item) =>
+    item.setTitle('Insert column right').setIcon('arrow-right').onClick(() =>
+      apply((x) => addColumn(x, cell.col + 1))),
+  );
+  menu.addSeparator();
+  menu.addItem((item) =>
+    item
+      .setTitle('Delete row')
+      .setIcon('trash-2')
+      .setDisabled(cell.isHead || t.body.length <= 1)
+      .onClick(() => apply((x) => removeRow(x, cell.row))),
+  );
+  menu.addItem((item) =>
+    item
+      .setTitle('Delete column')
+      .setIcon('trash-2')
+      .setDisabled(t.columns <= 1)
+      .onClick(() => apply((x) => removeColumn(x, cell.col))),
+  );
+  menu.addSeparator();
+  menu.addItem((item) =>
+    item.setTitle('Transpose table').setIcon('repeat').onClick(() =>
+      apply((x) => transposeTable(x), true)),
+  );
+  menu.showAtPosition({ x: at.x, y: at.y });
 }
 
 /** Re-serialize a table (used after an external edit). */

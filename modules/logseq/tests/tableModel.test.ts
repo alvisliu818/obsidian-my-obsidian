@@ -15,6 +15,7 @@ import {
   editTableInText,
   findTable,
   hasTable,
+  insertRowAt,
   moveColumn,
   moveRow,
   parseAlignLine,
@@ -23,6 +24,7 @@ import {
   serializeTable,
   setCell,
   setColumnAlign,
+  transposeTable,
   splitRow,
 } from '../src/blocks/tableModel';
 
@@ -240,5 +242,56 @@ describe('editTableInText', () => {
     expect(t.columns).toBe(3);
     expect(t.body).toHaveLength(3);
     expect(serializeTable(t)).toBe(text);
+  });
+});
+
+/* 批次 32：insertRowAt / transposeTable（思源 table.ts transposeTableCells 的 GFM 简化）。 */
+describe('insertRowAt', () => {
+  it('在指定位置插入空行，行宽=columns', () => {
+    const t = findTable(TBL)!;
+    const next = insertRowAt(t, 1);
+    expect(next.body).toHaveLength(3);
+    expect(next.body[1].cells.map((c) => c.text)).toEqual(['', '']);
+    expect(serializeTable(next).split(NL)[3]).toBe('|  |  |');
+  });
+
+  it('at 越界时钳制到边界', () => {
+    const t = findTable(TBL)!;
+    expect(insertRowAt(t, 99).body).toHaveLength(3);
+    expect(insertRowAt(t, -5).body[0].cells.map((c) => c.text)).toEqual(['', '']);
+  });
+});
+
+describe('transposeTable', () => {
+  it('矩阵转置：原首列变新表头行，原表头行变首列', () => {
+    const t = findTable(TBL)!; // header [Name,Age]; body [Alice,30],[Bob,25]
+    const next = transposeTable(t);
+    expect(next.header.cells.map((c) => c.text)).toEqual(['Name', 'Alice', 'Bob']);
+    expect(next.body.map((r) => r.cells.map((c) => c.text))).toEqual([['Age', '30', '25']]);
+    expect(next.columns).toBe(3);
+  });
+
+  it('对齐重置为 null（对齐按列，转置后语义换位不可迁移）', () => {
+    const t = findTable(['| Name | Age |', '| :-: | --: |', '| Alice | 30 |'].join(NL))!;
+    const next = transposeTable(t);
+    expect(next.header.cells.map((c) => c.text)).toEqual(['Name', 'Alice']); // 原首列
+    expect(next.aligns.aligns).toEqual([null, null]);
+  });
+
+  it('行长不齐时按最宽补齐空格', () => {
+    const t = findTable(['| A | B |', '| --- | --- |', '| 1 |', '| 2 | 3 |'].join(NL))!;
+    const next = transposeTable(t);
+    expect(next.header.cells.map((c) => c.text)).toEqual(['A', '1', '2']);
+    expect(next.body[0].cells.map((c) => c.text)).toEqual(['B', '', '3']);
+  });
+
+  it('round-trip：editTableInText 落回文本且再解析一致', () => {
+    const text = editTableInText(TBL, (x) => transposeTable(x));
+    const reparsed = findTable(text)!;
+    expect(reparsed.header.cells.map((c) => c.text)).toEqual(['Name', 'Alice', 'Bob']);
+    expect(reparsed.body[0].cells.map((c) => c.text)).toEqual(['Age', '30', '25']);
+    // 二次转置还原
+    const back = editTableInText(text, (x) => transposeTable(x));
+    expect(findTable(back)!.header.cells.map((c) => c.text)).toEqual(['Name', 'Age']);
   });
 });

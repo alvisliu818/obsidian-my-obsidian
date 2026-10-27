@@ -351,6 +351,50 @@ export function removeRow(t: ParsedTable, row: number): ParsedTable {
   return next;
 }
 
+/** Insert an empty body row at `at` (0 = right below the header). */
+export function insertRowAt(t: ParsedTable, at: number): ParsedTable {
+  const next = cloneTable(t);
+  const row = Math.min(Math.max(at, 0), next.body.length);
+  const cells = [];
+  for (let c = 0; c < next.columns; c++) cells.push({ text: '', col: c });
+  next.body.splice(row, 0, { kind: 'body', cells, line: next.startLine + row + 1 });
+  return next;
+}
+
+/**
+ * Matrix transpose (SiYuan table.ts `transposeTableCells` simplified for GFM:
+ * no merged cells, so rowspan/colspan are all 1). The original first column
+ * becomes the new header row — GFM only has row headers, and SiYuan's own
+ * head-row migration reads the same way for a plain grid. Column alignments
+ * cannot survive a transpose (they are per-column semantics), so they reset
+ * to null; `uniform`/`columns` re-derive from the new shape.
+ */
+export function transposeTable(t: ParsedTable): ParsedTable {
+  const all = [t.header, ...t.body];
+  const cols = Math.max(t.columns, ...all.map((r) => r.cells.length), 1);
+  const grid = all.map((r) => {
+    const cells = r.cells.map((c) => c.text);
+    while (cells.length < cols) cells.push('');
+    return cells;
+  });
+  const rows: string[][] = [];
+  for (let c = 0; c < cols; c++) rows.push(grid.map((row) => row[c] ?? ''));
+  const [headerCells, ...bodyCells] = rows;
+  return {
+    header: { kind: 'header', cells: headerCells.map((text, col) => ({ text, col })), line: t.startLine },
+    aligns: { aligns: headerCells.map(() => null as AlignKind), line: t.startLine + 1 },
+    body: bodyCells.map((cells, i) => ({
+      kind: 'body' as const,
+      cells: cells.map((text, col) => ({ text, col })),
+      line: t.startLine + i + 2,
+    })),
+    startLine: t.startLine,
+    endLine: t.endLine,
+    uniform: bodyCells.every((cells) => cells.length === headerCells.length),
+    columns: headerCells.length,
+  };
+}
+
 /**
  * Grow/shrink the table to exactly `rows` body rows and `columns` columns.
  *
