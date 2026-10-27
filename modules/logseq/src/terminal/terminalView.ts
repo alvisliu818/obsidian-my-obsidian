@@ -5,7 +5,7 @@ import { ItemView, Notice, WorkspaceLeaf } from 'obsidian';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import type LogseqEditorPlugin from '../main';
-import { absolutePluginDir, createPtySession, type PtySession } from './ptyClient';
+import { absolutePluginDir, createPtySession, type PtySession } from '../../../code-editor/src/terminal/ptyClient';
 
 export const VIEW_TYPE_TERMINAL = 'lgp-terminal-view';
 

@@ -36,7 +36,7 @@
 import { Component, Menu } from 'obsidian';
 import type * as monacoNS from 'monaco-editor';
 import type LogseqEditorPlugin from '../main';
-import { createEditor, setupMonaco } from '../editor/monaco';
+import { createEditor, setupMonaco } from '../../../code-editor/src/editor/monaco';
 import { toHybridRegions, toOutlineDocText, unescapeNoteLine, type HybridRegion } from '../features/codeDoc';
 import { FragmentHost } from '../blocks/fragmentEditor';
 import { parseDocument } from '../core/parser';

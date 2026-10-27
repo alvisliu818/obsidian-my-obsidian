@@ -13,8 +13,8 @@
  */
 
 import { Notice, Setting, TextComponent } from 'obsidian';
-import { getEditorSettings, type EditorSettings } from '../editor/editorSettings';
-import { applyEditorSettings } from '../editor/monaco';
+import { getEditorSettings, type EditorSettings } from '../../../code-editor/src/editor/editorSettings';
+import { applyEditorSettings } from '../../../code-editor/src/editor/monaco';
 import {
   loadEditorSettings,
   saveEditorSettings,

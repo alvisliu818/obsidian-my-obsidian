@@ -13,7 +13,7 @@ import {
   EDITOR_SETTINGS_DEFAULTS,
   getEditorSettings,
   setEditorSettings,
-} from '../src/editor/editorSettings';
+} from '../../code-editor/src/editor/editorSettings';
 import { __setFsForTest, type NodeFsLike } from '../../doc-tree/src/features/extFs';
 import {
   initEditorSettingsStore,

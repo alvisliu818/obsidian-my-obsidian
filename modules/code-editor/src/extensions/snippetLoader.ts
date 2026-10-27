@@ -10,7 +10,13 @@
 //     }
 //   }
 import * as monaco from 'monaco-editor';
-import type { InstalledExtension } from './types';
+// Structural subset of logseq's `InstalledExtension` (see themeLoader note):
+// snippet loading only reads id / files / contributes.snippets.
+export interface SnippetExtension {
+  id: string;
+  files: Record<string, string>;
+  contributes?: { snippets?: { language?: string; path?: string; languageId?: string }[] };
+}
 
 interface Snippet {
   name: string;
@@ -29,7 +35,7 @@ function normalizePath(p: string): string {
 }
 
 /** 加载扩展的代码片段贡献，返回注册的片段条数（重复调用先清理旧的，幂等） */
-export function loadSnippets(extension: InstalledExtension): number {
+export function loadSnippets(extension: SnippetExtension): number {
   removeExtensionSnippets(extension.id);
 
   const contributes = extension.contributes;

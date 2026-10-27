@@ -20,7 +20,7 @@ import { ItemView, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian'
 import type * as monacoNS from 'monaco-editor';
 // 代码编辑器:Monaco(开源 VS Code 内核)。语言解析/高亮/worker 见 src/editor/monaco.ts;
 // pyright LSP 的 Monaco provider 接线在 extensions/grammarLoader 侧(与 SiYuan 同源)。
-import { createEditor, setupMonaco, getLanguageByPath } from '../editor/monaco';
+import { createEditor, setupMonaco, getLanguageByPath } from '../../../code-editor/src/editor/monaco';
 import { readExternalText, writeExternalText } from '../../../doc-tree/src/features/extFs';
 import { logOp } from '../features/logger';
 import type LogseqEditorPlugin from '../main';
@@ -29,8 +29,8 @@ import { setLeafTitle } from '../features/leafTitle';
 import { docTreeOf } from '../../../doc-tree/src/main';
 import { applyHeaderPath, headerPathSegments } from './headerPath';
 import { HybridCodeEditor } from './hybridCodeEditor';
-import { runFile, langFromExt } from '../exec/runner';
-import type { RunHandle } from '../exec/pythonRunner';
+import { runFile, langFromExt } from '../../../code-editor/src/exec/runner';
+import type { RunHandle } from '../../../code-editor/src/exec/pythonRunner';
 
 export { relativeDisplayPath };
 

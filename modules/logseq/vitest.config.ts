@@ -9,7 +9,7 @@ export default defineConfig({
       { find: /^obsidian$/, replacement: path.resolve(__dirname, 'obsidian-stub.js') },
       // monaco-editor 同理:renderTree → codeBlockEdit → monaco.ts 的链要能
       // 解析,但编辑器本体只在 Obsidian 运行时存在(e2e 才真正创建)。
-      { find: /^monaco-editor$/, replacement: path.resolve(__dirname, 'monaco-stub.js') },
+      { find: /^monaco-editor$/, replacement: path.resolve(__dirname, '../code-editor/monaco-stub.js') },
       // `cm-bundle:<pkg>` — strip the prefix; node_modules resolution takes over
       // (the bundling split only matters inside Obsidian, not under vitest).
       { find: /^cm-bundle:/, replacement: '' },

@@ -7,7 +7,22 @@
 
 import { loadWASM, OnigScanner, OnigString } from 'vscode-oniguruma';
 import { Registry, type IGrammar, type IRawGrammar } from 'vscode-textmate';
-import type { InstalledExtension } from './types';
+// Structural subset of logseq's `InstalledExtension` (see themeLoader note):
+// the TM engine only reads id / files / contributes.grammars.
+export interface GrammarExtension {
+  id: string;
+  files: Record<string, string>;
+  contributes?: {
+    languages?: { id: string; extensions?: string[]; aliases?: string[]; filenames?: string[]; firstLine?: string }[];
+    grammars?: {
+      language?: string;
+      scopeName: string;
+      path: string;
+      embeddedLanguages?: Record<string, string>;
+      injectTo?: string[];
+    }[];
+  };
+}
 
 declare const __ONIG_WASM_B64__: string | undefined;
 
@@ -48,7 +63,7 @@ function ensureRegistry(): Registry {
 }
 
 /** 注册一个启用扩展的全部语法贡献（重复调用幂等） */
-export function registerGrammarFromExtension(ext: InstalledExtension): void {
+export function registerGrammarFromExtension(ext: GrammarExtension): void {
   if (registeredExts.has(ext.id)) return;
   const contributes = ext.contributes;
   if (!contributes) return;
@@ -83,7 +98,7 @@ export function registerGrammarFromExtension(ext: InstalledExtension): void {
 }
 
 /** 注销一个（被禁用/卸载）扩展的全部语法贡献 */
-export function unregisterGrammarFromExtension(ext: InstalledExtension): void {
+export function unregisterGrammarFromExtension(ext: GrammarExtension): void {
   if (!registeredExts.has(ext.id)) return;
   const contributes = ext.contributes;
   for (const g of contributes?.grammars ?? []) {

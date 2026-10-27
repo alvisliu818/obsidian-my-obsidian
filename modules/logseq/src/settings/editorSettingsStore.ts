@@ -19,7 +19,7 @@ import {
   editorSettingsFrom,
   setEditorSettings,
   type EditorSettings,
-} from '../editor/editorSettings';
+} from '../../../code-editor/src/editor/editorSettings';
 import { exists, ensureDir, readExternalText, writeExternalText } from '../../../doc-tree/src/features/extFs';
 
 /** 存取层需要的宿主最小面(Plugin 满足)。 */

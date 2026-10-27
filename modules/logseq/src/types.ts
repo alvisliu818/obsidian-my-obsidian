@@ -1,7 +1,8 @@
 /**
  * Core data types for the Logseq-style block editor.
  * This module must stay dependency-free (no obsidian / CM6 / DOM) — it is
- * unit-tested under plain Node via vitest.
+ * unit-tested under plain Node via vitest. Type-only re-exports (import type)
+ * from sibling bottom-layer modules are allowed: they erase at compile time.
  */
 
 export type Marker = 'TODO' | 'DOING' | 'DONE' | null;
@@ -320,23 +321,10 @@ export interface BlockEditorSettings {
 }
 
 /** LSP 语言服务器配置：语言 → 启动命令映射（多语言通用化） */
-export interface LspServerSpec {
-  /** 唯一 id；内置 pyright 固定 'pyright'，用户添加的自取 */
-  id: string;
-  /** 匹配的 languageId（即文件扩展名小写），如 ['python']、['ts','tsx'] */
-  languages: string[];
-  /** node = 用系统 node.exe 跑 JS 脚本（复用终端的 node 发现）；direct = 直接 spawn 可执行文件 */
-  launch: 'node' | 'direct';
-  /** node 模式：脚本路径（相对插件目录或绝对）；direct 模式：可执行文件名/路径 */
-  command: string;
-  /** 追加参数（如 ['--stdio']） */
-  args: string[];
-  enabled: boolean;
-  /** generic 服务器按 section 回复的静态 workspace/configuration（pyright 内置语义不需要） */
-  config?: { section: string; value: unknown }[];
-  /** 内置预设（不可删除，仅可禁用） */
-  builtin?: boolean;
-}
+// LspServerSpec 已随 LSP 域迁往 code-editor（2026-10-27 Step B）。
+// import type 在转译时擦除——本模块的"零运行时依赖、Node 直测"性质不变。
+import type { LspServerSpec } from '../../code-editor/src/types';
+export type { LspServerSpec };
 
 /** Options for the vault-wide content search panel. */
 export interface ContentSearchOptions {

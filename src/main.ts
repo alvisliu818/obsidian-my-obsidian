@@ -26,6 +26,7 @@ import {
 } from "./settings";
 
 import DocTreePlugin from "../modules/doc-tree/src/main";
+import CodeEditorPlugin from "../modules/code-editor/src/main";
 import LogseqEditorPlugin from "../modules/logseq/src/main";
 import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE } from "../modules/logseq/src/views/ExternalCodeView";
 import BrowserPlugin from "../modules/browser/src/main";
@@ -126,6 +127,20 @@ export default class MyObsidianPlugin extends Plugin {
 				"虚拟文档树：把库外文件夹挂进侧栏（挂载树/嵌套挂载/新建笔记/链接进库），库外图片、视频与 Office 文件的应用内查看器，以及库外文件的打开路由与系统「打开方式」菜单。",
 			desktopOnly: true,
 			cls: DocTreePlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// 自研(2026-10-27 自 logseq 模块拆出):Monaco 编辑器基建 + LSP 宿主 +
+			// 代码执行器 + 扩展贡献桥(语法/主题/片段)。惰性初始化——首次
+			// createEditor 才落 monaco 真资源,首次 openLspDocument 才 spawn
+			// LSP 子进程(常驻内存大头,拆分动机);onunload 释放两者。视图
+			// (ExternalCodeView/hybridCodeEditor/CodeDocView)留 logseq,经静态
+			// import 使用本模块(上层→底层)。
+			id: "code-editor",
+			legacyId: "obsidian-code-editor",
+			name: "my Code Editor",
+			summary: "Monaco 代码编辑器基建：代码块/代码文件的语法高亮与编辑（含混合模式所需的编辑器内核）、LSP 诊断补全（pyright 等）、代码执行器，以及 VSCode 扩展的主题/片段/语法贡献注册。",
+			desktopOnly: true,
+			cls: CodeEditorPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
 			id: "logseq",

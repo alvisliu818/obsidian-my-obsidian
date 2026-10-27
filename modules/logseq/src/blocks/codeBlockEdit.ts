@@ -18,10 +18,10 @@
  * 编辑器,提交后换回静态渲染(缓存渲染保持有效)。
  */
 
-import { mountSharedBlockEditor, setupMonaco, getLanguageByFence, colorizeCode } from '../editor/monaco';
-import { effectiveFontSize, getEditorSettings } from '../editor/editorSettings';
-import { monacoLspAttach } from '../lsp/monacoLspBridge';
-import { encodeFileUri } from '../lsp/lspHost';
+import { mountSharedBlockEditor, setupMonaco, getLanguageByFence, colorizeCode } from '../../../code-editor/src/editor/monaco';
+import { effectiveFontSize, getEditorSettings } from '../../../code-editor/src/editor/editorSettings';
+import { monacoLspAttach } from '../../../code-editor/src/lsp/monacoLspBridge';
+import { encodeFileUri } from '../../../code-editor/src/lsp/lspHost';
 import { blockId } from '../types';
 import { nextVisible, prevVisible } from '../core/treeOps';
 import { caretAtGoalX } from '../interactions/keymap';
@@ -31,7 +31,7 @@ import type { BlockRenderHost } from './renderHost';
 
 // parseCodeFence/CodeFenceInfo 在 codeFence.ts(纯逻辑,单测不必拉起 Monaco)。
 import { parseCodeFence, type CodeFenceInfo } from './codeFence';
-import { createRunButton, mountRunUi, registerCodeWrap } from '../exec/codeBlockRun';
+import { createRunButton, mountRunUi, registerCodeWrap } from '../../../code-editor/src/exec/codeBlockRun';
 
 export { parseCodeFence, type CodeFenceInfo };
 

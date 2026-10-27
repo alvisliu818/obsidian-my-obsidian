@@ -5,7 +5,18 @@
 // 管理代码编辑器主题，自动切换会覆盖用户在设置里选的配色。应用时机交给调用方
 // （设置项/市场 UI）显式触发 applyExtensionTheme / applyThemeByPreference。
 import * as monaco from 'monaco-editor';
-import type { InstalledExtension } from './types';
+// Structural subset of logseq's `InstalledExtension` (extensions/types.ts):
+// theme loading only reads id / files / contributes.themes, and this module
+// must not import the extension-management domain back (code-editor is a
+// bottom-layer module). Callers passing the full InstalledExtension stay
+// compatible.
+export interface CodeThemeExtension {
+  id: string;
+  files: Record<string, string>;
+  contributes?: {
+    themes?: { label: string; uiTheme?: 'vs' | 'vs-dark' | 'hc-black' | 'hc-light'; path: string }[];
+  };
+}
 
 export interface LoadedTheme {
   extensionId: string;
@@ -37,7 +48,7 @@ function normalizePath(p: string): string {
 }
 
 /** 加载扩展的颜色主题贡献，返回注册的主题数（重复调用先清理旧的，幂等） */
-export function loadThemes(extension: InstalledExtension): number {
+export function loadThemes(extension: CodeThemeExtension): number {
   removeExtensionThemes(extension.id);
 
   const contributes = extension.contributes;

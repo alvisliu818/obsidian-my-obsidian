@@ -19,7 +19,7 @@ import { tags as t, type Tag } from 'cm-bundle:@lezer/highlight';
 import {
   getActiveThemeName, getLoadedThemes,
   type NbTokenRule,
-} from '../../logseq/src/extensions/themeLoader';
+} from '../../code-editor/src/extensions/themeLoader';
 
 /** lezer tag → TextMate scope 前缀候选（按特异度从高到低排列只是可读性，匹配本身按长度） */
 const TAG_SCOPES: Array<{ tag: Tag | Tag[]; scopes: string[] }> = [

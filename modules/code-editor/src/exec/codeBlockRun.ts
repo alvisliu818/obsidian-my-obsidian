@@ -13,7 +13,7 @@
  *   静态渲染层的装饰节点),面板可以安全挂在代码块容器内部。
  */
 
-import type { Block } from '../types';
+import type { RunBlockLike } from '../types';
 import { runCode, isRunnableLang as isRunnable, langFromTag } from './runner';
 import { stripANSI, type RunHandle } from './pythonRunner';
 
@@ -36,9 +36,9 @@ interface RunState {
 }
 
 /** 按块记忆运行状态:块模型跨 patch 稳定,WeakMap 跟随块生命周期。 */
-const runStates = new WeakMap<Block, RunState>();
+const runStates = new WeakMap<RunBlockLike, RunState>();
 
-function stateOf(b: Block): RunState {
+function stateOf(b: RunBlockLike): RunState {
   let st = runStates.get(b);
   if (!st) {
     st = { running: false, lang: '', handle: null, output: '', exitCode: null, collapsed: false, panel: null };
@@ -48,7 +48,7 @@ function stateOf(b: Block): RunState {
 }
 
 /** 供 renderTree 在静态渲染代码块时调用:有状态则把面板重新接上。 */
-export function mountRunUi(wrap: HTMLElement, lang: string, b: Block): void {
+export function mountRunUi(wrap: HTMLElement, lang: string, b: RunBlockLike): void {
   if (!isRunnableLang(lang)) return;
   const st = runStates.get(b);
   if (st && (st.running || st.output || st.exitCode !== null)) {
@@ -58,7 +58,7 @@ export function mountRunUi(wrap: HTMLElement, lang: string, b: Block): void {
 }
 
 /** 创建「▶ 运行」按钮(挂进代码块工具栏)。 */
-export function createRunButton(lang: string, getCode: () => string, b: Block): HTMLElement | null {
+export function createRunButton(lang: string, getCode: () => string, b: RunBlockLike): HTMLElement | null {
   if (!isRunnableLang(lang)) return null;
   const btn = document.createElement('span');
   btn.className = 'lgp-code-run';
@@ -73,7 +73,7 @@ export function createRunButton(lang: string, getCode: () => string, b: Block): 
 }
 
 /** 运行一个块的代码;面板会被创建/更新。 */
-async function runBlock(b: Block, code: string, rawLang: string): Promise<void> {
+async function runBlock(b: RunBlockLike, code: string, rawLang: string): Promise<void> {
   const st = stateOf(b);
   if (st.running) return;
   st.lang = rawLang || st.lang;
@@ -121,14 +121,14 @@ async function runBlock(b: Block, code: string, rawLang: string): Promise<void> 
 }
 
 /** 找到块当前渲染的 .lgp-code-block 容器(重渲染后由 mountRunUi 重建连接)。 */
-const wrapByBlock = new WeakMap<Block, HTMLElement>();
+const wrapByBlock = new WeakMap<RunBlockLike, HTMLElement>();
 
 /** renderTree 在包代码块时注册容器,运行时按块找回。 */
-export function registerCodeWrap(b: Block, wrap: HTMLElement): void {
+export function registerCodeWrap(b: RunBlockLike, wrap: HTMLElement): void {
   wrapByBlock.set(b, wrap);
 }
 
-function btnHostOf(b: Block): HTMLElement | null {
+function btnHostOf(b: RunBlockLike): HTMLElement | null {
   return wrapByBlock.get(b) ?? null;
 }
 
@@ -136,7 +136,7 @@ function btnHostOf(b: Block): HTMLElement | null {
 // 面板 DOM
 // ---------------------------------------------------------------------
 
-function buildPanel(b: Block, st: RunState): HTMLElement {
+function buildPanel(b: RunBlockLike, st: RunState): HTMLElement {
   const panel = document.createElement('div');
   panel.className = 'lgp-cb-run';
   st.panel = panel;
@@ -144,7 +144,7 @@ function buildPanel(b: Block, st: RunState): HTMLElement {
   return panel;
 }
 
-function renderPanel(b: Block, st: RunState, phase: 'running' | 'done' = 'running'): void {
+function renderPanel(b: RunBlockLike, st: RunState, phase: 'running' | 'done' = 'running'): void {
   void phase;
   if (st.panel && st.panel.isConnected) renderPanelInto(st.panel, b, st);
   else {
@@ -157,7 +157,7 @@ function renderPanel(b: Block, st: RunState, phase: 'running' | 'done' = 'runnin
   }
 }
 
-function renderPanelInto(panel: HTMLElement, b: Block, st: RunState, _phase: 'running' | 'done' = 'running'): void {
+function renderPanelInto(panel: HTMLElement, b: RunBlockLike, st: RunState, _phase: 'running' | 'done' = 'running'): void {
   panel.empty?.();
   if (panel.innerHTML !== undefined) panel.innerHTML = '';
 
@@ -239,7 +239,7 @@ function renderPanelInto(panel: HTMLElement, b: Block, st: RunState, _phase: 'ru
 }
 
 /** 从块模型重新解析代码(重跑时块可能已被编辑)。 */
-function latestCodeOf(b: Block): string {
+function latestCodeOf(b: RunBlockLike): string {
   const lines = b.text.split('\n');
   const open = lines.findIndex((l) => /^\s*(`{3,}|~{3,})/.test(l));
   if (open < 0) return b.text;

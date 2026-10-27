@@ -1,15 +1,15 @@
 import { PluginSettingTab, Setting, Notice, type App } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import { ExtensionMarketModal } from '../extensions/marketModal';
-import { getLoadedThemes } from '../extensions/themeLoader';
+import { getLoadedThemes } from '../../../code-editor/src/extensions/themeLoader';
 import { getLoadedIconThemes, activateIconThemeByPreference } from '../../../doc-tree/src/extensions/iconThemeLoader';
-import { applyCodeThemePreference } from '../editor/monaco';
+import { applyCodeThemePreference } from '../../../code-editor/src/editor/monaco';
 import { VIEW_TYPE_CONTENT_SEARCH } from '../panels/contentSearchPanel';
 import { resetReferencesCollapse } from '../features/pageReferences';
 import { VIEW_TYPE_BLOCK_EDITOR, type BlockEditorView } from '../view/BlockEditorView';
 import { VIEW_TYPE_EXTERNAL_BLOCK } from '../views/ExternalBlockView';
 import { SHORTCUT_GROUP_LABELS, type LspServerSpec, type PagePropsEditor, type ScopeMode, type ShortcutOverrides } from '../types';
-import { effectiveLspServers } from '../lsp/serverSpecs';
+import { effectiveLspServers } from '../../../code-editor/src/lsp/serverSpecs';
 import { LspServerEditModal } from './lspServerModal';
 import { renderEditorSettingsRows } from './editorSettingsUI';
 

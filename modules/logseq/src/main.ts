@@ -59,17 +59,16 @@ import { applyMarkedTabIcons, markLeafTabIcon } from '../../doc-tree/src/feature
 import { ExtensionMarketModal } from './extensions/marketModal';
 import { restoreAllExtensions, registerExtensionConsumer, search as extSearch, installExtension, uninstallExtension, toggleExtension, reinstallExtension, getInstalledExtensions } from './extensions/extensionManager';
 import { isExtensionInstalled } from './extensions/extensionStore';
-import { hasGrammarForFence } from './extensions/tmEngine';
-import { applyCodeThemePreference, warmUpSharedBlockEditor, disposeMonaco } from './editor/monaco';
+import { hasGrammarForFence } from '../../code-editor/src/extensions/tmEngine';
+import { applyCodeThemePreference, warmUpSharedBlockEditor } from '../../code-editor/src/editor/monaco';
 import { TerminalView, VIEW_TYPE_TERMINAL } from './terminal/terminalView';
-import { shutdownPtyHelper, findNodeExe } from './terminal/ptyClient';
-import { shutdownAllLsp } from './lsp/lspHost';
+import { shutdownPtyHelper, findNodeExe } from '../../code-editor/src/terminal/ptyClient';
 import type { ExtensionSource } from './extensions/types';
-import { registerGrammarFromExtension, unregisterGrammarFromExtension, ensureTmEngineReady } from './extensions/tmEngine';
+import { registerGrammarFromExtension, unregisterGrammarFromExtension, ensureTmEngineReady } from '../../code-editor/src/extensions/tmEngine';
 import { loadOpLog, logOp, flushOpLog } from './features/logger';
 import { OpLogModal } from './features/opLogModal';
-import { discoverPythonEnvs, probeVersions, spawnEnvFor, type PythonEnv } from './exec/pythonEnvs';
-import { setActivePythonEnv, getActivePythonEnv } from './exec/activeEnv';
+import { discoverPythonEnvs, probeVersions, spawnEnvFor, type PythonEnv } from '../../code-editor/src/exec/pythonEnvs';
+import { setActivePythonEnv, getActivePythonEnv } from '../../code-editor/src/exec/activeEnv';
 import { BackupRestoreModal } from './features/backupModal';
 import { builtinSlashItems, registerSlashEditorCommands } from './features/commandMenu';
 import { getLogseqPageProps } from './pagePropsRegistry';
@@ -818,8 +817,9 @@ export default class LogseqEditorPlugin extends Plugin {
 
     // 块内代码块的 Monaco 单例常驻在 body 的隐藏池里,不显式销毁会随插件
     // 禁用/重载泄漏(外部代码视图的实例由各自的 view 自己 dispose)。
-    disposeMonaco();
-    void shutdownAllLsp();
+    // disposeMonaco/shutdownAllLsp 已随 code-editor 模块拆出（Step B）：
+    // monaco 运行时与 LSP 子进程由 code-editor 自己的 onunload 释放，
+    // 本模块禁用时它们保持独立启停，不再在此代管。
     shutdownPtyHelper();
     logOp(this, 'plugin.unload', '', 'ok');
     // Flush pending log records before the adapter access goes away.

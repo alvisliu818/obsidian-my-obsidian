@@ -8,8 +8,8 @@ import { downloadMarketplaceVsix, downloadOpenVsxVsix, getMarketplaceLatestVersi
 import { parseVsix } from './vsixLoader';
 import { addInstalledExtension, loadInstalledExtensions, removeInstalledExtension, toggleExtensionEnabled } from './extensionStore';
 import { loadIconThemes, removeExtensionIconThemes } from '../../../doc-tree/src/extensions/iconThemeLoader';
-import { loadThemes, removeExtensionThemes } from './themeLoader';
-import { loadSnippets, removeExtensionSnippets } from './snippetLoader';
+import { loadThemes, removeExtensionThemes } from '../../../code-editor/src/extensions/themeLoader';
+import { loadSnippets, removeExtensionSnippets } from '../../../code-editor/src/extensions/snippetLoader';
 import type Plugin from '../main';
 
 /** 消费端回调：扩展数据变化（安装/启用/禁用/启动恢复）后触发 */

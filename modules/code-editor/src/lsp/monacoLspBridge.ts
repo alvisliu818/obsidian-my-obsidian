@@ -10,7 +10,7 @@ import {
   type LspCompletionItem,
 } from './lspHost';
 import { resolveLspSpec } from './serverSpecs';
-import type LogseqEditorPlugin from '../main';
+import type { LspHostLike } from '../types';
 
 interface LspDiagItem {
   uri: string;
@@ -24,7 +24,7 @@ interface LspDiagItem {
 const providerLangs = new Set<string>();
 
 /** LSP 是否可用(有匹配 server 且设置未关闭) */
-function lspActive(plugin: LogseqEditorPlugin, languageId: string): boolean {
+function lspActive(plugin: LspHostLike, languageId: string): boolean {
   if (plugin.settings.lspEnabled === false) return false;
   return !!resolveLspSpec(languageId, plugin.settings.lspServers);
 }
@@ -33,7 +33,7 @@ function lspActive(plugin: LogseqEditorPlugin, languageId: string): boolean {
  * 语言级 provider 只注册一次(补全/悬停是语言级 API);目标文件从 model.uri 解析。
  * 后续打开同类文件自动获得 LSP,无需重复注册。
  */
-export function ensureMonacoLspProviders(plugin: LogseqEditorPlugin, languageId: string): void {
+export function ensureMonacoLspProviders(plugin: LspHostLike, languageId: string): void {
   if (providerLangs.has(languageId) || !lspActive(plugin, languageId)) return;
   providerLangs.add(languageId);
 
@@ -101,7 +101,7 @@ export function ensureMonacoLspProviders(plugin: LogseqEditorPlugin, languageId:
  * 由挂载方在视图关闭时统一 dispose。
  */
 export function monacoLspAttach(
-  plugin: LogseqEditorPlugin,
+  plugin: LspHostLike,
   editor: monaco.editor.IStandaloneCodeEditor,
   languageId: string,
   docUri: string,

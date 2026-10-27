@@ -12,8 +12,7 @@
 //
 // 诊断：所有 server 的 publishDiagnostics 统一进多播监听（bridge 按 uri 过滤）。
 
-import type LogseqEditorPlugin from '../main';
-import type { LspServerSpec } from '../types';
+import type { LspHostLike, LspServerSpec } from '../types';
 import { resolveLspSpec, isPyrightLike } from './serverSpecs';
 import { getActivePythonEnv } from '../exec/activeEnv';
 import { spawnEnvFor } from '../exec/pythonEnvs';
@@ -35,7 +34,7 @@ const diagListeners = new Set<(ds: LspDiagnostic[]) => void>();
 // 首次调用时缓存的宿主上下文（manifest.dir 是相对路径，需要插件实例解析）
 let hostCtx: { absPluginDir: string; vaultRoot: string } | null = null;
 
-function hostContextOf(plugin: LogseqEditorPlugin): { absPluginDir: string; vaultRoot: string } {
+function hostContextOf(plugin: LspHostLike): { absPluginDir: string; vaultRoot: string } {
   if (hostCtx) return hostCtx;
   const { absolutePluginDir } = require('../terminal/ptyClient') as typeof import('../terminal/ptyClient');
   const absPluginDir = absolutePluginDir(plugin.manifest.dir ?? '', plugin.app.vault.adapter);
@@ -131,7 +130,7 @@ function resolvePyrightLaunch(absPluginDir: string, id: string): { launch: 'node
   return { launch: 'direct', command: exe, args: ['--stdio'] };
 }
 
-async function startServer(plugin: LogseqEditorPlugin, spec: LspServerSpec): Promise<LspClient> {
+async function startServer(plugin: LspHostLike, spec: LspServerSpec): Promise<LspClient> {
   const { absPluginDir, vaultRoot } = hostContextOf(plugin);
   const isPyright = isPyrightLike(spec);
 
@@ -234,7 +233,7 @@ function stateOf(spec: LspServerSpec): ServerState {
 }
 
 /** 获取（或启动）某语言的 server；python 系环境变化时自动重启 */
-async function ensureServer(plugin: LogseqEditorPlugin, spec: LspServerSpec): Promise<LspClient | null> {
+async function ensureServer(plugin: LspHostLike, spec: LspServerSpec): Promise<LspClient | null> {
   const st = stateOf(spec);
   const isPyright = isPyrightLike(spec);
   const envKeyNow = isPyright ? (getActivePythonEnv()?.cmd ?? '') : '';
@@ -264,7 +263,7 @@ async function ensureServer(plugin: LogseqEditorPlugin, spec: LspServerSpec): Pr
 }
 
 /** 打开（或全量更新）一份文档；返回是否有 server 接管 */
-export async function openLspDocument(plugin: LogseqEditorPlugin, uri: string, languageId: string, text: string): Promise<boolean> {
+export async function openLspDocument(plugin: LspHostLike, uri: string, languageId: string, text: string): Promise<boolean> {
   const spec = resolveLspSpec(languageId, plugin.settings.lspServers);
   if (!spec) return false;
   const st = stateOf(spec);
@@ -298,7 +297,7 @@ export interface LspCompletionItem {
   insertText?: string;
 }
 
-export async function lspCompletion(plugin: LogseqEditorPlugin, languageId: string, uri: string, line: number, ch: number): Promise<LspCompletionItem[]> {
+export async function lspCompletion(plugin: LspHostLike, languageId: string, uri: string, line: number, ch: number): Promise<LspCompletionItem[]> {
   const spec = resolveLspSpec(languageId, plugin.settings.lspServers);
   if (!spec) return [];
   const st = states.get(spec.id);
@@ -325,7 +324,7 @@ export async function lspCompletion(plugin: LogseqEditorPlugin, languageId: stri
   }
 }
 
-export async function lspHover(plugin: LogseqEditorPlugin, languageId: string, uri: string, line: number, ch: number): Promise<string | null> {
+export async function lspHover(plugin: LspHostLike, languageId: string, uri: string, line: number, ch: number): Promise<string | null> {
   const spec = resolveLspSpec(languageId, plugin.settings.lspServers);
   if (!spec) return null;
   const st = states.get(spec.id);

@@ -20,8 +20,8 @@ import {
   lspCompletion,
   lspHover,
   onLspDiagnostics,
-} from './lspHost';
-import { resolveLspSpec } from './serverSpecs';
+} from '../../../code-editor/src/lsp/lspHost';
+import { resolveLspSpec } from '../../../code-editor/src/lsp/serverSpecs';
 import type LogseqEditorPlugin from '../main';
 
 interface DiagRange {

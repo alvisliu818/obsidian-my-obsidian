@@ -27,6 +27,13 @@
       // node_modules (doc-tree itself has none under the root PnP program).
       "mammoth/mammoth.browser.js": ["./node_modules/mammoth/mammoth.browser.js"],
       "jszip": ["./node_modules/jszip"],
+      // code-editor sources (compiled into this program via relative
+      // imports) import monaco-editor; same reasoning as `obsidian` above.
+      "monaco-editor": ["./node_modules/monaco-editor"],
+      // code-editor's TextMate engine deps (bundled in our own main.js
+      // since the tmEngine lived in logseq/src).
+      "vscode-textmate": ["./node_modules/vscode-textmate"],
+      "vscode-oniguruma": ["./node_modules/vscode-oniguruma"],
       "xlsx": ["./node_modules/xlsx"],
       // `cm-bundle:<pkg>` — the code-block editor's own bundled CM copy.
       // Strip the prefix for type resolution (esbuild/vite do the same).

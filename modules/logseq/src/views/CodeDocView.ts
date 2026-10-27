@@ -19,7 +19,7 @@
 
 import { ItemView, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
-import { createEditor, setupMonaco, getLanguageByPath } from '../editor/monaco';
+import { createEditor, setupMonaco, getLanguageByPath } from '../../../code-editor/src/editor/monaco';
 import { buildCodeDoc, toOutlineDocText } from '../features/codeDoc';
 import { parseCodeFence } from '../blocks/codeFence';
 import { FragmentHost } from '../blocks/fragmentEditor';
