@@ -9,7 +9,7 @@
  */
 
 import { ItemView, Menu, Notice, setIcon, TFile, type WorkspaceLeaf, type ViewStateResult } from 'obsidian';
-import type LogseqEditorPlugin from '../main';
+import type DocTreePlugin from '../main';
 import {
   getOfficeKind,
   OFFICE_KIND_LABEL,
@@ -31,14 +31,15 @@ export interface OfficeViewState {
 }
 
 export class OfficeView extends ItemView {
-  plugin: LogseqEditorPlugin;
+  plugin: DocTreePlugin;
   private path = '';
   private engine: OfficeEngine | null = null;
   private bodyEl!: HTMLElement;
   private toolbarEl!: HTMLElement;
-  // titleEl: 基类 View 自带 public titleEl（obsidian ^1.14 typings），直接用
+  // titleEl：public View typings 没有（同 ImageView 的说明），自声明槽位。
+  titleEl!: HTMLElement;
 
-  constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
+  constructor(leaf: WorkspaceLeaf, plugin: DocTreePlugin) {
     super(leaf);
     this.plugin = plugin;
   }

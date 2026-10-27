@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { EditorState } from '@codemirror/state';
-import type { CompletionContext } from '@codemirror/autocomplete';
+import type { CompletionContext, CompletionResult } from '@codemirror/autocomplete';
 import { blockRefSource, tagSource, wikiLinkSource } from '../src/features/links';
 import type { BlockRenderHost } from '../src/blocks/renderHost';
 
@@ -32,7 +32,8 @@ const hostStub = {
 describe('wikiLinkSource 挂守卫后', () => {
   it('normal [[ still returns options', () => {
     const src = wikiLinkSource(hostStub);
-    const r = src(ctxOf('see [[ab', 8));
+    // CompletionSource may return a Promise — this source is sync, narrow it.
+    const r = src(ctxOf('see [[ab', 8)) as CompletionResult | null;
     expect(r).not.toBeNull();
     expect(r!.from).toBe(6);
   });

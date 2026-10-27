@@ -9,7 +9,7 @@ import {
   joinAbs,
   uniqueCopyName,
   writeExternalBinary,
-} from './extFs';
+} from '../../../doc-tree/src/features/extFs';
 
 /**
  * 库外笔记（挂载目录里的文件）的附件落盘：粘贴图片 / 拖入文件。

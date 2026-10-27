@@ -17,7 +17,15 @@
 // 时机说明：扩展在插件 onload 后异步恢复，而挂载树/面板可能更早渲染，
 // 那时 getFileIconFor() 恒为 null（画默认图标）。ICON_THEME_CHANGED_EVENT
 // 让"图标主题就绪/切换"能被已渲染界面听到并重绘。
-import type { InstalledExtension } from './types';
+// Structural subset of logseq's `InstalledExtension` (extensions/types.ts):
+// icon-theme loading only reads id / files / contributes.iconThemes, and this
+// module must not import the extension-management domain back (doc-tree is
+// the lower layer). Callers passing the full InstalledExtension stay compatible.
+export interface IconThemeExtension {
+  id: string;
+  files: Record<string, string>;
+  contributes?: { iconThemes?: { id: string; label: string; path: string }[] };
+}
 
 export const ICON_THEME_CHANGED_EVENT = 'lgp:icon-theme-changed';
 const ICON_CACHE_KEY = 'lgp-icon-theme-cache-v1';
@@ -161,7 +169,7 @@ function mapToMap(obj: Record<string, string> | undefined): Map<string, string> 
   return m;
 }
 
-function parseIconTheme(themeData: any, extension: InstalledExtension, themePath: string): LoadedIconTheme {
+function parseIconTheme(themeData: any, extension: IconThemeExtension, themePath: string): LoadedIconTheme {
   const icons = new Map<string, string>();
   const iconDefs = themeData.iconDefinitions || {};
   const themeDir = getBasePath(themePath); // 主题文件目录（相对 extension 根）
@@ -191,7 +199,7 @@ function parseIconTheme(themeData: any, extension: InstalledExtension, themePath
 }
 
 /** 加载扩展的图标主题贡献，返回加载的主题数（重复调用先清理旧的，幂等） */
-export function loadIconThemes(extension: InstalledExtension): number {
+export function loadIconThemes(extension: IconThemeExtension): number {
   removeExtensionIconThemes(extension.id);
 
   const contributes = extension.contributes;

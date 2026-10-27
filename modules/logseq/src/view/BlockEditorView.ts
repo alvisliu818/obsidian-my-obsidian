@@ -74,7 +74,7 @@ import { applySupertags, normalizeTag, removeSupertags } from '../features/super
 import { collectBlockTags, removeTagFromText } from '../features/supertagText';
 import { mountCodeEditor, parseCodeFence, type MountedCodeEditor } from '../blocks/codeBlockEdit';
 import { unwatchGuideLayout, watchGuideLayout } from '../blocks/guideLayout';
-import { baseOf, MOUNT_FOLDER, readExternalText, writeExternalText } from '../features/extFs';
+import { baseOf, MOUNT_FOLDER, readExternalText, writeExternalText } from '../../../doc-tree/src/features/extFs';
 import { relativeDisplayPath } from '../features/codeFileKind';
 import { setLeafTitle } from '../features/leafTitle';
 import { toObsidianMath } from '../features/latexSource';

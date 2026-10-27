@@ -15,7 +15,7 @@
  */
 
 import { FileSystemAdapter, ItemView, Menu, Notice, setIcon, TFile, TFolder, type WorkspaceLeaf } from 'obsidian';
-import type LogseqEditorPlugin from '../main';
+import type DocTreePlugin from '../main';
 import type { ExternalMount } from '../types';
 import { mountDisplayName, mountHostOf } from '../types';
 import {
@@ -99,7 +99,7 @@ type MountLevelEntry =
   | { kind: 'mount'; m: ExternalMount; key: string; name: string; isDir: true };
 
 export class MountPanelView extends ItemView {
-  plugin: LogseqEditorPlugin;
+  plugin: DocTreePlugin;
   private states = new Map<string, MountState>();
   /** Per-render viewport painters; the panel's scroll runs them all. */
   private rowPainters: Array<() => void> = [];
@@ -116,7 +116,7 @@ export class MountPanelView extends ItemView {
     for (const paint of this.rowPainters) paint();
   };
 
-  constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
+  constructor(leaf: WorkspaceLeaf, plugin: DocTreePlugin) {
     super(leaf);
     this.plugin = plugin;
   }

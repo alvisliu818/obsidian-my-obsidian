@@ -12,7 +12,7 @@
  */
 
 import { Modal, Notice, Setting, TextComponent } from 'obsidian';
-import type LogseqEditorPlugin from '../main';
+import type DocTreePlugin from '../main';
 import { compileFilter, dirPruned, entryMatches, validateMountPath, type MountNode } from '../features/mountFilter';
 import { exists, isDirectory, joinAbs, scanExternal } from '../features/extFs';
 import {
@@ -64,14 +64,14 @@ function setStyles(el: HTMLElement, styles: Readonly<Record<string, string>>): v
  *  `attachTo` 非空时 = 嵌套挂载:保存后渲染在该宿主挂载项之下
  *  (si-yuan 虚拟文档树的「挂载文件/文件夹…「xxx」下」语义)。 */
 export class MountEditorModal extends Modal {
-  plugin: LogseqEditorPlugin;
+  plugin: DocTreePlugin;
   private draft: MountDraft;
   private editing: ExternalMount | null;
   private attachTo?: string;
   /** The path field, so a pick can write straight back into it. */
   private pathInput: TextComponent | null = null;
 
-  constructor(plugin: LogseqEditorPlugin, mount?: ExternalMount, attachTo?: string) {
+  constructor(plugin: DocTreePlugin, mount?: ExternalMount, attachTo?: string) {
     super(plugin.app);
     this.plugin = plugin;
     this.editing = mount ?? null;
@@ -281,9 +281,9 @@ export class MountEditorModal extends Modal {
 
 /** List every mount with per-row edit / rescan / unmount. */
 export class MountListModal extends Modal {
-  plugin: LogseqEditorPlugin;
+  plugin: DocTreePlugin;
 
-  constructor(plugin: LogseqEditorPlugin) {
+  constructor(plugin: DocTreePlugin) {
     super(plugin.app);
     this.plugin = plugin;
   }
@@ -355,10 +355,10 @@ export class MountListModal extends Modal {
  * mounts there is nothing to choose, so callers add directly instead.
  */
 export class MountPositionModal extends Modal {
-  plugin: LogseqEditorPlugin;
+  plugin: DocTreePlugin;
   private draft: Omit<ExternalMount, 'id' | 'enabled'>;
 
-  constructor(plugin: LogseqEditorPlugin, draft: Omit<ExternalMount, 'id' | 'enabled'>) {
+  constructor(plugin: DocTreePlugin, draft: Omit<ExternalMount, 'id' | 'enabled'>) {
     super(plugin.app);
     this.plugin = plugin;
     this.draft = draft;
@@ -445,7 +445,7 @@ export interface MountTargetPick {
  * 选择器只服务选位，不接拖拽序/已加载统计那些面板语义。
  */
 export class MountTargetPickerModal extends Modal {
-  private plugin: LogseqEditorPlugin;
+  private plugin: DocTreePlugin;
   private sourceName: string;
   private sourceAbs: string;
   private onPick: (t: MountTargetPick) => void;
@@ -458,7 +458,7 @@ export class MountTargetPickerModal extends Modal {
   private treeEl: HTMLElement | null = null;
 
   constructor(
-    plugin: LogseqEditorPlugin,
+    plugin: DocTreePlugin,
     opts: { sourceName: string; sourceAbs: string; onPick: (t: MountTargetPick) => void },
   ) {
     super(plugin.app);

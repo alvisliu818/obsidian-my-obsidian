@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MountPanelView } from '../src/panels/mountPanel';
 import type { MountNode } from '../src/features/mountFilter';
-import type { ExternalMount, LogseqEditorSettings } from '../src/types';
+import type { ExternalMount, DocTreeSettings } from '../src/types';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -30,7 +30,7 @@ function makeTree(): string {
 }
 
 function panelWith(mounts: ExternalMount[]): MountPanelView {
-  const plugin = { settings: { externalMounts: mounts } as unknown as LogseqEditorSettings };
+  const plugin = { settings: { externalMounts: mounts } as unknown as DocTreeSettings };
   return new MountPanelView({} as never, plugin as never);
 }
 

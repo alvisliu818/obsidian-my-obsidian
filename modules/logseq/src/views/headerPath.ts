@@ -9,8 +9,8 @@
 
 import { Menu, Notice } from 'obsidian';
 import type { App } from 'obsidian';
-import { scanExternal } from '../features/extFs';
-import { iconForEntry } from '../features/iconTheme';
+import { scanExternal } from '../../../doc-tree/src/features/extFs';
+import { iconForEntry } from '../../../doc-tree/src/features/iconTheme';
 
 export interface HeaderSegment {
 	/** 这一段显示的文字 */

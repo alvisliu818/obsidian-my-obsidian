@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { isMarkdownFile, relativeDisplayPath } from '../src/features/codeFileKind';
-import { isTextFileName } from '../src/features/mountFilter';
+import { isTextFileName } from '../../doc-tree/src/features/mountFilter';
 
 describe('isMarkdownFile — the only format that opens in the block editor', () => {
   it('accepts the markdown extensions', () => {

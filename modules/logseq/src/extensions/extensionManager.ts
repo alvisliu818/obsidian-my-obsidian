@@ -7,7 +7,7 @@ import type { ExtensionSource, InstalledExtension, LoadResult, SearchEntry, Sear
 import { downloadMarketplaceVsix, downloadOpenVsxVsix, getMarketplaceLatestVersion, getOpenVsxMetadata, searchMarketplace, searchOpenVsx } from './marketClient';
 import { parseVsix } from './vsixLoader';
 import { addInstalledExtension, loadInstalledExtensions, removeInstalledExtension, toggleExtensionEnabled } from './extensionStore';
-import { loadIconThemes, removeExtensionIconThemes } from './iconThemeLoader';
+import { loadIconThemes, removeExtensionIconThemes } from '../../../doc-tree/src/extensions/iconThemeLoader';
 import { loadThemes, removeExtensionThemes } from './themeLoader';
 import { loadSnippets, removeExtensionSnippets } from './snippetLoader';
 import type Plugin from '../main';

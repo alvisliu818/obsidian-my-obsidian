@@ -14,8 +14,8 @@
  *     import 纯函数，extFs 对 Node 模块是懒加载的，插件加载时安全）。
  */
 
-import { scanExternal, readExternalText, readExternalTextHead } from '../../../logseq/src/features/extFs';
-import { compileFilter, entryMatches, dirPruned } from '../../../logseq/src/features/mountFilter';
+import { scanExternal, readExternalText, readExternalTextHead } from '../../../doc-tree/src/features/extFs';
+import { compileFilter, entryMatches, dirPruned } from '../../../doc-tree/src/features/mountFilter';
 
 /** 一个参与抽象文件夹图的库外文件。键（FileGraph 里的 key）= abs。 */
 export interface ExternalFileEntry {

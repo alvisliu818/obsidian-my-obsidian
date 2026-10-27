@@ -16,7 +16,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { MountPanelView } from '../src/panels/mountPanel';
-import type { ExternalMount, LogseqEditorSettings } from '../src/types';
+import type { ExternalMount, DocTreeSettings } from '../src/types';
 import type { MountNode } from '../src/features/mountFilter';
 
 type Row =
@@ -47,7 +47,7 @@ function mount(id: string, attachTo?: string, label?: string): ExternalMount {
 
 /** A panel with the given mounts, and nothing else Obsidian needs. */
 function panelWith(mounts: ExternalMount[]): MountPanelView {
-  const plugin = { settings: { externalMounts: mounts } as unknown as LogseqEditorSettings };
+  const plugin = { settings: { externalMounts: mounts } as unknown as DocTreeSettings };
   return new MountPanelView({} as never, plugin as never);
 }
 

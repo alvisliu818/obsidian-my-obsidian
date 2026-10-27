@@ -23,10 +23,11 @@ import { createEditor, setupMonaco, getLanguageByPath } from '../editor/monaco';
 import { buildCodeDoc, toOutlineDocText } from '../features/codeDoc';
 import { parseCodeFence } from '../blocks/codeFence';
 import { FragmentHost } from '../blocks/fragmentEditor';
-import { readExternalText, writeExternalText } from '../features/extFs';
+import { readExternalText, writeExternalText } from '../../../doc-tree/src/features/extFs';
 import { parseDocument } from '../core/parser';
+import { docTreeOf } from '../../../doc-tree/src/main';
 import { applyHeaderPath, headerPathSegments } from './headerPath';
-import type { MountNode } from '../features/mountFilter';
+import type { MountNode } from '../../../doc-tree/src/features/mountFilter';
 
 export const VIEW_TYPE_CODE_DOC = 'logseq-code-doc';
 
@@ -136,7 +137,7 @@ export class CodeDocView extends ItemView {
     const label = this.mountLabel || this.mountLabelFromSettings();
     const segments = headerPathSegments(this.abs, rel, label);
     if (segments.length) segments[0].isMount = true;
-    applyHeaderPath(this.containerEl, segments, this.plugin, this.abs);
+    applyHeaderPath(this.containerEl, segments, this.plugin.headerMenuHost, this.abs);
   }
 
   private relFromMount(): string {
@@ -147,7 +148,7 @@ export class CodeDocView extends ItemView {
   }
 
   private mountLabelFromSettings(): string {
-    const mounts = this.plugin.settings.externalMounts ?? [];
+    const mounts = docTreeOf(this.app)?.settings.externalMounts ?? [];
     const full = this.abs.replace(/\\/g, '/').toLowerCase();
     let best = '';
     let bestLen = -1;

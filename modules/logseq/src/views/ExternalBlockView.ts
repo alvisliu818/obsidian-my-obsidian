@@ -28,8 +28,9 @@
 import { ItemView, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import { BlockEditorView } from '../view/BlockEditorView';
-import type { MountNode } from '../features/mountFilter';
+import type { MountNode } from '../../../doc-tree/src/features/mountFilter';
 import { installExternalAttachmentHandlers } from '../features/externalAttachment';
+import { docTreeOf } from '../../../doc-tree/src/main';
 import { applyHeaderPath, headerPathSegments } from './headerPath';
 
 export const VIEW_TYPE_EXTERNAL_BLOCK = 'logseq-external-block';
@@ -118,7 +119,7 @@ export class ExternalBlockView extends ItemView {
     const label = this.mountLabel || this.mountLabelFromSettings();
     const segments = headerPathSegments(this.abs, rel, label);
     if (segments.length) segments[0].isMount = true;
-    applyHeaderPath(this.containerEl, segments, this.plugin, this.abs);
+    applyHeaderPath(this.containerEl, segments, this.plugin.headerMenuHost, this.abs);
   }
 
   /** 没有 rel（老 state 恢复的标签页）时，用挂载根现算一个相对路径。 */
@@ -131,7 +132,7 @@ export class ExternalBlockView extends ItemView {
 
   /** 老 state 没有挂载名时，按最长前缀匹配在挂载配置里找回来。 */
   private mountLabelFromSettings(): string {
-    const mounts = this.plugin.settings.externalMounts ?? [];
+    const mounts = docTreeOf(this.app)?.settings.externalMounts ?? [];
     const full = this.abs.replace(/\\/g, '/').toLowerCase();
     let best = '';
     let bestLen = -1;
@@ -220,7 +221,7 @@ export class ExternalBlockView extends ItemView {
 
   /** 老 state 没有挂载根时，按最长前缀匹配在挂载配置里找回来。 */
   private mountRootFromSettings(): string {
-    const mounts = this.plugin.settings.externalMounts ?? [];
+    const mounts = docTreeOf(this.app)?.settings.externalMounts ?? [];
     const full = this.abs.replace(/\\/g, '/').toLowerCase();
     let best = '';
     let bestLen = -1;

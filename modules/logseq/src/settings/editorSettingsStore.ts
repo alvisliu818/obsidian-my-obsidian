@@ -20,7 +20,7 @@ import {
   setEditorSettings,
   type EditorSettings,
 } from '../editor/editorSettings';
-import { exists, ensureDir, readExternalText, writeExternalText } from '../features/extFs';
+import { exists, ensureDir, readExternalText, writeExternalText } from '../../../doc-tree/src/features/extFs';
 
 /** 存取层需要的宿主最小面(Plugin 满足)。 */
 export interface EditorSettingsHost {

@@ -21,8 +21,8 @@ import type { Block } from '../types';
 import { parseDocument } from '../core/parser';
 import { serializeDocument } from '../core/serializer';
 import { logOp } from '../features/logger';
-import { extOf, readExternalText, writeExternalText } from '../features/extFs';
-import { isTextMount } from '../features/mountFilter';
+import { extOf, readExternalText, writeExternalText } from '../../../doc-tree/src/features/extFs';
+import { isTextMount } from '../../../doc-tree/src/features/mountFilter';
 import { toObsidianMath } from '../features/latexSource';
 
 export const VIEW_TYPE_EXTERNAL_FILE = 'logseq-external-file';

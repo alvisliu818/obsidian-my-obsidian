@@ -66,7 +66,7 @@ import { toml } from "cm-bundle:@codemirror/legacy-modes/mode/toml";
 import { xml } from "cm-bundle:@codemirror/legacy-modes/mode/xml";
 import { yaml } from "cm-bundle:@codemirror/legacy-modes/mode/yaml";
 import { runFile, langFromExt } from "../modules/logseq/src/exec/runner";
-import { TEXT_MOUNT_EXTENSIONS } from "../modules/logseq/src/features/mountFilter";
+import { TEXT_MOUNT_EXTENSIONS } from "../modules/doc-tree/src/features/mountFilter";
 import type { RunHandle } from "../modules/logseq/src/exec/pythonRunner";
 
 export const VIEW_TYPE_CODE_FILE = "lgp-code-file";

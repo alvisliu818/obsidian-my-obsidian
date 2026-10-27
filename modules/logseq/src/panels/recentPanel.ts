@@ -13,7 +13,8 @@
 
 import { ItemView, Menu, TFile, setIcon, type WorkspaceLeaf } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
-import { addOpenWithMenuItems } from '../features/openWith';
+import { docTreeOf } from '../../../doc-tree/src/main';
+import { addOpenWithMenuItems } from '../../../doc-tree/src/features/openWith';
 
 export const VIEW_TYPE_RECENT_PANEL = 'logseq-recent-panel';
 
@@ -103,7 +104,7 @@ export class RecentPanelView extends ItemView {
           }),
         );
         if (file instanceof TFile) {
-          addOpenWithMenuItems(this.plugin.app, file, menu, this.plugin.settings.openWithApps);
+          addOpenWithMenuItems(this.plugin.app, file, menu, docTreeOf(this.plugin.app)?.settings.openWithApps ?? []);
         }
         menu.addSeparator();
         menu.addItem((item) =>

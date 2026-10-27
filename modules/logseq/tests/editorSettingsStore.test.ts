@@ -14,7 +14,7 @@ import {
   getEditorSettings,
   setEditorSettings,
 } from '../src/editor/editorSettings';
-import { __setFsForTest, type NodeFsLike } from '../src/features/extFs';
+import { __setFsForTest, type NodeFsLike } from '../../doc-tree/src/features/extFs';
 import {
   initEditorSettingsStore,
   loadEditorSettings,

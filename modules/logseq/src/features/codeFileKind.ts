@@ -28,16 +28,10 @@
  * read line by line.
  */
 
-/** Extensions that are prose and belong in the block editor. */
-const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown', 'mdown', 'mkd', 'mdx']);
-
-/** True when a file is markdown — the only case that opens in the block editor. */
-export function isMarkdownFile(name: string): boolean {
-  const base = (name.split(/[\\/]/).pop() ?? name).toLowerCase();
-  const m = /\.([A-Za-z0-9]+)$/.exec(base);
-  if (!m) return false;
-  return MARKDOWN_EXTENSIONS.has(m[1].toLowerCase());
-}
+// 2026-10-27 模块拆分:库外文件的打开路由归 doc-tree 模块,markdown 判定
+// 随之搬进 doc-tree/src/features/mountFilter.ts。这里 re-export 维持本模块
+// 与宿主的 import 面不断(main.ts 的 file-menu、ExternalCodeView 等)。
+export { isMarkdownFile } from '../../../doc-tree/src/features/mountFilter';
 
 /**
  * Display path for a mounted file: relative to the mount root.

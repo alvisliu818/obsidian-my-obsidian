@@ -5,7 +5,7 @@
 import { Modal, Notice, setIcon } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import { getInstalledExtensions, installFromSearchEntry, search, toggleExtension, uninstallExtension, reinstallExtension } from './extensionManager';
-import { getIconThemesWithMissingIcons } from './iconThemeLoader';
+import { getIconThemesWithMissingIcons } from '../../../doc-tree/src/extensions/iconThemeLoader';
 import type { ExtensionSource, InstalledExtension, SearchEntry } from './types';
 
 function escapeHTML(s: string): string {

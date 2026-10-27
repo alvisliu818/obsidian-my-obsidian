@@ -25,6 +25,7 @@ import {
 	type SubPluginLike,
 } from "./settings";
 
+import DocTreePlugin from "../modules/doc-tree/src/main";
 import LogseqEditorPlugin from "../modules/logseq/src/main";
 import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE } from "../modules/logseq/src/views/ExternalCodeView";
 import BrowserPlugin from "../modules/browser/src/main";
@@ -112,6 +113,20 @@ export default class MyObsidianPlugin extends Plugin {
 	private readonly aliases: string[] = [];
 
 	readonly descriptors: ModuleDescriptor[] = [
+		{
+			// 自研(2026-10-27 自 logseq 模块拆出,拆分前是该模块的挂载面):
+			// 挂载面板/库外文件系统(extFs)/库外文件打开路由/图片·视频·Office
+			// 查看器/系统「打开方式」。引导顺序必须在 logseq 之前——logseq 的
+			// onload 通过 docTreeOf() 找到它登记库外编辑 opener(见 doc-tree
+			// 的 openers.ts);它被单独关闭时库外文件回落系统打开,库内编辑不受影响。
+			id: "doc-tree",
+			legacyId: "obsidian-doc-tree",
+			name: "my Doc Tree",
+			summary:
+				"虚拟文档树：把库外文件夹挂进侧栏（挂载树/嵌套挂载/新建笔记/链接进库），库外图片、视频与 Office 文件的应用内查看器，以及库外文件的打开路由与系统「打开方式」菜单。",
+			desktopOnly: true,
+			cls: DocTreePlugin as unknown as ModuleDescriptor["cls"],
+		},
 		{
 			id: "logseq",
 			// The id other modules look this one up by (jupyter reads
@@ -558,6 +573,50 @@ export default class MyObsidianPlugin extends Plugin {
 				raw?.modules?.[d.id],
 			);
 		}
+		await this.migrateDocTreeSettings();
+	}
+
+	/**
+	 * 一次性 guarded 迁移(2026-10-27 模块拆分):doc-tree 拆出时,挂载/查看器/
+	 * 打开方式这批设置键从 logseq 的 data 片迁到 doc-tree 的 data 片。
+	 *
+	 * guarded 的含义:doc-tree 片里已经有同名键(拆分后保存过)就**不覆盖**——
+	 * 以拆分后的新值为准;logseq 片里的旧键无论如何都删掉(本模块的读方已
+	 * 随拆分搬走,留着只是死重)。迁完立刻落盘,保证只跑一次。
+	 */
+	private async migrateDocTreeSettings(): Promise<void> {
+		const MOUNT_KEYS = [
+			"mountFilterEnabled",
+			"mountLinkEnabled",
+			"mountShowLoadedCount",
+			"mountDragMode",
+			"mountTreeOrder",
+			"mountPickDir",
+			"mountNewNotePath",
+			"externalMounts",
+			"externalSplitView",
+			"externalMarkdownEditor",
+			"officeViewerEnabled",
+			"imageViewerTakeOver",
+			"videoPlayerTakeOver",
+			"openWithApps",
+		];
+		const lgData = this.settings.modules["logseq"]?.data as Record<string, unknown> | undefined;
+		const dtState = this.settings.modules["doc-tree"];
+		if (!lgData || !dtState) return;
+		const target = (dtState.data ?? {}) as Record<string, unknown>;
+		let touched = false;
+		for (const k of MOUNT_KEYS) {
+			if (lgData[k] === undefined) continue;
+			if (target[k] === undefined) {
+				target[k] = lgData[k];
+				touched = true;
+			}
+			delete lgData[k];
+		}
+		if (!touched) return;
+		dtState.data = target;
+		await this.saveSettings();
 	}
 
 	async saveSettings(): Promise<void> {

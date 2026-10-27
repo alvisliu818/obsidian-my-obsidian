@@ -21,11 +21,11 @@
   "license": "MIT",
   "devDependencies": {
     "@playwright/test": "1.48",
-    "@types/node": "^20.19.43",
+    "@types/node": "^22.20.5",
     "builtin-modules": "^3.3.0",
     "esbuild": "^0.21.5",
     "monaco-editor": "^0.50.0",
-    "obsidian": "^1.5.7",
+    "obsidian": "^1.14.4",
     "pyright": "^1.1.414",
     "tslib": "^2.6.3",
     "typescript": "^5.5.4",

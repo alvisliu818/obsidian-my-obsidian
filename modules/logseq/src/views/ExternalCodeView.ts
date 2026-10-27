@@ -21,11 +21,12 @@ import type * as monacoNS from 'monaco-editor';
 // 代码编辑器:Monaco(开源 VS Code 内核)。语言解析/高亮/worker 见 src/editor/monaco.ts;
 // pyright LSP 的 Monaco provider 接线在 extensions/grammarLoader 侧(与 SiYuan 同源)。
 import { createEditor, setupMonaco, getLanguageByPath } from '../editor/monaco';
-import { readExternalText, writeExternalText } from '../features/extFs';
+import { readExternalText, writeExternalText } from '../../../doc-tree/src/features/extFs';
 import { logOp } from '../features/logger';
 import type LogseqEditorPlugin from '../main';
 import { relativeDisplayPath } from '../features/codeFileKind';
 import { setLeafTitle } from '../features/leafTitle';
+import { docTreeOf } from '../../../doc-tree/src/main';
 import { applyHeaderPath, headerPathSegments } from './headerPath';
 import { HybridCodeEditor } from './hybridCodeEditor';
 import { runFile, langFromExt } from '../exec/runner';
@@ -57,7 +58,7 @@ export class ExternalCodeView extends ItemView {
 
   /** 老 state 没有挂载名时，按最长前缀匹配在挂载配置里找回来。 */
   private mountLabelFromSettings(): string {
-    const mounts = this.plugin.settings.externalMounts ?? [];
+    const mounts = docTreeOf(this.app)?.settings.externalMounts ?? [];
     const full = this.abs.replace(/\\/g, '/').toLowerCase();
     let best = '';
     let bestLen = -1;
@@ -233,7 +234,7 @@ export class ExternalCodeView extends ItemView {
       this.mountLabel || this.mountLabelFromSettings(),
     );
     if (segments.length) segments[0].isMount = true;
-    applyHeaderPath(this.containerEl, segments, this.plugin, this.abs);
+    applyHeaderPath(this.containerEl, segments, this.plugin.headerMenuHost, this.abs);
   }
 
   async onClose(): Promise<void> {

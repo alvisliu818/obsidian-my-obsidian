@@ -7,11 +7,11 @@ import { describe, expect, it } from 'vitest';
 import { parseDocument } from '../src/core/parser';
 import {
   docPageProps,
-  editorChoiceFromExternalText,
   editorChoiceFromProps,
   takeOverForFile,
   type BlockEditorSettings,
 } from '../src/types';
+import { editorChoiceFromExternalText } from '../../doc-tree/src/types';
 
 describe('editorChoiceFromProps', () => {
   it('maps the two known values', () => {

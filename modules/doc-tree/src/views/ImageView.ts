@@ -23,7 +23,7 @@ import {
   type WorkspaceLeaf,
   type ViewStateResult,
 } from 'obsidian';
-import type LogseqEditorPlugin from '../main';
+import type DocTreePlugin from '../main';
 import { baseOf, copyExternalFile, dirOf, extOf, readExternalBinary, scanExternal } from '../features/extFs';
 import {
   absolutePath,
@@ -62,7 +62,7 @@ export interface ImageViewState {
 }
 
 export class ImageView extends ItemView {
-  plugin: LogseqEditorPlugin;
+  plugin: DocTreePlugin;
   private path = '';
   /** 库外绝对路径;与 path 互斥(库外模式下 path 恒为空)。 */
   private abs = '';
@@ -83,10 +83,14 @@ export class ImageView extends ItemView {
   private stageEl!: HTMLElement;
   private imgEl!: HTMLImageElement;
   private toolbarEl!: HTMLElement;
-  // titleEl: 基类 View 自带 public titleEl（obsidian ^1.14 typings），直接用
+  // titleEl：public View typings 没有这个成员（titleEl 只在 Modal 上）；
+  // 运行时槽位是 Obsidian 内部 API（只有 @obsidian-typings 的 augment 类型
+  // 才看得到）。onOpen 里自建并覆盖同一槽位，这里显式 declare，不依赖宿主
+  // 的 augment 面（模块拆分后独立 program 也成立）。
+  titleEl!: HTMLElement;
   private zoomLabelEl!: HTMLElement;
 
-  constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
+  constructor(leaf: WorkspaceLeaf, plugin: DocTreePlugin) {
     super(leaf);
     this.plugin = plugin;
   }

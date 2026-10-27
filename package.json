@@ -10,7 +10,7 @@
     "build": "yarn run build:icons && tsc -noEmit -skipLibCheck && node esbuild.mjs production",
     "build:fast": "node esbuild.mjs production",
     "typecheck": "tsc -noEmit -skipLibCheck",
-    "test": "vitest run --root modules/logseq && vitest run --root modules/abstract-folder && vitest run --root modules/latex-delimiter-renderer && vitest run --root modules/omnisearch && vitest run --root modules/save-control && node scripts/test-index-core.mjs",
+    "test": "vitest run --root modules/doc-tree && vitest run --root modules/logseq && vitest run --root modules/abstract-folder && vitest run --root modules/latex-delimiter-renderer && vitest run --root modules/omnisearch && vitest run --root modules/save-control && node scripts/test-index-core.mjs",
     "test:index-core": "node scripts/test-index-core.mjs",
     "test:audio-player": "vitest run --root modules/audio-player",
     "test:abstract-folder": "vitest run --root modules/abstract-folder",

@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { EditorSelection, EditorState } from '@codemirror/state';
+import { EditorState } from '@codemirror/state';
 import { history } from '@codemirror/commands';
 import type { EditorView } from '@codemirror/view';
 import { linkParents } from '../src/core/treeOps';

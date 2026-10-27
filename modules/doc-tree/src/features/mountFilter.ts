@@ -285,6 +285,19 @@ export function extOfName(base: string): string {
 }
 
 /**
+ * Extensions that are prose and belong in the block editor (not the code
+ * editor). Moved here from logseq's codeFileKind with the 2026-10-27 module
+ * split: the ROUTING of an out-of-vault file lives in doc-tree, so the
+ * markdown predicate has to live here too (codeFileKind re-exports it).
+ */
+const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown', 'mdown', 'mkd', 'mdx']);
+
+/** True when a file is markdown — the only case that opens in the block editor. */
+export function isMarkdownFile(name: string): boolean {
+  return MARKDOWN_EXTENSIONS.has(extOfName(name));
+}
+
+/**
  * Validate a user-entered mount path. Returns an error string, or null when the
  * path is acceptable.
  */

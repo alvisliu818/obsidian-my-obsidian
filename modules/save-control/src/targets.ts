@@ -18,7 +18,7 @@ import {
   MOUNT_FOLDER,
   readExternalText,
   writeExternalText,
-} from "../../logseq/src/features/extFs";
+} from "../../doc-tree/src/features/extFs";
 
 export type SaveTargetKind = "vault" | "external";
 
