@@ -23,6 +23,8 @@ export interface Block {
   /** 'list' = outline bullet block (Logseq style); 'raw' = verbatim top-level content (headings, paragraphs, fences, quotes...) */
   kind: 'list' | 'raw';
   marker: Marker;
+  /** GFM 任务状态单字符（' '/'X'/'/'-' 或自定义），undefined = 非任务（批次 23）。 */
+  task?: string;
   /**
    * 段落容器标记(运行时字段,不落盘):源文件里没有列表标志(`-`)的顶层文本行。
    *

@@ -94,6 +94,8 @@ export function serializeBlock(b: Block, depth: number, skipProps?: readonly str
 
   const prefix = unit.repeat(depth);
   const marker = b.marker ? b.marker + ' ' : '';
+  // GFM 任务前缀（批次 23）：parse 剥进 b.task，这里拼回，round-trip 保真。
+  const taskPrefix = b.task !== undefined && b.task !== null ? `[${b.task}] ` : '';
   const textLines = b.text.split('\n');
   const out: string[] = [];
 
@@ -118,7 +120,7 @@ export function serializeBlock(b: Block, depth: number, skipProps?: readonly str
     return out.join('\n');
   }
 
-  out.push(`${prefix}- ${marker}${textLines[0]}`);
+  out.push(`${prefix}- ${marker}${taskPrefix}${textLines[0]}`);
   const softPrefix = unit.repeat(depth + 1);
   for (let k = 1; k < textLines.length; k++) {
     out.push(softPrefix + textLines[k]);

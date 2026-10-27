@@ -39,6 +39,7 @@ import {
   splitRawToOutline,
   visibleRange,
 } from '../core/treeOps';
+import { nextTaskListMarker } from '../core/taskMarker';
 import {
   foldLevelOf,
   foldValueFor,
@@ -430,6 +431,13 @@ export class FragmentHost extends Component implements BlockRenderHost {
 
   toggleMarker(b: Block): void {
     this.mutate(() => cycleMarker(b));
+  }
+
+  toggleTask(b: Block): void {
+    this.mutate(() => {
+      b.task = nextTaskListMarker(b.task ?? null);
+      return b.task;
+    });
   }
 
   // ------------------------------------------------------------------

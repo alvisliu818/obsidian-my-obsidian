@@ -25,6 +25,7 @@ import { VIEW_TYPE_IMAGE } from '../../../doc-tree/src/views/ImageView';
 import { VIEW_TYPE_VIDEO } from '../../../doc-tree/src/views/VideoView';
 import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Block } from '../types';
+import { taskStatusClass } from '../core/taskMarker';
 import { blockId } from '../types';
 import { foldLevelOf, foldSummary, isFoldableBody, isFoldableHeading, isInsideFoldedSection, isMediaOnlyBlock, normFoldKey } from '../core/fold';
 import { createPageEmbedBox, enhanceBlockRefs, enhanceEmbeds } from '../features/links';
@@ -136,7 +137,7 @@ export function blockFromEl(el: HTMLElement | null): Block | null {
 const CARET_SVG = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6l4 4 4-4"/></svg>`;
 
 function contentSig(b: Block): string {
-  return JSON.stringify([b.text, b.marker ?? '', b.kind]);
+  return JSON.stringify([b.text, b.marker ?? '', b.task ?? '', b.kind]);
 }
 
 export function renderBlockTree(container: HTMLElement, roots: Block[], host: BlockRenderHost): void {
@@ -376,6 +377,14 @@ function renderBlock(b: Block, host: BlockRenderHost, budget?: RenderBudget): HT
     mk.addEventListener('click', (e) => {
       e.stopPropagation();
       host.toggleMarker(b);
+    });
+  } else if (b.kind === 'list' && b.task !== undefined) {
+    // GFM 任务 checkbox（思源 .protyle-action--task 同位，批次 23）：点击两态 toggle。
+    const mk = main.createEl('div', { cls: 'block-marker task task-' + taskStatusClass(b.task) });
+    mk.setAttribute('aria-label', b.task === ' ' ? '[ ]' : `[${b.task}]`);
+    mk.addEventListener('click', (e) => {
+      e.stopPropagation();
+      host.toggleTask(b);
     });
   }
 

@@ -19,6 +19,7 @@ import { serializeBlock, serializeDocument } from '../core/serializer';
 import { writeMarkdownWithInternalFormat } from '../features/internalClipboard';
 import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, insertAfter, insertBefore, isDescendant, linkParents, mergeWithNext, mergeWithPrev, moveBlockGroup, moveBlockVertically, nextVisible, outdent, prevVisible, pseudoRootOf, rangeAnchor, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, unregisterRoots, visibleRange, type MovePosition } from '../core/treeOps';
 import { capForIndex, planScrollRestore, scrollHeightReady, SCROLL_READY_MAX_TRIES, type PersistedScroll } from '../core/scrollRestore';
+import { nextTaskListMarker } from '../core/taskMarker';
 import { foldLevelOf, foldValueFor, headingLevel, nextFoldLevel, normFoldKey, subtreeFoldTargets, type FoldLevel } from '../core/fold';
 import { UndoStack } from '../state/undoStack';
 import {
@@ -2877,6 +2878,16 @@ ${content}`;
   toggleMarker(b: Block): void {
     this.mutate(
       () => cycleMarker(b),
+      () => ({ subtree: b }),
+    );
+  }
+
+  toggleTask(b: Block): void {
+    this.mutate(
+      () => {
+        b.task = nextTaskListMarker(b.task ?? null);
+        return b.task;
+      },
       () => ({ subtree: b }),
     );
   }

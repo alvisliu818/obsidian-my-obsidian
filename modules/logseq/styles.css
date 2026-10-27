@@ -418,6 +418,40 @@
   content: '✓';
 }
 
+/* --- GFM 任务 checkbox（批次 23，思源四态）--- */
+.block-marker.task.task-empty {
+  /* 未完成:默认空框即态 */
+}
+
+.block-marker.task.task-x {
+  border-color: var(--text-success);
+  background: var(--text-success);
+  color: var(--background-primary);
+}
+
+.block-marker.task.task-x::after {
+  content: '✓';
+}
+
+.block-marker.task.task-slash {
+  border-color: var(--text-accent);
+  background: linear-gradient(to top, var(--text-accent) 45%, transparent 45%);
+}
+
+.block-marker.task.task-dash {
+  border-color: var(--text-faint);
+  position: relative;
+}
+
+.block-marker.task.task-dash::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 50%;
+  border-top: 1.5px solid var(--text-faint);
+}
+
 /* ---------- Children guides ---------- */
 .block-children-container {
   display: flex;

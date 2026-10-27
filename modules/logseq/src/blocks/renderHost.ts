@@ -90,6 +90,8 @@ export interface BlockRenderHost extends Component {
   foldSubtree(b: Block): void;
   setFold(b: Block, level: FoldLevel): void;
   toggleMarker(b: Block): void;
+  /** GFM 任务 checkbox 点击（批次 23）：两态 toggle。 */
+  toggleTask(b: Block): void;
   toggleCollapseGuide(b: Block): void;
   createFirstBlock(): void;
   addBlockAtEnd(): void;

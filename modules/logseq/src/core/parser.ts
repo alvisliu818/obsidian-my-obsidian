@@ -20,6 +20,7 @@
  */
 
 import { Block, Marker, MARKERS, ParsedDocument, createBlock } from '../types';
+import { getTaskListMarker } from './taskMarker';
 import { normFoldKey } from './fold';
 
 const FENCE_OPEN_RE = /^(\s*)(`{3,}|~{3,})(.*)$/;
@@ -144,8 +145,25 @@ function leadingWs(line: string): string {
 
 function parseMarker(content: string): { marker: Marker; text: string } {
   const m = MARKER_RE.exec(content);
-  if (m) return { marker: m[1] as Exclude<Marker, null>, text: m[2] };
-  return { marker: null, text: content };
+  let marker: Marker = null;
+  let text = content;
+  if (m) {
+    marker = m[1] as Exclude<Marker, null>;
+    text = m[2];
+  }
+  return { marker, text };
+}
+
+/**
+ * GFM 任务前缀剥离（仅 list 调用点——GFM 任务必须 list 形态，bare 段落
+ * `[ ] x` 保持纯文本）。getTaskListMarker 的 contentStartIndex 只跳过 `[X]`
+ * 三字符，标准写法 `[X] text` 在 `]` 后还有一个分隔空格，这里一并吃掉。
+ */
+function stripTaskPrefix(text: string): { text: string; task?: string } {
+  const tm = getTaskListMarker(text, false);
+  if (!tm) return { text };
+  const rest = text.slice(tm.contentStartIndex);
+  return { text: rest.startsWith(' ') ? rest.slice(1) : rest, task: tm.marker };
 }
 
 /** Strip `depth` tab-equivalents of leading indentation, preserving the rest (code indents!). */
@@ -504,7 +522,9 @@ export function parseDocument(md: string): ParsedDocument {
       flushBare();
       const content = listMatch[2] ?? '';
       const { marker, text } = parseMarker(content);
-      const b = createBlock(text, marker);
+      const { text: blockText, task } = stripTaskPrefix(text);
+      const b = createBlock(blockText, marker);
+      if (task !== undefined) b.task = task;
       // Find parent: truncate stack to depth-1 ancestors.
       let parent: Block | null = null;
       if (depth > 0 && stack.length > 0) {
