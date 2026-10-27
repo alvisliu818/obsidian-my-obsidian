@@ -26,6 +26,8 @@ import { VIEW_TYPE_VIDEO } from '../../../doc-tree/src/views/VideoView';
 import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Block } from '../types';
 import { taskStatusClass } from '../core/taskMarker';
+import { calloutFold, calloutKind } from './blockTypes';
+import { setCalloutFold } from './blockTypeConvert';
 import { headingNumberNeedsSpacing } from '../core/headingNumber';
 import { blockId } from '../types';
 import { foldLevelOf, foldSummary, headingLevel, isFoldableBody, isFoldableHeading, isInsideFoldedSection, isMediaOnlyBlock, normFoldKey } from '../core/fold';
@@ -972,6 +974,9 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
       // rendered <table> in place) and after code blocks (a table inside a code
       // fence is not a table).
       enhanceTables(holder, b, host);
+      // Callout fold arrow (native callout structure): click = rewrite the
+      // fold marker through the model, never an edit (see enhanceCallouts).
+      enhanceCallouts(holder, b, host);
       // Image resize handles (native editor parity): hover corner + drag.
       enhanceImages(holder, b, host);
       // 库外媒体点击打开(图片单击/视频双击 → 增强查看器)。必须在
@@ -1425,6 +1430,42 @@ export function wireMediaOpen(holder: HTMLElement, host: BlockRenderHost): void 
 			openFor(v);
 		});
 	});
+}
+
+/**
+ * Obsidian-native callout interactions (SiYuan callout.ts/calloutClick.ts parity,
+ * batch 26): the markdown renderer already emits the native .callout structure
+ * (icon / title / fold arrow), but the arrow has no handler inside the block
+ * editor — a click would bubble into wireContentEvents and start an edit.
+ *
+ * Live-preview parity: the arrow rewrites the block's fold marker
+ * (`[!x]` ↔ `[!x]-`) through the block model, so the state persists with the
+ * file and the subtree re-render derives the DOM state from the markdown —
+ * the arrow click never reaches the editor path. Title/content clicks are left
+ * alone: they enter the block editor where the callout head is plain text.
+ */
+function enhanceCallouts(holder: HTMLElement, b: Block, host: BlockRenderHost): void {
+  if (calloutKind(b.text) === '') return; // not a callout
+  const folds = holder.querySelectorAll<HTMLElement>('.callout-fold');
+  for (const fold of folds) {
+    fold.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      // Toggle between the two EXPLICIT markers: `-` (collapsed) <-> `+`
+      // (expanded). Plain `[!x]` has no arrow in the native render, so the
+      // marker must never be rewritten to '' — the arrow would disappear and
+      // there would be no way back.
+      const fold = calloutFold(b.text);
+      const nextFold: '-' | '+' = fold === '-' ? '+' : '-';
+      host.mutate(
+        () => {
+          const next = setCalloutFold(b, nextFold);
+          if (next) b.text = next.text;
+        },
+        () => ({ subtree: b }),
+      );
+    });
+  }
 }
 
 function enhanceTables(holder: HTMLElement, b: Block, host: BlockRenderHost): void {

@@ -303,11 +303,47 @@ export function setHeadingLevel(shape: BlockShape, level: number): BlockShape | 
   return cycleHeadingLevel(shape, clampLevel(level) - headingLevel(shape.text));
 }
 
-/** Change a callout's kind (note → warning ...). Returns null if not a callout. */
+/** Callout kind syntax: Obsidian accepts `[!kind]` with a word-ish name. */
+const CALLOUT_KIND_RE = /^[a-zA-Z][\w-]*$/;
+
+/**
+ * Change a callout's kind (note → warning ...). Returns null if not a callout,
+ * or when `kind` is not a valid callout name (Obsidian `[!name]` syntax).
+ *
+ * SiYuan callout.ts updateCalloutType parity: when the title IS the old kind's
+ * name (case-insensitive — the callout was created with a default title), the
+ * title follows the kind to its new name; a user title is kept verbatim. The
+ * fold marker survives the rewrite (it lives on the `[!kind]` token itself).
+ */
 export function setCalloutKind(shape: BlockShape, kind: string): BlockShape | null {
   const bare = stripToBare(shape);
   if (!bare.callout) return null;
-  return convertBlock(shape, 'callout', { callout: kind });
+  const nextKind = kind.trim();
+  if (!CALLOUT_KIND_RE.test(nextKind)) return null;
+  const lines = bare.text.split('\n');
+  if ((lines[0] ?? '').trim().toLowerCase() === bare.callout.toLowerCase()) {
+    lines[0] = nextKind;
+  }
+  return convertBlock({ ...shape, text: lines.join('\n') }, 'callout', {
+    callout: nextKind,
+    fold: bare.fold,
+  });
+}
+
+/**
+ * Set a callout's fold marker (`''` expanded / `'-'` collapsed by default /
+ * `'+'` explicitly expanded). Returns null if the block is not a callout.
+ * Live-preview parity: the arrow rewrites the markdown itself, so the state
+ * persists with the file — the renderer derives the DOM state from it.
+ */
+export function setCalloutFold(shape: BlockShape, fold: '' | '-' | '+'): BlockShape | null {
+  if (calloutKind(shape.text) === '') return null;
+  const lines = shape.text.split('\n');
+  lines[0] = (lines[0] ?? '').replace(
+    /^(\s*>\s*\[![a-zA-Z][\w-]*\])([+-]?)/,
+    (_m, head: string) => `${head}${fold}`,
+  );
+  return { ...shape, text: lines.join('\n') };
 }
 
 /** Change a fenced code block's language. Returns null if not code. */

@@ -132,6 +132,16 @@ export function openBlockTypeMenu(
             .onClick(() => applyRewrite(host, b, setCalloutKind(b, k))),
         );
       }
+      // SiYuan updateCustomCalloutType parity: a free-text kind. Obsidian
+      // renders any `[!name]` callout (gray when unknown), so custom kinds are
+      // first-class — CSS just falls back to the default styling.
+      sub.addSeparator();
+      sub.addItem((item) =>
+        item
+          .setTitle('Custom…')
+          .setIcon('pencil')
+          .onClick(() => new CalloutKindPromptModal(host, b, kind).open()),
+      );
     });
   }
   if (current === 'code') {
@@ -193,6 +203,49 @@ function addSubmenu(
       else sub.showAtPosition({ x: anchor.x + 14, y: anchor.y + 14 });
     }),
   );
+}
+
+/** Free-text callout kind (SiYuan updateCustomCalloutType parity). */
+class CalloutKindPromptModal extends Modal {
+  constructor(
+    private host: BlockRenderHost,
+    private block: Block,
+    private current: string,
+  ) {
+    super(host.app);
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    let value = this.current;
+    new Setting(contentEl).setName('Callout type').addText((t) =>
+      t
+        .setPlaceholder('note, warning, my-type, …')
+        .setValue(this.current)
+        .onChange((v) => {
+          value = v.trim();
+        }),
+    );
+    new Setting(contentEl).addButton((btn) =>
+      btn
+        .setButtonText('Apply')
+        .setCta()
+        .onClick(() => {
+          this.close();
+          const next = setCalloutKind(this.block, value);
+          if (!next) {
+            new Notice('Callout type must match [!name] syntax (letters, digits, -).');
+            return;
+          }
+          applyRewrite(this.host, this.block, next);
+        }),
+    );
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
 }
 
 /** Free-text fence language. */

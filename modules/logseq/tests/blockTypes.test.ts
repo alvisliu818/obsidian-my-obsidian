@@ -26,6 +26,7 @@ import {
   convertBlock,
   conversionLosesIdentity,
   cycleHeadingLevel,
+  setCalloutFold,
   setCalloutKind,
   setCodeLang,
   stripToBare,
@@ -218,6 +219,42 @@ describe('convertBlock', () => {
     expect(c.text).toBe('> [!danger] head\n> body');
     expect(setCalloutKind(c, 'success')?.text).toBe('> [!success] head\n> body');
     expect(setCalloutKind(shape('plain'), 'success')).toBe(null);
+  });
+
+  it('setCalloutKind follows a default title to the new kind (SiYuan parity)', () => {
+    // SiYuan updateCalloutType: a title that literally IS the old kind's name
+    // (case-insensitive) follows the kind; a user title is kept verbatim.
+    const follow = setCalloutKind(shape('> [!note] Note\n> body'), 'warning');
+    expect(follow?.text).toBe('> [!warning] warning\n> body');
+    const followUpper = setCalloutKind(shape('> [!NOTE] Note\n> body'), 'warning');
+    expect(followUpper?.text).toBe('> [!warning] warning\n> body');
+    const keep = setCalloutKind(shape('> [!note] My Title\n> body'), 'warning');
+    expect(keep?.text).toBe('> [!warning] My Title\n> body');
+  });
+
+  it('setCalloutKind keeps the fold marker and validates the kind', () => {
+    const folded = setCalloutKind(shape('> [!note]- Note\n> body'), 'tip');
+    expect(folded?.text).toBe('> [!tip]- tip\n> body');
+    const expanded = setCalloutKind(shape('> [!note]+ Note'), 'tip');
+    expect(expanded?.text).toBe('> [!tip]+ tip');
+    // Custom kinds are first-class (Obsidian renders any [!name]).
+    expect(setCalloutKind(shape('> [!note] x'), 'my-type')?.text).toBe('> [!my-type] x');
+    // Invalid kinds must not corrupt the markdown.
+    expect(setCalloutKind(shape('> [!note] x'), 'has space')).toBe(null);
+    expect(setCalloutKind(shape('> [!note] x'), '')).toBe(null);
+    expect(setCalloutKind(shape('> [!note] x'), '!bad')).toBe(null);
+  });
+
+  it('setCalloutFold toggles the fold marker in place', () => {
+    const c = shape('> [!note] Title\n> body');
+    const folded = setCalloutFold(c, '-');
+    expect(folded?.text).toBe('> [!note]- Title\n> body');
+    const back = setCalloutFold(folded!, '');
+    expect(back?.text).toBe('> [!note] Title\n> body');
+    const plus = setCalloutFold(c, '+');
+    expect(plus?.text).toBe('> [!note]+ Title\n> body');
+    // Quotes are not callouts: no fold marker to set.
+    expect(setCalloutFold(shape('> plain quote'), '-')).toBe(null);
   });
 
   it('code conversion keeps the body and swaps the language', () => {
