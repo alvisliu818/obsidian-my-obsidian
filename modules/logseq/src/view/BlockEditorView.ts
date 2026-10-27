@@ -40,6 +40,7 @@ import {
 import { applyCursor, applyCursorAndScroll, commitEditorText, cursorAtCoords, mountFocusedEditor, type CursorPos } from '../editor/focusEditor';
 import { createEmbedExtensions } from '../editor/extensions';
 import { bindBlockDragSelect } from '../interactions/blockDragSelect';
+import { dragOverScroll, stopScrollAnimation } from '../interactions/dragOverScroll';
 import { deactivatePainter, hideFormatToolbar } from '../interactions/formatToolbar';
 import {
   findEmbedBox,
@@ -264,6 +265,18 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
           this.lastClicked = end;
           this.syncSelectionClasses();
           this.focusTreeForSelection();
+        },
+        // 越界滚动（批次 21）：指针压 scroller 上/下 24px 边缘带 → dragOverScroll
+        // rAF 驱动（压得越深滚越快）；横向出界或无 point（松手）即停。
+        scroll: (point) => {
+          const sc = this.editorContainerEl.querySelector('.block-editor-scroller');
+          if (!sc) return;
+          const rect = sc.getBoundingClientRect();
+          if (point && point.clientX >= rect.left && point.clientX <= rect.right) {
+            dragOverScroll(point, rect, sc);
+          } else {
+            stopScrollAnimation();
+          }
         },
         finish: (cancelled) => {
           if (cancelled) this.clearSelection();

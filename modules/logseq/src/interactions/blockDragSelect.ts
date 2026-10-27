@@ -11,8 +11,9 @@
  * 方的 canStart 把关。范围切片与标记落位都是回调（visibleRange + 选择态
  * 字段在 BlockEditorView），这里只管手势状态机。
  *
- * 移植时去掉的 SiYuan 专属分支：触摸长按阈值 / 多选模式工具条 / 越界滚动
- * 驱动（dragOverScroll）——我们用原生滚动 + scroll 重算覆盖常见场景。
+ * 移植时去掉的 SiYuan 专属分支：触摸长按阈值 / 多选模式工具条。越界滚动
+ * 驱动（dragOverScroll）批次 21 经 scroll 挂点接回（update 每步回调当前点，
+ * finish 无参调用一次 = 停）；原生滚动 + scroll 重算仍覆盖滚动条拖动场景。
  */
 
 import type { Block } from '../types';
@@ -30,6 +31,8 @@ export interface BlockDragSelectOptions {
   getBlockAtPoint: (x: number, y: number) => BlockDragSelectHit | null;
   select: (start: Block, end: Block) => void;
   finish: (cancelled: boolean) => void;
+  /** 越界滚动挂点（思源同位）：update 每步带当前点，finish 无参（= 停）。 */
+  scroll?: (point?: { clientX: number; clientY: number }) => void;
 }
 
 export function bindBlockDragSelect(element: HTMLElement, o: BlockDragSelectOptions): () => void {
@@ -49,6 +52,7 @@ export function bindBlockDragSelect(element: HTMLElement, o: BlockDragSelectOpti
     ownerWin.removeEventListener('blur', onCancel);
     if (prev?.active) {
       suppressClickUntil = Date.now() + 500;
+      o.scroll?.(); // 松手即停边缘带滚动（思源 finish 同位）
       o.finish(cancelled);
     }
   };
@@ -78,6 +82,7 @@ export function bindBlockDragSelect(element: HTMLElement, o: BlockDragSelectOpti
     gesture.x = x;
     gesture.y = y;
     if (hit) o.select(gesture.block, hit.block);
+    o.scroll?.({ clientX: x, clientY: y }); // 贴边滚动驱动（思源 update 尾部同位）
     return true;
   };
 
