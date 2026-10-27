@@ -3194,6 +3194,67 @@ body.lgp-table-editor-cursor .lgp-table-editor-grow {
   opacity: 0.95;
 }
 
+/* Column-width drag handles (siyuan batch 20, self-designed): a thin bar on
+   each header cell's right edge. The preview label reuses the grow
+   handle's floating style. */
+.lgp-table-editor-table th {
+  /* Anchors the width-drag handle. The reorder col-handle already relied on
+     a positioning context here (it worked via an outside rule); making it
+     explicit costs nothing and stops the width handle from resolving
+     against the block wrapper if that outside rule ever changes. */
+  position: relative;
+}
+
+.lgp-table-editor-cw-handle {
+  position: absolute;
+  top: 15%;
+  height: 70%;
+  right: -4px;
+  width: 8px;
+  cursor: col-resize;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  /* The handle's center sits EXACTLY on the column boundary (right:-4px +
+     width:8px ⇒ mid = th.right). At a tie, elementFromPoint and painting
+     both favor the LATER sibling th (also positioned via the rule above),
+     so the next column's cell ate every pointer event and the first two
+     handles were dead (measured: hit = TH, handle listener never fired).
+     One step of z-index puts the handle above all sibling cells. */
+  z-index: 6;
+}
+
+.lgp-table-editor-cw-handle::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background 120ms ease;
+}
+
+/* Faint by default so an undragged table reads as content, not chrome —
+   the bar only appears on header hover, matching the toolbar's hover-in
+   discipline. */
+.lgp-table-editor-table th:hover > .lgp-table-editor-cw-handle::before {
+  background: var(--text-faint);
+}
+
+.lgp-table-editor-cw-handle:hover::before,
+.lgp-table-editor-cw-handle.dragging::before {
+  background: var(--interactive-accent);
+}
+
+/* Global col-resize cursor for the whole gesture (the grab-cursor rule
+   above is for the reorder handles; widths get their own). */
+body.lgp-table-editor-cw-cursor,
+body.lgp-table-editor-cw-cursor * {
+  cursor: col-resize !important;
+}
+
 /* ------------------------------------------------------------------ */
 /* Linked-references filter (Logseq parity): funnel button next to the */
 /* "N linked mentions" count + its dialog.                            */

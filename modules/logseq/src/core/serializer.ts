@@ -134,7 +134,7 @@ export function serializeBlock(b: Block, depth: number, skipProps?: readonly str
 }
 
 /** Bookkeeping props that are meaningless in an embed / drag-drop preview. */
-export const PREVIEW_SKIP_PROPS: readonly string[] = ['id', 'collapsed'];
+export const PREVIEW_SKIP_PROPS: readonly string[] = ['id', 'collapsed', 'table-widths'];
 
 /**
  * Serialize the content of one block (used for embeds and drag & drop):

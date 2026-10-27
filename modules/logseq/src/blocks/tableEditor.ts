@@ -52,6 +52,16 @@ import {
   TABLE_DEFAULT_COLUMN_WIDTH,
   TABLE_RESIZE_DRAG_THRESHOLD,
 } from './tableResizeCore';
+import {
+  applyColumnWidths,
+  clampColumnWidth,
+  clearColumnWidth,
+  isEmptyWidths,
+  parseTableWidths,
+  serializeTableWidths,
+  withColumnWidth,
+  TABLE_WIDTHS_PROP,
+} from './tableWidths';
 
 const CLS = 'lgp-table-editor';
 
@@ -127,6 +137,9 @@ export function enhanceTable(table: HTMLTableElement, b: Block, host: BlockRende
 
   // ------------------------------------------------------------- editing
   table.classList.add(`${CLS}-table`);
+  // Restored FIRST so both the editor and any read-only render show the
+  // saved geometry before interaction (the drag handles below only WRITE it).
+  applyColumnWidths(table, parseTableWidths(b.props[TABLE_WIDTHS_PROP]));
   for (const cell of [...table.querySelectorAll('th, td')] as HTMLElement[]) {
     cell.setAttribute('contenteditable', 'true');
     cell.setAttribute('spellcheck', 'false');
@@ -367,12 +380,14 @@ export function enhanceTable(table: HTMLTableElement, b: Block, host: BlockRende
   // since the table was rendered).
   const drag = makeDragHandles(t, apply, () => b.text);
   const grow = makeGrowHandle(t, apply, () => b.text);
+  const colW = makeColumnWidthHandles(table, b, host);
 
   return {
     destroy() {
       for (const fn of cleanups) fn();
       drag();
       grow();
+      colW();
     },
   };
 }
@@ -1181,6 +1196,187 @@ function makeGrowHandle(
     handle.remove();
   });
   return () => {
+    for (const d of disposers) d();
+  };
+}
+
+/**
+ * Column-width drag handles: one per header cell, on its RIGHT edge.
+ *
+ * Dragging sets the column's width live (every cell of the column gets
+ * `width` + `max-width` so auto layout actually honors it — see
+ * tableWidths.ts for why not a colgroup) and on release persists the list
+ * into the block's `table-widths` prop through `host.mutate`, exactly the
+ * image-resize contract (renderTree.enhanceImages): live DOM, one commit.
+ *
+ * ## Why a prop commit needs a subtree re-render at all
+ *
+ * The DOM is already in its final state when the pointer comes up, so the
+ * re-render looks gratuitous — but the prop must pass through the block
+ * model (serializer/parser) to reach the file, and skipping the render would
+ * leave the model believing nothing changed. `subtree: b` rebuilds only this
+ * block; enhance re-applies the widths from the prop, so nothing visibly
+ * moves.
+ *
+ * ## Why raw blocks get no handles
+ *
+ * A raw-form block's trailing `key:: value` line stays CONTENT by parser
+ * design (only fold flags re-attach — promoting anything else would move the
+ * user's text), so widths cannot persist there. A handle that edits without
+ * persisting would be a trap; we simply don't offer it.
+ *
+ * ## Double(-quick-)click resets a column
+ *
+ * Widths are "sticky" once set, and the natural escape is to drag back — but
+ * the natural width depends on content, so there is no value to drag back
+ * TO. Two quick clicks (detected on pointerup — the native dblclick never
+ * fires because preventDefault on pointerdown suppresses it) clear the
+ * column's entry; when the last entry goes, the prop key is dropped entirely
+ * (a never-dragged table's file stays byte-identical — same discipline as
+ * the fold flag).
+ */
+function makeColumnWidthHandles(table: HTMLTableElement, b: Block, host: BlockRenderHost): () => void {
+  if (b.kind === 'raw') return () => {};
+  const disposers: (() => void)[] = [];
+  const on = (el: HTMLElement, type: string, fn: (e: Event) => void): void => {
+    el.addEventListener(type, fn);
+    disposers.push(() => el.removeEventListener(type, fn));
+  };
+
+  interface CwState {
+    pointerId: number;
+    startX: number;
+    startWidth: number;
+    col: number;
+    moved: boolean;
+    /** Latest clamped width — the value a pointerup commits. */
+    lastWidth: number;
+  }
+  let state: CwState | null = null;
+  let preview: HTMLElement | null = null;
+
+  const cleanup = (): void => {
+    state = null;
+    preview?.remove();
+    preview = null;
+    document.body.classList.remove(`${CLS}-cw-cursor`);
+  };
+
+  /**
+   * Persist the widths list (or drop the prop when nothing is set). Runs
+   * inside `host.mutate`; `subtree` rebuilds just this block, and enhance
+   * re-applies the widths from the model.
+   */
+  const commitWidths = (widths: number[] | null): void => {
+    host.mutate(() => {
+      if (isEmptyWidths(widths)) {
+        delete b.props[TABLE_WIDTHS_PROP];
+      } else if (widths) {
+        b.props[TABLE_WIDTHS_PROP] = serializeTableWidths(widths);
+      }
+    }, () => ({ subtree: b }));
+  };
+
+  const headerRow = table.tHead?.rows[0];
+  if (!headerRow) return () => {
+    for (const d of disposers) d();
+  };
+
+  [...headerRow.cells].forEach((th, col) => {
+    const h = document.createElement('div');
+    h.className = `${CLS}-cw-handle`;
+    h.title = 'Drag to set column width; double-click to reset';
+    h.setAttribute('contenteditable', 'false');
+    h.setAttribute('tabindex', '-1');
+    h.setAttribute('aria-hidden', 'true');
+    th.appendChild(h);
+
+    on(h, 'pointerdown', (e) => {
+      const ev = e as PointerEvent;
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      state = {
+        pointerId: ev.pointerId,
+        startX: ev.clientX,
+        // Live measurement: the rendered width, not the stored one (the
+        // column may have been re-laid-out since the prop was written).
+        startWidth: th.getBoundingClientRect().width,
+        col,
+        moved: false,
+        lastWidth: clampColumnWidth(th.getBoundingClientRect().width),
+      };
+      document.body.classList.add(`${CLS}-cw-cursor`);
+      preview = document.createElement('div');
+      preview.className = `${CLS}-grow-preview`;
+      document.body.appendChild(preview);
+      preview.textContent = `${Math.round(state.startWidth)}px`;
+      preview.style.left = `${ev.clientX + 14}px`;
+      preview.style.top = `${ev.clientY + 14}px`;
+      h.setPointerCapture?.(ev.pointerId);
+    });
+
+    on(h, 'pointermove', (e) => {
+      if (!state || (e as PointerEvent).pointerId !== state.pointerId) return;
+      const ev = e as PointerEvent;
+      ev.preventDefault();
+      const w = clampColumnWidth(state.startWidth + (ev.clientX - state.startX));
+      state.lastWidth = w;
+      if (Math.abs(ev.clientX - state.startX) > 1) state.moved = true;
+      if (preview) {
+        preview.textContent = `${w}px`;
+        preview.style.left = `${ev.clientX + 14}px`;
+        preview.style.top = `${ev.clientY + 14}px`;
+      }
+      // Live, model-free preview on EVERY cell of the column.
+      const px = `${w}px`;
+      for (const row of [...(table.tHead?.rows ?? []), ...(table.tBodies[0]?.rows ?? [])]) {
+        const cell = row.cells[col] as HTMLElement | undefined;
+        if (!cell) continue;
+        cell.style.width = px;
+        cell.style.maxWidth = px;
+      }
+    });
+
+    let lastUpAt = 0;
+    on(h, 'pointerup', (e) => {
+      if (!state || (e as PointerEvent).pointerId !== state.pointerId) return;
+      const s = state;
+      const ev = e as PointerEvent;
+      ev.preventDefault();
+      cleanup();
+      // A click, not a drag: either half of a double-click reset, or a stray
+      // single click (ignored). NB we CANNOT use the native dblclick event:
+      // preventDefault() on pointerdown suppresses the compatibility mouse
+      // events INCLUDING click/dblclick (measured: dblclick never fired).
+      const now = Date.now();
+      const isDouble = !s.moved && now - lastUpAt < 350;
+      lastUpAt = now;
+      if (!s.moved && !isDouble) return;
+      const cur = parseTableWidths(b.props[TABLE_WIDTHS_PROP]) ?? [];
+      if (isDouble) {
+        // Reset: clear the column's entry (0 = unset); when the last entry
+        // goes, commitWidths drops the prop key entirely.
+        const next = [...cur];
+        while (next.length <= s.col) next.push(0);
+        next[s.col] = 0;
+        clearColumnWidth(table, s.col);
+        commitWidths(next);
+        return;
+      }
+      commitWidths(withColumnWidth(cur, s.col, s.lastWidth));
+    });
+
+    on(h, 'pointercancel', () => cleanup());
+    on(h, 'lostpointercapture', () => {
+      if (state) cleanup();
+    });
+
+    disposers.push(() => h.remove());
+  });
+
+  return () => {
+    cleanup();
     for (const d of disposers) d();
   };
 }

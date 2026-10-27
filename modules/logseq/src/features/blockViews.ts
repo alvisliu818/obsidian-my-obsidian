@@ -38,6 +38,11 @@ export const VIEW_PROP = 'view';
 /** Optional explicit column order / subset. */
 export const VIEW_COLUMNS_PROP = 'view-columns';
 
+// table-widths:本文件 NON_DATA_PROPS 引用它,同时转出给需要同步 skip
+// 清单的调用方。export-from 形式不引入本模块作用域绑定,必须 import。
+import { TABLE_WIDTHS_PROP } from '../blocks/tableWidths';
+export { TABLE_WIDTHS_PROP };
+
 export type BlockViewKind = 'table' | 'cards' | 'tabs';
 
 /** Aliases accepted in `view::`, so `view:: card` and `view:: Cards` work. */
@@ -63,7 +68,7 @@ const VIEW_ALIASES: Record<string, BlockViewKind> = {
  * would leak a column into the table.
  */
 const NON_DATA_PROPS = new Set(
-  ['id', 'collapsed', 'style', VIEW_PROP, VIEW_COLUMNS_PROP].map(normPropKey),
+  ['id', 'collapsed', 'style', VIEW_PROP, VIEW_COLUMNS_PROP, TABLE_WIDTHS_PROP].map(normPropKey),
 );
 
 /** Lowercase + strip dashes, so config keys compare case/punctuation-insensitively. */

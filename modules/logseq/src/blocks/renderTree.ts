@@ -42,6 +42,7 @@ import { flattenVisible } from '../core/treeOps';
 import { layoutGuideLines } from './guideLayout';
 import { renderBlockView } from './blockView';
 import { isViewBlock, VIEW_COLUMNS_PROP, VIEW_PROP } from '../features/blockViews';
+import { TABLE_WIDTHS_PROP } from './tableWidths';
 import { syncPrologContainer } from './prologResults';
 import { detectBlockType, mediaTypeOf } from './blockTypes';
 import { renderBlockTypeBadge } from './blockTypeMenu';
@@ -590,7 +591,7 @@ function blockKindLabel(b: Block): string {
 }
 
 /** Props that configure the block itself and are never shown as a `key:: value` row. */
-const WRAP_PROPS_SKIP = new Set(['id', 'collapsed', 'style', VIEW_PROP, VIEW_COLUMNS_PROP]);
+const WRAP_PROPS_SKIP = new Set(['id', 'collapsed', 'style', VIEW_PROP, VIEW_COLUMNS_PROP, TABLE_WIDTHS_PROP]);
 
 /**
  * Properties hidden from the props row, resolved per render.
