@@ -18,6 +18,7 @@ import { clearLogseqPageProps, registerLogseqPageProps } from '../pagePropsRegis
 import { serializeBlock, serializeDocument } from '../core/serializer';
 import { writeMarkdownWithInternalFormat } from '../features/internalClipboard';
 import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, insertAfter, insertBefore, isDescendant, linkParents, mergeWithNext, mergeWithPrev, moveBlockGroup, moveBlockVertically, nextVisible, outdent, prevVisible, pseudoRootOf, rangeAnchor, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, unregisterRoots, visibleRange, type MovePosition } from '../core/treeOps';
+import { capForIndex, planScrollRestore, scrollHeightReady, SCROLL_READY_MAX_TRIES, type PersistedScroll } from '../core/scrollRestore';
 import { foldLevelOf, foldValueFor, headingLevel, nextFoldLevel, normFoldKey, subtreeFoldTargets, type FoldLevel } from '../core/fold';
 import { UndoStack } from '../state/undoStack';
 import {
@@ -123,6 +124,9 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   renderGeneration = 0;
   /** Virtual scrolling: how many leading visible blocks may render. */
   scrollCap = VIRTUAL_INITIAL_CAP;
+  /** setState 带入、渲染高度就绪后应用的滚动恢复计划（批次 22）。 */
+  private pendingScroll: PersistedScroll | null = null;
+  private pendingScrollTries = 0;
   /** Multi-selection (Shift/Ctrl+click); only top-level members act in bulk. */
   selectedBlocks = new Set<Block>();
   private lastClicked: Block | null = null;
@@ -844,18 +848,82 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
       s.state = next;
     }
     const zid = zoomId(this.zoomedBlock);
-    if (zid) s.state = { ...(s.state ?? {}), zoomedBlockId: zid };
+    if (zid) {
+      // zoom 态不存滚动：恢复缩放后 visibleRoots 换了序列，scrollTop 语义错位。
+      s.state = { ...(s.state ?? {}), zoomedBlockId: zid };
+    } else {
+      const saved = this.captureScrollState();
+      if (saved) s.state = { ...(s.state ?? {}), scroll: saved };
+    }
     return s as unknown as Record<string, unknown>;
+  }
+
+  /** 采集滚动位置（getState 用）：首可见块索引 = 渐进窗口的恢复锚。 */
+  private captureScrollState(): PersistedScroll | null {
+    const sc = this.editorContainerEl?.querySelector('.block-editor-scroller') as HTMLElement | null;
+    if (!sc || sc.scrollTop <= 0) return null; // 顶部是默认态，不存
+    const scRect = sc.getBoundingClientRect();
+    // 首个下缘越过滚动容器可视顶（容差 ≈ sticky breadcrumb 高）的块
+    let firstEl: HTMLElement | null = null;
+    sc.querySelectorAll('.block-wrap').forEach((w) => {
+      if (firstEl) return;
+      if (w.getBoundingClientRect().bottom > scRect.top + 48) firstEl = w as HTMLElement;
+    });
+    if (!firstEl) return null;
+    const b = blockFromEl(firstEl);
+    if (!b) return null;
+    const idx = flattenVisible(this.visibleRoots).indexOf(b);
+    if (idx < 0) return null;
+    return { top: sc.scrollTop, idx };
   }
 
   async setState(state: Record<string, unknown>, result: ViewStateResult): Promise<void> {
     await super.setState(state, result);
     const st = state as unknown as ViewState;
     const zid = (st.state as Record<string, unknown> | undefined)?.zoomedBlockId;
+    const plan = planScrollRestore((st.state as Record<string, unknown> | undefined)?.scroll);
     if (typeof zid === 'string' && zid) {
+      this.pendingScroll = null; // zoom 态滚动语义错位，恢复缩放即够
       this.zoomedBlock = restoreZoomed(this.doc, zid);
       this.render();
+      return;
     }
+    this.pendingScroll = plan;
+    if (plan) {
+      // 拉渲染窗口到锚块所在片（渐进虚拟滚动的恢复前提）
+      this.scrollCap = Math.max(this.scrollCap, capForIndex(plan.idx, VIRTUAL_CHUNK));
+      // super.setState 的加载链已经同步跑完 setViewData→render——此刻不主动
+      // 应用，pendingScroll 就要等到下一次 render（可能永远不会来）。高度
+      // 不够时 applyPendingScroll 自己 bumpScrollCap→render 自续到就绪。
+      this.applyPendingScroll();
+    }
+  }
+
+  /**
+   * 渲染后应用挂起的滚动恢复：高度就绪（±40px 容差）直接设；不够则
+   * bump 下一窗口重试，超限（目标内容已不在——文档被外部改短）放弃。
+   */
+  private applyPendingScroll(): void {
+    const plan = this.pendingScroll;
+    if (!plan) return;
+    const sc = this.editorContainerEl?.querySelector('.block-editor-scroller') as HTMLElement | null;
+    if (!sc) {
+      this.pendingScroll = null;
+      return;
+    }
+    if (scrollHeightReady(sc.scrollHeight, sc.clientHeight, plan.top)) {
+      sc.scrollTop = plan.top;
+      this.pendingScroll = null;
+      this.pendingScrollTries = 0;
+      return;
+    }
+    this.pendingScrollTries += 1;
+    if (this.pendingScrollTries > SCROLL_READY_MAX_TRIES) {
+      this.pendingScroll = null;
+      this.pendingScrollTries = 0;
+      return;
+    }
+    this.bumpScrollCap(); // render() 会再次走到这里重试
   }
 
   // ------------------------------------------------------------------
@@ -955,6 +1023,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     this.renderExternalBanner();
     this.renderBreadcrumb();
     this.syncLeafTitle();
+    this.applyPendingScroll();
   }
 
   private renderBreadcrumb(): void {
