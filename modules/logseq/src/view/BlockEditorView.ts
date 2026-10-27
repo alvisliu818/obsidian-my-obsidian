@@ -20,6 +20,7 @@ import { writeMarkdownWithInternalFormat } from '../features/internalClipboard';
 import { blockAtPath, cycleMarker, duplicateBlock, findBlockById, flattenVisible, indent, insertAfter, insertBefore, isDescendant, linkParents, mergeWithNext, mergeWithPrev, moveBlockGroup, moveBlockVertically, nextVisible, outdent, prevVisible, pseudoRootOf, rangeAnchor, registerRoots, removeBlock, siblingsOf, splitBlock, splitRawToOutline, unregisterRoots, visibleRange, type MovePosition } from '../core/treeOps';
 import { capForIndex, planScrollRestore, scrollHeightReady, SCROLL_READY_MAX_TRIES, type PersistedScroll } from '../core/scrollRestore';
 import { nextTaskListMarker } from '../core/taskMarker';
+import { buildHeadingNumbers } from '../core/headingNumber';
 import { foldLevelOf, foldValueFor, headingLevel, nextFoldLevel, normFoldKey, subtreeFoldTargets, type FoldLevel } from '../core/fold';
 import { UndoStack } from '../state/undoStack';
 import {
@@ -156,6 +157,8 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   } | null = null;
   private savedFocusPos: CursorPos = 'end';
   private indexDisposer: (() => void) | null = null;
+  /** 标题编号 map（块对象 → 显示编号），renderInner / mutate 后刷新（批次 24）。 */
+  private headingNumberMap = new Map<Block, string>();
   private searchBar: PageSearchBar | null = null;
   /**
    * Bumped on unload. Deferred refs renders capture it and drop themselves
@@ -964,6 +967,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   private renderInner(): void {
     if (!this.editorContainerEl) return;
     this.commitEmbedEdit(); // never lose an in-place embed edit on re-render
+    this.refreshHeadingNumbers();
     const roots = this.visibleRoots;
     registerRoots(roots);
     this.renderBreadcrumb();
@@ -2450,6 +2454,9 @@ ${content}`;
     this.undo.push(this.serializeCurrent());
     fn();
     this.markDirty();
+    // 编号依赖文档结构（标题插入/层级变化会平移后续编号），patch 只重渲部分
+    // DOM——map 必须在 patch 渲染前刷新，否则新编号读到旧值。
+    this.refreshHeadingNumbers();
     const p = patch?.();
     if (!p || !this.renderPatched(p)) this.render();
     // If the focused block still exists, it was remounted with savedFocusPos
@@ -2890,6 +2897,17 @@ ${content}`;
       },
       () => ({ subtree: b }),
     );
+  }
+
+  /** 标题编号（批次 24）：renderBlock 查询当前块显示编号。 */
+  headingNumberOf(b: Block): string | null {
+    return this.headingNumberMap.get(b) ?? null;
+  }
+
+  private refreshHeadingNumbers(): void {
+    this.headingNumberMap = this.plugin.settings.headingNumberEnabled
+      ? buildHeadingNumbers(this.doc.blocks, this.plugin.settings.headingNumberFormat)
+      : new Map<Block, string>();
   }
 
   // ------------------------------------------------------------------

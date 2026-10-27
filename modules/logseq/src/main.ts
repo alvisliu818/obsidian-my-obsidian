@@ -919,6 +919,9 @@ export default class LogseqEditorPlugin extends Plugin {
     if (typeof this.settings.pythonEnvCustomPath !== 'string') this.settings.pythonEnvCustomPath = '';
     if (typeof this.settings.codeThemePref !== 'string') this.settings.codeThemePref = '';
     if (typeof this.settings.iconThemePref !== 'string') this.settings.iconThemePref = '';
+    // Heading numbers (batch 24): boolean + format id (unknown ids fall back at render).
+    if (typeof this.settings.headingNumberEnabled !== 'boolean') this.settings.headingNumberEnabled = false;
+    if (typeof this.settings.headingNumberFormat !== 'string' || this.settings.headingNumberFormat === '') this.settings.headingNumberFormat = 'decimal-hierarchical';
     this.applyPythonEnv();
     if (typeof this.settings.customTemplateVars !== 'string') this.settings.customTemplateVars = '';
     // Shortcut groups: a config written before these settings existed has no

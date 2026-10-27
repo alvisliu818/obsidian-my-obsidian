@@ -92,6 +92,8 @@ export interface BlockRenderHost extends Component {
   toggleMarker(b: Block): void;
   /** GFM 任务 checkbox 点击（批次 23）：两态 toggle。 */
   toggleTask(b: Block): void;
+  /** 标题编号（批次 24）：块 → 显示编号。可选——不提供 = 不启用（嵌入片段宿主不编号，对齐思源 embed 容器排除）。 */
+  headingNumberOf?(b: Block): string | null;
   toggleCollapseGuide(b: Block): void;
   createFirstBlock(): void;
   addBlockAtEnd(): void;

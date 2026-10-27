@@ -452,6 +452,26 @@
   border-top: 1.5px solid var(--text-faint);
 }
 
+/* --- 标题编号（批次 24，思源 protyle-heading-number 同位）--- */
+/* marker 位内联渲染：编号在标题文本前方；思源用 ::before+CSS 变量做悬挂
+   排版（带 DOM 测宽调 padding），我们用同位内联元素——文本不进块模型，
+   round-trip 无污染。no-gap = 编号以 、/） 结尾（自带视觉间距）。 */
+.block-heading-number {
+  display: inline-flex;
+  align-items: baseline;
+  margin-right: 0.5em;
+  color: var(--text-faint);
+  font-size: 0.78em;
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
+}
+
+.block-heading-number.no-gap {
+  margin-right: 0;
+}
+
 /* ---------- Children guides ---------- */
 .block-children-container {
   display: flex;

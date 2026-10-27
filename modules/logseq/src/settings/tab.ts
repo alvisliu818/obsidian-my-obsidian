@@ -157,6 +157,43 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
           }),
       );
 
+    // ---------- Heading numbers (SiYuan editor.headingNumber, batch 24) ----------
+    new Setting(containerEl)
+      .setName('标题编号')
+      .setDesc('在块编辑器里给标题块显示层级编号（1.1、一、（一）…）。编号只是显示装饰，不会写进文件。')
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.headingNumberEnabled).onChange(async (v) => {
+          this.plugin.settings.headingNumberEnabled = v;
+          await this.plugin.saveSettings();
+          this.display();
+        }),
+      );
+
+    if (this.plugin.settings.headingNumberEnabled) {
+      new Setting(containerEl)
+        .setName('编号格式')
+        .setDesc('思源同款九种格式。')
+        .addDropdown((d) =>
+          d
+            .addOptions({
+              'decimal-hierarchical': '1.2 / 1.2.1（层级）',
+              'decimal-parenthesized': '1）2）3）',
+              'chinese-document': '一、（一）1.（1）① A.（中文文档）',
+              'upper-alpha-hierarchical': 'A.B / A.B.C',
+              'lower-alpha-hierarchical': 'a.b / a.b.c',
+              'upper-roman-hierarchical': 'I.II / I.II.III',
+              'lower-roman-hierarchical': 'i.ii / i.ii.iii',
+              'upper-greek-hierarchical': 'Α.Β / Α.Β.Γ',
+              'lower-greek-hierarchical': 'α.β / α.β.γ',
+            })
+            .setValue(this.plugin.settings.headingNumberFormat)
+            .onChange(async (v) => {
+              this.plugin.settings.headingNumberFormat = v;
+              await this.plugin.saveSettings();
+            }),
+        );
+    }
+
   }
 
   private renderMarketSection(containerEl: HTMLElement): void {

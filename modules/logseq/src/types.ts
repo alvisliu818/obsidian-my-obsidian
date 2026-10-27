@@ -152,6 +152,10 @@ export interface BlockEditorSettings {
   takeOverByDefault: boolean;
   /** Take-over scope: 'all' = every .md file (minus exclusions); 'folders' = only inside includedFolders. */
   scopeMode: ScopeMode;
+  /** Show heading numbers in the block editor (SiYuan editor.headingNumber, batch 24). */
+  headingNumberEnabled: boolean;
+  /** Heading number format preset id (SiYuan editor.headingNumberFormat). */
+  headingNumberFormat: string;
   /** Folders (paths) where the block editor takes over; used when scopeMode = 'folders'. */
   includedFolders: string;
   /** Journal (daily note) folder; '' = vault root or core daily-notes setting. */
@@ -378,6 +382,8 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   pythonEnvCustomPath: '',
   takeOverByDefault: true,
   scopeMode: 'all',
+  headingNumberEnabled: false,
+  headingNumberFormat: 'decimal-hierarchical',
   includedFolders: '',
   journalFolder: '',
   journalFormat: '',

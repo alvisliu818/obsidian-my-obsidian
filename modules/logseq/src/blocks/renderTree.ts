@@ -26,8 +26,9 @@ import { VIEW_TYPE_VIDEO } from '../../../doc-tree/src/views/VideoView';
 import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Block } from '../types';
 import { taskStatusClass } from '../core/taskMarker';
+import { headingNumberNeedsSpacing } from '../core/headingNumber';
 import { blockId } from '../types';
-import { foldLevelOf, foldSummary, isFoldableBody, isFoldableHeading, isInsideFoldedSection, isMediaOnlyBlock, normFoldKey } from '../core/fold';
+import { foldLevelOf, foldSummary, headingLevel, isFoldableBody, isFoldableHeading, isInsideFoldedSection, isMediaOnlyBlock, normFoldKey } from '../core/fold';
 import { createPageEmbedBox, enhanceBlockRefs, enhanceEmbeds } from '../features/links';
 import {
   buildQueryTableModel,
@@ -386,6 +387,18 @@ function renderBlock(b: Block, host: BlockRenderHost, budget?: RenderBudget): HT
       e.stopPropagation();
       host.toggleTask(b);
     });
+  }
+
+  // --- heading number（思源标题编号，批次 24）：marker 位内联渲染，不进块文本
+  //（round-trip 无污染）。判定与编号 map 见 core/headingNumber.ts；无宿主方法
+  //（嵌入片段）或未启用时不渲染。编号是只读装饰：无 click 行为。
+  if (headingLevel(b) > 0) {
+    const hnLabel = host.headingNumberOf?.(b) ?? null;
+    if (hnLabel) {
+      const hn = main.createEl('div', { cls: 'block-heading-number' + (headingNumberNeedsSpacing(hnLabel) ? '' : ' no-gap') });
+      hn.setText(hnLabel);
+      hn.setAttribute('aria-hidden', 'true');
+    }
   }
 
   // --- content ---
