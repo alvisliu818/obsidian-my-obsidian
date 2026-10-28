@@ -49,17 +49,58 @@ export class UnifiedSearchPlugin extends Plugin {
 	}
 
 	private extRetries = 0;
+	/** 深扫在途守卫:onload/周期/挂载刷新三个入口共用,扫描重叠只会浪费 */
+	private extScanInFlight = false;
 
 	private pushExtWithRetry(): void {
+		// 启动路径(2026-10-29):先把缓存的上一轮清单秒推给 daemon(毫秒级,
+		// daemon 侧 stat 门控自然纠正失效项),真实深扫挪到 layout-ready +
+		// 3s —— 同步深扫曾阻塞 onload 主线程 57s(主库启动慢元凶)。
+		void this.pushCachedExt();
 		const attempt = (): void => {
 			if (this.daemon) void this.pushExt();
 			else if (this.extRetries++ < 10) window.setTimeout(attempt, 3000);
 		};
-		attempt();
+		this.app.workspace.onLayoutReady(() => window.setTimeout(attempt, 3000));
+	}
+
+	/** 上一轮推送清单的边车缓存(manifest.dir 下);读失败/不存在 = 空 */
+	private async readExtCache(): Promise<Array<{ path: string; mtime: number }>> {
+		try {
+			const raw = await this.app.vault.adapter.read(`${this.manifest.dir}/unified-search-ext-cache.json`);
+			const parsed = JSON.parse(raw) as { files?: Array<{ path: string; mtime: number }> };
+			return Array.isArray(parsed.files) ? parsed.files : [];
+		} catch {
+			return [];
+		}
+	}
+
+	private async writeExtCache(files: Array<{ path: string; mtime: number }>): Promise<void> {
+		try {
+			// 缓存只是暖启动近似(真清单由深扫修正),封顶防 data.json 级大文件
+			await this.app.vault.adapter.write(
+				`${this.manifest.dir}/unified-search-ext-cache.json`,
+				JSON.stringify({ ts: Date.now(), files: files.slice(0, 20000) }),
+			);
+		} catch {
+			// 写失败不影响推送
+		}
+	}
+
+	/** 暖启动:把缓存的上一轮清单推给 daemon,不等深扫 */
+	private async pushCachedExt(): Promise<void> {
+		try {
+			const files = await this.readExtCache();
+			if (files.length) await this.daemon?.setExtFiles(files);
+		} catch {
+			// daemon 未起时静默:retry 链与深扫都会再推
+		}
 	}
 
 	/** 组装挂载清单(白名单/目录黑名单/数量上限,见 extpolicy)推给 daemon。 */
 	private async pushExt(): Promise<void> {
+		if (this.extScanInFlight) return;
+		this.extScanInFlight = true;
 		try {
 			const host = (
 				this.app as unknown as {
@@ -67,16 +108,25 @@ export class UnifiedSearchPlugin extends Plugin {
 				}
 			).plugins?.plugins?.["obsidian-my-obsidian"];
 			const lg = host?.live?.get("logseq") as
-				| { listExternalSearchFiles?: () => ExtEntry[] }
+				| {
+						listExternalSearchFiles?: () => ExtEntry[];
+						listExternalSearchFilesAsync?: () => Promise<ExtEntry[]>;
+				  }
 				| undefined;
-			const raw = lg?.listExternalSearchFiles?.() ?? [];
-			if (!raw.length) return;
+			// 异步深扫(行走让出主线程):同步版曾把主线程按住 57s
+			const raw = lg?.listExternalSearchFilesAsync
+				? await lg.listExternalSearchFilesAsync()
+				: (lg?.listExternalSearchFiles?.() ?? []);
+			if (!raw.length) return; // 瞬时空结果(挂载暂不可读等)不清空 daemon 侧旧清单
 			const list = selectExternalFiles(raw);
 			await this.daemon?.setExtFiles(
 				list.map((e) => ({ path: e.abs.replace(/\\/g, "/"), mtime: e.mtime ?? 0 })),
 			);
+			void this.writeExtCache(list.map((e) => ({ path: e.abs.replace(/\\/g, "/"), mtime: e.mtime ?? 0 })));
 		} catch (e) {
 			console.warn("[unified-search] ext 清单推送失败", e);
+		} finally {
+			this.extScanInFlight = false;
 		}
 	}
 

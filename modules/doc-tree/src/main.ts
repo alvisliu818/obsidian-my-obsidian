@@ -32,6 +32,7 @@ import {
   safeSegment,
   sameVolume,
   scanExternal,
+  scanExternalAsync,
 } from './features/extFs';
 import {
   compileFilter,
@@ -763,7 +764,7 @@ export default class DocTreePlugin extends Plugin {
       let entries: ScanEntry[];
       try {
         entries = scanExternal(mount.path, {
-          shouldEnterDir: () => true,
+          shouldEnterDir: this.dirPruner(filter, vaultRoot, mount.path),
           keepFile: keep,
         }).entries;
       } catch (e) {
@@ -779,6 +780,78 @@ export default class DocTreePlugin extends Plugin {
       }
     }
     return out;
+  }
+
+  /**
+   * listExternalSearchFiles 的协作式异步版:行走期间周期让出主线程,大挂载
+   * 不冻结 UI(统一搜索的周期推送走这条)。过滤/剪枝语义与同步版一致。
+   */
+  public async listExternalSearchFilesAsync(): Promise<Array<{ abs: string; name: string; mtime: number }>> {
+    const out: Array<{ abs: string; name: string; mtime: number }> = [];
+    const mounts = this.settings.externalMounts ?? [];
+    const vaultRoot = this.vaultRootNorm();
+    for (const mount of mounts) {
+      if (!mount?.enabled || !mount.path) continue;
+      const filter = compileFilter({
+        include: mount.include ?? '',
+        exclude: mount.exclude ?? '',
+      });
+      const keep = (rel: string): boolean => {
+        if (filter.exclude?.test(rel)) return false;
+        if (filter.include && !filter.include.test(rel)) return false;
+        return true;
+      };
+      let scanned: { entries: ScanEntry[] };
+      try {
+        scanned = await scanExternalAsync(mount.path, {
+          shouldEnterDir: this.dirPruner(filter, vaultRoot, mount.path),
+          keepFile: keep,
+        });
+      } catch (e) {
+        console.warn('[doc-tree] listExternalSearchFilesAsync: scan failed for', mount.path, e);
+        continue;
+      }
+      for (const entry of scanned.entries) {
+        if (entry.isDir) continue;
+        if (vaultRoot && entry.abs.replace(/\\/g, '/').toLowerCase().startsWith(`${vaultRoot}/`)) {
+          continue;
+        }
+        out.push({ abs: entry.abs, name: entry.name, mtime: entry.mtime ?? 0 });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 行走期目录剪枝(2026-10-29):返回 false 的子树整棵不进。
+   *  - rel 命中 exclude 的目录跳过 —— 其下文件本来也会被文件级 exclude 丢掉,
+   *    node_modules/.git 这类巨树不再白走(带尾部斜杠再测一次,让
+   *    `[\\/]\.git[\\/]` 这类要求两侧边界的模式也能命中裸目录名);
+   *  - 库根内子树跳过 —— vaultRoot 过滤最终会把它们全部丢掉;
+   *  - 完全在库根内的挂载由调用方前置跳过(整棵挂载白扫)。
+   *  include 不参与目录剪枝(include 通常锚定扩展名,目录名不匹配是正常的)。
+   */
+  private dirPruner(
+    filter: { exclude?: RegExp | null; include?: RegExp | null },
+    vaultRoot: string,
+    mountPath: string,
+  ): (rel: string) => boolean {
+    const mountNorm = mountPath.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    const mountInsideVault = vaultRoot
+      ? mountNorm === vaultRoot || mountNorm.startsWith(`${vaultRoot}/`)
+      : false;
+    return (rel: string): boolean => {
+      if (mountInsideVault) return false;
+      if (vaultRoot) {
+        const absNorm = `${mountNorm}/${rel.toLowerCase()}`;
+        if (absNorm.startsWith(`${vaultRoot}/`)) return false;
+      }
+      const ex = filter.exclude;
+      if (ex) {
+        if (ex.test(rel) || ex.test(`${rel}/`)) return false;
+      }
+      return true;
+    };
   }
 
   /**

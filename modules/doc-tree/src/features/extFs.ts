@@ -405,6 +405,113 @@ export function scanExternal(
   return { entries, truncated };
 }
 
+const YIELD_EVERY = 150;
+
+/**
+ * scanExternal 的协作式异步版:深扫挂载树但周期性让出主线程(setTimeout 0),
+ * 大挂载不再冻结 UI。逻辑与 scanExternal 同构(同样的剪枝/过滤/链接语义),
+ * 差异只有迭代式栈 + 每 YIELD_EVERY 条让出一拍。
+ *
+ * 背景:统一搜索启动时同步扫整个挂载盘曾阻塞主线程 57s(主库启动慢元凶,
+ * 2026-10-29);剪枝(调用方给 shouldEnterDir)负责把规模打下来,这里负责
+ * 剩余耗时不再卡死界面。
+ */
+export async function scanExternalAsync(
+	root: string,
+	opts: {
+		shouldEnterDir: (rel: string) => boolean;
+		keepFile: (rel: string, name: string) => boolean;
+		limit?: number;
+		depth?: number;
+		followSymlinks?: boolean;
+	},
+): Promise<{ entries: ScanEntry[]; truncated: boolean }> {
+	const limit = opts.limit ?? Number.POSITIVE_INFINITY;
+	const maxDepth = opts.depth ?? Number.POSITIVE_INFINITY;
+	const follow = opts.followSymlinks ?? false;
+	const entries: ScanEntry[] = [];
+	let truncated = false;
+	let sinceYield = 0;
+
+	// node 环境无 window(vitest),渲染环境用 window.setTimeout(Obsidian 的
+	// 渲染进程调度更友好)——按可用性取。
+	const yieldTick = (): Promise<void> =>
+		new Promise((r) => {
+			const g = globalThis as { window?: { setTimeout?: typeof setTimeout } };
+			const schedule = g.window?.setTimeout ?? setTimeout;
+			schedule(r);
+		});
+
+	const visit = async (dirAbs: string, dirRel: string, depth: number): Promise<void> => {
+		if (truncated) return;
+		if (depth > maxDepth) return;
+		if (sinceYield >= YIELD_EVERY) {
+			sinceYield = 0;
+			await yieldTick();
+		}
+		let items: DirentLike[];
+		try {
+			items = fsMod().readdirSync(dirAbs, { withFileTypes: true });
+		} catch {
+			// Unreadable directory (permissions, or it vanished mid-scan) — skip it
+			return;
+		}
+		const dirs: Array<{ abs: string; rel: string }> = [];
+		for (const it of items) {
+			if (entries.length >= limit) {
+				truncated = true;
+				return;
+			}
+			const rel = dirRel ? `${dirRel}/${it.name}` : it.name;
+			const abs = joinAbs(root, rel);
+			let isDir = it.isDirectory();
+			if (!isDir && it.isSymbolicLink()) {
+				if (follow) {
+					try {
+						isDir = fsMod().statSync(abs).isDirectory?.() === true;
+					} catch {
+						continue; // broken link
+					}
+				} else {
+					continue;
+				}
+			}
+			if (isDir) {
+				if (!opts.shouldEnterDir(rel)) continue;
+				entries.push({ rel, name: it.name, isDir: true, abs });
+				dirs.push({ abs, rel });
+			} else if (it.isFile()) {
+				if (!opts.keepFile(rel, it.name)) continue;
+				let size: number | undefined;
+				let mtime: number | undefined;
+				try {
+					const st = fsMod().statSync(abs);
+					size = st.size;
+					mtime = st.mtimeMs;
+				} catch {
+					/* stat is best-effort */
+				}
+				entries.push({ rel, name: it.name, isDir: false, abs, size, mtime });
+				sinceYield++;
+			}
+		}
+		// 子目录顺序深扫;每层之间让一拍(readdirSync 大目录本身也毫秒级)
+		for (const d of dirs) {
+			if (truncated) return;
+			await visit(d.abs, d.rel, depth + 1);
+		}
+	};
+
+	try {
+		if (!fsMod().existsSync(root)) return { entries, truncated: false };
+		if (fsMod().statSync(root).isDirectory?.() !== true) return { entries, truncated: false };
+	} catch {
+		return { entries, truncated: false };
+	}
+	await visit(root, '', 0);
+	return { entries, truncated };
+}
+
 /** Read a UTF-8 text file from outside the vault. Throws on failure. */
 export function readExternalText(abs: string): string {
   return fsMod().readFileSync(abs, 'utf8');

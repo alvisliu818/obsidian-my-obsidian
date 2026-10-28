@@ -1836,6 +1836,11 @@ export default class LogseqEditorPlugin extends Plugin {
     return docTreeOf(this.app)?.listExternalSearchFiles() ?? [];
   }
 
+  /** 协作式异步版:行走让出主线程,统一搜索的启动/周期推送走这条。 */
+  async listExternalSearchFilesAsync(): Promise<Array<{ abs: string; name: string; mtime: number }>> {
+    return (await docTreeOf(this.app)?.listExternalSearchFilesAsync()) ?? [];
+  }
+
   /**
    * doc-tree 的操作日志转发入口:doc-tree 不 import 本模块(分层规则),
    * 经插件表运行时反查把 mount.add / external.open 等记录写进同一条
