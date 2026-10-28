@@ -3980,6 +3980,63 @@ body.lgp-table-editor-cw-cursor * {
   background-color: var(--background-modifier-hover);
   color: var(--text-normal);
 }
+/* 拖拽模式等开关型按钮的开启态 */
+.logseq-mount-panel-btn.is-active {
+  color: var(--text-accent);
+  background-color: var(--background-modifier-active-hover);
+}
+
+/* ==== 虚拟文档树「编辑工具栏」面板(思源同款交互) ==== */
+.lgp-tbedit__hint {
+  margin-bottom: 10px;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+.lgp-tbedit__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 12px;
+}
+.lgp-tbedit__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: var(--radius-s);
+}
+.lgp-tbedit__row:hover {
+  background-color: var(--background-modifier-hover);
+}
+.lgp-tbedit__icon {
+  display: flex;
+  align-items: center;
+}
+.lgp-tbedit__icon svg {
+  width: 15px;
+  height: 15px;
+}
+.lgp-tbedit__label {
+  flex: 0 1 auto;
+}
+.lgp-tbedit__spacer {
+  flex: 1 1 auto;
+}
+.lgp-tbedit__move {
+  padding: 2px 4px !important;
+  opacity: 0.7;
+  height: auto;
+  min-height: 0;
+}
+.lgp-tbedit__move:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+.lgp-tbedit__bar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
 
 .logseq-mount-panel-empty {
   padding: 20px 14px;
@@ -6217,9 +6274,10 @@ body.lgp-table-editor-cw-cursor * {
 }
 
 .bcn-next {
-	padding: 1px 5px;
+	/* › 兼任分隔与下一级入口：样式对齐 .bcn-sep，保留 hover 反馈 */
+	padding: 0 5px;
 	border-radius: 4px;
-	opacity: 0.5;
+	opacity: 0.45;
 	cursor: pointer;
 }
 

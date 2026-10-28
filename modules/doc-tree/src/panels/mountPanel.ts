@@ -52,6 +52,14 @@ import { MountEditorModal, MountTargetPickerModal } from './mountModals';
 import { iconForEntry } from '../features/iconTheme';
 import { isImageFile } from '../views/ImageView';
 import { isVideoFile } from '../views/VideoView';
+import {
+  PANEL_TOOLBAR_FIXED,
+  PanelToolbarEditorModal,
+  defaultPanelToolbarCfg,
+  panelToolbarButtonByKey,
+  resolvePanelToolbar,
+  type PanelToolbarCfg,
+} from '../features/panelToolbar';
 
 export const VIEW_TYPE_MOUNT_PANEL = 'logseq-mount-panel';
 
@@ -112,6 +120,10 @@ export class MountPanelView extends ItemView {
   private pendingReveal: { mountId: string; rel: string } | null = null;
   /** The ancestor that actually scrolls the panel (usually `.view-content`). */
   private scrollEl: HTMLElement | null = null;
+  /** 工具栏配置(注册表 + 设置,见 features/panelToolbar.ts;渲染时懒读设置) */
+  private toolbarCfg: PanelToolbarCfg | null = null;
+  /** 最近点击/定位的目录(工具栏「新建」的目标;null = 第一个挂载的根) */
+  private currentDir: { mount: ExternalMount; abs: string; rel: string } | null = null;
   private readonly onScrollRepaint = (): void => {
     for (const paint of this.rowPainters) paint();
   };
@@ -551,32 +563,41 @@ export class MountPanelView extends ItemView {
       return;
     }
 
+    // 顶栏工具栏(思源虚拟文档树同款结构):注册表 + 配置渲染,每个按钮可在
+    // 「编辑工具栏」里开关归属(顶栏 ⇄ 更多)与排序;「更多」固定在顶栏。
+    if (!this.toolbarCfg) {
+      this.toolbarCfg = this.plugin.settings.mountToolbar ?? defaultPanelToolbarCfg();
+    }
     const bar = contentEl.createDiv({ cls: 'logseq-mount-panel-bar' });
     bar.createSpan({ cls: 'logseq-mount-panel-count', text: `${mounts.length} 个挂载` });
-    const addBtn = bar.createEl('button', { cls: 'logseq-mount-panel-btn', text: '＋' });
-    addBtn.setAttribute('aria-label', '添加挂载');
-    addBtn.addEventListener('click', () => this.plugin.promptAddMount());
-    const refreshBtn = bar.createEl('button', { cls: 'logseq-mount-panel-btn', text: '⟳' });
-    refreshBtn.setAttribute('aria-label', '重新扫描');
-    refreshBtn.addEventListener('click', () => this.refreshMounts());
-    // 拖拽模式：开时树行可拖拽排序（仅显示顺序，存 mountTreeOrder），
-    // 关时行恢复默认排序且不可拖。状态持久化，重启后保持。
+    const { order, hidden } = resolvePanelToolbar(this.toolbarCfg);
     const dragOn = this.plugin.settings.mountDragMode === true;
-    const dragBtn = bar.createEl('button', {
-      cls: 'logseq-mount-panel-btn' + (dragOn ? ' is-active' : ''),
-      text: '⇅',
+    for (const key of order) {
+      if (hidden.has(key)) continue;
+      const b = panelToolbarButtonByKey(key);
+      if (!b) continue;
+      const btn = bar.createEl('button', {
+        cls: 'logseq-mount-panel-btn' + (key === 'drag-mode' && dragOn ? ' is-active' : ''),
+        attr: { 'data-tb-action': b.key },
+      });
+      setIcon(btn, b.icon);
+      btn.setAttribute('aria-label', b.label);
+    }
+    // 「更多」:收进去的按钮(按顶栏同序)+ 固定「编辑工具栏…」入口
+    const moreBtn = bar.createEl('button', {
+      cls: 'logseq-mount-panel-btn',
+      attr: { 'data-tb-action': PANEL_TOOLBAR_FIXED },
     });
-    dragBtn.setAttribute('aria-label', dragOn ? '拖拽排序：开' : '拖拽排序：关');
-    dragBtn.addEventListener('click', () => {
-      this.plugin.settings.mountDragMode = this.plugin.settings.mountDragMode !== true;
-      void this.plugin.saveSettings();
-      this.render();
+    setIcon(moreBtn, 'more-horizontal');
+    moreBtn.setAttribute('aria-label', '更多');
+    bar.addEventListener('click', (ev) => {
+      const actionEl = (ev.target as HTMLElement).closest('[data-tb-action]') as HTMLElement | null;
+      if (!actionEl) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      // dataset 键按驼峰规则:data-tb-action → tbAction(用下划线写法取不到值)
+      this.runToolbarAction(actionEl.dataset.tbAction || '', ev);
     });
-    // 定位当前文件：把正在编辑的文件在树里展开并滚动到可见（原生文件列表的定位）
-    const locateBtn = bar.createEl('button', { cls: 'logseq-mount-panel-btn' });
-    setIcon(locateBtn, 'crosshair');
-    locateBtn.setAttribute('aria-label', '定位当前文件');
-    locateBtn.addEventListener('click', () => void this.revealActiveFile());
 
     for (const m of mounts) this.renderMount(contentEl, m);
     // Restore the scroll position BEFORE the first paint so the viewport band
@@ -593,8 +614,81 @@ export class MountPanelView extends ItemView {
     for (const paint of this.rowPainters) paint();
   }
 
-  private renderMount(root: HTMLElement, mount: ExternalMount): void {
-    const section = root.createDiv({ cls: 'logseq-mount-section' });
+  // ------------------------------------------------------------------
+  // 工具栏动作(顶栏按钮与「更多」菜单共用,思源同款统一入口)
+  // ------------------------------------------------------------------
+
+  /** 工具栏动作分发;action === 'more' 时弹出「更多」菜单 */
+  private runToolbarAction(action: string, ev?: MouseEvent): void {
+    if (action === PANEL_TOOLBAR_FIXED) {
+      this.showToolbarMoreMenu(ev);
+      return;
+    }
+    if (action === 'locate') {
+      void this.revealActiveFile();
+    } else if (action === 'mount') {
+      this.plugin.promptAddMount();
+    } else if (action === 'refresh') {
+      this.refreshMounts();
+    } else if (action === 'drag-mode') {
+      // 拖拽模式:开时树行可拖拽排序(仅显示顺序,存 mountTreeOrder)
+      this.plugin.settings.mountDragMode = this.plugin.settings.mountDragMode !== true;
+      void this.plugin.saveSettings();
+      this.render();
+    } else if (action === 'collapse-all') {
+      // 全部收起:清空各挂载的展开集合(挂载根一并收起,思源「全部收起」同义)
+      for (const st of this.states.values()) st.open.clear();
+      this.render();
+    } else if (action === 'new-file' || action === 'new-folder') {
+      // 新建目标 = 最近点击的目录;没点过就退回第一个挂载的根
+      const dir = this.currentDir ?? this.defaultNewDir();
+      if (!dir) {
+        new Notice('请先挂载一个文件夹,再使用新建');
+        return;
+      }
+      if (action === 'new-file') this.promptNewFile(dir.mount, dir.abs, dir.rel);
+      else this.promptNewFolder(dir.mount, dir.abs, dir.rel);
+    }
+  }
+
+  /** 新建目标回退:第一个启用的挂载的根目录 */
+  private defaultNewDir(): { mount: ExternalMount; abs: string; rel: string } | null {
+    const m = (this.plugin.settings.externalMounts ?? []).find((x) => x.enabled);
+    return m ? { mount: m, abs: m.path, rel: '' } : null;
+  }
+
+  /** 「更多」菜单:收进去的按钮(按顶栏同序)+ 固定的「编辑工具栏…」入口 */
+  private showToolbarMoreMenu(ev?: MouseEvent): void {
+    const menu = new Menu();
+    const { order, hidden } = resolvePanelToolbar(this.toolbarCfg ?? undefined);
+    for (const key of order) {
+      if (!hidden.has(key)) continue;
+      const b = panelToolbarButtonByKey(key);
+      if (!b) continue;
+      menu.addItem((item) =>
+        item.setTitle(b.label).setIcon(b.icon as never).onClick(() => this.runToolbarAction(b.key)),
+      );
+    }
+    menu.addSeparator();
+    menu.addItem((item) =>
+      item.setTitle('编辑工具栏…').setIcon('settings' as never).onClick(() => {
+        new PanelToolbarEditorModal(
+          this.app,
+          this.toolbarCfg ?? defaultPanelToolbarCfg(),
+          (cfg) => {
+            this.toolbarCfg = cfg;
+            this.plugin.settings.mountToolbar = cfg;
+            void this.plugin.saveSettings();
+            this.render();
+          },
+        ).open();
+      }),
+    );
+    if (ev) menu.showAtMouseEvent(ev);
+    else menu.showAtPosition({ x: window.innerWidth / 2, y: 80 });
+  }
+
+  private renderMount(root: HTMLElement, mount: ExternalMount): void {    const section = root.createDiv({ cls: 'logseq-mount-section' });
     // 定位当前文件时按挂载找到区段、再按固定行高算偏移。
     section.dataset.mountId = mount.id;
 
@@ -621,6 +715,8 @@ export class MountPanelView extends ItemView {
     head.addEventListener('click', () => {
       if (state.open.has('')) state.open.delete('');
       else state.open.add('');
+      // 挂载根也是目录:点过就记为「当前目录」,工具栏的新建落在这里
+      this.currentDir = { mount, abs: mount.path, rel: '' };
       this.render();
     });
     // The mount's own menu: edit, unmount, rescan, pin.
@@ -890,6 +986,8 @@ export class MountPanelView extends ItemView {
           // Lazily read this folder's children the first time it is opened.
           this.loadLayer(mount, node.rel, state);
         }
+        // 最近点击的目录:工具栏「新建文件/文件夹」落在这里(思源 currentDir 同款)
+        this.currentDir = { mount, abs: node.abs, rel: node.rel };
         this.render();
       });
       this.wireMenu(row, mount, node);

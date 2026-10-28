@@ -26,10 +26,30 @@ interface ServerState {
   openDocs: Map<string, number>;
   /** pyright：启动时的环境指纹（python 路径），变化即重启；generic 恒 '' */
   envKey: string;
+  /** 语义 token 图例（initialize 响应捕获；server 不支持/未就绪 = null） */
+  semanticLegend: LspSemanticLegend | null;
 }
 
 const states = new Map<string, ServerState>();
 const diagListeners = new Set<(ds: LspDiagnostic[]) => void>();
+
+/** 语义 token 图例(server initialize 响应里声明;null = 该 server 不支持) */
+export interface LspSemanticLegend {
+  tokenTypes: string[];
+  tokenModifiers: string[];
+}
+
+// 客户端可解码的语义 token 类型/修饰符(能力握手声明;服务端用自己的 legend 回,
+// 这里只是握手的一部分。表抄思源侧 python-lsp 的 basedpyright 1.40 实测值)。
+const SEMANTIC_TOKEN_TYPES = [
+  'namespace', 'type', 'class', 'enum', 'typeParameter', 'parameter', 'variable',
+  'property', 'enumMember', 'function', 'method', 'keyword', 'decorator',
+  'selfParameter', 'clsParameter',
+];
+const SEMANTIC_TOKEN_MODIFIERS = [
+  'declaration', 'definition', 'readonly', 'static', 'async', 'defaultLibrary',
+  'builtin', 'classMember', 'parameter',
+];
 
 // 首次调用时缓存的宿主上下文（manifest.dir 是相对路径，需要插件实例解析）
 let hostCtx: { absPluginDir: string; vaultRoot: string } | null = null;
@@ -130,7 +150,7 @@ function resolvePyrightLaunch(absPluginDir: string, id: string): { launch: 'node
   return { launch: 'direct', command: exe, args: ['--stdio'] };
 }
 
-async function startServer(plugin: LspHostLike, spec: LspServerSpec): Promise<LspClient> {
+async function startServer(plugin: LspHostLike, spec: LspServerSpec): Promise<{ client: LspClient; semanticLegend: LspSemanticLegend | null }> {
   const { absPluginDir, vaultRoot } = hostContextOf(plugin);
   const isPyright = isPyrightLike(spec);
 
@@ -181,13 +201,32 @@ async function startServer(plugin: LspHostLike, spec: LspServerSpec): Promise<Ls
           completion: { completionItem: { documentationFormat: ['markdown', 'plaintext'] } },
           hover: { contentFormat: ['markdown', 'plaintext'] },
           signatureHelp: { signatureInformation: { documentationFormat: ['markdown', 'plaintext'] } },
+          // 语义 token:basedpyright 实测 gate(思源侧 python-lsp 探针两次对照)——
+          // dynamicRegistration 不声明 true 时 initialize 结果里根本不会出现
+          // semanticTokensProvider,语义着色拿不到数据源。registerCapability
+          // 我们照样回 null(下面 message 分发),basedpyright 是静态声明,不实际走。
+          semanticTokens: {
+            dynamicRegistration: true,
+            tokenTypes: SEMANTIC_TOKEN_TYPES,
+            tokenModifiers: SEMANTIC_TOKEN_MODIFIERS,
+            formats: ['relative'],
+            requests: { range: false, full: { delta: false } },
+            multilineTokenSupport: false,
+            overlappingTokenSupport: false,
+            serverCancelSupport: false,
+            augmentsSyntaxTokens: true,
+          },
         },
       },
       initializationOptions: pythonPath ? { pythonPath } : {},
     },
     30000,
-  )) as Record<string, unknown>;
-  void init;
+  )) as { capabilities?: { semanticTokensProvider?: { legend?: { tokenTypes?: string[]; tokenModifiers?: string[] } } } };
+  const stp = init?.capabilities?.semanticTokensProvider;
+  const semanticLegend: LspSemanticLegend | null =
+    stp?.legend?.tokenTypes?.length
+      ? { tokenTypes: stp.legend.tokenTypes, tokenModifiers: stp.legend.tokenModifiers ?? [] }
+      : null;
   c.notify('initialized', {});
 
   // workspace/configuration：pyright 动态 section（环境跟随）；generic 用 spec.config 静态表
@@ -219,13 +258,13 @@ async function startServer(plugin: LspHostLike, spec: LspServerSpec): Promise<Ls
     }
   });
 
-  return c;
+  return { client: c, semanticLegend };
 }
 
 function stateOf(spec: LspServerSpec): ServerState {
   let st = states.get(spec.id);
   if (!st) {
-    st = { spec, client: null, starting: null, openDocs: new Map(), envKey: '' };
+    st = { spec, client: null, starting: null, openDocs: new Map(), envKey: '', semanticLegend: null };
     states.set(spec.id, st);
   }
   st.spec = spec; // 配置可能被设置更新（如 enabled/args），以最新为准
@@ -243,15 +282,20 @@ async function ensureServer(plugin: LspHostLike, spec: LspServerSpec): Promise<L
     const old = st.client;
     st.client = null;
     st.openDocs.clear();
+    st.semanticLegend = null; // 重启后图例要随 initialize 重新捕获
     await old.stop();
   }
   st.envKey = envKeyNow;
   st.starting = (async () => {
     try {
-      const c = await startServer(plugin, spec);
-      st.client = c;
+      const started = await startServer(plugin, spec);
+      st.client = started.client;
+      st.semanticLegend = started.semanticLegend;
+      if (started.semanticLegend) {
+        console.info(`[lgp-lsp] ${spec.id} semanticTokens 可用:${started.semanticLegend.tokenTypes.length} types`);
+      }
       console.info(`[lgp-lsp] ${spec.id} 已启动`);
-      return c;
+      return started.client;
     } catch (e) {
       console.warn(`[lgp-lsp] ${spec.id} 启动失败:`, e);
       return null;
@@ -340,6 +384,35 @@ export async function lspHover(plugin: LspHostLike, languageId: string, uri: str
     if (typeof c === 'string') return c;
     if (Array.isArray(c)) return c.map((x) => x.value).join('\n\n');
     return c.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 某语言的语义 token 图例;server 未就绪/不支持/语言无 server 时返回 null */
+export function lspSemanticLegend(plugin: LspHostLike, languageId: string): LspSemanticLegend | null {
+  const spec = resolveLspSpec(languageId, plugin.settings.lspServers);
+  if (!spec) return null;
+  return states.get(spec.id)?.semanticLegend ?? null;
+}
+
+/**
+ * 全文档语义 token(LSP 五元组 deltaLine/deltaStartChar/length/type/modifiers)。
+ * 与 Monaco registerDocumentSemanticTokensProvider 期望的编码完全一致,
+ * bridge 层直接转 Uint32Array 即可。失败/未就绪返回 null(调用方回空集)。
+ */
+export async function lspSemanticTokensFull(plugin: LspHostLike, languageId: string, uri: string): Promise<number[] | null> {
+  const spec = resolveLspSpec(languageId, plugin.settings.lspServers);
+  if (!spec) return null;
+  const st = states.get(spec.id);
+  if (!st?.client?.isAlive || !st.semanticLegend) return null;
+  try {
+    const result = (await st.client.request(
+      'textDocument/semanticTokens/full',
+      { textDocument: { uri } },
+      10000,
+    )) as { data?: number[] } | null;
+    return result?.data ?? null;
   } catch {
     return null;
   }

@@ -454,6 +454,10 @@ export interface CreateEditorOptions {
   folding?: boolean;
   onSave?: () => void;
   onEscape?: () => void;
+  /** 文档身份(file:/// 形式)。给了就把 model 绑定到该 uri —— LSP 按路径定位
+   *  文档(补全/悬停/诊断/语义 token),代码文件视图必传;不传走匿名 model
+   *  (无 LSP 的场景)。语义与 mountSharedBlockEditor 的 uri 同源。 */
+  uri?: string;
   /** 变更明细:混合视图按变更行归属代码区(维护区行数) */
   onChange?: (value: string, changes?: Array<{ range: { startLineNumber: number; endLineNumber: number }; text: string }>) => void;
 }
@@ -535,6 +539,10 @@ export function createEditor(
     cursorBlinking: 'smooth',
     renderWhitespace: 'selection',
     padding: { top: padTop, bottom: padBottom },
+    // 语义 token 着色(LSP semanticTokens → 参数名/函数调用等 VS Code 同款颜色)。
+    // Monaco standalone 默认关闭,靠编辑器选项写进全局配置激活;没有语义
+    // provider 的语言下是纯 no-op(思源侧同款开关,见其 editor/monaco.ts)。
+    'semanticHighlighting.enabled': true,
   };
   // ---- 用户编辑器设置覆盖层(settings.json) ----
   // 结构锁死 > 用户设置 > 调用方默认:上面的字面量是"调用方默认",这里整体
@@ -553,6 +561,18 @@ export function createEditor(
       horizontalScrollbarSize: CODE_HSCROLL_STRIP,
       alwaysConsumeMouseWheel: false,
     };
+  }
+  // LSP 文档身份:model 绑定到 file:/// uri(applyDoc 同款套路)。同一个 uri
+  // 已有存活 model 时复用(视图重挂载),值不同才覆盖。
+  if (opts.uri) {
+    const target = monaco.Uri.parse(opts.uri);
+    let bound = monaco.editor.getModel(target);
+    if (!bound || bound.isDisposed()) bound = monaco.editor.createModel(opts.value, opts.language, target);
+    else {
+      if (bound.getValue() !== opts.value) bound.setValue(opts.value);
+      if (bound.getLanguageId() !== opts.language) monaco.editor.setModelLanguage(bound, opts.language);
+    }
+    options.model = bound;
   }
   const editor = monaco.editor.create(container, options);
   editorScopes.set(editor, scope);
@@ -755,6 +775,8 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
     value: '',
     language: 'plaintext',
     theme: currentMonacoTheme(),
+    // 与 createEditor 同款:语义 token 着色开关(块内代码块也接 LSP,见 codeBlockEdit)
+    'semanticHighlighting.enabled': true,
     // 块内形态(与 createEditor 的 blockMode 同套参数):无行号、折叠槽清零、
     // 无 minimap、关括号彩虹 —— 都要和阅读态 colorize 的输出对齐。
     lineNumbers: 'off',

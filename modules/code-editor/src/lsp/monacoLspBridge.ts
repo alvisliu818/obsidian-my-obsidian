@@ -5,6 +5,8 @@ import {
   closeLspDocument,
   lspCompletion,
   lspHover,
+  lspSemanticLegend,
+  lspSemanticTokensFull,
   onLspDiagnostics,
   openLspDocument,
   type LspCompletionItem,
@@ -94,6 +96,52 @@ export function ensureMonacoLspProviders(plugin: LspHostLike, languageId: string
       return { contents: [{ value: md }] };
     },
   });
+
+  registerSemanticProviderWhenReady(plugin, languageId);
+}
+
+// ---- 语义 token(basedpyright semanticTokens → Monaco 语义着色)----
+// 移植自 siyuan-virtual-tree python-lsp-bridge 的 registerSemanticProvider。
+// 必须等 server 就绪(图例已知)再注册:Monaco 的 SemanticTokensStylingService
+// 会按 provider 缓存首次 getLegend() 的返回,拿空图例注册会让所有语义 token
+// 因 "not-in-legend" 被丢弃。
+const semanticRegistered = new Set<string>();
+
+function registerSemanticProviderWhenReady(plugin: LspHostLike, languageId: string): void {
+  const id = languageId.toLowerCase();
+  if (semanticRegistered.has(id)) return;
+  const deadline = Date.now() + 60000; // server 启动+首次 initialize 最长等 60s
+  const tick = (): void => {
+    const legend = lspSemanticLegend(plugin, languageId);
+    if (!legend) {
+      if (Date.now() > deadline || !lspActive(plugin, languageId)) return;
+      window.setTimeout(tick, 500);
+      return;
+    }
+    if (semanticRegistered.has(id)) return;
+    semanticRegistered.add(id);
+    console.info(`[lgp-lsp] semanticTokens provider registered for ${languageId}`);
+    // 图例同一 server 版本内不变;真需要刷新时 dispose 重注册即可,Emitter 留作钩子
+    const changed = new monaco.Emitter<void>();
+    monaco.languages.registerDocumentSemanticTokensProvider(languageId, {
+      onDidChange: changed.event,
+      getLegend() {
+        return { tokenTypes: legend.tokenTypes, tokenModifiers: legend.tokenModifiers };
+      },
+      async provideDocumentSemanticTokens(model) {
+        // model 的 uri 就是文档身份:代码文件绑真实路径(createEditor 的 uri 选项),
+        // 块内代码块绑"宿主笔记同目录的虚拟文件"——都与 didOpen 一致。
+        const data = await lspSemanticTokensFull(plugin, languageId, model.uri.toString());
+        // LSP 与 Monaco 的五元组编码完全一致
+        // (deltaLine, deltaStartChar, length, tokenType, tokenModifiers)
+        return { data: new Uint32Array(data ?? []) };
+      },
+      releaseDocumentSemanticTokens() {
+        // 无资源需要释放
+      },
+    } as monaco.languages.DocumentSemanticTokensProvider);
+  };
+  tick();
 }
 
 /**

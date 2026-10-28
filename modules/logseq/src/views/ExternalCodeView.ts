@@ -19,8 +19,10 @@
 import { ItemView, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
 import type * as monacoNS from 'monaco-editor';
 // 代码编辑器:Monaco(开源 VS Code 内核)。语言解析/高亮/worker 见 src/editor/monaco.ts;
-// pyright LSP 的 Monaco provider 接线在 extensions/grammarLoader 侧(与 SiYuan 同源)。
+// LSP(补全/悬停/诊断/语义 token)的 Monaco 接线在 code-editor/src/lsp(与 SiYuan 同源)。
 import { createEditor, setupMonaco, getLanguageByPath } from '../../../code-editor/src/editor/monaco';
+import { encodeFileUri } from '../../../code-editor/src/lsp/lspHost';
+import { monacoLspAttach } from '../../../code-editor/src/lsp/monacoLspBridge';
 import { readExternalText, writeExternalText } from '../../../doc-tree/src/features/extFs';
 import { logOp } from '../features/logger';
 import type LogseqEditorPlugin from '../main';
@@ -55,6 +57,8 @@ export class ExternalCodeView extends ItemView {
   /** 运行输出区(首次运行时创建) */
   private runOutputEl: HTMLPreElement | null = null;
   private runHandle: RunHandle | null = null;
+  /** LSP 接线(补全/悬停/诊断/语义 token;无 server 或 LSP 关闭时为空数组) */
+  private lspDisposables: monacoNS.IDisposable[] = [];
 
   /** 老 state 没有挂载名时，按最长前缀匹配在挂载配置里找回来。 */
   private mountLabelFromSettings(): string {
@@ -250,6 +254,8 @@ export class ExternalCodeView extends ItemView {
 
   /** 销毁 Monaco 实例与混合引擎( FragmentHost / ResizeObserver 随引擎卸载)。 */
   private disposeEditors(): void {
+    for (const d of this.lspDisposables) d.dispose();
+    this.lspDisposables = [];
     if (this.hybridEngine) {
       this.hybridEngine.unload();
       this.hybridEngine = null;
@@ -353,13 +359,19 @@ export class ExternalCodeView extends ItemView {
       this.editor = engine.getEditor();
     } else {
       this.hybridEngine = null;
+      const docUri = encodeFileUri(this.abs);
       this.editor = createEditor(host, {
         value: content,
         language,
         lineNumbers: true,
+        // model 绑真实文件 uri:LSP(补全/悬停/诊断/语义 token)按路径定位文档
+        uri: docUri,
         onSave: () => void this.flush(true),
         onChange: () => this.scheduleSave(),
       });
+      // LSP:basedpyright 等语言服务,含语义 token 着色(VS Code 同款);
+      // 无匹配 server 或 LSP 关闭时 attach 返回空数组,零开销
+      this.lspDisposables = monacoLspAttach(this.plugin, this.editor, language, docUri);
     }
     this.syncAction();
     this.editor?.focus();

@@ -199,15 +199,17 @@ export function handleEnter(view: EditorView, host: BlockRenderHost): boolean { 
   if (b.kind === 'raw') {
     const { text, offset } = deleteSelection(view);
     const parent = b.parent;
-    // 引述块(用户指定,2026-10-26):非空引述末尾回车 → 新建同级引述块;
-    // 内容中间回车 → 拆成两个引述块(Logseq 同款,尾部补 '> ');caret 在
-    // '>' 标记上/前 → 上方插空段落块(引述保持原样);空引述回车 → 退出
-    // 引述变空段落。此前走 splitRawToOutline 会把引述拆成大纲块,丢失
-    // 引述形态。'> ' 是 raw 块文本内嵌标记(位置绝对),库内库外编辑器
-    // 同走本分支(fragmentEditor 也挂 createEditorExtensions)。
+    // 引述块(2026-10-28 用户指令「不要分歧」,对齐思源容器内回车语义):
+    // 引述是容器块,回车 = **容器内拆段落**(思源 enter.ts bq/callout 分支;
+    // 原先 2026-10-26 的 Logseq 同款——拆两个引述块/新同级引述块——已撤销)。
+    // 我们的引述是一个 raw 块('> ' 内嵌标记),容器内新段落 = 块内新 '> ' 行:
+    //   - caret 在当前行 '> ' 标记上/前(行首)→ 行上方插空引述行 '> '
+    //     (思源段首回车=容器内当前块前插空块)
+    //   - 末尾/中间 → 从 caret 拆行,新行缺 '> ' 前缀则补上(已带不重复)
+    //   - 空引述回车 → 退出引述变空段落(思源同义:容器空末块回车
+    //     getTopEmptyElement 移出容器)
     if (/^>/.test(text)) {
       if (text.slice(1).trim() === '') {
-        // 空引述('> '/'>'/纯空白)回车 → 退出引述:剥掉标记变空段落块
         host.mutate(
           () => {
             b.text = '';
@@ -217,35 +219,34 @@ export function handleEnter(view: EditorView, host: BlockRenderHost): boolean { 
         host.focusBlock(b, 0);
         return true;
       }
-      let qn: Block | null = null;
-      let above = false;
+      let newPos = 0;
       host.mutate(
         () => {
-          if (offset > 1) {
-            // 末尾(offset===len,tail 空 → 空同级引述)与内容中间(尾部补 '> ')
-            const tail = text.slice(offset);
-            b.text = text.slice(0, offset);
-            qn = createBlock(/^>/.test(tail) ? tail : '> ' + tail);
-            qn.kind = 'raw'; // 引述形态必须是 raw(list 序列化会加 '- ' 前缀)
-            insertAfter(b, qn);
+          const lineStart = text.lastIndexOf('\n', offset - 1) + 1;
+          // 当前行标记长度(引述行恒以 '> ' 或 '>' 开头;bare '>' 也容错)
+          const markerLen = (/^> ?/.exec(text.slice(lineStart))?.[0] ?? '').length;
+          const col = offset - lineStart;
+          if (col <= markerLen) {
+            // 行首:上方插空引述行(容器内新空段落),光标落新行 '> ' 之后
+            if (lineStart === 0) {
+              b.text = '> \n' + text;
+              newPos = 2;
+            } else {
+              b.text = text.slice(0, lineStart) + '\n> ' + text.slice(lineStart);
+              newPos = lineStart + 3;
+            }
           } else {
-            // caret 在 '>' 上/前:上方插空段落容器,引述原样(Logseq 同款)
-            b.text = text;
-            qn = createBlock('');
-            qn.bare = true;
-            insertBefore(b, qn);
-            above = true;
+            // 末尾/中间:拆行,新行补标记
+            const tail = text.slice(offset);
+            const hadMarker = /^>/.test(tail);
+            b.text = text.slice(0, offset) + '\n' + (hadMarker ? tail : '> ' + tail);
+            newPos = offset + 1 + (hadMarker ? 0 : 2);
           }
         },
         () => ({ lists: [parent] }),
       );
-      const target = qn as Block | null;
-      if (target) {
-        // raw 块无符号前缀换算(mlen=0),位置是文档绝对偏移:新引述的光标
-        // 落在标记之后('> '→2,'>'→1),空段落落行首。
-        const qpos = above ? 0 : target.text.startsWith('> ') ? 2 : target.text.startsWith('>') ? 1 : 0;
-        host.focusBlock(target, qpos);
-      }
+      // raw 块无符号前缀换算(mlen=0),位置是文档绝对偏移
+      host.focusBlock(b, newPos);
       return true;
     }
     // Logseq parity: Enter turns the raw block into outline blocks — the head

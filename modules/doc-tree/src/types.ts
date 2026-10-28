@@ -264,6 +264,12 @@ export interface DocTreeSettings {
    */
   mountTreeOrder: Record<string, Record<string, string[]>>;
   /**
+   * 面板顶栏工具栏配置(思源虚拟文档树同款结构):按钮顺序 + 收进「更多」的归属。
+   * order 空 = 按注册表默认顺序;hidden = 收进「更多」菜单的按钮 key。
+   * 未配置(undefined)时按注册表默认渲染。
+   */
+  mountToolbar?: { order: string[]; hidden: string[] };
+  /**
    * 虚拟文档树「新建笔记」的落盘目录。
    *
    * 笔记不一定和它挂载到的位置在同一棵磁盘树里：文件写在**这个**目录下，
@@ -416,6 +422,14 @@ export function docTreeSettingsFrom(raw: unknown): DocTreeSettings {
   s.mountShowLoadedCount = o.mountShowLoadedCount !== false;
   s.mountDragMode = o.mountDragMode === true;
   s.mountTreeOrder = mountTreeOrderFrom(o.mountTreeOrder);
+  // 工具栏配置:结构非法/未配置时保持 undefined(= 注册表默认渲染)
+  if (o.mountToolbar && typeof o.mountToolbar === 'object') {
+    const tb = o.mountToolbar as { order?: unknown; hidden?: unknown };
+    s.mountToolbar = {
+      order: Array.isArray(tb.order) ? tb.order.filter((k): k is string => typeof k === 'string') : [],
+      hidden: Array.isArray(tb.hidden) ? tb.hidden.filter((k): k is string => typeof k === 'string') : [],
+    };
+  }
   if (typeof o.mountPickDir === 'string') s.mountPickDir = o.mountPickDir;
   if (typeof o.mountNewNotePath === 'string') s.mountNewNotePath = o.mountNewNotePath;
   s.externalMounts = mountsFrom(o.externalMounts);

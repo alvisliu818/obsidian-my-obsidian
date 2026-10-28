@@ -97,6 +97,151 @@ function safeSetTheme(themeName: string): boolean {
   }
 }
 
+// ===== 语义 token 规则(LSP semanticTokens → 主题颜色)=====
+// 移植自 siyuan-virtual-tree theme-loader 的 appendSemanticRules。
+//
+// 背景:LSP(basedpyright) 下发"语义 token"(类型如 parameter/function/variable),
+// Monaco 拿语义 token 字符串(类型 + '.' + 修饰符,如 "parameter.declaration")
+// 走与 TextMate **同一个** ThemeTrie 匹配。主题 tokenColors 里没有 'parameter'
+// 这种顶层选择器,所以要按 VS Code 官方 tokenClassificationRegistry 把语义类型
+// 映射成 TextMate 探测 scope,再到主题 tokenColors 里取色,落成 Monaco 规则
+// (VS Code 里 Pylance 的参数名橙色就是这么来的)。
+//
+// 探测算法(VS Code colorThemeData 语义):
+//   - 主题规则 scope 是探测 scope 的"点分段前缀"才命中,且选择器不能比 scope 长;
+//   - 多个命中取最长选择器;
+//   - 探测不到 → 不生成规则 → 该语义 token 回退 TextMate 语法着色(同 VS Code)。
+
+/** 官方默认规则(createDefaultTokenClassificationRegistry 全表) */
+const SEMANTIC_DEFAULT_RULES: Array<{ selector: string; scopes: string[] }> = [
+  { selector: 'comment', scopes: ['comment'] },
+  { selector: 'string', scopes: ['string'] },
+  { selector: 'keyword', scopes: ['keyword.control'] },
+  { selector: 'number', scopes: ['constant.numeric'] },
+  { selector: 'regexp', scopes: ['constant.regexp'] },
+  { selector: 'operator', scopes: ['keyword.operator'] },
+  { selector: 'namespace', scopes: ['entity.name.namespace'] },
+  { selector: 'type', scopes: ['entity.name.type', 'support.type'] },
+  { selector: 'struct', scopes: ['entity.name.type.struct'] },
+  { selector: 'class', scopes: ['entity.name.type.class', 'support.class'] },
+  { selector: 'interface', scopes: ['entity.name.type.interface'] },
+  { selector: 'enum', scopes: ['entity.name.type.enum'] },
+  { selector: 'typeParameter', scopes: ['entity.name.type.parameter'] },
+  { selector: 'function', scopes: ['entity.name.function', 'support.function'] },
+  { selector: 'method', scopes: ['entity.name.function.member', 'support.function'] },
+  { selector: 'macro', scopes: ['entity.name.function.preprocessor'] },
+  { selector: 'variable', scopes: ['variable.other.readwrite', 'entity.name.variable'] },
+  { selector: 'parameter', scopes: ['variable.parameter'] },
+  { selector: 'property', scopes: ['variable.other.property'] },
+  { selector: 'enumMember', scopes: ['variable.other.enummember'] },
+  { selector: 'event', scopes: ['variable.other.event'] },
+  { selector: 'decorator', scopes: ['entity.name.decorator', 'entity.name.function'] },
+  // 带 modifier 的默认规则(只有 readonly/defaultLibrary 影响 scope 探测)
+  { selector: 'variable.readonly', scopes: ['variable.other.constant'] },
+  { selector: 'property.readonly', scopes: ['variable.other.constant.property'] },
+  { selector: 'type.defaultLibrary', scopes: ['support.type'] },
+  { selector: 'class.defaultLibrary', scopes: ['support.class'] },
+  { selector: 'interface.defaultLibrary', scopes: ['support.class'] },
+  { selector: 'variable.defaultLibrary', scopes: ['support.variable', 'support.other.variable'] },
+  { selector: 'variable.defaultLibrary.readonly', scopes: ['support.constant'] },
+  { selector: 'property.defaultLibrary', scopes: ['support.variable.property'] },
+  { selector: 'property.defaultLibrary.readonly', scopes: ['support.constant.property'] },
+  { selector: 'function.defaultLibrary', scopes: ['support.function'] },
+  { selector: 'member.defaultLibrary', scopes: ['support.function'] },
+];
+
+/** 主题 tokenColors 解析结果:scope 按点分段 + 颜色 */
+interface ParsedTokenRule {
+  segments: string[];
+  foreground: string;
+  fontStyle?: string;
+}
+
+/** 探测:找"点分段前缀"命中的主题规则,取最长选择器 */
+function probeTokenColor(parsed: ParsedTokenRule[], scopeSegments: string[]): ParsedTokenRule | null {
+  let best: ParsedTokenRule | null = null;
+  let bestLen = 0;
+  for (const rule of parsed) {
+    if (rule.segments.length > scopeSegments.length) continue; // 选择器比 scope 长
+    if (rule.segments.length <= bestLen) continue; // 只找更长的
+    let ok = true;
+    for (let i = 0; i < rule.segments.length; i++) {
+      if (rule.segments[i] !== scopeSegments[i]) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) {
+      best = rule;
+      bestLen = rule.segments.length;
+    }
+  }
+  return best;
+}
+
+/**
+ * 生成语义 token 规则并追加到 rules。生成的规则 key 是语义类型/类型.修饰符
+ * (如 "parameter"、"variable.readonly"),与 Monaco 语义 token 字符串在同一
+ * ThemeTrie 里前缀匹配。对 TextMate 语法着色无副作用:裸类型规则的颜色 = 主题
+ * 对同名 scope 的既有匹配结果,对以它为前缀的语法 scope 是重复/更弱的匹配。
+ */
+function appendSemanticRules(themeData: any, rules: monaco.editor.ITokenThemeRule[]): void {
+  // 主题声明不支持语义高亮时跳过(与 VS Code semanticHighlighting 开关一致)
+  if (themeData?.semanticHighlighting === false) return;
+
+  // 解析主题 tokenColors 为可探测的规则表
+  const parsed: ParsedTokenRule[] = [];
+  for (const tokenColor of themeData?.tokenColors ?? []) {
+    const rawScopes = Array.isArray(tokenColor.scope) ? tokenColor.scope : [tokenColor.scope];
+    const settings = tokenColor.settings || {};
+    const foreground = settings.foreground ? normalizeHex(settings.foreground) : '';
+    if (!foreground) continue;
+    const fontStyle = typeof settings.fontStyle === 'string' ? settings.fontStyle : undefined;
+    for (const rawScope of rawScopes) {
+      if (typeof rawScope !== 'string') continue;
+      for (const scope of rawScope.split(/[\s,]+/).filter(Boolean)) {
+        parsed.push({ segments: scope.split('.'), foreground, fontStyle });
+      }
+    }
+  }
+
+  // semanticTokenColors:键 "variable" / "variable.readonly",值为颜色或 TokenStyle。
+  // 优先级高于默认规则(VS Code 同序)。
+  const byToken = new Map<string, monaco.editor.ITokenThemeRule>();
+  const putRule = (token: string, foreground: string, fontStyle?: string): void => {
+    byToken.set(token, { token, foreground, fontStyle: fontStyle as any });
+  };
+  const stc = themeData?.semanticTokenColors || {};
+  for (const key of Object.keys(stc)) {
+    if (key.includes(':')) continue; // 语言限定键(type:python)不处理
+    const value = stc[key];
+    let foreground = '';
+    let fontStyle: string | undefined;
+    if (typeof value === 'string') {
+      foreground = value;
+    } else if (value && typeof value === 'object') {
+      foreground = value.foreground || '';
+      fontStyle = value.fontStyle;
+    }
+    foreground = normalizeHex(foreground);
+    if (foreground) putRule(key, foreground, fontStyle);
+  }
+
+  // 默认规则表:每条 selector 解析一次颜色
+  for (const dr of SEMANTIC_DEFAULT_RULES) {
+    if (byToken.has(dr.selector)) continue; // semanticTokenColors 已覆盖
+    let resolved: ParsedTokenRule | null = null;
+    // 依次尝试各探测 scope(官方顺序),首个探到颜色的生效
+    for (const scope of dr.scopes) {
+      resolved = probeTokenColor(parsed, scope.split('.'));
+      if (resolved) break;
+    }
+    if (resolved) putRule(dr.selector, resolved.foreground, resolved.fontStyle);
+  }
+
+  rules.push(...byToken.values());
+}
+
 /** 将 VSCode 主题转换为 Monaco 主题 */
 function convertThemeToMonaco(themeData: any, themeName: string, base: 'vs' | 'vs-dark'): void {  const colors: Record<string, string> = {};
   const rules: monaco.editor.ITokenThemeRule[] = [];
@@ -135,6 +280,10 @@ function convertThemeToMonaco(themeData: any, themeName: string, base: 'vs' | 'v
       }
     }
   }
+
+  // 语义 token 规则(LSP semanticTokens 的取色换算,移植自思源侧;无 LSP 或
+  // 探测不到颜色时不生成规则,自然回退 TextMate 语法着色)
+  appendSemanticRules(themeData, rules);
 
   monaco.editor.defineTheme(themeName, { base, inherit: true, rules, colors });
 }
