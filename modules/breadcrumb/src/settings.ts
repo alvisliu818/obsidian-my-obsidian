@@ -55,7 +55,7 @@ export class BreadcrumbNavSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("显示下一级图标")
-			.setDesc("面包屑末尾显示 ▸，点击或悬浮可继续向下选择下级标题")
+			.setDesc("面包屑末尾显示 ›，点击或悬浮可继续向下选择下级标题")
 			.addToggle((toggle) =>
 				toggle.setValue(this.plugin.settings.enableNextLevel).onChange(async (value) => {
 					this.plugin.settings.enableNextLevel = value;
@@ -92,6 +92,21 @@ export class BreadcrumbNavSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
+
+		new Setting(containerEl)
+			.setName("悬浮弹出延时")
+			.setDesc("悬浮多少毫秒后弹出菜单（0 = 立即弹出），对面包屑各级与菜单条目均生效")
+			.addText((text) =>
+				text
+					.setPlaceholder("160")
+					.setValue(String(this.plugin.settings.hoverDelayMs))
+					.onChange(async (value) => {
+						const n = Number(value);
+						this.plugin.settings.hoverDelayMs =
+							Number.isFinite(n) && n >= 0 ? Math.round(n) : 160;
+						await this.plugin.saveSettings();
+					})
+			);
 
 		new Setting(containerEl)
 			.setName("页面悬浮显示同标签页面")

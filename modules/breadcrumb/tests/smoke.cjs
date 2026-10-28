@@ -201,7 +201,7 @@ const nextBtnOf = (item) => item.children.find((c) => c.className === "bcn-popup
 	});
 
 	check("首项是文件名，其后是标题层级链", () => {
-		assert.strictEqual(bar.textContent, "项目笔记›第一章›第一节›小节›▸");
+		assert.strictEqual(bar.textContent, "项目笔记›第一章›第一节›小节›");
 		assert.strictEqual(itemsOf(bar)[0].className, "bcn-item bcn-page");
 		assert.ok(itemsOf(bar)[3].className.includes("bcn-active"), "当前标题应高亮");
 	});
@@ -225,7 +225,7 @@ const nextBtnOf = (item) => item.children.find((c) => c.className === "bcn-popup
 
 	check("点 ▸ 后该项成为面包屑末尾，并立即展开它的下一级", () => {
 		bar = barOf(view);
-		assert.strictEqual(bar.textContent, "项目笔记›第一章›▸");
+		assert.strictEqual(bar.textContent, "项目笔记›第一章›");
 		const p = popup();
 		assert.ok(p, "下钻后应自动展开下一级菜单");
 		assert.deepStrictEqual(popupTexts(p), ["第一节", "第二节"]);
@@ -236,7 +236,7 @@ const nextBtnOf = (item) => item.children.find((c) => c.className === "bcn-popup
 	await sleep(60);
 	check("可继续向下钻取", () => {
 		bar = barOf(view);
-		assert.strictEqual(bar.textContent, "项目笔记›第一章›第一节›▸");
+		assert.strictEqual(bar.textContent, "项目笔记›第一章›第一节›");
 		assert.deepStrictEqual(popupTexts(popup()), ["小节"]);
 	});
 
@@ -275,12 +275,12 @@ const nextBtnOf = (item) => item.children.find((c) => c.className === "bcn-popup
 	await sleep(60);
 	check("点击面包屑某一级：跳转并把路径截短到该级", () => {
 		bar = barOf(view);
-		assert.strictEqual(bar.textContent, "项目笔记›第一章›第一节›▸");
+		assert.strictEqual(bar.textContent, "项目笔记›第一章›第一节›");
 		assert.deepStrictEqual(view.calls.filter((c) => c[0] === "setCursor").pop(), ["setCursor", 3]);
 	});
 
 	// ---------- 场景 7：悬浮自动展开下一级（级联子菜单） ----------
-	// 接续场景 6：面包屑停在 项目笔记›第一章›第一节›▸，光标在 line 3
+	// 接续场景 6：面包屑停在 项目笔记›第一章›第一节›，光标在 line 3
 	itemsOf(bar)
 		.find((i) => i.textContent === "第一节")
 		.dispatch("mouseenter");
@@ -553,7 +553,7 @@ const nextBtnOf = (item) => item.children.find((c) => c.className === "bcn-popup
 	await plugin.refresh();
 	check("首项就是文件名，前面没有目录链", () => {
 		bar = barOf(view);
-		assert.strictEqual(bar.textContent, "项目笔记›第一章›第一节›小节›▸");
+		assert.strictEqual(bar.textContent, "项目笔记›第一章›第一节›小节›");
 		assert.strictEqual(itemsOf(bar)[0].className, "bcn-item bcn-page");
 		assert.strictEqual(bar.querySelectorAll(".bcn-folder").length, 0, "不应有目录项");
 	});
@@ -624,7 +624,7 @@ const nextBtnOf = (item) => item.children.find((c) => c.className === "bcn-popup
 		const b = barOf(extView);
 		assert.ok(b, "外壳视图里应插入面包屑");
 		assert.strictEqual(extHost.children[0], b, "面包屑应在最前面");
-		assert.strictEqual(b.textContent, "a›根块›子块›▸");
+		assert.strictEqual(b.textContent, "a›根块›子块›");
 		const items = itemsOf(b);
 		assert.strictEqual(items[0].className, "bcn-item bcn-page");
 		assert.strictEqual(b.querySelectorAll(".bcn-folder").length, 0, "不应有目录项");

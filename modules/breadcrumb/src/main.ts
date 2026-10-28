@@ -20,6 +20,8 @@ const ICON_SVG_OFF =
 	'<line x1="3" y1="21" x2="21" y2="3" stroke="currentColor" stroke-width="1.7"/></svg>';
 
 const HOVER_DELAY = 160;
+/** hoverDelayMs 非法（负数/非数字）时的兜底值 */
+const HOVER_DELAY_FALLBACK = HOVER_DELAY;
 const HIDE_DELAY = 220;
 /** 程序化跳转后的一段时间内，不把「光标移动」当成用户主动切换（否则会清掉下钻状态） */
 const JUMP_GUARD = 600;
@@ -511,10 +513,10 @@ export default class BreadcrumbNavPlugin extends Plugin {
 			this.nextEntriesProvider = null;
 		}
 		if (nextChildren.length) {
-			bar.appendChild(this.createSeparator());
+			// ▸/› 合并定案：› 自身兼任分隔与下一级入口（不再另加 ▸）
 			const icon = document.createElement("span");
 			icon.className = "bcn-next";
-			icon.textContent = "▸";
+			icon.textContent = "›";
 			icon.title = "下一级";
 			const provider = () => this.headingEntries(view, tree, nextChildren, currentKey);
 			this.attachHover(icon, provider);
@@ -638,10 +640,10 @@ export default class BreadcrumbNavPlugin extends Plugin {
 				: (src.__lgRoots ?? [])
 			: [];
 		if (nextChildren.length) {
-			bar.appendChild(this.createSeparator());
+			// ▸/› 合并定案：› 自身兼任分隔与下一级入口（不再另加 ▸）
 			const icon = document.createElement("span");
 			icon.className = "bcn-next";
-			icon.textContent = "▸";
+			icon.textContent = "›";
 			icon.title = "下一级";
 			const provider = () =>
 				this.lgBlockEntries(inner, nextChildren, chain.length ? chain[chain.length - 1] : null);
@@ -1039,6 +1041,12 @@ export default class BreadcrumbNavPlugin extends Plugin {
 		trigger.addEventListener("mouseleave", () => this.scheduleHide());
 	}
 
+	/** 悬浮弹出延时（毫秒，设置项；非法值回落默认） */
+	private get hoverDelay(): number {
+		const n = this.settings.hoverDelayMs;
+		return Number.isFinite(n) && n >= 0 ? n : HOVER_DELAY_FALLBACK;
+	}
+
 	/** 统一的「延时弹出」：期间鼠标移开就会取消 */
 	private schedulePopup(
 		anchor: HTMLElement,
@@ -1053,7 +1061,7 @@ export default class BreadcrumbNavPlugin extends Plugin {
 			if (!entries.length) return;
 			this.closePopupsFrom(level);
 			this.openPopup(anchor, entries, level);
-		}, HOVER_DELAY);
+		}, this.hoverDelay);
 	}
 
 	/** 打开一个全新的根菜单（供点击 ▸、下钻后自动展开等场景调用） */

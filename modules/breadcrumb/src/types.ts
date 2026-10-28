@@ -57,6 +57,8 @@ export interface BreadcrumbNavSettings {
 	followCursor: boolean;
 	/** 悬浮菜单一次最多显示多少条目 */
 	maxMenuItems: number;
+	/** 悬浮多少毫秒后弹出菜单（0 = 立即） */
+	hoverDelayMs: number;
 }
 
 export const DEFAULT_SETTINGS: BreadcrumbNavSettings = {
@@ -71,4 +73,5 @@ export const DEFAULT_SETTINGS: BreadcrumbNavSettings = {
 	sticky: true,
 	followCursor: true,
 	maxMenuItems: 20,
+	hoverDelayMs: 160,
 };

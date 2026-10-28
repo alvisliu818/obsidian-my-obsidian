@@ -61,9 +61,10 @@
 }
 
 .bcn-next {
-	padding: 1px 5px;
+	/* › 兼任分隔与下一级入口：样式对齐 .bcn-sep，保留 hover 反馈 */
+	padding: 0 5px;
 	border-radius: 4px;
-	opacity: 0.5;
+	opacity: 0.45;
 	cursor: pointer;
 }
 
