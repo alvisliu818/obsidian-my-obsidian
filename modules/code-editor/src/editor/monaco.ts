@@ -13,7 +13,7 @@
 import * as monaco from 'monaco-editor';
 import { normalizePath, type App } from 'obsidian';
 import { registerTmGrammarForMonaco } from '../extensions/monacoGrammarBridge';
-import { applyThemeByPreference, getActiveThemeName } from '../extensions/themeLoader';
+import { applyThemeByPreference, appendSemanticRules, getActiveThemeName } from '../extensions/themeLoader';
 import {
   buildEditorOptionOverrides,
   buildModelOverrides,
@@ -277,7 +277,12 @@ export function setupMonaco(plugin: MonacoPluginHost): void {
   };
 
   configureTypeScriptWorker();
-  applyTheme(getCurrentMode());
+  // 扩展主题已激活时不落内置主题:恢复链(onload → tm 引擎 → restoreAllExtensions
+  // → applyCodeThemePreference)是异步的,若它先完成、这里再无条件 applyTheme,
+  // 用户选的扩展主题会被内置主题永久覆盖(主库 2026-10-28 实测:首次打开代码
+  // 文件即触发,且之后再无重应用点)。activeThemeName 只由扩展主题的
+  // safeSetTheme 写入,为 null = 尚无扩展主题,落内置回退是安全默认。
+  if (!getActiveThemeName()) applyTheme(getCurrentMode());
 }
 
 /** monaco.css 注入(只一次):读内容 → <style> 内联,绕开 CSP 的 style-src。 */
@@ -350,13 +355,15 @@ export function applyTheme(mode: 0 | 1): void {
   const c = (name: string, fallback: string): string => normalizeColor(readCSSVar(name), fallback);
   const stringC = c('--code-string', mode === 1 ? '#ce9178' : '#a31515');
   const tagC = c('--code-tag', mode === 1 ? '#569cd6' : '#800000');
+  const funcC = c('--code-function', mode === 1 ? '#dcdcaa' : '#795e26');
+  const valueC = c('--code-value', mode === 1 ? '#b5cea8' : '#098658');
   const rules: monaco.editor.ITokenThemeRule[] = [
     { token: '', foreground: codeFg },
     { token: 'identifier', foreground: codeFg },
     { token: 'comment', foreground: c('--code-comment', mode === 1 ? '#6a9955' : '#237e38') },
     { token: 'string', foreground: stringC },
     { token: 'keyword', foreground: c('--code-keyword', mode === 1 ? '#c586c0' : '#0000ff') },
-    { token: 'number', foreground: c('--code-value', mode === 1 ? '#b5cea8' : '#098658') },
+    { token: 'number', foreground: valueC },
     { token: 'regexp', foreground: c('--code-important', mode === 1 ? '#d16969' : '#811f3f') },
     { token: 'operator', foreground: c('--code-operator', mode === 1 ? '#d4d4d4' : '#333333') },
     { token: 'delimiter', foreground: c('--code-punctuation', mode === 1 ? '#808080' : '#666666') },
@@ -364,8 +371,30 @@ export function applyTheme(mode: 0 | 1): void {
     { token: 'metatag', foreground: tagC },
     { token: 'attribute.name', foreground: codeFg },
     { token: 'attribute.value', foreground: stringC },
-    { token: 'type.identifier', foreground: c('--code-function', mode === 1 ? '#dcdcaa' : '#795e26') },
+    { token: 'type.identifier', foreground: funcC },
   ];
+  // 语义 token 规则(LSP semanticTokens):不补这层,function/parameter/type
+  // 等语义类型在 ThemeTrie 里没有命中规则,全部落进上面的 {token:''} 默认
+  // 规则 = 正文色,表现为「语义高亮不生效」(主库 2026-10-28 实测)。扩展主题
+  // 走 themeLoader 自己的 appendSemanticRules,这里给内置主题补同层:取色沿用
+  // --code-* 变量,函数/类型 → --code-function,readonly 变量 → --code-value,
+  // 与阅读态 Prism 的 .token.function/.token.constant 同源。
+  appendSemanticRules(
+    {
+      tokenColors: [
+        {
+          scope: 'entity.name.function entity.name.function.member support.function',
+          settings: { foreground: funcC },
+        },
+        {
+          scope: 'entity.name.type entity.name.type.class support.type support.class',
+          settings: { foreground: funcC },
+        },
+        { scope: 'variable.other.constant', settings: { foreground: valueC } },
+      ],
+    },
+    rules,
+  );
   const themeName = mode === 1 ? 'logseq-dark' : 'logseq-light';
   monaco.editor.defineTheme(themeName, {
     base: mode === 1 ? 'vs-dark' : 'vs',

@@ -110,10 +110,11 @@ export async function installFromSearchEntry(plugin: Plugin, entry: SearchEntry)
 export async function uninstallExtension(plugin: Plugin, extensionId: string): Promise<InstalledExtension[]> {
   const list = await loadInstalledExtensions(plugin);
   const ext = list.find((e) => e.id === extensionId);
-  // 通知消费端按禁用清理（若此前启用）
+  // 通知消费端按禁用清理（若此前启用）:先移除贡献点再通知,消费端重应用
+  // 偏好时不会再把已卸载的主题选上
   if (ext?.enabled) {
-    consumeFn?.(ext, 'disable');
     applyOtherContributions(ext, 'disable');
+    consumeFn?.(ext, 'disable');
   }
   return removeInstalledExtension(plugin, extensionId);
 }
@@ -138,8 +139,11 @@ export async function toggleExtension(plugin: Plugin, extensionId: string): Prom
   const ext = next.find((e) => e.id === extensionId);
   if (ext) {
     const action = ext.enabled ? 'enable' : 'disable';
-    consumeFn?.(ext, action);
+    // 与 install/restore 同契约:先动贡献点,后通知消费端(启用的主题要先
+    // 定义,消费端按偏好应用才看得到;禁用的主题要先移除,重应用才不会
+    // 再选到它)。
     applyOtherContributions(ext, action);
+    consumeFn?.(ext, action);
   }
   void before;
   return ext ? ext.enabled : false;
@@ -159,8 +163,12 @@ export async function restoreAllExtensions(plugin: Plugin): Promise<LoadResult[]
     .filter((e) => e.enabled)
     .map((ext) => {
       try {
-        consumeFn?.(ext, 'restore');
+        // 与 installExtension 同契约:先加载贡献点,后通知消费端 —— 消费端
+        // (main.ts)会按 codeThemePref 重应用主题,顺序反了主题还没定义,
+        // 偏好查找必失败落回内置主题,扩展主题在启动路径上永远不生效
+        // (2026-10-28 实测:主库/e2e 均复现,主题 60s 内从未应用)。
         const counts = applyOtherContributions(ext, 'restore');
+        consumeFn?.(ext, 'restore');
         return {
           extensionId: ext.id,
           status: 'loaded' as const,

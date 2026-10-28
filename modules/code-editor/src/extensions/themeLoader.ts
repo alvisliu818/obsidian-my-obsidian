@@ -184,8 +184,12 @@ function probeTokenColor(parsed: ParsedTokenRule[], scopeSegments: string[]): Pa
  * (如 "parameter"、"variable.readonly"),与 Monaco 语义 token 字符串在同一
  * ThemeTrie 里前缀匹配。对 TextMate 语法着色无副作用:裸类型规则的颜色 = 主题
  * 对同名 scope 的既有匹配结果,对以它为前缀的语法 scope 是重复/更弱的匹配。
+ *
+ * 导出给内置回退主题(editor/monaco.ts 的 applyTheme)复用:它没有 VSCode
+ * themeData,用合成的 tokenColors 表调进来 —— 不补这层,LSP 语义 token 在
+ * 内置主题下全部落进 {token:''} 默认规则,表现为语义高亮不生效。
  */
-function appendSemanticRules(themeData: any, rules: monaco.editor.ITokenThemeRule[]): void {
+export function appendSemanticRules(themeData: any, rules: monaco.editor.ITokenThemeRule[]): void {
   // 主题声明不支持语义高亮时跳过(与 VS Code semanticHighlighting 开关一致)
   if (themeData?.semanticHighlighting === false) return;
 
