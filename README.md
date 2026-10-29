@@ -36,20 +36,20 @@ GPL-3 是强 copyleft——衍生作品必须整体以 GPL-3 分发，这不是�
 | --- | --- | --- | --- |
 | Material Icon Theme | GilbertzzzZZ | MIT | https://github.com/gilbertzzzzz/obsidian-material-icon-theme |
 | TraceTime | QuincySx | MIT | https://github.com/QuincySx/obsidian-tracetime |
-| AI image analyzer | Swaggeroo | GPL-3.0 | 见 `modules/ai-image-analyzer/README.md` |
+| AI image analyzer | Swaggeroo | GPL-3.0 | 见 `modules/my-ai-image-analyzer/README.md` |
 | Omnisearch | Simon Cambier | GPL-3 | https://github.com/scambier/obsidian-omnisearch |
-| Save Control（save-history） | Sevoni | MIT | 见 `modules/save-control/NOTICE.md` |
-| Save Control（autosave-control） | mihasm | MIT | 见 `modules/save-control/NOTICE.md` |
+| Save Control（save-history） | Sevoni | MIT | 见 `modules/my-save-control/NOTICE.md` |
+| Save Control（autosave-control） | mihasm | MIT | 见 `modules/my-save-control/NOTICE.md` |
 | Git | Vinzent03 | MIT | https://github.com/Vinzent03/obsidian-git |
 | Vault Explorer | DecafDev | MIT | https://github.com/decaf-dev/obsidian-vault-explorer |
 | LaTeX Delimiters | Andreas Burger | MIT | https://github.com/BurgerAndreas/latex-delimiter-renderer |
 
 - **Material Icon Theme** 另外打包了 Material Icon Theme 的图标美术资源（来源
   `material-icon-theme` npm 包），其许可声明见
-  `modules/material-icon-theme/NOTICE`（© Material Extensions，MIT）。
+  `modules/my-material-icon-theme/NOTICE`（© Material Extensions，MIT）。
 - **Save Control** 由两个 MIT 插件合并而成（save-history 为基座 +
   autosave-control 的延迟落盘控制器），两上游的版本、作者与 subtree 历史
-  见 `modules/save-control/NOTICE.md`。
+  见 `modules/my-save-control/NOTICE.md`。
 - 这些第三方模块的源码未作功能性修改，仅为主仓的构建与装载方式做了适配；
   如需同步上游更新，可在各自目录用 `git subtree pull`。
 
@@ -62,13 +62,13 @@ npm run build      # 先生成图标数据，再类型检查，最后打包
 
 `npm run build` 比一般的 Obsidian 插件多两步：
 
-1. **Material Icon Theme 的图标数据**（`modules/material-icon-theme/src/icon-data.ts`，
+1. **Material Icon Theme 的图标数据**（`modules/my-material-icon-theme/src/icon-data.ts`，
    约 2MB 内联 SVG）由 `scripts/build-icons.mjs` 从 `material-icon-theme` npm 包
    生成，未入库——这一步由 `npm run build:icons` 完成。
 2. **Omnisearch 的 Svelte 组件**由主仓 esbuild 里的 `esbuild-svelte` 插件编译
    （`css: 'injected'`，与上游配置一致）；它依赖的 dexie 在打包时由
    `dexie-patch` 插件套用上游的补丁（移除 dual-package-hazard 检查，见
-   `modules/omnisearch/patches/dexie.patch`），因为 pnpm 的补丁格式与
+   `modules/my-omnisearch/patches/dexie.patch`），因为 pnpm 的补丁格式与
    patch-package 不兼容。
 
 ## 待并入

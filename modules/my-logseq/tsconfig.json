@@ -1,0 +1,49 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["DOM", "ES2020", "DOM.Iterable"],
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "paths": {
+      // `obsidian` — doc-tree sources are compiled into this program via
+      // relative imports (modules/my-doc-tree), but that directory has no
+      // node_modules of its own; pin the type package here so its
+      // `import 'obsidian'` resolves the same way ours does.
+      "obsidian": ["./node_modules/obsidian"],
+      // doc-tree's office sources import these; they live in this module's
+      // node_modules (doc-tree itself has none under the root PnP program).
+      "mammoth/mammoth.browser.js": ["./node_modules/mammoth/mammoth.browser.js"],
+      "jszip": ["./node_modules/jszip"],
+      // code-editor sources (compiled into this program via relative
+      // imports) import monaco-editor; same reasoning as `obsidian` above.
+      "monaco-editor": ["./node_modules/monaco-editor"],
+      // code-editor's TextMate engine deps (bundled in our own main.js
+      // since the tmEngine lived in logseq/src).
+      "vscode-textmate": ["./node_modules/vscode-textmate"],
+      "vscode-oniguruma": ["./node_modules/vscode-oniguruma"],
+      "xlsx": ["./node_modules/xlsx"],
+      // `cm-bundle:<pkg>` — the code-block editor's own bundled CM copy.
+      // Strip the prefix for type resolution (esbuild/vite do the same).
+      // Fallback to the HOST root's node_modules: as a module of
+      // obsidian-my-obsidian the CM packages live hoisted one level up, and a
+      // local duplicate would split CM's class identities between the host
+      // program and this one (EditorView/SelectionRange private-field clash).
+      "cm-bundle:*": ["./node_modules/*", "../../node_modules/*"]
+    }
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts", "../my-doc-tree/src/office/mammoth.d.ts"],
+  "exclude": ["tests/e2e"]
+}

@@ -49,7 +49,7 @@ const ONIG_WASM_B64 = readFileSync(path.join(onigDir, "release", "onig.wasm")).t
 // imports (a module import would run in the plugin's realm and see no
 // document). Bundled to IIFE strings at build time and inlined.
 // ---------------------------------------------------------------------------
-const BROWSER = "modules/browser";
+const BROWSER = "modules/my-browser";
 async function bundleVendorSource(entry) {
   const r = await esbuild.build({
     entryPoints: [entry],
@@ -78,10 +78,10 @@ const EXT_PRELOAD_SOURCE = await bundleVendorSource(
 // The plugin starts it via a Blob URL (workers can't be loaded from app://),
 // so like the browser scripts above it travels as source text inside the
 // bundle. Captured once at build time; editing
-// modules/audio-recorder/src/audio/encodingWorker.ts requires a rebuild.
+// modules/my-audio-recorder/src/audio/encodingWorker.ts requires a rebuild.
 // ---------------------------------------------------------------------------
 const ENCODING_WORKER_SOURCE = await bundleVendorSource(
-  "modules/audio-recorder/src/audio/encodingWorker.ts",
+  "modules/my-audio-recorder/src/audio/encodingWorker.ts",
 );
 
 // ---------------------------------------------------------------------------
@@ -141,7 +141,7 @@ const sveltePlugin = esbuildSvelte({
 // `Symbol($state) in undefined`，后者 "Class constructor cannot be invoked
 // without 'new'"；componentApi:4 兼容模式只包根组件，子组件仍是函数约定）。
 //
-// 实现：modules/momentum/node_modules 下嵌套装着 svelte@4 + esbuild-svelte
+// 实现：modules/my-momentum/node_modules 下嵌套装着 svelte@4 + esbuild-svelte
 // （该模块自包含依赖，与独立项目 obsidian-momentum 一致；根 node_modules 的
 // svelte@5 供 omnisearch/obsidian-git 使用）。用 createRequire 从模块目录
 // 解析出这份 esbuild-svelte——它 require("svelte/compiler") 时自然落到嵌套
@@ -152,7 +152,7 @@ const sveltePlugin = esbuildSvelte({
 // ts.transpileModule 会把「只被 $store 引用」的 import 当未使用删掉，
 // Svelte 编译器随即报 `global_reference_invalid`。
 // ---------------------------------------------------------------------------
-const momentumRequire = createRequire(path.resolve("modules/momentum/package.json"));
+const momentumRequire = createRequire(path.resolve("modules/my-momentum/package.json"));
 const esbuildSvelte4 = momentumRequire("esbuild-svelte");
 const momentumSveltePlugin = esbuildSvelte4({
   include: /momentum.*\.svelte$/,
@@ -166,7 +166,7 @@ const momentumSveltePlugin = esbuildSvelte4({
 // ---------------------------------------------------------------------------
 // omnisearch: dexie 的 dual-package-hazard 补丁。
 //
-// 上游用 pnpm patch 打（modules/omnisearch/patches/dexie.patch）：去掉
+// 上游用 pnpm patch 打（modules/my-omnisearch/patches/dexie.patch）：去掉
 // dexie import-wrapper 里的 Symbol.for("Dexie") 全局实例检查。pnpm 的补丁
 // 格式与 patch-package 不兼容（试过），所以改为 esbuild onLoad 插件在打包
 // 时直接替换——不依赖 node_modules 的状态，构建自愈。
@@ -194,7 +194,7 @@ const dexiePatchPlugin = {
 // ---------------------------------------------------------------------------
 // open-tab-settings: `glob:./locales/*.json` 聚合导入（上游 esbuild 插件原样
 // 移植）。编译期把 glob 匹配到的 JSON 各自 import 后聚成一个对象，键取文件名。
-// TS 侧由 modules/open-tab-settings/src/glob.d.ts 的 `declare module 'glob:*'`
+// TS 侧由 modules/my-open-tab-settings/src/glob.d.ts 的 `declare module 'glob:*'`
 // 兜住类型。
 // ---------------------------------------------------------------------------
 const importGlobPlugin = {
@@ -229,18 +229,18 @@ const importGlobPlugin = {
 // 摘出来打进 bundle，让 music-metadata 这类库的 require('process/')、
 // require('buffer') 在移动端（无 nodeIntegration）也能工作。聚合的 external
 // 列表是全局的，罩不到模块粒度 —— 所以用 onResolve 按 importer 路径覆盖：
-// 只对 modules/music-player/ 下的导入返回 npm shim 包的真实路径（进 bundle），
+// 只对 modules/my-music-player/ 下的导入返回 npm shim 包的真实路径（进 bundle），
 // 其余 importer 返回 undefined 走默认解析（维持 external 语义不变）。
 // ---------------------------------------------------------------------------
 const musicPlayerRequire = createRequire(
-  path.resolve("modules/music-player/package.json"),
+  path.resolve("modules/my-music-player/package.json"),
 );
 const NODE_SHIM_RE = /^(node:)?(buffer|events|process|string_decoder)$/;
 const musicPlayerShimsPlugin = {
   name: "music-player-node-shims",
   setup(build) {
     build.onResolve({ filter: NODE_SHIM_RE }, (args) => {
-      if (!args.importer.split(path.sep).join("/").startsWith("modules/music-player/"))
+      if (!args.importer.split(path.sep).join("/").startsWith("modules/my-music-player/"))
         return undefined;
       try {
         return { path: musicPlayerRequire.resolve(args.path.replace(/^node:/, "")) };
@@ -260,7 +260,7 @@ const musicPlayerShimsPlugin = {
 //    替换为 arktype 的 `.instanceOf(HTMLElement)`，不套用会运行时报错。
 //    上游 filter 用正斜杠，Windows 路径是反斜杠，此处两种都匹配。
 // ③ NODE_ENV 作用域替换 —— 上游用 define，但聚合的 define 是全局的，会连带
-//    改 omnisearch 等模块的运行时分支；改为只对 modules/media-extended/ 下
+//    改 omnisearch 等模块的运行时分支；改为只对 modules/my-media-extended/ 下
 //    （含其 node_modules 里的 react/vidstack）文件做文本替换。
 // ---------------------------------------------------------------------------
 const mxInlinePlugin = {
@@ -391,7 +391,7 @@ const context = await esbuild.context({
   // esm-env（obsidian-git 的 svelte 组件用它）按这个条件切换 dev/prod 分支
   conditions: [prod ? "production" : "development"],
   // isomorphic-git 在移动端需要 Buffer 全局（obsidian-git 上游的 polyfill）
-  inject: ["modules/obsidian-git/polyfill_buffer.js"],
+  inject: ["modules/my-obsidian-git/polyfill_buffer.js"],
   logLevel: "info",
   sourcemap: prod ? false : "inline",
   treeShaking: true,
@@ -405,7 +405,7 @@ const context = await esbuild.context({
 // wa-sqlite 经 __WA_SQLITE_WASM_B64__ define 内联(同主 bundle),node builtin
 // 由 platform:'node' 自动 external。
 const daemon = await esbuild.context({
-  entryPoints: ["modules/unified-search/src/daemon/daemonMain.ts"],
+  entryPoints: ["modules/my-unified-search/src/daemon/daemonMain.ts"],
   bundle: true,
   platform: "node",
   // 原生模块不可 bundle:运行时从插件目录 node_modules 解析(deploy 边车)

@@ -25,41 +25,41 @@ import {
 	type SubPluginLike,
 } from "./settings";
 
-import DocTreePlugin from "../modules/doc-tree/src/main";
-import CodeEditorPlugin from "../modules/code-editor/src/main";
-import LogseqEditorPlugin from "../modules/logseq/src/main";
-import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE } from "../modules/logseq/src/views/ExternalCodeView";
-import BrowserPlugin from "../modules/browser/src/main";
-import JupyterNotebookPlugin from "../modules/jupyter/src/main";
-import BreadcrumbNavPlugin from "../modules/breadcrumb/src/main";
-import DocAssistPlugin from "../modules/doc-assist/src/main";
-import MaterialIconThemePlugin from "../modules/material-icon-theme/src/main";
-import TraceTimePlugin from "../modules/tracetime/src/main";
-import AIImageAnalyzerPlugin from "../modules/ai-image-analyzer/src/main";
-import OmnisearchPlugin from "../modules/omnisearch/src/main";
-import ObsidianGitPlugin from "../modules/obsidian-git/src/main";
-import SaveControlPlugin from "../modules/save-control/src/main";
-import OpenTabSettingsPlugin from "../modules/open-tab-settings/src/main";
-import AudioRecorderPlugin from "../modules/audio-recorder/src/main";
-import MediaJournalPlugin from "../modules/media-journal/src/main";
-import MusicPlayerPlugin from "../modules/music-player/src/main";
-import AudioPlayerPlugin from "../modules/audio-player/src/main";
-import ScrollingPlugin from "../modules/scrolling/src/core/main";
-import AbstractFolderPlugin from "../modules/abstract-folder/main";
-import MomentumPlugin from "../modules/momentum/src/main";
-import HearthPlugin from "../modules/hearth/src/main";
+import DocTreePlugin from "../modules/my-doc-tree/src/main";
+import CodeEditorPlugin from "../modules/my-code-editor/src/main";
+import LogseqEditorPlugin from "../modules/my-logseq/src/main";
+import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE } from "../modules/my-logseq/src/views/ExternalCodeView";
+import BrowserPlugin from "../modules/my-browser/src/main";
+import JupyterNotebookPlugin from "../modules/my-jupyter/src/main";
+import BreadcrumbNavPlugin from "../modules/my-breadcrumb/src/main";
+import DocAssistPlugin from "../modules/my-doc-assist/src/main";
+import MaterialIconThemePlugin from "../modules/my-material-icon-theme/src/main";
+import TraceTimePlugin from "../modules/my-tracetime/src/main";
+import AIImageAnalyzerPlugin from "../modules/my-ai-image-analyzer/src/main";
+import OmnisearchPlugin from "../modules/my-omnisearch/src/main";
+import ObsidianGitPlugin from "../modules/my-obsidian-git/src/main";
+import SaveControlPlugin from "../modules/my-save-control/src/main";
+import OpenTabSettingsPlugin from "../modules/my-open-tab-settings/src/main";
+import AudioRecorderPlugin from "../modules/my-audio-recorder/src/main";
+import MediaJournalPlugin from "../modules/my-media-journal/src/main";
+import MusicPlayerPlugin from "../modules/my-music-player/src/main";
+import AudioPlayerPlugin from "../modules/my-audio-player/src/main";
+import ScrollingPlugin from "../modules/my-scrolling/src/core/main";
+import AbstractFolderPlugin from "../modules/my-abstract-folder/main";
+import MomentumPlugin from "../modules/my-momentum/src/main";
+import HearthPlugin from "../modules/my-hearth/src/main";
 // latex-delimiter-renderer v1.0.4（Andreas Burger，MIT）：只有两个文件，且在
 // 宿主严格配置（strict + noUnusedLocals）下零错误 → 按收编判据走**源码直连**，
 // 不需要 require 桥。它是 `\(…\)` / `\[…\]` 公式渲染的正主，见模块内 NOTICE。
-import LatexDelimiterRendererPlugin from "../modules/latex-delimiter-renderer/src/main";
-// 自研统一索引搜索（modules/index-core 的消费层）：node:sqlite 磁盘索引，
+import LatexDelimiterRendererPlugin from "../modules/my-latex-delimiter-renderer/src/main";
+// 自研统一索引搜索（modules/my-index-core 的消费层）：node:sqlite 磁盘索引，
 // 与 omnisearch（minisearch/内存）平行，桌面端专用（node:sqlite 需要 Electron）。
-import UnifiedSearchPlugin from "../modules/unified-search/src/main";
+import UnifiedSearchPlugin from "../modules/my-unified-search/src/main";
 // media-extended v3 自带 obsidian@1.5.7 类型与自己的 "@/..." 别名（与
 // music-player 的 @/ 同名冲突），经 require 桥接进 bundle：不进宿主 tsc
 // 程序（类型由模块自带 tsconfig 独立校验），运行时打包不受影响。
 const MediaExtendedPlugin = (
-	require("../modules/media-extended/apps/app/src/mx-main") as {
+	require("../modules/my-media-extended/apps/app/src/mx-main") as {
 		default: new (app: unknown, manifest: unknown) => SubPluginLike;
 	}
 ).default;
@@ -68,16 +68,16 @@ const MediaExtendedPlugin = (
 // 差异），按收编判据走 require 桥：不进宿主 tsc 程序，类型由模块自带 tsconfig
 // 独立校验，运行时照常打进 bundle。
 const CustomAttachmentLocationPlugin = (
-	require("../modules/custom-attachment-location/src/main") as {
+	require("../modules/my-custom-attachment-location/src/main") as {
 		default: new (app: unknown, manifest: unknown) => SubPluginLike;
 	}
 ).default;
 // advanced-rename-and-delete-handler v2.3：custom-attachment-location v12+
 // 声明的伴生依赖（附件跟随重命名/删除的真正执行者）。同款 require 桥；
 // descriptor 里的 manifest 覆盖（id/version 特制成上游值）是 CAL 门禁能
-// 打开的关键，见 modules/advanced-rename-and-delete-handler/NOTICE。
+// 打开的关键，见 modules/my-advanced-rename-and-delete-handler/NOTICE。
 const AdvancedRenameAndDeleteHandlerPlugin = (
-	require("../modules/advanced-rename-and-delete-handler/src/main") as {
+	require("../modules/my-advanced-rename-and-delete-handler/src/main") as {
 		default: new (app: unknown, manifest: unknown) => SubPluginLike;
 	}
 ).default;
@@ -86,7 +86,7 @@ const AdvancedRenameAndDeleteHandlerPlugin = (
 // 占用，不能让它进宿主 tsc 程序；类型由模块自带 tsconfig 独立校验，运行时照常
 // 打进 bundle（.svelte 组件由根 esbuild 的 svelte 插件编译）。
 const VaultExplorerPlugin = (
-	require("../modules/vault-explorer/src/main") as {
+	require("../modules/my-vault-explorer/src/main") as {
 		default: new (app: unknown, manifest: unknown) => SubPluginLike;
 	}
 ).default;
@@ -243,7 +243,7 @@ export default class MyObsidianPlugin extends Plugin {
 			cls: OmnisearchPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
-			// 两个上游 MIT 插件的合并（见 modules/save-control/NOTICE.md）。库外
+			// 两个上游 MIT 插件的合并（见 modules/my-save-control/NOTICE.md）。库外
 			// 文件支持依赖 Node fs（快照/读写），只承诺桌面端。
 			id: "save-control",
 			legacyId: "save-history",
@@ -265,7 +265,7 @@ export default class MyObsidianPlugin extends Plugin {
 		},
 		{
 			// Third-party (Anatol Khmialeuski, MIT), kept whole — see
-			// modules/audio-recorder/NOTICE.
+			// modules/my-audio-recorder/NOTICE.
 			id: "audio-recorder",
 			legacyId: "advanced-audio-recorder",
 			name: "my Audio Recorder",
@@ -276,7 +276,7 @@ export default class MyObsidianPlugin extends Plugin {
 		},
 		{
 			// Third-party (Alaxanalax10, 0-BSD), kept whole — see
-			// modules/media-journal/NOTICE. Desktop-only like its own
+			// modules/my-media-journal/NOTICE. Desktop-only like its own
 			// manifest: screen capture needs getDisplayMedia.
 			id: "media-journal",
 			legacyId: "media-recorder",
@@ -288,7 +288,7 @@ export default class MyObsidianPlugin extends Plugin {
 		},
 		{
 			// Third-party (TracingOrigins / Kevin, MIT), kept whole — see
-			// modules/music-player/NOTICE. React UI builds through the same
+			// modules/my-music-player/NOTICE. React UI builds through the same
 			// esbuild (tsx loader + node-shim overrides for its mobile polyfills).
 			id: "music-player",
 			// Same id before and after the merge: keeps the real upstream id
@@ -302,7 +302,7 @@ export default class MyObsidianPlugin extends Plugin {
 		},
 		{
 			// Third-party (AidenLx / PKM-er, MIT), absorbed at the v3 line —
-			// see modules/media-extended/NOTICE. 4.x is closed-source; v3
+			// see modules/my-media-extended/NOTICE. 4.x is closed-source; v3
 			// (3.2.6) is the last open build. Desktop-only per its manifest.
 			id: "media-extended",
 			legacyId: "media-extended",
@@ -314,7 +314,7 @@ export default class MyObsidianPlugin extends Plugin {
 		},
 		{
 			// Three third-party plugins merged into one module — see
-			// modules/audio-player/NOTICE. media-marker (MIT, Blontern) is the
+			// modules/my-audio-player/NOTICE. media-marker (MIT, Blontern) is the
 			// base; audio-timestamp-player (0BSD, ITNQ18) contributed explicit
 			// multi-recording bindings, the cross-view floating player and
 			// source-mode link clicks; timestamp-player (MIT, Len Zhou) needed
@@ -331,7 +331,7 @@ export default class MyObsidianPlugin extends Plugin {
 		},
 		{
 			// Third-party (mnaoumov, MIT), kept whole — see
-			// modules/advanced-rename-and-delete-handler/NOTICE. Wired through
+			// modules/my-advanced-rename-and-delete-handler/NOTICE. Wired through
 			// a require bridge like custom-attachment-location (upstream imports
 			// with .ts extensions; obsidian-lib range ^4.2.1 vs root 5.1.0).
 			//
@@ -353,7 +353,7 @@ export default class MyObsidianPlugin extends Plugin {
 		},
 		{
 			// Third-party (RainCat1998 / mnaoumov, MIT), kept whole — see
-			// modules/custom-attachment-location/NOTICE. Large surface (147
+			// modules/my-custom-attachment-location/NOTICE. Large surface (147
 			// files / ~28k lines, 1673 errors under the host's strict config):
 			// wired through a require bridge, so it is type-checked by its own
 			// tsconfig instead of joining the host tsc program.
@@ -385,8 +385,8 @@ export default class MyObsidianPlugin extends Plugin {
 		},
 		{
 			// Third-party (omeyenburg / Oskar Meyenburg, MIT), kept whole — see
-			// modules/scrolling/NOTICE. Upstream history (369 commits) was grafted
-			// into this repo, so `git log --follow modules/scrolling` still works.
+			// modules/my-scrolling/NOTICE. Upstream history (369 commits) was grafted
+			// into this repo, so `git log --follow modules/my-scrolling` still works.
 			id: "scrolling",
 			legacyId: "scrolling",
 			name: "my Scrolling",
@@ -397,9 +397,9 @@ export default class MyObsidianPlugin extends Plugin {
 		},
 		{
 			// Third-party (Erfan Rahmani, GPL-3.0), kept whole — see
-			// modules/abstract-folder/NOTICE. Upstream history (161 commits) was
+			// modules/my-abstract-folder/NOTICE. Upstream history (161 commits) was
 			// grafted into this repo, so `git log --follow
-			// modules/abstract-folder` still works.
+			// modules/my-abstract-folder` still works.
 			id: "abstract-folder",
 			legacyId: "abstract-folder",
 			name: "my Abstract Folder",
@@ -409,7 +409,7 @@ export default class MyObsidianPlugin extends Plugin {
 			cls: AbstractFolderPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
-			// Two upstreams merged into one project (see modules/momentum/NOTICE):
+			// Two upstreams merged into one project (see modules/my-momentum/NOTICE):
 			// Momentum Life (jnagase, MIT) is the base; WorkLife Calendar (atinss,
 			// MIT, 145 commits grafted as a second parent) runs inside it as an
 			// in-process sub-plugin — one manifest, one data.json, the calendar's
@@ -434,7 +434,7 @@ export default class MyObsidianPlugin extends Plugin {
 		},
 		{
 			// Third-party (DecafDev, MIT), kept whole — see
-			// modules/vault-explorer/NOTICE. Wired through a require bridge like
+			// modules/my-vault-explorer/NOTICE. Wired through a require bridge like
 			// media-extended: its `src/...` imports rely on the upstream baseUrl
 			// convention and the host tsconfig's `src/*` alias already points at
 			// obsidian-git.
@@ -457,7 +457,7 @@ export default class MyObsidianPlugin extends Plugin {
 		},
 		{
 			// Third-party (Andreas Burger, MIT), kept whole — see
-			// modules/latex-delimiter-renderer/LICENSE. Straight `import`, no
+			// modules/my-latex-delimiter-renderer/LICENSE. Straight `import`, no
 			// require bridge: it compiles clean under the host tsconfig.
 			id: "latex-delimiter-renderer",
 			legacyId: "latex-delimiter-renderer",
@@ -472,7 +472,7 @@ export default class MyObsidianPlugin extends Plugin {
 			cls: LatexDelimiterRendererPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
-			// 自研（无上游）：索引本体在 modules/index-core，本模块只是它的
+			// 自研（无上游）：索引本体在 modules/my-index-core，本模块只是它的
 			// Obsidian 消费层。设计见 docs/unified-index-design.md。
 			id: "unified-search",
 			name: "my Unified Search",

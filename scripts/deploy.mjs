@@ -59,25 +59,25 @@ for (const f of ["main.js", "manifest.json", "styles.css"]) {
 // 注入内联 <style>。两者都在插件目录里按 manifest.dir 相对路径取。
 // 漏了它们 = Monaco 布局 CSS 全不生效、worker 起不来,表现为编辑器堆叠/无高亮。
 for (const f of ["monaco.css"]) {
-	const src = path.join(ROOT, "modules", "logseq", f);
+	const src = path.join(ROOT, "modules", "my-logseq", f);
 	if (!existsSync(src)) {
-		console.error(`缺少 modules/logseq/${f} —— Monaco 样式不会生效`);
+		console.error(`缺少 modules/my-logseq/${f} —— Monaco 样式不会生效`);
 		process.exit(1);
 	}
 	cpSync(src, path.join(TARGET, f));
 	console.log(`  ${f}`);
 }
 {
-	const src = path.join(ROOT, "modules", "logseq", "monaco-workers");
+	const src = path.join(ROOT, "modules", "my-logseq", "monaco-workers");
 	if (!existsSync(src)) {
-		console.error("缺少 modules/logseq/monaco-workers/ —— Monaco worker 起不来");
+		console.error("缺少 modules/my-logseq/monaco-workers/ —— Monaco worker 起不来");
 		process.exit(1);
 	}
 	cpSync(src, path.join(TARGET, "monaco-workers"), { recursive: true });
 	console.log(`  monaco-workers/`);
 }
 
-// ---- basedpyright(语言服务；宿主 = modules/code-editor 的 lsp/，2026-10-27 拆分)----
+// ---- basedpyright(语言服务；宿主 = modules/my-code-editor 的 lsp/，2026-10-27 拆分)----
 // 块内代码块的语言服务走这个:随插件部署,启动时不依赖 PATH / 网络 / uv。
 // 整个 basedpyright 目录都要带 —— dist/pyright-langserver.js 运行时读
 // 同目录的 typeshed-fallback(lspHost 的 resolvePyrightLaunch 优先用它)。
@@ -112,9 +112,9 @@ for (const f of ["monaco.css"]) {
 // 目录,所以这里从源 tools/ 取。漏了它 = 点运行弹「内核不可用」,工具栏
 // 内核状态 hover 显示「找不到内核脚本」。
 {
-	const src = path.join(ROOT, "modules", "jupyter", "tools", "syfe-kernel.py");
+	const src = path.join(ROOT, "modules", "my-jupyter", "tools", "syfe-kernel.py");
 	if (!existsSync(src)) {
-		console.error("缺少 modules/jupyter/tools/syfe-kernel.py —— notebook 无法运行单元格");
+		console.error("缺少 modules/my-jupyter/tools/syfe-kernel.py —— notebook 无法运行单元格");
 		process.exit(1);
 	}
 	cpSync(src, path.join(TARGET, "syfe-kernel.py"));

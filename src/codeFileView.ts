@@ -65,9 +65,9 @@ import { swift } from "cm-bundle:@codemirror/legacy-modes/mode/swift";
 import { toml } from "cm-bundle:@codemirror/legacy-modes/mode/toml";
 import { xml } from "cm-bundle:@codemirror/legacy-modes/mode/xml";
 import { yaml } from "cm-bundle:@codemirror/legacy-modes/mode/yaml";
-import { runFile, langFromExt } from "../modules/code-editor/src/exec/runner";
-import { TEXT_MOUNT_EXTENSIONS } from "../modules/doc-tree/src/features/mountFilter";
-import type { RunHandle } from "../modules/code-editor/src/exec/pythonRunner";
+import { runFile, langFromExt } from "../modules/my-code-editor/src/exec/runner";
+import { TEXT_MOUNT_EXTENSIONS } from "../modules/my-doc-tree/src/features/mountFilter";
+import type { RunHandle } from "../modules/my-code-editor/src/exec/pythonRunner";
 
 export const VIEW_TYPE_CODE_FILE = "lgp-code-file";
 
@@ -75,7 +75,7 @@ export const VIEW_TYPE_CODE_FILE = "lgp-code-file";
  * Extensions this plugin claims INSIDE the vault.
  *
  * 库内与库外**同一个编辑器**(用户要求):清单 = 挂载侧按内容路由的文本
- * 扩展名(modules/logseq 的 TEXT_EXTENSIONS),只排除 Markdown 与 canvas
+ * 扩展名(modules/my-logseq 的 TEXT_EXTENSIONS),只排除 Markdown 与 canvas
  * —— 它们各有自己的编辑器(块编辑器 / Obsidian 原生画布)。
  * 此前这里是一小撮「代码」扩展名,库外能混合编辑的 .json/.csv/.log/.vue/
  * .env … 在库内只能落到 Obsidian 默认查看器:同一份文件,两个编辑器。
