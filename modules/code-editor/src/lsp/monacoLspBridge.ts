@@ -123,6 +123,10 @@ function registerSemanticProviderWhenReady(plugin: LspHostLike, languageId: stri
     console.info(`[lgp-lsp] semanticTokens provider registered for ${languageId}`);
     // 图例同一 server 版本内不变;真需要刷新时 dispose 重注册即可,Emitter 留作钩子
     const changed = new monaco.Emitter<void>();
+    // ⚠️ 注册即 fire：provider 注册晚于 model 创建（pyright 启动数秒），model
+    // 的首次语义请求可能撞上 server 未就绪被记成 null——null 结果缓存后
+    // Monaco 不再主动重试。注册事件后强制重算一次。
+    window.setTimeout(() => changed.fire(), 120);
     monaco.languages.registerDocumentSemanticTokensProvider(languageId, {
       onDidChange: changed.event,
       getLegend() {

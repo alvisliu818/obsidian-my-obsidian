@@ -43,7 +43,7 @@ import { VIEW_TYPE_VIDEO, isVideoFile } from '../../doc-tree/src/views/VideoView
 import { OFFICE_EXTENSIONS } from '../../doc-tree/src/office/types';
 import { ContentSearchPanelView, VIEW_TYPE_CONTENT_SEARCH } from './panels/contentSearchPanel';
 import { RecentPanelView, VIEW_TYPE_RECENT_PANEL, pushRecent } from './panels/recentPanel';
-import { addOpenWithMenuItems } from '../../doc-tree/src/features/openWith';
+import { addOpenWithMenuItems, openWithSystemDefaultAt } from '../../doc-tree/src/features/openWith';
 import { mountDisplayName, type ExternalMount } from '../../doc-tree/src/types';
 import type { MountNode } from '../../doc-tree/src/features/mountFilter';
 import { docTreeOf } from '../../doc-tree/src/main';
@@ -65,6 +65,7 @@ import { TerminalView, VIEW_TYPE_TERMINAL } from './terminal/terminalView';
 import { shutdownPtyHelper, findNodeExe } from '../../code-editor/src/terminal/ptyClient';
 import type { ExtensionSource } from './extensions/types';
 import { registerGrammarFromExtension, unregisterGrammarFromExtension, ensureTmEngineReady } from '../../code-editor/src/extensions/tmEngine';
+import { registerTmGrammarForMonaco, disposeTmGrammarForMonaco } from '../../code-editor/src/extensions/monacoGrammarBridge';
 import { loadOpLog, logOp, flushOpLog } from './features/logger';
 import { OpLogModal } from './features/opLogModal';
 import { discoverPythonEnvs, probeVersions, spawnEnvFor, type PythonEnv } from '../../code-editor/src/exec/pythonEnvs';
@@ -142,14 +143,36 @@ export default class LogseqEditorPlugin extends Plugin {
 
     // 扩展市场：注册消费端（语法 → TextMate 引擎），预热引擎后恢复已安装扩展
     registerExtensionConsumer((ext, action) => {
-      if (action === 'install' || action === 'enable' || action === 'restore') registerGrammarFromExtension(ext);
-      else unregisterGrammarFromExtension(ext);
+      if (action === 'install' || action === 'enable' || action === 'restore') {
+        registerGrammarFromExtension(ext);
+        // 语法注册完成后**立即**挂 Monaco provider：编辑器创建可能早于扩展恢复
+        // （重载插件时 workspace 布局恢复先重建代码 tab，createEditor 时的首次
+        // registerTmGrammarForMonaco 因 fence 未命中空手而归，之后没人再补——
+        // 2026-10-29 主库实测：MagicPython 已启用但高亮仍是内置 Monarch）。
+        // setTokensProvider fire change → 已打开的 model 自动重分词，无需重开文件。
+        for (const g of ext.contributes?.grammars ?? []) {
+          if (g.language)
+            void registerTmGrammarForMonaco(g.language, { force: true }).catch((e) => {
+              console.error(`[lgp-tm] re-register Monaco provider for ${g.language} failed:`, e);
+            });
+        }
+      } else {
+        unregisterGrammarFromExtension(ext);
+        // 同步摘掉 Monaco provider，避免 fenceAlias 已删但陈旧 provider 永远生效
+        for (const g of ext.contributes?.grammars ?? []) {
+          if (g.language) disposeTmGrammarForMonaco(g.language);
+        }
+      }
       // 贡献点变化后按偏好重应用代码主题与图标主题（manager 已先加载好本扩展的
       // 贡献点再通知到这里）：装/启/恢复 → 可能切到扩展主题；禁用/卸载 → 回退内置。
       applyCodeThemePreference(this.settings.codeThemePref);
       activateIconThemeByPreference(this.settings.iconThemePref);
     });
-    void ensureTmEngineReady().catch(() => {/* wasm 失败时回落 Prism */}).then(() => restoreAllExtensions(this));
+    void ensureTmEngineReady().catch((e) => {
+      // onig wasm 加载失败会让全部 TM 语法静默失效(回落 Prism/Monarch)——
+      // 必须可见:CSP 挡 wasm-eval 时就是这里炸
+      console.error('[lgp-tm] tm engine (onig wasm) init failed:', e);
+    }).then(() => restoreAllExtensions(this));
     void loadOpLog(this);
     logOp(this, 'plugin.load', '', 'ok', `v${this.manifest.version}`);
 
@@ -1122,6 +1145,24 @@ export default class LogseqEditorPlugin extends Plugin {
       state: ViewState,
       eState?: unknown,
     ): Promise<void> {
+      // 【dirty 守卫】当前 view 有编辑痕迹（dirty=未落盘，touched=编辑过即保持，
+      // 见 tabTouch.ts / BlockEditorView.markDirty 同款）且新 state 指向别的内容
+      // → 不原地替换（原生 openFile 经 getUnpinnedLeaf 会选中 canNavigate 的
+      // active 编辑 tab 并同 type setState 换文件，把用户正在编辑的标签页连同
+      // 内容一起顶掉，2026-10-29 用户报），改到新 tab 打开。同文件重挂（刷新、
+      // 面板/设置链路）放行；目标识别不了时也放行，避免误伤内部状态切换。
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cur = this.view as any;
+      if (cur?.dirty === true || cur?.openTabSettings?.touched === true) {
+        const curKey = String(cur?.abs ?? cur?.file?.path ?? '').toLowerCase();
+        const st = (state?.state ?? {}) as { abs?: string; file?: string; path?: string };
+        const nextKey = String(st.abs ?? st.file ?? st.path ?? '').toLowerCase();
+        if (curKey && nextKey && curKey !== nextKey) {
+          const fresh = plugin.app.workspace.getLeaf('tab');
+          // 走 patch 递归一层：take-over 转换在 fresh 上照常生效
+          return fresh.setViewState(state, eState);
+        }
+      }
       // shouldTakeOverFile folds in both the settings and the per-page
       // `editor` property, so this converts even when take-over is off
       // globally but the page opts in with `editor:: logseq`.
@@ -1626,8 +1667,9 @@ export default class LogseqEditorPlugin extends Plugin {
   /**
    * 用 ExternalCodeView 打开库外代码文件(默认纯 Monaco 代码编辑器,见
    * externalCodeHybrid 默认 false;用户 2026-10-18 决策「代码文件不用混合
-   * 编辑器了」)。混合模式(注释区 = Logseq 块编辑器)仍可在设置或视图头部
-   * 按钮按文件开启。库内代码文件经 registerExtensions 同走本视图。
+   * 编辑器了」)。混合模式(注释区 = Logseq 块编辑器)仍可在设置里开启
+   * (视图头部的切换按钮已按用户 2026-10-29 要求移除)。库内代码文件经
+   * registerExtensions 同走本视图。
    */
   private async openInCodeDocView(mount: ExternalMount, node: MountNode): Promise<boolean> {
     if (!isTextFileName(node.name)) return false;
@@ -1740,7 +1782,7 @@ export default class LogseqEditorPlugin extends Plugin {
         content: data,
         mountPath: mount.path,
         mountLabel: mount.label,
-        // 右键「纯代码编辑器」入口:该文件覆盖为纯源码呈现(可头部按钮切回)
+        // 右键「纯代码编辑器」入口:该文件覆盖为纯源码呈现(设置里可改默认)
         hybrid: false,
       },
     });
@@ -1865,6 +1907,18 @@ export default class LogseqEditorPlugin extends Plugin {
     // are full doc-tree ExternalMounts at runtime.
     openExternalEntry: (mount, node) => this.openExternalEntry(mount as ExternalMount, node),
       revealInSystem: (abs) => dt?.revealInSystem(abs),
+      // 右键上下文菜单（面包屑段/文件名/路径面板行）：库外文件夹/文件的完整
+      // 菜单（重命名/删除/复制路径/系统操作 + 其他插件 file-menu 转发项）。
+      paneMenuHost: dt
+        ? {
+            app: this.app,
+            canOpenNativeExternal: () => this.canOpenNativeExternal(),
+            revealInSystem: (abs) => dt.revealInSystem(abs),
+            openWithSystem: (abs) => { void openWithSystemDefaultAt(abs); },
+            refreshMounts: () => dt.refreshMounts(),
+            vaultBasePath: () => dt.vaultBasePath(),
+          }
+        : undefined,
     };
   }
 }

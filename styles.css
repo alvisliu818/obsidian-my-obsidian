@@ -4258,6 +4258,24 @@ body.lgp-table-editor-cw-cursor * {
   color: var(--text-accent);
 }
 
+/* 右键打开上下文菜单时，被右键的那个项的"按住"指示（菜单关掉即移除）。
+   段/文件名是行内 span（无背景框），面板行是 menu-item——两处都点亮。 */
+.lgp-hdr-ctx-open {
+  background-color: var(--background-modifier-active-hover) !important;
+  box-shadow: inset 0 0 0 1px var(--background-modifier-border-hover);
+  border-radius: var(--radius-s, 4px);
+}
+span.lgp-hdr-ctx-open {
+  color: var(--text-normal);
+  text-decoration: underline;
+}
+.menu-item.lgp-hdr-ctx-open {
+  background-color: var(--background-modifier-active-hover);
+}
+.menu-item.lgp-hdr-ctx-open .menu-item-title {
+  color: var(--text-accent);
+}
+
 /* 文件项没有三角，但要在图标前占同样的格位，图标列才与同层文件夹对齐
    （同挂载面板树行：文件行补上折叠箭头的列宽） */
 /* 路径菜单里的条目图标与虚拟文档树同源（Material）：
@@ -4480,11 +4498,6 @@ body.lgp-table-editor-cw-cursor * {
   width: 100%;
   /* 背景与主 Monaco(editor.background)一致 —— 整页同一张底色。 */
   background: var(--background-primary);
-}
-
-/* 视图头部的混合模式按钮:开启时高亮,一眼能看出当前是哪种呈现。 */
-.view-action.logseq-external-hybrid-on {
-  color: var(--text-accent);
 }
 
 /* --------------------------------------------------------------------------
@@ -8912,6 +8925,14 @@ div:hover > .git-gutter-marker.git-changedelete {
 }
 
 .logseq-external-block-host .workspace-leaf-content > .view-content {
+  padding: 0;
+  overflow: hidden;
+}
+
+/* External code view — 同上：Obsidian 给 .view-content 的 12px 左右内边距让
+   Monaco 滚动条右侧悬空一条白带（用户 2026-10-29 报「右侧间隙」）。归零后
+   滚动条贴边。完整 rationale 见 modules/logseq/styles.css 代码视图段。 */
+.view-content.logseq-external-code-view.view-content.logseq-external-code-view {
   padding: 0;
   overflow: hidden;
 }

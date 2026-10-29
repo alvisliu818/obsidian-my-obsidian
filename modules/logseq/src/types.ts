@@ -295,7 +295,8 @@ export interface BlockEditorSettings {
    * 代码流里):可编辑、按 Markdown 渲染、写 [[双链]]。代码块仍由 Monaco 编辑。
    *
    * 默认开启——注释本来就是给人读的笔记,让它能被当成笔记编辑是这个插件的
-   * 初衷。单个文件可在视图头部临时反向覆盖(设置里的是默认值)。
+   * 初衷。单个文件的临时反向覆盖只来自打开入口/布局恢复的 state(设置里的是
+   * 默认值;视图头部切换按钮已按用户 2026-10-29 要求移除)。
    * 关掉则回到「整文件一台 Monaco」的纯源码形态。
    */
   externalCodeHybrid: boolean;
@@ -415,7 +416,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   // 展开 Unlinked references 也是 ~10ms。不想常驻那点内存的可关掉。
   unlinkedScanPrewarm: true,
   // 代码文件默认纯 Monaco 编辑器(用户 2026-10-18 决策);混合模式(注释区 =
-  // Logseq 块编辑器)保留为设置/头部按钮可选,不再作为默认。
+  // Logseq 块编辑器)保留为设置可选,不再作为默认(头部按钮已移除)。
   externalCodeHybrid: false,
   lspEnabled: true,
   lspServers: [],

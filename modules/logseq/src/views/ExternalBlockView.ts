@@ -31,7 +31,7 @@ import { BlockEditorView } from '../view/BlockEditorView';
 import type { MountNode } from '../../../doc-tree/src/features/mountFilter';
 import { installExternalAttachmentHandlers } from '../features/externalAttachment';
 import { docTreeOf } from '../../../doc-tree/src/main';
-import { applyHeaderPath, headerPathSegments } from './headerPath';
+import { applyHeaderPath, headerSegmentsFor, isUnderMount, matchMountFor } from './headerPath';
 
 export const VIEW_TYPE_EXTERNAL_BLOCK = 'logseq-external-block';
 
@@ -115,10 +115,19 @@ export class ExternalBlockView extends ItemView {
    */
   syncHeaderPath(): void {
     if (!this.abs) return;
+    // state 缺 mountPath（部分打开入口不传、老页签恢复）→ 从挂载配置找回，
+    // 否则 relFromMount 退成裸文件名，面包屑丢掉挂载内的子目录链。
+    if (!this.mountPath || !isUnderMount(this.abs, this.mountPath)) {
+      const m = matchMountFor(this.abs, docTreeOf(this.app)?.settings.externalMounts ?? []);
+      if (m) {
+        this.mountPath = m.path;
+        if (!this.mountLabel) this.mountLabel = m.label;
+      }
+    }
     const rel = this.rel || this.relFromMount();
     const label = this.mountLabel || this.mountLabelFromSettings();
-    const segments = headerPathSegments(this.abs, rel, label);
-    if (segments.length) segments[0].isMount = true;
+    // 挂载文件走「挂载名 / 子目录」链；不在任何挂载下则按库内文件走「/ + 库内目录链」
+    const segments = headerSegmentsFor(this.app, this.abs, rel, label);
     applyHeaderPath(this.containerEl, segments, this.plugin.headerMenuHost, this.abs);
   }
 

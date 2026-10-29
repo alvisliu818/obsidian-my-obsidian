@@ -4327,6 +4327,17 @@ body.lgp-table-editor-cursor * {
   height: 100%;
 }
 
+/* Obsidian 给 .view-content 留了 12px 左右内边距（CDP 实测 2026-10-29：
+   view-content right=1707.3 vs Monaco 右缘=1694.8），Monaco 的滚动条因此
+   离窗口右缘悬空一条白带 —— 用户报「最右侧有一条空白，在滚动条旁边」。
+   代码视图是 IDE 面，归零内边距让滚动条贴边（VS Code 观感）；外部块视图
+   早有同款处理（root styles.css 的 logseq-external-block-view 段）。
+   双重类名是为压过主题/核心对 .view-content 的同属性规则。 */
+.view-content.logseq-external-code-view.view-content.logseq-external-code-view {
+  padding: 0;
+  overflow: hidden;
+}
+
 .logseq-external-code-host {
   flex: 1 1 auto;
   min-height: 0;
@@ -4364,11 +4375,6 @@ body.lgp-table-editor-cursor * {
 .lgp-hybrid-note-code {
   width: 100%;
   background: var(--background-primary);
-}
-
-/* 视图头部的混合模式按钮:开启时高亮,一眼能看出当前是哪种呈现。 */
-.view-action.logseq-external-hybrid-on {
-  color: var(--text-accent);
 }
 
 /* --------------------------------------------------------------------------

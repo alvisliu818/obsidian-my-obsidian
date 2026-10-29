@@ -29,7 +29,8 @@ import type LogseqEditorPlugin from '../main';
 import { relativeDisplayPath } from '../features/codeFileKind';
 import { setLeafTitle } from '../features/leafTitle';
 import { docTreeOf } from '../../../doc-tree/src/main';
-import { applyHeaderPath, headerPathSegments } from './headerPath';
+import { applyHeaderPath, headerSegmentsFor, isUnderMount, matchMountFor } from './headerPath';
+import { markLeafTouched } from './tabTouch';
 import { HybridCodeEditor } from './hybridCodeEditor';
 import { runFile, langFromExt } from '../../../code-editor/src/exec/runner';
 import type { RunHandle } from '../../../code-editor/src/exec/pythonRunner';
@@ -97,15 +98,13 @@ export class ExternalCodeView extends ItemView {
    */
   private hybridEngine: HybridCodeEditor | null = null;
   /**
-   * 当前文件对混合模式的临时覆盖(视图头部按钮切换)。null = 跟随设置里的默认值。
-   * 重新 mount 与 remount 都读它,所以切换后重挂载不会退回设置值。
+   * 当前文件对混合模式的呈现覆盖。null = 跟随设置里的默认值。
+   * 来源:打开入口的 state.hybrid / 布局恢复的持久化 state(视图头部的切换按钮
+   * 已按用户 2026-10-29 要求移除,不再产生新的运行时覆盖)。
    */
   private hybridOverride: boolean | null = null;
   /** 原文件是否 CRLF(混合模式落盘时还原) */
   private crlf = false;
-  private actionAdded = false;
-  /** 视图头部的混合模式按钮(切换后要改图标与提示) */
-  private actionEl: HTMLElement | null = null;
 
   /** 设置里的默认值,可被本文件的临时覆盖反向取值。
    *  默认纯代码编辑器(用户 2026-10-18 决策):externalCodeHybrid 缺省/为 false
@@ -117,24 +116,6 @@ export class ExternalCodeView extends ItemView {
   /** 当前生效的混合模式(临时覆盖优先,否则设置默认) */
   get hybrid(): boolean {
     return this.hybridOverride ?? this.hybridDefault();
-  }
-
-  private async toggleHybrid(): Promise<void> {
-    // 先落盘:切换要重挂载,缓冲区会随引擎一起销毁。
-    await this.flush();
-    this.hybridOverride = !this.hybrid;
-    this.mount();
-  }
-
-  /** 头部按钮按当前模式改图标与提示(纯源码 → 混合,混合 → 纯源码)。 */
-  private syncAction(): void {
-    const el = this.actionEl;
-    if (!el) return;
-    const on = this.hybrid;
-    el.setAttribute('aria-label', on ? '切换为纯源码模式' : '切换为混合模式（注释可编辑）');
-    el.setAttribute('title', on ? '切换为纯源码模式' : '切换为混合模式（注释可编辑）');
-    // 混合模式图标高亮,一眼能看出当前是哪种呈现。
-    el.toggleClass('logseq-external-hybrid-on', on);
   }
 
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
@@ -167,16 +148,6 @@ export class ExternalCodeView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
-    if (!this.actionAdded) {
-      this.actionAdded = true;
-      // 视图头部按钮:临时反向覆盖当前文件的呈现方式(设置里的是默认值)。
-      // 放在头部而不是提示栏里,因为提示栏可以被设置关掉——按钮得始终可达。
-      this.actionEl = this.addAction(
-        'list',
-        '混合模式：注释用 Logseq 编辑器编辑',
-        () => void this.toggleHybrid(),
-      );
-    }
     // Mounting waits for setState: Obsidian calls onOpen BEFORE setState, so
     // mounting here would build an empty editor for a file whose path and
     // content have not arrived yet — and the state that carries them is the
@@ -226,18 +197,29 @@ export class ExternalCodeView extends ItemView {
         this.fileName = s.file.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? s.file;
       }
     }
+    // state 没带 mountPath（部分打开入口不传、老页签恢复）或挂载已挪位 →
+    // 按最长前缀从挂载配置找回：否则 displayPath 退成裸文件名，头部面包屑
+    // 丢掉挂载内的整段子目录链（2026-10-29 用户报：深 5 层的文件只剩
+    // 「挂载名 / 文件名」，中间 4 层全没）。
+    if (this.abs && (!this.mountPath || !isUnderMount(this.abs, this.mountPath))) {
+      const m = matchMountFor(this.abs, docTreeOf(this.app)?.settings.externalMounts ?? []);
+      if (m) {
+        this.mountPath = m.path;
+        if (!this.mountLabel) this.mountLabel = m.label;
+      }
+    }
     this.displayPath = relativeDisplayPath(this.abs, this.mountPath, this.fileName);
     await super.setState(state, result);
     // Now the path is known; build the editor if onOpen ran before us.
     if (!this.editor && this.abs) this.mount();
-    // 视图头部的完整路径（挂载名 / 子目录 / …）：库外文件没有库内路径，
-    // Obsidian 不会给自定义视图生成目录链。
-    const segments = headerPathSegments(
+    // 视图头部的完整路径（挂载名 / 子目录 / …；库内文件则是 / + 库内目录链）：
+    // 库外文件没有库内路径，Obsidian 不会给自定义视图生成目录链。
+    const segments = headerSegmentsFor(
+      this.app,
       this.abs,
       this.displayPath || this.fileName,
       this.mountLabel || this.mountLabelFromSettings(),
     );
-    if (segments.length) segments[0].isMount = true;
     applyHeaderPath(this.containerEl, segments, this.plugin.headerMenuHost, this.abs);
   }
 
@@ -272,6 +254,8 @@ export class ExternalCodeView extends ItemView {
   /** 防抖自动保存(与库内编辑器同节奏:不是每敲一个键就写盘)。 */
   private scheduleSave(): void {
     this.dirty = true;
+    // 编辑过的 tab 对「复用/替换」保护(见 tabTouch.ts;落盘不清,对齐原生 md)
+    markLeafTouched(this.leaf);
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
     this.saveTimer = window.setTimeout(() => void this.flush(), 900);
   }
@@ -373,7 +357,6 @@ export class ExternalCodeView extends ItemView {
       // 无匹配 server 或 LSP 关闭时 attach 返回空数组,零开销
       this.lspDisposables = monacoLspAttach(this.plugin, this.editor, language, docUri);
     }
-    this.syncAction();
     this.editor?.focus();
     // The leaf's own view header caches the name it was mounted with; on a fresh
     // mount that is nothing, on a re-mount it is the previous file. Writing it

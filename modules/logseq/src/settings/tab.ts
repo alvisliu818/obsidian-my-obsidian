@@ -829,7 +829,7 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
     });
 
     const envs = this.plugin.discoveredPythonEnvs();
-    new Setting(containerEl)
+    const envSetting = new Setting(containerEl)
       .setName('Python 环境')
       .setDesc(this.plugin.activePythonEnvLabel())
       .addDropdown((d) => {
@@ -841,8 +841,9 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         d.onChange(async (v) => {
           this.plugin.settings.pythonEnvId = v;
           await this.plugin.saveSettings();
-          this.plugin.applyPythonEnv();
-          this.display();
+          await this.plugin.applyPythonEnv();
+          // 就地刷新描述,不重建整页(整页 this.display() 会把设置页滚回顶部)
+          envSetting.setDesc(this.plugin.activePythonEnvLabel());
         });
       })
       .addExtraButton((b) =>
@@ -851,7 +852,9 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
           .setTooltip('重新扫描环境')
           .onClick(async () => {
             await this.plugin.refreshPythonEnvs();
+            const st = this.containerEl.scrollTop;
             this.display();
+            this.containerEl.scrollTop = st;
             new Notice(`已扫描到 ${this.plugin.discoveredPythonEnvs().length} 个 Python 环境`);
           }),
       );

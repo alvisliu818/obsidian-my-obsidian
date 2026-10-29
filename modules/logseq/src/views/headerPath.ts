@@ -7,10 +7,12 @@
  * 的 DOM 结构补上「挂载名 / 子目录 / … /」，观感与库内笔记一致。
  */
 
-import { Menu, Notice } from 'obsidian';
+import { Menu, Notice, TFile } from 'obsidian';
 import type { App } from 'obsidian';
 import { scanExternal } from '../../../doc-tree/src/features/extFs';
 import { iconForEntry } from '../../../doc-tree/src/features/iconTheme';
+import { buildExternalPaneMenu, type PaneMenuHost } from '../../../doc-tree/src/features/externalPaneMenu';
+import { docTreeOf } from '../../../doc-tree/src/main';
 
 export interface HeaderSegment {
 	/** 这一段显示的文字 */
@@ -19,6 +21,8 @@ export interface HeaderSegment {
 	abs: string;
 	/** 挂载名那一段（它的同级是别的挂载，不是磁盘目录） */
 	isMount?: boolean;
+	/** 库根那一段「/」（点击列库根的顶层条目，不是同级） */
+	isVaultRoot?: boolean;
 }
 
 /** 打开菜单需要的插件能力（结构化类型，免得这里反向依赖 main.ts）。 */
@@ -41,6 +45,10 @@ export interface HeaderMenuHost {
 	app: App;
 	openExternalEntry(mount: ExternalMountLike, node: MountNodeLike): Promise<void>;
 	revealInSystem(abs: string): void;
+	/** 库外文件夹/文件的完整上下文菜单（重命名/删除/复制路径/系统操作 + 其
+	 *  他插件的 file-menu 转发项）。右键面包屑段/文件名/菜单行时用它弹真正的
+	 *  文件夹菜单或文件菜单；缺省时右键回退到同级路径面板。 */
+	paneMenuHost?: PaneMenuHost;
 }
 
 /**
@@ -75,6 +83,76 @@ export function headerPathSegments(abs: string, rel: string, mountLabel: string)
 	return out;
 }
 
+/** Obsidian 库适配器的极小子集（拿库根的磁盘绝对路径）。 */
+interface VaultAdapterLike {
+	getFullPath?: (p: string) => string;
+	basePath?: string;
+}
+
+/** 库根的磁盘绝对路径（无尾分隔符）。拿不到（适配器怪异）时返回空串。 */
+export function vaultRootOf(app: App): string {
+	const adapter = (app?.vault as { adapter?: VaultAdapterLike } | undefined)?.adapter;
+	let base = '';
+	if (adapter && typeof adapter.getFullPath === 'function') {
+		try {
+			base = String(adapter.getFullPath('') ?? '');
+		} catch {
+			/* fall through to basePath */
+		}
+	}
+	if (!base) base = String(adapter?.basePath ?? '');
+	return norm(base).replace(/\/+$/, '');
+}
+
+/**
+ * 库内文件的路径段：首段是库根「/」，其后是库内子目录链。
+ *
+ * 库内代码文件（registerExtensions 路由进 ExternalCodeView）不在任何挂载下，
+ * Obsidian 又不给自定义视图生成目录链——库根文件连一个段都没有，嵌套文件
+ * 同样全空（2026-10-29 用户报：库根下的 .py 面包屑上没有根路径）。这里把
+ * 路径画成绝对路径的样子：「/」+ 子目录 + 文件名（标题本身）。
+ */
+export function vaultSegments(vaultRoot: string, abs: string): HeaderSegment[] {
+	const root = norm(vaultRoot).replace(/\/+$/, '');
+	const full = norm(abs);
+	if (!root || !full.toLowerCase().startsWith(root.toLowerCase() + '/')) return [];
+	const parts = full.slice(root.length + 1).split('/');
+	parts.pop(); // 最后一段是文件名本身，交给标题
+	const out: HeaderSegment[] = [{ label: '/', abs: root, isVaultRoot: true }];
+	let cur = root;
+	for (const part of parts) {
+		cur = `${cur}/${part}`;
+		out.push({ label: part, abs: cur });
+	}
+	return out;
+}
+
+/**
+ * 视图头部路径的统一入口：挂载文件走「挂载名 / 子目录」链（并标好 isMount），
+ * 不在任何挂载下的文件按库内文件走「/ + 库内目录链」。
+ *
+ * 挂载优先于库：挂载可以指向库内子目录，此时它更具体，面包屑跟着挂载走。
+ */
+export function headerSegmentsFor(
+	app: App,
+	abs: string,
+	rel: string,
+	mountLabel: string,
+): HeaderSegment[] {
+	const full = norm(abs);
+	if (!full) return [];
+	const m = mountLabel ? null : matchMountFor(abs, docTreeOf(app)?.settings.externalMounts ?? []);
+	if (mountLabel || m) {
+		const segments = headerPathSegments(abs, rel, mountLabel || m?.label || '');
+		if (segments.length) segments[0].isMount = true;
+		return segments;
+	}
+	const vault = vaultRootOf(app);
+	if (vault) return vaultSegments(vault, abs);
+	// 连库根都定位不了：维持旧兜底（rel 里的子目录链，通常为空）
+	return headerPathSegments(abs, rel, '');
+}
+
 /** 把路径段画成原生样式的 view-header 面包屑；重复调用会先清空。 */
 export function renderHeaderPath(
 	container: HTMLElement,
@@ -83,18 +161,29 @@ export function renderHeaderPath(
 ): void {
 	container.empty();
 	for (const seg of segments) {
-		const span = container.createSpan({ cls: 'view-header-breadcrumb', text: seg.label });
+		// 库根段「/」用分隔符的样式画：整个面包屑读起来就是一条绝对路径
+		const span = container.createSpan({
+			cls: seg.isVaultRoot
+				? 'view-header-breadcrumb view-header-breadcrumb-separator'
+				: 'view-header-breadcrumb',
+			text: seg.label,
+		});
 		span.setAttribute('aria-label', seg.label);
 		span.setAttribute('draggable', 'true');
-		span.title = `${seg.abs}（点击查看同级）`;
+		span.title = `${seg.abs}（点击查看${seg.isVaultRoot ? '根目录' : '同级'}）`;
 		if (host) {
 			attachHeaderMenu(span, host, {
 				abs: seg.abs,
 				currentAbs: seg.abs,
 				isMount: seg.isMount,
+				// 库根没有「同级」：点它列库根的顶层条目
+				viewDir: seg.isVaultRoot,
 			});
 		}
-		container.createSpan({ cls: 'view-header-breadcrumb-separator', text: '/' });
+		// 库根段后面不再补分隔符——它自己就是那条「/」，再补就成了「/ /」
+		if (!seg.isVaultRoot) {
+			container.createSpan({ cls: 'view-header-breadcrumb-separator', text: '/' });
+		}
 	}
 }
 
@@ -129,6 +218,27 @@ function relUnder(mount: ExternalMountLike, abs: string): string {
 	const root = norm(mount.path).replace(/\/+$/, '');
 	const full = norm(abs);
 	return full.toLowerCase().startsWith(root.toLowerCase() + '/') ? full.slice(root.length + 1) : '';
+}
+
+/** 菜单里点一个文件：挂载文件走虚拟文档树入口；库内文件走 Obsidian 打开
+ *  （代码扩展名会按 registerExtensions 路由进代码视图）。 */
+function openFileEntry(host: HeaderMenuHost, abs: string): void {
+	const mount = findMount(host, abs);
+	if (mount) {
+		void host.openExternalEntry(mount, {
+			name: basenameOf(abs),
+			rel: relUnder(mount, abs) || basenameOf(abs),
+			abs,
+			isDir: false,
+			children: [],
+		});
+		return;
+	}
+	const root = vaultRootOf(host.app);
+	const full = norm(abs);
+	if (!root || !full.toLowerCase().startsWith(root.toLowerCase() + '/')) return;
+	const target = host.app.vault.getAbstractFileByPath(full.slice(root.length + 1));
+	if (target instanceof TFile) void host.app.workspace.getLeaf(false).openFile(target);
 }
 
 /** 一个目录下的直接条目：文件夹在前，各自按名称排。 */
@@ -188,7 +298,13 @@ interface MenuTarget {
  * 高亮是整行底色 + 强调色，不用 setChecked：那个只放一个 ✓，语义是"已选中"，
  * 放在"你当前在这里"上会读成勾选项。
  */
-function openHeaderMenu(anchor: HTMLElement, host: HeaderMenuHost, target: MenuTarget): void {
+function openHeaderMenu(
+	anchor: HTMLElement,
+	host: HeaderMenuHost,
+	target: MenuTarget,
+	atX?: number,
+	atY?: number,
+): void {
 	const menu = new Menu();
 	const entries: { name: string; abs: string; isDir: boolean }[] = [];
 	// 点文件夹（名字或左侧三角）= 展开/收起，展开的行就地插在同一张菜单里，
@@ -198,11 +314,15 @@ function openHeaderMenu(anchor: HTMLElement, host: HeaderMenuHost, target: MenuT
 		addMountLevel(menu, host, entries, toggles);
 	} else {
 		const dirAbs = target.viewDir ? target.abs : parentOf(target.abs);
-		addDirLevel(menu, host, dirAbs, target.currentAbs, entries, toggles, menu);
+		addDirLevel(menu, host, dirAbs, entries, toggles, menu);
 	}
 	addTail(menu, host, target.abs);
-	const rect = anchor.getBoundingClientRect();
-	menu.showAtPosition({ x: rect.left, y: rect.bottom + 2 });
+	if (typeof atX === 'number' && typeof atY === 'number') {
+		menu.showAtPosition({ x: atX, y: atY });
+	} else {
+		const rect = anchor.getBoundingClientRect();
+		menu.showAtPosition({ x: rect.left, y: rect.bottom + 2 });
+	}
 	// 挂载那一段的菜单里写的是挂载名（不是目录名），所以点亮也得按挂载名比。
 	decorateMenu(
 		menu,
@@ -222,13 +342,50 @@ function mountAtRoot(host: HeaderMenuHost, rootAbs: string): ExternalMountLike |
 	return null;
 }
 
-/** 点某一段 / 文件名：同级菜单。 */
+/**
+ * 右键：弹**真正的文件夹/文件上下文菜单**（重命名/删除/复制路径/系统操作 +
+ * 其他插件的 file-menu 转发项），锚在鼠标位置——不是同级路径面板。
+ * 被右键的项加高亮 class（menu.onHide 时移除）；没装配 paneMenuHost 时回退到
+ * 同级面板（与左键同款）。
+ */
+export function openEntryContextMenu(
+	host: HeaderMenuHost,
+	abs: string,
+	fileName: string,
+	isDir: boolean,
+	x: number,
+	y: number,
+	anchor?: HTMLElement,
+): void {
+	const menu = new Menu();
+	if (anchor) {
+		anchor.addClass('lgp-hdr-ctx-open');
+		menu.onHide(() => anchor.removeClass('lgp-hdr-ctx-open'));
+	}
+	if (host.paneMenuHost) {
+		buildExternalPaneMenu(host.paneMenuHost, menu, { abs, fileName, isDir });
+	} else {
+		// 回退：宿主没给 paneMenuHost（老装配）→ 同级面板也能用
+		openHeaderMenu(document.body as HTMLElement, host, { abs, currentAbs: abs }, x, y);
+		return;
+	}
+	menu.showAtPosition({ x, y });
+}
+
+/** 点某一段 / 文件名：左键同级菜单（VSCode 面包屑同款）；右键文件夹/文件菜单。 */
 export function attachHeaderMenu(el: HTMLElement, host: HeaderMenuHost, target: MenuTarget): void {
 	el.addClass('lgp-hdr-crumb');
+	const openAt = (x?: number, y?: number): void => openHeaderMenu(el, host, target, x, y);
 	el.addEventListener('click', (ev) => {
 		ev.preventDefault();
 		ev.stopPropagation();
-		openHeaderMenu(el, host, target);
+		openAt();
+	});
+	el.addEventListener('contextmenu', (ev) => {
+		ev.preventDefault();
+		ev.stopPropagation();
+		// 面包屑段全部是目录（文件名是独立标题，不在这里）→ 文件夹菜单
+		openEntryContextMenu(host, target.abs, basenameOf(target.abs), true, ev.clientX, ev.clientY, el);
 	});
 }
 
@@ -266,6 +423,16 @@ function decorateMenu(
 					slot.empty();
 					slot.appendChild(entryIcon(host, entry));
 				}
+				// 右键：这一项自己的文件夹/文件上下文菜单。**不要 hide 同级面板**：
+				// 上下文菜单浮在它上面，关掉后同级面板还在（2026-10-29 用户要求）
+				el.addEventListener('contextmenu', (ev) => {
+					ev.preventDefault();
+					ev.stopPropagation();
+					openEntryContextMenu(
+						host, entry.abs, entry.name, entry.isDir,
+						(ev as MouseEvent).clientX, (ev as MouseEvent).clientY, el,
+					);
+				});
 				if (entry.isDir) addTwisty(el, entry.abs, host, toggles, menu, currentName, 0);
 				else addGutter(el);
 			}
@@ -364,6 +531,17 @@ function makeRow(
 
 	if (entry.name === currentName) row.addClass('lgp-hdr-current');
 
+	// 右键：这一行自己的文件夹/文件上下文菜单。不 hide 同级面板——上下文
+	// 菜单浮在它上面，关掉后同级面板还在（2026-10-29 用户要求）。
+	row.addEventListener('contextmenu', (ev) => {
+		ev.preventDefault();
+		ev.stopPropagation();
+		openEntryContextMenu(
+			host, entry.abs, entry.name, entry.isDir,
+			(ev as MouseEvent).clientX, (ev as MouseEvent).clientY, row,
+		);
+	});
+
 	if (entry.isDir) {
 		// 三角要插在图标左侧，所以先建行再加
 		window.requestAnimationFrame(() =>
@@ -375,19 +553,42 @@ function makeRow(
 			ev.preventDefault();
 			ev.stopPropagation();
 			menu.hide();
-			const mount = findMount(host, entry.abs);
-			if (mount) {
-				void host.openExternalEntry(mount, {
-					name: entry.name,
-					rel: relUnder(mount, entry.abs) || entry.name,
-					abs: entry.abs,
-					isDir: false,
-					children: [],
-				});
-			}
+			openFileEntry(host, entry.abs);
 		});
 	}
 	return row;
+}
+
+/** abs 是否严格位于挂载根之下（不等于根本身；分隔符/大小写归一后比较）。 */
+export function isUnderMount(abs: string, mountRoot: string): boolean {
+	const root = norm(mountRoot).replace(/\/+$/, '').toLowerCase();
+	return !!root && norm(abs).toLowerCase().startsWith(root + '/');
+}
+
+/**
+ * 按 abs 最长前缀在挂载配置里找回挂载（path + label）。
+ *
+ * 视图 state 缺 mountPath/mountLabel（部分打开入口不传、老页签恢复）时兜底：
+ * 没有挂载根，`relativeDisplayPath` 会退成裸文件名，头部面包屑就丢掉挂载内的
+ * 整段子目录链（2026-10-29 用户报：深 5 层的文件只剩「挂载名 / 文件名」，
+ * 中间 4 层目录全没）。严格要求 abs 在挂载之下；并列时取更长的前缀。
+ */
+export function matchMountFor(
+	abs: string,
+	mounts: ExternalMountLike[],
+): { path: string; label: string } | null {
+	const full = norm(abs).toLowerCase();
+	let best: { path: string; label: string } | null = null;
+	let bestLen = -1;
+	for (const m of mounts) {
+		const root = norm(m.path).replace(/\/+$/, '').toLowerCase();
+		if (!root || !full.startsWith(root + '/')) continue;
+		if (root.length > bestLen) {
+			bestLen = root.length;
+			best = { path: m.path, label: m.label || '' };
+		}
+	}
+	return best;
 }
 
 function parentOf(abs: string): string {
@@ -448,7 +649,6 @@ function addDirLevel(
 	menu: Menu,
 	host: HeaderMenuHost,
 	dirAbs: string,
-	currentAbs: string,
 	entries: { name: string; abs: string; isDir: boolean }[],
 	toggles: Map<string, () => void>,
 	owner: Menu,
@@ -458,7 +658,6 @@ function addDirLevel(
 		menu.addItem((it) => it.setTitle('（空）').setDisabled(true));
 		return;
 	}
-	const mount = findMount(host, dirAbs) ?? findMount(host, currentAbs);
 	for (const entry of items) {
 		menu.addItem((it) => {
 			it.setTitle(entry.name).setIcon(entry.isDir ? 'folder' : fileIcon(entry.name));
@@ -467,16 +666,10 @@ function addDirLevel(
 			if (entry.isDir) {
 				// 三角（也就是展开动作）要等菜单挂上 DOM 才有，先按名字记账
 				it.onClick(() => toggles.get(entry.name)?.());
-			} else if (mount) {
+			} else {
 				it.onClick(() => {
 					owner.hide();
-					void host.openExternalEntry(mount, {
-						name: entry.name,
-						rel: relUnder(mount, entry.abs) || entry.name,
-						abs: entry.abs,
-						isDir: false,
-						children: [],
-					});
+					openFileEntry(host, entry.abs);
 				});
 			}
 			return it;
@@ -512,7 +705,8 @@ export function applyHeaderPath(
 }
 
 /**
- * 文件名（标题）也点得动：弹出它所在目录的同级，当前文件高亮。
+ * 文件名（标题）也点得动：左键弹它所在目录的同级（当前文件高亮），右键弹
+ * 这个文件的上下文菜单（重命名/删除/复制路径/系统操作）。
  * 标题节点由框架持有、每次 setState 复用，所以只挂一次监听。
  */
 function attachTitleMenu(host: HTMLElement, menuHost: HeaderMenuHost, fileAbs: string): void {
@@ -520,6 +714,19 @@ function attachTitleMenu(host: HTMLElement, menuHost: HeaderMenuHost, fileAbs: s
 	if (!title) return;
 	if (title.dataset['lgpHdrMenu'] === '1') return;
 	title.dataset['lgpHdrMenu'] = '1';
-	title.title = `${norm(fileAbs)}（点击查看同级）`;
-	attachHeaderMenu(title, menuHost, { abs: fileAbs, currentAbs: fileAbs });
+	title.title = `${norm(fileAbs)}（点击查看同级，右键文件菜单）`;
+	title.addClass('lgp-hdr-crumb');
+	title.addEventListener('click', (ev) => {
+		ev.preventDefault();
+		ev.stopPropagation();
+		openHeaderMenu(title, menuHost, { abs: fileAbs, currentAbs: fileAbs });
+	});
+	title.addEventListener('contextmenu', (ev) => {
+		ev.preventDefault();
+		ev.stopPropagation();
+		openEntryContextMenu(
+			menuHost, fileAbs, basenameOf(fileAbs), false,
+			(ev as MouseEvent).clientX, (ev as MouseEvent).clientY, title,
+		);
+	});
 }

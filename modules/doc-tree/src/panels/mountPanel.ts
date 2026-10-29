@@ -65,6 +65,14 @@ export const VIEW_TYPE_MOUNT_PANEL = 'logseq-mount-panel';
 
 /** Must match the row height in styles.css so the spacer maths stays honest. */
 const MOUNT_ROW_HEIGHT = 25;
+
+/** 带 abs 的外部视图类型（activeAbsPath 按它取当前文件；与各视图的 getViewType 对齐）。 */
+const EXTERNAL_ABS_VIEW_TYPES = new Set([
+	'logseq-external-block',
+	'logseq-external-code',
+	'logseq-external-file',
+	'logseq-code-doc',
+]);
 /** Rows drawn beyond the viewport on each side, so fast scrolling stays filled. */
 const MOUNT_OVERSCAN = 8;
 
@@ -372,14 +380,19 @@ export class MountPanelView extends ItemView {
 
   /** Find a node by its mount-relative path among the layers loaded so far. */
   /** 当前正在编辑文件的绝对路径：库内文件取库根+路径；挂载树打开的库外文件
-   *  没有 TFile，从外部块编辑器视图的 abs 拿。视图类型用字符串比对而不是
-   *  import，避免 main → mountPanel → ExternalBlockView → main 循环依赖。 */
+   *  没有 TFile，从外部视图的 abs 拿。视图类型用字符串比对而不是 import，
+   *  避免 main → mountPanel → ExternalBlockView → main 循环依赖。
+   *  名单必须覆盖**所有**带 abs 的外部视图：external-block（md）、
+   *  external-code（py 等代码文件）、external-file（库外 md 原生视图）、
+   *  code-doc（旧混合视图）。漏一个 = 那类文件点定位提示「当前没有打开的
+   *  文件」（2026-10-29 用户报：py 文件定位不了，external-code 不在名单）。 */
   private activeAbsPath(): string | null {
     // 外部块视图优先：getActiveFile 对它返回 null，甚至可能残留上一个
     // 库内文件的 TFile —— 那会让定位静默走“不在任何挂载内”分支。
     const leaf = this.app.workspace.getMostRecentLeaf();
     const view = leaf?.view as { getViewType?: () => string; abs?: string } | undefined;
-    if (view?.getViewType?.() === 'logseq-external-block' && view.abs) return view.abs;
+    const vt = view?.getViewType?.();
+    if (vt && EXTERNAL_ABS_VIEW_TYPES.has(vt) && view!.abs) return view!.abs;
     const f = this.app.workspace.getActiveFile();
     if (f) {
       const adapter = this.app.vault.adapter as FileSystemAdapter;

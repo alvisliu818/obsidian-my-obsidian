@@ -205,12 +205,12 @@ class JupyterNotebookSettingTab extends PluginSettingTab {
 				}),
 			);
 
-		new Setting(containerEl)
+		const envDesc = (): string =>
+			'选择运行 notebook 的环境(conda / venv / 系统)。切换会重启已运行的内核。' +
+				(this.plugin.settings.pythonEnvId ? ` 当前:${this.plugin.settings.pythonEnvId}` : ' 当前:自动探测');
+		const envSetting = new Setting(containerEl)
 			.setName('Python 环境')
-			.setDesc(
-				'选择运行 notebook 的环境(conda / venv / 系统)。切换会重启已运行的内核。' +
-					(this.plugin.settings.pythonEnvId ? ` 当前:${this.plugin.settings.pythonEnvId}` : ' 当前:自动探测'),
-			)
+			.setDesc(envDesc())
 			.addDropdown((dd) => {
 				dd.addOption('', '自动探测(PATH → py.exe → Program Files)');
 				for (const e of this.plugin.discoveredPythonEnvs()) dd.addOption(e.id, e.name);
@@ -219,7 +219,8 @@ class JupyterNotebookSettingTab extends PluginSettingTab {
 					this.plugin.settings.pythonEnvId = v;
 					await this.plugin.saveSettings();
 					this.plugin.applyPythonEnv();
-					this.display();
+					// 就地刷新描述,不重建整页(整页 this.display() 会把设置页滚回顶部)
+					envSetting.setDesc(envDesc());
 					new Notice(v ? '已切换 Python 环境,内核将重启' : '已回到自动探测');
 				});
 			})
@@ -229,7 +230,10 @@ class JupyterNotebookSettingTab extends PluginSettingTab {
 					.setTooltip('重新扫描环境')
 					.onClick(() => {
 						this.plugin.discoveredPythonEnvs(true);
+						// 重建整页不可避免(选项列表变了),但保住滚动位置
+						const st = this.containerEl.scrollTop;
 						this.display();
+						this.containerEl.scrollTop = st;
 						new Notice(`已扫描到 ${this.plugin.discoveredPythonEnvs().length} 个 Python 环境`);
 					}),
 			);

@@ -80,7 +80,9 @@ export class FileExplorerLocateButton {
   private async revealActiveFile(): Promise<void> {
     const file = this.app.workspace.getActiveFile();
     if (!file) {
-      new Notice('当前没有打开的文件');
+      // 挂载树打开的库外文件（含 py 等代码文件）在这里没有 TFile——它们由
+      // 挂载面板的「定位当前文件」负责（按视图 abs 匹配挂载）。
+      new Notice('当前是库外文件：请用挂载面板的「定位当前文件」按钮');
       return;
     }
 

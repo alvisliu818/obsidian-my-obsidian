@@ -405,17 +405,44 @@ export async function lspSemanticTokensFull(plugin: LspHostLike, languageId: str
   const spec = resolveLspSpec(languageId, plugin.settings.lspServers);
   if (!spec) return null;
   const st = states.get(spec.id);
-  if (!st?.client?.isAlive || !st.semanticLegend) return null;
-  try {
-    const result = (await st.client.request(
-      'textDocument/semanticTokens/full',
-      { textDocument: { uri } },
-      10000,
-    )) as { data?: number[] } | null;
-    return result?.data ?? null;
-  } catch {
+  const client = st?.client;
+  if (!st || !client) return null;
+  // 诊断打点：provide 入口（每次 Monaco 请求都会打——多次出现=有重算）
+  console.info(`[lgp-lsp][diag] provide enter: model=${uri.slice(-60)}`);
+  const sent = resolveOpenDocUri(st, uri);
+  if (!sent) {
+    console.info(`[lgp-lsp][diag] semantic full: NO OPEN-DOC MATCH for ${uri.slice(-60)}`);
     return null;
   }
+  try {
+    const result = (await client.request(
+      'textDocument/semanticTokens/full',
+      { textDocument: { uri: sent } },
+      10000,
+    )) as { data?: number[] } | null;
+    console.info(
+      `[lgp-lsp][diag] semantic full: len=${result?.data?.length ?? -1} sent=${sent.slice(-60)}`,
+    );
+    return result?.data ?? null;
+  } catch (e) {
+    console.info(`[lgp-lsp][diag] semantic full FAILED: ${String(e).slice(0, 140)}`);
+    return null;
+  }
+}
+
+/** 在 openDocs 里找出与 uri 同一文档的 didOpen 原始字符串（精确 → 解码归一化）。 */
+function resolveOpenDocUri(st: ServerState, uri: string): string | null {
+  if (st.openDocs.has(uri)) return uri;
+  const dec = (p: string): string => {
+    let s = p;
+    try { s = decodeURIComponent(s); } catch { /* 非法编码保持原样 */ }
+    return s.toLowerCase();
+  };
+  const want = dec(uri);
+  for (const key of st.openDocs.keys()) {
+    if (dec(key) === want) return key;
+  }
+  return null;
 }
 
 /** 插件卸载：停止全部 server */

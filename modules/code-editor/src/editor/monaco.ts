@@ -564,6 +564,13 @@ export function createEditor(
     hover: { enabled: true, delay: 200 },
     automaticLayout: true,
     scrollBeyondLastLine: !opts.autoHeight,
+    // 概览标尺区关掉:Monaco 默认 lanes=3 + border=true,且标尺画布宽度=滚动条宽
+    // (布局层 overviewRuler:{width:verticalScrollbarWidth, right:0}),正好叠在滚动条
+    // 区上画出一条 14px 的空白带(用户 2026-10-29 报「最右侧一条空白」)。块内分支
+    // 早就是同款三连,文件视图这里补齐;搜索命中仍会在正文里高亮,不损失功能。
+    overviewRulerLanes: 0,
+    hideCursorInOverviewRuler: true,
+    overviewRulerBorder: false,
     smoothScrolling: true,
     cursorBlinking: 'smooth',
     renderWhitespace: 'selection',

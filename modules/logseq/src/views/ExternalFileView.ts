@@ -18,6 +18,7 @@
 import { ItemView, MarkdownRenderer, Notice, WorkspaceLeaf, setIcon, type ViewStateResult } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import type { Block } from '../types';
+import { markLeafTouched } from './tabTouch';
 import { parseDocument } from '../core/parser';
 import { serializeDocument } from '../core/serializer';
 import { logOp } from '../features/logger';
@@ -209,6 +210,8 @@ export class ExternalFileView extends ItemView {
         if (commit && ta.value !== original) {
           b.text = ta.value;
           this.dirty = true;
+          // 编辑过的 tab 对「复用/替换」保护(见 tabTouch.ts;落盘不清)
+          markLeafTouched(this.leaf);
           // Re-parse so the stored markdown is regenerated from the tree, then
           // rebuild: a multi-line block may now split differently.
           this.doc = parseDocument(serializeDocument(this.doc));
