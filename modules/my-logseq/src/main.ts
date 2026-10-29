@@ -1541,12 +1541,48 @@ export default class LogseqEditorPlugin extends Plugin {
   }
 
   /**
+   * 同一代码文件已开着标签页时聚焦复用,不再叠新页签(2026-10-29 用户报:
+   * 打开同一个代码文件,每次都新开标签)。与图片/视频查看器
+   * (doc-tree openExternalInView)同策略:按视图已解析的 abs 匹配——in-vault
+   * 叶子的 state 只有 {file},view.abs 是 setState 解析后的绝对路径,统一比它。
+   */
+  private activateExistingCodeLeaf(abs: string): boolean {
+    const key = abs.replace(/\\/g, '/').toLowerCase();
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_EXTERNAL_CODE)) {
+      const view = leaf.view as ExternalCodeView | null;
+      if (view?.abs && view.abs.replace(/\\/g, '/').toLowerCase() === key) {
+        this.app.workspace.setActiveLeaf(leaf, { focus: true });
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** vault 相对路径 → 磁盘绝对路径(失败退回拼接 basePath,拿不到则原样)。 */
+  private vaultAbsPath(rel: string): string {
+    const adapter = this.app.vault.adapter as unknown as {
+      getFullPath?: (p: string) => string;
+      basePath?: string;
+    };
+    if (typeof adapter?.getFullPath === 'function') {
+      try {
+        return adapter.getFullPath(rel);
+      } catch {
+        /* fall through */
+      }
+    }
+    const base = adapter?.basePath ?? '';
+    return base ? `${base.replace(/[\\/]+$/, '')}/${rel}` : rel;
+  }
+
+  /**
    * 库内文件 → ExternalCodeView(用户指令 2026-10-25:Code.code-workspace
    * 类型文件等 Obsidian 没有应用内编辑器的文本,给一个代码编辑器入口)。
    * 视图的 setState 认 `{file}`(vault 相对路径),自己解析真实路径并挂
    * inVault 徽标;叶策略与库外 openInCodeDocView 同(设置分屏否则新标签)。
    */
   async openVaultFileInCodeEditor(file: TFile): Promise<void> {
+    if (this.activateExistingCodeLeaf(this.vaultAbsPath(file.path))) return;
     const leaf = this.app.workspace.getLeaf(this.extSplitView() ? 'split' : 'tab');
     markLeafTabIcon(leaf, { name: file.name, rel: file.path });
     await leaf.setViewState({
@@ -1673,6 +1709,7 @@ export default class LogseqEditorPlugin extends Plugin {
    */
   private async openInCodeDocView(mount: ExternalMount, node: MountNode): Promise<boolean> {
     if (!isTextFileName(node.name)) return false;
+    if (this.activateExistingCodeLeaf(node.abs)) return true;
     let data: string;
     try {
       data = readExternalText(node.abs);
@@ -1761,6 +1798,7 @@ export default class LogseqEditorPlugin extends Plugin {
    */
   private async openInCodeEditor(mount: ExternalMount, node: MountNode): Promise<boolean> {
     if (isMarkdownFile(node.name)) return false;
+    if (this.activateExistingCodeLeaf(node.abs)) return true;
     let data: string;
     try {
       data = readExternalText(node.abs);

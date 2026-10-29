@@ -7536,6 +7536,16 @@ body:has(.modal-container .sc-unsaved-close) .progress-bar-container {
   white-space: pre-wrap;
   word-break: break-word;
 }
+/* 代码版本预览:Monaco 只读宿主(模态定高,预览页签撑满) */
+.sh-code-host {
+  height: min(60vh, 640px);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.sh-code-host > .monaco-editor {
+  height: 100%;
+}
 
 /* ===== Restore Modal ===== */
 .sh-restore-row {

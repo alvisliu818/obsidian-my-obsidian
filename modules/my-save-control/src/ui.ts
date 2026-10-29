@@ -4,6 +4,7 @@ import { listSnapshotsForFile, readSnapshotContent, deleteSnapshotFile, updateSn
 import type { SnapshotRecord, SearchMatch } from "./storage";
 import { computeDiff, type DiffLine } from "./diff";
 import { translate, getLocale } from "./locale";
+import { mountCodePreview } from "./previewCode";
 import { setupVersioning } from "./versioning";
 
 type Versioning = ReturnType<typeof setupVersioning>;
@@ -79,6 +80,7 @@ export class PreviewTabView extends ItemView {
   private fileName: string = "";
   // contentEl 沿用 ItemView 自带的（非空）；这里不再遮蔽。
   private fileNameEl: HTMLElement | null = null;
+  private disposeCode: (() => void) | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: SaveControlPlugin) {
     super(leaf);
@@ -114,13 +116,28 @@ export class PreviewTabView extends ItemView {
   private renderContent() {
     if (!this.contentEl) return;
     this.contentEl.empty();
-    void MarkdownRenderer.render(
-      this.plugin.app,
-      this.content,
-      this.contentEl,
-      "/",
-      this
-    );
+    this.disposeCode?.();
+    this.disposeCode = null;
+    const ext = (this.fileName.split(".").pop() ?? "").toLowerCase();
+    if (ext === "md" || ext === "markdown") {
+      void MarkdownRenderer.render(
+        this.plugin.app,
+        this.content,
+        this.contentEl,
+        "/",
+        this
+      );
+      return;
+    }
+    // 代码/文本版本:同一台 Monaco 只读渲染(行号 + 语法高亮,与编辑器同源),
+    // 实例随本视图销毁。
+    const host = this.contentEl.createDiv({ cls: "sh-code-host sh-code-host-fill" });
+    this.disposeCode = mountCodePreview(host, this.plugin, this.content, this.fileName);
+  }
+
+  async onClose(): Promise<void> {
+    this.disposeCode?.();
+    this.disposeCode = null;
   }
 }
 
@@ -1105,6 +1122,9 @@ export class SaveHistoryView extends ItemView {
 
       const previewModal = new Modal(this.plugin.app);
       const previewAbort = new AbortController();
+      // Monaco 预览实例的清场函数:onOpen 里挂,onClose/切换时调——声明放在
+      // onclick 作用域,onOpen 与 onClose 都要够得着。
+      let disposeCode: (() => void) | null = null;
       previewModal.onOpen = () => {
         const el = previewModal.contentEl;
         el.empty();
@@ -1124,16 +1144,37 @@ export class SaveHistoryView extends ItemView {
 
         const content = el.createDiv({ cls: "sh-preview-body sh-preview-content" });
 
-        const resolvedContent = resolveImagesInMarkdown(this.plugin, restored.content, curFile.path);
-        let rendered = true;
-        resolvedContent.then((resolved) => {
-          if (curFile.extension === "md") {
+        // md → MarkdownRenderer(图片走 resolveImagesInMarkdown);代码/文本 →
+        // 同一台 Monaco 只读渲染(行号 + 语法高亮,2026-10-30 用户要求)。
+        // disposeCode 挂在模态 onClose 与「原始/渲染」切换上,实例不驻留。
+        const isMd = curFile.extension === "md" || curFile.extension === "markdown";
+        const resolvedContent = isMd
+          ? resolveImagesInMarkdown(this.plugin, restored.content, curFile.path)
+          : null;
+        const mountRendered = (resolved: string) => {
+          disposeCode?.();
+          disposeCode = null;
+          content.empty();
+          if (isMd) {
             void MarkdownRenderer.render(this.plugin.app, resolved, content, curFile.path, this);
           } else {
-            const pre = content.createEl("pre", { cls: "sh-raw-pre" });
-            pre.textContent = resolved;
+            const codeHost = content.createDiv({ cls: "sh-code-host" });
+            disposeCode = mountCodePreview(codeHost, this.plugin, resolved, curFile.name);
           }
-        }).catch(() => {});
+        };
+        const mountRaw = () => {
+          disposeCode?.();
+          disposeCode = null;
+          content.empty();
+          const pre = content.createEl("pre", { cls: "sh-raw-pre" });
+          pre.textContent = restored.content;
+        };
+        let rendered = true;
+        if (isMd) {
+          resolvedContent!.then((resolved) => mountRendered(resolved)).catch(() => {});
+        } else {
+          mountRendered(restored.content);
+        }
 
         const btnRow = el.createDiv({ cls: "sh-preview-btn-row" });
 
@@ -1154,26 +1195,17 @@ export class SaveHistoryView extends ItemView {
 
         const viewRawBtn = btnRow.createEl("button", { text: translate("viewRaw") });
         viewRawBtn.onclick = () => {
-          const savedScroll = content.scrollTop;
           if (rendered) {
             rendered = false;
-            content.empty();
-            const pre = content.createEl("pre", { cls: "sh-raw-pre" });
-            pre.textContent = restored.content;
-            content.scrollTop = savedScroll;
+            mountRaw();
             viewRawBtn.textContent = translate("viewRendered");
           } else {
             rendered = true;
-            content.empty();
-            resolvedContent.then(async (resolved) => {
-              if (curFile.extension === "md") {
-                await MarkdownRenderer.render(this.plugin.app, resolved, content, curFile.path, this);
-              } else {
-                const pre = content.createEl("pre", { cls: "sh-raw-pre" });
-                pre.textContent = resolved;
-              }
-              content.scrollTop = savedScroll;
-            }).catch(() => {});
+            if (isMd) {
+              resolvedContent!.then((resolved) => mountRendered(resolved)).catch(() => {});
+            } else {
+              mountRendered(restored.content);
+            }
             viewRawBtn.textContent = translate("viewRaw");
           }
         };
@@ -1186,7 +1218,11 @@ export class SaveHistoryView extends ItemView {
           makeResizable(modalContainer, previewAbort.signal);
         }
       };
-      previewModal.onClose = () => previewAbort.abort();
+      previewModal.onClose = () => {
+        previewAbort.abort();
+        disposeCode?.();
+        disposeCode = null;
+      };
       previewModal.open();
     };
 

@@ -107,6 +107,13 @@ export function asExternalSaveHandle(view: unknown): ExternalSaveHandle | null {
   if (!save) return null;
   const fileName = typeof v.fileName === "string" && v.fileName ? v.fileName : v.abs.split(/[\\/]/).pop() ?? v.abs;
   const mountLabel = typeof v.mountLabel === "string" ? v.mountLabel : "";
+  /** 库内代码文件(宿主映射到 ExternalCodeView 的)暴露 vaultFile——
+   *  目标按 vault 归类:快照键/版本历史/恢复写回都走 vault 路径,与普通
+   *  笔记一致,而不是落到库外版本存储的绝对路径镜像里。 */
+  const vaultFileOf = (): TFile | null => {
+    const vf = (source as { vaultFile?: unknown }).vaultFile;
+    return vf instanceof TFile ? vf : null;
+  };
   const handle: ExternalSaveHandle = {
     abs: v.abs,
     fileName,
@@ -117,7 +124,11 @@ export function asExternalSaveHandle(view: unknown): ExternalSaveHandle | null {
     save: async () => {
       await save();
     },
-    target: () => externalTarget(v.abs as string, fileName, mountLabel),
+    target: () => {
+      const vf = vaultFileOf();
+      if (vf) return vaultTarget(vf);
+      return externalTarget(v.abs as string, fileName, mountLabel);
+    },
   };
   const configure = (
     v as { configureAutoSave?: (o: { enabled: boolean; delayMs: number }) => void }

@@ -16,7 +16,7 @@
  * which is what the user asked for.
  */
 
-import { ItemView, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
+import { ItemView, Notice, TFile, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
 import type * as monacoNS from 'monaco-editor';
 // 代码编辑器:Monaco(开源 VS Code 内核)。语言解析/高亮/worker 见 src/editor/monaco.ts;
 // LSP(补全/悬停/诊断/语义 token)的 Monaco 接线在 code-editor/src/lsp(与 SiYuan 同源)。
@@ -55,6 +55,10 @@ export class ExternalCodeView extends ItemView {
    * 只影响提示文案（「库内」/「库外」徽标），读写完全一样——都是文件本体。
    */
   inVault = false;
+  /** 库内文件的 TFile（registerExtensions / openVaultFileInCodeEditor 路径解析）。
+   *  save-control 的探针据此把目标归为 vault 目标——快照键、File History、
+   *  右键菜单都按 vault 路径走，与普通笔记一致。库外文件为 null。 */
+  vaultFile: TFile | null = null;
   /** 运行输出区(首次运行时创建) */
   private runOutputEl: HTMLPreElement | null = null;
   private runHandle: RunHandle | null = null;
@@ -196,6 +200,8 @@ export class ExternalCodeView extends ItemView {
       if (!this.fileName) {
         this.fileName = s.file.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? s.file;
       }
+      const resolved = this.plugin.app.vault.getAbstractFileByPath(s.file);
+      this.vaultFile = resolved instanceof TFile ? resolved : null;
     }
     // state 没带 mountPath（部分打开入口不传、老页签恢复）或挂载已挪位 →
     // 按最长前缀从挂载配置找回：否则 displayPath 退成裸文件名，头部面包屑
@@ -228,6 +234,23 @@ export class ExternalCodeView extends ItemView {
     this.disposeEditors();
   }
 
+  /**
+   * save-control「不保存并关闭」的丢弃请求(鸭子类型调用)。
+   * 必须由视图自己携带状态:onClose 的冲刷是无条件的——不在这里短路,用户
+   * 明确选了丢弃,关闭时缓冲仍被写盘(BlockEditorView 2026-10-24 同款事故)。
+   * 清掉 dirty 并让后续一切 flush 都变空操作。
+   */
+  discardPendingChanges(): void {
+    this.discardRequested = true;
+    this.dirty = false;
+    if (this.saveTimer !== null) {
+      window.clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+  }
+
+  private discardRequested = false;
+
   /** 当前缓冲区全文(混合模式按区块重建,纯源码模式取 Monaco 全文)。 */
   private currentBuffer(): string {
     if (this.hybridEngine) return this.hybridEngine.reconstruct();
@@ -251,13 +274,39 @@ export class ExternalCodeView extends ItemView {
     this.editor = null;
   }
 
-  /** 防抖自动保存(与库内编辑器同节奏:不是每敲一个键就写盘)。 */
+  /** 防抖自动保存(与库内编辑器同节奏:不是每敲一个键就写盘)。
+   *  save-control 可经 configureAutoSave 接管这里的节奏(见 autoSaveOverride)。 */
   private scheduleSave(): void {
     this.dirty = true;
     // 编辑过的 tab 对「复用/替换」保护(见 tabTouch.ts;落盘不清,对齐原生 md)
     markLeafTouched(this.leaf);
+    const cfg = this.autoSaveOverride;
+    if (cfg && !cfg.enabled) {
+      // save-control 关掉自动落盘:只记脏,不排定时器——落盘交给手动保存、
+      // 关闭提示或退出冲刷(与 BlockEditorView 库外模式的接管语义一致)。
+      if (this.saveTimer !== null) {
+        window.clearTimeout(this.saveTimer);
+        this.saveTimer = null;
+      }
+      return;
+    }
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
-    this.saveTimer = window.setTimeout(() => void this.flush(), 900);
+    this.saveTimer = window.setTimeout(() => void this.flush(), cfg?.delayMs ?? 900);
+  }
+
+  /** save-control 的接管配置(不存在 = 视图自带 900ms 防抖)。 */
+  private autoSaveOverride: { enabled: boolean; delayMs: number } | null = null;
+
+  /** save-control 的库外保存探针:报告未落盘的编辑(标签页圆点/关闭提示/调度器)。 */
+  isDirty(): boolean {
+    return this.dirty;
+  }
+
+  /** save-control 接管自动保存节奏(对齐 BlockEditorView 的同款探针)。 */
+  configureAutoSave(o: { enabled: boolean; delayMs: number }): void {
+    this.autoSaveOverride = { enabled: o.enabled, delayMs: Math.max(1, o.delayMs) };
+    // 节奏变了就让已脏的缓冲按新规则重排(关自动保存会当场撤掉挂起的定时器)。
+    if (this.dirty) this.scheduleSave();
   }
 
   // ------------------------------------------------------------------
@@ -410,6 +459,8 @@ export class ExternalCodeView extends ItemView {
   }
 
   async flush(notify = false): Promise<void> {
+    // 丢弃请求在身(「不保存并关闭」):本次以及之后的 flush 都是空操作。
+    if (this.discardRequested) return;
     if (this.saveTimer !== null) {
       window.clearTimeout(this.saveTimer);
       this.saveTimer = null;
@@ -421,12 +472,34 @@ export class ExternalCodeView extends ItemView {
     // 未编辑就不写盘:混合模式的重建会归一注释缩进,只看「结果 ≠ 磁盘内容」
     // 会把没动过的文件改掉格式(见 dirty 的注释)。
     if (!this.dirty || data === this.lastDiskData) return;
+    const previousDiskData = this.lastDiskData;
     try {
       writeExternalText(this.abs, data);
       this.lastDiskData = data;
       this.dirty = false;
       if (notify) new Notice(`已保存 ${this.fileName}`);
       logOp(this.plugin, 'external.code.save', this.abs, 'ok');
+      // 写盘绕过 vault 时 save-control 的 versionOnWrite(监听 vault modify)
+      // 收不到「写盘前」的基线——写盘方显式递(与 BlockEditorView.save 同款)。
+      // 库外走 onExternalSaved(目标=绝对路径镜像);库内走 onVaultFileSaved
+      // (目标=vault 路径,与原生 md 同存储)——这些视图不发 file-open,watcher
+      // 的基线取样收不到,不递的话首次落盘就没有「写盘前」版本(2026-10-30
+      // 用户报)。两个 hook 都可选链:save-control 未启用/旧版时静默跳过。
+      {
+        const appWithTable = this.plugin.app as unknown as {
+          plugins?: { plugins?: Record<string, {
+            onExternalSaved?: (abs: string, fileName: string, previousContent?: string | null) => void;
+            onVaultFileSaved?: (file: unknown, previousContent?: string | null) => void;
+          } | undefined> | undefined };
+        };
+        const table = appWithTable.plugins?.plugins;
+        const sc = table?.['save-history'] ?? table?.['save-control'];
+        if (this.inVault && this.vaultFile) {
+          sc?.onVaultFileSaved?.(this.vaultFile, previousDiskData);
+        } else if (!this.inVault) {
+          sc?.onExternalSaved?.(this.abs, this.fileName, previousDiskData);
+        }
+      }
     } catch (e) {
       new Notice(`保存失败：${String(e).slice(0, 120)}`);
       logOp(this.plugin, 'external.code.save', this.abs, 'error', String(e).slice(0, 200));

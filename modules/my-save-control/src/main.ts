@@ -67,6 +67,9 @@ import {
   type SaveTarget,
 } from "./targets";
 import { extOfName } from "./fileKind";
+// 代码文件的扩展名清单与编辑器同一覆盖面(库内库外同一编辑器):versionOnWrite
+// 的白名单若只认 md,代码文件整类没有版本史(2026-10-29 用户报)。
+import { TEXT_MOUNT_EXTENSIONS } from "../../my-doc-tree/src/features/mountFilter";
 
 export type { SaveControlSettings, PerFileSettings, GroupByMode };
 export { VIEW_TYPE_SAVE_HISTORY, VIEW_TYPE_PREVIEW };
@@ -384,6 +387,30 @@ export class SaveControlPlugin extends Plugin {
     const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
     if (!this.isExtensionAllowed(ext)) return;
     const target = externalTarget(abs, fileName);
+    void (async () => {
+      if (typeof previousContent === "string" && !(await this.versioning.hasAnySnapshots(target))) {
+        await this.versioning
+          .saveContentForTarget(target, previousContent, ON_WRITE_PREVIOUS_NAME, new Date(Date.now() - 1).toISOString())
+          .catch(() => undefined);
+      }
+      await this.versioning.saveNowForTarget(target, ON_WRITE_SNAPSHOT_NAME).catch(() => undefined);
+    })();
+  }
+
+  /**
+   * 库内代码文件的写盘版本(ExternalCodeView 的 fs 直写来叫)。
+   *
+   * 与 onExternalSaved 同语义,但目标按 vault 路径归档——与原生 md 同一存储、
+   * 同一套 File History/右键菜单。为什么要写盘方显式递基线:这些文件不走
+   * TextFileView 管线,autoVersion 的 file-open 基线取样收不到事件,首次落盘
+   * 的「写盘前」会被静默跳过(2026-10-30 用户报:代码保存没有写盘之前的版本)。
+   * 与 watcher 的 modify 双保险是收敛的:对面的 savePreviousVersion 基线缺失
+   * 直接跳过,saveNow 同内容判 no_change,两个方向都不会记重。
+   */
+  onVaultFileSaved(file: TFile, previousContent?: string | null): void {
+    if (!this.settings.versionOnWriteEnabled) return;
+    if (!this.isExtensionAllowed(file.extension)) return;
+    const target = vaultTarget(file);
     void (async () => {
       if (typeof previousContent === "string" && !(await this.versioning.hasAnySnapshots(target))) {
         await this.versioning
@@ -886,6 +913,13 @@ export class SaveControlPlugin extends Plugin {
 
   getAllowedExtensions(): Set<string> {
     const set = new Set<string>(["md"]);
+    // 代码文件与编辑器同一覆盖面(挂载文本清单,md/markdown/canvas 各有正主
+    // 不进);用户白名单是追加不是替换——设置里删不掉代码扩展名,不需要代码
+    // 版本史的单文件用 per-file 关闭。
+    for (const ext of TEXT_MOUNT_EXTENSIONS) {
+      const clean = ext.trim().toLowerCase();
+      if (clean && !/^(md|markdown|canvas)$/.test(clean)) set.add(clean);
+    }
     const raw = this.settings.allowedExtensions;
     if (raw) {
       for (const part of raw.split(/[,;\s]+/)) {

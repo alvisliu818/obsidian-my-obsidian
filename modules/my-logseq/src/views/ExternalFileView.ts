@@ -261,6 +261,11 @@ export class ExternalFileView extends ItemView {
    * "markdown is the only source of truth" is respected by never introducing a
    * second copy.
    */
+  /** save-control 的库外保存探针:报告未落盘的编辑(标签页圆点/关闭提示/调度器)。 */
+  isDirty(): boolean {
+    return this.dirty;
+  }
+
   async flush(notify = false): Promise<void> {
     if (!this.abs || this.readOnly || !this.dirty) return;
     const md = serializeDocument(this.doc);
