@@ -64,6 +64,13 @@ export interface ModuleDescriptor {
 	 * folder); `name` is always taken from the descriptor.
 	 */
 	manifest?: Partial<PluginManifest>;
+	/**
+	 * 一次性设置迁移来源：曾作为独立插件装在库里的 id。模块数据片为空且
+	 * `<configDir>/plugins/<该id>/data.json` 存在时，宿主在 loadSettings 阶段
+	 * 把它读进数据片——合并版首次启动即继承原独立版的设置（只做一次：
+	 * 导入后写回 data.json，此后以数据片为准）。
+	 */
+	migrateFrom?: string;
 	/** The module's own Plugin class, imported from modules/<id>/src/main. */
 	cls: new (app: App, manifest: unknown) => SubPluginLike;
 }

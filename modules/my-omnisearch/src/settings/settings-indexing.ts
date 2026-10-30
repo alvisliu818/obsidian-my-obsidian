@@ -186,10 +186,24 @@ export function injectSettingsIndexing(
       })
     })
 
+  // Merge results from the unified index daemon
+  new Setting(containerEl)
+    .setName('Merge results from the index daemon')
+    .setDesc(
+      htmlDescription(`Also merge hits from the <strong style="color: var(--text-accent)">unified index daemon</strong> (spawned by the Logseq Editor module's SQLite index) into the results: block-level hits for vault notes and full-text hits for mounted out-of-vault files.<br/>
+      The daemon's trigram index matches CJK substrings that this plugin's own index can miss, so results only ever <em>gain</em> entries — ranking of Omnisearch's own results is unchanged.<br/>
+      Desktop-only; if the daemon is not running (module disabled) this setting has no effect.`)
+    )
+    .addToggle(toggle => {
+      toggle.setValue(settings.useIndexDaemon).onChange(async v => {
+        settings.useIndexDaemon = v
+        await saveSettings(plugin)
+      })
+    })
+
   // Path whitelist (regex)
   new Setting(containerEl)
-    .setName('Path whitelist (regex)')
-    .setDesc(
+    .setName('Path whitelist (regex)')    .setDesc(
       htmlDescription(`Only index paths matching this <strong style="color: var(--text-accent)">regular expression</strong>. Leave empty to allow everything.<br/>
       Example: <code>^projects/</code> keeps just one folder.`)
     )

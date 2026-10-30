@@ -15,6 +15,8 @@
 | TraceTime | obsidian-tracetime | 段落旁显示最后编辑时间（第三方，fork 维护） |
 | AI image analyzer | ai-image-analyzer | 用 AI 给图片生成关键词并反查（第三方） |
 | Omnisearch | obsidian-omnisearch | 库内全文搜索引擎（第三方） |
+| Chs Patch | cm-chs-patch | 编辑器中文分词，兼作 Omnisearch 分词引擎（第三方） |
+| Text Extractor | obsidian-text-extractor | 图片 OCR / PDF / Office 文本提取，兼作 Omnisearch 提取引擎（第三方） |
 | Save Control | save-history + autosave-control | 库外文件的自动保存、版本快照、未保存圆点与关闭提示（两 MIT 插件合并） |
 | Git | obsidian-git | 库内 git 集成：自动备份、源管理视图、行作者标注（第三方，支持分离布局） |
 | Vault Explorer | obsidian-vault-explorer | frontmatter 可视化库浏览器：网格/列表/表格/动态四种版式、属性过滤与自定义过滤器（第三方） |
@@ -41,6 +43,8 @@ GPL-3 是强 copyleft——衍生作品必须整体以 GPL-3 分发，这不是�
 | TraceTime | QuincySx | MIT | https://github.com/QuincySx/obsidian-tracetime |
 | AI image analyzer | Swaggeroo | GPL-3.0 | 见 `modules/my-ai-image-analyzer/README.md` |
 | Omnisearch | Simon Cambier | GPL-3 | https://github.com/scambier/obsidian-omnisearch |
+| Chs Patch | AidenLx | MIT | https://github.com/AidenLx/cm-chs-patch |
+| Text Extractor | Simon Cambier | GPL-3 | https://github.com/scambier/obsidian-text-extractor |
 | Save Control（save-history） | Sevoni | MIT | 见 `modules/my-save-control/NOTICE.md` |
 | Save Control（autosave-control） | mihasm | MIT | 见 `modules/my-save-control/NOTICE.md` |
 | Git | Vinzent03 | MIT | https://github.com/Vinzent03/obsidian-git |
@@ -53,6 +57,10 @@ GPL-3 是强 copyleft——衍生作品必须整体以 GPL-3 分发，这不是�
 - **Save Control** 由两个 MIT 插件合并而成（save-history 为基座 +
   autosave-control 的延迟落盘控制器），两上游的版本、作者与 subtree 历史
   见 `modules/my-save-control/NOTICE.md`。
+- **Chs Patch** 与 **Text Extractor** 为源码快照收编（上游 git 当时不可达，
+  未能 subtree 拼接历史），出处/版本/适配见各自 `NOTICE.md`：前者构建期内嵌
+  jieba wasm（免手动导入组件），后者的 `obsidian-text-extract` 核心库以
+  `file:` 依赖接入（wasm 已内嵌其 dist）。
 - 这些第三方模块的源码未作功能性修改，仅为主仓的构建与装载方式做了适配；
   如需同步上游更新，可在各自目录用 `git subtree pull`。
 
@@ -73,6 +81,12 @@ npm run build      # 先生成图标数据，再类型检查，最后打包
    `dexie-patch` 插件套用上游的补丁（移除 dual-package-hazard 检查，见
    `modules/my-omnisearch/patches/dexie.patch`），因为 pnpm 的补丁格式与
    patch-package 不兼容。
+3. **Chs Patch 的 jieba wasm** 在构建期读 `jieba-wasm` 包（unplugged）算
+   版本/sha256 并以 base64 内嵌进 main.js——上游要用户手动导入组件，合并后
+   装上即用；上游 pnpm 补丁（去 wasm 胶水的隐式 URL 兜底）移植为
+   `jiebaPatchPlugin`。Text Extractor 的语言多选组件（LangSelector）经根
+   svelte5 工具链编译，`svelte-multiselect` 直引组件源文件（v11，svelte5
+   原生）。
 
 ## 待并入
 

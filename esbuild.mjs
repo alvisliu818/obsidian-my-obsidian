@@ -13,6 +13,7 @@ import { sveltePreprocess } from "svelte-preprocess";
 import process from "process";
 import builtins from "builtin-modules";
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 import { readFileSync, globSync as fsGlobSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -41,6 +42,32 @@ const onigDir = path.dirname(nodeRequire.resolve("vscode-oniguruma/package.json"
 const ONIG_WASM_B64 = readFileSync(path.join(onigDir, "release", "onig.wasm")).toString(
   "base64",
 );
+
+// ---------------------------------------------------------------------------
+// cm-chs-patch: jieba wasm 的版本/哈希/内嵌 base64。
+//
+// 上游 vite.config 构建期读 jieba-wasm 包的版本与 wasm 文件算 sha256（设置
+// 页手动导入组件时的校验门）。聚合仓额外把同一份 wasm 以 base64 内嵌
+// （__JIEBA_WASM_B64__），IndexedDB 无导入时自动兜底，装上即用——见
+// modules/my-cm-chs-patch/NOTICE。jieba-wasm 在根 package.json 的
+// dependenciesMeta 声明 unplugged（真实目录落盘），与 wa-sqlite/onig 同因：
+// 构建期要读真实文件。
+// ---------------------------------------------------------------------------
+// jieba-wasm 的 exports 不暴露 './package.json'，从 web 胶水入口反推包根
+// （pkg/web/jieba_rs_wasm.js → 包根两层上）。
+const jiebaDir = path.resolve(
+  path.dirname(nodeRequire.resolve("jieba-wasm/web")),
+  "..",
+  "..",
+);
+const JIEBA_VERSION = JSON.parse(
+  readFileSync(path.join(jiebaDir, "package.json"), "utf8"),
+).version;
+const jiebaWasmPath = path.join(jiebaDir, "pkg", "web", "jieba_rs_wasm_bg.wasm");
+const JIEBA_WASM_SHA256 = createHash("sha256")
+  .update(readFileSync(jiebaWasmPath))
+  .digest("hex");
+const JIEBA_WASM_B64 = readFileSync(jiebaWasmPath).toString("base64");
 
 // ---------------------------------------------------------------------------
 // browser: scripts that must run INSIDE the webview guest.
@@ -318,6 +345,28 @@ const mxNodeEnvPlugin = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// cm-chs-patch: jieba wasm 胶水的补丁移植。
+//
+// 上游 pnpm patch（modules/my-cm-chs-patch/patches/jieba-wasm@2.4.0.patch）：
+// 去掉胶水里 `module_or_path = new URL('jieba_rs_wasm_bg.wasm',
+// import.meta.url)` 的隐式兜底，防打包器把 wasm 当 URL 资产处理。我们的调用
+// 永远显式传二进制（initJieba），改为 esbuild onLoad 文本替换——与 dexie
+// 补丁同款，不依赖 node_modules 状态，构建自愈。
+// ---------------------------------------------------------------------------
+const jiebaPatchPlugin = {
+  name: "jieba-patch",
+  setup(build) {
+    build.onLoad({ filter: /jieba-wasm[\\/]pkg[\\/]web[\\/]jieba_rs_wasm\.js$/ }, (args) => {
+      const contents = readFileSync(args.path, "utf8").replace(
+        "module_or_path = new URL('jieba_rs_wasm_bg.wasm', import.meta.url);",
+        "throw new Error('jieba_rs_wasm: a wasm module/path must be passed to init()');",
+      );
+      return { contents, loader: "js", resolveDir: path.dirname(args.path) };
+    });
+  },
+};
+
 const context = await esbuild.context({
   banner: { js: banner },
   entryPoints: ["src/main.ts"],
@@ -347,7 +396,7 @@ const context = await esbuild.context({
     // ollama 等包用 `node:fs` 带前缀的写法，裸名列表罩不住
     ...builtins.map((m) => `node:${m}`),
   ],
-  plugins: [cmBundlePlugin, momentumSveltePlugin, sveltePlugin, dexiePatchPlugin, importGlobPlugin, musicPlayerShimsPlugin, mxInlinePlugin, mxCaptionsPlugin, mxNodeEnvPlugin],
+  plugins: [cmBundlePlugin, momentumSveltePlugin, sveltePlugin, jiebaPatchPlugin, dexiePatchPlugin, importGlobPlugin, musicPlayerShimsPlugin, mxInlinePlugin, mxCaptionsPlugin, mxNodeEnvPlugin],
   // Monaco 的 codicon.css 引用 .ttf 字体(图标字形)。内联成 dataurl:图标
   // 只有几 KB,而少这一条整个构建会以 "No loader is configured for .ttf" 失败。
   // (与独立插件 obsidian-logseq 的 esbuild.mjs 同款配置。)
@@ -377,6 +426,9 @@ const context = await esbuild.context({
     "import.meta.url": '""',
     __WA_SQLITE_WASM_B64__: JSON.stringify(WA_SQLITE_WASM_B64),
     __ONIG_WASM_B64__: JSON.stringify(ONIG_WASM_B64),
+    __JIEBA_VERSION__: JSON.stringify(JIEBA_VERSION),
+    __JIEBA_WASM_SHA256__: JSON.stringify(JIEBA_WASM_SHA256),
+    __JIEBA_WASM_B64__: JSON.stringify(JIEBA_WASM_B64),
     __READABILITY_SOURCE__: JSON.stringify(READABILITY_SOURCE),
     __CLIP_SOURCE__: JSON.stringify(CLIP_SOURCE),
     __PRELOAD_SOURCE__: JSON.stringify(PRELOAD_SOURCE),

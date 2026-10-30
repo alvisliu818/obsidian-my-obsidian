@@ -22,6 +22,7 @@ import type { Query } from './query'
 import { sortBy } from 'es-toolkit/compat'
 import type OmnisearchPlugin from '../main'
 import { Tokenizer } from './tokenizer'
+import { searchIndexDaemon } from '../tools/indexDaemon'
 
 export class SearchEngine {
   private tokenizer: Tokenizer
@@ -540,7 +541,8 @@ export class SearchEngine {
     }
 
     // Map the raw results to get usable suggestions
-    const resultNotes = results.map((result, index) => {
+    // （let：统一索引守护进程的结果可能在此追加，见函数尾部）
+    let resultNotes = results.map((result, index) => {
       logVerbose('Locating matches for', result.id)
       let note = documents.find(d => d?.path === result.id)
       if (!note) {
@@ -586,6 +588,22 @@ export class SearchEngine {
     })
 
     logVerbose('Suggestions:', resultNotes)
+
+    // 统一索引守护进程合并（可选，见 tools/indexDaemon.ts）：vault 块级与
+    // ext 域（挂载库外文件）的 trigram 子串命中，补 minisearch 没返回的
+    // 文件。文件内搜索（singleFilePath）不适用；daemon 不在/失败时为空。
+    if (!options?.singleFilePath && this.plugin.settings.useIndexDaemon) {
+      try {
+        const daemonNotes = await searchIndexDaemon(this.plugin, query)
+        if (daemonNotes.length) {
+          const own = new Set(resultNotes.map(r => r.path))
+          resultNotes = [...resultNotes, ...daemonNotes.filter(r => !own.has(r.path))]
+          logVerbose('Merged index daemon results:', daemonNotes.length)
+        }
+      } catch (e) {
+        logVerbose('Omnisearch - index daemon merge failed', e)
+      }
+    }
 
     return resultNotes
   }

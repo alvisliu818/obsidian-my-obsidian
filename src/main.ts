@@ -36,6 +36,11 @@ import DocAssistPlugin from "../modules/my-doc-assist/src/main";
 import MaterialIconThemePlugin from "../modules/my-material-icon-theme/src/main";
 import TraceTimePlugin from "../modules/my-tracetime/src/main";
 import AIImageAnalyzerPlugin from "../modules/my-ai-image-analyzer/src/main";
+// omnisearch 的两个可选依赖插件收编（2026-10-31，各自 NOTICE 有出处与适配
+// 记录）。必须在 omnisearch descriptor **之前**登记：boot 顺序即数组顺序，
+// omnisearch 的设置页/索引期会读它们的实例与 api。
+import CMChsPatchPlugin from "../modules/my-cm-chs-patch/src/chsp-main";
+import TextExtractorPlugin from "../modules/my-text-extractor/plugin/src/main";
 import OmnisearchPlugin from "../modules/my-omnisearch/src/main";
 import ObsidianGitPlugin from "../modules/my-obsidian-git/src/main";
 import SaveControlPlugin from "../modules/my-save-control/src/main";
@@ -230,6 +235,36 @@ export default class MyObsidianPlugin extends Plugin {
 				"库内 git 集成：自动备份/定时 pull、源管理视图、行作者标注、差异比对。支持分离布局（设置里填 gitDir 即可让仓库数据放 vault 之外）。上游 Vinzent03（MIT）。",
 			desktopOnly: false,
 			cls: ObsidianGitPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// omnisearch 的分词依赖（AidenLx，MIT），2026-10-31 收编——顺序在
+			// omnisearch 之前。上游要手动导入 jieba wasm，这里构建期内嵌
+			// （见模块 NOTICE）；编辑器中文分词与 omnisearch 分词共用一份实例。
+			id: "chs-patch",
+			legacyId: "my-cm-chs-patch",
+			name: "my Chs Patch",
+			// PluginSettingTab 按 manifest.id 建键：不覆盖会与宿主设置页撞车
+			// （同 CAL/ARDH 的先例）。
+			manifest: { id: "my-cm-chs-patch", version: "1.14.0" },
+			migrateFrom: "cm-chs-patch",
+			summary:
+				"编辑器中文分词：双击选词、w/e/b 词移动等按词边界工作；并作为 Omnisearch 的中文分词引擎（内置结巴分词组件，免手动导入）。上游 AidenLx（MIT）。",
+			desktopOnly: false,
+			cls: CMChsPatchPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// omnisearch 的文本提取依赖（scambier，GPL-3），2026-10-31 收编——
+			// 顺序在 omnisearch 之前。PDF/图片 OCR/Office 提取，Omnisearch 的
+			// PDFIndexing/imagesIndexing/officeIndexing 靠它才可用。
+			id: "text-extractor",
+			legacyId: "my-text-extractor",
+			name: "my Text Extractor",
+			manifest: { id: "my-text-extractor", version: "0.7.0" },
+			migrateFrom: "text-extractor",
+			summary:
+				"从图片（OCR）、PDF 与 Office 文档提取文本：供 Omnisearch 索引其内容，另有右键菜单提取、提取到剪贴板/新笔记与系统原生 OCR 开关。上游 scambier（GPL-3）+ 本地增强。",
+			desktopOnly: false,
+			cls: TextExtractorPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
 			// GPL-3 as well — upstream Simon Cambier. Its Svelte components build
@@ -591,6 +626,43 @@ export default class MyObsidianPlugin extends Plugin {
 			);
 		}
 		await this.migrateDocTreeSettings();
+		await this.migrateStandaloneSettings();
+	}
+
+	/**
+	 * 一次性设置迁移：收编前作为独立插件装在库里的模块（descriptor 的
+	 * migrateFrom），在其数据片为空且旧 data.json 仍存在时导入一次——合并
+	 * 版首次启动即继承原独立版的设置。导入后随 saveSettings 落盘，此后以
+	 * 数据片为准（删掉旧插件的 data.json 即可跳过迁移）。
+	 */
+	private async migrateStandaloneSettings(): Promise<void> {
+		let touched = false;
+		for (const d of this.descriptors) {
+			const standalone = d.migrateFrom;
+			if (!standalone) continue;
+			const state = this.settings.modules[d.id];
+			if (
+				!state ||
+				(state.data &&
+					typeof state.data === "object" &&
+					Object.keys(state.data as object).length > 0)
+			) {
+				continue;
+			}
+			try {
+				const path = `${this.app.vault.configDir}/plugins/${standalone}/data.json`;
+				if (!(await this.app.vault.adapter.exists(path))) continue;
+				const parsed = JSON.parse(await this.app.vault.adapter.read(path)) as unknown;
+				if (parsed && typeof parsed === "object") {
+					state.data = parsed;
+					touched = true;
+					console.debug(`[my-obsidian] ${d.id}: migrated settings from ${standalone}`);
+				}
+			} catch (e) {
+				console.warn(`[my-obsidian] ${d.id}: settings migration from ${standalone} failed`, e);
+			}
+		}
+		if (touched) await this.saveSettings();
 	}
 
 	/**

@@ -69,6 +69,12 @@ export interface OmnisearchSettings extends WeightingSettings {
   indexFilesWithoutExtension: boolean
   /** 索引所有纯文本文件：除已知二进制扩展名外一律按明文索引（.ts/.json/.yaml/.csv/.log 等） */
   indexAllPlaintext: boolean
+  /**
+   * 合并统一索引守护进程的命中（合并新增）：logseq 模块拉起的
+   * index-daemon（FTS5 trigram）按块级与 ext 域补充 minisearch 没返回的
+   * 文件——CJK 子串搜索的主要补强来源。daemon 不在时自动无操作。
+   */
+  useIndexDaemon: boolean
   /** 路径正则白名单：非空时只有匹配的路径才会被索引。空 = 不限制。 */
   pathWhitelist: string
   /** 路径正则黑名单：匹配的路径不索引，优先于白名单。默认忽略 node_modules。 */
