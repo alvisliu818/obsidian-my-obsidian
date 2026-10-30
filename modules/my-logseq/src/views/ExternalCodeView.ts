@@ -493,7 +493,7 @@ export class ExternalCodeView extends ItemView {
           } | undefined> | undefined };
         };
         const table = appWithTable.plugins?.plugins;
-        const sc = table?.['my-save-history'] ?? table?.['save-history'] ?? table?.['save-control'];
+        const sc = table?.['my-save-history'];
         if (this.inVault && this.vaultFile) {
           sc?.onVaultFileSaved?.(this.vaultFile, previousDiskData);
         } else if (!this.inVault) {

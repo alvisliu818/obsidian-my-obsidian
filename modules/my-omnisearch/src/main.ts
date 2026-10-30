@@ -212,7 +212,7 @@ export default class OmnisearchPlugin extends Plugin {
 
   async onunload(): Promise<void> {
     // @ts-ignore
-    delete globalThis['omnisearch']
+    delete globalThis['my-omnisearch']
 
     if (this.refreshIndexCallback) {
       removeEventListener('blur', this.refreshIndexCallback)
@@ -258,9 +258,9 @@ export default class OmnisearchPlugin extends Plugin {
    * @returns
    */
   public getAIImageAnalyzer(): AIImageAnalyzerAPI | undefined {
-    // 聚合内别名 my-ai-image-analyzer（2026-10-30 起）；独立构建场景回退上游 id。
+    // 聚合内别名 my-ai-image-analyzer（2026-10-30 起统一新 id，不再回退上游 id）。
     const aia = (this.app as any).plugins?.plugins
-    return (aia?.['my-ai-image-analyzer'] ?? aia?.['ai-image-analyzer'])?.api
+    return aia?.['my-ai-image-analyzer']?.api
   }
 
   /**

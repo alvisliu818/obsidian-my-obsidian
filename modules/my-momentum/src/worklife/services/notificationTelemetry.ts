@@ -5,7 +5,7 @@ import {
 } from "../io/vaultStorage";
 
 export const NOTIFICATION_TELEMETRY_EVENT =
-  "worklife-calendar:notification-telemetry-updated";
+  "my-worklife-calendar:notification-telemetry-updated";
 
 export type NotificationChannel = "browser" | "ntfy" | "github-actions";
 export type NotificationStatus = "sent" | "failed" | "skipped";

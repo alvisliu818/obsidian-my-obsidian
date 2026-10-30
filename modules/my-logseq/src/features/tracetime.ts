@@ -40,11 +40,11 @@ export function traceTimePluginOf(app: App): TraceTimeSettings | null {
   // App.plugins exists at runtime but is absent from the public typings.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const pluginApi = (app as any).plugins;
-  // 聚合内别名为 my-tracetime（2026-10-30 起）；独立构建场景仍答 tracetime。
-  // enabledPlugins 里只有宿主 id（obsidian-my-obsidian）——独立构建时才是 tracetime。
-  const p = pluginApi?.plugins?.['my-tracetime'] ?? pluginApi?.plugins?.['tracetime'];
+  // 聚合内别名为 my-tracetime（2026-10-30 起统一新 id，不再保留旧 id 回退键）；
+  // enabledPlugins 里可用的是宿主 id（obsidian-my-obsidian）。
+  const p = pluginApi?.plugins?.['my-tracetime'];
   const enabled = pluginApi?.enabledPlugins;
-  if (!p || !(enabled?.has('obsidian-my-obsidian') || enabled?.has('tracetime')) || !p.tracker) return null;
+  if (!p || !enabled?.has('obsidian-my-obsidian') || !p.tracker) return null;
   return p as TraceTimeSettings;
 }
 

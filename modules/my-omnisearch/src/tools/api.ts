@@ -78,7 +78,7 @@ export function registerAPI(plugin: OmnisearchPlugin): void {
 
   // Public api
   // @ts-ignore
-  globalThis['omnisearch'] = api
+  globalThis['my-omnisearch'] = api
   // 合并进 obsidian-my-obsidian 后的时序坑：宿主要把模块的 my- 前缀 id 挂回
   // plugins.plugins，但那发生在 onload **完成之后**，而这里在 onload 中间——
   // 此刻 plugins.plugins["my-omnisearch"] 还不存在，直接赋值会 TypeError（且模块级
