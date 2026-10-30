@@ -23,6 +23,7 @@ import { hasTable } from './tableModel';
 import { baseOf, exists, extOf, readExternalBinary } from '../../../my-doc-tree/src/features/extFs';
 import { VIEW_TYPE_IMAGE } from '../../../my-doc-tree/src/views/ImageView';
 import { VIEW_TYPE_VIDEO } from '../../../my-doc-tree/src/views/VideoView';
+import { parseTimecodeSeconds } from '../../../my-doc-tree/src/features/videoTimestamps';
 import type { BlockRenderHost } from '../blocks/renderHost';
 import type { Block } from '../types';
 import { taskStatusClass } from '../core/taskMarker';
@@ -1608,10 +1609,15 @@ function wireContentEvents(holder: HTMLElement, b: Block, host: BlockRenderHost)
       // window.open——相对路径在 app:// 下必然 404。
       const extHost = host as { isExternal?: boolean; externalAbs?: string };
       if (extHost.isExternal === true && extHost.externalAbs) {
-        const abs = resolveExternalMediaHref(href, extHost.externalAbs);
+        // 时间戳链接 `[](clip.mp4#t=83)`:先剥 `#t=` 再解析媒体目标(resolve
+        // 不认带 hash 的扩展名),秒数透传给播放器 seek(2026-10-30)。
+        const hashIdx = href.indexOf('#t=');
+        const tSeconds = hashIdx >= 0 ? parseTimecodeSeconds(href.slice(hashIdx + 3)) : null;
+        const bareHref = hashIdx >= 0 ? href.slice(0, hashIdx) : href;
+        const abs = resolveExternalMediaHref(bareHref, extHost.externalAbs);
         if (abs) {
           if (VIDEO_EXT_RE.test(extOf(abs))) {
-            void host.plugin.openExternalInView(VIEW_TYPE_VIDEO, { abs, name: baseOf(abs) });
+            void host.plugin.openExternalInView(VIEW_TYPE_VIDEO, { abs, name: baseOf(abs), t: tSeconds ?? undefined });
           } else {
             void host.plugin.openExternalInView(VIEW_TYPE_IMAGE, { abs, name: baseOf(abs) });
           }

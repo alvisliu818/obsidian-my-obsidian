@@ -27,6 +27,20 @@ import type DocTreePlugin from '../main';
 import { baseOf, copyExternalFile, dirOf, extOf, readExternalBinary, scanExternal } from '../features/extFs';
 import { absolutePath, addOpenWithMenuItems, addOpenWithMenuItemsAt, openWithSystemDefaultAt } from '../features/openWith';
 import { pickSavePath } from '../features/systemDialog';
+import {
+  appendMarkToCompanionNote,
+  buildTimestampLink,
+  companionNotePath,
+  ensureCompanionNote,
+  formatTimecode,
+  insertIntoActiveNote,
+  noticeMark,
+  openVaultNote,
+  parseTimecodeSubpath,
+  readMarksFromNote,
+  toExtPath,
+  type VideoMarkRow,
+} from '../features/videoTimestamps';
 
 export const VIEW_TYPE_VIDEO = 'logseq-video';
 
@@ -68,6 +82,8 @@ export interface VideoViewState {
   path?: string;
   /** Absolute path OUTSIDE the vault (库外). */
   abs?: string;
+  /** 打开即跳转的时间点(秒)。时间戳链接点击路由时透传。 */
+  t?: number;
 }
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
@@ -83,6 +99,11 @@ export class VideoView extends ItemView {
   private videoEl!: HTMLVideoElement;
   private toolbarEl!: HTMLElement;
   private fallbackEl: HTMLElement | null = null;
+  /** 待生效的 seek:state 带 t 但视频还没加载到可 seek 时先记着。 */
+  private pendingSeek: number | null = null;
+  /** 标记列表面板(懒建,开合切换)。 */
+  private marksEl: HTMLElement | null = null;
+  private marksOpen = false;
 
   constructor(leaf: WorkspaceLeaf, plugin: DocTreePlugin) {
     super(leaf);
@@ -115,10 +136,52 @@ export class VideoView extends ItemView {
     const s = (state ?? {}) as VideoViewState;
     const nextAbs = typeof s.abs === 'string' ? s.abs : '';
     const nextPath = typeof s.path === 'string' ? s.path : '';
-    if (nextAbs === this.abs && nextPath === this.path) return;
+    if (typeof s.t === 'number' && Number.isFinite(s.t)) this.pendingSeek = s.t;
+    if (nextAbs === this.abs && nextPath === this.path) {
+      // 同文件复用(时间戳点击的主要场景):文件不动,只把播放位置拨过去。
+      this.applyPendingSeek();
+      return;
+    }
     this.abs = nextAbs;
     this.path = nextAbs ? '' : nextPath;
     await this.load();
+  }
+
+  /**
+   * 原生 `[[视频.mp4#t=83]]` 点击路由:Obsidian 的 openFile 会把链接 subpath
+   * 作为 ephemeral state 送达视图(mx 同款机制)。
+   */
+  setEphemeralState(state: unknown): void {
+    const subpath = (state as { subpath?: string } | null)?.subpath ?? null;
+    const t = parseTimecodeSubpath(subpath);
+    if (t !== null) {
+      this.pendingSeek = t;
+      this.applyPendingSeek();
+    }
+    super.setEphemeralState(state as never);
+  }
+
+  /** 把挂起的 seek 应用到 `<video>`;元数据没就绪就等 loadedmetadata。 */
+  private applyPendingSeek(): void {
+    if (this.pendingSeek === null || !this.videoEl) return;
+    const t = this.pendingSeek;
+    this.pendingSeek = null;
+    const el = this.videoEl;
+    const apply = () => {
+      try {
+        el.currentTime = t;
+      } catch {
+        /* 元数据仍不可用:放弃这一次(下次点击会再来) */
+      }
+    };
+    if (el.readyState >= 1) apply();
+    else el.addEventListener('loadedmetadata', apply, { once: true });
+  }
+
+  /** 跳到指定时刻(暂停态;标记面板/命令共用)。 */
+  seekTo(seconds: number): void {
+    this.pendingSeek = seconds;
+    this.applyPendingSeek();
   }
 
   async onOpen(): Promise<void> {
@@ -152,6 +215,16 @@ export class VideoView extends ItemView {
     this.iconBtn(actGroup, 'camera', '截图到剪贴板', () => void this.snapshot());
     this.iconBtn(actGroup, 'save', '另存为…', () => void this.saveAs());
     this.iconBtn(actGroup, 'external-link', '用外部应用打开', () => this.showOpenWith());
+    if (this.plugin.settings.videoTimestampsEnabled) {
+      const tsGroup = this.toolbarEl.createDiv({ cls: 'lg-video-view__group' });
+      this.iconBtn(tsGroup, 'alarm-clock', '在此时间打时间戳标记(Mod+Shift+M)', () => void this.addTimestampMark());
+      this.iconBtn(tsGroup, 'list', '标记列表(伴随笔记)', () => this.toggleMarks());
+      this.iconBtn(tsGroup, 'file-text', '打开标记笔记', () => void this.openMarksNote());
+    }
+
+    // 标记列表面板:工具栏与画面之间,默认收起。
+    this.marksEl = this.contentEl.createDiv({ cls: 'lg-video-view__marks' });
+    this.marksEl.style.display = 'none';
 
     this.stageEl = this.contentEl.createDiv({ cls: 'lg-video-view__stage' });
     this.videoEl = document.createElement('video');
@@ -221,6 +294,7 @@ export class VideoView extends ItemView {
     this.videoEl.src = this.objectUrl;
     // 变更 src 后 load() 让浏览器重新探测;自动尝试播放失败也无妨(controls 在)。
     this.videoEl.load();
+    this.applyPendingSeek();
   }
 
   /** 库内模式的磁盘绝对路径（文件不存在/移动端返回 ''）。 */
@@ -328,5 +402,122 @@ export class VideoView extends ItemView {
       addOpenWithMenuItems(this.plugin.app, file, menu, this.plugin.settings.openWithApps);
     }
     menu.showAtPosition({ x: this.toolbarEl.getBoundingClientRect().left, y: this.toolbarEl.getBoundingClientRect().bottom });
+  }
+
+  // ------------------------------------------------------------------
+  // 时间戳标记(2026-10-30):打标记 → markdown → 点击回跳;伴随笔记 = 反向列表
+  // ------------------------------------------------------------------
+
+  /** 当前视频对应的库内 TFile(库外模式为 null)。 */
+  private vaultVideoFile(): TFile | null {
+    if (!this.path) return null;
+    const f = this.app.vault.getAbstractFileByPath(this.path);
+    return f instanceof TFile ? f : null;
+  }
+
+  /**
+   * 打标记:取当前播放位置生成时间戳链接,优先写进当前活动的笔记光标处;
+   * 没有活动笔记就落伴随笔记(`<videoMarksFolder>/<视频名>.md`)。
+   */
+  async addTimestampMark(): Promise<void> {
+    if (!this.plugin.settings.videoTimestampsEnabled) {
+      new Notice('视频时间戳功能已在设置里关闭。');
+      return;
+    }
+    const seconds = this.videoEl?.currentTime;
+    if (!seconds || Number.isNaN(seconds)) {
+      new Notice('视频还没有播放位置(未加载)。');
+      return;
+    }
+    const videoFile = this.vaultVideoFile();
+    if (!videoFile && !this.abs) return;
+
+    const folder = this.plugin.settings.videoMarksFolder || 'Video Marks';
+    // 活动笔记优先:链接的相对路径计算需要落笔笔记的路径。
+    const activePath = this.app.workspace.activeEditor?.file?.path ?? null;
+    if (activePath) {
+      const link = buildTimestampLink(this.app, videoFile
+        ? { videoFile, notePath: activePath, seconds }
+        : { videoAbs: this.abs, notePath: activePath, seconds });
+      if (insertIntoActiveNote(this.app, link)) {
+        noticeMark(`已插入时间戳 ${formatTimecode(seconds)} → ${activePath.split('/').pop()}`);
+        return;
+      }
+    }
+    // 无活动笔记 → 伴随笔记。
+    const notePath = companionNotePath(folder, this.fileName);
+    const link = buildTimestampLink(this.app, videoFile
+      ? { videoFile, notePath, seconds }
+      : { videoAbs: this.abs, notePath, seconds });
+    const saved = await appendMarkToCompanionNote(this.app, {
+      folder,
+      videoName: this.fileName,
+      line: `${link} `,
+      linkTargetForHeader: videoFile ? null : toExtPath(this.abs),
+    });
+    noticeMark(`已写入标记 ${formatTimecode(seconds)} → ${saved.split('/').pop()}`);
+    if (this.marksOpen) void this.refreshMarks();
+  }
+
+  /** 打开(必要时创建)伴随笔记。 */
+  async openMarksNote(): Promise<void> {
+    const folder = this.plugin.settings.videoMarksFolder || 'Video Marks';
+    const videoFile = this.vaultVideoFile();
+    const path = await ensureCompanionNote(this.app, {
+      folder,
+      videoName: this.fileName,
+      linkTargetForHeader: videoFile ? null : toExtPath(this.abs),
+    });
+    await openVaultNote(this.app, path);
+  }
+
+  private toggleMarks(): void {
+    this.marksOpen = !this.marksOpen;
+    if (!this.marksEl) return;
+    this.marksEl.style.display = this.marksOpen ? 'block' : 'none';
+    if (this.marksOpen) void this.refreshMarks();
+  }
+
+  /** 重新渲染标记列表(读伴随笔记)。 */
+  private async refreshMarks(): Promise<void> {
+    const panel = this.marksEl;
+    if (!panel) return;
+    const folder = this.plugin.settings.videoMarksFolder || 'Video Marks';
+    const notePath = companionNotePath(folder, this.fileName);
+    let rows: VideoMarkRow[] = [];
+    try {
+      rows = await readMarksFromNote(this.app, notePath);
+    } catch {
+      rows = [];
+    }
+    panel.empty();
+    const head = panel.createDiv({ cls: 'lg-video-view__marks-head' });
+    head.createSpan({ cls: 'lg-video-view__marks-title', text: `标记(${rows.length})` });
+    const refreshBtn = head.createEl('button', { cls: 'lg-video-view__btn' });
+    setIcon(refreshBtn, 'refresh-cw');
+    refreshBtn.title = '重新读取';
+    refreshBtn.addEventListener('click', () => void this.refreshMarks());
+    const openBtn = head.createEl('button', { cls: 'lg-video-view__btn' });
+    setIcon(openBtn, 'file-text');
+    openBtn.title = '打开标记笔记';
+    openBtn.addEventListener('click', () => void this.openMarksNote());
+
+    if (rows.length === 0) {
+      panel.createDiv({
+        cls: 'lg-video-view__marks-empty',
+        text: '还没有标记。按 Mod+Shift+M(或工具栏闹钟按钮)在当前时间打标记;打开其他笔记时标记会插入光标处。',
+      });
+      return;
+    }
+    const list = panel.createDiv({ cls: 'lg-video-view__marks-list' });
+    for (const row of rows) {
+      const item = list.createDiv({ cls: 'lg-video-view__marks-row' });
+      const timeEl = item.createSpan({ cls: 'lg-video-view__marks-time', text: row.label });
+      timeEl.addEventListener('click', () => {
+        this.seekTo(row.seconds);
+        noticeMark(`跳到 ${row.label}`);
+      });
+      item.createSpan({ cls: 'lg-video-view__marks-note', text: row.note || '' });
+    }
   }
 }

@@ -335,6 +335,14 @@ export interface DocTreeSettings {
    * in the player regardless of this setting.
    */
   videoPlayerTakeOver: boolean;
+  /**
+   * 视频时间戳标记(2026-10-30):播放器里打标记写进 markdown,点击回跳;
+   * 伴随笔记即「视频 → 笔记」方向的标记列表。默认开——入口只有播放器工具栏
+   * 与命令,不改变任何既有行为。
+   */
+  videoTimestampsEnabled: boolean;
+  /** 标记伴随笔记的落盘目录(vault 相对路径)。 */
+  videoMarksFolder: string;
   /** Configured external applications for the "open with" menu. */
   openWithApps: OpenWithApp[];
 }
@@ -355,6 +363,8 @@ export const DEFAULT_DOCTREE_SETTINGS: DocTreeSettings = {
   officeViewerEnabled: true,
   imageViewerTakeOver: false,
   videoPlayerTakeOver: false,
+  videoTimestampsEnabled: true,
+  videoMarksFolder: 'Video Marks',
   openWithApps: [],
 };
 
@@ -439,6 +449,10 @@ export function docTreeSettingsFrom(raw: unknown): DocTreeSettings {
   s.officeViewerEnabled = o.officeViewerEnabled !== false;
   s.imageViewerTakeOver = o.imageViewerTakeOver === true;
   s.videoPlayerTakeOver = o.videoPlayerTakeOver === true;
+  // 时间戳标记:缺省开;空目录名回落默认(设置 UI 承诺「留空用默认」)。
+  s.videoTimestampsEnabled = o.videoTimestampsEnabled !== false;
+  const marksFolder = typeof o.videoMarksFolder === 'string' ? o.videoMarksFolder.trim() : '';
+  s.videoMarksFolder = marksFolder || DEFAULT_DOCTREE_SETTINGS.videoMarksFolder;
   // "Open with": a config that never had the key gets the presets, so a fresh
   // install has something in the menu; once the key exists (even as []) the
   // user's own list — including an empty one — is respected.

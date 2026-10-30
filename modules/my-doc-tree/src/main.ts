@@ -14,6 +14,7 @@
  */
 
 import { Notice, Platform, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
+import { around } from 'monkey-around';
 import { DocTreeSettingTab } from './settings/tab';
 import { MountPanelView, VIEW_TYPE_MOUNT_PANEL } from './panels/mountPanel';
 import { MountEditorModal, MountListModal, MountPositionModal } from './panels/mountModals';
@@ -43,6 +44,7 @@ import {
   type ScanEntry,
 } from './features/mountFilter';
 import { applyMarkedTabIcons, markLeafTabIcon } from './features/tabIcon';
+import { parseExtVideoTarget } from './features/videoTimestamps';
 import { ICON_THEME_CHANGED_EVENT } from './extensions/iconThemeLoader';
 import {
   DEFAULT_DOCTREE_SETTINGS,
@@ -110,6 +112,14 @@ export default class DocTreePlugin extends Plugin {
       registerFreeExtensions(this, VIDEO_EXTENSIONS, VIEW_TYPE_VIDEO, 'video player');
     }
 
+    // ---------- 视频时间戳链接路由(2026-10-30) ----------
+    // `[[ext:<绝对路径>#t=83|00:01]]` 的点击(阅读视图 / Live Preview / 块编辑器
+    // 的 openLink)统一汇到 Workspace.openLinkText,在这一个 patch 里拦截:
+    // ext: + 视频扩展名 → 打开播放器并跳到该时刻;其余走原函数。
+    // doc-tree 先于 media-extended 引导,此 patch 在内层——mx 对它不认识的
+    // ext: 目标回落 fallback 时正好落到这里。
+    this.patchOpenLinkTextForExtVideos();
+
     // 图标主题就绪/切换 → 挂载面板行内图标重绘（iconForEntry 每次渲染时查询）
     // 自定义事件不走 registerDomEvent（其重载只收已知事件名），register 兜底注销。
     const onIconThemeChanged = () => {
@@ -140,6 +150,30 @@ export default class DocTreePlugin extends Plugin {
       id: 'refresh-external-mounts',
       name: 'Rescan external mounts',
       callback: () => this.refreshMounts(),
+    });
+
+    // ---------- 视频时间戳 ----------
+    this.addCommand({
+      id: 'video-add-timestamp',
+      name: '视频：在当前时间打时间戳标记',
+      // 用户要求支持快捷键;默认 Mod+Shift+M,热键设置里可改。
+      hotkeys: [{ modifiers: ['Mod', 'Shift'], key: 'M' }],
+      checkCallback: (checking) => {
+        const view = this.activeOrRecentVideoView();
+        if (!view) return false;
+        if (!checking) void view.addTimestampMark();
+        return true;
+      },
+    });
+    this.addCommand({
+      id: 'video-open-marks-note',
+      name: '视频：打开当前视频的标记笔记',
+      checkCallback: (checking) => {
+        const view = this.activeOrRecentVideoView();
+        if (!view) return false;
+        if (!checking) void view.openMarksNote();
+        return true;
+      },
     });
 
     // ---------- 库外媒体:任意磁盘路径的图片/视频,系统文件选择器 ----------
@@ -659,8 +693,10 @@ export default class DocTreePlugin extends Plugin {
    * 同一文件已开着时复用叶而不是叠标签；媒体文件没有「接管」包袱，也不进
    * setViewState 补丁的路径（ItemView 自有 state）。
    */
-  async openExternalInView(viewType: string, spec: { abs: string; name?: string }): Promise<void> {
-    const state = { abs: spec.abs, name: spec.name ?? '' };
+  async openExternalInView(viewType: string, spec: { abs: string; name?: string; t?: number }): Promise<void> {
+    // t = 时间戳(秒):时间戳链接点击路由进来的,VideoView 用它 seek。
+    const state: Record<string, unknown> = { abs: spec.abs, name: spec.name ?? '' };
+    if (typeof spec.t === 'number' && Number.isFinite(spec.t)) state.t = spec.t;
     // 复用同一文件的同型视图叶。
     for (const leaf of this.app.workspace.getLeavesOfType(viewType)) {
       const vs = leaf.getViewState().state as { abs?: string } | undefined;
@@ -678,6 +714,62 @@ export default class DocTreePlugin extends Plugin {
     this.refreshTabIcons();
     this.refreshTabIconsSoon();
     this.logOp('external.open', spec.abs, 'ok', viewType === VIEW_TYPE_IMAGE ? 'image-viewer' : 'video-player');
+  }
+
+  /**
+   * 时间戳命令的目标播放器:优先活动视图;没在前台时取**最近活动的**
+   * VideoView 叶(用户的工作流是笔记在前、视频在旁边,快捷键按下时光标
+   * 在笔记里——按 active 门控会让热键永远够不着)。
+   */
+  private activeOrRecentVideoView(): VideoView | null {
+    const active = this.app.workspace.getActiveViewOfType(VideoView);
+    if (active) return active;
+    let found: VideoView | null = null;
+    let best = -1;
+    this.app.workspace.iterateAllLeaves((l) => {
+      const v = l.view;
+      if (v instanceof VideoView) {
+        const at = (l as unknown as { activeTime?: number }).activeTime ?? 0;
+        if (at >= best) {
+          best = at;
+          found = v;
+        }
+      }
+    });
+    return found;
+  }
+
+  /**
+   * Patch `Workspace.openLinkText`:`ext:<绝对路径>#t=秒` 的内部链接点击
+   * (阅读视图/Live Preview 的 wikilink、块编辑器的 openLink 都汇到这里)
+   * 直接路由到视频播放器并跳到该时刻。其余目标一律走原函数。
+   *
+   * 与 media-extended 的同名 patch 叠加顺序:doc-tree 先引导、先 patch,在
+   * 调用链的内层;mx 对它不认识的 `ext:` 目标回落 fallback 时落到这里。
+   */
+  private patchOpenLinkTextForExtVideos(): void {
+    const self = this;
+    this.register(
+      around(self.app.workspace.constructor.prototype as object, {
+        openLinkText(old: unknown) {
+          return function openLinkTextRouted(this: unknown, linktext: string, sourcePath: string, newLeaf?: unknown, data?: unknown) {
+            if (typeof linktext === 'string' && linktext.startsWith('ext:')) {
+              const parsed = parseExtVideoTarget(linktext);
+              const name = parsed?.abs.split(/[\\/]/).pop() ?? '';
+              if (parsed && name && isVideoFile(name)) {
+                void self.openExternalInView(VIEW_TYPE_VIDEO, {
+                  abs: parsed.abs,
+                  name,
+                  t: parsed.seconds ?? undefined,
+                });
+                return Promise.resolve();
+              }
+            }
+            return (old as (...a: unknown[]) => unknown).call(this, linktext, sourcePath, newLeaf, data);
+          };
+        },
+      }),
+    );
   }
 
   /** Keep every open image viewer's tab title in sync after prev/next. */

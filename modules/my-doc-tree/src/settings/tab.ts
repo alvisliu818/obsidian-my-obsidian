@@ -252,6 +252,33 @@ export class DocTreeSettingTab extends PluginSettingTab {
         }),
       );
 
+    // ---------- 视频时间戳标记 ----------
+    new Setting(containerEl)
+      .setName('视频时间戳标记')
+      .setDesc(
+        '播放器工具栏与命令(Ctrl/Cmd+Shift+M,可在热键设置改)在当前播放时间打标记:' +
+          '优先插入当前活动笔记的光标处;没有活动笔记时写入标记笔记' +
+          '(笔记里点时间戳跳回视频该时刻;播放器的「标记列表」读它,即双向链接)。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.videoTimestampsEnabled !== false).onChange(async (v) => {
+          this.plugin.settings.videoTimestampsEnabled = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+    new Setting(containerEl)
+      .setName('标记笔记目录')
+      .setDesc('没有活动笔记时,标记自动写入这个库内目录下的《视频名.md》。留空用默认 Video Marks。')
+      .addText((t) =>
+        t
+          .setPlaceholder('Video Marks')
+          .setValue(this.plugin.settings.videoMarksFolder ?? '')
+          .onChange(async (v) => {
+            this.plugin.settings.videoMarksFolder = v.trim() || 'Video Marks';
+            await this.plugin.saveSettings();
+          }),
+      );
+
     // ---------- Open with ----------
     containerEl.createEl('h4', { text: '打开方式' });
     containerEl.createEl('p', {

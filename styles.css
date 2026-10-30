@@ -5494,6 +5494,53 @@ span.lgp-hdr-ctx-open {
   height: 26px;
   font-size: var(--font-ui-smaller);
 }
+/* 视频时间戳标记面板(工具栏与画面之间,默认收起) */
+.lg-video-view__marks {
+  flex: 0 0 auto;
+  max-height: 30%;
+  overflow: auto;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  font-size: var(--font-ui-smaller);
+}
+.lg-video-view__marks-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.lg-video-view__marks-title {
+  font-weight: 600;
+  margin-right: auto;
+}
+.lg-video-view__marks-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.lg-video-view__marks-row:hover {
+  background: var(--background-modifier-hover);
+}
+.lg-video-view__marks-time {
+  font-family: var(--font-monospace);
+  color: var(--text-accent);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.lg-video-view__marks-time:hover {
+  text-decoration: underline;
+}
+.lg-video-view__marks-note {
+  color: var(--text-normal);
+  overflow-wrap: anywhere;
+}
+.lg-video-view__marks-empty {
+  color: var(--text-muted);
+  padding: 2px 0;
+}
 .lg-image-view__stage,
 .lg-video-view__stage {
   flex: 1 1 auto;

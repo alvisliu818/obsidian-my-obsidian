@@ -110,6 +110,22 @@ function isLinkTimestampEndpoint(view: EditorView, from: number, to: number): bo
     return false;
 }
 
+
+/**
+ * `[[…#t=…]]` 形态 wikilink 内的时间戳**不**由本模块渲染成按钮——那是
+ * audio-recorder 的录音时间戳与视频时间戳标记(2026-10-30)的地盘:链接的
+ * 点击已经由各自模块经 openLinkText 接管,这里的裸时间戳装饰会把链接吃掉
+ * (实测:别名 00:05 被 widget 替换,链接不可点)。
+ */
+function insideTcWikilink(view: EditorView, from: number): boolean {
+    const line = view.state.doc.lineAt(from);
+    const before = line.text.slice(0, from - line.from);
+    const open = before.lastIndexOf("[[");
+    if (open < 0) return false;
+    if (before.lastIndexOf("]]") > open) return false; // 上一个 wikilink 已闭合
+    return before.slice(open).includes("#t=");
+}
+
 function createDecorationPlugin(matcher: MatchDecorator) {
     return Prec.high(ViewPlugin.fromClass(
         class {
@@ -147,6 +163,9 @@ export function createLivePreviewTimestampExtension(manager: TimestampManager) {
 
             // 链接语法内的时间戳由链接装饰接管，避免双重渲染
             if (isLinkTimestampEndpoint(view, from, to)) return;
+
+            // [[…#t=…]] wikilink 内的时间戳留给所属模块(录音/视频标记)
+            if (insideTcWikilink(view, from)) return;
 
             const timeStr = match[0];
             const totalSeconds = parseTimestamp(timeStr);

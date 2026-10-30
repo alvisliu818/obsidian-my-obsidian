@@ -1902,7 +1902,7 @@ export default class LogseqEditorPlugin extends Plugin {
   }
 
   /** 兼容门面:库外媒体(图片/视频)→ doc-tree 的增强查看器/播放器。 */
-  async openExternalInView(viewType: string, spec: { abs: string; name?: string }): Promise<void> {
+  async openExternalInView(viewType: string, spec: { abs: string; name?: string; t?: number }): Promise<void> {
     await docTreeOf(this.app)?.openExternalInView(viewType, spec);
   }
 
