@@ -7,8 +7,9 @@ import { App, Notice, setIcon, TFile, WorkspaceLeaf } from 'obsidian';
  * 与挂载面板那个定位按钮的区别：挂载面板只认 externalMounts 里的路径，库内
  * 文件不在任何挂载目录下就定位不了；这个按钮走 Obsidian 自己的揭示逻辑，对
  * 库内文件总是有效——包括库内代码文件（.py 等）：它们统一开在 ExternalCodeView
- * （ItemView），getActiveFile() 恒为 null，但视图自己解析并持有 vaultFile，
- * 从活动视图取出来直通揭示即可。
+ * （ItemView），getActiveFile() 恒为 null。还原 TFile 两条路：视图自己解析的
+ * vaultFile（registerExtensions/{file} 入口），以及按库根前缀从 abs 兜底解析
+ * （挂载面板入口只带绝对路径）。
  *
  * 揭示优先用内置命令 `…:reveal-active-file`（内部实现随版本变，命令 id 前缀
  * 不保证稳定，故按包含匹配查找）；找不到再回退 FileExplorerView 的
@@ -87,12 +88,17 @@ export class FileExplorerLocateButton {
       // 解析并持有 vaultFile（库外文件才是 null）。取出来直通揭示。
       // getActiveViewOfType 对双参构造的 ExternalCodeView 会报类型错，遍历叶子。
       const view = this.app.workspace.activeLeaf?.view as
-        | { vaultFile?: unknown }
+        | { vaultFile?: unknown; abs?: unknown }
         | undefined;
-      const vaultFile =
+      let vaultFile =
         view && 'vaultFile' in view && view.vaultFile instanceof TFile
           ? view.vaultFile
           : null;
+      // 挂载面板打开的库内代码文件走 abs（state 只有绝对路径），ExternalCodeView
+      // 只在 {file} 分支解析 vaultFile——此时为 null。按库根前缀从 abs 兜底还原。
+      if (!vaultFile && view && typeof view.abs === 'string' && view.abs) {
+        vaultFile = this.vaultTFileFromAbs(view.abs);
+      }
       if (!vaultFile) {
         new Notice('当前是库外文件：请用挂载面板的「定位当前文件」按钮');
         return;
@@ -119,6 +125,34 @@ export class FileExplorerLocateButton {
     if (this.revealInExplorer(active)) return;
 
     new Notice('未能定位当前文件');
+  }
+
+  /** abs 落在库内时还原对应 TFile（库根前缀匹配，Windows 大小写不敏感）；库外 null。 */
+  private vaultTFileFromAbs(abs: string): TFile | null {
+    const adapter = this.app.vault.adapter as unknown as {
+      getFullPath?: (p: string) => string;
+      basePath?: string;
+    };
+    let base = '';
+    if (typeof adapter.getFullPath === 'function') {
+      try {
+        base = adapter.getFullPath('');
+      } catch {
+        /* fall through to basePath */
+      }
+    }
+    if (!base) base = adapter.basePath ?? '';
+    base = base.replace(/[\\/]+$/, '');
+    if (!base) return null;
+    const full = abs.replace(/\\/g, '/');
+    const normBase = base.replace(/\\/g, '/');
+    if (!full.toLowerCase().startsWith(normBase.toLowerCase() + '/')) {
+      return null;
+    }
+    const resolved = this.app.vault.getAbstractFileByPath(
+      full.slice(normBase.length + 1),
+    );
+    return resolved instanceof TFile ? resolved : null;
   }
 
   /** 在文件浏览器面板里揭示 TFile（revealFile 存在即用）；成功返回 true。 */
