@@ -116,7 +116,7 @@ export interface MigratableSettings {
   readonly treatAsAttachmentExtensions?: readonly string[];
 }
 
-export const ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_ID = 'advanced-rename-and-delete-handler';
+export const ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_ID = 'my-advanced-rename-and-delete-handler';
 
 export const ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_NAME = 'Advanced Rename and Delete Handler';
 

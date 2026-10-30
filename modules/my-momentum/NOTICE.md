@@ -29,7 +29,7 @@ git log 71f71bf -- src/view.ts          # Momentum's own files kept their paths
   Momentum's own blob, and `installSaveBridge()` serializes every write
   (read-modify-write) so a calendar save can neither clobber nor race a
   Momentum save.
-- The sub-plugin gets a **synthetic manifest** (`id: "worklife-calendar"`,
+- The sub-plugin gets a **synthetic manifest** (`id: "my-worklife-calendar"`,
   name "WorkLife Calendar") so its settings tab and command labels keep the
   calendar's own identity, and its `findPluginDir()` adapter fallback can only
   ever match a *stale standalone install* — a one-time migration read, never a

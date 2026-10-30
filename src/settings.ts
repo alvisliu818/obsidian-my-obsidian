@@ -30,18 +30,19 @@ export interface ModuleDescriptor {
 	/** Our own id (the key in settings.modules). */
 	id: string;
 	/**
-	 * The id this plugin had BEFORE the merge.
+	 * The id this module answers to in the app's plugin table (its own
+	 * my- 前缀 id；2026-10-30 起不再占用上游插件 id)。
 	 *
 	 * Two modules reach for each other through `app.plugins.plugins[...]`:
 	 * jupyter reads logseq's `pythonEnvs`, breadcrumb reads logseq's mount
-	 * list. Keeping the old id alive as an alias means those lookups — and any
-	 * other plugin that integrated with them — keep working untouched.
+	 * list. Keeping that id alive as an alias means those lookups — and any
+	 * other plugin that integrated with the my- id — keep working untouched.
 	 */
 	legacyId?: string;
 	/**
-	 * Extra pre-merge ids to keep alive (modules merged from SEVERAL upstream
-	 * plugins, e.g. audio-player = media-marker + audio-timestamp-player +
-	 * timestamp-player). Takes precedence over `legacyId` when present.
+	 * Extra ids to keep alive (modules merged from SEVERAL upstream
+	 * plugins, e.g. audio-player = my-media-marker + my-audio-timestamp-player +
+	 * my-timestamp-player). Takes precedence over `legacyId` when present.
 	 */
 	legacyIds?: string[];
 	/** Shown as this module's settings-tab name. */
@@ -56,8 +57,9 @@ export interface ModuleDescriptor {
 	 * Mostly identity fields (`id` / `version`) for modules that take part in
 	 * mnaoumov-style cross-plugin API negotiation: `publishPluginApi` registers
 	 * under `plugin.manifest.id`, and version gates read
-	 * `app.plugins.plugins[id].manifest.version` — both must be the UPSTREAM
-	 * values for a co-bundled provider/consumer pair to find each other.
+	 * `app.plugins.plugins[id].manifest.version` — `id` must be the SAME my-
+	 * 前缀 string on both sides of a co-bundled provider/consumer pair, while
+	 * `version` stays the upstream value (the gates compare against it).
 	 * `dir` must never be overridden (sidecar paths land in the real plugin
 	 * folder); `name` is always taken from the descriptor.
 	 */

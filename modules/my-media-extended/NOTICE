@@ -10,7 +10,7 @@ LICENSE；cm-language fork 同为 MIT）原样保留并注明出处。
   main 分支历史上从未包含源码，故收编止于 v3。
 - monorepo 形态原样保留：apps/app（插件本体，入口 src/mx-main.ts）、
   packages/*、pnpm/turbo 等仓库机制文件原样在位（聚合构建不经它们）。
-- manifest id: `media-extended`（id 与 legacyId 同为真实上游 id）。
+- manifest id: `my-media-extended`（2026-10-30 起 id 与 legacyId 均用 my- 前缀 id，不再占用上游 id）。
 
 收编适配（均为构建/接线机械适配，不改运行时语义）:
 1. **cm-language submodule 实体化**: 上游 packages/cm-language 是指向

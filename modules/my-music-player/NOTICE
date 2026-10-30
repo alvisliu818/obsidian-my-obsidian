@@ -6,8 +6,9 @@
 - 上游仓库: https://github.com/tracingorigins/obsidian-music-player-plugin
 - 收编版本: v1.3.8（commit 7b4d220eff54c3c4700407a1c8d19c9d6639ac6c，main 分支）
 - 收编方式: 工作区整体拷贝（与上游 HEAD 逐文件一致，未改源码语义）
-- manifest id: `music-player`（聚合内 id 与 legacyId 均保持此真实上游 id，
-  使 `app.plugins.plugins["music-player"]` 继续可解析）
+- manifest id: `my-music-player`（2026-10-30 起聚合内 id 与 legacyId 均用
+  my- 前缀 id，不再占用上游 id；`app.plugins.plugins["my-music-player"]`
+  可解析）
 
 并入时的适配（均不改语义）:
 - 根 `package.json` 的 `obsidian: latest` 钉为 `1.14.4`（与聚合宿主类型版本一致）。

@@ -63,7 +63,7 @@ function persistChatStyle(app: App, style: ChatStyle): void {
       } | null;
     };
   };
-  const plugin = (app as unknown as PluginHost).plugins?.getPlugin?.("worklife-calendar");
+  const plugin = (app as unknown as PluginHost).plugins?.getPlugin?.("my-worklife-calendar");
   void plugin?.writeOptions?.({ aiChatStyle: style });
 }
 
@@ -419,7 +419,7 @@ export class AiAskChat {
           } | null;
         };
       };
-      const plugin = (this.app as unknown as PluginHost).plugins?.getPlugin?.("worklife-calendar");
+      const plugin = (this.app as unknown as PluginHost).plugins?.getPlugin?.("my-worklife-calendar");
       void plugin?.writeOptions?.({ aiWebSearchEnabled: this.webSearchOn });
       this.renderWebSearchToggle();
       new Notice(this.webSearchOn ? tRaw("ai.askQa.webSearchOn") : tRaw("ai.askQa.webSearchOff"));

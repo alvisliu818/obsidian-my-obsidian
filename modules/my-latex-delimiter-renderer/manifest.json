@@ -1,5 +1,5 @@
 {
-  "id": "latex-delimiter-renderer",
+  "id": "my-latex-delimiter-renderer",
   "name": "LaTeX Delimiter Renderer",
   "version": "1.0.4",
   "minAppVersion": "1.5.0",

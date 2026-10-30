@@ -12,8 +12,9 @@
 - 收编方式: 工作区整体拷贝（`src/`、`preview/`、`LICENSE`、`README.md`、
   `manifest.json`、`versions.json`、`tsconfig.json`、`package.json`、`styles.css`
   与上游 HEAD 逐文件一致），未改源码语义
-- manifest id: `scrolling`（聚合内 id 与 legacyId 均保持此真实上游 id，
-  使 `app.plugins.plugins["scrolling"]` 继续可解析）
+- manifest id: `my-scrolling`（2026-10-30 起聚合内 id 与 legacyId 均用
+  my- 前缀 id，不再占用上游 id；`app.plugins.plugins["my-scrolling"]`
+  可解析）
 
 ## 功能
 

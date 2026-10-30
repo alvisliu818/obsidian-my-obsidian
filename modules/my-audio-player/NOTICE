@@ -24,10 +24,11 @@
 
 ## 二、合并后的插件标识
 
-- 聚合内模块 id：`audio-player`（设置页显示名 `Audio Player`）
-- 宿主 `ModuleDescriptor` 挂三个 legacyId 别名：`media-marker`、
-  `audio-timestamp-player`、`timestamp-player` —— 三者的旧 id 在
-  `app.plugins.plugins` 中均可继续解析（数据互不迁移：三个上游的
+- 聚合内模块 id：`my-audio-player`（设置页显示名 `Audio Player`；2026-10-30
+  起 id 与别名统一加 `my-` 前缀，不再占用上游 id）
+- 宿主 `ModuleDescriptor` 挂三个 legacyId 别名：`my-media-marker`、
+  `my-audio-timestamp-player`、`my-timestamp-player` —— 上游旧 id 不再
+  进插件表（数据互不迁移：三个上游的
   data.json / player-settings.json 边车互不兼容，重新配置即可；
   基底 media-marker 原本就不用 data.json）。
 - manifest 版本从 1.0.0 起算（新身份）；上游 media-marker 1.0.4 的

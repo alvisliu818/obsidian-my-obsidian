@@ -74,7 +74,7 @@ const CustomAttachmentLocationPlugin = (
 ).default;
 // advanced-rename-and-delete-handler v2.3：custom-attachment-location v12+
 // 声明的伴生依赖（附件跟随重命名/删除的真正执行者）。同款 require 桥；
-// descriptor 里的 manifest 覆盖（id/version 特制成上游值）是 CAL 门禁能
+// descriptor 里的 manifest 覆盖（id 用模块自己的 my- 前缀值、version 特制成上游值）是 CAL 门禁能
 // 打开的关键，见 modules/my-advanced-rename-and-delete-handler/NOTICE。
 const AdvancedRenameAndDeleteHandlerPlugin = (
 	require("../modules/my-advanced-rename-and-delete-handler/src/main") as {
@@ -110,7 +110,7 @@ export default class MyObsidianPlugin extends Plugin {
 
 	/** Loaded modules, by id. */
 	private readonly live = new Map<string, SubPluginLike>();
-	/** Old plugin ids we re-published into the app's plugin table. */
+	/** 模块的 my- 前缀 id，发布进 app 的插件表，供跨插件查找。 */
 	private readonly aliases: string[] = [];
 
 	readonly descriptors: ModuleDescriptor[] = [
@@ -121,7 +121,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// onload 通过 docTreeOf() 找到它登记库外编辑 opener(见 doc-tree
 			// 的 openers.ts);它被单独关闭时库外文件回落系统打开,库内编辑不受影响。
 			id: "doc-tree",
-			legacyId: "obsidian-doc-tree",
+			legacyId: "my-obsidian-doc-tree",
 			name: "my Doc Tree",
 			summary:
 				"虚拟文档树：把库外文件夹挂进侧栏（挂载树/嵌套挂载/新建笔记/链接进库），库外图片、视频与 Office 文件的应用内查看器，以及库外文件的打开路由与系统「打开方式」菜单。",
@@ -136,7 +136,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// (ExternalCodeView/hybridCodeEditor/CodeDocView)留 logseq,经静态
 			// import 使用本模块(上层→底层)。
 			id: "code-editor",
-			legacyId: "obsidian-code-editor",
+			legacyId: "my-obsidian-code-editor",
 			name: "my Code Editor",
 			summary: "Monaco 代码编辑器基建：代码块/代码文件的语法高亮与编辑（含混合模式所需的编辑器内核）、LSP 诊断补全（pyright 等）、代码执行器，以及 VSCode 扩展的主题/片段/语法贡献注册。",
 			desktopOnly: true,
@@ -146,7 +146,7 @@ export default class MyObsidianPlugin extends Plugin {
 			id: "logseq",
 			// The id other modules look this one up by (jupyter reads
 			// `pythonEnvs` off it, breadcrumb reads its mount list).
-			legacyId: "obsidian-logseq",
+			legacyId: "my-obsidian-logseq",
 			name: "my Logseq Editor",
 			summary: "Logseq 式块大纲编辑器：折叠、缩放、块引用、任务、SQLite 索引，以及库外文件的虚拟文档树。",
 			desktopOnly: true,
@@ -154,7 +154,7 @@ export default class MyObsidianPlugin extends Plugin {
 		},
 		{
 			id: "browser",
-			legacyId: "obsidian-browser",
+			legacyId: "my-obsidian-browser",
 			name: "my Browser",
 			summary: "库内的多标签浏览器：地址栏、书签、历史、下载、网页剪藏与 Chrome 扩展支持。",
 			desktopOnly: true,
@@ -162,7 +162,7 @@ export default class MyObsidianPlugin extends Plugin {
 		},
 		{
 			id: "jupyter",
-			legacyId: "obsidian-jupyter-notebook",
+			legacyId: "my-obsidian-jupyter-notebook",
 			name: "my Jupyter Notebook",
 			summary: "在库里查看、编辑并运行 .ipynb，自带常驻 Python 内核。",
 			desktopOnly: true,
@@ -170,7 +170,7 @@ export default class MyObsidianPlugin extends Plugin {
 		},
 		{
 			id: "breadcrumb",
-			legacyId: "breadcrumb-nav",
+			legacyId: "my-breadcrumb-nav",
 			name: "my Breadcrumb Nav",
 			summary: "笔记顶部的面包屑（文件 › 标题 / 块层级），支持悬浮查看同级与逐级下钻。",
 			desktopOnly: false,
@@ -178,7 +178,7 @@ export default class MyObsidianPlugin extends Plugin {
 		},
 		{
 			id: "doc-assist",
-			legacyId: "obsidian-doc-assist",
+			legacyId: "my-obsidian-doc-assist",
 			name: "my Doc Assist",
 			summary:
 				"文档加工流水线：剪藏清洗（多余空行 / 行尾空白 / 列表前缀 / AI 报告残留）、中英文加空格与标点互转、列表段落整理、断尾求真删区间。",
@@ -190,7 +190,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// Same id before and after the merge: this module is a THIRD-PARTY
 			// plugin (GilbertzzzZZ, MIT) kept whole, not our own code, so the
 			// alias has to be its real upstream id.
-			legacyId: "material-icon-theme",
+			legacyId: "my-material-icon-theme",
 			name: "my Material Icon Theme",
 			summary:
 				"文件浏览器换上 Material Design 图标：按文件名 / 扩展名 / 文件夹名匹配，含 Obsidian 专有的 canvas、base。上游 GilbertzzzZZ（MIT）。",
@@ -200,7 +200,7 @@ export default class MyObsidianPlugin extends Plugin {
 		{
 			id: "tracetime",
 			// Third-party too (QuincySx, MIT), kept as the user's own fork of it.
-			legacyId: "tracetime",
+			legacyId: "my-tracetime",
 			name: "my TraceTime",
 			summary:
 				"在每个段落旁显示它最后一次被编辑的时间，编辑器与阅读模式都有；记录存在本地，不联网。上游 QuincySx（MIT）。",
@@ -211,7 +211,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// GPL-3.0: merging it in is what switched the whole repo to GPL-3.
 			// Kept whole, upstream is Swaggeroo.
 			id: "ai-image-analyzer",
-			legacyId: "ai-image-analyzer",
+			legacyId: "my-ai-image-analyzer",
 			name: "my AI image analyzer",
 			summary:
 				"用 AI 给图片生成关键词：Gemini / Ollama 等接口，支持批量分析、按关键词反查图片，结果缓存本地。上游 Swaggeroo（GPL-3.0）。",
@@ -224,7 +224,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// git layouts: settings.gitDir is injected as GIT_DIR/GIT_WORK_TREE
 			// env into simple-git (desktop) and as gitdir: into isomorphic-git
 			// (mobile). The user's vault then keeps zero .git traces.
-			legacyId: "obsidian-git",
+			legacyId: "my-obsidian-git",
 			name: "my Git",
 			summary:
 				"库内 git 集成：自动备份/定时 pull、源管理视图、行作者标注、差异比对。支持分离布局（设置里填 gitDir 即可让仓库数据放 vault 之外）。上游 Vinzent03（MIT）。",
@@ -235,7 +235,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// GPL-3 as well — upstream Simon Cambier. Its Svelte components build
 			// through the same esbuild (see the svelte plugin in esbuild.mjs).
 			id: "omnisearch",
-			legacyId: "omnisearch",
+			legacyId: "my-omnisearch",
 			name: "my Omnisearch",
 			summary:
 				"库内全文搜索引擎：拼音容错、按路径/标签/区块过滤、文件内搜索与 API。上游 Simon Cambier（GPL-3）。",
@@ -246,7 +246,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// 两个上游 MIT 插件的合并（见 modules/my-save-control/NOTICE.md）。库外
 			// 文件支持依赖 Node fs（快照/读写），只承诺桌面端。
 			id: "save-control",
-			legacyId: "save-history",
+			legacyId: "my-save-history",
 			name: "my Save Control",
 			summary:
 				"自动保存节奏控制 + 文件版本历史（save-history 与 autosave-control 合并）：延迟落盘、状态栏待保存指示、标签页未保存圆点与关闭提示；虚拟文档树挂载的库外文件同样支持。上游 Sevoni（MIT）+ mihasm（MIT）。",
@@ -256,7 +256,7 @@ export default class MyObsidianPlugin extends Plugin {
 		{
 			// Third-party (jesse-r-s-hines, MIT), kept whole.
 			id: "open-tab-settings",
-			legacyId: "open-tab-settings",
+			legacyId: "my-open-tab-settings",
 			name: "my Open Tab Settings",
 			summary:
 				"标签页打开方式定制：默认新标签页/新窗口打开、防止重复标签页、新标签页分组摆放，可按来源（文件列表/搜索/反链等）分别设置。上游 jesse-r-s-hines（MIT）。",
@@ -267,7 +267,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// Third-party (Anatol Khmialeuski, MIT), kept whole — see
 			// modules/my-audio-recorder/NOTICE.
 			id: "audio-recorder",
-			legacyId: "advanced-audio-recorder",
+			legacyId: "my-advanced-audio-recorder",
 			name: "my Audio Recorder",
 			summary:
 				"库内录音与语音转写：多轨（麦克风+系统声）录音、带书签/章节/波形的高级播放器、格式转换、降噪清理与说话人分离转写（Whisper / Deepgram / Gemini / 本地 whisper.cpp）。上游 Anatol Khmialeuski（MIT）。",
@@ -279,7 +279,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// modules/my-media-journal/NOTICE. Desktop-only like its own
 			// manifest: screen capture needs getDisplayMedia.
 			id: "media-journal",
-			legacyId: "media-recorder",
+			legacyId: "my-media-recorder",
 			name: "my Media Recorder",
 			summary:
 				"侧栏里的录像/录屏/录音机：三档画质、画中画预览、计时与暂停续录，录完的 .webm 存进库并可自动嵌入当前笔记（或指定笔记）；嵌入后的视频能拖拽改宽度并写回原文。上游 Alaxanalax10（0-BSD）。",
@@ -293,7 +293,7 @@ export default class MyObsidianPlugin extends Plugin {
 			id: "music-player",
 			// Same id before and after the merge: keeps the real upstream id
 			// alive in the plugin table (same precedent as material-icon-theme).
-			legacyId: "music-player",
+			legacyId: "my-music-player",
 			name: "my Music Player",
 			summary:
 				"侧栏音乐播放器：扫描库内音频按艺术家/专辑整理，歌词滚动与卡拉OK逐字、播放队列与收藏、封面自动匹配，库外文件不支持。上游 TracingOrigins（MIT）。",
@@ -305,7 +305,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// see modules/my-media-extended/NOTICE. 4.x is closed-source; v3
 			// (3.2.6) is the last open build. Desktop-only per its manifest.
 			id: "media-extended",
-			legacyId: "media-extended",
+			legacyId: "my-media-extended",
 			name: "my Media Extended",
 			summary:
 				"库内媒体播放增强：本地/YouTube/B站视频与音频的嵌入式播放器、时间戳链接与截图、媒体笔记工作流。上游 AidenLx（MIT；v3 3.2.6 为最后的开源版本）。",
@@ -322,7 +322,7 @@ export default class MyObsidianPlugin extends Plugin {
 			id: "audio-player",
 			// All three upstream ids stay resolvable in the plugin table
 			// (first use of legacyIds — their data.json files are NOT migrated).
-			legacyIds: ["media-marker", "audio-timestamp-player", "timestamp-player"],
+			legacyIds: ["my-media-marker", "my-audio-timestamp-player", "my-timestamp-player"],
 			name: "my Audio Player",
 			summary:
 				"转录文稿时间戳点击即播：自定义播放器（进度/音量/倍速/字幕/画中画/全屏）、贴边媒体、字幕歌词、快捷键、循环区间、时间戳插入；同笔记多录音可用 %%audio-id%% 显式绑定，播放跨视图切换存活（悬浮播放器）。上游 blontern（MIT）+ ITNQ18（0BSD）+ zhoulianglen（MIT）。",
@@ -336,19 +336,20 @@ export default class MyObsidianPlugin extends Plugin {
 			// with .ts extensions; obsidian-lib range ^4.2.1 vs root 5.1.0).
 			//
 			// It is custom-attachment-location v12+'s declared companion: CAL's
-			// dependency gate consumes its API through watchPluginApi keyed by
-			// the UPSTREAM plugin id, and version-gates it through the plugin
+			// dependency gate consumes its API through watchPluginApi keyed by this
+			// module's own my- 前缀 id, and version-gates it through the plugin
 			// table. Hence the manifest override — publishPluginApi registers
-			// under plugin.manifest.id, so `id` must be the upstream id, and
+			// under plugin.manifest.id, so `id` must equal the id CAL watches
+			// for (the same my- string on both sides), and
 			// `version` must satisfy CAL's minPluginVersion 2.2.0 (host is 0.1.0).
 			// Listed BEFORE custom-attachment-location: provider first.
 			id: "advanced-rename-and-delete-handler",
-			legacyId: "advanced-rename-and-delete-handler",
+			legacyId: "my-advanced-rename-and-delete-handler",
 			name: "my Advanced Rename and Delete Handler",
 			summary:
 				"全库统一接管重命名/删除：更新链接、移动附件文件与文件夹、清理删除残留（空文件夹处理、挽救路径解析）。默认所有开关关闭，装上不改变现有行为；开启后 custom-attachment-location 的「附件跟随重命名」也由它完成。上游 mnaoumov（MIT）。",
 			desktopOnly: false,
-			manifest: { id: "advanced-rename-and-delete-handler", version: "2.3.0" },
+			manifest: { id: "my-advanced-rename-and-delete-handler", version: "2.3.0" },
 			cls: AdvancedRenameAndDeleteHandlerPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
@@ -365,7 +366,8 @@ export default class MyObsidianPlugin extends Plugin {
 			// the host's 0.1.0 it would read the co-bundled CAL as an OLD CAL,
 			// block itself, and dead-lock the CAL gate that depends on it.
 			//
-			// manifest.id MUST also be the upstream id. Obsidian's
+			// manifest.id MUST also be overridden — 2026-10-30 起用模块自己的 my- 前缀
+			// id，不再借用上游 id，避免与真上游插件在插件表/命令空间里重名。Obsidian's
 			// PluginSettingTab takes its id from `plugin.manifest.id`, so
 			// leaving it as the host's gave CAL a settings tab literally called
 			// "obsidian-my-obsidian" — the same id as the host's own tab, which
@@ -375,12 +377,12 @@ export default class MyObsidianPlugin extends Plugin {
 			// overrides its id above. `dir` deliberately stays the host's: CAL
 			// writes its sidecar files next to the real plugin folder.
 			id: "custom-attachment-location",
-			legacyId: "obsidian-custom-attachment-location",
+			legacyId: "my-obsidian-custom-attachment-location",
 			name: "my Custom Attachment Location",
 			summary:
 				"自定义附件存放位置：用 {{noteFileName}}、{{date:format}} 等变量拼出目标路径，支持笔记子文件夹/同名文件夹归档、粘贴即自动归位、批量收集与清理未使用附件、重命名删除时同步更新链接。上游 RainCat1998 + mnaoumov（MIT）。",
 			desktopOnly: false,
-			manifest: { id: "obsidian-custom-attachment-location", version: "16.0.0" },
+			manifest: { id: "my-obsidian-custom-attachment-location", version: "16.0.0" },
 			cls: CustomAttachmentLocationPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
@@ -388,7 +390,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// modules/my-scrolling/NOTICE. Upstream history (369 commits) was grafted
 			// into this repo, so `git log --follow modules/my-scrolling` still works.
 			id: "scrolling",
-			legacyId: "scrolling",
+			legacyId: "my-scrolling",
 			name: "my Scrolling",
 			summary:
 				"滚动与导航增强：光标居中（typewriter 模式）、记住并恢复滚动/光标位置、代码块不换行横向滚动、行内 MathJax 与文件树横向滚动、置顶/置底按钮与快捷命令、阅读模式 Vim 式快捷键、滚动条显隐策略、正文最大行宽。上游 omeyenburg（MIT）。",
@@ -401,7 +403,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// grafted into this repo, so `git log --follow
 			// modules/my-abstract-folder` still works.
 			id: "abstract-folder",
-			legacyId: "abstract-folder",
+			legacyId: "my-abstract-folder",
 			name: "my Abstract Folder",
 			summary:
 				"动态虚拟文件夹：按父级关系把散落各处的笔记聚成虚拟文件夹，树形/列式两种版式、拖拽整理、文件夹结构生成与转换（冲突消解、分组管理）、图标与配色自定义。上游 Erfan Rahmani（GPL-3.0）。",
@@ -415,7 +417,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// in-process sub-plugin — one manifest, one data.json, the calendar's
 			// settings living under a "worklife" key of this module's slice.
 			id: "momentum",
-			legacyIds: ["momentum-life", "worklife-calendar"],
+			legacyIds: ["my-momentum-life", "my-worklife-calendar"],
 			name: "my Momentum",
 			summary:
 				"生活仪表盘：习惯/任务/健身/营养/学习看板、Google Tasks 与 Google Drive 同步、快速访问面板；并入 WorkLife Calendar 后另有日历/日程/看板/习惯分析/财务/天气视图与 dashboard、hello 代码块。上游 jnagase + atinss（均 MIT）。",
@@ -425,7 +427,7 @@ export default class MyObsidianPlugin extends Plugin {
 		{
 			// 库首页（ondreu/Hearth，MIT）——搜索/仪表盘/启动器三合一。
 			id: "hearth",
-			legacyIds: ["hearth"],
+			legacyIds: ["my-hearth"],
 			name: "my Hearth",
 			summary:
 				"库首页：全局搜索与快速切换器、仪表盘卡片（日记/任务/看板/日历/RSS 阅读/天气/书签/最近文件/画册/启动器/集成 Dataview 等）、工作区布局与壁纸外观，移动端可用。上游 ondreu/Hearth（MIT）。",
@@ -439,7 +441,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// convention and the host tsconfig's `src/*` alias already points at
 			// obsidian-git.
 			id: "vault-explorer",
-			legacyId: "vault-explorer",
+			legacyId: "my-vault-explorer",
 			name: "my Vault Explorer",
 			// manifest.version MUST be the upstream value: the module saves
 			// manifest.version into its own data as pluginVersion, and on every
@@ -449,7 +451,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// search filter has { isEnabled: true, value: undefined }, and the
 			// view dies on its first effect (e.toLowerCase crash, empty view).
 			// Same reason ARDH/CAL override their id/version.
-			manifest: { id: "vault-explorer", version: "1.47.4" },
+			manifest: { id: "my-vault-explorer", version: "1.47.4" },
 			summary:
 				"可视化库浏览器：以 frontmatter 属性与文件元数据过滤、排序，网格/列表/表格/动态（feed）四种版式展示，自定义过滤器可保存复用，卡片支持封面图与正文预览。上游 DecafDev（MIT）。",
 			desktopOnly: true,
@@ -460,12 +462,12 @@ export default class MyObsidianPlugin extends Plugin {
 			// modules/my-latex-delimiter-renderer/LICENSE. Straight `import`, no
 			// require bridge: it compiles clean under the host tsconfig.
 			id: "latex-delimiter-renderer",
-			legacyId: "latex-delimiter-renderer",
+			legacyId: "my-latex-delimiter-renderer",
 			name: "my LaTeX Delimiters",
 			// `id` MUST be part of the override — a copy without it keeps the
 			// HOST's id, and anything keyed on manifest.id (setting tabs,
 			// cross-plugin lookups) would then collide with the host.
-			manifest: { id: "latex-delimiter-renderer", version: "1.0.4" },
+			manifest: { id: "my-latex-delimiter-renderer", version: "1.0.4" },
 			summary:
 				"渲染标准 LaTeX 公式分隔符：行内 \\(…\\) 与独立 \\[...\\]，不改动笔记源文件。原生编辑器的实时预览与阅读模式、logseq 块编辑器（含库外文件）均可；公式里的下标不会把强调漏进正文。上游 Andreas Burger（MIT）。",
 			desktopOnly: false,
@@ -703,8 +705,11 @@ export default class MyObsidianPlugin extends Plugin {
 	 *
 	 * Adds a key to the app's plugin table and nothing else: the enable/disable
 	 * list comes from community-plugins.json, not from this table, so no ghost
-	 * plugin appears in the settings. It only makes `app.plugins.plugins[oldId]`
+	 * plugin appears in the settings. It only makes `app.plugins.plugins[myId]`
 	 * resolve again for the modules (and third-party plugins) that look it up.
+	 *
+	 * 2026-10-30 起别名统一是模块自己的 my- 前缀 id，不再把上游 id 占进插件表——
+	 * 同库若还装着真上游插件，别名不会再顶掉它的位置。
 	 */
 	private aliasLegacyId(d: ModuleDescriptor, inst: SubPluginLike): void {
 		const ids = d.legacyIds ?? (d.legacyId ? [d.legacyId] : []);

@@ -1,7 +1,7 @@
 {
     "author": "Vinzent",
     "authorUrl": "https://github.com/Vinzent03",
-    "id": "obsidian-git",
+    "id": "my-obsidian-git",
     "name": "Git",
     "description": "Integrate Git version control with automatic backup and other advanced features.",
     "isDesktopOnly": false,

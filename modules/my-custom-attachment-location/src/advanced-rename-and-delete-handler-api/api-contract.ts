@@ -59,7 +59,7 @@ import type {
  */
 export type AdvancedRenameAndDeleteHandlerApiContract = TypedApiContract<AdvancedRenameAndDeleteHandlerApi>;
 
-const { createArgumentsSchema, createTypeGuardSchema } = createApiContractSchemaBuilders('advanced-rename-and-delete-handler');
+const { createArgumentsSchema, createTypeGuardSchema } = createApiContractSchemaBuilders('my-advanced-rename-and-delete-handler');
 
 /**
  * Accepts every value {@link EmptyFolderBehavior} can take. Typed as a record over the union so a member added to

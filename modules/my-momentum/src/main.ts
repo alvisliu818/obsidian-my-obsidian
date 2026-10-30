@@ -1857,7 +1857,7 @@ export default class MomentumPlugin extends Plugin implements PAHost {
    *  - loadData/saveData are shadowed on the instance to read/write the
    *    "worklife" namespace of OUR blob (never Momentum's own keys), through
    *    the same serialized write bridge;
-   *  - the manifest is a shallow copy with id "worklife-calendar", so its
+   *  - the manifest is a shallow copy with id "my-worklife-calendar", so its
    *    settings tab and command labels keep the calendar's own name, and its
    *    findPluginDir() fallback can only match a stale standalone install —
    *    a one-time migration read, never a write.
@@ -1866,7 +1866,7 @@ export default class MomentumPlugin extends Plugin implements PAHost {
     try {
       const wlManifest = {
         ...this.manifest,
-        id: "worklife-calendar",
+        id: "my-worklife-calendar",
         name: "WorkLife Calendar",
       } as PluginManifest;
       const wl = new WorkLifePlugin(this.app as App, wlManifest);

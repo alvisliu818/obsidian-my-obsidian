@@ -24,8 +24,8 @@ slice of my-obsidian's single data.json.
 Changes made only for the merge:
 
   - the module registers itself through the host's ModuleDescriptor list
-    instead of its own manifest id; its original id, "media-recorder", is
-    kept alive in app.plugins.plugins so anything looking it up still finds
-    it.
+    instead of its own manifest id; since 2026-10-30 it answers to
+    "my-media-recorder" in app.plugins.plugins (its original upstream id,
+    "media-recorder", is no longer claimed).
   - its styles.css now lives as the "Media Journal" section of the host
     root styles.css, because an Obsidian plugin loads exactly one.

@@ -147,7 +147,7 @@
       appInstance as unknown as {
         plugins?: { getPlugin?: (id: string) => { writeOptions?: (c: Record<string, unknown>) => Promise<void> } | undefined };
       }
-    ).plugins?.getPlugin?.("worklife-calendar");
+    ).plugins?.getPlugin?.("my-worklife-calendar");
     const mod = await import("../task-tracker/KanbanBoardModal");
     new mod.KanbanBoardsListModal(appInstance, {
       defaultBoardId: preferredDefaultId,

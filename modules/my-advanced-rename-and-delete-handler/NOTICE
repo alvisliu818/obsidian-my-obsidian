@@ -37,15 +37,17 @@ v12+ 经 `watchPluginApi` 按 **pluginId** 消费它的 API（obsidian-lib 的
 「插件表查找」，解不了 API 协商。因此本模块的 descriptor 带了
 `manifest` 覆盖：
 
-- `id: 'advanced-rename-and-delete-handler'` —— 让 API 发布对上键；
+- `id: 'my-advanced-rename-and-delete-handler'` —— 让 API 发布对上键
+  （2026-10-30 起用 my- 前缀 id，CAL 侧 watch 的键同步改名）；
 - `version: '2.3.0'` —— CAL 门禁按插件表里的 `manifest.version` 校验
   `minPluginVersion: 2.2.0`，宿主版本号（0.1.0）过不了。
 
 同理，custom-attachment-location 的 descriptor 补了
-`manifest: { version: '16.0.0' }`：本插件声明对 `<12.0.0` 的
-`obsidian-custom-attachment-location` 为 BLOCKING 冲突（老版本自带
-rename handler），查的是别名表实例的 `manifest.version` —— 宿主
-0.1.0 会被误判成老 CAL，反过来把自己 block 死，形成死锁。
+`manifest: { id: 'my-obsidian-custom-attachment-location', version: '16.0.0' }`。
+本插件声明对 `<12.0.0` 的 `obsidian-custom-attachment-location` 为 BLOCKING
+冲突（老版本自带 rename handler）；2026-10-30 起并入版 CAL 改用 my- 前缀
+id，这条冲突只对真正独立安装的上游旧版 CAL 生效，version 覆盖保留是为
+CAL 自身按 manifest.version 驱动的迁移/校验语义。
 
 构建相关
 --------

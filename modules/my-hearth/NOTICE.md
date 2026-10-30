@@ -12,7 +12,7 @@
 - 收编方式: 工作区整体拷贝（`src/`、`CHANGELOG.md`、`LICENSE`、`README.md`、
   `README.zh-CN.md`、`manifest.json`、`versions.json`、`tsconfig.json`、
   `package.json`、`styles.css` 与上游 HEAD 逐文件一致），未改源码语义
-- manifest id: `hearth`（聚合内 id 与 legacyId 均保持此真实上游 id）
+- manifest id: `my-hearth`（2026-10-30 起聚合内 id 与 legacyId 均用 my- 前缀 id，不再占用上游 id）
 
 ## 功能
 

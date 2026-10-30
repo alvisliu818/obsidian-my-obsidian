@@ -79,18 +79,18 @@ export function registerAPI(plugin: OmnisearchPlugin): void {
   // Public api
   // @ts-ignore
   globalThis['omnisearch'] = api
-  // 合并进 obsidian-my-obsidian 后的时序坑：宿主要把旧插件 id 挂回
+  // 合并进 obsidian-my-obsidian 后的时序坑：宿主要把模块的 my- 前缀 id 挂回
   // plugins.plugins，但那发生在 onload **完成之后**，而这里在 onload 中间——
-  // 此刻 plugins.plugins.omnisearch 还不存在，直接赋值会 TypeError（且模块级
+  // 此刻 plugins.plugins["my-omnisearch"] 还不存在，直接赋值会 TypeError（且模块级
   // 的 registed 已置位，重试也救不回来）。api 挂在插件实例上：宿主别名挂回的
-  // 正是这个实例，`plugins.plugins.omnisearch.api` 随之可读；独立插件场景下
+  // 正是这个实例，`plugins.plugins["my-omnisearch"].api` 随之可读；独立插件场景下
   // 表里本来就有自己，直接挂。
   const self = plugin as unknown as { api?: unknown }
   self.api = api
   const table = (plugin.app as unknown as { plugins?: { plugins?: Record<string, { api?: unknown }> } })
     .plugins?.plugins
-  if (table?.omnisearch) {
-    table.omnisearch.api = api
+  if (table?.["my-omnisearch"]) {
+    table["my-omnisearch"].api = api
   }
 }
 

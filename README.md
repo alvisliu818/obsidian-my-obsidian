@@ -20,6 +20,9 @@
 | Vault Explorer | obsidian-vault-explorer | frontmatter 可视化库浏览器：网格/列表/表格/动态四种版式、属性过滤与自定义过滤器（第三方） |
 | LaTeX Delimiters | latex-delimiter-renderer | 渲染 `\(…\)` / `\[…\]` 公式而不改源文件：原生编辑器（实时预览/阅读模式）、logseq 块编辑器、内嵌、闪卡、库外文件（第三方） |
 
+> 2026-10-30 起，各模块自己的插件 id 统一加 `my-` 前缀（如 `my-obsidian-logseq`），
+> 不再与来源插件的上游 id 重名；下表「来源插件」列保持写上游原 id。
+
 历史用 `git subtree` 挂在 `modules/<子功能>/` 下，各插件原来的提交都能追溯。
 
 ## 许可：GPL-3.0

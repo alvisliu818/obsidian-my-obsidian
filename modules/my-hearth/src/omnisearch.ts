@@ -4,7 +4,7 @@ import { groupForFile } from "./filetypes";
 import { QueryFilter, QueryHit } from "./query";
 
 /** The community-plugin id Omnisearch registers itself under. */
-export const OMNISEARCH_PLUGIN_ID = "omnisearch";
+export const OMNISEARCH_PLUGIN_ID = "my-omnisearch";
 
 /** A single result from Omnisearch's public search API. Only the fields Hearth
  * uses are declared; Omnisearch returns a few more. */
@@ -20,7 +20,7 @@ interface OmnisearchResult {
 }
 
 /** The slice of Omnisearch's public API Hearth calls. Exposed by the plugin at
- * `app.plugins.plugins.omnisearch.api` once Omnisearch is enabled. */
+ * `app.plugins.plugins["my-omnisearch"].api` once Omnisearch is enabled. */
 interface OmnisearchApi {
 	search(query: string): Promise<OmnisearchResult[]>;
 }

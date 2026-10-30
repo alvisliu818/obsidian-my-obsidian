@@ -209,7 +209,7 @@
         appInstance as unknown as {
           plugins?: { getPlugin?: (id: string) => { writeOptions?: (c: Record<string, unknown>) => Promise<void> } | undefined };
         }
-      ).plugins?.getPlugin?.("worklife-calendar");
+      ).plugins?.getPlugin?.("my-worklife-calendar");
       await openWorkoutPlanModal(appInstance, async (changes) => {
         if (plugin?.writeOptions) await plugin.writeOptions(changes);
       });

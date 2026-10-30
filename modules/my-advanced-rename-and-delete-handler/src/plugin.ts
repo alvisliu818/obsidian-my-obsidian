@@ -71,6 +71,10 @@ interface RenameDeleteHandlerOwner {
  * and `Frontmatter Markdown Links` 3.0.2. So the block can dead-end nobody — the update each entry asks for exists — which is
  * what the wording below is written against.
  *
+ * 2026-10-30: the co-bundled Custom Attachment Location answers to the my- 前缀 id
+ * (my-obsidian-custom-attachment-location), so this entry now only fires for a
+ * genuinely installed upstream CAL.
+ *
  * TODO: drop an entry outright once every version that still owns a handler is old enough to have aged out.
  */
 const RENAME_DELETE_HANDLER_OWNERS: readonly RenameDeleteHandlerOwner[] = [
