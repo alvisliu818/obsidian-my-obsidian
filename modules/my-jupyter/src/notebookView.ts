@@ -497,7 +497,7 @@ export class NotebookView extends ItemView {
   } | null {
     // obsidian 公开 d.ts 未声明 App.plugins,用结构化视图取
     const pm = (this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } }).plugins;
-    const p = pm?.plugins?.['obsidian-logseq'] as
+    const p = pm?.plugins?.['my-obsidian-logseq'] as
       | { renderMarkdownFragment?: unknown }
       | undefined;
     return p && typeof p.renderMarkdownFragment === 'function'

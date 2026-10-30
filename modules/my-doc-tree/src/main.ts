@@ -277,7 +277,7 @@ export default class DocTreePlugin extends Plugin {
     try {
       const lg = (
         this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } }
-      ).plugins?.plugins?.['obsidian-logseq'] as
+      ).plugins?.plugins?.['my-obsidian-logseq'] as
         | { logOpPublic?: (op: string, file: string, status: 'ok' | 'error' | 'skip', detail?: string) => void }
         | undefined;
       lg?.logOpPublic?.(op, file, status, detail);
@@ -566,7 +566,7 @@ export default class DocTreePlugin extends Plugin {
     if (extOfName(node.name) === 'ipynb') {
       // App 类型不暴露 plugins（iconTheme 同款防御式访问）
       const host = (this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } }).plugins;
-      const jupyter = host?.plugins?.['obsidian-jupyter-notebook'] as
+      const jupyter = host?.plugins?.['my-obsidian-jupyter-notebook'] as
         | { openExternalNotebook?: (p: string) => Promise<void> }
         | undefined;
       if (typeof jupyter?.openExternalNotebook === 'function') {

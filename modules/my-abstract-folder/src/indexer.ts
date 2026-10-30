@@ -272,7 +272,7 @@ export class FolderIndexer {
    */
   private readExternalMounts(): ExternalMountLite[] {
     const plugins = (this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } }).plugins?.plugins;
-    const logseq = plugins?.['obsidian-logseq'] as
+    const logseq = plugins?.['my-obsidian-logseq'] as
       | { settings?: { externalMounts?: Array<{ id?: unknown; path?: unknown; include?: unknown; exclude?: unknown; enabled?: unknown }> } }
       | undefined;
     const raw = logseq?.settings?.externalMounts;

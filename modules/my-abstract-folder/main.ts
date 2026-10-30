@@ -226,7 +226,7 @@ this.addCommand({
 		const entry = this.indexer.getExternalEntry(abs);
 		if (!entry) return;
 
-		const logseq = (this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } }).plugins?.plugins?.['obsidian-logseq'] as
+		const logseq = (this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } }).plugins?.plugins?.['my-obsidian-logseq'] as
 			| {
 					settings?: { externalMounts?: Array<{ id?: string } & Record<string, unknown>> };
 					openExternalEntry?: (mount: unknown, node: unknown) => Promise<void>;

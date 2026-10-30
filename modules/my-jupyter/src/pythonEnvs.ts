@@ -85,12 +85,12 @@ function deps() {
 
 /** 发现本机可用环境(毫秒级,同步)。 */
 export function discoverPythonEnvs(): PythonEnv[] {
-  // 软依赖:装了 obsidian-logseq 就用它的同一份清单
+  // 软依赖:装了 my-obsidian-logseq（聚合内的 logseq 模块）就用它的同一份清单
   const shared = (
     globalThis as {
       app?: { plugins?: { plugins?: Record<string, { pythonEnvs?: { discover?: (r?: string[]) => PythonEnv[] } }> } };
     }
-  ).app?.plugins?.plugins?.['obsidian-logseq']?.pythonEnvs;
+  ).app?.plugins?.plugins?.['my-obsidian-logseq']?.pythonEnvs;
   if (shared?.discover) {
     try {
       const list = shared.discover();

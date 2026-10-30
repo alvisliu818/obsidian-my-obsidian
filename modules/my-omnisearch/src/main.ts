@@ -258,19 +258,21 @@ export default class OmnisearchPlugin extends Plugin {
    * @returns
    */
   public getAIImageAnalyzer(): AIImageAnalyzerAPI | undefined {
-    return (this.app as any).plugins?.plugins?.['ai-image-analyzer']?.api
+    // 聚合内别名 my-ai-image-analyzer（2026-10-30 起）；独立构建场景回退上游 id。
+    const aia = (this.app as any).plugins?.plugins
+    return (aia?.['my-ai-image-analyzer'] ?? aia?.['ai-image-analyzer'])?.api
   }
 
   /**
    * 合并新增：库外文件（虚拟文档树挂载）的索引清单。
    *
-   * 通过 logseq 模块（宿主别名 obsidian-logseq）的全深度扫描拿文件清单，
+   * 通过 logseq 模块（宿主别名 my-obsidian-logseq）的全深度扫描拿文件清单，
    * 转成 ext: 伪路径。logseq 模块不在（未启用）时返回空——库外支持是
    * 纯增益，缺了它 omnisearch 照常工作。
    */
   private getExternalIndexableFiles(): Array<{ path: string; mtime: number }> {
     try {
-      const logseq = (this.app as any).plugins?.plugins?.['obsidian-logseq'] as
+      const logseq = (this.app as any).plugins?.plugins?.['my-obsidian-logseq'] as
         | { listExternalSearchFiles?: () => Array<{ abs: string; name: string; mtime: number }> }
         | undefined
       const files = logseq?.listExternalSearchFiles?.() ?? []
