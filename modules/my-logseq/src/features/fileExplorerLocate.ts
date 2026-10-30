@@ -13,7 +13,7 @@ import { App, Notice, setIcon, TFile, WorkspaceLeaf } from 'obsidian';
  *
  * 揭示优先用内置命令 `…:reveal-active-file`（内部实现随版本变，命令 id 前缀
  * 不保证稳定，故按包含匹配查找）；找不到再回退 FileExplorerView 的
- * revealFile()。两条路都没有才提示失败——绝不静默。
+ * revealInFolder()（旧版本叫 revealFile）。两条路都没有才提示失败——绝不静默。
  *
  * 耐久：Obsidian 会在布局/排序变化时整排重建 nav buttons，注入的按钮会被抹
  * 掉，所以每个工具栏挂一个 MutationObserver，发现按钮没了就补回去（位置仍
@@ -158,14 +158,25 @@ export class FileExplorerLocateButton {
     return resolved instanceof TFile ? resolved : null;
   }
 
-  /** 在文件浏览器面板里揭示 TFile（revealFile 存在即用）；成功返回 true。 */
+  /**
+   * 在文件浏览器面板里揭示 TFile；成功返回 true。
+   * 当前 Obsidian 的 FileExplorer 原型上是 revealInFolder(file)（e2e 探针
+   * _locate-diag 实测），老版本叫 revealFile——两个都试。
+   */
   private revealInExplorer(file: TFile): boolean {
     for (const leaf of this.app.workspace.getLeavesOfType('file-explorer')) {
       const explorer = leaf.view as unknown as {
+        revealInFolder?: (f: unknown) => void;
         revealFile?: (f: unknown) => void;
       };
-      if (typeof explorer?.revealFile === 'function') {
-        explorer.revealFile(file);
+      const reveal =
+        typeof explorer?.revealInFolder === 'function'
+          ? explorer.revealInFolder.bind(explorer)
+          : typeof explorer?.revealFile === 'function'
+            ? explorer.revealFile.bind(explorer)
+            : null;
+      if (reveal) {
+        reveal(file);
         return true;
       }
     }
