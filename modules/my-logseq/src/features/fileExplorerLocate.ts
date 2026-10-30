@@ -1,4 +1,4 @@
-import { App, Notice, setIcon, WorkspaceLeaf } from 'obsidian';
+import { App, Notice, setIcon, TFile, WorkspaceLeaf } from 'obsidian';
 
 /**
  * 在 Obsidian **自带文件浏览器**（核心的 file-explorer 边栏）顶部工具栏——
@@ -6,7 +6,9 @@ import { App, Notice, setIcon, WorkspaceLeaf } from 'obsidian';
  *
  * 与挂载面板那个定位按钮的区别：挂载面板只认 externalMounts 里的路径，库内
  * 文件不在任何挂载目录下就定位不了；这个按钮走 Obsidian 自己的揭示逻辑，对
- * 库内文件总是有效。
+ * 库内文件总是有效——包括库内代码文件（.py 等）：它们统一开在 ExternalCodeView
+ * （ItemView），getActiveFile() 恒为 null，但视图自己解析并持有 vaultFile，
+ * 从活动视图取出来直通揭示即可。
  *
  * 揭示优先用内置命令 `…:reveal-active-file`（内部实现随版本变，命令 id 前缀
  * 不保证稳定，故按包含匹配查找）；找不到再回退 FileExplorerView 的
@@ -78,11 +80,25 @@ export class FileExplorerLocateButton {
   }
 
   private async revealActiveFile(): Promise<void> {
-    const file = this.app.workspace.getActiveFile();
-    if (!file) {
-      // 挂载树打开的库外文件（含 py 等代码文件）在这里没有 TFile——它们由
-      // 挂载面板的「定位当前文件」负责（按视图 abs 匹配挂载）。
-      new Notice('当前是库外文件：请用挂载面板的「定位当前文件」按钮');
+    const active = this.app.workspace.getActiveFile();
+    if (!active) {
+      // getActiveFile() 为 null ≠ 库外：库内代码文件（.py 等）与库外共用
+      // ExternalCodeView（ItemView），Obsidian 对它拿不出 TFile；但视图自己
+      // 解析并持有 vaultFile（库外文件才是 null）。取出来直通揭示。
+      // getActiveViewOfType 对双参构造的 ExternalCodeView 会报类型错，遍历叶子。
+      const view = this.app.workspace.activeLeaf?.view as
+        | { vaultFile?: unknown }
+        | undefined;
+      const vaultFile =
+        view && 'vaultFile' in view && view.vaultFile instanceof TFile
+          ? view.vaultFile
+          : null;
+      if (!vaultFile) {
+        new Notice('当前是库外文件：请用挂载面板的「定位当前文件」按钮');
+        return;
+      }
+      if (this.revealInExplorer(vaultFile)) return;
+      new Notice('未能定位当前文件');
       return;
     }
 
@@ -100,13 +116,22 @@ export class FileExplorerLocateButton {
       return;
     }
 
-    const explorer = this.app.workspace.getLeavesOfType('file-explorer')[0]
-      ?.view as unknown as { revealFile?: (f: unknown) => void } | undefined;
-    if (typeof explorer?.revealFile === 'function') {
-      explorer.revealFile(file);
-      return;
-    }
+    if (this.revealInExplorer(active)) return;
 
     new Notice('未能定位当前文件');
+  }
+
+  /** 在文件浏览器面板里揭示 TFile（revealFile 存在即用）；成功返回 true。 */
+  private revealInExplorer(file: TFile): boolean {
+    for (const leaf of this.app.workspace.getLeavesOfType('file-explorer')) {
+      const explorer = leaf.view as unknown as {
+        revealFile?: (f: unknown) => void;
+      };
+      if (typeof explorer?.revealFile === 'function') {
+        explorer.revealFile(file);
+        return true;
+      }
+    }
+    return false;
   }
 }
