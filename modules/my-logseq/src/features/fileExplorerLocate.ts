@@ -86,8 +86,11 @@ export class FileExplorerLocateButton {
       // getActiveFile() 为 null ≠ 库外：库内代码文件（.py 等）与库外共用
       // ExternalCodeView（ItemView），Obsidian 对它拿不出 TFile；但视图自己
       // 解析并持有 vaultFile（库外文件才是 null）。取出来直通揭示。
-      // getActiveViewOfType 对双参构造的 ExternalCodeView 会报类型错，遍历叶子。
-      const view = this.app.workspace.activeLeaf?.view as
+      // 取视图不能用 activeLeaf：点侧栏按钮时焦点在文件浏览器，activeLeaf
+      // 指向的是 explorer 叶子（无 vaultFile/abs）。getMostRecentLeaf 返回主区
+      // 最近编辑叶子——挂载面板 activeAbsPath 同款，2026-10-29 实测可靠。
+      // getActiveViewOfType 对双参构造的 ExternalCodeView 也会报类型错，不取。
+      const view = this.app.workspace.getMostRecentLeaf()?.view as
         | { vaultFile?: unknown; abs?: unknown }
         | undefined;
       let vaultFile =
