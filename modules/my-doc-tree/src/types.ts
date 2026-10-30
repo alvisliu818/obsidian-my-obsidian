@@ -14,6 +14,9 @@ import { PRESET_OPEN_WITH } from './features/openWith';
 /** Editor for out-of-vault markdown: Obsidian's native editor or the block editor. */
 export type EditorChoice = 'logseq' | 'native';
 
+/** How in-vault video files open: our enhanced player or Obsidian's bare preview. */
+export type VideoOpenMode = 'player' | 'native';
+
 /**
  * One mount: an absolute path to a folder outside the vault.
  *
@@ -329,12 +332,16 @@ export interface DocTreeSettings {
    */
   imageViewerTakeOver: boolean;
   /**
-   * Take over video files with the enhanced player (speed / loop / snapshot /
-   * prev-next). Off by default for the same reason — Obsidian already previews
-   * bare video. Out-of-vault videos (mount tree, system picker) always open
-   * in the player regardless of this setting.
+   * 视频打开方式（用户 2026-10-30 决策：默认本插件的视频播放器）。
+   *
+   * 'player' = 接管视频扩展名（mp4/webm/…，ts 除外——它是代码文件扩展名），
+   * 库内视频点击进增强播放器；核心已占用的扩展名也一并抢过来（引导时
+   * takeOverExtensions 备份原属主、unload 还原）。
+   * 'native' = 不注册任何视频扩展名，Obsidian 自带的裸 <video> 预览照旧。
+   * 库外视频（挂载树、系统选择器、ext: 时间戳链接）不受此设置影响，
+   * 始终走播放器。
    */
-  videoPlayerTakeOver: boolean;
+  videoOpenMode: VideoOpenMode;
   /**
    * 视频时间戳标记(2026-10-30):播放器里打标记写进 markdown,点击回跳;
    * 伴随笔记即「视频 → 笔记」方向的标记列表。默认开——入口只有播放器工具栏
@@ -362,7 +369,8 @@ export const DEFAULT_DOCTREE_SETTINGS: DocTreeSettings = {
   externalMarkdownEditor: 'native',
   officeViewerEnabled: true,
   imageViewerTakeOver: false,
-  videoPlayerTakeOver: false,
+  // 视频默认本插件播放器(用户 2026-10-30 决策);原生预览可在设置里选回。
+  videoOpenMode: 'player',
   videoTimestampsEnabled: true,
   videoMarksFolder: 'Video Marks',
   openWithApps: [],
@@ -448,7 +456,9 @@ export function docTreeSettingsFrom(raw: unknown): DocTreeSettings {
     editorChoiceValue(o.externalMarkdownEditor) ?? DEFAULT_DOCTREE_SETTINGS.externalMarkdownEditor;
   s.officeViewerEnabled = o.officeViewerEnabled !== false;
   s.imageViewerTakeOver = o.imageViewerTakeOver === true;
-  s.videoPlayerTakeOver = o.videoPlayerTakeOver === true;
+  // 视频打开方式:显式 'native' 才走原生;旧键 videoPlayerTakeOver 一并废弃
+  //(缺席或任何其他值都落回默认 'player'——那是新决策的默认,不迁移旧布尔)。
+  s.videoOpenMode = o.videoOpenMode === 'native' ? 'native' : DEFAULT_DOCTREE_SETTINGS.videoOpenMode;
   // 时间戳标记:缺省开;空目录名回落默认(设置 UI 承诺「留空用默认」)。
   s.videoTimestampsEnabled = o.videoTimestampsEnabled !== false;
   const marksFolder = typeof o.videoMarksFolder === 'string' ? o.videoMarksFolder.trim() : '';

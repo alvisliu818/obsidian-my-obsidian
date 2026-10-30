@@ -22,7 +22,7 @@ import { ImageView, VIEW_TYPE_IMAGE, IMAGE_EXTENSIONS, isImageFile } from './vie
 import { VideoView, VIEW_TYPE_VIDEO, VIDEO_EXTENSIONS, isVideoFile } from './views/VideoView';
 import { OfficeView, VIEW_TYPE_OFFICE } from './views/OfficeView';
 import { OFFICE_EXTENSIONS } from './office/types';
-import { registerFreeExtensions } from '../../../src/extensionRegistry';
+import { registerFreeExtensions, takeOverExtensions } from '../../../src/extensionRegistry';
 import { pickExternalPath } from './features/systemDialog';
 import { openWithSystemDefault, revealInSystemExplorer } from './features/openWith';
 import {
@@ -105,11 +105,20 @@ export default class DocTreePlugin extends Plugin {
     if (this.settings.imageViewerTakeOver) {
       registerFreeExtensions(this, IMAGE_EXTENSIONS, VIEW_TYPE_IMAGE, 'image viewer');
     }
-    // Videos: same opt-in story (Obsidian previews bare <video>); enhanced
-    // player = speed / loop / same-folder navigation. mkv 之类核心未占用;
-    // mp4 等被占用时靠 registerFreeExtensions 跳过。
-    if (this.settings.videoPlayerTakeOver) {
-      registerFreeExtensions(this, VIDEO_EXTENSIONS, VIEW_TYPE_VIDEO, 'video player');
+    // Videos: 默认接管(用户 2026-10-30 决策,videoOpenMode,设置里可切回
+    // Obsidian 原生预览)。核心已占用的 mp4/webm/ogv/m4v/mov 也一并抢过来
+    // ——takeOverExtensions 备份原属主,unload 时还原;这正是
+    // registerFreeExtensions(先占者赢)做不到的。ts 在 VIDEO_EXTENSIONS 里
+    // 是 MPEG-TS 传输流,但它同时是代码文件扩展名(TEXT_EXTENSIONS)且
+    // doc-tree 先于宿主的代码文件注册引导——不剔除会把库内 .ts 抢给播放器。
+    // 播放器自身仍认 ts(库外挂载树/命令入口不受影响)。
+    if (this.settings.videoOpenMode === 'player') {
+      takeOverExtensions(
+        this,
+        VIDEO_EXTENSIONS.filter((e) => e !== 'ts'),
+        VIEW_TYPE_VIDEO,
+        'video player',
+      );
     }
 
     // ---------- 视频时间戳链接路由(2026-10-30) ----------

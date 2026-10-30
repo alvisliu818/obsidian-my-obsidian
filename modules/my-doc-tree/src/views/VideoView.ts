@@ -7,8 +7,9 @@
  * Node fs（extFs.readExternalBinary）读进来走 blob URL，库里视频走
  * vault.adapter，两种模式共用一套 UI。
  *
- * 接管库内视频扩展是 opt-in（`videoPlayerTakeOver`，与 imageViewerTakeOver
- * 对齐——Obsidian 已经会预览视频）；命令与 file-menu 入口则始终可用。
+ * 库内视频默认由本插件接管(videoOpenMode,用户 2026-10-30 决策):引导时
+ * takeOverExtensions 抢注视频扩展名,Obsidian 点击文件按 {file} state 打开
+ * 本视图;设置里可选回原生预览。命令与 file-menu 入口则始终可用。
  *
  * 浏览器解不了的容器（avi/wmv/flv 等）仍列为可打开扩展，但 `<video>` 会
  * 报解码错误——错误态给「用系统程序打开」兜底，文件本身不受影响。
@@ -80,6 +81,10 @@ export function isVideoFile(name: string): boolean {
 export interface VideoViewState {
   /** Vault-relative path (库内). */
   path?: string;
+  /** Vault-relative path too — the key Obsidian's registerExtensions route
+   * passes when it opens a vault file by extension ({file}, measured on the
+   * ExternalCodeView precedent). Normalized into `path`. */
+  file?: string;
   /** Absolute path OUTSIDE the vault (库外). */
   abs?: string;
   /** 打开即跳转的时间点(秒)。时间戳链接点击路由时透传。 */
@@ -135,7 +140,9 @@ export class VideoView extends ItemView {
   async setState(state: unknown, _result: ViewStateResult): Promise<void> {
     const s = (state ?? {}) as VideoViewState;
     const nextAbs = typeof s.abs === 'string' ? s.abs : '';
-    const nextPath = typeof s.path === 'string' ? s.path : '';
+    // Obsidian 扩展名路由带的是 {file}(库内相对路径),视图自己的 state 用 path。
+    const nextPath =
+      typeof s.path === 'string' ? s.path : typeof s.file === 'string' ? s.file : '';
     if (typeof s.t === 'number' && Number.isFinite(s.t)) this.pendingSeek = s.t;
     if (nextAbs === this.abs && nextPath === this.path) {
       // 同文件复用(时间戳点击的主要场景):文件不动,只把播放位置拨过去。

@@ -13,7 +13,7 @@ import { PluginSettingTab, Setting, type App } from 'obsidian';
 import type DocTreePlugin from '../main';
 import { MountListModal } from '../panels/mountModals';
 import { VIEW_TYPE_MOUNT_PANEL } from '../panels/mountPanel';
-import { mountDisplayName, type EditorChoice } from '../types';
+import { mountDisplayName, type EditorChoice, type VideoOpenMode } from '../types';
 import { OpenWithEditModal } from '../features/openWithUi';
 import { isDirectory } from '../features/extFs';
 import {
@@ -238,18 +238,23 @@ export class DocTreeSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('接管视频文件')
+      .setName('视频打开方式')
       .setDesc(
-        '用内置视频播放器打开视频：倍速（0.5–2x）、循环、截图到剪贴板、' +
-          '同目录上一个 / 下一个、另存为。Obsidian 自带裸视频预览，因此默认关闭；' +
-          '库外视频（挂载树、命令面板的「打开库外视频…」）始终走内置播放器，不受此开关影响。' +
+        '点击库内视频文件时用哪个播放器。"视频播放器"是本插件的增强播放器：' +
+          '倍速（0.5–2x）、循环、截图到剪贴板、同目录上一个 / 下一个、时间戳标记；' +
+          '"Obsidian 原生播放器"是 Obsidian 自带的裸视频预览。' +
+          '库外视频（挂载树、命令面板的「打开库外视频…」）始终走内置播放器，不受此设置影响。' +
+          '启用 my Media Extended 模块时，它会在本插件之后接管 mp4 / webm / ogv / mov / mkv。' +
           '修改后需重启 Obsidian 生效。',
       )
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.videoPlayerTakeOver === true).onChange(async (v) => {
-          this.plugin.settings.videoPlayerTakeOver = v;
-          await this.plugin.saveSettings();
-        }),
+      .addDropdown((d) =>
+        d
+          .addOptions({ player: '视频播放器（本插件）', native: 'Obsidian 原生播放器' })
+          .setValue(this.plugin.settings.videoOpenMode)
+          .onChange(async (v) => {
+            this.plugin.settings.videoOpenMode = v as VideoOpenMode;
+            await this.plugin.saveSettings();
+          }),
       );
 
     // ---------- 视频时间戳标记 ----------

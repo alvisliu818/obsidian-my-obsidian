@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	isExtensionFree,
 	registerFreeExtensions,
+	takeOverExtensions,
 	type ExtensionRegistrar,
 } from "../extensionRegistry";
 
@@ -16,6 +17,8 @@ import {
 function fakeRegistrar(initial: Record<string, string> = {}) {
 	const typeByExtension: Record<string, string> = { ...initial };
 	const calls: Array<{ extensions: string[]; viewType: string }> = [];
+	const unregistered: string[][] = [];
+	const unloadHooks: Array<() => void> = [];
 	const viewRegistry = {
 		isExtensionRegistered(extension: string): boolean {
 			return Object.prototype.hasOwnProperty.call(typeByExtension, extension);
@@ -32,6 +35,10 @@ function fakeRegistrar(initial: Record<string, string> = {}) {
 			for (const extension of extensions) typeByExtension[extension] = viewType;
 			calls.push({ extensions: [...extensions], viewType });
 		},
+		unregisterExtensions(extensions: string[]): void {
+			unregistered.push([...extensions]);
+			for (const extension of extensions) delete typeByExtension[extension];
+		},
 	};
 	const registrar: ExtensionRegistrar = {
 		app: { viewRegistry },
@@ -40,8 +47,11 @@ function fakeRegistrar(initial: Record<string, string> = {}) {
 		registerExtensions(extensions: string[], viewType: string): void {
 			viewRegistry.registerExtensions(extensions, viewType);
 		},
+		register(cb: () => void): void {
+			unloadHooks.push(cb);
+		},
 	};
-	return { registrar, typeByExtension, calls };
+	return { registrar, typeByExtension, calls, unregistered, unloadHooks };
 }
 
 afterEach(() => {
@@ -56,7 +66,7 @@ describe("isExtensionFree", () => {
 	});
 
 	it("treats a missing probe API as free", () => {
-		const registrar: ExtensionRegistrar = { app: {}, registerExtensions: () => {} };
+		const registrar: ExtensionRegistrar = { app: {}, registerExtensions: () => {}, register: () => {} };
 		expect(isExtensionFree(registrar, "css")).toBe(true);
 	});
 });
@@ -116,6 +126,7 @@ describe("registerFreeExtensions", () => {
 			registerExtensions: () => {
 				throw new Error('Attempting to register an existing file extension "ts"');
 			},
+			register: () => {},
 		};
 		expect(() => registerFreeExtensions(registrar, ["ts"], "code-view", "code files")).not.toThrow();
 		expect(error).toHaveBeenCalledTimes(1);
@@ -139,5 +150,48 @@ describe("registerFreeExtensions", () => {
 		expect(result.registered).toEqual(["vue"]);
 		expect(result.skipped).toEqual(["svg"]);
 		expect(calls[0].extensions).toEqual(["vue"]);
+	});
+});
+
+describe("takeOverExtensions", () => {
+	it("steals claimed extensions from their current owner", () => {
+		// The video-player shape: core owns mp4, mkv is free. Both must end up
+		// mapped to our view type; only mp4 is unregistered first.
+		const { registrar, typeByExtension, unregistered, calls } = fakeRegistrar({ mp4: "video" });
+		const result = takeOverExtensions(registrar, ["mp4", "mkv"], "logseq-video", "video player");
+		expect(result.registered).toEqual(["mp4", "mkv"]);
+		expect(unregistered).toEqual([["mp4"]]);
+		expect(calls).toEqual([{ extensions: ["mp4", "mkv"], viewType: "logseq-video" }]);
+		expect(typeByExtension.mp4).toBe("logseq-video");
+		expect(typeByExtension.mkv).toBe("logseq-video");
+	});
+
+	it("logs the takeover with the previous owner's name", () => {
+		const info = vi.spyOn(console, "info").mockImplementation(() => {});
+		const { registrar } = fakeRegistrar({ mp4: "video", webm: "video" });
+		takeOverExtensions(registrar, ["mp4", "webm", "mkv"], "logseq-video", "video player");
+		const line = String(info.mock.calls[0][0]);
+		expect(line).toContain("video player");
+		expect(line).toContain("mp4 (was video)");
+		expect(line).toContain("webm (was video)");
+	});
+
+	it("restores the previous owners when the unload hook runs", () => {
+		const { registrar, typeByExtension, unloadHooks } = fakeRegistrar({ mp4: "video" });
+		takeOverExtensions(registrar, ["mp4", "mkv"], "logseq-video", "video player");
+		expect(typeByExtension.mp4).toBe("logseq-video");
+		expect(unloadHooks).toHaveLength(1);
+		unloadHooks[0]();
+		// mp4 goes back to core's view type; mkv (ours, no previous owner) is
+		// simply gone again.
+		expect(typeByExtension.mp4).toBe("video");
+		expect(typeByExtension.mkv).toBeUndefined();
+	});
+
+	it("still claims everything when nothing was taken", () => {
+		const { registrar, typeByExtension, unregistered } = fakeRegistrar();
+		takeOverExtensions(registrar, ["mkv", "avi"], "logseq-video", "video player");
+		expect(unregistered).toEqual([]);
+		expect(typeByExtension).toEqual({ mkv: "logseq-video", avi: "logseq-video" });
 	});
 });

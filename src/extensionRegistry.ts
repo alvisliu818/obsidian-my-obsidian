@@ -36,6 +36,8 @@
 interface ExtensionRegistryProbe {
 	isExtensionRegistered?(extension: string): boolean;
 	getTypeByExtension?(extension: string): string | undefined;
+	registerExtensions?(extensions: string[], viewType: string): void;
+	unregisterExtensions?(extensions: string[]): void;
 }
 
 /** The slice of `Plugin` needed here; keeps modules free of host types. */
@@ -43,6 +45,8 @@ export interface ExtensionRegistrar {
 	/** The plugin's `app`; typed `unknown` so any typings copy satisfies it. */
 	readonly app: unknown;
 	registerExtensions(extensions: string[], viewType: string): void;
+	/** Component.register — unload hooks (takeOverExtensions restores owners there). */
+	register(cb: () => unknown): void;
 }
 
 function probeOf(registrar: ExtensionRegistrar): ExtensionRegistryProbe | null {
@@ -123,4 +127,93 @@ export function registerFreeExtensions(
 	}
 
 	return { registered, skipped };
+}
+
+/**
+ * Force-claim `extensions` for `viewType`, STEALING any that are already
+ * taken — including by Obsidian core.
+ *
+ * `registerFreeExtensions` is first-claimant-wins, which is right when a
+ * takeover is opt-in (images: core previews them fine). It is wrong when the
+ * module is the intended default: core claims mp4/webm/ogv/m4v/mov at boot,
+ * so a "take over video" flag built on registerFreeExtensions only ever
+ * reached the formats core forgot. This function unregisters the current
+ * owner(s) first, keeps a backup, and restores them when the plugin unloads
+ * (same mechanism media-extended's injectMediaView uses for the same reason).
+ *
+ * Registration still goes through the Plugin (`registrar.registerExtensions`)
+ * so Obsidian's own unregister-on-unload hook stays installed on top of ours.
+ *
+ * @param registrar - plugin doing the claiming (receives the restore hook)
+ * @param extensions - extensions without the leading dot; matched case-insensitively
+ * @param viewType - view type the extensions map to
+ * @param label - human-readable name of the registration, for the log line
+ */
+export function takeOverExtensions(
+	registrar: ExtensionRegistrar,
+	extensions: readonly string[],
+	viewType: string,
+	label: string,
+): FreeRegistration {
+	const wanted = Array.from(
+		new Set(extensions.map((e) => e.trim().toLowerCase()).filter((e) => e.length > 0)),
+	);
+	const probe = probeOf(registrar);
+	const claimed = wanted.filter((e) => !isExtensionFree(registrar, e));
+
+	// Back up who owns what BEFORE unregistering, so unload can put it back.
+	// Grouped by view type: one registerExtensions call per previous owner.
+	const backup = new Map<string, string[]>();
+	for (const e of claimed) {
+		const owner = ownerOf(registrar, e) ?? "";
+		backup.set(owner, [...(backup.get(owner) ?? []), e]);
+	}
+	// The log line is computed now too: after unregisterExtensions the probe
+	// can no longer name the previous owner.
+	const detail = claimed
+		.map((e) => {
+			const prev = [...backup.entries()].find(([, exts]) => exts.includes(e))?.[0];
+			return prev ? `${e} (was ${prev})` : e;
+		})
+		.join(", ");
+
+	if (claimed.length > 0) {
+		try {
+			probe?.unregisterExtensions?.(claimed);
+			console.info(`[my-obsidian] ${label}: took over extension(s): ${detail}`);
+		} catch (error) {
+			// Unregister failed (Obsidian changed under us): the register below
+			// will then throw for the still-claimed ones and be swallowed too,
+			// so behavior degrades to "no takeover" instead of a dead onload.
+			console.error(`[my-obsidian] ${label}: unregisterExtensions failed`, error);
+		}
+	}
+
+	try {
+		registrar.registerExtensions(wanted, viewType);
+	} catch (error) {
+		console.error(`[my-obsidian] ${label}: registerExtensions(${viewType}) failed`, error);
+	}
+
+	// Restore previous owners on unload: drop ours, re-register theirs. The
+	// probe's unregister is used directly (not the Plugin hook — that already
+	// removed OUR claims as part of plugin teardown).
+	registrar.register(() => {
+		const restore = probeOf(registrar);
+		try {
+			restore?.unregisterExtensions?.(wanted);
+		} catch {
+			/* our claims may already be gone; restoring below is best-effort */
+		}
+		for (const [owner, exts] of backup) {
+			if (!owner) continue;
+			try {
+				restore?.registerExtensions?.(exts, owner);
+			} catch {
+				/* best-effort */
+			}
+		}
+	});
+
+	return { registered: wanted, skipped: [] };
 }
