@@ -1,7 +1,7 @@
 {
   "name": "obsidian-my-obsidian",
   "version": "0.1.0",
-  "description": "One plugin bundling the author's Obsidian add-ons: Logseq block editor, Browser, Jupyter Notebook, Breadcrumb Nav, Doc Assist, Material Icon Theme, TraceTime, Git, AI image analyzer, Omnisearch, Save Control, Open Tab Settings, Advanced Audio Recorder and Vault Explorer — each switchable from the settings.",
+  "description": "One plugin bundling the author's Obsidian add-ons: Logseq block editor, Browser, Jupyter Notebook, Breadcrumb Nav, Doc Assist, Material Icon Theme, TraceTime, Git, AI image analyzer, Omnisearch, Save Control, Open Tab Settings, Advanced Audio Recorder, Vault Explorer and Code Link — each switchable from the settings.",
   "main": "main.js",
   "type": "module",
   "scripts": {
@@ -10,10 +10,11 @@
     "build": "yarn run build:icons && tsc -noEmit -skipLibCheck && node esbuild.mjs production",
     "build:fast": "node esbuild.mjs production",
     "typecheck": "tsc -noEmit -skipLibCheck",
-    "test": "vitest run --root modules/my-doc-tree && vitest run --root modules/my-code-editor && vitest run --root modules/my-logseq && vitest run --root modules/my-abstract-folder && vitest run --root modules/my-latex-delimiter-renderer && vitest run --root modules/my-omnisearch && vitest run --root modules/my-save-control && node scripts/test-index-core.mjs",
+    "test": "vitest run --root modules/my-doc-tree && vitest run --root modules/my-code-editor && vitest run --root modules/my-logseq && vitest run --root modules/my-abstract-folder && vitest run --root modules/my-latex-delimiter-renderer && vitest run --root modules/my-omnisearch && vitest run --root modules/my-save-control && vitest run --root modules/my-code-link && node scripts/test-index-core.mjs",
     "test:index-core": "node scripts/test-index-core.mjs",
     "test:audio-player": "vitest run --root modules/my-audio-player",
     "test:abstract-folder": "vitest run --root modules/my-abstract-folder",
+    "test:code-link": "vitest run --root modules/my-code-link",
     "test:watch": "vitest --root modules/my-logseq",
     "test:breadcrumb": "cd modules/my-breadcrumb && yarn test",
     "test:doc-assist": "cd modules/my-doc-assist && yarn test",
@@ -35,7 +36,8 @@
     "time-tracking",
     "git",
     "audio-recorder",
-    "transcription"
+    "transcription",
+    "code-link"
   ],
   "author": "alvisliu",
   "authorUrl": "https://github.com/alvisliu818",
@@ -119,7 +121,9 @@
     "diff2html": "^3.4.56",
     "diff3": "^0.0.4",
     "es-toolkit": "^1.50.0",
+    "fastest-levenshtein": "^1.0.16",
     "filenamify": "^6.0.0",
+    "globby": "^14.0.2",
     "i18next": "~26.4.2",
     "idb": "^8.0.0",
     "iso-639-1": "^3.1.0",
@@ -173,6 +177,7 @@
     "vscode-oniguruma": "^2.0.1",
     "vscode-textmate": "^9.3.2",
     "wa-sqlite": "^1.0.0",
+    "web-tree-sitter": "^0.26.3",
     "xlsx": "^0.18.5",
     "zustand": "^4.4.7"
   },
@@ -276,6 +281,9 @@
       "unplugged": true
     },
     "wa-sqlite@1.0.0": {
+      "unplugged": true
+    },
+    "web-tree-sitter": {
       "unplugged": true
     }
   }

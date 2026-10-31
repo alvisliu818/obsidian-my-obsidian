@@ -2,7 +2,7 @@ import * as fs from "fs/promises";
 import { globby } from "globby";
 import { normalizePath } from "obsidian";
 import path from "path";
-import CodeLinkPlugin from "src/main";
+import CodeLinkPlugin from "../main";
 
 export class FileImporter {
 	constructor(private _plugin: CodeLinkPlugin) {}

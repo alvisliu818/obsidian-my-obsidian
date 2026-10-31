@@ -1,8 +1,8 @@
 import { MarkdownPostProcessor } from "obsidian";
-import { CodeLinkEmbedPreview } from "src/component/embed";
+import { CodeLinkEmbedPreview } from "../component/embed";
 import { PostProcessor } from ".";
-import { CodeLinkItem } from "src/link";
-import { TagTreeNode } from "src/lang/tree";
+import { CodeLinkItem } from "../link";
+import { TagTreeNode } from "../lang/tree";
 
 export class CodeLinkEmbedPreviewPostProcessor extends PostProcessor {
 	process: MarkdownPostProcessor = (el, { sourcePath }) => {

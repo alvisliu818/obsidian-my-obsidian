@@ -1,7 +1,7 @@
-import CodeLinkPlugin from "src/main";
+import CodeLinkPlugin from "../main";
 import { PostProcessor } from ".";
 import { MarkdownPostProcessor, MarkdownRenderer } from "obsidian";
-import { CodeLinkItem } from "src/link";
+import { CodeLinkItem } from "../link";
 
 export class CodeLinkHoverPreviewObserver {
 	hovering: CodeLinkItem | null = null;

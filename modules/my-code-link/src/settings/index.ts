@@ -1,8 +1,8 @@
 import { PluginSettingTab, Setting, Notice } from "obsidian";
-import CodeLinkPlugin from "src/main";
+import CodeLinkPlugin from "../main";
 import { FolderSuggest, LangSuggest } from "./suggester";
-import { SupportedLangsArray } from "src/lang/data";
-import { capitalizeLang } from "src/utils";
+import { SupportedLangsArray } from "../lang/data";
+import { capitalizeLang } from "../utils";
 
 export interface CodeLinkPluginSettings {
 	relImportDirPath: string;
@@ -21,7 +21,10 @@ const DEFAULT_SETTINGS: CodeLinkPluginSettings = {
 };
 
 export const loadSettings = async (plugin: CodeLinkPlugin) => {
-	const saved_settings = await plugin.loadData();
+	// 聚合适配：宿主经 my-open-tab-settings 的 obsidian-typings.d.ts 引入私有
+	// API 镜像，全程序 Plugin.loadData 的类型被镜像重写为 Promise<unknown>
+	// （独立版是 Promise<any>）——与宿主 src/main.ts 的 loadData 同款 cast。
+	const saved_settings = (await plugin.loadData()) as Partial<CodeLinkPluginSettings> | null;
 	return new Proxy(
 		{ ...DEFAULT_SETTINGS, ...saved_settings },
 		{

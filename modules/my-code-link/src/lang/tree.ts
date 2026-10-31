@@ -1,4 +1,4 @@
-import { memorize, dedent } from "src/utils";
+import { memorize, dedent } from "../utils";
 import * as TreeSitter from "web-tree-sitter";
 
 export class TagPath {

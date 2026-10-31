@@ -1,4 +1,4 @@
-import CodeLinkPlugin from "src/main";
+import CodeLinkPlugin from "../main";
 import { LangLoader } from "./loader";
 import { TagTree } from "./tree";
 import { TFile } from "obsidian";

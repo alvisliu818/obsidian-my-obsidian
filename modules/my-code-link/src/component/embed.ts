@@ -1,7 +1,7 @@
-import { TagTreeNode, TagPath } from "src/lang/tree";
+import { TagTreeNode, TagPath } from "../lang/tree";
 import { Component } from ".";
-import CodeLinkPlugin from "src/main";
-import { getLang } from "src/lang/utils";
+import CodeLinkPlugin from "../main";
+import { getLang } from "../lang/utils";
 import { TFile } from "obsidian";
 import path from "path";
 
@@ -21,15 +21,6 @@ export class CodeLinkEmbedPreview extends Component {
 		this._textEl = this._containerEl.createEl("div", {
 			cls: "code-link-embed-preview-text",
 		});
-	}
-
-	private _highLightLines(node: TagTreeNode): { start: number; end: number } {
-		const offset = this._activeNode?.startLine ?? 0;
-
-		return {
-			start: node.startLine - offset,
-			end: node.endLine - offset,
-		};
 	}
 
 	async setCode(file: TFile, node?: TagTreeNode | null): Promise<void> {

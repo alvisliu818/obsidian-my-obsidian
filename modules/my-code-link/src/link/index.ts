@@ -1,8 +1,8 @@
 import { TFile } from "obsidian";
-import { TagPath } from "src/lang/tree";
-import { getLang } from "src/lang/utils";
-import CodeLinkPlugin from "src/main";
-import { memorize } from "src/utils";
+import { TagPath } from "../lang/tree";
+import { getLang } from "../lang/utils";
+import CodeLinkPlugin from "../main";
+import { memorize } from "../utils";
 
 export const codeLinkInnerRe =
 	/(?<fileLink>[^#|\]]+)(?:#(?<tagPath>[^#|\]]+))?(?:\|(?<alias>[^#|\]]+))?/;

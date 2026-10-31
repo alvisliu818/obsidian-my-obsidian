@@ -60,6 +60,10 @@ import LatexDelimiterRendererPlugin from "../modules/my-latex-delimiter-renderer
 // 自研统一索引搜索（modules/my-index-core 的消费层）：node:sqlite 磁盘索引，
 // 与 omnisearch（minisearch/内存）平行，桌面端专用（node:sqlite 需要 Electron）。
 import UnifiedSearchPlugin from "../modules/my-unified-search/src/main";
+// code-link v1.0.4（observerw，MIT）：源码只做了相对导入改写（宿主 src/* 别名
+// 已被 obsidian-git 占用）即通过宿主严格配置 → 源码直连，无需 require 桥；
+// tree-sitter 核心 wasm 构建期内嵌（见模块 NOTICE 与根 esbuild.mjs）。
+import CodeLinkPlugin from "../modules/my-code-link/src/main";
 // media-extended v3 自带 obsidian@1.5.7 类型与自己的 "@/..." 别名（与
 // music-player 的 @/ 同名冲突），经 require 桥接进 bundle：不进宿主 tsc
 // 程序（类型由模块自带 tsconfig 独立校验），运行时打包不受影响。
@@ -517,6 +521,21 @@ export default class MyObsidianPlugin extends Plugin {
 				"统一索引搜索：node:sqlite（FTS5）磁盘索引，JS 堆零驻留；短语/排除/title:/tag:/path:/ext: 过滤与前缀语法，中文可选接入 cm-chs-patch 分词（缺席自动降级+LIKE 兜底）。库内 md/org，桌面端专用；与 Omnisearch 互不影响，可二选一启用。",
 			desktopOnly: true,
 			cls: UnifiedSearchPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Third-party (observerw, MIT), kept whole — see modules/my-code-link/NOTICE.
+			// 独立版运行时从 CDN 拉 tree-sitter.wasm，聚合版构建期内嵌（同
+			// wa-sqlite/jieba 先例）；语言级 wasm 仍按上游设计运行时下载。
+			// manifest.id 覆盖同 latex-delimiter-renderer：设置页/命令命名空间隔离。
+			id: "code-link",
+			legacyId: "my-code-link",
+			name: "my Code Link",
+			summary:
+				"笔记里链接代码文件：像链接笔记一样引用代码文件并悬停/嵌入预览，可按符号（类/函数/方法）创建链接，标签搜索由 tree-sitter 提供。上游 observerw（MIT）。",
+			desktopOnly: false,
+			manifest: { id: "my-code-link", version: "1.0.4" },
+			migrateFrom: "code-link",
+			cls: CodeLinkPlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 

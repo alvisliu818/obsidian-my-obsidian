@@ -7,10 +7,10 @@ import {
 	MarkdownRenderer,
 	TFile,
 } from "obsidian";
-import { TagTree, TagTreeNode, TagPath } from "src/lang/tree";
-import CodeLinkPlugin from "src/main";
+import { TagTree, TagTreeNode, TagPath } from "../lang/tree";
+import CodeLinkPlugin from "../main";
 import { distance } from "fastest-levenshtein";
-import { CodeLinkItem } from "src/link";
+import { CodeLinkItem } from "../link";
 
 interface TagTreeSuggestItem {
 	context: EditorSuggestContext;

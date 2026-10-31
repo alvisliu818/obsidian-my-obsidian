@@ -1,6 +1,6 @@
 import { AbstractInputSuggest, App, TAbstractFile, TFolder } from "obsidian";
-import { AvailableWasmLangs } from "src/lang/data";
-import { capitalizeLang } from "src/utils";
+import { AvailableWasmLangs } from "../../lang/data";
+import { capitalizeLang } from "../../utils";
 
 export class FolderSuggest extends AbstractInputSuggest<TFolder> {
 	protected getSuggestions(query: string): TFolder[] | Promise<TFolder[]> {
@@ -22,7 +22,7 @@ export class FolderSuggest extends AbstractInputSuggest<TFolder> {
 	renderSuggestion(value: TFolder, el: HTMLElement): void {
 		el.setText(value.path);
 	}
-	selectSuggestion(value: TFolder, evt: MouseEvent | KeyboardEvent): void {
+	selectSuggestion(value: TFolder, _evt: MouseEvent | KeyboardEvent): void {
 		this.setValue(value.path);
 		this.close();
 	}
@@ -45,7 +45,7 @@ export class LangSuggest extends AbstractInputSuggest<string> {
 		el.setText(capitalizeLang(value));
 	}
 
-	selectSuggestion(value: string, evt: MouseEvent | KeyboardEvent): void {
+	selectSuggestion(value: string, _evt: MouseEvent | KeyboardEvent): void {
 		this._onSelect(value);
 		this.setValue("");
 		this.close();

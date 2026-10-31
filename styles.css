@@ -59123,3 +59123,52 @@ body.hearth-snapshot-capturing .hearth-view:not(#hearth-boost) {
 .latex-delimiter-renderer-source-marker {
   color: var(--text-normal);
 }
+
+/* ==================== Code Link (modules/my-code-link) ==================== */
+
+/* .code-link-embed-preview-code {
+} */
+
+.code-link-embed-preview-text {
+	font-size: 0.8em;
+	color: gray;
+}
+
+.code-link-embed-preview-tag {
+	font-style: italic;
+	font-weight: bold;
+}
+
+.code-link-hover-preview-popover > pre {
+	max-height: 50vh;
+	margin: 0;
+	overflow: auto;
+}
+
+.code-link-settings-prompt {
+	margin: 0;
+}
+
+.code-link-settings-prompt[status="success"] {
+	color: green;
+}
+
+.code-link-settings-prompt[status="warning"] {
+	color: red;
+}
+
+.codelink-loading-spinner {
+	width: 16px;
+	height: 16px;
+	border: 2px solid var(--background-modifier-border);
+	border-top: 2px solid var(--interactive-accent);
+	border-radius: 50%;
+	animation: codelink-spin 1s linear infinite;
+	display: inline-block;
+	margin-left: 10px;
+}
+
+@keyframes codelink-spin {
+	0% { transform: rotate(0deg); }
+	100% { transform: rotate(360deg); }
+}

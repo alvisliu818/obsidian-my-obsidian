@@ -219,6 +219,26 @@ const dexiePatchPlugin = {
 };
 
 // ---------------------------------------------------------------------------
+// code-link（globby 依赖链）：unicorn-magic 的 node/default 条件拆分补丁。
+//
+// globby@14 从 'unicorn-magic' 导入 toPath；该包的 exports 把 toPath 放在
+// "node" 条件（node.js），"default"（default.js）只有 delay。主 bundle 是
+// browser 平台构建（移动端兼容），不能全局加 "node" condition——那会波及
+// 全仓其他带 node/browser 分支的包。与 dexie 补丁同款：onLoad 在打包期把
+// default.js 替换为对同目录 node.js 的 re-export（相对路径直取文件、绕过
+// exports），只影响这一个包。globby 只用 toPath。
+// ---------------------------------------------------------------------------
+const unicornMagicPatchPlugin = {
+	name: "unicorn-magic-node-conditions",
+	setup(build) {
+		build.onLoad({ filter: /unicorn-magic[\\/]default\.js$/ }, () => ({
+			contents: "export * from './node.js';",
+			loader: "js",
+		}));
+	},
+};
+
+// ---------------------------------------------------------------------------
 // open-tab-settings: `glob:./locales/*.json` 聚合导入（上游 esbuild 插件原样
 // 移植）。编译期把 glob 匹配到的 JSON 各自 import 后聚成一个对象，键取文件名。
 // TS 侧由 modules/my-open-tab-settings/src/glob.d.ts 的 `declare module 'glob:*'`
@@ -355,16 +375,56 @@ const mxNodeEnvPlugin = {
 // 补丁同款，不依赖 node_modules 状态，构建自愈。
 // ---------------------------------------------------------------------------
 const jiebaPatchPlugin = {
-  name: "jieba-patch",
-  setup(build) {
-    build.onLoad({ filter: /jieba-wasm[\\/]pkg[\\/]web[\\/]jieba_rs_wasm\.js$/ }, (args) => {
-      const contents = readFileSync(args.path, "utf8").replace(
-        "module_or_path = new URL('jieba_rs_wasm_bg.wasm', import.meta.url);",
-        "throw new Error('jieba_rs_wasm: a wasm module/path must be passed to init()');",
-      );
-      return { contents, loader: "js", resolveDir: path.dirname(args.path) };
-    });
-  },
+	name: "jieba-patch",
+	setup(build) {
+		build.onLoad({ filter: /jieba-wasm[\\/]pkg[\\/]web[\\/]jieba_rs_wasm\.js$/ }, (args) => {
+			const contents = readFileSync(args.path, "utf8").replace(
+				"module_or_path = new URL('jieba_rs_wasm_bg.wasm', import.meta.url);",
+				"throw new Error('jieba_rs_wasm: a wasm module/path must be passed to init()');",
+			);
+			return { contents, loader: "js", resolveDir: path.dirname(args.path) };
+		});
+	},
+};
+
+// ---------------------------------------------------------------------------
+// code-link: 上游 esbuild-plugin-inline-import 的内联移植 + tree-sitter 核心 wasm 内嵌。
+//
+// `inline:*` 前缀导入（模块内 .scm 查询文件）在构建期把文件内容内联为字符串——
+// 语义与上游插件一致，但不新增依赖（importGlob / music-player-shims 同款移植法）。
+// tree-sitter.wasm 随安装的 web-tree-sitter 包以 base64 内嵌（__TREE_SITTER_WASM_B64__，
+// 同 wa-sqlite/onig/jieba 先例）：独立版运行时从 jsdelivr 拉 wasm，glue 与 wasm 可能
+// 版本漂移；内嵌后两者同包同版本且不依赖 CDN。web-tree-sitter 因此按 unplug 四原则
+// 第 1 条在根 package.json 声明 unplugged（构建期 readFileSync 要读真实文件）。
+// ---------------------------------------------------------------------------
+// 0.25+ 的包把产物改名 web-tree-sitter.wasm 且 exports 只暴露该子路径
+// （`./package.json` 不可 resolve）——直接 resolve wasm 本体，装到哪个版本都对。
+const TREE_SITTER_WASM_B64 = readFileSync(
+  nodeRequire.resolve("web-tree-sitter/web-tree-sitter.wasm"),
+).toString("base64");
+
+const inlineImportPlugin = {
+	name: "inline-import",
+	setup(build) {
+		// `inline:` 前缀已被 media-extended 的 mx-inline-code 占用（webview 脚本）。
+		// onResolve 按注册顺序先到先得（esbuild 文档），所以本插件注册在 mx-inline
+		// 之前，并按 importer 路径限定作用域：只有 my-code-link 下的 `inline:` 归
+		// 这里，其余返回 undefined 交回流程，由后注册的 mx-inline 接住。
+		// 注意 args.importer 是绝对路径（Windows 反斜杠）——归一化后按
+		// /modules/my-code-link/ 中段匹配，相对/绝对布局都罩得住。
+		build.onResolve({ filter: /^inline:/ }, (args) => {
+			const importer = args.importer.split(path.sep).join("/");
+			if (!importer.includes("/modules/my-code-link/")) return undefined;
+			return {
+				path: path.resolve(args.resolveDir, args.path.replace(/^inline:/, "")),
+				namespace: "inline-import",
+			};
+		});
+		build.onLoad({ filter: /.*/, namespace: "inline-import" }, (args) => ({
+			contents: readFileSync(args.path, "utf8"),
+			loader: "text",
+		}));
+	},
 };
 
 const context = await esbuild.context({
@@ -396,7 +456,7 @@ const context = await esbuild.context({
     // ollama 等包用 `node:fs` 带前缀的写法，裸名列表罩不住
     ...builtins.map((m) => `node:${m}`),
   ],
-  plugins: [cmBundlePlugin, momentumSveltePlugin, sveltePlugin, jiebaPatchPlugin, dexiePatchPlugin, importGlobPlugin, musicPlayerShimsPlugin, mxInlinePlugin, mxCaptionsPlugin, mxNodeEnvPlugin],
+  plugins: [cmBundlePlugin, momentumSveltePlugin, sveltePlugin, jiebaPatchPlugin, dexiePatchPlugin, unicornMagicPatchPlugin, importGlobPlugin, musicPlayerShimsPlugin, inlineImportPlugin, mxInlinePlugin, mxCaptionsPlugin, mxNodeEnvPlugin],
   // Monaco 的 codicon.css 引用 .ttf 字体(图标字形)。内联成 dataurl:图标
   // 只有几 KB,而少这一条整个构建会以 "No loader is configured for .ttf" 失败。
   // (与独立插件 obsidian-logseq 的 esbuild.mjs 同款配置。)
@@ -429,6 +489,7 @@ const context = await esbuild.context({
     __JIEBA_VERSION__: JSON.stringify(JIEBA_VERSION),
     __JIEBA_WASM_SHA256__: JSON.stringify(JIEBA_WASM_SHA256),
     __JIEBA_WASM_B64__: JSON.stringify(JIEBA_WASM_B64),
+    __TREE_SITTER_WASM_B64__: JSON.stringify(TREE_SITTER_WASM_B64),
     __READABILITY_SOURCE__: JSON.stringify(READABILITY_SOURCE),
     __CLIP_SOURCE__: JSON.stringify(CLIP_SOURCE),
     __PRELOAD_SOURCE__: JSON.stringify(PRELOAD_SOURCE),
