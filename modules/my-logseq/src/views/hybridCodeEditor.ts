@@ -168,7 +168,7 @@ export class HybridCodeEditor extends Component {
       value: codeLines.join('\n'),
       language: lang,
       autoHeight: false,
-      lineNumbersFn: (n: number) => String(this.fileLineOf(n)),
+      lineNumbersFn: (n: number) => this.renderGutterNumber(this.fileLineOf(n)),
       folding: true,
       onSave: () => {
         // Ctrl+S 保存前同样做一次重切分检查(用户可能没失焦直接保存)。
@@ -221,6 +221,60 @@ export class HybridCodeEditor extends Component {
     return Math.min(Math.max(n, 1), Math.max(total, 1));
   }
 
+  /** Public 包装(fileLineOf):gutter 右键要把点中的 Monaco 行还原成文件行。 */
+  fileLineOfMonaco(n: number): number {
+    return this.fileLineOf(n);
+  }
+
+  /**
+   * 被笔记 `[[file#L42]]` 行锚引用的文件行(行号着色/悬浮展示引用用)。
+   * ExternalCodeView 扫 metadataCache 后注入;key = 文件行号。
+   */
+  linkedFileLines: Set<number> = new Set();
+
+  /**
+   * gutter 行号文本:被行锚引用的行包一层着色 class。Monaco 对 lineNumbersFn
+   * 的返回值按 HTML 渲染,内联 span 是官方支持的定制点。
+   */
+  private renderGutterNumber(fileLine: number): string {
+    if (this.linkedFileLines.size > 0 && this.linkedFileLines.has(fileLine)) {
+      return `<span class="logseq-external-code-ln-linked">${fileLine}</span>`;
+    }
+    return String(fileLine);
+  }
+
+  /** 行级反链集合变化后刷新 gutter(主编辑器 + 代码形态注释区小编辑器)。 */
+  refreshLinkedGutter(): void {
+    this.scheduleGutterRefresh();
+    for (let k = 0; k < this.noteEditors.length; k++) {
+      const ed = this.noteEditors[k];
+      if (!ed) continue;
+      ed.updateOptions({ lineNumbers: (n: number) => this.renderGutterNumber(this.noteFileLine(k, n)) });
+    }
+  }
+
+  /**
+   * 文件行 → Monaco 行(`[[file#L42]]` 行锚跳转用):fileLineOf 的逆映射。
+   * 文件行落在某个 code 区(startLine + 前置漂移 ≤ F < +行数)→ Monaco 行 =
+   * 前置 anchor + 区内偏移 + 1;落在注释区(块编辑器接管)→ null,没有 Monaco
+   * 落点。anchor/drift 的累进顺序与 fileLineOf 严格一致(先判定后累加)。
+   */
+  monacoLineOfFile(fileLine: number): number | null {
+    let anchor = 0; // 该 code 区之前所有 code 区的 Monaco 行数和
+    let drift = 0; // 该区之前所有区的行数漂移
+    for (let k = 0; k < this.regions.length; k++) {
+      const r = this.regions[k];
+      if (r.kind === 'code') {
+        const count = this.codeCounts[k] ?? 0;
+        const rel = fileLine - drift - r.startLine;
+        if (rel >= 0 && rel < count) return anchor + rel + 1;
+        anchor += count;
+      }
+      drift += (r.kind === 'code' ? this.codeCounts[k] : this.textCounts[k]) - (this.baseCounts[k] ?? 0);
+    }
+    return null;
+  }
+
   /** 注释区提交/编辑后行数变了:刷新 text 区计数 + 让 gutter 重绘 */
   private refreshTextCountAndGutter(regionIdx: number, lines: string[]): void {
     if (this.regions[regionIdx]?.kind !== 'text') return;
@@ -236,7 +290,7 @@ export class HybridCodeEditor extends Component {
       // 布局度量先行:行号位数/滚动条/字号可能刚变,注释区对齐值跟着续测
       this.measureMonacoNoteMetrics();
       try {
-          this.editor?.updateOptions({ lineNumbers: (n: number) => String(this.fileLineOf(n)) });
+          this.editor?.updateOptions({ lineNumbers: (n: number) => this.renderGutterNumber(this.fileLineOf(n)) });
         } catch {
         /* 编辑器已销毁 */
       }
@@ -476,7 +530,7 @@ export class HybridCodeEditor extends Component {
         lineNumbers: true,
         // 注释行号 = 文件真实行号(区起始行 + 区前漂移 + 区内偏移,每次现算,
         // 不闭包 —— 上方区域增删行后漂移会平移)。
-        lineNumbersFn: (n: number) => String(this.noteFileLine(regionIdx, n)),
+        lineNumbersFn: (n: number) => this.renderGutterNumber(this.noteFileLine(regionIdx, n)),
         onSave: () => this.opts?.onSave?.(),
         onChange: (v) => {
           this.refreshTextCountAndGutter(regionIdx, v.split('\n'));

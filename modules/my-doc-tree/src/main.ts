@@ -45,6 +45,7 @@ import {
 } from './features/mountFilter';
 import { applyMarkedTabIcons, markLeafTabIcon } from './features/tabIcon';
 import { parseExtVideoTarget } from './features/videoTimestamps';
+import { parseExtCodeTarget } from './features/codeFileLinks';
 import { ICON_THEME_CHANGED_EVENT } from './extensions/iconThemeLoader';
 import {
   DEFAULT_DOCTREE_SETTINGS,
@@ -702,10 +703,12 @@ export default class DocTreePlugin extends Plugin {
    * 同一文件已开着时复用叶而不是叠标签；媒体文件没有「接管」包袱，也不进
    * setViewState 补丁的路径（ItemView 自有 state）。
    */
-  async openExternalInView(viewType: string, spec: { abs: string; name?: string; t?: number }): Promise<void> {
+  async openExternalInView(viewType: string, spec: { abs: string; name?: string; t?: number; line?: number }): Promise<void> {
     // t = 时间戳(秒):时间戳链接点击路由进来的,VideoView 用它 seek。
+    // line = 行号:`ext:<abs>#L42` 行锚链接点击路由进来的,ExternalCodeView 用它跳转。
     const state: Record<string, unknown> = { abs: spec.abs, name: spec.name ?? '' };
     if (typeof spec.t === 'number' && Number.isFinite(spec.t)) state.t = spec.t;
+    if (typeof spec.line === 'number' && Number.isFinite(spec.line)) state.line = Math.floor(spec.line);
     // 复用同一文件的同型视图叶。
     for (const leaf of this.app.workspace.getLeavesOfType(viewType)) {
       const vs = leaf.getViewState().state as { abs?: string } | undefined;
@@ -770,6 +773,26 @@ export default class DocTreePlugin extends Plugin {
                   abs: parsed.abs,
                   name,
                   t: parsed.seconds ?? undefined,
+                });
+                return Promise.resolve();
+              }
+              // 代码/文本文件:`[[ext:<abs>#L42]]` 行锚与裸文件链接(codeFileLinks
+              // 生成的同款)→ ExternalCodeView('logseq-external-code',视图类型
+              // 由 my-logseq 注册,字符串单源在那边;不反向 import 免成环)。
+              // 视频分支没接住的 ext: 目标落到这里,再按文本代码扩展名门控。
+              const codeParsed = parseExtCodeTarget(linktext);
+              const codeName = codeParsed?.abs.split(/[\\/]/).pop() ?? '';
+              if (
+                codeParsed &&
+                codeName &&
+                isTextFileName(codeName) &&
+                !isMarkdownFile(codeName) &&
+                codeName.toLowerCase() !== 'canvas'
+              ) {
+                void self.openExternalInView('logseq-external-code', {
+                  abs: codeParsed.abs,
+                  name: codeName,
+                  line: codeParsed.line ?? undefined,
                 });
                 return Promise.resolve();
               }

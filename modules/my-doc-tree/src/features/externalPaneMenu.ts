@@ -30,6 +30,8 @@ import {
   trashEntry,
   validateEntryName,
 } from './extFs';
+import { isMarkdownFile, isTextFileName } from './mountFilter';
+import { buildCodeExtLink } from './codeFileLinks';
 import { NamePromptModal, ConfirmModal } from '../panels/promptModals';
 
 /** 菜单宿主需要的插件能力（结构化类型，免得反向依赖 main.ts）。 */
@@ -319,13 +321,13 @@ export function promptExternalDelete(
 // 菜单构建
 // ------------------------------------------------------------------
 
-/** 剪贴板写入，失败时把路径显示出来（总比无声失败好）。 */
-async function copyText(text: string): Promise<void> {
+/** 剪贴板写入，失败时把内容显示出来（总比无声失败好）。 */
+async function copyText(text: string, what = '绝对路径'): Promise<void> {
   try {
     await navigator.clipboard.writeText(text);
-    new Notice('已复制绝对路径');
+    new Notice(`已复制${what}`);
   } catch {
-    new Notice(`路径：${text}`);
+    new Notice(`${what}：${text}`);
   }
 }
 
@@ -376,6 +378,17 @@ export function buildExternalPaneMenu(
         }),
       ),
   );
+  // 库外文本/代码文件:给一个「复制链接」——`[[ext:<abs>|name]]` 伪路径
+  // wikilink(视频时间戳同款约定,doc-tree 的 openLinkText patch 负责路由)。
+  // 与「复制绝对路径」并排;行锚版本(#L42)由代码编辑器的行号右键产生。
+  if (target.isDir !== true && isTextFileName(fileName) && !isMarkdownFile(fileName)) {
+    menu.addItem((item) =>
+      item
+        .setTitle('复制链接')
+        .setIcon('link' as never)
+        .onClick(() => void copyText(buildCodeExtLink(abs), ` ${fileName} 的链接`)),
+    );
+  }
   menu.addItem((item) =>
     item
       .setTitle('复制绝对路径')

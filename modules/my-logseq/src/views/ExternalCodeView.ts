@@ -16,8 +16,11 @@
  * which is what the user asked for.
  */
 
-import { ItemView, Notice, TFile, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
+import { ItemView, MarkdownView, Menu, Notice, TFile, WorkspaceLeaf, parseLinktext, type ViewStateResult } from 'obsidian';
 import type * as monacoNS from 'monaco-editor';
+// 运行时命名空间(Range/MouseTargetType 等枚举值)——与 my-code-editor 的
+// monaco.ts 同一个 bundled 实例,不会产生第二份 Monaco。
+import * as monacoRuntime from 'monaco-editor';
 // 代码编辑器:Monaco(开源 VS Code 内核)。语言解析/高亮/worker 见 src/editor/monaco.ts;
 // LSP(补全/悬停/诊断/语义 token)的 Monaco 接线在 code-editor/src/lsp(与 SiYuan 同源)。
 import { createEditor, setupMonaco, getLanguageByPath } from '../../../my-code-editor/src/editor/monaco';
@@ -32,6 +35,7 @@ import { docTreeOf } from '../../../my-doc-tree/src/main';
 import { applyHeaderPath, headerSegmentsFor, isUnderMount, matchMountFor } from './headerPath';
 import { markLeafTouched } from './tabTouch';
 import { HybridCodeEditor } from './hybridCodeEditor';
+import { buildCodeExtLink, toExtPath } from '../../../my-doc-tree/src/features/codeFileLinks';
 import { runFile, langFromExt } from '../../../my-code-editor/src/exec/runner';
 import type { RunHandle } from '../../../my-code-editor/src/exec/pythonRunner';
 
@@ -64,6 +68,14 @@ export class ExternalCodeView extends ItemView {
   private runHandle: RunHandle | null = null;
   /** LSP 接线(补全/悬停/诊断/语义 token;无 server 或 LSP 关闭时为空数组) */
   private lspDisposables: monacoNS.IDisposable[] = [];
+  /** 视图级 disposables(行号右键菜单等;disposeEditors 一并释放) */
+  private viewDisposables: monacoNS.IDisposable[] = [];
+  /**
+   * 待跳转的文件行:`[[file#L42]]` 行锚 / openExternalInView 的 line 进来时
+   * 编辑器可能尚未挂载(setState 先于编辑器就绪、或叶子复用不重挂),先存这里,
+   * 由 mount() 末尾或 setState 的「编辑器已在」分支消费。
+   */
+  private pendingRevealLine: number | null = null;
 
   /** 老 state 没有挂载名时，按最长前缀匹配在挂载配置里找回来。 */
   private mountLabelFromSettings(): string {
@@ -157,6 +169,10 @@ export class ExternalCodeView extends ItemView {
     // content have not arrived yet — and the state that carries them is the
     // only place they exist.
     if (this.abs) this.mount();
+    // 行级反链的刷新源:笔记保存(changed)/索引批解析完成(resolved)。
+    // registerEvent 随视图卸载自动清理;扫描本身 600ms 防抖。
+    this.registerEvent(this.app.metadataCache.on('changed', () => this.scheduleLineLinksScan()));
+    this.registerEvent(this.app.metadataCache.on('resolved', () => this.scheduleLineLinksScan()));
   }
 
   async setState(state: unknown, result: ViewStateResult): Promise<void> {
@@ -170,12 +186,17 @@ export class ExternalCodeView extends ItemView {
       file?: string;
       /** 打开入口的呈现覆盖(false = 纯源码;缺省跟随设置) */
       hybrid?: boolean;
+      /** 行锚:openExternalInView(叶子复用)把 `#L42` 解析后的行号直接带进来 */
+      line?: number;
     };
     if (typeof s.abs === 'string') this.abs = s.abs;
     if (typeof s.name === 'string') this.fileName = s.name;
     if (typeof s.content === 'string') this.lastDiskData = s.content;
     if (typeof s.mountPath === 'string') this.mountPath = s.mountPath;
     if (typeof s.mountLabel === 'string') this.mountLabel = s.mountLabel;
+    if (typeof s.line === 'number' && Number.isFinite(s.line) && s.line >= 1) {
+      this.pendingRevealLine = Math.floor(s.line);
+    }
     // 打开入口的呈现覆盖(右键「纯代码编辑器」传 false;缺省跟随设置)
     if (typeof s.hybrid === 'boolean') this.hybridOverride = s.hybrid;
     // 库内文件:宿主把代码扩展名 registerExtensions 到本视图,Obsidian 传
@@ -218,6 +239,12 @@ export class ExternalCodeView extends ItemView {
     await super.setState(state, result);
     // Now the path is known; build the editor if onOpen ran before us.
     if (!this.editor && this.abs) this.mount();
+    // 行锚落地:新挂载的由 mount() 末尾消费;叶子复用(编辑器已在、不重挂)在这里跳。
+    if (this.pendingRevealLine !== null) {
+      const n = this.pendingRevealLine;
+      this.pendingRevealLine = null;
+      this.revealLine(n);
+    }
     // 视图头部的完整路径（挂载名 / 子目录 / …；库内文件则是 / + 库内目录链）：
     // 库外文件没有库内路径，Obsidian 不会给自定义视图生成目录链。
     const segments = headerSegmentsFor(
@@ -230,8 +257,58 @@ export class ExternalCodeView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    this.hideGutterHover();
     await this.flush();
     this.disposeEditors();
+  }
+
+  /**
+   * 原生 `[[code.py#L42]]` 点击路由:Obsidian 对非 md 文件把链接 subpath 作为
+   * ephemeral state 送达视图(VideoView 的 `#t=` 时间戳同款机制,无需任何
+   * openLinkText patch)。解析出行锚就跳转,其余 subpath 交回基类。
+   */
+  setEphemeralState(state: unknown): void {
+    const subpath = (state as { subpath?: string } | null)?.subpath ?? null;
+    const m = subpath ? /^#?L(\d+)$/.exec(subpath) : null;
+    if (m) {
+      const n = Number(m[1]);
+      if (this.editor) this.revealLine(n);
+      else this.pendingRevealLine = n; // mount() 末尾消费(mount 晚于本调用的竞态)
+      return;
+    }
+    super.setEphemeralState(state as never);
+  }
+
+  /**
+   * 跳转到文件行(库内/库外 `[[file#L42]]` 行锚、行号右键共用)。
+   *
+   * 纯源码模式 Monaco 行 == 文件行;混合模式 gutter 显示的是真实文件行,
+   * 经引擎逆映射回 Monaco 行(注释区是块编辑器,没有 Monaco 落点,直接放弃)。
+   * 跳完短时高亮该行(BlockEditorView 的 .block-revealed 同款反馈)。
+   */
+  revealLine(fileLine: number): void {
+    const editor = this.editor;
+    if (!editor) return;
+    let monacoLine = fileLine;
+    if (this.hybridEngine) {
+      const mapped = this.hybridEngine.monacoLineOfFile(fileLine);
+      if (mapped === null) return;
+      monacoLine = mapped;
+    }
+    const model = editor.getModel();
+    if (model && monacoLine > model.getLineCount()) monacoLine = model.getLineCount();
+    if (monacoLine < 1) monacoLine = 1;
+    editor.setPosition({ lineNumber: monacoLine, column: 1 });
+    editor.revealLineInCenter(monacoLine);
+    editor.focus();
+    // IRange 是纯结构对象,不必经 monacoRuntime.Range 构造
+    const deco = editor.createDecorationsCollection([
+      {
+        range: { startLineNumber: monacoLine, startColumn: 1, endLineNumber: monacoLine, endColumn: 1 },
+        options: { isWholeLine: true, className: 'logseq-external-code-line-flash', zIndex: 1 },
+      },
+    ]);
+    window.setTimeout(() => deco.clear(), 1200);
   }
 
   /**
@@ -259,6 +336,8 @@ export class ExternalCodeView extends ItemView {
 
   /** 销毁 Monaco 实例与混合引擎( FragmentHost / ResizeObserver 随引擎卸载)。 */
   private disposeEditors(): void {
+    for (const d of this.viewDisposables) d.dispose();
+    this.viewDisposables = [];
     for (const d of this.lspDisposables) d.dispose();
     this.lspDisposables = [];
     if (this.hybridEngine) {
@@ -396,7 +475,8 @@ export class ExternalCodeView extends ItemView {
       this.editor = createEditor(host, {
         value: content,
         language,
-        lineNumbers: true,
+        // 行号经渲染函数:被笔记 [[file#L42]] 引用的行号着色(见 renderGutterNumber)
+        lineNumbersFn: (n: number) => this.renderGutterNumber(n),
         // model 绑真实文件 uri:LSP(补全/悬停/诊断/语义 token)按路径定位文档
         uri: docUri,
         onSave: () => void this.flush(true),
@@ -415,6 +495,288 @@ export class ExternalCodeView extends ItemView {
     // full path as breadcrumbs (挂载名 / 子目录 / …), so putting the path in the
     // title as well spelled it out twice (`挂载库/sub/sub/code.ts`).
     setLeafTitle(this.leaf, this.fileName);
+
+    // 行号 gutter 右键(复制到行的链接 / 复制文件链接)+ 反链悬浮
+    if (this.editor) {
+      this.attachGutterContextMenu(this.editor);
+      this.attachGutterHover(this.editor);
+    }
+    // 行锚(#L42 / openExternalInView line):编辑器就绪后消费
+    if (this.pendingRevealLine !== null) {
+      const n = this.pendingRevealLine;
+      this.pendingRevealLine = null;
+      this.revealLine(n);
+    }
+    // 行级反链扫描(结果落 gutter 着色与悬浮数据)
+    this.scanLineLinks();
+  }
+
+  // ------------------------------------------------------------------
+  // 行锚与右键复制链接([[file#L42]] 体系)
+  // ------------------------------------------------------------------
+
+  /**
+   * 行级反链:文件行 → 引用它的笔记。库内 `[[file.py#L42]]`(metadataCache
+   * 解析到本文件)与库外 `[[ext:<abs>#L42]]`(未解析链接按伪路径比对)都算;
+   * 不带行锚的文件级链接不算(没有行可标)。
+   */
+  private lineLinks = new Map<number, { file: TFile; noteLine: number }[]>();
+  private lineLinksScanTimer: number | null = null;
+  /** 行号悬浮弹层状态(同一时刻至多一个;滚动/移出/换行即收) */
+  private hoverLine: number | null = null;
+  private hoverEl: HTMLElement | null = null;
+  private hoverHideTimer: number | null = null;
+  /** 行号右键菜单展开中:悬浮弹层让位(否则盖住菜单项,e2e 实测)。 */
+  private gutterMenuOpen = false;
+
+  /**
+   * gutter 行号文本:被行锚引用的行包一层着色 class。Monaco 对 lineNumbersFn
+   * 的返回值按 HTML 渲染,内联 span 是官方支持的定制点。
+   */
+  private renderGutterNumber(fileLine: number): string {
+    if (this.lineLinks.size > 0 && this.lineLinks.has(fileLine)) {
+      return `<span class="logseq-external-code-ln-linked">${fileLine}</span>`;
+    }
+    return String(fileLine);
+  }
+
+  /** 反链集合落进 gutter(混合引擎注入 + 刷新;纯源码模式换行号函数)。 */
+  private applyLinkedGutter(): void {
+    if (this.hybridEngine) {
+      this.hybridEngine.linkedFileLines = new Set(this.lineLinks.keys());
+      this.hybridEngine.refreshLinkedGutter();
+    } else if (this.editor) {
+      this.editor.updateOptions({
+        lineNumbers: (n: number) => this.renderGutterNumber(n),
+      });
+    }
+  }
+
+  private scheduleLineLinksScan(): void {
+    if (this.lineLinksScanTimer !== null) window.clearTimeout(this.lineLinksScanTimer);
+    this.lineLinksScanTimer = window.setTimeout(() => {
+      this.lineLinksScanTimer = null;
+      this.scanLineLinks();
+    }, 600);
+  }
+
+  /** 全库 md 缓存扫一遍 `#L` 行锚; getFileCache 是 O(1) 查表,大库也可承受。 */
+  private scanLineLinks(): void {
+    const map = new Map<number, { file: TFile; noteLine: number }[]>();
+    const push = (line: number, file: TFile, noteLine: number) => {
+      const arr = map.get(line);
+      if (arr) arr.push({ file, noteLine });
+      else map.set(line, [{ file, noteLine }]);
+    };
+    try {
+      const selfPath = this.vaultFile?.path ?? null;
+      const extTarget = this.vaultFile ? null : toExtPath(this.abs).toLowerCase();
+      for (const md of this.app.vault.getMarkdownFiles()) {
+        const cache = this.app.metadataCache.getFileCache(md);
+        if (!cache?.links?.length) continue;
+        for (const l of cache.links) {
+          const { path: lp, subpath } = parseLinktext(l.link);
+          if (!subpath) continue;
+          const m = /^#?L(\d+)$/.exec(subpath);
+          if (!m) continue;
+          if (selfPath) {
+            const dest = this.app.metadataCache.getFirstLinkpathDest(lp, md.path);
+            if (dest === this.vaultFile) push(Number(m[1]), md, l.position.start.line);
+          } else if (extTarget) {
+            // 库外:ext: 伪路径以未解析链接的形态留在缓存里,按归一化串比对
+            const norm = decodeURIComponent(lp).replace(/\\/g, '/').toLowerCase();
+            if (norm === extTarget) push(Number(m[1]), md, l.position.start.line);
+          }
+        }
+      }
+    } catch (e) {
+      console.debug('[my-obsidian] line-links scan failed', e);
+    }
+    this.lineLinks = map;
+    this.applyLinkedGutter();
+  }
+
+  /**
+   * 行号悬浮:展示引用该行的笔记(可跳转)。每次悬浮都重建弹层;内容是
+   * 笔记名 + 引用行上下文(引用行高亮),点笔记名跳到引用所在行。
+   */
+  private showGutterHover(
+    fileLine: number,
+    refs: { file: TFile; noteLine: number }[],
+    rect: DOMRect,
+  ): void {
+    this.hideGutterHover();
+    this.hoverLine = fileLine;
+    const el = document.body.createDiv({ cls: 'logseq-external-code-refhover' });
+    this.hoverEl = el;
+    el.createDiv({
+      cls: 'logseq-external-code-refhover-title',
+      text: `第 ${fileLine} 行被 ${refs.length} 处引用`,
+    });
+    for (const r of refs) {
+      const row = el.createDiv({ cls: 'logseq-external-code-refhover-item' });
+      const a = row.createEl('a', { cls: 'internal-link', text: r.file.basename });
+      a.setAttribute('data-href', r.file.path);
+      a.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        void this.openNoteAtLine(r);
+        this.hideGutterHover();
+      });
+      const pre = row.createEl('pre', { cls: 'logseq-external-code-refhover-ctx' });
+      void this.app.vault.cachedRead(r.file).then((text) => {
+        if (!this.hoverEl || this.hoverLine !== fileLine) return;
+        const lines = text.split(/\r?\n/);
+        const from = Math.max(0, r.noteLine - 3);
+        const to = Math.min(lines.length, r.noteLine + 4);
+        pre.empty();
+        for (let i = from; i < to; i++) {
+          const ln = pre.createDiv({ cls: 'logseq-external-code-refhover-line' });
+          if (i === r.noteLine) ln.addClass('is-link-line');
+          ln.setText(lines[i] ?? '');
+        }
+      });
+    }
+    el.addEventListener('mouseleave', () => this.hideGutterHoverSoon());
+    // 贴着行号的右侧弹;超出视口右缘就往左收
+    const width = 460;
+    const x = rect.right + 10 + width > window.innerWidth ? rect.left - width - 10 : rect.right + 10;
+    el.setCssStyles({ left: `${Math.max(8, x)}px`, top: `${Math.max(8, rect.top - 8)}px` });
+  }
+
+  private hideGutterHover(): void {
+    if (this.hoverHideTimer !== null) {
+      window.clearTimeout(this.hoverHideTimer);
+      this.hoverHideTimer = null;
+    }
+    this.hoverEl?.remove();
+    this.hoverEl = null;
+    this.hoverLine = null;
+  }
+
+  /** 弹层上停留(读上下文)不被收走:延迟关闭,再进入同一行时取消。 */
+  private hideGutterHoverSoon(): void {
+    if (this.hoverHideTimer !== null) window.clearTimeout(this.hoverHideTimer);
+    this.hoverHideTimer = window.setTimeout(() => this.hideGutterHover(), 400);
+  }
+
+  /** 跳到引用笔记的引用行(md 视图吃 eState.line,hearth 同款)。 */
+  private async openNoteAtLine(r: { file: TFile; noteLine: number }): Promise<void> {
+    await this.app.workspace.getLeaf('tab').openFile(r.file, { eState: { line: r.noteLine } });
+  }
+
+  /**
+   * 文件/行链接文本:库内走 generateMarkdownLink(尊重用户的链接风格设置,
+   * timecodeRefs 先例),源笔记取当前活动 md 笔记(复制场景用户大概率就地
+   * 粘贴);库外没有 TFile,走 `ext:<绝对路径>` 伪路径 wikilink(视频时间戳
+   * 同款约定,doc-tree 的 openLinkText patch 负责路由)。
+   */
+  buildFileLink(subpath = ''): string {
+    if (this.vaultFile) {
+      const notePath = this.app.workspace.getActiveViewOfType(MarkdownView)?.file?.path ?? '';
+      return this.plugin.app.fileManager.generateMarkdownLink(this.vaultFile, notePath, subpath, '');
+    }
+    const line = /^#L(\d+)$/.exec(subpath);
+    return buildCodeExtLink(this.abs, line ? Number(line[1]) : undefined);
+  }
+
+  private async copyWithNotice(text: string, what: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(text);
+      new Notice(`已复制${what}`);
+    } catch (e) {
+      new Notice(`复制失败:${String(e).slice(0, 80)}`);
+    }
+  }
+
+  /** 行号右键菜单项:复制到行的链接(`[[file#L42]]`)。 */
+  private copyLineLink(fileLine: number): void {
+    void this.copyWithNotice(this.buildFileLink(`#L${fileLine}`), ` ${this.fileName}:${fileLine} 的行链接`);
+  }
+
+  /** 行号右键菜单项:复制文件链接(`[[file]]`,不带行锚)。 */
+  private copyFileLink(): void {
+    void this.copyWithNotice(this.buildFileLink(), ` ${this.fileName} 的链接`);
+  }
+
+  /**
+   * 行号 gutter 右键 → 复制到行的链接 / 复制文件链接。
+   *
+   * 只在点中行号(MouseTargetType.GUTTER_LINE_NUMBERS)时接管:preventDefault
+   * 挡掉 Monaco 默认菜单,弹 Obsidian Menu。混合模式的 gutter 显示的就是
+   * 真实文件行,Monaco 行经引擎双向映射。可执行环境(移动端)无右键,无需门控。
+   */
+  private attachGutterContextMenu(editor: monacoNS.editor.IStandaloneCodeEditor): void {
+    this.viewDisposables.push(
+      editor.onContextMenu((e) => {
+        if (e.target.type !== monacoRuntime.editor.MouseTargetType.GUTTER_LINE_NUMBERS) return;
+        e.event.preventDefault();
+        e.event.stopPropagation();
+        // 菜单与悬浮弹层锚在同一位置——先收掉悬浮,展开期间也不再弹
+        // (否则弹层盖住菜单项吞掉点击,e2e 实测)。
+        this.hideGutterHover();
+        this.gutterMenuOpen = true;
+        const monacoLine = e.target.position?.lineNumber ?? e.target.range?.startLineNumber ?? 0;
+        if (monacoLine < 1) return;
+        const fileLine = this.hybridEngine ? this.hybridEngine.fileLineOfMonaco(monacoLine) : monacoLine;
+        if (!fileLine || fileLine < 1) return;
+        const menu = new Menu();
+        menu.addItem((item) =>
+          item
+            .setTitle(`复制到第 ${fileLine} 行的链接`)
+            .setIcon('link' as never)
+            .onClick(() => this.copyLineLink(fileLine)),
+        );
+        menu.addItem((item) =>
+          item
+            .setTitle('复制文件链接')
+            .setIcon('file-code' as never)
+            .onClick(() => this.copyFileLink()),
+        );
+        // 锚定 gutter 元素本体,不用 e.event:Monaco 包装事件的坐标喂给
+        // showAtMouseEvent 会被钳到视口角落(e2e 实测菜单落到 (0, 视口底) 外),
+        // 而 target.element 的 rect 与悬浮弹层同源,位置永远正确。
+        const gutterEl = e.target.element;
+        const gutterRect = gutterEl?.getBoundingClientRect();
+        if (gutterRect) {
+          menu.showAtPosition({ x: gutterRect.right + 4, y: gutterRect.top });
+        } else {
+          menu.showAtMouseEvent(e.event as unknown as MouseEvent);
+        }
+        menu.onHide(() => {
+          this.gutterMenuOpen = false;
+        });
+      }),
+    );
+  }
+
+  /**
+   * 行号悬浮(仅被行锚引用的行):展示引用它的笔记列表 + 引用行上下文,
+   * 点笔记名跳到引用所在行。onMouseMove 驱动,同 lineHeight 变更/移出即收。
+   */
+  private attachGutterHover(editor: monacoNS.editor.IStandaloneCodeEditor): void {
+    this.viewDisposables.push(
+      editor.onMouseMove((e) => {
+        if (this.gutterMenuOpen) return; // 右键菜单展开中,悬浮让位
+        if (e.target.type !== monacoRuntime.editor.MouseTargetType.GUTTER_LINE_NUMBERS) {
+          if (this.hoverEl) this.hideGutterHoverSoon();
+          return;
+        }
+        const monacoLine = e.target.position?.lineNumber ?? 0;
+        const fileLine = this.hybridEngine ? this.hybridEngine.fileLineOfMonaco(monacoLine) : monacoLine;
+        const refs = fileLine ? this.lineLinks.get(fileLine) : undefined;
+        if (!refs?.length) {
+          if (this.hoverEl) this.hideGutterHoverSoon();
+          return;
+        }
+        if (this.hoverLine === fileLine) return;
+        const rect = e.target.element?.getBoundingClientRect();
+        if (!rect) return;
+        void this.showGutterHover(fileLine, refs, rect);
+      }),
+    );
+    this.viewDisposables.push(editor.onMouseLeave(() => this.hideGutterHoverSoon()));
+    // 滚动会让行号与弹层错位,直接收掉最稳
+    this.viewDisposables.push(editor.onDidScrollChange(() => this.hideGutterHover()));
   }
 
   /**

@@ -59172,3 +59172,65 @@ body.hearth-snapshot-capturing .hearth-view:not(#hearth-boost) {
 	0% { transform: rotate(0deg); }
 	100% { transform: rotate(360deg); }
 }
+
+/* ==================== 代码文件行锚([[file#L42]] 体系) ==================== */
+
+/* 行锚跳转(#L42 reveal):目标行 1.2s 高亮闪烁(decoration className) */
+.logseq-external-code-line-flash {
+  background: color-mix(in srgb, var(--interactive-accent) 18%, transparent) !important;
+  box-shadow: inset 2px 0 0 0 var(--interactive-accent);
+}
+
+/* 被笔记 [[file#L42]] 引用的行号:accent 着色加粗,提示「这行被链接了」
+   (Monaco lineNumbersFn 返回值按 HTML 渲染,内联 span 是官方定制点) */
+.logseq-external-code-ln-linked {
+  color: var(--interactive-accent);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* 行号悬浮:引用该行的笔记列表(笔记名可点跳转 + 引用行上下文) */
+.logseq-external-code-refhover {
+  position: fixed;
+  z-index: 1000;
+  width: 460px;
+  max-height: 340px;
+  overflow: auto;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-s);
+  padding: 8px 10px;
+  font-size: var(--font-ui-smaller);
+}
+.logseq-external-code-refhover-title {
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.logseq-external-code-refhover-item {
+  margin-bottom: 8px;
+}
+.logseq-external-code-refhover-item:last-child {
+  margin-bottom: 0;
+}
+.logseq-external-code-refhover-item a.internal-link {
+  text-decoration: none;
+  font-weight: 600;
+}
+.logseq-external-code-refhover-ctx {
+  margin: 4px 0 0;
+  padding: 4px 6px;
+  background: var(--background-secondary);
+  border-radius: 4px;
+  overflow-x: auto;
+}
+.logseq-external-code-refhover-line {
+  white-space: pre;
+  color: var(--text-faint);
+}
+.logseq-external-code-refhover-line.is-link-line {
+  color: var(--text-normal);
+  background: color-mix(in srgb, var(--interactive-accent) 14%, transparent);
+  border-left: 2px solid var(--interactive-accent);
+  padding-left: 4px;
+}

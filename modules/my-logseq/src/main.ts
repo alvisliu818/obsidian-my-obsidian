@@ -740,6 +740,24 @@ export default class LogseqEditorPlugin extends Plugin {
                 .setIcon('code' as never)
                 .onClick(() => void this.openVaultFileInCodeEditor(file)),
             );
+            // 复制 wikilink(尊重用户链接风格设置,timecodeRefs 同款链路)——
+            // 贴进笔记即可链接代码文件;行锚版(#L42)在代码编辑器的行号右键里。
+            menu.addItem((item) =>
+              item
+                .setTitle('复制链接')
+                .setIcon('link' as never)
+                .onClick(async () => {
+                  try {
+                    const source =
+                      this.app.workspace.getActiveViewOfType(MarkdownView)?.file?.path ?? '';
+                    const link = this.app.fileManager.generateMarkdownLink(file, source, '', '');
+                    await navigator.clipboard.writeText(link);
+                    new Notice(`已复制 ${file.name} 的链接`);
+                  } catch (e) {
+                    new Notice(`复制失败:${String(e).slice(0, 80)}`);
+                  }
+                }),
+            );
           }
         }
       }),
