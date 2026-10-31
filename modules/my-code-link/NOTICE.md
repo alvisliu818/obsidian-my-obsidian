@@ -63,6 +63,15 @@ query files, the tests.
    was dropped; selectors unchanged — all `.code-link-*` / `.codelink-*`
    prefixed).
 
+4. Line-anchor previews (`[[file.py#L42]]`) — a FUNCTIONAL addition made for
+   the aggregate's line-link system (ExternalCodeView copies `#L42` links;
+   see the root styles/`logseq-external-code` sections). A subpath matching
+   `^L\d+$` is treated as a line anchor instead of a tree-sitter symbol path:
+   hover and embed previews show a numbered ±5-line window centered on the
+   target line (`lineWindow` in src/utils/string.ts) instead of falling back
+   to the whole file. Symbol links (`#Class>method`) are unaffected; a symbol
+   literally named `L42` would now resolve as a line — judged acceptable.
+
 Dependencies
 ------------
 Merged into the ROOT package.json (PnP: only root declarations resolve):

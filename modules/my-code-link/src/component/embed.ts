@@ -2,6 +2,7 @@ import { TagTreeNode, TagPath } from "../lang/tree";
 import { Component } from ".";
 import CodeLinkPlugin from "../main";
 import { getLang } from "../lang/utils";
+import { lineWindow } from "../utils";
 import { TFile } from "obsidian";
 import path from "path";
 
@@ -23,13 +24,26 @@ export class CodeLinkEmbedPreview extends Component {
 		});
 	}
 
-	async setCode(file: TFile, node?: TagTreeNode | null): Promise<void> {
+	async setCode(
+		file: TFile,
+		node?: TagTreeNode | null,
+		line?: number | null
+	): Promise<void> {
 		this._codeEl.empty();
 
 		const langName = getLang(file.path);
-		const text = node
-			? node.content
-			: await this._plugin.app.vault.cachedRead(file);
+		let text: string;
+		if (typeof line === "number" && line >= 1) {
+			// 行锚([[file#L42]]):目标行 ± 上下文的窗口,带文件行号前缀
+			text = lineWindow(
+				await this._plugin.app.vault.cachedRead(file),
+				line
+			);
+		} else {
+			text = node
+				? node.content
+				: await this._plugin.app.vault.cachedRead(file);
+		}
 
 		this.markdown(this._codeEl, `\`\`\`${langName}\n${text}\n\`\`\``);
 	}
@@ -93,12 +107,16 @@ export class CodeLinkEmbedPreview extends Component {
 		}
 	}
 
-	render(file: TFile, node?: TagTreeNode | null): HTMLElement {
+	render(
+		file: TFile,
+		node?: TagTreeNode | null,
+		line?: number | null
+	): HTMLElement {
 		if (node) {
 			this._activeNode = node;
 		}
 
-		this.setCode(file, node);
+		void this.setCode(file, node, line);
 		this.setText(file, node);
 
 		return this._containerEl;
