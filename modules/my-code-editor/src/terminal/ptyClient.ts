@@ -9,6 +9,7 @@
 
 import { spawn, type ChildProcess } from 'child_process';
 import { existsSync, promises as fsPromises } from 'fs';
+import { join } from 'path';
 import { Notice } from 'obsidian';
 
 export interface PtySessionEvents {
@@ -235,10 +236,16 @@ export async function findNodeExe(): Promise<string | null> {
   return null;
 }
 
+/** 可选 shell 的统一形态(探测与用户选择共用) */
+export interface ShellInfo {
+  file: string;
+  name: string;
+}
+
 /** Windows shell 探测：pwsh7 → powershell → cmd（返回可执行绝对路径与展示名） */
-export async function detectShell(): Promise<{ file: string; name: string }> {
+export async function detectShell(): Promise<ShellInfo> {
   const stat = fsPromises.stat;
-  const candidates: { file: string; name: string }[] = [
+  const candidates: ShellInfo[] = [
     { file: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe', name: 'pwsh' },
     { file: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', name: 'PowerShell' },
     { file: 'C:\\Windows\\System32\\cmd.exe', name: 'cmd' },
@@ -252,6 +259,148 @@ export async function detectShell(): Promise<{ file: string; name: string }> {
     }
   }
   return { file: 'C:\\Windows\\System32\\cmd.exe', name: 'cmd' };
+}
+
+/** `where <name>` 的行列表;where 不存在/失败返回空(PATH 精简的 GUI 进程常见) */
+function whereExe(name: string): Promise<string[]> {
+  return new Promise((resolve) => {
+    try {
+      const p = spawn('where', [name], { windowsHide: true });
+      let buf = '';
+      p.stdout.on('data', (d) => (buf += String(d)));
+      p.on('error', () => resolve([]));
+      p.on('exit', (code) =>
+        resolve(code === 0 ? buf.split(/\r?\n/).map((l) => l.trim()).filter(Boolean) : []),
+      );
+    } catch {
+      resolve([]);
+    }
+  });
+}
+
+async function statOk(file: string): Promise<boolean> {
+  try {
+    await fsPromises.stat(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * pwsh 7 探测:标准路径 + `where pwsh`(本机实测装在 D:\programs\PowerShell\7
+ * 之类的非标准目录,GUI 进程的 PATH 里 where 才是可靠来源)。
+ */
+async function detectPwsh(): Promise<ShellInfo | null> {
+  const std = 'C:\\Program Files\\PowerShell\\7\\pwsh.exe';
+  if (await statOk(std)) return { file: std, name: 'pwsh' };
+  for (const p of await whereExe('pwsh')) {
+    try {
+      if (await statOk(p)) return { file: p, name: 'pwsh' };
+    } catch {
+      // 下一行
+    }
+  }
+  return null;
+}
+
+/**
+ * Git Bash 探测:四级依次尝试(与 siyuan-virtual-tree 的 builtin-terminal
+ * findGitBash 同规则,两仓改动需同步)。找 bash.exe 而非 git-bash.exe——
+ * 后者是拉起 mintty 窗口的启动器,不能当 PTY shell。
+ *   1) 注册表 GitForWindows\InstallPath(官方安装器写入,覆盖自定义目录)
+ *   2) 标准安装位置(ProgramFiles 64/32 位、用户级 LocalAppData)
+ *   3) `where git` 推导(每行试 ..\bin\bash.exe 与 ..\usr\bin\bash.exe)
+ *   4) `where bash` 扫描(排除 System32/WindowsApps——那两处是 WSL 存根)
+ */
+const GIT_BASH_CANDIDATES = (): string[] => {
+  const env = process.env;
+  const pf = env.ProgramFiles || 'C:\\Program Files';
+  const pfw = env.ProgramW6432 || pf;
+  const pf86 = env['ProgramFiles(x86)'] || pf;
+  const lad = env.LocalAppData || '';
+  return [
+    `${pf}\\Git\\bin\\bash.exe`,
+    `${pfw}\\Git\\bin\\bash.exe`,
+    `${pf86}\\Git\\bin\\bash.exe`,
+    lad ? `${lad}\\Programs\\Git\\bin\\bash.exe` : '',
+  ].filter(Boolean);
+};
+
+async function detectGitBash(): Promise<ShellInfo | null> {
+  // 1) 注册表(官方安装器即使装到自定义目录也写 GitForWindows\InstallPath)
+  try {
+    const { execSync } = await import('child_process');
+    for (const k of [
+      'HKLM\\SOFTWARE\\GitForWindows',
+      'HKLM\\SOFTWARE\\WOW6432Node\\GitForWindows',
+      'HKCU\\SOFTWARE\\GitForWindows',
+    ]) {
+      try {
+        const out = execSync(`reg query "${k}" /v InstallPath`, {
+          stdio: ['ignore', 'pipe', 'ignore'],
+          timeout: 3000,
+          windowsHide: true,
+        }).toString();
+        const m = out.match(/InstallPath\s+REG_SZ\s+(.+)/i);
+        const install = m?.[1]?.trim();
+        if (install && (await statOk(`${install}\\bin\\bash.exe`))) {
+          return { file: `${install}\\bin\\bash.exe`, name: 'Git Bash' };
+        }
+      } catch {
+        // 键不存在,试下一个
+      }
+    }
+  } catch {
+    // child_process 动态导入失败(不会发生,渲染进程有 node)
+  }
+  // 2) 标准安装位置
+  for (const file of GIT_BASH_CANDIDATES()) {
+    if (await statOk(file)) return { file, name: 'Git Bash' };
+  }
+  // 3) where git 推导(每行试 ..\bin\bash.exe 与 ..\usr\bin\bash.exe)
+  for (const gitExe of await whereExe('git')) {
+    if (/system32/i.test(gitExe)) continue; // System32\git.exe 是 WSL 桩
+    for (const bash of [join(gitExe, '..', 'bin', 'bash.exe'), join(gitExe, '..', 'usr', 'bin', 'bash.exe')]) {
+      if (await statOk(bash)) return { file: bash, name: 'Git Bash' };
+    }
+  }
+  // 4) where bash 扫描(排除 WSL 存根)
+  for (const bash of await whereExe('bash')) {
+    if (/system32|windowsapps/i.test(bash)) continue;
+    if (await statOk(bash)) return { file: bash, name: 'Git Bash' };
+  }
+  return null;
+}
+
+/**
+ * 本机全部可选 shell(打开终端的选择菜单数据源):按 pwsh → PowerShell →
+ * Git Bash → cmd 排序,只含真实存在的项,同 file 去重。
+ */
+export async function listShells(): Promise<ShellInfo[]> {
+  const found: ShellInfo[] = [];
+  const seen = new Set<string>();
+  const push = (s: ShellInfo | null) => {
+    if (!s) return;
+    const key = s.file.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    found.push(s);
+  };
+  push(await detectPwsh());
+  const ps5 = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+  if (await statOk(ps5)) push({ file: ps5, name: 'PowerShell' });
+  push(await detectGitBash());
+  const comspec = process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe';
+  if (await statOk(comspec)) push({ file: comspec, name: 'cmd' });
+  return found;
+}
+
+/** 按壳分派启动参数(cmd 无参数;bash 走登录+交互;PowerShell 免 Logo)。 */
+function shellArgs(name: string): string[] {
+  if (name === 'cmd') return [];
+  if (name === 'Git Bash') return ['--login', '-i'];
+  return ['-NoLogo'];
 }
 
 /** 拉起（或复用）helper 进程；插件目录路径由调用方提供 */
@@ -304,7 +453,7 @@ async function ensureHelper(manifestDir: string, nodeExe: string): Promise<void>
  */
 export async function createPtySession(
   manifestDir: string,
-  opts: { cwd?: string; cols?: number; rows?: number },
+  opts: { cwd?: string; cols?: number; rows?: number; shell?: ShellInfo },
   ev: PtySessionEvents,
 ): Promise<PtySession> {
   const nodeExe = await findNodeExe();
@@ -313,7 +462,8 @@ export async function createPtySession(
 
   const id = `s${++seq}-${Date.now().toString(36)}`;
   sessions.set(id, ev);
-  const shell = await detectShell();
+  // shell 可由调用方指定(打开终端时的选择菜单/布局恢复),缺省走探测
+  const shell = opts.shell ?? (await detectShell());
   // 终端用纯净 shell 环境：注入 Python 环境 PATH 会与 conda init 的 PowerShell
   // 启动钩子冲突（hook 用环境里的 python 跑 base 的 conda 脚本 → ModuleNotFound）。
   // 终端里用户自行 conda activate；代码块/文件运行与 LSP 才跟随选定环境。
@@ -326,7 +476,7 @@ export async function createPtySession(
       t: 'spawn',
       id,
       file: shell.file,
-      args: shell.name === 'cmd' ? [] : ['-NoLogo'],
+      args: shellArgs(shell.name),
       cwd,
       env,
       cols: opts.cols ?? 80,

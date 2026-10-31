@@ -62,7 +62,7 @@ import { isExtensionInstalled } from './extensions/extensionStore';
 import { hasGrammarForFence } from '../../my-code-editor/src/extensions/tmEngine';
 import { applyCodeThemePreference, warmUpSharedBlockEditor } from '../../my-code-editor/src/editor/monaco';
 import { TerminalView, VIEW_TYPE_TERMINAL } from './terminal/terminalView';
-import { shutdownPtyHelper, findNodeExe } from '../../my-code-editor/src/terminal/ptyClient';
+import { shutdownPtyHelper, findNodeExe, listShells, detectShell, type ShellInfo } from '../../my-code-editor/src/terminal/ptyClient';
 import type { ExtensionSource } from './extensions/types';
 import { registerGrammarFromExtension, unregisterGrammarFromExtension, ensureTmEngineReady } from '../../my-code-editor/src/extensions/tmEngine';
 import { registerTmGrammarForMonaco, disposeTmGrammarForMonaco } from '../../my-code-editor/src/extensions/monacoGrammarBridge';
@@ -97,17 +97,40 @@ export default class LogseqEditorPlugin extends Plugin {
   /** Constructor of Obsidian's native properties editor (grabbed off a live instance). */
   nativePropsCtor: unknown = null;
   private nativePropsCtorPromise: Promise<unknown> | null = null;
-  /** 打开（或聚焦）终端标签页 */
+  /** 打开（或聚焦）终端标签页：无叶时先让用户选 shell（探测本机可选项） */
   async activateTerminalView(): Promise<void> {
     const { workspace } = this.app;
     const existing = workspace.getLeavesOfType(VIEW_TYPE_TERMINAL);
-    let leaf: WorkspaceLeaf;
     if (existing.length) {
-      leaf = existing[0];
-    } else {
-      leaf = workspace.getLeaf('split');
-      await leaf.setViewState({ type: VIEW_TYPE_TERMINAL, active: true });
+      workspace.revealLeaf(existing[0]);
+      return;
     }
+    // shell 选择菜单:Git Bash / pwsh / PowerShell / cmd,只列真实存在的;
+    // 探测到的默认项标注(默认)。已有标签页时直接聚焦不重选(换 shell =
+    // 关掉标签页重开)。
+    const shells = await listShells();
+    const fallback = await detectShell();
+    const menu = new Menu();
+    for (const s of shells) {
+      menu.addItem((item) =>
+        item
+          .setTitle(s.file === fallback.file ? `${s.name}（默认）` : s.name)
+          .setIcon(s.name === 'Git Bash' ? 'git-branch' : 'terminal-square')
+          .onClick(() => void this.openTerminalWithShell(s)),
+      );
+    }
+    // 命令面板/ribbon 触发时没有鼠标锚点,挂视口上方居中
+    menu.showAtPosition({ x: Math.max(16, window.innerWidth / 2 - 140), y: 120 });
+  }
+
+  private async openTerminalWithShell(shell: ShellInfo): Promise<void> {
+    const { workspace } = this.app;
+    const leaf = workspace.getLeaf('split');
+    await leaf.setViewState({
+      type: VIEW_TYPE_TERMINAL,
+      active: true,
+      state: { shellFile: shell.file, shellName: shell.name },
+    });
     workspace.revealLeaf(leaf);
   }
 
