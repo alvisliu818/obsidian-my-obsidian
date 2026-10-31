@@ -19,6 +19,7 @@
  */
 
 import { Menu, Notice, TFile, TFolder, type App, type ViewState } from 'obsidian';
+import { clipboard as electronClipboard } from 'electron';
 import {
   deletePermanent,
   exists,
@@ -327,7 +328,13 @@ async function copyText(text: string, what = '绝对路径'): Promise<void> {
     await navigator.clipboard.writeText(text);
     new Notice(`已复制${what}`);
   } catch {
-    new Notice(`${what}：${text}`);
+    // 无焦点窗口 navigator 剪贴板被 Chromium 拒 → Electron clipboard 兜底
+    try {
+      electronClipboard.writeText(text);
+      new Notice(`已复制${what}`);
+    } catch {
+      new Notice(`${what}：${text}`);
+    }
   }
 }
 

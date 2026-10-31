@@ -4,6 +4,7 @@
  */
 
 import { Menu, MarkdownView, Notice, Platform, Plugin, TAbstractFile, TFile, WorkspaceLeaf, type CachedMetadata, type ViewState } from 'obsidian';
+import { clipboard as electronClipboard } from 'electron';
 import { BlockEditorView, VIEW_TYPE_BLOCK_EDITOR } from './view/BlockEditorView';
 import { FragmentHost, type FragmentOptions } from './blocks/fragmentEditor';
 import { CMD_COLLAPSE_ALL, CMD_FIND, CMD_REPLACE } from './interactions/hotkeys';
@@ -776,8 +777,17 @@ export default class LogseqEditorPlugin extends Plugin {
                     const link = this.app.fileManager.generateMarkdownLink(file, source, '', '');
                     await navigator.clipboard.writeText(link);
                     new Notice(`已复制 ${file.name} 的链接`);
-                  } catch (e) {
-                    new Notice(`复制失败:${String(e).slice(0, 80)}`);
+                  } catch {
+                    // 无焦点窗口 navigator 剪贴板被拒 → Electron clipboard 兜底
+                    try {
+                      const source =
+                        this.app.workspace.getActiveViewOfType(MarkdownView)?.file?.path ?? '';
+                      const link = this.app.fileManager.generateMarkdownLink(file, source, '', '');
+                      electronClipboard.writeText(link);
+                      new Notice(`已复制 ${file.name} 的链接`);
+                    } catch (e) {
+                      new Notice(`复制失败:${String(e).slice(0, 80)}`);
+                    }
                   }
                 }),
             );

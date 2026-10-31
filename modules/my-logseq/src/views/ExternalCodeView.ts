@@ -17,6 +17,7 @@
  */
 
 import { ItemView, MarkdownView, Menu, Notice, TFile, WorkspaceLeaf, parseLinktext, type ViewStateResult } from 'obsidian';
+import { clipboard as electronClipboard } from 'electron';
 import type * as monacoNS from 'monaco-editor';
 // 运行时命名空间(Range/MouseTargetType 等枚举值)——与 my-code-editor 的
 // monaco.ts 同一个 bundled 实例,不会产生第二份 Monaco。
@@ -682,10 +683,12 @@ export class ExternalCodeView extends ItemView {
   private async copyWithNotice(text: string, what: string): Promise<void> {
     try {
       await navigator.clipboard.writeText(text);
-      new Notice(`已复制${what}`);
-    } catch (e) {
-      new Notice(`复制失败:${String(e).slice(0, 80)}`);
+    } catch {
+      // 后台/无焦点窗口会被 Chromium 拒掉 navigator 剪贴板(NotAllowedError);
+      // Electron 的 clipboard 不受 focus 门控,兜底保证复制总能成功
+      electronClipboard.writeText(text);
     }
+    new Notice(`已复制${what}`);
   }
 
   /** 行号右键菜单项:复制到行的链接(`[[file#L42]]`)。 */

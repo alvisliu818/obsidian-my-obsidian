@@ -137,24 +137,15 @@ export class LangLoader {
 	}
 
 	async preDownload(langs: string[]) {
-		const total = langs.length;
-		let count = 0;
-
-		const notice = new Notice(`CodeLink: Pre-downloading parsers (0/${total})...`, 0);
-
+		// 聚合适配:独立版这里弹进度 + 完成两个 Notice,聚合后变成每次开
+		// Obsidian 的固定弹窗噪音——改为纯静默(进度/结果走 console,失败
+		// 照常 error)。用户主动操作(设置页添加解析器)的提示不受影响。
 		for (const lang of langs) {
 			try {
 				await this.load(lang);
-				count++;
-				notice.setMessage(`CodeLink: Pre-downloading parsers (${count}/${total})...`);
 			} catch (err) {
-				console.error(`Failed to pre-download ${lang}:`, err);
+				console.error(`CodeLink: Failed to pre-download ${lang}:`, err);
 			}
-		}
-
-		notice.hide();
-		if (count > 0) {
-			new Notice(`CodeLink: Finished pre-downloading ${count} parsers.`);
 		}
 	}
 }

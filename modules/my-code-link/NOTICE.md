@@ -72,6 +72,12 @@ query files, the tests.
    to the whole file. Symbol links (`#Class>method`) are unaffected; a symbol
    literally named `L42` would now resolve as a line — judged acceptable.
 
+5. Silent boot pre-download: upstream's `preDownload` popped a progress
+   Notice plus a "Finished pre-downloading N parsers" toast on EVERY app
+   start (the parser cache is in-memory, so the warm-up runs each boot).
+   In the aggregate that is fixed noise — it is now fully silent (console
+   only). User-initiated feedback (adding a parser in settings) is intact.
+
 Dependencies
 ------------
 Merged into the ROOT package.json (PnP: only root declarations resolve):
