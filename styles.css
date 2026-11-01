@@ -59274,3 +59274,11 @@ body.hearth-snapshot-capturing .hearth-view:not(#hearth-boost) {
 .modal .advanced-uri-mode-option.setting-item:hover {
   background: var(--background-modifier-hover);
 }
+
+/* ==================== @ 链接建议 (src/atLinkSuggest.ts) ==================== */
+
+.at-link-suggest .suggestion-subtext {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
