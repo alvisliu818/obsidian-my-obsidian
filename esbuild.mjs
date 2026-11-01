@@ -436,6 +436,9 @@ const context = await esbuild.context({
   // CodeMirror with the native editor and with community plugins.
   external: [
     "obsidian",
+    // advanced-uri 的 types.ts 用 obsidian 包的 canvas 类型扩展；external 按
+    // 包路径精确匹配，不覆盖子路径，需单独列出（运行时由 Obsidian 提供）
+    "obsidian/canvas",
     "electron",
     // node:sqlite（unified-search 的索引库）：builtin-modules@3.3.0 早于
     // Node 22.5 新增的 sqlite，罩不住，需显式 external（运行时由 Electron 提供）

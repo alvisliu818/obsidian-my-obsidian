@@ -64,6 +64,16 @@ import UnifiedSearchPlugin from "../modules/my-unified-search/src/main";
 // 已被 obsidian-git 占用）即通过宿主严格配置 → 源码直连，无需 require 桥；
 // tree-sitter 核心 wasm 构建期内嵌（见模块 NOTICE 与根 esbuild.mjs）。
 import CodeLinkPlugin from "../modules/my-code-link/src/main";
+// Advanced URI v2.2.1（Vinzent03，MIT）：require 桥（见 modules/my-advanced-uri/NOTICE）。
+// 上游 tsconfig 非 strict 且其构建不过 tsc，直连会在宿主严格配置下爆 175 处
+// 类型噪音（obsidian 类型版本漂移 + strictNullChecks）——同 media-extended/
+// CAL 的判据：类型由模块自带 tsconfig（obsidian@1.13.1，已修 6 处上游遗留
+// 瑕疵后零错误）独立校验，运行时照常打进 bundle。
+const AdvancedURIPlugin = (
+	require("../modules/my-advanced-uri/src/main") as {
+		default: new (app: unknown, manifest: unknown) => SubPluginLike;
+	}
+).default;
 // media-extended v3 自带 obsidian@1.5.7 类型与自己的 "@/..." 别名（与
 // music-player 的 @/ 同名冲突），经 require 桥接进 bundle：不进宿主 tsc
 // 程序（类型由模块自带 tsconfig 独立校验），运行时打包不受影响。
@@ -540,6 +550,23 @@ export default class MyObsidianPlugin extends Plugin {
 			manifest: { id: "my-code-link", version: "1.0.4" },
 			migrateFrom: "code-link",
 			cls: CodeLinkPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Third-party (Vinzent03, MIT), kept whole — see
+			// modules/my-advanced-uri/NOTICE. Source-direct: only friction was the
+			// stripMD/uuid dependencies (inlined) and one `src/main` alias import
+			// (rewritten relative). Protocol handlers (obsidian://advanced-uri,
+			// adv-uri) register globally by handler name, so URI semantics are
+			// identical to the standalone plugin.
+			id: "advanced-uri",
+			legacyId: "my-advanced-uri",
+			name: "my Advanced URI",
+			manifest: { id: "my-advanced-uri", version: "2.2.1" },
+			migrateFrom: "obsidian-advanced-uri",
+			summary:
+				"Obsidian URI 增强：obsidian://advanced-uri / adv-uri 打开或新建文件并定位标题/块/行列、写入追加前置内容、执行命令、搜索替换、打开设置页、存取工作区、canvas 节点与视口、插件启停、UID/日记/剪贴板参数，配套各类 Copy URI 命令与 x-success/x-error 回调。上游 Vinzent03（MIT）。",
+			desktopOnly: false,
+			cls: AdvancedURIPlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 

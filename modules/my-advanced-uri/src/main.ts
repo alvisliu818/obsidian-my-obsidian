@@ -1,0 +1,964 @@
+import {
+    base64ToArrayBuffer,
+    MarkdownView,
+    normalizePath,
+    Notice,
+    parseFrontMatterAliases,
+    Platform,
+    Plugin,
+    TFile,
+    TFolder,
+    View,
+    WorkspaceLeaf,
+} from "obsidian";
+import { stripMD } from "./utils";
+import { BlockUtils } from "./block_utils";
+import { DEFAULT_SETTINGS } from "./constants";
+import {
+    appHasDailyNotesPluginLoaded,
+    getDailyNotePath,
+} from "./daily_note_utils";
+import { awaitSyncCompletion } from "./sync_utils";
+import Handlers from "./handlers";
+import { CommandModal } from "./modals/command_modal";
+import { EnterDataModal } from "./modals/enter_data_modal";
+import { FileModal } from "./modals/file_modal";
+import { SearchAndReplaceModal } from "./modals/search_and_replace_modal";
+import { SettingsTab } from "./settings";
+import Tools from "./tools";
+import {
+    AdvancedURISettings,
+    CanvasView,
+    FileModalData,
+    OpenMode,
+    Parameters,
+} from "./types";
+import {
+    getEndAndBeginningOfBlock,
+    getEndAndBeginningOfHeading,
+    getFileUri,
+    getViewStateFromMode as getOpenViewStateFromMode,
+    waitForMetadataCacheInitialization,
+} from "./utils";
+import { WorkspaceModal } from "./modals/workspace_modal";
+
+export default class AdvancedURI extends Plugin {
+    settings: AdvancedURISettings;
+    lastParameters?: object;
+    handlers = new Handlers(this);
+    tools = new Tools(this);
+
+    private getActiveView(): View | undefined {
+        return this.app.workspace.activeLeaf?.view;
+    }
+
+    private decodeParameterValues(parameters: Parameters): Parameters {
+        // Parameters 是全 string 字段的接口但无索引签名，泛型约束反而不满足
+        // （上游遗留类型瑕疵）；循环体经 Record 视图读写，行为不变。
+        const record = parameters as unknown as Record<
+            string,
+            string | undefined
+        >;
+        for (const parameter in record) {
+            const value = record[parameter];
+            if (typeof value === "string") {
+                record[parameter] = decodeURIComponent(value);
+            }
+        }
+        return parameters;
+    }
+
+    async onload() {
+        await this.loadSettings();
+        this.addSettingTab(new SettingsTab(this.app, this));
+
+        this.addCommand({
+            id: "copy-uri-current-file",
+            name: "Copy URI for file with options",
+            callback: () => this.handlers.handleCopyFileURI(false, false),
+        });
+
+        this.addCommand({
+            id: "copy-uri-current-file-simple",
+            name: "Copy URI for current file",
+            callback: () => this.handlers.handleCopyFileURI(true, false),
+        });
+
+        this.addCommand({
+            id: "copy-uri-current-file-with-format",
+            name: "Copy formatted URI for file with options ",
+            callback: () => this.handlers.handleCopyFileURI(false, true),
+        });
+
+        this.addCommand({
+            id: "copy-uri-current-file-simple-with-format",
+            name: "Copy formatted URI for current file",
+            callback: () => this.handlers.handleCopyFileURI(true, true),
+        });
+
+        this.addCommand({
+            id: "copy-uri-daily",
+            name: "Copy URI for daily note",
+            callback: () => new EnterDataModal(this, false).open(),
+        });
+
+        this.addCommand({
+            id: "copy-uri-search-and-replace",
+            name: "Copy URI for search and replace",
+            callback: () => {
+                const fileModal = new FileModal(
+                    this,
+                    "Used file for search and replace"
+                );
+                fileModal.open();
+                fileModal.onChooseItem = (filePath: FileModalData) => {
+                    new SearchAndReplaceModal(this, filePath?.source).open();
+                };
+            },
+        });
+
+        this.addCommand({
+            id: "copy-uri-command",
+            name: "Copy URI for command",
+            callback: () => {
+                const fileModal = new FileModal(
+                    this,
+                    "Select a file to be opened before executing the command"
+                );
+                fileModal.open();
+                fileModal.onChooseItem = (item: FileModalData) => {
+                    new CommandModal(this, item?.source).open();
+                };
+            },
+        });
+
+        this.addCommand({
+            id: "copy-uri-block",
+            name: "Copy URI for current block",
+            checkCallback: (checking) => {
+                const view =
+                    this.app.workspace.getActiveViewOfType(MarkdownView);
+                if (checking) return view != undefined;
+                const id = BlockUtils.getBlockId(this.app);
+                if (id) {
+                    void this.tools.copyURI(
+                        {
+                            filepath: view.file.path,
+                            block: id,
+                        },
+                        false,
+                        view.file
+                    );
+                }
+            },
+        });
+
+        this.addCommand({
+            id: "copy-uri-block-with-format",
+            name: "Copy formatted URI for current block",
+            checkCallback: (checking) => {
+                const view =
+                    this.app.workspace.getActiveViewOfType(MarkdownView);
+                if (checking) return view != undefined;
+                const id = BlockUtils.getBlockId(this.app);
+                if (id) {
+                    void this.tools.copyURI(
+                        {
+                            filepath: view.file.path,
+                            block: id,
+                        },
+                        true,
+                        view.file
+                    );
+                }
+            },
+        });
+
+        this.addCommand({
+            id: "copy-uri-workspace",
+            name: "Copy URI for workspace",
+            callback: () => {
+                const modal = new WorkspaceModal(this);
+                modal.open();
+            },
+        });
+
+        this.addCommand({
+            id: "copy-uri-canvas-node",
+            name: "Copy URI for selected canvas nodes",
+            checkCallback: (checking) => {
+                const activeView = this.getActiveView();
+                if (!activeView) return false;
+                if (checking) {
+                    return (
+                        activeView.getViewType() === "canvas" &&
+                        (activeView as CanvasView).canvas.selection.size > 0
+                    );
+                }
+                if (activeView.getViewType() !== "canvas") return false;
+
+                const canvasView = activeView as CanvasView;
+
+                let ids: string[] = [];
+                canvasView.canvas.selection.forEach((node) => {
+                    ids.push(node.id);
+                });
+
+                void this.tools.copyURI(
+                    {
+                        canvasnodes: ids.join(","),
+                        filepath: activeView.file.path,
+                    },
+                    false,
+                    activeView.file
+                );
+            },
+        });
+
+        this.addCommand({
+            id: "copy-uri-canvas-viewport",
+            name: "Copy URI for current canvas viewport",
+            checkCallback: (checking) => {
+                const activeView = this.getActiveView();
+                if (!activeView) return false;
+                if (checking) {
+                    return activeView.getViewType() === "canvas";
+                }
+                if (activeView.getViewType() !== "canvas") return false;
+
+                const canvasView = activeView as CanvasView;
+
+                const canvas = canvasView.canvas;
+                const tx = canvas.tx.toFixed(0),
+                    ty = canvas.ty.toFixed(0),
+                    tZoom = canvas.tZoom.toFixed(3);
+                void this.tools.copyURI(
+                    {
+                        filepath: activeView.file.path,
+                        canvasviewport: `${tx},${ty},${tZoom}`,
+                    },
+                    false,
+                    activeView.file
+                );
+            },
+        });
+
+        // Old version, which needed each value to be encoded twice
+        this.registerObsidianProtocolHandler("advanced-uri", async (e) => {
+            // ObsidianProtocolData 与 Parameters 的结构性差异是上游遗留类型瑕疵，
+            // 运行时键集一致（仅断言不改行为，两处同）
+            const parameters = this.decodeParameterValues(
+                e as unknown as Parameters
+            );
+
+            void this.onUriCall(parameters);
+        });
+
+        // New version starting with v1.44.0
+        this.registerObsidianProtocolHandler("adv-uri", async (e) => {
+            const parameters = e as unknown as Parameters;
+
+            void this.onUriCall(parameters);
+        });
+
+        this.registerObsidianProtocolHandler(
+            "hook-get-advanced-uri",
+            async (e) => {
+                const parameters = this.decodeParameterValues(
+                    e as unknown as Parameters
+                );
+                const file = this.app.workspace.getActiveFile();
+                if (file) {
+                    void this.hookSuccess(parameters, file);
+                } else {
+                    void this.failure(parameters, {
+                        errorMessage: "No file opened",
+                    });
+                }
+            }
+        );
+
+        this.registerEvent(
+            this.app.workspace.on("file-menu", (menu, file, source) => {
+                if (
+                    !(
+                        source === "more-options" ||
+                        source === "tab-header" ||
+                        source == "file-explorer-context-menu"
+                    )
+                ) {
+                    return;
+                }
+
+                if (!(file instanceof TFile)) {
+                    return;
+                }
+
+                menu.addItem((item) => {
+                    item.setTitle(`Copy Advanced URI`)
+                        .setIcon("link")
+                        .setSection("info")
+                        .onClick((_) =>
+                            this.handlers.handleCopyFileURI(true, false, file)
+                        );
+                });
+                menu.addItem((item) => {
+                    item.setTitle(`Copy formatted Advanced URI`)
+                        .setIcon("link")
+                        .setSection("info")
+                        .onClick((_) =>
+                            this.handlers.handleCopyFileURI(true, true, file)
+                        );
+                });
+            })
+        );
+    }
+
+    async onUriCall(parameters: Parameters) {
+        /** Allows writing to new created daily note without any `Parameters.mode` */
+        let createdDailyNote = false;
+        this.lastParameters = { ...parameters };
+        if (parameters.uid) {
+            // A UID with a filepath may create a new file when the UID is absent.
+            const res = (await this.tools.waitForFileFromUID(parameters.uid))
+                ?.path;
+            if (res != undefined) {
+                parameters.filepath = res;
+                parameters.uid = undefined;
+            } else if (!parameters.filepath) {
+                new Notice(`Cannot find file with UID ${parameters.uid}`);
+                this.failure(parameters, {
+                    errorMessage: `Cannot find file with UID ${parameters.uid}`,
+                });
+                return;
+            }
+        } else if (parameters.filename) {
+            await waitForMetadataCacheInitialization(this.app);
+            let file = this.app.metadataCache.getFirstLinkpathDest(
+                parameters.filename,
+                ""
+            );
+            if (!file) {
+                file = this.app.vault
+                    .getMarkdownFiles()
+                    .find((file) =>
+                        parseFrontMatterAliases(
+                            this.app.metadataCache.getFileCache(file)
+                                ?.frontmatter
+                        )?.includes(parameters.filename)
+                    );
+            }
+            const parentFolder = this.app.fileManager.getNewFileParent(
+                this.app.workspace.getActiveFile()?.path
+            );
+            const parentFolderPath = parentFolder.isRoot()
+                ? ""
+                : parentFolder.path + "/";
+            parameters.filepath =
+                file?.path ??
+                parentFolderPath + normalizePath(parameters.filename);
+        }
+        if (parameters.filepath) {
+            parameters.filepath = normalizePath(parameters.filepath);
+            const revealedFile =
+                parameters.reveal === "true" &&
+                this.app.vault.getAbstractFileByPath(parameters.filepath);
+            if (!revealedFile) {
+                const index = parameters.filepath.lastIndexOf(".");
+                const extension = parameters.filepath.substring(
+                    index < 0 ? parameters.filepath.length : index
+                );
+
+                if (extension === "") {
+                    parameters.filepath = parameters.filepath + ".md";
+                }
+            }
+        } else if (parameters.daily === "true") {
+            if (!appHasDailyNotesPluginLoaded(this.app)) {
+                new Notice("Daily notes plugin is not loaded");
+                return;
+            }
+            const moment = window.moment(Date.now());
+            const dailyNotePath = await getDailyNotePath(moment, this.app);
+            let dailyNoteFile =
+                this.app.vault.getAbstractFileByPath(dailyNotePath);
+            if (!dailyNoteFile) {
+                /// Prevent daily note from being created on existing check
+                if (parameters.exists === "true") {
+                    parameters.filepath = dailyNotePath;
+                } else {
+                    dailyNoteFile = await this.app.internalPlugins
+                        .getEnabledPluginById("daily-notes")
+                        .getDailyNote();
+
+                    createdDailyNote = true;
+                }
+            }
+            if (dailyNoteFile) {
+                parameters.filepath = dailyNoteFile.path;
+            }
+        }
+        if (parameters.clipboard === "true") {
+            parameters.data = await navigator.clipboard.readText();
+        }
+
+        await this.chooseHandler(parameters, createdDailyNote);
+    }
+
+    async chooseHandler(parameters: Parameters, createdDailyNote: boolean) {
+        if (parameters["await-sync"] === "true") {
+            await awaitSyncCompletion(this.app);
+        }
+
+        if (parameters.reveal === "true") {
+            await this.handlers.handleReveal(parameters);
+        } else if (
+            parameters["enable-plugin"] ||
+            parameters["disable-plugin"]
+        ) {
+            this.handlers.handlePluginManagement(parameters);
+        } else if (parameters.workspace || parameters.saveworkspace == "true") {
+            await this.handlers.handleWorkspace(parameters);
+        } else if (parameters.commandname || parameters.commandid) {
+            await this.handlers.handleCommand(parameters);
+            parameters.filepath = undefined;
+            parameters.commandid = undefined;
+            parameters.commandname = undefined;
+            // Allow for example search after going to a heading
+            await this.chooseHandler(parameters, createdDailyNote);
+        } else if (parameters.frontmatterkey) {
+            await this.handlers.handleFrontmatterKey(parameters);
+        } else if (parameters.bookmark) {
+            void this.handlers.handleBookmarks(parameters);
+        } else if (parameters.eval) {
+            this.handlers.handleRemovedEval(parameters);
+        } else if (parameters.filepath && parameters.exists === "true") {
+            await this.handlers.handleDoesFileExist(parameters);
+        } else if (parameters.canvasnodes || parameters.canvasviewport) {
+            void this.handlers.handleCanvas(parameters);
+        } else if (parameters.data) {
+            await this.handlers.handleWrite(parameters, createdDailyNote);
+        } else if (parameters.filepath && parameters.heading) {
+            await this.handlers.handleOpen(parameters);
+            parameters.filepath = undefined;
+            parameters.heading = undefined;
+            // Allow for example search after going to a heading
+            await this.chooseHandler(parameters, createdDailyNote);
+        } else if (parameters.filepath && parameters.block) {
+            await this.handlers.handleOpen(parameters);
+            parameters.filepath = undefined;
+            parameters.block = undefined;
+            // Allow for example search after going to a block
+            await this.chooseHandler(parameters, createdDailyNote);
+        } else if (
+            (parameters.search || parameters.searchregex) &&
+            parameters.replace != undefined
+        ) {
+            await this.handlers.handleSearchAndReplace(parameters);
+        } else if (parameters.search) {
+            void this.handlers.handleSearch(parameters);
+        } else if (parameters.filepath) {
+            await this.handlers.handleOpen(parameters);
+        } else if (parameters.block) {
+            await this.handlers.handleOpenBlock(parameters);
+        } else if (parameters.settingid) {
+            void this.handlers.handleOpenSettings(parameters);
+        } else if (parameters.updateplugins) {
+            void this.handlers.handleUpdatePlugins(parameters);
+        }
+    }
+
+    async hookSuccess(parameters: Parameters, file: TFile): Promise<void> {
+        if (!parameters["x-success"]) return;
+
+        const options = {
+            title: stripMD(file.name),
+            advanceduri: await this.tools.generateURI({ filepath: file.path }),
+            urlkey: "advanceduri",
+            fileuri: getFileUri(this.app, file),
+        };
+        this.success(parameters, options);
+    }
+
+    success(
+        parameters: Parameters,
+        options?: Record<string, string | number | boolean | undefined>
+    ): void {
+        if (parameters["x-success"]) {
+            const url = new URL(parameters["x-success"]);
+            for (const param in options) {
+                const value = options[param];
+                if (value !== undefined) {
+                    url.searchParams.set(param, String(value));
+                }
+            }
+            window.open(url.toString());
+        }
+    }
+
+    failure(
+        parameters: Parameters,
+        options?: Record<string, string | number | boolean | undefined>
+    ): void {
+        if (parameters["x-error"]) {
+            const url = new URL(parameters["x-error"]);
+            for (const param in options) {
+                const value = options[param];
+                if (value !== undefined) {
+                    url.searchParams.set(param, String(value));
+                }
+            }
+            window.open(url.toString());
+        }
+    }
+
+    async append(file: TFile | string, parameters: Parameters): Promise<TFile> {
+        let path: string;
+        let dataToWrite: string;
+
+        if (file instanceof TFile) {
+            path = file.path;
+            const data = await this.app.vault.read(file);
+            const lines = data.split("\n");
+
+            // determine which line to perform append operation
+            let line: number = undefined; // 1-indexed
+            if (parameters.heading) {
+                const lineInfo = getEndAndBeginningOfHeading(
+                    this.app,
+                    file,
+                    parameters.heading
+                );
+                line = lineInfo?.lastLine;
+                if (line === undefined) return;
+
+                // When the specified heading has no content, we should
+                // add a newline before the separator to make sure the content
+                // does not inserted after the heading.
+                if (
+                    lineInfo.firstLine == lineInfo.lastLine &&
+                    parameters.separator
+                ) {
+                    parameters.separator = "\n" + parameters.separator;
+                }
+            } else if (parameters.block) {
+                const lineInfo = getEndAndBeginningOfBlock(
+                    this.app,
+                    file,
+                    parameters.block
+                );
+                if (lineInfo === undefined) return;
+                line = lineInfo.lastLine + 1;
+            } else if (parameters.line) {
+                line = Number(parameters.line);
+            } else {
+                line = lines.length;
+            }
+
+            line = Math.max(1, line);
+            lines[line - 1] =
+                (lines[line - 1] ?? "") +
+                (parameters.separator ?? "\n") +
+                parameters.data;
+            dataToWrite = lines.join("\n");
+        } else {
+            path = file;
+            dataToWrite = parameters.data;
+        }
+
+        return this.writeAndOpenFile(path, dataToWrite, parameters);
+    }
+
+    async prepend(
+        file: TFile | string,
+        parameters: Parameters
+    ): Promise<TFile> {
+        let path: string;
+        let dataToWrite: string;
+
+        if (file instanceof TFile) {
+            path = file.path;
+            const data = await this.app.vault.read(file);
+            const cache = this.app.metadataCache.getFileCache(file);
+
+            const lines = data.split("\n");
+
+            // determine which line to perform prepend operation
+            let line = undefined; // 1-indexed
+            if (parameters.heading) {
+                line = getEndAndBeginningOfHeading(
+                    this.app,
+                    file,
+                    parameters.heading
+                )?.firstLine;
+                if (line === undefined) {
+                    return;
+                } else {
+                    line += 1;
+                }
+            } else if (parameters.block) {
+                const lineInfo = getEndAndBeginningOfBlock(
+                    this.app,
+                    file,
+                    parameters.block
+                );
+                if (lineInfo === undefined) return;
+                line = lineInfo.firstLine + 1;
+            } else if (parameters.line) {
+                line = Number(parameters.line);
+            } else if (cache.frontmatterPosition) {
+                // +1 to convert 0-indexed to 1-indexed
+                // another +1 to ensure prepend operation performed
+                // at the next line of the end of frontmatter
+                line = cache.frontmatterPosition.end.line + 2;
+            } else {
+                line = 1;
+            }
+
+            line = Math.max(1, line);
+            lines[line - 1] = `${parameters.data}${
+                parameters.separator ?? "\n"
+            }${lines[line - 1] ?? ""}`;
+            dataToWrite = lines.join("\n");
+        } else {
+            path = file;
+            dataToWrite = parameters.data;
+        }
+
+        return this.writeAndOpenFile(path, dataToWrite, parameters);
+    }
+
+    async writeAndOpenFile(
+        outputFileName: string,
+        text: string,
+        parameters: Parameters
+    ): Promise<TFile> {
+        const file = this.app.vault.getAbstractFileByPath(outputFileName);
+
+        if (file instanceof TFile) {
+            await this.app.vault.modify(file, text);
+        } else {
+            const parts = outputFileName.split("/");
+            const dir = parts.slice(0, parts.length - 1).join("/");
+            if (
+                parts.length > 1 &&
+                !(this.app.vault.getAbstractFileByPath(dir) instanceof TFolder)
+            ) {
+                await this.app.vault.createFolder(dir);
+            }
+            const base64regex =
+                /^([0-9a-zA-Z+/]{4})*(([0-9a-zA-Z+/]{2}==)|([0-9a-zA-Z+/]{3}=))?$/;
+            if (base64regex.test(text)) {
+                await this.app.vault.createBinary(
+                    outputFileName,
+                    base64ToArrayBuffer(text)
+                );
+            } else {
+                await this.app.vault.create(outputFileName, text);
+            }
+        }
+        await this.openExistingFileAndSetCursor(outputFileName, parameters);
+
+        return this.app.vault.getFileByPath(outputFileName);
+    }
+
+    async openExistingFileAndSetCursor(file: string, parameters: Parameters) {
+        if (parameters.openmode == "silent") return;
+        if (this.settings.openFileOnWrite) {
+            await this.open({
+                file: file,
+                setting: this.settings.openFileOnWriteInNewPane,
+                parameters,
+            });
+            if (
+                parameters.line != undefined ||
+                parameters.column != undefined ||
+                parameters.offset != undefined
+            ) {
+                await this.setCursorInLine(parameters);
+            } else if (parameters.mode != undefined) {
+                await this.setCursor(parameters);
+            }
+        }
+    }
+
+    async open({
+        file,
+        setting,
+        parameters,
+        supportPopover,
+        mode,
+    }: {
+        file?: string | TFile;
+        setting?: boolean;
+        parameters: Parameters;
+        supportPopover?: boolean;
+        mode?: "source";
+    }): Promise<WorkspaceLeaf | undefined> {
+        let leaf: WorkspaceLeaf;
+        if (parameters.openmode == "popover" && (supportPopover ?? true)) {
+            const hoverEditor =
+                this.app.plugins.plugins["obsidian-hover-editor"];
+            if (!hoverEditor) {
+                new Notice(
+                    "Cannot find hover editor plugin. Please file an issue."
+                );
+                this.failure(parameters);
+            }
+
+            await new Promise<void>((resolve) => {
+                leaf = hoverEditor.spawnPopover(undefined, () => {
+                    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+                    resolve();
+                });
+            });
+        } else {
+            let openMode: OpenMode | boolean = setting;
+            let focusExisting = isBoolean(openMode);
+            if (parameters.newpane !== undefined) {
+                openMode = parameters.newpane == "true";
+                focusExisting = true;
+            }
+            if (parameters.openmode !== undefined) {
+                if (
+                    parameters.openmode == "true" ||
+                    parameters.openmode == "false"
+                ) {
+                    openMode = parameters.openmode == "true";
+                    focusExisting = true;
+                } else if (parameters.openmode == "popover") {
+                    openMode = false;
+                    focusExisting = false;
+                } else if (parameters.openmode == "split-or-focus") {
+                    openMode = "split";
+                    focusExisting = true;
+                } else if (
+                    Platform.isMobile &&
+                    (parameters.openmode == "window" ||
+                        parameters.openmode == "window-or-focus")
+                ) {
+                    openMode = false;
+                    focusExisting = parameters.openmode == "window-or-focus";
+                } else if (parameters.openmode == "window-or-focus") {
+                    openMode = "window";
+                    focusExisting = true;
+                } else {
+                    openMode = parameters.openmode;
+                    focusExisting = false;
+                }
+            }
+            if (openMode == "silent") {
+                return;
+            }
+
+            // `window` is only supported on desktop
+            if (Platform.isMobileApp && openMode == "window") {
+                openMode = true;
+            }
+
+            if (file != undefined) {
+                let fileIsAlreadyOpened = false;
+                if (focusExisting) {
+                    const targetPath =
+                        file instanceof TFile ? file.path : parameters.filepath;
+                    this.app.workspace.iterateAllLeaves((existingLeaf) => {
+                        if (
+                            existingLeaf.getViewState().state.file ===
+                            targetPath
+                        ) {
+                            if (fileIsAlreadyOpened && existingLeaf.width == 0)
+                                return;
+                            fileIsAlreadyOpened = true;
+
+                            this.app.workspace.setActiveLeaf(existingLeaf, {
+                                focus: true,
+                            });
+                            leaf = existingLeaf;
+                        }
+                    });
+                }
+            }
+            if (!leaf) {
+                leaf = this.app.workspace.getLeaf(openMode);
+                this.app.workspace.setActiveLeaf(leaf, { focus: true });
+            }
+        }
+        if (file instanceof TFile) {
+            await leaf.openFile(file);
+        } else if (file != undefined) {
+            await this.app.workspace.openLinkText(
+                file,
+                "/",
+                false,
+                mode != undefined
+                    ? { state: { mode: mode } }
+                    : getOpenViewStateFromMode(parameters)
+            );
+        }
+
+        if (leaf.view instanceof MarkdownView) {
+            const viewState = leaf.getViewState();
+            if (mode != undefined) {
+                viewState.state.mode = mode;
+            } else {
+                viewState.state = {
+                    ...viewState.state,
+                    ...getOpenViewStateFromMode(parameters)?.state,
+                };
+            }
+            await leaf.setViewState(viewState);
+        }
+
+        return leaf;
+    }
+
+    async setCursor(parameters: Parameters) {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view) return;
+        const mode = parameters.mode;
+        const editor = view.editor;
+
+        let viewState = view.leaf.getViewState();
+        viewState.state.mode = "source";
+
+        if (mode === "append") {
+            let lastLine: number;
+            if (parameters.heading) {
+                const headingInfo = getEndAndBeginningOfHeading(
+                    this.app,
+                    view.file,
+                    parameters.heading
+                );
+
+                lastLine = headingInfo?.lastLine;
+            } else if (parameters.block) {
+                const blockInfo = getEndAndBeginningOfBlock(
+                    this.app,
+                    view.file,
+                    parameters.block
+                );
+
+                lastLine = blockInfo?.lastLine;
+            } else {
+                lastLine = editor.lastLine();
+            }
+            if (lastLine === undefined) return;
+            const targetLine =
+                parameters.heading && lastLine < editor.lineCount()
+                    ? Math.max(0, lastLine - 1)
+                    : Math.min(lastLine, editor.lastLine());
+            const cursor = {
+                line: targetLine,
+                ch: editor.getLine(targetLine).length,
+            };
+            await view.leaf.setViewState(viewState, { focus: true });
+
+            editor.setCursor(cursor);
+            view.editor.scrollIntoView(
+                {
+                    from: cursor,
+                    to: cursor,
+                },
+                true
+            );
+        } else if (mode === "prepend" || (!mode && parameters.heading)) {
+            await view.leaf.setViewState(viewState, { focus: true });
+
+            let firstLine: number;
+            if (parameters.heading) {
+                const headingInfo = getEndAndBeginningOfHeading(
+                    this.app,
+                    view.file,
+                    parameters.heading
+                );
+                firstLine = headingInfo?.firstLine;
+            } else if (parameters.block) {
+                const blockInfo = getEndAndBeginningOfBlock(
+                    this.app,
+                    view.file,
+                    parameters.block
+                );
+                firstLine = blockInfo?.firstLine;
+            } else {
+                firstLine = 0;
+            }
+            if (firstLine === undefined) return;
+
+            editor.setCursor({ line: firstLine, ch: 0 });
+            view.editor.scrollIntoView(
+                {
+                    from: { line: firstLine, ch: 0 },
+                    to: { line: firstLine, ch: 0 },
+                },
+                true
+            );
+        }
+
+        await new Promise((resolve) => window.setTimeout(resolve, 10));
+
+        if (parameters.viewmode == "preview") {
+            viewState.state.mode = "preview";
+            await view.leaf.setViewState(viewState);
+        }
+    }
+
+    async setCursorInLine(parameters: Parameters) {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view) return;
+        const viewState = view.leaf.getViewState();
+
+        const rawLine =
+            parameters.line != undefined ? Number(parameters.line) : undefined;
+        const rawColumn = parameters.column
+            ? Number(parameters.column)
+            : undefined;
+        viewState.state.mode = "source";
+        await view.leaf.setViewState(viewState);
+
+        let line: number, column: number;
+        if (parameters.offset != undefined) {
+            const pos = view.editor.offsetToPos(Number(parameters.offset));
+            line = pos.line;
+            column = pos.ch;
+        } else {
+            line =
+                rawLine != undefined
+                    ? Math.min(rawLine - 1, view.editor.lineCount() - 1)
+                    : view.editor.getCursor().line;
+            const maxColumn = view.editor.getLine(line).length - 1;
+            column = Math.min(rawColumn - 1, maxColumn);
+        }
+        view.editor.focus();
+        view.editor.setCursor({
+            line: line,
+            ch: column,
+        });
+        view.editor.scrollIntoView(
+            {
+                from: { line: line, ch: column },
+                to: { line: line, ch: column },
+            },
+            true
+        );
+
+        await new Promise((resolve) => window.setTimeout(resolve, 10));
+
+        if (parameters.viewmode == "preview") {
+            viewState.state.mode = "preview";
+            await view.leaf.setViewState(viewState);
+        }
+    }
+
+    async loadSettings() {
+        const storedSettings =
+            (await this.loadData()) as Partial<AdvancedURISettings> | null;
+        this.settings = {
+            ...DEFAULT_SETTINGS,
+            ...storedSettings,
+        };
+    }
+
+    async saveSettings() {
+        await this.saveData(this.settings);
+    }
+}
