@@ -487,6 +487,11 @@ function nativeRunPostProcessor(plugin: Plugin): MarkdownPostProcessor {
 
 			const bar = document.createElement('div');
 			bar.className = 'lgp-md-run-bar';
+			// 语言标签居左、运行按钮居右（样式在 styles.css 的 flex bar 上）
+			const langTag = document.createElement('span');
+			langTag.className = 'lgp-md-run-bar__lang';
+			langTag.textContent = tag;
+			bar.appendChild(langTag);
 			const btn = document.createElement('span');
 			btn.className = 'lgp-code-run';
 			btn.textContent = '▶ 运行';

@@ -4669,10 +4669,25 @@ span.lgp-hdr-ctx-open {
 .lgp-cb-run__stdin input { width: 100%; }
 
 /* ---------- 原生编辑器/阅读模式的代码块运行（面板复用上方 .lgp-cb-run） ---------- */
-/* 实时预览/源码模式：按钮挂在开栅栏行尾（CM 行内 widget），与行内容对齐 */
-.cm-line .lgp-code-run { vertical-align: middle; margin-left: 8px; }
-/* 阅读模式：按钮行插在 pre 之前，面板插在 pre 之后 */
-.lgp-md-run-bar { margin: 2px 0 4px; font-size: 12px; }
+/* 实时预览/源码模式：按钮挂在开栅栏行（CM 行内 widget），语言在左、按钮贴右。
+   绝对定位而不是 flex/float：CM 行高测量不被扰动，语言标签自然留在左侧。 */
+.cm-line:has(> .lgp-code-run) { position: relative; }
+.cm-line > .lgp-code-run {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: 0;
+}
+/* 阅读模式：按钮行插在 pre 之前，面板插在 pre 之后；语言居左、运行按钮居右 */
+.lgp-md-run-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 2px 0 4px;
+  font-size: 12px;
+}
+.lgp-md-run-bar__lang { opacity: 0.7; }
 .lgp-md-cb-run { margin: 4px 0 10px; }
 /* CM 块级 widget 的面板别参与行内布局 */
 .cm-embed-block .lgp-md-cb-run, .cm-line .lgp-md-cb-run { display: block; }
