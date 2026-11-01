@@ -69,10 +69,13 @@ class AtLinkSuggest extends EditorSuggest<AtSuggestion> {
 		const fuzzy = prepareFuzzySearch(query);
 		const nameHits: Array<{ file: TFile; score: number }> = [];
 		for (const file of files) {
-			const hit = fuzzy(file.path);
+			// 官方同款策略（见 app.js 的 UB）：先 basename（更相关），再整路径兜底。
+			const hit = fuzzy(file.basename) ?? fuzzy(file.path);
 			if (hit) nameHits.push({ file, score: hit.score });
 		}
-		nameHits.sort((a, b) => a.score - b.score);
+		// fuzzy 分数越高越好（官方 RB 就是 t.score - e.score 降序），升序会把
+		// 精确命中挤到 30 条上限之外——@test 找不到 test.md 的根因。
+		nameHits.sort((a, b) => b.score - a.score);
 
 		const suggestions: AtSuggestion[] = nameHits
 			.slice(0, MAX_SUGGESTIONS)
