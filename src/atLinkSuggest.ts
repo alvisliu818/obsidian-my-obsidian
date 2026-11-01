@@ -38,18 +38,20 @@ class AtLinkSuggest extends EditorSuggest<AtSuggestion> {
 	}
 
 	/**
-	 * 每次按键都会进来，保持轻量：只对光标前文本跑一个正则。
-	 * `@` 必须是行首或空白之后（避免命中 a@b 邮箱式文本），查询词不含空白。
+	 * 每次按键都会进来，保持轻量：只做一次 lastIndexOf。
+	 * `@` 允许出现在行内任意位置（中文输入没有敲空格的习惯，要求 `@` 前是
+	 * 空白/行首会导致紧跟汉字时弹窗不出现）；查询词取 `@` 到光标，允许空格，
+	 * 便于匹配带空格的文件名与 omnisearch 多关键词。
 	 */
 	onTrigger(cursor: EditorPosition, editor: Editor, _file: TFile | null): EditorSuggestTriggerInfo | null {
-		const before = editor.getLine(cursor.line).slice(0, cursor.ch);
-		const m = /(?:^|\s)@([^\s@]*)$/.exec(before);
-		if (!m) return null;
+		if (cursor.ch === 0) return null;
+		const line = editor.getLine(cursor.line);
+		const idx = line.lastIndexOf("@", cursor.ch - 1);
+		if (idx === -1) return null;
 		return {
-			// 起点定位在 `@` 本身（不含触发的空白符，替换时不吞空格）
-			start: { line: cursor.line, ch: cursor.ch - m[1].length - 1 },
+			start: { line: cursor.line, ch: idx },
 			end: cursor,
-			query: m[1],
+			query: line.slice(idx + 1, cursor.ch),
 		};
 	}
 
