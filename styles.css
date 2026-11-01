@@ -4323,6 +4323,15 @@ span.lgp-hdr-ctx-open {
   flex: 0 0 auto;
 }
 
+/* banner 关闭时,可运行代码文件的孤立运行按钮行(2026-11-01):
+   只给功能,不带文件名/路径/徽标 —— 那些才是用户关 banner 想去掉的 */
+.logseq-external-run-solo {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 4px 8px 0;
+}
+
 .logseq-external-tree {
   flex: 1 1 auto;
   overflow-y: auto;
@@ -4658,6 +4667,15 @@ span.lgp-hdr-ctx-open {
 }
 .lgp-cb-run__stdin { padding: 4px 8px 8px; }
 .lgp-cb-run__stdin input { width: 100%; }
+
+/* ---------- 原生编辑器/阅读模式的代码块运行（面板复用上方 .lgp-cb-run） ---------- */
+/* 实时预览/源码模式：按钮挂在开栅栏行尾（CM 行内 widget），与行内容对齐 */
+.cm-line .lgp-code-run { vertical-align: middle; margin-left: 8px; }
+/* 阅读模式：按钮行插在 pre 之前，面板插在 pre 之后 */
+.lgp-md-run-bar { margin: 2px 0 4px; font-size: 12px; }
+.lgp-md-cb-run { margin: 4px 0 10px; }
+/* CM 块级 widget 的面板别参与行内布局 */
+.cm-embed-block .lgp-md-cb-run, .cm-line .lgp-md-cb-run { display: block; }
 
 /* ---------- 挂载树拖拽排序（工具栏 ⇅ 开关） ---------- */
 .logseq-mount-panel-btn.is-active {

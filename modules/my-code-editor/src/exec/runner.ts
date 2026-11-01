@@ -10,7 +10,7 @@
  * (思源那套 helper 技巧在这里不适用),所以只找真正的 node。
  */
 
-import { runPythonCode, stripANSI, type RunHandle } from './pythonRunner';
+import { runPythonCode, runPythonFile, stripANSI, type RunHandle } from './pythonRunner';
 import { getActivePythonEnv } from './activeEnv';
 
 export type RunLang = 'python' | 'javascript' | 'shell';
@@ -63,6 +63,11 @@ export function runCode(options: RunCodeOptions): RunHandle {
 
 /** 运行一个磁盘上的代码文件。 */
 export function runFile(absPath: string, lang: RunLang, cwd: string | undefined, onOutput: (c: string) => void, onExit: (c: number) => void): RunHandle {
+  // python 必须走 pythonRunner:spawnScript 只认 node/shell,否则 .py 会被
+  // 当 shell 落到 powershell(实测 ENOENT);且 python 要接环境选择。
+  if (lang === 'python') {
+    return runPythonFile(absPath, cwd, getActivePythonEnv(), onOutput, onExit);
+  }
   return spawnScript({ file: absPath, lang, cwd, onOutput, onExit });
 }
 

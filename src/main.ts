@@ -13,7 +13,7 @@
  *
  * That is the whole trick. No module had to be rewritten to become a module.
  */
-import { Notice, Plugin } from "obsidian";
+import { Notice, Platform, Plugin, TFile } from "obsidian";
 import type { App, PluginManifest } from "obsidian";
 import {
 	DEFAULT_SETTINGS,
@@ -101,6 +101,10 @@ const VaultExplorerPlugin = (
 ).default;
 import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
 import { registerFreeExtensions } from "./extensionRegistry";
+// 原生 markdown 编辑器（实时预览/源码模式）+ 阅读模式的代码块「▶ 运行」。
+// 执行层与库内代码文件共用 exec/runner（真子进程 + 临时文件，stdin 可用）。
+import { registerNativeCodeBlockRun } from "../modules/my-code-editor/src/exec/nativeCodeBlockRun";
+import { langFromExt } from "../modules/my-code-editor/src/exec/runner";
 
 /**
  * Reached through a require bridge rather than imported, because the bridge's
@@ -554,6 +558,8 @@ export default class MyObsidianPlugin extends Plugin {
 		);
 		for (const d of this.descriptors) await this.bootModule(d);
 		this.registerCodeFiles();
+		// 库内代码块运行（原生编辑器 + 阅读模式）：执行层要 spawn 子进程，桌面端专属
+		if (Platform.isDesktopApp) registerNativeCodeBlockRun(this);
 	}
 
 	// ------------------------------------------------------------------
@@ -609,6 +615,34 @@ export default class MyObsidianPlugin extends Plugin {
 				return true;
 			},
 		});
+
+		// 文件浏览器右键「运行代码文件」:banner 可被用户关掉,活动视图命令也
+		// 要求文件已打开 —— 右键入口保证可运行扩展名(py/js/sh/ps1…)任何时候
+		// 都有运行通道。行为 = 打开到 ExternalCodeView(库内/库外同一编辑器)
+		// 并自动触发 ▶ 运行,输出落在视图底部的运行输出区。
+		this.registerEvent(
+			this.app.workspace.on("file-menu", (menu, file) => {
+				if (!(file instanceof TFile)) return;
+				if (!langFromExt(file.name)) return;
+				menu.addItem((item) => {
+					item
+						.setTitle("运行代码文件")
+						.setIcon("play")
+						.onClick(async () => {
+							const leaf = this.app.workspace.getLeaf("tab");
+							await leaf.openFile(file);
+							// 等视图挂载完成(挂载会 empty 重建内容,过早触发会把
+							// 输出区一起抹掉);挂载完成标志 = host 容器出现在 DOM。
+							for (let i = 0; i < 20; i++) {
+								if (leaf.view instanceof ExternalCodeView && leaf.view.contentEl.querySelector(".logseq-external-code-host")) break;
+								await new Promise((r) => setTimeout(r, 150));
+							}
+							const view = leaf.view;
+							if (view instanceof ExternalCodeView) await view.runCurrentFile();
+						});
+				});
+			}),
+		);
 	}
 
 	/** Which modules actually came up. Used by the e2e probe and handy in the

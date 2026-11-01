@@ -86,9 +86,6 @@ export function runPythonCode(options: RunOptions): RunHandle {
     existsSync(p: string): boolean;
     unlinkSync(p: string): void;
   };
-  const cp = nodeRequire('child_process') as {
-    spawn(cmd: string, args: string[], opts: unknown): NodeProcess;
-  };
 
   const runId = `${Date.now().toString(36)}-${(runSeq++).toString(36)}`;
   const script = `${tempScriptDir()}\\run-${runId}.py`;
@@ -96,12 +93,57 @@ export function runPythonCode(options: RunOptions): RunHandle {
   // 没有 BOM 会把 UTF-8 中文当 GBK 解,报出来的语法错误莫名其妙。
   fs.writeFileSync(script, '\ufeff' + options.code.replace(/\r\n/g, '\n'), { encoding: 'utf8' });
 
+  // 临时文件跑完即删;磁盘文件(runPythonFile)永不删。
+  return spawnPython(python.cmd, [...python.args, '-u', script], options.cwd || options.env?.rootDir || undefined, options.env ?? null, options.onOutput, options.onExit, {
+    onDone: () => {
+      try {
+        if (fs.existsSync(script)) fs.unlinkSync(script);
+      } catch {
+        // 临时文件删不掉不影响功能
+      }
+    },
+  });
+}
+
+/**
+ * 直接执行磁盘上的 .py 文件(「运行代码文件」入口)。
+ *
+ * 为什么不走「读内容→写临时文件」:临时文件的 sys.path[0] 是 tmp 目录,
+ * `import 同目录模块` 会坏;直接 spawn 磁盘路径,语义与命令行 python x.py 一致。
+ */
+export function runPythonFile(
+  absPath: string,
+  cwd: string | undefined,
+  env: PythonEnv | null,
+  onOutput: (c: string) => void,
+  onExit: (code: number) => void,
+): RunHandle {
+  const python = resolvePythonInterpreter(env ?? null);
+  if (!python) {
+    throw new Error('未找到 Python。请在设置里选择环境,或安装 Python 3 并确保 python 在 PATH 中');
+  }
+  return spawnPython(python.cmd, [...python.args, '-u', absPath], cwd || env?.rootDir || undefined, env, onOutput, onExit);
+}
+
+/** spawn python 子进程 + 事件接线。runPythonCode / runPythonFile 共用。 */
+function spawnPython(
+  cmd: string,
+  args: string[],
+  cwd: string | undefined,
+  env: PythonEnv | null,
+  onOutput: (c: string) => void,
+  onExit: (code: number) => void,
+  extra?: { onDone?: () => void },
+): RunHandle {
+  const cp = nodeRequire('child_process') as {
+    spawn(cmd: string, args: string[], opts: unknown): NodeProcess;
+  };
   const proc = nodeRequire('process') as { env?: Record<string, string | undefined> };
   // 环境切换的关键一步:把环境的 bin 目录前置进 PATH(conda 激活脚本干的事),
   // 否则带 DLL 的包会 ImportError,matplotlib 也可能弹窗卡死。
-  const childEnv = spawnEnvFor(options.env ?? null, proc?.env ?? {});
-  const child = cp.spawn(python.cmd, [...python.args, '-u', script], {
-    cwd: options.cwd || options.env?.rootDir || undefined,
+  const childEnv = spawnEnvFor(env, proc?.env ?? {});
+  const child = cp.spawn(cmd, args, {
+    cwd: cwd || undefined,
     env: {
       ...childEnv,
       PYTHONIOENCODING: 'utf-8', // 双保险:输出固定 UTF-8
@@ -114,31 +156,24 @@ export function runPythonCode(options: RunOptions): RunHandle {
 
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');
-  child.stdout.on('data', (chunk: string) => options.onOutput(stripANSI(chunk)));
-  child.stderr.on('data', (chunk: string) => options.onOutput(stripANSI(chunk)));
+  child.stdout.on('data', (chunk: string) => onOutput(stripANSI(chunk)));
+  child.stderr.on('data', (chunk: string) => onOutput(stripANSI(chunk)));
 
   let exited = false;
+  const finish = (code: number) => {
+    if (exited) return;
+    exited = true;
+    extra?.onDone?.();
+    onExit(code);
+  };
   child.on('error', (e: Error) => {
     if (exited) return;
-    exited = true;
-    cleanup();
-    options.onOutput(`\n[无法启动进程] ${e?.message || e}\n`);
-    options.onExit(-1);
+    onOutput(`\n[无法启动进程] ${e?.message || e}\n`);
+    finish(-1);
   });
   child.on('exit', (code: number) => {
-    if (exited) return;
-    exited = true;
-    cleanup();
-    options.onExit(code ?? 0);
+    finish(code ?? 0);
   });
-
-  function cleanup() {
-    try {
-      if (fs.existsSync(script)) fs.unlinkSync(script);
-    } catch {
-      // 临时文件删不掉不影响功能
-    }
-  }
 
   return {
     sendInput(line: string) {

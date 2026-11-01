@@ -432,6 +432,15 @@ export class ExternalCodeView extends ItemView {
         runBtn.setAttribute('title', `运行 ${this.fileName}`);
         runBtn.addEventListener('click', () => void this.runCurrentFile());
       }
+    } else if (langFromExt(this.fileName)) {
+      // banner 被用户关掉 = 整条顶条 GONE(上面的设计意图),但可运行文件的
+      // 运行入口不能跟着一起没(2026-11-01 用户报:关了 banner 打开 .py 连 ▶
+      // 都没有)。这里只渲染孤立的运行按钮,不带文件名/路径/徽标——用户嫌挤
+      // 的是那些信息,不是功能。
+      const solo = contentEl.createDiv({ cls: 'logseq-external-run-solo' });
+      const runBtn = solo.createEl('button', { cls: 'logseq-external-save', text: '▶ 运行' });
+      runBtn.setAttribute('title', `运行 ${this.fileName}`);
+      runBtn.addEventListener('click', () => void this.runCurrentFile());
     }
 
     const host = contentEl.createDiv({ cls: 'logseq-external-code-host' });
@@ -796,7 +805,12 @@ export class ExternalCodeView extends ItemView {
     const out = this.ensureRunOutput();
     out.textContent = '';
     out.style.display = 'block';
-    const cwd = this.abs.replace(/[\/][^\/]+$/, '');
+    // 工作目录 = 所在文件夹。原实现 /[\/][^\/]+$/ 的 [\/] 只匹配正斜杠 ——
+    // 库外挂载路径是正斜杠所以一直没炸;库内 getFullPath 给反斜杠,不匹配
+    // → cwd 原样是文件本身 → spawn ENOENT(2026-11-01 探针抓到)。按最后
+    // 出现的分隔符(不分方向)截断。
+    const cut = Math.max(this.abs.lastIndexOf('/'), this.abs.lastIndexOf('\\'));
+    const cwd = cut > 0 ? this.abs.slice(0, cut) : this.abs;
     this.runHandle?.interrupt();
     this.runHandle = runFile(
       this.abs,
