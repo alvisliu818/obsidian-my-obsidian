@@ -16,6 +16,7 @@ import { VIEW_TYPE_MOUNT_PANEL } from '../panels/mountPanel';
 import { mountDisplayName, type EditorChoice, type VideoOpenMode } from '../types';
 import { OpenWithEditModal } from '../features/openWithUi';
 import { isDirectory } from '../features/extFs';
+import { invalidateVaultParentPlans } from '../features/vaultFs';
 import {
   hasSystemPicker,
   pickExternalPath,
@@ -100,6 +101,22 @@ export class DocTreeSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
           this.plugin.refreshMounts();
           this.display();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName('parent 属性挂载')
+      .setDesc(
+        '笔记的 frontmatter 写 parent: [[某笔记]]（纯名称或库内路径也认）时，' +
+          '虚拟树自动把笔记挂到那篇笔记名下作为子文档显示——文件的真实位置不动，' +
+          '纯树形展示；可以逐级嵌套，链成环的笔记保持原位。不需要的话可以关掉。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.parentMountEnabled !== false).onChange(async (v) => {
+          this.plugin.settings.parentMountEnabled = v;
+          await this.plugin.saveSettings();
+          invalidateVaultParentPlans();
+          this.plugin.refreshMounts();
         }),
       );
 

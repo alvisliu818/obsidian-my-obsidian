@@ -151,6 +151,21 @@ export default class DocTreePlugin extends Plugin {
     this.registerEvent(this.app.vault.on('create', refreshVaultMountsSoon));
     this.registerEvent(this.app.vault.on('delete', refreshVaultMountsSoon));
     this.registerEvent(this.app.vault.on('rename', refreshVaultMountsSoon));
+    // parent 属性挂载（parentMountEnabled）：frontmatter 变了 → 计划换代 +
+    // 库内挂载强刷（同一去抖）。只在功能开着时听，不给不用它的人添常驻开销；
+    // 'resolved' 覆盖启动索引完成的那一刻（此前 getFirstLinkpathDest 拿不到目标）。
+    this.registerEvent(
+      this.app.metadataCache.on('changed', () => {
+        if (this.settings.parentMountEnabled === false) return;
+        refreshVaultMountsSoon();
+      }),
+    );
+    this.registerEvent(
+      this.app.metadataCache.on('resolved', () => {
+        if (this.settings.parentMountEnabled === false) return;
+        refreshVaultMountsSoon();
+      }),
+    );
     this.register(() => {
       if (vaultRefreshTimer) window.clearTimeout(vaultRefreshTimer);
     });

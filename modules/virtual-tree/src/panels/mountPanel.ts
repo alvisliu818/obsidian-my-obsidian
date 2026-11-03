@@ -18,7 +18,14 @@ import { FileSystemAdapter, ItemView, Menu, Notice, setIcon, TFile, TFolder, typ
 import type DocTreePlugin from '../main';
 import type { ExternalMount } from '../types';
 import { isVaultMount, mountDisplayName, mountHostOf } from '../types';
-import { vaultAbsOf, vaultRootOf, vaultScanLayer } from '../features/vaultFs';
+import {
+  invalidateVaultParentPlans,
+  parentPlanOf,
+  vaultAbsOf,
+  vaultHasVirtualChildren,
+  vaultRootOf,
+  vaultScanLayer,
+} from '../features/vaultFs';
 import {
   compileFilter,
   countTree,
@@ -307,9 +314,14 @@ export class MountPanelView extends ItemView {
       : compileFilter(EMPTY_FILTER);
 
     // 库内挂载：一层子项从 vault 索引读，产出同款 MountNode 后走同一套
-    // 排序/挂树逻辑（文件夹懒展开、过滤、拖拽序全部复用）。
+    // 排序/挂树逻辑（文件夹懒展开、过滤、拖拽序全部复用）。parent 属性
+    // 挂载开启时带上计划：目录层摘浮动笔记，md 笔记层列虚拟子文档。
     if (isVaultMount(mount)) {
-      const children = vaultScanLayer(this.app, mount, rel, this.plugin.vaultBasePath(), f);
+      const plan =
+        this.plugin.settings.parentMountEnabled !== false
+          ? parentPlanOf(this.app, mount.path)
+          : null;
+      const children = vaultScanLayer(this.app, mount, rel, this.plugin.vaultBasePath(), f, plan);
       this.sortChildren(mount.id, rel, children);
       if (!rel) {
         state.tree = children;
@@ -526,6 +538,19 @@ export class MountPanelView extends ItemView {
     const state = this.scan(mount);
     // 单文件挂载根（库内/库外同款）：那一行的 rel 是文件名而非空串。
     if (!rel && state.tree.length === 1 && !state.tree[0].isDir) rel = state.tree[0].rel;
+    // parent 属性挂载的浮动笔记：真实目录列表里没有它（摘出去挂在父笔记
+    // 名下），按段走 ancestors 永远走不到。改走显示父链——从链顶笔记的
+    // 真实祖先逐层展开，再沿链展开每个父笔记行，最后定位它自己的 rel。
+    if (isVaultMount(mount) && rel && this.plugin.settings.parentMountEnabled !== false) {
+      const plan = parentPlanOf(this.app, mount.path);
+      if (plan.floating.has(`${mount.path}/${rel}`)) {
+        this.revealParentMounted(mount, state, rel);
+        this.pendingReveal = { mountId: mount.id, rel };
+        this.render();
+        this.consumePendingReveal();
+        return;
+      }
+    }
     let acc = '';
     for (const seg of rel.split('/').filter(Boolean)) {
       if (!state.loaded.has(acc)) this.loadLayer(mount, acc, state);
@@ -539,6 +564,37 @@ export class MountPanelView extends ItemView {
   }
 
   /**
+   * parent 属性挂载的浮动笔记定位辅助：按显示父链展开。链顶（原位笔记）
+   * 的真实目录祖先逐层 loadLayer + 展开；链上每个父笔记行再逐个展开——
+   * 每步 loadLayer 拉的正是它名下的虚拟子层，行渲染后 pendingReveal 按
+   * 浮动笔记自己的 rel 找行（dataset.rel 仍是真身）。
+   */
+  private revealParentMounted(mount: ExternalMount, state: MountState, rel: string): void {
+    const plan = parentPlanOf(this.app, mount.path);
+    // 显示链：child → parent → … → 链顶（原位笔记）。计划已滤环，这里设防。
+    const chainRels: string[] = [];
+    const seen = new Set<string>([`${mount.path}/${rel}`]);
+    let cur = plan.parentOf.get(`${mount.path}/${rel}`);
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      chainRels.unshift(cur.slice(mount.path.length + 1));
+      cur = plan.parentOf.get(cur);
+    }
+    // 链顶笔记的真实目录祖先
+    let acc = '';
+    for (const seg of (chainRels[0] ?? '').split('/').filter(Boolean)) {
+      if (!state.loaded.has(acc)) this.loadLayer(mount, acc, state);
+      state.open.add(acc);
+      acc = acc ? `${acc}/${seg}` : seg;
+    }
+    // 链上每个父笔记行（链顶行本身在上一段最后一级目录里）
+    for (const nodeRel of chainRels) {
+      if (!state.loaded.has(nodeRel)) this.loadLayer(mount, nodeRel, state);
+      state.open.add(nodeRel);
+    }
+  }
+
+  /**
    * vault 结构事件（建/删/改名）回调：只强刷库内挂载的扫描缓存再重绘——
    * 库外磁盘扫描开销大，不动；库内各层读的是内存里的 vault 树，代价极低。
    * 由 main.ts 的 vault 事件（去抖后）调用。
@@ -548,6 +604,8 @@ export class MountPanelView extends ItemView {
       (m) => m.enabled && isVaultMount(m),
     );
     if (mounts.length === 0) return;
+    // parent 属性挂载计划跟着 vault 索引换代（建/删/改名/元数据变化后重建）
+    invalidateVaultParentPlans();
     for (const m of mounts) {
       const st = this.scan(m, true);
       this.reloadOpenLayers(m, st);
@@ -615,7 +673,8 @@ export class MountPanelView extends ItemView {
   private findNode(list: MountNode[], rel: string): MountNode | null {
     for (const n of list) {
       if (n.rel === rel) return n;
-      if (n.isDir) {
+      // parent 属性挂载后文件节点也带（虚拟）子层，一并下潜
+      if (n.isDir || n.children.length > 0) {
         const hit = this.findNode(n.children, rel);
         if (hit) return hit;
       }
@@ -1133,14 +1192,28 @@ export class MountPanelView extends ItemView {
     // A FILE with mounts under it is a container too, so it needs a caret to
     // open them. The caret is a separate click target: the row itself keeps
     // opening the file, which is what a file row has always done.
+    // parent 属性挂载是库内文件行的第二类容器子项：frontmatter 写了 parent
+    // 的笔记挂到它名下（计划缓存里查，渲染期零扫描开销）。
     const nested = this.nestedMountsOf(mount.id, node.rel);
-    if (nested.length > 0) {
+    const hasKids =
+      nested.length > 0 ||
+      (isVaultMount(mount) &&
+        this.plugin.settings.parentMountEnabled !== false &&
+        vaultHasVirtualChildren(mount, node.rel, parentPlanOf(this.app, mount.path)));
+    if (hasKids) {
       const caret = row.createSpan({ cls: 'logseq-mount-caret logseq-mount-caret-file' });
       caret.textContent = isOpen ? '▾' : '▸';
       caret.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        if (isOpen) state.open.delete(node.rel);
-        else state.open.add(node.rel);
+        if (isOpen) {
+          state.open.delete(node.rel);
+        } else {
+          state.open.add(node.rel);
+          // 虚拟子笔记懒加载：第一次展开才读（与文件夹同节奏）
+          if (isVaultMount(mount) && !state.loaded.has(node.rel)) {
+            this.loadLayer(mount, node.rel, state);
+          }
+        }
         this.render();
       });
     }

@@ -299,6 +299,13 @@ export interface DocTreeSettings {
    */
   mountFilterEnabled: boolean;
   /**
+   * parent 属性挂载（2026-11-03 用户需求）：笔记 frontmatter 写 `parent:`
+   * 指到另一篇笔记时，虚拟树把笔记挂到那篇笔记名下作为子文档显示。
+   * 真实位置不动，纯树形展示；`[[..]]` / 纯名称 / 库内路径都认，
+   * 链成环的笔记保持原位。默认开，设置里可关。
+   */
+  parentMountEnabled: boolean;
+  /**
    * Offer 「链接到库」 in the mount panel's right-click menu.
    *
    * On by default. Off hides the whole group — 链接到库 / 从库中取消链接 /
@@ -430,6 +437,8 @@ export interface DocTreeSettings {
 
 export const DEFAULT_DOCTREE_SETTINGS: DocTreeSettings = {
   mountFilterEnabled: false,
+  // parent 属性挂载默认开（用户 2026-11-03 需求本体就是它，开关用于关）
+  parentMountEnabled: true,
   mountLinkEnabled: true,
   mountShowLoadedCount: true,
   mountDragMode: false,
@@ -513,6 +522,7 @@ export function docTreeSettingsFrom(raw: unknown): DocTreeSettings {
   const o = (raw ?? {}) as Record<string, unknown>;
   const s: DocTreeSettings = { ...DEFAULT_DOCTREE_SETTINGS };
   s.mountFilterEnabled = o.mountFilterEnabled === true;
+  s.parentMountEnabled = o.parentMountEnabled !== false;
   s.mountLinkEnabled = o.mountLinkEnabled !== false;
   s.mountShowLoadedCount = o.mountShowLoadedCount !== false;
   s.mountDragMode = o.mountDragMode === true;
