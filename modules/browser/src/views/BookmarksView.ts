@@ -1,4 +1,4 @@
-import { ItemView, Menu, setIcon, type WorkspaceLeaf } from "obsidian";
+import { ItemView, Menu, Modal, setIcon, type App, type WorkspaceLeaf } from "obsidian";
 import { VIEW_TYPE_BOOKMARKS } from "../constants";
 import type { BrowserContext } from "../browser/context";
 import type { Bookmark } from "../types";
@@ -103,7 +103,11 @@ export class BookmarksView extends ItemView {
 
     const text = document.createElement("div");
     text.className = "ob-dock-text";
-    text.createDiv({ cls: "ob-dock-title", text: b.title || b.url });
+    const titleRow = text.createDiv({ cls: "ob-dock-title" });
+    titleRow.setText(b.title || b.url);
+    for (const t of b.tags ?? []) {
+      titleRow.createSpan({ cls: "ob-dock-tag", text: `#${t}` });
+    }
     text.createDiv({ cls: "ob-dock-sub", text: prettyUrl(b.url) });
     row.appendChild(text);
 
@@ -116,17 +120,81 @@ export class BookmarksView extends ItemView {
       menu.addItem((i) => i.setTitle("复制链接").setIcon("link").onClick(() => void copyText(b.url)));
       menu.addSeparator();
       menu.addItem((i) =>
-        i.setTitle("编辑标题").setIcon("pencil").onClick(() => {
-          const next = window.prompt("书签标题", b.title);
+        i.setTitle("编辑…").setIcon("pencil").onClick(() => {
+          new BookmarkEditModal(this.app, b, (patch) => {
+            this.ctx.bookmarks.update(b.id, patch);
+            this.render();
+          }).open();
+        }),
+      );
+      menu.addItem((i) =>
+        i.setTitle("添加标签…").setIcon("tag").onClick(() => {
+          const next = window.prompt("标签（可留空）", (b.tags ?? []).join(", "));
           if (next !== null) {
-            this.ctx.bookmarks.update(b.id, { title: next || b.url });
+            this.ctx.bookmarks.update(b.id, { tags: next.split(/[,，]/).map((t) => t.trim()).filter(Boolean) });
             this.render();
           }
         }),
       );
+      for (const t of b.tags ?? []) {
+        menu.addItem((i) =>
+          i.setTitle(`移除标签：${t}`).setIcon("tag-off").onClick(() => {
+            this.ctx.bookmarks.removeTag(b.id, t);
+            this.render();
+          }),
+        );
+      }
+      menu.addSeparator();
       menu.addItem((i) => i.setTitle("删除").setIcon("trash").onClick(() => this.ctx.bookmarks.remove(b.id)));
       menu.showAtMouseEvent(e);
     });
     return row;
+  }
+}
+
+
+/** 书签编辑弹窗（标题 / URL / 标签三字段，思源 promptDialog 的 Obsidian 形态）。 */
+class BookmarkEditModal extends Modal {
+  constructor(
+    app: App,
+    private bookmark: Bookmark,
+    private onSave: (patch: Partial<Bookmark>) => void,
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.contentEl.empty();
+    this.contentEl.createEl("h3", { text: "编辑书签" });
+    const row = (label: string, value: string): HTMLInputElement => {
+      const wrap = this.contentEl.createDiv({ cls: "ob-edit-row" });
+      wrap.createEl("label", { text: label });
+      const input = wrap.createEl("input", { type: "text" });
+      input.value = value;
+      input.addClass("ob-edit-input");
+      return input;
+    };
+    const title = row("标题", this.bookmark.title || "");
+    const url = row("URL", this.bookmark.url);
+    const tags = row("标签（逗号分隔）", (this.bookmark.tags ?? []).join(", "));
+    const btns = this.contentEl.createDiv({ cls: "ob-edit-btns" });
+    const save = (): void => {
+      const tagList = tags.value.split(/[,，]/).map((t) => t.trim()).filter(Boolean);
+      this.onSave({
+        title: title.value.trim() || this.bookmark.url,
+        url: url.value.trim() || this.bookmark.url,
+        tags: tagList,
+      });
+      this.close();
+    };
+    const cancel = btns.createEl("button", { text: "取消" });
+    cancel.addEventListener("click", () => this.close());
+    const ok = btns.createEl("button", { text: "保存" });
+    ok.addClass("mod-cta");
+    ok.addEventListener("click", save);
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
   }
 }

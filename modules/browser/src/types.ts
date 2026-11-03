@@ -68,6 +68,8 @@ export interface BrowserSettings {
   /** Extra Adblock `##` element-hiding rules. */
   adBlockRules: string;
 
+  /** 新标签页扩展（declare chrome_url_overrides.newtab 的插件 id；空 = 主页）。 */
+  newTabExtId: string;
   /** webview 会话代理（思源版同款：会话级代理不继承本体）。 */
   proxyMode: ProxyMode;
   /** custom 模式的代理规则（http/https/socks5://host:port 或 `http=…;https=…`）。 */
@@ -107,6 +109,8 @@ export interface ExtensionRecord {
   popup?: string;
   /** options_page / options_ui.page —— 扩展设置页（popup 齿轮与宿主菜单的打开目标）。 */
   options?: string;
+  /** chrome_url_overrides.newtab —— 「新标签页扩展」的落地页（设置里可选）。 */
+  newtab?: string;
   permissions: string[];
   /**
    * Electron 原生加载后的扩展 id（`session.loadExtension` 返回）。

@@ -337,6 +337,7 @@ export default class BrowserPlugin extends Plugin {
       },
       onDataChange: (fn) => this.store.onChange(fn),
       currentUrl: () => this.activeTab()?.url ?? "",
+      startUrl: () => this.resolveStartUrl(),
     };
   }
 
@@ -379,6 +380,21 @@ export default class BrowserPlugin extends Plugin {
   }
 
   /** The view the user is looking at (falls back to the first browser leaf). */
+  /**
+   * 新标签页起点（思源 resolveStartUrl 同款）：配置了新标签页扩展（declare
+   * chrome_url_overrides.newtab 且原生加载中）则开其 newtab 页，否则主页。
+   */
+  resolveStartUrl(): string {
+    const id = this.config.newTabExtId;
+    if (id) {
+      const rec = this.store.data.extensions.find((r) => (r.dir === id || r.id === id) && r.enabled && r.electronId && r.newtab);
+      if (rec) {
+        return `chrome-extension://${rec.electronId}/${String(rec.newtab).replace(/^\/+/, "")}`;
+      }
+    }
+    return this.config.homePage || "about:blank";
+  }
+
   private activeBrowserView(): BrowserView | null {
     const active = this.app.workspace.activeLeaf;
     if (active?.view instanceof BrowserView) return active.view;
@@ -460,7 +476,7 @@ export default class BrowserPlugin extends Plugin {
       id: "new-tab",
       name: "新建标签页",
       hotkeys: [{ modifiers: ["Mod", "Alt"], key: "T" }],
-      callback: () => void this.openUrl(this.config.homePage || "about:blank", true),
+      callback: () => void this.openUrl(this.resolveStartUrl(), true),
     });
     this.addCommand({
       id: "open-edge-addons",

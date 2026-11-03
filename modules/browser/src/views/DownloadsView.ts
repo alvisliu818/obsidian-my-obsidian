@@ -110,6 +110,13 @@ export class DownloadsView extends ItemView {
       menu.addItem((i) => i.setTitle("复制链接").setIcon("link").onClick(() => void navigator.clipboard.writeText(d.url)));
       menu.addItem((i) => i.setTitle("在新标签页打开来源").setIcon("external-link").onClick(() => this.ctx.openUrl(d.url, true)));
       menu.addSeparator();
+      if (d.state === "completed" || d.state === "interrupted") {
+        menu.addItem((i) =>
+          i.setTitle("重新下载").setIcon("refresh-cw").onClick(() => {
+            void this.ctx.saveUrlToVault(d.url, d.filename);
+          }),
+        );
+      }
       menu.addItem((i) => i.setTitle("从列表移除").setIcon("trash").onClick(() => this.ctx.downloads.remove(d.id)));
       menu.showAtMouseEvent(e);
     });

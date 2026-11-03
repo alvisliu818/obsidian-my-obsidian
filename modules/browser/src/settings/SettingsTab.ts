@@ -291,6 +291,19 @@ export class BrowserSettingTab extends PluginSettingTab {
 
     new Setting(containerEl).setName("Chrome 扩展").setHeading();
 
+    const newtabExts = () => this.host.extensions().filter((r) => r.enabled && r.newtab);
+    new Setting(containerEl)
+      .setName("新标签页扩展")
+      .setDesc("把新标签页/主页换成某个扩展的 newtab 页（需该扩展已原生加载）。留空 = 使用主页设置")
+      .addDropdown((d) => {
+        const opts: Record<string, string> = { "": "（主页设置）" };
+        for (const r of newtabExts()) opts[r.dir] = r.name;
+        d.addOptions(opts).setValue(s.newTabExtId ?? "").onChange((v) => {
+          s.newTabExtId = v;
+          this.host.save();
+        });
+      });
+
     new Setting(containerEl)
       .setName("启用扩展")
       .setDesc("内容脚本与 popup 可用；background / service worker 不执行")

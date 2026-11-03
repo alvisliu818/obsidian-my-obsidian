@@ -49,4 +49,6 @@ export interface BrowserContext {
   onDataChange(fn: () => void): () => void;
   /** URL of the active browser tab ('' when the view is closed). */
   currentUrl?(): string;
+  /** 新标签页起点：配置了新标签页扩展则其 newtab 页，否则主页。 */
+  startUrl(): string;
 }
