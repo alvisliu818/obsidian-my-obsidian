@@ -730,3 +730,37 @@ function attachTitleMenu(host: HTMLElement, menuHost: HeaderMenuHost, fileAbs: s
 		);
 	});
 }
+
+/**
+ * 原生 markdown 视图的头部路径：与三个自定义视图同款的可点击面包屑 +
+ * 文件名同级面板（用户 2026-11-03：原生编辑器打开库内或库外文件也一样）。
+ *
+ * 原生 markdown 自己会在 `.view-header-title-parent` 里画目录链，但不可点。
+ * 这里替换成同结构的可点击版本；原生重写头部（打开/改名/布局变化）会把
+ * 内容冲掉，调用方在 layout-change / active-leaf-change 上重复调用即可——
+ * marker（lgpHdrFile）没变且我们的节点还在时跳过，变了就重画。
+ *
+ * 不传 paneMenuHost：右键回落到同级面板。外链菜单（paneMenuHost）是按库外
+ * 文件装配的，库内笔记的改名/删除应走 Obsidian 原生右键，不冒充。
+ */
+export function applyNativeMarkdownHeaderPath(app: App, leaf: unknown, host: HeaderMenuHost): void {
+	const view = (leaf as { view?: { getViewType?: () => string; file?: { path?: string }; containerEl?: HTMLElement } | null })
+		?.view;
+	if (!view || view.getViewType?.() !== 'markdown') return;
+	const filePath = view.file?.path;
+	if (!filePath) return;
+	const container = view.containerEl;
+	if (!container) return;
+	const parent = container.querySelector<HTMLElement>('.view-header-title-parent');
+	if (!parent) return;
+	if (parent.dataset['lgpHdrFile'] === filePath && parent.querySelector('.lgp-hdr-crumb')) return;
+	parent.dataset['lgpHdrFile'] = filePath;
+
+	const external = /^file:/i.test(filePath);
+	const full = external ? norm(filePath.slice(5)) : `${vaultRootOf(app)}/${filePath.replace(/^\//, '')}`;
+	if (!full || full === '/') return;
+	const m = matchMountFor(full, host.settings.externalMounts ?? []);
+	const rel = m ? full.slice(norm(m.path).replace(/\/+$/, '').length + 1) : external ? basenameOf(full) : filePath;
+	const segments = headerSegmentsFor(app, full, rel, '');
+	applyHeaderPath(container, segments, host, full);
+}

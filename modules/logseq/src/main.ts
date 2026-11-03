@@ -53,6 +53,7 @@ import { readExternalText } from '../../virtual-tree/src/features/extFs';
 import { VIEW_TYPE_OFFICE } from '../../virtual-tree/src/views/OfficeView';
 import { activateIconThemeByPreference } from '../../virtual-tree/src/extensions/iconThemeLoader';
 import type { HeaderMenuHost } from './views/headerPath';
+import { applyNativeMarkdownHeaderPath } from './views/headerPath';
 import { openJournal } from './features/dailyNote';
 import { BackupManager } from './core/backup';
 import { registerNativeImgFix } from './features/nativeImgFix';
@@ -1382,6 +1383,13 @@ export default class LogseqEditorPlugin extends Plugin {
     // 事件重应用(applyMarkedTabIcons 有 marker 判断,重复触发代价可忽略)
     this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.refreshTabIcons()));
     this.registerEvent(this.app.workspace.on('layout-change', () => this.refreshTabIcons()));
+    // 原生 markdown 视图的头部路径(点击段/文件名弹同级文件面板,与自定义视图
+    // 同款)。原生会重写头部面包屑,两个事件上重复补(applyNativeMarkdown-
+    // HeaderPath 有 marker 判断,同文件不重画)。
+    this.registerEvent(
+      this.app.workspace.on('active-leaf-change', () => this.applyNativeHeaderPaths()),
+    );
+    this.registerEvent(this.app.workspace.on('layout-change', () => this.applyNativeHeaderPaths()));
 
     // 核心文件浏览器：工具栏注入「定位当前文件」按钮。布局变化会重建面板，
     // 故每次都要重新注入（install 幂等）；register() 保证卸载时把自己摘掉。
@@ -2046,5 +2054,16 @@ export default class LogseqEditorPlugin extends Plugin {
           }
         : undefined,
     };
+  }
+
+  /**
+   * 原生 markdown 视图的头部路径补画（用户 2026-11-03：原生编辑器打开库内或
+   * 库外文件也一样，点路径弹同级文件面板）。全量 markdown 叶子逐个处理，
+   * applyNativeMarkdownHeaderPath 内部有 marker 判断，同文件不重画。
+   */
+  applyNativeHeaderPaths(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+      applyNativeMarkdownHeaderPath(this.app, leaf, this.headerMenuHost);
+    }
   }
 }
