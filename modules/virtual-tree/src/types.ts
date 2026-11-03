@@ -384,6 +384,14 @@ export interface DocTreeSettings {
    */
   externalMarkdownEditor: EditorChoice;
   /**
+   * 虚拟文档树里库内（vault 挂载）markdown 的默认编辑器（用户 2026-11-03
+   * 决策：默认 'native' 原生编辑器）。logseq 模块的 setViewState 接管补丁
+   * 会把库内 markdown 一律转块编辑器；虚拟树点击按本设置绕开或照常——
+   * 页面自己的 `editor: logseq|native` 属性仍然最优先（logseq 模块的
+   * editorDefaultFor 解析，与库外 md 的逐文件覆盖同一套语义）。
+   */
+  vaultMarkdownEditor: EditorChoice;
+  /**
    * Take over Office files (.docx/.xlsx/.pptx/…) with the built-in previewer.
    * On by default: Obsidian has no viewer for these at all, so there is nothing
    * to displace — and "open with the system app" stays one click away in the
@@ -433,6 +441,9 @@ export const DEFAULT_DOCTREE_SETTINGS: DocTreeSettings = {
   // 库外 md 默认 Obsidian 原生编辑器(用户 2026-10-25 决策);块编辑器保留在
   // 右键菜单,文件自己的 editor 属性可逐文件覆盖。
   externalMarkdownEditor: 'native',
+  // 虚拟树库内 md 默认原生编辑器(用户 2026-11-03 决策);页面 editor 属性可
+  // 逐页覆盖(logseq 模块 editorDefaultFor 解析)。
+  vaultMarkdownEditor: 'native',
   officeViewerEnabled: true,
   imageViewerTakeOver: false,
   // 视频默认本插件播放器(用户 2026-10-30 决策);原生预览可在设置里选回。
@@ -520,6 +531,8 @@ export function docTreeSettingsFrom(raw: unknown): DocTreeSettings {
   s.externalSplitView = o.externalSplitView === true;
   s.externalMarkdownEditor =
     editorChoiceValue(o.externalMarkdownEditor) ?? DEFAULT_DOCTREE_SETTINGS.externalMarkdownEditor;
+  s.vaultMarkdownEditor =
+    editorChoiceValue(o.vaultMarkdownEditor) ?? DEFAULT_DOCTREE_SETTINGS.vaultMarkdownEditor;
   s.officeViewerEnabled = o.officeViewerEnabled !== false;
   s.imageViewerTakeOver = o.imageViewerTakeOver === true;
   // 视频打开方式:显式 'native' 才走原生;旧键 videoPlayerTakeOver 一并废弃

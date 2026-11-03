@@ -25,6 +25,7 @@ import {
   dirPruned,
   entryMatches,
   EMPTY_FILTER,
+  isMarkdownFile,
   isTextMount,
   type MountNode,
 } from '../features/mountFilter';
@@ -1162,8 +1163,12 @@ export class MountPanelView extends ItemView {
   // ------------------------------------------------------------------
 
   /**
-   * 打开库内挂载里的一个文件（vault 原生 openFile；面板的 split 设置同样
-   * 生效——与库外文件共用 externalSplitView 的语义）。
+   * 打开库内挂载里的一个文件（面板的 split 设置与库外共用 externalSplitView
+   * 语义）。md 默认编辑器按设置 vaultMarkdownEditor（默认原生，用户
+   * 2026-11-03）：logseq 模块的 setViewState 接管补丁会把库内 markdown 一律
+   * 转块编辑器，选原生时经 logseq 入口绕开——页面 `editor::` 属性仍可逐页
+   * 覆盖（判断在 logseq 模块入口内部）。模块未启用或旧版无该入口时落回普通
+   * openFile，行为与从前一致（选 logseq 时本来就照旧）。
    */
   private async openVaultNode(mount: ExternalMount, node: MountNode): Promise<void> {
     const vaultPath = node.rel ? `${mount.path}/${node.rel}` : mount.path;
@@ -1174,7 +1179,34 @@ export class MountPanelView extends ItemView {
       return;
     }
     const leaf = this.plugin.settings.externalSplitView ? 'split' : 'tab';
+    const logseq = this.hostModule('logseq') as
+      | {
+          openVaultMarkdownDefault?: (
+            leaf: WorkspaceLeaf,
+            file: TFile,
+            defaultChoice: 'native' | 'logseq',
+          ) => Promise<void>;
+        }
+      | undefined;
+    if (isMarkdownFile(af.name) && typeof logseq?.openVaultMarkdownDefault === 'function') {
+      await logseq.openVaultMarkdownDefault(
+        this.app.workspace.getLeaf(leaf),
+        af,
+        this.plugin.settings.vaultMarkdownEditor === 'logseq' ? 'logseq' : 'native',
+      );
+      return;
+    }
     await this.app.workspace.getLeaf(leaf).openFile(af);
+  }
+
+  /** 宿主插件实例上的兄弟模块（iconTheme 同款防御式取法，不静态依赖）。 */
+  private hostModule(id: string): unknown {
+    const plugins = (this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } })
+      .plugins?.plugins;
+    const host = plugins?.['obsidian-my-obsidian'] as
+      | { moduleInstance?: (mid: string) => unknown }
+      | undefined;
+    return host?.moduleInstance?.(id);
   }
 
   /**

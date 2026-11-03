@@ -1647,6 +1647,43 @@ export default class LogseqEditorPlugin extends Plugin {
     logOp(this, 'vault.open', file.path, 'ok', 'code-editor');
   }
 
+  /**
+   * 库内 markdown 的虚拟文档树默认入口（用户 2026-11-03：虚拟树 md 默认
+   * 原生编辑器，可在虚拟树设置里改）。`defaultChoice` 来自调用方设置；
+   * 页面自己的 `editor` 属性（logseq 页面属性表 + frontmatter）仍然最优先，
+   * 与接管补丁的逐页语义一致。
+   *
+   * 'logseq' → 照常 openFile（接管补丁把 state 转块编辑器）；'native' →
+   * bypassingSetViewState 绕过补丁直进原生 markdown 视图。dirty 守卫与补丁
+   * 内同款：目标 leaf 正编辑未落盘的其他文件时不原地顶掉，改到新 tab。
+   */
+  async openVaultMarkdownDefault(
+    leaf: WorkspaceLeaf,
+    file: TFile,
+    defaultChoice: 'native' | 'logseq',
+  ): Promise<void> {
+    const choice = this.editorDefaultFor(file.path) ?? defaultChoice;
+    if (choice !== 'native') {
+      await leaf.openFile(file);
+      return;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cur = leaf.view as any;
+    if (cur?.dirty === true || cur?.openTabSettings?.touched === true) {
+      const curKey = String(cur?.abs ?? cur?.file?.path ?? '').toLowerCase();
+      if (curKey && curKey !== file.path.toLowerCase()) {
+        leaf = this.app.workspace.getLeaf('tab');
+      }
+    }
+    await this.bypassingSetViewState(leaf, {
+      type: 'markdown',
+      state: { file: file.path },
+      active: true,
+    } as ViewState);
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    logOp(this, 'vault.open', file.path, 'ok', 'native-editor');
+  }
+
   /** Re-render every open recent-files panel. */
   refreshRecentPanels(): void {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_RECENT_PANEL)) {

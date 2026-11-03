@@ -70,6 +70,24 @@ export class DocTreeSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName('库内 Markdown 默认编辑器')
+      .setDesc(
+        '点击虚拟文档树里的库内 .md 文件时用哪个编辑器打开。默认"Obsidian 原生编辑器"' +
+          '——即使全局开了块编辑器接管，虚拟树的点击也会绕开它直进原生编辑器（反链、引用、' +
+          '大纲都是原生行为）；选"Logseq 块编辑器"则照常被接管。' +
+          '单个页面仍可在自己的属性里覆盖此默认：frontmatter 写 editor: logseq 或 editor: native。',
+      )
+      .addDropdown((d) =>
+        d
+          .addOptions({ native: 'Obsidian 原生编辑器', logseq: 'Logseq 块编辑器' })
+          .setValue(this.plugin.settings.vaultMarkdownEditor ?? 'native')
+          .onChange(async (v) => {
+            this.plugin.settings.vaultMarkdownEditor = v as EditorChoice;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
       .setName('启用挂载过滤')
       .setDesc(
         '默认关闭：虚拟文档树显示挂载文件夹下的全部内容，不做任何过滤。' +
