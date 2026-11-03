@@ -55,6 +55,10 @@ function registryOf(host: unknown): Record<string, unknown> | null {
 }
 
 const THEME_ID = 'material-icon-theme';
+/** 聚合宿主插件 id 与主题模块 id：合并版主题不以独立插件存在于插件表，
+ *  兄弟模块一律经宿主实例查找（宿主 moduleInstance 文档同款取法）。 */
+const HOST_PLUGIN_ID = 'obsidian-my-obsidian';
+const THEME_MODULE_ID = 'material-icon-theme';
 
 /**
  * Find the theme's plugin instance.
@@ -63,6 +67,12 @@ const THEME_ID = 'material-icon-theme';
  * `app.plugins.plugins`, and older builds expose `app.internalPlugins`. The
  * lookup is defensive because a missing theme is the normal case for users who
  * do not have it.
+ *
+ * 合并版（obsidian-my-obsidian）把主题整个收编为模块，插件表里没有独立
+ * `material-icon-theme` 条目——经宿主 `moduleInstance(THEME_MODULE_ID)` 取。
+ * 独立版与合并版不会同时安装；两处都查，先命中先用（独立版优先，它若是
+ * 用户单独装的，意图最明确）。宿主实例上的 getFileIconSvg/getFolderIconKey/
+ * getIconSet/getSvg 是 private TS 但运行时真实存在（同独立版实测结论）。
  */
 function themeInstance(app: AppLike): IconThemeLike | null {
   const a = (app ?? {}) as { plugins?: unknown; internalPlugins?: unknown };
@@ -72,6 +82,11 @@ function themeInstance(app: AppLike): IconThemeLike | null {
     const found = reg?.[THEME_ID] as IconThemeLike | undefined;
     if (found && typeof found === 'object') return found;
   }
+  const host = registryOf(a.plugins)?.[HOST_PLUGIN_ID] as
+    | { moduleInstance?: (id: string) => unknown }
+    | undefined;
+  const mod = host?.moduleInstance?.(THEME_MODULE_ID) as IconThemeLike | undefined;
+  if (mod && typeof mod === 'object') return mod;
   return null;
 }
 

@@ -205,3 +205,45 @@ describe('decideIcon — extension-market icon theme takes priority', () => {
     expect(d.dataUri).toBeUndefined();
   });
 });
+
+describe('themeInstance — 合并版宿主模块取图（obsidian-my-obsidian）', () => {
+  /** 合并环境：插件表里没有独立主题，主题经宿主 moduleInstance 暴露。 */
+  const mergedApp = (theme: unknown, host: unknown = {}) => ({
+    plugins: { plugins: { 'obsidian-my-obsidian': { ...host, moduleInstance: (id: string) => (id === 'material-icon-theme' ? theme : undefined) } } },
+  });
+
+  it('经宿主 moduleInstance 找到合并版主题并取到 svg', () => {
+    const app = mergedApp({ getFileIconSvg: () => SVG });
+    expect(iconSvgFor(app, 'index.ts')).toBe(SVG);
+    expect(hasIconTheme(app)).toBe(true);
+  });
+
+  it('文件夹三步查找在合并版主题上同样走通', () => {
+    const app = mergedApp({
+      getFolderIconKey: () => 'folder-src',
+      getIconSet: (key: string) => ({ dark: key, light: key }),
+      getSvg: (set: { dark: string }) => `<svg data-key="${set.dark}"/>`,
+    });
+    const d = decideIcon(app, opts({ name: 'tools', isDir: true, rel: 'tools' }));
+    expect(d.svg).toBe('<svg data-key="folder-src"/>');
+    expect(d.themed).toBe(true);
+  });
+
+  it('独立社区插件与合并版同时存在时独立版优先', () => {
+    const app = {
+      plugins: {
+        plugins: {
+          'material-icon-theme': { getFileIconSvg: () => `${SVG}<!--standalone-->` },
+          'obsidian-my-obsidian': { moduleInstance: () => ({ getFileIconSvg: () => `${SVG}<!--merged-->` }) },
+        },
+      },
+    };
+    expect(iconSvgFor(app, 'index.ts')).toBe(`${SVG}<!--standalone-->`);
+  });
+
+  it('宿主缺 moduleInstance / 模块缺方法时不抛错回退 null', () => {
+    expect(iconSvgFor({ plugins: { plugins: { 'obsidian-my-obsidian': {} } } }, 'index.ts')).toBeNull();
+    expect(iconSvgFor(mergedApp({}), 'index.ts')).toBeNull();
+    expect(iconSvgFor(mergedApp({ getFileIconSvg: () => { throw new Error('boom'); } }), 'x')).toBeNull();
+  });
+});

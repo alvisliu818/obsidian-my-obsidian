@@ -186,7 +186,8 @@ export class DocTreeSettingTab extends PluginSettingTab {
         .onClick(() => void this.plugin.activatePanel(VIEW_TYPE_MOUNT_PANEL)),
     );
     mountActions.addButton((b) =>
-      b.setButtonText('添加挂载').onClick(() => this.plugin.promptAddMount()),
+      // 分流菜单：库内（选择器）/库外（路径弹窗），与面板工具栏同一入口
+      b.setButtonText('添加挂载').onClick((ev) => this.plugin.promptAddMountSplit(ev)),
     );
     mountActions.addButton((b) =>
       b.setButtonText('管理全部').onClick(() => new MountListModal(this.plugin).open()),

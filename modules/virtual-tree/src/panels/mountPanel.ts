@@ -667,7 +667,7 @@ export class MountPanelView extends ItemView {
         text: '把库内或库外的文件/文件夹挂到这里；库外 Markdown 会在原地编辑并存回原文件。',
       });
       const add = empty.createEl('button', { cls: 'mod-cta', text: '添加挂载' });
-      add.addEventListener('click', () => this.plugin.promptAddMount());
+      add.addEventListener('click', (ev) => this.plugin.promptAddMountSplit(ev));
       return;
     }
 
@@ -677,7 +677,6 @@ export class MountPanelView extends ItemView {
       this.toolbarCfg = this.plugin.settings.mountToolbar ?? defaultPanelToolbarCfg();
     }
     const bar = contentEl.createDiv({ cls: 'logseq-mount-panel-bar' });
-    bar.createSpan({ cls: 'logseq-mount-panel-count', text: `${mounts.length} 个挂载` });
     const { order, hidden } = resolvePanelToolbar(this.toolbarCfg);
     const dragOn = this.plugin.settings.mountDragMode === true;
     for (const key of order) {
@@ -685,7 +684,7 @@ export class MountPanelView extends ItemView {
       const b = panelToolbarButtonByKey(key);
       if (!b) continue;
       const btn = bar.createEl('button', {
-        cls: 'logseq-mount-panel-btn' + (key === 'drag-mode' && dragOn ? ' is-active' : ''),
+        cls: 'clickable-icon logseq-mount-panel-btn' + (key === 'drag-mode' && dragOn ? ' is-active' : ''),
         attr: { 'data-tb-action': b.key },
       });
       setIcon(btn, b.icon);
@@ -693,7 +692,7 @@ export class MountPanelView extends ItemView {
     }
     // 「更多」:收进去的按钮(按顶栏同序)+ 固定「编辑工具栏…」入口
     const moreBtn = bar.createEl('button', {
-      cls: 'logseq-mount-panel-btn',
+      cls: 'clickable-icon logseq-mount-panel-btn',
       attr: { 'data-tb-action': PANEL_TOOLBAR_FIXED },
     });
     setIcon(moreBtn, 'more-horizontal');
@@ -736,34 +735,8 @@ export class MountPanelView extends ItemView {
       void this.revealActiveFile();
     } else if (action === 'mount') {
       // 思源同款：挂载入口分库内（选择器搜库内文件/文件夹）与库外（路径弹窗）。
-      const menu = new Menu();
-      menu.addItem((item) =>
-        item
-          .setTitle('挂载库内文件/文件夹…')
-          .setIcon('folder-tree' as never)
-          .onClick(() =>
-            new VaultMountPickModal(this.plugin, {
-              onPick: (p) =>
-                this.plugin.promptMountEntry({
-                  kind: 'vault',
-                  path: p.path,
-                  label: p.name,
-                  include: '',
-                  exclude: '',
-                  refreshSeconds: 0,
-                  pinned: false,
-                }),
-            }).open(),
-          ),
-      );
-      menu.addItem((item) =>
-        item
-          .setTitle('挂载库外文件/文件夹…')
-          .setIcon('hard-drive' as never)
-          .onClick(() => this.plugin.promptAddMount()),
-      );
-      if (ev) menu.showAtMouseEvent(ev);
-      else menu.showAtPosition({ x: window.innerWidth / 2, y: 80 });
+      // 实现在宿主 promptAddMountSplit——面板空状态与设置页共用同一分流。
+      this.plugin.promptAddMountSplit(ev);
     } else if (action === 'refresh') {
       this.refreshMounts();
     } else if (action === 'drag-mode') {

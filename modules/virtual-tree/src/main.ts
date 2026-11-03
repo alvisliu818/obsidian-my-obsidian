@@ -13,7 +13,7 @@
  * plugin table (legacy alias ids), never through static imports.
  */
 
-import { Notice, Platform, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
+import { Menu, Notice, Platform, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
 import { around } from 'monkey-around';
 import { DocTreeSettingTab } from './settings/tab';
 import { MountPanelView, VIEW_TYPE_MOUNT_PANEL } from './panels/mountPanel';
@@ -382,6 +382,42 @@ export default class DocTreePlugin extends Plugin {
   /** Open the add-mount dialog. */
   promptAddMount(): void {
     new MountEditorModal(this).open();
+  }
+
+  /**
+   * 挂载来源分流菜单：库内（搜索选择器，文件/文件夹都可挑）/ 库外（路径弹窗）。
+   * 工具栏「添加挂载」、面板空状态按钮与设置页共用，保证库内选择入口全链路
+   * 一致——思源同款：挂载入口先分来源再进各自弹窗。
+   */
+  promptAddMountSplit(ev?: MouseEvent): void {
+    const menu = new Menu();
+    menu.addItem((item) =>
+      item
+        .setTitle('挂载库内文件/文件夹…')
+        .setIcon('folder-tree' as never)
+        .onClick(() =>
+          new VaultMountPickModal(this, {
+            onPick: (p) =>
+              this.promptMountEntry({
+                kind: 'vault',
+                path: p.path,
+                label: p.name,
+                include: '',
+                exclude: '',
+                refreshSeconds: 0,
+                pinned: false,
+              }),
+          }).open(),
+        ),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle('挂载库外文件/文件夹…')
+        .setIcon('hard-drive' as never)
+        .onClick(() => this.promptAddMount()),
+    );
+    if (ev) menu.showAtMouseEvent(ev);
+    else menu.showAtPosition({ x: window.innerWidth / 2, y: 80 });
   }
 
   /** Edit an existing mount. */

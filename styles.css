@@ -3944,44 +3944,46 @@ body.lgp-table-editor-cw-cursor * {
   padding: 0 0 6px;
 }
 
+/* 工具栏样式对齐独立仓 obsidian-virtual-tree（思源 mount-tree-dock 同款）：
+   整条居中、按钮少时 safe center、溢出退化左对齐可横向滚动 */
 .logseq-mount-panel-bar {
   display: flex;
   align-items: center;
+  /* safe center:按钮少时水平居中,溢出时自动退化为左对齐——否则居中溢出
+     会裁掉左端且滚不回去 */
+  justify-content: safe center;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
   gap: 2px;
-  /* 上下等距；多出的高度由文字/图标放大占住 */
-  padding: 2px 4px;
+  padding: 4px 6px;
   border-bottom: 1px solid var(--background-modifier-border);
   margin-bottom: 2px;
+  flex-shrink: 0;
+  scrollbar-width: thin;
 }
-.logseq-mount-panel-count {
-  color: var(--text-muted);
-  font-size: var(--font-ui-small, 13px);
-  flex: 1 1 auto;
-}
+/* 图标按钮:clickable-icon 打底(尺寸/悬停底色随主题),opacity 悬停点亮;
+   图标多了不挤压,随工具栏横向滚动 */
 .logseq-mount-panel-btn {
+  flex-shrink: 0;
   background: none;
   border: none;
   cursor: pointer;
-  color: var(--text-muted);
-  font-size: 14px;
-  line-height: 1;
-  padding: 1px 4px;
-  border-radius: 3px;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+  padding: 4px !important;
+  border-radius: var(--radius-s);
   /* Obsidian 给裸 button 固定 --input-height(30px)，工具栏要紧凑就必须覆盖 */
   height: auto;
   min-height: 0;
 }
-/* 图标按钮（定位当前文件）与文字按钮同高同大 */
-.logseq-mount-panel-btn svg {
-  width: 15px;
-  height: 15px;
-}
 .logseq-mount-panel-btn:hover {
+  opacity: 1;
   background-color: var(--background-modifier-hover);
-  color: var(--text-normal);
 }
 /* 拖拽模式等开关型按钮的开启态 */
 .logseq-mount-panel-btn.is-active {
+  opacity: 1;
   color: var(--text-accent);
   background-color: var(--background-modifier-active-hover);
 }
