@@ -183,9 +183,16 @@ export class DnrBlocker {
                     const domain = (cut < 0 ? rest : rest.slice(0, cut)).toLowerCase();
                     if (!domain || domain.includes("*")) { this.skipped++; continue; }
                     let pathPart = cut < 0 ? "" : rest.slice(cut); // 可能以 ^ 开头
-                    const entry = this.allowDom.has(domain) || this.blockDom.has(domain)
-                        ? (isAllow ? this.allowDom : this.blockDom).get(domain)!
-                        : ((isAllow ? this.allowDom : this.blockDom).set(domain, { rules: [] }), (isAllow ? this.allowDom : this.blockDom).get(domain)!);
+                    // ★ 同域名可能同时有 block 与 allow 规则（例外覆盖）——必须在
+                    //   各自的 map 里取/建条目。旧写法在另一张 map 已有同名域时
+                    //   get 错 map → undefined → 规则被 try/catch 静默吞掉
+                    //   （实测：||ads.net^ 的 allow /good 例外整个丢失）
+                    const targetMap = isAllow ? this.allowDom : this.blockDom;
+                    let entry = targetMap.get(domain);
+                    if (!entry) {
+                        entry = { rules: [] };
+                        targetMap.set(domain, entry);
+                    }
                     const rule: DnrRule = { rts, dt };
                     if (!pathPart || pathPart === "^") {
                         rule.all = true;
