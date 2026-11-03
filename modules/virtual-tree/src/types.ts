@@ -367,8 +367,9 @@ export interface DocTreeSettings {
    * Obsidian refuses to mount a text view without a file, so opening one seeds
    * the leaf with a real note first (measured: every other route yields the
    * "empty" placeholder). A split keeps that seeding out of the way of whatever
-   * the user is working in; a tab keeps the window uncluttered. Tab is the
-   * default because it is what a click on a file usually means.
+   * the user is working in; a tab keeps the window uncluttered. Split is the
+   * default (用户 2026-11-03：点路径默认展开同级面板，跟 logseq 编辑器点路径
+   * 一样——当前标签不被顶掉；同一文件已打开时聚焦复用不叠分栏).
    */
   externalSplitView: boolean;
   /**
@@ -437,7 +438,9 @@ export const DEFAULT_DOCTREE_SETTINGS: DocTreeSettings = {
   mountPickDir: '',
   mountNewNotePath: '',
   externalMounts: [],
-  externalSplitView: false,
+  // 同级面板打开(用户 2026-11-03 决策,原默认 false=当前标签):点路径在活动
+  // 标签旁分栏,不顶掉当前标签;同一文件已开时聚焦复用。
+  externalSplitView: true,
   // 库外 md 默认 Obsidian 原生编辑器(用户 2026-10-25 决策);块编辑器保留在
   // 右键菜单,文件自己的 editor 属性可逐文件覆盖。
   externalMarkdownEditor: 'native',
@@ -528,7 +531,7 @@ export function docTreeSettingsFrom(raw: unknown): DocTreeSettings {
   if (typeof o.mountPickDir === 'string') s.mountPickDir = o.mountPickDir;
   if (typeof o.mountNewNotePath === 'string') s.mountNewNotePath = o.mountNewNotePath;
   s.externalMounts = mountsFrom(o.externalMounts);
-  s.externalSplitView = o.externalSplitView === true;
+  s.externalSplitView = o.externalSplitView !== false;
   s.externalMarkdownEditor =
     editorChoiceValue(o.externalMarkdownEditor) ?? DEFAULT_DOCTREE_SETTINGS.externalMarkdownEditor;
   s.vaultMarkdownEditor =
