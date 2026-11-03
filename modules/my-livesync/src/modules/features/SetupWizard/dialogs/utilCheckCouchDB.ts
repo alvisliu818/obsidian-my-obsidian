@@ -1,0 +1,305 @@
+import { requestToCouchDBWithCredentials } from "@/common/utils";
+import { $msg } from "@/common/translation";
+import { Logger } from "@vrtmrz/livesync-commonlib/compat/common/logger";
+import type { ObsidianLiveSyncSettings } from "@vrtmrz/livesync-commonlib/compat/common/types";
+import { parseHeaderValues } from "@vrtmrz/livesync-commonlib/compat/common/utils";
+import { isCloudantURI } from "@vrtmrz/livesync-commonlib/compat/pouchdb/utils_couchdb";
+import { generateCredentialObject } from "@vrtmrz/livesync-commonlib/compat/replication/httplib";
+import { compatGlobal } from "@vrtmrz/livesync-commonlib/compat/common/coreEnvFunctions";
+import { isUnauthorizedError } from "@vrtmrz/livesync-commonlib/compat/common/utils.doc";
+import { normaliseCouchDBConfiguration } from "@/common/couchdbConfiguration";
+import { isCouchDBVersionAtLeast, normaliseResponseHeaderKeys } from "@/modules/features/couchDBDiagnosticValues";
+
+export type ResultMessage = { message: string; classes: string[] };
+export type ResultErrorMessage = { message: string; result: "error"; classes: string[] };
+export type ResultOk<T> = { message: string; result: "ok"; value?: T };
+export type ResultError<T> = {
+    message: string;
+    result: "error";
+    value: T;
+    fixMessage: string;
+    settingKey: string;
+    expectedValue: string;
+    fix(): Promise<void>;
+};
+export type ConfigCheckResult<T = unknown, U = unknown> =
+    | ResultOk<T>
+    | ResultError<U>
+    | ResultMessage
+    | ResultErrorMessage;
+/**
+ * Updates the remote CouchDB setting with the given key and value.
+ * @param setting Connection settings
+ * @param key setting key to update
+ * @param value setting value to update
+ * @returns true if the update was successful, false otherwise
+ */
+async function updateRemoteSetting(
+    setting: ObsidianLiveSyncSettings,
+    key: string,
+    value: string
+): Promise<true | string> {
+    const customHeaders = parseHeaderValues(setting.couchDB_CustomHeaders);
+    const credential = generateCredentialObject(setting);
+    const res = await requestToCouchDBWithCredentials(
+        setting.couchDB_URI,
+        credential,
+        undefined,
+        key,
+        value,
+        undefined,
+        customHeaders
+    );
+    if (res.status == 200) {
+        return true;
+    } else {
+        return res.text || "Unknown error";
+    }
+}
+
+/**
+ * Checks the CouchDB configuration and returns the results.
+ * @param editingSettings
+ * @returns  Array of ConfigCheckResult
+ */
+export const checkConfig = async (editingSettings: ObsidianLiveSyncSettings) => {
+    const result = [] as ConfigCheckResult<unknown, unknown>[];
+    const addMessage = (msg: string, classes: string[] = []) => {
+        result.push({ message: msg, classes });
+    };
+    const addSuccess = <T>(msg: string, value?: T) => {
+        result.push({ message: msg, result: "ok", value });
+    };
+    const _addError = <T>(
+        message: string,
+        fixMessage: string,
+        settingKey: string,
+        expectedValue: string,
+        fix: () => Promise<void>,
+        value?: T
+    ) => {
+        result.push({ message, result: "error", fixMessage, settingKey, expectedValue, fix, value });
+    };
+    const addErrorMessage = (msg: string, classes: string[] = []) => {
+        result.push({ message: msg, result: "error", classes });
+    };
+
+    const addError = (message: string, fixMessage: string, key: string, expected: string) => {
+        _addError(
+            message,
+            fixMessage,
+            key,
+            expected,
+            async () => {
+                await updateRemoteSetting(editingSettings, key, expected);
+            },
+            expected
+        );
+    };
+
+    addMessage($msg("obsidianLiveSyncSettingTab.logCheckingDbConfig"));
+
+    try {
+        if (isCloudantURI(editingSettings.couchDB_URI)) {
+            addMessage($msg("obsidianLiveSyncSettingTab.logCannotUseCloudant"));
+            return result;
+        }
+        // Tip: Add log for cloudant as Logger($msg("obsidianLiveSyncSettingTab.logServerConfigurationCheck"));
+        const customHeaders = parseHeaderValues(editingSettings.couchDB_CustomHeaders);
+        const credential = generateCredentialObject(editingSettings);
+        const r = await requestToCouchDBWithCredentials(
+            editingSettings.couchDB_URI,
+            credential,
+            compatGlobal.origin,
+            undefined,
+            undefined,
+            undefined,
+            customHeaders
+        );
+        const responseConfig = normaliseCouchDBConfiguration(r.json as unknown);
+        addMessage($msg("obsidianLiveSyncSettingTab.msgNotice"), ["ob-btn-config-head"]);
+        addMessage($msg("obsidianLiveSyncSettingTab.msgIfConfigNotPersistent"), ["ob-btn-config-info"]);
+        addMessage($msg("obsidianLiveSyncSettingTab.msgConfigCheck"), ["ob-btn-config-head"]);
+
+        const serverBanner = r.headers["server"] ?? r.headers["Server"] ?? "unknown";
+        addMessage($msg("obsidianLiveSyncSettingTab.serverVersion", { info: serverBanner }));
+        const versionMatch = serverBanner.match(/CouchDB(\/([0-9.]+))?/);
+        const versionStr = versionMatch ? versionMatch[2] : "0.0.0";
+
+        // Compare version string with the target version.
+        // version must be a string like "3.2.1" or "3.10.2", and must be two or three parts.
+
+        // Admin check
+        //  for database creation and deletion
+        if (!(editingSettings.couchDB_USER in responseConfig.admins)) {
+            addSuccess($msg("obsidianLiveSyncSettingTab.warnNoAdmin"));
+        } else {
+            addSuccess($msg("obsidianLiveSyncSettingTab.okAdminPrivileges"));
+        }
+        if (isCouchDBVersionAtLeast(versionStr, "3.2.0")) {
+            // HTTP user-authorization check
+            if (responseConfig?.chttpd?.require_valid_user != "true") {
+                addError(
+                    $msg("obsidianLiveSyncSettingTab.errRequireValidUser"),
+                    $msg("obsidianLiveSyncSettingTab.msgSetRequireValidUser"),
+                    "chttpd/require_valid_user",
+                    "true"
+                );
+            } else {
+                addSuccess($msg("obsidianLiveSyncSettingTab.okRequireValidUser"));
+            }
+        } else {
+            if (responseConfig?.chttpd_auth?.require_valid_user != "true") {
+                addError(
+                    $msg("obsidianLiveSyncSettingTab.errRequireValidUserAuth"),
+                    $msg("obsidianLiveSyncSettingTab.msgSetRequireValidUserAuth"),
+                    "chttpd_auth/require_valid_user",
+                    "true"
+                );
+            } else {
+                addSuccess($msg("obsidianLiveSyncSettingTab.okRequireValidUserAuth"));
+            }
+        }
+        // HTTPD check
+        //  Check Authentication header
+        if (!responseConfig?.httpd["WWW-Authenticate"]) {
+            addError(
+                $msg("obsidianLiveSyncSettingTab.errMissingWwwAuth"),
+                $msg("obsidianLiveSyncSettingTab.msgSetWwwAuth"),
+                "httpd/WWW-Authenticate",
+                'Basic realm="couchdb"'
+            );
+        } else {
+            addSuccess($msg("obsidianLiveSyncSettingTab.okWwwAuth"));
+        }
+        if (isCouchDBVersionAtLeast(versionStr, "3.2.0")) {
+            if (responseConfig?.chttpd?.enable_cors != "true") {
+                addError(
+                    $msg("obsidianLiveSyncSettingTab.errEnableCorsChttpd"),
+                    $msg("obsidianLiveSyncSettingTab.msgEnableCorsChttpd"),
+                    "chttpd/enable_cors",
+                    "true"
+                );
+            } else {
+                addSuccess($msg("obsidianLiveSyncSettingTab.okEnableCorsChttpd"));
+            }
+        } else {
+            if (responseConfig?.httpd?.enable_cors != "true") {
+                addError(
+                    $msg("obsidianLiveSyncSettingTab.errEnableCors"),
+                    $msg("obsidianLiveSyncSettingTab.msgEnableCors"),
+                    "httpd/enable_cors",
+                    "true"
+                );
+            } else {
+                addSuccess($msg("obsidianLiveSyncSettingTab.okEnableCors"));
+            }
+        }
+        // If the server is not cloudant, configure request size
+        if (!isCloudantURI(editingSettings.couchDB_URI)) {
+            // REQUEST SIZE
+            if (Number(responseConfig?.chttpd?.max_http_request_size ?? 0) < 4294967296) {
+                addError(
+                    $msg("obsidianLiveSyncSettingTab.errMaxRequestSize"),
+                    $msg("obsidianLiveSyncSettingTab.msgSetMaxRequestSize"),
+                    "chttpd/max_http_request_size",
+                    "4294967296"
+                );
+            } else {
+                addSuccess($msg("obsidianLiveSyncSettingTab.okMaxRequestSize"));
+            }
+            if (Number(responseConfig?.couchdb?.max_document_size ?? 0) < 50000000) {
+                addError(
+                    $msg("obsidianLiveSyncSettingTab.errMaxDocumentSize"),
+                    $msg("obsidianLiveSyncSettingTab.msgSetMaxDocSize"),
+                    "couchdb/max_document_size",
+                    "50000000"
+                );
+            } else {
+                addSuccess($msg("obsidianLiveSyncSettingTab.okMaxDocumentSize"));
+            }
+        }
+        // CORS check
+        //  checking connectivity for mobile
+        if (responseConfig?.cors?.credentials != "true") {
+            addError(
+                $msg("obsidianLiveSyncSettingTab.errCorsCredentials"),
+                $msg("obsidianLiveSyncSettingTab.msgSetCorsCredentials"),
+                "cors/credentials",
+                "true"
+            );
+        } else {
+            addSuccess($msg("obsidianLiveSyncSettingTab.okCorsCredentials"));
+        }
+        const ConfiguredOrigins = ((responseConfig?.cors?.origins ?? "") + "").split(",");
+        if (
+            responseConfig?.cors?.origins == "*" ||
+            (ConfiguredOrigins.indexOf("app://obsidian.md") !== -1 &&
+                ConfiguredOrigins.indexOf("capacitor://localhost") !== -1 &&
+                ConfiguredOrigins.indexOf("http://localhost") !== -1)
+        ) {
+            addSuccess($msg("obsidianLiveSyncSettingTab.okCorsOrigins"));
+        } else {
+            const fixedValue = [
+                ...new Set([
+                    ...ConfiguredOrigins.map((e) => e.trim()),
+                    "app://obsidian.md",
+                    "capacitor://localhost",
+                    "http://localhost",
+                ]),
+            ].join(",");
+            addError(
+                $msg("obsidianLiveSyncSettingTab.errCorsOrigins"),
+                $msg("obsidianLiveSyncSettingTab.msgSetCorsOrigins"),
+                "cors/origins",
+                fixedValue
+            );
+        }
+        addMessage($msg("obsidianLiveSyncSettingTab.msgConnectionCheck"), ["ob-btn-config-head"]);
+        addMessage($msg("obsidianLiveSyncSettingTab.msgCurrentOrigin", { origin: compatGlobal.location.origin }));
+
+        // Request header check
+        const origins = ["app://obsidian.md", "capacitor://localhost", "http://localhost"];
+        for (const org of origins) {
+            const rr = await requestToCouchDBWithCredentials(
+                editingSettings.couchDB_URI,
+                credential,
+                org,
+                undefined,
+                undefined,
+                undefined,
+                customHeaders
+            );
+            const responseHeaders = normaliseResponseHeaderKeys(rr.headers);
+            addMessage($msg("obsidianLiveSyncSettingTab.msgOriginCheck", { org }));
+            if (responseHeaders["access-control-allow-credentials"] != "true") {
+                addErrorMessage($msg("obsidianLiveSyncSettingTab.errCorsNotAllowingCredentials"));
+            } else {
+                addSuccess($msg("obsidianLiveSyncSettingTab.okCorsCredentialsForOrigin"));
+            }
+            if (responseHeaders["access-control-allow-origin"] != org) {
+                addErrorMessage(
+                    $msg("obsidianLiveSyncSettingTab.warnCorsOriginUnmatched", {
+                        from: origin,
+                        to: responseHeaders["access-control-allow-origin"],
+                    })
+                );
+            } else {
+                addSuccess($msg("obsidianLiveSyncSettingTab.okCorsOriginMatched"));
+            }
+        }
+        addMessage($msg("obsidianLiveSyncSettingTab.msgDone"), ["ob-btn-config-head"]);
+        addMessage($msg("obsidianLiveSyncSettingTab.msgConnectionProxyNote"), ["ob-btn-config-info"]);
+        addMessage($msg("obsidianLiveSyncSettingTab.logCheckingConfigDone"));
+    } catch (ex) {
+        if (isUnauthorizedError(ex)) {
+            addErrorMessage($msg("obsidianLiveSyncSettingTab.errAccessForbidden"));
+            addErrorMessage($msg("obsidianLiveSyncSettingTab.errCannotContinueTest"));
+            addMessage($msg("obsidianLiveSyncSettingTab.logCheckingConfigDone"));
+        } else {
+            addErrorMessage($msg("obsidianLiveSyncSettingTab.logCheckingConfigFailed"));
+            Logger(ex);
+        }
+    }
+    return result;
+};

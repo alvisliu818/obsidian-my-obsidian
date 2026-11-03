@@ -1,0 +1,92 @@
+import { App, Modal } from "@/deps.ts";
+import { type FilePath, type LoadedEntry } from "@vrtmrz/livesync-commonlib/compat/common/types";
+import JsonResolvePane from "./JsonResolvePane.svelte";
+import { waitForSignal } from "@vrtmrz/livesync-commonlib/compat/common/utils";
+import { mount, unmount } from "svelte";
+
+export class JsonResolveModal extends Modal {
+    // result: Array<[number, string]>;
+    filename: FilePath;
+    callback?: (keepRev?: string, mergedStr?: string) => Promise<void>;
+    docs: LoadedEntry[];
+    component?: ReturnType<typeof mount>;
+    nameA: string;
+    nameB: string;
+    defaultSelect: string;
+    keepOrder: boolean;
+    hideLocal: boolean;
+    title: string = "Conflicted Setting";
+
+    constructor(
+        app: App,
+        filename: FilePath,
+        docs: LoadedEntry[],
+        callback: (keepRev?: string, mergedStr?: string) => Promise<void>,
+        nameA?: string,
+        nameB?: string,
+        defaultSelect?: string,
+        keepOrder?: boolean,
+        hideLocal?: boolean,
+        title: string = "Conflicted Setting"
+    ) {
+        super(app);
+        this.callback = callback;
+        this.filename = filename;
+        this.docs = docs;
+        this.nameA = nameA || "";
+        this.nameB = nameB || "";
+        this.keepOrder = keepOrder || false;
+        this.defaultSelect = defaultSelect || "";
+        this.title = title;
+        this.hideLocal = hideLocal ?? false;
+        void waitForSignal(`cancel-internal-conflict:${filename}`).then(() => this.close());
+    }
+
+    async UICallback(keepRev?: string, mergedStr?: string) {
+        const callback = this.callback;
+        this.callback = undefined;
+        if (callback) {
+            await callback(keepRev, mergedStr);
+        }
+        this.close();
+    }
+
+    override onOpen() {
+        const { contentEl } = this;
+        this.titleEl.setText(this.title);
+        contentEl.empty();
+
+        if (this.component == undefined) {
+            this.component = mount(JsonResolvePane, {
+                target: contentEl,
+                props: {
+                    docs: this.docs,
+                    filename: this.filename,
+                    nameA: this.nameA,
+                    nameB: this.nameB,
+                    defaultSelect: this.defaultSelect,
+                    keepOrder: this.keepOrder,
+                    hideLocal: this.hideLocal,
+                    callback: (keepRev: string | undefined, mergedStr: string | undefined) =>
+                        this.UICallback(keepRev, mergedStr),
+                },
+            });
+        }
+        return;
+    }
+
+    override onClose() {
+        const { contentEl } = this;
+        contentEl.empty();
+        // contentEl.empty();
+        const callback = this.callback;
+        this.callback = undefined;
+        if (callback) {
+            void callback(undefined);
+        }
+        if (this.component != undefined) {
+            void unmount(this.component);
+            this.component = undefined;
+        }
+    }
+}

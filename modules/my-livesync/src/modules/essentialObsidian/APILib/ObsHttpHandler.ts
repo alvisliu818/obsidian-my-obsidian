@@ -1,0 +1,145 @@
+// This file was originally based on code published by @remotely-save under the Apache License 2.0.
+// I would like to express my gratitude to the original authors for their work.
+//
+// Original implementation: https://github.com/remotely-save/remotely-save/blob/28b99557a864ef59c19d2ad96101196e401718f0/src/remoteForS3.ts
+
+import { FetchHttpHandler, type FetchHttpHandlerOptions } from "@smithy/fetch-http-handler";
+import { HttpRequest, HttpResponse } from "@smithy/protocol-http";
+import type { HttpHandlerOptions } from "@smithy/types";
+import { buildQueryString } from "@smithy/querystring-builder";
+import { requestUrl, type RequestUrlParam } from "@/deps.ts";
+import { compatGlobal } from "@vrtmrz/livesync-commonlib/compat/common/coreEnvFunctions";
+
+////////////////////////////////////////////////////////////////////////////////
+// special handler using Obsidian requestUrl
+////////////////////////////////////////////////////////////////////////////////
+
+function requestTimeout(timeoutInMs: number = 0): Promise<never> {
+    return new Promise((_, reject) => {
+        if (timeoutInMs) {
+            compatGlobal.setTimeout(() => {
+                const timeoutError = new Error(`Request did not complete within ${timeoutInMs} ms`);
+                timeoutError.name = "TimeoutError";
+                reject(timeoutError);
+            }, timeoutInMs);
+        }
+    });
+}
+
+function normaliseRequestBody(body: unknown): string | ArrayBuffer | undefined {
+    if (body === undefined) return undefined;
+    if (typeof body === "string" || body instanceof ArrayBuffer) return body;
+    if (ArrayBuffer.isView(body)) {
+        if (body.buffer instanceof ArrayBuffer && body.byteOffset === 0 && body.byteLength === body.buffer.byteLength) {
+            return body.buffer;
+        }
+        return new Uint8Array(body.buffer, body.byteOffset, body.byteLength).slice().buffer;
+    }
+    const bodyType = Object.prototype.toString.call(body).slice(8, -1);
+    throw new TypeError(`Obsidian requestUrl does not support the request body type ${bodyType}`);
+}
+
+/**
+ * This is close to origin implementation of FetchHttpHandler
+ * https://github.com/aws/aws-sdk-js-v3/blob/main/packages/fetch-http-handler/src/fetch-http-handler.ts
+ * that is released under Apache 2 License.
+ * But this uses Obsidian requestUrl instead.
+ */
+export class ObsHttpHandler extends FetchHttpHandler {
+    requestTimeoutInMs: number | undefined;
+    reverseProxyNoSignUrl: string | undefined;
+    constructor(options?: FetchHttpHandlerOptions, reverseProxyNoSignUrl?: string) {
+        super(options);
+        this.requestTimeoutInMs = options === undefined ? undefined : options.requestTimeout;
+        this.reverseProxyNoSignUrl = reverseProxyNoSignUrl;
+    }
+    override async handle(
+        request: HttpRequest,
+        { abortSignal }: HttpHandlerOptions = {}
+    ): Promise<{ response: HttpResponse }> {
+        if (abortSignal?.aborted) {
+            const abortError = new Error("Request aborted");
+            abortError.name = "AbortError";
+            return Promise.reject(abortError);
+        }
+
+        let path = request.path;
+        if (request.query) {
+            const queryString = buildQueryString(request.query);
+            if (queryString) {
+                path += `?${queryString}`;
+            }
+        }
+
+        const { port, method } = request;
+        let url = `${request.protocol}//${request.hostname}${port ? `:${port}` : ""}${path}`;
+        if (this.reverseProxyNoSignUrl !== undefined && this.reverseProxyNoSignUrl !== "") {
+            const urlObj = new URL(url);
+            urlObj.host = this.reverseProxyNoSignUrl;
+            url = urlObj.href;
+        }
+        const body: unknown = method === "GET" || method === "HEAD" ? undefined : request.body;
+
+        const transformedHeaders: Record<string, string> = {};
+        for (const key of Object.keys(request.headers)) {
+            const keyLower = key.toLowerCase();
+            if (keyLower === "host" || keyLower === "content-length") {
+                continue;
+            }
+            transformedHeaders[keyLower] = request.headers[key];
+        }
+
+        let contentType: string | undefined = undefined;
+        if (transformedHeaders["content-type"] !== undefined) {
+            contentType = transformedHeaders["content-type"];
+        }
+
+        const transformedBody = normaliseRequestBody(body);
+
+        const param: RequestUrlParam = {
+            body: transformedBody,
+            headers: transformedHeaders,
+            method: method,
+            url: url,
+            contentType: contentType,
+            throw: false,
+        };
+
+        const raceOfPromises = [
+            requestUrl(param).then((rsp) => {
+                const headers = rsp.headers;
+                const headersLower: Record<string, string> = {};
+                for (const key of Object.keys(headers)) {
+                    headersLower[key.toLowerCase()] = headers[key];
+                }
+                const stream = new ReadableStream<Uint8Array>({
+                    start(controller) {
+                        controller.enqueue(new Uint8Array(rsp.arrayBuffer));
+                        controller.close();
+                    },
+                });
+                return {
+                    response: new HttpResponse({
+                        headers: headersLower,
+                        statusCode: rsp.status,
+                        body: stream,
+                    }),
+                };
+            }),
+            requestTimeout(this.requestTimeoutInMs),
+        ];
+
+        if (abortSignal) {
+            raceOfPromises.push(
+                new Promise<never>((resolve, reject) => {
+                    abortSignal.onabort = () => {
+                        const abortError = new Error("Request aborted");
+                        abortError.name = "AbortError";
+                        reject(abortError);
+                    };
+                })
+            );
+        }
+        return Promise.race(raceOfPromises);
+    }
+}

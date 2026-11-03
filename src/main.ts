@@ -143,6 +143,16 @@ const ExternalRenameHandlerPlugin = (
 // 操作命令 + bulk 提交组件）按依赖闭包 BFS vendored 进模块 vendor/（36 文件）。
 // 5.0.0 起 handler 经 rename-delete-handover 让给 ARDH 生态——它是 conflict
 // 检查表的最后一条，收编后表整体退役。见 modules/my-better-markdown-links/NOTICE.md。
+// obsidian-livesync v1.0.44（vrtmrz，MIT）：本仓收编体量之最（453 源文件 /
+// 6.8MB，58 个 svelte 组件）——require 桥。上游用 @/ 路径别名与 octagonal-
+// wheels 等，esbuild 侧由 lib10Resolver 同款的 livesyncResolver 插件处理
+// （importer 限定 my-livesync）。数据安全注意：主库独立版活跃同步中，切换
+// 流程见 modules/my-livesync/NOTICE.md。
+const LiveSyncPlugin = (
+	require("../modules/my-livesync/src/main") as {
+		default: new (app: unknown, manifest: unknown) => SubPluginLike;
+	}
+).default;
 const BetterMarkdownLinksPlugin = (
 	require("../modules/my-better-markdown-links/src/main") as {
 		default: new (app: unknown, manifest: unknown) => SubPluginLike;
@@ -502,6 +512,19 @@ export default class MyObsidianPlugin extends Plugin {
 			manifest: { version: "6.4.0" },
 			migrateFrom: "better-markdown-links",
 			cls: BetterMarkdownLinksPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Self-hosted LiveSync v1.0.44（vrtmrz, MIT）——同步插件,数据安全
+			// 敏感:上游 id 存活(migrateFrom 迁主库 170 键配置),S3+E2EE 周期
+			// 同步语义保持。切换流程见 modules/my-livesync/NOTICE.md。
+			id: "obsidian-livesync",
+			name: "my LiveSync",
+			summary:
+				"自托管实时同步：S3/CouchDB/远端适配器 + 端到端加密 + 增量块同步，支持配置同步与插件同步。收编后设置经迁移继承独立版。上游 vrtmrz（MIT）。",
+			desktopOnly: false,
+			manifest: { version: "1.0.44" },
+			migrateFrom: "obsidian-livesync",
+			cls: LiveSyncPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
 			// Third-party (omeyenburg / Oskar Meyenburg, MIT), kept whole — see

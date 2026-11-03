@@ -1,0 +1,246 @@
+import {
+    E2EEAlgorithmNames,
+    E2EEAlgorithms,
+    type HashAlgorithm,
+    LOG_LEVEL_NOTICE,
+    SuffixDatabaseName,
+} from "@vrtmrz/livesync-commonlib/compat/common/types";
+import { Logger } from "@vrtmrz/livesync-commonlib/compat/common/logger";
+import { LiveSyncSetting as Setting } from "./LiveSyncSetting.ts";
+import type { ObsidianLiveSyncSettingTab } from "./ObsidianLiveSyncSettingTab.ts";
+import type { PageFunctions } from "./SettingPane.ts";
+import { visibleOnly } from "./SettingPane.ts";
+import { setButtonAdditionalActionState, setSettingAdditionalActionsState } from "./settingComponentStyles.ts";
+import { PouchDB } from "@vrtmrz/livesync-commonlib/compat/pouchdb/pouchdb-browser";
+import { ExtraSuffixIndexedDB } from "@vrtmrz/livesync-commonlib/compat/common/types";
+import { migrateDatabases } from "./settingUtils.ts";
+import { usesLegacyIndexedDBAdapter } from "@/common/compatibilitySettings.ts";
+import { $msg } from "@/common/translation";
+
+export function panePatches(this: ObsidianLiveSyncSettingTab, paneEl: HTMLElement, { addPanel }: PageFunctions): void {
+    void addPanel(paneEl, $msg("Compatibility (Metadata)")).then((paneEl) => {
+        new Setting(paneEl).autoWireToggle("deleteMetadataOfDeletedFiles");
+
+        new Setting(paneEl).autoWireNumeric("automaticallyDeleteMetadataOfDeletedFiles", {
+            onUpdate: visibleOnly(() => this.isConfiguredAs("deleteMetadataOfDeletedFiles", true)),
+        });
+    });
+
+    void addPanel(paneEl, $msg("Compatibility (Conflict Behaviour)")).then((paneEl) => {
+        new Setting(paneEl).autoWireToggle("disableMarkdownAutoMerge");
+        new Setting(paneEl).autoWireToggle("writeDocumentsIfConflicted");
+    });
+
+    void addPanel(paneEl, $msg("Compatibility (Database structure)")).then((paneEl) => {
+        const migrateAllToIndexedDB = async () => {
+            const dbToName = this.core.localDatabase.dbname + SuffixDatabaseName + ExtraSuffixIndexedDB;
+            const options = {
+                adapter: "indexeddb",
+                //@ts-ignore :missing def
+                purged_infos_limit: 1,
+                auto_compaction: false,
+                deterministic_revs: true,
+            };
+            const openTo = () => {
+                return new PouchDB(dbToName, options);
+            };
+            if (await migrateDatabases("to IndexedDB", this.core.localDatabase.localDatabase, openTo)) {
+                Logger(
+                    "Migration to IndexedDB completed. Obsidian will be restarted with new configuration immediately.",
+                    LOG_LEVEL_NOTICE
+                );
+                // this.plugin.settings.useIndexedDBAdapter = true;
+                // await this.services.setting.saveSettingData();
+                await this.core.services.setting.applyPartial({ useIndexedDBAdapter: true }, true);
+                this.services.appLifecycle.performRestart();
+            }
+        };
+        const migrateAllToIDB = async () => {
+            const dbToName = this.core.localDatabase.dbname + SuffixDatabaseName;
+            const options = {
+                adapter: "idb",
+                auto_compaction: false,
+                deterministic_revs: true,
+            };
+            const openTo = () => {
+                return new PouchDB(dbToName, options);
+            };
+            if (await migrateDatabases("to IDB", this.core.localDatabase.localDatabase, openTo)) {
+                Logger(
+                    "Migration to IDB completed. Obsidian will be restarted with new configuration immediately.",
+                    LOG_LEVEL_NOTICE
+                );
+                await this.core.services.setting.applyPartial({ useIndexedDBAdapter: false }, true);
+                // this.core.settings.useIndexedDBAdapter = false;
+                // await this.services.setting.saveSettingData();
+                this.services.appLifecycle.performRestart();
+            }
+        };
+        {
+            const useIndexedDBAdapter = usesLegacyIndexedDBAdapter(this.editingSettings);
+            const infoClass = useIndexedDBAdapter ? "op-warn" : "op-warn-info";
+            paneEl.createDiv({
+                text: $msg(
+                    "The IndexedDB adapter often offers superior performance in certain scenarios, but it has been found to cause memory leaks when used with LiveSync mode. When using LiveSync mode, please use IDB adapter instead."
+                ),
+                cls: infoClass,
+            });
+            paneEl.createDiv({
+                text: $msg(
+                    "Changing this setting requires migrating existing data (a bit time may be taken) and restarting Obsidian. Please make sure to back up your data before proceeding."
+                ),
+                cls: "op-warn-info",
+            });
+            const setting = new Setting(paneEl)
+                .setName($msg("Database Adapter"))
+                .setDesc($msg("Select the database adapter to use."));
+            const el = setting.controlEl.createDiv({});
+            el.setText(`Current adapter: ${useIndexedDBAdapter ? "IndexedDB" : "IDB"}`);
+            if (!useIndexedDBAdapter) {
+                setting.addButton((button) => {
+                    button.setButtonText("Switch to IndexedDB").onClick(async () => {
+                        Logger("Migrating all data to IndexedDB...", LOG_LEVEL_NOTICE);
+                        await migrateAllToIndexedDB();
+                        Logger(
+                            "Migration to IndexedDB completed. Please switch the adapter and restart Obsidian.",
+                            LOG_LEVEL_NOTICE
+                        );
+                    });
+                });
+            } else {
+                setting.addButton((button) => {
+                    button.setButtonText("Switch to IDB").onClick(async () => {
+                        Logger("Migrating all data to IDB...", LOG_LEVEL_NOTICE);
+                        await migrateAllToIDB();
+                        Logger(
+                            "Migration to IDB completed. Please switch the adapter and restart Obsidian.",
+                            LOG_LEVEL_NOTICE
+                        );
+                    });
+                });
+            }
+        }
+        new Setting(paneEl).autoWireToggle("handleFilenameCaseSensitive", { holdValue: true });
+    });
+
+    void addPanel(paneEl, $msg("Compatibility (Internal API Usage)")).then((paneEl) => {
+        new Setting(paneEl).autoWireToggle("watchInternalFileChanges", { invert: true });
+    });
+    void addPanel(paneEl, $msg("Compatibility (Remote Database)")).then((paneEl) => {
+        new Setting(paneEl).autoWireDropDown("E2EEAlgorithm", {
+            options: E2EEAlgorithmNames,
+        });
+    });
+    new Setting(paneEl).autoWireToggle("useDynamicIterationCount", {
+        holdValue: true,
+        onUpdate: visibleOnly(
+            () =>
+                this.isConfiguredAs("E2EEAlgorithm", E2EEAlgorithms.ForceV1) ||
+                this.isConfiguredAs("E2EEAlgorithm", E2EEAlgorithms.V1)
+        ),
+    });
+
+    void addPanel(paneEl, $msg("Edge case addressing (Database)")).then((paneEl) => {
+        new Setting(paneEl)
+            .autoWireText("additionalSuffixOfDatabaseName", { holdValue: true })
+            .addApplyButton(["additionalSuffixOfDatabaseName"]);
+
+        this.addOnSaved("additionalSuffixOfDatabaseName", async (key) => {
+            Logger("Suffix has been changed. Reopening database...", LOG_LEVEL_NOTICE);
+            if (!(await this.services.databaseEvents.initialiseDatabase())) {
+                Logger($msg("Ui.Common.LocalDatabaseInitialisationFailed"), LOG_LEVEL_NOTICE);
+            }
+        });
+
+        new Setting(paneEl).autoWireDropDown("hashAlg", {
+            options: {
+                "": "Old Algorithm",
+                xxhash32: "xxhash32 (Fast but less collision resistance)",
+                xxhash64: "xxhash64 (Fastest)",
+                "mixed-purejs": "PureJS fallback  (Fast, W/O WebAssembly)",
+                sha1: "Older fallback (Slow, W/O WebAssembly)",
+            } satisfies Record<HashAlgorithm, string>,
+        });
+        this.addOnSaved("hashAlg", async () => {
+            await this.core.localDatabase._prepareHashFunctions();
+        });
+    });
+    void addPanel(paneEl, $msg("Edge case addressing (Behaviour)")).then((paneEl) => {
+        new Setting(paneEl).autoWireToggle("doNotSuspendOnFetching");
+        new Setting(paneEl).autoWireToggle("doNotDeleteFolder");
+        new Setting(paneEl).autoWireToggle("processSizeMismatchedFiles");
+    });
+
+    void addPanel(paneEl, $msg("Edge case addressing (Processing)")).then((paneEl) => {
+        new Setting(paneEl).autoWireToggle("disableWorkerForGeneratingChunks");
+
+        new Setting(paneEl).autoWireToggle("processSmallFilesInUIThread", {
+            onUpdate: visibleOnly(() => this.isConfiguredAs("disableWorkerForGeneratingChunks", false)),
+        });
+    });
+    // void addPanel(paneEl, "Edge case addressing (Networking)").then((paneEl) => {
+    // new Setting(paneEl).autoWireToggle("useRequestAPI");
+    // });
+    void addPanel(paneEl, $msg("Compatibility (Trouble addressed)")).then((paneEl) => {
+        new Setting(paneEl).autoWireToggle("disableCheckingConfigMismatch");
+    });
+    void addPanel(paneEl, $msg("Remediation")).then((paneEl) => {
+        const setting = setSettingAdditionalActionsState(new Setting(paneEl));
+        const dateEl = setting.controlEl.createSpan();
+        setting
+            .addText((text) => {
+                const updateDateText = () => {
+                    if (this.editingSettings.maxMTimeForReflectEvents == 0) {
+                        dateEl.textContent = `No limit configured`;
+                    } else {
+                        const date = new Date(this.editingSettings.maxMTimeForReflectEvents);
+                        dateEl.textContent = `Limit: ${date.toLocaleString()} (${this.editingSettings.maxMTimeForReflectEvents})`;
+                    }
+                    this.requestUpdate();
+                };
+                text.inputEl.type = "datetime-local";
+                if (this.editingSettings.maxMTimeForReflectEvents > 0) {
+                    const date = new Date(this.editingSettings.maxMTimeForReflectEvents);
+                    const isoString = date.toISOString().slice(0, 16);
+                    text.setValue(isoString);
+                } else {
+                    text.setValue("");
+                }
+                text.onChange((value) => {
+                    if (value == "") {
+                        this.editingSettings.maxMTimeForReflectEvents = 0;
+                        updateDateText();
+                        return;
+                    }
+                    const date = new Date(value);
+                    if (!isNaN(date.getTime())) {
+                        this.editingSettings.maxMTimeForReflectEvents = date.getTime();
+                    }
+                    updateDateText();
+                });
+                updateDateText();
+                return text;
+            })
+            .setAuto("maxMTimeForReflectEvents")
+            .addApplyButton(["maxMTimeForReflectEvents"]);
+        if (setting.applyButtonComponent) {
+            setButtonAdditionalActionState(setting.applyButtonComponent);
+        }
+
+        this.addOnSaved("maxMTimeForReflectEvents", async (key) => {
+            const buttons = ["Restart Now", "Later"] as const;
+            const reboot = await this.core.confirm.askSelectStringDialogue(
+                "Restarting Obsidian is strongly recommended. Until restart, some changes may not take effect, and display may be inconsistent. Are you sure to restart now?",
+                buttons,
+                {
+                    title: "Remediation Setting Changed",
+                    defaultAction: "Restart Now",
+                }
+            );
+            if (reboot !== "Later") {
+                Logger("Remediation setting changed. Restarting Obsidian...", LOG_LEVEL_NOTICE);
+                this.services.appLifecycle.performRestart();
+            }
+        });
+    });
+}

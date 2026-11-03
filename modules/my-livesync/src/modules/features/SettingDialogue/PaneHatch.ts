@@ -1,0 +1,1245 @@
+import {
+    type FilePathWithPrefix,
+    type DocumentID,
+    LOG_LEVEL_NOTICE,
+    LOG_LEVEL_VERBOSE,
+    type FilePath,
+    type EntryDoc,
+    type diff_result,
+} from "@vrtmrz/livesync-commonlib/compat/common/types";
+import { createBlob, escapeMarkdownValue, readAsBlob } from "@vrtmrz/livesync-commonlib/compat/common/utils";
+import { Logger } from "@vrtmrz/livesync-commonlib/compat/common/logger";
+import { shouldBeIgnored } from "@vrtmrz/livesync-commonlib/compat/string_and_binary/path";
+import { Menu, TFile, diff_match_patch, setIcon } from "@/deps.ts";
+import { $msg } from "@/common/translation";
+import { Semaphore } from "octagonal-wheels/concurrency/semaphore";
+import { LiveSyncSetting as Setting } from "./LiveSyncSetting.ts";
+import {
+    EVENT_ANALYSE_DB_USAGE,
+    EVENT_INSPECT_DB_INTEGRITY,
+    EVENT_REQUEST_CHECK_REMOTE_SIZE,
+    EVENT_REQUEST_RUN_DOCTOR,
+    EVENT_REQUEST_RUN_FIX_INCOMPLETE,
+    eventHub,
+} from "@/common/events.ts";
+import { HiddenFileSync } from "@/features/HiddenFileSync/CmdHiddenFileSync.ts";
+import { EVENT_REQUEST_SHOW_HISTORY } from "@/common/obsidianEvents.ts";
+import type { ObsidianLiveSyncSettingTab } from "./ObsidianLiveSyncSettingTab.ts";
+import type { PageFunctions } from "./SettingPane.ts";
+import { setButtonDestructiveState } from "./settingComponentStyles.ts";
+import { isNotFoundError } from "@vrtmrz/livesync-commonlib/compat/common/utils.doc";
+import {
+    chooseAndCopyFileDatabaseInfo,
+    collectFileDatabaseInfoPaths,
+    copyFileDatabaseInfo,
+    retryReadFileDatabaseRevision,
+} from "@/serviceFeatures/fileDatabaseInfo.ts";
+import {
+    discardLiveBranch,
+    discardUnreadableLiveRevision,
+    inspectFileRepair,
+    type FileRepairInspection,
+    type FileRepairRevision,
+} from "@/serviceFeatures/fileRepair.ts";
+import {
+    getFileRepairRevisionActions,
+    getFileRepairRevisionComparison,
+} from "@/serviceFeatures/fileRepairPresentation.ts";
+import { ConflictResolveModal } from "@/modules/features/InteractiveConflictResolving/ConflictResolveModal.ts";
+import {
+    inspectMetadataDocumentIdentities,
+    MetadataDocumentRepairResults,
+    OfflineScanUnresolvedReasons,
+    repairMetadataDocumentIdentity,
+    VaultScanResults,
+    type MetadataDocumentIdentityIssue,
+} from "@vrtmrz/livesync-commonlib/compat/serviceFeatures/offlineScanner";
+import {
+    metadataIdentityPathKey,
+    selectUnresolvedMetadataIdentityEntries,
+} from "@/serviceFeatures/metadataIdentityInspection.ts";
+import {
+    executeMetadataIdentityRepair,
+    MetadataIdentityRepairExecutions,
+} from "@/serviceFeatures/metadataIdentityRepair.ts";
+import { showDiagnosticFileLookup } from "@/serviceFeatures/diagnosticFileLookup.ts";
+export function paneHatch(this: ObsidianLiveSyncSettingTab, paneEl: HTMLElement, { addPanel }: PageFunctions): void {
+    // const hatchWarn = this.createEl(paneEl, "div", { text: `To stop the boot up sequence for fixing problems on databases, you can put redflag.md on top of your vault (Rebooting obsidian is required).` });
+    // hatchWarn.addClass("op-warn-info");
+    void addPanel(paneEl, "Reporting Tools").then((paneEl) => {
+        new Setting(paneEl).setName($msg("Prepare the 'report' to create an issue")).addButton((button) =>
+            button
+                .setButtonText($msg("Copy Report to clipboard"))
+                .setCta()
+                .setDisabled(false)
+                .onClick(async () => {
+                    await this.app.commands.executeCommandById("obsidian-livesync:dump-debug-info");
+                })
+        );
+        new Setting(paneEl)
+            .setName($msg("Copy database information for a file"))
+            .setDesc(
+                $msg(
+                    "Copy revision, conflict, and local chunk availability information, including document and chunk identifiers but not file contents."
+                )
+            )
+            .addButton((button) =>
+                button.setButtonText($msg("Choose file")).onClick(async () => {
+                    await chooseAndCopyFileDatabaseInfo(this.core);
+                })
+            );
+        new Setting(paneEl)
+            .setName($msg("Find a file from a report pseudonym"))
+            .setDesc(
+                $msg(
+                    "Find matching paths in this Vault and local Metadata, then prepare a follow-up report using the same pseudonyms."
+                )
+            )
+            .addButton((button) =>
+                button.setButtonText($msg("Find file")).onClick(async () => {
+                    await showDiagnosticFileLookup(this.core, async (path) => {
+                        const file = this.app.vault.getAbstractFileByPath(path);
+                        if (file instanceof TFile) await this.app.workspace.getLeaf(false).openFile(file);
+                    });
+                })
+            );
+        new Setting(paneEl)
+            .setName($msg("Inspect database integrity"))
+            .setDesc(
+                $msg("Read normal-file Metadata and current conflicts locally and in CouchDB, then compare content for suspect groups. Choose original names or pseudonyms before starting.")
+            )
+            .addButton((button) =>
+                button.setButtonText($msg("Inspect")).onClick(() => eventHub.emitEvent(EVENT_INSPECT_DB_INTEGRITY))
+            );
+        new Setting(paneEl)
+            .setName($msg("Analyse database usage"))
+            .setDesc(
+                $msg(
+                    "Analyse database usage and generate a TSV report for diagnosis yourself. You can paste the generated report with any spreadsheet you like."
+                )
+            )
+            .addButton((button) =>
+                button.setButtonText($msg("Analyse")).onClick(() => {
+                    eventHub.emitEvent(EVENT_ANALYSE_DB_USAGE);
+                })
+            );
+    });
+
+    void addPanel(paneEl, "Checks and Recovery").then((paneEl) => {
+        new Setting(paneEl)
+            .setName($msg("Setting.TroubleShooting.Doctor"))
+            .setDesc($msg("Setting.TroubleShooting.Doctor.Desc"))
+            .addButton((button) =>
+                button
+                    .setButtonText($msg("Run Doctor"))
+                    .setCta()
+                    .setDisabled(false)
+                    .onClick(() => {
+                        this.closeSetting();
+                        eventHub.emitEvent(EVENT_REQUEST_RUN_DOCTOR, $msg("you wanted(Thank you)!"));
+                    })
+            );
+        new Setting(paneEl)
+            .setName($msg("Setting.TroubleShooting.ScanBrokenFiles"))
+            .setDesc($msg("Setting.TroubleShooting.ScanBrokenFiles.Desc"))
+            .addButton((button) =>
+                button
+                    .setButtonText($msg("Scan for Broken files"))
+                    .setCta()
+                    .setDisabled(false)
+                    .onClick(() => {
+                        this.closeSetting();
+                        eventHub.emitEvent(EVENT_REQUEST_RUN_FIX_INCOMPLETE);
+                    })
+            );
+    });
+
+    void addPanel(paneEl, $msg("Setting.TroubleShooting")).then((paneEl) => {
+        new Setting(paneEl)
+            .setName($msg("Reset notification threshold and check the remote database usage"))
+            .setDesc($msg("Reset the remote storage size threshold and check the remote storage size again."))
+            .addButton((button) =>
+                button.setButtonText($msg("Check")).onClick(() => {
+                    eventHub.emitEvent(EVENT_REQUEST_CHECK_REMOTE_SIZE);
+                })
+            );
+        new Setting(paneEl).autoWireToggle("writeLogToTheFile");
+    });
+
+    void addPanel(paneEl, $msg("Scram Switches")).then((paneEl) => {
+        new Setting(paneEl).autoWireToggle("suspendFileWatching");
+        this.addOnSaved("suspendFileWatching", () => this.services.appLifecycle.askRestart());
+
+        new Setting(paneEl).autoWireToggle("suspendParseReplicationResult");
+        this.addOnSaved("suspendParseReplicationResult", () => this.services.appLifecycle.askRestart());
+    });
+
+    void addPanel(paneEl, $msg("Recovery and Repair")).then((paneEl) => {
+        const resultArea = paneEl.createDiv({ text: "", cls: "sls-repair-results" });
+        type RepairMenuAction = {
+            title: string;
+            run: () => Promise<void> | void;
+            warning?: boolean;
+        };
+        const addActionMenu = (
+            parent: HTMLElement,
+            label: string,
+            actions: RepairMenuAction[]
+        ) => {
+            if (actions.length === 0) {
+                return;
+            }
+            this.createEl(parent, "button", { cls: "sls-repair-action-menu" }, (button) => {
+                setIcon(button, "wrench");
+                button.setAttr("aria-label", label);
+                button.setAttr("title", label);
+                button.onClickEvent(() => {
+                    const menu = new Menu();
+                    for (const action of actions) {
+                        menu.addItem((item) => {
+                            item.setTitle(action.title);
+                            if (action.warning) {
+                                item.setWarning(true);
+                            }
+                            item.onClick(() => {
+                                button.disabled = true;
+                                void Promise.resolve()
+                                    .then(() => action.run())
+                                    .catch((error) => {
+                                        Logger(error, LOG_LEVEL_VERBOSE);
+                                        Logger(
+                                            `Repair action '${action.title}' failed`,
+                                            LOG_LEVEL_NOTICE
+                                        );
+                                    })
+                                    .finally(() => {
+                                        if (button.isConnected) {
+                                            button.disabled = false;
+                                        }
+                                    });
+                            });
+                        });
+                    }
+                    const rect = button.getBoundingClientRect();
+                    menu.showAtPosition({ x: rect.left, y: rect.bottom });
+                });
+            });
+        };
+        const addMetadataIdentityResult = (entry: MetadataDocumentIdentityIssue) => {
+            const { diagnostic } = entry.inspection;
+            const card = this.createEl(resultArea, "div", { cls: "sls-repair-result" });
+            this.createEl(card, "h6", { text: diagnostic.declaredPath });
+            this.createEl(card, "div", {
+                text: $msg("Metadata entry requires review and was left unchanged"),
+                cls: "sls-repair-status-warning",
+            });
+            this.createEl(card, "div", {
+                text:
+                    diagnostic.reason === OfflineScanUnresolvedReasons.DOCUMENT_ID_MISMATCH
+                        ? $msg("The stored document ID does not match the ID derived from its recorded path.")
+                        : $msg(
+                              "The stored document ID and recorded path are handled by different synchronisation features."
+                          ),
+                cls: "sls-repair-metric",
+            });
+            this.createEl(card, "div", {
+                text: $msg("Stored document ID: ${ID}", { ID: diagnostic.actualDocumentId }),
+                cls: "sls-repair-metric",
+            });
+            if (diagnostic.expectedDocumentId !== undefined) {
+                this.createEl(card, "div", {
+                    text: $msg("Expected document ID: ${ID}", { ID: diagnostic.expectedDocumentId }),
+                    cls: "sls-repair-metric",
+                });
+            }
+            this.createEl(card, "div", {
+                text: $msg("Source revision: ${REVISION}", {
+                    REVISION: entry.sourceRevision ?? $msg("Unknown revision"),
+                }),
+                cls: "sls-repair-metric",
+            });
+            if (entry.logicallyDeleted) {
+                this.createEl(card, "div", {
+                    text: $msg("🗑️ Logical deletion"),
+                    cls: "sls-repair-metric mod-warning",
+                });
+            }
+            if (entry.conflictRevisions.length > 0) {
+                this.createEl(card, "div", {
+                    text: $msg("⚠️ Conflicts: ${COUNT}", { COUNT: `${entry.conflictRevisions.length}` }),
+                    cls: "sls-repair-metric mod-warning",
+                });
+            }
+
+            if (
+                !entry.repairAvailable ||
+                diagnostic.expectedDocumentId === undefined ||
+                entry.sourceRevision === null
+            ) {
+                this.createEl(card, "div", {
+                    text: $msg(
+                        "One-step repair is unavailable because this entry is ambiguous, no longer current, or unsafe to change."
+                    ),
+                    cls: "sls-repair-metric mod-warning",
+                });
+                return;
+            }
+
+            this.createEl(card, "div", {
+                text: entry.targetAlreadyPresent
+                    ? $msg("An exact target is already present; repair can remove the obsolete ID.")
+                    : $msg("Repair is available for this entry."),
+                cls: "sls-repair-status-ok",
+            });
+            const request = {
+                actualDocumentId: diagnostic.actualDocumentId,
+                expectedDocumentId: diagnostic.expectedDocumentId,
+                sourceRevision: entry.sourceRevision,
+            };
+            const repairAction = $msg("Repair Metadata ID");
+            const keepAction = $msg("Keep unchanged");
+            addActionMenu(card, $msg("More actions for ${FILE}", { FILE: diagnostic.declaredPath }), [
+                {
+                    title: $msg("Repair this Metadata document ID"),
+                    warning: true,
+                    run: async () => {
+                        const execution = await executeMetadataIdentityRepair(request, {
+                            confirm: async () =>
+                                (await this.core.confirm.confirmWithMessage(
+                                    $msg("Repair Metadata document ID"),
+                                    $msg(
+                                        "This moves one local Metadata entry to the ID derived from its recorded path.\n\n**File:** `${FILE}`  \n**Source:** `${SOURCE}@${REVISION}`  \n**Target:** `${TARGET}`\n\nThe target is verified before the source is removed. Its CouchDB revision ancestry cannot be preserved.\n\n> [!warning] Before repairing\n> - Back up this device.\n> - If file-name case or path obfuscation was intentionally changed for the whole database, use Rebuild instead.\n> - If other devices share this database, pause them, allow this device to upload the repair, then resume them one at a time.",
+                                        {
+                                            FILE: escapeMarkdownValue(diagnostic.declaredPath),
+                                            SOURCE: escapeMarkdownValue(diagnostic.actualDocumentId),
+                                            REVISION: escapeMarkdownValue(entry.sourceRevision!),
+                                            TARGET: escapeMarkdownValue(diagnostic.expectedDocumentId!),
+                                        }
+                                    ),
+                                    [repairAction, keepAction],
+                                    keepAction,
+                                    undefined,
+                                    "vertical"
+                                )) === repairAction,
+                            repair: async (repairRequest) =>
+                                await repairMetadataDocumentIdentity(this.core, repairRequest),
+                            requestOrdinaryScan: async () =>
+                                (await this.services.vault.scanVault(true, false)) === VaultScanResults.COMPLETED,
+                        });
+
+                        if (execution.status === MetadataIdentityRepairExecutions.CANCELLED) return;
+
+                        const result = execution.result;
+                        if (result.message) Logger(result.message, LOG_LEVEL_VERBOSE);
+                        if (result.status === MetadataDocumentRepairResults.COMPLETED) {
+                            if (execution.scanError !== undefined) {
+                                Logger(execution.scanError, LOG_LEVEL_VERBOSE);
+                            }
+                            resultArea.replaceChildren();
+                            this.createEl(resultArea, "div", {
+                                text: execution.scanCompleted
+                                    ? $msg(
+                                          "Metadata document ID repair and the ordinary Vault scan completed. Run this inspection again after synchronisation."
+                                      )
+                                    : $msg(
+                                          "Metadata document ID repair completed, but the ordinary Vault scan did not run. Keep synchronisation paused, resolve the scan condition, then run 'Scan storage and database again'."
+                                      ),
+                                cls: execution.scanCompleted
+                                    ? "sls-repair-status-ok"
+                                    : "sls-repair-metric mod-warning",
+                            });
+                            return;
+                        }
+
+                        const resultMessage =
+                            result.status === MetadataDocumentRepairResults.STALE ||
+                            result.status === MetadataDocumentRepairResults.BLOCKED
+                                ? $msg("The inspected state changed. No repair was performed; run inspection again.")
+                                : result.targetCreated
+                                  ? $msg(
+                                        "Repair stopped after creating the target. The source was retained. Run inspection again before retrying."
+                                    )
+                                  : $msg(
+                                        "Repair failed before the source was removed. Run inspection again before retrying."
+                                    );
+                        this.createEl(card, "div", {
+                            text: resultMessage,
+                            cls: "sls-repair-metric mod-warning",
+                        });
+                    },
+                },
+            ]);
+        };
+        const findHiddenFile = async (path: string) => {
+            const addOn = this.core.getAddOn<HiddenFileSync>(HiddenFileSync.name);
+            if (!addOn) {
+                return false;
+            }
+            const file = (await addOn.scanInternalFiles()).find((entry) => entry.path === path);
+            if (!file) {
+                Logger(`Failed to find the file in the internal files: ${path}`, LOG_LEVEL_NOTICE);
+                return false;
+            }
+            return { addOn, file };
+        };
+        const storeStorageInDatabase = async (path: string): Promise<boolean> => {
+            if (path.startsWith(".")) {
+                const hidden = await findHiddenFile(path);
+                return hidden
+                    ? Boolean(await hidden.addOn.storeInternalFileToDatabase(hidden.file, true))
+                    : false;
+            }
+            return Boolean(await this.core.fileHandler.storeFileToDB(path as FilePath, true));
+        };
+        const storeStorageOnRevision = async (
+            path: string,
+            revision: string,
+            createIfDifferent = true
+        ): Promise<boolean> => {
+            if (path.startsWith(".")) {
+                const hidden = await findHiddenFile(path);
+                return hidden
+                    ? Boolean(
+                          await hidden.addOn.storeInternalFileToDatabaseWithBaseRevision(
+                              hidden.file,
+                              revision,
+                              createIfDifferent
+                          )
+                      )
+                    : false;
+            }
+            return Boolean(
+                await this.core.fileHandler.storeFileToDBWithBaseRevision(
+                    path as FilePath,
+                    revision,
+                    createIfDifferent
+                )
+            );
+        };
+        const applyRevisionToStorage = async (
+            path: string,
+            revision: string,
+            force: boolean
+        ): Promise<boolean> => {
+            if (path.startsWith(".")) {
+                const addOn = this.core.getAddOn<HiddenFileSync>(HiddenFileSync.name);
+                return addOn
+                    ? Boolean(
+                          await addOn.extractInternalFileRevisionFromDatabase(
+                              path as FilePath,
+                              revision,
+                              force
+                          )
+                      )
+                    : false;
+            }
+            return Boolean(
+                await this.core.fileHandler.dbToStorageWithSpecificRev(
+                    path as FilePath,
+                    revision,
+                    force
+                )
+            );
+        };
+        const openRevisionComparison = async (
+            path: string,
+            selectedRevision: string
+        ): Promise<boolean> => {
+            const latest = await inspectFileRepair(this.core, path);
+            const revision = latest.revisions.find(
+                ({ metadata }) => metadata.revision === selectedRevision
+            );
+            if (
+                !latest.information.storage.exists ||
+                !revision ||
+                revision.loadedEntry === false
+            ) {
+                Logger(
+                    `Could not compare ${path} revision ${selectedRevision}; the Vault file or selected live revision is no longer readable`,
+                    LOG_LEVEL_NOTICE
+                );
+                return false;
+            }
+            const vaultText = await createBlob(
+                await this.core.storageAccess.readHiddenFileBinary(path)
+            ).text();
+            const databaseText = await readAsBlob(revision.loadedEntry).text();
+            const dmp = new diff_match_patch();
+            const diff = dmp.diff_main(vaultText, databaseText);
+            dmp.diff_cleanupSemantic(diff);
+            const result: diff_result = {
+                left: {
+                    rev: "vault",
+                    data: vaultText,
+                    ctime: latest.information.storage.ctime ?? 0,
+                    mtime: latest.information.storage.mtime ?? 0,
+                },
+                right: {
+                    rev: selectedRevision,
+                    data: databaseText,
+                    ctime: revision.metadata.ctime,
+                    mtime: revision.metadata.mtime,
+                },
+                diff,
+            };
+            new ConflictResolveModal(
+                this.app,
+                path as FilePathWithPrefix,
+                result,
+                false,
+                undefined,
+                {
+                    readOnly: true,
+                    title: $msg("Vault and database revision"),
+                    localName: $msg("Vault file"),
+                    remoteName: $msg("Database revision"),
+                }
+            ).open();
+            return true;
+        };
+        const formatSigned = (value: number) => `${value >= 0 ? "+" : ""}${value}`;
+        const timestampRelationLabel = (
+            relation: ReturnType<typeof getFileRepairRevisionComparison>["timestampRelation"]
+        ) => {
+            switch (relation) {
+                case "vault-newer":
+                    return $msg("Vault file is newer");
+                case "database-newer":
+                    return $msg("Database revision is newer");
+                case "same-window":
+                    return $msg("Within the two-second comparison window");
+                default:
+                    return $msg("Timestamp comparison unavailable");
+            }
+        };
+        const addRepairResult = (inspection: FileRepairInspection) => {
+            const { information, revisions } = inspection;
+            const path = information.path;
+            const card = this.createEl(resultArea, "div", { cls: "sls-repair-result" });
+            const refresh = async () => {
+                card.remove();
+                const refreshed = await inspectFileRepair(this.core, path);
+                if (refreshed.requiresAttention) {
+                    addRepairResult(refreshed);
+                } else {
+                    Logger(`Verification no longer reports a problem for ${path}`, LOG_LEVEL_NOTICE);
+                }
+            };
+            const runMutation = async (
+                description: string,
+                mutation: () => Promise<boolean>
+            ) => {
+                try {
+                    const succeeded = await mutation();
+                    if (!succeeded) {
+                        Logger(`${description} failed: ${path}`, LOG_LEVEL_NOTICE);
+                    }
+                } finally {
+                    await refresh();
+                }
+            };
+            const discardLiveBranchAction = (revision: string): RepairMenuAction => ({
+                title: $msg("Discard this branch"),
+                warning: true,
+                run: async () => {
+                    const confirmed =
+                        (await this.core.confirm.askYesNoDialog(
+                            $msg(
+                                "Discard database branch ${REVISION} of ${FILE}? This creates a logical deletion for that exact live branch. The current Vault file will not be changed.",
+                                {
+                                    REVISION: revision,
+                                    FILE: path,
+                                }
+                            ),
+                            {
+                                title: $msg("Discard branch"),
+                                defaultOption: "No",
+                            }
+                        )) === "yes";
+                    if (!confirmed) {
+                        return;
+                    }
+                    const result = await discardLiveBranch(this.core, path, revision);
+                    Logger(
+                        `Discard database branch ${revision} of ${path}: ${result}`,
+                        result === "discarded" ? LOG_LEVEL_NOTICE : LOG_LEVEL_VERBOSE
+                    );
+                    await refresh();
+                },
+            });
+
+            const fileHeader = this.createEl(card, "div", { cls: "sls-repair-header" });
+            this.createEl(fileHeader, "h6", { text: path });
+            const fileMenuHost = this.createEl(fileHeader, "div");
+            if (information.storage.exists) {
+                this.createEl(card, "div", {
+                    text: $msg("📁 Vault: ${SIZE} B · ${TIME}", {
+                        TIME: new Date(information.storage.mtime ?? 0).toLocaleString(),
+                        SIZE: `${information.storage.size ?? 0}`,
+                    }),
+                    cls: "sls-repair-metric",
+                });
+            } else {
+                this.createEl(card, "div", {
+                    text: $msg("📁 Vault: missing"),
+                    cls: "sls-repair-metric",
+                });
+            }
+            if (!information.database.exists) {
+                this.createEl(card, "div", {
+                    text: $msg("🗄️ Local DB: missing"),
+                    cls: "sls-repair-metric",
+                });
+            }
+            if (information.database.conflictCount > 0) {
+                const winner = revisions.find(({ role }) => role === "winner");
+                const vaultMatchesWinner =
+                    winner !== undefined &&
+                    (winner.metadata.deleted
+                        ? !information.storage.exists
+                        : information.storage.exists &&
+                          winner.contentMatchesStorage === true);
+                const status = this.createEl(card, "div", { cls: "sls-repair-status" });
+                if (vaultMatchesWinner) {
+                    this.createEl(status, "span", {
+                        text: $msg("✅ Vault matches winner"),
+                        cls: "sls-repair-status-ok",
+                    });
+                }
+                this.createEl(status, "span", {
+                    text: $msg("⚠️ Conflicts: ${COUNT}", {
+                        COUNT: `${information.database.conflictCount}`,
+                    }),
+                    cls: "sls-repair-status-warning",
+                });
+            }
+
+            const addRevision = (revision: FileRepairRevision) => {
+                const { metadata } = revision;
+                const revisionEl = this.createEl(card, "div", { cls: "sls-repair-revision" });
+                const revisionHeader = this.createEl(revisionEl, "div", {
+                    cls: "sls-repair-header",
+                });
+                this.createEl(revisionHeader, "div", {
+                    text: $msg("${ROLE}: ${REVISION}", {
+                        ROLE: revision.role === "winner" ? $msg("Winner revision") : $msg("Conflict revision"),
+                        REVISION: metadata.revision ?? $msg("Unknown revision"),
+                    }),
+                    cls: "sls-repair-revision-title",
+                });
+                const revisionMenuHost = this.createEl(revisionHeader, "div");
+                const comparison = getFileRepairRevisionComparison(inspection, revision);
+                if (metadata.deleted) {
+                    this.createEl(revisionEl, "div", {
+                        text: $msg("🗑️ Logical deletion"),
+                        cls: "sls-repair-metric",
+                    });
+                } else if (revision.contentReadable) {
+                    this.createEl(revisionEl, "div", {
+                        text: $msg(
+                            "📦 DB: recorded ${RECORDED} B · decoded ${DECODED} B · Δsize ${DIFFERENCE} B",
+                            {
+                                RECORDED: `${comparison.recordedSize}`,
+                                DECODED: `${comparison.decodedSize ?? 0}`,
+                                DIFFERENCE: formatSigned(
+                                    comparison.recordedToDecodedSizeDifference ?? 0
+                                ),
+                            }
+                        ),
+                        cls: "sls-repair-metric",
+                    });
+                } else {
+                    const missing = metadata.chunks.filter(
+                        ({ embedded, localDatabaseState }) =>
+                            !embedded && localDatabaseState !== "available"
+                    );
+                    this.createEl(revisionEl, "div", {
+                        text: $msg("🧩 Missing chunks: ${COUNT}", {
+                            COUNT: `${missing.length}`,
+                        }),
+                        cls: "sls-repair-metric mod-warning",
+                    });
+                    this.createEl(revisionEl, "div", {
+                        text: $msg("📦 DB: recorded ${RECORDED} B · decoded unavailable", {
+                            RECORDED: `${comparison.recordedSize}`,
+                        }),
+                        cls: "sls-repair-metric",
+                    });
+                    if (missing.length > 0) {
+                        this.createEl(revisionEl, "code", {
+                            text: missing
+                                .slice(0, 3)
+                                .map(({ id }) => id)
+                                .join(", ") + (missing.length > 3 ? ", …" : ""),
+                        });
+                    }
+                }
+                if (
+                    comparison.vaultSize !== null &&
+                    comparison.databaseToVaultSizeDifference !== null
+                ) {
+                    this.createEl(revisionEl, "div", {
+                        text: $msg("📁 Vault: ${VAULT} B · Δsize vs DB ${DIFFERENCE} B", {
+                            VAULT: `${comparison.vaultSize}`,
+                            DIFFERENCE: formatSigned(
+                                comparison.databaseToVaultSizeDifference
+                            ),
+                        }),
+                        cls: "sls-repair-metric",
+                    });
+                }
+                if (
+                    comparison.vaultMtime !== null &&
+                    comparison.timestampDifferenceMs !== null
+                ) {
+                    this.createEl(revisionEl, "div", {
+                        text: $msg(
+                            "🕒 DB ${DATABASE_TIME} · Vault ${VAULT_TIME} · Δtime ${DIFFERENCE} ms (${RELATION})",
+                            {
+                                DATABASE_TIME: new Date(
+                                    comparison.databaseMtime
+                                ).toLocaleString(),
+                                VAULT_TIME: new Date(
+                                    comparison.vaultMtime
+                                ).toLocaleString(),
+                                DIFFERENCE: formatSigned(
+                                    comparison.timestampDifferenceMs
+                                ),
+                                RELATION: timestampRelationLabel(
+                                    comparison.timestampRelation
+                                ),
+                            }
+                        ),
+                        cls: "sls-repair-metric",
+                    });
+                }
+                if (revision.contentMatchesStorage === true) {
+                    this.createEl(revisionEl, "div", {
+                        text: $msg("✅ Matches Vault"),
+                        cls: "sls-repair-metric",
+                    });
+                } else if (revision.contentMatchesStorage === false) {
+                    this.createEl(revisionEl, "div", {
+                        text: $msg("⚠️ Differs from Vault"),
+                        cls: "sls-repair-metric mod-warning",
+                    });
+                }
+
+                const policy = getFileRepairRevisionActions(inspection, revision);
+                const revisionActions: RepairMenuAction[] = [];
+                if (metadata.revision && policy.compareWithVault) {
+                    revisionActions.push({
+                        title: $msg("Compare with Vault"),
+                        run: async () => {
+                            await openRevisionComparison(path, metadata.revision!);
+                        },
+                    });
+                }
+                if (metadata.revision && policy.applyRevisionToVault) {
+                    revisionActions.push({
+                        title: $msg("Apply this revision to Vault"),
+                        run: async () => {
+                            if (await this.core.storageAccess.isExistsIncludeHidden(path)) {
+                                const confirmed =
+                                    (await this.core.confirm.askYesNoDialog(
+                                        $msg(
+                                            "Apply database revision ${REVISION} to ${FILE}? The current Vault file will be overwritten.",
+                                            {
+                                                REVISION: metadata.revision!,
+                                                FILE: path,
+                                            }
+                                        ),
+                                        {
+                                            title: $msg("Apply database revision to Vault"),
+                                            defaultOption: "No",
+                                        }
+                                    )) === "yes";
+                                if (!confirmed) {
+                                    return;
+                                }
+                            }
+                            await runMutation(
+                                `Apply database revision ${metadata.revision} to the Vault`,
+                                () =>
+                                    applyRevisionToStorage(
+                                        path,
+                                        metadata.revision!,
+                                        true
+                                    )
+                            );
+                        },
+                    });
+                }
+                if (metadata.revision && policy.markAsVaultRevision) {
+                    revisionActions.push({
+                        title: $msg("Mark this revision as the Vault version"),
+                        run: async () => {
+                            await runMutation(
+                                `Mark database revision ${metadata.revision} as the Vault version`,
+                                () =>
+                                    storeStorageOnRevision(
+                                        path,
+                                        metadata.revision!,
+                                        false
+                                    )
+                            );
+                        },
+                    });
+                }
+                if (metadata.revision && policy.storeVaultOnBranch) {
+                    revisionActions.push({
+                        title: $msg("Store Vault file as a child of this revision"),
+                        run: async () => {
+                            await runMutation(
+                                `Store the Vault file on database revision ${metadata.revision}`,
+                                () =>
+                                    storeStorageOnRevision(
+                                        path,
+                                        metadata.revision!
+                                    )
+                            );
+                        },
+                    });
+                }
+                if (metadata.revision && policy.applyLogicalDeletionToVault) {
+                    revisionActions.push({
+                        title: $msg("Apply logical deletion to Vault"),
+                        warning: true,
+                        run: async () => {
+                            if (await this.core.storageAccess.isExistsIncludeHidden(path)) {
+                                const confirmed =
+                                    (await this.core.confirm.askYesNoDialog(
+                                        $msg(
+                                            "Apply logical deletion ${REVISION} to ${FILE}? The current Vault file will be removed.",
+                                            {
+                                                REVISION: metadata.revision!,
+                                                FILE: path,
+                                            }
+                                        ),
+                                        {
+                                            title: $msg("Apply logical deletion to Vault"),
+                                            defaultOption: "No",
+                                        }
+                                    )) === "yes";
+                                if (!confirmed) {
+                                    return;
+                                }
+                            }
+                            await runMutation(
+                                `Apply logical deletion ${metadata.revision} to the Vault`,
+                                () =>
+                                    applyRevisionToStorage(
+                                        path,
+                                        metadata.revision!,
+                                        true
+                                    )
+                            );
+                        },
+                    });
+                }
+                if (metadata.revision && policy.retryRevision) {
+                    revisionActions.push({
+                        title: $msg("Retry reading revision"),
+                        run: async () => {
+                            const loaded = await retryReadFileDatabaseRevision(
+                                this.core,
+                                path,
+                                metadata.revision!
+                            );
+                            Logger(
+                                loaded
+                                    ? `Revision ${metadata.revision} of ${path} is readable after retry`
+                                    : `Revision ${metadata.revision} of ${path} remains unreadable`,
+                                LOG_LEVEL_NOTICE
+                            );
+                            await refresh();
+                        },
+                    });
+                }
+                if (metadata.revision && policy.discardBranch) {
+                    revisionActions.push(discardLiveBranchAction(metadata.revision));
+                }
+                if (metadata.revision && policy.discardRevision) {
+                    revisionActions.push({
+                        title: $msg("Discard unreadable revision"),
+                        warning: true,
+                        run: async () => {
+                            const confirmed =
+                                (await this.core.confirm.askYesNoDialog(
+                                    $msg(
+                                        "Discard database revision ${REVISION} of ${FILE}? This creates a logical deletion for that exact live revision. Missing content cannot be recovered by this action.",
+                                        {
+                                            REVISION: metadata.revision!,
+                                            FILE: path,
+                                        }
+                                    ),
+                                    {
+                                        title: $msg("Discard unreadable revision"),
+                                        defaultOption: "No",
+                                    }
+                                )) === "yes";
+                            if (!confirmed) {
+                                return;
+                            }
+                            const result = await discardUnreadableLiveRevision(
+                                this.core,
+                                path,
+                                metadata.revision!
+                            );
+                            Logger(
+                                `Discard unreadable revision ${metadata.revision} of ${path}: ${result}`,
+                                result === "discarded" ? LOG_LEVEL_NOTICE : LOG_LEVEL_VERBOSE
+                            );
+                            await refresh();
+                        },
+                    });
+                }
+                addActionMenu(
+                    revisionMenuHost,
+                    $msg("More actions for revision ${REVISION}", {
+                        REVISION: metadata.revision ?? $msg("Unknown revision"),
+                    }),
+                    revisionActions
+                );
+            };
+            revisions.forEach(addRevision);
+
+            for (const revision of information.database.unavailableConflictRevisions) {
+                const revisionEl = this.createEl(card, "div", { cls: "sls-repair-revision" });
+                const revisionHeader = this.createEl(revisionEl, "div", {
+                    cls: "sls-repair-header",
+                });
+                this.createEl(revisionHeader, "div", {
+                    text: $msg("${ROLE}: ${REVISION}", {
+                        ROLE: $msg("Conflict revision"),
+                        REVISION: revision,
+                    }),
+                    cls: "sls-repair-revision-title",
+                });
+                const revisionMenuHost = this.createEl(revisionHeader, "div");
+                this.createEl(revisionEl, "div", {
+                    text: $msg("Revision metadata is unavailable on this device"),
+                    cls: "mod-warning",
+                });
+                addActionMenu(
+                    revisionMenuHost,
+                    $msg("More actions for revision ${REVISION}", {
+                        REVISION: revision,
+                    }),
+                    [
+                        {
+                            title: $msg("Retry reading revision"),
+                            run: async () => {
+                                await retryReadFileDatabaseRevision(
+                                    this.core,
+                                    path,
+                                    revision
+                                );
+                                await refresh();
+                            },
+                        },
+                        discardLiveBranchAction(revision),
+                    ]
+                );
+            }
+
+            for (const base of information.database.mergeBases) {
+                if (base.contentAvailableLocally) {
+                    continue;
+                }
+                this.createEl(card, "div", {
+                    text: base.revision
+                        ? $msg(
+                              "Shared ancestor ${REVISION} is not readable on this device. Automatic three-way merging may be unavailable, but the live revisions remain available for explicit review.",
+                              {
+                                  REVISION: base.revision,
+                              }
+                          )
+                        : $msg(
+                              "No shared ancestor is available for this conflict. The live revisions remain available for explicit review."
+                          ),
+                    cls: "sls-repair-ancestor-warning",
+                });
+            }
+
+            const winner = revisions.find(({ role }) => role === "winner");
+            const fileActions: RepairMenuAction[] = [];
+            if (winner?.loadedEntry) {
+                const winnerEntry = winner.loadedEntry;
+                fileActions.push({
+                    title: $msg("Show revision history"),
+                    run: () => {
+                        eventHub.emitEvent(EVENT_REQUEST_SHOW_HISTORY, {
+                            file: path as FilePathWithPrefix,
+                            fileOnDB: winnerEntry,
+                        });
+                    },
+                });
+            }
+            if (information.storage.exists && !information.database.exists) {
+                fileActions.push({
+                    title: $msg("Store Vault file as a new local database document"),
+                    run: async () => {
+                        await runMutation(
+                            "Store the Vault file as a new local database document",
+                            () => storeStorageInDatabase(path)
+                        );
+                    },
+                });
+            }
+            fileActions.push({
+                title: $msg("Copy database information"),
+                run: async () => {
+                    await copyFileDatabaseInfo(this.core, path);
+                },
+            });
+            addActionMenu(
+                fileMenuHost,
+                $msg("More actions for ${FILE}", { FILE: path }),
+                fileActions
+            );
+        };
+
+        new Setting(paneEl)
+            .setName($msg("Recreate chunks for current Vault files"))
+            .setDesc(
+                $msg(
+                    "Recreate chunks from the files currently present in this Vault. This cannot reconstruct unavailable historical or conflict content."
+                )
+            )
+            .addButton((button) =>
+                button
+                    .setButtonText($msg("Recreate current chunks"))
+                    .setCta()
+                    .onClick(async () => {
+                        await this.core.fileHandler.createAllChunks(true);
+                    })
+            );
+        new Setting(paneEl)
+            .setName($msg("Inspect conflicts and file/database differences"))
+            .setDesc(
+                $msg(
+                    "Scan Vault files and local-database Metadata for conflicts, missing chunks, identity mismatches, and differences. Each result provides actions for one exact entry or revision."
+                )
+            )
+            .addButton((button) =>
+                button
+                    .setButtonText($msg("Begin inspection"))
+                    .setDisabled(false)
+                    .setCta()
+                    .onClick(async () => {
+                        resultArea.replaceChildren();
+                        Logger("Start inspecting file/database state", LOG_LEVEL_NOTICE, "verify");
+                        this.core.localDatabase.clearCaches();
+                        const identityEntries = await inspectMetadataDocumentIdentities(this.core);
+                        const handleFilenameCaseSensitive = this.core.settings.handleFilenameCaseSensitive;
+                        const unresolvedIdentity = selectUnresolvedMetadataIdentityEntries(
+                            identityEntries,
+                            handleFilenameCaseSensitive
+                        );
+                        unresolvedIdentity.entries.forEach(addMetadataIdentityResult);
+                        const allPaths = await collectFileDatabaseInfoPaths(this.core);
+                        let i = 0;
+                        const incProc = () => {
+                            i++;
+                            if (i % 25 == 0)
+                                Logger(
+                                    `Checking ${i}/${allPaths.length} files \n`,
+                                    LOG_LEVEL_NOTICE,
+                                    "verify-processed"
+                                );
+                        };
+                        const semaphore = Semaphore(10);
+                        const processes = allPaths.map(async (path) => {
+                            try {
+                                if (
+                                    unresolvedIdentity.unresolvedPathKeys.has(
+                                        metadataIdentityPathKey(path, handleFilenameCaseSensitive)
+                                    )
+                                ) {
+                                    return incProc();
+                                }
+                                if (shouldBeIgnored(path)) {
+                                    return incProc();
+                                }
+                                const stat = (await this.core.storageAccess.isExistsIncludeHidden(path))
+                                    ? await this.core.storageAccess.statHidden(path)
+                                    : false;
+                                const fileOnStorage = stat != null ? stat : false;
+                                if (!(await this.services.vault.isTargetFile(path))) return incProc();
+                                if (fileOnStorage && this.services.vault.isFileSizeTooLarge(fileOnStorage.size))
+                                    return incProc();
+                                const releaser = await semaphore.acquire(1);
+                                try {
+                                    const inspection = await inspectFileRepair(this.core, path);
+                                    const winner = inspection.revisions.find(({ role }) => role === "winner");
+                                    if (
+                                        winner &&
+                                        this.services.vault.isFileSizeTooLarge(winner.metadata.recordedSize)
+                                    )
+                                        return incProc();
+                                    if (inspection.requiresAttention) {
+                                        addRepairResult(inspection);
+                                    } else {
+                                        Logger(`Compare: SAME: ${path}`);
+                                    }
+                                } catch (ex) {
+                                    Logger(`Error while processing ${path}`, LOG_LEVEL_NOTICE);
+                                    Logger(ex, LOG_LEVEL_VERBOSE);
+                                } finally {
+                                    releaser();
+                                    incProc();
+                                }
+                            } catch (ex) {
+                                Logger(`Error while processing without semaphore ${path}`, LOG_LEVEL_NOTICE);
+                                Logger(ex, LOG_LEVEL_VERBOSE);
+                            }
+                        });
+                        await Promise.all(processes);
+                        Logger("done", LOG_LEVEL_NOTICE, "verify");
+                        // Logger(`${i}/${files.length}\n`, LOG_LEVEL_NOTICE, "verify-processed");
+                    })
+            );
+        new Setting(paneEl)
+            .setName($msg("Resolve All conflicted files by the newer one"))
+            .setDesc(
+                $msg(
+                    "Resolve all conflicted files by the newer one. Caution: This will overwrite the older one, and cannot resurrect the overwritten one."
+                )
+            )
+            .addButton((button) =>
+                button
+                    .setButtonText($msg("Resolve All"))
+                    .setCta()
+                    .onClick(async () => {
+                        const confirmed =
+                            (await this.core.confirm.askYesNoDialog(
+                                $msg(
+                                    "Resolve every conflict by modification time? This logically deletes every version except the newest one and cannot recover content which is already unavailable."
+                                ),
+                                {
+                                    title: $msg("Resolve all conflicts by the newest version"),
+                                    defaultOption: "No",
+                                }
+                            )) === "yes";
+                        if (!confirmed) {
+                            return;
+                        }
+                        await this.services.conflict.resolveAllConflictedFilesByNewerOnes();
+                    })
+            );
+        new Setting(paneEl)
+            .setName($msg("Check and convert non-path-obfuscated files"))
+            .setDesc("")
+            .addButton((button) =>
+                setButtonDestructiveState(button)
+                    .setButtonText($msg("Perform"))
+                    .setDisabled(false)
+                    .onClick(async () => {
+                        for await (const docName of this.core.localDatabase.findAllDocNames()) {
+                            if (!docName.startsWith("f:")) {
+                                const idEncoded = await this.services.path.path2id(docName as FilePathWithPrefix);
+                                const doc = await this.core.localDatabase.getRaw(docName as DocumentID);
+                                if (!doc) continue;
+                                if (doc.type != "newnote" && doc.type != "plain") {
+                                    continue;
+                                }
+                                if (doc?.deleted ?? false) continue;
+                                const newDoc = { ...doc };
+                                //Prepare converted data
+                                newDoc._id = idEncoded;
+                                newDoc.path = docName as FilePathWithPrefix;
+                                // @ts-ignore
+                                delete newDoc._rev;
+                                try {
+                                    const obfuscatedDoc = await this.core.localDatabase.getRaw(idEncoded, {
+                                        revs_info: true,
+                                    });
+                                    // Unfortunately we have to delete one of them.
+                                    // Just now, save it as a conflicted document.
+                                    obfuscatedDoc._revs_info?.shift(); // Drop latest revision.
+                                    const previousRev = obfuscatedDoc._revs_info?.shift(); // Use second revision.
+                                    if (previousRev) {
+                                        newDoc._rev = previousRev.rev;
+                                    } else {
+                                        //If there are no revisions, set the possibly unique one
+                                        newDoc._rev =
+                                            "1-" +
+                                            `00000000000000000000000000000000${~~(Math.random() * 1e9)}${~~(Math.random() * 1e9)}${~~(Math.random() * 1e9)}${~~(Math.random() * 1e9)}`.slice(
+                                                -32
+                                            );
+                                    }
+                                    const ret = await this.core.localDatabase.putRaw(newDoc, { force: true });
+                                    if (ret.ok) {
+                                        Logger(
+                                            `${docName} has been converted as conflicted document`,
+                                            LOG_LEVEL_NOTICE
+                                        );
+                                        doc._deleted = true;
+                                        if ((await this.core.localDatabase.putRaw(doc)).ok) {
+                                            Logger(`Old ${docName} has been deleted`, LOG_LEVEL_NOTICE);
+                                        }
+                                        await this.services.conflict.queueCheckForIfOpen(docName as FilePathWithPrefix);
+                                    } else {
+                                        Logger(`Converting ${docName} Failed!`, LOG_LEVEL_NOTICE);
+                                        Logger(ret, LOG_LEVEL_VERBOSE);
+                                    }
+                                } catch (ex: unknown) {
+                                    if (isNotFoundError(ex)) {
+                                        // We can perform this safely
+                                        if ((await this.core.localDatabase.putRaw(newDoc)).ok) {
+                                            Logger(`${docName} has been converted`, LOG_LEVEL_NOTICE);
+                                            doc._deleted = true;
+                                            if ((await this.core.localDatabase.putRaw(doc)).ok) {
+                                                Logger(`Old ${docName} has been deleted`, LOG_LEVEL_NOTICE);
+                                            }
+                                        }
+                                    } else {
+                                        Logger(`Something went wrong while converting ${docName}`, LOG_LEVEL_NOTICE);
+                                        Logger(ex, LOG_LEVEL_VERBOSE);
+                                        // Something wrong.
+                                    }
+                                }
+                            }
+                        }
+                        Logger(`Converting finished`, LOG_LEVEL_NOTICE);
+                    })
+            );
+    });
+    void addPanel(paneEl, $msg("Reset")).then((paneEl) => {
+        new Setting(paneEl).setName($msg("Back to non-configured")).addButton((button) =>
+            button
+                .setButtonText($msg("Back"))
+                .setDisabled(false)
+                .onClick(async () => {
+                    this.editingSettings.isConfigured = false;
+                    await this.saveAllDirtySettings();
+                    this.services.appLifecycle.askRestart();
+                })
+        );
+
+        new Setting(paneEl).setName($msg("Delete all customization sync data")).addButton((button) =>
+            setButtonDestructiveState(button)
+                .setButtonText($msg("Delete"))
+                .setDisabled(false)
+                .onClick(async () => {
+                    Logger(`Deleting customization sync data`, LOG_LEVEL_NOTICE);
+                    const entriesToDelete = await this.core.localDatabase.allDocsRaw({
+                        startkey: "ix:",
+                        endkey: "ix:\u{10ffff}",
+                        include_docs: true,
+                    });
+                    const newData = entriesToDelete.rows.map((e) => ({
+                        ...e.doc,
+                        _deleted: true,
+                    })) as EntryDoc[];
+                    const r = await this.core.localDatabase.bulkDocsRaw(newData);
+                    // Do not care about the result.
+                    Logger(
+                        `${r.length} items have been removed, to confirm how many items are left, please perform it again.`,
+                        LOG_LEVEL_NOTICE
+                    );
+                })
+        );
+    });
+}

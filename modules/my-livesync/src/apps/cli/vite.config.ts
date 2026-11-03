@@ -1,0 +1,110 @@
+import { defaultServerConditions, defaultServerMainFields, defineConfig } from "vite";
+import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { fileURLToPath, isBuiltin, path } from "@vrtmrz/livesync-commonlib/node";
+import { readVersion } from "../readVersion";
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const resolve = (...args: string[]) => path.resolve(...args).replace(/\\/g, "/");
+const repoRoot = path.resolve(__dirname, "../../..");
+
+const packageVersion = readVersion(path.resolve(repoRoot, "package.json"));
+const manifestVersion = readVersion(path.resolve(repoRoot, "manifest.json"));
+// https://vite.dev/config/
+const defaultExternal = [
+    "obsidian",
+    "electron",
+    "crypto",
+    "pouchdb-adapter-leveldb",
+    "commander",
+    "chokidar",
+    "punycode",
+    "werift",
+];
+// Polyfill FileReader at the very top of the CJS bundle. octagonal-wheels uses
+// FileReader for base64 conversion when Uint8Array.toBase64 (TC39 proposal) is
+// unavailable. Node.js has neither, so we inject a minimal FileReader shim before
+// any module-scope code evaluates.
+const fileReaderPolyfillBanner = `
+if (typeof globalThis.FileReader === "undefined") {
+    globalThis.FileReader = class FileReader {
+        constructor() { this.result = null; this.onload = null; this.onerror = null; }
+        readAsDataURL(blob) {
+            blob.arrayBuffer().then((buf) => {
+                var b64 = require("buffer").Buffer.from(buf).toString("base64");
+                this.result = "data:" + (blob.type || "application/octet-stream") + ";base64," + b64;
+                if (this.onload) this.onload({ target: this });
+            }).catch((err) => { if (this.onerror) this.onerror({ target: this, error: err }); });
+        }
+        readAsArrayBuffer() { throw new Error("FileReader.readAsArrayBuffer is not implemented in this polyfill"); }
+        readAsBinaryString() { throw new Error("FileReader.readAsBinaryString is not implemented in this polyfill"); }
+        readAsText() { throw new Error("FileReader.readAsText is not implemented in this polyfill"); }
+        abort() { throw new Error("FileReader.abort is not implemented in this polyfill"); }
+    };
+}
+`;
+
+const buildInputs: Record<string, string> = {
+    index: resolve(__dirname, "entrypoint.ts"),
+};
+if (process.env.LIVESYNC_CLI_TEST_SUPPORT === "1") {
+    buildInputs["p2p-lifecycle-test"] = resolve(__dirname, "test-support/p2p-lifecycle-entrypoint.ts");
+}
+
+export default defineConfig({
+    plugins: [svelte()],
+    resolve: {
+        // This bundle runs in Node. Vite's client defaults include the `browser`
+        // export condition, which would select Commonlib's inline Web Worker.
+        conditions: [...defaultServerConditions],
+        mainFields: [...defaultServerMainFields],
+        alias: {
+            // The CLI runs on Node.js; force AWS XML builder to its CJS Node entry
+            // so Vite does not resolve the browser DOMParser-based XML parser.
+            "@aws-sdk/xml-builder": resolve(__dirname, "../../../node_modules/@aws-sdk/xml-builder/dist-cjs/index.js"),
+            // Force fflate to the Node CJS entry; browser entry expects Web Worker globals.
+            fflate: resolve(__dirname, "../../../node_modules/fflate/lib/node.cjs"),
+            "@": resolve(__dirname, "../../"),
+        },
+    },
+
+    base: "./",
+    build: {
+        outDir: "dist",
+        emptyOutDir: true,
+        minify: false,
+        sourcemap: process.env.LIVESYNC_CLI_COVERAGE === "1",
+        rollupOptions: {
+            output: {
+                banner: (chunk) => (chunk.isEntry ? fileReaderPolyfillBanner : ""),
+                // c8 filters mapped ranges before resolving relative source paths.
+                sourcemapPathTransform:
+                    process.env.LIVESYNC_CLI_COVERAGE === "1"
+                        ? (source: string, mapPath: string) => path.resolve(path.dirname(mapPath), source)
+                        : undefined,
+            },
+            input: buildInputs,
+            external: (id) => {
+                if (isBuiltin(id)) return true;
+                if (defaultExternal.includes(id)) return true;
+                if (id.startsWith(".") || id.startsWith("/")) return false;
+                if (id.startsWith("@/")) return false;
+                if (id.endsWith(".ts") || id.endsWith(".js")) return false;
+                if (id.startsWith("pouchdb-")) return true;
+                if (id.startsWith("werift")) return true;
+                return false;
+            },
+        },
+        lib: {
+            entry: resolve(__dirname, "entrypoint.ts"),
+            formats: ["cjs"],
+            fileName: (_format, entryName) => `${entryName}.cjs`,
+        },
+    },
+    define: {
+        self: "globalThis",
+        global: "globalThis",
+        nonInteractive: "true",
+        // localStorage: "undefined", // Prevent usage of localStorage in the CLI environment
+        MANIFEST_VERSION: JSON.stringify(process.env.MANIFEST_VERSION || manifestVersion || "0.0.0"),
+        PACKAGE_VERSION: JSON.stringify(process.env.PACKAGE_VERSION || packageVersion || "0.0.0"),
+    },
+});

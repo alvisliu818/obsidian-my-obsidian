@@ -1,0 +1,314 @@
+import { LOG_LEVEL_INFO } from "octagonal-wheels/common/logger";
+import type PouchDB from "pouchdb-core";
+import type { SimpleStore } from "octagonal-wheels/databases/SimpleStoreBase";
+import {
+    type HasSettings,
+    type ObsidianLiveSyncSettings,
+    type EntryDoc,
+} from "@vrtmrz/livesync-commonlib/compat/common/types";
+import { __$checkInstanceBinding } from "@vrtmrz/livesync-commonlib/compat/dev/checks";
+import type { Confirm } from "@vrtmrz/livesync-commonlib/compat/interfaces/Confirm";
+import type { DatabaseFileAccess } from "@vrtmrz/livesync-commonlib/compat/interfaces/DatabaseFileAccess";
+import type { Rebuilder } from "@vrtmrz/livesync-commonlib/compat/interfaces/DatabaseRebuilder";
+import type { IFileHandler } from "@vrtmrz/livesync-commonlib/compat/interfaces/FileHandler";
+import type { StorageAccess } from "@vrtmrz/livesync-commonlib/compat/interfaces/StorageAccess";
+import type { LiveSyncLocalDBEnv } from "@vrtmrz/livesync-commonlib/compat/pouchdb/LiveSyncLocalDB";
+import type { LiveSyncCouchDBReplicatorEnv } from "@vrtmrz/livesync-commonlib/compat/replication/couchdb/LiveSyncReplicator";
+import type { CheckPointInfo } from "@vrtmrz/livesync-commonlib/compat/replication/journal/JournalSyncTypes";
+import type { LiveSyncAbstractReplicator } from "@vrtmrz/livesync-commonlib/compat/replication/LiveSyncAbstractReplicator";
+import type { ReplicatorInstance } from "@vrtmrz/livesync-commonlib/replication";
+import { useTargetFilters } from "@vrtmrz/livesync-commonlib/compat/serviceFeatures/targetFilter";
+import { useRemoteConfigurationMigration } from "@vrtmrz/livesync-commonlib/compat/serviceFeatures/remoteConfig";
+import type { ServiceContext } from "@vrtmrz/livesync-commonlib/context";
+import type { InjectableServiceHub } from "@vrtmrz/livesync-commonlib/compat/services/implements/injectable/InjectableServiceHub";
+import { AbstractModule } from "./modules/AbstractModule";
+import { ModuleResolvingMismatchedTweaks } from "./modules/coreFeatures/ModuleResolveMismatchedTweaks";
+import { ModuleLiveSyncMain } from "./modules/main/ModuleLiveSyncMain";
+import type { ServiceModules } from "@vrtmrz/livesync-commonlib/compat/interfaces/ServiceModule";
+import { usePrepareDatabaseForUse } from "@vrtmrz/livesync-commonlib/compat/serviceFeatures/prepareDatabaseForUse";
+import type { Constructor } from "@vrtmrz/livesync-commonlib/compat/common/utils.type";
+import { useReplicationScheduling, type ReplicationSchedulingControl } from "./serviceFeatures/replicationScheduling";
+import { createCentralReplicatorProviderDefinitions } from "./common/replicatorProviders";
+import { useReplicationFeature } from "./serviceFeatures/replication";
+import { useConflictResolutionFeature } from "./serviceFeatures/conflictResolution";
+import { createInstanceLogFunction } from "@vrtmrz/livesync-commonlib/compat/services/lib/logUtils";
+import { useBasicCommandsFeature } from "./serviceFeatures/basicCommands";
+
+/** Focused views returned by serviceFeatures which the host may consume during composition. */
+export interface LiveSyncCoreFeatureViews {
+    readonly replicationScheduling: ReplicationSchedulingControl;
+}
+
+export interface StartupDatabaseOptions {
+    readonly ignoreSuspending?: boolean;
+    readonly continueOnFileFailure?: boolean;
+}
+
+type CompatibilityReplicatorView = ReplicatorInstance & Partial<LiveSyncAbstractReplicator>;
+
+export class LiveSyncBaseCore<
+    T extends ServiceContext = ServiceContext,
+    TCommands extends IMinimumLiveSyncCommands = IMinimumLiveSyncCommands,
+>
+    implements LiveSyncLocalDBEnv, LiveSyncCouchDBReplicatorEnv, HasSettings<ObsidianLiveSyncSettings>
+{
+    addOns = [] as TCommands[];
+
+    /**
+     * register an add-onn to the plug-in.
+     * Add-ons are features that are not essential to the core functionality of the plugin,
+     * @param addOn
+     */
+    private _registerAddOn(addOn: TCommands) {
+        this.addOns.push(addOn);
+        this.services.appLifecycle.onUnload.addHandler(() => Promise.resolve(addOn.onunload()).then(() => true));
+    }
+
+    /**
+     * Get an add-on by its class name. Returns undefined if not found.
+     * @param cls
+     * @returns
+     */
+    getAddOn<T extends TCommands>(cls: string) {
+        for (const addon of this.addOns) {
+            if (addon.constructor.name == cls) return addon as T;
+        }
+        return undefined;
+    }
+
+    constructor(
+        serviceHub: InjectableServiceHub<T>,
+        serviceModuleInitialiser: (
+            core: LiveSyncBaseCore<T, TCommands>,
+            serviceHub: InjectableServiceHub<T>
+        ) => ServiceModules,
+        extraModuleInitialiser: (core: LiveSyncBaseCore<T, TCommands>) => AbstractModule[],
+        addOnsInitialiser: (core: LiveSyncBaseCore<T, TCommands>) => TCommands[],
+        featuresInitialiser: (core: LiveSyncBaseCore<T, TCommands>, coreFeatureViews: LiveSyncCoreFeatureViews) => void,
+        readonly startupDatabaseOptions: StartupDatabaseOptions = {}
+    ) {
+        this._services = serviceHub;
+        this.registerReplicatorProviders();
+        this._serviceModules = serviceModuleInitialiser(this, serviceHub);
+        const extraModules = extraModuleInitialiser(this);
+        this.registerModules(extraModules);
+        const coreFeatureViews = this.initialiseServiceFeatures();
+        featuresInitialiser(this, coreFeatureViews);
+        const addOns = addOnsInitialiser(this);
+        for (const addOn of addOns) {
+            this._registerAddOn(addOn);
+        }
+        // Compose late core features after host features and add-ons, then bind
+        // legacy modules so lifecycle handlers observe the required order.
+        useReplicationFeature(this);
+        useBasicCommandsFeature(this);
+        this.bindModuleFunctions();
+    }
+    /**
+     * The service hub for managing all services.
+     */
+    _services: InjectableServiceHub<T> | undefined = undefined;
+
+    get services() {
+        if (!this._services) {
+            throw new Error("Services not initialised yet");
+        }
+        return this._services;
+    }
+    /**
+     * Service Modules
+     */
+    protected _serviceModules: ServiceModules;
+
+    get serviceModules() {
+        return this._serviceModules;
+    }
+
+    /**
+     * The modules of the plug-in. Modules are responsible for specific features or functionalities of the plug-in, such as file handling, conflict resolution, replication, etc.
+     */
+    private modules = [
+        // Move to registerModules
+    ] as AbstractModule[];
+
+    /**
+     * Get a module by its class. Throws an error if not found.
+     * Mostly used for getting SetupManager.
+     * @param constructor
+     * @returns
+     */
+    getModule<T extends AbstractModule>(constructor: Constructor<T>): T {
+        for (const module of this.modules) {
+            if (module.constructor === constructor) return module as T;
+        }
+        throw new Error(`Module ${constructor.name} not found or not loaded.`);
+    }
+
+    /**
+     * Register a module to the plug-in.
+     * @param module The module to register.
+     */
+    private _registerModule(module: AbstractModule) {
+        this.modules.push(module);
+    }
+
+    /** Compose the current central providers before any lifecycle event can acquire one. */
+    private registerReplicatorProviders() {
+        this.services.replicator.registerReplicatorProviderDefinitions(
+            createCentralReplicatorProviderDefinitions(this)
+        );
+    }
+
+    public registerModules(extraModules: AbstractModule[] = []) {
+        this._registerModule(new ModuleLiveSyncMain(this));
+        this._registerModule(new ModuleResolvingMismatchedTweaks(this));
+
+        for (const module of extraModules) {
+            this._registerModule(module);
+        }
+        // Test and Dev Modules
+    }
+
+    /**
+     * Bind module functions to services.
+     */
+    public bindModuleFunctions() {
+        for (const module of this.modules) {
+            if (module instanceof AbstractModule) {
+                module.onBindFunction(this, this.services);
+                __$checkInstanceBinding(module); // Check if all functions are properly bound, and log warnings if not.
+            } else {
+                // module should not be never.
+                const moduleName = (module as unknown)?.constructor?.name ?? "unknown";
+                this.services.API.addLog(
+                    `Module ${moduleName} does not have onBindFunction, skipping binding.`,
+                    LOG_LEVEL_INFO
+                );
+            }
+        }
+    }
+    /**
+     * @obsolete Use services.UI.confirm instead. The confirm function to show a confirmation dialog to the user.
+     */
+    get confirm(): Confirm {
+        return this.services.UI.confirm;
+    }
+
+    /**
+     * @obsolete Use services.setting.currentSettings instead. The current settings of the plug-in.
+     */
+    get settings() {
+        return this.services.setting.settings;
+    }
+
+    /**
+     * @obsolete Use services.setting.settings instead. Set the settings of the plug-in.
+     */
+    set settings(value: ObsidianLiveSyncSettings) {
+        this.services.setting.settings = value;
+    }
+
+    /**
+     * @obsolete Use services.setting.currentSettings instead. Get the settings of the plug-in.
+     * @returns The current settings of the plug-in.
+     */
+    getSettings(): ObsidianLiveSyncSettings {
+        return this.settings;
+    }
+
+    /**
+     * @obsolete Use services.database.localDatabase instead. The local database instance.
+     */
+    get localDatabase() {
+        return this.services.database.localDatabase;
+    }
+
+    /**
+     * @obsolete Use services.database.localDatabase instead. Get the PouchDB database instance. Note that this is not the same as the local database instance, which is a wrapper around the PouchDB database.
+     * @returns The PouchDB database instance.
+     */
+    getDatabase(): PouchDB.Database<EntryDoc> {
+        return this.localDatabase.localDatabase;
+    }
+
+    /**
+     * @obsolete Use services.keyValueDB.simpleStore instead. A simple key-value store for storing non-file data, such as checkpoints, sync status, etc.
+     */
+    get simpleStore() {
+        return this.services.keyValueDB.simpleStore as SimpleStore<CheckPointInfo>;
+    }
+
+    /**
+     * @obsolete Use the provider context or a focused service operation instead.
+     * Provider-specific members on this compatibility view are optional.
+     */
+    get replicator(): CompatibilityReplicatorView {
+        return this.services.replicator.getActiveReplicator() as CompatibilityReplicatorView;
+    }
+
+    /**
+     * @obsolete Use services.keyValueDB.kvDB instead. Get the key-value database instance. This is used for storing large data that cannot be stored in the simple store, such as file metadata, etc.
+     */
+    get kvDB() {
+        return this.services.keyValueDB.kvDB;
+    }
+
+    /// Modules which were relied on services
+    /**
+     * Storage Accessor for handling file operations.
+     * @obsolete Use serviceModules.storageAccess instead.
+     */
+    get storageAccess(): StorageAccess {
+        return this.serviceModules.storageAccess;
+    }
+    /**
+     * Database File Accessor for handling file operations related to the database, such as exporting the database, importing from a file, etc.
+     * @obsolete Use serviceModules.databaseFileAccess instead.
+     */
+    get databaseFileAccess(): DatabaseFileAccess {
+        return this.serviceModules.databaseFileAccess;
+    }
+    /**
+     * File Handler for handling file operations related to replication, such as resolving conflicts, applying changes from replication, etc.
+     * @obsolete Use serviceModules.fileHandler instead.
+     */
+    get fileHandler(): IFileHandler {
+        return this.serviceModules.fileHandler;
+    }
+    /**
+     * Rebuilder for handling database rebuilding operations.
+     * @obsolete Use serviceModules.rebuilder instead.
+     */
+    get rebuilder(): Rebuilder {
+        return this.serviceModules.rebuilder;
+    }
+
+    // private initialiseServices<T extends ServiceContext>(serviceHub: InjectableServiceHub<T>) {
+    //     this._services = serviceHub;
+    // }
+    /**
+     * Initialise ServiceFeatures.
+     * (Please refer `serviceFeatures` for more details)
+     */
+    initialiseServiceFeatures(): LiveSyncCoreFeatureViews {
+        useConflictResolutionFeature({
+            services: this.services,
+            serviceModules: this.serviceModules,
+            log: createInstanceLogFunction("SF:ConflictResolution", this.services.API),
+        });
+        useTargetFilters(this);
+        // enable target filter feature.
+        usePrepareDatabaseForUse(this);
+        // Migration to multiple remote configurations
+        useRemoteConfigurationMigration(this);
+        return Object.freeze({
+            replicationScheduling: useReplicationScheduling(this),
+        });
+    }
+}
+
+export interface IMinimumLiveSyncCommands {
+    onunload(): void | Promise<void>;
+    onload(): void | Promise<void>;
+    constructor: { name: string };
+}

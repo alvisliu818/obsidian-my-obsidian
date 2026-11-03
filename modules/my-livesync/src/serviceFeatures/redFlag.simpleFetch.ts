@@ -1,0 +1,317 @@
+import { LOG_LEVEL_NOTICE } from "octagonal-wheels/common/logger";
+import type { NecessaryServices } from "@vrtmrz/livesync-commonlib/compat/interfaces/ServiceModule";
+import { type LogFunction } from "@vrtmrz/livesync-commonlib/compat/services/lib/logUtils";
+import { UnresolvedErrorManager } from "@vrtmrz/livesync-commonlib/compat/services/base/UnresolvedErrorManager";
+import {
+    ExtraOnLocal,
+    ExtraOnRemote,
+    FullScanModes,
+    normaliseFullScanOptions,
+    synchroniseAllFilesBetweenDBandStorage,
+    type FullScanOptions,
+} from "@vrtmrz/livesync-commonlib/compat/serviceFeatures/offlineScanner";
+import { adjustSettingToRemoteIfNeeded, cancelScheduledInitialisation, processVaultInitialisation } from "./redFlag";
+import { $msg } from "@/common/translation";
+import type { AllMessageKeys } from "@/common/rosetta";
+import { readFetchSelection, saveFetchSelection, clearFetchSelection, describeFetchRemote } from "./redFlag.fetchState";
+
+export const SIMPLE_FETCH_STAGE1_REMOTE_WINS = "Overwrite all with remote files";
+export const SIMPLE_FETCH_STAGE1_NEWER_WINS = "Compare time and take newer";
+export const SIMPLE_FETCH_STAGE1_DETAILED = "Use the detailed flow";
+export const SIMPLE_FETCH_STAGE1_CANCEL = "Cancel";
+
+export const SIMPLE_FETCH_STAGE2_REMOTE_DELETE_NONE = "Keep local files even if not on remote";
+export const SIMPLE_FETCH_STAGE2_REMOTE_DELETE_ALL = "Delete local files if not on remote";
+
+export const SIMPLE_FETCH_STAGE2_NEWER_CLEANUP = "Delete local files if deleted on remote";
+export const SIMPLE_FETCH_STAGE2_NEWER_SYNC_ALL = "Keep local files even if deleted on remote";
+export const STAGE2_ABORT = "Cancel all and reboot";
+
+function buildSimpleFetchResult(stage1: string, stage2?: string) {
+    if (stage1 === SIMPLE_FETCH_STAGE1_DETAILED) {
+        return { mode: "detailed", options: {} };
+    }
+    if (stage1 === SIMPLE_FETCH_STAGE1_REMOTE_WINS && stage2) {
+        if (![SIMPLE_FETCH_STAGE2_REMOTE_DELETE_ALL, SIMPLE_FETCH_STAGE2_REMOTE_DELETE_NONE].includes(stage2)) {
+            return undefined;
+        }
+        return {
+            mode: "remote-only",
+            options: {
+                mode: FullScanModes.DB_APPLY,
+                extraOnRemote:
+                    stage2 === SIMPLE_FETCH_STAGE2_REMOTE_DELETE_ALL ? ExtraOnRemote.DELETE_LOCAL_MISSING : undefined,
+            },
+        };
+    }
+    if (stage1 === SIMPLE_FETCH_STAGE1_NEWER_WINS && stage2) {
+        if (![SIMPLE_FETCH_STAGE2_NEWER_CLEANUP, SIMPLE_FETCH_STAGE2_NEWER_SYNC_ALL].includes(stage2)) {
+            return undefined;
+        }
+        return {
+            mode: "newer-wins",
+            options: {
+                mode: FullScanModes.NEWER_WINS,
+                extraOnLocal:
+                    stage2 === SIMPLE_FETCH_STAGE2_NEWER_CLEANUP
+                        ? ExtraOnLocal.DELETE_DB_DELETED
+                        : ExtraOnLocal.APPEND_STORAGE_ONLY,
+            },
+        };
+    }
+    return undefined;
+}
+
+function escapeMarkdownText(value: string): string {
+    return value.replace(/[\\`*_{}[\]()<>|]/g, "\\$&").replace(/[\r\n]/g, " ");
+}
+
+async function confirmTranslatedChoice(
+    host: NecessaryServices<"UI", never>,
+    title: string,
+    message: string,
+    buttons: AllMessageKeys[],
+    defaultAction: AllMessageKeys
+): Promise<string | false> {
+    const labels: string[] = buttons.map((key) => $msg(key));
+    const selected = await host.services.UI.confirm.confirmWithMessage(title, message, labels, $msg(defaultAction), 0);
+    if (selected === false) return false;
+    const index = labels.indexOf(selected);
+    return index < 0 ? false : buttons[index];
+}
+
+export async function askSimpleFetchMode(
+    host: NecessaryServices<"UI" | "setting", "storageAccess">
+): Promise<{ mode: string; options: Partial<FullScanOptions> } | "cancelled" | "aborted"> {
+    const saved = await readFetchSelection(host);
+    const remembered =
+        typeof saved === "object" && saved.stage1 !== SIMPLE_FETCH_STAGE1_DETAILED
+            ? buildSimpleFetchResult(saved.stage1, saved.stage2)
+            : undefined;
+    const canSave = saved === "empty" || remembered !== undefined;
+    const remote = escapeMarkdownText(describeFetchRemote(host.services.setting.currentSettings()));
+    if (remembered && typeof saved === "object") {
+        const decision = await confirmTranslatedChoice(
+            host,
+            $msg("Resume scheduled fetch?"),
+            $msg(
+                "Apply these saved choices to the current remote?\n\nCurrent remote: ${REMOTE}\n\n- ${STAGE1}\n- ${STAGE2}\n\nThe fetch flag may remain after an interruption or an incomplete cleanup. Continue only if this fetch is still intended.",
+                {
+                    REMOTE: remote,
+                    STAGE1: $msg(saved.stage1 as AllMessageKeys),
+                    STAGE2: $msg(saved.stage2 as AllMessageKeys),
+                }
+            ),
+            ["Continue with these choices", "Choose again", SIMPLE_FETCH_STAGE1_CANCEL],
+            SIMPLE_FETCH_STAGE1_CANCEL
+        );
+        if (decision === "Continue with these choices") return remembered;
+        if (decision !== "Choose again") return "cancelled";
+    } else if (saved !== "empty") {
+        const decision = await confirmTranslatedChoice(
+            host,
+            $msg("Saved fetch choices could not be read"),
+            $msg(
+                "The fetch flag does not contain one supported selection. Choose new options and continue with the current remote?\n\nCurrent remote: ${REMOTE}\n\nThe flag contents will remain unchanged. The new choices apply only to this attempt; another restart will ask again. Completing or cancelling the fetch removes the flag.",
+                { REMOTE: remote }
+            ),
+            ["Choose new options and continue", SIMPLE_FETCH_STAGE1_CANCEL],
+            SIMPLE_FETCH_STAGE1_CANCEL
+        );
+        if (decision !== "Choose new options and continue") return "cancelled";
+    }
+
+    const msg = $msg(
+        `We are about to retrieve the remote data.
+
+Firstly, how shall we handle the data retrieved from this remote source?
+
+- **\${NEWER_WINS}**: Compares the modified time of files and takes the newer one.
+  If you have been using Self-hosted LiveSync and have made changes on multiple devices, this option may be suitable for you as it tries to merge changes based on modified time.
+- **\${REMOTE_WINS}**: Remote data is the source of truth.
+  If you are new to using Self-hosted LiveSync. This option may be easiest to understand and get started with.
+  It will overwrite all your local files with the remote data, so please make sure you have a backup if there is any important data in your vault.
+- **\${DETAILED}**: Opens the detailed setup wizard.
+  If you want to have more control over the synchronisation process, or want to review the changes before applying, you can choose this option to use the detailed flow.`,
+        {
+            NEWER_WINS: $msg(SIMPLE_FETCH_STAGE1_NEWER_WINS),
+            REMOTE_WINS: $msg(SIMPLE_FETCH_STAGE1_REMOTE_WINS),
+            DETAILED: $msg(SIMPLE_FETCH_STAGE1_DETAILED),
+        }
+    );
+    const stage1 = await confirmTranslatedChoice(
+        host,
+        $msg("Data retrieval scheduled"),
+        msg,
+        [
+            SIMPLE_FETCH_STAGE1_NEWER_WINS,
+            SIMPLE_FETCH_STAGE1_REMOTE_WINS,
+            SIMPLE_FETCH_STAGE1_DETAILED,
+            SIMPLE_FETCH_STAGE1_CANCEL,
+        ],
+        SIMPLE_FETCH_STAGE1_NEWER_WINS
+    );
+
+    if (!stage1 || stage1 === SIMPLE_FETCH_STAGE1_CANCEL) return "cancelled";
+
+    if (stage1 === SIMPLE_FETCH_STAGE1_DETAILED) {
+        if (canSave) await clearFetchSelection(host);
+        return buildSimpleFetchResult(stage1)!;
+    }
+
+    if (stage1 === SIMPLE_FETCH_STAGE1_REMOTE_WINS) {
+        const msg = $msg(
+            `Since you have chosen to overwrite all local files with remote data, **how would you like to handle local files that are not present in the remote database?**
+
+- **\${DELETE_ALL}**: Local-only files and remote-deleted files will be removed.
+  This option will make your local vault exactly the same as the remote database, but please make sure you have a backup if there is any important data in your vault.
+- **\${DELETE_NONE}**: All existing local files will be preserved.
+  This option will keep all your local files, but it may cause duplicates if there are files that exist on local but not on remote. You can clean up these duplicates manually after the synchronisation.`,
+            {
+                DELETE_ALL: $msg(SIMPLE_FETCH_STAGE2_REMOTE_DELETE_ALL),
+                DELETE_NONE: $msg(SIMPLE_FETCH_STAGE2_REMOTE_DELETE_NONE),
+            }
+        );
+
+        const stage2 = await confirmTranslatedChoice(
+            host,
+            $msg("How to handle extra existing local files?"),
+            msg,
+            [SIMPLE_FETCH_STAGE2_REMOTE_DELETE_ALL, SIMPLE_FETCH_STAGE2_REMOTE_DELETE_NONE, STAGE2_ABORT],
+            SIMPLE_FETCH_STAGE2_REMOTE_DELETE_NONE
+        );
+        if (!stage2) return "cancelled";
+        if (stage2 === STAGE2_ABORT) {
+            if (canSave) await clearFetchSelection(host);
+            return "aborted";
+        }
+        if (canSave) await saveFetchSelection(host, stage1, stage2);
+        return buildSimpleFetchResult(stage1, stage2)!;
+    }
+
+    if (stage1 === SIMPLE_FETCH_STAGE1_NEWER_WINS) {
+        const msg = $msg(
+            `How should files that were deleted on other devices be handled?
+
+- **\${NEWER_CLEANUP}**: Delete local files if they were deleted on remote.
+  This is useful if you want to keep your vault clean and consistent across devices, but please make sure you have a backup if there is already any important data in your vault.
+- **\${NEWER_SYNC_ALL}**: Recreate remote files even if they were deleted on remote.
+  This option will keep all your local files, but it may cause duplicates if there are files that exist on local but not on remote. You can clean up these duplicates manually after the synchronisation.`,
+            {
+                NEWER_CLEANUP: $msg(SIMPLE_FETCH_STAGE2_NEWER_CLEANUP),
+                NEWER_SYNC_ALL: $msg(SIMPLE_FETCH_STAGE2_NEWER_SYNC_ALL),
+            }
+        );
+
+        const stage2 = await confirmTranslatedChoice(
+            host,
+            $msg("Conflict & Deletion Options"),
+            msg,
+            [SIMPLE_FETCH_STAGE2_NEWER_CLEANUP, SIMPLE_FETCH_STAGE2_NEWER_SYNC_ALL, STAGE2_ABORT],
+            SIMPLE_FETCH_STAGE2_NEWER_SYNC_ALL
+        );
+        if (!stage2) return "cancelled";
+        if (stage2 === STAGE2_ABORT) {
+            if (canSave) await clearFetchSelection(host);
+            return "aborted";
+        }
+        if (canSave) await saveFetchSelection(host, stage1, stage2);
+        return buildSimpleFetchResult(stage1, stage2)!;
+    }
+
+    return "cancelled";
+}
+
+const RERUN_PROCESS = "Reboot to re-run the process";
+const RELEASE_FLAG_PROCESS = "Finalise the process and resume normal operation";
+export async function askAndPerformFastSetupOnScheduledFetchAll(
+    host: NecessaryServices<
+        | "vault"
+        | "fileProcessing"
+        | "tweakValue"
+        | "UI"
+        | "setting"
+        | "appLifecycle"
+        | "path"
+        | "keyValueDB"
+        | "database",
+        "storageAccess" | "rebuilder" | "fileHandler"
+    >,
+    log: LogFunction,
+    cleanupFlag: () => Promise<void>
+): Promise<boolean | undefined> {
+    if (host.services.setting.currentSettings().maxMTimeForReflectEvents > 0) {
+        // Simple Fetch reconciles storage with the local database after fetching, past the check which
+        // refuses that scan in remediation mode. Skipping only the scan would restore nothing from most
+        // remotes: reflection of received documents stays suspended while Simple Fetch fetches, so Object
+        // Storage and P2P remotes discard them, and CouchDB Fast Fetch writes them straight into the
+        // database. The detailed flow at least states the restriction and offers to clear it before
+        // rebuilding, instead of quietly reconciling past it.
+        log(
+            "Remediation mode is active, so the detailed fetch flow is used instead of Simple Fetch.",
+            LOG_LEVEL_NOTICE
+        );
+        return undefined;
+    }
+    const result = await askSimpleFetchMode(host);
+    if (result === "cancelled") {
+        log("Fetch cancelled by user.", LOG_LEVEL_NOTICE);
+        return await cancelScheduledInitialisation(host, cleanupFlag);
+    }
+    if (result === "aborted") {
+        log("Fetch exited by user.", LOG_LEVEL_NOTICE);
+        host.services.appLifecycle.performRestart();
+        return false;
+    }
+    if (result.mode === "detailed") {
+        return undefined; // Let the detailed setup flow handle it.
+    }
+
+    const settings = host.services.setting.currentSettings();
+    if (!(await adjustSettingToRemoteIfNeeded(host, log, { preventFetchingConfig: false }, settings))) {
+        log("Fetch initialisation cancelled by user.", LOG_LEVEL_NOTICE);
+        return await cancelScheduledInitialisation(host, cleanupFlag);
+    }
+
+    const performFastSetup = async () => {
+        // 1. Perform fast DB fetch (download remote DB content to local DB)
+        await host.serviceModules.rebuilder.$fetchLocalDBFast(false);
+
+        // 2. Call the extended synchroniseAllFilesBetweenDBandStorage to reflect changes in storage
+        const errorManager = new UnresolvedErrorManager(host.services.appLifecycle, host.services.context.events);
+        const syncResult = await synchroniseAllFilesBetweenDBandStorage(
+            host,
+            log,
+            errorManager,
+            normaliseFullScanOptions({
+                ...result.options,
+                showingNotice: true,
+                omitEvents: true,
+                ignoreSuspending: true,
+            })
+        );
+        if (!syncResult) {
+            const rerunProcess = $msg(RERUN_PROCESS);
+            const releaseFlagProcess = $msg(RELEASE_FLAG_PROCESS);
+            const canRelease = await host.services.UI.confirm.askSelectStringDialogue(
+                $msg("Some files failed to synchronise. What would you like to do?"),
+                [rerunProcess, releaseFlagProcess],
+                { defaultAction: releaseFlagProcess, title: $msg("Synchronisation Issues Detected") }
+            );
+            if (canRelease === rerunProcess) {
+                log("User chose to reboot and re-run the process.", LOG_LEVEL_NOTICE);
+                // Prevent to delete the flag, so that the process will be re-run after reboot.
+                // await cleanupFlag();
+                host.services.appLifecycle.performRestart();
+                return false;
+            }
+        }
+        if (!(await host.serviceModules.rebuilder.finishRebuild())) {
+            throw new Error("Fast Setup could not finalise the rebuilt database.");
+        }
+        await cleanupFlag();
+        log("Simple fetch and scan operation completed.", LOG_LEVEL_NOTICE);
+        return true;
+    };
+    return await processVaultInitialisation(host, log, performFastSetup, "keep-on-failure");
+}

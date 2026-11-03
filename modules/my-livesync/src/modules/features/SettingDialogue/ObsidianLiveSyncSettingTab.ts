@@ -1,0 +1,1372 @@
+import { App, Component, PluginSettingTab, requireApiVersion, SettingPage } from "@/deps.ts";
+import {
+    type ObsidianLiveSyncSettings,
+    type RemoteDBSettings,
+    LOG_LEVEL_NOTICE,
+    REMOTE_COUCHDB,
+    REMOTE_MINIO,
+    type ConfigLevel,
+    LEVEL_POWER_USER,
+    LEVEL_ADVANCED,
+    LEVEL_EDGE_CASE,
+    REMOTE_P2P,
+} from "@vrtmrz/livesync-commonlib/compat/common/types";
+import { delay, isObjectDifferent, sizeToHumanReadable } from "@vrtmrz/livesync-commonlib/compat/common/utils";
+import { Logger } from "@vrtmrz/livesync-commonlib/compat/common/logger";
+import { testCrypt } from "octagonal-wheels/encryption/encryption";
+import ObsidianLiveSyncPlugin from "@/main.ts";
+import { scheduleTask } from "@/common/utils.ts";
+import { REMOTE_RESOURCE_KINDS } from "@vrtmrz/livesync-commonlib/replication";
+import {
+    type AllSettingItemKey,
+    type AllStringItemKey,
+    type AllNumericItemKey,
+    type AllBooleanItemKey,
+    type AllSettings,
+    OnDialogSettingsDefault,
+    type OnDialogSettings,
+    getConfName,
+} from "./settingConstants.ts";
+import { $msg } from "@/common/translation";
+import { LiveSyncSetting as Setting } from "./LiveSyncSetting.ts";
+import { fireAndForget, yieldNextAnimationFrame } from "octagonal-wheels/promises";
+import {
+    EVENT_ON_UNRESOLVED_ERROR,
+    EVENT_REQUEST_COPY_SETUP_URI,
+    EVENT_REQUEST_OPEN_SETUP_URI,
+    EVENT_REQUEST_RELOAD_SETTING_TAB,
+    EVENT_REQUEST_SHOW_SETUP_QR,
+    eventHub,
+} from "@/common/events.ts";
+import {
+    // findAttrFromParent,
+    // getLevelStr,
+    setLevelClass,
+    setStyle,
+    visibleOnly,
+    type OnSavedHandler,
+    type OnSavedHandlerFunc,
+    type OnUpdateFunc,
+    type OnUpdateResult,
+    type DeferredPageElement,
+    type PageFunctions,
+    type UpdateFunction,
+} from "./SettingPane.ts";
+import { JournalSyncCore } from "@vrtmrz/livesync-commonlib/compat/replication/journal/JournalSyncCore";
+import { MinioStorageAdapter } from "@vrtmrz/livesync-commonlib/compat/replication/journal/objectstore/MinioStorageAdapter";
+import { closeObsidianSettings } from "@/common/obsidianSettings.ts";
+import {
+    createAdvancedSettingDefinitionGroups,
+    createExtraMenuSettingDefinitions,
+    createGeneralSettingDefinitionGroups,
+    createSettingsPageCatalogue,
+    getSettingsRootGroupEntry,
+    type SettingsPageEntry,
+    type SettingsRootGroupId,
+} from "./SettingsPageCatalogue.ts";
+import { createAdvancedSettingSpecGroups } from "./AdvancedSettingSpecs.ts";
+import { isValidSettingSpecValue, type SettingSpec } from "./SettingSpec.ts";
+import type {
+    SettingDefinitionAction,
+    SettingDefinitionGroup,
+    SettingDefinitionItem,
+    SettingDefinitionPage,
+    SettingGroupItem,
+} from "obsidian";
+import { createExtraMenuSettingSpecGroup, createGeneralSettingSpecGroups } from "./GeneralSettingSpecs.ts";
+import { SetupManager } from "@/modules/features/SetupManager.ts";
+import { isP2PMainRemote } from "@/common/remoteConfiguration.ts";
+import { withOwnedRemoteResource } from "@/common/ownedRemoteResource.ts";
+import {
+    getSyncGuardSettings,
+    isSyncGuardSettingKey,
+    setSyncGuardSetting,
+} from "@/modules/services/ObsidianSettingService.ts";
+
+// For creating a document
+// const toc = new Set<string>();
+
+export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
+    plugin: ObsidianLiveSyncPlugin;
+    private _lifetimeComponent?: Component;
+    private activePageRefresh?: () => void;
+    get lifetimeComponent(): Component {
+        if (!this._lifetimeComponent) {
+            throw new Error("The settings page render scope has not been initialised");
+        }
+        return this._lifetimeComponent;
+    }
+    get core() {
+        return this.plugin.core;
+    }
+    get services() {
+        return this.core.services;
+    }
+    selectedScreen = "";
+
+    private localConfigurationPassphrase = "";
+    private localSettingsReadVersion = 0;
+
+    _editingSettings?: AllSettings;
+    // Buffered Settings for editing
+    get editingSettings(): AllSettings {
+        if (!this._editingSettings) {
+            this.reloadAllSettings();
+        }
+        return this._editingSettings!;
+    }
+    set editingSettings(v) {
+        if (!this._editingSettings) {
+            this.reloadAllSettings();
+        }
+        this._editingSettings = v;
+    }
+
+    // Buffered Settings for comparing.
+    initialSettings?: typeof this.editingSettings;
+
+    private copySettingValue(target: object | undefined, source: object, key: AllSettingItemKey): void {
+        if (!target) {
+            throw new Error("Initial settings have not been loaded");
+        }
+        const value: unknown = Reflect.get(source, key);
+        Reflect.set(target, key, value);
+    }
+
+    /**
+     * Apply editing setting to the plug-in.
+     * @param keys setting keys for applying
+     */
+    applySetting(keys: AllSettingItemKey[]) {
+        for (const k of keys) {
+            if (!this.isDirty(k)) continue;
+            if (
+                this.isReconstructionRequiredSetting(k) ||
+                this.isConfigurationEncryptionSetting(k) ||
+                isSyncGuardSettingKey(k) ||
+                k in OnDialogSettingsDefault
+            ) {
+                // //@ts-ignore
+                // this.initialSettings[k] = this.editingSettings[k];
+                continue;
+            }
+            this.copySettingValue(this.core.settings, this.editingSettings, k);
+            this.copySettingValue(this.initialSettings, this.core.settings, k);
+        }
+        keys.forEach((e) => {
+            if (this.isConfigurationEncryptionSetting(e) && this.isDirty(e)) return;
+            this.refreshSetting(e);
+        });
+    }
+    async applyAllSettings() {
+        const changedKeys = (Object.keys(this.editingSettings ?? {}) as AllSettingItemKey[]).filter(
+            (e) => this.isDirty(e) && !this.isReconstructionRequiredSetting(e)
+        );
+        await this.saveConfigurationEncryptionIfDirty(changedKeys);
+        for (const key of changedKeys.filter(isSyncGuardSettingKey)) {
+            await setSyncGuardSetting(this.services.setting, key, this.editingSettings[key]);
+            this.copySettingValue(this.initialSettings, this.editingSettings, key);
+        }
+        this.applySetting(changedKeys);
+        this.reloadAllSettings();
+    }
+
+    async saveLocalSetting(key: keyof typeof OnDialogSettingsDefault) {
+        if (key == "deviceAndVaultName") {
+            this.services.setting.setDeviceAndVaultName(this.editingSettings?.[key] ?? "");
+            await this.services.setting.saveDeviceAndVaultName();
+        }
+    }
+    /**
+     * Apply and save setting to the plug-in.
+     * @param keys setting keys for applying
+     */
+    async saveSettings(keys: AllSettingItemKey[]) {
+        let hasChanged = false;
+        const appliedKeys = keys.filter((k) => this.isDirty(k) && !this.isReconstructionRequiredSetting(k));
+        await this.saveConfigurationEncryptionIfDirty(appliedKeys);
+        for (const k of appliedKeys) {
+            if (this.isConfigurationEncryptionSetting(k)) continue;
+            if (isSyncGuardSettingKey(k)) {
+                await setSyncGuardSetting(this.services.setting, k, this.editingSettings[k]);
+                this.copySettingValue(this.initialSettings, this.editingSettings, k);
+                continue;
+            }
+            if (k in OnDialogSettingsDefault) {
+                await this.saveLocalSetting(k as keyof OnDialogSettings);
+                this.copySettingValue(this.initialSettings, this.editingSettings, k);
+                continue;
+            }
+            this.copySettingValue(this.core.settings, this.editingSettings, k);
+            this.copySettingValue(this.initialSettings, this.core.settings, k);
+            hasChanged = true;
+        }
+
+        if (hasChanged) {
+            await this.services.setting.saveSettingData();
+        }
+
+        // if (runOnSaved) {
+        const handlers = this.onSavedHandlers
+            .filter((e) => appliedKeys.indexOf(e.key) !== -1)
+            .map((e) => Promise.resolve(e.handler(this.editingSettings[e.key])));
+        await Promise.all(handlers);
+        // }
+        keys.forEach((e) => {
+            if (this.isReconstructionRequiredSetting(e) && this.isDirty(e)) return;
+            if (this.isConfigurationEncryptionSetting(e) && this.isDirty(e)) return;
+            this.refreshSetting(e);
+        });
+    }
+
+    private isReconstructionRequiredSetting(key: AllSettingItemKey): boolean {
+        return key === "pathNormalizationVersion";
+    }
+
+    private isConfigurationEncryptionSetting(key: AllSettingItemKey): boolean {
+        return key === "configPassphraseStore" || key === "configPassphrase";
+    }
+
+    private async saveConfigurationEncryptionIfDirty(keys: AllSettingItemKey[]): Promise<void> {
+        if (!keys.some((key) => this.isConfigurationEncryptionSetting(key) && this.isDirty(key))) {
+            return;
+        }
+
+        const appliedConfigurationEncryption = {
+            configPassphraseStore: this.editingSettings.configPassphraseStore,
+            configPassphrase: this.editingSettings.configPassphrase,
+        };
+        await this.services.setting.changeConfigurationEncryption(
+            appliedConfigurationEncryption.configPassphraseStore,
+            appliedConfigurationEncryption.configPassphrase
+        );
+
+        if (appliedConfigurationEncryption.configPassphraseStore === "LOCALSTORAGE") {
+            this.localSettingsReadVersion++;
+            this.localConfigurationPassphrase = appliedConfigurationEncryption.configPassphrase;
+        }
+        this.copySettingValue(this.initialSettings, appliedConfigurationEncryption, "configPassphraseStore");
+        this.copySettingValue(this.initialSettings, appliedConfigurationEncryption, "configPassphrase");
+    }
+
+    /**
+     * Apply all editing setting to the plug-in.
+     * @param keys setting keys for applying
+     */
+    async saveAllDirtySettings() {
+        const changedKeys = (Object.keys(this.editingSettings ?? {}) as AllSettingItemKey[]).filter(
+            (e) => this.isDirty(e) && !this.isReconstructionRequiredSetting(e)
+        );
+        await this.saveSettings(changedKeys);
+        this.reloadAllSettings();
+    }
+
+    /**
+     * Invalidate buffered value and fetch the latest.
+     */
+    requestUpdate() {
+        scheduleTask("update-setting", 10, () => {
+            for (const setting of this.settingComponents) {
+                setting._onUpdate();
+            }
+            for (const func of this.controlledElementFunc) {
+                func();
+            }
+            if (requireApiVersion("1.13.0") && typeof this.refreshDomState === "function") {
+                this.refreshDomState();
+            }
+        });
+    }
+
+    /** Re-render the active imperative page without assuming which settings renderer owns it. */
+    requestPageRefresh() {
+        if (this.activePageRefresh) {
+            this.activePageRefresh();
+            return;
+        }
+        if (requireApiVersion("1.13.0") && typeof SettingPage === "function" && typeof this.update === "function") {
+            this.update();
+            return;
+        }
+        this.displayImperative();
+    }
+
+    /** Rebuild the native page catalogue and preserve the current imperative page where possible. */
+    requestCatalogueRefresh() {
+        if (requireApiVersion("1.13.0") && typeof SettingPage === "function" && typeof this.update === "function") {
+            const refreshPage = this.activePageRefresh;
+            const owner = this._lifetimeComponent;
+            this.update();
+            if (owner && this._lifetimeComponent === owner) {
+                refreshPage?.();
+            }
+        } else {
+            this.displayImperative();
+        }
+    }
+
+    private async readLocalSettings(): Promise<boolean> {
+        const version = ++this.localSettingsReadVersion;
+        const passphrase = await this.services.setting.deviceValues.getValue("ls-setting-passphrase", "");
+        if (version !== this.localSettingsReadVersion) return false;
+        this.localConfigurationPassphrase = passphrase;
+        return true;
+    }
+
+    async loadSettings(): Promise<void> {
+        if (await this.readLocalSettings()) this.reloadAllSettings(true);
+    }
+
+    reloadAllLocalSettings() {
+        const ret = { ...OnDialogSettingsDefault };
+        ret.configPassphrase = this.localConfigurationPassphrase;
+        ret.preset = "";
+        ret.deviceAndVaultName = this.services.setting.getDeviceAndVaultName();
+        return { ...ret, ...getSyncGuardSettings(this.services.setting) };
+    }
+    computeAllLocalSettings(): Partial<OnDialogSettings> {
+        const syncMode = this.editingSettings?.liveSync
+            ? "LIVESYNC"
+            : this.editingSettings?.periodicReplication
+              ? "PERIODIC"
+              : "ONEVENTS";
+        return {
+            syncMode,
+        };
+    }
+    /**
+     * Reread all settings and request invalidate
+     */
+    reloadAllSettings(skipUpdate: boolean = false) {
+        const previousSettings = this._editingSettings;
+        const previousSnapshot = this.initialSettings;
+        const pendingPathNormalizationVersion =
+            previousSettings && previousSnapshot && this.isDirty("pathNormalizationVersion")
+                ? {
+                      value: previousSettings.pathNormalizationVersion,
+                      appliedValue: previousSnapshot.pathNormalizationVersion,
+                  }
+                : undefined;
+        const pendingConfigurationEncryption =
+            previousSettings && previousSnapshot
+                ? {
+                      configPassphraseStore: isObjectDifferent(
+                          previousSettings.configPassphraseStore,
+                          previousSnapshot.configPassphraseStore
+                      )
+                          ? { value: previousSettings.configPassphraseStore }
+                          : undefined,
+                      configPassphrase: isObjectDifferent(
+                          previousSettings.configPassphrase,
+                          previousSnapshot.configPassphrase
+                      )
+                          ? { value: previousSettings.configPassphrase }
+                          : undefined,
+                  }
+                : undefined;
+        const localSetting = this.reloadAllLocalSettings();
+        this._editingSettings = { ...this.core.settings, ...localSetting };
+        this._editingSettings = { ...this.editingSettings, ...this.computeAllLocalSettings() };
+        this.initialSettings = { ...this.editingSettings };
+        if (pendingConfigurationEncryption?.configPassphraseStore) {
+            this._editingSettings.configPassphraseStore = pendingConfigurationEncryption.configPassphraseStore.value;
+        }
+        if (pendingConfigurationEncryption?.configPassphrase) {
+            this._editingSettings.configPassphrase = pendingConfigurationEncryption.configPassphrase.value;
+        }
+        if (pendingPathNormalizationVersion) {
+            this._editingSettings.pathNormalizationVersion = pendingPathNormalizationVersion.value;
+            this.initialSettings.pathNormalizationVersion = pendingPathNormalizationVersion.appliedValue;
+        }
+        if (!skipUpdate) this.requestUpdate();
+    }
+
+    /**
+     * Reread each setting and request invalidate
+     */
+    refreshSetting(key: AllSettingItemKey) {
+        if (this.isReconstructionRequiredSetting(key) && this.isDirty(key)) {
+            this.requestUpdate();
+            return;
+        }
+        const localSetting = this.reloadAllLocalSettings();
+        if (isSyncGuardSettingKey(key) || key in this.core.settings) {
+            if (key in localSetting) {
+                this.copySettingValue(this.initialSettings, localSetting, key);
+                this.copySettingValue(this.editingSettings, localSetting, key);
+            } else {
+                this.copySettingValue(this.initialSettings, this.core.settings, key);
+                this.copySettingValue(this.editingSettings, this.initialSettings ?? {}, key);
+            }
+        }
+        this.editingSettings = { ...this.editingSettings, ...this.computeAllLocalSettings() };
+        // this.initialSettings = { ...this.initialSettings };
+        this.requestUpdate();
+    }
+
+    isDirty(key: AllSettingItemKey) {
+        return isObjectDifferent(this.editingSettings[key], this.initialSettings?.[key]);
+    }
+    isSomeDirty(keys: AllSettingItemKey[]) {
+        // if (debug) {
+        //     console.dir(keys);
+        //     console.dir(keys.map(e => this.isDirty(e)));
+        // }
+        return keys.some((e) => this.isDirty(e));
+    }
+
+    isConfiguredAs(key: AllStringItemKey, value: string): boolean;
+    isConfiguredAs(key: AllNumericItemKey, value: number): boolean;
+    isConfiguredAs(key: AllBooleanItemKey, value: boolean): boolean;
+    isConfiguredAs(key: AllSettingItemKey, value: AllSettings[typeof key]) {
+        if (!this.editingSettings) {
+            return false;
+        }
+        return this.editingSettings[key] == value;
+    }
+    // UI Element Wrapper -->
+    settingComponents = [] as Setting[];
+    controlledElementFunc = [] as UpdateFunction[];
+    onSavedHandlers = [] as OnSavedHandler<AllSettingItemKey>[];
+
+    constructor(app: App, plugin: ObsidianLiveSyncPlugin) {
+        super(app, plugin);
+        this.plugin = plugin;
+        Setting.env = this;
+        eventHub.onEvent(EVENT_REQUEST_RELOAD_SETTING_TAB, () => {
+            void this.requestReload().catch((error: unknown) => Logger(error, LOG_LEVEL_NOTICE));
+        });
+        this.addOnSaved("displayLanguage", () => this.requestCatalogueRefresh());
+        this.addOnSaved("showStatusOnEditor", () => eventHub.emitEvent(EVENT_ON_UNRESOLVED_ERROR));
+        this.addOnSaved("networkWarningStyle", () => eventHub.emitEvent(EVENT_ON_UNRESOLVED_ERROR));
+        this.addOnSaved("useAdvancedMode", () => this.requestCatalogueRefresh());
+        this.addOnSaved("usePowerUserMode", () => this.requestCatalogueRefresh());
+        this.addOnSaved("useEdgeCaseMode", () => this.requestCatalogueRefresh());
+    }
+
+    async testConnection(settingOverride: Partial<ObsidianLiveSyncSettings> = {}): Promise<void> {
+        const trialSetting = { ...this.editingSettings, ...settingOverride };
+        const probe = await this.services.replicator.createRemoteResource(
+            REMOTE_RESOURCE_KINDS.CONNECTION,
+            trialSetting
+        );
+        if (!probe) {
+            Logger("Connection testing is unavailable for the current settings.", LOG_LEVEL_NOTICE);
+            return;
+        }
+        await withOwnedRemoteResource(probe, async (ownedProbe) => {
+            await ownedProbe.check({ createIfMissing: true, showResult: true });
+            const status = await ownedProbe.getStatus();
+            if (status && status.estimatedSize) {
+                Logger(
+                    $msg("obsidianLiveSyncSettingTab.logEstimatedSize", {
+                        size: sizeToHumanReadable(status.estimatedSize),
+                    }),
+                    LOG_LEVEL_NOTICE
+                );
+            }
+        });
+    }
+
+    closeSetting() {
+        closeObsidianSettings(this.plugin.app);
+    }
+
+    requestOpenSetupURI(): void {
+        this.closeSetting();
+        eventHub.emitEvent(EVENT_REQUEST_OPEN_SETUP_URI);
+    }
+
+    async rerunOnboardingWizard(): Promise<void> {
+        await this.core.getModule(SetupManager).startOnBoarding();
+    }
+
+    async enableLiveSyncFromSettings(): Promise<void> {
+        this.editingSettings.isConfigured = true;
+        await this.saveAllDirtySettings();
+        this.services.appLifecycle.askRestart();
+    }
+
+    requestCopySetupURI(): void {
+        eventHub.emitEvent(EVENT_REQUEST_COPY_SETUP_URI);
+    }
+
+    requestShowSetupQRCode(): void {
+        eventHub.emitEvent(EVENT_REQUEST_SHOW_SETUP_QR);
+    }
+
+    handleElement(element: HTMLElement, func: OnUpdateFunc) {
+        const updateFunc = ((element, func) => {
+            const prev = {} as OnUpdateResult;
+            return () => {
+                const newValue = func();
+                const keys = Object.keys(newValue) as [keyof OnUpdateResult];
+                for (const k of keys) {
+                    if (prev[k] !== newValue[k]) {
+                        if (k == "visibility") {
+                            element.toggleClass("sls-setting-hidden", !(newValue[k] || false));
+                        }
+                        //@ts-ignore
+                        prev[k] = newValue[k];
+                    }
+                }
+            };
+        })(element, func);
+        this.controlledElementFunc.push(updateFunc);
+        updateFunc();
+    }
+
+    createEl<T extends keyof HTMLElementTagNameMap>(
+        el: HTMLElement,
+        tag: T,
+        o?: string | DomElementInfo,
+        callback?: (el: HTMLElementTagNameMap[T]) => void,
+        func?: OnUpdateFunc
+    ) {
+        const element = el.createEl(tag, o, callback);
+        if (func) this.handleElement(element, func);
+        return element;
+    }
+
+    addEl<T extends keyof HTMLElementTagNameMap>(
+        el: HTMLElement,
+        tag: T,
+        o?: string | DomElementInfo,
+        callback?: (el: HTMLElementTagNameMap[T]) => void,
+        func?: OnUpdateFunc
+    ) {
+        const elm = this.createEl(el, tag, o, callback, func);
+        return Promise.resolve(elm);
+    }
+
+    addOnSaved<T extends AllSettingItemKey>(key: T, func: OnSavedHandlerFunc<T>) {
+        const newHandler = { key, handler: func } as OnSavedHandler<AllSettingItemKey>;
+        const existing = this.onSavedHandlers.findIndex((handler) => handler.key === key);
+        if (existing === -1) {
+            this.onSavedHandlers.push(newHandler);
+        } else {
+            this.onSavedHandlers.splice(existing, 1, newHandler);
+        }
+    }
+    resetEditingSettings() {
+        this._editingSettings = undefined;
+        this.initialSettings = undefined;
+    }
+
+    override hide() {
+        this.disposeRenderScope();
+        super.hide();
+        this.isShown = false;
+    }
+    isShown: boolean = false;
+
+    private changesPageCatalogue(key: AllSettingItemKey): boolean {
+        return (
+            key === "displayLanguage" ||
+            key === "useAdvancedMode" ||
+            key === "usePowerUserMode" ||
+            key === "useEdgeCaseMode" ||
+            key === "isConfigured" ||
+            key === "liveSync" ||
+            key === "periodicReplication" ||
+            key === "syncOnSave" ||
+            key === "syncOnEditorSave" ||
+            key === "syncOnStart" ||
+            key === "syncOnFileOpen" ||
+            key === "syncAfterMerge"
+        );
+    }
+
+    async requestReload(): Promise<void> {
+        if (!(await this.readLocalSettings())) return;
+        const nativeTabIsShown =
+            this.supportsDeclarativeSettings() && this.containerEl !== undefined && this.containerEl.isShown();
+        if (this.isShown || nativeTabIsShown) {
+            const newConf = { ...this.core.settings, ...getSyncGuardSettings(this.services.setting) };
+            const keys = Object.keys(newConf) as AllSettingItemKey[];
+            let hasLoaded = false;
+            let catalogueVisibilityChanged = false;
+            for (const k of keys) {
+                if (isObjectDifferent(Reflect.get(newConf, k), this.initialSettings?.[k])) {
+                    // Something has changed
+                    if (this.isDirty(k)) {
+                        // And modified.
+                        this.core.confirm.askInPopup(
+                            `config-reloaded-${k}`,
+                            $msg("obsidianLiveSyncSettingTab.msgSettingModified", {
+                                setting: getConfName(k),
+                            }),
+                            (anchor) => {
+                                anchor.text = $msg("obsidianLiveSyncSettingTab.optionHere");
+                                anchor.addEventListener("click", () => {
+                                    this.refreshSetting(k);
+                                    if (this.changesPageCatalogue(k)) {
+                                        this.requestCatalogueRefresh();
+                                    } else {
+                                        this.requestPageRefresh();
+                                    }
+                                });
+                            }
+                        );
+                    } else {
+                        // not modified
+                        this.refreshSetting(k);
+                        if (k in OnDialogSettingsDefault) {
+                            continue;
+                        }
+                        hasLoaded = true;
+                        if (this.changesPageCatalogue(k)) {
+                            catalogueVisibilityChanged = true;
+                        }
+                    }
+                }
+            }
+            if (hasLoaded) {
+                if (catalogueVisibilityChanged) {
+                    this.requestCatalogueRefresh();
+                } else {
+                    this.requestPageRefresh();
+                }
+            } else {
+                this.requestUpdate();
+            }
+        } else {
+            this.reloadAllSettings(true);
+        }
+    }
+
+    screenElements: { [key: string]: HTMLElement[] } = {};
+    changeDisplay(screen: string) {
+        for (const k in this.screenElements) {
+            if (k == screen) {
+                this.screenElements[k].forEach((element) => element.removeClass("setting-collapsed"));
+            } else {
+                this.screenElements[k].forEach((element) => element.addClass("setting-collapsed"));
+            }
+        }
+        if (this.menuEl) {
+            this.menuEl.querySelectorAll(`.sls-setting-label`).forEach((element) => {
+                if (element.hasClass(`c-${screen}`)) {
+                    element.addClass("selected");
+                    element.querySelector<HTMLInputElement>("input[type=radio]")!.checked = true;
+                } else {
+                    element.removeClass("selected");
+                    element.querySelector<HTMLInputElement>("input[type=radio]")!.checked = false;
+                }
+            });
+        }
+        this.selectedScreen = screen;
+    }
+    menuEl?: HTMLElement;
+
+    addScreenElement(key: string, element: HTMLElement) {
+        if (!(key in this.screenElements)) {
+            this.screenElements[key] = [];
+        }
+        this.screenElements[key].push(element);
+    }
+
+    selectPane(event: Event) {
+        const target = event.target as HTMLElement;
+        if (target.tagName == "INPUT") {
+            const value = target.getAttribute("value");
+            if (value && this.selectedScreen != value) {
+                this.changeDisplay(value);
+            }
+        }
+    }
+
+    // Internal Metadata encryption affects future Metadata writes and is not a rebuild requirement.
+    isNeedRebuildLocal() {
+        return this.isSomeDirty([
+            "useIndexedDBAdapter",
+            "handleFilenameCaseSensitive",
+            "passphrase",
+            "useDynamicIterationCount",
+            "usePathObfuscation",
+            "pathNormalizationVersion",
+            "encrypt",
+            // "remoteType",
+        ]);
+    }
+    isNeedRebuildRemote() {
+        return this.isSomeDirty([
+            "handleFilenameCaseSensitive",
+            "passphrase",
+            "useDynamicIterationCount",
+            "usePathObfuscation",
+            "pathNormalizationVersion",
+            "encrypt",
+        ]);
+    }
+    isLiveSyncConfigured() {
+        return this.isConfiguredAs("isConfigured", true);
+    }
+
+    private supportsDeclarativeSettings(): boolean {
+        return requireApiVersion("1.13.0") && typeof SettingPage === "function";
+    }
+
+    private isPageVisible(level?: ConfigLevel): boolean {
+        if (level === LEVEL_ADVANCED) {
+            return this.isConfiguredAs("useAdvancedMode", true);
+        }
+        if (level === LEVEL_POWER_USER) {
+            return this.isConfiguredAs("usePowerUserMode", true);
+        }
+        if (level === LEVEL_EDGE_CASE) {
+            return this.isConfiguredAs("useEdgeCaseMode", true);
+        }
+        return true;
+    }
+
+    private getDeclarativeSettingSpec(key: string): SettingSpec {
+        const spec = [
+            ...createGeneralSettingSpecGroups({
+                showEditorStatusDetails: () => this.isConfiguredAs("showStatusOnEditor", true),
+                showVerboseLog: () => this.isConfiguredAs("lessInformationInLog", false),
+            }),
+            createExtraMenuSettingSpecGroup(),
+            ...createAdvancedSettingSpecGroups({
+                isCouchDB: () => this.isConfiguredAs("remoteType", REMOTE_COUCHDB),
+            }),
+        ]
+            .flatMap((group) => group.items)
+            .find((candidate) => candidate.key === key);
+        if (!spec) {
+            throw new Error(`Unknown declarative setting key: ${key}`);
+        }
+        return spec;
+    }
+
+    override getControlValue(key: string): unknown {
+        const spec = this.getDeclarativeSettingSpec(key);
+        const value = this.editingSettings[spec.key];
+        return spec.control.type === "numeric-dropdown" ? `${value}` : value;
+    }
+
+    override async setControlValue(key: string, value: unknown): Promise<void> {
+        const spec = this.getDeclarativeSettingSpec(key);
+        const persistedValue =
+            spec.control.type === "numeric-dropdown" && typeof value === "string" ? Number(value) : value;
+        if (!isValidSettingSpecValue(spec, persistedValue)) {
+            throw new TypeError(`Invalid value for declarative setting ${key}`);
+        }
+        Reflect.set(this.editingSettings, spec.key, persistedValue);
+        if (spec.holdValue) {
+            this.requestUpdate();
+        } else {
+            await this.saveSettings([spec.key]);
+        }
+    }
+
+    private createRebuildRequiredAction(): SettingDefinitionAction {
+        return {
+            name: $msg("obsidianLiveSyncSettingTab.optionApply"),
+            desc: $msg("obsidianLiveSyncSettingTab.msgChangesNeedToBeApplied"),
+            visible: () => this.isNeedRebuildLocal() || this.isNeedRebuildRemote(),
+            action: () => fireAndForget(async () => await this.confirmRebuild()),
+        };
+    }
+
+    private renderRebuildRequiredAction(parentEl: HTMLElement): void {
+        this.createEl(
+            parentEl,
+            "div",
+            { cls: "sls-setting-menu-buttons" },
+            (el) => {
+                el.createEl("label", { text: $msg("obsidianLiveSyncSettingTab.msgChangesNeedToBeApplied") });
+                void this.addEl(
+                    el,
+                    "button",
+                    { text: $msg("obsidianLiveSyncSettingTab.optionApply"), cls: "mod-warning" },
+                    (buttonEl) => {
+                        buttonEl.addEventListener("click", () =>
+                            fireAndForget(async () => await this.confirmRebuild())
+                        );
+                    }
+                );
+            },
+            visibleOnly(() => this.isNeedRebuildLocal() || this.isNeedRebuildRemote())
+        );
+    }
+
+    private addPanel(
+        parentEl: HTMLElement,
+        title: string,
+        callback?: (el: HTMLDivElement) => void,
+        func?: OnUpdateFunc,
+        level?: ConfigLevel
+    ): DeferredPageElement {
+        const owner = this.lifetimeComponent;
+        const el = this.createEl(parentEl, "div", { text: "" }, callback, func);
+        setLevelClass(el, level);
+        this.createEl(el, "h4", { text: title, cls: "sls-setting-panel-title" });
+        return this.resolveWithinRenderScope(el, owner);
+    }
+
+    /** Run delayed pane construction only while the requesting page still owns the render scope. */
+    private resolveWithinRenderScope<T extends HTMLElement>(value: T, owner: Component): DeferredPageElement<T> {
+        return {
+            then: (callback) => {
+                queueMicrotask(() => {
+                    if (this._lifetimeComponent === owner) {
+                        callback(value);
+                    }
+                });
+            },
+        };
+    }
+
+    private renderCustomPage(page: SettingPage, entry: SettingsPageEntry): Component {
+        if (requireApiVersion("1.13.0")) {
+            const component = this.beginRenderScope(() => page.display());
+            this.isShown = true;
+            page.title = entry.name();
+            page.containerEl.empty();
+            page.containerEl.addClass("sls-setting");
+            setStyle(page.containerEl, "menu-setting-poweruser", () => this.isConfiguredAs("usePowerUserMode", true));
+            setStyle(page.containerEl, "menu-setting-advanced", () => this.isConfiguredAs("useAdvancedMode", true));
+            setStyle(page.containerEl, "menu-setting-edgecase", () => this.isConfiguredAs("useEdgeCaseMode", true));
+            this.renderRebuildRequiredAction(page.containerEl);
+
+            const addPane: PageFunctions["addPane"] = (parentEl, title, _icon, _order, level) => {
+                const paneEl = this.createEl(parentEl, "div", { text: "" });
+                setLevelClass(paneEl, level);
+                new Setting(paneEl).setName(title).setHeading().setClass("sls-setting-pane-title");
+                return this.resolveWithinRenderScope(paneEl, component);
+            };
+            entry.legacy.call(this, page.containerEl, {
+                addPane,
+                addPanel: this.addPanel.bind(this),
+            });
+            this.requestUpdate();
+            return component;
+        }
+        throw new Error("Custom settings pages require Obsidian 1.13.0 or later");
+    }
+
+    private createCustomSettingPage(entry: SettingsPageEntry): SettingPage {
+        if (requireApiVersion("1.13.0") && typeof SettingPage === "function") {
+            const renderCustomPage = this.renderCustomPage.bind(this);
+            const disposeRenderScope = this.disposeRenderScope.bind(this);
+            return new (class extends SettingPage {
+                private scope?: Component;
+                override title = entry.name();
+
+                override display(): void {
+                    this.scope = renderCustomPage(this, entry);
+                }
+
+                override hide(): void {
+                    disposeRenderScope(this.scope);
+                    this.scope = undefined;
+                    super.hide();
+                }
+            })();
+        }
+        throw new Error("Custom settings pages require Obsidian 1.13.0 or later");
+    }
+
+    private createDeclarativePage(entry: SettingsPageEntry): SettingDefinitionPage {
+        const page: SettingDefinitionPage = {
+            type: "page",
+            name: `${entry.icon} ${entry.name()}`,
+            visible: () => this.isPageVisible(entry.level),
+        };
+        if (entry.content === "native") {
+            page.items = [
+                this.createRebuildRequiredAction(),
+                ...createAdvancedSettingDefinitionGroups({
+                    isCouchDB: () => this.isConfiguredAs("remoteType", REMOTE_COUCHDB),
+                }),
+            ];
+        } else {
+            page.page = () => this.createCustomSettingPage(entry);
+        }
+        return page;
+    }
+
+    private createGeneralSettingsGroup(): SettingDefinitionGroup {
+        const groups = createGeneralSettingDefinitionGroups({
+            showEditorStatusDetails: () => this.isConfiguredAs("showStatusOnEditor", true),
+            showVerboseLog: () => this.isConfiguredAs("lessInformationInLog", false),
+        });
+        const [appearance, logging] = groups;
+        if (!appearance || !logging) {
+            throw new Error("General settings must define Appearance and Logging groups");
+        }
+        return this.createRootGroup("general-settings", [
+            {
+                type: "page",
+                name: `🎨 ${appearance.heading}`,
+                items: appearance.items,
+            },
+            {
+                type: "page",
+                name: `📝 ${logging.heading}`,
+                items: logging.items,
+            },
+            this.createExtraMenusPage(),
+        ]);
+    }
+
+    private createExtraMenusPage(): SettingDefinitionPage {
+        return {
+            type: "page",
+            name: `🎚️ ${$msg("obsidianLiveSyncSettingTab.titleExtraMenus")}`,
+            items: createExtraMenuSettingDefinitions(),
+        };
+    }
+
+    private createQuickSetupGroup(): SettingDefinitionGroup {
+        return this.createRootGroup("quick-setup", [
+            {
+                name: $msg("obsidianLiveSyncSettingTab.nameConnectSetupURI"),
+                desc: $msg("obsidianLiveSyncSettingTab.descConnectSetupURI"),
+                action: () => this.requestOpenSetupURI(),
+            },
+            {
+                name: $msg("Rerun Onboarding Wizard"),
+                desc: $msg("Rerun the onboarding wizard to set up Self-hosted LiveSync again."),
+                action: () => fireAndForget(async () => await this.rerunOnboardingWizard()),
+            },
+            {
+                name: $msg("obsidianLiveSyncSettingTab.nameEnableLiveSync"),
+                desc: $msg("obsidianLiveSyncSettingTab.descEnableLiveSync"),
+                visible: () => !this.isConfiguredAs("isConfigured", true),
+                action: () => fireAndForget(async () => await this.enableLiveSyncFromSettings()),
+            },
+        ]);
+    }
+
+    private createRootGroup(
+        id: SettingsRootGroupId,
+        items: SettingGroupItem[],
+        visible?: () => boolean
+    ): SettingDefinitionGroup {
+        const { icon, name } = getSettingsRootGroupEntry(id);
+        return {
+            type: "group",
+            heading: `${icon} ${name()}`,
+            items,
+            ...(visible ? { visible } : {}),
+        };
+    }
+
+    private createSetupOtherDevicesGroup(): SettingDefinitionGroup {
+        return this.createRootGroup(
+            "setup-other-devices",
+            [
+                {
+                    name: $msg("obsidianLiveSyncSettingTab.nameCopySetupURI"),
+                    desc: $msg("obsidianLiveSyncSettingTab.descCopySetupURI"),
+                    action: () => this.requestCopySetupURI(),
+                },
+                {
+                    name: $msg("Setup.ShowQRCode"),
+                    desc: $msg("Setup.ShowQRCode.Desc"),
+                    action: () => this.requestShowSetupQRCode(),
+                },
+            ],
+            () => this.isConfiguredAs("isConfigured", true)
+        );
+    }
+
+    override getSettingDefinitions(): SettingDefinitionItem[] {
+        if (!this.supportsDeclarativeSettings()) {
+            return [];
+        }
+        const catalogue = createSettingsPageCatalogue();
+        const getPage = (id: string): SettingDefinitionPage => {
+            const entry = catalogue.find((candidate) => candidate.id === id);
+            if (!entry) {
+                throw new Error(`Unknown settings page: ${id}`);
+            }
+            return this.createDeclarativePage(entry);
+        };
+        const synchronisation = this.createRootGroup("synchronisation", [
+            getPage("remote-configuration"),
+            getPage("synchronisation"),
+        ]);
+        const generalSettings = this.createGeneralSettingsGroup();
+        const quickSetup = this.createQuickSetupGroup();
+        const setupOtherDevices = this.createSetupOtherDevicesGroup();
+        const maintenance = this.createRootGroup("maintenance-and-recovery", [
+            getPage("maintenance"),
+            getPage("hatch"),
+        ]);
+        const extraFeatures = this.createRootGroup(
+            "extra-features",
+            [getPage("selector"), getPage("customisation-sync")],
+            () => this.isPageVisible(LEVEL_ADVANCED)
+        );
+        const advancedSettings = this.createRootGroup(
+            "advanced-settings",
+            [getPage("advanced"), getPage("power-users"), getPage("patches")],
+            () =>
+                this.isPageVisible(LEVEL_ADVANCED) ||
+                this.isPageVisible(LEVEL_POWER_USER) ||
+                this.isPageVisible(LEVEL_EDGE_CASE)
+        );
+        const helpAndInformation = this.createRootGroup("help-and-information", [
+            getPage("help"),
+            getPage("change-log"),
+        ]);
+        const laterGroups = [maintenance, extraFeatures, advancedSettings, helpAndInformation];
+
+        const pendingInitialisation = this.createRebuildRequiredAction();
+        if (this.isLiveSyncConfigured()) {
+            return [
+                pendingInitialisation,
+                synchronisation,
+                generalSettings,
+                setupOtherDevices,
+                quickSetup,
+                ...laterGroups,
+            ];
+        }
+        return [pendingInitialisation, quickSetup, synchronisation, generalSettings, setupOtherDevices, ...laterGroups];
+    }
+
+    private beginRenderScope(refresh: () => void): Component {
+        this.disposeRenderScope();
+        const component = new Component();
+        this._lifetimeComponent = component;
+        this.activePageRefresh = refresh;
+        this.settingComponents.length = 0;
+        this.controlledElementFunc.length = 0;
+        component.load();
+        return component;
+    }
+
+    private disposeRenderScope(owner?: Component): void {
+        if (owner && this._lifetimeComponent !== owner) {
+            return;
+        }
+        this._lifetimeComponent?.unload();
+        this._lifetimeComponent = undefined;
+        this.activePageRefresh = undefined;
+        this.settingComponents.length = 0;
+        this.controlledElementFunc.length = 0;
+    }
+
+    onlyOnP2POrCouchDB = () =>
+        ({
+            visibility:
+                this.isConfiguredAs("remoteType", REMOTE_P2P) || this.isConfiguredAs("remoteType", REMOTE_COUCHDB),
+        }) as OnUpdateResult;
+
+    onlyOnCouchDB = () =>
+        ({
+            visibility: this.isConfiguredAs("remoteType", REMOTE_COUCHDB),
+        }) as OnUpdateResult;
+    onlyOnMinIO = () =>
+        ({
+            visibility: this.isConfiguredAs("remoteType", REMOTE_MINIO),
+        }) as OnUpdateResult;
+    onlyOnOnlyP2P = () =>
+        ({
+            visibility: this.isConfiguredAs("remoteType", REMOTE_P2P),
+        }) as OnUpdateResult;
+    onlyOnCouchDBOrMinIO = () =>
+        ({
+            visibility:
+                this.isConfiguredAs("remoteType", REMOTE_COUCHDB) || this.isConfiguredAs("remoteType", REMOTE_MINIO),
+        }) as OnUpdateResult;
+    /**
+     * Checks the edited CouchDB passphrase through an owned synchronisation-
+     * information resource. A missing document may be created by the check.
+     * Incompatibility and operational failure retain their distinct existing
+     * result messages.
+     */
+    checkWorkingPassphrase = async (): Promise<boolean> => {
+        if (this.editingSettings.remoteType == REMOTE_MINIO) return true;
+
+        const settingForCheck: RemoteDBSettings = {
+            ...this.editingSettings,
+        };
+        const resource = await this.services.replicator.createRemoteResource(
+            REMOTE_RESOURCE_KINDS.SYNCHRONISATION_INFORMATION,
+            settingForCheck
+        );
+        if (!resource) return true;
+        try {
+            if (await resource.check()) {
+                // Logger($msg("obsidianLiveSyncSettingTab.logDatabaseConnected"), LOG_LEVEL_NOTICE);
+                return true;
+            } else {
+                Logger($msg("obsidianLiveSyncSettingTab.logPassphraseNotCompatible"), LOG_LEVEL_NOTICE);
+                return false;
+            }
+        } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            Logger(
+                $msg("obsidianLiveSyncSettingTab.logCheckPassphraseFailed", {
+                    db: reason,
+                }),
+                LOG_LEVEL_NOTICE
+            );
+            return false;
+        } finally {
+            await resource.dispose();
+        }
+    };
+    isPassphraseValid = async () => {
+        if (this.editingSettings.encrypt && this.editingSettings.passphrase == "") {
+            Logger($msg("obsidianLiveSyncSettingTab.logEncryptionNoPassphrase"), LOG_LEVEL_NOTICE);
+            return false;
+        }
+        if (this.editingSettings.encrypt && !(await testCrypt())) {
+            Logger($msg("obsidianLiveSyncSettingTab.logEncryptionNoSupport"), LOG_LEVEL_NOTICE);
+            return false;
+        }
+        return true;
+    };
+
+    rebuildDB = async (method: "localOnly" | "remoteOnly" | "rebuildBothByThisDevice" | "localOnlyWithChunks") => {
+        if (method === "remoteOnly" && this.isDirty("pathNormalizationVersion")) {
+            Logger(
+                $msg(
+                    "CouchDB only. Version 0 preserves legacy path identity; version 1 uses Unicode NFC. Physical file names stay unchanged. Update every device and stop synchronisation, then Rebuild both databases from a complete authoritative Vault and Fetch on the other devices. Resolve colliding file names first. P2P and Object Storage do not support version 1."
+                ),
+                LOG_LEVEL_NOTICE
+            );
+            return;
+        }
+        if (this.editingSettings.encrypt && this.editingSettings.passphrase == "") {
+            Logger($msg("obsidianLiveSyncSettingTab.logEncryptionNoPassphrase"), LOG_LEVEL_NOTICE);
+            return;
+        }
+        if (this.editingSettings.encrypt && !(await testCrypt())) {
+            Logger($msg("obsidianLiveSyncSettingTab.logEncryptionNoSupport"), LOG_LEVEL_NOTICE);
+            return;
+        }
+        if (!this.editingSettings.encrypt) {
+            this.editingSettings.passphrase = "";
+        }
+        await this.applyAllSettings();
+        await this.services.setting.suspendAllSync();
+        await this.services.setting.suspendExtraSync();
+        this.reloadAllSettings();
+        this.editingSettings.isConfigured = true;
+        Logger($msg("obsidianLiveSyncSettingTab.logRebuildNote"), LOG_LEVEL_NOTICE);
+        await this.saveAllDirtySettings();
+        this.closeSetting();
+        await delay(2000);
+        await this.core.rebuilder.$performRebuildDB(method);
+    };
+    async confirmRebuild() {
+        if (!(await this.isPassphraseValid())) {
+            Logger(`Passphrase is not valid, please fix it.`, LOG_LEVEL_NOTICE);
+            return;
+        }
+        const keepEditing = $msg("Ui.SetupWizard.ApplySettingsInitialisation.KeepEditing");
+        const setupManager = this.core.getModule(SetupManager);
+        const result = await setupManager.applySettingsWithInitialisationChoice({
+            isP2P: isP2PMainRemote(this.editingSettings),
+            validateChoice: async (mode) => {
+                if (mode !== "fetch" || (await this.checkWorkingPassphrase())) {
+                    return true;
+                }
+                const continueFetch = $msg("Ui.SetupWizard.ApplySettingsInitialisation.ContinueFetch");
+                return (
+                    (await this.core.confirm.confirmWithMessage(
+                        $msg("Ui.SetupWizard.ApplySettingsInitialisation.RemoteVerificationTitle"),
+                        $msg("Ui.SetupWizard.ApplySettingsInitialisation.RemoteVerificationGuidance"),
+                        [continueFetch, keepEditing],
+                        keepEditing
+                    )) === continueFetch
+                );
+            },
+            applySettings: async () => {
+                if (!this.editingSettings.encrypt) {
+                    this.editingSettings.passphrase = "";
+                }
+                await this.saveAllDirtySettings();
+                await this.applyReconstructionRequiredSettings();
+            },
+        });
+        if (result.result === "scheduled") {
+            this.closeSetting();
+            return;
+        }
+        if (result.result === "failed") {
+            return;
+        }
+        if (this.isDirty("pathNormalizationVersion")) {
+            return;
+        }
+
+        const applyWithoutInitialisation = $msg(
+            "Ui.SetupWizard.ApplySettingsInitialisation.ApplyWithoutInitialisation"
+        );
+        const fallback = await this.core.confirm.confirmWithMessage(
+            $msg("Ui.SetupWizard.ApplySettingsInitialisation.BypassTitle"),
+            $msg("Ui.SetupWizard.ApplySettingsInitialisation.BypassGuidance"),
+            [applyWithoutInitialisation, keepEditing],
+            keepEditing
+        );
+        if (fallback === applyWithoutInitialisation) {
+            if (!this.editingSettings.encrypt) {
+                this.editingSettings.passphrase = "";
+            }
+            await this.saveAllDirtySettings();
+        }
+    }
+
+    private async applyReconstructionRequiredSettings(): Promise<void> {
+        const key = "pathNormalizationVersion";
+        if (!this.isDirty(key)) return;
+
+        const previousValue = this.core.settings.pathNormalizationVersion;
+        this.copySettingValue(this.core.settings, this.editingSettings, key);
+        try {
+            await this.services.setting.saveSettingData();
+        } catch (error) {
+            this.core.settings.pathNormalizationVersion = previousValue;
+            throw error;
+        }
+
+        this.copySettingValue(this.initialSettings, this.core.settings, key);
+        this.refreshSetting(key);
+    }
+
+    // The imperative renderer remains required by the declared Obsidian 1.7.2 minimum version.
+    override display(): void {
+        this.displayImperative();
+    }
+
+    private displayImperative(): void {
+        const changeDisplay = this.changeDisplay.bind(this);
+        // Make sure the page-owned component is loaded for markdown rendering in panes.
+        this.beginRenderScope(() => this.displayImperative());
+        const { containerEl } = this;
+        this.screenElements = {};
+        if (this._editingSettings == undefined || this.initialSettings == undefined) {
+            this.reloadAllSettings();
+        }
+        if (this.editingSettings === undefined || this.initialSettings == undefined) {
+            return;
+        }
+        this.isShown = true;
+
+        containerEl.empty();
+
+        containerEl.addClass("sls-setting");
+
+        setStyle(containerEl, "menu-setting-poweruser", () => this.isConfiguredAs("usePowerUserMode", true));
+        setStyle(containerEl, "menu-setting-advanced", () => this.isConfiguredAs("useAdvancedMode", true));
+        setStyle(containerEl, "menu-setting-edgecase", () => this.isConfiguredAs("useEdgeCaseMode", true));
+
+        // const addScreenElement = (key: string, element: HTMLElement) => addScreenElement.bind(this)(key, element);
+        const menuWrapper = this.createEl(containerEl, "div", { cls: "sls-setting-menu-wrapper" });
+
+        if (this.menuEl) {
+            this.menuEl.remove();
+        }
+        this.menuEl = menuWrapper.createDiv("");
+        this.menuEl.addClass("sls-setting-menu");
+        const menuTabs = this.menuEl.querySelectorAll(".sls-setting-label");
+
+        this.renderRebuildRequiredAction(menuWrapper);
+
+        // let paneNo = 0;
+        const addPane = (parentEl: HTMLElement, title: string, icon: string, order: number, level?: ConfigLevel) => {
+            const owner = this.lifetimeComponent;
+            const el = this.createEl(parentEl, "div", { text: "" });
+
+            setLevelClass(el, level);
+            new Setting(el).setName(title).setHeading().setClass("sls-setting-pane-title");
+            if (this.menuEl) {
+                this.menuEl.createEl("label", { cls: `sls-setting-label c-${order}` }, (el) => {
+                    setLevelClass(el, level);
+                    const inputEl = el.createEl("input", {
+                        type: "radio",
+                        name: "disp",
+                        value: `${order}`,
+                        cls: "sls-setting-tab",
+                    } as DomElementInfo);
+                    el.createDiv({
+                        cls: "sls-setting-menu-btn",
+                        text: icon,
+                        title: title,
+                    });
+                    inputEl.addEventListener("change", (evt) => this.selectPane(evt));
+                    inputEl.addEventListener("click", (evt) => this.selectPane(evt));
+                });
+            }
+            this.addScreenElement(`${order}`, el);
+            return this.resolveWithinRenderScope(el, owner);
+        };
+        // const panelNoMap = {} as { [key: string]: number };
+        const addPanel = this.addPanel.bind(this);
+
+        menuTabs.forEach((element) => {
+            const e = element.querySelector(".sls-setting-tab");
+            if (!e) return;
+            e.addEventListener("change", (event) => {
+                menuTabs.forEach((element) => element.removeClass("selected"));
+                this.changeDisplay((event.currentTarget as HTMLInputElement).value);
+                element.addClass("selected");
+            });
+        });
+
+        // Panes
+
+        const bindPane = (
+            paneFunc: (this: ObsidianLiveSyncSettingTab, paneEl: HTMLElement, funcs: PageFunctions) => void
+        ): ((paneEl: HTMLElement) => void) => {
+            const callback = (paneEl: HTMLElement) => {
+                paneFunc.call(this, paneEl, {
+                    addPane,
+                    addPanel,
+                });
+            };
+            return callback;
+        };
+
+        // Add panes
+
+        for (const entry of createSettingsPageCatalogue()) {
+            void addPane(containerEl, entry.name(), entry.icon, entry.order, entry.level).then(bindPane(entry.legacy));
+        }
+
+        void yieldNextAnimationFrame().then(() => {
+            if (this.selectedScreen == "") {
+                if (this.isLiveSyncConfigured()) {
+                    changeDisplay("20");
+                } else {
+                    changeDisplay("110");
+                }
+            } else {
+                changeDisplay(this.selectedScreen);
+            }
+            this.requestUpdate();
+        });
+    }
+
+    getMinioJournalSyncClient() {
+        // return new JournalSyncMinio(this.core.settings, this.core.simpleStore, this.core);
+        // const settings = this.editingSettings as ObsidianLiveSyncSettings;
+        return new JournalSyncCore(
+            this.core.settings,
+            this.core.simpleStore,
+            this.core,
+            new MinioStorageAdapter(this.core.settings, this.core)
+        );
+    }
+    /**
+     * Wipe the remote bucket through a short-lived Journal client.
+     * Journal wipes are batched and non-transactional, so a false result may
+     * leave a partial wipe which can be retried after all devices are stopped.
+     */
+    async resetRemoteBucket(): Promise<boolean> {
+        const minioJournal = this.getMinioJournalSyncClient();
+        try {
+            return await minioJournal.resetBucket();
+        } finally {
+            minioJournal.dispose();
+        }
+    }
+}

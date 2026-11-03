@@ -1,0 +1,797 @@
+import { TFile, Modal, App, DIFF_DELETE, DIFF_EQUAL, DIFF_INSERT, diff_match_patch } from "@/deps.ts";
+import { getPathFromTFile, isValidPath } from "@/common/utils.ts";
+import { decodeBinary, readString } from "@vrtmrz/livesync-commonlib/compat/string_and_binary/convert";
+import ObsidianLiveSyncPlugin from "@/main.ts";
+import {
+    type DocumentID,
+    type FilePathWithPrefix,
+    type LoadedEntry,
+    LOG_LEVEL_INFO,
+    LOG_LEVEL_NOTICE,
+    LOG_LEVEL_VERBOSE,
+} from "@vrtmrz/livesync-commonlib/compat/common/types";
+import { Logger } from "@vrtmrz/livesync-commonlib/compat/common/logger";
+import { isErrorOfMissingDoc } from "@vrtmrz/livesync-commonlib/compat/pouchdb/utils_couchdb";
+import { fireAndForget, getDocData } from "@vrtmrz/livesync-commonlib/compat/common/utils";
+import { isPlainText, stripPrefix } from "@vrtmrz/livesync-commonlib/compat/string_and_binary/path";
+import { scheduleOnceIfDuplicated } from "octagonal-wheels/concurrency/lock";
+import { stepCyclicIndex } from "octagonal-wheels/collection";
+import { navigateDiffNodes } from "@/common/diffNavigation.ts";
+import type { LiveSyncBaseCore } from "@/LiveSyncBaseCore.ts";
+import { compatGlobal } from "@vrtmrz/livesync-commonlib/compat/common/coreEnvFunctions";
+import {
+    DOCUMENT_HISTORY_PREFERENCE_KEYS,
+    loadDocumentHistoryPreference,
+    saveDocumentHistoryPreference,
+} from "./documentHistoryPreferences.ts";
+import type PouchDB from "pouchdb-core";
+import {
+    restoreDocumentHistoryRevision,
+    type DocumentHistoryRestorationResult,
+} from "@/serviceFeatures/documentHistoryRestoration";
+
+function isImage(path: string) {
+    const ext = path.split(".").splice(-1)[0].toLowerCase();
+    return ["png", "jpg", "jpeg", "gif", "bmp", "webp"].includes(ext);
+}
+function isComparableText(path: string) {
+    const ext = path.split(".").splice(-1)[0].toLowerCase();
+    return isPlainText(path) || ["md", "mdx", "txt", "json"].includes(ext);
+}
+function isComparableTextDecode(path: string) {
+    const ext = path.split(".").splice(-1)[0].toLowerCase();
+    return ["json"].includes(ext);
+}
+function readDocument(w: LoadedEntry) {
+    if (w.data.length == 0) return "";
+    if (isImage(w.path)) {
+        return new Uint8Array(decodeBinary(w.data));
+    }
+    if (w.type == "plain" || w.datatype == "plain") return getDocData(w.data);
+    if (isComparableTextDecode(w.path)) return readString(new Uint8Array(decodeBinary(w.data)));
+    if (isComparableText(w.path)) return getDocData(w.data);
+    try {
+        return readString(new Uint8Array(decodeBinary(w.data)));
+    } catch (ex) {
+        Logger(ex, LOG_LEVEL_VERBOSE);
+        // NO OP.
+    }
+    return getDocData(w.data);
+}
+export class DocumentHistoryModal extends Modal {
+    plugin: ObsidianLiveSyncPlugin;
+    core: LiveSyncBaseCore;
+    get services() {
+        return this.core.services;
+    }
+    range!: HTMLInputElement;
+    contentView!: HTMLDivElement;
+    info!: HTMLDivElement;
+    fileInfo!: HTMLDivElement;
+    showDiff = false;
+    diffOnly = false;
+    id?: DocumentID;
+
+    file: FilePathWithPrefix;
+
+    revs_info: PouchDB.Core.RevisionInfo[] = [];
+    currentDoc?: LoadedEntry;
+    currentText = "";
+    currentDeleted = false;
+    initialRev?: string;
+
+    // Revision navigation state (◀/▶ beside the range slider)
+    revPrevBtn!: HTMLButtonElement;
+    revNextBtn!: HTMLButtonElement;
+    revNavIndicator!: HTMLSpanElement;
+
+    // Diff navigation state
+    currentDiffIndex = -1;
+    diffNavContainer!: HTMLDivElement;
+    diffNavIndicator!: HTMLSpanElement;
+    diffOnlyLabel!: HTMLLabelElement;
+
+    // Search state
+    searchKeyword = "";
+    searchResults: { rev: string; index: number; matchType: "Content" | "Diff" }[] = [];
+    currentSearchIndex = -1;
+    searchPrevBtn!: HTMLButtonElement;
+    searchNextBtn!: HTMLButtonElement;
+    searchResultIndicator!: HTMLSpanElement;
+    searchProgressIndicator!: HTMLSpanElement;
+    searchTimeout: number | null = null;
+
+    constructor(
+        app: App,
+        core: LiveSyncBaseCore,
+        plugin: ObsidianLiveSyncPlugin,
+        file: TFile | FilePathWithPrefix,
+        id?: DocumentID,
+        revision?: string
+    ) {
+        super(app);
+        this.plugin = plugin;
+        this.core = core;
+        this.file = file instanceof TFile ? getPathFromTFile(file) : file;
+        this.id = id;
+        this.initialRev = revision;
+        if (!file && id) {
+            this.file = this.services.path.id2path(id);
+        }
+        if (loadDocumentHistoryPreference(this.app, DOCUMENT_HISTORY_PREFERENCE_KEYS.highlightDiff)) {
+            this.showDiff = true;
+        }
+        if (loadDocumentHistoryPreference(this.app, DOCUMENT_HISTORY_PREFERENCE_KEYS.diffOnly)) {
+            this.diffOnly = true;
+        }
+    }
+
+    async loadFile(initialRev?: string) {
+        if (!this.id) {
+            this.id = await this.services.path.path2id(this.file);
+        }
+        const db = this.core.localDatabase;
+        try {
+            const w = await db.getRaw(this.id, { revs_info: true });
+            this.revs_info = w._revs_info?.filter((e) => e?.status == "available") ?? [];
+            this.range.max = `${Math.max(this.revs_info.length - 1, 0)}`;
+            this.range.value = this.range.max;
+            this.fileInfo.setText(`${this.file} / ${this.revs_info.length} revisions`);
+            await this.loadRevs(initialRev);
+            this.updateRevisionNavUI();
+        } catch (ex) {
+            if (isErrorOfMissingDoc(ex)) {
+                this.range.max = "0";
+                this.range.value = "";
+                this.range.disabled = true;
+                this.contentView.setText(`We don't have any history for this note.`);
+                this.updateRevisionNavUI();
+            } else {
+                this.contentView.setText(`Error while loading file.`);
+                Logger(ex, LOG_LEVEL_VERBOSE);
+            }
+        }
+    }
+    async loadRevs(initialRev?: string) {
+        if (this.revs_info.length == 0) return;
+        if (initialRev) {
+            const rIndex = this.revs_info.findIndex((e) => e.rev == initialRev);
+            if (rIndex >= 0) {
+                this.range.value = `${this.revs_info.length - 1 - rIndex}`;
+            }
+        }
+        const index = this.revs_info.length - 1 - (Number(this.range.value) || 0);
+        const rev = this.revs_info[index];
+        await this.showExactRev(rev.rev);
+        this.updateRevisionNavUI();
+    }
+
+    navigateVersion(direction: "older" | "newer") {
+        const current = Number(this.range.value) || 0;
+        const max = Number(this.range.max) || 0;
+
+        if (direction === "older" && current > 0) {
+            this.range.value = `${current - 1}`;
+        } else if (direction === "newer" && current < max) {
+            this.range.value = `${current + 1}`;
+        } else {
+            return;
+        }
+
+        this.updateRevisionNavUI();
+        void scheduleOnceIfDuplicated("loadRevs", () => this.loadRevs());
+    }
+
+    updateRevisionNavUI() {
+        if (!this.revNavIndicator) return;
+
+        const total = this.revs_info.length;
+        const max = Number(this.range.max) || 0;
+        const current = Number(this.range.value) || 0;
+
+        this.revNavIndicator.setText(total > 0 ? `Rev ${current + 1}/${total}` : "\u2014");
+
+        const disabled = !!this.range.disabled || total <= 1;
+        this.revPrevBtn.disabled = disabled || current <= 0;
+        this.revNextBtn.disabled = disabled || current >= max;
+    }
+    BlobURLs = new Map<string, string>();
+
+    revokeURL(key: string) {
+        const v = this.BlobURLs.get(key);
+        if (v) {
+            URL.revokeObjectURL(v);
+        }
+        this.BlobURLs.delete(key);
+    }
+    generateBlobURL(key: string, data: Uint8Array<ArrayBuffer>) {
+        this.revokeURL(key);
+        const v = URL.createObjectURL(new Blob([data], { endings: "transparent", type: "application/octet-stream" }));
+        this.BlobURLs.set(key, v);
+        return v;
+    }
+
+    prepareContentView(usePreformatted = true) {
+        this.contentView.empty();
+        this.contentView.toggleClass("op-pre", usePreformatted);
+    }
+
+    appendTextDiff(diff: [number, string][]) {
+        let hasOmitted = false;
+        for (const [operation, text] of diff) {
+            if (operation == DIFF_DELETE) {
+                this.appendSearchHighlightedText(this.contentView.createSpan({ cls: "history-deleted" }), text);
+                hasOmitted = false;
+            } else if (operation == DIFF_EQUAL) {
+                if (this.diffOnly) {
+                    if (!hasOmitted) {
+                        this.contentView.appendText("\n...\n");
+                        hasOmitted = true;
+                    }
+                } else {
+                    this.appendSearchHighlightedText(this.contentView.createSpan({ cls: "history-normal" }), text);
+                }
+            } else if (operation == DIFF_INSERT) {
+                this.appendSearchHighlightedText(this.contentView.createSpan({ cls: "history-added" }), text);
+                hasOmitted = false;
+            }
+        }
+    }
+
+    appendSearchHighlightedText(container: HTMLElement, text: string) {
+        if (!this.searchKeyword) {
+            container.appendText(text);
+            return;
+        }
+        const escapedKeyword = this.searchKeyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const regex = new RegExp(escapedKeyword, "gi");
+        let lastIndex = 0;
+        for (const match of text.matchAll(regex)) {
+            const index = match.index ?? 0;
+            if (index > lastIndex) {
+                container.appendText(text.slice(lastIndex, index));
+            }
+            container.createEl("mark", { text: match[0] });
+            lastIndex = index + match[0].length;
+        }
+        if (lastIndex < text.length) {
+            container.appendText(text.slice(lastIndex));
+        }
+    }
+
+    appendImageDiff(baseSrc: string, overlaySrc?: string) {
+        const wrap = this.contentView.createDiv({ cls: "ls-imgdiff-wrap" });
+        const overlay = wrap.createDiv({ cls: "overlay" });
+        overlay.createEl("img", { cls: "img-base" }, (img) => {
+            img.src = baseSrc;
+        });
+        if (overlaySrc) {
+            overlay.createEl("img", { cls: "img-overlay" }, (img) => {
+                img.src = overlaySrc;
+            });
+        }
+    }
+
+    appendDeletedNotice(usePreformatted = true) {
+        const notice = "(At this revision, the file has been deleted)";
+        if (usePreformatted) {
+            this.contentView.appendText(`${notice}\n`);
+        } else {
+            this.contentView.createDiv({ text: notice });
+        }
+    }
+
+    async showExactRev(rev: string) {
+        const db = this.core.localDatabase;
+        this.currentDoc = undefined;
+        const w = await db.getDBEntry(this.file, { rev: rev }, false, false, true);
+        this.currentText = "";
+        this.currentDeleted = false;
+        this.prepareContentView();
+        if (w === false) {
+            this.currentDeleted = true;
+            this.info.empty();
+            this.contentView.appendText("Could not read this revision");
+            this.contentView.createEl("br");
+            this.contentView.appendText(`(${rev})`);
+        } else {
+            this.currentDoc = w;
+            this.info.setText(`Modified:${new Date(w.mtime).toLocaleString()}`);
+            const w1data = readDocument(w);
+            this.currentDeleted = !!w.deleted;
+            if (typeof w1data == "string") {
+                this.currentText = w1data;
+            }
+            let rendered = false;
+            if (this.showDiff) {
+                const prevRevIdx = this.revs_info.length - 1 - ((Number(this.range.value) || 0) - 1);
+                if (prevRevIdx >= 0 && prevRevIdx < this.revs_info.length) {
+                    const oldRev = this.revs_info[prevRevIdx].rev;
+                    const w2 = await db.getDBEntry(this.file, { rev: oldRev }, false, false, true);
+                    if (w2 != false) {
+                        if (typeof w1data == "string") {
+                            const w2data = readDocument(w2);
+                            if (typeof w2data == "string") {
+                                const dmp = new diff_match_patch();
+                                const diff = dmp.diff_main(w2data, w1data);
+                                dmp.diff_cleanupSemantic(diff);
+                                if (this.currentDeleted) {
+                                    this.appendDeletedNotice();
+                                }
+                                this.appendTextDiff(diff);
+                                rendered = true;
+                            }
+                        } else if (isImage(this.file)) {
+                            const src = this.generateBlobURL("base", w1data);
+                            const overlay = this.generateBlobURL(
+                                "overlay",
+                                readDocument(w2) as Uint8Array<ArrayBuffer>
+                            );
+                            this.prepareContentView(false);
+                            if (this.currentDeleted) {
+                                this.appendDeletedNotice(false);
+                            }
+                            this.appendImageDiff(src, overlay);
+                            rendered = true;
+                        }
+                    }
+                }
+            }
+            if (!rendered) {
+                if (typeof w1data != "string") {
+                    if (isImage(this.file)) {
+                        const src = this.generateBlobURL("base", w1data);
+                        this.prepareContentView(false);
+                        if (this.currentDeleted) {
+                            this.appendDeletedNotice(false);
+                        }
+                        this.appendImageDiff(src);
+                    } else {
+                        if (this.currentDeleted) {
+                            this.appendDeletedNotice();
+                        }
+                        this.contentView.appendText("Binary file");
+                    }
+                } else {
+                    if (this.currentDeleted) {
+                        this.appendDeletedNotice();
+                    }
+                    this.appendSearchHighlightedText(this.contentView, w1data);
+                }
+            }
+        }
+        // Reset diff navigation after content changes
+        this.resetDiffNavigation();
+        if (this.showDiff) {
+            this.navigateDiff("next");
+        } else if (this.searchKeyword) {
+            const firstMark = this.contentView.querySelector("mark");
+            if (firstMark) {
+                firstMark.scrollIntoView({ behavior: "smooth", block: "center" });
+            }
+        }
+    }
+
+    /**
+     * Navigate to the previous or next diff block in the content view.
+     * Only effective when diff highlighting is enabled.
+     */
+    navigateDiff(direction: "prev" | "next") {
+        navigateDiffNodes(this.contentView, ".history-added, .history-deleted", this, direction);
+    }
+
+    /**
+     * Reset the diff navigation index and update the indicator.
+     */
+    resetDiffNavigation() {
+        this.currentDiffIndex = -1;
+        if (this.diffNavIndicator) {
+            if (this.showDiff) {
+                const diffElements = this.contentView.querySelectorAll(".history-added, .history-deleted");
+                this.diffNavIndicator.setText(diffElements.length > 0 ? `0/${diffElements.length}` : "\u2014");
+            } else {
+                this.diffNavIndicator.setText("\u2014");
+            }
+        }
+        this.updateDiffNavVisibility();
+    }
+
+    /**
+     * Show or hide the diff navigation buttons based on the showDiff state.
+     */
+    updateDiffNavVisibility() {
+        if (this.diffNavContainer) {
+            this.diffNavContainer.setCssStyles({ display: this.showDiff ? "flex" : "none" });
+        }
+        if (this.diffOnlyLabel) {
+            this.diffOnlyLabel.setCssStyles({ display: this.showDiff ? "inline-block" : "none" });
+        }
+    }
+
+    /**
+     * Search through the last 100 revisions for the given keyword.
+     */
+    async performSearch(keyword: string) {
+        this.searchKeyword = keyword;
+        this.searchResults = [];
+        this.currentSearchIndex = -1;
+
+        if (!keyword) {
+            this.searchResultIndicator.setText("");
+            this.searchProgressIndicator.setText("");
+            this.updateSearchUI();
+            return;
+        }
+
+        const db = this.core.localDatabase;
+        const limit = 100;
+        const totalRevs = this.revs_info.length;
+        const end = Math.min(totalRevs, limit);
+
+        this.searchProgressIndicator.setText("Searching...");
+
+        const dmp = new diff_match_patch();
+
+        // 0 is the newest, higher index is older.
+        for (let i = 0; i < end; i++) {
+            const revInfo = this.revs_info[i];
+            const rev = revInfo.rev;
+
+            this.searchProgressIndicator.setText(`Searching ${i + 1}/${end}...`);
+
+            const doc = await db.getDBEntry(this.file, { rev: rev }, false, false, true);
+            if (doc === false) continue;
+
+            const content = readDocument(doc);
+            if (typeof content !== "string") continue;
+
+            const keywordLower = keyword.toLocaleLowerCase();
+
+            // Search in content
+            if (content.toLocaleLowerCase().includes(keywordLower)) {
+                this.searchResults.push({ rev, index: i, matchType: "Content" });
+                this.updateSearchUI();
+                continue;
+            }
+
+            // Search in diff (from older version to this version)
+            // Older version is at i + 1
+            if (i < totalRevs - 1) {
+                const olderRev = this.revs_info[i + 1].rev;
+                const olderDoc = await db.getDBEntry(this.file, { rev: olderRev }, false, false, true);
+                if (olderDoc !== false) {
+                    const olderContent = readDocument(olderDoc);
+                    if (typeof olderContent === "string") {
+                        const diffs = dmp.diff_main(olderContent, content);
+                        let foundInDiff = false;
+                        for (const d of diffs) {
+                            if (
+                                (d[0] === DIFF_INSERT || d[0] === DIFF_DELETE) &&
+                                d[1].toLocaleLowerCase().includes(keywordLower)
+                            ) {
+                                foundInDiff = true;
+                                break;
+                            }
+                        }
+                        if (foundInDiff) {
+                            this.searchResults.push({ rev, index: i, matchType: "Diff" });
+                            this.updateSearchUI();
+                        }
+                    }
+                }
+            }
+        }
+
+        this.searchProgressIndicator.setText("Done");
+        this.updateSearchUI();
+    }
+
+    updateSearchUI() {
+        if (this.searchResults.length === 0) {
+            this.searchResultIndicator.setText(this.searchKeyword ? "No matches found" : "");
+        } else {
+            const current = this.currentSearchIndex >= 0 ? this.currentSearchIndex + 1 : 0;
+            this.searchResultIndicator.setText(`${current}/${this.searchResults.length} matches`);
+        }
+
+        const hasResults = this.searchResults.length > 0;
+        this.searchPrevBtn.disabled = !hasResults;
+        this.searchNextBtn.disabled = !hasResults;
+    }
+
+    navigateSearch(direction: "prev" | "next") {
+        if (this.searchResults.length === 0) return;
+
+        this.currentSearchIndex = stepCyclicIndex(this.currentSearchIndex, this.searchResults.length, direction);
+
+        const match = this.searchResults[this.currentSearchIndex];
+        this.range.value = `${this.revs_info.length - 1 - match.index}`;
+        void scheduleOnceIfDuplicated("loadRevs", () => this.loadRevs());
+        this.updateSearchUI();
+
+        // If it's a diff match, make sure Highlight diff is on
+        if (match.matchType === "Diff" && !this.showDiff) {
+            // We could auto-enable it, but maybe just notify the user?
+            // For now, let's just let the user toggle it if they want to see the diff.
+        }
+    }
+
+    override onOpen() {
+        const { contentEl } = this;
+        this.titleEl.setText("Document History");
+        contentEl.empty();
+        this.fileInfo = contentEl.createDiv("");
+        this.fileInfo.addClass("op-info");
+
+        // Search Row
+        const searchRow = contentEl.createDiv("");
+        searchRow.addClass("op-info");
+        searchRow.addClass("search-row");
+        searchRow.addClass("history-search-row");
+
+        const searchInput = searchRow.createEl("input", {
+            type: "text",
+            placeholder: "Search in history (last 100)...",
+        });
+        searchInput.addClass("history-search-input");
+        searchInput.addEventListener("input", () => {
+            if (this.searchTimeout) {
+                compatGlobal.clearTimeout(this.searchTimeout);
+            }
+            this.searchTimeout = compatGlobal.setTimeout(() => {
+                void this.performSearch(searchInput.value);
+            }, 500);
+        });
+
+        this.searchPrevBtn = searchRow.createEl("button", { text: "\u25B2" }, (e) => {
+            e.title = "Previous match";
+            e.disabled = true;
+            e.addEventListener("click", () => this.navigateSearch("prev"));
+        });
+        this.searchNextBtn = searchRow.createEl("button", { text: "\u25BC" }, (e) => {
+            e.title = "Next match";
+            e.disabled = true;
+            e.addEventListener("click", () => this.navigateSearch("next"));
+        });
+
+        this.searchResultIndicator = searchRow.createSpan({ text: "" });
+        this.searchResultIndicator.addClass("history-search-result-indicator");
+
+        this.searchProgressIndicator = searchRow.createSpan({ text: "" });
+        this.searchProgressIndicator.addClass("history-search-progress-indicator");
+
+        const revNavRow = contentEl.createDiv({ cls: "history-rev-nav-row" });
+
+        this.revPrevBtn = revNavRow.createEl("button", { text: "\u25C0" }, (e) => {
+            e.addClass("history-rev-nav-btn");
+            e.title = "Older revision";
+            e.disabled = true;
+            e.addEventListener("click", () => this.navigateVersion("older"));
+        });
+
+        revNavRow.createEl("input", { type: "range" }, (e) => {
+            this.range = e;
+            e.addEventListener("change", () => {
+                this.updateRevisionNavUI();
+                void scheduleOnceIfDuplicated("loadRevs", () => this.loadRevs());
+            });
+            e.addEventListener("input", () => {
+                this.updateRevisionNavUI();
+                void scheduleOnceIfDuplicated("loadRevs", () => this.loadRevs());
+            });
+        });
+
+        this.revNextBtn = revNavRow.createEl("button", { text: "\u25B6" }, (e) => {
+            e.addClass("history-rev-nav-btn");
+            e.title = "Newer revision";
+            e.disabled = true;
+            e.addEventListener("click", () => this.navigateVersion("newer"));
+        });
+
+        this.revNavIndicator = revNavRow.createSpan({ text: "\u2014" }, (e) => {
+            e.addClass("history-rev-indicator");
+        });
+        const diffOptionsRow = contentEl.createDiv("");
+        diffOptionsRow.addClass("op-info");
+        diffOptionsRow.addClass("diff-options-row");
+        diffOptionsRow.addClass("history-diff-options-row");
+
+        const highlightDiffContainer = diffOptionsRow.createDiv("");
+        highlightDiffContainer.addClass("history-highlight-diff-container");
+
+        highlightDiffContainer.createEl("label", {}, (label) => {
+            label.addClass("history-highlight-diff-label");
+            label.createEl("input", { type: "checkbox" }, (checkbox) => {
+                if (this.showDiff) {
+                    checkbox.checked = true;
+                }
+                checkbox.addEventListener("input", (evt: Event) => {
+                    this.showDiff = checkbox.checked;
+                    saveDocumentHistoryPreference(
+                        this.app,
+                        DOCUMENT_HISTORY_PREFERENCE_KEYS.highlightDiff,
+                        this.showDiff
+                    );
+                    this.updateDiffNavVisibility();
+                    void scheduleOnceIfDuplicated("loadRevs", () => this.loadRevs());
+                });
+            });
+            label.appendText("Highlight diff");
+        });
+
+        const diffOnlyLabel = diffOptionsRow.createEl("label", {});
+        diffOnlyLabel.createEl("input", { type: "checkbox" }, (checkbox) => {
+            if (this.diffOnly) {
+                checkbox.checked = true;
+            }
+            checkbox.addEventListener("input", (evt: Event) => {
+                this.diffOnly = checkbox.checked;
+                saveDocumentHistoryPreference(this.app, DOCUMENT_HISTORY_PREFERENCE_KEYS.diffOnly, this.diffOnly);
+                void scheduleOnceIfDuplicated("loadRevs", () => this.loadRevs());
+            });
+        });
+        diffOnlyLabel.appendText("Diff only");
+        diffOnlyLabel.addClass("diff-only-label");
+        diffOnlyLabel.setCssStyles({ display: this.showDiff ? "inline-block" : "none" });
+        this.diffOnlyLabel = diffOnlyLabel;
+
+        // Diff navigation buttons
+        this.diffNavContainer = diffOptionsRow.createDiv("");
+        this.diffNavContainer.addClass("diff-nav");
+        this.diffNavContainer.setCssStyles({ display: this.showDiff ? "flex" : "none" });
+
+        this.diffNavContainer.createEl("button", { text: "\u25B2 Prev" }, (e) => {
+            e.addClass("diff-nav-btn");
+            e.addEventListener("click", () => {
+                this.navigateDiff("prev");
+            });
+        });
+        this.diffNavContainer.createEl("button", { text: "\u25BC Next" }, (e) => {
+            e.addClass("diff-nav-btn");
+            e.addEventListener("click", () => {
+                this.navigateDiff("next");
+            });
+        });
+        this.diffNavIndicator = this.diffNavContainer.createSpan({ text: "\u2014" });
+        this.diffNavIndicator.addClass("diff-nav-indicator");
+
+        this.info = contentEl.createDiv("");
+        this.info.addClass("op-info");
+        fireAndForget(async () => await this.loadFile(this.initialRev));
+        const div = contentEl.createDiv({ text: "Loading old revisions..." });
+        this.contentView = div;
+        div.addClass("op-scrollable");
+        div.addClass("op-pre");
+        const buttons = contentEl.createDiv("");
+        buttons.createEl("button", { text: "Copy to clipboard" }, (e) => {
+            e.addClass("mod-cta");
+            e.addEventListener("click", () => {
+                fireAndForget(async () => {
+                    await compatGlobal.navigator.clipboard.writeText(this.currentText);
+                    Logger(`Old content copied to clipboard`, LOG_LEVEL_NOTICE);
+                });
+            });
+        });
+        const focusFile = async (path: string) => {
+            const targetFile = this.plugin.app.vault.getFileByPath(path);
+            if (targetFile) {
+                const leaf = this.plugin.app.workspace.getLeaf(false);
+                await leaf.openFile(targetFile);
+            } else {
+                Logger("Unable to display the file in the editor", LOG_LEVEL_NOTICE);
+            }
+        };
+        buttons.createEl("button", { text: "Back to this revision" }, (e) => {
+            e.addClass("mod-cta");
+            e.addEventListener("click", () => {
+                fireAndForget(async () => {
+                    const pathToWrite = stripPrefix(this.file);
+                    if (!isValidPath(pathToWrite)) {
+                        Logger("Path is not valid to write content.", LOG_LEVEL_INFO);
+                        return;
+                    }
+                    if (!this.currentDoc) {
+                        Logger("No active file loaded.", LOG_LEVEL_INFO);
+                        return;
+                    }
+                    const sourceRevision = this.currentDoc._rev;
+                    if (!sourceRevision) {
+                        Logger("The selected revision does not have a revision identifier.", LOG_LEVEL_NOTICE);
+                        return;
+                    }
+
+                    e.disabled = true;
+                    let result: DocumentHistoryRestorationResult;
+                    try {
+                        result = await restoreDocumentHistoryRevision(this.core, this.file, sourceRevision, {
+                            isPathValid: isValidPath,
+                        });
+                    } catch (ex) {
+                        Logger(
+                            "Restoring the selected revision failed before Vault reflection completed. Review the file with 'Inspect conflicts and file/database differences' before retrying.",
+                            LOG_LEVEL_NOTICE
+                        );
+                        Logger(ex, LOG_LEVEL_VERBOSE);
+                        e.disabled = false;
+                        return;
+                    }
+
+                    if (result.status === "source-unavailable") {
+                        Logger(
+                            "The selected revision could not be restored because its content is no longer available.",
+                            LOG_LEVEL_NOTICE
+                        );
+                        e.disabled = false;
+                        return;
+                    }
+                    if (result.status === "current-unavailable") {
+                        Logger(
+                            "The current database revision could not be read. The Vault was not changed.",
+                            LOG_LEVEL_NOTICE
+                        );
+                        e.disabled = false;
+                        return;
+                    }
+                    if (result.status === "unsupported-path") {
+                        Logger(
+                            "Only an ordinary valid Vault path can be restored from Document History.",
+                            LOG_LEVEL_NOTICE
+                        );
+                        e.disabled = false;
+                        return;
+                    }
+                    if (result.status === "database-write-refused") {
+                        Logger(
+                            "The restored revision could not be created. The file may have changed during the operation, and the Vault was not changed.",
+                            LOG_LEVEL_NOTICE
+                        );
+                        e.disabled = false;
+                        return;
+                    }
+                    if (result.status === "stored-not-reflected") {
+                        Logger(
+                            "The restored revision was saved in the local database, but it could not be reflected to the Vault. Use 'Inspect conflicts and file/database differences' to review and apply it.",
+                            LOG_LEVEL_NOTICE
+                        );
+                        if (result.cause) {
+                            Logger(result.cause, LOG_LEVEL_VERBOSE);
+                        }
+                        this.close();
+                        return;
+                    }
+
+                    if (result.conflictCheckError) {
+                        Logger(result.conflictCheckError, LOG_LEVEL_VERBOSE);
+                    }
+                    if (result.conflictsRemain === true) {
+                        Logger(
+                            "The selected content was restored as a new revision. Other versions remain unresolved; use 'Inspect conflicts and file/database differences' to review them.",
+                            LOG_LEVEL_NOTICE
+                        );
+                    } else if (result.conflictsRemain === false) {
+                        Logger("The selected content was restored as a new revision.", LOG_LEVEL_NOTICE);
+                    } else {
+                        Logger(
+                            "The selected content was restored as a new revision. LiveSync could not confirm whether other versions remain; use 'Inspect conflicts and file/database differences' to review the file.",
+                            LOG_LEVEL_NOTICE
+                        );
+                    }
+                    try {
+                        await focusFile(result.path);
+                    } catch (ex) {
+                        Logger("The restored file could not be opened in the editor.", LOG_LEVEL_NOTICE);
+                        Logger(ex, LOG_LEVEL_VERBOSE);
+                    }
+                    this.close();
+                });
+            });
+        });
+    }
+    override onClose() {
+        const { contentEl } = this;
+        contentEl.empty();
+        this.BlobURLs.forEach((value) => {
+            if (value) URL.revokeObjectURL(value);
+        });
+    }
+}

@@ -1,0 +1,690 @@
+<script lang="ts">
+    import { onMount } from "svelte";
+    import ObsidianLiveSyncPlugin from "@/main";
+    import {
+        ConfigSync,
+        type IPluginDataExDisplay,
+        pluginIsEnumerating,
+        pluginList,
+        pluginManifestStore,
+        pluginV2Progress,
+    } from "./CmdConfigSync.ts";
+    import PluginCombo from "./PluginCombo.svelte";
+    import { Menu, type PluginManifest } from "@/deps.ts";
+    import { unique } from "@vrtmrz/livesync-commonlib/compat/common/utils";
+    import {
+        MODE_SELECTIVE,
+        MODE_AUTOMATIC,
+        MODE_PAUSED,
+        type SYNC_MODE,
+        MODE_SHINY,
+    } from "@vrtmrz/livesync-commonlib/compat/common/types";
+    import { normalizePath } from "@/deps";
+    import {
+        HiddenFileSync,
+        HIDDEN_FILE_SYNC_DISABLED_NOTICE,
+    } from "@/features/HiddenFileSync/CmdHiddenFileSync.ts";
+    import { LOG_LEVEL_NOTICE, Logger } from "octagonal-wheels/common/logger";
+    import type { LiveSyncBaseCore } from "@/LiveSyncBaseCore.ts";
+    import { $msg as translateMessage } from "@/common/translation";
+    import { getAutomaticSyncTargetFiles } from "./getAutomaticSyncTargetFiles.ts";
+    import {
+        REPLICATION_PROGRESS_PRESENTATIONS,
+        USER_INITIATED_REPLICATION_AUTHORITY,
+    } from "@vrtmrz/livesync-commonlib/replication";
+    export let plugin: ObsidianLiveSyncPlugin;
+    export let core :LiveSyncBaseCore;
+    // $: core = plugin.core;
+
+    // Comparing every copy is only worth it while the user asks to hide the unchanged ones.
+    $: hideNotApplicable = hideEven;
+    $: thisTerm = core.services.setting.getDeviceAndVaultName();
+
+    const addOn = core.getAddOn<ConfigSync>(ConfigSync.name)!;
+    if (!addOn) {
+        const msg = translateMessage(
+            "AddOn Module (ConfigSync) has not been loaded. This is very unexpected situation. Please report this issue."
+        );
+        Logger(msg, LOG_LEVEL_NOTICE);
+        throw new Error(msg);
+    }
+    const addOnHiddenFileSync = core.getAddOn<HiddenFileSync>(HiddenFileSync.name) as HiddenFileSync;
+    if (!addOnHiddenFileSync) {
+        const msg = translateMessage(
+            "AddOn Module (HiddenFileSync) has not been loaded. This is very unexpected situation. Please report this issue."
+        );
+        Logger(msg, LOG_LEVEL_NOTICE);
+        throw new Error(msg);
+    }
+
+    let list: IPluginDataExDisplay[] = [];
+
+    let selectNewestPulse = 0;
+    let selectNewestStyle = 0;
+    let hideEven = false;
+    let loading = false;
+    let applyAllPluse = 0;
+    let isMaintenanceMode = false;
+    async function requestUpdate() {
+        await addOn.updatePluginList(true);
+    }
+    async function requestReload() {
+        await addOn.reloadPluginList(true);
+    }
+    let allTerms = [] as string[];
+    pluginList.subscribe((e) => {
+        list = e;
+        allTerms = unique(list.map((e) => e.term));
+    });
+    pluginIsEnumerating.subscribe((e) => {
+        loading = e;
+    });
+    onMount(async () => {
+        requestUpdate();
+    });
+
+    function filterList(list: IPluginDataExDisplay[], categories: string[]) {
+        const w = list.filter((e) => categories.indexOf(e.category) !== -1);
+        return w.sort((a, b) => `${a.category}-${a.name}`.localeCompare(`${b.category}-${b.name}`));
+    }
+
+    function groupBy(items: IPluginDataExDisplay[], key: string) {
+        let ret = {} as Record<string, IPluginDataExDisplay[]>;
+        for (const v of items) {
+            //@ts-ignore
+            const k = (key in v ? v[key] : "") as string;
+            ret[k] = ret[k] || [];
+            ret[k].push(v);
+        }
+        for (const k in ret) {
+            ret[k] = ret[k].sort((a, b) => `${a.category}-${a.name}`.localeCompare(`${b.category}-${b.name}`));
+        }
+        const w = Object.entries(ret);
+        return w.sort(([a], [b]) => `${a}`.localeCompare(`${b}`));
+    }
+
+    const displays = {
+        CONFIG: translateMessage("Configuration"),
+        THEME: translateMessage("Themes"),
+        SNIPPET: translateMessage("Snippets"),
+    };
+    async function scanAgain() {
+        await addOn.scanAllConfigFiles(true);
+        await requestUpdate();
+    }
+    async function replicate() {
+        await core.services.replication.replicateUserInitiated({
+            trigger: "manual",
+            progressPresentation: REPLICATION_PROGRESS_PRESENTATIONS.NOTICE,
+            interaction: USER_INITIATED_REPLICATION_AUTHORITY,
+        });
+    }
+    function selectAllNewest(selectMode: boolean) {
+        selectNewestPulse++;
+        selectNewestStyle = selectMode ? 1 : 2;
+    }
+    function resetSelectNewest() {
+        selectNewestPulse++;
+        selectNewestStyle = 3;
+    }
+    function applyAll() {
+        applyAllPluse++;
+    }
+    async function applyData(data: IPluginDataExDisplay): Promise<boolean> {
+        return await addOn.applyData(data);
+    }
+    async function compareData(
+        docA: IPluginDataExDisplay,
+        docB: IPluginDataExDisplay,
+        compareEach = false
+    ): Promise<boolean> {
+        return await addOn.compareUsingDisplayData(docA, docB, compareEach);
+    }
+    async function deleteData(data: IPluginDataExDisplay): Promise<boolean> {
+        return await addOn.deleteData(data);
+    }
+    function checkAutomaticSyncAvailable() {
+        if (addOnHiddenFileSync.isThisModuleEnabled()) return true;
+        Logger(translateMessage(HIDDEN_FILE_SYNC_DISABLED_NOTICE), LOG_LEVEL_NOTICE);
+        return false;
+    }
+    function askMode(evt: MouseEvent, title: string, key: string) {
+        const menu = new Menu();
+        menu.addItem((item) => item.setTitle(title).setIsLabel(true));
+        menu.addSeparator();
+        const prevMode = automaticList.get(key) ?? MODE_SELECTIVE;
+        for (const mode of [MODE_SELECTIVE, MODE_AUTOMATIC, MODE_PAUSED, MODE_SHINY]) {
+            menu.addItem((item) => {
+                item.setTitle(`${getIcon(mode as SYNC_MODE)}:${TITLES[mode]}`)
+                    .onClick((e) => {
+                        if (mode === MODE_AUTOMATIC) {
+                            if (!checkAutomaticSyncAvailable()) return;
+                            askOverwriteModeForAutomatic(evt, key);
+                        } else {
+                            setMode(key, mode as SYNC_MODE);
+                        }
+                    })
+                    .setChecked(prevMode == mode)
+                    .setDisabled(prevMode == mode);
+            });
+        }
+        menu.showAtMouseEvent(evt);
+    }
+    function applyAutomaticSync(key: string, direction: "pushForce" | "pullForce" | "safe") {
+        if (!checkAutomaticSyncAvailable()) return;
+        setMode(key, MODE_AUTOMATIC);
+        const configDir = normalizePath(plugin.core.services.API.getSystemConfigDir());
+        const files = getAutomaticSyncTargetFiles(key, configDir, plugin.core.settings.pluginSyncExtendedSetting);
+        void addOnHiddenFileSync.initialiseInternalFileSync(direction, true, files);
+    }
+    function askOverwriteModeForAutomatic(evt: MouseEvent, key: string) {
+        const menu = new Menu();
+        menu.addItem((item) => item.setTitle(translateMessage("Initial Action")).setIsLabel(true));
+        menu.addSeparator();
+        menu.addItem((item) => {
+            item.setTitle(translateMessage("↑: Overwrite Remote")).onClick((e) => {
+                applyAutomaticSync(key, "pushForce");
+            });
+        })
+            .addItem((item) => {
+                item.setTitle(translateMessage("↓: Overwrite Local")).onClick((e) => {
+                    applyAutomaticSync(key, "pullForce");
+                });
+            })
+            .addItem((item) => {
+                item.setTitle(translateMessage("⇅: Use newer")).onClick((e) => {
+                    applyAutomaticSync(key, "safe");
+                });
+            });
+        menu.showAtMouseEvent(evt);
+    }
+
+    $: options = {
+        thisTerm,
+        hideNotApplicable,
+        selectNewest: selectNewestPulse,
+        selectNewestStyle,
+        applyAllPluse,
+        applyData,
+        compareData,
+        deleteData,
+        plugin,
+        isMaintenanceMode,
+    };
+
+    const ICON_EMOJI_PAUSED = `⛔`;
+    const ICON_EMOJI_AUTOMATIC = `✨`;
+    const ICON_EMOJI_SELECTIVE = `🔀`;
+    const ICON_EMOJI_FLAGGED = `🚩`;
+
+    const ICONS: { [key: number]: string } = {
+        [MODE_SELECTIVE]: ICON_EMOJI_SELECTIVE,
+        [MODE_PAUSED]: ICON_EMOJI_PAUSED,
+        [MODE_AUTOMATIC]: ICON_EMOJI_AUTOMATIC,
+        [MODE_SHINY]: ICON_EMOJI_FLAGGED,
+    };
+    const TITLES: { [key: number]: string } = {
+        [MODE_SELECTIVE]: translateMessage("Selective"),
+        [MODE_PAUSED]: translateMessage("Ignore"),
+        [MODE_AUTOMATIC]: translateMessage("Automatic"),
+        [MODE_SHINY]: translateMessage("Flagged Selective"),
+    };
+    const PREFIX_PLUGIN_ALL = "PLUGIN_ALL";
+    const PREFIX_PLUGIN_DATA = "PLUGIN_DATA";
+    const PREFIX_PLUGIN_MAIN = "PLUGIN_MAIN";
+    const PREFIX_PLUGIN_ETC = "PLUGIN_ETC";
+    function setMode(key: string, mode: SYNC_MODE) {
+        if (key.startsWith(PREFIX_PLUGIN_ALL + "/")) {
+            setMode(PREFIX_PLUGIN_DATA + key.substring(PREFIX_PLUGIN_ALL.length), mode);
+            setMode(PREFIX_PLUGIN_MAIN + key.substring(PREFIX_PLUGIN_ALL.length), mode);
+            return;
+        }
+        const files = unique(
+            list
+                .filter((e) => `${e.category}/${e.name}` == key)
+                .map((e) => e.files)
+                .flat()
+                .map((e) => e.filename)
+        );
+        if (mode == MODE_SELECTIVE) {
+            automaticList.delete(key);
+            delete plugin.core.settings.pluginSyncExtendedSetting[key];
+            automaticListDisp = automaticList;
+        } else {
+            automaticList.set(key, mode);
+            automaticListDisp = automaticList;
+            if (!(key in plugin.core.settings.pluginSyncExtendedSetting)) {
+                plugin.core.settings.pluginSyncExtendedSetting[key] = {
+                    key,
+                    mode,
+                    files: [],
+                };
+            }
+            plugin.core.settings.pluginSyncExtendedSetting[key].files = files;
+            plugin.core.settings.pluginSyncExtendedSetting[key].mode = mode;
+        }
+        core.services.setting.saveSettingData();
+    }
+    function getIcon(mode: SYNC_MODE) {
+        if (mode in ICONS) {
+            return ICONS[mode];
+        } else {
+            ("");
+        }
+    }
+    let automaticList = new Map<string, SYNC_MODE>();
+    let automaticListDisp = new Map<string, SYNC_MODE>();
+
+    // apply current configuration to the dialogue
+    for (const { key, mode } of Object.values(plugin.core.settings.pluginSyncExtendedSetting)) {
+        automaticList.set(key, mode);
+    }
+
+    automaticListDisp = automaticList;
+
+    let displayKeys: Record<string, string[]> = {};
+
+    function computeDisplayKeys(list: IPluginDataExDisplay[]) {
+        const extraKeys = Object.keys(plugin.core.settings.pluginSyncExtendedSetting);
+        return [
+            ...list,
+            ...extraKeys
+                .map((e) => `${e}///`.split("/"))
+                .filter((e) => e[0] && e[1])
+                .map((e) => ({ category: e[0], name: e[1], displayName: e[1] })),
+        ]
+            .sort((a, b) => (a.displayName ?? a.name).localeCompare(b.displayName ?? b.name))
+            .reduce(
+                (p, c) => ({
+                    ...p,
+                    [c.category]: unique(
+                        c.category in p ? [...p[c.category], c.displayName ?? c.name] : [c.displayName ?? c.name]
+                    ),
+                }),
+                {} as Record<string, string[]>
+            );
+    }
+    $: {
+        displayKeys = computeDisplayKeys(list);
+    }
+
+    let deleteTerm = "";
+
+    async function deleteAllItems(term: string) {
+        const deleteItems = list.filter((e) => e.term == term);
+        for (const item of deleteItems) {
+            await deleteData(item);
+        }
+        addOn.reloadPluginList(true);
+    }
+
+    let nameMap = new Map<string, string>();
+    function updateNameMap(e: Map<string, PluginManifest>) {
+        const items = [...e.entries()].map(([k, v]) => [k.split("/").slice(-2).join("/"), v.name] as [string, string]);
+        const newMap = new Map(items);
+        if (newMap.size == nameMap.size) {
+            let diff = false;
+            for (const [k, v] of newMap) {
+                if (nameMap.get(k) != v) {
+                    diff = true;
+                    break;
+                }
+            }
+            if (!diff) {
+                return;
+            }
+        }
+        nameMap = newMap;
+    }
+    $: updateNameMap($pluginManifestStore);
+
+    let displayEntries = [] as [string, string][];
+    $: {
+        displayEntries = Object.entries(displays).filter(([key, _]) => key in displayKeys);
+    }
+
+    let pluginEntries = [] as [string, IPluginDataExDisplay[]][];
+    $: {
+        pluginEntries = groupBy(filterList(list, ["PLUGIN_MAIN", "PLUGIN_DATA", "PLUGIN_ETC"]), "name");
+    }
+    let useSyncPluginEtc = plugin.core.settings.usePluginEtc;
+</script>
+
+<div class="buttonsWrap">
+    <div class="buttons">
+        <button on:click={() => scanAgain()}>{translateMessage("Scan changes")}</button>
+        <button on:click={() => replicate()}>{translateMessage("Sync once")}</button>
+        <button on:click={() => requestUpdate()}>{translateMessage("Refresh")}</button>
+        {#if isMaintenanceMode}
+            <button on:click={() => requestReload()}>{translateMessage("Reload")}</button>
+        {/if}
+    </div>
+    <div class="buttons">
+        <button on:click={() => selectAllNewest(true)}>{translateMessage("Select All Shiny")}</button>
+        <button on:click={() => selectAllNewest(false)}
+            >{ICON_EMOJI_FLAGGED} {translateMessage("Select Flagged Shiny")}</button
+        >
+        <button on:click={() => resetSelectNewest()}>{translateMessage("Deselect all")}</button>
+        <button on:click={() => applyAll()} class="mod-cta">{translateMessage("Apply All Selected")}</button>
+    </div>
+</div>
+<div class="loading">
+    {#if loading || $pluginV2Progress !== 0}
+        <span>{translateMessage("Updating list...")}{$pluginV2Progress == 0 ? "" : ` (${$pluginV2Progress})`}</span>
+    {/if}
+</div>
+<div class="list">
+    {#if list.length == 0}
+        <div class="center">{translateMessage("No Items.")}</div>
+    {:else}
+        {#each displayEntries as [key, label]}
+            <div>
+                <h3>{label}</h3>
+                {#each displayKeys[key] as name}
+                    {@const bindKey = `${key}/${name}`}
+                    {@const mode = automaticListDisp.get(bindKey) ?? MODE_SELECTIVE}
+                    <div class="labelrow {hideEven ? 'hideeven' : ''}">
+                        <div class="title">
+                            <button class="status" on:click={(evt) => askMode(evt, `${key}/${name}`, bindKey)}>
+                                {getIcon(mode)}
+                            </button>
+                            <span class="name">{(key == "THEME" && nameMap.get(`themes/${name}`)) || name}</span>
+                        </div>
+                        <div class="body">
+                            {#if mode == MODE_SELECTIVE || mode == MODE_SHINY}
+                                <PluginCombo
+                                    {...options}
+                                    isFlagged={mode == MODE_SHINY}
+                                    list={list.filter((e) => e.category == key && e.name == name)}
+                                    hidden={false}
+                                />
+                            {:else}
+                                <div class="statusnote">{TITLES[mode]}</div>
+                            {/if}
+                        </div>
+                    </div>
+                {/each}
+            </div>
+        {/each}
+        <div>
+            <h3>{translateMessage("Plugins")}</h3>
+            {#each pluginEntries as [name, listX]}
+                {@const bindKeyAll = `${PREFIX_PLUGIN_ALL}/${name}`}
+                {@const modeAll = automaticListDisp.get(bindKeyAll) ?? MODE_SELECTIVE}
+                {@const bindKeyMain = `${PREFIX_PLUGIN_MAIN}/${name}`}
+                {@const modeMain = automaticListDisp.get(bindKeyMain) ?? MODE_SELECTIVE}
+                {@const bindKeyData = `${PREFIX_PLUGIN_DATA}/${name}`}
+                {@const modeData = automaticListDisp.get(bindKeyData) ?? MODE_SELECTIVE}
+                {@const bindKeyETC = `${PREFIX_PLUGIN_ETC}/${name}`}
+                {@const modeEtc = automaticListDisp.get(bindKeyETC) ?? MODE_SELECTIVE}
+                <div class="labelrow {hideEven ? 'hideeven' : ''}">
+                    <div class="title">
+                        <button
+                            class="status"
+                            on:click={(evt) => askMode(evt, `${PREFIX_PLUGIN_ALL}/${name}`, bindKeyAll)}
+                        >
+                            {getIcon(modeAll)}
+                        </button>
+                        <span class="name">{nameMap.get(`plugins/${name}`) || name}</span>
+                    </div>
+                    <div class="body">
+                        {#if modeAll == MODE_SELECTIVE || modeAll == MODE_SHINY}
+                            <PluginCombo {...options} isFlagged={modeAll == MODE_SHINY} list={listX} hidden={true} />
+                        {/if}
+                    </div>
+                </div>
+                {#if modeAll == MODE_SELECTIVE || modeAll == MODE_SHINY}
+                    <div class="filerow {hideEven ? 'hideeven' : ''}">
+                        <div class="filetitle">
+                            <button
+                                class="status"
+                                on:click={(evt) => askMode(evt, `${PREFIX_PLUGIN_MAIN}/${name}/MAIN`, bindKeyMain)}
+                            >
+                                {getIcon(modeMain)}
+                            </button>
+                            <span class="name">MAIN</span>
+                        </div>
+                        <div class="body">
+                            {#if modeMain == MODE_SELECTIVE || modeMain == MODE_SHINY}
+                                <PluginCombo
+                                    {...options}
+                                    isFlagged={modeMain == MODE_SHINY}
+                                    list={filterList(listX, ["PLUGIN_MAIN"])}
+                                    hidden={false}
+                                />
+                            {:else}
+                                <div class="statusnote">{TITLES[modeMain]}</div>
+                            {/if}
+                        </div>
+                    </div>
+                    <div class="filerow {hideEven ? 'hideeven' : ''}">
+                        <div class="filetitle">
+                            <button
+                                class="status"
+                                on:click={(evt) => askMode(evt, `${PREFIX_PLUGIN_DATA}/${name}`, bindKeyData)}
+                            >
+                                {getIcon(modeData)}
+                            </button>
+                            <span class="name">DATA</span>
+                        </div>
+                        <div class="body">
+                            {#if modeData == MODE_SELECTIVE || modeData == MODE_SHINY}
+                                <PluginCombo
+                                    {...options}
+                                    isFlagged={modeData == MODE_SHINY}
+                                    list={filterList(listX, ["PLUGIN_DATA"])}
+                                    hidden={false}
+                                />
+                            {:else}
+                                <div class="statusnote">{TITLES[modeData]}</div>
+                            {/if}
+                        </div>
+                    </div>
+                    {#if useSyncPluginEtc}
+                        <div class="filerow {hideEven ? 'hideeven' : ''}">
+                            <div class="filetitle">
+                                <button
+                                    class="status"
+                                    on:click={(evt) => askMode(evt, `${PREFIX_PLUGIN_ETC}/${name}`, bindKeyETC)}
+                                >
+                                    {getIcon(modeEtc)}
+                                </button>
+                                <span class="name">{translateMessage("Other files")}</span>
+                            </div>
+                            <div class="body">
+                                {#if modeEtc == MODE_SELECTIVE || modeEtc == MODE_SHINY}
+                                    <PluginCombo
+                                        {...options}
+                                        isFlagged={modeEtc == MODE_SHINY}
+                                        list={filterList(listX, ["PLUGIN_ETC"])}
+                                        hidden={false}
+                                    />
+                                {:else}
+                                    <div class="statusnote">{TITLES[modeEtc]}</div>
+                                {/if}
+                            </div>
+                        </div>
+                    {/if}
+                {:else}
+                    <div class="noterow">
+                        <div class="statusnote">{TITLES[modeAll]}</div>
+                    </div>
+                {/if}
+            {/each}
+        </div>
+    {/if}
+</div>
+{#if isMaintenanceMode}
+    <div class="buttons">
+        <div>
+            <h3>{translateMessage("Maintenance Commands")}</h3>
+            <div class="maintenancerow">
+                <label for="">{translateMessage("Delete All of")} </label>
+                <select bind:value={deleteTerm}>
+                    {#each allTerms as term}
+                        <option value={term}>{term}</option>
+                    {/each}
+                </select>
+                <button
+                    class="status"
+                    on:click={(evt) => {
+                        deleteAllItems(deleteTerm);
+                    }}
+                >
+                    🗑️
+                </button>
+            </div>
+        </div>
+    </div>
+{/if}
+<div class="buttons">
+    <label
+        ><span>{translateMessage("Hide not applicable items")}</span><input
+            type="checkbox"
+            bind:checked={hideEven}
+        /></label
+    >
+</div>
+<div class="buttons">
+    <label
+        ><span>{translateMessage("Maintenance mode")}</span><input
+            type="checkbox"
+            bind:checked={isMaintenanceMode}
+        /></label
+    >
+</div>
+
+<style>
+    .buttonsWrap {
+        padding-bottom: 4px;
+    }
+    h3 {
+        position: sticky;
+        top: 0;
+        background-color: var(--modal-background);
+    }
+    .labelrow {
+        margin-left: 0.4em;
+        display: flex;
+        justify-content: flex-start;
+        align-items: center;
+        border-top: 1px solid var(--background-modifier-border);
+        padding: 4px;
+        flex-wrap: wrap;
+    }
+    .filerow {
+        margin-left: 1.25em;
+        display: flex;
+        justify-content: flex-start;
+        align-items: center;
+        padding-right: 4px;
+        flex-wrap: wrap;
+    }
+
+    .filerow.hideeven:has(:global(.even)),
+    .labelrow.hideeven:has(:global(.even)) {
+        display: none;
+    }
+
+    .noterow {
+        min-height: 2em;
+        display: flex;
+    }
+    button.status {
+        flex-grow: 0;
+        margin: 2px 4px;
+        min-width: 3em;
+        max-width: 4em;
+    }
+    .statusnote {
+        display: flex;
+        justify-content: flex-end;
+        padding-right: var(--size-4-12);
+        align-items: center;
+        min-width: 10em;
+        flex-grow: 1;
+    }
+    .list {
+        overflow-y: auto;
+    }
+    .title {
+        color: var(--text-normal);
+        font-size: var(--font-ui-medium);
+        line-height: var(--line-height-tight);
+        margin-right: auto;
+    }
+    .body {
+        /* margin-left: 0.4em; */
+        margin-left: auto;
+        display: flex;
+        justify-content: flex-start;
+        align-items: center;
+        /* flex-wrap: wrap; */
+    }
+    .filetitle {
+        color: var(--text-normal);
+        font-size: var(--font-ui-medium);
+        line-height: var(--line-height-tight);
+        margin-right: auto;
+    }
+    .buttons {
+        display: flex;
+        flex-direction: row;
+        justify-content: flex-end;
+        margin-top: 8px;
+        flex-wrap: wrap;
+    }
+    .buttons > button {
+        margin-left: 4px;
+        width: auto;
+    }
+
+    label {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+    label > span {
+        margin-right: 0.25em;
+    }
+    :global(.is-mobile) .title,
+    :global(.is-mobile) .filetitle {
+        width: 100%;
+    }
+
+    .center {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 3em;
+    }
+    .maintenancerow {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+    }
+    .maintenancerow label {
+        margin-right: 0.5em;
+        margin-left: 0.5em;
+    }
+
+    .loading {
+        transition: height 0.25s ease-in-out;
+        transition-delay: 4ms;
+        overflow-y: hidden;
+        flex-shrink: 0;
+        display: flex;
+        justify-content: flex-start;
+        align-items: center;
+    }
+    .loading:empty {
+        height: 0px;
+        transition: height 0.25s ease-in-out;
+        transition-delay: 1s;
+    }
+    .loading:not(:empty) {
+        height: 2em;
+        transition: height 0.25s ease-in-out;
+        transition-delay: 0;
+    }
+</style>

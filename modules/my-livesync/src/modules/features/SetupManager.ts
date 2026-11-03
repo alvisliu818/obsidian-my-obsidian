@@ -1,0 +1,582 @@
+import {
+    type BucketSyncSetting,
+    type ObsidianLiveSyncSettings,
+    type P2PSyncSetting,
+    LOG_LEVEL_NOTICE,
+    LOG_LEVEL_VERBOSE,
+    REMOTE_COUCHDB,
+    REMOTE_MINIO,
+} from "@vrtmrz/livesync-commonlib/compat/common/types";
+import { createNewVaultSettings } from "@vrtmrz/livesync-commonlib/settings";
+import { upsertRemoteConfigurationInPlace } from "@vrtmrz/livesync-commonlib/remote-configurations";
+import { isObjectDifferent } from "@vrtmrz/livesync-commonlib/compat/common/utils";
+import Intro from "./SetupWizard/dialogs/Intro.svelte";
+import SelectMethodNewUser from "./SetupWizard/dialogs/SelectMethodNewUser.svelte";
+import SelectMethodExisting from "./SetupWizard/dialogs/SelectMethodExisting.svelte";
+import ScanQRCode from "./SetupWizard/dialogs/ScanQRCode.svelte";
+import UseSetupURI from "./SetupWizard/dialogs/UseSetupURI.svelte";
+import OutroNewUser from "./SetupWizard/dialogs/OutroNewUser.svelte";
+import OutroExistingUser from "./SetupWizard/dialogs/OutroExistingUser.svelte";
+import OutroAskUserMode from "./SetupWizard/dialogs/OutroAskUserMode.svelte";
+import ApplySettingsInitialisation from "./SetupWizard/dialogs/ApplySettingsInitialisation.svelte";
+import SetupRemote from "./SetupWizard/dialogs/SetupRemote.svelte";
+import SetupRemoteCouchDB from "./SetupWizard/dialogs/SetupRemoteCouchDB.svelte";
+import SetupRemoteBucket from "./SetupWizard/dialogs/SetupRemoteBucket.svelte";
+import SetupRemoteP2P from "./SetupWizard/dialogs/SetupRemoteP2P.svelte";
+import SetupRemoteE2EE from "./SetupWizard/dialogs/SetupRemoteE2EE.svelte";
+import { decodeSettingsFromQRCodeData } from "@vrtmrz/livesync-commonlib/compat/API/processSetting";
+import { AbstractModule } from "@/modules/AbstractModule.ts";
+import type {
+    OutroAskUserModeResultType,
+    OutroExistingUserResultType,
+    OutroNewUserResultType,
+    ScanQRCodeResultType,
+    SetupRemoteBucketResultType,
+    SetupRemoteCouchDBResultType,
+    SetupRemoteCouchDBInitialData,
+    SetupRemoteE2EEResultType,
+    SetupRemoteE2EEInitialData,
+    SetupRemoteP2PInitialData,
+    SetupRemoteP2PResultType,
+    SetupRemoteResultType,
+    UseSetupURIResultType,
+    ApplySettingsInitialisationResultType,
+    ApplySettingsInitialisationInitialData,
+} from "./SetupWizard/dialogs/setupDialogTypes.ts";
+import {
+    applySettingsAndFetchOnActivation,
+    applySettingsWithScheduledInitialisation,
+    type SetupInitialisationMode,
+} from "@/serviceFeatures/setupObsidian/setupActivationLifecycle.ts";
+import { isP2PMainRemote } from "@/common/remoteConfiguration.ts";
+import type { P2PConnectionProbeAdmission } from "@vrtmrz/livesync-commonlib/p2p";
+
+function copySettingsForRemoteProfileUpdate(settings: ObsidianLiveSyncSettings): ObsidianLiveSyncSettings {
+    return {
+        ...settings,
+        remoteConfigurations: { ...(settings.remoteConfigurations ?? {}) },
+    };
+}
+
+function normaliseImportedIdDerivationSettings(settings: ObsidianLiveSyncSettings): ObsidianLiveSyncSettings {
+    // Setup URIs are complete imports even when their encoder omitted default-valued fields.
+    // Fill each missing half so a receiving device cannot supply the unrelated saved key.
+    return {
+        ...settings,
+        idDerivationVersion: Object.prototype.hasOwnProperty.call(settings, "idDerivationVersion")
+            ? settings.idDerivationVersion
+            : 0,
+        idDerivationKey: Object.prototype.hasOwnProperty.call(settings, "idDerivationKey")
+            ? settings.idDerivationKey
+            : "",
+    };
+}
+
+/**
+ * User modes for onboarding and setup
+ */
+export const enum UserMode {
+    /**
+     * New User Mode - for users who are new to the plugin
+     */
+    NewUser = "new-user",
+    /**
+     * Existing User Mode - for users who have used the plugin before, or just configuring again
+     */
+    ExistingUser = "existing-user",
+    /**
+     * Unknown User Mode - for cases where the user mode is not determined
+     */
+    Unknown = "unknown",
+    /**
+     * Update User Mode - for users who are updating configuration. May be `existing-user` as well, but possibly they want to treat it differently.
+     */
+    // eslint-disable-next-line @typescript-eslint/no-duplicate-enum-values -- Update is a semantic alias for the unknown setup mode.
+    Update = "unknown", // Alias for Unknown for better readability
+}
+
+export type SettingsInitialisationApplicationResult =
+    | { result: "scheduled"; mode: SetupInitialisationMode }
+    | { result: "cancelled" }
+    | { result: "failed"; mode: SetupInitialisationMode };
+
+export type ApplySettingsWithInitialisationChoiceOptions = {
+    applySettings: () => Promise<void>;
+    isP2P: boolean;
+    validateChoice?: (mode: SetupInitialisationMode) => Promise<boolean>;
+};
+
+/**
+ * Setup Manager to handle onboarding and configuration setup
+ */
+export class SetupManager extends AbstractModule {
+    private p2pSetupConnectionProbe?: P2PConnectionProbeAdmission;
+
+    // /**
+    //  * Dialog manager for handling Svelte dialogs
+    //  */
+    // private dialogManager: SvelteDialogManager = new SvelteDialogManager(this.plugin);
+    get dialogManager() {
+        return this.services.UI.dialogManager;
+    }
+
+    /** Bind the stable P2P owner's probe view to host-owned Setup dialogues. */
+    registerP2PSetupConnectionProbe(connectionProbe: P2PConnectionProbeAdmission): void {
+        if (this.p2pSetupConnectionProbe && this.p2pSetupConnectionProbe !== connectionProbe) {
+            throw new Error("The P2P Setup connection probe has already been registered.");
+        }
+        this.p2pSetupConnectionProbe = connectionProbe;
+    }
+
+    /** Open P2P Setup with the owner-arbitrated connection-probe boundary. */
+    openP2PSetup(settings: P2PSyncSetting): Promise<SetupRemoteP2PResultType> {
+        const connectionProbe = this.p2pSetupConnectionProbe;
+        if (!connectionProbe) {
+            throw new Error("The P2P Setup connection probe is not available.");
+        }
+        return this.dialogManager.openWithExplicitCancel<SetupRemoteP2PResultType, SetupRemoteP2PInitialData>(
+            SetupRemoteP2P,
+            { settings, connectionProbe }
+        );
+    }
+
+    /**
+     * Ask which existing data should be authoritative for pending setting changes,
+     * then reserve the matching next-start operation before applying them.
+     *
+     * Cancellation and reservation failure remain distinct so the caller may
+     * offer an explicit settings-only fallback only after a user cancellation.
+     */
+    async applySettingsWithInitialisationChoice({
+        applySettings,
+        isP2P,
+        validateChoice = () => Promise.resolve(true),
+    }: ApplySettingsWithInitialisationChoiceOptions): Promise<SettingsInitialisationApplicationResult> {
+        const mode = await this.dialogManager.openWithExplicitCancel<
+            ApplySettingsInitialisationResultType,
+            ApplySettingsInitialisationInitialData
+        >(ApplySettingsInitialisation, { isP2P });
+        if (mode === "cancelled") {
+            return { result: "cancelled" };
+        }
+        if (!(await validateChoice(mode))) {
+            return { result: "failed", mode };
+        }
+        const scheduled = await applySettingsWithScheduledInitialisation(this.core.rebuilder, mode, applySettings);
+        return scheduled ? { result: "scheduled", mode } : { result: "failed", mode };
+    }
+
+    /**
+     * Starts the onboarding process
+     * @returns Promise that resolves to true if onboarding completed successfully, false otherwise
+     */
+    async startOnBoarding(): Promise<boolean> {
+        const isUserNewOrExisting = await this.dialogManager.openWithExplicitCancel(Intro);
+        if (isUserNewOrExisting === "new-user") {
+            await this.onOnboard(UserMode.NewUser);
+        } else if (isUserNewOrExisting === "existing-user") {
+            await this.onOnboard(UserMode.ExistingUser);
+        } else if (isUserNewOrExisting === "cancelled") {
+            this._log("Onboarding cancelled by user.", LOG_LEVEL_NOTICE);
+            return false;
+        }
+        return false;
+    }
+
+    /**
+     *  Handles the onboarding process based on user mode
+     * @param userMode
+     * @returns Promise that resolves to true if onboarding completed successfully, false otherwise
+     */
+    async onOnboard(userMode: UserMode): Promise<boolean> {
+        const originalSetting = userMode === UserMode.NewUser ? createNewVaultSettings() : this.core.settings;
+        if (userMode === UserMode.NewUser) {
+            //Ask how to apply initial setup
+            const method = await this.dialogManager.openWithExplicitCancel(SelectMethodNewUser);
+            if (method === "use-setup-uri") {
+                await this.onUseSetupURI(userMode);
+            } else if (method === "configure-manually") {
+                await this.onConfigureManually(originalSetting, userMode);
+            } else if (method === "cancelled") {
+                this._log("Onboarding cancelled by user.", LOG_LEVEL_NOTICE);
+                return false;
+            }
+        } else if (userMode === UserMode.ExistingUser) {
+            const method = await this.dialogManager.openWithExplicitCancel(SelectMethodExisting);
+            if (method === "use-setup-uri") {
+                await this.onUseSetupURI(userMode);
+            } else if (method === "configure-manually") {
+                await this.onConfigureManually(originalSetting, userMode);
+            } else if (method === "scan-qr-code") {
+                await this.onPromptQRCodeInstruction();
+            } else if (method === "cancelled") {
+                this._log("Onboarding cancelled by user.", LOG_LEVEL_NOTICE);
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Handles setup using a setup URI
+     * @param userMode
+     * @param setupURI
+     * @returns Promise that resolves to true if onboarding completed successfully, false otherwise
+     */
+    async onUseSetupURI(userMode: UserMode, setupURI: string = ""): Promise<boolean> {
+        const newSetting = await this.dialogManager.openWithExplicitCancel<UseSetupURIResultType, string>(
+            UseSetupURI,
+            setupURI
+        );
+        if (newSetting === "cancelled") {
+            this._log("Setup URI dialog cancelled.", LOG_LEVEL_NOTICE);
+            return false;
+        }
+        this._log("Setup URI dialog closed.", LOG_LEVEL_VERBOSE);
+        return await this.onConfirmApplySettingsFromWizard(normaliseImportedIdDerivationSettings(newSetting), userMode);
+    }
+
+    /**
+     * Handles manual setup for CouchDB
+     * @param userMode
+     * @param currentSetting
+     * @param activate  Whether to activate the CouchDB as remote type
+     * @returns Promise that resolves to true if setup completed successfully, false otherwise
+     */
+    async onCouchDBManualSetup(
+        userMode: UserMode,
+        currentSetting: ObsidianLiveSyncSettings,
+        activate = true
+    ): Promise<boolean> {
+        const couchConf = await this.dialogManager.openWithExplicitCancel<
+            SetupRemoteCouchDBResultType,
+            SetupRemoteCouchDBInitialData
+        >(SetupRemoteCouchDB, {
+            settings: currentSetting,
+            mode:
+                userMode === UserMode.NewUser
+                    ? "create-or-connect"
+                    : userMode === UserMode.ExistingUser
+                      ? "connect-existing"
+                      : "settings",
+        });
+        if (couchConf === "cancelled") {
+            this._log("Manual configuration cancelled.", LOG_LEVEL_NOTICE);
+            return await this.onOnboard(userMode);
+        }
+        const newSetting = {
+            ...copySettingsForRemoteProfileUpdate(currentSetting),
+            ...couchConf,
+        } as ObsidianLiveSyncSettings;
+        if (activate) {
+            newSetting.remoteType = REMOTE_COUCHDB;
+        }
+        upsertRemoteConfigurationInPlace(newSetting, "couchdb", { activate });
+        return await this.onConfirmApplySettingsFromWizard(newSetting, userMode, activate);
+    }
+
+    /**
+     * Handles manual setup for S3-compatible bucket
+     * @param userMode
+     * @param currentSetting
+     * @param activate Whether to activate the Bucket as remote type
+     * @returns Promise that resolves to true if setup completed successfully, false otherwise
+     */
+    async onBucketManualSetup(
+        userMode: UserMode,
+        currentSetting: ObsidianLiveSyncSettings,
+        activate = true
+    ): Promise<boolean> {
+        const bucketConf = await this.dialogManager.openWithExplicitCancel<
+            SetupRemoteBucketResultType,
+            BucketSyncSetting
+        >(SetupRemoteBucket, currentSetting);
+        if (bucketConf === "cancelled") {
+            this._log("Manual configuration cancelled.", LOG_LEVEL_NOTICE);
+            return await this.onOnboard(userMode);
+        }
+        const newSetting = {
+            ...copySettingsForRemoteProfileUpdate(currentSetting),
+            ...bucketConf,
+        } as ObsidianLiveSyncSettings;
+        if (activate) {
+            newSetting.remoteType = REMOTE_MINIO;
+        }
+        upsertRemoteConfigurationInPlace(newSetting, "s3", { activate });
+        return await this.onConfirmApplySettingsFromWizard(newSetting, userMode, activate);
+    }
+
+    /**
+     * Handles manual setup for P2P
+     * @param userMode
+     * @param currentSetting
+     * @param activate Whether to activate the P2P as remote type (as P2P Only setup)
+     * @returns Promise that resolves to true if setup completed successfully, false otherwise
+     */
+    async onP2PManualSetup(
+        userMode: UserMode,
+        currentSetting: ObsidianLiveSyncSettings,
+        activate = true
+    ): Promise<boolean> {
+        const p2pConf = await this.openP2PSetup(currentSetting);
+        if (p2pConf === "cancelled") {
+            this._log("Manual configuration cancelled.", LOG_LEVEL_NOTICE);
+            return await this.onOnboard(userMode);
+        }
+        const newSetting = {
+            ...copySettingsForRemoteProfileUpdate(currentSetting),
+            ...p2pConf,
+        } as ObsidianLiveSyncSettings;
+        upsertRemoteConfigurationInPlace(newSetting, "p2p", {
+            id: newSetting.P2P_ActiveRemoteConfigurationId || undefined,
+            activate,
+            activateForP2P: true,
+        });
+        return await this.onConfirmApplySettingsFromWizard(newSetting, userMode, activate);
+    }
+
+    /**
+     * Handles only E2EE configuration
+     * @param userMode
+     * @param currentSetting
+     * @returns
+     */
+    async onlyE2EEConfiguration(userMode: UserMode, currentSetting: ObsidianLiveSyncSettings): Promise<boolean> {
+        const e2eeConf = await this.dialogManager.openWithExplicitCancel<
+            SetupRemoteE2EEResultType,
+            SetupRemoteE2EEInitialData
+        >(
+            SetupRemoteE2EE,
+            { settings: currentSetting, newVault: userMode === UserMode.NewUser }
+        );
+        if (e2eeConf === "cancelled") {
+            this._log("E2EE configuration cancelled.", LOG_LEVEL_NOTICE);
+            return false;
+        }
+        const onlyInternalMetadataPreferenceChanged =
+            currentSetting.encryptInternalMetadata !== e2eeConf.encryptInternalMetadata &&
+            currentSetting.encrypt === e2eeConf.encrypt &&
+            currentSetting.passphrase === e2eeConf.passphrase &&
+            currentSetting.E2EEAlgorithm === e2eeConf.E2EEAlgorithm &&
+            currentSetting.usePathObfuscation === e2eeConf.usePathObfuscation &&
+            currentSetting.idDerivationVersion === e2eeConf.idDerivationVersion &&
+            currentSetting.idDerivationKey === e2eeConf.idDerivationKey;
+        if (userMode === UserMode.Update && onlyInternalMetadataPreferenceChanged) {
+            if (e2eeConf.encryptInternalMetadata && currentSetting.remoteType === REMOTE_COUCHDB) {
+                const proceed = "Enable without rebuilding — update every other device first";
+                const choice = await this.core.confirm.askSelectStringDialogue(
+                    "A manual remote Rebuild is strongly recommended to protect existing file properties. " +
+                        "Before continuing without rebuilding, update every other synchronising device to a version " +
+                        "which supports this option, including devices currently running LiveSync. " +
+                        "Existing properties remain unchanged until they are rewritten or rebuilt.",
+                    [proceed, "Cancel"],
+                    { title: "Encrypt internal file Properties", defaultAction: "Cancel" }
+                );
+                if (choice !== proceed) return false;
+            }
+            await this.services.setting.applyPartial(
+                { encryptInternalMetadata: e2eeConf.encryptInternalMetadata },
+                true
+            );
+            return true;
+        }
+        const newSetting = {
+            ...currentSetting,
+            ...e2eeConf,
+        } as ObsidianLiveSyncSettings;
+        return await this.onConfirmApplySettingsFromWizard(newSetting, userMode);
+    }
+
+    /**
+     * Handles manual configuration flow (E2EE + select server)
+     * @param originalSetting
+     * @param userMode
+     * @returns
+     */
+    async onConfigureManually(originalSetting: ObsidianLiveSyncSettings, userMode: UserMode): Promise<boolean> {
+        const e2eeConf = await this.dialogManager.openWithExplicitCancel<
+            SetupRemoteE2EEResultType,
+            SetupRemoteE2EEInitialData
+        >(
+            SetupRemoteE2EE,
+            { settings: originalSetting, newVault: userMode === UserMode.NewUser }
+        );
+        if (e2eeConf === "cancelled") {
+            this._log("Manual configuration cancelled.", LOG_LEVEL_NOTICE);
+            return await this.onOnboard(userMode);
+        }
+        const currentSetting = {
+            ...originalSetting,
+            ...e2eeConf,
+        } as ObsidianLiveSyncSettings;
+        return await this.onSelectServer(currentSetting, userMode);
+    }
+
+    /**
+     * Handles server selection during manual configuration
+     * @param currentSetting
+     * @param userMode
+     * @returns
+     */
+    async onSelectServer(currentSetting: ObsidianLiveSyncSettings, userMode: UserMode): Promise<boolean> {
+        const method = await this.dialogManager.openWithExplicitCancel<SetupRemoteResultType>(SetupRemote);
+        if (method === "couchdb") {
+            return await this.onCouchDBManualSetup(userMode, currentSetting, true);
+        } else if (method === "bucket") {
+            return await this.onBucketManualSetup(userMode, currentSetting, true);
+        } else if (method === "p2p") {
+            return await this.onP2PManualSetup(userMode, currentSetting, true);
+        } else if (method === "cancelled") {
+            this._log("Manual configuration cancelled.", LOG_LEVEL_NOTICE);
+            if (userMode !== UserMode.Unknown) {
+                return await this.onOnboard(userMode);
+            }
+        }
+        // Should not reach here.
+        return false;
+    }
+    /**
+     * Confirms and applies settings obtained from the wizard
+     * @param newConf
+     * @param _userMode
+     * @param activate Whether to activate the remote type in the new settings
+     * @param extra  Extra function to run before applying settings
+     * @returns Promise that resolves to true if settings applied successfully, false otherwise
+     */
+    async onConfirmApplySettingsFromWizard(
+        newConf: ObsidianLiveSyncSettings,
+        _userMode: UserMode,
+        activate: boolean = true,
+        extra: () => void = () => {}
+    ): Promise<boolean> {
+        newConf = await this.services.setting.adjustSettings({
+            ...this.settings,
+            ...newConf,
+        });
+        let userMode = _userMode;
+        if (userMode === UserMode.Unknown) {
+            if (isObjectDifferent(this.settings, newConf, true) === false) {
+                this._log("No changes in settings detected. Skipping applying settings from wizard.", LOG_LEVEL_NOTICE);
+                return true;
+            }
+            // const patch = generatePatchObj(this.settings, newConf);
+            // console.log(`Changes:`);
+            // console.dir(patch);
+            if (!activate) {
+                extra();
+                const applied = await this.applySettingAndScheduleFetchOnActivation(newConf, UserMode.ExistingUser);
+                if (applied) this._log("Setting Applied", LOG_LEVEL_NOTICE);
+                return applied;
+            }
+            // Check virtual changes
+            const original = { ...this.settings, P2P_DevicePeerName: "" } as ObsidianLiveSyncSettings;
+            const modified = { ...newConf, P2P_DevicePeerName: "" } as ObsidianLiveSyncSettings;
+            const isOnlyVirtualChange = isObjectDifferent(original, modified, true) === false;
+            if (isOnlyVirtualChange) {
+                extra();
+                const applied = await this.applySettingAndScheduleFetchOnActivation(newConf, UserMode.ExistingUser);
+                if (applied) this._log("Settings from wizard applied.", LOG_LEVEL_NOTICE);
+                return applied;
+            } else {
+                const userModeResult =
+                    await this.dialogManager.openWithExplicitCancel<OutroAskUserModeResultType>(OutroAskUserMode);
+                if (userModeResult === "new-user") {
+                    userMode = UserMode.NewUser;
+                } else if (userModeResult === "existing-user") {
+                    userMode = UserMode.ExistingUser;
+                } else if (userModeResult === "compatible-existing-user") {
+                    extra();
+                    const applied = await this.applySettingAndScheduleFetchOnActivation(newConf, UserMode.ExistingUser);
+                    if (applied) this._log("Settings from wizard applied.", LOG_LEVEL_NOTICE);
+                    return applied;
+                } else if (userModeResult === "cancelled") {
+                    this._log("User cancelled applying settings from wizard.", LOG_LEVEL_NOTICE);
+                    return false;
+                }
+            }
+        }
+        const component = userMode === UserMode.NewUser ? OutroNewUser : OutroExistingUser;
+        const confirm = await this.dialogManager.openWithExplicitCancel<
+            OutroNewUserResultType | OutroExistingUserResultType,
+            { isP2P: boolean }
+        >(component, { isP2P: isP2PMainRemote(newConf) });
+        if (confirm === "cancelled") {
+            this._log("User cancelled applying settings from wizard..", LOG_LEVEL_NOTICE);
+            return false;
+        }
+        if (confirm) {
+            extra();
+            if (userMode === UserMode.NewUser) {
+                // Reserve Rebuild before enabling the imported settings, so
+                // the current runtime cannot begin ordinary processing first.
+                await applySettingsWithScheduledInitialisation(this.core.rebuilder, "rebuild", async () => {
+                    await this.applySetting(newConf, userMode);
+                });
+            } else {
+                // Existing data must be fetched before the ordinary startup scan.
+                await applySettingsWithScheduledInitialisation(this.core.rebuilder, "fetch", async () => {
+                    await this.applySetting(newConf, userMode);
+                });
+            }
+        }
+        // Settings applied, but may require rebuild to take effect.
+        return false;
+    }
+
+    /**
+     * Prompts the user with QR code scanning instructions
+     * @returns Promise that resolves to false as QR code instruction dialog does not yield settings directly
+     */
+
+    async onPromptQRCodeInstruction(): Promise<boolean> {
+        const qrResult = await this.dialogManager.open<ScanQRCodeResultType>(ScanQRCode);
+        this._log("QR Code dialog closed.", LOG_LEVEL_VERBOSE);
+        // Result is not used, but log it for debugging.
+        this._log(qrResult, LOG_LEVEL_VERBOSE);
+        // QR Code instruction dialog never yields settings directly.
+        return false;
+    }
+
+    /**
+     * Decodes settings from a QR code string and applies them
+     * @param qr QR code string containing encoded settings
+     * @returns Promise that resolves to true if settings applied successfully, false otherwise
+     */
+    async decodeQR(qr: string) {
+        let newSettings: ObsidianLiveSyncSettings;
+        try {
+            newSettings = normaliseImportedIdDerivationSettings(decodeSettingsFromQRCodeData(qr));
+        } catch {
+            this._log("The QR configuration could not be decoded or contains unsupported settings.", LOG_LEVEL_NOTICE);
+            return false;
+        }
+        return await this.onConfirmApplySettingsFromWizard(newSettings, UserMode.Unknown);
+    }
+
+    /**
+     * Applies the new settings to the core settings and saves them
+     * @param newConf
+     * @param userMode
+     * @returns Promise that resolves to true if settings applied successfully, false otherwise
+     */
+    async applySetting(newConf: ObsidianLiveSyncSettings, userMode: UserMode) {
+        this.services.setting.clearUsedPassphrase();
+        await this.services.setting.applyExternalSettings(newConf, true);
+        return true;
+    }
+
+    private async applySettingAndScheduleFetchOnActivation(
+        newConf: ObsidianLiveSyncSettings,
+        userMode: UserMode
+    ): Promise<boolean> {
+        const wasConfigured = this.settings.isConfigured;
+        return await applySettingsAndFetchOnActivation(
+            this.core.rebuilder,
+            wasConfigured,
+            newConf.isConfigured,
+            async () => {
+                await this.applySetting(newConf, userMode);
+            }
+        );
+    }
+}

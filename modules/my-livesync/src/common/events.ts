@@ -1,0 +1,60 @@
+import { createLiveSyncEventHub } from "@vrtmrz/livesync-commonlib/context";
+// import type ObsidianLiveSyncPlugin from "../main";
+
+export const EVENT_PLUGIN_LOADED = "plugin-loaded";
+export const EVENT_PLUGIN_UNLOADED = "plugin-unloaded";
+export const EVENT_FILE_SAVED = "file-saved";
+/** A received note could not be reflected from the local database into the Vault. */
+export const EVENT_VAULT_REFLECTION_FAILED = "vault-reflection-failed";
+/** Device-local SyncGuard preferences changed without changing replication settings. */
+export const EVENT_SYNC_GUARD_PREFERENCES_CHANGED = "sync-guard-preferences-changed";
+export const EVENT_LEAF_ACTIVE_CHANGED = "leaf-active-changed";
+
+export const EVENT_REQUEST_OPEN_SETTINGS = "request-open-settings";
+export const EVENT_REQUEST_OPEN_SETUP_URI = "request-open-setup-uri";
+export const EVENT_REQUEST_COPY_SETUP_URI = "request-copy-setup-uri";
+export const EVENT_REQUEST_SHOW_SETUP_QR = "request-show-setup-qr";
+
+export const EVENT_REQUEST_RELOAD_SETTING_TAB = "reload-setting-tab";
+
+export const EVENT_REQUEST_OPEN_PLUGIN_SYNC_DIALOG = "request-open-plugin-sync-dialog";
+
+export const EVENT_REQUEST_RUN_DOCTOR = "request-run-doctor";
+export const EVENT_REQUEST_RUN_FIX_INCOMPLETE = "request-run-fix-incomplete";
+
+export const EVENT_ANALYSE_DB_USAGE = "analyse-db-usage";
+export const EVENT_INSPECT_DB_INTEGRITY = "inspect-db-integrity";
+export const EVENT_REQUEST_PERFORM_GC_V3 = "request-perform-gc-v3";
+// export const EVENT_REQUEST_CHECK_REMOTE_SIZE = "request-check-remote-size";
+// export const EVENT_FILE_CHANGED = "file-changed";
+
+declare global {
+    interface LSEvents {
+        [EVENT_PLUGIN_LOADED]: undefined;
+        [EVENT_PLUGIN_UNLOADED]: undefined;
+        [EVENT_VAULT_REFLECTION_FAILED]: undefined;
+        [EVENT_SYNC_GUARD_PREFERENCES_CHANGED]: undefined;
+        [EVENT_REQUEST_OPEN_PLUGIN_SYNC_DIALOG]: undefined;
+        [EVENT_REQUEST_OPEN_SETTINGS]: undefined;
+        [EVENT_REQUEST_RELOAD_SETTING_TAB]: undefined;
+        [EVENT_LEAF_ACTIVE_CHANGED]: undefined;
+        [EVENT_REQUEST_OPEN_SETUP_URI]: undefined;
+        [EVENT_REQUEST_COPY_SETUP_URI]: undefined;
+        [EVENT_REQUEST_SHOW_SETUP_QR]: undefined;
+        [EVENT_REQUEST_RUN_DOCTOR]: string;
+        [EVENT_REQUEST_RUN_FIX_INCOMPLETE]: undefined;
+        [EVENT_ANALYSE_DB_USAGE]: undefined;
+        [EVENT_INSPECT_DB_INTEGRITY]: undefined;
+        [EVENT_REQUEST_PERFORM_GC_V3]: undefined;
+    }
+}
+
+export * from "@vrtmrz/livesync-commonlib/compat/events/coreEvents";
+
+/**
+ * Self-hosted LiveSync's host event channel.
+ *
+ * Commonlib does not own a process-global channel. Each LiveSync host context is
+ * composed with this channel while legacy host UI modules migrate to context.events.
+ */
+export const eventHub = createLiveSyncEventHub();

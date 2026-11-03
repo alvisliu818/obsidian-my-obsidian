@@ -1,0 +1,392 @@
+import { normalizePath, Platform, TAbstractFile, type RequestUrlParam, requestUrl } from "@/deps.ts";
+import {
+    path2id_base,
+    id2path_base,
+    isValidFilenameInLinux,
+    isValidFilenameInDarwin,
+    isValidFilenameInWidows,
+    isValidFilenameInAndroid,
+    stripAllPrefixes,
+    expandFilePathPrefix,
+} from "@vrtmrz/livesync-commonlib/compat/string_and_binary/path";
+
+import { Logger } from "@vrtmrz/livesync-commonlib/compat/common/logger";
+import {
+    LOG_LEVEL_INFO,
+    LOG_LEVEL_NOTICE,
+    LOG_LEVEL_VERBOSE,
+    type AnyEntry,
+    type CouchDBCredentials,
+    type DocumentID,
+    type EntryHasPath,
+    type FilePath,
+    type FilePathWithPrefix,
+    type UXFileInfo,
+    type UXFileInfoStub,
+} from "@vrtmrz/livesync-commonlib/compat/common/types";
+export { ICHeader, ICXHeader } from "./types.ts";
+import { writeString } from "@vrtmrz/livesync-commonlib/compat/string_and_binary/convert";
+import { sameChangePairs } from "./stores.ts";
+
+import { scheduleTask } from "octagonal-wheels/concurrency/task";
+import { AuthorizationHeaderGenerator } from "@vrtmrz/livesync-commonlib/compat/replication/httplib";
+import type { KeyValueDatabase } from "@vrtmrz/livesync-commonlib/compat/interfaces/KeyValueDatabase";
+
+export { scheduleTask, cancelTask, cancelAllTasks } from "octagonal-wheels/concurrency/task";
+
+// For backward compatibility, using the path for determining id.
+// Only CouchDB unacceptable ID (that starts with an underscore) has been prefixed with "/".
+// The first slash will be deleted when the path is normalized.
+export async function path2id(
+    filename: FilePathWithPrefix | FilePath,
+    obfuscatePassphrase: string | false,
+    caseInsensitive: boolean
+): Promise<DocumentID> {
+    const [prefix, path] = expandFilePathPrefix(filename);
+    const normalizedPath = normalizePath(path as FilePath);
+    const fixedPath = `${prefix}${normalizedPath}` as FilePathWithPrefix;
+
+    const out = await path2id_base(fixedPath, obfuscatePassphrase, caseInsensitive);
+    return out;
+}
+export function id2path(id: DocumentID, entry?: EntryHasPath): FilePathWithPrefix {
+    const filename = id2path_base(id, entry);
+    const [prefix, path] = expandFilePathPrefix(filename);
+    const normalizedPath = normalizePath(path as FilePath);
+    const fixedPath = `${prefix}${normalizedPath}` as FilePathWithPrefix;
+    return fixedPath;
+}
+
+export function getPathFromTFile(file: TAbstractFile) {
+    return file.path as FilePath;
+}
+
+import {
+    isInternalFile,
+    getPathFromUXFileInfo,
+    getStoragePathFromUXFileInfo,
+    getDatabasePathFromUXFileInfo,
+} from "@vrtmrz/livesync-commonlib/compat/common/typeUtils";
+export { isInternalFile, getPathFromUXFileInfo, getStoragePathFromUXFileInfo, getDatabasePathFromUXFileInfo };
+
+const memos: { [key: string]: unknown } = {};
+export function memoObject<T>(key: string, obj: T): T {
+    memos[key] = obj;
+    return memos[key] as T;
+}
+export async function memoIfNotExist<T>(key: string, func: () => T | Promise<T>): Promise<T> {
+    if (!(key in memos)) {
+        const w = func();
+        const v = w instanceof Promise ? await w : w;
+        memos[key] = v;
+    }
+    return memos[key] as T;
+}
+export function retrieveMemoObject<T>(key: string): T | false {
+    if (key in memos) {
+        return memos[key] as T;
+    } else {
+        return false;
+    }
+}
+export function disposeMemoObject(key: string) {
+    delete memos[key];
+}
+
+export function isValidPath(filename: string) {
+    if (Platform.isDesktop) {
+        // if(Platform.isMacOS) return isValidFilenameInDarwin(filename);
+        if (process.platform == "darwin") return isValidFilenameInDarwin(filename);
+        if (process.platform == "linux") return isValidFilenameInLinux(filename);
+        return isValidFilenameInWidows(filename);
+    }
+    if (Platform.isAndroidApp) return isValidFilenameInAndroid(filename);
+    if (Platform.isIosApp) return isValidFilenameInDarwin(filename);
+    //Fallback
+    Logger("Could not determine platform for checking filename", LOG_LEVEL_VERBOSE);
+    return isValidFilenameInWidows(filename);
+}
+
+export function trimPrefix(target: string, prefix: string) {
+    return target.startsWith(prefix) ? target.substring(prefix.length) : target;
+}
+
+export {
+    isInternalMetadata,
+    id2InternalMetadataId,
+    isChunk,
+    isCustomisationSyncMetadata,
+    isPluginMetadata,
+    stripInternalMetadataPrefix,
+} from "@vrtmrz/livesync-commonlib/compat/common/typeUtils";
+
+export const _requestToCouchDBFetch = async (
+    baseUri: string,
+    username: string,
+    password: string,
+    path?: string,
+    body?: unknown,
+    method?: string
+) => {
+    const utf8str = String.fromCharCode.apply(null, [...writeString(`${username}:${password}`)]);
+    const encoded = compatGlobal.btoa(utf8str);
+    const authHeader = "Basic " + encoded;
+    const transformedHeaders: Record<string, string> = {
+        authorization: authHeader,
+        "content-type": "application/json",
+    };
+    const uri = `${baseUri.replace(/\/+$/, "")}/${path}`;
+    const requestParam = {
+        url: uri,
+        method: method || (body ? "PUT" : "GET"),
+        headers: new Headers(transformedHeaders),
+        contentType: "application/json",
+        body: JSON.stringify(body),
+    };
+    return await _fetch(uri, requestParam);
+};
+
+export const _requestToCouchDB = async (
+    baseUri: string,
+    credentials: CouchDBCredentials,
+    origin: string,
+    path?: string,
+    body?: unknown,
+    method?: string,
+    customHeaders?: Record<string, string>
+) => {
+    // Create each time to avoid caching.
+    const authHeaderGen = new AuthorizationHeaderGenerator();
+    const authHeader = await authHeaderGen.getAuthorizationHeader(credentials);
+    const transformedHeaders: Record<string, string> = { authorization: authHeader, origin: origin, ...customHeaders };
+    const uri = `${baseUri.replace(/\/+$/, "")}/${path}`;
+    const requestParam: RequestUrlParam = {
+        url: uri,
+        method: method || (body ? "PUT" : "GET"),
+        headers: transformedHeaders,
+        contentType: "application/json",
+        body: body ? JSON.stringify(body) : undefined,
+    };
+    return await requestUrl(requestParam);
+};
+/**
+ * @deprecated Use requestToCouchDBWithCredentials instead.
+ */
+export const requestToCouchDB = async (
+    baseUri: string,
+    username: string,
+    password: string,
+    origin: string = "",
+    key?: string,
+    body?: string,
+    method?: string,
+    customHeaders?: Record<string, string>
+) => {
+    const uri = `_node/_local/_config${key ? "/" + key : ""}`;
+    return await _requestToCouchDB(
+        baseUri,
+        { username, password, type: "basic" },
+        origin,
+        uri,
+        body,
+        method,
+        customHeaders
+    );
+};
+
+export function requestToCouchDBWithCredentials(
+    baseUri: string,
+    credentials: CouchDBCredentials,
+    origin: string = "",
+    key?: string,
+    body?: string,
+    method?: string,
+    customHeaders?: Record<string, string>
+) {
+    const uri = `_node/_local/_config${key ? "/" + key : ""}`;
+    return _requestToCouchDB(baseUri, credentials, origin, uri, body, method, customHeaders);
+}
+
+import { BASE_IS_NEW, EVEN, TARGET_IS_NEW } from "@vrtmrz/livesync-commonlib/compat/common/models/shared.const.symbols";
+export { BASE_IS_NEW, EVEN, TARGET_IS_NEW };
+// Why 2000? : ZIP FILE Does not have enough resolution.
+import { compareMTime } from "@vrtmrz/livesync-commonlib/compat/common/utils";
+import { _fetch, compatGlobal } from "@vrtmrz/livesync-commonlib/compat/common/coreEnvFunctions";
+export { compareMTime };
+function getKey(file: AnyEntry | string | UXFileInfoStub) {
+    const key = typeof file == "string" ? file : stripAllPrefixes(file.path);
+    return key;
+}
+
+export function markChangesAreSame(file: AnyEntry | string | UXFileInfoStub, mtime1: number, mtime2: number) {
+    if (mtime1 === mtime2) return true;
+    const key = getKey(file);
+    const pairs = sameChangePairs.get(key, []) || [];
+    if (pairs.some((e) => e == mtime1 || e == mtime2)) {
+        sameChangePairs.set(key, [...new Set([...pairs, mtime1, mtime2])]);
+    } else {
+        sameChangePairs.set(key, [mtime1, mtime2]);
+    }
+}
+
+export function unmarkChanges(file: AnyEntry | string | UXFileInfoStub) {
+    const key = getKey(file);
+    sameChangePairs.delete(key);
+}
+export function isMarkedAsSameChanges(
+    file: UXFileInfoStub | AnyEntry | string,
+    mtimes: number[]
+): undefined | typeof EVEN {
+    const key = getKey(file);
+    const pairs = sameChangePairs.get(key, []) || [];
+    if (mtimes.every((e) => pairs.indexOf(e) !== -1)) {
+        return EVEN;
+    }
+}
+export function compareFileFreshness(
+    baseFile: UXFileInfoStub | AnyEntry | undefined,
+    checkTarget: UXFileInfo | AnyEntry | undefined
+): typeof BASE_IS_NEW | typeof TARGET_IS_NEW | typeof EVEN {
+    if (baseFile === undefined && checkTarget == undefined) return EVEN;
+    if (baseFile == undefined) return TARGET_IS_NEW;
+    if (checkTarget == undefined) return BASE_IS_NEW;
+
+    const modifiedBase = "stat" in baseFile ? (baseFile?.stat?.mtime ?? 0) : (baseFile?.mtime ?? 0);
+    const modifiedTarget = "stat" in checkTarget ? (checkTarget?.stat?.mtime ?? 0) : (checkTarget?.mtime ?? 0);
+
+    if (modifiedBase && modifiedTarget && isMarkedAsSameChanges(baseFile, [modifiedBase, modifiedTarget])) {
+        return EVEN;
+    }
+    return compareMTime(modifiedBase, modifiedTarget);
+}
+
+const _cached = new Map<
+    string,
+    {
+        value: unknown;
+        context: Map<string, unknown>;
+    }
+>();
+
+export type MemoOption = {
+    key: string;
+    forceUpdate?: boolean;
+    validator?: (context: Map<string, unknown>) => boolean;
+};
+
+export function useMemo<T>(
+    { key, forceUpdate, validator }: MemoOption,
+    updateFunc: (context: Map<string, unknown>, prev: T) => T
+): T {
+    const cached = _cached.get(key);
+    const context = cached?.context || new Map<string, unknown>();
+    if (cached && !forceUpdate && (!validator || (validator && !validator(context)))) {
+        return cached.value as T;
+    }
+    const value = updateFunc(context, cached?.value as T);
+    if (value !== cached?.value) {
+        _cached.set(key, { value, context });
+    }
+    return value;
+}
+
+const _staticObj = new Map<
+    string,
+    {
+        value: unknown;
+    }
+>();
+
+export function useStatic<T>(key: string): { value: T | undefined };
+export function useStatic<T>(key: string, initial: T): { value: T };
+export function useStatic<T>(key: string, initial?: T) {
+    // if (!_static.has(key) && initial) {
+    //     _static.set(key, initial);
+    // }
+    const obj = _staticObj.get(key);
+    if (obj !== undefined) {
+        return obj;
+    } else {
+        // let buf = initial;
+        const obj = {
+            _buf: initial,
+            get value() {
+                return this._buf as T;
+            },
+            set value(value: T) {
+                this._buf = value;
+            },
+        };
+        _staticObj.set(key, obj);
+        return obj;
+    }
+}
+export function disposeMemo(key: string) {
+    _cached.delete(key);
+}
+
+export function disposeAllMemo() {
+    _cached.clear();
+}
+
+export function getLogLevel(showNotice: boolean) {
+    return showNotice ? LOG_LEVEL_NOTICE : LOG_LEVEL_INFO;
+}
+
+export type MapLike<K, V> = {
+    set(key: K, value: V): Map<K, V>;
+    clear(): void;
+    delete(key: K): boolean;
+    get(key: K): V | undefined;
+    has(key: K): boolean;
+    keys: () => IterableIterator<K>;
+    get size(): number;
+};
+
+export async function autosaveCache<K, V>(db: KeyValueDatabase, mapKey: string): Promise<MapLike<K, V>> {
+    const savedData = (await db.get<Map<K, V>>(mapKey)) ?? new Map<K, V>();
+    const _commit = () => {
+        try {
+            scheduleTask("commit-map-save-" + mapKey, 250, async () => {
+                await db.set(mapKey, savedData);
+            });
+        } catch {
+            // NO OP.
+        }
+    };
+    return {
+        set(key: K, value: V) {
+            const modified = savedData.get(key) !== value;
+            const result = savedData.set(key, value);
+            if (modified) {
+                _commit();
+            }
+            return result;
+        },
+        clear(): void {
+            savedData.clear();
+            _commit();
+        },
+        delete(key: K): boolean {
+            const result = savedData.delete(key);
+            if (result) {
+                _commit();
+            }
+            return result;
+        },
+        get(key: K): V | undefined {
+            return savedData.get(key);
+        },
+        has(key) {
+            return savedData.has(key);
+        },
+        keys() {
+            return savedData.keys();
+        },
+        get size() {
+            return savedData.size;
+        },
+    };
+}
+
+export { displayRev } from "@vrtmrz/livesync-commonlib/compat/common/utils";

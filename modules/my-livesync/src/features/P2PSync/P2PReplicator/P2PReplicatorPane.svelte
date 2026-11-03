@@ -1,0 +1,602 @@
+<script lang="ts">
+    import { onMount } from "svelte";
+    import { ValueStoreError } from "@vrtmrz/value-store";
+    import { AutoAccepting, DEFAULT_SETTINGS, type P2PSyncSetting } from "@vrtmrz/livesync-commonlib/compat/common/types";
+    import {
+        AcceptedStatus,
+        ConnectionStatus,
+        type PeerStatus,
+    } from "@vrtmrz/livesync-commonlib/compat/replication/trystero/P2PReplicatorPaneCommon";
+    import type { P2PReplicatorPaneHost } from "./P2PReplicatorPaneHost";
+    import PeerStatusRow from "@/features/P2PSync/P2PReplicator/PeerStatusRow.svelte";
+    import { EVENT_LAYOUT_READY } from "@vrtmrz/livesync-commonlib/compat/events/coreEvents";
+    import {
+        type PeerInfo,
+        type P2PServerInfo,
+        EVENT_SERVER_STATUS,
+        EVENT_P2P_REPLICATOR_STATUS,
+    } from "@vrtmrz/livesync-commonlib/compat/replication/trystero/TrysteroReplicatorP2PServer";
+    import type { P2PReplicatorStatus } from "@vrtmrz/livesync-commonlib/compat/replication/trystero/TrysteroReplicator";
+    import { $msg as _msg } from "@/common/translation";
+    import { SETTING_KEY_P2P_DEVICE_NAME } from "@vrtmrz/livesync-commonlib/compat/common/types";
+    import { generateP2PRoomId } from "@vrtmrz/livesync-commonlib/compat/common/utils";
+
+    interface Props {
+        host: P2PReplicatorPaneHost;
+    }
+
+    let { host }: Props = $props();
+    let services = $derived(host.services);
+    let events = $derived(services.context.events);
+    const currentSettings = () => services.setting.currentSettings() as P2PSyncSetting;
+    const initialSettings = { ...currentSettings() } as P2PSyncSetting;
+
+    let settings = $state<P2PSyncSetting>(initialSettings);
+
+    let deviceName = $state<string>("");
+    let deviceNameReady = $state(false);
+    let dialogStatusReady = $state(false);
+    type StorageErrorKey = "deviceNameLoad" | "dialogStatusLoad" | "deviceNameWrite" | "dialogStatusWrite";
+    let storageErrors = $state<Partial<Record<StorageErrorKey, string>>>({});
+    let mounted = false;
+    let deviceNameLoadSequence = 0;
+    let deviceNameWriteQueue: Promise<void> = Promise.resolve();
+    let dialogStatusWriteQueue: Promise<void> = Promise.resolve();
+
+    let eP2PEnabled = $state<boolean>(initialSettings.P2P_Enabled);
+    let eRelay = $state<string>(initialSettings.P2P_relays);
+    let eRoomId = $state<string>(initialSettings.P2P_roomID);
+    let ePassword = $state<string>(initialSettings.P2P_passphrase);
+    let eAppId = $state<string>(initialSettings.P2P_AppID);
+    let eDeviceName = $state<string>("");
+    let eAutoAccept = $state<boolean>(initialSettings.P2P_AutoAccepting == AutoAccepting.ALL);
+    let eAutoStart = $state<boolean>(initialSettings.P2P_AutoStart);
+    let eAutoBroadcast = $state<boolean>(initialSettings.P2P_AutoBroadcast);
+
+    const isP2PEnabledModified = $derived.by(() => eP2PEnabled !== settings.P2P_Enabled);
+    const isRelayModified = $derived.by(() => eRelay !== settings.P2P_relays);
+    const isRoomIdModified = $derived.by(() => eRoomId !== settings.P2P_roomID);
+    const isPasswordModified = $derived.by(() => ePassword !== settings.P2P_passphrase);
+    const isAppIdModified = $derived.by(() => eAppId !== settings.P2P_AppID);
+    const isDeviceNameModified = $derived.by(() => eDeviceName !== deviceName);
+    const isAutoAcceptModified = $derived.by(() => eAutoAccept !== (settings.P2P_AutoAccepting == AutoAccepting.ALL));
+    const isAutoStartModified = $derived.by(() => eAutoStart !== settings.P2P_AutoStart);
+    const isAutoBroadcastModified = $derived.by(() => eAutoBroadcast !== settings.P2P_AutoBroadcast);
+
+    const isAnyModified = $derived.by(
+        () =>
+            isP2PEnabledModified ||
+            isRelayModified ||
+            isRoomIdModified ||
+            isPasswordModified ||
+            isAppIdModified ||
+            isDeviceNameModified ||
+            isAutoAcceptModified ||
+            isAutoStartModified ||
+            isAutoBroadcastModified
+    );
+
+    async function saveAndApply() {
+        const savedDeviceName = eDeviceName;
+        // const newSettings = {
+        //     ...currentSettings(),
+        //     P2P_Enabled: eP2PEnabled,
+        //     P2P_relays: eRelay,
+        //     P2P_roomID: eRoomId,
+        //     P2P_passphrase: ePassword,
+        //     P2P_AppID: eAppId,
+        //     P2P_AutoAccepting: eAutoAccept ? AutoAccepting.ALL : AutoAccepting.NONE,
+        //     P2P_AutoStart: eAutoStart,
+        //     P2P_AutoBroadcast: eAutoBroadcast,
+        // };
+        await services.setting.applyPartial(
+            {
+                P2P_Enabled: eP2PEnabled,
+                P2P_relays: eRelay,
+                P2P_roomID: eRoomId,
+                P2P_passphrase: ePassword,
+                P2P_AppID: eAppId,
+                P2P_AutoAccepting: eAutoAccept ? AutoAccepting.ALL : AutoAccepting.NONE,
+                P2P_AutoStart: eAutoStart,
+                P2P_AutoBroadcast: eAutoBroadcast,
+            },
+            true
+        );
+        try {
+            await queueDeviceNameWrite(savedDeviceName);
+            if (!mounted) return;
+            deviceName = savedDeviceName;
+            clearStorageError("deviceNameWrite");
+        } catch (error) {
+            setStorageError("deviceNameWrite", error);
+        }
+    }
+
+    function setStorageError(key: StorageErrorKey, error: unknown) {
+        if (mounted) {
+            storageErrors = {
+                ...storageErrors,
+                [key]: error instanceof Error ? error.message : String(error),
+            };
+        }
+    }
+
+    function clearStorageError(key: StorageErrorKey) {
+        if (!mounted) return;
+        const nextErrors = { ...storageErrors };
+        delete nextErrors[key];
+        storageErrors = nextErrors;
+    }
+
+    function queueDeviceNameWrite(name: string): Promise<void> {
+        const write = deviceNameWriteQueue.catch(() => undefined).then(async () => {
+            if (!mounted) return;
+            await services.config.setValue(SETTING_KEY_P2P_DEVICE_NAME, name);
+        });
+        deviceNameWriteQueue = write;
+        return write;
+    }
+    async function revert() {
+        eP2PEnabled = settings.P2P_Enabled;
+        eRelay = settings.P2P_relays;
+        eRoomId = settings.P2P_roomID;
+        ePassword = settings.P2P_passphrase;
+        eAppId = settings.P2P_AppID;
+        eAutoAccept = settings.P2P_AutoAccepting == AutoAccepting.ALL;
+        eAutoStart = settings.P2P_AutoStart;
+        eAutoBroadcast = settings.P2P_AutoBroadcast;
+    }
+
+    let serverInfo = $state<P2PServerInfo | undefined>(undefined);
+    let replicatorInfo = $state<P2PReplicatorStatus | undefined>(undefined);
+    const applyLoadSettings = (d: P2PSyncSetting, force: boolean) => {
+        if (force) {
+            void loadDeviceName(true).catch(() => undefined);
+        }
+        const { P2P_relays, P2P_roomID, P2P_passphrase, P2P_AppID, P2P_AutoAccepting } = d;
+        if (force || !isP2PEnabledModified) eP2PEnabled = d.P2P_Enabled;
+        if (force || !isRelayModified) eRelay = P2P_relays;
+        if (force || !isRoomIdModified) eRoomId = P2P_roomID;
+        if (force || !isPasswordModified) ePassword = P2P_passphrase;
+        if (force || !isAppIdModified) eAppId = P2P_AppID;
+        const newAutoAccept = P2P_AutoAccepting === AutoAccepting.ALL;
+        if (force || !isAutoAcceptModified) eAutoAccept = newAutoAccept;
+        if (force || !isAutoStartModified) eAutoStart = d.P2P_AutoStart;
+        if (force || !isAutoBroadcastModified) eAutoBroadcast = d.P2P_AutoBroadcast;
+
+        settings = d;
+    };
+    onMount(() => {
+        mounted = true;
+        const r = events.onEvent("setting-saved", async (d) => {
+            applyLoadSettings(d, false);
+            closeServer();
+        });
+        const rx = events.onEvent(EVENT_LAYOUT_READY, () => {
+            applyLoadSettings(currentSettings(), true);
+        });
+        const r2 = events.onEvent(EVENT_SERVER_STATUS, (status) => {
+            serverInfo = status;
+            advertisements = status?.knownAdvertisements ?? [];
+        });
+        const r3 = events.onEvent(EVENT_P2P_REPLICATOR_STATUS, (status) => {
+            replicatorInfo = status;
+        });
+        applyLoadSettings(currentSettings(), false);
+        void loadInitialPreferences().catch(() => undefined);
+        host.p2p.diagnostics.requestStatus();
+        return () => {
+            mounted = false;
+            r();
+            rx();
+            r2();
+            r3();
+        };
+    });
+
+    async function loadInitialPreferences() {
+        const deviceNameLoad = loadDeviceName(true).catch(() => undefined);
+        const dialogStatusLoad = readDialogStatus().then(
+            (dialogStatus) => {
+                if (!mounted) return;
+                isNoticeOpened = dialogStatus.notice ?? true;
+                isSettingOpened = dialogStatus.setting ?? true;
+                dialogStatusReady = true;
+                clearStorageError("dialogStatusLoad");
+            },
+            (error: unknown) => {
+                setStorageError("dialogStatusLoad", error);
+            }
+        );
+        await Promise.all([deviceNameLoad, dialogStatusLoad]);
+    }
+
+    async function loadDeviceName(force: boolean) {
+        const request = ++deviceNameLoadSequence;
+        try {
+            const savedDeviceName = await services.config.getValue(SETTING_KEY_P2P_DEVICE_NAME, "");
+            if (!mounted || request !== deviceNameLoadSequence) return;
+            const initialDeviceName = savedDeviceName;
+            if (force || !isDeviceNameModified) {
+                deviceName = initialDeviceName;
+                eDeviceName = initialDeviceName;
+            }
+            deviceNameReady = true;
+            clearStorageError("deviceNameLoad");
+        } catch (error) {
+            if (mounted && request === deviceNameLoadSequence) setStorageError("deviceNameLoad", error);
+            throw error;
+        }
+    }
+    let isConnected = $derived.by(() => {
+        return serverInfo?.isConnected ?? false;
+    });
+    let serverPeerId = $derived.by(() => {
+        return serverInfo?.serverPeerId ?? "";
+    });
+    let advertisements = $state<PeerInfo[]>([]);
+
+    let autoSyncPeers = $derived.by(() =>
+        settings.P2P_AutoSyncPeers.split(",")
+            .map((e) => e.trim())
+            .filter((e) => e)
+    );
+    let autoWatchPeers = $derived.by(() =>
+        settings.P2P_AutoWatchPeers.split(",")
+            .map((e) => e.trim())
+            .filter((e) => e)
+    );
+    let syncOnCommand = $derived.by(() =>
+        settings.P2P_SyncOnReplication.split(",")
+            .map((e) => e.trim())
+            .filter((e) => e)
+    );
+
+    const peers = $derived.by(() =>
+        advertisements.map((ad) => {
+            let accepted: AcceptedStatus;
+            const isTemporaryAccepted = ad.isTemporaryAccepted;
+            if (isTemporaryAccepted === undefined) {
+                if (ad.isAccepted === undefined) {
+                    accepted = AcceptedStatus.UNKNOWN;
+                } else {
+                    accepted = ad.isAccepted ? AcceptedStatus.ACCEPTED : AcceptedStatus.DENIED;
+                }
+            } else if (isTemporaryAccepted === true) {
+                accepted = AcceptedStatus.ACCEPTED_IN_SESSION;
+            } else {
+                accepted = AcceptedStatus.DENIED_IN_SESSION;
+            }
+            const isFetching = replicatorInfo?.replicatingFrom.indexOf(ad.peerId) !== -1;
+            const isSending = replicatorInfo?.replicatingTo.indexOf(ad.peerId) !== -1;
+            const isWatching = replicatorInfo?.watchingPeers.indexOf(ad.peerId) !== -1;
+            const syncOnStart = autoSyncPeers.indexOf(ad.name) !== -1;
+            const watchOnStart = autoWatchPeers.indexOf(ad.name) !== -1;
+            const syncOnReplicationCommand = syncOnCommand.indexOf(ad.name) !== -1;
+            const st: PeerStatus = {
+                name: ad.name,
+                peerId: ad.peerId,
+                accepted: accepted,
+                status: ad.isAccepted ? ConnectionStatus.CONNECTED : ConnectionStatus.DISCONNECTED,
+                isSending: isSending,
+                isFetching: isFetching,
+                isWatching: isWatching,
+                syncOnConnect: syncOnStart,
+                watchOnConnect: watchOnStart,
+                syncOnReplicationCommand: syncOnReplicationCommand,
+            };
+            return st;
+        })
+    );
+
+    function useDefaultRelay() {
+        eRelay = DEFAULT_SETTINGS.P2P_relays;
+    }
+    function chooseRandom() {
+        eRoomId = generateP2PRoomId();
+    }
+
+    async function openServer() {
+        await host.p2p.transportLifecycle.connect();
+    }
+    async function closeServer() {
+        await host.p2p.transportLifecycle.disconnect();
+    }
+    function startBroadcasting() {
+        host.p2p.changeRelay.enableBroadcastChanges();
+    }
+    function stopBroadcasting() {
+        host.p2p.changeRelay.disableBroadcastChanges();
+    }
+
+    const initialDialogStatusKey = `p2p-dialog-status`;
+    const readDialogStatus = async (): Promise<{ notice?: boolean; setting?: boolean }> => {
+        try {
+            const initialDialogStatus = await services.config.getObject(initialDialogStatusKey);
+            if (typeof initialDialogStatus !== "object" || initialDialogStatus === null || Array.isArray(initialDialogStatus)) {
+                return {};
+            }
+            const status = initialDialogStatus as Record<string, unknown>;
+            return {
+                ...(typeof status.notice === "boolean" ? { notice: status.notice } : {}),
+                ...(typeof status.setting === "boolean" ? { setting: status.setting } : {}),
+            };
+        } catch (error) {
+            if (error instanceof ValueStoreError && error.code === "invalid-data") {
+                // Invalid optional UI state is recovered with the historical defaults.
+                return {};
+            }
+            throw error;
+        }
+    };
+    let isNoticeOpened = $state<boolean>(true);
+    let isSettingOpened = $state<boolean>(true);
+    $effect(() => {
+        if (!mounted || !dialogStatusReady) return;
+        const dialogStatus = {
+            notice: isNoticeOpened,
+            setting: isSettingOpened,
+        };
+        const write = dialogStatusWriteQueue.catch(() => undefined).then(async () => {
+            if (!mounted) return;
+            await services.config.setObject(initialDialogStatusKey, dialogStatus);
+        });
+        dialogStatusWriteQueue = write;
+        void write.then(
+            () => clearStorageError("dialogStatusWrite"),
+            (error: unknown) => setStorageError("dialogStatusWrite", error)
+        );
+    });
+    let isObsidian = $derived.by(() => {
+        return services.API.getPlatform() === "obsidian";
+    });
+</script>
+
+<article>
+    {#each Object.values(storageErrors) as storageError}
+        <p role="alert">{storageError}</p>
+    {/each}
+    <h1>{_msg("Peer to Peer Replicator")}</h1>
+    <details bind:open={isNoticeOpened}>
+        <summary>{_msg("P2P.Note.Summary")}</summary>
+        <p class="important">{_msg("P2P.Note.important_note")}</p>
+        <p class="important-sub">
+            {_msg("P2P.Note.important_note_sub")}
+        </p>
+        {#each _msg("P2P.Note.description").split("\n\n") as paragraph}
+            <p>{paragraph}</p>
+        {/each}
+    </details>
+    <h2>{_msg("Connection Settings")}</h2>
+    {#if isObsidian}
+        {_msg("You can configure in the Obsidian Plugin Settings.")}
+    {:else}
+        <details bind:open={isSettingOpened}>
+            <summary>{eRelay}</summary>
+            <table class="settings">
+                <tbody>
+                    <tr>
+                        <th>{_msg("Enable P2P Replicator")}</th>
+                        <td>
+                            <label class={{ "is-dirty": isP2PEnabledModified }}>
+                                <input type="checkbox" bind:checked={eP2PEnabled} />
+                            </label>
+                        </td>
+                    </tr><tr>
+                        <th>{_msg("Relay settings")}</th>
+                        <td>
+                            <label class={{ "is-dirty": isRelayModified }}>
+                                <input
+                                    type="text"
+                                    placeholder="wss://exp-relay.vrtmrz.net, wss://xxxxx"
+                                    bind:value={eRelay}
+                                    autocomplete="off"
+                                />
+                                <button onclick={() => useDefaultRelay()}>{_msg("Use vrtmrz's relay")}</button>
+                            </label>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>{_msg("Room ID")}</th>
+                        <td>
+                            <label class={{ "is-dirty": isRoomIdModified }}>
+                                <input
+                                    type="text"
+                                    placeholder="anything-you-like"
+                                    bind:value={eRoomId}
+                                    autocomplete="off"
+                                    spellcheck="false"
+                                    autocorrect="off"
+                                />
+                                <button onclick={() => chooseRandom()}>{_msg("Use Random Number")}</button>
+                            </label>
+                            <span>
+                                <small
+                                    >{_msg(
+                                        "This can isolate your connections between devices. Use the same Room ID for the same devices."
+                                    )}</small
+                                >
+                            </span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>{_msg("Password")}</th>
+                        <td>
+                            <label class={{ "is-dirty": isPasswordModified }}>
+                                <input type="password" placeholder="password" bind:value={ePassword} />
+                            </label>
+                            <span>
+                                <small>
+                                    {_msg("This password is used to encrypt the connection. Use something long enough.")}
+                                </small>
+                            </span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>{_msg("This device name")}</th>
+                        <td>
+                            <label class={{ "is-dirty": isDeviceNameModified }}>
+                                <input
+                                    type="text"
+                                    placeholder="iphone-16"
+                                    bind:value={eDeviceName}
+                                    disabled={!deviceNameReady}
+                                    autocomplete="off"
+                                />
+                            </label>
+                            <span>
+                                <small>
+                                    {_msg(
+                                        'Device name to identify the device. Please use shorter one for the stable peer detection, i.e., "iphone-16" or "macbook-2021".'
+                                    )}
+                                </small>
+                            </span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>{_msg("Auto Connect")}</th>
+                        <td>
+                            <label class={{ "is-dirty": isAutoStartModified }}>
+                                <input type="checkbox" bind:checked={eAutoStart} />
+                            </label>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>{_msg("Start change-broadcasting on Connect")}</th>
+                        <td>
+                            <label class={{ "is-dirty": isAutoBroadcastModified }}>
+                                <input type="checkbox" bind:checked={eAutoBroadcast} />
+                            </label>
+                        </td>
+                    </tr>
+                    <!-- <tr>
+                <th> Auto Accepting </th>
+                <td>
+                    <label class={{ "is-dirty": isAutoAcceptModified }}>
+                        <input type="checkbox" bind:checked={eAutoAccept} />
+                    </label>
+                </td>
+            </tr> -->
+                </tbody>
+            </table>
+            <button disabled={!isAnyModified || !deviceNameReady} class="button mod-cta" onclick={saveAndApply}
+                >{_msg("Save and Apply")}</button
+            >
+            <button disabled={!isAnyModified} class="button" onclick={revert}>{_msg("Revert changes")}</button>
+        </details>
+    {/if}
+
+    <div>
+        <h2>{_msg("Signaling Server Connection")}</h2>
+        <div>
+            {#if !isConnected}
+                <p>{_msg("No Connection")}</p>
+            {:else}
+                <p>{_msg("Connected to Signaling Server (as Peer ID: ${peerId})", { peerId: serverPeerId })}</p>
+            {/if}
+        </div>
+        <div>
+            {#if !isConnected}
+                <button onclick={openServer}>{_msg("Connect")}</button>
+            {:else}
+                <button onclick={closeServer}>{_msg("Disconnect")}</button>
+                {#if replicatorInfo?.isBroadcasting !== undefined}
+                    {#if replicatorInfo?.isBroadcasting}
+                        <button onclick={stopBroadcasting}>{_msg("Stop Broadcasting")}</button>
+                    {:else}
+                        <button onclick={startBroadcasting}>{_msg("Start Broadcasting")}</button>
+                    {/if}
+                {/if}
+                <details>
+                    <summary>{_msg("Broadcasting?")}</summary>
+                    <p>
+                        <small>
+                            {_msg(
+                                "If you want to use `LiveSync`, you should broadcast changes. All `watching` peers which detects this will start the replication for fetching."
+                            )}
+                            <br />
+                            {_msg("However, This should not be enabled if you want to increase your secrecy more.")}
+                        </small>
+                    </p>
+                </details>
+            {/if}
+        </div>
+    </div>
+
+    <div>
+        <h2>{_msg("Peers")}</h2>
+        <table class="peers">
+            <thead>
+                <tr>
+                    <th>{_msg("Name")}</th>
+                    <th>{_msg("Action")}</th>
+                    <th>{_msg("Command")}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {#each peers as peer}
+                    <PeerStatusRow peerStatus={peer} p2p={host.p2p} showPeerMenu={host.showPeerMenu}></PeerStatusRow>
+                {/each}
+            </tbody>
+        </table>
+    </div>
+</article>
+
+<style>
+    article {
+        max-width: 100%;
+    }
+    article p {
+        user-select: text;
+        -webkit-user-select: text;
+    }
+    h2 {
+        margin-top: var(--size-4-1);
+        margin-bottom: var(--size-4-1);
+        padding-bottom: var(--size-4-1);
+        border-bottom: 1px solid var(--background-modifier-border);
+    }
+    label.is-dirty {
+        background-color: var(--background-modifier-error);
+    }
+    input {
+        background-color: transparent;
+    }
+    th {
+        /* display: flex;
+        justify-content: center;
+        align-items: center; */
+        min-height: var(--input-height);
+    }
+    td {
+        min-height: var(--input-height);
+    }
+    td > label {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: flex-start;
+        min-height: var(--input-height);
+    }
+    td > label > * {
+        margin: auto var(--size-4-1);
+    }
+    table.peers {
+        width: 100%;
+    }
+    .important {
+        color: var(--text-error);
+        font-size: 1.2em;
+        font-weight: bold;
+    }
+    .important-sub {
+        color: var(--text-warning);
+    }
+    .settings label {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+    }
+</style>

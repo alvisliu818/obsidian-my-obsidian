@@ -1,0 +1,773 @@
+import { sizeToHumanReadable } from "octagonal-wheels/number";
+import {
+    EntryTypes,
+    LOG_LEVEL_INFO,
+    LOG_LEVEL_NOTICE,
+    LOG_LEVEL_VERBOSE,
+    REMOTE_COUCHDB,
+    type DocumentID,
+    type EntryDoc,
+    type EntryLeaf,
+    type MetaEntry,
+} from "@vrtmrz/livesync-commonlib/compat/common/types";
+import { getNoFromRev } from "@vrtmrz/livesync-commonlib/compat/pouchdb/LiveSyncLocalDB";
+import { LiveSyncCommands } from "@/features/LiveSyncCommands";
+import { withLock } from "octagonal-wheels/concurrency/lock_v2";
+import { arrayToChunkedArray } from "octagonal-wheels/collection";
+import { EVENT_REQUEST_PERFORM_GC_V3, eventHub } from "@/common/events";
+import type { LiveSyncCouchDBReplicator } from "@vrtmrz/livesync-commonlib/compat/replication/couchdb/LiveSyncReplicator";
+import type { ReplicatorInstance } from "@vrtmrz/livesync-commonlib/replication";
+import { delay } from "@vrtmrz/livesync-commonlib/compat/common/utils";
+import { isNotFoundError } from "@vrtmrz/livesync-commonlib/compat/common/utils.doc";
+import { ensureLocalDatabaseMaintenancePrerequisites } from "./maintenancePrerequisites";
+// import { _requestToCouchDB } from "@/common/utils";
+const DB_KEY_SEQ = "gc-seq";
+const DB_KEY_CHUNK_SET = "chunk-set";
+const DB_KEY_DOC_USAGE_MAP = "doc-usage-map";
+type ChunkID = DocumentID;
+type NoteDocumentID = DocumentID;
+type Rev = string;
+
+type ChunkUsageMap = Map<NoteDocumentID, Map<Rev, Set<ChunkID>>>;
+
+type CouchDBCompactionReplicator = ReplicatorInstance &
+    Pick<LiveSyncCouchDBReplicator, "connectRemoteCouchDBWithSetting">;
+
+type CouchDBGarbageCollectionReplicator = ReplicatorInstance &
+    Pick<LiveSyncCouchDBReplicator, "getConnectedDeviceList" | "openOneShotReplication">;
+
+function canCompactCouchDBRemote(replicator: ReplicatorInstance): replicator is CouchDBCompactionReplicator {
+    return (
+        "connectRemoteCouchDBWithSetting" in replicator &&
+        typeof replicator.connectRemoteCouchDBWithSetting === "function"
+    );
+}
+
+function canRunCouchDBGarbageCollection(
+    replicator: ReplicatorInstance
+): replicator is CouchDBGarbageCollectionReplicator {
+    return (
+        "getConnectedDeviceList" in replicator &&
+        typeof replicator.getConnectedDeviceList === "function" &&
+        "openOneShotReplication" in replicator &&
+        typeof replicator.openOneShotReplication === "function"
+    );
+}
+
+export class LocalDatabaseMaintenance extends LiveSyncCommands {
+    onunload(): void {
+        // NO OP.
+    }
+    onload(): void | Promise<void> {
+        // NO OP.
+        this.services.API.addCommand({
+            id: "gc-v3",
+            name: "Garbage Collection V3 (advanced, beta)",
+            icon: "trash-2",
+            checkCallback: (checking) => {
+                const isApplicableRemote = this.settings.remoteType === REMOTE_COUCHDB;
+                if (!this.settings.useEdgeCaseMode || !this._isDatabaseReady() || !isApplicableRemote) {
+                    return false;
+                }
+                if (!checking) {
+                    void this.gcv3();
+                }
+                return true;
+            },
+        });
+        eventHub.onEvent(EVENT_REQUEST_PERFORM_GC_V3, () => this.gcv3());
+    }
+    async allChunks(includeDeleted: boolean = false) {
+        const p = this._progress("", LOG_LEVEL_NOTICE);
+        p.log("Retrieving chunks informations..");
+        try {
+            const ret = await this.localDatabase.allChunks(includeDeleted);
+            return ret;
+        } finally {
+            p.done();
+        }
+    }
+    get database() {
+        return this.localDatabase.localDatabase;
+    }
+    clearHash() {
+        this.localDatabase.clearCaches();
+    }
+
+    async confirm(title: string, message: string, affirmative = "Yes", negative = "No") {
+        return (
+            (await this.core.confirm.askSelectStringDialogue(message, [affirmative, negative], {
+                title,
+                defaultAction: affirmative,
+            })) === affirmative
+        );
+    }
+    async ensureAvailable(operationName: string) {
+        return await ensureLocalDatabaseMaintenancePrerequisites({
+            operationName,
+            settings: this.settings,
+            askSelectStringDialogue: this.core.confirm.askSelectStringDialogue.bind(this.core.confirm),
+            applyPartial: async (settings, saveImmediately) => {
+                await this.core.services.setting.applyPartial(settings, saveImmediately);
+                Object.assign(this.core.settings, settings);
+            },
+        });
+    }
+    /**
+     * Resurrect deleted chunks that are still used in the database.
+     */
+    async resurrectChunks() {
+        if (!(await this.ensureAvailable("Resurrect Chunks"))) return;
+        const { used, existing } = await this.allChunks(true);
+        const excessiveDeletions = [...existing]
+            .filter(([key, e]) => e._deleted)
+            .filter(([key, e]) => used.has(e._id))
+            .map(([key, e]) => e);
+        const completelyLostChunks = [] as string[];
+        // Data lost chunks : chunks that are deleted and data is purged.
+        const dataLostChunks = [...existing]
+            .filter(([key, e]) => e._deleted && e.data === "")
+            .map(([key, e]) => e)
+            .filter((e) => used.has(e._id));
+        for (const e of dataLostChunks) {
+            // Retrieve the data from the previous revision.
+            const doc = await this.database.get(e._id, { rev: e._rev, revs: true, revs_info: true, conflicts: true });
+            const history = doc._revs_info || [];
+            // Chunks are immutable. So, we can resurrect the chunk by copying the data from any of previous revisions.
+            let resurrected = null as null | string;
+            const availableRevs = history
+                .filter((e) => e.status == "available")
+                .map((e) => e.rev)
+                .sort((a, b) => getNoFromRev(a) - getNoFromRev(b));
+            for (const rev of availableRevs) {
+                const revDoc = await this.database.get(e._id, { rev: rev });
+                if (revDoc.type == "leaf" && revDoc.data !== "") {
+                    // Found the data.
+                    resurrected = revDoc.data;
+                    break;
+                }
+            }
+            // If the data is not found, we cannot resurrect the chunk, add it to the excessiveDeletions.
+            if (resurrected !== null) {
+                excessiveDeletions.push({ ...e, data: resurrected, _deleted: false });
+            } else {
+                completelyLostChunks.push(e._id);
+            }
+        }
+        // Chunks to be resurrected.
+        const resurrectChunks = excessiveDeletions.filter((e) => e.data !== "").map((e) => ({ ...e, _deleted: false }));
+
+        if (resurrectChunks.length == 0) {
+            this._notice("No chunks are found to be resurrected.");
+            return;
+        }
+        const message = `We have following chunks that are deleted but still used in the database.
+
+- Completely lost chunks: ${completelyLostChunks.length}
+- Resurrectable chunks: ${resurrectChunks.length}
+
+Do you want to resurrect these chunks?`;
+        if (await this.confirm("Resurrect Chunks", message, "Resurrect", "Cancel")) {
+            const result = await this.database.bulkDocs(resurrectChunks);
+            this.clearHash();
+            const resurrectedChunks = result.filter((e) => "ok" in e).map((e) => e.id);
+            this._notice(`Resurrected chunks: ${resurrectedChunks.length} / ${resurrectChunks.length}`);
+        } else {
+            this._notice("Resurrect operation is cancelled.");
+        }
+    }
+    /**
+     * Commit deletion of files that are marked as deleted.
+     * This method makes the deletion permanent, and the files will not be recovered.
+     * After this, chunks that are used in the deleted files become ready for compaction.
+     */
+    async commitFileDeletion() {
+        if (!(await this.ensureAvailable("Delete Files"))) return;
+        const p = this._progress("", LOG_LEVEL_NOTICE);
+        p.log("Searching for deleted files..");
+        const docs = await this.database.allDocs<MetaEntry>({ include_docs: true });
+        const deletedDocs = docs.rows.filter(
+            (e) => (e.doc?.type == "newnote" || e.doc?.type == "plain") && e.doc?.deleted
+        );
+        if (deletedDocs.length == 0) {
+            p.done("No deleted files found.");
+            return;
+        }
+        p.log(`Found ${deletedDocs.length} deleted files.`);
+
+        const message = `We have following files that are marked as deleted.
+
+- Deleted files: ${deletedDocs.length}
+
+Are you sure to delete these files permanently?
+
+Note: **Make sure to synchronise all devices before deletion.**
+
+> [!Note]
+> This operation affects the database permanently. Deleted files will not be recovered after this operation.
+> And, the chunks that are used in the deleted files will be ready for compaction.`;
+
+        const deletingDocs = deletedDocs.map((e) => ({ ...e.doc, _deleted: true }) as MetaEntry);
+
+        if (await this.confirm("Delete Files", message, "Delete", "Cancel")) {
+            const result = await this.database.bulkDocs(deletingDocs);
+            this.clearHash();
+            p.done(`Deleted ${result.filter((e) => "ok" in e).length} / ${deletedDocs.length} files.`);
+        } else {
+            p.done("Deletion operation is cancelled.");
+        }
+    }
+    /**
+     * Commit deletion of chunks that are not used in the database.
+     * This method makes the deletion permanent, and the chunks will not be recovered if the database run compaction.
+     * After this, the database can shrink the database size by compaction.
+     * It is recommended to compact the database after this operation (History should be kept once before compaction).
+     */
+    async commitChunkDeletion() {
+        if (!(await this.ensureAvailable("Delete Chunks"))) return;
+        const { existing } = await this.allChunks(true);
+        const deletedChunks = [...existing].filter(([key, e]) => e._deleted && e.data !== "").map(([key, e]) => e);
+        const deletedNotVacantChunks = deletedChunks.map((e) => ({ ...e, data: "", _deleted: true }));
+        const size = deletedChunks.reduce((acc, e) => acc + e.data.length, 0);
+        const humanSize = sizeToHumanReadable(size);
+        const message = `We have following chunks that are marked as deleted.
+
+- Deleted chunks: ${deletedNotVacantChunks.length} (${humanSize})
+
+Are you sure to delete these chunks permanently?
+
+Note: **Make sure to synchronise all devices before deletion.**
+
+> [!Note]
+> This operation finally reduces the capacity of the remote.`;
+
+        if (deletedNotVacantChunks.length == 0) {
+            this._notice("No deleted chunks found.");
+            return;
+        }
+        if (await this.confirm("Delete Chunks", message, "Delete", "Cancel")) {
+            const result = await this.database.bulkDocs(deletedNotVacantChunks);
+            this.clearHash();
+            this._notice(
+                `Deleted chunks: ${result.filter((e) => "ok" in e).length} / ${deletedNotVacantChunks.length}`
+            );
+        } else {
+            this._notice("Deletion operation is cancelled.");
+        }
+    }
+    /**
+     * Compact the database.
+     * This method removes all deleted chunks that are not used in the database.
+     * Make sure all devices are synchronized before running this method.
+     */
+    async markUnusedChunks() {
+        if (!(await this.ensureAvailable("Mark unused chunks"))) return;
+        const { used, existing } = await this.allChunks();
+        const existChunks = [...existing];
+        const unusedChunks = existChunks.filter(([key, e]) => !used.has(e._id)).map(([key, e]) => e);
+        const deleteChunks = unusedChunks.map((e) => ({
+            ...e,
+            _deleted: true,
+        }));
+        const size = deleteChunks.reduce((acc, e) => acc + e.data.length, 0);
+        const humanSize = sizeToHumanReadable(size);
+        if (deleteChunks.length == 0) {
+            this._notice("No unused chunks found.");
+            return;
+        }
+        const message = `We have following chunks that are not used from any files.
+
+- Chunks: ${deleteChunks.length} (${humanSize})
+
+Are you sure to mark these chunks to be deleted?
+
+Note: **Make sure to synchronise all devices before deletion.**
+
+> [!Note]
+> This operation will not reduces the capacity of the remote until permanent deletion.`;
+
+        if (await this.confirm("Mark unused chunks", message, "Mark", "Cancel")) {
+            const result = await this.database.bulkDocs(deleteChunks);
+            this.clearHash();
+            this._notice(`Marked chunks: ${result.filter((e) => "ok" in e).length} / ${deleteChunks.length}`);
+        }
+    }
+
+    async removeUnusedChunks() {
+        if (!(await this.ensureAvailable("Delete unused chunks"))) return;
+        const { used, existing } = await this.allChunks();
+        const existChunks = [...existing];
+        const unusedChunks = existChunks.filter(([key, e]) => !used.has(e._id)).map(([key, e]) => e);
+        const deleteChunks = unusedChunks.map((e) => ({
+            ...e,
+            data: "",
+            _deleted: true,
+        }));
+        const size = unusedChunks.reduce((acc, e) => acc + e.data.length, 0);
+        const humanSize = sizeToHumanReadable(size);
+        if (deleteChunks.length == 0) {
+            this._notice("No unused chunks found.");
+            return;
+        }
+        const message = `We have following chunks that are not used from any files.
+
+- Chunks: ${deleteChunks.length} (${humanSize})
+
+Are you sure to delete these chunks?
+
+Note: **Make sure to synchronise all devices before deletion.**
+
+> [!Note]
+> Chunks referenced from deleted files are not deleted. Please run "Commit File Deletion" before this operation.`;
+
+        if (await this.confirm("Mark unused chunks", message, "Mark", "Cancel")) {
+            const result = await this.database.bulkDocs(deleteChunks);
+            this._notice(`Deleted chunks: ${result.filter((e) => "ok" in e).length} / ${deleteChunks.length}`);
+            this.clearHash();
+        }
+    }
+
+    async scanUnusedChunks() {
+        const kvDB = this.core.kvDB;
+        const chunkSet = (await kvDB.get<Set<DocumentID>>(DB_KEY_CHUNK_SET)) || new Set();
+        const chunkUsageMap = (await kvDB.get<ChunkUsageMap>(DB_KEY_DOC_USAGE_MAP)) || new Map();
+        const KEEP_MAX_REVS = 10;
+        const unusedSet = new Set<DocumentID>([...chunkSet]);
+        for (const [, revIdMap] of chunkUsageMap) {
+            const sortedRevId = [...revIdMap.entries()].sort((a, b) => getNoFromRev(b[0]) - getNoFromRev(a[0]));
+            if (sortedRevId.length > KEEP_MAX_REVS) {
+                // If we have more revisions than we want to keep, we need to delete the extras
+            }
+            const keepRevID = sortedRevId.slice(0, KEEP_MAX_REVS);
+            keepRevID.forEach((e) => e[1].forEach((ee: DocumentID) => unusedSet.delete(ee)));
+        }
+        return {
+            chunkSet,
+            chunkUsageMap,
+            unusedSet,
+        };
+    }
+    /**
+     * Track changes in the database and update the chunk usage map for garbage collection.
+     * Note that this only able to perform without Fetch chunks on demand.
+     */
+    async trackChanges(fromStart: boolean = false, showNotice: boolean = false) {
+        if (!(await this.ensureAvailable("Track chunk usage"))) return;
+        const logLevel = showNotice ? LOG_LEVEL_NOTICE : LOG_LEVEL_INFO;
+        const kvDB = this.core.kvDB;
+
+        const previousSeq = fromStart ? "" : await kvDB.get<string>(DB_KEY_SEQ);
+        const chunkSet = (await kvDB.get<Set<DocumentID>>(DB_KEY_CHUNK_SET)) || new Set();
+
+        const chunkUsageMap = (await kvDB.get<ChunkUsageMap>(DB_KEY_DOC_USAGE_MAP)) || new Map();
+
+        const db = this.localDatabase.localDatabase;
+        const verbose = (msg: string) => this._verbose(msg);
+
+        const processDoc = async (doc: EntryDoc, isDeleted: boolean) => {
+            if (!("children" in doc)) {
+                return;
+            }
+            const id = doc._id;
+            const rev = doc._rev!;
+            const deleted = doc._deleted || isDeleted;
+            const softDeleted = doc.deleted;
+            const children = (doc.children || []) as DocumentID[];
+            if (!chunkUsageMap.has(id)) {
+                chunkUsageMap.set(id, new Map<Rev, Set<ChunkID>>());
+            }
+            for (const chunkId of children) {
+                if (deleted) {
+                    chunkUsageMap.get(id)!.delete(rev);
+                    // chunkSet.add(chunkId as DocumentID);
+                } else {
+                    if (softDeleted) {
+                        //TODO: Soft delete
+                        chunkUsageMap.get(id)!.set(rev, (chunkUsageMap.get(id)!.get(rev) || new Set()).add(chunkId));
+                    } else {
+                        chunkUsageMap.get(id)!.set(rev, (chunkUsageMap.get(id)!.get(rev) || new Set()).add(chunkId));
+                    }
+                }
+            }
+            verbose(
+                `Tracking chunk: ${id}/${rev} (${doc?.path}), deleted: ${deleted ? "yes" : "no"} Soft-Deleted:${softDeleted ? "yes" : "no"}`
+            );
+            return await Promise.resolve();
+        };
+        // let saveQueue = 0;
+        const saveState = async (seq: string | number) => {
+            await kvDB.set(DB_KEY_SEQ, seq);
+            await kvDB.set(DB_KEY_CHUNK_SET, chunkSet);
+            await kvDB.set(DB_KEY_DOC_USAGE_MAP, chunkUsageMap);
+        };
+
+        const processDocRevisions = async (doc: EntryDoc) => {
+            try {
+                const oldRevisions = await db.get(doc._id, { revs: true, revs_info: true, conflicts: true });
+                const allRevs = oldRevisions._revs_info?.length || 0;
+                const info = (oldRevisions._revs_info || [])
+                    .filter((e) => e.status == "available" && e.rev != doc._rev)
+                    .filter((info) => !chunkUsageMap.get(doc._id)?.has(info.rev));
+                const infoLength = info.length;
+                this._log(`Found ${allRevs} old revisions for ${doc._id} . ${infoLength} items to check `);
+                if (info.length > 0) {
+                    const oldDocs = await Promise.all(
+                        info
+                            .filter((revInfo) => revInfo.status == "available")
+                            .map((revInfo) => db.get(doc._id, { rev: revInfo.rev }))
+                    ).then((docs) => docs.filter((doc) => doc));
+                    for (const oldDoc of oldDocs) {
+                        await processDoc(oldDoc, false);
+                    }
+                }
+            } catch (ex) {
+                if (isNotFoundError(ex)) {
+                    this._log(`No revisions found for ${doc._id}`, LOG_LEVEL_VERBOSE);
+                } else {
+                    this._log(`Error finding revisions for ${doc._id}`);
+                    this._verbose(ex);
+                }
+            }
+        };
+        const processChange = async (doc: EntryDoc, isDeleted: boolean, seq: string | number) => {
+            if (doc.type === EntryTypes.CHUNK) {
+                if (isDeleted) return;
+                chunkSet.add(doc._id);
+            } else if ("children" in doc) {
+                await processDoc(doc, isDeleted);
+                await withLock("x-process-doc", async () => await processDocRevisions(doc));
+            }
+        };
+        // Track changes
+        let i = 0;
+        await db
+            .changes({
+                since: previousSeq || "",
+                live: false,
+                conflicts: true,
+                include_docs: true,
+                style: "all_docs",
+                return_docs: false,
+            })
+            .on("change", async (change) => {
+                // handle change
+                await processChange(change.doc!, change.deleted ?? false, change.seq);
+                if (i++ % 100 == 0) {
+                    await saveState(change.seq);
+                }
+            })
+            .on("complete", async (info) => {
+                await saveState(info.last_seq);
+            });
+
+        // Track all changed docs and new-leafs;
+
+        const result = await this.scanUnusedChunks();
+
+        const message = `Total chunks: ${result.chunkSet.size}\nUnused chunks: ${result.unusedSet.size}`;
+        this._log(message, logLevel);
+    }
+    async performGC(showingNotice = false) {
+        if (!(await this.ensureAvailable("Garbage Collection"))) return;
+        await this.trackChanges(false, showingNotice);
+        const title = "Are all devices synchronised?";
+        const confirmMessage = `This function deletes unused chunks from the device. If there are differences between devices, some chunks may be missing when resolving conflicts.
+Be sure to synchronise before executing.
+
+If chunks used by current Vault files are deleted, Hatch -> Recreate chunks for current Vault files can recreate them only from files currently present in the Vault. It cannot recover unreadable historical or conflict content.
+
+Are you ready to delete unused chunks?`;
+
+        const logLevel = showingNotice ? LOG_LEVEL_NOTICE : LOG_LEVEL_INFO;
+
+        const BUTTON_OK = `Yes, delete chunks`;
+        const BUTTON_CANCEL = "Cancel";
+
+        const result = await this.core.confirm.askSelectStringDialogue(
+            confirmMessage,
+            [BUTTON_OK, BUTTON_CANCEL] as const,
+            {
+                title,
+                defaultAction: BUTTON_CANCEL,
+            }
+        );
+        if (result !== BUTTON_OK) {
+            this._log("User cancelled chunk deletion", logLevel);
+            return;
+        }
+        const { unusedSet, chunkSet } = await this.scanUnusedChunks();
+        const deleteChunks = await this.database.allDocs({
+            keys: [...unusedSet],
+            include_docs: true,
+        });
+        for (const chunk of deleteChunks.rows) {
+            if ((chunk as { value?: { deleted?: boolean } })?.value?.deleted) {
+                chunkSet.delete(chunk.key as DocumentID);
+            }
+        }
+        const deleteDocs = deleteChunks.rows
+            .filter((e) => "doc" in e)
+            .map((e) => ({
+                ...(e as { doc?: EntryLeaf }).doc!,
+                _deleted: true,
+            }));
+
+        this._log(`Deleting chunks: ${deleteDocs.length}`, logLevel);
+        const deleteChunkBatch = arrayToChunkedArray(deleteDocs, 100);
+        let successCount = 0;
+        let errored = 0;
+        for (const batch of deleteChunkBatch) {
+            const results = await this.database.bulkDocs(batch);
+            for (const result of results) {
+                if ("ok" in result) {
+                    chunkSet.delete(result.id as DocumentID);
+                    successCount++;
+                } else {
+                    this._log(`Failed to delete doc: ${result.id}`, LOG_LEVEL_VERBOSE);
+                    errored++;
+                }
+            }
+            this._log(`Deleting chunks: ${successCount} `, logLevel, "gc-preforming");
+        }
+        const message = `Garbage Collection completed.
+Success: ${successCount}, Errored: ${errored}`;
+        this._log(message, logLevel);
+        const kvDB = this.core.kvDB;
+        await kvDB.set(DB_KEY_CHUNK_SET, chunkSet);
+    }
+
+    async compactDatabase() {
+        const replicator = this.core.replicator;
+        if (!canCompactCouchDBRemote(replicator)) return;
+        const remote = await replicator.connectRemoteCouchDBWithSetting(this.settings, false, false, true);
+        if (!remote) {
+            this._notice("Failed to connect to remote for compaction.", "gc-compact");
+            return;
+        }
+        if (typeof remote == "string") {
+            this._notice(`Failed to connect to remote for compaction. ${remote}`, "gc-compact");
+            return;
+        }
+        try {
+            const compactResult = await remote.db.compact({
+                interval: 1000,
+            });
+            // Probably no need to wait, but just in case.
+            let timeout = 2 * 60 * 1000; // 2 minutes
+            for (;;) {
+                const status = await remote.db.info();
+                if ("compact_running" in status && status?.compact_running) {
+                    this._notice("Compaction in progress on remote database...", "gc-compact");
+                    await delay(2000);
+                    timeout -= 2000;
+                    if (timeout <= 0) {
+                        this._notice("Compaction on remote database timed out.", "gc-compact");
+                        return;
+                    }
+                } else {
+                    break;
+                }
+            }
+            if (compactResult && "ok" in compactResult) {
+                this._notice("Compaction on remote database completed successfully.", "gc-compact");
+            } else {
+                this._notice("Compaction on remote database failed.", "gc-compact");
+            }
+        } finally {
+            await remote.db.close();
+        }
+    }
+
+    // /**
+    //  * Compact the database by temporarily setting the revision limit to 1.
+    //  * @returns
+    //  */
+    // async compactDatabaseWithRevLimit() {
+    //     // Temporarily set revs_limit to 1, perform compaction, and restore the original revs_limit.
+    //     // Very dangerous operation, so now suppressed.
+    //     return Promise.resolve(false);
+    //     const replicator = this.core.replicator as LiveSyncCouchDBReplicator;
+    //     const remote = await replicator.connectRemoteCouchDBWithSetting(this.settings, false, false, true);
+    //     if (!remote) {
+    //         this._notice("Failed to connect to remote for compaction.");
+    //         return;
+    //     }
+    //     if (typeof remote == "string") {
+    //         this._notice(`Failed to connect to remote for compaction. ${remote}`);
+    //         return;
+    //     }
+    //     const customHeaders = parseHeaderValues(this.settings.couchDB_CustomHeaders);
+    //     const credential = generateCredentialObject(this.settings);
+    //     const request = async (path: string, method: string = "GET", body: any = undefined) => {
+    //         const req = await _requestToCouchDB(
+    //             this.settings.couchDB_URI.replace(/\/+$/, "") +
+    //             (this.settings.couchDB_DBNAME ? `/${this.settings.couchDB_DBNAME}` : ""),
+    //             credential,
+    //             window.origin,
+    //             path,
+    //             body,
+    //             method,
+    //             customHeaders
+    //         );
+    //         return req;
+    //     };
+    //     let revsLimit = "";
+    //     const req = await request(`_revs_limit`, "GET");
+    //     if (req.status == 200) {
+    //         revsLimit = req.text.trim();
+    //         this._info(`Remote database _revs_limit: ${revsLimit}`);
+    //     } else {
+    //         this._notice(`Failed to get remote database _revs_limit. Status: ${req.status}`);
+    //         return;
+    //     }
+    //     const req2 = await request(`_revs_limit`, "PUT", 1);
+    //     if (req2.status == 200) {
+    //         this._info(`Set remote database _revs_limit to 1 for compaction.`);
+    //     }
+    //     try {
+    //         await this.compactDatabase();
+    //     } finally {
+    //         // Restore revs_limit
+    //         if (revsLimit) {
+    //             const req3 = await request(`_revs_limit`, "PUT", parseInt(revsLimit));
+    //             if (req3.status == 200) {
+    //                 this._info(`Restored remote database _revs_limit to ${revsLimit}.`);
+    //             } else {
+    //                 this._notice(
+    //                     `Failed to restore remote database _revs_limit. Status: ${req3.status} / ${req3.text}`
+    //                 );
+    //             }
+    //         }
+    //     }
+    // }
+    async gcv3() {
+        const replicator = this.core.replicator;
+        if (this.settings.remoteType !== REMOTE_COUCHDB || !canRunCouchDBGarbageCollection(replicator)) return;
+        if (!(await this.ensureAvailable("Garbage Collection"))) return;
+        // Start one-shot replication to ensure all changes are synced before GC.
+        const r0 = await replicator.openOneShotReplication(this.settings, false, false, "sync");
+        if (!r0) {
+            this._notice(
+                "Failed to start one-shot replication before Garbage Collection. Garbage Collection Cancelled."
+            );
+            return;
+        }
+
+        // Delete the chunk, but first verify the following:
+        // Fetch the list of accepted nodes from the replicator.
+        const OPTION_CANCEL = "Cancel Garbage Collection";
+        const info = await replicator.getConnectedDeviceList();
+        if (!info) {
+            this._notice("No connected device information found. Cancelling Garbage Collection.");
+            return;
+        }
+        const { accepted_nodes, node_info } = info;
+        //1. Compare accepted_nodes and node_info, and confirm whether it is acceptable to delete nodes not present in node_info.
+        const infoMissingNodes = [] as string[];
+        for (const node of accepted_nodes) {
+            if (!(node in node_info)) {
+                infoMissingNodes.push(node);
+            }
+        }
+        if (infoMissingNodes.length > 0) {
+            const message = `The following accepted nodes are missing its node information:\n- ${infoMissingNodes.join("\n- ")}\n\nThis indicates that they have not been connected for some time or have been left on an older version.
+It is preferable to update all devices if possible. If you have any devices that are no longer in use, you can clear all accepted nodes by locking the remote once.`;
+
+            const OPTION_IGNORE = "Ignore and Proceed";
+            // const OPTION_DELETE = "Delete them and proceed";
+            const buttons = [OPTION_CANCEL, OPTION_IGNORE] as const;
+            const result = await this.core.confirm.askSelectStringDialogue(message, buttons, {
+                title: "Node Information Missing",
+                defaultAction: OPTION_CANCEL,
+            });
+            if (result === OPTION_CANCEL) {
+                this._notice("Garbage Collection cancelled by user.");
+                return;
+            } else if (result === OPTION_IGNORE) {
+                this._notice("Proceeding with Garbage Collection, ignoring missing nodes.");
+            }
+        }
+
+        //2. Check whether the progress values in NodeData are roughly the same (only the numerical part is needed).
+        const progressValues = Object.values(node_info).map((entry) => {
+            const progress = typeof entry.progress === "string" ? entry.progress.split("-")[0] : "";
+            return /^\d+$/u.test(progress) ? Number(progress) : Number.NaN;
+        });
+        if (progressValues.length === 0 || progressValues.some((progress) => !Number.isSafeInteger(progress))) {
+            this._notice("No connected device information found. Cancelling Garbage Collection.");
+            return;
+        }
+        const maxProgress = Math.max(...progressValues);
+        const minProgress = Math.min(...progressValues);
+        const progressDifference = maxProgress - minProgress;
+        const OPTION_PROCEED = "Proceed Garbage Collection";
+        //   - If they differ significantly, the node may not have completed synchronisation, potentially causing conflicts. Display a confirmation dialog as a precaution.
+        // - If they are not significantly different, display the standard confirmation dialogue message.
+
+        const detail = `> [!INFO]- The connected devices have been detected as follows:
+${Object.entries(node_info)
+    .map(
+        ([nodeId, nodeData]) =>
+            `> - Device: ${nodeData.device_name} (Node ID: ${nodeId})
+>   - Obsidian version: ${nodeData.app_version}
+>   - Plug-in version: ${nodeData.plugin_version}
+>   - Progress: ${nodeData.progress.split("-")[0]}`
+    )
+    .join("\n")}
+`;
+        const message =
+            progressDifference != 0
+                ? `Some devices have differing progress values (max: ${maxProgress}, min: ${minProgress}).
+This may indicate that some devices have not completed synchronisation, which could lead to conflicts. Strongly recommend confirming that all devices are synchronised before proceeding.`
+                : `All devices have the same progress value (${maxProgress}). Your devices seem to be synchronised. And be able to proceed with Garbage Collection.`;
+        const buttons = [OPTION_PROCEED, OPTION_CANCEL] as const;
+        const defaultAction = progressDifference != 0 ? OPTION_CANCEL : OPTION_PROCEED;
+        const result = await this.core.confirm.askSelectStringDialogue(message + "\n\n" + detail, buttons, {
+            title: "Garbage Collection Confirmation",
+            defaultAction,
+        });
+        if (result !== OPTION_PROCEED) {
+            this._notice("Garbage Collection cancelled by user.");
+            return;
+        }
+        this._notice("Proceeding with Garbage Collection.");
+        //-  3. Once OK is confirmed in the dialogue, execute the chunk deletion. This is performed on the local database and immediately reflected on the remote. After reflecting on the remote, perform compaction.
+        const gcStartTime = Date.now();
+        // Perform Garbage Collection (new implementation).
+        const localDatabase = this.localDatabase.localDatabase;
+        // Use the revision-aware reachability scan. Reading only winning revisions
+        // would make chunks used exclusively by live conflict branches look unused.
+        const { used: usedChunks, existing: allChunks } = await this.localDatabase.allChunks();
+        this._notice(
+            `Garbage Collection: Scanning completed. Total chunks: ${allChunks.size}, Used chunks: ${usedChunks.size}`,
+            "gc-scanning"
+        );
+
+        const unusedChunks = [...allChunks.entries()].filter(([chunkId]) => !usedChunks.has(chunkId));
+        this._notice(`Garbage Collection: Found ${unusedChunks.length} unused chunks to delete.`, "gc-scanning");
+        const deleteChunkDocs = unusedChunks.map(
+            ([chunkId, chunk]) =>
+                ({
+                    _id: chunkId as DocumentID,
+                    _deleted: true,
+                    _rev: chunk._rev,
+                }) as EntryLeaf
+        );
+        const response = await localDatabase.bulkDocs(deleteChunkDocs);
+        const deletedCount = response.filter((e) => "ok" in e).length;
+        const gcEndTime = Date.now();
+        this._notice(
+            `Garbage Collection completed. Deleted chunks: ${deletedCount} / ${unusedChunks.length}. Time taken: ${(gcEndTime - gcStartTime) / 1000} seconds.`
+        );
+        // Send changes to remote
+        const r = await replicator.openOneShotReplication(this.settings, false, false, "pushOnly");
+        // Wait for replication to complete
+        if (!r) {
+            this._notice("Failed to start replication after Garbage Collection.");
+            return;
+        }
+        // Perform compaction
+        await this.compactDatabase();
+        this.clearHash();
+    }
+}

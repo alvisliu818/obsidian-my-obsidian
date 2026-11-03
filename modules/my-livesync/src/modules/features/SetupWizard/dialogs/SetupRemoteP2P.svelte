@@ -1,0 +1,421 @@
+<script lang="ts">
+    import TurnConfiguration from "@/features/P2PSync/TurnConfiguration.svelte";
+    import { validateManagedTurnSettings } from "@/integrations/turnSettings";
+    // import { delay } from "octagonal-wheels/promises";
+    import DialogHeader from "@/modules/services/LiveSyncUI/components/DialogHeader.svelte";
+    import Guidance from "@/modules/services/LiveSyncUI/components/Guidance.svelte";
+    import Decision from "@/modules/services/LiveSyncUI/components/Decision.svelte";
+    import UserDecisions from "@/modules/services/LiveSyncUI/components/UserDecisions.svelte";
+    import InfoNote from "@/modules/services/LiveSyncUI/components/InfoNote.svelte";
+    import InputRow from "@/modules/services/LiveSyncUI/components/InputRow.svelte";
+    import Password from "@/modules/services/LiveSyncUI/components/Password.svelte";
+    import { PouchDB } from "@vrtmrz/livesync-commonlib/compat/pouchdb/pouchdb-browser";
+    import {
+        DEFAULT_SETTINGS,
+        P2P_DEFAULT_SETTINGS,
+        P2PConnectionPaths,
+        P2PMessageSizePresets,
+        PREFERRED_BASE,
+        RemoteTypes,
+        hasP2PTurnConfiguration,
+        normaliseP2PConnectionPath,
+        normaliseP2PMaxWirePayloadBytes,
+        type EntryDoc,
+        type ObsidianLiveSyncSettings,
+        type P2PConnectionInfo,
+        type P2PSyncSetting,
+    } from "@vrtmrz/livesync-commonlib/compat/common/types";
+
+    import { TrysteroReplicator } from "@vrtmrz/livesync-commonlib/compat/replication/trystero/TrysteroReplicator";
+    import type { ReplicatorHostEnv } from "@vrtmrz/livesync-commonlib/compat/replication/trystero/types";
+    import {
+        generateP2PRoomId,
+        pickP2PSyncSettings,
+        type SimpleStore,
+    } from "@vrtmrz/livesync-commonlib/compat/common/utils";
+    import { onMount } from "svelte";
+    import { getDialogContext, type GuestDialogProps } from "@/modules/services/LiveSyncUI/svelteDialog";
+    import { SETTING_KEY_P2P_DEVICE_NAME } from "@vrtmrz/livesync-commonlib/compat/common/types";
+    import ExtraItems from "@/modules/services/LiveSyncUI/components/ExtraItems.svelte";
+    import {
+        TYPE_CANCELLED,
+        type SetupRemoteP2PInitialData,
+        type SetupRemoteP2PResultType,
+    } from "./setupDialogTypes";
+    import { LOG_LEVEL_VERBOSE, Logger } from "octagonal-wheels/common/logger";
+    import { $msg as translateMessage } from "@/common/translation";
+    import { coordinateP2PSetupConnectionProbe, probeP2PSetupConnection } from "./p2pSetupConnectionProbe";
+
+    const default_setting = pickP2PSyncSettings(DEFAULT_SETTINGS);
+    let syncSetting = $state<P2PConnectionInfo>({ ...default_setting });
+
+    const context = getDialogContext();
+    let error = $state("");
+    let connectionPathResetNotice = $state(false);
+    let peerNameReady = $state(false);
+    let mounted = false;
+    const hasValidTurnServer = $derived(hasP2PTurnConfiguration(syncSetting));
+    type Props = GuestDialogProps<SetupRemoteP2PResultType, SetupRemoteP2PInitialData>;
+
+    const { setResult, getInitialData }: Props = $props();
+    let connectionProbe: SetupRemoteP2PInitialData["connectionProbe"] | undefined;
+    onMount(() => {
+        mounted = true;
+        const initialData = getInitialData?.();
+        connectionProbe = initialData?.connectionProbe;
+        const initialSettings = initialData?.settings;
+        if (initialSettings) {
+            syncSetting = pickP2PSyncSettings(initialSettings);
+        }
+        const savedPeerName = initialSettings?.P2P_DevicePeerName;
+        const initialPeerName = typeof savedPeerName === "string" ? savedPeerName.trim() : "";
+        if (initialPeerName !== "") {
+            peerNameReady = true;
+            return () => {
+                mounted = false;
+            };
+        }
+        void context.services.config.getValue(SETTING_KEY_P2P_DEVICE_NAME).then(
+            (cachedPeerName) => {
+                if (mounted) {
+                    if (typeof cachedPeerName === "string" && cachedPeerName) {
+                        syncSetting.P2P_DevicePeerName = cachedPeerName;
+                    }
+                    peerNameReady = true;
+                }
+            },
+            (loadError: unknown) => {
+                if (mounted) {
+                    error = loadError instanceof Error ? loadError.message : String(loadError);
+                    peerNameReady = true;
+                }
+            }
+        );
+        return () => {
+            mounted = false;
+        };
+    });
+    function generateSetting() {
+        const connSetting: P2PSyncSetting = {
+            // remoteType: ",
+            ...P2P_DEFAULT_SETTINGS,
+            ...syncSetting,
+            P2P_Enabled: true,
+            P2P_maxWirePayloadBytes: normaliseP2PMaxWirePayloadBytes(syncSetting.P2P_maxWirePayloadBytes),
+            P2P_connectionPath:
+                normaliseP2PConnectionPath(syncSetting.P2P_connectionPath) === P2PConnectionPaths.Relay &&
+                hasValidTurnServer
+                    ? P2PConnectionPaths.Relay
+                    : P2PConnectionPaths.Automatic,
+        };
+        const trialSettings: P2PSyncSetting = {
+            ...connSetting,
+        };
+        const trialRemoteSetting: ObsidianLiveSyncSettings = {
+            ...DEFAULT_SETTINGS,
+            ...PREFERRED_BASE,
+            remoteType: RemoteTypes.REMOTE_P2P,
+            ...trialSettings,
+        };
+        return trialRemoteSetting;
+    }
+
+    async function checkConnection() {
+        try {
+            processing = true;
+            const sourceError = validateManagedTurnSettings(syncSetting);
+            if (sourceError) return sourceError;
+            const trialRemoteSetting = generateSetting();
+            const admission = connectionProbe;
+            if (!admission) {
+                throw new Error("The P2P Setup connection probe is not available.");
+            }
+            const result = await coordinateP2PSetupConnectionProbe(admission, trialRemoteSetting, async (signallingSettings) => {
+                const map = new Map<string, unknown>();
+                const store = {
+                    get: (key: string) => {
+                        return Promise.resolve(map.get(key) || null);
+                    },
+                    set: (key: string, value: unknown) => {
+                        map.set(key, value);
+                        return Promise.resolve();
+                    },
+                    delete: (key: string) => {
+                        map.delete(key);
+                        return Promise.resolve();
+                    },
+                    keys: () => {
+                        return Promise.resolve(Array.from(map.keys()));
+                    },
+                    get db() {
+                        return Promise.resolve(this);
+                    },
+                } as SimpleStore<unknown>;
+
+                const dummyPouch = new PouchDB<EntryDoc>("dummy");
+                let replicator: TrysteroReplicator | undefined;
+                try {
+                    const env: ReplicatorHostEnv = {
+                        events: context.context.events,
+                        translate: context.context.translate,
+                        settings: signallingSettings,
+                        processReplicatedDocs: async (_docs: PouchDB.Core.ExistingDocument<EntryDoc>[]) => {
+                            return;
+                        },
+                        confirm: context.services.confirm,
+                        db: dummyPouch,
+                        simpleStore: store,
+                        deviceName: syncSetting.P2P_DevicePeerName || "unnamed-device",
+                        platform: "setup-wizard",
+                    };
+                    replicator = new TrysteroReplicator(env);
+                    return await probeP2PSetupConnection(replicator);
+                } finally {
+                    try {
+                        await replicator?.dispose();
+                    } catch (e) {
+                        Logger(e, LOG_LEVEL_VERBOSE, "setup-p2p-replicator-cleanup");
+                    }
+                    try {
+                        await dummyPouch.destroy();
+                    } catch (e) {
+                        Logger(e, LOG_LEVEL_VERBOSE, "setup-p2p-database-cleanup");
+                    }
+                }
+            });
+            if (!result.ok) {
+                if ("kind" in result && result.kind === "blocked") {
+                    return translateMessage(
+                        "The connection test cannot add a signalling relay while P2P is active. Use the active relay settings, or disconnect P2P before testing."
+                    );
+                }
+                return translateMessage("Failed to connect to the signalling relay: ${reason}", {
+                    reason: `${result.reason}`,
+                });
+            }
+            return "";
+        } finally {
+            processing = false;
+        }
+    }
+    function setDefaultRelay() {
+        syncSetting.P2P_relays = P2P_DEFAULT_SETTINGS.P2P_relays;
+    }
+
+    $effect(() => {
+        if (!hasValidTurnServer && syncSetting.P2P_connectionPath === P2PConnectionPaths.Relay) {
+            syncSetting.P2P_connectionPath = P2PConnectionPaths.Automatic;
+            connectionPathResetNotice = true;
+        }
+    });
+
+    let processing = $state(false);
+    function generateDefaultGroupId() {
+        syncSetting.P2P_roomID = generateP2PRoomId();
+    }
+
+    async function checkAndCommit() {
+        if (!peerNameReady) return;
+        error = "";
+        try {
+            error = (await checkConnection()) || "";
+            if (!error) {
+                const setting = generateSetting();
+                setResult(pickP2PSyncSettings(setting));
+                return;
+            }
+        } catch (e) {
+            error = translateMessage("Error during connection test: ${reason}", { reason: `${e}` });
+            return;
+        }
+    }
+    function commit() {
+        if (!peerNameReady) return;
+        error = validateManagedTurnSettings(syncSetting) ?? "";
+        if (error) return;
+        const setting = pickP2PSyncSettings(generateSetting());
+        setResult(setting);
+    }
+    function cancel() {
+        setResult(TYPE_CANCELLED);
+    }
+    const canProceed = $derived.by(() => {
+        return (
+            peerNameReady &&
+            syncSetting.P2P_relays.trim() !== "" &&
+            syncSetting.P2P_roomID.trim() !== "" &&
+            syncSetting.P2P_passphrase.trim() !== "" &&
+            (syncSetting.P2P_DevicePeerName ?? "").trim() !== "" &&
+            validateManagedTurnSettings(syncSetting) === undefined
+        );
+    });
+</script>
+
+<DialogHeader title={translateMessage("P2P Configuration")} />
+<Guidance>{translateMessage("Please enter the Peer-to-Peer Synchronisation information below.")}</Guidance>
+<InputRow label={translateMessage("Enabled")}>
+    <input type="checkbox" name="p2p-enabled" bind:checked={syncSetting.P2P_Enabled} />
+</InputRow>
+<InputRow label={translateMessage("Signalling relay URLs")}>
+    <input
+        type="text"
+        name="p2p-relay-url"
+        placeholder="wss://relay.example.com"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck="false"
+        bind:value={syncSetting.P2P_relays}
+    />
+    <button class="button" onclick={() => setDefaultRelay()}>
+        {translateMessage("Use the project's public signalling relay")}
+    </button>
+</InputRow>
+<InfoNote>
+    {translateMessage("Peer discovery uses Nostr-compatible signalling relays.")}
+    {translateMessage(
+        "The project's public signalling relay is a best-effort convenience operated by the project author. It does not store Vault contents, but signalling metadata may be visible to the relay. Availability and log retention are not guaranteed. You can replace it with your own Nostr-compatible relay."
+    )}
+    <a
+        href="https://github.com/vrtmrz/obsidian-livesync/blob/main/docs/p2p.md"
+        target="_blank"
+        rel="noopener noreferrer">{translateMessage("Learn more about P2P connections")}</a
+    >.
+</InfoNote>
+<InputRow label={translateMessage("Group ID")}>
+    <input
+        type="text"
+        name="p2p-room-id"
+        placeholder="123-456-789-abc"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck="false"
+        bind:value={syncSetting.P2P_roomID}
+    />
+    <button class="button" onclick={() => generateDefaultGroupId()}>{translateMessage("Generate Random ID")}</button>
+</InputRow>
+<InputRow label={translateMessage("Passphrase")}>
+    <Password
+        name="p2p-password"
+        placeholder={translateMessage("Enter your passphrase")}
+        bind:value={syncSetting.P2P_passphrase}
+    />
+</InputRow>
+<InfoNote>
+    {translateMessage(
+        "The Group ID and passphrase are used to identify your group of devices. Make sure to use the same Group ID and passphrase on all devices you want to synchronise."
+    )}<br />
+    {translateMessage(
+        "Note that the Group ID is not limited to the generated format; you can use any string as the Group ID."
+    )}
+</InfoNote>
+<InputRow label={translateMessage("Device Peer ID")}>
+    <input
+        type="text"
+        name="p2p-device-peer-id"
+        placeholder="main-iphone16"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck="false"
+        disabled={!peerNameReady}
+        bind:value={syncSetting.P2P_DevicePeerName}
+    />
+</InputRow>
+<InputRow label={translateMessage("Auto Start P2P Connection")}>
+    <input type="checkbox" name="p2p-auto-start" bind:checked={syncSetting.P2P_AutoStart} />
+</InputRow>
+<InfoNote>
+    {translateMessage(
+        'If "Auto Start P2P Connection" is enabled, the P2P connection will be started automatically when the plug-in launches.'
+    )}
+</InfoNote>
+<InputRow label={translateMessage("Announce changes automatically after connecting")}>
+    <input type="checkbox" name="p2p-auto-broadcast" bind:checked={syncSetting.P2P_AutoBroadcast} />
+</InputRow>
+<InfoNote>
+    {translateMessage(
+        "When enabled, this device notifies connected peers after a local change. The notification contains no Vault data; a peer which follows this device then fetches the change through the encrypted P2P connection."
+    )}
+</InfoNote>
+<ExtraItems title={translateMessage("Connection compatibility")}>
+    <InputRow label={translateMessage("P2P message size")}>
+        <select
+            name="p2p-message-size"
+            aria-label={translateMessage("P2P message size")}
+            bind:value={syncSetting.P2P_maxWirePayloadBytes}
+        >
+            <option value={P2PMessageSizePresets.Standard}>{translateMessage("Standard")}</option>
+            <option value={P2PMessageSizePresets.Reduced}>{translateMessage("Reduced")}</option>
+            <option value={P2PMessageSizePresets.Conservative}>{translateMessage("Conservative")}</option>
+            <option value={P2PMessageSizePresets.MaximumCompatibility}
+                >{translateMessage("Maximum compatibility")}</option
+            >
+        </select>
+    </InputRow>
+    <InfoNote>
+        {translateMessage(
+            "Smaller messages can improve compatibility on paths which fragment or drop larger WebRTC messages. This setting limits outgoing P2P messages, so use a compatible profile on each sending device when required."
+        )}
+    </InfoNote>
+    <InputRow label={translateMessage("Connection path")}>
+        <select
+            name="p2p-connection-path"
+            aria-label={translateMessage("Connection path")}
+            bind:value={syncSetting.P2P_connectionPath}
+            onchange={() => (connectionPathResetNotice = false)}
+        >
+            <option value={P2PConnectionPaths.Automatic}>{translateMessage("Automatic")}</option>
+            <option value={P2PConnectionPaths.Relay} disabled={!hasValidTurnServer}
+                >{translateMessage("TURN relay only")}</option
+            >
+        </select>
+    </InputRow>
+    <InfoNote>
+        {translateMessage(
+            "TURN relay only requires a TURN server or a configured credential source under Advanced Settings."
+        )}
+    </InfoNote>
+    <InfoNote notice visible={connectionPathResetNotice}>
+        {translateMessage(
+            "TURN relay only requires TURN configuration. Connection path has been restored to Automatic."
+        )}
+    </InfoNote>
+</ExtraItems>
+<ExtraItems title={translateMessage("Advanced Settings")}>
+    <InfoNote>
+        {translateMessage(
+            "Configure TURN when a direct connection cannot be established or when you select TURN relay only."
+        )}
+    </InfoNote>
+    <InfoNote>
+        {translateMessage(
+            "WebRTC encrypts data between your devices, including when it passes through TURN. The TURN provider cannot read the transferred data. It can see network addresses and traffic volume."
+        )}
+        <a
+            href="https://github.com/vrtmrz/obsidian-livesync/blob/main/docs/p2p.md#signalling-relay-and-turn-server"
+            target="_blank"
+            rel="noopener noreferrer">{translateMessage("Learn more about signalling and TURN")}</a
+        >.
+    </InfoNote>
+    <TurnConfiguration bind:settings={syncSetting} />
+</ExtraItems>
+<InfoNote error visible={error !== ""}>
+    {error}
+</InfoNote>
+{#if processing}
+    {translateMessage("Checking connection... Please wait.")}
+{:else}
+    <UserDecisions>
+        <Decision
+            title={translateMessage("Test Settings and Continue")}
+            important
+            disabled={!canProceed}
+            commit={() => checkAndCommit()}
+        />
+        <Decision
+            title={translateMessage("Continue anyway")}
+            disabled={!peerNameReady}
+            commit={() => commit()}
+        />
+        <Decision title={translateMessage("Cancel")} commit={() => cancel()} />
+    </UserDecisions>
+{/if}
