@@ -469,9 +469,6 @@ export class ConfigSync extends LiveSyncCommands {
                 return true;
             },
         });
-        this.addRibbonIcon("custom-sync", $msg("cmdConfigSync.showCustomizationSync"), () => {
-            this.showPluginSyncModal();
-        }).addClass("livesync-ribbon-showcustom");
         eventHub.onEvent(EVENT_REQUEST_OPEN_PLUGIN_SYNC_DIALOG, () => this.showPluginSyncModal());
     }
 

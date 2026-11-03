@@ -483,6 +483,9 @@ const inlineImportPlugin = {
     "data-stores/local-data-store": "modules/my-frontmatter-markdown-links/vendor/data-stores/local-data-store.cjs",
     "command-handlers/open-bug-report-command-handler": "modules/my-frontmatter-markdown-links/vendor/command-handlers/open-bug-report-command-handler.cjs",
     "command-handlers/undo-bulk-operation-command-handler": "modules/my-better-markdown-links/vendor/command-handlers/undo-bulk-operation-command-handler.cjs",
+    // FML/ERH 的账本后端迁移:LocalDataStore(IDB) → index-core 的
+    // plugin-kv sqlite(shim 内按开关回退 IDB)。FML/ERH importer 限定。
+    "data-stores/local-data-store": "modules/my-index-core/src/plugin-kv-shim.ts",
     "components/bulk-operation-commit-component": "modules/my-better-markdown-links/vendor/components/bulk-operation-commit-component.cjs",
     link: "modules/my-better-markdown-links/vendor/link.cjs",
     "metadata-cache": "modules/my-better-markdown-links/vendor/metadata-cache.cjs",

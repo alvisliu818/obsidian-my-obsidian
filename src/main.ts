@@ -667,6 +667,10 @@ export default class MyObsidianPlugin extends Plugin {
 	];
 
 	async onload(): Promise<void> {
+		// FML/ERH 的账本后端开关:index-core 的 plugin-kv shim 检测此标记,
+		// true 时它们的 LocalDataStore 走本机 sqlite(Runtime/unified-index/
+		// plugin-kv.sqlite),否则回退原 IDB。桌面端恒开(shim 自检 node:sqlite)。
+		(window as unknown as { __myKvBackend?: boolean }).__myKvBackend = true;
 		// Must precede every module load: the mnaoumov modules call these during
 		// their own onload, and the second one to arrive used to throw.
 		allowReentrantLibraryInit();
