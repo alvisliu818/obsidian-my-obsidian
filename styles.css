@@ -59378,3 +59378,35 @@ body.hearth-snapshot-capturing .hearth-view:not(#hearth-boost) {
 .my-module-settings > summary:hover { color: var(--text-normal); }
 .my-embedded-setting-tab { padding: 4px 2px; }
 .my-embedded-setting-tab .setting-item { border: none; }
+
+/* ==================== Frontmatter Markdown Links (modules/my-frontmatter-markdown-links) ==================== */
+/* 上游 src/styles/main.scss 经 sass 编译并入；模块内 import 走 .scss -> empty loader */
+.frontmatter-markdown-links.text-property-widget-component.metadata-property-value {
+  gap: 0;
+}
+.frontmatter-markdown-links.text-property-widget-component.metadata-property-value > .metadata-property-value {
+  --metadata-divider-width: 0;
+}
+.frontmatter-markdown-links.text-property-widget-component.metadata-property-value > .metadata-property-value > .metadata-property-value:not(:first-of-type) .metadata-link,
+.frontmatter-markdown-links.text-property-widget-component.metadata-property-value > .metadata-property-value > .metadata-property-value:not(:first-of-type) .metadata-input-longtext {
+  padding-left: 0;
+}
+.frontmatter-markdown-links.text-property-widget-component.metadata-property-value > .metadata-property-value > .metadata-property-value:not(:last-of-type) .metadata-link,
+.frontmatter-markdown-links.text-property-widget-component.metadata-property-value > .metadata-property-value > .metadata-property-value:not(:last-of-type) .metadata-input-longtext {
+  padding-right: 0;
+}
+.frontmatter-markdown-links.text-property-widget-component.metadata-property-value .metadata-link-flair {
+  display: none;
+}
+.frontmatter-markdown-links .metadata-property-value, .frontmatter-markdown-links.multi-text-property-component {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 0;
+  min-width: 0;
+  white-space: pre-wrap;
+}
+.bases-table-container:not(.mod-multiline) .frontmatter-markdown-links .metadata-input-longtext:not(:focus-within) {
+  white-space-collapse: preserve;
+  text-wrap: nowrap;
+}

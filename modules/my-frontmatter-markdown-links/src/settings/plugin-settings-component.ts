@@ -1,0 +1,35 @@
+import type { DataHandler } from '@mnaoumov/obsidian-lib/data-handler';
+import type { PluginEventSource } from '@mnaoumov/obsidian-lib/plugin/plugin-event-source';
+
+import { PluginSettingsComponentBase } from '@mnaoumov/obsidian-lib/components/plugin-settings-component';
+
+import { PluginSettings } from './plugin-settings.ts';
+
+interface PluginSettingsComponentConstructorParams {
+  readonly dataHandler: DataHandler;
+  readonly pluginEventSource: PluginEventSource;
+}
+
+class LegacySettings {
+  // Owned by `Advanced Rename and Delete Handler` since 3.0.0. The converter is what keeps the user's value:
+  // The saved record is rebuilt from the declared properties alone, so the first save after the property was
+  // dropped would otherwise strip it from `data.json` before it could ever be offered.
+  public shouldHandleRenames = true;
+}
+
+export class PluginSettingsComponent extends PluginSettingsComponentBase<PluginSettings> {
+  public constructor(params: PluginSettingsComponentConstructorParams) {
+    super({
+      ...params,
+      pluginSettingsClass: PluginSettings
+    });
+  }
+
+  protected override registerLegacySettingsConverters(): void {
+    this.registerLegacySettingsConverter(LegacySettings, (legacySettings) => {
+      if (legacySettings.shouldHandleRenames !== undefined) {
+        legacySettings.proposedShouldHandleRenames = legacySettings.shouldHandleRenames;
+      }
+    });
+  }
+}

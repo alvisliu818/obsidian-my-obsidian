@@ -63,9 +63,10 @@ interface RenameDeleteHandlerOwner {
  *   id 收编退役——CAL 是本 bundle 的共生模块，consistent-attachments-and-links
  *   自 4.1.0 起连 delete-empty-folders 命令都让出（功能被 CAL/ARDH 完全替代），
  *   用户库不存在独立安装形态，检查是死代码，条目删除。
- * - 剩余三条（Better Markdown Links / External Rename Handler /
- *   Frontmatter Markdown Links）按用户拍板也将源码级收编，收编一个删一条，
- *   表清空后整体退役。
+ * - `Frontmatter Markdown Links` 已源码级收编为 my-frontmatter-markdown-links
+ *   模块（v3.1.0，3.0.0 起 handler 让给 ARDH 生态），条目随之删除。
+ * - 剩余两条（Better Markdown Links / External Rename Handler）按用户拍板
+ *   也将源码级收编，收编一个删一条，表清空后整体退役。
  *
  * TODO: 收编完成后删除本表与 getPluginConflicts。
  */
@@ -79,11 +80,6 @@ const RENAME_DELETE_HANDLER_OWNERS: readonly RenameDeleteHandlerOwner[] = [
     firstSupportedVersion: '4.0.0',
     pluginId: 'external-rename-handler',
     pluginName: 'External Rename Handler'
-  },
-  {
-    firstSupportedVersion: '3.0.0',
-    pluginId: 'frontmatter-markdown-links',
-    pluginName: 'Frontmatter Markdown Links'
   }
 ];
 

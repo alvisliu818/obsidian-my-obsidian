@@ -120,6 +120,15 @@ const TerminalPlugin = (
 		default: new (app: unknown, manifest: unknown) => SubPluginLike;
 	}
 ).default;
+// frontmatter-markdown-links v3.1.0（mnaoumov，MIT）：同款 require 桥——
+// 上游 import 全带 .ts 扩展名、obsidian-lib 区间 ^5（根 PnP 5.1.0 兼容），
+// 但按 mnaoumov 系收编判据不进宿主 tsc 程序（模块自带 tsconfig 独立校验）。
+// 见 modules/my-frontmatter-markdown-links/NOTICE.md。
+const FrontmatterMarkdownLinksPlugin = (
+	require("../modules/my-frontmatter-markdown-links/src/main") as {
+		default: new (app: unknown, manifest: unknown) => SubPluginLike;
+	}
+).default;
 import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
 import { registerFreeExtensions } from "./extensionRegistry";
 // 原生 markdown 编辑器（实时预览/源码模式）+ 阅读模式的代码块「▶ 运行」。
@@ -428,6 +437,24 @@ export default class MyObsidianPlugin extends Plugin {
 			desktopOnly: false,
 			manifest: { version: "16.0.0" },
 			cls: CustomAttachmentLocationPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Third-party (mnaoumov, MIT), kept whole — see
+			// modules/my-frontmatter-markdown-links/NOTICE.md. Same require
+			// bridge as CAL/ARDH. 3.0.0 起 rename/delete handler 让给 ARDH
+			// 生态（RENAME_DELETE_HANDLER_OWNERS 曾防它的旧版），收编后该条目
+			// 已从 conflict 表移除。
+			// id 保持上游值存活在插件表（同 music-player/material-icon-theme
+			// 先例）；migrateFrom 一次性迁移独立版 data.json；version 保持
+			// 上游 3.1.0 语义。
+			id: "frontmatter-markdown-links",
+			name: "my Frontmatter Markdown Links",
+			summary:
+				"让 properties 面板里的 frontmatter markdown 链接可点：解析 [[wiki]] 与 [](<md>) 链接、多值属性逐段渲染、Bases 表格同样生效、不合法 frontmatter 可整库开关。上游 mnaoumov（MIT）。",
+			desktopOnly: false,
+			manifest: { version: "3.1.0" },
+			migrateFrom: "frontmatter-markdown-links",
+			cls: FrontmatterMarkdownLinksPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
 			// Third-party (omeyenburg / Oskar Meyenburg, MIT), kept whole — see

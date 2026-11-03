@@ -1,0 +1,45 @@
+import type { BasesControl } from '@obsidian-typings/obsidian-public-latest';
+import type { App } from 'obsidian';
+
+import { MonkeyAroundComponent } from '@mnaoumov/obsidian-lib/components/monkey-around-component';
+import { getPrototypeOf } from '@mnaoumov/typescript-lib/object-utils';
+
+import { didRenderStringValueLinks } from '../links/render-links.ts';
+
+interface StringValueRenderToPatchComponentConstructorParams {
+  readonly app: App;
+  readonly stringValue: BasesControl;
+}
+
+export class StringValueRenderToPatchComponent extends MonkeyAroundComponent {
+  private readonly app: App;
+  private readonly stringValue: BasesControl;
+
+  public constructor(params: StringValueRenderToPatchComponentConstructorParams) {
+    super();
+    this.app = params.app;
+    this.stringValue = params.stringValue;
+  }
+
+  public override onload(): void {
+    this.registerMethodPatch({
+      $object: getPrototypeOf(this.stringValue),
+      methodName: 'renderTo',
+      patchHandler: ({
+        fallback,
+        originalArguments: [containerEl]
+      }) => {
+        // The native `StringValue.renderTo` sets the raw string as the container's text, so after
+        // the fallback the container text is the value. When it holds embedded links,
+        // `didRenderStringValueLinks` empties the container and re-renders text + link spans; otherwise
+        // it leaves the native plain-text rendering untouched.
+        fallback();
+        didRenderStringValueLinks({
+          app: this.app,
+          containerEl,
+          value: containerEl.textContent
+        });
+      }
+    });
+  }
+}

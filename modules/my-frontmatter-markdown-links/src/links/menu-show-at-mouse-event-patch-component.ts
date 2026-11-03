@@ -1,0 +1,50 @@
+import { MonkeyAroundComponent } from '@mnaoumov/obsidian-lib/components/monkey-around-component';
+import {
+  App,
+  Menu,
+  MenuItem,
+  MenuSeparator
+} from 'obsidian';
+
+import { getLinkData } from './link-data.ts';
+
+export class MenuShowAtMouseEventPatchComponent extends MonkeyAroundComponent {
+  public constructor(private readonly app: App) {
+    super();
+  }
+
+  public override onload(): void {
+    this.registerMethodPatch({
+      $object: Menu.prototype,
+      methodName: 'showAtMouseEvent',
+      patchHandler: ({
+        fallback,
+        originalArguments: [$event],
+        originalThis
+      }) => {
+        const menu = originalThis;
+        const target = $event.target as HTMLElement | undefined;
+
+        if (!target) {
+          return fallback();
+        }
+
+        const linkData = getLinkData(target);
+        if (!linkData) {
+          return fallback();
+        }
+
+        if (menu.items.some((menuItem: MenuItem | MenuSeparator) => (menuItem instanceof MenuItem) && menuItem.section === 'open')) {
+          return fallback();
+        }
+        if (linkData.isExternalUrl) {
+          this.app.workspace.handleExternalLinkContextMenu(menu, linkData.url);
+        } else {
+          this.app.workspace.handleLinkContextMenu(menu, linkData.url, this.app.workspace.getActiveFile()?.path ?? '');
+        }
+
+        return fallback();
+      }
+    });
+  }
+}

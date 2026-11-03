@@ -481,9 +481,27 @@ const context = await esbuild.context({
   bundle: true,
   // terminal 的 vendor 子库（polyipseity/obsidian-plugin-library，源码随仓）：
   // 别名到其 TS 入口，esbuild 直接编译源码。子库无 dist、无 node_modules。
+  // FML 的 lib-10-only 子路径（根 PnP 实装 obsidian-lib 5.1.0，FML 上游要
+  // ^10.5.0）：data-stores（LocalDataStore 是 FML 缓存的核心依赖，不可桩空）
+  // 与 bug-report 命令——把 10.5.0 的自包含 dist cjs vendored 进模块
+  // （vendor/，依赖闭包 11 个文件，其余只依赖 typescript-lib/obsidian），
+  // alias 劫持这四个 5.1.0 不存在的子路径，其余 obsidian-lib 路径不受影响
+  // （CAL/ARDH 照走 PnP 5.1.0）。
   alias: {
     "@polyipseity/obsidian-plugin-library": path.resolve(
       "modules/my-terminal/vendor/obsidian-plugin-library/src/index.ts",
+    ),
+    "@mnaoumov/obsidian-lib/data-stores/data-store-seeds": path.resolve(
+      "modules/my-frontmatter-markdown-links/vendor/data-stores/data-store-seeds.cjs",
+    ),
+    "@mnaoumov/obsidian-lib/data-stores/data-store-transport": path.resolve(
+      "modules/my-frontmatter-markdown-links/vendor/data-stores/data-store-transport.cjs",
+    ),
+    "@mnaoumov/obsidian-lib/data-stores/local-data-store": path.resolve(
+      "modules/my-frontmatter-markdown-links/vendor/data-stores/local-data-store.cjs",
+    ),
+    "@mnaoumov/obsidian-lib/command-handlers/open-bug-report-command-handler": path.resolve(
+      "modules/my-frontmatter-markdown-links/vendor/command-handlers/open-bug-report-command-handler.cjs",
     ),
   },
   // obsidian = the host API; @codemirror/* + @lezer/* = Obsidian's own CM6
