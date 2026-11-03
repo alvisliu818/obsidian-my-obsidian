@@ -1,0 +1,1494 @@
+import {
+  Functions,
+  type PluginContext,
+  activeSelf,
+  consumeEvent,
+  deepFreeze,
+  dynamicRequire,
+  isNonNil,
+  replaceAllRegex,
+  revealPrivateFilter,
+} from "@polyipseity/obsidian-plugin-library";
+import type { CanvasAddon } from "@xterm/addon-canvas";
+import type { WebglAddon } from "@xterm/addon-webgl";
+import type { ILink, ITerminalAddon, ITheme, Terminal } from "@xterm/xterm";
+import { eastAsianWidth } from "get-east-asian-width";
+import { around } from "monkey-around";
+import { noop } from "ts-essentials";
+import { BUNDLE } from "../imports.js";
+import { DOMClasses2 } from "../magic.js";
+import type { Settings } from "../settings-data.js";
+import type { $App } from "../@types/obsidian.js";
+import { Win32InputMode, isWin32ClipboardChord } from "./win32-input-mode.js";
+
+const electron = dynamicRequire<typeof import("electron")>(BUNDLE, "electron");
+/* @__PURE__ */ electron.catch(noop); // Prevent unhandled rejections from `dynamicRequire` in tests.
+
+export class DisposerAddon extends Functions implements ITerminalAddon {
+  public constructor(...args: readonly (() => void)[]) {
+    super({ async: false, settled: true }, ...args);
+  }
+
+  public activate(_terminal: Terminal): void {
+    // Noop
+  }
+
+  public dispose(): void {
+    this.call();
+  }
+}
+
+export class DragAndDropAddon implements ITerminalAddon {
+  readonly #disposer = new Functions({ async: false, settled: true });
+
+  public constructor(protected readonly element: HTMLElement) {}
+
+  public activate(terminal: Terminal): void {
+    const { element } = this;
+
+    // Asynchronously load Electron's webUtils API for file path resolution.
+    // This is available in Electron 30+. We load it asynchronously to:
+    // 1. Avoid blocking the terminal initialization
+    // 2. Gracefully handle cases where Electron is unavailable (e.g.,
+    //    running in non-Electron environments or sandboxed contexts)
+    (async (): Promise<void> => {
+      let electron2 = null;
+      try {
+        // Dynamically load the electron module using dynamicRequire with the
+        // configured BUNDLE. This ensures safe loading in both development and
+        // production builds, respecting the plugin's module bundling strategy.
+        electron2 = await electron;
+      } catch (error) {
+        // Electron module failed to load. This is expected in non-Electron
+        // environments. Log at debug level to avoid console spam.
+        // The fallback to File.path will be used if available.
+        /* @__PURE__ */ activeSelf(element).console.debug(error);
+      }
+
+      const getFilePath = (file: File): string | undefined => {
+        // Priority order for file path extraction:
+        // 1. Electron 30+ webUtils.getPathForFile() - recommended, handles edge cases
+        // 2. Catch any errors from getPathForFile() - some paths may fail
+        // 3. Fall back to deprecated File.path - available in Electron < 32
+        if (electron2?.webUtils?.getPathForFile) {
+          try {
+            return electron2.webUtils.getPathForFile(file);
+          } catch (error) {
+            // getPathForFile() failed for this specific file.
+            // This can happen with certain file types or in special contexts.
+            // Log the error and continue with the fallback.
+            /* @__PURE__ */ activeSelf(element).console.warn(error);
+          }
+        }
+        // Fallback to legacy File.path property (Electron < 32).
+        // This property is non-standard and removed in Electron 32+, but provides
+        // compatibility with older versions that may not have webUtils.
+        // eslint-disable-next-line eslint-comments/no-restricted-disable -- Need to suppress no-deprecated (see below)
+        // eslint-disable-next-line @typescript-eslint/no-deprecated -- Intentional fallback for Electron versions without `webUtils.getPathForFile`.
+        return file.path;
+      };
+
+      const drop = (event: DragEvent): void => {
+        terminal.paste(
+          Array.from(event.dataTransfer?.files ?? [])
+            .map(getFilePath)
+            .filter(isNonNil)
+            .map((path) => path.replace(replaceAllRegex('"'), '\\"'))
+            .map((path) => (path.includes(" ") ? `"${path}"` : path))
+            .join(" "),
+        );
+        consumeEvent(event);
+      };
+
+      // dragover handler - needed to enable the drop target
+      const dragover = consumeEvent;
+
+      // Register event listeners and store cleanup functions.
+      // Both listeners are removed when the addon is disposed to prevent memory leaks.
+      this.#disposer.push(
+        () => {
+          element.removeEventListener("dragover", dragover);
+        },
+        () => {
+          element.removeEventListener("drop", drop);
+        },
+      );
+      element.addEventListener("drop", drop);
+      element.addEventListener("dragover", dragover);
+    })().catch((error: unknown) => {
+      // Log errors from the async initialization to help with debugging.
+      activeSelf(element).console.error(error);
+    });
+  }
+
+  public dispose(): void {
+    this.#disposer.call();
+  }
+}
+
+export namespace FollowThemeAddon {
+  export interface Options {
+    /**
+     * Whether the addon should apply changes.
+     * Default: always true
+     */
+    readonly enabled?: () => boolean;
+
+    /**
+     * CSS custom properties to read. If a value is itself another var(), we
+     * resolve it by delegating to the browser.
+     */
+    readonly bgVar?: string; // Default: --background-primary
+    readonly fgVar?: string; // Default: --text-normal
+    readonly accentVar?: string; // Default: --interactive-accent
+
+    /**
+     * Selection overlay alpha. 0..1
+     * Default: 0.3
+     */
+    readonly selectionAlpha?: number;
+
+    /**
+     * Min contrast for cursor vs background. If accent cannot reach this,
+     * fall back to the best of white/black/foreground.
+     * Default: 3
+     */
+    readonly minCursorContrast?: number;
+  }
+
+  export interface RGBA {
+    readonly red: number;
+    readonly green: number;
+    readonly blue: number;
+    readonly alpha: number;
+  }
+}
+export class FollowThemeAddon implements ITerminalAddon {
+  // -------------------------------------------------------------------------
+  // Constants (removed magic numbers) — kept as private static class fields
+  // -------------------------------------------------------------------------
+
+  // CSS variable defaults
+  static readonly #DEFAULT_BG_VAR = "--background-primary";
+  static readonly #DEFAULT_FG_VAR = "--text-normal";
+  static readonly #DEFAULT_ACCENT_VAR = "--interactive-accent";
+
+  // Color constants
+  static readonly #COLOR_ALPHA_OPAQUE = 1;
+  static readonly #COLOR_ALPHA_MIN = 0;
+  static readonly #COLOR_ALPHA_MAX = 1;
+
+  static readonly #COLOR_BLACK: FollowThemeAddon.RGBA = {
+    alpha: 1,
+    blue: 0,
+    green: 0,
+    red: 0,
+  };
+
+  static readonly #COLOR_WHITE: FollowThemeAddon.RGBA = {
+    alpha: 1,
+    blue: 255,
+    green: 255,
+    red: 255,
+  };
+
+  // Selection alpha default
+  static readonly #DEFAULT_SELECTION_ALPHA = 0.3;
+
+  // Cursor contrast default (WCAG-ish practical threshold)
+  static readonly #DEFAULT_MIN_CURSOR_CONTRAST = 3;
+
+  // WCAG relative luminance constants (sRGB -> linear)
+  static readonly #SRGB_THRESHOLD = 0.03928;
+  static readonly #SRGB_DIVISOR = 12.92;
+  static readonly #SRGB_A = 0.055;
+  static readonly #SRGB_GAMMA = 2.4;
+  static readonly #SRGB_FACTOR = 1.055;
+
+  // WCAG luminance coefficients
+  static readonly #LUM_COEFF_R = 0.2126;
+  static readonly #LUM_COEFF_G = 0.7152;
+  static readonly #LUM_COEFF_B = 0.0722;
+
+  // WCAG contrast epsilon
+  static readonly #CONTRAST_EPSILON = 0.05;
+
+  // Number formatting for rgba alpha output
+  static readonly #RGBA_ALPHA_DECIMALS = 3;
+
+  // -------------------------------------------------------------------------
+  // Instance fields
+  // -------------------------------------------------------------------------
+
+  readonly #disposer = new Functions({ async: false, settled: true });
+  #lastThemeKey = "";
+  #terminal: Terminal | null = null;
+
+  public constructor(
+    protected readonly context: PluginContext,
+    protected readonly element: HTMLElement,
+    protected readonly opts: FollowThemeAddon.Options = {},
+  ) {}
+
+  // -------------------------------------------------------------------------
+  // Static methods (declared before private instance methods)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Resolves a CSS custom property to its final computed color string,
+   * even if it is defined via nested var() indirections.
+   */
+  static #resolveCssColor(
+    varName: string,
+    attachTo: HTMLElement,
+  ): string | null {
+    const doc = attachTo.ownerDocument,
+      view = doc.defaultView,
+      computed = view?.getComputedStyle(attachTo),
+      raw = computed?.getPropertyValue(varName) ?? "";
+
+    // Explicitly check for non-empty string and no var() indirection
+    if (raw !== "" && !raw.includes("var(")) {
+      return raw;
+    }
+
+    // Robust path: let the browser resolve var(...) into a concrete color
+    // eslint-disable-next-line eslint-comments/no-restricted-disable -- Need to suppress prefer-create-el (see below)
+    // eslint-disable-next-line obsidianmd/prefer-create-el -- Probe must be created in `doc` (a possibly-popout document); the global `createDiv` binds to the main window.
+    const probe = doc.createElement("div");
+    probe.classList.add(DOMClasses2.COLOR_PROBE);
+    probe.style.backgroundColor = `var(${varName})`;
+    const resolved = ((): string => {
+      attachTo.appendChild(probe);
+      try {
+        return view?.getComputedStyle(probe).backgroundColor ?? "";
+      } finally {
+        probe.remove();
+      }
+    })();
+
+    return resolved === "" ? null : resolved;
+  }
+
+  static #toCss(color: FollowThemeAddon.RGBA): string {
+    const red = Math.round(color.red),
+      green = Math.round(color.green),
+      blue = Math.round(color.blue);
+
+    if (color.alpha === FollowThemeAddon.#COLOR_ALPHA_OPAQUE) {
+      return `rgb(${String(red)}, ${String(green)}, ${String(blue)})`;
+    }
+
+    const alpha = Number(
+      color.alpha.toFixed(FollowThemeAddon.#RGBA_ALPHA_DECIMALS),
+    );
+
+    return `rgba(${String(red)}, ${String(green)}, ${String(blue)}, ${String(alpha)})`;
+  }
+
+  /** WCAG relative luminance of sRGB color */
+  static #lum(color: FollowThemeAddon.RGBA): number {
+    const toLin = (chan: number): number => {
+        const normalized = chan / 255;
+        return normalized <= FollowThemeAddon.#SRGB_THRESHOLD
+          ? normalized / FollowThemeAddon.#SRGB_DIVISOR
+          : ((normalized + FollowThemeAddon.#SRGB_A) /
+              FollowThemeAddon.#SRGB_FACTOR) **
+              FollowThemeAddon.#SRGB_GAMMA;
+      },
+      redLin = toLin(color.red),
+      greenLin = toLin(color.green),
+      blueLin = toLin(color.blue);
+
+    return (
+      FollowThemeAddon.#LUM_COEFF_R * redLin +
+      FollowThemeAddon.#LUM_COEFF_G * greenLin +
+      FollowThemeAddon.#LUM_COEFF_B * blueLin
+    );
+  }
+
+  /** Contrast ratio per WCAG between two colors */
+  static #contrast(
+    colorA: FollowThemeAddon.RGBA,
+    colorB: FollowThemeAddon.RGBA,
+  ): number {
+    const lumA = FollowThemeAddon.#lum(colorA),
+      lumB = FollowThemeAddon.#lum(colorB),
+      [hi, lo] = lumA >= lumB ? [lumA, lumB] : [lumB, lumA];
+    return (
+      (hi + FollowThemeAddon.#CONTRAST_EPSILON) /
+      (lo + FollowThemeAddon.#CONTRAST_EPSILON)
+    );
+  }
+
+  /** Alpha blend: result = (1 - alpha) * base + alpha * top */
+  static #mix(
+    top: FollowThemeAddon.RGBA,
+    base: FollowThemeAddon.RGBA,
+    alpha: number,
+  ): FollowThemeAddon.RGBA {
+    const clamped = Math.min(
+      FollowThemeAddon.#COLOR_ALPHA_MAX,
+      Math.max(FollowThemeAddon.#COLOR_ALPHA_MIN, alpha),
+    );
+
+    return {
+      alpha: FollowThemeAddon.#COLOR_ALPHA_OPAQUE, // Selection is opaque
+      blue: base.blue * (1 - clamped) + top.blue * clamped,
+      green: base.green * (1 - clamped) + top.green * clamped,
+      red: base.red * (1 - clamped) + top.red * clamped,
+    };
+  }
+
+  /** Pick color with highest contrast vs bg */
+  static #bestOf(
+    candidates: readonly FollowThemeAddon.RGBA[],
+    bg: FollowThemeAddon.RGBA,
+  ): FollowThemeAddon.RGBA {
+    return candidates.reduce((best, current) => {
+      const bestC = FollowThemeAddon.#contrast(best, bg),
+        curC = FollowThemeAddon.#contrast(current, bg);
+      return curC > bestC ? current : best;
+    });
+  }
+
+  /** First candidate that meets min contrast, else null */
+  static #bestMeetingContrast(
+    candidates: FollowThemeAddon.RGBA[],
+    bg: FollowThemeAddon.RGBA,
+    min: number,
+  ): FollowThemeAddon.RGBA | null {
+    for (const color of candidates) {
+      if (FollowThemeAddon.#contrast(color, bg) >= min) {
+        return color;
+      }
+    }
+    return null;
+  }
+
+  static #themeKey(theme: ITheme): string {
+    return JSON.stringify({
+      background: theme.background ?? null,
+      cursor: theme.cursor ?? null,
+      foreground: theme.foreground ?? null,
+      selectionBackground: theme.selectionBackground ?? null,
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Public members BEFORE private instance members (member-ordering)
+  // -------------------------------------------------------------------------
+
+  public activate(terminal: Terminal): void {
+    this.#terminal = terminal;
+    this.#update();
+
+    const {
+        app,
+        app: { workspace },
+      } = this.context,
+      // Arrow closure captures the addon's `this` lexically so that
+      // the patched function (where `this` is the app) can still reach
+      // the private #update method without aliasing `this`.
+      doUpdate = (): void => {
+        this.#update();
+      },
+      // Keep in sync with app CSS/theme changes (no throttling)
+      // Obsidian already takes care of system-level theme changes
+      ref = workspace.on("css-change", doUpdate);
+    this.#disposer.push(() => {
+      workspace.offref(ref);
+    });
+
+    revealPrivateFilter<[$App]>()(
+      this.context,
+      [app],
+      (app2) => {
+        // Patch app.setAccentColor to invoke #update after it runs
+        const unpatchSetAccent = around(app2, {
+          setAccentColor(next) {
+            return function patched(
+              this: typeof app,
+              ...args: Parameters<typeof next>
+            ): ReturnType<typeof next> {
+              next.apply(this, args);
+              doUpdate();
+            };
+          },
+        });
+        this.#disposer.push(unpatchSetAccent);
+      },
+      noop,
+    );
+  }
+
+  public refresh(force = false): void {
+    if (force) {
+      this.#lastThemeKey = "";
+    }
+    this.#update();
+  }
+
+  public dispose(): void {
+    this.#disposer.call();
+    this.#terminal = null;
+  }
+
+  // -------------------------------------------------------------------------
+  // Private instance methods (after public members)
+  // -------------------------------------------------------------------------
+
+  #update(): void {
+    if (this.#terminal === null) {
+      return;
+    }
+
+    // When provided, only apply if enabled() returns true
+    if (typeof this.opts.enabled === "function" && !this.opts.enabled()) {
+      return;
+    }
+
+    const next = this.#computeTheme();
+    if (next === null) {
+      return;
+    }
+
+    // No-op if unchanged
+    const key = FollowThemeAddon.#themeKey(next);
+    if (key === this.#lastThemeKey) {
+      return;
+    }
+    this.#lastThemeKey = key;
+
+    // Ensure a new object so the terminal notices the change
+    this.#terminal.options.theme = {
+      ...(this.#terminal.options.theme ?? {}),
+      background: next.background,
+      cursor: next.cursor,
+      foreground: next.foreground,
+      selectionBackground: next.selectionBackground,
+    };
+  }
+
+  /**
+   * Derive an xterm theme from host CSS variables. Returns `null` if
+   * nothing useful is computed.
+   */
+  #computeTheme(): {
+    readonly background: string;
+    readonly cursor: string;
+    readonly foreground: string;
+    readonly selectionBackground: string;
+  } | null {
+    const doc = this.element.ownerDocument,
+      { defaultView: view, body } = doc;
+
+    if (view === null) {
+      return null;
+    }
+
+    const bgVar = this.opts.bgVar ?? FollowThemeAddon.#DEFAULT_BG_VAR,
+      fgVar = this.opts.fgVar ?? FollowThemeAddon.#DEFAULT_FG_VAR,
+      accentVar = this.opts.accentVar ?? FollowThemeAddon.#DEFAULT_ACCENT_VAR,
+      // Resolve CSS variables to final, computed css color strings
+      bgStr = FollowThemeAddon.#resolveCssColor(bgVar, body)?.trim() ?? "",
+      fgVarStr = FollowThemeAddon.#resolveCssColor(fgVar, body)?.trim() ?? "",
+      accentStr =
+        FollowThemeAddon.#resolveCssColor(accentVar, body)?.trim() ?? "",
+      computedBodyColor = view.getComputedStyle(body).color,
+      bg = this.#toRGBA(bgStr);
+    if (bg === null) {
+      // Cannot theme without background
+      return null;
+    }
+
+    const explicitFg =
+        this.#toRGBA(fgVarStr) ?? this.#toRGBA(computedBodyColor),
+      autoFg = FollowThemeAddon.#bestOf(
+        [FollowThemeAddon.#COLOR_BLACK, FollowThemeAddon.#COLOR_WHITE],
+        bg,
+      ),
+      fg = explicitFg ?? autoFg,
+      // Cursor: try accent first but ensure minimum contrast
+      minCursorContrast =
+        this.opts.minCursorContrast ??
+        FollowThemeAddon.#DEFAULT_MIN_CURSOR_CONTRAST,
+      cursorCandidates = [
+        this.#toRGBA(accentStr),
+        fg,
+        FollowThemeAddon.#COLOR_BLACK,
+        FollowThemeAddon.#COLOR_WHITE,
+      ].filter(isNonNil),
+      cursor =
+        FollowThemeAddon.#bestMeetingContrast(
+          cursorCandidates,
+          bg,
+          minCursorContrast,
+        ) ?? FollowThemeAddon.#bestOf(cursorCandidates, bg),
+      // Selection: overlay high-contrast color over background
+      alpha = Math.min(
+        1,
+        Math.max(
+          0,
+          this.opts.selectionAlpha ?? FollowThemeAddon.#DEFAULT_SELECTION_ALPHA,
+        ),
+      ),
+      overlayBase = FollowThemeAddon.#bestOf(
+        [FollowThemeAddon.#COLOR_BLACK, FollowThemeAddon.#COLOR_WHITE],
+        bg,
+      ),
+      selection = FollowThemeAddon.#mix(overlayBase, bg, alpha);
+
+    return {
+      background: FollowThemeAddon.#toCss(bg),
+      cursor: FollowThemeAddon.#toCss(cursor),
+      foreground: FollowThemeAddon.#toCss(fg),
+      selectionBackground: FollowThemeAddon.#toCss(selection),
+    };
+  }
+
+  // --- Color utilities (WCAG aware) ----------------------------------------
+
+  /** Parse any CSS color the browser understands into RGBA, or null */
+  #toRGBA(input: string | null | undefined): FollowThemeAddon.RGBA | null {
+    const doc = this.element.ownerDocument,
+      view = doc.defaultView;
+    if (!view) {
+      return null;
+    }
+
+    // eslint-disable-next-line eslint-comments/no-restricted-disable -- Need to suppress prefer-create-el (see below)
+    // eslint-disable-next-line obsidianmd/prefer-create-el -- Probe must be created in `doc` (a possibly-popout document); the global `createSpan` binds to the main window.
+    const span = doc.createElement("span");
+    // A fresh element has an empty `color`; assigning the input tests whether the browser can parse it.
+    span.style.color = input ?? "";
+
+    if (span.style.color === "") {
+      return null;
+    }
+
+    const colorStr = ((): string => {
+        doc.body.appendChild(span);
+        try {
+          return view.getComputedStyle(span).color;
+        } finally {
+          span.remove();
+        }
+      })(),
+      // Extract numeric channels with named groups
+      RGBA_REGEX =
+        /rgba?\s*\(\s*(?<red>\d+(?:\.\d+)?)\s*,\s*(?<green>\d+(?:\.\d+)?)\s*,\s*(?<blue>\d+(?:\.\d+)?)\s*(?:,\s*(?<alpha>\d+(?:\.\d+)?)\s*)?\)/iu,
+      match = RGBA_REGEX.exec(colorStr);
+
+    if (!match?.groups) {
+      return null;
+    }
+
+    const red = Number(match.groups["red"]),
+      green = Number(match.groups["green"]),
+      blue = Number(match.groups["blue"]),
+      hasAlpha = match.groups["alpha"] !== undefined,
+      alpha = hasAlpha
+        ? Number(match.groups["alpha"])
+        : FollowThemeAddon.#COLOR_ALPHA_OPAQUE;
+
+    if (Number.isNaN(red) || Number.isNaN(green) || Number.isNaN(blue)) {
+      return null;
+    }
+    return { alpha, blue, green, red };
+  }
+}
+
+export class RendererAddon implements ITerminalAddon {
+  public renderer: CanvasAddon | WebglAddon | null = null;
+  #terminal: Terminal | null = null;
+
+  public constructor(
+    protected readonly canvasSupplier: () => CanvasAddon,
+    protected readonly webglSupplier: () => WebglAddon,
+  ) {}
+
+  public use(renderer: RendererAddon.RendererOption): void {
+    const term = this.#terminal;
+    if (!term) {
+      return;
+    }
+    const { element } = term;
+    this.renderer?.dispose();
+    switch (renderer) {
+      case "dom":
+        this.renderer = null;
+        break;
+      case "canvas":
+        try {
+          const renderer0 = this.canvasSupplier();
+          term.loadAddon((this.renderer = renderer0));
+          break;
+        } catch (error) {
+          activeSelf(element).console.warn(error);
+          this.use("dom");
+        }
+        break;
+      case "webgl": {
+        try {
+          const renderer0 = this.webglSupplier(),
+            contextLoss = renderer0.onContextLoss(() => {
+              try {
+                this.use("webgl");
+              } finally {
+                contextLoss.dispose();
+              }
+            });
+          term.loadAddon((this.renderer = renderer0));
+        } catch (error) {
+          activeSelf(element).console.warn(error);
+          this.use("canvas");
+        }
+        break;
+      }
+      // No default
+    }
+  }
+
+  public activate(terminal: Terminal): void {
+    this.#terminal = terminal;
+  }
+
+  public dispose(): void {
+    this.renderer?.dispose();
+    this.#terminal = null;
+  }
+}
+export namespace RendererAddon {
+  export const RENDERER_OPTIONS = deepFreeze(["dom", "canvas", "webgl"]);
+  export type RendererOption = (typeof RENDERER_OPTIONS)[number];
+}
+
+export class RightClickActionAddon implements ITerminalAddon {
+  readonly #disposer = new Functions({ async: false, settled: true });
+
+  public constructor(
+    protected readonly action: () => RightClickActionAddon.Action = () =>
+      "default",
+  ) {}
+
+  public activate(terminal: Terminal): void {
+    const { element } = terminal;
+    if (!element) {
+      throw new Error();
+    }
+    const contextMenuListener = (ev: MouseEvent): void => {
+      const action = this.action();
+      if (action === "default") {
+        return;
+      }
+      (async (): Promise<void> => {
+        switch (action) {
+          case "nothing":
+            // How to send right click to the terminal?
+            break;
+          // @ts-expect-error: fallthrough
+          case "copyPaste":
+            if (terminal.hasSelection()) {
+              await activeSelf(element).navigator.clipboard.writeText(
+                terminal.getSelection(),
+              );
+              terminal.clearSelection();
+              break;
+            }
+          // eslint-disable-next-line no-fallthrough -- `copyPaste` without a selection intentionally falls through to paste.
+          case "paste":
+            terminal.paste(
+              await activeSelf(element).navigator.clipboard.readText(),
+            );
+            break;
+        }
+      })().catch((error: unknown) => {
+        activeSelf(element).console.error(error);
+      });
+      consumeEvent(ev);
+    };
+    this.#disposer.push(() => {
+      element.removeEventListener("contextmenu", contextMenuListener);
+    });
+    element.addEventListener("contextmenu", contextMenuListener);
+  }
+
+  public dispose(): void {
+    this.#disposer.call();
+  }
+}
+export namespace RightClickActionAddon {
+  export const ACTIONS = deepFreeze([
+    "copyPaste",
+    "default",
+    "nothing",
+    "paste",
+  ]);
+  export type Action = (typeof ACTIONS)[number];
+}
+
+/**
+ * Unified custom key event handler addon that consolidates all key interception.
+ *
+ * The pipeline (in priority order):
+ *
+ * 1. **IME guard** — events fired during IME composition are passed through
+ *    unchanged so the input method can operate unimpeded.
+ *
+ * 2. **Keymappings** — the user-defined (and built-in default) ordered list
+ *    from `Settings.keymappings` is checked; the first match wins:
+ *    - `"ignore"` — suppress the event, send nothing.
+ *    - `"passthrough"` — yield to xterm.js as if no mapping matched; useful
+ *      for explicitly opting out of a default mapping for a specific combo.
+ *    - `"sendEscapeSequence"` / `"sendHexCode"` / `"sendText"` — fire the
+ *      configured output and suppress the event.
+ *    Each mapping can be restricted to a specific platform via its `platform`
+ *    field; `undefined` means all platforms.
+ *
+ * 3. **macOS Option key passthrough** (enabled by `isPassthroughEnabled`):
+ *    xterm.js issue #2831 — when `macOptionIsMeta` is `false`, xterm still
+ *    fires ESC sequences for single-character Option+key events on macOS.
+ *    When passthrough is enabled this stage intercepts those events, re-emits
+ *    the browser-composed character (e.g., Option+2 → `@` on Finnish
+ *    keyboards) via `terminal.input()`, and returns `false` to prevent xterm
+ *    from also sending an ESC sequence.
+ *    Internal rules of this stage (not user-configurable because they are
+ *    correctness rules of the workaround, not preferences):
+ *    - Option key alone → suppressed (prevents a stray bare ESC).
+ *    - Option + single-character key → re-emit composed char, suppress event.
+ *    - All other Option+key (Enter, function keys, arrows not covered by a
+ *      mapping, etc.) → passed through to xterm unchanged.
+ *
+ * Between stages 2 and 3, ConPTY terminals can activate Win32 input mode with
+ * `DECSET 9001`. The mode handlers are registered on Windows and honoured only
+ * while the effective backend is ConPTY: `supportsWin32InputMode` is asked
+ * when the mode is requested, because a ConHost fallback is known only after
+ * the terminal opened. While active, unmatched keydown and keyup events use
+ * Win32 `KEY_EVENT_RECORD` sequences. Dead keys are the exception: the browser
+ * composes them, and cancelling a dead key's keydown or the keydown of the
+ * character it combines with discards the composed character (UI Events
+ * §Dead keys; xterm.js #3430). Both keydowns are left to the browser, and the
+ * `keypress` carrying the composed character becomes the keydown record, as
+ * Windows Terminal turns character events into key events. That record reuses
+ * the deferred keydown's virtual key, so it keeps the layout's identity. Two
+ * more kinds of key stay unencoded and go to the browser: the keydown that
+ * starts an IME composition (`isImeKeyEvent`) and the clipboard chords
+ * (`isWin32ClipboardChord`).
+ */
+export class CustomKeyEventHandlerAddon implements ITerminalAddon {
+  readonly #disposer = new Functions({ async: false, settled: true });
+  #terminal: Terminal | null = null;
+  #win32InputMode: Win32InputMode | null = null;
+  #win32InputModeActive = false;
+  /** `pending` after a dead key's keydown; `composing` once the character
+   * keydown it combines with was deferred to its keypress. */
+  #deadKey: "composing" | "none" | "pending" = "none";
+  /** Virtual key of the deferred keydown, reused by its keypresses. */
+  #deadKeyVirtualKey = 0;
+  /** Alt starts a candidate; numpad digits await the OS character, which may
+   * arrive before or after Alt's keyup. Never derive it from the digits. */
+  #altNumpad: "alt" | "composing" | "none" | "released" = "none";
+  /** Suppress each participating digit's keyup, even after completion or
+   * interruption. Mode reset and disposal clear this held-key tracking. */
+  readonly #altNumpadCodes = new Set<string>();
+  /** `code`s of the clipboard chord keys whose keydown went to the browser. */
+  readonly #clipboardChordCodes = new Set<string>();
+
+  public constructor(
+    protected readonly currentPlatform: string,
+    protected readonly getKeymappings: () => readonly Settings.Keymapping[],
+    protected readonly isPassthroughEnabled: () => boolean,
+    protected readonly supportsWin32InputMode: () => boolean,
+  ) {}
+
+  public activate(terminal: Terminal): void {
+    this.#terminal = terminal;
+    terminal.attachCustomKeyEventHandler((event) => this.#handleEvent(event));
+    if (this.currentPlatform === "win32") {
+      this.#registerWin32InputModeHandlers(terminal);
+    }
+  }
+
+  public dispose(): void {
+    this.#disposer.call();
+    this.#terminal = null;
+    this.#win32InputMode = null;
+    this.#resetWin32InputMode();
+  }
+
+  #handleEvent(event: KeyboardEvent): boolean {
+    const terminal = this.#terminal;
+
+    // Guard: addon uninitialized or disposed
+    if (!terminal) {
+      return true;
+    }
+
+    // Block during IME composition so the input method operates unimpeded.
+    if (event.isComposing) {
+      this.#altNumpad = "none";
+      return true;
+    }
+
+    // --- Stage 1: keymappings ---
+    // Walk the ordered list; first match wins.
+    for (const mapping of this.getKeymappings()) {
+      if (this.#matches(event, mapping)) {
+        // In active Win32 input mode, passthrough means bypass the mapping and
+        // continue into Win32 encoding. Returning true here would expose the
+        // event to xterm.js 6.x's legacy keyboard encoder.
+        if (mapping.action === "passthrough" && this.#win32InputModeActive) {
+          break;
+        }
+        this.#altNumpad = "none";
+        if (event.type === "keydown") {
+          return this.#fire(terminal, mapping);
+        }
+        // For keyup: only suppress if the action is not passthrough.
+        // Passthrough should let both keydown and keyup reach xterm.
+        if (mapping.action === "passthrough") {
+          return true;
+        }
+        // Suppress keyup for all other actions so xterm never sees this event.
+        return false;
+      }
+    }
+
+    // --- Stage 2: Windows ConPTY Win32 input mode ---
+    if (this.#win32InputModeActive && this.#win32InputMode) {
+      return this.#encodeWin32(terminal, this.#win32InputMode, event);
+    }
+
+    // --- Stage 3: macOS Option key passthrough ---
+    // Workaround for xterm.js issue #2831: even with macOptionIsMeta: false,
+    // xterm fires ESC sequences for single-character Option+key events on macOS.
+    // When passthrough is enabled we intercept those events, re-emit the
+    // browser-composed character, and block xterm from processing them.
+
+    // Only active when explicitly enabled on macOS.
+    if (this.currentPlatform !== "darwin" || !this.isPassthroughEnabled()) {
+      return true;
+    }
+
+    // Only relevant for Option+key. Events that also carry Cmd or Ctrl are not
+    // affected by the Option-composition bug and should reach xterm normally.
+    if (!event.altKey || event.metaKey || event.ctrlKey) {
+      return true;
+    }
+
+    // Option key alone: suppress to prevent a stray bare ESC sequence that
+    // some xterm builds fire for the modifier press/release itself.
+    if (event.key === "Alt") {
+      return false;
+    }
+
+    // Single-character keys (e.g., Option+2 → '@' on Finnish keyboard):
+    // re-emit the browser-composed character and suppress the original event.
+    // Both keydown and keyup are suppressed to avoid duplicate output.
+    if (event.key.length === 1) {
+      if (event.type === "keydown") {
+        terminal.input(event.key);
+      }
+      return false;
+    }
+
+    // All other Option+key events (Enter, function keys, arrows not matched by
+    // a keymapping, etc.): pass through to xterm unchanged.
+    // These multi-character key names are not subject to the #2831 composition
+    // bug, so xterm can handle them correctly without interception.
+    return true;
+  }
+
+  /**
+   * Win32 input mode. Dead keys defer to the browser: neither the dead key's
+   * keydown nor the keydown of the character key it combines with is cancelled
+   * or encoded, and the keypress carrying the composed character becomes the
+   * keydown record, with the deferred keydown's virtual key. Alt+Numpad also
+   * leaves its keydowns to the browser, but replaces the digits with one
+   * synthetic character down/up pair once the OS supplies the character.
+   */
+  #encodeWin32(
+    terminal: Terminal,
+    mode: Win32InputMode,
+    event: KeyboardEvent,
+  ): boolean {
+    const { type } = event,
+      virtualKey = mode.virtualKey(event),
+      isAltRelease =
+        type === "keyup" &&
+        (event.code === "AltLeft" ||
+          event.code === "AltRight" ||
+          virtualKey === 18);
+    if (mode.isImeKeyEvent(event)) {
+      this.#altNumpad = "none";
+      return true;
+    }
+    // Returning false bypasses xterm.js 6 without cancelling native input.
+    let preserveDefault = false;
+    if (type === "keydown") {
+      const altOnly =
+        event.altKey &&
+        !event.ctrlKey &&
+        !event.shiftKey &&
+        !event.metaKey &&
+        !event.getModifierState("AltGraph");
+      if (event.key === "Alt" && altOnly) {
+        this.#altNumpad = "alt";
+        preserveDefault = true;
+      } else if (
+        (this.#altNumpad === "alt" || this.#altNumpad === "composing") &&
+        altOnly &&
+        /^Numpad[0-9]$/u.test(event.code)
+      ) {
+        this.#altNumpad = "composing";
+        this.#altNumpadCodes.add(event.code);
+        // This composition owns the character, not a previous dead key.
+        this.#deadKey = "none";
+        this.#deadKeyVirtualKey = 0;
+        event.stopPropagation();
+        return false;
+      } else {
+        this.#altNumpad = "none";
+        this.#altNumpadCodes.delete(event.code);
+      }
+      if (event.key === "Dead") {
+        this.#deadKey = "pending";
+      } else if (this.#deadKey === "composing") {
+        // The composed character's keypresses precede the next keydown.
+        this.#deadKey = "none";
+      } else if (
+        this.#deadKey === "pending" &&
+        isWin32ComposableKeyEvent(event)
+      ) {
+        this.#deadKey = "composing";
+      }
+      if (event.key === "Dead" || this.#deadKey === "composing") {
+        // Cancelling either keydown discards the composition; the browser
+        // delivers the result on the keypress, whose `keyCode` is the
+        // character, so the key's identity is kept here.
+        this.#deadKeyVirtualKey = virtualKey;
+        event.stopPropagation();
+        return false;
+      }
+      if (isWin32ClipboardChord(event, virtualKey)) {
+        this.#clipboardChordCodes.add(event.code);
+        return true;
+      }
+      this.#clipboardChordCodes.delete(event.code);
+    } else if (type === "keyup" && this.#altNumpadCodes.delete(event.code)) {
+      event.stopPropagation();
+      return false;
+    } else if (isAltRelease) {
+      preserveDefault = this.#altNumpad !== "none";
+      this.#altNumpad = this.#altNumpad === "composing" ? "released" : "none";
+    } else if (
+      type === "keyup" &&
+      this.#clipboardChordCodes.delete(event.code)
+    ) {
+      // The application never saw this key go down. The modifiers may be up
+      // already, so the chord is recognized by its key alone.
+      return true;
+    }
+    if (type === "keydown" || type === "keyup") {
+      // Alt's release may carry the OS-composed character in `key`, even
+      // after its keypress. Only the synthetic pair delivers that character.
+      // Copy fields explicitly: DOM KeyboardEvent getters are not enumerable.
+      const keyEvent = isAltRelease
+        ? {
+            altKey: event.altKey,
+            code: event.code,
+            ctrlKey: event.ctrlKey,
+            getModifierState: (modifier: string): boolean =>
+              event.getModifierState(modifier),
+            key: "Alt",
+            keyCode: virtualKey,
+            metaKey: event.metaKey,
+            shiftKey: event.shiftKey,
+            type,
+          }
+        : event;
+      terminal.input(
+        mode.encode(keyEvent, type === "keydown"),
+        !isAltRelease && !isWin32ModifierKeyOnlyEvent(event),
+      );
+    } else if (
+      type === "keypress" &&
+      (this.#altNumpad === "composing" || this.#altNumpad === "released") &&
+      Array.from(event.key).length === 1 &&
+      !(event.altKey && /^Numpad[0-9]$/u.test(event.code))
+    ) {
+      this.#altNumpad = "none";
+      const character = {
+        altKey: false,
+        code: "",
+        ctrlKey: false,
+        getModifierState: (modifier: string): boolean =>
+          ["NumLock", "CapsLock", "ScrollLock"].includes(modifier) &&
+          event.getModifierState(modifier),
+        key: event.key,
+        keyCode: 0,
+        metaKey: false,
+        shiftKey: false,
+        type: "keypress",
+      };
+      terminal.input(
+        mode.encode(character, true) + mode.encode(character, false),
+        true,
+      );
+    } else if (type === "keypress" && this.#deadKey !== "none") {
+      // Only a deferred keydown still produces keypresses, one per composed
+      // character (`'` then `q` yields two on US-International).
+      terminal.input(mode.encode(event, true, this.#deadKeyVirtualKey), true);
+    }
+    // A cancelled keydown produces no keypress, and a cancelled keypress
+    // inserts nothing, so xterm.js sends no duplicate legacy input.
+    if (!preserveDefault) {
+      event.preventDefault();
+    }
+    event.stopPropagation();
+    return false;
+  }
+
+  #registerWin32InputModeHandlers(terminal: Terminal): void {
+    const setHandler = terminal.parser.registerCsiHandler(
+        { final: "h", prefix: "?" },
+        (params) => {
+          if (
+            params.some((parameter) => parameter === 9001) &&
+            this.supportsWin32InputMode()
+          ) {
+            this.#win32InputMode ??= new Win32InputMode();
+            this.#win32InputModeActive = true;
+          }
+          // Preserve xterm.js processing for this and every unrelated mode.
+          return false;
+        },
+      ),
+      resetHandler = terminal.parser.registerCsiHandler(
+        { final: "l", prefix: "?" },
+        (params) => {
+          if (params.some((parameter) => parameter === 9001)) {
+            this.#resetWin32InputMode();
+          }
+          return false;
+        },
+      );
+
+    this.#disposer.push(
+      () => {
+        setHandler.dispose();
+      },
+      () => {
+        resetHandler.dispose();
+      },
+    );
+  }
+
+  #resetWin32InputMode(): void {
+    this.#win32InputModeActive = false;
+    this.#deadKey = "none";
+    this.#deadKeyVirtualKey = 0;
+    this.#clipboardChordCodes.clear();
+    this.#altNumpad = "none";
+    this.#altNumpadCodes.clear();
+  }
+
+  #matches(event: KeyboardEvent, mapping: Settings.Keymapping): boolean {
+    // Skip mappings that don't match the current platform
+    if (
+      mapping.platform !== null &&
+      mapping.platform !== this.currentPlatform
+    ) {
+      return false;
+    }
+    return (
+      event.key === mapping.key &&
+      event.ctrlKey === mapping.ctrl &&
+      event.altKey === mapping.alt &&
+      event.metaKey === mapping.meta &&
+      event.shiftKey === mapping.shift
+    );
+  }
+
+  /**
+   * Execute the action configured for a matched mapping. Returns `true` if
+   * the event should be passed through to xterm after firing the action, or
+   * `false` if the event should be suppressed.
+   */
+  #fire(terminal: Terminal, mapping: Settings.Keymapping): boolean {
+    switch (mapping.action) {
+      case "ignore":
+        // Suppress the event, send nothing.
+        break;
+      case "passthrough":
+        // Yield to xterm.js as if no mapping matched.
+        return true;
+      case "scrollLines": {
+        // actionArg is a number; scroll that many lines (negative = up).
+        terminal.scrollLines(mapping.actionArg);
+        break;
+      }
+      case "scrollPages": {
+        // actionArg is a number; scroll that many pages (negative = up).
+        terminal.scrollPages(mapping.actionArg);
+        break;
+      }
+      case "scrollToBottom":
+        terminal.scrollToBottom();
+        break;
+      case "scrollToTop":
+        terminal.scrollToTop();
+        break;
+      case "sendEscapeSequence":
+        // Send ESC (\x1b) followed by actionArg.
+        terminal.input("\x1b" + mapping.actionArg);
+        break;
+      case "sendHexCode": {
+        // actionArg is space-separated hex bytes, e.g. "01 0d".
+        const chars = mapping.actionArg
+          .trim()
+          .split(/\s+/)
+          .map((token) => parseInt(token, 16))
+          .filter((n) => !isNaN(n))
+          .map((n) => String.fromCharCode(n))
+          .join("");
+        if (chars) {
+          terminal.input(chars);
+        }
+        break;
+      }
+      case "sendText": {
+        // actionArg is sent as-is; escape sequences \\n, \\t, \\e, \\a are
+        // interpreted as their corresponding control characters.
+        const text = mapping.actionArg
+          .replace(/\\n/g, "\n")
+          .replace(/\\t/g, "\t")
+          .replace(/\\e/g, "\x1b")
+          .replace(/\\a/g, "\x07");
+        terminal.input(text);
+        break;
+      }
+      // No default
+    }
+    return false;
+  }
+}
+
+/**
+ * Whether the browser combines this key with a pending dead key: an
+ * unmodified character key. Chords get no character event on Windows, and
+ * modifier and navigation keys leave the dead key pending, as the OS does.
+ */
+function isWin32ComposableKeyEvent(event: KeyboardEvent): boolean {
+  return (
+    event.key.length === 1 && !event.ctrlKey && !event.altKey && !event.metaKey
+  );
+}
+
+/** Keep modifier-only records from changing xterm's user-input state. */
+function isWin32ModifierKeyOnlyEvent(event: KeyboardEvent): boolean {
+  const { key } = event;
+  return (
+    key === "Alt" ||
+    key === "AltGraph" ||
+    key === "Control" ||
+    key === "ContextMenu" ||
+    key === "Meta" ||
+    key === "Shift"
+  );
+}
+
+/**
+ * Addon that scrolls to bottom when alt-screen mode exits.
+ *
+ * This ensures that after full-screen TUIs (e.g., Claude Code, vim, less)
+ * close and exit alt-screen mode, the normal buffer is displayed at the bottom
+ * of the viewport rather than at a possibly stale scroll position.
+ */
+export class AltScreenExitAddon implements ITerminalAddon {
+  readonly #disposer = new Functions({ async: false, settled: true });
+
+  public activate(terminal: Terminal): void {
+    // Register a CSI handler for "?1049l" (alt-screen exit sequence).
+    // When this sequence is received, schedule a scrollToBottom() via setTimeout(0)
+    // to defer the scroll until after xterm has finished processing the buffer switch.
+    const handler = terminal.parser.registerCsiHandler(
+      { prefix: "?", final: "l" },
+      (params) => {
+        if (params[0] === 1049) {
+          window.setTimeout(() => {
+            terminal.scrollToBottom();
+          }, 0);
+        }
+        // Return false so xterm still processes the sequence normally.
+        return false;
+      },
+    );
+    this.#disposer.push(() => {
+      handler.dispose();
+    });
+  }
+
+  public dispose(): void {
+    this.#disposer.call();
+  }
+}
+
+/**
+ * Addon that preserves the scroll position across DEC 2026 synchronized output
+ * blocks (begin: `\x1b[?2026h`, end: `\x1b[?2026l`).
+ *
+ * AI coding agents (e.g., pi, Claude Code) use synchronized output with ED2
+ * (`\x1b[2J`) inside each block to atomically redraw their TUI. xterm.js 6.x
+ * buffers row renders during the block but does not guard `ydisp`; when the
+ * buffer is full and the user is scrolled up, `Buffer.scroll()` walks `ydisp`
+ * toward 0 on each scroll call — the render at block-end sees this drifted
+ * value and paints "topmost content" for one frame (scroll yank).
+ *
+ * This addon addresses that by saving `viewportY` and `baseY` at block entry
+ * (`\x1b[?2026h`) and restoring the equivalent position at block exit
+ * (`\x1b[?2026l`) via `queueMicrotask`, which fires after all synchronous
+ * processing in the current task but before the next animation frame — so the
+ * ydisp correction lands before xterm's buffered render fires and no visible
+ * flash occurs.
+ *
+ * Workaround for xterm.js issue #5801 (fixed in upstream 7.x, not yet
+ * available in the 6.x release line used by this plugin).
+ */
+export class SynchronizedOutputScrollAddon implements ITerminalAddon {
+  readonly #disposer = new Functions({ async: false, settled: true });
+
+  public activate(terminal: Terminal): void {
+    let syncDepth = 0;
+    let savedViewportY = 0;
+    let savedBaseY = 0;
+    let savedAtBottom = false;
+
+    // Register handler for ?2026h (begin synchronized output).
+    // On the outermost entry, snapshot the current scroll state so it can be
+    // restored when the block ends.
+    const beginHandler = terminal.parser.registerCsiHandler(
+      { prefix: "?", final: "h" },
+      (params) => {
+        if (params[0] === 2026) {
+          if (syncDepth === 0) {
+            const { active } = terminal.buffer;
+            savedViewportY = active.viewportY;
+            savedBaseY = active.baseY;
+            savedAtBottom = active.viewportY >= active.baseY;
+          }
+          syncDepth++;
+        }
+        // Return false so xterm still processes the sequence normally.
+        return false;
+      },
+    );
+
+    // Register handler for ?2026l (end synchronized output).
+    // On the outermost exit, restore the saved scroll position after a tick so
+    // that xterm has finished applying the buffered output.
+    const endHandler = terminal.parser.registerCsiHandler(
+      { prefix: "?", final: "l" },
+      (params) => {
+        if (params[0] === 2026 && syncDepth > 0) {
+          syncDepth--;
+          if (syncDepth === 0) {
+            const vY = savedViewportY;
+            const bY = savedBaseY;
+            const atBottom = savedAtBottom;
+            queueMicrotask(() => {
+              if (atBottom) {
+                terminal.scrollToBottom();
+              } else {
+                const { active } = terminal.buffer;
+                // Adjust for baseY growth: content writes during the block push
+                // old screen rows into scrollback, incrementing baseY. Preserve
+                // the user's distance from the top of scrollback by shifting
+                // viewportY by the same delta.
+                const delta = active.baseY - bY;
+                terminal.scrollToLine(
+                  Math.min(Math.max(0, vY + delta), active.baseY),
+                );
+              }
+            });
+          }
+        }
+        // Return false so xterm still processes the sequence normally.
+        return false;
+      },
+    );
+
+    this.#disposer.push(() => {
+      beginHandler.dispose();
+      endHandler.dispose();
+    });
+  }
+
+  public dispose(): void {
+    this.#disposer.call();
+  }
+}
+
+// Detects vault-relative .md file paths in the terminal and opens them in
+// Obsidian's viewer on click, instead of the system default application.
+//
+// Supports two path formats that appear in terminal output:
+//   1. Parenthesized (may contain spaces): (wiki/goals/My File.md)
+//   2. Bare paths (no spaces):             wiki/some/file.md
+export class VaultFileLinksAddon implements ITerminalAddon {
+  readonly #disposer = new Functions({ async: false, settled: true });
+
+  // Parenthesized paths: (path/to/file.md) — spaces inside are allowed
+  static readonly #PAREN_REGEX = /\(([^)\n]+\.md)\)/g;
+
+  // Bare space-free paths: path/to/file.md
+  static readonly #BARE_REGEX =
+    /(?:^|[\s"'])([^\s"'()[\]{}<>|\\:]+\.md)(?=[\s"'()[\]{}<>|\\:,;]|$)/gm;
+
+  public constructor(protected readonly context: PluginContext) {}
+
+  public activate(terminal: Terminal): void {
+    const {
+      context: { app },
+    } = this;
+
+    const disposable = terminal.registerLinkProvider({
+      provideLinks: (
+        bufferLineNumber: number,
+        callback: (links: ILink[] | undefined) => void,
+      ): void => {
+        const line = terminal.buffer.active.getLine(bufferLineNumber - 1);
+        if (!line) {
+          callback([]);
+          return;
+        }
+
+        const lineText = line.translateToString(true);
+        const { links: parenLinks, ranges: parenRanges } =
+          VaultFileLinksAddon.#processParenLinks(
+            lineText,
+            bufferLineNumber,
+            app,
+            terminal,
+          );
+        const bareLinks = VaultFileLinksAddon.#processBareLinks(
+          lineText,
+          bufferLineNumber,
+          app,
+          terminal,
+          parenRanges,
+        );
+        callback([...parenLinks, ...bareLinks]);
+      },
+    });
+
+    this.#disposer.push(() => {
+      disposable.dispose();
+    });
+  }
+
+  public dispose(): void {
+    this.#disposer.call();
+  }
+
+  /** Converts a string character index to a 0-based visual terminal column,
+   * counting double-width (CJK and ambiguous-width) characters as 2 columns. */
+  static visualColumn(text: string, charIndex: number): number {
+    let col = 0;
+    for (let i = 0; i < charIndex && i < text.length;) {
+      const cp = text.codePointAt(i) ?? 0;
+      col += eastAsianWidth(cp, { ambiguousAsWide: true });
+      i += cp > 0xffff ? 2 : 1;
+    }
+    return col;
+  }
+
+  static makeLink(
+    lineText: string,
+    filePath: string,
+    textStart: number,
+    bufferLineNumber: number,
+    app: PluginContext["app"],
+    terminal: Terminal,
+  ): ILink | null {
+    const file = app.vault.getFileByPath(filePath);
+    if (!file) return null;
+    const startX = this.visualColumn(lineText, textStart) + 1;
+    const endX = this.visualColumn(lineText, textStart + filePath.length);
+    return {
+      range: {
+        end: { x: endX, y: bufferLineNumber },
+        start: { x: startX, y: bufferLineNumber },
+      },
+      text: filePath,
+
+      activate(_event: MouseEvent, _text: string): void {
+        app.workspace
+          .getLeaf(false)
+          .openFile(file)
+          .catch((error: unknown) => {
+            activeSelf(terminal.element).console.error(error);
+          });
+      },
+    };
+  }
+
+  static #processParenLinks(
+    lineText: string,
+    bufferLineNumber: number,
+    app: PluginContext["app"],
+    terminal: Terminal,
+  ): {
+    links: readonly ILink[];
+    ranges: readonly { readonly start: number; readonly end: number }[];
+  } {
+    const links: ILink[] = [];
+    const ranges: { readonly start: number; readonly end: number }[] = [];
+    for (const match of lineText.matchAll(this.#PAREN_REGEX)) {
+      if (!match[1]) continue;
+      const link = this.makeLink(
+        lineText,
+        match[1],
+        match.index + 1,
+        bufferLineNumber,
+        app,
+        terminal,
+      );
+      if (link) links.push(link);
+      ranges.push({
+        start: match.index + 1,
+        end: match.index + 1 + match[1].length,
+      });
+    }
+    return { links, ranges };
+  }
+
+  static #processBareLinks(
+    lineText: string,
+    bufferLineNumber: number,
+    app: PluginContext["app"],
+    terminal: Terminal,
+    parenRanges: readonly { readonly start: number; readonly end: number }[],
+  ): readonly ILink[] {
+    const links: ILink[] = [];
+    for (const match of lineText.matchAll(this.#BARE_REGEX)) {
+      if (!match[1]) continue;
+      const prefixLen = match[0].length - match[1].length;
+      const bareStart = match.index + prefixLen;
+      const bareEnd = bareStart + match[1].length;
+      if (parenRanges.some((r) => bareStart >= r.start && bareEnd <= r.end))
+        continue;
+      const link = this.makeLink(
+        lineText,
+        match[1],
+        bareStart,
+        bufferLineNumber,
+        app,
+        terminal,
+      );
+      if (link) links.push(link);
+    }
+    return links;
+  }
+}

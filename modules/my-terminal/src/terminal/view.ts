@@ -1,0 +1,1639 @@
+import {
+  DialogModal,
+  FindComponent,
+  type FindComponent$,
+  type Fixed,
+  JSON_STRINGIFY_SPACE,
+  Platform,
+  UnnamespacedID,
+  activeSelf,
+  addCommand,
+  anyToError,
+  assignExact,
+  awaitCSS,
+  basename,
+  cloneAsWritable,
+  createChildElement,
+  deepFreeze,
+  deopaque,
+  dynamicRequire,
+  extname,
+  fixTyped,
+  instanceOf,
+  launderUnchecked,
+  linkSetting,
+  markFixed,
+  newCollaborativeState,
+  newHotkeyListener,
+  notice2,
+  onResize,
+  openExternal,
+  printError,
+  printMalformedData,
+  randomNotIn,
+  readStateCollaboratively,
+  recordViewStateHistory,
+  resetButton,
+  saveFileAs,
+  svelteState,
+  updateView,
+  useSettings,
+  writeStateCollaboratively,
+} from "@polyipseity/obsidian-plugin-library";
+import type { FitAddon, ITerminalDimensions } from "@xterm/addon-fit";
+import type { LigaturesAddon } from "@xterm/addon-ligatures";
+import type { SearchAddon } from "@xterm/addon-search";
+import type { Unicode11Addon } from "@xterm/addon-unicode11";
+import type { WebLinksAddon } from "@xterm/addon-web-links";
+import { type ITerminalOptions, Terminal } from "@xterm/xterm";
+import { noop, once } from "es-toolkit/function";
+import {
+  FileSystemAdapter,
+  ItemView,
+  type Menu,
+  Scope,
+  View,
+  type ViewStateResult,
+  type WorkspaceLeaf,
+} from "obsidian";
+import { mount, unmount } from "svelte";
+import type { DeepWritable } from "ts-essentials";
+import { BUNDLE } from "../imports.js";
+import {
+  DEFAULT_ENCODING,
+  DEFAULT_SUCCESS_EXIT_CODES,
+  DOMClasses2,
+} from "../magic.js";
+import type { TerminalPlugin } from "../main.js";
+import { ProfileModal } from "../modals.js";
+import { Settings } from "../settings-data.js";
+import {
+  AltScreenExitAddon,
+  CustomKeyEventHandlerAddon,
+  DisposerAddon,
+  DragAndDropAddon,
+  FollowThemeAddon,
+  RendererAddon,
+  RightClickActionAddon,
+  SynchronizedOutputScrollAddon,
+  VaultFileLinksAddon,
+} from "./emulator-addons.js";
+import { XtermTerminalEmulator } from "./emulator.js";
+import {
+  type TerminalBackendOptions,
+  applyTerminalOptionDiffShallow,
+  mergeTerminalOptions,
+  parseWin32BuildNumber,
+} from "./options.js";
+import { PROFILE_PROPERTIES, openProfile } from "./profile-properties.js";
+import {
+  ConPtyControlError,
+  type Pseudoterminal,
+  TextPseudoterminal,
+} from "./pseudoterminal.js";
+import { writePromise } from "./utils.js";
+import { win32ExitCodeKey } from "./win32-doctor.js";
+
+const os = dynamicRequire<typeof import("node:os")>(BUNDLE, "node:os"),
+  xtermAddonCanvas = dynamicRequire<typeof import("@xterm/addon-canvas")>(
+    BUNDLE,
+    "@xterm/addon-canvas",
+  ),
+  xtermAddonLigatures = dynamicRequire<typeof import("@xterm/addon-ligatures")>(
+    BUNDLE,
+    "@xterm/addon-ligatures",
+  ),
+  xtermAddonSearch = dynamicRequire<typeof import("@xterm/addon-search")>(
+    BUNDLE,
+    "@xterm/addon-search",
+  ),
+  xtermAddonUnicode11 = dynamicRequire<typeof import("@xterm/addon-unicode11")>(
+    BUNDLE,
+    "@xterm/addon-unicode11",
+  ),
+  xtermAddonWebLinks = dynamicRequire<typeof import("@xterm/addon-web-links")>(
+    BUNDLE,
+    "@xterm/addon-web-links",
+  ),
+  xtermAddonWebgl = dynamicRequire<typeof import("@xterm/addon-webgl")>(
+    BUNDLE,
+    "@xterm/addon-webgl",
+  );
+
+/** Returns the fitted spawn size, or the terminal's current size as fallback. */
+export function fittedSize(
+  fit: Pick<FitAddon, "proposeDimensions">,
+  terminal: Pick<Terminal, "cols" | "rows">,
+): readonly [number, number] {
+  const dim = ((): ITerminalDimensions | undefined => {
+    try {
+      return fit.proposeDimensions();
+    } catch (error) {
+      /* @__PURE__ */ self.console.debug(error);
+      return void 0;
+    }
+  })();
+  if (dim && isFinite(dim.cols) && isFinite(dim.rows)) {
+    return [
+      Math.max(1, Math.trunc(dim.cols)),
+      Math.max(1, Math.trunc(dim.rows)),
+    ];
+  }
+  return [Math.max(1, terminal.cols), Math.max(1, terminal.rows)];
+}
+
+/**
+ * Backend options for the pseudoterminal that opened. `openProfile` falls
+ * back to ConHost when ConPTY is unusable, so the profile's `win32Backend` is
+ * only the request. Returns `requested` itself when the pseudoterminal agrees
+ * or does not name a backend.
+ */
+export function settleTerminalBackendOptions(
+  requested: TerminalBackendOptions,
+  pty: Pseudoterminal | null,
+): TerminalBackendOptions {
+  const win32Backend = pty?.win32Backend;
+  return win32Backend === void 0 || win32Backend === requested.win32Backend
+    ? requested
+    : deepFreeze({ ...requested, win32Backend });
+}
+
+/** This machine's Windows build, read once, or `undefined` off Windows. */
+const win32BuildNumber = once(async (): Promise<number | undefined> => {
+  if (deopaque(Platform.CURRENT) !== "win32") {
+    return void 0;
+  }
+  try {
+    return parseWin32BuildNumber((await os).release());
+  } catch (error) {
+    /* @__PURE__ */ self.console.debug(error);
+    return void 0;
+  }
+});
+
+const terminalUses = new WeakMap<TerminalView, number>();
+// Intentionally mutable so session uses have a strict order even within one tick.
+let terminalUseSequence = 0;
+
+function recordTerminalUse(view: TerminalView): void {
+  terminalUses.set(view, ++terminalUseSequence);
+}
+
+// Recorded uses start at 1, so 0 means "not used this session".
+function terminalUseOf(leaf: WorkspaceLeaf | undefined): number {
+  const view = leaf?.view;
+  return view instanceof TerminalView ? (terminalUses.get(view) ?? 0) : 0;
+}
+
+export class EditTerminalModal extends DialogModal {
+  protected readonly state;
+  #profile: string | null = null;
+  readonly #confirm;
+
+  public constructor(
+    protected override readonly context: TerminalPlugin,
+    protected readonly protostate: TerminalView.State,
+    confirm: (state_: DeepWritable<typeof protostate>) => unknown,
+  ) {
+    const {
+      language: { value: i18n },
+    } = context;
+    super(context, {
+      title: () => i18n.t("components.terminal.edit-modal.title"),
+    });
+    this.state = cloneAsWritable(protostate);
+    this.#confirm = confirm;
+  }
+
+  public override onOpen(): void {
+    super.onOpen();
+    const {
+        context,
+        context: {
+          settings,
+          language: { value: i18n },
+          app: {
+            vault: { adapter },
+          },
+        },
+        ui,
+        protostate,
+        state,
+      } = this,
+      { element: listEl, remover: listElRemover } = useSettings(this.contentEl);
+    ui.finally(listElRemover)
+      .newSetting(listEl, (setting) => {
+        setting
+          .setName(i18n.t("components.terminal.edit-modal.working-directory"))
+          .addText(
+            linkSetting(
+              () => state.cwd ?? "",
+              (value) => {
+                state.cwd = value || null;
+              },
+              () => {
+                this.postMutate();
+              },
+              {
+                post: (component) => {
+                  component.setPlaceholder(
+                    i18n.t(
+                      "components.terminal.edit-modal.working-directory-placeholder",
+                    ),
+                  );
+                },
+              },
+            ),
+          )
+          .addButton((button) =>
+            button
+              .setIcon(
+                i18n.t(
+                  "asset:components.terminal.edit-modal.root-directory-icon",
+                ),
+              )
+              .setTooltip(
+                i18n.t("components.terminal.edit-modal.root-directory"),
+              )
+              .onClick(() => {
+                state.cwd =
+                  adapter instanceof FileSystemAdapter
+                    ? adapter.getBasePath()
+                    : null;
+                this.postMutate();
+              }),
+          )
+          .addExtraButton(
+            resetButton(
+              i18n.t(
+                "asset:components.terminal.edit-modal.working-directory-icon",
+              ),
+              i18n.t("components.terminal.edit-modal.reset"),
+              () => {
+                state.cwd = protostate.cwd;
+              },
+              () => {
+                this.postMutate();
+              },
+            ),
+          );
+      })
+      .newSetting(listEl, (setting) => {
+        const { profiles } = settings.value,
+          unselected = randomNotIn(Object.keys(profiles));
+        setting
+          .setName(i18n.t("components.terminal.edit-modal.profile"))
+          .addDropdown(
+            linkSetting(
+              () => this.#profile ?? unselected,
+              (value) => {
+                const profile0 = profiles[value];
+                if (!profile0) {
+                  this.#profile = null;
+                  this.state.profileSourceId = null;
+                  return;
+                }
+                this.#profile = value;
+                this.state.profile = cloneAsWritable(profile0);
+                this.state.profileSourceId = value;
+              },
+              () => {
+                this.postMutate();
+              },
+              {
+                pre: (component) => {
+                  component
+                    .addOption(
+                      unselected,
+                      i18n.t(
+                        "components.terminal.edit-modal.profile-placeholder",
+                      ),
+                    )
+                    .addOptions(
+                      Object.fromEntries(
+                        Object.entries(profiles).map((entry) => [
+                          entry[0],
+
+                          i18n.t(
+                            `components.terminal.edit-modal.profile-name-${
+                              Settings.Profile.isCompatible(
+                                entry[1],
+                                Platform.CURRENT,
+                              )
+                                ? ""
+                                : "incompatible"
+                            }`,
+                            {
+                              info: Settings.Profile.info(entry),
+                              interpolation: { escapeValue: false },
+                            },
+                          ),
+                        ]),
+                      ),
+                    );
+                },
+              },
+            ),
+          )
+          .addButton((button) =>
+            button
+              .setIcon(
+                i18n.t(
+                  "asset:components.terminal.edit-modal.profile-edit-icon",
+                ),
+              )
+              .setTooltip(i18n.t("components.terminal.edit-modal.profile-edit"))
+              .onClick(() => {
+                new ProfileModal(context, state.profile, (profile0) => {
+                  this.#profile = null;
+                  state.profile = profile0;
+                  state.profileSourceId = null;
+                  this.postMutate();
+                }).open();
+              }),
+          )
+          .addExtraButton(
+            resetButton(
+              i18n.t("asset:components.terminal.edit-modal.profile-icon"),
+              i18n.t("components.terminal.edit-modal.reset"),
+              () => {
+                this.#profile = null;
+                state.profile = cloneAsWritable(protostate.profile);
+                state.profileSourceId = protostate.profileSourceId;
+              },
+              () => {
+                this.postMutate();
+              },
+            ),
+          );
+      });
+  }
+
+  protected override async confirm(close: () => void): Promise<void> {
+    await this.#confirm(cloneAsWritable(this.state));
+    await super.confirm(close);
+  }
+
+  protected postMutate(): void {
+    const { modalUI, ui } = this;
+    modalUI.update();
+    ui.update();
+  }
+}
+
+export class TerminalView extends ItemView {
+  public static readonly type = new UnnamespacedID(
+    DOMClasses2.Namespaced.TERMINAL,
+  );
+
+  protected static lastFocusTimes = new Map<TerminalView, number>();
+  protected static lastActiveOtherLeaf: WeakRef<WorkspaceLeaf> | null = null;
+  protected static readonly focusedScope = new Scope();
+
+  static #namespacedType: string;
+  #rawTitle0 = "";
+  #emulator0: TerminalView.EMULATOR | null = null;
+  #find0:
+    readonly [ReturnType<typeof FindComponent>, FindComponent$.Props] | null =
+    null;
+  #state = TerminalView.State.DEFAULT;
+
+  public constructor(
+    protected readonly context: TerminalPlugin,
+    leaf: WorkspaceLeaf,
+  ) {
+    super(leaf);
+    this.navigation = true;
+  }
+
+  protected get isFocused(): boolean {
+    const { contentEl } = this;
+    return contentEl.contains(contentEl.ownerDocument.activeElement);
+  }
+
+  protected get state(): TerminalView.State {
+    return this.#state;
+  }
+
+  protected get emulator(): TerminalView.EMULATOR | null {
+    return this.#emulator0;
+  }
+
+  protected get find():
+    readonly [ReturnType<typeof FindComponent>, FindComponent$.Props] | null {
+    return this.#find0;
+  }
+
+  protected get rawTitle(): string {
+    return this.#rawTitle0;
+  }
+
+  protected get title(): string {
+    const { state } = this;
+    if (state.userTitle) {
+      return state.userTitle;
+    }
+    return this.titleGenerated;
+  }
+
+  protected get titleGenerated(): string {
+    const { context: plugin, state } = this,
+      { value: i18n } = plugin.language,
+      { profile } = state,
+      { name, type } = profile;
+    if (this.rawTitle) {
+      return this.rawTitle;
+    }
+    if (typeof name === "string" && name) {
+      return name;
+    }
+    if ("executable" in profile) {
+      const { executable } = profile;
+      if (typeof executable === "string") {
+        return basename(executable, extname(executable));
+      }
+    }
+    return i18n.t("components.terminal.name.profile-type", {
+      interpolation: { escapeValue: false },
+      type,
+    });
+  }
+
+  protected get hidesStatusBar(): boolean {
+    const {
+      context: { settings },
+    } = this;
+    switch (settings.value.hideStatusBar) {
+      case "focused":
+        return this.isFocused;
+      case "running":
+        return true;
+      case "always":
+      case "never":
+        return false;
+      // No default
+    }
+  }
+
+  protected set state(value: TerminalView.State) {
+    const value2 = cloneAsWritable(value);
+    let cachedSerial = value2.serial;
+    this.#state = Object.defineProperty(value2, "serial", {
+      configurable: false,
+      enumerable: true,
+      get: (): TerminalView.State["serial"] => {
+        // Cache the serial regardless if the serial needs to be saved.
+        cachedSerial = this.emulator?.serialize() ?? cachedSerial;
+        return value2.profile.type !== "invalid" &&
+          value2.profile.restoreHistory
+          ? cachedSerial
+          : null;
+      },
+    });
+    updateView(this.context, this);
+  }
+
+  protected set emulator(val: TerminalView.EMULATOR | null) {
+    const { context: plugin } = this;
+    this.#emulator0?.close(false).catch((error: unknown) => {
+      printError(
+        anyToError(error),
+        () => plugin.language.value.t("errors.error-killing-pseudoterminal"),
+        plugin,
+      );
+    });
+    this.#emulator0 = val;
+  }
+
+  protected set find(
+    val:
+      readonly [ReturnType<typeof FindComponent>, FindComponent$.Props] | null,
+  ) {
+    if (this.find) {
+      unmount(this.find[0], { outro: true }).catch((error: unknown) => {
+        activeSelf(this.contentEl).console.warn(error);
+      });
+    }
+    this.#find0 = val;
+  }
+
+  protected set rawTitle(value: string) {
+    this.#rawTitle0 = value;
+    updateView(this.context, this);
+  }
+
+  public static load(context: TerminalPlugin): void {
+    const {
+      app: { workspace },
+      language: { value: i18n },
+    } = context;
+    this.#namespacedType = this.type.namespaced(context);
+    context.registerView(
+      TerminalView.type.namespaced(context),
+      (leaf) => new TerminalView(context, leaf),
+    );
+
+    // Track the last non-terminal leaf for restoring focus on unfocus
+    context.registerEvent(
+      workspace.on("active-leaf-change", (leaf) => {
+        if (leaf && !(leaf.view instanceof TerminalView)) {
+          this.lastActiveOtherLeaf = new WeakRef(leaf);
+        }
+      }),
+    );
+
+    const withLastFocusedView =
+      (
+        callback: (checking: boolean, view: TerminalView) => boolean,
+        focused: readonly boolean[] = [true],
+      ): ((checking: boolean) => boolean) =>
+      (checking) => {
+        let lastFocusTime = null,
+          lastFocus = null;
+        for (const [view, time] of this.lastFocusTimes.entries()) {
+          if (lastFocusTime !== null && lastFocusTime >= time) {
+            continue;
+          }
+          lastFocusTime = time;
+          lastFocus = view;
+        }
+        if (!lastFocus || !focused.includes(lastFocus.isFocused)) {
+          return false;
+        }
+        return callback(checking, lastFocus);
+      };
+    addCommand(context, () => i18n.t("commands.focus-on-last-terminal"), {
+      checkCallback: withLastFocusedView(
+        (checking, view) => {
+          if (!checking) {
+            view.focus();
+          }
+          return true;
+        },
+        [false],
+      ),
+      // No hotkeys: hotkeys: [],
+      icon: i18n.t("asset:commands.focus-on-last-terminal-icon"),
+      id: "focus-on-last-terminal",
+    });
+    const focusedScopeIDs = new Set([
+        addCommand(
+          context,
+          () => i18n.t("commands.toggle-focus-on-last-terminal"),
+          {
+            checkCallback: withLastFocusedView(
+              (checking, view) => {
+                if (!checking) {
+                  if (view.isFocused) {
+                    view.unfocus();
+                  } else {
+                    view.focus();
+                  }
+                }
+                return true;
+              },
+              [false, true],
+            ),
+            // Meta + ` does not work well on macOS.
+            hotkeys: [
+              {
+                key: "`",
+                modifiers: ["Ctrl", "Shift"],
+              },
+            ],
+            icon: i18n.t("asset:commands.toggle-focus-on-last-terminal-icon"),
+            id: "toggle-focus-on-last-terminal",
+          },
+        ).id,
+        addCommand(context, () => i18n.t("commands.unfocus-terminal"), {
+          checkCallback: withLastFocusedView((checking, view) => {
+            if (!checking) {
+              view.unfocus();
+            }
+            return true;
+          }),
+          // No hotkeys: hotkeys: [],
+          icon: i18n.t("asset:commands.unfocus-terminal-icon"),
+          id: "unfocus-terminal",
+        }).id,
+        addCommand(context, () => i18n.t("commands.clear-terminal"), {
+          checkCallback: withLastFocusedView((checking, view) => {
+            if (!checking) {
+              view.emulator?.terminal.clear();
+            }
+            return true;
+          }),
+          hotkeys: [
+            {
+              key: "k",
+              modifiers: ["Mod", "Shift"],
+            },
+          ],
+          icon: i18n.t("asset:commands.clear-terminal-icon"),
+          id: "clear-terminal",
+        }).id,
+        addCommand(context, () => i18n.t("commands.close-terminal"), {
+          checkCallback: withLastFocusedView((checking, view) => {
+            if (!checking) {
+              view.leaf.detach();
+            }
+            return true;
+          }),
+          hotkeys: [
+            {
+              key: "w",
+              modifiers: ["Mod", "Shift"],
+            },
+          ],
+          icon: i18n.t("asset:commands.close-terminal-icon"),
+          id: "close-terminal",
+        }).id,
+        addCommand(context, () => i18n.t("commands.find-in-terminal"), {
+          checkCallback: withLastFocusedView((checking, view) => {
+            if (!checking) {
+              view.startFind();
+            }
+            return true;
+          }),
+          hotkeys: [
+            {
+              key: "f",
+              modifiers: ["Mod", "Shift"],
+            },
+          ],
+          icon: i18n.t("asset:commands.find-in-terminal-icon"),
+          id: "find-in-terminal",
+        }).id,
+        addCommand(context, () => i18n.t("commands.rename-terminal"), {
+          checkCallback: withLastFocusedView(
+            (checking, view) => {
+              if (!checking) {
+                view.openRenameDialog();
+              }
+              return true;
+            },
+            [false, true],
+          ),
+          icon: i18n.t("asset:commands.rename-terminal-icon"),
+          id: "rename-terminal",
+        }).id,
+      ]),
+      handler = this.focusedScope.register(
+        null,
+        null,
+        newHotkeyListener(context, focusedScopeIDs),
+      );
+    context.register(() => {
+      this.focusedScope.unregister(handler);
+    });
+  }
+
+  public override async setState(
+    state: unknown,
+    result: ViewStateResult,
+  ): Promise<void> {
+    const { context: plugin } = this,
+      ownState = readStateCollaboratively(
+        TerminalView.type.namespaced(plugin),
+        state,
+      ),
+      { value, valid } = TerminalView.State.fix(ownState);
+    if (!valid) {
+      printMalformedData(plugin, ownState, value);
+    }
+    await super.setState(state, result);
+    const { focus } = value;
+    value.focus = false;
+    this.state = value;
+    this.startEmulator(focus);
+    recordViewStateHistory(plugin, result);
+  }
+
+  public override getState(): Record<string, unknown> {
+    return writeStateCollaboratively(
+      super.getState(),
+      TerminalView.type.namespaced(this.context),
+      this.state,
+    );
+  }
+
+  public getDisplayText(): string {
+    if (this.context.settings.value.showTerminalTabPrefix) {
+      return this.context.language.value.t(
+        `components.${TerminalView.type.id}.display-name`,
+        {
+          interpolation: { escapeValue: false },
+          title: this.title,
+        },
+      );
+    }
+    return this.title;
+  }
+
+  public override getIcon(): string {
+    return this.context.language.value.t(
+      `asset:components.${TerminalView.type.id}.icon`,
+    );
+  }
+
+  public getViewType(): string {
+    return TerminalView.#namespacedType;
+  }
+
+  public override onPaneMenu(menu: Menu, source: string): void {
+    super.onPaneMenu(menu, source);
+    const {
+      context,
+      context: {
+        language: { value: i18n },
+      },
+      leaf,
+      app: {
+        vault: { adapter },
+      },
+    } = this;
+    menu
+      .addSeparator()
+      .addItem((item) =>
+        item
+          .setTitle(i18n.t("components.terminal.menus.clear"))
+          .setIcon(i18n.t("asset:components.terminal.menus.clear-icon"))
+          .onClick(() => {
+            this.emulator?.terminal.clear();
+          }),
+      )
+      .addItem((item) =>
+        item
+          .setTitle(i18n.t("components.terminal.menus.find"))
+          .setIcon(i18n.t("asset:components.terminal.menus.find-icon"))
+          .setDisabled(this.find !== null)
+          .onClick(() => {
+            this.startFind();
+          }),
+      )
+      .addSeparator()
+      .addItem((item) =>
+        item
+          .setTitle(i18n.t("components.terminal.menus.copy"))
+          .setIcon(i18n.t("asset:components.terminal.menus.copy-icon"))
+          .onClick(async () =>
+            TerminalView.spawn(
+              context,
+              {
+                ...this.state,
+                focus: context.settings.value.focusOnNewInstance,
+              },
+              TerminalView.getLeaf(context, this.leaf),
+              this.getViewType(),
+            ),
+          ),
+      )
+      .addItem((item) =>
+        item
+          .setTitle(i18n.t("components.terminal.menus.edit"))
+          .setIcon(i18n.t("asset:components.terminal.menus.edit-icon"))
+          .onClick(() => {
+            new EditTerminalModal(context, this.state, async (state) =>
+              TerminalView.spawn(context, state, leaf, this.getViewType()),
+            ).open();
+          }),
+      )
+      .addItem((item) =>
+        item
+          .setTitle(i18n.t("components.terminal.menus.restart"))
+          .setIcon(i18n.t("asset:components.terminal.menus.restart-icon"))
+          .onClick(() => {
+            this.startEmulator(true);
+          }),
+      )
+      .addItem((item) =>
+        item
+          .setTitle(i18n.t("components.terminal.menus.rename"))
+          .setIcon(i18n.t("asset:components.terminal.menus.rename-icon"))
+          .onClick(() => {
+            this.openRenameDialog();
+          }),
+      )
+      .addSeparator()
+      .addItem((item) =>
+        item
+          .setTitle(i18n.t("components.terminal.menus.save-as-HTML"))
+          .setIcon(i18n.t("asset:components.terminal.menus.save-as-HTML-icon"))
+          .setDisabled(!this.emulator?.addons.serialize)
+          .onClick(async () => {
+            const ser = this.emulator?.addons.serialize;
+            if (!ser) {
+              return;
+            }
+            await saveFileAs(
+              context,
+              adapter,
+              new File(
+                [
+                  ser.serializeAsHTML({
+                    includeGlobalBackground: false,
+                    onlySelection: false,
+                  }),
+                ],
+                `${this.title}.html`,
+                { type: `text/html; charset=${DEFAULT_ENCODING};` },
+              ),
+            );
+          }),
+      );
+  }
+
+  protected focus(): void {
+    const { app, emulator, leaf, contentEl } = this;
+    app.workspace.revealLeaf(leaf).catch((error: unknown) => {
+      activeSelf(contentEl).console.error(error);
+    });
+    emulator?.terminal.focus();
+  }
+
+  protected unfocus(): void {
+    const {
+      app: { workspace },
+    } = this;
+
+    // Try to restore focus to the last non-terminal leaf
+    const lastActiveOtherLeaf = TerminalView.lastActiveOtherLeaf?.deref();
+    if (lastActiveOtherLeaf) {
+      if (
+        workspace
+          .getLeavesOfType(lastActiveOtherLeaf.view.getViewType())
+          .includes(lastActiveOtherLeaf)
+      ) {
+        workspace.setActiveLeaf(lastActiveOtherLeaf, { focus: true });
+        return;
+      }
+      TerminalView.lastActiveOtherLeaf = null;
+    }
+
+    // Fallback: just blur the active element
+    const {
+      contentEl: {
+        ownerDocument: { activeElement },
+      },
+    } = this;
+    if (
+      instanceOf(activeElement, HTMLElement) ||
+      instanceOf(activeElement, SVGElement)
+    ) {
+      activeElement.blur();
+    }
+  }
+
+  protected openRenameDialog(): void {
+    const { context, titleGenerated, state } = this,
+      {
+        language: { value: i18n },
+      } = context;
+    let userTitle = state.userTitle;
+    new DialogModal(context, {
+      confirm: (close) => {
+        close();
+        const state = cloneAsWritable(this.state);
+        state.userTitle = userTitle.trim();
+        this.state = state;
+      },
+      draw(ui, contentEl) {
+        ui.newSetting(contentEl, (setting) => {
+          const { controlEl } = setting.addText((component) => {
+            component
+              .setValue(userTitle)
+              .setPlaceholder(titleGenerated)
+              .onChange((value) => {
+                userTitle = value;
+              });
+          });
+          controlEl.classList.add(DOMClasses2.FULL_WIDTH);
+          controlEl
+            .querySelectorAll<HTMLInputElement>(":scope > input")
+            .forEach((input) => {
+              input.classList.add(DOMClasses2.FULL_WIDTH);
+            });
+        });
+      },
+      title() {
+        return i18n.t("components.terminal.menus.rename-prompt");
+      },
+    }).open();
+  }
+
+  protected override async onOpen(): Promise<void> {
+    await super.onOpen();
+    const { focusedScope } = TerminalView,
+      { context, contentEl, app } = this,
+      { language, settings, statusBarHider } = context,
+      { value: i18n } = language,
+      { keymap } = app;
+
+    this.register(
+      language.onChangeLanguage.listen(() => {
+        updateView(context, this);
+        if (this.find) {
+          this.find[1].i18nt = i18n.t.bind(i18n); // `bind` to preserve the context for potential i18n features that rely on it
+        }
+      }),
+    );
+
+    this.register(() => {
+      keymap.popScope(focusedScope);
+      TerminalView.lastFocusTimes.delete(this);
+    });
+    this.registerDomEvent(
+      contentEl,
+      "focusout",
+      () => {
+        keymap.popScope(focusedScope);
+        statusBarHider.update();
+      },
+      { passive: true },
+    );
+    this.registerDomEvent(
+      contentEl,
+      "focusin",
+      () => {
+        TerminalView.lastFocusTimes.set(this, Date.now());
+        recordTerminalUse(this);
+        if (settings.value.interceptKeysWhenFocused) {
+          keymap.pushScope(focusedScope);
+        }
+        statusBarHider.update();
+      },
+      { capture: true, passive: true },
+    );
+    TerminalView.lastFocusTimes.set(this, Date.now());
+    if (this.isFocused && settings.value.interceptKeysWhenFocused) {
+      keymap.pushScope(focusedScope);
+    }
+    this.register(
+      settings.onMutate(
+        (s) => s.interceptKeysWhenFocused,
+        (cur) => {
+          keymap.popScope(focusedScope);
+          if (cur && this.isFocused) {
+            keymap.pushScope(focusedScope);
+          }
+        },
+      ),
+    );
+    this.register(
+      settings.onMutate(
+        (s) => s.showTerminalTabPrefix,
+        () => {
+          updateView(context, this);
+        },
+      ),
+    );
+
+    this.register(statusBarHider.hide(() => this.hidesStatusBar));
+    this.register(() => {
+      this.emulator = null;
+    });
+  }
+
+  protected startFind(): void {
+    const { context: plugin, contentEl } = this,
+      { language } = plugin,
+      { value: i18n } = language;
+    if (!this.find) {
+      const onFind = (
+          direction: FindComponent$.Direction,
+          params: FindComponent$.Params,
+          incremental = false,
+        ): void => {
+          const finder = this.emulator?.addons.search;
+          if (!finder) {
+            return;
+          }
+          const func =
+            direction === "next"
+              ? finder.findNext.bind(finder)
+              : finder.findPrevious.bind(finder);
+          let empty = params.findText === "";
+          try {
+            func(params.findText, {
+              caseSensitive: params.caseSensitive,
+              decorations: {
+                activeMatchColorOverviewRuler: "#00000000",
+                matchOverviewRuler: "#00000000",
+              },
+              incremental,
+              regex: params.regex,
+              wholeWord: params.wholeWord,
+            });
+          } catch (error) {
+            /* @__PURE__ */ activeSelf(contentEl).console.debug(error);
+            empty = true;
+          }
+          if (empty) {
+            if (this.find) {
+              this.find[1].results = "";
+            }
+          }
+        },
+        optional: { anchor?: Element } = {};
+      assignExact(optional, "anchor", contentEl.firstElementChild ?? void 0);
+      const props = svelteState({
+        focused: true,
+        i18nt: i18n.t.bind(i18n), // `bind` to preserve the context for potential i18n features that rely on it
+        onClose: () => {
+          this.find = null;
+        },
+        onFind,
+        onParamsChanged: (params: FindComponent$.Params) => {
+          this.emulator?.addons.search.clearDecorations();
+          onFind("previous", params);
+        },
+      });
+      this.find = [
+        mount(FindComponent, {
+          intro: true,
+          props,
+          target: contentEl,
+          ...optional,
+        }),
+        props,
+      ];
+    }
+    this.find[0].focus();
+  }
+
+  protected startEmulator(focus: boolean): void {
+    const {
+        contentEl,
+        context,
+        context: {
+          language: { onChangeLanguage, value: i18n },
+          settings,
+        },
+        leaf,
+        state: { profile, cwd, serial },
+        app: {
+          workspace: { requestSaveLayout },
+        },
+      } = this,
+      noticeSpawn = (): void => {
+        notice2(
+          () =>
+            i18n.t("notices.spawning-terminal", {
+              interpolation: { escapeValue: false },
+              title: this.title,
+            }),
+          settings.value.noticeTimeout,
+          context,
+        );
+      };
+    if (!PROFILE_PROPERTIES[profile.type].integratable) {
+      (async (): Promise<void> => {
+        noticeSpawn();
+        await openProfile(context, profile, { cwd: cwd ?? void 0 });
+      })().catch((error: unknown) => {
+        printError(
+          anyToError(error),
+          () => i18n.t("errors.error-spawning-terminal"),
+          context,
+        );
+      });
+      leaf.detach();
+      return;
+    }
+    createChildElement(contentEl, "div", (ele) => {
+      function warn(error: unknown): void {
+        activeSelf(ele).console.warn(error);
+      }
+      ele.classList.add(TerminalView.type.namespaced(context));
+      (async (): Promise<void> => {
+        await awaitCSS(ele);
+        noticeSpawn();
+        // Starts as the profile's request; the opened pseudoterminal settles it.
+        let terminalBackendOptions: TerminalBackendOptions = deepFreeze({
+          platform: deopaque(Platform.CURRENT),
+          win32Backend:
+            profile.type === "integrated" ? profile.win32Backend : void 0,
+          win32BuildNumber: await win32BuildNumber(),
+        });
+        const [
+            { CanvasAddon },
+
+            { LigaturesAddon },
+
+            { SearchAddon },
+
+            { Unicode11Addon },
+
+            { WebLinksAddon },
+
+            { WebglAddon },
+          ] = await Promise.all([
+            xtermAddonCanvas,
+            xtermAddonLigatures,
+            xtermAddonSearch,
+            xtermAddonUnicode11,
+            xtermAddonWebLinks,
+            xtermAddonWebgl,
+          ]),
+          profileTerminalOptions =
+            profile.type === "invalid"
+              ? Settings.Profile.DEFAULTS[""].terminalOptions
+              : profile.terminalOptions,
+          customKeyEventHandler = new CustomKeyEventHandlerAddon(
+            Platform.CURRENT,
+            () => settings.value.keymappings,
+            () => settings.value.macOSOptionKeyPassthrough,
+            () => terminalBackendOptions.win32Backend === "conpty",
+          ),
+          emulator = new TerminalView.EMULATOR(
+            ele,
+            async (terminal, addons0, signal) => {
+              if (serial) {
+                await writePromise(
+                  terminal,
+                  i18n.t("components.terminal.restored-history", {
+                    datetime: new Date(),
+                    interpolation: { escapeValue: false },
+                  }),
+                );
+              }
+              // Spawn at the fitted size: a default-sized spawn reflows on
+              // the first frame.
+              const [columns, rows] = fittedSize(addons0.fit, terminal);
+              terminal.resize(columns, rows);
+              const ret = await openProfile(context, profile, {
+                  columns,
+                  cwd: cwd ?? void 0,
+                  rows,
+                  signal,
+                }),
+                requested = terminalBackendOptions;
+              terminalBackendOptions = settleTerminalBackendOptions(
+                requested,
+                ret,
+              );
+              if (terminalBackendOptions !== requested) {
+                // A ConHost fallback: nothing has been piped yet, so drop what
+                // only ConPTY understands before any output is parsed.
+                const merge = (
+                  backendOptions: TerminalBackendOptions,
+                ): ReturnType<typeof mergeTerminalOptions> =>
+                  mergeTerminalOptions(
+                    profileTerminalOptions,
+                    settings.value.terminalOptions,
+                    backendOptions,
+                  );
+                applyTerminalOptionDiffShallow(
+                  terminal,
+                  merge(requested),
+                  merge(terminalBackendOptions),
+                );
+              }
+              if (ret) {
+                return ret;
+              }
+              const pty = new TextPseudoterminal(
+                i18n.t("components.terminal.unsupported-profile", {
+                  interpolation: { escapeValue: false },
+                  profile: JSON.stringify(profile, null, JSON_STRINGIFY_SPACE),
+                }),
+              );
+              pty.onExit.catch(noop).finally(
+                onChangeLanguage.listen(() => {
+                  pty.text = i18n.t("components.terminal.unsupported-profile", {
+                    interpolation: { escapeValue: false },
+                    profile: JSON.stringify(
+                      profile,
+                      null,
+                      JSON_STRINGIFY_SPACE,
+                    ),
+                  });
+                }),
+              );
+              return pty;
+            },
+            serial ?? void 0,
+            mergeTerminalOptions(
+              profileTerminalOptions,
+              settings.value.terminalOptions,
+              terminalBackendOptions,
+            ),
+            {
+              altScreenExit: new AltScreenExitAddon(),
+              customKeyEventHandler,
+              synchronizedOutputScroll: new SynchronizedOutputScrollAddon(),
+              disposer: new DisposerAddon(
+                () => {
+                  ele.remove();
+                },
+                () => {
+                  this.rawTitle = "";
+                },
+                ele.onWindowMigrated(() => {
+                  emulator.reopen();
+                  emulator.resize(false).catch(warn);
+                }),
+                () => {
+                  if (this.find) {
+                    this.find[1].results = "";
+                  }
+                },
+              ),
+              dragAndDrop: new DragAndDropAddon(ele),
+              followTheme: new FollowThemeAddon(context, ele, {
+                enabled: (): boolean => {
+                  const { profileSourceId } = this.state;
+                  if (profileSourceId !== null) {
+                    const live = settings.value.profiles[profileSourceId];
+                    if (live) {
+                      return live.type === "invalid" || live.followTheme;
+                    }
+                  }
+                  return profile.type === "invalid" || profile.followTheme;
+                },
+              }),
+              ligatures: new LigaturesAddon({}),
+              renderer: new RendererAddon(
+                () => new CanvasAddon(),
+                () => new WebglAddon(false),
+              ),
+              rightClickAction: new RightClickActionAddon(
+                (): RightClickActionAddon.Action =>
+                  settings.value.rightClickAction,
+              ),
+              search: new SearchAddon(),
+              unicode11: new Unicode11Addon(),
+              vaultFileLinks: new VaultFileLinksAddon(context),
+              webLinks: new WebLinksAddon(
+                (event, uri) => openExternal(activeSelf(event), uri),
+                {
+                  /*
+                  ref: <https://github.com/xtermjs/xterm.js/blob/fb25eb8f79fd223acef90828dc2990bb7e196a1d/addons/addon-web-links/src/WebLinksAddon.ts#L10-L21>
+
+                  const strictUrlRegex = /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\\^<>`]*[^\s"':,.!?{}|\\\^~\[\]`()<>]/;
+                  */
+                  urlRegex:
+                    /(https?|HTTPS?|obsidian|OBSIDIAN):[/]{2}[^\s"'!*(){}|\\^<>`]*[^\s"':,.!?{}|\\^~[\]`()<>]/,
+                },
+              ),
+            },
+          ),
+          { pseudoterminal, terminal, addons } = emulator,
+          { disposer, renderer, search } = addons;
+        pseudoterminal
+          .then(async (pty0) => ({
+            code: await pty0.onExit,
+            // Only ConPTY's shell promise records authenticated readiness.
+            // Wait for its cleanup to settle before classifying the exit.
+            startupFailure:
+              pty0.win32Backend === "conpty"
+                ? await pty0.shell?.then(
+                    () => null,
+                    (error: unknown) =>
+                      error instanceof ConPtyControlError && error.noticeShown
+                        ? "notified"
+                        : "unnotified",
+                  )
+                : null,
+          }))
+          .then(
+            ({ code, startupFailure }) => {
+              // Closing or replacing the view intentionally kills its old PTY.
+              // ConPTY owns failures it already announced during startup.
+              if (this.emulator !== emulator || startupFailure === "notified") {
+                return;
+              }
+              notice2(
+                () => {
+                  const key =
+                    startupFailure === "unnotified"
+                      ? (win32ExitCodeKey(code) ?? "notices.terminal-exited")
+                      : "notices.terminal-exited";
+                  return i18n.t(key, {
+                    code,
+                    executable:
+                      profile.type === "integrated" ? profile.executable : "",
+                    interpolation: { escapeValue: false },
+                  });
+                },
+                (profile.type === "invalid"
+                  ? DEFAULT_SUCCESS_EXIT_CODES
+                  : profile.successExitCodes
+                ).includes(code.toString())
+                  ? settings.value.noticeTimeout
+                  : settings.value.errorNoticeTimeout,
+                context,
+              );
+            },
+            (error: unknown) => {
+              if (
+                this.emulator !== emulator &&
+                error instanceof ConPtyControlError &&
+                error.reason === "aborted"
+              ) {
+                return;
+              }
+              printError(
+                anyToError(error),
+                () => i18n.t("errors.error-spawning-terminal"),
+                context,
+              );
+            },
+          );
+        terminal.unicode.activeVersion = "11";
+        terminal.onWriteParsed(requestSaveLayout);
+        terminal.onResize(requestSaveLayout);
+        terminal.onTitleChange((title) => {
+          this.rawTitle = title;
+        });
+
+        disposer.push(
+          settings.onMutate(
+            (s) => {
+              const { profileSourceId } = this.state;
+              const liveProfile =
+                profileSourceId !== null ? s.profiles[profileSourceId] : null;
+              return {
+                globalOptions: s.terminalOptions,
+                profileOptions:
+                  liveProfile && liveProfile.type !== "invalid"
+                    ? liveProfile.terminalOptions
+                    : null,
+                followTheme: liveProfile
+                  ? liveProfile.type === "invalid" || liveProfile.followTheme
+                  : null,
+              };
+            },
+            (cur, prev) => {
+              if (
+                cur.globalOptions !== prev.globalOptions ||
+                cur.profileOptions !== prev.profileOptions
+              ) {
+                // When computing the merged options we want to see what
+                // xterm actually normalises the object to.  To do that we
+                // create short-lived Terminal instances with the merged
+                // settings, read back their `.options`, then dispose them
+                // immediately in a finally block so there's no residual
+                // DOM state.
+                const createMergedWith = (
+                  profileOpts: Settings.Profile.TerminalOptions,
+                  globalOpts: Settings.Profile.TerminalOptions,
+                ): ITerminalOptions => {
+                  const merged = mergeTerminalOptions(
+                    profileOpts,
+                    globalOpts,
+                    terminalBackendOptions,
+                  );
+                  const tmp = new Terminal(merged);
+                  try {
+                    return tmp.options;
+                  } finally {
+                    tmp.dispose();
+                  }
+                };
+
+                const prevProfileOpts =
+                  prev.profileOptions ?? profileTerminalOptions;
+                const curProfileOpts =
+                  cur.profileOptions ?? profileTerminalOptions;
+                const prevMerged = createMergedWith(
+                  prevProfileOpts,
+                  prev.globalOptions,
+                );
+                const curMerged = createMergedWith(
+                  curProfileOpts,
+                  cur.globalOptions,
+                );
+
+                // Only patch the terminal when something actually changed at
+                // the *first* level of the merged settings object.  The helper
+                // will perform a deep equality check per-key and update/delete
+                // values accordingly.
+                applyTerminalOptionDiffShallow(terminal, prevMerged, curMerged);
+              }
+              if (
+                cur.followTheme !== prev.followTheme ||
+                cur.globalOptions !== prev.globalOptions ||
+                cur.profileOptions !== prev.profileOptions
+              ) {
+                emulator.addons.followTheme.refresh(true);
+              }
+            },
+          ),
+        );
+        disposer.push(
+          settings.onMutate(
+            (settings0) => settings0.preferredRenderer,
+            (cur) => {
+              renderer.use(cur);
+            },
+          ),
+        );
+        renderer.use(settings.value.preferredRenderer);
+        search.onDidChangeResults((results0) => {
+          const { resultIndex, resultCount } = results0,
+            results =
+              resultIndex === -1 && resultCount > 0
+                ? i18n.t("components.find.too-many-results", {
+                    interpolation: { escapeValue: false },
+                    limit: resultCount - 1,
+                  })
+                : i18n.t("components.find.results", {
+                    interpolation: { escapeValue: false },
+                    replace: {
+                      count: resultCount,
+                      index: resultIndex + 1,
+                    },
+                  });
+          if (this.find) {
+            this.find[1].results = results;
+          }
+        });
+
+        emulator.resize().catch(warn);
+        onResize(ele, (ent) => {
+          if (
+            ent.contentBoxSize.every(
+              (size) => size.blockSize <= 0 || size.inlineSize <= 0,
+            )
+          ) {
+            return;
+          }
+          emulator.resize(false).catch(warn);
+        });
+        this.emulator = emulator;
+        if (focus) {
+          terminal.focus();
+        }
+      })().catch((error: unknown) => {
+        activeSelf(ele).console.error(error);
+      });
+    });
+  }
+}
+export namespace TerminalView {
+  export const EMULATOR = XtermTerminalEmulator<Addons>;
+  export type EMULATOR = XtermTerminalEmulator<Addons>;
+  export interface Addons {
+    readonly altScreenExit: AltScreenExitAddon;
+    readonly customKeyEventHandler: CustomKeyEventHandlerAddon;
+    readonly disposer: DisposerAddon;
+    readonly dragAndDrop: DragAndDropAddon;
+    readonly followTheme: FollowThemeAddon;
+    readonly ligatures: LigaturesAddon;
+    readonly renderer: RendererAddon;
+    readonly rightClickAction: RightClickActionAddon;
+    readonly search: SearchAddon;
+    readonly synchronizedOutputScroll: SynchronizedOutputScrollAddon;
+    readonly unicode11: Unicode11Addon;
+    readonly vaultFileLinks: VaultFileLinksAddon;
+    readonly webLinks: WebLinksAddon;
+  }
+  export interface State {
+    readonly profile: Settings.Profile;
+    readonly profileSourceId: string | null;
+    readonly cwd: string | null;
+    readonly serial: XtermTerminalEmulator.State | null;
+    readonly focus: boolean;
+    readonly userTitle: string;
+  }
+  export namespace State {
+    export const DEFAULT: State = deepFreeze({
+      cwd: null,
+      focus: false,
+      profile: Settings.Profile.DEFAULTS.invalid,
+      profileSourceId: null,
+      serial: null,
+      userTitle: "",
+    });
+    export function fix(self0: unknown): Fixed<State> {
+      const unc = launderUnchecked<State>(self0);
+      return markFixed(self0, {
+        cwd: fixTyped(DEFAULT, unc, "cwd", ["string", "null"]),
+        focus: fixTyped(DEFAULT, unc, "focus", ["boolean"]),
+        profile: Settings.Profile.fix(unc.profile).value,
+        profileSourceId: fixTyped(DEFAULT, unc, "profileSourceId", [
+          "string",
+          "null",
+        ]),
+        serial:
+          unc.serial === null
+            ? null
+            : XtermTerminalEmulator.State.fix(unc.serial).value,
+        userTitle: fixTyped(DEFAULT, unc, "userTitle", ["string"]),
+      });
+    }
+  }
+  export function getLeaf(
+    context: TerminalPlugin,
+    leaf?: WorkspaceLeaf,
+  ): WorkspaceLeaf {
+    const {
+        app: {
+          workspace,
+          workspace: { leftSplit, rightSplit },
+        },
+        settings,
+      } = context,
+      newLeaf = ((): WorkspaceLeaf => {
+        if (settings.value.createInstanceNearExistingOnes) {
+          const existingLeaves = workspace.getLeavesOfType(
+              TerminalView.type.namespaced(context),
+            ),
+            existingLeaf =
+              leaf ??
+              existingLeaves.reduce<WorkspaceLeaf | undefined>(
+                (latest, candidate) =>
+                  terminalUseOf(candidate) > terminalUseOf(latest)
+                    ? candidate
+                    : latest,
+                void 0,
+              );
+          if (existingLeaf) {
+            const root = existingLeaf.getRoot();
+            if (root === leftSplit) {
+              const ret = workspace.getLeftLeaf(false);
+              if (ret !== null) return ret;
+            }
+            if (root === rightSplit) {
+              const ret = workspace.getRightLeaf(false);
+              if (ret !== null) return ret;
+            }
+            workspace.setActiveLeaf(existingLeaf);
+            return workspace.getLeaf("tab");
+          }
+        }
+        switch (settings.value.newInstanceBehavior) {
+          case "replaceTab":
+            return workspace.getLeaf();
+          case "newTab":
+            return workspace.getLeaf("tab");
+          case "newLeftTab":
+            return workspace.getLeftLeaf(false) ?? workspace.getLeaf("tab");
+          case "newLeftSplit":
+            return (
+              workspace.getLeftLeaf(true) ??
+              workspace.getLeaf("split", "horizontal")
+            );
+          case "newRightTab":
+            return workspace.getRightLeaf(false) ?? workspace.getLeaf("tab");
+          case "newRightSplit":
+            return (
+              workspace.getRightLeaf(true) ??
+              workspace.getLeaf("split", "horizontal")
+            );
+          case "newHorizontalSplit":
+            return workspace.getLeaf("split", "horizontal");
+          case "newVerticalSplit":
+            return workspace.getLeaf("split", "vertical");
+          case "newWindow":
+            return workspace.getLeaf("window");
+          // No default
+        }
+      })();
+    newLeaf.setPinned(settings.value.pinNewInstance);
+    return newLeaf;
+  }
+  export async function spawn(
+    context: TerminalPlugin,
+    state: State,
+    leaf?: WorkspaceLeaf,
+    type: string = TerminalView.type.namespaced(context),
+  ): Promise<void> {
+    const { focus } = state,
+      {
+        app: { workspace },
+      } = context,
+      target = leaf ?? getLeaf(context);
+    await target.setViewState({
+      state: newCollaborativeState(
+        context,
+        new Map([[TerminalView.type, state]]),
+      ),
+      type,
+    });
+    const { view } = target;
+    // An external profile detaches the leaf while its state is set, so there is nothing to reveal.
+    if (
+      !(view instanceof TerminalView) ||
+      !workspace.getLeavesOfType(type).includes(target)
+    ) {
+      return;
+    }
+    await workspace.revealLeaf(target);
+    recordTerminalUse(view);
+    if (focus) {
+      workspace.setActiveLeaf(target, { focus: true });
+    } else {
+      const activeView = workspace.getActiveViewOfType(View);
+      // The reveal hid the active leaf's tab, so the shown terminal becomes the active leaf.
+      if (
+        activeView !== null &&
+        activeView.leaf.parent === target.parent &&
+        activeView.containerEl.offsetParent === null
+      ) {
+        workspace.setActiveLeaf(target);
+      }
+    }
+  }
+}

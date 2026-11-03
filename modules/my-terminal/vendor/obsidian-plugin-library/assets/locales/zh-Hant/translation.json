@@ -1,0 +1,130 @@
+{
+  "commands": {
+    "export-settings-clipboard": "$t(generic.export)$t(generic.setting)到$t(generic.clipboard)",
+    "export-settings-current-file": "$t(generic.export)$t(generic.setting)到$t(generic.current-file)",
+    "import-settings-clipboard": "從$t(generic.clipboard)$t(generic.import)$t(generic.setting)",
+    "import-settings-current-file": "從$t(generic.current-file)$t(generic.import)$t(generic.setting)"
+  },
+  "components": {
+    "dialog": {
+      "cancel": "$t(generic.cancel)",
+      "confirm": "$t(generic.confirm)",
+      "double-confirm-hint": "按<Enter>兩次$t(generic.confirm)。"
+    },
+    "dropdown": {
+      "placeholder": "（未選擇）"
+    },
+    "edit-data": {
+      "data": "$t(generic.data)",
+      "export": "$t(generic.export)",
+      "export-to-clipboard": "$t(generic.export)到$t(generic.clipboard)",
+      "import": "$t(generic.import)",
+      "import-from-clipboard": "從$t(generic.import)$t(generic.import)",
+      "reset": "$t(generic.reset)"
+    },
+    "find": {
+      "case-sensitive": "區分大小寫",
+      "close": "$t(generic.close)",
+      "input-placeholder": "$t(generic.find)",
+      "next": "下一個",
+      "previous": "上一個",
+      "regex": "正則表達式",
+      "results": "{{index, number}}/{{count, number}}",
+      "too-many-results": "?/{{limit, number}}+",
+      "whole-word": "全字"
+    },
+    "list": {
+      "append": "後置",
+      "move-down": "下移",
+      "move-up": "上移",
+      "name": "$t(generic.ordinal)",
+      "prepend": "前置",
+      "remove": "刪除"
+    },
+    "rules-list": {
+      "description": "$t(generic.rule)是從上到下執行的。如果沒有$t(generic.rule)匹配，則排除。支持JavaScript正則表達式。不前置任何文字或前置「+」表示包含，「-」表示排除。"
+    },
+    "suggest": {
+      "instructions": {
+        "dismiss": "esc",
+        "dismiss-purpose": "$t(generic.dismiss)",
+        "navigate": "↑↓",
+        "navigate-purpose": "$t(generic.navigate)",
+        "use": "↵",
+        "use-purpose": "$t(generic.use)"
+      }
+    }
+  },
+  "dialogs": {
+    "overwrite-existing-frontmatter": "$t(generic.overwrite)$t(generic.exist)的$t(generic.frontmatter)？"
+  },
+  "errors": {
+    "error-exporting-settings": "$t(generic.export)$t(generic.setting)時出錯",
+    "error-importing-settings": "$t(generic.import)$t(generic.setting)時出錯",
+    "error-opening-documentation": "$t(generic.open)$t(generic.documentation)時出錯",
+    "error-processing-frontmatter": "處理$t(generic.frontmatter)時出錯：{{file.path}}",
+    "malformed-data": "$t(generic.data)格式不正確",
+    "missing-interpolation": "名稱為「{{name}}」的缺少插值被替換為「{{value}}」：{{text}}",
+    "missing-translation": "鍵為「{{key}}」的缺少翻譯被替換為「{{value}}」",
+    "no-formatter": "没有格式器",
+    "private-API-changed": "私有$t(generic.API)改變了",
+    "retry-outdated-frontmatter": "請$t(generic.retry)，因為$t(generic.frontmatter)在$t(generic.background)更新了"
+  },
+  "generic": {
+    "API": "API",
+    "app": "應用程式",
+    "background": "後台",
+    "cancel": "取消",
+    "clipboard": "剪貼板",
+    "close": "關閉",
+    "command": "命令",
+    "command-palette": "$t(generic.command)面板",
+    "confirm": "確認",
+    "current-file": "目前$t(generic.file)",
+    "data": "數據",
+    "disable": "禁用",
+    "dismiss": "取消",
+    "edit": "編輯",
+    "exist": "存在",
+    "export": "導出",
+    "file": "檔案",
+    "find": "搜尋",
+    "frontmatter": "前置信息",
+    "import": "導入",
+    "language": "語言",
+    "list": "列表",
+    "list-description_other": "有{{count, number}}項項目。",
+    "list-description_zero": "沒有項目。",
+    "navigate": "移動",
+    "notice": "通知",
+    "open": "開啟",
+    "ordinal": "第{{count, number}}",
+    "overwrite": "覆蓋",
+    "plugin": "外掛程式",
+    "reset": "重設",
+    "retry": "重試",
+    "rule": "規則",
+    "setting": "設置",
+    "timeout": "超時",
+    "use": "使用"
+  },
+  "settings": {
+    "all-settings": "所有$t(generic.setting)",
+    "all-settings-actions": {
+      "edit": "$t(generic.edit)",
+      "recover": "復原",
+      "reload": "重新加載",
+      "reset": "$t(generic.reset)",
+      "undo": "復原"
+    },
+    "description": "$t(generic.open)「$t(settings.all-settings)」下的「$t(settings.all-settings-actions.edit)」或$t(generic.use)$t(generic.command-palette)以$t(generic.export)或$t(generic.import)$t(generic.setting)。",
+    "error-notice-timeout": "錯誤$t(generic.notice)$t(generic.timeout)（s）",
+    "error-notice-timeout-description": "$t(settings.notice-timeout-description)",
+    "language": "$t(generic.language)",
+    "language-default": "$t(generic.use)$t(generic.app)$t(generic.setting)",
+    "language-description": "僅適用於此$t(generic.plugin)。標有🚧的$t(generic.language)需要您幫助來翻譯！",
+    "notice-timeout": "$t(generic.notice)$t(generic.timeout)（s）",
+    "notice-timeout-description": "設為0\u00a0s是無$t(generic.timeout)。設為負數以$t(generic.disable)$t(generic.notice)。",
+    "reset": "$t(generic.reset)"
+  }
+}

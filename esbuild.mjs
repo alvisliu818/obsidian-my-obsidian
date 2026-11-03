@@ -158,32 +158,32 @@ const sveltePlugin = esbuildSvelte({
 });
 
 // ---------------------------------------------------------------------------
-// momentum（含并入的 WorkLife Calendar）: Svelte 4 组件。
+// momentum（含并入的 WorkLife Calendar）: Svelte 5（2026-11-03 起）。
 //
-// 为什么是 4 而不是根仓的 5：WorkLife 的视图用 Svelte 3 的
-// `new Component({ target, props })` 实例化（配 $destroy/$set），且
-// ui/Calendar.svelte 把 obsidian-calendar-ui 的预编译 Svelte 3 class 当子组件
-// 用。Svelte 4 与 Svelte 3 的 class 组件 API、`new Child({...})` 子组件约定
-// 一致；Svelte 5 默认编译成函数组件，两条路都炸（前者 `$.prop()` 内部
-// `Symbol($state) in undefined`，后者 "Class constructor cannot be invoked
-// without 'new'"；componentApi:4 兼容模式只包根组件，子组件仍是函数约定）。
-//
-// 实现：modules/my-momentum/node_modules 下嵌套装着 svelte@4 + esbuild-svelte
-// （该模块自包含依赖，与独立项目 obsidian-momentum 一致；根 node_modules 的
-// svelte@5 供 omnisearch/obsidian-git 使用）。用 createRequire 从模块目录
-// 解析出这份 esbuild-svelte——它 require("svelte/compiler") 时自然落到嵌套
-// 的 svelte@4。include 只罩 momentum 下的 .svelte，且必须注册在根
+// 曾长期钉在 Svelte 4（嵌套 node_modules）：WorkLife 的视图大量用 S3/4 类 API
+// 实例化（`new Component({ target, props })` + `$set`/`$destroy`，见
+// worklife/views/*.ts），且 ui/Calendar.svelte 把 obsidian-calendar-ui 的
+// 预编译 Svelte 3 class 当子组件。升级 Svelte 5 后：
+//  - 类 API 兼容由 `compatibility: { componentApi: 4 }` 提供——它给每个文件的
+//    **根导出**包一层类包装；views/*.ts 实例化的全是各文件根组件，恰好命中。
+//  - S3/4 class 组件（calendar-ui）作为子组件：Svelte 5 运行时自动识别
+//    class 组件并走 `new` 桥（官方向后兼容）。
+//  - 28 个 .svelte 源码保持 legacy 语法（Svelte 5 自动按文件进入 legacy 模式）。
+// 与根仓同用 svelte@5 —— 嵌套 node_modules（svelte@4 + esbuild-svelte）已删，
+// 依赖复用，一套工具链。include 只罩 momentum 下的 .svelte，注册在根
 // sveltePlugin 之前（onLoad 按插件顺序先到先得）。
 //
-// verbatimModuleSyntax 同样只经 options 传（不动 tsconfig）：没有它
+// verbatimModuleSyntax 仍只经 options 传（不动 tsconfig）：没有它
 // ts.transpileModule 会把「只被 $store 引用」的 import 当未使用删掉，
-// Svelte 编译器随即报 `global_reference_invalid`。
+// 编译器随即报 `global_reference_invalid`。
 // ---------------------------------------------------------------------------
-const momentumRequire = createRequire(path.resolve("modules/my-momentum/package.json"));
-const esbuildSvelte4 = momentumRequire("esbuild-svelte");
-const momentumSveltePlugin = esbuildSvelte4({
+const momentumSveltePlugin = esbuildSvelte({
   include: /momentum.*\.svelte$/,
-  compilerOptions: { css: "injected", dev: !prod },
+  compilerOptions: {
+    css: "injected",
+    dev: !prod,
+    compatibility: { componentApi: 4 },
+  },
   filterWarnings: (warning) => !warning.code.startsWith("a11y-"),
   preprocess: sveltePreprocess({
     typescript: { compilerOptions: { verbatimModuleSyntax: true } },
@@ -236,6 +236,54 @@ const unicornMagicPatchPlugin = {
 			loader: "js",
 		}));
 	},
+};
+
+// ---------------------------------------------------------------------------
+// terminal（vendor 库 obsidian-plugin-library）：Svelte 5 组件 + runes 模块。
+//
+// 库源码里有一个 find.svelte 组件和 src/svelte.svelte.ts（$state runes 模块，
+// 终端视图的 svelteState 桥就出自它）。esbuild-svelte 的默认 filter 只认
+// `\.svelte$`，罩不住 `.svelte.ts`——不编它就会落到 esbuild 默认 ts loader，
+// `$state` 直接语法错。与 momentum 插件同理：作用域 include 只罩
+// my-terminal/vendor 下的 svelte 文件，注册在根 sveltePlugin 之前。
+// .d.svelte.ts（组件类型声明）运行时无人 import，不进 bundle 图。
+// 上游构建还用 PACKAGE_ID 定制 cssHash + inject 计时器包装；前者默认哈希
+// 无碰撞风险，后者会把全 bundle 的 setTimeout 路由到 activeWindow（影响
+// 其他模块），先都不带——见 modules/my-terminal/NOTICE.md。
+// ---------------------------------------------------------------------------
+const terminalSveltePlugin = esbuildSvelte({
+  include: /my-terminal[\\/]vendor.*\.svelte(?:\.ts)?$/,
+  compilerOptions: { css: "injected", dev: !prod },
+  moduleCompilerOptions: { dev: !prod, generate: "client" },
+  filterWarnings: (warning) => !warning.code.startsWith("a11y-"),
+  preprocess: sveltePreprocess(),
+});
+
+// ---------------------------------------------------------------------------
+// terminal：`.py` 文本模块。
+//
+// 上游把 win32_conpty.py / win32_resizer.py / unix_pseudoterminal.py /
+// get_package_version.py 当文本打进 bundle（esbuild-compress 的 text
+// loader），运行时写进插件目录再由 python 执行。宿主没有 .py loader，
+// 这里按同语义补一个（无压缩——行为一致，体积多几 KB）。
+// TS 侧声明由 terminal 自带 src/@types/index.ts 的 `declare module "*.py"`
+// 提供；terminal 不进宿主 tsc 程序，宿主侧无需声明。
+// ---------------------------------------------------------------------------
+const terminalPyPlugin = {
+  name: "terminal-py-text",
+  setup(build) {
+    build.onLoad({ filter: /\.py$/ }, (args) => ({
+      // 上游 esbuild-compress 的 lazy text 语义：default 导出的是
+      // **thenable**（PromiseLike<string>），消费方全部 await 后再当字符串用
+      // （pseudoterminal.ts 的 dependencies.source 还显式标 PromiseLike 并调
+      // .then）。所以这里包成 Promise，不能给裸 text——裸字符串会在
+      // `p.source.then` 处直接炸 "not a function"。
+      contents: `export default Promise.resolve(${JSON.stringify(
+        readFileSync(args.path, "utf8"),
+      )});`,
+      loader: "js",
+    }));
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -431,6 +479,13 @@ const context = await esbuild.context({
   banner: { js: banner },
   entryPoints: ["src/main.ts"],
   bundle: true,
+  // terminal 的 vendor 子库（polyipseity/obsidian-plugin-library，源码随仓）：
+  // 别名到其 TS 入口，esbuild 直接编译源码。子库无 dist、无 node_modules。
+  alias: {
+    "@polyipseity/obsidian-plugin-library": path.resolve(
+      "modules/my-terminal/vendor/obsidian-plugin-library/src/index.ts",
+    ),
+  },
   // obsidian = the host API; @codemirror/* + @lezer/* = Obsidian's own CM6
   // instance (official plugin convention), so every editor here shares ONE
   // CodeMirror with the native editor and with community plugins.
@@ -459,7 +514,7 @@ const context = await esbuild.context({
     // ollama 等包用 `node:fs` 带前缀的写法，裸名列表罩不住
     ...builtins.map((m) => `node:${m}`),
   ],
-  plugins: [cmBundlePlugin, momentumSveltePlugin, sveltePlugin, jiebaPatchPlugin, dexiePatchPlugin, unicornMagicPatchPlugin, importGlobPlugin, musicPlayerShimsPlugin, inlineImportPlugin, mxInlinePlugin, mxCaptionsPlugin, mxNodeEnvPlugin],
+  plugins: [cmBundlePlugin, momentumSveltePlugin, terminalSveltePlugin, sveltePlugin, jiebaPatchPlugin, dexiePatchPlugin, unicornMagicPatchPlugin, importGlobPlugin, musicPlayerShimsPlugin, inlineImportPlugin, mxInlinePlugin, mxCaptionsPlugin, mxNodeEnvPlugin, terminalPyPlugin],
   // Monaco 的 codicon.css 引用 .ttf 字体(图标字形)。内联成 dataurl:图标
   // 只有几 KB,而少这一条整个构建会以 "No loader is configured for .ttf" 失败。
   // (与独立插件 obsidian-logseq 的 esbuild.mjs 同款配置。)

@@ -1,0 +1,1161 @@
+import {
+  AdvancedSettingTab,
+  activeSelf,
+  cloneAsWritable,
+  closeSetting,
+  createChildElement,
+  createDocumentFragment,
+  deopaque,
+  DOMClasses,
+  linkSetting,
+  openExternal,
+  Platform,
+  registerSettingsCommands,
+  resetButton,
+  setSanitizedInnerHTML,
+  setTextToEnum,
+} from "@polyipseity/obsidian-plugin-library";
+import { cloneDeep } from "es-toolkit/object";
+import semverLt from "semver/functions/lt.js";
+import type { loadDocumentations } from "./documentations.js";
+import type { TerminalPlugin } from "./main.js";
+import {
+  KeymappingsModal,
+  ProfileListModal,
+  TerminalOptionsModal,
+} from "./modals.js";
+import { Settings } from "./settings-data.js";
+import { RightClickActionAddon } from "./terminal/emulator-addons.js";
+import { CONPTY_HOST_POOL } from "./terminal/pseudoterminal.js";
+import {
+  PYTHON_DOWNLOADS_URL,
+  getWindowsPythonDiagnosis,
+  isAutomaticWindowsPythonExecutable,
+  isPluginPythonCheckPending,
+  invalidateWindowsPythonDiagnosis,
+  onPluginPythonDiagnosis,
+  pluginPythonStatusKey,
+  runPluginPythonCheck,
+  onWindowsPythonStateChange,
+} from "./terminal/win32-doctor.js";
+
+export class SettingTab extends AdvancedSettingTab<Settings> {
+  #unregisterPythonDiagnosis?: () => void;
+  #setPythonWidgetsVisible?: (visible: boolean) => void;
+
+  public constructor(
+    protected override readonly context: TerminalPlugin,
+    protected readonly docs: loadDocumentations.Loaded,
+  ) {
+    super(context);
+  }
+
+  public override display(): void {
+    this.#setPythonWidgetsVisible?.(true);
+    super.display();
+  }
+
+  public override hide(): void {
+    this.#setPythonWidgetsVisible?.(false);
+    super.hide();
+  }
+
+  protected override onUnload(): void {
+    this.#unregisterPythonDiagnosis?.();
+    this.#unregisterPythonDiagnosis = void 0;
+    this.#setPythonWidgetsVisible = void 0;
+    super.onUnload();
+  }
+
+  protected override onLoad(): void {
+    super.onLoad();
+    const {
+      containerEl,
+      context,
+      context: {
+        language: { value: i18n },
+        localSettings,
+        settings,
+        version,
+      },
+      docs,
+      ui,
+    } = this;
+    this.newDescriptionWidget();
+    this.newLanguageWidget(
+      Settings.DEFAULTABLE_LANGUAGES,
+      (language) =>
+        language
+          ? i18n.t(`language:${language}`)
+          : i18n.t("settings.language-default"),
+      Settings.DEFAULT,
+    );
+    ui.newSetting(containerEl, (setting) => {
+      setting
+        .setName(i18n.t("settings.documentation"))
+        .addButton((button) =>
+          button
+            .setIcon(i18n.t("asset:settings.documentations.donate-icon"))
+            .setTooltip(i18n.t("settings.documentations.donate"))
+            .setCta()
+            .onClick((event) => {
+              docs.open("donate", { event });
+            }),
+        )
+        .addButton((button) =>
+          button
+            .setIcon(i18n.t("asset:settings.documentations.readme-icon"))
+            .setTooltip(i18n.t("settings.documentations.readme"))
+            .setCta()
+            .onClick((event) => {
+              docs.open("readme", { event });
+              closeSetting(containerEl);
+            }),
+        )
+        .addButton((button) => {
+          button
+            .setIcon(i18n.t("asset:settings.documentations.changelog-icon"))
+            .setTooltip(i18n.t("settings.documentations.changelog"))
+            .onClick((event) => {
+              docs.open("changelog", { event });
+              closeSetting(containerEl);
+            });
+          if (
+            version === null ||
+            semverLt(localSettings.value.lastReadChangelogVersion, version)
+          ) {
+            button.setCta();
+          }
+        });
+    });
+    this.newAllSettingsWidget(Settings.DEFAULT, Settings.fix);
+    if (deopaque(Platform.CURRENT) === "win32") {
+      this.newPythonWidgets();
+    }
+    ui.newSetting(containerEl, (setting) => {
+      setting
+        .setName(i18n.t("settings.add-to-command"))
+        .addToggle(
+          linkSetting(
+            () => settings.value.addToCommand,
+            async (value) =>
+              settings.mutate((settingsM) => {
+                settingsM.addToCommand = value;
+              }),
+            () => {
+              this.postMutate();
+            },
+          ),
+        )
+        .addExtraButton(
+          resetButton(
+            i18n.t("asset:settings.add-to-command-icon"),
+            i18n.t("settings.reset"),
+            async () =>
+              settings.mutate((settingsM) => {
+                settingsM.addToCommand = Settings.DEFAULT.addToCommand;
+              }),
+            () => {
+              this.postMutate();
+            },
+          ),
+        );
+    })
+      .newSetting(containerEl, (setting) => {
+        setting
+          .setName(i18n.t("settings.add-to-context-menu"))
+          .addToggle(
+            linkSetting(
+              () => settings.value.addToContextMenu,
+              async (value) =>
+                settings.mutate((settingsM) => {
+                  settingsM.addToContextMenu = value;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          )
+          .addExtraButton(
+            resetButton(
+              i18n.t("asset:settings.add-to-context-menu-icon"),
+              i18n.t("settings.reset"),
+              async () =>
+                settings.mutate((settingsM) => {
+                  settingsM.addToContextMenu =
+                    Settings.DEFAULT.addToContextMenu;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          );
+      })
+      .newSetting(containerEl, (setting) => {
+        setting
+          .setName(i18n.t("settings.profiles"))
+          .setDesc(
+            i18n.t("settings.profiles-description", {
+              count: Object.keys(settings.value.profiles).length,
+              interpolation: { escapeValue: false },
+            }),
+          )
+          .addButton((button) =>
+            button
+              .setIcon(i18n.t("asset:settings.profiles-edit-icon"))
+              .setTooltip(i18n.t("settings.profiles-edit"))
+              .onClick(() => {
+                new ProfileListModal(
+                  context,
+                  {
+                    defaultProfile: settings.value.defaultProfile,
+                    entries: Object.entries(settings.value.profiles),
+                  },
+                  {
+                    callback: async (data): Promise<void> => {
+                      await settings.mutate((settingsM) => {
+                        settingsM.profiles = Object.fromEntries(data.entries);
+                        settingsM.defaultProfile = data.defaultProfile;
+                      });
+                      this.postMutate();
+                    },
+                    description: (): string =>
+                      i18n.t("settings.profile-list.description"),
+                  },
+                ).open();
+              }),
+          )
+          .addExtraButton(
+            resetButton(
+              i18n.t("asset:settings.profiles-icon"),
+              i18n.t("settings.reset"),
+              async () =>
+                settings.mutate((settingsM) => {
+                  settingsM.profiles = cloneAsWritable(
+                    Settings.DEFAULT.profiles,
+                  );
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          );
+      })
+      .newSetting(containerEl, (setting) => {
+        setting
+          .setName(i18n.t("settings.default-profile"))
+          .setDesc(i18n.t("settings.default-profile-description"))
+          .addDropdown(
+            linkSetting(
+              (): string => settings.value.defaultProfile ?? "",
+              async (value) =>
+                settings.mutate((settingsM) => {
+                  // Unfortunately we have to use the empty string as a sentinel value for "no default profile" because the dropdown component doesn't allow null/undefined values. So we have to coerce it back to null here.
+                  settingsM.defaultProfile =
+                    value === "" ? null : (value as Settings.DefaultProfile);
+                }),
+              () => {
+                this.postMutate();
+              },
+              {
+                pre: (dropdown) => {
+                  dropdown
+                    .addOption("", i18n.t("components.dropdown.placeholder"))
+                    .addOptions(
+                      Object.fromEntries(
+                        Object.entries(settings.value.profiles).map(
+                          ([id, profile]) => [
+                            id,
+                            i18n.t(
+                              `settings.default-profile-name-${
+                                Settings.Profile.isCompatible(
+                                  profile,
+                                  Platform.CURRENT,
+                                )
+                                  ? ""
+                                  : "incompatible"
+                              }`,
+                              {
+                                info: Settings.Profile.info([id, profile]),
+                                interpolation: { escapeValue: false },
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                },
+              },
+            ),
+          )
+          .addExtraButton(
+            resetButton(
+              i18n.t("asset:settings.default-profile-icon"),
+              i18n.t("settings.reset"),
+              async () =>
+                settings.mutate((settingsM) => {
+                  settingsM.defaultProfile = Settings.DEFAULT.defaultProfile;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          );
+      });
+    // profile defaults section
+    this.newSectionWidget(() => i18n.t("settings.profile-defaults"));
+    ui.new(
+      () => createChildElement(containerEl, "div"),
+      (ele) => {
+        ele.classList.add(DOMClasses.SETTING_ITEM);
+        ele.textContent = i18n.t("settings.profile-defaults-description");
+      },
+      (ele) => {
+        ele.remove();
+      },
+    );
+    ui.newSetting(containerEl, (setting) => {
+      setting
+        .setName(i18n.t("settings.terminal-options"))
+        .setDesc(i18n.t("settings.terminal-options-description"))
+        .addButton((button) =>
+          button
+            .setIcon(i18n.t("asset:settings.terminal-options-edit-icon"))
+            .setTooltip(i18n.t("settings.terminal-options-edit"))
+            .onClick(() => {
+              new TerminalOptionsModal(
+                context,
+                settings.value.terminalOptions,
+                {
+                  callback: async (value): Promise<void> => {
+                    await settings.mutate((settingsM) => {
+                      settingsM.terminalOptions = value;
+                    });
+                    this.postMutate();
+                  },
+                },
+              ).open();
+            }),
+        )
+        .addExtraButton(
+          resetButton(
+            i18n.t("asset:settings.terminal-options-icon"),
+            i18n.t("settings.reset"),
+            async () =>
+              settings.mutate((settingsM) => {
+                settingsM.terminalOptions = cloneAsWritable(
+                  Settings.DEFAULT.terminalOptions,
+                  cloneDeep,
+                );
+              }),
+            () => {
+              this.postMutate();
+            },
+          ),
+        );
+    });
+
+    // inputs section
+    this.newSectionWidget(() => i18n.t("settings.inputs"));
+    ui.newSetting(containerEl, (setting) => {
+      setting
+        .setName(i18n.t("settings.right-click-action"))
+        .addDropdown(
+          linkSetting(
+            (): string => settings.value.rightClickAction,
+            setTextToEnum(RightClickActionAddon.ACTIONS, async (value) =>
+              settings.mutate((settingsM) => {
+                settingsM.rightClickAction = value;
+              }),
+            ),
+            () => {
+              this.postMutate();
+            },
+            {
+              pre: (dropdown) => {
+                dropdown.addOptions(
+                  Object.fromEntries(
+                    RightClickActionAddon.ACTIONS.map((action) => [
+                      action,
+                      i18n.t(`settings.right-click-action-options.${action}`),
+                    ]),
+                  ),
+                );
+              },
+            },
+          ),
+        )
+        .addExtraButton(
+          resetButton(
+            i18n.t("asset:settings.right-click-action-icon"),
+            i18n.t("settings.reset"),
+            async () =>
+              settings.mutate((settingsM) => {
+                settingsM.rightClickAction = Settings.DEFAULT.rightClickAction;
+              }),
+            () => {
+              this.postMutate();
+            },
+          ),
+        );
+    })
+      .newSetting(containerEl, (setting) => {
+        setting
+          .setName(i18n.t("settings.intercept-keys-when-focused"))
+          .setDesc(i18n.t("settings.intercept-keys-when-focused-description"))
+          .addToggle(
+            linkSetting(
+              () => settings.value.interceptKeysWhenFocused,
+              async (value) =>
+                settings.mutate((settingsM) => {
+                  settingsM.interceptKeysWhenFocused = value;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          )
+          .addExtraButton(
+            resetButton(
+              i18n.t("asset:settings.intercept-keys-when-focused-icon"),
+              i18n.t("settings.reset"),
+              async () =>
+                settings.mutate((settingsM) => {
+                  settingsM.interceptKeysWhenFocused =
+                    Settings.DEFAULT.interceptKeysWhenFocused;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          );
+      })
+      .newSetting(containerEl, (setting) => {
+        setting
+          .setName(i18n.t("settings.keymappings"))
+          .setDesc(
+            i18n.t("settings.keymappings-description", {
+              count: settings.value.keymappings.length,
+              interpolation: { escapeValue: false },
+            }),
+          )
+          .addButton((button) =>
+            button
+              .setIcon(i18n.t("asset:settings.keymappings-edit-icon"))
+              .setTooltip(i18n.t("settings.keymappings-edit"))
+              .onClick(() => {
+                new KeymappingsModal(
+                  context,
+                  settings.value.keymappings,
+                  async (data): Promise<void> => {
+                    await settings.mutate((settingsM) => {
+                      settingsM.keymappings = data;
+                    });
+                    this.postMutate();
+                  },
+                ).open();
+              }),
+          )
+          .addExtraButton(
+            resetButton(
+              i18n.t("asset:settings.keymappings-icon"),
+              i18n.t("settings.reset"),
+              async () =>
+                settings.mutate((settingsM) => {
+                  settingsM.keymappings = cloneAsWritable(
+                    Settings.DEFAULT.keymappings,
+                  );
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          );
+      })
+      // Note: macOSOptionKeyPassthrough is intentionally shown on all platforms
+      // (not just darwin) so users can pre-configure the setting before
+      // switching to macOS.  The toggle has no effect at runtime on non-macOS
+      // platforms (view.ts passes constant(false) for isPassthroughEnabled
+      // when Platform.CURRENT !== "darwin").  The setting description explains
+      // this behaviour to the user.
+      .newSetting(containerEl, (setting) => {
+        setting
+          .setName(i18n.t("settings.macOS-option-key-passthrough"))
+          .setDesc(i18n.t("settings.macOS-option-key-passthrough-description"))
+          .addToggle(
+            linkSetting(
+              () => settings.value.macOSOptionKeyPassthrough,
+              async (value) =>
+                settings.mutate((settingsM) => {
+                  settingsM.macOSOptionKeyPassthrough = value;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          )
+          .addExtraButton(
+            resetButton(
+              i18n.t("asset:settings.macOS-option-key-passthrough-icon"),
+              i18n.t("settings.reset"),
+              async () =>
+                settings.mutate((settingsM) => {
+                  settingsM.macOSOptionKeyPassthrough =
+                    Settings.DEFAULT.macOSOptionKeyPassthrough;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          );
+      });
+
+    this.newSectionWidget(() => i18n.t("settings.instancing"));
+    ui.newSetting(containerEl, (setting) => {
+      setting
+        .setName(i18n.t("settings.new-instance-behavior"))
+        .addDropdown(
+          linkSetting(
+            (): string => settings.value.newInstanceBehavior,
+            setTextToEnum(Settings.NEW_INSTANCE_BEHAVIORS, async (value) =>
+              settings.mutate((settingsM) => {
+                settingsM.newInstanceBehavior = value;
+              }),
+            ),
+            () => {
+              this.postMutate();
+            },
+            {
+              pre: (dropdown) => {
+                dropdown.addOptions(
+                  Object.fromEntries(
+                    Settings.NEW_INSTANCE_BEHAVIORS.map((value) => [
+                      value,
+                      i18n.t(`settings.new-instance-behaviors.${value}`),
+                    ]),
+                  ),
+                );
+              },
+            },
+          ),
+        )
+        .addExtraButton(
+          resetButton(
+            i18n.t("asset:settings.new-instance-behavior-icon"),
+            i18n.t("settings.reset"),
+            async () =>
+              settings.mutate((settingsM) => {
+                settingsM.newInstanceBehavior =
+                  Settings.DEFAULT.newInstanceBehavior;
+              }),
+            () => {
+              this.postMutate();
+            },
+          ),
+        );
+    })
+      .newSetting(containerEl, (setting) => {
+        setting
+          .setName(i18n.t("settings.create-instance-near-existing-ones"))
+          .setDesc(
+            i18n.t("settings.create-instance-near-existing-ones-description"),
+          )
+          .addToggle(
+            linkSetting(
+              () => settings.value.createInstanceNearExistingOnes,
+              async (value) =>
+                settings.mutate((settingsM) => {
+                  settingsM.createInstanceNearExistingOnes = value;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          )
+          .addExtraButton(
+            resetButton(
+              i18n.t("asset:settings.create-instance-near-existing-ones-icon"),
+              i18n.t("settings.reset"),
+              async () =>
+                settings.mutate((settingsM) => {
+                  settingsM.createInstanceNearExistingOnes =
+                    Settings.DEFAULT.createInstanceNearExistingOnes;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          );
+      })
+      .newSetting(containerEl, (setting) => {
+        setting
+          .setName(i18n.t("settings.focus-on-new-instance"))
+          .setDesc(i18n.t("settings.focus-on-new-instance-description"))
+          .addToggle(
+            linkSetting(
+              () => settings.value.focusOnNewInstance,
+              async (value) =>
+                settings.mutate((settingsM) => {
+                  settingsM.focusOnNewInstance = value;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          )
+          .addExtraButton(
+            resetButton(
+              i18n.t("asset:settings.focus-on-new-instance-icon"),
+              i18n.t("settings.reset"),
+              async () =>
+                settings.mutate((settingsM) => {
+                  settingsM.focusOnNewInstance =
+                    Settings.DEFAULT.focusOnNewInstance;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          );
+      })
+      .newSetting(containerEl, (setting) => {
+        setting
+          .setName(i18n.t("settings.pin-new-instance"))
+          .addToggle(
+            linkSetting(
+              () => settings.value.pinNewInstance,
+              async (value) =>
+                settings.mutate((settingsM) => {
+                  settingsM.pinNewInstance = value;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          )
+          .addExtraButton(
+            resetButton(
+              i18n.t("asset:settings.pin-new-instance-icon"),
+              i18n.t("settings.reset"),
+              async () =>
+                settings.mutate((settingsM) => {
+                  settingsM.pinNewInstance = Settings.DEFAULT.pinNewInstance;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          );
+      });
+
+    this.newSectionWidget(() => i18n.t("settings.interface"));
+    ui.newSetting(containerEl, (setting) => {
+      setting
+        .setName(i18n.t("settings.open-changelog-on-update"))
+        .addToggle(
+          linkSetting(
+            () => settings.value.openChangelogOnUpdate,
+            async (value) =>
+              settings.mutate((settingsM) => {
+                settingsM.openChangelogOnUpdate = value;
+              }),
+            () => {
+              this.postMutate();
+            },
+          ),
+        )
+        .addExtraButton(
+          resetButton(
+            i18n.t("asset:settings.open-changelog-on-update-icon"),
+            i18n.t("settings.reset"),
+            async () =>
+              settings.mutate((settingsM) => {
+                settingsM.openChangelogOnUpdate =
+                  Settings.DEFAULT.openChangelogOnUpdate;
+              }),
+            () => {
+              this.postMutate();
+            },
+          ),
+        );
+    })
+      .newSetting(containerEl, (setting) => {
+        setting
+          .setName(i18n.t("settings.hide-status-bar"))
+          .addDropdown(
+            linkSetting(
+              (): string => settings.value.hideStatusBar,
+              setTextToEnum(Settings.HIDE_STATUS_BAR_OPTIONS, async (value) =>
+                settings.mutate((settingsM) => {
+                  settingsM.hideStatusBar = value;
+                }),
+              ),
+              () => {
+                this.postMutate();
+              },
+              {
+                pre: (dropdown) => {
+                  dropdown.addOptions(
+                    Object.fromEntries(
+                      Settings.HIDE_STATUS_BAR_OPTIONS.map((value) => [
+                        value,
+                        i18n.t(`settings.hide-status-bar-options.${value}`),
+                      ]),
+                    ),
+                  );
+                },
+              },
+            ),
+          )
+          .addExtraButton(
+            resetButton(
+              i18n.t("asset:settings.hide-status-bar-icon"),
+              i18n.t("settings.reset"),
+              async () =>
+                settings.mutate((settingsM) => {
+                  settingsM.hideStatusBar = Settings.DEFAULT.hideStatusBar;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          );
+      })
+      .newSetting(containerEl, (setting) => {
+        setting
+          .setName(i18n.t("settings.show-terminal-tab-prefix"))
+          .addToggle(
+            linkSetting(
+              () => settings.value.showTerminalTabPrefix,
+              async (value) =>
+                settings.mutate((settingsM) => {
+                  settingsM.showTerminalTabPrefix = value;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          )
+          .addExtraButton(
+            resetButton(
+              i18n.t("asset:settings.show-terminal-tab-prefix-icon"),
+              i18n.t("settings.reset"),
+              async () =>
+                settings.mutate((settingsM) => {
+                  settingsM.showTerminalTabPrefix =
+                    Settings.DEFAULT.showTerminalTabPrefix;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          );
+      });
+    this.newNoticeTimeoutWidget(Settings.DEFAULT);
+    this.newSectionWidget(() => i18n.t("settings.advanced"));
+    ui.newSetting(containerEl, (setting) => {
+      const { settingEl } = setting;
+      setting
+        .setName(i18n.t("settings.expose-internal-modules"))
+        .setDesc(
+          createDocumentFragment(settingEl.ownerDocument, (frag) => {
+            createChildElement(frag, "span", (ele) => {
+              setSanitizedInnerHTML(
+                ele,
+                i18n.t("settings.expose-internal-modules-description-HTML"),
+              );
+            });
+          }),
+        )
+        .addToggle(
+          linkSetting(
+            () => settings.value.exposeInternalModules,
+            async (value) =>
+              settings.mutate((settingsM) => {
+                settingsM.exposeInternalModules = value;
+              }),
+            () => {
+              this.postMutate();
+            },
+          ),
+        )
+        .addExtraButton(
+          resetButton(
+            i18n.t("asset:settings.expose-internal-modules-icon"),
+            i18n.t("settings.reset"),
+            async () =>
+              settings.mutate((settingsM) => {
+                settingsM.exposeInternalModules =
+                  Settings.DEFAULT.exposeInternalModules;
+              }),
+            () => {
+              this.postMutate();
+            },
+          ),
+        );
+    })
+      .newSetting(containerEl, (setting) => {
+        setting
+          .setName(i18n.t("settings.intercept-logging"))
+          .addToggle(
+            linkSetting(
+              () => settings.value.interceptLogging,
+              async (value) =>
+                settings.mutate((settingsM) => {
+                  settingsM.interceptLogging = value;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          )
+          .addExtraButton(
+            resetButton(
+              i18n.t("asset:settings.intercept-logging-icon"),
+              i18n.t("settings.reset"),
+              async () =>
+                settings.mutate((settingsM) => {
+                  settingsM.interceptLogging =
+                    Settings.DEFAULT.interceptLogging;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          );
+      })
+      .newSetting(containerEl, (setting) => {
+        setting
+          .setName(i18n.t("settings.preferred-renderer"))
+          .addDropdown(
+            linkSetting(
+              (): string => settings.value.preferredRenderer,
+              setTextToEnum(
+                Settings.PREFERRED_RENDERER_OPTIONS,
+                async (value) =>
+                  settings.mutate((settingsM) => {
+                    settingsM.preferredRenderer = value;
+                  }),
+              ),
+              () => {
+                this.postMutate();
+              },
+              {
+                pre: (dropdown) => {
+                  dropdown.addOptions(
+                    Object.fromEntries(
+                      Settings.PREFERRED_RENDERER_OPTIONS.map((type) => [
+                        type,
+                        i18n.t("settings.preferred-renderer-options", {
+                          interpolation: { escapeValue: false },
+                          type,
+                        }),
+                      ]),
+                    ),
+                  );
+                },
+              },
+            ),
+          )
+          .addExtraButton(
+            resetButton(
+              i18n.t("asset:settings.preferred-renderer-icon"),
+              i18n.t("settings.reset"),
+              async () =>
+                settings.mutate((settingsM) => {
+                  settingsM.preferredRenderer =
+                    Settings.DEFAULT.preferredRenderer;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          );
+      });
+  }
+
+  /** Plugin-level Python controls, rendered on Windows only. */
+  protected newPythonWidgets(): void {
+    const {
+      containerEl,
+      context,
+      context: {
+        language: { value: i18n },
+        settings,
+      },
+      ui,
+    } = this;
+    // UI-local ownership keeps late completions from repainting a moved field.
+    let checking = false,
+      checkingExplicitly = false,
+      disposed = false,
+      visible = true,
+      hasBeenDisplayed = false,
+      repaintQueued = false,
+      generation = 0,
+      fieldGeneration = 0,
+      recheckKey = settings.value.pythonExecutable,
+      committedValue: string | undefined,
+      fieldMutation = Promise.resolve(),
+      pythonInput: HTMLInputElement | undefined;
+    const recheck = (includeProfileOverrides = true): void => {
+        const configured = settings.value.pythonExecutable;
+        if (
+          disposed ||
+          !visible ||
+          (!includeProfileOverrides &&
+            !isAutomaticWindowsPythonExecutable(configured))
+        )
+          return;
+        recheckKey = configured;
+        committedValue = configured;
+        const currentGeneration = ++generation;
+        checking = true;
+        checkingExplicitly = includeProfileOverrides;
+        if (includeProfileOverrides) {
+          CONPTY_HOST_POOL.clear();
+        } else {
+          invalidateWindowsPythonDiagnosis(configured, configured);
+        }
+        runPluginPythonCheck(context, void 0, void 0, {
+          includeProfileOverrides,
+          refresh: includeProfileOverrides,
+        })
+          .catch((error: unknown) => {
+            activeSelf(containerEl).console.error(error);
+          })
+          .finally(() => {
+            if (
+              disposed ||
+              currentGeneration !== generation ||
+              settings.value.pythonExecutable !== configured
+            )
+              return;
+            checking = false;
+            checkingExplicitly = false;
+            ui.update();
+          });
+        ui.update();
+      },
+      afterFieldMutation = (callback: () => void): void => {
+        // Persistence may settle after another edit or after the tab closes.
+        const currentGeneration = fieldGeneration;
+        fieldMutation
+          .then(() => {
+            if (!disposed && visible && currentGeneration === fieldGeneration)
+              callback();
+          })
+          .catch((error: unknown) => {
+            activeSelf(containerEl).console.error(error);
+          });
+      },
+      commit = (): void => {
+        const value = pythonInput?.value;
+        // linkSetting persists on input; commit can arrive before it settles.
+        afterFieldMutation(() => {
+          if (
+            value !== settings.value.pythonExecutable ||
+            committedValue === value
+          )
+            return;
+          committedValue = value;
+          recheck(false);
+        });
+      },
+      removeCommitListeners = (): void => {
+        pythonInput?.removeEventListener("change", commit);
+        pythonInput?.removeEventListener("blur", commit);
+      },
+      repaint = (): void => {
+        if (!visible || !hasBeenDisplayed || disposed || repaintQueued) return;
+        repaintQueued = true;
+        queueMicrotask(() => {
+          repaintQueued = false;
+          if (visible && !disposed) ui.update();
+        });
+      };
+    // Settings tabs survive hide/show; onUnload only runs at plugin unload.
+    this.#setPythonWidgetsVisible = (value): void => {
+      visible = value;
+      hasBeenDisplayed ||= visible;
+      if (visible) return;
+      ++generation;
+      ++fieldGeneration;
+      checking = false;
+      checkingExplicitly = false;
+      removeCommitListeners();
+    };
+    ui.finally(() => {
+      disposed = true;
+      ++generation;
+      removeCommitListeners();
+    });
+    // The load-time check may still be probing when the tab opens; its
+    // completion must replace the "checking" status without a reopen.
+    this.#unregisterPythonDiagnosis?.();
+    this.#unregisterPythonDiagnosis = onPluginPythonDiagnosis(context, repaint);
+    ui.finally(onWindowsPythonStateChange(repaint));
+    ui.newSetting(containerEl, (setting) => {
+      setting
+        .setName(i18n.t("settings.python-executable"))
+        .setDesc(i18n.t("settings.python-executable-description"))
+        .addText(
+          linkSetting(
+            () => settings.value.pythonExecutable,
+            (value) => {
+              ++fieldGeneration;
+              fieldMutation = settings.mutate((settingsM) => {
+                settingsM.pythonExecutable = value;
+              });
+              return fieldMutation;
+            },
+            () => {
+              this.postMutate();
+            },
+            {
+              post: (component) => {
+                removeCommitListeners();
+                pythonInput = component.inputEl;
+                if (visible && !disposed) {
+                  pythonInput.addEventListener("change", commit);
+                  pythonInput.addEventListener("blur", commit);
+                }
+                component.setPlaceholder(
+                  i18n.t("settings.python-executable-placeholder"),
+                );
+              },
+            },
+          ),
+        )
+        .addExtraButton(
+          resetButton(
+            i18n.t("asset:settings.python-executable-icon"),
+            i18n.t("settings.reset"),
+            async () =>
+              settings.mutate((settingsM) => {
+                settingsM.pythonExecutable = Settings.DEFAULT.pythonExecutable;
+              }),
+            () => {
+              this.postMutate();
+            },
+          ),
+        );
+    })
+      .newSetting(containerEl, (setting) => {
+        const { pythonExecutable } = settings.value;
+        if (recheckKey !== pythonExecutable) {
+          recheckKey = pythonExecutable;
+          ++generation;
+          checking = false;
+          checkingExplicitly = false;
+          committedValue = void 0;
+        }
+        const busy =
+            checking || isPluginPythonCheckPending(context, pythonExecutable),
+          diagnosis = getWindowsPythonDiagnosis(
+            pythonExecutable,
+            pythonExecutable,
+          ),
+          notAutomatic =
+            !isAutomaticWindowsPythonExecutable(pythonExecutable) &&
+            !busy &&
+            !diagnosis,
+          statusKey = notAutomatic
+            ? "not-automatic"
+            : !diagnosis && !busy
+              ? "unverified"
+              : pluginPythonStatusKey(diagnosis, busy, pythonExecutable),
+          i18nVariant = busy ? "ing" : "";
+        setting.setName(i18n.t("settings.python-status")).setDesc(
+          i18n.t(`settings.python-status-${statusKey}`, {
+            candidate: diagnosis?.candidate,
+            errno: diagnosis?.errno,
+            executable: diagnosis?.executable,
+            interpolation: { escapeValue: false },
+            value: pythonExecutable,
+            version: diagnosis?.version,
+          }),
+        );
+        /*
+         * The UI records its components once, at plugin load, and later
+         * updates only reconfigure them — a conditionally added button
+         * would never be recorded. Always add it; toggle visibility.
+         */
+        setting.addButton((button) => {
+          button
+            .setIcon(i18n.t("asset:settings.python-download-icon"))
+            .setTooltip(i18n.t("settings.python-download"))
+            .onClick(() => {
+              openExternal(activeSelf(containerEl), PYTHON_DOWNLOADS_URL);
+            });
+          // Only a settled, definitive failure offers Download.
+          const hidden =
+            busy ||
+            !diagnosis ||
+            diagnosis.status === "ok" ||
+            !!diagnosis.transient ||
+            !!diagnosis.errno;
+          button.buttonEl.style.display = hidden ? "none" : "";
+          if (!hidden) {
+            button.setCta();
+          }
+        });
+        setting.addButton((button) => {
+          button
+            .setIcon(i18n.t(`asset:settings.python-recheck${i18nVariant}-icon`))
+            .setTooltip(i18n.t("settings.python-recheck"))
+            .onClick(() => {
+              afterFieldMutation(() => {
+                // A blur check must not consume an explicit full Recheck.
+                if (!checkingExplicitly) recheck();
+              });
+            });
+          if (busy || statusKey === "ok-fallback") {
+            button.setCta();
+          }
+        });
+      })
+      .newSetting(containerEl, (setting) => {
+        setting
+          .setName(i18n.t("settings.prewarm-conpty"))
+          .setDesc(i18n.t("settings.prewarm-conpty-description"))
+          .addToggle(
+            linkSetting(
+              () => settings.value.prewarmConPty,
+              async (value) =>
+                settings.mutate((settingsM) => {
+                  settingsM.prewarmConPty = value;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          )
+          .addExtraButton(
+            resetButton(
+              i18n.t("asset:settings.prewarm-conpty-icon"),
+              i18n.t("settings.reset"),
+              async () =>
+                settings.mutate((settingsM) => {
+                  settingsM.prewarmConPty = Settings.DEFAULT.prewarmConPty;
+                }),
+              () => {
+                this.postMutate();
+              },
+            ),
+          );
+      });
+  }
+
+  protected override snapshot0(): Partial<Settings> {
+    return this.context.settings.value;
+  }
+}
+
+export function loadSettings(
+  context: TerminalPlugin,
+  docs: loadDocumentations.Loaded,
+): void {
+  context.addSettingTab(new SettingTab(context, docs));
+  registerSettingsCommands(context);
+}

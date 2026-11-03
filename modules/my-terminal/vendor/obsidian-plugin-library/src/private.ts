@@ -1,0 +1,659 @@
+import type {
+  AsyncOrSync,
+  IsNever,
+  MarkRequired,
+  Prettify,
+  UnionToIntersection,
+} from "ts-essentials";
+import type { AreNonDistributiveEqual } from "ts-essentials/dist/are-non-distributive-equal.js";
+import type { PluginContext } from "./plugin.js";
+
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- extension point for private keys
+export interface PrivateKeys {
+  // Empty for interface extension.
+}
+export type PrivateKeys$ = keyof PrivateKeys;
+export type Private<T, P extends keyof PrivateKeys> = Prettify<{
+  readonly [K in P]?: T;
+}>;
+export type HasPrivate<P extends keyof PrivateKeys = PrivateKeys$> = Prettify<
+  {
+    readonly [K in P]: Private<unknown, K>;
+  }[P]
+>;
+/**
+ * Brand marker for types that pass through `RevealPrivate` unchanged. The
+ * marker is a required property so index-signature objects (weak types) do not
+ * accidentally match it. Builtins (`String`, `Number`, `Boolean`, `BigInt`,
+ * `Symbol`, `Date`, `RegExp`) extend this marker in `src/@types/lib.es5.ts`,
+ * so the gate needs no special-case union. Prefer the `RevealWhitelist`
+ * parameter for non-builtin exceptions.
+ */
+export interface RevealPrivateExempt {
+  readonly __reveal_private_exempt: true;
+}
+/**
+ * The default recursion depth of `RevealPrivate`. Cyclic types (e.g. DOM
+ * nodes) return the raw type past this depth. Override via the `Depth` number
+ * generic — orthogonal to both the reveal whitelist and the recursion
+ * blacklist.
+ */
+type DefaultRevealDepth = 8;
+/**
+ * Builds a tuple of length `N` so a number generic can drive a tuple-length
+ * depth counter (tuple length is the only compile-time integer arithmetic
+ * available in the type system).
+ */
+type Enumerate<
+  N extends number,
+  Acc extends readonly unknown[] = readonly [],
+> = Acc["length"] extends N ? Acc : Enumerate<N, readonly [unknown, ...Acc]>;
+/**
+ * Drops the first element of a depth counter tuple. When the counter is empty
+ * the recursion has reached `Depth` and must stop.
+ */
+type Tail<T extends readonly unknown[]> = T extends readonly [
+  unknown,
+  ...infer R,
+]
+  ? R
+  : readonly [];
+/**
+ * True when the brand payload of `T` (i.e. `T[PrivateKeys$]`) is exactly one
+ * element of the `RevealWhitelist` tuple. The whitelist is a SET of PRIVATE
+ * types (`$X`); a branded type is revealed only when its brand payload matches
+ * a whitelist element via `AreNonDistributiveEqual`. Subtypes and supertypes
+ * do not match. A tuple element may itself be a union (`X | Y`) and is matched
+ * exactly as one entry; the whole union `T = X | Y` is matched as a single
+ * entry (individual members `X`/`Y` do not match).
+ */
+type RevealWhitelistMatch<
+  T,
+  RevealWhitelist extends readonly unknown[],
+> = RevealWhitelist extends readonly [infer Head, ...infer Tail]
+  ? [Extract<PrivateKeys$, keyof T>] extends [never]
+    ? RevealWhitelistMatch<T, Tail>
+    : AreNonDistributiveEqual<
+          NonNullable<T[Extract<PrivateKeys$, keyof T>]>,
+          Head
+        > extends true
+      ? true
+      : RevealWhitelistMatch<T, Tail>
+  : false;
+/**
+ * Walks the `RevealWhitelist` tuple; returns `V` when `NonNullable<V>` exactly
+ * matches the head element via `AreNonDistributiveEqual`, else `never` after
+ * recursing the tail. Mirrors the structure of `RevealWhitelistMatch` but
+ * yields the matched brand payload `V` (so the caller can collect the key that
+ * carried it) instead of `true`.
+ */
+type WhitelistMember<
+  V,
+  RevealWhitelist extends readonly unknown[],
+> = RevealWhitelist extends readonly [infer Head, ...infer Tail]
+  ? AreNonDistributiveEqual<NonNullable<V>, Head> extends true
+    ? V
+    : WhitelistMember<V, Tail>
+  : never;
+/**
+ * The SUBSET of `Extract<PrivateKeys$, keyof T>` whose brand payload
+ * (`NonNullable<T[K]>`) exactly matches one `RevealWhitelist` element via
+ * `AreNonDistributiveEqual`. Unlike `RevealWhitelistMatch` (which tests the
+ * whole brand payload `T[PrivateKeys$]` against the whitelist as one entry),
+ * this maps each private key independently, so a type carrying MULTIPLE private
+ * keys can reveal a SELECTIVE subset of their shapes. Returns `never` when no
+ * key matches.
+ */
+type WhitelistedPrivateKeys<T, RevealWhitelist extends readonly unknown[]> =
+  Extract<PrivateKeys$, keyof T> extends infer K
+    ? K extends PrivateKeys$ & keyof T
+      ? [WhitelistMember<NonNullable<T[K]>, RevealWhitelist>] extends [never]
+        ? never
+        : K
+      : never
+    : never;
+/**
+ * True when the whole type `T` (after removing `undefined`/`null`) is exactly
+ * one element of the `RevealWhitelist` tuple. Unlike `RevealWhitelistMatch`
+ * (which matches the brand payload of a branded type), this matches the entire
+ * type — used for non-branded types (e.g. local function aliases
+ * `LoadPlugin`/`GetPlugin`) that should pass through unchanged rather than be
+ * reconstructed (which would strip generic signatures).
+ */
+type WhitelistMatch<
+  T,
+  RevealWhitelist extends readonly unknown[],
+> = RevealWhitelist extends readonly [infer Head, ...infer Tail]
+  ? AreNonDistributiveEqual<NonNullable<T>, Head> extends true
+    ? true
+    : WhitelistMatch<T, Tail>
+  : false;
+/**
+ * True when `T` (after removing `undefined`/`null`) is exactly one element of
+ * the `RecursionBlacklist` tuple. The blacklist is a SET of types to STOP
+ * recursing into (members returned raw); it matches the whole type, branded or
+ * not. Orthogonal to the reveal whitelist — a type can be in neither, either,
+ * or both lists. The blacklist only suppresses descent into members; the
+ * reveal at the node is unaffected. A type in both lists is revealed (shape
+ * merged) but not descended.
+ */
+type RecursionBlacklistMatch<
+  T,
+  RecursionBlacklist extends readonly unknown[],
+> = RecursionBlacklist extends readonly [infer Head, ...infer Tail]
+  ? AreNonDistributiveEqual<NonNullable<T>, Head> extends true
+    ? true
+    : RecursionBlacklistMatch<T, Tail>
+  : false;
+/**
+
+ * The public members of `T` merged with its private shape (the `$X` brand
+ * value). String-indexed types skip the brand merge: their index signature
+ * would answer the brand lookup with the value type, corrupting the merged
+ * shape (e.g. `Record<string, X>` would gain `X`'s members).
+ */
+type PrivateShape<
+  T,
+  RevealWhitelist extends readonly unknown[] = readonly [],
+> = MarkRequired<
+  T,
+  WhitelistedPrivateKeys<T, RevealWhitelist>
+>[WhitelistedPrivateKeys<T, RevealWhitelist>];
+type MergePrivateShape<
+  T,
+  RevealWhitelist extends readonly unknown[] = readonly [],
+> = Prettify<
+  string extends keyof T
+    ? Omit<T, PrivateKeys$>
+    : Omit<T, PrivateKeys$> &
+        (IsNever<PrivateShape<T, RevealWhitelist>> extends true
+          ? unknown
+          : UnionToIntersection<PrivateShape<T, RevealWhitelist>>)
+>;
+/**
+ * Removes the private brand of `T` and reveals its members.
+ *
+ * Evaluation order:
+ * 1. **Depth guard** — past `Depth` (default 8), return `T` unchanged
+ *    (terminates on cyclic types). `Depth` is a configurable number generic,
+ *    orthogonal to both the reveal whitelist and the recursion blacklist.
+ * 2. **Builtin gate** — exempt types pass through unchanged: the
+ *    `RevealPrivateExempt` shape. Builtins (`String`, `Number`, `Boolean`,
+ *    `BigInt`, `Symbol`, `Date`, `RegExp`) extend the marker in
+ *    `src/@types/lib.es5.ts`, so the gate needs no special-case union.
+ *    Functions are deliberately NOT exempt: they are structural containers
+ *    whose parameters and return type must be processed.
+ * 3. **Recursion blacklist** — if `T` is in `RecursionBlacklist`, descent into
+ *    its members stops (members returned raw). This is orthogonal to the
+ *    reveal whitelist: a type in both lists is revealed (shape merged) but not
+ *    descended.
+ * 4. **Structural dispatch** — tuples/arrays (preserving element
+ *    optionality, rest elements, readonlyness), functions (exact blacklist
+ *    matches pass through unchanged; otherwise parameters and return type
+ *    are revealed), `Promise`/`PromiseLike`, `Map`/`ReadonlyMap`,
+ *    `Set`/`ReadonlySet`, then objects (below). Anything else (primitives
+ *    not caught by the gate, `unknown`, `never` via distribution) passes
+ *    through unchanged.
+ *
+ * Two orthogonal lists govern the reveal:
+ * - `RevealWhitelist` — a SET of PRIVATE types (`$X`) to reveal. When a branded
+ *   type's brand payload exactly matches a whitelist element
+ *   (`AreNonDistributiveEqual`), its private `$X` shape is merged and every
+ *   member is recursively revealed.
+ * - `RecursionBlacklist` — a SET of types to STOP recursing into (members
+ *   returned raw). Matches the whole type exactly. Orthogonal to the reveal
+ *   whitelist: the two lists have no precedence, each governing its own concern
+ *   (reveal-at-node vs descend-into-members).
+ * Recursion is uniform for BRANDED types — every branded object is recursed
+ * into unless blacklisted, and the reveal whitelist only decides
+ * reveal-vs-traverse. Non-branded objects (no private brand, e.g. DOM types
+ * like `HTMLElement` or plain data) are descended member-by-member so nested
+ * unions reach `RevealPrivateImpl` and distribute; the depth guard keeps cyclic
+ * types finite and the result assignable to the plain original. You no longer
+ * list intermediate types on an access path:
+ * `app.setting.settingTabs[i].id` is revealed by
+ * `RevealPrivate<App, [$CommunityPluginsSettingTab | $UnknownSettingTab]>` —
+ * `App` and `setting` are auto-traversed.
+ *
+ * The default `RevealWhitelist = readonly []` reveals nothing (traverse only);
+ * list private types to reveal them. The default `RecursionBlacklist =
+ * readonly []` blacklists nothing. A tuple element may itself be a union
+ * (`X | Y`) and is matched exactly as one entry; the whole union `T = X | Y`
+ * is matched as a single entry (individual members `X`/`Y` do not match).
+ */
+export type RevealPrivate<
+  T,
+  RevealWhitelist extends readonly unknown[] = readonly [],
+  RecursionBlacklist extends readonly unknown[] = readonly [],
+  Depth extends number = DefaultRevealDepth,
+> = RevealPrivateImpl<T, RevealWhitelist, RecursionBlacklist, Enumerate<Depth>>;
+type RevealPrivateImpl<
+  T,
+  RevealWhitelist extends readonly unknown[],
+  RecursionBlacklist extends readonly unknown[],
+  Depth extends readonly unknown[],
+> = Depth extends readonly []
+  ? T
+  : [T] extends [RevealPrivateExempt]
+    ? T
+    : T extends infer U
+      ? [U] extends [object]
+        ? RevealWhitelistMatch<U, RevealWhitelist> extends true
+          ? RevealUnion<U, RevealWhitelist, RecursionBlacklist, Depth>
+          : RevealPrivateStructural<
+              U,
+              RevealWhitelist,
+              RecursionBlacklist,
+              Depth
+            >
+        : RevealPrivateStructural<U, RevealWhitelist, RecursionBlacklist, Depth>
+      : never;
+type RevealPrivateStructural<
+  T,
+  RevealWhitelist extends readonly unknown[],
+  RecursionBlacklist extends readonly unknown[],
+  Depth extends readonly unknown[],
+> = T extends readonly unknown[]
+  ? number extends T["length"]
+    ? T extends unknown[]
+      ? RevealPrivateImpl<
+          T[number],
+          RevealWhitelist,
+          RecursionBlacklist,
+          Tail<Depth>
+        >[]
+      : readonly RevealPrivateImpl<
+          T[number],
+          RevealWhitelist,
+          RecursionBlacklist,
+          Tail<Depth>
+        >[]
+    : {
+        [K in keyof T]: RevealPrivateImpl<
+          T[K],
+          RevealWhitelist,
+          RecursionBlacklist,
+          Tail<Depth>
+        >;
+      }
+  : T extends (...args: infer A) => infer R
+    ? RecursionBlacklistMatch<T, RecursionBlacklist> extends true
+      ? T
+      : WhitelistMatch<T, RevealWhitelist> extends true
+        ? T
+        : (
+            ...args: {
+              [K in keyof A]: RevealPrivateImpl<
+                A[K],
+                RevealWhitelist,
+                RecursionBlacklist,
+                Tail<Depth>
+              >;
+            }
+          ) => RevealPrivateImpl<
+            R,
+            RevealWhitelist,
+            RecursionBlacklist,
+            Tail<Depth>
+          >
+    : T extends Promise<infer U>
+      ? Promise<
+          RevealPrivateImpl<U, RevealWhitelist, RecursionBlacklist, Tail<Depth>>
+        >
+      : T extends PromiseLike<infer U>
+        ? PromiseLike<
+            RevealPrivateImpl<
+              U,
+              RevealWhitelist,
+              RecursionBlacklist,
+              Tail<Depth>
+            >
+          >
+        : T extends ReadonlyMap<infer K, infer V>
+          ? T extends Map<unknown, unknown>
+            ? Map<
+                RevealPrivateImpl<
+                  K,
+                  RevealWhitelist,
+                  RecursionBlacklist,
+                  Tail<Depth>
+                >,
+                RevealPrivateImpl<
+                  V,
+                  RevealWhitelist,
+                  RecursionBlacklist,
+                  Tail<Depth>
+                >
+              >
+            : ReadonlyMap<
+                RevealPrivateImpl<
+                  K,
+                  RevealWhitelist,
+                  RecursionBlacklist,
+                  Tail<Depth>
+                >,
+                RevealPrivateImpl<
+                  V,
+                  RevealWhitelist,
+                  RecursionBlacklist,
+                  Tail<Depth>
+                >
+              >
+          : T extends ReadonlySet<infer U>
+            ? T extends Set<unknown>
+              ? Set<
+                  RevealPrivateImpl<
+                    U,
+                    RevealWhitelist,
+                    RecursionBlacklist,
+                    Tail<Depth>
+                  >
+                >
+              : ReadonlySet<
+                  RevealPrivateImpl<
+                    U,
+                    RevealWhitelist,
+                    RecursionBlacklist,
+                    Tail<Depth>
+                  >
+                >
+            : T extends object
+              ? RevealPrivateObject<
+                  T,
+                  RevealWhitelist,
+                  RecursionBlacklist,
+                  Depth
+                >
+              : T;
+type RevealPrivateObject<
+  T extends object,
+  RevealWhitelist extends readonly unknown[],
+  RecursionBlacklist extends readonly unknown[],
+  Depth extends readonly unknown[],
+> =
+  RecursionBlacklistMatch<T, RecursionBlacklist> extends true
+    ? [WhitelistedPrivateKeys<T, RevealWhitelist>] extends [never]
+      ? RevealWhitelistMatch<T, RevealWhitelist> extends true
+        ? RevealObjectNoRecurse<T, RevealWhitelist>
+        : T
+      : RevealObjectNoRecurse<T, RevealWhitelist>
+    : [WhitelistedPrivateKeys<T, RevealWhitelist>] extends [never]
+      ? RevealWhitelistMatch<T, RevealWhitelist> extends true
+        ? RevealObject<T, RevealWhitelist, RecursionBlacklist, Depth>
+        : TraverseObject<T, RevealWhitelist, RecursionBlacklist, Depth>
+      : RevealObject<T, RevealWhitelist, RecursionBlacklist, Depth>;
+/**
+ * Merges the private `$X` shape of a whitelisted type but returns its members
+ * raw (no descent). Used when a type is in BOTH the reveal whitelist and the
+ * recursion blacklist: the two concerns are orthogonal, so the reveal at the
+ * node still applies while descent into members is suppressed.
+ */
+type RevealObjectNoRecurse<
+  T extends object,
+  RevealWhitelist extends readonly unknown[] = readonly [],
+> = Prettify<{
+  [K in keyof MergePrivateShape<T, RevealWhitelist>]: MergePrivateShape<
+    T,
+    RevealWhitelist
+  >[K];
+}>;
+/**
+ * Eagerly replaces a whitelisted type by its merged shape and reveals every
+ * member. `Prettify` flattens the intersection so narrowed property access
+ * (`!== undefined` guards) and inference through the revealed type work.
+ */
+type RevealObject<
+  T extends object,
+  RevealWhitelist extends readonly unknown[],
+  RecursionBlacklist extends readonly unknown[],
+  Depth extends readonly unknown[],
+> = Prettify<{
+  [K in keyof MergePrivateShape<T, RevealWhitelist>]: RevealPrivateImpl<
+    MergePrivateShape<T, RevealWhitelist>[K],
+    RevealWhitelist,
+    RecursionBlacklist,
+    Tail<Depth>
+  >;
+}>;
+/**
+ * Eagerly reveals a (possibly union) object type whose whole shape exactly
+ * matches a reveal-whitelist element. Reached only after
+ * `RevealWhitelistMatch<T, RevealWhitelist>` has matched the entire `T` (e.g.
+ * `T = X | Y` against whitelist `[X | Y]`). Distributes the union over its
+ * members (`T extends infer U`) so each is revealed by `RevealObject`; when the
+ * whitelist element is itself a whole union (`$X | $Y`), `RevealObject` merges
+ * both `$X` shapes into one object (conflicting literal `id`s collapse to
+ * `never`), so the result is a single merged object rather than a union.
+ */
+type RevealUnion<
+  T,
+  RevealWhitelist extends readonly unknown[],
+  RecursionBlacklist extends readonly unknown[],
+  Depth extends readonly unknown[],
+> = T extends (...args: never[]) => unknown
+  ? T
+  : T extends object
+    ? T extends infer U
+      ? U extends object
+        ? RevealObject<U, RevealWhitelist, RecursionBlacklist, Depth>
+        : U
+      : never
+    : T;
+/**
+ * Uniformly reveals the members of a branded object without replacing it by
+ * its shape. The brand key is omitted and every member is recursed into.
+ * Non-branded objects (no private brand) are descended into member-by-member
+ * so nested unions reach `RevealPrivateImpl` and are distributed over their
+ * members; the depth guard in `RevealPrivateImpl` keeps cyclic types (e.g.
+ * `HTMLElement`) finite and the result assignable to the plain original.
+ */
+type TraverseObject<
+  T extends object,
+  RevealWhitelist extends readonly unknown[],
+  RecursionBlacklist extends readonly unknown[],
+  Depth extends readonly unknown[],
+> = Prettify<
+  [Extract<PrivateKeys$, keyof T>] extends [never]
+    ? {
+        [K in keyof T]: RevealPrivateImpl<
+          T[K],
+          RevealWhitelist,
+          RecursionBlacklist,
+          Tail<Depth>
+        >;
+      }
+    : {
+        [K in keyof Omit<T, Extract<PrivateKeys$, keyof T>>]: RevealPrivateImpl<
+          T[K],
+          RevealWhitelist,
+          RecursionBlacklist,
+          Tail<Depth>
+        >;
+      }
+>;
+
+type RevealArgs<
+  As extends readonly HasPrivate[],
+  RevealWhitelist extends readonly unknown[] = readonly [],
+  RecursionBlacklist extends readonly unknown[] = readonly [],
+  Depth extends number = DefaultRevealDepth,
+> = {
+  readonly [A in keyof As]: RevealPrivate<
+    As[A],
+    RevealWhitelist,
+    RecursionBlacklist,
+    Depth
+  >;
+};
+type SyncResult<R> = R extends PromiseLike<unknown> ? never : R;
+
+function revealPrivateInternal<
+  const As extends readonly HasPrivate[],
+  Result,
+  RevealWhitelist extends readonly unknown[] = readonly [],
+  RecursionBlacklist extends readonly unknown[] = readonly [],
+  Depth extends number = DefaultRevealDepth,
+>(
+  context: PluginContext,
+  args: As,
+  func: (
+    ...args: RevealArgs<As, RevealWhitelist, RecursionBlacklist, Depth>
+  ) => SyncResult<Result>,
+  fallback: (error: unknown) => SyncResult<Result>,
+): SyncResult<Result> {
+  try {
+    return func(
+      ...(args as RevealArgs<As, RevealWhitelist, RecursionBlacklist, Depth>),
+    );
+  } catch (error) {
+    /* @__PURE__ */ self.console.debug(error);
+    self.console.warn(
+      context.language.value.t("errors.private-API-changed"),
+      error,
+    );
+    return fallback(error);
+  }
+}
+/**
+ * Calls `func` with `args` where each arg's private members are revealed.
+ *
+ * @deprecated Prefer {@link revealPrivateFilter} with an explicit reveal
+ *   whitelist. Without a whitelist, nothing is revealed (traverse only); the
+ *   whitelist keeps the reveal scoped to exactly the private types you list.
+ */
+export function revealPrivate<
+  const As extends readonly HasPrivate[],
+  Result,
+  RevealWhitelist extends readonly unknown[] = readonly [],
+  RecursionBlacklist extends readonly unknown[] = readonly [],
+  Depth extends number = DefaultRevealDepth,
+>(
+  context: PluginContext,
+  args: As,
+  func: (
+    ...args: RevealArgs<As, RevealWhitelist, RecursionBlacklist, Depth>
+  ) => SyncResult<Result>,
+  fallback: (error: unknown) => SyncResult<Result>,
+): SyncResult<Result> {
+  return revealPrivateInternal<
+    As,
+    Result,
+    RevealWhitelist,
+    RecursionBlacklist,
+    Depth
+  >(context, args, func, fallback);
+}
+export function revealPrivateFilter<
+  RevealWhitelist extends readonly unknown[] = readonly [],
+  RecursionBlacklist extends readonly unknown[] = readonly [],
+  Depth extends number = DefaultRevealDepth,
+>(): <const As extends readonly HasPrivate[], Result>(
+  context: PluginContext,
+  args: As,
+  func: (
+    ...args: RevealArgs<As, RevealWhitelist, RecursionBlacklist, Depth>
+  ) => SyncResult<Result>,
+  fallback: (error: unknown) => SyncResult<Result>,
+) => SyncResult<Result> {
+  return function <const As extends readonly HasPrivate[], Result>(
+    context: PluginContext,
+    args: As,
+    func: (
+      ...args: RevealArgs<As, RevealWhitelist, RecursionBlacklist, Depth>
+    ) => SyncResult<Result>,
+    fallback: (error: unknown) => SyncResult<Result>,
+  ): SyncResult<Result> {
+    return revealPrivateInternal<
+      As,
+      Result,
+      RevealWhitelist,
+      RecursionBlacklist,
+      Depth
+    >(context, args, func, fallback);
+  };
+}
+
+async function revealPrivateAsyncInternal<
+  const As extends readonly HasPrivate[],
+  Result,
+  RevealWhitelist extends readonly unknown[] = readonly [],
+  RecursionBlacklist extends readonly unknown[] = readonly [],
+  Depth extends number = DefaultRevealDepth,
+>(
+  context: PluginContext,
+  args: As,
+  func: (
+    ...args: RevealArgs<As, RevealWhitelist, RecursionBlacklist, Depth>
+  ) => PromiseLike<Result>,
+  fallback: (error: unknown) => AsyncOrSync<Result>,
+): Promise<Result> {
+  try {
+    return await func(
+      ...(args as RevealArgs<As, RevealWhitelist, RecursionBlacklist, Depth>),
+    );
+  } catch (error) {
+    /* @__PURE__ */ self.console.debug(error);
+    self.console.warn(
+      context.language.value.t("errors.private-API-changed"),
+      error,
+    );
+    return fallback(error);
+  }
+}
+/**
+ * Async variant of {@link revealPrivate}.
+ *
+ * @deprecated Prefer {@link revealPrivateAsyncFilter} with an explicit reveal
+ *   whitelist.
+ */
+export async function revealPrivateAsync<
+  const As extends readonly HasPrivate[],
+  Result,
+  RevealWhitelist extends readonly unknown[] = readonly [],
+  RecursionBlacklist extends readonly unknown[] = readonly [],
+  Depth extends number = DefaultRevealDepth,
+>(
+  context: PluginContext,
+  args: As,
+  func: (
+    ...args: RevealArgs<As, RevealWhitelist, RecursionBlacklist, Depth>
+  ) => PromiseLike<Result>,
+  fallback: (error: unknown) => AsyncOrSync<Result>,
+): Promise<Result> {
+  return revealPrivateAsyncInternal<
+    As,
+    Result,
+    RevealWhitelist,
+    RecursionBlacklist,
+    Depth
+  >(context, args, func, fallback);
+}
+export function revealPrivateAsyncFilter<
+  RevealWhitelist extends readonly unknown[] = readonly [],
+  RecursionBlacklist extends readonly unknown[] = readonly [],
+  Depth extends number = DefaultRevealDepth,
+>(): <const As extends readonly HasPrivate[], Result>(
+  context: PluginContext,
+  args: As,
+  func: (
+    ...args: RevealArgs<As, RevealWhitelist, RecursionBlacklist, Depth>
+  ) => PromiseLike<Result>,
+  fallback: (error: unknown) => AsyncOrSync<Result>,
+) => Promise<Result> {
+  return function <const As extends readonly HasPrivate[], Result>(
+    context: PluginContext,
+    args: As,
+    func: (
+      ...args: RevealArgs<As, RevealWhitelist, RecursionBlacklist, Depth>
+    ) => PromiseLike<Result>,
+    fallback: (error: unknown) => AsyncOrSync<Result>,
+  ): Promise<Result> {
+    return revealPrivateAsyncInternal<
+      As,
+      Result,
+      RevealWhitelist,
+      RecursionBlacklist,
+      Depth
+    >(context, args, func, fallback);
+  };
+}
