@@ -14,11 +14,6 @@ import { PluginEventSourceImpl } from '@mnaoumov/obsidian-lib/plugin/plugin-even
 import type { RenameDeleteHandlerSettings } from './rename-delete-handler-component.ts';
 
 import { DeleteEmptyFoldersCommandHandler } from './command-handlers/delete-empty-folders-command-handler.ts';
-import {
-  CONSISTENT_ATTACHMENTS_AND_LINKS_DELETE_EMPTY_FOLDERS_VERSION_RANGE,
-  CONSISTENT_ATTACHMENTS_AND_LINKS_PLUGIN_ID,
-  CONSISTENT_ATTACHMENTS_AND_LINKS_PLUGIN_NAME
-} from './consistent-attachments-and-links.ts';
 import { FirstLoadNoticeComponent } from './first-load-notice-component.ts';
 import { PluginApiImpl } from './plugin-api-impl.ts';
 import {
@@ -30,9 +25,6 @@ import { PluginSettingsComponent as PluginSettingsComponentImpl } from './plugin
 import { PluginSettingsTab } from './plugin-settings-tab.ts';
 import { RenameDeleteHandlerComponent } from './rename-delete-handler-component.ts';
 import { RescuePathResolver } from './rescue-path-resolver.ts';
-
-const DELETE_EMPTY_FOLDERS_OVERLAP_REASON = 'Both plugins add a Delete empty folders command, so it appears'
-  + ' twice in the command palette and running either copy sweeps the vault again.';
 
 /**
  * A plugin that used to own a rename/delete handler of its own.
@@ -59,35 +51,25 @@ interface RenameDeleteHandlerOwner {
  * The plugins that used to carry a rename/delete handler of their own, and the version of each that gave it
  * up.
  *
- * Five of them shipped that handler, from `obsidian-dev-utils`. Two handlers acting on one rename corrupt
+ * They shipped that handler, from `obsidian-dev-utils`. Two handlers acting on one rename corrupt
  * links and move attachments twice, and there is no reliable way for this plugin to win that race: the
  * library elects a handler by registry order, but its `runAsyncLinkUpdate` patch sits outside that election,
  * so whichever plugin loaded first keeps a hand on the wheel. Every scheme for seizing control from inside is
  * therefore load-order dependent. So this plugin does not compete — it declares each of them as a BLOCKING
  * conflict and stands aside while one of them is enabled at a version that still owns the handler.
  *
- * Every version named here has shipped, measured 2026-09-20: `Custom Attachment Location` 12.0.1,
- * `Consistent Attachments and Links` 4.0.1, `Better Markdown Links` 5.0.1, `External Rename Handler` 4.0.1
- * and `Frontmatter Markdown Links` 3.0.2. So the block can dead-end nobody — the update each entry asks for exists — which is
- * what the wording below is written against.
+ * 检查表收缩史（2026-11-03）：
+ * - `Custom Attachment Location` 与 `Consistent Attachments and Links` 已随单
+ *   id 收编退役——CAL 是本 bundle 的共生模块，consistent-attachments-and-links
+ *   自 4.1.0 起连 delete-empty-folders 命令都让出（功能被 CAL/ARDH 完全替代），
+ *   用户库不存在独立安装形态，检查是死代码，条目删除。
+ * - 剩余三条（Better Markdown Links / External Rename Handler /
+ *   Frontmatter Markdown Links）按用户拍板也将源码级收编，收编一个删一条，
+ *   表清空后整体退役。
  *
- * 2026-10-30: the co-bundled Custom Attachment Location answers to the my- 前缀 id
- * (my-obsidian-custom-attachment-location), so this entry now only fires for a
- * genuinely installed upstream CAL.
- *
- * TODO: drop an entry outright once every version that still owns a handler is old enough to have aged out.
+ * TODO: 收编完成后删除本表与 getPluginConflicts。
  */
 const RENAME_DELETE_HANDLER_OWNERS: readonly RenameDeleteHandlerOwner[] = [
-  {
-    firstSupportedVersion: '12.0.0',
-    pluginId: 'obsidian-custom-attachment-location',
-    pluginName: 'Custom Attachment Location'
-  },
-  {
-    firstSupportedVersion: '4.0.0',
-    pluginId: CONSISTENT_ATTACHMENTS_AND_LINKS_PLUGIN_ID,
-    pluginName: CONSISTENT_ATTACHMENTS_AND_LINKS_PLUGIN_NAME
-  },
   {
     firstSupportedVersion: '5.0.0',
     pluginId: 'better-markdown-links',
@@ -146,25 +128,16 @@ export class Plugin extends PluginBase {
    * @returns The declared conflicts, blocking ones first.
    */
   protected override getPluginConflicts(): PluginConflict[] {
-    return [
-      ...RENAME_DELETE_HANDLER_OWNERS.map((owner) => ({
-        conflictingVersionRange: `<${owner.firstSupportedVersion}`,
-        pluginId: owner.pluginId,
-        pluginName: owner.pluginName,
-        reason: `This plugin is waiting for ${owner.pluginName} ${owner.firstSupportedVersion} or newer.`
-          + ' Until then that plugin handles renames and deletes itself, and two handlers acting on one'
-          + ' rename corrupt links between them. Update it and this plugin picks the work back up on its'
-          + ' own, with no restart and nothing here to switch back on.',
-        severity: PluginConflictSeverity.Block
-      })),
-      {
-        conflictingVersionRange: CONSISTENT_ATTACHMENTS_AND_LINKS_DELETE_EMPTY_FOLDERS_VERSION_RANGE,
-        pluginId: CONSISTENT_ATTACHMENTS_AND_LINKS_PLUGIN_ID,
-        pluginName: CONSISTENT_ATTACHMENTS_AND_LINKS_PLUGIN_NAME,
-        reason: DELETE_EMPTY_FOLDERS_OVERLAP_REASON,
-        severity: PluginConflictSeverity.Warn
-      }
-    ];
+    return RENAME_DELETE_HANDLER_OWNERS.map((owner) => ({
+      conflictingVersionRange: `<${owner.firstSupportedVersion}`,
+      pluginId: owner.pluginId,
+      pluginName: owner.pluginName,
+      reason: `This plugin is waiting for ${owner.pluginName} ${owner.firstSupportedVersion} or newer.`
+        + ' Until then that plugin handles renames and deletes itself, and two handlers acting on one'
+        + ' rename corrupt links between them. Update it and this plugin picks the work back up on its'
+        + ' own, with no restart and nothing here to switch back on.',
+      severity: PluginConflictSeverity.Block
+    }));
   }
 
   protected override async onloadImpl(): Promise<void> {

@@ -28,7 +28,6 @@ import type {
 
 import {
   ADVANCED_RENAME_AND_DELETE_HANDLER_API_VERSION_RANGE,
-  ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_ID,
   ADVANCED_RENAME_AND_DELETE_HANDLER_READ_BACK_API_CONTRACT,
   DEFAULT_HANDED_OVER_SETTINGS,
   toHandedOverSettings
@@ -36,6 +35,15 @@ import {
 
 interface HandedOverSettingsComponentConstructorParams {
   readonly app: App;
+  /**
+   * 单一插件 id（2026-11-03）：ARDH 模块与本插件同 bundle 共生，两个实例的
+   * `manifest.id` 都是宿主 id，ARDH publish API 的 registry 键因此是宿主 id
+   * 而非上游常量 {@link ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_ID}。
+   * watch 若仍用上游常量，`resolveUnavailabilityReason` 在插件表里查不到该 id
+   * 会判定 notInstalled，read-back 永远静默走 fallback（excludePaths 与
+   * 自定义附件扩展名被无视）。由宿主在构造时传入运行时的 `manifest.id`。
+   */
+  readonly providerPluginId: string;
 }
 
 export class HandedOverSettingsComponent extends ComponentEx {
@@ -51,9 +59,12 @@ export class HandedOverSettingsComponent extends ComponentEx {
 
   private readonly app: App;
 
+  private readonly providerPluginId: string;
+
   public constructor(params: HandedOverSettingsComponentConstructorParams) {
     super();
     this.app = params.app;
+    this.providerPluginId = params.providerPluginId;
   }
 
   /**
@@ -87,7 +98,7 @@ export class HandedOverSettingsComponent extends ComponentEx {
       app: this.app,
       component: this,
       contract: ADVANCED_RENAME_AND_DELETE_HANDLER_READ_BACK_API_CONTRACT,
-      pluginId: ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_ID
+      pluginId: this.providerPluginId
     });
   }
 }

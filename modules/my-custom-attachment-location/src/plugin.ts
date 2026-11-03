@@ -1,5 +1,4 @@
 import type {
-  PluginConflict,
   PluginDependency,
   PluginGateComponent
 } from '@mnaoumov/obsidian-lib/components/plugin-gate-component';
@@ -8,7 +7,6 @@ import type { PluginApiDeclaration } from '@mnaoumov/obsidian-lib/plugin/plugin-
 import type { TAbstractFile } from 'obsidian';
 
 import { OpenDemoVaultCommandHandler } from '@mnaoumov/obsidian-lib/command-handlers/open-demo-vault-command-handler';
-import { PluginConflictSeverity } from '@mnaoumov/obsidian-lib/components/plugin-gate-component';
 import { PluginSettingsTabComponent } from '@mnaoumov/obsidian-lib/components/plugin-settings-tab-component';
 import { SettingsMigrationComponent } from '@mnaoumov/obsidian-lib/components/settings-migration-component';
 import { PluginDataHandler } from '@mnaoumov/obsidian-lib/data-handler';
@@ -55,11 +53,6 @@ import { MoveAttachmentToProperFolderCommandHandler } from './command-handlers/m
 import { PruneOriginalAttachmentNamesCommandHandler } from './command-handlers/prune-original-attachment-names-command-handler.ts';
 import { RememberCurrentNameAsOriginalCommandHandler } from './command-handlers/remember-current-name-as-original-command-handler.ts';
 import { ShowOriginalAttachmentNamesCommandHandler } from './command-handlers/show-original-attachment-names-command-handler.ts';
-import {
-  CONSISTENT_ATTACHMENTS_AND_LINKS_COLLECTING_VERSION_RANGE,
-  CONSISTENT_ATTACHMENTS_AND_LINKS_PLUGIN_ID,
-  CONSISTENT_ATTACHMENTS_AND_LINKS_PLUGIN_NAME
-} from './consistent-attachments-and-links.ts';
 import { CustomAttachmentLocationComponent } from './custom-attachment-location-component.ts';
 import { HandedOverSettingsComponent } from './handed-over-settings-component.ts';
 import { translationsMap } from './i18n/locales/translations-map.ts';
@@ -140,17 +133,12 @@ export class Plugin extends PluginBase {
       : [];
   }
 
-  protected override getPluginConflicts(): PluginConflict[] {
-    return [
-      {
-        conflictingVersionRange: CONSISTENT_ATTACHMENTS_AND_LINKS_COLLECTING_VERSION_RANGE,
-        pluginId: CONSISTENT_ATTACHMENTS_AND_LINKS_PLUGIN_ID,
-        pluginName: CONSISTENT_ATTACHMENTS_AND_LINKS_PLUGIN_NAME,
-        reason: t(($: any) => $.pluginConflict.consistentAttachmentsAndLinks.reason),
-        severity: PluginConflictSeverity.Warn
-      }
-    ];
-  }
+  /**
+   * 单一插件 id（2026-11-03）：对外部 `Consistent Attachments and Links` 的
+   * Warn 级 conflict 检查已删——其 collecting 命令功能自上游 5.0.0 起被本插件
+   * 完全接管（migrateSettings 交接），用户库不存在独立安装形态，检查是死代码。
+   * `getPluginConflicts` 不再 override，回落基类默认（空）。
+   */
 
   /**
    * Declares `Advanced Rename and Delete Handler` as a dependency this plugin cannot run without.
@@ -160,21 +148,19 @@ export class Plugin extends PluginBase {
    * plugin removed weeks earlier. Declared, this plugin does nothing while it is missing, says why, and installs
    * it in one click.
    *
+   * 单一插件 id（2026-11-03）：ARDH 与本插件**同一 bundle 共生**（合并插件的
+   * 两个模块），不存在「没安装」的形态——上游基于插件表的门禁检查
+   * （plugins.plugins[ardhId] + 版本比较）在单 id 下必然失败并渲染
+   * 「Required plugin missing」横幅把整个模块闸死。故返回空数组放行；
+   * 版本保证由 monorepo 打包天然成立（同 bundle 即同版本），运行期 API
+   * 协商走 mnaoumov 库的全局 registry（watchPluginApi），不查插件表，
+   * 不受影响。ARDH 模块被宿主大开关关闭时，watchPluginApi 挂起等待，
+   * 跟随重命名功能静默降级（与上游「ARDH 未启用」语义一致）。
+   *
    * @returns The dependency.
    */
   protected override getPluginDependencies(): PluginDependency[] {
-    return [
-      {
-        apiVersionRange: ADVANCED_RENAME_AND_DELETE_HANDLER_DEPENDENCY_API_VERSION_RANGE,
-        minPluginVersion: ADVANCED_RENAME_AND_DELETE_HANDLER_MIN_PLUGIN_VERSION,
-        pluginId: ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_ID,
-        pluginName: ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_NAME,
-        reason: createFragmentWithCodeBlocks(t(($: any) => $.pluginDependency.advancedRenameAndDeleteHandler.reason, {
-          dependencyPluginName: asCodeBlock(ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_NAME),
-          pluginName: asCodeBlock(this.manifest.name)
-        }))
-      }
-    ];
+    return [];
   }
 
   protected override async onloadImpl(): Promise<void> {
@@ -184,7 +170,10 @@ export class Plugin extends PluginBase {
     // list that `Advanced Rename and Delete Handler` owns since 12.0.0.
     const handedOverSettingsComponent = this.addChild(
       new HandedOverSettingsComponent({
-        app: this.app
+        app: this.app,
+        // 单一插件 id（2026-11-03）：ARDH 的 publish 键是其实例的 manifest.id =
+        // 宿主 id；watch 键必须与之一致，见组件内注释。
+        providerPluginId: this.manifest.id
       })
     );
 
@@ -209,7 +198,9 @@ export class Plugin extends PluginBase {
         contract: ADVANCED_RENAME_AND_DELETE_HANDLER_MIGRATION_API_CONTRACT,
         getProposedSettings: (): MigratableSettings | null => pluginSettingsComponent.settings.proposedRenameDeleteSettings,
         pluginSettingsComponent,
-        providerPluginId: ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_ID,
+        // 单一插件 id（2026-11-03）：同 handed-over 组件——ARDH 的 registry 键
+        // 是其实例的 manifest.id（宿主 id），migration 的 watch 键随之。
+        providerPluginId: this.manifest.id,
         retireProposedSettings: async (): Promise<void> => {
           await pluginSettingsComponent.editAndSave((settings) => {
             settings.proposedRenameDeleteSettings = null;
