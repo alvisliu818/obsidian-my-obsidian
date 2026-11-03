@@ -4233,35 +4233,124 @@ body.lgp-table-editor-cw-cursor * {
   text-decoration: underline;
 }
 
-/* 路径菜单里"当前所在那一级"的高亮（VSCode 面包屑的同款观感）。
-   不用 setChecked——那个画的是"已勾选"，放在"你在这里"上会读错。 */
-.menu-item.lgp-hdr-current {
+/* 路径同级弹窗（自绘浮层，2026-11-03 起替代 Obsidian Menu）：
+   - 悬停绝不自动滚（旧 Menu 超高后鼠标靠近边沿就自己滚），只有滚轮/拖滚动条才动
+   - 尺寸按窗口比例：宽 30vw（320-640px 钳位）、高最多 70vh（"按比例设置大小"）
+   - 内容超出出横竖两条滚动条；长文件名 nowrap 撑出横向滚动 */
+.lgp-hdr-sibpop {
+  position: fixed;
+  /* 与真 .menu 同层；行右键弹的上下文菜单（也是 .menu）后挂 DOM，自然盖在上面 */
+  z-index: var(--layer-menu, 1000);
+  /* 尺寸按窗口比例（2026-11-03 用户要求"按比例设置大小"）：
+     宽 30vw（320-640px 钳位）、高最多 70vh——内容超出走双轴滚动条 */
+  width: clamp(320px, 30vw, 640px);
+  max-height: 70vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background-color: var(--menu-background, var(--background-primary));
+  border: 1px solid var(--menu-border-color, var(--background-modifier-border-hover));
+  border-radius: var(--menu-radius, var(--radius-m));
+  box-shadow: var(--menu-shadow, var(--shadow-s));
+}
+/* 弹窗自己的双轴滚动条：12px 常驻样式，竖着滚条目、横着滚长文件名 */
+.lgp-hdr-sibpop::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+.lgp-hdr-sibpop::-webkit-scrollbar-thumb {
+  background-color: var(--background-modifier-border);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+.lgp-hdr-sibpop::-webkit-scrollbar-thumb:hover {
+  background-color: var(--background-modifier-border-hover);
+}
+.lgp-hdr-sibpop::-webkit-scrollbar-corner {
+  background: transparent;
+}
+/* 内层按内容撑宽：长文件名把横向滚动条顶出来，行底色也铺满整个滚动区 */
+.lgp-hdr-sibpop-inner {
+  width: max-content;
+  min-width: 100%;
+  padding: 6px 0;
+  box-sizing: border-box;
+}
+.lgp-hdr-sibpop .lgp-hdr-pop-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 4px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.lgp-hdr-sibpop .lgp-hdr-pop-row:hover {
   background-color: var(--background-modifier-hover);
 }
-.menu-item.lgp-hdr-current .menu-item-title {
-  color: var(--text-accent);
-  font-weight: 600;
+.lgp-hdr-sibpop .lgp-hdr-pop-row.is-disabled {
+  opacity: 0.5;
+  cursor: default;
 }
-
+.lgp-hdr-sibpop .lgp-hdr-pop-row.is-disabled:hover {
+  background-color: transparent;
+}
+.lgp-hdr-sibpop .lgp-hdr-pop-title {
+  flex: 1 1 auto;
+}
+.lgp-hdr-sibpop .lgp-hdr-pop-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+/* 条目图标与虚拟文档树同源（Material）：收掉 .mfi-icon 自带的 margin-right
+   （行内已有 8px gap），svg 15px 和树行观感一致；尾部动作用 Obsidian 原图标 */
+.lgp-hdr-sibpop .lgp-hdr-pop-icon svg,
+.lgp-hdr-sibpop .logseq-mount-icon svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+}
+.lgp-hdr-sibpop .logseq-mount-icon.mfi-icon {
+  margin-right: 0;
+}
 /* 文件夹项左侧的展开三角（点它换成"看这个文件夹里有什么"） */
-.menu-item-icon.lgp-hdr-twisty {
+.lgp-hdr-sibpop .lgp-hdr-twisty {
+  flex: 0 0 auto;
   width: 12px;
   min-width: 12px;
   margin-left: -2px;
-  /* 抵消菜单行 8px gap 的一半，三角和文件夹图标靠近一点 */
+  /* 抵消行 8px gap 的一半，三角和文件夹图标靠近一点 */
   margin-right: -4px;
   font-size: 9px;
   line-height: 1;
   opacity: 0.55;
   cursor: pointer;
 }
-.menu-item-icon.lgp-hdr-twisty:hover {
+.lgp-hdr-sibpop .lgp-hdr-twisty:hover {
   opacity: 1;
   color: var(--text-accent);
 }
-
+/* 文件项没有三角，但要在图标前占同样的格位，图标列才与同层文件夹对齐
+   （同挂载面板树行：文件行补上折叠箭头的列宽） */
+.lgp-hdr-sibpop .lgp-hdr-gutter {
+  flex: 0 0 auto;
+  width: 12px;
+  min-width: 12px;
+  margin-left: -2px;
+  margin-right: -4px;
+}
+/* 弹窗里"当前所在那一级"的高亮（VSCode 面包屑的同款观感）。
+   不用 setChecked——那个画的是"已勾选"，放在"你在这里"上会读错。 */
+.lgp-hdr-sibpop .lgp-hdr-pop-row.lgp-hdr-current {
+  background-color: var(--background-modifier-hover);
+}
+.lgp-hdr-sibpop .lgp-hdr-pop-row.lgp-hdr-current .lgp-hdr-pop-title {
+  color: var(--text-accent);
+  font-weight: 600;
+}
 /* 右键打开上下文菜单时，被右键的那个项的"按住"指示（菜单关掉即移除）。
-   段/文件名是行内 span（无背景框），面板行是 menu-item——两处都点亮。 */
+   段/文件名是行内 span（无背景框），弹窗行在这里补强调色。 */
 .lgp-hdr-ctx-open {
   background-color: var(--background-modifier-active-hover) !important;
   box-shadow: inset 0 0 0 1px var(--background-modifier-border-hover);
@@ -4271,31 +4360,14 @@ span.lgp-hdr-ctx-open {
   color: var(--text-normal);
   text-decoration: underline;
 }
-.menu-item.lgp-hdr-ctx-open {
-  background-color: var(--background-modifier-active-hover);
-}
-.menu-item.lgp-hdr-ctx-open .menu-item-title {
+.lgp-hdr-sibpop .lgp-hdr-pop-row.lgp-hdr-ctx-open .lgp-hdr-pop-title {
   color: var(--text-accent);
 }
-
-/* 文件项没有三角，但要在图标前占同样的格位，图标列才与同层文件夹对齐
-   （同挂载面板树行：文件行补上折叠箭头的列宽） */
-/* 路径菜单里的条目图标与虚拟文档树同源（Material）：
-   收掉 .mfi-icon 自带的 margin-right（菜单行已有 8px gap），svg 15px 和树行观感一致 */
-.menu-item .logseq-mount-icon.mfi-icon {
-  margin-right: 0;
-}
-.menu-item .logseq-mount-icon svg {
-  width: 15px;
-  height: 15px;
-}
-
-/* 盒模型与 lgp-hdr-twisty 完全一致，文件图标才与同层文件夹图标同列 */
-.menu-item-icon.lgp-hdr-gutter {
-  width: 12px;
-  min-width: 12px;
-  margin-left: -2px;
-  margin-right: -4px;
+/* 同级列表与尾部动作之间 */
+.lgp-hdr-sibpop .lgp-hdr-pop-sep {
+  height: 1px;
+  margin: 6px 8px;
+  background-color: var(--background-modifier-border);
 }
 
 .logseq-external-banner-path {

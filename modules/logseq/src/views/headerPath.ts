@@ -7,7 +7,7 @@
  * 的 DOM 结构补上「挂载名 / 子目录 / … /」，观感与库内笔记一致。
  */
 
-import { Menu, Notice, TFile } from 'obsidian';
+import { Menu, Notice, TFile, setIcon } from 'obsidian';
 import type { App } from 'obsidian';
 import { scanExternal } from '../../../virtual-tree/src/features/extFs';
 import { iconForEntry } from '../../../virtual-tree/src/features/iconTheme';
@@ -263,11 +263,7 @@ function listDir(dirAbs: string): { name: string; abs: string; isDir: boolean }[
 	return [...dirs.sort(byName), ...files.sort(byName)];
 }
 
-function fileIcon(name: string): string {
-	return /\.md$/i.test(name) ? 'file-text' : 'file-code';
-}
-
-/** 条目的 Material 图标（与虚拟文档树行同源），菜单里用它替换原生 svg。 */
+/** 条目的 Material 图标（与虚拟文档树行同源），弹窗行用它替换原生 svg。 */
 function entryIcon(host: HeaderMenuHost, entry: { name: string; abs: string; isDir: boolean }): HTMLElement {
 	const mount = findMount(host, entry.abs);
 	return iconForEntry(host.app, {
@@ -292,8 +288,50 @@ interface MenuTarget {
 	viewDir?: boolean;
 }
 
+// --- 自绘同级弹窗 -----------------------------------------------------------
+// 2026-11-03 起不再用 Obsidian Menu：同级列表动辄上百行，Menu 超高后把弹窗顶
+// 满视口，鼠标一靠近上下边沿内容就自己滚（用户报"自动随鼠标滚动"），尺寸和
+// 滚动条也不受控。自绘浮层（.lgp-hdr-sibpop，样式在根 styles.css）：
+//   - 悬停绝不自动滚，只有滚轮和拖滚动条才动
+//   - 宽度按窗口比例（30vw，320-640px 钳位）、高度最多 70vh（"按比例设置大小"）
+//   - 内容超出出横竖两条滚动条；长文件名 nowrap 撑出横向
+
+interface SibEntry {
+	name: string;
+	abs: string;
+	isDir: boolean;
+}
+
+/** 当前打开的同级弹窗（全局最多一张：再点一段就换一张）。 */
+let sibPopup: HTMLElement | null = null;
+
+function closeSibPopup(): void {
+	const el = sibPopup;
+	if (!el) return;
+	sibPopup = null;
+	el.remove();
+	document.removeEventListener('pointerdown', onDocPointerDown, true);
+	document.removeEventListener('keydown', onDocKeyDown, true);
+}
+
+/** 点弹窗外才关；行右键弹的上下文菜单（真 .menu）浮在弹窗上，点它不关——
+ *  关掉上下文菜单后同级弹窗还在（2026-10-29 用户要求）。 */
+function onDocPointerDown(ev: PointerEvent): void {
+	if (!sibPopup) return;
+	const t = ev.target;
+	if (t instanceof Element) {
+		if (sibPopup.contains(t)) return;
+		if (t.closest('.menu')) return;
+	}
+	closeSibPopup();
+}
+
+function onDocKeyDown(ev: KeyboardEvent): void {
+	if (ev.key === 'Escape') closeSibPopup();
+}
+
 /**
- * 点某一段（或文件名）→ 菜单列出**它的同级**，当前那一项高亮。
+ * 点某一段（或文件名）→ 弹窗列出**它的同级**，当前那一项高亮。
  *
  * 高亮是整行底色 + 强调色，不用 setChecked：那个只放一个 ✓，语义是"已选中"，
  * 放在"你当前在这里"上会读成勾选项。
@@ -305,32 +343,193 @@ function openHeaderMenu(
 	atX?: number,
 	atY?: number,
 ): void {
-	const menu = new Menu();
-	const entries: { name: string; abs: string; isDir: boolean }[] = [];
-	// 点文件夹（名字或左侧三角）= 展开/收起，展开的行就地插在同一张菜单里，
-	// 不换浮窗。addItem 时还拿不到 DOM，所以先记名字，等菜单挂上再回填。
-	const toggles = new Map<string, () => void>();
+	closeSibPopup();
+
+	const pop = document.createElement('div');
+	pop.className = 'lgp-hdr-sibpop';
+	const inner = document.createElement('div');
+	inner.className = 'lgp-hdr-sibpop-inner';
+	pop.appendChild(inner);
+
+	// 首层条目：挂载名那一段列的是别的挂载，其余段列它所在目录的同级
+	let entries: SibEntry[];
 	if (target.isMount) {
-		addMountLevel(menu, host, entries, toggles);
+		entries = [];
+		for (const m of host.settings.externalMounts ?? []) {
+			if (m.enabled === false) continue;
+			const root = norm(m.path).replace(/\/+$/, '');
+			entries.push({ name: m.label || root, abs: root, isDir: true });
+		}
 	} else {
-		const dirAbs = target.viewDir ? target.abs : parentOf(target.abs);
-		addDirLevel(menu, host, dirAbs, entries, toggles, menu);
+		entries = listDir(target.viewDir ? target.abs : parentOf(target.abs));
 	}
-	addTail(menu, host, target.abs);
-	if (typeof atX === 'number' && typeof atY === 'number') {
-		menu.showAtPosition({ x: atX, y: atY });
+	if (!entries.length) {
+		const empty = document.createElement('div');
+		empty.className = 'lgp-hdr-pop-row is-disabled';
+		empty.textContent = target.isMount ? '（没有挂载）' : '（空）';
+		inner.appendChild(empty);
+	}
+	// 挂载那一段的弹窗里写的是挂载名（不是目录名），所以点亮也得按挂载名比。
+	const currentName = target.isMount
+		? (mountAtRoot(host, target.abs)?.label ?? '')
+		: basenameOf(target.currentAbs);
+	for (const entry of entries) inner.appendChild(popEntryRow(entry, 0, host, currentName));
+
+	// 尾部动作（与原菜单一致：复制路径 / 在系统中显示）
+	inner.appendChild(makePopSep());
+	for (const act of [
+		{
+			icon: 'copy',
+			label: '复制路径',
+			run: () => {
+				void navigator.clipboard?.writeText(norm(target.abs)).then(
+					() => new Notice(`已复制路径：${norm(target.abs)}`),
+					() => new Notice(`复制失败：${norm(target.abs)}`),
+				);
+			},
+		},
+		{ icon: 'folder-open', label: '在系统中显示', run: () => host.revealInSystem(target.abs) },
+	]) {
+		inner.appendChild(makePopActionRow(act.icon, act.label, act.run));
+	}
+
+	document.body.appendChild(pop);
+	sibPopup = pop;
+	document.addEventListener('pointerdown', onDocPointerDown, true);
+	document.addEventListener('keydown', onDocKeyDown, true);
+
+	// 锚在段的下方（外部给坐标就用坐标），量完实际宽高再钳回视口
+	const rect = anchor.getBoundingClientRect();
+	const x0 = typeof atX === 'number' ? atX : rect.left;
+	const y0 = typeof atY === 'number' ? atY : rect.bottom + 2;
+	const m = 8;
+	const w = pop.offsetWidth;
+	const h = pop.offsetHeight;
+	pop.style.left = `${Math.max(m, Math.min(x0, window.innerWidth - w - m))}px`;
+	pop.style.top = `${Math.max(m, Math.min(y0, window.innerHeight - h - m))}px`;
+}
+
+/**
+ * 弹窗里的一行条目：文件夹带左侧三角，点三角或整行在**同一张弹窗里**就地
+ * 展开/收起（子项插在自己后面，dataset.lgpChild 标记，收起时成串移除）；
+ * 文件点击直接打开。右键弹这一行自己的文件夹/文件上下文菜单，同级弹窗不关。
+ */
+function popEntryRow(
+	entry: SibEntry,
+	depth: number,
+	host: HeaderMenuHost,
+	currentName: string,
+): HTMLElement {
+	const row = document.createElement('div');
+	row.className = 'lgp-hdr-pop-row';
+	// 每级 17px，与挂载面板树行一致；起点 8px 与菜单原生 padding 对齐，
+	// 图标列逐级正好右移 17px
+	row.style.paddingLeft = `${8 + depth * 17}px`;
+	if (entry.name === currentName) row.addClass('lgp-hdr-current');
+
+	if (entry.isDir) {
+		const tw = document.createElement('div');
+		tw.className = 'lgp-hdr-twisty';
+		tw.textContent = '▶';
+		tw.title = '展开这个文件夹';
+		row.appendChild(tw);
+		let expanded = false;
+		const expand = (): void => {
+			let ref: Element = row;
+			for (const child of listDir(entry.abs)) {
+				const childRow = popEntryRow(child, depth + 1, host, currentName);
+				childRow.dataset['lgpChild'] = '1';
+				ref.insertAdjacentElement('afterend', childRow);
+				ref = childRow;
+			}
+		};
+		const collapse = (): void => {
+			let next: Element | null = row.nextElementSibling;
+			while (next && (next as HTMLElement).dataset['lgpChild'] === '1') {
+				const after: Element | null = next.nextElementSibling;
+				next.remove();
+				next = after;
+			}
+		};
+		const toggle = (): void => {
+			if (expanded) collapse();
+			else expand();
+			expanded = !expanded;
+			tw.textContent = expanded ? '▼' : '▶';
+		};
+		tw.addEventListener('click', (ev) => {
+			ev.preventDefault();
+			ev.stopPropagation();
+			toggle();
+		});
+		row.addEventListener('click', (ev) => {
+			ev.preventDefault();
+			ev.stopPropagation();
+			toggle();
+		});
 	} else {
-		const rect = anchor.getBoundingClientRect();
-		menu.showAtPosition({ x: rect.left, y: rect.bottom + 2 });
+		// 文件没有三角，补一个同宽占位，图标列才与同层文件夹对齐（同树行）
+		const g = document.createElement('div');
+		g.className = 'lgp-hdr-gutter';
+		row.appendChild(g);
+		row.addEventListener('click', (ev) => {
+			ev.preventDefault();
+			ev.stopPropagation();
+			closeSibPopup();
+			openFileEntry(host, entry.abs);
+		});
 	}
-	// 挂载那一段的菜单里写的是挂载名（不是目录名），所以点亮也得按挂载名比。
-	decorateMenu(
-		menu,
-		entries,
-		host,
-		toggles,
-		target.isMount ? (mountAtRoot(host, target.abs)?.label ?? '') : basenameOf(target.currentAbs),
-	);
+
+	const slot = document.createElement('div');
+	slot.className = 'lgp-hdr-pop-icon';
+	slot.appendChild(entryIcon(host, entry));
+	row.appendChild(slot);
+
+	const title = document.createElement('div');
+	title.className = 'lgp-hdr-pop-title';
+	title.textContent = entry.name;
+	row.appendChild(title);
+
+	// 右键：这一行自己的文件夹/文件上下文菜单。**不要关同级弹窗**：
+	// 上下文菜单浮在它上面，关掉后弹窗还在（2026-10-29 用户要求）
+	row.addEventListener('contextmenu', (ev) => {
+		ev.preventDefault();
+		ev.stopPropagation();
+		openEntryContextMenu(
+			host, entry.abs, entry.name, entry.isDir,
+			(ev as MouseEvent).clientX, (ev as MouseEvent).clientY, row,
+		);
+	});
+
+	return row;
+}
+
+/** 弹窗分隔线（同级列表与尾部动作之间）。 */
+function makePopSep(): HTMLElement {
+	const sep = document.createElement('div');
+	sep.className = 'lgp-hdr-pop-sep';
+	return sep;
+}
+
+/** 尾部动作行（复制路径 / 在系统中显示），Obsidian 原图标。 */
+function makePopActionRow(icon: string, label: string, run: () => void): HTMLElement {
+	const row = document.createElement('div');
+	row.className = 'lgp-hdr-pop-row lgp-hdr-pop-action';
+	const slot = document.createElement('div');
+	slot.className = 'lgp-hdr-pop-icon';
+	setIcon(slot, icon);
+	row.appendChild(slot);
+	const title = document.createElement('div');
+	title.className = 'lgp-hdr-pop-title';
+	title.textContent = label;
+	row.appendChild(title);
+	row.addEventListener('click', (ev) => {
+		ev.preventDefault();
+		ev.stopPropagation();
+		closeSibPopup();
+		run();
+	});
+	return row;
 }
 
 /** 挂载根本身精确匹配（findMount 要求 abs 在挂载之下，对挂载根不成立）。 */
@@ -389,176 +588,6 @@ export function attachHeaderMenu(el: HTMLElement, host: HeaderMenuHost, target: 
 	});
 }
 
-/**
- * 菜单挂上 DOM 之后再补的两件事：
- *
- *  - 给"当前所在"那一项加高亮 class
- *  - 给文件夹项在**图标左侧**插一个三角，点它展开该文件夹
- *
- * 为什么只能事后补：`Menu.addItem` 返回的是 Menu 而不是 MenuItem，拿不到
- * 条目对象；而且 Menu 在 show 时会按 section 重排，插入序 ≠ DOM 顺序，所以
- * 只能按标题文本回找。
- */
-function decorateMenu(
-	menu: Menu,
-	entries: { name: string; abs: string; isDir: boolean }[],
-	host: HeaderMenuHost,
-	toggles: Map<string, () => void>,
-	currentName: string,
-): void {
-	const root = (menu as unknown as { dom?: HTMLElement }).dom;
-	if (!root) return;
-	window.requestAnimationFrame(() => {
-		const items = Array.from(root.querySelectorAll<HTMLElement>('.menu-item')).filter(
-			(el) => el.closest('.menu') === root,
-		);
-		for (const el of items) {
-			const name = el.querySelector('.menu-item-title')?.textContent ?? '';
-			if (currentName && name === currentName) el.addClass('lgp-hdr-current');
-			const entry = entries.find((f) => f.name === name);
-			if (entry) {
-				// 图标换成与虚拟文档树行同源的 Material 图标
-				const slot = el.querySelector('.menu-item-icon');
-				if (slot) {
-					slot.empty();
-					slot.appendChild(entryIcon(host, entry));
-				}
-				// 右键：这一项自己的文件夹/文件上下文菜单。**不要 hide 同级面板**：
-				// 上下文菜单浮在它上面，关掉后同级面板还在（2026-10-29 用户要求）
-				el.addEventListener('contextmenu', (ev) => {
-					ev.preventDefault();
-					ev.stopPropagation();
-					openEntryContextMenu(
-						host, entry.abs, entry.name, entry.isDir,
-						(ev as MouseEvent).clientX, (ev as MouseEvent).clientY, el,
-					);
-				});
-				if (entry.isDir) addTwisty(el, entry.abs, host, toggles, menu, currentName, 0);
-				else addGutter(el);
-			}
-		}
-	});
-}
-
-/**
- * 文件夹项左侧的三角：点它（或点整行）在**同一张菜单里**就地展开子项，
- * 再点收起——不换浮窗，子项和同级的文件/文件夹一起列着，跟 VSCode 一样。
- *
- * 展开的行是手建的 DOM：Menu.show 之后 addItem 就不再生效了，只能自己往里插
- * 结构相同的 `.menu-item`。好处是这些行不在 Obsidian 的条目表里，点它们不会
- * 触发"点完就关菜单"，所以能一路展开下去。
- */
-function addTwisty(
-	itemEl: HTMLElement,
-	dirAbs: string,
-	host: HeaderMenuHost,
-	toggles: Map<string, () => void>,
-	menu: Menu,
-	currentName: string,
-	depth: number,
-): void {
-	if (itemEl.querySelector('.lgp-hdr-twisty')) return;
-	const name = itemEl.querySelector('.menu-item-title')?.textContent ?? '';
-	const tw = document.createElement('div');
-	tw.className = 'menu-item-icon lgp-hdr-twisty';
-	tw.textContent = '▶';
-	tw.title = '展开这个文件夹';
-	let expanded = false;
-
-	const collapse = (): void => {
-		let next: Element | null = itemEl.nextElementSibling;
-		while (next && (next as HTMLElement).dataset['lgpChild'] === '1') {
-			const after: Element | null = next.nextElementSibling;
-			next.remove();
-			next = after;
-		}
-	};
-
-	const expand = (): void => {
-		let ref: Element = itemEl;
-		for (const entry of listDir(dirAbs)) {
-			const row = makeRow(entry, depth + 1, host, toggles, menu, currentName);
-			ref.insertAdjacentElement('afterend', row);
-			ref = row;
-		}
-	};
-
-	tw.addEventListener('click', (ev) => {
-		ev.preventDefault();
-		ev.stopPropagation();
-		if (expanded) collapse();
-		else expand();
-		expanded = !expanded;
-		tw.textContent = expanded ? '▼' : '▶';
-	});
-	itemEl.insertBefore(tw, itemEl.firstChild);
-	if (name) toggles.set(name, () => tw.click());
-}
-
-/** 文件项左侧的空占位：与三角同宽同位，文件图标才和同层文件夹图标对齐（同树行）。 */
-function addGutter(itemEl: HTMLElement): void {
-	if (itemEl.querySelector('.lgp-hdr-twisty, .lgp-hdr-gutter')) return;
-	const g = document.createElement('div');
-	g.className = 'menu-item-icon lgp-hdr-gutter';
-	itemEl.insertBefore(g, itemEl.firstChild);
-}
-
-/** 一行展开出来的子项：文件夹带自己的三角，文件点击直接打开。 */
-function makeRow(
-	entry: { name: string; abs: string; isDir: boolean },
-	depth: number,
-	host: HeaderMenuHost,
-	toggles: Map<string, () => void>,
-	menu: Menu,
-	currentName: string,
-): HTMLElement {
-	const row = document.createElement('div');
-	row.className = 'menu-item tappable lgp-hdr-child';
-	row.dataset['lgpChild'] = '1';
-	// 每级 17px，与挂载面板树行一致；起点 8px 与菜单原生 padding 对齐，
-	// 图标列逐级正好右移 17px
-	row.style.paddingLeft = `${8 + depth * 17}px`;
-
-	const icon = document.createElement('div');
-	icon.className = 'menu-item-icon';
-	icon.appendChild(entryIcon(host, entry));
-	row.appendChild(icon);
-
-	const title = document.createElement('div');
-	title.className = 'menu-item-title';
-	title.textContent = entry.name;
-	row.appendChild(title);
-
-	if (entry.name === currentName) row.addClass('lgp-hdr-current');
-
-	// 右键：这一行自己的文件夹/文件上下文菜单。不 hide 同级面板——上下文
-	// 菜单浮在它上面，关掉后同级面板还在（2026-10-29 用户要求）。
-	row.addEventListener('contextmenu', (ev) => {
-		ev.preventDefault();
-		ev.stopPropagation();
-		openEntryContextMenu(
-			host, entry.abs, entry.name, entry.isDir,
-			(ev as MouseEvent).clientX, (ev as MouseEvent).clientY, row,
-		);
-	});
-
-	if (entry.isDir) {
-		// 三角要插在图标左侧，所以先建行再加
-		window.requestAnimationFrame(() =>
-			addTwisty(row, entry.abs, host, toggles, menu, currentName, depth),
-		);
-	} else {
-		addGutter(row);
-		row.addEventListener('click', (ev) => {
-			ev.preventDefault();
-			ev.stopPropagation();
-			menu.hide();
-			openFileEntry(host, entry.abs);
-		});
-	}
-	return row;
-}
-
 /** abs 是否严格位于挂载根之下（不等于根本身；分隔符/大小写归一后比较）。 */
 export function isUnderMount(abs: string, mountRoot: string): boolean {
 	const root = norm(mountRoot).replace(/\/+$/, '').toLowerCase();
@@ -601,80 +630,6 @@ function basenameOf(abs: string): string {
 	const full = norm(abs);
 	const i = full.lastIndexOf('/');
 	return i >= 0 ? full.slice(i + 1) : full;
-}
-
-function addTail(menu: Menu, host: HeaderMenuHost, abs: string): void {
-	menu.addSeparator();
-	menu.addItem((it) =>
-		it.setTitle('复制路径').setIcon('copy').onClick(() => {
-			void navigator.clipboard?.writeText(norm(abs)).then(
-				() => new Notice(`已复制路径：${norm(abs)}`),
-				() => new Notice(`复制失败：${norm(abs)}`),
-			);
-		}),
-	);
-	menu.addItem((it) =>
-		it.setTitle('在系统中显示').setIcon('folder-open').onClick(() => host.revealInSystem(abs)),
-	);
-}
-
-/** 挂载名那一段：同级是别的挂载，当前挂载高亮。 */
-function addMountLevel(
-	menu: Menu,
-	host: HeaderMenuHost,
-	entries: { name: string; abs: string; isDir: boolean }[],
-	toggles: Map<string, () => void>,
-): void {
-	const mounts = (host.settings.externalMounts ?? []).filter((m) => m.enabled !== false);
-	if (!mounts.length) {
-		menu.addItem((it) => it.setTitle('（没有挂载）').setDisabled(true));
-		return;
-	}
-	for (const m of mounts) {
-		const root = norm(m.path).replace(/\/+$/, '');
-		menu.addItem((it) => {
-			const name = m.label || root;
-			it.setTitle(name).setIcon('folder-open');
-			// 挂载根也是目录：和普通文件夹一样记账 + 就地展开，
-			// 点击不再弹系统文件管理器（tail 里本来就有“在系统中显示”）
-			entries.push({ name, abs: root, isDir: true });
-			it.onClick(() => toggles.get(name)?.());
-			return it;
-		});
-	}
-}
-
-/** 一个目录里的条目：文件夹在前、文件在后。文件夹由调用方补左侧三角。 */
-function addDirLevel(
-	menu: Menu,
-	host: HeaderMenuHost,
-	dirAbs: string,
-	entries: { name: string; abs: string; isDir: boolean }[],
-	toggles: Map<string, () => void>,
-	owner: Menu,
-): void {
-	const items = listDir(dirAbs);
-	if (!items.length) {
-		menu.addItem((it) => it.setTitle('（空）').setDisabled(true));
-		return;
-	}
-	for (const entry of items) {
-		menu.addItem((it) => {
-			it.setTitle(entry.name).setIcon(entry.isDir ? 'folder' : fileIcon(entry.name));
-			// 条目全部记账：文件夹补三角，文件补图标前的空占位（列对齐用）
-			entries.push({ name: entry.name, abs: entry.abs, isDir: entry.isDir });
-			if (entry.isDir) {
-				// 三角（也就是展开动作）要等菜单挂上 DOM 才有，先按名字记账
-				it.onClick(() => toggles.get(entry.name)?.());
-			} else {
-				it.onClick(() => {
-					owner.hide();
-					openFileEntry(host, entry.abs);
-				});
-			}
-			return it;
-		});
-	}
 }
 
 /** 视图头部里放面包屑的那个容器（原生 FileView 用它放目录链）。 */
