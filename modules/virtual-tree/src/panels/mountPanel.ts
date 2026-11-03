@@ -17,7 +17,8 @@
 import { FileSystemAdapter, ItemView, Menu, Notice, setIcon, TFile, TFolder, type WorkspaceLeaf } from 'obsidian';
 import type DocTreePlugin from '../main';
 import type { ExternalMount } from '../types';
-import { mountDisplayName, mountHostOf } from '../types';
+import { isVaultMount, mountDisplayName, mountHostOf } from '../types';
+import { vaultAbsOf, vaultRootOf, vaultScanLayer } from '../features/vaultFs';
 import {
   compileFilter,
   countTree,
@@ -48,7 +49,7 @@ import {
   linkVaultPath,
 } from '../features/extFs';
 import { ConfirmModal, NamePromptModal } from './promptModals';
-import { MountEditorModal, MountTargetPickerModal } from './mountModals';
+import { MountEditorModal, MountTargetPickerModal, VaultMountPickModal } from './mountModals';
 import { iconForEntry } from '../features/iconTheme';
 import { isImageFile } from '../views/ImageView';
 import { isVideoFile } from '../views/VideoView';
@@ -230,6 +231,37 @@ export class MountPanelView extends ItemView {
       scannedAt: Date.now(),
     };
 
+    // 库内挂载：根与各层都从 vault 索引读（TFolder.children 在内存里），
+    // 不碰 extFs；文件不存在（被删/被移）给错误行，与库外同一套 UI。
+    if (isVaultMount(mount)) {
+      const root = vaultRootOf(this.app, mount);
+      if (root.kind === 'missing') {
+        state.error = '文件不存在（可能已被删除或移动）。';
+        this.states.set(mount.id, state);
+        return state;
+      }
+      if (root.kind === 'file') {
+        // 挂载单个库内文件：树就是那一行（与库外挂单文件同款）。
+        state.tree = [
+          {
+            name: root.file.name,
+            rel: root.file.name,
+            abs: vaultAbsOf(this.app, root.file.path),
+            isDir: false,
+            size: root.file.stat.size,
+            mtime: root.file.stat.mtime,
+            children: [],
+          },
+        ];
+        state.loaded.add('');
+        this.states.set(mount.id, state);
+        return state;
+      }
+      this.states.set(mount.id, state);
+      this.loadLayer(mount, '', state);
+      return state;
+    }
+
     if (!isDirectory(mount.path)) {
       // A mounted FILE is legal: the tree is that one row (挂载为独立条目
       // offers both folders and files). `loaded` covers '' so loadLayer
@@ -272,6 +304,23 @@ export class MountPanelView extends ItemView {
     const f = filtering
       ? compileFilter({ include: mount.include, exclude: mount.exclude })
       : compileFilter(EMPTY_FILTER);
+
+    // 库内挂载：一层子项从 vault 索引读，产出同款 MountNode 后走同一套
+    // 排序/挂树逻辑（文件夹懒展开、过滤、拖拽序全部复用）。
+    if (isVaultMount(mount)) {
+      const children = vaultScanLayer(this.app, mount, rel, this.plugin.vaultBasePath(), f);
+      this.sortChildren(mount.id, rel, children);
+      if (!rel) {
+        state.tree = children;
+        return;
+      }
+      const parent = this.findNode(state.tree, rel);
+      if (parent) {
+        parent.children = children;
+        parent.empty = children.length === 0;
+      }
+      return;
+    }
 
     const dirAbs = rel ? joinAbs(mount.path, rel) : mount.path;
     // Guard for mounted-FILE roots and races where the entry vanished:
@@ -412,9 +461,26 @@ export class MountPanelView extends ItemView {
       new Notice('当前没有打开的文件');
       return;
     }
+    const all = (this.plugin.settings.externalMounts ?? []).filter((m) => m.enabled !== false);
+    // 库内挂载优先：活动文件是库内文件时按库内相对路径匹配（库外挂载的
+    // 绝对路径前缀匹配管不到相对路径域）。库根本身嵌在某个库外挂载里时
+    // 两个域都能命中，取更具体的库内挂载。
+    const activeFile = this.app.workspace.getActiveFile();
+    if (activeFile) {
+      const vm = all
+        .filter(isVaultMount)
+        .sort((a, b) => b.path.length - a.path.length)
+        .find((m) => activeFile.path === m.path || activeFile.path.startsWith(`${m.path}/`));
+      if (vm) {
+        this.revealInMount(
+          vm,
+          activeFile.path === vm.path ? '' : activeFile.path.slice(vm.path.length + 1),
+        );
+        return;
+      }
+    }
     const norm = (p: string): string => p.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
     const target = norm(abs);
-    const all = (this.plugin.settings.externalMounts ?? []).filter((m) => m.enabled !== false);
     // 候选含嵌套挂载:命中后沿 attachTo 链回溯,把宿主头行逐级展开,
     // 否则嵌套挂载行根本不渲染,定位无从谈起。
     // 同一文件同时落在宿主与嵌套挂载范围内时取**最长前缀**(更具体的根)。
@@ -429,6 +495,21 @@ export class MountPanelView extends ItemView {
       new Notice('当前文件不在任何挂载目录内');
       return;
     }
+    const rootSlash = mount.path.replace(/[\\/]+$/, '').replace(/\\/g, '/');
+    const absSlash = abs.replace(/\\/g, '/');
+    const rel = absSlash.toLowerCase().startsWith(rootSlash.toLowerCase())
+      ? absSlash.slice(rootSlash.length).replace(/^\/+/, '')
+      : '';
+    this.revealInMount(mount, rel);
+  }
+
+  /**
+   * 定位到某挂载内 `rel`（相对挂载根，'' = 挂载根）：沿 attachTo 链展开宿主
+   * 头行（嵌套挂载行不渲染就无从定位），逐层 loadLayer + 展开祖先，渲染后
+   * 滚动定位。库内/库外挂载共用——loadLayer 内部按 kind 分流。
+   */
+  private revealInMount(mount: ExternalMount, rel: string): void {
+    const all = (this.plugin.settings.externalMounts ?? []).filter((m) => m.enabled !== false);
     // 宿主链:嵌套挂载 → … → 顶层,顺序展开头行(环被 mountsFrom 清过,但仍设防)。
     // attachTo 可能是 `hostId/rel`,归属看 hostId。
     const byId = new Map(all.map((m) => [m.id, m]));
@@ -441,12 +522,9 @@ export class MountPanelView extends ItemView {
       cur = cur.attachTo ? byId.get(mountHostOf(cur.attachTo).hostId) : undefined;
     }
     for (const m of chain) this.scan(m).open.add('');
-    const rootSlash = mount.path.replace(/[\\/]+$/, '').replace(/\\/g, '/');
-    const absSlash = abs.replace(/\\/g, '/');
-    const rel = absSlash.toLowerCase().startsWith(rootSlash.toLowerCase())
-      ? absSlash.slice(rootSlash.length).replace(/^\/+/, '')
-      : '';
     const state = this.scan(mount);
+    // 单文件挂载根（库内/库外同款）：那一行的 rel 是文件名而非空串。
+    if (!rel && state.tree.length === 1 && !state.tree[0].isDir) rel = state.tree[0].rel;
     let acc = '';
     for (const seg of rel.split('/').filter(Boolean)) {
       if (!state.loaded.has(acc)) this.loadLayer(mount, acc, state);
@@ -457,6 +535,23 @@ export class MountPanelView extends ItemView {
     this.pendingReveal = { mountId: mount.id, rel: acc };
     this.render();
     this.consumePendingReveal();
+  }
+
+  /**
+   * vault 结构事件（建/删/改名）回调：只强刷库内挂载的扫描缓存再重绘——
+   * 库外磁盘扫描开销大，不动；库内各层读的是内存里的 vault 树，代价极低。
+   * 由 main.ts 的 vault 事件（去抖后）调用。
+   */
+  refreshVaultMounts(): void {
+    const mounts = (this.plugin.settings.externalMounts ?? []).filter(
+      (m) => m.enabled && isVaultMount(m),
+    );
+    if (mounts.length === 0) return;
+    for (const m of mounts) {
+      const st = this.scan(m, true);
+      this.reloadOpenLayers(m, st);
+    }
+    this.render();
   }
 
   /** 找到定位目标行并高亮；行不在视口带内时按固定行高滚动到它。 */
@@ -566,10 +661,10 @@ export class MountPanelView extends ItemView {
       .sort((a, b) => Number(b.pinned === true) - Number(a.pinned === true));
     if (mounts.length === 0) {
       const empty = contentEl.createDiv({ cls: 'logseq-mount-panel-empty' });
-      empty.createDiv({ text: '还没有外部挂载。' });
+      empty.createDiv({ text: '还没有挂载。' });
       empty.createDiv({
         cls: 'logseq-mount-panel-hint',
-        text: '把库外的文件夹挂到这里，Markdown 会在原地编辑并存回原文件。',
+        text: '把库内或库外的文件/文件夹挂到这里；库外 Markdown 会在原地编辑并存回原文件。',
       });
       const add = empty.createEl('button', { cls: 'mod-cta', text: '添加挂载' });
       add.addEventListener('click', () => this.plugin.promptAddMount());
@@ -640,7 +735,35 @@ export class MountPanelView extends ItemView {
     if (action === 'locate') {
       void this.revealActiveFile();
     } else if (action === 'mount') {
-      this.plugin.promptAddMount();
+      // 思源同款：挂载入口分库内（选择器搜库内文件/文件夹）与库外（路径弹窗）。
+      const menu = new Menu();
+      menu.addItem((item) =>
+        item
+          .setTitle('挂载库内文件/文件夹…')
+          .setIcon('folder-tree' as never)
+          .onClick(() =>
+            new VaultMountPickModal(this.plugin, {
+              onPick: (p) =>
+                this.plugin.promptMountEntry({
+                  kind: 'vault',
+                  path: p.path,
+                  label: p.name,
+                  include: '',
+                  exclude: '',
+                  refreshSeconds: 0,
+                  pinned: false,
+                }),
+            }).open(),
+          ),
+      );
+      menu.addItem((item) =>
+        item
+          .setTitle('挂载库外文件/文件夹…')
+          .setIcon('hard-drive' as never)
+          .onClick(() => this.plugin.promptAddMount()),
+      );
+      if (ev) menu.showAtMouseEvent(ev);
+      else menu.showAtPosition({ x: window.innerWidth / 2, y: 80 });
     } else if (action === 'refresh') {
       this.refreshMounts();
     } else if (action === 'drag-mode') {
@@ -664,7 +787,8 @@ export class MountPanelView extends ItemView {
     }
   }
 
-  /** 新建目标回退:第一个启用的挂载的根目录 */
+  /** 新建目标回退:第一个启用的挂载的根目录（库内挂载同样可用——
+   *  promptNewFile/promptNewFolder 按 kind 分流）。 */
   private defaultNewDir(): { mount: ExternalMount; abs: string; rel: string } | null {
     const m = (this.plugin.settings.externalMounts ?? []).find((x) => x.enabled);
     return m ? { mount: m, abs: m.path, rel: '' } : null;
@@ -725,6 +849,8 @@ export class MountPanelView extends ItemView {
     );
     head.createSpan({ cls: 'logseq-mount-name', text: headLabel });
     if (mount.pinned) head.createSpan({ cls: 'logseq-mount-flag is-pinned', text: '已固定' });
+    // 库内标记：与库外挂载在同一面板里混排，一眼分得清来源。
+    if (isVaultMount(mount)) head.createSpan({ cls: 'logseq-mount-flag', text: '库内' });
     head.addEventListener('click', () => {
       if (state.open.has('')) state.open.delete('');
       else state.open.add('');
@@ -843,6 +969,8 @@ export class MountPanelView extends ItemView {
       }),
     );
     row.createSpan({ cls: 'logseq-mount-name', text: mountDisplayName(mount) });
+    // 嵌套挂载头同样标注库内/库外来源。
+    if (isVaultMount(mount)) row.createSpan({ cls: 'logseq-mount-flag', text: '库内' });
     row.addEventListener('click', () => {
       if (st.open.has('')) st.open.delete('');
       else st.open.add('');
@@ -1047,15 +1175,216 @@ export class MountPanelView extends ItemView {
       });
     }
     row.addEventListener('click', () => {
-      void this.plugin.openExternalEntry(mount, node);
+      // 库内挂载行：走 vault 原生 openFile（反链/引用/扩展名路由全是原生
+      // 行为），不进 openExternalEntry 的库外路由。
+      if (isVaultMount(mount)) void this.openVaultNode(mount, node);
+      else void this.plugin.openExternalEntry(mount, node);
     });
     this.wireMenu(row, mount, node);
     this.wireRowDrag(row, mount, node);
   }
 
   // ------------------------------------------------------------------
-  // context menu
+  // vault mounts（kind: 'vault'）— 打开与右键菜单
   // ------------------------------------------------------------------
+
+  /**
+   * 打开库内挂载里的一个文件（vault 原生 openFile；面板的 split 设置同样
+   * 生效——与库外文件共用 externalSplitView 的语义）。
+   */
+  private async openVaultNode(mount: ExternalMount, node: MountNode): Promise<void> {
+    const vaultPath = node.rel ? `${mount.path}/${node.rel}` : mount.path;
+    const af = this.app.vault.getAbstractFileByPath(vaultPath);
+    if (!(af instanceof TFile)) {
+      new Notice('文件不存在（可能已被删除或移动）。');
+      this.rescan(mount);
+      return;
+    }
+    const leaf = this.plugin.settings.externalSplitView ? 'split' : 'tab';
+    await this.app.workspace.getLeaf(leaf).openFile(af);
+  }
+
+  /**
+   * 库内挂载行的右键菜单。与库外分支分开写而不是塞进同一个 if：两边语义
+   * 差异太大（链接/系统编辑器/TExternalFile 转发 vs vault API），硬塞一个
+   * 函数里全是分支。共用的挂载系列入口（挂载为独立条目/在此挂载/挂载到）
+   * 形态一致，各自带 kind。
+   */
+  private wireVaultMenuItems(menu: Menu, mount: ExternalMount, node: MountNode | null): void {
+    if (node) {
+      menu.addItem((item) =>
+        item
+          .setTitle(node.isDir ? '展开 / 折叠' : '打开')
+          .setIcon(node.isDir ? 'folder' : 'file-text')
+          .onClick(() => {
+            if (node.isDir) this.toggleNode(mount, node.rel);
+            else void this.openVaultNode(mount, node);
+          }),
+      );
+      menu.addSeparator();
+      this.addVaultFileMenuItems(menu, mount, node);
+      menu.addSeparator();
+      // 挂载为独立条目：把这个库内子树提升成面板上自己的挂载。
+      const vaultPath = node.rel ? `${mount.path}/${node.rel}` : mount.path;
+      menu.addItem((item) =>
+        item
+          .setTitle('挂载为独立条目…')
+          .setIcon('folder-symlink' as never)
+          .onClick(() => {
+            void this.plugin.promptMountEntry({
+              kind: 'vault',
+              path: vaultPath,
+              label: safeSegment(node.name) || node.name,
+              include: '',
+              exclude: '',
+              refreshSeconds: 0,
+              pinned: false,
+            });
+          }),
+      );
+    } else {
+      // 挂载根：新建落在挂载根目录（重命名/删除归「编辑这个挂载…/卸载」管）。
+      this.addVaultFileMenuItems(menu, mount, null);
+      menu.addSeparator();
+    }
+    // 在此挂载库内条目：库内选择器挑一个，挂到本节点之下（跨 kind 嵌套：
+    // 宿主是库内，子挂载可以是库内也可以是库外）。
+    const hostAt = node ? `${mount.id}/${node.rel}` : mount.id;
+    menu.addItem((item) =>
+      item
+        .setTitle('在此挂载库内文件/文件夹…')
+        .setIcon('folder-tree' as never)
+        .onClick(() =>
+          new VaultMountPickModal(this.plugin, {
+            title: node ? `挂载到「${node.name}」下` : `挂载到「${mountDisplayName(mount)}」下`,
+            onPick: (p) => {
+              void this.plugin
+                .addMount({
+                  kind: 'vault',
+                  path: p.path,
+                  label: p.name,
+                  include: '',
+                  exclude: '',
+                  refreshSeconds: 0,
+                  pinned: false,
+                  attachTo: hostAt,
+                })
+                .then(() => {
+                  this.states.get(mount.id)?.open.add(node?.rel ?? '');
+                  this.render();
+                });
+            },
+          }).open(),
+        ),
+    );
+    // 在此挂载库外条目：走库外编辑弹窗（attachTo 同三形态）。
+    menu.addItem((item) =>
+      item
+        .setTitle('在此挂载库外文件/文件夹…')
+        .setIcon('folder-symlink' as never)
+        .onClick(() => new MountEditorModal(this.plugin, undefined, hostAt).open()),
+    );
+    // 挂载到…：以本节点为源，在树形选择器里挑虚拟文档树的另一个位置。
+    // sourceAbs 用库内相对路径（与库内挂载的 path 同一空间，禁区判定才准）。
+    if (node) {
+      const vaultPath2 = node.rel ? `${mount.path}/${node.rel}` : mount.path;
+      menu.addItem((item) =>
+        item
+          .setTitle('挂载到…')
+          .setIcon('corner-down-right' as never)
+          .onClick(() =>
+            new MountTargetPickerModal(this.plugin, {
+              sourceName: node.name,
+              sourceAbs: vaultPath2,
+              onPick: (t) => {
+                void this.plugin
+                  .addMount({
+                    kind: 'vault',
+                    path: vaultPath2,
+                    label: safeSegment(node.name) || node.name,
+                    include: '',
+                    exclude: '',
+                    refreshSeconds: 0,
+                    pinned: false,
+                    attachTo: t.attachTo,
+                  })
+                  .then((m) => {
+                    new Notice(`已把「${mountDisplayName(m)}」挂到 ${t.label}`);
+                    this.revealMountLocation(t.attachTo);
+                  });
+              },
+            }).open(),
+          ),
+      );
+    }
+    menu.addSeparator();
+    menu.addItem((item) =>
+      item
+        .setTitle('在资源管理器中显示')
+        .setIcon('folder-open' as never)
+        .onClick(() => this.plugin.revealInSystem(node ? node.abs : vaultAbsOf(this.app, mount.path))),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle('复制库内路径')
+        .setIcon('copy' as never)
+        .onClick(() => {
+          void navigator.clipboard?.writeText(node ? `${mount.path}/${node.rel}` : mount.path);
+          new Notice('已复制路径');
+        }),
+    );
+    if (!node) {
+      menu.addSeparator();
+      menu.addItem((item) =>
+        item.setTitle('编辑这个挂载…').setIcon('settings' as never).onClick(() => this.plugin.editMount(mount)),
+      );
+      menu.addItem((item) =>
+        item.setTitle('重新扫描').setIcon('refresh-cw' as never).onClick(() => this.refreshMounts()),
+      );
+      menu.addItem((item) =>
+        item
+          .setTitle(mount.pinned ? '取消固定' : '固定到顶部')
+          .setIcon('pin' as never)
+          .onClick(async () => {
+            mount.pinned = !mount.pinned;
+            await this.plugin.saveSettings();
+            this.render();
+          }),
+      );
+      menu.addSeparator();
+      menu.addItem((item) =>
+        item
+          .setTitle('卸载')
+          .setIcon('trash' as never)
+          .onClick(async () => {
+            await this.plugin.removeMount(mount);
+            this.render();
+          }),
+      );
+    }
+  }
+
+  /** vault 版文件操作入口（新建/新建笔记/重命名/删除），走 vault API。 */
+  private addVaultFileMenuItems(menu: Menu, mount: ExternalMount, node: MountNode | null): void {
+    const dirRel = node?.isDir ? node.rel : node ? parentRelOf(node.rel) : '';
+    menu.addItem((item) =>
+      item.setTitle('新建文件').setIcon('file-plus' as never).onClick(() => this.promptNewFile(mount, '', dirRel)),
+    );
+    menu.addItem((item) =>
+      item.setTitle('新建文件夹').setIcon('folder-plus' as never).onClick(() => this.promptNewFolder(mount, '', dirRel)),
+    );
+    menu.addItem((item) =>
+      item.setTitle('新建笔记…').setIcon('pencil' as never).onClick(() => this.promptNewNote(mount, node)),
+    );
+    if (node) {
+      menu.addItem((item) =>
+        item.setTitle('重命名').setIcon('text-cursor-input' as never).onClick(() => this.promptRename(mount, node)),
+      );
+      menu.addItem((item) =>
+        item.setTitle('删除…').setIcon('trash-2' as never).onClick(() => this.promptDelete(mount, node)),
+      );
+    }
+  }
 
   /**
    * Right-click menu.
@@ -1070,6 +1399,14 @@ export class MountPanelView extends ItemView {
       e.preventDefault();
       e.stopPropagation();
       const menu = new Menu();
+
+      // 库内挂载：独立菜单支（已在库内，无链接/系统编辑器语义，文件操作走
+      // vault API），菜单项见 wireVaultMenuItems。
+      if (isVaultMount(mount)) {
+        this.wireVaultMenuItems(menu, mount, node);
+        menu.showAtMouseEvent(e);
+        return;
+      }
 
       if (node) {
         const text = !node.isDir && isTextMount(extOf(node.name));
@@ -1614,6 +1951,32 @@ export class MountPanelView extends ItemView {
   }
 
   private promptNewFile(mount: ExternalMount, dirAbs: string, dirRel: string): void {
+    // 库内挂载：走 vault.create（动索引；磁盘上的库根路径与 vault 相同，
+    // 但直接写盘不会进索引，面板会看到一个幽灵文件）。dirAbs 在此不用，
+    // 新建目标由 mount.path + dirRel 决定。
+    if (isVaultMount(mount)) {
+      new NamePromptModal(
+        this.app,
+        { title: '新建文件', placeholder: 'untitled.md', validate: validateEntryName },
+        (name) => {
+          if (!name) return;
+          const dir = dirRel ? `${mount.path}/${dirRel}` : mount.path;
+          const target = `${dir}/${name}`;
+          if (this.app.vault.getAbstractFileByPath(target)) {
+            new Notice(`已存在同名条目：${name}`);
+            return;
+          }
+          void this.app.vault.create(target, '').then(
+            () => {
+              new Notice(`已创建 ${name}`);
+              this.rescan(mount, dirRel);
+            },
+            (err) => new Notice(`创建失败：${(err as Error)?.message ?? '未知错误'}`),
+          );
+        },
+      ).open();
+      return;
+    }
     new NamePromptModal(
       this.app,
       { title: '新建文件', placeholder: 'untitled.md', validate: validateEntryName },
@@ -1632,6 +1995,29 @@ export class MountPanelView extends ItemView {
   }
 
   private promptNewFolder(mount: ExternalMount, dirAbs: string, dirRel: string): void {
+    if (isVaultMount(mount)) {
+      new NamePromptModal(
+        this.app,
+        { title: '新建文件夹', placeholder: 'new-folder', validate: validateEntryName },
+        (name) => {
+          if (!name) return;
+          const dir = dirRel ? `${mount.path}/${dirRel}` : mount.path;
+          const target = `${dir}/${name}`;
+          if (this.app.vault.getAbstractFileByPath(target)) {
+            new Notice(`已存在同名条目：${name}`);
+            return;
+          }
+          void this.app.vault.createFolder(target).then(
+            () => {
+              new Notice(`已创建 ${name}`);
+              this.rescan(mount, dirRel);
+            },
+            (err) => new Notice(`创建失败：${(err as Error)?.message ?? '未知错误'}`),
+          );
+        },
+      ).open();
+      return;
+    }
     new NamePromptModal(
       this.app,
       { title: '新建文件夹', placeholder: 'new-folder', validate: validateEntryName },
@@ -1702,6 +2088,35 @@ export class MountPanelView extends ItemView {
   }
 
   private promptRename(mount: ExternalMount, node: MountNode): void {
+    // 库内挂载：fileManager.renameFile 会同步更新全库引用与反链，
+    // 直接磁盘改名做不到这一点。
+    if (isVaultMount(mount)) {
+      const vaultPath = node.rel ? `${mount.path}/${node.rel}` : mount.path;
+      const af = this.app.vault.getAbstractFileByPath(vaultPath);
+      if (!af) {
+        new Notice('文件不存在。');
+        this.rescan(mount);
+        return;
+      }
+      new NamePromptModal(
+        this.app,
+        { title: '重命名', initial: node.name, validate: validateEntryName },
+        (name) => {
+          if (!name || name === node.name) return;
+          const slash = vaultPath.lastIndexOf('/');
+          const parent = slash > 0 ? vaultPath.slice(0, slash) : '';
+          const target = parent ? `${parent}/${name}` : name;
+          void this.app.fileManager.renameFile(af, target).then(
+            () => {
+              new Notice(`已重命名为 ${name}`);
+              this.rescan(mount, parentRelOf(node.rel));
+            },
+            (err) => new Notice(`重命名失败：${(err as Error)?.message ?? '未知错误'}`),
+          );
+        },
+      ).open();
+      return;
+    }
     new NamePromptModal(
       this.app,
       { title: '重命名', initial: node.name, validate: validateEntryName },
@@ -1731,6 +2146,37 @@ export class MountPanelView extends ItemView {
 
   private promptDelete(mount: ExternalMount, node: MountNode): void {
     const typeStr = node.isDir ? '文件夹' : '文件';
+    // 库内挂载：走 fileManager.trashFile（尊重用户设置的回收站形态），
+    // 索引与反链同步更新。
+    if (isVaultMount(mount)) {
+      const vaultPath = node.rel ? `${mount.path}/${node.rel}` : mount.path;
+      const af = this.app.vault.getAbstractFileByPath(vaultPath);
+      if (!af) {
+        new Notice('文件不存在。');
+        this.rescan(mount);
+        return;
+      }
+      new ConfirmModal(
+        this.app,
+        {
+          title: `删除${typeStr}`,
+          body: `确定删除${typeStr}「${node.name}」${node.isDir ? '及其全部内容' : ''}吗？将按库设置移入回收站。`,
+          confirmText: '删除',
+          dangerous: true,
+        },
+        (ok) => {
+          if (!ok) return;
+          void this.app.fileManager.trashFile(af).then(
+            () => {
+              new Notice('已移入回收站');
+              this.rescan(mount, parentRelOf(node.rel));
+            },
+            (err) => new Notice(`删除失败：${(err as Error)?.message ?? '未知错误'}`),
+          );
+        },
+      ).open();
+      return;
+    }
     new ConfirmModal(
       this.app,
       {

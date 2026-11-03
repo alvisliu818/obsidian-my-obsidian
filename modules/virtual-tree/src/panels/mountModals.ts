@@ -11,10 +11,12 @@
  * pattern accepted here cannot behave differently there.
  */
 
-import { Modal, Notice, Setting, TextComponent } from 'obsidian';
+import { FuzzySuggestModal, Modal, Notice, Setting, TFolder, TextComponent, type TAbstractFile } from 'obsidian';
 import type DocTreePlugin from '../main';
 import { compileFilter, dirPruned, entryMatches, validateMountPath, type MountNode } from '../features/mountFilter';
 import { exists, isDirectory, joinAbs, scanExternal } from '../features/extFs';
+import { vaultScanLayer } from '../features/vaultFs';
+import { isVaultMount, vaultRelPath, type MountKind } from '../types';
 import {
   hasSystemPicker,
   pickExternalPath,
@@ -26,6 +28,8 @@ import { mountDisplayName, mountHostLabel, mountHostOf, type ExternalMount } fro
 
 /** Form state (everything is a string until it is committed). */
 interface MountDraft {
+  /** 库内/库外形态；kind 与 path 必须一起改，两者的合法域完全不同。 */
+  kind: MountKind;
   path: string;
   label: string;
   include: string;
@@ -36,12 +40,14 @@ interface MountDraft {
 
 function draftFrom(m?: ExternalMount): MountDraft {
   return {
+    kind: m?.kind === 'vault' ? 'vault' : 'external',
     path: m?.path ?? '',
     label: m?.label ?? '',
     include: m?.include ?? '',
     // node_modules and .git are noise in almost every external folder, so they
-    // are excluded by default — the user can clear the field.
-    exclude: m?.exclude ?? 'node_modules|[\\\\/]\\.git[\\\\/]',
+    // are excluded by default — the user can clear the field. 库内挂载默认
+    // 不过滤：库内内容本来就归 Obsidian 管。
+    exclude: m?.exclude ?? (m?.kind === 'vault' ? '' : 'node_modules|[\\\\/]\\.git[\\\\/]'),
     refreshSeconds: String(m?.refreshSeconds ?? 0),
     enabled: m?.enabled ?? true,
   };
@@ -86,9 +92,12 @@ export class MountEditorModal extends Modal {
       ? (this.plugin.settings.externalMounts ?? []).find((m) => m.id === mountHostOf(this.attachTo!).hostId)
       : null;
     const hostLabel = host ? mountHostLabel({ ...host, attachTo: this.attachTo }, this.plugin.settings.externalMounts ?? []) : '';
+    const vault = this.draft.kind === 'vault';
     this.titleEl.setText(
       this.editing
-        ? '编辑外部挂载'
+        ? vault
+          ? '编辑库内挂载'
+          : '编辑外部挂载'
         : hostLabel
           ? `挂载到「${hostLabel}」下`
           : '挂载外部文件或文件夹',
@@ -101,22 +110,31 @@ export class MountEditorModal extends Modal {
     contentEl.empty();
     clearErrors(this);
     this.pathInput = null;
+    const vault = this.draft.kind === 'vault';
 
     contentEl.createEl('p', {
       cls: 'setting-item-description',
-      text: '把库外的文件夹或单个文件挂到挂载面板。Markdown 会在原地编辑并存回原文件，不会复制进库。',
+      text: vault
+        ? '把库内的文件夹或单个文件挂到挂载面板。只是树上的一个入口，文件仍归 Obsidian 库管（索引、反链、同步都不受影响）。'
+        : '把库外的文件夹或单个文件挂到挂载面板。Markdown 会在原地编辑并存回原文件，不会复制进库。',
     });
 
     const pathSetting = new Setting(contentEl)
-      .setName('文件或文件夹路径')
-      .setDesc('库外的绝对路径，例如 D:\\notes\\inbox。也可以直接挂单个文件。')
+      .setName(vault ? '库内路径（相对库根）' : '文件或文件夹路径')
+      .setDesc(
+        vault
+          ? '库内相对路径，例如 notes/inbox。也可以直接挂单个文件。'
+          : '库外的绝对路径，例如 D:\\notes\\inbox。也可以直接挂单个文件。',
+      )
       .addText((t) => {
         this.pathInput = t;
-        t.setPlaceholder('D:\\notes\\inbox').setValue(this.draft.path).onChange((v) => {
+        t.setPlaceholder(vault ? 'notes/inbox' : 'D:\\notes\\inbox').setValue(this.draft.path).onChange((v) => {
           this.draft.path = v;
         });
       });
-    if (hasSystemPicker()) {
+    // 浏览按钮只在库外挂载提供（系统对话框选的是磁盘路径）；库内路径
+    // 由工具栏的库内选择器（VaultMountPickModal）负责。
+    if (!vault && hasSystemPicker()) {
       pathSetting
         .addButton((b) =>
           b.setButtonText('浏览文件夹').setTooltip('打开系统资源管理器选择文件夹').onClick(() => {
@@ -168,14 +186,18 @@ export class MountEditorModal extends Modal {
         );
     }
 
-    new Setting(contentEl)
-      .setName('自动刷新（秒）')
-      .setDesc('按间隔重新扫描这个挂载。0 = 仅在手动点重新扫描时。')
-      .addText((t) =>
-        t.setPlaceholder('0').setValue(this.draft.refreshSeconds).onChange((v) => {
-          this.draft.refreshSeconds = v;
-        }),
-      );
+    if (!vault) {
+      // 库内挂载不给刷新间隔：各层读的是内存里的 vault 树，结构变化由
+      // vault 事件直接推到面板（main.ts 的去抖刷新），定时器没有意义。
+      new Setting(contentEl)
+        .setName('自动刷新（秒）')
+        .setDesc('按间隔重新扫描这个挂载。0 = 仅在手动点重新扫描时。')
+        .addText((t) =>
+          t.setPlaceholder('0').setValue(this.draft.refreshSeconds).onChange((v) => {
+            this.draft.refreshSeconds = v;
+          }),
+        );
+    }
 
     new Setting(contentEl)
       .setName('启用')
@@ -221,11 +243,21 @@ export class MountEditorModal extends Modal {
   }
 
   private async commit(): Promise<boolean> {
-    clearErrors(this);
-    const pathError = validateMountPath(this.draft.path);
-    if (pathError) {
-      showError(this, pathError);
-      return false;
+    // 库内相对路径与 Windows 绝对路径的合法域完全不同，各走各的校验。
+    const vault = this.draft.kind === 'vault';
+    if (vault) {
+      const rel = vaultRelPath(this.draft.path);
+      if (!rel) {
+        showError(this, '路径为空。');
+        return false;
+      }
+      this.draft.path = rel;
+    } else {
+      const pathError = validateMountPath(this.draft.path);
+      if (pathError) {
+        showError(this, pathError);
+        return false;
+      }
     }
     // Compile through the real compiler, so what is accepted here and what
     // actually applies in the tree cannot drift apart.
@@ -240,12 +272,14 @@ export class MountEditorModal extends Modal {
     }
     // A mounted FILE is legal too (the panel renders it as a single row), so
     // existence is the only check here — a directory is not required.
-    const trimmed = this.draft.path.trim().replace(/[\\/]+$/, '');
-    if (!exists(trimmed)) {
+    // 库内挂载不做存在性检查：库内路径随删随建是常态，面板对不存在的根
+    // 有自己的错误行（与手改 data.json 同一容错策略）。
+    const trimmed = vault ? vaultRelPath(this.draft.path) : this.draft.path.trim().replace(/[\\/]+$/, '');
+    if (!vault && !exists(trimmed)) {
       showError(this, `路径不存在：${trimmed}`);
       return false;
     }
-    const secs = Number(this.draft.refreshSeconds);
+    const secs = vault ? 0 : Number(this.draft.refreshSeconds);
     if (!Number.isFinite(secs) || secs < 0) {
       showError(this, '自动刷新必须是秒数（0 表示关闭）。');
       return false;
@@ -266,6 +300,7 @@ export class MountEditorModal extends Modal {
     }
 
     await this.plugin.addMount({
+      kind: vault ? 'vault' : 'external',
       path: trimmed,
       label: this.draft.label,
       include: this.draft.include,
@@ -311,11 +346,16 @@ export class MountListModal extends Modal {
       const row = contentEl.createDiv({ cls: 'logseq-mount-list-row' });
       const head = row.createDiv({ cls: 'logseq-mount-list-head' });
       head.createSpan({ cls: 'logseq-mount-list-name', text: mountDisplayName(m) });
+      if (isVaultMount(m)) head.createSpan({ cls: 'logseq-mount-list-off', text: '库内' });
       if (!m.enabled) head.createSpan({ cls: 'logseq-mount-list-off', text: '已停用' });
       if (m.attachTo) {
         head.createSpan({ cls: 'logseq-mount-list-off', text: `嵌套于 ${mountHostLabel(m, mounts)}` });
       }
-      if (!isDirectory(m.path)) head.createSpan({ cls: 'logseq-mount-list-warn', text: '路径不存在' });
+      // 路径存在性：库外查磁盘，库内查 vault 索引（同名规则：不存在给警示行）。
+      const missing = isVaultMount(m)
+        ? !this.plugin.app.vault.getAbstractFileByPath(m.path)
+        : !isDirectory(m.path) && !exists(m.path);
+      if (missing) head.createSpan({ cls: 'logseq-mount-list-warn', text: '路径不存在' });
       row.createDiv({ cls: 'logseq-mount-list-path', text: m.path });
 
       const filters = row.createDiv({ cls: 'logseq-mount-list-filters' });
@@ -405,6 +445,55 @@ export class MountPositionModal extends Modal {
     const m = await this.plugin.addMount(this.draft, atIndex);
     new Notice(`已挂载 ${mountDisplayName(m)}`);
     this.close();
+  }
+}
+
+/**
+ * 库内文件/文件夹选择器（思源 pickMountTargetDialog 同款搜索式入口）：
+ * 对全库文件+文件夹做模糊搜索，选中即回传 {path, isDir, name}。
+ * 工具栏「挂载库内文件/文件夹」与面板/挂载头的「在此挂载库内文件/文件夹」
+ * 共用；隐藏目录（以 . 开头）不在 vault 树里，天然不会出现。
+ */
+export interface VaultMountPick {
+  /** 库内相对路径（`/` 分隔）。 */
+  path: string;
+  isDir: boolean;
+  name: string;
+}
+
+export class VaultMountPickModal extends FuzzySuggestModal<TAbstractFile> {
+  private plugin: DocTreePlugin;
+  private onPick: (pick: VaultMountPick) => void;
+
+  constructor(
+    plugin: DocTreePlugin,
+    opts: { title?: string; onPick: (pick: VaultMountPick) => void },
+  ) {
+    super(plugin.app);
+    this.plugin = plugin;
+    this.onPick = opts.onPick;
+    if (opts.title) this.titleEl.setText(opts.title);
+    this.setPlaceholder('搜索库内文件或文件夹…');
+  }
+
+  getItems(): TAbstractFile[] {
+    const out: TAbstractFile[] = [];
+    const walk = (folder: TFolder): void => {
+      for (const child of folder.children) {
+        out.push(child);
+        if (child instanceof TFolder) walk(child);
+      }
+    };
+    walk(this.plugin.app.vault.getRoot());
+    return out;
+  }
+
+  getItemText(f: TAbstractFile): string {
+    return f instanceof TFolder ? `${f.path}/` : f.path;
+  }
+
+  onChooseItem(f: TAbstractFile): void {
+    this.onPick({ path: f.path, isDir: f instanceof TFolder, name: f.name });
   }
 }
 
@@ -533,22 +622,27 @@ export class MountTargetPickerModal extends Modal {
     let children: MountNode[] = [];
     if (m) {
       const f = compileFilter({ include: m.include, exclude: m.exclude });
-      const dirAbs = rel ? joinAbs(m.path, rel) : m.path;
-      if (isDirectory(dirAbs)) {
-        const { entries } = scanExternal(dirAbs, {
-          shouldEnterDir: (childRel) => !dirPruned(rel ? `${rel}/${childRel}` : childRel, f),
-          keepFile: (childRel) => entryMatches(rel ? `${rel}/${childRel}` : childRel, f),
-          depth: 0,
-        });
-        children = entries.map((e) => ({
-          name: e.name,
-          rel: rel ? `${rel}/${e.rel}` : e.rel,
-          abs: e.abs,
-          isDir: e.isDir,
-          children: [],
-        }));
-        children.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+      // 库内挂载：从 vault 索引读一层（与面板 loadLayer 同一辅助函数）。
+      if (isVaultMount(m)) {
+        children = vaultScanLayer(this.plugin.app, m, rel, this.plugin.vaultBasePath(), f);
+      } else {
+        const dirAbs = rel ? joinAbs(m.path, rel) : m.path;
+        if (isDirectory(dirAbs)) {
+          const { entries } = scanExternal(dirAbs, {
+            shouldEnterDir: (childRel) => !dirPruned(rel ? `${rel}/${childRel}` : childRel, f),
+            keepFile: (childRel) => entryMatches(rel ? `${rel}/${childRel}` : childRel, f),
+            depth: 0,
+          });
+          children = entries.map((e) => ({
+            name: e.name,
+            rel: rel ? `${rel}/${e.rel}` : e.rel,
+            abs: e.abs,
+            isDir: e.isDir,
+            children: [],
+          }));
+        }
       }
+      children.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
     }
     byRel.set(rel, children);
     return children;

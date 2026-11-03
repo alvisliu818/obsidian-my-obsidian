@@ -17,7 +17,7 @@ import { Notice, Platform, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
 import { around } from 'monkey-around';
 import { DocTreeSettingTab } from './settings/tab';
 import { MountPanelView, VIEW_TYPE_MOUNT_PANEL } from './panels/mountPanel';
-import { MountEditorModal, MountListModal, MountPositionModal } from './panels/mountModals';
+import { MountEditorModal, MountListModal, MountPositionModal, VaultMountPickModal } from './panels/mountModals';
 import { ImageView, VIEW_TYPE_IMAGE, IMAGE_EXTENSIONS, isImageFile } from './views/ImageView';
 import { VideoView, VIEW_TYPE_VIDEO, VIDEO_EXTENSIONS, isVideoFile } from './views/VideoView';
 import { OfficeView, VIEW_TYPE_OFFICE } from './views/OfficeView';
@@ -51,8 +51,11 @@ import {
   DEFAULT_DOCTREE_SETTINGS,
   docTreeSettingsFrom,
   editorChoiceFromExternalText,
+  isVaultMount,
   mountDisplayName,
   mountHostOf,
+  listMountTargets,
+  vaultRelPath,
   type DocTreeSettings,
   type EditorChoice,
   type ExternalMount,
@@ -130,6 +133,65 @@ export default class DocTreePlugin extends Plugin {
     // ext: 目标回落 fallback 时正好落到这里。
     this.patchOpenLinkTextForExtVideos();
 
+    // ---------- 库内挂载（kind: 'vault'）----------
+    // vault 结构变化（建/删/改名）→ 去抖后强刷库内挂载的扫描缓存。库内各层
+    // 读的是内存里的 vault 树，代价极低；库外磁盘扫描不受影响。去抖是必须
+    // 的：Obsidian 启动索引时会对每个现存文件发一次 create 事件。
+    let vaultRefreshTimer = 0;
+    const refreshVaultMountsSoon = (): void => {
+      if (!(this.settings.externalMounts ?? []).some((m) => m.enabled && isVaultMount(m))) return;
+      if (vaultRefreshTimer) window.clearTimeout(vaultRefreshTimer);
+      vaultRefreshTimer = window.setTimeout(() => {
+        vaultRefreshTimer = 0;
+        for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_MOUNT_PANEL)) {
+          (leaf.view as MountPanelView | null)?.refreshVaultMounts();
+        }
+      }, 300);
+    };
+    this.registerEvent(this.app.vault.on('create', refreshVaultMountsSoon));
+    this.registerEvent(this.app.vault.on('delete', refreshVaultMountsSoon));
+    this.registerEvent(this.app.vault.on('rename', refreshVaultMountsSoon));
+    this.register(() => {
+      if (vaultRefreshTimer) window.clearTimeout(vaultRefreshTimer);
+    });
+
+    // ---------- 文件管理器右键「挂载到虚拟文档树」（思源 mount-menu 同款） ----------
+    // 子菜单 = 顶层 + 现有全部挂载节点（面包屑标签）；同一位置已挂过同一条目
+    // 时打 ✓（同 kind+path+attachTo）。隐藏目录与库根本体不可挂。
+    this.registerEvent(
+      this.app.workspace.on('file-menu', (menu, file) => {
+        if (!file || file.path === '/' || file.path.startsWith('.')) return;
+        const targets = listMountTargets(this.settings.externalMounts ?? []);
+        if (targets.length === 0) return;
+        const alreadyAt = (attachTo: string | undefined): boolean =>
+          (this.settings.externalMounts ?? []).some(
+            (m) => m.kind === 'vault' && m.path === file.path && (m.attachTo ?? undefined) === attachTo,
+          );
+        const mountTo = (attachTo?: string): void => {
+          void this.addMount({
+            kind: 'vault',
+            path: file.path,
+            label: file.name,
+            include: '',
+            exclude: '',
+            refreshSeconds: 0,
+            pinned: false,
+            ...(attachTo ? { attachTo } : {}),
+          }).then(() => {
+            new Notice(attachTo ? `已嵌套挂载「${file.name}」` : `已挂载到虚拟文档树：${file.name}`);
+          });
+        };
+        for (const t of targets) {
+          menu.addItem((item) =>
+            item
+              .setTitle(`${t.label}${alreadyAt(t.attachTo) ? ' ✓' : ''}`)
+              .setIcon(t.attachTo ? 'corner-down-right' : 'folder-tree')
+              .onClick(() => mountTo(t.attachTo)),
+          );
+        }
+      }),
+    );
+
     // 图标主题就绪/切换 → 挂载面板行内图标重绘（iconForEntry 每次渲染时查询）
     // 自定义事件不走 registerDomEvent（其重载只收已知事件名），register 兜底注销。
     const onIconThemeChanged = () => {
@@ -150,6 +212,23 @@ export default class DocTreePlugin extends Plugin {
       id: 'add-external-mount',
       name: 'Mount an external folder',
       callback: () => this.promptAddMount(),
+    });
+    this.addCommand({
+      id: 'add-vault-mount',
+      name: '挂载库内文件/文件夹到虚拟文档树…',
+      callback: () =>
+        new VaultMountPickModal(this, {
+          onPick: (p) =>
+            this.promptMountEntry({
+              kind: 'vault',
+              path: p.path,
+              label: p.name,
+              include: '',
+              exclude: '',
+              refreshSeconds: 0,
+              pinned: false,
+            }),
+        }).open(),
     });
     this.addCommand({
       id: 'manage-external-mounts',
@@ -325,7 +404,8 @@ export default class DocTreePlugin extends Plugin {
 
   /** Persist a new mount and show the panel; `atIndex` places it in the panel list. */
   async addMount(draft: Omit<ExternalMount, 'id' | 'enabled'>, atIndex?: number): Promise<ExternalMount> {
-    const trimmed = draft.path.trim().replace(/[\\/]+$/, '');
+    // 库内挂载的 path 是相对路径：分隔符/首尾斜杠归一；库外照旧是绝对路径。
+    const trimmed = draft.kind === 'vault' ? vaultRelPath(draft.path) : draft.path.trim().replace(/[\\/]+$/, '');
     const base = this.vaultBasePath() || 'mount';
     let id = safeSegment(draft.label.trim() || trimmed.split(/[\\/]+/).pop() || base);
     // Ids become folder names under Mounts/, so they must stay unique there.

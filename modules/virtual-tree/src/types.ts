@@ -18,16 +18,26 @@ export type EditorChoice = 'logseq' | 'native';
 export type VideoOpenMode = 'player' | 'native';
 
 /**
- * One mount: an absolute path to a folder outside the vault.
+ * One mount: a folder (or single file) shown as a tree in the mount panel.
  *
- * Nothing is copied into the vault — a mounted file is read from and written
+ * Nothing is copied anywhere — a mounted file is read from and written
  * back to where it actually lives. `include` / `exclude` are regular
  * expressions matched against the path relative to `path`.
+ *
+ * 两种形态（2026-11-03 库内挂载）：
+ *   - kind 'external'（缺省，向后兼容）：库外条目，`path` 是绝对路径；
+ *   - kind 'vault'：库内条目，`path` 是库内相对路径（Obsidian 的 TFile /
+ *     TFolder path 形态，`/` 分隔）。库内条目直接走 vault API（打开走
+ *     openFile、建删走 vault 事件与索引），不需要 rescan 定时器。
  */
+export type MountKind = 'external' | 'vault';
+
 export interface ExternalMount {
   /** Stable id; also used as the link folder name, so it must be path-safe. */
   id: string;
-  /** Absolute Windows path, e.g. `D:\\notes`. */
+  /** 'external'（缺省）= 库外绝对路径；'vault' = 库内相对路径。 */
+  kind?: MountKind;
+  /** Absolute Windows path (`D:\\notes`) or vault-relative path (`notes/inbox`). */
   path: string;
   /** Label shown in the panel; '' = use the folder's own name. */
   label: string;
@@ -72,6 +82,16 @@ export function mountHostOf(attachTo: string): { hostId: string; hostRel: string
   };
 }
 
+/** 库内挂载判定：kind 缺省 = 'external'（旧 data.json 无 kind 字段）。 */
+export function isVaultMount(m: ExternalMount): boolean {
+  return m.kind === 'vault';
+}
+
+/** 库内相对路径归一：反斜杠转 `/`、去首尾斜杠。 */
+export function vaultRelPath(p: string): string {
+  return p.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+}
+
 /** Human-readable host label for the mount lists: `Folder / sub / dir`. */
 export function mountHostLabel(m: ExternalMount, mounts: readonly ExternalMount[]): string {
   if (!m.attachTo) return '';
@@ -93,9 +113,14 @@ export function mountFrom(raw: unknown): ExternalMount | null {
   const at = typeof m.attachTo === 'string' && m.attachTo.trim() ? m.attachTo.trim().replace(/\/+$/, '') : undefined;
   const selfHost = at ? mountHostOf(at).hostId === m.id.trim() : false;
   const attachTo = at && !selfHost ? at : undefined;
+  const kind: MountKind = m.kind === 'vault' ? 'vault' : 'external';
+  // vault 挂载的 path 是库内相对路径：归一分隔符与首尾斜杠；空 path 无意义。
+  const path = kind === 'vault' ? vaultRelPath(m.path) : m.path.trim();
+  if (!path) return null;
   return {
     id: m.id.trim(),
-    path: m.path.trim(),
+    kind,
+    path,
     label: typeof m.label === 'string' ? m.label : '',
     include: typeof m.include === 'string' ? m.include : '',
     exclude: typeof m.exclude === 'string' ? m.exclude : '',
@@ -132,6 +157,47 @@ export function mountsFrom(raw: unknown): ExternalMount[] {
       cur = cur.attachTo ? byId.get(mountHostOf(cur.attachTo).hostId) : undefined;
     }
     if (cyclic) delete m.attachTo;
+  }
+  return out;
+}
+
+/**
+ * 可挂载位置列表（si-yuan mount-menu 的 listMountTargets 同款）：「顶层」+
+ * 每个启用的挂载头（带面包屑标签），供文件管理器右键子菜单等入口共用，
+ * 实现嵌套挂载。挂到某个挂载头下 = attachTo 写它的 id（挂载项根部）；
+ * 挂到挂载内部的子文件夹/文件下 = `hostId/子路径`，那个入口在面板与
+ * 选择器里（树形上下文才有子路径可指）。
+ *
+ * 面包屑 = 宿主显示链 + 宿主内子路径：attachTo 为 `ext/tools` 的挂载，
+ * 自己作为挂载点时显示为 `tree / tools / 它的名字` —— 与它在面板里的
+ * 实际渲染位置一致。
+ */
+export interface MountTargetOption {
+  /** undefined = 顶层；否则 `hostId` 或 `hostId/子路径`。 */
+  attachTo?: string;
+  /** 面包屑标签：`宿主名 / 子路径 / 嵌套挂载名`。 */
+  label: string;
+}
+
+export function listMountTargets(mounts: readonly ExternalMount[]): MountTargetOption[] {
+  const out: MountTargetOption[] = [{ label: '顶层' }];
+  const enabled = mounts.filter((m) => m.enabled);
+  // 名字解析用全量表：宿主停用时嵌套挂载回落顶层渲染，但面包屑仍应显示
+ // 它挂在谁下面的完整链（宿主名可考）。
+  const byId = new Map(mounts.map((m) => [m.id, m] as const));
+  for (const m of enabled) {
+    const trail: string[] = [];
+    let cur: ExternalMount | undefined = m;
+    const seen = new Set<string>();
+    while (cur && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      trail.unshift(mountDisplayName(cur));
+      if (!cur.attachTo) break;
+      const { hostId, hostRel } = mountHostOf(cur.attachTo);
+      if (hostRel) trail.unshift(...hostRel.split('/'));
+      cur = byId.get(hostId);
+    }
+    out.push({ attachTo: m.id, label: trail.join(' / ') });
   }
   return out;
 }
