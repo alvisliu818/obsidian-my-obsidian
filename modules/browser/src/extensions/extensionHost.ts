@@ -844,51 +844,5 @@ function pickIcon(icon: string | Record<string, string> | undefined): string {
 }
 
 /** Chrome match patterns: `<all_urls>`, `*://*.host/path`, `https://host/*`. */
-export function matchPattern(pattern: string, url: string): boolean {
-  if (!pattern) return false;
-  if (pattern === "<all_urls>") return true;
-  let u: URL;
-  try {
-    u = new URL(url);
-  } catch {
-    return false;
-  }
-
-  const schemeSep = pattern.indexOf("://");
-  if (schemeSep < 0) return false;
-  const scheme = pattern.slice(0, schemeSep);
-  const rest = pattern.slice(schemeSep + 3);
-  const slash = rest.indexOf("/");
-  const host = slash < 0 ? rest : rest.slice(0, slash);
-  const path = slash < 0 ? "/*" : rest.slice(slash);
-
-  if (scheme !== "*") {
-    const want = scheme.replace(/:$/, "");
-    if (u.protocol.replace(/:$/, "") !== want) return false;
-  } else if (!/^https?:$/.test(u.protocol)) {
-    return false;
-  }
-
-  if (host !== "*") {
-    if (host.startsWith("*.")) {
-      const base = host.slice(2);
-      if (u.hostname !== base && !u.hostname.endsWith("." + base)) return false;
-    } else if (u.hostname !== host) {
-      return false;
-    }
-  }
-
-  if (path !== "/*" && path !== "*") {
-    // Only leading/trailing wildcards are handled — enough for real manifests.
-    const re = new RegExp(
-      "^" +
-        path
-          .split("*")
-          .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
-          .join(".*") +
-        "$",
-    );
-    if (!re.test(u.pathname + u.search)) return false;
-  }
-  return true;
-}
+import { matchPattern } from "./matchPattern";
+export { matchPattern };

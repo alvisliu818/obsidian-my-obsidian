@@ -17,7 +17,7 @@
  *   bootstrap 实现；宿主直装（ register 进垫片的）脚本由本文件的 GM 前奏补齐。
  */
 import type { IWebviewTag } from "../types";
-import { matchPattern } from "./extensionHost";
+import { userScriptMatches } from "./matchPattern";
 import { ensureExtensionWorld, evalInExtensionWorldBridge, evalInSwBridge } from "./cs-runtime";
 import { evalInExtensionWorld } from "./sw-bridge";
 import { nodeRequire } from "../utils/electron";
@@ -275,20 +275,3 @@ function readExtFile(extPath: string, rel: string): string {
 }
 
 /** userScripts 注册条目的 URL 匹配：matches/excludeMatches（match pattern） */
-function userScriptMatches(entry: any, rawUrl: string): boolean {
-	const matches: string[] = entry.matches || [];
-	const excludeMatches: string[] = entry.excludeMatches || [];
-	if (excludeMatches.some((p) => safePattern(p, rawUrl))) return false;
-	return matches.some((p) => safePattern(p, rawUrl));
-}
-
-function safePattern(pattern: string, rawUrl: string): boolean {
-	try {
-		// TM 系脚本允许非标准通配 host（实测 SEJ: *://**/*），标准 match pattern
-		// 不认 `**` —— 视同任意主机归一后匹配（否则直装条目永不被注入）
-		const norm = /:\/\/\*\*(?:[/?#]|$)/.test(pattern) ? pattern.replace("://**/", "://*/").replace("://**", "://*") : pattern;
-		return matchPattern(norm, rawUrl);
-	} catch {
-		return false;
-	}
-}
