@@ -183,7 +183,8 @@ export class MarketStore {
 		return this.catalog ?? [];
 	}
 
-	private adoptCatalog(entries: CatalogEntry[]): void {
+	/** 装入目录条目并建反查索引（测试也从这里喂规则）。 */
+	adoptCatalog(entries: CatalogEntry[]): void {
 		this.catalog = entries;
 		this.byRepo.clear();
 		this.byNameAuthor.clear();
