@@ -138,6 +138,16 @@ const ExternalRenameHandlerPlugin = (
 		default: new (app: unknown, manifest: unknown) => SubPluginLike;
 	}
 ).default;
+// better-markdown-links v6.4.0（mnaoumov，MIT）：同款 require 桥。43 个 lib
+// 子路径中 5.1.0 缺失的 3 个里 2 个由 FML vendor 覆盖，新增 2 个（undo 批量
+// 操作命令 + bulk 提交组件）按依赖闭包 BFS vendored 进模块 vendor/（36 文件）。
+// 5.0.0 起 handler 经 rename-delete-handover 让给 ARDH 生态——它是 conflict
+// 检查表的最后一条，收编后表整体退役。见 modules/my-better-markdown-links/NOTICE.md。
+const BetterMarkdownLinksPlugin = (
+	require("../modules/my-better-markdown-links/src/main") as {
+		default: new (app: unknown, manifest: unknown) => SubPluginLike;
+	}
+).default;
 import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
 import { registerFreeExtensions } from "./extensionRegistry";
 // 原生 markdown 编辑器（实时预览/源码模式）+ 阅读模式的代码块「▶ 运行」。
@@ -478,6 +488,20 @@ export default class MyObsidianPlugin extends Plugin {
 			manifest: { version: "4.1.0" },
 			migrateFrom: "external-rename-handler",
 			cls: ExternalRenameHandlerPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Third-party (mnaoumov, MIT), kept whole — see
+			// modules/my-better-markdown-links/NOTICE.md. Same require bridge.
+			// 5.0.0 起 handler 让给 ARDH 生态（rename-delete-handover），是
+			// RENAME_DELETE_HANDLER_OWNERS 检查表的最后一条——收编后表退役。
+			id: "better-markdown-links",
+			name: "my Better Markdown Links",
+			summary:
+				"Markdown 链接增强：相对路径链接、链接路径批量转换（整库/文件夹/文件/选区，可撤销）、GitHub 标题锚点、严格相对链接、frontmatter wikilink 风格、自动转换。上游 mnaoumov（MIT）。",
+			desktopOnly: false,
+			manifest: { version: "6.4.0" },
+			migrateFrom: "better-markdown-links",
+			cls: BetterMarkdownLinksPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
 			// Third-party (omeyenburg / Oskar Meyenburg, MIT), kept whole — see

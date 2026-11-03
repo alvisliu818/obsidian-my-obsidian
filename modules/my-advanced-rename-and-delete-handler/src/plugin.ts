@@ -1,11 +1,7 @@
-import type {
-  PluginConflict,
-  PluginGateComponent
-} from '@mnaoumov/obsidian-lib/components/plugin-gate-component';
+import type { PluginGateComponent } from '@mnaoumov/obsidian-lib/components/plugin-gate-component';
 import type { PluginApiDeclaration } from '@mnaoumov/obsidian-lib/plugin/plugin-api';
 
 import { OpenDemoVaultCommandHandler } from '@mnaoumov/obsidian-lib/command-handlers/open-demo-vault-command-handler';
-import { PluginConflictSeverity } from '@mnaoumov/obsidian-lib/components/plugin-gate-component';
 import { PluginSettingsTabComponent } from '@mnaoumov/obsidian-lib/components/plugin-settings-tab-component';
 import { PluginDataHandler } from '@mnaoumov/obsidian-lib/data-handler';
 import { PluginBase } from '@mnaoumov/obsidian-lib/plugin/plugin';
@@ -26,57 +22,6 @@ import { PluginSettingsTab } from './plugin-settings-tab.ts';
 import { RenameDeleteHandlerComponent } from './rename-delete-handler-component.ts';
 import { RescuePathResolver } from './rescue-path-resolver.ts';
 
-/**
- * A plugin that used to own a rename/delete handler of its own.
- */
-interface RenameDeleteHandlerOwner {
-  /**
-   * The first version that no longer registers a handler of its own, and is therefore safe to run alongside
-   * this plugin.
-   */
-  readonly firstSupportedVersion: string;
-
-  /**
-   * The plugin id, as listed in Obsidian's community plugin registry.
-   */
-  readonly pluginId: string;
-
-  /**
-   * The display name, used when telling the user what to update.
-   */
-  readonly pluginName: string;
-}
-
-/**
- * The plugins that used to carry a rename/delete handler of their own, and the version of each that gave it
- * up.
- *
- * They shipped that handler, from `obsidian-dev-utils`. Two handlers acting on one rename corrupt
- * links and move attachments twice, and there is no reliable way for this plugin to win that race: the
- * library elects a handler by registry order, but its `runAsyncLinkUpdate` patch sits outside that election,
- * so whichever plugin loaded first keeps a hand on the wheel. Every scheme for seizing control from inside is
- * therefore load-order dependent. So this plugin does not compete — it declares each of them as a BLOCKING
- * conflict and stands aside while one of them is enabled at a version that still owns the handler.
- *
- * 检查表收缩史（2026-11-03）：
- * - `Custom Attachment Location` 与 `Consistent Attachments and Links` 已随单
- *   id 收编退役——CAL 是本 bundle 的共生模块，consistent-attachments-and-links
- *   自 4.1.0 起连 delete-empty-folders 命令都让出（功能被 CAL/ARDH 完全替代），
- *   用户库不存在独立安装形态，检查是死代码，条目删除。
- * - `Frontmatter Markdown Links`（v3.1.0）与 `External Rename Handler`
- *   （v4.1.0）已源码级收编为 bundle 模块，条目随之删除。
- * - 剩余一条（Better Markdown Links）按用户拍板也将源码级收编，收编后表
- *   清空整体退役。
- *
- * TODO: 收编完成后删除本表与 getPluginConflicts。
- */
-const RENAME_DELETE_HANDLER_OWNERS: readonly RenameDeleteHandlerOwner[] = [
-  {
-    firstSupportedVersion: '5.0.0',
-    pluginId: 'better-markdown-links',
-    pluginName: 'Better Markdown Links'
-  }
-];
 
 export class Plugin extends PluginBase {
   private pluginApi: null | PluginApiImpl = null;
@@ -103,32 +48,6 @@ export class Plugin extends PluginBase {
         contract: PLUGIN_API_CONTRACT
       }
     ];
-  }
-
-  /**
-   * Declares what this plugin refuses to run beside, and what it merely warns about.
-   *
-   * The two severities are not two mechanisms: a plugin that still owns a rename/delete handler corrupts
-   * links when it acts on the same rename as this one, so it BLOCKS; a plugin that merely duplicates the
-   * Delete empty folders command costs the user a second palette entry, so it WARNS and both keep running.
-   *
-   * Blocked means enabled-but-inert. This plugin stays in the user's enabled list, says what it is waiting
-   * for in its settings tab, and comes back the moment the conflict lifts — with no restart, and with
-   * nothing to switch back on by hand.
-   *
-   * @returns The declared conflicts, blocking ones first.
-   */
-  protected override getPluginConflicts(): PluginConflict[] {
-    return RENAME_DELETE_HANDLER_OWNERS.map((owner) => ({
-      conflictingVersionRange: `<${owner.firstSupportedVersion}`,
-      pluginId: owner.pluginId,
-      pluginName: owner.pluginName,
-      reason: `This plugin is waiting for ${owner.pluginName} ${owner.firstSupportedVersion} or newer.`
-        + ' Until then that plugin handles renames and deletes itself, and two handlers acting on one'
-        + ' rename corrupt links between them. Update it and this plugin picks the work back up on its'
-        + ' own, with no restart and nothing here to switch back on.',
-      severity: PluginConflictSeverity.Block
-    }));
   }
 
   protected override async onloadImpl(): Promise<void> {

@@ -12,7 +12,6 @@ import { FileSystemAdapter } from 'obsidian';
 import type { MigratableSettings } from './advanced-rename-and-delete-handler.ts';
 
 import {
-  ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_ID,
   ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_NAME
 } from './advanced-rename-and-delete-handler.ts';
 import { ExternalRenameHandlerComponent } from './desktop-external-rename-handler-component.ts';
@@ -43,7 +42,10 @@ export class Plugin extends PluginBase {
             settings.isAdvancedRenameAndDeleteHandlerSuggestionDeclined = isDeclined;
           });
         },
-        suggestedPluginId: ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_ID,
+        // 单一插件 id（2026-11-03）：ARDH 与本模块同 bundle 共生，其实例
+        // manifest.id = 宿主 id；按上游常量查插件表永远 NotInstalled，
+        // handover 建议弹窗每次启动都弹（实测）。改指运行时宿主 id。
+        suggestedPluginId: this.manifest.id,
         suggestedPluginName: ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_NAME
       })
     );
@@ -86,7 +88,8 @@ export class Plugin extends PluginBase {
           return proposedShouldHandleRenames === null ? null : { shouldHandleRenames: proposedShouldHandleRenames };
         },
         pluginSettingsComponent,
-        providerPluginId: ADVANCED_RENAME_AND_DELETE_HANDLER_PLUGIN_ID,
+        // 同 suggestedPluginId：ARDH 的 registry/publish 键是宿主 id。
+        providerPluginId: this.manifest.id,
         retireProposedSettings: async (): Promise<void> => {
           await pluginSettingsComponent.editAndSave((settings) => {
             settings.proposedShouldHandleRenames = null;

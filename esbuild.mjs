@@ -475,33 +475,46 @@ const inlineImportPlugin = {
 	},
 };
 
+  const lib10Shims = {
+    "data-stores/data-store-seeds": "modules/my-frontmatter-markdown-links/vendor/data-stores/data-store-seeds.cjs",
+    "data-stores/data-store-transport": "modules/my-frontmatter-markdown-links/vendor/data-stores/data-store-transport.cjs",
+    "data-stores/local-data-store": "modules/my-frontmatter-markdown-links/vendor/data-stores/local-data-store.cjs",
+    "command-handlers/open-bug-report-command-handler": "modules/my-frontmatter-markdown-links/vendor/command-handlers/open-bug-report-command-handler.cjs",
+    "command-handlers/undo-bulk-operation-command-handler": "modules/my-better-markdown-links/vendor/command-handlers/undo-bulk-operation-command-handler.cjs",
+    "components/bulk-operation-commit-component": "modules/my-better-markdown-links/vendor/components/bulk-operation-commit-component.cjs",
+    link: "modules/my-better-markdown-links/vendor/link.cjs",
+    "metadata-cache": "modules/my-better-markdown-links/vendor/metadata-cache.cjs",
+    reference: "modules/my-better-markdown-links/vendor/reference.cjs",
+  };
+  const lib10Importers = /modules[\\/](my-frontmatter-markdown-links|my-external-rename-handler|my-better-markdown-links)[\\/]/;
+  const lib10Resolver = {
+    name: "lib10-shims",
+    setup(build) {
+      build.onResolve({ filter: /^@mnaoumov\/obsidian-lib\// }, (args) => {
+        const importer = args.importer.split(path.sep).join("/");
+        if (!lib10Importers.test(importer)) return undefined;
+        const shim = lib10Shims[args.path.slice("@mnaoumov/obsidian-lib/".length)];
+        if (!shim) return undefined;
+        return { path: path.resolve(shim) };
+      });
+    },
+  };
+
 const context = await esbuild.context({
   banner: { js: banner },
   entryPoints: ["src/main.ts"],
   bundle: true,
   // terminal 的 vendor 子库（polyipseity/obsidian-plugin-library，源码随仓）：
   // 别名到其 TS 入口，esbuild 直接编译源码。子库无 dist、无 node_modules。
-  // FML 的 lib-10-only 子路径（根 PnP 实装 obsidian-lib 5.1.0，FML 上游要
-  // ^10.5.0）：data-stores（LocalDataStore 是 FML 缓存的核心依赖，不可桩空）
-  // 与 bug-report 命令——把 10.5.0 的自包含 dist cjs vendored 进模块
-  // （vendor/，依赖闭包 11 个文件，其余只依赖 typescript-lib/obsidian），
-  // alias 劫持这四个 5.1.0 不存在的子路径，其余 obsidian-lib 路径不受影响
-  // （CAL/ARDH 照走 PnP 5.1.0）。
+  // FML/ERH/BML 的 lib-10-only 缺口（根 PnP 实装 obsidian-lib 5.1.0，三个
+  // mnaoumov 新模块上游要 ^10.5.0）：缺失子路径按 importer 作用域劫持到
+  // 10.5.0 自包含 dist cjs 的 vendored 副本（FML vendor/ 4 文件、BML
+  // vendor/ 36+ 文件含 link/reference/metadata-cache 整模块）。**必须按
+  // importer 限定**：link/metadata-cache 是 CAL/ARDH 共享的 lib 模块，
+  // 全局劫持会把它们也切到 10.5 语义；限定后 CAL/ARDH 照走 PnP 5.1.0。
   alias: {
     "@polyipseity/obsidian-plugin-library": path.resolve(
       "modules/my-terminal/vendor/obsidian-plugin-library/src/index.ts",
-    ),
-    "@mnaoumov/obsidian-lib/data-stores/data-store-seeds": path.resolve(
-      "modules/my-frontmatter-markdown-links/vendor/data-stores/data-store-seeds.cjs",
-    ),
-    "@mnaoumov/obsidian-lib/data-stores/data-store-transport": path.resolve(
-      "modules/my-frontmatter-markdown-links/vendor/data-stores/data-store-transport.cjs",
-    ),
-    "@mnaoumov/obsidian-lib/data-stores/local-data-store": path.resolve(
-      "modules/my-frontmatter-markdown-links/vendor/data-stores/local-data-store.cjs",
-    ),
-    "@mnaoumov/obsidian-lib/command-handlers/open-bug-report-command-handler": path.resolve(
-      "modules/my-frontmatter-markdown-links/vendor/command-handlers/open-bug-report-command-handler.cjs",
     ),
   },
   // obsidian = the host API; @codemirror/* + @lezer/* = Obsidian's own CM6
@@ -532,7 +545,7 @@ const context = await esbuild.context({
     // ollama 等包用 `node:fs` 带前缀的写法，裸名列表罩不住
     ...builtins.map((m) => `node:${m}`),
   ],
-  plugins: [cmBundlePlugin, momentumSveltePlugin, terminalSveltePlugin, sveltePlugin, jiebaPatchPlugin, dexiePatchPlugin, unicornMagicPatchPlugin, importGlobPlugin, musicPlayerShimsPlugin, inlineImportPlugin, mxInlinePlugin, mxCaptionsPlugin, mxNodeEnvPlugin, terminalPyPlugin],
+  plugins: [lib10Resolver, cmBundlePlugin, momentumSveltePlugin, terminalSveltePlugin, sveltePlugin, jiebaPatchPlugin, dexiePatchPlugin, unicornMagicPatchPlugin, importGlobPlugin, musicPlayerShimsPlugin, inlineImportPlugin, mxInlinePlugin, mxCaptionsPlugin, mxNodeEnvPlugin, terminalPyPlugin],
   // Monaco 的 codicon.css 引用 .ttf 字体(图标字形)。内联成 dataurl:图标
   // 只有几 KB,而少这一条整个构建会以 "No loader is configured for .ttf" 失败。
   // (与独立插件 obsidian-logseq 的 esbuild.mjs 同款配置。)

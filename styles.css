@@ -59410,3 +59410,10 @@ body.hearth-snapshot-capturing .hearth-view:not(#hearth-boost) {
   white-space-collapse: preserve;
   text-wrap: nowrap;
 }
+
+/* ==================== Better Markdown Links (modules/my-better-markdown-links) ==================== */
+/* 上游 src/styles/main.scss 经 sass 编译并入；模块内 import 走 .scss -> empty loader */
+.better-markdown-links.obsidian-lib.multiple-text-component textarea {
+  height: 6em;
+  width: 20em;
+}
