@@ -52,6 +52,12 @@ export interface ModuleDescriptor {
 	 * 导入后写回 data.json，此后以数据片为准）。
 	 */
 	migrateFrom?: string;
+	/**
+	 * 内层子插件实例会注册的设置 tab id 清单（如 momentum 的 WorkLife 报
+	 * my-worklife-calendar）。垫片按此截获这类 tab 进「其他」区，避免它们
+	 * 在设置侧栏单独成栏。
+	 */
+	internalTabIds?: string[];
 	/** The module's own Plugin class, imported from modules/<id>/src/main. */
 	cls: new (app: App, manifest: unknown) => SubPluginLike;
 }

@@ -560,6 +560,7 @@ export default class MyObsidianPlugin extends Plugin {
 			summary:
 				"生活仪表盘：习惯/任务/健身/营养/学习看板、Google Tasks 与 Google Drive 同步、快速访问面板；并入 WorkLife Calendar 后另有日历/日程/看板/习惯分析/财务/天气视图与 dashboard、hello 代码块。上游 jnagase + atinss（均 MIT）。",
 			desktopOnly: false,
+			internalTabIds: ["my-worklife-calendar"],
 			cls: MomentumPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
@@ -684,25 +685,53 @@ export default class MyObsidianPlugin extends Plugin {
 		// 撞 id（Obsidian 按 id 索引，其中一个会从侧栏消失）。垫片把这类
 		// 「宿主 id 但非宿主标签」的注册截进 capturedTabs（inner: 前缀键），
 		// 由设置页末尾的「其他」区渲染。
-		const settingApi = (
-			this.app as unknown as {
-				setting?: { addTab?: (tab: unknown) => void };
-			}
-		).setting;
-		if (settingApi?.addTab) {
-			const origAddTab = settingApi.addTab.bind(settingApi);
+		const settingApi = this.app.setting as unknown as {
+			addTab?: (tab: unknown) => void;
+			addSettingTab?: (tab: unknown) => void;
+		};
+		if (settingApi) {
 			const hostId = this.manifest.id;
-			settingApi.addTab = (tab: unknown) => {
-				const t = tab as { id?: string };
+			// 统一拦截逻辑:①宿主 id 的冒名 tab(1.14 语义)②内层实例的 tab
+			// (组件树判定 + descriptor 声明的 internalTabIds,如 momentum 的
+			// WorkLife 报 my-worklife-calendar)——都截进 capturedTabs 的
+			// inner: 键,由宿主设置页「其他」区渲染。其余放行原生注册。
+			const intercept = (tab: unknown): boolean => {
+				const t = tab as { id?: string; plugin?: unknown };
 				if (t?.id === hostId && tab !== hostTab) {
 					this.capturedTabs.set(
 						`inner:${this.capturedTabs.size}:${t.id ?? "unknown"}`,
 						tab,
 					);
-					return;
+					return true;
 				}
-				origAddTab(tab);
+				const internalIds = this.collectInternalTabIds();
+				if (
+					(t?.id && internalIds.has(t.id)) ||
+					(t?.plugin && this.isInternalPluginInstance(t.plugin))
+				) {
+					this.capturedTabs.set(
+						`inner:${this.capturedTabs.size}:${t.id ?? "unknown"}`,
+						tab,
+					);
+					return true;
+				}
+				return false;
 			};
+			// 1.14:setting.addTab;1.15:setting.addSettingTab——两代 API 双挂
+			if (typeof settingApi.addTab === "function") {
+				const origAddTab = settingApi.addTab.bind(settingApi);
+				settingApi.addTab = (tab: unknown) => {
+					if (intercept(tab)) return;
+					origAddTab(tab);
+				};
+			}
+			if (typeof settingApi.addSettingTab === "function") {
+				const origAddSettingTab = settingApi.addSettingTab.bind(settingApi);
+				settingApi.addSettingTab = (tab: unknown) => {
+					if (intercept(tab)) return;
+					origAddSettingTab(tab);
+				};
+			}
 		}
 		for (const d of this.descriptors) await this.bootModule(d);
 		// 兜底清扫：内层实例若经 addTab 之外的路径把「宿主 id」标签塞进
@@ -942,6 +971,44 @@ export default class MyObsidianPlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+	}
+
+	/** 汇总所有 descriptor 声明的内层 tab id（垫片判定用） */
+	private collectInternalTabIds(): Set<string> {
+		const ids = new Set<string>();
+		for (const d of this.descriptors) {
+			for (const id of d.internalTabIds ?? []) ids.add(id);
+		}
+		return ids;
+	}
+
+	/**
+	 * 判定 candidate 是否属于本插件的模块实例树（模块实例本身，或其
+	 * Component 树内的内层子插件实例——如 momentum 的 WorkLife）。
+	 * 用于垫片拦截内层实例的设置 tab。
+	 */
+	private isInternalPluginInstance(candidate: unknown): boolean {
+		if (!candidate || typeof candidate !== "object") return false;
+		for (const inst of this.live.values()) {
+			if (inst === candidate) return true;
+			if (this.inInstanceTree(inst, candidate, 0)) return true;
+		}
+		return false;
+	}
+
+	private inInstanceTree(
+		root: unknown,
+		target: unknown,
+		depth: number
+	): boolean {
+		if (depth > 6) return false;
+		const children = (root as { _children?: unknown[] })._children;
+		if (!Array.isArray(children)) return false;
+		for (const child of children) {
+			if (child === target) return true;
+			if (this.inInstanceTree(child, target, depth + 1)) return true;
+		}
+		return false;
 	}
 
 	/** Boot a module if its switch is on. A failing module must not take the
