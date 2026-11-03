@@ -193,6 +193,26 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 				if (!tab) return;
 				containerEl.empty();
 				containerEl.appendChild(tab.containerEl);
+				// polyipseity 系 tab 的 UI widgets 在其 onLoad() 里注册（构造期
+				// 经 Promise.then→addChild(LambdaComponent) 触发）；1.15 下
+				// 该链断掉（addChild 挂起 / load() 不达 onload，两者实测），
+				// display() 的 ui.update() 无 widget 可渲染——宿主直接补调
+				// 一次 onLoad（打标防重复；多次调用会重复注册语言监听与
+				// widget）。
+				const t0 = tab as { __myLoaded?: boolean; onLoad?(): unknown };
+				if (!t0.__myLoaded && typeof t0.onLoad === "function") {
+					t0.__myLoaded = true;
+					try {
+						t0.onLoad();
+					} catch {
+						/* lifecycle best-effort */
+					}
+				}
+				// 模块 tab 的 containerEl 类名是 .vertical-tab-content——1.x 里
+				// 它自身就是滚动容器（height:100% + overflow-y:auto），嵌进
+				// 二级页后与 .setting-page 的滚动叠加成双滚动条（实测）。加标
+				// 记类取消它的高度约束与滚动，滚动职责上交 .setting-page。
+				tab.containerEl.addClass("my-module-page-embed");
 				if (typeof tab.update === "function" && typeof tab.renderTab === "function") {
 					tab.update();
 					tab.renderTab();

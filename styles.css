@@ -59417,3 +59417,13 @@ body.hearth-snapshot-capturing .hearth-view:not(#hearth-boost) {
   height: 6em;
   width: 20em;
 }
+
+/* ==================== 模块设置二级页（宿主 settings.ts） ==================== */
+/* 模块 tab 的 containerEl 类名是 .vertical-tab-content（自带 height:100% +
+   overflow-y:auto 的滚动容器样式），嵌进 .setting-page 后与外层滚动叠加成
+   双滚动条——嵌入时加本标记类取消其高度约束与滚动，滚动职责上交
+   .setting-page（唯一滚动容器）。 */
+.setting-page .vertical-tab-content.my-module-page-embed {
+  height: auto;
+  overflow-y: visible;
+}

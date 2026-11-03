@@ -984,6 +984,26 @@ export default class MyObsidianPlugin extends Plugin {
 			host.capturedTabs.set(d.id, tab);
 		};
 		await inst.onload();
+		// 1.15：Component.addChild 改为「父 _loaded 时才立即 load 子，否则挂
+		// 起」。宿主绕过 Plugin.load() 直接 onload（模块数据片遮蔽发生在
+		// onload 前），实例 _loaded 恒为 false → 构造期经 Promise.then 再
+		// addChild 的子组件（polyipseity 库的 LambdaComponent 模式，terminal
+		// 设置页的 UI widget 注册全靠它）永远挂起——设置页二级页空白（实测
+		// 手动 tab.onLoad() 后内容即出）。此处补载 children，恢复 1.14 的
+		// 无条件 load 语义；已 load 的跳过，无重复风险。
+		const children = (inst as { _children?: Array<{ _loaded?: boolean; load(): unknown }> })
+			._children;
+		if (Array.isArray(children)) {
+			for (const child of children) {
+				if (!child._loaded) {
+					try {
+						child.load();
+					} catch (e) {
+						console.error(`[my-obsidian] ${d.id} child load failed`, e);
+					}
+				}
+			}
+		}
 		this.live.set(d.id, inst);
 	}
 }

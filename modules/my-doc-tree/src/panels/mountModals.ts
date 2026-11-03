@@ -554,7 +554,7 @@ export class MountTargetPickerModal extends Modal {
     return children;
   }
 
-  private isOpen(mountId: string, rel: string): boolean {
+  private isPickerOpen(mountId: string, rel: string): boolean {
     return this.openMap.get(mountId)?.has(rel) === true;
   }
 
@@ -586,7 +586,7 @@ export class MountTargetPickerModal extends Modal {
   /** 一行挂载头：可选（= 挂到该挂载根），可展开（= 浏览它的树）。 */
   private renderMountRow(container: HTMLElement, m: ExternalMount, depth: number, visited: Set<string>): void {
     const cyclic = visited.has(m.id);
-    const open = this.isOpen(m.id, '');
+    const open = this.isPickerOpen(m.id, '');
     this.row(container, {
       depth,
       name: mountDisplayName(m),
@@ -609,7 +609,7 @@ export class MountTargetPickerModal extends Modal {
   /** 一行真实文件/文件夹：可选（= 挂到该节点之下），文件夹或挂了下游挂载的可展开。 */
   private renderNodeRow(container: HTMLElement, m: ExternalMount, node: MountNode, depth: number, visited: Set<string>): void {
     const nested = this.nestedAt(m.id, node.rel);
-    const open = this.isOpen(m.id, node.rel);
+    const open = this.isPickerOpen(m.id, node.rel);
     this.row(container, {
       depth,
       name: node.name,

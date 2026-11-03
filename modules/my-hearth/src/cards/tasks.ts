@@ -5318,7 +5318,7 @@ export class TaskFieldsModal extends HearthModal {
 		this.renderBody();
 	}
 
-	private isOpen(key: string): boolean {
+	private isExpanded(key: string): boolean {
 		return this.expanded.has(key);
 	}
 
@@ -5341,7 +5341,7 @@ export class TaskFieldsModal extends HearthModal {
 		expandable: boolean,
 	): HTMLElement {
 		const labels = t().editors.tasks;
-		const open = this.isOpen(openKey);
+		const open = this.isExpanded(openKey);
 		const head = panel.createDiv("hearth-taskfields-head");
 		const chevron = head.createDiv("hearth-taskfields-chevron");
 		if (expandable) setIcon(chevron, open ? "chevron-down" : "chevron-right");
@@ -5412,7 +5412,7 @@ export class TaskFieldsModal extends HearthModal {
 	private renderField(body: HTMLElement, field: TaskFieldDef, index: number): void {
 		const labels = t().editors.tasks;
 		const openKey = `field:${field.id}`;
-		const open = this.isOpen(openKey);
+		const open = this.isExpanded(openKey);
 
 		// A card per field, so where one ends and the next begins is obvious
 		// without counting indentation.
@@ -5552,7 +5552,7 @@ export class TaskFieldsModal extends HearthModal {
 		// configure. Everything else expands.
 		const mappable = !isDescriptionSource(key.source);
 		const mapped = (key.values ?? []).length;
-		const open = mappable && this.isOpen(openKey);
+		const open = mappable && this.isExpanded(openKey);
 
 		const panel = section.createDiv("hearth-taskfields-key");
 		panel.toggleClass("is-open", open);
