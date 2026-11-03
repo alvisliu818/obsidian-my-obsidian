@@ -823,8 +823,6 @@ export class MountPanelView extends ItemView {
     );
     head.createSpan({ cls: 'logseq-mount-name', text: headLabel });
     if (mount.pinned) head.createSpan({ cls: 'logseq-mount-flag is-pinned', text: '已固定' });
-    // 库内标记：与库外挂载在同一面板里混排，一眼分得清来源。
-    if (isVaultMount(mount)) head.createSpan({ cls: 'logseq-mount-flag', text: '库内' });
     head.addEventListener('click', () => {
       if (state.open.has('')) state.open.delete('');
       else state.open.add('');
@@ -855,7 +853,7 @@ export class MountPanelView extends ItemView {
       if (mount.exclude.trim()) meta.push(`排除 /${mount.exclude}/`);
     }
     if (state.truncated) meta.push('已截断');
-    section.createDiv({ cls: 'logseq-mount-meta', text: meta.join(' · ') || mount.path });
+    section.createDiv({ cls: 'logseq-mount-meta', text: meta.join(' · ') || mountDisplayPath(mount) });
 
     if (state.tree.length === 0 && !state.truncated) {
       section.createDiv({ cls: 'logseq-mount-empty', text: '没有符合过滤条件的条目。' });
@@ -943,8 +941,6 @@ export class MountPanelView extends ItemView {
       }),
     );
     row.createSpan({ cls: 'logseq-mount-name', text: mountDisplayName(mount) });
-    // 嵌套挂载头同样标注库内/库外来源。
-    if (isVaultMount(mount)) row.createSpan({ cls: 'logseq-mount-flag', text: '库内' });
     row.addEventListener('click', () => {
       if (st.open.has('')) st.open.delete('');
       else st.open.add('');
@@ -2305,6 +2301,11 @@ export class MountPanelView extends ItemView {
 }
 
 // Small helper kept out of the class for readability.
+/** 区块 meta 行的路径展示：库内挂载按库内习惯以 / 开头；库外保持绝对路径。 */
+function mountDisplayPath(mount: ExternalMount): string {
+  return isVaultMount(mount) ? `/${mount.path.replace(/^\/+/, '')}` : mount.path;
+}
+
 /** The directory containing `rel`, if the cached scan has it. */
 function parentNodeOf(st: MountState, rel: string): MountNode | null {
   const idx = rel.lastIndexOf('/');

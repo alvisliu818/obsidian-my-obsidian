@@ -9,6 +9,17 @@ const RELEASES_URL = `https://github.com/${REPO}/releases`;
 const LAST_CHECK_KEY = "worklife-update-last-check";
 const LAST_NOTIFIED_KEY = "worklife-update-notified";
 
+/**
+ * 合并版（obsidian-my-obsidian 的 momentum 模块）禁用自更新。
+ *
+ * 本模块在聚合插件里没有独立插件目录：updatePluginNow 的 findPluginDir 按
+ * manifest.id 找到的是宿主（obsidian-my-obsidian）的插件目录，「Update now」
+ * 会把上游单插件的 main.js 整个写进聚合插件——灾难性覆盖。启动弹窗、设置页
+ * 检查按钮、TaskPanel 更新按钮三处都经 fetchLatestRelease，此处返回 null 即
+ * 全部静默（各调用点都有 !latest 守卫）。版本升级走聚合仓自身。
+ */
+const SELF_UPDATE_DISABLED = true;
+
 /** Shared UI state: version of available update, or null when up to date. */
 export const pluginUpdateInfo = writable<{ version: string | null }>({ version: null });
 
@@ -47,6 +58,7 @@ export function compareVersions(a: string, b: string): number {
 }
 
 export async function fetchLatestRelease(): Promise<LatestRelease | null> {
+  if (SELF_UPDATE_DISABLED) return null;
   const resp = await requestUrl({
     url: `https://api.github.com/repos/${REPO}/releases/latest`,
     method: "GET",
