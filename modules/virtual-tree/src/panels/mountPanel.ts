@@ -1175,13 +1175,6 @@ export class MountPanelView extends ItemView {
       return;
     }
     const leaf = this.plugin.settings.externalSplitView ? 'split' : 'tab';
-    // 已有原生 md 叶子显示同一文件 → 直接聚焦复用（重复点击不叠分栏，
-    // logseq 点路径同款）；否则按 split 设置在活动叶子旁开新面板。
-    const existing = this.findNativeLeafFor(af.path);
-    if (existing) {
-      this.app.workspace.setActiveLeaf(existing, { focus: true });
-      return;
-    }
     const logseq = this.hostModule('logseq') as
       | {
           openVaultMarkdownDefault?: (
@@ -1210,17 +1203,6 @@ export class MountPanelView extends ItemView {
       | { moduleInstance?: (mid: string) => unknown }
       | undefined;
     return host?.moduleInstance?.(id);
-  }
-
-  /** 已显示同一文件的原生 markdown 叶子（有则聚焦复用，不重复开面板）。 */
-  private findNativeLeafFor(path: string): WorkspaceLeaf | null {
-    const key = path.toLowerCase();
-    for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
-      const v = leaf.view as { file?: { path?: string } } | null;
-      const p = v?.file?.path;
-      if (p && p.toLowerCase() === key) return leaf;
-    }
-    return null;
   }
 
   /**

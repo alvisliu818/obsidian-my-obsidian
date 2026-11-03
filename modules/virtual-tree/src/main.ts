@@ -605,15 +605,6 @@ export default class DocTreePlugin extends Plugin {
       new Notice('无法打开：文件不存在，或此版本不支持库外文件。');
       return false;
     }
-    // 同一库外文件已有原生叶子 → 聚焦复用（重复点击不叠分栏）。
-    const existKey = key.toLowerCase();
-    for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
-      const v = leaf.view as { file?: { path?: string } } | null;
-      if (v?.file?.path?.toLowerCase() === existKey) {
-        this.app.workspace.setActiveLeaf(leaf, { focus: true });
-        return true;
-      }
-    }
     const leaf = this.app.workspace.getLeaf(this.settings.externalSplitView === true ? 'split' : 'tab');
     await leaf.openFile(af);
     this.app.workspace.setActiveLeaf(leaf, { focus: true });

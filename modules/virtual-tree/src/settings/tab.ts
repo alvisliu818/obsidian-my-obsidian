@@ -213,12 +213,10 @@ export class DocTreeSettingTab extends PluginSettingTab {
     mountActions.addButton((b) => b.setButtonText('重新扫描').onClick(() => this.plugin.refreshMounts()));
 
     new Setting(containerEl)
-      .setName('文件分栏打开（同级面板）')
+      .setName('库外文件分栏打开')
       .setDesc(
-        '默认开启：点虚拟文档树里的文件（原生编辑器打开，库内/库外一致）在活动' +
-          '标签旁展开同级面板，不顶掉当前标签（跟 logseq 编辑器点路径一样）；' +
-          '同一文件已打开时聚焦复用，不叠分栏。' +
-          '关闭则直接用当前标签页打开——窗口更整洁，' +
+        '在侧边分栏中打开库外文件，不替换当前标签页。' +
+          '关闭则直接用当前标签页打开（默认）——窗口更整洁，' +
           '但若该标签页正显示着别的笔记，会被替换掉。',
       )
       .addToggle((t) =>
