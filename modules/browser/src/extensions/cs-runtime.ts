@@ -93,10 +93,13 @@ function renderClipTemplate(_t: string, d: Record<string, any>): string { return
 function getDefaultClipMarkdown(_p: any, md: string): string { return String(md || ""); }
 function formatClipExcerpt(x: string): string { return String(x || ""); }
 import { CS_WORLD_PREFIX, cdpHttpLikelyDead, evalInSwBrowserFlat, evalInSwFlat, evalInSwFlatCached, findSwFlatSession, findSwTarget, FlatCommandSender, SW_FLAT_UNAVAILABLE } from "./sw-bridge";
+import { sessionFromPartition } from "../utils/electron";
 
 const BRIDGE_NAME = "__obExtHost";
 /** popup/options 页专属世界前缀（独立于 content 世界，避免顶层声明冲突） */
 const POPUP_WORLD_PREFIX = "__obCsPop_";
+/** GM_xmlhttpRequest 走的分区（与浏览器页签同源 Cookie/代理） */
+const GMXHR_PARTITION = "persist:obsidian-browser";
 /** Clip 自定义剪藏模板缓存（模块级：manager（seed 预读）与 CsPageSession（剪藏直用）共享） */
 const clipTemplateCache = new Map<string, string>();
 
@@ -144,6 +147,13 @@ export function ensureCsRuntime(webview: IWebviewTag): void {
     manager?.ensure(webview).catch((e) => {
         console.warn("[browser-plugin] cs-runtime ensure failed:", e);
     });
+}
+
+/** 确保某扩展在该 webview 的隔离世界就绪（userScripts 注入入口，带重试由调用方做） */
+export async function ensureExtensionWorld(webview: IWebviewTag, ext: ICsExtInfo): Promise<void> {
+    if (!manager) throw new Error("cs-runtime not initialized");
+    const s = await manager.sessionFor(webview);
+    await s.ensureWorld(ext);
 }
 
 export function disposeCsRuntime(webview: IWebviewTag): void {
@@ -277,7 +287,7 @@ class CsRuntimeManager {
         }
     }
 
-    private async sessionFor(webview: IWebviewTag): Promise<CsPageSession> {
+    async sessionFor(webview: IWebviewTag): Promise<CsPageSession> {
         const pageUrl = safeUrl(webview);
         const wc = remoteWebContents(webview);
         if (!wc) throw new Error("webContents 不可用");
@@ -699,6 +709,37 @@ class CsPageSession {
         }
     }
 
+    /**
+     * 确保某扩展的隔离世界存在（无静态 content script 的扩展也建 —— 油猴类
+     * 扩展的 userScripts 注入全靠它，userscriptInjector 注入前调用）。
+     */
+    async ensureWorld(ext: ICsExtInfo): Promise<number> {
+        let ctxId = this.contentWorlds.get(ext.electronId);
+        if (ctxId) return ctxId;
+        const r: any = await this.send("Page.createIsolatedWorld", {
+            frameId: this.frameId,
+            worldName: CS_WORLD_PREFIX + ext.electronId,
+            grantUniversalAccess: true,
+            allowCommandLineAPI: false,
+        });
+        ctxId = r?.executionContextId;
+        if (!ctxId) throw new Error("createIsolatedWorld 未返回 contextId");
+        this.contentWorlds.set(ext.electronId, ctxId);
+        await this.send("Runtime.addBinding", { name: BRIDGE_NAME, executionContextId: ctxId });
+        const shim = buildShim(ext, this.host.messages(ext.path, ext.defaultLocale));
+        const sr: any = await this.send("Runtime.evaluate", {
+            expression: shim,
+            contextId: ctxId,
+            returnByValue: false,
+        });
+        if (sr?.exceptionDetails) {
+            throw new Error(
+                "垫片执行异常: " + String(sr.exceptionDetails?.exception?.description || sr.exceptionDetails?.text).slice(0, 200)
+            );
+        }
+        return ctxId;
+    }
+
     private async installExt(ext: ICsExtInfo): Promise<void> {
         if (this.contentWorlds.has(ext.electronId) && this.ran.has(ext.electronId)) return;
         // 全量接管：原生 manifest 的 content_scripts 已被 neutralizeNativeContentScripts
@@ -710,30 +751,7 @@ class CsPageSession {
         );
         if (groups.length === 0) return;
 
-        let ctxId = this.contentWorlds.get(ext.electronId);
-        if (!ctxId) {
-            const r: any = await this.send("Page.createIsolatedWorld", {
-                frameId: this.frameId,
-                worldName: CS_WORLD_PREFIX + ext.electronId,
-                grantUniversalAccess: true,
-                allowCommandLineAPI: false,
-            });
-            ctxId = r?.executionContextId;
-            if (!ctxId) throw new Error("createIsolatedWorld 未返回 contextId");
-            this.contentWorlds.set(ext.electronId, ctxId);
-            await this.send("Runtime.addBinding", { name: BRIDGE_NAME, executionContextId: ctxId });
-            const shim = buildShim(ext, this.host.messages(ext.path, ext.defaultLocale));
-            const sr: any = await this.send("Runtime.evaluate", {
-                expression: shim,
-                contextId: ctxId,
-                returnByValue: false,
-            });
-            if (sr?.exceptionDetails) {
-                throw new Error(
-                    "垫片执行异常: " + String(sr.exceptionDetails?.exception?.description || sr.exceptionDetails?.text).slice(0, 200)
-                );
-            }
-        }
+        const ctxId = await this.ensureWorld(ext);
         if (this.ran.has(ext.electronId)) return;
         // CSS 注入：原生注入渠道已移除，manifest 声明的 css 由这里补上
         //（style 标签进文档，世界与页面共享 DOM；同文档只注一次，随 ran 守卫幂等）
@@ -917,6 +935,37 @@ class CsPageSession {
             const body = args.body === undefined || args.body === null ? undefined : String(args.body);
             const r = await this.kernelFetchNode(url, method, headers, body);
             return { data: r };
+        }
+        if (req.type === "gmxhr") {
+            // GM_xmlhttpRequest 的网络通道（userscriptInjector 的 GM 前奏经此路由）：
+            // 走分区 session.fetch —— 与浏览器页签共享 Cookie/代理，无 CORS 限制
+            //（源侧同款；30s 超时）。cookie/origin/referer 头已在注入侧剥掉。
+            const gUrl = String(args.url || "");
+            const gMethod = String(args.method || "GET").toUpperCase();
+            const gHeaders = (args.headers && typeof args.headers === "object") ? args.headers : {};
+            const gData = args.data === undefined || args.data === null ? undefined : String(args.data);
+            try {
+                const ses = sessionFromPartition(GMXHR_PARTITION);
+                if (!ses?.fetch) throw new Error("session.fetch unavailable");
+                const ctrl = new AbortController();
+                const timer = setTimeout(() => ctrl.abort(), 30_000);
+                try {
+                    const res = await ses.fetch(gUrl, {
+                        method: gMethod,
+                        headers: gHeaders,
+                        body: gMethod === "GET" || gMethod === "HEAD" ? undefined : gData,
+                        signal: ctrl.signal,
+                    });
+                    const body = await res.text();
+                    const hs: string[] = [];
+                    res.headers?.forEach?.((v: string, k: string) => hs.push(`${k}: ${v}`));
+                    return { data: { status: res.status, body, headers: hs.join("\r\n"), finalUrl: res.url || gUrl } };
+                } finally {
+                    clearTimeout(timer);
+                }
+            } catch (e: any) {
+                return { err: String(e?.message || e) };
+            }
         }
         if (req.type === "bigmsg-chunk") {
             // 大消息分块接收：binding 通道挂大 payload，CS 侧把大 JSON 切 <400KB 块

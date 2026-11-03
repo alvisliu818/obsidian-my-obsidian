@@ -22,10 +22,10 @@ export interface WebRequestPipelineOpts {
 	getSettings: () => BrowserSettings;
 	/** 当前活动页签的 URL（Referer 兜底用；空串则退化为目标 origin）。 */
 	activeTabUrl: () => string;
-	/** 扩展 webRequest 阻塞桥（B2 接线；缺省跳过）。 */
-	dispatchExtBridge?: (url: string, resourceType: string, details: unknown) => boolean | Promise<boolean>;
-	/** .user.js 导航拦截（B2 接线；缺省不处理，直接放行）。 */
-	onUserJsNavigation?: (url: string, resourceType: string, details: unknown) => boolean;
+	/** 扩展 webRequest 阻塞桥（userJsInstall.ts 的 maybeDispatchWr）。 */
+	extBridge?: { maybeDispatch(url: string, rtDnr: string | null, details: any, cb: (r: any) => void): boolean };
+	/** .user.js mainFrame 导航（userJsInstall.ts 的 onUserJsNavigation；管线先 cb cancel）。 */
+	onUserJs?: (url: string, resourceType: string) => void;
 }
 
 export interface WebRequestPipeline {
@@ -43,14 +43,15 @@ export function bindWebRequestPipeline(session: any, opts: WebRequestPipelineOpt
 			const rt = String(details?.resourceType || "");
 			const rtDnr = RT_MAP[rt] || rt || null;
 			if (/\.user\.js(?:[?#]|$)/i.test(url) && rt === "mainFrame" && !/script_installation\.php/i.test(url)) {
-				if (opts.onUserJsNavigation?.(url, rt, details)) {
+				// .user.js 导航：管线先 cancel，安装链接管（合成下载事件 + 回落弹窗）
+				if (opts.onUserJs) {
 					cb({ cancel: true });
+					opts.onUserJs(url, rt);
 					return;
 				}
 			}
-			if (opts.dispatchExtBridge && opts.dispatchExtBridge(url, rtDnr ?? "", details) === true) {
-				cb({ cancel: true });
-				return;
+			if (opts.extBridge?.maybeDispatch(url, rtDnr ?? "", details, cb)) {
+				return; // cb 由阻塞桥派发路径回调
 			}
 			const s = opts.getSettings();
 			if (s.adBlockEnabled && dnrBlocker.shouldBlock(url, rt, details?.referrer || "")) {

@@ -23,6 +23,8 @@ import { BrowserTab } from "./browser/BrowserTab";
 import type { BrowserContext } from "./browser/context";
 import { clipPage } from "./browser/excerpt";
 import { bindWebRequestPipeline } from "./browser/webRequestPipeline";
+import { UserJsChain } from "./browser/userJsInstall";
+import { evalInSwBridge } from "./extensions/cs-runtime";
 import { applyProxyToSession } from "./browser/proxy";
 import { dnrBlocker } from "./browser/dnrEngine";
 import { bindSessionDownloads } from "./browser/downloads";
@@ -30,6 +32,7 @@ import { ExtensionHost } from "./extensions/extensionHost";
 import { buildEdgeStoreHelperScript, isEdgeAddonsSiteUrl } from "./extensions/edgeStoreHelper";
 import { EDGE_ADDONS_HOME } from "./extensions/edgeStore";
 import { setClipBridge } from "./extensions/cs-runtime";
+import { UserscriptInjector } from "./extensions/userscriptInjector";
 import { htmlToMarkdown } from "./utils/markdown";
 import { PopupLayer } from "./extensions/popup";
 import { BrowserSettingTab } from "./settings/SettingsTab";
@@ -43,6 +46,8 @@ export default class BrowserPlugin extends Plugin {
   private history!: HistoryStore;
   private downloads!: DownloadsStore;
   private extHost!: ExtensionHost;
+  private usInjector = new UserscriptInjector();
+  private usChain!: UserJsChain;
   private popupLayer: PopupLayer | null = null;
   private ctx!: BrowserContext;
 
@@ -92,9 +97,39 @@ export default class BrowserPlugin extends Plugin {
       },
     });
 
+    // .user.js 安装链 + webRequest 阻塞桥 + webNavigation 合成
+    this.usChain = new UserJsChain({
+      listExts: () =>
+        this.store.data.extensions
+          .filter((r) => r.enabled && r.electronId)
+          .map((r) => ({ electronId: r.electronId!, name: r.name, native: true })),
+      getRegistry: () => this.usInjector.registry(),
+      evalInSw: (eid, expr) => evalInSwBridge({ electronId: eid } as any, expr),
+      openUrl: (u) => void this.openUrl(u, true),
+      activeUrl: () => this.activeTab()?.url ?? "",
+    });
+
+    // 油猴类扩展的 userScripts 注入（宿主侧对账 + GM 前奏），扩展清单由 extHost 提供
+    this.usInjector.setNativeIdProvider(() =>
+      this.store.data.extensions
+        .filter((r) => r.enabled && r.electronId)
+        .map((r) => ({
+          electronId: r.electronId!,
+          path: this.extHost.dirOfPublic(r),
+          name: r.name,
+          version: r.version,
+          defaultLocale: (r as any).defaultLocale ?? "",
+          contentScripts: r.contentScripts ?? [],
+        })),
+    );
+
     // 插件重启后 session 里的原生扩展已失效，需重新加载以拿回 electronId，
     // 否则 cs-runtime / sw-bridge 拿不到 SW，退回自研注入式。
-    void this.extHost.syncNativeOnStartup().then(() => this.wakeDnrEngine());
+    void this.extHost.syncNativeOnStartup().then(() => {
+      this.wakeDnrEngine();
+      // SW 就绪后拉一轮 webRequest filter 快照（阻塞桥冷启动）
+      void this.usChain.refreshWrBridge(true);
+    });
 
     await this.writePreloads();
     this.ctx = this.buildContext();
@@ -177,6 +212,10 @@ export default class BrowserPlugin extends Plugin {
         if (cur) this.lastActiveTabUrl = cur;
         return this.lastActiveTabUrl;
       },
+      extBridge: {
+        maybeDispatch: (url, rtDnr, details, cb) => this.usChain.maybeDispatchWr(url, rtDnr, details, cb),
+      },
+      onUserJs: (url) => this.usChain.onUserJsNavigation(url, "mainFrame"),
     });
     this.pipelinePartition = partition;
     this.unbindPipeline = () => pipeline.unbind();
@@ -235,6 +274,8 @@ export default class BrowserPlugin extends Plugin {
         // 关键：为已原生加载（有 electronId）的扩展创建 isolated world，
         // 让 content script 拿到真实 chrome.* 绑定 —— 不做这步 cs-runtime 等于没接。
         this.extHost.ensureCsRuntime(webview);
+        // chrome.userScripts 适配层：命中 URL 的已注册用户脚本注入扩展世界
+        if (this.config.extensionsEnabled) void this.usInjector.injectForPage(webview, url);
         void this.extHost.injectDocumentEnd(webview as never, url);
         // chrome-extension:// 整页（popup/options 直开为页签）需要扩展专属世界垫片，
         // 否则页面脚本在受限主世界 sendMessage/storage 全失败（AdGuard 永远 loading）。
@@ -349,6 +390,8 @@ export default class BrowserPlugin extends Plugin {
   }
 
   private onTabChanged(tab: BrowserTab): void {
+    // webNavigation.onCommitted 合成派发（TM 的 .user.js 安装检测依赖导航事件流）
+    if (/^https?:\/\//i.test(tab.url)) void this.usChain.emitWebNavCommitted(tab.url);
     for (const leaf of this.browserLeaves()) {
       const view = leaf.view as BrowserView;
       if (view?.tabs?.includes(tab)) {
