@@ -64,11 +64,17 @@ export class MarketStore {
 		return this.data.reviews[pluginId];
 	}
 
-	setRating(pluginId: string, rating: number | undefined): void {
-		const rec = { ...this.data.reviews[pluginId] };
-		if (rating === undefined) delete rec.rating;
-		else rec.rating = Math.max(1, Math.min(5, Math.round(rating)));
-		if (!rec.rating && !rec.tags?.length) delete this.data.reviews[pluginId];
+	/** 备注上限（防 data.json 膨胀；超长截断）。 */
+	static readonly NOTE_MAX = 2000;
+
+	setNote(pluginId: string, note: string | undefined): void {
+		const rec = { ...this.data.reviews[pluginId] } as PluginReview & { rating?: number };
+		const text = (note ?? '').replace(/\r\n/g, '\n').trim().slice(0, MarketStore.NOTE_MAX);
+		if (text) rec.note = text;
+		else delete rec.note;
+		// 星级字段已废弃（v1 遗留），写入时顺手清掉
+		delete rec.rating;
+		if (!rec.note && !rec.tags?.length) delete this.data.reviews[pluginId];
 		else {
 			rec.updatedAt = Date.now();
 			this.data.reviews[pluginId] = rec;
@@ -96,7 +102,7 @@ export class MarketStore {
 		const tags = rec.tags.filter((t) => t !== tag);
 		if (tags.length) rec.tags = tags;
 		else delete rec.tags;
-		if (!rec.tags?.length && !rec.rating) delete this.data.reviews[pluginId];
+		if (!rec.tags?.length && !rec.note) delete this.data.reviews[pluginId];
 		else this.data.reviews[pluginId] = rec;
 		this.allTagsCache = null;
 		// 当前筛选的标签被删光时连筛选一起撤

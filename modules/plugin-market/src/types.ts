@@ -6,11 +6,11 @@
  * id 反查靠目录缓存（community-catalog.json，与 data.json 分文件防膨胀）。
  */
 
-/** 单个插件的评价 + 标签。 */
+/** 单个插件的备注 + 标签（2026-11-04 用户定稿：评价是文字备注，不是星级）。 */
 export interface PluginReview {
-	/** 1-5 星；缺省 = 未评分 */
-	rating?: number;
-	/** 标签（小写保序去重在写入侧做，UI 不改大小写） */
+	/** 文字备注；空 = 无 */
+	note?: string;
+	/** 标签（保序去重在写入侧做，UI 不改大小写） */
 	tags?: string[];
 	updatedAt?: number;
 }

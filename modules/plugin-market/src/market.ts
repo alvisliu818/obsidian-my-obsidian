@@ -43,17 +43,16 @@ const STYLE_CSS = `
 }
 .lgp-mkt-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .lgp-mkt-label { color: var(--text-muted); font-size: var(--font-ui-small); flex: 0 0 auto; }
-.lgp-mkt-star {
-  cursor: pointer; border: none; background: none; padding: 0 2px;
-  color: var(--text-faint); font-size: 18px; line-height: 1;
+.lgp-mkt-note-row { align-items: flex-start; }
+.lgp-mkt-note-wrap { flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lgp-mkt-note {
+  width: 100%; min-height: 44px; resize: vertical;
+  background: var(--background-primary); color: var(--text-normal);
+  border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s, 4px);
+  padding: 4px 8px; font-size: var(--font-ui-smaller); line-height: 1.4;
 }
-.lgp-mkt-star.is-on { color: var(--color-accent); }
-.lgp-mkt-star:hover { color: var(--color-accent-hover, var(--color-accent)); }
-.lgp-mkt-clear {
-  cursor: pointer; border: none; background: none; color: var(--text-faint);
-  font-size: var(--font-ui-small); padding: 0 4px;
-}
-.lgp-mkt-clear:hover { color: var(--text-normal); }
+.lgp-mkt-note:focus { border-color: var(--color-accent); outline: none; }
+.lgp-mkt-badge-note { color: var(--text-muted); }
 .lgp-mkt-chip {
   display: inline-flex; align-items: center; gap: 4px;
   border: 1px solid var(--background-modifier-border);
@@ -181,31 +180,26 @@ function renderDetailBlock(block: HTMLElement, id: string | null, ctx: EnhanceCt
 	}
 	const rec = ctx.store.reviewOf(id);
 
-	// —— 评分行 ——
-	const rateRow = block.createDiv({ cls: 'lgp-mkt-row' });
-	rateRow.createSpan({ cls: 'lgp-mkt-label', text: '评分' });
-	for (let i = 1; i <= 5; i++) {
-		const star = doc.createElement('button');
-		star.className = 'lgp-mkt-star' + (rec?.rating && i <= rec.rating ? ' is-on' : '');
-		star.textContent = '★';
-		star.title = `${i} 星`;
-		star.addEventListener('click', () => {
-			// 点当前星级 = 取消评分
-			ctx.store.setRating(id, rec?.rating === i ? undefined : i);
-			renderDetailBlock(block, id, ctx);
+	// —— 备注行（文字评价，输入即自动保存；重建块会重画标签行，textarea 不重建）——
+	const noteRow = block.createDiv({ cls: 'lgp-mkt-row lgp-mkt-note-row' });
+	noteRow.createSpan({ cls: 'lgp-mkt-label', text: '备注' });
+	const noteWrap = noteRow.createDiv({ cls: 'lgp-mkt-note-wrap' });
+	const note = doc.createElement('textarea');
+	note.className = 'lgp-mkt-note';
+	note.placeholder = '写点备注…（输入自动保存）';
+	note.rows = 2;
+	note.value = rec?.note ?? '';
+	let noteTimer = 0;
+	note.addEventListener('input', () => {
+		if (noteTimer) window.clearTimeout(noteTimer);
+		noteTimer = window.setTimeout(() => {
+			noteTimer = 0;
+			// 只落数据，不重建块——重建会打断正在输入的光标
+			ctx.store.setNote(id, (note as HTMLTextAreaElement).value);
 			refreshAround(block, ctx);
-		});
-		rateRow.appendChild(star);
-	}
-	if (rec?.rating) {
-		const clear = rateRow.createSpan({ cls: 'lgp-mkt-clear', text: '清除' });
-		clear.title = '取消评分';
-		clear.addEventListener('click', () => {
-			ctx.store.setRating(id, undefined);
-			renderDetailBlock(block, id, ctx);
-			refreshAround(block, ctx);
-		});
-	}
+		}, 600);
+	});
+	noteWrap.appendChild(note);
 
 	// —— 标签行 ——
 	const tagRow = block.createDiv({ cls: 'lgp-mkt-row' });
@@ -305,14 +299,14 @@ function applyFilter(modal: HTMLElement, ctx: EnhanceCtx): void {
 		card.style.display = match ? '' : 'none';
 		// 徽标（有评价或标签才画；先清旧的防重复/防陈旧）
 		card.querySelector('.lgp-mkt-badge')?.remove();
-		if (review && (review.rating || review.tags?.length)) {
+		if (review && (review.note || review.tags?.length)) {
 			const badge = doc.createElement('div');
 			badge.className = 'lgp-mkt-badge';
-			if (review.rating) {
-				const s = doc.createElement('span');
-				s.className = 'lgp-mkt-badge-star';
-				s.textContent = `★ ${review.rating}`;
-				badge.appendChild(s);
+			if (review.note) {
+				const n = doc.createElement('span');
+				n.className = 'lgp-mkt-badge-note';
+				n.textContent = `📝 ${review.note.replace(/\s+/g, ' ').slice(0, 24)}${review.note.length > 24 ? '…' : ''}`;
+				badge.appendChild(n);
 			}
 			for (const t of (review.tags ?? []).slice(0, 3)) {
 				const c = doc.createElement('span');
