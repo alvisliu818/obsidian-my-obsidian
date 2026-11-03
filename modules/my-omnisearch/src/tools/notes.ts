@@ -8,6 +8,7 @@ import {
 import OmnisearchPlugin from '../main'
 import type { ResultNote } from '../globals'
 import { absFromExternalDocPath, isExternalDocPath } from './externalDocs'
+import { resolveHostModule } from '../host-module'
 
 /**
  * Extracts the PDF page number from content based on the offset, looking for page markers in format: `^# Page N^page=N$`
@@ -43,7 +44,7 @@ export async function openNote(
   // 代码编辑器、其余按它自己的路由。软依赖：logseq 不在时回退系统默认应用。
   if (isExternalDocPath(item.path)) {
     const abs = absFromExternalDocPath(item.path)
-    const lg = (app as any).plugins?.plugins?.['my-obsidian-logseq']
+    const lg = resolveHostModule(app, 'logseq', 'my-obsidian-logseq')
     const hit = lg?.resolveExternalMount?.(abs) ?? null
     if (hit && typeof lg.openExternalEntry === 'function') {
       const name = abs.split('/').pop() ?? abs

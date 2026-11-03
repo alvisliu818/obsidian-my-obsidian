@@ -29,23 +29,7 @@ export interface MyObsidianSettings {
 export interface ModuleDescriptor {
 	/** Our own id (the key in settings.modules). */
 	id: string;
-	/**
-	 * The id this module answers to in the app's plugin table (its own
-	 * my- 前缀 id；2026-10-30 起不再占用上游插件 id)。
-	 *
-	 * Two modules reach for each other through `app.plugins.plugins[...]`:
-	 * jupyter reads logseq's `pythonEnvs`, breadcrumb reads logseq's mount
-	 * list. Keeping that id alive as an alias means those lookups — and any
-	 * other plugin that integrated with the my- id — keep working untouched.
-	 */
-	legacyId?: string;
-	/**
-	 * Extra ids to keep alive (modules merged from SEVERAL upstream
-	 * plugins, e.g. audio-player = my-media-marker + my-audio-timestamp-player +
-	 * my-timestamp-player). Takes precedence over `legacyId` when present.
-	 */
-	legacyIds?: string[];
-	/** Shown as this module's settings-tab name. */
+	/** Shown as this module's settings-section name. */
 	name: string;
 	summary: string;
 	/** Desktop-only modules are refused when Obsidian has no Node/electron. */
@@ -54,14 +38,11 @@ export interface ModuleDescriptor {
 	 * Per-module manifest overrides, merged over the host's manifest before
 	 * the copy is handed to the instance.
 	 *
-	 * Mostly identity fields (`id` / `version`) for modules that take part in
-	 * mnaoumov-style cross-plugin API negotiation: `publishPluginApi` registers
-	 * under `plugin.manifest.id`, and version gates read
-	 * `app.plugins.plugins[id].manifest.version` — `id` must be the SAME my-
-	 * 前缀 string on both sides of a co-bundled provider/consumer pair, while
-	 * `version` stays the upstream value (the gates compare against it).
-	 * `dir` must never be overridden (sidecar paths land in the real plugin
-	 * folder); `name` is always taken from the descriptor.
+	 * 单一插件 id 策略下只允许 `version` 这类语义字段：一些模块的内部逻辑
+	 * 读 `manifest.version` 做版本门禁/迁移（vault-explorer 的迁移链、
+	 * terminal 的版本显示），须保持上游值；宿主自己的 0.1.0 会把它们带偏。
+	 * `id` 覆盖已随插件表别名机制移除（2026-11-03）；`dir` 永远不许覆盖
+	 * （sidecar 路径落在真插件目录）；`name` 总是取自 descriptor。
 	 */
 	manifest?: Partial<PluginManifest>;
 	/**
@@ -102,6 +83,7 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 		descriptors: ModuleDescriptor[];
 		save(): Promise<void>;
 		reload(id: string): Promise<void>;
+		capturedTabs: Map<string, unknown>;
 	};
 
 	constructor(
@@ -112,6 +94,8 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 			descriptors: ModuleDescriptor[];
 			save(): Promise<void>;
 			reload(id: string): Promise<void>;
+			/** 模块自己的设置页（addSettingTab 截获物），键 = 模块 id。 */
+			capturedTabs: Map<string, unknown>;
 		},
 	) {
 		super(app, plugin as never);
@@ -123,7 +107,7 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		containerEl.createEl("h2", { text: "My Obsidian" });
 		containerEl.createEl("p", {
-			text: "一个插件里装着几个自用功能。关掉的功能在下次启动前不会占用任何资源；改动后需要重启 Obsidian 才能卸载已经载入的模块。",
+			text: "一个插件、一个 id。每个功能一把大开关：关掉的功能在下次启动前不会占用任何资源；开启即时生效，关闭需重启 Obsidian 才能卸载已载入的模块。带设置的模块在开关下方直接展开。",
 			cls: "setting-item-description",
 		});
 
@@ -143,15 +127,62 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 						else new Notice(`「${m.name}」已关闭，重启 Obsidian 后生效`);
 					}),
 				);
+
+			// 内嵌模块设置：模块 onload 里 addSettingTab 的截获物。展开时把它的
+			// containerEl 挂进 details 并调 display()（PluginSettingTab 渲染进
+			// 自带容器，搬 DOM 节点即可）；收起时调 hide() 让它落盘/清定时器。
+			const tab = this.host.capturedTabs.get(m.id) as
+				| {
+						containerEl: HTMLElement;
+						display(): void;
+						hide?(): void;
+				  }
+				| undefined;
+			if (!tab) continue;
+			const details = containerEl.createEl("details", {
+				cls: "my-module-settings",
+			});
+			details.createEl("summary", { text: `${m.name} 设置` });
+			const holder = details.createDiv({ cls: "my-module-settings-holder" });
+			let rendered = false;
+			details.addEventListener("toggle", () => {
+				if (details.open && !rendered) {
+					holder.appendChild(tab.containerEl);
+					tab.containerEl.addClass("my-embedded-setting-tab");
+					tab.display();
+					rendered = true;
+				} else if (!details.open) {
+					tab.hide?.();
+				}
+			});
 		}
 
-		// 模块名清单由 descriptors 动态生成:硬编码会漏(这里就曾漏掉后加的 7 个)。
-		containerEl.createEl("p", {
-			text: `每个模块自己的设置项仍然在各自原来的设置页里（${this.host.descriptors
-				.map((m) => m.name)
-				.join(" / ")}）。`,
-			cls: "setting-item-description",
-		});
+		// 内层子插件实例的设置页（addTab 垫片截获的 inner: 键）：没有对应的
+		// descriptor 行，统一挂在末尾的「其他」区。
+		for (const [key, tab] of this.host.capturedTabs) {
+			if (!key.startsWith("inner:")) continue;
+			const t = tab as {
+				containerEl: HTMLElement;
+				display(): void;
+				hide?(): void;
+			};
+			const details = containerEl.createEl("details", {
+				cls: "my-module-settings",
+			});
+			details.createEl("summary", { text: `其他模块设置（${key.split(":")[2] ?? key}）` });
+			const holder = details.createDiv({ cls: "my-module-settings-holder" });
+			let rendered = false;
+			details.addEventListener("toggle", () => {
+				if (details.open && !rendered) {
+					holder.appendChild(t.containerEl);
+					t.containerEl.addClass("my-embedded-setting-tab");
+					t.display();
+					rendered = true;
+				} else if (!details.open) {
+					t.hide?.();
+				}
+			});
+		}
 
 		containerEl.createEl("p", {
 			text: "这些扩展名由本插件打开（Obsidian 原本对它们没有视图，点了只会是一片空白）。带 ▶ 运行的会在运行前自动保存。改动后需要重启 Obsidian。",

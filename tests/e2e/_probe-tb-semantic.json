@@ -1,0 +1,25 @@
+{
+  "tb": {
+    "opened": true,
+    "buttons": [
+      "locate",
+      "mount",
+      "drag-mode",
+      "refresh",
+      "collapse-all",
+      "more"
+    ],
+    "moreItems": [],
+    "modalRows": 0,
+    "toggledVisible": false,
+    "persisted": null,
+    "error": ""
+  },
+  "sem": {
+    "viewOpened": true,
+    "editorAlive": true,
+    "modelUri": "file:///e%3A/HOME/Local/logseq-e2e-vault/_hl.py",
+    "error": ""
+  },
+  "registered": true
+}

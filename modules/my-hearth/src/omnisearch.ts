@@ -28,7 +28,12 @@ interface OmnisearchApi {
 /** Reach Omnisearch's public API, or null when the plugin isn't installed,
  * isn't enabled, or is too old to expose one. */
 export function getOmnisearchApi(app: App): OmnisearchApi | null {
-	const plugin = app.plugins.plugins[OMNISEARCH_PLUGIN_ID] as
+	// 单一插件 id：omnisearch 模块实例经由宿主 moduleInstance 查找，回落旧表键。
+	const host = app.plugins.plugins["obsidian-my-obsidian"] as
+		| { moduleInstance?: (id: string) => unknown }
+		| undefined;
+	const plugin = (host?.moduleInstance?.("omnisearch") ??
+		app.plugins.plugins[OMNISEARCH_PLUGIN_ID]) as
 		| { api?: unknown }
 		| undefined;
 	const api = plugin?.api;

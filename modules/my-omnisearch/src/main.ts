@@ -19,6 +19,7 @@ import {
 } from './settings'
 import type { OmnisearchSettings } from './settings/utils'
 import { isCacheEnabled } from './settings/utils'
+import { resolveHostModule } from './host-module'
 import { saveSettings } from './settings/utils'
 import { isPluginDisabled } from './settings/utils'
 import {
@@ -240,28 +241,27 @@ export default class OmnisearchPlugin extends Plugin {
   /**
    * Plugin dependency - Chs Patch for Chinese word segmentation
    *
-   * 合并环境（宿主别名 my-cm-chs-patch）优先；同库装着独立版 cm-chs-patch
-   * 时回退到它。这里的旧 id 回退是**有意的**：分词是可选软依赖（不是模块
-   * 图），2026-10-30 的「查找收敛到 my- 新 id」策略针对模块间协作面，而
-   * 依赖类查找多一路回退能让「模块关了、独立版还在」的用户少丢功能。
+   * 合并环境（宿主 moduleInstance('chs-patch')）优先；独立版 cm-chs-patch
+   * 回退（resolveHostModule 的第三层）。分词是可选软依赖（不是模块图），
+   * 「模块关了、独立版还在」的用户不丢功能。
    * @returns
    */
   public getChsSegmenter(): any | undefined {
-    const plugins = (this.app as any).plugins?.plugins
-    return plugins?.['my-cm-chs-patch'] ?? plugins?.['cm-chs-patch']
+    return resolveHostModule(this.app, 'chs-patch', 'my-cm-chs-patch', 'cm-chs-patch')
   }
 
   /**
    * Plugin dependency - Text Extractor
-   * 同上：my-text-extractor 模块优先，独立版 text-extractor 回退。
+   * 同上：宿主实例优先，独立版 text-extractor 回退。
    * @returns
    */
   public getTextExtractor(): TextExtractorApi | undefined {
-    const plugins = (this.app as any).plugins?.plugins
-    return (
-      plugins?.['my-text-extractor']?.api ??
-      plugins?.['text-extractor']?.api
-    )
+    return resolveHostModule(
+      this.app,
+      'text-extractor',
+      'my-text-extractor',
+      'text-extractor',
+    )?.api
   }
 
   /**
@@ -269,15 +269,13 @@ export default class OmnisearchPlugin extends Plugin {
    * @returns
    */
   public getAIImageAnalyzer(): AIImageAnalyzerAPI | undefined {
-    // 聚合内别名 my-ai-image-analyzer（2026-10-30 起统一新 id，不再回退上游 id）。
-    const aia = (this.app as any).plugins?.plugins
-    return aia?.['my-ai-image-analyzer']?.api
+    return resolveHostModule(this.app, 'ai-image-analyzer', 'my-ai-image-analyzer')?.api
   }
 
   /**
    * 合并新增：库外文件（虚拟文档树挂载）的索引清单。
    *
-   * 通过 logseq 模块（宿主别名 my-obsidian-logseq）的全深度扫描拿文件清单，
+   * 通过 logseq 模块（宿主 moduleInstance('logseq')）的全深度扫描拿文件清单，
    * 转成 ext: 伪路径。logseq 模块不在（未启用）时返回空——库外支持是
    * 纯增益，缺了它 omnisearch 照常工作。
    *
@@ -286,7 +284,7 @@ export default class OmnisearchPlugin extends Plugin {
    */
   private async getExternalIndexableFiles(): Promise<Array<{ path: string; mtime: number }>> {
     try {
-      const logseq = (this.app as any).plugins?.plugins?.['my-obsidian-logseq'] as
+      const logseq = resolveHostModule(this.app, 'logseq', 'my-obsidian-logseq') as
         | {
             listExternalSearchFiles?: () => Array<{ abs: string; name: string; mtime: number }>
             listExternalSearchFilesAsync?: () => Promise<Array<{ abs: string; name: string; mtime: number }>>

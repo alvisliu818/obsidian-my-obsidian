@@ -656,15 +656,22 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
       // 库外写盘绕过 vault,save-control 的 versionOnWrite(监听 vault modify)
       // 收不到——显式通知它记「写盘」版本,顺带交出写盘前基线让它补一条
       // 「写盘前」(同内容去重在那边做,通常只有该文件第一条会真正落盘)。
-      // save-control 模块在插件表里挂在它的 legacyId 下——2026-10-30 起
-      // 该 id 统一为 my-save-history（不再保留旧 id 回退键）。注意要走两层 .plugins:第一层是 Plugins 实例,插件实例
-      // 表在其 .plugins 字段上(与宿主 aliasLegacyId 的读法一致)——只走一层
-      // 会在实例上永远读到 undefined,hook 静默失效。
+      // save-control 模块实例：单一插件 id 下经宿主 moduleInstance 查找
+      // （2026-11-03 起插件表 my-* 别名已移除；保留旧键读法作回落）。
+      // 注意要走两层 .plugins:第一层是 Plugins 实例,插件实例
+      // 表在其 .plugins 字段上——只走一层会在实例上永远读到 undefined,
+      // hook 静默失效。
       const appWithTable = this.plugin.app as unknown as {
-        plugins?: { plugins?: Record<string, { onExternalSaved?: (abs: string, fileName: string, previousContent?: string | null) => void } | undefined> | undefined };
+        plugins?: { plugins?: Record<string, unknown> | undefined };
       };
       const table = appWithTable.plugins?.plugins;
-      const sc = table?.['my-save-history'];
+      const hostInst = table?.['obsidian-my-obsidian'] as
+        | { moduleInstance?: (id: string) => unknown }
+        | undefined;
+      const sc = (hostInst?.moduleInstance?.('save-control') ??
+        table?.['my-save-history']) as
+        | { onExternalSaved?: (abs: string, fileName: string, previousContent?: string | null) => void }
+        | undefined;
       sc?.onExternalSaved?.(this.externalAbs, baseOf(this.externalAbs), previousDiskData);
     } catch (e) {
       new Notice(`保存失败：${String(e).slice(0, 120)}`);

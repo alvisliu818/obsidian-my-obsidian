@@ -1,0 +1,26 @@
+{
+  "r": {
+    "viewType": "logseq-block-editor",
+    "doc": [
+      {
+        "text": "> 引用A",
+        "kind": "raw"
+      }
+    ],
+    "viewRef": true
+  },
+  "focused": {
+    "hasCM": true,
+    "len": 5
+  },
+  "after": {
+    "blocks": [
+      {
+        "text": "> 引用A\n> ",
+        "kind": "raw"
+      }
+    ],
+    "cmDoc": "> 引用A\n> ",
+    "count": 1
+  }
+}

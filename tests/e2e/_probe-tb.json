@@ -1,0 +1,25 @@
+{
+  "moreItems": [
+    "在当前目录新建文件夹",
+    "编辑工具栏…"
+  ],
+  "modal": {
+    "open": true,
+    "rows": 7,
+    "hint": true
+  },
+  "after": [
+    "locate",
+    "new-file",
+    "new-folder",
+    "mount",
+    "drag-mode",
+    "refresh",
+    "collapse-all",
+    "more"
+  ],
+  "persisted": {
+    "order": [],
+    "hidden": []
+  }
+}

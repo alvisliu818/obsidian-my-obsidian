@@ -59297,3 +59297,84 @@ body.hearth-snapshot-capturing .hearth-view:not(#hearth-boost) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ==================== Terminal (modules/my-terminal, AGPL-3.0) ==================== */
+/* -- vendor 库 obsidian-plugin-library 样式（icons/modals/obsidian/status-bar）-- */
+.obsidian-plugin-library\:icon {
+  fill: none;
+  stroke: currentColor;
+}
+.obsidian-plugin-library\:list-spacer {
+  visibility: hidden;
+}
+.obsidian-plugin-library\:await-css {
+  display: unset !important;
+}
+
+.obsidian-plugin-library\:subsettings {
+  padding-bottom: var(--size-4-4);
+}
+.obsidian-plugin-library\:hide-status-bar {
+  display: none;
+}
+/* -- 终端视图样式（emulator 已去 xterm.css 重复，根文件 4835 行段已有同版本）-- */
+
+/* Hidden off-screen probe used to resolve CSS variables into concrete colors. */
+.terminal\:color-probe {
+  height: 0;
+  pointer-events: none;
+  position: absolute;
+  visibility: hidden;
+  width: 0;
+}
+/* Utility classes for dynamic element state. */
+
+.terminal\:hidden {
+  visibility: hidden;
+}
+
+.terminal\:full-width {
+  width: 100%;
+}
+.workspace-leaf-content[data-type="terminal\:terminal"] .view-content {
+  overflow: clip;
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal\:terminal {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.is-phone
+  .workspace-leaf-content[data-type="terminal\:terminal"]
+  .view-content {
+  padding-bottom: max(
+    var(--size-4-4),
+    calc(
+      var(--icon-l) + var(--size-4-2) +
+        max(var(--size-4-2), var(--safe-area-inset-bottom))
+    )
+  );
+}
+
+/* ==================== 单一插件 id：宿主设置页内嵌模块设置 ==================== */
+.my-module-settings {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  margin: 4px 0 12px 0;
+  padding: 4px 8px;
+  background: var(--background-secondary);
+}
+.my-module-settings > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  padding: 4px 2px;
+  user-select: none;
+}
+.my-module-settings > summary:hover { color: var(--text-normal); }
+.my-embedded-setting-tab { padding: 4px 2px; }
+.my-embedded-setting-tab .setting-item { border: none; }

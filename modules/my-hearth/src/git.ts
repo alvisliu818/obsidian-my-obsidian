@@ -186,7 +186,12 @@ export interface GitPlugin {
  * it hides, since it usually means the repo is still being found on startup.
  */
 export function getGitPlugin(app: App): GitPlugin | null {
-	const plugin = app.plugins.plugins[GIT_PLUGIN_ID] as
+	// 单一插件 id：git 模块实例经由宿主 moduleInstance 查找，回落旧 my-* 表键。
+	const host = app.plugins.plugins["obsidian-my-obsidian"] as
+		| { moduleInstance?: (id: string) => unknown }
+		| undefined;
+	const plugin = (host?.moduleInstance?.("obsidian-git") ??
+		app.plugins.plugins[GIT_PLUGIN_ID]) as
 		| { gitManager?: unknown; gitReady?: unknown }
 		| undefined;
 	if (!plugin) return null;
@@ -214,7 +219,13 @@ export function isGitAvailable(app: App): boolean {
  * usable — see `renderGit`, which waits it out.
  */
 export function isGitPluginEnabled(app: App): boolean {
-	return app.plugins.plugins[GIT_PLUGIN_ID] != null;
+	const host = app.plugins.plugins["obsidian-my-obsidian"] as
+		| { moduleInstance?: (id: string) => unknown }
+		| undefined;
+	return (
+		host?.moduleInstance?.("obsidian-git") != null ||
+		app.plugins.plugins[GIT_PLUGIN_ID] != null
+	);
 }
 
 

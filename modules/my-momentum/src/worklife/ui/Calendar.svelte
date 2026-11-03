@@ -120,6 +120,94 @@
   export let onMonthChange: (monthKey: string) => void = () => {};
   export let onWeatherDayClick: (date: string) => void = () => {};
 
+  // -------------------------------------------------------------------
+  // calendar-ui 手工桥（momentum 升 Svelte 5 后唯一的互操作点）。
+  //
+  // obsidian-calendar-ui 的 Calendar 是预编译的 Svelte 3 类组件（自含 S3
+  // 运行时、无事件 API）。Svelte 5 编译的本组件若在模板里写 <CalendarBase/>，
+  // 会被编译成函数式调用，运行时炸 "Class constructor cannot be invoked
+  // without 'new'"——所以改为手工挂载：
+  //   父→子：响应式块里 calInstance.$set({...})（S3 $set 合并部分 props，
+  //     外部 $set 走 skip_bound，不会反向触发 bound 回写）。
+  //   子→父：S3 内部导航改 displayedMonth 时走 $$.bound[i] 写回——用差异化
+  //     哨兵值（+24 个月）探测 displayedMonth 在 S3 ctx 里的索引，再注册
+  //     bound 回调。
+  // -------------------------------------------------------------------
+  let calAnchor: HTMLElement;
+  let calInstance: {
+    $set: (props: Record<string, unknown>) => void;
+    $destroy: () => void;
+    $$: {
+      ctx: unknown[];
+      bound: (Record<number, (v: unknown) => void> | undefined)[];
+    };
+  } | null = null;
+
+  function mountCalendarBase(): void {
+    const sentinel = today.clone().add(24, "month");
+    const instance = new CalendarBase({
+      target: calAnchor,
+      props: {
+        displayedMonth: sentinel,
+        sources,
+        today,
+        onHoverDay,
+        onHoverWeek,
+        onContextMenuDay,
+        onContextMenuWeek,
+        onClickDay,
+        onClickWeek,
+        localeData: today.localeData(),
+        selectedId: $activeFile,
+        showWeekNums: $settings.showWeeklyNote,
+      },
+    }) as unknown as {
+      $set: (props: Record<string, unknown>) => void;
+      $destroy: () => void;
+      $$: {
+        ctx: unknown[];
+        bound: (Record<number, (v: unknown) => void> | undefined)[];
+      };
+    };
+    const ctx = instance.$$?.ctx ?? [];
+    const idx = ctx.findIndex(
+      (v) => (v as Moment)?.isSame?.(sentinel) === true,
+    );
+    if (idx >= 0 && instance.$$.bound) {
+      instance.$$.bound[idx] = (v: unknown) => {
+        displayedMonth = v as Moment;
+      };
+    }
+    instance.$set({ displayedMonth });
+    calInstance = instance;
+  }
+
+  onMount(mountCalendarBase);
+  onDestroy(() => {
+    calInstance?.$destroy();
+    calInstance = null;
+  });
+
+  // 父→子同步：任一 prop 变化都推给 S3 实例。
+  $: {
+    if (calInstance) {
+      calInstance.$set({
+        displayedMonth,
+        sources,
+        today,
+        onHoverDay,
+        onHoverWeek,
+        onContextMenuDay,
+        onContextMenuWeek,
+        onClickDay,
+        onClickWeek,
+        localeData: today.localeData(),
+        selectedId: $activeFile,
+        showWeekNums: $settings.showWeeklyNote,
+      });
+    }
+  }
+
   let lastMonthKey = "";
 
   $: {
@@ -256,20 +344,7 @@
 </script>
 
 <div bind:this={containerEl}>
-  <CalendarBase
-    {sources}
-    {today}
-    {onHoverDay}
-    {onHoverWeek}
-    {onContextMenuDay}
-    {onContextMenuWeek}
-    {onClickDay}
-    {onClickWeek}
-    bind:displayedMonth
-    localeData={today.localeData()}
-    selectedId={$activeFile}
-    showWeekNums={$settings.showWeeklyNote}
-  />
+  <div class="cal-base-anchor" bind:this={calAnchor} />
   {#if $settings.weatherEnabled !== false}
     {@const weekStart = today.clone().add(weatherWeekOffset, "weeks").startOf("week")}
     {@const weekEnd = today.clone().add(weatherWeekOffset, "weeks").endOf("week")}
