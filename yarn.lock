@@ -9835,7 +9835,7 @@ __metadata:
     obsidian: "npm:^1.14.4"
     obsidian-calendar-ui: "npm:0.3.12"
     obsidian-daily-notes-interface: "npm:0.9.5"
-    obsidian-text-extract: "file:modules/my-text-extractor/lib"
+    obsidian-text-extract: "file:modules/text-extractor/lib"
     obsidian-typings: "npm:^6.41.0"
     octagonal-wheels: "npm:0.1.56"
     ollama: "npm:^0.6.3"
@@ -9919,6 +9919,8 @@ __metadata:
       unplugged: true
     basedpyright:
       unplugged: true
+    electron:
+      unplugged: true
     jieba-wasm:
       unplugged: true
     vscode-oniguruma@2.0.1:
@@ -9930,9 +9932,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"obsidian-text-extract@file:modules/my-text-extractor/lib::locator=obsidian-my-obsidian%40workspace%3A.":
+"obsidian-text-extract@file:modules/text-extractor/lib::locator=obsidian-my-obsidian%40workspace%3A.":
   version: 0.5.0
-  resolution: "obsidian-text-extract@file:modules/my-text-extractor/lib#modules/my-text-extractor/lib::hash=a5f3e4&locator=obsidian-my-obsidian%40workspace%3A."
+  resolution: "obsidian-text-extract@file:modules/text-extractor/lib#modules/text-extractor/lib::hash=a5f3e4&locator=obsidian-my-obsidian%40workspace%3A."
   dependencies:
     "@apollo/utils.createhash": "npm:^3.0.1"
     mammoth: "npm:^1.10.0"

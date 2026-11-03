@@ -51,7 +51,7 @@ const ONIG_WASM_B64 = readFileSync(path.join(onigDir, "release", "onig.wasm")).t
 // 上游 vite.config 构建期读 jieba-wasm 包的版本与 wasm 文件算 sha256（设置
 // 页手动导入组件时的校验门）。聚合仓额外把同一份 wasm 以 base64 内嵌
 // （__JIEBA_WASM_B64__），IndexedDB 无导入时自动兜底，装上即用——见
-// modules/my-cm-chs-patch/NOTICE。jieba-wasm 在根 package.json 的
+// modules/cm-chs-patch/NOTICE。jieba-wasm 在根 package.json 的
 // dependenciesMeta 声明 unplugged（真实目录落盘），与 wa-sqlite/onig 同因：
 // 构建期要读真实文件。
 // ---------------------------------------------------------------------------
@@ -78,7 +78,7 @@ const JIEBA_WASM_B64 = readFileSync(jiebaWasmPath).toString("base64");
 // imports (a module import would run in the plugin's realm and see no
 // document). Bundled to IIFE strings at build time and inlined.
 // ---------------------------------------------------------------------------
-const BROWSER = "modules/my-browser";
+const BROWSER = "modules/browser";
 async function bundleVendorSource(entry) {
   const r = await esbuild.build({
     entryPoints: [entry],
@@ -107,10 +107,10 @@ const EXT_PRELOAD_SOURCE = await bundleVendorSource(
 // The plugin starts it via a Blob URL (workers can't be loaded from app://),
 // so like the browser scripts above it travels as source text inside the
 // bundle. Captured once at build time; editing
-// modules/my-audio-recorder/src/audio/encodingWorker.ts requires a rebuild.
+// modules/audio-recorder/src/audio/encodingWorker.ts requires a rebuild.
 // ---------------------------------------------------------------------------
 const ENCODING_WORKER_SOURCE = await bundleVendorSource(
-  "modules/my-audio-recorder/src/audio/encodingWorker.ts",
+  "modules/audio-recorder/src/audio/encodingWorker.ts",
 );
 
 // ---------------------------------------------------------------------------
@@ -195,7 +195,7 @@ const momentumSveltePlugin = esbuildSvelte({
 // ---------------------------------------------------------------------------
 // omnisearch: dexie 的 dual-package-hazard 补丁。
 //
-// 上游用 pnpm patch 打（modules/my-omnisearch/patches/dexie.patch）：去掉
+// 上游用 pnpm patch 打（modules/omnisearch/patches/dexie.patch）：去掉
 // dexie import-wrapper 里的 Symbol.for("Dexie") 全局实例检查。pnpm 的补丁
 // 格式与 patch-package 不兼容（试过），所以改为 esbuild onLoad 插件在打包
 // 时直接替换——不依赖 node_modules 的状态，构建自愈。
@@ -247,14 +247,14 @@ const unicornMagicPatchPlugin = {
 // 终端视图的 svelteState 桥就出自它）。esbuild-svelte 的默认 filter 只认
 // `\.svelte$`，罩不住 `.svelte.ts`——不编它就会落到 esbuild 默认 ts loader，
 // `$state` 直接语法错。与 momentum 插件同理：作用域 include 只罩
-// my-terminal/vendor 下的 svelte 文件，注册在根 sveltePlugin 之前。
+// terminal/vendor 下的 svelte 文件，注册在根 sveltePlugin 之前。
 // .d.svelte.ts（组件类型声明）运行时无人 import，不进 bundle 图。
 // 上游构建还用 PACKAGE_ID 定制 cssHash + inject 计时器包装；前者默认哈希
 // 无碰撞风险，后者会把全 bundle 的 setTimeout 路由到 activeWindow（影响
-// 其他模块），先都不带——见 modules/my-terminal/NOTICE.md。
+// 其他模块），先都不带——见 modules/terminal/NOTICE.md。
 // ---------------------------------------------------------------------------
 const terminalSveltePlugin = esbuildSvelte({
-  include: /my-terminal[\\/]vendor.*\.svelte(?:\.ts)?$/,
+  include: /terminal[\\/]vendor.*\.svelte(?:\.ts)?$/,
   compilerOptions: { css: "injected", dev: !prod },
   moduleCompilerOptions: { dev: !prod, generate: "client" },
   filterWarnings: (warning) => !warning.code.startsWith("a11y-"),
@@ -291,7 +291,7 @@ const terminalPyPlugin = {
 // ---------------------------------------------------------------------------
 // open-tab-settings: `glob:./locales/*.json` 聚合导入（上游 esbuild 插件原样
 // 移植）。编译期把 glob 匹配到的 JSON 各自 import 后聚成一个对象，键取文件名。
-// TS 侧由 modules/my-open-tab-settings/src/glob.d.ts 的 `declare module 'glob:*'`
+// TS 侧由 modules/open-tab-settings/src/glob.d.ts 的 `declare module 'glob:*'`
 // 兜住类型。
 // ---------------------------------------------------------------------------
 const importGlobPlugin = {
@@ -326,18 +326,18 @@ const importGlobPlugin = {
 // 摘出来打进 bundle，让 music-metadata 这类库的 require('process/')、
 // require('buffer') 在移动端（无 nodeIntegration）也能工作。聚合的 external
 // 列表是全局的，罩不到模块粒度 —— 所以用 onResolve 按 importer 路径覆盖：
-// 只对 modules/my-music-player/ 下的导入返回 npm shim 包的真实路径（进 bundle），
+// 只对 modules/music-player/ 下的导入返回 npm shim 包的真实路径（进 bundle），
 // 其余 importer 返回 undefined 走默认解析（维持 external 语义不变）。
 // ---------------------------------------------------------------------------
 const musicPlayerRequire = createRequire(
-  path.resolve("modules/my-music-player/package.json"),
+  path.resolve("modules/music-player/package.json"),
 );
 const NODE_SHIM_RE = /^(node:)?(buffer|events|process|string_decoder)$/;
 const musicPlayerShimsPlugin = {
   name: "music-player-node-shims",
   setup(build) {
     build.onResolve({ filter: NODE_SHIM_RE }, (args) => {
-      if (!args.importer.split(path.sep).join("/").startsWith("modules/my-music-player/"))
+      if (!args.importer.split(path.sep).join("/").startsWith("modules/music-player/"))
         return undefined;
       try {
         return { path: musicPlayerRequire.resolve(args.path.replace(/^node:/, "")) };
@@ -357,7 +357,7 @@ const musicPlayerShimsPlugin = {
 //    替换为 arktype 的 `.instanceOf(HTMLElement)`，不套用会运行时报错。
 //    上游 filter 用正斜杠，Windows 路径是反斜杠，此处两种都匹配。
 // ③ NODE_ENV 作用域替换 —— 上游用 define，但聚合的 define 是全局的，会连带
-//    改 omnisearch 等模块的运行时分支；改为只对 modules/my-media-extended/ 下
+//    改 omnisearch 等模块的运行时分支；改为只对 modules/media-extended/ 下
 //    （含其 node_modules 里的 react/vidstack）文件做文本替换。
 // ---------------------------------------------------------------------------
 const mxInlinePlugin = {
@@ -418,7 +418,7 @@ const mxNodeEnvPlugin = {
 // ---------------------------------------------------------------------------
 // cm-chs-patch: jieba wasm 胶水的补丁移植。
 //
-// 上游 pnpm patch（modules/my-cm-chs-patch/patches/jieba-wasm@2.4.0.patch）：
+// 上游 pnpm patch（modules/cm-chs-patch/patches/jieba-wasm@2.4.0.patch）：
 // 去掉胶水里 `module_or_path = new URL('jieba_rs_wasm_bg.wasm',
 // import.meta.url)` 的隐式兜底，防打包器把 wasm 当 URL 资产处理。我们的调用
 // 永远显式传二进制（initJieba），改为 esbuild onLoad 文本替换——与 dexie
@@ -458,13 +458,13 @@ const inlineImportPlugin = {
 	setup(build) {
 		// `inline:` 前缀已被 media-extended 的 mx-inline-code 占用（webview 脚本）。
 		// onResolve 按注册顺序先到先得（esbuild 文档），所以本插件注册在 mx-inline
-		// 之前，并按 importer 路径限定作用域：只有 my-code-link 下的 `inline:` 归
+		// 之前，并按 importer 路径限定作用域：只有 code-link 下的 `inline:` 归
 		// 这里，其余返回 undefined 交回流程，由后注册的 mx-inline 接住。
 		// 注意 args.importer 是绝对路径（Windows 反斜杠）——归一化后按
-		// /modules/my-code-link/ 中段匹配，相对/绝对布局都罩得住。
+		// /modules/code-link/ 中段匹配，相对/绝对布局都罩得住。
 		build.onResolve({ filter: /^inline:/ }, (args) => {
 			const importer = args.importer.split(path.sep).join("/");
-			if (!importer.includes("/modules/my-code-link/")) return undefined;
+			if (!importer.includes("/modules/code-link/")) return undefined;
 			return {
 				path: path.resolve(args.resolveDir, args.path.replace(/^inline:/, "")),
 				namespace: "inline-import",
@@ -478,22 +478,22 @@ const inlineImportPlugin = {
 };
 
   const lib10Shims = {
-    "data-stores/data-store-seeds": "modules/my-frontmatter-markdown-links/vendor/data-stores/data-store-seeds.cjs",
-    "data-stores/data-store-transport": "modules/my-frontmatter-markdown-links/vendor/data-stores/data-store-transport.cjs",
-    "data-stores/local-data-store": "modules/my-frontmatter-markdown-links/vendor/data-stores/local-data-store.cjs",
-    "command-handlers/open-bug-report-command-handler": "modules/my-frontmatter-markdown-links/vendor/command-handlers/open-bug-report-command-handler.cjs",
-    "command-handlers/undo-bulk-operation-command-handler": "modules/my-better-markdown-links/vendor/command-handlers/undo-bulk-operation-command-handler.cjs",
+    "data-stores/data-store-seeds": "modules/frontmatter-markdown-links/vendor/data-stores/data-store-seeds.cjs",
+    "data-stores/data-store-transport": "modules/frontmatter-markdown-links/vendor/data-stores/data-store-transport.cjs",
+    "data-stores/local-data-store": "modules/frontmatter-markdown-links/vendor/data-stores/local-data-store.cjs",
+    "command-handlers/open-bug-report-command-handler": "modules/frontmatter-markdown-links/vendor/command-handlers/open-bug-report-command-handler.cjs",
+    "command-handlers/undo-bulk-operation-command-handler": "modules/better-markdown-links/vendor/command-handlers/undo-bulk-operation-command-handler.cjs",
     // FML/ERH 的账本后端迁移:LocalDataStore(IDB) → index-core 的
     // plugin-kv sqlite(shim 内按开关回退 IDB)。FML/ERH importer 限定。
-    "data-stores/local-data-store": "modules/my-index-core/src/plugin-kv-shim.ts",
-    "components/bulk-operation-commit-component": "modules/my-better-markdown-links/vendor/components/bulk-operation-commit-component.cjs",
-    link: "modules/my-better-markdown-links/vendor/link.cjs",
-    "metadata-cache": "modules/my-better-markdown-links/vendor/metadata-cache.cjs",
-    reference: "modules/my-better-markdown-links/vendor/reference.cjs",
+    "data-stores/local-data-store": "modules/index-core/src/plugin-kv-shim.ts",
+    "components/bulk-operation-commit-component": "modules/better-markdown-links/vendor/components/bulk-operation-commit-component.cjs",
+    link: "modules/better-markdown-links/vendor/link.cjs",
+    "metadata-cache": "modules/better-markdown-links/vendor/metadata-cache.cjs",
+    reference: "modules/better-markdown-links/vendor/reference.cjs",
   };
-  const lib10Importers = /modules[\\/](my-frontmatter-markdown-links|my-external-rename-handler|my-better-markdown-links)[\\/]/;
+  const lib10Importers = /modules[\\/](frontmatter-markdown-links|external-rename-handler|better-markdown-links)[\\/]/;
   // livesync 的 @/ 路径别名(上游 tsconfig baseUrl 约定):importer 限定
-  // my-livesync,不与宿主其它 @ 别名冲突
+  // livesync,不与宿主其它 @ 别名冲突
   const livesyncResolver = {
     name: "livesync-at-alias",
     setup(build) {
@@ -501,8 +501,8 @@ const inlineImportPlugin = {
       // 解析——这里自己探测(.ts/.tsx/.svelte/index.*)
       build.onResolve({ filter: /^@\// }, (args) => {
         const importer = args.importer.split(path.sep).join("/");
-        if (!importer.includes("/modules/my-livesync/")) return undefined;
-        const base = path.resolve("modules/my-livesync/src", args.path.slice(2));
+        if (!importer.includes("/modules/livesync/")) return undefined;
+        const base = path.resolve("modules/livesync/src", args.path.slice(2));
         for (const cand of [base, `${base}.ts`, `${base}.tsx`, `${base}.svelte`, path.join(base, "index.ts"), path.join(base, "index.tsx")]) {
           if (fs.existsSync(cand)) return { path: cand };
         }
@@ -537,7 +537,7 @@ const context = await esbuild.context({
   // 全局劫持会把它们也切到 10.5 语义；限定后 CAL/ARDH 照走 PnP 5.1.0。
   alias: {
     "@polyipseity/obsidian-plugin-library": path.resolve(
-      "modules/my-terminal/vendor/obsidian-plugin-library/src/index.ts",
+      "modules/terminal/vendor/obsidian-plugin-library/src/index.ts",
     ),
   },
   // obsidian = the host API; @codemirror/* + @lezer/* = Obsidian's own CM6
@@ -621,7 +621,7 @@ const context = await esbuild.context({
   // esm-env（obsidian-git 的 svelte 组件用它）按这个条件切换 dev/prod 分支
   conditions: [prod ? "production" : "development"],
   // isomorphic-git 在移动端需要 Buffer 全局（obsidian-git 上游的 polyfill）
-  inject: ["modules/my-obsidian-git/polyfill_buffer.js"],
+  inject: ["modules/obsidian-git/polyfill_buffer.js"],
   logLevel: "info",
   sourcemap: prod ? false : "inline",
   treeShaking: true,
@@ -635,7 +635,7 @@ const context = await esbuild.context({
 // wa-sqlite 经 __WA_SQLITE_WASM_B64__ define 内联(同主 bundle),node builtin
 // 由 platform:'node' 自动 external。
 const daemon = await esbuild.context({
-  entryPoints: ["modules/my-unified-search/src/daemon/daemonMain.ts"],
+  entryPoints: ["modules/unified-search/src/daemon/daemonMain.ts"],
   bundle: true,
   platform: "node",
   // 原生模块不可 bundle:运行时从插件目录 node_modules 解析(deploy 边车)

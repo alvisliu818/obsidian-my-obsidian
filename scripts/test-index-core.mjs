@@ -1,6 +1,6 @@
 // index-core 测试入口：需要带 FTS5 的 node（≥24 官方构建；22.x 官方构建的 SQLite 没有 FTS5）。
 // 本机默认可能是 22.x——这里自动探测：当前 node 没有 FTS5 就从 vfox cache 挑最新的带 FTS5 的，
-// PATH 前置后照常跑 `yarn vitest run --root modules/my-index-core`。
+// PATH 前置后照常跑 `yarn vitest run --root modules/index-core`。
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -88,7 +88,7 @@ if (existsSync(pnp)) {
 }
 const r = spawnSync(
   chosen,
-  [vitestEntry, "run", "--root", "modules/my-index-core", ...process.argv.slice(2)],
+  [vitestEntry, "run", "--root", "modules/index-core", ...process.argv.slice(2)],
   { env, stdio: "inherit", cwd: repoRoot },
 );
 process.exit(r.status ?? 1);

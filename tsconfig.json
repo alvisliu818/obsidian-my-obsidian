@@ -20,16 +20,16 @@
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
     "paths": {
-      "src/*": ["modules/my-obsidian-git/src/*"],
-      "@/*": ["modules/my-music-player/src/*"],
+      "src/*": ["modules/obsidian-git/src/*"],
+      "@/*": ["modules/music-player/src/*"],
       "cm-bundle:@codemirror/legacy-modes/mode/*": ["E:/HOME/Code/.yarn-global/unplugged/@codemirror-legacy-modes-npm-6.5.5-23395d6ece/node_modules/@codemirror/legacy-modes/mode/*"],
-      "@core/*": ["modules/my-scrolling/src/core/*"],
-      "@features/*": ["modules/my-scrolling/src/features/*"],
-      "@typings/*": ["modules/my-scrolling/src/typings/*"]
+      "@core/*": ["modules/scrolling/src/core/*"],
+      "@features/*": ["modules/scrolling/src/features/*"],
+      "@typings/*": ["modules/scrolling/src/typings/*"]
     },
     "jsx": "react-jsx",
     "jsxImportSource": "react"
   },
-  "include": ["src/**/*.ts", "modules/my-index-core/src/**/*.ts", "modules/my-unified-search/src/**/*.ts", "modules/my-doc-tree/src/**/*.ts", "modules/my-code-editor/src/**/*.ts", "modules/my-logseq/src/**/*.ts", "modules/my-browser/src/**/*.ts", "modules/my-jupyter/src/**/*.ts", "modules/my-breadcrumb/src/**/*.ts", "modules/my-doc-assist/src/**/*.ts", "modules/my-material-icon-theme/src/**/*.ts", "modules/my-tracetime/src/**/*.ts", "modules/my-ai-image-analyzer/src/**/*.ts", "modules/my-cm-chs-patch/src/**/*.ts", "modules/my-text-extractor/plugin/src/**/*.ts", "modules/my-omnisearch/src/**/*.ts", "modules/my-obsidian-git/src/**/*.ts", "modules/my-open-tab-settings/src/**/*.ts", "modules/my-audio-recorder/src/**/*.ts", "modules/my-media-journal/src/**/*.ts", "modules/my-music-player/src/**/*.ts", "modules/my-music-player/src/**/*.tsx", "modules/my-audio-player/src/**/*.ts", "modules/my-scrolling/src/**/*.ts", "modules/my-abstract-folder/**/*.ts", "modules/my-momentum/src/**/*.ts", "modules/my-hearth/src/**/*.ts", "modules/my-latex-delimiter-renderer/src/**/*.ts", "modules/my-code-link/src/**/*.ts"],
-  "exclude": ["**/node_modules", "**/tests/e2e", "modules/my-omnisearch/src/__tests__", "modules/my-ai-image-analyzer/src", "modules/my-obsidian-git/tests", "modules/my-obsidian-git/src/__tests__", "modules/my-abstract-folder/tests", "src/libraryInitPatch.ts"]
+  "include": ["src/**/*.ts", "modules/index-core/src/**/*.ts", "modules/unified-search/src/**/*.ts", "modules/virtual-tree/src/**/*.ts", "modules/code-editor/src/**/*.ts", "modules/logseq/src/**/*.ts", "modules/browser/src/**/*.ts", "modules/jupyter/src/**/*.ts", "modules/breadcrumb/src/**/*.ts", "modules/doc-assist/src/**/*.ts", "modules/material-icon-theme/src/**/*.ts", "modules/tracetime/src/**/*.ts", "modules/ai-image-analyzer/src/**/*.ts", "modules/cm-chs-patch/src/**/*.ts", "modules/text-extractor/plugin/src/**/*.ts", "modules/omnisearch/src/**/*.ts", "modules/obsidian-git/src/**/*.ts", "modules/open-tab-settings/src/**/*.ts", "modules/audio-recorder/src/**/*.ts", "modules/media-journal/src/**/*.ts", "modules/music-player/src/**/*.ts", "modules/music-player/src/**/*.tsx", "modules/audio-player/src/**/*.ts", "modules/scrolling/src/**/*.ts", "modules/abstract-folder/**/*.ts", "modules/momentum/src/**/*.ts", "modules/hearth/src/**/*.ts", "modules/latex-delimiter-renderer/src/**/*.ts", "modules/code-link/src/**/*.ts"],
+  "exclude": ["**/node_modules", "**/tests/e2e", "modules/omnisearch/src/__tests__", "modules/ai-image-analyzer/src", "modules/obsidian-git/tests", "modules/obsidian-git/src/__tests__", "modules/abstract-folder/tests", "src/libraryInitPatch.ts"]
 }
