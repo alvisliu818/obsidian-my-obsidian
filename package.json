@@ -123,6 +123,7 @@
     "browser-util-inspect": "^0.2.0",
     "buffer": "^6.0.3",
     "cancelable-promise": "^4.3.1",
+    "chokidar": "^6.0.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^1.2.1",
     "codemirror": "^6.0.2",

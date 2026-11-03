@@ -129,6 +129,15 @@ const FrontmatterMarkdownLinksPlugin = (
 		default: new (app: unknown, manifest: unknown) => SubPluginLike;
 	}
 ).default;
+// external-rename-handler v4.1.0（mnaoumov，MIT）：同款 require 桥。桌面端
+// 专属（chokidar ^6 监听外部改动，已补进根 deps）。它的 20 个 obsidian-lib
+// 子路径里 5.1.0 缺失的 2 个已由 FML 的 vendor+alias 覆盖，零新增 vendored。
+// 见 modules/my-external-rename-handler/NOTICE.md。
+const ExternalRenameHandlerPlugin = (
+	require("../modules/my-external-rename-handler/src/main") as {
+		default: new (app: unknown, manifest: unknown) => SubPluginLike;
+	}
+).default;
 import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
 import { registerFreeExtensions } from "./extensionRegistry";
 // 原生 markdown 编辑器（实时预览/源码模式）+ 阅读模式的代码块「▶ 运行」。
@@ -455,6 +464,20 @@ export default class MyObsidianPlugin extends Plugin {
 			manifest: { version: "3.1.0" },
 			migrateFrom: "frontmatter-markdown-links",
 			cls: FrontmatterMarkdownLinksPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Third-party (mnaoumov, MIT), kept whole — see
+			// modules/my-external-rename-handler/NOTICE.md. Same require bridge;
+			// desktop-only（chokidar 文件监听）。4.0.0 起 handler 让给 ARDH
+			// 生态，收编后 conflict 表条目已删。
+			id: "external-rename-handler",
+			name: "my External Rename Handler",
+			summary:
+				"把文件重命名交给外部工具完成：监听磁盘改动（chokidar）识别库外重命名/移动，自动更新库内链接与附件跟随，支持 inode 追踪与文件夹 mtime 探测。上游 mnaoumov（MIT）。仅桌面端。",
+			desktopOnly: true,
+			manifest: { version: "4.1.0" },
+			migrateFrom: "external-rename-handler",
+			cls: ExternalRenameHandlerPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
 			// Third-party (omeyenburg / Oskar Meyenburg, MIT), kept whole — see
