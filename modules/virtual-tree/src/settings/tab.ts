@@ -17,6 +17,7 @@ import { mountDisplayName, type EditorChoice, type VideoOpenMode } from '../type
 import { OpenWithEditModal } from '../features/openWithUi';
 import { isDirectory } from '../features/extFs';
 import { invalidateVaultParentPlans } from '../features/vaultFs';
+import { applyTitleRenameLock } from '../titleRename';
 import {
   hasSystemPicker,
   pickExternalPath,
@@ -101,6 +102,21 @@ export class DocTreeSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
           this.plugin.refreshMounts();
           this.display();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName('文件名点击重命名')
+      .setDesc(
+        '默认开：原生编辑器顶部的文件名（.view-header-title）是可编辑的，' +
+          '点一下就聚焦进重命名。关闭后文件名不可编辑——点击只弹出该目录的' +
+          '同级文件面板，重命名走右键菜单或文件列表。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.titleRenameEnabled !== false).onChange(async (v) => {
+          this.plugin.settings.titleRenameEnabled = v;
+          await this.plugin.saveSettings();
+          applyTitleRenameLock(this.plugin.app, v);
         }),
       );
 

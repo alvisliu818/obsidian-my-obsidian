@@ -14,6 +14,7 @@
  */
 
 import { Menu, Notice, Platform, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
+import { startTitleRenameObserver } from './titleRename';
 import { around } from 'monkey-around';
 import { DocTreeSettingTab } from './settings/tab';
 import { MountPanelView, VIEW_TYPE_MOUNT_PANEL } from './panels/mountPanel';
@@ -86,6 +87,8 @@ export default class DocTreePlugin extends Plugin {
   /** Timer id for the mount panel's optional auto-refresh; 0 = not scheduled. */
   private mountRefreshTimer = 0;
 
+  private stopTitleRenameObserver: (() => void) | null = null;
+
   async onload(): Promise<void> {
     await this.loadSettings();
     this.addSettingTab(new DocTreeSettingTab(this.app, this));
@@ -148,6 +151,11 @@ export default class DocTreePlugin extends Plugin {
         }
       }, 300);
     };
+    // 文件名点击重命名开关（2026-11-04）：关时锁 .view-header-title 不可编辑
+    this.stopTitleRenameObserver = startTitleRenameObserver(
+      this.app,
+      () => this.settings.titleRenameEnabled !== false,
+    );
     this.registerEvent(this.app.vault.on('create', refreshVaultMountsSoon));
     this.registerEvent(this.app.vault.on('delete', refreshVaultMountsSoon));
     this.registerEvent(this.app.vault.on('rename', refreshVaultMountsSoon));
@@ -343,6 +351,7 @@ export default class DocTreePlugin extends Plugin {
   }
 
   onunload(): void {
+    this.stopTitleRenameObserver?.();
     if (this.mountRefreshTimer) {
       window.clearInterval(this.mountRefreshTimer);
       this.mountRefreshTimer = 0;

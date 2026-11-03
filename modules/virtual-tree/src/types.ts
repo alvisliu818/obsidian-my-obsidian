@@ -299,6 +299,12 @@ export interface DocTreeSettings {
    */
   mountFilterEnabled: boolean;
   /**
+   * 文件名点击重命名（2026-11-04 用户需求）：原生编辑器的 .view-header-title
+   * 是 contenteditable，点一下就聚焦进重命名。默认开（原生行为）；
+   * 关掉后标题不可编辑，点击只弹同级文件面板。
+   */
+  titleRenameEnabled: boolean;
+  /**
    * parent 属性挂载（2026-11-03 用户需求）：笔记 frontmatter 写 `parent:`
    * 指到另一篇笔记时，虚拟树把笔记挂到那篇笔记名下作为子文档显示。
    * 真实位置不动，纯树形展示；`[[..]]` / 纯名称 / 库内路径都认，
@@ -439,6 +445,8 @@ export const DEFAULT_DOCTREE_SETTINGS: DocTreeSettings = {
   mountFilterEnabled: false,
   // parent 属性挂载默认开（用户 2026-11-03 需求本体就是它，开关用于关）
   parentMountEnabled: true,
+  // 文件名点击重命名默认开（原生行为本体，开关用于关）
+  titleRenameEnabled: true,
   mountLinkEnabled: true,
   mountShowLoadedCount: true,
   mountDragMode: false,
@@ -523,6 +531,7 @@ export function docTreeSettingsFrom(raw: unknown): DocTreeSettings {
   const s: DocTreeSettings = { ...DEFAULT_DOCTREE_SETTINGS };
   s.mountFilterEnabled = o.mountFilterEnabled === true;
   s.parentMountEnabled = o.parentMountEnabled !== false;
+  s.titleRenameEnabled = o.titleRenameEnabled !== false;
   s.mountLinkEnabled = o.mountLinkEnabled !== false;
   s.mountShowLoadedCount = o.mountShowLoadedCount !== false;
   s.mountDragMode = o.mountDragMode === true;
