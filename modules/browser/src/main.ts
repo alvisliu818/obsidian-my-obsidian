@@ -74,6 +74,7 @@ export default class BrowserPlugin extends Plugin {
       () => this.store.data.extensions,
       () => this.config.extensionsEnabled,
       () => this.store.save(),
+      () => void this.store.saveNow(),
     );
 
     // 思源内核 API 的 Obsidian 对应：扩展剪藏流程（cs-runtime）经这个桥落库。
@@ -107,6 +108,10 @@ export default class BrowserPlugin extends Plugin {
       evalInSw: (eid, expr) => evalInSwBridge({ electronId: eid } as any, expr),
       openUrl: (u) => void this.openUrl(u, true),
       activeUrl: () => this.activeTab()?.url ?? "",
+      ensureCsRuntime: () => {
+        const t = this.activeTab();
+        if (t) this.extHost.ensureCsRuntime(t.getWebview());
+      },
     });
 
     // 新标签页扩展数据代答（chrome.topSites/bookmarks/history ← 自己的库）

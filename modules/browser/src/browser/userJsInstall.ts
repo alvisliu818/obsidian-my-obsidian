@@ -59,6 +59,9 @@ export interface UserJsChainOpts {
 	openUrl: (url: string) => void;
 	/** 活动页签 URL（派发 details.initiator 用）。 */
 	activeUrl: () => string;
+	/** 确保 cs-runtime 已初始化（SW eval 通道的地基；.user.js 被 cancel 后
+	 *  没有页面成功加载、dom-ready 不触发，必须显式调）。 */
+	ensureCsRuntime?: () => void;
 }
 
 export class UserJsChain {
@@ -67,6 +70,8 @@ export class UserJsChain {
 	private wrBridgeCacheAt = 0;
 	private pendingUserJs: PendingUserJs | null = null;
 	private pendingInstalls = new Map<string, PendingInstall>();
+	/** VM confirm 页已为该 URL 打开（同 URL 60s 内不再走链/弹宿主窗） */
+	private vmConfirmAt = new Map<string, number>();
 	private installDialogShownAt = new Map<string, number>();
 	private pendingInstallDialogs = new Set<HTMLElement>();
 
@@ -317,16 +322,30 @@ export class UserJsChain {
 	}
 
 	private async runVmInstallChain(url: string, resourceType: string): Promise<void> {
+		// .user.js 被取消后没有任何页面成功加载 → dom-ready 不触发 → cs-runtime
+		// 可能还没初始化（SW eval 全靠它的通道），显式补一次
+		try {
+			this.opts.ensureCsRuntime?.();
+		} catch {
+			/* ignore */
+		}
 		const vm = this.findVm();
 		if (!vm?.electronId) {
 			new Notice("未安装 Violentmonkey（开源用户脚本管理器），无法安装脚本", 5000);
 			return;
 		}
+		// 0) 先拉 VM 的 webRequest filter 快照（刚装完/刚启用时缓存里没有它，
+		//    排空循环在空缓存上跑 = confirm 永远等不到——实测踩坑）
+		await this.refreshWrBridge(true);
 		// 1) 合成 downloads.onCreated：真 Chrome 把 .user.js 当下载，VM 观察
 		//    请求/下载后自己 fetch/登记/开确认页 —— 缺这步 VM 链条静默超时。
-		await this.opts
-			.evalInSw(vm.electronId, `try { self.__obEmitDownload && self.__obEmitDownload(${JSON.stringify(url)}); } catch (e) {}`)
-			.catch(() => null);
+		//    VM SW 冷启动可能吃掉首发 eval：失败补发一次。
+		const emitExpr = `try { self.__obEmitDownload && self.__obEmitDownload(${JSON.stringify(url)}); } catch (e) {}`;
+		const emit1 = await this.opts.evalInSw(vm.electronId, emitExpr).catch(() => null);
+		if (!emit1 || emit1.err) {
+			await new Promise((r) => setTimeout(r, 1200));
+			await this.opts.evalInSw(vm.electronId, emitExpr).catch(() => null);
+		}
 		// 2) wr 派发 + 多轮排空，等 confirm 页出现在 tabs.create 出箱
 		this.pendingUserJs = { url, askOpened: false };
 		try {
@@ -339,9 +358,16 @@ export class UserJsChain {
 			await this.drainWrOutbox();
 			if (this.pendingUserJs?.askOpened) {
 				console.info("[ob-browser] .user.js VM confirm 已打开:", url.slice(0, 80));
+				this.vmConfirmAt.set(url.split("?")[0], Date.now());
+				if (this.vmConfirmAt.size > 50) {
+					const oldest = this.vmConfirmAt.keys().next().value;
+					if (oldest !== undefined) this.vmConfirmAt.delete(oldest);
+				}
 				this.pendingUserJs = null;
 				return;
 			}
+			// 中途再刷一次 filter 快照（VM SW 冷启动后 filter 才注册齐）
+			if (i === 2) await this.refreshWrBridge(true);
 		}
 		this.pendingUserJs = null;
 		// 3) VM 自有链没走出 confirm → 探测 chrome.userScripts（直装前提），

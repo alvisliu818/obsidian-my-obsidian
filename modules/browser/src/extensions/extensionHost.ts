@@ -70,6 +70,7 @@ export class ExtensionHost {
     private getRecords: () => ExtensionRecord[],
     private getEnabled: () => boolean,
     private onChange: () => void,
+    private flushStore: () => unknown = () => {},
   ) {
     this.fs = nodeRequire<any>("fs");
     this.pathMod = nodeRequire<any>("path");
@@ -803,6 +804,8 @@ export class ExtensionHost {
   }
 
   private upsert(rec: ExtensionRecord): void {
+    // 记录变更立即落盘：扩展记录珍贵，防抖窗口内插件重载会整条丢失
+    // （实测：装 Violentmonkey 后模块重载，记录蒸发）。records 全量替换写。
     const records = this.getRecords();
     const i = records.findIndex((r) => r.id === rec.id);
     if (i >= 0) records[i] = rec;
@@ -810,6 +813,7 @@ export class ExtensionHost {
     this.scriptCache.clear();
     this.iconCache.clear();
     this.onChange();
+    this.flushStore();
   }
 
   private sanitizeDir(name: string): string {
