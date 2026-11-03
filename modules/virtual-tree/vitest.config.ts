@@ -7,6 +7,10 @@ export default defineConfig({
     // resolve it to the compile-time stub (the real API only exists in Obsidian).
     alias: [
       { find: /^obsidian$/, replacement: path.resolve(__dirname, 'obsidian-stub.js') },
+      // electron 同理：包体只有类型没二进制（dependenciesMeta build:false），
+      // 真 index.js 在 vitest 里一加载就抛 "Electron failed to install
+      // correctly"。单测只碰得到 clipboard.writeText，给个最小 stub。
+      { find: /^electron$/, replacement: path.resolve(__dirname, 'electron-stub.js') },
       // monaco-editor 同理:renderTree → codeBlockEdit → monaco.ts 的链要能
       // 解析,但编辑器本体只在 Obsidian 运行时存在(e2e 才真正创建)。
       { find: /^monaco-editor$/, replacement: path.resolve(__dirname, 'monaco-stub.js') },

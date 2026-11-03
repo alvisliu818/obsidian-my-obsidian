@@ -34,7 +34,7 @@ function backendAvailable(): boolean {
   }
 }
 
-/** node:sqlite 后端的 LocalDataStore 兼容实现 */
+/** node:sqlite 后端的 LocalDataStore 兼容实现（面 = DatabaseSync 用到的子集） */
 interface KvDb {
   exec(sql: string): void;
   prepare(sql: string): {
@@ -42,6 +42,7 @@ interface KvDb {
     get(...args: unknown[]): unknown;
     all(...args: unknown[]): unknown[];
   };
+  close(): void;
 }
 
 export class SqliteKvStore {
@@ -147,7 +148,7 @@ export class SqliteKvStore {
   public close(): void {
     this.closed = true;
     if (this.db) {
-      (this.db as { close(): void }).close();
+      this.db.close();
       this.db = null;
     }
   }
