@@ -134,6 +134,9 @@ export interface ICsRuntimeHost {
     wakeSw?(electronId: string): Promise<void>;
     /** 扩展 popup/页面调 chrome.runtime.openOptionsPage（设置齿轮）→ 宿主开设置页 */
     openExtensionOptions?(ext: ICsExtInfo): void;
+    /** 新标签页扩展数据代答（topSites/bookmarks/history 查询，宿主用自己的
+     *  历史/书签库回答——Electron 无这些 API）。缺省 = usdata 返回错误。 */
+    userData?(kind: string, args: any): Promise<any>;
 }
 
 let manager: CsRuntimeManager | null = null;
@@ -1028,6 +1031,17 @@ class CsPageSession {
                 console.warn("[browser-plugin] cs-runtime: openoptions 处理失败:", e);
             }
             return { data: null };
+        }
+        if (req.type === "usdata") {
+            // 新标签页扩展数据适配：topSites/bookmarks/history 查询由宿主
+            // 用插件自己的历史/书签库代答（Electron 无这些 API）
+            if (!this.host.userData) return { err: "userData provider missing" };
+            try {
+                const data = await this.host.userData(String(args.kind || ""), args);
+                return { data: data === undefined ? null : data };
+            } catch (e: any) {
+                return { err: String(e?.message || e) };
+            }
         }
         return { err: "unknown bridge type: " + req.type };
     }
@@ -2149,6 +2163,61 @@ function buildShim(ext: ICsExtInfo, messages: Record<string, any>): string {
     chrome_.storage = { local: storageArea("local"), sync: storageArea("sync"), session: storageArea("session") };
     // 全局 chrome.storage.onChanged（content.js 顶层就用它，缺失即抛 TypeError）
     chrome_.storage.onChanged = { addListener: function () {}, removeListener: function () {}, hasListener: function () { return false; } };
+    // 新标签页扩展数据适配：Electron 无 topSites/bookmarks/history API，
+    // Momentum/Infinity 类新标签页扩展靠它们渲染起始页内容 —— 由宿主用
+    // 插件自己的历史/书签库代答（hostCall "usdata"，见宿主路由）。
+    chrome_.topSites = {
+        get: traced("topSites.get", function (cb) {
+            var p = hostCall("usdata", { kind: "topSites" }).then(function (v) { return Array.isArray(v) ? v : []; });
+            return cbStyle(p, cb);
+        }),
+    };
+    chrome_.bookmarks = (function () {
+        var ev = { onChanged: eventHub(), onCreated: eventHub(), onRemoved: eventHub(), onMoved: eventHub(), onChildrenReordered: eventHub(), onImportBegan: eventHub(), onImportEnded: eventHub() };
+        var api = {
+            getTree: traced("bookmarks.getTree", function (cb) { return cbStyle(hostCall("usdata", { kind: "bookmarkTree" }), cb); }),
+            getChildren: function (id, cb) {
+                return cbStyle(hostCall("usdata", { kind: "bookmarkTree" }).then(function (t) {
+                    function find(nodes) {
+                        for (var i = 0; i < (nodes || []).length; i++) {
+                            if (String(nodes[i].id) === String(id)) return nodes[i].children || [];
+                            if (nodes[i].children) { var r = find(nodes[i].children); if (r) return r; }
+                        }
+                        return null;
+                    }
+                    return Promise.resolve(find(t) || []);
+                }), cb);
+            },
+            getRecent: function (n, cb) {
+                return cbStyle(hostCall("usdata", { kind: "bookmarkRecent", n: Number(n) || 10 }).then(function (list) { return Array.isArray(list) ? list : []; }), cb);
+            },
+            search: function (q, cb) {
+                return cbStyle(hostCall("usdata", { kind: "bookmarkSearch", query: typeof q === "string" ? q : String((q && q.query) || "") }).then(function (list) { return Array.isArray(list) ? list : []; }), cb);
+            },
+            create: function (bm, cb) { return cbStyle(Promise.reject(new Error("bookmarks.create 未适配（只读）")), cb); },
+            remove: function (id, cb) { return cbStyle(Promise.resolve(), cb); },
+            update: function (id, chg, cb) { return cbStyle(Promise.resolve(), cb); },
+            move: function (id, dest, cb) { return cbStyle(Promise.resolve(), cb); },
+        };
+        for (var k in ev) api[k] = ev[k];
+        return api;
+    })();
+    chrome_.history = (function () {
+        var ev = { onVisited: eventHub(), onVisitRemoved: eventHub(), onChanged: eventHub(), onDeleteUrls: eventHub(), onDeleteRange: eventHub(), onDeleteAll: eventHub() };
+        var api = {
+            search: traced("history.search", function (query, cb) {
+                return cbStyle(hostCall("usdata", { kind: "historySearch", query: query === undefined ? null : query }).then(function (list) { return Array.isArray(list) ? list : []; }), cb);
+            }),
+            getVisits: function (q, cb) { return cbStyle(Promise.resolve([]), cb); },
+            addUrl: function (q, cb) { return cbStyle(Promise.resolve(), cb); },
+            deleteUrl: function (q, cb) { return cbStyle(Promise.resolve(), cb); },
+            deleteRange: function (q, cb) { return cbStyle(Promise.resolve(), cb); },
+            deleteAll: function (cb) { return cbStyle(Promise.resolve(), cb); },
+        };
+        for (var k2 in ev) api[k2] = ev[k2];
+        return api;
+    })();
+
     chrome_.i18n = {
         getMessage: function (key, args) {
             var entry = MESSAGES[key];

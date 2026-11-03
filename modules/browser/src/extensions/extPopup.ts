@@ -188,8 +188,110 @@ export const POPUP_JS_PRELUDE = `
         syncBodyClass();
         new MutationObserver(syncBodyClass).observe(body, { attributes: true, attributeFilter: ["class"] });
     } catch (e) {}
+    // ★ 运行时 <style> 作用域化（仅 popup 模式）：扩展 popup JS（React 等）
+    //   会把样式块塞进 document.head —— 不经 body 补丁，规则全局生效污染
+    //   宿主页面（源侧实测 AdGuard popup 运行时注入 23 个 style 块，含
+    //   "*,*:before,*:after{box-sizing}" 与 :root/body 规则，把宿主 body
+    //   压成 320px，页面布局全毁）。在本扩展世界拦截 head 的 style 插入并按
+    //   popup 宿主作用域化；页面自己的脚本不受影响（补丁只在本世界生效）。
+    //   作用域算法经宿主函数 toString 注入：模板里写正则会遭打包器非法转义
+    //   二次 cooking，toString 注入零转义、打包器任意变换都不影响。
+    try {
+        var POPUP_MODE = !!document.getElementById("ob-ext-popup-host");
+        if (POPUP_MODE) {
+            var SCOPE = "#ob-ext-popup-host";
+            var obScopeCss = ${scopeCssJs.toString()};
+            var scopeOnInsert = function (n) {
+                try {
+                    if (!n || n.tagName !== "STYLE" || n.getAttribute("data-ob-scoped")) return n;
+                    var css = n.textContent || "";
+                    if (css.trim().length > 4) {
+                        n.textContent = obScopeCss(css, SCOPE);
+                        n.setAttribute("data-ob-scoped", "1");
+                    }
+                } catch (e) {}
+                return n;
+            };
+            var patchHeadMethod = function (name) {
+                try {
+                    var el = document.head || document.documentElement;
+                    if (typeof el[name] !== "function") return;
+                    var orig = el[name].bind(el);
+                    Object.defineProperty(el, name, {
+                        configurable: true,
+                        value: function () {
+                            for (var i = 0; i < arguments.length; i++) scopeOnInsert(arguments[i]);
+                            return orig.apply(el, arguments);
+                        },
+                    });
+                } catch (e) {}
+            };
+            patchHeadMethod("appendChild");
+            patchHeadMethod("prepend");
+            patchHeadMethod("insertBefore");
+            patchHeadMethod("append");
+        }
+    } catch (e) {}
 })();
 `;
+
+/**
+ * 自包含的 CSS 作用域重写（toString 注入进 popup 世界）。
+ * 必须是**自包含**的普通函数：禁止引用模块级状态（splitTopLevel 等模块函数
+ * 进不了 toString 产物），正则写在这里没问题——本函数不在模板字符串里。
+ */
+function scopeCssJs(css: string, scopeSel: string): string {
+	const splitTop = (s: string): string[] => {
+		const out: string[] = [];
+		let depth = 0;
+		let cur = "";
+		for (const ch of s) {
+			if (ch === "(" || ch === "[") depth++;
+			else if (ch === ")" || ch === "]") depth--;
+			if (ch === "," && depth === 0) {
+				out.push(cur);
+				cur = "";
+			} else cur += ch;
+		}
+		return out.map((x) => x.trim()).filter(Boolean);
+	};
+	const reRoot = /(^|[\s>+~,])(html|body|:root)(?=[\s.#[{,:]|$)/gi;
+	const reStar = /(^|[\s>+~,]|\b)\*(?=[\s.#[{,:]|$)/g;
+	const mapSel = (sel: string): string => {
+		return splitTop(sel)
+			.map((t) => {
+				const replaced = t.replace(reRoot, (_m, pre) => pre + scopeSel);
+				if (replaced !== t) return replaced;
+				const star = t.replace(reStar, (_m, pre) => pre + scopeSel + " *");
+				if (star !== t) return star;
+				return scopeSel + " " + t;
+			})
+			.join(", ");
+	};
+	const walk = (src: string): string => {
+		const out: string[] = [];
+		let i = 0;
+		while (i < src.length) {
+			const brace = src.indexOf("{", i);
+			if (brace < 0) break;
+			const sel = src.slice(i, brace).trim();
+			let depth = 1;
+			let j = brace + 1;
+			while (j < src.length && depth > 0) {
+				if (src[j] === "{") depth++;
+				else if (src[j] === "}") depth--;
+				j++;
+			}
+			const body = src.slice(brace + 1, j - 1);
+			i = j;
+			if (/^@(keyframes|font-face|charset)/i.test(sel)) out.push(sel + "{" + body + "}");
+			else if (/^@(media|supports|layer)/i.test(sel)) out.push(sel + "{" + walk(body) + "}");
+			else out.push(mapSel(sel) + "{" + body + "}");
+		}
+		return out.join("\n");
+	};
+	return walk(String(css));
+}
 
 /** 括号感知的顶层逗号分割（:not(a,b) 这类不切错） */
 function splitTopLevel(s: string): string[] {

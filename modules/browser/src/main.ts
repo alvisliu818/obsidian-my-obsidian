@@ -109,6 +109,65 @@ export default class BrowserPlugin extends Plugin {
       activeUrl: () => this.activeTab()?.url ?? "",
     });
 
+    // 新标签页扩展数据代答（chrome.topSites/bookmarks/history ← 自己的库）
+    this.extHost.userDataProvider = async (kind: string, args: any) => {
+      const bmNode = (b: (typeof this.store.data.bookmarks)[number], i: number) => ({
+        id: "bm" + i,
+        parentId: "1",
+        title: b.title || b.url,
+        url: b.url,
+        dateAdded: b.createdAt ?? undefined,
+      });
+      switch (kind) {
+        case "topSites": {
+          const count = new Map<string, { url: string; title: string; n: number }>();
+          for (const h of this.store.data.history) {
+            try {
+              const host = new URL(h.url).hostname;
+              const cur = count.get(host);
+              if (cur) cur.n++;
+              else count.set(host, { url: h.url, title: h.title || h.url, n: 1 });
+            } catch {
+              /* bad url */
+            }
+          }
+          return [...count.values()].sort((a, b) => b.n - a.n).slice(0, 10).map((x) => ({ url: x.url, title: x.title }));
+        }
+        case "bookmarkTree":
+          return [
+            {
+              id: "0",
+              title: "",
+              children: [
+                {
+                  id: "1",
+                  parentId: "0",
+                  title: "Bookmarks 栏",
+                  children: this.store.data.bookmarks.map((b, i) => bmNode(b, i)),
+                },
+              ],
+            },
+          ];
+        case "bookmarkRecent": {
+          const n = Number(args?.n) || 10;
+          return this.store.data.bookmarks.slice(0, n).map((b, i) => bmNode(b, i));
+        }
+        case "bookmarkSearch": {
+          const q = String(args?.query || "").toLowerCase();
+          return this.store.data.bookmarks
+            .filter((b) => !q || b.title.toLowerCase().includes(q) || b.url.toLowerCase().includes(q) || (b.tags ?? []).some((t) => t.toLowerCase().includes(q)))
+            .map((b, i) => bmNode(b, i));
+        }
+        case "historySearch": {
+          const q = args?.query;
+          const list = this.history.search(typeof q === "string" ? q : "");
+          return list.map((h) => ({ url: h.url, title: h.title, lastVisitTime: h.visitTime, visitCount: 1 }));
+        }
+        default:
+          return null;
+      }
+    };
+
     // 油猴类扩展的 userScripts 注入（宿主侧对账 + GM 前奏），扩展清单由 extHost 提供
     this.usInjector.setNativeIdProvider(() =>
       this.store.data.extensions

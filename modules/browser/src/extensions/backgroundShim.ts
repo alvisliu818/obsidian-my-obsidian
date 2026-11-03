@@ -3,6 +3,7 @@
  * src/extensions/extensionHost.ts 的 shimBody（__sy* 前缀统一改 __ob*）。
  *
  * 版本史（上游注释摘录）：
+ *   v24 剥掉 0d 节 TM extdb 守卫（闭源油猴链移除，开源暴力猴用不到）
  *   v23 userScripts.execute 补桩（SW→页面 下发用户脚本代码，出箱
  *       __obUsExecOutbox 由 cs-runtime 回包泵排空后在自建世界执行）——
  *       Violentmonkey MV3 注入链 forceContent 路径的关键通道
@@ -15,7 +16,7 @@
  * 尾标记 ob-bg-shim-end 供换版剥离旧垫片；标记含 FNV-1a 内容哈希
  * （shimMark()），迭代内容而版本号不变时也能触发重注入。
  */
-export const SHIM_VER = "v23";
+export const SHIM_VER = "v24";
 
 export const SHIM_BODY = `;(function () {
     try {
@@ -68,106 +69,6 @@ export const SHIM_BODY = `;(function () {
                         oiEmit({ reason: "install" });
                     });
                 } catch (eOi5) {}
-            }
-        } catch (e) {}
-        // 0d) TM extdb 启动守卫：TM 5.5 的脚本主库按 "#storage" 类型标记在两个
-        //     持久后端之间二选一 —— chrome.storage.local（"!extdb.*" 键）与
-        //     IndexedDB("ext","general")，默认 storage.local，读不到标记时即落它。
-        //     本环境实测：扩展重载/clearStorageData(serviceworkers) 会连带清空
-        //     扩展 origin 的 IndexedDB（脚本库丢失事故），而 chrome.storage 键
-        //     幸存 —— 必须确保 TM 启动锚定在 storage.local，且 IndexedDB 路径
-        //     也能看见脚本（双保险）：
-        //     1) 在途拦截 chrome.storage.local.get：结果里 "!extdb.#storage" 若为
-        //        "indexedDB" 就地改写 "storage.local"（回调内同步改写，TM 的
-        //        后端选择读到即生效，无竞态窗口），并异步落盘修正（一次性）；
-        //     2) 镜像 → IndexedDB 兜底回填：镜像有 @uid# 条目而 IndexedDB 没有
-        //        任何 @uid# 键时，剥 "!extdb." 前缀与 {origin,value} 包装写回
-        //        （IndexedDB 已有脚本时不回填，防旧镜像覆盖新数据）。
-        //     启动诊断快照落 self.__obExtDbBoot 供宿主探针读取。
-        try {
-            if (!self.__obExtDbGuard) {
-                self.__obExtDbGuard = true;
-                var EXTDB_PFX = "!extdb.", EXTDB_TYPE = "!extdb.#storage";
-                var stLocal = chrome.storage.local;
-                var extDbDiag = self.__obExtDbBoot = { ts: Date.now(), markerRewritten: 0, backfilled: 0 };
-                try {
-                    if (stLocal && typeof stLocal.get === "function" && !stLocal.__obExtDbGet) {
-                        var origGet = stLocal.get.bind(stLocal);
-                        var fixResult = function (res) {
-                            try {
-                                var t = res && res[EXTDB_TYPE];
-                                var tv = t && typeof t === "object" && "value" in t ? t.value : t;
-                                if (tv === "indexedDB") {
-                                    var wrapped = t && typeof t === "object" && "value" in t;
-                                    if (wrapped) t.value = "storage.local"; else res[EXTDB_TYPE] = "storage.local";
-                                    extDbDiag.markerRewritten++;
-                                    if (!extDbDiag.markerPersisted) {
-                                        extDbDiag.markerPersisted = true;
-                                        var fix = {};
-                                        fix[EXTDB_TYPE] = wrapped ? { origin: (t && t.origin) || "normal", value: "storage.local" } : { origin: "normal", value: "storage.local" };
-                                        try { stLocal.set(fix, function () {}); } catch (eF2) {}
-                                    }
-                                }
-                            } catch (eF) {}
-                            return res;
-                        };
-                        stLocal.get = function (keys, cb) {
-                            if (typeof keys === "function") {
-                                var cb1 = keys; keys = null;
-                                return origGet(null, function (v) { try { cb1(fixResult(v)); } catch (e1) { cb1(v); } });
-                            }
-                            if (typeof cb === "function") return origGet(keys, function (v) { try { cb(fixResult(v)); } catch (e2) { cb(v); } });
-                            var p = origGet(keys, null);
-                            try { if (p && typeof p.then === "function") p = p.then(fixResult); } catch (e3) {}
-                            return p;
-                        };
-                        stLocal.__obExtDbGet = true;
-                    }
-                } catch (eG) { extDbDiag.getWrapErr = String(eG); }
-                try {
-                    stLocal.get(null, function (all) {
-                        try {
-                            var uidN = 0, extN = 0;
-                            for (var k in all) {
-                                if (k.indexOf(EXTDB_PFX) !== 0) continue;
-                                extN++;
-                                if (k.indexOf(EXTDB_PFX + "@uid#") === 0) uidN++;
-                            }
-                            extDbDiag.nMirrorExt = extN;
-                            extDbDiag.nMirrorUid = uidN;
-                            if (!uidN) return;
-                            var rq = indexedDB.open("ext", 1);
-                            rq.onupgradeneeded = function (ev) { try { var d = ev.target.result; if (!d.objectStoreNames.contains("general")) d.createObjectStore("general"); } catch (eU) {} };
-                            rq.onsuccess = function () {
-                                var db = rq.result;
-                                try {
-                                    var tx = db.transaction("general", "readonly");
-                                    var gk = tx.objectStore("general").getAllKeys();
-                                    gk.onsuccess = function () {
-                                        try {
-                                            var hasUid = false, i;
-                                            for (i = 0; i < gk.result.length; i++) { if (String(gk.result[i]).indexOf("@uid#") === 0) { hasUid = true; break; } }
-                                            extDbDiag.idbKeys = gk.result.length;
-                                            if (hasUid) return;
-                                            var tx2 = db.transaction("general", "readwrite");
-                                            var os = tx2.objectStore("general");
-                                            var n = 0;
-                                            for (var k3 in all) {
-                                                if (k3.indexOf(EXTDB_PFX) !== 0) continue;
-                                                var v = all[k3];
-                                                if (v && typeof v === "object" && "value" in v) v = v.value;
-                                                try { os.put(v, k3.slice(EXTDB_PFX.length)); n++; } catch (eP) {}
-                                            }
-                                            extDbDiag.backfilled = n;
-                                        } catch (eS) { extDbDiag.backfillErr = String(eS); }
-                                    };
-                                    gk.onerror = function () { extDbDiag.backfillErr = "getAllKeys failed"; };
-                                } catch (eT) { extDbDiag.backfillErr = String(eT); }
-                            };
-                            rq.onerror = function () { extDbDiag.backfillErr = "idb open failed"; };
-                        } catch (eA) { extDbDiag.backfillErr = String(eA); }
-                    });
-                } catch (eB) {}
             }
         } catch (e) {}
         // 0e) chrome.extension 兼容（v20，Violentmonkey SW 启动即死修复）：VM 2.50
@@ -1064,7 +965,7 @@ export const SHIM_BODY = `;(function () {
             }
         } catch (e) {}
     } catch (e) {}
-  // S) chrome.scripting 下发（AdGuard MV3 的元素隐藏 CSS 与 JS scriptlet 都
+// S) chrome.scripting 下发（AdGuard MV3 的元素隐藏 CSS 与 JS scriptlet 都
     //    从 background 经 chrome.scripting.insertCSS/executeScript 注入 ——
     //    Electron 不实现该 API，缺位 = AdGuard 过滤完全不生效）。这里把请求
     //    push 进 __obScriptingRequests，宿主泵（cs-runtime startScriptingPump）

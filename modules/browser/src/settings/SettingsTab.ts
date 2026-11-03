@@ -425,26 +425,27 @@ class UrlInstallModal extends Modal {
   onOpen(): void {
     const { contentEl } = this;
     contentEl.empty();
-    contentEl.createEl("h3", { text: "从 URL 安装扩展" });
+    contentEl.createEl("h3", { text: "从来源安装扩展" });
     contentEl.createDiv({
-      text: "填入 CRX 文件的直接下载地址（浏览器扩展商店页面本身不是 CRX）",
+      text: "智能识别：Edge 扩展 id / 商店详情页链接 / http(s) CRX 直链 / 本地 .crx|.zip 包路径 / 本地扩展目录",
       cls: "ob-modal-hint",
     });
     let url = "";
-    new Setting(contentEl).setName("CRX 地址").addText((t) =>
+    new Setting(contentEl).setName("安装来源").addText((t) =>
       t.onChange((v) => {
         url = v.trim();
       }),
     );
     new Setting(contentEl).addButton((b) =>
       b
-        .setButtonText("下载并安装")
+        .setButtonText("安装")
         .setCta()
         .onClick(async () => {
           if (!url) return;
           try {
-            const rec = await this.host.extHost.installFromUrl(url);
+            const rec = await this.host.extHost.installFromInput(url);
             new Notice(`已安装扩展：${rec.name}`);
+            this.host.refreshExtensionIcons();
             this.close();
           } catch (e: any) {
             new Notice("安装失败：" + String(e?.message ?? e));

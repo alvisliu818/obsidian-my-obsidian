@@ -156,6 +156,10 @@ export class WebviewController {
       if (e?.channel === "ob-edge-install" && e.args?.[0]) {
         this.callbacks.onEdgeInstall?.(String(e.args[0]), this.webview);
       }
+      // 扩展页 F12（preload 转发）→ 开该 guest 的 DevTools
+      if (e?.channel === "ob-open-devtools") {
+        this.openDevTools();
+      }
     });
 
     this.on("will-navigate", (e: any) => {

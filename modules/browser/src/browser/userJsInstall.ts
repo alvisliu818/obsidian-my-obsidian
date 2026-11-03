@@ -1,19 +1,21 @@
 /**
- * .user.js 安装链 + 扩展 webRequest 阻塞桥 + webNavigation 合成 —— 移植自
- * siyuan-plugin-browser src/browser/BrowserTab.ts:373-784（__sy* → __ob*）。
+ * .user.js 安装链（暴力猴/Violentmonkey 版）+ 扩展 webRequest 阻塞桥 +
+ * webNavigation 合成 —— 移植自 siyuan-plugin-browser BrowserTab.ts:373-784
+ * （__sy* → __ob*；2026-11-04 用户决定：闭源油猴 TM 链路整体移除，只兼容
+ * 开源的暴力猴）。
  *
  * 三块能力：
  *  1. webRequest 阻塞桥：拉取各扩展 SW 暴露的监听器 filter 快照
  *     （__obWebRequestFilters），webRequest 层 filter 命中的扩展 SW 合成派发
  *     onBeforeRequest，收 {cancel/redirectUrl}；派发后排空 tabs.create 出箱
- *     （ask.html 等由宿主真实开页签）。
- *  2. webNavigation.onCommitted 合成派发：TM 的 .user.js 安装检测依赖导航
+ *     （VM confirm 页等由宿主真实开页签）。
+ *  2. webNavigation.onCommitted 合成派发：VM 的 .user.js 安装检测依赖导航
  *     事件流；派发后多点排空 tabs 出箱。
- *  3. .user.js 宿主安装链：mainFrame 导航命中 .user.js → cancel + 合成
- *     downloads.onCreated（TM 观察下载登记待装）→ 9s 内 TM 链未走出 ask 页
- *     则回落宿主确认弹窗（fetch 脚本、解析 ==UserScript== 头、已装比对、
- *     防重入 3 分钟、确认后注册进 TM 的 userScripts 注册表——垫片持久化，
- *     userscriptInjector 自动在匹配页面执行）。
+ *  3. .user.js 暴力猴安装链：mainFrame 导航命中 .user.js → cancel + 合成
+ *     downloads.onCreated（VM 的安装入口）→ 多轮 wr 派发/排空等 VM 自己的
+ *     confirm 页弹出；超时且 VM 带 chrome.userScripts（MV3 内核）才回落
+ *     宿主确认弹窗直装（注册进 VM 的 userScripts 注册表，垫片持久化，
+ *     userscriptInjector 自动在匹配页面执行，GM_* 由注入前奏补齐）。
  */
 import { Notice } from "obsidian";
 
@@ -49,7 +51,7 @@ interface PendingInstall {
 export interface UserJsChainOpts {
 	/** 已启用且原生加载的扩展清单（name + electronId）。 */
 	listExts: () => ExtRef[];
-	/** TM 直装副本比对用（usInjector.regs，Map<electronId, Map<id, entry>>）。 */
+	/** 直装副本比对用（usInjector.registry()）。 */
 	getRegistry?: () => Map<string, Map<string, any>> | null;
 	/** 在扩展 SW 里求值（内部有唤醒/兜底通道）。 */
 	evalInSw: (electronId: string, expr: string) => Promise<{ value?: any; err?: string } | null>;
@@ -159,7 +161,9 @@ export class UserJsChain {
 			);
 		}
 		if (!tasks.length) return null;
-		const results = await Promise.all(tasks.map((t) => Promise.race([t, new Promise<{ cancel?: boolean; redirectUrl?: string } | null>((res) => setTimeout(() => res(null), 6000))])));
+		const results = await Promise.all(
+			tasks.map((t) => Promise.race([t, new Promise<{ cancel?: boolean; redirectUrl?: string } | null>((res) => setTimeout(() => res(null), 6000))])),
+		);
 		for (const r of results) {
 			if (!r) continue;
 			if (r.cancel || r.redirectUrl) return r;
@@ -167,7 +171,7 @@ export class UserJsChain {
 		return null;
 	}
 
-	/** 排空各扩展 SW 的 tabs.create 出箱（ask.html 等由 openUrl 真实打开） */
+	/** 排空各扩展 SW 的 tabs.create 出箱（VM confirm 页等由 openUrl 真实打开） */
 	async drainWrOutbox(): Promise<void> {
 		try {
 			const drExpr = "(() => { const o = self.__obTabCreateOutbox || []; self.__obTabCreateOutbox = []; return JSON.stringify(o); })()";
@@ -260,7 +264,7 @@ export class UserJsChain {
 					if (!chk || !String(chk.value || "").includes('"c":')) continue;
 					if (String(chk.value).includes('"c":0')) continue; // 该扩展没挂 onCommitted
 					await this.opts.evalInSw(e.electronId, dispatchExpr).catch(() => null);
-					// 多点排空（TM handler 异步 fetch 后才 tabs.create）
+					// 多点排空（VM handler 异步 fetch 后才 tabs.create）
 					for (const delay of [1500, 4000, 8000]) {
 						await new Promise((r) => setTimeout(r, delay === 1500 ? 1500 : delay === 4000 ? 2500 : 4000));
 						try {
@@ -289,97 +293,89 @@ export class UserJsChain {
 	}
 
 	// ------------------------------------------------------------------
-	// .user.js 宿主安装链
+	// .user.js 暴力猴（Violentmonkey）安装链
 	// ------------------------------------------------------------------
 
 	/**
 	 * mainFrame 导航命中 .user.js（webRequest 管线调，管线已 cb({cancel:true})）：
-	 * 合成 downloads.onCreated（TM 的安装入口是下载事件）+ wr 派发 + 多点排空
-	 * + 9s 回落宿主确认弹窗。
+	 * 合成 downloads.onCreated（VM 的安装入口是请求/下载观察）+ wr 派发 +
+	 * 多轮排空，等 VM 自己的确认页（confirm/index.html）弹出；约 13.5s 未弹出
+	 * 再探测 VM 是否带 chrome.userScripts（MV3 内核有，MV2 稳定版没有）——
+	 * 有才回落宿主确认弹窗直装。闭源油猴（TM）链路已整体移除（2026-11-04）。
 	 */
 	onUserJsNavigation(url: string, resourceType: string): void {
-		void (async () => {
-			try {
-				// 合成 downloads.onCreated：TM 的安装入口是下载事件（真 Chrome 把
-				// .user.js 当下载，TM 观察后自己 fetch URL/登记待装/tabs.create）。
-				// 只派发 webRequest 不会触发其安装流（源侧实测缺这步 TM 链条 20s
-				// 静默超时）。对全部原生扩展合成（downloads.onCreated 只有 TM 注册）。
-				const expr = `try { self.__obEmitDownload && self.__obEmitDownload(${JSON.stringify(url)}); } catch (e) {}`;
-				for (const e of this.opts.listExts()) {
-					if (!e.native || !e.electronId) continue;
-					await this.opts.evalInSw(e.electronId, expr).catch(() => null);
-				}
-			} catch {
-				/* ignore */
-			}
-		})();
-		this.pendingUserJs = { url, askOpened: false };
-		void (async () => {
-			try {
-				await this.dispatchWrCollect(url, "main_frame", { url, resourceType: "mainFrame", type: "mainFrame" });
-				for (const delay of [1500, 2500, 4000]) {
-					await new Promise((r) => setTimeout(r, delay));
-					await this.drainWrOutbox();
-				}
-			} catch {
-				/* ignore */
-			}
-		})();
-		// TM 链条 9s 未走出 ask → 回落宿主确认弹窗（TM 原生链需要 tab 注册表
-		// 配合，多数情况走不到 ask —— 9s 已够其 fetch+登记；宿主弹窗带元数据与
-		// 已安装检测，体验完整）
-		setTimeout(() => {
-			const pj = this.pendingUserJs;
-			if (pj && pj.url === url && !pj.askOpened) {
-				console.info("[ob-browser] .user.js TM 链条未完成，回落宿主确认安装:", url.slice(0, 80));
-				void this.interceptUserScriptInstall(url, resourceType);
-			}
-			if (this.pendingUserJs && this.pendingUserJs.url === url) this.pendingUserJs = null;
-		}, 9000);
+		void this.runVmInstallChain(url, resourceType).catch(() => {});
 	}
 
-	/** .user.js → 油猴安装：下载脚本、解析 ==UserScript== 头、已装比对、防重入、弹确认。 */
+	/** 已启用且原生加载的 Violentmonkey（开源用户脚本管理器）。 */
+	private findVm(): ExtRef | null {
+		return (
+			this.opts
+				.listExts()
+				.find((e) => /violentmonkey|暴力猴/i.test(String(e.name || "")) && e.electronId) ?? null
+		);
+	}
+
+	private async runVmInstallChain(url: string, resourceType: string): Promise<void> {
+		const vm = this.findVm();
+		if (!vm?.electronId) {
+			new Notice("未安装 Violentmonkey（开源用户脚本管理器），无法安装脚本", 5000);
+			return;
+		}
+		// 1) 合成 downloads.onCreated：真 Chrome 把 .user.js 当下载，VM 观察
+		//    请求/下载后自己 fetch/登记/开确认页 —— 缺这步 VM 链条静默超时。
+		await this.opts
+			.evalInSw(vm.electronId, `try { self.__obEmitDownload && self.__obEmitDownload(${JSON.stringify(url)}); } catch (e) {}`)
+			.catch(() => null);
+		// 2) wr 派发 + 多轮排空，等 confirm 页出现在 tabs.create 出箱
+		this.pendingUserJs = { url, askOpened: false };
+		try {
+			await this.dispatchWrCollect(url, "main_frame", { url, resourceType: "mainFrame", type: "mainFrame" });
+		} catch {
+			/* ignore */
+		}
+		for (let i = 0; i < 8; i++) {
+			await new Promise((r) => setTimeout(r, i === 0 ? 1500 : 2000));
+			await this.drainWrOutbox();
+			if (this.pendingUserJs?.askOpened) {
+				console.info("[ob-browser] .user.js VM confirm 已打开:", url.slice(0, 80));
+				this.pendingUserJs = null;
+				return;
+			}
+		}
+		this.pendingUserJs = null;
+		// 3) VM 自有链没走出 confirm → 探测 chrome.userScripts（直装前提），
+		//    有才回落宿主确认弹窗；没有（MV2 稳定版）就指引用户在 VM 面板装。
+		const probe = await Promise.race([
+			this.opts
+				.evalInSw(
+					vm.electronId,
+					"(() => { try { return JSON.stringify({ us: typeof chrome.userScripts?.register === 'function' }); } catch (e) { return JSON.stringify({ us: false }); } })()",
+				)
+				.catch(() => null),
+			new Promise<null>((_, rej) => setTimeout(() => rej(new Error("probe timeout")), 5000)).catch(() => null),
+		]);
+		const direct = (() => {
+			try {
+				return JSON.parse(String(probe?.value || "{}")).us === true;
+			} catch {
+				return false;
+			}
+		})();
+		if (!direct) {
+			new Notice("Violentmonkey 安装页未打开（脚本源不可达/代理未开，或该版本不支持直装）——可在 VM 面板手动安装", 6000);
+			return;
+		}
+		console.info("[ob-browser] .user.js VM 链未完成，回落宿主确认直装:", url.slice(0, 80));
+		await this.interceptUserScriptInstall(url, resourceType);
+	}
+
+	/** .user.js → 宿主直装：下载脚本、解析 ==UserScript== 头、副本比对、防重入、弹确认。 */
 	async interceptUserScriptInstall(url: string, _resourceType: string): Promise<void> {
 		try {
-			const exts = this.opts.listExts();
-			const tm = exts.find((e) => /tampermonkey|篡改猴/i.test(String(e.name || "")) && e.electronId);
-			if (!tm) {
-				const vm = exts.find((e) => /violentmonkey|暴力猴/i.test(String(e.name || "")) && e.electronId);
-				if (!vm) {
-					new Notice("未找到油猴扩展，无法安装脚本", 4000);
-					return;
-				}
-				// VM 自有安装链（webRequest 观察者 + confirm/index.html#key 页）：
-				// 再给一轮合成下载事件 + wr 派发 + 多点排空，confirm 出现即止。
-				new Notice("已交给 Violentmonkey 处理安装…", 3000);
-				console.info("[ob-browser] .user.js 交由 VM 安装链重试:", url.slice(0, 80));
-				void (async () => {
-					try {
-						await this.opts
-							.evalInSw(vm.electronId!, `try { self.__obEmitDownload && self.__obEmitDownload(${JSON.stringify(url)}); } catch (e) {}`)
-							.catch(() => null);
-						this.pendingUserJs = { url, askOpened: false };
-						try {
-							await this.dispatchWrCollect(url, "main_frame", { url, resourceType: "mainFrame", type: "mainFrame" });
-						} catch {
-							/* ignore */
-						}
-						for (const delay of [1500, 3000, 5000, 7000]) {
-							await new Promise((r) => setTimeout(r, delay));
-							await this.drainWrOutbox();
-							if (this.pendingUserJs && this.pendingUserJs.askOpened) {
-								console.info("[ob-browser] .user.js VM confirm 已打开");
-								break;
-							}
-						}
-						if (this.pendingUserJs && this.pendingUserJs.url === url && !this.pendingUserJs.askOpened) {
-							new Notice("Violentmonkey 安装页未打开（脚本源不可达或网络代理未开）", 5000);
-						}
-						if (this.pendingUserJs && this.pendingUserJs.url === url) this.pendingUserJs = null;
-					} catch {
-						/* ignore */
-					}
-				})();
+			const vm = this.findVm();
+			if (!vm?.electronId) {
+				new Notice("未安装 Violentmonkey（开源用户脚本管理器），无法安装脚本", 5000);
 				return;
 			}
 			// 下载脚本内容：★ 必须走浏览器分区的 session.fetch（代理/cookie 与
@@ -404,9 +400,8 @@ export class UserJsChain {
 				if (pat && !matches.includes(pat)) matches.push(pat);
 			}
 			if (!matches.length) matches.push("*://*/*");
-			// 已安装检测：先跑纯宿主侧的直装副本比对（无 SW 依赖），再查 TM
-			// 存储 @source/@uid（SW eval 曾观测到挂起，加 5s 限时）——命中提示
-			// 「已安装」跳过确认框，防冗余副本
+			// 已装比对：只比宿主直装副本（无 SW 依赖）——VM 自装脚本的去重由
+			// VM 自己负责（其 confirm 页有重复提示）。
 			const normSrc = (s: unknown) => String(s || "").replace(/\r\n/g, "\n").trim();
 			try {
 				const regs = this.opts.getRegistry?.() ?? null;
@@ -425,29 +420,7 @@ export class UserJsChain {
 			} catch {
 				/* ignore */
 			}
-			try {
-				const expr =
-					"(async () => { const all = await new Promise(res => chrome.storage.local.get(null, res)); " +
-					"const out = []; for (const k in all) { " +
-					"if (k.indexOf('!extdb.@source#') === 0) out.push({ src: (all[k] && all[k].value) || '' }); " +
-					"if (k.indexOf('!extdb.@uid#') === 0) out.push({ uid: (all[k] && all[k].value) || '' }); } " +
-					"return JSON.stringify(out); })()";
-				const r = await Promise.race([
-					this.opts.evalInSw(tm.electronId!, expr),
-					new Promise<null>((_, rej) => setTimeout(() => rej(new Error("已安装检测超时")), 5000)),
-				]);
-				const entries = JSON.parse(String((r as { value?: string } | null)?.value || "[]"));
-				const sameSource = entries.some((x: any) => x.src !== undefined && normSrc(x.src) === normSrc(code));
-				const sameName = entries.some((x: any) => x.uid !== undefined && String(x.uid).trim() === name);
-				console.info("[ob-browser] .user.js TM 存储比对:", JSON.stringify({ sameSource, sameName }));
-				if (sameSource || sameName) {
-					new Notice("该脚本已安装，无需重复安装: " + name, 4000);
-					return;
-				}
-			} catch {
-				/* 检测失败不阻断安装 */
-			}
-			// 确认弹窗（对齐 TM ask.html 语义）：展示脚本信息，用户点安装才注册
+			// 确认弹窗（对齐 VM confirm 页语义）：展示脚本信息，用户点安装才注册
 			const aid = "aid-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
 			// 防重入：同脚本 3 分钟内不重复弹（文本页留在地址栏，重建/恢复/刷新
 			// 会重新触发导航）；已有弹窗打开时也不叠加
@@ -480,8 +453,8 @@ export class UserJsChain {
 				author,
 				description,
 				matches,
-				electronId: tm.electronId!,
-				extName: tm.name,
+				electronId: vm.electronId,
+				extName: vm.name,
 			});
 			this.showInstallDialog(aid, { name, version, author, description, matches, from: url });
 		} catch (e) {
@@ -526,7 +499,7 @@ export class UserJsChain {
 		}
 	}
 
-	/** 安装确认弹窗（宿主侧 DOM，对齐 TM ask.html 的确认语义） */
+	/** 安装确认弹窗（宿主侧 DOM，对齐 VM confirm 页的确认语义） */
 	private showInstallDialog(aid: string, info: { name: string; version: string; author: string; description: string; matches: string[]; from: string }): void {
 		const esc = (s: string) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 		const overlay = document.createElement("div");
@@ -573,7 +546,7 @@ export class UserJsChain {
 		console.info("[ob-browser] .user.js 确认弹窗已展示:", info.name);
 	}
 
-	/** 用户确认后的注册（直装进油猴扩展的 userScripts 注册表，垫片持久化） */
+	/** 用户确认后的注册（直装进 VM 的 userScripts 注册表，垫片持久化） */
 	private async confirmInstall(aid: string): Promise<void> {
 		const pending = this.pendingInstalls.get(aid);
 		if (!pending) {
@@ -586,7 +559,7 @@ export class UserJsChain {
 		try {
 			const id = "ob-install-" + Date.now().toString(36);
 			const tryRegister = async (m: string[]): Promise<string> => {
-				// ★ 归一非标准通配：TM 系 @match 允许 `*://**/*`（host `**`），
+				// ★ 归一非标准通配：用户脚本 @match 允许 `*://**/*`（host `**`），
 				//   标准 match pattern 不认 —— 存进注册表后 matches 永不命中，
 				//   脚本静默不注入（源侧实测 SEJ 直装副本失效）。`**` 视同任意主机。
 				const normMatches = m.map((p) => (/:\/\/\*\*(?:[/?#]|$)/.test(p) ? p.replace("://**/", "://*/").replace("://**", "://*") : p));
@@ -609,8 +582,8 @@ export class UserJsChain {
 				new Notice("安装脚本失败: " + reg.replace("throw:", ""), 5000);
 				return;
 			}
-			console.info("[ob-browser] 油猴脚本已安装:", name, "matches:", matches.join(" "));
-			new Notice("已安装油猴脚本: " + name, 4000);
+			console.info("[ob-browser] 用户脚本已安装:", name, "matches:", matches.join(" "));
+			new Notice("已安装用户脚本: " + name, 4000);
 		} catch (e) {
 			console.warn("[ob-browser] .user.js 安装失败:", e);
 			new Notice("安装脚本失败: " + (e instanceof Error ? e.message : e), 5000);

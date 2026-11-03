@@ -89,6 +89,53 @@ export class ExtensionHost {
   // ---------------- installation ----------------
 
   /** files: entries relative to the extension root (manifest.json at root). */
+  /**
+   * 智能来源安装（源侧 installFromInput 同款）：输入可以是 Edge 扩展 id /
+   * 商店详情页 URL / http(s) CRX 直链 / 本地 .crx|.zip 包路径 / 本地扩展目录。
+   * 按形态分流到对应安装通道。
+   */
+  async installFromInput(raw: string): Promise<ExtensionRecord> {
+    const v = String(raw || "").trim();
+    if (!v) throw new Error("输入为空");
+    // Edge 加载项商店输入优先识别（32 位 [a-p] id 或商店详情页链接，与本地路径形态不冲突）
+    if (parseEdgeAddonId(v)) {
+      await this.installFromEdgeAddons(v);
+      const rec = this.getRecords().find((r) => r.electronId);
+      if (!rec) throw new Error("Edge 扩展安装后未找到记录");
+      return rec;
+    }
+    // http(s) 直链
+    if (/^https?:\/\//i.test(v)) return await this.installFromUrl(v);
+    // 本地路径：文件（.crx/.zip 包）或目录（未打包扩展）
+    const fs = this.fs;
+    const p = v.replace(/^file:\/\//i, "").replace(/^"|"$/g, "");
+    let st: any = null;
+    try {
+      st = fs.existsSync(p) ? fs.statSync(p) : null;
+    } catch {
+      /* not a local path */
+    }
+    if (st?.isFile()) {
+      const buf = fs.readFileSync(p);
+      return await this.installFromArchive(buf, this.pathMod.basename(p));
+    }
+    if (st?.isDirectory()) {
+      const files: { path: string; data: Uint8Array | ArrayBuffer }[] = [];
+      const walk = (dir: string, rel: string): void => {
+        for (const name of fs.readdirSync(dir)) {
+          const abs = this.pathMod.join(dir, name);
+          const r = rel ? rel + "/" + name : name;
+          const s2 = fs.statSync(abs);
+          if (s2.isDirectory()) walk(abs, r);
+          else files.push({ path: r, data: fs.readFileSync(abs) });
+        }
+      };
+      walk(p, "");
+      return await this.installFromFiles(files);
+    }
+    throw new Error("无法识别的来源：填 Edge 扩展 id/详情页链接、http(s) CRX 直链，或本地包/目录路径");
+  }
+
   async installFromFiles(files: { path: string; data: Uint8Array | ArrayBuffer }[]): Promise<ExtensionRecord> {
     this.ensureRoot();
     const manifestEntry = files.find((f) => f.path.replace(/^\/+/, "") === "manifest.json");
@@ -438,6 +485,9 @@ export class ExtensionHost {
     }
   }
 
+  /** 新标签页扩展数据代答（topSites/bookmarks/history，main.ts 用自己的库注入） */
+  userDataProvider?: (kind: string, args: any) => Promise<any>;
+
   /** AdGuard 扩展的磁盘目录（DNR 规则引擎的规则集来源）；无原生 AdGuard 返回 null。 */
   findAdGuardDir(): string | null {
     const rec = this.getRecords().find(
@@ -512,6 +562,8 @@ export class ExtensionHost {
         }
         return await this.loadNative(rec);
       },
+      userData: (kind: string, args: any) =>
+        this.userDataProvider ? this.userDataProvider(kind, args) : Promise.reject(new Error("userData provider missing")),
       wakeSw: async (electronId: string) => {
         await this.wakeSw(electronId);
       },
@@ -745,6 +797,7 @@ export class ExtensionHost {
       icon,
       popup: action.default_popup,
       options: m.options_page ?? m.options_ui?.page ?? undefined,
+      newtab: (m as any).chrome_url_overrides?.newtab ?? undefined,
       permissions: m.permissions ?? [],
     };
   }
