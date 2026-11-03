@@ -54,6 +54,8 @@ export const DEFAULT_SETTINGS: BrowserSettings = {
   excludedSites: "",
 
   adBlockEnabled: true,
+  proxyMode: "system",
+  proxyCustomUrl: "",
   adBlockRules: "",
 
   downloadDir: "Browser/Downloads",

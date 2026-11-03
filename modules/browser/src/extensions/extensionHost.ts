@@ -3,6 +3,7 @@ import type { App } from "obsidian";
 import { requestUrl } from "obsidian";
 import type { ExtensionContentScript, ExtensionRecord, IWebviewTag } from "../types";
 import { nodeRequire, sessionFromPartition, vaultBasePath } from "../utils/electron";
+import { dnrBlocker } from "../browser/dnrEngine";
 import { extractExtensionArchive } from "./crx";
 import { buildShimSource } from "./cs-runtime";
 import { EDGE_ADDONS_HOME, downloadEdgeCrx, parseEdgeAddonId, toArrayBuffer } from "./edgeStore";
@@ -225,6 +226,8 @@ export class ExtensionHost {
   async loadNative(rec: ExtensionRecord): Promise<string | null> {
     const ses = this.session();
     if (!ses?.loadExtension) return null;
+    // AdGuard 装好/启用即挂 DNR 规则引擎（惰性，幂等）：网络层拦截的规则来源
+    if (/adguard/i.test(rec.name)) void dnrBlocker.load(this.dirOf(rec));
     // 单扩展垫片（install/enable 路径；启动路径由 syncNativeOnStartup 全局做）：
     // SW 文件被垫后必须卸掉重载，Electron 才会从磁盘拉新脚本 —— 否则垫了也白垫。
     let shimmed = false;
@@ -741,6 +744,14 @@ try {
       if (rec.enabled) await this.loadNative(rec);
       else await this.unloadNative(rec);
     }
+  }
+
+  /** AdGuard 扩展的磁盘目录（DNR 规则引擎的规则集来源）；无原生 AdGuard 返回 null。 */
+  findAdGuardDir(): string | null {
+    const rec = this.getRecords().find(
+      (r) => r.enabled && r.electronId && /adguard/i.test(r.name),
+    );
+    return rec ? this.dirOf(rec) : null;
   }
 
   /** dom-ready 时调用：确保该页签的 CDP 会话与各扩展自建世界就绪 */

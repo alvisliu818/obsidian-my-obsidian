@@ -11,6 +11,8 @@ export interface SettingsHost {
   extensions(): ExtensionRecord[];
   refreshExtensionIcons(): void;
   clearHistory(): void;
+  /** 代理设置变更后立刻应用到 webview 会话（applyProxyToSession）。 */
+  applyProxy(): Promise<boolean>;
 }
 
 export class BrowserSettingTab extends PluginSettingTab {
@@ -81,6 +83,31 @@ export class BrowserSettingTab extends PluginSettingTab {
         t.setValue(s.partition).onChange((v) => {
           s.partition = v.trim() || "persist:obsidian-browser";
           this.host.save();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("网络代理")
+      .setDesc("webview 会话级代理（不继承 Obsidian 本体）。系统 = 跟随系统代理；自定义填规则后立即生效")
+      .addDropdown((d) =>
+        d
+          .addOptions({ system: "系统代理", custom: "自定义" })
+          .setValue(s.proxyMode ?? "system")
+          .onChange((v) => {
+            s.proxyMode = v as BrowserSettings["proxyMode"];
+            this.host.save();
+            void this.host.applyProxy();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("自定义代理地址")
+      .setDesc("http/https/socks5://host:port，或 `http=…;https=…` 多规则串（Electron proxyRules 语义）；仅自定义模式生效")
+      .addText((t) =>
+        t.setValue(s.proxyCustomUrl ?? "").onChange((v) => {
+          s.proxyCustomUrl = v.trim();
+          this.host.save();
+          void this.host.applyProxy();
         }),
       );
 

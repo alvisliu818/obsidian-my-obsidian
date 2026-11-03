@@ -22,6 +22,9 @@ import { DownloadsView } from "./views/DownloadsView";
 import { BrowserTab } from "./browser/BrowserTab";
 import type { BrowserContext } from "./browser/context";
 import { clipPage } from "./browser/excerpt";
+import { bindWebRequestPipeline } from "./browser/webRequestPipeline";
+import { applyProxyToSession } from "./browser/proxy";
+import { dnrBlocker } from "./browser/dnrEngine";
 import { bindSessionDownloads } from "./browser/downloads";
 import { ExtensionHost } from "./extensions/extensionHost";
 import { buildEdgeStoreHelperScript, isEdgeAddonsSiteUrl } from "./extensions/edgeStoreHelper";
@@ -32,7 +35,7 @@ import { PopupLayer } from "./extensions/popup";
 import { BrowserSettingTab } from "./settings/SettingsTab";
 import { downloadToVault } from "./utils/download";
 import { isUrlExcluded, normalizeUrl, safeFilename } from "./utils/url";
-import { nodeRequire, openExternal, vaultBasePath } from "./utils/electron";
+import { nodeRequire, openExternal, sessionFromPartition, vaultBasePath } from "./utils/electron";
 
 export default class BrowserPlugin extends Plugin {
   private store = new DataStore(this);
@@ -91,7 +94,10 @@ export default class BrowserPlugin extends Plugin {
 
     // 插件重启后 session 里的原生扩展已失效，需重新加载以拿回 electronId，
     // 否则 cs-runtime / sw-bridge 拿不到 SW，退回自研注入式。
-    void this.extHost.syncNativeOnStartup();
+    void this.extHost.syncNativeOnStartup().then(() => this.wakeDnrEngine());
+
+    await this.writePreloads();
+    this.ctx = this.buildContext();
 
     await this.writePreloads();
     this.ctx = this.buildContext();
@@ -122,11 +128,14 @@ export default class BrowserPlugin extends Plugin {
         extensions: () => this.store.data.extensions,
         refreshExtensionIcons: () => this.refreshExtensionIcons(),
         clearHistory: () => this.history.clear(),
+        applyProxy: () => applyProxyToSession(this.config),
       }),
     );
 
     this.app.workspace.onLayoutReady(() => {
       this.bindDownloads();
+      this.bindWebRequestPipeline();
+      void applyProxyToSession(this.config);
       if (this.config.restoreSession && this.store.data.session.length) {
         // Nothing to do: BrowserView.onOpen pulls the session from ctx.
       }
@@ -135,8 +144,48 @@ export default class BrowserPlugin extends Plugin {
 
   onunload(): void {
     this.unbindDownloads?.();
+    this.unbindPipeline?.();
+    this.unbindPipeline = null;
     this.popupLayer?.close();
     void this.store.flush();
+  }
+
+  // ---------------- 网络层（webRequest 管线 + DNR + 代理）----------------
+
+  private unbindPipeline: (() => void) | null = null;
+  private pipelinePartition = "";
+  /** 当前活动页签 URL 的弱引用（Referer 兜底用；BrowserView 会刷新它）。 */
+  private lastActiveTabUrl = "";
+
+  /**
+   * webRequest 三层管线（每 partition 注册一次——Electron 的 webRequest
+   * 是单听众语义，重复注册只会覆盖）。partition 改设置后重绑。
+   */
+  private bindWebRequestPipeline(): void {
+    const partition = this.config.partition;
+    if (this.unbindPipeline && this.pipelinePartition === partition) return;
+    this.unbindPipeline?.();
+    this.unbindPipeline = null;
+    const session = sessionFromPartition(partition);
+    if (!session?.webRequest) return;
+    this.lastActiveTabUrl = this.activeTab()?.url ?? "";
+    const pipeline = bindWebRequestPipeline(session, {
+      getSettings: () => this.config,
+      activeTabUrl: () => {
+        // 活动页签优先；退化为最近记录的 URL
+        const cur = this.activeTab()?.url;
+        if (cur) this.lastActiveTabUrl = cur;
+        return this.lastActiveTabUrl;
+      },
+    });
+    this.pipelinePartition = partition;
+    this.unbindPipeline = () => pipeline.unbind();
+  }
+
+  /** DNR 规则引擎惰性加载（AdGuard 扩展自带 35 万条规则集）。 */
+  private wakeDnrEngine(): void {
+    const dir = this.extHost.findAdGuardDir();
+    if (dir) void dnrBlocker.load(dir);
   }
 
   // ---------------- context ----------------

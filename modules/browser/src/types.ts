@@ -39,6 +39,8 @@ export type NewTabMode = "blank" | "home" | "search";
  *              (drag to splits, Ctrl+W, workspace.json restore all come free).
  */
 export type TabMode = "internal" | "native";
+/** system = 跟随系统代理（Chromium 默认）；custom = proxyCustomUrl。 */
+export type ProxyMode = "system" | "custom";
 
 export interface BrowserSettings {
   /** URL loaded by the home button / new-tab page. */
@@ -65,6 +67,11 @@ export interface BrowserSettings {
   adBlockEnabled: boolean;
   /** Extra Adblock `##` element-hiding rules. */
   adBlockRules: string;
+
+  /** webview 会话代理（思源版同款：会话级代理不继承本体）。 */
+  proxyMode: ProxyMode;
+  /** custom 模式的代理规则（http/https/socks5://host:port 或 `http=…;https=…`）。 */
+  proxyCustomUrl: string;
 
   /** Vault-relative folder for downloads. */
   downloadDir: string;
