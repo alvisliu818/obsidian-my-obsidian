@@ -102,12 +102,126 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 		this.host = host;
 	}
 
+	/**
+	 * 模块设置二级页（用户拍板的形态：不内嵌展开，点开进下一页）。
+	 *
+	 * 形状逆向自 Obsidian 1.15 app.js 的 page 基类（aT）与 openPage 契约：
+	 * rootEl = div.setting-page.vertical-tab-content，其下 titlebarEl =
+	 * div.setting-page-titlebar（框架塞返回键与标题）、containerEl =
+	 * div.setting-page-content。openPage 负责把 rootEl 挂进设置容器并做
+	 * 滑入动画（旧页自动 detach），closePage 滑出并回渲染宿主页；但
+	 * clearPageStack（切换 tab 时）只调 page.hide() 不摘 DOM——hide 里延迟
+	 * detach 兜底，避免残页叠在宿主页上。
+	 *
+	 * 页内容渲染复用 1.15 配方：模块 tab 的 display() 在 1.15 已成空壳
+	 * （displayLegacy 只 beginRenderCycle + empty），真实渲染 = update() 从
+	 * getSettingDefinitions() 填 settingItems + renderTab() 铺 DOM；1.14 及
+	 * 更早没有 openPage，走到这里直接提示（Obsidian 自动升级，1.14 分支
+	 * 不再维护）。
+	 */
+	private modulePage: {
+		title: string;
+		rootEl: HTMLElement;
+		titlebarEl: HTMLElement;
+		containerEl: HTMLElement;
+		display(): void;
+		hide(): void;
+	} | null = null;
+
+	private modulePageTab: {
+		containerEl: HTMLElement;
+		display(): void;
+		hide?(): void;
+		update?(): unknown;
+		renderTab?(): unknown;
+	} | null = null;
+
+	private openModulePage(moduleId: string, moduleName: string): void {
+		const tab = this.host.capturedTabs.get(moduleId) as
+			| {
+					containerEl: HTMLElement;
+					display(): void;
+					hide?(): void;
+					update?(): unknown;
+					renderTab?(): unknown;
+			  }
+			| undefined;
+		if (!tab) {
+			new Notice(`「${moduleName}」暂无设置页（模块可能尚未启动）`);
+			return;
+		}
+		const api = this.app.setting as unknown as {
+			openPage?(page: unknown): void;
+			closePage?(): void;
+			pageStack?: Array<{ page: unknown }>;
+		};
+		if (typeof api.openPage !== "function") {
+			new Notice("当前 Obsidian 版本不支持设置二级页（需要 1.15+）");
+			return;
+		}
+		// 复用单例 page：openPage 拒绝重复 push 同一对象，换模块时先出栈。
+		if (this.modulePage && api.pageStack?.some((e) => e.page === this.modulePage)) {
+			api.closePage?.();
+		}
+		if (!this.modulePage) {
+			this.modulePage = this.buildModulePage();
+		}
+		this.modulePageTab = tab;
+		this.modulePage.title = `${moduleName} 设置`;
+		api.openPage(this.modulePage);
+	}
+
+	private buildModulePage(): {
+		title: string;
+		rootEl: HTMLElement;
+		titlebarEl: HTMLElement;
+		containerEl: HTMLElement;
+		display(): void;
+		hide(): void;
+	} {
+		const self = this;
+		const rootEl = createDiv("setting-page vertical-tab-content");
+		const titlebarEl = rootEl.createDiv("setting-page-titlebar");
+		const containerEl = rootEl.createDiv("setting-page-content");
+		return {
+			title: "",
+			rootEl,
+			titlebarEl,
+			containerEl,
+			display() {
+				const tab = self.modulePageTab;
+				if (!tab) return;
+				containerEl.empty();
+				containerEl.appendChild(tab.containerEl);
+				if (typeof tab.update === "function" && typeof tab.renderTab === "function") {
+					tab.update();
+					tab.renderTab();
+				} else {
+					tab.display();
+				}
+			},
+			hide() {
+				self.modulePageTab?.hide?.();
+				// closePage 路径：框架滑出动画（150ms）后自会 detach；
+				// clearPageStack 路径无人摘 DOM——延迟兜底。对已 detach 的
+				// rootEl 再 detach 无害。
+				window.setTimeout(() => {
+					try {
+						rootEl.detach();
+					} catch {
+						/* already detached */
+					}
+				}, 250);
+			},
+		};
+	}
+
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
 		containerEl.createEl("h2", { text: "My Obsidian" });
 		containerEl.createEl("p", {
-			text: "一个插件、一个 id。每个功能一把大开关：关掉的功能在下次启动前不会占用任何资源；开启即时生效，关闭需重启 Obsidian 才能卸载已载入的模块。带设置的模块在开关下方直接展开。",
+			text: "一个插件、一个 id。每个功能一把大开关：关掉的功能在下次启动前不会占用任何资源；开启即时生效，关闭需重启 Obsidian 才能卸载已载入的模块。点齿轮进入该模块的设置页。",
 			cls: "setting-item-description",
 		});
 
@@ -126,62 +240,29 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 						if (value) await this.host.reload(m.id);
 						else new Notice(`「${m.name}」已关闭，重启 Obsidian 后生效`);
 					}),
+				)
+				.addExtraButton((btn) =>
+					btn
+						.setIcon("settings-2")
+						.setTooltip(`${m.name} 设置`)
+						.onClick(() => this.openModulePage(m.id, m.name)),
 				);
-
-			// 内嵌模块设置：模块 onload 里 addSettingTab 的截获物。展开时把它的
-			// containerEl 挂进 details 并调 display()（PluginSettingTab 渲染进
-			// 自带容器，搬 DOM 节点即可）；收起时调 hide() 让它落盘/清定时器。
-			const tab = this.host.capturedTabs.get(m.id) as
-				| {
-						containerEl: HTMLElement;
-						display(): void;
-						hide?(): void;
-				  }
-				| undefined;
-			if (!tab) continue;
-			const details = containerEl.createEl("details", {
-				cls: "my-module-settings",
-			});
-			details.createEl("summary", { text: `${m.name} 设置` });
-			const holder = details.createDiv({ cls: "my-module-settings-holder" });
-			let rendered = false;
-			details.addEventListener("toggle", () => {
-				if (details.open && !rendered) {
-					holder.appendChild(tab.containerEl);
-					tab.containerEl.addClass("my-embedded-setting-tab");
-					tab.display();
-					rendered = true;
-				} else if (!details.open) {
-					tab.hide?.();
-				}
-			});
 		}
 
 		// 内层子插件实例的设置页（addTab 垫片截获的 inner: 键）：没有对应的
 		// descriptor 行，统一挂在末尾的「其他」区。
 		for (const [key, tab] of this.host.capturedTabs) {
 			if (!key.startsWith("inner:")) continue;
-			const t = tab as {
-				containerEl: HTMLElement;
-				display(): void;
-				hide?(): void;
-			};
-			const details = containerEl.createEl("details", {
-				cls: "my-module-settings",
-			});
-			details.createEl("summary", { text: `其他模块设置（${key.split(":")[2] ?? key}）` });
-			const holder = details.createDiv({ cls: "my-module-settings-holder" });
-			let rendered = false;
-			details.addEventListener("toggle", () => {
-				if (details.open && !rendered) {
-					holder.appendChild(t.containerEl);
-					t.containerEl.addClass("my-embedded-setting-tab");
-					t.display();
-					rendered = true;
-				} else if (!details.open) {
-					t.hide?.();
-				}
-			});
+			void tab;
+			const label = key.split(":")[2] ?? key;
+			new SettingCtor(containerEl)
+				.setName(`其他模块设置（${label}）`)
+				.addExtraButton((btn) =>
+					btn
+						.setIcon("settings-2")
+						.setTooltip("打开设置")
+						.onClick(() => this.openModulePage(key, label)),
+				);
 		}
 
 		containerEl.createEl("p", {
