@@ -64,6 +64,9 @@ import UnifiedSearchPlugin from "../modules/unified-search/src/main";
 // 已被 obsidian-git 占用）即通过宿主严格配置 → 源码直连，无需 require 桥；
 // tree-sitter 核心 wasm 构建期内嵌（见模块 NOTICE 与根 esbuild.mjs）。
 import CodeLinkPlugin from "../modules/code-link/src/main";
+// plugin-market（自研）：社区插件市场增强——详情顶部区可选中复制（核心
+// user-select:none 传导）、插件评价打标签（绑定社区插件 id）、按标签筛选。
+import PluginMarketPlugin from "../modules/plugin-market/src/main";
 // Advanced URI v2.2.1（Vinzent03，MIT）：require 桥（见 modules/advanced-uri/NOTICE）。
 // 上游 tsconfig 非 strict 且其构建不过 tsc，直连会在宿主严格配置下爆 175 处
 // 类型噪音（obsidian 类型版本漂移 + strictNullChecks）——同 media-extended/
@@ -632,6 +635,17 @@ export default class MyObsidianPlugin extends Plugin {
 			manifest: { version: "1.0.4" },
 			migrateFrom: "code-link",
 			cls: CodeLinkPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// 自研：社区插件市场增强（2026-11-04 用户需求）——详情顶部区可选中
+			// 复制、插件评价打标签（绑定社区插件 id，数据在模块片）、按标签筛选
+			// 市场列表。不 patch 核心类，纯 DOM 观察 + 注入。
+			id: "plugin-market",
+			name: "Plugin Market",
+			summary:
+				"社区插件市场增强：详情页信息可选中复制；插件可打 1-5 星评分与标签（绑定插件 id 持久化）；侧栏按标签筛选市场列表，卡片显示评价/标签徽标。",
+			desktopOnly: false,
+			cls: PluginMarketPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
 			// Third-party (Vinzent03, MIT), kept whole — see
