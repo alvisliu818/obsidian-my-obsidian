@@ -28,8 +28,7 @@ const STYLE_CSS = `
   user-select: text !important;
   -webkit-user-select: text !important;
 }
-.community-modal-info .community-modal-meta button,
-.community-modal-info .community-modal-meta a {
+.community-modal-info .community-modal-meta button {
   user-select: none !important;
   -webkit-user-select: none !important;
 }
@@ -281,10 +280,27 @@ function countMatchingCards(modal: HTMLElement, ctx: EnhanceCtx): { matched: num
 	let total = 0;
 	for (const card of modal.querySelectorAll<HTMLElement>('.community-item.tappable')) {
 		total++;
-		const id = cardId(card, ctx);
-		if (id && ctx.store.reviewOf(id)?.tags?.includes(tag ?? '')) matched++;
+		if (cardMatches(card, tag, ctx)) matched++;
 	}
 	return { matched, total };
+}
+
+/**
+ * 标签筛选的单卡判定。
+ *
+ * 两条不隐藏的宽限（反查失败 = 优雅退化，见 store.ts 文件头）：
+ *  - **懒加载占位卡**：核心分批渲染列表，未滚到的卡片还没有 name/author
+ *    （实测 300 张卡里只有视口带约 31 张有内容）。它们反查必失败——
+ *    若按"查无此 id = 不匹配"处理，开筛选后整个未渲染区全部消失
+ *    （实测 9933/9934 被藏），滚动到哪藏到哪。占位卡一律可见。
+ *  - **目录未收录**：官方目录快照之外的插件（目录刷新间隙新增的等）。
+ *    同理可见——筛选只对"确认无此标签"的卡片生效。
+ */
+function cardMatches(card: HTMLElement, tag: string | undefined, ctx: EnhanceCtx): boolean {
+	if (!tag) return true;
+	const id = cardId(card, ctx);
+	if (!id) return true;
+	return !!ctx.store.reviewOf(id)?.tags?.includes(tag);
 }
 
 function applyFilter(modal: HTMLElement, ctx: EnhanceCtx): void {
@@ -292,11 +308,10 @@ function applyFilter(modal: HTMLElement, ctx: EnhanceCtx): void {
 	if (!doc) return;
 	const tag = ctx.store.data.activeTag;
 	for (const card of modal.querySelectorAll<HTMLElement>('.community-item.tappable')) {
+		const match = cardMatches(card, tag, ctx);
+		card.style.display = match ? '' : 'none';
 		const id = cardId(card, ctx);
 		const review = id ? ctx.store.reviewOf(id) : undefined;
-		// 筛选
-		const match = !tag || (!!id && !!review?.tags?.includes(tag));
-		card.style.display = match ? '' : 'none';
 		// 徽标（有评价或标签才画；先清旧的防重复/防陈旧）
 		card.querySelector('.lgp-mkt-badge')?.remove();
 		if (review && (review.note || review.tags?.length)) {
