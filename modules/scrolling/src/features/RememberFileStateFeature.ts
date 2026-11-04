@@ -24,6 +24,48 @@ interface EphemeralState {
     cursor?: EditorRange;
 }
 
+// 库外存储（聚合主仓新增）：位置表写到 vault 之外的绝对路径（同步盘外的本机
+// 文件），滚动时的高频落盘不再进同步队列。node:fs 保持 external，由 Electron
+// renderer 的 nodeIntegration 在运行时解析；这里惰性 require，移动端（无
+// nodeIntegration）拿到 null，外部存储的所有入口都会先挡在 isDesktop 上。
+type FsModule = typeof import("node:fs");
+type OsModule = typeof import("node:os");
+type PathModule = typeof import("node:path");
+
+let fsModule: FsModule | null | undefined;
+function getFs(): FsModule | null {
+    if (fsModule === undefined) {
+        try {
+            fsModule = require("node:fs") as FsModule;
+        } catch {
+            fsModule = null;
+        }
+    }
+    return fsModule;
+}
+let osModule: OsModule | null | undefined;
+function getOs(): OsModule | null {
+    if (osModule === undefined) {
+        try {
+            osModule = require("node:os") as OsModule;
+        } catch {
+            osModule = null;
+        }
+    }
+    return osModule;
+}
+let pathModule: PathModule | null | undefined;
+function getPath(): PathModule | null {
+    if (pathModule === undefined) {
+        try {
+            pathModule = require("node:path") as PathModule;
+        } catch {
+            pathModule = null;
+        }
+    }
+    return pathModule;
+}
+
 class FileLeaf extends WorkspaceLeaf {
     // 聚合主仓开了 strictPropertyInitialization：这里只是收窄 WorkspaceLeaf
     // 的 view 类型（不产生运行时字段，故用 declare）。
@@ -168,6 +210,30 @@ export class RememberFileStateFeature implements Feature {
                 },
             },
             {
+                // 聚合主仓新增：库外存储。同步盘 vault 里高频滚动写盘全是同步
+                // 噪音——外部文件（绝对路径，本机）绕开同步。仅桌面（node:fs）。
+                name: "Store positions outside the vault",
+                desc:
+                    "Desktop only. Write the positions file to an absolute path on this machine " +
+                    "instead of inside the vault, so the frequent scroll writes never reach a " +
+                    "synced folder. Turning this on migrates the existing vault file to the " +
+                    "external location (the vault copy is kept as a backup).",
+                control: {
+                    type: "toggle",
+                    key: "restoreScrollExternal",
+                    defaultValue: false,
+                    disabled: (): boolean => {
+                        return this.plugin.settings.restoreScrollMode === "top";
+                    },
+                },
+                visible: (): boolean => {
+                    return this.plugin.settings.restoreScrollFileEnabled && Platform.isDesktopApp;
+                },
+                onChange: (value: unknown) => {
+                    if (value === true) void this.migrateToExternal();
+                },
+            },
+            {
                 // 聚合主仓新增（上游没有）：写盘时机开关。
                 name: "Write file only on exit",
                 desc:
@@ -189,7 +255,10 @@ export class RememberFileStateFeature implements Feature {
             },
             {
                 name: "Storage file path",
-                desc: "File for persistent storage of scrolling positions across sessions.",
+                desc: (): string =>
+                    this.isExternalStorage()
+                        ? "Absolute path on this machine (outside the vault) for persistent storage of scrolling positions."
+                        : "File for persistent storage of scrolling positions across sessions (vault-relative).",
                 control: {
                     type: "text",
                     key: "restoreScrollFilePath",
@@ -289,6 +358,133 @@ export class RememberFileStateFeature implements Feature {
         return Object.keys(this.ephemeralStates).length;
     }
 
+    // ------------------------------------------------------------------
+    // 库外存储（聚合主仓新增）——IO 分流的公共部分
+    // ------------------------------------------------------------------
+
+    /** 外部模式生效 = 开关开 + 桌面 + node:fs 可用。移动端没有 fs，永远走库内。 */
+    private isExternalStorage(): boolean {
+        return Platform.isDesktopApp && this.plugin.settings.restoreScrollExternal === true && getFs() !== null;
+    }
+
+    /** Windows 盘符路径 / POSIX 绝对路径判定（外部模式下用于识别已配置的绝对路径）。 */
+    private isAbsolutePath(p: string): boolean {
+        return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith("/") || p.startsWith("\\");
+    }
+
+    /**
+     * 外部默认路径：跟随 Obsidian 自身的配置目录旁（`%APPDATA%/obsidian/` 或
+     * `~/.config/obsidian/`），绝不在任何 vault（同步盘）内。用户可在设置页改。
+     */
+    private externalDefaultPath(): string {
+        const os = getOs();
+        const path = getPath();
+        if (!os || !path) return "";
+        const base = process.env.APPDATA || path.join(os.homedir(), ".config");
+        return path.join(base, "obsidian", "scrolling-positions.json");
+    }
+
+    /**
+     * 首次切到库外存储时调用：路径还是库内相对路径就换成外部默认路径，并把
+     * 现有库内位置文件复制过去（库内原件保留作备份）。已在绝对路径上则仅尝试
+     * 把库内默认文件迁移过来（用户可能改过路径）。
+     */
+    private async migrateToExternal(): Promise<void> {
+        const fs = getFs();
+        if (!fs) {
+            new Notice("External storage requires the desktop app.");
+            await this.plugin.settingsStore.set("restoreScrollExternal", false);
+            return;
+        }
+        const current = this.plugin.settings.restoreScrollFilePath ?? "";
+        let target = current;
+        if (!current || !this.isAbsolutePath(current)) {
+            target = this.externalDefaultPath();
+            if (!target) {
+                new Notice("External storage is not available on this system.");
+                await this.plugin.settingsStore.set("restoreScrollExternal", false);
+                return;
+            }
+            await this.plugin.settingsStore.set("restoreScrollFilePath", target);
+        }
+
+        // 迁移源：当前库内路径（若还是相对路径）或库内默认路径。
+        const vaultSource = !current || this.isAbsolutePath(current) ? this.getDefaultStateFilePath() : current;
+        try {
+            const adapter = this.plugin.app.vault.adapter;
+            const hasSource = !this.isAbsolutePath(vaultSource) && (await adapter.exists(vaultSource));
+            const hasTarget = fs.existsSync(target);
+            if (hasSource && !hasTarget) {
+                const path = getPath();
+                const dir = path ? path.dirname(target) : "";
+                if (dir) fs.mkdirSync(dir, { recursive: true });
+                const data = await adapter.read(vaultSource);
+                fs.writeFileSync(target, data, "utf-8");
+                new Notice(`Migrated scroll positions to ${target} (the vault copy is kept).`);
+            }
+        } catch (err) {
+            console.warn("Scroll positions migration failed:", err);
+        }
+    }
+
+    /** 位置文件是否存在（按当前模式走 fs 或 vault adapter）。 */
+    private async statesFileExists(filePath: string): Promise<boolean> {
+        if (this.isExternalStorage()) {
+            const fs = getFs();
+            if (!fs) return false;
+            try {
+                return fs.existsSync(filePath);
+            } catch {
+                return false;
+            }
+        }
+        return this.plugin.app.vault.adapter.exists(filePath);
+    }
+
+    /** 读位置文件全文（按当前模式分流）。 */
+    private async readStatesFile(filePath: string): Promise<string> {
+        if (this.isExternalStorage()) {
+            const fs = getFs();
+            if (!fs) throw new Error("node:fs unavailable");
+            return fs.readFileSync(filePath, "utf-8");
+        }
+        return this.plugin.app.vault.adapter.read(filePath);
+    }
+
+    /** 写位置文件全文（外部模式确保父目录存在）。 */
+    private async writeStatesFileAt(filePath: string, data: string): Promise<void> {
+        if (this.isExternalStorage()) {
+            const fs = getFs();
+            const path = getPath();
+            if (!fs || !path) throw new Error("node:fs unavailable");
+            fs.mkdirSync(path.dirname(filePath), { recursive: true });
+            fs.writeFileSync(filePath, data, "utf-8");
+            return;
+        }
+        await this.plugin.app.vault.adapter.write(filePath, data);
+    }
+
+    /** 某路径的父目录是否存在（外部模式按 fs 判，库内模式按 adapter 判）。 */
+    private async directoryOfFileExists(filePath: string): Promise<boolean> {
+        const lastSlashIndex = filePath.lastIndexOf("/");
+        const winSlash = filePath.lastIndexOf("\\");
+        const idx = Math.max(lastSlashIndex, winSlash);
+        if (idx === -1) {
+            return true;
+        }
+        const dirPath = filePath.substring(0, idx);
+        if (this.isExternalStorage()) {
+            const fs = getFs();
+            if (!fs) return false;
+            try {
+                return fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory();
+            } catch {
+                return false;
+            }
+        }
+        return await this.plugin.app.vault.adapter.exists(dirPath);
+    }
+
     /**
      * Reads the state file on disk into memory.
      *
@@ -301,7 +497,7 @@ export class RememberFileStateFeature implements Feature {
         const filePath = this.plugin.settings.restoreScrollFilePath;
 
         try {
-            const data = await this.plugin.app.vault.adapter.read(filePath);
+            const data = await this.readStatesFile(filePath);
             if (data) {
                 this.ephemeralStates = JSON.parse(data);
             } else {
@@ -331,6 +527,39 @@ export class RememberFileStateFeature implements Feature {
         if (!newPath || newPath.trim() === "" || newPath === "." || newPath === "..") {
             new Notice("Invalid file path!");
             return;
+        }
+
+        const external = this.isExternalStorage();
+        if (external) {
+            // 外部模式：绝对路径直用（Windows 反斜杠原样保留），不碰
+            // normalizePath——它会把绝对路径当 vault 相对路径改写。
+            const fs = getFs();
+            const path = getPath();
+            if (!fs || !path) {
+                new Notice("External storage requires the desktop app.");
+                return;
+            }
+            const target = newPath.trim();
+            const old = this.plugin.settings.restoreScrollFilePath ?? "";
+            if (!(await this.directoryOfFileExists(target))) {
+                new Notice(`Directory of file does not exist.`);
+                return;
+            }
+            if (fs.existsSync(target)) {
+                new Notice(`File already exists: ${target}`);
+                return;
+            }
+            if (old && fs.existsSync(old)) {
+                try {
+                    fs.mkdirSync(path.dirname(target), { recursive: true });
+                    fs.renameSync(old, target);
+                } catch {
+                    new Notice("Invalid file path!");
+                    return;
+                }
+            }
+            new Notice(`Renamed storage file to: ${target}`);
+            return target;
         }
 
         // Assuming this.plugin.settings.restoreScrollStoreFile is valid
@@ -687,18 +916,6 @@ export class RememberFileStateFeature implements Feature {
     }
 
     /**
-     * Checks asynchronously whether the directory of a file path exists.
-     */
-    private async directoryOfFileExists(filePath: string): Promise<boolean> {
-        const lastSlashIndex = filePath.lastIndexOf("/");
-        if (lastSlashIndex === -1) {
-            return true;
-        }
-        const dirPath = filePath.substring(0, lastSlashIndex);
-        return await this.plugin.app.vault.adapter.exists(dirPath);
-    }
-
-    /**
      * 计划一次落盘（聚合主仓新增的调度层）。
      *
      * 上游每次滚动/打开文件都会防抖写盘（293ms），库里文件多或开着同步盘时写
@@ -720,16 +937,16 @@ export class RememberFileStateFeature implements Feature {
     }
 
     /**
-     * Validates or updates the path to the storage file on disk for writing (not reading).
+     * Validates or updates the path to the state file on disk for writing (not reading).
      * Attempts "scrolling" and "obsidian-scrolling" as fallback directory names of this plugin.
      */
     private async checkStatesFileWritePath(): Promise<void> {
         // Check saved path
         if (await this.directoryOfFileExists(this.plugin.settings.restoreScrollFilePath)) return;
 
-        // Check default path
-        let default_path = this.getDefaultStateFilePath();
-        if (await this.directoryOfFileExists(default_path)) {
+        // Check default path（外部模式回落外部默认；库内模式回落插件目录）
+        let default_path = this.isExternalStorage() ? this.externalDefaultPath() : this.getDefaultStateFilePath();
+        if (default_path && (await this.directoryOfFileExists(default_path))) {
             await this.plugin.settingsStore.set("restoreScrollFilePath", default_path);
             return;
         }
@@ -748,7 +965,7 @@ export class RememberFileStateFeature implements Feature {
 
         try {
             const data = JSON.stringify(this.ephemeralStates);
-            await this.plugin.app.vault.adapter.write(filePath, data);
+            await this.writeStatesFileAt(filePath, data);
         } catch {
             new Notice("Failed to write scroll positions file. Disabling disk storage.");
             console.error("Failed to write scroll positions file:", filePath);
@@ -762,12 +979,11 @@ export class RememberFileStateFeature implements Feature {
      */
     private async checkStatesFileLoadPath(): Promise<boolean> {
         // Check saved path
-        if (await this.plugin.app.vault.adapter.exists(this.plugin.settings.restoreScrollFilePath))
-            return true;
+        if (await this.statesFileExists(this.plugin.settings.restoreScrollFilePath)) return true;
 
         // Check default path
-        let default_path = this.getDefaultStateFilePath();
-        if (await this.directoryOfFileExists(default_path)) {
+        let default_path = this.isExternalStorage() ? this.externalDefaultPath() : this.getDefaultStateFilePath();
+        if (default_path && (await this.statesFileExists(default_path))) {
             await this.plugin.settingsStore.set("restoreScrollFilePath", default_path);
             return true;
         }
