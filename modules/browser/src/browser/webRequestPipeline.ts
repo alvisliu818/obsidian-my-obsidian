@@ -22,8 +22,8 @@ export interface WebRequestPipelineOpts {
 	getSettings: () => BrowserSettings;
 	/** 当前活动页签的 URL（Referer 兜底用；空串则退化为目标 origin）。 */
 	activeTabUrl: () => string;
-	/** 扩展 webRequest 阻塞桥（userJsInstall.ts 的 maybeDispatchWr）。 */
-	extBridge?: { maybeDispatch(url: string, rtDnr: string | null, details: any, cb: (r: any) => void): boolean };
+	/** 扩展 webRequest 阻塞桥（wrBridge.ts 实例的 ducks 形状）。 */
+	extBridge?: { maybeDispatchWr(url: string, rtDnr: string | null, details: any, cb: (r: any) => void): boolean };
 	/** .user.js mainFrame 导航（userJsInstall.ts 的 onUserJsNavigation；管线先 cb cancel）。 */
 	onUserJs?: (url: string, resourceType: string) => void;
 }
@@ -50,7 +50,7 @@ export function bindWebRequestPipeline(session: any, opts: WebRequestPipelineOpt
 					return;
 				}
 			}
-			if (opts.extBridge?.maybeDispatch(url, rtDnr ?? "", details, cb)) {
+			if (opts.extBridge?.maybeDispatchWr(url, rtDnr ?? "", details, cb)) {
 				return; // cb 由阻塞桥派发路径回调
 			}
 			const s = opts.getSettings();

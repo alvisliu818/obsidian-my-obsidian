@@ -24,6 +24,7 @@ import type { BrowserContext } from "./browser/context";
 import { clipPage } from "./browser/excerpt";
 import { bindWebRequestPipeline } from "./browser/webRequestPipeline";
 import { UserJsChain } from "./browser/userJsInstall";
+import { WrBridge } from "./browser/wrBridge";
 import { evalInSwBridge } from "./extensions/cs-runtime";
 import { applyProxyToSession } from "./browser/proxy";
 import { dnrBlocker } from "./browser/dnrEngine";
@@ -47,6 +48,7 @@ export default class BrowserPlugin extends Plugin {
   private downloads!: DownloadsStore;
   private extHost!: ExtensionHost;
   private usInjector = new UserscriptInjector();
+  private wrBridge!: WrBridge;
   private usChain!: UserJsChain;
   private popupLayer: PopupLayer | null = null;
   private ctx!: BrowserContext;
@@ -98,7 +100,17 @@ export default class BrowserPlugin extends Plugin {
       },
     });
 
-    // .user.js 安装链 + webRequest 阻塞桥 + webNavigation 合成
+    // .user.js 安装链 + webRequest 阻塞桥 + webNavigation 合成（架构：
+    // 阻塞桥是基础设施 wrBridge，安装链 usChain 是它的消费者）
+    this.wrBridge = new WrBridge({
+      listExts: () =>
+        this.store.data.extensions
+          .filter((r) => r.enabled && r.electronId)
+          .map((r) => ({ electronId: r.electronId!, name: r.name, native: true })),
+      evalInSw: (eid, expr) => evalInSwBridge({ electronId: eid } as any, expr),
+      openUrl: (u) => void this.openUrl(u, true),
+      activeUrl: () => this.activeTab()?.url ?? "",
+    });
     this.usChain = new UserJsChain({
       listExts: () =>
         this.store.data.extensions
@@ -106,13 +118,13 @@ export default class BrowserPlugin extends Plugin {
           .map((r) => ({ electronId: r.electronId!, name: r.name, native: true })),
       getRegistry: () => this.usInjector.registry(),
       evalInSw: (eid, expr) => evalInSwBridge({ electronId: eid } as any, expr),
-      openUrl: (u) => void this.openUrl(u, true),
-      activeUrl: () => this.activeTab()?.url ?? "",
+      bridge: this.wrBridge,
       ensureCsRuntime: () => {
         const t = this.activeTab();
         if (t) this.extHost.ensureCsRuntime(t.getWebview());
       },
     });
+    this.usChain = this.usChain;
 
     // 新标签页扩展数据代答（chrome.topSites/bookmarks/history ← 自己的库）
     this.extHost.userDataProvider = async (kind: string, args: any) => {
@@ -192,7 +204,7 @@ export default class BrowserPlugin extends Plugin {
     void this.extHost.syncNativeOnStartup().then(() => {
       this.wakeDnrEngine();
       // SW 就绪后拉一轮 webRequest filter 快照（阻塞桥冷启动）
-      void this.usChain.refreshWrBridge(true);
+      void this.wrBridge.refreshWrBridge(true);
     });
 
     await this.writePreloads();
@@ -276,9 +288,7 @@ export default class BrowserPlugin extends Plugin {
         if (cur) this.lastActiveTabUrl = cur;
         return this.lastActiveTabUrl;
       },
-      extBridge: {
-        maybeDispatch: (url, rtDnr, details, cb) => this.usChain.maybeDispatchWr(url, rtDnr, details, cb),
-      },
+      extBridge: this.wrBridge,
       onUserJs: (url) => this.usChain.onUserJsNavigation(url, "mainFrame"),
     });
     this.pipelinePartition = partition;
@@ -471,7 +481,7 @@ export default class BrowserPlugin extends Plugin {
 
   private onTabChanged(tab: BrowserTab): void {
     // webNavigation.onCommitted 合成派发（TM 的 .user.js 安装检测依赖导航事件流）
-    if (/^https?:\/\//i.test(tab.url)) void this.usChain.emitWebNavCommitted(tab.url);
+    if (/^https?:\/\//i.test(tab.url)) void this.wrBridge.emitWebNavCommitted(tab.url);
     for (const leaf of this.browserLeaves()) {
       const view = leaf.view as BrowserView;
       if (view?.tabs?.includes(tab)) {
