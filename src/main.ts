@@ -725,6 +725,50 @@ export default class MyObsidianPlugin extends Plugin {
 		// Must precede every module load: the mnaoumov modules call these during
 		// their own onload, and the second one to arrive used to throw.
 		allowReentrantLibraryInit();
+		// 启动洪峰治理（2026-11-05 内存优化）：55k 文件库启动期构建
+		// metadata/索引/模块结构的瞬时分配会把 renderer RSS 推到 ~3GB 高水位
+		// （实测峰值 3008MB@69s），V8 保留页不主动还给 OS，稳定态实测仅 ~1.4GB。
+		// layoutReady + 60s（索引 daemon 收敛后）主动 expose-gc 一轮拉回水位。
+		this.app.workspace.onLayoutReady(() => {
+			window.setTimeout(() => {
+				try {
+					// eslint-disable-next-line @typescript-eslint/no-require-imports
+					const v8 = require('v8') as { setFlagsFromString: (f: string) => void };
+					v8.setFlagsFromString('--expose_gc');
+					(globalThis as { gc?: () => void }).gc?.();
+					console.debug('[my-obsidian] boot GC done');
+				} catch (err) {
+					console.warn('[my-obsidian] boot GC failed', err);
+				}
+				// 周期性空闲 GC：livesync 活跃同步等后台工作在 renderer 持续分配，
+				// V8 只在堆压力下回收、RSS 高水位不还页（实测启动 GC 后 60s 内
+				// 又爬回 +1.2GB）。每 5 分钟检查一次，用户空闲 ≥ 60s 才执行——
+				// 交互期零停顿，空闲期把高水位拉回稳定态。
+				let lastActivity = Date.now();
+				const mark = (): void => {
+					lastActivity = Date.now();
+				};
+				window.addEventListener('pointerdown', mark, { capture: true, passive: true });
+				window.addEventListener('keydown', mark, { capture: true, passive: true });
+				window.addEventListener('wheel', mark, { capture: true, passive: true });
+				this.register(() => {
+					window.removeEventListener('pointerdown', mark, { capture: true });
+					window.removeEventListener('keydown', mark, { capture: true });
+					window.removeEventListener('wheel', mark, { capture: true });
+				});
+				const idleGc = (): void => {
+					if (Date.now() - lastActivity < 60_000) return;
+					try {
+						(globalThis as { gc?: () => void }).gc?.();
+						console.debug('[my-obsidian] idle GC done');
+					} catch (err) {
+						console.warn('[my-obsidian] idle GC failed', err);
+					}
+				};
+				const idleGcTimer = window.setInterval(idleGc, 5 * 60_000);
+				this.register(() => window.clearInterval(idleGcTimer));
+			}, 60_000);
+		});
 		await this.loadSettings();
 		const hostTab = new MyObsidianSettingTab(this.app, this, {
 			settings: this.settings,
