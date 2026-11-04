@@ -671,6 +671,14 @@ function attachTitleMenu(host: HTMLElement, menuHost: HeaderMenuHost, fileAbs: s
 	title.dataset['lgpHdrMenu'] = '1';
 	title.title = `${norm(fileAbs)}（点击查看同级，右键文件菜单）`;
 	title.addClass('lgp-hdr-crumb');
+	// 锁定态（虚拟树「文件名点击重命名」= 关）拦掉 mousedown 默认行为：焦点
+	// 跟着 mousedown 走，不拦的话点击会把标题变成焦点元素（聚焦态），且核心
+	// rename 模式对聚焦标题的响应会清空 .view-header-title-parent 的路径段
+	// （用户 2026-11-05：点击不要有聚焦态、路径不要收缩）。解锁态不拦——
+	// 重命名的点击聚焦照旧。锁标记由 virtual-tree 的 titleRename 观察器维护。
+	title.addEventListener('mousedown', (ev) => {
+		if (title.getAttribute('data-lgp-title-lock') === '1') ev.preventDefault();
+	});
 	title.addEventListener('click', (ev) => {
 		ev.preventDefault();
 		ev.stopPropagation();
