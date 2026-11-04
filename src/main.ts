@@ -141,6 +141,16 @@ const ExternalRenameHandlerPlugin = (
 		default: new (app: unknown, manifest: unknown) => SubPluginLike;
 	}
 ).default;
+// obsidian-shellcommands v1.0.2（Taitava / Jarkko Linnanvirta，GPL-3.0，现由
+// david-shepard 维护）：require 桥（同 livesync 模式——上游 171 文件 2.45 万行
+// 只开 noImplicitAny，不进根 strict typecheck）。两个 GitHub 依赖（ansi_up /
+// autocompleter 的 Taitava fork）源码 vendor 在模块 vendor/，esbuild alias 指入。
+// 见 modules/shellcommands/NOTICE.md。
+const ShellCommandsPlugin = (
+	require("../modules/shellcommands/src/main") as {
+		default: new (app: unknown, manifest: unknown) => SubPluginLike;
+	}
+).default;
 // better-markdown-links v6.4.0（mnaoumov，MIT）：同款 require 桥。43 个 lib
 // 子路径中 5.1.0 缺失的 3 个里 2 个由 FML vendor 覆盖，新增 2 个（undo 批量
 // 操作命令 + bulk 提交组件）按依赖闭包 BFS vendored 进模块 vendor/（36 文件）。
@@ -539,6 +549,17 @@ export default class MyObsidianPlugin extends Plugin {
 				"滚动与导航增强：光标居中（typewriter 模式）、记住并恢复滚动/光标位置、代码块不换行横向滚动、行内 MathJax 与文件树横向滚动、置顶/置底按钮与快捷命令、阅读模式 Vim 式快捷键、滚动条显隐策略、正文最大行宽。上游 omeyenburg（MIT）。",
 			desktopOnly: false,
 			cls: ScrollingPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Third-party (Taitava / Jarkko Linnanvirta, GPL-3.0; maintained by
+			// david-shepard), kept whole — see modules/shellcommands/NOTICE.md.
+			// 桌面专属：shell 执行依赖本机 shell 与 child_process。
+			id: "shellcommands",
+			name: "Shell Commands",
+			summary:
+				"自定义 shell 命令：预定义本机命令并绑快捷键/命令面板/URI（obsidian://shell-commands）执行，支持文件/变量插值、多 shell 配置、输出通道（浮层/状态栏/终端缓冲/当前文件）、执行前确认、别名、定时与事件自动化、提示框输入。上游 Taitava（GPL-3.0）。",
+			desktopOnly: true,
+			cls: ShellCommandsPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
 			// Third-party (Erfan Rahmani, GPL-3.0), kept whole — see

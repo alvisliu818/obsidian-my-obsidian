@@ -539,6 +539,11 @@ const context = await esbuild.context({
     "@polyipseity/obsidian-plugin-library": path.resolve(
       "modules/terminal/vendor/obsidian-plugin-library/src/index.ts",
     ),
+    // shellcommands 的两个 GitHub 依赖，源码 vendor 在模块 vendor/（见
+    // modules/shellcommands/NOTICE.md）。alias 以包名前缀匹配，子路径
+    // autocompleter/autocomplete 一并指入。
+    "ansi_up": path.resolve("modules/shellcommands/vendor/ansi_up"),
+    "autocompleter": path.resolve("modules/shellcommands/vendor/autocompleter"),
   },
   // obsidian = the host API; @codemirror/* + @lezer/* = Obsidian's own CM6
   // instance (official plugin convention), so every editor here shares ONE
@@ -623,6 +628,8 @@ const context = await esbuild.context({
   // isomorphic-git 在移动端需要 Buffer 全局（obsidian-git 上游的 polyfill）
   inject: ["modules/obsidian-git/polyfill_buffer.js"],
   logLevel: "info",
+  // METAFILE=1 时收集产物构成清单（esbuild-meta.json，见文件尾部 rebuild 处）
+  metafile: !!process.env.METAFILE,
   sourcemap: prod ? false : "inline",
   treeShaking: true,
   outfile: "main.js",
@@ -651,7 +658,12 @@ const daemon = await esbuild.context({
 });
 
 if (prod) {
-  await context.rebuild();
+  const r = await context.rebuild();
+  // METAFILE=1 时落盘产物构成清单（逐输入字节数），供体积/内存优化分析
+  if (process.env.METAFILE && r.metafile) {
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync("esbuild-meta.json", JSON.stringify(r.metafile));
+  }
   await daemon.rebuild();
   process.exit(0);
 } else {
