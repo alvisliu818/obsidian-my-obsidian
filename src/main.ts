@@ -50,6 +50,7 @@ import MediaJournalPlugin from "../modules/media-journal/src/main";
 import MusicPlayerPlugin from "../modules/music-player/src/main";
 import AudioPlayerPlugin from "../modules/audio-player/src/main";
 import ScrollingPlugin from "../modules/scrolling/src/core/main";
+import RibbonOrganizerPlugin from "../modules/ribbon-organizer/src/main";
 import AbstractFolderPlugin from "../modules/abstract-folder/main";
 import MomentumPlugin from "../modules/momentum/src/main";
 import HearthPlugin from "../modules/hearth/src/main";
@@ -549,6 +550,16 @@ export default class MyObsidianPlugin extends Plugin {
 				"滚动与导航增强：光标居中（typewriter 模式）、记住并恢复滚动/光标位置、代码块不换行横向滚动、行内 MathJax 与文件树横向滚动、置顶/置底按钮与快捷命令、阅读模式 Vim 式快捷键、滚动条显隐策略、正文最大行宽。上游 omeyenburg（MIT）。",
 			desktopOnly: false,
 			cls: ScrollingPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Third-party (xooooooooox / X.O., MIT), kept whole — see
+			// modules/ribbon-organizer/NOTICE.md.
+			id: "ribbon-organizer",
+			name: "Ribbon and Status Bar Organizer",
+			summary:
+				"侧栏图标与状态栏整理器：ribbon 图标分组（组开关/组内快捷命令菜单/拖拽排序）、隐藏杂项图标、状态栏元素分组与显隐规则。上游 xooooooooox（MIT）。",
+			desktopOnly: false,
+			cls: RibbonOrganizerPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
 			// Third-party (Taitava / Jarkko Linnanvirta, GPL-3.0; maintained by
