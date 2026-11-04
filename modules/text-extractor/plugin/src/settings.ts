@@ -11,7 +11,7 @@ import {
   getOcrLangs,
   clearOCRWorkers,
   setCacheLocation,
-} from 'obsidian-text-extract'
+} from './lazyTextExtract'
 import type { CacheLocation } from 'obsidian-text-extract'
 
 /**

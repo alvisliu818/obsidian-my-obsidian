@@ -3,15 +3,18 @@
  * 提供从 PDF、图片（OCR）和 Office 文件中提取文本的功能
  * 支持右键菜单操作、命令面板命令和 API 接口
  */
-import { MenuItem, Notice, Platform, Plugin, TFile, App } from 'obsidian'
+import { FileSystemAdapter, MenuItem, Notice, Platform, Plugin, TFile, App } from 'obsidian'
 import { loadSettings, settings, TextExtractorSettingsTab } from './settings'
-import * as TextExtract from 'obsidian-text-extract'
+// 懒加载器：lib 2.7MB 拆独立懒包（lazy/text-extract.js），首次触碰才 require。
+// 转发包装与 lib 同名，调用点零改动（见 lazyTextExtract.ts 文件头）。
 import {
   canFileBeExtracted,
-  extractText,
+  extractText as _extractTextFn,
   isInCache,
   removeFromCache,
-} from 'obsidian-text-extract'
+  configureLazyTextExtract,
+  clearProcessQueue as clearLazyProcessQueue,
+} from './lazyTextExtract'
 import { createNote } from './utils'
 
 /**
@@ -37,10 +40,10 @@ export default class TextExtractorPlugin extends Plugin {
     async extractText(file: TFile): Promise<string> {
       const langs = settings.ocrLanguages
       const useSystemOCR = settings.useSystemOCR
-      return await TextExtract.extractText(file, { langs, useSystemOCR })
+      return await _extractTextFn(file, { langs, useSystemOCR })
     },
-    canFileBeExtracted: TextExtract.canFileBeExtracted,
-    isInCache: TextExtract.isInCache,
+    canFileBeExtracted,
+    isInCache,
   }
 
   /**
@@ -50,10 +53,13 @@ export default class TextExtractorPlugin extends Plugin {
   async onload() {
     await loadSettings(this)
 
-    // 根据设置初始化缓存位置模式
-    TextExtract.setCacheLocation(settings.cacheLocation)
-
-    await TextExtract.convertOldCachePaths()
+    // 懒包配置：cacheLocation 记 pending、迁移折进首触序列（见 lazyTextExtract.ts）
+    // manifest.dir 是 vault 相对路径——懒包 require 需要绝对路径
+		const adapter = this.app.vault.adapter as FileSystemAdapter
+		configureLazyTextExtract({
+			pluginDir: adapter.getFullPath(this.manifest.dir ?? ''),
+			cacheLocation: settings.cacheLocation,
+		})
     this.addSettingTab(new TextExtractorSettingsTab(this))
 
     // 注册命令：提取文本到剪贴板
@@ -146,7 +152,7 @@ export default class TextExtractorPlugin extends Plugin {
    * 清除所有处理队列中的待处理任务
    */
   onunload() {
-    TextExtract.clearProcessQueue()
+    clearLazyProcessQueue()
   }
 }
 
@@ -165,7 +171,7 @@ async function extractTextWithNotice(file: TFile) {
   try {
     const langs = settings.ocrLanguages
     const useSystemOCR = settings.useSystemOCR
-    return await extractText(file, { langs, useSystemOCR })
+    return await _extractTextFn(file, { langs, useSystemOCR })
   } catch (e) {
     new Notice(`Text Extractor - Error extracting text from file ${file.path}`)
     throw e

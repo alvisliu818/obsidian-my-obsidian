@@ -194,6 +194,11 @@ const { allowReentrantLibraryInit } = require("./libraryInitPatch") as {
 	allowReentrantLibraryInit: () => void;
 };
 
+// 懒加载分包的 obsidian 桥：懒包（lazy/*.js）经裸 require 加载，没有插件
+// 加载器的模块映射——主 bundle 启动时把 API 挂到全局供 src/obsidian-shim.ts
+// （懒包构建的 alias 目标）读取。
+(globalThis as { __lgpObsidianApi?: unknown }).__lgpObsidianApi = require('obsidian');
+
 export default class MyObsidianPlugin extends Plugin {
 	settings: MyObsidianSettings = DEFAULT_SETTINGS;
 

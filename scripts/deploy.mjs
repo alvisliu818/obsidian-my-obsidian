@@ -231,6 +231,15 @@ if (wanted("index-daemon.cjs")) {
 	}
 }
 
+// ---- 懒加载分包（lazy/*.js：重依赖模块首次触碰才 require 的次级 bundle）----
+if (wanted("lazy")) {
+	const lazyDir = path.join(ROOT, "lazy");
+	if (existsSync(lazyDir)) {
+		cpSync(lazyDir, path.join(TARGET, "lazy"), { recursive: true });
+		console.log("  lazy/");
+	}
+}
+
 if (!only) {
 	const unplugged = path.join(ROOT, ".yarn", "unplugged");
 	const bs3Dir = existsSync(unplugged)

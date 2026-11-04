@@ -2,7 +2,7 @@
   // 聚合仓适配：直引 MultiSelect.svelte 而非包桶文件——v11 的桶会连带
   // 文档组件（FileDetails → @wooorm/starry-night），这里用不到
   import MultiSelect from 'svelte-multiselect/MultiSelect.svelte'
-  import { getOcrLangs } from 'obsidian-text-extract'
+  import { getOcrLangs } from '../lazyTextExtract'
   import { selectedLanguages } from '../settings'
 
   const langs = getOcrLangs()

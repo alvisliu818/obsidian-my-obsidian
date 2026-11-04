@@ -657,6 +657,36 @@ const daemon = await esbuild.context({
   minify: prod,
 });
 
+// ---- 懒加载分包:重依赖模块的次要入口。运行时经动态 require(插件目录绝对
+// 路径)首次触碰才解析执行——主 bundle 不再携带这些字节(源码 ×2 驻留同额省回)。
+// 每个懒包自包含(共享依赖随包重复,但各懒包使用面互不重叠,重复可忽略)。
+// obsidian/electron external——懒包与宿主同 realm,require('obsidian') 运行时
+// 由 Obsidian 的插件模块系统提供。platform node 使 node: 内建 external
+// (Electron renderer nodeIntegration 下运行时可用)。
+const LAZY_BUNDLES = [
+  { entry: "modules/text-extractor/plugin/src/lazy-entry.ts", outfile: "lazy/text-extract.js" },
+];
+const lazyContexts = [];
+for (const lb of LAZY_BUNDLES) {
+  lazyContexts.push(
+    await esbuild.context({
+      entryPoints: [lb.entry],
+      bundle: true,
+      platform: "node",
+      // obsidian 桥：裸 require 加载的懒包没有插件加载器的模块映射，alias 到
+      // 读 globalThis 的 shim（宿主主 bundle 启动时挂 __lgpObsidianApi）。
+      alias: { obsidian: path.resolve("src/obsidian-shim.ts") },
+      external: ["electron"],
+      format: "cjs",
+      target: "es2021",
+      logLevel: "info",
+      sourcemap: false,
+      outfile: lb.outfile,
+      minify: prod,
+    }),
+  );
+}
+
 if (prod) {
   const r = await context.rebuild();
   // METAFILE=1 时落盘产物构成清单（逐输入字节数），供体积/内存优化分析
@@ -665,8 +695,10 @@ if (prod) {
     writeFileSync("esbuild-meta.json", JSON.stringify(r.metafile));
   }
   await daemon.rebuild();
+  for (const lc of lazyContexts) await lc.rebuild();
   process.exit(0);
 } else {
   await context.watch();
   await daemon.watch();
+  for (const lc of lazyContexts) await lc.watch();
 }
