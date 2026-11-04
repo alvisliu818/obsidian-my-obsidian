@@ -23,15 +23,7 @@
  * @module audio/streamingSplit
  */
 
-import {
-	ALL_FORMATS,
-	AudioSampleSink,
-	AudioSampleSource,
-	BufferSource,
-	BufferTarget,
-	Input,
-	Output,
-} from 'mediabunny';
+import { ALL_FORMATS, AudioSampleSink, AudioSampleSource, BufferSource, BufferTarget, Input, Output, InputType, AudioSampleSourceType } from '../lazyMediabunny';
 import type { AudioSample } from 'mediabunny';
 import { PLUGIN_LOG_PREFIX } from '../constants';
 import {
@@ -112,7 +104,7 @@ export class StreamedSplit implements Disposable {
 	private consumed = 0;
 
 	private constructor(
-		private readonly input: Input,
+		private readonly input: InputType,
 		private readonly samples: AsyncIterator<AudioSample>,
 		/** The decoded sample the next part starts with, possibly a remainder. */
 		private pending: AudioSample | null,
@@ -271,7 +263,7 @@ export class StreamedSplit implements Disposable {
 	 * @throws StreamedSplitError when the recording ended before the part began
 	 */
 	private async fill(
-		source: AudioSampleSource,
+		source: AudioSampleSourceType,
 		endFrame: number | null,
 	): Promise<void> {
 		const partStart = this.consumed;

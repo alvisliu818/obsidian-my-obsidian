@@ -667,6 +667,7 @@ const LAZY_BUNDLES = [
   { entry: "modules/text-extractor/plugin/src/lazy-entry.ts", outfile: "lazy/text-extract.js" },
   { entry: "modules/code-editor/src/lazy-entry.ts", outfile: "lazy/monaco.js" },
   { entry: "modules/terminal/src/lazy-xterm-entry.ts", outfile: "lazy/terminal-xterm.js" },
+  { entry: "modules/audio-recorder/src/lazy-codecs-entry.ts", outfile: "lazy/audio-codecs.js" },
 ];
 const lazyContexts = [];
 for (const lb of LAZY_BUNDLES) {

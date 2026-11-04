@@ -7,7 +7,7 @@
  */
 
 import { App, Notice, TFile } from 'obsidian';
-import { BufferSource } from 'mediabunny';
+import { BufferSource } from '../lazyMediabunny';
 import type { Input, InputAudioTrack } from 'mediabunny';
 import { PLUGIN_LOG_PREFIX } from '../constants';
 import {
