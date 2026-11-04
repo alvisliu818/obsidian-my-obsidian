@@ -8,7 +8,16 @@
  * @module audio/streamingConversion
  */
 
-import { Input, Output, BlobSource, BufferTarget, ALL_FORMATS, AudioSample, Conversion, Quality, InputType } from '../lazyMediabunny';
+import {
+	Input,
+	Output,
+	BlobSource,
+	BufferTarget,
+	ALL_FORMATS,
+	AudioSample,
+	Conversion,
+	Quality,
+} from 'mediabunny';
 import type { AudioCodec, ConversionAudioOptions } from 'mediabunny';
 import {
 	ensureEncoderRegistered,
@@ -189,7 +198,7 @@ export async function runStreamingConversion(
  * caller can guarantee input disposal in one place.
  */
 async function convertWithInput(
-	input: InputType,
+	input: Input,
 	targetFormat: string,
 	codec: AudioCodec,
 	bitrate: number,

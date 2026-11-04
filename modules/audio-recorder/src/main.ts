@@ -6,7 +6,6 @@
 import { Notice, Plugin, normalizePath } from 'obsidian';
 import type { TFile } from 'obsidian';
 import { RecordingStatus } from './types';
-import { initLazyMediabunny } from './lazyMediabunny';
 import type {
 	SaveProgress,
 	RecordingControls,
@@ -296,12 +295,6 @@ export default class AudioRecorderPlugin extends Plugin {
 	 * Called when the plugin is loaded.
 	 */
 	override async onload(): Promise<void> {
-		// 聚合主仓懒分包：mediabunny + 编码器（~1.2MB）拆独立懒包，记录插件
-		// 目录（绝对路径）供 lazyMediabunny 首次触碰时 require。
-		initLazyMediabunny(
-			(this.app.vault.adapter as { getFullPath?: (p: string) => string }).getFullPath?.(this.manifest.dir ?? '')
-				?? `${(this.app.vault.adapter as unknown as { basePath: string }).basePath}/${this.manifest.dir ?? ''}`,
-		);
 		await this.loadSettings();
 		this.profileNotes.register(this);
 		// A key edited, linked, or deleted in Obsidian's keychain page changes

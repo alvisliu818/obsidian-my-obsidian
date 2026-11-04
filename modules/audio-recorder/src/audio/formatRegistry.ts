@@ -8,7 +8,15 @@
  * @module audio/formatRegistry
  */
 
-import { AdtsOutputFormat, Mp4OutputFormat, WebMOutputFormat, OggOutputFormat, FlacOutputFormat, Mp3OutputFormat, WavOutputFormat } from '../lazyMediabunny';
+import {
+	AdtsOutputFormat,
+	Mp4OutputFormat,
+	WebMOutputFormat,
+	OggOutputFormat,
+	FlacOutputFormat,
+	Mp3OutputFormat,
+	WavOutputFormat,
+} from 'mediabunny';
 import type { OutputFormat, AudioCodec } from 'mediabunny';
 import {
 	FORMAT_WAV,

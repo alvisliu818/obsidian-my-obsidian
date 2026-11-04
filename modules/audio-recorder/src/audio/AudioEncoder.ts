@@ -5,10 +5,17 @@
  * @module audio/AudioEncoder
  */
 
-import { Output, BufferTarget, AudioBufferSource, canEncodeAudio, Quality, QualityType } from '../lazyMediabunny';
+import {
+	Output,
+	BufferTarget,
+	AudioBufferSource,
+	canEncodeAudio,
+	Quality,
+} from 'mediabunny';
 import type { AudioCodec, AudioEncodingConfig, OutputFormat } from 'mediabunny';
 import { EncodingError, errorMessage } from '../errors';
-import { getFormatDescriptor } from './formatRegistry';
+import { FORMAT_MP3, FORMAT_FLAC } from '../constants';
+import { FORMAT_REGISTRY, getFormatDescriptor } from './formatRegistry';
 
 /**
  * The codec string of AAC-LC, the profile every AAC file this plugin writes is
@@ -27,7 +34,7 @@ const AAC_LC_CODEC_STRING = 'mp4a.40.2';
 interface EncoderQuestion {
 	numberOfChannels?: number;
 	sampleRate?: number;
-	quality?: QualityType;
+	quality?: Quality;
 }
 
 /**
@@ -88,10 +95,24 @@ export function createOutputFormat(format: string): OutputFormat {
  * calls no-ops: a registered extension encoder counts as encodable.
  * @param format - Target audio format
  */
-export async function ensureEncoderRegistered(_format: string): Promise<void> {
-	// 聚合主仓懒分包：懒包加载时 flac/mp3 编码器已对同一 mediabunny 实例
-	// 自注册（lazy/audio-codecs.js 入口），canEncodeAudio 即可命中，无需再注册。
+export async function ensureEncoderRegistered(format: string): Promise<void> {
+	if (
+		format === FORMAT_FLAC &&
+		!(await canEncodeAudio(FORMAT_REGISTRY[FORMAT_FLAC].codec))
+	) {
+		const { registerFlacEncoder } =
+			await import('@mediabunny/flac-encoder');
+		registerFlacEncoder();
+	}
+	if (
+		format === FORMAT_MP3 &&
+		!(await canEncodeAudio(FORMAT_REGISTRY[FORMAT_MP3].codec))
+	) {
+		const { registerMp3Encoder } = await import('@mediabunny/mp3-encoder');
+		registerMp3Encoder();
+	}
 }
+
 /**
  * Encodes an AudioBuffer to the specified format.
  * Routes to the appropriate encoder based on format.
