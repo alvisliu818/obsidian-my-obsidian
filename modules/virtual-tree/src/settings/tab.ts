@@ -121,6 +121,21 @@ export class DocTreeSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName('虚拟文件浏览器')
+      .setDesc(
+        '默认开：侧栏文件浏览器换成虚拟滚动版——只渲染视口内的行，' +
+          '几万文件的库也只花固定内存（原生版给每个文件建一整行 DOM 并永久持有，' +
+          '5.5 万文件 ≈ 16.5 万个 DOM 节点）。关闭后还原 Obsidian 原生浏览器。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.vaultVirtualExplorer !== false).onChange(async (v) => {
+          this.plugin.settings.vaultVirtualExplorer = v;
+          await this.plugin.saveSettings();
+          this.plugin.applyVaultExplorerSetting();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName('parent 属性挂载')
       .setDesc(
         '笔记的 frontmatter 写 parent: [[某笔记]]（纯名称或库内路径也认）时，' +

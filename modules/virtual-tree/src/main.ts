@@ -48,6 +48,7 @@ import { applyMarkedTabIcons, markLeafTabIcon } from './features/tabIcon';
 import { parseExtVideoTarget } from './features/videoTimestamps';
 import { parseExtCodeTarget } from './features/codeFileLinks';
 import { ICON_THEME_CHANGED_EVENT } from './extensions/iconThemeLoader';
+import { installVaultExplorer, type VaultExplorerHandle } from './vaultExplorer/install';
 import {
   DEFAULT_DOCTREE_SETTINGS,
   docTreeSettingsFrom,
@@ -89,6 +90,12 @@ export default class DocTreePlugin extends Plugin {
 
   private stopTitleRenameObserver: (() => void) | null = null;
 
+  /**
+   * 虚拟文件浏览器接管句柄（viewRegistry 'file-explorer' 换构造器）。
+   * null = 未接管（设置关了，或引导时注册表不可用）。
+   */
+  private vaultExplorer: VaultExplorerHandle | null = null;
+
   async onload(): Promise<void> {
     await this.loadSettings();
     this.addSettingTab(new DocTreeSettingTab(this.app, this));
@@ -97,6 +104,14 @@ export default class DocTreePlugin extends Plugin {
     this.registerView(VIEW_TYPE_IMAGE, (leaf) => new ImageView(leaf, this));
     this.registerView(VIEW_TYPE_OFFICE, (leaf) => new OfficeView(leaf, this));
     this.registerView(VIEW_TYPE_VIDEO, (leaf) => new VideoView(leaf, this));
+
+    // 虚拟文件浏览器接管（2026-11-05）：必须在布局恢复之前注册好——社区
+    // 插件先于 workspace 布局还原加载，所以侧栏叶子会直接实例化虚拟视图，
+    // 原生 explorer 的「每文件一整行 DOM」（55k 文件库 ≈ 16.5 万 detached
+    // 节点 + 5.8 万条目注册表，堆快照实测）一行都不会建。
+    if (this.settings.vaultVirtualExplorer) {
+      this.vaultExplorer = installVaultExplorer(this);
+    }
 
     // Hand Office files to the previewer. Obsidian has no viewer for these at
     // all (it offers "open in default app" and nothing else), so taking the
@@ -352,9 +367,33 @@ export default class DocTreePlugin extends Plugin {
 
   onunload(): void {
     this.stopTitleRenameObserver?.();
+    if (this.vaultExplorer) {
+      void this.vaultExplorer.uninstall();
+      this.vaultExplorer = null;
+    }
     if (this.mountRefreshTimer) {
       window.clearInterval(this.mountRefreshTimer);
       this.mountRefreshTimer = 0;
+    }
+  }
+
+  /**
+   * 设置页开关实时生效：开 = 现场接管（已存在的核心叶子换成虚拟视图），
+   * 关 = 还原核心构造器并把活叶子换回核心视图。
+   */
+  applyVaultExplorerSetting(): void {
+    if (this.settings.vaultVirtualExplorer && !this.vaultExplorer) {
+      this.vaultExplorer = installVaultExplorer(this);
+      // 接管后把现存叶子换到新视图（原本是核心视图实例）。
+      for (const leaf of this.app.workspace.getLeavesOfType('file-explorer')) {
+        void leaf
+          .setViewState({ type: 'file-explorer', state: (leaf.view as unknown as { getState?: () => Record<string, unknown> }).getState?.() ?? {} })
+          .catch((err: unknown) => console.warn('[doc-tree] explorer leaf swap failed', err));
+      }
+    } else if (!this.settings.vaultVirtualExplorer && this.vaultExplorer) {
+      const handle = this.vaultExplorer;
+      this.vaultExplorer = null;
+      void handle.uninstall();
     }
   }
 

@@ -405,6 +405,17 @@ export interface DocTreeSettings {
    */
   vaultMarkdownEditor: EditorChoice;
   /**
+   * 用虚拟滚动版文件浏览器接管侧栏 'file-explorer' 视图（2026-11-05）。
+   *
+   * 动机（堆快照实测，55k 文件主库）：原生 explorer 在 load 时对每个库内文件
+   * 建一整行 DOM（55,153 行 ≈ 16.5 万 detached 节点 + 5.8 万 fileItems 注册表，
+   * 永久驻留）。虚拟版只画视口带 ~130 行，行数 = 已展开子树，从未展开的文件
+   * 零 DOM 零记录。接管走 viewRegistry 换构造器：社区插件先于布局恢复加载，
+   * 正常启动核心视图根本不实例化。卸载/关闭还原核心构造器并把活视图换回。
+   * 默认开（用户拍板的内存优化主项）。
+   */
+  vaultVirtualExplorer: boolean;
+  /**
    * Take over Office files (.docx/.xlsx/.pptx/…) with the built-in previewer.
    * On by default: Obsidian has no viewer for these at all, so there is nothing
    * to displace — and "open with the system app" stays one click away in the
@@ -461,6 +472,7 @@ export const DEFAULT_DOCTREE_SETTINGS: DocTreeSettings = {
   // 虚拟树库内 md 默认原生编辑器(用户 2026-11-03 决策);页面 editor 属性可
   // 逐页覆盖(logseq 模块 editorDefaultFor 解析)。
   vaultMarkdownEditor: 'native',
+  vaultVirtualExplorer: true,
   officeViewerEnabled: true,
   imageViewerTakeOver: false,
   // 视频默认本插件播放器(用户 2026-10-30 决策);原生预览可在设置里选回。
@@ -553,6 +565,8 @@ export function docTreeSettingsFrom(raw: unknown): DocTreeSettings {
   s.vaultMarkdownEditor =
     editorChoiceValue(o.vaultMarkdownEditor) ?? DEFAULT_DOCTREE_SETTINGS.vaultMarkdownEditor;
   s.officeViewerEnabled = o.officeViewerEnabled !== false;
+  // 虚拟文件浏览器接管：缺省开（默认值即决策），显式 false 才回核心 explorer。
+  s.vaultVirtualExplorer = o.vaultVirtualExplorer !== false;
   s.imageViewerTakeOver = o.imageViewerTakeOver === true;
   // 视频打开方式:显式 'native' 才走原生;旧键 videoPlayerTakeOver 一并废弃
   //(缺席或任何其他值都落回默认 'player'——那是新决策的默认,不迁移旧布尔)。

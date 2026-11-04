@@ -59539,3 +59539,95 @@ body.hearth-snapshot-capturing .hearth-view:not(#hearth-boost) {
   justify-content: flex-end;
   margin-top: 14px;
 }
+
+/* ==========================================================================
+   虚拟文件浏览器（vaultExplorer，2026-11-05）
+   接管侧栏 'file-explorer'：虚拟滚动替代原生「每文件一整行 DOM」。
+   行 DOM 复用原生类名（.tree-item/.nav-file/.nav-file-title + data-path），
+   主题与既有选择器自动生效；这里只负责虚拟滚动的骨架与少量状态样式。
+   行高 25px 必须与 view.ts 的 VX_ROW_HEIGHT 保持一致。
+   ========================================================================== */
+.nav-files-container.lgp-vx {
+  position: relative;
+  overflow-y: auto;
+  overflow-x: hidden;
+  height: 100%;
+  padding: var(--size-2-3) var(--size-2-2) var(--size-4-3);
+  contain: strict;
+}
+
+.lgp-vx .lgp-vx-spacer {
+  min-height: 0;
+}
+
+.lgp-vx .lgp-vx-band {
+  top: 0;
+  will-change: transform;
+}
+
+/* 行：原生 tree-item 自带 hover/radius/字号变量；这里补虚拟行需要的高度与
+   单行省略（行高恒定是 spacer 数学的前提）。 */
+.lgp-vx .tree-item {
+  height: 25px;
+}
+
+.lgp-vx .tree-item-self {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  align-content: center;
+  gap: 2px;
+  padding-inline-end: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.lgp-vx .tree-item-inner {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lgp-vx .tree-item-icon {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+}
+
+/* 折叠箭头：沿用核心的旋转语义（展开时转向下）。 */
+.lgp-vx .collapse-icon svg {
+  transition: transform 100ms ease-in-out;
+}
+
+.lgp-vx .collapse-icon.is-collapsed svg {
+  transform: rotate(-90deg);
+}
+
+/* 拖拽落点高亮与定位闪烁。 */
+.lgp-vx .lgp-vx-drop-target {
+  background: var(--background-modifier-active-hover);
+  border-radius: var(--nav-item-radius, 4px);
+}
+
+.lgp-vx .lgp-vx-flash {
+  background: var(--background-modifier-active-hover);
+  border-radius: var(--nav-item-radius, 4px);
+}
+
+.lgp-vx .is-dragging-src {
+  opacity: 0.5;
+}
+
+/* 文件名过滤条：header 下方一根细输入行。 */
+.lgp-vx-search {
+  padding: 4px 8px;
+}
+
+.lgp-vx-search-input {
+  width: 100%;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s, 4px);
+  padding: 4px 8px;
+  font-size: var(--font-ui-small);
+}
