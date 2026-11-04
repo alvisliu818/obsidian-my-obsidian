@@ -10,7 +10,8 @@
  *     代码栈溢出);着色由 Monarch tokenizer 提供,不依赖诊断。
  */
 
-import * as monaco from 'monaco-editor';
+import type * as monacoNs from 'monaco-editor';
+import { monaco } from './lazyMonaco';
 import { normalizePath, type App } from 'obsidian';
 import { registerTmGrammarForMonaco } from '../extensions/monacoGrammarBridge';
 import { applyThemeByPreference, appendSemanticRules, getActiveThemeName } from '../extensions/themeLoader';
@@ -357,7 +358,7 @@ export function applyTheme(mode: 0 | 1): void {
   const tagC = c('--code-tag', mode === 1 ? '#569cd6' : '#800000');
   const funcC = c('--code-function', mode === 1 ? '#dcdcaa' : '#795e26');
   const valueC = c('--code-value', mode === 1 ? '#b5cea8' : '#098658');
-  const rules: monaco.editor.ITokenThemeRule[] = [
+  const rules: monacoNs.editor.ITokenThemeRule[] = [
     { token: '', foreground: codeFg },
     { token: 'identifier', foreground: codeFg },
     { token: 'comment', foreground: c('--code-comment', mode === 1 ? '#6a9955' : '#237e38') },
@@ -434,7 +435,7 @@ export function colorizeCode(text: string, languageId: string): Promise<string> 
  * (.lgp-code-block 段的 bracket-highlighting)。
  */
 export function disableBlockBracketColorization(
-  editor: monaco.editor.ICodeEditor,
+  editor: monacoNs.editor.ICodeEditor,
 ): void {
   try {
     editor.getModel()?.updateOptions({
@@ -459,7 +460,7 @@ export function applyCodeThemePreference(pref: string): boolean {
 }
 
 /** 活跃编辑器 → 作用域(file/block):applyEditorSettings 按作用域重放覆盖表。 */
-const editorScopes = new WeakMap<monaco.editor.ICodeEditor, EditorScope>();
+const editorScopes = new WeakMap<monacoNs.editor.ICodeEditor, EditorScope>();
 
 export interface CreateEditorOptions {
   value: string;
@@ -501,7 +502,7 @@ const CODE_HSCROLL_STRIP = 10;
 export function createEditor(
   container: HTMLElement,
   opts: CreateEditorOptions,
-): monaco.editor.IStandaloneCodeEditor {
+): monacoNs.editor.IStandaloneCodeEditor {
   // 市场扩展的 TM 语法优先:异步注册完成后实时覆盖内置 monarch tokenizer
   void registerTmGrammarForMonaco(opts.language).catch(() => {});
   // 块内模式(lineNumbers:false):折叠槽(lineDecorationsWidth 默认 ~20px)会把
@@ -511,7 +512,7 @@ export function createEditor(
   const scope: EditorScope = blockMode ? 'block' : 'file';
   const padTop = opts.vPadding ?? 8;
   const padBottom = opts.vPadding ?? (opts.autoHeight ? 8 : 24);
-  const options: monaco.editor.IStandaloneEditorConstructionOptions = {
+  const options: monacoNs.editor.IStandaloneEditorConstructionOptions = {
     value: opts.value,
     language: opts.language,
     theme: currentMonacoTheme(),
@@ -664,14 +665,14 @@ export function createEditor(
  * listener 只在插件卸载时随 disposeMonaco 一起摘掉,这里统一登记。
  */
 const clipboardBridges: Array<{
-  editor: monaco.editor.IStandaloneCodeEditor;
+  editor: monacoNs.editor.IStandaloneCodeEditor;
   handler: (e: KeyboardEvent) => void;
   detach: () => void;
 }> = [];
 
 function installClipboardBridge(
   container: HTMLElement,
-  editor: monaco.editor.IStandaloneCodeEditor,
+  editor: monacoNs.editor.IStandaloneCodeEditor,
 ): void {
   const isEditorFocused = (): boolean => {
     if (editor.hasTextFocus()) return true;
@@ -758,7 +759,7 @@ function installClipboardBridge(
  * 只有块内这一条路径走单例。
  */
 interface SharedBlockEditor {
-  editor: monaco.editor.IStandaloneCodeEditor;
+  editor: monacoNs.editor.IStandaloneCodeEditor;
   /** Monaco 的容器:在池与目标 host 之间搬移(Monaco 只认这一个节点) */
   root: HTMLElement;
   /** 当前占用者被抢占时的处理;null = 空闲 */
@@ -807,7 +808,7 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
   const esc: { onEscape?: () => void } = {};
   const edge: { onEdgeNav?: (dir: 'up' | 'down' | 'left' | 'right', goalX: number | null) => boolean } = {};
   const pad = { top: 8, bottom: 8 };
-  const options: monaco.editor.IStandaloneEditorConstructionOptions = {
+  const options: monacoNs.editor.IStandaloneEditorConstructionOptions = {
     value: '',
     language: 'plaintext',
     theme: currentMonacoTheme(),
@@ -987,7 +988,7 @@ export interface SharedMountOpts {
  * 清自己的 stale handle 时,不会把已经属于视图 B 的实例搬回池里。
  */
 export interface SharedBlockLease {
-  editor: monaco.editor.IStandaloneCodeEditor;
+  editor: monacoNs.editor.IStandaloneCodeEditor;
   release(): void;
 }
 
@@ -1103,7 +1104,7 @@ export function applyEditorSettings(): void {
   const s = getEditorSettings();
   for (const ed of monaco.editor.getEditors()) {
     const scope = editorScopes.get(ed) ?? 'file';
-    ed.updateOptions(buildEditorOptionOverrides(scope, s) as unknown as monaco.editor.IEditorOptions);
+    ed.updateOptions(buildEditorOptionOverrides(scope, s) as unknown as monacoNs.editor.IEditorOptions);
     // 补全面板行高跟字号联动:在 updateOptions **之后**读字号,用户改了字号
     // 这里拿到的就是新值;哨兵时以编辑器当前字号为基准。
     ed.updateOptions({

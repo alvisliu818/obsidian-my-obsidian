@@ -1,21 +1,22 @@
 // 已装扩展的 TextMate 语法 → Monaco 桥(移植自 siyuan-virtual-tree grammar-loader)。
 // 复用 tmEngine 的 registry/grammarMap/fenceAlias(onig wasm 已 base64 内联),
 // 把 IGrammar 注册为 Monaco 的 tokens provider —— 市场扩展覆盖内置 monarch。
-import * as monaco from 'monaco-editor';
+import type * as monacoNs from 'monaco-editor';
+import { monaco } from '../editor/lazyMonaco';
 import { INITIAL } from 'vscode-textmate';
 import { getGrammarForFence, hasGrammarForFence } from './tmEngine';
 
 const registered = new Set<string>();
 // 语言 → setTokensProvider 的句柄。禁用/卸载语法扩展时 dispose,否则已挂的
 // TM provider 会陈旧残留(fenceAlias 已删但 provider 永远生效)。
-const providers = new Map<string, monaco.IDisposable>();
+const providers = new Map<string, monacoNs.IDisposable>();
 
-class TMState implements monaco.languages.IState {
+class TMState implements monacoNs.languages.IState {
   constructor(public ruleStack: unknown) {}
-  clone(): monaco.languages.IState {
+  clone(): monacoNs.languages.IState {
     return new TMState(this.ruleStack);
   }
-  equals(other: monaco.languages.IState): boolean {
+  equals(other: monacoNs.languages.IState): boolean {
     return other instanceof TMState && other.ruleStack === this.ruleStack;
   }
 }

@@ -9,7 +9,8 @@
 //       "description": "Log to console"
 //     }
 //   }
-import * as monaco from 'monaco-editor';
+import type * as monacoNs from 'monaco-editor';
+import { monaco } from '../editor/lazyMonaco';
 // Structural subset of logseq's `InstalledExtension` (see themeLoader note):
 // snippet loading only reads id / files / contributes.snippets.
 export interface SnippetExtension {
@@ -26,7 +27,7 @@ interface Snippet {
 }
 
 // 已注册的 provider dispose 句柄（按扩展 id）
-const registeredProviders = new Map<string, monaco.IDisposable[]>();
+const registeredProviders = new Map<string, monacoNs.IDisposable[]>();
 // 已注册的片段数（按扩展 id），供 LoadResult 回填
 const registeredCounts = new Map<string, number>();
 
@@ -41,7 +42,7 @@ export function loadSnippets(extension: SnippetExtension): number {
   const contributes = extension.contributes;
   if (!contributes?.snippets || contributes.snippets.length === 0) return 0;
 
-  const disposables: monaco.IDisposable[] = [];
+  const disposables: monacoNs.IDisposable[] = [];
   let count = 0;
   // 按语言分组（同一语言的多个 snippet 文件合并）
   const languageSnippets = new Map<string, Snippet[]>();

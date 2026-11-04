@@ -10,6 +10,7 @@ import {
   semVerString,
 } from "@polyipseity/obsidian-plugin-library";
 import { isNil } from "es-toolkit/predicate";
+import { initTerminalLazy } from "./imports.js";
 import { type App, Plugin, type PluginManifest } from "obsidian";
 import { PluginLocales } from "../assets/locales.js";
 import { loadDocumentations } from "./documentations.js";
@@ -67,6 +68,12 @@ export class TerminalPlugin
   }
 
   public override onload(): void {
+    // 聚合主仓懒分包：@xterm/* 拆独立懒包，记录插件目录（绝对路径）供 imports.ts 的
+    // BUNDLE 工厂首次触碰时 require。manifest.dir 是 vault 相对路径，转绝对。
+    initTerminalLazy(
+      (this.app.vault.adapter as { getFullPath?: (p: string) => string }).getFullPath?.(this.manifest.dir ?? '')
+        ?? `${(this.app.vault.adapter as unknown as { basePath: string }).basePath}/${this.manifest.dir ?? ''}`,
+    );
     (async (): Promise<void> => {
       const loaded: unknown = await this.loadData(),
         {

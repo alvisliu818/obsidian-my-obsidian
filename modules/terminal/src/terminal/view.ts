@@ -45,7 +45,7 @@ import type { LigaturesAddon } from "@xterm/addon-ligatures";
 import type { SearchAddon } from "@xterm/addon-search";
 import type { Unicode11Addon } from "@xterm/addon-unicode11";
 import type { WebLinksAddon } from "@xterm/addon-web-links";
-import { type ITerminalOptions, Terminal } from "@xterm/xterm";
+import type { ITerminalOptions, Terminal } from "@xterm/xterm";
 import { noop, once } from "es-toolkit/function";
 import {
   FileSystemAdapter,
@@ -1384,7 +1384,7 @@ export class TerminalView extends ItemView {
                     globalOpts,
                     terminalBackendOptions,
                   );
-                  const tmp = new Terminal(merged);
+                  const tmp = new (BUNDLE.get("@xterm/xterm")() as typeof import("@xterm/xterm")).Terminal(merged);
                   try {
                     return tmp.options;
                   } finally {

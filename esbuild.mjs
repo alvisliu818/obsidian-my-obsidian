@@ -665,6 +665,8 @@ const daemon = await esbuild.context({
 // (Electron renderer nodeIntegration 下运行时可用)。
 const LAZY_BUNDLES = [
   { entry: "modules/text-extractor/plugin/src/lazy-entry.ts", outfile: "lazy/text-extract.js" },
+  { entry: "modules/code-editor/src/lazy-entry.ts", outfile: "lazy/monaco.js" },
+  { entry: "modules/terminal/src/lazy-xterm-entry.ts", outfile: "lazy/terminal-xterm.js" },
 ];
 const lazyContexts = [];
 for (const lb of LAZY_BUNDLES) {
@@ -677,6 +679,15 @@ for (const lb of LAZY_BUNDLES) {
       // 读 globalThis 的 shim（宿主主 bundle 启动时挂 __lgpObsidianApi）。
       alias: { obsidian: path.resolve("src/obsidian-shim.ts") },
       external: ["electron"],
+      // monaco 的 codicon.css 引用 .ttf（主构建同款 loader；css 按空模块——
+      // 样式由 monaco.css 独立文件并入根 styles.css 的 monaco 分段承担）。
+      loader: {
+        ".ttf": "dataurl",
+        ".woff": "dataurl",
+        ".woff2": "dataurl",
+        ".css": "empty",
+        ".scss": "empty",
+      },
       format: "cjs",
       target: "es2021",
       logLevel: "info",

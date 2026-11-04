@@ -21,7 +21,7 @@ import { clipboard as electronClipboard } from 'electron';
 import type * as monacoNS from 'monaco-editor';
 // 运行时命名空间(Range/MouseTargetType 等枚举值)——与 code-editor 的
 // monaco.ts 同一个 bundled 实例,不会产生第二份 Monaco。
-import * as monacoRuntime from 'monaco-editor';
+import { monaco as monacoRuntime } from '../../../code-editor/src/editor/lazyMonaco';
 // 代码编辑器:Monaco(开源 VS Code 内核)。语言解析/高亮/worker 见 src/editor/monaco.ts;
 // LSP(补全/悬停/诊断/语义 token)的 Monaco 接线在 code-editor/src/lsp(与 SiYuan 同源)。
 import { createEditor, setupMonaco, getLanguageByPath } from '../../../code-editor/src/editor/monaco';

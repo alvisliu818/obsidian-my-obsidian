@@ -1,6 +1,7 @@
 // LSP ↔ Monaco 桥(代码文件编辑态)——移植自 cmLspBridge,编辑器侧换成 Monaco。
 // lspHost 的客户端函数保持编辑器无关:补全/悬停/诊断/文档开关全部复用。
-import * as monaco from 'monaco-editor';
+import type * as monacoNs from 'monaco-editor';
+import { monaco } from '../editor/lazyMonaco';
 import {
   closeLspDocument,
   lspCompletion,
@@ -41,10 +42,10 @@ export function ensureMonacoLspProviders(plugin: LspHostLike, languageId: string
 
   /** LSP 候选 → Monaco 补全项。dunder 成员降权(pyright 默认排最前,与 CM 桥同策略)。 */
   const build = (
-    model: monaco.editor.ITextModel,
-    position: monaco.Position,
+    model: monacoNs.editor.ITextModel,
+    position: monacoNs.Position,
     items: LspCompletionItem[],
-  ): monaco.languages.CompletionList => {
+  ): monacoNs.languages.CompletionList => {
     if (!items.length) return { suggestions: [] };
     const word = model.getWordUntilPosition(position);
     const rank = (label: string) => (label.startsWith('__') ? 2 : label.startsWith('_') ? 1 : 0);
@@ -53,7 +54,7 @@ export function ensureMonacoLspProviders(plugin: LspHostLike, languageId: string
       .slice(0, 200)
       .map((it) => ({
         label: it.label,
-        kind: (Math.max(0, (Number(it.kind) || 1) - 1)) as monaco.languages.CompletionItemKind,
+        kind: (Math.max(0, (Number(it.kind) || 1) - 1)) as monacoNs.languages.CompletionItemKind,
         detail: it.detail,
         documentation: it.documentation ? { value: it.documentation } : undefined,
         insertText: it.insertText && /^[A-Za-z0-9_.()[\]= ]+$/.test(it.insertText) ? it.insertText : it.label,
@@ -143,7 +144,7 @@ function registerSemanticProviderWhenReady(plugin: LspHostLike, languageId: stri
       releaseDocumentSemanticTokens() {
         // 无资源需要释放
       },
-    } as monaco.languages.DocumentSemanticTokensProvider);
+    } as monacoNs.languages.DocumentSemanticTokensProvider);
   };
   tick();
 }
@@ -154,11 +155,11 @@ function registerSemanticProviderWhenReady(plugin: LspHostLike, languageId: stri
  */
 export function monacoLspAttach(
   plugin: LspHostLike,
-  editor: monaco.editor.IStandaloneCodeEditor,
+  editor: monacoNs.editor.IStandaloneCodeEditor,
   languageId: string,
   docUri: string,
-): monaco.IDisposable[] {
-  const disposables: monaco.IDisposable[] = [];
+): monacoNs.IDisposable[] {
+  const disposables: monacoNs.IDisposable[] = [];
   if (!lspActive(plugin, languageId)) return disposables;
   ensureMonacoLspProviders(plugin, languageId);
 
@@ -185,7 +186,7 @@ export function monacoLspAttach(
         }
         return u.toLowerCase().replace(/\\/g, '/').endsWith(uriTail);
       });
-      const markers: monaco.editor.IMarkerData[] = kept.map((d) => ({
+      const markers: monacoNs.editor.IMarkerData[] = kept.map((d) => ({
         startLineNumber: d.line + 1,
         startColumn: d.ch + 1,
         endLineNumber: d.line + 1,

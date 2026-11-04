@@ -14,8 +14,9 @@
  * 它们与块编辑器的 parser / FragmentHost 交织（混合模式），经静态 import
  * 使用本模块（方向合法：上层 → 底层）。
  */
-import { Plugin } from 'obsidian';
+import { FileSystemAdapter, Plugin } from 'obsidian';
 import { disposeMonaco } from './editor/monaco';
+import { initLazyMonaco } from './editor/lazyMonaco';
 import { shutdownAllLsp } from './lsp/lspHost';
 
 /** The id this instance is re-published under in the app's plugin table. */
@@ -23,8 +24,11 @@ export const CODE_EDITOR_ALIAS_ID = 'obsidian-code-editor';
 
 export default class CodeEditorPlugin extends Plugin {
   async onload(): Promise<void> {
-    // 惰性：monaco 的 worker/主题在首次 createEditor 时初始化（monaco.ts
-    // 的 setupMonaco），LSP 子进程在首次 openLspDocument 时 spawn（lspHost）。
+    // 惰性：monaco 的字节（3.7MB 懒包）在首次属性触碰时 require（lazyMonaco），
+    // worker/主题在首次 createEditor 时初始化（monaco.ts 的 setupMonaco），
+    // LSP 子进程在首次 openLspDocument 时 spawn（lspHost）。
+    const adapter = this.app.vault.adapter as FileSystemAdapter;
+    initLazyMonaco(adapter.getFullPath(this.manifest.dir ?? ''));
   }
 
   async onunload(): Promise<void> {

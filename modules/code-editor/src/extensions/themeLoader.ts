@@ -4,7 +4,8 @@
 // 与思源侧的差异：这里只 defineTheme，不在加载时自动 setTheme —— 聚合插件自己
 // 管理代码编辑器主题，自动切换会覆盖用户在设置里选的配色。应用时机交给调用方
 // （设置项/市场 UI）显式触发 applyExtensionTheme / applyThemeByPreference。
-import * as monaco from 'monaco-editor';
+import type * as monacoNs from 'monaco-editor';
+import { monaco } from '../editor/lazyMonaco';
 // Structural subset of logseq's `InstalledExtension` (extensions/types.ts):
 // theme loading only reads id / files / contributes.themes, and this module
 // must not import the extension-management domain back (code-editor is a
@@ -189,7 +190,7 @@ function probeTokenColor(parsed: ParsedTokenRule[], scopeSegments: string[]): Pa
  * themeData,用合成的 tokenColors 表调进来 —— 不补这层,LSP 语义 token 在
  * 内置主题下全部落进 {token:''} 默认规则,表现为语义高亮不生效。
  */
-export function appendSemanticRules(themeData: any, rules: monaco.editor.ITokenThemeRule[]): void {
+export function appendSemanticRules(themeData: any, rules: monacoNs.editor.ITokenThemeRule[]): void {
   // 主题声明不支持语义高亮时跳过(与 VS Code semanticHighlighting 开关一致)
   if (themeData?.semanticHighlighting === false) return;
 
@@ -211,7 +212,7 @@ export function appendSemanticRules(themeData: any, rules: monaco.editor.ITokenT
 
   // semanticTokenColors:键 "variable" / "variable.readonly",值为颜色或 TokenStyle。
   // 优先级高于默认规则(VS Code 同序)。
-  const byToken = new Map<string, monaco.editor.ITokenThemeRule>();
+  const byToken = new Map<string, monacoNs.editor.ITokenThemeRule>();
   const putRule = (token: string, foreground: string, fontStyle?: string): void => {
     byToken.set(token, { token, foreground, fontStyle: fontStyle as any });
   };
@@ -248,7 +249,7 @@ export function appendSemanticRules(themeData: any, rules: monaco.editor.ITokenT
 
 /** 将 VSCode 主题转换为 Monaco 主题 */
 function convertThemeToMonaco(themeData: any, themeName: string, base: 'vs' | 'vs-dark'): void {  const colors: Record<string, string> = {};
-  const rules: monaco.editor.ITokenThemeRule[] = [];
+  const rules: monacoNs.editor.ITokenThemeRule[] = [];
 
   // 编辑器颜色：走 Monaco 的 CSS 生成路径，支持带 alpha 的 8 位 hex
   //（主题常用半透明叠加，如 lineHighlightBackground=#383A420C，截断会变纯黑）
