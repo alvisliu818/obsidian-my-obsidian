@@ -51,6 +51,11 @@ import MusicPlayerPlugin from "../modules/music-player/src/main";
 import AudioPlayerPlugin from "../modules/audio-player/src/main";
 import ScrollingPlugin from "../modules/scrolling/src/core/main";
 import RibbonOrganizerPlugin from "../modules/ribbon-organizer/src/main";
+const SRPlugin = (
+	require("../modules/spaced-repetition/src/main") as {
+		default: new (app: unknown, manifest: unknown) => SubPluginLike;
+	}
+).default;
 import AbstractFolderPlugin from "../modules/abstract-folder/main";
 import MomentumPlugin from "../modules/momentum/src/main";
 import HearthPlugin from "../modules/hearth/src/main";
@@ -243,13 +248,8 @@ export default class MyObsidianPlugin extends Plugin {
 			desktopOnly: true,
 			cls: LogseqEditorPlugin as unknown as ModuleDescriptor["cls"],
 		},
-		{
-			id: "browser",
-			name: "Browser",
-			summary: "库内的多标签浏览器：地址栏、书签、历史、下载、网页剪藏与 Chrome 扩展支持。",
-			desktopOnly: true,
-			cls: BrowserPlugin as unknown as ModuleDescriptor["cls"],
-		},
+		// browser 模块源文件缺失（待恢复）——暂移除
+
 		{
 			id: "jupyter",
 			name: "Jupyter Notebook",
@@ -567,6 +567,24 @@ export default class MyObsidianPlugin extends Plugin {
 			cls: RibbonOrganizerPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
+			id: "browser",
+			name: "Browser",
+			summary:
+				"库内的多标签浏览器：地址栏、书签、历史、下载、网页剪藏与 Chrome 扩展支持。",
+			desktopOnly: true,
+			cls: BrowserPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Third-party (Stephen Mwangi / st3v3nmw, MIT), kept whole — see
+			// modules/spaced-repetition/NOTICE.md.
+			id: "spaced-repetition",
+			name: "Spaced Repetition",
+			summary:
+				"间隔重复记忆：在笔记内用分隔符划卡组，按 FSRS 算法排期复习（正面/背面/填空），.deck 面板管理队列、键盘快捷评审、正排/倒排/随机多模式、图表统计、多语言 UI。上游 st3v3nmw（MIT）。",
+			desktopOnly: false,
+			cls: SRPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
 			// Third-party (Taitava / Jarkko Linnanvirta, GPL-3.0; maintained by
 			// david-shepard), kept whole — see modules/shellcommands/NOTICE.md.
 			// 桌面专属：shell 执行依赖本机 shell 与 child_process。
@@ -769,6 +787,49 @@ export default class MyObsidianPlugin extends Plugin {
 				this.register(() => window.clearInterval(idleGcTimer));
 			}, 60_000);
 		});
+		// ===== 临时内存插桩（调查 renderer 内存上涨，确认后删除）=====
+		// 每 20s 采一次 JS 堆（performance.memory）+ rss/external/arrayBuffers
+		// （process.memoryUsage），落 trace-mem.log：
+		//   used 涨 = JS 堆滞留；rss 涨而 used 不涨 = worker/wasm/DOM/原生层。
+		// 后台节流会把 setInterval 压到 1/min —— 正常，长时段趋势不受影响。
+		{
+			const perfMem = (): { used: number; total: number } | null => {
+				const m = (performance as unknown as {
+					memory?: { usedJSHeapSize: number; totalJSHeapSize: number };
+				}).memory;
+				return m ? { used: m.usedJSHeapSize / 1048576, total: m.totalJSHeapSize / 1048576 } : null;
+			};
+			const nodeMem = (): { rss: number; external: number; ab: number } | null => {
+				try {
+					// eslint-disable-next-line @typescript-eslint/no-require-imports
+					const p = require("node:process") as { memoryUsage: () => { rss: number; external: number; arrayBuffers: number } };
+					const u = p.memoryUsage();
+					return { rss: u.rss / 1048576, external: u.external / 1048576, ab: u.arrayBuffers / 1048576 };
+				} catch { return null; }
+			};
+			let prevUsed = perfMem()?.used ?? 0;
+			const memTimer = window.setInterval(() => {
+				const m = perfMem();
+				if (!m) return;
+				const n = nodeMem();
+				const line = `${new Date().toISOString()} used=${m.used.toFixed(1)}MB total=${m.total.toFixed(1)}MB d20s=${(m.used - prevUsed).toFixed(1)}MB`
+					+ (n ? ` rss=${n.rss.toFixed(1)}MB ext=${n.external.toFixed(1)}MB ab=${n.ab.toFixed(1)}MB` : "")
+					+ ` live=${this.live.size}\n`;
+				prevUsed = m.used;
+				try {
+					// eslint-disable-next-line @typescript-eslint/no-require-imports
+					const fs = require("node:fs") as { appendFileSync: (p: string, d: string) => void };
+					// eslint-disable-next-line @typescript-eslint/no-require-imports
+					const path = require("node:path") as { join: (...p: string[]) => string };
+					// manifest.dir 是相对路径，appendFileSync 会落到进程 CWD —— 用
+					// FileSystemAdapter.getBasePath() 拼绝对路径（trace-mem.log 落库外）。
+					const base = (this.app.vault.adapter as unknown as { getBasePath: () => string }).getBasePath();
+					fs.appendFileSync(path.join(base, this.manifest.dir ?? "", "trace-mem.log"), line);
+				} catch { /* ignore */ }
+			}, 20_000);
+			this.register(() => window.clearInterval(memTimer));
+		}
+		// ===== 临时内存插桩结束 =====
 		await this.loadSettings();
 		const hostTab = new MyObsidianSettingTab(this.app, this, {
 			settings: this.settings,

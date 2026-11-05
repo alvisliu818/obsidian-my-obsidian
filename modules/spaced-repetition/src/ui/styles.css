@@ -1,0 +1,159 @@
+/* MARK: Utils */
+
+/* Code to enable the plugin icon in the settings tab */
+/* .vertical-tab-header-group-items[data-section="community-plugins"] [data-setting-id^="obsidian-spaced-repetition"] .vertical-tab-nav-item-icon {
+    display: flex;
+} */
+
+[data-callout="sr"][data-callout-metadata="card-metadata"] {
+    display: inline-block;
+    background-color: transparent;
+
+    & > .callout-title {
+        display: none;
+    }
+
+    & > .callout-content {
+        display: none;
+    }
+}
+
+.sr-bg-blue,
+.sr-bg-yellow,
+.sr-bg-green,
+.sr-bg-red {
+    color: #ffffff !important;
+}
+
+.sr-bg-green {
+    background-color: #47a84a !important;
+}
+
+.sr-bg-blue {
+    background-color: #3591dd !important;
+}
+
+.sr-bg-red {
+    background-color: #f25d50 !important;
+}
+
+.sr-bg-yellow {
+    background-color: #e87743 !important;
+}
+
+.sr-fg-green {
+    color: #47a84a !important;
+}
+
+.sr-fg-blue {
+    color: #3591dd !important;
+}
+
+.sr-fg-red {
+    color: #f25d50 !important;
+}
+
+.sr-fg-yellow {
+    color: #e87743 !important;
+}
+
+.sr-deck-container .sr-tree-item-row:hover .sr-bg-green,
+.sr-response-button.sr-bg-green:hover {
+    background-color: #429e45 !important;
+}
+
+.sr-deck-container .sr-tree-item-row:hover .sr-bg-blue,
+.sr-response-button.sr-bg-blue:hover {
+    background-color: #2e8ddc !important;
+}
+
+.sr-deck-container .sr-tree-item-row:hover .sr-bg-red,
+.sr-response-button.sr-bg-red:hover {
+    background-color: #f15041 !important;
+}
+
+.sr-deck-container .sr-tree-item-row:hover .sr-bg-yellow,
+.sr-response-button.sr-bg-yellow:hover {
+    background-color: #e66f37 !important;
+}
+
+.sr-is-hidden {
+    display: none !important;
+}
+
+.sr-hide-by-scaling {
+    scale: 0;
+    user-select: none;
+    cursor: default;
+    opacity: 0;
+
+    &.hide-height {
+        height: 0 !important;
+    }
+
+    &.hide-width {
+        width: 0 !important;
+    }
+
+    &.hide-margin {
+        margin: 0 !important;
+    }
+
+    &.hide-padding {
+        padding: 0 !important;
+    }
+}
+
+.sr-centered {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+}
+
+.sr-button {
+    cursor: pointer;
+}
+
+.sr-button:disabled {
+    cursor: not-allowed;
+}
+
+.sr-flex-spacer {
+    flex-grow: 1;
+}
+
+.sr-divider {
+    --divider-width: 2px;
+    --divider-height: 2ch;
+    --divider-color: var(--text-faint);
+    border-left: var(--divider-width) solid var(--divider-color);
+    height: var(--divider-height);
+    width: var(--divider-width);
+    max-width: var(--divider-width);
+    border-radius: 10px;
+}
+
+/* MARK: Views General*/
+
+.sr-view {
+    container-type: size;
+    container-name: sr-view;
+    display: flex;
+    flex-direction: column;
+
+    & .MathJax {
+        overflow-x: auto;
+        margin: 0;
+        padding: 1em 0;
+    }
+}
+
+/* MARK: Container */
+
+.sr-container {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+}

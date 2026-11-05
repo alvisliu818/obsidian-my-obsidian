@@ -1,0 +1,425 @@
+// English
+
+import { IBaseLocale } from "../base-locale";
+
+const en: IBaseLocale = {
+    language: "en",
+    languageName: "English",
+    // flashcard-modal.tsx
+    CRAM_MODE: "Cram Mode",
+    REVIEW_MODE: "Review Mode",
+    DECKS: "Decks",
+    DUE_CARDS: "Due Cards",
+    DUE: "Due",
+    NEW_CARDS: "New Cards",
+    SEEN_CARDS: "Seen Cards",
+    SEEN: "Seen",
+    TOTAL_CARDS: "Total Cards",
+    TOTAL: "Total",
+    BACK: "Back",
+    SKIP: "Skip",
+    EDIT_CARD: "Edit Card",
+    RESET_CARD_PROGRESS: "Reset card's progress",
+    HARD: "Hard",
+    GOOD: "Good",
+    EASY: "Easy",
+    SHOW_ANSWER: "Show Answer",
+    CARD_PROGRESS_RESET: "Card's progress has been reset.",
+    SAVE: "Save",
+    CANCEL: "Cancel",
+    NO_INPUT: "No input provided.",
+    CURRENT_EASE_HELP_TEXT: "Current Ease: ",
+    CURRENT_INTERVAL_HELP_TEXT: "Current Interval: ",
+    CARD_GENERATED_FROM: "Generated from: ${notePath}",
+    JUMP_TO: "Jump to card",
+    JUMP_TO_AND_CLOSE: "Close and jump to card",
+    OPEN_IN_BACKGROUND: "Open card in background",
+    VIEW_CARD_INFO: "View Card Info",
+    DELETE_CARD: "Delete Card",
+    DELETE_CARD_CONFIRMATION:
+        "This action cannot be undone and might alter your notes in unwanted ways. Are you sure you want to delete this card?",
+
+    // main.ts
+    OPEN_NOTE_FOR_REVIEW: "Review a note",
+    REVIEW_CARDS: "Review flashcards",
+    REVIEW_DIFFICULTY_FILE_MENU: "Review: ${difficulty}",
+    REVIEW_NOTE_DIFFICULTY_CMD: "Review note as ${difficulty}",
+    REVIEW_CARD_DIFFICULTY_CMD: "Review card as ${difficulty}",
+    CRAM_ALL_CARDS: "Select a deck to cram",
+    REVIEW_ALL_CARDS: "Review flashcards from all notes",
+    REVIEW_CARDS_IN_NOTE: "Review flashcards in this note",
+    CRAM_CARDS_IN_NOTE: "Cram flashcards in this note",
+    VIEW_STATS: "View statistics",
+    OPEN_REVIEW_QUEUE_VIEW: "Open Notes Review Queue in sidebar",
+    STATUS_BAR: "Review: ${dueNotesCount} note(s), ${dueFlashcardsCount} card(s) due",
+    SYNC_TIME_TAKEN: "Sync took ${t}ms",
+    NOTE_IN_IGNORED_FOLDER: "Note is saved under ignored folder (check settings).",
+    PLEASE_TAG_NOTE: "Please tag the note appropriately for reviewing (in settings).",
+    RESPONSE_RECEIVED: "Response received.",
+    NO_DECK_EXISTS: "No deck exists for ${deckName}",
+    ALL_CAUGHT_UP: "You're all caught up now :D.",
+    REVIEW_REMINDER_NOTICE:
+        "Flashcards are ready to review. Return to Obsidian to continue learning.",
+
+    // scheduling.ts
+    DAYS_STR_IVL: "${interval} day(s)",
+    MONTHS_STR_IVL: "${interval} month(s)",
+    YEARS_STR_IVL: "${interval} year(s)",
+    DAYS_STR_IVL_MOBILE: "${interval}d",
+    MONTHS_STR_IVL_MOBILE: "${interval}m",
+    YEARS_STR_IVL_MOBILE: "${interval}y",
+
+    // settings.ts
+    SETTINGS_HEADER: "Spaced Repetition",
+    GROUP_TAGS_FOLDERS: "Tags & Folders",
+    GROUP_FLASHCARD_REVIEW: "Flashcard Review",
+    GROUP_FLASHCARD_SEPARATORS: "Flashcard Separators",
+    GROUP_DATA_STORAGE: "Storage of Scheduling Data",
+    GROUP_DATA_STORAGE_DESC: "Choose where to store the scheduling data",
+    PLUGIN_DATA_STORE_INFO:
+        "Schedule data is stored in markdown files inside your vault (in the configured folder under Schedule Data). Note schedules are identified by a unique ID (sr-id) added to each note's frontmatter, so they survive renames and moves inside or outside Obsidian. Card schedules are keyed by a hash of the card text - editing a card's front side will reset its schedule.",
+    MIGRATE_TO_PLUGIN_DATA: "Migrate scheduling data to plugin data?",
+    CONFIRM_MIGRATE_TO_PLUGIN_DATA:
+        "All <!--SR:...--> comments and sr-* frontmatter fields will be moved to markdown schedule files in the vault, and an sr-id field will be added to each note's frontmatter as a stable identifier. This may take a moment on large vaults. Do not edit notes until migration is complete.",
+    MIGRATING_TO_PLUGIN_DATA: "Migrating scheduling data to plugin data...",
+    MIGRATE_TO_NOTES: "Migrate scheduling data back to notes?",
+    CONFIRM_MIGRATE_TO_NOTES:
+        "All scheduling data will be written back as <!--SR:...--> comments and sr-* frontmatter fields. This may take a moment on large vaults. Do not edit notes until migration is complete.",
+    MIGRATING_TO_NOTES: "Migrating scheduling data to notes...",
+    GROUP_FLASHCARDS_NOTES: "Flashcards & Notes",
+    GROUP_CONTRIBUTING: "Contributing",
+    CHECK_WIKI: 'For more information, check the <a href="${wikiUrl}">wiki</a>.',
+    GITHUB_DISCUSSIONS:
+        'Visit the <a href="${discussionsUrl}">discussions</a> section for Q&A help, feedback, and general discussion.',
+    GITHUB_ISSUES:
+        'Raise an issue <a href="${issuesUrl}">here</a> if you have a feature request or a bug report.',
+    GITHUB_SOURCE_CODE:
+        'The project\'s source code is available on <a href="${githubProjectUrl}">GitHub</a>.',
+    CODE_CONTRIBUTION_INFO:
+        '<a href="${codeContributionUrl}">Here\'s</a> how to contribute code to the plugin.',
+    TRANSLATION_CONTRIBUTION_INFO:
+        '<a href="${translationContributionUrl}">Here\'s</a> how to translate the plugin to another language.',
+    FOLDERS_TO_IGNORE: "Folders to ignore",
+    FOLDERS_TO_IGNORE_DESC:
+        "Enter folder paths or glob patterns on separate lines e.g. Templates/Scripts or **/*.excalidraw.md. This setting is common to both flashcards and notes.",
+    OBSIDIAN_INTEGRATION: "Integration into Obsidian",
+    FLASHCARDS: "Flashcards",
+    FLASHCARD_EASY_LABEL: "Easy Button Text",
+    FLASHCARD_GOOD_LABEL: "Good Button Text",
+    FLASHCARD_HARD_LABEL: "Hard Button Text",
+    FLASHCARD_AGAIN_LABEL: "Again Button Text",
+    FLASHCARD_EASY_DESC: 'Customize the label for the "Easy" Button',
+    FLASHCARD_GOOD_DESC: 'Customize the label for the "Good" Button',
+    FLASHCARD_HARD_DESC: 'Customize the label for the "Hard" Button',
+    FLASHCARD_AGAIN_DESC: 'Customize the label for the "Again" Button',
+    REVIEW_BUTTON_DELAY: "Button Press Delay (ms)",
+    REVIEW_BUTTON_DELAY_DESC: "Add a delay to the review buttons before they can be pressed again.",
+    FLASHCARD_TAGS: "Flashcard tags",
+    FLASHCARD_TAGS_DESC:
+        "Enter tags separated by spaces or newlines i.e. #flashcards #deck2 #deck3.",
+    FLASHCARD_TAGS_TO_IGNORE: "Tags to ignore",
+    FLASHCARD_TAGS_TO_IGNORE_DESC:
+        "Enter tags separated by spaces or newlines. Notes containing any of these tags will be excluded from flashcard review.",
+    CONVERT_FOLDERS_TO_DECKS: "Convert folders to decks and subdecks",
+    CONVERT_FOLDERS_TO_DECKS_DESC: "This is an alternative to the Flashcard tags option above.",
+    INLINE_SCHEDULING_COMMENTS:
+        "Save scheduling comment on the same line as the flashcard's last line?",
+    INLINE_SCHEDULING_COMMENTS_DESC:
+        "Turning this on will make the HTML comments not break list formatting.",
+    BURY_SIBLINGS_TILL_NEXT_DAY: "Bury sibling cards until the next day",
+    BURY_SIBLINGS_TILL_NEXT_DAY_DESC:
+        "Siblings are cards generated from the same card text i.e. cloze deletions",
+    SHOW_CARD_CONTEXT: "Show context in cards",
+    SHOW_CARD_CONTEXT_DESC: "i.e. Title > Heading 1 > Subheading > ... > Subheading",
+    SHOW_INTERVAL_IN_REVIEW_BUTTONS: "Show next review time in the review buttons",
+    SHOW_INTERVAL_IN_REVIEW_BUTTONS_DESC:
+        "Useful to know how far in the future your cards are being pushed.",
+    SHOW_DELETE_BUTTON: "Show Delete button",
+    SHOW_DELETE_BUTTON_DESC: "Adds a delete button to the card review UI.",
+    CARD_MODAL_HEIGHT_PERCENT: "Flashcard Height Percentage",
+    CARD_MODAL_SIZE_PERCENT_DESC:
+        "Should be set to 100% on mobile or if you have very large images",
+    RESET_DEFAULT: "Reset to default",
+    CARD_MODAL_WIDTH_PERCENT: "Flashcard Width Percentage",
+    RANDOMIZE_CARD_ORDER: "Randomize card order during review?",
+    REVIEW_CARD_ORDER_WITHIN_DECK: "Order cards in a deck are displayed during review",
+    REVIEW_CARD_ORDER_NEW_FIRST_SEQUENTIAL: "Sequentially within a deck (All new cards first)",
+    REVIEW_CARD_ORDER_DUE_FIRST_SEQUENTIAL: "Sequentially within a deck (All due cards first)",
+    REVIEW_CARD_ORDER_NEW_FIRST_RANDOM: "Randomly within a deck (All new cards first)",
+    REVIEW_CARD_ORDER_DUE_FIRST_RANDOM: "Randomly within a deck (All due cards first)",
+    REVIEW_CARD_ORDER_RANDOM_DECK_AND_CARD: "Random card from random deck",
+    REVIEW_DECK_ORDER: "Order decks are displayed during review",
+    REVIEW_DECK_ORDER_PREV_DECK_COMPLETE_SEQUENTIAL:
+        "Sequentially (once all cards in previous deck reviewed)",
+    REVIEW_DECK_ORDER_PREV_DECK_COMPLETE_RANDOM:
+        "Randomly (once all cards in previous deck reviewed)",
+    REVIEW_DECK_ORDER_RANDOM_DECK_AND_CARD: "Random card from random deck",
+    REVIEW_REMINDERS: "Review reminders",
+    REVIEW_REMINDERS_DESC:
+        "Periodically checks for new or due flashcards and reminds you when cards are ready to review.",
+    REVIEW_REMINDER_CHECK_ON_STARTUP: "Check immediately on startup",
+    REVIEW_REMINDER_CHECK_ON_STARTUP_DESC:
+        "Runs one check when Obsidian startup layout is ready, without waiting for the first interval.",
+    REVIEW_REMINDER_INTERVAL: "Reminder interval (minutes)",
+    REVIEW_REMINDER_INTERVAL_DESC:
+        "Checks every N minutes. Minimum 1 minute, maximum 1440 minutes.",
+    REVIEW_REMINDER_INTERVAL_MIN_WARNING: "Reminder interval must be a number between 1 and 1440.",
+    REVIEW_REMINDER_MESSAGE: "Reminder message",
+    REVIEW_REMINDER_MESSAGE_DESC:
+        "Optional custom message shown in the reminder notice. Leave empty to use the default message.",
+    REVIEW_REMINDER_AUTO_OPEN: "Automatically open review",
+    REVIEW_REMINDER_AUTO_OPEN_DESC:
+        "When enabled, reminders open the existing flashcard review session directly.",
+    REVIEW_REMINDER_SHOW_NOTICE: "Show notice when reminding",
+    REVIEW_REMINDER_SHOW_NOTICE_DESC: "Displays a temporary notice when a review reminder fires.",
+    REVIEW_REMINDER_PLAY_SOUND: "Play sound when reminding",
+    REVIEW_REMINDER_PLAY_SOUND_DESC: "Plays a short alert sound when a review reminder fires.",
+    REVIEW_REMINDER_BOUNCE_DOCK: "Bounce dock icon when reminding",
+    REVIEW_REMINDER_BOUNCE_DOCK_DESC:
+        "On desktop, bounces the dock icon when a review reminder fires.",
+    DISABLE_CLOZE_CARDS: "Disable cloze cards?",
+    CONVERT_CLOZE_PATTERNS_TO_INPUTS: "Convert cloze patterns to input fields",
+    CONVERT_CLOZE_PATTERNS_TO_INPUTS_DESC:
+        "Replace cloze patterns with input fields when reviewing cloze cards.",
+    CONVERT_HIGHLIGHTS_TO_CLOZES: "Convert ==highlights== to clozes",
+    CONVERT_HIGHLIGHTS_TO_CLOZES_DESC:
+        'Add/remove the <code>${defaultPattern}</code> from your "Cloze Patterns"',
+    CONVERT_BOLD_TEXT_TO_CLOZES: "Convert **bolded text** to clozes",
+    CONVERT_BOLD_TEXT_TO_CLOZES_DESC:
+        'Add/remove the <code>${defaultPattern}</code> from your "Cloze Patterns"',
+    CONVERT_CURLY_BRACKETS_TO_CLOZES: "Convert {{curly brackets}} to clozes",
+    CONVERT_CURLY_BRACKETS_TO_CLOZES_DESC:
+        'Add/remove the <code>${defaultPattern}</code> from your "Cloze Patterns"',
+    CLOZE_PATTERNS: "Cloze Patterns",
+    CLOZE_PATTERNS_DESC:
+        'Enter cloze patterns separated by newlines. Check the <a href="${docsUrl}">wiki</a> for guidance.',
+    INLINE_CARDS_SEPARATOR: "Separator for inline flashcards",
+    FIX_SEPARATORS_MANUALLY_WARNING:
+        "Note that after changing this you have to manually edit any flashcards you already have.",
+    INLINE_REVERSED_CARDS_SEPARATOR: "Separator for inline reversed flashcards",
+    MULTILINE_CARDS_SEPARATOR: "Separator for multiline flashcards",
+    MULTILINE_REVERSED_CARDS_SEPARATOR: "Separator for multiline reversed flashcards",
+    MULTILINE_CARDS_END_MARKER: "Characters denoting the end of clozes and multiline flashcards",
+    NOTES: "Notes",
+    NOTE: "Note",
+    REVIEW_PANE_ON_STARTUP: "Enable note review pane on startup",
+    TAGS_TO_REVIEW: "Tags to review",
+    TAGS_TO_REVIEW_DESC: "Enter tags separated by spaces or newlines i.e. #review #tag2 #tag3.",
+    NOTE_TAGS_TO_IGNORE: "Tags to ignore",
+    NOTE_TAGS_TO_IGNORE_DESC:
+        "Enter tags separated by spaces or newlines. Notes containing any of these tags will be excluded from note review.",
+    OPEN_RANDOM_NOTE: "Open a random note for review",
+    OPEN_RANDOM_NOTE_DESC: "When you turn this off, notes are ordered by importance (PageRank).",
+    AUTO_NEXT_NOTE: "Open next note automatically after a review",
+    MAX_N_DAYS_REVIEW_QUEUE: "Maximum number of days to display on note review panel",
+    MIN_ONE_DAY: "The number of days must be at least 1.",
+    VALID_NUMBER_WARNING: "Please provide a valid number.",
+    UI: "User Interface",
+    OPEN_IN_TAB: "Open in new tab",
+    OPEN_IN_TAB_DESC: "Turn this off to open the plugin in a modal window",
+    STATUS_BAR_SETTINGS: "Status Bar",
+    SHOW_STATUS_BAR: "Show status bar",
+    SHOW_STATUS_BAR_DESC: "Turn this off to hide all status messages in Obsidian's status bar",
+    SHOW_CARD_STATUS_BAR_ITEM: "Show card status bar item",
+    SHOW_CARD_STATUS_BAR_ITEM_DESC:
+        "Turn this off to hide the flashcard's review status in Obsidian's status bar",
+    SHOW_NOTE_STATUS_BAR_ITEM: "Show note status bar item",
+    SHOW_NOTE_STATUS_BAR_ITEM_DESC:
+        "Turn this off to hide the note's review status in Obsidian's status bar",
+    SHOW_UPDATE_AVAILABLE_STATUS_BAR_ITEM: "Show update available status bar item",
+    SHOW_UPDATE_AVAILABLE_STATUS_BAR_ITEM_DESC:
+        "Turn this off to hide the update available status bar item & to stop the fetching of the newest version number",
+    SHOW_RIBBON_ICON: "Show icon in the ribbon bar",
+    SHOW_RIBBON_ICON_DESC: "Turn this off to hide the plugin icon from Obsidian's ribbon bar",
+    ENABLE_FILE_MENU_REVIEW_OPTIONS:
+        "Enable the review options in the file menu (e.g. Review: Easy, Good, Hard)",
+    ENABLE_FILE_MENU_REVIEW_OPTIONS_DESC:
+        "If you disable the review options in the file menu, you can review your notes using the plugin commands and, if you defined them, the associated command hotkeys.",
+    INITIALLY_EXPAND_SUBDECKS_IN_TREE: "Deck trees should be initially displayed as expanded",
+    INITIALLY_EXPAND_SUBDECKS_IN_TREE_DESC:
+        "Turn this off to collapse nested decks in the same card. Useful if you have cards which belong to many decks in the same file.",
+    ALGORITHM: "Algorithm",
+    CHECK_ALGORITHM_WIKI:
+        'For more information, check the <a href="${algoUrl}">algorithm details</a>.',
+    SM2_OSR_VARIANT: "OSR's variant of SM-2",
+    SWITCH_TO_FSRS_ALGORITHM: "Switch flashcard algorithm to FSRS?",
+    CONFIRM_FSRS_ALGORITHM_SWITCH:
+        "Switching to FSRS may cause unforseen data loss, as it is still not tested enough! Switching changes how flashcard scheduling data is formatted as cards are reviewed. this means that rewritten cards in the FSRS format, will require a lot more parameters and thus a longer, more intrusive, scheduling data comment. There is best effort backwards compatibility for the scheduling comments, in case you might want to switch back to OSR. This means your scheduling data will be rewritten to the OSR format once you review a card with OSR enabled.",
+    BASE_EASE: "Base ease",
+    BASE_EASE_DESC: "minimum = 130, preferrably approximately 250.",
+    BASE_EASE_MIN_WARNING: "The base ease must be at least 130.",
+    LAPSE_INTERVAL_CHANGE: "Interval change when you review a flashcard/note as hard",
+    LAPSE_INTERVAL_CHANGE_DESC: "newInterval = oldInterval * intervalChange / 100.",
+    EASY_BONUS: "Easy Bonus",
+    EASY_BONUS_DESC:
+        "The easy bonus allows you to set the difference in intervals between answering Good and Easy on a flashcard/note (minimum = 100%).",
+    EASY_BONUS_MIN_WARNING: "The easy bonus must be at least 100.",
+    LOAD_BALANCE: "Enable load balancer",
+    LOAD_BALANCE_DESC: `Slightly tweaks the interval so that the number of reviews per day is more consistent.
+        It's like Anki's fuzz but instead of being random, it picks the day with the least amount of reviews.
+        It's turned off for small intervals.`,
+    MAX_INTERVAL: "Maximum interval in days",
+    MAX_INTERVAL_DESC: "Allows you to place an upper limit on the interval (default = 100 years).",
+    MAX_INTERVAL_MIN_WARNING: "The maximum interval must be at least 1 day.",
+    MAX_LINK_CONTRIB: "Maximum link contribution",
+    MAX_LINK_CONTRIB_DESC:
+        "Maximum contribution of the weighted ease of linked notes to the initial ease.",
+    LOGGING: "Logging",
+    DISPLAY_SCHEDULING_DEBUG_INFO:
+        "Show the scheduler's debugging information on the developer console",
+    DISPLAY_PARSER_DEBUG_INFO: "Show the parser's debugging information on the developer console",
+    SCHEDULING: "Scheduling",
+    EXPERIMENTAL: "Experimental",
+    HELP: "Help",
+    STORE_IN_NOTES: "In the notes",
+    DELETE_SCHEDULING_DATA_ALL: "Delete Scheduling Data",
+    DELETE_SCHEDULING_DATA_ALL_DESC: "Delete scheduling data from all notes and flashcards.",
+    DELETE: "Delete",
+    CONFIRM_SCHEDULING_DATA_ALL_DELETION:
+        "Are you sure you want to delete all scheduling data from your notes and flashcards? This action cannot be undone.",
+    CONFIRM: "Confirm",
+    SCHEDULING_DATA_ALL_DELETION_IN_PROGRESS: "Scheduling data deletion in progress...",
+    SCHEDULING_DATA_HAS_BEEN_DELETED:
+        "Scheduling data has been deleted from all notes and flashcards.",
+    USE_CUSTOM_HOTKEYS: "Use custom hotkeys",
+    USE_CUSTOM_HOTKEYS_DESC:
+        "Enable custom hotkeys for the review cards commands. The default hotkeys wont be active after enabling this. Custom hotkeys can only be used when using the 'Open in new tab' option.",
+
+    // sidebar.ts
+    NOTES_REVIEW_QUEUE: "Notes Review Queue",
+    CLOSE: "Close",
+    NEW: "New",
+    YESTERDAY: "Yesterday",
+    TODAY: "Today",
+    TOMORROW: "Tomorrow",
+
+    // stats-modal.tsx
+    STATS_TITLE: "Statistics",
+    MONTH: "Month",
+    QUARTER: "Quarter",
+    YEAR: "Year",
+    LIFETIME: "Lifetime",
+    FORECAST: "Forecast",
+    FORECAST_DESC: "The number of cards due in the future",
+    SCHEDULED: "Scheduled",
+    DAYS: "Days",
+    NUMBER_OF_CARDS: "Number of cards",
+    REVIEWS_PER_DAY: "Average: ${avg} reviews/day",
+    INTERVALS: "Intervals",
+    INTERVALS_DESC: "Delays until reviews are shown again",
+    COUNT: "Count",
+    INTERVALS_SUMMARY: "Average interval: ${avg}, Longest interval: ${longest}",
+    EASES: "Eases",
+    EASES_SUMMARY: "Average ease: ${avgEase}",
+    EASE: "Ease",
+    CARD_TYPES: "Card Types",
+    CARD_TYPES_DESC: "This includes buried cards as well, if any",
+    CARD_TYPE_NEW: "New",
+    CARD_TYPE_YOUNG: "Young",
+    CARD_TYPE_MATURE: "Mature",
+    CARD_TYPES_SUMMARY: "Total cards: ${totalCardsCount}",
+    SEARCH: "Search",
+    PREVIOUS: "Previous",
+    NEXT: "Next",
+
+    // settings.ts
+    SETTINGS_TAB_HEADING: "Settings",
+    MAIN_SETTINGS_PAGE: "MAIN_SETTINGS",
+
+    // NoteReviewQueue.ts
+    NOTE_REVIEW_QUEUE_HINT:
+        "Click on any note to open it for review. To rate a review click on the 3 dots next to the note.",
+    NOTE_REVIEW_QUEUE_EMPTY_HINT:
+        "There are no notes to review. To add some notes, add the tag 'review' in one of your notes.",
+
+    // StatusBarManager.ts
+    OPEN_DECK_FOR_REVIEW: "Open deck for review",
+    UPDATE_AVAILABLE: "Update available",
+
+    // Statistics
+    PERIOD_TITLE: "Period",
+    PERIOD_DESC: "Period of time to display in the charts",
+
+    // Card controls reset button
+    DELETE_SCHEDULING_DATA_OF_CURRENT_CARD: "Delete card scheduling data?",
+    CONFIRM_SCHEDULING_DATA_DELETION_OF_CURRENT_CARD:
+        "Are you sure you want to delete the scheduling data from your current card? This action cannot be undone.",
+    SCHEDULING_DATA_DELETION_IN_PROGRESS_OF_CURRENT_CARD: "Deleting the cards scheduling data...",
+
+    // Settings > Scheduling
+    START_OF_DAY: "Start of day",
+    START_OF_DAY_DESC: "The time at which the day begins (Format: HH:MM:SS, Default: 00:00:00)",
+    INVALID_START_OF_DAY_WARNING: "Invalid format for start of day",
+
+    // Settings > Scheduling > Delete
+    DELETE_SCHEDULING_DATA_IN_NOTES: "Delete Scheduling Data in Notes",
+    DELETE_SCHEDULING_DATA_IN_NOTES_DESC: "Delete scheduling data from all notes.",
+    DELETE_SCHEDULING_DATA_IN_CARDS: "Delete Scheduling Data in Cards",
+    DELETE_SCHEDULING_DATA_IN_CARDS_DESC: "Delete scheduling data from all cards.",
+    CONFIRM_SCHEDULING_DATA_IN_NOTES_DELETION:
+        "Are you sure you want to delete all scheduling data from your notes? This action cannot be undone.",
+    CONFIRM_SCHEDULING_DATA_IN_CARDS_DELETION:
+        "Are you sure you want to delete all scheduling data from your cards? This action cannot be undone.",
+    SCHEDULING_DATA_IN_NOTES_DELETION_IN_PROGRESS: "Scheduling data deletion in progress...",
+    SCHEDULING_DATA_IN_CARDS_DELETION_IN_PROGRESS: "Scheduling data deletion in progress...",
+    // Settings > main-page
+    INFO: "Info",
+    // Card responses
+    AGAIN: "Again",
+    // Settings > info
+    CHECK_ROADMAP: 'Check out the <a href="${roadMapUrl}">roadmap</a> for upcoming features.',
+    CHECK_DEV_NEWS:
+        'Check out the <a href="${devNewsUrl}">dev news</a> for the latest development news.',
+
+    OPEN_MENU: "Open menu",
+    DELETE_NOTE_SCHEDULING_DATA_IN_NOTE: "Delete note scheduling data in note",
+    CONFIRM_NOTE_SCHEDULING_DATA_IN_NOTE_DELETION:
+        "Are you sure you want to delete note scheduling data in this note?",
+    NOTE_SCHEDULING_DATA_IN_NOTE_DELETION_IN_PROGRESS: "Deleting note scheduling data in note...",
+    DELETE_SCHEDULING_DATA_OF_CARDS_IN_NOTE: "Delete scheduling data of cards in note",
+    CONFIRM_SCHEDULING_DATA_OF_CARDS_IN_NOTE_DELETION:
+        "Are you sure you want to delete scheduling data of cards in note?",
+    SCHEDULING_DATA_OF_CARDS_IN_NOTE_DELETION_IN_PROGRESS:
+        "Deleting scheduling data of cards in note...",
+
+    DELETE_TAGS_WHEN_DELETING_SCHEDULING_DATA: "Delete tags when deleting scheduling data",
+    DELETE_TAGS_WHEN_DELETING_SCHEDULING_DATA_DESC: "Delete tags when deleting scheduling data",
+
+    ENABLE_FILE_MENU_DELETE_BUTTON: "Enable file menu delete button",
+    ENABLE_FILE_MENU_DELETE_BUTTON_DESC:
+        "Enables the delete button in the file menu for scheduling data",
+
+    DATA_PAGE_NAME: "Data",
+    GROUP_RESET_SETTINGS: "Reset settings",
+    GROUP_RESET_SETTINGS_DESC: "Reset all settings to their default values",
+    RESET_SETTINGS: "Reset settings",
+    CONFIRM_RESET_SETTINGS: "Are you sure you want to reset all settings to their default values?",
+    RESET_SETTINGS_CONFIRMATION: "Resetting all settings to their default values...",
+    DATE_FORMAT_FOR_NOTE_REVIEW_QUEUE: "Date format for note review queue",
+    DATE_FORMAT_FOR_NOTE_REVIEW_QUEUE_DESC:
+        'Date format for note review queue (see <a href="${docsUrl}">moment.js</a> for details). It only updates, once the note review queue is reopened.',
+    MIGRATE_TO_FOLDER: "Migrate to folder",
+    CONFIRM_MIGRATE_TO_FOLDER: "Are you sure you want to migrate to folder storage?",
+    MIGRATING_TO_FOLDER: "Migrating to folder storage...",
+    USE_CALLOUTS_FOR_SCHEDULING_COMMENTS: "Use callouts for scheduling comments",
+    USE_CALLOUTS_FOR_SCHEDULING_COMMENTS_DESC:
+        "Use the sr metadata callout for scheduling comments instead of regular comments by default. This will hide away the scheduling comments in a callout which looks like an empty line in the editor.",
+    MIGRATE_SCHEDULING_COMMENTS_TO_CALLOUT_BUTTON: "Migrate",
+    MIGRATE_SCHEDULING_COMMENTS_TO_CALLOUT_DESC:
+        "Migrating will put the scheduling comments into a sr metadata callout. This callout is designed to hide away the scheduling comments.",
+    CONFIRM_MIGRATE_SCHEDULING_COMMENTS_TO_CALLOUT:
+        "Migrating will modify all your cards. Please back them up first in case you want to revert the migration later or in case it breaks your cards because of a bug. Are you sure you want to migrate scheduling comments to sr metadata callouts?",
+    MIGRATING_SCHEDULING_COMMENTS_TO_CALLOUT:
+        "Migrating scheduling comments to sr metadata callouts...",
+    MIGRATE_SCHEDULING_COMMENTS_TO_CALLOUT: "Migrate scheduling comments to sr metadata callout",
+    DEFAULT_LOCALE_NAME: "- Obsidian's Default -",
+    LANGUAGE_SETTINGS: "Language Settings",
+    LANGUAGE_SETTINGS_DESC:
+        "Select the language you want to use for the plugin interface. This will only fully take effect after restarting Obsidian.",
+    DEBUG_LOG: "Debug Log",
+    COPY: "Copy",
+    NO_DECKS_TO_REVIEW:
+        "There are no decks with cards to review. Make sure you have created some flashcards by adding the tag 'flashcards' to a note and then add cards to it (see plugin page for details on that). In case you did all that and still don't see any decks here, then it will probably caused by a bug in the plugin. There is a known bug that happens when one reviews the cards very fast, then the system bugs out and the decks are not shown. Please try again to open the deck list after a few seconds.",
+};
+
+export default en;

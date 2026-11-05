@@ -1,0 +1,291 @@
+import { Notice, TFile } from "obsidian";
+
+import { OsrCore } from "./core";
+import { DataStore, StorageType } from "./data-store/base/data-store";
+import { DataStoreAlgorithm } from "./data-store/base/data-store-algorithm";
+import { NoteDataFileModifier } from "./data-store/notes-data-store/note-data-file-modifier";
+import { NoteDataStoreAlgorithmOsr } from "./data-store/notes-data-store/note-data-store-algorithm-osr";
+import { NotesDataStore } from "./data-store/notes-data-store/notes-data-store";
+import { QuestionPostponementList } from "./data-structures/card/questions/question-postponement-list";
+import { TopicPath } from "./data-structures/deck/topic-path";
+import { ISRNoteTFile, SRNoteTFile } from "./data-structures/file/note-file";
+import { PluginData } from "./plugin-data";
+import { PluginDataManager } from "./plugin-data-manager";
+import { SettingsUtil, SRSettings } from "./settings";
+import { SettingsManager } from "./settings-manager";
+import { t } from "../lang/helpers";
+import SRPlugin from "../main";
+import { Note } from "../note/note";
+import { NoteFileLoader } from "../note/note-file-loader";
+import { NoteReviewQueue } from "../note/note-review-queue";
+import { SRAlgorithmType } from "../scheduling/algorithms/base/isr-algorithm";
+import { ReviewResponse } from "../scheduling/algorithms/base/repetition-item";
+import { SRAlgorithm } from "../scheduling/algorithms/base/sr-algorithm";
+import { SrsAlgorithmFsrs } from "../scheduling/algorithms/fsrs/sr-algorithm-fsrs";
+import { ObsidianVaultNoteLinkInfoFinder } from "../scheduling/algorithms/osr/obsidian-vault-notelink-info-finder";
+import { SRAlgorithmOsr } from "../scheduling/algorithms/osr/srs-algorithm-osr";
+
+/**
+ * Manages all the data related systems of the Spaced Repetition plugin and exposes them to the other parts of the plugin.
+ *
+ * This includes the plugin data, the OSR app core, and the scheduling data repository.
+ */
+export class DataManager {
+    private plugin: SRPlugin;
+    public pluginDataManager: PluginDataManager; // TODO: Refactor so that the plugin data manager and the settings manager are separate from the data manager
+    public settingsManager: SettingsManager; // TODO: Refactor so that the plugin data manager and the settings manager are separate from the data manager
+    private _osrCore: OsrCore | null = null;
+    private _syncLock = false;
+
+    constructor(
+        plugin: SRPlugin,
+        pluginDataManager: PluginDataManager,
+        settingsManager: SettingsManager,
+    ) {
+        this.plugin = plugin;
+        this.pluginDataManager = pluginDataManager;
+        this.settingsManager = settingsManager;
+    }
+
+    /**
+     * Checks if the data has been loaded.
+     */
+    isDataLoaded(): boolean {
+        return this.pluginDataManager.isLoaded;
+    }
+
+    /**
+     * Checks if the OSR app core has been loaded.
+     */
+    isOsrCoreLoaded(): boolean {
+        return this._osrCore !== null;
+    }
+
+    // TODO: Remove once everything is migrated to the settings manager and plugin data manager
+    get data(): PluginData {
+        return this.pluginDataManager.pluginData;
+    }
+
+    set data(data: PluginData) {
+        this.pluginDataManager.pluginData = data;
+    }
+
+    get osrCore(): OsrCore {
+        if (this._osrCore === null) throw new Error("SR plugin or OSR core not initialized!!!");
+        return this._osrCore;
+    }
+
+    set osrCore(osrCore: OsrCore) {
+        this._osrCore = osrCore;
+    }
+
+    get syncLock(): boolean {
+        return this._syncLock;
+    }
+
+    /**
+     * Loads the plugin data from the data.json from the plugin's folder.
+     */
+    loadData(): void {
+        this.setupDataStoreAndAlgorithmInstances(this.settingsManager.settings);
+    }
+
+    /**
+     * Initializes the OSR app core.
+     *
+     * @param {NoteReviewQueue} noteReviewQueue - The note review queue.
+     * @param {() => void} onOsrVaultDataChanged - A callback function that is called when the OSR vault data changes.
+     * @returns {Promise<void>} - A promise that resolves when the OSR app core is initialized.
+     */
+    async initOSRCore(
+        noteReviewQueue: NoteReviewQueue,
+        onOsrVaultDataChanged: () => Promise<void>,
+    ): Promise<void> {
+        const questionPostponementList: QuestionPostponementList = new QuestionPostponementList(
+            this.pluginDataManager,
+            this.settingsManager.settings,
+            this.pluginDataManager.pluginData.buryList,
+        );
+        await questionPostponementList.clearIfNewDay(this.pluginDataManager.pluginData);
+
+        this.osrCore = new OsrCore(
+            questionPostponementList,
+            new ObsidianVaultNoteLinkInfoFinder(this.plugin.app.metadataCache),
+            this.settingsManager.settings,
+            onOsrVaultDataChanged,
+            noteReviewQueue,
+            this.plugin.getObsidianRtlSetting(),
+        );
+    }
+
+    async loadVault(): Promise<void> {
+        if (this._syncLock) {
+            return;
+        }
+        this._syncLock = true;
+
+        try {
+            this.osrCore.loadInitialStateOfCore();
+
+            const notes: TFile[] = this.plugin.app.vault.getMarkdownFiles();
+            for (const noteFile of notes) {
+                // Skip files in the note ignore folder
+                if (
+                    SettingsUtil.isPathInFoldersToIgnore(
+                        this.settingsManager.settings,
+                        noteFile.path,
+                    )
+                )
+                    continue;
+
+                const file: SRNoteTFile = this.createSRNoteTFile(noteFile);
+                await this.osrCore.processFile(file);
+            }
+
+            await this.osrCore.finalizeLoad();
+        } finally {
+            this._syncLock = false;
+        }
+    }
+
+    /**
+     * Creates a SRNoteTFile object from a note file.
+     *
+     * @param {TFile} note - The note file.
+     * @returns {SRNoteTFile} - The SRNoteTFile object.
+     */
+    createSRNoteTFile(note: TFile): SRNoteTFile {
+        return new SRNoteTFile(
+            this.plugin.app.vault,
+            this.plugin.app.metadataCache,
+            this.plugin.app.fileManager,
+            note,
+        );
+    }
+
+    /**
+     * Sets up the data store and algorithm instances based on the settings.
+     *
+     * @param {SRSettings} settings - The settings object.
+     */
+    setupDataStoreAndAlgorithmInstances(settings: SRSettings) {
+        switch (settings.dataStore) {
+            case StorageType.NOTES:
+                DataStore.instance = new NotesDataStore(
+                    settings,
+                    new NoteDataFileModifier(this.plugin),
+                );
+                DataStoreAlgorithm.instance = new NoteDataStoreAlgorithmOsr(settings);
+                break;
+        }
+
+        // TODO: Move this to the scheduling manager once it is implemented
+        SRAlgorithm.instance =
+            settings.algorithm === SRAlgorithmType.FSRS
+                ? new SrsAlgorithmFsrs(settings)
+                : new SRAlgorithmOsr(settings);
+    }
+
+    /**
+     * Synchronizes the data with the Obsidian vault.
+     *
+     * @returns {Promise<void>} - A promise that resolves when the synchronization is complete.
+     */
+    async sync(): Promise<void> {
+        if (this.osrCore === null) throw new Error("OSR app core not initialized!!!");
+        if (this.syncLock) {
+            return;
+        }
+
+        const now = window.moment(Date.now());
+        this.osrCore.defaultTextDirection = this.plugin.getObsidianRtlSetting();
+
+        await this.loadVault();
+
+        if (this.settingsManager.settings.showSchedulingDebugMessages) {
+            console.log(`SR: ${t("DECKS")}`, this.osrCore.reviewableDeckTree);
+            console.log(
+                "SR: " +
+                    t("SYNC_TIME_TAKEN", {
+                        t: Date.now() - now.valueOf(),
+                    }),
+            );
+        }
+    }
+
+    /**
+     * Loads a note from the Obsidian vault.
+     *
+     * @param {TFile} noteFile - The note file.
+     * @returns {Promise<Note | null>} - A promise that resolves with the loaded note or null if not found.
+     */
+    async loadNote(noteFile: TFile): Promise<Note | null> {
+        const loader: NoteFileLoader = new NoteFileLoader(this.settingsManager.settings);
+        const srFile: ISRNoteTFile = this.createSRNoteTFile(noteFile);
+        const folderTopicPath: TopicPath = TopicPath.getFolderPathFromFilename(
+            srFile,
+            this.settingsManager.settings,
+        );
+
+        const note: Note | null = await loader.load(
+            this.createSRNoteTFile(noteFile),
+            this.plugin.getObsidianRtlSetting(),
+            folderTopicPath,
+        );
+        if (note && note.hasChanged) {
+            await note.writeNoteFile(this.settingsManager.settings);
+        }
+        return note;
+    }
+
+    /**
+     * Saves the review response for a note.
+     *
+     * @param {TFile} note - The note file.
+     * @param {ReviewResponse} response - The review response.
+     * @returns {Promise<void>} - A promise that resolves when the review response is saved.
+     */
+    async saveNoteReviewResponse(note: TFile, response: ReviewResponse): Promise<void> {
+        if (this.osrCore === null) throw new Error("OSR app core not initialized!!!");
+        if (this.plugin.nextNoteReviewHandler === null)
+            throw new Error("Next note review handler not initialized!!!");
+
+        const noteSrTFile: ISRNoteTFile = this.createSRNoteTFile(note);
+
+        if (SettingsUtil.isPathInFoldersToIgnore(this.settingsManager.settings, note.path)) {
+            new Notice(t("NOTE_IN_IGNORED_FOLDER"));
+            return;
+        }
+
+        const tags = noteSrTFile.getAllTagsFromCache();
+        if (!SettingsUtil.isAnyTagANoteReviewTag(this.settingsManager.settings, tags)) {
+            new Notice(t("PLEASE_TAG_NOTE"));
+            return;
+        }
+
+        await this.osrCore.saveNoteReviewResponse(
+            noteSrTFile,
+            response,
+            this.settingsManager.settings,
+        );
+
+        new Notice(t("RESPONSE_RECEIVED"));
+
+        if (this.settingsManager.settings.autoNextNote) {
+            await this.plugin.nextNoteReviewHandler.autoReviewNextNote();
+        }
+    }
+
+    /**
+     * Saves the plugin data.
+     *
+     * @returns {Promise<void>} - A promise that resolves when the plugin data is saved.
+     */
+    async savePluginData(): Promise<void> {
+        try {
+            await this.pluginDataManager.savePluginData();
+        } catch (error) {
+            console.warn("DataManager: Error saving plugin data", error);
+        }
+    }
+}

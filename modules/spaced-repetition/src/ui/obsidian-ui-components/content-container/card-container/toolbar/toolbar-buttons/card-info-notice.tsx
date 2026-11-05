@@ -1,0 +1,18 @@
+import { Notice } from "obsidian";
+
+import { t } from "src/lang/helpers";
+import { RepItemScheduleInfo } from "src/scheduling/algorithms/base/rep-item-schedule-info";
+import { formatScheduleInterval } from "src/scheduling/algorithms/schedule-display";
+
+export default class CardInfoNotice extends Notice {
+    public constructor(schedule: RepItemScheduleInfo, notePath: string) {
+        const currentEaseStr = t("CURRENT_EASE_HELP_TEXT") + (schedule?.latestEase ?? t("NEW"));
+        const currentIntervalStr =
+            t("CURRENT_INTERVAL_HELP_TEXT") + formatScheduleInterval(schedule, false);
+        const generatedFromStr = t("CARD_GENERATED_FROM", {
+            notePath: notePath,
+        });
+
+        super(currentEaseStr + "\n" + currentIntervalStr + "\n" + generatedFromStr);
+    }
+}

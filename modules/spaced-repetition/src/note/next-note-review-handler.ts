@@ -1,0 +1,85 @@
+import { App, Notice, TFile } from "obsidian";
+
+import { SRSettings } from "../data/settings";
+import { t } from "../lang/helpers";
+import { NoteReviewQueue } from "./note-review-queue";
+import { ReviewDeckSelectionModal } from "../ui/obsidian-ui-components/modals/review-deck-selection-modal";
+
+export class NextNoteReviewHandler {
+    private app: App;
+    private settings: SRSettings;
+    private _noteReviewQueue: NoteReviewQueue;
+    private _lastSelectedReviewDeck: string | null = null;
+
+    get lastSelectedReviewDeck(): string | null {
+        return this._lastSelectedReviewDeck;
+    }
+
+    get noteReviewQueue(): NoteReviewQueue {
+        return this._noteReviewQueue;
+    }
+
+    constructor(app: App, settings: SRSettings, noteReviewQueue: NoteReviewQueue) {
+        this.app = app;
+        this.settings = settings;
+        this._noteReviewQueue = noteReviewQueue;
+    }
+
+    async autoReviewNextNote(): Promise<void> {
+        if (this.settings.autoNextNote) {
+            if (!this._lastSelectedReviewDeck) {
+                const reviewDeckKeys: string[] = this._noteReviewQueue.reviewDeckNameList;
+                if (reviewDeckKeys.length > 0) this._lastSelectedReviewDeck = reviewDeckKeys[0];
+                else {
+                    // 2024-07-05 existing functionality: Code doesn't look at other decks
+                    new Notice(t("ALL_CAUGHT_UP"));
+                    return;
+                }
+            }
+            await this.reviewNextNote(this._lastSelectedReviewDeck);
+        }
+    }
+
+    async reviewNextNoteModal(): Promise<void> {
+        const reviewDeckNames: string[] = this._noteReviewQueue.reviewDeckNameList;
+
+        if (reviewDeckNames.length === 1) {
+            // There is only one deck, so no need to ask the user to make a selection
+            await this.reviewNextNote(reviewDeckNames[0]);
+        } else {
+            const deckSelectionModal = new ReviewDeckSelectionModal(this.app, reviewDeckNames);
+            deckSelectionModal.submitCallback = (deckKey: string) => {
+                void this.reviewNextNote(deckKey);
+            };
+            deckSelectionModal.open();
+        }
+    }
+
+    async reviewNextNote(deckKey: string): Promise<void> {
+        if (!this._noteReviewQueue.reviewDeckNameList.contains(deckKey)) {
+            new Notice(t("NO_DECK_EXISTS", { deckName: deckKey }));
+            return;
+        }
+
+        this._lastSelectedReviewDeck = deckKey;
+        const deck = this._noteReviewQueue.reviewDecks.get(deckKey);
+
+        if (!deck) {
+            new Notice(t("NO_DECK_EXISTS", { deckName: deckKey }));
+            return;
+        }
+
+        const notefile = deck.determineNextNote(this.settings.openRandomNote);
+
+        if (notefile) {
+            await this.openNote(deckKey, notefile.tfile);
+        } else {
+            new Notice(t("ALL_CAUGHT_UP"));
+        }
+    }
+
+    async openNote(deckName: string, file: TFile): Promise<void> {
+        this._lastSelectedReviewDeck = deckName;
+        await this.app.workspace.getLeaf().openFile(file);
+    }
+}
