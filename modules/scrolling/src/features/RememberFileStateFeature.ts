@@ -29,7 +29,6 @@ interface EphemeralState {
 // renderer 的 nodeIntegration 在运行时解析；这里惰性 require，移动端（无
 // nodeIntegration）拿到 null，外部存储的所有入口都会先挡在 isDesktop 上。
 type FsModule = typeof import("node:fs");
-type OsModule = typeof import("node:os");
 type PathModule = typeof import("node:path");
 
 let fsModule: FsModule | null | undefined;
@@ -42,17 +41,6 @@ function getFs(): FsModule | null {
         }
     }
     return fsModule;
-}
-let osModule: OsModule | null | undefined;
-function getOs(): OsModule | null {
-    if (osModule === undefined) {
-        try {
-            osModule = require("node:os") as OsModule;
-        } catch {
-            osModule = null;
-        }
-    }
-    return osModule;
 }
 let pathModule: PathModule | null | undefined;
 function getPath(): PathModule | null {
@@ -221,7 +209,10 @@ export class RememberFileStateFeature implements Feature {
                 control: {
                     type: "toggle",
                     key: "restoreScrollExternal",
-                    defaultValue: false,
+                    // 默认开（2026-11-06 用户指定）：位置文件落
+                    // E:\HOME\Runtime\scrolling，同步盘 vault 不再吃高频写盘。
+                    // 移动端 isExternalStorage() 自判 false 回落库内。
+                    defaultValue: true,
                     disabled: (): boolean => {
                         return this.plugin.settings.restoreScrollMode === "top";
                     },
@@ -302,6 +293,19 @@ export class RememberFileStateFeature implements Feature {
             void plugin.settingsStore.set("restoreScrollFilePath", this.getDefaultStateFilePath());
         }
 
+        // 外部存储默认开启（2026-11-06）：两类存量路径都要补迁移——①库内相对
+        // 路径（外部默认新开后路径没跟上）；②旧外部默认 %APPDATA%（外部模式
+        // 早已开启、路径跟着旧默认走的库）。migrateToExternal 会把位置文件
+        // 复制到 E:\HOME\Runtime\scrolling\<库slug>.json，原文件保留作备份。
+        if (this.isExternalStorage()) {
+            const currentPath = plugin.settings.restoreScrollFilePath ?? "";
+            const legacy = this.legacyExternalDefaultPath();
+            const onLegacy = !!legacy && !!currentPath && currentPath.trim().toLowerCase() === legacy.toLowerCase();
+            if (!currentPath || !this.isAbsolutePath(currentPath) || onLegacy) {
+                void this.migrateToExternal();
+            }
+        }
+
         // True when plugin is reloaded.
         this.workspaceInitialized = this.plugin.app.workspace.layoutReady;
 
@@ -373,21 +377,37 @@ export class RememberFileStateFeature implements Feature {
     }
 
     /**
-     * 外部默认路径：跟随 Obsidian 自身的配置目录旁（`%APPDATA%/obsidian/` 或
-     * `~/.config/obsidian/`），绝不在任何 vault（同步盘）内。用户可在设置页改。
+     * 外部默认路径（用户指定，2026-11-06）：E:\HOME\Runtime\scrolling——本机
+     * 运行时目录（与统一索引同层），绝不在任何 vault（同步盘）内。文件名带库
+     * 身份（slug = 库绝对路径净化 + fnv1a-32 前 6 位，惯例同 unified-index 的
+     * 库文件命名）——状态键是库相对路径，两库共用一个文件会互相串位。
+     * 用户可在设置页改。
      */
     private externalDefaultPath(): string {
-        const os = getOs();
         const path = getPath();
-        if (!os || !path) return "";
-        const base = process.env.APPDATA || path.join(os.homedir(), ".config");
-        return path.join(base, "obsidian", "scrolling-positions.json");
+        if (!path) return "";
+        const base = String(
+            (this.plugin.app.vault.adapter as unknown as { basePath?: string }).basePath ??
+                this.plugin.manifest.id ??
+                "vault",
+        );
+        let h = 0x811c9dc5;
+        for (let i = 0; i < base.length; i++) {
+            h ^= base.charCodeAt(i);
+            h = Math.imul(h, 0x01000193);
+        }
+        h >>>= 0;
+        const slug = `${base.replace(/[^A-Za-z0-9._-]/g, "_")}-${h.toString(16).padStart(8, "0").slice(0, 6)}`;
+        return path.join("E:\\HOME\\Runtime\\scrolling", `scrolling-${slug}.json`);
     }
 
     /**
      * 首次切到库外存储时调用：路径还是库内相对路径就换成外部默认路径，并把
      * 现有库内位置文件复制过去（库内原件保留作备份）。已在绝对路径上则仅尝试
      * 把库内默认文件迁移过来（用户可能改过路径）。
+     * 例外（2026-11-06）：当前路径若等于**旧外部默认**（%APPDATA%/obsidian/
+     * scrolling-positions.json），视为「跟着旧默认走」而非用户手选——同样迁到
+     * 新默认 E:\HOME\Runtime\scrolling，旧外部文件内容一并带过去。
      */
     private async migrateToExternal(): Promise<void> {
         const fs = getFs();
@@ -397,34 +417,50 @@ export class RememberFileStateFeature implements Feature {
             return;
         }
         const current = this.plugin.settings.restoreScrollFilePath ?? "";
+        const legacy = this.legacyExternalDefaultPath();
+        const onLegacyExternal = !!legacy && !!current && current.trim().toLowerCase() === legacy.toLowerCase();
         let target = current;
-        if (!current || !this.isAbsolutePath(current)) {
+        let fsSource = "";
+        if (!current || !this.isAbsolutePath(current) || onLegacyExternal) {
             target = this.externalDefaultPath();
             if (!target) {
                 new Notice("External storage is not available on this system.");
                 await this.plugin.settingsStore.set("restoreScrollExternal", false);
                 return;
             }
+            if (onLegacyExternal) fsSource = current;
             await this.plugin.settingsStore.set("restoreScrollFilePath", target);
         }
 
-        // 迁移源：当前库内路径（若还是相对路径）或库内默认路径。
+        // 迁移源：库内路径（相对路径现状/库内默认），或旧外部默认文件。
         const vaultSource = !current || this.isAbsolutePath(current) ? this.getDefaultStateFilePath() : current;
         try {
             const adapter = this.plugin.app.vault.adapter;
-            const hasSource = !this.isAbsolutePath(vaultSource) && (await adapter.exists(vaultSource));
+            const hasVaultSource = !this.isAbsolutePath(vaultSource) && (await adapter.exists(vaultSource));
+            const hasFsSource = !!fsSource && fs.existsSync(fsSource);
             const hasTarget = fs.existsSync(target);
-            if (hasSource && !hasTarget) {
+            if ((hasVaultSource || hasFsSource) && !hasTarget) {
                 const path = getPath();
                 const dir = path ? path.dirname(target) : "";
                 if (dir) fs.mkdirSync(dir, { recursive: true });
-                const data = await adapter.read(vaultSource);
+                const data = hasFsSource ? fs.readFileSync(fsSource, "utf-8") : await adapter.read(vaultSource);
                 fs.writeFileSync(target, data, "utf-8");
-                new Notice(`Migrated scroll positions to ${target} (the vault copy is kept).`);
+                new Notice(`Migrated scroll positions to ${target} (the old copy is kept).`);
             }
         } catch (err) {
             console.warn("Scroll positions migration failed:", err);
         }
+    }
+
+    /**
+     * 旧版外部默认路径（2026-11-06 前的 externalDefaultPath 实现）——仅用于
+     * 识别「跟着旧默认走」的存量配置并迁到新默认，不是可选目标。
+     */
+    private legacyExternalDefaultPath(): string {
+        const path = getPath();
+        if (!path) return "";
+        const base = process.env.APPDATA || path.join(process.env.USERPROFILE ?? "", ".config");
+        return path.join(base, "obsidian", "scrolling-positions.json");
     }
 
     /** 位置文件是否存在（按当前模式走 fs 或 vault adapter）。 */
