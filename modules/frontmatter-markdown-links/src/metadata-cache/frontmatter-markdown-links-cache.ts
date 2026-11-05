@@ -247,7 +247,10 @@ export class FrontmatterMarkdownLinksCache {
           entries: [
             ...[...imported].filter(([path]) => !existing.has(FILE_PREFIX + path)).map(([path, record]) => [FILE_PREFIX + path, record] as const),
             [IMPORT_KEY, true]
-          ]
+          ],
+          // 漏传 removedKeys → kv shim `for (const key of params.removedKeys)`
+          // 抛 "not iterable"，IMPORT_KEY 永远写不进 → 每次启动重试再失败（2026-11-06）
+          removedKeys: []
         });
       });
       for (const [key, value] of await store.entries()) {
