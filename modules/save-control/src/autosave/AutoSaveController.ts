@@ -1355,6 +1355,14 @@ export class AutoSaveController {
       return;
     }
 
+    // The freshly opened view's buffer IS the disk content. If the stashed
+    // data matches it there is nothing to restore — an unedited held save
+    // must not resurrect as a phantom unsaved edit (dot + close prompt).
+    if (pendingData === view.data) {
+      this.pendingSaveQueue.clear(filePath);
+      return;
+    }
+
     this.markPendingDataRestoreStarted(filePath);
 
     view.setViewData(pendingData, false);
@@ -1571,6 +1579,15 @@ export class AutoSaveController {
     const currentData = textFileView.getViewData?.();
     if (typeof currentData !== "string") {
       return false;
+    }
+
+    // For external (`file:`) notes the cachedRead baseline is unreliable: it
+    // returns raw bytes/BOM (or fails) while getViewData() is normalized, so
+    // every spurious close/blur save looked like an edit — held, stashed and
+    // then resurrected phantom-dirty on reopen. The view's own load-time
+    // buffer is the disk truth for them.
+    if (filePath.startsWith("file:")) {
+      return textFileView.data !== currentData;
     }
 
     const lastSavedData = this.lastSavedDataByPath.get(filePath);
