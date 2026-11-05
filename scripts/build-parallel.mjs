@@ -50,9 +50,29 @@ function run(label, command) {
 
 console.log('[build] 类型道(tsc 增量) ∥ 产物道(icons→esbuild) 并行开始');
 const t0 = Date.now();
+
+// icons 跳过: 产物 icon-data.ts 新于构建脚本和 material-icon-theme 包则跳过
+// （重复构建时 icons 步骤 1-3s 完全浪费——SVG 源和生成逻辑没变）。
+const iconsOut = `${ROOT}/modules/material-icon-theme/src/icon-data.ts`;
+const iconsScript = `${ROOT}/modules/material-icon-theme/scripts/build-icons.mjs`;
+const iconsPkg = `${ROOT}/modules/material-icon-theme/package.json`;
+let iconsCmd = 'yarn build:icons';
+try {
+	const { statSync } = await import('node:fs');
+	const outM = statSync(iconsOut).mtimeMs;
+	const srcM = Math.max(
+		statSync(iconsScript).mtimeMs,
+		statSync(iconsPkg).mtimeMs,
+	);
+	if (outM > srcM) {
+		iconsCmd = 'echo "[icons] skipped (up to date)"';
+		console.log('[esb] icons skipped (output newer than sources)');
+	}
+} catch { /* 文件缺失则不跳过 */ }
+
 const [tscCode, esbCode] = await Promise.all([
 	run('tsc', 'yarn tsc -noEmit -skipLibCheck -incremental -tsBuildInfoFile .cache/tsc-noemit.tsbuildinfo'),
-	run('esb', 'yarn build:icons && yarn node esbuild.mjs production'),
+	run('esb', `${iconsCmd} && yarn node esbuild.mjs production`),
 ]);
 const total = ((Date.now() - t0) / 1000).toFixed(1);
 if (tscCode !== 0 || esbCode !== 0) {

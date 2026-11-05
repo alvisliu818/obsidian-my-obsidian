@@ -494,6 +494,22 @@ const inlineImportPlugin = {
   const lib10Importers = /modules[\\/](frontmatter-markdown-links|external-rename-handler|better-markdown-links)[\\/]/;
   // livesync 的 @/ 路径别名(上游 tsconfig baseUrl 约定):importer 限定
   // livesync,不与宿主其它 @ 别名冲突
+  const srSrcResolver = {
+    name: "sr-src-alias",
+    setup(build) {
+      // spaced-repetition 模块的 `from "src/..."` 路径别名（上游 tsconfig baseUrl
+      // 约定），importer 限定 SR 模块，不与宿主的 src/* paths（obsidian-git）冲突。
+      build.onResolve({ filter: /^src\// }, (args) => {
+        const importer = args.importer.split(path.sep).join("/");
+        if (!importer.includes("/modules/spaced-repetition/")) return undefined;
+        const base = path.resolve("modules/spaced-repetition/src", args.path.slice(4));
+        for (const cand of [base, `${base}.ts`, `${base}.tsx`, `${base}.svelte`, `${base}.css`, path.join(base, "index.ts")]) {
+          if (fs.existsSync(cand)) return { path: cand };
+        }
+        return undefined;
+      });
+    },
+  };
   const livesyncResolver = {
     name: "livesync-at-alias",
     setup(build) {
@@ -573,7 +589,7 @@ const context = await esbuild.context({
     // ollama 等包用 `node:fs` 带前缀的写法，裸名列表罩不住
     ...builtins.map((m) => `node:${m}`),
   ],
-  plugins: [lib10Resolver, livesyncResolver, cmBundlePlugin, momentumSveltePlugin, terminalSveltePlugin, sveltePlugin, jiebaPatchPlugin, dexiePatchPlugin, unicornMagicPatchPlugin, importGlobPlugin, musicPlayerShimsPlugin, inlineImportPlugin, mxInlinePlugin, mxCaptionsPlugin, mxNodeEnvPlugin, terminalPyPlugin],
+  plugins: [srSrcResolver, lib10Resolver, livesyncResolver, cmBundlePlugin, momentumSveltePlugin, terminalSveltePlugin, sveltePlugin, jiebaPatchPlugin, dexiePatchPlugin, unicornMagicPatchPlugin, importGlobPlugin, musicPlayerShimsPlugin, inlineImportPlugin, mxInlinePlugin, mxCaptionsPlugin, mxNodeEnvPlugin, terminalPyPlugin],
   // Monaco 的 codicon.css 引用 .ttf 字体(图标字形)。内联成 dataurl:图标
   // 只有几 KB,而少这一条整个构建会以 "No loader is configured for .ttf" 失败。
   // (与独立插件 obsidian-logseq 的 esbuild.mjs 同款配置。)
@@ -699,14 +715,19 @@ for (const lb of LAZY_BUNDLES) {
 }
 
 if (prod) {
-  const r = await context.rebuild();
+  // 所有 context 并行 rebuild——main/daemon/lazy 互不依赖，串行浪费
+  // 5-8s（lazy ×4 + daemon 各 1-2s 的等待被 main 的 8-9s 遮不住）。
+  const results = await Promise.all([
+    context.rebuild(),
+    daemon.rebuild(),
+    ...lazyContexts.map((lc) => lc.rebuild()),
+  ]);
+  const r = results[0];
   // METAFILE=1 时落盘产物构成清单（逐输入字节数），供体积/内存优化分析
   if (process.env.METAFILE && r.metafile) {
     const { writeFileSync } = await import("node:fs");
     writeFileSync("esbuild-meta.json", JSON.stringify(r.metafile));
   }
-  await daemon.rebuild();
-  for (const lc of lazyContexts) await lc.rebuild();
   process.exit(0);
 } else {
   await context.watch();
