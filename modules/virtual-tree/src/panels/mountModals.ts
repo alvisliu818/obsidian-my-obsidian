@@ -24,7 +24,7 @@ import {
   startDirFor,
   type PickKind,
 } from '../features/systemDialog';
-import { mountDisplayName, mountHostLabel, mountHostOf, type ExternalMount } from '../types';
+import { mountDisplayName, mountHostLabel, mountHostOf, VAULT_ROOT_MOUNT_ID, type ExternalMount } from '../types';
 
 /** Form state (everything is a string until it is committed). */
 interface MountDraft {
@@ -352,11 +352,15 @@ export class MountListModal extends Modal {
         head.createSpan({ cls: 'logseq-mount-list-off', text: `嵌套于 ${mountHostLabel(m, mounts)}` });
       }
       // 路径存在性：库外查磁盘，库内查 vault 索引（同名规则：不存在给警示行）。
-      const missing = isVaultMount(m)
-        ? !this.plugin.app.vault.getAbstractFileByPath(m.path)
-        : !isDirectory(m.path) && !exists(m.path);
+      // 库根条目 path 恒为空 = 库根，永远存在，不做误报。
+      const isRoot = m.id === VAULT_ROOT_MOUNT_ID;
+      const missing = isRoot
+        ? false
+        : isVaultMount(m)
+          ? !this.plugin.app.vault.getAbstractFileByPath(m.path)
+          : !isDirectory(m.path) && !exists(m.path);
       if (missing) head.createSpan({ cls: 'logseq-mount-list-warn', text: '路径不存在' });
-      row.createDiv({ cls: 'logseq-mount-list-path', text: m.path });
+      row.createDiv({ cls: 'logseq-mount-list-path', text: isRoot ? '（库根）' : m.path });
 
       const filters = row.createDiv({ cls: 'logseq-mount-list-filters' });
       if (m.include.trim()) filters.createSpan({ cls: 'logseq-mount-list-include', text: `+/${m.include}/` });
@@ -364,9 +368,12 @@ export class MountListModal extends Modal {
       if (m.refreshSeconds > 0) filters.createSpan({ cls: 'logseq-mount-list-refresh', text: `${m.refreshSeconds}s` });
 
       const actions = row.createDiv({ cls: 'logseq-mount-list-actions' });
-      actions.createEl('button', { cls: 'mod-cta', text: '编辑' }).addEventListener('click', () => {
-        new MountEditorModal(this.plugin, m).open();
-      });
+      // 库根条目没有可编辑的路径/过滤域（编辑弹窗校验不收空路径），不给编辑按钮。
+      if (!isRoot) {
+        actions.createEl('button', { cls: 'mod-cta', text: '编辑' }).addEventListener('click', () => {
+          new MountEditorModal(this.plugin, m).open();
+        });
+      }
       actions.createEl('button', { text: '重新扫描' }).addEventListener('click', () => {
         this.plugin.refreshMounts();
         new Notice('挂载已重新扫描');

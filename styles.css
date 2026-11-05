@@ -59547,13 +59547,32 @@ body.hearth-snapshot-capturing .hearth-view:not(#hearth-boost) {
    主题与既有选择器自动生效；这里只负责虚拟滚动的骨架与少量状态样式。
    行高 25px 必须与 view.ts 的 VX_ROW_HEIGHT 保持一致。
    ========================================================================== */
+/* 工具栏横排（修竖向） */
+.nav-header.lgp-vx-header {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+/* 外层 view-content 不滚——只有内层 scroller 滚（修双滚动条） */
+.workspace-leaf-content[data-type="file-explorer"] .view-content {
+  overflow: hidden !important;
+  display: flex;
+  flex-direction: column;
+  padding: 0 !important;
+}
+
 .nav-files-container.lgp-vx {
   position: relative;
   overflow-y: auto;
   overflow-x: hidden;
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   padding: var(--size-2-3) var(--size-2-2) var(--size-4-3);
-  contain: strict;
 }
 
 .lgp-vx .lgp-vx-spacer {

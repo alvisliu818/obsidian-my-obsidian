@@ -53,10 +53,10 @@ import {
   DEFAULT_DOCTREE_SETTINGS,
   docTreeSettingsFrom,
   editorChoiceFromExternalText,
-  isVaultMount,
   mountDisplayName,
   mountHostOf,
   listMountTargets,
+  VAULT_ROOT_MOUNT_ID,
   vaultRelPath,
   type DocTreeSettings,
   type EditorChoice,
@@ -104,6 +104,18 @@ export default class DocTreePlugin extends Plugin {
     this.registerView(VIEW_TYPE_IMAGE, (leaf) => new ImageView(leaf, this));
     this.registerView(VIEW_TYPE_OFFICE, (leaf) => new OfficeView(leaf, this));
     this.registerView(VIEW_TYPE_VIDEO, (leaf) => new VideoView(leaf, this));
+
+    // 挂载面板是单例面板，但 workspace.json 里可能残留多个叶子（守卫存在前
+    // 落盘的，主库实测左侧标签组里存了 2 个；启动布局还原不经过 activatePanel
+    // 的既有叶子守卫）——每次启动原样还原，就出现多个面板。布局就绪后去重：
+    // 保留第一个，其余 detach。必须挂 onLayoutReady：onload 阶段布局尚未还原，
+    // getLeavesOfType 看不到存量叶子。持有多个（如弹出到独立窗口）按 bug 处理
+    // ——「多个外部挂载面板」本身就是用户报告的问题。
+    this.app.workspace.onLayoutReady(() => {
+      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_MOUNT_PANEL).slice(1)) {
+        leaf.detach();
+      }
+    });
 
     // 虚拟文件浏览器接管（2026-11-05）：必须在布局恢复之前注册好——社区
     // 插件先于 workspace 布局还原加载，所以侧栏叶子会直接实例化虚拟视图，
@@ -157,11 +169,12 @@ export default class DocTreePlugin extends Plugin {
     // 的：Obsidian 启动索引时会对每个现存文件发一次 create 事件。
     let vaultRefreshTimer = 0;
     const refreshVaultMountsSoon = (): void => {
-      if (!(this.settings.externalMounts ?? []).some((m) => m.enabled && isVaultMount(m))) return;
+      // 面板恒有内置库根挂载（__vault_root__，mountPanel.vaultRootMount），
+      // 不再按"有无显式库内挂载"设门槛——根树同样吃 vault 结构事件。
       if (vaultRefreshTimer) window.clearTimeout(vaultRefreshTimer);
       vaultRefreshTimer = window.setTimeout(() => {
         vaultRefreshTimer = 0;
-        for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_MOUNT_PANEL)) {
+        for (const leaf of this.mountPanelLeaves()) {
           (leaf.view as MountPanelView | null)?.refreshVaultMounts();
         }
       }, 300);
@@ -233,7 +246,7 @@ export default class DocTreePlugin extends Plugin {
     // 图标主题就绪/切换 → 挂载面板行内图标重绘（iconForEntry 每次渲染时查询）
     // 自定义事件不走 registerDomEvent（其重载只收已知事件名），register 兜底注销。
     const onIconThemeChanged = () => {
-      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_MOUNT_PANEL)) {
+      for (const leaf of this.mountPanelLeaves()) {
         (leaf.view as MountPanelView).render();
       }
     };
@@ -530,6 +543,28 @@ export default class DocTreePlugin extends Plugin {
    *  嵌套在其下的挂载提升为顶层(各自有独立真实路径,不连带删除)。 */
   async removeMount(mount: ExternalMount): Promise<void> {
     const list = this.settings.externalMounts;
+    if (mount.id === VAULT_ROOT_MOUNT_ID) {
+      // 库根挂载卸载 = 物化成 disabled 条目（不 splice）：卸载意图要跨会话
+      // 持久，重新挂载走设置页「库根挂载」开关。
+      this.materializeVaultRootMount({ enabled: false, pinned: false });
+      let promoted = 0;
+      for (const m of this.settings.externalMounts ?? []) {
+        if (m.attachTo && mountHostOf(m.attachTo).hostId === mount.id) {
+          delete m.attachTo;
+          promoted++;
+        }
+      }
+      await this.saveSettings();
+      this.startMountRefresh();
+      this.refreshMounts();
+      this.logOp('mount.remove', mount.path, 'ok');
+      new Notice(
+        promoted > 0
+          ? `已卸载 ${mountDisplayName(mount)}（${promoted} 个嵌套挂载已移到顶层）`
+          : `已卸载 ${mountDisplayName(mount)}`,
+      );
+      return;
+    }
     const i = list.findIndex((m) => m.id === mount.id);
     if (i < 0) return;
     list.splice(i, 1);
@@ -556,6 +591,14 @@ export default class DocTreePlugin extends Plugin {
   /** Move a mount so that `fromId` sits immediately before `toId`. */
   async reorderMount(fromId: string, toId: string): Promise<void> {
     const list = this.settings.externalMounts ?? [];
+    // 合成态的库根挂载第一次参与排序时物化成真实条目（pinned 关掉，位置
+    // 从此由数组序决定），之后与普通挂载走同一套 splice。
+    if (
+      (fromId === VAULT_ROOT_MOUNT_ID || toId === VAULT_ROOT_MOUNT_ID) &&
+      !list.some((m) => m.id === VAULT_ROOT_MOUNT_ID)
+    ) {
+      this.materializeVaultRootMount({ enabled: true, pinned: false });
+    }
     const from = list.findIndex((m) => m.id === fromId);
     const to = list.findIndex((m) => m.id === toId);
     if (from < 0 || to < 0 || from === to) return;
@@ -564,14 +607,66 @@ export default class DocTreePlugin extends Plugin {
     await this.saveSettings();
   }
 
+  /**
+   * 把内置库根挂载物化进 externalMounts（对合成态做排序/固定/卸载前调用）。
+   * 已物化则原样返回；否则按合成挂载的样子落到列表头部，可带覆盖项。
+   * 物化后 pinned 默认关——排序语义从此由数组序表达。
+   */
+  materializeVaultRootMount(patch: Partial<ExternalMount> = {}): ExternalMount {
+    const list = this.settings.externalMounts ?? [];
+    const existing = list.find((m) => m.id === VAULT_ROOT_MOUNT_ID);
+    if (existing) return existing;
+    const entry = {
+      id: VAULT_ROOT_MOUNT_ID,
+      kind: 'vault' as const,
+      path: '',
+      label: this.app.vault.getName(),
+      enabled: true,
+      pinned: false,
+      include: '',
+      exclude: '',
+      refreshSeconds: 0,
+      ...patch,
+    } as ExternalMount;
+    list.unshift(entry);
+    this.settings.externalMounts = list;
+    void this.saveSettings();
+    return entry;
+  }
+
+  /** 设置页「库根挂载」开关：开 = 可用（无条目则走合成态）；关 = 物化 disabled 条目。 */
+  async setVaultRootMountEnabled(v: boolean): Promise<void> {
+    const list = this.settings.externalMounts ?? [];
+    const entry = list.find((m) => m.id === VAULT_ROOT_MOUNT_ID);
+    if (v) {
+      if (entry) {
+        entry.enabled = true;
+        await this.saveSettings();
+      }
+      // 无条目（合成态本来就可用）：无需落配置。
+    } else {
+      this.materializeVaultRootMount({ enabled: false, pinned: false });
+      await this.saveSettings();
+    }
+    this.refreshMounts();
+  }
+
   /** Re-scan every open mount panel. */
   refreshMounts(): void {
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_MOUNT_PANEL)) {
+    for (const leaf of this.mountPanelLeaves()) {
       (leaf.view as MountPanelView | null)?.refreshMounts();
     }
     // 广播「挂载已刷新」：omnisearch / unified-search 据此重索引库外文件。
     // 事件名沿用拆分前的 logseq: 前缀——两个消费方都按这个名字监听，不能改。
     this.app.workspace.trigger('logseq:external-mounts-refreshed');
+  }
+
+  /** 渲染统一面板的叶子：独立挂载面板叶子 + 托管虚拟 explorer 的 file-explorer
+   *  叶子。两者渲染同一份内容（库树就是内置挂载），刷新/重绘必须同时覆盖，
+   *  否则「文件」页签里的挂载树会陈旧。 */
+  mountPanelLeaves(): WorkspaceLeaf[] {
+    const explorer = this.app.workspace.getLeavesOfType('file-explorer').filter((l) => l.view instanceof MountPanelView);
+    return [...this.app.workspace.getLeavesOfType(VIEW_TYPE_MOUNT_PANEL), ...explorer];
   }
 
   /**

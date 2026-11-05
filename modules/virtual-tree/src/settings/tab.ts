@@ -13,7 +13,7 @@ import { PluginSettingTab, Setting, type App } from 'obsidian';
 import type DocTreePlugin from '../main';
 import { MountListModal } from '../panels/mountModals';
 import { VIEW_TYPE_MOUNT_PANEL } from '../panels/mountPanel';
-import { mountDisplayName, type EditorChoice, type VideoOpenMode } from '../types';
+import { mountDisplayName, VAULT_ROOT_MOUNT_ID, type EditorChoice, type VideoOpenMode } from '../types';
 import { OpenWithEditModal } from '../features/openWithUi';
 import { isDirectory } from '../features/extFs';
 import { invalidateVaultParentPlans } from '../features/vaultFs';
@@ -161,6 +161,65 @@ export class DocTreeSettingTab extends PluginSettingTab {
       .addToggle((t) =>
         t.setValue(this.plugin.settings.mountShowLoadedCount !== false).onChange(async (v) => {
           this.plugin.settings.mountShowLoadedCount = v;
+          await this.plugin.saveSettings();
+          this.plugin.refreshMounts();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName('显示「已固定」徽标')
+      .setDesc(
+        '顶部挂载标题旁的「已固定」小标签。固定的挂载本来就排在最前面，' +
+          '徽标只是重复这个信息；默认不展示，想看到标记再打开。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.mountShowPinnedBadge === true).onChange(async (v) => {
+          this.plugin.settings.mountShowPinnedBadge = v;
+          await this.plugin.saveSettings();
+          this.plugin.refreshMounts();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName('库根挂载')
+      .setDesc(
+        '面板第一行的整库树挂载（库名即挂载名）。右键「卸载」它之后从这里重新打开；' +
+          '对它拖拽排序或固定后，它的位置/状态会落成配置条目，与其他挂载同一套机制。',
+      )
+      .addToggle((t) => {
+        const entry = (this.plugin.settings.externalMounts ?? []).find(
+          (m) => m.id === VAULT_ROOT_MOUNT_ID,
+        );
+        t.setValue(!entry || entry.enabled !== false).onChange(async (v) => {
+          await this.plugin.setVaultRootMountEnabled(v);
+        });
+        return t;
+      });
+
+    new Setting(containerEl)
+      .setName('显示挂载路径')
+      .setDesc(
+        '挂载标题下方 meta 行的路径（库内挂载以 / 开头，库外为磁盘绝对路径）。' +
+          '统计、过滤、截断信息优先占位，meta 行没有别的内容时才落路径；' +
+          '嫌路径行占地方可以整行关掉。默认开。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.mountShowPath !== false).onChange(async (v) => {
+          this.plugin.settings.mountShowPath = v;
+          await this.plugin.saveSettings();
+          this.plugin.refreshMounts();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName('显示库根路径')
+      .setDesc(
+        '库根挂载（面板第一行的库名）meta 行的「/」。纯占位信息，' +
+          '默认不展示；打开后仍受上面的「显示挂载路径」总开关约束。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.mountShowRootPath === true).onChange(async (v) => {
+          this.plugin.settings.mountShowRootPath = v;
           await this.plugin.saveSettings();
           this.plugin.refreshMounts();
         }),

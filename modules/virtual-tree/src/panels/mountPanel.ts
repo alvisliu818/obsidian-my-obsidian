@@ -17,12 +17,19 @@
 import { FileSystemAdapter, ItemView, Menu, Notice, setIcon, TFile, TFolder, type WorkspaceLeaf } from 'obsidian';
 import type DocTreePlugin from '../main';
 import type { ExternalMount } from '../types';
-import { isVaultMount, mountDisplayName, mountHostOf } from '../types';
+import {
+  isVaultMount,
+  mountDisplayName,
+  mountHostOf,
+  VAULT_ROOT_MOUNT_ID,
+  vaultRelPath,
+} from '../types';
 import {
   invalidateVaultParentPlans,
   parentPlanOf,
   vaultAbsOf,
   vaultHasVirtualChildren,
+  vaultJoinPath,
   vaultRootOf,
   vaultScanLayer,
 } from '../features/vaultFs';
@@ -125,6 +132,8 @@ type MountLevelEntry =
 
 export class MountPanelView extends ItemView {
   plugin: DocTreePlugin;
+  /** file-explorer 叶子复用标记： VaultExplorerView 退役后面板兼做文件浏览器 */
+  isEmbeddedFileExplorer = false;
   private states = new Map<string, MountState>();
   /** Per-render viewport painters; the panel's scroll runs them all. */
   private rowPainters: Array<() => void> = [];
@@ -600,12 +609,15 @@ export class MountPanelView extends ItemView {
    * 由 main.ts 的 vault 事件（去抖后）调用。
    */
   refreshVaultMounts(): void {
-    const mounts = (this.plugin.settings.externalMounts ?? []).filter(
-      (m) => m.enabled && isVaultMount(m),
-    );
-    if (mounts.length === 0) return;
-    // parent 属性挂载计划跟着 vault 索引换代（建/删/改名/元数据变化后重建）
+    // 内置库根挂载恒在（面板第一行），必须一起强刷——否则 vault 建/删/改名
+    // 后只有显式挂载项刷新，根树停在旧状态。已物化时用真实条目避免同 id
+    // 双份扫描。
     invalidateVaultParentPlans();
+    const root = this.effectiveVaultRootMount();
+    const mounts = [
+      root,
+      ...(this.plugin.settings.externalMounts ?? []).filter((m) => m.id !== VAULT_ROOT_MOUNT_ID),
+    ].filter((m) => m.enabled && isVaultMount(m));
     for (const m of mounts) {
       const st = this.scan(m, true);
       this.reloadOpenLayers(m, st);
@@ -686,6 +698,37 @@ export class MountPanelView extends ItemView {
   // rendering
   // ------------------------------------------------------------------
 
+  /**
+   * 内置 vault 根挂载（面板顶部的第一行，label = 库名）。path 为 '' = 库根
+   * （vaultFs 的 vaultJoinPath/vaultNodeAt/vaultRootOf 都按此归一）；每次
+   * 调用返回新对象，但 id 恒为 '__vault_root__'，scan 缓存因此跨渲染复用。
+   */
+  private vaultRootMount(): ExternalMount {
+    return {
+      id: '__vault_root__',
+      label: this.plugin.app.vault.getName(),
+      path: '',
+      kind: 'vault',
+      enabled: true,
+      pinned: true,
+      include: '',
+      exclude: '',
+      refreshSeconds: 0,
+    } as ExternalMount;
+  }
+
+  /**
+   * 有效库根挂载：已物化（externalMounts 里有 __vault_root__ 条目）用真实
+   * 条目——它的 enabled/pinned/数组位置都听用户的；未物化用合成态（恒
+   * 可用、恒浮顶）。两者同 id，scan 缓存与展开状态无缝衔接。
+   */
+  private effectiveVaultRootMount(): ExternalMount {
+    const persisted = (this.plugin.settings.externalMounts ?? []).find(
+      (m) => m.id === VAULT_ROOT_MOUNT_ID,
+    );
+    return persisted ?? this.vaultRootMount();
+  }
+
   render(): void {
     const { contentEl } = this;
     // The panel scrolls on contentEl ITSELF (the .view-content), so emptying
@@ -708,8 +751,14 @@ export class MountPanelView extends ItemView {
     // dragged it into (see `wireDragReorder`).
     // 嵌套挂载(attachTo 的宿主存在且启用)不在此渲染——它们编进宿主内部的行流;
     // 宿主被卸载/停用时兜底回落顶层,配置不丢。
+    // 内置 vault 根挂载（用户 2026-11-05：vault 树也看做一个挂载项）——
+    // path 为 ''（库内挂载的"库根"形态，vaultFs.vaultJoinPath 归一处理）；
+    // 传磁盘绝对路径会让 getAbstractFileByPath 必然 miss（报"文件不存在"）。
+    // 已物化（externalMounts 有同 id 条目）则用真实条目——排序/固定/卸载
+    // 都听用户的；未物化用合成态，恒浮顶。
     const all = this.plugin.settings.externalMounts ?? [];
-    const mounts = all
+    const vaultRootMount = this.effectiveVaultRootMount();
+    const mounts = [vaultRootMount, ...all.filter((m) => m.id !== VAULT_ROOT_MOUNT_ID)]
       .filter((m) => m.enabled)
       .filter((m) => {
         if (!m.attachTo) return true;
@@ -881,7 +930,11 @@ export class MountPanelView extends ItemView {
       }),
     );
     head.createSpan({ cls: 'logseq-mount-name', text: headLabel });
-    if (mount.pinned) head.createSpan({ cls: 'logseq-mount-flag is-pinned', text: '已固定' });
+    // 「已固定」徽标默认不展示（设置 → 外部挂载 → 显示「已固定」徽标）：
+    // pinned 的语义已由"浮到顶部"的位置表达，徽标纯装饰。
+    if (mount.pinned && this.plugin.settings.mountShowPinnedBadge) {
+      head.createSpan({ cls: 'logseq-mount-flag is-pinned', text: '已固定' });
+    }
     head.addEventListener('click', () => {
       if (state.open.has('')) state.open.delete('');
       else state.open.add('');
@@ -912,7 +965,15 @@ export class MountPanelView extends ItemView {
       if (mount.exclude.trim()) meta.push(`排除 /${mount.exclude}/`);
     }
     if (state.truncated) meta.push('已截断');
-    section.createDiv({ cls: 'logseq-mount-meta', text: meta.join(' · ') || mountDisplayPath(mount) });
+    // meta 行的路径兜底受两个开关管：mountShowPath 总开关（默认开）+
+    // 库根挂载单独关（默认关——库根的「/」纯占位）。meta 有统计内容时
+    // 本来就不落路径；两者都不展示且无统计时整行省略。
+    const isRootMount = isVaultMount(mount) && vaultRelPath(mount.path) === '';
+    const showPath =
+      this.plugin.settings.mountShowPath !== false &&
+      (!isRootMount || this.plugin.settings.mountShowRootPath === true);
+    const metaText = meta.join(' · ') || (showPath ? mountDisplayPath(mount) : '');
+    if (metaText) section.createDiv({ cls: 'logseq-mount-meta', text: metaText });
 
     if (state.tree.length === 0 && !state.truncated) {
       section.createDiv({ cls: 'logseq-mount-empty', text: '没有符合过滤条件的条目。' });
@@ -1240,7 +1301,7 @@ export class MountPanelView extends ItemView {
    * openFile，行为与从前一致（选 logseq 时本来就照旧）。
    */
   private async openVaultNode(mount: ExternalMount, node: MountNode): Promise<void> {
-    const vaultPath = node.rel ? `${mount.path}/${node.rel}` : mount.path;
+    const vaultPath = vaultJoinPath(mount, node.rel);
     const af = this.app.vault.getAbstractFileByPath(vaultPath);
     if (!(af instanceof TFile)) {
       new Notice('文件不存在（可能已被删除或移动）。');
@@ -1299,7 +1360,7 @@ export class MountPanelView extends ItemView {
       this.addVaultFileMenuItems(menu, mount, node);
       menu.addSeparator();
       // 挂载为独立条目：把这个库内子树提升成面板上自己的挂载。
-      const vaultPath = node.rel ? `${mount.path}/${node.rel}` : mount.path;
+      const vaultPath = vaultJoinPath(mount, node.rel);
       menu.addItem((item) =>
         item
           .setTitle('挂载为独立条目…')
@@ -1361,7 +1422,7 @@ export class MountPanelView extends ItemView {
     // 挂载到…：以本节点为源，在树形选择器里挑虚拟文档树的另一个位置。
     // sourceAbs 用库内相对路径（与库内挂载的 path 同一空间，禁区判定才准）。
     if (node) {
-      const vaultPath2 = node.rel ? `${mount.path}/${node.rel}` : mount.path;
+      const vaultPath2 = vaultJoinPath(mount, node.rel);
       menu.addItem((item) =>
         item
           .setTitle('挂载到…')
@@ -1403,15 +1464,19 @@ export class MountPanelView extends ItemView {
         .setTitle('复制库内路径')
         .setIcon('copy' as never)
         .onClick(() => {
-          void navigator.clipboard?.writeText(node ? `${mount.path}/${node.rel}` : mount.path);
+          void navigator.clipboard?.writeText(vaultJoinPath(mount, node?.rel ?? '') || '/');
           new Notice('已复制路径');
         }),
     );
     if (!node) {
       menu.addSeparator();
-      menu.addItem((item) =>
-        item.setTitle('编辑这个挂载…').setIcon('settings' as never).onClick(() => this.plugin.editMount(mount)),
-      );
+      // 库根挂载没有可编辑的路径/过滤域（path 恒为空 = 库根，编辑弹窗的
+      // 校验也不收空路径），只给重扫/固定/卸载。
+      if (mount.id !== VAULT_ROOT_MOUNT_ID) {
+        menu.addItem((item) =>
+          item.setTitle('编辑这个挂载…').setIcon('settings' as never).onClick(() => this.plugin.editMount(mount)),
+        );
+      }
       menu.addItem((item) =>
         item.setTitle('重新扫描').setIcon('refresh-cw' as never).onClick(() => this.refreshMounts()),
       );
@@ -1420,7 +1485,16 @@ export class MountPanelView extends ItemView {
           .setTitle(mount.pinned ? '取消固定' : '固定到顶部')
           .setIcon('pin' as never)
           .onClick(async () => {
-            mount.pinned = !mount.pinned;
+            // 合成态的库根挂载先物化成真实条目再改 pinned，否则写入无处落盘
+            // （重启后恢复浮顶）。物化返回已存在条目时 no-op 创建，统一在
+            // 条目上翻转。
+            if (mount.id === VAULT_ROOT_MOUNT_ID) {
+              const entry = this.plugin.materializeVaultRootMount();
+              entry.pinned = !mount.pinned;
+              mount.pinned = entry.pinned;
+            } else {
+              mount.pinned = !mount.pinned;
+            }
             await this.plugin.saveSettings();
             this.render();
           }),
@@ -2034,7 +2108,7 @@ export class MountPanelView extends ItemView {
         { title: '新建文件', placeholder: 'untitled.md', validate: validateEntryName },
         (name) => {
           if (!name) return;
-          const dir = dirRel ? `${mount.path}/${dirRel}` : mount.path;
+          const dir = vaultJoinPath(mount, dirRel);
           const target = `${dir}/${name}`;
           if (this.app.vault.getAbstractFileByPath(target)) {
             new Notice(`已存在同名条目：${name}`);
@@ -2075,7 +2149,7 @@ export class MountPanelView extends ItemView {
         { title: '新建文件夹', placeholder: 'new-folder', validate: validateEntryName },
         (name) => {
           if (!name) return;
-          const dir = dirRel ? `${mount.path}/${dirRel}` : mount.path;
+          const dir = vaultJoinPath(mount, dirRel);
           const target = `${dir}/${name}`;
           if (this.app.vault.getAbstractFileByPath(target)) {
             new Notice(`已存在同名条目：${name}`);
@@ -2165,7 +2239,7 @@ export class MountPanelView extends ItemView {
     // 库内挂载：fileManager.renameFile 会同步更新全库引用与反链，
     // 直接磁盘改名做不到这一点。
     if (isVaultMount(mount)) {
-      const vaultPath = node.rel ? `${mount.path}/${node.rel}` : mount.path;
+      const vaultPath = vaultJoinPath(mount, node.rel);
       const af = this.app.vault.getAbstractFileByPath(vaultPath);
       if (!af) {
         new Notice('文件不存在。');
@@ -2223,7 +2297,7 @@ export class MountPanelView extends ItemView {
     // 库内挂载：走 fileManager.trashFile（尊重用户设置的回收站形态），
     // 索引与反链同步更新。
     if (isVaultMount(mount)) {
-      const vaultPath = node.rel ? `${mount.path}/${node.rel}` : mount.path;
+      const vaultPath = vaultJoinPath(mount, node.rel);
       const af = this.app.vault.getAbstractFileByPath(vaultPath);
       if (!af) {
         new Notice('文件不存在。');

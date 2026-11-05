@@ -32,6 +32,14 @@ export type VideoOpenMode = 'player' | 'native';
  */
 export type MountKind = 'external' | 'vault';
 
+/**
+ * 内置库根挂载的 id。面板默认渲染一个合成态的库根挂载（不在配置里）；
+ * 用户对它做排序/固定/卸载时物化成 externalMounts 里的真实条目（同 id），
+ * 之后与普通挂载走同一套机制。合成态与物化态共用 id，scan 缓存/展开
+ * 状态因此无缝衔接。
+ */
+export const VAULT_ROOT_MOUNT_ID = '__vault_root__';
+
 export interface ExternalMount {
   /** Stable id; also used as the link folder name, so it must be path-safe. */
   id: string;
@@ -329,6 +337,21 @@ export interface DocTreeSettings {
    */
   mountShowLoadedCount: boolean;
   /**
+   * 顶部挂载头行上的「已固定」徽标（pinned 挂载已按位置浮到顶部，徽标纯
+   * 装饰）。默认关——固定的语义靠位置表达，徽标默认是冗余信息。
+   */
+  mountShowPinnedBadge: boolean;
+  /**
+   * 挂载头 meta 行的路径展示（库内挂载以 / 开头，库外为磁盘绝对路径）。
+   * 统计/过滤/截断信息优先占位，meta 没内容时才落路径。默认开。
+   */
+  mountShowPath: boolean;
+  /**
+   * 库根挂载（面板第一行的库名）meta 行的「/」。纯占位信息，默认不展示；
+   * 打开后仍受 mountShowPath 总开关约束。
+   */
+  mountShowRootPath: boolean;
+  /**
    * Drag mode for the virtual document tree: when on, tree rows can be
    * dragged to a custom DISPLAY order (persisted in `mountTreeOrder`).
    * The filesystem is never touched - this is purely how the panel draws.
@@ -460,6 +483,9 @@ export const DEFAULT_DOCTREE_SETTINGS: DocTreeSettings = {
   titleRenameEnabled: true,
   mountLinkEnabled: true,
   mountShowLoadedCount: true,
+  mountShowPinnedBadge: false,
+  mountShowPath: true,
+  mountShowRootPath: false,
   mountDragMode: false,
   mountTreeOrder: {},
   mountPickDir: '',
@@ -546,6 +572,9 @@ export function docTreeSettingsFrom(raw: unknown): DocTreeSettings {
   s.titleRenameEnabled = o.titleRenameEnabled !== false;
   s.mountLinkEnabled = o.mountLinkEnabled !== false;
   s.mountShowLoadedCount = o.mountShowLoadedCount !== false;
+  s.mountShowPinnedBadge = o.mountShowPinnedBadge === true;
+  s.mountShowPath = o.mountShowPath !== false;
+  s.mountShowRootPath = o.mountShowRootPath === true;
   s.mountDragMode = o.mountDragMode === true;
   s.mountTreeOrder = mountTreeOrderFrom(o.mountTreeOrder);
   // 工具栏配置:结构非法/未配置时保持 undefined(= 注册表默认渲染)

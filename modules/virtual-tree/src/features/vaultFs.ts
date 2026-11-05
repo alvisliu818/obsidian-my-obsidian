@@ -13,9 +13,22 @@
  */
 
 import { TFile, TFolder, type App, type TAbstractFile } from 'obsidian';
-import { isVaultMount, type ExternalMount } from '../types';
+import { isVaultMount, vaultRelPath, type ExternalMount } from '../types';
 import type { CompiledFilter, MountNode } from './mountFilter';
 import { dirPruned, entryMatches } from './mountFilter';
+
+// ---------------------------------------------------------------------------
+// 库内挂载路径归一。挂载根 `path` 是库内相对路径；内置的库根挂载（mountPanel
+// render 里的 __vault_root__）path 为 ''（= 库根），所有 `${mount.path}/${rel}`
+// 形式的手拼在这里统一收口——空基名直接返回 rel 本身，绝不产出 `/notes` 这种
+// 带首斜杠的路径（getAbstractFileByPath 不认）。
+// ---------------------------------------------------------------------------
+
+/** 库内挂载内 `rel` 对应的 vault 相对路径（挂载根为库根时 rel 原样返回）。 */
+export function vaultJoinPath(mount: ExternalMount, rel: string): string {
+  const base = vaultRelPath(mount.path);
+  return base && rel ? `${base}/${rel}` : base || rel;
+}
 
 // ---------------------------------------------------------------------------
 // parent 属性挂载（2026-11-03 用户需求）：笔记 frontmatter 写 `parent:` 时，
@@ -73,8 +86,9 @@ export function parentPlanOf(app: App, mountPath: string): ParentPlan {
   const cached = parentPlans.get(mountPath);
   if (cached && cached.gen === gen) return cached.plan;
 
-  const root = mountPath.replace(/[\\/]+$/, '').replace(/\\/g, '/');
-  const underRoot = (p: string): boolean => p === root || p.startsWith(`${root}/`);
+  // 根挂载（mountPath='' 或 '/'）= 整库都是挂载域。
+  const root = vaultRelPath(mountPath);
+  const underRoot = (p: string): boolean => !root || p === root || p.startsWith(`${root}/`);
 
   // 逐笔记读 frontmatter.parent，解析成 child → parent 的原始映射
   const raw = new Map<string, string>();
@@ -142,9 +156,11 @@ export function vaultAbsOf(app: App, vaultRel: string): string {
   return base ? `${base}/${vaultRel}` : vaultRel;
 }
 
-/** 挂载内 `rel`（相对挂载根）对应的库内 TAbstractFile；不存在返回 null。 */
+/** 挂载内 `rel`（相对挂载根）对应的库内 TAbstractFile；不存在返回 null。
+ * 挂载根为库根（path 归一后为 ''）且 rel 为空时返回库根 TFolder。 */
 export function vaultNodeAt(app: App, mount: ExternalMount, rel = ''): TAbstractFile | null {
-  const vaultPath = rel ? `${mount.path}/${rel}` : mount.path;
+  const vaultPath = vaultJoinPath(mount, rel);
+  if (!vaultPath || vaultPath === '/') return app.vault.getRoot();
   return app.vault.getAbstractFileByPath(vaultPath) ?? null;
 }
 
@@ -156,7 +172,7 @@ export type VaultRoot =
 
 export function vaultRootOf(app: App, mount: ExternalMount): VaultRoot {
   if (!isVaultMount(mount)) return { kind: 'missing' };
-  const node = app.vault.getAbstractFileByPath(mount.path);
+  const node = vaultNodeAt(app, mount);
   if (node instanceof TFile) return { kind: 'file', file: node };
   if (node instanceof TFolder) return { kind: 'folder', folder: node };
   return { kind: 'missing' };
@@ -186,10 +202,11 @@ export function vaultScanLayer(
     // parent 属性挂载的虚拟子层：挂到这篇笔记名下的子文档（md 行，懒展开）
     if (!plan) return [];
     const out: MountNode[] = [];
+    const mountBase = vaultRelPath(mount.path);
     for (const childPath of plan.childrenOf.get(node.path) ?? []) {
       const child = app.vault.getAbstractFileByPath(childPath);
       if (!(child instanceof TFile)) continue;
-      const childRel = child.path.slice(mount.path.length + 1);
+      const childRel = mountBase ? child.path.slice(mountBase.length + 1) : child.path;
       if (!entryMatches(childRel, f)) continue;
       out.push({
         name: child.name,
@@ -235,6 +252,6 @@ export function vaultHasVirtualChildren(
   plan: ParentPlan | null,
 ): boolean {
   if (!plan) return false;
-  const vaultPath = rel ? `${mount.path}/${rel}` : mount.path;
+  const vaultPath = vaultJoinPath(mount, rel);
   return (plan.childrenOf.get(vaultPath)?.length ?? 0) > 0;
 }
