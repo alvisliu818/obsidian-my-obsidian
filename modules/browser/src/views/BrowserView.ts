@@ -96,7 +96,7 @@ export class BrowserView extends ItemView {
       // setState(). Obsidian does NOT necessarily call setState before onOpen
       // when it creates a brand-new leaf, so read the state directly too.
       // The plugin's handoff wins; the leaf state covers a workspace restore.
-      const initial = this.pendingUrl || this.readLeafStateUrl() || this.ctx.startUrl();
+      const initial = this.pendingUrl || this.readLeafStateUrl() || this.ctx.getSettings().homePage || "about:blank";
       this.pendingUrl = "";
       this.newTab(initial, true);
       // Obsidian can attach the state AFTER onOpen (workspace restore). If it
@@ -117,7 +117,7 @@ export class BrowserView extends ItemView {
       const idx = tabs.findIndex((t) => t.active);
       if (idx >= 0 && this.tabs[idx]) this.activate(this.tabs[idx].id);
     } else {
-      const home = this.ctx.startUrl();
+      const home = this.ctx.getSettings().homePage || "about:blank";
       this.newTab(home, true);
     }
   }
@@ -199,7 +199,7 @@ export class BrowserView extends ItemView {
       if (next) this.activate(next.id);
       else {
         this.activeId = null;
-        this.newTab(this.ctx.startUrl(), true);
+        this.newTab(this.ctx.getSettings().homePage || "about:blank", true);
       }
     } else {
       this.renderTabbar();

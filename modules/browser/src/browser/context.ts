@@ -30,8 +30,6 @@ export interface BrowserContext {
   onDomReady(webview: IWebviewTag, url: string): void;
   /** Content scripts that must run before the page's own scripts. */
   extensionStartPayload(url: string): { css: string[]; js: string[] };
-  /** Edge Add-ons store page: the injected helper hands back an extension id. */
-  onEdgeInstall?(id: string, webview: IWebviewTag): void;
 
   extensionIcons(): { id: string; name: string; icon: string }[];
   onExtensionClick(id: string, anchor: HTMLElement): void;
@@ -49,6 +47,4 @@ export interface BrowserContext {
   onDataChange(fn: () => void): () => void;
   /** URL of the active browser tab ('' when the view is closed). */
   currentUrl?(): string;
-  /** 新标签页起点：配置了新标签页扩展则其 newtab 页，否则主页。 */
-  startUrl(): string;
 }

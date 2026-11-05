@@ -22,24 +22,13 @@ import { DownloadsView } from "./views/DownloadsView";
 import { BrowserTab } from "./browser/BrowserTab";
 import type { BrowserContext } from "./browser/context";
 import { clipPage } from "./browser/excerpt";
-import { bindWebRequestPipeline } from "./browser/webRequestPipeline";
-import { UserJsChain } from "./browser/userJsInstall";
-import { WrBridge } from "./browser/wrBridge";
-import { evalInSwBridge } from "./extensions/cs-runtime";
-import { applyProxyToSession } from "./browser/proxy";
-import { dnrBlocker } from "./browser/dnrEngine";
 import { bindSessionDownloads } from "./browser/downloads";
 import { ExtensionHost } from "./extensions/extensionHost";
-import { buildEdgeStoreHelperScript, isEdgeAddonsSiteUrl } from "./extensions/edgeStoreHelper";
-import { EDGE_ADDONS_HOME } from "./extensions/edgeStore";
-import { setClipBridge } from "./extensions/cs-runtime";
-import { UserscriptInjector } from "./extensions/userscriptInjector";
-import { htmlToMarkdown } from "./utils/markdown";
 import { PopupLayer } from "./extensions/popup";
 import { BrowserSettingTab } from "./settings/SettingsTab";
 import { downloadToVault } from "./utils/download";
-import { isUrlExcluded, normalizeUrl, safeFilename } from "./utils/url";
-import { nodeRequire, openExternal, sessionFromPartition, vaultBasePath } from "./utils/electron";
+import { isUrlExcluded, normalizeUrl } from "./utils/url";
+import { nodeRequire, openExternal, vaultBasePath } from "./utils/electron";
 
 export default class BrowserPlugin extends Plugin {
   private store = new DataStore(this);
@@ -47,9 +36,6 @@ export default class BrowserPlugin extends Plugin {
   private history!: HistoryStore;
   private downloads!: DownloadsStore;
   private extHost!: ExtensionHost;
-  private usInjector = new UserscriptInjector();
-  private wrBridge!: WrBridge;
-  private usChain!: UserJsChain;
   private popupLayer: PopupLayer | null = null;
   private ctx!: BrowserContext;
 
@@ -76,139 +62,7 @@ export default class BrowserPlugin extends Plugin {
       () => this.store.data.extensions,
       () => this.config.extensionsEnabled,
       () => this.store.save(),
-      () => void this.store.saveNow(),
     );
-
-    // 思源内核 API 的 Obsidian 对应：扩展剪藏流程（cs-runtime）经这个桥落库。
-    // extract ← 思源 /api/extension/copy；save ← 思源 createDocWithMd + renderSprig
-    // + netImg2LocalAssets 的组合（Obsidian 侧 = vault.create + clipFolder 设置）。
-    setClipBridge({
-      extract: async (data: Record<string, any>) => {
-        const html = String(data.html || "");
-        const md = html ? htmlToMarkdown(html) : String(data.excerpt || "");
-        return md ? { md } : { md: "", error: "页面无可用内容" };
-      },
-      save: async (_data: Record<string, any>, markdown: string, title: string) => {
-        const folder = (this.config.clipFolder || "Browser/Clippings").replace(/\/+$/, "");
-        const stem = safeFilename(title) || "clipping";
-        let path = `${folder}/${stem}.md`;
-        for (let i = 1; this.app.vault.getAbstractFileByPath(path) && i < 500; i++) {
-          path = `${folder}/${stem} ${i}.md`;
-        }
-        const file = await this.app.vault.create(path, markdown);
-        return { ok: true, path: file.path };
-      },
-    });
-
-    // .user.js 安装链 + webRequest 阻塞桥 + webNavigation 合成（架构：
-    // 阻塞桥是基础设施 wrBridge，安装链 usChain 是它的消费者）
-    this.wrBridge = new WrBridge({
-      listExts: () =>
-        this.store.data.extensions
-          .filter((r) => r.enabled && r.electronId)
-          .map((r) => ({ electronId: r.electronId!, name: r.name, native: true })),
-      evalInSw: (eid, expr) => evalInSwBridge({ electronId: eid } as any, expr),
-      openUrl: (u) => void this.openUrl(u, true),
-      activeUrl: () => this.activeTab()?.url ?? "",
-    });
-    this.usChain = new UserJsChain({
-      listExts: () =>
-        this.store.data.extensions
-          .filter((r) => r.enabled && r.electronId)
-          .map((r) => ({ electronId: r.electronId!, name: r.name, native: true })),
-      getRegistry: () => this.usInjector.registry(),
-      evalInSw: (eid, expr) => evalInSwBridge({ electronId: eid } as any, expr),
-      bridge: this.wrBridge,
-      ensureCsRuntime: () => {
-        const t = this.activeTab();
-        if (t) this.extHost.ensureCsRuntime(t.getWebview());
-      },
-    });
-    this.usChain = this.usChain;
-
-    // 新标签页扩展数据代答（chrome.topSites/bookmarks/history ← 自己的库）
-    this.extHost.userDataProvider = async (kind: string, args: any) => {
-      const bmNode = (b: (typeof this.store.data.bookmarks)[number], i: number) => ({
-        id: "bm" + i,
-        parentId: "1",
-        title: b.title || b.url,
-        url: b.url,
-        dateAdded: b.createdAt ?? undefined,
-      });
-      switch (kind) {
-        case "topSites": {
-          const count = new Map<string, { url: string; title: string; n: number }>();
-          for (const h of this.store.data.history) {
-            try {
-              const host = new URL(h.url).hostname;
-              const cur = count.get(host);
-              if (cur) cur.n++;
-              else count.set(host, { url: h.url, title: h.title || h.url, n: 1 });
-            } catch {
-              /* bad url */
-            }
-          }
-          return [...count.values()].sort((a, b) => b.n - a.n).slice(0, 10).map((x) => ({ url: x.url, title: x.title }));
-        }
-        case "bookmarkTree":
-          return [
-            {
-              id: "0",
-              title: "",
-              children: [
-                {
-                  id: "1",
-                  parentId: "0",
-                  title: "Bookmarks 栏",
-                  children: this.store.data.bookmarks.map((b, i) => bmNode(b, i)),
-                },
-              ],
-            },
-          ];
-        case "bookmarkRecent": {
-          const n = Number(args?.n) || 10;
-          return this.store.data.bookmarks.slice(0, n).map((b, i) => bmNode(b, i));
-        }
-        case "bookmarkSearch": {
-          const q = String(args?.query || "").toLowerCase();
-          return this.store.data.bookmarks
-            .filter((b) => !q || b.title.toLowerCase().includes(q) || b.url.toLowerCase().includes(q) || (b.tags ?? []).some((t) => t.toLowerCase().includes(q)))
-            .map((b, i) => bmNode(b, i));
-        }
-        case "historySearch": {
-          const q = args?.query;
-          const list = this.history.search(typeof q === "string" ? q : "");
-          return list.map((h) => ({ url: h.url, title: h.title, lastVisitTime: h.visitTime, visitCount: 1 }));
-        }
-        default:
-          return null;
-      }
-    };
-
-    // 油猴类扩展的 userScripts 注入（宿主侧对账 + GM 前奏），扩展清单由 extHost 提供
-    this.usInjector.setNativeIdProvider(() =>
-      this.store.data.extensions
-        .filter((r) => r.enabled && r.electronId)
-        .map((r) => ({
-          electronId: r.electronId!,
-          path: this.extHost.dirOfPublic(r),
-          name: r.name,
-          version: r.version,
-          defaultLocale: (r as any).defaultLocale ?? "",
-          contentScripts: r.contentScripts ?? [],
-        })),
-    );
-
-    // 插件重启后 session 里的原生扩展已失效，需重新加载以拿回 electronId，
-    // 否则 cs-runtime / sw-bridge 拿不到 SW，退回自研注入式。
-    void this.extHost.syncNativeOnStartup().then(() => {
-      this.wakeDnrEngine();
-      // SW 就绪后拉一轮 webRequest filter 快照（阻塞桥冷启动）
-      void this.wrBridge.refreshWrBridge(true);
-    });
-
-    await this.writePreloads();
-    this.ctx = this.buildContext();
 
     await this.writePreloads();
     this.ctx = this.buildContext();
@@ -239,14 +93,11 @@ export default class BrowserPlugin extends Plugin {
         extensions: () => this.store.data.extensions,
         refreshExtensionIcons: () => this.refreshExtensionIcons(),
         clearHistory: () => this.history.clear(),
-        applyProxy: () => applyProxyToSession(this.config),
       }),
     );
 
     this.app.workspace.onLayoutReady(() => {
       this.bindDownloads();
-      this.bindWebRequestPipeline();
-      void applyProxyToSession(this.config);
       if (this.config.restoreSession && this.store.data.session.length) {
         // Nothing to do: BrowserView.onOpen pulls the session from ctx.
       }
@@ -255,50 +106,8 @@ export default class BrowserPlugin extends Plugin {
 
   onunload(): void {
     this.unbindDownloads?.();
-    this.unbindPipeline?.();
-    this.unbindPipeline = null;
     this.popupLayer?.close();
     void this.store.flush();
-  }
-
-  // ---------------- 网络层（webRequest 管线 + DNR + 代理）----------------
-
-  private unbindPipeline: (() => void) | null = null;
-  private pipelinePartition = "";
-  /** 当前活动页签 URL 的弱引用（Referer 兜底用；BrowserView 会刷新它）。 */
-  private lastActiveTabUrl = "";
-
-  /**
-   * webRequest 三层管线（每 partition 注册一次——Electron 的 webRequest
-   * 是单听众语义，重复注册只会覆盖）。partition 改设置后重绑。
-   */
-  private bindWebRequestPipeline(): void {
-    const partition = this.config.partition;
-    if (this.unbindPipeline && this.pipelinePartition === partition) return;
-    this.unbindPipeline?.();
-    this.unbindPipeline = null;
-    const session = sessionFromPartition(partition);
-    if (!session?.webRequest) return;
-    this.lastActiveTabUrl = this.activeTab()?.url ?? "";
-    const pipeline = bindWebRequestPipeline(session, {
-      getSettings: () => this.config,
-      activeTabUrl: () => {
-        // 活动页签优先；退化为最近记录的 URL
-        const cur = this.activeTab()?.url;
-        if (cur) this.lastActiveTabUrl = cur;
-        return this.lastActiveTabUrl;
-      },
-      extBridge: this.wrBridge,
-      onUserJs: (url) => this.usChain.onUserJsNavigation(url, "mainFrame"),
-    });
-    this.pipelinePartition = partition;
-    this.unbindPipeline = () => pipeline.unbind();
-  }
-
-  /** DNR 规则引擎惰性加载（AdGuard 扩展自带 35 万条规则集）。 */
-  private wakeDnrEngine(): void {
-    const dir = this.extHost.findAdGuardDir();
-    if (dir) void dnrBlocker.load(dir);
   }
 
   // ---------------- context ----------------
@@ -345,45 +154,7 @@ export default class BrowserPlugin extends Plugin {
       },
 
       onDomReady: (webview: IWebviewTag, url: string) => {
-        // 关键：为已原生加载（有 electronId）的扩展创建 isolated world，
-        // 让 content script 拿到真实 chrome.* 绑定 —— 不做这步 cs-runtime 等于没接。
-        this.extHost.ensureCsRuntime(webview);
-        // chrome.userScripts 适配层：命中 URL 的已注册用户脚本注入扩展世界
-        if (this.config.extensionsEnabled) void this.usInjector.injectForPage(webview, url);
         void this.extHost.injectDocumentEnd(webview as never, url);
-        // chrome-extension:// 整页（popup/options 直开为页签）需要扩展专属世界垫片，
-        // 否则页面脚本在受限主世界 sendMessage/storage 全失败（AdGuard 永远 loading）。
-        if (/^chrome-extension:\/\//i.test(url)) {
-          void this.extHost.injectExtensionPage(webview, url);
-        }
-        // Edge 加载项商店：注入"安装到 Obsidian"按钮（点击经 ob-edge-install 回传 id）
-        if (this.config.extensionsEnabled && isEdgeAddonsSiteUrl(url)) {
-          void webview
-            .executeJavaScript(
-              buildEdgeStoreHelperScript({
-                install: "安装到 Obsidian",
-                installing: "安装中…",
-                installed: "已安装",
-              }),
-            )
-            .catch(() => {
-              /* guest gone */
-            });
-        }
-      },
-
-      onEdgeInstall: (id: string, webview: IWebviewTag) => {
-        void this.extHost.installFromEdgeAddons(id).then((r) => {
-          new Notice(r.ok ? `扩展已安装：${r.ext?.name ?? id}` : `安装失败：${r.error ?? id}`);
-          // 回写页面按钮状态（"安装中…" → "已安装"/复位），见 edgeStoreHelper
-          try {
-            void webview.executeJavaScript(
-              `window.__obEdgeStoreSetState && window.__obEdgeStoreSetState(${JSON.stringify(r.ok ? "ok" : "idle")})`,
-            );
-          } catch {
-            /* guest gone */
-          }
-        });
       },
       extensionStartPayload: (url: string) => this.extHost.documentStartPayload(url),
       extensionIcons: () =>
@@ -411,27 +182,13 @@ export default class BrowserPlugin extends Plugin {
       },
       onDataChange: (fn) => this.store.onChange(fn),
       currentUrl: () => this.activeTab()?.url ?? "",
-      startUrl: () => this.resolveStartUrl(),
     };
   }
 
   private buildPopupLayer(): void {
-    if (this.popupLayer) return;
-    this.popupLayer = new PopupLayer(
-      this.extHost,
-      () => this.activeTab()?.getWebview() ?? null,
-      (msg) => new Notice(msg),
-    );
-    // 扩展 popup 设置齿轮（chrome.runtime.openOptionsPage → binding 桥 → extHost）→
-    // 当前页签打开设置页
-    this.extHost.onOpenOptionsPage = (rec) => {
-      const url = this.extHost.optionsPageUrl(rec);
-      if (!url) {
-        new Notice(`扩展「${rec.name}」没有设置页`);
-        return;
-      }
-      void this.openUrl(url, false);
-    };
+    if (this.popupLayer || !this.extPreloadUrl) return;
+    this.popupLayer = new PopupLayer(document.body, this.extHost, this.extPreloadUrl);
+    this.popupLayer.onOpenNewTab = (url) => void this.openUrl(url, true);
   }
 
   // ---------------- views ----------------
@@ -454,21 +211,6 @@ export default class BrowserPlugin extends Plugin {
   }
 
   /** The view the user is looking at (falls back to the first browser leaf). */
-  /**
-   * 新标签页起点（思源 resolveStartUrl 同款）：配置了新标签页扩展（declare
-   * chrome_url_overrides.newtab 且原生加载中）则开其 newtab 页，否则主页。
-   */
-  resolveStartUrl(): string {
-    const id = this.config.newTabExtId;
-    if (id) {
-      const rec = this.store.data.extensions.find((r) => (r.dir === id || r.id === id) && r.enabled && r.electronId && r.newtab);
-      if (rec) {
-        return `chrome-extension://${rec.electronId}/${String(rec.newtab).replace(/^\/+/, "")}`;
-      }
-    }
-    return this.config.homePage || "about:blank";
-  }
-
   private activeBrowserView(): BrowserView | null {
     const active = this.app.workspace.activeLeaf;
     if (active?.view instanceof BrowserView) return active.view;
@@ -480,8 +222,6 @@ export default class BrowserPlugin extends Plugin {
   }
 
   private onTabChanged(tab: BrowserTab): void {
-    // webNavigation.onCommitted 合成派发（TM 的 .user.js 安装检测依赖导航事件流）
-    if (/^https?:\/\//i.test(tab.url)) void this.wrBridge.emitWebNavCommitted(tab.url);
     for (const leaf of this.browserLeaves()) {
       const view = leaf.view as BrowserView;
       if (view?.tabs?.includes(tab)) {
@@ -550,12 +290,7 @@ export default class BrowserPlugin extends Plugin {
       id: "new-tab",
       name: "新建标签页",
       hotkeys: [{ modifiers: ["Mod", "Alt"], key: "T" }],
-      callback: () => void this.openUrl(this.resolveStartUrl(), true),
-    });
-    this.addCommand({
-      id: "open-edge-addons",
-      name: "打开 Edge 扩展集市",
-      callback: () => void this.openUrl(EDGE_ADDONS_HOME, true),
+      callback: () => void this.openUrl(this.config.homePage || "about:blank", true),
     });
     this.addCommand({
       id: "close-tab",
@@ -716,8 +451,7 @@ export default class BrowserPlugin extends Plugin {
         fs.mkdirSync(dir, { recursive: true });
         for (const [name, src] of sources) fs.writeFileSync(pathMod.join(dir, name), src, "utf8");
         this.preloadUrl = toFileUrl(pathMod.join(dir, "preload.js"));
-        this.extPreloadUrl = toFileUrl(pathMod.join(dir, "ext-preload.js")); // 保留写盘：页面直开路径的兜底
-        void this.extPreloadUrl;
+        this.extPreloadUrl = toFileUrl(pathMod.join(dir, "ext-preload.js"));
       } catch (e) {
         console.warn("[obsidian-browser] preload write failed", e);
       }

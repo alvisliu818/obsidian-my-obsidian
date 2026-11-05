@@ -42,25 +42,6 @@ export class BookmarksStore {
     return true;
   }
 
-  /** 加标签（去重、保序）；思源 BookmarksDock 同款能力。 */
-  addTag(id: string, tag: string): void {
-    const clean = tag.trim().replace(/\s+/g, " ").slice(0, 24);
-    if (!clean) return;
-    const b = this.items.find((x) => x.id === id);
-    if (!b) return;
-    const tags = b.tags ?? [];
-    if (!tags.some((t) => t.toLowerCase() === clean.toLowerCase())) {
-      this.update(id, { tags: [...tags, clean] });
-    }
-  }
-
-  /** 移除单个标签。 */
-  removeTag(id: string, tag: string): void {
-    const b = this.items.find((x) => x.id === id);
-    if (!b?.tags) return;
-    this.update(id, { tags: b.tags.filter((t) => t !== tag) });
-  }
-
   update(id: string, patch: Partial<Bookmark>): void {
     const hit = this.items.find((b) => b.id === id);
     if (!hit) return;

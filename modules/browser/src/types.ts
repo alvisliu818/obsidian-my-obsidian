@@ -39,8 +39,6 @@ export type NewTabMode = "blank" | "home" | "search";
  *              (drag to splits, Ctrl+W, workspace.json restore all come free).
  */
 export type TabMode = "internal" | "native";
-/** system = 跟随系统代理（Chromium 默认）；custom = proxyCustomUrl。 */
-export type ProxyMode = "system" | "custom";
 
 export interface BrowserSettings {
   /** URL loaded by the home button / new-tab page. */
@@ -67,13 +65,6 @@ export interface BrowserSettings {
   adBlockEnabled: boolean;
   /** Extra Adblock `##` element-hiding rules. */
   adBlockRules: string;
-
-  /** 新标签页扩展（declare chrome_url_overrides.newtab 的插件 id；空 = 主页）。 */
-  newTabExtId: string;
-  /** webview 会话代理（思源版同款：会话级代理不继承本体）。 */
-  proxyMode: ProxyMode;
-  /** custom 模式的代理规则（http/https/socks5://host:port 或 `http=…;https=…`）。 */
-  proxyCustomUrl: string;
 
   /** Vault-relative folder for downloads. */
   downloadDir: string;
@@ -107,18 +98,7 @@ export interface ExtensionRecord {
   icon?: string;
   /** browser_action / action popup html (may be empty). */
   popup?: string;
-  /** options_page / options_ui.page —— 扩展设置页（popup 齿轮与宿主菜单的打开目标）。 */
-  options?: string;
-  /** chrome_url_overrides.newtab —— 「新标签页扩展」的落地页（设置里可选）。 */
-  newtab?: string;
   permissions: string[];
-  /**
-   * Electron 原生加载后的扩展 id（`session.loadExtension` 返回）。
-   * 只有拿到它，扩展的 background service worker 才真实存在，
-   * cs-runtime（isolated world + chrome 真实绑定）与 sw-bridge（SW CDP 通道）才能工作。
-   * 桌面端不可用 / 加载失败时为 undefined —— 此时退回自研注入式（内容脚本 + shim）不报错。
-   */
-  electronId?: string;
 }
 
 export interface ExtensionContentScript {

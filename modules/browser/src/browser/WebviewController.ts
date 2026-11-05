@@ -13,12 +13,6 @@ export interface WebviewCallbacks {
   onContextMenu?(params: WebViewContextMenuParams): void;
   /** The preload asks (at document_start) for extension content scripts. */
   onExtensionRequest?(url: string): { css: string[]; js: string[] };
-  /**
-   * Edge Add-ons store page: the injected helper (edgeStoreHelper) hands back the
-   * extension id when the user clicks its "install" button (IPC channel or the
-   * __obEdgeInstall polling fallback). The webview is passed for state writeback.
-   */
-  onEdgeInstall?(id: string, webview: IWebviewTag): void;
   onFindResult?(active: number, matches: number): void;
   /** Injection point for ad-filter CSS and content scripts. */
   onDomReady?(webview: IWebviewTag, url: string): void;
@@ -49,7 +43,6 @@ export class WebviewController {
   private programmaticNav = false;
   private lastNewTabUrl = "";
   private lastNewTabTime = 0;
-  private edgePollTimer: ReturnType<typeof setInterval> | null = null;
   private lastKnownUrl = "";
   private loading = false;
   private hasLoadedOnce = false;
@@ -85,9 +78,6 @@ export class WebviewController {
       this.loading = true;
       this.faviconEverSet = false;
       this.callbacks.onLoadingChange?.(true);
-      // 尽早启动拦截器轮询（Electron 43 webview preload 实测不加载，
-      // executeJavaScript 拦截是唯一防线 —— 见 injectLinkInterceptor 注释）。
-      void this.injectLinkInterceptor();
     });
 
     this.on("did-stop-loading", () => {
@@ -102,7 +92,6 @@ export class WebviewController {
       this.programmaticNav = false;
       if (e?.url && !/^data:/i.test(e.url)) this.lastKnownUrl = e.url;
       this.callbacks.onUrlChange?.(e?.url ?? "");
-      void this.injectLinkInterceptor();
     });
 
     // SPAs never fire did-navigate for hash/anchor routing.
@@ -116,7 +105,6 @@ export class WebviewController {
       this.syncUserAgent(this.getCurrentUrl());
       void this.injectLinkInterceptor();
       const url = this.getCurrentUrl();
-      this.syncEdgeInstallPolling(url);
       if (/^(https?:|chrome-extension:)/i.test(url)) this.callbacks.onDomReady?.(this.webview, url);
     });
 
@@ -150,15 +138,6 @@ export class WebviewController {
         } catch {
           /* guest gone */
         }
-        return;
-      }
-      // Edge 商店页助手回传的扩展 id（见 edgeStoreHelper 的 sendInstall）
-      if (e?.channel === "ob-edge-install" && e.args?.[0]) {
-        this.callbacks.onEdgeInstall?.(String(e.args[0]), this.webview);
-      }
-      // 扩展页 F12（preload 转发）→ 开该 guest 的 DevTools
-      if (e?.channel === "ob-open-devtools") {
-        this.openDevTools();
       }
     });
 
@@ -480,33 +459,6 @@ export class WebviewController {
     void url;
   }
 
-  /**
-   * Edge 商店页兜底通道：注入脚本在 IPC 不可用时把扩展 id 写进
-   * window.__obEdgeInstall，由宿主轮询消费并清除。仅在商店页面上轮询，
-   * 导航离开后停止（dom-ready 驱动）。
-   */
-  private syncEdgeInstallPolling(url: string): void {
-    const onStore = /^https?:\/\/microsoftedge\.microsoft\.com\//i.test(url);
-    if (onStore && this.edgePollTimer === null) {
-      this.edgePollTimer = setInterval(() => {
-        void this.webview
-          .executeJavaScript(
-            "(function(){var v=window.__obEdgeInstall; if(v){try{delete window.__obEdgeInstall;}catch(e){window.__obEdgeInstall=null;}} return v||'';})()",
-            true,
-          )
-          .then((v) => {
-            if (v) this.callbacks.onEdgeInstall?.(String(v), this.webview);
-          })
-          .catch(() => {
-            /* guest gone */
-          });
-      }, 1000);
-    } else if (!onStore && this.edgePollTimer !== null) {
-      clearInterval(this.edgePollTimer);
-      this.edgePollTimer = null;
-    }
-  }
-
   // ---------------- health ----------------
 
   /** A guest that stops answering can only be replaced, not repaired. */
@@ -559,25 +511,42 @@ export class WebviewController {
   // ---------------- link interception fallback ----------------
 
   /**
-   * 链接拦截器：executeJavaScript 注入 + 轮询读取，是 target=_blank / window.open
-   * 开新页签的**唯一防线** —— Electron 43 下 webview preload 实测完全不加载
-   * （最小无 require 的 preload 也不执行，preload.ts 修复仅对其它 Electron 版本有效）。
-   *
-   * 对齐思源版（siyuan-plugin-browser WebviewController.injectLinkInterceptor）：
-   * - 普通左键放行；Ctrl/Cmd/Shift+左键、中键、target=_blank、window.open 开新页签
-   * - form submit 到 _blank 也拦截
-   * - window.open 不锁定（页面重新赋值合法，重新赋值后仍走原生语义）
-   * ★ 注入与读取合并为一条幂等脚本、每个 tick 执行：新文档导航后的第一次 tick
-   *   即装上拦截器，不再依赖单次 dom-ready 注入的时机（实测部分页面该注入
-   *   静默失败，导致拦截器整个缺失 → 点击跳系统浏览器）。
+   * Pages love to re-assign window.open after the preload ran. When that
+   * happened, our preload hook is gone — so install a plain DOM interceptor and
+   * poll the result. (Polling instead of IPC because this runs in the guest's
+   * main world where ipcRenderer may not be reachable.)
    */
   private async injectLinkInterceptor(): Promise<void> {
     if (this.pollTimer) return;
+    const code = `
+      (function(){
+        if (window.__obsidianLinkInterceptor) return "already";
+        window.__obsidianLinkInterceptor = true;
+        window.__obsidianHadPreload = !!window.__obsidianBrowserPreload;
+        window.__obsidianPendingNewTab = null;
+        try { window.open = function(u){ if(u){ window.__obsidianPendingNewTab = String(u); } return null; }; } catch(e){}
+        document.addEventListener("click", function(e){
+          var a = e.target && e.target.closest && e.target.closest("a[href]");
+          if(!a) return;
+          if(!(e.button===1||e.metaKey||e.ctrlKey||e.shiftKey||a.getAttribute("target")==="_blank")) return;
+          e.preventDefault(); e.stopPropagation();
+          window.__obsidianPendingNewTab = a.href;
+        }, true);
+        return "installed";
+      })()`;
+    try {
+      await this.webview.executeJavaScript(code, false);
+    } catch {
+      return;
+    }
     this.pollTimer = setInterval(() => {
       if (this.disposed) return;
       void (async () => {
         try {
-          const v = await this.webview.executeJavaScript<string>(INTERCEPT_AND_READ_SCRIPT, false);
+          const v = await this.webview.executeJavaScript<string>(
+            "(function(){var u=window.__obsidianPendingNewTab;window.__obsidianPendingNewTab=null;return u})()",
+            false,
+          );
           if (v) this.openNewTab(String(v), true);
         } catch {
           /* guest gone */
@@ -586,57 +555,3 @@ export class WebviewController {
     }, 400);
   }
 }
-
-/**
- * 拦截器注入（幂等）+ 取走 __obsidianPendingNewTab，一条脚本完成。
- * 结构与思源版 injectLinkInterceptor 的注入脚本一致（__sy 前缀改 __obsidian）。
- */
-const INTERCEPT_AND_READ_SCRIPT = `
-(function(){
-  if (!window.__obsidianLinkInterceptor) {
-    window.__obsidianLinkInterceptor = true;
-    window.__obsidianPendingNewTab = null;
-    var isHttp = function(u){
-      try { return /^https?:\\/\\//i.test(new URL(u, location.href).href); } catch(e) { return false; }
-    };
-    try {
-      window.open = function(u){
-        if (u && isHttp(u)) { window.__obsidianPendingNewTab = String(u); }
-        return null;
-      };
-    } catch(e) {}
-    document.addEventListener("click", function(e){
-      if (e.button !== 0 && e.button !== 1) return;
-      var a = e.target && e.target.closest && e.target.closest("a[href]");
-      if (!a || !a.href || !isHttp(a.href)) return;
-      var openNewTab = e.button === 1 || e.ctrlKey || e.metaKey || e.shiftKey || a.getAttribute("target") === "_blank";
-      if (!openNewTab) return;
-      e.preventDefault(); e.stopPropagation();
-      try { window.__obsidianPendingNewTab = new URL(a.href, location.href).href; } catch(err) { window.__obsidianPendingNewTab = a.href; }
-    }, true);
-    document.addEventListener("auxclick", function(e){
-      if (e.button !== 1) return;
-      var a = e.target && e.target.closest && e.target.closest("a[href]");
-      if (!a || !a.href || !isHttp(a.href)) return;
-      e.preventDefault(); e.stopPropagation();
-      try { window.__obsidianPendingNewTab = new URL(a.href, location.href).href; } catch(err) { window.__obsidianPendingNewTab = a.href; }
-    }, true);
-    // form submit 到 _blank（对齐思源版）
-    document.addEventListener("submit", function(e){
-      var f = e.target;
-      if (!f || f.tagName !== "FORM" || f.target !== "_blank") return;
-      e.preventDefault(); e.stopPropagation();
-      try {
-        var fd = new FormData(f);
-        var params = new URLSearchParams();
-        fd.forEach(function(v, k){ params.append(k, String(v)); });
-        var url = new URL(f.action || location.href);
-        url.search = params.toString();
-        window.__obsidianPendingNewTab = url.href;
-      } catch(err) {}
-    }, true);
-  }
-  var u = window.__obsidianPendingNewTab;
-  window.__obsidianPendingNewTab = null;
-  return u || null;
-})()`;

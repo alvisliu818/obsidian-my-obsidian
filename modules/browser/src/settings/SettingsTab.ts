@@ -11,8 +11,6 @@ export interface SettingsHost {
   extensions(): ExtensionRecord[];
   refreshExtensionIcons(): void;
   clearHistory(): void;
-  /** 代理设置变更后立刻应用到 webview 会话（applyProxyToSession）。 */
-  applyProxy(): Promise<boolean>;
 }
 
 export class BrowserSettingTab extends PluginSettingTab {
@@ -83,31 +81,6 @@ export class BrowserSettingTab extends PluginSettingTab {
         t.setValue(s.partition).onChange((v) => {
           s.partition = v.trim() || "persist:obsidian-browser";
           this.host.save();
-        }),
-      );
-
-    new Setting(containerEl)
-      .setName("网络代理")
-      .setDesc("webview 会话级代理（不继承 Obsidian 本体）。系统 = 跟随系统代理；自定义填规则后立即生效")
-      .addDropdown((d) =>
-        d
-          .addOptions({ system: "系统代理", custom: "自定义" })
-          .setValue(s.proxyMode ?? "system")
-          .onChange((v) => {
-            s.proxyMode = v as BrowserSettings["proxyMode"];
-            this.host.save();
-            void this.host.applyProxy();
-          }),
-      );
-
-    new Setting(containerEl)
-      .setName("自定义代理地址")
-      .setDesc("http/https/socks5://host:port，或 `http=…;https=…` 多规则串（Electron proxyRules 语义）；仅自定义模式生效")
-      .addText((t) =>
-        t.setValue(s.proxyCustomUrl ?? "").onChange((v) => {
-          s.proxyCustomUrl = v.trim();
-          this.host.save();
-          void this.host.applyProxy();
         }),
       );
 
@@ -291,19 +264,6 @@ export class BrowserSettingTab extends PluginSettingTab {
 
     new Setting(containerEl).setName("Chrome 扩展").setHeading();
 
-    const newtabExts = () => this.host.extensions().filter((r) => r.enabled && r.newtab);
-    new Setting(containerEl)
-      .setName("新标签页扩展")
-      .setDesc("把新标签页/主页换成某个扩展的 newtab 页（需该扩展已原生加载）。留空 = 使用主页设置")
-      .addDropdown((d) => {
-        const opts: Record<string, string> = { "": "（主页设置）" };
-        for (const r of newtabExts()) opts[r.dir] = r.name;
-        d.addOptions(opts).setValue(s.newTabExtId ?? "").onChange((v) => {
-          s.newTabExtId = v;
-          this.host.save();
-        });
-      });
-
     new Setting(containerEl)
       .setName("启用扩展")
       .setDesc("内容脚本与 popup 可用；background / service worker 不执行")
@@ -425,27 +385,26 @@ class UrlInstallModal extends Modal {
   onOpen(): void {
     const { contentEl } = this;
     contentEl.empty();
-    contentEl.createEl("h3", { text: "从来源安装扩展" });
+    contentEl.createEl("h3", { text: "从 URL 安装扩展" });
     contentEl.createDiv({
-      text: "智能识别：Edge 扩展 id / 商店详情页链接 / http(s) CRX 直链 / 本地 .crx|.zip 包路径 / 本地扩展目录",
+      text: "填入 CRX 文件的直接下载地址（浏览器扩展商店页面本身不是 CRX）",
       cls: "ob-modal-hint",
     });
     let url = "";
-    new Setting(contentEl).setName("安装来源").addText((t) =>
+    new Setting(contentEl).setName("CRX 地址").addText((t) =>
       t.onChange((v) => {
         url = v.trim();
       }),
     );
     new Setting(contentEl).addButton((b) =>
       b
-        .setButtonText("安装")
+        .setButtonText("下载并安装")
         .setCta()
         .onClick(async () => {
           if (!url) return;
           try {
-            const rec = await this.host.extHost.installFromInput(url);
+            const rec = await this.host.extHost.installFromUrl(url);
             new Notice(`已安装扩展：${rec.name}`);
-            this.host.refreshExtensionIcons();
             this.close();
           } catch (e: any) {
             new Notice("安装失败：" + String(e?.message ?? e));
