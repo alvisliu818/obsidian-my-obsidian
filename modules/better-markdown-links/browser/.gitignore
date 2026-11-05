@@ -1,0 +1,27 @@
+# Node / 构建产物
+node_modules/
+main.js
+*.js.map
+*.log
+
+# 桌面系统杂项
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# AI 助手工作区（私人文件，不入公共仓库）
+.trae/
+.openclaw/
+.opencode/
+.workbuddy/
+memory/
+TOOLS.md
+USER.md
+SOUL.md
+IDENTITY.md
+HEARTBEAT.md
+
+# 一次性探针 / 截图 / 中间产物
+tests/e2e/_*
+tests/e2e/*.png
+diagnostics/
