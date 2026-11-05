@@ -28,15 +28,23 @@ interface DaemonLike {
 		match: string,
 		excludePath?: string,
 		limit?: number,
+		onlyPath?: string,
 	): Promise<{ bkey: string; path: string; blockId: string; text: string }[]>
 	scan(
 		pattern: string,
 		excludePath?: string,
 		limit?: number,
+		onlyPath?: string,
 	): Promise<{ bkey: string; path: string; text: string }[]>
 	extSearch(
 		tokens: string[],
 		not?: string[],
+		limit?: number,
+	): Promise<{ path: string; text: string }[]>
+	/** 文件名/标签域:tokens 全子串命中文件路径,tags 反查含标签文件（2026-11-04）。 */
+	nameSearch(
+		tokens: string[],
+		tags?: string[],
 		limit?: number,
 	): Promise<{ path: string; text: string }[]>
 }
@@ -62,11 +70,6 @@ export function getIndexDaemon(plugin: OmnisearchPlugin): DaemonLike | null {
 	}
 }
 
-const VAULT_LIMIT = 30
-const EXT_LIMIT = 15
-/** scan 交集的单 token 拉取上限：放大给多 token 交集留余量 */
-const SCAN_FETCH = 500
-
 /** FTS5 MATCH 的安全引用（内部引号转义 ""），用户输入永不直通语法面。 */
 function quote(term: string): string {
 	return '"' + term.replace(/"/g, '""') + '"'
@@ -83,6 +86,13 @@ function filterHits<T extends { path: string }>(
 		out = out.filter(h => {
 			const p = h.path.toLowerCase()
 			return subs.every(s => p.includes(s))
+		})
+	}
+	if (query.query.exclude?.path?.length) {
+		const subs = query.query.exclude.path.map(p => p.toLowerCase())
+		out = out.filter(h => {
+			const p = h.path.toLowerCase()
+			return !subs.some(s => p.includes(s))
 		})
 	}
 	if (query.query.ext?.length) {
@@ -125,83 +135,148 @@ function toResultNote(
 	}
 }
 
-/**
- * 查询守护进程并转成 ResultNote。任何失败（daemon 未起/超时/协议错）都
- * 返回空数组——调用方把结果原样并进 minisearch，绝不因此阻塞搜索。
- */
-export async function searchIndexDaemon(
+// ---------------------------------------------------------------------------
+// 统一索引模式（2026-11-04）:daemon 的磁盘 sqlite 是唯一索引。
+//
+// useIndexDaemon 打开时,渲染进程不再构建 minisearch/documents（主库 5.5 万
+// 文件的全量索引曾耗 1h+ CPU、数百 MB 堆——见 main.ts populateIndex 的同日
+// 门控）。搜索全部走本函数:文件名/标签域（nameSearch,强信号排前）+ 内容域
+// （trigram 子串,两字符也能查）+ ext 域（挂载库外文件）。
+//
+// 返回 null 表示 daemon 不可用——调用方落回本地索引路径（统一模式下本地
+// 索引为空,即空结果;daemon 由 logseq 模块自动拉起/重启,离线窗口只在
+// 启动头几秒）。
+// ---------------------------------------------------------------------------
+export async function searchIndexDaemonUnified(
 	plugin: OmnisearchPlugin,
 	query: Query,
-): Promise<ResultNote[]> {
+	singleFilePath?: string,
+): Promise<ResultNote[] | null> {
 	const daemon = getIndexDaemon(plugin)
-	if (!daemon) return []
+	if (!daemon) return null
 
-	// 正项 = 文本词（含 #tag——块/ext 文本里 tag 就是 "#x" 字面）；负项 = 排除词。
-	// omnisearch 的 Query 构造时已按设置做过 diacritics 归一，这里直接复用。
-	const tokens = query.query.text.filter(Boolean)
-	if (!tokens.length) return []
-	const excludes = query.query.exclude.text ?? []
-
-	const out: ResultNote[] = []
-	let score = 0
-
-	// ---- vault 域：块级命中（trigram 子串） ----
 	try {
-		let rows: { bkey: string; path: string; text: string }[]
-		if (tokens.every(t => t.length >= 3)) {
-			// FTS5 的 NOT 是二元运算符：正项 AND 连接，排除项二目 NOT 追加尾部
-			const match =
-				tokens.map(quote).join(' AND ') +
-				excludes.map(n => ' NOT ' + quote(n)).join('')
-			const hits = await daemon.ftsSearch(match, '', VAULT_LIMIT)
-			rows = hits.map(h => ({ bkey: h.bkey, path: h.path, text: h.text }))
-		} else {
-			// trigram 物理限制：<3 字符的 term MATCH 不中（中文两字词极常见）
-			// ——整条查询改走 scan/LIKE 逐 token 交集，排除项客户端过滤
-			let base: Map<string, { bkey: string; path: string; text: string }> | null =
-				null
-			for (const t of tokens) {
-				const rows = await daemon.scan(t, '', SCAN_FETCH)
-				const m = new Map(rows.map(r => [r.bkey, r]))
-				if (base === null) base = m
-				else for (const k of [...base.keys()]) if (!m.has(k)) base.delete(k)
-				if (base.size === 0) break
+		const tokens = query.query.text.filter(Boolean)
+		// '#tag' 形式的词:内容域按字面查（块文本里 tag 就是 "#x"）,文件名域
+		// 同时剥前缀走 tags 表反查
+		const tagNames = [
+			...new Set(
+				[...query.getTags(), ...tokens.filter(t => t.startsWith('#'))]
+					.map(t => t.replace(/^#/, ''))
+					.filter(Boolean),
+			),
+		]
+		const excludes = query.query.exclude.text ?? []
+
+		// ---- 文件内搜索:单文件内容域（daemon 侧 onlyPath 限定） ----
+		if (singleFilePath) {
+			let rows: { path: string; text: string }[]
+			if (tokens.length && tokens.every(t => t.length >= 3)) {
+				const match =
+					tokens.map(quote).join(' AND ') +
+					excludes.map(n => ' NOT ' + quote(n)).join('')
+				const hits = await daemon.ftsSearch(match, '', 50, singleFilePath)
+				rows = hits.map(h => ({ path: h.path, text: h.text }))
+			} else if (tokens.length) {
+				// 多 token 单文件:逐 token scan(onlyPath)取交集
+				let base: Map<string, { path: string; text: string }> | null = null
+				for (const t of tokens) {
+					const rowsT = await daemon.scan(t, '', 500, singleFilePath)
+					const m = new Map(rowsT.map(r => [r.path, r]))
+					if (base === null) base = m
+					else for (const k of [...base.keys()]) if (!m.has(k)) base.delete(k)
+					if (base.size === 0) break
+				}
+				rows = [...(base ?? new Map()).values()]
+			} else {
+				return []
 			}
-			rows = [...(base ?? new Map()).values()].filter(
-				h => !excludes.some(n => h.text.toLowerCase().includes(n.toLowerCase())),
-			)
+			return rows
+				.filter(h => !excludes.some(n => h.text.toLowerCase().includes(n.toLowerCase())))
+				.map((h, i) => toResultNote(plugin, query, h.path, h.text, -i))
 		}
-		// 同文件多块命中只留一条（打开都落在文件级），并按路径过滤
+
+		if (!tokens.length && !tagNames.length) return []
+
+		const out: ResultNote[] = []
 		const seen = new Set<string>()
-		for (const row of filterHits(rows, query)) {
-			if (seen.has(row.path) || isExternalDocPath(row.path)) continue
-			seen.add(row.path)
-			out.push(
-				toResultNote(plugin, query, row.path, row.text, --score),
-			)
-			if (out.length >= VAULT_LIMIT) break
+		const push = (note: ResultNote): boolean => {
+			if (seen.has(note.path)) return false
+			seen.add(note.path)
+			out.push(note)
+			return true
 		}
-	} catch (e) {
-		logVerbose('Omnisearch - index daemon vault search failed', e)
-	}
 
-	// ---- ext 域：挂载库外文件（daemon 侧整文件一行，token 交集在服务端） ----
-	try {
-		const hits = await daemon.extSearch(tokens, excludes, EXT_LIMIT)
-		let count = 0
-		for (const hit of filterHits(hits, query)) {
-			// daemon 的 ext 命中 path 是绝对路径 → 转 omnisearch 的 ext: 伪路径
-			// （toExternalDocPath 同时把反斜杠归一成斜杠），打开路由
-			// （openNote → logseq openExternalEntry）随之复用
-			const pseudoPath = toExternalDocPath(hit.path)
-			out.push(
-				toResultNote(plugin, query, pseudoPath, hit.text, --score),
+		// ---- 文件名/标签域（强信号,排最前） ----
+		try {
+			const nameHits = filterHits(
+				await daemon.nameSearch(tokens.filter(t => !t.startsWith('#')), tagNames, 30),
+				query,
 			)
-			if (++count >= EXT_LIMIT) break
+			let score = 1000
+			for (const hit of nameHits) {
+				if (!push(toResultNote(plugin, query, hit.path, hit.text, score--))) continue
+				if (out.length >= 30) break
+			}
+		} catch (e) {
+			logVerbose('Omnisearch - unified name search failed', e)
 		}
-	} catch (e) {
-		logVerbose('Omnisearch - index daemon ext search failed', e)
-	}
 
-	return out
+		// ---- 内容域:vault 块级（trigram 子串） ----
+		try {
+			let rows: { path: string; text: string }[]
+			if (tokens.length && tokens.every(t => t.length >= 3)) {
+				const match =
+					tokens.map(quote).join(' AND ') +
+					excludes.map(n => ' NOT ' + quote(n)).join('')
+				const hits = await daemon.ftsSearch(match, '', 30)
+				rows = hits.map(h => ({ path: h.path, text: h.text }))
+			} else if (tokens.length) {
+				let base: Map<string, { bkey: string; path: string; text: string }> | null = null
+				for (const t of tokens) {
+					const rowsT = await daemon.scan(t, '', 500)
+					const m = new Map(rowsT.map(r => [r.bkey, r]))
+					if (base === null) base = m
+					else for (const k of [...base.keys()]) if (!m.has(k)) base.delete(k)
+					if (base.size === 0) break
+				}
+				rows = [...(base ?? new Map()).values()].filter(
+					h => !excludes.some(n => h.text.toLowerCase().includes(n.toLowerCase())),
+				)
+			} else {
+				rows = []
+			}
+			let score = 0
+			for (const row of filterHits(rows, query)) {
+				if (isExternalDocPath(row.path)) continue
+				if (!push(toResultNote(plugin, query, row.path, row.text, --score))) continue
+				if (out.length >= 60) break
+			}
+		} catch (e) {
+			logVerbose('Omnisearch - unified content search failed', e)
+		}
+
+		// ---- ext 域：挂载库外文件 ----
+		try {
+			const hits = filterHits(await daemon.extSearch(tokens, excludes, 15), query)
+			let count = 0
+			for (const hit of hits) {
+				const pseudoPath = toExternalDocPath(hit.path)
+				if (!push(toResultNote(plugin, query, pseudoPath, hit.text, -100 - count))) continue
+				if (++count >= 15) break
+			}
+		} catch (e) {
+			logVerbose('Omnisearch - unified ext search failed', e)
+		}
+
+		// hideExcluded:Obsidian 排除文件直接过滤（与 minisearch 侧同语义）
+		if (plugin.settings.hideExcluded) {
+			const isIgnored = plugin.app.metadataCache.isUserIgnored?.bind(plugin.app.metadataCache)
+			if (isIgnored) return out.filter(r => !isIgnored(r.path))
+		}
+		return out
+	} catch (e) {
+		logVerbose('Omnisearch - unified index search failed, falling back', e)
+		return null
+	}
 }

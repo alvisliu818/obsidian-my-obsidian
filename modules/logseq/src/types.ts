@@ -204,6 +204,10 @@ export interface BlockEditorSettings {
    * resolves every path against the vault root and cannot reach it.
    */
   sqliteDbDir: string;
+  /** R2a 常驻内核：unload 只断连不杀（detached + 空闲自退兜底孤儿）。默认开。 */
+  kernelResident: boolean;
+  /** R2c 内核托盘：托盘图标 + 右键退出。默认关；开启后空闲自退关闭。 */
+  kernelTray: boolean;
   /**
    * Offer the collapse caret on every block whose body spans more than one
    * rendered line — not just list blocks with children. Off = the caret only
@@ -401,6 +405,8 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   sqlitePersist: true,
   sqliteAutoSync: true,
   sqliteDbDir: '',
+  kernelResident: true,
+  kernelTray: false,
   foldEnabled: true,
   addBlockAffordance: true,
   addBlockMarks: true,

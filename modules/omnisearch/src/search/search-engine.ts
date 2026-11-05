@@ -22,7 +22,7 @@ import type { Query } from './query'
 import { sortBy } from 'es-toolkit/compat'
 import type OmnisearchPlugin from '../main'
 import { Tokenizer } from './tokenizer'
-import { searchIndexDaemon } from '../tools/indexDaemon'
+import { searchIndexDaemonUnified } from '../tools/indexDaemon'
 
 export class SearchEngine {
   private tokenizer: Tokenizer
@@ -491,6 +491,23 @@ export class SearchEngine {
     // Clear highlight regex cache for fresh search
     this.plugin.textProcessor.clearHighlightCache()
 
+    // 统一索引模式（2026-11-04）:useIndexDaemon 打开时,daemon 的磁盘 sqlite
+    // 是唯一索引——文件名/标签/内容三域查询全部走它,渲染进程不再驻留
+    // minisearch/documents。必须在此早退而非 search()：search() 返回的是
+    // minisearch 原始 SearchResult[],下游还要经空的 documentsRepository
+    // 映射,统一结果（自带摘要/标题）会被洗成空壳。返回 null（daemon 不在）
+    // 才落回本地索引路径（此时本地索引为空,结果自然为空,daemon 由
+    // logseq 模块自动重启）。
+    if (this.plugin.settings.useIndexDaemon) {
+      if (query.isEmpty()) return []
+      const unified = await searchIndexDaemonUnified(
+        this.plugin,
+        query,
+        options?.singleFilePath
+      )
+      if (unified !== null) return unified
+    }
+
     // Get the raw results
     let results: SearchResult[]
     if (this.plugin.settings.simpleSearch) {
@@ -588,22 +605,6 @@ export class SearchEngine {
     })
 
     logVerbose('Suggestions:', resultNotes)
-
-    // 统一索引守护进程合并（可选，见 tools/indexDaemon.ts）：vault 块级与
-    // ext 域（挂载库外文件）的 trigram 子串命中，补 minisearch 没返回的
-    // 文件。文件内搜索（singleFilePath）不适用；daemon 不在/失败时为空。
-    if (!options?.singleFilePath && this.plugin.settings.useIndexDaemon) {
-      try {
-        const daemonNotes = await searchIndexDaemon(this.plugin, query)
-        if (daemonNotes.length) {
-          const own = new Set(resultNotes.map(r => r.path))
-          resultNotes = [...resultNotes, ...daemonNotes.filter(r => !own.has(r.path))]
-          logVerbose('Merged index daemon results:', daemonNotes.length)
-        }
-      } catch (e) {
-        logVerbose('Omnisearch - index daemon merge failed', e)
-      }
-    }
 
     return resultNotes
   }

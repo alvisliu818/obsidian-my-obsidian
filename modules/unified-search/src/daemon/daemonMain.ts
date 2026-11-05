@@ -33,8 +33,12 @@ import { extractFile } from '../../../logseq/src/index/fileFacts';
 import { hashText } from '../../../logseq/src/index/sqliteSchema';
 import { SCHEMA_SQL, FTS_STATEMENTS } from '../../../logseq/src/index/sqliteSchema';
 import * as os from 'os';
+import * as crypto from 'crypto';
 import type { SqliteFileMeta } from '../../../logseq/src/index/sqliteSchema';
 import type { SqliteRuntimeLike } from '../../../logseq/src/index/sqliteRuntime';
+import { KERNEL_PROTO, createDiscoveryIO, makeToken, parseRegistryCommand, type KernelEvent } from './kernelApi';
+import { startKernelHttpServer } from './httpServer';
+import { startKernelTray, type TrayHandle } from './kernelTray';
 
 // ---------------------------------------------------------------------
 // argv
@@ -46,10 +50,14 @@ interface Args {
   exclude: string[];
   oneShot: 'rebuild' | 'sync' | 'query' | null;
   query: unknown;
+  http: boolean;
+  idleExitMs: number;
+  tray: boolean;
+  obsidianExe: string;
 }
 
 function parseArgs(argv: string[]): Args {
-  const out: Args = { db: '', vault: '', exclude: [], oneShot: null, query: null };
+  const out: Args = { db: '', vault: '', exclude: [], oneShot: null, query: null, http: false, idleExitMs: 600_000, tray: false, obsidianExe: '' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--db') out.db = argv[++i] ?? '';
@@ -58,6 +66,10 @@ function parseArgs(argv: string[]): Args {
     else if (a === '--rebuild') out.oneShot = 'rebuild';
     else if (a === '--sync') out.oneShot = 'sync';
     else if (a === '--query') { out.oneShot = 'query'; out.query = JSON.parse(argv[++i] ?? '{}'); }
+    else if (a === '--http') out.http = true;
+    else if (a === '--idle-exit-ms') out.idleExitMs = Math.max(0, Number(argv[++i] ?? '') || 0);
+    else if (a === '--tray') out.tray = true;
+    else if (a === '--obsidian-exe') out.obsidianExe = argv[++i] ?? '';
   }
   return out;
 }
@@ -85,9 +97,31 @@ class BetterSqliteRuntime implements SqliteRuntimeLike {
   private constructor(private db: BetterSqlite3Db) {}
 
   static open(file: string): BetterSqliteRuntime {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const Database = require('better-sqlite3') as unknown as new (f: string) => BetterSqlite3Db;
-    const db = new Database(file);
+    // 重试加载（2026-11-06）：部署换血窗口期 spawn 的内核会撞上边车半拷贝
+    // （bindings/file-uri-to-path 尚未就位）→ require 失败 → 静默降级
+    // node:sqlite，整个内核生命周期无 FTS5。实测复现过。短暂重试等拷贝完成,
+    // 仍失败才回落（真正的坏边车也只多花几秒）。
+    let Database: unknown;
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        Database = require('better-sqlite3');
+        lastErr = null;
+        break;
+      } catch (e) {
+        lastErr = e;
+        const wait = Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
+        if (wait === 'timed-out') continue;
+        // Atomics.wait 不可用（主线程限制?daemon 是独立 node,不会发生）→ 同步睡
+        const end = Date.now() + 2_000;
+        while (Date.now() < end) { /* spin */ }
+      }
+    }
+    if (lastErr || !Database) {
+      throw lastErr ?? new Error('better-sqlite3 require failed');
+    }
+    const db = new (Database as new (f: string) => BetterSqlite3Db)(file);
     db.exec('PRAGMA journal_mode=WAL');
     db.exec('PRAGMA synchronous=NORMAL');
     return new BetterSqliteRuntime(db);
@@ -211,6 +245,28 @@ class FsSource implements SqliteFileSource {
 
   async read(rel: string): Promise<string> {
     return fs.promises.readFile(path.join(this.vault, rel), 'utf8');
+  }
+
+  /**
+   * 单文件签名（2026-11-04）:O(1) stat 替代全库遍历——syncFile 的
+   * upsert 洪峰（几千个排队）每个都 listMarkdownFiles() 全库 walk 时,
+   * 网盘 vault 上就是小时级空转。返回 null = 文件不在/非 md/被排除
+   * （调用方据此 forgetFile）。未在清单里出现过的路径约定返回 null 而
+   * 非 undefined（undefined 语义 = "本源不支持 statFile,回落清单"）。
+   */
+  statFile(rel: string): SqliteFileMeta | null {
+    if (!rel.toLowerCase().endsWith('.md')) return null;
+    if (this.isExcluded(rel)) return null;
+    const segs = rel.split('/');
+    if (segs.some((s) => s.startsWith('.') || HIDDEN_DIRS.has(s))) return null;
+    let st: fs.Stats;
+    try {
+      st = fs.statSync(path.join(this.vault, rel));
+    } catch {
+      return null;
+    }
+    if (!st.isFile()) return null;
+    return { path: rel, mtime: Math.floor(st.mtimeMs), size: st.size };
   }
 }
 
@@ -414,13 +470,16 @@ class Queries {
    * 见 unified-search/src/matchBuilder)。JOIN blocks 取 block_id 供 #^锚点
    * 打开;trigram tokenizer,子串命中,中文毫秒级。
    */
-  async fts(match: string, excludePath: string, limit: number): Promise<{ bkey: string; path: string; blockId: string; text: string }[]> {
+  async fts(match: string, excludePath: string, limit: number, onlyPath = ''): Promise<{ bkey: string; path: string; blockId: string; text: string }[]> {
     const lim = Math.max(1, Math.min(limit || 50, 500));
+    // onlyPath 非空 → 限定单文件（omnisearch 的文件内搜索）；excludePath 仍生效
+    const scope = onlyPath ? ' AND path = ?' : '';
+    const params: unknown[] = onlyPath ? [match, excludePath, onlyPath, lim] : [match, excludePath, lim];
     const rs = await this.rows(
       `SELECT s.bkey, s.path, s.text, b.block_id FROM
-         (SELECT bkey, path, text FROM blocks_fts WHERE blocks_fts MATCH ? AND path != ? LIMIT ?) s
+         (SELECT bkey, path, text FROM blocks_fts WHERE blocks_fts MATCH ? AND path != ?${scope} LIMIT ?) s
        JOIN blocks b ON b.bkey = s.bkey`,
-      [match, excludePath, lim],
+      params,
     );
     return rs.map((r) => ({
       bkey: String(r.bkey ?? ''),
@@ -430,23 +489,85 @@ class Queries {
     }));
   }
 
-  async scan(pattern: string, excludePath: string, limit: number, fts: boolean): Promise<{ bkey: string; path: string; text: string }[]> {
+  async scan(pattern: string, excludePath: string, limit: number, fts: boolean, onlyPath = ''): Promise<{ bkey: string; path: string; text: string }[]> {
     const lim = Math.max(1, Math.min(limit || 200, 2000));
+    const scope = onlyPath ? ' AND path = ?' : '';
     let rs: Record<string, unknown>[];
     if (fts && pattern.length >= 3) {
       const q = '"' + pattern.replace(/"/g, '""') + '"';
       rs = await this.rows(
-        'SELECT bkey, path, text FROM blocks_fts WHERE blocks_fts MATCH ? AND path != ? LIMIT ?',
-        [q, excludePath, lim],
+        `SELECT bkey, path, text FROM blocks_fts WHERE blocks_fts MATCH ? AND path != ?${scope} LIMIT ?`,
+        onlyPath ? [q, excludePath, onlyPath, lim] : [q, excludePath, lim],
       );
     } else {
       const esc = pattern.replace(/([%_\\])/g, '\\$1');
       rs = await this.rows(
-        "SELECT bkey, path, text FROM blocks WHERE text LIKE ? ESCAPE '\\' AND path != ? LIMIT ?",
-        [`%${esc}%`, excludePath, lim],
+        `SELECT bkey, path, text FROM blocks WHERE text LIKE ? ESCAPE '\\' AND path != ?${scope} LIMIT ?`,
+        onlyPath ? [`%${esc}%`, excludePath, onlyPath, lim] : [`%${esc}%`, excludePath, lim],
       );
     }
     return rs.map((r) => ({ bkey: String(r.bkey), path: String(r.path), text: String(r.text) }));
+  }
+
+  /**
+   * 文件名/标签域搜索（omnisearch 统一索引模式新增,2026-11-04）。
+   *
+   * tokens 全部为路径子串（大小写不敏感 LIKE,files 表仅 ~万行,毫秒级）；
+   * tags（'#tag' 去前缀）经 tags JOIN blocks 反查包含该标签的文件。
+   * 文件名命中是强信号,排序在内容命中之前。text 附该文件首块前 400 字符
+   * 供结果摘要,免一次客户端回读。
+   */
+  async nameSearch(tokens: string[], tags: string[], limit: number): Promise<{ path: string; text: string }[]> {
+    const lim = Math.max(1, Math.min(limit || 30, 100));
+    const likeEsc = (s: string): string => s.replace(/([%_\\])/g, '\\$1');
+    const out: { path: string; text: string }[] = [];
+    const seen = new Set<string>();
+
+    if (tokens.length) {
+      const conds = tokens.map(() => "lower(path) LIKE ? ESCAPE '\\'");
+      const params = tokens.map((t) => `%${likeEsc(t.toLowerCase())}%`);
+      const rs = await this.rows(
+        `SELECT path FROM files WHERE ${conds.join(' AND ')} ORDER BY path LIMIT ?`,
+        [...params, lim],
+      );
+      for (const r of rs) {
+        const p = String(r.path);
+        if (!seen.has(p)) {
+          seen.add(p);
+          out.push({ path: p, text: '' });
+        }
+      }
+    }
+    if (tags.length) {
+      const ph = tags.map(() => '?').join(', ');
+      const rs = await this.rows(
+        `SELECT DISTINCT b.path FROM tags t JOIN blocks b ON b.bkey = t.bkey
+         WHERE lower(t.tag) IN (${ph}) LIMIT ?`,
+        [...tags.map((t) => t.toLowerCase()), lim],
+      );
+      for (const r of rs) {
+        const p = String(r.path);
+        if (!seen.has(p)) {
+          seen.add(p);
+          out.push({ path: p, text: '' });
+        }
+      }
+    }
+    // 摘要:首块前 400 字符（一次 IN 查询批量取,比逐文件问快）
+    if (out.length) {
+      const ph = out.map(() => '?').join(', ');
+      const rs = await this.rows(
+        `SELECT path, text FROM blocks WHERE path IN (${ph}) ORDER BY path, ord LIMIT 4000`,
+        out.map((o) => o.path),
+      );
+      const first = new Map<string, string>();
+      for (const r of rs) {
+        const p = String(r.path);
+        if (!first.has(p)) first.set(p, String(r.text ?? '').slice(0, 400));
+      }
+      for (const o of out) o.text = first.get(o.path) ?? '';
+    }
+    return out;
   }
 }
 
@@ -457,7 +578,7 @@ class Queries {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   if (!args.db || !args.vault) {
-    process.stderr.write('usage: index-daemon.js --db <file> --vault <dir> [--exclude a,b] [--rebuild|--sync|--query <json>]\n');
+    process.stderr.write('usage: index-daemon.js --db <file> --vault <dir> [--exclude a,b] [--rebuild|--sync|--query <json>] [--http]\n');
     process.exit(2);
   }
 
@@ -465,12 +586,15 @@ async function main(): Promise<void> {
   const write = (obj: unknown): void => {
     process.stdout.write(JSON.stringify(obj) + '\n');
   };
+  // 事件出口：stdio 模式 = write（JSON 行）；HTTP 模式（--http）在守护模式
+  // 段被改道为 SSE 广播（R1a，docs/kernel-separation-design.md §5）。
+  let emit: (ev: KernelEvent) => void = write;
 
   const idx = new SqliteIndex({
     source,
     runtimeFactory: () => openRuntime(args.db),
     onProgress: (done, total) => {
-      if (!args.oneShot) write({ ev: 'progress', done, total });
+      if (!args.oneShot) emit({ ev: 'progress', done, total });
     },
   });
 
@@ -488,14 +612,21 @@ async function main(): Promise<void> {
     if (!queries) queries = new Queries(rt);
     const wasFts = fts;
     fts = (idx as unknown as { ftsEnabled?: boolean }).ftsEnabled === true;
-    if (!args.oneShot && fts !== wasFts) write({ ev: 'fts', enabled: fts });
+    if (!args.oneShot && fts !== wasFts) emit({ ev: 'fts', enabled: fts });
   };
 
+  // mutate 进行中标志：空闲自退的豁免条件（turbo/upsert 期间不许退,§6.3）。
+  let mutateRunning = false;
   const mutate = async (fn: () => Promise<unknown>): Promise<unknown> => {
-    const r = await fn();
-    version++;
-    if (!args.oneShot) write({ ev: 'changed', version });
-    return r;
+    mutateRunning = true;
+    try {
+      const r = await fn();
+      version++;
+      if (!args.oneShot) emit({ ev: 'changed', version });
+      return r;
+    } finally {
+      mutateRunning = false;
+    }
   };
 
   /**
@@ -781,6 +912,62 @@ async function main(): Promise<void> {
     return out.slice(0, lim).map((r) => ({ path: r.path, text: r.text }));
   };
 
+  // ---- 「打开 Obsidian」派发链（托盘 + open op 共用） ----
+  // exe 决策：运行时配置（argv --obsidian-exe 或 setConfig 推送，常驻内核可能
+  // 由旧构建/外部脚本拉起——配置必须能在运行时到达）→ 注册表 obsidian:// 关联
+  // （复刻其 %1 原样行为）。explorer.exe 中间商已证伪（对带 query 的协议 URL
+  // 派发不可靠,2026-11-05 实测打开的是资源管理器窗口）——永远不在候选里,
+  // 两个来源都空就明确拒绝并留痕。
+  let openObsidianExe = args.obsidianExe;
+  let openExeSource: 'argv' | 'setConfig' = 'argv';
+  const resolveOpenExeFromRegistry = (): string => {
+    try {
+      const cp = require('child_process') as { execFileSync: (f: string, a: string[], o: object) => string };
+      const reg = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\reg.exe`;
+      for (const key of ['HKCU\\Software\\Classes\\obsidian\\shell\\open\\command', 'HKEY_CLASSES_ROOT\\obsidian\\shell\\open\\command']) {
+        try {
+          const out = cp.execFileSync(reg, ['query', key, '/ve'], { encoding: 'utf8', timeout: 3_000, windowsHide: true });
+          const exe = parseRegistryCommand(out);
+          if (exe) return exe;
+        } catch {
+          /* 该注册表视图无关联,试下一个 */
+        }
+      }
+    } catch {
+      /* require 不可用（不应发生:daemon 是 node 环境） */
+    }
+    return '';
+  };
+  const dispatchOpen = (): { ok: boolean; via: string; exe: string } => {
+    let exe = openObsidianExe;
+    let via: string = exe ? openExeSource : '';
+    if (!exe) {
+      exe = resolveOpenExeFromRegistry();
+      via = exe ? 'registry' : 'none';
+    }
+    if (!exe) {
+      process.stderr.write('[kernel-tray] open failed: no exe source (runtime/setConfig/registry all empty)\n');
+      return { ok: false, via, exe: '' };
+    }
+    try {
+      const { spawn: spawnChild } = require('child_process') as {
+        spawn: (c: string, a: string[], o?: object) => { unref?(): void; on?: (ev: string, cb: (e: Error) => void) => void };
+      };
+      // URL 作为 argv 直派 exe（=注册表 HKCU...obsidian\shell\open\command 的
+      // 原样行为）。注意:**不能** windowsHide——我们要的就是窗口。路径归一化
+      // 正斜杠（vault path 匹配不认 %5C）。
+      const url = `obsidian://open?path=${encodeURIComponent(args.vault.replace(/\\/g, '/'))}`;
+      const child = spawnChild(exe, [url], { detached: true, stdio: 'ignore' });
+      child.unref?.();
+      child.on?.('error', (e: Error) => process.stderr.write(`[kernel-tray] open failed: ${String(e).slice(0, 120)}\n`));
+      process.stderr.write(`[kernel-tray] open dispatched via ${exe} (${via})\n`);
+      return { ok: true, via, exe };
+    } catch (e) {
+      process.stderr.write(`[kernel-tray] open failed: ${String(e).slice(0, 120)}\n`);
+      return { ok: false, via: 'error', exe };
+    }
+  };
+
   const handle = async (msg: {
     id?: number;
     op?: string;
@@ -793,6 +980,17 @@ async function main(): Promise<void> {
     switch (msg.op) {
       case 'ping':
         return 'pong';
+      case 'setConfig': {
+        // 空串不覆盖——拒绝把已有配置洗掉（客户端推送空值=「我不知道」）
+        const exe = String((msg as { obsidianExe?: unknown }).obsidianExe ?? '').trim();
+        if (exe) {
+          openObsidianExe = exe;
+          openExeSource = 'setConfig';
+        }
+        return { ok: true, obsidianExe: openObsidianExe || null };
+      }
+      case 'open':
+        return dispatchOpen();
       case 'rebuild':
         return mutate(() => idx.rebuild());
       case 'turbo': {
@@ -856,6 +1054,9 @@ async function main(): Promise<void> {
         const files = (await idx as unknown as { stats?(): Promise<unknown> }).stats?.();
         return files ?? null;
       }
+      case 'shutdown':
+        await idx.close();
+        return { closing: true };
       case 'close':
         await idx.close();
         return { closing: true };
@@ -872,9 +1073,14 @@ async function main(): Promise<void> {
         if (msg.q === 'refsToBlock') return fn.call(queries, String(a.id ?? ''));
         if (msg.q === 'supertagInstances') return fn.call(queries, String(a.tag ?? ''));
         if (msg.q === 'scan')
-          return fn.call(queries, String(a.pattern ?? ''), String(a.excludePath ?? ''), Number(a.limit ?? 200), ftsEnabled());
+          return fn.call(queries, String(a.pattern ?? ''), String(a.excludePath ?? ''), Number(a.limit ?? 200), ftsEnabled(), String(a.onlyPath ?? ''));
         if (msg.q === 'fts')
-          return fn.call(queries, String(a.match ?? ''), String(a.excludePath ?? ''), Number(a.limit ?? 50));
+          return fn.call(queries, String(a.match ?? ''), String(a.excludePath ?? ''), Number(a.limit ?? 50), String(a.onlyPath ?? ''));
+        if (msg.q === 'nameSearch') {
+          const toks = Array.isArray(a.tokens) ? (a.tokens as unknown[]).map(String) : [];
+          const tgs = Array.isArray(a.tags) ? (a.tags as unknown[]).map(String) : [];
+          return fn.call(queries, toks, tgs, Number(a.limit ?? 30));
+        }
         return fn.call(queries);
       }
       default:
@@ -910,44 +1116,137 @@ async function main(): Promise<void> {
     return;
   }
 
-  // ---- 守护模式：stdio JSON 行协议 ----
-  write({ ev: 'hello', proto: 1, pid: process.pid });
+  // ---- 守护模式 ----
   // ext 域周期重扫(30min):stat 门下未变文件免读,开销是清单 stat 一轮;
   // 挂载文件无 vault 事件,靠这个兜底(与旧 unified-search 引擎同语义)。
   const extTimer = setInterval(() => {
     void syncExt().catch(() => {});
   }, 30 * 60_000);
   extTimer.unref?.();
-  let buf = '';
-  process.stdin.setEncoding('utf8');
-  process.stdin.on('data', (chunk: string) => {
-    buf += chunk;
-    let nl: number;
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (!line) continue;
-      let msg: { id?: number };
-      try {
-        msg = JSON.parse(line) as { id?: number };
-      } catch {
-        write({ id: null, ok: false, data: 'bad json' });
-        continue;
+
+  if (!args.http) {
+    // 旧 stdio JSON 行协议（proto 1）：R1a 默认。现役客户端 spawn 时不带
+    // --http，必须字节级兼容；R1b 客户端切 HttpTransport 后由客户端带
+    // --http，稳定后再把默认翻过来（docs/kernel-separation-design.md §10）。
+    emit({ ev: 'hello', proto: 1, pid: process.pid });
+    let buf = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk: string) => {
+      buf += chunk;
+      let nl: number;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        let msg: { id?: number };
+        try {
+          msg = JSON.parse(line) as { id?: number };
+        } catch {
+          write({ id: null, ok: false, data: 'bad json' });
+          continue;
+        }
+        void handle(msg as Parameters<typeof handle>[0])
+          .then((data) => write({ id: msg.id, ok: true, data }))
+          .catch((e) => write({ id: msg.id, ok: false, data: String(e) }))
+          .then(() => {
+            const op = (msg as { op?: string }).op;
+            if (op === 'close' || op === 'shutdown') {
+              setTimeout(() => process.exit(0), 50);
+            }
+          });
       }
-      void handle(msg as Parameters<typeof handle>[0])
-        .then((data) => write({ id: msg.id, ok: true, data }))
-        .catch((e) => write({ id: msg.id, ok: false, data: String(e) }))
-        .then(() => {
-          const op = (msg as { op?: string }).op;
-          if (op === 'close') {
-            setTimeout(() => process.exit(0), 50);
-          }
-        });
+    });
+    process.stdin.on('close', () => {
+      void idx.close().finally(() => process.exit(0));
+    });
+    return;
+  }
+
+  // HTTP/SSE（kernelApi proto 2，思源式内核传输——R1a 仅传输升级，生命周期
+  // 仍由客户端管理；detached 常驻/空闲自退/discovery 复用属 R1b/R2，§6）。
+  const token = makeToken((n) => crypto.randomBytes(n));
+  const startedAt = Date.now();
+  let idleTimer: ReturnType<typeof setInterval> | null = null;
+  let tray: TrayHandle | null = null;
+  // 停机收敛点：/shutdown、空闲自退、托盘退出共用同一条路径（§6.7 退出语义）。
+  const gracefulStop = async (reason: string): Promise<void> => {
+    try {
+      tray?.killSync(); // 防孤儿图标:先杀 helper
+    } catch {
+      /* 已死 */
     }
+    if (idleTimer) clearInterval(idleTimer);
+    clearInterval(extTimer);
+    try {
+      await server.close();
+    } catch {
+      /* 已关 */
+    }
+    try {
+      await idx.close();
+    } catch {
+      /* 已关 */
+    }
+    process.stderr.write(`[index-daemon] stopped: ${reason}\n`);
+    process.exit(0);
+  };
+  // 托盘（R2c）:helper 挂掉 → 内核无头继续（降级纪律）。四动作走 handle 同
+  // 一条 op 路径;退出走 gracefulStop（与 /shutdown 同语义）。
+  if (args.tray) {
+    tray = startKernelTray({
+      onOpen: () => {
+        // 派发链见 dispatchOpen 定义处（runtime exe → 注册表 → 拒绝,无 explorer）
+        dispatchOpen();
+      },
+      onSync: () => void handle({ op: 'sync' } as Parameters<typeof handle>[0]).catch(() => {}),
+      onRebuild: () => void handle({ op: 'rebuild' } as Parameters<typeof handle>[0]).catch(() => {}),
+      onExit: () => void gracefulStop('tray exit'),
+    });
+    // 异常退出兜底:防孤儿图标（exit 钩子只允许同步操作）
+    process.on('exit', () => {
+      try {
+        tray?.killSync();
+      } catch {
+        /* 已死 */
+      }
+    });
+  }
+  const server = await startKernelHttpServer({
+    token,
+    info: () => ({ proto: KERNEL_PROTO, pid: process.pid, vault: args.vault, dbPath: args.db, startedAt }),
+    handle: (msg) => handle(msg as unknown as Parameters<typeof handle>[0]),
+    onShutdown: () => gracefulStop('shutdown request'),
   });
-  process.stdin.on('close', () => {
-    void idx.close().finally(() => process.exit(0));
-  });
+  // 事件改道：changed/progress/fts → SSE 广播，stdout 不再承载事件。
+  emit = (ev) => server.broadcast(ev);
+  server.broadcast({ ev: 'hello', proto: KERNEL_PROTO, pid: process.pid });
+  // discovery 落盘失败不挡服务（客户端 R1b 靠它发现；R1a 仅有探针消费）。
+  try {
+    createDiscoveryIO(fs).write(args.db, {
+      proto: KERNEL_PROTO,
+      pid: process.pid,
+      port: server.port,
+      token,
+      vault: args.vault,
+      dbPath: args.db,
+      startedAt,
+    });
+  } catch (e) {
+    process.stderr.write(`[index-daemon] discovery write failed: ${String(e).slice(0, 120)}\n`);
+  }
+  process.stderr.write(`[index-daemon] kernel on 127.0.0.1:${server.port} (proto ${KERNEL_PROTO})\n`);
+  // 空闲自退（§6.3）：无 SSE 客户端 且 idleExitMs 内无任何请求 且 mutate 不在跑
+  // → 优雅停机。孤儿内核兜底（常驻 spawn 后 Obsidian 崩溃/未回访场景）。
+  // R2c 托盘开启时互斥关闭（托盘即常驻语义——客户端 spawn 传 --idle-exit-ms 0）。
+  if (args.idleExitMs > 0 && !args.tray) {
+    const period = Math.min(60_000, Math.max(1_000, Math.floor(args.idleExitMs / 4)));
+    idleTimer = setInterval(() => {
+      if (mutateRunning || server.clientCount() > 0) return;
+      if (Date.now() - server.lastActivityMs() < args.idleExitMs) return;
+      void gracefulStop(`idle ${Math.round(args.idleExitMs / 1000)}s without clients`);
+    }, period);
+    idleTimer.unref?.();
+  }
 }
 
 void main().catch((e) => {

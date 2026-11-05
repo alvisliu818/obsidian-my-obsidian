@@ -784,6 +784,33 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
           }),
         );
 
+      new Setting(containerEl)
+        .setName('常驻内核')
+        .setDesc(
+          '索引守护进程脱离 Obsidian 常驻（独立进程，重开秒连、崩溃不丢索引态）。' +
+            '关闭后退出 Obsidian 时一并停掉。内核空闲 10 分钟无客户端会自动退出。',
+        )
+        .addToggle((t) =>
+          t.setValue(this.plugin.settings.kernelResident !== false).onChange(async (v) => {
+            this.plugin.settings.kernelResident = v;
+            await this.plugin.saveSettings();
+          }),
+        );
+
+      new Setting(containerEl)
+        .setName('内核托盘')
+        .setDesc(
+          '系统托盘图标：打开 Obsidian / 立即同步 / 全量重建 / 退出内核。' +
+            '开启后空闲自退关闭（托盘即常驻语义）。切换后自动重启索引内核。',
+        )
+        .addToggle((t) =>
+          t.setValue(this.plugin.settings.kernelTray === true).onChange(async (v) => {
+            this.plugin.settings.kernelTray = v;
+            await this.plugin.saveSettings();
+            this.plugin.restartSqliteIndex();
+          }),
+        );
+
       const d = this.plugin.daemonIndex;
       const detail = d
         ? '索引守护进程运行中（独立 node 进程,库文件在 unified-index）。'
@@ -816,6 +843,15 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         b.setButtonText('狂暴增量').onClick(async () => {
           if (!this.plugin.daemonIndex) return;
           void this.plugin.runTurbo('sync');
+        }),
+      );
+      actions.addButton((b) =>
+        b.setButtonText('停用内核').onClick(async () => {
+          if (!this.plugin.daemonIndex) return;
+          await this.plugin.daemonIndex.stopKernel();
+          this.plugin.daemonIndex = null;
+          new Notice('索引内核已停用（daemon-only 模式下索引不可用）');
+          this.display();
         }),
       );
     }

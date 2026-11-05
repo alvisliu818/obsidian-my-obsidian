@@ -127,6 +127,8 @@ export default class OmnisearchPlugin extends Plugin {
       this.registerEvent(
         this.app.vault.on('create', async file => {
           if (!(file instanceof TFile)) return
+          // 统一索引模式:变更由 logseq 模块转发 daemon,本地不进索引
+          if (this.settings.useIndexDaemon) return
           if (this.notesIndexer.isFileIndexable(file.path)) {
             logVerbose('Indexing new file', file.path)
             try {
@@ -150,6 +152,8 @@ export default class OmnisearchPlugin extends Plugin {
       this.registerEvent(
         this.app.vault.on('modify', async file => {
           if (!(file instanceof TFile)) return
+          // 统一索引模式:变更由 logseq 模块转发 daemon,本地不进索引
+          if (this.settings.useIndexDaemon) return
           if (this.notesIndexer.isFileIndexable(file.path)) {
             this.notesIndexer.flagNoteForReindex(file)
           }
@@ -159,6 +163,8 @@ export default class OmnisearchPlugin extends Plugin {
       this.registerEvent(
         this.app.vault.on('rename', async (file, oldPath) => {
           if (!(file instanceof TFile)) return
+          // 统一索引模式:变更由 logseq 模块转发 daemon,本地不进索引
+          if (this.settings.useIndexDaemon) return
           if (this.notesIndexer.isFileIndexable(file.path)) {
             logVerbose('Renaming file', file.path)
             this.documentsRepository.removeDocument(oldPath)
@@ -325,6 +331,8 @@ export default class OmnisearchPlugin extends Plugin {
   }
 
   public async reindexExternalFiles(): Promise<void> {
+    // 统一索引模式:ext 域由 unified-search 模块推送 daemon,本模块不再自建
+    if (this.settings.useIndexDaemon) return
     try {
       const ext = await this.getExternalIndexableFiles()
       const next = new Map(ext.map(f => [f.path, f.mtime]))
@@ -345,6 +353,16 @@ export default class OmnisearchPlugin extends Plugin {
   }
 
   private async populateIndex(): Promise<void> {
+    // 统一索引模式（2026-11-04）:useIndexDaemon 打开时,索引驻守护进程的
+    // 磁盘 sqlite——vault 变更由 logseq 模块转发 daemon,ext 域由
+    // unified-search 推送,本进程不再构建 minisearch/documents。
+    // 背景:主库 5.5 万文件（含 4.6 万附件文件名文档）的全量索引曾耗
+    // 1h+ CPU、堆 +300MB 且持续驻留——统一后渲染进程索引成本为零。
+    if (this.settings.useIndexDaemon) {
+      indexingStep.set(IndexingStepType.Done)
+      console.debug('Omnisearch: unified index mode - local index skipped (daemon owns the index)')
+      return
+    }
     console.time('Indexing total time')
     indexingStep.set(IndexingStepType.ReadingFiles)
     // 库外文件（虚拟文档树挂载）：ext: 伪路径与库内文件一起进 diff/索引。

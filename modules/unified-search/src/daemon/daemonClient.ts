@@ -20,6 +20,8 @@ import type { BacklinkEntry } from '../../../logseq/src/index/blockIndex';
 export type { IndexedBlock, BacklinkEntry, CardEntry } from '../../../logseq/src/index/blockIndex';
 import type { CardEntry, IndexedBlock } from '../../../logseq/src/index/blockIndex';
 import type { SupertagDef } from '../../../logseq/src/features/supertags';
+import type { KernelEvent } from './kernelApi';
+import { HttpTransport } from './httpTransport';
 
 interface DaemonChild {
   pid: number | undefined;
@@ -46,6 +48,14 @@ export interface DaemonClientOptions {
   excludes?: () => string[];
   /** spawn 注入点（测试用）；生产用 require('child_process').spawn。 */
   spawnImpl?: SpawnFn;
+  /** 传输选择（R1b 默认 http：discovery 复用 + spawn --http；失败回落 stdio）。 */
+  transport?: 'http' | 'stdio';
+  /** R2a 常驻内核：dispose 只断连不杀（默认开；空闲自退兜底孤儿）。 */
+  kernelResident?: boolean;
+  /** R2c 内核托盘：spawn 带 --tray 且关闭空闲自退（互斥）。默认关。 */
+  kernelTray?: boolean;
+  /** R2c 托盘「打开 Obsidian」用的 exe（渲染进程 process.execPath=Obsidian.exe）。 */
+  obsidianExe?: string;
   /** 触发 BlockIndex 消费方刷新（onRebuild 监听器的同一条线）。 */
   onChange: () => void;
 }
@@ -65,6 +75,8 @@ export class BlockIndexDaemonClient {
   /** 狂暴模式进度回调(turbo 重建/增量期间的 progress 事件)。 */
   onTurboProgress: ((done: number, total: number) => void) | null = null;
   private disposed = false;
+  /** HTTP 传输（R1b）；null = 当前走 stdio。 */
+  private http: HttpTransport | null = null;
 
   // ---- 小常驻缓存（changed 时作废，懒加载） ----
   private cacheById: Map<string, IndexedBlock> | null = null;
@@ -100,15 +112,62 @@ export class BlockIndexDaemonClient {
     const base = vaultBase(this.opts.app).replace(/[\\/]+$/, '');
     const rel = this.opts.pluginDir.replace(/^\/+|\/+$/g, '');
     const script = `${base}/${rel}/index-daemon.cjs`;
-    const args = [script, '--db', this.opts.dbPath, '--vault', vaultBase(this.opts.app)];
+    const vault = vaultBase(this.opts.app);
     const ex = this.opts.excludes?.() ?? [];
-    if (ex.length) args.push('--exclude', ex.join(','));
-    this.spawnDaemon(node, args);
+    const extra: string[] = [];
+    if (ex.length) extra.push('--exclude', ex.join(','));
+    if (this.opts.kernelTray === true) extra.push('--tray', '--idle-exit-ms', '0');
+    // --obsidian-exe 不在这里推：httpTransport 自带同款追加（opts.obsidianExe
+    // 单独传了），两边都推会出现重复 flag（2026-11-06 实测,无害但脏）。
+
+    // R1b：HTTP 传输优先（discovery 探活复用 + spawn --http）。失败回落 stdio——
+    // 部署偏斜场景（盘上还是旧 daemon.cjs：parseArgs 忽略未知 flag 走 stdio
+    // 模式）HTTP 等不到内核就绪超时，这里兜住（§10 R1b）。
+    if (this.opts.transport !== 'stdio') {
+      try {
+        const http = new HttpTransport({
+          dbPath: this.opts.dbPath,
+          scriptPath: script,
+          vault,
+          extraArgs: extra,
+          obsidianExe: this.opts.obsidianExe,
+          findNode: this.opts.findNode,
+          onEvent: (ev) => this.handleEvent(ev),
+          onExit: () => void this.onDaemonExit(),
+          resident: this.opts.kernelResident !== false,
+        });
+        await http.start();
+        this.http = http;
+        await this.call('ping');
+        // R2d 运行时配置推送：HTTP 内核可被探活复用，也可能由旧构建/外部脚本
+        // 拉起——argv 里的 --obsidian-exe 不保证在（2026-11-05 实测：旧内核缺
+        // 该 flag，托盘「打开 Obsidian」回落 explorer 打开了资源管理器）。连上
+        // 就补送，派发不依赖内核的出生参数。fire-and-forget：失败不碰索引主链路。
+        void this.call('setConfig', { obsidianExe: this.opts.obsidianExe ?? '' }).catch(() => {});
+        void this.turboSync().catch(() => {});
+        return;
+      } catch (e) {
+        // 回落 stdio——失败原因必须留痕（2026-11-06：静默吞掉导致 stdio 困局无法诊断）
+        console.warn('[daemon-client] http transport start failed, fallback to stdio:', e);
+        this.http = null;
+      }
+    }
+
+    this.spawnDaemon(node, [
+      script,
+      '--db',
+      this.opts.dbPath,
+      '--vault',
+      vault,
+      ...(ex.length ? ['--exclude', ex.join(',')] : []),
+    ]);
     await this.call('ping');
-    // 启动同步放后台：主库首次 sync 是全量解析（分钟级），start() 等
-    // 它必撞 60s 超时 → daemon 明明活着却被误回落内存索引（2026-10-25
-    // 实测）。daemon 完成后广播 changed，缓存自会预热。
-    void this.call('sync').catch(() => {});
+    // 启动同步放后台：等它必撞 60s 超时 → daemon 明明活着却被误回落
+    // 内存索引。走 turboSync（并发读池 + 流式写批,2026-11-04）：旧串行
+    // idx.sync() 逐文件读+解析,单核满转可达小时级,且把事件循环按住——
+    // 统一索引模式下 omnisearch 的搜索也过这条 stdio,ping 都能延迟秒级。
+    // turbo 的异步读 + 每文件小批写让查询能穿插;完成后广播 changed,缓存自预热。
+    void this.turboSync().catch(() => {});
   }
 
   private spawnDaemon(node: string, args: string[]): void {
@@ -143,6 +202,34 @@ export class BlockIndexDaemonClient {
   dispose(): void {
     this.disposed = true;
     this.rejectAllPending(new Error('daemon client disposed'));
+    if (this.http) {
+      if (this.opts.kernelResident !== false) {
+        // R2a 常驻：只断连不杀——内核存活等下次复用，孤儿由空闲自退兜底。
+        this.http.disconnect();
+      } else {
+        void this.http.stop().catch(() => {});
+      }
+      this.http = null;
+      return;
+    }
+    try {
+      this.child?.kill();
+    } catch {
+      /* 已死 */
+    }
+    this.child = null;
+  }
+
+  /** 显式停内核（设置页「停用内核」）：无论 resident 与否都优雅停机。 */
+  async stopKernel(): Promise<void> {
+    this.disposed = true;
+    this.rejectAllPending(new Error('kernel stopped'));
+    const http = this.http;
+    this.http = null;
+    if (http) {
+      await http.stop().catch(() => {});
+      return;
+    }
     try {
       this.child?.kill();
     } catch {
@@ -168,18 +255,10 @@ export class BlockIndexDaemonClient {
       } catch {
         continue;
       }
-      if (msg.ev === 'changed' && typeof msg.version === 'number') {
-        this.version = msg.version;
-        this.invalidateCaches();
-        this.opts.onChange();
+      if (msg.ev) {
+        this.handleEvent(msg as unknown as KernelEvent);
         continue;
       }
-      if (msg.ev === 'progress' && typeof msg.done === 'number' && typeof msg.total === 'number') {
-        // progress 事件结构在 onStdout 的解析里:这里补齐字段读取
-        this.onTurboProgress?.(Number((msg as unknown as { done: number }).done), Number((msg as unknown as { total: number }).total));
-        continue;
-      }
-      if (msg.ev) continue; // hello/fts 暂不消费
       if (typeof msg.id === 'number' && this.pending.has(msg.id)) {
         const p = this.pending.get(msg.id)!;
         this.pending.delete(msg.id);
@@ -194,7 +273,23 @@ export class BlockIndexDaemonClient {
     this.pending.clear();
   }
 
+  /** 事件路由（stdio JSON 行与 HTTP SSE 共用同一语义,§4 KernelEvent）。 */
+  private handleEvent(ev: KernelEvent): void {
+    if (ev.ev === 'changed') {
+      this.version = ev.version;
+      this.invalidateCaches();
+      this.opts.onChange();
+      return;
+    }
+    if (ev.ev === 'progress') {
+      this.onTurboProgress?.(ev.done, ev.total);
+      return;
+    }
+    // hello/fts 暂不消费（与旧行为一致）
+  }
+
   private call<T = unknown>(op: string, extra: Record<string, unknown> = {}): Promise<T> {
+    if (this.http) return this.http.call<T>(op, extra);
     return new Promise<T>((resolve, reject) => {
       const child = this.child;
       if (!child || this.disposed) {
@@ -307,16 +402,24 @@ export class BlockIndexDaemonClient {
   }
 
   /** 未连提及/块搜索的文本扫描（FTS5 trigram,中文子串毫秒级）。 */
-  async scan(pattern: string, excludePath: string, limit = 200): Promise<{ bkey: string; path: string; text: string }[]> {
-    return this.query<{ bkey: string; path: string; text: string }[]>('scan', { pattern, excludePath, limit });
+  async scan(pattern: string, excludePath: string, limit = 200, onlyPath = ''): Promise<{ bkey: string; path: string; text: string }[]> {
+    return this.query<{ bkey: string; path: string; text: string }[]>('scan', { pattern, excludePath, limit, onlyPath });
   }
 
   /**
    * 统一搜索查询面:调用方编译好的 FTS5 MATCH 表达式(token 已安全引用,
    * 见 unified-search/src/matchBuilder),返回带 block_id 的块命中(供 #^锚点)。
    */
-  async ftsSearch(match: string, excludePath = '', limit = 50): Promise<{ bkey: string; path: string; blockId: string; text: string }[]> {
-    return this.query<{ bkey: string; path: string; blockId: string; text: string }[]>('fts', { match, excludePath, limit });
+  async ftsSearch(match: string, excludePath = '', limit = 50, onlyPath = ''): Promise<{ bkey: string; path: string; blockId: string; text: string }[]> {
+    return this.query<{ bkey: string; path: string; blockId: string; text: string }[]>('fts', { match, excludePath, limit, onlyPath });
+  }
+
+  /**
+   * 文件名/标签域搜索（omnisearch 统一索引模式,2026-11-04）:
+   * tokens = 路径子串(全命中),tags = '#tag' 去前缀,返回文件路径 + 首块摘要。
+   */
+  async nameSearch(tokens: string[], tags: string[] = [], limit = 30): Promise<{ path: string; text: string }[]> {
+    return this.query<{ path: string; text: string }[]>('nameSearch', { tokens, tags, limit });
   }
 
   // ------------------------------------------------------------------

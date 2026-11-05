@@ -42,6 +42,14 @@ export const MAX_FILE_BYTES = 2_000_000;
 export interface SqliteFileSource {
   /** Every markdown file in the vault with its current signature. */
   listMarkdownFiles(): SqliteFileMeta[];
+  /**
+   * 单文件签名（2026-11-04）。可选：给足实现时 syncFile 用 O(1) stat 替代
+   * 全库 listMarkdownFiles().find()——upsert 洪峰（同步插件/网盘批量触碰）
+   * 会把上千个 syncFile 排进队列,每个都全库遍历一次,在大 vault + 网盘
+   * minifilter 上就是小时级的空转（主库实测:每 walk 5-20s,daemon 单核
+   * 满转数小时,查询全部被按住）。缺席时回落 listMarkdownFiles。
+   */
+  statFile?(path: string): SqliteFileMeta | null;
   read(path: string): Promise<string>;
 }
 
@@ -420,13 +428,32 @@ export class SqliteIndex {
       await this.ensureOpen();
       const rt = this.rt;
       if (!rt) return;
-      const meta = this.opts.source.listMarkdownFiles().find((f) => f.path === path);
+      // statFile（O(1) stat）优先;缺席回落全库清单——见 SqliteFileSource 注释,
+      // 全库遍历在 upsert 洪峰下是小时级空转（2026-11-04 主库实测）。
+      const probed = this.opts.source.statFile?.(path);
+      const meta = probed !== undefined
+        ? probed
+        : this.opts.source.listMarkdownFiles().find((f) => f.path === path);
       if (!meta) {
         await this.forgetFile(rt, path);
         return;
       }
+      // 幂等门控（2026-11-04）:mtime+size 与库里一致就跳过。Obsidian 启动
+      // 时 vault 'create' 会对全库文件触发,forwardVaultEvents 把几千个
+      // syncFile 排进队列——不门控的话每次启动都要无谓地读+解析+写全库
+      // 一遍（10-30 分钟单核）;门控后全部秒过,真实变更才动库。
+      const row = await this.indexedRow(rt, path);
+      if (row && row.mtime === meta.mtime && row.size === meta.size) return;
       if (await this.indexOne(rt, meta)) this.dirty = true;
     });
+  }
+
+  /** 单文件签名行（幂等门控用）;不存在返回 null。 */
+  private async indexedRow(rt: SqliteRuntimeLike, path: string): Promise<IndexedFileRow | null> {
+    const res = await rt.all('SELECT path, mtime, size, hash, blocks FROM files WHERE path = ?', [path], 1);
+    const r = res.rows[0];
+    if (!r) return null;
+    return { path: String(r[0]), mtime: Number(r[1] ?? 0), size: Number(r[2] ?? 0), hash: Number(r[3] ?? 0), blocks: Number(r[4] ?? 0) };
   }
 
   /** Forget a file that no longer exists (or is no longer markdown). */

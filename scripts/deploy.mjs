@@ -19,7 +19,7 @@
  * Usage:
  *   node scripts/deploy.mjs --vault "<库路径>" [--from "<旧 logseq 插件目录>"]
  */
-import { existsSync, mkdirSync, cpSync, rmSync, readdirSync, readFileSync, openSync, writeSync, closeSync, fsyncSync, renameSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, cpSync, copyFileSync, rmSync, readdirSync, readFileSync, openSync, writeSync, closeSync, fsyncSync, renameSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { execSync } from "node:child_process";
@@ -222,12 +222,142 @@ if (!only) {
 // ---- index-daemon(索引守护进程) + better-sqlite3 边车 ----
 // 守护进程是独立 node 进程,无 PnP——better-sqlite3(原生模块,FTS5 预编译)
 // 以传统 node_modules 布局放插件目录,从 unplugged 取(构建产物不进 git)。
+
+/**
+ * 内核换血（R2b,kernel-separation-design.md §6.6）:常驻内核持有的是**已加载
+ * 进内存的旧代码**——部署新 index-daemon.cjs 后主动停掉它,下次 Obsidian
+ * 启动（或运行中的客户端退避重启）自动 spawn 新版。发现文件在
+ * <dbDir>/kernel-*.json（dbDir 取 data.json 的 sqliteDbDir,缺省 =
+ * unified-index 默认目录）;vault 不匹配的内核不动（别库的）。运行中的
+ * Obsidian 侧:SSE 断 → onExit → 退避重启 → 探活失败 → spawn 新内核,
+ * 秒级热换血,用户无感。
+ */
+async function shutdownDeployedKernels() {
+	const dirs = new Set();
+	try {
+		const data = JSON.parse(readFileSync(path.join(TARGET, "data.json"), "utf8"));
+		const d = String(data?.sqliteDbDir || "").trim().replace(/[\\/]+$/, "");
+		if (d) dirs.add(d);
+	} catch { /* 无 data.json（新库）——只用默认目录 */ }
+	dirs.add("E:/HOME/Runtime/unified-index");
+	const norm = (p) => path.resolve(p).toLowerCase().replace(/[\\/]+$/, "");
+	const wantVault = norm(VAULT);
+	let stopped = 0;
+	for (const dir of dirs) {
+		let files = [];
+		try {
+			files = readdirSync(dir).filter((f) => /^kernel-.*\.json$/.test(f));
+		} catch { continue; }
+		for (const f of files) {
+			let disc;
+			try {
+				disc = JSON.parse(readFileSync(path.join(dir, f), "utf8"));
+			} catch { continue; }
+			if (disc?.proto !== 2 || typeof disc?.port !== "number" || typeof disc?.token !== "string") continue;
+			if (disc.vault && norm(disc.vault) !== wantVault) continue;
+			try {
+				const ctl = new AbortController();
+				const t = setTimeout(() => ctl.abort(), 1500);
+				const pong = await fetch(`http://127.0.0.1:${disc.port}/ping`, {
+					headers: { "x-kernel-token": disc.token },
+					signal: ctl.signal,
+				});
+				clearTimeout(t);
+				if (!pong.ok) continue;
+				const ctl2 = new AbortController();
+				const t2 = setTimeout(() => ctl2.abort(), 3000);
+				await fetch(`http://127.0.0.1:${disc.port}/shutdown`, {
+					method: "POST",
+					headers: { "x-kernel-token": disc.token },
+					signal: ctl2.signal,
+				});
+				clearTimeout(t2);
+				stopped++;
+				console.log(`  内核已停旧版 (pid ${disc.pid}) —— 新版于下次启动/退避重启生效`);
+			} catch { /* 已死/不可达,跳过 */ }
+		}
+	}
+	return stopped;
+}
+
 if (wanted("index-daemon.cjs")) {
 	const daemonJs = path.join(ROOT, "index-daemon.cjs");
 	if (existsSync(daemonJs)) {
-		atomicWriteFile(daemonJs, path.join(TARGET, "index-daemon.cjs"));
+		const ok = atomicWriteFile(daemonJs, path.join(TARGET, "index-daemon.cjs"));
+		if (ok) await shutdownDeployedKernels();
 	} else {
 		console.warn("  ! 缺少 index-daemon.cjs(先 yarn node esbuild.mjs production)");
+	}
+}
+
+// ---- 托盘 helper（R2c）:systray2 JS 已打进 index-daemon.cjs,这里只补平台
+// 二进制。helper 经 __dirname/traybin 解析=bundle 所在插件目录。
+if (!only) {
+	const binName =
+		process.platform === "win32"
+			? "tray_windows_release.exe"
+			: process.platform === "darwin"
+				? "tray_darwin_release"
+				: "tray_linux_release";
+	let trayBinSrc = null;
+	try {
+		// PnP 解析（basedpyright 块同款机制）——unplugged 目录在全局 cache
+		const requirePnp = createRequire(path.join(ROOT, "index.js"));
+		trayBinSrc = path.join(path.dirname(requirePnp.resolve("systray2/package.json")), "traybin", binName);
+	} catch { /* PnP 不可用,fallback 到全局目录 glob */ }
+	if (!trayBinSrc || !existsSync(trayBinSrc)) {
+		try {
+			const upRoot = "E:/HOME/Code/.yarn-global/unplugged";
+			const dir = readdirSync(upRoot).find((d) => d.startsWith("systray2-npm-"));
+			if (dir) trayBinSrc = path.join(upRoot, dir, "node_modules", "systray2", "traybin", binName);
+		} catch { /* 找不到就报缺 */ }
+	}
+	// 复制守则（2026-11-05 实测）：换血钩子停旧内核后,运行中 Obsidian 的客户端
+	// 会在 ~1s 内 respawn 新内核+helper 并**重新锁住 exe**——直接 copyFileSync
+	// 会 EBUSY 且炸掉整个部署。守则：内容相同即跳过（二进制基本不变）+ EBUSY
+	// 退避重试 + 失败只警告不中断（图标等后续步骤必须继续跑）。
+	const copyExeSafe = (src, dst, label) => {
+		try {
+			if (
+				existsSync(dst) &&
+				createHash("sha256").update(readFileSync(dst)).digest("hex") ===
+					createHash("sha256").update(readFileSync(src)).digest("hex")
+			) {
+				console.log(`  ${label}  (unchanged, skip)`);
+				return true;
+			}
+		} catch { /* 读不了就强制试复制 */ }
+		const wait = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+		for (let attempt = 1; attempt <= 3; attempt++) {
+			try {
+				copyFileSync(src, dst);
+				console.log(`  ${label}`);
+				return true;
+			} catch (e) {
+				if (attempt < 3) wait(1200);
+				else {
+					console.warn(`  ! ${label} 复制失败(被运行中的 helper/内核锁定,本次跳过): ${e?.message || e}`);
+					return false;
+				}
+			}
+		}
+		return false;
+	};
+	if (trayBinSrc && existsSync(trayBinSrc)) {
+		mkdirSync(path.join(TARGET, "traybin"), { recursive: true });
+		copyExeSafe(trayBinSrc, path.join(TARGET, "traybin", binName), `traybin/${binName}`);
+	} else {
+		console.warn("  ! systray2 托盘二进制未找到（托盘不可用,内核无头继续）——先 yarn add systray2");
+	}
+	// 托盘图标（R2c）:kernelTray.ts 从 <bundle 目录>/assets/kernel.ico 读——
+	// 漏了它托盘静默禁用（icon missing → null,2026-11-05 实测教训）。
+	const iconSrc = path.join(ROOT, "assets", "kernel.ico");
+	if (existsSync(iconSrc)) {
+		mkdirSync(path.join(TARGET, "assets"), { recursive: true });
+		copyFileSync(iconSrc, path.join(TARGET, "assets", "kernel.ico"));
+		console.log("  assets/kernel.ico");
+	} else {
+		console.warn("  ! 缺少 assets/kernel.ico（托盘将禁用）");
 	}
 }
 
@@ -241,33 +371,81 @@ if (wanted("lazy")) {
 }
 
 if (!only) {
-	const unplugged = path.join(ROOT, ".yarn", "unplugged");
-	const bs3Dir = existsSync(unplugged)
-		? readdirSync(unplugged).find((d) => d.startsWith("better-sqlite3-npm-"))
-		: null;
-	if (bs3Dir) {
-	const src = path.join(unplugged, bs3Dir, "node_modules", "better-sqlite3");
+	// PnP 迁移后 unplugged 在全局 cache（.yarnrc.yml pnpUnpluggedFolder），仓库内
+	// .yarn/unplugged 已不存在——用 createRequire 解析（basedpyright/systray2 同款），
+	// 失败再试旧路径与新全局路径。
+	let bs3Dir = null;
+	try {
+		const pnpFile = path.join(ROOT, ".pnp.cjs");
+		if (existsSync(pnpFile)) {
+			createRequire(import.meta.url)(pnpFile).setup();
+		}
+		bs3Dir = path.dirname(
+			createRequire(path.join(ROOT, "index.js")).resolve("better-sqlite3/package.json"),
+		);
+	} catch { /* PnP resolve 失败,走目录猜测 */ }
+	if (!bs3Dir || !existsSync(bs3Dir)) {
+		for (const up of [path.join(ROOT, ".yarn", "unplugged"), "E:/HOME/Code/.yarn-global/unplugged"]) {
+			try {
+				const hit = readdirSync(up).find((d) => d.startsWith("better-sqlite3-npm-"));
+				if (hit) {
+					bs3Dir = path.join(up, hit, "node_modules", "better-sqlite3");
+					break;
+				}
+			} catch { /* 目录不存在 */ }
+		}
+	}
+	if (bs3Dir && existsSync(bs3Dir)) {
+	const src = bs3Dir;
 	const dst = path.join(TARGET, "node_modules", "better-sqlite3");
-	rmSync(dst, { recursive: true, force: true });
-	cpSync(src, dst, {
-		recursive: true,
-		// 只带运行时需要的:lib/index/package.json + 编译产物。prebuild-install
-		// 是装包期工具,deps/** 是 sqlite 源码(几 MB),都不要。
-		filter: (f) => {
-			const rel = path.relative(src, f).split(path.sep).join("/");
-			return (
-				rel === "" ||
-				rel === "package.json" ||
-				rel === "index.js" ||
-				rel === "LICENSE" ||
-				rel === "lib" ||
-				rel === "build" ||
-				rel.startsWith("lib/") ||
-				rel.startsWith("build/") ||
-				rel.startsWith("deps/license")
-			);
-		},
-	});
+	// 换血竞态守则（copyExeSafe 同款,2026-11-05 第二次踩实）：部署钩子停旧内核
+	// 后,运行中 Obsidian 的旧客户端 ~1s 内 respawn 新内核,**重新锁住
+	// better_sqlite3.node** → rmSync EPERM 直接炸掉整个 deploy。而边车内容几乎
+	// 从不变——.node 哈希一致就整段跳过;真要升级且被锁:警告不中断（本次沿用
+	// 旧边车跑,下轮部署内核自然解锁后补齐;rm 可能已删部分 JS 文件,cpSync 会
+	// 尽力补回,极端情况下新旧混杂——重跑一次部署即收敛）。
+	const bs3Node = path.join("build", "Release", "better_sqlite3.node");
+	const shaOf = (p) => {
+		try {
+			return createHash("sha256").update(readFileSync(p)).digest("hex");
+		} catch {
+			return null;
+		}
+	};
+	const srcNode = shaOf(path.join(src, bs3Node));
+	if (srcNode !== null && srcNode === shaOf(path.join(dst, bs3Node))) {
+		console.log("  node_modules/better-sqlite3  (unchanged, skip)");
+	} else {
+		try {
+			rmSync(dst, { recursive: true, force: true });
+		} catch (e) {
+			console.warn(`  ! better-sqlite3 边车被运行中内核锁定,rm 不完整(继续尽力覆盖): ${e?.message || e}`);
+		}
+		try {
+			cpSync(src, dst, {
+				recursive: true,
+				// 只带运行时需要的:lib/index/package.json + 编译产物。prebuild-install
+				// 是装包期工具,deps/** 是 sqlite 源码(几 MB),都不要。
+				filter: (f) => {
+					const rel = path.relative(src, f).split(path.sep).join("/");
+					return (
+						rel === "" ||
+						rel === "package.json" ||
+						rel === "index.js" ||
+						rel === "LICENSE" ||
+						rel === "lib" ||
+						rel === "build" ||
+						rel.startsWith("lib/") ||
+						rel.startsWith("build/") ||
+						rel.startsWith("deps/license")
+					);
+				},
+			});
+			console.log("  node_modules/better-sqlite3");
+		} catch (e) {
+			console.warn(`  ! better-sqlite3 边车复制失败(内核锁着旧 .node,本次沿用旧边车,稍后重跑部署收敛): ${e?.message || e}`);
+		}
+	}
 	// better-sqlite3 的运行时依赖 bindings(定位 .node)——纯 JS,住在全局
 	// cache zip 里(不 unplugged),解包到边车 node_modules。
 	const cacheDir = path.join(ROOT, "..", "..", ".yarn-global", "cache");

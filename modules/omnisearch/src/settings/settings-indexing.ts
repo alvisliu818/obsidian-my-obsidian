@@ -188,11 +188,10 @@ export function injectSettingsIndexing(
 
   // Merge results from the unified index daemon
   new Setting(containerEl)
-    .setName('Merge results from the index daemon')
+    .setName('Use the unified index daemon as the only index')
     .setDesc(
-      htmlDescription(`Also merge hits from the <strong style="color: var(--text-accent)">unified index daemon</strong> (spawned by the Logseq Editor module's SQLite index) into the results: block-level hits for vault notes and full-text hits for mounted out-of-vault files.<br/>
-      The daemon's trigram index matches CJK substrings that this plugin's own index can miss, so results only ever <em>gain</em> entries — ranking of Omnisearch's own results is unchanged.<br/>
-      Desktop-only; if the daemon is not running (module disabled) this setting has no effect.`)
+      htmlDescription(`Unified index mode (2026-11-04): the <strong style="color: var(--text-accent)">unified index daemon</strong>'s on-disk SQLite (spawned by the Logseq Editor module) becomes the <em>only</em> search index — this plugin stops building its own in-memory index entirely (zero RAM for minisearch/documents; filename/tag/content/ext domains all query the daemon).<br/>
+      Vault change events are forwarded to the daemon by the Logseq module. Desktop-only; if the daemon is not running (module disabled) searches fall back to the (empty) local index — keep the Logseq Editor module enabled.`)
     )
     .addToggle(toggle => {
       toggle.setValue(settings.useIndexDaemon).onChange(async v => {

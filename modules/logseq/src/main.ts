@@ -1101,6 +1101,9 @@ export default class LogseqEditorPlugin extends Plugin {
       findNode: findNodeExe,
       excludes: () => parseFolderList(this.settings.indexExcludedFolders),
       onChange: () => this.notifyBlockIndexConsumers(),
+      kernelResident: this.settings.kernelResident !== false,
+      kernelTray: this.settings.kernelTray === true,
+      obsidianExe: process.execPath,
     });
     try {
       await client.start();
