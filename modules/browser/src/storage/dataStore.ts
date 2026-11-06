@@ -28,6 +28,7 @@ export class DataStore {
       if (Array.isArray(raw.history)) merged.history = raw.history;
       if (Array.isArray(raw.downloads)) merged.downloads = raw.downloads;
       if (Array.isArray(raw.extensions)) merged.extensions = raw.extensions;
+      if (Array.isArray(raw.userscripts)) merged.userscripts = raw.userscripts;
       if (Array.isArray(raw.session)) merged.session = raw.session;
     }
     this.data = merged;

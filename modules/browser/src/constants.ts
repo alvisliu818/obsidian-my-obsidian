@@ -74,5 +74,6 @@ export const DEFAULT_DATA: PluginData = {
   history: [],
   downloads: [],
   extensions: [],
+  userscripts: [],
   session: [],
 };

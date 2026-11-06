@@ -13,6 +13,8 @@ export interface WebviewCallbacks {
   onContextMenu?(params: WebViewContextMenuParams): void;
   /** The preload asks (at document_start) for extension content scripts. */
   onExtensionRequest?(url: string): { css: string[]; js: string[] };
+  onUserScriptNavigate?(url: string): void;
+  onUserScriptRequest?(req: { rid: string; params: { method: string; url: string; headers: Record<string, string> | null; body: string | null } }): void;
   onFindResult?(active: number, matches: number): void;
   /** Injection point for ad-filter CSS and content scripts. */
   onDomReady?(webview: IWebviewTag, url: string): void;
@@ -139,11 +141,25 @@ export class WebviewController {
           /* guest gone */
         }
       }
+      // 用户脚本 GM_xmlhttpRequest 桥
+      if (e?.channel === "ob-us-request") {
+        try {
+          this.callbacks.onUserScriptRequest?.(e.args?.[0]);
+        } catch {
+          /* guest gone */
+        }
+      }
     });
 
     this.on("will-navigate", (e: any) => {
       if (this.programmaticNav) return;
       const url = e?.url ?? "";
+      // .user.js 导航 → 原生用户脚本安装（截住，不让页面变成一屏裸文本）
+      if (/\.user\.js(\?|#|$)/i.test(url)) {
+        try { (e as any).preventDefault?.(); } catch { /* not preventable */ }
+        this.callbacks.onUserScriptNavigate?.(url);
+        return;
+      }
       // Suppress the duplicate that arrives right after we already opened a tab.
       if (url && url === this.lastNewTabUrl && Date.now() - this.lastNewTabTime < NEW_TAB_DEDUP_WINDOW) {
         try {
@@ -315,6 +331,15 @@ export class WebviewController {
       void this.webview.loadURL(dataUrl);
     } catch {
       this.webview.setAttribute("src", dataUrl);
+    }
+  }
+
+  /** 宿主 → guest 的单发通道（用户脚本 GM_xmlhttpRequest 应答用）。 */
+  sendIpc(channel: string, data: unknown): void {
+    try {
+      this.webview.send(channel, data);
+    } catch {
+      /* guest gone */
     }
   }
 

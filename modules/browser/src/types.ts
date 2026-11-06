@@ -110,6 +110,25 @@ export interface ExtensionContentScript {
   allFrames: boolean;
 }
 
+/** 宿主直装的用户脚本（原生 userscript 管理，不依赖暴力猴等扩展）。 */
+export interface UserScriptRecord {
+	id: string;
+	name: string;
+	version: string;
+	namespace?: string;
+	author?: string;
+	description?: string;
+	matches: string[];
+	excludeMatches: string[];
+	/** @grant 声明（信息性；注入时统一提供常用 GM_* 面） */
+	grants: string[];
+	runAt: "document_start" | "document_end" | "document_idle";
+	code: string;
+	enabled: boolean;
+	installedAt: number;
+	sourceUrl?: string;
+}
+
 /** Persisted tab, used by the session restore feature. */
 export interface PersistedTab {
   url: string;
@@ -123,6 +142,7 @@ export interface PluginData {
   history: HistoryEntry[];
   downloads: DownloadItem[];
   extensions: ExtensionRecord[];
+  userscripts: UserScriptRecord[];
   session: PersistedTab[];
 }
 

@@ -31,6 +31,11 @@ export interface BrowserContext {
   /** Content scripts that must run before the page's own scripts. */
   extensionStartPayload(url: string): { css: string[]; js: string[] };
 
+  /** 页面把自身导航到一个 .user.js —— 拦下并打开原生安装对话框。 */
+  onUserScriptNavigate?(url: string): void;
+  /** 用户脚本的 GM_xmlhttpRequest IPC 桥（ob-us-request）。 */
+  onUserScriptRequest?(req: { rid: string; params: { method: string; url: string; headers: Record<string, string> | null; body: string | null } }): void;
+
   extensionIcons(): { id: string; name: string; icon: string }[];
   onExtensionClick(id: string, anchor: HTMLElement): void;
 

@@ -2,6 +2,7 @@
 import { App, Modal, Notice, PluginSettingTab, Setting } from "obsidian";
 import { SEARCH_ENGINES } from "../constants";
 import type { BrowserSettings, ExtensionRecord } from "../types";
+import type { UserscriptHost } from "../userscripts/userscriptHost";
 import type { ExtensionHost } from "../extensions/extensionHost";
 
 export interface SettingsHost {
@@ -11,6 +12,7 @@ export interface SettingsHost {
   extensions(): ExtensionRecord[];
   refreshExtensionIcons(): void;
   clearHistory(): void;
+  usHost(): UserscriptHost;
 }
 
 export class BrowserSettingTab extends PluginSettingTab {
@@ -289,6 +291,8 @@ export class BrowserSettingTab extends PluginSettingTab {
         }),
       );
 
+    this.renderUserscripts(containerEl);
+
     const list = containerEl.createDiv({ cls: "ob-ext-list" });
     for (const rec of this.host.extensions()) {
       new Setting(list)
@@ -310,6 +314,85 @@ export class BrowserSettingTab extends PluginSettingTab {
             }),
         );
     }
+  }
+
+  private renderUserscripts(containerEl: HTMLElement): void {
+    new Setting(containerEl).setName("用户脚本").setHeading();
+
+    new Setting(containerEl)
+      .setName("从 URL 安装")
+      .setDesc("粘贴 .user.js 地址（GreasyFork / GitHub raw 等），原生安装，无需暴力猴")
+      .addButton((b) =>
+        b.setButtonText("安装").onClick(() => {
+          new UrlUserScriptModal(this.app, this.host.usHost()).open();
+        }),
+      );
+
+    const scripts = this.host.usHost().list();
+    if (!scripts.length) {
+      containerEl.createDiv({ cls: "ob-ext-list", text: "（还没有安装用户脚本——在浏览器里点开 .user.js 链接即可安装）" });
+      return;
+    }
+    const list = containerEl.createDiv({ cls: "ob-ext-list" });
+    for (const rec of scripts) {
+      new Setting(list)
+        .setName(`${rec.name} ${rec.version}`)
+        .setDesc((rec.description || rec.sourceUrl || rec.id) + (rec.runAt === "document_start" ? "（document_start）" : ""))
+        .addToggle((t) =>
+          t.setValue(rec.enabled).onChange((v) => {
+            this.host.usHost().setEnabled(rec.id, v);
+          }),
+        )
+        .addButton((b) =>
+          b
+            .setButtonText("删除")
+            .setWarning()
+            .onClick(() => {
+              this.host.usHost().remove(rec.id);
+              this.display();
+            }),
+        );
+    }
+  }
+}
+
+/** 从 URL 安装用户脚本。 */
+class UrlUserScriptModal extends Modal {
+  private input = "";
+
+  constructor(
+    app: App,
+    private usHost: UserscriptHost,
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h3", { text: "从 URL 安装用户脚本" });
+    new Setting(contentEl).setName("脚本地址").addText((t) =>
+      t.setPlaceholder("https://…/script.user.js").onChange((v) => (this.input = v.trim())),
+    );
+    new Setting(contentEl).addButton((b) =>
+      b
+        .setButtonText("安装")
+        .setCta()
+        .onClick(async () => {
+          if (!this.input) return;
+          try {
+            const rec = await this.usHost.installFromUrl(this.input);
+            new Notice(`已安装用户脚本：${rec.name}`);
+            this.close();
+          } catch (e) {
+            new Notice("安装失败：" + String((e as Error)?.message ?? e));
+          }
+        }),
+    );
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
   }
 }
 

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Menu, Notice, Plugin, TFile } from "obsidian";
+import { Menu, Notice, Plugin, requestUrl, TFile } from "obsidian";
 import type { WorkspaceLeaf } from "obsidian";
 
 import {
@@ -24,6 +24,8 @@ import type { BrowserContext } from "./browser/context";
 import { clipPage } from "./browser/excerpt";
 import { bindSessionDownloads } from "./browser/downloads";
 import { ExtensionHost } from "./extensions/extensionHost";
+import { UserscriptHost } from "./userscripts/userscriptHost";
+import { InstallUserScriptModal } from "./userscripts/install-modal";
 import { PopupLayer } from "./extensions/popup";
 import { BrowserSettingTab } from "./settings/SettingsTab";
 import { downloadToVault } from "./utils/download";
@@ -36,6 +38,7 @@ export default class BrowserPlugin extends Plugin {
   private history!: HistoryStore;
   private downloads!: DownloadsStore;
   private extHost!: ExtensionHost;
+	private usHost!: UserscriptHost;
   private popupLayer: PopupLayer | null = null;
   private ctx!: BrowserContext;
 
@@ -64,6 +67,11 @@ export default class BrowserPlugin extends Plugin {
       () => this.store.save(),
     );
 
+    this.usHost = new UserscriptHost(
+      () => this.store.data.userscripts,
+      () => this.store.save(),
+    );
+
     await this.writePreloads();
     this.ctx = this.buildContext();
 
@@ -89,6 +97,7 @@ export default class BrowserPlugin extends Plugin {
       new BrowserSettingTab(this.app, this, {
         settings: this.config,
         save: () => this.store.save(),
+        usHost: () => this.usHost,
         extHost: this.extHost,
         extensions: () => this.store.data.extensions,
         refreshExtensionIcons: () => this.refreshExtensionIcons(),
@@ -155,8 +164,33 @@ export default class BrowserPlugin extends Plugin {
 
       onDomReady: (webview: IWebviewTag, url: string) => {
         void this.extHost.injectDocumentEnd(webview as never, url);
+        for (const code of this.usHost.documentEndScripts(url)) void this.usHost.injectScript(webview as never, code);
       },
-      extensionStartPayload: (url: string) => this.extHost.documentStartPayload(url),
+      extensionStartPayload: (url: string) => {
+        const p = this.extHost.documentStartPayload(url);
+        const u = this.usHost.documentStartPayload(url);
+        return { css: [...p.css, ...u.css], js: [...p.js, ...u.js] };
+      },
+      onUserScriptNavigate: (url: string) => this.openUserScriptInstall(url),
+      onUserScriptRequest: async (req: { rid: string; params: { method: string; url: string; headers: Record<string, string> | null; body: string | null } }) => {
+        try {
+          const resp = await requestUrl({
+            url: req.params.url,
+            method: req.params.method as "GET",
+            headers: (req.params.headers ?? {}) as Record<string, string>,
+            body: req.params.body ?? undefined,
+            throw: false,
+          });
+          this.activeBrowserController()?.sendIpc("ob-us-response", {
+            rid: req.rid,
+            status: resp.status,
+            headers: resp.headers,
+            body: resp.text,
+          });
+        } catch (e) {
+          this.activeBrowserController()?.sendIpc("ob-us-response", { rid: req.rid, error: String((e as Error)?.message ?? e) });
+        }
+      },
       extensionIcons: () =>
         this.config.extensionsEnabled
           ? this.store.data.extensions
@@ -174,7 +208,10 @@ export default class BrowserPlugin extends Plugin {
       },
 
       notifyTabChanged: (tab) => this.onTabChanged(tab),
-      requestNewTab: (url) => void this.openUrl(url, true),
+      requestNewTab: (url) => {
+        if (this.openUserScriptInstall(url)) return;
+        void this.openUrl(url, true);
+      },
       initialTabs: () => (this.config.restoreSession ? this.store.data.session : []),
       saveSession: (tabs: PersistedTab[]) => {
         this.store.data.session = tabs;
@@ -185,10 +222,31 @@ export default class BrowserPlugin extends Plugin {
     };
   }
 
+  /** .user.js 链接 → 原生安装对话框；非用户脚本返回 false 走常规打开。 */
+  private openUserScriptInstall(url: string): boolean {
+    if (!/\.user\.js(\?|#|$)/i.test(url)) return false;
+    void this.usHost;
+    new InstallUserScriptModal(this.app, this.usHost, url).open();
+    return true;
+  }
+
+  private activeBrowserController(): { sendIpc(channel: string, data: unknown): void } | null {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_BROWSER)) {
+      const view = leaf.view as unknown as { activeTab?: () => { controller?: { sendIpc?: (c: string, d: unknown) => void } } | null };
+      const t = view.activeTab?.();
+      const c = t?.controller as { sendIpc?: (c: string, d: unknown) => void } | undefined;
+      if (c?.sendIpc) return c as { sendIpc(channel: string, data: unknown): void };
+    }
+    return null;
+  }
+
   private buildPopupLayer(): void {
     if (this.popupLayer || !this.extPreloadUrl) return;
     this.popupLayer = new PopupLayer(document.body, this.extHost, this.extPreloadUrl);
-    this.popupLayer.onOpenNewTab = (url) => void this.openUrl(url, true);
+    this.popupLayer.onOpenNewTab = (url) => {
+      if (this.openUserScriptInstall(url)) return;
+      void this.openUrl(url, true);
+    };
   }
 
   // ---------------- views ----------------
