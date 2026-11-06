@@ -27,7 +27,7 @@ export type HttpSpawnFn = (cmd: string, args: string[]) => HttpChild;
 export interface HttpTransportOptions {
   /** discovery 锚点 = dbPath（§3）。 */
   dbPath: string;
-  /** index-daemon.cjs 绝对路径（spawn 用；必须绝对——2026-10-25 教训）。 */
+  /** MyKernel.cjs 绝对路径（spawn 用；必须绝对——2026-10-25 教训）。 */
   scriptPath: string;
   /** vault 根绝对路径（探活匹配 + --vault）。 */
   vault: string;
@@ -129,7 +129,7 @@ export class HttpTransport {
       return;
     }
     const node = await this.opts.findNode();
-    if (!node) throw new Error('system node not found for index-daemon');
+    if (!node) throw new Error('system node not found for MyKernel');
     const args = [
       this.opts.scriptPath,
       '--db',

@@ -20,9 +20,9 @@
  * 同源，二者对同一文件永远一致。
  *
  * CLI 一次性模式（构建/调试/基准）：
- *   node index-daemon.js --db <file> --vault <dir> [--exclude a,b] --rebuild
- *   node index-daemon.js ... --sync
- *   node index-daemon.js ... --query '{"q":"backlinksTo","args":{"page":"foo"}}'
+ *   node MyKernel.cjs --db <file> --vault <dir> [--exclude a,b] --rebuild
+ *   node MyKernel.cjs ... --sync
+ *   node MyKernel.cjs ... --query '{"q":"backlinksTo","args":{"page":"foo"}}'
  */
 
 import * as fs from 'fs';
@@ -184,7 +184,7 @@ async function openRuntime(file: string): Promise<SqliteRuntimeLike> {
     return BetterSqliteRuntime.open(file);
   } catch (e) {
     process.stderr.write(
-      `[index-daemon] better-sqlite3 unavailable (${String(e).slice(0, 90)}), fallback node:sqlite (no FTS5)\n`,
+      `[MyKernel] better-sqlite3 unavailable (${String(e).slice(0, 90)}), fallback node:sqlite (no FTS5)\n`,
     );
     const { NodeSqliteRuntime } = (await import(
       '../../../logseq/src/index/nodeSqlite'
@@ -578,7 +578,7 @@ class Queries {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   if (!args.db || !args.vault) {
-    process.stderr.write('usage: index-daemon.js --db <file> --vault <dir> [--exclude a,b] [--rebuild|--sync|--query <json>] [--http]\n');
+    process.stderr.write('usage: MyKernel.cjs --db <file> --vault <dir> [--exclude a,b] [--rebuild|--sync|--query <json>] [--http]\n');
     process.exit(2);
   }
 
@@ -1187,7 +1187,7 @@ async function main(): Promise<void> {
     } catch {
       /* 已关 */
     }
-    process.stderr.write(`[index-daemon] stopped: ${reason}\n`);
+    process.stderr.write(`[MyKernel] stopped: ${reason}\n`);
     process.exit(0);
   };
   // 托盘（R2c）:helper 挂掉 → 内核无头继续（降级纪律）。四动作走 handle 同
@@ -1232,9 +1232,9 @@ async function main(): Promise<void> {
       startedAt,
     });
   } catch (e) {
-    process.stderr.write(`[index-daemon] discovery write failed: ${String(e).slice(0, 120)}\n`);
+    process.stderr.write(`[MyKernel] discovery write failed: ${String(e).slice(0, 120)}\n`);
   }
-  process.stderr.write(`[index-daemon] kernel on 127.0.0.1:${server.port} (proto ${KERNEL_PROTO})\n`);
+  process.stderr.write(`[MyKernel] kernel on 127.0.0.1:${server.port} (proto ${KERNEL_PROTO})\n`);
   // 空闲自退（§6.3）：无 SSE 客户端 且 idleExitMs 内无任何请求 且 mutate 不在跑
   // → 优雅停机。孤儿内核兜底（常驻 spawn 后 Obsidian 崩溃/未回访场景）。
   // R2c 托盘开启时互斥关闭（托盘即常驻语义——客户端 spawn 传 --idle-exit-ms 0）。

@@ -71,7 +71,7 @@ export interface OmnisearchSettings extends WeightingSettings {
   indexAllPlaintext: boolean
   /**
    * 合并统一索引守护进程的命中（合并新增）：logseq 模块拉起的
-   * index-daemon（FTS5 trigram）按块级与 ext 域补充 minisearch 没返回的
+   * MyKernel（FTS5 trigram）按块级与 ext 域补充 minisearch 没返回的
    * 文件——CJK 子串搜索的主要补强来源。daemon 不在时自动无操作。
    */
   useIndexDaemon: boolean

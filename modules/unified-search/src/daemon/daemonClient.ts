@@ -2,7 +2,7 @@
  * 渲染进程侧的守护进程客户端（档位 2 的另一半）。
  *
  * 职责：
- *  - 生命周期：spawn 系统 node 跑 index-daemon.cjs（崩溃退避重启），unload 收尾
+ *  - 生命周期：spawn 系统 node 跑 MyKernel.cjs（崩溃退避重启），unload 收尾
  *  - 协议：stdio JSON 行的请求/应答/事件（与 daemonMain 的协议一一对应）
  *  - BlockIndex 兼容 API：小常驻缓存保住**同步**方法（byId 池 / 标签 / 卡片 /
  *    超标签 / 当前文件的块），重查询（backlinksTo / refsToBlock / scan / blocksByPath）
@@ -105,13 +105,13 @@ export class BlockIndexDaemonClient {
   async start(): Promise<void> {
     if (!Platform.isDesktopApp) throw new Error('daemon client is desktop-only');
     const node = await this.opts.findNode();
-    if (!node) throw new Error('system node not found for index-daemon');
+    if (!node) throw new Error('system node not found for MyKernel');
     // spawn 的 cwd 是插件目录——manifest.dir 是 vault 相对路径,必须拼绝对路径
     // (实测:相对路径在异 cwd 下解析到不存在的位置,node 报 Cannot find module,
     // 客户端静默回落内存索引,2026-10-25)。
     const base = vaultBase(this.opts.app).replace(/[\\/]+$/, '');
     const rel = this.opts.pluginDir.replace(/^\/+|\/+$/g, '');
-    const script = `${base}/${rel}/index-daemon.cjs`;
+    const script = `${base}/${rel}/MyKernel.cjs`;
     const vault = vaultBase(this.opts.app);
     const ex = this.opts.excludes?.() ?? [];
     const extra: string[] = [];
@@ -185,7 +185,7 @@ export class BlockIndexDaemonClient {
   private async onDaemonExit(): Promise<void> {
     if (this.disposed || this.restarting) return;
     this.restarting = true;
-    this.rejectAllPending(new Error('index-daemon exited'));
+    this.rejectAllPending(new Error('MyKernel exited'));
     const wait = RESTART_BACKOFF_MS[Math.min(this.restarts, RESTART_BACKOFF_MS.length - 1)];
     this.restarts++;
     await new Promise((r) => setTimeout(r, wait));

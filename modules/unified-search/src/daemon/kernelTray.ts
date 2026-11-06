@@ -53,8 +53,8 @@ export function startKernelTray(actions: TrayActions, iconDir?: string): TrayHan
     const tray = new SysTray({
       menu: {
         icon,
-        title: '索引内核',
-        tooltip: '索引内核 · 运行中',
+        title: 'MyKernel',
+        tooltip: 'MyKernel · 运行中',
         items: [
           { title: ITEM_OPEN, tooltip: '在 Obsidian 中打开本库' },
           { title: ITEM_SYNC, tooltip: '增量索引变更文件' },

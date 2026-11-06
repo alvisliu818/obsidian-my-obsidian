@@ -669,7 +669,7 @@ const daemon = await esbuild.context({
   define: { __WA_SQLITE_WASM_B64__: JSON.stringify(WA_SQLITE_WASM_B64) },
   logLevel: "info",
   sourcemap: false,
-  outfile: "index-daemon.cjs",
+  outfile: "MyKernel.cjs",
   minify: prod,
 });
 

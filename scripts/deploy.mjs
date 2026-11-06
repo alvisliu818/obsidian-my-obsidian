@@ -280,14 +280,19 @@ async function shutdownDeployedKernels() {
 	return stopped;
 }
 
-if (wanted("index-daemon.cjs")) {
-	const daemonJs = path.join(ROOT, "index-daemon.cjs");
-	if (existsSync(daemonJs)) {
-		const ok = atomicWriteFile(daemonJs, path.join(TARGET, "index-daemon.cjs"));
+if (wanted("MyKernel.cjs")) {
+	const kernelJs = path.join(ROOT, "MyKernel.cjs");
+	if (existsSync(kernelJs)) {
+		const ok = atomicWriteFile(kernelJs, path.join(TARGET, "MyKernel.cjs"));
 		if (ok) await shutdownDeployedKernels();
 	} else {
-		console.warn("  ! 缺少 index-daemon.cjs(先 yarn node esbuild.mjs production)");
+		console.warn("  ! 缺少 MyKernel.cjs(先 yarn node esbuild.mjs production)");
 	}
+	// 更名兼容垫片（2026-11-06 index-daemon.cjs → MyKernel.cjs）:运行中的旧
+	// 客户端 scriptPath 仍指旧名,垫片转发到新内核——零断线迁移,全部客户端
+	// 自然换血后可移除本段
+	const shimJs = path.join(ROOT, "index-daemon.cjs");
+	if (existsSync(shimJs)) atomicWriteFile(shimJs, path.join(TARGET, "index-daemon.cjs"));
 }
 
 // ---- 托盘 helper（R2c）:systray2 JS 已打进 index-daemon.cjs,这里只补平台
