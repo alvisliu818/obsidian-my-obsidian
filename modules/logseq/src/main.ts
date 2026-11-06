@@ -1356,11 +1356,37 @@ export default class LogseqEditorPlugin extends Plugin {
   }
 
   /**
-   * 数据库位置（sqliteDbDir）变更后调用：daemon 的库文件路径在启动时定格，
-   * 热改不重开——提示重启生效。旧位置的索引文件不迁移、不删除——用户自己处置。
+   * 内核出生参数（托盘/库位置）变更后调用：真重启守护进程。旧内核必须
+   * 杀掉而非仅断连——驻留内核会被 discovery 探活复用，复用即丢失新出生
+   * 参数（2026-11-06 实测：8:54 无 --tray 出生 → 8:56 开托盘不生效，
+   * 托盘永远不出现）。sqliteDbDir 变更同走这里，新位置立即生效。
    */
+  private sqliteIndexRestarting = false;
+
   restartSqliteIndex(): void {
-    new Notice('索引库位置变更后需重启 Obsidian 生效。');
+    if (!Platform.isDesktopApp || this.sqliteIndexRestarting) return;
+    this.sqliteIndexRestarting = true;
+    void (async () => {
+      try {
+        const old = this.daemonIndex;
+        this.daemonIndex = null;
+        if (old) {
+          // stopKernel（非 dispose）无论 resident 与否都优雅停机；
+          // 缓一拍再拉起，给 /shutdown → process.exit 留出收尾时间，
+          // 避免新客户端探活撞上垂死旧内核而复用。
+          await old.stopKernel();
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        const c = await this.startDaemonIndex();
+        this.daemonIndex = c;
+        if (c) void c.upsertFiles([]); // 触发 changed→缓存预热（同 applySqliteSettings）
+        this.notifyBlockIndexConsumers();
+      } catch (e) {
+        console.warn('[logseq] sqlite index restart failed:', e);
+      } finally {
+        this.sqliteIndexRestarting = false;
+      }
+    })();
   }
 
   // ------------------------------------------------------------------
