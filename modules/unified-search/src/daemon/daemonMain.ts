@@ -955,8 +955,12 @@ async function main(): Promise<void> {
       };
       // URL 作为 argv 直派 exe（=注册表 HKCU...obsidian\shell\open\command 的
       // 原样行为）。注意:**不能** windowsHide——我们要的就是窗口。路径归一化
-      // 正斜杠（vault path 匹配不认 %5C）。
-      const url = `obsidian://open?path=${encodeURIComponent(args.vault.replace(/\\/g, '/'))}`;
+      // vault=名称形态（2026-11-06 实测）：path= 形态的正斜杠路径与注册表
+      // 反斜杠路径分隔符不匹配 →「Vault not found」对话框；vault= 按库名
+      // 匹配，冷启动/运行中都可靠。库名 = vault 路径 basename（本机两库名
+      // 唯一；同名库场景需换 path 形态并解决分隔符匹配，暂无需求）。
+      const vaultName = args.vault.replace(/[\/]+$/, '').split(/[\/]/).pop() ?? '';
+      const url = `obsidian://open?vault=${encodeURIComponent(vaultName)}`;
       const child = spawnChild(exe, [url], { detached: true, stdio: 'ignore' });
       child.unref?.();
       child.on?.('error', (e: Error) => process.stderr.write(`[kernel-tray] open failed: ${String(e).slice(0, 120)}\n`));
