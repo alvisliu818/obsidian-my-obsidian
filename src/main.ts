@@ -244,7 +244,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// The id other modules look this one up by (jupyter reads
 			// `pythonEnvs` off it, breadcrumb reads its mount list).
 			name: "MD Editor",
-			summary: "块大纲 Markdown 编辑器：折叠、缩放、块引用、任务、SQLite 索引，以及库外文件的虚拟文档树。",
+			summary: "块文档 Markdown 编辑器：折叠、缩放、块引用、任务、SQLite 索引，以及库外文件的虚拟文档树。",
 			desktopOnly: true,
 			cls: LogseqEditorPlugin as unknown as ModuleDescriptor["cls"],
 		},
