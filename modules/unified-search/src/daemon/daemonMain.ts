@@ -1199,7 +1199,6 @@ async function main(): Promise<void> {
         dispatchOpen();
       },
       onSync: () => void handle({ op: 'sync' } as Parameters<typeof handle>[0]).catch(() => {}),
-      onRebuild: () => void handle({ op: 'rebuild' } as Parameters<typeof handle>[0]).catch(() => {}),
       onExit: () => void gracefulStop('tray exit'),
     });
     // 异常退出兜底:防孤儿图标（exit 钩子只允许同步操作）

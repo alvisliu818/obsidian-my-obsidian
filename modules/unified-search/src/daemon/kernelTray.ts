@@ -19,7 +19,6 @@ import type SysTrayNS from 'systray2';
 export interface TrayActions {
   onOpen(): void;
   onSync(): void;
-  onRebuild(): void;
   onExit(): void;
 }
 
@@ -31,8 +30,7 @@ export interface TrayHandle {
 }
 
 const ITEM_OPEN = '打开 Obsidian';
-const ITEM_SYNC = '立即同步';
-const ITEM_REBUILD = '全量重建';
+const ITEM_SYNC = '增量索引';
 const ITEM_EXIT = '退出内核';
 
 export function startKernelTray(actions: TrayActions, iconDir?: string): TrayHandle | null {
@@ -58,7 +56,6 @@ export function startKernelTray(actions: TrayActions, iconDir?: string): TrayHan
         items: [
           { title: ITEM_OPEN, tooltip: '在 Obsidian 中打开本库' },
           { title: ITEM_SYNC, tooltip: '增量索引变更文件' },
-          { title: ITEM_REBUILD, tooltip: '从文件全量重建索引' },
           SysTray.separator,
           { title: ITEM_EXIT, tooltip: '优雅停止索引内核' },
         ],
@@ -69,7 +66,6 @@ export function startKernelTray(actions: TrayActions, iconDir?: string): TrayHan
       process.stderr.write(`[kernel-tray] click: ${title}\n`);
       if (title === ITEM_OPEN) actions.onOpen();
       else if (title === ITEM_SYNC) actions.onSync();
-      else if (title === ITEM_REBUILD) actions.onRebuild();
       else if (title === ITEM_EXIT) actions.onExit();
       else process.stderr.write(`[kernel-tray] click unmatched\n`);
     };
