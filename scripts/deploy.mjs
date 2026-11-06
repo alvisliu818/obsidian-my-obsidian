@@ -219,7 +219,7 @@ if (!only) {
 	}
 }
 
-// ---- index-daemon(索引守护进程) + better-sqlite3 边车 ----
+// ---- MyKernel(内核) + better-sqlite3 边车 ----
 // 守护进程是独立 node 进程,无 PnP——better-sqlite3(原生模块,FTS5 预编译)
 // 以传统 node_modules 布局放插件目录,从 unplugged 取(构建产物不进 git)。
 
@@ -288,11 +288,6 @@ if (wanted("MyKernel.cjs")) {
 	} else {
 		console.warn("  ! 缺少 MyKernel.cjs(先 yarn node esbuild.mjs production)");
 	}
-	// 更名兼容垫片（2026-11-06 index-daemon.cjs → MyKernel.cjs）:运行中的旧
-	// 客户端 scriptPath 仍指旧名,垫片转发到新内核——零断线迁移,全部客户端
-	// 自然换血后可移除本段
-	const shimJs = path.join(ROOT, "index-daemon.cjs");
-	if (existsSync(shimJs)) atomicWriteFile(shimJs, path.join(TARGET, "index-daemon.cjs"));
 }
 
 // ---- 托盘 helper（R2c）:systray2 JS 已打进 index-daemon.cjs,这里只补平台

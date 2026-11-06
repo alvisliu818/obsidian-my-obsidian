@@ -38,7 +38,7 @@ type SpawnFn = (cmd: string, args: string[]) => DaemonChild;
 
 export interface DaemonClientOptions {
   app: App;
-  /** 插件数据目录（index-daemon.cjs 与 node_modules 边车所在）。 */
+  /** 插件数据目录（MyKernel.cjs 与 node_modules 边车所在）。 */
   pluginDir: string;
   /** SQLite 库文件绝对路径。 */
   dbPath: string;
