@@ -154,7 +154,16 @@ export default class LogseqEditorPlugin extends Plugin {
   private statusModeEl: HTMLElement | null = null;
 
   async onload(): Promise<void> {
+    // 启动分段观测（2026-11-06「界面出现慢」定位）:window.__bootPhases
+    const bootT0 = performance.now();
+    const bootPhases: Record<string, number> = {};
+    (window as unknown as { __bootPhases?: Record<string, number> }).__bootPhases = bootPhases;
+    const phase = (n: string): void => {
+      bootPhases[n] = Math.round(performance.now() - bootT0);
+    };
+    phase('onload-enter');
     await this.loadSettings();
+    phase('settings');
     // 供 obsidian-jupyter-notebook 复用同一份环境发现(与它取
     // renderMarkdownFragment 的软依赖方式一致;插件必须能独立运行,所以那边
     // 也有自己的降级实现)。
@@ -214,6 +223,7 @@ export default class LogseqEditorPlugin extends Plugin {
     this.registerView(VIEW_TYPE_EXTERNAL_BLOCK, (leaf) => new ExternalBlockView(leaf, this));
     this.registerView(VIEW_TYPE_CONTENT_SEARCH, (leaf) => new ContentSearchPanelView(leaf, this));
     this.registerView(VIEW_TYPE_RECENT_PANEL, (leaf) => new RecentPanelView(leaf, this));
+    phase('views');
 
     // 库内 .code-workspace 等代码扩展名的注册**不在这里**做:宿主 onload 的
     // registerCodeFiles() 会按 TEXT_MOUNT_EXTENSIONS 派生的 DEFAULT_CODE_EXTENSIONS
@@ -278,14 +288,24 @@ export default class LogseqEditorPlugin extends Plugin {
     // 缓存(byId 池 ~90 块/标签/卡片),JS 堆 -160~190MB。失败自动回落内存索引。
     const daemonMode = Platform.isDesktopApp && this.settings.sqliteIndexEnabled;
     if (daemonMode) {
-      this.daemonIndex = await this.startDaemonIndex();
+      phase('pre-daemon');
+      // 启动提速（2026-11-06）：daemon 客户端启动 ~1s（findNode 探测+ping）
+      // 不阻塞界面——layout-ready 后台拉起，索引晚 ~1s 到位。消费方全走 ?.
+      // 调用，空窗期语义 = 「无索引」，与 daemon-only 纪律一致。
+      this.app.workspace.onLayoutReady(() => {
+        void this.startDaemonIndex()
+          .then((client) => {
+            phase('daemon');
+            if (client) void client.upsertFiles([]); // 触发一次 changed→缓存预热
+          })
+          .catch(() => {});
+      });
     }
     // daemon-only(2026-10-25 用户指定「daemon 起不来时就不要索引」):内存
     // blockIndex 与渲染内 sqliteIndex 两层回落全部退役——索引要么在独立
     // 守护进程里,要么没有(旧兜底正是双启动 OOM 白屏的半个根源)。
     // daemon 起不来时 syncIndex=null,消费方(全是 ?. 调用)渲染空。
     this.app.workspace.onLayoutReady(() => {
-      if (this.daemonIndex) void this.daemonIndex.upsertFiles([]); // 触发一次 changed→缓存预热
       if (this.settings.pagePropsEditor === 'native') void this.resolveNativePropsCtor();
       this.convertOpenMarkdownLeaves();
       // 预热块内代码块的 Monaco 单例:延后一拍再建,不与启动期的布局/索引
@@ -296,6 +316,7 @@ export default class LogseqEditorPlugin extends Plugin {
     });
 
     this.patchSetViewState();
+    phase('patches');
 
     // Logseq-format page properties (file-top `key:: value` lines) are not
     // frontmatter, so Obsidian's metadata cache never sees them. Expose them

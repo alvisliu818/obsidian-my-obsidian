@@ -1226,6 +1226,9 @@ export default class MyObsidianPlugin extends Plugin {
 	 *  - 模块自己的 addSettingTab 被截获进 capturedTabs：单 id 下模块设置页
 	 *    若照常全局注册会全部撞成宿主一个键，改由宿主设置页内嵌渲染。
 	 */
+	/** 逐模块 onload 耗时（启动性能观测，2026-11-06）。 */
+	readonly moduleInitMs: Record<string, number> = {};
+
 	private async startModule(d: ModuleDescriptor, state: ModuleState): Promise<void> {
 		const manifest = { ...this.manifest, ...d.manifest, name: d.name } as PluginManifest;
 		const inst = new d.cls(this.app as App, manifest);
@@ -1240,7 +1243,15 @@ export default class MyObsidianPlugin extends Plugin {
 		) => {
 			host.capturedTabs.set(d.id, tab);
 		};
+		// 启动性能观测（2026-11-06）：逐模块 onload 耗时——「界面出现慢」的
+		// 分段定位。全量在 host.moduleInitMs（探针可读），≥150ms 打 console.info
+		const modT0 = performance.now();
 		await inst.onload();
+		const modMs = Math.round(performance.now() - modT0);
+		this.moduleInitMs[d.id] = modMs;
+		(window as unknown as { __moduleInitMs?: Record<string, number> }).__moduleInitMs =
+			this.moduleInitMs;
+		if (modMs >= 150) console.info(`[my-obsidian] ${d.id} onload ${modMs}ms`);
 		// 1.15：Component.addChild 改为「父 _loaded 时才立即 load 子，否则挂
 		// 起」。宿主绕过 Plugin.load() 直接 onload（模块数据片遮蔽发生在
 		// onload 前），实例 _loaded 恒为 false → 构造期经 Promise.then 再

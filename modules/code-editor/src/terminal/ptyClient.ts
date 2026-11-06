@@ -189,7 +189,35 @@ function findNodeInPathEnv(): string | null {
 }
 
 /** 找系统 node.exe：where → PATH 双格式扫描 → 常见安装位置（含灵犀便携 node） */
+const NODE_PATH_CACHE_KEY = 'my-obsidian.nodePathCache';
+
+/**
+ * findNodeExe 的持久缓存包装（启动提速,2026-11-06）：GUI 启动的 Obsidian
+ * PATH 无 node,全量探测（spawn where + 候选 existsSync）每次 ~0.3-1s——
+ * 上次解析结果存 localStorage,命中且文件仍在直接返回;失效才走全量探测并回写。
+ */
 export async function findNodeExe(): Promise<string | null> {
+  try {
+    const cached = localStorage.getItem(NODE_PATH_CACHE_KEY);
+    if (cached) {
+      if (existsSync(cached)) return cached;
+      localStorage.removeItem(NODE_PATH_CACHE_KEY);
+    }
+  } catch {
+    /* localStorage 不可用则每次全量探测 */
+  }
+  const found = await probeNodeExe();
+  if (found) {
+    try {
+      localStorage.setItem(NODE_PATH_CACHE_KEY, found);
+    } catch {
+      /* 写不了就下次再探 */
+    }
+  }
+  return found;
+}
+
+async function probeNodeExe(): Promise<string | null> {
   const where = await new Promise<string>((resolve) => {
     try {
       const p = spawn('where', ['node'], { windowsHide: true });

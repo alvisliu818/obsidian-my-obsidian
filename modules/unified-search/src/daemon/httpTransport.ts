@@ -146,7 +146,9 @@ export class HttpTransport {
       if (!this.stopped) this.opts.onExit();
     });
     // 轮询 discovery+ping：新内核要覆盖写 discovery 才可发现（旧文件陈旧也算未就绪）
-    const deadline = Date.now() + (this.opts.probeTimeoutMs ?? 10_000);
+    // 30s（2026-11-06）：大索引库（主库 1.56GB）冷开 node 起进程+开库 >10s,
+// 10s 探活必超时 → 客户端整个 start 失败。UI 已不阻塞(defer),这里等就等。
+    const deadline = Date.now() + (this.opts.probeTimeoutMs ?? 30_000);
     while (Date.now() < deadline) {
       if (this.stopped) throw new Error('kernel transport disposed during start');
       if (await this.probeOnce()) {
