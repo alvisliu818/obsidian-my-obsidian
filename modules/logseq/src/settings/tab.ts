@@ -66,7 +66,7 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
   private renderBlocksSection(containerEl: HTMLElement): void {
     new Setting(containerEl)
       .setName('接管 Markdown 文件')
-      .setDesc('默认用 Logseq 式块编辑器打开所有 .md 文件。单个文件随时可以切回原生编辑器。')
+      .setDesc('默认用 MD 块编辑器打开所有 .md 文件。单个文件随时可以切回原生编辑器。')
       .addToggle((t) =>
         t.setValue(this.plugin.settings.takeOverByDefault).onChange(async (v) => {
           this.plugin.settings.takeOverByDefault = v;
@@ -578,7 +578,7 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('代码文件注释用 Logseq 编辑器编辑（可选）')
+      .setName('代码文件注释用 MD 编辑器编辑（可选）')
       .setDesc(
         '默认关闭：代码文件整台是一个 Monaco 纯代码编辑器，注释即语法高亮。' +
           '开启后，注释区（连续的整行注释，以及 /* */ 与 """ 块注释、docstring）' +
