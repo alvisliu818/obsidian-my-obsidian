@@ -58,6 +58,14 @@ export class DocumentsRepository {
    */
   private documents: Map<string, IndexedDocument> = new Map()
 
+  /**
+   * live cache 上限（LRU,2026-11-07 内存优化）：全量驻留 8.5k 文档的
+   * IndexedDocument（含全文/分词/标题）实测 ~200MB。搜索展示只按需取少量
+   * 文档，minisearch 的紧凑索引不在这里——上限 1000 保查询体验、砍常驻。
+   * 被逐出的文档在下次 getDocument 时按需重建（读盘+映射,单条毫秒级）。
+   */
+  private readonly maxLive = 1000
+
   constructor(private plugin: OmnisearchPlugin) {}
 
   /**
@@ -84,6 +92,7 @@ export class DocumentsRepository {
         return
       }
       this.documents.set(path, doc)
+      this.evictOverflow()
       this.plugin.embedsRepository.refreshEmbedsForNote(path)
     } catch (e) {
       // getAndMapIndexedDocument 抛错只剩两类，都不是「缓存损坏」：
@@ -101,13 +110,25 @@ export class DocumentsRepository {
     }
   }
 
+  private evictOverflow(): void {
+    while (this.documents.size > this.maxLive) {
+      const oldest = this.documents.keys().next().value as string | undefined
+      if (oldest === undefined) break
+      this.documents.delete(oldest)
+    }
+  }
+
   public removeDocument(path: string): void {
     this.documents.delete(path)
   }
 
   public async getDocument(path: string): Promise<IndexedDocument> {
     if (this.documents.has(path)) {
-      return this.documents.get(path)!
+      const doc = this.documents.get(path)!
+      // LRU touch：delete + re-insert 把命中的挪到队尾（Map 保插入序）
+      this.documents.delete(path)
+      this.documents.set(path, doc)
+      return doc
     }
     logVerbose('Generating IndexedDocument from', path)
     await this.addDocument(path)
