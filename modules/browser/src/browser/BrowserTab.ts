@@ -116,7 +116,7 @@ export class BrowserTab {
       },
       onExtensionRequest: (url: string) => this.ctx.extensionStartPayload(url),
       onUserScriptNavigate: (url: string) => this.ctx.onUserScriptNavigate?.(url),
-      onUserScriptRequest: (req: { rid: string; params: { method: string; url: string; headers: Record<string, string> | null; body: string | null } }) => this.ctx.onUserScriptRequest?.(req),
+      onUserScriptRequest: (req: { rid: string; params: { method: string; url: string; headers: Record<string, string> | null; body: string | null } }, webview: unknown) => this.ctx.onUserScriptRequest?.(req, webview as never),
       onContextMenu: (params: WebViewContextMenuParams) => {
         showWebViewContextMenu(params, this.wrap.getBoundingClientRect(), {
           goBack: () => this.goBack(),

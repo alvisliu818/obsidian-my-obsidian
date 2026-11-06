@@ -14,7 +14,7 @@ export interface WebviewCallbacks {
   /** The preload asks (at document_start) for extension content scripts. */
   onExtensionRequest?(url: string): { css: string[]; js: string[] };
   onUserScriptNavigate?(url: string): void;
-  onUserScriptRequest?(req: { rid: string; params: { method: string; url: string; headers: Record<string, string> | null; body: string | null } }): void;
+  onUserScriptRequest?(req: { rid: string; params: { method: string; url: string; headers: Record<string, string> | null; body: string | null } }, webview: IWebviewTag): void;
   onFindResult?(active: number, matches: number): void;
   /** Injection point for ad-filter CSS and content scripts. */
   onDomReady?(webview: IWebviewTag, url: string): void;
@@ -26,7 +26,7 @@ export function createWebview(partition: string, preloadUrl: string, userAgent: 
   wv.setAttribute("partition", partition);
   // contextIsolation=no is what lets the preload reach `require('electron')`.
   // webSecurity stays ON: disabling it breaks site CSS/CSP in ugly ways.
-  wv.setAttribute("webpreferences", "contextIsolation=no,nodeIntegrationInSubFrames=yes");
+  wv.setAttribute("webpreferences", "contextIsolation=no,nodeIntegrationInSubFrames=yes,sandbox=no");
   wv.setAttribute("allowpopups", "");
   if (preloadUrl) wv.setAttribute("preload", preloadUrl);
   if (userAgent) wv.setAttribute("useragent", userAgent);
@@ -141,13 +141,20 @@ export class WebviewController {
           /* guest gone */
         }
       }
-      // 用户脚本 GM_xmlhttpRequest 桥
-      if (e?.channel === "ob-us-request") {
-        try {
-          this.callbacks.onUserScriptRequest?.(e.args?.[0]);
-        } catch {
-          /* guest gone */
-        }
+    });
+
+    // 用户脚本 GM_xmlhttpRequest 通道：guest console 标记 → 宿主 requestUrl
+    // → executeJavaScript 送回 __obUsDeliver（webview preload 不执行,这是
+    // 唯一活的 guest↔宿主通道）
+    this.on("console-message", (e: any) => {
+      const text = String(e?.message?.message ?? e?.message ?? "");
+      const i = text.indexOf("[ob-us-request]");
+      if (i < 0) return;
+      try {
+        const payload = JSON.parse(text.slice(i + 15));
+        this.callbacks.onUserScriptRequest?.(payload, this.webview);
+      } catch {
+        /* 坏标记忽略 */
       }
     });
 

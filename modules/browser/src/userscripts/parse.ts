@@ -81,31 +81,28 @@ export function usMatch(pattern: string, url: string): boolean {
 	const p = pattern.trim();
 	if (!p) return false;
 	if (p === "*" || p === "<all_urls>") return true;
-	// Chrome match-pattern（scheme://host/path）交给扩展侧的 matchPattern；
-	// 交给它的前提是形如 scheme://…，否则按通配符处理。
-	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(p)) {
-		try {
-			// 延迟 import 会出现初始化顺序问题（extensionHost 引 GM 前奏所需
-			// 的类型），这里复制一份轻量判定即可——match-pattern 的核心就是
-			// 把 pattern 转成一个正则。
-			return patternToRegExp(p).test(url);
-		} catch {
-			return false;
-		}
-	}
 	return patternToRegExp(p).test(url);
 }
 
-function patternToRegExp(pattern: string): RegExp {
-	const esc = (s: string): string => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
-	let body = pattern;
-	// scheme 部分按字面匹配（http/https 已由调用方保证形态）
-	const m = /^([a-z][a-z0-9+.-]*):\/\/([^/]*)(\/.*)?$/i.exec(pattern);
-	if (m) {
-		const scheme = m[1].toLowerCase() === "http" ? "https?" : esc(m[1]);
-		const host = m[2] === "*" ? "[^/]*" : esc(m[2]).replace(/^\*\./, "(?:[^/]*\\.)?");
-		body = `${scheme}://${host}${esc(m[3] ?? "/").replace(/\\\*/g, ".*")}`;
-		return new RegExp(`^${body}$`, "i");
+/** glob 片段 → 正则片段：* → .*、? → .、其余元字符转义。 */
+function globPart(s: string): string {
+	let out = "";
+	for (const ch of s) {
+		if (ch === "*") out += ".*";
+		else if (ch === "?") out += ".";
+		else out += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
 	}
-	return new RegExp(`^${esc(pattern).replace(/\\\*/g, ".*").replace(/\?/g, ".")}$`, "i");
+	return out;
+}
+
+function patternToRegExp(pattern: string): RegExp {
+	// scheme 段允许 *（*:// = 任意协议）
+	const m = /^([a-z*][a-z0-9+.-]*):\/\/([^/]*)(\/.*)?$/i.exec(pattern);
+	if (m) {
+		const scheme = m[1].toLowerCase() === "http" ? "https?" : m[1] === "*" ? "[a-z][a-z0-9+.-]*" : globPart(m[1]);
+		const host = m[2] === "*" ? "[^/]*" : globPart(m[2]).replace(/^\.\*\\\./, "(?:[^/]*\\.)?");
+		const path = globPart(m[3] ?? "/");
+		return new RegExp(`^${scheme}://${host}${path}$`, "i");
+	}
+	return new RegExp(`^${globPart(pattern)}$`, "i");
 }

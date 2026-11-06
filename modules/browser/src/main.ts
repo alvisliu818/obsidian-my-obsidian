@@ -172,7 +172,12 @@ export default class BrowserPlugin extends Plugin {
         return { css: [...p.css, ...u.css], js: [...p.js, ...u.js] };
       },
       onUserScriptNavigate: (url: string) => this.openUserScriptInstall(url),
-      onUserScriptRequest: async (req: { rid: string; params: { method: string; url: string; headers: Record<string, string> | null; body: string | null } }) => {
+      onUserScriptRequest: async (req: { rid: string; params: { method: string; url: string; headers: Record<string, string> | null; body: string | null } }, webview: unknown) => {
+        const deliver = (payload: string): void => {
+          void (webview as { executeJavaScript(code: string): Promise<unknown> })
+            .executeJavaScript(`window.__obUsDeliver(${JSON.stringify(req.rid)}, ${payload})`)
+            .catch(() => undefined);
+        };
         try {
           const resp = await requestUrl({
             url: req.params.url,
@@ -181,14 +186,9 @@ export default class BrowserPlugin extends Plugin {
             body: req.params.body ?? undefined,
             throw: false,
           });
-          this.activeBrowserController()?.sendIpc("ob-us-response", {
-            rid: req.rid,
-            status: resp.status,
-            headers: resp.headers,
-            body: resp.text,
-          });
+          deliver(JSON.stringify({ status: resp.status, headers: resp.headers, body: resp.text }));
         } catch (e) {
-          this.activeBrowserController()?.sendIpc("ob-us-response", { rid: req.rid, error: String((e as Error)?.message ?? e) });
+          deliver(JSON.stringify({ error: String((e as Error)?.message ?? e) }));
         }
       },
       extensionIcons: () =>
@@ -230,15 +230,6 @@ export default class BrowserPlugin extends Plugin {
     return true;
   }
 
-  private activeBrowserController(): { sendIpc(channel: string, data: unknown): void } | null {
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_BROWSER)) {
-      const view = leaf.view as unknown as { activeTab?: () => { controller?: { sendIpc?: (c: string, d: unknown) => void } } | null };
-      const t = view.activeTab?.();
-      const c = t?.controller as { sendIpc?: (c: string, d: unknown) => void } | undefined;
-      if (c?.sendIpc) return c as { sendIpc(channel: string, data: unknown): void };
-    }
-    return null;
-  }
 
   private buildPopupLayer(): void {
     if (this.popupLayer || !this.extPreloadUrl) return;
@@ -306,6 +297,9 @@ export default class BrowserPlugin extends Plugin {
    * leaf whose view state carries the URL (restored by workspace.json).
    */
   private async openUrl(url: string, newTab = false): Promise<void> {
+    // 地址栏/编程式导航也要走 .user.js 检测——programmaticNav 会绕过
+    // will-navigate 拦截,这里是唯一能兜住全部入口的位置
+    if (this.openUserScriptInstall(url)) return;
     if (this.config.tabMode === "native") {
       if (newTab || !this.browserLeaves().length) {
         this.pendingLeafUrl = url;

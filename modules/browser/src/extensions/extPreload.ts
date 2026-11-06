@@ -9,7 +9,10 @@
  * define window.chrome for the popup.
  */
 (function () {
-  const req = (window as any).require as ((name: string) => any) | undefined;
+  // Electron 20+ 的 webview preload 默认沙箱:window.require 不存在,但沙箱
+  // 垫片在 preload 作用域提供 require（含 ipcRenderer）——读 window 会整个
+  // preload 早退,扩展注入全灭（2026-11-07 实测根因）。
+  const req = typeof require === "function" ? require : (window as any).require;
   const ipcRenderer = req?.("electron")?.ipcRenderer;
   if (!ipcRenderer) return;
 
