@@ -413,7 +413,21 @@ if (!only) {
 		}
 	};
 	const srcNode = shaOf(path.join(src, bs3Node));
-	if (srcNode !== null && srcNode === shaOf(path.join(dst, bs3Node))) {
+	// 完整性哨兵（2026-11-07）：.node 哈希一致但 bindings/file-uri-to-path 缺
+	// 入口文件 = 历史某次部署中途残缺——skip 会把残缺状态永久固化（内核每次
+	// spawn 都静默降级 node:sqlite 无 FTS5）。有缺件就不 skip,走重装补齐。
+	const sidecarComplete = (relDir) => {
+		for (const f of ["index.js", "package.json"]) {
+			if (!existsSync(path.join(dst, relDir, f))) return false;
+		}
+		return true;
+	};
+	const complete =
+		srcNode !== null &&
+		srcNode === shaOf(path.join(dst, bs3Node)) &&
+		sidecarComplete(path.join("bindings")) &&
+		sidecarComplete(path.join("file-uri-to-path"));
+	if (complete) {
 		console.log("  node_modules/better-sqlite3  (unchanged, skip)");
 	} else {
 		try {
