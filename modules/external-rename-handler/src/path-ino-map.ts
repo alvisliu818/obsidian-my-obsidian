@@ -215,7 +215,10 @@ export class PathInoMap implements Disposable {
           entries: [
             ...entries.map((entry): readonly [string, DatabaseEntry] => [PATH_PREFIX + entry.path, entry]),
             [IMPORT_MARKER, true]
-          ]
+          ],
+          // 漏传 removedKeys → kv shim 迭代 undefined 抛错,IMPORT_MARKER 永远
+          // 写不进 → 每次启动重试再失败（与 FML 同款,2026-11-07 补修）
+          removedKeys: []
         });
       }
       for (const [key, value] of await local.entries()) {

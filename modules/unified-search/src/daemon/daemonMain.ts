@@ -184,7 +184,7 @@ async function openRuntime(file: string): Promise<SqliteRuntimeLike> {
     return BetterSqliteRuntime.open(file);
   } catch (e) {
     process.stderr.write(
-      `[MyKernel] better-sqlite3 unavailable (${String(e).slice(0, 90)}), fallback node:sqlite (no FTS5)\n`,
+      `[MyKernel] better-sqlite3 unavailable (${String(e).slice(0, 900)}), fallback node:sqlite (no FTS5)\n`,
     );
     const { NodeSqliteRuntime } = (await import(
       '../../../md-editor/src/index/nodeSqlite'
