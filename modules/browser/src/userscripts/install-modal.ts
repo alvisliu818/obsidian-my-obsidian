@@ -38,6 +38,7 @@ export class InstallUserScriptModal extends Modal {
 
 		const rows: Array<[string, string]> = [
 			["名称", parsed.name],
+			["外部依赖", parsed.requires.length ? parsed.requires.length + " 个（安装时抓取）" : "无"],
 			["版本", parsed.version],
 			["作者", parsed.author || "—"],
 			["描述", parsed.description || "—"],
@@ -54,9 +55,9 @@ export class InstallUserScriptModal extends Modal {
 				b
 					.setButtonText("安装")
 					.setCta()
-					.onClick(() => {
+					.onClick(async () => {
 						try {
-							const rec = this.usHost.installFromSource(parsed!.code, this.sourceUrl);
+							const rec = await this.usHost.installFromSource(parsed!.code, this.sourceUrl);
 							new Notice(`已安装用户脚本：${rec.name}`);
 							this.close();
 							if (this.onInstalled) this.onInstalled(rec);

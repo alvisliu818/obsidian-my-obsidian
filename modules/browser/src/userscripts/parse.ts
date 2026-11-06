@@ -15,8 +15,21 @@ export interface ParsedUserScript {
 	excludeMatches: string[];
 	grants: string[];
 	runAt: "document_start" | "document_end" | "document_idle";
+	/** @require 外链库（相对地址已按来源解析为绝对地址；code 安装时填充） */
+	requires: Array<{ url: string; code?: string }>;
+	/** @noframes：只在顶层框架注入 */
+	noframes: boolean;
 	/** 完整脚本源码（含头注释——注入时头注释无害且便于导出辨识） */
 	code: string;
+}
+
+/** @require 的相对地址按来源脚本 URL 解析为绝对地址。 */
+function resolveRequireUrl(u: string, sourceUrl?: string): string {
+	try {
+		return new URL(u, sourceUrl || undefined).toString();
+	} catch {
+		return u;
+	}
 }
 
 function safeBasename(url?: string): string {
@@ -48,6 +61,7 @@ export function parseUserScript(source: string, sourceUrl?: string): ParsedUserS
 	}
 	const matches = [...list("match"), ...list("include")];
 	const runAt = first("run-at").toLowerCase();
+	const requires = list("require").map((u) => ({ url: resolveRequireUrl(u, srcUrl) }));
 	return {
 		name: first("name") || safeBasename(srcUrl) || "userscript",
 		version: first("version") || "0.0.0",
@@ -57,6 +71,8 @@ export function parseUserScript(source: string, sourceUrl?: string): ParsedUserS
 		matches: matches.length ? matches : [fallback],
 		excludeMatches: [...list("exclude"), ...list("exclude-match")],
 		grants: list("grant"),
+		requires,
+		noframes: list("noframes").length > 0,
 		runAt:
 			runAt === "document-start"
 				? "document_start"

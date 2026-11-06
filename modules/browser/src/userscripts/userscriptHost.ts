@@ -27,7 +27,20 @@ export class UserscriptHost {
 	}
 
 	/** 解析并安装（同名同 namespace 视为更新，保留启用状态）。 */
-	installFromSource(source: string, sourceUrl: string): UserScriptRecord {
+	/** @require 同步抓取（安装时一次,失败的单条容忍跳过并记录）。 */
+	private async fetchRequires(rec: UserScriptRecord): Promise<void> {
+		if (!rec.requires?.length) return;
+		for (const r of rec.requires) {
+			try {
+				const resp = await requestUrl({ url: r.url, throw: false });
+				r.code = resp.status < 400 ? resp.text : "";
+			} catch {
+				r.code = "";
+			}
+		}
+	}
+
+	async installFromSource(source: string, sourceUrl: string): Promise<UserScriptRecord> {
 		const parsed = parseUserScript(source, sourceUrl);
 		if (!parsed) throw new Error("不是有效的用户脚本（缺少 ==UserScript== 头）");
 		const rec: UserScriptRecord = {
@@ -37,6 +50,7 @@ export class UserscriptHost {
 			installedAt: Date.now(),
 			sourceUrl,
 		};
+		await this.fetchRequires(rec);
 		const data = this.getData();
 		const i = data.findIndex((r) => r.name === rec.name && (r.namespace ?? "") === (rec.namespace ?? ""));
 		if (i >= 0) data[i] = { ...rec, enabled: data[i].enabled, installedAt: data[i].installedAt };
@@ -77,6 +91,9 @@ export class UserscriptHost {
 			if (!rec.enabled) continue;
 			if (rec.runAt !== "document_start") continue;
 			if (!userScriptMatches(rec.matches, rec.excludeMatches, url)) continue;
+			for (const r of rec.requires ?? []) {
+				if (r.code) out.js.push(r.code);
+			}
 			out.js.push(withGmPrelude(rec));
 		}
 		return out;
@@ -86,6 +103,10 @@ export class UserscriptHost {
 	documentEndScripts(url: string): string[] {
 		const out: string[] = [];
 		for (const rec of this.getData()) {
+			// @require 前置（按声明顺序）
+			for (const r of rec.requires ?? []) {
+				if (r.code) out.push(r.code);
+			}
 			if (!rec.enabled) continue;
 			if (rec.runAt === "document_start") continue;
 			if (!userScriptMatches(rec.matches, rec.excludeMatches, url)) continue;

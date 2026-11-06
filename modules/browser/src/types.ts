@@ -127,6 +127,10 @@ export interface UserScriptRecord {
 	enabled: boolean;
 	installedAt: number;
 	sourceUrl?: string;
+	/** @require 外链库：安装时抓取的代码（抓取失败的单条 code 为空,注入跳过），按序前置。 */
+	requires?: Array<{ url: string; code?: string }>;
+	/** @noframes：只在顶层框架注入。 */
+	noframes?: boolean;
 }
 
 /** Persisted tab, used by the session restore feature. */
