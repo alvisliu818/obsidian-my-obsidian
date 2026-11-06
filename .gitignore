@@ -54,3 +54,14 @@ tests/e2e/_*.out
 .yarn/releases/
 # Monaco worker 构建产物（仓库根级，deploy 部署面；fixture 路径单列在上）
 monaco-workers/
+
+# 根目录一次性调试产物（探针输出/截图/堆快照/临时脚本；下划线开头 = 本地不入库）
+/_*.out
+/_*.png
+/_*.json
+/_*.py
+/_*.mjs
+/_*.cjs
+/_*.heapsnapshot
+/HOMELocal*/
+/esbuild-meta.json
