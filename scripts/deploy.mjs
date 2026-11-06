@@ -119,17 +119,17 @@ for (const f of ["main.js", "manifest.json", "styles.css"]) {
 // 漏了它们 = Monaco 布局 CSS 全不生效、worker 起不来,表现为编辑器堆叠/无高亮。
 if (!only) {
 	for (const f of ["monaco.css"]) {
-		const src = path.join(ROOT, "modules", "logseq", f);
+		const src = path.join(ROOT, "modules", "md-editor", f);
 		if (!existsSync(src)) {
-			console.error(`缺少 modules/logseq/${f} —— Monaco 样式不会生效`);
+			console.error(`缺少 modules/md-editor/${f} —— Monaco 样式不会生效`);
 			process.exit(1);
 		}
 		atomicWriteFile(src, path.join(TARGET, f));
 	}
 	{
-		const src = path.join(ROOT, "modules", "logseq", "monaco-workers");
+		const src = path.join(ROOT, "modules", "md-editor", "monaco-workers");
 		if (!existsSync(src)) {
-			console.error("缺少 modules/logseq/monaco-workers/ —— Monaco worker 起不来");
+			console.error("缺少 modules/md-editor/monaco-workers/ —— Monaco worker 起不来");
 			process.exit(1);
 		}
 		cpSync(src, path.join(TARGET, "monaco-workers"), { recursive: true });

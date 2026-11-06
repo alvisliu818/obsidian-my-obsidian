@@ -14,12 +14,12 @@
  */
 
 import { App, TAbstractFile, TFile, EventRef, Platform } from 'obsidian';
-import type { BacklinkEntry } from '../../../logseq/src/index/blockIndex';
+import type { BacklinkEntry } from '../../../md-editor/src/index/blockIndex';
 
 // 复用 BlockIndex 的公开类型，消费方零改动。
-export type { IndexedBlock, BacklinkEntry, CardEntry } from '../../../logseq/src/index/blockIndex';
-import type { CardEntry, IndexedBlock } from '../../../logseq/src/index/blockIndex';
-import type { SupertagDef } from '../../../logseq/src/features/supertags';
+export type { IndexedBlock, BacklinkEntry, CardEntry } from '../../../md-editor/src/index/blockIndex';
+import type { CardEntry, IndexedBlock } from '../../../md-editor/src/index/blockIndex';
+import type { SupertagDef } from '../../../md-editor/src/features/supertags';
 import type { KernelEvent } from './kernelApi';
 import { HttpTransport } from './httpTransport';
 

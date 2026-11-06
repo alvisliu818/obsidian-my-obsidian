@@ -75,7 +75,7 @@ export const VIEW_TYPE_CODE_FILE = "lgp-code-file";
  * Extensions this plugin claims INSIDE the vault.
  *
  * 库内与库外**同一个编辑器**(用户要求):清单 = 挂载侧按内容路由的文本
- * 扩展名(modules/logseq 的 TEXT_EXTENSIONS),只排除 Markdown 与 canvas
+ * 扩展名(modules/md-editor 的 TEXT_EXTENSIONS),只排除 Markdown 与 canvas
  * —— 它们各有自己的编辑器(块编辑器 / Obsidian 原生画布)。
  * 此前这里是一小撮「代码」扩展名,库外能混合编辑的 .json/.csv/.log/.vue/
  * .env … 在库内只能落到 Obsidian 默认查看器:同一份文件,两个编辑器。

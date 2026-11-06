@@ -27,15 +27,15 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { SqliteIndex, type SqliteFileSource } from '../../../logseq/src/index/sqliteIndex';
-import { buildFileStatements, deleteFileStatements, type Stmt } from '../../../logseq/src/index/sqliteIndex';
-import { extractFile } from '../../../logseq/src/index/fileFacts';
-import { hashText } from '../../../logseq/src/index/sqliteSchema';
-import { SCHEMA_SQL, FTS_STATEMENTS } from '../../../logseq/src/index/sqliteSchema';
+import { SqliteIndex, type SqliteFileSource } from '../../../md-editor/src/index/sqliteIndex';
+import { buildFileStatements, deleteFileStatements, type Stmt } from '../../../md-editor/src/index/sqliteIndex';
+import { extractFile } from '../../../md-editor/src/index/fileFacts';
+import { hashText } from '../../../md-editor/src/index/sqliteSchema';
+import { SCHEMA_SQL, FTS_STATEMENTS } from '../../../md-editor/src/index/sqliteSchema';
 import * as os from 'os';
 import * as crypto from 'crypto';
-import type { SqliteFileMeta } from '../../../logseq/src/index/sqliteSchema';
-import type { SqliteRuntimeLike } from '../../../logseq/src/index/sqliteRuntime';
+import type { SqliteFileMeta } from '../../../md-editor/src/index/sqliteSchema';
+import type { SqliteRuntimeLike } from '../../../md-editor/src/index/sqliteRuntime';
 import { KERNEL_PROTO, createDiscoveryIO, makeToken, parseRegistryCommand, type KernelEvent } from './kernelApi';
 import { startKernelHttpServer } from './httpServer';
 import { startKernelTray, type TrayHandle } from './kernelTray';
@@ -187,8 +187,8 @@ async function openRuntime(file: string): Promise<SqliteRuntimeLike> {
       `[MyKernel] better-sqlite3 unavailable (${String(e).slice(0, 90)}), fallback node:sqlite (no FTS5)\n`,
     );
     const { NodeSqliteRuntime } = (await import(
-      '../../../logseq/src/index/nodeSqlite'
-    )) as typeof import('../../../logseq/src/index/nodeSqlite');
+      '../../../md-editor/src/index/nodeSqlite'
+    )) as typeof import('../../../md-editor/src/index/nodeSqlite');
     return NodeSqliteRuntime.open(file);
   }
 }

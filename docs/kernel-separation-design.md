@@ -228,8 +228,8 @@ spawn），不再直接 respawn 固定命令行。
 | `modules/unified-search/src/daemon/httpServer.ts` | **新增**：node:http + SSE，绑现 `handle()` |
 | `modules/unified-search/src/daemon/daemonMain.ts` | 守护模式默认起 httpServer（`--stdio` 逃生口）；`write()` 事件改道 SSE 广播；`close`→`shutdown` |
 | `modules/unified-search/src/daemon/daemonClient.ts` | Transport 抽象：StdioTransport（现逻辑收编）+ HttpTransport（fetch/SSE + discovery）；spawn detached；dispose 不 kill |
-| `modules/logseq/src/main.ts` | `startDaemonIndex` 传参；onunload 分支按 `kernelResident` 分流（**外科手术，仅此两处**） |
-| `modules/logseq/src/settings/tab.ts` | 守护区加「常驻内核」开关 + 「停用内核」按钮；「内核托盘」开关（R2c） |
+| `modules/md-editor/src/main.ts` | `startDaemonIndex` 传参；onunload 分支按 `kernelResident` 分流（**外科手术，仅此两处**） |
+| `modules/md-editor/src/settings/tab.ts` | 守护区加「常驻内核」开关 + 「停用内核」按钮；「内核托盘」开关（R2c） |
 | `package.json` + deploy 边车 | systray2 依赖（external）+ `tray_windows_release.exe` + `assets/kernel.ico`（R2c） |
 | `esbuild.mjs` | **不动**（platform:node 自动 external node:http） |
 

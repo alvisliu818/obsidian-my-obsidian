@@ -27,8 +27,8 @@ import {
 
 import DocTreePlugin from "../modules/virtual-tree/src/main";
 import CodeEditorPlugin from "../modules/code-editor/src/main";
-import LogseqEditorPlugin from "../modules/logseq/src/main";
-import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE } from "../modules/logseq/src/views/ExternalCodeView";
+import LogseqEditorPlugin from "../modules/md-editor/src/main";
+import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE } from "../modules/md-editor/src/views/ExternalCodeView";
 import BrowserPlugin from "../modules/browser/src/main";
 import JupyterNotebookPlugin from "../modules/jupyter/src/main";
 import BreadcrumbNavPlugin from "../modules/breadcrumb/src/main";

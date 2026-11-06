@@ -295,6 +295,7 @@ export default class LogseqEditorPlugin extends Plugin {
       this.app.workspace.onLayoutReady(() => {
         void this.startDaemonIndex()
           .then((client) => {
+            this.daemonIndex = client; // 赋值不能丢——丢了消费方全断(2026-11-07 实测)
             phase('daemon');
             if (client) void client.upsertFiles([]); // 触发一次 changed→缓存预热
           })
