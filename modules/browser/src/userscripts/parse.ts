@@ -48,8 +48,9 @@ export function parseUserScript(source: string, sourceUrl?: string): ParsedUserS
 	if (!block) return null;
 	const meta: Record<string, string[]> = {};
 	for (const line of block[1].split(/\r?\n/)) {
-		const mm = /^\s*\/\/\s*@(\S+)\s+(.*)$/.exec(line);
-		if (mm) (meta[mm[1]] ??= []).push(mm[2].trim());
+		// 值可选:@noframes 这类无值键也要收录
+		const mm = /^\s*\/\/\s*@(\S+)(?:\s+(.*))?$/.exec(line);
+		if (mm) (meta[mm[1]] ??= []).push((mm[2] ?? "").trim());
 	}
 	const list = (k: string): string[] => meta[k] ?? [];
 	const first = (k: string): string => list(k)[0] ?? "";
