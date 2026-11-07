@@ -92,11 +92,14 @@ const childProcess = dynamicRequire<typeof import("node:child_process")>(
   os = dynamicRequire<typeof import("node:os")>(BUNDLE, "node:os"),
   path = dynamicRequire<typeof import("node:path")>(BUNDLE, "node:path"),
   stream = dynamicRequire<typeof import("node:stream")>(BUNDLE, "node:stream"),
-  url = dynamicRequire<typeof import("node:url")>(BUNDLE, "node:url"),
-  tmpPromise = dynamicRequire<typeof import("tmp-promise")>(
-    BUNDLE,
-    "tmp-promise",
-  );
+  url = dynamicRequire<typeof import("node:url")>(BUNDLE, "node:url");
+// tmp-promise 是懒包注册表（imports.ts BUNDLE）里唯一被顶层急取的键——
+// 顶层 dynamicRequire 在模块求值期就调工厂,早于 terminal onload 的
+// initTerminalLazy,每次启动都产出 "[terminal] lazy xterm registry used
+// before initTerminalLazy()" 未处理拒绝（2026-11-07 实测 7 条 pageerror）。
+// 挪进唯一消费点（shell 启动时,远晚于 init）。
+const tmpPromise = (): Promise<typeof import("tmp-promise")> =>
+  dynamicRequire<typeof import("tmp-promise")>(BUNDLE, "tmp-promise");
 
 export interface PausableStream {
   readonly pause: () => void;
@@ -1100,7 +1103,7 @@ export class WindowsPseudoterminal implements Pseudoterminal {
           const [childProcess2, fsPromises2, tmpPromise2] = await Promise.all([
               childProcess,
               fsPromises,
-              tmpPromise,
+              tmpPromise(),
             ]),
             inOutTmp = await tmpPromise2.file({
               discardDescriptor: true,

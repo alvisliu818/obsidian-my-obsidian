@@ -242,6 +242,18 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 		};
 	}
 
+	/**
+	 * 就地重渲染（tab 动态注册的补救，2026-11-07 用户报「设置页面有时会
+	 * 加载不全」）:宿主页 display() 一次性铺完,内层实例的 tab（「其他」区）
+	 * 在启动中后段才注册——启动窗口期打开设置就终身停在缺行状态。垫片截获
+	 * 新 tab / 启动收尾时调用;仅当设置弹窗开着且宿主页正显示时重画
+	 * （containerEl.isConnected 就是「正显示」判据,未显示等下次 display）。
+	 */
+	refreshIfVisible(): void {
+		if (!this.containerEl.isConnected) return;
+		this.display();
+	}
+
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();

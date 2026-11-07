@@ -211,6 +211,8 @@ export default class MyObsidianPlugin extends Plugin {
 	private readonly live = new Map<string, SubPluginLike>();
 	/** 模块自己的设置页（addSettingTab 被截获），由宿主设置页内嵌渲染。 */
 	private readonly capturedTabs = new Map<string, unknown>();
+	/** 新 tab 截获后的宿主页去抖重渲染（onload 垫片安装时赋值;见 intercept）。 */
+	private scheduleSettingTabRefresh?: () => void;
 
 	readonly descriptors: ModuleDescriptor[] = [
 		{
@@ -851,6 +853,19 @@ export default class MyObsidianPlugin extends Plugin {
 		};
 		if (settingApi) {
 			const hostId = this.manifest.id;
+			// 宿主页是静态渲染（display() 一次性铺完）,而 tab 注册是动态的——
+			// 内层实例（momentum 的 WorkLife 等）在启动中后段才注册,用户在
+			// 启动窗口期打开设置就终身停在缺行的页面上（实测:1.5s 开=42 条,
+			// 2.5s 开=43 条）。截获到新 tab 就去抖重渲染在显示中的宿主页。
+			let tabRefreshTimer = 0;
+			const scheduleTabRefresh = (): void => {
+				if (tabRefreshTimer) window.clearTimeout(tabRefreshTimer);
+				tabRefreshTimer = window.setTimeout(() => {
+					tabRefreshTimer = 0;
+					hostTab.refreshIfVisible();
+				}, 300);
+			};
+			this.scheduleSettingTabRefresh = scheduleTabRefresh;
 			// 统一拦截逻辑:①宿主 id 的冒名 tab(1.14 语义)②内层实例的 tab
 			// (组件树判定 + descriptor 声明的 internalTabIds,如 momentum 的
 			// WorkLife 报 my-worklife-calendar)——都截进 capturedTabs 的
@@ -862,6 +877,7 @@ export default class MyObsidianPlugin extends Plugin {
 						`inner:${this.capturedTabs.size}:${t.id ?? "unknown"}`,
 						tab,
 					);
+					scheduleTabRefresh();
 					return true;
 				}
 				const internalIds = this.collectInternalTabIds();
@@ -873,6 +889,7 @@ export default class MyObsidianPlugin extends Plugin {
 						`inner:${this.capturedTabs.size}:${t.id ?? "unknown"}`,
 						tab,
 					);
+					scheduleTabRefresh();
 					return true;
 				}
 				return false;
@@ -919,6 +936,11 @@ export default class MyObsidianPlugin extends Plugin {
 				}
 			}
 		}
+		// 启动完成:此刻起不会再有新的 descriptor 行,但内层 tab 可能仍会迟到
+		// 注册（垫片去抖兜住）。启动收尾先刷一遍在显示中的宿主页——用户在
+		// 启动窗口期打开设置的话,页面停在缺行状态直到重开（实测 1.5s 开=42
+		// 条,启动完应为 43 条）。
+		this.scheduleSettingTabRefresh?.();
 		this.registerCodeFiles();
 		// 库内代码块运行（原生编辑器 + 阅读模式）：执行层要 spawn 子进程，桌面端专属
 		if (Platform.isDesktopApp) registerNativeCodeBlockRun(this);

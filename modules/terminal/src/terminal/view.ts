@@ -94,31 +94,16 @@ import {
 import { writePromise } from "./utils.js";
 import { win32ExitCodeKey } from "./win32-doctor.js";
 
-const os = dynamicRequire<typeof import("node:os")>(BUNDLE, "node:os"),
-  xtermAddonCanvas = dynamicRequire<typeof import("@xterm/addon-canvas")>(
-    BUNDLE,
-    "@xterm/addon-canvas",
-  ),
-  xtermAddonLigatures = dynamicRequire<typeof import("@xterm/addon-ligatures")>(
-    BUNDLE,
-    "@xterm/addon-ligatures",
-  ),
-  xtermAddonSearch = dynamicRequire<typeof import("@xterm/addon-search")>(
-    BUNDLE,
-    "@xterm/addon-search",
-  ),
-  xtermAddonUnicode11 = dynamicRequire<typeof import("@xterm/addon-unicode11")>(
-    BUNDLE,
-    "@xterm/addon-unicode11",
-  ),
-  xtermAddonWebLinks = dynamicRequire<typeof import("@xterm/addon-web-links")>(
-    BUNDLE,
-    "@xterm/addon-web-links",
-  ),
-  xtermAddonWebgl = dynamicRequire<typeof import("@xterm/addon-webgl")>(
-    BUNDLE,
-    "@xterm/addon-webgl",
-  );
+const os = dynamicRequire<typeof import("node:os")>(BUNDLE, "node:os");
+// @xterm/* 附加插件是懒包注册表（imports.ts BUNDLE）里的键——顶层
+// dynamicRequire 在模块求值期就调工厂,早于 terminal onload 的
+// initTerminalLazy,每次启动 6 条 "[terminal] lazy xterm registry used
+// before initTerminalLazy()" 未处理拒绝（2026-11-07 实测）。挪进唯一
+// 消费点（终端视图挂载时,远晚于 init）;同文件 emulator.ts 的
+// dynamicRequireLazy 系列本来就是惰性的,不受影响。
+
+/** 在消费点惰性获取一个 BUNDLE 键的模块 promise。 */
+const bundleModule = <T>(key: string): Promise<T> => dynamicRequire<T>(BUNDLE, key);
 
 /** Returns the fitted spawn size, or the terminal's current size as fallback. */
 export function fittedSize(
@@ -1128,12 +1113,12 @@ export class TerminalView extends ItemView {
 
             { WebglAddon },
           ] = await Promise.all([
-            xtermAddonCanvas,
-            xtermAddonLigatures,
-            xtermAddonSearch,
-            xtermAddonUnicode11,
-            xtermAddonWebLinks,
-            xtermAddonWebgl,
+            bundleModule<typeof import("@xterm/addon-canvas")>("@xterm/addon-canvas"),
+            bundleModule<typeof import("@xterm/addon-ligatures")>("@xterm/addon-ligatures"),
+            bundleModule<typeof import("@xterm/addon-search")>("@xterm/addon-search"),
+            bundleModule<typeof import("@xterm/addon-unicode11")>("@xterm/addon-unicode11"),
+            bundleModule<typeof import("@xterm/addon-web-links")>("@xterm/addon-web-links"),
+            bundleModule<typeof import("@xterm/addon-webgl")>("@xterm/addon-webgl"),
           ]),
           profileTerminalOptions =
             profile.type === "invalid"
