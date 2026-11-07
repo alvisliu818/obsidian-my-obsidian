@@ -3960,8 +3960,15 @@ body.lgp-table-editor-cw-cursor * {
   border-bottom: 1px solid var(--background-modifier-border);
   margin-bottom: 2px;
   flex-shrink: 0;
-  scrollbar-width: thin;
+  /* 顶部工具栏固定（2026-11-07 用户指定）：面板经 view-content 滚动,
+     工具栏 sticky 钉在滚动容器顶部,行从其下滚过 */
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--background-secondary);
+  scrollbar-width: none;
 }
+.logseq-mount-panel-bar::-webkit-scrollbar { display: none; }
 /* 图标按钮:clickable-icon 打底(尺寸/悬停底色随主题),opacity 悬停点亮;
    图标多了不挤压,随工具栏横向滚动 */
 .logseq-mount-panel-btn {
