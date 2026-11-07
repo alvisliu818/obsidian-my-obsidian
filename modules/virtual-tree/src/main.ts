@@ -107,24 +107,17 @@ export default class DocTreePlugin extends Plugin {
 
     // 挂载面板是单例面板，但 workspace.json 里可能残留多个叶子（守卫存在前
     // 落盘的，主库实测左侧标签组里存了 2 个；启动布局还原不经过 activatePanel
-    // 的既有叶子守卫）——每次启动原样还原，就出现多个面板。布局就绪后去重：
+    // 的既有叶子守卫）——每次启动原样还原，就出现多个面板。
     // 统一面板纪律（2026-11-07）：虚拟 explorer 叶子（「文件」）已含库树+全部
-    // 挂载——独立「外部挂载」面板与之完全重复（用户实报「文件和外部挂载面板
-    // 一起出现了」）。在位时全数摘除；接管关闭时退回「保留第一个」。
+    // 挂载——独立「外部挂载」面板与之完全重复。执法升级（用户复现「又同时
+    // 出现了」）：清理原来只在启动期跑两遍,设置开关现场开启/后续任何路径
+    // 建出的独立面板永远没人收——升为 enforceUnifiedPanel()（见其注释），
+    // 启动期 + 布局变化（去抖）持续执法。
     // 必须挂 onLayoutReady：onload 阶段布局尚未还原，getLeavesOfType 看不到
     // 存量叶子。另挂一遍 3s 延迟兜底：Obsidian 自动补建 explorer 叶子的时机
     // 可能晚于 layoutReady。
     const dedupeMountPanels = (): void => {
-      const embedded = this.app.workspace
-        .getLeavesOfType("file-explorer")
-        .some((l) => l.view instanceof MountPanelView);
-      const standalone = this.app.workspace.getLeavesOfType(VIEW_TYPE_MOUNT_PANEL);
-      if (embedded) {
-        // 统一面板在位：独立「外部挂载」面板全数摘除（内容重复）
-        for (const leaf of standalone) leaf.detach();
-      } else {
-        for (const leaf of standalone.slice(1)) leaf.detach();
-      }
+      void this.enforceUnifiedPanel();
     };
     // 布局还原后：把非虚拟的核心 explorer 叶子现场换成虚拟视图。app 启动期
     // 核心 file-explorer 叶子已用核心工厂实例化,布局还原时类型未变被原样
@@ -147,6 +140,19 @@ export default class DocTreePlugin extends Plugin {
       void unifyExplorerLeaves().then(() => dedupeMountPanels());
       window.setTimeout(() => void unifyExplorerLeaves().then(() => dedupeMountPanels()), 3000);
     });
+    // 布局变化持续执法（去抖 400ms）：独立面板被任何路径（设置开关现场
+    // 开启、activatePanel 兜底、残留 workspace 还原时序）建出来都能被收掉。
+    let layoutEnforceTimer = 0;
+    this.registerEvent(
+      this.app.workspace.on("layout-change", () => {
+        if (layoutEnforceTimer) window.clearTimeout(layoutEnforceTimer);
+        layoutEnforceTimer = window.setTimeout(() => {
+          layoutEnforceTimer = 0;
+          if (!this.settings.vaultVirtualExplorer) return;
+          void this.enforceUnifiedPanel();
+        }, 400);
+      }),
+    );
 
     // 虚拟文件浏览器接管（2026-11-05）：必须在布局恢复之前注册好——社区
     // 插件先于 workspace 布局还原加载，所以侧栏叶子会直接实例化虚拟视图，
@@ -422,6 +428,44 @@ export default class DocTreePlugin extends Plugin {
   }
 
   /**
+   * 统一面板纪律执法（接管开启时）。三种态势：
+   *  - 统一叶子在位 → 独立「外部挂载」面板全数摘除（内容完全重复）。
+   *  - 统一叶子不在位但有独立面板 → 第一只**就地转正**（setViewState 换成
+   *    file-explorer，注册表工厂实例化虚拟视图，侧栏位置/弹出窗口全保留），
+   *    其余摘除。此前只在启动期清两遍,设置开关现场开启（用户 2026-11-07
+   *    实测复现「文件和外部挂载面板又同时出现了」：e2e 库开关 None→true,
+   *    applyVaultExplorerSetting 只换血 explorer、从不清场存量独立面板）
+   *    或后期任何路径建出的独立面板永远没人收。
+   *  - 什么都没有 → 不动（Obsidian 按需自建 explorer）。
+   * 接管安装失败（vaultExplorer 为空）时不动独立面板:转正会落回核心
+   * explorer 工厂,用户反而把仅剩的面板丢掉。
+   * 自身幂等,收敛后重复执行是空转；detach/转正触发的 layout-change 由
+   * 调用侧去抖,不会形成风暴。
+   */
+  enforceUnifiedPanel(): void {
+    const standalone = this.app.workspace.getLeavesOfType(VIEW_TYPE_MOUNT_PANEL);
+    if (standalone.length === 0) return;
+    // 接管关闭：统一面板不存在,独立面板就是正主——只做遗留重复清理
+    // （workspace.json 守卫存在前落盘的多只,保留第一只）。
+    if (!this.settings.vaultVirtualExplorer) {
+      for (const leaf of standalone.slice(1)) leaf.detach();
+      return;
+    }
+    const unified = this.app.workspace
+      .getLeavesOfType("file-explorer")
+      .filter((l) => l.view instanceof MountPanelView);
+    if (unified.length > 0) {
+      for (const leaf of standalone) leaf.detach();
+      return;
+    }
+    if (!this.vaultExplorer) return;
+    for (const leaf of standalone.slice(1)) leaf.detach();
+    void standalone[0]
+      .setViewState({ type: "file-explorer" })
+      .catch((err: unknown) => console.warn("[virtual-tree] standalone panel convert failed", err));
+  }
+
+  /**
    * 设置页开关实时生效：开 = 现场接管（已存在的核心叶子换成虚拟视图），
    * 关 = 还原核心构造器并把活叶子换回核心视图。
    */
@@ -434,6 +478,8 @@ export default class DocTreePlugin extends Plugin {
           .setViewState({ type: 'file-explorer', state: (leaf.view as unknown as { getState?: () => Record<string, unknown> }).getState?.() ?? {} })
           .catch((err: unknown) => console.warn('[doc-tree] explorer leaf swap failed', err));
       }
+      // 现场开启时清场存量独立面板（用户实测复现的并存场景）。
+      this.enforceUnifiedPanel();
     } else if (!this.settings.vaultVirtualExplorer && this.vaultExplorer) {
       const handle = this.vaultExplorer;
       this.vaultExplorer = null;
