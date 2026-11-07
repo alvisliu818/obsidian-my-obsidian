@@ -244,7 +244,10 @@ export class MountPanelView extends ItemView {
       ? compileFilter({ include: mount.include, exclude: mount.exclude })
       : compileFilter(EMPTY_FILTER);
     const state: MountState = {
-      open: cached?.open ?? new Set<string>(['']),
+      // 新挂载默认**收起**（用户 2026-11-07 实报「添加挂载项还是会自动展开」
+      // 两次）：挂完自动摊开一棵树是噪声,想看内容点一下就行。此前默认
+      // 展开（「刚挂载文件夹的人想看看里面有什么」的旧假设被用户推翻）。
+      open: cached?.open ?? new Set<string>(),
       tree: [],
       loaded: new Set<string>(),
       truncated: false,
@@ -1173,6 +1176,11 @@ export class MountPanelView extends ItemView {
    * orderedLevel 对空 children 也能返回它名下的挂载头。
    */
   private flattenHost(host: ExternalMount, st: MountState, chain: Set<string>, out: FlattenRow[], baseDepth: number): void {
+    // 单文件挂载：树=[文件自己]，头行就是文件——根层再把文件节点渲染成
+    // 子行 = 头行下又出现一个"自己"（用户实报「子Root又出现」；点它路径
+    // 拼成 ROOT.md/ROOT.md 报「文件不存在」）。根层的文件节点跳过，只渲染
+    // orderedLevel 织入的嵌套挂载头/虚拟子笔记。
+    const skipRootNode = st.tree.length === 1 && !st.tree[0].isDir;
     const walkLevel = (parentRel: string, children: MountNode[], depth: number): void => {
       for (const e of this.orderedLevel(host.id, parentRel, children)) {
         if (e.kind === 'mount') {
@@ -1180,6 +1188,7 @@ export class MountPanelView extends ItemView {
           continue;
         }
         const n = e.node;
+        if (skipRootNode && parentRel === '' && n === st.tree[0]) continue;
         out.push({ kind: 'node', node: n, mount: host, state: st, depth });
         if (st.open.has(n.rel)) walkLevel(n.rel, n.children, depth + 1);
       }
