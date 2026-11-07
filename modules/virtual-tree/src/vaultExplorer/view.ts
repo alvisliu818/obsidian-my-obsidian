@@ -371,6 +371,8 @@ export class VaultExplorerView extends ItemView {
 	private async openRow(row: VxRow): Promise<void> {
 		const file = this.app.vault.getAbstractFileByPath(row.path);
 		if (!(file instanceof TFile)) return;
+		// 同文件已开 → 聚焦既有标签（2026-11-07 用户报:重复点击堆叠新标签）
+		if (this.plugin.focusIfOpen(file)) return;
 		const leaf = this.app.workspace.getLeaf(false);
 		await leaf.openFile(file);
 		// 打开后聚焦（2026-11-07 用户报）：焦点留在侧栏的话编辑器没有光标

@@ -723,6 +723,21 @@ export default class DocTreePlugin extends Plugin {
     }, Math.max(5, interval) * 1000);
   }
 
+  /**
+   * 同文件已打开的叶子 → 聚焦它并返回 true（原生 explorer 语义:重复点击
+   * 聚焦既有标签,不堆叠）。2026-11-07 用户报:点同一个文件会开新标签页。
+   */
+  focusIfOpen(file: TFile): boolean {
+    let target: WorkspaceLeaf | null = null;
+    this.app.workspace.iterateAllLeaves((l) => {
+      if (target) return;
+      if (l.getViewState().state?.file === file.path) target = l;
+    });
+    if (!target) return false;
+    this.app.workspace.setActiveLeaf(target, { focus: true });
+    return true;
+  }
+
   /** Reveal a sidebar panel, creating its leaf on first use. */
   async activatePanel(viewType: string): Promise<void> {
     const { workspace } = this.app;

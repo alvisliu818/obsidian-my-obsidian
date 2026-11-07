@@ -1312,6 +1312,8 @@ export class MountPanelView extends ItemView {
     // 新标签）：getLeaf(false) 复用最近叶子——同文件重复点击 = 聚焦既有
     // 标签,不堆叠。externalSplitView 的 split/tab 语义只属于库外文件
     // （openExternalEntry 路径）。
+    // 同文件已开 → 聚焦既有标签（2026-11-07 用户报:重复点击堆叠新标签）
+    if (this.plugin.focusIfOpen(af)) return;
     const targetLeaf = this.app.workspace.getLeaf(false);
     const logseq = this.hostModule('logseq') as
       | {
