@@ -975,12 +975,14 @@ export class MountPanelView extends ItemView {
           this.plugin.settings.parentMountEnabled !== false &&
           vaultHasVirtualChildren(mount, '', parentPlanOf(this.app, mount.path))));
     if (isFileRoot && !fileRootHasKids) state.open.delete('');
-    const caret = head.createSpan({ cls: 'logseq-mount-caret' });
-    caret.textContent =
-      isFileRoot && !fileRootHasKids ? '' : state.open.has('') ? '▾' : '▸';
-    // 对齐:无 caret 的文件头补足 caret 位(29 = 14 gutter + 11 caret + 4 间距),
-    // 图标与同层文件夹头的图标同列;有 caret 的头行 14 起排。
-    head.style.paddingInlineStart = `${isFileRoot && !fileRootHasKids ? 29 : 14}px`;
+    // 无 caret 的文件头**不创建** caret span:.logseq-mount-caret 有固定宽度,
+    // 空 span 也占 11px,再加 29px 预留就成了双重补偿(图标被顶到 44 列,
+    // 用户实报「同级挂载没对齐」)。29 = 14 gutter + 11 caret + 4 间距,
+    // 图标与同层文件夹头的图标同列。
+    const showCaret = !(isFileRoot && !fileRootHasKids);
+    const caret = showCaret ? head.createSpan({ cls: 'logseq-mount-caret' }) : null;
+    if (caret) caret.textContent = state.open.has('') ? '▾' : '▸';
+    head.style.paddingInlineStart = `${showCaret ? 14 : 29}px`;
     // 头行也带行级身份：定位（consumePendingReveal）高亮的目标行——库内文件
     // 的定位按挂载匹配后 rel 为 ''，正落在头行上。
     head.dataset.mount = mount.id;
@@ -1024,7 +1026,7 @@ export class MountPanelView extends ItemView {
     if (fileRootHasKids) {
       // 文件根的 caret 是独立展开目标(与文件行同款):点头行=打开文件,
       // 点 caret 才展开/收起名下的嵌套挂载与虚拟子笔记。
-      caret.addEventListener('click', (ev) => {
+      caret?.addEventListener('click', (ev) => {
         ev.stopPropagation();
         if (state.open.has('')) state.open.delete('');
         else state.open.add('');
