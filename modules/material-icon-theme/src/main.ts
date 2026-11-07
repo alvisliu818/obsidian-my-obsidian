@@ -789,6 +789,21 @@ export default class MaterialFileIconsPlugin extends Plugin {
       return;
     }
     this.app.workspace.iterateAllLeaves((leaf: WorkspaceLeaf) => {
+      // 只画**主编辑区**的标签页:侧栏面板(backlink/outgoing-link/outline 等)
+      // 的 view 也带 .file(指向当前笔记),会被误贴成文件图标(用户实报:
+      // 出链/反链的侧栏标签变成 md 文件图标)。侧栏不是「编辑器标签页」。
+      if (
+        (leaf.containerEl as HTMLElement | null)?.closest?.('.mod-right-split, .mod-left-split')
+      ) {
+        // 已被误贴的侧栏标签就地还原成 Obsidian 原图标。
+        const stale = (leaf as unknown as { tabHeaderInnerIconEl?: HTMLElement }).tabHeaderInnerIconEl;
+        if (stale?.querySelector(`.${TAB_ICON_CLASS}`)) {
+          stale.empty();
+          const icon = (leaf.view as unknown as { getIcon?: () => string }).getIcon?.();
+          setIcon(stale, icon || 'file');
+        }
+        return;
+      }
       const iconEl = (leaf as unknown as { tabHeaderInnerIconEl?: HTMLElement }).tabHeaderInnerIconEl;
       if (!iconEl || !iconEl.isConnected) return;
       if (iconEl.querySelector(`.${TAB_ICON_CLASS}`)) return;

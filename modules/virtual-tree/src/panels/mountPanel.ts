@@ -939,12 +939,21 @@ export class MountPanelView extends ItemView {
     // A mounted FILE's head carries the file's own icon, not a folder's.
     const rootNode = state.tree.length === 1 ? state.tree[0] : null;
     const isFileRoot = !!rootNode && !rootNode.isDir;
-    // 单文件挂载：头行**就是**文件本身——不可展开，展开只会渲染出"自己在
-    // 自己下面"（挂 ROOT.md 后多出一行 /ROOT.md，用户实报）；点头行 = 打开
-    // 文件，与点文件行同语义（含 Ctrl/中键新标签）。
-    if (isFileRoot) state.open.delete('');
+    // 单文件挂载：头行**就是**文件本身——展开只会渲染出"自己在自己下面"
+    // （挂 ROOT.md 后多出一行 /ROOT.md，用户实报）。强制收起，**但**名下有
+    // 嵌套挂载/虚拟子笔记时例外：它们是真子项，收起就永远看不见（用户实报
+    // 「无法在文件下挂载」）——与文件行同设计：caret 独立点击负责展开，
+    // 头行点击仍 = 打开文件。
+    const fileRootHasKids =
+      isFileRoot &&
+      (this.nestedMountsOf(mount.id, '').length > 0 ||
+        (isVaultMount(mount) &&
+          this.plugin.settings.parentMountEnabled !== false &&
+          vaultHasVirtualChildren(mount, '', parentPlanOf(this.app, mount.path))));
+    if (isFileRoot && !fileRootHasKids) state.open.delete('');
     const caret = head.createSpan({ cls: 'logseq-mount-caret' });
-    caret.textContent = isFileRoot ? '' : state.open.has('') ? '▾' : '▸';
+    caret.textContent =
+      isFileRoot && !fileRootHasKids ? '' : state.open.has('') ? '▾' : '▸';
     // 头行也带行级身份：定位（consumePendingReveal）高亮的目标行——库内文件
     // 的定位按挂载匹配后 rel 为 ''，正落在头行上。
     head.dataset.mount = mount.id;
@@ -983,6 +992,16 @@ export class MountPanelView extends ItemView {
       this.currentDir = { mount, abs: mount.path, rel: '' };
       this.render();
     });
+    if (fileRootHasKids) {
+      // 文件根的 caret 是独立展开目标(与文件行同款):点头行=打开文件,
+      // 点 caret 才展开/收起名下的嵌套挂载与虚拟子笔记。
+      caret.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (state.open.has('')) state.open.delete('');
+        else state.open.add('');
+        this.render();
+      });
+    }
     // The mount's own menu: edit, unmount, rescan, pin.
     this.wireMenu(head, mount, null);
     this.wireDragReorder(section, head, mount);
