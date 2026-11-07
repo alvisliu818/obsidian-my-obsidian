@@ -144,6 +144,9 @@ export class MountPanelView extends ItemView {
   private draggedMountId: string | null = null;
   /** 待定位目标行（挂载 + 相对路径），渲染后由 consumePendingReveal 消费。 */
   private pendingReveal: { mountId: string; rel: string } | null = null;
+  /** 定位高亮目标：画笔时点应用——虚拟重绘会反复重建行元素,当场加类随旧
+   * 元素一起丢弃;按时间戳在窗口内每次 paint 重上,平滑滚动也不丢。 */
+  private revealGlow: { mountId: string; rel: string; until: number } | null = null;
   /** The ancestor that actually scrolls the panel (usually `.view-content`). */
   private scrollEl: HTMLElement | null = null;
   /** 工具栏配置(注册表 + 设置,见 features/panelToolbar.ts;渲染时懒读设置) */
@@ -483,20 +486,27 @@ export class MountPanelView extends ItemView {
       new Notice('当前没有打开的文件');
       return;
     }
-    const all = (this.plugin.settings.externalMounts ?? []).filter((m) => m.enabled !== false);
+    // 挂载清单与 render() 同源：内置库根挂载未物化时不在 externalMounts 里
+    // （合成态），漏掉它库内文件的定位永远匹配不上任何挂载。
+    const all = [
+      this.effectiveVaultRootMount(),
+      ...(this.plugin.settings.externalMounts ?? []).filter((m) => m.id !== VAULT_ROOT_MOUNT_ID),
+    ].filter((m) => m.enabled !== false);
     // 库内挂载优先：活动文件是库内文件时按库内相对路径匹配（库外挂载的
     // 绝对路径前缀匹配管不到相对路径域）。库根本身嵌在某个库外挂载里时
     // 两个域都能命中，取更具体的库内挂载。
     const activeFile = this.app.workspace.getActiveFile();
     if (activeFile) {
+      // 库根挂载（path 为 '' 的合成态）匹配所有库内文件——startsWith('/')
+      // 对空路径恒 false,库内文件的定位因此全灭（2026-11-07 用户报）
       const vm = all
         .filter(isVaultMount)
         .sort((a, b) => b.path.length - a.path.length)
-        .find((m) => activeFile.path === m.path || activeFile.path.startsWith(`${m.path}/`));
+        .find((m) => m.path === '' || activeFile.path === m.path || activeFile.path.startsWith(`${m.path}/`));
       if (vm) {
         this.revealInMount(
           vm,
-          activeFile.path === vm.path ? '' : activeFile.path.slice(vm.path.length + 1),
+          vm.path === '' ? activeFile.path : activeFile.path === vm.path ? '' : activeFile.path.slice(vm.path.length + 1),
         );
         return;
       }
@@ -531,7 +541,10 @@ export class MountPanelView extends ItemView {
    * 滚动定位。库内/库外挂载共用——loadLayer 内部按 kind 分流。
    */
   private revealInMount(mount: ExternalMount, rel: string): void {
-    const all = (this.plugin.settings.externalMounts ?? []).filter((m) => m.enabled !== false);
+    const all = [
+      this.effectiveVaultRootMount(),
+      ...(this.plugin.settings.externalMounts ?? []).filter((m) => m.id !== VAULT_ROOT_MOUNT_ID),
+    ].filter((m) => m.enabled !== false);
     // 宿主链:嵌套挂载 → … → 顶层,顺序展开头行(环被 mountsFrom 清过,但仍设防)。
     // attachTo 可能是 `hostId/rel`,归属看 hostId。
     const byId = new Map(all.map((m) => [m.id, m]));
@@ -630,21 +643,25 @@ export class MountPanelView extends ItemView {
     const pend = this.pendingReveal;
     if (!pend) return;
     const sel = `.logseq-mount-row[data-mount="${CSS.escape(pend.mountId)}"][data-rel="${CSS.escape(pend.rel)}"]`;
-    const highlight = (el: HTMLElement): void => {
-      el.addClass('is-reveal-row');
-      window.setTimeout(() => el.removeClass('is-reveal-row'), 2000);
-    };
     requestAnimationFrame(() => {
       this.pendingReveal = null;
+      // 高亮走画笔时点（revealGlow）：scrollIntoView/scrollTop 触发的虚拟
+      // 重绘会反复重建行元素,当场加类随旧元素一起丢弃（实测高亮闪失）。
+      // 窗口内每次 paint 重上,平滑滚动/慢机不丢；过期后由兜底 timeout 摘类。
+      this.revealGlow = { mountId: pend.mountId, rel: pend.rel, until: Date.now() + 2000 };
       const row = this.contentEl.querySelector(sel) as HTMLElement | null;
       if (row) {
+        row.addClass('is-reveal-row');
         row.scrollIntoView({ block: 'center' });
-        highlight(row);
-        return;
-      }
+      } else {
       // 目标行在视口带外：用固定行高算出它在滚动容器里的位置。
       // 嵌套挂载的行渲染在其顶层祖先的区段里,section 按宿主链向上找。
-      const allMounts = this.plugin.settings.externalMounts ?? [];
+      // 清单与 render() 同源（含合成库根）——否则定位到库内挂载时 byId
+      // 查不到宿主/自身,兜底滚动直接失效。
+      const allMounts = [
+        this.effectiveVaultRootMount(),
+        ...(this.plugin.settings.externalMounts ?? []).filter((m) => m.id !== VAULT_ROOT_MOUNT_ID),
+      ];
       const byId = new Map(allMounts.map((m) => [m.id, m]));
       let sectionId = pend.mountId;
       const seenIds = new Set<string>([sectionId]);
@@ -669,17 +686,14 @@ export class MountPanelView extends ItemView {
         scroller.scrollTop +
         idx * MOUNT_ROW_HEIGHT;
       scroller.scrollTop = Math.max(0, targetTop - scroller.clientHeight / 2 + MOUNT_ROW_HEIGHT / 2);
-      // 滚动触发 paint 后行才会进 DOM；rAF 一次可能还早，再给几次机会。
-      const tryHighlight = (attempt: number): void => {
-        const el = this.contentEl.querySelector(sel) as HTMLElement | null;
-        if (el) {
-          highlight(el);
-        } else if (attempt < 3) {
-          window.setTimeout(() => tryHighlight(attempt + 1), 60);
-        }
-      };
-      requestAnimationFrame(() => tryHighlight(0));
+      // 滚动触发 paint 后行进 DOM,画笔按 revealGlow 自动上高亮。
+      }
     });
+    // 过期兜底：窗口内无后续重绘时类还挂着,到点手动摘。
+    window.setTimeout(() => {
+      if (this.revealGlow && this.revealGlow.until <= Date.now()) this.revealGlow = null;
+      this.contentEl.querySelector(sel)?.removeClass('is-reveal-row');
+    }, 2100);
   }
 
   private findNode(list: MountNode[], rel: string): MountNode | null {
@@ -1046,6 +1060,11 @@ export class MountPanelView extends ItemView {
     // 行身份 = 嵌套挂载自己的 id + 空 rel(头行);定位选择器靠它唯一。
     row.dataset.mount = mount.id;
     row.dataset.rel = '';
+    // 定位高亮（画笔时点,同 renderNode）：定位到挂载根时头行也要带光。
+    const glow = this.revealGlow;
+    if (glow && mount.id === glow.mountId && glow.rel === '' && Date.now() < glow.until) {
+      row.addClass('is-reveal-row');
+    }
     // 与文件夹行同款缩进节奏(14px caret gutter + 每级 17px)。
     row.style.paddingInlineStart = `${14 + depth * 17}px`;
     const caret = row.createSpan({ cls: 'logseq-mount-caret' });
@@ -1184,6 +1203,12 @@ export class MountPanelView extends ItemView {
     // 定位与测试用：行级身份（挂载 + 相对路径）。
     row.dataset.mount = mount.id;
     row.dataset.rel = node.rel;
+    // 定位高亮（画笔时点）：定位目标行被虚拟画笔反复重建,当场加的类随旧
+    // 元素丢弃——paint 时按 revealGlow 时间戳重上,窗口内每次重建都带高亮。
+    const glow = this.revealGlow;
+    if (glow && mount.id === glow.mountId && node.rel === glow.rel && Date.now() < glow.until) {
+      row.addClass('is-reveal-row');
+    }
     // Native-explorer rhythm, pulled 10px left as a whole (user preference):
     // folder rows carry a 14px caret gutter, FILE rows the same gutter plus
     // the caret's width (11px + 4px gap). Each level shifts the row 17px; the
