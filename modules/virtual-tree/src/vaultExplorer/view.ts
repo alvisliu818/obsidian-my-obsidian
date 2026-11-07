@@ -371,7 +371,10 @@ export class VaultExplorerView extends ItemView {
 	private async openRow(row: VxRow): Promise<void> {
 		const file = this.app.vault.getAbstractFileByPath(row.path);
 		if (!(file instanceof TFile)) return;
-		await this.app.workspace.getLeaf(false).openFile(file);
+		const leaf = this.app.workspace.getLeaf(false);
+		await leaf.openFile(file);
+		// 打开后聚焦（2026-11-07 用户报）：焦点留在侧栏的话编辑器没有光标
+		this.app.workspace.setActiveLeaf(leaf, { focus: true });
 	}
 
 	// ------------------------------------------------------------------
@@ -399,7 +402,10 @@ export class VaultExplorerView extends ItemView {
 				item
 					.setTitle("在新标签页打开")
 					.setIcon("file-plus")
-					.onClick(() => void this.app.workspace.getLeaf("tab").openFile(target)),
+					.onClick(() => {
+						const leaf = this.app.workspace.getLeaf("tab");
+						void leaf.openFile(target).then(() => this.app.workspace.setActiveLeaf(leaf, { focus: true }));
+					}),
 			);
 		} else {
 			menu.addItem((item) =>

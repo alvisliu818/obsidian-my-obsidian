@@ -1318,15 +1318,19 @@ export class MountPanelView extends ItemView {
           ) => Promise<void>;
         }
       | undefined;
+    const targetLeaf = this.app.workspace.getLeaf(leaf);
     if (isMarkdownFile(af.name) && typeof logseq?.openVaultMarkdownDefault === 'function') {
       await logseq.openVaultMarkdownDefault(
-        this.app.workspace.getLeaf(leaf),
+        targetLeaf,
         af,
         this.plugin.settings.vaultMarkdownEditor === 'logseq' ? 'logseq' : 'native',
       );
+      // 打开后聚焦（2026-11-07 用户报,同 openRow）
+      this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
       return;
     }
-    await this.app.workspace.getLeaf(leaf).openFile(af);
+    await targetLeaf.openFile(af);
+    this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
   }
 
   /** 宿主插件实例上的兄弟模块（iconTheme 同款防御式取法，不静态依赖）。 */
