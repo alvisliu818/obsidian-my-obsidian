@@ -611,6 +611,11 @@ export function createEditor(
     }
     options.model = bound;
   }
+  // CJK 内容（2026-11-07 用户报）：中文 .txt 的全角标点（，：）被
+  // unicodeHighlight 标为「易混淆 ASCII」——中文语境全是误报;且快选开关
+  // 在独立 Monaco 下不生效（点击无效）。默认关歧义检查,不可见字符仍标
+  // （真风险）;调用方显式传 unicodeHighlight 时不覆盖。
+  options.unicodeHighlight = { ambiguousCharacters: false, ...(options.unicodeHighlight ?? {}) } as never;
   const editor = monaco.editor.create(container, options);
   editorScopes.set(editor, scope);
   // model 级选项(缩进/括号着色)编辑器级到不了,创建后立即套用。
@@ -845,6 +850,8 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
   // 用户设置覆盖层:block 作用域只含字体/光标/渲染/补全键,上面的锁死键
   // (行号/折叠/minimap/换行/括号色)不在覆盖表里,不会被穿透。
   Object.assign(options, buildEditorOptionOverrides('block', getEditorSettings()));
+  // CJK 内容:块内同样关歧义检查（同 createEditor 处注释,2026-11-07）
+  options.unicodeHighlight = { ambiguousCharacters: false, ...(options.unicodeHighlight ?? {}) } as never;
   const editor = monaco.editor.create(root, options);
   editorScopes.set(editor, 'block');
   // e2e/诊断句柄(与 codeBlockEdit 的 __lgEditor 同级):页面侧直接调
