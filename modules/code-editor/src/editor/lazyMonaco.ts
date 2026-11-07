@@ -31,7 +31,53 @@ export function getMonaco(): MonacoNS {
 	// nodeIntegration 按绝对路径解析插件目录下的懒包文件）。
 	// eslint-disable-next-line @typescript-eslint/no-require-imports
 	mod = require(`${pluginDir}/lazy/monaco.js`) as MonacoNS;
+	bridgeConfigurationService(mod);
 	return mod;
+}
+
+/**
+ * 配置服务 → 编辑器桥（2026-11-07，解决「快选点击无效」）。
+ *
+ * 独立 Monaco 的 StandaloneConfigurationService.updateValue 只写自己的存储
+ * 并 fire 事件——**逐文件创建的编辑器 rawOptions 不读它**（实测:服务写入
+ * allowedLocales 后编辑器 rawOptions 仍 null）→ unicode 高亮快选（VS Code 式
+ * 配置服务面）的所有开关点击无效。桥：包装服务的 updateValue，把 'editor.*'
+ * 的写入转成全部存活编辑器的 updateOptions（嵌套键拆段），快选等 VS Code 式
+ * 面板由此生效。服务为跨编辑器单例，每个实例只桥一次。
+ */
+function bridgeConfigurationService(monacoNs: MonacoNS): void {
+	const origCreate = monacoNs.editor.create;
+	monacoNs.editor.create = function (...args: Parameters<typeof origCreate>) {
+		const ed = (origCreate as (...a: unknown[]) => any)(...args) as any;
+		try {
+			const svc = ed?._configurationService;
+			if (svc && typeof svc.updateValue === 'function' && !svc.__obConfigBridged) {
+				svc.__obConfigBridged = true;
+				const origUpdate = svc.updateValue.bind(svc);
+				svc.updateValue = function (key: string, value: any, ...rest: any[]) {
+					const result = origUpdate(key, value, ...rest);
+					try {
+						if (typeof key === 'string' && key.startsWith('editor.')) {
+							const segs = key.slice('editor.'.length).split('.');
+							const patch: Record<string, unknown> = {};
+							let cur = patch;
+							for (let i = 0; i < segs.length; i++) {
+								if (i === segs.length - 1) cur[segs[i]] = value;
+								else cur = cur[segs[i]] = (cur[segs[i]] as Record<string, unknown>) ?? {};
+							}
+							for (const e2 of monacoNs.editor.getEditors()) e2.updateOptions(patch as never);
+						}
+					} catch {
+						/* 桥失败不影响原写入 */
+					}
+					return result;
+				};
+			}
+		} catch {
+			/* 私有结构变化时静默 */
+		}
+		return ed;
+	};
 }
 
 /**
