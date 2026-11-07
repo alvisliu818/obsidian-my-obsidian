@@ -11,6 +11,9 @@
  * 本工作区把每个模块配置登记为独立 project：根目录任意 `vitest run`
  * （带或不带路径过滤器）都会按各模块自己的配置跑，裸调不再是陷阱。
  * `yarn test` 脚本仍按模块 --root 隔离跑，不受影响。
+ *
+ * 注：project 显示名取自各模块 package.json 的 name（如 md-editor 已随
+ * 2026-11-07 改名同步为 md-editor）。
  */
 import { defineWorkspace } from 'vitest/config';
 
