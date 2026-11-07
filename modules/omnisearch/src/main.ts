@@ -281,7 +281,7 @@ export default class OmnisearchPlugin extends Plugin {
   /**
    * 合并新增：库外文件（虚拟文档树挂载）的索引清单。
    *
-   * 通过 logseq 模块（宿主 moduleInstance('logseq')）的全深度扫描拿文件清单，
+   * 通过 md-editor 模块（宿主 moduleInstance('md-editor')，旧名 logseq）的全深度扫描拿文件清单，
    * 转成 ext: 伪路径。logseq 模块不在（未启用）时返回空——库外支持是
    * 纯增益，缺了它 omnisearch 照常工作。
    *
@@ -290,7 +290,8 @@ export default class OmnisearchPlugin extends Plugin {
    */
   private async getExternalIndexableFiles(): Promise<Array<{ path: string; mtime: number }>> {
     try {
-      const logseq = resolveHostModule(this.app, 'logseq', 'my-obsidian-logseq') as
+      // 模块 id 2026-11-07 由 logseq 改名 md-editor;老独立版插件 id 留作软依赖回落。
+      const logseq = resolveHostModule(this.app, 'md-editor', 'logseq', 'my-obsidian-logseq') as
         | {
             listExternalSearchFiles?: () => Array<{ abs: string; name: string; mtime: number }>
             listExternalSearchFilesAsync?: () => Promise<Array<{ abs: string; name: string; mtime: number }>>

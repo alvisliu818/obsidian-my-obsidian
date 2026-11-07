@@ -218,7 +218,7 @@ export default class MyObsidianPlugin extends Plugin {
 		{
 			// 自研(2026-10-27 自 logseq 模块拆出,拆分前是该模块的挂载面):
 			// 挂载面板/库外文件系统(extFs)/库外文件打开路由/图片·视频·Office
-			// 查看器/系统「打开方式」。引导顺序必须在 logseq 之前——logseq 的
+			// 查看器/系统「打开方式」。引导顺序必须在 md-editor（旧名 logseq）之前——它的
 			// onload 通过 docTreeOf() 找到它登记库外编辑 opener(见 doc-tree
 			// 的 openers.ts);它被单独关闭时库外文件回落系统打开,库内编辑不受影响。
 			id: "virtual-tree",
@@ -233,7 +233,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// 代码执行器 + 扩展贡献桥(语法/主题/片段)。惰性初始化——首次
 			// createEditor 才落 monaco 真资源,首次 openLspDocument 才 spawn
 			// LSP 子进程(常驻内存大头,拆分动机);onunload 释放两者。视图
-			// (ExternalCodeView/hybridCodeEditor/CodeDocView)留 logseq,经静态
+			// (ExternalCodeView/hybridCodeEditor/CodeDocView)留 md-editor,经静态
 			// import 使用本模块(上层→底层)。
 			id: "code-editor",
 			name: "Code Editor",
@@ -242,9 +242,10 @@ export default class MyObsidianPlugin extends Plugin {
 			cls: CodeEditorPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
-			id: "logseq",
+			id: "md-editor",
 			// The id other modules look this one up by (jupyter reads
-			// `pythonEnvs` off it, breadcrumb reads its mount list).
+			// `pythonEnvs` off it, breadcrumb reads its mount list). 2026-11-07
+			// 由 logseq 改名——数据片迁移见 loadSettings。
 			name: "MD Editor",
 			summary: "块文档 Markdown 编辑器：折叠、缩放、块引用、任务、SQLite 索引，以及库外文件的虚拟文档树。",
 			desktopOnly: true,
@@ -1039,7 +1040,7 @@ export default class MyObsidianPlugin extends Plugin {
 	/**
 	 * 单一插件 id 时代的跨模块实例访问。旧的 my-* 插件表别名已移除：
 	 * 兄弟模块一律经由宿主实例查找——
-	 *   `app.plugins.plugins["obsidian-my-obsidian"]?.moduleInstance("logseq")`
+	 *   `app.plugins.plugins["obsidian-my-obsidian"]?.moduleInstance("md-editor")`
 	 * 外部第三方插件的 id（dataview/iconize/tasknotes…）不受影响。
 	 */
 	moduleInstance(id: string): SubPluginLike | undefined {
@@ -1067,6 +1068,12 @@ export default class MyObsidianPlugin extends Plugin {
 		if (rawModules && rawModules["doc-tree"] && !rawModules["virtual-tree"]) {
 			rawModules["virtual-tree"] = rawModules["doc-tree"];
 			delete rawModules["doc-tree"];
+		}
+		// 一次性键名迁移(2026-11-07 模块更名):logseq 数据片改键 md-editor。
+		// 同款规则:老键存在且新键空才搬,两键都在以新键为准。
+		if (rawModules && rawModules["logseq"] && !rawModules["md-editor"]) {
+			rawModules["md-editor"] = rawModules["logseq"];
+			delete rawModules["logseq"];
 		}
 		this.settings = { modules: {} };
 		for (const d of this.descriptors) {
@@ -1140,7 +1147,10 @@ export default class MyObsidianPlugin extends Plugin {
 			"videoPlayerTakeOver",
 			"openWithApps",
 		];
-		const lgData = this.settings.modules["logseq"]?.data as Record<string, unknown> | undefined;
+		// 数据片键 2026-11-07 随模块改名 logseq → md-editor;老键兜底读
+		// （loadSettings 的搬键迁移若因时序未落盘,这里仍能拿到旧片）。
+		const lgData = (this.settings.modules["md-editor"] ?? this.settings.modules["logseq"])
+			?.data as Record<string, unknown> | undefined;
 		const dtState = this.settings.modules["virtual-tree"];
 		if (!lgData || !dtState) return;
 		const target = (dtState.data ?? {}) as Record<string, unknown>;

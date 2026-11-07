@@ -84,8 +84,13 @@ export async function launchObsidian(ctx: Ctx, fixtures: Record<string, string>)
     const hostData = JSON.parse(readFileSync(hostDataPath, 'utf8')) as {
       modules?: Record<string, { data?: Record<string, unknown> }>;
     };
-    if (hostData.modules?.logseq) {
-      hostData.modules.logseq.data = { ...hostData.modules.logseq.data, ...pinned };
+    // 数据片键 2026-11-07 随模块改名 logseq → md-editor;旧库文件可能仍是
+    // 旧键（运行时迁移落盘前）,两键都兜。
+    const slice = hostData.modules?.['md-editor'] ?? hostData.modules?.logseq;
+    if (slice) {
+      slice.data = { ...slice.data, ...pinned };
+      hostData.modules!['md-editor'] = slice;
+      delete hostData.modules?.logseq;
       writeFileSync(hostDataPath, JSON.stringify(hostData, null, 2));
     }
   } catch {

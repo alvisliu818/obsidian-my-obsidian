@@ -1365,7 +1365,7 @@ export class MountPanelView extends ItemView {
     // 经它的 createNewLeaf（位置/标签组/立即切换全归它管），不强行
     // setActiveLeaf（后台开是它的「立即切换」设置项）。
     if (paneMode) {
-      const logseq = this.hostModule('logseq') as
+      const logseq = this.hostModule('md-editor') as
         | {
             openVaultMarkdownDefault?: (
               leaf: WorkspaceLeaf,
@@ -1393,7 +1393,7 @@ export class MountPanelView extends ItemView {
     // 同文件已开 → 聚焦既有标签（2026-11-07 用户报:重复点击堆叠新标签）
     if (this.plugin.focusIfOpen(af)) return;
     const targetLeaf = this.app.workspace.getLeaf(false);
-    const logseq = this.hostModule('logseq') as
+    const logseq = this.hostModule('md-editor') as
       | {
           openVaultMarkdownDefault?: (
             leaf: WorkspaceLeaf,

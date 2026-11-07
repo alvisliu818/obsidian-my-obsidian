@@ -2042,7 +2042,7 @@ export default class LogseqEditorPlugin extends Plugin {
   //
   // 库外文件的挂载面板/路由/查看器整体迁往 doc-tree 模块。这里保留的四个
   // 方法是跨模块兼容门面:omnisearch/unified-search 按 legacyId 取本模块
-  // (live.get('logseq')),renderTree 经 host.plugin 调媒体打开——调用点不动,
+  // (live.get('md-editor'),旧名 logseq),renderTree 经 host.plugin 调媒体打开——调用点不动,
   // 实现委托 docTreeOf()。doc-tree 被禁用时门面降级为 Notice/空结果。
   // ------------------------------------------------------------------
 
