@@ -1308,7 +1308,11 @@ export class MountPanelView extends ItemView {
       this.rescan(mount);
       return;
     }
-    const leaf = this.plugin.settings.externalSplitView ? 'split' : 'tab';
+    // vault 文件走原生 explorer 语义（2026-11-07 用户报:点同一个文件会开
+    // 新标签）：getLeaf(false) 复用最近叶子——同文件重复点击 = 聚焦既有
+    // 标签,不堆叠。externalSplitView 的 split/tab 语义只属于库外文件
+    // （openExternalEntry 路径）。
+    const targetLeaf = this.app.workspace.getLeaf(false);
     const logseq = this.hostModule('logseq') as
       | {
           openVaultMarkdownDefault?: (
@@ -1318,7 +1322,6 @@ export class MountPanelView extends ItemView {
           ) => Promise<void>;
         }
       | undefined;
-    const targetLeaf = this.app.workspace.getLeaf(leaf);
     if (isMarkdownFile(af.name) && typeof logseq?.openVaultMarkdownDefault === 'function') {
       await logseq.openVaultMarkdownDefault(
         targetLeaf,
