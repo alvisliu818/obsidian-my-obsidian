@@ -60070,6 +60070,10 @@ div.SC-modal-output a.SC-icon-terminate-process { /* For terminator icons in Out
     overscroll-behavior: contain;
     /* 滚动条不显示（2026-11-07 用户指定）：滚轮/触控板滚动保留,滚动条视觉隐藏 */
     scrollbar-width: none;
+    /* 顶部起排（2026-11-07 用户指定）：原生 justify center 在内容溢出时
+       两头裁切（上端顶进标题栏被遮挡+顶部空位）——flex-start 从顶部排,
+       溢出只向底部,可滚可达 */
+    justify-content: flex-start !important;
   }
   .workspace-ribbon.mod-primary.side-dock-ribbon .side-dock-actions::-webkit-scrollbar {
     width: 0; height: 0; display: none;
