@@ -774,10 +774,24 @@ export default class DocTreePlugin extends Plugin {
    * 聚焦既有标签,不堆叠）。2026-11-07 用户报:点同一个文件会开新标签页。
    */
   focusIfOpen(file: TFile): boolean {
+    // 只认**展示文件内容**的叶子（markdown + 自研文件视图）。弱匹配
+    // state.file 会命中反链/出链面板——它们的 state.file 恒等于当前笔记,
+    // setActiveLeaf 落在侧栏上,文件永远不开（用户实报:点击挂载的 ROOT.md
+    // 毫无反应,当时 ROOT.md 恰是最近活动笔记,反链面板正指着它）。
+    const fileViews: ReadonlySet<string> = new Set([
+      'markdown',
+      'external-block',
+      'external-code',
+      'external-file',
+      'code-doc',
+    ]);
     let target: WorkspaceLeaf | null = null;
     this.app.workspace.iterateAllLeaves((l) => {
       if (target) return;
-      if (l.getViewState().state?.file === file.path) target = l;
+      const vs = l.getViewState();
+      if (vs.state?.file !== file.path) return;
+      if (!fileViews.has(vs.type)) return;
+      target = l;
     });
     if (!target) return false;
     this.app.workspace.setActiveLeaf(target, { focus: true });
