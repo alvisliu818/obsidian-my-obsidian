@@ -213,7 +213,11 @@ export class MountPanelView extends ItemView {
     const mounts = this.plugin.settings.externalMounts ?? [];
     const alive = new Set(mounts.map((m) => m.id));
     for (const id of [...this.states.keys()]) {
-      if (!alive.has(id)) this.states.delete(id);
+      if (!alive.has(id)) {
+        this.states.delete(id);
+        // 挂载已卸载:持久化展开态一并剪掉(下次 render 的去抖回写落盘)。
+        delete this.plugin.settings.mountOpenState?.[id];
+      }
     }
     for (const m of mounts) {
       const st = this.scan(m, true);
@@ -247,7 +251,8 @@ export class MountPanelView extends ItemView {
       // 新挂载默认**收起**（用户 2026-11-07 实报「添加挂载项还是会自动展开」
       // 两次）：挂完自动摊开一棵树是噪声,想看内容点一下就行。此前默认
       // 展开（「刚挂载文件夹的人想看看里面有什么」的旧假设被用户推翻）。
-      open: cached?.open ?? new Set<string>(),
+      // 无缓存时按持久化的展开态恢复（重启后层级不再全收起）。
+      open: cached?.open ?? new Set<string>(this.plugin.settings.mountOpenState?.[mount.id] ?? []),
       tree: [],
       loaded: new Set<string>(),
       truncated: false,
@@ -852,6 +857,22 @@ export class MountPanelView extends ItemView {
     // Repaint with the final DOM in place — geometry measured mid-build can
     // be stale, and the scroll position may have been reset by the rebuild.
     for (const paint of this.rowPainters) paint();
+    // 展开态持久化(去抖):每次渲染(含所有展开/收起切换)后序列化当前
+    // states,重启后由 scan() 恢复。
+    this.persistOpenStates();
+  }
+
+  /** 展开态去抖回写 settings(800ms);render() 每次都会调,幂等。 */
+  private openStateSaveTimer = 0;
+  private persistOpenStates(): void {
+    if (this.openStateSaveTimer) window.clearTimeout(this.openStateSaveTimer);
+    this.openStateSaveTimer = window.setTimeout(() => {
+      this.openStateSaveTimer = 0;
+      const rec: Record<string, string[]> = {};
+      for (const [id, st] of this.states) rec[id] = [...st.open].sort();
+      this.plugin.settings.mountOpenState = rec;
+      void this.plugin.saveSettings();
+    }, 800);
   }
 
   // ------------------------------------------------------------------
@@ -965,14 +986,16 @@ export class MountPanelView extends ItemView {
     if (glow && mount.id === glow.mountId && glow.rel === '' && Date.now() < glow.until) {
       head.addClass('is-reveal-row');
     }
+    // 图标按挂载**真实路径**解析:label 可自定义(不含扩展名),按 label 匹配
+    // 主题规则会落空成通用文件图标。文件挂载传路径,文件夹挂载照旧按名匹配。
     head.appendChild(
       iconForEntry(this.plugin.app, {
         name: headLabel,
         isDir: rootNode ? rootNode.isDir : true,
         mountPath: mount.path,
-        rel: '',
+        rel: isFileRoot ? mount.path : '',
         collapsed: !state.open.has(''),
-        fallback: '📁',
+        fallback: isFileRoot ? '📄' : '📁',
       }),
     );
     head.createSpan({ cls: 'logseq-mount-name', text: headLabel });
@@ -1105,7 +1128,22 @@ export class MountPanelView extends ItemView {
   private renderMountHeadRow(parent: HTMLElement, mount: ExternalMount, depth: number): void {
     const st = this.states.get(mount.id) ?? this.scan(mount);
     const isOpen = st.open.has('');
-    const row = parent.createDiv({ cls: 'logseq-mount-row is-dir is-nested-mount' });
+    // 嵌套挂载头行 = 顶层挂载头行的行内版:**文件挂载头行就是文件本身**——
+    // 文件图标、点头行打开(含修饰键),有子项时 caret 独立点击展开;文件夹
+    // 挂载照旧(文件夹图标,点头行展开/收起)。此前一律 is-dir+📁,文件挂载
+    // 被画成文件夹(用户实报「挂载的文件变成文件夹了」)。
+    const rootNode = st.tree.length === 1 ? st.tree[0] : null;
+    const isFileRoot = !!rootNode && !rootNode.isDir;
+    const hasKids =
+      this.nestedMountsOf(mount.id, '').length > 0 ||
+      (isVaultMount(mount) &&
+        this.plugin.settings.parentMountEnabled !== false &&
+        vaultHasVirtualChildren(mount, '', parentPlanOf(this.app, mount.path)));
+    if (isFileRoot && !hasKids) st.open.delete('');
+    const showCaret = !isFileRoot || hasKids;
+    const row = parent.createDiv({
+      cls: 'logseq-mount-row ' + (isFileRoot ? 'is-file' : 'is-dir') + ' is-nested-mount',
+    });
     // 行身份 = 嵌套挂载自己的 id + 空 rel(头行);定位选择器靠它唯一。
     row.dataset.mount = mount.id;
     row.dataset.rel = '';
@@ -1116,20 +1154,38 @@ export class MountPanelView extends ItemView {
     }
     // 与文件夹行同款缩进节奏(14px caret gutter + 每级 17px)。
     row.style.paddingInlineStart = `${14 + depth * 17}px`;
-    const caret = row.createSpan({ cls: 'logseq-mount-caret' });
-    caret.textContent = isOpen ? '▾' : '▸';
+    if (showCaret) {
+      const caret = row.createSpan({ cls: 'logseq-mount-caret' + (isFileRoot ? ' logseq-mount-caret-file' : '') });
+      caret.textContent = isOpen ? '▾' : '▸';
+      if (isFileRoot) {
+        caret.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          if (st.open.has('')) st.open.delete('');
+          else st.open.add('');
+          this.render();
+        });
+      }
+    }
+    // 图标按挂载真实路径解析(同顶层头行;label 不含扩展名时主题匹配落空)。
     row.appendChild(
       iconForEntry(this.plugin.app, {
         name: mountDisplayName(mount),
-        isDir: true,
+        isDir: !isFileRoot,
         mountPath: mount.path,
-        rel: '',
+        rel: isFileRoot ? mount.path : '',
         collapsed: !isOpen,
-        fallback: '📁',
+        fallback: isFileRoot ? '📄' : '📁',
       }),
     );
     row.createSpan({ cls: 'logseq-mount-name', text: mountDisplayName(mount) });
-    row.addEventListener('click', () => {
+    row.addEventListener('click', (ev) => {
+      if (isFileRoot && rootNode) {
+        // 头行即文件:点头行 = 打开(与文件行同款,含 Ctrl/中键新标签)。
+        const mode = this.modOpenMode(ev);
+        if (isVaultMount(mount)) void this.openVaultNode(mount, { ...rootNode, rel: '' }, mode);
+        else void this.plugin.openExternalEntry(mount, rootNode, { paneMode: mode });
+        return;
+      }
       if (st.open.has('')) st.open.delete('');
       else st.open.add('');
       this.render();

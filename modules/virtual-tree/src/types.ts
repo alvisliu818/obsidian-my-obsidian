@@ -337,6 +337,12 @@ export interface DocTreeSettings {
    */
   mountShowLoadedCount: boolean;
   /**
+   * 挂载树展开态持久化（mountId -> 展开的 rel 列表）。面板每次渲染去抖
+   * 回写,scan() 无缓存时按它恢复——重启后层级不再全部收起（用户 2026-11-07
+   * 实报「挂载文件,其他文件夹自动收起了」:展开态原是内存态,重启即失）。
+   */
+  mountOpenState?: Record<string, string[]>;
+  /**
    * 顶部挂载头行上的「已固定」徽标（pinned 挂载已按位置浮到顶部，徽标纯
    * 装饰）。默认关——固定的语义靠位置表达，徽标默认是冗余信息。
    */
@@ -577,6 +583,10 @@ export function docTreeSettingsFrom(raw: unknown): DocTreeSettings {
   s.mountShowRootPath = o.mountShowRootPath === true;
   s.mountDragMode = o.mountDragMode === true;
   s.mountTreeOrder = mountTreeOrderFrom(o.mountTreeOrder);
+  s.mountOpenState =
+    o.mountOpenState && typeof o.mountOpenState === 'object'
+      ? (o.mountOpenState as Record<string, string[]>)
+      : undefined;
   // 工具栏配置:结构非法/未配置时保持 undefined(= 注册表默认渲染)
   if (o.mountToolbar && typeof o.mountToolbar === 'object') {
     const tb = o.mountToolbar as { order?: unknown; hidden?: unknown };
