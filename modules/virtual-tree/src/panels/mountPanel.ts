@@ -14,7 +14,7 @@
  * that implies — backlinks, block references, search.
  */
 
-import { FileSystemAdapter, ItemView, Menu, Notice, setIcon, TFile, TFolder, type WorkspaceLeaf } from 'obsidian';
+import { FileSystemAdapter, ItemView, Menu, Notice, setIcon, TFile, TFolder, type PaneType, type WorkspaceLeaf } from 'obsidian';
 import type DocTreePlugin from '../main';
 import type { ExternalMount } from '../types';
 import {
@@ -1303,11 +1303,20 @@ export class MountPanelView extends ItemView {
         this.render();
       });
     }
-    row.addEventListener('click', () => {
+    row.addEventListener('click', (ev) => {
+      const mode = this.modOpenMode(ev);
       // 库内挂载行：走 vault 原生 openFile（反链/引用/扩展名路由全是原生
       // 行为），不进 openExternalEntry 的库外路由。
-      if (isVaultMount(mount)) void this.openVaultNode(mount, node);
-      else void this.plugin.openExternalEntry(mount, node);
+      if (isVaultMount(mount)) void this.openVaultNode(mount, node, mode);
+      else void this.plugin.openExternalEntry(mount, node, { paneMode: mode });
+    });
+    // 中键 = 新标签（原生 explorer 同款）：click 事件不含中键，走 auxclick。
+    row.addEventListener('auxclick', (ev) => {
+      if (ev.button !== 1) return;
+      ev.preventDefault();
+      const mode = this.modOpenMode(ev);
+      if (isVaultMount(mount)) void this.openVaultNode(mount, node, mode);
+      else void this.plugin.openExternalEntry(mount, node, { paneMode: mode });
     });
     this.wireMenu(row, mount, node);
     this.wireRowDrag(row, mount, node);
@@ -1325,12 +1334,56 @@ export class MountPanelView extends ItemView {
    * 覆盖（判断在 logseq 模块入口内部）。模块未启用或旧版无该入口时落回普通
    * openFile，行为与从前一致（选 logseq 时本来就照旧）。
    */
-  private async openVaultNode(mount: ExternalMount, node: MountNode): Promise<void> {
+  /**
+   * 修饰键点击（Ctrl/Cmd/中键）的打开语义。必须走 Keymap.isModEvent——
+   * open-tab-settings 模块把 modClickBehavior 的改写挂在它上面（Ctrl/Cmd/
+   * 中键 = 新标签页等，返回值可能是不透明装饰串），原生 explorer 的
+   * Ctrl+点击也是这条路；拿不到 keymap 时按 Ctrl/Cmd = 新标签兜底。
+   * 返回 false = 普通点击。
+   */
+  private modOpenMode(ev: MouseEvent): PaneType | boolean {
+    const km = (this.app as unknown as { keymap?: { isModEvent?: (e: MouseEvent) => PaneType | boolean } }).keymap;
+    if (typeof km?.isModEvent === 'function') {
+      const mode = km.isModEvent(ev);
+      // 中键事件 isModEvent 可能不认（只看修饰键）：中键本身就是新标签语义。
+      if (!mode && ev.type === 'auxclick' && ev.button === 1) return 'tab';
+      return mode;
+    }
+    return (ev.ctrlKey || ev.metaKey || (ev.type === 'auxclick' && ev.button === 1)) && 'tab';
+  }
+
+  private async openVaultNode(mount: ExternalMount, node: MountNode, paneMode: PaneType | boolean = false): Promise<void> {
     const vaultPath = vaultJoinPath(mount, node.rel);
     const af = this.app.vault.getAbstractFileByPath(vaultPath);
     if (!(af instanceof TFile)) {
       new Notice('文件不存在（可能已被删除或移动）。');
       this.rescan(mount);
+      return;
+    }
+    // 修饰键点击 = 显式新标签语义：跳过 focusIfOpen（重复与否交给
+    // open-tab-settings 的 openFile 补丁按去重设置处理），getLeaf(paneMode)
+    // 经它的 createNewLeaf（位置/标签组/立即切换全归它管），不强行
+    // setActiveLeaf（后台开是它的「立即切换」设置项）。
+    if (paneMode) {
+      const logseq = this.hostModule('logseq') as
+        | {
+            openVaultMarkdownDefault?: (
+              leaf: WorkspaceLeaf,
+              file: TFile,
+              defaultChoice: 'native' | 'logseq',
+            ) => Promise<void>;
+          }
+        | undefined;
+      const leaf = this.app.workspace.getLeaf(paneMode as PaneType);
+      if (isMarkdownFile(af.name) && typeof logseq?.openVaultMarkdownDefault === 'function') {
+        await logseq.openVaultMarkdownDefault(
+          leaf,
+          af,
+          this.plugin.settings.vaultMarkdownEditor === 'logseq' ? 'logseq' : 'native',
+        );
+        return;
+      }
+      await leaf.openFile(af);
       return;
     }
     // vault 文件走原生 explorer 语义（2026-11-07 用户报:点同一个文件会开

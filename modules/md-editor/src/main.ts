@@ -3,7 +3,7 @@
  * vault-wide block-id index, and clean uninstall (restore native views).
  */
 
-import { Menu, MarkdownView, Notice, Platform, Plugin, TAbstractFile, TFile, WorkspaceLeaf, type CachedMetadata, type ViewState } from 'obsidian';
+import { Menu, MarkdownView, Notice, Platform, Plugin, TAbstractFile, TFile, WorkspaceLeaf, type CachedMetadata, type PaneType, type ViewState } from 'obsidian';
 import { clipboard as electronClipboard } from 'electron';
 import { BlockEditorView, VIEW_TYPE_BLOCK_EDITOR } from './view/BlockEditorView';
 import { FragmentHost, type FragmentOptions } from './blocks/fragmentEditor';
@@ -238,9 +238,9 @@ export default class LogseqEditorPlugin extends Plugin {
     registerOpener({
       owner: 'logseq',
       route: 'markdown',
-      open: async (_ctx, mount, node) => {
+      open: async (_ctx, mount, node, opts) => {
         if (!isMarkdownFile(node.name)) return false;
-        return this.openInBlockEditor(mount, node);
+        return this.openInBlockEditor(mount, node, opts);
       },
     });
     registerOpener({
@@ -248,8 +248,8 @@ export default class LogseqEditorPlugin extends Plugin {
       route: 'code',
       open: async (_ctx, mount, node, opts) => {
         if (isMarkdownFile(node.name) || !isTextFileName(node.name)) return false;
-        if (!opts?.forceCodeEditor && (await this.openInCodeDocView(mount, node))) return true;
-        return this.openInCodeEditor(mount, node);
+        if (!opts?.forceCodeEditor && (await this.openInCodeDocView(mount, node, opts))) return true;
+        return this.openInCodeEditor(mount, node, opts);
       },
     });
     registerOpener({
@@ -1854,16 +1854,21 @@ export default class LogseqEditorPlugin extends Plugin {
    * (视图头部的切换按钮已按用户 2026-10-29 要求移除)。库内代码文件经
    * registerExtensions 同走本视图。
    */
-  private async openInCodeDocView(mount: ExternalMount, node: MountNode): Promise<boolean> {
+  private async openInCodeDocView(
+    mount: ExternalMount,
+    node: MountNode,
+    opts?: { paneMode?: string | boolean },
+  ): Promise<boolean> {
     if (!isTextFileName(node.name)) return false;
-    if (this.activateExistingCodeLeaf(node.abs)) return true;
+    // 修饰键点击 = 显式新标签:跳过既有叶复用。
+    if (!opts?.paneMode && this.activateExistingCodeLeaf(node.abs)) return true;
     let data: string;
     try {
       data = readExternalText(node.abs);
     } catch {
       return false; // 混合视图打不开时回落(代码编辑器/shim 会给出提示)
     }
-    const leaf = this.app.workspace.getLeaf(this.extSplitView() ? 'split' : 'tab');
+    const leaf = this.app.workspace.getLeaf((opts?.paneMode ?? (this.extSplitView() ? 'split' : 'tab')) as PaneType);
     markLeafTabIcon(leaf, { name: node.name, rel: node.rel });
     await leaf.setViewState({
       type: VIEW_TYPE_EXTERNAL_CODE,
@@ -1882,7 +1887,11 @@ export default class LogseqEditorPlugin extends Plugin {
     logOp(this, 'external.open', node.abs, 'ok', 'code-editor');
     return true;
   }
-  private async openInBlockEditor(mount: ExternalMount, node: MountNode): Promise<boolean> {
+  private async openInBlockEditor(
+    mount: ExternalMount,
+    node: MountNode,
+    opts?: { paneMode?: string | boolean },
+  ): Promise<boolean> {
     if (!isMarkdownFile(node.name)) return false;
     try {
       readExternalText(node.abs);
@@ -1909,7 +1918,7 @@ export default class LogseqEditorPlugin extends Plugin {
       // setViewState, which needs no file at all. BlockEditorView is a
       // TextFileView and cannot be mounted that way, so a thin shell hosts it
       // (see ExternalBlockView for the measurements behind this).
-      const leaf = this.app.workspace.getLeaf(this.extSplitView() ? 'split' : 'tab');
+      const leaf = this.app.workspace.getLeaf((opts?.paneMode ?? (this.extSplitView() ? 'split' : 'tab')) as PaneType);
       markLeafTabIcon(leaf, { name: node.name, rel: node.rel });
       await leaf.setViewState({
       type: VIEW_TYPE_EXTERNAL_BLOCK,
@@ -1922,7 +1931,7 @@ export default class LogseqEditorPlugin extends Plugin {
         mountPath: mount.path,
       },
     });
-    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    if (!opts?.paneMode) this.app.workspace.setActiveLeaf(leaf, { focus: true });
     this.refreshTabIcons();
     this.refreshTabIconsSoon();
     logOp(this, 'external.open', node.abs, 'ok', 'block-editor');
@@ -1943,9 +1952,14 @@ export default class LogseqEditorPlugin extends Plugin {
    * the "empty" placeholder). Rather than give up on code files, this opens them
    * in a view we own, which saves back to the original file.
    */
-  private async openInCodeEditor(mount: ExternalMount, node: MountNode): Promise<boolean> {
+  private async openInCodeEditor(
+    mount: ExternalMount,
+    node: MountNode,
+    opts?: { paneMode?: string | boolean },
+  ): Promise<boolean> {
     if (isMarkdownFile(node.name)) return false;
-    if (this.activateExistingCodeLeaf(node.abs)) return true;
+    // 修饰键点击 = 显式新标签:跳过既有叶复用。
+    if (!opts?.paneMode && this.activateExistingCodeLeaf(node.abs)) return true;
     let data: string;
     try {
       data = readExternalText(node.abs);
@@ -1956,7 +1970,7 @@ export default class LogseqEditorPlugin extends Plugin {
     // without a file — no seed needed here (measured: setViewState on a
     // TextFileView type with no TFile yields the "empty" placeholder, which is
     // why the markdown path above has to borrow a live editor).
-    const leaf = this.app.workspace.getLeaf('tab');
+    const leaf = this.app.workspace.getLeaf((opts?.paneMode ?? 'tab') as PaneType);
     markLeafTabIcon(leaf, { name: node.name, rel: node.rel });
     await leaf.setViewState({
       type: VIEW_TYPE_EXTERNAL_CODE,
@@ -1987,7 +2001,7 @@ export default class LogseqEditorPlugin extends Plugin {
   private async openExternalInShimView(
     mount: ExternalMount,
     node: MountNode,
-    opts?: { readOnly?: boolean },
+    opts?: { readOnly?: boolean; paneMode?: string | boolean },
   ): Promise<void> {
     let content: string;
     try {
@@ -2000,14 +2014,17 @@ export default class LogseqEditorPlugin extends Plugin {
       return;
     }
     // Reuse the tab already showing this file instead of stacking duplicates.
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_EXTERNAL_FILE)) {
-      const view = leaf.view as ExternalFileView | null;
-      if (view?.abs === node.abs && view.readOnly === false) {
-        this.app.workspace.setActiveLeaf(leaf, { focus: true });
-        return;
+    // 修饰键点击 = 显式新标签,跳过复用。
+    if (!opts?.paneMode) {
+      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_EXTERNAL_FILE)) {
+        const view = leaf.view as ExternalFileView | null;
+        if (view?.abs === node.abs && view.readOnly === false) {
+          this.app.workspace.setActiveLeaf(leaf, { focus: true });
+          return;
+        }
       }
     }
-    const leaf = this.app.workspace.getLeaf('tab');
+    const leaf = this.app.workspace.getLeaf((opts?.paneMode ?? 'tab') as PaneType);
     markLeafTabIcon(leaf, { name: node.name, rel: node.rel });
     await leaf.setViewState({
       type: VIEW_TYPE_EXTERNAL_FILE,

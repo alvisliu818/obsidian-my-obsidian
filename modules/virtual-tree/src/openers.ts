@@ -22,6 +22,12 @@ export type ExternalOpenOpts = {
   readOnly?: boolean;
   forceCodeEditor?: boolean;
   forceBlockEditor?: boolean;
+  /**
+   * 修饰键点击（Ctrl/Cmd/中键）的叶子语义：Keymap.isModEvent 的返回值
+   * （open-tab-settings 模块在此改写 modClickBehavior，可能是不透明的
+   * 装饰串，getLeaf 原样透传即可）。缺省 = 普通点击，按各自 split 设置。
+   */
+  paneMode?: string | boolean;
 };
 
 /** Which route an opener serves; `openExternalEntry` tries them in this order. */

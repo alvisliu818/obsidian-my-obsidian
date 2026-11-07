@@ -13,7 +13,7 @@
  * plugin table (legacy alias ids), never through static imports.
  */
 
-import { Menu, Notice, Platform, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
+import { Menu, Notice, Platform, Plugin, TFile, WorkspaceLeaf, type PaneType } from 'obsidian';
 import { startTitleRenameObserver } from './titleRename';
 import { around } from 'monkey-around';
 import { DocTreeSettingTab } from './settings/tab';
@@ -807,7 +807,7 @@ export default class DocTreePlugin extends Plugin {
    * logseq module's setViewState take-over patch explicitly leaves these alone,
    * so this really lands in the native markdown editor, not in the block editor.
    */
-  async openExternalInNativeEditor(node: MountNode): Promise<boolean> {
+  async openExternalInNativeEditor(node: MountNode, paneMode?: string | boolean): Promise<boolean> {
     if (!this.canOpenNativeExternal()) {
       new Notice('用原生编辑器打开库外文件需要 Obsidian 1.14.4+，并通过最新安装器安装。');
       return false;
@@ -818,9 +818,13 @@ export default class DocTreePlugin extends Plugin {
       new Notice('无法打开：文件不存在，或此版本不支持库外文件。');
       return false;
     }
-    const leaf = this.app.workspace.getLeaf(this.settings.externalSplitView === true ? 'split' : 'tab');
+    // paneMode（修饰键点击）优先于 split 设置；走 getLeaf 顺带经过
+    // open-tab-settings 的补丁（位置/分组/去重按它的设置）。
+    const leaf = this.app.workspace.getLeaf(
+      (paneMode ?? (this.settings.externalSplitView === true ? 'split' : 'tab')) as PaneType,
+    );
     await leaf.openFile(af);
-    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    if (!paneMode) this.app.workspace.setActiveLeaf(leaf, { focus: true });
     this.logOp('external.open', node.abs, 'ok', 'native-editor');
     return true;
   }
@@ -862,17 +866,17 @@ export default class DocTreePlugin extends Plugin {
   async openExternalEntry(
     mount: ExternalMount,
     node: MountNode,
-    opts?: { readOnly?: boolean; forceCodeEditor?: boolean; forceBlockEditor?: boolean },
+    opts?: { readOnly?: boolean; forceCodeEditor?: boolean; forceBlockEditor?: boolean; paneMode?: string | boolean },
   ): Promise<void> {
     if (node.isDir) return;
     // 媒体文件最先路由(先于 readOnly):查看器/播放器本身就是只读的,
     // 「只读打开」对二进制塞文本 shim 只会得到乱码。
     if (isImageFile(node.name)) {
-      await this.openExternalInView(VIEW_TYPE_IMAGE, { abs: node.abs, name: node.name });
+      await this.openExternalInView(VIEW_TYPE_IMAGE, { abs: node.abs, name: node.name }, opts?.paneMode);
       return;
     }
     if (isVideoFile(node.name)) {
-      await this.openExternalInView(VIEW_TYPE_VIDEO, { abs: node.abs, name: node.name });
+      await this.openExternalInView(VIEW_TYPE_VIDEO, { abs: node.abs, name: node.name }, opts?.paneMode);
       return;
     }
     // Read-only means "show me, change nothing", and it is also the fallback
@@ -888,7 +892,7 @@ export default class DocTreePlugin extends Plugin {
     // An already-linked file has a real vault path, so open that and let
     // Obsidian dispatch on the extension as it would for any vault note.
     if (this.isLinkedInto(node)) {
-      await this.app.workspace.openLinkText(linkVaultPath(safeSegment(node.name)), '', false);
+      await this.app.workspace.openLinkText(linkVaultPath(safeSegment(node.name)), '', !!opts?.paneMode);
       return;
     }
     // .ipynb 优先交给 jupyter notebook 插件（库外绝对路径 fs 直读直写）。
@@ -921,7 +925,7 @@ export default class DocTreePlugin extends Plugin {
         this.externalMarkdownChoice(node) === 'native' &&
         this.canOpenNativeExternal()
       ) {
-        if (await this.openExternalInNativeEditor(node)) return;
+        if (await this.openExternalInNativeEditor(node, opts?.paneMode)) return;
       }
       if (await runOpeners('markdown', ctx, mount, node, opts)) return;
     } else {
@@ -1032,26 +1036,34 @@ export default class DocTreePlugin extends Plugin {
    * 同一文件已开着时复用叶而不是叠标签；媒体文件没有「接管」包袱，也不进
    * setViewState 补丁的路径（ItemView 自有 state）。
    */
-  async openExternalInView(viewType: string, spec: { abs: string; name?: string; t?: number; line?: number }): Promise<void> {
+  async openExternalInView(
+    viewType: string,
+    spec: { abs: string; name?: string; t?: number; line?: number },
+    paneMode?: string | boolean,
+  ): Promise<void> {
     // t = 时间戳(秒):时间戳链接点击路由进来的,VideoView 用它 seek。
     // line = 行号:`ext:<abs>#L42` 行锚链接点击路由进来的,ExternalCodeView 用它跳转。
     const state: Record<string, unknown> = { abs: spec.abs, name: spec.name ?? '' };
     if (typeof spec.t === 'number' && Number.isFinite(spec.t)) state.t = spec.t;
     if (typeof spec.line === 'number' && Number.isFinite(spec.line)) state.line = Math.floor(spec.line);
-    // 复用同一文件的同型视图叶。
-    for (const leaf of this.app.workspace.getLeavesOfType(viewType)) {
-      const vs = leaf.getViewState().state as { abs?: string } | undefined;
-      if (vs?.abs && vs.abs.toLowerCase() === spec.abs.toLowerCase()) {
-        await leaf.setViewState({ type: viewType, state, active: true });
-        this.app.workspace.setActiveLeaf(leaf, { focus: true });
-        return;
+    // 复用同一文件的同型视图叶。修饰键点击 = 显式新标签,跳过复用。
+    if (!paneMode) {
+      for (const leaf of this.app.workspace.getLeavesOfType(viewType)) {
+        const vs = leaf.getViewState().state as { abs?: string } | undefined;
+        if (vs?.abs && vs.abs.toLowerCase() === spec.abs.toLowerCase()) {
+          await leaf.setViewState({ type: viewType, state, active: true });
+          this.app.workspace.setActiveLeaf(leaf, { focus: true });
+          return;
+        }
       }
     }
-    const leaf = this.app.workspace.getLeaf(this.settings.externalSplitView === true ? 'split' : 'tab');
+    const leaf = this.app.workspace.getLeaf(
+      (paneMode ?? (this.settings.externalSplitView === true ? 'split' : 'tab')) as PaneType,
+    );
     const name = spec.name ?? spec.abs.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? spec.abs;
     markLeafTabIcon(leaf, { name, rel: name });
     await leaf.setViewState({ type: viewType, state, active: true });
-    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    if (!paneMode) this.app.workspace.setActiveLeaf(leaf, { focus: true });
     this.refreshTabIcons();
     this.refreshTabIconsSoon();
     this.logOp('external.open', spec.abs, 'ok', viewType === VIEW_TYPE_IMAGE ? 'image-viewer' : 'video-player');
