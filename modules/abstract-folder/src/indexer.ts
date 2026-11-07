@@ -404,7 +404,10 @@ export class FolderIndexer {
       const values = extractLinkTexts(entry.frontmatter[propName]);
       for (const link of values) {
         const target = this.resolveLinkTargetForExternal(link, entry.rel, linkIndex);
-        if (!target || target === entry.abs) continue;
+        if (!target) continue;
+        // 归一化自环守卫：分隔符/大小写差异的同文件链接不得绕过
+        const norm = (p: string) => p.replace(/[\/]+/g, "/").toLowerCase();
+        if (norm(target) === norm(entry.abs)) continue;
 
         if (isParentProp) {
           relationships.definedParents.add(target);
@@ -508,7 +511,9 @@ export class FolderIndexer {
     if (cycles.length > 0) {
       const message = `Abstract Folder Plugin: ${cycles.length} circular relationship(s) detected. See logs for details.`;
       new Notice(message, 5000); // Display a concise notice for 5 seconds
-      Logger.warn("Circular relationships detected!", cycles);
+      // 环路径可读化（A → B → A）——数组折叠形式无法定位具体文件
+      const readable = cycles.map((c) => c.join(" → "));
+      Logger.warn("Circular relationships detected!", readable);
     }
   }
 
@@ -616,6 +621,9 @@ export class FolderIndexer {
   }
   
   private addRelationshipToGraphStructure(parentPath: string, childPath: string) {
+      // 图层自环守卫（2026-11-07）：自边会产生单元素环（Array(1) 告警）——
+      // 上游解析层的大小写/分隔符差异可能绕过逐案守卫,这里统一兜底
+      if (parentPath === childPath) return;
       if (!this.parentToChildren[parentPath]) {
           this.parentToChildren[parentPath] = new Set();
       }
