@@ -108,13 +108,44 @@ export default class DocTreePlugin extends Plugin {
     // 挂载面板是单例面板，但 workspace.json 里可能残留多个叶子（守卫存在前
     // 落盘的，主库实测左侧标签组里存了 2 个；启动布局还原不经过 activatePanel
     // 的既有叶子守卫）——每次启动原样还原，就出现多个面板。布局就绪后去重：
-    // 保留第一个，其余 detach。必须挂 onLayoutReady：onload 阶段布局尚未还原，
-    // getLeavesOfType 看不到存量叶子。持有多个（如弹出到独立窗口）按 bug 处理
-    // ——「多个外部挂载面板」本身就是用户报告的问题。
-    this.app.workspace.onLayoutReady(() => {
-      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_MOUNT_PANEL).slice(1)) {
-        leaf.detach();
+    // 统一面板纪律（2026-11-07）：虚拟 explorer 叶子（「文件」）已含库树+全部
+    // 挂载——独立「外部挂载」面板与之完全重复（用户实报「文件和外部挂载面板
+    // 一起出现了」）。在位时全数摘除；接管关闭时退回「保留第一个」。
+    // 必须挂 onLayoutReady：onload 阶段布局尚未还原，getLeavesOfType 看不到
+    // 存量叶子。另挂一遍 3s 延迟兜底：Obsidian 自动补建 explorer 叶子的时机
+    // 可能晚于 layoutReady。
+    const dedupeMountPanels = (): void => {
+      const embedded = this.app.workspace
+        .getLeavesOfType("file-explorer")
+        .some((l) => l.view instanceof MountPanelView);
+      const standalone = this.app.workspace.getLeavesOfType(VIEW_TYPE_MOUNT_PANEL);
+      if (embedded) {
+        // 统一面板在位：独立「外部挂载」面板全数摘除（内容重复）
+        for (const leaf of standalone) leaf.detach();
+      } else {
+        for (const leaf of standalone.slice(1)) leaf.detach();
       }
+    };
+    // 布局还原后：把非虚拟的核心 explorer 叶子现场换成虚拟视图。app 启动期
+    // 核心 file-explorer 叶子已用核心工厂实例化,布局还原时类型未变被原样
+    // 保留——install 期的 live-swap（还原前跑,当时无叶子）扑空,必须在这里
+    // 补一次有效换血,否则接管永远不上身（用户实报「文件和外部挂载面板一起
+    // 出现了」的根因）。
+    const unifyExplorerLeaves = async (): Promise<void> => {
+      for (const leaf of this.app.workspace.getLeavesOfType("file-explorer")) {
+        if (leaf.view instanceof MountPanelView) continue;
+        try {
+          const state =
+            (leaf.view as { getState?: () => Record<string, unknown> }).getState?.() ?? {};
+          await leaf.setViewState({ type: "file-explorer", state });
+        } catch (e) {
+          console.warn("[virtual-tree] explorer leaf swap failed", e);
+        }
+      }
+    };
+    this.app.workspace.onLayoutReady(() => {
+      void unifyExplorerLeaves().then(() => dedupeMountPanels());
+      window.setTimeout(() => void unifyExplorerLeaves().then(() => dedupeMountPanels()), 3000);
     });
 
     // 虚拟文件浏览器接管（2026-11-05）：必须在布局恢复之前注册好——社区
@@ -695,6 +726,15 @@ export default class DocTreePlugin extends Plugin {
   /** Reveal a sidebar panel, creating its leaf on first use. */
   async activatePanel(viewType: string): Promise<void> {
     const { workspace } = this.app;
+    // 统一面板设计：「打开挂载面板」优先唤起虚拟 explorer（「文件」，内含
+    // 全部挂载），不再另开独立面板造成双份
+    if (viewType === VIEW_TYPE_MOUNT_PANEL && this.settings.vaultVirtualExplorer) {
+      const unified = workspace.getLeavesOfType("file-explorer").find((l) => l.view instanceof MountPanelView);
+      if (unified) {
+        workspace.revealLeaf(unified);
+        return;
+      }
+    }
     const existing = workspace.getLeavesOfType(viewType)[0];
     if (existing) {
       workspace.revealLeaf(existing);
