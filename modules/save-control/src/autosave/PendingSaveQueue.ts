@@ -44,13 +44,23 @@ export class PendingSaveQueue {
   // it when the trigger was not an edit — a suppressed save(), which Obsidian
   // fires on editor blur or a view-mode switch — so merely clicking away from the
   // editor cannot postpone the write by another full delay.
-  schedule(filePath: string, view: TextFileView, fromUserEdit = false, resetDelay = true) {
+  async schedule(filePath: string, view: TextFileView, fromUserEdit = false, resetDelay = true) {
     if (!view.file) {
       return;
     }
 
     const existingPendingSave = this.pendingSavesByPath.get(filePath);
     if (existingPendingSave) {
+      // 无编辑且内容回到基线（行尾归一化比较）→ 撤条目,圆点消失
+      if (!fromUserEdit && !existingPendingSave.hadUserEdit) {
+        const viewData = view.getViewData();
+        const baseline = await this.getBaselineContent(filePath);
+        if (baseline !== null && this.normalizedEqual(viewData, baseline)) {
+          this.withdraw(filePath);
+          this.emitPendingSaveCount();
+          return;
+        }
+      }
       existingPendingSave.view = view;
       existingPendingSave.hadUserEdit ||= fromUserEdit;
 
@@ -76,6 +86,14 @@ export class PendingSaveQueue {
     // recording another note's text as this path's pending content.
     if (!this.isViewContentReliable(view)) {
       return;
+    }
+
+    // 无编辑的 blur/切换：缓冲与磁盘一致（行尾归一化比较,CRLF 文件的编辑器
+    // buffer 是 LF 规范化的）→ 无可保存内容,不调度 pending save
+    if (!fromUserEdit) {
+      const viewData = view.getViewData();
+      const baseline = await this.getBaselineContent(filePath);
+      if (baseline !== null && this.normalizedEqual(viewData, baseline)) return;
     }
 
     this.captureBaseline(filePath);
@@ -173,6 +191,14 @@ export class PendingSaveQueue {
     }
   }
 
+  private withdraw(filePath: string): void {
+    const pending = this.pendingSavesByPath.get(filePath);
+    if (!pending) return;
+    if (pending.timeoutId != null) window.clearTimeout(pending.timeoutId);
+    if (pending.ramRefreshIntervalId !== null) window.clearInterval(pending.ramRefreshIntervalId);
+    this.pendingSavesByPath.delete(filePath);
+  }
+
   clear(filePath: string) {
     const pendingSave = this.pendingSavesByPath.get(filePath);
     if (!pendingSave) {
@@ -233,6 +259,28 @@ export class PendingSaveQueue {
   }
 
   /** 第一次进入待保存队列时快照磁盘内容（异步，读到的就是本会话编辑前的字节）。 */
+  /** 行尾归一化比较（2026-11-07）：CRLF 文件的编辑器 buffer 是 LF 规范化的,
+   *  与磁盘原文逐字比较永不相等 → 未编辑文件也被判「已修改」。比较前统一行尾。 */
+  private normalizedEqual(a: string, b: string): boolean {
+    const norm = (x: string) => x.replace(/\r\n/g, "\n");
+    return norm(a) === norm(b);
+  }
+
+  private async getBaselineContent(filePath: string): Promise<string | null> {
+    this.captureBaseline(filePath);
+    const promise = this.baselines.get(filePath);
+    if (!promise) return null;
+    return await promise.catch(() => null);
+  }
+
+  /** 写回时保持文件原始行尾（2026-11-07 用户指定「行尾不要变」）：编辑器 buffer
+   *  是 LF 规范化的,CRLF 文件的持存写盘需还原 CR,否则每次保存都改行尾。 */
+  private async dataWithOriginalEndings(filePath: string, data: string): Promise<string> {
+    const baseline = await this.getBaselineContent(filePath);
+    if (baseline === null || baseline.includes("\r\n") === data.includes("\r\n")) return data;
+    return baseline.includes("\r\n") ? data.replace(/\r?\n/g, "\r\n") : data.replace(/\r?\n/g, "\n");
+  }
+
   private captureBaseline(filePath: string): void {
     if (this.baselines.has(filePath)) return;
     const file = this.app.vault.getAbstractFileByPath(filePath);
@@ -284,6 +332,7 @@ export class PendingSaveQueue {
       // Write FIRST. Only retire the entry once the bytes actually land, so the
       // status indicator never reports "saved" while changes are still pending.
       const attachedViewFilePath = pendingSave.view.file?.path;
+      const dataToWrite = await this.dataWithOriginalEndings(filePath, pendingSave.latestData);
       if (!this.shouldWriteDirectlyToVault() && attachedViewFilePath === filePath) {
         // originalSave 是 TextFileView.prototype.save 的原始实现。补丁就打在这一层：
         // MarkdownView 与块编辑器（BlockEditorView extends TextFileView）都经原型链
@@ -292,10 +341,10 @@ export class PendingSaveQueue {
       } else {
         const fileSystemAdapter = this.app.vault.adapter;
         if (fileSystemAdapter instanceof FileSystemAdapter) {
-          await fileSystemAdapter.write(filePath, pendingSave.latestData);
+          await fileSystemAdapter.write(filePath, dataToWrite);
           dlog("Pending save flushed via filesystem", filePath);
         } else {
-          await this.app.vault.modify(file, pendingSave.latestData);
+          await this.app.vault.modify(file, dataToWrite);
           dlog("Pending save flushed", filePath);
         }
       }
