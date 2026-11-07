@@ -558,8 +558,9 @@ export class MountPanelView extends ItemView {
     }
     for (const m of chain) this.scan(m).open.add('');
     const state = this.scan(mount);
-    // 单文件挂载根（库内/库外同款）：那一行的 rel 是文件名而非空串。
-    if (!rel && state.tree.length === 1 && !state.tree[0].isDir) rel = state.tree[0].rel;
+    // 单文件挂载根：头行即文件本身（不可展开,无子行）,定位目标就是头行
+    // （rel=''）——旧实现把 rel 改指文件名找子行,子行已不存在（2026-11-07
+    // 用户实报「挂载文件下面多了自身」后一并调整）。
     // parent 属性挂载的浮动笔记：真实目录列表里没有它（摘出去挂在父笔记
     // 名下），按段走 ancestors 永远走不到。改走显示父链——从链顶笔记的
     // 真实祖先逐层展开，再沿链展开每个父笔记行，最后定位它自己的 rel。
@@ -642,7 +643,9 @@ export class MountPanelView extends ItemView {
   private consumePendingReveal(): void {
     const pend = this.pendingReveal;
     if (!pend) return;
-    const sel = `.logseq-mount-row[data-mount="${CSS.escape(pend.mountId)}"][data-rel="${CSS.escape(pend.rel)}"]`;
+    // 目标行可能是文件挂载的头行（单文件挂载不可展开,头行即文件,rel=''）,
+    // 选择器一并匹配头行;文件夹挂载的头行无 data-rel,不会误中。
+    const sel = `:is(.logseq-mount-row, .logseq-mount-head)[data-mount="${CSS.escape(pend.mountId)}"][data-rel="${CSS.escape(pend.rel)}"]`;
     requestAnimationFrame(() => {
       this.pendingReveal = null;
       // 高亮走画笔时点（revealGlow）：scrollIntoView/scrollTop 触发的虚拟
@@ -772,7 +775,11 @@ export class MountPanelView extends ItemView {
     // 都听用户的；未物化用合成态，恒浮顶。
     const all = this.plugin.settings.externalMounts ?? [];
     const vaultRootMount = this.effectiveVaultRootMount();
-    const mounts = [vaultRootMount, ...all.filter((m) => m.id !== VAULT_ROOT_MOUNT_ID)]
+    // 库根已物化时听**数组序**（与普通挂载同权）——此前无条件强提首位,用户
+    // 「挂载项排到库前面」（拖拽 reorderMount 物化 + 挂载位置选「库之前」）
+    // 的结果都被这一提作废（2026-11-07 用户实报）。合成态仍恒浮顶。
+    const materializedRoot = all.some((m) => m.id === VAULT_ROOT_MOUNT_ID);
+    const mounts = (materializedRoot ? all.slice() : [vaultRootMount, ...all])
       .filter((m) => m.enabled)
       .filter((m) => {
         if (!m.attachTo) return true;
@@ -926,13 +933,26 @@ export class MountPanelView extends ItemView {
     section.dataset.mountId = mount.id;
 
     const head = section.createDiv({ cls: 'logseq-mount-head' });
-    const caret = head.createSpan({ cls: 'logseq-mount-caret' });
     const state = this.scan(mount);
-    caret.textContent = state.open.has('') ? '▾' : '▸';
     // The mount root is a folder too, so it gets the same treatment.
     const headLabel = mountDisplayName(mount);
     // A mounted FILE's head carries the file's own icon, not a folder's.
     const rootNode = state.tree.length === 1 ? state.tree[0] : null;
+    const isFileRoot = !!rootNode && !rootNode.isDir;
+    // 单文件挂载：头行**就是**文件本身——不可展开，展开只会渲染出"自己在
+    // 自己下面"（挂 ROOT.md 后多出一行 /ROOT.md，用户实报）；点头行 = 打开
+    // 文件，与点文件行同语义（含 Ctrl/中键新标签）。
+    if (isFileRoot) state.open.delete('');
+    const caret = head.createSpan({ cls: 'logseq-mount-caret' });
+    caret.textContent = isFileRoot ? '' : state.open.has('') ? '▾' : '▸';
+    // 头行也带行级身份：定位（consumePendingReveal）高亮的目标行——库内文件
+    // 的定位按挂载匹配后 rel 为 ''，正落在头行上。
+    head.dataset.mount = mount.id;
+    head.dataset.rel = '';
+    const glow = this.revealGlow;
+    if (glow && mount.id === glow.mountId && glow.rel === '' && Date.now() < glow.until) {
+      head.addClass('is-reveal-row');
+    }
     head.appendChild(
       iconForEntry(this.plugin.app, {
         name: headLabel,
@@ -949,7 +969,14 @@ export class MountPanelView extends ItemView {
     if (mount.pinned && this.plugin.settings.mountShowPinnedBadge) {
       head.createSpan({ cls: 'logseq-mount-flag is-pinned', text: '已固定' });
     }
-    head.addEventListener('click', () => {
+    head.addEventListener('click', (ev) => {
+      if (isFileRoot && rootNode) {
+        const mode = this.modOpenMode(ev);
+        // rel 传 ''：vaultJoinPath(mount, '') = mount.path（文件自身路径）。
+        if (isVaultMount(mount)) void this.openVaultNode(mount, { ...rootNode, rel: '' }, mode);
+        else void this.plugin.openExternalEntry(mount, rootNode, { paneMode: mode });
+        return;
+      }
       if (state.open.has('')) state.open.delete('');
       else state.open.add('');
       // 挂载根也是目录:点过就记为「当前目录」,工具栏的新建落在这里

@@ -427,6 +427,23 @@ export class MountPositionModal extends Modal {
     });
 
     const mounts = this.plugin.settings.externalMounts ?? [];
+    // 合成态库根挂载不在 externalMounts 里——补一行「挂到库挂载项之前」，
+    // 否则新挂载永远只能落在库树后面（用户实报）。做法：物化库根（从此
+    // 排序听数组序,不再恒浮顶——reorderMount 拖拽路径同款前置）再把新
+    // 挂载插到下标 0；库根已物化时它本就在下面列表里,无需特判。
+    if (!mounts.some((m) => m.id === VAULT_ROOT_MOUNT_ID)) {
+      const vaultName = this.plugin.app.vault.getName();
+      const row = contentEl.createDiv({ cls: 'logseq-mount-list-row' });
+      const head = row.createDiv({ cls: 'logseq-mount-list-head' });
+      head.createSpan({ cls: 'logseq-mount-list-name', text: `${vaultName}（库挂载项）` });
+      const actions = row.createDiv({ cls: 'logseq-mount-list-actions' });
+      actions
+        .createEl('button', { cls: 'mod-cta', text: `挂到「${vaultName}」之前` })
+        .addEventListener('click', () => {
+          this.plugin.materializeVaultRootMount();
+          void this.commit(0);
+        });
+    }
     mounts.forEach((m, i) => {
       const row = contentEl.createDiv({ cls: 'logseq-mount-list-row' });
       const head = row.createDiv({ cls: 'logseq-mount-list-head' });
