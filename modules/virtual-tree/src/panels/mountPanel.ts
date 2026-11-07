@@ -978,6 +978,9 @@ export class MountPanelView extends ItemView {
     const caret = head.createSpan({ cls: 'logseq-mount-caret' });
     caret.textContent =
       isFileRoot && !fileRootHasKids ? '' : state.open.has('') ? '▾' : '▸';
+    // 对齐:无 caret 的文件头补足 caret 位(29 = 14 gutter + 11 caret + 4 间距),
+    // 图标与同层文件夹头的图标同列;有 caret 的头行 14 起排。
+    head.style.paddingInlineStart = `${isFileRoot && !fileRootHasKids ? 29 : 14}px`;
     // 头行也带行级身份：定位（consumePendingReveal）高亮的目标行——库内文件
     // 的定位按挂载匹配后 rel 为 ''，正落在头行上。
     head.dataset.mount = mount.id;
@@ -1152,8 +1155,10 @@ export class MountPanelView extends ItemView {
     if (glow && mount.id === glow.mountId && glow.rel === '' && Date.now() < glow.until) {
       row.addClass('is-reveal-row');
     }
-    // 与文件夹行同款缩进节奏(14px caret gutter + 每级 17px)。
-    row.style.paddingInlineStart = `${14 + depth * 17}px`;
+    // 缩进节奏与 renderNode 同款:文件夹头 14px caret gutter(caret 11px+间距
+    // 4px),文件头 29px 预留 caret 位——两者图标才落在同一列(用户实报
+    // 「同一级的文件和文件夹没有对齐」:文件头少算 15px caret 位)。
+    row.style.paddingInlineStart = `${(isFileRoot ? 29 : 14) + depth * 17}px`;
     if (showCaret) {
       const caret = row.createSpan({ cls: 'logseq-mount-caret' + (isFileRoot ? ' logseq-mount-caret-file' : '') });
       caret.textContent = isOpen ? '▾' : '▸';

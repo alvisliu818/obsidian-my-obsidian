@@ -114,7 +114,11 @@ export function mountFrom(raw: unknown): ExternalMount | null {
   if (!raw || typeof raw !== 'object') return null;
   const m = raw as Partial<ExternalMount>;
   if (typeof m.id !== 'string' || !m.id.trim()) return null;
-  if (typeof m.path !== 'string' || !m.path.trim()) return null;
+  // 物化态库根挂载的 path 就是 ''(库根形态)——必须放行,否则每次启动解析
+  // 都把它丢掉:物化还原为合成态、恒浮顶,用户排到库前面的挂载全部回落
+  // (2026-11-07 用户实报「重新打开又变后面了」)。
+  const isVaultRoot = m.id.trim() === VAULT_ROOT_MOUNT_ID;
+  if (typeof m.path !== 'string' || (!m.path.trim() && !isVaultRoot)) return null;
   const secs = Number(m.refreshSeconds);
   // attachTo 保留三种形态:裸 hostId、hostId/子路径。自引用(宿主是自己)丢弃,
   // 其余按顶层渲染;data.json 用户可编辑,故一律容错。
@@ -124,7 +128,7 @@ export function mountFrom(raw: unknown): ExternalMount | null {
   const kind: MountKind = m.kind === 'vault' ? 'vault' : 'external';
   // vault 挂载的 path 是库内相对路径：归一分隔符与首尾斜杠；空 path 无意义。
   const path = kind === 'vault' ? vaultRelPath(m.path) : m.path.trim();
-  if (!path) return null;
+  if (!path && !isVaultRoot) return null;
   return {
     id: m.id.trim(),
     kind,
