@@ -81,7 +81,9 @@ describe('flatten — nested mounts hang on the host root', () => {
     const rows = (panel as unknown as { flatten(m: ExternalMount, s: unknown): Row[] }).flatten(mount('host'), state);
     // The nested head is emitted either way; the host's own rows are not,
     // because `walk` starts from `state.tree` and only descends what is open.
-    expect(describe2(rows)).toEqual(['HEAD:child@1', 'FILE:a.md@1']);
+    // 文件根的自节点也不再渲染(头行即文件,再渲染一行=「子Root又出现」,
+    // 2026-11-07 用户实报):文件根层级只产嵌套挂载头。
+    expect(describe2(rows)).toEqual(['HEAD:child@1']);
   });
 });
 
@@ -141,7 +143,8 @@ describe('flatten — nesting is recursive', () => {
     const state = { open: new Set(['']), tree: [node('host.md', 'host.md', false)], loaded: new Set(['']), truncated: false, scannedAt: 0 };
     const rows = (panel as unknown as { flatten(m: ExternalMount, s: unknown): Row[] }).flatten(mount('host'), state);
 
-    expect(describe2(rows)).toEqual(['HEAD:child@1', 'DIR:sub@2', 'HEAD:grand@3', 'FILE:host.md@1']);
+    // 文件根的自节点不渲染(头行即文件)。
+    expect(describe2(rows)).toEqual(['HEAD:child@1', 'DIR:sub@2', 'HEAD:grand@3']);
   });
 });
 
@@ -211,7 +214,8 @@ describe('flatten — drag order (mountTreeOrder) interleaves mount heads', () =
     const state = { open: new Set(['']), tree: [node('top.md', 'top.md', false)], loaded: new Set(['']), truncated: false, scannedAt: 0 };
     const rows = (panel as unknown as { flatten(m: ExternalMount, s: unknown): Row[] }).flatten(mount('host'), state);
 
-    expect(describe2(rows)).toEqual(['HEAD:m2@1', 'HEAD:m1@1', 'FILE:top.md@1']);
+    // 文件根的自节点不渲染(头行即文件)。
+    expect(describe2(rows)).toEqual(['HEAD:m2@1', 'HEAD:m1@1']);
   });
 });
 
@@ -261,6 +265,7 @@ describe('reorderLevelRow — persists the merged sibling key list', () => {
       truncated: false,
       scannedAt: 0,
     });
-    expect(describe2(rows)).toEqual(['HEAD:m1@1', 'HEAD:m2@1', 'FILE:s.md@1']);
+    // 文件根的自节点不渲染(头行即文件);拖拽序仍记录真实子项键。
+    expect(describe2(rows)).toEqual(['HEAD:m1@1', 'HEAD:m2@1']);
   });
 });
