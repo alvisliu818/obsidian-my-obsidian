@@ -34,6 +34,16 @@ export function webContentsFromId(id: number): any | null {
   }
 }
 
+/** Obsidian 默认会话(插件安装/更新/市场等本体流量走它)。 */
+export function defaultSession(): any | null {
+  const remote = getRemote();
+  try {
+    return remote?.session?.defaultSession ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function sessionFromPartition(name: string): any | null {
   const remote = getRemote();
   if (!remote?.session?.fromPartition) return null;

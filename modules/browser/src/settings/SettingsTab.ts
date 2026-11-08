@@ -8,6 +8,8 @@ import type { ExtensionHost } from "../extensions/extensionHost";
 export interface SettingsHost {
   settings: BrowserSettings;
   save(): void;
+  /** 代理相关设置变更后重放到会话。 */
+  applyProxy(): void;
   extHost: ExtensionHost;
   extensions(): ExtensionRecord[];
   refreshExtensionIcons(): void;
@@ -85,6 +87,65 @@ export class BrowserSettingTab extends PluginSettingTab {
           this.host.save();
         }),
       );
+
+    new Setting(containerEl).setName("网络代理").setHeading();
+
+    new Setting(containerEl)
+      .setName("代理模式")
+      .setDesc("自定义 = 按下方规则走代理；系统 = 跟随系统代理；直连 = 不用代理")
+      .addDropdown((d) =>
+        d
+          .addOptions({ off: "直连", system: "系统代理", fixed: "自定义代理" })
+          .setValue(s.proxyMode)
+          .onChange((v) => {
+            s.proxyMode = v as BrowserSettings["proxyMode"];
+            this.host.save();
+            this.host.applyProxy();
+            this.display();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("代理规则")
+      .setDesc(
+        "Electron rules 语法：http=127.0.0.1:7890;https=socks5://127.0.0.1:7890；单个地址(127.0.0.1:7890)对全部协议生效",
+      )
+      .addText((t) =>
+        t.setValue(s.proxyRules).onChange((v) => {
+          s.proxyRules = v.trim();
+          this.host.save();
+          this.host.applyProxy();
+        }),
+      )
+      .setDisabled(s.proxyMode !== "fixed");
+
+    new Setting(containerEl)
+      .setName("代理作用域")
+      .setDesc(
+        "应用 = 同时代理 Obsidian 本体流量(插件安装/更新、社区市场走默认会话)；浏览器 = 仅内置浏览器",
+      )
+      .addDropdown((d) =>
+        d
+          .addOptions({ browser: "仅浏览器", app: "浏览器 + Obsidian 应用" })
+          .setValue(s.proxyScope)
+          .onChange((v) => {
+            s.proxyScope = v as BrowserSettings["proxyScope"];
+            this.host.save();
+            this.host.applyProxy();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("绕过列表")
+      .setDesc("不走代理的地址，分号分隔：localhost;127.0.0.1;<local>")
+      .addText((t) =>
+        t.setValue(s.proxyBypass).onChange((v) => {
+          s.proxyBypass = v.trim();
+          this.host.save();
+          this.host.applyProxy();
+        }),
+      )
+      .setDisabled(s.proxyMode !== "fixed");
 
     new Setting(containerEl).setName("历史与隐私").setHeading();
 

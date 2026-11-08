@@ -7,6 +7,7 @@ import { WebviewController, createWebview } from "./WebviewController";
 import { showWebViewContextMenu } from "./contextMenu";
 import type { BrowserContext } from "./context";
 import { buildAdBlockCss, BUILTIN_ADBLOCK_RULES } from "./adblock";
+import { applyProxyForPartition, rememberBrowserPartition } from "./proxy";
 import { isValidHttpUrl } from "../utils/url";
 
 /**
@@ -80,7 +81,11 @@ export class BrowserTab {
 
   private createWebviewElement(): IWebviewTag {
     const s = this.ctx.getSettings();
-    return createWebview(s.partition || "persist:obsidian-browser", this.ctx.preloadUrl(), s.userAgent || "");
+    const partition = s.partition || "persist:obsidian-browser";
+    // 每个 tab 的分区可能覆盖默认值:代理设置(若启用)对该分区就地生效。
+    rememberBrowserPartition(partition);
+    void applyProxyForPartition(partition, s);
+    return createWebview(partition, this.ctx.preloadUrl(), s.userAgent || "");
   }
 
   private callbacks() {

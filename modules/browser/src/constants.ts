@@ -45,6 +45,12 @@ export const DEFAULT_SETTINGS: BrowserSettings = {
   partition: "persist:obsidian-browser",
   userAgent: "",
 
+  proxyMode: "off",
+  proxyScope: "browser",
+  proxyRules: "",
+  proxyBypass: "",
+
+
   recordHistory: true,
   historyLimit: 5000,
   restoreSession: true,

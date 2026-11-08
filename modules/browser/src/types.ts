@@ -47,6 +47,20 @@ export interface BrowserSettings {
   customSearchUrl: string;
   /** Session partition; change = fresh cookies. */
   partition: string;
+  /**
+   * 浏览器网络代理:off=直连,system=跟随系统,fixed=按 proxyRules 走。
+   */
+  proxyMode: "off" | "system" | "fixed";
+  /**
+   * fixed 的作用域:browser=仅内置浏览器分区;app=同时代理 Obsidian 默认
+   * 会话——插件安装/更新、社区市场目录都走默认会话(用户 2026-11-08:
+   * 「安装插件时也能走代理」)。
+   */
+  proxyScope: "browser" | "app";
+  /** fixed 模式的代理规则(Electron rules 语法)。 */
+  proxyRules: string;
+  /** 不走代理的地址,分号分隔(localhost;127.0.0.1;<local>)。 */
+  proxyBypass: string;
   /** Empty = Electron default. */
   userAgent: string;
 

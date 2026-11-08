@@ -11,6 +11,7 @@ import {
   VIEW_TYPE_HISTORY,
 } from "./constants";
 import type { BrowserSettings, IWebviewTag, PersistedTab } from "./types";
+import { applyProxyEverywhere } from "./browser/proxy";
 import { DataStore } from "./storage/dataStore";
 import { BookmarksStore } from "./storage/bookmarksStore";
 import { HistoryStore } from "./storage/historyStore";
@@ -93,10 +94,13 @@ export default class BrowserPlugin extends Plugin {
     this.registerLinkHandlers();
 
     this.addRibbonIcon(BROWSER_ICON, "打开浏览器", () => void this.openBrowser());
+    // 代理设置铺到相关会话(含 scope=app 时的 Obsidian 默认会话)。
+    void this.applyBrowserProxy();
     this.addSettingTab(
       new BrowserSettingTab(this.app, this, {
         settings: this.config,
         save: () => this.store.save(),
+        applyProxy: () => void this.applyBrowserProxy(),
         usHost: () => this.usHost,
         extHost: this.extHost,
         extensions: () => this.store.data.extensions,
@@ -120,6 +124,11 @@ export default class BrowserPlugin extends Plugin {
   }
 
   // ---------------- context ----------------
+
+  /** 当前代理设置铺到默认分区 + 打开过的浏览器分区(+scope=app 的默认会话)。 */
+  applyBrowserProxy(): Promise<void> {
+    return applyProxyEverywhere(this.config.partition || "persist:obsidian-browser", this.config);
+  }
 
   private buildContext(): BrowserContext {
     return {
