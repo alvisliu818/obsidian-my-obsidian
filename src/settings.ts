@@ -288,11 +288,13 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 		}
 
 		// 内层子插件实例的设置页（addTab 垫片截获的 inner: 键）：没有对应的
-		// descriptor 行，统一挂在末尾的「其他」区。
+		// descriptor 行，统一挂在末尾的「其他」区。显示名用内层插件的
+		// manifest.name（如「WorkLife Calendar」），内部 id 只作兜底——
+		// 用户看到 my-worklife-calendar 这种技术键毫无信息量（用户实报）。
 		for (const [key, tab] of this.host.capturedTabs) {
 			if (!key.startsWith("inner:")) continue;
-			void tab;
-			const label = key.split(":")[2] ?? key;
+			const t = tab as { plugin?: { manifest?: { name?: string } } } | undefined;
+			const label = t?.plugin?.manifest?.name || key.split(":")[2] || key;
 			new SettingCtor(containerEl)
 				.setName(`其他模块设置（${label}）`)
 				.addExtraButton((btn) =>
