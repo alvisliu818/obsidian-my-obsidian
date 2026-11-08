@@ -296,7 +296,8 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 			const t = tab as { plugin?: { manifest?: { name?: string } } } | undefined;
 			const label = t?.plugin?.manifest?.name || key.split(":")[2] || key;
 			new SettingCtor(containerEl)
-				.setName(`其他模块设置（${label}）`)
+				.setName(label)
+				.setDesc("内嵌模块设置页")
 				.addExtraButton((btn) =>
 					btn
 						.setIcon("settings-2")
