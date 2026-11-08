@@ -82,11 +82,16 @@ export default class OmnisearchPlugin extends Plugin {
       return
     }
 
-    bootlog.push('omnisearch: cleaning cache files')
-    await cleanOldCacheFiles(this.app)
-    bootlog.push('omnisearch: cache cleaned; clearing old dbs')
-    await this.database.clearOldDatabases()
-    bootlog.push('omnisearch: old dbs cleared')
+    // 缓存/旧库清理是纯维护任务,不阻塞 onload:挪到布局就绪后执行。
+    // 同步盘(百度)目录的 fs 慢 5-10 倍,这两个 fs 清理曾占 onload 数百 ms
+    // (2026-11-08 实测 364ms)。
+    this.app.workspace.onLayoutReady(() => {
+      bootlog.push('omnisearch: cleaning cache files (layout-ready)')
+      cleanOldCacheFiles(this.app)
+        .catch(e => console.error('Omnisearch - Failed to clean old cache files', e))
+        .then(() => this.database.clearOldDatabases())
+        .catch(e => console.error('Omnisearch - Failed to clear old databases', e))
+    })
 
     registerAPI(this)
 

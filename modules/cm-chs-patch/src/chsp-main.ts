@@ -29,12 +29,14 @@ export default class CMChsPatch extends Plugin {
     this.settingTab = new ChsPatchSettingTab(this);
     this.addSettingTab(this.settingTab);
 
-    try {
-      await this.applySegmenter();
-    } catch (error) {
-      console.error("Failed to load word splitting engine", error);
-      new Notice("分词引擎加载失败，请在设置中重新导入结巴分词组件");
-    }
+    // 分词引擎(wasm 读取+实例化+词典解析,同步盘上数百 ms)不阻塞 onload:
+    // 挪到布局就绪后。就绪前中文选词补丁暂不生效,窗口极短且无感知。
+    this.app.workspace.onLayoutReady(() => {
+      this.applySegmenter().catch((error) => {
+        console.error("Failed to load word splitting engine", error);
+        new Notice("分词引擎加载失败，请在设置中重新导入结巴分词组件");
+      });
+    });
   }
 
   onunload() {
