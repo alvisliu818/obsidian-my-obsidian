@@ -106,6 +106,21 @@ describe('vxCompare / vxSortChildren', () => {
       expect(vxCompare(dir, file, order)).toBeLessThan(0);
     }
   });
+
+  it('digit runs compare numerically like the native explorer (260817 after 99)', () => {
+    // BaiduSyncdisk 回归锚：原生排序把 260817 排在 99-Attachment 之后,
+    // 纯字节序(localeCompare 无 numeric)会把它插到 20-Diary 和 30-Reading 之间。
+    const names = ['20-Diary', '260817', '30-Reading', '99-Attachment', '98-fonts'];
+    const nodes = build(names.map((name) => ({ vxdir: true, name, kids: [] })));
+    const sorted = vxSortChildren(nodes, 'alphabetical', noMtime);
+    expect(sorted.map((n) => n.name)).toEqual([
+      '20-Diary',
+      '30-Reading',
+      '98-fonts',
+      '99-Attachment',
+      '260817',
+    ]);
+  });
 });
 
 describe('vxFlatten', () => {

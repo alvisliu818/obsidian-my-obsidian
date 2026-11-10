@@ -14,6 +14,8 @@
  * the project's rule is that anything under test must not import `obsidian`.
  */
 
+import { compareNames } from '../nameCompare';
+
 /** A file/dir entry as reported by the scanner, before filtering. */
 export interface ScanEntry {
   /** Path relative to the mount root, always with `/` separators. */
@@ -183,7 +185,7 @@ export function buildTree(entries: ScanEntry[], f: CompiledFilter): MountNode[] 
   }
 
   const sortRec = (list: MountNode[]): void => {
-    list.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+    list.sort((a, b) => (a.isDir === b.isDir ? compareNames(a.name, b.name) : a.isDir ? -1 : 1));
     for (const n of list) sortRec(n.children);
   };
   sortRec(roots);

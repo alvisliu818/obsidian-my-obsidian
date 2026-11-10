@@ -16,6 +16,7 @@
 
 import { FileSystemAdapter, ItemView, Menu, Notice, setIcon, TFile, TFolder, type PaneType, type WorkspaceLeaf } from 'obsidian';
 import type VirtualTreePlugin from '../main';
+import { compareNames } from '../nameCompare';
 import type { ExternalMount } from '../types';
 import {
   isVaultMount,
@@ -396,7 +397,7 @@ export class MountPanelView extends ItemView {
    * deleted on disk) is simply ignored — no cleanup pass needed.
    */
   private sortChildren(mountId: string, rel: string, children: MountNode[]): void {
-    children.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+    children.sort((a, b) => (a.isDir === b.isDir ? compareNames(a.name, b.name) : a.isDir ? -1 : 1));
     const order = this.plugin.settings.mountTreeOrder?.[mountId]?.[rel];
     if (!order || order.length === 0) return;
     const rank = new Map(order.map((n, i) => [n, i]));
@@ -405,7 +406,7 @@ export class MountPanelView extends ItemView {
       if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
       const ra = rank.get(a.name) ?? last;
       const rb = rank.get(b.name) ?? last;
-      return ra !== rb ? ra - rb : a.name.localeCompare(b.name);
+      return ra !== rb ? ra - rb : compareNames(a.name, b.name);
     });
   }
 
@@ -1298,7 +1299,7 @@ export class MountPanelView extends ItemView {
     for (const m of this.nestedMountsOf(mountId, rel)) {
       entries.push({ kind: 'mount', m, key: `mount:${m.id}`, name: mountDisplayName(m), isDir: true });
     }
-    entries.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+    entries.sort((a, b) => (a.isDir === b.isDir ? compareNames(a.name, b.name) : a.isDir ? -1 : 1));
     const order = this.plugin.settings.mountTreeOrder?.[mountId]?.[rel];
     if (order && order.length > 0) {
       const rank = new Map(order.map((k, i) => [k, i]));
@@ -1307,7 +1308,7 @@ export class MountPanelView extends ItemView {
         if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
         const ra = rank.get(a.key) ?? last;
         const rb = rank.get(b.key) ?? last;
-        return ra !== rb ? ra - rb : a.name.localeCompare(b.name);
+        return ra !== rb ? ra - rb : compareNames(a.name, b.name);
       });
     }
     return entries;

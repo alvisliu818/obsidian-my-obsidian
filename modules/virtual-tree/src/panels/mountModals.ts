@@ -13,6 +13,7 @@
 
 import { FuzzySuggestModal, Modal, Notice, Setting, TFolder, TextComponent, type TAbstractFile } from 'obsidian';
 import type VirtualTreePlugin from '../main';
+import { compareNames } from '../nameCompare';
 import { compileFilter, dirPruned, entryMatches, validateMountPath, type MountNode } from '../features/mountFilter';
 import { exists, isDirectory, joinAbs, scanExternal } from '../features/extFs';
 import { vaultScanLayer } from '../features/vaultFs';
@@ -666,7 +667,7 @@ export class MountTargetPickerModal extends Modal {
           }));
         }
       }
-      children.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+      children.sort((a, b) => (a.isDir === b.isDir ? compareNames(a.name, b.name) : a.isDir ? -1 : 1));
     }
     byRel.set(rel, children);
     return children;

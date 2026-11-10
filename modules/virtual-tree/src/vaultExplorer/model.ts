@@ -12,6 +12,8 @@
  * Obsidian instance; the view adapts TFolder/TFile onto the lazy node shape.
  */
 
+import { compareNames } from '../nameCompare';
+
 /** A vault entry as the model sees it. `children` is a LAZY accessor: for a
  * folder it reads the live folder children (no copy); for a file it is null. */
 export interface VxNode {
@@ -34,19 +36,20 @@ export interface VxRow {
 	readonly depth: number;
 }
 
-/** Default sort: folders first, then case-insensitive name. */
+/** Default sort: folders first, then Obsidian-native name order
+ * (case-insensitive, digit runs compared numerically — 260817 after 99). */
 export function vxCompare(a: VxNode, b: VxNode, order: VxSortOrder): number {
 	if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
 	switch (order) {
 		case "alphabeticalReverse":
-			return b.name.localeCompare(a.name, undefined, { sensitivity: "base" });
+			return compareNames(b.name, a.name);
 		case "byModifiedTime":
 		case "byModifiedTimeReverse":
 			// mtime lives on files only; folders keep name order so the tree
 			// part of the list stays stable while the files reshuffle.
-			return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+			return compareNames(a.name, b.name);
 		default:
-			return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+			return compareNames(a.name, b.name);
 	}
 }
 
