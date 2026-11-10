@@ -19,6 +19,15 @@ export default class StatusBarManager {
     protected plugin: SRPlugin;
     private settingsManager: SettingsManager;
 
+    /**
+     * 版本检查缓存：状态栏每次刷新（库数据变化）都会走 showStatusBarItems，
+     * 原先每次都请求未认证的 GitHub API（60 次/小时限流，走代理时常见 403）。
+     * 这里按 6 小时节流；失败则本次会话不再重试，避免控制台反复刷 403。
+     */
+    private versionCheckAt = 0;
+    private versionCheckUnavailable = false;
+    private static readonly VERSION_CHECK_TTL_MS = 6 * 60 * 60 * 1000;
+
     constructor(plugin: SRPlugin, settingsManager: SettingsManager) {
         this.plugin = plugin;
         this.settingsManager = settingsManager;
@@ -178,8 +187,19 @@ export default class StatusBarManager {
     }
 
     private async checkAndUpdatePluginVersion() {
+        if (this.versionCheckUnavailable) return;
+        const now = Date.now();
+        if (now - this.versionCheckAt < StatusBarManager.VERSION_CHECK_TTL_MS) return;
+        // 先占位，避免并发的状态栏刷新重复发请求。
+        this.versionCheckAt = now;
+
         // Set update statusbar item, if the versions miss match
-        const newestVersion: string = await this.getNewestVersion();
+        const newestVersion = await this.getNewestVersion();
+        if (newestVersion === null) {
+            // 请求失败（403/限流/离线）：状态栏提示不是关键功能，本次会话放弃。
+            this.versionCheckUnavailable = true;
+            return;
+        }
 
         if (this.plugin.manifest.version === newestVersion) return;
 
@@ -192,7 +212,7 @@ export default class StatusBarManager {
         }
     }
 
-    private async getNewestVersion(): Promise<string> {
+    private async getNewestVersion(): Promise<string | null> {
         try {
             const response: string = await request({
                 url: "https://api.github.com/repos/st3v3nmw/obsidian-spaced-repetition/releases/latest",
@@ -200,8 +220,9 @@ export default class StatusBarManager {
             // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             return (await JSON.parse(response)).tag_name as string;
         } catch (e) {
-            console.warn(e);
-            return this.plugin.manifest.version;
+            // 403 = GitHub 未认证限流或代理拦截。只打一次，不让状态栏刷新刷屏。
+            console.warn("[spaced-repetition] 版本检查不可用，本次会话不再重试:", String(e));
+            return null;
         }
     }
 }
