@@ -65,6 +65,13 @@ export class HttpTransport {
   private readonly spawnImpl: HttpSpawnFn;
   /** probeOnce 失败原因诊断计数（≤3 条留痕,2026-11-06） */
   private probeLogs = 0;
+  /**
+   * 上次 ping 失败的 discovery 快照（port/token）。同一份已探活失败的
+   * discovery 不再反复 1.5s 超时：daemon 每次启动都用随机 token + 新 pid
+   * 原子覆盖 discovery，快照一旦被覆盖内容必然变化，跳过不会卡死复用。
+   * 这就是启动期「ping throw (AbortError) ×2」刷日志的根因修复。
+   */
+  private failedDiscKey: string | null = null;
 
   constructor(private readonly opts: HttpTransportOptions) {
     // fetch 必须 bind——存字段后 this.f(...) 的 this 是 transport 实例,
@@ -240,16 +247,23 @@ export class HttpTransport {
   private async probeOnce(): Promise<boolean> {
     const d = this.io.read(this.opts.dbPath);
     if (!d || d.proto !== 2 || !d.port || !d.token) {
-      // 诊断留痕（2026-11-06 stdio 困局）：discovery 缺失/坏值
+      // 诊断留痕（2026-11-06 stdio 困局）：discovery 缺失/坏值。首次启动本来
+      // 就没有 discovery，走 debug 不进 warn（避免控制台刷「错误」）。
       if ((this.probeLogs = (this.probeLogs ?? 0) + 1) <= 3) {
-        console.warn(`[http-transport] probe: discovery missing/bad (attempt ${this.probeLogs})`);
+        console.debug(`[http-transport] probe: discovery missing/bad (attempt ${this.probeLogs})`);
       }
       return false;
     }
+    // 同一份已探活失败的 discovery 直接跳过：旧 daemon 已死，ping 它只会每次
+    // 白等 1.5s 超时（用户实测启动期连刷两条 ping throw/AbortError）。
+    // 新 daemon 覆盖 discovery 时 token/pid 必然变化，届时自动恢复探测。
+    const discKey = `${d.port}/${d.token}`;
+    if (discKey === this.failedDiscKey) return false;
     if (d.vault && this.opts.vault && this.normVault(d.vault) !== this.normVault(this.opts.vault)) {
       if ((this.probeLogs = (this.probeLogs ?? 0) + 1) <= 3) {
         console.warn(`[http-transport] probe: vault mismatch disc=${d.vault} opts=${this.opts.vault}`);
       }
+      this.failedDiscKey = discKey;
       return false;
     }
     const ctl = new AbortController();
@@ -263,6 +277,7 @@ export class HttpTransport {
         if ((this.probeLogs = (this.probeLogs ?? 0) + 1) <= 3) {
           console.warn(`[http-transport] probe: ping ${res.status} (port ${d.port})`);
         }
+        this.failedDiscKey = discKey;
         return false;
       }
       const info = (await res.json()) as { proto?: number };
@@ -270,15 +285,24 @@ export class HttpTransport {
         if ((this.probeLogs = (this.probeLogs ?? 0) + 1) <= 3) {
           console.warn(`[http-transport] probe: proto mismatch ${info.proto}`);
         }
+        this.failedDiscKey = discKey;
         return false;
       }
       this.probeLogs = 0;
+      this.failedDiscKey = null;
       this.port = d.port;
       this.token = d.token;
       return true;
     } catch (e) {
+      this.failedDiscKey = discKey;
+      // 主动 1.5s 超时（AbortError）是「旧 daemon 已死」的正常竞态结果，走
+      // debug；真正的网络异常仍以 warn 留痕（≤3 条）。
+      const aborted = (e as Error)?.name === 'AbortError';
       if ((this.probeLogs = (this.probeLogs ?? 0) + 1) <= 3) {
-        console.warn(`[http-transport] probe: ping throw (port ${d.port}):`, String(e).slice(0, 120));
+        const text = aborted
+          ? `[http-transport] probe: reuse ping timeout (port ${d.port}) — stale daemon, falling through to spawn`
+          : `[http-transport] probe: ping throw (port ${d.port}): ${String(e).slice(0, 120)}`;
+        (aborted ? console.debug : console.warn)(text);
       }
       return false;
     } finally {

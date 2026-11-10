@@ -179,4 +179,45 @@ describe('http transport', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('陈旧 discovery（旧 daemon 已死）→ 复用 ping 只发一次,不再反复 1.5s 超时', async () => {
+    // 用户实测主库启动连刷两条 probe: ping throw (AbortError)：轮询期间对同一
+    // 份死 discovery 每 150ms ping 一次、每次白等 1.5s。修复 = 失败快照跳过。
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kernel-t5-'));
+    try {
+      const dbPath = path.join(dir, 'db.sqlite');
+      // 起一个真 server 拿端口再关掉 —— 得到一份「端口无人监听」的 discovery。
+      const dead = await startKernelHttpServer({
+        token: 'dead-token',
+        info: () => ({ proto: KERNEL_PROTO, pid: 42, vault: 'V', dbPath, startedAt: Date.now() }),
+        handle: async () => ({}),
+        onShutdown: async () => undefined,
+      });
+      const port = dead.port;
+      await dead.close();
+      const io = createDiscoveryIO(fs);
+      io.write(dbPath, { proto: KERNEL_PROTO, pid: 42, port, token: 'dead-token', vault: 'V', dbPath, startedAt: Date.now() });
+      let fetches = 0;
+      const t = new HttpTransport({
+        dbPath,
+        scriptPath: 'unused',
+        vault: 'V',
+        findNode: async () => 'fake-node',
+        spawnImpl: () => ({ pid: 1, kill: () => undefined, on: () => undefined }),
+        onEvent: () => undefined,
+        onExit: () => undefined,
+        io,
+        fetchImpl: (async () => {
+          fetches++;
+          throw new Error('connection refused');
+        }) as unknown as typeof fetch,
+        probeTimeoutMs: 900,
+      });
+      await expect(t.start()).rejects.toThrow(/did not come up/);
+      expect(fetches).toBe(1); // 修复前 ≈6 次（每 150ms ping 一次死端口）
+      await t.stop();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
