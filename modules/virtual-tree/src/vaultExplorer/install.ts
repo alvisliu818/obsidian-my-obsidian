@@ -15,7 +15,7 @@
  */
 
 import { WorkspaceLeaf } from "obsidian";
-import type DocTreePlugin from "../main";
+import type VirtualTreePlugin from "../main";
 import { MountPanelView } from "../panels/mountPanel";
 
 type ViewFactory = (leaf: WorkspaceLeaf) => unknown;
@@ -54,10 +54,10 @@ class VirtualExplorerView extends MountPanelView {
 	}
 }
 
-export function installVaultExplorer(plugin: DocTreePlugin): VaultExplorerHandle {
+export function installVaultExplorer(plugin: VirtualTreePlugin): VaultExplorerHandle {
 	const registry = (plugin.app as unknown as { viewRegistry?: ViewRegistryLike }).viewRegistry;
 	if (!registry) {
-		console.warn("[doc-tree] viewRegistry unavailable — vault virtual explorer not installed");
+		console.warn("[virtual-tree] viewRegistry unavailable — vault virtual explorer not installed");
 		return { uninstall: async () => {} };
 	}
 	// 核心的 registerView 对已存在类型直接抛错（"Attempting to register an
@@ -65,7 +65,7 @@ export function installVaultExplorer(plugin: DocTreePlugin): VaultExplorerHandle
 	// 不存在无主窗口期。
 	const coreCreator = registry.getViewCreatorByType("file-explorer");
 	if (!coreCreator) {
-		console.warn("[doc-tree] core file-explorer creator missing — vault virtual explorer not installed");
+		console.warn("[virtual-tree] core file-explorer creator missing — vault virtual explorer not installed");
 		return { uninstall: async () => {} };
 	}
 	registry.unregisterView("file-explorer");
@@ -87,7 +87,7 @@ export function installVaultExplorer(plugin: DocTreePlugin): VaultExplorerHandle
 					(leaf.view as unknown as { getState?: () => Record<string, unknown> }).getState?.() ?? {};
 				await leaf.setViewState({ type: "file-explorer", state });
 			} catch (err) {
-				console.warn("[doc-tree] explorer leaf takeover failed", err);
+				console.warn("[virtual-tree] explorer leaf takeover failed", err);
 			}
 		}
 	})();
@@ -105,7 +105,7 @@ export function installVaultExplorer(plugin: DocTreePlugin): VaultExplorerHandle
 			try {
 				await leaf.setViewState({ type: "file-explorer", state: leaf.view.getState() });
 			} catch (err) {
-				console.warn("[doc-tree] file-explorer leaf restore failed", err);
+				console.warn("[virtual-tree] file-explorer leaf restore failed", err);
 			}
 		}
 	};

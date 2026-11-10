@@ -47,7 +47,7 @@ import { RecentPanelView, VIEW_TYPE_RECENT_PANEL, pushRecent } from './panels/re
 import { addOpenWithMenuItems, openWithSystemDefaultAt } from '../../virtual-tree/src/features/openWith';
 import { mountDisplayName, type ExternalMount } from '../../virtual-tree/src/types';
 import type { MountNode } from '../../virtual-tree/src/features/mountFilter';
-import { docTreeOf } from '../../virtual-tree/src/main';
+import { virtualTreeOf } from '../../virtual-tree/src/main';
 import { registerOpener, removeOpeners } from '../../virtual-tree/src/openers';
 import { readExternalText } from '../../virtual-tree/src/features/extFs';
 import { VIEW_TYPE_OFFICE } from '../../virtual-tree/src/views/OfficeView';
@@ -231,10 +231,10 @@ export default class LogseqEditorPlugin extends Plugin {
     // 编辑器)。这里再注册一遍是冗余,还抢在宿主前面占坑。
 
     // ---- 库外文件 opener 登记(2026-10-27 模块拆分)----
-    // 库外文件的打开路由归 doc-tree 模块(openExternalEntry);md/文本的编辑
-    // 路线在本模块,按 doc-tree openers.ts 的契约登记进去。doc-tree 先于本
-    // 模块引导(descriptor 顺序),它被禁用时 docTreeOf 为 null——库外 md/text
-    // 没有编辑路线,原生路线(doc-tree 自己的)不受影响。
+    // 库外文件的打开路由归 virtual-tree 模块(openExternalEntry);md/文本的编辑
+    // 路线在本模块,按 virtual-tree openers.ts 的契约登记进去。virtual-tree 先于本
+    // 模块引导(descriptor 顺序),它被禁用时 virtualTreeOf 为 null——库外 md/text
+    // 没有编辑路线,原生路线(virtual-tree 自己的)不受影响。
     registerOpener({
       owner: 'logseq',
       route: 'markdown',
@@ -747,7 +747,7 @@ export default class LogseqEditorPlugin extends Plugin {
       this.app.workspace.on('file-menu', (menu, file) => {
         if (file instanceof TFile) {
           menu.addSeparator();
-          addOpenWithMenuItems(this.app, file, menu, docTreeOf(this.app)?.settings.openWithApps ?? []);
+          addOpenWithMenuItems(this.app, file, menu, virtualTreeOf(this.app)?.settings.openWithApps ?? []);
           if (isImageFile(file.name)) {
             menu.addItem((item) =>
               item
@@ -764,7 +764,7 @@ export default class LogseqEditorPlugin extends Plugin {
                 .onClick(() => void this.openInView(VIEW_TYPE_VIDEO, file)),
             );
           }
-          if (docTreeOf(this.app)?.settings.officeViewerEnabled !== false && OFFICE_EXTENSIONS.includes(file.extension.toLowerCase())) {
+          if (virtualTreeOf(this.app)?.settings.officeViewerEnabled !== false && OFFICE_EXTENSIONS.includes(file.extension.toLowerCase())) {
             menu.addItem((item) =>
               item
                 .setTitle('用 Office 预览器打开')
@@ -1653,7 +1653,7 @@ export default class LogseqEditorPlugin extends Plugin {
   /**
    * 同一代码文件已开着标签页时聚焦复用,不再叠新页签(2026-10-29 用户报:
    * 打开同一个代码文件,每次都新开标签)。与图片/视频查看器
-   * (doc-tree openExternalInView)同策略:按视图已解析的 abs 匹配——in-vault
+   * (virtual-tree openExternalInView)同策略:按视图已解析的 abs 匹配——in-vault
    * 叶子的 state 只有 {file},view.abs 是 setState 解析后的绝对路径,统一比它。
    */
   private activateExistingCodeLeaf(abs: string): boolean {
@@ -2040,15 +2040,15 @@ export default class LogseqEditorPlugin extends Plugin {
   // ------------------------------------------------------------------
   // 虚拟文档树门面(2026-10-27 模块拆分)
   //
-  // 库外文件的挂载面板/路由/查看器整体迁往 doc-tree 模块。这里保留的四个
+  // 库外文件的挂载面板/路由/查看器整体迁往 virtual-tree 模块。这里保留的四个
   // 方法是跨模块兼容门面:omnisearch/unified-search 按 legacyId 取本模块
   // (live.get('md-editor'),旧名 logseq),renderTree 经 host.plugin 调媒体打开——调用点不动,
-  // 实现委托 docTreeOf()。doc-tree 被禁用时门面降级为 Notice/空结果。
+  // 实现委托 virtualTreeOf()。virtual-tree 被禁用时门面降级为 Notice/空结果。
   // ------------------------------------------------------------------
 
-  /** 库外文件叶策略(设置已迁 doc-tree,经模块实例读)。 */
+  /** 库外文件叶策略(设置已迁 virtual-tree,经模块实例读)。 */
   private extSplitView(): boolean {
-    return docTreeOf(this.app)?.settings.externalSplitView === true;
+    return virtualTreeOf(this.app)?.settings.externalSplitView === true;
   }
 
   /** 兼容门面:打开一个库外挂载条目(omnisearch 搜索结果 / e2e 探针入口)。 */
@@ -2057,7 +2057,7 @@ export default class LogseqEditorPlugin extends Plugin {
     node: MountNode,
     opts?: { readOnly?: boolean; forceCodeEditor?: boolean; forceBlockEditor?: boolean },
   ): Promise<void> {
-    const dt = docTreeOf(this.app);
+    const dt = virtualTreeOf(this.app);
     if (!dt) {
       new Notice('虚拟文档树模块未启用，无法打开库外文件。');
       return;
@@ -2065,28 +2065,28 @@ export default class LogseqEditorPlugin extends Plugin {
     await dt.openExternalEntry(mount, node, opts);
   }
 
-  /** 兼容门面:库外媒体(图片/视频)→ doc-tree 的增强查看器/播放器。 */
+  /** 兼容门面:库外媒体(图片/视频)→ virtual-tree 的增强查看器/播放器。 */
   async openExternalInView(viewType: string, spec: { abs: string; name?: string; t?: number }): Promise<void> {
-    await docTreeOf(this.app)?.openExternalInView(viewType, spec);
+    await virtualTreeOf(this.app)?.openExternalInView(viewType, spec);
   }
 
   /** 兼容门面:反查绝对路径属于哪个挂载(omnisearch 打开库外结果用)。 */
   resolveExternalMount(abs: string): { mount: ExternalMount; rel: string } | null {
-    return docTreeOf(this.app)?.resolveExternalMount(abs) ?? null;
+    return virtualTreeOf(this.app)?.resolveExternalMount(abs) ?? null;
   }
 
   /** 兼容门面:列举库外可搜索文件(omnisearch / unified-search 的数据源)。 */
   listExternalSearchFiles(): Array<{ abs: string; name: string; mtime: number }> {
-    return docTreeOf(this.app)?.listExternalSearchFiles() ?? [];
+    return virtualTreeOf(this.app)?.listExternalSearchFiles() ?? [];
   }
 
   /** 协作式异步版:行走让出主线程,统一搜索的启动/周期推送走这条。 */
   async listExternalSearchFilesAsync(): Promise<Array<{ abs: string; name: string; mtime: number }>> {
-    return (await docTreeOf(this.app)?.listExternalSearchFilesAsync()) ?? [];
+    return (await virtualTreeOf(this.app)?.listExternalSearchFilesAsync()) ?? [];
   }
 
   /**
-   * doc-tree 的操作日志转发入口:doc-tree 不 import 本模块(分层规则),
+   * virtual-tree 的操作日志转发入口:virtual-tree 不 import 本模块(分层规则),
    * 经插件表运行时反查把 mount.add / external.open 等记录写进同一条
    * .logseq-editor/log.jsonl。
    */
@@ -2096,17 +2096,17 @@ export default class LogseqEditorPlugin extends Plugin {
 
   /**
    * HeaderMenuHost 适配面（headerPath 面包屑）：externalMounts 已随挂载域迁往
-   * doc-tree、revealInSystem 是 DocTreePlugin 的方法，这里合成一个满足
-   * HeaderMenuHost 的对象给三个库外视图，避免它们各自摸 docTreeOf。
+   * virtual-tree、revealInSystem 是 VirtualTreePlugin 的方法，这里合成一个满足
+   * HeaderMenuHost 的对象给三个库外视图，避免它们各自摸 virtualTreeOf。
    */
   get headerMenuHost(): HeaderMenuHost {
-    const dt = docTreeOf(this.app);
+    const dt = virtualTreeOf(this.app);
     return {
       settings: { externalMounts: dt?.settings.externalMounts },
       app: this.app,
       // mount is ExternalMountLike by the interface, but headerPath only ever
     // feeds back entries taken from host.settings.externalMounts — i.e. these
-    // are full doc-tree ExternalMounts at runtime.
+    // are full virtual-tree ExternalMounts at runtime.
     openExternalEntry: (mount, node) => this.openExternalEntry(mount as ExternalMount, node),
       revealInSystem: (abs) => dt?.revealInSystem(abs),
       // 右键上下文菜单（面包屑段/文件名/路径面板行）：库外文件夹/文件的完整
@@ -2120,7 +2120,7 @@ export default class LogseqEditorPlugin extends Plugin {
             refreshMounts: () => dt.refreshMounts(),
             vaultBasePath: () => dt.vaultBasePath(),
             // 「同步到库」：库外标签页的 ⋮ / 面包屑右键也能把当前文件
-            // （或文件夹）用 mklink 链接进库；状态与执行统一走 doc-tree。
+            // （或文件夹）用 mklink 链接进库；状态与执行统一走 virtual-tree。
             syncStateFor: (abs) => dt.syncStateFor(abs),
             syncToVault: (abs, name, isDir) => dt.syncToVault(abs, name, isDir),
             linkedStateFor: (abs, name) => dt.linkedStateFor(abs, name),

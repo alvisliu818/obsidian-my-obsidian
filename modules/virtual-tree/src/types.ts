@@ -5,7 +5,7 @@
  * Node via vitest.
  *
  * 2026-10-27 模块拆分:这些类型原先住在 logseq 模块的 types.ts;挂载面板 /
- * 库外文件系统 / 查看器整体划给 doc-tree 模块后随之搬家。与块编辑器相关的
+ * 库外文件系统 / 查看器整体划给 virtual-tree 模块后随之搬家。与块编辑器相关的
  * 设置(externalBanner、externalCodeHybrid 等)仍归 logseq。
  */
 
@@ -300,8 +300,8 @@ export interface RecentOpenEntry {
   at: number;
 }
 
-/** doc-tree 模块自己的设置片(data.json 的 modules['doc-tree'].data)。 */
-export interface DocTreeSettings {
+/** virtual-tree 模块自己的设置片(data.json 的 modules['virtual-tree'].data)。 */
+export interface VirtualTreeSettings {
   /**
    * Apply each mount's include/exclude regexes to the virtual document tree.
    *
@@ -498,7 +498,7 @@ export interface DocTreeSettings {
   openWithApps: OpenWithApp[];
 }
 
-export const DEFAULT_DOCTREE_SETTINGS: DocTreeSettings = {
+export const DEFAULT_VIRTUAL_TREE_SETTINGS: VirtualTreeSettings = {
   mountFilterEnabled: false,
   // parent 属性挂载默认开（用户 2026-11-03 需求本体就是它，开关用于关）
   parentMountEnabled: true,
@@ -614,14 +614,14 @@ function syncLinksFrom(raw: unknown): Record<string, string> {
 }
 
 /**
- * Sanitize the whole doc-tree settings slice read from user-editable data.json.
+ * Sanitize the whole virtual-tree settings slice read from user-editable data.json.
  * Mirrors what logseq's loadSettings used to do for these fields before the
  * 2026-10-27 module split: absent keys fall to defaults, malformed records are
  * dropped, and every per-entry rule lives in its own `*From` helper.
  */
-export function docTreeSettingsFrom(raw: unknown): DocTreeSettings {
+export function virtualTreeSettingsFrom(raw: unknown): VirtualTreeSettings {
   const o = (raw ?? {}) as Record<string, unknown>;
-  const s: DocTreeSettings = { ...DEFAULT_DOCTREE_SETTINGS };
+  const s: VirtualTreeSettings = { ...DEFAULT_VIRTUAL_TREE_SETTINGS };
   s.mountFilterEnabled = o.mountFilterEnabled === true;
   s.parentMountEnabled = o.parentMountEnabled !== false;
   s.titleRenameEnabled = o.titleRenameEnabled !== false;
@@ -654,20 +654,20 @@ export function docTreeSettingsFrom(raw: unknown): DocTreeSettings {
   s.externalMounts = mountsFrom(o.externalMounts);
   s.externalSplitView = o.externalSplitView === true;
   s.externalMarkdownEditor =
-    editorChoiceValue(o.externalMarkdownEditor) ?? DEFAULT_DOCTREE_SETTINGS.externalMarkdownEditor;
+    editorChoiceValue(o.externalMarkdownEditor) ?? DEFAULT_VIRTUAL_TREE_SETTINGS.externalMarkdownEditor;
   s.vaultMarkdownEditor =
-    editorChoiceValue(o.vaultMarkdownEditor) ?? DEFAULT_DOCTREE_SETTINGS.vaultMarkdownEditor;
+    editorChoiceValue(o.vaultMarkdownEditor) ?? DEFAULT_VIRTUAL_TREE_SETTINGS.vaultMarkdownEditor;
   s.officeViewerEnabled = o.officeViewerEnabled !== false;
   // 虚拟文件浏览器接管：缺省开（默认值即决策），显式 false 才回核心 explorer。
   s.vaultVirtualExplorer = o.vaultVirtualExplorer !== false;
   s.imageViewerTakeOver = o.imageViewerTakeOver === true;
   // 视频打开方式:显式 'native' 才走原生;旧键 videoPlayerTakeOver 一并废弃
   //(缺席或任何其他值都落回默认 'player'——那是新决策的默认,不迁移旧布尔)。
-  s.videoOpenMode = o.videoOpenMode === 'native' ? 'native' : DEFAULT_DOCTREE_SETTINGS.videoOpenMode;
+  s.videoOpenMode = o.videoOpenMode === 'native' ? 'native' : DEFAULT_VIRTUAL_TREE_SETTINGS.videoOpenMode;
   // 时间戳标记:缺省开;空目录名回落默认(设置 UI 承诺「留空用默认」)。
   s.videoTimestampsEnabled = o.videoTimestampsEnabled !== false;
   const marksFolder = typeof o.videoMarksFolder === 'string' ? o.videoMarksFolder.trim() : '';
-  s.videoMarksFolder = marksFolder || DEFAULT_DOCTREE_SETTINGS.videoMarksFolder;
+  s.videoMarksFolder = marksFolder || DEFAULT_VIRTUAL_TREE_SETTINGS.videoMarksFolder;
   // "Open with": a config that never had the key gets the presets, so a fresh
   // install has something in the menu; once the key exists (even as []) the
   // user's own list — including an empty one — is respected.

@@ -117,7 +117,7 @@ export function buildTimestampLink(
 /**
  * 尝试把文本写进「当前活动的笔记」:
  *   原生 MarkdownView(activeEditor)→ 光标处 replaceSelection;
- *   块编辑器视图(鸭子类型 insertTopLevelBlock,doc-tree 不反向依赖 logseq 模块)
+ *   块编辑器视图(鸭子类型 insertTopLevelBlock,virtual-tree 不反向依赖 logseq 模块)
  *   → 追加顶级块。
  * 返回 true 表示已写入任一笔记;false = 没有可写的活动笔记。
  *

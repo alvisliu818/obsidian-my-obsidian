@@ -10,7 +10,7 @@
  */
 
 import { PluginSettingTab, Setting, Notice, type App } from 'obsidian';
-import type DocTreePlugin from '../main';
+import type VirtualTreePlugin from '../main';
 import { MountListModal } from '../panels/mountModals';
 import { VIEW_TYPE_MOUNT_PANEL } from '../panels/mountPanel';
 import {
@@ -31,10 +31,10 @@ import {
   startDirFor,
 } from '../features/systemDialog';
 
-export class DocTreeSettingTab extends PluginSettingTab {
-  plugin: DocTreePlugin;
+export class VirtualTreeSettingTab extends PluginSettingTab {
+  plugin: VirtualTreePlugin;
 
-  constructor(app: App, plugin: DocTreePlugin) {
+  constructor(app: App, plugin: VirtualTreePlugin) {
     super(app, plugin);
     this.plugin = plugin;
   }

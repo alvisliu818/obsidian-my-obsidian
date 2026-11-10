@@ -23,7 +23,7 @@
  */
 
 import { ItemView, Menu, Notice, TFile, TFolder, setIcon, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
-import type DocTreePlugin from "../main";
+import type VirtualTreePlugin from "../main";
 import {
 	vxExpandedForReveal,
 	vxFlatten,
@@ -57,7 +57,7 @@ const SORT_ICON: Record<VxSortOrder, string> = {
 export const VIEW_TYPE_FILE_EXPLORER = "file-explorer";
 
 export class VaultExplorerView extends ItemView {
-	plugin: DocTreePlugin;
+	plugin: VirtualTreePlugin;
 	/** Folders currently expanded. Root is implicitly expanded and never enters. */
 	private expanded = new Set<string>();
 	private sortOrder: VxSortOrder = "alphabetical";
@@ -76,7 +76,7 @@ export class VaultExplorerView extends ItemView {
 	/** Drag sources (vault paths) captured at dragstart, consumed at drop. */
 	private dragging: string[] = [];
 
-	constructor(leaf: WorkspaceLeaf, plugin: DocTreePlugin) {
+	constructor(leaf: WorkspaceLeaf, plugin: VirtualTreePlugin) {
 		super(leaf);
 		this.plugin = plugin;
 	}

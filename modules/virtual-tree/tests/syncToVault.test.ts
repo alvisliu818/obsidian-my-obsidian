@@ -28,7 +28,7 @@ import {
   unlinkVaultEntry,
   type SyncHost,
 } from '../src/features/syncToVault';
-import { docTreeSettingsFrom, normalizeVaultFolder } from '../src/types';
+import { virtualTreeSettingsFrom, normalizeVaultFolder } from '../src/types';
 
 interface Entry {
   dir: boolean;
@@ -100,7 +100,7 @@ function fakeHost(over: Partial<SyncHost> = {}): SyncHost & HostSpy {
         },
       },
     } as unknown as App,
-    settings: docTreeSettingsFrom({}),
+    settings: virtualTreeSettingsFrom({}),
     saveSettings: async () => {
       spy.saved += 1;
     },
@@ -152,10 +152,10 @@ describe('路径与合法性', () => {
   });
 
   it('设置合并：非法固定目录回落 Mounts，记录只留合法条目', () => {
-    expect(docTreeSettingsFrom({ syncTargetMode: 'prompt' }).syncTargetMode).toBe('prompt');
-    expect(docTreeSettingsFrom({ syncTargetFolder: '../x' }).syncTargetFolder).toBe('Mounts');
-    expect(docTreeSettingsFrom({ syncTargetMode: 'nonsense' }).syncTargetMode).toBe('fixed');
-    const s = docTreeSettingsFrom({
+    expect(virtualTreeSettingsFrom({ syncTargetMode: 'prompt' }).syncTargetMode).toBe('prompt');
+    expect(virtualTreeSettingsFrom({ syncTargetFolder: '../x' }).syncTargetFolder).toBe('Mounts');
+    expect(virtualTreeSettingsFrom({ syncTargetMode: 'nonsense' }).syncTargetMode).toBe('fixed');
+    const s = virtualTreeSettingsFrom({
       syncLinks: { 'E:\\ext\\a.md': 'Mounts/a.md', bad: '../evil', nope: 3 },
     });
     expect(s.syncLinks).toEqual({ 'e:\\ext\\a.md': 'Mounts/a.md' });

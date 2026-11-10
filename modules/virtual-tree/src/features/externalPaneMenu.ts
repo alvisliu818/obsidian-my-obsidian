@@ -48,7 +48,7 @@ export interface PaneMenuHost {
   vaultBasePath(): string;
   /** 「同步到库」是否已建立（决定菜单标题）。缺省 = 宿主不支持，菜单项隐藏。 */
   syncStateFor?(abs: string): boolean;
-  /** 建立 / 取消同步到库（mklink）；doc-tree 的同步服务实现。 */
+  /** 建立 / 取消同步到库（mklink）；virtual-tree 的同步服务实现。 */
   syncToVault?(abs: string, name: string, isDir: boolean): void | Promise<void>;
   /** 旧的「链接到库」是否仍在（决定「取消链接到库内」是否出现）。 */
   linkedStateFor?(abs: string, name: string): boolean;
@@ -394,7 +394,7 @@ export function buildExternalPaneMenu(
       ),
   );
   // 库外文本/代码文件:给一个「复制链接」——`[[ext:<abs>|name]]` 伪路径
-  // wikilink(视频时间戳同款约定,doc-tree 的 openLinkText patch 负责路由)。
+  // wikilink(视频时间戳同款约定,virtual-tree 的 openLinkText patch 负责路由)。
   // 与「复制绝对路径」并排;行锚版本(#L42)由代码编辑器的行号右键产生。
   if (target.isDir !== true && isTextFileName(fileName) && !isMarkdownFile(fileName)) {
     menu.addItem((item) =>

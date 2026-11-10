@@ -1,7 +1,7 @@
 /**
  * code-editor 模块的共享类型（2026-10-27 模块拆分，Step B）。
  *
- * 分层：code-editor 与 doc-tree 同为底层（零跨模块静态依赖），logseq 与宿主
+ * 分层：code-editor 与 virtual-tree 同为底层（零跨模块静态依赖），logseq 与宿主
  * 依赖两者。这里放 LSP 服务规格与 host 的结构化面——不 import logseq 的
  * main/types（模块独立启停的前提：禁用 code-editor 时 monaco 与 LSP 子进程
  * 全部不加载），调用方传完整插件实例时按结构兼容。

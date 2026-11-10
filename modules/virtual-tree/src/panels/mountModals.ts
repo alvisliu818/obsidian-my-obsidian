@@ -12,7 +12,7 @@
  */
 
 import { FuzzySuggestModal, Modal, Notice, Setting, TFolder, TextComponent, type TAbstractFile } from 'obsidian';
-import type DocTreePlugin from '../main';
+import type VirtualTreePlugin from '../main';
 import { compileFilter, dirPruned, entryMatches, validateMountPath, type MountNode } from '../features/mountFilter';
 import { exists, isDirectory, joinAbs, scanExternal } from '../features/extFs';
 import { vaultScanLayer } from '../features/vaultFs';
@@ -70,14 +70,14 @@ function setStyles(el: HTMLElement, styles: Readonly<Record<string, string>>): v
  *  `attachTo` 非空时 = 嵌套挂载:保存后渲染在该宿主挂载项之下
  *  (si-yuan 虚拟文档树的「挂载文件/文件夹…「xxx」下」语义)。 */
 export class MountEditorModal extends Modal {
-  plugin: DocTreePlugin;
+  plugin: VirtualTreePlugin;
   private draft: MountDraft;
   private editing: ExternalMount | null;
   private attachTo?: string;
   /** The path field, so a pick can write straight back into it. */
   private pathInput: TextComponent | null = null;
 
-  constructor(plugin: DocTreePlugin, mount?: ExternalMount, attachTo?: string) {
+  constructor(plugin: VirtualTreePlugin, mount?: ExternalMount, attachTo?: string) {
     super(plugin.app);
     this.plugin = plugin;
     this.editing = mount ?? null;
@@ -316,9 +316,9 @@ export class MountEditorModal extends Modal {
 
 /** List every mount with per-row edit / rescan / unmount. */
 export class MountListModal extends Modal {
-  plugin: DocTreePlugin;
+  plugin: VirtualTreePlugin;
 
-  constructor(plugin: DocTreePlugin) {
+  constructor(plugin: VirtualTreePlugin) {
     super(plugin.app);
     this.plugin = plugin;
   }
@@ -402,10 +402,10 @@ export class MountListModal extends Modal {
  * mounts there is nothing to choose, so callers add directly instead.
  */
 export class MountPositionModal extends Modal {
-  plugin: DocTreePlugin;
+  plugin: VirtualTreePlugin;
   private draft: Omit<ExternalMount, 'id' | 'enabled'>;
 
-  constructor(plugin: DocTreePlugin, draft: Omit<ExternalMount, 'id' | 'enabled'>) {
+  constructor(plugin: VirtualTreePlugin, draft: Omit<ExternalMount, 'id' | 'enabled'>) {
     super(plugin.app);
     this.plugin = plugin;
     this.draft = draft;
@@ -486,11 +486,11 @@ export interface VaultMountPick {
 }
 
 export class VaultMountPickModal extends FuzzySuggestModal<TAbstractFile> {
-  private plugin: DocTreePlugin;
+  private plugin: VirtualTreePlugin;
   private onPick: (pick: VaultMountPick) => void;
 
   constructor(
-    plugin: DocTreePlugin,
+    plugin: VirtualTreePlugin,
     opts: { title?: string; onPick: (pick: VaultMountPick) => void },
   ) {
     super(plugin.app);
@@ -558,7 +558,7 @@ export interface MountTargetPick {
  * 选择器只服务选位，不接拖拽序/已加载统计那些面板语义。
  */
 export class MountTargetPickerModal extends Modal {
-  private plugin: DocTreePlugin;
+  private plugin: VirtualTreePlugin;
   private sourceName: string;
   private sourceAbs: string;
   private onPick: (t: MountTargetPick) => void;
@@ -571,7 +571,7 @@ export class MountTargetPickerModal extends Modal {
   private treeEl: HTMLElement | null = null;
 
   constructor(
-    plugin: DocTreePlugin,
+    plugin: VirtualTreePlugin,
     opts: { sourceName: string; sourceAbs: string; onPick: (t: MountTargetPick) => void },
   ) {
     super(plugin.app);

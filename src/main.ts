@@ -25,7 +25,7 @@ import {
 	type SubPluginLike,
 } from "./settings";
 
-import DocTreePlugin from "../modules/virtual-tree/src/main";
+import VirtualTreePlugin from "../modules/virtual-tree/src/main";
 import CodeEditorPlugin from "../modules/code-editor/src/main";
 import LogseqEditorPlugin from "../modules/md-editor/src/main";
 import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE } from "../modules/md-editor/src/views/ExternalCodeView";
@@ -219,14 +219,14 @@ export default class MyObsidianPlugin extends Plugin {
 			// 自研(2026-10-27 自 logseq 模块拆出,拆分前是该模块的挂载面):
 			// 挂载面板/库外文件系统(extFs)/库外文件打开路由/图片·视频·Office
 			// 查看器/系统「打开方式」。引导顺序必须在 md-editor（旧名 logseq）之前——它的
-			// onload 通过 docTreeOf() 找到它登记库外编辑 opener(见 doc-tree
+			// onload 通过 virtualTreeOf() 找到它登记库外编辑 opener(见 virtual-tree
 			// 的 openers.ts);它被单独关闭时库外文件回落系统打开,库内编辑不受影响。
 			id: "virtual-tree",
 			name: "Virtual Tree",
 			summary:
 				"虚拟文档树：把库内文件/文件夹与库外文件夹挂进侧栏（挂载树/嵌套挂载/新建笔记/链接进库），库内库外图片、视频与 Office 文件的应用内查看器，以及库外文件的打开路由与系统「打开方式」菜单。",
 			desktopOnly: true,
-			cls: DocTreePlugin as unknown as ModuleDescriptor["cls"],
+			cls: VirtualTreePlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
 			// 自研(2026-10-27 自 logseq 模块拆出):Monaco 编辑器基建 + LSP 宿主 +
@@ -1062,7 +1062,8 @@ export default class MyObsidianPlugin extends Plugin {
 
 	async loadSettings(): Promise<void> {
 		const raw = (await this.loadData()) as Partial<MyObsidianSettings> | null;
-		// 一次性键名迁移(2026-11-03 模块更名):doc-tree 数据片改键 virtual-tree。
+		// 一次性键名迁移(2026-11-03 模块更名):旧键 doc-tree 数据片改键 virtual-tree。
+		// 这里必须保留字面的旧键——老 data.json 里可能还有它,改名不等于删兼容。
 		// 老键只要存在且新键空就整个搬过去;两键都在时以新键为准(不覆盖)。
 		const rawModules = raw?.modules as Record<string, unknown> | undefined;
 		if (rawModules && rawModules["doc-tree"] && !rawModules["virtual-tree"]) {
@@ -1082,7 +1083,7 @@ export default class MyObsidianPlugin extends Plugin {
 				raw?.modules?.[d.id],
 			);
 		}
-		await this.migrateDocTreeSettings();
+		await this.migrateVirtualTreeSettings();
 		await this.migrateStandaloneSettings();
 	}
 
@@ -1130,7 +1131,7 @@ export default class MyObsidianPlugin extends Plugin {
 	 * 以拆分后的新值为准;logseq 片里的旧键无论如何都删掉(本模块的读方已
 	 * 随拆分搬走,留着只是死重)。迁完立刻落盘,保证只跑一次。
 	 */
-	private async migrateDocTreeSettings(): Promise<void> {
+	private async migrateVirtualTreeSettings(): Promise<void> {
 		const MOUNT_KEYS = [
 			"mountFilterEnabled",
 			"mountLinkEnabled",

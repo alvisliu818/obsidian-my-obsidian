@@ -25,7 +25,7 @@ import { parseCodeFence } from '../blocks/codeFence';
 import { FragmentHost } from '../blocks/fragmentEditor';
 import { readExternalText, writeExternalText } from '../../../virtual-tree/src/features/extFs';
 import { parseDocument } from '../core/parser';
-import { docTreeOf } from '../../../virtual-tree/src/main';
+import { virtualTreeOf } from '../../../virtual-tree/src/main';
 import { applyHeaderPath, headerSegmentsFor, isUnderMount, matchMountFor } from './headerPath';
 import { markLeafTouched } from './tabTouch';
 import type { MountNode } from '../../../virtual-tree/src/features/mountFilter';
@@ -137,7 +137,7 @@ export class CodeDocView extends ItemView {
     // state 缺 mountPath（部分打开入口不传、老页签恢复）→ 从挂载配置找回，
     // 否则 relFromMount 退成裸文件名，面包屑丢掉挂载内的子目录链。
     if (!this.mountPath || !isUnderMount(this.abs, this.mountPath)) {
-      const m = matchMountFor(this.abs, docTreeOf(this.app)?.settings.externalMounts ?? []);
+      const m = matchMountFor(this.abs, virtualTreeOf(this.app)?.settings.externalMounts ?? []);
       if (m) {
         this.mountPath = m.path;
         if (!this.mountLabel) this.mountLabel = m.label;
@@ -158,7 +158,7 @@ export class CodeDocView extends ItemView {
   }
 
   private mountLabelFromSettings(): string {
-    const mounts = docTreeOf(this.app)?.settings.externalMounts ?? [];
+    const mounts = virtualTreeOf(this.app)?.settings.externalMounts ?? [];
     const full = this.abs.replace(/\\/g, '/').toLowerCase();
     let best = '';
     let bestLen = -1;

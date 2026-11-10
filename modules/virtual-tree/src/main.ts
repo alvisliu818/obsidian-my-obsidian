@@ -8,7 +8,7 @@
  * 2026-10-27 module split: this surface used to live in the logseq module's
  * main.ts. The editors themselves stay in higher layers and register here as
  * openers (see openers.ts) — logseq owns the markdown/block-editor routes,
- * the code-editor module owns the code route. doc-tree is the bottom layer
+ * the code-editor module owns the code route. virtual-tree is the bottom layer
  * and imports neither of them; cross-module contact runs through the app's
  * plugin table (legacy alias ids), never through static imports.
  */
@@ -16,7 +16,7 @@
 import { Menu, Notice, Platform, Plugin, TFile, WorkspaceLeaf, type PaneType } from 'obsidian';
 import { startTitleRenameObserver } from './titleRename';
 import { around } from 'monkey-around';
-import { DocTreeSettingTab } from './settings/tab';
+import { VirtualTreeSettingTab } from './settings/tab';
 import { MountPanelView, VIEW_TYPE_MOUNT_PANEL } from './panels/mountPanel';
 import { MountEditorModal, MountListModal, MountPositionModal, VaultMountPickModal } from './panels/mountModals';
 import { ImageView, VIEW_TYPE_IMAGE, IMAGE_EXTENSIONS, isImageFile } from './views/ImageView';
@@ -51,15 +51,15 @@ import { parseExtCodeTarget } from './features/codeFileLinks';
 import { ICON_THEME_CHANGED_EVENT } from './extensions/iconThemeLoader';
 import { installVaultExplorer, type VaultExplorerHandle } from './vaultExplorer/install';
 import {
-  DEFAULT_DOCTREE_SETTINGS,
-  docTreeSettingsFrom,
+  DEFAULT_VIRTUAL_TREE_SETTINGS,
+  virtualTreeSettingsFrom,
   editorChoiceFromExternalText,
   mountDisplayName,
   mountHostOf,
   listMountTargets,
   VAULT_ROOT_MOUNT_ID,
   vaultRelPath,
-  type DocTreeSettings,
+  type VirtualTreeSettings,
   type EditorChoice,
   type ExternalMount,
 } from './types';
@@ -75,33 +75,36 @@ import {
 } from './features/syncToVault';
 
 /** The id this instance is re-published under in the app's plugin table. */
-export const DOC_TREE_ALIAS_ID = 'obsidian-doc-tree';
+export const VIRTUAL_TREE_ALIAS_ID = 'obsidian-virtual-tree';
+
+/** 2026-11-03 改名之前注册的旧别名；老库的插件表可能还留着它，查找时兜底。 */
+const LEGACY_ALIAS_ID = 'obsidian-doc-tree';
 
 /**
- * Look up the live doc-tree module (or null when it is disabled).
+ * Look up the live virtual-tree module (or null when it is disabled).
  *
  * Runtime lookup on purpose: higher layers (logseq, code-editor) use this to
  * reach the routing surface and the mount settings without a static import —
- * the layering rule (doc-tree imports nothing above it) survives because this
+ * the layering rule (virtual-tree imports nothing above it) survives because this
  * is an app-registry read, resolved at runtime.
  */
-export function docTreeOf(app: unknown): DocTreePlugin | null {
+export function virtualTreeOf(app: unknown): VirtualTreePlugin | null {
   const table = (app as { plugins?: { plugins?: Record<string, unknown> } } | null | undefined)?.plugins
     ?.plugins;
-  const hit = table?.[DOC_TREE_ALIAS_ID];
-  if (hit) return hit as DocTreePlugin;
+  const hit = table?.[VIRTUAL_TREE_ALIAS_ID] ?? table?.[LEGACY_ALIAS_ID];
+  if (hit) return hit as VirtualTreePlugin;
   // 聚合宿主不把内嵌模块注册进 app.plugins.plugins：实例放在宿主插件的
   // live: Map<id, instance> 里（virtual-tree 的 id 就是 'virtual-tree'）。
-  // 实测 e2e 库里别名表只有宿主自己，只查别名会让 docTreeOf 恒为 null，
+  // 实测 e2e 库里别名表只有宿主自己，只查别名会让 virtualTreeOf 恒为 null，
   // 库外标签页的 paneMenuHost 因而整个缺失。补一次 Map 查找，并用方法形状
-  // 确认取到的确实是 doc-tree 实例。
+  // 确认取到的确实是 virtual-tree 实例。
   const host = table?.['obsidian-my-obsidian'] as { live?: Map<string, unknown> } | undefined;
-  const live = host?.live?.get?.('virtual-tree') as DocTreePlugin | undefined;
+  const live = host?.live?.get?.('virtual-tree') as VirtualTreePlugin | undefined;
   return live && typeof live.vaultBasePath === 'function' ? live : null;
 }
 
-export default class DocTreePlugin extends Plugin {
-  settings: DocTreeSettings = DEFAULT_DOCTREE_SETTINGS;
+export default class VirtualTreePlugin extends Plugin {
+  settings: VirtualTreeSettings = DEFAULT_VIRTUAL_TREE_SETTINGS;
 
   /** Timer id for the mount panel's optional auto-refresh; 0 = not scheduled. */
   private mountRefreshTimer = 0;
@@ -116,7 +119,7 @@ export default class DocTreePlugin extends Plugin {
 
   async onload(): Promise<void> {
     await this.loadSettings();
-    this.addSettingTab(new DocTreeSettingTab(this.app, this));
+    this.addSettingTab(new VirtualTreeSettingTab(this.app, this));
 
     this.registerView(VIEW_TYPE_MOUNT_PANEL, (leaf) => new MountPanelView(leaf, this));
     this.registerView(VIEW_TYPE_IMAGE, (leaf) => new ImageView(leaf, this));
@@ -199,7 +202,7 @@ export default class DocTreePlugin extends Plugin {
     // ——takeOverExtensions 备份原属主,unload 时还原;这正是
     // registerFreeExtensions(先占者赢)做不到的。ts 在 VIDEO_EXTENSIONS 里
     // 是 MPEG-TS 传输流,但它同时是代码文件扩展名(TEXT_EXTENSIONS)且
-    // doc-tree 先于宿主的代码文件注册引导——不剔除会把库内 .ts 抢给播放器。
+    // virtual-tree 先于宿主的代码文件注册引导——不剔除会把库内 .ts 抢给播放器。
     // 播放器自身仍认 ts(库外挂载树/命令入口不受影响)。
     if (this.settings.videoOpenMode === 'player') {
       takeOverExtensions(
@@ -214,7 +217,7 @@ export default class DocTreePlugin extends Plugin {
     // `[[ext:<绝对路径>#t=83|00:01]]` 的点击(阅读视图 / Live Preview / 块编辑器
     // 的 openLink)统一汇到 Workspace.openLinkText,在这一个 patch 里拦截:
     // ext: + 视频扩展名 → 打开播放器并跳到该时刻;其余走原函数。
-    // doc-tree 先于 media-extended 引导,此 patch 在内层——mx 对它不认识的
+    // virtual-tree 先于 media-extended 引导,此 patch 在内层——mx 对它不认识的
     // ext: 目标回落 fallback 时正好落到这里。
     this.patchOpenLinkTextForExtVideos();
 
@@ -409,7 +412,7 @@ export default class DocTreePlugin extends Plugin {
     });
 
     // ---------- External applications ----------
-    // 系统打开/资源管理器定位是**文件域**能力（doc-tree 的 openWith 层），
+    // 系统打开/资源管理器定位是**文件域**能力（virtual-tree 的 openWith 层），
     // 命令对当前活动文件生效——库内文件同样可用，所以命令留在模块内，
     // 而 logseq 的库内右键菜单直接复用这里的函数。
     this.addCommand({
@@ -497,7 +500,7 @@ export default class DocTreePlugin extends Plugin {
       for (const leaf of this.app.workspace.getLeavesOfType('file-explorer')) {
         void leaf
           .setViewState({ type: 'file-explorer', state: (leaf.view as unknown as { getState?: () => Record<string, unknown> }).getState?.() ?? {} })
-          .catch((err: unknown) => console.warn('[doc-tree] explorer leaf swap failed', err));
+          .catch((err: unknown) => console.warn('[virtual-tree] explorer leaf swap failed', err));
       }
       // 现场开启时清场存量独立面板（用户实测复现的并存场景）。
       this.enforceUnifiedPanel();
@@ -510,7 +513,7 @@ export default class DocTreePlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     const raw = (await this.loadData()) as Record<string, unknown> | null;
-    this.settings = docTreeSettingsFrom(raw);
+    this.settings = virtualTreeSettingsFrom(raw);
   }
 
   async saveSettings(): Promise<void> {
@@ -524,7 +527,7 @@ export default class DocTreePlugin extends Plugin {
   /**
    * Forward an operation record to the logseq module's operation log, where
    * the JSONL trail and the viewer modal live. Runtime lookup through the
-   * plugin table: doc-tree boots before logseq and must not import it; when
+   * plugin table: virtual-tree boots before logseq and must not import it; when
    * logseq is disabled the record is dropped (logging never breaks the caller).
    */
   logOp(op: string, file: string, status: 'ok' | 'error' | 'skip', detail = ''): void {
@@ -939,7 +942,7 @@ export default class DocTreePlugin extends Plugin {
    *
    * Text-like files go to a REGISTERED opener (logseq owns the markdown/block
    * route and the code route until the code-editor module exists; see
-   * openers.ts). Media is routed to doc-tree's own viewers, binaries to the
+   * openers.ts). Media is routed to virtual-tree's own viewers, binaries to the
    * system. A synthetic `TFile` would be the shortcut here, but it does not
    * work: measured, `leaf.openFile(fake)` resolves and then mounts the "empty"
    * placeholder, so the content never appears.
@@ -964,7 +967,7 @@ export default class DocTreePlugin extends Plugin {
     // whenever a real editor cannot be given the file. Creating a link is a
     // genuine change to the user's library, so it happens only when they ask
     // for it from the row's context menu — never because they clicked a file.
-    const ctx: OpenerCtx = { docTree: this };
+    const ctx: OpenerCtx = { virtualTree: this };
     if (opts?.readOnly) {
       if (await runOpeners('shim', ctx, mount, node, opts)) return;
       new Notice('块编辑器模块未启用，无法只读打开。');
@@ -1035,7 +1038,7 @@ export default class DocTreePlugin extends Plugin {
   }
 
   // ---- 「同步到库」：三类右键菜单（面板子行 / 挂载头行 / 库外标签页）共用 ----
-  // 逻辑全在 features/syncToVault.ts，这里只把 DocTreePlugin 本身作为宿主
+  // 逻辑全在 features/syncToVault.ts，这里只把 VirtualTreePlugin 本身作为宿主
   // 传进去：settings / saveSettings / refreshMounts / vaultBasePath /
   // waitForIndex 都已在插件上，不必再包一层适配对象。
 
@@ -1239,7 +1242,7 @@ export default class DocTreePlugin extends Plugin {
    * (阅读视图/Live Preview 的 wikilink、块编辑器的 openLink 都汇到这里)
    * 直接路由到视频播放器并跳到该时刻。其余目标一律走原函数。
    *
-   * 与 media-extended 的同名 patch 叠加顺序:doc-tree 先引导、先 patch,在
+   * 与 media-extended 的同名 patch 叠加顺序:virtual-tree 先引导、先 patch,在
    * 调用链的内层;mx 对它不认识的 `ext:` 目标回落 fallback 时落到这里。
    */
   private patchOpenLinkTextForExtVideos(): void {
@@ -1309,7 +1312,7 @@ export default class DocTreePlugin extends Plugin {
   }
 
   /**
-   * 给 doc-tree 自己打开的标签页补主题文件图标。
+   * 给 virtual-tree 自己打开的标签页补主题文件图标。
    * 标签页头重建/setIcon 重设后 marker 元素丢失,layout-change 时重应用。
    */
   private refreshTabIcons(): void {
@@ -1375,7 +1378,7 @@ export default class DocTreePlugin extends Plugin {
           keepFile: keep,
         }).entries;
       } catch (e) {
-        console.warn('[doc-tree] listExternalSearchFiles: scan failed for', mount.path, e);
+        console.warn('[virtual-tree] listExternalSearchFiles: scan failed for', mount.path, e);
         continue;
       }
       for (const entry of entries) {
@@ -1415,7 +1418,7 @@ export default class DocTreePlugin extends Plugin {
           keepFile: keep,
         });
       } catch (e) {
-        console.warn('[doc-tree] listExternalSearchFilesAsync: scan failed for', mount.path, e);
+        console.warn('[virtual-tree] listExternalSearchFilesAsync: scan failed for', mount.path, e);
         continue;
       }
       for (const entry of scanned.entries) {

@@ -28,8 +28,8 @@
  * read line by line.
  */
 
-// 2026-10-27 模块拆分:库外文件的打开路由归 doc-tree 模块,markdown 判定
-// 随之搬进 doc-tree/src/features/mountFilter.ts。这里 re-export 维持本模块
+// 2026-10-27 模块拆分:库外文件的打开路由归 virtual-tree 模块,markdown 判定
+// 随之搬进 virtual-tree/src/features/mountFilter.ts。这里 re-export 维持本模块
 // 与宿主的 import 面不断(main.ts 的 file-menu、ExternalCodeView 等)。
 export { isMarkdownFile } from '../../../virtual-tree/src/features/mountFilter';
 

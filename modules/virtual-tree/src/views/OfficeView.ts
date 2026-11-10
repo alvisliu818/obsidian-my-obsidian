@@ -9,7 +9,7 @@
  */
 
 import { ItemView, Menu, Notice, setIcon, TFile, type WorkspaceLeaf, type ViewStateResult } from 'obsidian';
-import type DocTreePlugin from '../main';
+import type VirtualTreePlugin from '../main';
 import {
   getOfficeKind,
   OFFICE_KIND_LABEL,
@@ -31,7 +31,7 @@ export interface OfficeViewState {
 }
 
 export class OfficeView extends ItemView {
-  plugin: DocTreePlugin;
+  plugin: VirtualTreePlugin;
   private path = '';
   private engine: OfficeEngine | null = null;
   private bodyEl!: HTMLElement;
@@ -39,7 +39,7 @@ export class OfficeView extends ItemView {
   // titleEl：public View typings 没有（同 ImageView 的说明），自声明槽位。
   titleEl!: HTMLElement;
 
-  constructor(leaf: WorkspaceLeaf, plugin: DocTreePlugin) {
+  constructor(leaf: WorkspaceLeaf, plugin: VirtualTreePlugin) {
     super(leaf);
     this.plugin = plugin;
   }

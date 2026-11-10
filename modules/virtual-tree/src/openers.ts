@@ -1,12 +1,12 @@
 /**
  * Opener registry for out-of-vault files (2026-10-27 module split).
  *
- * doc-tree owns the ROUTING (`openExternalEntry`): media → its own viewers,
+ * virtual-tree owns the ROUTING (`openExternalEntry`): media → its own viewers,
  * binary → the system, and everything text-shaped → a registered opener. The
  * editors themselves live in higher layers — logseq owns the markdown/block
  * routes (its parser is bound into ExternalBlockView/ExternalFileView), and
  * the code-editor module owns the code route — so they REGISTER here instead
- * of being imported (doc-tree is the bottom layer and must not import them).
+ * of being imported (virtual-tree is the bottom layer and must not import them).
  *
  * Openers are registered at the owning module's onload and removed on unload
  * (or when the module is disabled). An opener that declines returns false and
@@ -33,14 +33,14 @@ export type ExternalOpenOpts = {
 /** Which route an opener serves; `openExternalEntry` tries them in this order. */
 export type OpenerRoute = 'markdown' | 'code' | 'shim';
 
-/** The doc-tree instance, so an opener can read mount settings (split view…). */
+/** The virtual-tree instance, so an opener can read mount settings (split view…). */
 export interface OpenerCtx {
   // Structural type rather than a class import: keeps this file free of the
   // plugin module (and therefore trivially unit-testable).
   // No `& Record<string, unknown>`: the plugin's settings is an interface
   // (no implicit index signature), so a structural subset is the only
   // assignment-compatible shape; openers read exactly these fields.
-  docTree: {
+  virtualTree: {
     settings: { externalSplitView: boolean };
   };
 }
@@ -92,7 +92,7 @@ export async function runOpeners(
       if (await opener.open(ctx, mount, node, opts)) return true;
     } catch (e) {
       // One broken opener must not strand the file: log and fall through.
-      console.error(`[doc-tree] opener ${opener.owner}/${route} failed:`, e);
+      console.error(`[virtual-tree] opener ${opener.owner}/${route} failed:`, e);
     }
   }
   return false;

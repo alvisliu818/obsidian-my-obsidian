@@ -19,7 +19,7 @@
 // 让"图标主题就绪/切换"能被已渲染界面听到并重绘。
 // Structural subset of logseq's `InstalledExtension` (extensions/types.ts):
 // icon-theme loading only reads id / files / contributes.iconThemes, and this
-// module must not import the extension-management domain back (doc-tree is
+// module must not import the extension-management domain back (virtual-tree is
 // the lower layer). Callers passing the full InstalledExtension stay compatible.
 export interface IconThemeExtension {
   id: string;

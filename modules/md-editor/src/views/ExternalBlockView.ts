@@ -30,7 +30,7 @@ import type LogseqEditorPlugin from '../main';
 import { BlockEditorView } from '../view/BlockEditorView';
 import type { MountNode } from '../../../virtual-tree/src/features/mountFilter';
 import { installExternalAttachmentHandlers } from '../features/externalAttachment';
-import { docTreeOf } from '../../../virtual-tree/src/main';
+import { virtualTreeOf } from '../../../virtual-tree/src/main';
 import { applyHeaderPath, headerSegmentsFor, isUnderMount, matchMountFor } from './headerPath';
 
 export const VIEW_TYPE_EXTERNAL_BLOCK = 'logseq-external-block';
@@ -118,7 +118,7 @@ export class ExternalBlockView extends ItemView {
     // state 缺 mountPath（部分打开入口不传、老页签恢复）→ 从挂载配置找回，
     // 否则 relFromMount 退成裸文件名，面包屑丢掉挂载内的子目录链。
     if (!this.mountPath || !isUnderMount(this.abs, this.mountPath)) {
-      const m = matchMountFor(this.abs, docTreeOf(this.app)?.settings.externalMounts ?? []);
+      const m = matchMountFor(this.abs, virtualTreeOf(this.app)?.settings.externalMounts ?? []);
       if (m) {
         this.mountPath = m.path;
         if (!this.mountLabel) this.mountLabel = m.label;
@@ -141,7 +141,7 @@ export class ExternalBlockView extends ItemView {
 
   /** 老 state 没有挂载名时，按最长前缀匹配在挂载配置里找回来。 */
   private mountLabelFromSettings(): string {
-    const mounts = docTreeOf(this.app)?.settings.externalMounts ?? [];
+    const mounts = virtualTreeOf(this.app)?.settings.externalMounts ?? [];
     const full = this.abs.replace(/\\/g, '/').toLowerCase();
     let best = '';
     let bestLen = -1;
@@ -230,7 +230,7 @@ export class ExternalBlockView extends ItemView {
 
   /** 老 state 没有挂载根时，按最长前缀匹配在挂载配置里找回来。 */
   private mountRootFromSettings(): string {
-    const mounts = docTreeOf(this.app)?.settings.externalMounts ?? [];
+    const mounts = virtualTreeOf(this.app)?.settings.externalMounts ?? [];
     const full = this.abs.replace(/\\/g, '/').toLowerCase();
     let best = '';
     let bestLen = -1;

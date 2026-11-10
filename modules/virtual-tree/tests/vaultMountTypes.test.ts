@@ -43,9 +43,9 @@ describe('mountFrom — kind 解析与向后兼容', () => {
     expect(mountFrom({ id: 'y', path: 'D:\\notes' })!.path).toBe('D:\\notes');
   });
 
-  it('settings 往返：docTreeSettingsFrom 保留 vault 挂载', async () => {
-    const { docTreeSettingsFrom } = await import('../src/types');
-    const s = docTreeSettingsFrom({
+  it('settings 往返：virtualTreeSettingsFrom 保留 vault 挂载', async () => {
+    const { virtualTreeSettingsFrom } = await import('../src/types');
+    const s = virtualTreeSettingsFrom({
       externalMounts: [{ id: 'v1', kind: 'vault', path: 'notes', label: '笔记' }],
     });
     expect(s.externalMounts).toHaveLength(1);

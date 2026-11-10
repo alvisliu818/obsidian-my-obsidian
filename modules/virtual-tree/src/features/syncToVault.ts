@@ -28,12 +28,12 @@ import {
   type LinkKind,
 } from './extFs';
 import { SyncTargetModal, VaultFolderPickModal } from '../panels/syncTargetModal';
-import { normalizeVaultFolder, type DocTreeSettings } from '../types';
+import { normalizeVaultFolder, type VirtualTreeSettings } from '../types';
 
-/** 同步服务需要的宿主能力；DocTreePlugin 本身就满足，不必反向依赖。 */
+/** 同步服务需要的宿主能力；VirtualTreePlugin 本身就满足，不必反向依赖。 */
 export interface SyncHost {
   app: App;
-  settings: DocTreeSettings;
+  settings: VirtualTreeSettings;
   saveSettings(): Promise<void>;
   refreshMounts(): void;
   vaultBasePath(): string;

@@ -15,7 +15,7 @@
  */
 
 import { FileSystemAdapter, ItemView, Menu, Notice, setIcon, TFile, TFolder, type PaneType, type WorkspaceLeaf } from 'obsidian';
-import type DocTreePlugin from '../main';
+import type VirtualTreePlugin from '../main';
 import type { ExternalMount } from '../types';
 import {
   isVaultMount,
@@ -131,7 +131,7 @@ type MountLevelEntry =
   | { kind: 'mount'; m: ExternalMount; key: string; name: string; isDir: true };
 
 export class MountPanelView extends ItemView {
-  plugin: DocTreePlugin;
+  plugin: VirtualTreePlugin;
   /** file-explorer 叶子复用标记： VaultExplorerView 退役后面板兼做文件浏览器 */
   isEmbeddedFileExplorer = false;
   private states = new Map<string, MountState>();
@@ -157,7 +157,7 @@ export class MountPanelView extends ItemView {
     for (const paint of this.rowPainters) paint();
   };
 
-  constructor(leaf: WorkspaceLeaf, plugin: DocTreePlugin) {
+  constructor(leaf: WorkspaceLeaf, plugin: VirtualTreePlugin) {
     super(leaf);
     this.plugin = plugin;
   }

@@ -32,7 +32,7 @@ import { logOp } from '../features/logger';
 import type LogseqEditorPlugin from '../main';
 import { relativeDisplayPath } from '../features/codeFileKind';
 import { setLeafTitle } from '../features/leafTitle';
-import { docTreeOf } from '../../../virtual-tree/src/main';
+import { virtualTreeOf } from '../../../virtual-tree/src/main';
 import { applyHeaderPath, headerSegmentsFor, isUnderMount, matchMountFor } from './headerPath';
 import { markLeafTouched } from './tabTouch';
 import { HybridCodeEditor } from './hybridCodeEditor';
@@ -80,7 +80,7 @@ export class ExternalCodeView extends ItemView {
 
   /** 老 state 没有挂载名时，按最长前缀匹配在挂载配置里找回来。 */
   private mountLabelFromSettings(): string {
-    const mounts = docTreeOf(this.app)?.settings.externalMounts ?? [];
+    const mounts = virtualTreeOf(this.app)?.settings.externalMounts ?? [];
     const full = this.abs.replace(/\\/g, '/').toLowerCase();
     let best = '';
     let bestLen = -1;
@@ -230,7 +230,7 @@ export class ExternalCodeView extends ItemView {
     // 丢掉挂载内的整段子目录链（2026-10-29 用户报：深 5 层的文件只剩
     // 「挂载名 / 文件名」，中间 4 层全没）。
     if (this.abs && (!this.mountPath || !isUnderMount(this.abs, this.mountPath))) {
-      const m = matchMountFor(this.abs, docTreeOf(this.app)?.settings.externalMounts ?? []);
+      const m = matchMountFor(this.abs, virtualTreeOf(this.app)?.settings.externalMounts ?? []);
       if (m) {
         this.mountPath = m.path;
         if (!this.mountLabel) this.mountLabel = m.label;
@@ -678,7 +678,7 @@ export class ExternalCodeView extends ItemView {
    * 文件/行链接文本:库内走 generateMarkdownLink(尊重用户的链接风格设置,
    * timecodeRefs 先例),源笔记取当前活动 md 笔记(复制场景用户大概率就地
    * 粘贴);库外没有 TFile,走 `ext:<绝对路径>` 伪路径 wikilink(视频时间戳
-   * 同款约定,doc-tree 的 openLinkText patch 负责路由)。
+   * 同款约定,virtual-tree 的 openLinkText patch 负责路由)。
    */
   buildFileLink(subpath = ''): string {
     if (this.vaultFile) {

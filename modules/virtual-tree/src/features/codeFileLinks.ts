@@ -2,11 +2,11 @@
  * 库外代码文件的行锚链接(`[[ext:<绝对路径>#L42|name:42]]`)。
  *
  * 与视频时间戳(videoTimestamps.ts)同一套约定:`ext:` 伪路径 wikilink,
- * 点击经 doc-tree 主文件里 patchOpenLinkTextForExtVideos 的 openLinkText
+ * 点击经 virtual-tree 主文件里 patchOpenLinkTextForExtVideos 的 openLinkText
  * patch 路由到对应视图。行锚格式 `#L42` 是 GitHub 惯例;code-link 的
  * 符号解析对查不到的 tagPath 优雅回落整文件,互不影响。
  *
- * 为什么放 doc-tree:ext: 路由契约(生成/解析/patch)都住这里;库内文件
+ * 为什么放 virtual-tree:ext: 路由契约(生成/解析/patch)都住这里;库内文件
  * 不用这文件——它们走 generateMarkdownLink + setEphemeralState 原生链路。
  */
 import { parseLinktext } from 'obsidian';

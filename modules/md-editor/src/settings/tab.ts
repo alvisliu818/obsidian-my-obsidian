@@ -559,7 +559,7 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
   }
 
   private renderMountsSection(containerEl: HTMLElement): void {
-    // 2026-10-27 模块拆分:挂载/查看器/打开方式各节迁 doc-tree 模块的设置页;
+    // 2026-10-27 模块拆分:挂载/查看器/打开方式各节迁 virtual-tree 模块的设置页;
     // 这里留下的是渲染在本模块视图上的开关——代码块预热、注释区混合、
     // 库外提示栏与底部引用区的默认折叠。
     new Setting(containerEl)

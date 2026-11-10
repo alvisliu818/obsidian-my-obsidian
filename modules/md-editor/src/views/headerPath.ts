@@ -12,7 +12,7 @@ import type { App } from 'obsidian';
 import { scanExternal } from '../../../virtual-tree/src/features/extFs';
 import { iconForEntry } from '../../../virtual-tree/src/features/iconTheme';
 import { buildExternalPaneMenu, type PaneMenuHost } from '../../../virtual-tree/src/features/externalPaneMenu';
-import { docTreeOf } from '../../../virtual-tree/src/main';
+import { virtualTreeOf } from '../../../virtual-tree/src/main';
 
 export interface HeaderSegment {
 	/** 这一段显示的文字 */
@@ -141,7 +141,7 @@ export function headerSegmentsFor(
 ): HeaderSegment[] {
 	const full = norm(abs);
 	if (!full) return [];
-	const m = mountLabel ? null : matchMountFor(abs, docTreeOf(app)?.settings.externalMounts ?? []);
+	const m = mountLabel ? null : matchMountFor(abs, virtualTreeOf(app)?.settings.externalMounts ?? []);
 	if (mountLabel || m) {
 		const segments = headerPathSegments(abs, rel, mountLabel || m?.label || '');
 		if (segments.length) segments[0].isMount = true;

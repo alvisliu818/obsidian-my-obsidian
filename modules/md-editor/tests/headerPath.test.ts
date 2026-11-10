@@ -110,10 +110,10 @@ describe('vaultSegments', () => {
 	});
 });
 
-/** headerSegmentsFor 需要的最小 App 桩：doc-tree 挂载配置 + 库适配器。 */
+/** headerSegmentsFor 需要的最小 App 桩：virtual-tree 挂载配置 + 库适配器。 */
 function stubApp(mounts: ExternalMountLike[], vaultRoot: string): unknown {
 	return {
-		plugins: { plugins: { 'obsidian-doc-tree': { settings: { externalMounts: mounts } } } },
+		plugins: { plugins: { 'obsidian-virtual-tree': { settings: { externalMounts: mounts } } } },
 		vault: { adapter: { basePath: vaultRoot } },
 	};
 }

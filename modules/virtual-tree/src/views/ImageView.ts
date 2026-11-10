@@ -23,7 +23,7 @@ import {
   type WorkspaceLeaf,
   type ViewStateResult,
 } from 'obsidian';
-import type DocTreePlugin from '../main';
+import type VirtualTreePlugin from '../main';
 import { baseOf, copyExternalFile, dirOf, extOf, readExternalBinary, scanExternal } from '../features/extFs';
 import {
   absolutePath,
@@ -62,7 +62,7 @@ export interface ImageViewState {
 }
 
 export class ImageView extends ItemView {
-  plugin: DocTreePlugin;
+  plugin: VirtualTreePlugin;
   private path = '';
   /** 库外绝对路径;与 path 互斥(库外模式下 path 恒为空)。 */
   private abs = '';
@@ -90,7 +90,7 @@ export class ImageView extends ItemView {
   titleEl!: HTMLElement;
   private zoomLabelEl!: HTMLElement;
 
-  constructor(leaf: WorkspaceLeaf, plugin: DocTreePlugin) {
+  constructor(leaf: WorkspaceLeaf, plugin: VirtualTreePlugin) {
     super(leaf);
     this.plugin = plugin;
   }

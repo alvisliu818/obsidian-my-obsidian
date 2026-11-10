@@ -18,13 +18,13 @@
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
     "paths": {
-      // `obsidian` — doc-tree sources are compiled into this program via
+      // `obsidian` — virtual-tree sources are compiled into this program via
       // relative imports (modules/virtual-tree), but that directory has no
       // node_modules of its own; pin the type package here so its
       // `import 'obsidian'` resolves the same way ours does.
       "obsidian": ["./node_modules/obsidian"],
-      // doc-tree's office sources import these; they live in this module's
-      // node_modules (doc-tree itself has none under the root PnP program).
+      // virtual-tree's office sources import these; they live in this module's
+      // node_modules (virtual-tree itself has none under the root PnP program).
       "mammoth/mammoth.browser.js": ["./node_modules/mammoth/mammoth.browser.js"],
       "jszip": ["./node_modules/jszip"],
       // code-editor sources (compiled into this program via relative

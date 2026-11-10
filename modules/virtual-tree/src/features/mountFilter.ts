@@ -287,7 +287,7 @@ export function extOfName(base: string): string {
 /**
  * Extensions that are prose and belong in the block editor (not the code
  * editor). Moved here from logseq's codeFileKind with the 2026-10-27 module
- * split: the ROUTING of an out-of-vault file lives in doc-tree, so the
+ * split: the ROUTING of an out-of-vault file lives in virtual-tree, so the
  * markdown predicate has to live here too (codeFileKind re-exports it).
  */
 const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown', 'mdown', 'mkd', 'mdx']);
