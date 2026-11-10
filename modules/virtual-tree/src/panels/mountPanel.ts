@@ -1860,13 +1860,14 @@ export class MountPanelView extends ItemView {
         if (this.plugin.settings.mountLinkEnabled !== false) {
           const kind = linkKindFor(node.abs);
           const linkName = safeSegment(node.name);
-          const already = this.isLinked(node);
+          // 「链接到库」与「同步到库」两套链接都算已链接，取消时统一处理。
+          const already = this.isLinked(node) || this.plugin.syncStateFor(node.abs);
           const kindLabel = kind === 'junction' ? '目录联接' : '硬链接';
           menu.addItem((item) =>
             item
               .setTitle(
                 already
-                  ? '从库中取消链接'
+                  ? '取消链接到库内'
                   : `链接到库（${kindLabel} → ${MOUNT_FOLDER}/）`,
               )
               .setIcon((already ? 'unlink' : 'link') as never)
@@ -1893,6 +1894,9 @@ export class MountPanelView extends ItemView {
             );
           }
         }
+        // 「同步到库」：独立入口（可配置库内目标目录、跨盘文件降级符号链接、
+        // 按记录取消），与上面的「链接到库」并存、互不影响。
+        this.addSyncMenuItems(menu, node.abs, node.name, node.isDir);
         menu.addSeparator();
         // ---- file management on the external tree (思源文件树对齐) ----
         this.addTreeFileMenuItems(menu, mount, node);
@@ -1974,6 +1978,11 @@ export class MountPanelView extends ItemView {
         // Mount header: directory-level ops land on the mount ROOT, matching
         // how the SiYuan file tree exposes 新建 on the tree root.
         this.addTreeFileMenuItems(menu, mount, null);
+        // 整个挂载（头行）也能同步到库：文件夹走 /J 一次带过整棵子树。
+        this.addSyncMenuItems(menu, mount.path, mountDisplayName(mount), isDirectory(mount.path));
+        // 已链接/已同步的挂载头行补「取消链接到库内」（子行由上面的
+        // 「链接到库 / 取消链接到库内」两态项承担，头行没有那个两态项）。
+        this.addUnlinkMenuItems(menu, mount.path, mountDisplayName(mount));
         // 在此挂载(si-yuan「挂载文件/文件夹…「xxx」下」):把库外路径嵌套挂到
         // 本挂载项之下;嵌套挂载行渲染在本挂载的真实内容之前。
         menu.addItem((item) =>
@@ -2576,6 +2585,36 @@ export class MountPanelView extends ItemView {
   // linking
   // ------------------------------------------------------------------
 
+  /** 挂载头行的「取消链接到库内」：只在确实存在链接时出现。 */
+  private addUnlinkMenuItems(menu: Menu, abs: string, name: string): void {
+    if (this.plugin.settings.mountLinkEnabled === false) return;
+    if (!this.plugin.linkedStateFor(abs, name) && !this.plugin.syncStateFor(abs)) return;
+    menu.addItem((item) =>
+      item
+        .setTitle('取消链接到库内')
+        .setIcon('unlink' as never)
+        .onClick(() => this.plugin.unlinkToVault(abs, name)),
+    );
+  }
+
+  /**
+   * 「同步到库」菜单项（挂载头行与子行共用）。
+   *
+   * 与上面「链接到库」是两套：这套的目标目录可配置、跨盘文件降级符号链接、
+   * 用 settings.syncLinks 里的记录精确定位链接；旧的固定落 Mounts/ 不变。
+   * 受同一个「显示链接到库」开关管辖，关掉时两个入口一起消失。
+   */
+  private addSyncMenuItems(menu: Menu, abs: string, name: string, isDir: boolean): void {
+    if (this.plugin.settings.mountLinkEnabled === false) return;
+    const synced = this.plugin.syncStateFor(abs);
+    menu.addItem((item) =>
+      item
+        .setTitle(synced ? '取消同步到库' : '同步到库…')
+        .setIcon((synced ? 'unlink' : 'folder-symlink') as never)
+        .onClick(() => void this.plugin.syncToVault(abs, name, isDir)),
+    );
+  }
+
   /**
    * Expose one node inside the vault as a real path.
    *
@@ -2629,12 +2668,9 @@ export class MountPanelView extends ItemView {
   }
 
   private unlinkNode(node: MountNode): void {
-    const base = this.plugin.vaultBasePath();
-    if (!base) return;
-    const target = linkTargetFor(base, node.name, safeSegment(node.name));
-    const r = removeLink(target);
-    if (!r.ok) new Notice(`取消链接失败：${r.error ?? '未知错误'}`);
-    else new Notice('已从库中移除链接（外部文件未受影响）');
+    // 统一入口：既清「同步到库」记录，也拆旧的 Mounts/ 链接；只删库内
+    // 链接，外部源文件始终不动。菜单标题也统一成「取消链接到库内」。
+    this.plugin.unlinkToVault(node.abs, node.name);
     this.render();
   }
 

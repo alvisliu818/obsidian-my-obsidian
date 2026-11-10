@@ -28,6 +28,7 @@ import { pickExternalPath } from './features/systemDialog';
 import { openWithSystemDefault, revealInSystemExplorer } from './features/openWith';
 import {
   exists,
+  joinAbs,
   linkTargetFor,
   linkVaultPath,
   readExternalText,
@@ -63,6 +64,15 @@ import {
   type ExternalMount,
 } from './types';
 import { runOpeners, type OpenerCtx } from './openers';
+import {
+  isVaultLink,
+  linkedState,
+  pickVaultFolder,
+  syncMenuAction,
+  syncState,
+  unlinkBySource,
+  unlinkVaultEntry,
+} from './features/syncToVault';
 
 /** The id this instance is re-published under in the app's plugin table. */
 export const DOC_TREE_ALIAS_ID = 'obsidian-doc-tree';
@@ -79,7 +89,15 @@ export function docTreeOf(app: unknown): DocTreePlugin | null {
   const table = (app as { plugins?: { plugins?: Record<string, unknown> } } | null | undefined)?.plugins
     ?.plugins;
   const hit = table?.[DOC_TREE_ALIAS_ID];
-  return (hit as DocTreePlugin | undefined) ?? null;
+  if (hit) return hit as DocTreePlugin;
+  // 聚合宿主不把内嵌模块注册进 app.plugins.plugins：实例放在宿主插件的
+  // live: Map<id, instance> 里（virtual-tree 的 id 就是 'virtual-tree'）。
+  // 实测 e2e 库里别名表只有宿主自己，只查别名会让 docTreeOf 恒为 null，
+  // 库外标签页的 paneMenuHost 因而整个缺失。补一次 Map 查找，并用方法形状
+  // 确认取到的确实是 doc-tree 实例。
+  const host = table?.['obsidian-my-obsidian'] as { live?: Map<string, unknown> } | undefined;
+  const live = host?.live?.get?.('virtual-tree') as DocTreePlugin | undefined;
+  return live && typeof live.vaultBasePath === 'function' ? live : null;
 }
 
 export default class DocTreePlugin extends Plugin {
@@ -249,6 +267,9 @@ export default class DocTreePlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on('file-menu', (menu, file) => {
         if (!file || file.path === '/' || file.path.startsWith('.')) return;
+        // 库内条目本身就是 mklink 链接（外部文件/文件夹链接进库）时，
+        // 右键补一个「取消链接到库内」，不必回到挂载面板去找源条目。
+        this.addUnlinkMenuItem(menu, file);
         const targets = listMountTargets(this.settings.externalMounts ?? []);
         if (targets.length === 0) return;
         const alreadyAt = (attachTo: string | undefined): boolean =>
@@ -1011,6 +1032,67 @@ export default class DocTreePlugin extends Plugin {
     const base = this.vaultBasePath();
     if (!base) return false;
     return exists(linkTargetFor(base, node.name, safeSegment(node.name)));
+  }
+
+  // ---- 「同步到库」：三类右键菜单（面板子行 / 挂载头行 / 库外标签页）共用 ----
+  // 逻辑全在 features/syncToVault.ts，这里只把 DocTreePlugin 本身作为宿主
+  // 传进去：settings / saveSettings / refreshMounts / vaultBasePath /
+  // waitForIndex 都已在插件上，不必再包一层适配对象。
+
+  /** 当前是否已经用「同步到库」建立了链接（决定菜单标题）。 */
+  syncStateFor(abs: string): boolean {
+    return syncState(this, abs);
+  }
+
+  /** 建立 / 取消同步；目标目录按设置决定固定还是每次弹窗选。 */
+  syncToVault(abs: string, name: string, isDir: boolean): void {
+    syncMenuAction(this, abs, name, isDir);
+  }
+
+  /** 设置页选「固定目标文件夹」时打开库内文件夹选择器。 */
+  pickSyncFolder(onPick: (folder: string, name: string) => void): void {
+    pickVaultFolder(this.app, onPick);
+  }
+
+  /** 旧的「链接到库」是否还在（已同步的交给「取消同步到库」，避免重复项）。 */
+  linkedStateFor(abs: string, name: string): boolean {
+    return linkedState(this, abs, name);
+  }
+
+  /**
+   * 「取消链接到库内」：从库外一侧取消——优先查同步记录，再退回旧的
+   * Mounts/ 链接。只删库内链接，外部源文件始终不动。
+   */
+  unlinkToVault(abs: string, name: string): void {
+    void unlinkBySource(this, abs, name).then((r) => {
+      if (!r.ok) new Notice(`取消链接失败：${r.error ?? '未知错误'}`);
+      else new Notice(`已取消链接：${r.rel}（外部文件未受影响）`);
+    });
+  }
+
+  /**
+   * 库内右键菜单的「取消链接到库内」。只在目标确实是 mklink 链接
+   * （junction / symlink / 硬链接）时显示，绝不把库内真笔记当成链接。
+   * 原生 file-explorer 的 `file-menu` 与虚拟树的 `files-menu` 共用这里。
+   */
+  addUnlinkMenuItem(menu: Menu, fileOrFiles: unknown): void {
+    const f = (Array.isArray(fileOrFiles) ? fileOrFiles[0] : fileOrFiles) as { path?: string } | null;
+    const rel = f?.path ?? '';
+    if (!rel || rel === '/' || rel.startsWith('.')) return;
+    const base = this.vaultBasePath();
+    if (!base || !isVaultLink(joinAbs(base, rel))) return;
+    menu.addItem((item) =>
+      item
+        .setTitle('取消链接到库内')
+        .setIcon('unlink' as never)
+        .setSection('danger')
+        .onClick(() => {
+          void unlinkVaultEntry(this, rel).then((r) => {
+            if (!r.ok) new Notice(`取消链接失败：${r.error ?? '未知错误'}`);
+            else new Notice(`已取消链接：${r.rel}（外部文件未受影响）`);
+          });
+        }),
+    );
   }
 
   /**

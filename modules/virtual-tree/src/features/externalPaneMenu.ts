@@ -46,6 +46,14 @@ export interface PaneMenuHost {
   refreshMounts(): void;
   /** 库根路径（链接同步用）；取不到返回空串。 */
   vaultBasePath(): string;
+  /** 「同步到库」是否已建立（决定菜单标题）。缺省 = 宿主不支持，菜单项隐藏。 */
+  syncStateFor?(abs: string): boolean;
+  /** 建立 / 取消同步到库（mklink）；doc-tree 的同步服务实现。 */
+  syncToVault?(abs: string, name: string, isDir: boolean): void | Promise<void>;
+  /** 旧的「链接到库」是否仍在（决定「取消链接到库内」是否出现）。 */
+  linkedStateFor?(abs: string, name: string): boolean;
+  /** 取消链接到库内（只删库内链接，外部源文件不动）。 */
+  unlinkToVault?(abs: string, name: string): void | Promise<void>;
 }
 
 /** 一个库外文件在当前标签页里的上下文。 */
@@ -402,6 +410,33 @@ export function buildExternalPaneMenu(
       .setIcon('clipboard-copy' as never)
       .onClick(() => void copyText(abs)),
   );
+  // 「同步到库」：库外标签页的 ⋮ / 面包屑 / 文件名右键也能用 mklink 把当前
+  // 文件（或文件夹）链接进库。宿主没接这套能力时整项隐藏，老装配不受影响。
+  if (typeof host.syncToVault === 'function' && typeof host.syncStateFor === 'function') {
+    const synced = host.syncStateFor(abs);
+    menu.addItem((item) =>
+      item
+        .setTitle(synced ? '取消同步到库' : '同步到库…')
+        .setIcon((synced ? 'unlink' : 'folder-symlink') as never)
+        .setSection('sync')
+        .onClick(() => void host.syncToVault?.(abs, fileName, target.isDir === true)),
+    );
+  }
+  // 「取消链接到库内」：这个库外条目此前用旧的「链接到库」链进 Mounts/ 时，
+  // 标签页右键也能直接拆链（已同步的走上面的「取消同步到库」，不重复出现）。
+  if (
+    typeof host.unlinkToVault === 'function' &&
+    typeof host.linkedStateFor === 'function' &&
+    host.linkedStateFor(abs, fileName)
+  ) {
+    menu.addItem((item) =>
+      item
+        .setTitle('取消链接到库内')
+        .setIcon('unlink' as never)
+        .setSection('danger')
+        .onClick(() => void host.unlinkToVault?.(abs, fileName)),
+    );
+  }
   menu.addItem((item) =>
     item
       .setTitle('在系统资源管理器中显示')

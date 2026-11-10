@@ -9,11 +9,17 @@
  * the references toggles) stayed behind in logseq's tab.
  */
 
-import { PluginSettingTab, Setting, type App } from 'obsidian';
+import { PluginSettingTab, Setting, Notice, type App } from 'obsidian';
 import type DocTreePlugin from '../main';
 import { MountListModal } from '../panels/mountModals';
 import { VIEW_TYPE_MOUNT_PANEL } from '../panels/mountPanel';
-import { mountDisplayName, VAULT_ROOT_MOUNT_ID, type EditorChoice, type VideoOpenMode } from '../types';
+import {
+  mountDisplayName,
+  normalizeVaultFolder,
+  VAULT_ROOT_MOUNT_ID,
+  type EditorChoice,
+  type VideoOpenMode,
+} from '../types';
 import { OpenWithEditModal } from '../features/openWithUi';
 import { isDirectory } from '../features/extFs';
 import { invalidateVaultParentPlans } from '../features/vaultFs';
@@ -240,6 +246,60 @@ export class DocTreeSettingTab extends PluginSettingTab {
           this.plugin.refreshMounts();
         }),
       );
+
+    // 「同步到库」的目标位置（2026-11-10）：固定一个库内文件夹，或每次
+    // 右键后弹窗选择 + 填链接名。旧的「链接到库」不受影响，恒落 Mounts/。
+    new Setting(containerEl)
+      .setName('同步到库：目标位置')
+      .setDesc(
+        '右键「同步到库」用 mklink 把库外文件/文件夹链接进库：文件夹目录联接 /J、' +
+          '同盘文件硬链接 /H、跨盘文件自动降级为符号链接（需 Windows 开发者模式或管理员权限）。' +
+          '选「每次选择文件夹」会在右键后弹窗挑库内目录并填链接名；选「固定文件夹」则每次都落到下面设置的目录。',
+      )
+      .addDropdown((d) =>
+        d
+          .addOptions({ fixed: '固定文件夹', prompt: '每次选择文件夹' })
+          .setValue(this.plugin.settings.syncTargetMode ?? 'fixed')
+          .onChange(async (v) => {
+            this.plugin.settings.syncTargetMode = v as 'fixed' | 'prompt';
+            await this.plugin.saveSettings();
+            this.display();
+          }),
+      );
+
+    if ((this.plugin.settings.syncTargetMode ?? 'fixed') === 'fixed') {
+      const folderSetting = new Setting(containerEl)
+        .setName('同步到库：固定文件夹')
+        .setDesc(
+          `当前：${this.plugin.settings.syncTargetFolder || '/（库根）'}。` +
+            '留空 = 库根；点「选择…」可以从库内文件夹里挑，也可以直接填库内相对路径。',
+        )
+        .addText((t) =>
+          t
+            .setPlaceholder('Mounts（留空 = 库根）')
+            .setValue(this.plugin.settings.syncTargetFolder ?? 'Mounts')
+            .onChange(async (v) => {
+              const norm = normalizeVaultFolder(v);
+              if (norm === null) {
+                new Notice('目标必须是库内相对路径：不能是绝对路径、.. 或点开头的隐藏目录');
+                return;
+              }
+              this.plugin.settings.syncTargetFolder = norm;
+              await this.plugin.saveSettings();
+            }),
+        );
+      folderSetting.addButton((b) =>
+        b
+          .setButtonText('选择…')
+          .setTooltip('从库内文件夹里挑一个')
+          .onClick(() => {
+            this.plugin.pickSyncFolder((folder) => {
+              this.plugin.settings.syncTargetFolder = folder;
+              void this.plugin.saveSettings().then(() => this.display());
+            });
+          }),
+      );
+    }
 
     const mounts = this.plugin.settings.externalMounts ?? [];
     if (mounts.length === 0) {

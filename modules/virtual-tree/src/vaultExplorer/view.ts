@@ -443,6 +443,10 @@ export class VaultExplorerView extends ItemView {
 					new Notice("已复制路径");
 				}),
 		);
+		// 「取消链接到库内」：这一行若是外部文件/文件夹用 mklink 链接进库的
+		// 结果，直接从库内侧拆链（虚拟树用 files-menu，不吃 file-menu 事件，
+		// 所以这里显式补一次，与原生 file-explorer 共用插件上的同一个方法）。
+		this.plugin.addUnlinkMenuItem(menu, [target]);
 		// 与核心 explorer 同一入口：社区插件（git、标签管理等）在同一 trigger
 		// 上往菜单里添项——菜单语义对齐原生。
 		this.app.workspace.trigger("files-menu", menu, [target], "file-explorer-context-menu", null);

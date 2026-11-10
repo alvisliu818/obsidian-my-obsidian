@@ -2119,6 +2119,12 @@ export default class LogseqEditorPlugin extends Plugin {
             openWithSystem: (abs) => { void openWithSystemDefaultAt(abs); },
             refreshMounts: () => dt.refreshMounts(),
             vaultBasePath: () => dt.vaultBasePath(),
+            // 「同步到库」：库外标签页的 ⋮ / 面包屑右键也能把当前文件
+            // （或文件夹）用 mklink 链接进库；状态与执行统一走 doc-tree。
+            syncStateFor: (abs) => dt.syncStateFor(abs),
+            syncToVault: (abs, name, isDir) => dt.syncToVault(abs, name, isDir),
+            linkedStateFor: (abs, name) => dt.linkedStateFor(abs, name),
+            unlinkToVault: (abs, name) => dt.unlinkToVault(abs, name),
           }
         : undefined,
     };
