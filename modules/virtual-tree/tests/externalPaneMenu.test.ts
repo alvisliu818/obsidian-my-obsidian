@@ -362,4 +362,65 @@ describe('buildExternalPaneMenu', () => {
     expect(menu.items.map((i) => i.title)).toContain('重命名');
     expect(menu.items.map((i) => i.title)).toContain('删除文件');
   });
+
+  it('hides 「同步到库」 when the host does not implement it', () => {
+    const menu = fakeMenu();
+    buildExternalPaneMenu(fakeHost(), menu as unknown as Menu, target());
+    expect(menu.items.some((i) => i.title.includes('同步到库'))).toBe(false);
+  });
+
+  it('offers 「同步到库…」 on the real absolute path when the host supports it', () => {
+    const host = fakeHost();
+    const calls: Array<[string, string, boolean]> = [];
+    host.syncStateFor = () => false;
+    host.syncToVault = (abs, name, isDir) => {
+      calls.push([abs, name, isDir]);
+    };
+    const menu = fakeMenu();
+    buildExternalPaneMenu(host, menu as unknown as Menu, target());
+    const item = menu.items.find((i) => i.title === '同步到库…');
+    expect(item?.section).toBe('sync');
+    item!.onClick!();
+    expect(calls).toEqual([[ABS, 'note.md', false]]);
+  });
+
+  it('switches to 「取消同步到库」 and carries isDir for folders', () => {
+    const host = fakeHost();
+    const calls: Array<[string, string, boolean]> = [];
+    host.syncStateFor = () => true;
+    host.syncToVault = (abs, name, isDir) => {
+      calls.push([abs, name, isDir]);
+    };
+    const menu = fakeMenu();
+    buildExternalPaneMenu(host, menu as unknown as Menu, target({ isDir: true }));
+    expect(menu.items.some((i) => i.title === '同步到库…')).toBe(false);
+    const item = menu.items.find((i) => i.title === '取消同步到库');
+    expect(item).toBeTruthy();
+    item!.onClick!();
+    expect(calls).toEqual([[ABS, 'note.md', true]]);
+  });
+
+  it('offers 「取消链接到库内」 when an old link exists', () => {
+    const host = fakeHost();
+    const calls: Array<[string, string]> = [];
+    host.linkedStateFor = () => true;
+    host.unlinkToVault = (abs, name) => {
+      calls.push([abs, name]);
+    };
+    const menu = fakeMenu();
+    buildExternalPaneMenu(host, menu as unknown as Menu, target());
+    const item = menu.items.find((i) => i.title === '取消链接到库内');
+    expect(item?.section).toBe('danger');
+    item!.onClick!();
+    expect(calls).toEqual([[ABS, 'note.md']]);
+  });
+
+  it('hides 「取消链接到库内」 when there is no old link', () => {
+    const host = fakeHost();
+    host.linkedStateFor = () => false;
+    host.unlinkToVault = () => undefined;
+    const menu = fakeMenu();
+    buildExternalPaneMenu(host, menu as unknown as Menu, target());
+    expect(menu.items.some((i) => i.title === '取消链接到库内')).toBe(false);
+  });
 });
