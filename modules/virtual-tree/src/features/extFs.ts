@@ -63,6 +63,10 @@ export interface StatLike {
   size?: number;
   mtimeMs?: number;
   isDirectory?(): boolean;
+  /** Node lstat: junction / symlink report true, a hard link reports false. */
+  isSymbolicLink?(): boolean;
+  /** NTFS hard links share an inode; `nlink > 1` proves a second dir entry. */
+  nlink?: number;
 }
 
 type Requirer = (id: string) => unknown;
@@ -72,6 +76,11 @@ const hooks: { fs?: NodeFsLike; path?: unknown; cp?: unknown; require?: Requirer
 
 export function __setFsForTest(fs: NodeFsLike | null): void {
   hooks.fs = fs ?? undefined;
+}
+
+/** Inject a fake `child_process` so unit tests can inspect the mklink argv. */
+export function __setCpForTest(cp: unknown | null): void {
+  hooks.cp = cp ?? undefined;
 }
 
 /** Default `require`. Obsidian desktop exposes it on window (nodeIntegration). */
@@ -647,12 +656,30 @@ export function exists(abs: string): boolean {
  * say so, because deleting the link in the vault does not touch the original
  * while writing through it does.
  */
-export type LinkKind = 'junction' | 'hardlink';
+export type LinkKind = 'junction' | 'hardlink' | 'symlink';
 
 /** Pick the link kind that can represent `targetPath`. */
 export function linkKindFor(targetPath: string): LinkKind {
   return isDirectory(targetPath) ? 'junction' : 'hardlink';
 }
+
+/**
+ * 「同步到库」的 kind 选择：目录永远用 junction（目录联接可以跨卷），
+ * 同卷文件用硬链接，跨卷文件降级成符号链接（`mklink` 不带开关）。
+ *
+ * 符号链接在本机可能因为没有 SeCreateSymbolicLinkPrivilege 而失败
+ * （Windows 开发者模式开启后可用），失败原因原样回传给调用方展示。
+ */
+export function syncLinkKindFor(sourceAbs: string, vaultBase: string, isDir: boolean): LinkKind {
+  if (isDir) return 'junction';
+  return sameVolume(vaultBase, sourceAbs) ? 'hardlink' : 'symlink';
+}
+
+export const SYNC_KIND_LABEL: Record<LinkKind, string> = {
+  junction: '目录联接 mklink /J',
+  hardlink: '硬链接 mklink /H',
+  symlink: '符号链接 mklink（跨盘）',
+};
 
 /** True when something already occupies `linkPath`. */
 export function linkPathTaken(linkPath: string): boolean {
@@ -686,7 +713,11 @@ export function ensureDir(abs: string): { ok: boolean; error?: string } {
  * file. Refuses rather than clobbering when the destination is occupied — a
  * silent overwrite here would risk a real note.
  */
-export function createLink(targetPath: string, linkPath: string): { ok: boolean; error?: string; kind?: LinkKind } {
+export function createLink(
+  targetPath: string,
+  linkPath: string,
+  opts?: { kind?: LinkKind },
+): { ok: boolean; error?: string; kind?: LinkKind } {
   if (!exists(targetPath)) return { ok: false, error: '源路径不存在' };
   if (exists(linkPath)) return { ok: false, error: '目标位置已被占用' };
   // The parent must exist before mklink will run at all.
@@ -694,7 +725,9 @@ export function createLink(targetPath: string, linkPath: string): { ok: boolean;
   const parent = linkPath.slice(0, linkPath.lastIndexOf(sep)) || linkPath;
   const mk = ensureDir(parent);
   if (!mk.ok) return { ok: false, error: `无法创建目录 ${parent}：${mk.error}` };
-  const kind = linkKindFor(targetPath);
+  // 默认仍按目标自动选（= 原有「链接到库」行为）；「同步到库」显式传 kind，
+  // 跨盘文件才能落到符号链接上。
+  const kind = opts?.kind ?? linkKindFor(targetPath);
   const r = runMklink(kind, linkPath, targetPath);
   return r.ok ? { ok: true, kind } : r;
 }
@@ -706,32 +739,117 @@ export function createLink(targetPath: string, linkPath: string): { ok: boolean;
  * target's contents. Files: `del` drops the directory entry; because a hard
  * link shares its bytes with the original, the external file survives.
  */
+/**
+ * cmd.exe 在中文 Windows 上按 CP936/GBK 输出，而 `String(Buffer)` 默认按
+ * UTF-8 解码 —— 用户实报「同步到库失败：」后面一整串 U+FFFD 菱形乱码就是
+ * 这么来的。先按 UTF-8 试，发现替换字符再按 GBK 解一次。
+ */
+export function decodeCmdError(e: unknown): string {
+  const err = (e ?? {}) as { stderr?: unknown; message?: string };
+  const raw = err.stderr;
+  if (Buffer.isBuffer(raw) || raw instanceof Uint8Array) {
+    const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+    const utf8 = buf.toString('utf8');
+    if (!utf8.includes('\uFFFD')) return utf8.trim().slice(0, 240);
+    try {
+      return new TextDecoder('gbk').decode(buf).trim().slice(0, 240);
+    } catch {
+      return utf8.trim().slice(0, 240);
+    }
+  }
+  if (typeof raw === 'string' && raw.trim()) return raw.trim().slice(0, 240);
+  return String(err.message ?? e ?? '未知错误').slice(0, 240);
+}
+
+/**
+ * cmd.exe 会把路径里的 `/段` 当成开关：实测 `E:/HOME/...` 直接报
+ * 「参数格式不正确 - "HOME"。」。所有进 cmd 的路径都先转成原生反斜杠。
+ */
+function nativeCmdPath(p: string): string {
+  return p.replace(/\//g, '\\');
+}
+
+/** 用 `/d /s /c` + 显式引号跑一条 cmd 内置命令，路径含空格也不会被拆开。 */
+function runCmdLine(cp: unknown, line: string, stdio: 'pipe' | 'ignore'): void {
+  const exec = (cp as { execFileSync: (f: string, a: string[], o: object) => unknown }).execFileSync.bind(cp);
+  exec('cmd.exe', ['/d', '/s', '/c', `"${line}"`], { stdio, windowsVerbatimArguments: true });
+}
+
 export function removeLink(linkPath: string): { ok: boolean; error?: string } {
   if (!exists(linkPath)) return { ok: true };
   const cp = hooks.cp ?? nodeRequire('child_process');
-  const exec = (cp as { execFileSync: (f: string, a: string[], o: object) => unknown }).execFileSync.bind(cp);
   const isDir = isDirectory(linkPath);
   try {
-    exec('cmd.exe', ['/c', isDir ? 'rmdir' : 'del', linkPath], { stdio: 'ignore' });
+    runCmdLine(cp, `${isDir ? 'rmdir' : 'del'} "${nativeCmdPath(linkPath)}"`, 'ignore');
     return { ok: true };
   } catch (e) {
-    return { ok: false, error: String(e).slice(0, 200) };
+    return { ok: false, error: decodeCmdError(e) };
+  }
+}
+
+/**
+ * 「取消同步」前的形状检查：绝不能把库内一篇真笔记当成链接删掉。
+ *
+ * - lstat 的 isSymbolicLink 对 junction 和符号链接都为 true；
+ * - 硬链接 lstat 看起来就是普通文件，靠 `nlink > 1` 认出来（NTFS 上另一个
+ *   目录项还在）。部分 Windows/Node 构建对硬链接也报 1，此时只有带同步记录
+ *   才认 —— 记录是我们自己建立链接时写的，不会凭空指向一篇真笔记。
+ */
+export function isSyncLinkPresent(linkPath: string, recorded: boolean): boolean {
+  try {
+    const fs = fsMod();
+    const l = fs.lstatSync(linkPath);
+    if (l.isSymbolicLink?.() === true) return true;
+    if (l.isDirectory?.() === true) return false;
+    const nlink = fs.statSync(linkPath).nlink;
+    if (typeof nlink === 'number' && nlink > 1) return true;
+    return recorded;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 只删链接本身，不动源：目录联接走 `rmdir`（只摘重解析点），文件链接走
+ * `del`。断链符号链接 existsSync 会是 false，所以这里一律用 lstat 判存在。
+ */
+export function removeSyncLink(linkPath: string, opts: { recorded: boolean }): FsOpResult {
+  if (!isSyncLinkPresent(linkPath, opts.recorded)) {
+    try {
+      fsMod().lstatSync(linkPath);
+    } catch {
+      return { ok: true }; // 链接本来就没了
+    }
+    return { ok: false, error: '目标不是链接（可能是库内真实笔记），未删除' };
+  }
+  const cp = hooks.cp ?? nodeRequire('child_process');
+  let dirLink = false;
+  try {
+    dirLink = fsMod().lstatSync(linkPath).isSymbolicLink?.() === true && isDirectory(linkPath);
+  } catch {
+    /* 断链按文件处理 */
+  }
+  try {
+    runCmdLine(cp, `${dirLink ? 'rmdir' : 'del'} "${nativeCmdPath(linkPath)}"`, 'ignore');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: decodeCmdError(e) };
   }
 }
 
 function runMklink(kind: LinkKind, linkPath: string, targetPath: string): { ok: boolean; error?: string } {
   const cp = hooks.cp ?? nodeRequire('child_process');
+  // /J junction、/H hard link、/D directory symlink；普通文件符号链接不带开关。
+  const flags =
+    kind === 'junction' ? ['/J'] : kind === 'hardlink' ? ['/H'] : isDirectory(targetPath) ? ['/D'] : [];
+  const line = `mklink ${flags.join(' ')} "${nativeCmdPath(linkPath)}" "${nativeCmdPath(targetPath)}"`
+    .replace(/\s+/g, ' ')
+    .trim();
   try {
-    (cp as { execFileSync: (f: string, a: string[], o: object) => unknown }).execFileSync(
-      'cmd.exe',
-      ['/c', 'mklink', kind === 'junction' ? '/J' : '/H', linkPath, targetPath],
-      { stdio: 'pipe' },
-    );
+    runCmdLine(cp, line, 'pipe');
     return { ok: true };
   } catch (e) {
-    const msg = (e as { stderr?: Buffer | string; message?: string });
-    const stderr = msg?.stderr ? String(msg.stderr) : '';
-    return { ok: false, error: (stderr || msg?.message || String(e)).slice(0, 240) };
+    return { ok: false, error: decodeCmdError(e) };
   }
 }
 

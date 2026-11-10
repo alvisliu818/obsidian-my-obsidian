@@ -333,6 +333,19 @@ export interface DocTreeSettings {
    */
   mountLinkEnabled: boolean;
   /**
+   * 「同步到库」的目标位置策略（2026-11-10 用户需求）：
+   * 'fixed' = 每次都用 syncTargetFolder，'prompt' = 每次弹窗选库内文件夹。
+   * 与「链接到库」互不干扰：后者始终固定落在 Mounts/。
+   */
+  syncTargetMode: 'fixed' | 'prompt';
+  /** 'fixed' 模式下的库内相对文件夹；空串 = 库根。默认 'Mounts'。 */
+  syncTargetFolder: string;
+  /**
+   * 「同步到库」建立的链接：源绝对路径（归一化为小写反斜杠）→ 库内相对
+   * 路径。只为精确「取消同步」服务——固定目录可配置，不能靠名字反推。
+   */
+  syncLinks?: Record<string, string>;
+  /**
    * Show the 「已加载 N 文件 · M 文件夹」 line under a mount's header.
    *
    * On by default; the tree is filled in lazily, so the numbers only ever
@@ -492,6 +505,10 @@ export const DEFAULT_DOCTREE_SETTINGS: DocTreeSettings = {
   // 文件名点击重命名默认开（原生行为本体，开关用于关）
   titleRenameEnabled: true,
   mountLinkEnabled: true,
+  // 同步到库默认固定落在 Mounts/：与旧链接同一处，索引与「已链接」呈现一致。
+  syncTargetMode: 'fixed',
+  syncTargetFolder: 'Mounts',
+  syncLinks: {},
   mountShowLoadedCount: true,
   mountShowPinnedBadge: false,
   mountShowPath: true,
@@ -569,6 +586,34 @@ export function editorChoiceFromExternalText(text: string): EditorChoice | null 
 }
 
 /**
+ * 规范化「同步到库」的目标文件夹（库内相对路径）。
+ *
+ * 返回 '' 表示库根，返回 null 表示非法：绝对路径 / UNC / `..` / Windows
+ * 非法字符 / 隐藏目录（点开头，Obsidian 不索引点目录，链接放进去等于白建）。
+ */
+export function normalizeVaultFolder(raw: string): string | null {
+  const v = String(raw ?? '').trim().replace(/\\/g, '/');
+  if (!v || v === '/' || v === '.') return '';
+  if (/^[A-Za-z]:/.test(v) || v.startsWith('//')) return null;
+  const parts = v.split('/').filter(Boolean);
+  if (parts.some((p) => p === '..' || p === '.' || /[<>:"|?*]/.test(p) || p.startsWith('.'))) return null;
+  return parts.join('/');
+}
+
+/** data.json 里手改过的同步记录只保留形状合法、键已归一化的条目。 */
+function syncLinksFrom(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== 'object') return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v !== 'string' || !v.trim()) continue;
+    const rel = v.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+    if (!rel || rel.split('/').some((p) => p === '..' || p === '.' || p.startsWith('.'))) continue;
+    out[k.replace(/\//g, '\\').toLowerCase()] = rel;
+  }
+  return out;
+}
+
+/**
  * Sanitize the whole doc-tree settings slice read from user-editable data.json.
  * Mirrors what logseq's loadSettings used to do for these fields before the
  * 2026-10-27 module split: absent keys fall to defaults, malformed records are
@@ -581,6 +626,11 @@ export function docTreeSettingsFrom(raw: unknown): DocTreeSettings {
   s.parentMountEnabled = o.parentMountEnabled !== false;
   s.titleRenameEnabled = o.titleRenameEnabled !== false;
   s.mountLinkEnabled = o.mountLinkEnabled !== false;
+  // 「同步到库」：目标模式/目录/记录都从用户可编辑的 data.json 归一化。
+  s.syncTargetMode = o.syncTargetMode === 'prompt' ? 'prompt' : 'fixed';
+  s.syncTargetFolder =
+    typeof o.syncTargetFolder === 'string' ? (normalizeVaultFolder(o.syncTargetFolder) ?? 'Mounts') : 'Mounts';
+  s.syncLinks = syncLinksFrom(o.syncLinks);
   s.mountShowLoadedCount = o.mountShowLoadedCount !== false;
   s.mountShowPinnedBadge = o.mountShowPinnedBadge === true;
   s.mountShowPath = o.mountShowPath !== false;
