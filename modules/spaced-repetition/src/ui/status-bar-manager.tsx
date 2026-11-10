@@ -1,5 +1,3 @@
-import { request } from "obsidian";
-
 import { SettingsManager } from "src/data/settings-manager";
 import { t } from "src/lang/helpers";
 import SRPlugin from "src/main";
@@ -20,13 +18,13 @@ export default class StatusBarManager {
     private settingsManager: SettingsManager;
 
     /**
-     * 版本检查缓存：状态栏每次刷新（库数据变化）都会走 showStatusBarItems，
-     * 原先每次都请求未认证的 GitHub API（60 次/小时限流，走代理时常见 403）。
-     * 这里按 6 小时节流；失败则本次会话不再重试，避免控制台反复刷 403。
+     * 为什么没有「检查 GitHub 新版本」：本模块是聚合插件 obsidian-my-obsidian
+     * 的内嵌件，Obsidian 只会更新聚合插件本身，单独盯
+     * st3v3nmw/obsidian-spaced-repetition 的 releases 毫无意义；而未认证的
+     * GitHub API 在国内网络/代理下恒 403，状态栏每次刷新（库数据变化）都
+     * 请求一次并刷控制台。2026-11-10 用户要求彻底解决 → 移除该请求，
+     * 「update-available」状态栏项从此不再出现（保留代码结构以便回退）。
      */
-    private versionCheckAt = 0;
-    private versionCheckUnavailable = false;
-    private static readonly VERSION_CHECK_TTL_MS = 6 * 60 * 60 * 1000;
 
     constructor(plugin: SRPlugin, settingsManager: SettingsManager) {
         this.plugin = plugin;
@@ -187,19 +185,8 @@ export default class StatusBarManager {
     }
 
     private async checkAndUpdatePluginVersion() {
-        if (this.versionCheckUnavailable) return;
-        const now = Date.now();
-        if (now - this.versionCheckAt < StatusBarManager.VERSION_CHECK_TTL_MS) return;
-        // 先占位，避免并发的状态栏刷新重复发请求。
-        this.versionCheckAt = now;
-
-        // Set update statusbar item, if the versions miss match
-        const newestVersion = await this.getNewestVersion();
-        if (newestVersion === null) {
-            // 请求失败（403/限流/离线）：状态栏提示不是关键功能，本次会话放弃。
-            this.versionCheckUnavailable = true;
-            return;
-        }
+        // 版本检查已移除（见类注释）：恒返回当前版本 = 永不提示「有更新」。
+        const newestVersion = this.plugin.manifest.version;
 
         if (this.plugin.manifest.version === newestVersion) return;
 
@@ -212,17 +199,8 @@ export default class StatusBarManager {
         }
     }
 
-    private async getNewestVersion(): Promise<string | null> {
-        try {
-            const response: string = await request({
-                url: "https://api.github.com/repos/st3v3nmw/obsidian-spaced-repetition/releases/latest",
-            });
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-            return (await JSON.parse(response)).tag_name as string;
-        } catch (e) {
-            // 403 = GitHub 未认证限流或代理拦截。只打一次，不让状态栏刷新刷屏。
-            console.warn("[spaced-repetition] 版本检查不可用，本次会话不再重试:", String(e));
-            return null;
-        }
+    private async getNewestVersion(): Promise<string> {
+        // 2026-11-10 起不再请求 GitHub API（403 根因，见类注释）。
+        return this.plugin.manifest.version;
     }
 }
