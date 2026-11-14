@@ -19,12 +19,33 @@ import type VirtualTreePlugin from '../main';
 import { compareNames } from '../nameCompare';
 import type { ExternalMount } from '../types';
 import {
+  isRemoteMount,
   isVaultMount,
   mountDisplayName,
   mountHostOf,
   VAULT_ROOT_MOUNT_ID,
   vaultRelPath,
 } from '../types';
+import { isBaiduPath } from '../features/baiduPath';
+import {
+  bdListDir,
+  clearBaiduListCache,
+  bdCreateDir,
+  bdRemove,
+  bdRename,
+  bdUploadFile,
+} from '../features/baiduPanApi';
+import {
+  clearGitRepoCache,
+  gitEntryInfo,
+  gitListDir,
+  gitCreateDir,
+  gitRemove,
+  gitRename,
+  gitUploadFile,
+} from '../features/gitRepoApi';
+import { gitRepoWebUrl, isGitRepoPath } from '../features/gitRepoPath';
+import { remoteChildVPath, remoteRootLabel } from '../features/remotePath';
 import {
   invalidateVaultParentPlans,
   parentPlanOf,
@@ -66,6 +87,8 @@ import {
 } from '../features/extFs';
 import { ConfirmModal, NamePromptModal } from './promptModals';
 import { MountEditorModal, MountTargetPickerModal, VaultMountPickModal } from './mountModals';
+import { GitRepoMountModal } from './gitRepoModal';
+import { BaiduPanMountModal } from './baiduPanModal';
 import { iconForEntry } from '../features/iconTheme';
 import { isImageFile } from '../views/ImageView';
 import { isVideoFile } from '../views/VideoView';
@@ -107,6 +130,8 @@ interface MountState {
   truncated: boolean;
   scannedAt: number;
   error?: string;
+  /** remote 挂载:有请求在途(根层/子层)。渲染头行时给「加载中…」提示。 */
+  loading?: boolean;
 }
 
 /**
@@ -211,6 +236,9 @@ export class MountPanelView extends ItemView {
    * 重扫后 render 命中新缓存即可;已卸载的挂载残留 state 顺手清掉。
    */
   refreshMounts(): void {
+    // remote 挂载:磁盘重扫之外,远端缓存一并清掉(手动刷新 = 拉到远端最新)
+    clearGitRepoCache();
+    clearBaiduListCache();
     const mounts = this.plugin.settings.externalMounts ?? [];
     const alive = new Set(mounts.map((m) => m.id));
     for (const id of [...this.states.keys()]) {
@@ -291,6 +319,14 @@ export class MountPanelView extends ItemView {
       return state;
     }
 
+    // remote 挂载（github:// / gitee:// / bdpan://）：不碰磁盘，各层逐个从
+    // 远端 API 拉取（git 整树缓存 / bdpan 目录缓存），拉取完成后再重绘。
+    if (isRemoteMount(mount)) {
+      this.states.set(mount.id, state);
+      this.loadLayer(mount, '', state);
+      return state;
+    }
+
     if (!isDirectory(mount.path)) {
       // A mounted FILE is legal: the tree is that one row (挂载为独立条目
       // offers both folders and files). `loaded` covers '' so loadLayer
@@ -326,6 +362,11 @@ export class MountPanelView extends ItemView {
    * tree is always complete, just filled in lazily.
    */
   private loadLayer(mount: ExternalMount, rel: string, state: MountState): void {
+    // remote 挂载：读一层是网络请求，走异步分支（数据到达后自行重绘）
+    if (isRemoteMount(mount)) {
+      this.loadLayerRemote(mount, rel, state);
+      return;
+    }
     if (state.loaded.has(rel)) return;
     state.loaded.add(rel);
 
@@ -387,6 +428,61 @@ export class MountPanelView extends ItemView {
       parent.children = children;
       parent.empty = children.length === 0;
     }
+  }
+
+  /**
+   * remote 挂载读一层（github:// / gitee:// 走整树缓存 + gitListDir；
+   * bdpan:// 走目录缓存 + bdListDir）。
+   *
+   * loaded 立即标记 + in-flight 去重：展开点击是同步回调，请求在途时再次
+   * 展开/渲染不能重复发请求；数据到达后挂 children 并重绘。挂载被卸载/
+   * 重扫（state 已被替换）时旧请求的结果直接丢弃。
+   */
+  private loadLayerRemote(mount: ExternalMount, rel: string, state: MountState): void {
+    if (state.loaded.has(rel)) {
+      // 已在加载中：占住 loading 提示即可，无需再发
+      return;
+    }
+    state.loaded.add(rel);
+    state.loading = true;
+    const dirVPath = remoteChildVPath(mount.path, rel);
+    void (async () => {
+      try {
+        let children = isGitRepoPath(mount.path) ? await gitListDir(dirVPath) : await bdListDir(dirVPath);
+        // 挂载单个远端文件:目录接口对文件路径返回空列表 —— 查树接口里该路径
+        // 本身,是文件就按「单文件挂载」渲染成一行(与库外挂单文件同款)
+        if (children.length === 0 && !rel && isGitRepoPath(mount.path)) {
+          const info = await gitEntryInfo(dirVPath);
+          if (info && !info.isDir) {
+            children = [{
+              name: dirVPath.split('/').pop() || 'file',
+              rel: dirVPath.split('/').pop() || 'file',
+              abs: dirVPath,
+              isDir: false,
+              size: info.size,
+              children: [],
+            }];
+          }
+        }
+        if (this.states.get(mount.id) !== state) return; // 挂载已卸载/重扫
+        if (!rel) {
+          state.tree = children;
+        } else {
+          const parent = this.findNode(state.tree, rel);
+          if (parent) {
+            parent.children = children;
+            parent.empty = children.length === 0;
+          }
+        }
+        state.loading = false;
+        state.error = undefined;
+      } catch (e) {
+        if (this.states.get(mount.id) !== state) return;
+        state.loading = false;
+        state.error = String((e as Error)?.message || e);
+      }
+      this.render();
+    })();
   }
 
   /**
@@ -892,6 +988,34 @@ export class MountPanelView extends ItemView {
       // 思源同款：挂载入口分库内（选择器搜库内文件/文件夹）与库外（路径弹窗）。
       // 实现在宿主 promptAddMountSplit——面板空状态与设置页共用同一分流。
       this.plugin.promptAddMountSplit(ev);
+    } else if (action === 'git-mount') {
+      // 远端挂载入口:仓库地址/我的仓库 → 分支 → 浏览 → 挂载(思源 git-repo-dialog 同款)
+      new GitRepoMountModal(this.plugin, {
+        onPick: (p) =>
+          this.plugin.promptMountEntry({
+            kind: 'remote',
+            path: p.vPath,
+            label: p.label,
+            include: '',
+            exclude: '',
+            refreshSeconds: 0,
+            pinned: false,
+          }),
+      }).open();
+    } else if (action === 'baidu-mount') {
+      // 百度网盘挂载入口:接入方式配置 → 快捷同步空间/浏览网盘 → 挂载
+      new BaiduPanMountModal(this.plugin, {
+        onPick: (p) =>
+          this.plugin.promptMountEntry({
+            kind: 'remote',
+            path: p.vPath,
+            label: p.label,
+            include: '',
+            exclude: '',
+            refreshSeconds: 0,
+            pinned: false,
+          }),
+      }).open();
     } else if (action === 'refresh') {
       this.refreshMounts();
     } else if (action === 'drag-mode') {
@@ -1041,6 +1165,10 @@ export class MountPanelView extends ItemView {
     if (!state.open.has('')) return;
 
     if (state.error) section.createDiv({ cls: 'logseq-mount-error', text: state.error });
+    // remote 挂载:请求在途且根层还没有数据时给加载提示(数据到达后自动重绘)
+    if (isRemoteMount(mount) && state.loading && state.tree.length === 0) {
+      section.createDiv({ cls: 'logseq-mount-flag', text: '加载中…' });
+    }
     const filtering = this.plugin.settings.mountFilterEnabled !== false;
     const counts = countTree(state.tree);
     const meta: string[] = [];
@@ -1393,7 +1521,10 @@ export class MountPanelView extends ItemView {
     row.createSpan({ cls: 'logseq-mount-name', text: node.name });
     // Linked state is the only flair a file row carries: type pills (png /
     // 二进制 / …) read as noise repeated on half the rows, so they are gone.
-    if (this.isLinked(node)) row.createSpan({ cls: 'logseq-mount-flag is-linked', text: '已链接' });
+    // remote 行不查链接(isLinked 按文件名查 Mounts/,同名库内文件会误报)
+    if (!isRemoteMount(mount) && this.isLinked(node)) {
+      row.createSpan({ cls: 'logseq-mount-flag is-linked', text: '已链接' });
+    }
     // A FILE with mounts under it is a container too, so it needs a caret to
     // open them. The caret is a separate click target: the row itself keeps
     // opening the file, which is what a file row has always done.
@@ -1741,6 +1872,94 @@ export class MountPanelView extends ItemView {
   }
 
   /**
+   * remote 挂载（github:// / gitee:// / bdpan://）的右键菜单支。
+   *
+   * 文件行:打开(工作副本路由)/Monaco/只读 + 新建笔记;目录与挂载头:新建。
+   * 重命名/删除直接提交到远端(git 一次 commit,bdpan 走 filemanager),没有
+   * 回收站语义 —— 删除走 dangerous 确认。git 独有:在 GitHub/Gitee 中打开
+   * (bdpan 没有等价的单条目网页地址,不设占位项)。
+   */
+  private wireRemoteMenuItems(menu: Menu, mount: ExternalMount, node: MountNode | null): void {
+    if (node && !node.isDir) {
+      const text = isTextMount(extOf(node.name));
+      const md = node.name.toLowerCase().endsWith('.md');
+      menu.addItem((item) =>
+        item
+          .setTitle(md || text ? '在块编辑器中打开' : '用系统程序打开')
+          .setIcon('file-text')
+          .onClick(() => void this.plugin.openExternalEntry(mount, node)),
+      );
+      menu.addItem((item) =>
+        item
+          .setTitle('用 Monaco 打开（纯代码）')
+          .setIcon('code' as never)
+          .onClick(() => void this.plugin.openExternalEntry(mount, node, { forceCodeEditor: true })),
+      );
+      menu.addItem((item) =>
+        item
+          .setTitle('只读打开')
+          .setIcon('eye' as never)
+          .onClick(() => void this.plugin.openExternalEntry(mount, node, { readOnly: true })),
+      );
+      menu.addSeparator();
+    }
+    // 新建文件/文件夹/笔记、重命名、删除:共用 external 的菜单构建,各 prompt
+    // 内部按 isRemoteMount 分流到远端提交
+    this.addTreeFileMenuItems(menu, mount, node);
+    if (isGitRepoPath(mount.path)) {
+      const url = gitRepoWebUrl(node ? node.abs : mount.path, !node || node.isDir);
+      if (url) {
+        menu.addItem((item) =>
+          item
+            .setTitle(`在 ${mount.path.startsWith('gitee://') ? 'Gitee' : 'GitHub'} 中打开`)
+            .setIcon('arrow-up-right' as never)
+            .onClick(() => window.open(url, '_blank')),
+        );
+      }
+    }
+    menu.addSeparator();
+    // 重新拉取:清掉该挂载的远端缓存,已展开层重读(git 树缓存 5 分钟 TTL /
+    // bdpan 目录缓存 30 秒,写回后各自失效,这里管「远端被别人改了」的场景)
+    menu.addItem((item) =>
+      item.setTitle('重新拉取').setIcon('refresh-cw' as never).onClick(() => {
+        if (isGitRepoPath(mount.path)) clearGitRepoCache();
+        if (isBaiduPath(mount.path)) clearBaiduListCache();
+        this.rescan(mount);
+      }),
+    );
+    menu.addItem((item) =>
+      item.setTitle('复制路径').setIcon('copy' as never).onClick(() => {
+        void navigator.clipboard?.writeText(node ? node.abs : mount.path);
+        new Notice('已复制路径');
+      }),
+    );
+    if (!node) {
+      // 挂载头:固定/卸载与 external 头行同款;不提供「编辑这个挂载」——
+      // 改分支需要移除重挂(siyuan 同款刻意不做)
+      menu.addItem((item) =>
+        item
+          .setTitle(mount.pinned ? '取消固定' : '固定到顶部')
+          .setIcon('pin' as never)
+          .onClick(async () => {
+            mount.pinned = !mount.pinned;
+            await this.plugin.saveSettings();
+            this.render();
+          }),
+      );
+    }
+    menu.addSeparator();
+    menu.addItem((item) =>
+      item
+        .setTitle('卸载')
+        .setIcon('trash' as never)
+        .onClick(async () => {
+          await this.plugin.removeMount(mount);
+          this.render();
+        }),
+    );
+  }
+
+  /**
    * Right-click menu.
    *
    * `preventDefault` is essential: without it Obsidian opens ITS menu for the
@@ -1758,6 +1977,15 @@ export class MountPanelView extends ItemView {
       // vault API），菜单项见 wireVaultMenuItems。
       if (isVaultMount(mount)) {
         this.wireVaultMenuItems(menu, mount, node);
+        menu.showAtMouseEvent(e);
+        return;
+      }
+
+      // remote 挂载（github:// / gitee:// / bdpan://）：独立菜单支。没有磁盘
+      // 路径,链接到库/同步到库/系统编辑器/资源管理器一概不适用;文件操作经
+      // promptXxx 的 remote 分支直接提交到远端。
+      if (isRemoteMount(mount)) {
+        this.wireRemoteMenuItems(menu, mount, node);
         menu.showAtMouseEvent(e);
         return;
       }
@@ -2314,6 +2542,30 @@ export class MountPanelView extends ItemView {
   }
 
   private promptNewFile(mount: ExternalMount, dirAbs: string, dirRel: string): void {
+    // remote 挂载:新建 = 直接提交一个空文件到远端(git = Contents/批量提交,
+    // bdpan = 上传;官方 API 不支持 0 字节文件时会给出可读错误)
+    if (isRemoteMount(mount)) {
+      new NamePromptModal(
+        this.app,
+        { title: '新建文件', placeholder: 'untitled.md', validate: validateEntryName },
+        (name) => {
+          if (!name) return;
+          const dir = dirRel ? remoteChildVPath(mount.path, dirRel) : mount.path;
+          const target = remoteChildVPath(dir, name);
+          const push = isGitRepoPath(mount.path)
+            ? gitUploadFile(target, new Uint8Array(0))
+            : bdUploadFile(target, new Uint8Array(0));
+          void push.then(
+            () => {
+              new Notice(`已提交 ${name}`);
+              this.rescan(mount, dirRel);
+            },
+            (err) => new Notice(`创建失败:${(err as Error)?.message ?? '未知错误'}`),
+          );
+        },
+      ).open();
+      return;
+    }
     // 库内挂载：走 vault.create（动索引；磁盘上的库根路径与 vault 相同，
     // 但直接写盘不会进索引，面板会看到一个幽灵文件）。dirAbs 在此不用，
     // 新建目标由 mount.path + dirRel 决定。
@@ -2358,6 +2610,27 @@ export class MountPanelView extends ItemView {
   }
 
   private promptNewFolder(mount: ExternalMount, dirAbs: string, dirRel: string): void {
+    // remote 挂载:git 提交 .gitkeep 占位(git 不存空目录);bdpan 走 mkdir
+    if (isRemoteMount(mount)) {
+      new NamePromptModal(
+        this.app,
+        { title: '新建文件夹', placeholder: 'new-folder', validate: validateEntryName },
+        (name) => {
+          if (!name) return;
+          const dir = dirRel ? remoteChildVPath(mount.path, dirRel) : mount.path;
+          const target = remoteChildVPath(dir, name);
+          const push = isGitRepoPath(mount.path) ? gitCreateDir(target) : bdCreateDir(target);
+          void push.then(
+            () => {
+              new Notice(`已提交 ${name}`);
+              this.rescan(mount, dirRel);
+            },
+            (err) => new Notice(`创建失败:${(err as Error)?.message ?? '未知错误'}`),
+          );
+        },
+      ).open();
+      return;
+    }
     if (isVaultMount(mount)) {
       new NamePromptModal(
         this.app,
@@ -2451,6 +2724,28 @@ export class MountPanelView extends ItemView {
   }
 
   private promptRename(mount: ExternalMount, node: MountNode): void {
+    // remote 挂载:同目录改名直接提交远端(git = 一次 Rename commit;bdpan =
+    // filemanager rename,不支持跨目录)
+    if (isRemoteMount(mount)) {
+      new NamePromptModal(
+        this.app,
+        { title: '重命名', initial: node.name, validate: validateEntryName },
+        (name) => {
+          if (!name || name === node.name) return;
+          const parent = parentRelOf(node.rel);
+          const target = remoteChildVPath(parent ? remoteChildVPath(mount.path, parent) : mount.path, name);
+          const push = isGitRepoPath(mount.path) ? gitRename(node.abs, target) : bdRename(node.abs, target);
+          void push.then(
+            () => {
+              new Notice(`已重命名为 ${name}`);
+              this.rescan(mount, parentRelOf(node.rel));
+            },
+            (err) => new Notice(`重命名失败:${(err as Error)?.message ?? '未知错误'}`),
+          );
+        },
+      ).open();
+      return;
+    }
     // 库内挂载：fileManager.renameFile 会同步更新全库引用与反链，
     // 直接磁盘改名做不到这一点。
     if (isVaultMount(mount)) {
@@ -2509,6 +2804,34 @@ export class MountPanelView extends ItemView {
 
   private promptDelete(mount: ExternalMount, node: MountNode): void {
     const typeStr = node.isDir ? '文件夹' : '文件';
+    // remote 挂载:直接提交删除到远端,没有回收站(git 可从历史恢复;bdpan 删
+    // 即删)—— ConfirmModal dangerous,把后果说清楚再动手
+    if (isRemoteMount(mount)) {
+      const where = isGitRepoPath(mount.path)
+        ? `将直接提交一个删除 commit 到 ${remoteRootLabel(mount.path)}`
+        : '将从百度网盘删除';
+      new ConfirmModal(
+        this.app,
+        {
+          title: `删除${typeStr}`,
+          body: `确定删除${typeStr}「${node.name}」${node.isDir ? '及其全部内容' : ''}吗?${where},本地不会经过回收站。`,
+          confirmText: '删除',
+          dangerous: true,
+        },
+        (ok) => {
+          if (!ok) return;
+          const push = isGitRepoPath(mount.path) ? gitRemove(node.abs) : bdRemove(node.abs);
+          void push.then(
+            () => {
+              new Notice('已删除并提交到远端');
+              this.rescan(mount, parentRelOf(node.rel));
+            },
+            (err) => new Notice(`删除失败:${(err as Error)?.message ?? '未知错误'}`),
+          );
+        },
+      ).open();
+      return;
+    }
     // 库内挂载：走 fileManager.trashFile（尊重用户设置的回收站形态），
     // 索引与反链同步更新。
     if (isVaultMount(mount)) {
@@ -2690,9 +3013,12 @@ export class MountPanelView extends ItemView {
 }
 
 // Small helper kept out of the class for readability.
-/** 区块 meta 行的路径展示：库内挂载按库内习惯以 / 开头；库外保持绝对路径。 */
+/** 区块 meta 行的路径展示：库内挂载按库内习惯以 / 开头；remote 挂载显示
+ *  带标签的根名（[GitHub] o/r@ref）；库外保持绝对路径。 */
 function mountDisplayPath(mount: ExternalMount): string {
-  return isVaultMount(mount) ? `/${mount.path.replace(/^\/+/, '')}` : mount.path;
+  if (isVaultMount(mount)) return `/${mount.path.replace(/^\/+/, '')}`;
+  if (isRemoteMount(mount)) return remoteRootLabel(mount.path);
+  return mount.path;
 }
 
 /** The directory containing `rel`, if the cached scan has it. */

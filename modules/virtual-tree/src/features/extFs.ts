@@ -526,6 +526,36 @@ export function readExternalText(abs: string): string {
   return fsMod().readFileSync(abs, 'utf8');
 }
 
+// ---------------------------------------------------------------------------
+// 保存通知（remote 挂载工作副本的写回提交用）。
+//
+// md-editor 各外部视图与 save-control 都经 writeExternalText 落盘 —— 在这里
+// 统一广播一次,remoteWorkspace 就能捕获「用户保存了远端文件的本地工作副本」
+// 并异步推送 commit/上传,而不用改造任何同步 IO 的调用方。
+// ---------------------------------------------------------------------------
+
+type ExternalSaveListener = (abs: string) => void;
+const saveListeners = new Set<ExternalSaveListener>();
+
+/** Subscribe to out-of-vault text/binary saves. Returns the unsubscribe fn. */
+export function onExternalFileSaved(fn: ExternalSaveListener): () => void {
+  saveListeners.add(fn);
+  return () => {
+    saveListeners.delete(fn);
+  };
+}
+
+function notifySaved(abs: string): void {
+  for (const fn of saveListeners) {
+    try {
+      fn(abs);
+    } catch (e) {
+      // 一个坏监听不能影响保存本身
+      console.error('[virtual-tree] external save listener failed:', e);
+    }
+  }
+}
+
 /**
  * Read at most `limit` bytes from the HEAD of a file, decoded as UTF-8.
  *
@@ -564,6 +594,7 @@ export function readExternalTextHead(abs: string, limit: number): string {
 /** Overwrite a text file outside the vault. Throws on failure. */
 export function writeExternalText(abs: string, data: string): void {
   fsMod().writeFileSync(abs, data, 'utf8');
+  notifySaved(abs);
 }
 
 // ---------------------------------------------------------------------------
@@ -579,6 +610,23 @@ export function writeExternalText(abs: string, data: string): void {
  * 必须走 writeFileSync 的 Buffer 分支（生产 Node fs 原生支持）。
  */
 export function writeExternalBinary(abs: string, data: Uint8Array): FsOpResult {
+  try {
+    const fs = fsMod() as unknown as {
+      writeFileSync(p: string, d: Uint8Array): void;
+    };
+    fs.writeFileSync(abs, data);
+    notifySaved(abs);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: errorMessage(e) };
+  }
+}
+
+/**
+ * 静默写字节：不触发保存监听。remote 工作副本的**下载**用它 —— 下载写盘不是
+ * 用户保存,不该被写回提交钩子当成一次上传推回远端。
+ */
+export function writeExternalBytesQuiet(abs: string, data: Uint8Array): FsOpResult {
   try {
     const fs = fsMod() as unknown as {
       writeFileSync(p: string, d: Uint8Array): void;

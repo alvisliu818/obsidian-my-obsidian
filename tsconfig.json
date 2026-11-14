@@ -22,7 +22,7 @@
     "paths": {
       "src/*": ["modules/obsidian-git/src/*"],
       "@/*": ["modules/music-player/src/*"],
-      "cm-bundle:@codemirror/legacy-modes/mode/*": ["E:/HOME/Code/.yarn-global/unplugged-obsidian-my-obsidian/@codemirror-legacy-modes-npm-6.5.5-23395d6ece/node_modules/@codemirror/legacy-modes/mode/*"],
+      "cm-bundle:@codemirror/legacy-modes/mode/*": ["E:/HOME/Runtime/.yarn-global/unplugged-obsidian-my-obsidian/@codemirror-legacy-modes-npm-6.5.5-23395d6ece/node_modules/@codemirror/legacy-modes/mode/*"],
       "@core/*": ["modules/scrolling/src/core/*"],
       "@features/*": ["modules/scrolling/src/features/*"],
       "@typings/*": ["modules/scrolling/src/typings/*"]

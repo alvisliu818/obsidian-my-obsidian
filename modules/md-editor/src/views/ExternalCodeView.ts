@@ -27,7 +27,7 @@ import { monaco as monacoRuntime } from '../../../code-editor/src/editor/lazyMon
 import { createEditor, setupMonaco, getLanguageByPath } from '../../../code-editor/src/editor/monaco';
 import { encodeFileUri } from '../../../code-editor/src/lsp/lspHost';
 import { monacoLspAttach } from '../../../code-editor/src/lsp/monacoLspBridge';
-import { readExternalText, writeExternalText } from '../../../virtual-tree/src/features/extFs';
+import { readTextAny, writeTextAny } from '../../../virtual-tree/src/features/remoteIO';
 import { logOp } from '../features/logger';
 import type LogseqEditorPlugin from '../main';
 import { relativeDisplayPath } from '../features/codeFileKind';
@@ -97,6 +97,8 @@ export class ExternalCodeView extends ItemView {
   /** Public so the e2e probe can read the buffer without reaching into privates. */
   editor: monacoNS.editor.IStandaloneCodeEditor | null = null;
   private lastDiskData = '';
+  // 加载失败标记:挡住 flush,防止把空缓冲覆盖回远端(BlockEditorView 同款)
+  private loadFailed = false;
   private saveTimer: number | null = null;
   /**
    * 是否有未落盘的编辑。
@@ -169,7 +171,7 @@ export class ExternalCodeView extends ItemView {
     // mounting here would build an empty editor for a file whose path and
     // content have not arrived yet — and the state that carries them is the
     // only place they exist.
-    if (this.abs) this.mount();
+    await this.mount();
     // 行级反链的刷新源:笔记保存(changed)/索引批解析完成(resolved)。
     // registerEvent 随视图卸载自动清理;扫描本身 600ms 防抖。
     this.registerEvent(this.app.metadataCache.on('changed', () => this.scheduleLineLinksScan()));
@@ -239,7 +241,7 @@ export class ExternalCodeView extends ItemView {
     this.displayPath = relativeDisplayPath(this.abs, this.mountPath, this.fileName);
     await super.setState(state, result);
     // Now the path is known; build the editor if onOpen ran before us.
-    if (!this.editor && this.abs) this.mount();
+    if (!this.editor && this.abs) await this.mount();
     // 行锚落地:新挂载的由 mount() 末尾消费;叶子复用(编辑器已在、不重挂)在这里跳。
     if (this.pendingRevealLine !== null) {
       const n = this.pendingRevealLine;
@@ -391,7 +393,7 @@ export class ExternalCodeView extends ItemView {
 
   // ------------------------------------------------------------------
 
-  private mount(): void {
+  private async mount(): Promise<void> {
     // 重挂载(切换混合/源码、设置变更)前先销毁旧的:
     // contentEl.empty() 只清 DOM,M Monaco 实例与 FragmentHost 组件会泄漏,
     // 且它们的 ResizeObserver 还盯着已脱离文档的容器。
@@ -448,8 +450,10 @@ export class ExternalCodeView extends ItemView {
     let content = this.lastDiskData;
     if (!content && this.abs) {
       try {
-        content = readExternalText(this.abs);
+        content = await readTextAny(this.abs);
+        this.loadFailed = false;
       } catch (e) {
+        this.loadFailed = true;
         new Notice(`无法读取 ${this.fileName}：${String(e).slice(0, 100)}`);
         content = '';
       }
@@ -850,10 +854,14 @@ export class ExternalCodeView extends ItemView {
     const data = this.hybridEngine ? this.hybridEngine.reconstruct() : this.editor.getValue();
     // 未编辑就不写盘:混合模式的重建会归一注释缩进,只看「结果 ≠ 磁盘内容」
     // 会把没动过的文件改掉格式(见 dirty 的注释)。
+    if (this.loadFailed) {
+      new Notice('文件未成功加载,已阻止保存;请关闭标签页后重新打开。');
+      return;
+    }
     if (!this.dirty || data === this.lastDiskData) return;
     const previousDiskData = this.lastDiskData;
     try {
-      writeExternalText(this.abs, data);
+      await writeTextAny(this.abs, data);
       this.lastDiskData = data;
       this.dirty = false;
       if (notify) new Notice(`已保存 ${this.fileName}`);
@@ -893,7 +901,7 @@ export class ExternalCodeView extends ItemView {
    * settings toggle has to remount. The unsaved text is carried across so
    * nothing is lost in the swap.
    */
-  remount(): void {
+  async remount(): Promise<void> {
     if (!this.abs) return;
     try {
       // Prefer what is on screen: an autosave may not have landed yet.
@@ -901,21 +909,22 @@ export class ExternalCodeView extends ItemView {
       // mount() rebuilds from lastDiskData, so the live buffer travels with it
       // in BOTH modes — in hybrid mode there is no single model to setValue()
       // onto anyway (the code lines are only part of the file).
-      this.mount();
+      await this.mount();
     } catch {
       /* a failed remount leaves the previous view in place; not fatal */
     }
   }
 
-  /** Re-read from disk (the file changed elsewhere). */
-  reload(): void {
+  /** Re-read from disk / remote (the file changed elsewhere). */
+  async reload(): Promise<void> {
     try {
-      this.lastDiskData = readExternalText(this.abs);
+      this.lastDiskData = await readTextAny(this.abs);
       // 重新读取是「放弃本地改动,以磁盘为准」,所以清掉脏标记。
       this.dirty = false;
+      this.loadFailed = false;
       // 混合模式下给 Monaco setValue 只换掉代码行,注释区还是旧的——必须整
       // 体重挂载,让 buildCodeDoc 重新切一遍。
-      this.mount();
+      await this.mount();
     } catch (e) {
       new Notice(`重新读取失败：${String(e).slice(0, 100)}`);
     }

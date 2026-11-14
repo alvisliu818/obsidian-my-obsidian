@@ -14,11 +14,9 @@
  */
 
 import { App, TFile } from "obsidian";
-import {
-  MOUNT_FOLDER,
-  readExternalText,
-  writeExternalText,
-} from "../../virtual-tree/src/features/extFs";
+import { MOUNT_FOLDER } from "../../virtual-tree/src/features/extFs";
+// 库外读写走 remoteIO 直连分发(远端虚拟路径提交到远端,磁盘路径走 fs)
+import { readTextAny, writeTextAny } from "../../virtual-tree/src/features/remoteIO";
 
 export type SaveTargetKind = "vault" | "external";
 
@@ -173,7 +171,7 @@ export async function readTargetContent(app: App, target: SaveTarget): Promise<s
   }
   if (!target.abs) return null;
   try {
-    return readExternalText(target.abs);
+    return readTextAny(target.abs);
   } catch {
     return null;
   }
@@ -186,7 +184,7 @@ export async function writeTargetContent(app: App, target: SaveTarget, content: 
     return;
   }
   if (!target.abs) throw new Error("库外目标缺少绝对路径");
-  writeExternalText(target.abs, content);
+  await writeTextAny(target.abs, content);
 }
 
 /**

@@ -10,6 +10,7 @@
  */
 
 import { PRESET_OPEN_WITH } from './features/openWith';
+import { validRemotePath, remoteShortName } from './features/remotePath';
 
 /** Editor for out-of-vault markdown: Obsidian's native editor or the block editor. */
 export type EditorChoice = 'logseq' | 'native';
@@ -24,13 +25,17 @@ export type VideoOpenMode = 'player' | 'native';
  * back to where it actually lives. `include` / `exclude` are regular
  * expressions matched against the path relative to `path`.
  *
- * 两种形态（2026-11-03 库内挂载）：
+ * 三种形态：
  *   - kind 'external'（缺省，向后兼容）：库外条目，`path` 是绝对路径；
- *   - kind 'vault'：库内条目，`path` 是库内相对路径（Obsidian 的 TFile /
- *     TFolder path 形态，`/` 分隔）。库内条目直接走 vault API（打开走
- *     openFile、建删走 vault 事件与索引），不需要 rescan 定时器。
+ *   - kind 'vault'（2026-11-03 库内挂载）：`path` 是库内相对路径（Obsidian 的
+ *     TFile / TFolder path 形态，`/` 分隔）。库内条目直接走 vault API（打开走
+ *     openFile、建删走 vault 事件与索引），不需要 rescan 定时器；
+ *   - kind 'remote'（2026-11-14 远端挂载）：`path` 是虚拟路径 —— github:// /
+ *     gitee://（Git 仓库某分支）或 bdpan://（百度网盘目录）。条目按前缀分发到
+ *     各自的 API 后端；文件打开先落到本地工作副本（remoteWorkspace.ts），保存
+ *     经 extFs 写钩子异步推回远端。
  */
-export type MountKind = 'external' | 'vault';
+export type MountKind = 'external' | 'vault' | 'remote';
 
 /**
  * 内置库根挂载的 id。面板默认渲染一个合成态的库根挂载（不在配置里）；
@@ -95,6 +100,11 @@ export function isVaultMount(m: ExternalMount): boolean {
   return m.kind === 'vault';
 }
 
+/** 远端挂载判定（github:// / gitee:// / bdpan://）。 */
+export function isRemoteMount(m: ExternalMount): boolean {
+  return m.kind === 'remote';
+}
+
 /** 库内相对路径归一：反斜杠转 `/`、去首尾斜杠。 */
 export function vaultRelPath(p: string): string {
   return p.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
@@ -125,9 +135,13 @@ export function mountFrom(raw: unknown): ExternalMount | null {
   const at = typeof m.attachTo === 'string' && m.attachTo.trim() ? m.attachTo.trim().replace(/\/+$/, '') : undefined;
   const selfHost = at ? mountHostOf(at).hostId === m.id.trim() : false;
   const attachTo = at && !selfHost ? at : undefined;
-  const kind: MountKind = m.kind === 'vault' ? 'vault' : 'external';
-  // vault 挂载的 path 是库内相对路径：归一分隔符与首尾斜杠；空 path 无意义。
-  const path = kind === 'vault' ? vaultRelPath(m.path) : m.path.trim();
+  const kind: MountKind = m.kind === 'vault' ? 'vault' : m.kind === 'remote' ? 'remote' : 'external';
+  // vault 挂载的 path 是库内相对路径：归一分隔符与首尾斜杠；remote 挂载的 path
+  // 是虚拟路径（github:// / gitee:// / bdpan://），必须是合法虚拟路径才放行；
+  // external 照旧是绝对路径。空 path 无意义。
+  const rawPath = m.path.trim();
+  const path = kind === 'vault' ? vaultRelPath(rawPath) : rawPath;
+  if (kind === 'remote' && !validRemotePath(path)) return null;
   if (!path && !isVaultRoot) return null;
   return {
     id: m.id.trim(),
@@ -239,6 +253,8 @@ export function mountTreeOrderFrom(raw: unknown): Record<string, Record<string, 
 /** Display name for a mount: its label, else the folder's own name. */
 export function mountDisplayName(m: ExternalMount): string {
   if (m.label.trim()) return m.label.trim();
+  // remote 挂载的 path 是虚拟路径，按前缀取短名（owner/repo@ref、同步空间…）
+  if (m.kind === 'remote') return remoteShortName(m.path);
   const parts = m.path.replace(/[\\/]+$/, '').split(/[\\/]+/);
   return parts[parts.length - 1] || m.path;
 }
@@ -298,6 +314,66 @@ export interface RecentOpenEntry {
   kind: 'vault' | 'ext';
   /** Epoch ms of the last open; ordering only. */
   at: number;
+}
+
+/**
+ * remote 挂载的凭据配置（本模块 data.json 内，不出本机）：
+ *  - git：GitHub / Gitee 各一个可选访问令牌（公开仓库可匿名浏览，写回提交必须令牌）；
+ *  - baiduPan：两种接入方式（official 官方 API 设备码授权 / cookie 网页 BDUSS），
+ *    字段与 siyuan-virtual-tree 的 BaiduPanConfig 一致，令牌轮换（refreshToken /
+ *    tokenExpiresAt）必须持久化。
+ */
+export interface BaiduPanSettings {
+  mode: 'official' | 'cookie';
+  bduss: string;
+  stoken: string;
+  appKey: string;
+  secretKey: string;
+  accessToken: string;
+  refreshToken: string;
+  tokenExpiresAt: number;
+  /** cookie 模式下「同步空间」对应的云端目录（官方 API 无同步空间）。 */
+  syncDir: string;
+}
+
+export const DEFAULT_BD_SYNC_DIR = '/apps/sync';
+
+export const DEFAULT_BAIDU_PAN_SETTINGS: BaiduPanSettings = {
+  mode: 'official',
+  bduss: '',
+  stoken: '',
+  appKey: '',
+  secretKey: '',
+  accessToken: '',
+  refreshToken: '',
+  tokenExpiresAt: 0,
+  syncDir: DEFAULT_BD_SYNC_DIR,
+};
+
+/** data.json 里手改过的百度网盘配置只保留形状合法的条目；mode 缺省时按凭据
+ *  推断(有 accessToken → official),完全没有凭据保持默认 official(推荐接入)。 */
+function baiduPanFrom(raw: unknown): BaiduPanSettings {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  const mode: BaiduPanSettings['mode'] =
+    o.mode === 'official'
+      ? 'official'
+      : o.mode === 'cookie'
+        ? 'cookie'
+        : o.accessToken || o.refreshToken || o.appKey
+          ? 'official'
+          : DEFAULT_BAIDU_PAN_SETTINGS.mode;
+  const s = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+  return {
+    mode,
+    bduss: s(o.bduss),
+    stoken: s(o.stoken),
+    appKey: s(o.appKey),
+    secretKey: s(o.secretKey),
+    accessToken: s(o.accessToken),
+    refreshToken: s(o.refreshToken),
+    tokenExpiresAt: Number(o.tokenExpiresAt) || 0,
+    syncDir: s(o.syncDir) || DEFAULT_BD_SYNC_DIR,
+  };
 }
 
 /** virtual-tree 模块自己的设置片(data.json 的 modules['virtual-tree'].data)。 */
@@ -496,6 +572,11 @@ export interface VirtualTreeSettings {
   videoMarksFolder: string;
   /** Configured external applications for the "open with" menu. */
   openWithApps: OpenWithApp[];
+  /** remote 挂载（github:// / gitee://）的访问令牌；空 = 匿名浏览（60 次/小时）。 */
+  gitGithubToken: string;
+  gitGiteeToken: string;
+  /** 百度网盘（bdpan://）接入配置，见 BaiduPanSettings。 */
+  baiduPan: BaiduPanSettings;
 }
 
 export const DEFAULT_VIRTUAL_TREE_SETTINGS: VirtualTreeSettings = {
@@ -533,6 +614,9 @@ export const DEFAULT_VIRTUAL_TREE_SETTINGS: VirtualTreeSettings = {
   videoTimestampsEnabled: true,
   videoMarksFolder: 'Video Marks',
   openWithApps: [],
+  gitGithubToken: '',
+  gitGiteeToken: '',
+  baiduPan: { ...DEFAULT_BAIDU_PAN_SETTINGS },
 };
 
 /** Normalize one raw property value to an editor choice (unknown → null). */
@@ -675,5 +759,9 @@ export function virtualTreeSettingsFrom(raw: unknown): VirtualTreeSettings {
     o.openWithApps === undefined
       ? PRESET_OPEN_WITH.map((a) => ({ ...a }))
       : openWithAppsFrom(o.openWithApps);
+  // remote 挂载凭据：git 两家令牌 + 百度网盘接入配置（见 baiduPanFrom 的容错规则）
+  s.gitGithubToken = typeof o.gitGithubToken === 'string' ? o.gitGithubToken.trim() : '';
+  s.gitGiteeToken = typeof o.gitGiteeToken === 'string' ? o.gitGiteeToken.trim() : '';
+  s.baiduPan = baiduPanFrom(o.baiduPan);
   return s;
 }

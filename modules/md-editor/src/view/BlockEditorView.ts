@@ -78,7 +78,8 @@ import { applySupertags, normalizeTag, removeSupertags } from '../features/super
 import { collectBlockTags, removeTagFromText } from '../features/supertagText';
 import { mountCodeEditor, parseCodeFence, type MountedCodeEditor } from '../blocks/codeBlockEdit';
 import { unwatchGuideLayout, watchGuideLayout } from '../blocks/guideLayout';
-import { baseOf, MOUNT_FOLDER, readExternalText, writeExternalText } from '../../../virtual-tree/src/features/extFs';
+import { baseOf, MOUNT_FOLDER } from '../../../virtual-tree/src/features/extFs';
+import { readTextAny, writeTextAny } from '../../../virtual-tree/src/features/remoteIO';
 import { relativeDisplayPath } from '../features/codeFileKind';
 import { setLeafTitle } from '../features/leafTitle';
 import { toObsidianMath } from '../features/latexSource';
@@ -168,6 +169,12 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
    * render into a dead view.
    */
   private refsEpoch = 0;
+  /**
+   * 库外文件加载失败标记(remoteIO 直连读失败/网络断等)。加载失败时编辑器
+   * 呈现空文档 —— 放行 save 会把远端文件覆盖成空内容,所以 save() 见到它
+   * 直接拒绝;成功(重)加载后复位。
+   */
+  private loadFailed = false;
 
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
     super(leaf);
@@ -393,7 +400,17 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
    * content.
    */
   async openExternalFile(abs: string, name: string, mountPath = ''): Promise<void> {
-    const data = readExternalText(abs);
+    // 远端虚拟路径经 remoteIO 直连 API 读;加载失败必须挡住 save —— 编辑器
+    // 呈现的是空文档,放行保存会把远端文件覆盖成空内容。
+    let data = '';
+    try {
+      data = await readTextAny(abs);
+      this.loadFailed = false;
+    } catch (e) {
+      this.loadFailed = true;
+      new Notice(`加载失败:${(e as Error)?.message || e}`);
+      throw e;
+    }
     // Release the seed note's page props before retargeting, so the registry
     // entry that pointed at the borrowed file goes away with it.
     clearLogseqPageProps(this.file?.path ?? '');
@@ -633,6 +650,11 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     }
     // 丢弃请求在身:本次以及之后的 save 都是空操作(视图马上销毁)。
     if (this.externalDiscardRequested) return;
+    // 加载失败:编辑器是空文档,写回 = 把远端文件覆盖成空,直接拒绝。
+    if (this.loadFailed) {
+      new Notice('文件未成功加载,已阻止保存;请关闭标签页后重新打开。');
+      return;
+    }
     // Nothing was edited, so nothing is written.
     //
     // The test is NOT "does the serialization differ from the file" — the
@@ -650,7 +672,8 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     // 结果 ≠ 基线时才写),且与本次写盘内容不同。
     const previousDiskData = this.externalDiskData;
     try {
-      writeExternalText(this.externalAbs, data);
+      // remoteIO 直连:远端虚拟路径提交到远端(git 内容无差异自动跳过),磁盘路径走 fs
+      await writeTextAny(this.externalAbs, data);
       this.externalDiskData = data;
       this.externalDirty = false;
       // 库外写盘绕过 vault,save-control 的 versionOnWrite(监听 vault modify)

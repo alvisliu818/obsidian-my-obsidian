@@ -49,7 +49,7 @@ import { mountDisplayName, type ExternalMount } from '../../virtual-tree/src/typ
 import type { MountNode } from '../../virtual-tree/src/features/mountFilter';
 import { virtualTreeOf } from '../../virtual-tree/src/main';
 import { registerOpener, removeOpeners } from '../../virtual-tree/src/openers';
-import { readExternalText } from '../../virtual-tree/src/features/extFs';
+import { readTextAny } from '../../virtual-tree/src/features/remoteIO';
 import { VIEW_TYPE_OFFICE } from '../../virtual-tree/src/views/OfficeView';
 import { activateIconThemeByPreference } from '../../virtual-tree/src/extensions/iconThemeLoader';
 import type { HeaderMenuHost } from './views/headerPath';
@@ -1864,7 +1864,7 @@ export default class LogseqEditorPlugin extends Plugin {
     if (!opts?.paneMode && this.activateExistingCodeLeaf(node.abs)) return true;
     let data: string;
     try {
-      data = readExternalText(node.abs);
+      data = await readTextAny(node.abs);
     } catch {
       return false; // 混合视图打不开时回落(代码编辑器/shim 会给出提示)
     }
@@ -1894,7 +1894,7 @@ export default class LogseqEditorPlugin extends Plugin {
   ): Promise<boolean> {
     if (!isMarkdownFile(node.name)) return false;
     try {
-      readExternalText(node.abs);
+      await readTextAny(node.abs);
     } catch {
       return false; // the shim view reports the failure with the mount name
     }
@@ -1962,7 +1962,7 @@ export default class LogseqEditorPlugin extends Plugin {
     if (!opts?.paneMode && this.activateExistingCodeLeaf(node.abs)) return true;
     let data: string;
     try {
-      data = readExternalText(node.abs);
+      data = await readTextAny(node.abs);
     } catch {
       return false; // the shim view reports the failure with the mount name
     }
@@ -2005,7 +2005,7 @@ export default class LogseqEditorPlugin extends Plugin {
   ): Promise<void> {
     let content: string;
     try {
-      content = readExternalText(node.abs);
+      content = await readTextAny(node.abs);
     } catch (e) {
       // Name the mount, because the user clicked a row in a tree of many and
       // an absolute path alone would not tell them which one failed.

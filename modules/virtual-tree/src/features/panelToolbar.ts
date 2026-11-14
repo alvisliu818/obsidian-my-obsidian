@@ -25,6 +25,8 @@ export const PANEL_TOOLBAR_BUTTONS: PanelToolbarButton[] = [
   { key: 'new-file', label: '在当前目录新建文件', icon: 'file-plus' },
   { key: 'new-folder', label: '在当前目录新建文件夹', icon: 'folder-plus' },
   { key: 'mount', label: '添加挂载', icon: 'plus' },
+  { key: 'git-mount', label: '挂载 Git 仓库…', icon: 'git-branch' },
+  { key: 'baidu-mount', label: '挂载百度网盘…', icon: 'cloud' },
   { key: 'drag-mode', label: '拖拽排序模式', icon: 'arrow-up-down' },
   { key: 'refresh', label: '重新扫描', icon: 'refresh-cw' },
   { key: 'collapse-all', label: '全部收起', icon: 'chevrons-down-up' },

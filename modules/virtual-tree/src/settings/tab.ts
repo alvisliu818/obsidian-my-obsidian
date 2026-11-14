@@ -13,6 +13,7 @@ import { PluginSettingTab, Setting, Notice, type App } from 'obsidian';
 import type VirtualTreePlugin from '../main';
 import { MountListModal } from '../panels/mountModals';
 import { VIEW_TYPE_MOUNT_PANEL } from '../panels/mountPanel';
+import { gitVerifyToken } from '../features/gitRepoApi';
 import {
   mountDisplayName,
   normalizeVaultFolder,
@@ -44,8 +45,77 @@ export class VirtualTreeSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.createEl('h3', { text: '外部挂载' });
     this.renderMountsSection(containerEl);
+    containerEl.createEl('h3', { text: 'Git 仓库' });
+    this.renderGitSection(containerEl);
     containerEl.createEl('h3', { text: '查看器' });
     this.renderViewersSection(containerEl);
+  }
+
+  /** remote 挂载（github:// / gitee://）的访问令牌。百度网盘凭据不在这里 ——
+   *  设备码授权是一段交互流程,只在挂载对话框里做。 */
+  private renderGitSection(containerEl: HTMLElement): void {
+    containerEl.createEl('p', {
+      cls: 'setting-item-description',
+      text: '挂载面板支持把 GitHub / Gitee 仓库（某个分支或标签）挂成虚拟文档树：浏览、编辑、保存自动提交回远端。公开仓库不填令牌也能浏览，但匿名配额仅 60 次/小时；私有仓库与写回提交必须填令牌。挂载入口在面板工具栏「挂载 Git 仓库…」。',
+    });
+
+    const gh = new Setting(containerEl)
+      .setName('GitHub 访问令牌')
+      .setDesc(
+        'Settings → Developer settings → Personal access tokens。classic 勾 repo，细粒度给 Contents 读写。仅保存在本地插件数据。',
+      );
+    gh.addText((t) => {
+      t.setPlaceholder('ghp_… / github_pat_…(可留空)').setValue(this.plugin.settings.gitGithubToken);
+      t.inputEl.type = 'password';
+      t.onChange(async (v) => {
+        this.plugin.settings.gitGithubToken = v.trim();
+        await this.plugin.saveSettings();
+      });
+    });
+    gh.addButton((b) =>
+      b.setButtonText('验证').setTooltip('验证令牌并显示登录名').onClick(async () => {
+        const token = this.plugin.settings.gitGithubToken.trim();
+        if (!token) {
+          new Notice('未填写 GitHub 令牌');
+          return;
+        }
+        new Notice('验证中…');
+        try {
+          const login = await gitVerifyToken('github');
+          new Notice(`GitHub 令牌有效:${login || '已连接'}`);
+        } catch (e) {
+          new Notice(`GitHub 令牌无效:${(e as Error)?.message || e}`, 6000);
+        }
+      }),
+    );
+
+    const ge = new Setting(containerEl)
+      .setName('Gitee 访问令牌')
+      .setDesc('Gitee → 设置 → 私人令牌,勾 projects。仅保存在本地插件数据。');
+    ge.addText((t) => {
+      t.setPlaceholder('Gitee 私人令牌(可留空)').setValue(this.plugin.settings.gitGiteeToken);
+      t.inputEl.type = 'password';
+      t.onChange(async (v) => {
+        this.plugin.settings.gitGiteeToken = v.trim();
+        await this.plugin.saveSettings();
+      });
+    });
+    ge.addButton((b) =>
+      b.setButtonText('验证').setTooltip('验证令牌并显示登录名').onClick(async () => {
+        const token = this.plugin.settings.gitGiteeToken.trim();
+        if (!token) {
+          new Notice('未填写 Gitee 令牌');
+          return;
+        }
+        new Notice('验证中…');
+        try {
+          const login = await gitVerifyToken('gitee');
+          new Notice(`Gitee 令牌有效:${login || '已连接'}`);
+        } catch (e) {
+          new Notice(`Gitee 令牌无效:${(e as Error)?.message || e}`, 6000);
+        }
+      }),
+    );
   }
 
   private renderMountsSection(containerEl: HTMLElement): void {

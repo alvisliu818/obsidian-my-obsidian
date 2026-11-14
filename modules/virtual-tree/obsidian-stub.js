@@ -4,6 +4,8 @@ module.exports = {
   Plugin, PluginSettingTab: class {}, ItemView: class {}, Modal: class {},
   FuzzySuggestModal: class {}, Setting: class {}, Notice: class {},
   TFile: class {}, TFolder: class {}, TAbstractFile: class {},
+  // remoteHttp 默认传输走 requestUrl;测试注入假传输层后不会走到这里
+  requestUrl: async () => { throw new Error('requestUrl is not available in tests'); },
   normalizePath: (p) => p, MarkdownRenderer: { render: async () => {} },
   debounce: (f) => f, Menu: class {}, Scope: class {}, WorkspaceLeaf: class {},
   TextFileView: class {},

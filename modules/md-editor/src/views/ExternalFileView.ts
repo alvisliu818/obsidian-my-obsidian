@@ -22,7 +22,8 @@ import { markLeafTouched } from './tabTouch';
 import { parseDocument } from '../core/parser';
 import { serializeDocument } from '../core/serializer';
 import { logOp } from '../features/logger';
-import { extOf, readExternalText, writeExternalText } from '../../../virtual-tree/src/features/extFs';
+import { extOf } from '../../../virtual-tree/src/features/extFs';
+import { readTextAny, writeTextAny } from '../../../virtual-tree/src/features/remoteIO';
 import { isTextMount } from '../../../virtual-tree/src/features/mountFilter';
 import { toObsidianMath } from '../features/latexSource';
 
@@ -43,6 +44,8 @@ export class ExternalFileView extends ItemView {
   readOnly = false;
   private doc = parseDocument('');
   private dirty = false;
+  // 加载失败标记:挡住 flush,防止把空文档覆盖回远端(BlockEditorView 同款)
+  private loadFailed = false;
 
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
     super(leaf);
@@ -86,8 +89,10 @@ export class ExternalFileView extends ItemView {
   async onOpen(): Promise<void> {
     if (this.abs && isTextMount(extOf(this.fileName))) {
       try {
-        this.doc = parseDocument(readExternalText(this.abs));
+        this.doc = parseDocument(await readTextAny(this.abs));
+        this.loadFailed = false;
       } catch (e) {
+        this.loadFailed = true;
         new Notice(`无法读取 ${this.fileName}：${String(e).slice(0, 100)}`);
       }
     }
@@ -267,10 +272,14 @@ export class ExternalFileView extends ItemView {
   }
 
   async flush(notify = false): Promise<void> {
+    if (this.loadFailed) {
+      new Notice('文件未成功加载,已阻止保存;请关闭标签页后重新打开。');
+      return;
+    }
     if (!this.abs || this.readOnly || !this.dirty) return;
     const md = serializeDocument(this.doc);
     try {
-      writeExternalText(this.abs, md);
+      await writeTextAny(this.abs, md);
       this.dirty = false;
       if (notify) new Notice(`已保存 ${this.fileName}`);
       logOp(this.plugin, 'external.save', this.abs, 'ok');
@@ -280,11 +289,12 @@ export class ExternalFileView extends ItemView {
     }
   }
 
-  /** Re-read from disk (after the file changed elsewhere). */
-  reload(): void {
+  /** Re-read from disk / remote (the file changed elsewhere). */
+  async reload(): Promise<void> {
     try {
-      this.doc = parseDocument(readExternalText(this.abs));
+      this.doc = parseDocument(await readTextAny(this.abs));
       this.dirty = false;
+      this.loadFailed = false;
       this.render();
     } catch (e) {
       new Notice(`重新读取失败：${String(e).slice(0, 100)}`);

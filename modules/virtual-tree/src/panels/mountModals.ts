@@ -17,7 +17,7 @@ import { compareNames } from '../nameCompare';
 import { compileFilter, dirPruned, entryMatches, validateMountPath, type MountNode } from '../features/mountFilter';
 import { exists, isDirectory, joinAbs, scanExternal } from '../features/extFs';
 import { vaultScanLayer } from '../features/vaultFs';
-import { isVaultMount, vaultRelPath, type MountKind } from '../types';
+import { isRemoteMount, isVaultMount, vaultRelPath, type MountKind } from '../types';
 import {
   hasSystemPicker,
   pickExternalPath,
@@ -348,18 +348,22 @@ export class MountListModal extends Modal {
       const head = row.createDiv({ cls: 'logseq-mount-list-head' });
       head.createSpan({ cls: 'logseq-mount-list-name', text: mountDisplayName(m) });
       if (isVaultMount(m)) head.createSpan({ cls: 'logseq-mount-list-off', text: '库内' });
+      if (isRemoteMount(m)) head.createSpan({ cls: 'logseq-mount-list-off', text: '远端' });
       if (!m.enabled) head.createSpan({ cls: 'logseq-mount-list-off', text: '已停用' });
       if (m.attachTo) {
         head.createSpan({ cls: 'logseq-mount-list-off', text: `嵌套于 ${mountHostLabel(m, mounts)}` });
       }
       // 路径存在性：库外查磁盘，库内查 vault 索引（同名规则：不存在给警示行）。
-      // 库根条目 path 恒为空 = 库根，永远存在，不做误报。
+      // 库根条目 path 恒为空 = 库根，永远存在，不做误报。remote 挂载的 path
+      // 是虚拟路径（github:// / bdpan://），不在磁盘上，跳过存在性检查。
       const isRoot = m.id === VAULT_ROOT_MOUNT_ID;
       const missing = isRoot
         ? false
         : isVaultMount(m)
           ? !this.plugin.app.vault.getAbstractFileByPath(m.path)
-          : !isDirectory(m.path) && !exists(m.path);
+          : isRemoteMount(m)
+            ? false
+            : !isDirectory(m.path) && !exists(m.path);
       if (missing) head.createSpan({ cls: 'logseq-mount-list-warn', text: '路径不存在' });
       row.createDiv({ cls: 'logseq-mount-list-path', text: isRoot ? '（库根）' : m.path });
 
@@ -370,7 +374,8 @@ export class MountListModal extends Modal {
 
       const actions = row.createDiv({ cls: 'logseq-mount-list-actions' });
       // 库根条目没有可编辑的路径/过滤域（编辑弹窗校验不收空路径），不给编辑按钮。
-      if (!isRoot) {
+      // remote 挂载同样不给：改分支/换接入方式需要移除重挂或进挂载对话框。
+      if (!isRoot && !isRemoteMount(m)) {
         actions.createEl('button', { cls: 'mod-cta', text: '编辑' }).addEventListener('click', () => {
           new MountEditorModal(this.plugin, m).open();
         });

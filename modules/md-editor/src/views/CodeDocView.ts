@@ -23,7 +23,7 @@ import { createEditor, setupMonaco, getLanguageByPath } from '../../../code-edit
 import { buildCodeDoc, toOutlineDocText } from '../features/codeDoc';
 import { parseCodeFence } from '../blocks/codeFence';
 import { FragmentHost } from '../blocks/fragmentEditor';
-import { readExternalText, writeExternalText } from '../../../virtual-tree/src/features/extFs';
+import { readTextAny, writeTextAny } from '../../../virtual-tree/src/features/remoteIO';
 import { parseDocument } from '../core/parser';
 import { virtualTreeOf } from '../../../virtual-tree/src/main';
 import { applyHeaderPath, headerSegmentsFor, isUnderMount, matchMountFor } from './headerPath';
@@ -83,6 +83,8 @@ export class CodeDocView extends ItemView {
   private crlf = false;
   private dirty = false;
   private diskData = '';
+  // 加载失败标记:挡住 flushSave,防止把空文档覆盖回远端(见 BlockEditorView 同名注释)
+  private loadFailed = false;
   private saveTimer: number | null = null;
   private zoneTimer = 0;
   private gutterTimer = 0;
@@ -123,12 +125,12 @@ export class CodeDocView extends ItemView {
     if (typeof s.mountLabel === 'string') this.mountLabel = s.mountLabel;
     if (typeof s.mountPath === 'string') this.mountPath = s.mountPath;
     await super.setState(state, result);
-    if (this.abs && !this.mounted) this.mountEditor();
+    if (this.abs && !this.mounted) await this.mountEditor();
     this.syncHeaderPath();
   }
 
   async onOpen(): Promise<void> {
-    if (this.abs && !this.mounted) this.mountEditor();
+    if (this.abs && !this.mounted) await this.mountEditor();
     this.syncHeaderPath();
   }
 
@@ -192,11 +194,14 @@ export class CodeDocView extends ItemView {
   // 挂载
   // ------------------------------------------------------------------
 
-  private mountEditor(): void {
+  private async mountEditor(): Promise<void> {
     let raw = '';
     try {
-      raw = readExternalText(this.abs);
+      raw = await readTextAny(this.abs);
+      this.loadFailed = false;
     } catch (e) {
+      // 加载失败:不 mount 编辑器(空白面板 + 错误提示),loadFailed 挡住 flushSave
+      this.loadFailed = true;
       new Notice(`无法读取 ${this.fileName}：${String(e).slice(0, 120)}`);
       return;
     }
@@ -463,6 +468,10 @@ export class CodeDocView extends ItemView {
       window.clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
+    if (this.loadFailed) {
+      new Notice('文件未成功加载,已阻止保存;请关闭标签页后重新打开。');
+      return;
+    }
     if (!this.dirty || !this.abs) return;
     const data = this.reconstruct();
     if (data === this.diskData) {
@@ -470,7 +479,7 @@ export class CodeDocView extends ItemView {
       return;
     }
     try {
-      writeExternalText(this.abs, data);
+      await writeTextAny(this.abs, data);
       this.diskData = data;
       this.dirty = false;
     } catch (e) {

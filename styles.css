@@ -60446,3 +60446,80 @@ body.ribbon-organizer-mobile-sb.is-mobile .status-bar:not(.ribbon-organizer-sb-s
   text-overflow: ellipsis;
   max-width: 60vw;
 }
+
+/* ==== 虚拟文档树 remote 挂载对话框(Git 仓库 / 百度网盘,思源同款三段式) ==== */
+.lgp-gitrepo__crumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  margin-bottom: 4px;
+}
+.lgp-gitrepo__back {
+  cursor: pointer;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.lgp-gitrepo__back:hover { color: var(--text-normal); }
+.lgp-gitrepo__cur {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.lgp-gitrepo__list {
+  max-height: 42vh;
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 4px;
+}
+.lgp-gitrepo__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.lgp-gitrepo__row:hover { background-color: var(--background-modifier-hover); }
+.lgp-gitrepo__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lgp-gitrepo__row button { flex-shrink: 0; }
+.lgp-gitrepo__status {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lgp-gitrepo__wide { width: 100%; }
+.lgp-bdpan__status {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+.lgp-bdpan__authflow {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-top: 6px;
+}
+.lgp-bdpan__usercode {
+  font-size: 1.6em;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-align: center;
+  padding: 6px 0;
+  user-select: all;
+}
+.lgp-bdpan__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

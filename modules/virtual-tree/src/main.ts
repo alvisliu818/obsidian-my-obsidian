@@ -73,6 +73,12 @@ import {
   unlinkBySource,
   unlinkVaultEntry,
 } from './features/syncToVault';
+import { isRemoteMount } from './types';
+import { initGitRepoApi } from './features/gitRepoApi';
+import { initBaiduPanApi, initBaiduPanConfigFromSettings } from './features/baiduPanApi';
+import { ensureRemoteWorkFile, initRemoteWorkspace, stopRemoteWorkspace } from './features/remoteWorkspace';
+import { GitRepoMountModal } from './panels/gitRepoModal';
+import { BaiduPanMountModal } from './panels/baiduPanModal';
 
 /** The id this instance is re-published under in the app's plugin table. */
 export const VIRTUAL_TREE_ALIAS_ID = 'obsidian-virtual-tree';
@@ -120,6 +126,34 @@ export default class VirtualTreePlugin extends Plugin {
   async onload(): Promise<void> {
     await this.loadSettings();
     this.addSettingTab(new VirtualTreeSettingTab(this.app, this));
+
+    // ---------- remote 挂载（github:// / gitee:// / bdpan://）----------
+    // API 令牌永远实时读 settings（设置里改完立即生效）;百度配置在内存镜像
+    // (bdConfig)中维护、写操作经 hooks 回写 settings(令牌轮换必须持久化)。
+    initGitRepoApi({
+      tokenOf: (p) => (p === 'github' ? this.settings.gitGithubToken : this.settings.gitGiteeToken),
+    });
+    initBaiduPanApi({
+      get: () => this.settings.baiduPan,
+      save: async (next) => {
+        this.settings.baiduPan = next;
+        await this.saveSettings();
+      },
+    });
+    initBaiduPanConfigFromSettings();
+    // 工作副本根:<库根>/<configDir>/plugins/obsidian-my-obsidian/remote-workspace。
+    // 放插件目录(而非库内普通目录)的原因:缓存文件不该被 Obsidian 索引、
+    // 不该进用户笔记列表;放 configDir 的原因:与插件数据同进退,清插件数据
+    // 即清缓存。
+    {
+      const configDir = (this.app.vault as unknown as { configDir?: string }).configDir || '.obsidian';
+      const base = this.vaultBasePath();
+      const root = base ? joinAbs(joinAbs(base, configDir), 'plugins/obsidian-my-obsidian/remote-workspace') : '';
+      initRemoteWorkspace({
+        root,
+        notify: (msg) => new Notice(msg),
+      });
+    }
 
     this.registerView(VIEW_TYPE_MOUNT_PANEL, (leaf) => new MountPanelView(leaf, this));
     this.registerView(VIEW_TYPE_IMAGE, (leaf) => new ImageView(leaf, this));
@@ -441,6 +475,7 @@ export default class VirtualTreePlugin extends Plugin {
 
   onunload(): void {
     this.stopTitleRenameObserver?.();
+    stopRemoteWorkspace();
     if (this.vaultExplorer) {
       void this.vaultExplorer.uninstall();
       this.vaultExplorer = null;
@@ -593,6 +628,44 @@ export default class VirtualTreePlugin extends Plugin {
         .setIcon('hard-drive' as never)
         .onClick(() => this.promptAddMount()),
     );
+    menu.addItem((item) =>
+      item
+        .setTitle('挂载 Git 仓库…')
+        .setIcon('git-branch' as never)
+        .onClick(() =>
+          new GitRepoMountModal(this, {
+            onPick: (p) =>
+              this.promptMountEntry({
+                kind: 'remote',
+                path: p.vPath,
+                label: p.label,
+                include: '',
+                exclude: '',
+                refreshSeconds: 0,
+                pinned: false,
+              }),
+          }).open(),
+        ),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle('挂载百度网盘…')
+        .setIcon('cloud' as never)
+        .onClick(() =>
+          new BaiduPanMountModal(this, {
+            onPick: (p) =>
+              this.promptMountEntry({
+                kind: 'remote',
+                path: p.vPath,
+                label: p.label,
+                include: '',
+                exclude: '',
+                refreshSeconds: 0,
+                pinned: false,
+              }),
+          }).open(),
+        ),
+    );
     if (ev) menu.showAtMouseEvent(ev);
     else menu.showAtPosition({ x: window.innerWidth / 2, y: 80 });
   }
@@ -617,8 +690,15 @@ export default class VirtualTreePlugin extends Plugin {
 
   /** Persist a new mount and show the panel; `atIndex` places it in the panel list. */
   async addMount(draft: Omit<ExternalMount, 'id' | 'enabled'>, atIndex?: number): Promise<ExternalMount> {
-    // 库内挂载的 path 是相对路径：分隔符/首尾斜杠归一；库外照旧是绝对路径。
-    const trimmed = draft.kind === 'vault' ? vaultRelPath(draft.path) : draft.path.trim().replace(/[\\/]+$/, '');
+    // 库内挂载的 path 是相对路径：分隔符/首尾斜杠归一；remote 挂载的 path 是
+    // 虚拟路径(仅去空白 —— 结尾的 bdpan:/// 里的斜杠是路径语义的一部分);
+    // 库外照旧是绝对路径。
+    const trimmed =
+      draft.kind === 'vault'
+        ? vaultRelPath(draft.path)
+        : draft.kind === 'remote'
+          ? draft.path.trim()
+          : draft.path.trim().replace(/[\\/]+$/, '');
     const base = this.vaultBasePath() || 'mount';
     let id = safeSegment(draft.label.trim() || trimmed.split(/[\\/]+/).pop() || base);
     // Ids become folder names under Mounts/, so they must stay unique there.
@@ -953,6 +1033,27 @@ export default class VirtualTreePlugin extends Plugin {
     opts?: { readOnly?: boolean; forceCodeEditor?: boolean; forceBlockEditor?: boolean; paneMode?: string | boolean },
   ): Promise<void> {
     if (node.isDir) return;
+    // remote 挂载(github:// / gitee:// / bdpan://)按文件形态分流:
+    //  - 文本类(md/text/code)→ **异步 API 直连**:node.abs 保持虚拟路径,
+    //    md-editor 视图经 remoteIO.readTextAny/writeTextAny 与远端直读直写
+    //    (打开即读、保存即提交);原生编辑器(TExternalFile)需要真实文件,
+    //    remote md 不走(下方路由条件里排除)。
+    //  - 媒体/二进制 → 查看器与「系统打开」需要真实文件:下载到工作副本,
+    //    用本地路径路由(打开时下载一次,查看器只读)。
+    if (isRemoteMount(mount)) {
+      // ipynb 交给 jupyter 插件(下游 fs 直读),需要真实文件 → 走工作副本
+      const textLike =
+        (isMarkdownFile(node.name) || isTextFileName(node.name)) && extOfName(node.name) !== 'ipynb';
+      if (!textLike) {
+        try {
+          const local = await ensureRemoteWorkFile(node.abs);
+          node = { ...node, abs: local };
+        } catch (e) {
+          new Notice(`下载远端文件失败:${(e as Error)?.message || e}`);
+          return;
+        }
+      }
+    }
     // 媒体文件最先路由(先于 readOnly):查看器/播放器本身就是只读的,
     // 「只读打开」对二进制塞文本 shim 只会得到乱码。
     if (isImageFile(node.name)) {
@@ -975,7 +1076,9 @@ export default class VirtualTreePlugin extends Plugin {
     }
     // An already-linked file has a real vault path, so open that and let
     // Obsidian dispatch on the extension as it would for any vault note.
-    if (this.isLinkedInto(node)) {
+    // remote 工作副本跳过:isLinkedInto 按文件名查 Mounts/,远端文件与库内
+    // 同名链接撞名会打开错误的文件。
+    if (!isRemoteMount(mount) && this.isLinkedInto(node)) {
       await this.app.workspace.openLinkText(linkVaultPath(safeSegment(node.name)), '', !!opts?.paneMode);
       return;
     }
@@ -1004,8 +1107,11 @@ export default class VirtualTreePlugin extends Plugin {
       // 默认原生时先试原生编辑器；打开失败（文件刚被移走等）落回块编辑器。
       // 本机不支持库外原生打开（pre-1.14.4）时直接走块编辑器——shim 是只读兜底,
       // 不该成为可编辑 md 的默认目的地。
+      // remote 挂载不走原生(虚拟路径没有真实文件,原生编辑器无法打开):
+      // 一律落块编辑器路线(remoteIO 直连远端读写)。
       if (
         !opts?.forceBlockEditor &&
+        !isRemoteMount(mount) &&
         this.externalMarkdownChoice(node) === 'native' &&
         this.canOpenNativeExternal()
       ) {
