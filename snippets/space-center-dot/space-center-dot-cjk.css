@@ -1,0 +1,135 @@
+/* ===========================================================
+   space-center-dot · 空格显示小中心圆点
+   纯 CSS / 不依赖任何插件 / 字体已内嵌，单文件可用。
+   【变体】本文件正文空格宽度 0.5em，适配霞鹜文楷等中文正文字体；
+     西文/Obsidian 默认字体栈请改用同目录 space-center-dot.css。
+   原理：@font-face + unicode-range 只接管空格字符
+   (U+0020 半角空格、U+00A0 不换行空格、U+3000 全角空格)，
+   把它们画成一个几何居中的小圆点（水平 = 空格宽的一半，
+   垂直 = em 框正中）；其它字符仍由原字体渲染，文字本身
+   的颜色、字重、字号、主题字体设置都不受影响。
+   注：COLR 层字形的 hmtx.lsb 必须与轮廓 xMin 一致，否则
+   Chrome 会把圆点整体左移，看起来不居中（2026-11-15 已修）。
+
+   圆点是 COLR 彩色字形，颜色写在内嵌字体的 CPAL 调色板里：
+   默认 rgba(110,116,124,.50) = 中性灰 + 半透明，不再跟随正文黑色；
+   深色主题由下方 @font-palette-values 覆盖为 rgba(214,219,228,.78)。
+
+   【部署】把本文件复制到 <库>/.obsidian/snippets/，
+     设置 → 外观 → CSS 片段 → 刷新并启用；停用即关闭，无残留。
+   【选变体】正文为西文 / Obsidian 默认字体栈用
+     space-center-dot.css（300 变体）；正文为中文（霞鹜文楷等，
+     半角空格 ≈ 0.5em）用 space-center-dot-cjk.css（500 变体）。
+     可用开发者工具测「空格宽度 ÷ font-size」得到实际比值。
+   【阅读视图】默认只作用于编辑区（源码模式 + 实时预览）。
+     需要阅读视图也显示，删掉文件末尾「阅读视图」段首尾的两处注释标记。
+   【调宽度】下面两个变量要跟当前库的正文字体空格宽度一致，
+   否则每个空格会变宽/变窄、排版会移动：
+     ObsSpaceDot250 ≈ 0.25em  多数西文比例字体
+     ObsSpaceDot300 ≈ 0.30em  Obsidian 默认字体栈（实测 0.296em）
+     ObsSpaceDot330 ≈ 0.33em  略宽的系统 UI 字体
+     ObsSpaceDot500 ≈ 0.50em  中文半角空格（如霞鹜文楷）
+     ObsSpaceDot600 ≈ 0.60em  等宽字体（如 Cascadia Mono）
+   【调颜色/透明度】改 tools/gen-fonts.py 的 DOT_COLOR；
+     深色主题色改下方 @font-palette-values 的 override-colors。
+   【调点的大小】改 DOT_RADIUS 后重新生成即可。
+   【重建】python tools/gen-fonts.py && python tools/build-css.py
+   =========================================================== */
+
+@font-face {
+  font-family: "ObsSpaceDot250";
+  src: url("data:font/woff2;base64,d09GMgABAAAAAAHQAAwAAAAABDgAAAGDAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIhgjEgZgADwKLEkBNgIkAwoLCAAEIAWDPAcsG3oDAI7Cca8UYrLE4jAUbzxPbuz9bcyCSxzBMxAJhE4wVqNniYZQDcWk//x+7ty5t706v/sTbVtUxK15xUOkBLNKJTRoZPOpm/yL8BsY5VGiia4Fki2gRWNhnkgXBZRAngUWWZamqTe/boV4pVtCRPQPEQwsSBAFRASD13N6HfKUaR9KTZZX4NwFbA7k4j8NVYRbALQJCyoWL+Ar7KCHUVjS/3+Qzf8P/31o3es7ghkD0ABk7ti6wvqlbvOaNm6WhzxWT3MegCD87ubnesz5V41c/ghfr+1EjxU84YSGAVUBYXtRfgpeeQLiFSUv4A94IFSzgCLddfYBgRgIKC6GgGrhRKBZ+RCYXJ0IdKsSuTQt4q5/TIvhTavdNm0Oh3Ryc1/pDl/V/oUDVSrOLEoJ/uKqP+EIU99dR4IDYca9dyEaZuYwEvpOqOq3oMGsPgOGFM1YJElg9YaMWDKpjwQCan89kyRZpwSev9mQeQvGzJgmRIUxxkxSoRkyzq0lE5l8cGYRAAA=") format("woff2");
+  unicode-range: U+0020, U+00A0;
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "ObsSpaceDot300";
+  src: url("data:font/woff2;base64,d09GMgABAAAAAAHMAAwAAAAABDgAAAGBAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIhgjEgZgADwKLEkBNgIkAwoLCAAEIAWDPAcsG3oDAI7CtrVzTEjKFC2NbzwPHer7d5cxaU2c4CGJYLBLqMoVK0i1Bo25+7nHr3OJi6KGaIdqlqEEs0qJ0Mjmgzd1W0V4McqjkO/TOKBH52GeSBhfgTwLKcA0EEy9+bk9REmzhIjoGyKYYoYIooCIYMrba2oJNdNkCx1Niiv4OAScHDLpvw8qD3cAduIWVMzsgM1yBt0oikr8/w82+//hv4mse38XwRhTQAOQcXn1Gl9XgpUbsny739XJdd11AILwv5o8qEtDrzwm8xF+j4ozP/f0hJ/0AFUBYXth/hig8lMCACh5IXfAE0E1FlAAADD2jYCYIqDomQqoZtQIaBb0COiYeCCgayGCKY2P2GmNyWLqg6zO1sjm7ojs2LgvdN19xVvzByoXnl5w2mxfXLUnTBrSu2sP2aWh3nsn7BabzUYjzO8JcS3z0mY0tXWFTVvgZGOT0tW3aEKTuRTLUw42Dh7VIYrnz+maM29o2hTKzsLGxqYkZB7B0Fi1JMJgdqYXAA==") format("woff2");
+  unicode-range: U+0020, U+00A0;
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "ObsSpaceDot330";
+  src: url("data:font/woff2;base64,d09GMgABAAAAAAHQAAwAAAAABDgAAAGCAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIhgjEgZgADwKLEkBNgIkAwoLCAAEIAWDPAcsG3oDAI7CtnlzJDJZstim+Mbz1GG+v7tXKrWKFfz8SE+DVSgAGpBMfPhx+f7Z8bcz40VAI7vaHCIUilRXGtqyPHhTt1WEF6M8Cvk+jQN6dB7miYTxFcizkAJMA8HUm5/bQ5Q0S4iIviGCKWaIIAqICKa8v43NoWaRbKCjSXEFH4eAk00m/Q9A5eEWwE7cgoqZHbBZzqAbRVGJ///BZv8//LeRde/vIhhjCmgAMq4uX+H7UrB0TeZvdnt1cl13HYAg/B/o5U1p5JXHZD7C71Fx6udennCXPkBVQNhemD8GGP4pAQCUvECegBeCaiygAABg7AcBMUVA0TMVUM2oEdAsGBHQMfFAQNdCDFMaH7HTGZPF1CdZna2Qzd0h2bFxX+i6+0p2pg9ULjo+43Y7vrhqT5g0pHfXHrJLQ733TjhtDoeDRljfE5I6pmVNaOvqFTVuhpubQ0avfrNGtJlLsTzl4uDiUx2ieP6CXlOmDRo3hnKycXBwKAlZRzA0Vi2JMJg94zMAAAA=") format("woff2");
+  unicode-range: U+0020, U+00A0;
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "ObsSpaceDot500";
+  src: url("data:font/woff2;base64,d09GMgABAAAAAAHgAAwAAAAABDQAAAGUAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIhgjEgZgADwKLEkBNgIkAwgLCAAEIAWDPAcsG3gDAK4G7AZ5KwQmEobwidvV6nXsf2ipVl08z7dfu2/mr2gSRKNG+saIRq94ojVtiW6Rg///c7tvYk0s/roNuRtSEolK49AiJVCC6OmUCI3TzdbbkcpLEZou2HTsM5v95tf1gwSPGXDIid7tqy3x8h8HYfCmbqsIL0Z5FPJ9Ggf06DzMEwnjK5BnIQWYBoKpNz+3hyhplhARfUMEY0yIIAqICMacnfJXc8mTlkaKKzg/BGya6Zv/Q+U5ANgmt6BiYgdswxZoR1FU4j+w2f+TcOve30YwxBjQAMhwdPuCq7138yrXb8/hZ911AILwx/+Qfqv6GT43XPu5d19uPwNVAWF7YX4Y4P2XCAAguYB3QTUUUAAAMPSMgBgjoOgYC6gmYgIaMzkBLSNzAtpmBoI0LmLVeEwWYxdktWVKNvbMyZZlx0LbnleuHqdcEovkB1ftCRNDenXtIbsq1FvvRNUiSSOa7wmyThVHM5BEmIhoiEzP1piLWF6pUa2vOqTw/BW51CIYqrQQUUmoOcJrrFoS0fTJgQEA") format("woff2");
+  unicode-range: U+0020, U+00A0;
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "ObsSpaceDot600";
+  src: url("data:font/woff2;base64,d09GMgABAAAAAAHIAAwAAAAABDwAAAF8AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIhgjEgZgADwKMEkBNgIkAwoLCAAEIAWDPAcsG3oDAI7DdHsjj4NJyhQtPUREHbr3/ymVWsUKHuBYCIKZCAZA48ePuXdzj7/Ob6Zp0aSKYd5HxUOkBLNKidDI5gPn1EWRJI7moyFXURSXF0XhfCLD8R5kt4td7IDXqzeLW0WUNE8REf2HCKaYIUEUEBFM+bwXJ5CWBB1AroniCnw8BZwcSsV/EgoPdwB84hZUzOyQLXMG3TSKl+z/H3D6/+G/h+Z9fxfBGFNAA5Dx1PY1JlearRvavPWOXGZX8zoAQXge8rWOMfuqkkof4X+0nAXjKRM0LgF1uxzL88tLEYGA8PICAB8MQjUWUAAAMPYDgZgioOiZCqhm7Ag0C24EOiYeCHQtFEmlqRE7/T5ZTH3J6myHbO6OyI6N+07X3Velv3agWoWl9TjzF1fzAVOY9O66InaFqffeg1CAmWWo/3dCRd+ahmU9AyMFS9bFMVY3MmXDvB64gtcLYSws7nVL8Pu3jaxaM2PJIiEkgDH2JOTfIVFZNVUikQ6X1gEA") format("woff2");
+  unicode-range: U+0020, U+00A0;
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "ObsSpaceDotFull";
+  src: url("data:font/woff2;base64,d09GMgABAAAAAAHEAAwAAAAABEAAAAF5AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIhgjEgZgADQKMEkBNgIkAwoLCAAEIAWDSAcsG34DAI7DdGsnI6qKOsPZpoeQomHL3N7XRumaLlyTGolEaIxBGKSDq7XtvgLN83fscOliVUQ6VNHSCNUrkRIZokXmJy7H/9seeEyg91ccYwr+vf0OF2bYBg8TK5FE09SbndtCnHQnlIj+YwRL7KEgGogIlnx+dKdAVwi3wOpEBPByCzwj6BvRqUvgDkA3QCMLezcUM26A3g3PRBEf8UABUGCIYI4loAPIvLa4wPQsm19xdvtUTuQneh1AEH4O+n9u5f1Jin7C37Xi157DI7ypR6wCKA3Esqz/DByPJSBgSb7A+Q4gylxAE9517hsQxAoBzchKQDnQQNAd00IwsPAOwdCxGFq6FOJKdcw2S19subVnu0dnduDMqzf0GCZWHG2kJtobH9H631bLGUdw5cV1U7p/4/qVNzY9alMe8vBLQUzRSEpfQUlFVM+YCUEQSRU1E20FFgo8jcCMMLNX3ibwcVbF0EhDT7cmZDiE1JLTH0EJTrVWKLrcGwM=") format("woff2");
+  unicode-range: U+3000;
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --space-dot-text: "ObsSpaceDot500";  /* 正文空格宽度，见上方说明 */
+  --space-dot-mono: "ObsSpaceDot600";  /* 代码/等宽区空格宽度 */
+}
+
+/* ---- 深色主题：把调色板换成更亮的灰；浅色主题用字体内置 CPAL ---- */
+@font-palette-values --space-dot-dark {
+  font-family: "ObsSpaceDot250", "ObsSpaceDot300", "ObsSpaceDot330",
+               "ObsSpaceDot500", "ObsSpaceDot600", "ObsSpaceDotFull";
+  override-colors: 0 rgba(214, 219, 228, 0.78);
+}
+.theme-dark .markdown-source-view.mod-cm6 .cm-editor,
+.theme-dark .markdown-source-view.mod-cm6 .cm-line {
+  font-palette: --space-dot-dark;
+}
+
+/* ---- 编辑区：源码模式 + 实时预览 ---- */
+.markdown-source-view.mod-cm6 .cm-editor,
+.markdown-source-view.mod-cm6 .cm-scroller,
+.markdown-source-view.mod-cm6 .cm-content,
+.markdown-source-view.mod-cm6 .cm-line {
+  font-family: var(--space-dot-text), "ObsSpaceDotFull", var(--font-text) !important;
+}
+
+/* ---- 代码块 / 行内代码 / frontmatter（等宽字体） ---- */
+.markdown-source-view.mod-cm6 .cm-line.HyperMD-codeblock,
+.markdown-source-view.mod-cm6 .cm-line.HyperMD-frontmatter,
+.markdown-source-view.mod-cm6 .cm-hmd-codeblock,
+.markdown-source-view.mod-cm6 .cm-hmd-frontmatter,
+.markdown-source-view.mod-cm6 .cm-inline-code {
+  font-family: var(--space-dot-mono), "ObsSpaceDotFull", var(--font-monospace) !important;
+}
+
+/* ---- 阅读视图：默认关闭，需要时删掉本段首尾的注释标记 ---- */
+/*
+.markdown-reading-view .markdown-preview-view,
+.markdown-reading-view .markdown-rendered {
+  font-family: var(--space-dot-text), "ObsSpaceDotFull", var(--font-text) !important;
+}
+.markdown-reading-view .markdown-rendered :is(code, pre, kbd) {
+  font-family: var(--space-dot-mono), "ObsSpaceDotFull", var(--font-monospace) !important;
+}
+*/
