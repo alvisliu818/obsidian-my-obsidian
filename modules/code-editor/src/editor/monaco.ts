@@ -465,7 +465,9 @@ const editorScopes = new WeakMap<monacoNs.editor.ICodeEditor, EditorScope>();
 export interface CreateEditorOptions {
   value: string;
   language: string;
-  fontSize?: number;
+    /** 自动换行（默认 off——代码文件横向滚动） */
+  wordWrap?: boolean;
+fontSize?: number;
   /** 字体(块内代码块传 var(--font-monospace),与阅读态 pre 同字体) */
   fontFamily?: string;
   /** 行高(px);不传走 Monaco 默认(1.35×fontSize) */
@@ -521,7 +523,7 @@ export function createEditor(
     lineHeight: opts.lineHeight,
     // 换行/缩略地图的调用方默认(关);用户设置(settings.json,换行默认开)在
     // 覆盖层统一接管,file 作用域必定覆盖这两个键。
-    wordWrap: 'off',
+    wordWrap: opts.wordWrap ? 'on' : 'off',
     lineNumbers:
       opts.lineNumbers === false
         ? 'off'

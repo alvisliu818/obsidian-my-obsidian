@@ -1,0 +1,6011 @@
+/**
+ * OneDriveClient — Microsoft Graph API wrapper for App Folder operations
+ *
+ * All methods use delegated permissions (Files.ReadWrite).
+ * Access token is obtained from AuthModule.getAccessToken().
+ *
+ * Error handling: all non-2xx responses are classified into OneDriveErrorType
+ * and thrown as OneDriveError. The caller can distinguish transient errors
+ * (RateLimited, ServerError) from permanent ones (NotFound, Forbidden).
+ */
+
+import { requestUrl, type DataAdapter, type RequestUrlResponse } from "obsidian";
+import { sha256Hex } from "../crypto";
+import {
+  compatClearTimeout,
+  compatSetTimeout,
+  DEFAULT_CONFIG_DIR,
+  describeError,
+  getEasySyncPaths,
+  hostPlatformFacts,
+  isRecord,
+  isStringRecord,
+  type HostPlatformFacts,
+} from "../obsidian-compat";
+import {
+  type DriveItem,
+  type DeltaResponse,
+  type DeltaPageCallback,
+  type RemotelySaveRepositoryLocation,
+  type RemoteVaultScope,
+  type UploadResult,
+  OneDriveError,
+  OneDriveErrorType,
+  OneDriveDriveUnavailableError,
+  type OneDriveDriveProbeDetail,
+  type OneDriveGraphErrorDetail,
+  RemoteVaultScopeIdentityError,
+  SharedSyncProtocolObservationError,
+  SyntheticRequestTimeoutError,
+  GRAPH_BASE_URL,
+  APP_FOLDER_PATHS,
+  type DriveItemVersion,
+} from "./types";
+import {
+  firstMissingUploadRange,
+  shouldUseUploadSession,
+  uploadRangeEndExclusive,
+  uploadSessionChunkSize,
+  uploadSessionChunkTimeoutMs,
+  type UploadMissingRange,
+} from "./upload-session-policy";
+import {
+  fingerprintCdnDownloadFailure,
+  isPreSignedContentHost,
+} from "./cdn-download-failure";
+import type { SyncFileErrorTierV1 } from "../sync/types";
+import {
+  createDownloadStallWatchdog,
+  createSlowConnectionGate,
+  createSlowLinkEvidence,
+  isAbortError,
+  isRequestTimeoutError,
+  isUncancellableRequestTimeout,
+  requestErrorMessage,
+  rethrowUncancellableRequestTimeout,
+  sleepWithAbort,
+  throwIfAborted,
+  type DownloadStallWatchdog,
+  type SlowConnectionGate,
+} from "./download-stream-guards";
+import {
+  createRangeStreamDownloader,
+  isRangeCancel,
+  loadNodeHttps,
+  readRangePartialDownload,
+  type RangePartialDownload,
+  type RangeStreamDownloader,
+} from "./range-download";
+import { planRangeDownloadWindows, DOWNLOAD_RANGE_MIN_BYTES } from "./download-range-policy";
+import {
+  createRangeStreamAdaptation,
+  type RangeStreamAdaptation,
+} from "./range-stream-adaptation";
+import type { DiagnosticLogger } from "../sync/diagnostic-logger";
+
+/** Callback to get a fresh access token */
+type TokenProvider = () => Promise<string>;
+type UploadProgressCallback = (uploadedBytes: number, totalBytes: number) => void;
+
+interface SharedSyncProtocolControlObject {
+  id: string;
+  eTag: string;
+  content: string;
+}
+
+/** A control-directory slot whose content the caller can prove unchanged from
+ *  its V3 binding (same id + eTag ⇒ same bytes under the Graph versioning
+ *  contract). `content: null` marks that binding proof; only callers holding
+ *  the binding may materialize it. */
+export interface SharedSyncProtocolBindingProvenObject {
+  id: string;
+  eTag: string;
+  content: null;
+}
+
+interface SharedSyncProtocolObjectsObservation {
+  v2: SharedSyncProtocolControlObject | null;
+  v3:
+    | SharedSyncProtocolControlObject
+    | SharedSyncProtocolBindingProvenObject
+    | null;
+}
+
+const REQUEST_TIMEOUT_MS = 15_000;
+/** Metadata-class GETs (directory listings, delta pages) and shared-protocol
+ *  slot reads use a wider cap than the flat 15s/8s lines: real-device logs
+ *  show healthy metadata latency reaching p99 10.8s / max 18.7s and reads
+ *  settling after the old caps with fulfilled results (late-settlement p90
+ *  +9.9s), so the flat lines cut inside the healthy tail and discarded
+ *  late-arriving data as network failures. The cap stays bounded — requestUrl
+ *  promises may never settle (see requestSharedSyncProtocolUrl). */
+const METADATA_READ_TIMEOUT_MS = 30_000;
+const MAX_REQUEST_ATTEMPTS = 3;
+const RETRY_BASE_MS = 500;
+const RETRY_JITTER_MS = 250;
+/** Self-built delta feeds request a larger first page (Graph official: the
+ *  driveItem delta method supports the $top OData query parameter). This
+ *  reduces serial pagination round trips on complete feeds (first sync,
+ *  full identity rebuilds). Server-issued @odata.deltaLink/nextLink URLs are
+ *  never modified. */
+// 500 项/页（2026-09-19 join 弱网案C 配套）：单页响应减半更耐弱网，断点粒度更细；
+// 增量轮的后续页与 deltaLink 页大小由服务端 nextLink 控制，不受此值影响。
+const DELTA_PAGE_SIZE_TOP = 500;
+/** Selected fields for delta responses — includes every DriveItem property the
+ *  sync engine consumes plus `lastModifiedBy`/`createdBy`. Note: the recovery-
+ *  layer T2 convergence model that motivated these two fields was reverted to
+ *  fail-closed (2026-09-07, commit b1ec1d85); the fields are retained as
+ *  plan-layer input (see DECISIONS 2026-09-07), not consumed at runtime.
+ *  When `$select` is present the server returns *only* the listed properties,
+ *  so this must stay in sync with the {@link DriveItem} interface and all
+ *  consumer sites. */
+const DELTA_SELECT = [
+  "id","name","size",
+  "file","folder",
+  "parentReference",
+  "lastModifiedDateTime","createdDateTime",
+  "lastModifiedBy","createdBy",
+  "eTag","cTag",
+  "@microsoft.graph.downloadUrl",
+  "deleted",
+  "specialFolder",
+].join(",");
+const DOWNLOAD_BASE_TIMEOUT_MS = 30_000;  // 30s base — covers slow/unstable connections
+// 12s/MiB — budgets a 9 MiB file at ~2.4 min so a real slow link (~50 KiB/s,
+// 2026-09-12 mobile: seven consecutive 85.5s timeouts at 3s/MiB) can finish
+// inside one budget; downloads have no resumable retry, so a too-tight budget
+// wastes the whole transfer instead of part of it.
+const DOWNLOAD_PER_MIB_TIMEOUT_MS = 12_000;
+const DOWNLOAD_MAX_TIMEOUT_MS = 300_000; // 5min hard cap — slow connections may need minutes, not seconds
+const DOWNLOAD_FAILURE_RESERVE_RATIO = 0.5;  // 50% reserve for slow/stalled connections
+/** 预算阶梯 (2026-10-27, 20261026-1240 T2): `ceil(size/1MiB)` priced
+ *  an 18-byte note as one full MiB — 42 s of primary patience for a transfer a
+ *  50 KiB/s field link finishes in under a second, and the first channel could
+ *  hold the *whole* waterfall deadline (later channels then threw on
+ *  `remainingMs()` without an attempt). Files at or below
+ *  {@link DOWNLOAD_MEDIUM_MAX_BYTES} now get a flat channel window, and the
+ *  complete pre-ladder budget stays behind as the fallback reserve, so a
+ *  slow-but-progressing transfer keeps exactly the same overall window it has
+ *  today (it may be restarted once on the /content channel). Files above it
+ *  keep the pre-ladder pair byte for byte. */
+const DOWNLOAD_SMALL_MAX_BYTES = 64 * 1024;
+const DOWNLOAD_MEDIUM_MAX_BYTES = 256 * 1024;
+/** Channel windows of the two small tiers. The slowest healthy link on record
+ *  (50 KiB/s, 2026-10-26 iOS) moves 64 KiB in 1.3 s and 256 KiB in 5.2 s, so
+ *  both windows keep 3-5× headroom over observed traffic while still leaving
+ *  the CDN path in seconds instead of a whole minute. */
+const DOWNLOAD_SMALL_PRIMARY_TIMEOUT_MS = 15_000;
+const DOWNLOAD_MEDIUM_PRIMARY_TIMEOUT_MS = 25_000;
+/** 连续传输级 CDN 失败熔断 (2026-10-27): `statusCode 0` says nothing about the
+ *  endpoint (it must never blacklist), but a link that returns no HTTP
+ *  response three files in a row is dead for this round — every further file
+ *  would pay one more first-byte wait on it. */
+const DOWNLOAD_CDN_TRANSPORT_FAILURE_LIMIT = 3;
+const UPLOAD_SESSION_CONTROL_TIMEOUT_MS = 15_000;
+const MAX_UPLOAD_SESSION_RECOVERIES = 3;
+const MAX_REMOTE_FILE_BYTES = 2 * 1024 * 1024 * 1024;
+const MAX_LEGACY_BASELINE_BYTES = 64 * 1024 * 1024;
+const MAX_CLOUD_BOOTSTRAP_BYTES = 64 * 1024 * 1024;
+const MAX_SHARED_PROTOCOL_BYTES = 1024 * 1024;
+const ONEDRIVE_PERSONAL_DRIVE_ID_PATTERN = /^[0-9a-f]{16}$/i;
+
+function isSameGraphDriveId(actual: string, expected: string): boolean {
+  if (actual === expected) return true;
+  return ONEDRIVE_PERSONAL_DRIVE_ID_PATTERN.test(actual)
+    && ONEDRIVE_PERSONAL_DRIVE_ID_PATTERN.test(expected)
+    && actual.toLowerCase() === expected.toLowerCase();
+}
+
+/** Which side of the byte budget was exceeded. "declared" is a standing fact
+ *  (the metadata itself is already over the hard cap — the item can never be
+ *  transferred, so it must stay a hard failure). "observed" means the response
+ *  body came back larger than the declared size: the remote was rewritten
+ *  between the metadata read and the body read (content race), which the
+ *  download layer defers instead of failing the round.
+ *  "declared-over-expected" (2026-10-16) is the same physical race caught one
+ *  step earlier: the response header declares more than the size the metadata
+ *  promised for this very item. It only applies where the budget came from that
+ *  item's own metadata size; a budget that fell back to the class hard cap, the
+ *  plugin control-plane budgets and the legacy baseline keep "declared". */
+type ResponseByteBudgetKind =
+  | "declared"
+  | "declared-over-expected"
+  | "observed";
+
+export class ResponseByteBudgetError extends OneDriveError {
+  readonly kind: ResponseByteBudgetKind;
+
+  constructor(
+    label: string,
+    maxBytes: number,
+    observedBytes: number,
+    kind: ResponseByteBudgetKind,
+  ) {
+    super(
+      OneDriveErrorType.Unknown,
+      `${label} exceeds safe download size (${observedBytes} > ${maxBytes})`,
+    );
+    this.name = "ResponseByteBudgetError";
+    this.kind = kind;
+  }
+}
+
+interface RequestOptions {
+  deadlineMs?: number;
+  maxAttempts?: number;
+  extraHeaders?: Record<string, string>;
+  perRequestTimeoutMs?: number;
+  observationAttemptOffset?: number;
+  metadataReason?: OneDriveMetadataReason;
+  expectedNotFound?: boolean;
+  maxResponseBytes?: number;
+  /** Kind to report when a response *declares* more than `maxResponseBytes`.
+   *  Download requests sized from one item's own metadata pass
+   *  "declared-over-expected" (the response grew after the metadata read);
+   *  everything else keeps the standing-fact default. */
+  maxResponseBytesDeclaredKind?: ResponseByteBudgetKind;
+  responseLabel?: string;
+  sharedSyncProtocolRequestKey?: string;
+}
+
+type OneDriveEndpointCategory =
+  | "metadata"
+  | "delta"
+  | "simpleUpload"
+  | "uploadSessionCreate"
+  | "uploadSessionChunk"
+  | "uploadSessionStatus"
+  | "uploadSessionCancel"
+  | "downloadUrl"
+  | "contentFallback";
+
+type OneDriveAttemptStatusCategory =
+  | "success"
+  | "cancelled"
+  | "auth"
+  | "forbidden"
+  | "notFound"
+  | "conflict"
+  | "precondition"
+  | "rangeNotSatisfiable"
+  | "rateLimited"
+  | "insufficientStorage"
+  | "serverError"
+  | "network"
+  | "unknown";
+
+export type OneDriveMetadataReason =
+  | "downloadUrlRefresh"
+  | "downloadVersionVerify"
+  | "contentVerificationRefresh"
+  | "blockedRecoveryVersionHistory"
+  | "other";
+
+interface OneDriveMetadataReasonRunMetrics {
+  attempts: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  elapsedMs: number;
+}
+
+interface OneDriveEndpointRunMetrics {
+  attempts: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  elapsedMs: number;
+  effectiveBytes: number;
+  failedBytes: number;
+  retriedBytes: number;
+  peakConcurrency: number;
+  statusCategories: Partial<Record<OneDriveAttemptStatusCategory, number>>;
+}
+
+interface OneDriveRunMetricsSummary {
+  schemaVersion: 2;
+  tokenAcquisition: {
+    attempts: number;
+    elapsedMs: number;
+    maxElapsedMs: number;
+  };
+  totals: Omit<OneDriveEndpointRunMetrics, "statusCategories">;
+  endpoints: Partial<Record<OneDriveEndpointCategory, OneDriveEndpointRunMetrics>>;
+  metadataReasons: Partial<Record<OneDriveMetadataReason, OneDriveMetadataReasonRunMetrics>>;
+}
+
+interface MutableEndpointRunMetrics extends OneDriveEndpointRunMetrics {
+  activeConcurrency: number;
+}
+
+interface ActiveRunMetrics {
+  activeConcurrency: number;
+  peakConcurrency: number;
+  tokenAcquisition: {
+    attempts: number;
+    elapsedMs: number;
+    maxElapsedMs: number;
+  };
+  endpoints: Partial<Record<OneDriveEndpointCategory, MutableEndpointRunMetrics>>;
+  metadataReasons: Partial<Record<OneDriveMetadataReason, OneDriveMetadataReasonRunMetrics>>;
+}
+
+interface DownloadToPathResult {
+  size: number;
+  hash: string;
+}
+
+/** Carries a non-2xx RequestUrlResponse through the existing error path.
+ *  requestUrl is called with throw:false so the Graph body stays available;
+ *  the retry/classification pipeline still expects a thrown Error. */
+class GraphHttpErrorResponse extends Error {
+  readonly status: number;
+  readonly headers: Record<string, string>;
+  readonly json: unknown;
+  readonly text: string | undefined;
+
+  constructor(response: RequestUrlResponse) {
+    super(`HTTP ${response.status}`);
+    this.name = "GraphHttpErrorResponse";
+    this.status = response.status;
+    this.headers = response.headers;
+    this.json = response.json;
+    this.text = typeof response.text === "string" ? response.text : undefined;
+  }
+}
+
+/** Per-chunk publication of one batched driveItem read (see
+ *  `getDriveItemMetadataByIds`). Observation only — the call's returned map is
+ *  unchanged, so a caller that ignores this keeps the old contract. */
+interface DriveItemMetadataChunkOptions {
+  onChunkResolved?: (resolved: ReadonlyMap<string, DriveItem | null>) => void;
+}
+
+export class OneDriveClient {
+  private initializedVaults = new Set<string>();
+  private storageVaultNames = new Map<string, string>();
+  private vaultScopes = new Map<string, RemoteVaultScope>();
+  private abortSignal: AbortSignal | null = null;
+  /** Remember which download strategy worked last in this sync round so
+   *  subsequent files skip the waterfall of known-broken tiers. */
+  private downloadMethod: "downloadUrl" | "content" | null = null;
+  /** M13: set when a /content tier fails for a file in this round with a
+   *  real HTTP status (endpoint-level evidence). Transport-level failures
+   *  (statusCode 0 — the link died) never blacklist: they made small files
+   *  fail without a single attempt (2026-09-15 连坐切片). */
+  private contentFailedThisRound = false;
+  /** Set when the CDN downloadUrl fails for a file this round with a real
+   *  HTTP status. The hint tier then skips CDN for the rest of the round
+   *  (saves budget for /content); the item-metadata tier still re-fetches a
+   *  downloadUrl, so it can touch the CDN again. Transport-level failures
+   *  never blacklist (连坐切片). */
+  private cdnFailedThisRound = false;
+  /** 连续传输级 CDN 失败熔断 (2026-10-27): `statusCode 0` must not blacklist
+   *  the endpoint (a dead link is not a broken CDN), but nothing counted them
+   *  either, so a dead link charged every single file one first-byte wait.
+   *  Three in a row open this breaker: the rest of the round skips the CDN
+   *  path and goes straight to /content. One successful CDN transfer (or a
+   *  new round) resets it; a /content 401/403 reverses it (see
+   *  `releaseCdnCircuitAfterContentRejection`). */
+  private cdnTransportFailuresThisRound = 0;
+  private cdnCircuitOpenThisRound = false;
+  /** Per-round slow-link evidence (2026-09-15 乙路): window rates from every
+   *  download feed the slow gate's relative judgment, so only the round's
+   *  first window pays the cold-start tuition against the absolute line. */
+  private slowLinkEvidence = createSlowLinkEvidence();
+  private runMetrics: ActiveRunMetrics | null = null;
+  /** requestUrl cannot be cancelled after our local deadline. Keep one raw
+   *  owner per shared-protocol component so later sync rounds cannot pile up
+   *  the same request or consume a response from an earlier observation. */
+  private sharedSyncProtocolRequestsInFlight = new Map<
+    string,
+    Promise<RequestUrlResponse>
+  >();
+  /** W5 2026-10-24: protocol-v2.json is an immutable control file that every
+   *  round re-downloaded. Session cache of the last successful content read,
+   *  keyed by storage vault + the same (id, eTag) Graph versioning contract
+   *  the V3 binding-proven skip relies on; a moved eTag (or another vault
+   *  sharing this client) misses and re-reads. The id+eTag trust boundary is
+   *  drive-scoped in Graph; a same-session account switch would need an id
+   *  and eTag collision across drives, which the listing makes unreachable. */
+  private lastReadProtocolV2: {
+    storageVaultName: string;
+    id: string;
+    eTag: string;
+    content: string;
+  } | null = null;
+
+  constructor(
+    private getToken: TokenProvider,
+    private diag?: DiagnosticLogger,
+    private configDir = DEFAULT_CONFIG_DIR,
+    private pluginId = "easy-sync",
+    /** Host platform facts; tests inject a fake, production keeps the live
+     *  `Platform`-backed default. */
+    private platform: HostPlatformFacts = hostPlatformFacts,
+  ) {
+    this.rangeStreamAdaptation = createRangeStreamAdaptation({ diag: this.diag });
+  }
+
+  setAbortSignal(signal: AbortSignal | null): void {
+    this.abortSignal = signal;
+  }
+
+  /** Node-https multi-range downloader (C 载体, 2026-09-14). Lazily resolved
+   *  once; null on runtimes without Node require (mobile), which keeps every
+   *  download on the proven single-stream waterfall. Tests may preset this
+   *  field with a fake to exercise the multi-range branch. */
+  private rangeStreamDownloader: RangeStreamDownloader | null | undefined;
+
+  private resolveRangeStreamDownloader(): RangeStreamDownloader | null {
+    if (this.rangeStreamDownloader === undefined) {
+      this.rangeStreamDownloader = createRangeStreamDownloader(loadNodeHttps(this.platform), this.diag);
+    }
+    return this.rangeStreamDownloader;
+  }
+
+  /** Round-scoped stream-count plan for desktop multi-range downloads (G3,
+   *  2026-10-27). One instance is shared by every large file in the round, so
+   *  a second file starts where the previous one stopped instead of probing
+   *  from 8 again. `resetDownloadStrategy()` restores the 8-stream start; the
+   *  state deliberately never reaches data.json (link conditions are
+   *  round-local, and a stale high tier after a network switch is worse than
+   *  one cheap first file). */
+  private rangeStreamAdaptation: RangeStreamAdaptation;
+
+  /** Start an in-memory diagnostic scope for one sync round. */
+  beginRunMetrics(): void {
+    this.runMetrics = {
+      activeConcurrency: 0,
+      peakConcurrency: 0,
+      tokenAcquisition: {
+        attempts: 0,
+        elapsedMs: 0,
+        maxElapsedMs: 0,
+      },
+      endpoints: {},
+      metadataReasons: {},
+    };
+  }
+
+  /** Finish the current diagnostic scope without persisting any state. */
+  finishRunMetrics(): OneDriveRunMetricsSummary | null {
+    const active = this.runMetrics;
+    this.runMetrics = null;
+    if (!active) return null;
+
+    const endpoints: OneDriveRunMetricsSummary["endpoints"] = {};
+    const totals: OneDriveRunMetricsSummary["totals"] = {
+      attempts: 0,
+      succeeded: 0,
+      failed: 0,
+      cancelled: 0,
+      elapsedMs: 0,
+      effectiveBytes: 0,
+      failedBytes: 0,
+      retriedBytes: 0,
+      peakConcurrency: active.peakConcurrency,
+    };
+    for (const [category, metrics] of Object.entries(active.endpoints) as Array<
+      [OneDriveEndpointCategory, MutableEndpointRunMetrics]
+    >) {
+      const { activeConcurrency: _activeConcurrency, ...snapshot } = metrics;
+      endpoints[category] = {
+        ...snapshot,
+        statusCategories: { ...snapshot.statusCategories },
+      };
+      totals.attempts += snapshot.attempts;
+      totals.succeeded += snapshot.succeeded;
+      totals.failed += snapshot.failed;
+      totals.cancelled += snapshot.cancelled;
+      totals.elapsedMs += snapshot.elapsedMs;
+      totals.effectiveBytes += snapshot.effectiveBytes;
+      totals.failedBytes += snapshot.failedBytes;
+      totals.retriedBytes += snapshot.retriedBytes;
+    }
+    return {
+      schemaVersion: 2,
+      tokenAcquisition: { ...active.tokenAcquisition },
+      totals,
+      endpoints,
+      metadataReasons: Object.fromEntries(
+        Object.entries(active.metadataReasons).map(([reason, metrics]) => [
+          reason,
+          { ...metrics },
+        ]),
+      ),
+    };
+  }
+
+  private recordTokenAcquisition(startedAt: number): void {
+    const active = this.runMetrics;
+    if (!active) return;
+    const elapsedMs = Math.max(0, Date.now() - startedAt);
+    active.tokenAcquisition.attempts++;
+    active.tokenAcquisition.elapsedMs += elapsedMs;
+    active.tokenAcquisition.maxElapsedMs = Math.max(
+      active.tokenAcquisition.maxElapsedMs,
+      elapsedMs,
+    );
+  }
+
+  private async acquireToken(): Promise<string> {
+    const startedAt = Date.now();
+    try {
+      return await this.getToken();
+    } finally {
+      this.recordTokenAcquisition(startedAt);
+    }
+  }
+
+  private beginMetricAttempt(endpoint: OneDriveEndpointCategory): number {
+    const startedAt = Date.now();
+    const active = this.runMetrics;
+    if (!active) return startedAt;
+    const metrics = active.endpoints[endpoint] ?? createEndpointRunMetrics();
+    active.endpoints[endpoint] = metrics;
+    metrics.activeConcurrency++;
+    metrics.peakConcurrency = Math.max(metrics.peakConcurrency, metrics.activeConcurrency);
+    active.activeConcurrency++;
+    active.peakConcurrency = Math.max(active.peakConcurrency, active.activeConcurrency);
+    return startedAt;
+  }
+
+  private finishMetricAttempt(
+    endpoint: OneDriveEndpointCategory,
+    status: OneDriveAttemptStatusCategory,
+    startedAt: number,
+    effectiveBytes = 0,
+    retriedBytes = 0,
+    failedBytes = 0,
+    metadataReason?: OneDriveMetadataReason,
+    countsAsSucceeded = false,
+  ): void {
+    const active = this.runMetrics;
+    if (!active) return;
+    const metrics = active.endpoints[endpoint] ?? createEndpointRunMetrics();
+    active.endpoints[endpoint] = metrics;
+    metrics.attempts++;
+    metrics.elapsedMs += Math.max(0, Date.now() - startedAt);
+    metrics.effectiveBytes += Math.max(0, effectiveBytes);
+    metrics.retriedBytes += Math.max(0, retriedBytes);
+    metrics.failedBytes += Math.max(0, failedBytes);
+    metrics.statusCategories[status] = (metrics.statusCategories[status] ?? 0) + 1;
+    if (status === "success" || countsAsSucceeded) {
+      metrics.succeeded++;
+    } else if (status === "cancelled") {
+      metrics.cancelled++;
+    } else {
+      metrics.failed++;
+    }
+    metrics.activeConcurrency = Math.max(0, metrics.activeConcurrency - 1);
+    active.activeConcurrency = Math.max(0, active.activeConcurrency - 1);
+    if (endpoint === "metadata" && metadataReason) {
+      const reasonMetrics = active.metadataReasons[metadataReason]
+        ?? createMetadataReasonRunMetrics();
+      active.metadataReasons[metadataReason] = reasonMetrics;
+      reasonMetrics.attempts++;
+      reasonMetrics.elapsedMs += Math.max(0, Date.now() - startedAt);
+      if (status === "success" || countsAsSucceeded) reasonMetrics.succeeded++;
+      else if (status === "cancelled") reasonMetrics.cancelled++;
+      else reasonMetrics.failed++;
+    }
+  }
+
+  // ---- App Folder Bootstrap ----
+
+  /** Get the App Folder special folder metadata */
+  async getAppFolder(): Promise<DriveItem> {
+    const response = await this.request("GET", APP_FOLDER_PATHS.appRoot);
+    return response.json as DriveItem;
+  }
+
+  /** Ensure the signed-in account has a usable default OneDrive.
+   *
+   *  GET /me/drive is the Graph endpoint documented to provision the drive
+   *  automatically for a licensed user who has never opened OneDrive. Listing
+   *  /me/drive/root/children does not carry that guarantee, so a first sync
+   *  can otherwise fail with 404 forever. A 404 here means no drive can be
+   *  provisioned for this account; auth and permission failures keep their
+   *  own error types and must not be reported as "no OneDrive". */
+  async ensureDriveAvailable(): Promise<void> {
+    try {
+      await this.request("GET", "/me/drive?$select=id");
+    } catch (error) {
+      if (
+        error instanceof OneDriveError
+        && error.type === OneDriveErrorType.NotFound
+      ) {
+        const detail = await this.probeDriveAvailability(error);
+        this.diag?.warn(
+          "onedrive",
+          "drive preflight — default drive unavailable; /me/drives probe completed",
+          {
+            statusCode: detail.statusCode,
+            graphCode: detail.graphError?.code ?? null,
+            graphMessage: detail.graphError?.message ?? null,
+            graphInnerCode: detail.graphError?.innerCode ?? null,
+            requestId: detail.graphError?.requestId ?? null,
+            drivesProbe: detail.drivesProbe,
+            drivesCount: detail.drivesCount,
+            driveTypes: detail.driveTypes,
+            drivesGraphCode: detail.drivesGraphCode,
+            drivesRequestId: detail.drivesRequestId,
+            drivesError: detail.drivesError,
+          },
+        );
+        throw new OneDriveDriveUnavailableError(
+          "No OneDrive drive is available for this account",
+          detail,
+        );
+      }
+      throw error;
+    }
+  }
+
+  /** Cross-check a /me/drive 404 with /me/drives. Diagnostic only: the
+   *  default-drive failure still stops this round, but the report can now
+   *  distinguish "no drive" from "drive exists under another alias" and
+   *  records the Graph code/request id for both calls. */
+  private async probeDriveAvailability(
+    primary: OneDriveError,
+  ): Promise<OneDriveDriveProbeDetail> {
+    let drivesProbe: OneDriveDriveProbeDetail["drivesProbe"] = "failed";
+    let drivesCount = 0;
+    let driveTypes: string[] = [];
+    let drivesGraphCode: string | null = null;
+    let drivesRequestId: string | null = null;
+    let drivesError: string | null = null;
+    try {
+      const response = await this.request(
+        "GET",
+        "/me/drives?$select=id,driveType,name",
+        undefined,
+        undefined,
+        { maxAttempts: 1, expectedNotFound: true },
+      );
+      const body = isRecord(response.json) ? response.json : {};
+      const value = Array.isArray(body.value)
+        ? body.value.filter(isRecord)
+        : [];
+      drivesCount = value.length;
+      driveTypes = [...new Set(value.map((item) =>
+        typeof item.driveType === "string" && item.driveType
+          ? item.driveType
+          : "unknown",
+      ))];
+      drivesProbe = drivesCount > 0 ? "ok" : "empty";
+    } catch (error) {
+      drivesError = describeError(error);
+      if (error instanceof OneDriveError) {
+        drivesGraphCode = error.graphCode;
+        drivesRequestId = error.graphRequestId;
+        drivesProbe = error.type === OneDriveErrorType.Forbidden
+          ? "denied"
+          : "failed";
+      }
+    }
+    return {
+      statusCode: primary.statusCode,
+      graphError: primary.graphError,
+      drivesProbe,
+      drivesCount,
+      driveTypes,
+      drivesGraphCode,
+      drivesRequestId,
+      drivesError,
+    };
+  }
+
+  /** Ensure a directory exists and return its metadata when Graph creates it. */
+  async createFolder(folderPath: string): Promise<DriveItem | null> {
+    // For path-based creation, we use:
+    // PUT /me/drive/special/approot:/path/to/folder
+    const encodedName = folderPath.split("/").pop() || "";
+    try {
+      const response = await this.request(
+        "PUT",
+        folderPath,
+        {
+          name: decodeURIComponent(encodedName),
+          folder: {},
+          "@microsoft.graph.conflictBehavior": "fail",
+        },
+      );
+      return response.json as DriveItem;
+    } catch (e) {
+      if (e instanceof OneDriveError && e.type === OneDriveErrorType.Conflict) {
+        this.diag?.log("onedrive", `folder already exists (409): ${folderPath}`);
+        return null;
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Ensure one vault-relative folder exists, addressed by path — the same path
+   * shape `uploadFile` uses. `createFolder` treats 409 as "already there", so
+   * this is re-entrant; a *missing parent* of this folder is a NotFound error
+   * the caller must resolve by creating shallower levels first.
+   */
+  async createFolderPath(
+    vaultName: string,
+    folderPath: string,
+  ): Promise<DriveItem | null> {
+    return this.createFolder(
+      APP_FOLDER_PATHS.filePath(
+        this.getStorageVaultName(vaultName),
+        folderPath,
+      ),
+    );
+  }
+
+  /** Create one child folder under an already committed parent identity.
+   *  Unlike the bootstrap path helper, a name collision remains an error so
+   *  the mutation ledger can reconcile the exact outcome before retrying. */
+  async createFolderByParentId(
+    parentDriveItemId: string,
+    name: string,
+  ): Promise<DriveItem> {
+    const response = await this.request(
+      "POST",
+      `/me/drive/items/${encodeURIComponent(parentDriveItemId)}/children`,
+      {
+        name,
+        folder: {},
+        "@microsoft.graph.conflictBehavior": "fail",
+      },
+    );
+    const item = response.json as DriveItem;
+    if (
+      !item.id
+      || !item.folder
+      || item.name !== name
+      || item.parentReference?.id !== parentDriveItemId
+    ) {
+      throw new Error(`Created folder metadata is incomplete or mismatched: ${name}`);
+    }
+    return item;
+  }
+
+  /** Resolve one exact child folder, creating it only when the committed
+   *  parent listing proves that it is absent. Unknown create outcomes and
+   *  name races are adopted only after an exact identity readback. */
+  private async ensureFolderByParentId(
+    parentDriveItemId: string,
+    name: string,
+    expectedDriveId?: string,
+  ): Promise<DriveItem> {
+    const resolveExactFolder = (children: DriveItem[]): DriveItem | null => {
+      const matches = children.filter((item) => item.name === name);
+      if (matches.length > 1) {
+        throw new Error(`Folder child listing returned duplicate names: ${name}`);
+      }
+      const item = matches[0];
+      if (!item) return null;
+      if (
+        !item.id
+        || !item.folder
+        || item.parentReference?.id !== parentDriveItemId
+        || (
+          expectedDriveId
+          && item.parentReference.driveId
+          && !isSameGraphDriveId(item.parentReference.driveId, expectedDriveId)
+        )
+      ) {
+        throw new Error(`Folder metadata is incomplete or mismatched: ${name}`);
+      }
+      return item;
+    };
+
+    const existing = resolveExactFolder(
+      await this.listFolderChildrenById(parentDriveItemId),
+    );
+    if (existing) return existing;
+
+    try {
+      return resolveExactFolder([
+        await this.createFolderByParentId(parentDriveItemId, name),
+      ]) as DriveItem;
+    } catch (error) {
+      const outcomeNeedsReadback = error instanceof OneDriveError && (
+        error.type === OneDriveErrorType.Conflict
+        || (
+          error.type === OneDriveErrorType.NetworkError
+          && error.statusCode === 0
+        )
+      );
+      if (!outcomeNeedsReadback) throw error;
+
+      const winner = resolveExactFolder(
+        await this.listFolderChildrenById(parentDriveItemId),
+      );
+      if (winner) return winner;
+      throw error;
+    }
+  }
+
+  /** Read any file/folder item by vault-relative path without conflating a
+   *  folder with a missing file. */
+  async getDriveItemMetadata(
+    vaultName: string,
+    itemPath: string,
+  ): Promise<DriveItem | null> {
+    try {
+      const apiPath = APP_FOLDER_PATHS.filePath(
+        this.getStorageVaultName(vaultName),
+        itemPath,
+      );
+      const response = await this.request(
+        "GET",
+        apiPath,
+        undefined,
+        undefined,
+        { metadataReason: "other", expectedNotFound: true },
+      );
+      return response.json as DriveItem;
+    } catch (error) {
+      if (error instanceof OneDriveError && error.type === OneDriveErrorType.NotFound) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /** Read a committed parent identity immediately before a create-only write. */
+  async getDriveItemMetadataById(
+    driveItemId: string,
+    metadataReason: OneDriveMetadataReason = "other",
+  ): Promise<DriveItem | null> {
+    try {
+      const response = await this.request(
+        "GET",
+        `/me/drive/items/${encodeURIComponent(driveItemId)}`,
+        undefined,
+        undefined,
+        { metadataReason, expectedNotFound: true },
+      );
+      return response.json as DriveItem;
+    } catch (error) {
+      if (error instanceof OneDriveError && error.type === OneDriveErrorType.NotFound) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /** Read the retained version history of one driveItem — read-only forensic
+   *  surface used only to enrich blocked-recovery evidence. Version creation
+   *  and retention are service/configuration dependent (a write may create no
+   *  version at all), so an empty list is a valid answer, never an error;
+   *  `lastModifiedBy` reaches account/application level only, not the device. */
+  async listDriveItemVersionsById(
+    driveItemId: string,
+    metadataReason: OneDriveMetadataReason = "other",
+  ): Promise<DriveItemVersion[]> {
+    try {
+      const response = await this.request(
+        "GET",
+        `/me/drive/items/${encodeURIComponent(driveItemId)}/versions`,
+        undefined,
+        undefined,
+        { metadataReason, expectedNotFound: true },
+      );
+      const body: unknown = response.json;
+      if (!isRecord(body) || !Array.isArray(body.value)) return [];
+      return body.value as DriveItemVersion[];
+    } catch (error) {
+      if (error instanceof OneDriveError && error.type === OneDriveErrorType.NotFound) {
+        return [];
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Read the content of one retained version (read-only recovery surface).
+   *
+   * Two field-proven routes, cheapest first (2026-10-19 cloud-version probe):
+   * 1. the version entry's own `@microsoft.graph.downloadUrl` — a one-hop,
+   *    already-authorized URL that must be fetched *without* the bearer token;
+   * 2. `GET /me/drive/items/{id}/versions/{versionId}/content` → 302 → a
+   *    pre-authorized Location that must also be fetched without the bearer
+   *    token (the host's requestUrl may forward Authorization through the
+   *    redirect and get the download host to reject it).
+   *
+   * The version content endpoint answers 400 `invalidRequest` when the
+   * requested id is the item's *current* version: current content stays on the
+   * existing `/content` routes and must never be read through this method.
+   */
+  async downloadDriveItemVersionContent(input: {
+    driveItemId: string;
+    versionId: string;
+    /** The entry's pre-authorized download URL when the caller holds a fresh
+     *  listing; a missing or expired one falls back to route 2. */
+    downloadUrl?: string;
+    /** Version size — budget only (a retained version's size is fixed). */
+    size?: number;
+    metadataReason?: OneDriveMetadataReason;
+  }): Promise<ArrayBuffer> {
+    throwIfAborted(this.abortSignal);
+    const timeoutMs =
+      input.size !== undefined && Number.isFinite(input.size) && input.size > 0
+        ? downloadTimeoutMs(input.size)
+        : DOWNLOAD_MAX_TIMEOUT_MS;
+    if (input.downloadUrl) {
+      try {
+        return await this.fetchPreauthorizedVersionContent(
+          input.downloadUrl,
+          timeoutMs,
+        );
+      } catch (error) {
+        // 用户取消不得被当成"链接失效"再打一次端点。
+        if (isAbortError(error) || this.abortSignal?.aborted) throw error;
+        // 预授权链接失效（过期／被撤）不得当成"没有内容"：退回版本内容端点。
+        this.diag?.warn(
+          "onedrive",
+          `version content downloadUrl failed — falling back to the version content endpoint, version=${input.versionId}`,
+          requestErrorMessage(error),
+        );
+      }
+    }
+    const apiPath = `/me/drive/items/${encodeURIComponent(input.driveItemId)}`
+      + `/versions/${encodeURIComponent(input.versionId)}/content`;
+    const response = await this.request("GET", apiPath, undefined, undefined, {
+      metadataReason: input.metadataReason ?? "other",
+      expectedNotFound: true,
+      maxAttempts: 2,
+      perRequestTimeoutMs: timeoutMs,
+    });
+    if (response.status >= 200 && response.status < 300) {
+      // 宿主若已自行跟随重定向，这一次响应就是内容本体。
+      return response.arrayBuffer;
+    }
+    if (response.status >= 300 && response.status < 400) {
+      const location = responseLocationHeader(response.headers);
+      if (!location) {
+        throw new OneDriveError(
+          OneDriveErrorType.Unknown,
+          `Version content redirect without a location: ${input.versionId}`,
+        );
+      }
+      return this.fetchPreauthorizedVersionContent(location, timeoutMs);
+    }
+    throw this.classifyError(response);
+  }
+
+  /** Fetch one pre-authorized version-content URL. The request must not carry
+   *  the bearer token: the URL holds its own one-shot credential, and a
+   *  forwarded Authorization gets the download host to reject the call. */
+  private async fetchPreauthorizedVersionContent(
+    url: string,
+    timeoutMs: number,
+  ): Promise<ArrayBuffer> {
+    throwIfAborted(this.abortSignal);
+    const startedAt = this.beginMetricAttempt("contentFallback");
+    let response: RequestUrlResponse;
+    try {
+      try {
+        // 原生 fetch 是 CDN 域上的首选通道（宿主 requestUrl 在移动端有已知缺陷）。
+        response = await downloadUrlFetch(
+          url,
+          MAX_REMOTE_FILE_BYTES,
+          "Drive item version content",
+          undefined,
+          this.abortSignal ?? undefined,
+        );
+      } catch (fetchError) {
+        // 与下载瀑布同判据：类型错误／status 0 = 该通道不可用，换 requestUrl。
+        const fetchUnavailable = fetchError instanceof TypeError
+          || (fetchError as { status?: number }).status === 0;
+        if (!fetchUnavailable) throw fetchError;
+        response = await withTimeout(requestUrl({ url, method: "GET" }), timeoutMs);
+      }
+      if (response.status < 200 || response.status >= 300) {
+        throw this.classifyError(response);
+      }
+    } catch (error) {
+      this.finishMetricAttempt(
+        "contentFallback",
+        rawAttemptStatus(error, this.abortSignal),
+        startedAt,
+      );
+      throw error instanceof OneDriveError
+        ? error
+        : this.toRequestError(error, url, false, undefined, "GET");
+    }
+    this.finishMetricAttempt(
+      "contentFallback",
+      "success",
+      startedAt,
+      responsePayloadByteLength(response),
+    );
+    return response.arrayBuffer;
+  }
+
+  /**
+   * Bring one deleted driveItem back from the account's recycle bin
+   * (`POST /me/drive/items/{id}/restore`, no request body — a personal-account
+   * endpoint).
+   *
+   * 已在真实账号实测可用（2026-10-19，应用文件夹权限域 `Files.ReadWrite.AppFolder`
+   * + `Files.Read`，探针目录已清理；原始证据：
+   * `.tmp/20261027-235123-docs-evidence迁出/20261019-171659 回收站恢复能力实测-原始证据.json`）：
+   * 成功应答 200 带响应体，文件回到原父目录、名字与内容逐字节不变；旧文档口径的
+   * 204 一并接受（2xx 一律当成功）。
+   *
+   * 不重试：恢复没有幂等保证，结果不明的重发可能把「已经恢复成功」读成第二次的
+   * 404，从而误报失败。失败按既有 `OneDriveError` 分类抛出，由调用方如实呈现
+   * （不吞分类、不循环重试）。原路径已被占用时的服务端行为已于 2026-10-28 探针
+   * 变体 B 实测：占位文件被自动改名让位（`probe(1).md`；日志 `20261028-150741`）。
+   */
+  async restoreDeletedDriveItemById(driveItemId: string): Promise<void> {
+    const response = await this.request(
+      "POST",
+      `/me/drive/items/${encodeURIComponent(driveItemId)}/restore`,
+      undefined,
+      undefined,
+      { maxAttempts: 1 },
+    );
+    if (response.status >= 200 && response.status < 300) return;
+    throw this.classifyError(response);
+  }
+
+  /** Read up to 20 independent driveItem identities per Graph JSON batch.
+   *  Every sub-response is checked independently; retryable or malformed
+   *  sub-responses fall back through the ordinary single-item GET contract.
+   *  Chunk isolation (2026-10-27): one failed POST (a 15 s timeout was enough
+   *  in the field) only costs its own 20 ids their fan-out; the remaining
+   *  chunks still use `$batch` and the caller keeps every resolved entry.
+   *
+   *  `options.onChunkResolved` (2026-10-27) publishes each chunk as soon as it
+   *  is resolved, so a caller whose next step only needs that chunk (the
+   *  download URL refresh lookahead) can start on it while the later chunks are
+   *  still in flight. Observer only: the returned map is still the complete
+   *  result in input order, the request shape and count are unchanged, and a
+   *  chunk that lost its POST publishes exactly the entries its per-item GET
+   *  fallback resolved. The callback must not throw. */
+  async getDriveItemMetadataByIds(
+    driveItemIds: readonly string[],
+    metadataReason: OneDriveMetadataReason = "other",
+    options?: DriveItemMetadataChunkOptions,
+  ): Promise<Map<string, DriveItem | null>> {
+    const uniqueIds = [...new Set(driveItemIds.filter(Boolean))];
+    const resolved = new Map<string, DriveItem | null>();
+    for (let offset = 0; offset < uniqueIds.length; offset += 20) {
+      const batchIds = uniqueIds.slice(offset, offset + 20);
+      const chunkResolved = new Map<string, DriveItem | null>();
+      let response: RequestUrlResponse;
+      try {
+        response = await this.request(
+          "POST",
+          "/$batch",
+          {
+            requests: batchIds.map((driveItemId, index) => ({
+              id: String(index + 1),
+              method: "GET",
+              url: `/me/drive/items/${encodeURIComponent(driveItemId)}`,
+            })),
+          },
+          undefined,
+          { metadataReason },
+        );
+      } catch (error) {
+        if (isAbortError(error) || this.abortSignal?.aborted) throw error;
+        if (isFatalMetadataBatchReadError(error)) throw error;
+        this.diag?.warn(
+          "onedrive",
+          `$batch metadata read failed for ${batchIds.length} item(s) — per-item verification takes over`,
+          {
+            reason: describeError(error),
+            batchRequests: 1,
+            items: batchIds.length,
+            mutations: 0,
+          },
+        );
+        for (const driveItemId of batchIds) {
+          chunkResolved.set(
+            driveItemId,
+            await this.getDriveItemMetadataById(driveItemId, metadataReason),
+          );
+        }
+        for (const [driveItemId, item] of chunkResolved) {
+          resolved.set(driveItemId, item);
+        }
+        options?.onChunkResolved?.(chunkResolved);
+        continue;
+      }
+      await this.readDriveItemIdBatchResponse(
+        response,
+        batchIds,
+        metadataReason,
+        chunkResolved,
+      );
+      for (const [driveItemId, item] of chunkResolved) {
+        resolved.set(driveItemId, item);
+      }
+      options?.onChunkResolved?.(chunkResolved);
+    }
+    return resolved;
+  }
+
+  /** One 20-id `$batch` response; the caller isolates a failed POST per chunk. */
+  private async readDriveItemIdBatchResponse(
+    response: RequestUrlResponse,
+    batchIds: readonly string[],
+    metadataReason: OneDriveMetadataReason,
+    resolved: Map<string, DriveItem | null>,
+  ): Promise<void> {
+    const body = isRecord(response.json) ? response.json : {};
+    const rawSubresponses = Array.isArray(body.responses)
+      ? body.responses
+      : [];
+    const subresponses = new Map(
+      rawSubresponses.filter(isRecord).map((item) => [
+        typeof item.id === "string" ? item.id : "",
+        item as {
+        id?: string;
+        status?: number;
+        headers?: Record<string, string>;
+        body?: unknown;
+        },
+      ]),
+    );
+    for (let index = 0; index < batchIds.length; index++) {
+      const driveItemId = batchIds[index];
+      const subresponse = subresponses.get(String(index + 1));
+      if (subresponse?.status === 200 && isRecord(subresponse.body)) {
+        const item = subresponse.body as unknown as DriveItem;
+        if (item.id === driveItemId) {
+          resolved.set(driveItemId, item);
+          continue;
+        }
+      }
+      if (subresponse?.status === 404) {
+        resolved.set(driveItemId, null);
+        continue;
+      }
+      if (subresponse?.status === 401 || subresponse?.status === 403) {
+        throw this.classifyError({
+          status: subresponse.status,
+          headers: subresponse.headers ?? {},
+          json: isRecord(subresponse.body) ? subresponse.body : {},
+        } as RequestUrlResponse);
+      }
+      if (
+        subresponse?.status === 429
+        || (typeof subresponse?.status === "number"
+          && [500, 502, 503, 504].includes(subresponse.status))
+      ) {
+        const error = this.classifyError({
+          status: subresponse.status,
+          headers: subresponse.headers ?? {},
+          json: isRecord(subresponse.body) ? subresponse.body : {},
+        } as RequestUrlResponse);
+        await sleepWithAbort(retryDelayMs(error, 1), this.abortSignal);
+      }
+      resolved.set(
+        driveItemId,
+        await this.getDriveItemMetadataById(driveItemId, metadataReason),
+      );
+    }
+  }
+
+  /** Read up to 20 vault-relative file paths per Graph JSON batch and return
+   *  presence per path (null = provably absent). Every sub-response is checked
+   *  independently; retryable or malformed sub-responses fall back through the
+   *  ordinary single-item GET contract. Chunk isolation (2026-10-26): one
+   *  failed POST only costs its own 20 paths their fan-out, so the caller
+   *  degrades those items to per-item verification instead of the whole call
+   *  falling back. Auth failures and cancellation still abort the read. */
+  async getFileMetadataByPaths(
+    vaultName: string,
+    filePaths: readonly string[],
+    metadataReason: OneDriveMetadataReason = "other",
+  ): Promise<Map<string, DriveItem | null>> {
+    const uniquePaths = [...new Set(filePaths.filter(Boolean))];
+    const resolved = new Map<string, DriveItem | null>();
+    for (let offset = 0; offset < uniquePaths.length; offset += 20) {
+      const batchPaths = uniquePaths.slice(offset, offset + 20);
+      try {
+        await this.readFilePathBatch(
+          vaultName,
+          batchPaths,
+          metadataReason,
+          resolved,
+        );
+      } catch (error) {
+        if (isAbortError(error) || this.abortSignal?.aborted) throw error;
+        if (isFatalMetadataBatchReadError(error)) throw error;
+        this.diag?.warn(
+          "onedrive",
+          `$batch path read failed for ${batchPaths.length} path(s) — per-item verification takes over`,
+          {
+            reason: describeError(error),
+            batchRequests: 1,
+            paths: batchPaths.length,
+            mutations: 0,
+          },
+        );
+      }
+    }
+    return resolved;
+  }
+
+  /** One 20-path `$batch` read; the caller isolates its failures per chunk. */
+  private async readFilePathBatch(
+    vaultName: string,
+    batchPaths: readonly string[],
+    metadataReason: OneDriveMetadataReason,
+    resolved: Map<string, DriveItem | null>,
+  ): Promise<void> {
+    const response = await this.request(
+      "POST",
+      "/$batch",
+      {
+        requests: batchPaths.map((path, index) => ({
+          id: String(index + 1),
+          method: "GET",
+          url: APP_FOLDER_PATHS.filePath(
+            this.getStorageVaultName(vaultName),
+            path,
+          ),
+        })),
+      },
+      undefined,
+      { metadataReason },
+    );
+    const body = isRecord(response.json) ? response.json : {};
+    const rawSubresponses = Array.isArray(body.responses)
+      ? body.responses
+      : [];
+    const subresponses = new Map(
+      rawSubresponses.filter(isRecord).map((item) => [
+        typeof item.id === "string" ? item.id : "",
+        item as {
+        id?: string;
+        status?: number;
+        headers?: Record<string, string>;
+        body?: unknown;
+        },
+      ]),
+    );
+    for (let index = 0; index < batchPaths.length; index++) {
+      const path = batchPaths[index];
+      const subresponse = subresponses.get(String(index + 1));
+      if (subresponse?.status === 200 && isRecord(subresponse.body)) {
+        resolved.set(path, subresponse.body as unknown as DriveItem);
+        continue;
+      }
+      if (subresponse?.status === 404) {
+        resolved.set(path, null);
+        continue;
+      }
+      if (subresponse?.status === 401 || subresponse?.status === 403) {
+        throw this.classifyError({
+          status: subresponse.status,
+          headers: subresponse.headers ?? {},
+          json: isRecord(subresponse.body) ? subresponse.body : {},
+        } as RequestUrlResponse);
+      }
+      if (
+        subresponse?.status === 429
+        || (typeof subresponse?.status === "number"
+          && [500, 502, 503, 504].includes(subresponse.status))
+      ) {
+        const error = this.classifyError({
+          status: subresponse.status,
+          headers: subresponse.headers ?? {},
+          json: isRecord(subresponse.body) ? subresponse.body : {},
+        } as RequestUrlResponse);
+        await sleepWithAbort(retryDelayMs(error, 1), this.abortSignal);
+      }
+      resolved.set(
+        path,
+        await this.getDriveItemMetadata(vaultName, path),
+      );
+    }
+  }
+
+  /** List every direct child of one committed folder identity.
+   *  Folder deletion callers use this immediately before DELETE and therefore
+   *  must consume every Graph page rather than trusting childCount metadata. */
+  async listFolderChildrenById(driveItemId: string): Promise<DriveItem[]> {
+    const children: DriveItem[] = [];
+    let url = `/me/drive/items/${encodeURIComponent(driveItemId)}/children`;
+    while (url) {
+      const response = await this.request("GET", url);
+      const data = response.json as {
+        value?: DriveItem[];
+        "@odata.nextLink"?: string;
+      };
+      const page = data.value ?? [];
+      if (page.some((item) => item.parentReference?.id !== driveItemId)) {
+        throw new Error(`Folder child listing returned a different parent identity: ${driveItemId}`);
+      }
+      children.push(...page);
+      url = data["@odata.nextLink"] ?? "";
+    }
+    return children;
+  }
+
+  /** Initialize the App Folder directory structure and return Graph-owned identities.
+   *  Read-only preview callers can require existing folders so this method
+   *  uses GET only and never sends an idempotent create request. */
+  async initVaultScope(
+    vaultName: string,
+    options: { createMissing?: boolean } = {},
+  ): Promise<RemoteVaultScope> {
+    if (this.initializedVaults.has(vaultName)) {
+      const scope = this.vaultScopes.get(vaultName);
+      if (!scope) throw new Error(`Missing initialized vault scope: ${vaultName}`);
+      return scope;
+    }
+
+    const createMissing = options.createMissing ?? true;
+    // Graph creates the dedicated App Folder when the special folder itself
+    // is requested. Do this before probing named descendants on a fresh drive.
+    // Read-only callers deliberately skip it because that GET can create the
+    // app root as an observable remote side effect.
+    const appRoot = createMissing ? await this.getAppFolder() : null;
+    const storageVaultName = await this.resolveStorageVaultName(vaultName);
+    this.storageVaultNames.set(vaultName, storageVaultName);
+
+    const vaultPath = APP_FOLDER_PATHS.vaultDir(storageVaultName);
+    const filesPath = APP_FOLDER_PATHS.filesDir(storageVaultName);
+    let vaultFolder: DriveItem;
+    let filesFolder: DriveItem;
+    let driveId: string | undefined;
+
+    if (createMissing) {
+      if (
+        !appRoot
+        || !appRoot.id
+        || !appRoot.folder
+        || (
+          appRoot.specialFolder
+          && appRoot.specialFolder.name !== "approot"
+          && appRoot.specialFolder.name !== "appRoot"
+        )
+      ) {
+        throw new Error("Invalid App Folder root metadata");
+      }
+      driveId = appRoot.parentReference?.driveId;
+      const vaultsFolder = await this.ensureFolderByParentId(
+        appRoot.id,
+        "vaults",
+        driveId,
+      );
+      driveId ??= vaultsFolder.parentReference?.driveId;
+      vaultFolder = await this.ensureFolderByParentId(
+        vaultsFolder.id,
+        storageVaultName,
+        driveId,
+      );
+      driveId ??= vaultFolder.parentReference?.driveId;
+      filesFolder = await this.ensureFolderByParentId(
+        vaultFolder.id,
+        "files",
+        driveId,
+      );
+      driveId ??= filesFolder.parentReference?.driveId;
+      await this.ensureFolderByParentId(
+        vaultFolder.id,
+        ".easy-sync",
+        driveId,
+      );
+    } else {
+      vaultFolder = (
+        await this.request("GET", vaultPath)
+      ).json as DriveItem;
+      filesFolder = (
+        await this.request("GET", filesPath)
+      ).json as DriveItem;
+      driveId = filesFolder.parentReference?.driveId
+        ?? vaultFolder.parentReference?.driveId;
+    }
+
+    if (!vaultFolder.id || !vaultFolder.folder) {
+      throw new Error(`Invalid vault folder metadata: ${vaultPath}`);
+    }
+
+    if (!filesFolder.id || !filesFolder.folder) {
+      throw new Error(`Invalid files root metadata: ${filesPath}`);
+    }
+    if (
+      filesFolder.parentReference?.id
+      && filesFolder.parentReference.id !== vaultFolder.id
+    ) {
+      throw new Error(`Files root parent identity mismatch: ${filesPath}`);
+    }
+
+    if (!driveId) {
+      const drive = (await this.request("GET", "/me/drive?$select=id")).json as { id?: string };
+      driveId = drive.id;
+    }
+    if (!driveId) throw new Error(`Missing drive identity for vault: ${vaultName}`);
+
+    const scope: RemoteVaultScope = {
+      driveId,
+      vaultFolderId: vaultFolder.id,
+      filesRootId: filesFolder.id,
+    };
+    this.vaultScopes.set(vaultName, scope);
+    if (createMissing) this.initializedVaults.add(vaultName);
+    return scope;
+  }
+
+  /** Restore a previously committed Graph-owned scope without probing folders.
+   *  The delta link must still prove which canonical/legacy storage path owns
+   *  the cursor; callers fall back to live initialization when it cannot. */
+  restoreVaultScope(
+    vaultName: string,
+    scope: RemoteVaultScope,
+    deltaLink: string,
+  ): boolean {
+    if (!scope.driveId || !scope.vaultFolderId || !scope.filesRootId || !deltaLink) {
+      return false;
+    }
+    const candidates = [vaultName];
+    const legacyName = encodeURIComponent(vaultName);
+    if (legacyName !== vaultName) candidates.push(legacyName);
+    const storageVaultName = candidates.find((candidate) =>
+      routeMatchesContinuationUrl(deltaLink, APP_FOLDER_PATHS.filesDelta(candidate))
+    );
+    if (!storageVaultName) return false;
+
+    this.storageVaultNames.set(vaultName, storageVaultName);
+    this.vaultScopes.set(vaultName, { ...scope });
+    this.initializedVaults.add(vaultName);
+    return true;
+  }
+
+  /**
+   * Restore a committed scope from Graph-owned identities when a delta cursor
+   * is missing or unusable. This is the authoritative fallback for legacy
+   * encoded vault directories: names choose presentation paths, IDs choose the
+   * actual storage tree.
+   */
+  async restoreVaultScopeByIdentity(
+    vaultName: string,
+    scope: RemoteVaultScope,
+  ): Promise<RemoteVaultScope> {
+    if (!scope.driveId || !scope.vaultFolderId || !scope.filesRootId) {
+      throw new RemoteVaultScopeIdentityError("scope-incomplete");
+    }
+    const [vaultResponse, filesResponse] = await Promise.all([
+      this.request(
+        "GET",
+        `/me/drive/items/${encodeURIComponent(scope.vaultFolderId)}`,
+      ),
+      this.request(
+        "GET",
+        `/me/drive/items/${encodeURIComponent(scope.filesRootId)}`,
+      ),
+    ]);
+    const vaultFolder = vaultResponse.json as DriveItem;
+    const filesFolder = filesResponse.json as DriveItem;
+    const allowedVaultNames = new Set([vaultName, encodeURIComponent(vaultName)]);
+    if (
+      vaultFolder.id !== scope.vaultFolderId
+      || !vaultFolder.folder
+      || !vaultFolder.name
+      || !allowedVaultNames.has(vaultFolder.name)
+    ) {
+      throw new RemoteVaultScopeIdentityError("vault-folder-invalid");
+    }
+    if (
+      filesFolder.id !== scope.filesRootId
+      || !filesFolder.folder
+      || filesFolder.name !== "files"
+      || filesFolder.parentReference?.id !== scope.vaultFolderId
+    ) {
+      throw new RemoteVaultScopeIdentityError("files-root-invalid");
+    }
+    const observedDriveIds = [
+      vaultFolder.parentReference?.driveId,
+      filesFolder.parentReference?.driveId,
+    ].filter((value): value is string => Boolean(value));
+    if (observedDriveIds.some((value) => !isSameGraphDriveId(value, scope.driveId))) {
+      throw new RemoteVaultScopeIdentityError("drive-invalid");
+    }
+
+    this.storageVaultNames.set(vaultName, vaultFolder.name);
+    this.vaultScopes.set(vaultName, { ...scope });
+    this.initializedVaults.add(vaultName);
+    return { ...scope };
+  }
+
+  invalidateVaultScope(vaultName: string): void {
+    this.initializedVaults.delete(vaultName);
+    this.storageVaultNames.delete(vaultName);
+    this.vaultScopes.delete(vaultName);
+  }
+
+  isDeltaLinkForVault(vaultName: string, deltaLink: string): boolean {
+    return routeMatchesContinuationUrl(
+      deltaLink,
+      APP_FOLDER_PATHS.filesDelta(this.getStorageVaultName(vaultName)),
+    );
+  }
+
+  /** Reset the per-round download strategy hint. Called at the start of
+   *  each sync round so the first file runs the full waterfall. */
+  resetDownloadStrategy(): void {
+    this.downloadMethod = null;
+    this.contentFailedThisRound = false;
+    this.cdnFailedThisRound = false;
+    this.cdnTransportFailuresThisRound = 0;
+    this.cdnCircuitOpenThisRound = false;
+    this.slowLinkEvidence = createSlowLinkEvidence();
+    this.rangeStreamAdaptation.reset();
+  }
+
+  /** One CDN-path attempt ended. Two independent rules read the same failure:
+   *  only real HTTP evidence may blacklist an endpoint (2026-09-16 连坐切片,
+   *  `cdnFailedThisRound`), while a *no-HTTP-response* failure counts toward
+   *  the 2026-10-27 channel breaker. Never reads error evidence fields
+   *  (`tier`, `attempts`, `transferredBytes`) — only the status the transport
+   *  reported, via the same classifier the run metrics already use. */
+  private noteCdnTierFailure(error: unknown): void {
+    if (!isTransportLevelDownloadFailure(error)) {
+      this.cdnFailedThisRound = true;
+    }
+    if (rawAttemptStatus(error, this.abortSignal) !== "network") return;
+    this.cdnTransportFailuresThisRound++;
+    if (
+      this.cdnTransportFailuresThisRound < DOWNLOAD_CDN_TRANSPORT_FAILURE_LIMIT
+      || this.cdnCircuitOpenThisRound
+    ) return;
+    this.cdnCircuitOpenThisRound = true;
+    this.diag?.warn(
+      "onedrive",
+      `download CDN breaker opened — ${this.cdnTransportFailuresThisRound} consecutive transport-level failures, this round skips the CDN path`,
+    );
+  }
+
+  /** A CDN transfer carried its file: the link is alive, so the breaker (and
+   *  the streak behind it) is reset rather than left armed for the rest of the
+   *  round. */
+  private noteCdnTransferSuccess(): void {
+    this.cdnTransportFailuresThisRound = 0;
+    if (!this.cdnCircuitOpenThisRound) return;
+    this.cdnCircuitOpenThisRound = false;
+    this.diag?.warn(
+      "onedrive",
+      "download CDN breaker released — a CDN transfer succeeded again",
+    );
+  }
+
+  /** The whole point of the breaker is to reach /content faster; a /content
+   *  401/403 says that channel cannot serve these files, so skipping the CDN
+   *  would fail every remaining file without an attempt. Reverse the decision. */
+  private releaseCdnCircuitAfterContentRejection(
+    error: unknown,
+    tier: SyncFileErrorTierV1,
+  ): void {
+    if (!this.cdnCircuitOpenThisRound || !isContentEndpointRejection(error)) {
+      return;
+    }
+    this.cdnCircuitOpenThisRound = false;
+    this.cdnTransportFailuresThisRound = 0;
+    this.diag?.warn(
+      "onedrive",
+      "download CDN breaker released — /content rejected the file, CDN re-enabled for the round",
+      { tier, statusCode: (error as { statusCode?: number }).statusCode },
+    );
+  }
+
+  /**
+   * A read-only signal for the per-run small-file download controller.
+   * Once a CDN/content fallback or a retryable transport failure is observed,
+   * callers must keep the remainder of the round serial.
+   */
+  hasDegradedDownloadPathThisRound(): boolean {
+    if (this.cdnFailedThisRound || this.contentFailedThisRound) return true;
+    const unhealthy = new Set<OneDriveAttemptStatusCategory>([
+      "rateLimited",
+      "serverError",
+      "network",
+      "unknown",
+    ]);
+    for (const endpoint of ["downloadUrl", "contentFallback"] as const) {
+      const categories = this.runMetrics?.endpoints[endpoint]?.statusCategories;
+      if (!categories) continue;
+      for (const category of unhealthy) {
+        if ((categories[category] ?? 0) > 0) return true;
+      }
+    }
+    return false;
+  }
+
+  private getStorageVaultName(vaultName: string): string {
+    return this.storageVaultNames.get(vaultName) ?? vaultName;
+  }
+
+  private async resolveStorageVaultName(vaultName: string): Promise<string> {
+    const legacyName = encodeURIComponent(vaultName);
+    if (legacyName === vaultName) return vaultName;
+
+    let children: DriveItem[];
+    try {
+      const response = await this.request(
+        "GET",
+        "/me/drive/special/approot:/vaults:/children",
+      );
+      children = (response.json as { value?: DriveItem[] }).value ?? [];
+    } catch (error) {
+      if (error instanceof OneDriveError && error.type === OneDriveErrorType.NotFound) {
+        return vaultName;
+      }
+      throw error;
+    }
+
+    const names = new Set(children.filter((item) => item.folder).map((item) => item.name));
+    const hasCanonical = names.has(vaultName);
+    const hasLegacy = names.has(legacyName);
+    if (!hasLegacy) return vaultName;
+    if (!hasCanonical) {
+      this.diag?.warn("onedrive", `using legacy encoded vault directory: ${legacyName}`);
+      return legacyName;
+    }
+
+    const [canonicalHasContent, legacyHasContent] = await Promise.all([
+      this.hasNonBootstrapContent(vaultName),
+      this.hasNonBootstrapContent(legacyName),
+    ]);
+    if (!canonicalHasContent && legacyHasContent) {
+      this.diag?.warn("onedrive", `using legacy encoded vault directory with existing content: ${legacyName}`);
+      return legacyName;
+    }
+    if (canonicalHasContent && legacyHasContent) {
+      throw new OneDriveError(
+        OneDriveErrorType.Conflict,
+        `Both canonical and legacy vault directories contain sync content: ${vaultName}`,
+        409,
+      );
+    }
+    return vaultName;
+  }
+
+  private async hasNonBootstrapContent(storageVaultName: string): Promise<boolean> {
+    const filesPath = APP_FOLDER_PATHS.filesDir(storageVaultName);
+    const { configDir } = getEasySyncPaths(this.configDir, this.pluginId);
+    const levels = [
+      { path: filesPath, allowed: configDir },
+      { path: `${filesPath}/${configDir}`, allowed: "plugins" },
+      { path: `${filesPath}/${configDir}/plugins`, allowed: this.pluginId },
+    ];
+
+    for (const level of levels) {
+      let children: DriveItem[];
+      try {
+        const response = await this.request("GET", `${level.path}:/children`);
+        children = (response.json as { value?: DriveItem[] }).value ?? [];
+      } catch (error) {
+        if (error instanceof OneDriveError && error.type === OneDriveErrorType.NotFound) {
+          return false;
+        }
+        throw error;
+      }
+      if (children.some((item) => item.name !== level.allowed)) return true;
+      const next = children.find((item) => item.name === level.allowed);
+      if (!next) return false;
+      if (!next.folder) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Check if a vault directory already exists and is non-empty.
+   * Returns true if the directory exists and contains files/subdirectories.
+   */
+  async vaultExists(vaultName: string): Promise<boolean> {
+    try {
+      const childrenPath = `${APP_FOLDER_PATHS.filesDir(this.getStorageVaultName(vaultName))}:/children`;
+      const response = await this.request("GET", childrenPath);
+      const data = response.json as { value: DriveItem[] };
+      return data.value.length > 0;
+    } catch (e) {
+      if (e instanceof OneDriveError && e.type === OneDriveErrorType.NotFound) {
+        return false;
+      }
+      throw e;
+    }
+  }
+
+  // ---- File Operations ----
+
+  /** Upload a file, using an upload session above 4 MiB.
+   *
+   *  @param eTag  When set, the upload includes an If-Match header. OneDrive
+   *               rejects the request with 412 if the remote eTag has changed,
+   *               preventing silent overwrite of another device's changes. */
+  async uploadFile(
+    vaultName: string,
+    filePath: string,
+    content: ArrayBuffer,
+    onProgress?: UploadProgressCallback,
+    eTag?: string,
+    driveItemId?: string,
+  ): Promise<UploadResult> {
+    throwIfAborted(this.abortSignal);
+    onProgress?.(0, content.byteLength);
+    const targetPath = driveItemId
+      ? `/me/drive/items/${encodeURIComponent(driveItemId)}`
+      : APP_FOLDER_PATHS.filePath(this.getStorageVaultName(vaultName), filePath);
+    if (shouldUseUploadSession(content.byteLength)) {
+      return this.uploadLargeFile(
+        filePath,
+        driveItemId
+          ? `${targetPath}/createUploadSession`
+          : `${targetPath}:/createUploadSession`,
+        content,
+        onProgress,
+        eTag,
+        driveItemId ? "replace" : "fail",
+      );
+    }
+    const apiPath = driveItemId
+      ? `${targetPath}/content`
+      : `${targetPath}:/content?@microsoft.graph.conflictBehavior=fail`;
+    const headers: Record<string, string> = {};
+    if (eTag) headers["If-Match"] = eTag;
+    const response = await this.request(
+      "PUT",
+      apiPath,
+      content,
+      "application/octet-stream",
+      {
+        extraHeaders: headers,
+        // A single non-resumable PUT must outlive slow uploads. The flat 15s
+        // REQUEST_TIMEOUT_MS misclassified slow-but-successful uploads as
+        // network failures, so reuse the upload-session transfer budget (min
+        // 30s, rate-scaled, capped 5min). Timeout outcome stays non-retryable.
+        perRequestTimeoutMs: uploadSessionChunkTimeoutMs(content.byteLength, null),
+      },
+    );
+    onProgress?.(content.byteLength, content.byteLength);
+    return response.json as UploadResult;
+  }
+
+  private async uploadLargeFile(
+    displayPath: string,
+    apiPath: string,
+    content: ArrayBuffer,
+    onProgress?: UploadProgressCallback,
+    eTag?: string,
+    conflictBehavior: "fail" | "replace" = "fail",
+  ): Promise<UploadResult> {
+    throwIfAborted(this.abortSignal);
+    const extraHeaders = eTag ? { "If-Match": eTag } : undefined;
+    const sessionResponse = await this.request(
+      "POST",
+      apiPath,
+      {
+        item: { "@microsoft.graph.conflictBehavior": conflictBehavior },
+      },
+      undefined,
+      { extraHeaders },
+    );
+    const uploadUrl = (sessionResponse.json as { uploadUrl?: string }).uploadUrl;
+    if (!uploadUrl) {
+      throw new OneDriveError(
+        OneDriveErrorType.Unknown,
+        `Upload session did not return an uploadUrl: ${displayPath}`,
+      );
+    }
+
+    this.diag?.log(
+      "onedrive",
+      `large upload session — path=${displayPath}, bytes=${content.byteLength}`,
+    );
+    try {
+      return await this.runUploadSessionTransfer({
+        displayPath,
+        uploadUrl,
+        content,
+        onProgress,
+      });
+    } catch (error) {
+      if (!isUncancellableRequestTimeout(error)) {
+        await this.cancelUploadSessionBestEffort(uploadUrl);
+      }
+      throw error;
+    }
+  }
+
+  private async runUploadSessionTransfer(args: {
+    displayPath: string;
+    uploadUrl: string;
+    content: ArrayBuffer;
+    onProgress?: UploadProgressCallback;
+  }): Promise<UploadResult> {
+    const { displayPath, uploadUrl, content, onProgress } = args;
+    let range: UploadMissingRange = { start: 0, endExclusive: content.byteLength };
+    let observedBytesPerSecond: number | null = null;
+    let recovering = false;
+    let recoveriesForRange = 0;
+    let reportedProgress = 0;
+
+    while (range.start < content.byteLength) {
+      throwIfAborted(this.abortSignal);
+      const chunkSize = uploadSessionChunkSize(observedBytesPerSecond, recovering);
+      const endExclusive = uploadRangeEndExclusive(range, chunkSize, content.byteLength);
+      if (endExclusive <= range.start) {
+        throw new OneDriveError(
+          OneDriveErrorType.Unknown,
+          `Upload session returned an invalid missing range: ${displayPath}`,
+        );
+      }
+      const end = endExclusive - 1;
+      const chunk = content.slice(range.start, endExclusive);
+      const timeoutMs = uploadSessionChunkTimeoutMs(chunk.byteLength, observedBytesPerSecond);
+      const startedAt = Date.now();
+      let response: RequestUrlResponse;
+      try {
+        response = await this.uploadChunk(
+          uploadUrl,
+          chunk,
+          range.start,
+          end,
+          content.byteLength,
+          timeoutMs,
+        );
+      } catch (rawError) {
+        if (isAbortError(rawError)) throw rawError;
+        const error = rawError instanceof OneDriveError
+          ? rawError
+          : this.toRequestError(rawError, uploadUrl, false, undefined, "PUT");
+        if (isUncancellableRequestTimeout(error)) throw error;
+        if (!isRecoverableUploadSessionError(error)) throw error;
+        recoveriesForRange++;
+        if (recoveriesForRange > MAX_UPLOAD_SESSION_RECOVERIES) throw error;
+        range = await this.recoverUploadSessionRange(
+          uploadUrl,
+          content.byteLength,
+          error,
+        );
+        recovering = true;
+        this.diag?.warn(
+          "onedrive",
+          `large upload resumed from session state — next=${range.start}, recovery=${recoveriesForRange}/${MAX_UPLOAD_SESSION_RECOVERIES}`,
+        );
+        continue;
+      }
+
+      if (response.status === 200 || response.status === 201) {
+        onProgress?.(content.byteLength, content.byteLength);
+        return response.json as UploadResult;
+      }
+      if (response.status !== 202) {
+        throw new OneDriveError(
+          OneDriveErrorType.Unknown,
+          `Upload session returned unexpected status ${response.status}: ${displayPath}`,
+          response.status,
+        );
+      }
+
+      const nextRange = firstMissingUploadRange(
+        (response.json as { nextExpectedRanges?: unknown } | undefined)?.nextExpectedRanges,
+        content.byteLength,
+      ) ?? await this.getUploadSessionRange(uploadUrl, content.byteLength);
+      if (nextRange.start <= range.start) {
+        throw new OneDriveError(
+          OneDriveErrorType.Unknown,
+          `Upload session did not advance after an accepted fragment: ${displayPath}`,
+        );
+      }
+
+      const elapsedMs = Math.max(1, Date.now() - startedAt);
+      observedBytesPerSecond = chunk.byteLength / (elapsedMs / 1000);
+      range = nextRange;
+      recovering = false;
+      recoveriesForRange = 0;
+      reportedProgress = Math.max(reportedProgress, Math.min(range.start, content.byteLength));
+      this.diag?.log(
+        "onedrive",
+        `large upload progress — path=${displayPath}, uploaded=${reportedProgress}/${content.byteLength}, chunkBytes=${chunk.byteLength}, timeoutMs=${timeoutMs}`,
+      );
+      onProgress?.(reportedProgress, content.byteLength);
+    }
+
+    throw new OneDriveError(
+      OneDriveErrorType.Unknown,
+      `Upload session ended without a completed driveItem: ${displayPath}`,
+    );
+  }
+
+  private async uploadChunk(
+    uploadUrl: string,
+    chunk: ArrayBuffer,
+    start: number,
+    end: number,
+    total: number,
+    timeoutMs: number,
+  ): Promise<RequestUrlResponse> {
+    // Try native fetch first — bypasses requestUrl mobile bugs
+    // (Android base64 encoding, iOS status=0 on non-Graph domains).
+    // Azure Blob upload session URLs are non-Graph, same risk profile as CDN downloadUrl.
+    let observedAttempt = 1;
+    const fetchStartedAt = this.beginMetricAttempt("uploadSessionChunk");
+    try {
+      const response = await withAbortableTimeout(
+        (signal) => uploadChunkFetch(uploadUrl, chunk, start, end, total, signal),
+        timeoutMs,
+        this.abortSignal,
+      );
+      this.finishMetricAttempt(
+        "uploadSessionChunk",
+        "success",
+        fetchStartedAt,
+        chunk.byteLength,
+      );
+      return response;
+    } catch (fetchError) {
+      this.finishMetricAttempt(
+        "uploadSessionChunk",
+        rawAttemptStatus(fetchError, this.abortSignal),
+        fetchStartedAt,
+      );
+      if (isAbortError(fetchError)) throw fetchError;
+      if (!isFetchUnavailableError(fetchError)) {
+        const classified = classifyUploadSessionUrlError(this.toRequestError(fetchError, uploadUrl, false, undefined, "PUT"));
+        if (isRequestTimeoutError(fetchError)) {
+          throw stampDownloadTier(
+            new OneDriveError(
+              OneDriveErrorType.NetworkError,
+              `Abortable upload chunk timed out after ${timeoutMs}ms`,
+              classified.statusCode,
+              classified.retryAfterSeconds,
+              classified.graphCode,
+            ),
+            "uploadSession",
+          );
+        }
+        throw stampDownloadTier(classified, "uploadSession");
+      }
+      this.diag?.log("onedrive", "upload chunk fetch unavailable, falling back to requestUrl");
+    }
+
+    throwIfAborted(this.abortSignal);
+    observedAttempt++;
+    const fallbackStartedAt = this.beginMetricAttempt("uploadSessionChunk");
+    try {
+      const response = await withTimeout(
+        requestUrl({
+          url: uploadUrl,
+          method: "PUT",
+          headers: {
+            "Content-Range": `bytes ${start}-${end}/${total}`,
+          },
+          body: chunk,
+          contentType: "application/octet-stream",
+        }),
+        timeoutMs,
+      );
+      this.finishMetricAttempt(
+        "uploadSessionChunk",
+        "success",
+        fallbackStartedAt,
+        chunk.byteLength,
+        observedAttempt > 1 ? chunk.byteLength : 0,
+      );
+      return response;
+    } catch (rawError) {
+      this.finishMetricAttempt(
+        "uploadSessionChunk",
+        rawAttemptStatus(rawError, this.abortSignal),
+        fallbackStartedAt,
+        0,
+        observedAttempt > 1 ? chunk.byteLength : 0,
+      );
+      this.diag?.warn(
+        "onedrive",
+        `large upload chunk failed — range=${start}-${end}, bytes=${chunk.byteLength}, hostError=${requestErrorMessage(rawError)}`,
+      );
+      // A3 (2026-10-26): evidence-only tier stamp, same shape as the download
+      // waterfall. Stamped after classification so an AuthExpired rewrite onto
+      // a fresh OneDriveError keeps the mark.
+      throw stampDownloadTier(
+        classifyUploadSessionUrlError(
+          this.toRequestError(rawError, uploadUrl, false, undefined, "PUT"),
+        ),
+        "uploadSession",
+      );
+    }
+  }
+
+  private async recoverUploadSessionRange(
+    uploadUrl: string,
+    totalBytes: number,
+    cause: OneDriveError,
+  ): Promise<UploadMissingRange> {
+    for (let attempt = 1; attempt <= MAX_UPLOAD_SESSION_RECOVERIES; attempt++) {
+      throwIfAborted(this.abortSignal);
+      if (attempt > 1 || cause.type !== OneDriveErrorType.RangeNotSatisfiable) {
+        await sleepWithAbort(retryDelayMs(cause, attempt), this.abortSignal);
+      }
+      try {
+        return await this.getUploadSessionRange(uploadUrl, totalBytes);
+      } catch (rawError) {
+        if (isAbortError(rawError)) throw rawError;
+        const error = rawError instanceof OneDriveError
+          ? rawError
+          : this.toRequestError(rawError, uploadUrl, false, undefined, "PUT");
+        if (
+          isUncancellableRequestTimeout(error)
+          || !isTransientRequestError(error)
+          || attempt === MAX_UPLOAD_SESSION_RECOVERIES
+        ) {
+          throw error;
+        }
+      }
+    }
+    throw cause;
+  }
+
+  private async getUploadSessionRange(
+    uploadUrl: string,
+    totalBytes: number,
+  ): Promise<UploadMissingRange> {
+    const response = await this.uploadSessionControlRequest(uploadUrl, "GET");
+    const range = firstMissingUploadRange(
+      (response.json as { nextExpectedRanges?: unknown } | undefined)?.nextExpectedRanges,
+      totalBytes,
+    );
+    if (!range) {
+      throw new OneDriveError(
+        OneDriveErrorType.Unknown,
+        "Upload session status returned no valid missing range",
+      );
+    }
+    return range;
+  }
+
+  private async uploadSessionControlRequest(
+    uploadUrl: string,
+    method: "GET" | "DELETE",
+  ): Promise<RequestUrlResponse> {
+    const endpoint: OneDriveEndpointCategory = method === "GET"
+      ? "uploadSessionStatus"
+      : "uploadSessionCancel";
+    const fetchStartedAt = this.beginMetricAttempt(endpoint);
+    try {
+      const response = await withAbortableTimeout(
+        (signal) => uploadSessionControlFetch(uploadUrl, method, signal),
+        UPLOAD_SESSION_CONTROL_TIMEOUT_MS,
+        method === "GET" ? this.abortSignal : null,
+      );
+      this.finishMetricAttempt(endpoint, "success", fetchStartedAt);
+      return response;
+    } catch (fetchError) {
+      this.finishMetricAttempt(
+        endpoint,
+        rawAttemptStatus(fetchError, method === "GET" ? this.abortSignal : null),
+        fetchStartedAt,
+      );
+      if (isAbortError(fetchError)) throw fetchError;
+      if (!isFetchUnavailableError(fetchError)) {
+        throw classifyUploadSessionUrlError(this.toRequestError(fetchError, uploadUrl, false, undefined, "PUT"));
+      }
+    }
+
+    const fallbackStartedAt = this.beginMetricAttempt(endpoint);
+    try {
+      const response = await withTimeout(
+        requestUrl({ url: uploadUrl, method }),
+        UPLOAD_SESSION_CONTROL_TIMEOUT_MS,
+      );
+      this.finishMetricAttempt(endpoint, "success", fallbackStartedAt);
+      return response;
+    } catch (rawError) {
+      this.finishMetricAttempt(
+        endpoint,
+        rawAttemptStatus(rawError, method === "GET" ? this.abortSignal : null),
+        fallbackStartedAt,
+      );
+      throw classifyUploadSessionUrlError(this.toRequestError(rawError, uploadUrl, false, undefined, "PUT"));
+    }
+  }
+
+  private async cancelUploadSessionBestEffort(uploadUrl: string): Promise<void> {
+    try {
+      await this.uploadSessionControlRequest(uploadUrl, "DELETE");
+      this.diag?.log("onedrive", "upload session cancelled and temporary data cleanup requested");
+    } catch (error) {
+      const classified = error instanceof OneDriveError
+        ? error
+          : this.toRequestError(error, uploadUrl, false, undefined, "PUT");
+      if (classified.type !== OneDriveErrorType.NotFound) {
+        this.diag?.warn(
+          "onedrive",
+          `upload session cleanup failed — type=${classified.type}, status=${classified.statusCode}`,
+        );
+      }
+    }
+  }
+
+  /** Keep route selection identical while each public entry owns its sink. */
+  private async downloadWithWaterfall<T>(input: {
+    operationName: "downloadFile" | "downloadFileToPath";
+    vaultName: string;
+    filePath: string;
+    downloadUrl?: string;
+    driveItemId?: string;
+    fileSize: number;
+    onProgress?: (downloaded: number, total: number) => void;
+    loadDownloadUrl: (
+      url: string,
+      signal: AbortSignal,
+      slowGate?: SlowConnectionGate,
+    ) => Promise<{ value: T; bytes: number }>;
+    loadRequestUrlResponse: (
+      response: RequestUrlResponse,
+    ) => Promise<{ value: T; bytes: number }>;
+    loadContent: (
+      apiPath: string,
+      requestOptions: RequestOptions,
+      slowGate?: SlowConnectionGate,
+    ) => Promise<T>;
+    afterContentShortcut?: (value: T) => void;
+    afterHintDownload?: (value: T) => void;
+  }): Promise<T> {
+    throwIfAborted(this.abortSignal);
+    // The one place a download's financials are decided (2026-10-27 ladder):
+    // the log line below and every deadline in this waterfall read this value.
+    // Priced before the gate so the slow-connection gate can judge a window
+    // against the time the file actually has left (2026-11-10).
+    const budget = downloadBudget(input.fileSize);
+    const deadlineMs = Date.now() + budget.totalMs;
+    const remainingMs = () =>
+      ensureDownloadBudget(deadlineMs, input.filePath);
+    const slowGate = createSlowConnectionGate(
+      `${input.operationName} "${input.filePath}"`,
+      {
+        evidence: this.slowLinkEvidence,
+        totalSize: input.fileSize,
+        // Raw remaining deadline (never throws): the gate keeps a judged-slow
+        // window when it can still finish the file inside this budget, and an
+        // exhausted budget therefore keeps the pre-existing abandonment rule.
+        budgetLeftMs: () => deadlineMs - Date.now(),
+      },
+    );
+    const {
+      maxBytes: maxResponseBytes,
+      declaredKind: declaredOverflowKind,
+    } = remoteFileByteBudget(input.fileSize, input.filePath);
+    let metadataAuthError: OneDriveError | null = null;
+    // 连坐切片 (2026-09-16): whether a /content tier failed with a real HTTP
+    // status — only that blacklists content for the round when the caller has
+    // no driveItemId and the fallthrough below is reached.
+    let sawEndpointLevelContentFailure = false;
+    // 阶梯只在有空网接着的时候提前收杆: once this round knows /content cannot
+    // serve these files (a real HTTP rejection was recorded), cutting the CDN
+    // early would trade a slow success for a certain failure — such files keep
+    // the whole waterfall deadline on the CDN.
+    const channelCapMs = this.contentFailedThisRound ? null : budget.channelCapMs;
+    /** Deadline of the CDN path only. Started lazily at the first CDN attempt so
+     *  a preceding /content shortcut cannot eat it, and never longer than the
+     *  waterfall's own deadline. `null` cap keeps the pre-ladder rule that the
+     *  first channel may hold the whole deadline. */
+    let cdnWindowDeadlineMs = 0;
+    const cdnWindowLeftMs = (): number => {
+      if (cdnWindowDeadlineMs === 0) {
+        cdnWindowDeadlineMs = Date.now()
+          + (channelCapMs ?? budget.totalMs);
+      }
+      return Math.min(deadlineMs, cdnWindowDeadlineMs) - Date.now();
+    };
+    const loadDownloadUrl = async (
+      url: string,
+      maxAttempts: number,
+    ): Promise<T> => {
+      let observedAttempt = 0;
+      // Every attempt of the CDN path shares the channel window: exhausting it
+      // hands the file to the fallback channels instead of letting the CDN
+      // swallow the reserve.
+      const channelRemaining = () => Math.min(remainingMs(), cdnWindowLeftMs());
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        observedAttempt++;
+        const fetchStartedAt = this.beginMetricAttempt("downloadUrl");
+        try {
+          const result = await withAbortableTimeout(
+            (signal) => input.loadDownloadUrl(url, signal, slowGate),
+            channelRemaining(),
+            this.abortSignal,
+          );
+          this.finishMetricAttempt(
+            "downloadUrl",
+            "success",
+            fetchStartedAt,
+            result.bytes,
+            observedAttempt > 1 ? result.bytes : 0,
+          );
+          return result.value;
+        } catch (error) {
+          this.finishMetricAttempt(
+            "downloadUrl",
+            rawAttemptStatus(error, this.abortSignal),
+            fetchStartedAt,
+            0,
+            0,
+            transferredBytesFromError(error),
+          );
+          // Same cancel priority as the multi-range recovery: a transport
+          // AbortError with connection markers belongs to the fallback ladder,
+          // not to user cancellation.
+          if (isRangeCancel(error, this.abortSignal)) throw error;
+          if (isResponseByteBudgetError(error)) throw error;
+          let err = error;
+          if (
+            err instanceof TypeError
+            || (err as { status?: number }).status === 0
+          ) {
+            observedAttempt++;
+            const fallbackStartedAt = this.beginMetricAttempt("downloadUrl");
+            try {
+              throwIfAborted(this.abortSignal);
+              const response = await withTimeout(
+                requestUrl({ url, method: "GET" }),
+                channelRemaining(),
+              );
+              const result = await input.loadRequestUrlResponse(response);
+              this.finishMetricAttempt(
+                "downloadUrl",
+                "success",
+                fallbackStartedAt,
+                result.bytes,
+                observedAttempt > 1 ? result.bytes : 0,
+              );
+              return result.value;
+            } catch (fallbackErr) {
+              this.finishMetricAttempt(
+                "downloadUrl",
+                rawAttemptStatus(fallbackErr, this.abortSignal),
+                fallbackStartedAt,
+              );
+              if (isResponseByteBudgetError(fallbackErr)) throw fallbackErr;
+              err = fallbackErr;
+            }
+          }
+          if (isUncancellableRequestTimeout(err)) {
+            throw stampDownloadAttempts(downloadTimeoutError(input.filePath), attempt);
+          }
+          if (
+            attempt === maxAttempts
+            || !isTransientDownloadUrlError(err)
+          ) {
+            throw stampDownloadAttempts(err, attempt);
+          }
+          const remaining = channelRemaining();
+          if (remaining <= RETRY_BASE_MS) throw stampDownloadAttempts(err, attempt);
+          this.diag?.warn(
+            "onedrive",
+            `${input.operationName} "${input.filePath}" — CDN retry ${attempt + 1}/${maxAttempts}, remainingMs=${remaining}`,
+            requestErrorMessage(err),
+          );
+          await sleepWithAbort(RETRY_BASE_MS, this.abortSignal);
+        }
+      }
+      throw new OneDriveError(
+        OneDriveErrorType.NetworkError,
+        `Download failed for: ${input.filePath}`,
+      );
+    };
+    const contentRequestOptions: RequestOptions = {
+      deadlineMs,
+      maxAttempts: 2,
+      perRequestTimeoutMs: DOWNLOAD_MAX_TIMEOUT_MS,
+      maxResponseBytes,
+      maxResponseBytesDeclaredKind: declaredOverflowKind,
+      responseLabel: `Remote file "${input.filePath}"`,
+    };
+    /** Metadata refresh exists only to mint a fresh CDN URL, so it lives inside
+     *  the CDN window — built per call so the window starts with the CDN path. */
+    const metaRequestOptions = (): RequestOptions => ({
+      deadlineMs: Math.min(deadlineMs, Date.now() + Math.max(0, cdnWindowLeftMs())),
+      maxAttempts: 1,
+      metadataReason: "downloadUrlRefresh",
+    });
+    this.diag?.log(
+      "onedrive",
+      `${input.operationName} "${input.filePath}" — size=${input.fileSize}, primaryMs=${budget.primaryMs}, reserveMs=${budget.reserveMs}, budgetMs=${budget.totalMs}, class=${budget.budgetClass}, channelCapMs=${channelCapMs ?? "none"}, hint=${this.downloadMethod ?? "none"}`,
+    );
+    input.onProgress?.(0, input.fileSize);
+
+    if (this.downloadMethod === "content" && input.driveItemId) {
+      const tierStartMs = Date.now();
+      try {
+        const apiPath = `${APP_FOLDER_PATHS.filePath(
+          this.getStorageVaultName(input.vaultName),
+          input.filePath,
+        )}:/content`;
+        const value = await input.loadContent(apiPath, contentRequestOptions, slowGate);
+        input.afterContentShortcut?.(value);
+        return value;
+      } catch (caught) {
+        // A3: stamp the tier on the error itself so both this tier's warn line
+        // and any error that escapes carry "where the waterfall died".
+        const err = stampDownloadTier(caught, "content");
+        if (isResponseByteBudgetError(err)) throw err;
+        if (isUncancellableRequestTimeout(err)) {
+          throw stampDownloadTier(downloadTimeoutError(input.filePath), "content");
+        }
+        // 内容端点整批 401/403 时反向撤销熔断 (2026-10-27): the breaker pushed
+        // this file onto /content, and /content cannot even authorize it — the
+        // direction was wrong, so the next file must be allowed to try the CDN.
+        this.releaseCdnCircuitAfterContentRejection(err, "content");
+        if (isAuthExpired(err)) throw err;
+        this.diag?.warn(
+          "onedrive",
+          `${input.operationName} "${input.filePath}" — content shortcut failed, falling back to full waterfall`,
+          { ...downloadErrorData(err), tierMs: Date.now() - tierStartMs },
+        );
+      }
+    }
+
+    if (
+      input.downloadUrl
+      && !this.cdnFailedThisRound
+      && !this.cdnCircuitOpenThisRound
+      && cdnWindowLeftMs() > 0
+    ) {
+      const tierStartMs = Date.now();
+      try {
+        const value = await loadDownloadUrl(input.downloadUrl, 1);
+        this.downloadMethod = "downloadUrl";
+        this.noteCdnTransferSuccess();
+        input.afterHintDownload?.(value);
+        return value;
+      } catch (caught) {
+        const err = stampDownloadTier(caught, "downloadUrl");
+        if (isResponseByteBudgetError(err)) throw err;
+        this.diag?.warn(
+          "onedrive",
+          `${input.operationName} "${input.filePath}" — downloadUrl failed, trying item metadata`,
+          { ...downloadErrorData(err), tierMs: Date.now() - tierStartMs },
+        );
+        this.noteCdnTierFailure(err);
+        remainingMs();
+      }
+    }
+
+    // The item-metadata tier exists only to mint a fresh CDN URL, so an open
+    // breaker skips it with the rest of the CDN path and an exhausted channel
+    // window is not re-opened for it.
+    if (input.driveItemId && !this.cdnCircuitOpenThisRound && cdnWindowLeftMs() > 0) {
+      const tierStartMs = Date.now();
+      try {
+        throwIfAborted(this.abortSignal);
+        const metaResp = await this.request(
+          "GET",
+          `/me/drive/items/${input.driveItemId}?select=id,name,size,file,@microsoft.graph.downloadUrl`,
+          undefined,
+          undefined,
+          metaRequestOptions(),
+        );
+        const meta = metaResp.json as {
+          "@microsoft.graph.downloadUrl"?: string;
+        };
+        if (meta["@microsoft.graph.downloadUrl"]) {
+          const value = await loadDownloadUrl(
+            meta["@microsoft.graph.downloadUrl"],
+            input.downloadUrl ? 1 : 2,
+          );
+          this.downloadMethod = "downloadUrl";
+          this.noteCdnTransferSuccess();
+          return value;
+        }
+      } catch (caught) {
+        const err = stampDownloadTier(caught, "itemMetadata");
+        if (isResponseByteBudgetError(err)) throw err;
+        if (isAuthExpired(err)) metadataAuthError = err;
+        this.diag?.warn(
+          "onedrive",
+          `${input.operationName} "${input.filePath}" — item metadata downloadUrl failed, trying path /content`,
+          { ...downloadErrorData(err), tierMs: Date.now() - tierStartMs },
+        );
+        this.noteCdnTierFailure(err);
+        remainingMs();
+      }
+    }
+
+    if (this.contentFailedThisRound) {
+      this.diag?.log(
+        "onedrive",
+        `${input.operationName} "${input.filePath}" — /content blocked this round, no fallback available`,
+      );
+      throw new OneDriveError(
+        OneDriveErrorType.NetworkError,
+        `Content endpoint unavailable for: ${input.filePath}`,
+      );
+    }
+
+    const pathTierStartMs = Date.now();
+    try {
+      this.diag?.log(
+        "onedrive",
+        `${input.operationName} "${input.filePath}" — executing path /content fallback, remainingMs=${remainingMs()}`,
+      );
+      const apiPath = `${APP_FOLDER_PATHS.filePath(
+        this.getStorageVaultName(input.vaultName),
+        input.filePath,
+      )}:/content`;
+      const value = await input.loadContent(apiPath, contentRequestOptions, slowGate);
+      this.downloadMethod = "content";
+      return value;
+    } catch (caught) {
+      const err = stampDownloadTier(caught, "pathContent");
+      if (isResponseByteBudgetError(err)) throw err;
+      if (isUncancellableRequestTimeout(err)) {
+        throw stampDownloadTier(downloadTimeoutError(input.filePath), "pathContent");
+      }
+      this.releaseCdnCircuitAfterContentRejection(err, "pathContent");
+      if (isAuthExpired(err)) {
+        throw metadataAuthError
+          ?? asFileDownloadUnauthorized(err, input.filePath);
+      }
+      this.diag?.warn(
+        "onedrive",
+        `${input.operationName} "${input.filePath}" — path /content failed, trying item ID /content`,
+        { ...downloadErrorData(err), tierMs: Date.now() - pathTierStartMs },
+      );
+      if (!isTransportLevelDownloadFailure(err)) sawEndpointLevelContentFailure = true;
+      remainingMs();
+    }
+
+    if (input.driveItemId) {
+      const itemTierStartMs = Date.now();
+      try {
+        throwIfAborted(this.abortSignal);
+        this.diag?.log(
+          "onedrive",
+          `${input.operationName} "${input.filePath}" — executing item ID /content fallback, remainingMs=${remainingMs()}`,
+        );
+        const value = await input.loadContent(
+          `/me/drive/items/${input.driveItemId}/content`,
+          contentRequestOptions,
+          slowGate,
+        );
+        this.downloadMethod = "content";
+        return value;
+      } catch (caught) {
+        // The last resort: this error is the one that escapes the waterfall,
+        // so its tier is what the diagnostic report reads back.
+        const err = stampDownloadTier(caught, "itemContent");
+        if (isResponseByteBudgetError(err)) throw err;
+        this.releaseCdnCircuitAfterContentRejection(err, "itemContent");
+        if (isAuthExpired(err)) {
+          throw metadataAuthError
+            ?? asFileDownloadUnauthorized(err, input.filePath);
+        }
+        this.diag?.warn(
+          "onedrive",
+          `${input.operationName} "${input.filePath}" — item ID /content failed, no remaining fallback`,
+          { ...downloadErrorData(err), tierMs: Date.now() - itemTierStartMs },
+        );
+        if (!isTransportLevelDownloadFailure(err)) this.contentFailedThisRound = true;
+        throw err;
+      }
+    }
+
+    if (sawEndpointLevelContentFailure) this.contentFailedThisRound = true;
+    throw new OneDriveError(
+      OneDriveErrorType.NotFound,
+      `No download method available for: ${input.filePath}`,
+    );
+  }
+
+  /** Download file content as ArrayBuffer.
+   *
+   *  Download strategy (in priority order):
+   *  1. Pre-signed downloadUrl (if provided) — bypasses /content 401 entirely
+   *  2. Fetch fresh downloadUrl from item metadata, then download via that URL
+   *  3. Path-based /content endpoint
+   *  4. Item ID /content endpoint (last resort)
+   *
+   *  /content GET returns 401 even with Files.ReadWrite for App Folder files,
+   *  so the downloadUrl path is the primary reliable method. */
+  async downloadFile(
+    vaultName: string,
+    filePath: string,
+    downloadUrl?: string,
+    driveItemId?: string,
+    fileSize = 0,
+    onProgress?: (downloaded: number, total: number) => void,
+  ): Promise<ArrayBuffer> {
+    const {
+      maxBytes: maxResponseBytes,
+      declaredKind: declaredOverflowKind,
+    } = remoteFileByteBudget(fileSize, filePath);
+    return this.downloadWithWaterfall({
+      operationName: "downloadFile",
+      vaultName,
+      filePath,
+      downloadUrl,
+      driveItemId,
+      fileSize,
+      onProgress,
+      loadDownloadUrl: async (url, signal, slowGate) => {
+        // C 载体 (2026-09-14): large desktop downloads split into parallel
+        // Node-https Range streams. Rendering-process fetch cannot serve
+        // this (CORS hides Content-Range; parallel fetches hung and poisoned
+        // the shared pool — see range-download.ts), so the branch only arms
+        // when the Node downloader resolved. Any failure except user cancel
+        // falls back to the proven single-stream attempt right here, so the
+        // worst case is exactly the pre-multi-range behavior.
+        const rangeDownloader = this.resolveRangeStreamDownloader();
+        // Only a file that can actually arm the Range path may consume an
+        // adaptive probe; small files must not advance the round's tier. The
+        // file size also caps which rung may be probed (a 20 MiB file cannot
+        // fund the 24-stream rung at the 1 MiB per-stream floor).
+        const rangePlan = rangeDownloader && fileSize >= DOWNLOAD_RANGE_MIN_BYTES
+          ? planRangeDownloadWindows(
+            fileSize,
+            this.rangeStreamAdaptation.planStreams(fileSize),
+          )
+          : null;
+        // 回退不重下 (2026-10-28): a failed ladder still hands back the bytes it
+        // landed. The single stream below then continues at its first hole
+        // inside that same assembly buffer instead of restarting the file,
+        // which is what made a bad-link fallback cost more than no fallback.
+        let rangePartial: RangePartialDownload | null = null;
+        if (rangeDownloader && rangePlan) {
+          this.diag?.log(
+            "onedrive",
+            `downloadFile "${filePath}" — multi-range download — streams=${rangePlan.length}, tier=${this.rangeStreamAdaptation.plannedStreams}, fileSize=${fileSize}`,
+          );
+          try {
+            const buffer = await rangeDownloader.download({
+              url,
+              windows: rangePlan,
+              fileSize,
+              signal,
+              label: `Remote file "${filePath}"`,
+              onProgress,
+              slowLinkEvidence: this.slowLinkEvidence,
+              adaptation: this.rangeStreamAdaptation,
+            });
+            return { value: buffer, bytes: buffer.byteLength };
+          } catch (error) {
+            if (isRangeCancel(error, signal)) throw error;
+            rangePartial = readRangePartialDownload(error);
+            const resumeAt = rangePartial && rangePartial.landedOffset > 0
+              ? rangePartial.landedOffset
+              : 0;
+            this.diag?.warn(
+              "onedrive",
+              `downloadFile "${filePath}" — multi-range download failed, falling back to single stream`
+                + (resumeAt > 0
+                  ? ` (resume at byte ${resumeAt}, remaining ${fileSize - resumeAt}/${fileSize})`
+                  : " (from byte 0)"),
+              requestErrorMessage(error),
+            );
+          }
+        }
+        // A resume request that the CDN ignores (200 instead of 206) must not
+        // be stitched onto the landed prefix: the buffer keeps its unchanged
+        // size + sha256 check, and the retry is the plain whole-file GET.
+        let resumeRejected = false;
+        // Holder (not a plain `let`): the evidence is written by a callback, so
+        // control-flow analysis would otherwise keep the initial `null` type.
+        const resumeEvidence: { contentRange: string | null } = {
+          contentRange: null,
+        };
+        const rangeResume = rangePartial && rangePartial.landedOffset > 0
+          ? {
+            assembly: rangePartial.assembly,
+            offset: rangePartial.landedOffset,
+            fileSize,
+            onRangeAccepted: (evidence: { contentRange: string | null }): void => {
+              resumeEvidence.contentRange = evidence.contentRange;
+            },
+            onRangeRejected: (rejection: DownloadRangeRejection): void => {
+              resumeRejected = true;
+              this.diag?.warn(
+                "onedrive",
+                `downloadFile "${filePath}" — single-stream resume not honored (status ${rejection.status}, Content-Range ${rejection.contentRange ?? "none"}); re-downloading from byte 0`,
+              );
+            },
+          }
+          : undefined;
+        const response = await downloadUrlFetch(
+          url,
+          maxResponseBytes,
+          `Remote file "${filePath}"`,
+          onProgress,
+          signal,
+          slowGate,
+          declaredOverflowKind,
+          rangeResume,
+        );
+        if (rangeResume && !resumeRejected) {
+          const contentRange = resumeEvidence.contentRange;
+          this.diag?.log(
+            "onedrive",
+            `downloadFile "${filePath}" — single-stream resume landed ${fileSize - rangeResume.offset} byte(s) from byte ${rangeResume.offset}`
+              + (contentRange === null
+                ? " (206, Content-Range not exposed)"
+                : ` (206, Content-Range ${contentRange})`),
+          );
+        }
+        return {
+          value: response.arrayBuffer,
+          bytes: responsePayloadByteLength(response),
+        };
+      },
+      loadRequestUrlResponse: async (response) => {
+        assertResponseByteBudget(
+          response,
+          maxResponseBytes,
+          `Remote file "${filePath}"`,
+        );
+        return {
+          value: response.arrayBuffer,
+          bytes: responsePayloadByteLength(response),
+        };
+      },
+      loadContent: async (apiPath, requestOptions, slowGate) =>
+        (await this.contentGet(apiPath, requestOptions, onProgress, slowGate)).arrayBuffer,
+      afterContentShortcut: (buffer) => {
+        onProgress?.(0, fileSize || buffer.byteLength);
+        onProgress?.(buffer.byteLength, fileSize || buffer.byteLength);
+      },
+      afterHintDownload: (buffer) => {
+        onProgress?.(buffer.byteLength, fileSize || buffer.byteLength);
+      },
+    });
+  }
+
+  /** Download directly to a local temp file.
+   *
+   *  Used by the sync executor on modern mobile runtimes to avoid holding
+   *  large downloads entirely in memory before writing them to disk. */
+  async downloadFileToPath(
+    vaultName: string,
+    filePath: string,
+    localPath: string,
+    adapter: DataAdapter,
+    downloadUrl?: string,
+    driveItemId?: string,
+    fileSize = 0,
+    expectedSha256?: string,
+    onProgress?: (downloaded: number, total: number) => void,
+  ): Promise<DownloadToPathResult> {
+    const {
+      maxBytes: maxResponseBytes,
+      declaredKind: declaredOverflowKind,
+    } = remoteFileByteBudget(fileSize, filePath);
+    // 甲路续传 (2026-09-16): bytes already received are assets. The streaming
+    // writers keep the on-disk prefix on retryable failures and record its
+    // length here; the next attempt re-requests `Range: bytes=<offset>-` and
+    // re-seeds the hash from the prefix. The offset survives across tiers
+    // (same file) and is reset by any full-buffer (requestUrl) write.
+    const resumeState: DownloadResumeState = { offset: 0 };
+    try {
+      return await this.downloadWithWaterfall({
+      operationName: "downloadFileToPath",
+      vaultName,
+      filePath,
+      downloadUrl,
+      driveItemId,
+      fileSize,
+      onProgress,
+      loadDownloadUrl: async (url, signal, slowGate) => {
+        const result = await downloadUrlFetchToBinaryFile(
+          url,
+          adapter,
+          localPath,
+          expectedSha256,
+          maxResponseBytes,
+          `Remote file "${filePath}"`,
+          onProgress,
+          signal,
+          slowGate,
+          resumeState,
+          declaredOverflowKind,
+        );
+        return { value: result, bytes: result.size };
+      },
+      loadRequestUrlResponse: async (response) => {
+        resumeState.offset = 0;
+        const result = await writeArrayBufferToBinaryFile(
+          adapter,
+          localPath,
+          response.arrayBuffer,
+          expectedSha256,
+          fileSize,
+          maxResponseBytes,
+          `Remote file "${filePath}"`,
+          onProgress,
+        );
+        return { value: result, bytes: result.size };
+      },
+      loadContent: (apiPath, requestOptions, slowGate) =>
+        this.contentGetToPath(
+          apiPath,
+          adapter,
+          localPath,
+          expectedSha256,
+          requestOptions,
+          onProgress,
+          slowGate,
+          resumeState,
+        ),
+      });
+    } catch (error) {
+      // 甲路续传: the waterfall gave up on this file for the round — the kept
+      // prefix is unreachable by any further retry, so discard it instead of
+      // leaking it in tmp (the executor's failure path and the next fresh
+      // attempt each also clean up).
+      if (resumeState.offset > 0) {
+        resumeState.offset = 0;
+        await safeRemove(adapter, localPath);
+      }
+      throw error;
+    }
+  }
+
+  /** Delete a file or folder.
+   *  @param matchTag  When set, the DELETE includes an If-Match header. Use a
+   *                   folder cTag for an empty-folder delete because its eTag
+   *                   does not reliably change when descendants change. */
+  async deleteItem(
+    vaultName: string,
+    itemPath: string,
+    matchTag?: string,
+    driveItemId?: string,
+  ): Promise<void> {
+    const apiPath = driveItemId
+      ? `/me/drive/items/${encodeURIComponent(driveItemId)}`
+      : APP_FOLDER_PATHS.filePath(this.getStorageVaultName(vaultName), itemPath);
+    await this.request("DELETE", apiPath, undefined, undefined, undefined, matchTag);
+  }
+
+  /** Rename a file on OneDrive without re-uploading content.
+   *
+   *  Uses the reviewed driveItem identity and If-Match version.
+   *  OneDrive handles the rename server-side — no content transfer.
+   *
+   *  Returns the updated DriveItem so callers can grab the new eTag. */
+  async renameItem(
+    _vaultName: string,
+    _oldPath: string,
+    newPath: string,
+    driveItemId: string,
+    eTag: string,
+  ): Promise<DriveItem> {
+    const apiPath = `/me/drive/items/${encodeURIComponent(driveItemId)}`;
+    const newName = newPath.split("/").pop() || newPath;
+    const response = await this.request("PATCH", apiPath, { name: newName }, undefined, undefined, eTag);
+    return response.json as DriveItem;
+  }
+
+  /** Move/rename a known driveItem using reviewed identity + version. */
+  async moveItemById(
+    driveItemId: string,
+    eTag: string,
+    newName: string,
+    newParentId: string,
+  ): Promise<DriveItem> {
+    const response = await this.request(
+      "PATCH",
+      `/me/drive/items/${encodeURIComponent(driveItemId)}`,
+      { name: newName, parentReference: { id: newParentId } },
+      undefined,
+      undefined,
+      eTag,
+    );
+    return response.json as DriveItem;
+  }
+
+  // ---- Foreign App Folder (Remotely Save adoption) ----
+
+  /** Read-only scan for a Remotely Save repository that pairs with one vault.
+   *  GET only and never touches special/approot, so it cannot create any
+   *  folder as an observable side effect. Pairing is strict: the vault
+   *  directory must exactly equal the vault name (a renamed vault must not
+   *  adopt a stale directory). An end-to-end encrypted remote (every synced
+   *  file carries an unrecognisable cipher name) cannot be adopted either,
+   *  so it classifies as null too and the caller silently walks the normal
+   *  first sync. Returns null when any level of the expected layout is
+   *  absent — absence is a normal outcome, not an error. */
+  async detectRemotelySaveRepository(
+    vaultName: string,
+  ): Promise<RemotelySaveRepositoryLocation | null> {
+    const rootFolders: DriveItem[] = [];
+    let rootUrl: string | null = "/me/drive/root/children?$top=200&$select=id,name,folder";
+    let rootPages = 0;
+    while (rootUrl) {
+      if (rootPages >= REMOTELY_SAVE_MAX_ROOT_PAGES) {
+        this.diag?.warn(
+          "onedrive",
+          "Remotely Save detection gave up: root listing exceeded the page budget",
+          { pages: rootPages, mutations: 0 },
+        );
+        return null;
+      }
+      const response = await this.request("GET", rootUrl);
+      const data = response.json as {
+        value?: DriveItem[];
+        "@odata.nextLink"?: string;
+      };
+      rootFolders.push(...(data.value ?? []));
+      rootUrl = data["@odata.nextLink"] ?? null;
+      rootPages++;
+    }
+    const container = rootFolders.find(
+      (item) => item.folder
+        && REMOTELY_SAVE_APPS_CONTAINER_NAMES.has(item.name.toLowerCase()),
+    );
+    if (!container?.id) return null;
+    const containerChildren = await this.listFolderChildrenById(container.id);
+    const remotelySaveDir = containerChildren.find(
+      (item) => item.folder
+        && item.name.toLowerCase() === REMOTELY_SAVE_DIR_NAME,
+    );
+    if (!remotelySaveDir?.id) return null;
+    const remotelySaveChildren = await this.listFolderChildrenById(
+      remotelySaveDir.id,
+    );
+    const vaultDir = remotelySaveChildren.find(
+      (item) => item.folder && item.name === vaultName,
+    );
+    if (!vaultDir?.id) return null;
+    const vaultDirChildren = await this.listFolderChildrenById(vaultDir.id);
+    if (classifyRemotelySaveVaultChildren(vaultDirChildren) === "encrypted") {
+      this.diag?.log(
+        "onedrive",
+        "Remotely Save repository looks end-to-end encrypted; the adoption offer stays hidden",
+        { vault: vaultName, mutations: 0 },
+      );
+      return null;
+    }
+    const driveId = vaultDir.parentReference?.driveId
+      ?? remotelySaveDir.parentReference?.driveId
+      ?? container.parentReference?.driveId;
+    if (!driveId) {
+      throw new Error("Remotely Save detection could not resolve a drive identity");
+    }
+    return {
+      driveId,
+      appsContainerId: container.id,
+      remotelySaveDirId: remotelySaveDir.id,
+      vaultDirId: vaultDir.id,
+    };
+  }
+
+  /** 加入询问用的仓库检测结果。`same-name` 来自同名快通道：命中时不再列举其余仓
+   *  ——调用方在该分支本来就不弹框、不提示（同名防打扰门），不需要数量或名单，
+   *  所以用显式形态说明「名单未列举」，而不是返回一份不完整的列表。 */
+  async detectExistingEasySyncRepositories(
+    vaultName: string,
+  ): Promise<EasySyncRepositoryDetection> {
+    // 同名快通道与列举并发发出：命中时省掉全部探测批次（慢在串行来回次数），
+    // 未命中时这次并发不增加墙钟（它的往返被列举覆盖）。任何探测失败都算未命中
+    // ——这条路径只做加速，不新增失败面（失败仍由下方现役路径如实抛出）。
+    const sameNameProbe = this.probeLiveRepositoryForVaultName(vaultName);
+    const candidates: DriveItem[] = [];
+    let url: string | null =
+      "/me/drive/special/approot:/vaults:/children?$top=200&$select=id,name,folder";
+    let pages = 0;
+    while (url) {
+      if (pages >= EASYSYNC_VAULTS_MAX_PAGES) {
+        throw new Error("EasySync repository detection exceeded its page budget");
+      }
+      let response;
+      try {
+        response = await this.request("GET", url);
+      } catch (error) {
+        if (
+          error instanceof OneDriveError
+          && error.type === OneDriveErrorType.NotFound
+        ) {
+          // No vaults/ directory at all — confirmed absence, not a failure.
+          return { kind: "none" };
+        }
+        throw error;
+      }
+      const data = response.json as {
+        value?: DriveItem[];
+        "@odata.nextLink"?: unknown;
+      };
+      for (const item of data.value ?? []) {
+        if (item.folder && item.name) candidates.push(item);
+      }
+      const nextLink = data["@odata.nextLink"];
+      if (nextLink === undefined) {
+        url = null;
+      } else if (typeof nextLink === "string" && nextLink.length > 0) {
+        url = nextLink;
+      } else {
+        throw new Error("EasySync repository listing continuation is invalid");
+      }
+      pages++;
+    }
+    if (await sameNameProbe) return { kind: "same-name" };
+
+    const repositories: string[] = [];
+    for (
+      let index = 0;
+      index < candidates.length;
+      index += EASYSYNC_VAULTS_PROBE_CONCURRENCY
+    ) {
+      const batch = candidates.slice(
+        index,
+        index + EASYSYNC_VAULTS_PROBE_CONCURRENCY,
+      );
+      const probed = await Promise.all(
+        batch.map(async (candidate): Promise<string | null> => {
+          const naming = resolveVaultDirectoryNaming(candidate.name);
+          let children: DriveItem[];
+          try {
+            const response = await this.request(
+              "GET",
+              `/me/drive/special/approot:/vaults/${naming.storage}/.easy-sync:/children?$select=id,name`,
+            );
+            children = (response.json as { value?: DriveItem[] }).value ?? [];
+          } catch (error) {
+            if (
+              error instanceof OneDriveError
+              && error.type === OneDriveErrorType.NotFound
+            ) {
+              // No control directory — not a repository.
+              return null;
+            }
+            throw error;
+          }
+          return hasEasySyncControlSlot(children) ? naming.display : null;
+        }),
+      );
+      for (const name of probed) {
+        if (name !== null) repositories.push(name);
+      }
+    }
+    if (repositories.length === 0) return { kind: "none" };
+    return { kind: "others", repositories };
+  }
+
+  /** 同名快通道探针（只读）：按本条库名做一次控制目录直探，命名约定与全量枚举
+   *  共用 `resolveVaultDirectoryNaming`。**只做加速**——任何失败（含非 404 的真实
+   *  故障）都算未命中并回落全量路径，不新增失败面；legacy 编码目录名不在快通道
+   *  覆盖内（回落全量后由现役解码逻辑识别，语义不变）。 */
+  private async probeLiveRepositoryForVaultName(vaultName: string): Promise<boolean> {
+    const naming = resolveVaultDirectoryNaming(vaultName);
+    try {
+      const response = await this.request(
+        "GET",
+        `/me/drive/special/approot:/vaults/${naming.storage}/.easy-sync:/children?$select=id,name`,
+      );
+      return hasEasySyncControlSlot(
+        (response.json as { value?: DriveItem[] }).value ?? [],
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /** Copy one driveItem subtree into a same-drive destination folder.
+   *  Graph copy is asynchronous and its monitor URL lives on a SharePoint
+   *  host that must not receive the Graph token, so completion is observed by
+   *  polling the destination children for the expected name. The caller must
+   *  guarantee the destination does not already hold that name (personal
+   *  OneDrive copies fail server-side on name conflicts, and conflictBehavior
+   *  is unsupported there). */
+  async copyItemById(
+    driveItemId: string,
+    targetParentId: string,
+    expectedName: string,
+    options?: { timeoutMs?: number; pollIntervalMs?: number },
+  ): Promise<DriveItem> {
+    await this.request(
+      "POST",
+      `/me/drive/items/${encodeURIComponent(driveItemId)}/copy`,
+      { parentReference: { id: targetParentId } },
+    );
+    const arrived = await this.pollChildArrivedInParent(
+      targetParentId,
+      expectedName,
+      options?.timeoutMs ?? REMOTELY_SAVE_COPY_TIMEOUT_MS,
+      options?.pollIntervalMs ?? REMOTELY_SAVE_COPY_POLL_INTERVAL_MS,
+    );
+    if (!arrived) {
+      throw new OneDriveError(
+        OneDriveErrorType.ServerError,
+        `Copy of drive item did not appear in the destination within its deadline: ${expectedName}`,
+      );
+    }
+    return arrived;
+  }
+
+  /** Poll a destination folder until one child with the expected name shows
+   *  up, or the deadline elapses (null). Used for asynchronous Graph copy and
+   *  as the arrival check after folder moves that Graph answers 202. */
+  async pollChildArrivedInParent(
+    parentId: string,
+    expectedName: string,
+    timeoutMs: number,
+    pollIntervalMs: number,
+  ): Promise<DriveItem | null> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await sleepWithAbort(pollIntervalMs, this.abortSignal);
+      const children = await this.listFolderChildrenById(parentId);
+      const found = children.find((item) => item.name === expectedName);
+      if (found?.id) return found;
+    }
+    return null;
+  }
+
+  /** Fetch current metadata for a single file — used when an If-Match upload
+   *  fails with 412 to get fresh remote info for conflict creation. */
+  async getFileMetadata(
+    vaultName: string,
+    filePath: string,
+    metadataReason: OneDriveMetadataReason = "other",
+  ): Promise<{
+    eTag: string;
+    cTag: string;
+    size: number;
+    sha256Hash?: string;
+    quickXorHash?: string;
+    downloadUrl?: string;
+    driveId: string;
+    parentId?: string;
+    mtime: number;
+  } | null> {
+    try {
+      const apiPath = APP_FOLDER_PATHS.filePath(this.getStorageVaultName(vaultName), filePath);
+      const response = await this.request(
+        "GET",
+        apiPath,
+        undefined,
+        undefined,
+        { metadataReason, expectedNotFound: true },
+      );
+      const item = response.json as DriveItem;
+      if (!item.file) return null;
+      return {
+        eTag: item.eTag ?? "",
+        cTag: item.cTag ?? "",
+        size: item.size ?? 0,
+        sha256Hash: item.file?.hashes?.sha256Hash?.toLowerCase(),
+        quickXorHash: item.file?.hashes?.quickXorHash,
+        downloadUrl: item["@microsoft.graph.downloadUrl"],
+        driveId: item.id,
+        parentId: item.parentReference?.id,
+        mtime: item.lastModifiedDateTime ? new Date(item.lastModifiedDateTime).getTime() : 0,
+      };
+    } catch (e) {
+      if (e instanceof OneDriveError && e.type === OneDriveErrorType.NotFound) {
+        return null;
+      }
+      throw e;
+    }
+  }
+
+  // ---- Cloud Baseline ----
+
+  /** Download the cloud baseline snapshot from .easy-sync/baseline.json.
+   *  Returns null if the file doesn't exist (NotFound → first sync on a fresh vault). */
+  async downloadBaseline(vaultName: string): Promise<string | null> {
+    const storageVaultName = this.getStorageVaultName(vaultName);
+    try {
+      const childrenResp = await this.request(
+        "GET",
+        `${APP_FOLDER_PATHS.pluginDir(storageVaultName)}:/children`,
+      );
+      const children = (childrenResp.json as { value?: DriveItem[] }).value ?? [];
+      const baseline = children.find((item) => item.name === "baseline.json" && item.file);
+      if (!baseline) {
+        return null;
+      }
+      assertDeclaredRemoteSize(
+        baseline.size,
+        MAX_LEGACY_BASELINE_BYTES,
+        "Cloud baseline",
+      );
+
+      // ponytail: children already gives us the file id and a downloadUrl,
+      // so reuse that instead of a second metadata hop that proved flaky.
+      if (baseline["@microsoft.graph.downloadUrl"]) {
+        try {
+          const downloadResp = await withTimeout(
+            requestUrl({
+              url: baseline["@microsoft.graph.downloadUrl"],
+              method: "GET",
+            }),
+            METADATA_READ_TIMEOUT_MS,
+          );
+          this.diag?.log("onedrive", "cloud baseline downloaded via plugin-dir children downloadUrl");
+          return responseToText(
+            downloadResp,
+            MAX_LEGACY_BASELINE_BYTES,
+            "Cloud baseline",
+          );
+        } catch (error) {
+          if (isResponseByteBudgetError(error)) throw error;
+          rethrowUncancellableRequestTimeout(error);
+          // downloadUrl may expire or be blocked — fall through to Graph fallback
+        }
+      }
+
+      if (baseline.id) {
+        try {
+          const metaResp = await this.request(
+            "GET",
+            `/me/drive/items/${baseline.id}?select=id,name,size,file,@microsoft.graph.downloadUrl`,
+          );
+          const meta = metaResp.json as {
+            size?: number;
+            "@microsoft.graph.downloadUrl"?: string;
+          };
+          assertDeclaredRemoteSize(
+            meta.size,
+            MAX_LEGACY_BASELINE_BYTES,
+            "Cloud baseline",
+          );
+          if (meta["@microsoft.graph.downloadUrl"]) {
+            const downloadResp = await withTimeout(
+              requestUrl({
+                url: meta["@microsoft.graph.downloadUrl"],
+                method: "GET",
+              }),
+              METADATA_READ_TIMEOUT_MS,
+            );
+            this.diag?.log("onedrive", "cloud baseline downloaded via item metadata downloadUrl fallback");
+            return responseToText(
+              downloadResp,
+              MAX_LEGACY_BASELINE_BYTES,
+              "Cloud baseline",
+            );
+          }
+        } catch (error) {
+          if (isResponseByteBudgetError(error)) throw error;
+          rethrowUncancellableRequestTimeout(error);
+          // fall through to direct Graph /content
+        }
+      }
+
+      if (!baseline.id) {
+        return null;
+      }
+
+      const response = await this.request(
+        "GET",
+        `/me/drive/items/${baseline.id}/content`,
+        undefined,
+        undefined,
+        {
+          maxResponseBytes: MAX_LEGACY_BASELINE_BYTES,
+          responseLabel: "Cloud baseline",
+        },
+      );
+      this.diag?.log("onedrive", "cloud baseline downloaded via direct item /content fallback");
+      return responseToText(
+        response,
+        MAX_LEGACY_BASELINE_BYTES,
+        "Cloud baseline",
+      );
+    } catch (e) {
+      if (e instanceof OneDriveError && e.type === OneDriveErrorType.NotFound) {
+        return null;
+      }
+      throw e;
+    }
+  }
+
+  // ---- Cloud Bootstrap V2 ----
+
+  async readCloudBootstrapV2(
+    vaultName: string,
+  ): Promise<{ id: string; eTag: string; content: string } | null> {
+    const storageVaultName = this.getStorageVaultName(vaultName);
+    const childrenResp = await this.request(
+      "GET",
+      `${APP_FOLDER_PATHS.pluginDir(storageVaultName)}:/children`,
+    );
+    const children = (childrenResp.json as { value?: DriveItem[] }).value ?? [];
+    const item = children.find((entry) => entry.name === "bootstrap-v2.json" && entry.file);
+    if (!item) return null;
+    return this.readPluginControlItemV2(item, "CloudBootstrapV2");
+  }
+
+  async readCloudBootstrapV2ById(
+    id: string,
+  ): Promise<{ id: string; eTag: string; content: string }> {
+    const metaResp = await this.request(
+      "GET",
+      `/me/drive/items/${encodeURIComponent(id)}?select=id,name,size,eTag,file,@microsoft.graph.downloadUrl`,
+    );
+    return this.readPluginControlItemV2(
+      metaResp.json as DriveItem,
+      "CloudBootstrapV2",
+    );
+  }
+
+  async createCloudBootstrapV2(
+    vaultName: string,
+    content: string,
+  ): Promise<{ id: string; eTag: string }> {
+    const apiPath = `${APP_FOLDER_PATHS.pluginDir(this.getStorageVaultName(vaultName))}/bootstrap-v2.json:/content?@microsoft.graph.conflictBehavior=fail`;
+    const response = await this.request("PUT", apiPath, content, "application/json");
+    return requirePluginControlFileVersion(response.json, "CloudBootstrapV2");
+  }
+
+  async updateCloudBootstrapV2(
+    id: string,
+    eTag: string,
+    content: string,
+  ): Promise<{ id: string; eTag: string }> {
+    const response = await this.request(
+      "PUT",
+      `/me/drive/items/${encodeURIComponent(id)}/content`,
+      content,
+      "application/json",
+      {},
+      eTag,
+    );
+    return requirePluginControlFileVersion(response.json, "CloudBootstrapV2");
+  }
+
+  // ---- Shared Sync Protocol V2 ----
+
+  /** Read the fixed V2 and V3 slots from one complete control-directory
+   * observation. The directory snapshot is never cached across sync rounds;
+   * body reads may run in parallel only after every directory page is known. */
+  async readSharedSyncProtocolObjects(
+    vaultName: string,
+    expectedV3Slot?: { id: string; eTag: string },
+  ): Promise<SharedSyncProtocolObjectsObservation> {
+    const storageVaultName = this.getStorageVaultName(vaultName);
+    const requestOwnerPrefix = `sharedProtocol:${storageVaultName}`;
+    const children = await this.listSharedSyncProtocolControlChildren(
+      storageVaultName,
+      `${requestOwnerPrefix}:directory`,
+    );
+
+    let v2Item: DriveItem | null;
+    let v3Item: DriveItem | null;
+    try {
+      v2Item = selectSharedSyncProtocolSlot(children, "protocol-v2.json");
+      v3Item = selectSharedSyncProtocolSlot(children, "protocol-v3.json");
+    } catch (error) {
+      throw new SharedSyncProtocolObservationError("directory", error);
+    }
+    const v3ProvenItem = expectedV3Slot
+      && v3Item
+      && v3Item.id === expectedV3Slot.id
+      && v3Item.eTag === expectedV3Slot.eTag
+      ? v3Item
+      : null;
+    if (v3ProvenItem) {
+      this.diag?.log(
+        "onedrive",
+        "shared protocol V3 slot unchanged since the committed binding; skipping its content read",
+      );
+    }
+
+    const [v2, v3] = await Promise.all([
+      v2Item
+        ? this.readSharedSyncProtocolV2WithSessionCache(
+          storageVaultName,
+          v2Item,
+          `${requestOwnerPrefix}:v2`,
+        )
+          .catch((error: unknown) => {
+            throw new SharedSyncProtocolObservationError("v2", error);
+          })
+        : null,
+      v3Item
+        ? v3ProvenItem
+          ? (() => {
+              // selectSharedSyncProtocolSlot already ran the same identity
+              // gate; these narrow the DriveItem optionals for the proven
+              // marker without weakening that gate.
+              const provenId = v3ProvenItem.id;
+              const provenETag = v3ProvenItem.eTag;
+              if (!provenId || !provenETag) {
+                throw new Error(
+                  "Shared sync protocol slot protocol-v3.json metadata is incomplete",
+                );
+              }
+              return Promise.resolve<SharedSyncProtocolBindingProvenObject>({
+                id: provenId,
+                eTag: provenETag,
+                content: null,
+              });
+            })()
+          : this.readObservedSharedSyncProtocolItem(
+              v3Item,
+              "SharedSyncProtocolV3",
+              `${requestOwnerPrefix}:v3`,
+            )
+              .catch((error: unknown) => {
+                throw new SharedSyncProtocolObservationError("v3", error);
+              })
+        : null,
+    ]);
+    return { v2, v3 };
+  }
+
+  /** V2 slot read through the session cache: the same storage vault + (id,
+   *  eTag) identity that proves the V3 slot unchanged guarantees the cached
+   *  bytes still match, so unchanged rounds skip the CDN GET entirely. */
+  private async readSharedSyncProtocolV2WithSessionCache(
+    storageVaultName: string,
+    item: DriveItem,
+    requestKey: string,
+  ): Promise<SharedSyncProtocolControlObject> {
+    const cached = this.lastReadProtocolV2;
+    if (
+      cached
+      && cached.storageVaultName === storageVaultName
+      && item.id
+      && item.eTag
+      && cached.id === item.id
+      && cached.eTag === item.eTag
+    ) {
+      this.diag?.log(
+        "onedrive",
+        "shared protocol V2 slot unchanged since this session's last successful read; reusing cached content",
+      );
+      return { id: cached.id, eTag: cached.eTag, content: cached.content };
+    }
+    const observed = await this.readObservedSharedSyncProtocolItem(
+      item,
+      "SharedSyncProtocolV2",
+      requestKey,
+    );
+    this.lastReadProtocolV2 = {
+      storageVaultName,
+      id: observed.id,
+      eTag: observed.eTag,
+      content: observed.content,
+    };
+    return observed;
+  }
+
+  private async listSharedSyncProtocolControlChildren(
+    storageVaultName: string,
+    requestKey: string,
+  ): Promise<DriveItem[]> {
+    const children: DriveItem[] = [];
+    const observedPages = new Set<string>();
+    let url: string | null =
+      `${APP_FOLDER_PATHS.pluginDir(storageVaultName)}:/children?select=id,name,size,eTag,file,@microsoft.graph.downloadUrl`;
+    while (url) {
+      if (observedPages.has(url)) {
+        throw new Error("Shared sync protocol directory pagination repeated a page");
+      }
+      observedPages.add(url);
+      const response = await this.request(
+        "GET",
+        url,
+        undefined,
+        undefined,
+        { sharedSyncProtocolRequestKey: requestKey },
+      );
+      const data = response.json as {
+        value?: DriveItem[];
+        "@odata.nextLink"?: unknown;
+      };
+      if (!Array.isArray(data.value)) {
+        throw new Error("Shared sync protocol directory response is invalid");
+      }
+      children.push(...data.value);
+      const nextLink = data["@odata.nextLink"];
+      if (nextLink === undefined) {
+        url = null;
+      } else if (typeof nextLink === "string" && nextLink.length > 0) {
+        url = nextLink;
+      } else {
+        throw new Error("Shared sync protocol directory continuation is invalid");
+      }
+    }
+    return children;
+  }
+
+  /** Read bytes bound to the exact directory observation. A missing download
+   * URL invalidates the whole profile; refreshing one slot independently or
+   * falling back to current-by-ID content would mix two observation times. */
+  private async readObservedSharedSyncProtocolItem(
+    item: DriveItem,
+    label: "SharedSyncProtocolV2" | "SharedSyncProtocolV3",
+    requestKey: string,
+  ): Promise<SharedSyncProtocolControlObject> {
+    const downloadUrl = item["@microsoft.graph.downloadUrl"];
+    if (!item.id || !item.eTag || !downloadUrl) {
+      throw new Error(`${label} directory observation is incomplete`);
+    }
+    const maxResponseBytes = pluginControlByteBudget(label);
+    assertDeclaredRemoteSize(item.size, maxResponseBytes, label);
+    const readStartedAt = Date.now();
+    let response: RequestUrlResponse;
+    try {
+      response = await this.requestSharedSyncProtocolUrl(
+        requestKey,
+        METADATA_READ_TIMEOUT_MS,
+        () => this.readSharedSyncProtocolContentUrl(downloadUrl, maxResponseBytes, label),
+      );
+    } catch (error) {
+      if (isResponseByteBudgetError(error)) throw error;
+      const component = requestKey.slice(requestKey.lastIndexOf(":") + 1);
+      if (error instanceof SyntheticRequestTimeoutError) {
+        this.diag?.warn(
+          "onedrive",
+          error.source === "deadline"
+            ? `request local deadline elapsed — method=GET, endpoint=sharedProtocolContent, timeoutMs=${error.timeoutMs}, HTTP status unavailable`
+            : `request not dispatched — method=GET, endpoint=sharedProtocolContent, prior requestUrl remains in flight after timeoutMs=${error.timeoutMs}, HTTP status unavailable`,
+          {
+            source: error.source,
+            timeoutMs: error.timeoutMs,
+            stage: "deadline",
+            component,
+            elapsedMs: Date.now() - readStartedAt,
+          },
+        );
+        throw error;
+      }
+      // A pre-signed content host can reject its own URL (expired signature,
+      // provider incident) without the session token being invalid. Keep that
+      // as a retryable delivery failure: mapping it to AuthExpired pauses
+      // automatic sync and tells the user to log in again, which cannot help.
+      const httpStatus = typeof (error as { status?: unknown })?.status === "number"
+        ? (error as { status: number }).status
+        : typeof (error as { statusCode?: unknown })?.statusCode === "number"
+          ? (error as { statusCode: number }).statusCode
+          : 0;
+      if (
+        (httpStatus === 401 || httpStatus === 403)
+        && isPreSignedContentHost(downloadUrl)
+      ) {
+        this.diag?.warn(
+          "onedrive",
+          "shared protocol slot content host rejected the pre-signed URL; treating it as a transient delivery failure",
+          {
+            status: httpStatus,
+            stage: "http",
+            component,
+            elapsedMs: Date.now() - readStartedAt,
+          },
+        );
+        throw new OneDriveError(
+          OneDriveErrorType.NetworkError,
+          `Shared sync protocol content host rejected the signed URL (HTTP ${httpStatus})`,
+        );
+      }
+      throw this.toRequestError(
+        error,
+        downloadUrl,
+        false,
+        fingerprintCdnDownloadFailure(error, {
+          elapsedMs: Date.now() - readStartedAt,
+          url: downloadUrl,
+          component,
+        }),
+        "GET",
+      );
+    }
+    return {
+      id: item.id,
+      eTag: item.eTag,
+      content: responseToText(response, maxResponseBytes, label),
+    };
+  }
+
+  /** Read one shared-protocol slot's pre-signed content URL. Native fetch is
+   *  the primary transport because requestUrl carries the documented CDN
+   *  defects on Android (base64 body) and iOS (status 0); requestUrl stays as
+   *  the fallback because on these hosts it is the transport that reports a
+   *  transport-level error text, which the CDN stage grading needs. Only a
+   *  native-fetch transport failure falls back — HTTP and byte-budget errors
+   *  propagate unchanged. */
+  private async readSharedSyncProtocolContentUrl(
+    downloadUrl: string,
+    maxResponseBytes: number,
+    label: "SharedSyncProtocolV2" | "SharedSyncProtocolV3",
+  ): Promise<RequestUrlResponse> {
+    try {
+      return await downloadUrlFetch(downloadUrl, maxResponseBytes, label);
+    } catch (error) {
+      if (isResponseByteBudgetError(error)) throw error;
+      if (isFetchUnavailableError(error)) {
+        this.diag?.log(
+          "onedrive",
+          "native fetch unavailable; reading shared protocol slot content via requestUrl",
+        );
+      } else if (
+        error instanceof TypeError
+        || (error as { status?: number }).status === 0
+      ) {
+        // Keep the failure observable on its own transport, so a later
+        // episode can be compared across transports instead of guessed.
+        this.diag?.warn(
+          "onedrive",
+          `shared protocol slot native fetch failed — falling back to requestUrl, url=${sanitizeUrl(downloadUrl)}`,
+          { message: requestErrorMessage(error) },
+        );
+      } else {
+        throw error;
+      }
+      return await requestUrl({ url: downloadUrl, method: "GET" });
+    }
+  }
+
+  private requestSharedSyncProtocolUrl(
+    requestKey: string,
+    timeoutMs: number,
+    dispatch: () => Promise<RequestUrlResponse>,
+  ): Promise<RequestUrlResponse> {
+    if (this.sharedSyncProtocolRequestsInFlight.has(requestKey)) {
+      const component = requestKey.slice(requestKey.lastIndexOf(":") + 1);
+      this.diag?.log(
+        "onedrive",
+        "shared protocol request not dispatched — identical request still in flight",
+        { component, source: "prior-request-in-flight", timeoutMs },
+      );
+      return Promise.reject(new SyntheticRequestTimeoutError(
+        timeoutMs,
+        "prior-request-in-flight",
+      ));
+    }
+
+    const rawRequest = dispatch();
+    this.sharedSyncProtocolRequestsInFlight.set(requestKey, rawRequest);
+    let localDeadlineElapsed = false;
+    const releaseOwner = (outcome: "fulfilled" | "rejected") => {
+      if (this.sharedSyncProtocolRequestsInFlight.get(requestKey) === rawRequest) {
+        this.sharedSyncProtocolRequestsInFlight.delete(requestKey);
+      }
+      if (localDeadlineElapsed) {
+        const component = requestKey.slice(requestKey.lastIndexOf(":") + 1);
+        this.diag?.log(
+          "onedrive",
+          "shared protocol request settled after its local deadline",
+          {
+            component,
+            source: "late-settlement",
+            outcome,
+          },
+        );
+      }
+    };
+    // Both settlement paths are handled even after the local timeout has won.
+    // The late value only releases ownership; it is never returned to a later
+    // observation.
+    void rawRequest.then(
+      () => releaseOwner("fulfilled"),
+      () => releaseOwner("rejected"),
+    );
+    return withTimeout(rawRequest, timeoutMs).catch((error: unknown) => {
+      if (
+        error instanceof SyntheticRequestTimeoutError
+        && error.source === "deadline"
+      ) {
+        localDeadlineElapsed = true;
+        // Release ownership at the local deadline so the next sync round can
+        // re-dispatch instead of being permanently blocked when the underlying
+        // requestUrl promise never settles. The identity check keeps a newer
+        // owner intact; the late settlement then only logs (its value is never
+        // returned to a later observation).
+        if (this.sharedSyncProtocolRequestsInFlight.get(requestKey) === rawRequest) {
+          this.sharedSyncProtocolRequestsInFlight.delete(requestKey);
+        }
+      }
+      throw error;
+    });
+  }
+
+  async readSharedSyncProtocolV2(
+    vaultName: string,
+  ): Promise<{ id: string; eTag: string; content: string } | null> {
+    const storageVaultName = this.getStorageVaultName(vaultName);
+    const childrenResp = await this.request(
+      "GET",
+      `${APP_FOLDER_PATHS.pluginDir(storageVaultName)}:/children`,
+    );
+    const children = (childrenResp.json as { value?: DriveItem[] }).value ?? [];
+    const item = children.find(
+      (entry) => entry.name === "protocol-v2.json" && entry.file,
+    );
+    if (!item) return null;
+    return this.readPluginControlItemV2(item, "SharedSyncProtocolV2");
+  }
+
+  async readSharedSyncProtocolV2ById(
+    id: string,
+  ): Promise<{ id: string; eTag: string; content: string }> {
+    const metaResp = await this.request(
+      "GET",
+      `/me/drive/items/${encodeURIComponent(id)}?select=id,name,size,eTag,file,@microsoft.graph.downloadUrl`,
+    );
+    return this.readPluginControlItemV2(
+      metaResp.json as DriveItem,
+      "SharedSyncProtocolV2",
+    );
+  }
+
+  async createSharedSyncProtocolV2(
+    vaultName: string,
+    content: string,
+  ): Promise<{ id: string; eTag: string }> {
+    const apiPath = `${APP_FOLDER_PATHS.pluginDir(this.getStorageVaultName(vaultName))}/protocol-v2.json:/content?@microsoft.graph.conflictBehavior=fail`;
+    const response = await this.request(
+      "PUT",
+      apiPath,
+      content,
+      "application/json",
+    );
+    return requirePluginControlFileVersion(
+      response.json,
+      "SharedSyncProtocolV2",
+    );
+  }
+
+  async overwriteSharedSyncProtocolV2(
+    id: string,
+    eTag: string,
+    content: string,
+  ): Promise<{ id: string; eTag: string }> {
+    const response = await this.request(
+      "PUT",
+      `/me/drive/items/${encodeURIComponent(id)}/content`,
+      content,
+      "application/json",
+      undefined,
+      eTag,
+    );
+    return requirePluginControlFileVersion(
+      response.json,
+      "SharedSyncProtocolV2",
+    );
+  }
+
+  // ---- Shared Sync Protocol V3 ----
+
+  async readSharedSyncProtocolV3(
+    vaultName: string,
+  ): Promise<{ id: string; eTag: string; content: string } | null> {
+    const storageVaultName = this.getStorageVaultName(vaultName);
+    const childrenResp = await this.request(
+      "GET",
+      `${APP_FOLDER_PATHS.pluginDir(storageVaultName)}:/children`,
+    );
+    const children = (childrenResp.json as { value?: DriveItem[] }).value ?? [];
+    const item = children.find(
+      (entry) => entry.name === "protocol-v3.json" && entry.file,
+    );
+    if (!item) return null;
+    return this.readPluginControlItemV2(item, "SharedSyncProtocolV3");
+  }
+
+  async readSharedSyncProtocolV3ById(
+    id: string,
+  ): Promise<{ id: string; eTag: string; content: string }> {
+    const metaResp = await this.request(
+      "GET",
+      `/me/drive/items/${encodeURIComponent(id)}?select=id,name,size,eTag,file,@microsoft.graph.downloadUrl`,
+    );
+    return this.readPluginControlItemV2(
+      metaResp.json as DriveItem,
+      "SharedSyncProtocolV3",
+    );
+  }
+
+  async createSharedSyncProtocolV3(
+    vaultName: string,
+    content: string,
+  ): Promise<{ id: string; eTag: string }> {
+    const apiPath = `${APP_FOLDER_PATHS.pluginDir(this.getStorageVaultName(vaultName))}/protocol-v3.json:/content?@microsoft.graph.conflictBehavior=fail`;
+    const response = await this.request(
+      "PUT",
+      apiPath,
+      content,
+      "application/json",
+    );
+    return requirePluginControlFileVersion(
+      response.json,
+      "SharedSyncProtocolV3",
+    );
+  }
+
+  private async readPluginControlItemV2(
+    initial: DriveItem,
+    label:
+      | "CloudBootstrapV2"
+      | "SharedSyncProtocolV2"
+      | "SharedSyncProtocolV3",
+  ): Promise<{ id: string; eTag: string; content: string }> {
+    if (!initial.id) throw new Error(`${label} item has no driveItem id`);
+    const maxResponseBytes = pluginControlByteBudget(label);
+    let item = initial;
+    assertDeclaredRemoteSize(item.size, maxResponseBytes, label);
+    if (!item.eTag || !item["@microsoft.graph.downloadUrl"]) {
+      const metaResp = await this.request(
+        "GET",
+        `/me/drive/items/${encodeURIComponent(item.id)}?select=id,name,size,eTag,file,@microsoft.graph.downloadUrl`,
+      );
+      item = metaResp.json as DriveItem;
+      assertDeclaredRemoteSize(item.size, maxResponseBytes, label);
+    }
+    if (!item.eTag) throw new Error(`${label} item has no eTag`);
+    if (item["@microsoft.graph.downloadUrl"]) {
+      try {
+        // 控制对象内容读取与元数据类读取同预算（27f14c2d 统一的收尾）：
+        // 弱网下 8 秒不够读完引导/协议文档，超时仍按不可取消终局，
+        // 不与 Graph /content 兜底重叠。
+        const response = await withTimeout(
+          requestUrl({
+            url: item["@microsoft.graph.downloadUrl"],
+            method: "GET",
+          }),
+          METADATA_READ_TIMEOUT_MS,
+        );
+        return {
+          id: item.id,
+          eTag: item.eTag,
+          content: responseToText(response, maxResponseBytes, label),
+        };
+      } catch (error) {
+        if (isResponseByteBudgetError(error)) throw error;
+        rethrowUncancellableRequestTimeout(error);
+        // Fall through to the authenticated ID /content path.
+      }
+    }
+    const response = await this.request(
+      "GET",
+      `/me/drive/items/${encodeURIComponent(item.id)}/content`,
+      undefined,
+      undefined,
+      { maxResponseBytes, responseLabel: label },
+    );
+    return {
+      id: item.id,
+      eTag: item.eTag,
+      content: responseToText(response, maxResponseBytes, label),
+    };
+  }
+
+  // ---- Directory Listing ----
+
+  /** List all items in the files directory (recursive). */
+  async listFiles(vaultName: string): Promise<DriveItem[]> {
+    const rootPath = APP_FOLDER_PATHS.filesDir(this.getStorageVaultName(vaultName));
+    return this.listRecursive(rootPath);
+  }
+
+  /** Recursively list all files in a directory and its subdirectories. */
+  private async listRecursive(dirPath: string): Promise<DriveItem[]> {
+    const apiPath = `${dirPath}:/children?$select=${DELTA_SELECT}`;
+    const result: DriveItem[] = [];
+    let url: string | null = apiPath;
+
+    while (url) {
+      const response = await this.request("GET", url);
+      const data = response.json as { value: DriveItem[]; "@odata.nextLink"?: string };
+      for (const item of data.value) {
+        result.push(item);
+        if (item.folder) {
+          const subPath = `${dirPath}/${encodeURIComponent(item.name)}`;
+          const children = await this.listRecursive(subPath);
+          result.push(...children);
+        }
+      }
+      url = data["@odata.nextLink"] || null;
+    }
+
+    return result;
+  }
+
+  // ---- Delta / Change Tracking ----
+
+  /**
+   * Query delta for the files directory.
+   * Pass a deltaToken to get changes since that token.
+   * Returns the delta response with changed items and new deltaToken.
+   * Handles pagination via @odata.nextLink.
+   */
+  async getDelta(
+    vaultName: string,
+    deltaToken?: string,
+    onPage?: DeltaPageCallback,
+  ): Promise<DeltaResponse> {
+    return this.collectDelta(
+      deltaToken
+        ?? this.deltaInitialUrl(
+          APP_FOLDER_PATHS.filesDelta(this.getStorageVaultName(vaultName)),
+        ),
+      onPage,
+    );
+  }
+
+  /**
+   * Query a delta feed from one Graph-owned folder identity. Scope recovery
+   * uses this instead of a path endpoint so a concurrent replacement at the
+   * configured path cannot redirect the evidence scan to a different root.
+   */
+  async getDeltaByFolderId(
+    folderId: string,
+    deltaToken?: string,
+    onPage?: DeltaPageCallback,
+  ): Promise<DeltaResponse> {
+    if (!folderId) throw new Error("Missing folder identity for delta");
+    return this.collectDelta(
+      deltaToken
+        ?? this.deltaInitialUrl(
+          `/me/drive/items/${encodeURIComponent(folderId)}/delta`,
+        ),
+      onPage,
+    );
+  }
+
+  /** First-page URL for a self-constructed delta endpoint. Continuation URLs
+   *  returned by the server (nextLink/deltaLink) are never rewritten. */
+  private deltaInitialUrl(path: string): string {
+    return `${path}?$top=${DELTA_PAGE_SIZE_TOP}&$select=${DELTA_SELECT}`;
+  }
+
+  private async collectDelta(
+    initialUrl: string,
+    onPage?: DeltaPageCallback,
+  ): Promise<DeltaResponse> {
+    let url = initialUrl;
+    const allValues: DriveItem[] = [];
+    let deltaLink: string | undefined;
+    let nextLink: string | undefined;
+
+    while (url) {
+      const response = await this.request("GET", url);
+      const data = response.json as DeltaResponse;
+      // A proxied/garbled page can answer 200 with a non-array body; let it
+      // escape as a typed network error (retryable classification) instead of
+      // a bare TypeError from the spread.
+      if (!Array.isArray(data.value)) {
+        throw new OneDriveError(
+          OneDriveErrorType.NetworkError,
+          `Delta response "value" is not an array (status ${response.status})`,
+          response.status,
+        );
+      }
+      allValues.push(...data.value);
+      deltaLink = data["@odata.deltaLink"];
+      nextLink = data["@odata.nextLink"];
+      if (deltaLink) validateGraphContinuationUrl(deltaLink);
+      if (nextLink) validateGraphContinuationUrl(nextLink);
+      if (onPage) {
+        // join 弱网「稍后重试」案C: 每个落定页通知一次调用方，调用方持久化
+        // 断点进度后，任何后续页失败都不会丢弃已读页。回调异常向上传播，
+        // 由调用方决定保留或丢弃检查点。
+        await onPage({ url, values: data.value, deltaLink, nextLink });
+      }
+      url = nextLink || "";
+    }
+
+    return {
+      value: allValues,
+      "@odata.deltaLink": deltaLink,
+    };
+  }
+
+  /**
+   * Full scan fallback when delta is unavailable.
+   * Returns files and folders so callers can rebuild paths from identities.
+   */
+  async fullScan(vaultName: string): Promise<DriveItem[]> {
+    return this.listFiles(vaultName);
+  }
+
+  // ---- Request Helper ----
+
+  /** GET a /content endpoint using native fetch (primary) with requestUrl
+   *  fallback.  fetch strips the Authorization header on cross-origin
+   *  redirects (graph.microsoft.com → sharepoint.com) which avoids the
+   *  401 that requestUrl triggers by forwarding the Bearer token to
+   *  SharePoint's already-authenticated download.aspx. */
+  private async contentGet(
+    apiPath: string,
+    options: RequestOptions,
+    onProgress?: (downloaded: number, total: number) => void,
+    slowGate?: SlowConnectionGate,
+  ): Promise<RequestUrlResponse> {
+    throwIfAborted(this.abortSignal);
+    const url = resolveAuthenticatedGraphUrl(apiPath);
+    const token = await this.acquireToken();
+
+    const fetchStartedAt = this.beginMetricAttempt("contentFallback");
+    try {
+      const timeoutMs = requestTimeoutWithCap(options.deadlineMs, options.perRequestTimeoutMs ?? DOWNLOAD_MAX_TIMEOUT_MS);
+      this.diag?.log("onedrive", `contentGet — trying fetch, timeoutMs=${timeoutMs}, url=${sanitizeUrl(url)}`);
+      const response = await withAbortableTimeout(
+        (signal) => contentUrlFetch(
+          url,
+          token,
+          options.maxResponseBytes,
+          options.responseLabel,
+          onProgress,
+          signal,
+          slowGate,
+          options.maxResponseBytesDeclaredKind,
+        ),
+        timeoutMs,
+        this.abortSignal,
+      );
+      this.finishMetricAttempt(
+        "contentFallback",
+        "success",
+        fetchStartedAt,
+        responsePayloadByteLength(response),
+      );
+      return response;
+    } catch (fetchErr) {
+      this.finishMetricAttempt(
+        "contentFallback",
+        rawAttemptStatus(fetchErr, this.abortSignal),
+        fetchStartedAt,
+        0,
+        0,
+        transferredBytesFromError(fetchErr),
+      );
+      if (isAbortError(fetchErr)) throw fetchErr;
+      if (isResponseByteBudgetError(fetchErr)) throw fetchErr;
+      // Slow-connection aborts are retryable upstream (fresh connection via
+      // the waterfall); falling back to requestUrl would silently continue
+      // the slow transfer and defeat the gate.
+      if ((fetchErr as { stalled?: unknown })?.stalled === true) throw fetchErr;
+      this.diag?.log("onedrive", `content fetch failed, falling back to requestUrl: ${requestErrorMessage(fetchErr)}`);
+    }
+
+    // Fall back to requestUrl — may 401 on SharePoint redirect but
+    // handles environments where fetch is unavailable.
+    return this.request(
+      "GET",
+      apiPath,
+      undefined,
+      undefined,
+      { ...options, observationAttemptOffset: 1 },
+    );
+  }
+
+  private async contentGetToPath(
+    apiPath: string,
+    adapter: DataAdapter,
+    localPath: string,
+    expectedSha256: string | undefined,
+    options: RequestOptions,
+    onProgress?: (downloaded: number, total: number) => void,
+    slowGate?: SlowConnectionGate,
+    resumeState?: DownloadResumeState,
+  ): Promise<DownloadToPathResult> {
+    throwIfAborted(this.abortSignal);
+    const url = resolveAuthenticatedGraphUrl(apiPath);
+    const token = await this.acquireToken();
+
+    const fetchStartedAt = this.beginMetricAttempt("contentFallback");
+    try {
+      const timeoutMs = requestTimeoutWithCap(options.deadlineMs, options.perRequestTimeoutMs ?? DOWNLOAD_MAX_TIMEOUT_MS);
+      this.diag?.log("onedrive", `contentGetToPath — trying fetch stream, timeoutMs=${timeoutMs}, url=${sanitizeUrl(url)}`);
+      const result = await withAbortableTimeout(
+        (signal) => contentUrlFetchToBinaryFile(
+          url,
+          token,
+          adapter,
+          localPath,
+          expectedSha256,
+          options.maxResponseBytes,
+          options.responseLabel,
+          onProgress,
+          signal,
+          slowGate,
+          resumeState,
+          options.maxResponseBytesDeclaredKind,
+        ),
+        timeoutMs,
+        this.abortSignal,
+      );
+      this.finishMetricAttempt(
+        "contentFallback",
+        "success",
+        fetchStartedAt,
+        result.size,
+      );
+      return result;
+    } catch (fetchErr) {
+      this.finishMetricAttempt(
+        "contentFallback",
+        rawAttemptStatus(fetchErr, this.abortSignal),
+        fetchStartedAt,
+        0,
+        0,
+        transferredBytesFromError(fetchErr),
+      );
+      if (isAbortError(fetchErr)) throw fetchErr;
+      if (isResponseByteBudgetError(fetchErr)) throw fetchErr;
+      // Slow-connection aborts are retryable upstream (fresh connection via
+      // the waterfall); falling back to requestUrl would silently continue
+      // the slow transfer and defeat the gate.
+      if ((fetchErr as { stalled?: unknown })?.stalled === true) throw fetchErr;
+      this.diag?.log("onedrive", `content stream fetch failed, falling back to requestUrl: ${requestErrorMessage(fetchErr)}`);
+    }
+
+    const response = await this.request(
+      "GET",
+      apiPath,
+      undefined,
+      undefined,
+      { ...options, observationAttemptOffset: 1 },
+    );
+    return writeArrayBufferToBinaryFile(
+      adapter,
+      localPath,
+      response.arrayBuffer,
+      expectedSha256,
+      0,
+      options.maxResponseBytes,
+      options.responseLabel,
+      onProgress,
+    );
+  }
+
+  private async request(
+    method: string,
+    apiPath: string,
+    body?: unknown,
+    contentType?: string,
+    options: RequestOptions = {},
+    ifMatch?: string,
+  ): Promise<RequestUrlResponse> {
+    throwIfAborted(this.abortSignal);
+    const url = resolveAuthenticatedGraphUrl(apiPath);
+    const token = await this.acquireToken();
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+    };
+    if (ifMatch) headers["If-Match"] = ifMatch;
+
+    let requestBody: ArrayBuffer | string | undefined;
+    if (body !== undefined) {
+      if (contentType) {
+        headers["Content-Type"] = contentType;
+      } else {
+        headers["Content-Type"] = "application/json";
+      }
+      requestBody =
+        body instanceof ArrayBuffer
+          ? body
+          : typeof body === "string"
+            ? body
+            : JSON.stringify(body);
+    }
+
+    if (options.extraHeaders) {
+      Object.assign(headers, options.extraHeaders);
+    }
+
+    const maxAttempts = options.maxAttempts ?? MAX_REQUEST_ATTEMPTS;
+    const endpoint = classifyRequestEndpoint(method, apiPath);
+    const requestBytes = endpoint === "simpleUpload"
+      ? requestPayloadByteLength(requestBody)
+      : 0;
+
+    return this.runRequestAttempts({
+      method,
+      url,
+      headers,
+      requestBody,
+      contentType,
+      options,
+      maxAttempts,
+      endpoint,
+      requestBytes,
+    });
+  }
+
+  private async runRequestAttempts(args: {
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    requestBody: ArrayBuffer | string | undefined;
+    contentType: string | undefined;
+    options: RequestOptions;
+    maxAttempts: number;
+    endpoint: OneDriveEndpointCategory;
+    requestBytes: number;
+  }): Promise<RequestUrlResponse> {
+    const {
+      method,
+      url,
+      headers,
+      requestBody,
+      contentType,
+      options,
+      maxAttempts,
+      endpoint,
+      requestBytes,
+    } = args;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      throwIfAborted(this.abortSignal);
+      const attemptStartedAt = this.beginMetricAttempt(endpoint);
+      try {
+        const timeoutMs = options.perRequestTimeoutMs
+          ? requestTimeoutWithCap(options.deadlineMs, options.perRequestTimeoutMs)
+          : requestTimeoutWithCap(options.deadlineMs, defaultRequestTimeoutMs(method, endpoint));
+        const dispatch = () => requestUrl({
+            url,
+            method,
+            headers,
+            body: requestBody,
+            contentType,
+            // Keep the response body on 4xx/5xx so Graph's error.code and
+            // innerError survive into diagnostics. The catch path below
+            // classifies the response exactly like a thrown host error.
+            throw: false,
+          });
+        const response = options.sharedSyncProtocolRequestKey
+          ? await this.requestSharedSyncProtocolUrl(
+            options.sharedSyncProtocolRequestKey,
+            timeoutMs,
+            dispatch,
+          )
+          : await withTimeout(dispatch(), timeoutMs);
+        if (!Number.isFinite(response.status) || response.status === 0) {
+          throw new OneDriveError(
+            OneDriveErrorType.NetworkError,
+            "Network error: HTTP status unavailable",
+          );
+        }
+        if (response.status >= 400) {
+          // Carry the response through an Error wrapper: toRequestError logs
+          // the now-visible Graph body and classifyError turns it into the
+          // same typed error the host's throw path used to produce.
+          throw new GraphHttpErrorResponse(response);
+        }
+        if (options.maxResponseBytes !== undefined) {
+          assertResponseByteBudget(
+            response,
+            options.maxResponseBytes,
+            options.responseLabel ?? "Graph response",
+          );
+        }
+        const effectiveBytes = endpoint === "simpleUpload"
+          ? requestBytes
+          : endpoint === "contentFallback"
+            ? responsePayloadByteLength(response)
+            : 0;
+        const observedAttempt = attempt + (options.observationAttemptOffset ?? 0);
+        this.finishMetricAttempt(
+          endpoint,
+          "success",
+          attemptStartedAt,
+          effectiveBytes,
+          observedAttempt > 1 ? effectiveBytes : 0,
+          0,
+          options.metadataReason ?? (endpoint === "metadata" ? "other" : undefined),
+        );
+        return response;
+      } catch (rawError) {
+        const syntheticTimeout = rawError instanceof SyntheticRequestTimeoutError;
+        const error = syntheticTimeout
+          ? new OneDriveError(
+              OneDriveErrorType.NetworkError,
+              rawError.message,
+            )
+          : this.toRequestError(rawError, url, options.expectedNotFound === true, undefined, method);
+        if (syntheticTimeout) {
+          this.diag?.warn(
+            "onedrive",
+            rawError.source === "deadline"
+              ? `request local deadline elapsed — method=${method}, endpoint=${endpoint}, timeoutMs=${rawError.timeoutMs}, HTTP status unavailable`
+              : `request not dispatched — method=${method}, endpoint=${endpoint}, prior requestUrl remains in flight after timeoutMs=${rawError.timeoutMs}, HTTP status unavailable`,
+          );
+        }
+        const expectedNotFound = options.expectedNotFound === true
+          && error.type === OneDriveErrorType.NotFound;
+        const observedAttempt = attempt + (options.observationAttemptOffset ?? 0);
+        this.finishMetricAttempt(
+          endpoint,
+          requestAttemptStatus(error, this.abortSignal),
+          attemptStartedAt,
+          0,
+          observedAttempt > 1 ? requestBytes : 0,
+          0,
+          options.metadataReason ?? (endpoint === "metadata" ? "other" : undefined),
+          expectedNotFound,
+        );
+        // A locally timed-out idempotent read (deadline fired, no HTTP outcome,
+        // GET/HEAD cannot double-apply on resend) joins the ordinary transient
+        // retry path below instead of abandoning the run — join 弱网「稍后重试」
+        // 案二 (2026-09-19): 单页超时曾是整轮枚举作废的最大放大器. Shared
+        // sync-protocol reads keep their own dedup/attempt contract, and every
+        // non-idempotent method keeps the historical outcome-unclear bail-out.
+        const idempotentDeadlineTimeout =
+          syntheticTimeout
+          && rawError.source === "deadline"
+          && !options.sharedSyncProtocolRequestKey
+          && (method === "GET" || method === "HEAD");
+        if (
+          isRequestTimeoutError(rawError) && !idempotentDeadlineTimeout
+          || (method !== "GET" && method !== "HEAD" && rawStatusCode(rawError) === 0)
+        ) {
+          this.diag?.warn(
+            "onedrive",
+            `request outcome unclear — not retrying method=${method}, endpoint=${endpoint}`,
+          );
+          throw syntheticTimeout && options.sharedSyncProtocolRequestKey
+            ? rawError
+            : error;
+        }
+        if (idempotentDeadlineTimeout) {
+          this.diag?.warn(
+            "onedrive",
+            `idempotent read timed out locally — retrying as transient method=${method}, endpoint=${endpoint}, attempt=${attempt}/${maxAttempts}`,
+          );
+        }
+        if (expectedNotFound) throw error;
+        // A 404 the caller did not expect may mean the resolved storage
+        // directory went away (vault recreated under another name), so the
+        // scope cache is dropped for re-resolution. An expected-absence probe
+        // is a normal answer: clearing here would drop a legacy
+        // percent-encoded name and silently retarget the rest of the round at
+        // the canonical directory.
+        if (error.type === OneDriveErrorType.NotFound) {
+          this.initializedVaults.clear();
+          this.storageVaultNames.clear();
+          this.vaultScopes.clear();
+        }
+        if (
+          method === "DELETE"
+          && attempt > 1
+          && error.type === OneDriveErrorType.NotFound
+        ) {
+          this.diag?.log("onedrive", `DELETE retry confirmed item already absent — url=${sanitizeUrl(url)}`);
+          return { status: 204, headers: {}, json: {} } as RequestUrlResponse;
+        }
+
+        if (!isTransientRequestError(error) || attempt === maxAttempts) {
+          if (!(method === "PUT" && error.type === OneDriveErrorType.Conflict)) {
+            this.diag?.warn(
+              "onedrive",
+              `request failed — attempt=${attempt}/${maxAttempts}, type=${error.type}, method=${method}, url=${sanitizeUrl(url)}`,
+            );
+          }
+          throw error;
+        }
+
+        const waitMs = retryDelayMs(error, attempt);
+        this.diag?.warn(
+          "onedrive",
+          `request retry — attempt=${attempt}/${maxAttempts}, type=${error.type}, method=${method}, waitMs=${waitMs}, url=${sanitizeUrl(url)}`,
+        );
+        if (options.deadlineMs && Date.now() + waitMs >= options.deadlineMs) {
+          throw error;
+        }
+        await sleepWithAbort(waitMs, this.abortSignal);
+      }
+    }
+    throw new OneDriveError(OneDriveErrorType.Unknown, `Request failed: ${sanitizeUrl(url)}`);
+  }
+
+  private toRequestError(
+    rawError: unknown,
+    url: string,
+    suppressExpectedNotFoundWarning = false,
+    detail?: Record<string, unknown>,
+    method?: string,
+  ): OneDriveError {
+    if (rawError instanceof OneDriveError) return rawError;
+    // Graph requests are dispatched with requestUrl({ throw: false }), so a
+    // non-2xx response arrives here as the response object itself. That keeps
+    // Graph's error.code / innerError / request-id visible; a "none" code now
+    // means the body was absent, empty, or not JSON.
+    const errAny = isRecord(rawError) ? rawError : {};
+    const errStatus = typeof errAny.status === "number" ? errAny.status : 0;
+    const errHeaders = isStringRecord(errAny.headers) ? errAny.headers : {};
+    let graphBody: Record<string, unknown> | undefined;
+    if (isRecord(errAny.json)) {
+      graphBody = errAny.json;
+    } else if (errAny.text && typeof errAny.text === "string") {
+      try {
+        const parsed: unknown = JSON.parse(errAny.text);
+        if (isRecord(parsed)) graphBody = parsed;
+      } catch {
+        // Not JSON
+      }
+    }
+    const graphError = parseGraphErrorBody(graphBody);
+    const graphCodeText = graphError?.code ?? "none";
+    const graphMsgText = graphError?.message ?? "none";
+    const graphInnerCodeText = graphError?.innerCode ?? "none";
+    const graphRequestIdText = graphError?.requestId ?? "none";
+    const methodPrefix = method ? `method=${method}, ` : "";
+    const bodyVisibilityNote = graphCodeText === "none"
+      ? ", responseBody=absent or not JSON"
+      : "";
+    // 409 is "folder already exists" — handled gracefully, don't alarm the user
+    if (errStatus === 409) {
+      this.diag?.log("onedrive", `requestUrl 409 — ${methodPrefix}${sanitizeUrl(url)}`);
+    } else if (errStatus > 0 && !(suppressExpectedNotFoundWarning && errStatus === 404)) {
+      this.diag?.warn(
+        "onedrive",
+        `requestUrl HTTP error — ${methodPrefix}status=${errStatus}, graphCode=${graphCodeText}, graphMsg=${graphMsgText}, graphInnerCode=${graphInnerCodeText}, graphRequestId=${graphRequestIdText}${bodyVisibilityNote}, url=${sanitizeUrl(url)}`,
+        detail,
+      );
+    } else if (errStatus === 0) {
+      this.diag?.warn(
+        "onedrive",
+        `request transport failed — HTTP status unavailable${method ? `, method=${method}` : ""}, errorMessage=${requestErrorMessage(rawError)}, url=${sanitizeUrl(url)}`,
+        detail,
+      );
+    }
+
+    if (errStatus) {
+      return this.classifyError({
+        status: errStatus,
+        headers: errHeaders,
+        json: graphBody,
+      } as RequestUrlResponse);
+    }
+
+    const errMsg = describeError(rawError);
+    // 刀 2：transport 层把超时源包装成 NetworkError 时，把 deadline 毫秒带进
+    // 标记位（此前下游只能靠消息文本里的 "Request timed out after " 识别）。
+    const requestTimeoutMs = rawError instanceof SyntheticRequestTimeoutError
+      ? rawError.timeoutMs
+      : null;
+    return new OneDriveError(
+      OneDriveErrorType.NetworkError,
+      `Network error: ${errMsg}`,
+      0,
+      null,
+      null,
+      null,
+      requestTimeoutMs,
+    );
+  }
+
+  /** Classify an HTTP error response into OneDriveErrorType */
+  private classifyError(response: RequestUrlResponse): OneDriveError {
+    const status = response.status;
+    const retryAfter = parseRetryAfter(response.headers);
+    const graphError = tryParseGraphError(response);
+    // Keep the runtime message stable across body-visibility changes. Graph's
+    // message is developer-facing; typed callers use graphCode/graphError.
+    const message = `HTTP ${status}`;
+    const make = (type: OneDriveErrorType) =>
+      new OneDriveError(
+        type,
+        message,
+        status,
+        retryAfter,
+        graphError?.code ?? null,
+        graphError,
+      );
+
+    switch (status) {
+      case 401:
+        return make(OneDriveErrorType.AuthExpired);
+      case 403:
+        return make(OneDriveErrorType.Forbidden);
+      case 404:
+        return make(OneDriveErrorType.NotFound);
+      case 409:
+        return make(OneDriveErrorType.Conflict);
+      case 412:
+        return make(OneDriveErrorType.PreconditionFailed);
+      case 416:
+        return make(OneDriveErrorType.RangeNotSatisfiable);
+      case 429:
+      case 509:
+        // 509 is OneDrive's bandwidth cap. The service documents it as
+        // retryable after more time, so it shares the rate-limited class.
+        return make(OneDriveErrorType.RateLimited);
+      case 507:
+        return make(OneDriveErrorType.InsufficientStorage);
+      case 500:
+      case 502:
+      case 503:
+      case 504:
+        return make(OneDriveErrorType.ServerError);
+      default:
+        return make(OneDriveErrorType.Unknown);
+    }
+  }
+}
+
+function isAuthExpired(error: unknown): error is OneDriveError {
+  return error instanceof OneDriveError
+    && error.type === OneDriveErrorType.AuthExpired;
+}
+
+function createEndpointRunMetrics(): MutableEndpointRunMetrics {
+  return {
+    attempts: 0,
+    succeeded: 0,
+    failed: 0,
+    cancelled: 0,
+    elapsedMs: 0,
+    effectiveBytes: 0,
+    failedBytes: 0,
+    retriedBytes: 0,
+    peakConcurrency: 0,
+    statusCategories: {},
+    activeConcurrency: 0,
+  };
+}
+
+function createMetadataReasonRunMetrics(): OneDriveMetadataReasonRunMetrics {
+  return {
+    attempts: 0,
+    succeeded: 0,
+    failed: 0,
+    cancelled: 0,
+    elapsedMs: 0,
+  };
+}
+
+function classifyRequestEndpoint(method: string, apiPath: string): OneDriveEndpointCategory {
+  const normalizedMethod = method.toUpperCase();
+  const path = apiPath.toLowerCase();
+  if (path.includes("/delta")) return "delta";
+  if (path.includes("createuploadsession")) return "uploadSessionCreate";
+  if (path.includes("/content")) {
+    return normalizedMethod === "PUT" ? "simpleUpload" : "contentFallback";
+  }
+  return "metadata";
+}
+
+function requestPayloadByteLength(body: ArrayBuffer | string | undefined): number {
+  if (body instanceof ArrayBuffer) return body.byteLength;
+  return typeof body === "string" ? new TextEncoder().encode(body).byteLength : 0;
+}
+
+function responsePayloadByteLength(response: RequestUrlResponse): number {
+  if (response.arrayBuffer instanceof ArrayBuffer) return response.arrayBuffer.byteLength;
+  if (typeof response.text === "string") {
+    return new TextEncoder().encode(response.text).byteLength;
+  }
+  if (response.json !== undefined) {
+    return new TextEncoder().encode(JSON.stringify(response.json)).byteLength;
+  }
+  return 0;
+}
+
+/** Case-insensitive `Location` lookup: header casing is host-provided, and the
+ *  redirect target is the only way to reach a version's content when the host
+ *  hands back the 302 itself. */
+function responseLocationHeader(
+  headers: Record<string, string> | undefined,
+): string | null {
+  for (const [name, value] of Object.entries(headers ?? {})) {
+    if (name.toLowerCase() === "location"
+      && typeof value === "string"
+      && value.length > 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
+/** Per-item response budget for a remote file download.
+ *
+ *  The budget is the size the metadata promised for this item. A response that
+ *  declares more than that is the content race (the remote grew between the
+ *  metadata read and the body read) — never a standing fact about the item —
+ *  so the caller receives the matching kind alongside the number. When the
+ *  metadata size is unusable the budget falls back to the class hard cap, and
+ *  then a declared length over it *is* the standing fact ("declared"). */
+function remoteFileByteBudget(
+  fileSize: number,
+  filePath: string,
+): { maxBytes: number; declaredKind: ResponseByteBudgetKind } {
+  assertDeclaredRemoteSize(
+    fileSize,
+    MAX_REMOTE_FILE_BYTES,
+    `Remote file "${filePath}"`,
+  );
+  return Number.isFinite(fileSize) && fileSize > 0
+    ? { maxBytes: fileSize, declaredKind: "declared-over-expected" }
+    : { maxBytes: MAX_REMOTE_FILE_BYTES, declaredKind: "declared" };
+}
+
+function pluginControlByteBudget(
+  label:
+    | "CloudBootstrapV2"
+    | "SharedSyncProtocolV2"
+    | "SharedSyncProtocolV3",
+): number {
+  if (label === "CloudBootstrapV2") return MAX_CLOUD_BOOTSTRAP_BYTES;
+  return MAX_SHARED_PROTOCOL_BYTES;
+}
+
+function selectSharedSyncProtocolSlot(
+  children: readonly DriveItem[],
+  name: "protocol-v2.json" | "protocol-v3.json",
+): DriveItem | null {
+  const matches = children.filter((item) => item.name === name);
+  if (matches.length === 0) return null;
+  if (matches.length !== 1) {
+    throw new Error(`Shared sync protocol slot ${name} is duplicated`);
+  }
+  const [item] = matches;
+  if (!item.file) {
+    throw new Error(`Shared sync protocol slot ${name} is not a file`);
+  }
+  if (
+    !item.id
+    || !item.eTag
+    || typeof item.size !== "number"
+    || !Number.isSafeInteger(item.size)
+    || item.size < 0
+    || typeof item["@microsoft.graph.downloadUrl"] !== "string"
+    || item["@microsoft.graph.downloadUrl"].length === 0
+  ) {
+    throw new Error(`Shared sync protocol slot ${name} metadata is incomplete`);
+  }
+  return item;
+}
+
+function assertResponseByteBudget(
+  response: RequestUrlResponse,
+  maxBytes: number,
+  label: string,
+): void {
+  assertByteBudget(responsePayloadByteLength(response), maxBytes, label);
+}
+
+function assertDeclaredRemoteSize(
+  size: number | undefined,
+  maxBytes: number,
+  label: string,
+  declaredKind: ResponseByteBudgetKind = "declared",
+): void {
+  if (typeof size === "number" && Number.isFinite(size) && size > maxBytes) {
+    throw new ResponseByteBudgetError(label, maxBytes, size, declaredKind);
+  }
+}
+
+function assertByteBudget(
+  observedBytes: number,
+  maxBytes: number,
+  label: string,
+): void {
+  if (observedBytes > maxBytes) {
+    throw new ResponseByteBudgetError(label, maxBytes, observedBytes, "observed");
+  }
+}
+
+export function isResponseByteBudgetError(error: unknown): error is ResponseByteBudgetError {
+  return error instanceof ResponseByteBudgetError;
+}
+
+function requestAttemptStatus(
+  error: OneDriveError,
+  signal: AbortSignal | null,
+): OneDriveAttemptStatusCategory {
+  if (signal?.aborted || isAbortError(error)) return "cancelled";
+  switch (error.type) {
+    case OneDriveErrorType.AuthExpired:
+    case OneDriveErrorType.Unauthorized:
+      return "auth";
+    case OneDriveErrorType.Forbidden:
+      return "forbidden";
+    case OneDriveErrorType.NotFound:
+      return "notFound";
+    case OneDriveErrorType.Conflict:
+      return "conflict";
+    case OneDriveErrorType.PreconditionFailed:
+      return "precondition";
+    case OneDriveErrorType.RangeNotSatisfiable:
+      return "rangeNotSatisfiable";
+    case OneDriveErrorType.RateLimited:
+      return "rateLimited";
+    case OneDriveErrorType.InsufficientStorage:
+      return "insufficientStorage";
+    case OneDriveErrorType.ServerError:
+      return "serverError";
+    case OneDriveErrorType.NetworkError:
+      return "network";
+    default:
+      return "unknown";
+  }
+}
+
+function rawAttemptStatus(
+  error: unknown,
+  signal: AbortSignal | null,
+): OneDriveAttemptStatusCategory {
+  if (signal?.aborted || isAbortError(error)) return "cancelled";
+  if (error instanceof OneDriveError) return requestAttemptStatus(error, signal);
+  const status = isRecord(error) && typeof error.status === "number"
+    ? error.status
+    : 0;
+  if (status === 401) return "auth";
+  if (status === 403) return "forbidden";
+  if (status === 404) return "notFound";
+  if (status === 409) return "conflict";
+  if (status === 412) return "precondition";
+  if (status === 416) return "rangeNotSatisfiable";
+  if (status === 429) return "rateLimited";
+  if (status === 509) return "rateLimited";
+  if (status === 507) return "insufficientStorage";
+  if ([500, 502, 503, 504].includes(status)) return "serverError";
+  if (status === 0 || error instanceof TypeError) return "network";
+  return "unknown";
+}
+
+function asFileDownloadUnauthorized(
+  error: OneDriveError,
+  filePath: string,
+): OneDriveError {
+  return new OneDriveError(
+    OneDriveErrorType.Unauthorized,
+    `File content download rejected for: ${filePath}`,
+    error.statusCode,
+    error.retryAfterSeconds,
+    error.graphCode,
+  );
+}
+
+/** Pre-ladder, size-scaled budget. Kept for the single-shot retained-version
+ *  content reads, which have no waterfall to split. The download waterfall
+ *  itself prices every file through {@link downloadBudget}. */
+function downloadTimeoutMs(fileSize: number): number {
+  const sizeMiB = Math.ceil(Math.max(0, fileSize) / (1024 * 1024));
+  return Math.min(
+    DOWNLOAD_MAX_TIMEOUT_MS,
+    DOWNLOAD_BASE_TIMEOUT_MS + sizeMiB * DOWNLOAD_PER_MIB_TIMEOUT_MS,
+  );
+}
+
+type DownloadBudgetClass = "small" | "medium" | "regular";
+
+interface DownloadBudget {
+  /** Which ladder rung priced this file (log evidence). */
+  budgetClass: DownloadBudgetClass;
+  /** Patience of one channel: the CDN path loses the file to the fallback
+   *  channels after this much silence/time. */
+  primaryMs: number;
+  /** What the fallback channels keep after a failed primary attempt. Never
+   *  shorter than the pre-ladder budget of the same file. */
+  reserveMs: number;
+  /** Hard deadline of the whole waterfall. */
+  totalMs: number;
+  /** Cap for the CDN path as a whole, or `null` for regular files. `null`
+   *  keeps the pre-ladder rule that the first channel may hold the entire
+   *  deadline: restarting a multi-MiB transfer discards far more than a flat
+   *  window can buy back, and the 2026-07-14 decision ("CDN 下载不给短 leash")
+   *  rests on the same observation. */
+  channelCapMs: number | null;
+}
+
+/** Single source of the download budget (2026-10-27 预算阶梯).
+ *
+ *  - `regular` (> 256 KiB) is the pre-ladder pair unchanged: primary =
+ *    `30 s + ceil(size/1MiB) × 12 s`, reserve = 50 %, no channel cap.
+ *  - `small` (< 64 KiB) and `medium` (64–256 KiB) replace the primary with a
+ *    flat channel window (15 s / 25 s) and keep the *complete* pre-ladder
+ *    budget as the reserve, so the two windows together are strictly longer
+ *    than today's single deadline. Nothing that succeeds today can be killed
+ *    by the ladder: a transfer that needs the old window still gets it on the
+ *    fallback channel; only the CDN's share shrinks, which is the point —
+ *    the first channel can no longer swallow the reserve.
+ *
+ *  The `ceil` is what made an 18-byte note cost 42 s in the first place
+ *  (20261026-1240 T2); the ladder fixes the pricing for the two
+ *  smallest size bands only, as decided. */
+export function downloadBudget(fileSize: number): DownloadBudget {
+  const size = Number.isFinite(fileSize) ? Math.max(0, fileSize) : 0;
+  const preLadderPrimaryMs = downloadTimeoutMs(size);
+  const preLadderReserveMs = Math.ceil(
+    preLadderPrimaryMs * DOWNLOAD_FAILURE_RESERVE_RATIO,
+  );
+  const budgetClass: DownloadBudgetClass = size < DOWNLOAD_SMALL_MAX_BYTES
+    ? "small"
+    : size <= DOWNLOAD_MEDIUM_MAX_BYTES
+      ? "medium"
+      : "regular";
+  if (budgetClass === "regular") {
+    return {
+      budgetClass,
+      primaryMs: preLadderPrimaryMs,
+      reserveMs: preLadderReserveMs,
+      totalMs: preLadderPrimaryMs + preLadderReserveMs,
+      channelCapMs: null,
+    };
+  }
+  const primaryMs = budgetClass === "small"
+    ? DOWNLOAD_SMALL_PRIMARY_TIMEOUT_MS
+    : DOWNLOAD_MEDIUM_PRIMARY_TIMEOUT_MS;
+  // The reserve is the whole pre-ladder deadline, not 50 % of the shortened
+  // primary: that is what "失败后仍有一次完整备用预算" buys, and it is the only
+  // way a slow-but-progressing transfer keeps the window it has today.
+  const reserveMs = preLadderPrimaryMs + preLadderReserveMs;
+  return {
+    budgetClass,
+    primaryMs,
+    reserveMs,
+    totalMs: primaryMs + reserveMs,
+    channelCapMs: primaryMs,
+  };
+}
+
+/** 401/403 with a real HTTP status: the endpoint answered, it just refused this
+ *  file. Used only to reverse the CDN breaker (the channel cannot serve us). */
+function isContentEndpointRejection(error: unknown): boolean {
+  if (!(error instanceof OneDriveError)) return false;
+  return error.statusCode === 401
+    || error.statusCode === 403
+    || error.type === OneDriveErrorType.AuthExpired
+    || error.type === OneDriveErrorType.Forbidden;
+}
+
+function ensureDownloadBudget(deadlineMs: number, filePath: string): number {
+  const remaining = deadlineMs - Date.now();
+  if (remaining <= 0) {
+    throw new OneDriveError(
+      OneDriveErrorType.NetworkError,
+      `Download timed out for: ${filePath}`,
+    );
+  }
+  return remaining;
+}
+
+function downloadTimeoutError(filePath: string): OneDriveError {
+  return new OneDriveError(
+    OneDriveErrorType.NetworkError,
+    `Download timed out for: ${filePath}`,
+  );
+}
+
+function rawStatusCode(error: unknown): number {
+  return isRecord(error) && typeof error.status === "number" ? error.status : 0;
+}
+
+function isTransientDownloadUrlError(error: unknown): boolean {
+  // A watchdog stall marks a dead connection, not a dead CDN: retrying the
+  // same URL on a fresh connection is exactly the recovery the watchdog
+  // exists to enable.
+  if ((error as { stalled?: unknown })?.stalled === true) return true;
+  const status = (error as { status?: unknown })?.status;
+  // status=0 means no HTTP response (DNS/TCP/TLS failure) — retrying the
+  // same CDN URL won't help. Fall through to metadata refresh or /content.
+  if (typeof status !== "number" || status === 0) return false;
+  return status === 408 || status === 429 || status >= 500;
+}
+
+/** Default per-attempt cap for Graph calls that carry no explicit budget.
+ *  Only GETs on metadata/delta endpoints widen to METADATA_READ_TIMEOUT_MS;
+ *  writes and other endpoints keep the flat 15s line (no misjudgment
+ *  evidence there). */
+function defaultRequestTimeoutMs(method: string, endpoint: OneDriveEndpointCategory): number {
+  return method.toUpperCase() === "GET" && (endpoint === "metadata" || endpoint === "delta")
+    ? METADATA_READ_TIMEOUT_MS
+    : REQUEST_TIMEOUT_MS;
+}
+
+/** Like requestTimeoutMs but uses `cap` instead of the global 15 s limit.
+ *  Content downloads call this so per-attempt timeout matches the file budget. */
+function requestTimeoutWithCap(deadlineMs: number | undefined, cap: number): number {
+  if (!deadlineMs) return cap;
+  const remaining = deadlineMs - Date.now();
+  if (remaining <= 0) {
+    throw new OneDriveError(
+      OneDriveErrorType.NetworkError,
+      "Request deadline exceeded",
+    );
+  }
+  return Math.min(cap, remaining);
+}
+
+// ---- Error Parsing Helpers ----
+
+function parseRetryAfter(
+  headers: Record<string, string>,
+): number | null {
+  const value = headers["retry-after"];
+  if (!value) return null;
+  const seconds = parseInt(value, 10);
+  return isNaN(seconds) ? null : seconds;
+}
+
+function parseGraphErrorBody(body: unknown): OneDriveGraphErrorDetail | null {
+  if (!isRecord(body)) return null;
+  const error = body.error;
+  if (!isRecord(error)) return null;
+  const inner = isRecord(error.innerError)
+    ? error.innerError
+    : isRecord(error.innererror)
+      ? error.innererror
+      : null;
+  const codeRaw = error.code;
+  const messageRaw = error.message;
+  const innerCodeRaw = inner?.code;
+  const requestIdRaw = inner?.["request-id"] ?? inner?.requestId;
+  const dateRaw = inner?.date;
+  return {
+    code: typeof codeRaw === "string" && codeRaw
+      ? codeRaw
+      : typeof codeRaw === "number"
+        ? String(codeRaw)
+        : "unknown",
+    message: typeof messageRaw === "string" && messageRaw
+      ? messageRaw
+      : "no message",
+    innerCode: typeof innerCodeRaw === "string" && innerCodeRaw
+      ? innerCodeRaw
+      : null,
+    requestId: typeof requestIdRaw === "string" && requestIdRaw
+      ? requestIdRaw
+      : null,
+    date: typeof dateRaw === "string" && dateRaw ? dateRaw : null,
+  };
+}
+
+function tryParseGraphError(
+  response: RequestUrlResponse,
+): OneDriveGraphErrorDetail | null {
+  try {
+    return parseGraphErrorBody(response.json);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Race a promise against a timeout.
+ * Rejects with a typed local deadline if the promise doesn't resolve within
+ * `ms`. Callers decide whether that type is part of their public contract.
+ */
+
+const GRAPH_ORIGIN = new URL(GRAPH_BASE_URL).origin;
+const GRAPH_API_PATH_PREFIX = new URL(GRAPH_BASE_URL).pathname;
+
+// Foreign App Folder (Remotely Save adoption) constants. The observed layout
+// and the localized "Apps" container names come from the 2026-09/10 real
+// account probes recorded in the migration feasibility carrier.
+const REMOTELY_SAVE_APPS_CONTAINER_NAMES = new Set(["apps", "应用", "applications"]);
+const REMOTELY_SAVE_DIR_NAME = "remotely-save";
+const REMOTELY_SAVE_METADATA_BASE_NAME = "_remotely-save-metadata-on-remote";
+const REMOTELY_SAVE_MAX_ROOT_PAGES = 25;
+/** Page budget for listing vaults/ during EasySync repository join detection.
+ *  Real clouds hold a handful of repositories; an over-budget listing is a
+ *  detection failure, never absence. */
+const EASYSYNC_VAULTS_MAX_PAGES = 5;
+/** Path probes in flight at a time during EasySync repository detection. */
+const EASYSYNC_VAULTS_PROBE_CONCURRENCY = 4;
+/** Control-directory slots that mark a live EasySync repository (协议 v2/v3 任一
+ *  存在即活仓）；全量枚举与同名快通道共用同一判据。 */
+const EASYSYNC_CONTROL_SLOT_NAMES = ["protocol-v2.json", "protocol-v3.json"] as const;
+
+function hasEasySyncControlSlot(children: readonly DriveItem[]): boolean {
+  return children.some((item) =>
+    (EASYSYNC_CONTROL_SLOT_NAMES as readonly string[]).includes(item.name));
+}
+
+/** 加入仓库检测的结果。`same-name` 由同名快通道给出（名单未列举，调用方在该
+ *  分支不弹框、不提示，不需要数量）；`others` 的名单完整，用于弹框与计数。 */
+export type EasySyncRepositoryDetection =
+  | { kind: "none" }
+  | { kind: "same-name" }
+  | { kind: "others"; repositories: string[] };
+/** Filename shapes produced by rclone-crypt-style name encryption (research
+ *  doc §124): a long unrecognisable token with no extension. */
+const REMOTELY_SAVE_CIPHER_NAME_PATTERN = /^[A-Za-z0-9_-]{16,}$/;
+
+/** Resolve a listed vault directory name into its request-path form and its
+ *  display form. Legacy storage directories are percent-encoded on the wire
+ *  and must be probed verbatim; canonical names are encoded for the request
+ *  path and displayed as-is. */
+function resolveVaultDirectoryNaming(name: string): {
+  storage: string;
+  display: string;
+} {
+  try {
+    const decoded = decodeURIComponent(name);
+    if (decoded !== name && encodeURIComponent(decoded) === name) {
+      return { storage: name, display: decoded };
+    }
+  } catch {
+    // Not a percent-encoded name; treat it as canonical.
+  }
+  return { storage: encodeURIComponent(name), display: name };
+}
+
+/** Decide whether a Remotely Save vault directory holds plaintext content or
+ *  end-to-end encrypted ciphertext. Encrypted remotes encrypt every file
+ *  name, so their synced files carry no meaningful extension at all, while a
+ *  plaintext vault always exposes at least one ordinary one (.md notes,
+ *  attachments). Encrypted content cannot be adopted: detection must keep
+ *  the adoption offer hidden and let normal first sync run (design contract
+ *  "encrypted users never see the modal"). A listing without files cannot be
+ *  classified and stays "plain" — an empty source is handled by the
+ *  transaction on its own. */
+export function classifyRemotelySaveVaultChildren(
+  children: readonly DriveItem[],
+): "plain" | "encrypted" {
+  const files = children.filter(
+    (item) => !item.folder
+      && !item.name.startsWith(`${REMOTELY_SAVE_METADATA_BASE_NAME}.`),
+  );
+  if (files.length === 0) return "plain";
+  if (files.some((item) => /\.[A-Za-z0-9]{1,8}$/.test(item.name))) {
+    return "plain";
+  }
+  return files.some((item) => REMOTELY_SAVE_CIPHER_NAME_PATTERN.test(item.name))
+    ? "encrypted"
+    : "plain";
+}
+
+const REMOTELY_SAVE_COPY_TIMEOUT_MS = 180_000;
+const REMOTELY_SAVE_COPY_POLL_INTERVAL_MS = 3_000;
+
+/** Resolve the only routes that may receive a Microsoft Graph bearer token. */
+function resolveAuthenticatedGraphUrl(apiPath: string): string {
+  let parsed: URL;
+  const absoluteUrl = /^[a-z][a-z\d+.-]*:/i.test(apiPath)
+    ? apiPath
+    : `${GRAPH_BASE_URL}${apiPath.startsWith("/") ? "" : "/"}${apiPath}`;
+  try {
+    parsed = new URL(absoluteUrl);
+  } catch {
+    throw new OneDriveError(
+      OneDriveErrorType.Unknown,
+      "Blocked invalid Microsoft Graph request URL",
+    );
+  }
+  const route = parsed.pathname.slice(GRAPH_API_PATH_PREFIX.length);
+  const allowedRoute = route === "/$batch"
+    || route === "/me/drive"
+    || route === "/me/drives"
+    || route.startsWith("/me/drive/")
+    || route.startsWith("/drives/");
+  if (
+    parsed.protocol !== "https:"
+    || parsed.origin !== GRAPH_ORIGIN
+    || parsed.username !== ""
+    || parsed.password !== ""
+    || !parsed.pathname.startsWith(`${GRAPH_API_PATH_PREFIX}/`)
+    || !allowedRoute
+  ) {
+    throw new OneDriveError(
+      OneDriveErrorType.Unknown,
+      `Blocked untrusted Microsoft Graph request: ${sanitizeUrl(apiPath)}`,
+    );
+  }
+  return absoluteUrl;
+}
+
+function validateGraphContinuationUrl(url: string): void {
+  resolveAuthenticatedGraphUrl(url);
+}
+
+/**
+ * Match a Graph continuation URL against one exact vault route.
+ *
+ * Byte equality first; otherwise both sides are decoded, NFC-normalized and
+ * case-folded before the containment check. The service re-serializes the
+ * cursor URL it hands back — a field sample (2026-10-14) shows a request path
+ * carrying `%40` for "@" returning with a literal "@", and query separators
+ * returning as `%2c` — so byte equality alone can misjudge the same directory
+ * as a foreign one, forcing a full re-enumeration on every round. A different
+ * directory still fails the check; undecodable input stays fail-closed on the
+ * raw comparison.
+ */
+function routeMatchesContinuationUrl(url: string, route: string): boolean {
+  if (url.includes(route)) return true;
+  const queryStart = url.search(/[?#]/);
+  const decodedUrl = decodeRouteForComparison(
+    queryStart === -1 ? url : url.slice(0, queryStart),
+  );
+  const decodedRoute = decodeRouteForComparison(route);
+  return decodedUrl !== null
+    && decodedRoute !== null
+    && decodedUrl.includes(decodedRoute);
+}
+
+function decodeRouteForComparison(value: string): string | null {
+  try {
+    return decodeURIComponent(value).normalize("NFC").toLocaleLowerCase("en-US");
+  } catch {
+    return null;
+  }
+}
+
+/** Strip credentials, query parameters, and fragments from a URL for log safety. */
+function sanitizeUrl(url: string): string {
+  try {
+    const absoluteUrl = /^[a-z][a-z\d+.-]*:/i.test(url)
+      ? url
+      : `${GRAPH_BASE_URL}${url.startsWith("/") ? "" : "/"}${url}`;
+    const u = new URL(absoluteUrl);
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return "[invalid-url]";
+  }
+}
+
+/**
+ * Request-deadline wrapper for Graph calls. A timeout rejects with
+ * `SyntheticRequestTimeoutError`; that type plus its `source`/`timeoutMs`
+ * fields are a contract upper layers branch on, so they must never degrade to
+ * a generic `Error`. Every other rejection is normalized through `toErrorLike`
+ * because `requestUrl` can reject with plain Graph error records whose status
+ * fields downstream classification reads. `compatSetTimeout` keeps the timer
+ * on the same active-window source as the rest of the plugin. The wrapped
+ * promise is never cancelled: its handlers stay attached, so a late
+ * settlement is ignored once this outer promise has settled and cannot become
+ * an unhandled rejection.
+ *
+ * Intentionally not merged with `withTimeout` in `src/update-check.ts`: that
+ * copy rejects with `Error("update-check-timeout")`, passes rejection reasons
+ * through untouched and uses `window.setTimeout`; its only caller swallows
+ * every failure, so it has no error-identity or normalization contract. A
+ * shared shell would need an injected error factory, rejection normalizer and
+ * timer provider just to reproduce two unrelated contracts, while risking
+ * that one caller silently inherits the other's semantics.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = compatSetTimeout(
+      () => reject(new SyntheticRequestTimeoutError(ms)),
+      ms,
+    );
+    promise.then(
+      (value) => {
+        compatClearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        compatClearTimeout(timer);
+        reject(toErrorLike(error));
+      },
+    );
+  });
+}
+
+function withAbortableTimeout<T>(
+  run: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+  outerSignal: AbortSignal | null | undefined,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const controller = new AbortController();
+    let timedOut = false;
+    const onAbort = () => controller.abort();
+    if (outerSignal) {
+      if (outerSignal.aborted) {
+        controller.abort();
+      } else {
+        outerSignal.addEventListener("abort", onAbort, { once: true });
+      }
+    }
+    const timer = compatSetTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, ms);
+    run(controller.signal).then(
+      (value) => {
+        compatClearTimeout(timer);
+        outerSignal?.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        compatClearTimeout(timer);
+        outerSignal?.removeEventListener("abort", onAbort);
+        if (timedOut && isAbortError(error)) {
+          // 刀 2：客户端 deadline 到点＝SyntheticRequestTimeoutError（消息
+          // 逐字节不变；此前是裸 Error，只能靠文本前缀识别）。
+          reject(new SyntheticRequestTimeoutError(ms));
+          return;
+        }
+        reject(toErrorLike(error));
+      },
+    );
+  });
+}
+
+/** Linked-signal zero-progress watchdog and per-download slow-connection
+ *  gate live in download-stream-guards.ts (verbatim move, 2026-09-14) so the
+ *  Node-https multi-range streams share the exact stall/slow semantics. */
+
+function browserFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const currentWindow = typeof window !== "undefined" ? (window.activeWindow ?? window) : null;
+  if (currentWindow && typeof currentWindow.fetch === "function") {
+    return currentWindow.fetch(input, init);
+  }
+  throw new TypeError("fetch unavailable");
+}
+
+function toErrorLike(error: unknown): Error {
+  if (error instanceof Error) return error;
+  const wrapped = new Error(String(error));
+  if (isRecord(error)) Object.assign(wrapped, error);
+  return wrapped;
+}
+
+function isTransientRequestError(error: OneDriveError): boolean {
+  return error.type === OneDriveErrorType.NetworkError
+    || error.type === OneDriveErrorType.RateLimited
+    || error.type === OneDriveErrorType.ServerError;
+}
+
+/** A failed `$batch` path read that must still abort the whole call: the
+ *  session is gone, so degrading the chunk to per-item GETs would only repeat
+ *  the same rejection once per path. Every other failure stays inside its
+ *  chunk (see `getFileMetadataByPaths`). */
+function isFatalMetadataBatchReadError(error: unknown): boolean {
+  return error instanceof OneDriveError
+    && (error.type === OneDriveErrorType.Unauthorized
+      || error.type === OneDriveErrorType.Forbidden
+      || error.type === OneDriveErrorType.AuthExpired);
+}
+
+function isRecoverableUploadSessionError(error: OneDriveError): boolean {
+  return error.type === OneDriveErrorType.NetworkError
+    || error.type === OneDriveErrorType.RateLimited
+    || error.type === OneDriveErrorType.ServerError
+    || error.type === OneDriveErrorType.RangeNotSatisfiable;
+}
+
+function classifyUploadSessionUrlError(error: OneDriveError): OneDriveError {
+  if (error.type !== OneDriveErrorType.AuthExpired) return error;
+  return new OneDriveError(
+    OneDriveErrorType.Unauthorized,
+    error.message,
+    error.statusCode,
+    error.retryAfterSeconds,
+    error.graphCode,
+  );
+}
+
+function isFetchUnavailableError(error: unknown): boolean {
+  return error instanceof TypeError && error.message === "fetch unavailable";
+}
+
+function retryDelayMs(error: OneDriveError, attempt: number): number {
+  // Retry-After is authoritative for throttling (429/509) and for a
+  // temporarily unavailable service (503 may carry the same header); the
+  // exponential ladder is only the fallback.
+  const retryAfterApplies = error.type === OneDriveErrorType.RateLimited
+    || error.type === OneDriveErrorType.ServerError;
+  const base = retryAfterApplies && error.retryAfterSeconds !== null
+    ? error.retryAfterSeconds * 1000
+    : RETRY_BASE_MS * (2 ** (attempt - 1));
+  return base + Math.floor(Math.random() * RETRY_JITTER_MS);
+}
+
+function requirePluginControlFileVersion(
+  value: unknown,
+  label:
+    | "CloudBootstrapV2"
+    | "SharedSyncProtocolV2"
+    | "SharedSyncProtocolV3",
+): { id: string; eTag: string } {
+  if (!value || typeof value !== "object") {
+    throw new Error(`${label} write returned no metadata`);
+  }
+  const item = value as Partial<DriveItem>;
+  if (!item.id || !item.eTag) {
+    throw new Error(`${label} write returned no id/eTag`);
+  }
+  return { id: item.id, eTag: item.eTag };
+}
+
+async function safeRemove(adapter: DataAdapter, path: string): Promise<void> {
+  try { await adapter.remove(path); } catch { /* noop */ }
+}
+
+function exactArrayBuffer(chunk: Uint8Array): ArrayBuffer {
+  return chunk.slice().buffer;
+}
+
+/**
+ * Split a byte count's bit length into the two big-endian 32-bit words the
+ * SHA-256 padding stores (high word first). Exported for the boundary test:
+ * a stream of 2^32 bits (512 MiB) is the first size where the low word alone
+ * stops being enough.
+ */
+export function sha256BitLengthWords(totalBytes: number): [number, number] {
+  const totalBitLength = totalBytes * 8;
+  return [Math.floor(totalBitLength / 0x1_0000_0000), totalBitLength >>> 0];
+}
+
+class StreamingSha256 {
+  private static readonly K = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
+    0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+    0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+    0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+    0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+    0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+    0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+  ];
+
+  private h0 = 0x6a09e667;
+  private h1 = 0xbb67ae85;
+  private h2 = 0x3c6ef372;
+  private h3 = 0xa54ff53a;
+  private h4 = 0x510e527f;
+  private h5 = 0x9b05688c;
+  private h6 = 0x1f83d9ab;
+  private h7 = 0x5be0cd19;
+  private pending = new Uint8Array(64);
+  private pendingLength = 0;
+  private totalBytes = 0;
+
+  update(chunk: Uint8Array): void {
+    let offset = 0;
+    this.totalBytes += chunk.length;
+    if (this.pendingLength > 0) {
+      const take = Math.min(64 - this.pendingLength, chunk.length);
+      this.pending.set(chunk.subarray(0, take), this.pendingLength);
+      this.pendingLength += take;
+      offset += take;
+      if (this.pendingLength === 64) {
+        this.processBlock(this.pending, 0);
+        this.pendingLength = 0;
+      }
+    }
+    while (offset + 64 <= chunk.length) {
+      this.processBlock(chunk, offset);
+      offset += 64;
+    }
+    if (offset < chunk.length) {
+      this.pending.set(chunk.subarray(offset), 0);
+      this.pendingLength = chunk.length - offset;
+    }
+  }
+
+  digestHex(): string {
+    const finalBlock = new Uint8Array(128);
+    if (this.pendingLength > 0) {
+      finalBlock.set(this.pending.subarray(0, this.pendingLength), 0);
+    }
+    finalBlock[this.pendingLength] = 0x80;
+    const needsTwoBlocks = this.pendingLength >= 56;
+    const lengthOffset = needsTwoBlocks ? 120 : 56;
+    // SHA-256 pads with the message length in bits as one 64-bit big-endian
+    // value. Writing only the low word silently hashes the wrong length for
+    // streams of 2^32 bits (512 MiB) and larger.
+    const [hi, lo] = sha256BitLengthWords(this.totalBytes);
+    finalBlock[lengthOffset] = (hi >>> 24) & 0xff;
+    finalBlock[lengthOffset + 1] = (hi >>> 16) & 0xff;
+    finalBlock[lengthOffset + 2] = (hi >>> 8) & 0xff;
+    finalBlock[lengthOffset + 3] = hi & 0xff;
+    finalBlock[lengthOffset + 4] = (lo >>> 24) & 0xff;
+    finalBlock[lengthOffset + 5] = (lo >>> 16) & 0xff;
+    finalBlock[lengthOffset + 6] = (lo >>> 8) & 0xff;
+    finalBlock[lengthOffset + 7] = lo & 0xff;
+    this.processBlock(finalBlock, 0);
+    if (needsTwoBlocks) {
+      this.processBlock(finalBlock, 64);
+    }
+    const bytes = new Uint8Array(32);
+    const words = [this.h0, this.h1, this.h2, this.h3, this.h4, this.h5, this.h6, this.h7];
+    for (let i = 0; i < 8; i++) {
+      bytes[i * 4] = (words[i] >>> 24) & 0xff;
+      bytes[i * 4 + 1] = (words[i] >>> 16) & 0xff;
+      bytes[i * 4 + 2] = (words[i] >>> 8) & 0xff;
+      bytes[i * 4 + 3] = words[i] & 0xff;
+    }
+    let hex = "";
+    for (let i = 0; i < bytes.length; i++) {
+      hex += bytes[i].toString(16).padStart(2, "0");
+    }
+    return hex;
+  }
+
+  private processBlock(block: Uint8Array, offset: number): void {
+    const w = new Uint32Array(64);
+    for (let t = 0; t < 16; t++) {
+      const i = offset + t * 4;
+      w[t] = (block[i] << 24)
+        | (block[i + 1] << 16)
+        | (block[i + 2] << 8)
+        | block[i + 3];
+    }
+    for (let t = 16; t < 64; t++) {
+      const s0 = rotr32(w[t - 15], 7) ^ rotr32(w[t - 15], 18) ^ (w[t - 15] >>> 3);
+      const s1 = rotr32(w[t - 2], 17) ^ rotr32(w[t - 2], 19) ^ (w[t - 2] >>> 10);
+      w[t] = (w[t - 16] + s0 + w[t - 7] + s1) | 0;
+    }
+    let a = this.h0;
+    let b = this.h1;
+    let c = this.h2;
+    let d = this.h3;
+    let e = this.h4;
+    let f = this.h5;
+    let g = this.h6;
+    let h = this.h7;
+    for (let t = 0; t < 64; t++) {
+      const s1 = rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25);
+      const ch = (e & f) ^ (~e & g);
+      const temp1 = (h + s1 + ch + StreamingSha256.K[t] + w[t]) | 0;
+      const s0 = rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22);
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const temp2 = (s0 + maj) | 0;
+      h = g;
+      g = f;
+      f = e;
+      e = (d + temp1) | 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (temp1 + temp2) | 0;
+    }
+    this.h0 = (this.h0 + a) | 0;
+    this.h1 = (this.h1 + b) | 0;
+    this.h2 = (this.h2 + c) | 0;
+    this.h3 = (this.h3 + d) | 0;
+    this.h4 = (this.h4 + e) | 0;
+    this.h5 = (this.h5 + f) | 0;
+    this.h6 = (this.h6 + g) | 0;
+    this.h7 = (this.h7 + h) | 0;
+  }
+}
+
+function rotr32(x: number, n: number): number {
+  return (x >>> n) | (x << (32 - n));
+}
+
+function responseToText(
+  response: RequestUrlResponse,
+  maxBytes: number,
+  label: string,
+): string {
+  assertResponseByteBudget(response, maxBytes, label);
+  if (typeof response.text === "string") {
+    return response.text;
+  }
+  if (response.arrayBuffer instanceof ArrayBuffer) {
+    return new TextDecoder().decode(response.arrayBuffer);
+  }
+  return JSON.stringify(response.json ?? null);
+}
+
+/** Extract structured error data for diag logging. */
+function downloadErrorData(err: unknown): Record<string, unknown> {
+  const message = describeError(err);
+  const data: Record<string, unknown> = err instanceof OneDriveError
+    ? { message, errorType: err.type, statusCode: err.statusCode, graphCode: err.graphCode }
+    : { message };
+  // Slow-gate telemetry (2026-09-15 乙路 phase 1): the aborting window rate
+  // and the previous abort's rate on the same gate, for before/after pairing.
+  const slowGateRate = (err as { slowGateRateKiBps?: unknown } | null)?.slowGateRateKiBps;
+  if (typeof slowGateRate === "number") data.slowGateRateKiBps = slowGateRate;
+  const slowGatePrior = (err as { slowGatePriorRateKiBps?: unknown } | null)?.slowGatePriorRateKiBps;
+  if (typeof slowGatePrior === "number") data.slowGatePriorRateKiBps = slowGatePrior;
+  // A3 (2026-10-26): the tier that raised this failure and the retry attempts
+  // it consumed. Read-only evidence for the per-tier warn lines; the report
+  // reads the same props off the thrown error.
+  const tier = (err as { tier?: unknown } | null)?.tier;
+  if (typeof tier === "string") data.tier = tier;
+  const attempts = (err as { attempts?: unknown } | null)?.attempts;
+  if (typeof attempts === "number") data.attempts = attempts;
+  return data;
+}
+
+/** Transport-level download failures (2026-09-16 连坐切片): statusCode 0 means
+ *  no HTTP response at all — stalled connection, DNS, local deadline, slow-gate
+ *  abort. That is evidence the LINK died, not that the endpoint is broken;
+ *  blacklisting an endpoint for the whole round on these failures made small
+ *  files fail without a single attempt (2026-09-15 iPhone: 86.6KB/558KB
+ *  recordings blocked by an earlier large file's stalls). Only failures with a
+ *  real HTTP status confirm "this endpoint is broken" and keep blacklisting. */
+function isTransportLevelDownloadFailure(err: unknown): boolean {
+  return err instanceof OneDriveError && err.statusCode === 0;
+}
+
+/** Upload a chunk to an Azure Blob upload session URL using native fetch
+ *  (bypasses requestUrl mobile bugs: Android base64 encoding, iOS status=0
+ *  on non-Graph domains). Only active in browser/Electron/WebView environments
+ *  (has window). Returns a minimal RequestUrlResponse shape for compatibility. */
+async function uploadChunkFetch(
+  uploadUrl: string,
+  chunk: ArrayBuffer,
+  start: number,
+  end: number,
+  total: number,
+  signal?: AbortSignal,
+): Promise<RequestUrlResponse> {
+  // In Node.js (test), fall through to requestUrl — fetch with fake timers hangs.
+  const res = await browserFetch(uploadUrl, {
+    method: "PUT",
+    headers: {
+      "Content-Range": `bytes ${start}-${end}/${total}`,
+      "Content-Type": "application/octet-stream",
+    },
+    body: chunk,
+    cache: "no-store",
+    signal,
+  });
+  if (!res.ok) {
+    throw await fetchResponseError(res);
+  }
+  // 200/201 → driveItem JSON, 202 (Accepted) → no body
+  let json: unknown = undefined;
+  try { json = await res.json(); } catch { /* 202 Accepted has no body */ }
+  return { json, status: res.status, headers: {} } as RequestUrlResponse;
+}
+
+async function uploadSessionControlFetch(
+  uploadUrl: string,
+  method: "GET" | "DELETE",
+  signal: AbortSignal,
+): Promise<RequestUrlResponse> {
+  const res = await browserFetch(uploadUrl, {
+    method,
+    cache: "no-store",
+    signal,
+  });
+  if (!res.ok) {
+    throw await fetchResponseError(res);
+  }
+  let json: unknown = undefined;
+  if (res.status !== 204) {
+    try { json = await res.json(); } catch { /* empty control response */ }
+  }
+  return { json, status: res.status, headers: {} } as RequestUrlResponse;
+}
+
+async function fetchResponseError(response: Response): Promise<Error> {
+  const headers: Record<string, string> = {};
+  response.headers?.forEach((value, key) => {
+    headers[key] = value;
+  });
+  let json: unknown = undefined;
+  let text: string | undefined;
+  try {
+    json = await response.json();
+  } catch {
+    try { text = await response.text(); } catch { /* empty error body */ }
+  }
+  return Object.assign(new Error(`HTTP ${response.status}`), {
+    status: response.status,
+    headers,
+    ...(json === undefined ? {} : { json }),
+    ...(text === undefined ? {} : { text }),
+  });
+}
+
+function responseContentLength(response: Response): number {
+  const raw = response.headers.get("Content-Length");
+  if (!raw) return 0;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/** Where a resumed single-stream body has to land: the failed multi-range
+ *  attempt's own assembly buffer (2026-10-28). `offset` is the first hole, so
+ *  the expected body length is `assembly.byteLength - offset` — the buffer is
+ *  always exactly the declared file size. */
+interface ResponseBufferSink {
+  assembly: Uint8Array;
+  offset: number;
+}
+
+/** Why a resume request was not stitched: the CDN ignored the Range (200), or
+ *  answered a different start. The caller logs the safe retreat; byte 0 is
+ *  used instead. */
+interface DownloadRangeRejection {
+  status: number;
+  contentRange: string | null;
+}
+
+/** Resume payload of the single-stream fallback after a failed multi-range
+ *  attempt. The body is written into `assembly` at `offset`; no second
+ *  whole-file buffer is allocated. */
+interface DownloadUrlResume extends ResponseBufferSink {
+  fileSize: number;
+  /** The answer was accepted as the resume tail. `contentRange` is null when
+   *  the CDN does not expose the header to the renderer (the documented CORS
+   *  limitation that forced the Node carrier in the first place): a 206 with
+   *  no readable start is then trusted on status + exact remaining length,
+   *  the same contract the on-disk resume path uses. Log evidence only. */
+  onRangeAccepted: (evidence: { contentRange: string | null }) => void;
+  onRangeRejected: (rejection: DownloadRangeRejection) => void;
+}
+
+/** Shared helper: read a fetch Response as ArrayBuffer, optionally reporting
+ *  byte-level progress via streaming read.  Falls back to simple arrayBuffer()
+ *  when no progress callback is provided.
+ *
+ *  With a `sink` the body is the tail of a resumed download: it is written
+ *  into the caller's existing buffer at `sink.offset`, the sink's own
+ *  remainder (not the whole-file budget) bounds both byte checks, and a short
+ *  body fails closed — a hole here must never reach the caller as a
+ *  plausibly-sized buffer. */
+async function readResponseBuffer(
+  res: Response,
+  maxBytes: number,
+  label: string,
+  watchdog: DownloadStallWatchdog,
+  onProgress?: (downloaded: number, total: number) => void,
+  declaredKind: ResponseByteBudgetKind = "declared",
+  sink?: ResponseBufferSink,
+): Promise<ArrayBuffer> {
+  if (!res.ok) {
+    const err = new Error(`HTTP ${res.status}`) as Error & { status: number };
+    err.status = res.status;
+    throw err;
+  }
+  const budgetBytes = sink
+    ? sink.assembly.byteLength - sink.offset
+    : maxBytes;
+  const contentLength = responseContentLength(res);
+  assertDeclaredRemoteSize(contentLength, budgetBytes, label, declaredKind);
+  if (!res.body) {
+    const data = await watchdog.guard(res.arrayBuffer());
+    assertByteBudget(data.byteLength, budgetBytes, label);
+    if (sink) {
+      if (data.byteLength !== budgetBytes) {
+        throw resumeShortBodyError(label, data.byteLength, budgetBytes);
+      }
+      sink.assembly.set(new Uint8Array(data), sink.offset);
+      onProgress?.(sink.offset + data.byteLength, sink.assembly.byteLength);
+      // The producer's assembly buffer is a plain ArrayBuffer; the caller
+      // never passes a SharedArrayBuffer view.
+      return sink.assembly.buffer as ArrayBuffer;
+    }
+    return data;
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let downloaded = 0;
+  try {
+    while (true) {
+      throwIfAborted(watchdog.signal);
+      const { done, value } = await watchdog.guard(reader.read());
+      if (done) break;
+      assertByteBudget(downloaded + value.length, budgetBytes, label);
+      if (sink) sink.assembly.set(value, sink.offset + downloaded);
+      else chunks.push(value);
+      downloaded += value.length;
+      watchdog.slowGate?.evaluate(downloaded);
+      if (sink) onProgress?.(sink.offset + downloaded, sink.assembly.byteLength);
+      else onProgress?.(downloaded, contentLength || downloaded);
+    }
+  } catch (error) {
+    throw withTransferredBytes(error, downloaded);
+  } finally {
+    try { reader.releaseLock(); } catch { /* noop */ }
+  }
+  if (sink) {
+    if (downloaded !== budgetBytes) {
+      throw resumeShortBodyError(label, downloaded, budgetBytes);
+    }
+    return sink.assembly.buffer as ArrayBuffer;
+  }
+  const buf = new Uint8Array(downloaded);
+  let pos = 0;
+  for (const chunk of chunks) {
+    buf.set(chunk, pos);
+    pos += chunk.length;
+  }
+  return buf.buffer;
+}
+
+/** Fail closed on a resumed body that did not fill the rest of the buffer.
+ *  Network error type keeps the retry/fallback classification unchanged; the
+ *  terminal size + sha256 check stays the last word either way. */
+function resumeShortBodyError(
+  label: string,
+  received: number,
+  expected: number,
+): OneDriveError {
+  return new OneDriveError(
+    OneDriveErrorType.NetworkError,
+    `${label} resume ended early (${received}/${expected})`,
+  );
+}
+
+/** `Content-Range: bytes <start>-<end>/<total>` → its start; null when the
+ *  header is absent or not a byte range (a CDN that ignores the Range request
+ *  answers 200 without one, and a cross-origin renderer response may not
+ *  expose the header at all). */
+function contentRangeStart(raw: string | null): number | null {
+  if (!raw) return null;
+  const match = /^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i.exec(raw.trim());
+  if (!match) return null;
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+  return Number.isSafeInteger(start) && end >= start ? start : null;
+}
+
+/** Release a response body we are not going to read (the range answer that
+ *  cannot be stitched). Cancelling frees the connection instead of leaving a
+ *  whole-file body streaming behind the fresh request. */
+async function discardResponseBody(res: Response): Promise<void> {
+  try { await res.body?.cancel(); } catch { /* body already closed */ }
+}
+
+async function writeArrayBufferToBinaryFile(
+  adapter: DataAdapter,
+  path: string,
+  data: ArrayBuffer,
+  expectedSha256?: string,
+  declaredSize = 0,
+  maxBytes = MAX_REMOTE_FILE_BYTES,
+  label = `Remote file "${path}"`,
+  onProgress?: (downloaded: number, total: number) => void,
+): Promise<DownloadToPathResult> {
+  assertByteBudget(data.byteLength, maxBytes, label);
+  await safeRemove(adapter, path);
+  await adapter.writeBinary(path, data);
+  const size = data.byteLength;
+  const hash = await sha256Hex(data);
+  if (expectedSha256 && hash !== expectedSha256.toLowerCase()) {
+    await safeRemove(adapter, path);
+    throw new OneDriveError(
+      OneDriveErrorType.NetworkError,
+      `Downloaded content hash mismatch for: ${path}`,
+    );
+  }
+  onProgress?.(size, declaredSize || size);
+  return { size, hash };
+}
+
+/** 甲路续传 (2026-09-16): shared per-download resume bookkeeping for the
+ *  streamed (.part) path. `offset` is the number of bytes already on disk;
+ *  the writers keep it current so a retryable failure re-requests
+ *  `Range: bytes=<offset>-` instead of restarting from zero. The offset
+ *  survives across the waterfall's tiers (same remote file) and is reset by
+ *  any full-buffer (requestUrl) write or fresh-stream downgrade. */
+interface DownloadResumeState {
+  offset: number;
+}
+
+async function streamResponseToBinaryFile(
+  res: Response,
+  adapter: DataAdapter,
+  path: string,
+  expectedSha256: string | undefined,
+  maxBytes: number,
+  label: string,
+  watchdog: DownloadStallWatchdog,
+  onProgress?: (downloaded: number, total: number) => void,
+  resumeState?: DownloadResumeState,
+  declaredKind: ResponseByteBudgetKind = "declared",
+): Promise<DownloadToPathResult> {
+  if (!res.ok) {
+    const err = new Error(`HTTP ${res.status}`) as Error & { status: number };
+    err.status = res.status;
+    throw err;
+  }
+  const contentLength = responseContentLength(res);
+  assertDeclaredRemoteSize(contentLength, maxBytes, label, declaredKind);
+  if (!res.body) {
+    if (resumeState) resumeState.offset = 0;
+    return writeArrayBufferToBinaryFile(
+      adapter,
+      path,
+      await watchdog.guard(res.arrayBuffer()),
+      expectedSha256,
+      contentLength,
+      maxBytes,
+      label,
+      onProgress,
+    );
+  }
+  // 甲路续传: a 206 against a recorded prefix continues from the on-disk
+  // bytes; anything else (200 — the server ignored Range — or a prefix that
+  // no longer matches) downgrades fail-closed to a full fresh stream. The
+  // terminal sha256 always covers the whole assembled file either way.
+  let resumePrefix: ArrayBuffer | null = null;
+  if (resumeState && resumeState.offset > 0 && res.status === 206) {
+    try {
+      const prefix = await adapter.readBinary(path);
+      if (prefix.byteLength === resumeState.offset) resumePrefix = prefix;
+    } catch {
+      resumePrefix = null;
+    }
+  }
+  if (resumePrefix) {
+    // Continuing after the on-disk prefix: first new chunk appends and the
+    // hash is seeded from the prefix bytes.
+  } else {
+    if (resumeState) resumeState.offset = 0;
+    await safeRemove(adapter, path);
+  }
+  const reader = res.body.getReader();
+  const hasher = new StreamingSha256();
+  let downloaded = resumePrefix ? resumeState!.offset : 0;
+  let wrote = Boolean(resumePrefix);
+  if (resumePrefix) hasher.update(new Uint8Array(resumePrefix));
+  const progressTotal = resumePrefix ? resumeState!.offset + (contentLength || 0) : contentLength;
+  try {
+    while (true) {
+      throwIfAborted(watchdog.signal);
+      const { done, value } = await watchdog.guard(reader.read());
+      if (done) break;
+      assertByteBudget(downloaded + value.length, maxBytes, label);
+      hasher.update(value);
+      const chunk = exactArrayBuffer(value);
+      if (!wrote) {
+        await adapter.writeBinary(path, chunk);
+        wrote = true;
+      } else {
+        await adapter.appendBinary(path, chunk);
+      }
+      downloaded += value.length;
+      watchdog.slowGate?.evaluate(downloaded);
+      onProgress?.(downloaded, progressTotal || downloaded);
+    }
+    if (!wrote) {
+      await adapter.writeBinary(path, new ArrayBuffer(0));
+    }
+    const hash = hasher.digestHex();
+    if (expectedSha256 && hash !== expectedSha256.toLowerCase()) {
+      if (resumeState) resumeState.offset = 0;
+      await safeRemove(adapter, path);
+      throw new OneDriveError(
+        OneDriveErrorType.NetworkError,
+        `Downloaded content hash mismatch for: ${path}`,
+      );
+    }
+    return { size: downloaded, hash };
+  } catch (error) {
+    // 甲路续传: keep the received prefix for the next attempt's Range
+    // resume — only the terminal failures above discard it.
+    if (resumeState) resumeState.offset = downloaded;
+    throw withTransferredBytes(error, downloaded);
+  } finally {
+    try { reader.releaseLock(); } catch { /* noop */ }
+  }
+}
+
+function withTransferredBytes(error: unknown, transferredBytes: number): unknown {
+  if (transferredBytes <= 0) return error;
+  if ((typeof error === "object" && error !== null) || typeof error === "function") {
+    try {
+      const target = error as { transferredBytes?: number };
+      target.transferredBytes = Math.max(target.transferredBytes ?? 0, transferredBytes);
+    } catch { /* Preserve the original error even when it is not extensible. */ }
+    return error;
+  }
+  return Object.assign(new Error(String(error)), { transferredBytes });
+}
+
+function transferredBytesFromError(error: unknown): number {
+  if ((typeof error !== "object" || error === null) && typeof error !== "function") return 0;
+  const value = (error as { transferredBytes?: unknown }).transferredBytes;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/** A3 (2026-10-26): stamp the waterfall tier that raised this failure onto the
+ *  error object, the same way `slowGateRateKiBps` already rides along. The
+ *  value is evidence for the diagnostic report only — nothing in the client,
+ *  the executor or the pause/breaker logic reads it back to decide anything
+ *  (see `SyncFileErrorFactV1`). Never replaces the error: callers keep the
+ *  exact same instance so every existing `instanceof` / status check holds.
+ *  Despite the download-era name it is the single tier stamp for every
+ *  waterfall, including the upload-session chunk PUT (`uploadSession`). */
+function stampDownloadTier(error: unknown, tier: SyncFileErrorTierV1): unknown {
+  return stampErrorEvidence(error, "tier", tier);
+}
+
+/** A3 (2026-10-26): stamp how many attempts the retry loop spent, so a report
+ *  can tell a first-try failure from an exhausted retry budget. Evidence only. */
+function stampDownloadAttempts(error: unknown, attempts: number): unknown {
+  return stampErrorEvidence(error, "attempts", attempts);
+}
+
+function stampErrorEvidence(
+  error: unknown,
+  key: "tier" | "attempts",
+  value: string | number,
+): unknown {
+  if ((typeof error !== "object" || error === null) && typeof error !== "function") {
+    return error;
+  }
+  try {
+    (error as Record<string, unknown>)[key] = value;
+  } catch { /* Preserve the original error even when it is not extensible. */ }
+  return error;
+}
+
+/** Download via a Graph API /content endpoint using native fetch.
+ *  Includes the Authorization header for the initial Graph call, but
+ *  fetch correctly strips it when following cross-origin redirects to
+ *  SharePoint download.aspx.  requestUrl forwards the auth header blindly
+ *  and SharePoint rejects it as 401 (the URL is already authenticated
+ *  via a tempauth query parameter).
+ *  Only active in browser/Electron/WebView environments (has window). */
+async function contentUrlFetch(
+  url: string,
+  token: string,
+  maxBytes = MAX_REMOTE_FILE_BYTES,
+  label = "Graph content response",
+  onProgress?: (downloaded: number, total: number) => void,
+  signal?: AbortSignal,
+  slowGate?: SlowConnectionGate,
+  declaredKind: ResponseByteBudgetKind = "declared",
+): Promise<RequestUrlResponse> {
+  const watchdog = createDownloadStallWatchdog(signal, label, slowGate);
+  try {
+    const res = await watchdog.guard(browserFetch(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+      signal: watchdog.signal,
+    }));
+    const buf = await readResponseBuffer(
+      res,
+      maxBytes,
+      label,
+      watchdog,
+      onProgress,
+      declaredKind,
+    );
+    return { arrayBuffer: buf, status: res.status, headers: {} } as RequestUrlResponse;
+  } finally {
+    watchdog.dispose();
+  }
+}
+
+async function contentUrlFetchToBinaryFile(
+  url: string,
+  token: string,
+  adapter: DataAdapter,
+  path: string,
+  expectedSha256?: string,
+  maxBytes = MAX_REMOTE_FILE_BYTES,
+  label = `Remote file "${path}"`,
+  onProgress?: (downloaded: number, total: number) => void,
+  signal?: AbortSignal,
+  slowGate?: SlowConnectionGate,
+  resumeState?: DownloadResumeState,
+  declaredKind: ResponseByteBudgetKind = "declared",
+): Promise<DownloadToPathResult> {
+  const watchdog = createDownloadStallWatchdog(signal, label, slowGate);
+  try {
+    const resumeOffset = resumeState?.offset ?? 0;
+    const res = await watchdog.guard(browserFetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(resumeOffset > 0 ? { Range: `bytes=${resumeOffset}-` } : {}),
+      },
+      cache: "no-store",
+      signal: watchdog.signal,
+    }));
+    return await streamResponseToBinaryFile(
+      res,
+      adapter,
+      path,
+      expectedSha256,
+      maxBytes,
+      label,
+      watchdog,
+      onProgress,
+      resumeState,
+      declaredKind,
+    );
+  } finally {
+    watchdog.dispose();
+  }
+}
+
+/** Download a CDN pre-signed URL using native fetch (bypasses requestUrl
+ *  mobile bugs: Android base64 encoding, iOS status=0 on CDN domains).
+ *  Only active in browser/Electron/WebView environments (has window).
+ *  Returns a minimal RequestUrlResponse shape for compatibility.
+ *
+ *  回退不重下 (2026-10-28): with a `resume` payload this is the last tier of
+ *  the multi-range ladder continuing a partially landed file. It asks for
+ *  `Range: bytes=<offset>-`, accepts only a 206 whose Content-Range starts at
+ *  exactly that offset, and writes the body into the failed attempt's own
+ *  assembly buffer. Anything else (200 = the CDN ignored Range, a 206 with a
+ *  different start, no Content-Range) cannot be stitched: the body is
+ *  discarded, the caller is told so it can log, and the file is downloaded in
+ *  full from byte 0 — the same bytes the old fallback always fetched. */
+async function downloadUrlFetch(
+  url: string,
+  maxBytes = MAX_REMOTE_FILE_BYTES,
+  label = "Remote file",
+  onProgress?: (downloaded: number, total: number) => void,
+  signal?: AbortSignal,
+  slowGate?: SlowConnectionGate,
+  declaredKind: ResponseByteBudgetKind = "declared",
+  resume?: DownloadUrlResume,
+): Promise<RequestUrlResponse> {
+  const watchdog = createDownloadStallWatchdog(signal, label, slowGate);
+  try {
+    if (resume && resume.offset > 0) {
+      const resumed = await watchdog.guard(browserFetch(url, {
+        cache: "no-store",
+        signal: watchdog.signal,
+        headers: { Range: `bytes=${resume.offset}-` },
+      }));
+      // Only a 206 can be a tail. When the start is readable it must be our
+      // offset; when the CDN does not expose Content-Range to the renderer
+      // (documented in range-download.ts) the 206 status plus a body that
+      // fills exactly the remaining bytes is the available evidence — the
+      // same contract the on-disk resume path uses. Everything else is
+      // discarded and re-downloaded from byte 0.
+      const visibleRange = resumed.headers.get("Content-Range");
+      const start = contentRangeStart(visibleRange);
+      if (resumed.status === 206 && (start === null || start === resume.offset)) {
+        resume.onRangeAccepted({ contentRange: visibleRange });
+        const arrayBuffer = await readResponseBuffer(
+          resumed,
+          maxBytes,
+          label,
+          watchdog,
+          onProgress,
+          declaredKind,
+          { assembly: resume.assembly, offset: resume.offset },
+        );
+        return { arrayBuffer, status: resumed.status, headers: {} } as RequestUrlResponse;
+      }
+      await discardResponseBody(resumed);
+      resume.onRangeRejected({
+        status: resumed.status,
+        contentRange: visibleRange,
+      });
+    }
+    const res = await watchdog.guard(browserFetch(url, { cache: "no-store", signal: watchdog.signal }));
+    const buf = await readResponseBuffer(
+      res,
+      maxBytes,
+      label,
+      watchdog,
+      onProgress,
+      declaredKind,
+    );
+    return { arrayBuffer: buf, status: res.status, headers: {} } as RequestUrlResponse;
+  } finally {
+    watchdog.dispose();
+  }
+}
+
+async function downloadUrlFetchToBinaryFile(
+  url: string,
+  adapter: DataAdapter,
+  path: string,
+  expectedSha256?: string,
+  maxBytes = MAX_REMOTE_FILE_BYTES,
+  label = `Remote file "${path}"`,
+  onProgress?: (downloaded: number, total: number) => void,
+  signal?: AbortSignal,
+  slowGate?: SlowConnectionGate,
+  resumeState?: DownloadResumeState,
+  declaredKind: ResponseByteBudgetKind = "declared",
+): Promise<DownloadToPathResult> {
+  const watchdog = createDownloadStallWatchdog(signal, label, slowGate);
+  try {
+    const resumeOffset = resumeState?.offset ?? 0;
+    const res = await watchdog.guard(browserFetch(url, {
+      cache: "no-store",
+      signal: watchdog.signal,
+      ...(resumeOffset > 0
+        ? { headers: { Range: `bytes=${resumeOffset}-` } }
+        : {}),
+    }));
+    return await streamResponseToBinaryFile(
+      res,
+      adapter,
+      path,
+      expectedSha256,
+      maxBytes,
+      label,
+      watchdog,
+      onProgress,
+      resumeState,
+      declaredKind,
+    );
+  } finally {
+    watchdog.dispose();
+  }
+}

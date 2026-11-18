@@ -486,11 +486,29 @@ export class ExternalCodeView extends ItemView {
     } else {
       this.hybridEngine = null;
       const docUri = encodeFileUri(this.abs);
+      // 代码编辑器设置（virtual-tree 设置节「代码编辑器」，思源同款对齐）：
+      // 字号/自动换行/行号。跨模块防御式读取（virtualTreeOf 同款）。
+      let codeFontSize = 13;
+      let codeWordWrap = false;
+      let codeLineNumbers = true;
+      try {
+        const hostPlugin = (this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } }).plugins?.plugins?.['obsidian-my-obsidian'];
+        const vt = (hostPlugin as { moduleInstance?: (id: string) => { settings?: Record<string, unknown> } } | undefined)?.moduleInstance?.('virtual-tree');
+        const vtSettings = vt?.settings;
+        if (vtSettings) {
+          if (typeof vtSettings.codeFontSize === 'number' && vtSettings.codeFontSize > 0) codeFontSize = vtSettings.codeFontSize;
+          codeWordWrap = vtSettings.codeWordWrap === true;
+          codeLineNumbers = vtSettings.codeLineNumbers !== false;
+        }
+      } catch { /* 防御：读不到走默认 */ }
       this.editor = createEditor(host, {
         value: content,
         language,
+        fontSize: codeFontSize,
+        wordWrap: codeWordWrap,
         // 行号经渲染函数:被笔记 [[file#L42]] 引用的行号着色(见 renderGutterNumber)
         lineNumbersFn: (n: number) => this.renderGutterNumber(n),
+        lineNumbers: codeLineNumbers,
         // model 绑真实文件 uri:LSP(补全/悬停/诊断/语义 token)按路径定位文档
         uri: docUri,
         onSave: () => void this.flush(true),

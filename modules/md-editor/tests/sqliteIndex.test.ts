@@ -103,7 +103,9 @@ describe('rebuild — markdown -> rows', () => {
       "SELECT bkey, block_id, depth, parent_key, text, marker, page FROM blocks WHERE text LIKE 'kickoff%'",
     );
     expect(res.error).toBe('');
-    expect(res.rows[0]).toEqual([ID_A, ID_A, 0, '', 'kickoff #work [[Person]]', null, 'project']);
+    // bkey 把 id 并入 key(2026-11-19):跨文件重复 id:: 曾撞主键(内核日志
+    // 2863 次 UNIQUE 冲突);导航标识是 block_id 列(第二列),bkey 只是库内主键。
+    expect(res.rows[0]).toEqual([`~${ID_A}@pages/Project.md#1`, ID_A, 0, '', 'kickoff #work [[Person]]', null, 'project']);
     await idx.close();
   });
 

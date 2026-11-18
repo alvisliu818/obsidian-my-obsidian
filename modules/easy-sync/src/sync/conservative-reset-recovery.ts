@@ -1,0 +1,527 @@
+import { normalizeRemotePathKey } from "./canonical-plan-v2";
+import { assertFileMutationReceiptShapeV1 } from "./file-state-reducer-v2";
+import { isFolderMutationIntent } from "./folder-state-reducer-v2";
+import type { SyncAnchorV2 } from "./state-envelope-v2";
+import type {
+  MutationLedgerEntryV1,
+  SyncScope,
+} from "./types";
+import { sameSyncScope } from "./types";
+
+/** Every file path whose identity or checkpoint belongs to one ledger entry. */
+export function conservativeResetRecordPaths(
+  record: Readonly<MutationLedgerEntryV1>,
+): string[] {
+  const checkpoint = record.receipt?.checkpoint;
+  return [...new Map([
+    record.intent.sourcePath,
+    record.intent.path,
+    ...(checkpoint?.baseUpserts.map((entry) => entry.path) ?? []),
+    ...(checkpoint?.baseRemovals ?? []),
+    ...(checkpoint?.remoteUpserts.map((entry) => entry.path) ?? []),
+    ...(checkpoint?.remoteDeletes ?? []),
+    ...(checkpoint?.pendingConflictRemovals ?? []),
+    ...(checkpoint?.pendingDeleteRemovals ?? []),
+  ].filter((path): path is string => Boolean(path)).map((path) => [
+    normalizeRemotePathKey(path),
+    path,
+  ])).values()];
+}
+
+/** Stable remote identities already owned by an intent or its receipt. */
+export function conservativeResetRecordRemoteIds(
+  record: Readonly<MutationLedgerEntryV1>,
+): Set<string> {
+  return new Set([
+    ...(record.intent.expectedRemote.exists
+      ? [record.intent.expectedRemote.driveId]
+      : []),
+    ...(record.receipt?.checkpoint.remoteUpserts.map((entry) => entry.driveId)
+      ?? []),
+  ]);
+}
+
+/**
+ * A file receipt may affect only the intent source/target. Folder checkpoint
+ * effects or unrelated paths need their original full authority and cannot be
+ * reduced to an ordinary-file reset capsule.
+ */
+function conservativeResetReceiptIsBounded(
+  record: Readonly<MutationLedgerEntryV1>,
+): boolean {
+  const checkpoint = record.receipt?.checkpoint;
+  if (!checkpoint) return true;
+  const allowed = new Set([
+    record.intent.path,
+    record.intent.sourcePath,
+  ].filter((path): path is string => Boolean(path)).map(normalizeRemotePathKey));
+  const pendingPathsAreBounded = (
+    paths: readonly string[],
+  ): boolean => paths.length <= 1
+    && paths.every((path) => path === record.intent.path);
+  return conservativeResetRecordPaths(record).every((path) =>
+    allowed.has(normalizeRemotePathKey(path)))
+    && (checkpoint.folderUpserts?.length ?? 0) === 0
+    && (checkpoint.folderDeletes?.length ?? 0) === 0
+    && (checkpoint.folderMoveHintRemovals?.length ?? 0) === 0
+    && pendingPathsAreBounded(checkpoint.pendingConflictRemovals)
+    && pendingPathsAreBounded(checkpoint.pendingDeleteRemovals);
+}
+
+function isVaultRelativeFilePath(path: string): boolean {
+  return Boolean(path)
+    && !path.startsWith("/")
+    && !path.endsWith("/")
+    && !path.includes("\\")
+    && path.split("/").every((segment) =>
+      Boolean(segment) && segment !== "." && segment !== "..");
+}
+
+/**
+ * True only when a rename's two paths differ solely by file-name spelling
+ * (case / NFC) inside the same byte-identical parent. Two execution chains
+ * produce it: `detectRenames` following a local file-name case change
+ * (`renameRemote`), and the identity planner following a cloud-side case-only
+ * rename (`moveLocal`, 2026-11-05). Neither is a vacuous self-move or a
+ * relocated file.
+ */
+function isFileNameSpellingAlias(path: string, sourcePath: string): boolean {
+  if (path === sourcePath) return false;
+  const parent = (value: string): string => {
+    const slash = value.lastIndexOf("/");
+    return slash === -1 ? "" : value.slice(0, slash);
+  };
+  return parent(path) === parent(sourcePath)
+    && normalizeRemotePathKey(path) === normalizeRemotePathKey(sourcePath);
+}
+
+function conservativeResetReceiptMatchesIntent(
+  record: Readonly<MutationLedgerEntryV1>,
+): boolean {
+  const { intent, receipt } = record;
+  if (!receipt || isFolderMutationIntent(intent) || intent.version !== 1) {
+    return receipt === null;
+  }
+  const checkpoint = receipt.checkpoint;
+  const base = checkpoint.baseUpserts[0];
+  const remote = checkpoint.remoteUpserts[0];
+  const baseMatches = (
+    expected: Readonly<{ hash: string; size: number }>,
+  ): boolean => Boolean(base
+    && base.hash === expected.hash
+    && base.size === expected.size);
+  const remoteMatches = (
+    expected: Readonly<{ hash: string; size: number }>,
+  ): boolean => Boolean(remote
+    && remote.size === expected.size
+    && (
+      remote.sha256Hash === undefined
+      || remote.sha256Hash.toLowerCase() === expected.hash.toLowerCase()
+    ));
+
+  switch (intent.action) {
+    case "upload":
+      return intent.expectedLocal.exists
+        && baseMatches(intent.expectedLocal)
+        && remoteMatches(intent.expectedLocal)
+        && base?.eTag === remote?.eTag
+        && (!intent.expectedRemote.exists
+          || remote?.driveId === intent.expectedRemote.driveId);
+    case "download":
+      return intent.expectedRemote.exists
+        && Boolean(base)
+        && base.size === intent.expectedRemote.size
+        && base.eTag === intent.expectedRemote.eTag
+        && (
+          intent.expectedRemote.sha256Hash === undefined
+          || base.hash.toLowerCase()
+            === intent.expectedRemote.sha256Hash.toLowerCase()
+        );
+    case "deleteRemote":
+    case "deleteLocal":
+      return true;
+    case "renameRemote":
+    case "moveLocal":
+      return conservativeResetRenameOrMoveReceiptMatchesIntent({
+        intent,
+        base,
+        remote,
+        baseMatches,
+        remoteMatches,
+        hintRemovals: checkpoint.fileMoveHintRemovals ?? [],
+        contentAlignedFromRemote: checkpoint.contentAlignedFromRemote === true,
+      });
+    case "merge":
+      return Boolean(intent.target)
+        && intent.expectedRemote.exists
+        && remote?.driveId === intent.expectedRemote.driveId
+        && remoteMatches(intent.target!)
+        && (!base || (
+          baseMatches(intent.target!)
+          && base.eTag === remote?.eTag
+        ));
+  }
+}
+
+/**
+ * Decide whether one rename/move receipt is an admissible settlement of its
+ * intent: both sides must exist, the checkpoint must bind the moved identity
+ * with a matching eTag, and the content must match one of the three
+ * admissible receipt shapes documented below. The caller's predicates are
+ * threaded by reference and no binding is reassigned, so the decision is
+ * returned directly.
+ */
+function conservativeResetRenameOrMoveReceiptMatchesIntent(args: {
+  intent: Extract<Readonly<MutationLedgerEntryV1>["intent"], { version: 1 }>;
+  base: NonNullable<
+    Readonly<MutationLedgerEntryV1>["receipt"]
+  >["checkpoint"]["baseUpserts"][number];
+  remote: NonNullable<
+    Readonly<MutationLedgerEntryV1>["receipt"]
+  >["checkpoint"]["remoteUpserts"][number];
+  baseMatches: (expected: Readonly<{ hash: string; size: number }>) => boolean;
+  remoteMatches: (expected: Readonly<{ hash: string; size: number }>) => boolean;
+  hintRemovals: readonly string[];
+  contentAlignedFromRemote: boolean;
+}): boolean {
+  const {
+    intent,
+    base,
+    remote,
+    baseMatches,
+    remoteMatches,
+    hintRemovals,
+    contentAlignedFromRemote,
+  } = args;
+  if (!intent.expectedLocal.exists || !intent.expectedRemote.exists) return false;
+  if (
+    !base
+    || !remote
+    || base.eTag !== remote.eTag
+    || remote.driveId !== intent.expectedRemote.driveId
+  ) return false;
+  // The host-rename hint shape rewires which bytes the base describes: the
+  // hint proves the remote identity moved while the local bytes were edited,
+  // so the receipt's base is the PRE-move common content (the anchor) and the
+  // intent's expectedLocal is the edited local file. That divergence is the
+  // whole point of the hint; the ordinary next-round decision uploads the
+  // edit. Admit it only when the hint names this exact identity and the
+  // preserved remote bytes still match the base size (and the planned remote
+  // hash when Graph supplied one). Every other field stays exactly as the
+  // pure-move shapes require.
+  const hintProvenMove = hintRemovals.includes(intent.expectedRemote.driveId)
+    && base.size === remote.size
+    && base.size === intent.expectedRemote.size
+    && (
+      intent.expectedRemote.sha256Hash === undefined
+      || base.hash.toLowerCase()
+        === intent.expectedRemote.sha256Hash.toLowerCase()
+    );
+  // Same-round composite (move + edited upload in one receipt): the base is
+  // the edited local bytes (size may differ from the pre-move remote), the
+  // upload read-back produced the remote entry, and the hint marker names the
+  // moved identity. This shape is only admissible with the hint marker.
+  const hintProvenComposite = hintRemovals.includes(intent.expectedRemote.driveId)
+    && base.hash.toLowerCase() === intent.expectedLocal.hash.toLowerCase()
+    && base.size === intent.expectedLocal.size
+    && base.size === remote.size
+    && (
+      remote.sha256Hash === undefined
+      || remote.sha256Hash.toLowerCase() === base.hash.toLowerCase()
+    );
+  // A1 alignment proof from the execution chain: the local target was
+  // rewritten with the exact remote bytes after a followed move (cTag
+  // evidence path, Graph returned no SHA-256). The marker is the execution
+  // chain's own read-back proof; the base is the aligned bytes and the
+  // remote entry is the post-move object.
+  const remoteAlignedShape = contentAlignedFromRemote
+    && base.size === remote.size
+    && (
+      remote.sha256Hash === undefined
+      || remote.sha256Hash.toLowerCase() === base.hash.toLowerCase()
+    );
+  // Three admissible receipt shapes:
+  //  1. content-aligned (A1 one-shot converge): the receipt base already
+  //     equals the intended remote bytes when the remote was moved and
+  //     edited while the local side stayed unchanged;
+  //  2. pure rename: both sides still hold the intended local bytes and
+  //     the intent itself declares matching content on both sides.
+  //  3. sha-unknown plain move (field report 2026-09-22, F9 case 3):
+  //     OneDrive personal often provides no sha256Hash, and the execution
+  //     chain legitimately records a followed move whose content diverged
+  //     (facts precheck + rename read-back proved the move; the ordinary
+  //     same-path decision converges the bytes next round). Without this
+  //     shape the receipt is unwritable and the record blocks recovery
+  //     forever as intent-only. It is restricted to intents that carry no
+  //     remote hash, so hash-known moves still require alignment (shape
+  //     1), and it binds both worlds exactly as planned instead of
+  //     proving content identity.
+  const aligned = (
+    expected: Readonly<{ size: number; sha256Hash?: string }>,
+  ): boolean => Boolean(base
+    && expected.sha256Hash !== undefined
+    && base.hash.toLowerCase() === expected.sha256Hash.toLowerCase()
+    && base.size === expected.size
+    && remote.size === expected.size
+    && remote.sha256Hash !== undefined
+    && remote.sha256Hash.toLowerCase() === expected.sha256Hash.toLowerCase());
+  if (intent.expectedRemote.sha256Hash === undefined) {
+    if (intent.action === "renameRemote") {
+      // F17 (field 2026-09-28): a REMOTE rename/move changes the
+      // object's eTag, so the receipt records the post-move world
+      // instead of the planned pre-move one — the moveLocal shape below
+      // (eTag bound to the untouched remote world) is unreachable by
+      // construction for this action. Anchors: the moved object's
+      // identity (driveId, checked above) and size (a move preserves
+      // size). The content hash is whatever the read-back reported
+      // (usually absent on OneDrive personal) and is never claimed from
+      // the local side; bytes divergence converges through the ordinary
+      // same-path decision next round.
+      return (
+        remote.size === intent.expectedRemote.size
+        && (baseMatches(intent.expectedLocal) || hintProvenMove)
+      ) || hintProvenComposite;
+    }
+    return (
+      remote.sha256Hash === undefined
+      && remote.eTag === intent.expectedRemote.eTag
+      && remote.size === intent.expectedRemote.size
+      && baseMatches(intent.expectedLocal)
+    ) || remoteAlignedShape;
+  }
+  return aligned(intent.expectedRemote) || (
+    baseMatches(intent.expectedLocal)
+    && remoteMatches(intent.expectedLocal)
+    && intent.expectedLocal.size === intent.expectedRemote.size
+    && (
+      intent.expectedRemote.sha256Hash === undefined
+      || intent.expectedLocal.hash.toLowerCase()
+        === intent.expectedRemote.sha256Hash.toLowerCase()
+    )
+  ) || hintProvenMove || hintProvenComposite || remoteAlignedShape;
+}
+
+/**
+ * Pure ordinary-file recovery gate. This is intentionally broad enough to
+ * retain the existing path-only planner isolation for an unreceipted create
+ * upload; conservative reset adds its stronger authority/capsule proof later.
+ */
+export function isOrdinaryFileRecoveryRecord(
+  record: Readonly<MutationLedgerEntryV1>,
+  scope: Readonly<SyncScope>,
+): boolean {
+  const intent = record.intent;
+  if (
+    isFolderMutationIntent(intent)
+    || intent.version !== 1
+    || intent.stateEffect !== undefined
+    || record.manualResolution !== undefined
+    || !sameSyncScope(intent.scope, scope)
+    || !conservativeResetReceiptIsBounded(record)
+    || !conservativeResetReceiptMatchesIntent(record)
+    || conservativeResetRecordPaths(record).some((path) =>
+      !isVaultRelativeFilePath(path))
+  ) return false;
+  try {
+    assertFileMutationReceiptShapeV1(record);
+  } catch {
+    return false;
+  }
+  const sourceBound = intent.action === "renameRemote"
+    || intent.action === "moveLocal";
+  // A file-name case change is a real rename (the cloud name changes) whose
+  // two paths normalize-equal. The execution receipt and recovery settlement
+  // must stay admissible so this shape keeps the ordinary record contract
+  // instead of becoming an unreceiptable record (field report 2026-10-22).
+  // Two chains produce it: `renameRemote` (detectRenames follows a local case
+  // change, same byte-identical parent) and, since 2026-11-05, `moveLocal`
+  // (the identity planner follows a CLOUD-side case-only rename by renaming
+  // the local file). Exact self-moves and parent-spelling changes stay
+  // rejected either way.
+  const fileNameSpellingAlias = (
+    intent.action === "renameRemote"
+    || intent.action === "moveLocal"
+  )
+    && intent.sourcePath !== undefined
+    && isFileNameSpellingAlias(intent.path, intent.sourcePath);
+  if (
+    sourceBound !== Boolean(intent.sourcePath)
+    || (
+      intent.sourcePath !== undefined
+      && !fileNameSpellingAlias
+      && normalizeRemotePathKey(intent.sourcePath)
+        === normalizeRemotePathKey(intent.path)
+    )
+  ) return false;
+
+  switch (intent.action) {
+    case "upload":
+      return intent.expectedLocal.exists && intent.target === undefined;
+    case "download":
+      return intent.expectedRemote.exists && intent.target === undefined;
+    case "deleteRemote":
+      return !intent.expectedLocal.exists
+        && intent.expectedRemote.exists
+        && intent.target === undefined;
+    case "deleteLocal":
+      return intent.expectedLocal.exists
+        && !intent.expectedRemote.exists
+        && intent.target === undefined;
+    case "renameRemote":
+    case "moveLocal":
+      // 内容相等性由收据层判定（纯移动或同轮对齐两种形态）；无收据时放行到
+      // 恢复分类器（路径已跟随但内容待对齐的已卡记录也必须能进入结算）。
+      return intent.expectedLocal.exists
+        && intent.expectedRemote.exists
+        && intent.target === undefined;
+    case "merge":
+      return intent.sourcePath === undefined
+        && intent.expectedLocal.exists
+        && intent.expectedRemote.exists
+        && Boolean(intent.target);
+  }
+}
+
+/**
+ * Durable reset admission before envelope-specific anchor closure. A create
+ * upload with no receipt owns neither a Graph identity nor an old anchor, so
+ * clearing the surrounding authority would make a moved unknown result
+ * impossible to bound. It remains eligible for ordinary path-only planning,
+ * but not for conservative reset.
+ */
+export function isConservativeResetOrdinaryRecord(
+  record: Readonly<MutationLedgerEntryV1>,
+  scope: Readonly<SyncScope>,
+): boolean {
+  return isOrdinaryFileRecoveryRecord(record, scope)
+    && !(
+      record.receipt === null
+      && (
+        (record.intent.action === "upload"
+          && !record.intent.expectedRemote.exists)
+        // Unreceipted moves may have followed the path already while the
+        // content alignment is still pending; reset must not absorb them
+        // before the recovery chain settles them (same fail-closed reason
+        // as the response-unknown create upload).
+        || record.intent.action === "moveLocal"
+        || record.intent.action === "renameRemote"
+      )
+    );
+}
+
+export interface ConservativeResetRecordFootprint {
+  pathKeys: ReadonlySet<string>;
+  remoteIds: ReadonlySet<string>;
+}
+
+export function buildConservativeResetRecordFootprints(
+  records: readonly Readonly<MutationLedgerEntryV1>[],
+  currentPathByRemoteId: ReadonlyMap<string, string> = new Map(),
+  anchors: readonly Readonly<SyncAnchorV2>[] = [],
+): ConservativeResetRecordFootprint[] {
+  const anchorsByPath = new Map<string, Readonly<SyncAnchorV2>[]>();
+  const anchorsByRemoteId = new Map<string, Readonly<SyncAnchorV2>[]>();
+  const append = <K>(
+    map: Map<K, Readonly<SyncAnchorV2>[]>,
+    key: K,
+    anchor: Readonly<SyncAnchorV2>,
+  ): void => {
+    map.set(key, [...(map.get(key) ?? []), anchor]);
+  };
+  for (const anchor of anchors) {
+    append(anchorsByPath, normalizeRemotePathKey(anchor.lastPath), anchor);
+    if (anchor.remoteId) append(anchorsByRemoteId, anchor.remoteId, anchor);
+  }
+  return records.map((record) => {
+    const pathKeys = new Set(conservativeResetRecordPaths(record).map(
+      normalizeRemotePathKey,
+    ));
+    const remoteIds = conservativeResetRecordRemoteIds(record);
+    const pendingPaths = [...pathKeys];
+    const pendingRemoteIds = [...remoteIds];
+    const processedPaths = new Set<string>();
+    const processedRemoteIds = new Set<string>();
+    const addPath = (path: string): void => {
+      const key = normalizeRemotePathKey(path);
+      if (pathKeys.has(key)) return;
+      pathKeys.add(key);
+      pendingPaths.push(key);
+    };
+    const addRemoteId = (remoteId: string): void => {
+      if (remoteIds.has(remoteId)) return;
+      remoteIds.add(remoteId);
+      pendingRemoteIds.push(remoteId);
+    };
+    const addAnchor = (anchor: Readonly<SyncAnchorV2>): void => {
+      addPath(anchor.lastPath);
+      if (anchor.remoteId) addRemoteId(anchor.remoteId);
+    };
+    while (pendingPaths.length > 0 || pendingRemoteIds.length > 0) {
+      const pathKey = pendingPaths.shift();
+      if (pathKey !== undefined && !processedPaths.has(pathKey)) {
+        processedPaths.add(pathKey);
+        for (const anchor of anchorsByPath.get(pathKey) ?? []) addAnchor(anchor);
+      }
+      const remoteId = pendingRemoteIds.shift();
+      if (remoteId !== undefined && !processedRemoteIds.has(remoteId)) {
+        processedRemoteIds.add(remoteId);
+        const currentPath = currentPathByRemoteId.get(remoteId);
+        if (currentPath) addPath(currentPath);
+        for (const anchor of anchorsByRemoteId.get(remoteId) ?? []) addAnchor(anchor);
+      }
+    }
+    return { pathKeys, remoteIds };
+  });
+}
+
+export function conservativeResetFootprintsOverlap(
+  leftFootprint: Readonly<ConservativeResetRecordFootprint>,
+  rightFootprint: Readonly<ConservativeResetRecordFootprint>,
+): boolean {
+  if ([...rightFootprint.pathKeys].some((path) =>
+    leftFootprint.pathKeys.has(path))) return true;
+  return [...rightFootprint.remoteIds].some((remoteId) =>
+    leftFootprint.remoteIds.has(remoteId));
+}
+
+export function areIndependentConservativeResetRecords(
+  records: readonly Readonly<MutationLedgerEntryV1>[],
+  currentPathByRemoteId: ReadonlyMap<string, string> = new Map(),
+  anchors: readonly Readonly<SyncAnchorV2>[] = [],
+): boolean {
+  const operationIds = new Set<string>();
+  for (const record of records) {
+    if (operationIds.has(record.intent.operationId)) return false;
+    operationIds.add(record.intent.operationId);
+  }
+  const footprints = buildConservativeResetRecordFootprints(
+    records,
+    currentPathByRemoteId,
+    anchors,
+  );
+  const ownedPaths = footprints.flatMap((footprint, owner) =>
+    [...footprint.pathKeys].map((pathKey) => ({ pathKey, owner })),
+  ).sort((left, right) =>
+    left.pathKey.length - right.pathKey.length
+      || left.pathKey.localeCompare(right.pathKey));
+  const pathOwners = new Map<string, number>();
+  for (const { pathKey, owner } of ownedPaths) {
+    if (pathOwners.has(pathKey)) return false;
+    let separator = pathKey.lastIndexOf("/");
+    while (separator >= 0) {
+      const ancestor = pathKey.slice(0, separator);
+      const ancestorOwner = pathOwners.get(ancestor);
+      if (ancestorOwner !== undefined && ancestorOwner !== owner) return false;
+      separator = ancestor.lastIndexOf("/");
+    }
+    pathOwners.set(pathKey, owner);
+  }
+  const remoteIdOwners = new Set<string>();
+  for (const footprint of footprints) {
+    for (const remoteId of footprint.remoteIds) {
+      if (remoteIdOwners.has(remoteId)) return false;
+      remoteIdOwners.add(remoteId);
+    }
+  }
+  return true;
+}

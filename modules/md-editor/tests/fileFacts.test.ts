@@ -24,7 +24,8 @@ describe('extractFile — block identity and shape', () => {
   it('uses the real id:: as the key and keeps a synthetic one otherwise', () => {
     const id = '11111111-1111-4111-8111-111111111111';
     const f = extractFile('a.md', `- parent\nid:: ${id}\n\t- child\n`);
-    expect(f.blocks[0].bkey).toBe(id);
+    // id 并入 key(2026-11-19):跨文件重复 id:: 曾撞 blocks.bkey 主键
+    expect(f.blocks[0].bkey).toBe(`${SYNTHETIC_PREFIX}${id}@a.md#0`);
     expect(f.blocks[0].id).toBe(id);
     expect(f.blocks[1].id).toBe('');
     expect(f.blocks[1].bkey).toBe(`${SYNTHETIC_PREFIX}a.md#1`);
@@ -35,7 +36,17 @@ describe('extractFile — block identity and shape', () => {
 
   it('synthetic keys can never collide with a uuid', () => {
     expect(bkeyOf('a.md', 0, '')).toBe('~a.md#0');
-    expect(bkeyOf('a.md', 0, 'abc')).toBe('abc');
+    // id 并入 key(2026-11-19):跨文件重复 id:: 曾撞 blocks.bkey 主键——
+    // SQLite 模式整文件批次失败且每轮 sync 永久重试(内核日志 2863 次)。
+    expect(bkeyOf('a.md', 0, 'abc')).toBe('~abc@a.md#0');
+  });
+
+  it('duplicate ids across files produce DISTINCT bkeys (SQLite 主键安全)', () => {
+    const a = bkeyOf('folder/a.md', 0, 'same-id');
+    const b = bkeyOf('folder/b.md', 0, 'same-id');
+    expect(a).not.toBe(b);
+    // 同文件 ord 区分(防御性覆盖)
+    expect(bkeyOf('a.md', 0, 'x')).not.toBe(bkeyOf('a.md', 1, 'x'));
   });
 
   it('normalizes the owning page name', () => {

@@ -18,6 +18,7 @@
 import { defineWorkspace } from 'vitest/config';
 
 export default defineWorkspace([
+  'modules/easy-sync/vitest.config.ts',
   'modules/code-editor/vitest.config.ts',
   'modules/code-link/vitest.config.ts',
   'modules/index-core/vitest.config.ts',
@@ -30,4 +31,5 @@ export default defineWorkspace([
   'modules/save-control/vitest.config.ts',
   'modules/unified-search/vitest.config.ts',
   'modules/virtual-tree/vitest.config.ts',
+  'modules/life/vitest.config.ts',
 ]);

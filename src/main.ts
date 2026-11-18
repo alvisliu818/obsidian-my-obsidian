@@ -32,6 +32,7 @@ import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE } from "../modules/md-editor/
 import BrowserPlugin from "../modules/browser/src/main";
 import JupyterNotebookPlugin from "../modules/jupyter/src/main";
 import BreadcrumbNavPlugin from "../modules/breadcrumb/src/main";
+import LifePlugin from "../modules/life/src/main";
 import DocAssistPlugin from "../modules/doc-assist/src/main";
 import MaterialIconThemePlugin from "../modules/material-icon-theme/src/main";
 import TraceTimePlugin from "../modules/tracetime/src/main";
@@ -177,6 +178,19 @@ const BetterMarkdownLinksPlugin = (
 		default: new (app: unknown, manifest: unknown) => SubPluginLike;
 	}
 ).default;
+// easy-sync v1.7.1（jiaoyingxing，MIT）：双向 OneDrive 同步（冲突保护/移动端/
+// 设置与插件同步），本仓收编体量第二（172 文件 / 13.9 万行，sync-executor 单文件
+// 3.4 万行）——require 桥：上游自有 tsconfig（strict + ES2020）与自身测试/文档
+// 工具链，不进宿主 tsc 程序；类型由模块自带 tsconfig 独立校验，运行时照常打进
+// bundle。全部相对导入，无需 alias/resolver；上游 24h 更新检查经
+// __EASY_SYNC_UPDATE_CHECK_DISABLED__ 构建期禁用。内部存储/IndexedDB 命名空间
+// 随宿主 manifest.id（.obsidian/plugins/<宿主 id>/ 下），云端布局按仓库名不受
+// 影响。黑/白名单/正则路径过滤为本仓功能增强，见 modules/easy-sync/NOTICE.md。
+const EasySyncPlugin = (
+	require("../modules/easy-sync/src/main") as {
+		default: new (app: unknown, manifest: unknown) => SubPluginLike;
+	}
+).default;
 import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
 import { registerFreeExtensions } from "./extensionRegistry";
 // 原生 markdown 编辑器（实时预览/源码模式）+ 阅读模式的代码块「▶ 运行」。
@@ -266,6 +280,15 @@ export default class MyObsidianPlugin extends Plugin {
 			summary: "笔记顶部的面包屑（文件 › 标题 / 块层级），支持悬浮查看同级与逐级下钻。",
 			desktopOnly: false,
 			cls: BreadcrumbNavPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// 自研(2026-11-19)：生活面板——倒计时/正计时/时钟/任务/习惯/代办/大日历/倒数日/计划/计时/记账。
+			// 全部落模块数据片；计时运行态墙钟法跨重启,模块内 1s 哨兵到点提醒。
+			id: "life",
+			name: "Life",
+			summary: "生活面板：时钟、计时（倒计时/正计时/番茄钟）、倒数日、代办、任务、习惯打卡、大日历、计划、记账。",
+			desktopOnly: false,
+			cls: LifePlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
 			id: "doc-assist",
@@ -735,6 +758,21 @@ export default class MyObsidianPlugin extends Plugin {
 				"库内终端：在编辑器/悬浮窗里开 PowerShell、CMD 或自定义 shell 会话（xterm.js），支持默认/选择/集成/外部四种配置，右键文件夹与终端互跳，Windows 走 ConPTY/Windows-PTY。上游 polyipseity（AGPL-3.0）。",
 			desktopOnly: false,
 			cls: TerminalPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// easy-sync v1.7.1（jiaoyingxing，MIT）：双向 OneDrive 同步插件，
+			// require 桥收编（见 modules/easy-sync/NOTICE 与上方 require 处注释）。
+			// version 保持上游值（模块的代际判定读 manifest.version）；
+			// migrateFrom 指向独立版 easy-sync——老用户 data.json 自动迁入模块片。
+			// 同步排除在本仓扩展了黑名单/白名单/正则模式（NOTICE 功能增强节）。
+			id: "my-easy-sync",
+			name: "EasySync",
+			manifest: { version: "1.7.1" },
+			migrateFrom: "easy-sync",
+			summary:
+				"双向 OneDrive 同步：冲突保护、移动端支持、可选的设置/插件同步；同步计划先预览再执行，中断可恢复。同步排除支持文件夹与黑名单/白名单/正则模式。上游 jiaoyingxing（MIT）。",
+			desktopOnly: false,
+			cls: EasySyncPlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 

@@ -10,6 +10,8 @@ export interface SettingsHost {
   save(): void;
   /** 代理相关设置变更后重放到会话。 */
   applyProxy(): void;
+  /** DNR/Edge UA 网络钩子重放（设置变更/扩展装卸后）。 */
+  applyNetFilters(): void;
   extHost: ExtensionHost;
   extensions(): ExtensionRecord[];
   refreshExtensionIcons(): void;
@@ -318,6 +320,65 @@ export class BrowserSettingTab extends PluginSettingTab {
         }),
       );
 
+    new Setting(containerEl).setName("网页标注").setHeading();
+
+    new Setting(containerEl)
+      .setName("标注保存目录")
+      .setDesc("每个网页一个 Markdown 笔记，按域名分文件夹")
+      .addText((t) =>
+        t.setValue(s.annotationsFolder).onChange((v) => {
+          s.annotationsFolder = v.trim();
+          this.host.save();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("选区气泡显示取消按钮")
+      .setDesc("取消高亮/取消小字只影响显示，标注数据保留")
+      .addToggle((t) =>
+        t.setValue(s.showAnnRemove !== false).onChange((v) => {
+          s.showAnnRemove = v;
+          this.host.save();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("悬停/点击高亮弹出悬浮窗")
+      .addToggle((t) =>
+        t.setValue(s.showAnnFloat !== false).onChange((v) => {
+          s.showAnnFloat = v;
+          this.host.save();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("显示标注小字")
+      .setDesc("高亮旁显示批注摘要，可随时切换")
+      .addToggle((t) =>
+        t.setValue(s.showAnnInline).onChange((v) => {
+          s.showAnnInline = v;
+          this.host.save();
+        }),
+      );
+
+    new Setting(containerEl).setName("摘录预处理（思源同款）").setHeading();
+    const expToggles: [keyof BrowserSettings & string, string][] = [
+      ["clipExpBold", "粗体转为 <b> 标签"],
+      ["clipExpItalic", "斜体转为 <i> 标签"],
+      ["clipExpUnderline", "下划线转为 <u> 标签"],
+      ["clipExpRemoveImgLink", "移除图片外层链接"],
+      ["clipExpSpanBr", "span 换行转 <br>"],
+      ["clipExpSvgToImg", "内嵌 SVG 转图片"],
+    ];
+    for (const [key, label] of expToggles) {
+      new Setting(containerEl).setName(label).addToggle((t) =>
+        t.setValue(s[key] === true).onChange((v) => {
+          (s as unknown as Record<string, unknown>)[key] = v;
+          this.host.save();
+        }),
+      );
+    }
+
     this.renderExtensions();
   }
 
@@ -358,7 +419,7 @@ export class BrowserSettingTab extends PluginSettingTab {
     for (const rec of this.host.extensions()) {
       new Setting(list)
         .setName(`${rec.name} ${rec.version}`)
-        .setDesc(rec.description || rec.dir)
+        .setDesc((rec.description || rec.dir) + (rec.nativeId ? "（已原生装载）" : ""))
         .addToggle((t) =>
           t.setValue(rec.enabled).onChange((v) => {
             this.host.extHost.setEnabled(rec.id, v);
@@ -375,6 +436,32 @@ export class BrowserSettingTab extends PluginSettingTab {
             }),
         );
     }
+
+    const ntab = this.host.extHost.newtabExtensions();
+    if (ntab.length) {
+      new Setting(containerEl)
+        .setName("新标签页扩展")
+        .setDesc("用扩展自带的新标签页作为新建标签页/主页")
+        .addDropdown((d) => {
+          const opts: Record<string, string> = { "": "关闭（使用主页）" };
+          for (const x of ntab) opts[x.id] = x.name;
+          d.addOptions(opts).setValue(s.newTabExtId || "").onChange((v) => {
+            s.newTabExtId = v;
+            this.host.save();
+          });
+        });
+    }
+
+    new Setting(containerEl)
+      .setName("DNR 网络层广告过滤")
+      .setDesc("解析已装 AdGuard 扩展的 declarativeNetRequest 规则集做真网络拦截（元素隐藏过滤之外）")
+      .addToggle((t) =>
+        t.setValue(s.dnrEnabled).onChange((v) => {
+          s.dnrEnabled = v;
+          this.host.save();
+          this.host.applyNetFilters();
+        }),
+      );
   }
 
   private renderUserscripts(containerEl: HTMLElement): void {

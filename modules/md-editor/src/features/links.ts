@@ -7,6 +7,7 @@
 
 import { MarkdownRenderer, TFile, Notice, setIcon } from 'obsidian';
 import type { Completion, CompletionContext, CompletionResult, CompletionSource } from '@codemirror/autocomplete';
+import { wordCompletionSource } from './wordComplete';
 import type { BlockRenderHost } from '../blocks/renderHost';
 import { blockId, blockSummary } from '../types';
 import { parseDocument } from '../core/parser';
@@ -34,9 +35,11 @@ export function autocompleteSources(host: BlockRenderHost, embed = false): Compl
   // (commandMenu.ts); offering the CM6 slash source there would open TWO
   // menus on `/`. The in-place embed editor has no self-drawn menu, so it
   // gets the slash source (with block-model commands filtered out).
+  // VC 式词补全源(wordComplete.ts):随打随补,`:` 触发 emoji,词前缀触发
+  // 本页/词库/词典候选——embed 与主编辑器都提供。
   return embed
-    ? [wikiLinkSource(host), tagSource(host), blockRefSource(host), slashMenuSource(host, embed)]
-    : [wikiLinkSource(host), tagSource(host), blockRefSource(host)];
+    ? [wikiLinkSource(host), tagSource(host), blockRefSource(host), slashMenuSource(host, embed), wordCompletionSource(host)]
+    : [wikiLinkSource(host), tagSource(host), blockRefSource(host), wordCompletionSource(host)];
 }
 
 export function wikiLinkSource(host: BlockRenderHost): CompletionSource {

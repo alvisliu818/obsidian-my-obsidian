@@ -142,6 +142,9 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 		renderTab?(): unknown;
 	} | null = null;
 
+	/** 待执行的延迟 detach 定时器（hide 挂、openModulePage 取消——防单例 rootEl 复用竞态）。 */
+	private modulePageDetachTimer: number | null = null;
+
 	private openModulePage(moduleId: string, moduleName: string): void {
 		const tab = this.host.capturedTabs.get(moduleId) as
 			| {
@@ -159,22 +162,44 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 		const api = this.app.setting as unknown as {
 			openPage?(page: unknown): void;
 			closePage?(): void;
-			pageStack?: Array<{ page: unknown }>;
+			pageStack?: Array<unknown>;
 		};
 		if (typeof api.openPage !== "function") {
 			new Notice("当前 Obsidian 版本不支持设置二级页（需要 1.15+）");
 			return;
 		}
 		// 复用单例 page：openPage 拒绝重复 push 同一对象，换模块时先出栈。
-		if (this.modulePage && api.pageStack?.some((e) => e.page === this.modulePage)) {
-			api.closePage?.();
+		// 栈条目形状不假设（{page} 包装或裸 page 都认——形状猜错会让 closePage
+		// 永远不被调、openPage 拒绝重复 push，模块页打不开（用户实报「有时
+		// 打不开」的候选根因）。
+		if (this.modulePage) {
+			this.cancelModulePageDetach();
+			const inStack = (api.pageStack ?? []).some(
+				(e) => e === this.modulePage || (e as { page?: unknown })?.page === this.modulePage,
+			);
+			if (inStack) api.closePage?.();
 		}
 		if (!this.modulePage) {
 			this.modulePage = this.buildModulePage();
 		}
 		this.modulePageTab = tab;
 		this.modulePage.title = `${moduleName} 设置`;
-		api.openPage(this.modulePage);
+		try {
+			api.openPage(this.modulePage);
+		} catch {
+			// 重复 push 被核心拒绝（栈状态与我们的判断不一致）时：先出栈再试一次
+			api.closePage?.();
+			api.openPage(this.modulePage);
+		}
+		// 挂载确认：openPage 返回后 rootEl 应已入 DOM。没入（核心吞了 push）=
+		// 用户看到的「打不开」——出栈重试一次。
+		if (!this.modulePage.rootEl.isConnected) {
+			api.closePage?.();
+			api.openPage(this.modulePage);
+			if (!this.modulePage.rootEl.isConnected) {
+				new Notice(`「${moduleName}」设置页打开失败，请重试`);
+			}
+		}
 	}
 
 	private buildModulePage(): {
@@ -231,7 +256,17 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 				// closePage 路径：框架滑出动画（150ms）后自会 detach；
 				// clearPageStack 路径无人摘 DOM——延迟兜底。对已 detach 的
 				// rootEl 再 detach 无害。
-				window.setTimeout(() => {
+				//
+				// 但这个 detach 必须可取消（用户实报「模块设置页有时打不开」的
+				// 根因之一）：单例 rootEl 复用——关页后 250ms 内又点开别的模块
+				// 页，openPage 把同一个 rootEl 重新挂上，此时若延迟 detach 照跑，
+				// 刚挂好的页又被摘掉（表现=点了齿轮没反应）。openModulePage 进
+				// 场时会 cancelModulePageDetach()。
+				self.modulePageDetachTimer = window.setTimeout(() => {
+					self.modulePageDetachTimer = null;
+					// 双保险：若 rootEl 已被重新挂载成活动页（isConnected 且仍是
+					// 当前单例），放弃摘除
+					if (rootEl.isConnected && self.modulePage?.rootEl === rootEl) return;
 					try {
 						rootEl.detach();
 					} catch {
@@ -240,6 +275,14 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 				}, 250);
 			},
 		};
+	}
+
+	/** 取消待执行的延迟 detach（快速连续换模块页时防竞态）。 */
+	private cancelModulePageDetach(): void {
+		if (this.modulePageDetachTimer !== null) {
+			window.clearTimeout(this.modulePageDetachTimer);
+			this.modulePageDetachTimer = null;
+		}
 	}
 
 	/**

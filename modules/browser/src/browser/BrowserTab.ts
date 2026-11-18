@@ -57,13 +57,14 @@ export class BrowserTab {
         onForward: () => this.goForward(),
         onReload: (force) => this.reload(force),
         onStop: () => this.controller.stop(),
-        onHome: () => void this.loadUrl(this.ctx.getSettings().homePage || "about:blank"),
+        onHome: () => void this.loadUrl(this.ctx.startUrl?.() || this.ctx.getSettings().homePage || "about:blank"),
         onNavigate: (url) => void this.loadUrl(url),
         onToggleBookmark: () => this.toggleBookmark(),
         onFind: (text, forward, next) => this.controller.findInPage(text, forward, next),
         onFindClose: () => this.controller.stopFind(),
         onOpenExternal: () => this.ctx.openInSystemBrowser(this.url),
         onMenu: (e) => this.showMenu(e),
+        onAnnotate: (e) => this.showAnnotationMenu(e),
         onExtensionClick: (id, anchor) => this.ctx.onExtensionClick(id, anchor),
       },
     );
@@ -130,12 +131,90 @@ export class BrowserTab {
           openInNewTab: (url) => this.ctx.requestNewTab(url),
           saveAs: (url, name) => void this.ctx.saveUrlToVault(url, name),
           excerpt: (mode) => void this.ctx.excerpt(this, mode),
+          annotate: (selectionText) => void this.annotateSelection(selectionText),
           copyImage: (src) => void this.copyImage(src),
           openSource: (url) => this.ctx.requestNewTab(url),
           inspect: () => this.controller.openDevTools(),
         });
       },
+      onAnnCreate: (payload: { quote?: string; prefix?: string; suffix?: string; color?: string }, webview: IWebviewTag) => void this.ctx.annotation?.create(webview, this.url, this.title, payload),
+      onAnnOpen: (payload: { id?: string; x?: number; y?: number; hover?: boolean }, webview: IWebviewTag) => void this.ctx.annotation?.openFloat(webview, this.url, payload),
+      onAnnMeta: (payload: { id?: string; color?: string; tags?: string[] }) => void this.ctx.annotation?.applyMeta(payload),
+      onAnnHoverEnd: (payload: { id?: string }) => this.ctx.annotation?.notifyMarkLeave(String(payload?.id ?? "")),
+      onAnnRemove: (payload: { kind?: string; id?: string; quote?: string; prefix?: string; suffix?: string }) =>
+        void this.ctx.annotation?.setDisplayOff(this.webview, this.url, payload),
+      onAnnRect: (payload: { id?: string; rect?: { x: number; y: number; w: number; h: number }; vrect?: { x: number; y: number; w: number; h: number } }) =>
+        void this.ctx.annotation?.onRectCaptured(this.webview, this.url, this.title, payload),
+      onAnnReanchor: (payload: { id?: string; quote?: string; prefix?: string; suffix?: string }) =>
+        void this.ctx.annotation?.reanchorText(this.webview, this.url, payload),
+      onEdgeInstall: (id: string) => this.ctx.onEdgeInstall?.(id),
     };
+  }
+
+  /** 地址栏 ✎ 菜单：标注入口族（选中文字 / 整页 / 标注笔记 / 列表 / 小字开关）。 */
+  private showAnnotationMenu(e: MouseEvent): void {
+    const menu = new Menu();
+    menu.addItem((i) =>
+      i
+        .setTitle("标注选中文字")
+        .setIcon("pen-tool")
+        .onClick(() => void this.annotateSelection("")),
+    );
+    menu.addItem((i) =>
+      i
+        .setTitle("框选标注（截图区域）")
+        .setIcon("crop")
+        .onClick(() => this.ctx.annotation?.beginCapture(this.webview, this.url)),
+    );
+    menu.addItem((i) =>
+      i.setTitle("标注此页（无选区）").setIcon("file-text").onClick(() => {
+        if (!this.ctx.annotation) return;
+        void this.ctx.annotation.create(this.webview, this.url, this.title, {});
+      }),
+    );
+    menu.addSeparator();
+    menu.addItem((i) =>
+      i.setTitle("打开标注文档").setIcon("book-open").onClick(() => void this.ctx.annotation?.openDoc(this.url)),
+    );
+    menu.addItem((i) =>
+      i
+        .setTitle("本页标注列表（浮动窗）")
+        .setIcon("list")
+        .onClick(() => void this.ctx.annotation?.openListFloat(this.webview, this.url)),
+    );
+    menu.addItem((i) => {
+      const show = this.ctx.getSettings().showAnnInline !== false;
+      i.setTitle(show ? "隐藏标注小字" : "显示标注小字")
+        .setIcon(show ? "eye-off" : "eye")
+        .onClick(() => {
+          const next = !show;
+          const s = this.ctx.getSettings();
+          s.showAnnInline = next;
+          this.ctx.saveSettings?.();
+          this.ctx.annotation?.applyInlineVisibility(next);
+        });
+    });
+    menu.showAtMouseEvent(e);
+  }
+
+  /** 页面右键「标注」/菜单「标注选中文字」：从页面读选区与前缀后缀（气泡同款），空回落原始选区 */
+  private async annotateSelection(selectionText: string): Promise<void> {
+    if (!this.ctx.annotation) return;
+    const payload = await this.execJs<{ quote: string; prefix: string; suffix: string }>(
+      "(function(){var s=window.getSelection();if(!s||s.isCollapsed)return {quote:'',prefix:'',suffix:''};" +
+        "var n=function(v){return String(v||'').replace(/\\s+/g,' ').trim()};" +
+        "var r=s.getRangeAt(0);var pre='',suf='';" +
+        "try{if(r.startContainer.nodeType===3)pre=n(r.startContainer.nodeValue.slice(0,r.startOffset)).slice(-30);" +
+        "if(r.endContainer.nodeType===3)suf=n(r.endContainer.nodeValue.slice(r.endOffset)).slice(0,30);}catch(e){}" +
+        "return {quote:n(s.toString()),prefix:pre,suffix:suf}})()",
+    );
+    const quote = payload?.quote || selectionText || "";
+    if (!quote.trim()) return;
+    void this.ctx.annotation.create(this.webview, this.url, this.title, {
+      quote,
+      prefix: payload?.prefix ?? "",
+      suffix: payload?.suffix ?? "",
+    });
   }
 
   private async injectAdFilter(webview: IWebviewTag, url: string): Promise<void> {

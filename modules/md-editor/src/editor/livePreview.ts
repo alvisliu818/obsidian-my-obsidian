@@ -25,8 +25,10 @@ import {
   type PluginValue,
   type ViewUpdate,
 } from '@codemirror/view';
+import { tableAt, cellSourcePos } from './tableKeymap';
 import { syntaxTree } from '@codemirror/language';
 import { finishRenderMath, renderMath } from 'obsidian';
+import { collectEmojiTokens, emojiReplace } from '../features/emojiShortcodes';
 import {
   EditorSelection,
   EditorState,
@@ -103,14 +105,21 @@ class TableWidget extends WidgetType {
     rows[0].forEach((cell, i) => {
       const th = trh.createEl('th');
       th.textContent = cell;
+      // 表格可视化编辑:单元格几何 → cellSourcePos 源码映射(mousedown 用)
+      th.setAttribute('data-cell-row', '0');
+      th.setAttribute('data-cell-col', String(i));
       if (aligns[i]) th.style.textAlign = aligns[i];
     });
     const tbody = table.createEl('tbody');
     for (let r = 2; r < rows.length; r++) {
       const tr = tbody.createEl('tr');
+      // 渲染行号 = 逻辑行:0=表头,1=分隔行(不渲染),r-1=正文行
+      const cellRow = r - 1;
       rows[r].forEach((cell, i) => {
         const td = tr.createEl('td');
         td.textContent = cell;
+        td.setAttribute('data-cell-row', String(cellRow));
+        td.setAttribute('data-cell-col', String(i));
         if (aligns[i]) td.style.textAlign = aligns[i];
       });
     }
@@ -254,6 +263,16 @@ export function collectLivePreview(state: EditorState): LiveSpec[] {
         specs.push({ from: visFrom, to: to - 2, kind: 'wikilink:mark', deco: wikilinkMark });
       }
     }
+  }
+
+  // --- emoji shortcodes (GitHub 风格 `:star2:` → 🌟) ---
+  // 排他规则:行内 code 的 claim 绝对排斥(代码里 `:x:` 是字面);非 code
+  // claim(加粗/wikilink)允许完全包含——`**:star2:**` 里照样出 emoji,
+  // 与 GitHub 一致。部分重叠(emoji 撞上 wikilink alias 藏匿区)交给
+  // buildFor 的重叠丢弃兜底。光标落在 token 上(含起点)回原样可编辑。
+  for (const t of collectEmojiTokens(doc, covered)) {
+    if (inBlock(t.from, t.to)) continue;
+    specs.push({ from: t.from, to: t.to, kind: 'emoji', deco: emojiReplace(t.emoji) });
   }
 
   // --- per-line constructs (fence-aware: nothing decorates inside fences) ---
@@ -470,13 +489,38 @@ export const livePreviewExtension: Extension = [
         const target = ev.target as HTMLElement | null;
         if (!target || !target.closest('.lgp-table')) return false;
         ev.preventDefault();
+        // 单元格精确命中:点击点向上找 td/th,取其在表内的 row/col
+        let row = -1;
+        let col = -1;
+        const cellEl = target.closest('td, th') as HTMLElement | null;
+        if (cellEl) {
+          row = Number(cellEl.getAttribute('data-cell-row') ?? '-1');
+          col = Number(cellEl.getAttribute('data-cell-col') ?? '-1');
+          if (row < 0 || col < 0) {
+            const tr = cellEl.closest('tr');
+            const table = cellEl.closest('table');
+            if (tr && table) {
+              row = Array.from(table.querySelectorAll('tr')).indexOf(tr);
+              col = Array.from(tr.querySelectorAll('td, th')).indexOf(cellEl);
+            }
+          }
+        }
+        // 文档坐标 → 所在表格块 → cellSourcePos(单元格内容起点)
         let pos: number;
         try {
-          pos = view.posAtDOM(target);
+          pos = view.posAtDOM(cellEl ?? target);
         } catch {
           pos = view.posAtCoords({ x: ev.clientX, y: ev.clientY }) ?? 0;
         }
         pos = Math.min(Math.max(0, pos), view.state.doc.length);
+        const tb = tableAt(view.state, pos);
+        if (tb && row >= 0 && col >= 0) {
+          const anchor = cellSourcePos(view.state, tb, row, col);
+          if (anchor >= 0) {
+            view.dispatch({ selection: EditorSelection.cursor(anchor), scrollIntoView: true });
+            return true;
+          }
+        }
         view.dispatch({ selection: EditorSelection.cursor(pos) });
         return true;
       },

@@ -10,6 +10,8 @@
  */
 
 import { PRESET_OPEN_WITH } from './features/openWith';
+import { recentOpenFrom } from './panels/recentOpen';
+import { favoritesFrom, type FavoriteEntry } from './features/favorites';
 import { validRemotePath, remoteShortName } from './features/remotePath';
 
 /** Editor for out-of-vault markdown: Obsidian's native editor or the block editor. */
@@ -350,6 +352,43 @@ export const DEFAULT_BAIDU_PAN_SETTINGS: BaiduPanSettings = {
   syncDir: DEFAULT_BD_SYNC_DIR,
 };
 
+/** OneDrive（onedrive://）接入配置：Graph 设备码流凭据。 */
+export interface OneDriveSettings {
+  /** 用户自己的 Azure 应用 client id（插件无法替用户注册应用）。 */
+  clientId: string;
+  /** 登录端点租户段：common | consumers | organizations（默认 common）。 */
+  authority: string;
+  accessToken: string;
+  refreshToken: string;
+  /** access token 过期时间(ms)；过期前 60s 自动刷新。 */
+  tokenExpiresAt: number;
+  /** 登录账号（授权成功后回填，仅展示用）。 */
+  account?: string;
+}
+
+export const DEFAULT_ONEDRIVE_SETTINGS: OneDriveSettings = {
+  clientId: '',
+  authority: 'common',
+  accessToken: '',
+  refreshToken: '',
+  tokenExpiresAt: 0,
+  account: '',
+};
+
+/** data.json 里手改过的 OneDrive 配置只保留形状合法的字段。 */
+function oneDriveFrom(raw: unknown): OneDriveSettings {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  const s = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+  return {
+    clientId: s(o.clientId),
+    authority: s(o.authority) || DEFAULT_ONEDRIVE_SETTINGS.authority,
+    accessToken: s(o.accessToken),
+    refreshToken: s(o.refreshToken),
+    tokenExpiresAt: Number(o.tokenExpiresAt) || 0,
+    account: s(o.account),
+  };
+}
+
 /** data.json 里手改过的百度网盘配置只保留形状合法的条目；mode 缺省时按凭据
  *  推断(有 accessToken → official),完全没有凭据保持默认 official(推荐接入)。 */
 function baiduPanFrom(raw: unknown): BaiduPanSettings {
@@ -377,6 +416,25 @@ function baiduPanFrom(raw: unknown): BaiduPanSettings {
 }
 
 /** virtual-tree 模块自己的设置片(data.json 的 modules['virtual-tree'].data)。 */
+/** 标签定义（树行徽标 + 面板筛选；思源 tag-store 对齐）。 */
+export interface TagDef {
+  id: string;
+  name: string;
+  color?: string;
+  icon?: string;
+}
+
+/** 标签变更事件（面板重渲染）。 */
+export const TAGS_CHANGED_EVENT = 'vt-tags-changed';
+
+export interface ImapMailConfig {
+  provider: string;
+  user: string;
+  pass: string;
+  host?: string;
+  port?: number;
+}
+
 export interface VirtualTreeSettings {
   /**
    * Apply each mount's include/exclude regexes to the virtual document tree.
@@ -385,6 +443,14 @@ export interface VirtualTreeSettings {
    * "挂载不过滤". The regexes stay configured per mount and take effect again
    * the moment this is switched on, so nothing has to be re-entered.
    */
+  /** IMAP 邮箱挂载凭据（imapMailApi）。 */
+  imapMail?: ImapMailConfig;
+  /** 代码编辑器：字号（ExternalCodeView 的 Monaco fontSize，缺省 13）。 */
+  codeFontSize?: number;
+  /** 代码编辑器：自动换行。 */
+  codeWordWrap?: boolean;
+  /** 代码编辑器：显示行号（缺省 true）。 */
+  codeLineNumbers?: boolean;
   mountFilterEnabled: boolean;
   /**
    * 文件名点击重命名（2026-11-04 用户需求）：原生编辑器的 .view-header-title
@@ -505,6 +571,16 @@ export interface VirtualTreeSettings {
    * the user is working in; a tab keeps the window uncluttered. Tab is the
    * default because it is what a click on a file usually means.
    */
+  /** 最近打开（面板顶部区，openExternalEntry 成功后记录）。 */
+  recentOpen?: RecentOpenEntry[];
+  /** 标签定义。 */
+  tags?: TagDef[];
+  /** 路径（vault 相对或库外绝对）→ 标签 id 列表。 */
+  fileTags?: Record<string, string[]>;
+  /** 面板标签筛选激活的标签 id（空 = 不筛选）。 */
+  activeTagFilter?: string[];
+  /** 文件级收藏（面板顶部「收藏」区 + 树行右键「收藏」，思源 favorites 对齐）。 */
+  favorites?: FavoriteEntry[];
   externalSplitView: boolean;
   /**
    * 库外 markdown 文件的默认编辑器（挂载面板点击、搜索结果等一切走
@@ -577,6 +653,19 @@ export interface VirtualTreeSettings {
   gitGiteeToken: string;
   /** 百度网盘（bdpan://）接入配置，见 BaiduPanSettings。 */
   baiduPan: BaiduPanSettings;
+  /** OneDrive（onedrive://）接入配置，见 OneDriveSettings。 */
+  oneDrive: OneDriveSettings;
+  /** Outlook 邮箱（outlook://，只读）接入配置，同 OneDriveSettings 形状。 */
+  outlookMail: OneDriveSettings;
+  /**
+   * 库外挂载的删除方式（思源虚拟文档树同款，无"直接删除"选项——删除必须可恢复）：
+   * 'plugin' = 移入插件回收站（`<库根>/.vt-trash/`，镜像原路径 + index.json，
+   *   面板工具栏「回收站」里可恢复/彻底删除/清空）；
+   * 'system' = 移入操作系统回收站（electron shell.trashItem，既有行为）。
+   * vault 挂载始终走 fileManager.trashFile（Obsidian 自己的回收站）；
+   * remote 挂载删除仍提交到远端（历史可回溯），不受本设置影响。
+   */
+  deleteMode: 'plugin' | 'system';
 }
 
 export const DEFAULT_VIRTUAL_TREE_SETTINGS: VirtualTreeSettings = {
@@ -600,6 +689,11 @@ export const DEFAULT_VIRTUAL_TREE_SETTINGS: VirtualTreeSettings = {
   mountNewNotePath: '',
   externalMounts: [],
   externalSplitView: false,
+  codeFontSize: 13,
+  imapMail: { provider: 'qq', user: '', pass: '' },
+  codeWordWrap: false,
+  codeLineNumbers: true,
+  recentOpen: [],
   // 库外 md 默认 Obsidian 原生编辑器(用户 2026-10-25 决策);块编辑器保留在
   // 右键菜单,文件自己的 editor 属性可逐文件覆盖。
   externalMarkdownEditor: 'native',
@@ -617,6 +711,11 @@ export const DEFAULT_VIRTUAL_TREE_SETTINGS: VirtualTreeSettings = {
   gitGithubToken: '',
   gitGiteeToken: '',
   baiduPan: { ...DEFAULT_BAIDU_PAN_SETTINGS },
+  oneDrive: { ...DEFAULT_ONEDRIVE_SETTINGS },
+  outlookMail: { ...DEFAULT_ONEDRIVE_SETTINGS },
+  // 插件回收站默认开(思源同款语义:删除必须可恢复+统一管理器;系统回收站
+  // 不可枚举恢复)。既有用户想保留系统回收站行为可在设置里改回。
+  deleteMode: 'plugin',
 };
 
 /** Normalize one raw property value to an editor choice (unknown → null). */
@@ -737,6 +836,10 @@ export function virtualTreeSettingsFrom(raw: unknown): VirtualTreeSettings {
   if (typeof o.mountNewNotePath === 'string') s.mountNewNotePath = o.mountNewNotePath;
   s.externalMounts = mountsFrom(o.externalMounts);
   s.externalSplitView = o.externalSplitView === true;
+  s.codeFontSize = typeof o.codeFontSize === 'number' && o.codeFontSize > 0 ? o.codeFontSize : 13;
+  s.codeWordWrap = o.codeWordWrap === true;
+  s.codeLineNumbers = o.codeLineNumbers !== false;
+  s.recentOpen = recentOpenFrom(o.recentOpen);
   s.externalMarkdownEditor =
     editorChoiceValue(o.externalMarkdownEditor) ?? DEFAULT_VIRTUAL_TREE_SETTINGS.externalMarkdownEditor;
   s.vaultMarkdownEditor =
@@ -763,5 +866,65 @@ export function virtualTreeSettingsFrom(raw: unknown): VirtualTreeSettings {
   s.gitGithubToken = typeof o.gitGithubToken === 'string' ? o.gitGithubToken.trim() : '';
   s.gitGiteeToken = typeof o.gitGiteeToken === 'string' ? o.gitGiteeToken.trim() : '';
   s.baiduPan = baiduPanFrom(o.baiduPan);
+  s.oneDrive = oneDriveFrom(o.oneDrive);
+  s.outlookMail = oneDriveFrom(o.outlookMail);
+  // 删除方式:显式 'system' 才走系统回收站;缺席/其他值落插件回收站(默认)。
+  s.deleteMode = o.deleteMode === 'system' ? 'system' : 'plugin';
+  // 文件级收藏:非法记录丢弃,超限截断(favoritesFrom)。
+  s.favorites = favoritesFrom(o.favorites);
+  // 标签:定义 + 文件↔标签映射(思源 tag-store 对齐)。必须进归一化,否则
+  // loadSettings 丢字段、下次 saveSettings 把盘上的数据抹掉(实测复现)。
+  s.tags = tagsFrom(o.tags);
+  s.fileTags = fileTagsFrom(o.fileTags);
+  // IMAP 挂载凭据:字符串字段按类型收口,非法记录整段丢弃。
+  s.imapMail = imapMailFrom(o.imapMail);
   return s;
+}
+
+/** 标签定义清洗:非整组丢弃,单条缺 id/name 丢弃。 */
+function tagsFrom(v: unknown): TagDef[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: TagDef[] = [];
+  for (const it of v as Record<string, unknown>[]) {
+    if (!it || typeof it !== 'object') continue;
+    const id = typeof it.id === 'string' ? it.id : '';
+    const name = typeof it.name === 'string' ? it.name.trim() : '';
+    if (!id || !name) continue;
+    out.push({
+      id,
+      name,
+      color: typeof it.color === 'string' ? it.color : undefined,
+      icon: typeof it.icon === 'string' ? it.icon : undefined,
+    });
+  }
+  return out;
+}
+
+/** 文件↔标签映射清洗:键=路径,值=非空 id 数组。 */
+function fileTagsFrom(v: unknown): Record<string, string[]> | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const out: Record<string, string[]> = {};
+  for (const [path, ids] of Object.entries(v as Record<string, unknown>)) {
+    if (!path || !Array.isArray(ids)) continue;
+    const clean = ids.filter((id): id is string => typeof id === 'string' && id.length > 0);
+    if (clean.length) out[path] = clean;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** IMAP 凭据清洗:user+pass 齐全才算一段有效配置。 */
+function imapMailFrom(v: unknown): ImapMailConfig | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const o = v as Record<string, unknown>;
+  const user = typeof o.user === 'string' ? o.user.trim() : '';
+  const pass = typeof o.pass === 'string' ? o.pass : '';
+  if (!user || !pass) return undefined;
+  const cfg: ImapMailConfig = {
+    provider: typeof o.provider === 'string' && o.provider ? o.provider : 'qq',
+    user,
+    pass,
+  };
+  if (typeof o.host === 'string' && o.host.trim()) cfg.host = o.host.trim();
+  if (typeof o.port === 'number' && o.port > 0) cfg.port = o.port;
+  return cfg;
 }

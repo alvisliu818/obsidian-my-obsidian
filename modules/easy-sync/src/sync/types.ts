@@ -1,0 +1,1108 @@
+/**
+ * EasySync Sync Engine Types
+ *
+ * Core data types for local snapshots, remote snapshots, sync plans,
+ * and the three-way comparison engine.
+ */
+
+import type { PluginScopeSelection } from "./community-plugin-sync-policy";
+import type { PlanReason } from "./plan-reason";
+
+// ---- Neutral provider vocabulary (重构刀 5b, 2026-11-02) ----
+
+/**
+ * 刀 5b 中性词汇表：提供方耦合的元数据概念在模型层用以下别名声明。
+ * 全部是 `string` 的零运行时别名——持久化字段名、字节格式与行为一字不动，
+ * 改的只是声明处的类型名与注释语义。字段名保留历史名（driveId／eTag／cTag／
+ * sha256Hash／quickXorHash），JSDoc 用中性语义＋注明历史名。词汇表指针：
+ * src/sync/sync-provider.ts 文件头。
+ */
+/** 提供方条目身份（历史名 driveId／parentId／remoteId；OneDrive 下实存 driveItem id）。 */
+export type ExternalItemId = string;
+/** 版本令牌：If-Match 全链与三方比较的远端版本事实（历史名 eTag）。 */
+export type VersionToken = string;
+/** 内容版本令牌：rename/move 不变的次级令牌，与版本令牌互为兜底（历史名 cTag）。 */
+export type ContentVersionToken = string;
+/** 强内容指纹：逐字节等值证据（历史名 sha256Hash）。 */
+export type StrongContentFingerprint = string;
+/** 弱内容指纹：只证不同、不证相同（历史名 quickXorHash）。 */
+export type WeakContentFingerprint = string;
+
+// ---- File Metadata ----
+
+/** Local file snapshot entry */
+export interface LocalFileEntry {
+  /** Vault-relative path (forward slashes, no leading slash) */
+  path: string;
+  /** File size in bytes */
+  size: number;
+  /** Last modified time (epoch ms) */
+  mtime: number;
+  /** Full SHA-256 hash of file content (64 hex characters) */
+  hash: string;
+  /** 本机算出的弱内容指纹（历史名 quickXorHash），与远端同名字段同算法可比。 */
+  quickXorHash?: WeakContentFingerprint;
+  /** Whether the file is binary (true) or text (false) */
+  binary: boolean;
+}
+
+/** Local folder topology entry. The vault root itself is never included. */
+export interface LocalFolderEntry {
+  /** Vault-relative path (forward slashes, no leading or trailing slash) */
+  path: string;
+}
+
+/** Remote file snapshot entry */
+export interface RemoteFileEntry {
+  /** Vault-relative path (forward slashes, no leading slash) */
+  path: string;
+  /** 提供方条目身份；历史名 driveId，OneDrive 下实存 driveItem id。 */
+  driveId: ExternalItemId;
+  /** 父条目身份；历史名 parentId，仅 legacy／本机变更条目缺省。 */
+  parentId?: ExternalItemId;
+  /** Pre-signed download URL (from @microsoft.graph.downloadUrl) */
+  downloadUrl?: string;
+  /** File size in bytes */
+  size: number;
+  /** Last modified time from OneDrive (epoch ms) */
+  mtime: number;
+  /** 版本令牌（历史名 eTag），If-Match 与三方比较的远端版本事实。 */
+  eTag: VersionToken;
+  /** 内容版本令牌（历史名 cTag），rename/move 不变的次级令牌。 */
+  cTag: ContentVersionToken;
+  /** 强内容指纹（历史名 sha256Hash），可用时来自提供方元数据。 */
+  sha256Hash?: StrongContentFingerprint;
+  /**
+   * 弱内容指纹（历史名 quickXorHash）：不匹配证字节不同；匹配不等于
+   * SHA-256 级等值。
+   */
+  quickXorHash?: WeakContentFingerprint;
+}
+
+/** Persisted Graph folder identity used only to project incremental deltas. */
+export interface RemoteFolderEntry {
+  /** Vault-relative folder path below files/ (forward slashes). */
+  path: string;
+  /** 提供方条目身份；历史名 driveId，实存文件夹 driveItem id。 */
+  driveId: ExternalItemId;
+  /** 父条目身份；历史名 parentId。 */
+  parentId: ExternalItemId;
+  /** Current Graph-owned folder name. */
+  name: string;
+  /** 文件夹版本令牌（历史名 eTag），rename/move 与 create-parent 守卫用。 */
+  eTag?: VersionToken;
+  /** 内容版本令牌（历史名 cTag），提供方对文件夹暴露时才存在。 */
+  cTag?: ContentVersionToken;
+}
+
+/** Complete identity boundary for every reusable sync artifact. */
+export interface SyncScope {
+  accountId: string;
+  /**
+   * 集合根身份（OneDrive 下为 drive id）。与条目级历史名 driveId 名同实异：
+   * 这里是集合根，条目级 `driveId` 字段是条目身份（见 {@link ExternalItemId}）。
+   */
+  driveId: string;
+  vaultFolderId: string;
+  filesRootId: string;
+}
+
+export function isSyncScope(value: unknown): value is SyncScope {
+  if (!value || typeof value !== "object") return false;
+  const scope = value as Partial<SyncScope>;
+  return typeof scope.accountId === "string" && scope.accountId.length > 0
+    && typeof scope.driveId === "string" && scope.driveId.length > 0
+    && typeof scope.vaultFolderId === "string" && scope.vaultFolderId.length > 0
+    && typeof scope.filesRootId === "string" && scope.filesRootId.length > 0;
+}
+
+export interface RemoteSyncState {
+  version: 1;
+  /** Monotonically increasing counter — detects mid-sync resets or concurrent runs */
+  generation: number;
+  /** Null means legacy/incomplete identity and must never authorize cursor reuse. */
+  scope: SyncScope | null;
+  deltaLink: string | null;
+  entries: Record<string, RemoteFileEntry>;
+  /** Same-generation folder identity index; missing in legacy V1 files. */
+  folders: Record<string, RemoteFolderEntry>;
+  /** True only after a complete identity scan established the folder index. */
+  folderIndexComplete?: boolean;
+}
+
+/** Baseline entry — the state after last successful sync */
+export interface BaseFileEntry {
+  path: string;
+  /** Hash at last sync (for local comparison) */
+  hash: string;
+  /** Size at last sync */
+  size: number;
+  /** 上次同步时的版本令牌（历史名 eTag），供远端比较。 */
+  eTag: VersionToken;
+}
+
+// ---- Sync Plan Types ----
+
+export enum SyncActionType {
+  Upload = "upload",
+  Download = "download",
+  RecreateRemoteScope = "recreateRemoteScope",
+  CreateRemoteFolder = "createRemoteFolder",
+  CreateLocalFolder = "createLocalFolder",
+  MoveRemoteFolder = "moveRemoteFolder",
+  MoveLocalFolder = "moveLocalFolder",
+  DeleteRemoteFolder = "deleteRemoteFolder",
+  DeleteLocalFolder = "deleteLocalFolder",
+  MoveLocalFile = "moveLocalFile",
+  FolderDeferred = "folderDeferred",
+  DeleteRemote = "deleteRemote",
+  DeleteLocal = "deleteLocal",
+  ConfirmLocalDelete = "confirmLocalDelete",
+  RenameRemote = "renameRemote",
+  Conflict = "conflict",
+  SkipLargeFile = "skipLargeFile",
+  SkipIgnoredPath = "skipIgnoredPath",
+  /** A name OneDrive can never store (e.g. containing `?`); Graph always
+   *  rejects it with 400, so the path can never be uploaded. The planned item
+   *  is shown visibly with a rename hint instead of producing an upload
+   *  intent that would fail forever and re-block mutation recovery. */
+  SkipOneDriveInvalidName = "skipOneDriveInvalidName",
+  RetryLater = "retryLater",
+  AuthExpired = "authExpired",
+}
+
+interface SyncPlanFolder {
+  /** 文件夹条目身份（历史名 remoteId），已存在时稳定。 */
+  remoteId?: ExternalItemId;
+  /** 父条目身份（历史名 parentRemoteId），create-only 写入与读回校验用。 */
+  parentRemoteId?: ExternalItemId;
+  /** Vault-relative parent path; empty means the committed files root. */
+  parentPath: string;
+  /** 文件夹版本令牌（历史名 remoteETag），来自已提交的 V2 信封。 */
+  remoteETag?: VersionToken;
+  /** 父文件夹版本令牌（历史名 parentRemoteETag），来自已提交的 V2 信封。 */
+  parentRemoteETag?: VersionToken;
+  /** 来源父条目身份（历史名 sourceParentRemoteId），保身份 move/delete 用。 */
+  sourceParentRemoteId?: ExternalItemId;
+}
+
+/**
+ * 片② 单向模式：本机改动被云端版本接管之前，先留成笔记库内独立副本的类别。
+ * `edited` ＝有基线的本机改动（含两端都改）；`new-file-both-sides` ＝无基线但
+ * 两端同名。本机独有条目记录与侧栏条目（片④）都按这两个类别归属。
+ */
+export type LocalOnlyCopyKindV1 = "edited" | "new-file-both-sides";
+
+export interface SyncPlanItem {
+  type: SyncActionType;
+  /** Vault-relative file path */
+  path: string;
+  /** Local file metadata (for upload, conflict) */
+  local?: LocalFileEntry;
+  /** Remote file metadata (for download, conflict) */
+  remote?: RemoteFileEntry;
+  /** Present only for V2 folder actions. */
+  folder?: SyncPlanFolder;
+  /** Reason for skip or retry — 封闭词汇见 plan-reason.ts（刀 1：只加类型，字面值逐字不变） */
+  reason?: PlanReason;
+  /** 基线条目的版本令牌（历史名 baseEtag）——上传时作 If-Match，防止其他
+   *  设备并发改动后被静默覆盖。 */
+  baseEtag?: VersionToken;
+  /** For RenameRemote: the old path the file is being renamed from. */
+  renameFrom?: string;
+  /** 跨目录文件移动的目标父条目身份（历史名 targetParentRemoteId）。 */
+  targetParentRemoteId?: ExternalItemId;
+  /** Destructive local folder shell removal still awaits the existing delete approval. */
+  requiresConfirmation?: boolean;
+  /** Grouped identity action weight used by the existing bulk-change review gate. */
+  reviewImpactCount?: number;
+  /** Exact versions authorized by a user-facing pending decision. */
+  decisionToken?: SyncDecisionToken;
+  /**
+   * Durable proof that these exact local and remote versions were already
+   * compared byte-for-byte and are different. Missing means comparison has
+   * not completed, not that the versions are known to differ.
+   */
+  contentComparison?: ContentComparisonReceiptV1;
+  /**
+   * Discardable, non-authoritative observation that the exact ancestor/local/
+   * remote versions were already proven to require manual text resolution.
+   * It never authorizes a mutation and is ignored on any source mismatch.
+   */
+  textMergeEvidence?: TextMergeManualEvidenceV1;
+  /**
+   * 片② 单向模式：带着这个标记的 Download 在写入云端版本之前，必须先把当前
+   * 本机字节留成笔记库内独立副本（"本机改动"）；副本成功落盘才允许覆盖原路径。
+   * 只由计划生产链在方向＝单向时写入，双向计划里绝不出现。
+   */
+  localOnlyCopyKind?: LocalOnlyCopyKindV1;
+}
+
+export interface ContentComparisonReceiptV1 {
+  version: 1;
+  result: "different";
+  localHash: string;
+  localSize: number;
+  /** 远端条目身份（历史名 remoteDriveId）。 */
+  remoteDriveId: ExternalItemId;
+  /** 远端版本令牌（历史名 remoteETag）。 */
+  remoteETag: VersionToken;
+  remoteSize: number;
+  remoteHash: string;
+}
+
+export type TextMergeManualEvidenceReasonV1 =
+  | "invalid-utf8"
+  | "mixed-line-endings"
+  | "too-large"
+  | "overlap";
+
+export interface TextMergeManualEvidenceV1 {
+  version: 1;
+  algorithm: "conservative-line-merge-v1";
+  result: "manual";
+  reason: TextMergeManualEvidenceReasonV1;
+  scope: SyncScope;
+  ancestorHash: string;
+  ancestorSize: number;
+  /** 祖先版本令牌（历史名 ancestorETag）。 */
+  ancestorETag: VersionToken;
+  localHash: string;
+  localSize: number;
+  /** 远端条目身份（历史名 remoteDriveId）。 */
+  remoteDriveId: ExternalItemId;
+  /** 远端版本令牌（历史名 remoteETag）。 */
+  remoteETag: VersionToken;
+  remoteSize: number;
+  remoteHash: string;
+}
+
+export interface SyncDecisionToken {
+  version: 1;
+  vaultName: string;
+  accountId: string;
+  scope: SyncScope;
+  local: { exists: false } | { exists: true; hash: string; size: number };
+  /** 远端事实：条目身份（历史名 driveId）＋版本令牌（历史名 eTag）。 */
+  remote:
+    | { exists: false }
+    | { exists: true; driveId: ExternalItemId; eTag: VersionToken };
+  ancestorHash: string | null;
+}
+
+export interface SyncPlan {
+  items: SyncPlanItem[];
+  /** Total file count from last successful sync (for threshold check) */
+  lastTotalFiles: number;
+  /** Whether the plan has been confirmed by user (if threshold was exceeded) */
+  confirmed: boolean;
+  /** Filled by SyncExecutor after resolving the current Graph scope. */
+  scope?: SyncScope;
+  /** V2-only sealed identity for the exact ordered plan and source revision. */
+  canonicalIdentity?: CanonicalPlanIdentityV2;
+  /** V2-only review facts derived by the same owner that sealed the plan. */
+  canonicalReview?: CanonicalPlanReviewV2;
+  /** V2 activation review is a control-plane hold, never a V1 execution grant. */
+  reviewKind?: V2ActivationReviewKind;
+  /**
+   * Sealed identity of the plan before one-shot local-delete decisions were
+   * applied. Equal to `canonicalIdentity` when nothing converted; otherwise it
+   * is the reviewed D0 the decision records compose with.
+   */
+  preDecisionIdentity?: CanonicalPlanIdentityV2;
+  /** Whether the pre-decision plan would have paused for the bulk-change
+   *  review. Used to decide whether converted deletes need their own review. */
+  preDecisionRequiresThresholdConfirmation?: boolean;
+  /** Bulk-change review gate for the sealed (post-decision) plan. Mirrors the
+   *  finalized plan so the reviewed-plan check can compare D0 and D1. */
+  requiresThresholdConfirmation?: boolean;
+  /** Decision rows consumed into this plan, kept for post-checkpoint
+   *  consumption and for the reviewed-plan composition check. */
+  appliedLocalDeleteDecisions?: ReadonlyArray<{
+    kind: "file" | "folder";
+    token: string;
+    path: string;
+  }>;
+}
+
+export type V2ActivationReviewKind =
+  | "v2-migration"
+  | "v2-cloud-join"
+  | "v2-first-sync"
+  /** Remotely Save adoption: a fresh activation that seeds identical-content
+   *  baselines from an adopted foreign vault directory (plan-confirmed
+   *  transaction moved that content into files/ before this review). */
+  | "v2-rs-adoption";
+
+export interface CanonicalPlanIdentityV2 {
+  /**
+   * 封存身份版本（刀 5b 升 3，2026-11-02）：摘要事实形状中性化时一并升版，
+   * 旧版本身份经 {@link sameCanonicalPlanIdentityV2} 全门失效关闭（一次性
+   * 重审），不做旧读新写兼容层。
+   */
+  version: 3;
+  scope: SyncScope;
+  sourceCommitSeq: number;
+  digest: string;
+}
+
+export interface CanonicalPlanReviewV2 {
+  counts: PlanReviewCounts;
+  /** Weighted change count used by the bulk-change review policy. */
+  impactCount: number;
+}
+
+export interface PlanReviewAuthorization {
+  /**
+   * Device-local review-record CAS. This is not the V2 plan revision; the
+   * canonical identity carries the committed source revision and digest.
+   */
+  revision: number;
+  scope: SyncScope;
+  /** Absent for review bundles imported from the public V1 runtime. */
+  canonicalIdentity?: CanonicalPlanIdentityV2;
+  /** Present only when the review record belongs to the V2 activation hold. */
+  reviewKind?: V2ActivationReviewKind;
+}
+
+export type MutationAction =
+  | "upload"
+  | "download"
+  | "deleteRemote"
+  | "renameRemote"
+  | "moveLocal"
+  | "deleteLocal"
+  | "merge";
+export type FolderMutationActionV2 =
+  | "createLocalFolder"
+  | "createRemoteFolder"
+  | "moveLocalFolder"
+  | "moveRemoteFolder"
+  | "deleteLocalFolder"
+  | "deleteRemoteFolder";
+
+type MutationLocalExpectation =
+  | { exists: false }
+  | { exists: true; hash: string; size: number };
+
+export type MutationRemoteExpectation =
+  | { exists: false }
+  | {
+      exists: true;
+      /** 条目身份（历史名 driveId）。 */
+      driveId: ExternalItemId;
+      /** 版本令牌（历史名 eTag）。 */
+      eTag: VersionToken;
+      size: number;
+      /** 强内容指纹（历史名 sha256Hash）。 */
+      sha256Hash?: StrongContentFingerprint;
+    };
+
+/**
+ * Additive V1 recovery semantics which deliberately do not establish or alter
+ * the ordinary files-root base/remote state. `local-only` restores a target
+ * from a generation source; `settlement-only` closes one old out-of-scope
+ * operation; `bundle-settlement` applies one reviewed whole-plugin choice.
+ */
+export type MutationStateEffectV1 =
+  | "local-only"
+  | "settlement-only"
+  /**
+   * A reviewed plugin-bundle member adopts one side selected for the bundle.
+   * Its receipt reconciles the V2 base and remote index only after that member
+   * reaches the selected target.
+   * This effect is valid only inside CommunityPluginBundleSettlementV2.
+   */
+  | "bundle-settlement";
+
+/** Durable fact written before any local or remote file mutation. */
+export interface MutationIntentV1 {
+  version: 1;
+  operationId: string;
+  planRevision: number;
+  scope: SyncScope;
+  action: MutationAction;
+  path: string;
+  sourcePath?: string;
+  stateEffect?: MutationStateEffectV1;
+  expectedLocal: MutationLocalExpectation;
+  expectedRemote: MutationRemoteExpectation;
+  /** Exact result bytes persisted in merge-ready storage before a merge mutates either side. */
+  target?: { hash: string; size: number };
+  createdAt: number;
+}
+
+/**
+ * Durable proof that one non-empty cloud subtree was explicitly reviewed as a
+ * single deletion object. The root cTag seals every descendant change; the
+ * committed source facts let recovery retire exactly the reviewed identities
+ * after an unknown DELETE response without storing a second subtree state.
+ */
+interface ReviewedFolderSubtreeDeleteBindingV1 {
+  version: 1;
+  sourceCommitSeq: number;
+  sourceLifecycleEpoch: number;
+  /** Present only when the platform returned a descendant-sensitive tag
+   *  (OneDrive Personal never returns folder cTags). 历史名 rootCTag，
+   *  内容版本令牌语义。 */
+  rootCTag?: ContentVersionToken;
+  memberCount: number;
+}
+
+/**
+ * Durable proof that one reviewed two-sided folder move is rebasing the
+ * committed projection from the last common path. The actual mutation source
+ * remains `sourcePath`; this binding exists only so the receipt can translate
+ * the older committed anchors after that exact move succeeds.
+ */
+interface ReviewedFolderLocationMoveBindingV1 {
+  version: 1;
+  sourceCommitSeq: number;
+  sourceLifecycleEpoch: number;
+  sourceAnchorPath: string;
+}
+
+export interface FolderMutationIntentV2 {
+  version: 2;
+  operationId: string;
+  planRevision: number;
+  scope: SyncScope;
+  action: FolderMutationActionV2;
+  path: string;
+  sourcePath?: string;
+  /** Stable identity retained even when the current remote index has a tombstone.
+   *  历史名 folderId，条目身份语义。 */
+  folderId?: ExternalItemId;
+  expectedLocal: { exists: boolean };
+  expectedSourceLocal?: { exists: boolean };
+  expectedRemote:
+    | { exists: false }
+    | {
+        exists: true;
+        /** 条目身份（历史名 driveId）。 */
+        driveId: ExternalItemId;
+        /** 父条目身份（历史名 parentId）。 */
+        parentId: ExternalItemId;
+        /** 版本令牌（历史名 eTag）。 */
+        eTag?: VersionToken;
+      };
+  expectedParent: {
+    /** 父条目身份（历史名 driveId）。 */
+    driveId: ExternalItemId;
+    path: string;
+    /** 版本令牌（历史名 eTag）。 */
+    eTag?: VersionToken;
+  };
+  /** Present only for an explicit reviewed non-empty subtree deletion. */
+  reviewedSubtreeDelete?: ReviewedFolderSubtreeDeleteBindingV1;
+  /** Present only for an explicit reviewed two-sided folder move. */
+  reviewedLocationMove?: ReviewedFolderLocationMoveBindingV1;
+  createdAt: number;
+}
+
+export type MutationIntent = MutationIntentV1 | FolderMutationIntentV2;
+
+export interface MutationCheckpointV1 {
+  baseUpserts: BaseFileEntry[];
+  baseRemovals: string[];
+  remoteUpserts: RemoteFileEntry[];
+  remoteDeletes: string[];
+  pendingConflictRemovals: string[];
+  pendingDeleteRemovals: string[];
+  /** V2-only directory facts produced by create-local/create-remote. */
+  folderUpserts?: RemoteFolderEntry[];
+  /** V2-only directory identities retired after an empty-shell delete. */
+  folderDeletes?: Array<{ path: string; driveId: ExternalItemId }>;
+  /** Device-local rename hints consumed by a committed folder mutation. */
+  folderMoveHintRemovals?: string[];
+  /** Device-local file rename hints consumed by a committed file move. */
+  fileMoveHintRemovals?: string[];
+  /** A1 alignment proof: the local target was rewritten with the exact remote
+   *  bytes during a followed move (sha-unknown cTag path included). */
+  contentAlignedFromRemote?: boolean;
+}
+
+/** Durable mutation result; shared state may advance only after this exists. */
+export interface MutationReceiptV1 {
+  version: 1;
+  operationId: string;
+  completedAt: number;
+  checkpoint: MutationCheckpointV1;
+}
+
+export type ManualMutationResolutionChoiceV1 =
+  | "keep-local"
+  | "keep-remote"
+  // Folder recovery records only: the user confirms continuing from the
+  // current two-sided facts without executing or undoing the stuck action.
+  // Zero-write settlement; ordinary planning takes over conservatively.
+  | "as-observed";
+
+/** Exact V2 state evidence for recovering one receipted remote rename whose
+ * checkpoint is blocked by a distinct anchor already owning the target path. */
+export interface ReceiptedRenameAnchorCollisionEvidenceV1 {
+  kind: "receipted-rename-target-anchor-collision";
+  lifecycleEpoch: number;
+  sourceCommitSeq: number;
+  sourceAnchorId: string;
+  targetAnchorId: string;
+  /** Every stale Graph identity that must remain absent through publication. */
+  staleRemoteIds: string[];
+}
+
+/**
+ * A user-reviewed continuation of one otherwise blocked mutation record.
+ *
+ * The outer intent/receipt remain untouched so downgrade readers fail closed
+ * without losing the original blocking evidence. Newer builds execute and
+ * checkpoint only this nested, current-facts-bound continuation.
+ */
+export interface ManualMutationResolutionV1 {
+  version: 1;
+  choice: ManualMutationResolutionChoiceV1;
+  factsDigest: string;
+  selectedAt: number;
+  /** False only when strict equality permits a state-only reconciliation. */
+  externalMutation: boolean;
+  recoveryEvidence?: ReceiptedRenameAnchorCollisionEvidenceV1;
+  intent: MutationIntentV1;
+  receipt: MutationReceiptV1 | null;
+}
+
+interface CommunityPluginBundleSettlementMemberV2 {
+  intent: MutationIntentV1;
+  receipt: MutationReceiptV1 | null;
+}
+
+interface CommunityPluginBundleConflictDecisionV2 {
+  path: string;
+  decisionToken: SyncDecisionToken;
+}
+
+/**
+ * Durable whole-bundle continuation for one explicitly reviewed community
+ * plugin. Version 2 is intentionally not readable as the older single-file
+ * manual resolution: old builds reject the ledger and therefore fail closed.
+ */
+export interface CommunityPluginBundleSettlementV2 {
+  version: 2;
+  kind: "community-plugin-bundle-settlement";
+  choice: ManualMutationResolutionChoiceV1;
+  factsDigest: string;
+  selectedAt: number;
+  externalMutation: true;
+  /** Non-executable coordinator intent retained for the shared ledger shape. */
+  intent: MutationIntentV1;
+  receipt: null;
+  pluginId: string;
+  pluginRoot: string;
+  predecessorOperationIds: string[];
+  conflictDecisions: CommunityPluginBundleConflictDecisionV2[];
+  members: CommunityPluginBundleSettlementMemberV2[];
+}
+
+export interface FileConsolidationStepV2 {
+  intent: MutationIntentV1;
+  receipt: MutationReceiptV1 | null;
+}
+
+/**
+ * Ordered two-step settlement for a move record whose two copies diverged:
+ * step 1 creates the winning content on the losing side, step 2 retires the
+ * losing copy. Committing both steps reduces one synthetic upload-with-source
+ * checkpoint, so the shared V2 envelope only ever sees a converged move.
+ */
+export interface FileConsolidationSettlementV2 {
+  version: 2;
+  kind: "file-consolidation";
+  choice: "keep-local" | "keep-remote";
+  factsDigest: string;
+  selectedAt: number;
+  externalMutation: true;
+  steps: [FileConsolidationStepV2, FileConsolidationStepV2];
+}
+
+type ManualMutationResolution =
+  | ManualMutationResolutionV1
+  | FileConsolidationSettlementV2
+  | CommunityPluginBundleSettlementV2;
+
+export interface MutationLedgerEntryV1 {
+  intent: MutationIntent;
+  receipt: MutationReceiptV1 | null;
+  manualResolution?: ManualMutationResolution;
+}
+
+export interface ManualMutationResolutionAuditV1 {
+  version: 1;
+  sourceOperationId: string;
+  resolutionOperationId: string;
+  path: string;
+  choice: ManualMutationResolutionChoiceV1;
+  // Folder settlements ("as-observed") audit folder actions, which live
+  // outside the file-level MutationAction union.
+  action: MutationAction | FolderMutationActionV2;
+  externalMutation: boolean;
+  selectedAt: number;
+  completedAt: number;
+}
+
+export interface ManualMutationResolutionLocalFactV1 {
+  path: string;
+  exists: boolean;
+  hash?: string;
+  size?: number;
+  /** Display-only last-modified time; never part of `factsDigest`. */
+  mtime?: number;
+}
+
+export interface ManualMutationResolutionRemoteFactV1 {
+  path: string;
+  exists: boolean;
+  /** 条目身份（历史名 driveId）。 */
+  driveId?: ExternalItemId;
+  /** 版本令牌（历史名 eTag）。 */
+  eTag?: VersionToken;
+  hash?: string;
+  size?: number;
+  /** Display-only last-modified time; never part of `factsDigest`. */
+  mtime?: number;
+}
+
+interface ManualMutationResolutionOptionV1 {
+  available: boolean;
+  deletesOtherSide: boolean;
+}
+
+export type CommunityPluginBundleReviewBlockReasonV1 =
+  | "bundle-incomplete"
+  | "facts-unavailable"
+  | "manifest-invalid"
+  | "identity-mismatch"
+  | "platform-incompatible"
+  | "predecessor-mismatch";
+
+interface CommunityPluginBundleDirectionReviewV1 {
+  available: boolean;
+  reason?: CommunityPluginBundleReviewBlockReasonV1;
+}
+
+/** Per-file display facts for one reviewed community-plugin bundle. */
+export interface CommunityPluginBundleFilePresentationV1 {
+  path: string;
+  /** Local last-modified time (epoch ms) when readable. */
+  localMtime?: number;
+  /** Remote last-modified time (epoch ms) when readable. */
+  remoteMtime?: number;
+}
+
+/**
+ * Read-only presentation extras for the community-plugin bundle review.
+ *
+ * This object is intentionally NOT part of `factsDigest`: it exists only to
+ * carry display-side evidence (manifest versions, modified times) that the
+ * user can inspect before choosing. Keeping it out of the digest means adding
+ * or removing presentation fields can never invalidate an already-reviewed,
+ * persisted settlement across builds.
+ */
+export interface CommunityPluginBundlePresentationV1 {
+  version: 1;
+  /** Parsed manifest version of each side; null when unreadable/missing. */
+  localVersion: string | null;
+  remoteVersion: string | null;
+  files: CommunityPluginBundleFilePresentationV1[];
+}
+
+/**
+ * Ephemeral, read-only facts for reviewing one physical community-plugin
+ * bundle. This is not a persisted transaction and grants no mutation.
+ */
+export interface CommunityPluginBundleReviewV1 {
+  kind: "community-plugin-bundle";
+  pluginId: string;
+  displayName: string | null;
+  memberPaths: string[];
+  /** Ordinary conflicts currently represented by this whole-bundle review. */
+  conflictPaths: string[];
+  predecessorOperationIds: string[];
+  local: CommunityPluginBundleDirectionReviewV1;
+  remote: CommunityPluginBundleDirectionReviewV1;
+  /** True when at least one whole-bundle direction has an implemented path. */
+  executionReady: boolean;
+  /** Exact reviewed directions available to the current build. */
+  executableChoices?: ManualMutationResolutionChoiceV1[];
+}
+
+/** Read-only facts shown to the user and rechecked before a manual choice. */
+export interface ManualMutationResolutionSnapshotV1 {
+  version: 1;
+  sourceOperationId: string;
+  scope: SyncScope;
+  previousAction: MutationAction;
+  path: string;
+  sourcePath?: string;
+  local: ManualMutationResolutionLocalFactV1[];
+  remote: ManualMutationResolutionRemoteFactV1[];
+  recoveryEvidence?: ReceiptedRenameAnchorCollisionEvidenceV1;
+  factsDigest: string;
+  identical: boolean;
+  keepLocal: ManualMutationResolutionOptionV1;
+  keepRemote: ManualMutationResolutionOptionV1;
+  bundleReview?: CommunityPluginBundleReviewV1;
+  /**
+   * Display-only evidence for the bundle review surface. Never feeds
+   * `factsDigest`; see CommunityPluginBundlePresentationV1.
+   */
+  bundlePresentation?: CommunityPluginBundlePresentationV1;
+}
+
+/**
+ * Stable non-authoritative reason codes for exposing why an active V2
+ * mutation recovery stopped. These codes may be retained in sync history for
+ * diagnostics and presentation, but never authorize a file or Graph write.
+ */
+export type MutationRecoveryBlockReason =
+  | "facts-changed"
+  | "scope-changed"
+  | "account-changed"
+  | "evidence-corrupt"
+  | "state-unavailable"
+  | "automatic-budget-exhausted"
+  | "unknown";
+
+export interface MutationRecoveryRunSummary {
+  state: "settled" | "network-unavailable" | "blocked";
+  total: number;
+  settled: number;
+  remaining: number;
+  retryAfterSeconds: number | null;
+  blockReason?: MutationRecoveryBlockReason;
+  /** First non-retryable root record that can be reviewed by the user. */
+  blockedOperationId?: string;
+  /** The unresolved record is still protected, but ordinary work outside its
+   * exact object boundary may continue. This never means the record settled. */
+  isolated?: boolean;
+}
+
+/** Monotonic facts emitted by a sync executor run. Persisted history may omit
+ * this object only for records created before the contract existed. */
+export interface SyncRunFacts {
+  termination: "normal" | "cancelled";
+  ordinaryPlanning: "not-entered" | "entered";
+  userFileChanges: "none" | "performed" | "unknown";
+  /** True when this run paused with a durable plan held for review.
+   * Structured replacement for localised-message sniffing
+   * (review 2026-09-02, C9/C13 cross-cluster finding 6). */
+  planReviewPaused?: boolean;
+  /** True when automatic sync hit the threshold gate but proceeded without
+   * pausing (direction 3, user decision 2026-09-02): the caller shows a
+   * one-line summary notice instead of the durable review flow. */
+  thresholdSkippedInAuto?: boolean;
+  /** How many execution-layer mismatches were silently converged this run
+   * (e.g. upload 412 content-match, renameRemote identity-drift auto-close).
+   * Zero / undefined = no silent convergence. (candidate ①, 2026-09-06.)
+   * NOTE: currently no runtime consumer; kept as plan-layer input (recovery-
+   * layer T2 reverted fail-closed, 2026-09-07) — do not "clean up" as dead
+   * code without checking DECISIONS 2026-09-07 first. */
+  convergences?: number;
+}
+
+/**
+ * Where a failed download/upload died inside the OneDrive client's transport
+ * waterfall (A3, 2026-10-26).
+ *
+ * - `content`      — the round's remembered `/content` shortcut (`downloadMethod`)
+ * - `downloadUrl`  — the pre-signed `@microsoft.graph.downloadUrl` tier
+ * - `itemMetadata` — the driveItem metadata read that refreshes that URL
+ * - `pathContent`  — the path-addressed `/content` fallback
+ * - `itemContent`  — the item-id-addressed `/content` last resort
+ * - `uploadSession` — the chunked upload session transport
+ * - `localIO`      — a vault/adapter read or write on this device
+ * - `state`        — local state (plugin data / IndexedDB) bookkeeping
+ *
+ * Vocabulary only: this slice stamps the five download tiers; the remaining
+ * three values are reserved for the same fact shape. Declared as one runtime
+ * tuple so the union type and the "is this a known tier" check can never drift.
+ */
+export const SYNC_FILE_ERROR_TIERS = [
+  "content",
+  "downloadUrl",
+  "itemMetadata",
+  "pathContent",
+  "itemContent",
+  "uploadSession",
+  "localIO",
+  "state",
+] as const;
+
+export type SyncFileErrorTierV1 = (typeof SYNC_FILE_ERROR_TIERS)[number];
+
+/**
+ * Structured, **evidence-only** facts about one failed file action (A3,
+ * 2026-10-26). Lets a diagnostic report answer "why did this file fail":
+ * error class, HTTP status, Graph code, bytes already moved, which waterfall
+ * tier died, and how many attempts the retry loop spent.
+ *
+ * HARD BOUNDARY — these fields are never inputs to any decision. They must not
+ * reach `isNetworkClassFailure`, the M17 circuit breaker, the
+ * automatic-sync pause gate, planning, reconciliation or any retry budget. The
+ * user-visible `reason` / `outcome` text and every existing classification stay
+ * exactly as they were; this object only rides along as evidence. Adding a
+ * reader outside the diagnostic report is a regression — the consumer set is
+ * pinned by tests/sync-file-error-fact.test.ts.
+ *
+ * Every field is optional: a failure may have no HTTP status (local IO), no
+ * Graph code (transport drop), no byte count (failure before the first byte),
+ * no tier (failure outside the waterfall) or no attempt count (single-shot
+ * call). Reports render a missing field as "—" instead of guessing.
+ */
+export interface SyncFileErrorFactV1 {
+  /** `OneDriveErrorType` value (e.g. "NetworkError", "ServerError"). */
+  errorType?: string;
+  /** HTTP status; 0 means no HTTP response at all (dropped link, deadline). */
+  statusCode?: number;
+  /** Stable Graph error code when the service returned an error body. */
+  graphCode?: string;
+  /** Bytes of the payload already moved when the failure was raised. */
+  transferredBytes?: number;
+  /** Transport tier that raised the failure. */
+  tier?: SyncFileErrorTierV1;
+  /** Attempts the retry loop spent on that tier (1 = first attempt, no retry). */
+  attempts?: number;
+}
+
+export interface MutationRecoveryHistory {
+  state: "waiting-network" | "recovered" | "blocked";
+  total: number;
+  settled: number;
+  remaining: number;
+  updatedAt: number;
+  retryAt?: number;
+  blockReason?: MutationRecoveryBlockReason;
+  blockedOperationId?: string;
+}
+
+/**
+ * Device-local evidence captured from Obsidian's TFolder rename event.
+ * It never authorizes a mutation alone; the V2 planner must bind it to the
+ * same committed folder ID and re-check both complete snapshots.
+ */
+export interface LocalFolderMoveHintV1 {
+  version: 1;
+  scope: SyncScope;
+  /** 文件夹条目身份（历史名 remoteId）。 */
+  remoteId: ExternalItemId;
+  fromPath: string;
+  toPath: string;
+  observedAt: number;
+}
+
+/**
+ * Device-local deletion-gesture evidence captured from Obsidian's TFolder
+ * delete event. Like the move hint it never authorizes a mutation alone: the
+ * V2 planner consumes it only while the same committed folder ID is still
+ * active, the captured path still equals the anchor's last path, the local
+ * scan confirms the folder is gone and the cloud copy still sits at that
+ * anchor path. Evidence whose anchor retired before consumption is inert and
+ * is cleared by the same remote-id cleanup sweeps as the move hints.
+ */
+export interface LocalFolderDeleteHintV1 {
+  version: 1;
+  scope: SyncScope;
+  /** 文件夹条目身份（历史名 remoteId）。 */
+  remoteId: ExternalItemId;
+  path: string;
+  observedAt: number;
+}
+
+/**
+ * OneDrive Personal drive IDs are 16-digit hexadecimal strings that Graph may
+ * return in either case. P0-A established the narrow compatibility: two drive
+ * IDs are the same when they are byte-equal, or when both match the 16-hex
+ * Personal shape and differ only by case. Every other identity field stays
+ * strictly compared (see {@link sameSyncScope}). This mirrors
+ * `isSameGraphDriveId` in the OneDrive client without importing the network
+ * layer into the shared scope contract.
+ */
+const ONEDRIVE_PERSONAL_DRIVE_ID_PATTERN = /^[0-9a-f]{16}$/i;
+
+export function isSameDriveId(left: string | undefined, right: string | undefined): boolean {
+  if (left === right) return true;
+  if (typeof left !== "string" || typeof right !== "string") return false;
+  return ONEDRIVE_PERSONAL_DRIVE_ID_PATTERN.test(left)
+    && ONEDRIVE_PERSONAL_DRIVE_ID_PATTERN.test(right)
+    && left.toLowerCase() === right.toLowerCase();
+}
+
+export function sameSyncScope(left: SyncScope | null, right: SyncScope | null): boolean {
+  return left?.accountId === right?.accountId
+    && isSameDriveId(left?.driveId, right?.driveId)
+    && left?.vaultFolderId === right?.vaultFolderId
+    && left?.filesRootId === right?.filesRootId;
+}
+
+export function sameCanonicalPlanIdentityV2(
+  left: CanonicalPlanIdentityV2 | null | undefined,
+  right: CanonicalPlanIdentityV2 | null | undefined,
+): boolean {
+  if (!left || !right) return left == null && right == null;
+  // 刀 5b：版本门 2→3。旧版本（2）身份在此整体失效（一次性重审）——
+  // 这是升版失效的闸门语义，不是兼容判断。
+  return left.version === 3
+    && right.version === 3
+    && left.sourceCommitSeq === right.sourceCommitSeq
+    && left.digest === right.digest
+    && sameSyncScope(left.scope, right.scope);
+}
+
+// ---- Scan Configuration ----
+
+export interface ScanConfig {
+  /** Paths to exclude from sync (glob-like prefixes) */
+  excludePaths: string[];
+  /** Device-local vault-relative folders excluded from sync.
+   *  These exact folder boundaries take precedence over includePaths. */
+  excludedFolders?: string[];
+  /** Device-local user blacklist patterns (obsidian-my-obsidian extension).
+   *  Plain entries match folder/file boundaries like excludedFolders;
+   *  `/regex/flags` entries test the whole vault-relative path. A match
+   *  excludes the path outright — the blacklist wins over the whitelist. */
+  pathBlacklist?: string[];
+  /** Device-local user whitelist patterns (obsidian-my-obsidian extension).
+   *  Same entry syntax as pathBlacklist. When non-empty, a vault content
+   *  path must match at least one entry to stay in scope; plugin/config
+   *  files keep their own sync-scope switches (checked before the
+   *  whitelist layer in the scanner). */
+  pathWhitelist?: string[];
+  /** Paths that override exclusions. Checked before excludePaths —
+   *  a path matching any includePath is never excluded. */
+  includePaths: string[];
+  /** Maximum file size in bytes (default DEFAULT_MAX_FILE_SIZE_MB, or unlimited) */
+  maxFileSize: number;
+  /** Include EasySync's own main.js, manifest.json, and styles.css. */
+  includeOwnPluginCode?: boolean;
+  /** Include community plugin code files under the vault config dir plugin area. */
+  includePluginCode?: boolean;
+  /** Include community plugin data.json files under the vault config dir plugin area. */
+  includePluginData?: boolean;
+  /** Fine-grained community plugin code scope. Overrides includePluginCode when present. */
+  pluginCodeSelection?: PluginScopeSelection;
+  /** Fine-grained community plugin data scope. Overrides includePluginData when present. */
+  pluginDataSelection?: PluginScopeSelection;
+}
+
+/** Large-file exclusion UI presets in MiB; the device setting stores this unit. */
+export const MAX_FILE_SIZE_PRESET_OPTIONS_MB: readonly number[] = [8, 16, 64, 256, 512, 1024];
+/** Sentinel for "no size limit" stored in the per-device setting field. */
+export const UNLIMITED_MAX_FILE_SIZE_MB = -1;
+export const DEFAULT_MAX_FILE_SIZE_MB = 512;
+
+/**
+ * Coerce a stored/loaded large-file size value into the domain the plugin
+ * understands: -1 (unlimited) or any finite positive MiB number. Anything
+ * else (0, negative, non-finite, non-number) falls back to the default —
+ * persisted garbage is corrected in memory, never silently widened into
+ * an exclusion change.
+ */
+export function normalizeMaxFileSizeMb(value: unknown): number {
+  if (value === UNLIMITED_MAX_FILE_SIZE_MB) return UNLIMITED_MAX_FILE_SIZE_MB;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_MAX_FILE_SIZE_MB;
+}
+
+export const DEFAULT_SCAN_CONFIG: ScanConfig = {
+  excludePaths: [".trash/", ".DS_Store", "Thumbs.db"],
+  excludedFolders: [],
+  pathBlacklist: [],
+  pathWhitelist: [],
+  includePaths: [],
+  maxFileSize: DEFAULT_MAX_FILE_SIZE_MB * 1024 * 1024,
+  // Pre-config fallback. The plugin applies the effective sync-path settings
+  // right after construction, where EasySync's own bundle is always in scope
+  // (the self-sync opt-in was retired); until then the safe direction is out.
+  includeOwnPluginCode: false,
+  includePluginCode: false,
+  includePluginData: false,
+};
+
+// ---- Change Threshold ----
+
+/** If changed files exceed this ratio of total files, pause for confirmation */
+export const CHANGE_THRESHOLD_RATIO = 0.5;
+
+// ---- Cloud Baseline ----
+
+/** A single file entry in the cloud baseline snapshot */
+interface BaselineFileEntry {
+  hash: string;
+  size: number;
+  /** 版本令牌（历史名 eTag）。 */
+  eTag: VersionToken;
+  mtime: number;
+}
+
+// ---- Plan Review (sidebar preview before execution) ----
+
+/** Summary counts for a sync plan held for user review in the sidebar */
+export interface PlanReviewCounts {
+  uploads: number;
+  downloads: number;
+  /** Aggregate folder/scope changes for legacy count-only review bundles. */
+  folders?: number;
+  deletes: number;
+  conflicts: number;
+  skipped: number;
+  /**
+   * 片② 单向模式：本轮"本机改动留副本、云端版本接管原路径"的文件数（只有单向
+   * 计划里才可能大于 0，双向计数对象形状保持不变）。它由 {@link
+   * summarizeCanonicalPlanReviewV2} 从封存后的计划项推出，所以冻结进审阅事实的
+   * 也是这一份——侧栏的事前告知句读它，不再自己数一遍计划。
+   */
+  localOnlyCopies?: number;
+}
+
+export interface PlanReviewItem {
+  type: SyncActionType;
+  path: string;
+  reason?: PlanReason;
+  /** Hash from the local file at review time — used to detect plan staleness */
+  localHash?: string;
+  /** 审阅时远端文件的版本令牌（历史名 remoteETag）。 */
+  remoteETag?: VersionToken;
+  /** Stable folder identity/version used to make review digests stale-safe. */
+  folderRemoteId?: ExternalItemId;
+  folderRemoteETag?: VersionToken;
+  folderParentRemoteId?: ExternalItemId;
+  folderParentPath?: string;
+  folderParentRemoteETag?: VersionToken;
+}
+
+/** Compute a stable digest from plan items — used to detect plan changes
+ *  between review and execution. */
+export function planDigest(items: readonly SyncPlanItem[]): string {
+  const normalized = items
+    .map((i) => [
+      i.path,
+      i.type,
+      i.local?.hash ?? "",
+      i.remote?.eTag ?? "",
+      i.folder?.remoteId ?? "",
+      i.folder?.remoteETag ?? "",
+      i.folder?.parentRemoteId ?? "",
+      i.folder?.parentPath ?? "",
+      i.folder?.parentRemoteETag ?? "",
+      i.requiresConfirmation ? "confirm" : "",
+      i.reviewImpactCount ?? 1,
+    ].join("|"))
+    .sort();
+  return normalized.join("\n");
+}
+
+/** Cloud baseline snapshot stored at .easy-sync/baseline.json in the App Folder.
+ *  Used to bootstrap sync state on a new device without re-scanning every file. */
+export interface CloudBaseline {
+  vaultName: string;
+  lastSyncAt: number;
+  files: Record<string, BaselineFileEntry>;
+}

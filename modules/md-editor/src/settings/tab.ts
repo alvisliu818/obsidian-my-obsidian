@@ -399,6 +399,180 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName('第三方补全（Various Complements 等）')
+      .setDesc(
+        '块编辑器里打字时把按键转交给 Obsidian 的 editorSuggest 管线，让 Various Complements 等基于 EditorSuggest 的' +
+          '补全插件在块编辑器里原生生效——触发条件、词库、弹层行为全部由那些插件自己的设置管理。' +
+          '关掉即恢复「块编辑器不接第三方补全」的行为。',
+      )
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.thirdPartySuggestsEnabled !== false)
+          .onChange(async (v) => {
+            this.plugin.settings.thirdPartySuggestsEnabled = v;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    // ---- 虚拟链接（fakelink/Virtual Linker 并入,2026-11-19） ----
+    new Setting(containerEl)
+      .setName('虚拟链接（fakelink 并入）')
+      .setDesc(
+        '正文里出现其他笔记的标题、别名或标题头时，动态渲染成可点击的链接——不写回 Markdown 文件。' +
+          '点击打开目标（标题头条目跳到对应标题），右键可转换为真实链接或排除该词。' +
+          '词库来自 metadataCache（文件改名/元数据变更后自动重建）。',
+      )
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.virtualLinksEnabled !== false)
+          .onChange(async (v) => {
+            this.plugin.settings.virtualLinksEnabled = v;
+            await this.plugin.saveSettings();
+            this.plugin.scheduleVirtualLinkRebuild();
+            this.plugin.refreshAllViews();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('虚拟链接收录别名与标题头')
+      .setDesc('别名 = frontmatter aliases；标题头 = 目标笔记内的各级标题（剥「1.」「三、」等编号后也参与匹配），点击跳到对应标题。')
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.virtualLinksIncludeAliases !== false)
+          .onChange(async (v) => {
+            this.plugin.settings.virtualLinksIncludeAliases = v;
+            await this.plugin.saveSettings();
+            this.plugin.scheduleVirtualLinkRebuild();
+            this.plugin.refreshAllViews();
+          }),
+      )
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.virtualLinksIncludeHeaders !== false)
+          .setTooltip('收录标题头')
+          .onChange(async (v) => {
+            this.plugin.settings.virtualLinksIncludeHeaders = v;
+            await this.plugin.saveSettings();
+            this.plugin.scheduleVirtualLinkRebuild();
+            this.plugin.refreshAllViews();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('虚拟链接排除词')
+      .setDesc('每行一个（也支持逗号分隔），大小写不敏。右键虚拟链接 → 「排除该词」会写到这里。')
+      .addTextArea((t) =>
+        t
+          .setValue(this.plugin.settings.virtualLinksExcludedKeywords ?? '')
+          .onChange(async (v) => {
+            this.plugin.settings.virtualLinksExcludedKeywords = v;
+            await this.plugin.saveSettings();
+            this.plugin.scheduleVirtualLinkRebuild();
+            this.plugin.refreshAllViews();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('虚拟链接排除目录')
+      .setDesc('每行一个库内路径前缀；这些目录下的笔记不作为虚拟链接目标。')
+      .addTextArea((t) =>
+        t
+          .setValue(this.plugin.settings.virtualLinksExcludedDirectories ?? '')
+          .onChange(async (v) => {
+            this.plugin.settings.virtualLinksExcludedDirectories = v;
+            await this.plugin.saveSettings();
+            this.plugin.scheduleVirtualLinkRebuild();
+            this.plugin.refreshAllViews();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('虚拟链接部分匹配')
+      .setDesc(
+        '默认仅整词命中（CJK 文字恒为子串匹配，不受这些开关影响）。' +
+          '「前缀」允许词首部分命中（如 Ant 命中 Ants），「后缀」允许词尾部分命中，「任意片段」允许词中子串（误报最多）。',
+      )
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.virtualLinksMatchBeginningOfWords === true)
+          .setTooltip('前缀匹配')
+          .onChange(async (v) => {
+            this.plugin.settings.virtualLinksMatchBeginningOfWords = v;
+            await this.plugin.saveSettings();
+            this.plugin.refreshAllViews();
+          }),
+      )
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.virtualLinksMatchEndOfWords === true)
+          .setTooltip('后缀匹配')
+          .onChange(async (v) => {
+            this.plugin.settings.virtualLinksMatchEndOfWords = v;
+            await this.plugin.saveSettings();
+            this.plugin.refreshAllViews();
+          }),
+      )
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.virtualLinksMatchAnyPartsOfWords === true)
+          .setTooltip('任意片段')
+          .onChange(async (v) => {
+            this.plugin.settings.virtualLinksMatchAnyPartsOfWords = v;
+            await this.plugin.saveSettings();
+            this.plugin.refreshAllViews();
+          }),
+      );
+
+    // ---- VC 式词补全（Various Complements 原生吸收,2026-11-19） ----
+    new Setting(containerEl)
+      .setName('词补全（Various Complements 并入）')
+      .setDesc(
+        '块编辑器里打字时按前缀补词：候选来自当前页面词频、全库标题/别名（与虚拟链接同一索引）、' +
+          '下方自定义词典，以及 `:` 触发的 emoji 补全。默认前缀 ≥2 字符触发；行内代码/链接内不触发。',
+      )
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.wordCompleteEnabled !== false)
+          .onChange(async (v) => {
+            this.plugin.settings.wordCompleteEnabled = v;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('词补全触发长度与上限')
+      .setDesc('前缀最短字符数（最小 2）与候选上限。')
+      .addText((t) =>
+        t
+          .setValue(String(this.plugin.settings.wordCompleteMinChars ?? 2))
+          .onChange(async (v) => {
+            this.plugin.settings.wordCompleteMinChars = Math.max(2, parseInt(v, 10) || 2);
+            await this.plugin.saveSettings();
+          }),
+      )
+      .addText((t) =>
+        t
+          .setValue(String(this.plugin.settings.wordCompleteMaxSuggestions ?? 8))
+          .onChange(async (v) => {
+            this.plugin.settings.wordCompleteMaxSuggestions = Math.max(1, parseInt(v, 10) || 8);
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('词补全自定义词典')
+      .setDesc('库内相对路径的文本文件（如 .obsidian/my-dict.txt），每行一词，可 `词<TAB>说明`；# 开头的行是注释。文件改动自动重读。')
+      .addText((t) =>
+        t
+          .setValue(this.plugin.settings.wordCompleteDictionaryPath ?? '')
+          .setPlaceholder('.obsidian/my-dict.txt')
+          .onChange(async (v) => {
+            this.plugin.settings.wordCompleteDictionaryPath = v.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
       .setName('文末添加块')
       .setDesc(
         '大纲最后一块下方那条可点击的空白提示行——鼠标移过去会浮现一条横线和一个加号（与思源文档底部一致），' +
@@ -709,6 +883,27 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         }),
       );
 
+    // 库外内容倒排索引开关(2026-11-19 round2):关 = 清空 ext_fts(实测省
+    // ~300MB——代码文本 trigram 放大 9×),内容搜索回落按需读盘扫描。
+    new Setting(containerEl)
+      .setName('搜索：库外文件内容索引（FTS）')
+      .setDesc(
+        '挂载的库外文件（代码仓等）内容建全文倒排索引：搜索毫秒级，但盘上索引体积约为文本的 9 倍' +
+          '（实测 ~30MB 文本占 ~300MB）。关掉 = 立即清空该索引并改用按需读盘扫描' +
+          '（~30MB 文本单次搜索 ≈ 百毫秒级）。默认开。',
+      )
+      .addToggle((t) =>
+        t.setValue(cs.extFtsEnabled !== false).onChange(async (v) => {
+          this.plugin.settings.contentSearch = { ...cs, extFtsEnabled: v };
+          await this.plugin.saveSettings();
+          const d = this.plugin.daemonIndex as unknown as { pushRuntimeConfig?: () => Promise<void> } | null;
+          if (d?.pushRuntimeConfig) {
+            await d.pushRuntimeConfig();
+            new Notice(v ? '库外内容索引已重建' : '库外内容索引已清空（搜索改按需扫描）');
+          }
+        }),
+      );
+
   }
 
   private renderTemplatesSection(containerEl: HTMLElement): void {
@@ -828,6 +1023,17 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
           if (!this.plugin.daemonIndex) return;
           await this.plugin.daemonIndex.rebuild();
           new Notice('已触发守护进程全量重建');
+        }),
+      );
+      // 碎片回收(2026-11-19):主库索引实测 freelist 237MB——长期 delete+insert
+      // churn 的页碎片,VACUUM 回收;1.6GB 库约 1-2 分钟(超时放宽 10 分钟)。
+      actions.addButton((b) =>
+        b.setButtonText('碎片回收').onClick(async () => {
+          const d = this.plugin.daemonIndex as unknown as { vacuum?: () => Promise<{ ms: number } | null> };
+          if (!d?.vacuum) return;
+          new Notice('索引碎片回收中(可能需要 1-2 分钟,期间索引写暂停)…');
+          const r = await d.vacuum();
+          new Notice(r ? `索引碎片回收完成(${(r.ms / 1000).toFixed(0)} 秒)` : '碎片回收失败(守护进程未运行或正忙)');
         }),
       );
       // 狂暴模式(用户指定,2026-10-25):尽可能多占资源跑索引,进度在

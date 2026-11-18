@@ -100,6 +100,15 @@ const PRELOAD_SOURCE = await bundleVendorSource(`${BROWSER}/src/browser/preload.
 const EXT_PRELOAD_SOURCE = await bundleVendorSource(
   `${BROWSER}/src/extensions/extPreload.ts`,
 );
+// 网页标注：页内脚本原样注入（executeJavaScript），浮窗页按 preload 同款落盘。
+const ANN_SCRIPT_SOURCE = readFileSync(
+  `${BROWSER}/src/assets/annotationScript.js`,
+  "utf8",
+);
+const ANN_POPUP_HTML = readFileSync(
+  `${BROWSER}/src/assets/annotation-popup.html`,
+  "utf8",
+);
 
 // ---------------------------------------------------------------------------
 // audio-recorder: the encoding WebWorker, bundled to an IIFE string.
@@ -617,6 +626,11 @@ const context = await esbuild.context({
     MANIFEST_VERSION: '"1.0.44"',
     PACKAGE_VERSION: '"1.0.44"',
     UPDATE_INFO: "[]",
+    // easy-sync：烧进 bundle 的模块代际（诊断报告对照 manifest 版本用），
+    // 以及禁用对上游 GitHub release 的更新检查（聚合包不跟进上游发布，
+    // 见 modules/easy-sync/NOTICE.md 适配清单）。
+    __EASY_SYNC_BUILD_VERSION__: '"1.7.1"',
+    __EASY_SYNC_UPDATE_CHECK_DISABLED__: '"1"',
     global: "window",
     // wa-sqlite's Emscripten glue reads import.meta.url to locate its wasm;
     // in the CJS bundle that is `{}`, which throws before it ever looks at
@@ -636,6 +650,8 @@ const context = await esbuild.context({
     __ADBLOCK_RULES__: JSON.stringify(
       readFileSync(`${BROWSER}/src/assets/adblock-rules.txt`, "utf8"),
     ),
+    __ANN_SCRIPT_SOURCE__: JSON.stringify(ANN_SCRIPT_SOURCE),
+    __ANN_POPUP_HTML__: JSON.stringify(ANN_POPUP_HTML),
   },
   format: "cjs",
   target: "es2021",

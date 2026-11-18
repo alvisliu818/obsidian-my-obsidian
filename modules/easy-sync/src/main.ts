@@ -1,0 +1,12147 @@
+import {
+  structuredCloneImplementation,
+} from "./structured-clone-compat";
+import { apiVersion, EventRef, Menu, Notice, Plugin, requestUrl, setIcon, setTooltip, TFile, TFolder, WorkspaceLeaf } from "obsidian";
+
+import {
+  fetchLatestStableVersion,
+  isUpdateCheckDue,
+  isNewerVersion,
+  isUpdateCheckDisabledByBuild,
+  isUpdateReminderSuppressed,
+  loadUpdateCheckState,
+  parseManifestVersion,
+  resolveNextUpdateCheckDelay,
+  saveUpdateCheckState,
+  seedUpdateCheckStateFromLegacyPluginData,
+  shouldShowUpdateReminder,
+  SNOOZE_DURATION_MS,
+  UPDATE_CHECK_INTERVAL_MS,
+  type UpdateCheckStorage,
+  type UpdateReminderSnooze,
+} from "./update-check";
+import { AuthModule, type AuthPluginContext } from "./auth/auth-module";
+import {
+  AuthError,
+  AuthErrorType,
+  isAccountCredentialBindingV1,
+} from "./auth/types";
+import { createAuthBrowserLauncher } from "./auth/auth-browser";
+import {
+  compatClearInterval,
+  compatClearTimeout,
+  compatCancelAnimationFrame,
+  compatRequestAnimationFrame,
+  compatSetInterval,
+  compatSetTimeout,
+  describeError,
+  type AnimationFrameHandle,
+  getConfigDir,
+  getEasySyncPaths,
+  hostPlatformFacts,
+  IntervalHandle,
+  isRecord,
+  TimeoutHandle,
+  type HostPlatformFacts,
+} from "./obsidian-compat";
+import { OneDriveClient } from "./onedrive/client";
+import type { EasySyncRepositoryDetection } from "./onedrive/client";
+import { OneDriveDriveUnavailableError } from "./onedrive/types";
+import {
+  createFolderSyncScopeSnapshotV1,
+  isEasySyncInternalPath,
+  LocalScanner,
+  normalizeExcludedFolders,
+} from "./sync/local-scanner";
+// obsidian-my-obsidian 扩展：黑/白名单模式的解析、校验与归一化。
+import {
+  normalizePathPatterns,
+  validatePathPatterns,
+} from "./sync/path-pattern-filter";
+import {
+  ConservativeResetBlockedError,
+  StateManager,
+  SyncPathMutationRecoveryError,
+  type V2StateLoadBlockReason,
+} from "./sync/state-manager";
+import { queueWaitObservation } from "./sync/queue-wait-observation";
+import {
+  IndexedDbPublic113StateStore,
+  public113IndexedDbDatabaseName,
+} from "./sync/indexeddb-public-1-1-3-state";
+import { StateV2IndexedDbActiveStore } from "./sync/state-v2-indexeddb-active";
+import { detectVaultCloudClientEnvironment } from "./sync/cloud-client-environment";
+import {
+  IndexedDbRemoteScopeRecoveryEvidenceStore,
+} from "./sync/remote-scope-recovery-evidence-store";
+import {
+  loadOrCreateIndexedDbVaultInstanceId,
+  readIndexedDbVaultInstanceId,
+  rotateIndexedDbVaultInstanceId,
+} from "./sync/indexeddb-vault-namespace";
+import {
+  classifyRetryableObservationResult,
+  SyncExecutor,
+  type SyncCallbacks,
+  type SyncMode,
+  type SyncResult,
+  type SyncRunOptions,
+  type ReviewedContentEqualityProof,
+} from "./sync/sync-executor";
+import { SyncPathSettingsUpdateError } from "./sync/sync-path-settings-error";
+import type {
+  EmptyFolderResolutionSnapshotV1,
+  FolderLocationResolutionChoiceV1,
+  FolderLocationResolutionSnapshotV1,
+  FolderSubtreeReviewSnapshotV1,
+} from "./sync/empty-folder-resolution";
+import type { ManualResolutionEntrySnapshot } from "./sync/manual-resolution-entry";
+import type {
+  SharedFolderIdentityResolutionSnapshotV1,
+} from "./sync/shared-folder-identity-resolution";
+import type {
+  StaleIdentityResolutionSnapshotV1,
+} from "./sync/stale-identity-resolution";
+import type {
+  ScopeCrossingResolutionSnapshotV1,
+} from "./sync/scope-crossing-resolution";
+import {
+  isAnySyncActivityRunning,
+  SyncProgressStore,
+} from "./sync/sync-progress";
+import { resolveSyncActionPresentation } from "./sync/sync-action-presentation";
+import {
+  DiagnosticLogger,
+  type DiagCategory,
+  type DiagEntry,
+} from "./sync/diagnostic-logger";
+import {
+  describeMissingRunSummaries,
+  DIAG_RUN_SUMMARY_LIMIT,
+  formatDiagRunSummaryTable,
+  type DiagRunSummary,
+} from "./sync/diagnostic-run-summary";
+import {
+  EasySyncSettingTab,
+  createEasySyncSettingTab,
+} from "./ui/settings-tab";
+import {
+  EasySyncSyncView,
+  shouldAutoRebuildPlanReview,
+  SYNC_VIEW_TYPE,
+} from "./ui/sync-view";
+import {
+  RIBBON_STATUS_ICONS,
+  resolveRibbonStatus,
+  resolveRibbonStatusLabel,
+  type RibbonOwnStatus,
+  type RibbonStatus,
+} from "./ui/ribbon-status";
+import { ConfirmModal, SyncPlanAlertModal } from "./ui/confirm-modal";
+import { RsMigrationOfferModal } from "./ui/rs-migration-offer-modal";
+import { RsMigrationFailureModal } from "./ui/rs-migration-failure-modal";
+import { VaultJoinOfferModal } from "./ui/vault-join-offer-modal";
+import { VaultJoinRepositoryListModal } from "./ui/vault-join-repository-list-modal";
+import { runRsMigrationTransaction } from "./sync/rs-migration-transaction";
+import { ScopeCrossingPromptModal } from "./ui/scope-crossing-prompt-modal";
+import { RecoveryModal } from "./ui/recovery-modal";
+import type {
+  MutationRecoveryBlockReason,
+  MutationRecoveryHistory,
+  MutationRecoveryRunSummary,
+  ManualMutationResolutionChoiceV1,
+  ManualMutationResolutionSnapshotV1,
+  PlanReviewAuthorization,
+  RemoteFileEntry,
+  ScanConfig,
+  SyncFileErrorFactV1,
+  SyncPlan,
+} from "./sync/types";
+import {
+  DEFAULT_MAX_FILE_SIZE_MB,
+  normalizeMaxFileSizeMb,
+  UNLIMITED_MAX_FILE_SIZE_MB,
+} from "./sync/types";
+import {
+  sameCanonicalPlanIdentityV2,
+  sameSyncScope,
+  SyncActionType,
+} from "./sync/types";
+import { I18n } from "./i18n/index";
+import { OperationLifecycle } from "./sync/operation-lifecycle";
+import { EasySyncNoticeCenter, NOTICE_PRIORITY, type EasySyncNotificationPopupsLevel } from "./ui/notice-center";
+import {
+  createSyncProgressNoticeMessage,
+  formatSyncProgressNoticeLabel,
+  resolveSyncProgressNoticePresentation,
+  resolveSyncNoticeOutcome,
+  shouldSuppressSyncNoticeForVisibleSidebar,
+  type SyncNoticeOutcomeKind,
+} from "./ui/sync-notice";
+import {
+  formatSyncResultMessage,
+  isSyncResultFullyComplete,
+  resolveSyncPendingAttentionCounts,
+  resolveSyncHistoryStatus,
+} from "./ui/sync-result-presentation";
+import {
+  AutoSyncDirtyHint,
+  DEFAULT_AUTO_SYNC_CHANGE_DELAY_SECONDS,
+  DEFAULT_AUTO_SYNC_INTERVAL_MINUTES,
+  DEFAULT_AUTO_SYNC_ON_STARTUP,
+  LOCAL_DIRTY_DEBOUNCE_MS,
+  normalizeAutoSyncChangeDelaySeconds,
+  normalizeAutoSyncIntervalMinutes,
+  normalizeAutoSyncOnStartup,
+} from "./sync/auto-sync-dirty-hint";
+import {
+  MutationRecoveryScheduler,
+  type MutationRecoveryAttemptOutcome,
+  type MutationRecoverySchedulerSnapshot,
+} from "./sync/mutation-recovery-scheduler";
+import {
+  formatMutationRecoveryHistory,
+  manualResolutionExitAllowedFor,
+  mutationRecoveryStatusDetail,
+  mutationRecoveryStatusLabel,
+  type MutationRecoveryDisplayState,
+} from "./ui/mutation-recovery-presentation";
+import { readBakedBuildVersion } from "./build-version";
+import { sha256Hex } from "./crypto";
+import {
+  collectDownloadTransferEvidence,
+  formatDownloadTransferSection,
+} from "./sync/diagnostic-download-evidence";
+import {
+  buildConflictEvidence,
+  computeChangedPluginDataKeys,
+  type DiagnosticResetFacts,
+  extractPreResetReportCore,
+  findLatestAutomaticHandlingSummary,
+  findLatestNetworkSummary,
+  findLatestPhaseSummary,
+  findLatestSharedProtocolProfileSummary,
+  findLatestTransferSummary,
+  fingerprintOpaqueValue,
+  formatBuildVersionEvidence,
+  formatDiagnosticAutomaticSyncSummary,
+  formatRecentPluginDataWrites,
+  formatSyncFileErrorFactSuffix,
+  formatV2StorageAuthorityEvidence,
+  parseDiagnosticResetFacts,
+  PRE_RESET_REPORT_EMBED_CHAR_LIMIT,
+  projectSyncFileErrorFactColumns,
+  projectSyncHistoryActionCounts,
+  resetPhasePrefix,
+  RecentPluginDataWriteLog,
+  summarizeCommunityPluginSync,
+  summarizeMutationRecovery,
+} from "./sync/diagnostic-report-evidence";
+import {
+  deriveTransferRateFacts,
+  formatTransferRate,
+  transferDirectionKBps,
+  TransferRateSampler,
+  type TransferRateReading,
+} from "./sync/transfer-rate";
+import {
+  DEFAULT_AUTOMATIC_HANDLING_POLICY,
+  readAutomaticHandlingPolicy,
+  type AutomaticHandlingPolicy,
+} from "./sync/automatic-handling-policy";
+import {
+  DEFAULT_SYNC_DIRECTION,
+  readSyncDirection,
+  type SyncDirection,
+} from "./sync/sync-direction";
+import {
+  projectLocalOnlyEntryRowsV1,
+  type LocalOnlyEntryRowV1,
+} from "./sync/local-only-copies";
+import { isLocalOnlyPathIgnored } from "./sync/local-only-ignore-memory";
+import {
+  isSyncDecisionTokenLike,
+  localDeleteDecisionPathHash,
+  localDeleteDecisionRecordToken,
+  localFolderDeleteDecisionPathHash,
+  localFolderDeleteDecisionRecordToken,
+  type LocalDeleteDecisionScopeV1,
+} from "./sync/local-delete-decision";
+import type { LocalFileEntry } from "./sync/types";
+import {
+  countLocalOnlyEditedFacts,
+  countLocalOnlyRowFacts,
+} from "./sync/sync-mode-transition";
+import {
+  clearCompletedCommunityPluginRestores,
+  cloneCommunityPluginSyncPolicy,
+  createEffectiveCommunityPluginSyncPolicy,
+  DEFAULT_COMMUNITY_PLUGIN_SYNC_POLICY,
+  isPluginSelected,
+  normalizePluginIds,
+  normalizeCommunityPluginSyncSettings,
+  readCommunityPluginSyncPolicy,
+  sameCommunityPluginSyncPolicy,
+  stripPluginFromScopeSelection,
+  type CommunityPluginRestoreSet,
+  type CommunityPluginSyncPolicyV1,
+  type PluginScopeSelection,
+} from "./sync/community-plugin-sync-policy";
+import {
+  applyCommunityPluginLocalIgnores,
+  classifyCommunityPluginManagedPath,
+  type CommunityPluginLocalIgnores,
+} from "./sync/community-plugin-deletion-boundary";
+import {
+  buildCommunityPluginInventory,
+  type CommunityPluginInventoryItem,
+} from "./sync/community-plugin-inventory";
+import {
+  createEmptyDeviceCommunityPluginParticipation,
+  isDeviceCommunityPluginEnabled,
+  reduceDeviceCommunityPluginParticipation,
+  type DeviceCommunityPluginParticipationCommand,
+  type DeviceCommunityPluginParticipationV1,
+} from "./sync/community-plugin-participation";
+import {
+  buildRemoteCommunityPluginCatalog,
+  buildRemoteCommunityPluginCatalogFromIndex,
+  COMMUNITY_PLUGIN_CATALOG_STALE_FAILURE_THRESHOLD,
+  markRemoteCommunityPluginCatalogStale,
+  mergeRemoteCommunityPluginCatalogKeepingSuperset,
+  remoteCommunityPluginCatalogEntries,
+  remoteCommunityPluginCatalogEntryEntries,
+  shouldMarkCommunityPluginCatalogStale,
+  type RemoteCommunityPluginCatalogV1,
+} from "./sync/community-plugin-remote-catalog";
+import {
+  deriveCommunityPluginAdoptionCandidates,
+  resolveCommunityPluginPlatformFacts,
+} from "./sync/community-plugin-adoption-discovery";
+import {
+  reduceCommunityPluginAdoptionMemory,
+  type CommunityPluginAdoptionMemoryCommand,
+} from "./sync/community-plugin-adoption-memory";
+import { tryEnableDownloadedCommunityPlugin } from "./community-plugin-host-enable";
+import {
+  ensureCommunityPluginDisplayFacts,
+} from "./sync/community-plugin-display-facts";
+import {
+  buildCommunityPluginUpdateFacts,
+  type CommunityPluginAutoUpdateCandidate,
+} from "./sync/community-plugin-update-facts";
+import {
+  communityPluginJoinBlockRequiresTargetRebind,
+  isCommunityPluginJoinBlockRecheckable,
+  planCommunityPluginJoins,
+  type CommunityPluginJoinAuthorization,
+  type CommunityPluginJoinBlock,
+  type CommunityPluginLocalBundleFact,
+} from "./sync/community-plugin-join";
+import {
+  planCommunityPluginLocalReconciliation,
+} from "./sync/community-plugin-local-reconciliation";
+import {
+  COMMUNITY_PLUGIN_CLOUD_CLEANUP_MARKER_KEY,
+  normalizeCommunityPluginCloudCleanupMarkersV1,
+  planCommunityPluginCloudCleanupIndexReappearanceV1,
+  planCommunityPluginCloudCleanupMarkerSweepV1,
+} from "./sync/community-plugin-cloud-cleanup-v1";
+import { StartupPerformanceTracker } from "./startup-performance";
+import {
+  appendStartupTimingObservation,
+  buildStartupTimingObservation,
+  formatStartupTimingSection,
+  readStartupTimingObservations,
+} from "./startup-timing-observation";
+
+/** Plugin data keys for sync settings */
+const KEY_SYNC_INTERVAL = "sync-interval";
+const KEY_AUTO_SYNC_CHANGE_DELAY_SECONDS = "auto-sync-change-delay-seconds";
+const KEY_AUTO_SYNC_RESTORE_INTERVAL = "auto-sync-restore-interval";
+const KEY_AUTO_SYNC_RESTORE_CHANGE_DELAY_SECONDS =
+  "auto-sync-restore-change-delay-seconds";
+const KEY_AUTO_SYNC_ON_STARTUP = "auto-sync-on-startup";
+const KEY_AUTO_SYNC_RESTORE_ON_STARTUP = "auto-sync-restore-on-startup";
+const KEY_SYNC_PLUGIN_FILES = "sync-plugin-files";
+const KEY_MAX_FILE_SIZE_MB = "sync-max-file-size-mb";
+const KEY_DIAG_LOG = "sync-diagnostic-logging";
+const KEY_SYNC_EDITOR = "sync-editor";
+const KEY_SYNC_APPEARANCE = "sync-appearance";
+const KEY_SYNC_THEMES = "sync-themes";
+const KEY_SYNC_HOTKEYS = "sync-hotkeys";
+const KEY_SYNC_CORE_PLUGINS = "sync-core-plugins";
+const KEY_SYNC_BOOKMARKS = "sync-bookmarks";
+const KEY_SYNC_COMMUNITY_PLUGINS = "sync-community-plugins";
+const KEY_SYNC_PLUGIN_DATA = "sync-plugin-data";
+const KEY_COMMUNITY_PLUGIN_SYNC_POLICY = "community-plugin-sync-policy";
+const KEY_SYNC_EXCLUDED_FOLDERS = "sync-excluded-folders";
+// obsidian-my-obsidian 扩展：用户黑名单/白名单路径模式（设备本地，
+// 见 sync/path-pattern-filter.ts 的语法与语义说明）。
+const KEY_SYNC_PATH_BLACKLIST = "sync-path-blacklist";
+const KEY_SYNC_PATH_WHITELIST = "sync-path-whitelist";
+const KEY_AUTO_SYNC_PAUSED = "auto-sync-paused";
+const KEY_LAST_RESET_FACTS = "last-reset-facts";
+const KEY_RS_ADOPTION_MARKER = "rs-adoption-marker";
+
+/** Device-local memory that the confirmed adoption transaction has already
+ *  placed the foreign vault content into this vault's files/ root, so fresh
+ *  activations keep seeding identical-content baselines until the V2
+ *  authority commits. Never a sync authority; survives reset on purpose
+ *  (the adopted content stays in the cloud folder). */
+interface RsAdoptionMarker {
+  vaultName: string;
+  sourceVaultDirId: string;
+  strategy: "moved" | "copied";
+  completedAt: number;
+}
+
+function parseRsAdoptionMarker(value: unknown): RsAdoptionMarker | null {
+  if (typeof value !== "object" || value === null) return null;
+  const candidate = value as Record<string, unknown>;
+  if (
+    typeof candidate.vaultName !== "string"
+    || candidate.vaultName.length === 0
+    || typeof candidate.sourceVaultDirId !== "string"
+    || candidate.sourceVaultDirId.length === 0
+    || (candidate.strategy !== "moved" && candidate.strategy !== "copied")
+    || typeof candidate.completedAt !== "number"
+  ) return null;
+  return {
+    vaultName: candidate.vaultName,
+    sourceVaultDirId: candidate.sourceVaultDirId,
+    strategy: candidate.strategy,
+    completedAt: candidate.completedAt,
+  };
+}
+const KEY_LEGACY_AUTO_MERGE = "sync-auto-merge";
+const KEY_AUTOMATIC_HANDLING_POLICY = "sync-auto-conflict-policy";
+/** Committed sync direction (双向同步／单向同步). Absent means two-way. */
+const KEY_SYNC_DIRECTION = "sync-direction";
+const KEY_NOTIFICATION_POPUPS = "notification-popups";
+/** 移动端常驻状态图标开关（方案单 20261012-225046）：仅移动端生效，桌面状态栏不受影响。 */
+const KEY_MOBILE_STATUS_BAR = "mobile-status-bar";
+const KEY_ACKNOWLEDGED_RULES = "acknowledged-rules";
+const KEY_PROFILE_CACHE = "easy-sync-profile-cache";
+/** Vault-local binding between the verified account and the local credential
+ *  lineage. Account id + random lineage label only; never a token. */
+const KEY_ACCOUNT_CREDENTIAL_BINDING = "easy-sync-account-credential-binding-v1";
+/** One-shot notice memory: plugin bundles whose upload the downgrade guard
+ *  already told the user about. A marker is dropped once the deferral is gone
+ *  (plan no longer uploads the bundle), so a future real misalignment can
+ *  notify again. Never authorizes any mutation. */
+const KEY_UPLOAD_DOWNGRADE_NOTICE = "easy-sync-upload-downgrade-notice-v1";
+const RIBBON_SUCCESS_DURATION_MS = 5_000;
+const SYNC_RESULT_NOTICE_DURATION_MS = 2_000;
+const SYNC_PROGRESS_NOTICE_KEY = "sync-progress";
+/** Render-path floor between plugin-folder manifest reads while the running
+ *  version still looks behind the published release (see update reminder). */
+const INSTALLED_MANIFEST_REREAD_MS = 10_000;
+const DESCENDANT_FILE_RECONSTRUCTION_CONTINUATION_DELAY_MS = 250;
+const COMMUNITY_PLUGIN_FILE_DELETE_UNINSTALL_DELAY_MS = 150;
+const DESCENDANT_FILE_RECONSTRUCTION_RETRY_DELAYS_MS =
+  [5_000, 15_000, 30_000] as const;
+/** Consecutive catalog refresh failures reset after this quiet window. */
+const COMMUNITY_PLUGIN_CATALOG_REFRESH_FAILURE_WINDOW_MS = 10 * 60 * 1000;
+
+/** Bounded in-session V2 state reloads before the durable pause engages. */
+const V2_STATE_RELOAD_MAX_ATTEMPTS = 4;
+const V2_STATE_RELOAD_BACKOFF_MS = [2_000, 8_000, 30_000];
+
+/**
+ * Reasons that can succeed on a later reload (transient IO) keep retrying
+ * with bounded backoff; durable corruption/identity evidence keeps the
+ * existing fail-closed pause and diagnostic export.
+ */
+function isTransientV2StateLoadBlockReason(
+  reason: V2StateLoadBlockReason,
+): boolean {
+  switch (reason) {
+    case "envelope-unreadable":
+    case "publication-journal-unreadable":
+    case "manifest-unreadable":
+    case "manifest-presence-unreadable":
+    case "migration-hold-unreadable":
+    case "authority-witness-presence-unreadable":
+    case "authority-witness-unreadable":
+    case "authority-witness-save-failed":
+    case "scope-transition-unreadable":
+    case "corrupt-state-publication-presence-unreadable":
+    case "corrupt-state-publication-unreadable":
+    case "corrupt-state-recovery-hold-unreadable":
+    case "indexeddb-authority-load-failed":
+    case "indexeddb-authority-recovery-failed":
+    case "migration-authority-commit-interrupted":
+    case "public-1.1.3-cutover-backup-unreadable":
+    case "public-1.1.3-cutover-finalization-failed":
+    case "v2-mutation-ledger-migration-failed":
+    case "v2-state-load-failed":
+      return true;
+    default:
+      return false;
+  }
+}
+
+export interface SyncPathSettings {
+  syncPluginFiles: boolean;
+  syncEditorSettings: boolean;
+  syncAppearance: boolean;
+  syncThemes: boolean;
+  syncHotkeys: boolean;
+  syncCorePlugins: boolean;
+  syncBookmarks: boolean;
+  syncCommunityPlugins: boolean;
+  syncPluginData: boolean;
+  communityPluginSyncPolicy: CommunityPluginSyncPolicyV1;
+  excludedFolders: string[];
+  /** obsidian-my-obsidian extension: user blacklist patterns
+   *  (sync/path-pattern-filter.ts). Device-local, like excludedFolders. */
+  pathBlacklist: string[];
+  /** obsidian-my-obsidian extension: user whitelist patterns. */
+  pathWhitelist: string[];
+}
+
+function syncPathSettingsFingerprint(
+  settings: Readonly<SyncPathSettings>,
+): string {
+  const policy = settings.communityPluginSyncPolicy;
+  return JSON.stringify({
+    version: 1,
+    syncPluginFiles: settings.syncPluginFiles,
+    syncEditorSettings: settings.syncEditorSettings,
+    syncAppearance: settings.syncAppearance,
+    syncThemes: settings.syncThemes,
+    syncHotkeys: settings.syncHotkeys,
+    syncCorePlugins: settings.syncCorePlugins,
+    syncBookmarks: settings.syncBookmarks,
+    syncCommunityPlugins: settings.syncCommunityPlugins,
+    syncPluginData: settings.syncPluginData,
+    communityPluginSyncPolicy: {
+      version: 1,
+      files: {
+        mode: policy.files.mode,
+        pluginIds: [...policy.files.pluginIds].sort(),
+        ignoredPluginIds: [...(policy.files.ignoredPluginIds ?? [])].sort(),
+        restoringPluginIds:
+          [...(policy.files.restoringPluginIds ?? [])].sort(),
+      },
+      data: {
+        mode: policy.data.mode,
+        pluginIds: [...policy.data.pluginIds].sort(),
+        ignoredPluginIds: [...(policy.data.ignoredPluginIds ?? [])].sort(),
+        restoringPluginIds:
+          [...(policy.data.restoringPluginIds ?? [])].sort(),
+      },
+    },
+    excludedFolders: [...settings.excludedFolders].sort(),
+    pathBlacklist: [...settings.pathBlacklist].sort(),
+    pathWhitelist: [...settings.pathWhitelist].sort(),
+  });
+}
+
+function selectedPluginIds(
+  selection: Readonly<PluginScopeSelection>,
+): string[] {
+  return selection.pluginIds.filter(
+    (pluginId) => isPluginSelected(selection, pluginId),
+  );
+}
+
+function pluginSelectionExpands(
+  previous: Readonly<PluginScopeSelection>,
+  candidate: Readonly<PluginScopeSelection>,
+): boolean {
+  if (candidate.mode === "none") return false;
+  if (candidate.mode === "selected") {
+    return selectedPluginIds(candidate).some(
+      (pluginId) => !isPluginSelected(previous, pluginId),
+    );
+  }
+  if (previous.mode !== "all") return true;
+  const candidateIgnored = new Set(candidate.ignoredPluginIds ?? []);
+  return (previous.ignoredPluginIds ?? []).some(
+    (pluginId) => !candidateIgnored.has(pluginId),
+  );
+}
+
+function pluginDataSelectionExpands(
+  previous: Readonly<CommunityPluginSyncPolicyV1>,
+  candidate: Readonly<CommunityPluginSyncPolicyV1>,
+): boolean {
+  if (
+    candidate.files.mode === "none"
+    || candidate.data.mode === "none"
+  ) return false;
+  const candidateFiniteSelection =
+    candidate.files.mode === "selected"
+      ? candidate.files
+      : candidate.data.mode === "selected"
+        ? candidate.data
+        : null;
+  if (candidateFiniteSelection) {
+    return selectedPluginIds(candidateFiniteSelection).some(
+      (pluginId) =>
+        isPluginSelected(candidate.files, pluginId)
+        && isPluginSelected(candidate.data, pluginId)
+        && (
+          !isPluginSelected(previous.files, pluginId)
+          || !isPluginSelected(previous.data, pluginId)
+        ),
+    );
+  }
+  if (
+    previous.files.mode !== "all"
+    || previous.data.mode !== "all"
+  ) return true;
+  const candidateIgnored = new Set([
+    ...(candidate.files.ignoredPluginIds ?? []),
+    ...(candidate.data.ignoredPluginIds ?? []),
+  ]);
+  return [
+    ...(previous.files.ignoredPluginIds ?? []),
+    ...(previous.data.ignoredPluginIds ?? []),
+  ].some((pluginId) => !candidateIgnored.has(pluginId));
+}
+
+function syncPathSettingsExpandFileScope(
+  previous: Readonly<SyncPathSettings>,
+  candidate: Readonly<SyncPathSettings>,
+): boolean {
+  if (
+    (!previous.syncPluginFiles && candidate.syncPluginFiles)
+    || (!previous.syncEditorSettings && candidate.syncEditorSettings)
+    || (!previous.syncAppearance && candidate.syncAppearance)
+    || (!previous.syncThemes && candidate.syncThemes)
+    || (!previous.syncHotkeys && candidate.syncHotkeys)
+    || (!previous.syncCorePlugins && candidate.syncCorePlugins)
+    || (!previous.syncBookmarks && candidate.syncBookmarks)
+  ) return true;
+
+  const previousCommunityPolicy = createEffectiveCommunityPluginSyncPolicy(
+    previous.communityPluginSyncPolicy,
+    previous.syncCommunityPlugins,
+    previous.syncPluginData,
+  );
+  const candidateCommunityPolicy = createEffectiveCommunityPluginSyncPolicy(
+    candidate.communityPluginSyncPolicy,
+    candidate.syncCommunityPlugins,
+    candidate.syncPluginData,
+  );
+  if (
+    pluginSelectionExpands(
+      previousCommunityPolicy.files,
+      candidateCommunityPolicy.files,
+    )
+    || pluginDataSelectionExpands(
+      previousCommunityPolicy,
+      candidateCommunityPolicy,
+    )
+  ) return true;
+
+  return previous.excludedFolders.some((previousExcluded) => {
+    const previousKey = previousExcluded.toLowerCase();
+    return !candidate.excludedFolders.some((candidateExcluded) => {
+      const candidateKey = candidateExcluded.toLowerCase();
+      return previousKey === candidateKey
+        || previousKey.startsWith(`${candidateKey}/`);
+    });
+  })
+    // obsidian-my-obsidian 扩展（黑/白名单模式）的扩张判定，同样走保守
+    // 事务：黑名单里任何一条旧条目消失都可能重新纳入被排除的路径（正则
+    // 条目的覆盖范围无法用前缀关系证明，一律按扩张处理）；白名单新增
+    // 任何条目都可能把原先不在白名单内的路径纳入范围。
+    || pathBlacklistExpands(previous.pathBlacklist, candidate.pathBlacklist)
+    || pathWhitelistExpands(previous.pathWhitelist, candidate.pathWhitelist);
+}
+
+/** Pattern-list expansion check, keyed like normalizePathPatterns' dedupe
+ *  (trimmed lowercase): a previous blacklist entry missing from the
+ *  candidate means the corresponding exclusion may have been lifted. */
+function pathBlacklistExpands(
+  previous: readonly string[],
+  candidate: readonly string[],
+): boolean {
+  const candidateKeys = new Set(
+    candidate.map((entry) => entry.trim().toLowerCase()),
+  );
+  return previous.some(
+    (entry) => !candidateKeys.has(entry.trim().toLowerCase()),
+  );
+}
+
+/** Any whitelist entry the candidate adds could newly include paths. */
+function pathWhitelistExpands(
+  previous: readonly string[],
+  candidate: readonly string[],
+): boolean {
+  const previousKeys = new Set(
+    previous.map((entry) => entry.trim().toLowerCase()),
+  );
+  return candidate.some(
+    (entry) => !previousKeys.has(entry.trim().toLowerCase()),
+  );
+}
+
+/** Order-insensitive equality for already-normalized pattern lists. */
+function samePathPatternList(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  if (left.length !== right.length) return false;
+  const leftKeys = new Set(left.map((entry) => entry.trim().toLowerCase()));
+  return right.every((entry) => leftKeys.has(entry.trim().toLowerCase()));
+}
+
+type ConservativeResetEntries = Parameters<
+  StateManager["resetPreservingIsolatedMutationRecovery"]
+>[0];
+
+type ResetMutationRecoveryDisposition =
+  | { kind: "settled" }
+  | { kind: "isolated"; entries: ConservativeResetEntries }
+  | { kind: "blocked" };
+
+/**
+ * Semantic groups the single status bar item exposes via `.is-*` classes
+ * (is-loggedOut / is-attention / is-syncing / is-ready / is-offline), mirroring
+ * the sidebar status line class scheme (sync-view.ts). A subset of RibbonStatus:
+ * the status bar never enters the transient "success" state (常驻位不闪烁).
+ * "cancelling" has its own group here since 2026-09-29: the three carriers are
+ * gated to agree on the same token (tests/status-bar.test.ts), and collapsing
+ * it into "syncing" made the bar keep spinning through the drain window while
+ * the sidebar and ribbon had already switched to the cancelling form.
+ */
+type StatusBarStatusGroup = Extract<
+  RibbonStatus,
+  "loggedOut" | "attention" | "syncing" | "cancelling" | "ready" | "offline"
+>;
+
+interface MutationRecoveryRunContext {
+  priorTotal: number;
+  priorRemaining: number;
+  newRemaining: number;
+}
+
+function clonePluginData(data: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(data)) as Record<string, unknown>;
+}
+
+function measurePluginDataWrite(data: Record<string, unknown>): {
+  serializedBytes: number;
+  topLevelKeys: number;
+  largestKeys: Array<{ key: string; bytes: number }>;
+} {
+  const encoder = new TextEncoder();
+  const serializedBytes = encoder.encode(JSON.stringify(data)).byteLength;
+  const largestKeys = Object.entries(data)
+    .map(([key, value]) => {
+      const serialized = JSON.stringify(value);
+      return { key, bytes: serialized === undefined ? 0 : encoder.encode(serialized).byteLength };
+    })
+    .sort((left, right) => right.bytes - left.bytes)
+    .slice(0, 5);
+  return { serializedBytes, topLevelKeys: Object.keys(data).length, largestKeys };
+}
+
+/** Notification popups level normalization: unknown/legacy values fall back to "all". */
+function normalizeNotificationPopupsLevel(
+  value: unknown,
+): EasySyncNotificationPopupsLevel {
+  return value === "important" || value === "off" ? value : "all";
+}
+
+/** One pending new-plugin row for the sidebar adoption section (slice 2). */
+export interface CommunityPluginAdoptionRow {
+  pluginId: string;
+  /** Trusted manifest display name; falls back to the plugin id. */
+  displayName: string;
+  /** True only when a source-bound observation says the bundle is desktop-only. */
+  desktopOnly: boolean;
+}
+
+/** Safety recheck interval while deferred settings mutations wait for sync
+ *  to go idle (releaseOpLock is the primary trigger; this covers busy windows
+ *  that end without one, e.g. side actions). */
+const DEFERRED_SETTINGS_MUTATION_RECHECK_MS = 1_000;
+
+/** Handle for a sync-path settings mutation deferred behind an in-flight
+ *  round: `cancel()` reverts a still-queued mutation (false once it started
+ *  applying), `isQueued()` tells the manager row whether the queued
+ *  affordance applies. */
+export type DeferredSettingsMutationHandle = Promise<void> & {
+  cancel: () => boolean;
+  isQueued: () => boolean;
+};
+
+type DiagnosticReportRenderContext = {
+  lines: string[];
+  reportI18n: I18n;
+  fmt: (ts: number) => string;
+  fmtShort: (ts: number) => string;
+  formatActionLabel: (type?: SyncActionType) => string;
+  now: Date;
+  auth: AuthModule["authState"] | undefined;
+  reportState: EasySyncPlugin["state"];
+  resetFacts: DiagnosticResetFacts | null;
+  platformLabel: string;
+  automaticActivity: string;
+  buildFingerprint: string;
+  communityPluginInventory: CommunityPluginInventoryItem[];
+  communityPluginSummary: Awaited<ReturnType<typeof summarizeCommunityPluginSync>>;
+  mutationRecoveryDisplay: ReturnType<EasySyncPlugin["getMutationRecoveryDisplayState"]>;
+  mutationRecoveryScheduler: MutationRecoveryScheduler["snapshot"];
+  storageLayoutVersion: ReturnType<typeof getEasySyncPaths>["storageLayoutVersion"];
+  v2RemoteScopeRecovery:
+    | NonNullable<EasySyncPlugin["state"]>["activeV2RemoteScopeRecovery"]
+    | undefined;
+  v2StateLoadBlock:
+    | NonNullable<EasySyncPlugin["state"]>["v2StateLoadRecoveryBlock"]
+    | undefined;
+  v2StorageAuthority: NonNullable<EasySyncPlugin["state"]>["activeV2StorageAuthorityEvidence"];
+  accountFingerprint: Awaited<ReturnType<typeof fingerprintOpaqueValue>>;
+  driveFingerprint: Awaited<ReturnType<typeof fingerprintOpaqueValue>>;
+  vaultFingerprint: Awaited<ReturnType<typeof fingerprintOpaqueValue>>;
+  filesRootFingerprint: Awaited<ReturnType<typeof fingerprintOpaqueValue>>;
+  v2DatabaseFingerprint: Awaited<ReturnType<typeof fingerprintOpaqueValue>>;
+};
+
+/** Values declared inside a report section and consumed by a later section. */
+type DiagnosticReportProvidedValues = {
+  diagAll: DiagEntry[];
+  /** Rounds bypassed from the same snapshot before its 500-entry window. */
+  runSummaries: DiagRunSummary[];
+  remoteScopeRecoverySummary:
+    | StateManager["syncHistory"][number]["remoteScopeRecovery"]
+    | NonNullable<EasySyncPlugin["progressStore"]>["state"]["recoveryVerification"];
+  history: StateManager["syncHistory"];
+  formatSize: (bytes?: number) => string;
+};
+
+/** 宿主未公开的菜单分组名单机制：addSections 把给定名单插进 Host 已声明
+ *  名单中默认组（""）的位置。只用于声明专属分组渲染位置，不作其他用途。 */
+interface MenuWithSectionList extends Menu {
+  addSections?: (sectionNames: string[]) => Menu;
+}
+
+export default class EasySyncPlugin extends Plugin {
+  auth: AuthModule | null = null;
+  onedrive: OneDriveClient | null = null;
+  scanner: LocalScanner | null = null;
+  state: StateManager | null = null;
+  syncExecutor: SyncExecutor | null = null;
+  progressStore: SyncProgressStore = new SyncProgressStore();
+  noticeCenter: EasySyncNoticeCenter = new EasySyncNoticeCenter();
+  i18n: I18n = new I18n("en");
+  /** Platform facts this plugin instance acts on (device runtime + UI mode).
+   *  Per-instance injection point for tests; production keeps the live
+   *  `Platform`-backed defaults. Never a module-level mutable switch. */
+  platformFacts: HostPlatformFacts = hostPlatformFacts;
+
+  /** Bound translator for builders/modals that expect a plain I18nFn. */
+  private get t() {
+    return this.i18n.t.bind(this.i18n);
+  }
+  diag: DiagnosticLogger = new DiagnosticLogger();
+  // Connection-speed reading: session-local EWMA over real transferred
+  // bytes. Raw per-round facts persist only embedded in sync-history
+  // entries (2026-10-24: the separate persisted window was retired — its
+  // reload seed could never pass the 10s freshness window).
+  private transferRateSampler = new TransferRateSampler();
+  private transferRateRunWasActive = false;
+
+  // M14: single serialized write queue for PluginData — prevents
+  // StateManager.save() / saveSyncSettings() / auth profile writes
+  // from racing on loadData → modify → saveData cycles.
+  private pluginDataQueue: Promise<void> = Promise.resolve();
+  /** Forensic record of recent committed plugin data writes (key names only).
+   *  Surfaced in the diagnostic report so a mid-activation migration-input
+   *  digest drift can be attributed on the device itself (issue #18). */
+  private readonly pluginDataWriteLog = new RecentPluginDataWriteLog();
+  private pluginDataCache: Record<string, unknown> | null | undefined;
+  private pluginDataLoadPromise: Promise<Record<string, unknown> | null> | null = null;
+  /** Background settings read started by `onload`. The host's plugin-load
+   *  phase must stay registration-only (official load-time guide), so the
+   *  data-file read/parse is awaited by state/sync consumers instead of by
+   *  `onload` itself. A rejection is kept for those consumers: acting on
+   *  defaults before the user's settings are known is the unsafe direction. */
+  private settingsLoadPromise: Promise<void> | null = null;
+
+  syncInterval = 3;
+  autoSyncChangeDelaySeconds = DEFAULT_AUTO_SYNC_CHANGE_DELAY_SECONDS;
+  /** 启动后立即同步通道（默认开）：每次插件加载后补一轮，见
+   *  `noteStartupReadinessSettled`；缺失键的默认值由 `loadSyncSettings`
+   *  按当时总开关状态派生，不直接取默认常量。 */
+  autoSyncOnStartup = DEFAULT_AUTO_SYNC_ON_STARTUP;
+  /** Per-channel settings remembered when the master switch turned everything
+   *  off; the master's on flip restores them instead of imposing defaults. */
+  autoSyncRestoreInterval = DEFAULT_AUTO_SYNC_INTERVAL_MINUTES;
+  autoSyncRestoreChangeDelaySeconds = DEFAULT_AUTO_SYNC_CHANGE_DELAY_SECONDS;
+  autoSyncRestoreOnStartup = DEFAULT_AUTO_SYNC_ON_STARTUP;
+  /** EasySync self-sync is no longer a user choice: the running build has to
+   *  reach the other devices, so the plugin directory is always part of the
+   *  scope. Devices still carrying the old opt-in `false` are moved through
+   *  the scope transaction on the next state load — see
+   *  `ensureEasySyncSelfSyncScope`. */
+  syncPluginFiles = true;
+  syncMaxFileSizeMb = DEFAULT_MAX_FILE_SIZE_MB;
+  automaticHandlingPolicy: AutomaticHandlingPolicy = {
+    ...DEFAULT_AUTOMATIC_HANDLING_POLICY,
+  };
+  /**
+   * Committed sync direction (双向上限的设备级二选一)：设置页「同步模式」行读写它，
+   * 计划层与执行器按它切换抑制／改写与强制跟随语义；缺省与未知值都按双向处理
+   * （`readSyncDirection`）。单向模式的入口、门槛与切换事务见
+   * `src/ui/settings-tab.ts` 与 `updateSyncDirection`。
+   */
+  syncDirection: SyncDirection = DEFAULT_SYNC_DIRECTION;
+  syncEditorSettings = false;
+  syncAppearance = false;
+  syncThemes = false;
+  syncHotkeys = false;
+  syncCorePlugins = false;
+  syncBookmarks = false;
+  syncCommunityPlugins = false;
+  syncPluginData = false;
+  communityPluginSyncPolicy = cloneCommunityPluginSyncPolicy(
+    DEFAULT_COMMUNITY_PLUGIN_SYNC_POLICY,
+  );
+  excludedFolders: string[] = [];
+  /** obsidian-my-obsidian 扩展：黑名单模式（设备本地）。语义见
+   *  sync/path-pattern-filter.ts；与 excludedFolders 一样只影响本机。 */
+  pathBlacklist: string[] = [];
+  /** obsidian-my-obsidian 扩展：白名单模式（设备本地）。非空时内容文件
+   *  须至少命中一条才参与同步；插件/配置文件仍由同步范围开关管辖。 */
+  pathWhitelist: string[] = [];
+  diagLogEnabled = false;
+  autoSyncPaused = false;
+  lastResetFacts: DiagnosticResetFacts | null = null;
+  rsAdoptionMarker: RsAdoptionMarker | null = null;
+  notificationPopups: EasySyncNotificationPopupsLevel = "all";
+  /** 移动端常驻状态图标开关（仅移动端渲染与生效；桌面状态栏体系不受影响）。 */
+  mobileStatusBar = true;
+  /** 设置页「规则」行的已读记忆（本设备；清空该字段即恢复显示）。 */
+  acknowledgedRules: string[] = [];
+  private opLock: string | null = null;
+  /** 冲突批量在飞方向（null＝空闲）。自动同步只对这条批量让路；侧栏据此恢复
+   *  加载态。 */
+  private conflictBatchDirection: "local" | "remote" | null = null;
+  /** 入口只读准备期的取消范围（2026-10-10 R1）：非空＝armed，期间两个云端仓库
+   *  检测可被「取消同步」中止；进入弹框/写事务前清空（见 endEntryCancellation）。 */
+  private entryCancelController: AbortController | null = null;
+  private vaultCloudClientNoticeShown = false;
+  /** 卸载即置位：晚到的 onLayoutReady 回调（vault 监听挂载）据此退场。 */
+  private unloaded = false;
+  private deferredSettingsMutations: Array<{
+    started: boolean;
+    cancelled: boolean;
+    run: () => Promise<void>;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+  }> = [];
+  private deferredSettingsMutationTimer: TimeoutHandle | null = null;
+  private autoSyncTimer: IntervalHandle | null = null;
+  private descendantFileReconstructionTimer: TimeoutHandle | null = null;
+  private descendantFileReconstructionFailures = 0;
+  private readonly autoSyncDirtyHint = new AutoSyncDirtyHint(
+    () => this.runAutomaticSync("dirty"),
+  );
+  /** Local paths this plugin is erasing itself. Their vault delete events are
+   *  already represented in the committed state, so they must not arm a
+   *  follow-up automatic round (2026-10-28 iOS mixed-batch report: the
+   *  batch's own erases re-triggered sync after it finished). Entries are
+   *  one-shot and expire in case a host drops the event. */
+  private readonly selfDeletedLocalPaths = new Map<string, number>();
+  private static readonly SELF_DELETE_EVENT_TTL_MS = 30_000;
+  /** Busy-retry wheel for this session's single startup round: the first
+   *  attempt fires as soon as auth and state are both ready, and hands further
+   *  attempts here when the sync surface is busy (same semantics as the local
+   *  change hint, but with its own one-shot intent). */
+  private readonly startupSyncRetryHint = new AutoSyncDirtyHint(
+    () => this.runAutomaticSync("startup"),
+  );
+  private startupSyncAuthSettled = false;
+  private startupSyncStateSettled = false;
+  private startupSyncDispatched = false;
+  private readonly mutationRecoveryScheduler = new MutationRecoveryScheduler(
+    () => this.runScheduledMutationRecovery(),
+    () => {
+      void this.handleMutationRecoveryBudgetExhausted();
+    },
+    Math.random,
+    (snapshot) => {
+      void this.handleMutationRecoverySchedulerState(snapshot);
+    },
+  );
+  private mutationRecoveryBlockReason: MutationRecoveryBlockReason | null = null;
+  private v2StateReloadInFlight = false;
+  private v2StateReloadAttempts = 0;
+  private v2StateReloadRetryTimer: TimeoutHandle | null = null;
+  private statusBarEl: HTMLElement | null = null;
+  private statusBarFrame: AnimationFrameHandle | null = null;
+  private mobileStatusBarObserver: MutationObserver | null = null;
+  private mobileStatusBarResizeHandler: (() => void) | null = null;
+  private mobileStatusBarRecomputeTimer: TimeoutHandle | null = null;
+  private mobileStatusBarLayoutRef: EventRef | null = null;
+  private mobileStatusBarLayoutRetryArmed = false;
+  private ribbonEl: HTMLElement | null = null;
+  private ribbonSuccessTimer: TimeoutHandle | null = null;
+  private ribbonSuccessVisible = false;
+  /** Delayed "migration completed" notice; cleared on unload so a queued
+   *  reminder cannot surface after the plugin is gone. */
+  private rsMigrationCompletionNoticeTimer: TimeoutHandle | null = null;
+  private settingsTab: EasySyncSettingTab | null = null;
+  private stateLoadPromise: Promise<void> | null = null;
+  /** One attempt per reload for the retired self-sync opt-in: see
+   *  `ensureEasySyncSelfSyncScope`. */
+  private selfSyncScopeTransitionAttempted = false;
+  private syncNoticeFrame: AnimationFrameHandle | null = null;
+  private syncNoticeSignature: string | null = null;
+  private readonly operationLifecycle = new OperationLifecycle();
+  private readonly startupPerformance = new StartupPerformanceTracker();
+  private communityPluginInventoryRevision = 0;
+  private communityPluginInventoryRefreshTimer: TimeoutHandle | null = null;
+  private communityPluginLocalReconciliationTimer: TimeoutHandle | null = null;
+  private readonly communityPluginInventoryRevisionListeners = new Set<
+    (revision: number) => void
+  >();
+  private communityPluginLocalReconciliationQueue: Promise<void> =
+    Promise.resolve();
+  private readonly pendingCommunityPluginReconciliationIds =
+    new Map<string, number>();
+  private communityPluginReconciliationToken = 0;
+  private communityPluginReconciliationRetryOnLockRelease = false;
+  private communityPluginParticipation:
+    DeviceCommunityPluginParticipationV1 | null = null;
+  private communityPluginParticipationInitializationPromise:
+    Promise<DeviceCommunityPluginParticipationV1 | null> | null = null;
+  private communityPluginParticipationOperationSequence = 0;
+  /**
+   * Platform/name facts cached during the round-end reconcile for pending
+   * adoption rows. Filled from the round's fresh catalog and observations;
+   * entries stay until the next reconcile (missing after a restart resolves
+   * on the first settled round).
+   */
+  private communityPluginAdoptionPlatformFacts = new Map<
+    string,
+    { name: string | null; isDesktopOnly: boolean | null }
+  >();
+  private remoteCommunityPluginCatalogRefreshPromise:
+    Promise<RemoteCommunityPluginCatalogV1 | null> | null = null;
+  /** Consecutive catalog refresh failures since the last success (memory
+   *  only; the persisted catalog keeps its own `lastRefreshFailedAt`). */
+  private communityPluginCatalogRefreshConsecutiveFailures = 0;
+  private communityPluginCatalogLastRefreshFailureAt = 0;
+
+  /** Set to true after state.load() completes. Public so settings-tab
+   *  can guard the "Reset" button with it. */
+  _stateLoaded = false;
+
+  // ---- Operation Lock ----
+
+  /** Acquire the shared operation lock. Returns null on success, or the
+   *  holder's operation name if already held. */
+  private acquireOpLock(operation: string): string | null {
+    if (this.opLock !== null) return this.opLock;
+    this.opLock = operation;
+    // The held window (reset preflight crawl, settings commit) runs with no
+    // round and no other bar-refresh trigger, so the occupied phrase must be
+    // rendered here — waiting for an unrelated refresh leaves the bar on its
+    // pre-lock copy for the whole window (2026-09-20 回填实测).
+    this.updateStatusBar();
+    // 侧栏同样从这一份事实读「同步入口占用」（检测/准备期），所以它的重绘
+    // 时机也挂在这里——只刷状态栏会让面板停在点同步前的样子（2026-10-10）。
+    this.syncView?.render();
+    return null;
+  }
+
+  private releaseOpLock(): void {
+    this.opLock = null;
+    this.updateStatusBar();
+    this.syncView?.render();
+    this.retryCommunityPluginLocalReconciliationIfIdle();
+    this.drainDeferredSettingsMutations();
+  }
+
+  /** Status-bar phrase for one held-lock moment. The lock holder must be
+   *  visible while every side action bounces off the busy gateway — an idle
+   *  bar next to "another operation" notices is how the 2026-09-20 dead-end
+   *  window looked from the outside. */
+  private opHolderStatusKey(holder: string) {
+    switch (holder) {
+      // 同步持有者说现役「同步中…」：默认句「其他操作进行中」会被读成"别的
+      // 操作占着"，而这正是用户自己点的同步（2026-10-10）。
+      case "sync": return "status.syncing";
+      case "reset": return "status.occupiedReset";
+      case "sync-path-settings": return "status.occupiedPathSettings";
+      case "community-plugin-participation":
+        return "status.occupiedPluginCheck";
+      case "logout": return "status.occupiedLogout";
+      default: return "status.occupied";
+    }
+  }
+
+  /** User-facing holder name shared by the busy notice and the diagnostic
+   *  report (single mapping for both surfaces). */
+  private opHolderNameKey(holder: string) {
+    switch (holder) {
+      case "sync": return "opHolder.sync";
+      case "reset": return "opHolder.reset";
+      case "sync-path-settings": return "opHolder.pathSettings";
+      case "community-plugin-participation": return "opHolder.pluginCheck";
+      case "logout": return "opHolder.logout";
+      default: return "opHolder.other";
+    }
+  }
+
+  /** Whether a sync round / side action currently blocks sync-path settings
+   *  commits (the same conditions the commit guards reject with "busy"). */
+  private isSyncPathBusy(): boolean {
+    return this.opLock !== null
+      || this.syncExecutor?.hasActivityInFlight === true;
+  }
+
+  /**
+   * User-initiated sync-path settings mutations (manager toggles, adoption
+   * download) must never bounce off an in-flight round: while the commit
+   * guards would reject with "busy", the mutation waits here and applies in
+   * order once sync is idle again (2026-09-09 卡手反馈). The queue is
+   * in-memory on purpose — the toggled row stays pending until the commit
+   * lands, and a restart simply shows the truthful (unchanged) state.
+   *
+   * Returns a `cancel()` handle (2026-09-09 反悔拍板): cancelling a
+   * still-queued mutation settles its promise without running it, so the
+   * manager row can revert; once the mutation started applying, cancel is a
+   * no-op returning false (the commit then lands normally). The idle fast
+   * path has nothing to cancel and returns false as well. `isQueued()`
+   * distinguishes "waiting for sync to go idle" from "applying now" so the
+   * manager row only renders the queued affordance for the former.
+   */
+  runSettingsMutationWhenSyncIdle(
+    run: () => Promise<void>,
+  ): DeferredSettingsMutationHandle {
+    // One async hop for both paths. A run that returns a non-promise, or that
+    // throws synchronously, must still reach the drain as a promise: the drain
+    // removes an item from the queue before awaiting it, so an escape here
+    // would drop that settings change for good and leave its row loading.
+    const execute = async (): Promise<void> => {
+      await run();
+    };
+    if (!this.isSyncPathBusy()) {
+      return Object.assign(execute(), {
+        cancel: () => false,
+        isQueued: () => false,
+      });
+    }
+    let resolveGate!: () => void;
+    let rejectGate!: (error: unknown) => void;
+    const gate = new Promise<void>((resolve, reject) => {
+      resolveGate = resolve;
+      rejectGate = reject;
+    });
+    const item = {
+      started: false,
+      cancelled: false,
+      run: () => {
+        item.started = true;
+        if (item.cancelled) return Promise.resolve();
+        return execute();
+      },
+      resolve: () => resolveGate(),
+      reject: (error: unknown) => rejectGate(error),
+    };
+    this.deferredSettingsMutations.push(item);
+    this.armDeferredSettingsMutationRecheck();
+    const promise = gate as DeferredSettingsMutationHandle;
+    promise.cancel = () => {
+      if (item.started || item.cancelled) return false;
+      item.cancelled = true;
+      resolveGate();
+      return true;
+    };
+    promise.isQueued = () => !item.started;
+    return promise;
+  }
+
+  private armDeferredSettingsMutationRecheck(): void {
+    if (this.deferredSettingsMutationTimer !== null) return;
+    this.deferredSettingsMutationTimer = compatSetTimeout(() => {
+      this.deferredSettingsMutationTimer = null;
+      this.drainDeferredSettingsMutations();
+    }, DEFERRED_SETTINGS_MUTATION_RECHECK_MS);
+  }
+
+  private drainDeferredSettingsMutations(): void {
+    const next = this.deferredSettingsMutations.shift();
+    if (!next) return;
+    if (this.isSyncPathBusy()) {
+      this.deferredSettingsMutations.unshift(next);
+      this.armDeferredSettingsMutationRecheck();
+      return;
+    }
+    void next.run().then(next.resolve, next.reject).finally(() => {
+      this.drainDeferredSettingsMutations();
+    });
+  }
+
+  // ---- Lifecycle ----
+
+  async onload(): Promise<void> {
+    this.startupPerformance.begin(
+      this.platformFacts.isMobileApp ? "mobile" : "desktop",
+    );
+    this.startupPerformance.setHostFacts({
+      apiVersion,
+      pluginVersion: this.manifest.version,
+      visibilityAtOnload:
+        typeof document === "undefined" ? "" : document.visibilityState,
+    });
+    this.startupPerformance.markStage("onload:begin");
+    this.diag.log("lifecycle", "====== onload start ======");
+    this.diag.log(
+      "lifecycle",
+      `structuredClone implementation: ${structuredCloneImplementation}`,
+    );
+    this.diag.setAdapter(this.app.vault.adapter, getConfigDir(this.app.vault));
+
+    // ════ ① Fast init (all synchronous / negligible I/O) ════
+
+    const lang = I18n.detectLanguage(this.app as unknown as { vault: { getConfig: (key: string) => string } });
+    this.i18n = new I18n(lang);
+    this.startupPerformance.markStage("onload:i18n");
+    // Start the settings read now (the I/O overlaps every registration below)
+    // but do not await it: onload is the host's plugin-load phase, and the
+    // official load-time guide keeps data reads out of it. Consumers that
+    // decide from settings await `ensureSettingsLoaded()` first.
+    void this.beginSettingsLoad();
+    this.startupPerformance.markStage("onload:settings-kickoff");
+
+    // ════ ② Auth (create, register callback, then background-init) ════
+
+    const authBrowser = createAuthBrowserLauncher({
+      isDesktopApp: this.platformFacts.isDesktopApp,
+    });
+    const authCtx: AuthPluginContext = {
+      secretStorage: {
+        set: (key, value) => this.saveSecret(key, value),
+        get: (key) => this.loadSecret(key),
+        remove: (key) => this.removeSecret(key),
+      },
+      registerProtocolHandler: (action, handler) => {
+        this.registerObsidianProtocolHandler(action, handler);
+      },
+      openUrl: authBrowser.openUrl.bind(authBrowser),
+      // User profile cache: avoid network call on every cold start
+      profileCache: {
+        get: async () => {
+          // Startup-only read of two primitive fields: take the shared cache
+          // instead of paying a whole-object clone on the cold path.
+          const data = await this.readPluginDataSnapshot();
+          const cached = data?.[KEY_PROFILE_CACHE];
+          if (!isRecord(cached)) return null;
+          return typeof cached.displayName === "string" && typeof cached.accountId === "string"
+            ? { displayName: cached.displayName, accountId: cached.accountId }
+            : null;
+        },
+        set: async (profile) => {
+          await this.updatePluginData((data) => {
+            data[KEY_PROFILE_CACHE] = profile;
+          });
+        },
+        clear: async () => {
+          await this.updatePluginData((data) => {
+            delete data[KEY_PROFILE_CACHE];
+          });
+        },
+      },
+      // Verified-account binding: vault-local, account id + random lineage
+      // label. The refresh token stays in SecretStorage and never enters here.
+      accountBinding: {
+        get: async () => {
+          const data = await this.readPluginDataSnapshot();
+          const value = data?.[KEY_ACCOUNT_CREDENTIAL_BINDING];
+          return isAccountCredentialBindingV1(value) ? value : null;
+        },
+        set: async (binding) => {
+          await this.updatePluginData((data) => {
+            data[KEY_ACCOUNT_CREDENTIAL_BINDING] = binding;
+          });
+        },
+        clear: async (expectedCredentialId?: string) => {
+          await this.updatePluginData((data) => {
+            const current = data[KEY_ACCOUNT_CREDENTIAL_BINDING];
+            if (expectedCredentialId) {
+              if (!isAccountCredentialBindingV1(current)) return;
+              if (current.credentialId !== expectedCredentialId) return;
+            }
+            delete data[KEY_ACCOUNT_CREDENTIAL_BINDING];
+          });
+        },
+      },
+      // Durable vault identity for the one-time legacy bootstrap. Read-only
+      // and synchronous: an unloaded state yields empty values and the
+      // bootstrap stays off.
+      vaultIdentity: {
+        // The legacy bootstrap trusts the durable vault identity only when the
+        // account binding and the loaded sync scope agree; an inconsistent or
+        // not-yet-loaded state yields no identity and keeps the session closed.
+        getBoundAccountId: () => {
+          const bound = this.state?.boundAccountId ?? "";
+          const scopeAccount = this.state?.remoteScope?.accountId ?? "";
+          return bound && scopeAccount && bound === scopeAccount ? bound : null;
+        },
+        getBoundDriveId: () => this.state?.remoteScope?.driveId ?? null,
+      },
+      diag: this.diag,
+    };
+    this.auth = new AuthModule(authCtx, (key, params) => this.i18n.t(key, params));
+    // Foreground verification retries are lifecycle-driven; a hidden page
+    // leaves the chain parked until the host brings it back.
+    this.auth.setVerificationRetryActive(document.visibilityState !== "hidden");
+
+    // CRITICAL: register callback BEFORE initialize() so UI updates
+    // when the background token refresh completes
+    this.auth.onStateChange(() => {
+      this.updateStatusBar();
+      this.syncView?.render();
+      this.settingsTab?.refreshAuthState();
+      // /me binding can turn an earlier account-changed block into stale
+      // evidence (the same account is back, or the block was written before
+      // verification finished). Release it first, then let the ordinary
+      // scheduler observe the remaining records.
+      void this.resumeRecoveryAfterAccountVerification().finally(() => {
+        this.requestMutationRecoveryObservation("auth-state");
+      });
+      this.requestDescendantFileReconstructionContinuation("auth-state");
+    });
+
+    // ════ ③ Scanner + state (no state load yet) ════
+
+    let indexedDbVaultInstanceId =
+      loadOrCreateIndexedDbVaultInstanceId(this.app);
+    if (!indexedDbVaultInstanceId) {
+      this.diag.warn(
+        "state",
+        "Vault-local IndexedDB namespace is unavailable; new selection is disabled and an existing binding will fail closed",
+      );
+    }
+
+    this.state = new StateManager({
+      loadData: () => this.loadPluginData(),
+      updatePluginData: (mutator) => this.updatePluginData(mutator),
+      app: this.app,
+      layoutMigrationStorage: this.app,
+      manifest: this.manifest,
+      // State diagnostics (incl. the W4 canonicalization probe) read this
+      // channel; without it every `this.plugin.diag` site stays silent. The
+      // store contract takes plain strings (no logger import), so the live
+      // logger is narrowed here.
+      diag: {
+        warn: (category, message, detail) =>
+          this.diag.warn(category as DiagCategory, message, detail),
+        log: (category, message, detail) =>
+          this.diag.log(category as DiagCategory, message, detail),
+        isEnabled: (category) =>
+          this.diag.isEnabled(category as DiagCategory),
+      },
+      // Read live instead of a construction-time snapshot: a reset-time
+      // rotation (orphaned unreadable IndexedDB storage) must keep the
+      // captured identity and the live read in agreement.
+      get indexedDbVaultInstanceId() {
+        return indexedDbVaultInstanceId ?? undefined;
+      },
+      ...(indexedDbVaultInstanceId
+        ? {
+            readIndexedDbVaultInstanceId: () =>
+              readIndexedDbVaultInstanceId(this.app),
+            rotateIndexedDbVaultInstanceId: () => {
+              const rotated = rotateIndexedDbVaultInstanceId(this.app);
+              if (rotated) indexedDbVaultInstanceId = rotated;
+              return rotated;
+            },
+            createPublic113IndexedDbCandidateStore: (sourceStateDigest) => {
+              // The identity is non-null inside this branch; the guard keeps
+              // the fail-closed contract for any future reordering.
+              if (!indexedDbVaultInstanceId) {
+                throw new Error(
+                  "IndexedDB Vault instance identity is unavailable",
+                );
+              }
+              return new IndexedDbPublic113StateStore(
+                public113IndexedDbDatabaseName(
+                  indexedDbVaultInstanceId,
+                  sourceStateDigest,
+                ),
+              );
+            },
+            createStateV2IndexedDbActiveStore: (databaseId, recovery) =>
+              new StateV2IndexedDbActiveStore(databaseId, recovery),
+            createRemoteScopeRecoveryEvidenceStore: (vaultInstanceId) =>
+              new IndexedDbRemoteScopeRecoveryEvidenceStore(vaultInstanceId),
+          }
+        : {}),
+    });
+    // Reset circuit breakers on fresh OAuth login — old failures may
+    // be due to stale auth scope and are no longer predictive.
+    authCtx.onFreshLogin = () => {
+      void this.state!.resetCircuitBreakers().catch((error) => {
+        // The diagnostic report serializes a raw Error as `{}` (F14).
+        this.diag.warn(
+          "state",
+          "failed to reset circuit breakers after fresh login",
+          error instanceof Error
+            ? `${error.name}: ${error.message}`
+            : String(error),
+        );
+      });
+      void this.offerPostLoginRepositoryNotices();
+    };
+    // Loaded in the background after UI registration so Ribbon state is accurate.
+
+    this.scanner = new LocalScanner(this.app.vault, undefined, this.manifest.id);
+    this.scanner.setDiag(this.diag);
+    // Settings are still loading in the background (kicked off before the
+    // scanner existed): apply the values known so far so the scanner starts
+    // with a complete config. The settings read re-applies the real values
+    // once it settles, so this is not the only restore point.
+    this.applySyncPathSettings();
+    this.applyMaxFileSize();
+    this.onedrive = new OneDriveClient(
+      () => this.auth!.getAccessToken(),
+      this.diag,
+      getConfigDir(this.app.vault),
+      this.manifest.id,
+      this.platformFacts,
+    );
+    this.syncExecutor = new SyncExecutor(
+      this.onedrive,
+      this.scanner,
+      this.state,
+      this.app.vault.getName(),
+      this.i18n,
+      this.progressStore,
+      this.diag,
+      this.app.fileManager,
+      () => {
+        this.updateStatusBar();
+        // 侧栏动作的字节进度也按每块触发：同样只走轻量数字补丁。
+        this.syncView?.renderProgress();
+        this.settingsTab?.refreshSyncState();
+      },
+      this.operationLifecycle,
+      this.noticeCenter,
+      this.platformFacts,
+      (path) => this.noteSelfDeletedLocalPath(path),
+    );
+    this.syncExecutor.setAutomaticHandlingPolicy(this.automaticHandlingPolicy);
+    this.syncExecutor.setSyncDirection(this.syncDirection);
+    this.syncExecutor.setCommunityPluginSyncPolicy(
+      this.getEffectiveCommunityPluginSyncPolicy(),
+    );
+    this.startupPerformance.markStage("onload:core-ready");
+
+    // ════ ④ Register UI (Obsidian is usable from here on) ════
+
+    this.settingsTab = createEasySyncSettingTab(this, this.platformFacts);
+    this.addSettingTab(this.settingsTab);
+    this.registerView(
+      SYNC_VIEW_TYPE,
+      (leaf: WorkspaceLeaf) => new EasySyncSyncView(leaf, this, this.platformFacts),
+    );
+    this.registerEvent(this.app.workspace.on(
+      "layout-change",
+      () => this.refreshSyncNoticeVisibility(),
+    ));
+    this.registerEvent(this.app.workspace.on(
+      "active-leaf-change",
+      () => this.refreshSyncNoticeVisibility(),
+    ));
+    this.ribbonEl = this.addRibbonIcon(
+      "cloud",
+      this.i18n.t("syncView.title"),
+      () => this.handleRibbonClick(),
+    );
+    this.ribbonEl.addClass("easy-sync-ribbon");
+    this.statusBarEl = this.addStatusBarItem();
+    this.initStatusBar();
+    this.updateStatusBar(); // Shows "Connecting…" while auth initializes
+    // Mobile status-bar visibility is a persisted setting; it is applied by
+    // the settings-load continuation (a default flip here would flash the bar
+    // for users who turned it off).
+    this.addCommand({
+      id: "start-sync",
+      name: this.i18n.t("command.syncNow"),
+      callback: () => {
+        void this.startManualSync();
+      },
+    });
+    this.addCommand({
+      id: "show-detail",
+      name: this.i18n.t("command.showDetail"),
+      callback: () => {
+        void this.activateSyncView();
+      },
+    });
+    this.registerRecoveryUi();
+    this.startupPerformance.markUiReady();
+
+    // First layout-ready callback: record the host wait separately from the
+    // plugin's own onload segment. Push-only, guarded against a late callback
+    // after unload; it never awaits anything.
+    this.app.workspace.onLayoutReady(() => {
+      if (this.unloaded) return;
+      this.startupPerformance.markLayoutReady();
+    });
+
+    // Update reminder: prompt-only, silent, 24h-throttled check at the
+    // startup tail (方案单 20260915-0025 §四 检查层). Registered separately
+    // from the auth chain so neither can fail the other.
+    this.app.workspace.onLayoutReady(() => {
+      // The check's throttle bookkeeping comes from the settings read; wait
+      // for it so a slow cold read cannot degrade into "due" and refetch.
+      void this.ensureSettingsLoaded()
+        .then(() => {
+          // The reminder can show from persisted lastKnownLatest before the
+          // network round runs; read the installed copy first so an update
+          // that landed while Obsidian was closed never flashes the row.
+          this.refreshInstalledManifestVersion(true);
+          this.runUpdateCheckFlow();
+        })
+        .catch(() => undefined);
+    });
+
+    // ════ ⑤ Background auth init + state load ════
+    // Official load-time guide: heavy startup work belongs in onLayoutReady,
+    // which runs only after Obsidian finishes loading. Deferring keeps the
+    // envelope materialization from competing with Obsidian's own layout
+    // rendering for the main thread during the interaction-blocked loading
+    // phase, so the app becomes usable sooner.
+    this.app.workspace.onLayoutReady(() => {
+      this.startupPerformance.markStage("auth:start");
+      void this.auth!.initialize()
+        .then(() => {
+          const authState = this.auth?.authState;
+          this.startupPerformance.markAuthReady({
+            outcome: "ready",
+            loggedIn: authState?.isLoggedIn === true,
+            accountVerified:
+              typeof authState?.accountId === "string"
+              && authState.accountId.length > 0,
+          });
+          this.emitColdStartSummaryIfReady();
+          this.schedulePersistedCommunityPluginJoinSync("auth-ready");
+          this.noteStartupReadinessSettled("auth");
+        })
+        .catch((e) => {
+          this.startupPerformance.markAuthReady({
+            outcome: "failed",
+            loggedIn: false,
+            accountVerified: false,
+          });
+          this.emitColdStartSummaryIfReady();
+          this.diag.warn("lifecycle", "background auth init failed", e);
+          // A failed auth init still settles the readiness pair: the startup
+          // round then runs and is consumed as "not logged in" (runAutomaticSync),
+          // which is the honest outcome — there is nothing to sync yet.
+          this.noteStartupReadinessSettled("auth");
+        });
+      // onStateChange callback fires when complete → UI auto-refreshes
+      this.startupPerformance.markStage("state:start");
+      void this.ensureStateLoaded()
+        .then(() => {
+          const state = this.state;
+          const block = state?.v2StateLoadRecoveryBlock ?? null;
+          this.startupPerformance.markStateReady({
+            outcome: "ready",
+            activeV2: state?.isV2StateActive === true,
+            authorityBlocked: block !== null,
+            blockReason: block?.reason ?? null,
+            remoteFiles: state?.remoteSnapshot.length ?? 0,
+            remoteFolders: state?.remoteFolders.length ?? 0,
+            mutationLedger: state?.mutationLedger.length ?? 0,
+            pendingReview: state?.planReviewActive === true,
+          });
+          this.emitColdStartSummaryIfReady();
+          this.updateStatusBar();
+          // Auth may bind /me before the state finishes loading; retry the
+          // release here so a persisted account-changed block is not left
+          // waiting for the next session.
+          void this.resumeRecoveryAfterAccountVerification().finally(() => {
+            this.requestMutationRecoveryObservation("state-loaded");
+          });
+          this.requestDescendantFileReconstructionContinuation("state-loaded");
+          void this.scheduleCommunityPluginLocalReconciliation("state-loaded");
+          this.schedulePersistedCommunityPluginJoinSync("state-loaded");
+          this.noteStartupReadinessSettled("state");
+        })
+        .catch((e) => {
+          this.startupPerformance.markStateReady({
+            outcome: "failed",
+            activeV2: false,
+            authorityBlocked: true,
+            blockReason: "state-load-rejected",
+            remoteFiles: 0,
+            remoteFolders: 0,
+            mutationLedger: 0,
+            pendingReview: false,
+          });
+          this.emitColdStartSummaryIfReady();
+          this.diag.warn("state", "background state load failed", e);
+          // Deliberately NOT reporting state readiness here: with the state
+          // load rejected there is nothing to plan against, and
+          // `ensureStateLoaded` (awaited by the round) would keep re-throwing
+          // the cached rejection, turning the busy-retry wheel into a 7s
+          // failure loop. A failed load is owned by the self-heal path and by
+          // the interval/manual rounds instead.
+        });
+    });
+
+    // ════ ⑥ Auto-sync timer (skips until auth is ready) ════
+
+    // Vault listeners attach in onLayoutReady (see the method comment): the
+    // host's initialization calls `create` for every existing file, which must
+    // not read as a local change.
+    this.registerVaultLifecycleListeners();
+    this.registerDomEvent(document, "visibilitychange", () => {
+      if (document.visibilityState === "hidden") {
+        // Backgrounding can end in a hard kill before the batch window fires;
+        // push the pending diagnostic lines to disk now (2026-10-13 F26).
+        void this.diag.forceFlush();
+        this.auth?.setVerificationRetryActive(false);
+        return;
+      }
+      if (document.visibilityState === "visible") {
+        this.auth?.setVerificationRetryActive(true);
+        this.requestMutationRecoveryObservation("foreground");
+        this.requestDescendantFileReconstructionContinuation("foreground");
+        void this.scheduleCommunityPluginLocalReconciliation("foreground");
+        this.schedulePersistedCommunityPluginJoinSync("foreground");
+        // Returning to the app often follows an update outside it; re-read the
+        // installed copy so the reminder retires without waiting for a reload.
+        this.refreshInstalledManifestVersion(true);
+        // Device-code login: check the token endpoint immediately on return
+        // instead of waiting for the next (possibly throttled) poll tick.
+        void this.auth?.checkDeviceCodeNow();
+        // Silent token refresh: recover a session whose token expired during
+        // offline/sleep periods without waiting for the next sync round.
+        void this.auth?.refreshNowIfNeeded();
+      }
+    });
+    this.registerDomEvent(window, "focus", () => {
+      this.refreshInstalledManifestVersion(true);
+      this.auth?.setVerificationRetryActive(true);
+      void this.auth?.checkDeviceCodeNow();
+      void this.auth?.refreshNowIfNeeded();
+    });
+    this.registerDomEvent(window, "online", () => {
+      // Connectivity restored (e.g. laptop wake or network reconnection):
+      // give the silent token refresh a fresh chance immediately, clearing
+      // any transient backoff. The verification chain restarts as well.
+      this.auth?.setVerificationRetryActive(true);
+      void this.auth?.refreshNowIfNeeded(true);
+    });
+    this.registerDomEvent(window, "offline", () => {
+      // Mirror the online listener: the retry-pending presentation splits on
+      // the system offline flag, so re-render the status bar immediately
+      // instead of waiting for the next sync round.
+      this.updateStatusBar();
+    });
+    // `startAutoSync()` runs from the settings-load continuation: its gates
+    // read persisted interval/pause values, and arming timers from defaults
+    // would briefly contradict the user's saved configuration.
+
+    this.startupPerformance.markOnloadReturned();
+    this.diag.log("lifecycle", "onload complete (auth initializing in background)");
+  }
+
+  // ════ 文件版本找回入口（文件菜单项＋命令） ════
+  // 两个入口都打开同一个找回弹框，不带路径的进入总列表。
+  // 菜单项只对文件出现（文件夹没有"版本"可找回），且不按 `source` 过滤——
+  // 官方不枚举 source 值（桌面右键／更多选项／标签页头各不相同）。
+
+  /** addSections 未进公开类型但长期是宿主声明分组位置的机制；宿主一旦
+   *  收掉它，可选调用安全失效＝专属分组退回官方默认的沉底现状，不崩。 */
+  private declareSection(section: string, menu: Menu): void {
+    (menu as MenuWithSectionList).addSections?.([section]);
+  }
+
+  private registerRecoveryUi(): void {
+    this.addCommand({
+      id: "open-recovery",
+      name: this.i18n.t("recovery.command"),
+      callback: () => this.openRecoveryEntry(),
+    });
+    this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => {
+      if (!(file instanceof TFile)) return;
+      // 专属分组（不用官方 action 组）＝与系统动作分开、不混入宿主功能
+      // （2026-10-20 用户拍板独立分组）。宿主文件菜单按分组名单渲染，名单外
+      // 的分组名（只 setSection）会被追加到名单末尾沉底；addSections 把给定
+      // 名单插进宿主名单中默认组（""）的位置——紧邻 danger 组（重命名/删除
+      // 所在组）之前＝专属落到重命名/删除之上。
+      this.declareSection("easy-sync", menu);
+      menu.addItem((item) => {
+        item
+          .setTitle(this.i18n.t("recovery.menuItem"))
+          .setIcon("history")
+          .setSection("easy-sync")
+          .onClick(() => this.openRecoveryEntry(file.path));
+      });
+    }));
+  }
+
+  /**
+   * 找回弹框门面：只组装现役依赖（库适配器／插件目录／临时目录／同步状态／
+   * OneDrive 客户端）并打开；一切读写都由弹框内部按用户动作发起。
+   */
+  openRecoveryEntry(path?: string): void {
+    const state = this.state;
+    const cloud = this.onedrive;
+    if (!state || !cloud) return;
+    const { pluginDir, tmpDir } = getEasySyncPaths(
+      this.app.vault,
+      this.manifest.id,
+    );
+    new RecoveryModal(this.app, {
+      i18n: this.i18n,
+      noticeCenter: this.noticeCenter,
+      adapter: this.app.vault.adapter,
+      pluginDir,
+      tmpDir,
+      state,
+      cloud,
+      ...(path === undefined ? {} : { path }),
+    }, this.platformFacts).open();
+  }
+
+  // ════ Update reminder (方案单 20260915-0025) ════
+  // Prompt-only update notice: this plugin never downloads or writes its own
+  // bundle (host policy forbids self-install); it only surfaces a sidebar row
+  // handing the user to Obsidian's own plugin update page. Every check
+  // failure stays silent and touches nothing.
+
+  private updateLastCheckAt: number | null = null;
+  private updateLastKnownLatest: string | null = null;
+  private updateSnooze: UpdateReminderSnooze | null = null;
+  private updateCheckTimer: number | null = null;
+  /** Version written in the plugin folder's manifest.json; unlike
+   *  `this.manifest.version` it advances without a reload. */
+  private installedManifestVersion: string | null = null;
+  private installedManifestVersionReadAt = 0;
+  private installedManifestVersionReading = false;
+
+  /** Sidebar row model, or null when nothing should be shown. Single source
+   *  of truth for both the body-mode gate and the row render. */
+  getUpdatePromptState(): { latest: string; current: string } | null {
+    const latest = this.updateLastKnownLatest;
+    if (!latest) return null;
+    this.refreshInstalledManifestVersion();
+    return this.computeUpdatePromptState();
+  }
+
+  /** Pure read of the current row model; the disk refresh lives in the
+   *  public getter so this can be reused when a refresh settles. */
+  private computeUpdatePromptState(): { latest: string; current: string } | null {
+    const latest = this.updateLastKnownLatest;
+    if (!latest) return null;
+    const current = this.manifest.version;
+    if (!shouldShowUpdateReminder({
+      latest,
+      current,
+      installed: this.installedManifestVersion,
+    })) {
+      return null;
+    }
+    if (isUpdateReminderSuppressed(latest, this.updateSnooze, Date.now())) {
+      return null;
+    }
+    return { latest, current };
+  }
+
+  /**
+   * The running manifest version only advances on reload; the copy on disk
+   * advances the moment an update lands (host update awaiting reload, manual
+   * copy, self-sync download). Reading it lets the reminder retire as soon as
+   * the files are in place instead of pointing at an update the host can no
+   * longer offer. Read failures keep the last known value and never suppress.
+   */
+  private refreshInstalledManifestVersion(force = false): void {
+    if (this.unloaded || this.installedManifestVersionReading) return;
+    // Only the reminder's own gate needs this read: once the running version
+    // matches the published release no row can show, so an idle device does
+    // no extra folder reads.
+    const latest = this.updateLastKnownLatest;
+    if (!latest || !isNewerVersion(latest, this.manifest.version)) return;
+    const now = Date.now();
+    if (!force && now - this.installedManifestVersionReadAt < INSTALLED_MANIFEST_REREAD_MS) {
+      return;
+    }
+    this.installedManifestVersionReadAt = now;
+    this.installedManifestVersionReading = true;
+    const { manifestFile } = getEasySyncPaths(this.app.vault, this.manifest.id);
+    let read: Promise<string>;
+    try {
+      read = this.app.vault.adapter.read(manifestFile);
+    } catch {
+      this.installedManifestVersionReading = false;
+      return;
+    }
+    void read.then(
+      (text) => {
+        this.installedManifestVersionReading = false;
+        if (this.unloaded) return;
+        const version = parseManifestVersion(text);
+        if (version === this.installedManifestVersion) return;
+        const wasVisible = this.computeUpdatePromptState() !== null;
+        this.installedManifestVersion = version;
+        if (version !== null && version !== this.manifest.version) {
+          this.diag.log("lifecycle", "installed manifest version differs from running", {
+            installed: version,
+            current: this.manifest.version,
+          });
+        }
+        if ((this.computeUpdatePromptState() !== null) !== wasVisible) {
+          this.syncView?.render();
+        }
+      },
+      () => {
+        // Unreadable folder state (plugin being replaced, permissions): the
+        // reminder keeps its previous decision and the next read retries.
+        this.installedManifestVersionReading = false;
+      },
+    ).catch(() => {
+      // A render torn down mid-read must not surface as an unhandled rejection.
+      this.installedManifestVersionReading = false;
+    });
+  }
+
+  /** 「去更新」：stateless handoff to the host's own plugin detail page.
+   *  The sidebar row must stay until the update actually runs or a snooze is
+   *  confirmed (行不清规则) — this method intentionally mutates nothing. */
+  openUpdatePage(): void {
+    window.open(`obsidian://show-plugin?id=${encodeURIComponent(this.manifest.id)}`);
+  }
+
+  snoozeUpdateReminder(choice: "snooze" | "skipVersion"): void {
+    const latest = this.updateLastKnownLatest;
+    if (!latest) return;
+    this.updateSnooze = {
+      version: latest,
+      until: choice === "snooze" ? Date.now() + SNOOZE_DURATION_MS : null,
+    };
+    saveUpdateCheckState(this.updateDeviceStorage(), {
+      snooze: { ...this.updateSnooze },
+    });
+    this.syncView?.render();
+  }
+
+  /** Startup-tail + 24h-cycle check. lastKnownLatest persists the prompt
+   *  across restarts even when the throttle skips the network call; a failed
+   *  round leaves lastCheckAt untouched and is retried after one hour (still
+   *  silent) instead of waiting the regular 24h cycle. Bookkeeping persists
+   *  via the official App localStorage API (not the plugin data file) so a
+   *  routine write can never drift a V2 migration input digest mid-activation
+   *  (issue #18). */
+  private runUpdateCheckFlow(): void {
+    // Aggregate-host build (obsidian-my-obsidian): this bundle does not track
+    // upstream easy-sync releases; the reminder round is a no-op there.
+    if (isUpdateCheckDisabledByBuild()) return;
+    void (async () => {
+      const now = Date.now();
+      let nextDelayMs = UPDATE_CHECK_INTERVAL_MS;
+      if (isUpdateCheckDue(this.updateLastCheckAt, now)) {
+        const latest = await fetchLatestStableVersion((opts) =>
+          requestUrl(opts),
+        );
+        // The fetch can outlive the plugin (unload during flight); a stale
+        // continuation must not write bookkeeping, re-render, or re-arm the
+        // 24h timer on a dead instance.
+        if (this.unloaded) return;
+        if (latest !== null) {
+          this.updateLastKnownLatest = latest;
+          this.updateLastCheckAt = now;
+          saveUpdateCheckState(this.updateDeviceStorage(), {
+            lastCheckAt: now,
+            lastKnownLatest: latest,
+          });
+          this.diag.log("lifecycle", "update check found release", {
+            latest,
+            current: this.manifest.version,
+          });
+        } else {
+          this.diag.log("lifecycle", "update check unavailable; retry scheduled", {
+            retryInMs: resolveNextUpdateCheckDelay(null),
+          });
+        }
+        nextDelayMs = resolveNextUpdateCheckDelay(latest);
+      }
+      this.syncView?.render();
+      this.scheduleNextUpdateCheck(nextDelayMs);
+    })().catch(() => undefined);
+  }
+
+  /** Vault-scoped device storage for the update-reminder bookkeeping via the
+   *  official App localStorage API — never the synced plugin data file, whose
+   *  whole content is bound into the V2 migration input digest. Hosts without
+   *  the API (bare test harnesses) keep the state in memory only. */
+  private updateDeviceStorage(): UpdateCheckStorage | null {
+    if (
+      typeof this.app.loadLocalStorage !== "function"
+      || typeof this.app.saveLocalStorage !== "function"
+    ) {
+      return null;
+    }
+    return {
+      getItem: (key) => {
+        const value = this.app.loadLocalStorage(key) as unknown;
+        return typeof value === "string" ? value : null;
+      },
+      setItem: (key, value) => this.app.saveLocalStorage(key, value),
+    };
+  }
+
+  private scheduleNextUpdateCheck(
+    delayMs: number = UPDATE_CHECK_INTERVAL_MS,
+  ): void {
+    if (this.updateCheckTimer !== null) window.clearTimeout(this.updateCheckTimer);
+    this.updateCheckTimer = window.setTimeout(() => {
+      this.updateCheckTimer = null;
+      this.runUpdateCheckFlow();
+    }, delayMs);
+  }
+
+  onunload(): void {
+    this.unloaded = true;
+    if (this.updateCheckTimer !== null) {
+      window.clearTimeout(this.updateCheckTimer);
+      this.updateCheckTimer = null;
+    }
+    this.startupPerformance.cancel();
+    this.diag.log("lifecycle", "unloading");
+    if (this.syncExecutor) {
+      this.syncExecutor.invalidateLifecycle("unload");
+    } else {
+      this.operationLifecycle.invalidate("unload");
+    }
+    // Sever the UI gateway immediately. The invalidated executor object stays
+    // alive only for already-captured async work to drain safely.
+    this.syncExecutor = null;
+    this.communityPluginInventoryRevisionListeners.clear();
+    this.pendingCommunityPluginReconciliationIds.clear();
+    this.communityPluginReconciliationRetryOnLockRelease = false;
+    this.deferredSettingsMutations.splice(0).forEach((mutation) => {
+      mutation.reject(
+        new Error("EasySync unloaded before the queued settings mutation ran"),
+      );
+    });
+    compatClearTimeout(this.deferredSettingsMutationTimer);
+    this.deferredSettingsMutationTimer = null;
+    compatClearTimeout(this.communityPluginInventoryRefreshTimer);
+    this.communityPluginInventoryRefreshTimer = null;
+    compatClearTimeout(this.communityPluginLocalReconciliationTimer);
+    this.communityPluginLocalReconciliationTimer = null;
+    compatClearTimeout(this.v2StateReloadRetryTimer);
+    this.v2StateReloadRetryTimer = null;
+    compatClearTimeout(this.scopeCrossingPromptTimer);
+    this.scopeCrossingPromptTimer = null;
+    this.stopAutoSync();
+    this.auth?.stopVerificationRetry();
+    this.cancelDescendantFileReconstructionContinuation();
+    this.disableMobileStatusBar();
+    compatClearTimeout(this.ribbonSuccessTimer);
+    compatClearTimeout(this.rsMigrationCompletionNoticeTimer);
+    this.rsMigrationCompletionNoticeTimer = null;
+    compatCancelAnimationFrame(this.syncNoticeFrame);
+    compatCancelAnimationFrame(this.statusBarFrame);
+    this.statusBarFrame = null;
+    this.noticeCenter.dispose();
+    void this.state?.close().catch(() => undefined);
+    void this.diag.dispose().catch(() => undefined);
+    // Auth token stays in SecretStorage across sessions
+  }
+
+  /**
+   * Vault lifecycle listeners attach only once the workspace is ready.
+   *
+   * Obsidian's vault initialization calls `create` for every existing file
+   * (official load-time guide, "Listening to `vault.on('create')`"). Attached
+   * in `onload`, that host init flood read as local modifications and scheduled
+   * an auto-sync round on every cold start (archived design 20260802-103406
+   * §4.5/§6.1「Vault 初始化 create 洪峰不形成 dirty hint」；宿主实测 2026-10-14：
+   * 静态库冷启动 onload 后 43ms 即打出 dirty hint）。`onLayoutReady` runs
+   * immediately when the layout is already ready, so plugin reload / late
+   * enable keep the previous timing. The unload gate keeps the "unload cleans
+   * every resource" invariant for a callback that runs after teardown.
+   */
+  private registerVaultLifecycleListeners(): void {
+    this.app.workspace.onLayoutReady(() => {
+      if (this.unloaded) return;
+      this.registerEvent(this.app.vault.on("create", (file) => {
+        this.handleLocalVaultChange(file, "create");
+      }));
+      this.registerEvent(this.app.vault.on("modify", (file) => {
+        this.handleLocalVaultChange(file, "modify");
+      }));
+      this.registerEvent(this.app.vault.on("delete", (file) => {
+        void this.handleLocalVaultDelete(file);
+      }));
+      this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+        void this.handleLocalVaultRename(file, oldPath);
+      }));
+    });
+  }
+
+  // ---- Public API for UI callbacks ----
+
+  /**
+   * The EasySync leaf every plugin-driven refresh targets. A second EasySync
+   * leaf can exist (the user splits the view, or a dev opens it directly):
+   * picking "the first one" blindly let a hidden, never-opened duplicate
+   * swallow every render while the visible panel froze at the moment the
+   * duplicate appeared (2026-09-29 实测). Prefer a leaf the host actually
+   * shows; fall back to the first when none is shown.
+   *
+   * 当前适用上限：多个面板同时可见时只驱动其中一个（先发现即用），其余面板
+   * 停在上一次渲染。重开触发＝真机反馈「拆分出第二个 EasySync 面板后其中一侧
+   * 不再更新」，届时改为对全部叶渲染。
+   */
+  private primarySyncViewLeaf(): WorkspaceLeaf | null {
+    const leaves = this.app.workspace.getLeavesOfType(SYNC_VIEW_TYPE);
+    if (leaves.length === 0) return null;
+    return leaves.find((leaf) => leaf.view.containerEl?.isShown()) ?? leaves[0];
+  }
+
+  get syncView(): EasySyncSyncView | null {
+    const leaf = this.primarySyncViewLeaf();
+    if (!leaf) return null;
+    const view = leaf.view as unknown as Partial<EasySyncSyncView>;
+    // Hot reload can leave an old ItemView instance without the new prototype.
+    return typeof view.render === "function" ? view as EasySyncSyncView : null;
+  }
+
+  /** Open the sync detail view in the left sidebar */
+  async activateSyncView(): Promise<void> {
+    const existing = this.primarySyncViewLeaf();
+    if (existing) {
+      await this.app.workspace.revealLeaf(existing);
+      this.focusSyncPanel(existing);
+      this.refreshSyncNoticeVisibility();
+      return;
+    }
+    const leaf = this.app.workspace.getLeftLeaf(false);
+    if (!leaf) return;
+    await leaf.setViewState({
+      type: SYNC_VIEW_TYPE,
+      active: true,
+    });
+    // setViewState only creates the view: with the sidebar collapsed the panel
+    // stayed hidden, so a first entry (no leaf yet) looked like a no-op
+    // (2026-10-09 宿主实测). revealLeaf is the host's documented way to bring
+    // a sidebar leaf forward — "If the leaf is in a sidebar, the sidebar will
+    // be uncollapsed" (obsidian.d.ts, @since 1.7.2).
+    await this.app.workspace.revealLeaf(leaf);
+    this.focusSyncPanel(leaf);
+    this.refreshSyncNoticeVisibility();
+  }
+
+  /**
+   * 「打开同步面板」的强聚焦（2026-11-10 用户反馈：桌面端点入口像没反应）。
+   *
+   * 只 revealLeaf 时侧栏虽已展开，但该 leaf 不是活动叶、容器也没拿到焦点；桌面
+   * 设置面又是独立窗口，用户看不到变化。按 OpenPlug 的现役写法成对调用：
+   * `revealLeaf`（展开侧栏／选中 tab）＋ `setActiveLeaf(leaf, { focus: true })`
+   * （设为活动叶并聚焦容器）。移动端由 openSyncPanelFromSettings() 关闭设置面，
+   * 同样无害。
+   */
+  private focusSyncPanel(leaf: WorkspaceLeaf): void {
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+  }
+
+  /**
+   * Settings-page entry to the sync panel.
+   *
+   * Desktop: the 1.13+ settings surface is its own window in front of the main
+   * window, so close it first — revealing the panel while settings still covers
+   * the main window reads as a no-op (2026-11-10 user feedback; same order as
+   * OpenPlug's settings entry comment).
+   *
+   * Mobile: the settings surface is a full-screen modal too, but reveal first
+   * and close after. The drawer opens behind the modal; closing first shows a
+   * frame of empty workspace before the panel appears (2026-10-09 real-device
+   * feedback). `activateSyncView` still reveals and focuses the panel.
+   */
+  async openSyncPanelFromSettings(): Promise<void> {
+    if (this.platformFacts.isMobile) {
+      await this.activateSyncView();
+      this.closePluginSettings();
+      return;
+    }
+    this.closePluginSettings();
+    await this.activateSyncView();
+  }
+
+  private async runSideActionIntent(
+    path: string,
+    failureKey:
+      | "notice.conflict.failed"
+      | "notice.delete.failed"
+      | "notice.emptyFolder.failed"
+      | "notice.folderLocation.failed"
+      | "notice.folderSubtree.failed"
+      | "notice.sharedFolderIdentity.failed"
+      | "notice.staleIdentity.failed"
+      | "notice.scopeCrossing.failed"
+      | "notice.mutationResolution.failed",
+    action: (executor: SyncExecutor, state: StateManager) => Promise<void>,
+    requireIdleSideActions = false,
+    /** A confirmed batch waits for a round that is already running instead of
+     *  bouncing off it: the executor drains that round before it takes the
+     *  side-action queue (iOS 2026-10-27, 2,000 confirmed rows dropped by a
+     *  1–5 s round). Every other blocker keeps the ordinary busy notice. */
+    tolerateRunningRound = false,
+  ): Promise<boolean> {
+    const executor = this.syncExecutor;
+    const state = this.state;
+    if (!executor || !state) return false;
+
+    const rejectBusy = (): boolean => {
+      if (
+        (
+          this.opLock === null
+          || (tolerateRunningRound && this.opLock === "sync")
+        )
+        && (tolerateRunningRound || !executor.isRunning)
+        && (!requireIdleSideActions || !executor.hasSideActionsInFlight)
+      ) {
+        return false;
+      }
+      // The reason must name the actual blocker: a running round, the exact
+      // lock holder, or another in-flight side action. One generic sentence
+      // for all three read as a lie while the bar looked idle.
+      const reason = executor.isRunning && !tolerateRunningRound
+        ? this.i18n.t("result.alreadyRunning")
+        : this.opLock !== null
+          ? this.i18n.t("result.lockBusyWithHolder", {
+              holder: this.i18n.t(this.opHolderNameKey(this.opLock)),
+            })
+          : this.i18n.t("result.lockBusy");
+      this.noticeCenter.show({
+        key: `side-action-gateway:busy:${path}`,
+        message: this.i18n.t(failureKey, {
+          path,
+          reason,
+        }),
+        priority: NOTICE_PRIORITY.attention,
+        className: "easy-sync-notice-action",
+      });
+      return true;
+    };
+
+    try {
+      await this.ensureStateLoaded();
+      if (rejectBusy()) return false;
+      if (state.hasV2StateLoadRecoveryBlock) {
+        this.noticeCenter.show({
+          key: "side-action-gateway:v2-state-load-blocked",
+          message: this.i18n.t("result.v2StateLoadBlocked"),
+          priority: NOTICE_PRIORITY.critical,
+          className: "easy-sync-notice-action",
+          category: "safety",
+        });
+        return false;
+      }
+      if (state.hasV2RemoteScopeRecovery) {
+        this.noticeCenter.show({
+          key: "side-action-gateway:v2-scope-recovery-pending",
+          message: this.i18n.t("result.v2ScopeRecoveryPending"),
+          priority: NOTICE_PRIORITY.critical,
+          className: "easy-sync-notice-action",
+          category: "safety",
+        });
+        return false;
+      }
+      if (state.isV2StateActive === false) {
+        this.noticeCenter.show({
+          key: "side-action-gateway:v2-migration-required",
+          message: this.i18n.t("notice.v2MigrationRequired"),
+          priority: NOTICE_PRIORITY.attention,
+          className: "easy-sync-notice-action",
+          category: "safety",
+        });
+        return false;
+      }
+      if (!await this.checkAccountBinding()) return false;
+      if (rejectBusy()) return false;
+      const hadPendingDecision =
+        (state.pendingIssues?.length ?? 0) > 0
+        || (state.pendingConflicts?.length ?? 0) > 0
+        || (state.pendingRemoteDeletes?.length ?? 0) > 0;
+      await action(executor, state);
+      await this.maybeResumeAutoSyncAfterResolvedDecisions(
+        state,
+        executor,
+        hadPendingDecision,
+      );
+      this.updateStatusBar();
+      this.syncView?.render();
+      this.settingsTab?.refreshSyncState();
+      return true;
+    } catch (error) {
+      const reason = describeError(error);
+      this.diag.warn("execute", `side-action gateway failed — ${path}`, reason);
+      this.noticeCenter.show({
+        key: `side-action-gateway:failed:${path}`,
+        message: this.i18n.t(failureKey, { path, reason }),
+        priority: NOTICE_PRIORITY.failure,
+        className: "easy-sync-notice-action",
+      });
+      this.updateStatusBar();
+      this.syncView?.render();
+      this.settingsTab?.refreshSyncState();
+      return false;
+    }
+  }
+
+  /**
+   * Legacy conflict-owned automatic pause cleanup. New runs never pause on
+   * conflicts (2026-09-01 decision), but a pause persisted by an older build
+   * may still exist when pending decisions settle. Release it only when the
+   * latest conflicted history entry is the sole pause owner — every other
+   * blocker (errors, review, recovery, auth) keeps the pause intact.
+   */
+  private async maybeResumeAutoSyncAfterResolvedDecisions(
+    state: StateManager,
+    executor: SyncExecutor,
+    hadPendingDecision: boolean,
+  ): Promise<void> {
+    if (
+      !hadPendingDecision
+      || !this.autoSyncPaused
+      || executor.isRunning
+      || executor.hasSideActionsInFlight
+      || state.planReviewActive
+      || (state.pendingIssues?.length ?? 0) > 0
+      || (state.pendingConflicts?.length ?? 0) > 0
+      || (state.pendingRemoteDeletes?.length ?? 0) > 0
+      || state.hasV2StateLoadRecoveryBlock
+      || state.hasV2RemoteScopeRecovery
+      || this.getMutationRecoveryDisplayState() !== null
+    ) return;
+
+    const latestHistory = state.syncHistory[0];
+    if (
+      !latestHistory
+      || latestHistory.status !== "partial"
+      || latestHistory.errors !== 0
+      || latestHistory.conflicts <= 0
+      || (latestHistory.recovery !== undefined
+        && latestHistory.recovery.state !== "recovered")
+    ) return;
+
+    this.autoSyncPaused = false;
+    try {
+      await this.saveSyncSettings();
+    } catch (error) {
+      this.autoSyncPaused = true;
+      this.diag.warn(
+        "state",
+        "failed to release legacy conflict-owned automatic pause after pending decisions settled",
+        error,
+      );
+      return;
+    }
+    this.startAutoSync();
+    this.diag.log(
+      "execute",
+      "released legacy conflict-owned automatic pause after pending decisions settled",
+      { historyId: latestHistory.id, mutations: 0 },
+    );
+  }
+
+  resolveConflictKeepLocal(path: string): Promise<boolean> {
+    return this.runSideActionIntent(
+      path,
+      "notice.conflict.failed",
+      (executor) => executor.resolveConflictKeepLocal(path),
+    );
+  }
+
+  resolveConflictKeepRemote(path: string): Promise<boolean> {
+    return this.runSideActionIntent(
+      path,
+      "notice.conflict.failed",
+      (executor) => executor.resolveConflictKeepRemote(path),
+    );
+  }
+
+  /** 冲突批量在飞方向；侧栏重挂时按它恢复对应按钮的加载态。 */
+  get conflictBatchState(): "local" | "remote" | null {
+    return this.conflictBatchDirection;
+  }
+
+  /**
+   * 冲突批量：整批只过一次 side-action 忙碌门，逐项仍走现役逐条安全链。
+   * 方向先落位再进等待，自动同步在准备期就能看见并让路。
+   */
+  resolveConflictsKeepLocal(paths: readonly string[]): Promise<boolean> {
+    return this.runConflictBatch(paths, "local");
+  }
+
+  resolveConflictsKeepRemote(paths: readonly string[]): Promise<boolean> {
+    return this.runConflictBatch(paths, "remote");
+  }
+
+  private async runConflictBatch(
+    paths: readonly string[],
+    direction: "local" | "remote",
+  ): Promise<boolean> {
+    const requested = [...new Set(paths)].sort((left, right) =>
+      left.localeCompare(right));
+    if (requested.length === 0 || this.conflictBatchDirection !== null) {
+      return false;
+    }
+    this.conflictBatchDirection = direction;
+    try {
+      return await this.runSideActionIntent(
+        requested[0],
+        "notice.conflict.failed",
+        (executor) => direction === "local"
+          ? executor.resolveConflictsKeepLocal(requested)
+          : executor.resolveConflictsKeepRemote(requested),
+      );
+    } finally {
+      this.conflictBatchDirection = null;
+    }
+  }
+
+  reconcileIdenticalConflict(
+    path: string,
+    proof: ReviewedContentEqualityProof,
+  ): Promise<boolean> {
+    return this.runSideActionIntent(
+      path,
+      "notice.conflict.failed",
+      (executor) => executor.reconcileIdenticalConflict(path, proof),
+    );
+  }
+
+  /**
+   * Confirm one cloud-deletion follow row.
+   *
+   * Both file and folder rows write their device-local decision record and
+   * join the same side-action batch; the record is the crash/failure net and
+   * is pruned once the queued batch deletes the rows.
+   */
+  async confirmRemoteDelete(path: string): Promise<boolean> {
+    await this.ensureStateLoaded();
+    return this.confirmLocalDeletePaths([path]);
+  }
+
+  /**
+   * Write the device-local confirmation facts for the requested rows, then
+   * enqueue the whole batch into the side-action queue (files first, folders
+   * after). A round that is already running is waited out inside the queued
+   * task - no second plan round is started. The decision records are the
+   * crash/failure net only: if the queued batch never runs, the next plan
+   * converts the same rows; once the batch deletes them the records prune.
+   */
+  private async confirmLocalDeletePaths(
+    paths: readonly string[],
+  ): Promise<boolean> {
+    const state = this.state;
+    if (!state) return false;
+    // A running sync round must not drop a confirmed batch (the 2,000-row iOS
+    // case), but any other operation lock (reset, auth, another lifecycle
+    // owner) still closes this entry. Reading/writing the decision is local
+    // and does not take the side-action queue.
+    if (this.opLock !== null && this.opLock !== "sync") {
+      const holder = this.i18n.t(this.opHolderNameKey(this.opLock));
+      this.noticeCenter.show({
+        key: `local-delete-decision:busy:${paths[0] ?? ""}`,
+        message: this.i18n.t("notice.delete.failed", {
+          reason: this.i18n.t("result.lockBusyWithHolder", { holder }),
+        }),
+        priority: NOTICE_PRIORITY.attention,
+        className: "easy-sync-notice-action",
+      });
+      return false;
+    }
+    const pendingRows = Array.isArray(state.pendingRemoteDeletes)
+      ? state.pendingRemoteDeletes
+      : [];
+    const requested = new Set(paths);
+    const pending = pendingRows.filter((item) => requested.has(item.path));
+    if (pending.length === 0) return false;
+    // Decisions are a V2 plan input. Every pre-V2 or recovery-blocked case
+    // keeps the existing side-action exit, so a record can never be written
+    // in a state whose plan path cannot consume it.
+    const canUseDecisions = state.isV2StateActive === true
+      && state.hasV2StateLoadRecoveryBlock !== true
+      && state.hasV2RemoteScopeRecovery !== true;
+    const decisionScope = canUseDecisions
+      ? this.getLocalDeleteDecisionScope()
+      : null;
+    const folderRecordToken = decisionScope
+      ? localFolderDeleteDecisionRecordToken(decisionScope)
+      : null;
+    const decisionGroups = new Map<string, {
+      kind: "file" | "folder";
+      paths: string[];
+      hashes: string[];
+    }>();
+    for (const item of pending) {
+      if (!canUseDecisions) continue;
+      if (item.folder) {
+        // A folder row carries a committed anchor instead of a file decision
+        // token. Only the row the user actually saw (requiresConfirmation)
+        // can be recorded, and only inside the bound scope.
+        const hash = decisionScope && item.requiresConfirmation === true
+          ? localFolderDeleteDecisionPathHash(item, decisionScope)
+          : null;
+        if (!folderRecordToken || hash === null) continue;
+        const group = decisionGroups.get(folderRecordToken) ?? {
+          kind: "folder" as const,
+          paths: [],
+          hashes: [],
+        };
+        group.paths.push(item.path);
+        group.hashes.push(hash);
+        decisionGroups.set(folderRecordToken, group);
+        continue;
+      }
+      const token = item.decisionToken;
+      if (!isSyncDecisionTokenLike(token)) continue;
+      const recordToken = localDeleteDecisionRecordToken(token);
+      const group = decisionGroups.get(recordToken) ?? {
+        kind: "file" as const,
+        paths: [],
+        hashes: [],
+      };
+      group.paths.push(item.path);
+      group.hashes.push(localDeleteDecisionPathHash(token, item.path));
+      decisionGroups.set(recordToken, group);
+    }
+    if (decisionGroups.size > 0) {
+      try {
+        for (const [recordToken, group] of decisionGroups) {
+          await state.addLocalDeleteDecisions({
+            kind: group.kind,
+            recordToken,
+            paths: group.paths,
+            hashes: group.hashes,
+          });
+        }
+      } catch (error) {
+        const reason = describeError(error);
+        this.diag.warn(
+          "state",
+          "failed to record a local delete decision",
+          reason,
+        );
+        this.noticeCenter.show({
+          key: "local-delete-decision:failed",
+          message: this.i18n.t("notice.delete.failed", { reason }),
+          priority: NOTICE_PRIORITY.failure,
+          className: "easy-sync-notice-action",
+        });
+        return false;
+      }
+    }
+    // 确认＝入列（2026-10-27 用户拍板）：整批一次送入现役 side-action 队列，
+    // 文件先、文件夹后；正有轮在跑时批次排在轮后，由队列任务等待执行，不再
+    // 开第二轮计划。决定记录只在入列失败/崩溃后由计划兜底，不在本路径执行。
+    const enqueueOk = await this.runSideActionIntent(
+      pending[0].path,
+      "notice.delete.failed",
+      (executor) =>
+        executor.confirmRemoteDeletes(pending.map((item) => item.path)),
+      false,
+      true,
+    );
+    if (!enqueueOk && decisionGroups.size === 0) return false;
+    this.updateStatusBar();
+    this.syncView?.render();
+    this.settingsTab?.refreshSyncState();
+    return true;
+  }
+
+  /**
+   * Bound scope for device-local folder decision facts. It uses the same
+   * committed scope the plan seals against; a missing state/scope keeps the
+   * folder row on its existing side-action exit.
+   */
+  getLocalDeleteDecisionScope(): LocalDeleteDecisionScopeV1 | null {
+    const state = this.state;
+    if (!state?.isV2StateActive) return null;
+    const scope = state.remoteScope;
+    const accountId = state.boundAccountId;
+    if (!scope || !accountId) return null;
+    return {
+      vaultName: this.app.vault.getName(),
+      accountId,
+      scope,
+    };
+  }
+
+  /** 片④ 单向模式：把一条本机独有条目上传到云端（侧栏「上传到云端」）。 */
+  uploadLocalOnlyEntry(targetPath: string): Promise<boolean> {
+    return this.runSideActionIntent(
+      targetPath,
+      "notice.delete.failed",
+      (executor) => executor.uploadLocalOnlyEntry(targetPath),
+    );
+  }
+
+  /**
+   * 件② 批量行「全部上传」：逐条走现役上行链，逐条成功提示关掉（同
+   * `confirmRemoteDeletes` 先例）。确认弹框已经在侧栏问过，这里不另弹总入队
+   * 提示——行上的加载态与逐条失败提示已经说明系统在处理。
+   */
+  uploadLocalOnlyEntries(targetPaths: readonly string[]): Promise<boolean> {
+    const requestedPaths = [...new Set(targetPaths)];
+    if (requestedPaths.length === 0) return Promise.resolve(false);
+    return this.runSideActionIntent(
+      requestedPaths[0],
+      "notice.delete.failed",
+      (executor) => executor.uploadLocalOnlyEntries(requestedPaths),
+    );
+  }
+
+  /** 件② 批量行「全部留在本机」：一次写入整批忽略记忆（只影响提醒）。 */
+  async ignoreLocalOnlyEntries(targetPaths: readonly string[]): Promise<void> {
+    const state = this.state;
+    if (!state || this.syncDirection !== "one-way") return;
+    await state.ignoreLocalOnlyPaths(targetPaths);
+    this.updateStatusBar();
+    this.syncView?.render();
+    this.settingsTab?.refreshSyncState();
+  }
+
+  /**
+   * 件③ 反转入口的两个事实：面板看不见、但仍在记录族里的被忽略条目数
+   * （记录已退场的旧忽略项不计——它们本来就不会回来）。
+   */
+  getIgnoredLocalOnlyCount(): number {
+    const state = this.state;
+    if (!state || this.syncDirection !== "one-way") return 0;
+    return countLocalOnlyRowFacts({
+      rows: projectLocalOnlyEntryRowsV1({
+        copies: state.localOnlyCopyEntries,
+        created: state.localOnlyCreatedEntries,
+      }),
+      memory: state.localOnlyIgnoreMemory,
+    }).dismissed;
+  }
+
+  /** 件③ 反转入口「放回同步面板」：清空忽略记忆，条目回到同步面板。 */
+  async clearLocalOnlyIgnores(): Promise<void> {
+    const state = this.state;
+    if (!state || this.syncDirection !== "one-way") return;
+    const returning = this.getIgnoredLocalOnlyCount();
+    if (returning === 0) return;
+    await state.clearAllLocalOnlyIgnorePaths();
+    this.noticeCenter.show({
+      key: "local-only-ignored:reminded",
+      message: this.i18n.t("notice.localOnly.reminded", { count: returning }),
+      priority: NOTICE_PRIORITY.action,
+    });
+    this.updateStatusBar();
+    this.syncView?.render();
+    this.settingsTab?.refreshSyncState();
+  }
+
+  async confirmRemoteDeletes(paths: readonly string[]): Promise<boolean> {
+    const requestedPaths = [...new Set(paths)];
+    if (requestedPaths.length === 0) return false;
+    // 批量删除确认后先弹一条总入队提示，避免用户误以为系统卡死。提示走
+    // ambient 过滤（遵循「通知弹窗」设置），用户关闭提示时不弹；处理中
+    // 不再重复提示，进度由侧栏顶部进度展示承接。
+    this.noticeCenter.show({
+      key: "side-action:batch-delete:queueing",
+      message: this.i18n.t("notice.delete.queueing"),
+      priority: NOTICE_PRIORITY.action,
+      category: "ambient",
+      className: "easy-sync-notice-action",
+    });
+    await this.ensureStateLoaded();
+    return this.confirmLocalDeletePaths(requestedPaths);
+  }
+
+  async getEmptyFolderResolutionSnapshot(
+    path: string,
+  ): Promise<EmptyFolderResolutionSnapshotV1 | null> {
+    await this.ensureStateLoaded();
+    if (!this.syncExecutor || !this.state?.isV2StateActive) return null;
+    return this.syncExecutor.getEmptyFolderResolutionSnapshot(path);
+  }
+
+  async getFolderSubtreeReviewSnapshot(
+    path: string,
+  ): Promise<FolderSubtreeReviewSnapshotV1 | null> {
+    await this.ensureStateLoaded();
+    if (!this.syncExecutor || !this.state?.isV2StateActive) return null;
+    return this.syncExecutor.getFolderSubtreeReviewSnapshot(path);
+  }
+
+  async getFolderLocationResolutionSnapshot(
+    path: string,
+  ): Promise<FolderLocationResolutionSnapshotV1 | null> {
+    await this.ensureStateLoaded();
+    if (!this.syncExecutor || !this.state?.isV2StateActive) return null;
+    return this.syncExecutor.getFolderLocationResolutionSnapshot(path);
+  }
+
+  async getSharedFolderIdentityResolutionSnapshot(
+    path: string,
+  ): Promise<ManualResolutionEntrySnapshot<SharedFolderIdentityResolutionSnapshotV1>> {
+    await this.ensureStateLoaded();
+    if (!this.syncExecutor || !this.state?.isV2StateActive) {
+      return { snapshot: null, reason: "state-unprepared" };
+    }
+    return this.syncExecutor.getSharedFolderIdentityResolutionSnapshot(path);
+  }
+
+  async getStaleIdentityResolutionSnapshot(
+    path: string,
+  ): Promise<ManualResolutionEntrySnapshot<StaleIdentityResolutionSnapshotV1>> {
+    await this.ensureStateLoaded();
+    if (!this.syncExecutor || !this.state?.isV2StateActive) {
+      return { snapshot: null, reason: "state-unprepared" };
+    }
+    return this.syncExecutor.getStaleIdentityResolutionSnapshot(path);
+  }
+
+  async getScopeCrossingResolutionSnapshot(
+    path: string,
+  ): Promise<ManualResolutionEntrySnapshot<ScopeCrossingResolutionSnapshotV1>> {
+    await this.ensureStateLoaded();
+    if (!this.syncExecutor || !this.state?.isV2StateActive) {
+      return { snapshot: null, reason: "state-unprepared" };
+    }
+    return this.syncExecutor.getScopeCrossingResolutionSnapshot(path);
+  }
+
+  async getMutationRecoveryResolutionSnapshot():
+    Promise<ManualMutationResolutionSnapshotV1 | null> {
+    await this.ensureStateLoaded();
+    const executor = this.syncExecutor;
+    const display = this.getMutationRecoveryDisplayState();
+    if (
+      !executor
+      || executor.isRunning
+      || executor.hasSideActionsInFlight
+      || !this.state?.isV2StateActive
+      || display?.kind !== "blocked"
+      || !manualResolutionExitAllowedFor(display.blockReason)
+    ) return null;
+    if (!await this.checkAccountBinding()) return null;
+    return executor.getMutationRecoveryResolutionSnapshot(
+      display.blockedOperationId ?? undefined,
+    );
+  }
+
+  async getCommunityPluginBundleReviewSnapshot(
+    pluginId: string,
+  ): Promise<ManualMutationResolutionSnapshotV1 | null> {
+    await this.ensureStateLoaded();
+    const executor = this.syncExecutor;
+    if (
+      !executor
+      || executor.isRunning
+      || executor.hasSideActionsInFlight
+      || !this.state?.isV2StateActive
+    ) return null;
+    if (!await this.checkAccountBinding()) return null;
+    return executor.getCommunityPluginBundleReviewSnapshot(pluginId);
+  }
+
+  /**
+   * Read-only single-file diff for one reviewed community-plugin bundle
+   * member (used by the bundle sub-dialog). Never mutates state.
+   */
+  async getCommunityPluginBundleFileDiff(
+    pluginId: string,
+    path: string,
+  ): Promise<Awaited<
+    ReturnType<SyncExecutor["getCommunityPluginBundleFileDiff"]>
+  >> {
+    await this.ensureStateLoaded();
+    const executor = this.syncExecutor;
+    if (
+      !executor
+      || executor.isRunning
+      || executor.hasSideActionsInFlight
+      || !this.state?.isV2StateActive
+    ) return null;
+    if (!await this.checkAccountBinding()) return null;
+    return executor.getCommunityPluginBundleFileDiff(pluginId, path);
+  }
+
+  async resolveMutationRecovery(
+    reviewed: Readonly<ManualMutationResolutionSnapshotV1>,
+    choice: ManualMutationResolutionChoiceV1,
+  ): Promise<boolean> {
+    let resolved = false;
+    const admitted = await this.runSideActionIntent(
+      reviewed.path,
+      "notice.mutationResolution.failed",
+      async (executor) => {
+        resolved = await executor.resolveMutationRecovery(reviewed, choice);
+      },
+      true,
+    );
+    if (!admitted || !resolved || !this.state) return false;
+    this.mutationRecoveryBlockReason = null;
+    await this.startManualSync();
+    return true;
+  }
+
+  /**
+   * User-authorized forced reset: the single last-resort escape for
+   * recoveries that cannot converge on their own (the abandoned-operation
+   * exit was retired; see DECISIONS 2026-08-29 提示与出口收束).
+   */
+  private async confirmForcedReset(): Promise<boolean> {
+    const t = this.t;
+    return new ConfirmModal(
+      this.app,
+      t("settings.reset.forceTitle"),
+      t("settings.reset.forceConfirm"),
+      t("confirm.cancel"),
+      t,
+      {
+        message: t("settings.reset.forceMessage"),
+        warning: t("settings.reset.forceWarning"),
+        danger: true,
+      },
+    ).awaitConfirm();
+  }
+
+  restoreReviewedEmptyFolder(
+    reviewed: Readonly<EmptyFolderResolutionSnapshotV1>,
+  ): Promise<boolean> {
+    return this.runSideActionIntent(
+      reviewed.path,
+      "notice.emptyFolder.failed",
+      (executor) => executor.restoreReviewedEmptyFolder(reviewed),
+    );
+  }
+
+  async restoreReviewedFolderSubtree(
+    reviewed: Readonly<FolderSubtreeReviewSnapshotV1>,
+  ): Promise<boolean> {
+    let accepted = false;
+    const admitted = await this.runSideActionIntent(
+      reviewed.path,
+      "notice.folderSubtree.failed",
+      async (executor) => {
+        accepted = await executor.restoreReviewedFolderSubtree(reviewed);
+      },
+    );
+    return admitted && accepted;
+  }
+
+  async resolveReviewedFolderLocation(
+    reviewed: Readonly<FolderLocationResolutionSnapshotV1>,
+    choice: FolderLocationResolutionChoiceV1,
+  ): Promise<boolean> {
+    let resolved = false;
+    const admitted = await this.runSideActionIntent(
+      reviewed.path,
+      "notice.folderLocation.failed",
+      async (executor) => {
+        resolved = await executor.resolveReviewedFolderLocation(
+          reviewed,
+          choice,
+        );
+      },
+    );
+    return admitted && resolved;
+  }
+
+  async deleteReviewedFolderSubtree(
+    reviewed: Readonly<FolderSubtreeReviewSnapshotV1>,
+  ): Promise<boolean> {
+    let deleted = false;
+    const admitted = await this.runSideActionIntent(
+      reviewed.path,
+      "notice.folderSubtree.failed",
+      async (executor) => {
+        deleted = await executor.deleteReviewedFolderSubtree(reviewed);
+      },
+    );
+    return admitted && deleted;
+  }
+
+  async bindReviewedEmptyFolderRename(
+    reviewed: Readonly<EmptyFolderResolutionSnapshotV1>,
+    candidatePath: string,
+  ): Promise<boolean> {
+    let bound = false;
+    const admitted = await this.runSideActionIntent(
+      reviewed.path,
+      "notice.emptyFolder.failed",
+      async (executor) => {
+        bound = await executor.bindReviewedEmptyFolderRename(
+          reviewed,
+          candidatePath,
+        );
+      },
+    );
+    return admitted && bound;
+  }
+
+  async confirmReviewedSharedFolderIdentity(
+    reviewed: Readonly<SharedFolderIdentityResolutionSnapshotV1>,
+  ): Promise<boolean> {
+    let accepted = false;
+    const admitted = await this.runSideActionIntent(
+      reviewed.path,
+      "notice.sharedFolderIdentity.failed",
+      async (executor) => {
+        accepted = await executor.confirmReviewedSharedFolderIdentity(reviewed);
+      },
+    );
+    return admitted && accepted;
+  }
+
+  async retireReviewedStaleIdentity(
+    reviewed: Readonly<StaleIdentityResolutionSnapshotV1>,
+  ): Promise<boolean> {
+    let retired = false;
+    const admitted = await this.runSideActionIntent(
+      reviewed.path,
+      "notice.staleIdentity.failed",
+      async (executor) => {
+        retired = await executor.retireReviewedStaleIdentity(reviewed);
+      },
+    );
+    return admitted && retired;
+  }
+
+  async restoreScopeCrossingMove(
+    reviewed: Readonly<ScopeCrossingResolutionSnapshotV1>,
+  ): Promise<boolean> {
+    let restored = false;
+    const admitted = await this.runSideActionIntent(
+      reviewed.rowPath,
+      "notice.scopeCrossing.failed",
+      async (executor) => {
+        restored = await executor.restoreScopeCrossingMove(reviewed);
+      },
+    );
+    return admitted && restored;
+  }
+
+  async confirmScopeCrossingExit(
+    reviewed: Readonly<ScopeCrossingResolutionSnapshotV1>,
+  ): Promise<boolean> {
+    let confirmed = false;
+    const admitted = await this.runSideActionIntent(
+      reviewed.rowPath,
+      "notice.scopeCrossing.failed",
+      async (executor) => {
+        confirmed = await executor.confirmScopeCrossingExit(reviewed);
+      },
+    );
+    return admitted && confirmed;
+  }
+
+  deleteReviewedEmptyRemoteFolder(
+    reviewed: Readonly<EmptyFolderResolutionSnapshotV1>,
+  ): Promise<boolean> {
+    return this.runSideActionIntent(
+      reviewed.path,
+      "notice.emptyFolder.failed",
+      (executor) => executor.deleteReviewedEmptyRemoteFolder(reviewed),
+    );
+  }
+
+  rejectRemoteDelete(path: string): Promise<boolean> {
+    return this.runSideActionIntent(
+      path,
+      "notice.delete.failed",
+      (executor) => executor.rejectRemoteDelete(path),
+    );
+  }
+
+  dismissConflict(path: string): Promise<boolean> {
+    return this.runSideActionIntent(
+      path,
+      "notice.conflict.failed",
+      async (_executor, state) => state.removePendingConflict(path),
+      true,
+    );
+  }
+
+  private createSyncCallbacks(mode: SyncMode): SyncCallbacks {
+    return {
+      onProgress: (current, total, currentFile) => {
+        this.handleProgress(current, total, currentFile);
+        this.updateStatusBar();
+        // 逐项数字走轻量路径（每文件都会打一次）：顶部计数、进度条、当前
+        // 文件名、在飞徽标与新增完成行，不整屏重建。
+        this.syncView?.renderProgress();
+      },
+      onFileProgress: (downloaded, total) => {
+        this.handleFileProgress(downloaded, total);
+      },
+      onFileComplete: (path, actionType, success, reason, fileSize, sourcePath, error) => {
+        this.handleFileComplete(
+          path,
+          actionType,
+          success,
+          reason,
+          fileSize,
+          sourcePath,
+          error,
+        );
+      },
+      onFileReverted: (path, reason) => {
+        this.handleFileReverted(path, reason);
+      },
+      onFirstSyncPreview: mode === "first"
+        ? async (plan) => this.showPlanAlert("firstSync", plan)
+        : undefined,
+      onConfirmThreshold: mode === "auto"
+        ? async () => false
+        : async (plan) => this.showPlanAlert("threshold", plan),
+      onStateChange: () => {
+        this.updateStatusBar();
+        this.syncView?.render();
+      },
+    };
+  }
+
+  /**
+   * Warn once per session when the vault sits inside a desktop cloud client's
+   * sync folder. The client edits, locks and rolls back vault files behind
+   * the plugin's back — the failure shape behind repeated "state cannot be
+   * loaded safely" deadlocks and failed resets. Detection is pure string
+   * classification and must never interfere with the sync it precedes.
+   */
+  private showVaultCloudClientWarningOnce(): void {
+    if (this.vaultCloudClientNoticeShown) return;
+    this.vaultCloudClientNoticeShown = true;
+    try {
+      const detection = detectVaultCloudClientEnvironment(
+        this.app.vault,
+        this.platformFacts,
+      );
+      if (!detection.detected || !detection.service) return;
+      this.diag.log(
+        "state",
+        "vault located inside a cloud client sync folder",
+        { service: detection.service, signature: detection.signature },
+      );
+      this.noticeCenter.show({
+        key: "vault-cloud-client-warning",
+        message: this.i18n.t(
+          `notice.vaultCloudClient.${detection.service}`,
+        ),
+        priority: NOTICE_PRIORITY.attention,
+        durationMs: 10_000,
+        category: "safety",
+      });
+    } catch (error) {
+      this.diag.warn(
+        "state",
+        "vault cloud client detection failed",
+        describeError(error),
+      );
+    }
+  }
+
+  private async dispatchSyncRun(request: {
+    mode: SyncMode;
+    skipConfirmation?: boolean;
+    reviewedAuthorization?: PlanReviewAuthorization;
+    options?: SyncRunOptions;
+    logLabel?: string;
+    renderAfter?: boolean;
+    resultOwner?: "sync" | "reset";
+  }): Promise<SyncResult | null> {
+    if (!this.syncExecutor) return null;
+    this.showVaultCloudClientWarningOnce();
+    await this.preparePublic113MigrationSettings(request.options);
+    if (request.options?.recoveryOnly !== true) {
+      await this.reconcileCommunityPluginParticipationFromLocalBundles({
+        trigger: "sync",
+        allowedLockHolder: "sync",
+      });
+    }
+    // Community-plugin auto-update baseline: which plugins already
+    // participated before this round. Bundle downloads of plugins outside
+    // this set are explicit accepts (fresh join / restore / new install) and
+    // must not surface as silent auto updates.
+    const autoUpdateBaselinePluginIds =
+      this.collectAutoUpdateBaselinePluginIds();
+    const preparedCommunityPluginJoins = request.options?.recoveryOnly === true
+      ? { authorizations: [] }
+      : await this.prepareCommunityPluginJoinsForSync(
+          request.reviewedAuthorization,
+        );
+    const runOptions: SyncRunOptions = {
+      ...(request.options ?? {}),
+      // The durable adoption marker (not just the offer-round option) drives
+      // seeding on EVERY round until authority commits — review confirm and
+      // resume rounds must re-derive the exact reviewed plan (anchors
+      // included) or the drift guard would correctly re-stage instead of
+      // executing.
+      ...(this.rsAdoptionMarker ? { rsAdoptionPending: true } : {}),
+      ...(preparedCommunityPluginJoins.authorizations.length > 0
+        ? {
+            communityPluginJoinAuthorizations:
+              preparedCommunityPluginJoins.authorizations,
+          }
+        : {}),
+    };
+    const priorRecoveryIds = this.state?.isV2StateActive
+      ? new Set(
+          (this.state.mutationLedger ?? []).map(
+            (entry) => entry.intent.operationId,
+          ),
+        )
+      : new Set<string>();
+    // An already-running side action owns the shared progress store. Marking a
+    // full-sync activity here would survive the executor's `alreadyRunning`
+    // rejection (that return happens before its try/finally) and leave the top
+    // status showing the previous run's counter/current file while the body
+    // correctly shows the recovery state (iOS 2026-11-06 field screenshots).
+    const executorBusy = this.syncExecutor.isRunning
+      || this.syncExecutor.hasSideActionsInFlight;
+    if (executorBusy) {
+      this.diag.log("execute", "sync dispatch skipped progress mark — executor busy", {
+        mode: request.mode,
+        recoveryOnly: request.options?.recoveryOnly === true,
+        mutations: 0,
+      });
+    } else {
+      this.progressStore.markStarted(
+        request.options?.recoveryOnly === true
+          ? "mutationRecovery"
+          : "fullSync",
+      );
+      this.beginSyncNotice();
+    }
+    let continuedAfterStateOnlyRecovery = false;
+    let retainReviewedAuthorization = false;
+    let result: SyncResult;
+    do {
+      result = await this.syncExecutor.run(
+        request.mode,
+        this.createSyncCallbacks(request.mode),
+        continuedAfterStateOnlyRecovery && !retainReviewedAuthorization
+          ? false
+          : request.skipConfirmation ?? false,
+        continuedAfterStateOnlyRecovery && !retainReviewedAuthorization
+          ? undefined
+          : request.reviewedAuthorization,
+        runOptions,
+      );
+      if (
+        result.continueAfterStateOnlyMigrationRecovery
+        && !continuedAfterStateOnlyRecovery
+      ) {
+        this.diag.log(
+          "state",
+          "public 1.1.3 mutation ledger settled under V2 authority; continuing with one ordinary V2 round",
+          { mutations: 0 },
+        );
+        continuedAfterStateOnlyRecovery = true;
+        retainReviewedAuthorization = false;
+        continue;
+      }
+      if (
+        result.continueAfterV2CorruptStateRecovery
+        && !continuedAfterStateOnlyRecovery
+      ) {
+        this.diag.log(
+          "state",
+          "V2 corrupt state republished; continuing with one ordinary V2 round under the same reviewed authorization",
+          { mutations: 0 },
+        );
+        continuedAfterStateOnlyRecovery = true;
+        retainReviewedAuthorization = true;
+        continue;
+      }
+      break;
+    } while (true as boolean);
+    if (
+      this.rsAdoptionMarker
+      && this.state?.isV2StateActive === true
+    ) {
+      // The adoption choice is baked into the committed V2 authority; the
+      // device-local marker has served its purpose.
+      this.rsAdoptionMarker = null;
+      await this.updatePluginData((data) => {
+        delete data[KEY_RS_ADOPTION_MARKER];
+      });
+      this.diag.log(
+        "state",
+        "Remotely Save adoption marker cleared after authority commit",
+        { mutations: 0 },
+      );
+      // Journey 幕4: the adoption has been digested by the authority — this
+      // is the one correct moment for the completion reminder. Sent on an
+      // 8s delay because the round-result notice (shown by handleSyncResult
+      // right after this funnel returns) always preempts an immediate show.
+      this.rsMigrationCompletionNoticeTimer = compatSetTimeout(() => {
+        this.rsMigrationCompletionNoticeTimer = null;
+        this.noticeCenter?.show({
+          key: "rs-migration-completed",
+          message: this.i18n.t("rsMigration.completedNotice"),
+          priority: NOTICE_PRIORITY.info,
+          durationMs: 8_000,
+        });
+      }, 8_000);
+    }
+    const localIgnores = result.communityPluginLocalIgnores;
+    if (
+      this.state?.isV2StateActive === true
+      && localIgnores
+      && (localIgnores.files.length > 0 || localIgnores.data.length > 0)
+    ) {
+      try {
+        await this.persistCommunityPluginLocalIgnores(localIgnores);
+      } catch (error) {
+        result.success = false;
+        result.errors += 1;
+        result.message = this.i18n.t(
+          "result.communityPluginLocalIgnoreFailed",
+        );
+        this.diag.error(
+          "state",
+          "failed to persist device-local community plugin exclusions",
+          error,
+        );
+      }
+    }
+    const completedRestores = result.communityPluginRestoresCompleted;
+    const joinBlocks = result.communityPluginJoinBlocks ?? [];
+    const hasCommunityPluginJoinOutcome = joinBlocks.length > 0
+      || (completedRestores?.files.length ?? 0) > 0
+      || (completedRestores?.data.length ?? 0) > 0;
+    if (hasCommunityPluginJoinOutcome) {
+      try {
+        await this.persistCommunityPluginJoinOutcomes(
+          completedRestores ?? { files: [], data: [] },
+          joinBlocks,
+        );
+      } catch (error) {
+        result.success = false;
+        result.errors += 1;
+        this.diag.error(
+          "state",
+          "failed to persist community plugin join outcome",
+          error,
+        );
+      }
+    }
+    if (
+      request.resultOwner !== "reset"
+      && request.options?.recoveryOnly !== true
+      && (completedRestores?.files.length ?? 0) > 0
+    ) {
+      // Slice 3: no-restart enablement for the explicit downloads of this
+      // settled round. The set only ever contains user-taken joins/restores
+      // (automatic updates never enter it), so enablement state semantics
+      // stay untouched elsewhere. Every failure falls back to a notice;
+      // the round result is never modified here.
+      try {
+        await this.enableCommunityPluginDownloads(completedRestores!.files);
+      } catch (error) {
+        this.diag.warn(
+          "state",
+          "community plugin auto-enable step failed — manual enablement after restart still applies",
+          describeError(error),
+        );
+      }
+    }
+    this.maybeNoticeCommunityPluginUploadDowngrades(
+      result.communityPluginUploadDowngradesDeferred,
+    );
+    result.message = formatSyncResultMessage(
+      result,
+      this.progressStore.state.completedFiles,
+      this.i18n.t.bind(this.i18n),
+    );
+    if (request.logLabel) {
+      this.diag.log("execute", `${request.logLabel}: ${result.message}`, undefined, { urgent: true });
+    }
+    const remainingRecoveryIds = new Set(
+      this.state?.isV2StateActive
+        ? (this.state.mutationLedger ?? []).map(
+            (entry) => entry.intent.operationId,
+          )
+        : [],
+    );
+    const recoveryContext: MutationRecoveryRunContext = {
+      priorTotal: priorRecoveryIds.size,
+      priorRemaining: [...priorRecoveryIds].filter(
+        (operationId) => remainingRecoveryIds.has(operationId),
+      ).length,
+      newRemaining: [...remainingRecoveryIds].filter(
+        (operationId) => !priorRecoveryIds.has(operationId),
+      ).length,
+    };
+    let reconstructionContinuationDelay =
+      DESCENDANT_FILE_RECONSTRUCTION_CONTINUATION_DELAY_MS;
+    let scheduleReconstructionContinuation = false;
+    if (result.continueAfterConfirmedDescendantFileReconstruction) {
+      if (result.descendantFileReconstructionRetryableFailure) {
+        this.descendantFileReconstructionFailures++;
+        const retryDelay =
+          DESCENDANT_FILE_RECONSTRUCTION_RETRY_DELAYS_MS[
+            this.descendantFileReconstructionFailures - 1
+          ];
+        if (retryDelay === undefined) {
+          delete result.continueAfterConfirmedDescendantFileReconstruction;
+          delete result.descendantFileReconstructionRetryableFailure;
+          this.diag.warn(
+            "state",
+            "descendant file baseline automatic retry budget exhausted",
+            {
+              attempts: this.descendantFileReconstructionFailures,
+              mutations: 0,
+            },
+          );
+        } else {
+          reconstructionContinuationDelay = retryDelay;
+          scheduleReconstructionContinuation = true;
+        }
+      } else {
+        this.descendantFileReconstructionFailures = 0;
+        delete result.continueAfterConfirmedDescendantFileReconstruction;
+        delete result.descendantFileReconstructionRetryableFailure;
+        this.diag.warn(
+          "state",
+          "ignored a successful descendant file reconstruction continuation; successful work must remain in one visible sync",
+          { mutations: 0 },
+        );
+      }
+    } else if (!this.state?.confirmedDescendantFileReconstruction) {
+      this.descendantFileReconstructionFailures = 0;
+    }
+    if (request.resultOwner === "reset") {
+      // Reset owns the visible outcome and must not persist ordinary sync
+      // outcomes or change the user's automatic-sync pause state. Keep the
+      // canonical recovery history because it is the existing durable fact
+      // that makes a blocked manual resolution reachable in the sidebar.
+      this.mutationRecoveryBlockReason =
+        result.mutationRecovery?.state === "blocked"
+          ? result.mutationRecovery.blockReason ?? "unknown"
+          : null;
+      if (result.mutationRecovery) {
+        await this.recordSyncHistory(
+          result,
+          request.mode,
+          true,
+          recoveryContext,
+        );
+      }
+      this.clearSyncLifecycleNotice();
+      this.clearRibbonSuccess();
+      this.updateStatusBar();
+      this.syncView?.render();
+    } else {
+      await this.handleSyncResult(
+        result,
+        request.mode,
+        request.options?.recoveryOnly === true,
+        recoveryContext,
+      );
+    }
+    if (
+      request.resultOwner !== "reset"
+      && request.options?.recoveryOnly !== true
+    ) {
+      await this.syncRoundCommunityPluginCatalogUpdate();
+    }
+    this.advanceCommunityPluginInventoryRevision();
+    if (
+      request.resultOwner !== "reset"
+      && request.options?.recoveryOnly !== true
+    ) {
+      this.maybeNoticeCommunityPluginAutoUpdates(
+        result,
+        autoUpdateBaselinePluginIds,
+      );
+    }
+    if (
+      scheduleReconstructionContinuation
+      && result.continueAfterConfirmedDescendantFileReconstruction
+    ) {
+      this.requestDescendantFileReconstructionContinuation(
+        `${request.mode}-slice`,
+        reconstructionContinuationDelay,
+      );
+    }
+    if (request.renderAfter) this.syncView?.render();
+    return result;
+  }
+
+  /**
+   * Snapshot of plugins that participated before this sync round starts.
+   * Read after the local-bundle reconciliation but before joins/restores are
+   * planned, so a plugin that only appears mid-round (fresh accept) is never
+   * counted as an existing participant.
+   */
+  private collectAutoUpdateBaselinePluginIds(): ReadonlySet<string> {
+    const participation = this.communityPluginParticipation;
+    const ids = new Set<string>();
+    if (!participation) return ids;
+    for (const [pluginId, entry] of Object.entries(
+      participation.pluginsById,
+    )) {
+      if (entry.phase === "participating") ids.add(pluginId);
+    }
+    return ids;
+  }
+
+  /**
+   * Surface silent community-plugin auto updates of one finished round: an
+   * already-participating plugin whose bundle files were downloaded over the
+   * local copies. Obsidian keeps running the old in-memory plugin code, so the
+   * new version only takes effect after a restart — the notice says so instead
+   * of leaving the user wondering why nothing changed. Explicit accepts
+   * (fresh join / restore / new install) carry their own semantics and are
+   * excluded by the participating-before baseline.
+   *
+   * Rendered at attention level so the「通知弹窗＝仅重要」setting still shows
+   * it (ambient notices below attention are filtered there); only「关闭」hides
+   * it, and the round history row stays the durable record.
+   */
+  private maybeNoticeCommunityPluginAutoUpdates(
+    result: SyncResult,
+    baseline: ReadonlySet<string>,
+  ): void {
+    const progress = this.progressStore.state;
+    if (progress.startedAt <= 0) return;
+    if (baseline.size === 0) return;
+    const configDir = getConfigDir(this.app.vault);
+    const candidates = buildCommunityPluginUpdateFacts({
+      files: progress.completedFiles,
+      configDir,
+      participatingBeforePluginIds: [...baseline],
+      ownPluginId: this.manifest.id,
+    });
+    if (candidates.length === 0) return;
+    void this.presentCommunityPluginUpdateNotice(candidates, configDir);
+  }
+
+  private async presentCommunityPluginUpdateNotice(
+    candidates: readonly CommunityPluginAutoUpdateCandidate[],
+    configDir: string,
+  ): Promise<void> {
+    const t = this.t;
+    const labels: string[] = [];
+    let anyVersioned = false;
+    for (const candidate of candidates) {
+      if (candidate.manifestDownloaded) anyVersioned = true;
+      labels.push(await this.describeUpdatedPluginBundle(
+        candidate.pluginId,
+        configDir,
+        candidate.manifestDownloaded,
+      ));
+    }
+    const separator = this.i18n.language === "zh-cn" ? "、" : ", ";
+    this.noticeCenter.show({
+      key: "sync-result:community-plugin-updates",
+      message: t(
+        anyVersioned
+          ? "notice.communityPlugins.updatedRestart"
+          : "notice.communityPlugins.updatedRestartNoVersion",
+        { plugins: labels.join(separator) },
+      ),
+      priority: NOTICE_PRIORITY.attention,
+      category: "ambient",
+    });
+  }
+
+  /** Display label for one updated plugin: "Name v1.2.3" when the freshly
+   *  written manifest is readable, otherwise just the plugin id. */
+  private async describeUpdatedPluginBundle(
+    pluginId: string,
+    configDir: string,
+    readVersion: boolean,
+  ): Promise<string> {
+    try {
+      const manifestPath =
+        `${configDir.replace(/\/+$/, "")}/plugins/${pluginId}/manifest.json`;
+      const parsed: unknown = JSON.parse(
+        await this.app.vault.adapter.read(manifestPath),
+      );
+      if (!parsed || typeof parsed !== "object") return pluginId;
+      const manifest = parsed as { name?: unknown; version?: unknown };
+      const name = typeof manifest.name === "string"
+        && manifest.name.trim().length > 0
+        ? manifest.name.trim()
+        : pluginId;
+      if (
+        readVersion
+        && typeof manifest.version === "string"
+        && manifest.version.trim().length > 0
+      ) {
+        return `${name} v${manifest.version.trim()}`;
+      }
+      return name;
+    } catch {
+      return pluginId;
+    }
+  }
+
+  /**
+   * Persist the automatic pause and the current settings shape before a
+   * public-1.1.3 run snapshots PluginData for its migration hold.
+   *
+   * handleSyncResult persists the same values after a plan is held. Without
+   * this preflight, that deterministic post-run write makes the hold's full
+   * source digest stale before the user can confirm it. Read-only preview must
+   * remain mutation-free, and active V2 never enters this compatibility path.
+   */
+  private async preparePublic113MigrationSettings(
+    options: SyncRunOptions | undefined,
+  ): Promise<void> {
+    if (
+      options?.readOnlyPreview === true
+      || !this.state?.legacyAutoSyncAllowed
+      || this.state.isV2StateActive
+    ) return;
+    if (!this.autoSyncPaused) {
+      this.autoSyncPaused = true;
+      this.stopAutoSync();
+    }
+    await this.saveSyncSettings();
+  }
+
+  /**
+   * One bounded in-session V2 state reload (self-heal). load() re-derives the
+   * load block from scratch, so a transient failure clears itself without any
+   * user action; surviving transient reasons keep a bounded backoff retry,
+   * and only a durable block stays paused for diagnostics.
+   */
+  private async attemptV2StateReloadSelfHeal(): Promise<void> {
+    if (
+      this.v2StateReloadInFlight
+      || this.v2StateReloadRetryTimer
+      || !this.state?.hasV2StateLoadRecoveryBlock
+    ) return;
+    this.v2StateReloadInFlight = true;
+    this.v2StateReloadAttempts += 1;
+    const attempt = this.v2StateReloadAttempts;
+    try {
+      await this.state.load();
+    } catch (error) {
+      this.diag?.warn(
+        "state",
+        `V2 state reload self-heal attempt ${attempt} failed`,
+        describeError(error),
+      );
+    } finally {
+      this.v2StateReloadInFlight = false;
+    }
+    if (!this.state?.hasV2StateLoadRecoveryBlock) {
+      this.v2StateReloadAttempts = 0;
+      this.diag?.log(
+        "state",
+        "V2 state load block cleared by in-session reload",
+        { attempts: attempt, mutations: 0 },
+      );
+      if (this.mutationRecoveryBlockReason === "state-unavailable") {
+        this.mutationRecoveryBlockReason = null;
+        this.autoSyncPaused = false;
+        await this.saveSyncSettings().catch((error) => {
+          this.diag?.error(
+            "state",
+            "failed to persist auto sync resume after V2 state reload",
+            error,
+          );
+        });
+        this.startAutoSync();
+      }
+      this.updateStatusBar();
+      this.syncView?.render();
+      return;
+    }
+    const block = this.state.v2StateLoadRecoveryBlock;
+    if (!block) return;
+    if (
+      this.v2StateReloadAttempts < V2_STATE_RELOAD_MAX_ATTEMPTS
+      && isTransientV2StateLoadBlockReason(block.reason)
+    ) {
+      this.v2StateReloadRetryTimer = compatSetTimeout(() => {
+        this.v2StateReloadRetryTimer = null;
+        void this.attemptV2StateReloadSelfHeal();
+      }, V2_STATE_RELOAD_BACKOFF_MS[
+        Math.min(
+          this.v2StateReloadAttempts - 1,
+          V2_STATE_RELOAD_BACKOFF_MS.length - 1,
+        )
+      ]);
+      this.diag?.log(
+        "state",
+        `V2 state load block retry scheduled — attempt=${attempt} reason=${block.reason}`,
+        { mutations: 0 },
+      );
+    } else {
+      this.diag?.warn(
+        "state",
+        `V2 state load block survived ${attempt} reload attempt(s) — reason=${block.reason}`,
+        { mutations: 0 },
+      );
+    }
+  }
+
+  /**
+   * A manifest-selected V2 state that cannot load must still enter the normal
+   * result/diagnostic path. Stable identity/anchor corruption gets one
+   * explicit manual GET-only evidence pass after account verification;
+   * automatic runs and all other load failures stop before scan or Graph.
+   */
+  private async dispatchV2StateLoadBlockIfPresent(
+    mode: SyncMode,
+    logLabel: string,
+  ): Promise<boolean> {
+    if (!this.state?.hasV2StateLoadRecoveryBlock) return false;
+    // Self-heal first: a bounded in-session reload re-derives the block from
+    // scratch, so a transient failure clears without user action and the
+    // round continues normally.
+    await this.attemptV2StateReloadSelfHeal();
+    if (!this.state.hasV2StateLoadRecoveryBlock) return false;
+    // From here the block flow owns the entry: on success it presents the
+    // block result itself, and on failure it presents the "did not start"
+    // notice. Keeping the rejection inside this segment means a caller's
+    // entry catch can never replace that result notice with a second one.
+    try {
+      if (mode !== "auto") await this.activateSyncView();
+      const recoverV2CorruptState =
+        mode !== "auto"
+        && this.state.v2CorruptStateRecoveryEvidence !== null;
+      if (recoverV2CorruptState && !await this.checkAccountBinding()) {
+        return true;
+      }
+      const reviewedAuthorization =
+        recoverV2CorruptState && this.state.planReviewActive
+          ? this.state.planReviewAuthorization ?? undefined
+          : undefined;
+      await this.dispatchSyncRun({
+        mode,
+        skipConfirmation: reviewedAuthorization !== undefined,
+        reviewedAuthorization,
+        options: recoverV2CorruptState
+          ? { recoverV2CorruptState: true }
+          : undefined,
+        logLabel,
+        renderAfter: true,
+      });
+    } catch (error) {
+      this.presentSyncEntryFailure(error, "v2 state load block flow");
+    }
+    return true;
+  }
+
+  /** Execute a sync after the user has reviewed the plan in the sidebar.
+   *  The reviewed digest may become stale before execution; in that case the
+   *  executor sends the replacement plan back through the normal alert path. */
+  async executePlanReview(expectedRevision?: number): Promise<void> {
+    if (!this.syncExecutor || !this.state) return;
+    if (this.acquireOpLock("sync")) {
+      this.showSyncBusyHint();
+      return;
+    }
+    try {
+    await this.ensureStateLoaded();
+    if (
+      (expectedRevision !== undefined
+        && this.state.planReviewRevision !== expectedRevision)
+      || shouldAutoRebuildPlanReview(
+        this.state.planReviewCounts ?? null,
+        this.state.planReviewItems ?? [],
+      )
+    ) {
+      this.syncView?.render();
+      return;
+    }
+    if (await this.dispatchV2StateLoadBlockIfPresent(
+      "manual",
+      "blocked plan review execution result",
+    )) return;
+    if (this.state.hasV2RemoteScopeRecovery) {
+      if (!await this.checkAccountBinding()) return;
+      const reviewedAuthorization =
+        this.state.planReviewAuthorization ?? undefined;
+      const createsRemoteScope = (this.state.planReviewItems ?? []).some(
+        (item) => item.type === SyncActionType.RecreateRemoteScope,
+      );
+      if (
+        createsRemoteScope
+        && !await this.acknowledgeRemoteScopeCreation()
+      ) return;
+      await this.dispatchSyncRun({
+        mode: "manual",
+        skipConfirmation: reviewedAuthorization !== undefined,
+        reviewedAuthorization,
+        options: { recoverV2RemoteScope: true },
+        logLabel: "remote scope recovery result",
+        renderAfter: true,
+      });
+      return;
+    }
+    if (!this.state.planReviewActive) return;
+    if (!await this.checkAccountBinding()) return;
+    const reviewedAuthorization = this.state.planReviewAuthorization ?? undefined;
+    const acknowledgeMigrationRisk =
+      reviewedAuthorization?.reviewKind === "v2-migration";
+    const createFirstV2Protocol =
+      reviewedAuthorization?.reviewKind === "v2-first-sync"
+      || reviewedAuthorization?.reviewKind === "v2-rs-adoption";
+    if (
+      acknowledgeMigrationRisk
+      && !await this.acknowledgeV2MigrationRisk()
+    ) return;
+    await this.dispatchSyncRun({
+      mode: "manual",
+      skipConfirmation: true,
+      reviewedAuthorization,
+      options: acknowledgeMigrationRisk || createFirstV2Protocol
+        ? { acknowledgeMigrationRisk: true }
+        : undefined,
+      logLabel: "plan review execution result",
+      renderAfter: true,
+    });
+    } catch (error) {
+      this.presentSyncEntryFailure(error, "plan review execution");
+    } finally {
+      this.releaseOpLock();
+    }
+  }
+
+  async rebuildPlanReview(): Promise<void> {
+    if (!this.state || !this.syncExecutor || this.syncExecutor.isRunning) return;
+    await this.ensureStateLoaded();
+    if (
+      this.state.v2CorruptStateRecoveryEvidence
+      && this.state.activeV2CorruptStateRecoveryHold
+    ) {
+      await this.state.clearV2CorruptStateRecoveryReview();
+      await this.startFirstSync();
+      return;
+    }
+    if (
+      this.state.hasV2StateLoadRecoveryBlock
+      || this.state.hasV2RemoteScopeRecovery
+    ) {
+      await this.startFirstSync();
+      return;
+    }
+    await this.state.clearPlanReview();
+    await this.startFirstSync();
+  }
+
+  hasCompletedSyncState(): boolean {
+    const baseCount = this.state?.baseSnapshot?.length ?? 0;
+    return (this.state?.lastSyncTime ?? 0) > 0
+      || baseCount > 0;
+  }
+
+  /** 同步入口占用：任意持锁者都占入口。手动同步在第一步 acquireOpLock，
+   *  非 sync 持有者（重置／登出／参与核对／突变恢复／路径设置）同样让点击
+   *  在入口弹回 busy 提示——三个载体（侧栏状态行、桌面状态栏、Ribbon）若只
+   *  认 sync 持有者，这段就被呈现成空闲、面板挂着「立即同步」而点击全部
+   *  弹回（2026-10-28 真机：需要处理行在场，点击无轮次、无拒绝日志）。
+   *  sync 持有者的准备期（云端仓库检测、账号核对、运行前准备）实测 6.5 秒
+   *  以上，这段本就按占用呈现（2026-10-10 拍板），现在对全部持有者同档。 */
+  get isSyncEntryInProgress(): boolean {
+    return this.opLock !== null;
+  }
+
+  /** 入口只读准备期是否可取消（2026-10-10 R1）：armed 期间侧栏主动作显示现役
+   *  「取消同步」；弹框询问与写事务期间为假（那时各自的出口在弹框本身）。 */
+  get isSyncEntryCancellable(): boolean {
+    return this.entryCancelController !== null;
+  }
+
+  /** Verify the current account matches the vault's bound identity.
+   *  First sync ever silently binds. Account mismatch → Notice + block.
+   *  Returns true if sync may proceed. */
+  private async checkAccountBinding(options: {
+    suppressNotice?: boolean;
+    allowInitialBind?: boolean;
+  } = {}): Promise<boolean> {
+    const currentId = this.auth?.authState.accountId;
+    if (!currentId) return false; // Not logged in
+
+    const bound = this.state?.boundAccountId;
+    if (!bound) {
+      if (options.allowInitialBind === false) return false;
+      // First sync ever — bind to this account
+      this.operationLifecycle.invalidate("account-binding-change");
+      await this.state?.bindAccount(currentId);
+      return true;
+    }
+    if (bound !== currentId) {
+      if (!options.suppressNotice) {
+        this.noticeCenter.show({
+          key: "account-mismatch",
+          message: this.i18n.t("notice.accountMismatch", {
+            bound: `${bound.slice(0, 8)}…`,
+            current: `${currentId.slice(0, 8)}…`,
+          }),
+          priority: NOTICE_PRIORITY.critical,
+          category: "safety",
+        });
+      }
+      this.diag.warn("lifecycle", `account mismatch — bound=${bound.slice(0, 8)}, current=${currentId.slice(0, 8)}`);
+      return false;
+    }
+    return true;
+  }
+
+  private async checkAccountBindingForSync(): Promise<boolean> {
+    if (!this.hasUnresolvedMutationRecovery()) {
+      return this.checkAccountBinding();
+    }
+    // A restored session reports logged-in before Graph /me binds the
+    // account. That pending window is not evidence of a different account:
+    // refuse the round without turning it into an account-changed block.
+    if (!this.auth?.authState.accountId) return false;
+    const matches = await this.checkAccountBinding({
+      suppressNotice: true,
+      allowInitialBind: false,
+    });
+    if (!matches) {
+      await this.pauseForMutationRecoveryBlock("account-changed");
+    }
+    return matches;
+  }
+
+  /** Ensure StateManager has been loaded from disk.
+   *  Idempotent — only calls load() on the first invocation. */
+  async ensureStateLoaded(): Promise<void> {
+    // Settings decide direction, scope, pause and limits. Every state/sync
+    // consumer joins the same background read first, so a manual entry that
+    // lands before it settles cannot plan against defaults.
+    await this.ensureSettingsLoaded();
+    if (this._stateLoaded || !this.state) return;
+    this.stateLoadPromise ??= this.state.load().then(async () => {
+      if (this.state?.consumeCommunityPluginEnablementRetiredThisLoad()) {
+        this.noticeCenter.show({
+          key: "community-plugin-enablement-retired",
+          message: this.i18n.t("notice.communityPlugins.enablementRetired"),
+          priority: NOTICE_PRIORITY.info,
+          category: "safety",
+        });
+      }
+      try {
+        await this.ensureCommunityPluginParticipationInitialized();
+      } catch (error) {
+        // File/content sync can remain available, but the community-plugin
+        // scope fails closed until its device-local intent can be loaded.
+        this.applyCommunityPluginParticipationProjection(
+          createEmptyDeviceCommunityPluginParticipation(false),
+        );
+        this.diag.warn(
+          "state",
+          "community plugin participation initialization failed",
+          describeError(error),
+        );
+      }
+      this._stateLoaded = true;
+      // A pause persisted by an older build because of pending conflicts
+      // (conflicts no longer pause automatic sync, 2026-09-01) is stale once
+      // the loaded state proves no real pause owner is present. Release it
+      // only when conflicts are the sole remaining decision; errors, review,
+      // recovery and pending deletes keep the pause intact.
+      await this.releaseLegacyConflictOnlyPauseIfSafe();
+    }).finally(() => {
+      this.stateLoadPromise = null;
+    });
+    await this.stateLoadPromise;
+    await this.ensureEasySyncSelfSyncScope();
+  }
+
+  /**
+   * Device-local transition for the retired "EasySync self-sync" switch.
+   *
+   * The plugin directory entering the scope is a real scope expansion, so it
+   * runs the same settings transaction a user toggle used to run. Writing the
+   * value in place would not do: the persisted remote index still reads
+   * `complete` while physically missing the newly in-scope folder, and only
+   * the scope-expansion marker makes the next round rebuild it from a
+   * complete remote identity snapshot.
+   *
+   * Devices that already carry `true`, and fresh installs, are a no-op. One
+   * attempt per reload: a failure (sync in flight, recovery block, migration
+   * hold) leaves the plugin directory out of scope — the safe direction — and
+   * the next reload retries.
+   */
+  private async ensureEasySyncSelfSyncScope(): Promise<void> {
+    if (this.selfSyncScopeTransitionAttempted || this.syncPluginFiles) return;
+    this.selfSyncScopeTransitionAttempted = true;
+    try {
+      await this.updateSyncPathSettings({ syncPluginFiles: true });
+    } catch (error) {
+      this.diag.warn(
+        "state",
+        "EasySync self-sync scope transition did not run; the plugin directory stays out of scope until the next reload",
+        describeError(error),
+      );
+    }
+  }
+
+  /**
+   * Release a legacy automatic pause that only owned pending-conflict
+   * decisions. Uses the loaded typed state, never raw plugin-data keys, so
+   * every real pause owner (errors / review / recovery / pending deletes)
+   * keeps the pause. Conflict items alone never pause under the 2026-09-01
+   * decision, so a remaining conflict-only pause is safe to clear.
+   */
+  private async releaseLegacyConflictOnlyPauseIfSafe(): Promise<void> {
+    const state = this.state;
+    if (
+      !this.autoSyncPaused
+      || !state
+      || !state.isV2StateActive
+      || state.planReviewActive
+      || state.hasV2StateLoadRecoveryBlock
+      || state.hasV2RemoteScopeRecovery
+      || (state.mutationLedger?.length ?? 0) > 0
+      || (state.pendingRemoteDeletes?.length ?? 0) > 0
+      || (state.pendingIssues?.length ?? 0) > 0
+      || (state.pendingConflicts?.length ?? 0) === 0
+    ) return;
+    const latestHistory = state.syncHistory[0];
+    const historyIsConflictOnly = !latestHistory
+      || (
+        latestHistory.errors === 0
+        && latestHistory.conflicts > 0
+      );
+    if (!historyIsConflictOnly) return;
+    this.autoSyncPaused = false;
+    try {
+      await this.saveSyncSettings();
+    } catch (error) {
+      this.autoSyncPaused = true;
+      this.diag.warn(
+        "state",
+        "failed to persist release of a legacy conflict-only automatic pause",
+        error,
+      );
+      return;
+    }
+    this.startAutoSync();
+    this.diag.log(
+      "state",
+      "released a legacy conflict-only automatic pause after state load (conflicts no longer pause auto sync)",
+      { mutations: 0 },
+    );
+  }
+
+  /** One-shot login-time hint (carrier plan §11.1 幕1): a fresh login that
+   *  has never synced may be told a Remotely Save repository exists. Silent
+   *  and side-effect free — detection errors never surface here. Returns
+   *  whether the notice was shown, so the EasySync join notice can yield the
+   *  one-shot slot to the migration line (carrier 20261003-2128 §五.3). */
+  private async offerRsMigrationNoticeAfterFreshLogin(): Promise<boolean> {
+    try {
+      if (!this.onedrive || !this.state) return false;
+      if (
+        this.rsAdoptionMarker
+        || this.hasCompletedSyncState()
+        || this.state.planReviewActive
+      ) return false;
+      const detected = await this.onedrive.detectRemotelySaveRepository(
+        this.app.vault.getName(),
+      );
+      if (!detected) return false;
+      this.noticeCenter?.show({
+        key: "rs-migration-detect",
+        message: this.i18n.t("rsMigration.detectNotice"),
+        priority: NOTICE_PRIORITY.info,
+      });
+      return true;
+    } catch (error) {
+      this.diag.warn(
+        "state",
+        "Remotely Save detection after login failed",
+        describeError(error),
+      );
+      return false;
+    }
+  }
+
+  /** Login-time repository notices, migration first: when a paired Remotely
+   *  Save repository exists its notice wins the one-shot slot; otherwise the
+   *  EasySync join notice may appear. */
+  private async offerPostLoginRepositoryNotices(): Promise<void> {
+    const rsNoticeShown = await this.offerRsMigrationNoticeAfterFreshLogin();
+    if (!rsNoticeShown) await this.offerVaultJoinNoticeAfterFreshLogin();
+  }
+
+  /** One-shot login-time hint for the EasySync join offer: a fresh login
+   *  that has never synced may be told the cloud already holds EasySync
+   *  repositories under other names, so the first sync can join one. Silent
+   *  and side-effect free — detection errors never surface here (the offer
+   *  itself is a gain, not a safety gate). */
+  private async offerVaultJoinNoticeAfterFreshLogin(): Promise<void> {
+    try {
+      if (!this.onedrive || !this.state) return;
+      if (
+        this.rsAdoptionMarker
+        || this.hasCompletedSyncState()
+        || this.state.planReviewActive
+      ) return;
+      const vaultName = this.app.vault.getName();
+      const detection = await this.onedrive
+        .detectExistingEasySyncRepositories(vaultName);
+      if (detection.kind !== "others") return;
+      if (detection.repositories.some((name) => name === vaultName)) return;
+      this.noticeCenter?.show({
+        key: "vault-join-detect",
+        message: this.i18n.t("vaultJoin.detectNotice", {
+          count: detection.repositories.length,
+        }),
+        priority: NOTICE_PRIORITY.info,
+      });
+    } catch (error) {
+      this.diag.warn(
+        "state",
+        "EasySync repository detection after login failed",
+        describeError(error),
+      );
+    }
+  }
+
+  /** 首同步前两次云端询问的资格门与依赖（依赖就绪＋从未同步＋已登录＋无待审计划）：
+   *  RS 检测、加入检测与其预取共用同一份判据，避免各处复制后漂移。返回 null＝本轮
+   *  不做询问；非 null 时给出已验证非空的客户端（TS 收窄不跨方法，这里显式交接）。 */
+  private firstSyncCloudInquiryDeps(): { onedrive: OneDriveClient } | null {
+    if (!this.onedrive || !this.syncExecutor || !this.state) return null;
+    if (this.hasCompletedSyncState()) return null;
+    if (this.state.planReviewActive) return null;
+    if (this.auth?.authState.isLoggedIn !== true) return null;
+    return { onedrive: this.onedrive };
+  }
+
+  /** 加入询问检测的只读预取：与 RS 旧仓检测并发发出（两者互不依赖，各走自己的
+   *  云端路径），消费点仍是 `maybeOfferExistingVaultJoin`——同一个 catch、同一姿态。
+   *  资格门在这里多判一次只影响「是否预取」，不会改变行为（未预取时消费者自己发起）。
+   *  放弃消费（迁移/中止）时不留未处理拒绝。 */
+  private prefetchVaultJoinDetection():
+    Promise<EasySyncRepositoryDetection> | null {
+    const deps = this.firstSyncCloudInquiryDeps();
+    if (!deps) return null;
+    if (this.rsAdoptionMarker) return null;
+    const detection = deps.onedrive.detectExistingEasySyncRepositories(
+      this.app.vault.getName(),
+    );
+    detection.catch(() => {});
+    return detection;
+  }
+
+  /** 入口只读准备期的取消范围（2026-10-10 R1）：armed 期间两个云端仓库检测可被
+   *  「取消同步」中止；弹框询问、搬迁写事务与轮内取消各归各自现役负责点。 */
+  private beginEntryCancellation(): AbortController {
+    const controller = new AbortController();
+    this.entryCancelController = controller;
+    this.onedrive?.setAbortSignal(controller.signal);
+    this.updateStatusBar();
+    this.syncView?.render();
+    return controller;
+  }
+
+  private endEntryCancellation(): void {
+    if (this.entryCancelController === null) return;
+    this.entryCancelController = null;
+    // 轮内取消由 executor 每轮自持一份信号；这里必须清空，避免留下一枚已中止的
+    // 信号让后续所有云端请求立刻失败。
+    this.onedrive?.setAbortSignal(null);
+    this.updateStatusBar();
+    this.syncView?.render();
+  }
+
+  /** Remotely Save adoption decision point (carrier plan §11.3). Runs at
+   *  first-sync triggers when this vault has never synced and a foreign
+   *  repository pairs by exact vault name. Returns how the caller proceeds:
+   *  "migrated" (transaction done — dispatch with the adoption option),
+   *  "fresh" (plain first sync), or "abort" (this round ends here; the
+   *  adoption choice stays available for the next trigger). */
+  private async maybeRunRsMigrationOffer(): Promise<
+    "migrated" | "fresh" | "abort"
+  > {
+    if (this.rsAdoptionMarker) return "migrated";
+    const deps = this.firstSyncCloudInquiryDeps();
+    if (!deps) return "fresh";
+    const vaultName = this.app.vault.getName();
+    let detected: Awaited<
+      ReturnType<OneDriveClient["detectRemotelySaveRepository"]>
+    >;
+    try {
+      // GET /me/drive is the documented auto-provisioning entry for a licensed
+      // account that has never opened OneDrive. The root listing below does
+      // not carry that guarantee, so a fresh account can otherwise 404 here
+      // forever. Auth/permission errors keep their own path and wording.
+      await deps.onedrive.ensureDriveAvailable();
+      detected = await deps.onedrive.detectRemotelySaveRepository(vaultName);
+    } catch (error) {
+      // 入口取消是用户自己按的，不是检测失败：不出失败提示，只留诊断。
+      if (this.entryCancelController?.signal.aborted) {
+        this.diag.log(
+          "state",
+          "Remotely Save detection aborted by the sync-entry cancel",
+          { mutations: 0 },
+        );
+        return "abort";
+      }
+      if (error instanceof OneDriveDriveUnavailableError) {
+        this.diag.warn(
+          "state",
+          "OneDrive drive is unavailable for this account; first sync deferred",
+          {
+            mutations: 0,
+            accountType: this.auth?.authState.userType ?? null,
+            grantedScopes: this.auth?.authState.grantedScopes ?? null,
+            statusCode: error.detail?.statusCode ?? null,
+            graphCode: error.detail?.graphError?.code ?? null,
+            graphMessage: error.detail?.graphError?.message ?? null,
+            graphInnerCode: error.detail?.graphError?.innerCode ?? null,
+            requestId: error.detail?.graphError?.requestId ?? null,
+            drivesProbe: error.detail?.drivesProbe ?? null,
+            drivesCount: error.detail?.drivesCount ?? null,
+            driveTypes: error.detail?.driveTypes ?? null,
+            drivesGraphCode: error.detail?.drivesGraphCode ?? null,
+            drivesRequestId: error.detail?.drivesRequestId ?? null,
+            drivesError: error.detail?.drivesError ?? null,
+          },
+        );
+        this.noticeCenter?.show({
+          key: "rs-migration-no-onedrive",
+          message: this.i18n.t("rsMigration.noOneDriveNotice"),
+          priority: NOTICE_PRIORITY.attention,
+          durationMs: 12_000,
+        });
+        return "abort";
+      }
+      // A detection error is not an absence: keep the choice alive instead
+      // of silently closing the adoption window. 静默中止曾让用户只看到面板
+      // 闪一下又回原样（2026-10-10 R2）：补一条告知，行为语义不变。
+      this.diag.warn(
+        "state",
+        "Remotely Save detection failed; first sync deferred",
+        describeError(error),
+      );
+      this.noticeCenter?.show({
+        key: "rs-migration-detect-failed",
+        message: this.i18n.t("rsMigration.detectFailedNotice"),
+        priority: NOTICE_PRIORITY.attention,
+        durationMs: 8_000,
+      });
+      return "abort";
+    }
+    // 只读检测段到此结束：后面的弹框与搬迁写事务一律不可取消（写一半停下比
+    // 等一会更危险，2026-10-10 R1 边界）。
+    this.endEntryCancellation();
+    if (!detected) return "fresh";
+
+    const offer = await new RsMigrationOfferModal(this.app, {
+      title: this.i18n.t("rsMigration.offerTitle"),
+      body: this.i18n.t("rsMigration.offerBody", { vault: vaultName }),
+      migrate: {
+        title: this.i18n.t("rsMigration.offerMigrateTitle"),
+        description: this.i18n.t("rsMigration.offerMigrateDesc"),
+      },
+      fresh: {
+        title: this.i18n.t("rsMigration.offerFreshTitle"),
+        description: this.i18n.t("rsMigration.offerFreshDesc"),
+      },
+      crossDeviceNote: this.i18n.t("rsMigration.offerCrossDeviceNote"),
+    }).awaitAction();
+    if (offer.action === "dismiss") return "abort";
+    if (offer.action === "fresh-sync") return "fresh";
+
+    // Adoption confirmed: create the App Folder layout first (files/ is the
+    // move destination), then run the transaction.
+    try {
+      const scope = await deps.onedrive.initVaultScope(vaultName);
+      const outcome = await runRsMigrationTransaction({
+        onedrive: deps.onedrive,
+        vaultName,
+        filesRootId: scope.filesRootId,
+      });
+      if (outcome.status === "moved" || outcome.status === "copied") {
+        this.rsAdoptionMarker = outcome.marker;
+        await this.updatePluginData((data) => {
+          data[KEY_RS_ADOPTION_MARKER] = outcome.marker;
+        });
+        this.diag.log("state", "Remotely Save adoption transaction completed", {
+          strategy: outcome.status,
+          adoptedCount: outcome.adoptedCount,
+          mutations: 0,
+        });
+        return "migrated";
+      }
+      if (outcome.status === "empty-source" || outcome.status === "not-found") {
+        return "fresh";
+      }
+      this.diag.warn("state", "Remotely Save adoption transaction failed", {
+        status: outcome.status,
+        reason: outcome.reason,
+        mutations: 0,
+      });
+      const failure = await new RsMigrationFailureModal(this.app, {
+        title: this.i18n.t("rsMigration.failureTitle"),
+        // destination-not-empty is persistent, not transient — say so instead
+        // of blaming OneDrive and offering a retry that can never succeed.
+        body: outcome.status === "destination-not-empty"
+          ? this.i18n.t("rsMigration.failureBodyDestination")
+          : this.i18n.t("rsMigration.failureBody"),
+        retryLabel: this.i18n.t("rsMigration.failureRetry"),
+        freshLabel: this.i18n.t("rsMigration.failureFreshSync"),
+        guideLabel: this.i18n.t("rsMigration.failureGuide"),
+        guideTitle: this.i18n.t("rsMigration.guideTitle"),
+        guideBody: this.i18n.t("rsMigration.guideBody"),
+        guideOk: this.i18n.t("rsMigration.guideOk"),
+      }).awaitAction();
+      return failure.action === "fresh-sync" ? "fresh" : "abort";
+    } catch (error) {
+      this.diag.warn(
+        "state",
+        "Remotely Save adoption transaction threw; the choice is preserved",
+        describeError(error),
+      );
+      return "abort";
+    }
+  }
+
+  /** EasySync repository join offer (carrier 20261003-2128 §五.3, R1). Runs at
+   *  first-sync triggers when this vault has never synced: a read-only cloud
+   *  scan looks for EasySync repositories; when every one of them differs
+   *  from this vault's name (byte-for-byte — case-only differences included)
+   *  the offer names the count, and "join" opens the repository-name list
+   *  (pre-loaded from the same scan); closing the list returns to the offer.
+   *  Detection is a gain, not a safety gate: failures log and fall through to
+   *  the plain first sync. "abort" ends this round with the choice preserved
+   *  (the next first-sync trigger re-detects, no extra state involved).
+   *  `prefetched` lets the first-sync entry run this read-only scan in parallel
+   *  with the Remotely Save detection（2026-10-10 R4：两段串行等待实测合计约
+   *  10 秒，并发后取两者最大值）。 */
+  private async maybeOfferExistingVaultJoin(
+    prefetched?: Promise<EasySyncRepositoryDetection> | null,
+  ): Promise<"continue" | "abort"> {
+    const deps = this.firstSyncCloudInquiryDeps();
+    if (!deps) return "continue";
+    const vaultName = this.app.vault.getName();
+    let detection: EasySyncRepositoryDetection;
+    try {
+      detection = await (prefetched
+        ?? deps.onedrive.detectExistingEasySyncRepositories(vaultName));
+    } catch (error) {
+      if (this.entryCancelController?.signal.aborted) {
+        // 入口取消：中止是自己发起的，别按检测失败归因（本轮由调用方收尾）。
+        this.diag.log(
+          "state",
+          "EasySync repository detection aborted by the sync-entry cancel",
+          { mutations: 0 },
+        );
+        return "continue";
+      }
+      this.diag.warn(
+        "state",
+        "EasySync repository detection failed; the plain first sync proceeds",
+        describeError(error),
+      );
+      return "continue";
+    }
+    if (detection.kind !== "others") return "continue";
+    const repositories = detection.repositories;
+    if (repositories.some((name) => name === vaultName)) return "continue";
+    this.diag.log(
+      "state",
+      "EasySync join offer shown for a never-synced vault",
+      { repositories: repositories.length, mutations: 0 },
+    );
+    for (;;) {
+      const offer = await new VaultJoinOfferModal(this.app, {
+        title: this.i18n.t("vaultJoin.offerTitle"),
+        body: this.i18n.t("vaultJoin.offerBody", {
+          count: repositories.length,
+        }),
+        join: {
+          title: this.i18n.t("vaultJoin.offerJoinTitle"),
+          description: this.i18n.t("vaultJoin.offerJoinDesc"),
+        },
+        fresh: {
+          title: this.i18n.t("vaultJoin.offerFreshTitle"),
+          description: this.i18n.t("vaultJoin.offerFreshDesc"),
+        },
+      }).awaitAction();
+      if (offer.action === "fresh-sync") return "continue";
+      if (offer.action === "dismiss") return "abort";
+      await new VaultJoinRepositoryListModal(this.app, {
+        title: this.i18n.t("vaultJoin.listTitle"),
+        guide: this.i18n.t("vaultJoin.listGuide"),
+        empty: this.i18n.t("vaultJoin.listEmpty"),
+        rows: repositories,
+        copiedNotice: this.i18n.t("vaultJoin.nameCopied"),
+        copyUnavailableNotice: this.i18n.t("vaultJoin.copyUnavailable"),
+      }, this.noticeCenter).awaitAction();
+    }
+  }
+
+  /** Start a first sync (manual trigger from settings) */
+  async startFirstSync(options: SyncRunOptions = {}): Promise<void> {
+    if (!this.syncExecutor) return;
+    if (this.acquireOpLock("sync")) {
+      this.showSyncBusyHint();
+      return;
+    }
+    try {
+    await this.ensureStateLoaded();
+    if (await this.dispatchV2StateLoadBlockIfPresent(
+      "first",
+      "blocked first sync result",
+    )) return;
+    if (!await this.checkAccountBindingForSync()) return;
+    const recoverV2RemoteScope =
+      this.state?.hasV2RemoteScopeRecovery === true;
+    if (this.state?.planReviewActive && !recoverV2RemoteScope) {
+      await this.activateSyncView();
+      this.syncView?.render();
+      return;
+    }
+    // 面板先开：用户点完同步马上能在侧栏看到「同步进行中…」，而不是等云端
+    // 仓库检测（实测 6.5 秒以上）跑完才把面板弹出来（2026-10-10 拍板）。
+    await this.activateSyncView();
+    // 只读准备期＝可取消窗口（2026-10-10 R1）：两个云端仓库检测并发（R4），
+    // 期间侧栏主动作显示现役「取消同步」；进入弹框/写事务前由各自负责点收回。
+    const entryCancel = this.beginEntryCancellation();
+    let rsMigration: "migrated" | "fresh" | "abort" = "fresh";
+    try {
+      const joinDetection = this.prefetchVaultJoinDetection();
+      rsMigration = await this.maybeRunRsMigrationOffer();
+      if (rsMigration === "abort") return;
+      if (rsMigration !== "migrated") {
+        const vaultJoin = await this.maybeOfferExistingVaultJoin(joinDetection);
+        if (vaultJoin === "abort") return;
+      }
+      // 取消落在最后一段（检测已结束、还没派发）：本轮作废，不进入同步。
+      if (entryCancel.signal.aborted) return;
+    } finally {
+      this.endEntryCancellation();
+    }
+    await this.dispatchSyncRun({
+      mode: "first",
+      options: {
+        ...options,
+        ...(rsMigration === "migrated" ? { rsAdoptionPending: true } : {}),
+        ...(recoverV2RemoteScope
+          ? { recoverV2RemoteScope: true }
+          : {}),
+      },
+      logLabel: "first sync result",
+    });
+    } catch (error) {
+      // A rejection here means the run never started (executor.run owns
+      // in-run errors); the lock is still released by the finally below.
+      this.presentSyncEntryFailure(error, "first sync");
+    } finally {
+      this.releaseOpLock();
+    }
+  }
+
+  /** One-shot feedback for sync-entry clicks while sync work already holds
+   *  the operation lock; reuses the executor's own "already running" phrase.
+   *  Feedback category (no explicit category) shows at every popups level.
+   *  Each bounce also names the current holder in the log — a dead-click
+   *  report with zero rejection lines cannot otherwise say WHO held the
+   *  entry (2026-10-28 真机窗口持锁者只能靠排除法反推). */
+  private showSyncBusyHint(): void {
+    this.diag?.log(
+      "state",
+      "sync entry click bounced — operation lock held",
+      { holder: this.opLock },
+    );
+    this.noticeCenter?.show({
+      key: "sync-busy-hint",
+      message: this.i18n.t("result.alreadyRunning"),
+      priority: NOTICE_PRIORITY.action,
+      durationMs: 2_000,
+    });
+  }
+
+  /** Unified presentation for a sync entry that was rejected before the run
+   *  could start: one diagnostic line keeps the cause, one failure Notice
+   *  gives the user feedback. Feedback category (no explicit category) shows
+   *  at every popups level; the single key updates in place on repeats. */
+  private presentSyncEntryFailure(error: unknown, context: string): void {
+    this.diag?.error(
+      "state",
+      `sync entry did not start (${context})`,
+      describeError(error),
+    );
+    this.noticeCenter?.show({
+      key: "sync-entry-failed",
+      message: this.i18n.t("result.syncNotStarted", {
+        message: describeError(error),
+      }),
+      priority: NOTICE_PRIORITY.failure,
+    });
+  }
+
+  /** Start a manual sync */
+  async startManualSync(): Promise<void> {
+    if (!this.syncExecutor) return;
+    if (!this.hasCompletedSyncState() && !(this.state?.planReviewActive ?? false)) {
+      await this.startFirstSync();
+      return;
+    }
+    if (this.acquireOpLock("sync")) {
+      // A run (or other sync work) is already in flight. Ribbon / command
+      // entries give no other signal, so surface one-shot feedback instead of
+      // a silent return; same key updates in place on repeated clicks.
+      this.showSyncBusyHint();
+      return;
+    }
+    try {
+    await this.ensureStateLoaded();
+    if (await this.dispatchV2StateLoadBlockIfPresent(
+      "manual",
+      "blocked manual sync result",
+    )) return;
+    // A pending session used to make this entry return silently. Give the
+    // click one live verification attempt; the existing busy state covers the
+    // wait, and the background retry chain continues if it cannot bind. No
+    // separate failure surface is added: the root cause (a transient provider
+    // outage) is handled by the retry mechanism, not by compensation UI.
+    if (this.auth?.isSessionPending) {
+      const verified = await this.auth.verifyAccountNow({ allowBootstrap: true });
+      if (!verified) return;
+    }
+    if (!await this.checkAccountBindingForSync()) return;
+
+    // If a plan review is pending, execute it directly — but keep the
+    // reviewed bundle in state until SyncExecutor re-validates its digest.
+    const recoverV2RemoteScope =
+      this.state?.hasV2RemoteScopeRecovery === true;
+    const skipConfirmation = this.state?.planReviewActive ?? false;
+    const reviewedAuthorization = skipConfirmation
+      ? this.state?.planReviewAuthorization ?? undefined
+      : undefined;
+    const acknowledgeMigrationRisk =
+      reviewedAuthorization?.reviewKind === "v2-migration";
+    const createFirstV2Protocol =
+      reviewedAuthorization?.reviewKind === "v2-first-sync"
+      || reviewedAuthorization?.reviewKind === "v2-rs-adoption";
+    const createsRemoteScope = skipConfirmation
+      && (this.state?.planReviewItems ?? []).some(
+        (item) => item.type === SyncActionType.RecreateRemoteScope,
+      );
+    if (
+      acknowledgeMigrationRisk
+      && !await this.acknowledgeV2MigrationRisk()
+    ) return;
+    if (createsRemoteScope && !await this.acknowledgeRemoteScopeCreation()) return;
+
+    await this.dispatchSyncRun({
+      mode: "manual",
+      skipConfirmation,
+      reviewedAuthorization,
+      options: {
+        ...(recoverV2RemoteScope
+          ? { recoverV2RemoteScope: true }
+          : {}),
+        ...(acknowledgeMigrationRisk || createFirstV2Protocol
+          ? { acknowledgeMigrationRisk: true }
+          : {}),
+      },
+      logLabel: "manual sync result",
+    });
+    } catch (error) {
+      this.presentSyncEntryFailure(error, "manual sync");
+    } finally {
+      this.releaseOpLock();
+    }
+  }
+
+  private async acknowledgeV2MigrationRisk(): Promise<boolean> {
+    const t = this.t;
+    return new ConfirmModal(
+      this.app,
+      t("syncPlan.migrationConfirmTitle"),
+      t("syncPlan.migrationConfirm"),
+      t("confirm.cancel"),
+      t,
+      {
+        message: t("syncPlan.migrationConfirmMessage"),
+      },
+    ).awaitConfirm();
+  }
+
+  private async acknowledgeRemoteScopeCreation(): Promise<boolean> {
+    const t = this.t;
+    return new ConfirmModal(
+      this.app,
+      t("syncPlan.remoteScopeRecreateConfirmTitle"),
+      t("syncPlan.remoteScopeRecreateConfirm"),
+      t("confirm.cancel"),
+      t,
+      {
+        message: t("syncPlan.remoteScopeRecreateConfirmMessage"),
+      },
+    ).awaitConfirm();
+  }
+
+  /**
+   * Persist the plan's conflict and delete items to state, then show
+   * a lightweight alert. Sync pauses until the user clicks "确认执行"
+   * in the sidebar. Returns false to indicate the sync should pause.
+   */
+  private async showPlanAlert(
+    kind: "firstSync" | "threshold",
+    plan: SyncPlan,
+  ): Promise<boolean> {
+    const t = this.t;
+
+    const canonicalReview = plan.canonicalReview;
+    if (!canonicalReview) {
+      throw new Error(
+        "Cannot persist a plan review without canonical review counts",
+      );
+    }
+    const counts = canonicalReview.counts;
+    if (!plan.scope) {
+      throw new Error("Cannot persist a plan review without a complete sync scope");
+    }
+    // Capture the previous canonical identity before it is overwritten by
+    // setPlanReviewBundle below. When the plan did not actually change the
+    // regenerated alert can be skipped entirely — the sidebar still holds the
+    // same review from the previous round.
+    const previousIdentity = this.state?.planReviewCanonicalIdentity ?? null;
+    if (plan.reviewKind !== undefined) {
+      const hold = this.state!.activeV2MigrationHold;
+      if (
+        !hold
+        || !sameSyncScope(hold.scope, plan.scope)
+        || !sameCanonicalPlanIdentityV2(
+          hold.canonicalIdentity,
+          plan.canonicalIdentity,
+        )
+      ) {
+        throw new Error(
+          "Cannot display a V2 activation review without its durable hold",
+        );
+      }
+    } else {
+      await this.state!.setPlanReviewBundle(
+        plan.items,
+        counts,
+        plan.scope,
+        plan.canonicalIdentity,
+      );
+    }
+
+    // Refresh sidebar to show plan review section
+    this.updateStatusBar();
+    this.syncView?.render();
+
+    // When a regenerated plan is byte-for-byte identical to the review that
+    // was already sitting in the sidebar there is nothing new to show. The
+    // user still needs to confirm in the sidebar, so we still pause.
+    if (
+      kind === "threshold"
+      && previousIdentity
+      && plan.canonicalIdentity
+      && sameCanonicalPlanIdentityV2(previousIdentity, plan.canonicalIdentity)
+    ) {
+      this.diag?.log(
+        "state",
+        "regenerated plan review is identical — skipping repeat alert",
+        { mutations: 0 },
+      );
+      return false;
+    }
+
+    const firstTime = kind === "firstSync";
+    // First-use education (no competing sync tools / not a backup) moved to
+    // the login gate; the plan alert stays single-purpose.
+    const messages = firstTime
+      ? [t("syncPlan.readyMessage")]
+      : [t("syncPlan.reviewUpdatedMessage")];
+    const modal = new SyncPlanAlertModal(
+      this.app,
+      t(firstTime
+        ? "syncPlan.readyTitle"
+        : "syncPlan.reviewUpdatedTitle"),
+      messages,
+      t("syncPlan.viewButton"),
+      () => { void this.activateSyncView(); },
+    );
+    modal.open();
+
+    // Always return false — sync pauses for sidebar confirmation
+    return false;
+  }
+
+  // ---- Progress helpers ----
+
+  private shouldSuppressSyncNotice(): boolean {
+    const leftSidebar = this.app.workspace.leftSplit;
+    if (!leftSidebar) return false;
+    const easySyncViewVisibleInLeftSidebar = this.app.workspace
+      .getLeavesOfType(SYNC_VIEW_TYPE)
+      .some((leaf) => {
+        const parent = leaf.parent;
+        const belongsToLeftSidebar = parent === leftSidebar
+          || parent.parent === leftSidebar;
+        return belongsToLeftSidebar && leaf.view.containerEl.isShown();
+      });
+    return shouldSuppressSyncNoticeForVisibleSidebar({
+      leftSidebarCollapsed: leftSidebar.collapsed,
+      easySyncViewVisibleInLeftSidebar,
+    });
+  }
+
+  private clearSyncLifecycleNotice(): void {
+    const activeKey = this.noticeCenter.activeKey;
+    this.noticeCenter.clear(SYNC_PROGRESS_NOTICE_KEY);
+    if (activeKey?.startsWith("sync-result:")) this.noticeCenter.clear(activeKey);
+  }
+
+  private refreshSyncNoticeVisibility(): void {
+    if (this.shouldSuppressSyncNotice()) {
+      this.syncNoticeSignature = null;
+      this.clearSyncLifecycleNotice();
+      return;
+    }
+    if (this.syncExecutor?.isRunning) this.renderSyncNoticeProgress();
+  }
+
+  private beginSyncNotice(): void {
+    compatCancelAnimationFrame(this.syncNoticeFrame);
+    this.syncNoticeFrame = null;
+    this.clearSyncLifecycleNotice();
+    if (this.shouldSuppressSyncNotice()) {
+      this.syncNoticeSignature = null;
+      return;
+    }
+    const recovering =
+      this.progressStore.state.activityKind === "mutationRecovery";
+    const label = this.i18n.t(
+      recovering
+        ? "progress.recoveringMutation"
+        : "notice.sync.start",
+    );
+    this.syncNoticeSignature = `start:${label}`;
+    this.noticeCenter.show({
+      key: SYNC_PROGRESS_NOTICE_KEY,
+      message: () => createSyncProgressNoticeMessage(label, 0, false, false),
+      priority: NOTICE_PRIORITY.progress,
+      durationMs: 0,
+      className: "easy-sync-notice-progress",
+      resumable: true,
+      category: "ambient",
+    });
+  }
+
+  private scheduleSyncNoticeUpdate(): void {
+    if (this.syncNoticeFrame !== null) return;
+    this.syncNoticeFrame = compatRequestAnimationFrame(() => {
+      this.syncNoticeFrame = null;
+      if (this.syncExecutor?.isRunning) this.renderSyncNoticeProgress();
+    });
+  }
+
+  private renderSyncNoticeProgress(): void {
+    if (this.shouldSuppressSyncNotice()) {
+      this.syncNoticeSignature = null;
+      this.clearSyncLifecycleNotice();
+      return;
+    }
+    const progress = this.progressStore.state;
+    const presentation = resolveSyncProgressNoticePresentation(progress);
+    const t = this.t;
+    const label = formatSyncProgressNoticeLabel(presentation, t);
+    const signature = [
+      presentation.kind,
+      presentation.activity.kind,
+      label,
+      presentation.percent,
+      presentation.determinate,
+      presentation.showProgressBar,
+    ].join(":");
+    if (signature === this.syncNoticeSignature) return;
+    this.syncNoticeSignature = signature;
+    this.noticeCenter.show({
+      key: SYNC_PROGRESS_NOTICE_KEY,
+      message: () => createSyncProgressNoticeMessage(
+        label,
+        presentation.percent,
+        presentation.determinate,
+        presentation.showProgressBar,
+      ),
+      priority: NOTICE_PRIORITY.progress,
+      durationMs: 0,
+      className: "easy-sync-notice-progress",
+      resumable: true,
+      category: "ambient",
+    });
+  }
+
+  /** Structured run-fact checks for sync results. Localised-message
+   *  comparisons remain only as a fallback for results without runFacts
+   *  (review 2026-09-02 finding ⑥: runFacts is the primary signal). */
+  private isCancelled(result: SyncResult): boolean {
+    return result.runFacts?.termination === "cancelled"
+      || result.message === this.i18n.t("result.cancelled");
+  }
+
+  private isPlanReviewPaused(result: SyncResult): boolean {
+    return result.runFacts?.planReviewPaused === true
+      || result.message === this.i18n.t("result.pausedForReview");
+  }
+
+  private finishSyncNotice(result: SyncResult): void {
+    compatCancelAnimationFrame(this.syncNoticeFrame);
+    this.syncNoticeFrame = null;
+    this.syncNoticeSignature = null;
+    const suppressNotice = this.shouldSuppressSyncNotice();
+    this.clearSyncLifecycleNotice();
+
+    const outcome = resolveSyncNoticeOutcome(result, {
+      pausedForReview: this.isPlanReviewPaused(result),
+      cancelled: this.isCancelled(result),
+    }, this.progressStore.state.completedFiles);
+    if (
+      !outcome
+      || suppressNotice
+    ) return;
+
+    const messageKeys: Record<SyncNoticeOutcomeKind, string> = {
+      completed: "notice.sync.completed",
+      conflicts: "notice.sync.conflicts",
+      remoteDeletes: "notice.sync.remoteDeletes",
+      mixedPending: "notice.sync.mixedPending",
+      review: "notice.sync.review",
+      cancelled: "notice.sync.cancelled",
+      failed: "notice.sync.failed",
+      authExpired: "notice.sync.authExpired",
+    };
+    const priorities: Record<SyncNoticeOutcomeKind, number> = {
+      completed: NOTICE_PRIORITY.info,
+      conflicts: NOTICE_PRIORITY.attention,
+      remoteDeletes: NOTICE_PRIORITY.attention,
+      mixedPending: NOTICE_PRIORITY.attention,
+      review: NOTICE_PRIORITY.attention,
+      cancelled: NOTICE_PRIORITY.action,
+      failed: NOTICE_PRIORITY.failure,
+      authExpired: NOTICE_PRIORITY.critical,
+    };
+    // Direction 3 (user decision 2026-09-02): automatic sync proceeds when
+    // the threshold gate would otherwise pause a large plan; show the
+    // one-line summary instead of the durable review flow.
+    // 2026-09-15 copy-reduction round R-7: when the run completed, the summary
+    // alone replaces the completed notice — the previous double-show made the
+    // completed notice flash and get replaced downstream. Non-completed
+    // outcomes keep both notices (the outcome carries the real news).
+    const thresholdSkippedInAuto =
+      result.runFacts?.thresholdSkippedInAuto === true;
+    if (!thresholdSkippedInAuto || outcome.kind !== "completed") {
+      this.noticeCenter.show({
+        key: `sync-result:${outcome.kind}`,
+        message: outcome.message ?? this.i18n.t(
+          messageKeys[outcome.kind],
+          {
+            count: outcome.count,
+            remoteDeletes: outcome.remoteDeletes ?? 0,
+          },
+        ),
+        priority: priorities[outcome.kind],
+        durationMs: SYNC_RESULT_NOTICE_DURATION_MS,
+        className: "easy-sync-notice-result",
+        category: outcome.kind === "authExpired" ? "safety" : "ambient",
+      });
+    }
+
+    if (thresholdSkippedInAuto) {
+      this.noticeCenter.show({
+        key: "sync-result:threshold-skipped-auto",
+        message: this.i18n.t("notice.sync.thresholdSkippedInAuto"),
+        priority: NOTICE_PRIORITY.info,
+        durationMs: SYNC_RESULT_NOTICE_DURATION_MS,
+        className: "easy-sync-notice-result",
+        category: "ambient",
+      });
+    }
+  }
+
+  /** Forward progress from executor to the store for sync-view display.
+   *  Phase and progress are set directly by the executor on the store;
+   *  this callback only triggers UI refresh. */
+  private handleProgress(_current: number, _total: number, _currentFile: string): void {
+    // Store already updated by SyncExecutor — just refresh UI
+    this.scheduleSyncNoticeUpdate();
+  }
+
+  /** Track byte-level progress for the current file download */
+  private handleFileProgress(downloaded: number, total: number): void {
+    this.progressStore?.setByteProgress(downloaded, total);
+    // 每个字节块都会到这里：只走轻量数字补丁（同一帧内合并），整屏重建由
+    // 状态回调负责。
+    this.syncView?.renderProgress();
+    this.scheduleSyncNoticeUpdate();
+  }
+
+  /** Track a completed file in the progress store */
+  private handleFileComplete(
+    path: string,
+    actionType: SyncActionType,
+    success: boolean,
+    reason?: string,
+    fileSize?: number,
+    sourcePath?: string,
+    /** A3 (2026-10-26): evidence-only failure facts from the executor. Stored
+     *  on the progress row (and therefore on the history entry) verbatim; it
+     *  never changes the row's status, wording or any decision. */
+    error?: SyncFileErrorFactV1,
+  ): void {
+    const safelyDeferred = actionType === SyncActionType.RetryLater
+      || actionType === SyncActionType.FolderDeferred;
+    const status = success || safelyDeferred
+      ? SyncProgressStore.actionToStatus(actionType)
+      : "error";
+    this.progressStore.completeCurrentItem();
+    this.progressStore.addCompletedFile({
+      path,
+      sourcePath,
+      status,
+      actionType,
+      reason,
+      fileSize,
+      failedAt: status === "error" ? Date.now() : undefined,
+      ...(error ? { error } : {}),
+    });
+    this.scheduleSyncNoticeUpdate();
+    // Surface the completed row immediately: the pool reports each file as its
+    // own PUT and receipt land, so the row must not wait for the batch's shared
+    // checkpoint or the round end. renderProgress() coalesces per frame and only
+    // patches the top numbers plus the diffed completed list.
+    this.syncView?.renderProgress();
+  }
+
+  /**
+   * A row already shown as done is not durable after all: its batch's shared
+   * checkpoint failed, or the round was cancelled before that checkpoint
+   * committed. Flip the row where it stands and keep the reason — a shown
+   * success never disappears silently. The file's own work is still recorded
+   * in the mutation receipts; the next round's recovery settles it.
+   */
+  private handleFileReverted(path: string, reason: string): void {
+    if (!this.progressStore.revertCompletedFile(path, reason)) return;
+    this.scheduleSyncNoticeUpdate();
+    this.syncView?.renderProgress();
+  }
+
+  async cancelSync(): Promise<void> {
+    this.cancelDescendantFileReconstructionContinuation();
+    const entryCancel = this.entryCancelController;
+    if (entryCancel) {
+      // 入口只读准备期（2026-10-10 R1）：中止两个云端仓库检测，本轮直接作废
+      // ——等价于用户在询问弹框里按 ✕，复用现役取消回执句。写事务不在此列
+      // （arm 在进入弹框/事务前已收回）。
+      this.diag.log(
+        "execute",
+        "sync entry cancelled during repository preparation",
+        { mutations: 0 },
+      );
+      entryCancel.abort();
+      this.noticeCenter?.show({
+        key: "sync-entry-cancelled",
+        message: this.i18n.t("notice.sync.cancelled"),
+        priority: NOTICE_PRIORITY.attention,
+        durationMs: 6_000,
+      });
+      return;
+    }
+    if (!this.syncExecutor?.isRunning) return;
+    this.progressStore.requestCancel();
+    this.scheduleSyncNoticeUpdate();
+    this.syncExecutor.invalidateLifecycle("cancel");
+    this.diag.log("execute", "sync cancellation requested, waiting for drain...");
+    this.updateStatusBar();
+    this.syncView?.render();
+
+    const deadline = Date.now() + 30_000;
+    while (this.syncExecutor.isRunning && Date.now() < deadline) {
+      await new Promise<void>((resolve) => compatSetTimeout(() => resolve(), 100));
+    }
+
+    if (this.syncExecutor.isRunning) {
+      this.diag.warn("execute", "sync did not drain within 30s timeout");
+    } else {
+      this.diag.log("execute", "sync drained after cancellation");
+    }
+
+    this.updateStatusBar();
+    this.syncView?.render();
+  }
+
+  private async invalidateAndDrainSyncActivity(reason: string): Promise<boolean> {
+    this.cancelDescendantFileReconstructionContinuation();
+    const executor = this.syncExecutor;
+    if (!executor) {
+      this.operationLifecycle.invalidate(reason);
+      return true;
+    }
+
+    if (executor.isRunning) {
+      this.progressStore.requestCancel();
+    }
+    executor.invalidateLifecycle(reason);
+
+    const deadline = Date.now() + 30_000;
+    while ((executor.hasActivityInFlight || this.opLock !== null) && Date.now() < deadline) {
+      await new Promise<void>((resolve) => compatSetTimeout(() => resolve(), 100));
+    }
+    if (executor.hasActivityInFlight || this.opLock !== null) {
+      this.diag.warn("lifecycle", `${reason} blocked because old sync work did not drain within 30s`);
+      return false;
+    }
+    return true;
+  }
+
+  /** Reset sync state safely — cancels running sync, acquires lock, clears state. */
+  async resetSyncState(): Promise<void> {
+    // Reset is the exit users are pointed at when a load fails, so this
+    // pre-flight is best effort: letting it reject would seal off the very path
+    // that recovers from a failed load. The load inside the try below decides
+    // what the reset may act on: a settings failure fails closed with the
+    // normal notice path, a state failure is reported and the reset proceeds.
+    await this.ensureStateLoaded().catch(() => undefined);
+    if (!await this.invalidateAndDrainSyncActivity("reset")) {
+      this.noticeCenter.show({
+        key: "reset-lock-busy",
+        message: this.i18n.t("result.lockBusy"),
+        priority: NOTICE_PRIORITY.attention,
+      });
+      return;
+    }
+    // A completed round may still be publishing its recovery hint off the
+    // critical path; let it finish before the reset invalidates the state it
+    // was derived from (a hint write must never land after this decision).
+    // Optional guard keeps test doubles and older runtime holders valid.
+    if (typeof this.syncExecutor?.settleBackgroundTasks === "function") {
+      await this.syncExecutor.settleBackgroundTasks().catch(() => undefined);
+    }
+    const holder = this.acquireOpLock("reset");
+    if (holder) {
+      this.noticeCenter.show({
+        key: "reset-lock-busy",
+        message: this.i18n.t("result.lockBusy"),
+        priority: NOTICE_PRIORITY.attention,
+      });
+      return;
+    }
+    try {
+      // The pre-flight above is best effort; this is the load the reset acts
+      // on. A failed settings read must fail closed here: the reset re-saves
+      // the in-memory settings at the end, so persisting defaults over the
+      // user's settings would be worse than a visible failure. A failed state
+      // read is the case reset exists for: report it and let the reset run.
+      try {
+        await this.ensureStateLoaded();
+      } catch (error) {
+        try {
+          await this.ensureSettingsLoaded();
+        } catch (settingsError) {
+          this.diag.error(
+            "state",
+            "local sync state reset failed",
+            settingsError instanceof Error
+              ? `${settingsError.name}: ${settingsError.message}`
+              : String(settingsError),
+          );
+          this.noticeCenter.show({
+            key: "reset-failed",
+            message: this.i18n.t("settings.reset.failed"),
+            priority: NOTICE_PRIORITY.attention,
+            durationMs: 10_000,
+          });
+          return;
+        }
+        this.diag.warn(
+          "state",
+          "reset proceeding after the local state load failed",
+          error instanceof Error
+            ? `${error.name}: ${error.message}`
+            : String(error),
+        );
+      }
+      // The reset is definitely starting: capture a pre-reset report for
+      // every variant (normal / isolated / forced). Best-effort by contract —
+      // a failed report never blocks the exit. resetSnapshot=true keeps this
+      // file the raw pre-reset evidence (no prior-reset history embedded).
+      const preResetReportFile = await this.generateDiagnosticReport(true);
+      let isolatedRecoveries: ConservativeResetEntries | null = null;
+      let forceReset = false;
+      if (this.hasResetBlockingRecovery()) {
+        const disposition = await this.settleResetBlockingRecovery();
+        if (disposition.kind === "blocked") {
+          // Third tier: the conservative preflight cannot settle the
+          // unresolved evidence. Instead of aborting (a reset dead-end in the
+          // exact field where reset is needed most), disclose consequences
+          // and let the user authorize a forced reset. Remote data is never
+          // touched; only local tracking is terminated (audited).
+          if (!await this.confirmForcedReset()) {
+            return;
+          }
+          forceReset = true;
+        }
+        if (disposition.kind === "isolated") {
+          isolatedRecoveries = disposition.entries;
+        }
+      }
+      try {
+        if (forceReset) {
+          await this.state?.forceReset();
+        } else if (isolatedRecoveries) {
+          try {
+            await this.state?.resetPreservingIsolatedMutationRecovery(
+              isolatedRecoveries,
+            );
+          } catch (error) {
+            if (!(error instanceof ConservativeResetBlockedError)) throw error;
+            // The conservative reset refused to preserve the isolated
+            // evidence (e.g. an unreceipted create upload is not admissible
+            // for a reset capsule). Escalate to the same user-authorized
+            // forced-reset contract as the blocked disposition — without
+            // this the isolated path is a reset dead end (issue #17).
+            this.diag.warn(
+              "state",
+              "conservative local reset kept unresolved recovery evidence",
+              describeError(error),
+            );
+            if (!await this.confirmForcedReset()) {
+              this.showMutationRecoveryResetBlockedNotice();
+              return;
+            }
+            // The forced reset is what actually executes here; the marker's
+            // variant must reflect the operation, not the original intent.
+            forceReset = true;
+            await this.state?.forceReset();
+          }
+        } else {
+          await this.state?.reset();
+        }
+      } catch (error) {
+        if (error instanceof ConservativeResetBlockedError) {
+          this.diag.warn(
+            "state",
+            "conservative local reset kept unresolved recovery evidence",
+            describeError(error),
+          );
+          this.showMutationRecoveryResetBlockedNotice();
+          return;
+        }
+        // The diagnostic report serializes details as JSON, which turns a raw
+        // Error into `{}` (F14). Extract the name and message so the real
+        // error text reaches the report.
+        this.diag.error(
+          "state",
+          "local sync state reset failed",
+          error instanceof Error
+            ? `${error.name}: ${error.message}`
+            : String(error),
+        );
+        this.noticeCenter.show({
+          key: "reset-failed",
+          message: this.i18n.t("settings.reset.failed"),
+          priority: NOTICE_PRIORITY.attention,
+          durationMs: 10_000,
+        });
+        return;
+      }
+      // V2 participation is part of the discarded local baseline. Keep the
+      // user's current sync settings, then let the next V2 join rebuild a new
+      // participation projection from those settings and current file facts.
+      this.communityPluginParticipation = null;
+      this.communityPluginParticipationInitializationPromise = null;
+      // Reset lineage lives in the settings domain (survives the reset) so
+      // any later report can attribute its logs and embed the pre-reset
+      // snapshot. Recorded only after the reset has actually happened.
+      this.lastResetFacts = {
+        resetAt: Date.now(),
+        variant: forceReset ? "forced" : isolatedRecoveries ? "isolated" : "normal",
+        ...(preResetReportFile !== undefined ? { preResetReportFile } : {}),
+        pluginVersion: this.manifest.version,
+      };
+      // 规则行的「已读」记忆随重置一并清空（2026-10-12 用户裁决）：重置是用户的
+      // 大扫除出口，设置页的规则随之重新显示——不再单设恢复入口、零新增文案。
+      this.acknowledgedRules = [];
+      try {
+        await this.saveSyncSettings();
+        await this.scanner?.clearScanCache();
+      } catch (error) {
+        // The diagnostic report serializes a raw Error as `{}` (F14).
+        this.diag.error(
+          "state",
+          "local reset maintenance failed",
+          error instanceof Error
+            ? `${error.name}: ${error.message}`
+            : String(error),
+        );
+        this.noticeCenter.show({
+          key: "reset-failed",
+          message: this.i18n.t("settings.reset.failed"),
+          priority: NOTICE_PRIORITY.attention,
+          durationMs: 10_000,
+        });
+        return;
+      }
+      this.noticeCenter.show({
+        key: "reset-complete",
+        message: this.i18n.t("settings.reset.done"),
+        priority: NOTICE_PRIORITY.action,
+      });
+      const leftoverDirectories =
+        this.state?.lastResetLeftoverDirectories ?? [];
+      if (leftoverDirectories.length === 1) {
+        this.noticeCenter.show({
+          key: "reset-leftover-directories",
+          message: this.i18n.t("settings.reset.leftoverDirectoryOne", {
+            directory: leftoverDirectories[0],
+          }),
+          priority: NOTICE_PRIORITY.attention,
+          durationMs: 15_000,
+        });
+      } else if (leftoverDirectories.length > 1) {
+        this.noticeCenter.show({
+          key: "reset-leftover-directories",
+          message: this.i18n.t("settings.reset.leftoverDirectoryMany", {
+            count: leftoverDirectories.length,
+          }),
+          priority: NOTICE_PRIORITY.attention,
+          durationMs: 15_000,
+        });
+      }
+      this.updateStatusBar();
+      this.syncView?.render();
+    } catch (error) {
+      // Unexpected failures outside the guarded sub-steps above still report
+      // through the same notice path: the reset entry must never reject into
+      // a caller with no handler (the button would look dead).
+      this.diag.error(
+        "state",
+        "local sync state reset failed",
+        error instanceof Error
+          ? `${error.name}: ${error.message}`
+          : String(error),
+      );
+      this.noticeCenter.show({
+        key: "reset-failed",
+        message: this.i18n.t("settings.reset.failed"),
+        priority: NOTICE_PRIORITY.attention,
+        durationMs: 10_000,
+      });
+    } finally {
+      this.releaseOpLock();
+    }
+  }
+
+  /**
+   * A reset owns the shared operation lock for one recovery-only observation.
+   * The canonical executor may settle existing evidence, but it cannot enter
+   * ordinary planning. Any remaining, corrupt, quarantined, or unavailable
+   * evidence keeps the reset fail-closed and retryable.
+   */
+  private async settleResetBlockingRecovery():
+    Promise<ResetMutationRecoveryDisposition> {
+    const state = this.state;
+    if (!state || !this.hasResetBlockingRecovery()) {
+      return { kind: "settled" };
+    }
+    if (
+      !this.syncExecutor
+      || !state.isV2StateActive
+      || state.hasV2StateLoadRecoveryBlock
+      || state.hasV2RemoteScopeRecovery
+      || state.hasMutationLedgerCorruption
+      || state.hasMutationRecoveryQuarantineCorruption
+      || (state.mutationRecoveryQuarantine?.length ?? 0) > 0
+      || (state.mutationLedger?.length ?? 0) === 0
+    ) return { kind: "blocked" };
+
+    try {
+      if (!await this.checkAccountBinding({
+        suppressNotice: true,
+        allowInitialBind: false,
+      })) return { kind: "blocked" };
+
+      this.diag.log(
+        "execute",
+        "reset preflight started one recovery-only observation",
+        {
+          remaining: state.mutationLedger.length,
+          mutations: 0,
+        },
+      );
+      const result = await this.dispatchSyncRun({
+        mode: "manual",
+        options: {
+          recoveryOnly: true,
+          mutationRecoveryObservationOnly: true,
+        },
+        logLabel: "reset preflight mutation recovery result",
+        resultOwner: "reset",
+      });
+      // The reset owns the final user-facing outcome. Remove the ordinary
+      // recovery result (for example, "continuing sync") before showing the
+      // reset-specific success or retained-evidence notice.
+      this.clearSyncLifecycleNotice();
+      const settled = result?.mutationRecovery?.state === "settled"
+        && !this.hasResetBlockingRecovery();
+      if (settled) return { kind: "settled" };
+      const remaining = state.mutationLedger;
+      if (
+        result?.mutationRecovery?.state === "blocked"
+        && result.mutationRecovery.isolated === true
+        && result.mutationRecovery.blockReason === "facts-changed"
+        && remaining.length > 0
+        && result.mutationRecovery.blockedOperationId !== undefined
+        && remaining.some((record) => record.intent.operationId
+          === result.mutationRecovery?.blockedOperationId)
+      ) {
+        return {
+          kind: "isolated",
+          entries: structuredClone(remaining),
+        };
+      }
+      this.diag.warn(
+        "execute",
+        "reset preflight kept unresolved mutation recovery evidence",
+        {
+          remaining: state.mutationLedger.length,
+          recoveryState: result?.mutationRecovery?.state ?? "unavailable",
+          mutations: 0,
+        },
+      );
+      return { kind: "blocked" };
+    } catch (error) {
+      this.clearSyncLifecycleNotice();
+      this.diag.warn(
+        "execute",
+        "reset preflight mutation recovery failed",
+        describeError(error),
+      );
+      return { kind: "blocked" };
+    }
+  }
+
+  private hasResetBlockingRecovery(): boolean {
+    const state = this.state;
+    if (!state) return false;
+    return (state.mutationLedger?.length ?? 0) > 0
+      || (state.mutationRecoveryQuarantine?.length ?? 0) > 0
+      || state.hasMutationLedgerCorruption
+      || state.hasMutationRecoveryQuarantineCorruption;
+  }
+
+  private hasUnresolvedMutationRecovery(): boolean {
+    const state = this.state;
+    if (!state) return false;
+    return state.hasV2StateLoadRecoveryBlock
+      || (state.mutationLedger?.length ?? 0) > 0
+      || (state.mutationRecoveryQuarantine?.length ?? 0) > 0
+      || state.hasMutationLedgerCorruption
+      || state.hasMutationRecoveryQuarantineCorruption;
+  }
+
+  private showMutationRecoveryResetBlockedNotice(): void {
+    this.noticeCenter.show({
+      key: "reset-mutation-recovery-blocked",
+      message: this.i18n.t("notice.sync.recoveryResetBlocked"),
+      priority: NOTICE_PRIORITY.attention,
+      durationMs: 10_000,
+      category: "safety",
+    });
+    this.updateStatusBar();
+    this.syncView?.render();
+  }
+
+  /** Log out safely — cancels running sync, acquires lock, clears auth. */
+  async logoutUser(): Promise<void> {
+    if (!await this.invalidateAndDrainSyncActivity("logout")) {
+      this.noticeCenter.show({
+        key: "logout-lock-busy",
+        message: this.i18n.t("result.lockBusy"),
+        priority: NOTICE_PRIORITY.attention,
+      });
+      return;
+    }
+    const holder = this.acquireOpLock("logout");
+    if (holder) {
+      this.noticeCenter.show({
+        key: "logout-lock-busy",
+        message: this.i18n.t("result.lockBusy"),
+        priority: NOTICE_PRIORITY.attention,
+      });
+      return;
+    }
+    try {
+      await this.auth?.logout();
+    } finally {
+      this.releaseOpLock();
+    }
+  }
+
+  private async handleSyncResult(
+    result: SyncResult,
+    mode: SyncMode,
+    recoveryOnly = false,
+    recoveryContext: MutationRecoveryRunContext = {
+      priorTotal: 0,
+      priorRemaining: 0,
+      newRemaining: 0,
+    },
+  ): Promise<void> {
+    const harmlessRejectedRun = result.message === this.i18n.t("result.alreadyRunning");
+    const retryableMutationRecovery =
+      result.mutationRecovery?.state === "network-unavailable"
+      && !result.authExpired
+      && !this.isCancelled(result)
+      && !(this.state?.planReviewActive ?? false);
+    const isolatedMutationRecovery =
+      result.mutationRecovery?.state === "blocked"
+      && result.mutationRecovery.isolated === true
+      && result.errors === 0
+      && !result.authExpired
+      && !this.isCancelled(result)
+      && (
+        recoveryOnly
+        || (
+          result.success
+          && result.conflicts === 0
+          && result.deferred === 0
+          && !this.isPlanReviewPaused(result)
+          && !(this.state?.planReviewActive ?? false)
+        )
+      );
+    const blockedMutationRecovery =
+      result.mutationRecovery?.state === "blocked"
+      && result.mutationRecovery.isolated !== true
+      && !result.authExpired
+      && !this.isCancelled(result);
+
+    if (isolatedMutationRecovery) {
+      this.clearSyncLifecycleNotice();
+      this.mutationRecoveryBlockReason =
+        result.mutationRecovery?.blockReason ?? "unknown";
+      await this.recordSyncHistory(
+        result,
+        mode,
+        recoveryOnly,
+        recoveryContext,
+      );
+      if (!recoveryOnly && result.success && this.autoSyncPaused) {
+        this.autoSyncPaused = false;
+        await this.saveSyncSettings();
+        this.startAutoSync();
+      }
+      this.clearRibbonSuccess();
+      this.updateStatusBar();
+      this.syncView?.render();
+      return;
+    }
+
+    if (retryableMutationRecovery) {
+      this.clearSyncLifecycleNotice();
+      this.mutationRecoveryBlockReason = null;
+      await this.recordSyncHistory(
+        result,
+        mode,
+        recoveryOnly,
+        recoveryContext,
+      );
+      if (
+        !recoveryOnly
+        && this.isAutoSyncMasterEnabled()
+        && (!this.autoSyncPaused || this.pausedBlockedRecoveryLacksManualExit())
+      ) {
+        this.mutationRecoveryScheduler.continueAfterExternalFailure(
+          result.mutationRecovery?.retryAfterSeconds ?? null,
+        );
+      }
+      this.clearRibbonSuccess();
+      this.updateStatusBar();
+      this.syncView?.render();
+      return;
+    }
+
+    if (blockedMutationRecovery) {
+      this.clearSyncLifecycleNotice();
+      this.mutationRecoveryBlockReason =
+        result.mutationRecovery?.blockReason ?? "unknown";
+      this.autoSyncPaused = true;
+      this.stopAutoSync();
+      await this.saveSyncSettings();
+      await this.recordSyncHistory(
+        result,
+        mode,
+        recoveryOnly,
+        recoveryContext,
+      );
+      this.showMutationRecoveryBlockedNotice();
+      this.diag.warn(
+        "execute",
+        `automatic mutation recovery stopped: ${this.mutationRecoveryBlockReason}`,
+      );
+      this.clearRibbonSuccess();
+      this.updateStatusBar();
+      this.syncView?.render();
+      return;
+    }
+
+    if (recoveryOnly && result.mutationRecovery?.state === "settled") {
+      this.clearSyncLifecycleNotice();
+      this.mutationRecoveryBlockReason = null;
+      await this.recordSyncHistory(
+        result,
+        mode,
+        true,
+        recoveryContext,
+      );
+      this.showMutationRecoveryRecoveredNotice(
+        result.mutationRecovery.settled,
+      );
+      this.clearRibbonSuccess();
+      this.updateStatusBar();
+      this.syncView?.render();
+      return;
+    }
+
+    const observationClassification = classifyRetryableObservationResult(
+      result,
+      { completedFileCount: this.progressStore.state.completedCount },
+    );
+    const retryableObservation =
+      observationClassification.kind === "valid"
+      && !(this.state?.planReviewActive ?? false);
+    if (
+      observationClassification.kind === "contradictory"
+      || (
+        observationClassification.kind === "valid"
+        && !retryableObservation
+      )
+    ) {
+      this.diag.error(
+        "execute",
+        "retryable observation disposition contradicted the sync result; preserving fail-closed pause",
+        {
+          success: result.success,
+          errors: result.errors,
+          uploaded: result.uploaded,
+          downloaded: result.downloaded,
+          deleted: result.deleted,
+          conflicts: result.conflicts,
+          deferred: result.deferred,
+          termination: result.runFacts?.termination ?? "unknown",
+          ordinaryPlanning: result.runFacts?.ordinaryPlanning ?? "unknown",
+          completedFiles: this.progressStore.state.completedFiles.length,
+        },
+      );
+    }
+    if (retryableObservation) {
+      this.finishSyncNotice(result);
+      await this.recordSyncHistory(
+        result,
+        mode,
+        recoveryOnly,
+        recoveryContext,
+      );
+      this.diag.warn(
+        "execute",
+        `sync stopped before ordinary planning; the next normal sync will observe again (${result.disposition?.component ?? "unknown"})`,
+      );
+      this.clearRibbonSuccess();
+      this.updateStatusBar();
+      this.syncView?.render();
+      return;
+    }
+
+    const retryingDescendantFileReconstruction =
+      result.continueAfterConfirmedDescendantFileReconstruction === true
+      && result.descendantFileReconstructionRetryableFailure === true;
+    // Errors that must not pause the whole auto-sync round stay visible in
+    // `errors` (history and failure details stay honest); each exempt family
+    // has its own decision:
+    // - deterministic community-plugin identity blocks: nothing was written,
+    //   and only an observed-fact change can clear the block;
+    // - M17 breaker deferrals: the breaker protecting the round must not fail
+    //   it (its own message promises "自动同步将约每 15 分钟重试一次");
+    // - network-class transfer failures (2026-10-16 user decision): a dropped
+    //   link is an environmental transient — the item rows and the failure
+    //   notice stay, and the next round retries under the M17 network backoff
+    //   arm. Pausing would silence that very arm and leave the vault stopped
+    //   until a manual sync, which is what a long-lived machine hit after its
+    //   network came back.
+    // - plan-layer deferrals (2026-10-18 user decision): a `RetryLater` item
+    //   the plan itself produced for an identity-replacement verification
+    //   ("nothing was changed this round") is by design settled by *the next
+    //   round's* verification — pausing for a manual sync would contradict
+    //   the deferral's own semantics and the F30 rule that only unknown
+    //   outcomes stop the vault. The failure row and the notice stay.
+    // Conflicts no longer pause automatic sync either: they stay a visible
+    // pending decision (sidebar/ribbon still show them) while the rest of the
+    // vault keeps syncing (user decision 2026-09-01, 20260901-221059).
+    // The gate asks whether *every* counted error belongs to an exempt family,
+    // not whether one family accounts for all of them: a round mixing exempt
+    // families (a breaker-deferred item plus a fresh dropped link, or a
+    // blocked identity item plus either, or a plan deferral plus any of them)
+    // is still all-exempt, while any error outside the families keeps the
+    // round pausing. The sum is compared for equality, so an over-count (a
+    // deferred item that never reached execution) pauses instead of slipping
+    // through.
+    const exemptErrorFamilies =
+      (result.identityBlockedErrors ?? 0)
+      + (result.breakerDeferredErrors ?? 0)
+      + (result.networkFailureErrors ?? 0)
+      + (result.planningDeferredErrors ?? 0);
+    const exemptFailuresOnly = exemptErrorFamilies > 0
+      && exemptErrorFamilies === result.errors;
+    const pauseAutoSync =
+      !retryableMutationRecovery
+      && !retryingDescendantFileReconstruction
+      && (
+      ((!result.success && !harmlessRejectedRun) && !exemptFailuresOnly)
+      || (result.errors > 0 && !exemptFailuresOnly)
+      || result.authExpired
+      || this.isCancelled(result)
+      || this.isPlanReviewPaused(result)
+      || (this.state?.planReviewActive ?? false)
+      );
+    this.finishSyncNotice(result);
+    await this.recordSyncHistory(
+      result,
+      mode,
+      recoveryOnly,
+      recoveryContext,
+    );
+    if (pauseAutoSync) {
+      this.autoSyncPaused = true;
+      this.stopAutoSync();
+      await this.saveSyncSettings();
+      this.diag.warn("execute", `auto sync paused after incomplete run: ${result.message}`);
+      this.clearRibbonSuccess();
+      this.updateStatusBar();
+      this.syncView?.render();
+      return;
+    }
+    if (result.success && result.deferred === 0 && this.autoSyncPaused) {
+      this.autoSyncPaused = false;
+      await this.saveSyncSettings();
+      this.startAutoSync();
+    }
+    // Reset the auto-sync timer after a successful auto-sync so the
+    // full interval gap is guaranteed (prevents back-to-back cycles on
+    // slow mobile networks where sync duration approaches the interval).
+    // Use the timer-only reset here: re-arming a persisted community-plugin
+    // join would let a permanently blocked join re-trigger "修改后同步" at the
+    // end of every sync (~10s loop) even with no user edits.
+    if (result.success && mode === "auto") {
+      this.resetAutoSyncTimer();
+    }
+    if (isSyncResultFullyComplete(result)) this.showRibbonSuccess();
+    else this.clearRibbonSuccess();
+    this.updateStatusBar();
+    this.syncView?.render();
+  }
+
+  private async recordSyncHistory(
+    result: SyncResult,
+    mode: SyncMode,
+    recoveryOnly: boolean,
+    recoveryContext: MutationRecoveryRunContext,
+  ): Promise<void> {
+    if (!this.state) return;
+    const progress = this.progressStore.state;
+    if (
+      progress.startedAt <= 0
+      || result.message === this.i18n.t("result.alreadyRunning")
+    ) {
+      return;
+    }
+    const endedAt = Date.now();
+    const planReviewPaused = this.isPlanReviewPaused(result);
+    // A plan-review pause is not an ordinary history row, but the recovery
+    // evidence observed by this round must still be written. Skipping it left
+    // a settled row at blocked/account-changed, and later ledger churn
+    // resurrected the stale reason (2026-11-08 field case).
+    const priorRecoveryWithoutEntry =
+      planReviewPaused && result.mutationRecovery === undefined
+        ? undefined
+        : await this.updatePriorMutationRecoveryHistory(
+            result,
+            recoveryContext,
+            endedAt,
+          );
+    if (planReviewPaused) return;
+
+    const stoppedInsidePriorRecovery =
+      recoveryContext.priorTotal > 0
+      && recoveryContext.priorRemaining > 0
+      && (
+        result.mutationRecovery !== undefined
+        || this.isCancelled(result)
+      );
+    if (recoveryOnly || stoppedInsidePriorRecovery) {
+      if (priorRecoveryWithoutEntry) {
+        await this.createMutationRecoveryHistoryEntry(
+          priorRecoveryWithoutEntry,
+          progress.startedAt,
+        );
+      }
+      return;
+    }
+
+    const status = resolveSyncHistoryStatus(result, {
+      cancelled: this.isCancelled(result),
+      completedFileCount: progress.completedCount,
+    });
+    const newRecovery = recoveryContext.newRemaining > 0
+      && result.mutationRecovery
+      ? this.buildMutationRecoveryHistory(
+          result.mutationRecovery,
+          {
+            total: Math.max(
+              recoveryContext.newRemaining,
+              result.mutationRecovery.total,
+            ),
+            settled: result.mutationRecovery.settled,
+            remaining: recoveryContext.newRemaining,
+          },
+          endedAt,
+        )
+      : undefined;
+    const transferRateFacts = deriveTransferRateFacts({
+      endedAt,
+      fileTransfers: result.metrics?.fileTransfers,
+    });
+    if (transferRateFacts) {
+      this.transferRateSampler.addRoundFacts(transferRateFacts);
+    }
+    try {
+      await this.state.addSyncHistory({
+        id: `${progress.startedAt}-${endedAt}`,
+        mode,
+        status,
+        startedAt: progress.startedAt,
+        endedAt,
+        uploaded: result.uploaded,
+        downloaded: result.downloaded,
+        foldersCreated: result.foldersCreated,
+        foldersMoved: result.foldersMoved,
+        foldersDeleted: result.foldersDeleted,
+        filesMoved: result.filesMoved,
+        deleted: result.deleted,
+        conflicts: result.conflicts,
+        remoteDeletePending: result.remoteDeletePending,
+        deferred: result.deferred,
+        skipped: result.skippedLarge + result.skippedIgnored
+          + result.skippedInvalidName,
+        skippedLarge: result.skippedLarge,
+        skippedIgnored: result.skippedIgnored,
+        skippedInvalidName: result.skippedInvalidName,
+        skipPaths: result.skippedPaths,
+        // Retryable-observation rounds are presented as neutral entries without
+        // failure counts; executor result.errors stays untouched (classifier
+        // contract requires errors > 0 on the result itself).
+        errors: status === "retry-pending" ? 0 : result.errors,
+        message: result.message,
+        files: [...progress.completedFiles],
+        uploadBytes: result.metrics?.uploadBytes,
+        uploadReadMs: result.metrics?.uploadReadMs,
+        peakUploads: result.metrics?.peakUploads,
+        transferRates: transferRateFacts ?? undefined,
+        recovery: newRecovery ?? priorRecoveryWithoutEntry,
+        remoteScopeRecovery: result.remoteScopeRecovery,
+        runFacts: result.runFacts
+          ? structuredClone(result.runFacts)
+          : undefined,
+      });
+    } catch (error) {
+      this.diag.warn(
+        "state",
+        `sync history save failed: ${describeError(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Write the fate of the recovery evidence this round observed, keeping the
+   * recovery row consistent with the ledger even when the round ends before
+   * an ordinary history row exists. Returns the row to create later when the
+   * round started with records but no active evidence row existed.
+   */
+  private async updatePriorMutationRecoveryHistory(
+    result: SyncResult,
+    recoveryContext: MutationRecoveryRunContext,
+    endedAt: number,
+  ): Promise<MutationRecoveryHistory | undefined> {
+    const state = this.state;
+    if (!state) return undefined;
+    const activeRecoveryEntry = state.syncHistory.find(
+      (entry) => entry.recovery?.state !== undefined
+        && entry.recovery.state !== "recovered",
+    );
+    const priorRecoverySettled = Math.max(
+      0,
+      recoveryContext.priorTotal - recoveryContext.priorRemaining,
+    );
+    let priorRecoveryWithoutEntry: MutationRecoveryHistory | undefined;
+    if (recoveryContext.priorTotal > 0 && activeRecoveryEntry) {
+      const previous = activeRecoveryEntry.recovery!;
+      const total = Math.max(previous.total, recoveryContext.priorTotal);
+      const priorRecovery: MutationRecoveryHistory =
+        recoveryContext.priorRemaining === 0
+          ? {
+              state: "recovered",
+              total,
+              settled: total,
+              remaining: 0,
+              updatedAt: endedAt,
+            }
+          : this.buildMutationRecoveryHistory(
+              result.mutationRecovery,
+              {
+                total,
+                settled: Math.max(
+                  previous.settled,
+                  total - recoveryContext.priorRemaining,
+                  priorRecoverySettled,
+                ),
+                remaining: recoveryContext.priorRemaining,
+              },
+              endedAt,
+            );
+      try {
+        await state.addSyncHistory({
+          ...activeRecoveryEntry,
+          status: priorRecovery.state === "recovered"
+            ? "success"
+            : "partial",
+          endedAt,
+          errors: priorRecovery.state === "blocked"
+            ? Math.max(1, activeRecoveryEntry.errors)
+            : priorRecovery.state === "recovered"
+              ? 0
+              : activeRecoveryEntry.errors,
+          recovery: priorRecovery,
+        });
+      } catch (error) {
+        this.diag.warn(
+          "state",
+          `sync recovery history update failed: ${describeError(error)}`,
+        );
+      }
+    } else if (recoveryContext.priorTotal > 0) {
+      priorRecoveryWithoutEntry = this.buildMutationRecoveryHistory(
+        result.mutationRecovery,
+        {
+          total: recoveryContext.priorTotal,
+          settled: priorRecoverySettled,
+          remaining: recoveryContext.priorRemaining,
+        },
+        endedAt,
+      );
+    }
+    return priorRecoveryWithoutEntry;
+  }
+
+  private buildMutationRecoveryHistory(
+    summary: MutationRecoveryRunSummary | undefined,
+    counts: { total: number; settled: number; remaining: number },
+    updatedAt: number,
+  ): MutationRecoveryHistory {
+    if (summary?.state === "settled" || counts.remaining === 0) {
+      return {
+        state: "recovered",
+        total: counts.total,
+        settled: Math.max(counts.total, counts.settled),
+        remaining: 0,
+        updatedAt,
+      };
+    }
+    if (summary?.state === "blocked") {
+      return {
+        state: "blocked",
+        ...counts,
+        updatedAt,
+        blockReason:
+          summary.blockReason
+          ?? this.mutationRecoveryBlockReason
+          ?? "unknown",
+        ...(summary.blockedOperationId
+          ? { blockedOperationId: summary.blockedOperationId }
+          : {}),
+      };
+    }
+    // Per-round history is persisted text, so it follows the same rule as the
+    // live carriers: while automatic sync is paused nothing retries, and a
+    // "waiting for the network" line would contradict the paused body above
+    // it (2026-10-13 fix round).
+    if (this.autoSyncPaused) {
+      // The real reason must survive: the in-memory block reason is cleared by
+      // retryable rounds and after a restart, and falling straight through to
+      // "unknown" would both misreport the cause and (through the reason-keyed
+      // review gate) hide the record's review exit for good
+      // (2026-10-13 review finding).
+      const priorReason = (this.state?.syncHistory ?? []).find(
+        (entry) => entry.recovery?.state !== undefined
+          && entry.recovery.state !== "recovered",
+      )?.recovery?.blockReason;
+      return {
+        state: "blocked",
+        ...counts,
+        updatedAt,
+        blockReason:
+          summary?.blockReason
+          ?? this.mutationRecoveryBlockReason
+          ?? priorReason
+          ?? "unknown",
+        ...(summary?.blockedOperationId
+          ? { blockedOperationId: summary.blockedOperationId }
+          : {}),
+      };
+    }
+    const retryAt =
+      this.mutationRecoveryScheduler.snapshot.nextObservationAt ?? undefined;
+    return {
+      state: "waiting-network",
+      ...counts,
+      updatedAt,
+      ...(retryAt !== undefined ? { retryAt } : {}),
+    };
+  }
+
+  getMutationRecoveryDisplayState(): MutationRecoveryDisplayState | null {
+    const state = this.state;
+    if (!state?.isV2StateActive) return null;
+    const mutationLedger = state.mutationLedger ?? [];
+    const recoveryQuarantine = state.mutationRecoveryQuarantine ?? [];
+    const ledgerRemaining = mutationLedger.length;
+    const corruptEvidence =
+      state.hasMutationLedgerCorruption
+      || state.hasMutationRecoveryQuarantineCorruption;
+    const remaining = ledgerRemaining > 0
+      ? ledgerRemaining
+      : corruptEvidence
+        ? Math.max(1, recoveryQuarantine.length)
+        : 0;
+    if (remaining === 0) return null;
+
+    const historyRecovery = (state.syncHistory ?? []).find(
+      (entry) => entry.recovery?.state !== undefined
+        && entry.recovery.state !== "recovered",
+    )?.recovery;
+    const total = Math.max(remaining, historyRecovery?.total ?? remaining);
+    const scheduler = this.mutationRecoveryScheduler.snapshot;
+    const progress = this.progressStore.state;
+    const checking =
+      scheduler.state === "running"
+      || (
+        progress.activityKind === "mutationRecovery"
+        && isAnySyncActivityRunning(
+          progress,
+          this.syncExecutor?.isRunning ?? false,
+          this.syncExecutor?.hasSideActionsInFlight ?? false,
+        )
+      );
+    const retryAt = scheduler.state === "scheduled"
+      ? scheduler.nextObservationAt
+      : null;
+    const waitingForNetwork =
+      (retryAt !== null && retryAt > Date.now())
+      || scheduler.state === "exhausted"
+      || historyRecovery?.state === "waiting-network";
+    // An active automatic pause silences every automatic entry, so the
+    // waiting-for-network copy ("it will try again once the network is back")
+    // is a promise nothing can keep; report the pause first and keep the retry
+    // wording for the states that really retry (2026-10-13 field case: a
+    // paused stuck record read as a network wait for ten days).
+    const pausedOrBlocked =
+      this.autoSyncPaused
+      || this.mutationRecoveryBlockReason !== null
+      || corruptEvidence
+      || historyRecovery?.state === "blocked";
+    const kind = checking
+      ? "checking"
+      : pausedOrBlocked
+        ? "blocked"
+        : waitingForNetwork
+          ? "waiting-network"
+          : "checking";
+    const blockReason = kind === "blocked"
+      ? this.mutationRecoveryBlockReason
+        ?? (corruptEvidence ? "evidence-corrupt" : null)
+        ?? historyRecovery?.blockReason
+        ?? "unknown"
+      : null;
+    const blockedOperationId = kind === "blocked"
+      ? historyRecovery?.blockedOperationId
+        ?? mutationLedger[0]?.intent.operationId
+        ?? null
+      : null;
+    const firstBlockedRecord = blockedOperationId
+      ? mutationLedger.find(
+          (entry) => entry.intent.operationId === blockedOperationId,
+        )
+      : undefined;
+    const paths: string[] = [];
+    const seenPaths = new Set<string>();
+    const pushPath = (path: string | undefined | null): void => {
+      if (!path || seenPaths.has(path)) return;
+      seenPaths.add(path);
+      paths.push(path);
+    };
+    pushPath(firstBlockedRecord?.intent.path);
+    for (const entry of mutationLedger) pushPath(entry.intent.path);
+    for (const entry of recoveryQuarantine) pushPath(entry.record.intent.path);
+    return {
+      kind,
+      total,
+      settled: Math.max(
+        historyRecovery?.settled ?? 0,
+        total - remaining,
+      ),
+      remaining,
+      retryAt,
+      firstPath: firstBlockedRecord?.intent.path
+        ?? mutationLedger[0]?.intent.path
+        ?? null,
+      paths,
+      exhausted: scheduler.state === "exhausted",
+      blockReason,
+      blockedOperationId,
+      paused: this.autoSyncPaused,
+      manualResolutionAvailable: kind === "blocked"
+        && manualResolutionExitAllowedFor(blockReason)
+        && this.syncExecutor?.canResolveMutationRecovery(
+          blockedOperationId ?? undefined,
+        ) === true,
+    };
+  }
+
+  private async handleMutationRecoverySchedulerState(
+    snapshot: MutationRecoverySchedulerSnapshot,
+  ): Promise<void> {
+    if (
+      snapshot.state === "scheduled"
+      && snapshot.nextObservationAt !== null
+    ) {
+      if (this.autoSyncPaused) {
+        // A paused vault keeps the paused/blocked shape: "retry once the
+        // network is back" is a promise no automatic entry can keep while the
+        // pause silences them all (2026-10-13 review finding — this write path
+        // was reaching past the pause and putting the network row back).
+        await this.updateActiveMutationRecoveryHistory((recovery) => ({
+          ...recovery,
+          state: "blocked",
+          retryAt: undefined,
+          blockReason:
+            recovery.blockReason
+            ?? this.mutationRecoveryBlockReason
+            ?? "unknown",
+          updatedAt: Date.now(),
+        }));
+        this.noticeCenter.clear("sync-result:recovery-waiting");
+      } else {
+        await this.updateActiveMutationRecoveryHistory((recovery) => ({
+          ...recovery,
+          state: "waiting-network",
+          retryAt: snapshot.nextObservationAt ?? undefined,
+          updatedAt: Date.now(),
+        }));
+        this.showMutationRecoveryWaitingNotice();
+      }
+    } else {
+      this.noticeCenter.clear("sync-result:recovery-waiting");
+    }
+    this.updateStatusBar();
+    this.syncView?.render();
+  }
+
+  private async updateActiveMutationRecoveryHistory(
+    update: (recovery: MutationRecoveryHistory) => MutationRecoveryHistory,
+  ): Promise<void> {
+    const state = this.state;
+    if (!state) return;
+    const entry = (state.syncHistory ?? []).find(
+      (candidate) => candidate.recovery?.state !== undefined
+        && candidate.recovery.state !== "recovered",
+    );
+    const display = this.getMutationRecoveryDisplayState();
+    const seed = entry?.recovery ?? (display
+      ? {
+          state: display.kind === "blocked"
+            ? "blocked" as const
+            : "waiting-network" as const,
+          total: display.total,
+          settled: display.settled,
+          remaining: display.remaining,
+          updatedAt: Date.now(),
+          ...(display.retryAt !== null
+            ? { retryAt: display.retryAt }
+            : {}),
+          ...(display.blockReason !== null
+            ? { blockReason: display.blockReason }
+            : {}),
+          ...(display.blockedOperationId !== null
+            ? { blockedOperationId: display.blockedOperationId }
+            : {}),
+        }
+      : null);
+    if (!seed) return;
+    const recovery = update(seed);
+    if (!entry) {
+      await this.createMutationRecoveryHistoryEntry(recovery);
+      return;
+    }
+    const existingRecovery = entry.recovery;
+    if (
+      existingRecovery
+      && recovery.state === existingRecovery.state
+      && recovery.total === existingRecovery.total
+      && recovery.settled === existingRecovery.settled
+      && recovery.remaining === existingRecovery.remaining
+      && recovery.retryAt === existingRecovery.retryAt
+      && recovery.blockReason === existingRecovery.blockReason
+      && recovery.blockedOperationId === existingRecovery.blockedOperationId
+    ) return;
+    try {
+      await state.addSyncHistory({
+        ...entry,
+        status: recovery.state === "recovered"
+          ? "success"
+          : "partial",
+        endedAt: recovery.updatedAt,
+        errors: recovery.state === "blocked"
+          ? Math.max(1, entry.errors)
+          : recovery.state === "recovered"
+            ? 0
+            : entry.errors,
+        recovery,
+      });
+    } catch (error) {
+      this.diag.warn(
+        "state",
+        `sync recovery history refresh failed: ${describeError(error)}`,
+      );
+    }
+  }
+
+  private async createMutationRecoveryHistoryEntry(
+    recovery: MutationRecoveryHistory,
+    startedAtHint?: number,
+  ): Promise<void> {
+    const state = this.state;
+    if (!state) return;
+    const now = Date.now();
+    const eventStartedAt = (state.mutationLedger ?? []).reduce(
+      (oldest, record) => Math.min(oldest, record.intent.createdAt),
+      startedAtHint && startedAtHint > 0 ? startedAtHint : now,
+    );
+    try {
+      await state.addSyncHistory({
+        id: `mutation-recovery-${eventStartedAt}`,
+        mode: "auto",
+        status: recovery.state === "recovered" ? "success" : "partial",
+        startedAt: eventStartedAt,
+        endedAt: now,
+        uploaded: 0,
+        downloaded: 0,
+        foldersCreated: 0,
+        foldersMoved: 0,
+        foldersDeleted: 0,
+        filesMoved: 0,
+        deleted: 0,
+        conflicts: 0,
+        deferred: 0,
+        skipped: 0,
+        skippedLarge: 0,
+        skippedIgnored: 0,
+        skippedInvalidName: 0,
+        errors: recovery.state === "blocked" ? 1 : 0,
+        message: this.i18n.t(
+          recovery.state === "blocked"
+            ? "result.v2RecoveryBlocked"
+            : recovery.state === "recovered"
+              ? "notice.sync.recoveryRecovered"
+              : "progress.recoveringMutation",
+          recovery.state === "recovered"
+            ? { settled: recovery.settled }
+            : undefined,
+        ),
+        files: [],
+        recovery,
+      });
+    } catch (error) {
+      this.diag.warn(
+        "state",
+        `sync recovery history create failed: ${describeError(error)}`,
+      );
+    }
+  }
+
+  private showMutationRecoveryWaitingNotice(): void {
+    if (this.shouldSuppressSyncNotice()) {
+      this.noticeCenter.clear("sync-result:recovery-waiting");
+      return;
+    }
+    const recovery = this.getMutationRecoveryDisplayState();
+    if (
+      !recovery
+      || recovery.kind !== "waiting-network"
+      || recovery.retryAt === null
+    ) return;
+    this.noticeCenter.show({
+      key: "sync-result:recovery-waiting",
+      message: this.i18n.t("notice.sync.recoveryWaiting", {
+        remaining: recovery.remaining,
+        time: new Date(recovery.retryAt).toLocaleTimeString(undefined, {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }),
+      }),
+      priority: NOTICE_PRIORITY.action,
+      durationMs: 5_000,
+      className: "easy-sync-notice-result",
+      category: "ambient",
+    });
+  }
+
+  private showMutationRecoveryRecoveredNotice(settled: number): void {
+    if (this.shouldSuppressSyncNotice()) return;
+    this.noticeCenter.show({
+      key: "sync-result:recovery-recovered",
+      message: this.i18n.t("notice.sync.recoveryRecovered", { settled }),
+      priority: NOTICE_PRIORITY.info,
+      durationMs: SYNC_RESULT_NOTICE_DURATION_MS,
+      className: "easy-sync-notice-result",
+      category: "ambient",
+    });
+  }
+
+  private showMutationRecoveryBlockedNotice(): void {
+    if (this.shouldSuppressSyncNotice()) return;
+    // Honest, action-aware copy: point at the real entry when a keep-side
+    // review exists, at the real account action when the account changed,
+    // and at the honest status otherwise. No generic "please handle" prompt.
+    const display = this.getMutationRecoveryDisplayState();
+    const key = display?.manualResolutionAvailable
+      ? "notice.sync.recoveryBlockedReview"
+      : display?.blockReason === "account-changed"
+        ? "notice.sync.recoveryAccountChanged"
+        : "notice.sync.recoveryBlocked";
+    this.noticeCenter.show({
+      key: "sync-result:recovery-blocked",
+      message: this.i18n.t(key),
+      priority: NOTICE_PRIORITY.attention,
+      durationMs: 8_000,
+      className: "easy-sync-notice-result",
+      category: "safety",
+    });
+  }
+
+  private async pauseForMutationRecoveryBlock(
+    reason: MutationRecoveryBlockReason,
+  ): Promise<void> {
+    this.mutationRecoveryBlockReason = reason;
+    this.autoSyncPaused = true;
+    this.stopAutoSync();
+    // Structured, persisted failure evidence: every pause reason lands in the
+    // diagnostic log instead of existing only as a transient UI state.
+    this.diag.warn("execute", "mutation recovery paused (persisted reason)", {
+      reason,
+      remaining: this.state?.mutationLedger?.length ?? 0,
+      mutations: 0,
+    });
+    try {
+      await this.saveSyncSettings();
+    } catch (error) {
+      this.diag.error(
+        "state",
+        "failed to persist automatic pause after mutation recovery block",
+        error,
+      );
+    }
+    const display = this.getMutationRecoveryDisplayState();
+    if (display) {
+      await this.updateActiveMutationRecoveryHistory((previous) => ({
+        state: "blocked",
+        total: Math.max(previous.total, display.total),
+        settled: Math.max(previous.settled, display.settled),
+        remaining: display.remaining,
+        updatedAt: Date.now(),
+        blockReason: reason,
+        blockedOperationId: previous.blockedOperationId,
+      }));
+    }
+    this.showMutationRecoveryBlockedNotice();
+    this.clearRibbonSuccess();
+    this.updateStatusBar();
+    this.syncView?.render();
+  }
+
+  /**
+   * Release an account-changed recovery block once Graph /me has bound the
+   * account again. Two cases land here:
+   *
+   * - the bound identity is back (the user switched back, as the panel copy
+   *   promises);
+   * - the block was written while the session was still verifying (the
+   *   empty-account race fixed on 2026-11-08).
+   *
+   * Only the account-changed reason is released, only while its evidence row
+   * is still the newest history row, and never across plan review (that pause
+   * has its own release rule). Remaining records go back to the ordinary
+   * scheduler; this method never settles them itself.
+   */
+  private async resumeRecoveryAfterAccountVerification(): Promise<void> {
+    const state = this.state;
+    if (!state || !this._stateLoaded) return;
+    const currentId = this.auth?.authState?.accountId;
+    if (!currentId) return;
+    if (state.boundAccountId !== currentId) return;
+    if (
+      state.hasMutationLedgerCorruption
+      || state.hasMutationRecoveryQuarantineCorruption
+      || state.hasV2StateLoadRecoveryBlock
+      || state.hasV2RemoteScopeRecovery
+    ) return;
+    const activeEntry = (state.syncHistory ?? []).find(
+      (entry) => entry.recovery?.state !== undefined
+        && entry.recovery.state !== "recovered",
+    );
+    const reason = this.mutationRecoveryBlockReason
+      ?? activeEntry?.recovery?.blockReason
+      ?? null;
+    if (reason !== "account-changed") return;
+    // A force reset intentionally terminates tracking while keeping the
+    // blocked evidence row for audit; a later /me must not rewrite it.
+    const resetAt = state.forceResetAudit?.at ?? 0;
+    if (resetAt > (activeEntry?.recovery?.updatedAt ?? 0)) return;
+    // Another cause would have written a newer row, so only the newest
+    // evidence may own the pause. The row itself is still the active recovery
+    // evidence and is updated either way.
+    const newest = state.syncHistory[0];
+    const isNewest = !activeEntry || !newest || newest.id === activeEntry.id;
+    const ownedPause = isNewest && this.pauseIsRecoveryBlockOwned();
+    const remaining = (state.mutationLedger ?? []).length;
+    this.mutationRecoveryBlockReason = null;
+    if (activeEntry) {
+      const updatedAt = Date.now();
+      await this.updateActiveMutationRecoveryHistory((previous) => (
+        remaining > 0
+          ? {
+              state: "waiting-network",
+              total: Math.max(previous.total, remaining),
+              settled: previous.settled,
+              remaining,
+              updatedAt,
+            }
+          : {
+              state: "recovered",
+              total: previous.total,
+              settled: previous.total,
+              remaining: 0,
+              updatedAt,
+            }
+      ));
+    }
+    if (ownedPause && !state.planReviewActive && this.autoSyncPaused) {
+      this.autoSyncPaused = false;
+      await this.saveSyncSettings();
+      this.startAutoSync();
+    }
+    this.diag.warn(
+      "execute",
+      "account verified; released stale account-changed recovery block",
+      { remaining, mutations: 0 },
+    );
+    this.updateStatusBar();
+    this.syncView?.render();
+  }
+
+  // ---- Auto-sync ----
+
+  /**
+   * B4 (2026-09-28 用户拍板): while a mutation-recovery pause is active,
+   * bounded scheduler observations may continue ONLY when the stuck record
+   * has no manual exit — the configuration-path class whose automatic
+   * settlement is the sole outlet (F16, field case E). Records with a manual
+   * exit keep the user in charge; the scheduler budget (bounded backoff,
+   * exhaustion) is unchanged.
+   *
+   * Facts only, never the presentation ladder (2026-10-13 fix round): the
+   * display kind used to close this gate on itself — once the fast-retry
+   * budget ran out, the kind flipped to the waiting-for-network form, the
+   * gate read "not blocked", and the record's only automatic channel was
+   * gone for good. The pause must also not be a precondition: after a
+   * restart the pause is persisted while a memory-only block reason is not,
+   * and the record would start every session with no channel at all.
+   */
+  private pausedBlockedRecoveryLacksManualExit(): boolean {
+    if (!this.state?.isV2StateActive) return false;
+    if (this.state.mutationLedger.length === 0) return false;
+    // "No manual exit" is a fact about the record, never about the pause or
+    // its recorded reason: the reason is memory-only (lost across restarts) and
+    // is cleared by retryable rounds, so keying this channel on it would
+    // silently strand exactly the records the gate exists for. An executor
+    // that cannot answer the eligibility gate offers no manual exit by
+    // definition, so the bounded observation proceeds.
+    //
+    // Asked per record on purpose (2026-10-13 review finding): the first ledger
+    // row and the row the carriers report as blocked can differ, and either
+    // mistake is bad — keying on the wrong row would leave a no-exit record
+    // without a channel, or keep auto-resolving behind a resolvable record.
+    // One record without a manual exit is enough to keep the channel alive.
+    return this.state.mutationLedger.some(
+      (record) => this.syncExecutor?.canResolveMutationRecovery?.(
+        record.intent.operationId,
+      ) !== true,
+    );
+  }
+
+  /**
+   * The pause a mutation-recovery block set, as opposed to a pause another
+   * cause owns (an incomplete round, a cancelled round, a legacy
+   * conflict-only pause). Only the former may be ended by a settling
+   * observation: the documented rule is that every other pause is released by
+   * a user-initiated round. The in-memory block reason is the freshest owner
+   * signal within one session; the persisted recovery row is the fallback
+   * after a restart, when that reason is gone.
+   */
+  private pauseIsRecoveryBlockOwned(): boolean {
+    if (this.mutationRecoveryBlockReason !== null) return true;
+    const active = (this.state?.syncHistory ?? []).find(
+      (entry) => entry.recovery?.state !== undefined
+        && entry.recovery.state !== "recovered",
+    );
+    return active?.recovery?.state === "blocked";
+  }
+
+  /**
+   * Persisted V2 mutation intent is itself a recovery trigger. This gate only
+   * arms the timer-only scheduler; the scheduler cannot inspect or mutate
+   * sync state and still re-enters through the shared operation lock.
+   */
+  private requestMutationRecoveryObservation(trigger: string): boolean {
+    if (
+      !this.isAutoSyncMasterEnabled()
+      || (this.autoSyncPaused && !this.pausedBlockedRecoveryLacksManualExit())
+      || !this._stateLoaded
+      || !this.auth?.authState.isLoggedIn
+      // Sync authorization is fail-closed until /me binds the account. An
+      // empty id is "still verifying", never "a different account"; letting it
+      // reach the account check would persist a false account-changed block.
+      || !this.auth?.authState.accountId
+      || !this.state?.isV2StateActive
+      || this.state.planReviewActive
+    ) return false;
+    if (
+      this.state.hasMutationLedgerCorruption
+      || this.state.hasMutationRecoveryQuarantineCorruption
+    ) {
+      void this.pauseForMutationRecoveryBlock("evidence-corrupt");
+      return false;
+    }
+    if (this.state.hasV2StateLoadRecoveryBlock) {
+      // Self-heal: one bounded in-session reload attempt per observation
+      // gate. The reload re-derives the block from scratch, so a transient
+      // failure clears itself; only a surviving block stays paused.
+      void this.attemptV2StateReloadSelfHeal();
+      return false;
+    }
+    if (this.state.hasV2RemoteScopeRecovery) {
+      void this.pauseForMutationRecoveryBlock("scope-changed");
+      return false;
+    }
+    if (this.state.mutationLedger.length === 0) return false;
+    const canWakeExhaustedRecovery =
+      trigger === "foreground"
+      || trigger === "auth-state"
+      || trigger === "interval"
+      || trigger === "auto-start";
+    const scheduled =
+      this.mutationRecoveryScheduler.budgetExhausted
+      && canWakeExhaustedRecovery
+        ? this.mutationRecoveryScheduler.requestObservationAfterExhaustion()
+        : this.mutationRecoveryScheduler.requestObservation();
+    if (scheduled) {
+      this.diag.log(
+        "execute",
+        `mutation recovery observation scheduled — trigger=${trigger}`,
+        {
+          remaining: this.state.mutationLedger.length,
+          mutations: 0,
+        },
+      );
+    }
+    return scheduled;
+  }
+
+  /**
+   * One scheduler observation. The executor may settle existing intent but
+   * recoveryOnly guarantees that this run returns before ordinary planning.
+   */
+  private async runScheduledMutationRecovery():
+    Promise<MutationRecoveryAttemptOutcome> {
+    if (
+      !this.isAutoSyncMasterEnabled()
+      || (this.autoSyncPaused && !this.pausedBlockedRecoveryLacksManualExit())
+      || !this.auth?.authState.isLoggedIn
+      || !this.syncExecutor
+    ) return { state: "inactive" };
+    if (this.opLock !== null || this.syncExecutor.isRunning) {
+      return { state: "busy" };
+    }
+    // 冲突批量在飞：恢复观察也属于自动链，让路；调度器按自己的节拍再试。
+    if (this.conflictBatchDirection !== null) return { state: "busy" };
+    if (this.acquireOpLock("mutation-recovery")) return { state: "busy" };
+    const recoveryContinuation = {
+      settled: false,
+      continueAfterIsolatedRecovery: false,
+    };
+    try {
+      return await this.runScheduledMutationRecoveryObservation({
+        continuation: recoveryContinuation,
+      });
+    } catch (error) {
+      this.diag.warn(
+        "execute",
+        "scheduled mutation recovery setup failed",
+        describeError(error),
+      );
+      if (
+        this.state?.isV2StateActive
+        && this.state.mutationLedger.length > 0
+      ) {
+        await this.pauseForMutationRecoveryBlock("state-unavailable");
+      }
+      return { state: "blocked" };
+    } finally {
+      this.releaseOpLock();
+      if (
+        (recoveryContinuation.settled || recoveryContinuation.continueAfterIsolatedRecovery)
+        && this.isAutoSyncMasterEnabled()
+        && !this.autoSyncPaused
+      ) {
+        this.diag.log(
+          "execute",
+          recoveryContinuation.settled
+            ? "mutation recovery settled; continuing through a new canonical V2 round"
+            : "isolated mutation recovery retained; continuing unrelated canonical work",
+          { mutations: 0 },
+        );
+        void this.runAutomaticSync("recovery-continuation");
+      }
+    }
+  }
+
+  private async runScheduledMutationRecoveryObservation(args: {
+    continuation: { settled: boolean; continueAfterIsolatedRecovery: boolean };
+  }): Promise<MutationRecoveryAttemptOutcome> {
+    const { continuation } = args;
+    await this.ensureStateLoaded();
+    if (
+      !this.state?.isV2StateActive
+      || this.state.mutationLedger.length === 0
+    ) return { state: "inactive" };
+    if (this.state.planReviewActive) return { state: "inactive" };
+    if (
+      this.state.hasMutationLedgerCorruption
+      || this.state.hasMutationRecoveryQuarantineCorruption
+    ) {
+      await this.pauseForMutationRecoveryBlock("evidence-corrupt");
+      return { state: "blocked" };
+    }
+    if (this.state.hasV2StateLoadRecoveryBlock) {
+      if (this.v2StateReloadInFlight || this.v2StateReloadRetryTimer) {
+        return { state: "inactive" };
+      }
+      await this.attemptV2StateReloadSelfHeal();
+      if (this.state.hasV2StateLoadRecoveryBlock) {
+        await this.pauseForMutationRecoveryBlock("state-unavailable");
+        return { state: "blocked" };
+      }
+      // Block cleared by the reload; fall through to the ordinary flow.
+    }
+    if (this.state.hasV2RemoteScopeRecovery) {
+      await this.pauseForMutationRecoveryBlock("scope-changed");
+      return { state: "blocked" };
+    }
+    // Wait for /me instead of treating an unverified session as a mismatch.
+    // The auth-state notification that follows binding re-enters here.
+    if (!this.auth?.authState.accountId) return { state: "inactive" };
+    if (!await this.checkAccountBinding({
+      suppressNotice: true,
+      allowInitialBind: false,
+    })) {
+      await this.pauseForMutationRecoveryBlock("account-changed");
+      return { state: "blocked" };
+    }
+
+    this.diag.log("execute", "scheduled mutation recovery observation started", {
+      remaining: this.state.mutationLedger.length,
+      mutations: 0,
+    });
+    // Captured before the round: the observation itself rewrites the recovery
+    // history row, so ownership of the active pause must be read while the
+    // pre-round evidence is still intact (2026-10-13 review finding).
+    const recoveryOwnedPause = this.autoSyncPaused
+      && this.pauseIsRecoveryBlockOwned();
+    const result = await this.dispatchSyncRun({
+      mode: "auto",
+      options: { recoveryOnly: true },
+      logLabel: "scheduled mutation recovery result",
+    });
+    const recovery = result?.mutationRecovery;
+    if (!recovery) {
+      if (this.state.mutationLedger.length > 0) {
+        await this.pauseForMutationRecoveryBlock("state-unavailable");
+      }
+      return { state: "blocked" };
+    }
+    if (recovery.state === "network-unavailable") {
+      return {
+        state: "retry",
+        retryAfterSeconds: recovery.retryAfterSeconds,
+      };
+    }
+    if (recovery.state === "blocked" && recovery.isolated === true) {
+      continuation.continueAfterIsolatedRecovery = true;
+      return { state: "inactive" };
+    }
+    if (recovery.state === "blocked") return { state: "blocked" };
+    continuation.settled = recovery.remaining === 0;
+    if (!continuation.settled) {
+      await this.pauseForMutationRecoveryBlock("state-unavailable");
+      return { state: "blocked" };
+    }
+    if (this.autoSyncPaused && recoveryOwnedPause) {
+      // B4: a scheduled observation that settles a paused no-exit block
+      // ends the pause the same way an isolated recovery does — the
+      // finally below then continues through a fresh canonical round.
+      // A pause another cause owns keeps its own release rule: settling a
+      // record is not evidence about that cause (2026-10-13 review finding).
+      this.autoSyncPaused = false;
+      await this.saveSyncSettings();
+      this.startAutoSync();
+    } else if (this.autoSyncPaused) {
+      this.diag.log(
+        "execute",
+        "mutation recovery settled but the active pause belongs to another cause; pause retained",
+        { remaining: this.state.mutationLedger.length, mutations: 0 },
+      );
+    }
+    return { state: "settled" };
+  }
+
+  private async handleMutationRecoveryBudgetExhausted(): Promise<void> {
+    if (
+      this.autoSyncPaused
+      || !this.state?.isV2StateActive
+      || this.state.mutationLedger.length === 0
+    ) return;
+    this.diag.warn(
+      "execute",
+      "fast mutation recovery budget exhausted; waiting for an external observation trigger",
+      {
+        remaining: this.state.mutationLedger.length,
+        mutations: 0,
+      },
+    );
+    this.mutationRecoveryBlockReason = null;
+    await this.updateActiveMutationRecoveryHistory((previous) => ({
+      ...previous,
+      state: "waiting-network",
+      retryAt: undefined,
+      blockReason: undefined,
+      updatedAt: Date.now(),
+    }));
+    this.clearRibbonSuccess();
+    this.updateStatusBar();
+    this.syncView?.render();
+  }
+
+  private markLocalDirtyHint(path: string, oldPath?: string): void {
+    if (!this.canScheduleLocalChangeAutoSync()) return;
+    const currentIncluded = this.scanner?.shouldSyncPath(path) === true;
+    const previousIncluded = oldPath !== undefined
+      && this.scanner?.shouldSyncPath(oldPath) === true;
+    if (!currentIncluded && !previousIncluded) return;
+    if (this.autoSyncDirtyHint.mark()) {
+      this.diag.log("execute", "local dirty hint scheduled normal auto sync", {
+        debounceMs: this.autoSyncChangeDelaySeconds * 1_000,
+        scopeMatch: currentIncluded ? "current" : "previous",
+      });
+    }
+  }
+
+  /** Remember that the plugin itself is erasing this path. The matching vault
+   *  delete event is not a new local change: its checkpoint is (or is about to
+   *  be) committed by the mutation that erased it. */
+  private noteSelfDeletedLocalPath(path: string): void {
+    const now = Date.now();
+    for (const [key, expiresAt] of this.selfDeletedLocalPaths) {
+      if (expiresAt <= now) this.selfDeletedLocalPaths.delete(key);
+    }
+    this.selfDeletedLocalPaths.set(
+      path,
+      now + EasySyncPlugin.SELF_DELETE_EVENT_TTL_MS,
+    );
+  }
+
+  /** One-shot consume: each plugin erase owns at most one delete event. */
+  private consumeSelfDeletedLocalPath(path: string): boolean {
+    const expiresAt = this.selfDeletedLocalPaths.get(path);
+    if (expiresAt === undefined) return false;
+    this.selfDeletedLocalPaths.delete(path);
+    return expiresAt > Date.now();
+  }
+
+  private markLocalDirtyFolderHint(path: string, oldPath?: string): void {
+    if (!this.canScheduleLocalChangeAutoSync()) return;
+    const currentIncluded =
+      this.scanner?.shouldSyncFolderPath(path) === true;
+    const previousIncluded = oldPath !== undefined
+      && this.scanner?.shouldSyncFolderPath(oldPath) === true;
+    if (!currentIncluded && !previousIncluded) return;
+    if (this.autoSyncDirtyHint.mark()) {
+      this.diag.log("execute", "local dirty hint scheduled normal auto sync", {
+        debounceMs: this.autoSyncChangeDelaySeconds * 1_000,
+        scopeMatch: currentIncluded ? "current" : "previous",
+      });
+    }
+  }
+
+  private handleLocalVaultChange(
+    file: { path: string },
+    kind: "create" | "modify" = "modify",
+  ): void {
+    if (file instanceof TFolder) {
+      this.markLocalDirtyFolderHint(file.path);
+    } else {
+      this.markLocalDirtyHint(file.path);
+    }
+    if (kind === "create" || kind === "modify") {
+      this.invalidateCommunityPluginLocalReconciliationForPath(file.path);
+    }
+    this.scheduleCommunityPluginInventoryRevisionForPaths(
+      kind,
+      { path: file.path, isFolder: file instanceof TFolder },
+    );
+  }
+
+  private async handleLocalVaultDelete(file: { path: string }): Promise<void> {
+    // The erase was the plugin's own follow-delete/cleanup: its committed
+    // checkpoint already accounts for it, and arming the local-change hint
+    // here only produced an extra automatic round after every deletion batch
+    // (2026-10-28 iOS mixed-batch report).
+    if (this.consumeSelfDeletedLocalPath(file.path)) return;
+    if (!(file instanceof TFolder)) {
+      this.markLocalDirtyHint(file.path);
+      this.scheduleCommunityPluginInventoryRevisionForPaths(
+        "delete",
+        { path: file.path, isFolder: false },
+      );
+      const pluginId = this.parseCommunityPluginManagedPathPluginId(file.path);
+      if (pluginId && !file.path.endsWith("/data.json")) {
+        this.queueCommunityPluginLocalReconciliation(pluginId);
+        this.scheduleCommunityPluginLocalReconciliationFollowUp();
+      }
+      return;
+    }
+
+    // P1: retain the deletion-gesture evidence as soon as the delete is
+    // observed. The capture is not awaited (best effort), so a state write
+    // slower than the dirty debounce can still land after planning starts.
+    // The hint binds the committed folder ID; the planner consumes it only
+    // after the scan re-confirms the folder is gone and the cloud copy still
+    // sits at the anchor path. Unanchored folders record nothing.
+    void this.captureLocalFolderDeleteHint(file.path);
+    const pluginId = this.parseCommunityPluginRootPath(file.path);
+    if (!pluginId) {
+      this.markLocalDirtyFolderHint(file.path);
+      this.scheduleCommunityPluginInventoryRevisionForPaths(
+        "delete",
+        { path: file.path, isFolder: true },
+      );
+      return;
+    }
+
+    this.markLocalDirtyFolderHint(file.path);
+    this.queueCommunityPluginLocalReconciliation(pluginId);
+    await this.flushCommunityPluginLocalReconciliation();
+  }
+
+  private async captureLocalFolderDeleteHint(path: string): Promise<void> {
+    try {
+      await this.ensureStateLoaded();
+      const state = this.state;
+      if (!state) return;
+      const recorded = await state.recordLocalFolderDeleteHint(path);
+      if (recorded) {
+        this.diag.log("state", "local folder delete hint bound to committed V2 identity", {
+          path,
+        });
+      }
+    } catch (error) {
+      this.diag.warn(
+        "state",
+        `local folder delete hint was not retained: ${path}`,
+        describeError(error),
+      );
+    }
+  }
+
+  private queueCommunityPluginLocalReconciliation(pluginId: string): void {
+    this.pendingCommunityPluginReconciliationIds.set(
+      pluginId,
+      ++this.communityPluginReconciliationToken,
+    );
+  }
+
+  private scheduleCommunityPluginLocalReconciliationFollowUp(): void {
+    compatClearTimeout(this.communityPluginLocalReconciliationTimer);
+    this.communityPluginLocalReconciliationTimer = compatSetTimeout(() => {
+      this.communityPluginLocalReconciliationTimer = null;
+      void this.flushCommunityPluginLocalReconciliation();
+    }, COMMUNITY_PLUGIN_FILE_DELETE_UNINSTALL_DELAY_MS);
+  }
+
+  private invalidateCommunityPluginLocalReconciliationForPath(
+    path: string,
+  ): void {
+    const pluginId = this.parseCommunityPluginManagedPathPluginId(path);
+    if (!pluginId) return;
+    if (
+      !this.syncCommunityPlugins
+      && this.communityPluginParticipation?.scopeEnabled !== true
+    ) return;
+    this.communityPluginReconciliationToken += 1;
+    this.pendingCommunityPluginReconciliationIds.delete(pluginId);
+    const phase =
+      this.communityPluginParticipation?.pluginsById[pluginId]?.phase;
+    if (
+      phase === "exit-requested"
+      || phase === "never-participated"
+      || phase === undefined
+    ) {
+      this.queueCommunityPluginLocalReconciliation(pluginId);
+      void this.flushCommunityPluginLocalReconciliation();
+    }
+  }
+
+  private async scheduleCommunityPluginLocalReconciliation(
+    trigger: string,
+  ): Promise<void> {
+    const participation = this.communityPluginParticipation;
+    if (!participation?.scopeEnabled) return;
+    for (const entry of Object.values(participation.pluginsById)) {
+      if (
+        entry.phase === "participating"
+        || entry.phase === "exit-requested"
+      ) {
+        this.queueCommunityPluginLocalReconciliation(entry.pluginId);
+      }
+    }
+    for (const pluginId of await this.listLocalCommunityPluginIdsForParticipation()) {
+      const phase = participation.pluginsById[pluginId]?.phase;
+      if (phase === undefined || phase === "never-participated") {
+        this.queueCommunityPluginLocalReconciliation(pluginId);
+      }
+    }
+    if (this.pendingCommunityPluginReconciliationIds.size === 0) {
+      return;
+    }
+    this.diag?.log(
+      "state",
+      "scheduled community plugin local participation reconciliation",
+      { trigger, mutations: 0 },
+    );
+    return this.flushCommunityPluginLocalReconciliation();
+  }
+
+  private async listLocalCommunityPluginIdsForParticipation():
+    Promise<string[]> {
+    const configDir = getConfigDir(this.app.vault).replace(/\/+$/, "");
+    const pluginRoot = `${configDir}/plugins`;
+    const adapter = this.app.vault.adapter;
+    try {
+      if (!await adapter.exists(pluginRoot)) return [];
+      const listed = await adapter.list(pluginRoot);
+      return normalizePluginIds(
+        listed.folders.map((path) =>
+          path.replace(/\/+$/, "").split("/").pop() ?? ""
+        ),
+        this.manifest.id,
+      );
+    } catch (error) {
+      this.diag.warn(
+        "state",
+        "community plugin local participation inventory unavailable",
+        describeError(error),
+      );
+      return [];
+    }
+  }
+
+  private flushCommunityPluginLocalReconciliation(): Promise<void> {
+    const operationEpoch = this.operationLifecycle.capture();
+    const attempt = this.communityPluginLocalReconciliationQueue.then(async () => {
+      if (this.pendingCommunityPluginReconciliationIds.size === 0) return;
+      if (!this.operationLifecycle.isCurrent(operationEpoch)) return;
+      await this.ensureStateLoaded();
+      if (!this.operationLifecycle.isCurrent(operationEpoch)) return;
+      const pending = [...this.pendingCommunityPluginReconciliationIds];
+      if (
+        this.state?.isV2StateActive !== true
+        || typeof this.state.getCommunityPluginParticipation !== "function"
+      ) {
+        for (const [pluginId, token] of pending) {
+          if (
+            this.pendingCommunityPluginReconciliationIds.get(pluginId)
+              === token
+          ) {
+            this.pendingCommunityPluginReconciliationIds.delete(pluginId);
+          }
+        }
+        return;
+      }
+      const outcome =
+        await this.reconcileCommunityPluginParticipationFromLocalBundles({
+          pluginIds: pending.map(([pluginId]) => pluginId),
+          trigger: "local-reconciliation-queue",
+        });
+      const followUp = new Set(outcome.followUpPluginIds);
+      for (const [pluginId, token] of pending) {
+        if (
+          !followUp.has(pluginId)
+          && this.pendingCommunityPluginReconciliationIds.get(pluginId)
+            === token
+        ) {
+          this.pendingCommunityPluginReconciliationIds.delete(pluginId);
+        }
+      }
+      if (followUp.size > 0) {
+        this.scheduleCommunityPluginLocalReconciliationFollowUp();
+      }
+    });
+
+    this.communityPluginLocalReconciliationQueue = attempt.catch((error) => {
+      // A concurrent sync or recovery can temporarily own the settings
+      // transaction. The ordinary sync-time detector remains the durable
+      // fallback; never turn a Vault event rejection into an unhandled task.
+      this.diag.warn(
+        "lifecycle",
+        "community plugin local participation reconciliation deferred",
+        describeError(error),
+      );
+      if (
+        error instanceof SyncPathSettingsUpdateError
+        && error.code === "busy"
+      ) {
+        this.communityPluginReconciliationRetryOnLockRelease = true;
+      }
+      this.advanceCommunityPluginInventoryRevision();
+      this.retryCommunityPluginLocalReconciliationIfIdle();
+    });
+    return this.communityPluginLocalReconciliationQueue;
+  }
+
+  private retryCommunityPluginLocalReconciliationIfIdle(): void {
+    if (this.pendingCommunityPluginReconciliationIds.size === 0) {
+      this.communityPluginReconciliationRetryOnLockRelease = false;
+      return;
+    }
+    if (
+      !this.communityPluginReconciliationRetryOnLockRelease
+      || this.opLock !== null
+      || this.syncExecutor?.hasActivityInFlight === true
+    ) return;
+    this.communityPluginReconciliationRetryOnLockRelease = false;
+    void this.flushCommunityPluginLocalReconciliation();
+  }
+
+  private parseCommunityPluginRootPath(path: string): string | null {
+    const configDir = getConfigDir(this.app.vault).replace(/\/+$/, "");
+    const prefix = `${configDir}/plugins/`;
+    if (!path.startsWith(prefix)) return null;
+    const pluginId = path.slice(prefix.length);
+    if (pluginId.includes("/")) return null;
+    const normalized = normalizePluginIds([pluginId], this.manifest.id);
+    return normalized.length === 1 && normalized[0] === pluginId
+      ? pluginId
+      : null;
+  }
+
+  private parseCommunityPluginManagedPathPluginId(path: string): string | null {
+    const configDir = getConfigDir(this.app.vault).replace(/\/+$/, "");
+    const prefix = `${configDir}/plugins/`;
+    if (!path.startsWith(prefix)) return null;
+    const parts = path.slice(prefix.length).split("/");
+    if (parts.length < 1 || parts.length > 2) return null;
+    if (
+      parts.length === 2
+      && !["main.js", "manifest.json", "styles.css", "data.json"].includes(
+        parts[1],
+      )
+    ) return null;
+    const pluginId = normalizePluginIds([parts[0]], this.manifest.id)[0];
+    return pluginId === parts[0] ? pluginId : null;
+  }
+
+  private async handleLocalVaultRename(
+    file: { path: string },
+    oldPath: string,
+  ): Promise<void> {
+    if (file instanceof TFolder) {
+      // The folder identity hint is the durable evidence used by the next
+      // scan. Never let the dirty timer overtake that persistence attempt.
+      const recorded = await this.captureLocalFolderMoveHint(oldPath, file.path);
+      const previousPluginId = this.parseCommunityPluginRootPath(oldPath);
+      const currentPluginId = this.parseCommunityPluginRootPath(file.path);
+      if (currentPluginId) {
+        this.invalidateCommunityPluginLocalReconciliationForPath(file.path);
+      }
+      if (previousPluginId && currentPluginId !== previousPluginId) {
+        this.queueCommunityPluginLocalReconciliation(previousPluginId);
+        await this.flushCommunityPluginLocalReconciliation();
+      } else {
+        this.scheduleCommunityPluginInventoryRevisionForPaths(
+          "rename",
+          { path: oldPath, isFolder: true },
+          { path: file.path, isFolder: true },
+        );
+      }
+      this.markLocalDirtyFolderHint(file.path, oldPath);
+      if (
+        recorded
+        && this.isOutOfScopeMoveDestination(file.path, "folder")
+      ) {
+        this.enqueueScopeCrossingPrompt("folder", oldPath, file.path);
+      }
+      return;
+    }
+    // Retain the file's rename destination as device-local identity evidence
+    // before scheduling. In-scope destinations may prove an identity move even
+    // when the local bytes changed; out-of-scope destinations still open the
+    // scope-crossing exit. The dirty timer must never overtake this persistence
+    // attempt.
+    const crossesScope = this.isOutOfScopeMoveDestination(file.path, "file");
+    const recorded = await this.captureLocalFileMoveHint(oldPath, file.path);
+    this.invalidateCommunityPluginLocalReconciliationForPath(file.path);
+    this.scheduleCommunityPluginInventoryRevisionForPaths(
+      "rename",
+      { path: oldPath, isFolder: false },
+      { path: file.path, isFolder: false },
+    );
+    this.markLocalDirtyHint(file.path, oldPath);
+    if (recorded && crossesScope) {
+      this.enqueueScopeCrossingPrompt("file", oldPath, file.path);
+    }
+  }
+
+  private async captureLocalFolderMoveHint(
+    oldPath: string,
+    newPath: string,
+  ): Promise<boolean> {
+    try {
+      await this.ensureStateLoaded();
+      const state = this.state;
+      if (!state) return false;
+      const recorded = await state.recordLocalFolderMoveHint(oldPath, newPath);
+      if (recorded) {
+        this.diag.log("state", "local folder move hint bound to committed V2 identity", {
+          fromPath: oldPath,
+          toPath: newPath,
+        });
+      }
+      return recorded;
+    } catch (error) {
+      this.diag.warn(
+        "state",
+        `local folder move hint was not retained: ${oldPath} -> ${newPath}`,
+        describeError(error),
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Retain a TFile rename as device-local identity evidence bound to the
+   * renamed object's committed V2 identity. In-scope destinations let the
+   * planner preserve that identity even when the content changed; out-of-scope
+   * destinations keep the cloud copy safe behind the scope-crossing exit. The
+   * vault trash keeps its deletion semantics, and EasySync's own bookkeeping
+   * renames (download recovery copies, state / logs / tmp paths) are never
+   * evidence of a user move: they reach the same vault events as a real rename.
+   */
+  private async captureLocalFileMoveHint(
+    oldPath: string,
+    newPath: string,
+  ): Promise<boolean> {
+    try {
+      if (newPath === ".trash" || newPath.startsWith(".trash/")) return false;
+      if (isEasySyncInternalPath(newPath, getConfigDir(this.app.vault))) return false;
+      if (this.scanner == null) return false;
+      await this.ensureStateLoaded();
+      const state = this.state;
+      if (!state) return false;
+      const recorded = await state.recordLocalFileMoveHint(oldPath, newPath);
+      if (recorded) {
+        this.diag.log("state", "local file move hint bound to committed V2 identity", {
+          fromPath: oldPath,
+          toPath: newPath,
+        });
+      }
+      return recorded;
+    } catch (error) {
+      this.diag.warn(
+        "state",
+        `local file move hint was not retained: ${oldPath} -> ${newPath}`,
+        describeError(error),
+      );
+      return false;
+    }
+  }
+
+  // ---- Slice-2: immediate scope-crossing prompt (debounced queue) ----
+
+  private scopeCrossingPromptQueue: Array<{
+    kind: "folder" | "file";
+    fromPath: string;
+    toPath: string;
+  }> = [];
+  private scopeCrossingPromptTimer: number | null = null;
+  private scopeCrossingPromptShowing = false;
+
+  /**
+   * Whether a rename destination is a path the user moved something to, and
+   * that path lies outside the sync scope. This is the single rule behind both
+   * the immediate prompt and the recorded move evidence.
+   *
+   * EasySync's own bookkeeping paths (the download recovery copies, state /
+   * logs / tmp) are out of scope by construction, but the plugin renames into
+   * them itself — a download that replaces an existing file first renames it to
+   * `<path>.easy-sync-recovery`. Those renames reach the same vault events as a
+   * user move, so they must never be read as "the user moved this out of sync".
+   * The vault trash is excluded because its deletion semantics are unchanged.
+   */
+  private isOutOfScopeMoveDestination(
+    path: string,
+    kind: "folder" | "file",
+  ): boolean {
+    if (path === ".trash" || path.startsWith(".trash/")) return false;
+    if (this.scanner == null) return false;
+    if (isEasySyncInternalPath(path, getConfigDir(this.app.vault))) return false;
+    return kind === "folder"
+      ? this.scanner.shouldSyncFolderPath(path) === false
+      : this.scanner.shouldSyncPath(path) === false;
+  }
+
+  /** Debounce burst moves into one prompt; never pile modals on top of each
+   *  other — a dismissed prompt falls back to the pending-row surface. */
+  private enqueueScopeCrossingPrompt(
+    kind: "folder" | "file",
+    fromPath: string,
+    toPath: string,
+  ): void {
+    this.scopeCrossingPromptQueue.push({ kind, fromPath, toPath });
+    if (this.scopeCrossingPromptTimer !== null) return;
+    this.scopeCrossingPromptTimer = window.setTimeout(() => {
+      this.scopeCrossingPromptTimer = null;
+      void this.fireScopeCrossingPrompt();
+    }, 700);
+  }
+
+  private async fireScopeCrossingPrompt(): Promise<void> {
+    if (this.unloaded) return;
+    if (this.scopeCrossingPromptShowing) return;
+    const batch = this.scopeCrossingPromptQueue.splice(0);
+    if (batch.length === 0) return;
+    this.scopeCrossingPromptShowing = true;
+    const t = this.t;
+    try {
+      const first = batch[0];
+      const choice = await new ScopeCrossingPromptModal(
+        this.app,
+        t("syncView.scopeCrossing.promptTitle"),
+        t(
+          first.kind === "folder"
+            ? "syncView.scopeCrossing.promptMessageFolder"
+            : "syncView.scopeCrossing.promptMessageFile",
+          { path: first.fromPath },
+        ),
+        batch.length > 1
+          ? t("syncView.scopeCrossing.promptBatch", {
+            count: String(batch.length - 1),
+            paths: batch.slice(1).map((item) => item.fromPath).join(", "),
+          })
+          : null,
+        t("syncView.scopeCrossing.restore"),
+        t("syncView.scopeCrossing.confirm"),
+      ).awaitChoice();
+      if (choice === "restore") {
+        for (const item of batch) {
+          await this.restoreScopeCrossingPromptMove(
+            item.kind,
+            item.fromPath,
+            item.toPath,
+          );
+        }
+      } else if (choice === "confirm") {
+        for (const item of batch) {
+          await this.confirmScopeCrossingPromptMove(
+            item.kind,
+            item.fromPath,
+            item.toPath,
+          );
+        }
+      }
+      // choice === null: dismissed — the pending-row fallback keeps the
+      // decision available without deleting or moving anything.
+    } finally {
+      this.scopeCrossingPromptShowing = false;
+    }
+    if (this.scopeCrossingPromptQueue.length > 0) {
+      this.scopeCrossingPromptTimer = window.setTimeout(() => {
+        this.scopeCrossingPromptTimer = null;
+        void this.fireScopeCrossingPrompt();
+      }, 100);
+    }
+  }
+
+  private findScopeCrossingHintRemoteId(
+    state: StateManager,
+    kind: "folder" | "file",
+    fromPath: string,
+    toPath: string,
+  ): string | null {
+    const hints = kind === "folder"
+      ? state.localFolderMoveHints
+      : state.localFileMoveHints;
+    const hint = hints.find((candidate) =>
+      candidate.fromPath === fromPath && candidate.toPath === toPath);
+    return hint?.remoteId ?? null;
+  }
+
+  private async restoreScopeCrossingPromptMove(
+    kind: "folder" | "file",
+    fromPath: string,
+    toPath: string,
+  ): Promise<void> {
+    const t = this.t;
+    try {
+      await this.ensureStateLoaded();
+      const state = this.state;
+      if (!state) return;
+      const vault = this.app.vault;
+      const origin = vault.getAbstractFileByPath(fromPath);
+      const originOccupied = origin !== undefined && origin !== null;
+      const source = vault.getAbstractFileByPath(toPath);
+      if (kind === "folder") {
+        if (!(source instanceof TFolder) || originOccupied) {
+          new Notice(t("notice.scopeCrossing.changed"));
+          return;
+        }
+      } else if (!(source instanceof TFile) || originOccupied) {
+        new Notice(t("notice.scopeCrossing.changed"));
+        return;
+      }
+      await vault.rename(source, fromPath);
+      const remoteId = this.findScopeCrossingHintRemoteId(
+        state,
+        kind,
+        fromPath,
+        toPath,
+      );
+      if (remoteId) await state.retireLocalMoveHintsByRemoteIds([remoteId]);
+      new Notice(t("notice.scopeCrossing.restored", { path: fromPath }));
+    } catch {
+      new Notice(t("notice.scopeCrossing.changed"));
+    }
+  }
+
+  private async confirmScopeCrossingPromptMove(
+    kind: "folder" | "file",
+    fromPath: string,
+    toPath: string,
+  ): Promise<void> {
+    const t = this.t;
+    try {
+      await this.ensureStateLoaded();
+      const state = this.state;
+      if (!state) return;
+      const remoteId = this.findScopeCrossingHintRemoteId(
+        state,
+        kind,
+        fromPath,
+        toPath,
+      );
+      if (remoteId) await state.retireLocalMoveHintsByRemoteIds([remoteId]);
+      new Notice(t("notice.scopeCrossing.confirmed", { path: fromPath }));
+    } catch {
+      new Notice(t("notice.scopeCrossing.changed"));
+    }
+  }
+
+  /** Shared activity-gated entry for periodic reconciliation, dirty hints,
+   *  recovery continuations and the once-per-session startup round. */
+  private async runAutomaticSync(
+    trigger:
+      | "interval"
+      | "dirty"
+      | "recovery-continuation"
+      | "startup",
+  ): Promise<boolean> {
+    if (this.autoSyncPaused) return true;
+    if (trigger === "dirty") {
+      // Persisted join intents ride the dirty hint as their automatic
+      // settlement path; they follow the master switch like every other
+      // automatic surface instead of running with auto sync fully off.
+      if (this.hasPendingCommunityPluginJoin()) {
+        if (!this.isAutoSyncMasterEnabled()) return true;
+      } else if (this.autoSyncChangeDelaySeconds <= 0) {
+        return true;
+      }
+    } else if (trigger === "recovery-continuation") {
+      // Inherits the round that started it; follows the master switch only.
+      if (!this.isAutoSyncMasterEnabled()) return true;
+    } else if (trigger === "startup") {
+      // 启动轮是第三通道，和定时／修改后触发一样按自己的开关放行：总开关是
+      // 三条通道的派生态，只看它会让「启动后立即同步」关掉、其它通道开着的
+      // 设备每次打开 Obsidian 照样补一轮。
+      if (!this.isAutoSyncMasterEnabled() || !this.autoSyncOnStartup) return true;
+    } else if (this.syncInterval <= 0) {
+      return true;
+    }
+    if (!this.auth?.authState.isLoggedIn) return true;
+    if (!this.syncExecutor) return false;
+    if (
+      this.opLock !== null
+      || this.syncExecutor.isRunning
+      || this.syncExecutor.hasSideActionsInFlight
+    ) return false;
+    // 冲突批量在飞时自动轮让路：批量可能持续很久，整轮同步若中途启动会把
+    // 正在批量的行交给下一轮计划（含自愈侧的删云端）。只让这一条批量；
+    // 逐条 side action 同样在飞时不启动（2026-11-06 iOS 现场：恢复核对侧动作
+    // 与定时轮重叠，整轮被执行器判 alreadyRunning，顶部却挂着上一轮计数）。
+    if (this.conflictBatchDirection !== null) return false;
+    if (this.acquireOpLock("sync")) return false;
+    let dispatched = false;
+    try {
+      await this.ensureStateLoaded();
+      if (await this.dispatchV2StateLoadBlockIfPresent(
+        "auto",
+        `blocked auto sync result (${trigger})`,
+      )) {
+        dispatched = true;
+        return true;
+      }
+      if (!await this.checkAccountBinding()) return true;
+      if (
+        trigger !== "recovery-continuation"
+        && this.state?.isV2StateActive
+        && this.state.mutationLedger.length > 0
+      ) {
+        this.requestMutationRecoveryObservation(trigger);
+        return true;
+      }
+      if (this.state?.planReviewActive) {
+        this.diag.log("execute", `auto sync skipped — plan review pending (${trigger})`);
+        return true;
+      }
+      if (trigger === "startup" && !this.hasCompletedSyncState()) {
+        // 2026-10-13 拍板：启动轮只替已加入的库把第一轮提前，绝不放行首同步
+        // 分支（迁移询问与加入选择弹框不在启动时出现；定时轮与修改后触发仍按
+        // 现役行为承接首同步）。
+        this.diag.log(
+          "execute",
+          "auto sync skipped — startup round never runs the first-sync flow",
+        );
+        return true;
+      }
+      if (!this.hasCompletedSyncState()) {
+        // A first sync triggered automatically still deserves the adoption
+        // decision (plan §1): the modal shows while the app is foregrounded,
+        // which is the only state in which timers run.
+        // 与手动首同步同一套只读准备期（R4 并发 + R1 可取消）：自动触发同样让
+        // 用户可以从侧栏取消这段等待。
+        const entryCancel = this.beginEntryCancellation();
+        let rsMigration: "migrated" | "fresh" | "abort" = "fresh";
+        try {
+          const joinDetection = this.prefetchVaultJoinDetection();
+          rsMigration = await this.maybeRunRsMigrationOffer();
+          if (rsMigration === "abort") return true;
+          if (rsMigration !== "migrated") {
+            const vaultJoin = await this.maybeOfferExistingVaultJoin(joinDetection);
+            if (vaultJoin === "abort") return true;
+          }
+          if (entryCancel.signal.aborted) return true;
+        } finally {
+          this.endEntryCancellation();
+        }
+        this.diag.log("execute", `auto sync started — trigger=${trigger}`);
+        dispatched = true;
+        await this.dispatchSyncRun({
+          mode: "auto",
+          ...(rsMigration === "migrated"
+            ? { options: { rsAdoptionPending: true } }
+            : {}),
+        });
+        return true;
+      }
+      this.diag.log("execute", `auto sync started — trigger=${trigger}`);
+      dispatched = true;
+      await this.dispatchSyncRun({ mode: "auto" });
+      return true;
+    } catch (error) {
+      this.diag.warn(
+        "execute",
+        `auto sync setup failed — trigger=${trigger}`,
+        describeError(error),
+      );
+      // Only consume a dirty hint after the executor actually received it.
+      // A transient setup failure must keep the in-memory hint for retry.
+      return dispatched;
+    } finally {
+      this.releaseOpLock();
+    }
+  }
+
+  /**
+   * Resume a persisted or retryable source-bound subtree baseline repair.
+   * Successful work stays inside its originating visible sync; this scheduler
+   * is only for lifecycle recovery or bounded retries after a real failure.
+   */
+  private requestDescendantFileReconstructionContinuation(
+    trigger: string,
+    delayMs = DESCENDANT_FILE_RECONSTRUCTION_CONTINUATION_DELAY_MS,
+  ): boolean {
+    if (trigger === "foreground") {
+      this.descendantFileReconstructionFailures = 0;
+    }
+    if (
+      this.descendantFileReconstructionTimer
+      || !this.state?.confirmedDescendantFileReconstruction
+      || this.state.hasV2StateLoadRecoveryBlock
+      || this.state.planReviewActive
+      || !this.auth?.authState.isLoggedIn
+      // 自动面静默（2026-10-29）：重建续跑是一轮自动同步，与其它自动轮同规
+      // ——总开关关或已暂停时不开；检查点与失败重试阶梯原样保留，由下一次
+      // 手动轮（计划层会接手）或恢复后的自动轮补完。
+      || this.autoSyncPaused
+      || !this.isAutoSyncMasterEnabled()
+    ) return false;
+    this.descendantFileReconstructionTimer = compatSetTimeout(() => {
+      this.descendantFileReconstructionTimer = null;
+      void this.runDescendantFileReconstructionContinuation();
+    }, delayMs);
+    this.diag.log(
+      "state",
+      "scheduled descendant file baseline reconstruction continuation",
+      { trigger, delayMs, mutations: 0 },
+    );
+    return true;
+  }
+
+  private cancelDescendantFileReconstructionContinuation(): void {
+    compatClearTimeout(this.descendantFileReconstructionTimer);
+    this.descendantFileReconstructionTimer = null;
+    this.descendantFileReconstructionFailures = 0;
+  }
+
+  private async runDescendantFileReconstructionContinuation(): Promise<void> {
+    if (!this.state?.confirmedDescendantFileReconstruction) return;
+    // 计时器可能在总开关关闭/暂停之前就已排定：真正开跑前再按自动面静默规则
+    // 让一次（stopAutoSync 也会取消计时器，这里兜住已进入回调的竞态）。
+    if (this.autoSyncPaused || !this.isAutoSyncMasterEnabled()) return;
+    if (
+      this.opLock !== null
+      || this.conflictBatchDirection !== null
+      || !this.syncExecutor
+      || this.syncExecutor.isRunning
+    ) {
+      this.requestDescendantFileReconstructionContinuation("activity-busy", 1_000);
+      return;
+    }
+    if (this.acquireOpLock("sync")) {
+      this.requestDescendantFileReconstructionContinuation("lock-busy", 1_000);
+      return;
+    }
+    try {
+      await this.ensureStateLoaded();
+      if (
+        !this.state?.confirmedDescendantFileReconstruction
+        || this.state.hasV2StateLoadRecoveryBlock
+        || this.state.planReviewActive
+        || !this.auth?.authState.isLoggedIn
+        || this.autoSyncPaused
+        || !this.isAutoSyncMasterEnabled()
+      ) return;
+      if (!await this.checkAccountBindingForSync()) return;
+      await this.dispatchSyncRun({
+        mode: "auto",
+        logLabel: "descendant file baseline continuation result",
+      });
+    } catch (error) {
+      this.diag.warn(
+        "state",
+        "descendant file baseline continuation setup failed",
+        describeError(error),
+      );
+    } finally {
+      this.releaseOpLock();
+    }
+  }
+
+  /** Only clear + restart the interval-auto-sync timer. Intentionally does NOT
+   *  arm the persisted community-plugin join: after a successful auto run we
+   *  only reset the interval gap, whereas arming the join here lets a
+   *  permanently blocked join (e.g. remote-bundle-missing, which stays
+   *  recheckable forever) re-arm the local-change debounce at the end of every
+   *  sync — a ~10s infinite loop with no user edits. Join rechecks stay driven
+   *  by real lifecycle entries (start / foreground / settings / resume) and by
+   *  the next interval sync. */
+  private resetAutoSyncTimer(): void {
+    if (this.autoSyncTimer) {
+      compatClearInterval(this.autoSyncTimer);
+      this.autoSyncTimer = null;
+    }
+    if (this.autoSyncPaused) return;
+    if (this.syncInterval <= 0) return;
+    this.autoSyncTimer = compatSetInterval(() => {
+      void this.runAutomaticSync("interval");
+    }, this.syncInterval * 60 * 1000);
+  }
+
+  startAutoSync(): void {
+    this.resetAutoSyncTimer();
+    if (this.autoSyncPaused) return;
+    if (!this.isAutoSyncMasterEnabled()) return;
+    this.schedulePersistedCommunityPluginJoinSync("auto-start");
+    this.requestMutationRecoveryObservation("auto-start");
+  }
+
+  stopAutoSync(): void {
+    if (this.autoSyncTimer) {
+      compatClearInterval(this.autoSyncTimer);
+      this.autoSyncTimer = null;
+    }
+    this.autoSyncDirtyHint.cancel();
+    this.startupSyncRetryHint.cancel();
+    this.mutationRecoveryScheduler.cancel();
+    this.cancelDescendantFileReconstructionContinuation();
+  }
+
+  /**
+   * 启动后立即同步（2026-10-13）：每次插件加载只补一轮，解决冷启动后到第一个
+   * 定时周期之间的覆盖空白。发轮点＝登录与状态双双就绪（取较晚者）——状态先就绪
+   * 时登录还在后台恢复，提前发轮会被「未登录静默跳过」消费掉且不重来。轮次本身
+   * 只对已加入的库生效（见 `runAutomaticSync` 的 startup 分支）；暂停、待确认计划、
+   * 账本非空等让路规则与其它自动轮同源。
+   *
+   * 状态加载失败分支**不**报到（见该分支注释）：无状态可规划，且 `ensureStateLoaded`
+   * 的失败缓存会让重试轮变成 7 秒一次的失败循环；登录失败分支仍报到（如实按"未登录"
+   * 消费掉这一轮，不重试）。
+   */
+  private noteStartupReadinessSettled(signal: "auth" | "state"): void {
+    if (signal === "auth") this.startupSyncAuthSettled = true;
+    else this.startupSyncStateSettled = true;
+    if (!this.startupSyncAuthSettled || !this.startupSyncStateSettled) return;
+    if (this.startupSyncDispatched) return;
+    this.startupSyncDispatched = true;
+    void this.runAutomaticSync("startup").then(
+      (consumed) => {
+        // 忙时（返回 false）不丢这一轮：交给重试轮在静默窗口后再试，直到某一轮
+        // 真正被消费（起跑、或按规则让路）为止。
+        if (!consumed) this.startupSyncRetryHint.mark();
+      },
+      () => {
+        this.startupSyncRetryHint.mark();
+      },
+    );
+  }
+
+  private schedulePersistedCommunityPluginJoinSync(trigger: string): void {
+    if (!this.hasPendingCommunityPluginJoin()) return;
+    this.scheduleCommunityPluginJoinSync(trigger);
+  }
+
+  private scheduleCommunityPluginJoinSync(trigger = "settings"): void {
+    if (this.autoSyncDirtyHint.mark()) {
+      this.diag?.log(
+        "state",
+        "scheduled persisted community plugin join through the shared dirty trigger",
+        { trigger, mutations: 0 },
+      );
+    }
+  }
+
+  private hasPendingCommunityPluginJoin(): boolean {
+    const participation = this.communityPluginParticipation;
+    return participation?.scopeEnabled === true
+      && Object.values(participation.pluginsById).some((entry) =>
+        entry.phase === "join-requested"
+        || entry.phase === "restoring"
+        || (entry.phase === "blocked"
+          && isCommunityPluginJoinBlockRecheckable(entry.blockedReason))
+      );
+  }
+
+  restartAutoSync(): void {
+    this.stopAutoSync();
+    this.startAutoSync();
+  }
+
+  /** Re-render the settings page rows after settings changed outside the tab
+   *  (e.g. the auto-sync modal flipping a channel that owns the master
+   *  switch's derived on/off display). */
+  refreshSettingsTab(): void {
+    this.settingsTab?.refreshSyncState();
+  }
+
+  /** 设置页「规则」行是否已被「我知道了」收起（本设备记忆；重置同步状态会一并清空）。 */
+  isSettingRuleAcknowledged(ruleId: string): boolean {
+    return this.acknowledgedRules.includes(ruleId);
+  }
+
+  /** 收起一条「规则」行：先改内存再落盘，失败回滚（调用方补提示）。 */
+  async acknowledgeSettingRule(ruleId: string): Promise<void> {
+    if (this.acknowledgedRules.includes(ruleId)) return;
+    const previous = this.acknowledgedRules;
+    this.acknowledgedRules = [...previous, ruleId];
+    try {
+      await this.saveSyncSettings();
+    } catch (error) {
+      this.acknowledgedRules = previous;
+      throw error;
+    }
+  }
+
+  /** The outer auto-sync master switch: on while any automatic channel
+   *  (scheduled, change-triggered, startup) is enabled. */
+  isAutoSyncMasterEnabled(): boolean {
+    return this.syncInterval > 0
+      || this.autoSyncChangeDelaySeconds > 0
+      || this.autoSyncOnStartup;
+  }
+
+  /**
+   * The master switch controls every channel together: turning it off
+   * remembers the per-channel settings and zeroes them, turning it back on
+   * restores what it turned off (defaults when nothing was remembered), so
+   * a deliberately disabled channel never silently re-enables.
+   */
+  async setAutoSyncMasterEnabled(enabled: boolean): Promise<void> {
+    const previous = {
+      interval: this.syncInterval,
+      delay: this.autoSyncChangeDelaySeconds,
+      onStartup: this.autoSyncOnStartup,
+      restoreInterval: this.autoSyncRestoreInterval,
+      restoreDelay: this.autoSyncRestoreChangeDelaySeconds,
+      restoreOnStartup: this.autoSyncRestoreOnStartup,
+      paused: this.autoSyncPaused,
+    };
+    if (enabled) {
+      this.syncInterval =
+        normalizeAutoSyncIntervalMinutes(this.autoSyncRestoreInterval);
+      this.setAutoSyncChangeDelaySeconds(
+        normalizeAutoSyncChangeDelaySeconds(
+          this.autoSyncRestoreChangeDelaySeconds,
+        ),
+      );
+      this.setAutoSyncOnStartup(this.autoSyncRestoreOnStartup);
+    } else {
+      this.autoSyncRestoreInterval = previous.interval;
+      this.autoSyncRestoreChangeDelaySeconds = previous.delay;
+      this.autoSyncRestoreOnStartup = previous.onStartup;
+      this.syncInterval = 0;
+      this.setAutoSyncChangeDelaySeconds(0);
+      this.setAutoSyncOnStartup(false);
+    }
+    this.autoSyncPaused = false;
+    try {
+      await this.saveSyncSettings();
+    } catch (error) {
+      this.syncInterval = previous.interval;
+      this.setAutoSyncChangeDelaySeconds(previous.delay);
+      this.setAutoSyncOnStartup(previous.onStartup);
+      this.autoSyncRestoreInterval = previous.restoreInterval;
+      this.autoSyncRestoreChangeDelaySeconds = previous.restoreDelay;
+      this.autoSyncRestoreOnStartup = previous.restoreOnStartup;
+      this.autoSyncPaused = previous.paused;
+      this.diag.warn(
+        "state",
+        "failed to persist the auto sync master switch",
+        describeError(error),
+      );
+      new Notice(this.i18n.t("notice.settingsSaveFailed"));
+      return;
+    }
+    this.restartAutoSync();
+  }
+
+  private canScheduleLocalChangeAutoSync(): boolean {
+    return this.autoSyncChangeDelaySeconds > 0
+      && !this.autoSyncPaused;
+  }
+
+  setAutoSyncOnStartup(value: unknown): void {
+    this.autoSyncOnStartup = normalizeAutoSyncOnStartup(value);
+  }
+
+  setAutoSyncChangeDelaySeconds(value: unknown): void {
+    this.autoSyncChangeDelaySeconds =
+      normalizeAutoSyncChangeDelaySeconds(value);
+    if (this.autoSyncChangeDelaySeconds === 0) {
+      this.autoSyncDirtyHint.cancel();
+      this.autoSyncDirtyHint.setDelayMs(LOCAL_DIRTY_DEBOUNCE_MS);
+      this.schedulePersistedCommunityPluginJoinSync(
+        "local-change-trigger-disabled",
+      );
+      return;
+    }
+    this.autoSyncDirtyHint.setDelayMs(
+      this.autoSyncChangeDelaySeconds * 1_000,
+    );
+  }
+
+  // ---- Settings persistence ----
+
+  /**
+   * Start (or join) the one background settings read for this plugin instance.
+   *
+   * The read begins in `onload` so its I/O overlaps UI registration, but the
+   * host never waits for it: plugin load stays registration-only, per the
+   * official load-time guide. Settings-derived UI and timers are applied only
+   * after the values are known. A rejection is retained so every consumer that
+   * would act on settings fails closed instead of silently using defaults.
+   */
+  private beginSettingsLoad(): Promise<void> {
+    if (this.settingsLoadPromise) return this.settingsLoadPromise;
+    const load = this.loadSyncSettings().then(() => {
+      this.startupPerformance.markStage("settings:loaded");
+      if (this.unloaded) return;
+      // onload built the executor/scanner with defaults; propagate the real
+      // values now. Direction and handling policy are data-safety inputs, so
+      // every sync entry additionally waits for this read to settle.
+      this.applySyncPathSettings();
+      this.applyMaxFileSize();
+      this.syncExecutor?.setAutomaticHandlingPolicy(this.automaticHandlingPolicy);
+      this.syncExecutor?.setSyncDirection(this.syncDirection);
+      this.syncExecutor?.setCommunityPluginSyncPolicy(
+        this.getEffectiveCommunityPluginSyncPolicy(),
+      );
+      this.applyMobileStatusBar();
+      // Presentation refresh is best-effort: a rendering failure must not
+      // turn a successful settings read into a closed sync entry.
+      try {
+        this.updateStatusBar();
+        this.syncView?.render();
+        this.settingsTab?.refreshSyncState();
+      } catch (error) {
+        this.diag.warn(
+          "lifecycle",
+          "settings loaded but the startup UI refresh failed",
+          describeError(error),
+        );
+      }
+      this.startAutoSync();
+    }).catch((error) => {
+      this.startupPerformance.markStage("settings:failed");
+      this.diag.warn(
+        "lifecycle",
+        "background settings load failed; sync entries stay closed until reload",
+        describeError(error),
+      );
+      throw error;
+    });
+    // Consumers attach when they need settings; mark the rejection handled
+    // here so a failed read cannot surface as an unhandled rejection first.
+    void load.catch(() => undefined);
+    this.settingsLoadPromise = load;
+    return load;
+  }
+
+  /** Join the background settings read; rejects when it failed (fail-closed). */
+  private async ensureSettingsLoaded(): Promise<void> {
+    await this.beginSettingsLoad();
+  }
+
+  async loadSyncSettings(): Promise<void> {
+    // Read-only access to the shared cache: the settings assignments below
+    // normalize/copy every retained value, so no whole-object clone is needed
+    // on the cold path. `loadPluginData()` keeps returning defensive copies
+    // for callers that may mutate.
+    const data = await this.readPluginDataSnapshot();
+    this.setAutoSyncChangeDelaySeconds(
+      data?.[KEY_AUTO_SYNC_CHANGE_DELAY_SECONDS],
+    );
+    if (data) {
+      if (typeof data[KEY_SYNC_INTERVAL] === "number") {
+        this.syncInterval =
+          normalizeAutoSyncIntervalMinutes(data[KEY_SYNC_INTERVAL]);
+      }
+      if (typeof data[KEY_AUTO_SYNC_RESTORE_INTERVAL] === "number") {
+        this.autoSyncRestoreInterval =
+          normalizeAutoSyncIntervalMinutes(data[KEY_AUTO_SYNC_RESTORE_INTERVAL]);
+      }
+      if (typeof data[KEY_AUTO_SYNC_RESTORE_CHANGE_DELAY_SECONDS] === "number") {
+        this.autoSyncRestoreChangeDelaySeconds =
+          normalizeAutoSyncChangeDelaySeconds(
+            data[KEY_AUTO_SYNC_RESTORE_CHANGE_DELAY_SECONDS],
+          );
+      }
+      // 启动通道缺失时按当时的总开关状态派生（2026-10-13 拍板）：无条件取默认
+      // 开启会把曾经主动关掉自动同步的设备重新打开；显式布尔值（含用户关过之后
+      // 随保存落盘的 false）优先。
+      if (typeof data[KEY_AUTO_SYNC_ON_STARTUP] === "boolean") {
+        this.autoSyncOnStartup = data[KEY_AUTO_SYNC_ON_STARTUP];
+      } else {
+        this.autoSyncOnStartup =
+          this.syncInterval > 0 || this.autoSyncChangeDelaySeconds > 0;
+      }
+      if (typeof data[KEY_AUTO_SYNC_RESTORE_ON_STARTUP] === "boolean") {
+        this.autoSyncRestoreOnStartup = data[KEY_AUTO_SYNC_RESTORE_ON_STARTUP];
+      }
+      this.notificationPopups = normalizeNotificationPopupsLevel(
+        data[KEY_NOTIFICATION_POPUPS],
+      );
+      if (typeof data[KEY_MOBILE_STATUS_BAR] === "boolean") {
+        this.mobileStatusBar = data[KEY_MOBILE_STATUS_BAR];
+      }
+      if (Array.isArray(data[KEY_ACKNOWLEDGED_RULES])) {
+        this.acknowledgedRules = data[KEY_ACKNOWLEDGED_RULES]
+          .filter((ruleId): ruleId is string => typeof ruleId === "string");
+      }
+      if (typeof data[KEY_SYNC_PLUGIN_FILES] === "boolean") this.syncPluginFiles = data[KEY_SYNC_PLUGIN_FILES];
+      if (typeof data[KEY_DIAG_LOG] === "boolean") this.diagLogEnabled = data[KEY_DIAG_LOG];
+      if (typeof data[KEY_SYNC_EDITOR] === "boolean") this.syncEditorSettings = data[KEY_SYNC_EDITOR];
+      if (typeof data[KEY_SYNC_APPEARANCE] === "boolean") this.syncAppearance = data[KEY_SYNC_APPEARANCE];
+      if (typeof data[KEY_SYNC_THEMES] === "boolean") this.syncThemes = data[KEY_SYNC_THEMES];
+      if (typeof data[KEY_SYNC_HOTKEYS] === "boolean") this.syncHotkeys = data[KEY_SYNC_HOTKEYS];
+      if (typeof data[KEY_SYNC_CORE_PLUGINS] === "boolean") this.syncCorePlugins = data[KEY_SYNC_CORE_PLUGINS];
+      if (typeof data[KEY_SYNC_BOOKMARKS] === "boolean") this.syncBookmarks = data[KEY_SYNC_BOOKMARKS];
+      this.syncCommunityPlugins =
+        data[KEY_SYNC_COMMUNITY_PLUGINS] === true;
+      // The data switch's own key is its single stored source. The
+      // files-precondition is owned by the participation projection clamp
+      // and the effective policy (scanner and executor both require the
+      // files selection to hit); gating here against the legacy files key
+      // would clamp on a value participation-era persistence no longer
+      // maintains and reset the switch on every restart.
+      this.syncPluginData = data[KEY_SYNC_PLUGIN_DATA] === true;
+      const communityPluginSyncSettings =
+        normalizeCommunityPluginSyncSettings(
+          readCommunityPluginSyncPolicy(
+            data[KEY_COMMUNITY_PLUGIN_SYNC_POLICY],
+            this.syncCommunityPlugins,
+            this.syncPluginData,
+            this.manifest.id,
+          ),
+          this.syncCommunityPlugins,
+          this.syncPluginData,
+          this.manifest.id,
+        );
+      this.communityPluginSyncPolicy = communityPluginSyncSettings.policy;
+      this.excludedFolders = normalizeExcludedFolders(
+        Array.isArray(data[KEY_SYNC_EXCLUDED_FOLDERS])
+          ? data[KEY_SYNC_EXCLUDED_FOLDERS]
+          : [],
+        getConfigDir(this.app.vault),
+      );
+      this.pathBlacklist = normalizePathPatterns(
+        Array.isArray(data[KEY_SYNC_PATH_BLACKLIST])
+          ? data[KEY_SYNC_PATH_BLACKLIST]
+          : [],
+      );
+      this.pathWhitelist = normalizePathPatterns(
+        Array.isArray(data[KEY_SYNC_PATH_WHITELIST])
+          ? data[KEY_SYNC_PATH_WHITELIST]
+          : [],
+      );
+      if (typeof data[KEY_AUTO_SYNC_PAUSED] === "boolean") this.autoSyncPaused = data[KEY_AUTO_SYNC_PAUSED];
+      this.lastResetFacts = parseDiagnosticResetFacts(data[KEY_LAST_RESET_FACTS]);
+      this.rsAdoptionMarker = parseRsAdoptionMarker(data[KEY_RS_ADOPTION_MARKER]);
+      this.syncMaxFileSizeMb = normalizeMaxFileSizeMb(data[KEY_MAX_FILE_SIZE_MB]);
+      const deviceUpdateState = loadUpdateCheckState(this.updateDeviceStorage());
+      const legacyUpdateState = seedUpdateCheckStateFromLegacyPluginData(data);
+      this.updateLastCheckAt = deviceUpdateState.lastCheckAt
+        ?? legacyUpdateState.lastCheckAt;
+      this.updateLastKnownLatest = deviceUpdateState.lastKnownLatest
+        ?? legacyUpdateState.lastKnownLatest;
+      const storedUpdateSnooze = deviceUpdateState.snooze
+        ?? legacyUpdateState.snooze;
+      if (storedUpdateSnooze) {
+        this.updateSnooze = storedUpdateSnooze;
+      }
+      this.automaticHandlingPolicy = readAutomaticHandlingPolicy(
+        data[KEY_AUTOMATIC_HANDLING_POLICY],
+        data[KEY_LEGACY_AUTO_MERGE],
+      );
+      this.syncDirection = readSyncDirection(data[KEY_SYNC_DIRECTION]);
+    }
+    // The read is background work now: a plugin that unloaded while it was in
+    // flight must not push settings into a torn-down session.
+    if (this.unloaded) return;
+    this.applySyncPathSettings();
+    this.applyMaxFileSize();
+    this.applyDiagnosticSetting();
+    this.applyNotificationPopups();
+  }
+
+  /** M14: serialized PluginData write. All callers (StateManager, settings,
+   *  auth profile) mutate through this queue — no interleaved load-modify-save. */
+  private async updatePluginData(mutator: (data: Record<string, unknown>) => void): Promise<void> {
+    // Observation only: how long this write waited behind the physical queue.
+    const releaseQueue = queueWaitObservation.enter("pluginDataSave");
+    const enqueuedAt = performance.now();
+    const task = this.pluginDataQueue.then(async () => {
+      const queueWarning = queueWaitObservation.noteDequeue(
+        "pluginDataSave",
+        performance.now() - enqueuedAt,
+      );
+      if (queueWarning) {
+        this.diag.warn("state", "state queue wait exceeded", {
+          ...queueWarning,
+        });
+      }
+      const startupWriteStartedAt = this.startupPerformance.isCollecting
+        ? performance.now()
+        : 0;
+      const diagnosticsEnabled = this.diag.isEnabled("state");
+      const totalStartedAt = diagnosticsEnabled ? performance.now() : 0;
+      const committed = await this.ensurePluginDataCache();
+      // The private synchronous mutator never escapes this candidate. Keeping
+      // the old cache until saveData succeeds preserves failure atomicity while
+      // avoiding a second whole-object clone after the physical write.
+      const data = committed === null ? {} : clonePluginData(committed);
+      mutator(data);
+      const prepareFinishedAt = diagnosticsEnabled ? performance.now() : 0;
+      const measurementStartedAt = prepareFinishedAt;
+      const measurement = diagnosticsEnabled ? measurePluginDataWrite(data) : null;
+      const measurementFinishedAt = diagnosticsEnabled ? performance.now() : 0;
+      const startedAt = diagnosticsEnabled ? performance.now() : 0;
+      let saveMs = 0;
+      let publishMs = 0;
+      let success = false;
+      try {
+        const saveStartedAt = diagnosticsEnabled ? performance.now() : 0;
+        try {
+          await this.saveData(data);
+        } finally {
+          if (diagnosticsEnabled) saveMs = performance.now() - saveStartedAt;
+        }
+        const publishStartedAt = diagnosticsEnabled ? performance.now() : 0;
+        this.pluginDataCache = data;
+        this.pluginDataWriteLog.record(
+          Date.now(),
+          computeChangedPluginDataKeys(committed ?? {}, data),
+        );
+        if (diagnosticsEnabled) publishMs = performance.now() - publishStartedAt;
+        success = true;
+      } finally {
+        if (success && startupWriteStartedAt > 0) {
+          this.startupPerformance.recordPluginDataWrite(
+            performance.now() - startupWriteStartedAt,
+          );
+        }
+        if (measurement) {
+          const finishedAt = performance.now();
+          this.diag.log("state", "plugin data write", {
+            ...measurement,
+            elapsedMs: Number((finishedAt - startedAt).toFixed(3)),
+            prepareMs: Number((prepareFinishedAt - totalStartedAt).toFixed(3)),
+            measurementMs: Number((measurementFinishedAt - measurementStartedAt).toFixed(3)),
+            saveMs: Number(saveMs.toFixed(3)),
+            publishMs: Number(publishMs.toFixed(3)),
+            totalMs: Number((finishedAt - totalStartedAt).toFixed(3)),
+            success,
+          });
+        }
+      }
+    });
+    this.pluginDataQueue = task.catch(() => undefined);
+    if (releaseQueue) task.then(releaseQueue, releaseQueue);
+    return task;
+  }
+
+  async loadPluginData(): Promise<Record<string, unknown> | null> {
+    const data = await this.ensurePluginDataCache();
+    return data === null ? null : clonePluginData(data);
+  }
+
+  /**
+   * Read-only view of the cached plugin data for startup consumers that only
+   * read (settings, auth profile cache). Skips the defensive whole-object
+   * clone `loadPluginData()` pays on every call; the returned object must not
+   * be mutated. Writes go through `updatePluginData`, which clones first.
+   */
+  async readPluginDataSnapshot(): Promise<Readonly<Record<string, unknown>> | null> {
+    return this.ensurePluginDataCache();
+  }
+
+  private async ensurePluginDataCache(): Promise<Record<string, unknown> | null> {
+    if (this.pluginDataCache !== undefined) return this.pluginDataCache;
+    const startedAt = performance.now();
+    let topLevelKeys: number | null = null;
+    this.pluginDataLoadPromise ??= this.loadData()
+      .then((data: unknown) => {
+        // The host's loadData() parses a fresh JSON object per call and the
+        // cache is the only owner; cloning it here would pay a second full
+        // serialization before the settings/state consumers even start.
+        this.pluginDataCache = isRecord(data) ? data : null;
+        topLevelKeys = this.pluginDataCache === null
+          ? 0
+          : Object.keys(this.pluginDataCache).length;
+        return this.pluginDataCache;
+      })
+      .finally(() => {
+        this.startupPerformance.recordPluginDataRead(
+          performance.now() - startedAt,
+          topLevelKeys,
+        );
+        this.startupPerformance.markStage("plugin-data:read");
+        this.pluginDataLoadPromise = null;
+      });
+    return this.pluginDataLoadPromise;
+  }
+
+  private emitColdStartSummaryIfReady(): void {
+    const summary = this.startupPerformance.takeCompletedSummary();
+    if (!summary) return;
+    this.diag.log("lifecycle", "plugin cold start summary", summary);
+    // Diagnostics-only, fire-and-forget: the JSONL window can roll a startup
+    // line out under sync activity, while the bounded observation file keeps
+    // the last 40 sessions for "restart a few times and compare". Off means
+    // no file read, no write, no directory touch.
+    if (!this.diagLogEnabled) return;
+    const record = buildStartupTimingObservation(summary);
+    void appendStartupTimingObservation(
+      this.app.vault.adapter,
+      this.startupLogsDir(),
+      record,
+    ).then((written) => {
+      if (!written) {
+        this.diag.warn(
+          "lifecycle",
+          "startup timing observation could not be written",
+        );
+      }
+    });
+  }
+
+  private startupLogsDir(): string {
+    return getEasySyncPaths(
+      getConfigDir(this.app.vault),
+      this.manifest.id,
+    ).logsDir;
+  }
+
+  async saveSyncSettings(): Promise<void> {
+    await this.updatePluginData((data) => {
+      data[KEY_SYNC_INTERVAL] = this.syncInterval;
+      data[KEY_AUTO_SYNC_CHANGE_DELAY_SECONDS] =
+        this.autoSyncChangeDelaySeconds;
+      data[KEY_AUTO_SYNC_RESTORE_INTERVAL] = this.autoSyncRestoreInterval;
+      data[KEY_AUTO_SYNC_RESTORE_CHANGE_DELAY_SECONDS] =
+        this.autoSyncRestoreChangeDelaySeconds;
+      data[KEY_AUTO_SYNC_ON_STARTUP] = this.autoSyncOnStartup;
+      data[KEY_AUTO_SYNC_RESTORE_ON_STARTUP] = this.autoSyncRestoreOnStartup;
+      data[KEY_DIAG_LOG] = this.diagLogEnabled;
+      this.writeSyncPathSettingsData(data, this.captureSyncPathSettings());
+      data[KEY_AUTO_SYNC_PAUSED] = this.autoSyncPaused;
+      data[KEY_MAX_FILE_SIZE_MB] = this.syncMaxFileSizeMb;
+      data[KEY_AUTOMATIC_HANDLING_POLICY] = { ...this.automaticHandlingPolicy };
+      data[KEY_SYNC_DIRECTION] = this.syncDirection;
+      data[KEY_NOTIFICATION_POPUPS] = this.notificationPopups;
+      data[KEY_MOBILE_STATUS_BAR] = this.mobileStatusBar;
+      data[KEY_ACKNOWLEDGED_RULES] = this.acknowledgedRules;
+      data[KEY_LAST_RESET_FACTS] = this.lastResetFacts;
+    });
+  }
+
+  private captureSyncPathSettings(): SyncPathSettings {
+    return {
+      syncPluginFiles: this.syncPluginFiles,
+      syncEditorSettings: this.syncEditorSettings,
+      syncAppearance: this.syncAppearance,
+      syncThemes: this.syncThemes,
+      syncHotkeys: this.syncHotkeys,
+      syncCorePlugins: this.syncCorePlugins,
+      syncBookmarks: this.syncBookmarks,
+      syncCommunityPlugins: this.syncCommunityPlugins,
+      syncPluginData: this.syncPluginData,
+      communityPluginSyncPolicy: cloneCommunityPluginSyncPolicy(
+        this.communityPluginSyncPolicy,
+      ),
+      excludedFolders: [...this.excludedFolders],
+      pathBlacklist: [...this.pathBlacklist],
+      pathWhitelist: [...this.pathWhitelist],
+    };
+  }
+
+  private writeSyncPathSettingsData(
+    data: Record<string, unknown>,
+    settings: Readonly<SyncPathSettings>,
+  ): void {
+    data[KEY_SYNC_PLUGIN_FILES] = settings.syncPluginFiles;
+    data[KEY_SYNC_EDITOR] = settings.syncEditorSettings;
+    data[KEY_SYNC_APPEARANCE] = settings.syncAppearance;
+    data[KEY_SYNC_THEMES] = settings.syncThemes;
+    data[KEY_SYNC_HOTKEYS] = settings.syncHotkeys;
+    data[KEY_SYNC_CORE_PLUGINS] = settings.syncCorePlugins;
+    data[KEY_SYNC_BOOKMARKS] = settings.syncBookmarks;
+    data[KEY_SYNC_PLUGIN_DATA] = settings.syncPluginData;
+    if (!this.communityPluginParticipation) {
+      data[KEY_SYNC_COMMUNITY_PLUGINS] = settings.syncCommunityPlugins;
+      data[KEY_COMMUNITY_PLUGIN_SYNC_POLICY] = cloneCommunityPluginSyncPolicy(
+        settings.communityPluginSyncPolicy,
+      );
+    } else {
+      const legacy = readCommunityPluginSyncPolicy(
+        data[KEY_COMMUNITY_PLUGIN_SYNC_POLICY],
+        false,
+        false,
+        this.manifest.id,
+      );
+      data[KEY_COMMUNITY_PLUGIN_SYNC_POLICY] = {
+        ...legacy,
+        data: cloneCommunityPluginSyncPolicy(
+          settings.communityPluginSyncPolicy,
+        ).data,
+      };
+    }
+    data[KEY_SYNC_EXCLUDED_FOLDERS] = [...settings.excludedFolders];
+    data[KEY_SYNC_PATH_BLACKLIST] = [...settings.pathBlacklist];
+    data[KEY_SYNC_PATH_WHITELIST] = [...settings.pathWhitelist];
+  }
+
+  private publishSyncPathSettings(settings: Readonly<SyncPathSettings>): void {
+    this.syncPluginFiles = settings.syncPluginFiles;
+    this.syncEditorSettings = settings.syncEditorSettings;
+    this.syncAppearance = settings.syncAppearance;
+    this.syncThemes = settings.syncThemes;
+    this.syncHotkeys = settings.syncHotkeys;
+    this.syncCorePlugins = settings.syncCorePlugins;
+    this.syncBookmarks = settings.syncBookmarks;
+    this.syncCommunityPlugins = settings.syncCommunityPlugins;
+    this.syncPluginData = settings.syncPluginData;
+    this.communityPluginSyncPolicy = cloneCommunityPluginSyncPolicy(
+      settings.communityPluginSyncPolicy,
+    );
+    this.excludedFolders = [...settings.excludedFolders];
+    this.pathBlacklist = [...settings.pathBlacklist];
+    this.pathWhitelist = [...settings.pathWhitelist];
+    this.applySyncPathSettings();
+    if (typeof this.syncExecutor?.setCommunityPluginSyncPolicy === "function") {
+      this.syncExecutor.setCommunityPluginSyncPolicy(
+        this.getEffectiveCommunityPluginSyncPolicy(),
+      );
+    }
+  }
+
+  private getEffectiveCommunityPluginSyncPolicy(
+    settings: Readonly<SyncPathSettings> = this.captureSyncPathSettings(),
+  ): CommunityPluginSyncPolicyV1 {
+    return createEffectiveCommunityPluginSyncPolicy(
+      settings.communityPluginSyncPolicy,
+      settings.syncCommunityPlugins,
+      settings.syncPluginData,
+    );
+  }
+
+  async createSyncExclusionFolderSnapshot(): Promise<{
+    hadPendingReview: boolean;
+    remoteFolderPaths: string[];
+  }> {
+    await this.ensureStateLoaded();
+    if (!this.state) {
+      return { hadPendingReview: false, remoteFolderPaths: [] };
+    }
+    return await this.state.createSyncExclusionFolderSnapshot(
+      this.auth?.authState.accountId ?? "",
+    );
+  }
+
+  async updateSyncPathSettings(
+    patch: Partial<SyncPathSettings>,
+    operationEpoch?: number,
+  ): Promise<void> {
+    const previous = this.captureSyncPathSettings();
+    // 黑/白名单在进入保守事务前先做语法校验：坏正则拒绝保存（UI 会展示
+    // 报错条目），运行时匹配器对无法编译的条目按「不匹配」兜底。
+    const blacklistValidation = validatePathPatterns(
+      patch.pathBlacklist ?? previous.pathBlacklist,
+    );
+    if (blacklistValidation.invalid.length > 0) {
+      throw new SyncPathSettingsUpdateError("invalid-pattern");
+    }
+    const whitelistValidation = validatePathPatterns(
+      patch.pathWhitelist ?? previous.pathWhitelist,
+    );
+    if (whitelistValidation.invalid.length > 0) {
+      throw new SyncPathSettingsUpdateError("invalid-pattern");
+    }
+    const candidate: SyncPathSettings = {
+      ...previous,
+      ...patch,
+      excludedFolders: normalizeExcludedFolders(
+        patch.excludedFolders ?? previous.excludedFolders,
+        getConfigDir(this.app.vault),
+      ),
+      pathBlacklist: blacklistValidation.normalized,
+      pathWhitelist: whitelistValidation.normalized,
+    };
+    if (patch.communityPluginSyncPolicy) {
+      candidate.communityPluginSyncPolicy = readCommunityPluginSyncPolicy(
+        patch.communityPluginSyncPolicy,
+        false,
+        false,
+        this.manifest.id,
+      );
+    } else {
+      candidate.communityPluginSyncPolicy = cloneCommunityPluginSyncPolicy(
+        previous.communityPluginSyncPolicy,
+      );
+    }
+    const normalizedCommunityPluginSettings =
+      normalizeCommunityPluginSyncSettings(
+        candidate.communityPluginSyncPolicy,
+        candidate.syncCommunityPlugins,
+        candidate.syncPluginData,
+        this.manifest.id,
+      );
+    candidate.syncCommunityPlugins =
+      normalizedCommunityPluginSettings.filesEnabled;
+    candidate.syncPluginData =
+      normalizedCommunityPluginSettings.dataEnabled;
+    candidate.communityPluginSyncPolicy =
+      normalizedCommunityPluginSettings.policy;
+    if (this.communityPluginParticipation) {
+      candidate.syncCommunityPlugins =
+        this.communityPluginParticipation.scopeEnabled;
+      candidate.communityPluginSyncPolicy.files =
+        cloneCommunityPluginSyncPolicy(
+          this.communityPluginSyncPolicy,
+        ).files;
+      candidate.syncPluginData = candidate.syncCommunityPlugins
+        && candidate.syncPluginData;
+    }
+    if (
+      previous.syncPluginFiles === candidate.syncPluginFiles
+      && previous.syncEditorSettings === candidate.syncEditorSettings
+      && previous.syncAppearance === candidate.syncAppearance
+      && previous.syncThemes === candidate.syncThemes
+      && previous.syncHotkeys === candidate.syncHotkeys
+      && previous.syncCorePlugins === candidate.syncCorePlugins
+      && previous.syncBookmarks === candidate.syncBookmarks
+      && previous.syncCommunityPlugins === candidate.syncCommunityPlugins
+      && previous.syncPluginData === candidate.syncPluginData
+      && sameCommunityPluginSyncPolicy(
+        previous.communityPluginSyncPolicy,
+        candidate.communityPluginSyncPolicy,
+      )
+      && previous.excludedFolders.length === candidate.excludedFolders.length
+      && previous.excludedFolders.every(
+        (path, index) => path === candidate.excludedFolders[index],
+      )
+      && samePathPatternList(previous.pathBlacklist, candidate.pathBlacklist)
+      && samePathPatternList(previous.pathWhitelist, candidate.pathWhitelist)
+    ) return;
+
+    await this.ensureStateLoaded();
+    if (
+      operationEpoch !== undefined
+      && !this.operationLifecycle.isCurrent(operationEpoch)
+    ) return;
+    if (this.syncExecutor?.hasActivityInFlight) {
+      throw new SyncPathSettingsUpdateError("busy");
+    }
+    if (
+      this.state?.hasV2StateLoadRecoveryBlock
+      || this.state?.hasV2RemoteScopeRecovery
+      || this.state?.hasMutationLedgerCorruption
+      || this.state?.hasMutationRecoveryQuarantineCorruption
+    ) {
+      throw new SyncPathSettingsUpdateError("recovery");
+    }
+    const lockHolder = this.acquireOpLock("sync-path-settings");
+    if (lockHolder !== null) {
+      throw new SyncPathSettingsUpdateError("busy");
+    }
+
+    try {
+      if (
+        operationEpoch !== undefined
+        && !this.operationLifecycle.isCurrent(operationEpoch)
+      ) return;
+      await this.commitSyncPathSettingsCandidate(previous, candidate, {
+        operationEpoch,
+      });
+    } catch (error) {
+      if (error instanceof SyncPathMutationRecoveryError) {
+        throw new SyncPathSettingsUpdateError("recovery");
+      }
+      throw error;
+    } finally {
+      this.releaseOpLock();
+    }
+  }
+
+  private async persistCommunityPluginLocalIgnores(
+    ignores: Readonly<CommunityPluginLocalIgnores>,
+  ): Promise<void> {
+    const legacyIgnores: CommunityPluginLocalIgnores = {
+      files: [],
+      data: [...ignores.data],
+      ...(ignores.folderMoveHintRemoteIds
+        ? { folderMoveHintRemoteIds: [...ignores.folderMoveHintRemoteIds] }
+        : {}),
+    };
+    const previous = this.captureSyncPathSettings();
+    const communityPluginSyncPolicy = applyCommunityPluginLocalIgnores(
+      previous.communityPluginSyncPolicy,
+      legacyIgnores,
+      this.manifest.id,
+    );
+    if (sameCommunityPluginSyncPolicy(
+      previous.communityPluginSyncPolicy,
+      communityPluginSyncPolicy,
+    )) return;
+    if (
+      this.state?.hasV2StateLoadRecoveryBlock
+      || this.state?.hasV2RemoteScopeRecovery
+      || this.state?.hasMutationLedgerCorruption
+      || this.state?.hasMutationRecoveryQuarantineCorruption
+      || (this.state?.mutationLedger.length ?? 0) > 0
+    ) {
+      throw new SyncPathSettingsUpdateError("recovery");
+    }
+    await this.commitSyncPathSettingsCandidate(previous, {
+      ...previous,
+      communityPluginSyncPolicy,
+    }, {
+      retireLocalFolderMoveHintRemoteIds:
+        legacyIgnores.folderMoveHintRemoteIds ?? [],
+    });
+  }
+
+  private async persistCompletedCommunityPluginRestores(
+    completed: Readonly<CommunityPluginRestoreSet>,
+  ): Promise<void> {
+    const previous = this.captureSyncPathSettings();
+    const communityPluginSyncPolicy =
+      clearCompletedCommunityPluginRestores(
+        previous.communityPluginSyncPolicy,
+        completed,
+        this.manifest.id,
+      );
+    if (sameCommunityPluginSyncPolicy(
+      previous.communityPluginSyncPolicy,
+      communityPluginSyncPolicy,
+    )) return;
+    if (
+      this.state?.hasV2StateLoadRecoveryBlock
+      || this.state?.hasV2RemoteScopeRecovery
+      || this.state?.hasMutationLedgerCorruption
+      || this.state?.hasMutationRecoveryQuarantineCorruption
+      || (this.state?.mutationLedger.length ?? 0) > 0
+    ) {
+      throw new SyncPathSettingsUpdateError("recovery");
+    }
+    await this.commitSyncPathSettingsCandidate(previous, {
+      ...previous,
+      communityPluginSyncPolicy,
+    });
+  }
+
+  /**
+   * Dedicated cloud cleanup for a community plugin this device no longer
+   * holds locally. Gated on the device-local participation phase: active
+   * joins/restores/participations, in-flight exits and blocked restores
+   * never enter the transaction. Deletion is authorized by the remote catalog
+   * this call refreshes — planning against stale committed identities once
+   * produced a silent no-op reported as success (2026-09-15). When sync
+   * activity is in flight the refresh returns the current scope-validated
+   * catalog instead of re-listing, and the executor transaction re-verifies
+   * every identity before deleting. Records the cleanup marker that keeps the
+   * row hidden until the bundle reappears, and reports completion or blockage
+   * through the notice center.
+   */
+  async runCommunityPluginCloudCleanup(pluginId: string): Promise<boolean> {
+    await this.ensureStateLoaded();
+    const state = this.state;
+    const executor = this.syncExecutor;
+    if (!state?.isV2StateActive || !executor || executor.isRunning) {
+      this.noticeCenter.show({
+        key: `cloud-cleanup:busy:${pluginId}`,
+        message: this.i18n.t("result.lockBusy"),
+        priority: NOTICE_PRIORITY.attention,
+        className: "easy-sync-notice-action",
+      });
+      return false;
+    }
+    const participation = state.getCommunityPluginParticipation?.();
+    const phase = participation?.pluginsById[pluginId]?.phase;
+    if (
+      phase === "join-requested"
+      || phase === "restoring"
+      || phase === "participating"
+      || phase === "exit-requested"
+      || phase === "blocked"
+    ) {
+      return false;
+    }
+    let evidenceEntries: RemoteFileEntry[];
+    try {
+      const catalog = await this.refreshCommunityPluginRemoteCatalog();
+      if (!catalog || catalog.stale) {
+        throw new Error("no trusted remote catalog evidence for cloud cleanup");
+      }
+      const entry = catalog.entries.find(
+        (candidate) => candidate.pluginId === pluginId,
+      );
+      evidenceEntries = entry
+        ? remoteCommunityPluginCatalogEntryEntries(entry)
+        : [];
+    } catch (error) {
+      this.diag?.warn(
+        "state",
+        "community plugin cloud cleanup stopped before planning: no fresh catalog evidence",
+        describeError(error),
+      );
+      this.noticeCenter.show({
+        key: `cloud-cleanup:failed:${pluginId}`,
+        message: this.i18n.t("notice.communityPlugins.cloudCleanupFailed", {
+          plugin: pluginId,
+        }),
+        priority: NOTICE_PRIORITY.attention,
+        className: "easy-sync-notice-action",
+      });
+      return false;
+    }
+    const result = await executor.runCommunityPluginCloudCleanup(
+      pluginId,
+      { entries: evidenceEntries },
+    );
+    if (result.status === "failed") {
+      this.noticeCenter.show({
+        key: `cloud-cleanup:failed:${pluginId}`,
+        message: this.i18n.t("notice.communityPlugins.cloudCleanupFailed", {
+          plugin: pluginId,
+        }),
+        priority: NOTICE_PRIORITY.attention,
+        className: "easy-sync-notice-action",
+      });
+      return false;
+    }
+    if (result.status === "blocked") {
+      this.noticeCenter.show({
+        key: `cloud-cleanup:blocked:${pluginId}`,
+        message: this.i18n.t("notice.communityPlugins.cloudCleanupBlocked", {
+          plugin: pluginId,
+        }),
+        priority: NOTICE_PRIORITY.attention,
+        className: "easy-sync-notice-action",
+      });
+      return false;
+    }
+    const markers = this.readCommunityPluginCloudCleanupMarkers();
+    markers.push({ pluginId, cleanedAt: Date.now() });
+    this.writeCommunityPluginCloudCleanupMarkers(markers);
+    try {
+      await this.excludeCommunityPluginFromSyncPolicy(pluginId);
+    } catch (error) {
+      // The cloud objects are already deleted; a local policy update failure
+      // must not turn a successful cleanup into a reported failure. The
+      // excluded row and counts catch up on the next inventory refresh.
+      this.diag?.warn(
+        "state",
+        "cloud cleanup succeeded but the local plugin sync policy could not be updated",
+        describeError(error),
+      );
+    }
+    // 清理成功即退出参与并撤侧栏待定行（2026-09-16 用户拍板）：否则参与层
+    // 可能随后把已双侧删除的插件翻成 blocked/remote-bundle-missing 残留，发
+    // 现通道也会借合并目录里的过期条目重新提议安装。Best-effort —— 失败只
+    // 记日志，不回滚已完成的清理。
+    try {
+      await this.commitCommunityPluginParticipationCommand({
+        type: "confirm-excluded",
+        pluginId,
+      });
+    } catch (error) {
+      this.diag?.warn(
+        "state",
+        "community plugin participation exit after cloud cleanup failed",
+        describeError(error),
+      );
+    }
+    try {
+      await this.persistCommunityPluginAdoptionCommand({
+        type: "remove-pending",
+        pluginId,
+      });
+    } catch (error) {
+      this.diag?.warn(
+        "state",
+        "community plugin pending adoption row removal after cloud cleanup failed",
+        describeError(error),
+      );
+    }
+    // 清理成功即触发一轮同步（2026-09-16 用户拍板）：云端删除由清理事务直接
+    // 完成，但本机索引消费删除墓碑、基线收敛不应等下一个间隔轮。走现役一次
+    // 性动作的立即同步尾（忙/锁/首同步未定时回退脏标记调度），与采用行
+    // 「下载并同步」同形。
+    this.startCommunityPluginJoinNow();
+    this.noticeCenter.show({
+      key: `cloud-cleanup:done:${pluginId}`,
+      message: this.i18n.t("notice.communityPlugins.cloudCleanupDone", {
+        plugin: pluginId,
+      }),
+      priority: NOTICE_PRIORITY.info,
+      className: "easy-sync-notice-action",
+    });
+    return true;
+  }
+
+  /**
+   * Cloud-cleanup thorough removal: drop the plugin from both sides of the
+   * local community-plugin sync policy (files and data) so its rows disappear
+   * and counts stop including it. Cloud data.json and local data files are
+   * untouched; a local reinstall re-shows the row (no permanent blocklist).
+   */
+  private async excludeCommunityPluginFromSyncPolicy(
+    pluginId: string,
+  ): Promise<void> {
+    const policy = cloneCommunityPluginSyncPolicy(
+      this.communityPluginSyncPolicy,
+    );
+    policy.files = stripPluginFromScopeSelection(policy.files, pluginId);
+    policy.data = stripPluginFromScopeSelection(policy.data, pluginId);
+    await this.updateSyncPathSettings({
+      syncCommunityPlugins: this.syncCommunityPlugins,
+      syncPluginData: this.syncPluginData,
+      communityPluginSyncPolicy: policy,
+    });
+  }
+
+  private readCommunityPluginCloudCleanupMarkers():
+    { pluginId: string; cleanedAt: number }[] {
+    if (typeof this.app.loadLocalStorage !== "function") return [];
+    const raw: unknown = this.app.loadLocalStorage(
+      COMMUNITY_PLUGIN_CLOUD_CLEANUP_MARKER_KEY,
+    );
+    if (!Array.isArray(raw)) return [];
+    return normalizeCommunityPluginCloudCleanupMarkersV1(
+      raw.filter((
+        entry,
+      ): entry is { pluginId: string; cleanedAt: number } =>
+        isRecord(entry)
+        && typeof entry.pluginId === "string"
+        && typeof entry.cleanedAt === "number"
+      ),
+    );
+  }
+
+  /**
+   * Read-only view of persisted cloud-cleanup markers for the settings UI:
+   * rows of cleaned plugins stay hidden until the sweep drops the marker
+   * once the complete bundle reappears in the cloud, or the user explicitly
+   * re-joins the plugin on this device.
+   */
+  getCommunityPluginCloudCleanupMarkers():
+    readonly { pluginId: string; cleanedAt: number }[] {
+    return this.readCommunityPluginCloudCleanupMarkers();
+  }
+
+  private writeCommunityPluginCloudCleanupMarkers(
+    markers: readonly { pluginId: string; cleanedAt: number }[],
+  ): void {
+    if (typeof this.app.saveLocalStorage !== "function") return;
+    this.app.saveLocalStorage(
+      COMMUNITY_PLUGIN_CLOUD_CLEANUP_MARKER_KEY,
+      normalizeCommunityPluginCloudCleanupMarkersV1(markers),
+    );
+  }
+
+  /**
+   * Silent reappearance sweep against explicit reappearance evidence. The
+   * evidence contract differs per caller: the manager-open delta-fresh
+   * refresh passes every complete entry (a fresh enumeration IS current
+   * server truth); the round-end path passes only entries whose bundle
+   * facts postdate the cleanup (see
+   * `planCommunityPluginCloudCleanupIndexReappearanceV1`). Dropping the
+   * cleanup marker here un-hides the row so the user can re-join; no
+   * dedicated notice is shown (2026-09-09 用户拍板：重现即展示, 无需为重现
+   * 专门提示).
+   */
+  private sweepCommunityPluginCloudCleanupMarkers(
+    reappearedPluginIds: readonly string[],
+  ): void {
+    const markers = this.readCommunityPluginCloudCleanupMarkers();
+    if (markers.length === 0) return;
+    const sweep = planCommunityPluginCloudCleanupMarkerSweepV1({
+      markers,
+      reappearedPluginIds,
+    });
+    if (sweep.resurrectedPluginIds.length === 0) return;
+    this.writeCommunityPluginCloudCleanupMarkers(sweep.remaining);
+    this.diag?.log(
+      "state",
+      "community plugin cleanup markers dropped on bundle reappearance evidence",
+      {
+        schemaVersion: 1,
+        pluginIds: sweep.resurrectedPluginIds,
+      },
+    );
+  }
+
+  private readUploadDowngradeNoticeMarkers(): { pluginId: string; noticedAt: number }[] {
+    if (typeof this.app.loadLocalStorage !== "function") return [];
+    const raw: unknown = this.app.loadLocalStorage(KEY_UPLOAD_DOWNGRADE_NOTICE);
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((
+      entry,
+    ): entry is { pluginId: string; noticedAt: number } =>
+      isRecord(entry)
+      && typeof entry.pluginId === "string"
+      && typeof entry.noticedAt === "number"
+    );
+  }
+
+  private writeUploadDowngradeNoticeMarkers(
+    markers: readonly { pluginId: string; noticedAt: number }[],
+  ): void {
+    if (typeof this.app.saveLocalStorage !== "function") return;
+    this.app.saveLocalStorage(KEY_UPLOAD_DOWNGRADE_NOTICE, [...markers]);
+  }
+
+  /**
+   * One-shot notice for community-plugin upload downgrades deferred to user
+   * review by the plan-level guard. While versions stay misaligned the guard
+   * defers the same bundle on every round; notifying on every round would be
+   * noise, and never notifying leaves the user without any hint that an upload
+   * is intentionally blocked. Each plugin is notified once until the deferral
+   * is gone (the plan stops uploading that bundle), then its marker is dropped
+   * so a future misalignment can notify again. Pure notice; never mutates.
+   */
+  private maybeNoticeCommunityPluginUploadDowngrades(
+    deferredPluginIds: readonly string[] | undefined,
+  ): void {
+    const markers = this.readUploadDowngradeNoticeMarkers();
+    const active = new Set(deferredPluginIds ?? []);
+    // Retire markers whose plugin is no longer deferred this round: the guard
+    // runs every round, so a plugin absent from `deferredPluginIds` has
+    // converged and may notify again if a future misalignment reappears.
+    const retained = markers.filter((marker) => active.has(marker.pluginId));
+    const noticed = new Set(retained.map((marker) => marker.pluginId));
+    const next: { pluginId: string; noticedAt: number }[] = [...retained];
+    for (const pluginId of active) {
+      if (noticed.has(pluginId)) continue;
+      next.push({ pluginId, noticedAt: Date.now() });
+      this.noticeCenter.show({
+        key: `plugin-upload-downgrade:${pluginId}`,
+        message: this.i18n.t(
+          "notice.communityPlugins.uploadDowngradeDeferred",
+          { plugin: pluginId },
+        ),
+        priority: NOTICE_PRIORITY.attention,
+        className: "easy-sync-notice-action",
+      });
+    }
+    const changed = next.length !== markers.length
+      || next.some((marker, index) =>
+        marker.pluginId !== markers[index]?.pluginId
+        || marker.noticedAt !== markers[index]?.noticedAt);
+    if (changed) {
+      this.writeUploadDowngradeNoticeMarkers(next);
+    }
+  }
+
+  private async persistCommunityPluginJoinOutcomes(
+    completed: Readonly<CommunityPluginRestoreSet>,
+    blocks: readonly Readonly<CommunityPluginJoinBlock>[],
+  ): Promise<void> {
+    const state = this.state;
+    const participation = state?.getCommunityPluginParticipation?.() ?? null;
+    if (!state?.isV2StateActive || !participation) {
+      await this.persistCompletedCommunityPluginRestores(completed);
+      return;
+    }
+    for (const block of blocks) {
+      const current = state.getCommunityPluginParticipation()
+        ?.pluginsById[block.pluginId];
+      if (
+        !current
+        || (
+          current.phase !== "join-requested"
+          && current.phase !== "restoring"
+          && !(current.phase === "participating" && !block.operationId)
+        )
+        || (block.operationId && current.operationId !== block.operationId)
+      ) continue;
+      await state.updateCommunityPluginParticipation({
+        type: "block",
+        pluginId: block.pluginId,
+        reason: block.reason,
+        operationId: block.operationId,
+      });
+    }
+    for (const pluginId of completed.files) {
+      const current = state.getCommunityPluginParticipation()
+        ?.pluginsById[pluginId];
+      if (current?.phase !== "restoring") continue;
+      await state.updateCommunityPluginParticipation({
+        type: "confirm-participating",
+        pluginId,
+        localBundleDigest: current.targetBundleDigest,
+      });
+    }
+    const committed = state.getCommunityPluginParticipation();
+    if (committed) this.applyCommunityPluginParticipationProjection(committed);
+    const legacyCompleted = {
+      files: [],
+      data: completed.data,
+    };
+    if (
+      legacyCompleted.files.length > 0
+      || legacyCompleted.data.length > 0
+    ) {
+      await this.persistCompletedCommunityPluginRestores(legacyCompleted);
+    }
+  }
+
+  /**
+   * No-restart host enablement (slice 3) for the explicit plugin downloads
+   * completed by this settled round. Enabled downloads are silent; every
+   * fallback surfaces one aggregated notice telling the user to enable the
+   * plugin manually after a restart. Never throws per plugin — the caller's
+   * try/catch only covers presentation failures.
+   */
+  private async enableCommunityPluginDownloads(
+    pluginIds: readonly string[],
+  ): Promise<void> {
+    const fallbackIds: string[] = [];
+    for (const pluginId of pluginIds) {
+      const outcome = await tryEnableDownloadedCommunityPlugin(
+        this.app,
+        pluginId,
+      );
+      if (outcome.kind === "fallback") fallbackIds.push(pluginId);
+    }
+    if (fallbackIds.length === 0) return;
+    const t = this.t;
+    const configDir = getConfigDir(this.app.vault);
+    const labels: string[] = [];
+    for (const pluginId of fallbackIds) {
+      labels.push(await this.describeUpdatedPluginBundle(
+        pluginId,
+        configDir,
+        false,
+      ));
+    }
+    const separator = this.i18n.language === "zh-cn" ? "、" : ", ";
+    this.noticeCenter?.show({
+      key: "sync-result:community-plugin-enable-fallback",
+      message: t("notice.communityPlugins.enableFallbackRestart", {
+        plugins: labels.join(separator),
+      }),
+      priority: NOTICE_PRIORITY.info,
+    });
+  }
+
+  private async commitSyncPathSettingsCandidate(
+    previous: Readonly<SyncPathSettings>,
+    candidate: Readonly<SyncPathSettings>,
+    options: Readonly<{
+      retireLocalFolderMoveHintRemoteIds?: readonly string[];
+      operationEpoch?: number;
+    }> = {},
+  ): Promise<void> {
+    if (!this.state || !this.scanner) {
+      throw new Error("Sync path state is unavailable");
+    }
+    const assertOperationCurrent = (): void => {
+      if (
+        options.operationEpoch !== undefined
+        && !this.operationLifecycle.isCurrent(options.operationEpoch)
+      ) {
+        throw new Error("Operation lifecycle was invalidated");
+      }
+    };
+    try {
+      await this.runSyncPathSettingsCandidateCommit({
+        previous,
+        candidate,
+        state: this.state,
+        assertOperationCurrent,
+        options,
+      });
+    } catch (error) {
+      if (
+        options.operationEpoch === undefined
+        || this.operationLifecycle.isCurrent(options.operationEpoch)
+      ) {
+        this.publishSyncPathSettings(previous);
+      }
+      throw error;
+    }
+  }
+
+  private async runSyncPathSettingsCandidateCommit(args: {
+    previous: Readonly<SyncPathSettings>;
+    candidate: Readonly<SyncPathSettings>;
+    state: StateManager;
+    assertOperationCurrent: () => void;
+    options: Readonly<{
+      retireLocalFolderMoveHintRemoteIds?: readonly string[];
+    }>;
+  }): Promise<void> {
+    const { previous, candidate, state, assertOperationCurrent, options } = args;
+    const migrationHold = state.activeV2MigrationHold;
+    if (migrationHold) {
+      const migrationAuthorization = state.planReviewAuthorization;
+      if (!migrationAuthorization) {
+        throw new Error(
+          "Cannot change sync paths without a valid migration review",
+        );
+      }
+      assertOperationCurrent();
+      const retired = await state.clearPlanReview(
+        migrationAuthorization,
+      );
+      assertOperationCurrent();
+      if (!retired || state.activeV2MigrationHold) {
+        throw new Error(
+          "Cannot change sync paths while the migration review remains active",
+        );
+      }
+    }
+    const previousSettingsFingerprint =
+      syncPathSettingsFingerprint(previous);
+    const targetSettingsFingerprint =
+      syncPathSettingsFingerprint(candidate);
+    const requiresCompleteRemoteIdentitySnapshot =
+      syncPathSettingsExpandFileScope(previous, candidate);
+    const { configDir } = getEasySyncPaths(
+      this.app.vault,
+      this.manifest.id,
+    );
+    const previousFolderScope = createFolderSyncScopeSnapshotV1(
+      this.buildSyncPathScanConfig(previous),
+      configDir,
+      this.manifest.id,
+    );
+    const targetFolderScope = createFolderSyncScopeSnapshotV1(
+      this.buildSyncPathScanConfig(candidate),
+      configDir,
+      this.manifest.id,
+    );
+    const v2RemoteFolderPaths =
+      state.isV2StateActive
+      && state.hasCompleteRemoteFolderIndex
+        ? state.remoteFolders.map((folder) => folder.path)
+        : [];
+    const previousIncludedFolderPaths = new Set(
+      v2RemoteFolderPaths.filter(
+        (path) => this.scanner!.shouldSyncFolderPath(path),
+      ),
+    );
+    assertOperationCurrent();
+    this.publishSyncPathSettings(candidate);
+    const expandedFolderPaths = v2RemoteFolderPaths.filter(
+      (path) =>
+        !previousIncludedFolderPaths.has(path)
+        && this.scanner!.shouldSyncFolderPath(path),
+    );
+    const includedFolderPaths = v2RemoteFolderPaths.filter(
+      (path) => this.scanner!.shouldSyncFolderPath(path),
+    );
+    const filesPolicy =
+      this.getEffectiveCommunityPluginSyncPolicy(candidate).files;
+    assertOperationCurrent();
+    await state.commitSyncPathSettingsChange(
+      (path) => this.scanner!.shouldSyncPath(path),
+      (data) => {
+        assertOperationCurrent();
+        this.writeSyncPathSettingsData(data, candidate);
+      },
+      filesPolicy.mode === "all"
+        ? undefined
+        : filesPolicy.mode === "selected"
+          ? filesPolicy.pluginIds.filter(
+              (pluginId) => isPluginSelected(filesPolicy, pluginId),
+            )
+          : [],
+      {
+        previousSettingsFingerprint,
+        targetSettingsFingerprint,
+        expandedFolderPaths,
+        includedFolderPaths,
+        folderScopeTransition: {
+          previous: previousFolderScope,
+          target: targetFolderScope,
+        },
+        requiresCompleteRemoteIdentitySnapshot,
+        retireLocalFolderMoveHintRemoteIds:
+          options.retireLocalFolderMoveHintRemoteIds,
+      },
+    );
+    assertOperationCurrent();
+    this.advanceCommunityPluginInventoryRevision();
+    this.updateStatusBar();
+    this.syncView?.render();
+    this.settingsTab?.refreshSyncState();
+  }
+
+  async updateExcludedFolders(excludedFolders: readonly string[]): Promise<void> {
+    await this.updateSyncPathSettings({
+      excludedFolders: [...excludedFolders],
+    });
+  }
+
+  async updateAutomaticHandlingPolicy(
+    policy: Readonly<AutomaticHandlingPolicy>,
+  ): Promise<void> {
+    const previous = this.automaticHandlingPolicy;
+    this.automaticHandlingPolicy = { ...policy };
+    try {
+      await this.saveSyncSettings();
+    } catch (error) {
+      this.automaticHandlingPolicy = previous;
+      throw error;
+    }
+    this.syncExecutor?.setAutomaticHandlingPolicy(this.automaticHandlingPolicy);
+    if (this.state?.planReviewActive) {
+      await this.state.clearPlanReview();
+    }
+    this.updateStatusBar();
+    this.syncView?.render();
+    this.settingsTab?.refreshSyncState();
+  }
+
+  private buildSyncPathScanConfig(
+    settings: Readonly<SyncPathSettings>,
+  ): Partial<ScanConfig> {
+    const paths = new Set<string>();
+    const effectiveCommunityPluginPolicy =
+      this.getEffectiveCommunityPluginSyncPolicy(settings);
+    const { configDir, pluginDir } = getEasySyncPaths(this.app.vault, this.manifest.id);
+    const pluginDirPrefix = `${pluginDir}/`;
+
+    // EasySync self-sync (always on — see ensureEasySyncSelfSyncScope)
+    if (settings.syncPluginFiles) paths.add(pluginDirPrefix);
+
+    // Editor
+    if (settings.syncEditorSettings) paths.add(`${configDir}/app.json`);
+
+    // Appearance settings
+    if (settings.syncAppearance) paths.add(`${configDir}/appearance.json`);
+
+    // Themes & snippets
+    if (settings.syncThemes) {
+      paths.add(`${configDir}/themes/`);
+      paths.add(`${configDir}/snippets/`);
+    }
+
+    // Hotkeys
+    if (settings.syncHotkeys) paths.add(`${configDir}/hotkeys.json`);
+
+    // Core plugins (built-in enable states only, no code files)
+    if (settings.syncCorePlugins) paths.add(`${configDir}/core-plugins.json`);
+
+    // Bookmarks
+    if (settings.syncBookmarks) paths.add(`${configDir}/bookmarks.json`);
+
+    // Community plugins (enable list + code files, no data.json).
+    // Selected mode keeps the plugin root observable while the scanner owns
+    // the per-plugin file filter.
+    if (settings.syncCommunityPlugins) {
+      paths.add(`${configDir}/plugins/`);
+    }
+
+    // Plugin data (data.json only)
+    if (settings.syncPluginData) {
+      paths.add(`${configDir}/plugins/`);
+    }
+
+    return {
+      includePaths: [...paths],
+      excludedFolders: [...settings.excludedFolders],
+      pathBlacklist: [...settings.pathBlacklist],
+      pathWhitelist: [...settings.pathWhitelist],
+      includeOwnPluginCode: settings.syncPluginFiles,
+      includePluginCode: settings.syncCommunityPlugins,
+      includePluginData: settings.syncPluginData,
+      pluginCodeSelection: {
+        ...effectiveCommunityPluginPolicy.files,
+        pluginIds: [...effectiveCommunityPluginPolicy.files.pluginIds],
+        ...(effectiveCommunityPluginPolicy.files.ignoredPluginIds
+          ? {
+              ignoredPluginIds: [
+                ...effectiveCommunityPluginPolicy.files.ignoredPluginIds,
+              ],
+            }
+          : {}),
+      },
+      pluginDataSelection: {
+        ...effectiveCommunityPluginPolicy.data,
+        pluginIds: [...effectiveCommunityPluginPolicy.data.pluginIds],
+        ...(effectiveCommunityPluginPolicy.data.ignoredPluginIds
+          ? {
+              ignoredPluginIds: [
+                ...effectiveCommunityPluginPolicy.data.ignoredPluginIds,
+              ],
+            }
+          : {}),
+      },
+    };
+  }
+
+  /** Apply the single effective local/remote path policy to the scanner. */
+  applySyncPathSettings(): void {
+    this.scanner?.setConfig(
+      this.buildSyncPathScanConfig(this.captureSyncPathSettings()),
+    );
+  }
+
+  getCommunityPluginParticipation():
+    DeviceCommunityPluginParticipationV1 | null {
+    return this.communityPluginParticipation
+      ? structuredClone(this.communityPluginParticipation)
+      : null;
+  }
+
+  isCommunityPluginFilesParticipationEnabled(pluginId: string): boolean {
+    return this.communityPluginParticipation
+      ? isDeviceCommunityPluginEnabled(
+          this.communityPluginParticipation,
+          pluginId,
+        )
+      : this.syncCommunityPlugins
+        && isPluginSelected(this.communityPluginSyncPolicy.files, pluginId);
+  }
+
+  private async retireExcludedCommunityPluginPendingState(
+    participation: Readonly<DeviceCommunityPluginParticipationV1>,
+    invalidatePlanReview = false,
+  ): Promise<void> {
+    const state = this.state;
+    if (!state) return;
+    const retireAll = !participation.scopeEnabled;
+    const retiredPluginIds = new Set(
+      Object.values(participation.pluginsById)
+        .filter((entry) =>
+          entry.phase === "excluded"
+          || entry.phase === "never-participated"
+          || entry.phase === "exit-requested"
+        )
+        .map((entry) => entry.pluginId),
+    );
+    if (
+      !retireAll
+      && retiredPluginIds.size === 0
+      && !invalidatePlanReview
+    ) return;
+    const configDir = getConfigDir(this.app.vault);
+    await state.retirePendingStateForPaths((path) => {
+      const managed = classifyCommunityPluginManagedPath(
+        path,
+        configDir,
+        this.manifest.id,
+      );
+      return Boolean(
+        managed
+        && managed.kind !== "enablement"
+        && (retireAll || retiredPluginIds.has(managed.pluginId)),
+      );
+    }, invalidatePlanReview);
+  }
+
+  async ensureCommunityPluginParticipationInitialized():
+    Promise<DeviceCommunityPluginParticipationV1 | null> {
+    const state = this.state;
+    if (
+      !state?.isV2StateActive
+      || typeof state.getCommunityPluginParticipation !== "function"
+    ) return null;
+    const existing = state.getCommunityPluginParticipation();
+    if (existing) {
+      this.applyCommunityPluginParticipationProjection(existing);
+      await this.resumeExcludedCommunityPluginCodeRecoveryScopeExit(existing);
+      await this.retireExcludedCommunityPluginPendingState(existing);
+      return this.getCommunityPluginParticipation();
+    }
+    if (typeof state.initializeCommunityPluginParticipation !== "function") {
+      return null;
+    }
+    if (this.communityPluginParticipationInitializationPromise) {
+      return this.communityPluginParticipationInitializationPromise;
+    }
+    this.communityPluginParticipationInitializationPromise = (async () => {
+      const inventory =
+        await this.buildCommunityPluginInventoryFromLoadedState();
+      const completeLocalBundlePluginIds: string[] = [];
+      const incompleteLocalBundlePluginIds: string[] = [];
+      const pluginRoot = `${getConfigDir(this.app.vault)}/plugins`;
+      for (const item of inventory) {
+        if (!item.local) continue;
+        const complete = !item.manifestIssue
+          && await this.app.vault.adapter.exists(
+            `${pluginRoot}/${item.id}/main.js`,
+          );
+        (complete
+          ? completeLocalBundlePluginIds
+          : incompleteLocalBundlePluginIds).push(item.id);
+      }
+      const historicalPluginIds = (state.baseSnapshot ?? []).flatMap(
+        (entry) => {
+          const managed = classifyCommunityPluginManagedPath(
+            entry.path,
+            getConfigDir(this.app.vault),
+            this.manifest.id,
+          );
+          return managed?.kind === "files" ? [managed.pluginId] : [];
+        },
+      );
+      const initialized = await state.initializeCommunityPluginParticipation({
+        filesEnabled: this.syncCommunityPlugins,
+        selection: this.communityPluginSyncPolicy.files,
+        knownPluginIds: inventory.map((item) => item.id),
+        completeLocalBundlePluginIds,
+        incompleteLocalBundlePluginIds,
+        historicallyParticipatedPluginIds: historicalPluginIds,
+      });
+      this.applyCommunityPluginParticipationProjection(initialized.state);
+      await this.resumeExcludedCommunityPluginCodeRecoveryScopeExit(
+        initialized.state,
+      );
+      await this.retireExcludedCommunityPluginPendingState(initialized.state);
+      return this.getCommunityPluginParticipation();
+    })().finally(() => {
+      this.communityPluginParticipationInitializationPromise = null;
+    });
+    return this.communityPluginParticipationInitializationPromise;
+  }
+
+  private async resumeExcludedCommunityPluginCodeRecoveryScopeExit(
+    participation: Readonly<DeviceCommunityPluginParticipationV1>,
+  ): Promise<boolean> {
+    const state = this.state;
+    if (
+      !state
+      || !this.scanner
+      || !this.syncExecutor
+      || (state.mutationLedger?.length ?? 0) === 0
+    ) return false;
+    const isPluginExcluded = (pluginId: string): boolean =>
+      !participation.scopeEnabled
+      || !isDeviceCommunityPluginEnabled(participation, pluginId);
+    const records = this.syncExecutor
+      .inspectSelectedPluginCodeUploadRecoveriesForScopeExit(
+        isPluginExcluded,
+      );
+    if (!records || records.length === 0) return false;
+    const settings = this.captureSyncPathSettings();
+    const targetSettingsFingerprint = syncPathSettingsFingerprint(settings);
+    if (state.syncPathSettingsFingerprint !== targetSettingsFingerprint) {
+      const filesPolicy =
+        this.getEffectiveCommunityPluginSyncPolicy(settings).files;
+      const remoteFolderPaths = state.isV2StateActive
+        && state.hasCompleteRemoteFolderIndex
+          ? state.remoteFolders.map((folder) => folder.path)
+          : [];
+      await state.commitSyncPathSettingsChange(
+        (path) => this.scanner!.shouldSyncPath(path),
+        (data) => this.writeSyncPathSettingsData(data, settings),
+        filesPolicy.mode === "all"
+          ? undefined
+          : filesPolicy.mode === "selected"
+            ? filesPolicy.pluginIds.filter(
+                (pluginId) => isPluginSelected(filesPolicy, pluginId),
+              )
+            : [],
+        {
+          previousSettingsFingerprint: state.syncPathSettingsFingerprint,
+          targetSettingsFingerprint,
+          expandedFolderPaths: [],
+          includedFolderPaths: remoteFolderPaths.filter(
+            (path) => this.scanner!.shouldSyncFolderPath(path),
+          ),
+          requiresCompleteRemoteIdentitySnapshot: false,
+          retainedMutationRecoveryScopeExit: records,
+        },
+      );
+    }
+    if (
+      JSON.stringify(state.getCommunityPluginParticipation())
+        !== JSON.stringify(participation)
+      || state.syncPathSettingsFingerprint !== targetSettingsFingerprint
+    ) {
+      throw new Error("Community-plugin scope exit is not durably committed");
+    }
+    const retired = await this.syncExecutor
+      .retireSelectedPluginCodeUploadRecoveriesForScopeExit(
+        isPluginExcluded,
+      );
+    if (!retired || (state.mutationLedger?.length ?? 0) > 0) {
+      throw new Error("Community-plugin scope exit recovery remains pending");
+    }
+    this.diag?.log(
+      "state",
+      "resumed durable community plugin scope exit before retiring old recovery evidence",
+      { records: records.length, mutations: 0 },
+    );
+    return true;
+  }
+
+  private async observeCommunityPluginLocalBundleFacts(
+    pluginIds: readonly string[],
+  ): Promise<Map<string, CommunityPluginLocalBundleFact>> {
+    const configDir = getConfigDir(this.app.vault).replace(/\/+$/, "");
+    const adapter = this.app.vault.adapter;
+    const facts = new Map<string, CommunityPluginLocalBundleFact>();
+    for (const pluginId of [...new Set(pluginIds)].sort()) {
+      const root = `${configDir}/plugins/${pluginId}`;
+      const [mainExists, manifestExists, stylesExists] = await Promise.all([
+        adapter.exists(`${root}/main.js`),
+        adapter.exists(`${root}/manifest.json`),
+        adapter.exists(`${root}/styles.css`),
+      ]);
+      facts.set(
+        pluginId,
+        mainExists && manifestExists
+          ? "complete"
+          : mainExists || manifestExists || stylesExists
+            ? "partial"
+            : "absent",
+      );
+    }
+    return facts;
+  }
+
+  private async reconcileCommunityPluginParticipationFromLocalBundles(
+    input: Readonly<{
+      trigger: string;
+      pluginIds?: readonly string[];
+      allowedLockHolder?: string;
+    }>,
+  ): Promise<{ followUpPluginIds: string[] }> {
+    const state = this.state;
+    if (
+      !state?.isV2StateActive
+      || typeof state.getCommunityPluginParticipation !== "function"
+    ) return { followUpPluginIds: [] };
+    const participation =
+      await this.ensureCommunityPluginParticipationInitialized();
+    if (!participation?.scopeEnabled) return { followUpPluginIds: [] };
+    const requested = input.pluginIds
+      ? new Set(normalizePluginIds(input.pluginIds, this.manifest.id))
+      : null;
+    const candidatePluginIds = new Set<string>();
+    for (const entry of Object.values(participation.pluginsById)) {
+      if (
+        (entry.phase === "participating"
+          || entry.phase === "exit-requested")
+        && (!requested || requested.has(entry.pluginId))
+      ) {
+        candidatePluginIds.add(entry.pluginId);
+      }
+    }
+    const localPluginIds = requested
+      ? [...requested]
+      : await this.listLocalCommunityPluginIdsForParticipation();
+    const autoParticipatePluginIds: string[] = [];
+    for (const pluginId of localPluginIds) {
+      const phase = participation.pluginsById[pluginId]?.phase;
+      if (phase === undefined || phase === "never-participated") {
+        candidatePluginIds.add(pluginId);
+        autoParticipatePluginIds.push(pluginId);
+      }
+    }
+    if (candidatePluginIds.size === 0) return { followUpPluginIds: [] };
+    const localBundleFacts = await this.observeCommunityPluginLocalBundleFacts(
+      [...candidatePluginIds],
+    );
+    const planned = planCommunityPluginLocalReconciliation({
+      participation,
+      localBundleFacts,
+      operationId: (pluginId) =>
+        `exit-${pluginId}-${Date.now()}-${
+          ++this.communityPluginParticipationOperationSequence
+        }`,
+      autoParticipatePluginIds,
+    });
+    if (planned.commands.length === 0) return planned;
+    await this.commitCommunityPluginParticipationCommands(
+      planned.commands,
+      {
+        allowedLockHolder: input.allowedLockHolder,
+        expectedParticipation: participation,
+        commitSyncPathSettingsTransition: true,
+        // F33 (2026-10-22): when a plugin's local bundle vanished while an
+        // intent-only code-upload record still blocks recovery, the
+        // participation exit is the only channel that can retire that record.
+        // This reuses the same strict scope-exit evidence gate as the manual
+        // exit (`inspectSelectedPluginCodeUploadRecoveriesForScopeExit`) and
+        // performs zero file writes; anything that gate refuses keeps today's
+        // fail-closed "recovery" behaviour.
+        allowPluginCodeRecoveryScopeExit: true,
+      },
+    );
+    this.diag?.log(
+      "state",
+      "reconciled community plugin participation from current local bundles",
+      {
+        trigger: input.trigger,
+        commands: planned.commands.length,
+        followUps: planned.followUpPluginIds.length,
+        autoParticipated: planned.autoParticipatedPluginIds.length,
+        mutations: 0,
+      },
+    );
+    if (
+      planned.autoParticipatedPluginIds.length > 0
+      && this.canScheduleLocalChangeAutoSync()
+      && this.autoSyncDirtyHint.mark()
+    ) {
+      this.diag.log(
+        "execute",
+        "local community plugin install scheduled normal auto sync",
+        {
+          debounceMs: this.autoSyncChangeDelaySeconds * 1_000,
+          plugins: planned.autoParticipatedPluginIds.length,
+        },
+      );
+    }
+    for (const pluginId of planned.followUpPluginIds) {
+      this.queueCommunityPluginLocalReconciliation(pluginId);
+    }
+    if (planned.followUpPluginIds.length > 0) {
+      this.scheduleCommunityPluginLocalReconciliationFollowUp();
+    }
+    return planned;
+  }
+
+  private async prepareCommunityPluginJoinsForSync(
+    reviewedAuthorization?: Readonly<PlanReviewAuthorization>,
+  ): Promise<{
+    authorizations: CommunityPluginJoinAuthorization[];
+  }> {
+    const state = this.state;
+    if (!state?.isV2StateActive) return { authorizations: [] };
+    if (typeof state.getCommunityPluginParticipation !== "function") {
+      return { authorizations: [] };
+    }
+    const currentReview = state.planReviewAuthorization;
+    const isExecutingCurrentReviewedPlan = Boolean(
+      state.planReviewActive
+      && reviewedAuthorization
+      && currentReview
+      && reviewedAuthorization.revision === currentReview.revision
+      && sameSyncScope(reviewedAuthorization.scope, currentReview.scope)
+      && sameCanonicalPlanIdentityV2(
+        reviewedAuthorization.canonicalIdentity,
+        currentReview.canonicalIdentity,
+      ),
+    );
+    if (
+      state.hasV2StateLoadRecoveryBlock
+      || state.hasV2RemoteScopeRecovery
+      || state.hasMutationLedgerCorruption
+      || state.hasMutationRecoveryQuarantineCorruption
+      || state.mutationLedger.length > 0
+      || (state.planReviewActive && !isExecutingCurrentReviewedPlan)
+    ) return { authorizations: [] };
+    const initial = await this.ensureCommunityPluginParticipationInitialized();
+    if (!initial?.scopeEnabled) return { authorizations: [] };
+    const pending = Object.values(initial.pluginsById).filter((entry) =>
+      isExecutingCurrentReviewedPlan
+        ? entry.phase === "restoring"
+        : entry.phase === "join-requested"
+          || entry.phase === "restoring"
+          || (entry.phase === "blocked"
+            && isCommunityPluginJoinBlockRecheckable(entry.blockedReason))
+    );
+    if (pending.length === 0) return { authorizations: [] };
+
+    const retryEntries = pending.map((entry) => {
+      if (entry.phase !== "blocked") return entry;
+      const rebindTarget = communityPluginJoinBlockRequiresTargetRebind(
+        entry.blockedReason,
+      );
+      return {
+          pluginId: entry.pluginId,
+          phase: "join-requested" as const,
+          ...(entry.operationId ? { operationId: entry.operationId } : {}),
+          ...(!rebindTarget && entry.targetCatalogRevision !== undefined
+            ? { targetCatalogRevision: entry.targetCatalogRevision }
+            : {}),
+          ...(!rebindTarget && entry.targetBundleDigest
+            ? { targetBundleDigest: entry.targetBundleDigest }
+            : {}),
+        };
+    });
+
+    const localBundleFacts = await this.observeCommunityPluginLocalBundleFacts(
+      retryEntries.map((entry) => entry.pluginId),
+    );
+
+    let catalog = this.getCurrentRemoteCommunityPluginCatalog();
+    const remoteRequired = retryEntries.some((entry) =>
+      entry.phase === "restoring"
+      || localBundleFacts.get(entry.pluginId) !== "complete"
+    );
+    const freshTargetRequired = pending.some((entry) =>
+      entry.phase === "blocked"
+      && communityPluginJoinBlockRequiresTargetRebind(entry.blockedReason)
+      && localBundleFacts.get(entry.pluginId) === "absent"
+    );
+    if (
+      remoteRequired
+      && (freshTargetRequired || !catalog || catalog.stale)
+    ) {
+      try {
+        catalog = await this.refreshCommunityPluginRemoteCatalog();
+      } catch (error) {
+        this.diag.warn(
+          "state",
+          "community plugin join catalog refresh failed closed",
+          describeError(error),
+        );
+        catalog = null;
+      }
+    }
+
+    const planned = planCommunityPluginJoins({
+      entries: retryEntries,
+      localBundleFacts,
+      catalog,
+      scope: state.remoteScope,
+    });
+    if (isExecutingCurrentReviewedPlan && planned.commands.length > 0) {
+      this.diag.warn(
+        "plan",
+        "reviewed community plugin restore authorization changed before execution",
+        {
+          commands: planned.commands.length,
+          mutations: 0,
+        },
+      );
+      return { authorizations: [] };
+    }
+    await this.commitCommunityPluginParticipationCommands(
+      planned.commands,
+      {
+        allowedLockHolder: "sync",
+        expectedParticipation: initial,
+        commitSyncPathSettingsTransition: true,
+      },
+    );
+    return { authorizations: planned.authorizations };
+  }
+
+  async updateCommunityPluginFilesScope(enabled: boolean): Promise<void> {
+    await this.ensureStateLoaded();
+    const state = this.state;
+    if (
+      !state?.isV2StateActive
+      || typeof state.getCommunityPluginParticipation !== "function"
+    ) {
+      await this.updateSyncPathSettings({
+        syncCommunityPlugins: enabled,
+      });
+      return;
+    }
+    await this.commitCommunityPluginParticipationCommands([{
+      type: "set-scope-enabled",
+      enabled,
+    }], {
+      commitSyncPathSettingsTransition: true,
+      allowPluginCodeRecoveryScopeExit: !enabled,
+    });
+  }
+
+  async updateCommunityPluginFilesSelection(
+    pluginId: string,
+    enabled: boolean,
+    options: Readonly<{ deferJoinSyncRound?: boolean }> = {},
+  ): Promise<void> {
+    await this.ensureStateLoaded();
+    const current = await this.ensureCommunityPluginParticipationInitialized();
+    if (!current) {
+      throw new SyncPathSettingsUpdateError("recovery");
+    }
+    const phase = current.pluginsById[pluginId]?.phase;
+    if (enabled && (
+      phase === "join-requested"
+      || phase === "restoring"
+      || phase === "participating"
+    )) return;
+    if (!enabled && (
+      phase === "excluded"
+      || phase === "never-participated"
+      || phase === "exit-requested"
+      || phase === undefined
+    )) return;
+    if (!enabled) {
+      await this.commitCommunityPluginParticipationCommands([{
+        type: "confirm-excluded",
+        pluginId,
+      }], {
+        expectedParticipation: current,
+        commitSyncPathSettingsTransition: true,
+        allowPluginCodeRecoveryScopeExit: true,
+      });
+      return;
+    }
+    const catalog = this.getCurrentRemoteCommunityPluginCatalog();
+    const catalogEntry = !catalog?.stale
+      ? catalog?.entries.find((entry) =>
+          entry.pluginId === pluginId && entry.bundleState === "complete"
+        )
+      : undefined;
+    await this.commitCommunityPluginParticipationCommand({
+      type: "request-join",
+      pluginId,
+      operationId:
+        `join-${Date.now()}-${
+          ++this.communityPluginParticipationOperationSequence
+        }`,
+      ...(catalog && catalogEntry
+        ? {
+            targetCatalogRevision: catalog.revision,
+            targetBundleDigest: catalogEntry.bundleDigest,
+          }
+        : {}),
+    });
+    try {
+      await this.clearCommunityPluginAdoptionFor(pluginId);
+    } catch (error) {
+      this.diag.warn(
+        "state",
+        "failed to clear community plugin adoption memory after an explicit join",
+        describeError(error),
+      );
+    }
+    this.clearCommunityPluginCloudCleanupMarker(pluginId);
+    if (options.deferJoinSyncRound === true) {
+      // Manager toggles stay decoupled from the sync engine (2026-09-09
+      // 批量反馈): the join request is already persisted here, and the round
+      // starts once the batch settles (manager close flush) or on the shared
+      // dirty trigger — starting one round per toggle locked later toggles
+      // out with the busy guard until the round finished.
+      this.scheduleCommunityPluginJoinSync("manager-toggle");
+      return;
+    }
+    this.startCommunityPluginJoinNow();
+  }
+
+  /**
+   * User-facing join tail for one-shot explicit actions (adoption
+   * 「下载并同步」): start one manual sync round right away so the download
+   * begins immediately, instead of waiting for the next automatic round
+   * (2026-09-09 用户反馈：点击后处理不立即开始，要等下次甚至重启后的同步).
+   * Manager toggles no longer use this tail per toggle — they defer to the
+   * dirty hint and the manager close flush (2026-09-09 批量反馈).
+   * The manual path is unaffected by `autoSyncPaused` and the sync interval.
+   * Falls back to the ordinary dirty-hint scheduling while the executor is
+   * busy, the operation lock is held, or the very first sync has not settled
+   * yet (join handling there belongs to the in-flight/startup flow).
+   */
+  private startCommunityPluginJoinNow(): void {
+    if (
+      this.opLock !== null
+      || !this.syncExecutor
+      || this.syncExecutor.isRunning
+      || !this.hasCompletedSyncState()
+    ) {
+      this.scheduleCommunityPluginJoinSync();
+      return;
+    }
+    void this.startManualSync().catch((error) => {
+      this.diag?.warn(
+        "state",
+        "community plugin join immediate sync did not start",
+        describeError(error),
+      );
+    });
+  }
+
+  /**
+   * Manager-close tail (2026-09-09 批量反馈): one round covering every join
+   * request batched while the manager was open. No-op without pending joins
+   * so plain scope views never start empty rounds; the round itself follows
+   * the same immediate-or-dirty-hint path as the adoption button.
+   */
+  flushPendingCommunityPluginJoinSync(): void {
+    if (!this.hasPendingCommunityPluginJoin()) return;
+    this.startCommunityPluginJoinNow();
+  }
+
+  /** Fixed-cadence sample of the run in flight; the sidebar calls this once
+   *  a second while open. beginRun rides the run's rising edge so tick
+   *  deltas measure the new run's cumulative counters from zero. */
+  pollTransferRateTick(): void {
+    const executor = this.syncExecutor;
+    const running = executor?.isRunning ?? false;
+    if (running && !this.transferRateRunWasActive) {
+      this.transferRateSampler.beginRun();
+    }
+    this.transferRateRunWasActive = running;
+    if (!running || !executor) return;
+    const snapshot = executor.getActiveTransferMetrics();
+    if (snapshot) this.transferRateSampler.sampleRunTick(snapshot, Date.now());
+  }
+
+  /** Passive connection-speed reading (EWMA over real transferred bytes —
+   *  no probe requests). Session-local: null until one payload-sized sample
+   *  has been measured (small-file sync stays hidden — 18 B per file measures
+   *  request cost, not the link; 用户拍板 2026-10-27). The pre-2026-10-24
+   *  reload seeding could never conjure a fresh reading anyway — the 10s
+   *  freshness window excludes stale seeds. */
+  getTransferRateReading(): TransferRateReading | null {
+    return this.transferRateSampler.getReading();
+  }
+
+  /**
+   * Pending new-plugin rows for the sidebar. Only returned while the
+   * community-plugin files scope is on; the persisted memory itself stays
+   * untouched, so re-enabling restores the same proposals.
+   */
+  getCommunityPluginAdoptionRows(): CommunityPluginAdoptionRow[] {
+    if (!this.syncCommunityPlugins) return [];
+    const state = this.state;
+    if (
+      !state
+      || typeof state.getCommunityPluginAdoptionMemory !== "function"
+    ) {
+      return [];
+    }
+    let memory: ReturnType<typeof state.getCommunityPluginAdoptionMemory>;
+    try {
+      memory = state.getCommunityPluginAdoptionMemory();
+    } catch {
+      return [];
+    }
+    return memory.pendingPluginIds.map((pluginId) => {
+      const fact = this.communityPluginAdoptionPlatformFacts.get(pluginId);
+      const name = fact?.name?.trim();
+      return {
+        pluginId,
+        displayName: name && name.length > 0 ? name : pluginId,
+        desktopOnly: fact?.isDesktopOnly === true,
+      };
+    });
+  }
+
+  /** Sidebar「跳过」：record the device-local ignore; the row retires. */
+  async skipCommunityPluginAdoption(pluginId: string): Promise<void> {
+    try {
+      await this.persistCommunityPluginAdoptionCommand({
+        type: "ignore",
+        pluginId,
+      });
+    } catch (error) {
+      // A failed memory write keeps the row visible; the next click retries.
+      // Never turn a side-bar action into an unhandled rejection.
+      this.diag.warn(
+        "state",
+        "failed to record the community plugin adoption ignore",
+        describeError(error),
+      );
+    }
+  }
+
+  /**
+   * Sidebar「下载并同步」：retire the pending row, then take the ordinary
+   * explicit join path. Auto-enable without restart is slice 3.
+   */
+  async downloadCommunityPluginAdoption(pluginId: string): Promise<void> {
+    try {
+      await this.persistCommunityPluginAdoptionCommand({
+        type: "remove-pending",
+        pluginId,
+      });
+    } catch (error) {
+      // Row retirement is best-effort: a failed write leaves the row visible
+      // and the join below still runs; a successful join makes the next
+      // round-end reconcile drop the row anyway.
+      this.diag.warn(
+        "state",
+        "failed to retire the community plugin adoption row before download",
+        describeError(error),
+      );
+    }
+    try {
+      // Queued behind an in-flight round instead of surfacing busy — the
+      // sidebar click must never bounce (2026-09-09 卡手反馈).
+      await this.runSettingsMutationWhenSyncIdle(() =>
+        this.updateCommunityPluginFilesSelection(pluginId, true),
+      );
+    } catch (error) {
+      const pathErrorCode =
+        typeof SyncPathSettingsUpdateError === "function"
+          && error instanceof SyncPathSettingsUpdateError
+        ? error.code
+        : null;
+      const key = pathErrorCode === "busy"
+        ? "notice.communityPlugins.downloadBusy"
+        : pathErrorCode === "recovery"
+          ? "notice.communityPlugins.downloadRecovery"
+          : "notice.communityPlugins.downloadFailed";
+      this.noticeCenter?.show({
+        key: "side-action:adoption:download-failed",
+        message: this.i18n.t(key),
+        priority: NOTICE_PRIORITY.info,
+      });
+      this.diag.warn(
+        "state",
+        "community plugin download did not start",
+        describeError(error),
+      );
+    }
+  }
+
+  private async persistCommunityPluginAdoptionCommand(
+    command: Readonly<CommunityPluginAdoptionMemoryCommand>,
+  ): Promise<void> {
+    const state = this.state;
+    if (
+      !state
+      || typeof state.getCommunityPluginAdoptionMemory !== "function"
+      || typeof state.updateCommunityPluginAdoptionMemory !== "function"
+    ) {
+      return;
+    }
+    const memory = state.getCommunityPluginAdoptionMemory();
+    const next = reduceCommunityPluginAdoptionMemory(
+      memory,
+      command,
+      this.manifest.id,
+    );
+    if (JSON.stringify(next) !== JSON.stringify(memory)) {
+      await state.updateCommunityPluginAdoptionMemory(next);
+    }
+  }
+
+  /** Reversal memory: an explicit join re-opens the plugin — forget the
+   *  ignore and drop any pending row for it. */
+  private async clearCommunityPluginAdoptionFor(
+    pluginId: string,
+  ): Promise<void> {
+    await this.persistCommunityPluginAdoptionCommand({
+      type: "clear-ignore",
+      pluginId,
+    });
+    await this.persistCommunityPluginAdoptionCommand({
+      type: "remove-pending",
+      pluginId,
+    });
+  }
+
+  /** Explicit re-join revokes the hidden cloud-cleanup state: drop the
+   *  marker so the row can never stay hidden after the user re-adopts the
+   *  plugin on this device. */
+  private clearCommunityPluginCloudCleanupMarker(pluginId: string): void {
+    try {
+      const markers = this.readCommunityPluginCloudCleanupMarkers();
+      const remaining = markers.filter((marker) =>
+        marker.pluginId !== pluginId
+      );
+      if (remaining.length !== markers.length) {
+        this.writeCommunityPluginCloudCleanupMarkers(remaining);
+      }
+    } catch (error) {
+      this.diag.warn(
+        "state",
+        "failed to clear the cloud cleanup marker after an explicit join",
+        describeError(error),
+      );
+    }
+  }
+
+  private async commitCommunityPluginParticipationCommand(
+    command: Readonly<DeviceCommunityPluginParticipationCommand>,
+  ): Promise<void> {
+    await this.commitCommunityPluginParticipationCommands([command]);
+  }
+
+  private async commitCommunityPluginParticipationCommands(
+    commands: readonly Readonly<DeviceCommunityPluginParticipationCommand>[],
+    options: Readonly<{
+      allowedLockHolder?: string;
+      expectedParticipation?: Readonly<DeviceCommunityPluginParticipationV1>;
+      commitSyncPathSettingsTransition?: boolean;
+      allowPluginCodeRecoveryScopeExit?: boolean;
+    }> = {},
+  ): Promise<void> {
+    if (commands.length === 0) return;
+    await this.ensureStateLoaded();
+    const state = this.state;
+    if (!state || !await this.ensureCommunityPluginParticipationInitialized()) {
+      throw new SyncPathSettingsUpdateError("recovery");
+    }
+    if (this.syncExecutor?.hasActivityInFlight) {
+      throw new SyncPathSettingsUpdateError("busy");
+    }
+    if (
+      state.hasV2StateLoadRecoveryBlock
+      || state.hasV2RemoteScopeRecovery
+      || state.hasMutationLedgerCorruption
+      || state.hasMutationRecoveryQuarantineCorruption
+    ) {
+      throw new SyncPathSettingsUpdateError("recovery");
+    }
+    let ownsLock = false;
+    if (this.opLock === null) {
+      this.acquireOpLock("community-plugin-participation");
+      ownsLock = true;
+    } else if (this.opLock !== options.allowedLockHolder) {
+      throw new SyncPathSettingsUpdateError("busy");
+    }
+    try {
+      await this.runCommunityPluginParticipationCommit({
+        commands,
+        state,
+        options,
+      });
+    } catch (error) {
+      const durableParticipation =
+        state.getCommunityPluginParticipation();
+      if (durableParticipation) {
+        this.applyCommunityPluginParticipationProjection(
+          durableParticipation,
+        );
+        this.advanceCommunityPluginInventoryRevision();
+        this.updateStatusBar();
+        this.syncView?.render();
+        this.settingsTab?.refreshSyncState();
+      }
+      throw error;
+    } finally {
+      if (ownsLock) this.releaseOpLock();
+    }
+  }
+
+  private async runCommunityPluginParticipationCommit(args: {
+    commands: readonly Readonly<DeviceCommunityPluginParticipationCommand>[];
+    state: StateManager;
+    options: Readonly<{
+      expectedParticipation?: Readonly<DeviceCommunityPluginParticipationV1>;
+      commitSyncPathSettingsTransition?: boolean;
+      allowPluginCodeRecoveryScopeExit?: boolean;
+    }>;
+  }): Promise<void> {
+    const { commands, state, options } = args;
+    if (
+      options.expectedParticipation
+      && JSON.stringify(state.getCommunityPluginParticipation())
+        !== JSON.stringify(options.expectedParticipation)
+    ) {
+      throw new SyncPathSettingsUpdateError("busy");
+    }
+    const previousParticipation = state.getCommunityPluginParticipation();
+    if (!previousParticipation) {
+      throw new Error("Community-plugin participation commit disappeared");
+    }
+    let targetParticipation = previousParticipation;
+    for (const command of commands) {
+      targetParticipation = reduceDeviceCommunityPluginParticipation(
+        targetParticipation,
+        command,
+        this.manifest.id,
+      );
+    }
+    const isPluginExcludedByTarget = (pluginId: string): boolean =>
+      !targetParticipation.scopeEnabled
+      || !isDeviceCommunityPluginEnabled(
+        targetParticipation,
+        pluginId,
+      );
+    const recoveryScopeExitRecords = (state.mutationLedger?.length ?? 0) > 0
+      && options.allowPluginCodeRecoveryScopeExit === true
+      && this.syncExecutor
+        ? this.syncExecutor
+            .inspectSelectedPluginCodeUploadRecoveriesForScopeExit(
+              isPluginExcludedByTarget,
+            )
+        : (state.mutationLedger?.length ?? 0) === 0 ? [] : null;
+    if (!recoveryScopeExitRecords) {
+      throw new SyncPathSettingsUpdateError("recovery");
+    }
+    if (recoveryScopeExitRecords.length > 0) {
+      await state.updateCommunityPluginParticipationBatch(commands);
+      const committed = state.getCommunityPluginParticipation();
+      if (
+        !committed
+        || JSON.stringify(committed) !== JSON.stringify(targetParticipation)
+      ) {
+        throw new Error("Community-plugin scope exit commit disappeared");
+      }
+      this.applyCommunityPluginParticipationProjection(committed);
+      if (!await this.resumeExcludedCommunityPluginCodeRecoveryScopeExit(
+        committed,
+      )) {
+        throw new SyncPathSettingsUpdateError("recovery");
+      }
+      await this.retireExcludedCommunityPluginPendingState(committed, true);
+      this.advanceCommunityPluginInventoryRevision();
+      this.updateStatusBar();
+      this.syncView?.render();
+      this.settingsTab?.refreshSyncState();
+      return;
+    }
+    const previousSyncPathSettings =
+      options.commitSyncPathSettingsTransition
+        ? this.captureSyncPathSettings()
+        : null;
+    let candidateSyncPathSettings: SyncPathSettings | null = null;
+    if (previousSyncPathSettings) {
+      this.applyCommunityPluginParticipationProjection(targetParticipation);
+      candidateSyncPathSettings = this.captureSyncPathSettings();
+      this.applyCommunityPluginParticipationProjection(previousParticipation);
+    }
+    const requiresSyncPathSettingsCommit = Boolean(
+      previousSyncPathSettings
+      && candidateSyncPathSettings
+      && syncPathSettingsFingerprint(previousSyncPathSettings)
+        !== syncPathSettingsFingerprint(candidateSyncPathSettings),
+    );
+    const participationStateChanged =
+      JSON.stringify(previousParticipation)
+        !== JSON.stringify(targetParticipation);
+    if (
+      requiresSyncPathSettingsCommit
+      && previousSyncPathSettings
+      && candidateSyncPathSettings
+    ) {
+      await this.commitSyncPathSettingsCandidate(
+        previousSyncPathSettings,
+        candidateSyncPathSettings,
+      );
+    } else {
+      await this.retireExcludedCommunityPluginPendingState(
+        targetParticipation,
+        participationStateChanged,
+      );
+    }
+    await state.updateCommunityPluginParticipationBatch(commands);
+    const committed = state.getCommunityPluginParticipation();
+    if (!committed) {
+      throw new Error("Community-plugin participation commit disappeared");
+    }
+    this.applyCommunityPluginParticipationProjection(committed);
+    if (!requiresSyncPathSettingsCommit) {
+      this.advanceCommunityPluginInventoryRevision();
+      this.updateStatusBar();
+      this.syncView?.render();
+      this.settingsTab?.refreshSyncState();
+    }
+  }
+
+  private applyCommunityPluginParticipationProjection(
+    participation: Readonly<DeviceCommunityPluginParticipationV1>,
+  ): void {
+    this.communityPluginParticipation = structuredClone(participation);
+    this.syncCommunityPlugins = participation.scopeEnabled;
+    const participatingPluginIds = Object.values(
+      participation.pluginsById,
+    ).filter((entry) => entry.phase === "participating")
+      .map((entry) => entry.pluginId)
+      .sort((left, right) => left.localeCompare(right));
+    const restoringPluginIds = Object.values(
+      participation.pluginsById,
+    ).filter((entry) => entry.phase === "restoring")
+      .map((entry) => entry.pluginId)
+      .sort((left, right) => left.localeCompare(right));
+    this.communityPluginSyncPolicy = {
+      ...cloneCommunityPluginSyncPolicy(this.communityPluginSyncPolicy),
+      files: {
+        mode: "selected",
+        pluginIds: [...participatingPluginIds, ...restoringPluginIds].sort(
+          (left, right) => left.localeCompare(right),
+        ),
+      },
+    };
+    if (!this.syncCommunityPlugins) this.syncPluginData = false;
+    this.applySyncPathSettings();
+    this.syncExecutor?.setCommunityPluginSyncPolicy(
+      this.getEffectiveCommunityPluginSyncPolicy(),
+    );
+  }
+
+  async getCommunityPluginInventory(): Promise<CommunityPluginInventoryItem[]> {
+    await this.ensureStateLoaded();
+    await this.ensureCommunityPluginParticipationInitialized();
+    await this.scheduleCommunityPluginLocalReconciliation("settings-open");
+    const inventory = await this.buildCommunityPluginInventoryFromLoadedState();
+    const participation = this.communityPluginParticipation;
+    const catalog = this.getCurrentRemoteCommunityPluginCatalog();
+    const catalogById = new Map(
+      (catalog?.entries ?? []).map((entry) => [entry.pluginId, entry]),
+    );
+    return inventory.map((item) => ({
+      ...item,
+      ...(item.name === null && catalogById.get(item.id)?.manifestName
+        ? { name: catalogById.get(item.id)!.manifestName! }
+        : {}),
+      ...(catalog?.stale && catalogById.has(item.id)
+        ? { remoteCatalogStale: true }
+        : {}),
+      ...(participation?.pluginsById[item.id]
+        ? {
+            participationPhase:
+              participation.pluginsById[item.id].phase,
+            ...(participation.pluginsById[item.id].blockedReason
+              ? {
+                  participationBlockedReason:
+                    participation.pluginsById[item.id].blockedReason,
+                }
+              : {}),
+          }
+        : {}),
+    }));
+  }
+
+  private async buildCommunityPluginInventoryFromLoadedState():
+    Promise<CommunityPluginInventoryItem[]> {
+    const remoteDataInventoryTrusted =
+      this.hasTrustedCommunityPluginRemoteInventoryLoaded("data");
+    const remoteScope = this.state?.remoteScope;
+    const catalog = this.getCurrentRemoteCommunityPluginCatalog();
+    const catalogPluginIds = catalog?.entries.map((entry) => entry.pluginId)
+      ?? [];
+    const catalogRemoteEntries = catalog
+      ? remoteCommunityPluginCatalogEntries(catalog)
+      : [];
+    const legacyRemoteDataEntries = remoteDataInventoryTrusted
+      ? (this.state?.remoteSnapshot ?? []).filter((entry) =>
+          classifyCommunityPluginManagedPath(
+            entry.path,
+            getConfigDir(this.app.vault),
+            this.manifest.id,
+          )?.kind === "data"
+        )
+      : [];
+    const configDir = getConfigDir(this.app.vault);
+    const historicalManagedPlugins = (this.state?.baseSnapshot ?? []).flatMap(
+      (entry) => {
+        const managed = classifyCommunityPluginManagedPath(
+          entry.path,
+          configDir,
+          this.manifest.id,
+        );
+        return managed && managed.kind !== "enablement"
+          ? [managed]
+          : [];
+      },
+    );
+    const historicalPluginIds = historicalManagedPlugins.map(
+      (managed) => managed.pluginId,
+    );
+    const historicalCodePluginIds = historicalManagedPlugins
+      .filter((managed) => managed.kind === "files")
+      .map((managed) => managed.pluginId);
+    const historicalDataPluginIds = historicalManagedPlugins
+      .filter((managed) => managed.kind === "data")
+      .map((managed) => managed.pluginId);
+    const participationPluginIds = Object.keys(
+      this.communityPluginParticipation?.pluginsById ?? {},
+    );
+    const participationExcludedPluginIds = Object.values(
+      this.communityPluginParticipation?.pluginsById ?? {},
+    ).filter((entry) =>
+      entry.phase === "excluded"
+      || entry.phase === "never-participated"
+      || entry.phase === "exit-requested"
+    ).map((entry) => entry.pluginId);
+    return buildCommunityPluginInventory(
+      this.app.vault.adapter,
+      configDir,
+      this.manifest.id,
+      [
+        ...this.communityPluginSyncPolicy.files.pluginIds,
+        ...this.communityPluginSyncPolicy.data.pluginIds,
+        ...(this.communityPluginSyncPolicy.data.ignoredPluginIds ?? []),
+        ...(this.communityPluginSyncPolicy.data.restoringPluginIds ?? []),
+        ...participationPluginIds,
+        ...catalogPluginIds,
+        ...historicalPluginIds,
+      ],
+      [...catalogRemoteEntries, ...legacyRemoteDataEntries],
+      participationExcludedPluginIds,
+      this.syncExecutor?.getMobileDesktopOnlyCommunityPluginIds() ?? [],
+      historicalDataPluginIds,
+      catalog && remoteScope && this.state
+        ? {
+            scope: remoteScope,
+            observations:
+              this.state.getCommunityPluginManifestObservations(),
+          }
+        : null,
+      [...historicalCodePluginIds, ...catalogPluginIds],
+    );
+  }
+
+  async refreshCommunityPluginRemoteCatalog():
+    Promise<RemoteCommunityPluginCatalogV1 | null> {
+    await this.ensureStateLoaded();
+    if (this.remoteCommunityPluginCatalogRefreshPromise) {
+      return this.remoteCommunityPluginCatalogRefreshPromise;
+    }
+    const state = this.state;
+    const onedrive = this.onedrive;
+    const scope = state?.remoteScope;
+    if (!state?.isV2StateActive || !onedrive || !scope) return null;
+    if (this.syncExecutor?.hasActivityInFlight) {
+      return this.getCurrentRemoteCommunityPluginCatalog();
+    }
+    this.remoteCommunityPluginCatalogRefreshPromise = (async () => {
+      const previous = this.getCurrentRemoteCommunityPluginCatalog();
+      try {
+        return await this.runDeltaFreshRemoteCommunityPluginCatalogRefresh({
+          state,
+          onedrive,
+          scope,
+          previous,
+        });
+      } catch (error) {
+        const now = Date.now();
+        if (
+          now - this.communityPluginCatalogLastRefreshFailureAt
+          > COMMUNITY_PLUGIN_CATALOG_REFRESH_FAILURE_WINDOW_MS
+        ) {
+          this.communityPluginCatalogRefreshConsecutiveFailures = 0;
+        }
+        this.communityPluginCatalogRefreshConsecutiveFailures++;
+        this.communityPluginCatalogLastRefreshFailureAt = now;
+        if (previous && sameSyncScope(previous.scope, state.remoteScope)) {
+          if (shouldMarkCommunityPluginCatalogStale(
+            previous,
+            this.communityPluginCatalogRefreshConsecutiveFailures,
+          )) {
+            try {
+              await state.setRemoteCommunityPluginCatalog(
+                markRemoteCommunityPluginCatalogStale(previous, now),
+              );
+              this.advanceCommunityPluginInventoryRevision();
+            } catch {
+              // The previous complete cache remains in memory. A disposable
+              // catalog failure must never become an empty-cloud assertion.
+            }
+          } else {
+            this.diag?.warn(
+              "state",
+              `community plugin catalog refresh failed — keeping the last trusted catalog (${this.communityPluginCatalogRefreshConsecutiveFailures}/${COMMUNITY_PLUGIN_CATALOG_STALE_FAILURE_THRESHOLD})`,
+              describeError(error),
+            );
+          }
+        }
+        throw error;
+      }
+    })().finally(() => {
+      this.remoteCommunityPluginCatalogRefreshPromise = null;
+    });
+    return this.remoteCommunityPluginCatalogRefreshPromise;
+  }
+
+  private async runDeltaFreshRemoteCommunityPluginCatalogRefresh(args: {
+    state: StateManager;
+    onedrive: OneDriveClient;
+    scope: NonNullable<StateManager["remoteScope"]>;
+    previous: RemoteCommunityPluginCatalogV1 | null;
+  }): Promise<RemoteCommunityPluginCatalogV1> {
+    const {
+      state,
+      onedrive,
+      scope,
+      previous,
+    } = args;
+    const delta = await onedrive.getDeltaByFolderId(scope.filesRootId);
+    if (!sameSyncScope(state.remoteScope, scope)) {
+      throw new Error("Remote plugin catalog scope changed during refresh");
+    }
+    const catalog = await buildRemoteCommunityPluginCatalog({
+      scope,
+      configDir: getConfigDir(this.app.vault),
+      items: delta.value,
+      manifestObservations:
+        state.getCommunityPluginManifestObservations(),
+      observedAt: Date.now(),
+      previous,
+      ownPluginId: this.manifest.id,
+    });
+    await state.setRemoteCommunityPluginCatalog(catalog);
+    try {
+      // Display-facts light reads (G6-1): once per unobserved remote-only
+      // bundle, read the manifest body so the inventory can show the real
+      // name and isDesktopOnly flag instead of falling back to the id.
+      // Failure is silent — the refresh result and the trusted catalog
+      // must never be affected by a presentation-evidence miss.
+      await ensureCommunityPluginDisplayFacts({
+        scope,
+        configDir: getConfigDir(this.app.vault),
+        catalog,
+        previousCatalog: previous,
+        storedObservations:
+          state.getCommunityPluginManifestObservations(),
+        fetchManifestText: async (_pluginId, member) => {
+          const content = await onedrive.downloadFile(
+            this.app.vault.getName(),
+            member.path,
+            undefined,
+            member.remoteId,
+            member.size,
+          );
+          return new TextDecoder("utf-8", { fatal: true }).decode(content);
+        },
+        persist: async (observations) => {
+          await state.setCommunityPluginManifestObservations(
+            observations,
+          );
+        },
+        now: Date.now(),
+      });
+    } catch (error) {
+      this.diag?.warn(
+        "state",
+        "community plugin display facts were not ensured; names may fall back to plugin ids",
+        describeError(error),
+      );
+    }
+    this.communityPluginCatalogRefreshConsecutiveFailures = 0;
+    this.communityPluginCatalogLastRefreshFailureAt = 0;
+    // Fresh enumeration: every complete entry is current server truth,
+    // so all of them count as reappearance evidence for the sweep.
+    this.sweepCommunityPluginCloudCleanupMarkers(
+      catalog.entries
+        .filter((entry) => entry.bundleState === "complete")
+        .map((entry) => entry.pluginId),
+    );
+    this.advanceCommunityPluginInventoryRevision();
+    return catalog;
+  }
+
+  private getCurrentRemoteCommunityPluginCatalog():
+    RemoteCommunityPluginCatalogV1 | null {
+    const state = this.state;
+    if (typeof state?.getRemoteCommunityPluginCatalog !== "function") {
+      return null;
+    }
+    const catalog = state.getRemoteCommunityPluginCatalog();
+    return catalog && sameSyncScope(catalog.scope, state?.remoteScope ?? null)
+      ? catalog
+      : null;
+  }
+
+  /**
+   * Round-end catalog freshness (slice 2): after an ordinary settled round,
+   * rebuild the remote community-plugin catalog from the round's committed
+   * remote index — zero extra network requests — and then light-read display
+   * facts for previously unseen bundles through the same bounded G6-1 probe
+   * the manager-open refresh uses. Any failure silently keeps the last
+   * trusted catalog and never changes the round outcome or scheduling.
+   */
+  private async syncRoundCommunityPluginCatalogUpdate(): Promise<void> {
+    const state = this.state;
+    const onedrive = this.onedrive;
+    const scope = state?.remoteScope;
+    if (!state?.isV2StateActive || !onedrive || !scope) return;
+    if (!this.syncCommunityPlugins) return;
+    if (this.syncExecutor?.hasActivityInFlight) return;
+    const committedIndex = state.getCommittedRemoteIndex();
+    if (
+      !committedIndex
+      || committedIndex.filesRootId !== scope.filesRootId
+    ) {
+      return;
+    }
+    const previous = this.getCurrentRemoteCommunityPluginCatalog();
+    try {
+      await this.runRoundCommunityPluginCatalogRefresh({
+        state,
+        onedrive,
+        scope,
+        committedIndex,
+        previous,
+      });
+    } catch (error) {
+      this.diag?.warn(
+        "state",
+        "round-end community plugin catalog update failed — keeping the last trusted catalog",
+        describeError(error),
+      );
+    }
+  }
+
+  private async runRoundCommunityPluginCatalogRefresh(args: {
+    state: StateManager;
+    onedrive: OneDriveClient;
+    scope: NonNullable<StateManager["remoteScope"]>;
+    committedIndex: NonNullable<
+      ReturnType<StateManager["getCommittedRemoteIndex"]>
+    >;
+    previous: RemoteCommunityPluginCatalogV1 | null;
+  }): Promise<void> {
+    const {
+      state,
+      onedrive,
+      scope,
+      committedIndex,
+      previous,
+    } = args;
+    const next = await buildRemoteCommunityPluginCatalogFromIndex({
+      scope,
+      configDir: getConfigDir(this.app.vault),
+      index: committedIndex,
+      manifestObservations: state.getCommunityPluginManifestObservations(),
+      observedAt: Date.now(),
+      previous,
+      ownPluginId: this.manifest.id,
+    });
+    // The committed index only covers anchored folders (joined plugins).
+    // Never overwrite the delta-fresh catalog with that narrower view:
+    // keep the superset so unanchored cloud bundles stay visible and rows
+    // do not flicker away between manager refreshes.
+    const catalog = await mergeRemoteCommunityPluginCatalogKeepingSuperset(
+      previous,
+      next,
+    );
+    await state.setRemoteCommunityPluginCatalog(catalog);
+    try {
+      await ensureCommunityPluginDisplayFacts({
+        scope,
+        configDir: getConfigDir(this.app.vault),
+        catalog,
+        previousCatalog: previous,
+        storedObservations:
+          state.getCommunityPluginManifestObservations(),
+        fetchManifestText: async (_pluginId, member) => {
+          const content = await onedrive.downloadFile(
+            this.app.vault.getName(),
+            member.path,
+            undefined,
+            member.remoteId,
+            member.size,
+          );
+          return new TextDecoder("utf-8", { fatal: true }).decode(content);
+        },
+        persist: async (observations) => {
+          await state.setCommunityPluginManifestObservations(observations);
+        },
+        now: Date.now(),
+      });
+    } catch (error) {
+      this.diag?.warn(
+        "state",
+        "round-end community plugin display facts were not ensured; names may fall back to plugin ids",
+        describeError(error),
+      );
+    }
+    this.communityPluginCatalogRefreshConsecutiveFailures = 0;
+    this.communityPluginCatalogLastRefreshFailureAt = 0;
+    // Sweep against the freshly built index evidence only, and only when
+    // that evidence postdates the cleanup: the committed index learns
+    // about this device's own cloud deletion one delta later, and a
+    // pre-cleanup bundle still listed there is NOT a reappearance
+    // (2026-09-15: sweeping the merged catalog dropped markers on stale
+    // "complete" bundles; 2026-09-16: the index evidence itself needs the
+    // freshness rule — no reflow while the deletion decision is syncing).
+    // Resurrection for unanchored bundles stays on the manager-open
+    // delta-fresh refresh above.
+    this.sweepCommunityPluginCloudCleanupMarkers(
+      planCommunityPluginCloudCleanupIndexReappearanceV1({
+        entries: next.entries,
+        markers: this.readCommunityPluginCloudCleanupMarkers(),
+      }),
+    );
+    // Sidebar adoption memory (slice 2): reconcile this device's pending
+    // new-plugin rows with the round's fresh facts. Ignored plugins stay
+    // suppressed; rows whose plugin joined, vanished, or turned partial
+    // disappear without tombstones. Failures degrade silently — the next
+    // settled round reconciles again.
+    try {
+      await this.runRoundCommunityPluginAdoptionReconcile({
+        state,
+        scope,
+        catalog,
+      });
+    } catch (error) {
+      this.diag?.warn(
+        "state",
+        "round-end community plugin adoption reconcile failed — pending rows stay unchanged",
+        describeError(error),
+      );
+    }
+  }
+
+  private async runRoundCommunityPluginAdoptionReconcile(args: {
+    state: StateManager;
+    scope: NonNullable<StateManager["remoteScope"]>;
+    catalog: RemoteCommunityPluginCatalogV1;
+  }): Promise<void> {
+    const { state, scope, catalog } = args;
+    const participation = this.communityPluginParticipation;
+    if (
+      participation
+      && typeof state.getCommunityPluginAdoptionMemory === "function"
+      && typeof state.updateCommunityPluginAdoptionMemory === "function"
+    ) {
+      const memoryStore = state.getCommunityPluginAdoptionMemory();
+      const manifestObservations =
+        state.getCommunityPluginManifestObservations();
+      const platformFacts = await resolveCommunityPluginPlatformFacts(
+        scope,
+        catalog,
+        manifestObservations,
+        this.manifest.id,
+      );
+      this.communityPluginAdoptionPlatformFacts = platformFacts;
+      // The adoption row promises "not yet downloaded on this device":
+      // a complete local bundle (installed, sync toggle off) fails that
+      // premise and rejoins via the manager toggle instead. Facts
+      // unavailable -> keep the pre-gate phase-only behavior.
+      let localBundleFacts:
+        | ReadonlyMap<string, CommunityPluginLocalBundleFact>
+        | undefined;
+      try {
+        localBundleFacts = await this
+          .observeCommunityPluginLocalBundleFacts(
+            catalog.entries
+              .filter((entry) => entry.bundleState === "complete")
+              .map((entry) => entry.pluginId),
+          );
+      } catch (error) {
+        this.diag?.warn(
+          "state",
+          "round-end community plugin local bundle facts were not observed; adoption rows keep phase-only gating",
+          describeError(error),
+        );
+      }
+      const candidates = await deriveCommunityPluginAdoptionCandidates({
+        scope,
+        catalog,
+        participation,
+        memory: memoryStore,
+        manifestObservations,
+        platformFacts,
+        localBundleFacts,
+        cleanupMarkerPluginIds:
+          this.readCommunityPluginCloudCleanupMarkers().map((marker) =>
+            marker.pluginId
+          ),
+        isMobile: this.platformFacts.isMobileApp,
+        ownPluginId: this.manifest.id,
+      });
+      const next = reduceCommunityPluginAdoptionMemory(
+        memoryStore,
+        { type: "reconcile-pending", pluginIds: candidates },
+        this.manifest.id,
+      );
+      if (JSON.stringify(next) !== JSON.stringify(memoryStore)) {
+        await state.updateCommunityPluginAdoptionMemory(next);
+        this.updateStatusBar();
+        this.syncView?.render();
+      }
+    }
+  }
+
+  onCommunityPluginInventoryRevision(
+    listener: (revision: number) => void,
+  ): () => void {
+    this.communityPluginInventoryRevisionListeners.add(listener);
+    return () => {
+      this.communityPluginInventoryRevisionListeners.delete(listener);
+    };
+  }
+
+  private advanceCommunityPluginInventoryRevision(): void {
+    this.communityPluginInventoryRevision += 1;
+    for (const listener of this.communityPluginInventoryRevisionListeners) {
+      try {
+        listener(this.communityPluginInventoryRevision);
+      } catch (error) {
+        this.diag.warn(
+          "lifecycle",
+          "community plugin inventory revision listener failed",
+          describeError(error),
+        );
+      }
+    }
+  }
+
+  private scheduleCommunityPluginInventoryRevisionForPaths(
+    kind: "create" | "modify" | "delete" | "rename",
+    ...entries: Array<{ path: string; isFolder: boolean }>
+  ): void {
+    if (!entries.some((entry) =>
+      this.isCommunityPluginInventoryPath(entry.path, kind, entry.isFolder)
+    )) {
+      return;
+    }
+    if (this.communityPluginInventoryRefreshTimer !== null) return;
+    this.communityPluginInventoryRefreshTimer = compatSetTimeout(() => {
+      this.communityPluginInventoryRefreshTimer = null;
+      this.advanceCommunityPluginInventoryRevision();
+    }, 100);
+  }
+
+  private isCommunityPluginInventoryPath(
+    path: string,
+    kind: "create" | "modify" | "delete" | "rename",
+    isFolder: boolean,
+  ): boolean {
+    const configDir = getConfigDir(this.app.vault).replace(/\/+$/, "");
+    const pluginsRoot = `${configDir}/plugins`;
+    if (path === pluginsRoot) return isFolder && kind !== "modify";
+    const prefix = `${pluginsRoot}/`;
+    if (!path.startsWith(prefix)) return false;
+    const parts = path.slice(prefix.length).split("/");
+    const pluginId = normalizePluginIds([parts[0]], this.manifest.id)[0];
+    if (!pluginId || pluginId !== parts[0]) return false;
+    if (parts.length === 1) return isFolder && kind !== "modify";
+    if (isFolder || parts.length !== 2) return false;
+    const fileName = parts[1];
+    if (!["main.js", "manifest.json", "styles.css", "data.json"].includes(
+      fileName,
+    )) return false;
+    return kind !== "modify" || fileName === "manifest.json";
+  }
+
+  async hasTrustedCommunityPluginRemoteInventory(
+    column: "files" | "data" = "files",
+  ): Promise<boolean> {
+    await this.ensureStateLoaded();
+    return this.hasTrustedCommunityPluginRemoteInventoryLoaded(column);
+  }
+
+  private hasTrustedCommunityPluginRemoteInventoryLoaded(
+    column: "files" | "data",
+  ): boolean {
+    const catalog = this.getCurrentRemoteCommunityPluginCatalog();
+    if (column === "files") return Boolean(catalog && !catalog.stale);
+    return this.state?.remoteScope != null
+      && this.state.hasCompleteRemoteFolderIndex;
+  }
+
+  /** Apply diagnostic logging setting. Public so settings-tab can call it. */
+  applyDiagnosticSetting(): void {
+    if (this.diagLogEnabled) {
+      this.diag.enableAll();
+    } else {
+      this.diag.clear();
+    }
+  }
+
+  /** Apply the notification popups level to the notice center. Public so
+   *  settings-tab can call it; also applied after loadSyncSettings. */
+  applyNotificationPopups(): void {
+    this.noticeCenter.setNotificationPopups(this.notificationPopups);
+  }
+
+  /** Generate the report and return its file name, or undefined when the
+   *  generation failed (already noticed). `resetSnapshot` marks the
+   *  reset-flow capture: that report is the raw pre-reset evidence and must
+   *  not embed the previous reset's history inside itself. */
+  async generateDiagnosticReport(
+    resetSnapshot = false,
+  ): Promise<string | undefined> {
+    try {
+      return await this.buildDiagnosticReportFile(resetSnapshot);
+    } catch (error) {
+      this.diag.error(
+        "state",
+        "diagnostic report failed",
+        describeError(error),
+      );
+      this.noticeCenter.show({
+        key: "diagnostic-report-save-failed",
+        message: this.i18n.t("notice.diagnosticReportSaveFailed"),
+        priority: NOTICE_PRIORITY.action,
+      });
+      return undefined;
+    }
+  }
+
+  /** Build and write the report file. The success notice fires only after the
+   *  write lands; any failure throws so the caller reports it once. */
+  private async buildDiagnosticReportFile(resetSnapshot = false): Promise<string> {
+    const now = new Date();
+    const reportI18n = new I18n("zh-cn");
+    const formatActionLabel = (type?: SyncActionType): string =>
+      type
+        ? reportI18n.t(resolveSyncActionPresentation(type).labelKey)
+        : "—";
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const tsFile = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    const fileName = `EasySync 诊断报告 ${tsFile}.md`;
+
+    const fmt = (ts: number) => {
+      if (!ts) return "—";
+      const d = new Date(ts);
+      return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    };
+    const fmtShort = (ts: number) => {
+      if (!ts) return "—";
+      const d = new Date(ts);
+      return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    };
+
+    try {
+      await this.ensureStateLoaded();
+    } catch (error) {
+      // A load failure is itself reportable. Keep generating the report from
+      // the StateManager's fail-closed evidence instead of hiding the export.
+      this.diag.warn(
+        "state",
+        "diagnostic report state load failed",
+        describeError(error),
+      );
+    }
+    const auth = this.auth?.authState;
+    const reportState = this.state;
+    // Reset lineage for this report: suppressed in the reset-flow snapshot so
+    // that file stays the raw "before" evidence (no nested prior-reset data).
+    const resetFacts = resetSnapshot ? null : this.lastResetFacts;
+    const reportScope = reportState?.remoteScope;
+    const v2StorageAuthority =
+      reportState?.activeV2StorageAuthorityEvidence ?? null;
+    const v2StateLoadBlock = reportState?.v2StateLoadRecoveryBlock;
+    const v2RemoteScopeRecovery = reportState?.activeV2RemoteScopeRecovery;
+    const mutationRecoveryDisplay = this.getMutationRecoveryDisplayState();
+    const mutationRecoveryScheduler =
+      this.mutationRecoveryScheduler.snapshot;
+    const [
+      accountFingerprint,
+      driveFingerprint,
+      vaultFingerprint,
+      filesRootFingerprint,
+      v2DatabaseFingerprint,
+    ] = await Promise.all([
+      fingerprintOpaqueValue(reportScope?.accountId || reportState?.boundAccountId),
+      fingerprintOpaqueValue(reportScope?.driveId),
+      fingerprintOpaqueValue(reportScope?.vaultFolderId),
+      fingerprintOpaqueValue(reportScope?.filesRootId),
+      fingerprintOpaqueValue(v2StorageAuthority?.databaseId ?? undefined),
+    ]);
+    let communityPluginInventory: CommunityPluginInventoryItem[] = [];
+    let communityPluginRemoteInventoryTrusted =
+      this.hasTrustedCommunityPluginRemoteInventoryLoaded("files");
+    try {
+      communityPluginInventory = await this.getCommunityPluginInventory();
+    } catch (error) {
+      communityPluginRemoteInventoryTrusted = false;
+      this.diag.warn(
+        "state",
+        "diagnostic report could not read community plugin inventory",
+        describeError(error),
+      );
+    }
+    const communityPluginSummary = await summarizeCommunityPluginSync({
+      policy: this.getEffectiveCommunityPluginSyncPolicy(),
+      inventory: communityPluginInventory,
+      remoteInventoryTrusted: communityPluginRemoteInventoryTrusted,
+    });
+    const { pluginDir, storageLayoutVersion } = getEasySyncPaths(
+      this.app.vault,
+      this.manifest.id,
+    );
+    let buildFingerprint = "不可用";
+    try {
+      const mainPath = `${pluginDir}/main.js`;
+      const [mainRaw, mainStat] = await Promise.all([
+        this.app.vault.adapter.readBinary(mainPath),
+        this.app.vault.adapter.stat(mainPath),
+      ]);
+      const mainHash = await sha256Hex(mainRaw);
+      buildFingerprint = `sha256:${mainHash.slice(0, 16)} (${mainRaw.byteLength}B, mtime ${fmt(mainStat?.mtime ?? 0)})`;
+    } catch {
+      // A missing artifact must not prevent the report itself from being generated.
+    }
+    const lines: string[] = [];
+    const platformLabel = this.platformFacts.isIosApp ? "iOS" : this.platformFacts.isAndroidApp ? "Android" : this.platformFacts.isMobileApp ? "Mobile" : "Desktop";
+    const automaticActivity = this.syncExecutor?.isRunning
+      ? "同步中"
+      : this.opLock !== null
+        ? `其他操作占用中（${reportI18n.t(this.opHolderNameKey(this.opLock))}）`
+        : "空闲";
+
+    const renderCtx: DiagnosticReportRenderContext = {
+      lines,
+      reportI18n,
+      fmt,
+      fmtShort,
+      formatActionLabel,
+      now,
+      auth,
+      reportState,
+      resetFacts,
+      platformLabel,
+      automaticActivity,
+      buildFingerprint,
+      communityPluginInventory,
+      communityPluginSummary,
+      mutationRecoveryDisplay,
+      mutationRecoveryScheduler,
+      storageLayoutVersion,
+      v2RemoteScopeRecovery,
+      v2StateLoadBlock,
+      v2StorageAuthority,
+      accountFingerprint,
+      driveFingerprint,
+      vaultFingerprint,
+      filesRootFingerprint,
+      v2DatabaseFingerprint,
+    };
+
+    const headerValues = await this.renderDiagnosticHeaderSection(renderCtx);
+    const historyValues = this.renderDiagnosticSyncHistorySection(renderCtx);
+    this.renderDiagnosticFailedFileDetailsSection(renderCtx, historyValues);
+    this.renderDiagnosticConnectionSpeedSection(renderCtx, historyValues);
+    this.renderDiagnosticDownloadTransferSection(renderCtx, headerValues);
+    await this.renderDiagnosticPendingIssuesSection(renderCtx, historyValues);
+    await this.renderDiagnosticAnomaliesSection(renderCtx, {
+      ...headerValues,
+      formatSize: historyValues.formatSize,
+    });
+
+    await this.app.vault.adapter.write(fileName, lines.join("\n"));
+    this.noticeCenter.show({
+      key: "diagnostic-report-created",
+      message: this.i18n.t("notice.diagnosticReportGenerated", { fileName }),
+      priority: NOTICE_PRIORITY.action,
+    });
+    return fileName;
+  }
+
+  /**
+   * 片④ 单向模式的本机独有条目（侧栏「需要处理」区）。侧栏与桌面状态栏都读
+   * 这一份记录族（单一真源）；双向模式不出现这类条目。
+   */
+  getLocalOnlyRows(): LocalOnlyEntryRowV1[] {
+    if (this.syncDirection !== "one-way") return [];
+    const state = this.state;
+    if (!state) return [];
+    const memory = state.localOnlyIgnoreMemory;
+    return projectLocalOnlyEntryRowsV1({
+      copies: state.localOnlyCopyEntries,
+      created: state.localOnlyCreatedEntries,
+    }).filter((entry) => !isLocalOnlyPathIgnored(memory, entry.targetPath));
+  }
+
+  /**
+   * 片⑤「留在本机，不再提醒」：记住这一条、刷新侧栏（行消失即反馈，不加
+   * Notice——文案稿没有该键）。忽略只影响提醒：文件仍在原处、不会被自动上传，
+   * 片② 记录也照常维护。
+   */
+  async ignoreLocalOnlyEntry(targetPath: string): Promise<void> {
+    const state = this.state;
+    if (!state || this.syncDirection !== "one-way") return;
+    await state.ignoreLocalOnlyPath(targetPath);
+    this.updateStatusBar();
+    this.syncView?.render();
+    this.settingsTab?.refreshSyncState();
+  }
+
+  /** 片④ 单向模式的本机独有条目数（桌面状态栏「需要注意」与侧栏同源）。 */
+  getLocalOnlyEntryCount(): number {
+    return this.getLocalOnlyRows().length;
+  }
+
+  /**
+   * 片⑥ 开启门槛的两个数量。取一份本机扫描事实（只读、无网络）数"改过、
+   * 还没上传"的文件——它们会在切换后一次性变成副本；待确认的云端删除数
+   * 直接来自状态。扫描失败按 0 呈现，不阻断门槛（用户仍可切换）。
+   */
+  async getSyncModeGateCounts(): Promise<{
+    edited: number;
+    blockedDeletes: number;
+  }> {
+    const state = this.state;
+    const scanner = this.scanner;
+    if (!state || !scanner) return { edited: 0, blockedDeletes: 0 };
+    let localEntries: readonly LocalFileEntry[] = [];
+    try {
+      const scan = await scanner.scanAll();
+      localEntries = scan.entries;
+    } catch (error) {
+      this.diag.warn(
+        "state",
+        "sync-mode gate count fell back to zero: local scan failed",
+        describeError(error),
+      );
+    }
+    return {
+      edited: countLocalOnlyEditedFacts({
+        localEntries,
+        baseEntries: state.baseSnapshot,
+        remoteEntries: state.remoteSnapshot,
+        configDir: getConfigDir(this.app.vault),
+      }),
+      blockedDeletes: state.pendingRemoteDeletes.length,
+    };
+  }
+
+  /** 片⑥ 关闭告知的两个数量（本机独有条目总数／其中被"不再提醒"的）。 */
+  getSyncModeDisableCounts(): { pendingUploads: number; dismissed: number } {
+    const state = this.state;
+    if (!state) return { pendingUploads: 0, dismissed: 0 };
+    const facts = countLocalOnlyRowFacts({
+      rows: projectLocalOnlyEntryRowsV1({
+        copies: state.localOnlyCopyEntries,
+        created: state.localOnlyCreatedEntries,
+      }),
+      memory: state.localOnlyIgnoreMemory,
+    });
+    return { pendingUploads: facts.total, dismissed: facts.dismissed };
+  }
+
+  /** 设置页动作在弹框前捕获的操作 epoch（与范围设置变更同形）。 */
+  captureOperationEpoch(): number {
+    return this.operationLifecycle.capture();
+  }
+
+  /**
+   * 片⑥ 模式切换（一次可恢复的设置事务）。
+   *
+   * 前置门＝现役 `isSyncPathBusy()`（`opLock !== null || executor.hasActivityInFlight`，
+   * 后者＝`running || hasSideActionsInFlight`）——它覆盖"同步进行中""side action
+   * 在途"与"其它操作占用（重置／登出／范围设置等）"。忙碌时按现役 `rejectBusy`
+   * 形状指名占用者并返回 false（不静默失败），由调用方把下拉拨回。
+   *
+   * 第二道前置门＝未结算 mutation（台账非空，以及损坏／隔离／V2 载入阻塞——同口径
+   * 见 `hasUnsettledMutationRecovery` 的判定）。未结算的出站 intent 会在下一轮
+   * `recoverMutationLedger` 里被结算／补完，那会在单向模式下产生一笔云端写入，
+   * 与模式承诺冲突，故命中即拒绝且零写入。呈现复用现成文案
+   * `notice.sideActionPendingWork`（语义正合：还有未完成的恢复处理），不新增键。
+   *
+   * 写入＝单键设置（原子）：失败回退字段并抛出（调用方复用
+   * `notice.settingsSaveFailed`）；成功后推给执行器，并作废在审计划（方向改变会
+   * 改变计划语义，照自动处理策略的现役处理）。`assertOperationCurrent` 用调用方
+   * 给的 operation epoch（与范围设置变更同形）。
+   *
+   * **不动账本**：只写 `sync-direction`，基线／V2 权威与索引／远端协议对象一律
+   * 不碰；关闭方向把本机独有条目按 per-class 作废退场（记录退场，文件与忽略
+   * 记忆都保留）。
+   */
+  async updateSyncDirection(
+    direction: SyncDirection,
+    operationEpoch?: number,
+  ): Promise<boolean> {
+    const assertOperationCurrent = (): void => {
+      if (
+        operationEpoch !== undefined
+        && !this.operationLifecycle.isCurrent(operationEpoch)
+      ) {
+        throw new Error("Operation lifecycle was invalidated");
+      }
+    };
+    assertOperationCurrent();
+    if (direction === this.syncDirection) return true;
+    if (this.isSyncPathBusy()) {
+      this.showSyncModeBusyNotice();
+      return false;
+    }
+    if (this.hasUnsettledMutationRecovery()) {
+      this.showSyncModePendingWorkNotice();
+      return false;
+    }
+    const previous = this.syncDirection;
+    this.syncDirection = direction;
+    try {
+      await this.saveSyncSettings();
+    } catch (error) {
+      this.syncDirection = previous;
+      throw error;
+    }
+    assertOperationCurrent();
+    this.syncExecutor?.setSyncDirection(direction);
+    if (direction === "two-way") {
+      await this.retireLocalOnlyEntriesForDisabledMode();
+    }
+    if (this.state?.planReviewActive) {
+      await this.state.clearPlanReview();
+    }
+    this.diag.log("state", "sync direction committed", {
+      direction,
+      mutations: 0,
+    });
+    this.updateStatusBar();
+    this.syncView?.render();
+    this.settingsTab?.refreshSyncState();
+    return true;
+  }
+
+  /**
+   * 片⑥ 关闭方向：未处置的本机独有条目按现役 per-class 作废形状退场
+   * （照 `expire*Decision`：条目失去意义即退场）。只退记录——文件仍在原处、
+   * 忽略记忆保留、账本一字不动。
+   */
+  private async retireLocalOnlyEntriesForDisabledMode(): Promise<void> {
+    const state = this.state;
+    if (!state) return;
+    const rows = projectLocalOnlyEntryRowsV1({
+      copies: state.localOnlyCopyEntries,
+      created: state.localOnlyCreatedEntries,
+    });
+    if (rows.length === 0) return;
+    await state.retireLocalOnlyEntries({
+      paths: rows.map((row) => row.path),
+      copyPaths: rows
+        .filter((row) => row.kind === "edited")
+        .map((row) => row.targetPath),
+    });
+  }
+
+  /** 忙碌时的现役形状：指名占用者，不静默失败。 */
+  private showSyncModeBusyNotice(): void {
+    const reason = this.syncExecutor?.isRunning
+      ? this.i18n.t("result.alreadyRunning")
+      : this.opLock !== null
+        ? this.i18n.t("result.lockBusyWithHolder", {
+            holder: this.i18n.t(this.opHolderNameKey(this.opLock)),
+          })
+        : this.i18n.t("result.lockBusy");
+    this.noticeCenter?.show({
+      key: "settings:sync-mode-busy",
+      message: reason,
+      priority: NOTICE_PRIORITY.attention,
+      className: "easy-sync-notice-action",
+    });
+  }
+
+  /**
+   * 未结算 mutation 的第二道门（同口径见 `hasUnsettledMutationRecovery`）：
+   * 台账非空，或账本／隔离区损坏、V2 载入阻塞——都属"恢复未完成"，此时切换
+   * 方向会让下一轮的恢复结算在单向模式下补完一笔云端写入。
+   */
+  private hasUnsettledMutationRecovery(): boolean {
+    const state = this.state;
+    if (!state) return false;
+    return state.mutationLedger.length > 0
+      || state.hasMutationLedgerCorruption
+      || state.hasMutationRecoveryQuarantineCorruption
+      || state.hasV2StateLoadRecoveryBlock;
+  }
+
+  /** 未结算恢复的现役呈现形状（复用 `notice.sideActionPendingWork`，不新增键）。 */
+  private showSyncModePendingWorkNotice(): void {
+    this.noticeCenter?.show({
+      key: "settings:sync-mode-pending-work",
+      message: this.i18n.t("notice.sideActionPendingWork"),
+      priority: NOTICE_PRIORITY.attention,
+      className: "easy-sync-notice-action",
+    });
+  }
+
+  /** Diagnostic report section (extracted verbatim; pushes into ctx.lines). */
+  private async renderDiagnosticHeaderSection(ctx: DiagnosticReportRenderContext): Promise<Pick<DiagnosticReportProvidedValues, "diagAll" | "runSummaries" | "remoteScopeRecoverySummary">> {
+    const {
+      accountFingerprint,
+      auth,
+      automaticActivity,
+      buildFingerprint,
+      communityPluginInventory,
+      communityPluginSummary,
+      driveFingerprint,
+      filesRootFingerprint,
+      fmt,
+      fmtShort,
+      lines,
+      mutationRecoveryDisplay,
+      now,
+      platformLabel,
+      reportI18n,
+      reportState,
+      resetFacts,
+      storageLayoutVersion,
+      v2DatabaseFingerprint,
+      v2RemoteScopeRecovery,
+      v2StateLoadBlock,
+      v2StorageAuthority,
+      vaultFingerprint,
+    } = ctx;
+    // ── Header ──
+    lines.push("# EasySync 诊断报告");
+    lines.push("");
+    lines.push(`**生成时间**: ${fmt(now.getTime())}`);
+    lines.push(`**插件版本**: ${this.manifest.version}`);
+    lines.push(`**仓库名**: ${this.app.vault.getName()}`);
+    lines.push(`**登录账号**: ${auth?.isLoggedIn ? auth.displayName || "已登录" : "未登录"}`);
+    const accountTypeLabel = !auth?.isLoggedIn
+      ? "未登录"
+      : auth.userType === "Guest"
+        ? "访客"
+        : auth.userType === "Member"
+          ? "成员"
+          : "未知";
+    const grantedScopesLabel = !auth?.isLoggedIn
+      ? "未登录"
+      : (auth.grantedScopes?.trim() || "未知");
+    lines.push(`**账号类型**: ${accountTypeLabel}`);
+    lines.push(`**登录授权范围**: ${grantedScopesLabel}`);
+    lines.push(`**平台**: ${platformLabel}`);
+    lines.push(`**同步模式**: ${this.syncDirection === "one-way" ? "单向同步（本机不上传笔记与附件）" : "双向同步"}`);
+    lines.push("");
+    lines.push(`> ${reportI18n.t("diagnosticReport.feedbackNote")}`);
+    lines.push(`> ${reportI18n.t("diagnosticReport.redactionNote")}`);
+    lines.push("");
+    if (resetFacts) {
+      const resetVariantLabel =
+        resetFacts.variant === "forced"
+          ? "强制重置"
+          : resetFacts.variant === "isolated"
+            ? "隔离保留重置"
+            : "普通重置";
+      lines.push("## 重置历史");
+      lines.push("");
+      lines.push(
+        `**最近一次重置**: ${fmt(resetFacts.resetAt)}（${resetVariantLabel}）· EasySync ${resetFacts.pluginVersion}`,
+      );
+      lines.push(
+        `**重置前报告**: ${resetFacts.preResetReportFile
+          ? `\`${resetFacts.preResetReportFile}\`（核心内容已附于本报告末尾「重置前档案摘录」）`
+          : "未生成（重置时报告生成失败）"}`,
+      );
+      lines.push("");
+    }
+    lines.push("## 当前同步概况");
+    lines.push("");
+    lines.push(...formatDiagnosticAutomaticSyncSummary({
+      intervalMinutes: this.syncInterval,
+      paused: this.autoSyncPaused,
+      changeDelaySeconds: this.autoSyncChangeDelaySeconds,
+      startupSyncEnabled: this.autoSyncOnStartup,
+      dirtyPending: this.autoSyncDirtyHint.pending,
+      activity: automaticActivity,
+    }));
+    lines.push(`**上次同步**: ${fmt(this.state?.lastSyncTime ?? 0)}`);
+    if (mutationRecoveryDisplay) {
+      const pathlessRecovery = {
+        ...mutationRecoveryDisplay,
+        firstPath: null,
+      };
+      lines.push(
+        `**未完成操作核对**: ${mutationRecoveryStatusLabel(
+          pathlessRecovery,
+          reportI18n.t.bind(reportI18n),
+        )}；${mutationRecoveryStatusDetail(
+          pathlessRecovery,
+          reportI18n.t.bind(reportI18n),
+          fmtShort,
+        )}`,
+      );
+    } else {
+      lines.push("**未完成操作核对**: 无");
+    }
+    lines.push(`**计划审阅**: ${reportState?.planReviewActive ? `等待确认（revision ${reportState.planReviewRevision}）` : "无"}`);
+    // 片⑥ 收口：单向模式下删除跟随强制恒开，这里必须写"生效"而不是设置值，
+    // 否则报告与真实行为不符（技术工件，照现役行样式）。
+    const autoDeleteLocalFilesEffective =
+      this.syncDirection === "one-way"
+      || this.automaticHandlingPolicy.autoDeleteLocalFiles;
+    lines.push(`**自动处理配置**: 将云端删除同步到本机 ${this.syncDirection === "one-way" ? "强制跟随（单向同步）" : autoDeleteLocalFilesEffective ? "开启" : "关闭"} / 合并不重叠的文本修改 ${this.automaticHandlingPolicy.mergeNonOverlappingText ? "开启" : "关闭"}`);
+    const describePluginScope = (
+      scope: typeof communityPluginSummary.files,
+    ): string => `${scope.mode === "selected"
+      ? `已选 ${scope.selected} 个`
+      : scope.mode === "all"
+        ? "全部"
+        : "关闭"}（本机不同步 ${scope.ignoredOnDevice} 个）`;
+    lines.push(
+      `**社区插件精细化范围**: 文件 ${describePluginScope(communityPluginSummary.files)} / 数据 ${describePluginScope(communityPluginSummary.data)} / 清单 ${communityPluginSummary.inventory.total} 个（本机 ${communityPluginSummary.inventory.local}、云端 ${communityPluginSummary.inventory.remote}、清单异常 ${communityPluginSummary.inventory.manifestIssues}） / 云端清单 ${communityPluginSummary.remoteInventoryTrusted ? "可信" : "不可用"}`,
+    );
+    const inventoryById = new Map(
+      communityPluginInventory.map((item) => [item.id, item]),
+    );
+    const participationIssues = Object.values(
+      this.communityPluginParticipation?.pluginsById ?? {},
+    ).filter((entry) =>
+      entry.phase === "join-requested"
+      || entry.phase === "restoring"
+      || entry.phase === "exit-requested"
+      || entry.phase === "blocked"
+    ).map((entry) => {
+      const inventoryItem = inventoryById.get(entry.pluginId);
+      const name = inventoryItem?.name?.trim() || entry.pluginId;
+      const identity = name === entry.pluginId
+        ? entry.pluginId
+        : `${name} (${entry.pluginId})`;
+      return `${identity}: ${entry.phase}${
+        entry.blockedReason ? ` / ${entry.blockedReason}` : ""
+      }`;
+    });
+    lines.push(
+      `**社区插件过渡或受阻项**: ${
+        participationIssues.length > 0 ? participationIssues.join("；") : "无"
+      }`,
+    );
+    const configSyncLabels = [
+      [this.syncEditorSettings, "编辑器设置"],
+      [this.syncAppearance, "外观"],
+      [this.syncThemes, "主题"],
+      [this.syncHotkeys, "快捷键"],
+      [this.syncBookmarks, "书签"],
+      [this.syncCorePlugins, "核心插件"],
+      [this.syncCommunityPlugins, "社区插件"],
+      [this.syncPluginData, "插件数据"],
+      [this.syncPluginFiles, "EasySync 插件文件"],
+    ] as const;
+    lines.push(`**已启用配置同步**: ${configSyncLabels.filter(([enabled]) => enabled).map(([, label]) => label).join("、") || "无"}`);
+    lines.push(`**本机同步排除**: ${this.excludedFolders.length} 个`);
+    if (this.excludedFolders.length > 0) {
+      lines.push("");
+      for (const path of this.excludedFolders) {
+        lines.push(`- \`${path.replace(/`/g, "\\`")}\``);
+      }
+    }
+    // obsidian-my-obsidian 扩展：黑/白名单模式计入诊断报告，排查「为什么
+    // 这个文件没同步」时能看到本机模式过滤的全部事实。
+    lines.push(`**本机黑名单模式**: ${this.pathBlacklist.length} 条`);
+    if (this.pathBlacklist.length > 0) {
+      lines.push("");
+      for (const pattern of this.pathBlacklist) {
+        lines.push(`- \`${pattern.replace(/`/g, "\\`")}\``);
+      }
+    }
+    lines.push(`**本机白名单模式**: ${this.pathWhitelist.length} 条`);
+    if (this.pathWhitelist.length > 0) {
+      lines.push("");
+      for (const pattern of this.pathWhitelist) {
+        lines.push(`- \`${pattern.replace(/`/g, "\\`")}\``);
+      }
+    }
+    lines.push("");
+    lines.push("## 技术状态证据");
+    lines.push("");
+    lines.push(`**构筑物指纹**: ${buildFingerprint}`);
+    lines.push(formatBuildVersionEvidence(readBakedBuildVersion(), this.manifest.version));
+    lines.push(`**本机存储布局**: v${storageLayoutVersion}`);
+    lines.push(
+      `**同步状态权威**: ${v2StateLoadBlock
+        ? `${v2StateLoadBlock.authority}（加载受阻：${v2StateLoadBlock.reason}）`
+        : reportState?.isV2StateActive
+          ? "v2（已加载）"
+          : "v1-precommit"}`,
+    );
+    lines.push(`**V2 状态存储权威**: ${formatV2StorageAuthorityEvidence(
+      v2StorageAuthority?.kind === "indexeddb"
+        ? {
+            kind: "indexeddb",
+            databaseFingerprint: v2DatabaseFingerprint,
+            stateCommitSeq: v2StorageAuthority.stateCommitSeq,
+            lifecycleEpoch: v2StorageAuthority.lifecycleEpoch,
+          }
+        : v2StorageAuthority,
+    )}`);
+    lines.push(`**同步范围指纹**: account ${accountFingerprint} / drive ${driveFingerprint} / vault ${vaultFingerprint} / files ${filesRootFingerprint}`);
+    lines.push(`**云端快照**: generation ${reportState?.remoteGeneration ?? 0}`);
+    lines.push(`**状态规模**: 基线 ${reportState?.baseSnapshot.length ?? 0} / 云端文件 ${reportState?.remoteSnapshot.length ?? 0} / 云端目录 ${reportState?.remoteFolders.length ?? 0} / 冲突 ${reportState?.pendingConflicts.length ?? 0} / 待删除 ${reportState?.pendingRemoteDeletes.length ?? 0} / 待处理项 ${reportState?.pendingIssues.length ?? 0}`);
+    lines.push(`**增量游标**: ${reportState?.remoteDeltaLink ? "已保存" : "无"}`);
+    lines.push(`**最近同步记录 ID**: ${reportState?.syncHistory?.[0]?.id ?? "—"}`);
+    lines.push(`**社区插件策略指纹**: ${communityPluginSummary.policyFingerprint}`);
+    const recentPluginDataWrites = formatRecentPluginDataWrites(
+      this.pluginDataWriteLog.list(),
+    );
+    if (recentPluginDataWrites.length > 0) {
+      lines.push("");
+      lines.push("**近期插件数据写入**（仅键名与时间，不含值；最新 20 次）:");
+      lines.push("");
+      for (const writeLine of recentPluginDataWrites) {
+        lines.push(writeLine);
+      }
+    }
+    lines.push("");
+
+    const diagSnapshot = await this.diag.snapshot(500);
+    // `entries` keeps the historical 500-entry contract; `runSummaries` is the
+    // pre-window bypass that lets the report show more than the newest round.
+    const diagAll = diagSnapshot.entries;
+    const runSummaries = diagSnapshot.runSummaries;
+    // Diagnostics-only section: the observation file only exists when logging
+    // was on, so a diagnostics-off report stays byte-for-byte unchanged.
+    if (this.diagLogEnabled) {
+      const startupRecords = await readStartupTimingObservations(
+        this.app.vault.adapter,
+        this.startupLogsDir(),
+      );
+      lines.push(...formatStartupTimingSection(startupRecords));
+      lines.push("");
+    }
+    lines.push("## 云客户端同步环境");
+    lines.push("");
+    const cloudEnvironment = detectVaultCloudClientEnvironment(
+      this.app.vault,
+      this.platformFacts,
+    );
+    if (!cloudEnvironment.assessable) {
+      lines.push("**仓库位置**: 移动端无法判定（平台不提供仓库本地路径）");
+    } else if (cloudEnvironment.detected && cloudEnvironment.service) {
+      const serviceName =
+        cloudEnvironment.service === "onedrive" ? "OneDrive 客户端" : "iCloud";
+      lines.push(
+        `**仓库位置**: 位于 ${serviceName}同步范围内（命中签名：${cloudEnvironment.signature}）`,
+      );
+      lines.push(`**风险**: ${serviceName}正在同步本仓库，与 EasySync 必然冲突，会导致同步反复失败、状态加载受阻或重置不完整。请移出仓库，确保 EasySync 是本仓库唯一的同步工具。`);
+    } else {
+      lines.push("**仓库位置**: 未命中 OneDrive/iCloud 客户端同步目录签名");
+    }
+    const lockErrorPattern = /\b(?:EPERM|EBUSY|EACCES|ENOTEMPTY)\b/;
+    const journalIntegrityPattern =
+      /already contains different bytes|blocks delta retirement|record digest does not match/;
+    const journalIntegrityCount = diagAll.filter((e) =>
+      (e.lvl === "warn" || e.lvl === "error")
+      && journalIntegrityPattern.test(e.msg)
+    ).length;
+    const lockErrorCount = diagAll.filter((e) =>
+      (e.lvl === "warn" || e.lvl === "error")
+      && (lockErrorPattern.test(e.msg)
+        || (e.data !== undefined
+          && lockErrorPattern.test(JSON.stringify(e.data))))
+    ).length;
+    lines.push(`**账本完整性异常（近期 500 条日志内）**: ${journalIntegrityCount === 0 ? "无" : `${journalIntegrityCount} 条（可能由云客户端改动状态文件引起）`}`);
+    lines.push(`**本机文件锁错误（近期 500 条日志内）**: ${lockErrorCount === 0 ? "无" : `${lockErrorCount} 条`}`);
+    lines.push("");
+
+    const remoteScopeRecoverySummary =
+      this.progressStore.state.recoveryVerification
+      ?? reportState?.syncHistory.find(
+        (entry) => entry.remoteScopeRecovery !== undefined,
+      )?.remoteScopeRecovery;
+    lines.push("## 云端 Scope 恢复");
+    lines.push("");
+    lines.push(`**当前状态**: ${v2RemoteScopeRecovery ? "等待或正在恢复" : "无待恢复项"}`);
+    if (remoteScopeRecoverySummary) {
+      lines.push(`**操作指纹**: ${remoteScopeRecoverySummary.operationFingerprint}`);
+      lines.push(`**协议预检**: ${remoteScopeRecoverySummary.protocolPreflight === "ready" ? "通过" : "受阻"}`);
+      lines.push(`**正文核验**: 总数 ${remoteScopeRecoverySummary.total} / 本轮新增 ${remoteScopeRecoverySummary.verifiedThisRun} / 复用 ${remoteScopeRecoverySummary.reused} / 失效 ${remoteScopeRecoverySummary.invalidated} / 剩余 ${remoteScopeRecoverySummary.remaining}`);
+      lines.push(`**终止阶段**: ${remoteScopeRecoverySummary.failureStage ?? "无"}`);
+      lines.push(`**首个失败对象**: ${remoteScopeRecoverySummary.firstFailurePath ?? "—"}`);
+    } else {
+      lines.push("**最近核验证据**: 无");
+    }
+    lines.push("");
+
+    return { diagAll, runSummaries, remoteScopeRecoverySummary };
+  }
+
+  /** Diagnostic report section (extracted verbatim; pushes into ctx.lines). */
+  private renderDiagnosticSyncHistorySection(ctx: DiagnosticReportRenderContext): Pick<DiagnosticReportProvidedValues, "history" | "formatSize"> {
+    const {
+      fmt,
+      lines,
+      reportI18n,
+    } = ctx;
+    // ── Sync History ──
+    const history = this.state?.syncHistory ?? [];
+    lines.push("## 近期同步记录");
+    lines.push("");
+    if (history.length === 0) {
+      lines.push("*暂无同步记录*");
+    } else {
+      lines.push("| 时间 | 模式 | 状态 | 未完成操作核对 | 耗时 | 上传 | 下载 | 文件移动 | 文件夹创建 | 文件夹移动 | 文件夹删除 | 文件删除 | 冲突 | 云端删除待确认 | 延后 | 跳过(L/I) | 错误 |");
+      lines.push("|------|------|------|----------------|------|------|------|----------|------------|------------|------------|----------|------|------------------|------|-----------|------|");
+      for (const h of history) {
+        const mode = h.mode === "manual" ? "手动" : h.mode === "auto" ? "自动" : "首次";
+        const statusMap: Record<string, string> = { success: "已完成", partial: "部分完成", cancelled: "已取消", authExpired: "登录过期", failed: "失败", "retry-pending": "稍后重试" };
+        const status = statusMap[h.status] ?? h.status;
+        const duration = h.endedAt > 0 && h.startedAt > 0 ? `${Math.round((h.endedAt - h.startedAt) / 1000)}s` : "—";
+        const skipLarge = h.skippedLarge ?? 0;
+        const skipIgnored = h.skippedIgnored ?? 0;
+        const actions = projectSyncHistoryActionCounts(h);
+        const pending = resolveSyncPendingAttentionCounts(
+          h.conflicts,
+          h.files,
+          // New entries carry the executor's direct split; legacy entries fall
+          // back to counting ConfirmLocalDelete rows inside `files` (which the
+          // 100-success retention cap can truncate).
+          h.remoteDeletePending,
+        );
+        const recovery = h.recovery
+          ? formatMutationRecoveryHistory(
+              h.recovery,
+              reportI18n.t.bind(reportI18n),
+            )
+          : "—";
+        lines.push(`| ${fmt(h.startedAt)} | ${mode} | ${status} | ${recovery} | ${duration} | ${actions.uploaded} | ${actions.downloaded} | ${actions.filesMoved} | ${actions.foldersCreated} | ${actions.foldersMoved} | ${actions.foldersDeleted} | ${actions.filesDeleted} | ${pending.conflicts} | ${pending.remoteDeletes} | ${h.deferred ?? 0} | ${skipLarge}/${skipIgnored} | ${h.errors} |`);
+      }
+    }
+    lines.push("");
+
+    const formatSize = (bytes?: number): string => {
+      if (bytes === undefined || bytes === null) return "?";
+      if (bytes < 1024) return `${bytes}B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+    };
+
+    return { history, formatSize };
+  }
+
+  /** Diagnostic report section (extracted verbatim; pushes into ctx.lines). */
+  private renderDiagnosticFailedFileDetailsSection(ctx: DiagnosticReportRenderContext, prior: Pick<DiagnosticReportProvidedValues, "formatSize" | "history">): void {
+    const {
+      fmtShort,
+      formatActionLabel,
+      lines,
+    } = ctx;
+    const {
+      formatSize,
+      history,
+    } = prior;
+    // ── Failed file details from sync history ──
+    const failedFiles = history
+      .filter((h) => h.status === "partial" || h.status === "failed")
+      .flatMap((h) => (h.files ?? [])
+        .filter((f) => f.status === "error")
+        .map((f) => ({ ...f, historyStartedAt: h.startedAt })));
+    if (failedFiles.length > 0) {
+      lines.push("### 失败文件明细");
+      lines.push("");
+      for (const f of failedFiles) {
+        const action = formatActionLabel(f.actionType);
+        const size = formatSize(f.fileSize);
+        // A3 (2026-10-26): evidence suffix on the same line — error class,
+        // HTTP status, Graph code, bytes moved / file size, waterfall tier,
+        // retry attempts. Legacy rows without `error` print "—" for every cell
+        // instead of guessing; nothing here changes the row's own wording.
+        const evidence = formatSyncFileErrorFactSuffix(
+          f.error,
+          formatSize,
+          f.fileSize,
+        );
+        lines.push(`- \`${f.path}\` (${size}) — ${action} (${f.reason ?? "未知错误"}) — ${fmtShort(f.failedAt ?? f.historyStartedAt)} ${evidence}`);
+      }
+      lines.push("");
+    }
+
+  }
+
+  /** Diagnostic report section (extracted verbatim; pushes into ctx.lines). */
+  private renderDiagnosticConnectionSpeedSection(ctx: DiagnosticReportRenderContext, prior: Pick<DiagnosticReportProvidedValues, "history">): void {
+    const {
+      fmt,
+      lines,
+    } = ctx;
+    const {
+      history,
+    } = prior;
+    // ── Passive connection-speed readings from recent runs ──
+    // Derived from bytes real transfers already moved; no probe requests.
+    const rateEntries = history.filter((h) => h.transferRates).slice(0, 10);
+    if (rateEntries.length > 0) {
+      lines.push("## 连接速度（被动实测）");
+      lines.push("");
+      const reading = this.getTransferRateReading();
+      if (reading) {
+        const summaryUpload = this.transferRateSampler.getDirectionKBps("upload");
+        const summaryDownload = this.transferRateSampler.getDirectionKBps("download");
+        lines.push(`**当前读数**：上传 ${summaryUpload !== null ? formatTransferRate(summaryUpload) : "—"} · 下载 ${summaryDownload !== null ? formatTransferRate(summaryDownload) : "—"}`);
+        lines.push("");
+      }
+      lines.push("读数来自同步本身已传输的字节（不含清单与规划耗时），不发起任何额外请求；读数为近期样本的指数平滑（传输中每秒采样、轮末并入轮次读数，近期样本权重更高，本次会话从零开始）。本表逐轮读数取自「近期同步记录」条目内嵌的轮次实测。空轮（本轮没有文件变更）不产生吞吐读数——没有字节就没有速度可测，其网络耗时见「近期同步记录」的耗时列。");
+      lines.push("");
+      lines.push("| 时间 | 上传 | 下载 |");
+      lines.push("|------|------|------|");
+      for (const h of rateEntries) {
+        const rates = h.transferRates!;
+        const uploadKBps = transferDirectionKBps(rates, "upload");
+        const downloadKBps = transferDirectionKBps(rates, "download");
+        lines.push(`| ${fmt(h.startedAt)} | ${uploadKBps !== null ? formatTransferRate(uploadKBps) : "—"} | ${downloadKBps !== null ? formatTransferRate(downloadKBps) : "—"} |`);
+      }
+      lines.push("");
+      lines.push("档位：低 <64 KB/s · 中 64 KB/s–1 MB/s · 高 ≥1 MB/s（阈值按真实慢链样本校准，可调）");
+      lines.push("");
+    }
+
+  }
+
+  /**
+   * 诊断报告区块：下载通道 / 分段序列 / 回退 / 校验（2026-10-28，S1 预留）。
+   *
+   * 只在诊断日志开关打开时追加：开关关闭时必须一个字符都不多，现役报告的
+   * 逐字形状由测试钉住。数据本应来自下载写在日志里的结构化 payload（报告
+   * 不解析日志文本）；2026-10-28 回退删除了移动端分块/流式/择优三层，证据
+   * 生产者随之消失，区块照常出现、单元格显示 `—`，等未来通道重新接线。
+   */
+  private renderDiagnosticDownloadTransferSection(
+    ctx: DiagnosticReportRenderContext,
+    prior: Pick<DiagnosticReportProvidedValues, "diagAll">,
+  ): void {
+    if (!this.diagLogEnabled) return;
+    ctx.lines.push(
+      ...formatDownloadTransferSection(
+        collectDownloadTransferEvidence(prior.diagAll),
+      ),
+    );
+  }
+
+  /** Diagnostic report section (extracted verbatim; pushes into ctx.lines). */
+  private async renderDiagnosticPendingIssuesSection(ctx: DiagnosticReportRenderContext, prior: Pick<DiagnosticReportProvidedValues, "formatSize">): Promise<void> {
+    const {
+      fmt,
+      fmtShort,
+      formatActionLabel,
+      lines,
+      reportState,
+    } = ctx;
+    const {
+      formatSize,
+    } = prior;
+    // ── Pending Issues ──
+    const issues = this.state?.pendingIssues ?? [];
+    const conflicts = this.state?.pendingConflicts ?? [];
+    const deletes = this.state?.pendingRemoteDeletes ?? [];
+    lines.push("## 当前待处理问题");
+    lines.push("");
+
+    const pendingItems = issues.filter((i) =>
+      i.actionType !== SyncActionType.SkipLargeFile
+      && i.actionType !== SyncActionType.SkipIgnoredPath);
+    const skippedItems = issues.filter((i) =>
+      i.actionType === SyncActionType.SkipLargeFile
+      || i.actionType === SyncActionType.SkipIgnoredPath);
+    if (pendingItems.length > 0) {
+      lines.push(`### 待处理项（${pendingItems.length}）`);
+      lines.push("");
+      // A3 (2026-10-26): the last four columns are evidence only (error class,
+      // bytes already moved, waterfall tier, retry attempts). Rows written
+      // before the fact existed print "—" in all four.
+      lines.push("| 文件 | 大小 | 操作 | 原因 | 最后尝试 | 错误 | 已传 | 层级 | 重试 |");
+      lines.push("|------|------|------|------|----------|------|------|------|------|");
+      for (const f of pendingItems) {
+        const action = formatActionLabel(f.actionType);
+        const evidence = projectSyncFileErrorFactColumns(f.error, formatSize);
+        lines.push(`| ${f.path} | ${formatSize(f.fileSize)} | ${action} | ${f.reason ?? "—"} | ${fmtShort(f.updatedAt)} | ${evidence.errorType} | ${evidence.transferred} | ${evidence.tier} | ${evidence.attempts} |`);
+      }
+    } else {
+      lines.push("*无待处理项*");
+    }
+    lines.push("");
+
+    if (skippedItems.length > 0) {
+      lines.push(`### 未同步项（${skippedItems.length}）`);
+      lines.push("");
+      lines.push("| 文件 | 大小 | 操作 | 原因 | 最后尝试 |");
+      lines.push("|------|------|------|------|----------|");
+      for (const item of skippedItems) {
+        lines.push(`| ${item.path} | ${formatSize(item.fileSize)} | ${formatActionLabel(item.actionType)} | ${item.reason ?? "—"} | ${fmtShort(item.updatedAt)} |`);
+      }
+      lines.push("");
+    }
+
+    if (conflicts.length > 0) {
+      lines.push(`### 待处理冲突（${conflicts.length}）`);
+      lines.push("");
+      for (const c of conflicts) {
+        const evidence = buildConflictEvidence(c, reportState?.getBaseEntry(c.path));
+        const eTagFingerprint = await fingerprintOpaqueValue(evidence.remoteETag);
+        const reasonCode = c.reason ?? "conflict";
+        const reasonText = c.reason ? this.i18n.t(c.reason) : "冲突";
+        lines.push(`- \`${c.path}\` — ${reasonText} (${reasonCode})`);
+        lines.push(`  - 判等证据: ${evidence.equalityStatus} / ${evidence.equalityProof}; decision token: ${evidence.hasDecisionToken ? "有" : "无"}`);
+        lines.push(`  - 本机: ${formatSize(evidence.localSize)}, mtime ${fmt(evidence.localMtime ?? 0)}, sha256 ${evidence.localHash}`);
+        lines.push(`  - 云端: ${formatSize(evidence.remoteSize)}, mtime ${fmt(evidence.remoteMtime ?? 0)}, sha256 ${evidence.remoteSha256}, eTag ${eTagFingerprint}`);
+      }
+    } else {
+      lines.push("### 待处理冲突（0）");
+      lines.push("");
+      lines.push("*无*");
+    }
+    lines.push("");
+
+    if (deletes.length > 0) {
+      lines.push(`### 待确认删除（${deletes.length}）`);
+      lines.push("");
+      for (const d of deletes) lines.push(`- \`${d.path}\` — ${(d as { reason?: string }).reason ?? "已在云端删除"}`);
+    } else {
+      lines.push("### 待确认删除（0）");
+      lines.push("");
+      lines.push("*无*");
+    }
+    lines.push("");
+
+  }
+
+  /** Diagnostic report section (extracted verbatim; pushes into ctx.lines). */
+  private async renderDiagnosticAnomaliesSection(ctx: DiagnosticReportRenderContext, prior: Pick<DiagnosticReportProvidedValues, "diagAll" | "runSummaries" | "remoteScopeRecoverySummary" | "formatSize">): Promise<void> {
+    const {
+      fmt,
+      fmtShort,
+      lines,
+      mutationRecoveryDisplay,
+      mutationRecoveryScheduler,
+      reportState,
+      resetFacts,
+      v2RemoteScopeRecovery,
+      v2StateLoadBlock,
+    } = ctx;
+    const {
+      diagAll,
+      formatSize,
+      remoteScopeRecoverySummary,
+      runSummaries,
+    } = prior;
+    // ── Recent Diagnostic Anomalies (from disk logs) ──
+    // Prefer the newest bypassed round: the same entries when they still sit in
+    // the 500-entry window, and the only copy when they already rolled out.
+    const latestRunSummary = runSummaries[runSummaries.length - 1];
+    const latestAutomaticHandlingSummary = latestRunSummary?.automatic
+      ?? findLatestAutomaticHandlingSummary(diagAll);
+    const currentRecoverySummary = {
+      ...summarizeMutationRecovery(reportState?.mutationLedger ?? []),
+      v2Quarantined:
+        reportState?.mutationRecoveryQuarantine.length ?? 0,
+      v2QuarantineCorrupt:
+        reportState?.hasMutationRecoveryQuarantineCorruption ?? false,
+      v2AuthoritySelected:
+        reportState?.isV2AuthoritySelected ?? false,
+      v2StateActive:
+        reportState?.isV2StateActive ?? false,
+      v2StateLoadBlocked:
+        reportState?.hasV2StateLoadRecoveryBlock ?? false,
+      v2StateLoadBlockAuthority:
+        v2StateLoadBlock?.authority ?? null,
+      v2StateLoadBlockReason:
+        v2StateLoadBlock?.reason ?? null,
+      v2StateLoadBlockDetail:
+        v2StateLoadBlock?.detail ?? null,
+      v2RemoteScopeRecoveryPending:
+        reportState?.hasV2RemoteScopeRecovery ?? false,
+      v2RemoteScopeRecoveryReason:
+        v2RemoteScopeRecovery?.reason ?? null,
+      v2RemoteScopeObserved:
+        v2RemoteScopeRecovery?.observedScope !== null
+          && v2RemoteScopeRecovery?.observedScope !== undefined,
+      remoteScopeRecoveryVerification:
+        remoteScopeRecoverySummary ?? null,
+      automaticRecoveryState:
+        mutationRecoveryDisplay?.kind ?? "inactive",
+      automaticRecoveryRemaining:
+        mutationRecoveryDisplay?.remaining ?? 0,
+      automaticRecoveryRetryAt:
+        mutationRecoveryDisplay?.retryAt ?? null,
+      automaticRecoveryBlockReason:
+        mutationRecoveryDisplay?.blockReason ?? null,
+      automaticRecoveryObservations:
+        mutationRecoveryScheduler.automaticObservations,
+      automaticRecoverySchedulerState:
+        mutationRecoveryScheduler.state,
+      manualResolutionAuditCount:
+        reportState?.manualMutationResolutionAudit.length ?? 0,
+      latestManualResolution:
+        reportState?.manualMutationResolutionAudit.slice(-1)[0] ?? null,
+      autoSyncPaused: this.autoSyncPaused,
+    };
+    const latestPhaseSummary = latestRunSummary?.phase
+      ?? findLatestPhaseSummary(diagAll);
+    const latestNetworkSummary = latestRunSummary?.network
+      ?? findLatestNetworkSummary(diagAll);
+    const latestTransferSummary = latestRunSummary?.transfer
+      ?? findLatestTransferSummary(diagAll);
+    const latestSharedProtocolProfileSummary =
+      findLatestSharedProtocolProfileSummary(diagAll);
+    lines.push("## V2／V3 协议组合核对");
+    lines.push("");
+    if (latestSharedProtocolProfileSummary) {
+      const reasonText: Record<string, string> = {
+        "generation-mismatch": "V2 与 V3 的同步代次不一致",
+        "predecessor-mismatch": "V3 记录的 V2 前身与当前 V2 不一致",
+        "binding-mismatch": "本机记录与当前云端协议对象不一致",
+        "target-slot-occupied": "云端协议位置已被其他内容占用",
+      };
+      const predecessorText = {
+        match: "一致",
+        mismatch: "不一致",
+        unavailable: "无法核对",
+      }[latestSharedProtocolProfileSummary.predecessor];
+      lines.push("**状态**: 组合不一致");
+      lines.push(`**失败原因**: ${reasonText[latestSharedProtocolProfileSummary.reason] ?? "协议证据不完整或不受支持"}（${latestSharedProtocolProfileSummary.reason}）`);
+      lines.push(`**V2 generation 摘要**: ${latestSharedProtocolProfileSummary.v2Generation}`);
+      lines.push(`**V3 generation 摘要**: ${latestSharedProtocolProfileSummary.v3Generation}`);
+      lines.push(`**前身校验**: ${predecessorText}`);
+    } else {
+      lines.push("*近期没有协议组合错配记录。*");
+    }
+    lines.push("");
+    lines.push("## 自动处理与恢复摘要");
+    lines.push("");
+    lines.push("**当前恢复账本**:");
+    lines.push("```json");
+    lines.push(formatDiagData(currentRecoverySummary));
+    lines.push("```");
+    if (latestAutomaticHandlingSummary) {
+      lines.push("");
+      lines.push(`**最近一轮自动处理**（${fmt(latestAutomaticHandlingSummary.ts)}）:`);
+      lines.push("```json");
+      lines.push(formatDiagData(latestAutomaticHandlingSummary.data));
+      lines.push("```");
+    } else {
+      lines.push("");
+      lines.push("*暂无结构化自动处理摘要；开启诊断日志并完成一轮同步后再生成报告。*");
+    }
+    lines.push("");
+    lines.push("## 最近 5 轮阶段耗时与请求摘要");
+    lines.push("");
+    lines.push(`**最近 5 轮汇总**（新→旧，最多 ${DIAG_RUN_SUMMARY_LIMIT} 轮）:`);
+    lines.push("");
+    const missingSummaryNote = describeMissingRunSummaries({
+      roundCount: runSummaries.length,
+      diagnosticsEnabled: this.diag.isEnabled("lifecycle"),
+      hasLogEntries: diagAll.length > 0,
+    });
+    if (runSummaries.length > 0) {
+      for (const tableLine of formatDiagRunSummaryTable(runSummaries, {
+        time: fmt,
+        size: formatSize,
+      })) {
+        lines.push(tableLine);
+      }
+      if (missingSummaryNote) {
+        lines.push("");
+        lines.push(`*${missingSummaryNote}*`);
+      }
+      if (runSummaries.some((round) =>
+        !round.phase || !round.network || !round.transfer
+      )) {
+        lines.push("");
+        lines.push("*表中 missing = 该轮没有这条摘要：可能由诊断日志写入失败、该轮未产生，或已滚出最近 3 个日志分段。*");
+      }
+    } else if (missingSummaryNote) {
+      lines.push(`*${missingSummaryNote}*`);
+    }
+    lines.push("");
+    lines.push("**最新一轮详情**:");
+    lines.push("");
+    if (latestPhaseSummary) {
+      lines.push(`**记录时间**: ${fmt(latestPhaseSummary.ts)}`);
+      lines.push("**同步阶段**:");
+      lines.push("```json");
+      lines.push(formatDiagData(latestPhaseSummary.data));
+      lines.push("```");
+    } else {
+      lines.push("*暂无结构化阶段摘要；完成一轮同步后再生成报告。*");
+    }
+    if (latestNetworkSummary) {
+      lines.push("");
+      lines.push(`**OneDrive 请求与令牌获取**（${fmt(latestNetworkSummary.ts)}）:`);
+      lines.push("```json");
+      lines.push(formatDiagData(latestNetworkSummary.data));
+      lines.push("```");
+    } else {
+      lines.push("");
+      lines.push("*暂无结构化 OneDrive 请求摘要。*");
+    }
+    if (latestTransferSummary) {
+      lines.push("");
+      lines.push(`**文件传输与本机处理**（${fmt(latestTransferSummary.ts)}）:`);
+      lines.push("```json");
+      lines.push(formatDiagData(latestTransferSummary.data));
+      lines.push("```");
+    } else {
+      lines.push("");
+      lines.push("*暂无结构化文件传输摘要。*");
+    }
+    lines.push("");
+    const diagEntries = diagAll
+      .filter((e) => e.lvl === "warn" || e.lvl === "error"
+        || (e.cat === "onedrive" && e.lvl === "log" && e.msg.includes("downloadFile"))
+      )
+      .slice(-200);
+    lines.push("## 近期异常日志");
+    lines.push("");
+    if (diagEntries.length === 0) {
+      lines.push("*无异常日志（内存和磁盘均无记录）*");
+    } else {
+      // Split: execute errors with file paths vs other anomalies
+      const execFailures = diagEntries.filter(
+        (e) => e.cat === "execute" && e.lvl === "error" && e.msg.includes("FAILED:"),
+      );
+      const others = diagEntries.filter((e) => !execFailures.includes(e));
+
+      if (execFailures.length > 0) {
+        lines.push("### 文件传输失败详情");
+        lines.push("");
+        lines.push("```");
+        for (const e of execFailures) {
+          lines.push(`${fmtShort(e.ts)}${resetPhasePrefix(e.ts, resetFacts)} ❌ ${e.msg}`);
+          if (e.data !== undefined) {
+            lines.push(`  detail: ${formatDiagData(e.data)}`);
+          }
+        }
+        lines.push("```");
+        lines.push("");
+      }
+
+      if (others.length > 0) {
+        lines.push("### 其他异常");
+        lines.push("");
+        lines.push("```");
+        for (const e of others) {
+          const marker = e.lvl === "error" ? "❌" : "⚠️";
+          lines.push(`${fmtShort(e.ts)}${resetPhasePrefix(e.ts, resetFacts)} [${e.cat}] ${marker} ${e.msg}`);
+          if (e.data !== undefined) {
+            lines.push(`  detail: ${formatDiagData(e.data)}`);
+          }
+        }
+        lines.push("```");
+      }
+    }
+    lines.push("");
+
+    if (resetFacts?.preResetReportFile) {
+      lines.push(`## 重置前档案摘录（${resetFacts.preResetReportFile}）`);
+      lines.push("");
+      lines.push("> 以下内容摘自重置前自动生成的报告，反映重置那一刻之前的设备状态。");
+      lines.push("");
+      let excerpt = "";
+      try {
+        const preResetFile = this.app.vault.getAbstractFileByPath(
+          resetFacts.preResetReportFile,
+        );
+        if (preResetFile instanceof TFile) {
+          excerpt = extractPreResetReportCore(
+            await this.app.vault.cachedRead(preResetFile),
+            PRE_RESET_REPORT_EMBED_CHAR_LIMIT,
+          );
+        }
+      } catch {
+        // A missing or unreadable pre-reset report must not fail the current
+        // report; the lineage section above still names the file.
+      }
+      if (excerpt.length > 0) {
+        lines.push(...excerpt.split("\n"));
+      } else {
+        lines.push(`*重置前报告文件不可读（\`${resetFacts.preResetReportFile}\`）*`);
+      }
+      lines.push("");
+    }
+  }
+
+  /** Apply max file size setting to the scanner. Public so settings-tab can call it. */
+  applyMaxFileSize(): void {
+    this.scanner?.setConfig({
+      maxFileSize: this.syncMaxFileSizeMb === UNLIMITED_MAX_FILE_SIZE_MB
+        ? Number.POSITIVE_INFINITY
+        : this.syncMaxFileSizeMb * 1024 * 1024,
+    });
+  }
+
+  // ---- Status bar ----
+
+  /**
+   * One-time status bar item setup: host interaction classes + single click
+   * binding. The click reuses the ribbon's existing semantics through the same
+   * private `handleRibbonClick()` (未登录→打开设置 / ready→startManualSync /
+   * 其余→activateSyncView), so the two entry points can never drift apart.
+   * Never re-run per refresh — updateStatusBar only rebuilds child nodes.
+   */
+  private initStatusBar(): void {
+    if (!this.statusBarEl) return;
+    this.statusBarEl.addClass("easy-sync-status-bar-item");
+    this.statusBarEl.addClass("mod-clickable");
+    this.statusBarEl.onClickEvent(() => {
+      void this.handleRibbonClick();
+    });
+  }
+
+  /**
+   * 移动端常驻状态图标开关的应用入口（方案单 20261012-225046）：移动端宿主
+   * DOM 里存在一个官方隐藏的 `.status-bar` 元素，桌面状态项就在其中
+   * （20261012-215203 实测强显可行）。本方法只决定「现役状态项在移动端是否
+   * 可见」，不新建任何 UI；桌面端不进本路径（显示隔离，桌面状态栏体系与
+   * 设置项不受影响）。
+   */
+  applyMobileStatusBar(): void {
+    if (!this.platformFacts.isMobileApp) return;
+    if (this.mobileStatusBar) {
+      this.enableMobileStatusBar();
+    } else {
+      this.disableMobileStatusBar();
+    }
+  }
+
+  /**
+   * 强显宿主隐藏状态栏（Remotely Save 同款注入点）：`display:flex` + 按导航
+   * 栏布局高度让位。定位基于布局高度，导航栏滚动隐藏走 transform、改不了
+   * 布局，藏不住该图标（20261012-224210 实测）；键盘弹出/收起等底部占位变化
+   * 由 Observer 重算承接（真机待验）。
+   */
+  private enableMobileStatusBar(): void {
+    const statusBar = document.querySelector<HTMLElement>(
+      ".is-mobile .app-container .status-bar",
+    );
+    if (!statusBar) {
+      // 宿主元素未就绪（罕见）：布局就绪后重试一次，仍失败则放弃，不死循环。
+      if (this.mobileStatusBarLayoutRetryArmed) return;
+      this.mobileStatusBarLayoutRetryArmed = true;
+      this.app.workspace.onLayoutReady(() => {
+        this.mobileStatusBarLayoutRetryArmed = false;
+        // Only continue when the host element actually appeared. A blind
+        // re-call on an already-ready layout would see the element missing
+        // again and arm another layout-ready callback forever.
+        if (
+          this.mobileStatusBar
+          && document.querySelector(".is-mobile .app-container .status-bar")
+        ) {
+          this.enableMobileStatusBar();
+        }
+      });
+      return;
+    }
+    statusBar.setCssProps({ display: "flex" });
+    // 标记类配合 styles.css 抑制规则：强显时只保留 EasySync 现役状态项，
+    // 隐藏宿主随笔记打开塞入的原生项（反向链接／字数统计／视图切换等，
+    // 真机反馈 2026-10-12）。
+    statusBar.addClass("easy-sync-mobile-status-bar-shown");
+    this.refreshMobileStatusBarOffset();
+    if (!this.mobileStatusBarObserver) {
+      // 导航栏/工具栏挂载、卸载会改变底部占位高度：childList 变化后延迟重算
+      // （与 Remotely Save 同款 300ms 等待，取稳定后的计算高度）。
+      const appContainer = document.querySelector(".app-container");
+      if (appContainer) {
+        this.mobileStatusBarObserver = new MutationObserver(() => {
+          this.scheduleMobileStatusBarOffsetRefresh();
+        });
+        this.mobileStatusBarObserver.observe(appContainer, {
+          attributes: false,
+          childList: true,
+          characterData: false,
+          subtree: false,
+        });
+      }
+    }
+    if (!this.mobileStatusBarResizeHandler) {
+      this.mobileStatusBarResizeHandler = () =>
+        this.scheduleMobileStatusBarOffsetRefresh();
+      window.addEventListener("resize", this.mobileStatusBarResizeHandler);
+    }
+    if (this.mobileStatusBarLayoutRef === null) {
+      // 形态切换（含平板↔手机壳体重建）会整体替换 app-container，使上面挂在
+      // 旧容器上的 Observer 失联：layout-change 与其并行兜底重算（模拟实测
+      // 20261012-225046 实施轮：壳体重建后 margin-bottom 失效即此因）。
+      const layoutRef = this.app.workspace.on("layout-change", () => {
+        this.scheduleMobileStatusBarOffsetRefresh();
+      });
+      this.registerEvent(layoutRef);
+      this.mobileStatusBarLayoutRef = layoutRef;
+    }
+  }
+
+  private disableMobileStatusBar(): void {
+    // A disable always ends any pending layout-ready retry, even when there is
+    // no DOM to restore (Node-side unload tests, abnormal lifecycle).
+    this.mobileStatusBarLayoutRetryArmed = false;
+    // 无 DOM 环境（Node 侧卸载测试、异常生命周期）：无可还原的样式，直接返回。
+    if (typeof document === "undefined") return;
+    this.mobileStatusBarObserver?.disconnect();
+    this.mobileStatusBarObserver = null;
+    if (this.mobileStatusBarLayoutRef !== null) {
+      this.app.workspace.offref(this.mobileStatusBarLayoutRef);
+      this.mobileStatusBarLayoutRef = null;
+    }
+    if (this.mobileStatusBarResizeHandler) {
+      window.removeEventListener("resize", this.mobileStatusBarResizeHandler);
+      this.mobileStatusBarResizeHandler = null;
+    }
+    if (this.mobileStatusBarRecomputeTimer !== null) {
+      compatClearTimeout(this.mobileStatusBarRecomputeTimer);
+      this.mobileStatusBarRecomputeTimer = null;
+    }
+    const statusBar = document.querySelector<HTMLElement>(
+      ".is-mobile .app-container .status-bar",
+    );
+    statusBar?.removeClass("easy-sync-mobile-status-bar-shown");
+    statusBar?.setCssProps({ display: "" });
+    // `margin-bottom` 是多词属性，键必须带引号；带引号的具体属性名会被官方 lint
+    // 规则（`no-static-styles-assignment`）拦下，故走 DOM 原生的 removeProperty。
+    statusBar?.style.removeProperty("margin-bottom");
+  }
+
+  private scheduleMobileStatusBarOffsetRefresh(): void {
+    if (this.mobileStatusBarRecomputeTimer !== null) {
+      compatClearTimeout(this.mobileStatusBarRecomputeTimer);
+    }
+    this.mobileStatusBarRecomputeTimer = compatSetTimeout(() => {
+      this.mobileStatusBarRecomputeTimer = null;
+      this.refreshMobileStatusBarOffset();
+    }, 300);
+  }
+
+  private refreshMobileStatusBarOffset(): void {
+    const statusBar = document.querySelector<HTMLElement>(
+      ".is-mobile .app-container .status-bar",
+    );
+    if (!statusBar) return;
+    const navbar = document.querySelector<HTMLElement>(".mobile-navbar");
+    if (!navbar) {
+      // 平板等无导航栏形态：不预留底部占位（导航栏出现时由 Observer 重算）。
+      statusBar.style.removeProperty("margin-bottom");
+      return;
+    }
+    // 多词属性名不能走 setCssProps（带引号的键会被官方 lint 规则拦下），改用
+    // style.setProperty 写行内值：写出的声明与原实现逐字相同。
+    statusBar.style.setProperty(
+      "margin-bottom",
+      window.getComputedStyle(navbar).getPropertyValue("height"),
+    );
+  }
+
+  /**
+   * Rebuild the status bar item: icon-only (slice 3, 2026-08-26 ③ 方案 A,
+   * isomorphic with the official Obsidian Sync item) — host
+   * `status-bar-item-segment` > icon container (`status-bar-item-icon`,
+   * filled via setIcon), **no text span**. The full status text is carried by
+   * setTooltip + `aria-label` (same wording, 无障碍一致), so hover / screen
+   * readers still get the state without any permanent text.
+   * `empty()` only clears child nodes, so the item classes are managed
+   * explicitly here: the full `.is-*` set is cleared first, then the current
+   * group class is added (same first-clear/add-current pattern as the sidebar
+   * status line, sync-view.ts). The connecting branch carries no group and
+   * therefore no `.is-*` class (default grey).
+   */
+  private renderStatusBarItem(
+    el: HTMLElement,
+    iconId: string,
+    group: StatusBarStatusGroup | null,
+    text: string,
+  ): void {
+    el.empty();
+    // Must list every StatusBarStatusGroup value: the group class is added
+    // below from `group`, so one left behind here keeps tinting the icon after
+    // the status it represents has already cleared.
+    el.removeClass(
+      "is-loggedOut",
+      "is-cancelling",
+      "is-syncing",
+      "is-attention",
+      "is-offline",
+      "is-success",
+      "is-ready",
+    );
+    if (group) {
+      el.addClass(`is-${group}`);
+    }
+    const segment = el.createDiv({ cls: "status-bar-item-segment" });
+    const iconEl = segment.createDiv({ cls: "status-bar-item-icon" });
+    setIcon(iconEl, iconId);
+    setTooltip(el, text);
+    el.setAttr("aria-label", text);
+  }
+
+  /** Public entry point — merges multiple calls within the same animation
+   *  frame. Progress callbacks fire once per plan item, and each uncoalesced
+   *  run rebuilt the status bar item, the ribbon and (when open) the whole
+   *  settings page; the sidebar and Notice updates already coalesce the same
+   *  way (sync-view `render()`, `syncNoticeFrame`). */
+  updateStatusBar(): void {
+    if (this.statusBarFrame !== null) return;
+    this.statusBarFrame = compatRequestAnimationFrame(() => {
+      this.statusBarFrame = null;
+      this.doUpdateStatusBar();
+    });
+  }
+
+  private doUpdateStatusBar(): void {
+    this.updateRibbon();
+    this.settingsTab?.refreshSyncState();
+    if (!this.statusBarEl) return;
+    const t = this.t;
+    const fullSyncRunning = this.syncExecutor?.isRunning ?? false;
+    const sideActionRunning = this.syncExecutor?.hasSideActionsInFlight ?? false;
+    const isRunning = isAnySyncActivityRunning(this.progressStore.state, fullSyncRunning, sideActionRunning);
+
+    // Auth still initializing in background -> show "Connecting…" with a plain
+    // cloud icon (no alarming color while the auth outcome is still unknown).
+    if (this.auth?.isInitializing) {
+      this.renderStatusBarItem(
+        this.statusBarEl,
+        RIBBON_STATUS_ICONS.ready,
+        null,
+        t("status.connecting"),
+      );
+      return;
+    }
+
+    const authState = this.auth?.authState;
+    if (!authState?.isLoggedIn) {
+      this.renderStatusBarItem(
+        this.statusBarEl,
+        RIBBON_STATUS_ICONS.loggedOut,
+        "loggedOut",
+        t("status.notLoggedIn"),
+      );
+      return;
+    }
+
+    // Session restored but the account is not verified yet (transient restore
+    // or refresh failure). Sync authorization is fail-closed until Graph /me
+    // binds the account, so do not claim the vault is ready or in sync — reuse
+    // the same "connecting" presentation as the initializing state.
+    if (this.auth?.isSessionPending) {
+      this.renderStatusBarItem(
+        this.statusBarEl,
+        RIBBON_STATUS_ICONS.ready,
+        null,
+        t("status.connecting"),
+      );
+      return;
+    }
+
+    // Cancelling is its own wide-status presentation and both other carriers
+    // switch to it the moment the request lands (`resolveRibbonStatus` ranks
+    // cancelling ahead of syncing). Keeping the bar on the rotating "syncing…"
+    // form through the drain window made it the only carrier still claiming
+    // work is moving (2026-09-29 三载体一致性门实测；is-cancelling 着色规则自
+    // 2026-08-26 起就是备位，本轮启用，文案复用侧栏现役短句).
+    if (this.progressStore.state.cancelRequested) {
+      this.renderStatusBarItem(
+        this.statusBarEl,
+        RIBBON_STATUS_ICONS.cancelling,
+        "cancelling",
+        t("syncView.cancelling"),
+      );
+      return;
+    }
+
+    if (isRunning) {
+      this.renderStatusBarItem(
+        this.statusBarEl,
+        RIBBON_STATUS_ICONS.syncing,
+        "syncing",
+        this.progressStore.state.activityKind === "mutationRecovery"
+          ? t("status.recovering")
+          : t("status.syncing"),
+      );
+      return;
+    }
+
+    // The shared operation lock is held without a running round (reset
+    // preflight, settings commit, participation reconciliation). Without
+    // this branch the bar looks idle while every side action bounces off
+    // the busy gateway (2026-09-20 实测「正在运行/空闲」对不上).
+    if (this.opLock !== null) {
+      this.renderStatusBarItem(
+        this.statusBarEl,
+        RIBBON_STATUS_ICONS.syncing,
+        "syncing",
+        t(this.opHolderStatusKey(this.opLock)),
+      );
+      return;
+    }
+
+    // Plan review active (sync paused, user needs to confirm in sidebar)
+    if (this.state?.planReviewActive) {
+      this.renderStatusBarItem(
+        this.statusBarEl,
+        RIBBON_STATUS_ICONS.attention,
+        "attention",
+        t("status.planReview"),
+      );
+      return;
+    }
+
+    const conflicts = this.state?.pendingConflicts?.length ?? 0;
+    const deletes = this.state?.pendingRemoteDeletes?.length ?? 0;
+    if (conflicts > 0 && deletes > 0) {
+      this.renderStatusBarItem(
+        this.statusBarEl,
+        RIBBON_STATUS_ICONS.attention,
+        "attention",
+        t("status.conflictsAndDeletes", { conflicts, deletes }),
+      );
+      return;
+    }
+    if (conflicts > 0) {
+      this.renderStatusBarItem(
+        this.statusBarEl,
+        RIBBON_STATUS_ICONS.attention,
+        "attention",
+        t("status.conflicts", { count: conflicts }),
+      );
+      return;
+    }
+    if (deletes > 0) {
+      this.renderStatusBarItem(
+        this.statusBarEl,
+        RIBBON_STATUS_ICONS.attention,
+        "attention",
+        t("status.pendingDeletes", { count: deletes }),
+      );
+      return;
+    }
+    // The wide status has four attention members (plan review, pending items,
+    // a blocking recovery and an active automatic pause); the bar must cover
+    // each one it can render specifically or it silently falls through to the
+    // green ready claim below. Pending items are counted here with the
+    // sidebar's own phrase, so the two carriers read the same fact the same
+    // way — the bar itself stays a reminder, not a second information surface.
+    // 本机独有条目（片④）与待处理问题同属"需要注意"这一档：两者都用侧栏那句
+    // 合计文案，两个载体的读法一致（不新增文案、不另立一档）。
+    const issues = (this.state?.pendingIssues?.length ?? 0)
+      + this.getLocalOnlyEntryCount();
+    if (issues > 0) {
+      this.renderStatusBarItem(
+        this.statusBarEl,
+        RIBBON_STATUS_ICONS.attention,
+        "attention",
+        t("syncView.issues.title", { count: issues }),
+      );
+      return;
+    }
+
+    const recovery = this.getMutationRecoveryDisplayState();
+    if (recovery?.kind === "waiting-network") {
+      this.renderStatusBarItem(
+        this.statusBarEl,
+        RIBBON_STATUS_ICONS.attention,
+        "attention",
+        t("status.waitingForNetwork"),
+      );
+      return;
+    }
+    if (recovery?.kind === "blocked") {
+      this.renderStatusBarItem(
+        this.statusBarEl,
+        RIBBON_STATUS_ICONS.attention,
+        "attention",
+        t("status.recoveryBlocked"),
+      );
+      return;
+    }
+    if (recovery?.kind === "checking") {
+      this.renderStatusBarItem(
+        this.statusBarEl,
+        RIBBON_STATUS_ICONS.syncing,
+        "syncing",
+        t("status.recovering"),
+      );
+      return;
+    }
+
+    const lastSync = this.state?.lastSyncTime;
+    const latestRound = this.state?.syncHistory?.[0];
+    if (latestRound?.status === "retry-pending") {
+      // The latest round was a retry-pending observation (a remote read failed
+      // before ordinary planning). A green "last sync" here would mislead the
+      // user into believing the vault is currently in sync. The system offline
+      // flag is the only honest source for a "no network" claim: while the
+      // device reports having a network, the only known fact is "the cloud was
+      // not readable", which shares the neutral connecting form with auth
+      // initialization / session-pending. The next healthy round returns to
+      // the ready state.
+      if (navigator.onLine === false) {
+        this.renderStatusBarItem(
+          this.statusBarEl,
+          RIBBON_STATUS_ICONS.offline,
+          "offline",
+          t("status.offline"),
+        );
+      } else {
+        this.renderStatusBarItem(
+          this.statusBarEl,
+          RIBBON_STATUS_ICONS.ready,
+          null,
+          t("status.connecting"),
+        );
+      }
+      return;
+    }
+    // The wide status reads an active automatic pause as "attention" (ribbon
+    // and sidebar both use `autoSyncPaused`). While it is set every automatic
+    // entry stays silent and only a user-initiated round resumes it, so the bar
+    // is the one signal left and must not claim the vault is healthy
+    // (2026-09-29: cancelled round → orange sidebar, green bar). Recovery and
+    // retry-pending keep their more specific forms above; the sentence is the
+    // settings page's own wording for this flag, so no new copy is introduced.
+    if (this.autoSyncPaused) {
+      this.renderStatusBarItem(
+        this.statusBarEl,
+        RIBBON_STATUS_ICONS.attention,
+        "attention",
+        t("settings.autoSync.desc.paused"),
+      );
+      return;
+    }
+
+    if (lastSync) {
+      this.renderStatusBarItem(
+        this.statusBarEl,
+        RIBBON_STATUS_ICONS.ready,
+        "ready",
+        t("status.lastSync", { time: new Date(lastSync).toLocaleTimeString() }),
+      );
+    } else {
+      this.renderStatusBarItem(
+        this.statusBarEl,
+        RIBBON_STATUS_ICONS.ready,
+        "ready",
+        t("status.ready"),
+      );
+    }
+  }
+
+  private updateRibbon(): void {
+    if (!this.ribbonEl) return;
+    if ((this.auth?.isInitializing ?? true) || !this._stateLoaded) return;
+    const status = this.getRibbonStatus();
+    const recovery = this.getMutationRecoveryDisplayState();
+    const hasHigherPriorityAttention =
+      (this.state?.planReviewActive ?? false)
+      || (this.state?.pendingIssues.length ?? 0) > 0
+      || (this.state?.pendingConflicts.length ?? 0) > 0
+      || (this.state?.pendingRemoteDeletes.length ?? 0) > 0
+      || this.getLocalOnlyEntryCount() > 0;
+    const label =
+      status === "attention"
+      && recovery
+      && !hasHigherPriorityAttention
+        ? this.i18n.t(
+            recovery.kind === "waiting-network"
+              ? "ribbon.waitingForNetwork"
+              : "ribbon.recoveryBlocked",
+          )
+        : resolveRibbonStatusLabel(
+            status,
+            this.progressStore.state,
+            this.i18n.t.bind(this.i18n),
+          );
+    setIcon(this.ribbonEl, RIBBON_STATUS_ICONS[status]);
+    setTooltip(this.ribbonEl, label);
+    this.ribbonEl.setAttr("aria-label", label);
+    this.ribbonEl.dataset.easySyncStatus = status;
+  }
+
+  private getRibbonStatus(): RibbonOwnStatus {
+    const fullSyncRunning = this.syncExecutor?.isRunning ?? false;
+    const sideActionRunning = this.syncExecutor?.hasSideActionsInFlight ?? false;
+    return resolveRibbonStatus({
+      loggedIn: this.auth?.authState.isLoggedIn ?? false,
+      cancelling: this.progressStore.state.cancelRequested,
+      // 同步入口占用（检测/准备期）并入运行档：Ribbon 是「点同步」的入口本身，
+      // 整段窗口保持「立即同步」会让用户以为没点上（2026-10-10 拍板）。
+      syncing: isAnySyncActivityRunning(this.progressStore.state, fullSyncRunning, sideActionRunning)
+        || this.isSyncEntryInProgress,
+      needsAttention: this.autoSyncPaused
+        || (this.state?.planReviewActive ?? false)
+        || (this.state?.pendingIssues.length ?? 0) > 0
+        || (this.state?.pendingConflicts.length ?? 0) > 0
+        || (this.state?.pendingRemoteDeletes.length ?? 0) > 0
+        // 片④ 本机独有条目与其它"需要处理"同档：三个载体（侧栏／状态栏／
+        // Ribbon）读同一份记录，图标档位一致。
+        || this.getLocalOnlyEntryCount() > 0
+        || this.getMutationRecoveryDisplayState() !== null,
+      recentSuccess: this.ribbonSuccessVisible,
+    });
+  }
+
+  private async handleRibbonClick(): Promise<void> {
+    if ((this.auth?.isInitializing ?? true) || !this._stateLoaded) return;
+    switch (this.getRibbonStatus()) {
+      case "loggedOut":
+        this.openPluginSettings();
+        return;
+      case "ready":
+        await this.startManualSync();
+        return;
+      default:
+        await this.activateSyncView();
+    }
+  }
+
+  openPluginSettings(): void {
+    const setting = (this.app as unknown as {
+      setting?: { open: () => void; openTabById: (id: string) => void };
+    }).setting;
+    setting?.open();
+    setting?.openTabById(this.manifest.id);
+  }
+
+  /** Counterpart of openPluginSettings: leave the settings surface. */
+  closePluginSettings(): void {
+    const setting = (this.app as unknown as {
+      setting?: { close?: () => void };
+    }).setting;
+    setting?.close?.();
+  }
+
+  private showRibbonSuccess(): void {
+    this.clearRibbonSuccess();
+    this.ribbonSuccessVisible = true;
+    this.ribbonSuccessTimer = compatSetTimeout(() => {
+      this.ribbonSuccessVisible = false;
+      this.ribbonSuccessTimer = null;
+      this.updateStatusBar();
+    }, RIBBON_SUCCESS_DURATION_MS);
+  }
+
+  private clearRibbonSuccess(): void {
+    compatClearTimeout(this.ribbonSuccessTimer);
+    this.ribbonSuccessTimer = null;
+    this.ribbonSuccessVisible = false;
+  }
+
+  // ---- SecretStorage wrappers ----
+  // Await and propagate the underlying promise (review 2026-09-02 finding ⑦,
+  // C13 P1): the previous wrappers fired setSecret/deleteSecret without
+  // waiting, so logout's remove→read-back check raced the delete and a write
+  // failure stayed silent. Failures now propagate to callers (AuthModule
+  // already logs and reports "removal not confirmed" on error).
+
+  private async saveSecret(key: string, value: string): Promise<void> {
+    const ss = this.app.secretStorage;
+    // A missing SecretStorage must fail the write loudly: silent success made
+    // login look complete while the refresh token was never persisted, and
+    // the next cold start silently dropped the session (账本 §十三 R6). The
+    // read path surfaces the same condition as this error type already.
+    if (!ss) {
+      throw new AuthError(
+        AuthErrorType.SecretStorageUnavailable,
+        "SecretStorage is not available",
+      );
+    }
+    // Obsidian's runtime returns a real promise; the shipped type signature
+    // still says void. Assert the actual shape so the write still propagates.
+    await (ss.setSecret as (id: string, secret: string) => Promise<void>)(key, value);
+  }
+
+  private async loadSecret(key: string): Promise<string | null> {
+    return this.app.secretStorage?.getSecret(key) ?? null;
+  }
+
+  private async removeSecret(key: string): Promise<void> {
+    const ss = this.app.secretStorage;
+    if (!ss) return;
+    // deleteSecret 自宿主 1.11.4 起运行时必有，minAppVersion 1.13.4 下恒走
+    // 真删；官方类型仍未收录，调用经本地 cast（原空串回写兜底已退场）。
+    await (ss as unknown as { deleteSecret: (k: string) => Promise<void> }).deleteSecret(key);
+  }
+}
+
+/** Format diag entry data for human-readable report output.
+ *  Strings are returned as-is; objects/arrays are JSON-stringified. */
+function formatDiagData(data: unknown): string {
+  if (data === undefined || data === null) return "";
+  if (typeof data === "string") return data;
+  try {
+    return JSON.stringify(data, null, 2);
+  } catch {
+    // Circular/exotic structures keep a deterministic, readable form.
+    return Object.prototype.toString.call(data);
+  }
+}

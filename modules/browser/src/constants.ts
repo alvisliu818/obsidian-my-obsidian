@@ -71,6 +71,22 @@ export const DEFAULT_SETTINGS: BrowserSettings = {
   clipFrontmatter: true,
   clipAlsoCopy: false,
 
+  annotationsFolder: "Browser/Annotations",
+  showAnnInline: true,
+  showAnnRemove: true,
+  showAnnFloat: true,
+
+  newTabExtId: "",
+
+  clipExpBold: false,
+  clipExpItalic: false,
+  clipExpUnderline: false,
+  clipExpRemoveImgLink: false,
+  clipExpSpanBr: false,
+  clipExpSvgToImg: false,
+
+  dnrEnabled: true,
+
   extensionsEnabled: true,
 };
 
@@ -82,4 +98,5 @@ export const DEFAULT_DATA: PluginData = {
   extensions: [],
   userscripts: [],
   session: [],
+  annPages: {},
 };

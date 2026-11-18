@@ -2,8 +2,9 @@
 import type { App } from "obsidian";
 import { requestUrl } from "obsidian";
 import type { ExtensionContentScript, ExtensionRecord } from "../types";
-import { nodeRequire, vaultBasePath } from "../utils/electron";
+import { nodeRequire, sessionFromPartition, vaultBasePath } from "../utils/electron";
 import { extractExtensionArchive } from "./crx";
+import { downloadEdgeCrx, fetchEdgeAddonMeta, parseEdgeAddonId } from "./edgeStore";
 import { buildShimSource } from "./cs-runtime";
 
 interface RawManifest {
@@ -14,6 +15,7 @@ interface RawManifest {
   icons?: Record<string, string>;
   permissions?: string[];
   content_scripts?: RawContentScript[];
+  chrome_url_overrides?: { newtab?: string };
   browser_action?: { default_popup?: string; default_icon?: string | Record<string, string> };
   action?: { default_popup?: string; default_icon?: string | Record<string, string> };
   default_locale?: string;
@@ -96,6 +98,40 @@ export class ExtensionHost {
     return rec;
   }
 
+  /** 扩展根目录（Edge 下载/规则集发现用）。 */
+  dirOf(rec: ExtensionRecord): string {
+    return this.pathMod.join(this.rootDir, rec.dir);
+  }
+
+  /** 带 newtab override 的已装扩展（P4 新标签页扩展候选）。 */
+  newtabExtensions(): { id: string; name: string; page: string }[] {
+    const strip = (s: string): string => s.replace(/^[\\/]+/, "");
+    return this.getRecords()
+      .filter((r) => r.enabled && r.newtab)
+      .map((r) => ({ id: r.id, name: r.name, page: "chrome-extension://" + r.id + "/" + strip(String(r.newtab)) }));
+  }
+
+  /** Edge 加载项安装：商店链接/裸 id → 元数据 → CRX 下载 → 安装（按 edge id 去重旧记录）。 */
+  async installFromEdgeAddons(idOrUrl: string): Promise<ExtensionRecord> {
+    const id = parseEdgeAddonId(idOrUrl);
+    if (!id) throw new Error("无法从输入解析 Edge 扩展 id");
+    const meta = await fetchEdgeAddonMeta(id);
+    const buffer = await downloadEdgeCrx(id);
+    // 旧的同源安装先摘掉（SiYuan 同款：dir 含 edge-<id> 的记录）
+    const records = this.getRecords();
+    for (const old of records.filter((r) => r.dir.includes("edge-" + id))) {
+      try {
+        this.fs.rmSync(this.pathMod.join(this.rootDir, old.dir), { recursive: true, force: true });
+      } catch { /* 已删 */ }
+      const i = records.indexOf(old);
+      if (i >= 0) records.splice(i, 1);
+    }
+    const rec = await this.installFromArchive(buffer as unknown as ArrayBuffer, (meta?.name || id) + " (Edge)");
+    rec.description = meta?.description || rec.description;
+    this.upsert(rec);
+    return rec;
+  }
+
   async installFromArchive(buffer: ArrayBuffer, fallbackName: string): Promise<ExtensionRecord> {
     const files = await extractExtensionArchive(buffer);
     if (!files.some((f) => f.path === "manifest.json")) {
@@ -105,6 +141,7 @@ export class ExtensionHost {
   }
 
   async installFromUrl(url: string): Promise<ExtensionRecord> {
+    if (parseEdgeAddonId(url)) return this.installFromEdgeAddons(url);
     const resp = await requestUrl({ url, throw: false });
     if (resp.status >= 400) throw new Error("下载失败：HTTP " + resp.status);
     return this.installFromArchive(resp.arrayBuffer, url);
@@ -113,6 +150,7 @@ export class ExtensionHost {
   remove(id: string): void {
     const rec = this.getRecords().find((r) => r.id === id);
     if (rec) {
+      this.unloadNative(rec);
       try {
         this.fs?.rmSync(this.pathMod.join(this.rootDir, rec.dir), { recursive: true, force: true });
       } catch {
@@ -131,8 +169,63 @@ export class ExtensionHost {
     const rec = this.getRecords().find((r) => r.id === id);
     if (!rec) return;
     rec.enabled = enabled;
+    if (!enabled) this.unloadNative(rec);
     this.onChange();
   }
+
+  // ---------------- 原生加载（P7，思源「原生/垫片」双模对齐） ----------------
+
+  /**
+   * 用 Electron 原生 session.loadExtension 把扩展装载进浏览器分区。
+   *
+   * 只有原生模式才运行 manifest background / MV3 service worker——TM/VM 的
+   * 协作安装链（ParseScript、userScripts 注册）全发生在 SW 里，没有原生加载
+   * 这些扩展就是空壳。Obsidian 的 webRequest 面对原生扩展不提供桥接
+   * （声明式能力受限），但 SW 自身能跑：VM/TM 的安装确认页、脚本管理、
+   * chrome.userScripts 注册都能工作。失败（版本不支持/目录无效）→ 垫片模式
+   * 兜底，绝不抛出阻塞安装。
+   */
+  async loadNative(rec: ExtensionRecord, partition: string): Promise<boolean> {
+    try {
+      const ses = sessionFromPartition(partition);
+      if (!ses?.loadExtension || !this.available) return false;
+      if (rec.nativeId) return true; // 已加载
+      const info = await ses.loadExtension(this.pathMod.join(this.rootDir, rec.dir), {
+        allowFileAccess: false,
+      });
+      rec.nativeId = String(info?.id ?? "");
+      this.onChange();
+      return true;
+    } catch (e) {
+      console.warn("[obsidian-browser] native loadExtension failed for " + rec.name, e);
+      return false;
+    }
+  }
+
+  unloadNative(rec: ExtensionRecord): void {
+    if (!rec.nativeId) return;
+    try {
+      const ses = sessionFromPartition(this.lastPartition ?? "persist:obsidian-browser");
+      ses?.removeExtension?.(rec.nativeId);
+    } catch {
+      /* 已卸载 */
+    }
+    rec.nativeId = undefined;
+    this.onChange();
+  }
+
+  /** 扩展 id 的 electron 侧原生 id（SW eval 按 URL 匹配找 worker 用）。 */
+  electronIdOf(rec: ExtensionRecord): string {
+    return rec.nativeId || rec.id;
+  }
+
+  get lastPartition(): string {
+    return this._lastPartition;
+  }
+  set lastPartition(p: string) {
+    this._lastPartition = p;
+  }
+  private _lastPartition = "persist:obsidian-browser";
 
   // ---------------- injection ----------------
 
@@ -260,6 +353,7 @@ export class ExtensionHost {
       contentScripts,
       icon,
       popup: action.default_popup,
+      newtab: m.chrome_url_overrides?.newtab || "",
       permissions: m.permissions ?? [],
     };
   }

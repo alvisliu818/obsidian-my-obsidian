@@ -41,6 +41,9 @@ const CLIP_SOURCE = await bundleVendorSource("src/browser/clipScript.ts");
 const PRELOAD_SOURCE = await bundleVendorSource("src/browser/preload.ts");
 // Same idea for extension popups: a file:// guest needs the chrome.* shim.
 const EXT_PRELOAD_SOURCE = await bundleVendorSource("src/extensions/extPreload.ts");
+// 网页标注：页内脚本原样注入，浮窗页按 preload 同款落盘。
+const ANN_SCRIPT_SOURCE = readFileSync("src/assets/annotationScript.js", "utf8");
+const ANN_POPUP_HTML = readFileSync("src/assets/annotation-popup.html", "utf8");
 
 const context = await esbuild.context({
   banner: { js: banner },
@@ -59,6 +62,8 @@ const context = await esbuild.context({
     __ADBLOCK_RULES__: JSON.stringify(
       readFileSync(new URL("./src/assets/adblock-rules.txt", import.meta.url), "utf8"),
     ),
+    __ANN_SCRIPT_SOURCE__: JSON.stringify(ANN_SCRIPT_SOURCE),
+    __ANN_POPUP_HTML__: JSON.stringify(ANN_POPUP_HTML),
   },
   format: "cjs",
   target: "es2020",

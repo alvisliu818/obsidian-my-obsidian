@@ -3,6 +3,7 @@ import { NEW_TAB_DEDUP_WINDOW } from "../constants";
 import type { BrowserSettings, IWebviewTag, WebViewContextMenuParams } from "../types";
 import { webContentsFromId } from "../utils/electron";
 import { escapeHtml } from "../utils/dom";
+import { parseEdgeInstallNavigation } from "../extensions/edgeStore";
 
 export interface WebviewCallbacks {
   onUrlChange?(url: string): void;
@@ -19,6 +20,22 @@ export interface WebviewCallbacks {
   /** Injection point for ad-filter CSS and content scripts. */
   onDomReady?(webview: IWebviewTag, url: string): void;
   onSaveAs?(url: string): void;
+  /** 标注：气泡「标注」点击（quote/prefix/suffix/color）。 */
+  onAnnCreate?(payload: { quote?: string; prefix?: string; suffix?: string; color?: string }, webview: IWebviewTag): void;
+  /** 标注：悬浮/点击高亮 → 打开/复用浮窗（hover=悬浮预览态）。 */
+  onAnnOpen?(payload: { id?: string; x?: number; y?: number; hover?: boolean }, webview: IWebviewTag): void;
+  /** 标注：页内改颜色/标签。 */
+  onAnnMeta?(payload: { id?: string; color?: string; tags?: string[] }): void;
+  /** 标注：鼠标离开高亮（悬浮浮窗自动收起判定）。 */
+  onAnnHoverEnd?(payload: { id?: string }): void;
+  /** Edge 加载项：商店页「安装」按钮 / microsoft-edge: 协议 / CRX 直链导航。 */
+  onEdgeInstall?(id: string): void;
+  /** 标注：气泡「取消高亮/取消小字」。 */
+  onAnnRemove?(payload: { kind?: string; id?: string; quote?: string; prefix?: string; suffix?: string }): void;
+  /** 标注：框选完成（rect=文档坐标，vrect=视口坐标供宿主截屏）。 */
+  onAnnRect?(payload: { id?: string; rect?: { x: number; y: number; w: number; h: number }; vrect?: { x: number; y: number; w: number; h: number } }): void;
+  /** 标注：改锚（换锚点文字）。 */
+  onAnnReanchor?(payload: { id?: string; quote?: string; prefix?: string; suffix?: string }): void;
 }
 
 export function createWebview(partition: string, preloadUrl: string, userAgent: string): IWebviewTag {
@@ -52,6 +69,8 @@ export class WebviewController {
   private appliedUserAgent = "";
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private disposed = false;
+  /** 页面缩放系数（0.25–3；Ctrl+滚轮/命令驱动，导航不重置——Electron webContents 缩放随页保留）。 */
+  private zoomFactor = 1;
 
   constructor(
     public webview: IWebviewTag,
@@ -161,6 +180,13 @@ export class WebviewController {
     this.on("will-navigate", (e: any) => {
       if (this.programmaticNav) return;
       const url = e?.url ?? "";
+      // Edge 商店"获取"按钮的落点：microsoft-edge: 协议 / CRX 直链 → 安装
+      const edgeId = parseEdgeInstallNavigation(url);
+      if (edgeId) {
+        try { (e as any).preventDefault?.(); } catch { /* not preventable */ }
+        this.callbacks.onEdgeInstall?.(edgeId);
+        return;
+      }
       // .user.js 导航 → 原生用户脚本安装（截住，不让页面变成一屏裸文本）
       if (/\.user\.js(\?|#|$)/i.test(url)) {
         try { (e as any).preventDefault?.(); } catch { /* not preventable */ }
@@ -184,6 +210,11 @@ export class WebviewController {
       } catch {
         /* ignore */
       }
+      const edgeId = e?.url ? parseEdgeInstallNavigation(String(e.url)) : null;
+      if (edgeId) {
+        this.callbacks.onEdgeInstall?.(edgeId);
+        return;
+      }
       if (e?.url) this.openNewTab(String(e.url), true);
     });
 
@@ -194,6 +225,11 @@ export class WebviewController {
       } catch {
         /* ignore */
       }
+      const edgeId = e?.url ? parseEdgeInstallNavigation(String(e.url)) : null;
+      if (edgeId) {
+        this.callbacks.onEdgeInstall?.(edgeId);
+        return;
+      }
       if (e?.url) this.openNewTab(String(e.url), true);
     });
 
@@ -201,6 +237,15 @@ export class WebviewController {
       const code = e?.errorCode ?? 0;
       // -3 = aborted (redirect/user stop): not a real failure.
       if (code === -3) return;
+      // -301 ERR_UNKNOWN_URL_SCHEME：microsoft-edge: 协议 Electron 可能不发
+      // will-navigate，只在失败事件里露头——同样接住转安装
+      if (code === -301 && e?.validatedURL) {
+        const edgeId = parseEdgeInstallNavigation(String(e.validatedURL));
+        if (edgeId) {
+          this.callbacks.onEdgeInstall?.(edgeId);
+          return;
+        }
+      }
       this.loading = false;
       this.hasLoadedOnce = true;
       this.callbacks.onLoadingChange?.(false);
@@ -556,6 +601,7 @@ export class WebviewController {
         window.__obsidianLinkInterceptor = true;
         window.__obsidianHadPreload = !!window.__obsidianBrowserPreload;
         window.__obsidianPendingNewTab = null;
+        window.__obZoomDelta = 0;
         try { window.open = function(u){ if(u){ window.__obsidianPendingNewTab = String(u); } return null; }; } catch(e){}
         document.addEventListener("click", function(e){
           var a = e.target && e.target.closest && e.target.closest("a[href]");
@@ -564,6 +610,11 @@ export class WebviewController {
           e.preventDefault(); e.stopPropagation();
           window.__obsidianPendingNewTab = a.href;
         }, true);
+        document.addEventListener("wheel", function(e){
+          if(!(e.ctrlKey||e.metaKey)) return;
+          e.preventDefault();
+          window.__obZoomDelta += (e.deltaY < 0 ? 1 : -1);
+        }, { passive: false, capture: true });
         return "installed";
       })()`;
     try {
@@ -575,15 +626,75 @@ export class WebviewController {
       if (this.disposed) return;
       void (async () => {
         try {
-          const v = await this.webview.executeJavaScript<string>(
-            "(function(){var u=window.__obsidianPendingNewTab;window.__obsidianPendingNewTab=null;return u})()",
+          // 一次轮询取走全部 guest 意图：新标签页 / 缩放步进 / 标注事件。
+          const v = await this.webview.executeJavaScript<{
+            n: string | null;
+            z: number;
+            e: string | null;
+            r: { kind?: string; id?: string; quote?: string; prefix?: string; suffix?: string } | null;
+            c: { id?: string; rect?: { x: number; y: number; w: number; h: number }; vrect?: { x: number; y: number; w: number; h: number } } | null;
+            e2: { id?: string; quote?: string; prefix?: string; suffix?: string } | null;
+            a: { quote?: string; prefix?: string; suffix?: string; color?: string } | null;
+            ao: { id?: string; x?: number; y?: number; hover?: boolean } | null;
+            am: { id?: string; color?: string; tags?: string[] } | null;
+            ah: { id?: string } | null;
+          }>(
+            "(function(){var o={n:window.__obsidianPendingNewTab||null,z:window.__obZoomDelta||0," +
+              "e:window.__obEdgeInstall||null,r:window.__syAnnRemove||null," +
+              "c:window.__syAnnRectCaptured||null,e2:window.__syAnnReanchor||null," +
+              "a:window.__syAnnCreate||null,ao:window.__syAnnOpen||null," +
+              "am:window.__syAnnMeta||null,ah:window.__syAnnHoverEnd||null};" +
+              "window.__obsidianPendingNewTab=null;window.__obZoomDelta=0;window.__obEdgeInstall=null;" +
+              "window.__syAnnRemove=null;window.__syAnnRectCaptured=null;window.__syAnnReanchor=null;" +
+              "window.__syAnnCreate=null;window.__syAnnOpen=null;" +
+              "window.__syAnnMeta=null;window.__syAnnHoverEnd=null;return o})()",
             false,
           );
-          if (v) this.openNewTab(String(v), true);
+          if (!v) return;
+          if (v.n) this.openNewTab(String(v.n), true);
+          if (v.e) this.callbacks.onEdgeInstall?.(String(v.e));
+          if (v.z) this.applyZoomStep(v.z > 0 ? 1.1 : 1 / 1.1);
+          if (v.a) this.callbacks.onAnnCreate?.(v.a, this.webview);
+          if (v.ao) this.callbacks.onAnnOpen?.(v.ao, this.webview);
+          if (v.am) this.callbacks.onAnnMeta?.(v.am);
+          if (v.ah) this.callbacks.onAnnHoverEnd?.(v.ah);
+          if (v.r) this.callbacks.onAnnRemove?.(v.r);
+          if (v.c) this.callbacks.onAnnRect?.(v.c);
+          if (v.e2) this.callbacks.onAnnReanchor?.(v.e2);
         } catch {
           /* guest gone */
         }
       })();
     }, 400);
+  }
+
+  // ---------------- page zoom ----------------
+
+  /** 页面缩放（0.25–3）：webContents 级缩放，导航/刷新保持。 */
+  applyZoomStep(factor: number): void {
+    this.setZoomFactor(this.zoomFactor * factor);
+  }
+
+  setZoomFactor(f: number): void {
+    const clamped = Math.min(3, Math.max(0.25, f));
+    this.zoomFactor = clamped;
+    try {
+      this.webContents()?.setZoomFactor(clamped);
+    } catch {
+      /* guest gone */
+    }
+  }
+
+  getZoomFactor(): number {
+    return this.zoomFactor;
+  }
+
+  resetZoom(): void {
+    this.setZoomFactor(1);
+  }
+
+  private webContents(): any | null {
+    const id = this.webviewId();
+    return id > 0 ? webContentsFromId(id) : null;
   }
 }

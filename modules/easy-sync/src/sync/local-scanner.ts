@@ -1,0 +1,1578 @@
+/**
+ * LocalScanner — Vault file enumeration and snapshot building
+ *
+ * Uses Obsidian Vault API for cross-platform file access.
+ * Generates LocalFileEntry snapshots with path, size, mtime, full SHA-256,
+ * and an optional OneDrive-compatible QuickXor fingerprint from the same read.
+ */
+
+import { EASY_SYNC_RECOVERY_SUFFIX } from "./local-replacement-writer";
+import { TFolder, type Vault } from "obsidian";
+import { quickXorHashBase64, sha256Hex } from "../crypto";
+import {
+  compatSetTimeout,
+  DEFAULT_CONFIG_DIR,
+  getConfigDir,
+  getEasySyncPaths,
+  getEasySyncLegacyPaths,
+  isEasySyncSelfSyncFilePath,
+  isRecord,
+} from "../obsidian-compat";
+import {
+  type LocalFileEntry,
+  type LocalFolderEntry,
+  type ScanConfig,
+  DEFAULT_SCAN_CONFIG,
+} from "./types";
+import {
+  isPluginDataSelected,
+  isPluginSelected,
+  normalizePluginScopeSelection,
+  type PluginScopeSelection,
+} from "./community-plugin-sync-policy";
+import {
+  isFolderExcludedByPatterns,
+  isFolderPathKeptByWhitelist,
+  isPathExcludedByPatterns,
+  isPathIncludedByWhitelist,
+  normalizePathPatterns,
+} from "./path-pattern-filter";
+import type { DiagnosticLogger } from "./diagnostic-logger";
+const SCAN_CACHE_FORMAT = 2;
+const SCAN_CACHE_LEGACY_FORMAT = 1;
+const SCAN_CACHE_HISTORY_LIMIT = 16;
+/** Aggregate bounds across every path's history. The per-path cap alone
+ *  cannot bound deleted/renamed paths, whose histories are kept by design. */
+const SCAN_CACHE_HISTORY_GLOBAL_ENTRY_LIMIT = 20_000;
+const SCAN_CACHE_HISTORY_GLOBAL_BYTE_LIMIT = 8 * 1024 * 1024;
+/** Drain to this fraction of each global cap so one append at the hard limit
+ *  does not trigger the full cross-path prune again on the next append. */
+const SCAN_CACHE_HISTORY_GLOBAL_LOW_WATER = 0.9;
+const SCAN_SLEEP_EVERY = 50;
+
+interface ScanCacheEntry {
+  mtime: number;
+  size: number;
+  hash: string;
+  quickXorHash?: string;
+  binary: boolean;
+}
+
+/** One prior per-path scan observation (the local change history seed). */
+interface ScanCacheHistoryEntry extends ScanCacheEntry {
+  observedAt: number;
+}
+
+type ScanCache = {
+  format: number;
+  entries: Record<string, ScanCacheEntry>;
+  histories: Record<string, ScanCacheHistoryEntry[]>;
+};
+
+/** Deterministic approximation of one history entry's persisted footprint. */
+function scanCacheHistoryEntryBytes(entry: ScanCacheHistoryEntry): number {
+  return JSON.stringify(entry).length;
+}
+
+interface LocalScanResult {
+  entries: LocalFileEntry[];
+  /** Read-only folder topology. It does not authorize folder mutations. */
+  folders: LocalFolderEntry[];
+  /** Folder completeness is separate so V1 file sync stays unchanged in F0. */
+  folderScanComplete: boolean;
+  folderScanFailures: string[];
+  skippedLarge: string[];
+  failedPaths: string[];
+  skippedCount: number;
+  complete: boolean;
+  /** Orphaned `${target}.easy-sync-recovery` copies encountered during the
+   *  scan (target-side download-replacement backups whose journal intent is
+   *  already gone). They are excluded from sync; the executor clears them in
+   *  the same round after the ordinary journal recovery already ran. */
+  recoveryCopies: string[];
+}
+export type LocalFileInspection =
+  | { status: "missing" }
+  | { status: "present"; entry?: LocalFileEntry }
+  | { status: "uncertain"; reason: "excluded" | "stat" | "too-large" | "read" };
+/** Content-free probe for last-instant gates (`inspectFileStat`). Same status
+ *  vocabulary as `LocalFileInspection` minus content facts, so an unreadable
+ *  stat can still fail closed instead of being mistaken for a changed file. */
+export type LocalFileStatInspection =
+  | { status: "missing" }
+  | { status: "present"; size: number; mtime: number }
+  | { status: "uncertain"; reason: "excluded" | "stat" | "too-large" };
+const COMMUNITY_PLUGIN_CODE_FILES = new Set([
+  "main.js",
+  "manifest.json",
+  "styles.css",
+]);
+
+function normalizeVaultRelativePath(value: string): string {
+  return value
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/")
+    .replace(/^\/+|\/+$/g, "");
+}
+
+/** Normalize the persisted device-local folder scope.
+ *  Invalid/root/config paths are ignored; parent folders subsume descendants. */
+export function normalizeExcludedFolders(
+  values: readonly unknown[],
+  configDir = DEFAULT_CONFIG_DIR,
+): string[] {
+  const normalizedConfigDir = normalizeVaultRelativePath(configDir).toLowerCase();
+  const unique = new Map<string, string>();
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const path = normalizeVaultRelativePath(value);
+    if (!path || path === ".") continue;
+    const segments = path.split("/");
+    if (segments.some((segment) => segment === "." || segment === "..")) continue;
+    const key = path.toLowerCase();
+    if (
+      normalizedConfigDir
+      && (key === normalizedConfigDir || key.startsWith(`${normalizedConfigDir}/`))
+    ) continue;
+    if (!unique.has(key)) unique.set(key, path);
+  }
+
+  const byParentFirst = [...unique.values()].sort((left, right) =>
+    left.split("/").length - right.split("/").length
+    || left.length - right.length
+    || left.localeCompare(right),
+  );
+  const collapsed: string[] = [];
+  for (const path of byParentFirst) {
+    const key = path.toLowerCase();
+    if (collapsed.some((parent) => {
+      const parentKey = parent.toLowerCase();
+      return key === parentKey || key.startsWith(`${parentKey}/`);
+    })) continue;
+    collapsed.push(path);
+  }
+  return collapsed.sort((left, right) => left.localeCompare(right));
+}
+
+export function isPathExcludedByFolders(
+  path: string,
+  excludedFolders: readonly string[] | undefined,
+): boolean {
+  if (!excludedFolders?.length) return false;
+  const normalizedPath = normalizeVaultRelativePath(path).toLowerCase();
+  return excludedFolders.some((folder) => {
+    const normalizedFolder = normalizeVaultRelativePath(folder).toLowerCase();
+    return normalizedPath === normalizedFolder
+      || normalizedPath.startsWith(`${normalizedFolder}/`);
+  });
+}
+
+function isEasySyncInternalPathForPaths(
+  path: string,
+  paths: ReturnType<typeof getEasySyncPaths>,
+): boolean {
+  return path.endsWith(EASY_SYNC_RECOVERY_SUFFIX)
+    || path === paths.dataFile
+    || (
+      path.startsWith(`${paths.pluginDirPrefix}data.sync-conflict-`)
+      && path.endsWith(".json")
+    )
+    || path === paths.remoteStateFile
+    || path === paths.stateV2File
+    || path === paths.stateV2NextFile
+    || path === paths.stateV2PreviousFile
+    || path === paths.stateV2RecoveryFile
+    || path === paths.stateV2ManifestFile
+    || path === paths.stateV2ManifestNextFile
+    || path === paths.stateV2AuthorityWitnessFile
+    || path === paths.stateV2AuthorityWitnessNextFile
+    || path === paths.stateV2IndexedDbRecoveryDir
+    || path.startsWith(`${paths.stateV2IndexedDbRecoveryDir}/`)
+    || path === paths.stateV2RetiredManifestFile
+    || path === paths.stateV2RollbackFile
+    || path === paths.stateV2MigrationHoldFile
+    || path === paths.stateV2MigrationHoldNextFile
+    || path === paths.stateV2ScopeTransitionFile
+    || path === paths.stateV2ScopeTransitionNextFile
+    || (
+      path.startsWith(paths.stateV2CorruptSourcePrefix)
+      && (path.endsWith(".json") || path.endsWith(".json.next"))
+    )
+    || path === paths.stateV2CorruptRecoveryFile
+    || path === paths.stateV2CorruptRecoveryNextFile
+    || path === paths.stateV2CorruptPublicationFile
+    || path === paths.stateV2CorruptPublicationNextFile
+    || (
+      path.startsWith(paths.stateV2ReactivationArchivePrefix)
+      && (path.endsWith(".json") || path.endsWith(".json.next"))
+    )
+    || path === paths.stateV1BackupFile
+    || path === paths.baseContentFile
+    || path === paths.deletionLedgerFile
+    || path === `${paths.deletionLedgerFile}.next`
+    || path === paths.ancestorManifestV2File
+    || path === paths.ancestorManifestV2NextFile
+    || path === paths.ancestorsV2Dir
+    || path.startsWith(`${paths.ancestorsV2Dir}/`)
+    || path === paths.scanCacheFile
+    || path === paths.logsDir
+    || path.startsWith(`${paths.logsDir}/`)
+    || path === paths.tmpDir
+    || path.startsWith(`${paths.tmpDir}/`);
+}
+
+export function isEasySyncInternalPath(
+  path: string,
+  configDir = DEFAULT_CONFIG_DIR,
+  pluginId = "easy-sync",
+): boolean {
+  return isEasySyncInternalPathForPaths(
+    path,
+    getEasySyncPaths(configDir, pluginId),
+  ) || isEasySyncInternalPathForPaths(
+    path,
+    getEasySyncLegacyPaths(configDir, pluginId),
+  );
+}
+
+/** Heuristic binary detection: check for null bytes in the first 8KB */
+function isBinary(content: ArrayBuffer): boolean {
+  const bytes = new Uint8Array(content.slice(0, 8192));
+  for (let i = 0; i < bytes.length; i++) {
+    if (bytes[i] === 0) return true;
+  }
+  return false;
+}
+
+/** File-name-level default exclusions that apply anywhere in the vault.
+ *  Office owner/lock files (~$report.docx) exist only while the document is
+ *  open and vanish on close, so syncing them produces upload/delete churn;
+ *  .DS_Store / Thumbs.db / *.tmp are the same class of OS noise. Unlike
+ *  excludePaths (full-path prefixes) these match the basename in every
+ *  directory. Directories are intentionally not affected. */
+const DEFAULT_EXCLUDED_FILE_BASENAMES = new Set([".ds_store", "thumbs.db"]);
+
+function isDefaultExcludedFileName(fileName: string): boolean {
+  const name = fileName.toLowerCase();
+  if (name.startsWith("~$")) return true;
+  if (name.endsWith(".tmp")) return true;
+  return DEFAULT_EXCLUDED_FILE_BASENAMES.has(name);
+}
+
+/** Check if a path should be excluded based on config.
+ *  includePaths override excludePaths — a path matching any includePath is never excluded,
+ *  except for plugin data.json files which would cause self-referential sync writes.
+ *
+ *  User pattern filters (obsidian-my-obsidian extension): the blacklist is
+ *  checked right after excludedFolders — a match excludes outright, winning
+ *  over the whitelist below; the whitelist only narrows vault content and
+ *  sits after the internal includePaths resurrection so plugin/config files
+ *  keep being governed by their own sync-scope switches. */
+function isExcluded(path: string, config: ScanConfig, configDir: string, pluginId: string): boolean {
+  const paths = getEasySyncPaths(configDir, pluginId);
+  if (isEasySyncInternalPath(path, configDir, pluginId)) return true;
+  if (isPathExcludedByFolders(path, config.excludedFolders)) return true;
+  if (isPathExcludedByPatterns(path, config.pathBlacklist)) return true;
+
+  if (path === paths.pluginDir || path.startsWith(paths.pluginDirPrefix)) {
+    return config.includeOwnPluginCode !== true
+      || !isEasySyncSelfSyncFilePath(path, configDir, pluginId);
+  }
+
+  if (
+    path.startsWith(paths.pluginRoot)
+    && path !== paths.pluginDir
+    && !path.startsWith(paths.pluginDirPrefix)
+  ) {
+    const parts = path.slice(paths.pluginRoot.length).split("/");
+    if (parts.length !== 2) return true;
+    const communityPluginId = parts[0];
+    const fileName = parts[1];
+    const pluginCodeSelection = normalizePluginScopeSelection(
+      config.pluginCodeSelection,
+      config.includePluginCode,
+      pluginId,
+    );
+    const pluginDataSelection = normalizePluginScopeSelection(
+      config.pluginDataSelection,
+      config.includePluginData,
+      pluginId,
+    );
+    if (fileName === "data.json") {
+      return !isPluginDataSelected(
+        pluginCodeSelection,
+        pluginDataSelection,
+        communityPluginId,
+      );
+    }
+    return !isPluginSelected(
+      pluginCodeSelection,
+      communityPluginId,
+    )
+      || !COMMUNITY_PLUGIN_CODE_FILES.has(fileName);
+  }
+
+  for (const prefix of config.includePaths) {
+    if (path.startsWith(prefix)) {
+      return false;
+    }
+  }
+  if (!isPathIncludedByWhitelist(path, config.pathWhitelist)) return true;
+  for (const prefix of config.excludePaths) {
+    if (path.startsWith(prefix)) return true;
+  }
+  if (isDefaultExcludedFileName(path.slice(path.lastIndexOf("/") + 1))) return true;
+  return false;
+}
+
+function isExcludedDirectory(path: string, config: ScanConfig, configDir: string, pluginId: string): boolean {
+  const paths = getEasySyncPaths(configDir, pluginId);
+  const legacyPaths = getEasySyncLegacyPaths(configDir, pluginId);
+  const isInternalDirectory = (candidate: ReturnType<typeof getEasySyncPaths>): boolean =>
+    path === candidate.logsDir
+    || path.startsWith(`${candidate.logsDir}/`)
+    || path === candidate.tmpDir
+    || path.startsWith(`${candidate.tmpDir}/`)
+    || path === candidate.ancestorsV2Dir
+    || path.startsWith(`${candidate.ancestorsV2Dir}/`)
+    || path === candidate.stateV2IndexedDbRecoveryDir
+    || path.startsWith(`${candidate.stateV2IndexedDbRecoveryDir}/`);
+  if (isInternalDirectory(paths) || isInternalDirectory(legacyPaths)) return true;
+  if (isPathExcludedByFolders(path, config.excludedFolders)) return true;
+  if (isFolderExcludedByPatterns(path, config.pathBlacklist)) return true;
+
+  if (path === paths.pluginDir) {
+    return config.includeOwnPluginCode !== true;
+  }
+  if (path.startsWith(paths.pluginDirPrefix)) return true;
+
+  if (
+    path.startsWith(paths.pluginRoot)
+    && path !== paths.pluginDir
+    && !path.startsWith(paths.pluginDirPrefix)
+  ) {
+    const parts = path.slice(paths.pluginRoot.length).split("/");
+    if (parts.length > 1) return true;
+    const communityPluginId = parts[0];
+    const pluginCodeSelection = normalizePluginScopeSelection(
+      config.pluginCodeSelection,
+      config.includePluginCode,
+      pluginId,
+    );
+    const pluginDataSelection = normalizePluginScopeSelection(
+      config.pluginDataSelection,
+      config.includePluginData,
+      pluginId,
+    );
+    return !isPluginSelected(pluginCodeSelection, communityPluginId)
+      && !isPluginDataSelected(
+        pluginCodeSelection,
+        pluginDataSelection,
+      communityPluginId,
+    );
+  }
+
+  const prefix = `${path.replace(/\/+$/, "")}/`;
+  const relatedInclude = config.includePaths.some(
+    (include) => include.startsWith(prefix) || prefix.startsWith(include),
+  );
+  if (relatedInclude) return false;
+
+  if (!isFolderPathKeptByWhitelist(path, config.pathWhitelist)) return true;
+
+  return config.excludePaths.some((exclude) => prefix.startsWith(exclude));
+}
+
+export interface FolderSyncScopeSnapshotV1 {
+  version: 1;
+  configDir: string;
+  pluginId: string;
+  excludePaths: string[];
+  excludedFolders: string[];
+  /** User blacklist patterns (obsidian-my-obsidian extension). Snapshots
+   *  written before the extension lack this field; readers default to []. */
+  pathBlacklist?: string[];
+  /** User whitelist patterns (obsidian-my-obsidian extension). Optional for
+   *  the same backward-compatibility reason as pathBlacklist. */
+  pathWhitelist?: string[];
+  includePaths: string[];
+  includeOwnPluginCode: boolean;
+  includePluginCode: boolean;
+  includePluginData: boolean;
+  pluginCodeSelection: PluginScopeSelection;
+  pluginDataSelection: PluginScopeSelection;
+}
+
+/**
+ * Persistable, capability-free folder-range facts for one settings revision.
+ * The snapshot is only used by the source-bound scope-expansion transaction;
+ * normal scanning continues to read the live LocalScanner config.
+ */
+export function createFolderSyncScopeSnapshotV1(
+  config: Partial<ScanConfig>,
+  configDir = DEFAULT_CONFIG_DIR,
+  pluginId = "easy-sync",
+): FolderSyncScopeSnapshotV1 {
+  const normalizedConfigDir = normalizeVaultRelativePath(configDir);
+  const normalizedPluginId = pluginId.trim() || "easy-sync";
+  const includePluginCode = config.includePluginCode === true;
+  const includePluginData = config.includePluginData === true;
+  return {
+    version: 1,
+    configDir: normalizedConfigDir,
+    pluginId: normalizedPluginId,
+    excludePaths: [...(
+      config.excludePaths
+      ?? [`${normalizedConfigDir}/`, ...DEFAULT_SCAN_CONFIG.excludePaths]
+    )],
+    excludedFolders: normalizeExcludedFolders(
+      config.excludedFolders ?? [],
+      normalizedConfigDir,
+    ),
+    pathBlacklist: normalizePathPatterns(config.pathBlacklist ?? []),
+    pathWhitelist: normalizePathPatterns(config.pathWhitelist ?? []),
+    includePaths: [...(config.includePaths ?? [])],
+    includeOwnPluginCode: config.includeOwnPluginCode === true,
+    includePluginCode,
+    includePluginData,
+    pluginCodeSelection: normalizePluginScopeSelection(
+      config.pluginCodeSelection,
+      includePluginCode,
+      normalizedPluginId,
+    ),
+    pluginDataSelection: normalizePluginScopeSelection(
+      config.pluginDataSelection,
+      includePluginData,
+      normalizedPluginId,
+    ),
+  };
+}
+
+export function readFolderSyncScopeSnapshotV1(
+  value: unknown,
+): FolderSyncScopeSnapshotV1 | null {
+  if (!isRecord(value) || value.version !== 1) return null;
+  if (
+    typeof value.configDir !== "string"
+    || !normalizeVaultRelativePath(value.configDir)
+    || typeof value.pluginId !== "string"
+    || !value.pluginId.trim()
+    || !Array.isArray(value.excludePaths)
+    || !value.excludePaths.every((path) => typeof path === "string")
+    || !Array.isArray(value.excludedFolders)
+    || !value.excludedFolders.every((path) => typeof path === "string")
+    || !Array.isArray(value.includePaths)
+    || !value.includePaths.every((path) => typeof path === "string")
+    || typeof value.includeOwnPluginCode !== "boolean"
+    || typeof value.includePluginCode !== "boolean"
+    || typeof value.includePluginData !== "boolean"
+    || !isRecord(value.pluginCodeSelection)
+    || !isRecord(value.pluginDataSelection)
+    // User pattern filters are additive v1 fields (obsidian-my-obsidian
+    // extension): absent in older snapshots, present-and-string[] when set.
+    || (value.pathBlacklist !== undefined
+      && (
+        !Array.isArray(value.pathBlacklist)
+        || !value.pathBlacklist.every((path) => typeof path === "string")
+      ))
+    || (value.pathWhitelist !== undefined
+      && (
+        !Array.isArray(value.pathWhitelist)
+        || !value.pathWhitelist.every((path) => typeof path === "string")
+      ))
+  ) return null;
+  return createFolderSyncScopeSnapshotV1({
+    excludePaths: value.excludePaths,
+    excludedFolders: value.excludedFolders,
+    pathBlacklist: value.pathBlacklist ?? [],
+    pathWhitelist: value.pathWhitelist ?? [],
+    includePaths: value.includePaths,
+    includeOwnPluginCode: value.includeOwnPluginCode,
+    includePluginCode: value.includePluginCode,
+    includePluginData: value.includePluginData,
+    pluginCodeSelection: normalizePluginScopeSelection(
+      value.pluginCodeSelection,
+      value.includePluginCode,
+      value.pluginId,
+    ),
+    pluginDataSelection: normalizePluginScopeSelection(
+      value.pluginDataSelection,
+      value.includePluginData,
+      value.pluginId,
+    ),
+  }, value.configDir, value.pluginId);
+}
+
+export function isFolderPathInSyncScopeSnapshot(
+  snapshot: Readonly<FolderSyncScopeSnapshotV1>,
+  path: string,
+): boolean {
+  const normalized = normalizeVaultRelativePath(path);
+  if (!normalized) return false;
+  return !isExcludedDirectory(normalized, {
+    excludePaths: [...snapshot.excludePaths],
+    excludedFolders: [...snapshot.excludedFolders],
+    pathBlacklist: snapshot.pathBlacklist ?? [],
+    pathWhitelist: snapshot.pathWhitelist ?? [],
+    includePaths: [...snapshot.includePaths],
+    maxFileSize: DEFAULT_SCAN_CONFIG.maxFileSize,
+    includeOwnPluginCode: snapshot.includeOwnPluginCode,
+    includePluginCode: snapshot.includePluginCode,
+    includePluginData: snapshot.includePluginData,
+    pluginCodeSelection: snapshot.pluginCodeSelection,
+    pluginDataSelection: snapshot.pluginDataSelection,
+  }, snapshot.configDir, snapshot.pluginId);
+}
+
+export class LocalScanner {
+  /** Public accessor for SyncExecutor file I/O (readBinary, writeBinary, remove, mkdir) */
+  readonly vault: Vault;
+  private readonly configDir: string;
+  private config: ScanConfig;
+  private diag?: DiagnosticLogger;
+  /** Included single paths whose stat-null warning already fired this session
+   *  (F14: a configured-but-absent bookmarks.json warned every scan cycle).
+   *  First warning per path is kept; the entry re-arms when the file is
+   *  observed again so a later absence warns fresh. */
+  private statNullSinglePathWarned = new Set<string>();
+  private scanCache: ScanCache = {
+    format: SCAN_CACHE_FORMAT,
+    entries: {},
+    histories: {},
+  };
+  private scanCacheLoaded = false;
+  private scanCacheDirty = false;
+  /** Running totals for the global history caps (bytes are approximate). */
+  private historyEntryCount = 0;
+  private historyApproxBytes = 0;
+
+  constructor(
+    vault: Vault,
+    config: Partial<ScanConfig> = {},
+    private pluginId = "easy-sync",
+  ) {
+    this.vault = vault;
+    this.configDir = getConfigDir(vault);
+    this.config = {
+      ...DEFAULT_SCAN_CONFIG,
+      ...config,
+      includePaths: [...(config.includePaths ?? DEFAULT_SCAN_CONFIG.includePaths)],
+      excludedFolders: normalizeExcludedFolders(
+        config.excludedFolders ?? DEFAULT_SCAN_CONFIG.excludedFolders ?? [],
+        this.configDir,
+      ),
+      pathBlacklist: normalizePathPatterns(
+        config.pathBlacklist ?? DEFAULT_SCAN_CONFIG.pathBlacklist ?? [],
+      ),
+      pathWhitelist: normalizePathPatterns(
+        config.pathWhitelist ?? DEFAULT_SCAN_CONFIG.pathWhitelist ?? [],
+      ),
+    };
+    this.config.excludePaths = [
+      ...(config.excludePaths
+        ?? [`${this.configDir}/`, ...DEFAULT_SCAN_CONFIG.excludePaths]),
+    ];
+  }
+
+  setDiag(diag: DiagnosticLogger): void {
+    this.diag = diag;
+  }
+
+  setConfig(config: Partial<ScanConfig>): void {
+    this.config = {
+      ...this.config,
+      ...config,
+      ...(config.includePaths ? { includePaths: [...config.includePaths] } : {}),
+      ...(config.excludePaths ? { excludePaths: [...config.excludePaths] } : {}),
+      ...(config.excludedFolders
+        ? {
+            excludedFolders: normalizeExcludedFolders(
+              config.excludedFolders,
+              this.configDir,
+            ),
+          }
+        : {}),
+      ...(config.pathBlacklist
+        ? { pathBlacklist: normalizePathPatterns(config.pathBlacklist) }
+        : {}),
+      ...(config.pathWhitelist
+        ? { pathWhitelist: normalizePathPatterns(config.pathWhitelist) }
+        : {}),
+    };
+  }
+
+  getMaxFileSize(): number {
+    return this.config.maxFileSize;
+  }
+
+  shouldSyncPath(path: string): boolean {
+    return !isExcluded(path, this.config, this.configDir, this.pluginId);
+  }
+
+  shouldSyncFolderPath(path: string): boolean {
+    const normalized = normalizeVaultRelativePath(path);
+    return Boolean(normalized)
+      && !isExcludedDirectory(normalized, this.config, this.configDir, this.pluginId);
+  }
+
+  // ---- Scan Cache ----
+
+  private async loadScanCache(): Promise<void> {
+    if (this.scanCacheLoaded) return;
+    const { scanCacheFile } = getEasySyncPaths(this.configDir, this.pluginId);
+    const legacyScanCacheFile = getEasySyncLegacyPaths(
+      this.configDir,
+      this.pluginId,
+    ).scanCacheFile;
+    try {
+      let json: string;
+      try {
+        json = await this.vault.adapter.read(scanCacheFile);
+      } catch {
+        // Public 1.1.3 cache is valid migration input until the state loader
+        // has had a chance to copy it into the new runtime tree.
+        json = await this.vault.adapter.read(legacyScanCacheFile);
+      }
+      const parsed: unknown = JSON.parse(json);
+      if (
+        isRecord(parsed)
+        && (
+          parsed.format === SCAN_CACHE_FORMAT
+          || parsed.format === SCAN_CACHE_LEGACY_FORMAT
+        )
+        && isRecord(parsed.entries)
+      ) {
+        this.scanCache = {
+          format: SCAN_CACHE_FORMAT,
+          entries: Object.fromEntries(
+            Object.entries(parsed.entries).filter((entry): entry is [string, ScanCacheEntry] => {
+              const value = entry[1];
+              return isRecord(value)
+                && typeof value.mtime === "number"
+                && typeof value.size === "number"
+                && typeof value.hash === "string"
+                && (value.quickXorHash === undefined || typeof value.quickXorHash === "string")
+                && typeof value.binary === "boolean";
+            }),
+          ),
+          histories: parsed.format === SCAN_CACHE_LEGACY_FORMAT
+            ? {}
+            : this.parseScanCacheHistories(parsed),
+        };
+      }
+    } catch {
+      this.scanCache = {
+        format: SCAN_CACHE_FORMAT,
+        entries: {},
+        histories: {},
+      };
+    }
+    this.scanCacheLoaded = true;
+    this.scanCacheDirty = false;
+    // An already-oversized cache shrinks on load; the dirty flag makes the
+    // next successful scan persist the bounded shape.
+    this.recountHistoryTotals();
+    this.pruneScanCacheHistoriesGlobally();
+  }
+
+  private async saveScanCache(): Promise<void> {
+    if (!this.scanCacheDirty) return;
+    const { scanCacheFile } = getEasySyncPaths(this.configDir, this.pluginId);
+    try {
+      await this.vault.adapter.write(scanCacheFile, JSON.stringify(this.scanCache));
+      this.scanCacheDirty = false;
+    } catch {
+      // Best-effort — losing the cache is a perf regression, not data loss
+    }
+  }
+
+  async clearScanCache(): Promise<void> {
+    this.scanCache = {
+      format: SCAN_CACHE_FORMAT,
+      entries: {},
+      histories: {},
+    };
+    this.historyEntryCount = 0;
+    this.historyApproxBytes = 0;
+    this.scanCacheLoaded = true;
+    this.scanCacheDirty = false;
+    const { scanCacheFile } = getEasySyncPaths(this.configDir, this.pluginId);
+    try { await this.vault.adapter.remove(scanCacheFile); } catch { /* ok */ }
+  }
+
+  /**
+   * Prior per-path scan observations (newest last). This is the local change
+   * history seed: self-computed hash/size/mtime snapshots across sync rounds.
+   * History entries survive entry pruning so deleted files keep their last
+   * known facts. The chain is bounded per path and append-only across rounds.
+   */
+  pathHistory(path: string): readonly ScanCacheHistoryEntry[] {
+    return this.scanCache.histories[path] ?? [];
+  }
+
+  private parseScanCacheHistories(
+    parsed: Record<string, unknown>,
+  ): Record<string, ScanCacheHistoryEntry[]> {
+    const raw = parsed.histories;
+    if (!isRecord(raw)) return {};
+    const out: Record<string, ScanCacheHistoryEntry[]> = {};
+    for (const [path, list] of Object.entries(raw)) {
+      if (!Array.isArray(list)) continue;
+      const valid: ScanCacheHistoryEntry[] = [];
+      for (const value of list) {
+        if (
+          isRecord(value)
+          && typeof value.mtime === "number"
+          && typeof value.size === "number"
+          && typeof value.hash === "string"
+          && (value.quickXorHash === undefined
+            || typeof value.quickXorHash === "string")
+          && typeof value.binary === "boolean"
+          && typeof value.observedAt === "number"
+        ) {
+          valid.push({
+            mtime: value.mtime,
+            size: value.size,
+            hash: value.hash,
+            quickXorHash: value.quickXorHash,
+            binary: value.binary,
+            observedAt: value.observedAt,
+          });
+        }
+      }
+      if (valid.length > 0) {
+        out[path] = valid.slice(-SCAN_CACHE_HISTORY_LIMIT);
+      }
+    }
+    return out;
+  }
+
+  /** Rebuild the running global history totals from the current cache. */
+  private recountHistoryTotals(): void {
+    let entryCount = 0;
+    let approxBytes = 0;
+    for (const history of Object.values(this.scanCache.histories)) {
+      for (const entry of history) {
+        entryCount += 1;
+        approxBytes += scanCacheHistoryEntryBytes(entry);
+      }
+    }
+    this.historyEntryCount = entryCount;
+    this.historyApproxBytes = approxBytes;
+  }
+
+  /**
+   * Bound the aggregate history across all paths.
+   *
+   * Deleted paths keep their histories (entry-level `cachePrune` must not
+   * erase the last known facts), so the number of retained paths has no
+   * natural ceiling. Once either global cap is crossed, entries are evicted
+   * oldest-first by `observedAt` down to a low-water mark of both caps so the
+   * following appends stay O(1) until the headroom is used up.
+   */
+  private pruneScanCacheHistoriesGlobally(): void {
+    if (
+      this.historyEntryCount <= SCAN_CACHE_HISTORY_GLOBAL_ENTRY_LIMIT
+      && this.historyApproxBytes <= SCAN_CACHE_HISTORY_GLOBAL_BYTE_LIMIT
+    ) {
+      return;
+    }
+
+    const entryTarget = Math.floor(
+      SCAN_CACHE_HISTORY_GLOBAL_ENTRY_LIMIT
+        * SCAN_CACHE_HISTORY_GLOBAL_LOW_WATER,
+    );
+    const byteTarget = Math.floor(
+      SCAN_CACHE_HISTORY_GLOBAL_BYTE_LIMIT
+        * SCAN_CACHE_HISTORY_GLOBAL_LOW_WATER,
+    );
+
+    const ordered: Array<{
+      path: string;
+      index: number;
+      entry: ScanCacheHistoryEntry;
+    }> = [];
+    for (const [path, history] of Object.entries(this.scanCache.histories)) {
+      for (let index = 0; index < history.length; index += 1) {
+        ordered.push({ path, index, entry: history[index] });
+      }
+    }
+    // Stable sort: equal timestamps evict earlier per-path positions first.
+    ordered.sort((left, right) => left.entry.observedAt - right.entry.observedAt);
+
+    let remainingEntries = this.historyEntryCount;
+    let remainingBytes = this.historyApproxBytes;
+    let evicted = 0;
+    for (const candidate of ordered) {
+      if (
+        remainingEntries <= entryTarget
+        && remainingBytes <= byteTarget
+      ) {
+        break;
+      }
+      remainingEntries -= 1;
+      remainingBytes -= scanCacheHistoryEntryBytes(candidate.entry);
+      evicted += 1;
+    }
+    if (evicted === 0) return;
+
+    const evictedIndexes = new Map<string, Set<number>>();
+    for (const victim of ordered.slice(0, evicted)) {
+      let indexes = evictedIndexes.get(victim.path);
+      if (!indexes) {
+        indexes = new Set<number>();
+        evictedIndexes.set(victim.path, indexes);
+      }
+      indexes.add(victim.index);
+    }
+
+    const nextHistories: Record<string, ScanCacheHistoryEntry[]> = {};
+    for (const [path, history] of Object.entries(this.scanCache.histories)) {
+      const indexes = evictedIndexes.get(path);
+      if (!indexes) {
+        nextHistories[path] = history;
+        continue;
+      }
+      const kept = history.filter((_entry, index) => !indexes.has(index));
+      if (kept.length > 0) nextHistories[path] = kept;
+    }
+
+    this.scanCache.histories = nextHistories;
+    this.historyEntryCount = remainingEntries;
+    this.historyApproxBytes = Math.max(0, remainingBytes);
+    this.scanCacheDirty = true;
+  }
+
+  private cacheProbe(path: string, mtime: number, size: number): ScanCacheEntry | null {
+    const entry = this.scanCache.entries[path];
+    if (entry && entry.mtime === mtime && entry.size === size) return entry;
+    return null;
+  }
+
+  private cacheSet(
+    path: string,
+    mtime: number,
+    size: number,
+    hash: string,
+    quickXorHash: string | undefined,
+    binary: boolean,
+  ): void {
+    const current = this.scanCache.entries[path];
+    if (
+      current
+      && current.mtime === mtime
+      && current.size === size
+      && current.hash === hash
+      && current.quickXorHash === quickXorHash
+      && current.binary === binary
+    ) {
+      return;
+    }
+    if (current) {
+      const history = this.scanCache.histories[path] ?? [];
+      const appended = { ...current, observedAt: Date.now() };
+      history.push(appended);
+      this.historyEntryCount += 1;
+      this.historyApproxBytes += scanCacheHistoryEntryBytes(appended);
+      if (history.length > SCAN_CACHE_HISTORY_LIMIT) {
+        const dropped = history.splice(
+          0,
+          history.length - SCAN_CACHE_HISTORY_LIMIT,
+        );
+        for (const entry of dropped) {
+          this.historyEntryCount -= 1;
+          this.historyApproxBytes -= scanCacheHistoryEntryBytes(entry);
+        }
+      }
+      this.scanCache.histories[path] = history;
+      this.pruneScanCacheHistoriesGlobally();
+    }
+    this.scanCache.entries[path] = { mtime, size, hash, quickXorHash, binary };
+    this.scanCacheDirty = true;
+  }
+
+  private cachePrune(activePaths: Set<string>): void {
+    let removed = false;
+    const next: Record<string, ScanCacheEntry> = {};
+    for (const path of activePaths) {
+      if (this.scanCache.entries[path]) next[path] = this.scanCache.entries[path];
+    }
+    for (const path of Object.keys(this.scanCache.entries)) {
+      if (!activePaths.has(path)) {
+        removed = true;
+        break;
+      }
+    }
+    if (!removed) return;
+    this.scanCache.entries = next;
+    this.scanCacheDirty = true;
+  }
+
+  /**
+   * Scan all non-excluded files in the vault and return LocalFileEntry snapshots.
+   */
+  async scanAll(): Promise<LocalScanResult> {
+    await this.loadScanCache();
+    const entries: LocalFileEntry[] = [];
+    const skippedLarge: string[] = [];
+    const failedPaths: string[] = [];
+    const folderScanFailures: string[] = [];
+    const folderPaths = new Set<string>();
+    const scannedPaths = new Set<string>();
+    const observedFilePaths = new Set<string>();
+    const scannedDirs = new Set<string>();
+    let allFiles: ReturnType<Vault["getFiles"]>;
+    try {
+      allFiles = this.vault.getFiles();
+    } catch (error) {
+      this.diag?.warn("scan", "vault file enumeration failed", error);
+      return {
+        entries,
+        folders: [],
+        folderScanComplete: false,
+        folderScanFailures: ["/"],
+        skippedLarge,
+        failedPaths: ["/"],
+        skippedCount: 0,
+        complete: false,
+        recoveryCopies: [],
+      };
+    }
+    let skippedCount = 0;
+    const recoveryCopies: string[] = [];
+
+    this.collectLoadedFolderPaths(folderPaths, folderScanFailures);
+
+    skippedCount = await this.scanVaultFiles({
+      allFiles,
+      entries,
+      skippedLarge,
+      failedPaths,
+      scannedPaths,
+      observedFilePaths,
+      recoveryCopies,
+      skippedCount,
+    });
+
+    // ── IncludePaths enumeration ──
+    this.diag?.log("scan", `includePaths: [${this.config.includePaths.join(', ')}], excludePaths: [${this.config.excludePaths.join(', ')}]`);
+    await this.scanIncludePaths(
+      entries,
+      skippedLarge,
+      failedPaths,
+      scannedPaths,
+      observedFilePaths,
+      scannedDirs,
+      folderPaths,
+      recoveryCopies,
+    );
+    for (const path of observedFilePaths) {
+      if (this.shouldSyncPath(path)) addParentFolderPaths(path, folderPaths);
+    }
+    const folderSnapshot = buildFolderSnapshot(folderPaths, observedFilePaths, this);
+    if (folderSnapshot.conflicts.length > 0) {
+      folderScanFailures.push(...folderSnapshot.conflicts);
+      this.diag?.warn(
+        "scan",
+        `local folder topology rejected — ${folderSnapshot.conflicts.length} normalized path conflict(s)`,
+        folderSnapshot.conflicts,
+      );
+    }
+    const pluginEntries = entries.filter((e) => e.path.startsWith(`${this.configDir}/`));
+    this.diag?.log(
+      "scan",
+      `scanAll done — ${entries.length} files (${pluginEntries.length} plugin), ${folderSnapshot.entries.length} folders, ${skippedLarge.length} skipped-large, ${failedPaths.length} file failure(s), ${folderScanFailures.length} folder failure(s)`,
+    );
+    // ponytail: only log the count — full path listing is verbose and rarely useful
+
+    // An incomplete scan cannot prove a cached path was deleted. Keep the
+    // previous cache intact and publish nothing until a healthy scan succeeds.
+    if (failedPaths.length === 0) {
+      this.cachePrune(scannedPaths);
+      await this.saveScanCache();
+    }
+
+    return {
+      entries,
+      folders: folderSnapshot.entries,
+      folderScanComplete: failedPaths.length === 0 && folderScanFailures.length === 0,
+      folderScanFailures,
+      skippedLarge,
+      failedPaths,
+      skippedCount,
+      complete: failedPaths.length === 0,
+      recoveryCopies,
+    };
+  }
+
+  /** Scan every file enumerated by the vault index for one scan round.
+   *  Exclusion, cache probe, size ceiling, content read, hashing and the
+   *  cache write keep the exact order and continue semantics of the inline
+   *  loop this method replaces. */
+  private async scanVaultFiles(args: {
+    allFiles: ReturnType<Vault["getFiles"]>;
+    entries: LocalFileEntry[];
+    skippedLarge: string[];
+    failedPaths: string[];
+    scannedPaths: Set<string>;
+    observedFilePaths: Set<string>;
+    recoveryCopies: string[];
+    skippedCount: number;
+  }): Promise<number> {
+    const { allFiles, entries, skippedLarge, failedPaths, scannedPaths, observedFilePaths, recoveryCopies } = args;
+    let { skippedCount } = args;
+    let fileCount = 0;
+    for (const file of allFiles) {
+      const path = file.path;
+      scannedPaths.add(path);
+      observedFilePaths.add(path);
+
+      if (isExcluded(path, this.config, this.configDir, this.pluginId)) {
+        if (path.endsWith(EASY_SYNC_RECOVERY_SUFFIX)) recoveryCopies.push(path);
+        if (!isPathExcludedByFolders(path, this.config.excludedFolders)) {
+          skippedCount++;
+        }
+        continue;
+      }
+
+      let stat: { size: number; mtime?: number } | null | undefined = file.stat;
+      if (!stat) {
+        try {
+          stat = await this.vault.adapter.stat(path);
+        } catch (error) {
+          this.diag?.warn("scan", `stat failed for "${path}"`, error);
+        }
+      }
+      if (!stat) {
+        failedPaths.push(path);
+        continue;
+      }
+
+      if (stat.size > this.config.maxFileSize) {
+        skippedLarge.push(path);
+        continue;
+      }
+
+      // A zero stat size is not probe-trusted: a persisted cache entry may
+      // pin size 0 for non-empty bytes (fresh-file quirk), so read fresh.
+      const cached = stat.size === 0
+        ? null
+        : this.cacheProbe(path, stat.mtime ?? 0, stat.size);
+      if (cached) {
+        entries.push({
+          path,
+          size: stat.size,
+          mtime: stat.mtime ?? 0,
+          hash: cached.hash,
+          ...(cached.quickXorHash ? { quickXorHash: cached.quickXorHash } : {}),
+          binary: cached.binary,
+        });
+        continue;
+      }
+
+      let content: ArrayBuffer;
+      try {
+        content = await this.vault.adapter.readBinary(path);
+      } catch {
+        // Track failed paths — scan is incomplete, destructive actions
+        // (DeleteRemote, ConfirmLocalDelete) must be blocked this round.
+        failedPaths.push(path);
+        continue;
+      }
+
+      const hash = await sha256Hex(content);
+      const quickXorHash = quickXorHashBase64(content);
+      const size = resolveScannedFileSize(stat.size, content.byteLength);
+      if (size > this.config.maxFileSize) {
+        skippedLarge.push(path);
+        continue;
+      }
+      const binary = size > 0 ? isBinary(content) : false;
+      entries.push({ path, size, mtime: stat.mtime ?? 0, hash, quickXorHash, binary });
+      this.cacheSet(path, stat.mtime ?? 0, size, hash, quickXorHash, binary);
+
+      // P1: yield to UI thread every N files (per Obsidian performance docs)
+      if (++fileCount % SCAN_SLEEP_EVERY === 0) await sleep(0);
+    }
+    return skippedCount;
+  }
+
+  /** Enumerate paths listed in config.includePaths that are NOT
+   *  covered by vault.getFiles() (for example config-dir subtrees).
+   *
+   *  Directory paths (ending with /) are scanned recursively;
+   *  single file paths are scanned directly. */
+  private async scanIncludePaths(
+    entries: LocalFileEntry[],
+    skippedLarge: string[],
+    failedPaths: string[],
+    scannedPaths: Set<string>,
+    observedFilePaths: Set<string>,
+    scannedDirs: Set<string>,
+    folderPaths: Set<string>,
+    recoveryCopies: string[],
+  ): Promise<void> {
+    for (const prefix of this.config.includePaths) {
+      if (prefix.endsWith("/")) {
+        await this.scanDir(
+          prefix,
+          entries,
+          skippedLarge,
+          failedPaths,
+          scannedPaths,
+          observedFilePaths,
+          scannedDirs,
+          folderPaths,
+          true,
+          recoveryCopies,
+        );
+      } else {
+        await this.scanSinglePath(
+          prefix,
+          entries,
+          skippedLarge,
+          failedPaths,
+          scannedPaths,
+          observedFilePaths,
+        );
+      }
+    }
+  }
+
+  /** Scan a single file path (not a directory). Used for includePaths that
+   *  point to individual config files inside the vault config dir. */
+  private async scanSinglePath(
+    filePath: string,
+    entries: LocalFileEntry[],
+    skippedLarge: string[],
+    failedPaths: string[],
+    scannedPaths: Set<string>,
+    observedFilePaths: Set<string>,
+  ): Promise<void> {
+    if (scannedPaths.has(filePath)) return;
+    scannedPaths.add(filePath);
+
+    if (isExcluded(filePath, this.config, this.configDir, this.pluginId)) return;
+
+    let stat;
+    try {
+      stat = await this.vault.adapter.stat(filePath);
+    } catch (error) {
+      this.diag?.warn("scan", `stat failed for "${filePath}"`, error);
+      failedPaths.push(filePath);
+      return;
+    }
+    if (!stat) {
+      // An include path can legitimately point at a config file that does not
+      // exist locally (bookmarks.json with bookmark sync enabled). Keep the
+      // first warning, suppress the per-cycle repeats, and re-arm once the
+      // file is observed again (below).
+      if (!this.statNullSinglePathWarned.has(filePath)) {
+        this.statNullSinglePathWarned.add(filePath);
+        this.diag?.warn(
+          "scan",
+          `stat returned null for "${filePath}", skipping`,
+        );
+      }
+      return;
+    }
+    observedFilePaths.add(filePath);
+    this.statNullSinglePathWarned.delete(filePath);
+
+    if (stat.size > this.config.maxFileSize) {
+      skippedLarge.push(filePath);
+      return;
+    }
+
+    // A zero stat size is not probe-trusted (fresh-file quirk): read fresh.
+    const cached = stat.size === 0
+      ? null
+      : this.cacheProbe(filePath, stat.mtime ?? 0, stat.size);
+    if (cached) {
+      entries.push({
+        path: filePath,
+        size: stat.size,
+        mtime: stat.mtime ?? 0,
+        hash: cached.hash,
+        ...(cached.quickXorHash ? { quickXorHash: cached.quickXorHash } : {}),
+        binary: cached.binary,
+      });
+      return;
+    }
+
+    let content: ArrayBuffer;
+    try {
+      content = await this.vault.adapter.readBinary(filePath);
+    } catch {
+      failedPaths.push(filePath);
+      return;
+    }
+
+    const hash = await sha256Hex(content);
+    const quickXorHash = quickXorHashBase64(content);
+    const size = resolveScannedFileSize(stat.size, content.byteLength);
+    if (size > this.config.maxFileSize) {
+      skippedLarge.push(filePath);
+      return;
+    }
+    const binary = size > 0 ? isBinary(content) : false;
+    entries.push({
+      path: filePath,
+      size,
+      mtime: stat.mtime ?? 0,
+      hash,
+      quickXorHash,
+      binary,
+    });
+    this.cacheSet(filePath, stat.mtime ?? 0, size, hash, quickXorHash, binary);
+  }
+
+  /** Recursively list and scan files under `dirPath` via vault.adapter.
+   *
+   *  The caller may pass a trailing slash (from includePaths) —
+   *  it is stripped so `${base}/${name}` never produces double slashes,
+   *  which would break OneDrive API URLs after encodeUrlPath splits on `/`. */
+  private async scanDir(
+    dirPath: string,
+    entries: LocalFileEntry[],
+    skippedLarge: string[],
+    failedPaths: string[],
+    scannedPaths: Set<string>,
+    observedFilePaths: Set<string>,
+    scannedDirs: Set<string>,
+    folderPaths: Set<string>,
+    allowMissingRoot = false,
+    recoveryCopies?: string[],
+  ): Promise<void> {
+    // Normalize: strip trailing slash(es) so path construction is clean
+    const base = dirPath.replace(/\/+$/, "");
+    if (scannedDirs.has(base) || isExcludedDirectory(base, this.config, this.configDir, this.pluginId)) return;
+    scannedDirs.add(base);
+
+    // Explicitly included config directories such as themes/ and snippets/
+    // are optional and may not exist yet. A confirmed absence is a complete,
+    // empty local subtree; an uncertain existence check must still fail closed.
+    if (allowMissingRoot) {
+      let exists: boolean;
+      try {
+        exists = await this.vault.adapter.exists(base);
+      } catch (error) {
+        this.diag?.warn("scan", `scanDir("${base}") — existence check failed`, error);
+        failedPaths.push(base);
+        return;
+      }
+      if (!exists) {
+        this.diag?.log("scan", `scanDir("${base}") → directory absent, treating as empty`);
+        return;
+      }
+    }
+
+    let listed: { files: string[]; folders: string[] };
+    try {
+      listed = await this.vault.adapter.list(base);
+      folderPaths.add(base);
+      this.diag?.log("scan", `scanDir("${base}") → ${listed.files.length} files, ${listed.folders.length} folders: [${listed.files.join(', ')}]`);
+    } catch (err) {
+      this.diag?.warn("scan", `scanDir("${base}") — list failed`, err);
+      failedPaths.push(base);
+      return;
+    }
+
+    await this.scanListedFiles({
+      base,
+      listed,
+      entries,
+      skippedLarge,
+      failedPaths,
+      scannedPaths,
+      observedFilePaths,
+      recoveryCopies,
+    });
+
+    for (const sub of listed.folders) {
+      const path = normalizeListedPath(base, sub);
+      await this.scanDir(
+        path,
+        entries,
+        skippedLarge,
+        failedPaths,
+        scannedPaths,
+        observedFilePaths,
+        scannedDirs,
+        folderPaths,
+        false,
+        recoveryCopies,
+      );
+    }
+  }
+
+  /** Scan the files listed for one directory `base`.
+   *
+   *  Exclusion, stat, size ceiling, content read, hashing and the cache
+   *  write keep the exact order and continue semantics of the inline loop
+   *  this method replaces; every entry, skip and failure is appended to
+   *  the caller-owned collections passed by reference. */
+  private async scanListedFiles(args: {
+    base: string;
+    listed: { files: string[]; folders: string[] };
+    entries: LocalFileEntry[];
+    skippedLarge: string[];
+    failedPaths: string[];
+    scannedPaths: Set<string>;
+    observedFilePaths: Set<string>;
+    recoveryCopies: string[] | undefined;
+  }): Promise<void> {
+    const { base, listed, entries, skippedLarge, failedPaths, scannedPaths, observedFilePaths, recoveryCopies } = args;
+    for (const file of listed.files) {
+      const path = normalizeListedPath(base, file);
+      if (scannedPaths.has(path)) continue;
+      scannedPaths.add(path);
+      observedFilePaths.add(path);
+
+      if (isExcluded(path, this.config, this.configDir, this.pluginId)) {
+        if (path.endsWith(EASY_SYNC_RECOVERY_SUFFIX)) recoveryCopies?.push(path);
+        if (path.endsWith("/data.json")) {
+          this.diag?.log("scan", `isExcluded("${path}") → true (/data.json, self-referential protection)`);
+        }
+        continue;
+      }
+
+      let stat;
+      try {
+        stat = await this.vault.adapter.stat(path);
+      } catch (error) {
+        this.diag?.warn("scan", `stat failed for "${path}"`, error);
+        failedPaths.push(path);
+        continue;
+      }
+      if (!stat) {
+        this.diag?.warn("scan", `stat returned null for "${path}", marking scan incomplete`);
+        failedPaths.push(path);
+        continue;
+      }
+
+      if (stat.size > this.config.maxFileSize) {
+        skippedLarge.push(path);
+        continue;
+      }
+
+      // A zero stat size is not probe-trusted (fresh-file quirk): read fresh.
+      const cached = stat.size === 0
+        ? null
+        : this.cacheProbe(path, stat.mtime ?? 0, stat.size);
+      if (cached) {
+        entries.push({
+          path,
+          size: stat.size,
+          mtime: stat.mtime ?? 0,
+          hash: cached.hash,
+          ...(cached.quickXorHash ? { quickXorHash: cached.quickXorHash } : {}),
+          binary: cached.binary,
+        });
+        continue;
+      }
+
+      let content: ArrayBuffer;
+      try {
+        content = await this.vault.adapter.readBinary(path);
+      } catch {
+        failedPaths.push(path);
+        continue;
+      }
+
+      const hash = await sha256Hex(content);
+      const quickXorHash = quickXorHashBase64(content);
+      const size = resolveScannedFileSize(stat.size, content.byteLength);
+      if (size > this.config.maxFileSize) {
+        skippedLarge.push(path);
+        continue;
+      }
+      const binary = size > 0 ? isBinary(content) : false;
+      entries.push({ path, size, mtime: stat.mtime ?? 0, hash, quickXorHash, binary });
+      this.cacheSet(path, stat.mtime ?? 0, size, hash, quickXorHash, binary);
+    }
+  }
+
+  private collectLoadedFolderPaths(
+    folderPaths: Set<string>,
+    folderScanFailures: string[],
+  ): void {
+    const observedVault = this.vault as Vault & {
+      getAllLoadedFiles?: Vault["getAllLoadedFiles"];
+    };
+    if (typeof observedVault.getAllLoadedFiles !== "function") {
+      folderScanFailures.push("/");
+      this.diag?.warn("scan", "vault folder enumeration is unavailable");
+      return;
+    }
+    let loaded: ReturnType<Vault["getAllLoadedFiles"]>;
+    try {
+      loaded = observedVault.getAllLoadedFiles.call(observedVault);
+    } catch (error) {
+      folderScanFailures.push("/");
+      this.diag?.warn("scan", "vault folder enumeration failed", error);
+      return;
+    }
+    for (const entry of loaded) {
+      if (!(entry instanceof TFolder)) continue;
+      const path = normalizeVaultRelativePath(entry.path);
+      if (this.shouldSyncFolderPath(path)) folderPaths.add(path);
+    }
+  }
+
+  /** Read the current local version for a write-time compare-and-swap check.
+   *  Missing and unreadable are never conflated. */
+  async inspectFile(
+    path: string,
+    options: Readonly<{ allowExcludedForRecovery?: boolean }> = {},
+  ): Promise<LocalFileInspection> {
+    if (
+      !options.allowExcludedForRecovery
+      && isExcluded(path, this.config, this.configDir, this.pluginId)
+    ) {
+      return { status: "uncertain", reason: "excluded" };
+    }
+
+    let stat;
+    try {
+      stat = await this.vault.adapter.stat(path);
+    } catch {
+      return { status: "uncertain", reason: "stat" };
+    }
+    if (!stat) return { status: "missing" };
+    if (stat.size > this.config.maxFileSize) {
+      return { status: "uncertain", reason: "too-large" };
+    }
+
+    let content: ArrayBuffer;
+    try {
+      content = await this.vault.adapter.readBinary(path);
+    } catch {
+      return { status: "uncertain", reason: "read" };
+    }
+
+    const hash = await sha256Hex(content);
+    const quickXorHash = quickXorHashBase64(content);
+    const size = resolveScannedFileSize(stat.size, content.byteLength);
+    if (size > this.config.maxFileSize) {
+      return { status: "uncertain", reason: "too-large" };
+    }
+    const binary = size > 0 ? isBinary(content) : false;
+    return {
+      status: "present",
+      entry: {
+        path,
+        size,
+        mtime: stat.mtime ?? 0,
+        hash,
+        quickXorHash,
+        binary,
+      },
+    };
+  }
+
+  /** Read-only, content-free version probe. It applies the same exclusion and
+   *  size gates as `inspectFile` and reads the same `adapter.stat` facts, but
+   *  never reads or hashes the bytes. The confirm-delete wave uses it directly
+   *  before each local erase (2026-10-26) so the window between the reviewed
+   *  SHA-256 guard and one irreversible erase is a single stat, not the whole
+   *  wave. It is a supplementary mtime+size gate, not a content proof. */
+  async inspectFileStat(path: string): Promise<LocalFileStatInspection> {
+    if (isExcluded(path, this.config, this.configDir, this.pluginId)) {
+      return { status: "uncertain", reason: "excluded" };
+    }
+    let stat;
+    try {
+      stat = await this.vault.adapter.stat(path);
+    } catch {
+      return { status: "uncertain", reason: "stat" };
+    }
+    if (!stat) return { status: "missing" };
+    if (stat.size > this.config.maxFileSize) {
+      return { status: "uncertain", reason: "too-large" };
+    }
+    return { status: "present", size: stat.size, mtime: stat.mtime ?? 0 };
+  }
+}
+
+function normalizeListedPath(base: string, entry: string): string {
+  const normalized = entry.replace(/\/+$/, "");
+  return normalized.startsWith(`${base}/`) ? normalized : `${base}/${normalized}`;
+}
+
+/**
+ * Entry size must describe the same bytes the hash was taken from. Android
+ * can report stat.size 0 for a file written moments ago while readBinary
+ * already returns the full bytes; trusting stat there produces an entry of
+ * {size 0, hash of full content}, which the upload receipt gate later
+ * rejects — the plugin's own successful receipt becomes unrecordable and
+ * the mutation ledger blocks (2026-09-13 mobile incident, diagnostic report
+ * 142823). A genuinely empty file reads back empty, so only the non-empty
+ * divergence is corrected; any stat/content disagreement with stat.size > 0
+ * stays guarded by the transfer-time hash check.
+ */
+function resolveScannedFileSize(statSize: number, contentByteLength: number): number {
+  return statSize === 0 && contentByteLength > 0 ? contentByteLength : statSize;
+}
+
+function addParentFolderPaths(filePath: string, target: Set<string>): void {
+  const parts = normalizeVaultRelativePath(filePath).split("/");
+  parts.pop();
+  let current = "";
+  for (const part of parts) {
+    current = current ? `${current}/${part}` : part;
+    target.add(current);
+  }
+}
+
+function buildFolderSnapshot(
+  candidates: ReadonlySet<string>,
+  observedFiles: ReadonlySet<string>,
+  scanner: Pick<LocalScanner, "shouldSyncFolderPath" | "shouldSyncPath">,
+): { entries: LocalFolderEntry[]; conflicts: string[] } {
+  const byNormalizedPath = new Map<string, string>();
+  const conflicts = new Set<string>();
+  const candidatesWithParents = new Set(candidates);
+  for (const candidate of candidates) {
+    addParentFolderPaths(`${candidate}/__folder_snapshot__`, candidatesWithParents);
+  }
+  for (const candidate of candidatesWithParents) {
+    const path = normalizeVaultRelativePath(candidate);
+    if (!path || !scanner.shouldSyncFolderPath(path)) continue;
+    const key = normalizeTopologyPath(path);
+    const previous = byNormalizedPath.get(key);
+    if (previous && previous !== path) {
+      conflicts.add(previous);
+      conflicts.add(path);
+      continue;
+    }
+    byNormalizedPath.set(key, path);
+  }
+  for (const candidate of observedFiles) {
+    const path = normalizeVaultRelativePath(candidate);
+    if (!path || !scanner.shouldSyncPath(path)) continue;
+    if (byNormalizedPath.has(normalizeTopologyPath(path))) {
+      conflicts.add(path);
+      conflicts.add(byNormalizedPath.get(normalizeTopologyPath(path))!);
+    }
+  }
+  return {
+    entries: [...byNormalizedPath.values()]
+      .sort(comparePath)
+      .map((path) => ({ path })),
+    conflicts: [...conflicts].sort(comparePath),
+  };
+}
+
+function comparePath(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function normalizeTopologyPath(path: string): string {
+  return path.normalize("NFC").toLocaleLowerCase("en-US");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => compatSetTimeout(() => resolve(), ms));
+}

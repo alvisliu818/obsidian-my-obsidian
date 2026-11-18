@@ -40,6 +40,15 @@ export type NewTabMode = "blank" | "home" | "search";
  */
 export type TabMode = "internal" | "native";
 
+/** 一页标注的索引信息（annPages 集合的值；笔记本体在 vault 里）。 */
+export interface AnnotationPageInfo {
+  /** 笔记的 vault 相对路径 */
+  path: string;
+  title: string;
+  domain: string;
+  createdAt: number;
+}
+
 export interface BrowserSettings {
   /** URL loaded by the home button / new-tab page. */
   homePage: string;
@@ -93,6 +102,29 @@ export interface BrowserSettings {
   /** Copy the clip to the clipboard in addition to creating the note. */
   clipAlsoCopy: boolean;
 
+  /** Vault-relative folder for page-annotation notes. */
+  annotationsFolder: string;
+  /** Show truncated note text next to highlights in the page. */
+  showAnnInline: boolean;
+  /** 选区气泡显示「取消高亮/取消小字」按钮。 */
+  showAnnRemove: boolean;
+  /** 悬停/点击高亮弹出悬浮窗（关=只提示）。 */
+  showAnnFloat: boolean;
+
+  /** 使用扩展的 newtab 页作为新标签页/主页（扩展 id，空 = 关闭）。 */
+  newTabExtId: string;
+
+  /** 摘录预处理六开关（思源同款）。 */
+  clipExpBold: boolean;
+  clipExpItalic: boolean;
+  clipExpUnderline: boolean;
+  clipExpRemoveImgLink: boolean;
+  clipExpSpanBr: boolean;
+  clipExpSvgToImg: boolean;
+
+  /** DNR 网络层过滤（解析 AdGuard 扩展规则集；装了 AdGuard 才生效）。 */
+  dnrEnabled: boolean;
+
   extensionsEnabled: boolean;
 }
 
@@ -113,6 +145,10 @@ export interface ExtensionRecord {
   /** browser_action / action popup html (may be empty). */
   popup?: string;
   permissions: string[];
+  /** manifest 的 chrome_url_overrides.newtab（P4 新标签页扩展用）。 */
+  newtab?: string;
+  /** 原生 session.loadExtension 装载后的 Electron 扩展 id（垫片模式为空）。 */
+  nativeId?: string;
 }
 
 export interface ExtensionContentScript {
@@ -162,6 +198,8 @@ export interface PluginData {
   extensions: ExtensionRecord[];
   userscripts: UserScriptRecord[];
   session: PersistedTab[];
+  /** 网页标注索引：urlKey → 标注笔记信息（笔记本体在 vault）。 */
+  annPages: Record<string, AnnotationPageInfo>;
 }
 
 /**

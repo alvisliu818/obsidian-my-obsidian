@@ -18,6 +18,8 @@ import { startTitleRenameObserver } from './titleRename';
 import { around } from 'monkey-around';
 import { VirtualTreeSettingTab } from './settings/tab';
 import { MountPanelView, VIEW_TYPE_MOUNT_PANEL } from './panels/mountPanel';
+import { RecentOpenPanelView, VIEW_TYPE_RECENT_OPEN_PANEL } from './panels/recentOpenPanel';
+import { TagFilterPanelView, VIEW_TYPE_TAG_FILTER_PANEL } from './panels/tagFilterPanel';
 import { MountEditorModal, MountListModal, MountPositionModal, VaultMountPickModal } from './panels/mountModals';
 import { ImageView, VIEW_TYPE_IMAGE, IMAGE_EXTENSIONS, isImageFile } from './views/ImageView';
 import { VideoView, VIEW_TYPE_VIDEO, VIDEO_EXTENSIONS, isVideoFile } from './views/VideoView';
@@ -74,8 +76,24 @@ import {
   unlinkVaultEntry,
 } from './features/syncToVault';
 import { isRemoteMount } from './types';
+import type { RecentOpenEntry } from './types';
+import {
+  isWeblinkPath,
+  weblinkUrlOf,
+  isBmarksPath,
+  bmarksUrlOf,
+  openExternalUrl,
+} from './features/linkMount';
+import { executeActionMount } from './features/actionMount';
+import { openActionMountDialog, openWeblinkMountDialog } from './panels/actionMountModal';
+import { isActionPath as isActionMountPath } from './features/actionMount';
+import { pushRecentOpen, filterRecentOpen, resolveMountForAbs, baseNameOf, RECENT_FILTER_ALL } from './panels/recentOpen';
 import { initGitRepoApi } from './features/gitRepoApi';
 import { initBaiduPanApi, initBaiduPanConfigFromSettings } from './features/baiduPanApi';
+import { initOneDriveApi, initOneDriveConfigFromSettings } from './features/onedriveApi';
+import { initImapMailConfig } from './features/imapMailApi';
+import { ImapMailMountModal } from './panels/imapMailModal';
+import { initOutlookMailApi, initOutlookMailConfigFromSettings } from './features/outlookMailApi';
 import { ensureRemoteWorkFile, initRemoteWorkspace, stopRemoteWorkspace } from './features/remoteWorkspace';
 import { GitRepoMountModal } from './panels/gitRepoModal';
 import { BaiduPanMountModal } from './panels/baiduPanModal';
@@ -112,6 +130,12 @@ export function virtualTreeOf(app: unknown): VirtualTreePlugin | null {
 export default class VirtualTreePlugin extends Plugin {
   settings: VirtualTreeSettings = DEFAULT_VIRTUAL_TREE_SETTINGS;
 
+  /**
+   * 标签筛选激活的标签 id（标签筛选面板 ↔ 挂载树 flattenHost 过滤共享）。
+   * 会话内运行态：命中任一激活标签的文件行保留、目录一律保留；重启清空。
+   */
+  activeTagFilterIds: string[] = [];
+
   /** Timer id for the mount panel's optional auto-refresh; 0 = not scheduled. */
   private mountRefreshTimer = 0;
 
@@ -141,6 +165,28 @@ export default class VirtualTreePlugin extends Plugin {
       },
     });
     initBaiduPanConfigFromSettings();
+    initOneDriveApi({
+      get: () => this.settings.oneDrive,
+      save: async (next) => {
+        this.settings.oneDrive = next;
+        await this.saveSettings();
+      },
+    });
+    initOneDriveConfigFromSettings();
+    initOutlookMailApi({
+      get: () => this.settings.outlookMail,
+      save: async (next) => {
+        this.settings.outlookMail = next;
+        await this.saveSettings();
+      },
+    });
+    initOutlookMailConfigFromSettings();
+    // IMAP 凭据:settings.imapMail(types.imapMailFrom 清洗后)进 API 内存镜像——
+    // 重启后 imapListDir 等才能直接用;挂载弹窗路径之外的第二条供给线。
+    if (this.settings.imapMail) initImapMailConfig(this.settings.imapMail);
+    // 标签筛选共享状态(标签筛选面板 ↔ 挂载树 flattenHost 过滤)。运行态不落盘:
+    // 筛选是会话内的视图状态,重启还原全部显示与思源一致。
+    this.activeTagFilterIds = [];
     // 工作副本根:<库根>/<configDir>/plugins/obsidian-my-obsidian/remote-workspace。
     // 放插件目录(而非库内普通目录)的原因:缓存文件不该被 Obsidian 索引、
     // 不该进用户笔记列表;放 configDir 的原因:与插件数据同进退,清插件数据
@@ -156,6 +202,8 @@ export default class VirtualTreePlugin extends Plugin {
     }
 
     this.registerView(VIEW_TYPE_MOUNT_PANEL, (leaf) => new MountPanelView(leaf, this));
+    this.registerView(VIEW_TYPE_RECENT_OPEN_PANEL, (leaf) => new RecentOpenPanelView(leaf, this));
+    this.registerView(VIEW_TYPE_TAG_FILTER_PANEL, (leaf) => new TagFilterPanelView(leaf, this));
     this.registerView(VIEW_TYPE_IMAGE, (leaf) => new ImageView(leaf, this));
     this.registerView(VIEW_TYPE_OFFICE, (leaf) => new OfficeView(leaf, this));
     this.registerView(VIEW_TYPE_VIDEO, (leaf) => new VideoView(leaf, this));
@@ -353,6 +401,16 @@ export default class VirtualTreePlugin extends Plugin {
       id: 'open-mount-panel',
       name: 'Open the mount panel (folders outside the vault)',
       callback: () => void this.activatePanel(VIEW_TYPE_MOUNT_PANEL),
+    });
+    this.addCommand({
+      id: 'open-recent-open-panel',
+      name: 'Open the recent-open panel (最近打开)',
+      callback: () => void this.activatePanel(VIEW_TYPE_RECENT_OPEN_PANEL),
+    });
+    this.addCommand({
+      id: 'open-tag-filter-panel',
+      name: 'Open the tag filter panel (标签筛选)',
+      callback: () => void this.activatePanel(VIEW_TYPE_TAG_FILTER_PANEL),
     });
     this.addCommand({
       id: 'add-external-mount',
@@ -591,6 +649,11 @@ export default class VirtualTreePlugin extends Plugin {
     return adapter.basePath ?? adapter.getBasePath?.() ?? '';
   }
 
+  /** externalPaneMenu 等结构化宿主的设置访问器（删除方式等按此分流）。 */
+  virtualTreeSettings(): VirtualTreeSettings {
+    return this.settings;
+  }
+
   /** Open the add-mount dialog. */
   promptAddMount(): void {
     new MountEditorModal(this).open();
@@ -648,6 +711,73 @@ export default class VirtualTreePlugin extends Plugin {
         ),
     );
     menu.addItem((item) =>
+      item
+        .setTitle('挂载链接/网址…')
+        .setIcon('link' as never)
+        .onClick(() => {
+          openWeblinkMountDialog(this.app, this);
+        }),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle('挂载脚本/命令…')
+        .setIcon('terminal-square' as never)
+        .onClick(() => {
+          openActionMountDialog(this.app, {
+            onPicked: (vPath, name) =>
+              this.promptMountEntry({
+                kind: 'remote',
+                path: vPath,
+                label: name,
+                include: '',
+                exclude: '',
+                refreshSeconds: 0,
+                pinned: false,
+              }),
+          });
+        }),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle('挂载浏览器书签')
+        .setIcon('bookmark' as never)
+        .onClick(() =>
+          this.promptMountEntry({
+            kind: 'remote',
+            path: 'bmarks://',
+            label: '浏览器书签',
+            include: '',
+            exclude: '',
+            refreshSeconds: 0,
+            pinned: false,
+          }),
+        ),
+    );
+        menu.addItem((item) =>
+      item
+        .setTitle('挂载 IMAP 邮箱…')
+        .setIcon('mail-open' as never)
+        .onClick(() =>
+          new ImapMailMountModal(this.app, {
+            onConfig: (cfg) => {
+              this.settings.imapMail = cfg;
+              this.saveSettings();
+              initImapMailConfig(cfg);
+            },
+            onPick: (p) =>
+              this.promptMountEntry({
+                kind: 'remote',
+                path: p.vPath,
+                label: p.label,
+                include: '',
+                exclude: '',
+                refreshSeconds: 0,
+                pinned: false,
+              }),
+          }).open(),
+        ),
+    );
+menu.addItem((item) =>
       item
         .setTitle('挂载百度网盘…')
         .setIcon('cloud' as never)
@@ -1033,6 +1163,42 @@ export default class VirtualTreePlugin extends Plugin {
     opts?: { readOnly?: boolean; forceCodeEditor?: boolean; forceBlockEditor?: boolean; paneMode?: string | boolean },
   ): Promise<void> {
     if (node.isDir) return;
+    // 链接挂载家族（weblink/action/bmarks 叶子）：不走文件路由——网页类
+    // 经 Browser 模块打开，动作类直接执行（思源 editor-tab 同款分流）。
+    if (isWeblinkPath(node.abs)) {
+      openExternalUrl(this.app, weblinkUrlOf(node.abs));
+      return;
+    }
+    if (isActionMountPath(node.abs)) {
+      new Notice('执行脚本/命令…');
+      void executeActionMount(this.app, node.abs);
+      return;
+    }
+    if (isBmarksPath(node.abs)) {
+      const u = bmarksUrlOf(node.abs);
+      if (u) openExternalUrl(this.app, u);
+      return; // 书签根/标签目录：无文件语义
+    }
+    // 最近打开记录（链接/动作叶子不记——它们不是文件打开）。
+    this.recordRecentOpen(mount, node);
+    // 链接挂载家族（weblink/action/bmarks 叶子）：不走文件路由——网页类
+    // 经 Browser 模块打开，动作类直接执行（思源 editor-tab 同款分流）。
+    if (isWeblinkPath(node.abs)) {
+      openExternalUrl(this.app, weblinkUrlOf(node.abs));
+      return;
+    }
+    if (isActionMountPath(node.abs)) {
+      void executeActionMount(this.app, node.abs);
+      return;
+    }
+    if (isBmarksPath(node.abs)) {
+      const u = bmarksUrlOf(node.abs);
+      if (u) {
+        openExternalUrl(this.app, u);
+        return;
+      }
+      return; // 书签根/标签目录：无文件语义
+    }
     // remote 挂载(github:// / gitee:// / bdpan://)按文件形态分流:
     //  - 文本类(md/text/code)→ **异步 API 直连**:node.abs 保持虚拟路径,
     //    md-editor 视图经 remoteIO.readTextAny/writeTextAny 与远端直读直写
@@ -1060,7 +1226,10 @@ export default class VirtualTreePlugin extends Plugin {
       await this.openExternalInView(VIEW_TYPE_IMAGE, { abs: node.abs, name: node.name }, opts?.paneMode);
       return;
     }
-    if (isVideoFile(node.name)) {
+    // .ts 双重身份:TypeScript(文本清单里)与 MPEG 传输流(视频清单里)。
+    // 树里点开的 .ts 几乎总是源码——视频路由让位给代码路由(用户实报
+    // 「代码文件无法用代码编辑器打开」的根因);真传输流走右键「用系统默认应用打开」。
+    if (isVideoFile(node.name) && extOfName(node.name) !== 'ts') {
       await this.openExternalInView(VIEW_TYPE_VIDEO, { abs: node.abs, name: node.name }, opts?.paneMode);
       return;
     }
@@ -1134,6 +1303,58 @@ export default class VirtualTreePlugin extends Plugin {
     // Everything declined: the shim (read-only fallback) is the last resort.
     if (await runOpeners('shim', ctx, mount, node, opts)) return;
     new Notice(`无法打开 ${node.name}：块编辑器模块未启用。`);
+  }
+
+  /** True when a link for this entry is already present in the vault. */
+  /** 最近打开：成功路由前记录（独立面板展示，可筛选/清空）。 */
+  recordRecentOpen(mount: ExternalMount, node: MountNode): void {
+    if (!node.name) return;
+    const kind: 'vault' | 'ext' = mount.kind === 'vault' ? 'vault' : 'ext';
+    const path = mount.kind === 'vault' ? String(node.abs).replace(/\\/g, '/') : node.abs;
+    this.settings.recentOpen = pushRecentOpen(this.settings.recentOpen ?? [], path, kind, Date.now());
+    this.saveSettings();
+    this.refreshRecentOpenPanel();
+  }
+
+  recentEntries(filter?: string): RecentOpenEntry[] {
+    return filterRecentOpen(this.settings.recentOpen ?? [], filter ?? RECENT_FILTER_ALL);
+  }
+
+  clearRecentOpen(): void {
+    this.settings.recentOpen = [];
+    this.saveSettings();
+    this.refreshRecentOpenPanel();
+  }
+
+  async openRecentEntry(entry: RecentOpenEntry): Promise<void> {
+    if (entry.kind === 'vault') {
+      await this.app.workspace.openLinkText(entry.path, '');
+      return;
+    }
+    const hit = resolveMountForAbs(
+      (this.settings.externalMounts ?? []).filter((m) => m.enabled),
+      entry.path,
+    );
+    if (!hit) {
+      new Notice('该文件不在任何已启用挂载内');
+      return;
+    }
+    const rel = entry.path.slice(hit.mount.path.replace(/[\\/]+$/, '').length + 1) || baseNameOf(entry.path);
+    const node: MountNode = {
+      name: baseNameOf(entry.path),
+      rel,
+      abs: entry.path,
+      isDir: false,
+      children: [],
+    };
+    await this.openExternalEntry(hit.mount, node);
+  }
+
+  /** 刷新最近打开面板（记录/清空/移除后实时重绘）。 */
+  refreshRecentOpenPanel(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_RECENT_OPEN_PANEL)) {
+      (leaf.view as { render?: () => void }).render?.();
+    }
   }
 
   /** True when a link for this entry is already present in the vault. */

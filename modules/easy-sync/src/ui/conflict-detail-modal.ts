@@ -1,0 +1,638 @@
+/**
+ * ConflictDetailModal — Conflict resolution detail view
+ *
+ * Opens when the user clicks "查看详情" on a conflict item.
+ * Shows:
+ *  1. Metadata comparison table (local vs remote: mtime, size)
+ *  2. Local file content preview
+ *  3. Line-by-line diff (when remote content is downloadable)
+ *  4. Action buttons: [Keep Local] [Keep Remote] [Skip]
+ *
+ * Remote comparison is best-effort. Failure records a diagnostic category and
+ * degrades to metadata + a bounded local preview without guessing the cause.
+ */
+
+import type EasySyncPlugin from "../main";
+import type { SyncPlanItem } from "../sync/types";
+import { compareContentBuffers } from "../sync/content-equality";
+import { computeDisplayDiff } from "./diff-engine";
+import {
+  MAX_FALLBACK_PREVIEW_LINES,
+  MAX_TEXT_DIFF_BYTES_PER_SIDE,
+  decodeUtf8,
+  renderDisplayDiff,
+  sameVisibleText,
+} from "./diff-view-renderer";
+import {
+  conflictHasMissingLocalSide,
+  shouldAutoLoadRemoteComparison,
+  summarizeConflictDetail,
+} from "./conflict-detail-presentation";
+import type { ConflictDetailSummaryEvidence } from "./conflict-detail-presentation";
+import {
+  FileComparisonModal,
+  formatFileSize,
+} from "./file-comparison-modal";
+
+/**
+ * Keep both line-number columns only as wide as the largest number in this diff.
+ * Re-exported from the shared renderer for callers/tests that import it here.
+ */
+export { getDiffLineNumberWidth } from "./diff-view-renderer";
+
+/**
+ * Outcome of one conflict-detail rendering stage. "settled" means the modal
+ * already reached a terminal state and the caller must not continue.
+ */
+type ConflictDetailStageOutcome =
+  | { kind: "settled" }
+  | { kind: "continue" };
+
+export class ConflictDetailModal extends FileComparisonModal {
+  private onResolved: (() => void) | undefined;
+
+  constructor(
+    private readonly plugin: EasySyncPlugin,
+    private readonly item: SyncPlanItem,
+  ) {
+    super(plugin.app);
+  }
+
+  /** Set callback invoked after a conflict is resolved (keep local / keep remote) */
+  setOnResolved(callback: () => void): this {
+    this.onResolved = callback;
+    return this;
+  }
+
+  /** One detail modal at a time: same path rejected, another path replaces. */
+  override open(): void {
+    if (!this.takeOverSingleInstance(this.item.path, { replace: true })) return;
+    super.open();
+  }
+
+  override onClose(): void {
+    this.releaseSingleInstance();
+  }
+
+  protected async renderComparison(): Promise<void> {
+    const t = (key: string, params?: Record<string, string | number>) =>
+      this.plugin.i18n.t(key, params);
+    const body = this.comparisonBodyEl;
+
+    // ---- Title (official modal-title slot, not the scrollable body) ----
+    this.setTitle(t("conflictDetail.title"));
+    const pathFact = body.createDiv("easy-sync-detail-path");
+    pathFact.createSpan("easy-sync-detail-path-label").setText(
+      t("conflictDetail.path"),
+    );
+    pathFact.createSpan("easy-sync-detail-path-value").setText(this.item.path);
+
+    // ---- Current comparison summary ----
+    const reasonEl = body.createDiv("easy-sync-detail-reason");
+    const setSummary = (evidence: ConflictDetailSummaryEvidence) => {
+      reasonEl.setText(summarizeConflictDetail(evidence, this.item.reason, t));
+    };
+    const setComparisonUnavailableOrReason = () => {
+      setSummary(this.item.local && this.item.remote
+        ? { kind: "comparison-unavailable" }
+        : { kind: "reason" });
+    };
+    // The comparing phase is not a top-level conclusion: the overview keeps
+    // the plan reason until content evidence arrives, and the comparing
+    // sentence is the middle progress line below.
+    setSummary({ kind: "reason" });
+
+    // ---- Metadata table ----
+    this.renderMetadata(t);
+
+    body.createEl("hr");
+
+    // ---- Loading indicator ----
+    const loadingEl = body.createDiv("easy-sync-detail-loading");
+    loadingEl.setText(t("conflictDetail.summaryComparing"));
+
+    // ---- Content section ----
+    const isBinary = this.item.local?.binary;
+
+    try {
+      const outcome = await this.renderComparisonContent({
+        t,
+        body,
+        loadingEl,
+        reasonEl,
+        isBinary,
+        setSummary,
+        setComparisonUnavailableOrReason,
+      });
+      if (outcome.kind === "settled") return;
+    } catch (e) {
+      setComparisonUnavailableOrReason();
+      this.plugin.diag.warn("execute", "Conflict detail rendering unavailable", {
+        path: this.item.path,
+        errorKind: getErrorKind(e),
+      });
+      loadingEl.setText(t("conflictDetail.loadUnavailable"));
+    }
+
+    // ---- Action buttons (fixed footer, outside scroll body) ----
+    this.renderActionButtons(t);
+  }
+
+  /**
+   * Read the local bytes, then render either the remote comparison or the
+   * local-only evidence. Returns "settled" when the failure path already
+   * rendered the action footer, so the caller must not render it again.
+   */
+  private async renderComparisonContent(args: {
+    t: (key: string, params?: Record<string, string | number>) => string;
+    body: HTMLElement;
+    loadingEl: HTMLElement;
+    reasonEl: HTMLElement;
+    isBinary: boolean | undefined;
+    setSummary: (evidence: ConflictDetailSummaryEvidence) => void;
+    setComparisonUnavailableOrReason: () => void;
+  }): Promise<ConflictDetailStageOutcome> {
+    const {
+      t,
+      body,
+      loadingEl,
+      reasonEl,
+      isBinary,
+      setSummary,
+      setComparisonUnavailableOrReason,
+    } = args;
+
+    // Read local file content. A remote-only conflict (local deleted, remote
+    // modified) has no local bytes by definition: an empty local side is the
+    // honest comparison, and aborting here would hide the remote content the
+    // user opened this modal to see.
+    const localSideMissing = conflictHasMissingLocalSide(this.item);
+    let localRaw: ArrayBuffer;
+    if (localSideMissing) {
+      localRaw = new ArrayBuffer(0);
+    } else {
+      try {
+        localRaw = await this.plugin.app.vault.adapter.readBinary(
+          this.item.path,
+        );
+      } catch (e) {
+        setComparisonUnavailableOrReason();
+        this.plugin.diag.warn("execute", "Conflict detail local read unavailable", {
+          path: this.item.path,
+          errorKind: getErrorKind(e),
+        });
+        loadingEl.setText(t("conflictDetail.localReadUnavailable"));
+        this.renderActionButtons(t);
+        return { kind: "settled" };
+      }
+    }
+    const localWithinTextBudget = localRaw.byteLength <= MAX_TEXT_DIFF_BYTES_PER_SIDE;
+    const localContent = localWithinTextBudget ? decodeUtf8(localRaw) : null;
+
+    // ---- Diff (primary content; local preview is hidden — diff shows both sides) ----
+    if (this.item.remote) {
+      // A known remote size above the text-diff budget cannot yield a line
+      // diff, so defer the download to the explicit "check content" action.
+      if (
+        !shouldAutoLoadRemoteComparison(
+          this.item.remote.size,
+          MAX_TEXT_DIFF_BYTES_PER_SIDE,
+        )
+      ) {
+        this.renderLargeRemoteSkipped({
+          t,
+          body,
+          loadingEl,
+          reasonEl,
+          localRaw,
+          localContent,
+          localSideMissing,
+          isBinary,
+          remote: this.item.remote,
+          setSummary,
+          setComparisonUnavailableOrReason,
+        });
+        return { kind: "continue" };
+      }
+
+      const diffHeaderEl = body.createEl("h4", {
+        text: t("conflictDetail.diffTitle"),
+      });
+
+      try {
+        const outcome = await this.downloadAndCompareRemote({
+          t,
+          body,
+          loadingEl,
+          diffHeaderEl,
+          reasonEl,
+          localRaw,
+          localContent,
+          localSideMissing,
+          isBinary,
+          remote: this.item.remote,
+          setSummary,
+        });
+        if (outcome.kind === "settled") return { kind: "settled" };
+      } catch (e) {
+        setComparisonUnavailableOrReason();
+        this.plugin.diag.warn("execute", "Conflict detail remote comparison unavailable", {
+          path: this.item.path,
+          errorKind: getErrorKind(e),
+        });
+        loadingEl.remove();
+        // Remote content unavailable — show notice + fall back to local preview
+        body.createDiv("easy-sync-remote-unavailable").setText(
+          t("conflictDetail.remoteComparisonUnavailable"),
+        );
+        // Show local content as fallback
+        if (!localWithinTextBudget) {
+          body.createDiv("easy-sync-diff-truncated").setText(
+            t("conflictDetail.textDiffByteLimit", {
+              limit: formatFileSize(MAX_TEXT_DIFF_BYTES_PER_SIDE),
+            }),
+          );
+        } else if (localContent == null) {
+          body.createDiv("easy-sync-binary-notice").setText(
+            t("conflictDetail.binaryFile"),
+          );
+        } else {
+          body.createEl("h4", { text: t("conflictDetail.localPreview") });
+          this.renderTextPreview(body, localContent, t);
+        }
+      }
+    } else if (isBinary) {
+      setSummary({ kind: "reason" });
+      loadingEl.remove();
+      body.createDiv("easy-sync-binary-notice").setText(
+        t("conflictDetail.binaryFile"),
+      );
+    } else {
+      // No remote info — show local content only
+      setSummary({ kind: "reason" });
+      loadingEl.remove();
+      if (!localWithinTextBudget) {
+        body.createDiv("easy-sync-diff-truncated").setText(
+          t("conflictDetail.textDiffByteLimit", {
+            limit: formatFileSize(MAX_TEXT_DIFF_BYTES_PER_SIDE),
+          }),
+        );
+      } else if (localContent == null) {
+        body.createDiv("easy-sync-binary-notice").setText(
+          t("conflictDetail.binaryFile"),
+        );
+      } else {
+        body.createEl("h4", { text: t("conflictDetail.localPreview") });
+        this.renderTextPreview(body, localContent, t);
+      }
+    }
+    return { kind: "continue" };
+  }
+
+  /**
+   * Fetch the remote side, compare it with the local bytes, and render the
+   * line diff or the honest fallback notice. Returns "settled" after the
+   * identical case already reconciled the conflict and closed the modal.
+   *
+   * Shared by the automatic path (known small/unknown size) and the explicit
+   * check action that defers an oversized download.
+   */
+  private async downloadAndCompareRemote(args: {
+    t: (key: string, params?: Record<string, string | number>) => string;
+    body: HTMLElement;
+    loadingEl: HTMLElement;
+    diffHeaderEl: HTMLElement;
+    reasonEl: HTMLElement;
+    localRaw: ArrayBuffer;
+    localContent: string | null;
+    /** The local side is known absent (remote-only conflict), not unreadable. */
+    localSideMissing?: boolean;
+    isBinary: boolean | undefined;
+    remote: NonNullable<SyncPlanItem["remote"]>;
+    setSummary: (evidence: ConflictDetailSummaryEvidence) => void;
+  }): Promise<ConflictDetailStageOutcome> {
+    const {
+      t,
+      body,
+      loadingEl,
+      diffHeaderEl,
+      reasonEl,
+      localRaw,
+      localContent,
+      localSideMissing,
+      isBinary,
+      remote,
+      setSummary,
+    } = args;
+
+    loadingEl.setText(t("conflictDetail.fetchingRemote"));
+    const vaultName = this.plugin.app.vault.getName();
+    const remoteRaw = await this.plugin.onedrive!.downloadFile(
+      vaultName,
+      this.item.path,
+      remote.downloadUrl,
+      remote.driveId,
+      remote.size,
+    );
+    loadingEl.setText(t("conflictDetail.computingDiff"));
+    const contentComparison = await compareContentBuffers(localRaw, remoteRaw);
+    // A missing local side is not equal to an empty remote file: "identical"
+    // would retire the conflict with a baseline the user never had.
+    if (!localSideMissing && contentComparison.status === "equal") {
+      // The "comparing" summary above is stale once equality is proven:
+      // leave only the identical conclusion, without a diff section.
+      reasonEl.remove();
+      diffHeaderEl.remove();
+      body.createDiv("easy-sync-detail-identical").setText(
+        t("conflictDetail.identical"),
+      );
+      loadingEl.remove();
+      await this.plugin.reconcileIdenticalConflict(this.item.path, {
+        localHash: contentComparison.localHash,
+        localSize: localRaw.byteLength,
+        remoteHash: contentComparison.remoteHash,
+        remoteSize: remoteRaw.byteLength,
+        remoteETag: remote.eTag,
+      });
+      this.onResolved?.();
+      this.close();
+      return { kind: "settled" };
+    }
+
+    if (isBinary) {
+      setSummary({ kind: "content-different" });
+      diffHeaderEl.remove();
+      body.createDiv("easy-sync-binary-notice").setText(
+        t("conflictDetail.binaryFile"),
+      );
+    } else if (
+      localRaw.byteLength > MAX_TEXT_DIFF_BYTES_PER_SIDE ||
+      remoteRaw.byteLength > MAX_TEXT_DIFF_BYTES_PER_SIDE
+    ) {
+      setSummary({ kind: "content-different" });
+      body.createDiv("easy-sync-diff-truncated").setText(
+        t("conflictDetail.textDiffByteLimit", {
+          limit: formatFileSize(MAX_TEXT_DIFF_BYTES_PER_SIDE),
+        }),
+      );
+      if (localContent != null) {
+        body.createEl("h4", { text: t("conflictDetail.localPreview") });
+        this.renderTextPreview(body, localContent, t);
+      }
+    } else {
+      const remoteContent = decodeUtf8(remoteRaw);
+      if (localContent == null || remoteContent == null) {
+        setSummary({ kind: "content-different" });
+        diffHeaderEl.remove();
+        body.createDiv("easy-sync-binary-notice").setText(
+          t("conflictDetail.binaryFile"),
+        );
+      } else if (
+        contentComparison.decodedTextEqual ||
+        sameVisibleText(localContent, remoteContent)
+      ) {
+        setSummary({ kind: "bytes-different-no-line-diff" });
+        body.createDiv("easy-sync-detail-format-difference").setText(
+          t("conflictDetail.textSameBytesDifferent"),
+        );
+      } else {
+        const diff = computeDisplayDiff(localContent, remoteContent);
+        setSummary({ kind: "text-diff", diff });
+        diffHeaderEl.setText(
+          diff.complete
+            ? t("conflictDetail.diffTitle") +
+              ` (${t("conflictDetail.diffAdded", { count: diff.addedCount })}, ${t("conflictDetail.diffRemoved", { count: diff.removedCount })})`
+            : t("conflictDetail.diffTitle") +
+              ` (${t("conflictDetail.diffRegionsLocated", { count: diff.parts.length })})`,
+        );
+        renderDisplayDiff(body, diff);
+      }
+    }
+    loadingEl.remove();
+    return { kind: "continue" };
+  }
+
+  /**
+   * Deferred state for a known oversized remote: explain why it was not
+   * loaded, show the bounded local preview, and expose one explicit action
+   * that runs the same download/compare/render path on demand. The three
+   * conflict decisions stay in the fixed footer, so nothing is duplicated.
+   */
+  private renderLargeRemoteSkipped(args: {
+    t: (key: string, params?: Record<string, string | number>) => string;
+    body: HTMLElement;
+    loadingEl: HTMLElement;
+    reasonEl: HTMLElement;
+    localRaw: ArrayBuffer;
+    localContent: string | null;
+    /** The local side is known absent (remote-only conflict), not unreadable. */
+    localSideMissing?: boolean;
+    isBinary: boolean | undefined;
+    remote: NonNullable<SyncPlanItem["remote"]>;
+    setSummary: (evidence: ConflictDetailSummaryEvidence) => void;
+    setComparisonUnavailableOrReason: () => void;
+  }): void {
+    const {
+      t,
+      body,
+      loadingEl,
+      reasonEl,
+      localRaw,
+      localContent,
+      localSideMissing,
+      isBinary,
+      remote,
+      setSummary,
+      setComparisonUnavailableOrReason,
+    } = args;
+
+    loadingEl.remove();
+    const deferredEl = body.createDiv();
+    deferredEl.createDiv("easy-sync-diff-truncated").setText(
+      t("conflictDetail.largeRemoteSkipped"),
+    );
+
+    // The only way to bring the remote side in sits between the notice and the
+    // bounded local preview, so the action is visible without scrolling past it.
+    const checkButton = deferredEl.createEl("button", {
+      text: t("conflictDetail.checkContentEquality"),
+    });
+    const statusEl = deferredEl.createDiv();
+    if (!localSideMissing && localContent != null) {
+      deferredEl.createEl("h4", { text: t("conflictDetail.localPreview") });
+      this.renderTextPreview(deferredEl, localContent, t);
+    }
+    const resultEl = body.createDiv();
+
+    checkButton.addEventListener("click", () => {
+      if (checkButton.disabled) return;
+      checkButton.disabled = true;
+      void (async () => {
+        const checkLoadingEl = statusEl.createDiv("easy-sync-detail-loading");
+        const diffHeaderEl = resultEl.createEl("h4", {
+          text: t("conflictDetail.diffTitle"),
+        });
+        try {
+          const outcome = await this.downloadAndCompareRemote({
+            t,
+            body: resultEl,
+            loadingEl: checkLoadingEl,
+            diffHeaderEl,
+            reasonEl,
+            localRaw,
+            localContent,
+            localSideMissing,
+            isBinary,
+            remote,
+            setSummary,
+          });
+          if (outcome.kind === "settled") return;
+          // The rendered result supersedes the deferred notice, action, and
+          // preview, so the disabled button cannot linger as a dead control.
+          deferredEl.remove();
+        } catch (e) {
+          setComparisonUnavailableOrReason();
+          this.plugin.diag.warn(
+            "execute",
+            "Conflict detail remote comparison unavailable",
+            {
+              path: this.item.path,
+              errorKind: getErrorKind(e),
+            },
+          );
+          checkLoadingEl.remove();
+          diffHeaderEl.remove();
+          statusEl.empty();
+          statusEl.createDiv("easy-sync-remote-unavailable").setText(
+            t("conflictDetail.remoteComparisonUnavailable"),
+          );
+          // A failed check changed nothing: allow the user to retry.
+          checkButton.disabled = false;
+        }
+      })();
+    });
+  }
+
+  /** Render the metadata comparison table */
+  private renderMetadata(
+    t: (key: string, params?: Record<string, string | number>) => string,
+  ): void {
+    const localTime = this.item.local?.mtime
+      ? new Date(this.item.local.mtime)
+      : null;
+    const remoteTime = this.item.remote?.mtime
+      ? new Date(this.item.remote.mtime)
+      : null;
+    const localIsNewer =
+      localTime && remoteTime && localTime > remoteTime;
+    const remoteIsNewer =
+      localTime && remoteTime && remoteTime > localTime;
+    const localSize = this.item.local?.size;
+    const remoteSize = this.item.remote?.size;
+    const localLarger =
+      localSize != null && remoteSize != null && localSize > remoteSize;
+    const remoteLarger =
+      localSize != null && remoteSize != null && remoteSize > localSize;
+    this.renderComparisonTable(
+      t("conflictDetail.localLabel"),
+      t("conflictDetail.remoteLabel"),
+      [
+        {
+          label: t("conflictDetail.modifiedTime"),
+          local: localTime
+            ? localTime.toLocaleString()
+              + (localIsNewer ? ` ${t("conflictDetail.newer")}` : "")
+            : "—",
+          remote: remoteTime
+            ? remoteTime.toLocaleString()
+              + (remoteIsNewer ? ` ${t("conflictDetail.newer")}` : "")
+            : "—",
+          localHighlighted: Boolean(localIsNewer),
+          remoteHighlighted: Boolean(remoteIsNewer),
+        },
+        {
+          label: t("conflictDetail.fileSize"),
+          local: localSize != null
+            ? formatFileSize(localSize)
+              + (localLarger ? ` ${t("conflictDetail.larger")}` : "")
+            : "—",
+          remote: remoteSize != null
+            ? formatFileSize(remoteSize)
+              + (remoteLarger ? ` ${t("conflictDetail.larger")}` : "")
+            : "—",
+          localHighlighted: localLarger,
+          remoteHighlighted: remoteLarger,
+        },
+      ],
+    );
+  }
+
+  private renderTextPreview(
+    container: HTMLElement,
+    content: string,
+    t: (key: string, params?: Record<string, string | number>) => string,
+  ): void {
+    const lines = content.split("\n");
+    const shown = Math.min(lines.length, MAX_FALLBACK_PREVIEW_LINES);
+    if (shown < lines.length) {
+      container.createDiv("easy-sync-diff-truncated").setText(
+        t("conflictDetail.previewTruncated", { shown, total: lines.length }),
+      );
+    }
+    const preview = container.createDiv("easy-sync-content-preview");
+    const pre = preview.createEl("pre");
+    pre.createEl("code", { text: lines.slice(0, shown).join("\n") });
+  }
+
+  /** Render the bottom action buttons. DOM order: the skip exit first
+   *  (secondary), the two keep-side choices last — on phones the host's
+   *  column-reverse then shows the keep actions on top. */
+  private renderActionButtons(
+    t: (key: string, params?: Record<string, string | number>) => string,
+  ): void {
+    this.renderFileComparisonActions([
+      {
+        label: t("syncView.conflict.skip"),
+        onClick: () => {
+          this.close();
+          void (async () => {
+            await this.plugin.dismissConflict(this.item.path);
+            this.onResolved?.();
+          })();
+        },
+      },
+      {
+        label: t("syncView.conflict.keepLocal"),
+        className: "easy-sync-detail-action-local",
+        onClick: () => {
+          this.close();
+          void (async () => {
+            await this.plugin.resolveConflictKeepLocal(this.item.path);
+            this.onResolved?.();
+          })();
+        },
+      },
+      {
+        label: t("syncView.conflict.keepRemote"),
+        className: "easy-sync-detail-action-remote",
+        onClick: () => {
+          this.close();
+          void (async () => {
+            await this.plugin.resolveConflictKeepRemote(this.item.path);
+            this.onResolved?.();
+          })();
+        },
+      },
+    ]);
+  }
+}
+
+function getErrorKind(error: unknown): string {
+  if (error instanceof Error) {
+    const typed = error as Error & { type?: unknown; status?: unknown };
+    if (typeof typed.type === "string") return `${error.name}:${typed.type}`;
+    if (typeof typed.status === "number") return `${error.name}:${typed.status}`;
+    return error.name;
+  }
+  return typeof error;
+}

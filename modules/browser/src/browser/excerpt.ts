@@ -45,7 +45,7 @@ export async function clipPage(
       ";\n" +
       __CLIP_SOURCE__ +
       ";\n" +
-      `window.__obsidianClipRun(${JSON.stringify({ mode, assets: settings.clipAssets })})`;
+      `window.__obsidianClipRun(${JSON.stringify({ mode, assets: settings.clipAssets, exp: { bold: settings.clipExpBold === true, italic: settings.clipExpItalic === true, underline: settings.clipExpUnderline === true, removeImgLink: settings.clipExpRemoveImgLink === true, spanBr: settings.clipExpSpanBr === true, svgToImg: settings.clipExpSvgToImg === true } })})`;
     const raw = await runInPage(script);
     const payload = parsePayload(raw);
 

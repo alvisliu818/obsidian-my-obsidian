@@ -80,7 +80,11 @@ export interface FileFacts {
 }
 
 export function bkeyOf(path: string, ord: number, id: string): string {
-  return id || `${SYNTHETIC_PREFIX}${path}#${ord}`;
+  // 跨文件重复 id:: 会撞 blocks.bkey 主键——SQLite 模式下整个文件批次失败
+  // 且每轮 sync 永久重试(内核日志实测 2863 次 UNIQUE 约束冲突)。id 并入
+  // key 消除碰撞;((id)) 导航走 block_id 列(daemonClient.cacheById 按
+  // blockId 建键),不受影响;重复 id 的「last one wins」池语义保留。
+  return id ? `${SYNTHETIC_PREFIX}${id}@${path}#${ord}` : `${SYNTHETIC_PREFIX}${path}#${ord}`;
 }
 
 function collectTags(text: string): string[] {

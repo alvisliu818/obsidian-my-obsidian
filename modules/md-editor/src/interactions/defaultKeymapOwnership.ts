@@ -51,5 +51,8 @@ export function ownedDefaultKeys(shortcuts: ShortcutOverrides): Set<string> {
     add('ArrowLeft');
     add('ArrowRight');
   }
+  // Mod+L 插入链接(og :editor/insert-link parity)——CM defaultKeymap 的
+  // Mod-l(selectLine)让位;组关着时键落回 CM 默认。
+  if (shortcuts.insertLink) add('Mod-l');
   return owned;
 }

@@ -14,7 +14,7 @@
  * that implies — backlinks, block references, search.
  */
 
-import { FileSystemAdapter, ItemView, Menu, Notice, setIcon, TFile, TFolder, type PaneType, type WorkspaceLeaf } from 'obsidian';
+import { FileSystemAdapter, ItemView, Menu, Modal, Notice, setIcon, TFile, TFolder, type PaneType, type WorkspaceLeaf } from 'obsidian';
 import type VirtualTreePlugin from '../main';
 import { compareNames } from '../nameCompare';
 import type { ExternalMount } from '../types';
@@ -27,6 +27,19 @@ import {
   vaultRelPath,
 } from '../types';
 import { isBaiduPath } from '../features/baiduPath';
+import { isOneDrivePath } from '../features/onedrivePath';
+import { isOutlookPath } from '../features/outlookMailPath';
+import { mailListDir } from '../features/outlookMailApi';
+import { clearOneDriveListCache, odCreateDir, odListDir, odRemove, odRename, odUploadFile } from '../features/onedriveApi';
+import {
+  isBmarksPath,
+  bmarksListDir,
+} from '../features/linkMount';
+import { DestPickerModal } from '../features/moveCopy';
+import { allTags, tagById, addTag, fileHasTag, addTagToPath, removeTagFromPath, fileTagIds, pathMatchesTagFilter } from '../features/tagStore';
+import { VIEW_TYPE_TAG_FILTER_PANEL } from './tagFilterPanel';
+import { imapListDir } from '../features/imapMailApi';
+import { isImapPath } from '../features/imapPath';
 import {
   bdListDir,
   clearBaiduListCache,
@@ -81,7 +94,6 @@ import {
   renameEntry,
   safeSegment,
   scanExternal,
-  trashEntry,
   validateEntryName,
   linkVaultPath,
 } from '../features/extFs';
@@ -89,6 +101,13 @@ import { ConfirmModal, NamePromptModal } from './promptModals';
 import { MountEditorModal, MountTargetPickerModal, VaultMountPickModal } from './mountModals';
 import { GitRepoMountModal } from './gitRepoModal';
 import { BaiduPanMountModal } from './baiduPanModal';
+import { OneDriveMountModal } from './onedriveModal';
+import { OutlookMailMountModal } from './outlookMailModal';
+import { TrashManagerModal } from './trashModal';
+import { deleteToTrash } from '../features/trashStore';
+import { DirSearchModal } from './searchModal';
+import { GitPanelModal } from './gitPanelModal';
+import { isFavorited, removeFavorite, toggleFavorite } from '../features/favorites';
 import { iconForEntry } from '../features/iconTheme';
 import { isImageFile } from '../views/ImageView';
 import { isVideoFile } from '../views/VideoView';
@@ -177,9 +196,12 @@ export class MountPanelView extends ItemView {
   private scrollEl: HTMLElement | null = null;
   /** 工具栏配置(注册表 + 设置,见 features/panelToolbar.ts;渲染时懒读设置) */
   private toolbarCfg: PanelToolbarCfg | null = null;
+  /** 顶栏工具栏元素(横向滚动时 JS 反向平移钉住,见 pinToolbarHorizontally) */
+  private toolbarBarEl: HTMLElement | null = null;
   /** 最近点击/定位的目录(工具栏「新建」的目标;null = 第一个挂载的根) */
   private currentDir: { mount: ExternalMount; abs: string; rel: string } | null = null;
   private readonly onScrollRepaint = (): void => {
+    this.pinToolbarHorizontally();
     for (const paint of this.rowPainters) paint();
   };
 
@@ -207,6 +229,7 @@ export class MountPanelView extends ItemView {
   async onClose(): Promise<void> {
     if (this.scrollEl) this.scrollEl.removeEventListener('scroll', this.onScrollRepaint);
     this.scrollEl = null;
+    this.toolbarBarEl = null;
     this.rowPainters = [];
     this.states.clear();
   }
@@ -228,6 +251,22 @@ export class MountPanelView extends ItemView {
   }
 
   /**
+   * 工具栏横向钉住（2026-11-17 横向滚动条配套）。
+   *
+   * 竖向钉住走 CSS sticky（top:0），横向 sticky 钉不住：sticky 只能在其包含
+   * 块（contentEl，视口宽）内移动，而工具栏本身也是视口宽——没有移动余地，
+   * 横向一滚就跟着内容走了。这里在滚动时反向平移同一像素量，视觉上钉在
+   * 视口左缘。竖向 sticky + 横向 transform 互不干扰；无横向溢出时
+   * scrollLeft 恒 0，平移是 no-op。
+   */
+  private pinToolbarHorizontally(): void {
+    const bar = this.toolbarBarEl;
+    const scroller = this.scrollEl;
+    if (!bar || !scroller) return;
+    bar.style.transform = `translateX(${scroller.scrollLeft}px)`;
+  }
+
+  /**
    * Re-read every mount from disk on the next paint.
    *
    * 只丢磁盘扫描缓存,展开状态(open 集合)原样保留——否则卸载/新增/重扫
@@ -239,6 +278,7 @@ export class MountPanelView extends ItemView {
     // remote 挂载:磁盘重扫之外,远端缓存一并清掉(手动刷新 = 拉到远端最新)
     clearGitRepoCache();
     clearBaiduListCache();
+    clearOneDriveListCache();
     const mounts = this.plugin.settings.externalMounts ?? [];
     const alive = new Set(mounts.map((m) => m.id));
     for (const id of [...this.states.keys()]) {
@@ -266,6 +306,66 @@ export class MountPanelView extends ItemView {
    * A fresh mount starts EXPANDED: someone who just mounted a folder wants to
    * see what is in it. Nested folders stay closed.
    */
+  /** 最近打开区：ext 筛选 chips + 条目列表（点击经 openRecentEntry 回跳）。 */
+  /** 收藏区（思源 favorites 对齐）：面板顶部一列条目，点击回跳，右键移除。 */
+  private renderFavoritesSection(contentEl: HTMLElement): void {
+    const list = this.plugin.settings.favorites ?? [];
+    if (!list.length) return;
+    const sec = contentEl.createDiv({ cls: 'logseq-mount-section' });
+    const head = sec.createDiv({ cls: 'logseq-mount-head' });
+    head.createSpan({ text: '收藏' });
+    const listEl = sec.createDiv();
+    for (const fav of list) {
+      const mount = (this.plugin.settings.externalMounts ?? []).find((m) => m.id === fav.mountId);
+      const row = listEl.createDiv({ cls: 'logseq-mount-row' });
+      row.style.paddingInlineStart = '14px';
+      row.setAttribute('title', fav.name);
+      row.createSpan({ cls: 'logseq-mount-name', text: `${fav.isDir ? '📁 ' : ''}${fav.name}` });
+      if (!mount) row.createSpan({ cls: 'logseq-mount-flag', text: '挂载已卸载' });
+      row.addEventListener('click', () => {
+        if (!mount) {
+          new Notice('该条目所在的挂载已卸载,收藏已失效');
+          return;
+        }
+        this.openMountRel(mount, fav.rel, fav.isDir);
+      });
+      row.addEventListener('contextmenu', (e) => {
+        const menu = new Menu();
+        menu.addItem((i) =>
+          i.setTitle('从收藏中移除').setIcon('x' as never).onClick(() => {
+            this.plugin.settings.favorites = removeFavorite(this.plugin.settings.favorites ?? [], fav.mountId, fav.rel);
+            void this.plugin.saveSettings();
+            this.render();
+          }),
+        );
+        menu.showAtMouseEvent(e);
+      });
+    }
+  }
+
+  /** 树行右键「收藏/取消收藏」（三种挂载形态共用；条目键 = mountId + rel）。 */
+  private addFavoriteMenuItems(menu: Menu, mount: ExternalMount, node: MountNode): void {
+    const list = this.plugin.settings.favorites ?? [];
+    const already = isFavorited(list, mount.id, node.rel);
+    menu.addItem((item) =>
+      item
+        .setTitle(already ? '取消收藏' : '收藏')
+        .setIcon(already ? 'star-off' : 'star')
+        .onClick(async () => {
+          const r = toggleFavorite(this.plugin.settings.favorites ?? [], {
+            mountId: mount.id,
+            rel: node.rel,
+            name: node.name,
+            isDir: node.isDir,
+          });
+          this.plugin.settings.favorites = r.list;
+          await this.plugin.saveSettings();
+          if (r.added) new Notice(`已收藏「${node.name}」(面板顶部可见)`);
+          this.render();
+        }),
+    );
+  }
+
   private scan(mount: ExternalMount, force = false): MountState {
     const cached = this.states.get(mount.id);
     if (cached && !force) return cached;
@@ -351,6 +451,18 @@ export class MountPanelView extends ItemView {
     // instead of walking the whole disk before anything is shown.
     this.loadLayer(mount, '', state);
     return state;
+  }
+
+  /**
+   * 无缓存 scan + 展开层补读。scan 契约是「只读根层」(tests/ 固化),但 open
+   * 持久化恢复出的非根层 children 全是空数组——面板叶重开/接管重建后命中
+   * 此路径,展开中的文件夹就是空的(用户实报「点开文件夹无法展示内容」)。
+   * refreshMounts/rescan 各自带 reload,这里补齐第三个冷启动入口。
+   */
+  private scanWithLayers(mount: ExternalMount): MountState {
+    const st = this.scan(mount);
+    this.reloadOpenLayers(mount, st);
+    return st;
   }
 
   /**
@@ -448,7 +560,17 @@ export class MountPanelView extends ItemView {
     const dirVPath = remoteChildVPath(mount.path, rel);
     void (async () => {
       try {
-        let children = isGitRepoPath(mount.path) ? await gitListDir(dirVPath) : await bdListDir(dirVPath);
+        let children = isImapPath(dirVPath)
+          ? await imapListDir(dirVPath, this.app)
+          : isBmarksPath(dirVPath)
+          ? await bmarksListDir(dirVPath, this.app)
+          : isGitRepoPath(mount.path)
+            ? await gitListDir(dirVPath)
+            : isOneDrivePath(mount.path)
+              ? await odListDir(dirVPath)
+              : isOutlookPath(mount.path)
+                ? await mailListDir(dirVPath)
+                : await bdListDir(dirVPath);
         // 挂载单个远端文件:目录接口对文件路径返回空列表 —— 查树接口里该路径
         // 本身,是文件就按「单文件挂载」渲染成一行(与库外挂单文件同款)
         if (children.length === 0 && !rel && isGitRepoPath(mount.path)) {
@@ -662,7 +784,7 @@ export class MountPanelView extends ItemView {
       cur = cur.attachTo ? byId.get(mountHostOf(cur.attachTo).hostId) : undefined;
     }
     for (const m of chain) this.scan(m).open.add('');
-    const state = this.scan(mount);
+    const state = this.scanWithLayers(mount);
     // 单文件挂载根：头行即文件本身（不可展开,无子行）,定位目标就是头行
     // （rel=''）——旧实现把 rel 改指文件名找子行,子行已不存在（2026-11-07
     // 用户实报「挂载文件下面多了自身」后一并调整）。
@@ -858,9 +980,13 @@ export class MountPanelView extends ItemView {
     // last child is removed, and nothing restored it: every toggle / drag
     // reorder / rescan yanked the panel back to the top (展开文件夹页面会
     // 滚动). Capture the position before the wipe and put it back below.
+    // 横向同理（2026-11-17 加横向滚动条后 scrollLeft 也会被 wipe 清零）。
     const restoreScrollTop = this.scrollEl ? this.scrollEl.scrollTop : 0;
+    const restoreScrollLeft = this.scrollEl ? this.scrollEl.scrollLeft : 0;
     contentEl.empty();
     contentEl.addClass('logseq-mount-panel');
+    // 横向滚动条标记（styles.css 据此放行 overflow-x 并让行随内容变宽）。
+    contentEl.addClass('logseq-mount-leaf');
 
     // Viewport painters are rebuilt with the DOM; the scroll listener lives
     // on the panel's scrollable ancestor, which survives re-renders.
@@ -894,6 +1020,10 @@ export class MountPanelView extends ItemView {
       })
       .slice()
       .sort((a, b) => Number(b.pinned === true) - Number(a.pinned === true));
+    this.renderFavoritesSection(contentEl);
+    // 标签筛选在工具栏**下面**(用户 2026-11-19: chips 顶在工具栏上方看着突兀)。
+    // 最近打开不内嵌本面板(先嫌顶置挡树,后定案拆成独立 dock 面板)——
+    // 见 panels/recentOpenPanel.ts,命令面板「最近打开」可开。
     if (mounts.length === 0) {
       const empty = contentEl.createDiv({ cls: 'logseq-mount-panel-empty' });
       empty.createDiv({ text: '还没有挂载。' });
@@ -912,6 +1042,7 @@ export class MountPanelView extends ItemView {
       this.toolbarCfg = this.plugin.settings.mountToolbar ?? defaultPanelToolbarCfg();
     }
     const bar = contentEl.createDiv({ cls: 'logseq-mount-panel-bar' });
+    this.toolbarBarEl = bar;
     const { order, hidden } = resolvePanelToolbar(this.toolbarCfg);
     const dragOn = this.plugin.settings.mountDragMode === true;
     for (const key of order) {
@@ -919,13 +1050,30 @@ export class MountPanelView extends ItemView {
       const b = panelToolbarButtonByKey(key);
       if (!b) continue;
       const btn = bar.createEl('button', {
-        cls: 'clickable-icon logseq-mount-panel-btn' + (key === 'drag-mode' && dragOn ? ' is-active' : ''),
+        cls:
+          'clickable-icon logseq-mount-panel-btn' +
+          (key === 'drag-mode' && dragOn ? ' is-active' : '') +
+          (key === 'tag-filter' && this.plugin.activeTagFilterIds.length ? ' is-active' : ''),
         attr: { 'data-tb-action': b.key },
       });
       setIcon(btn, b.icon);
-      btn.setAttribute('aria-label', b.label);
+      btn.setAttribute(
+        'aria-label',
+        key === 'tag-filter' && this.plugin.activeTagFilterIds.length
+          ? `${b.label}（${this.plugin.activeTagFilterIds.length} 个激活）`
+          : b.label,
+      );
     }
     // 「更多」:收进去的按钮(按顶栏同序)+ 固定「编辑工具栏…」入口
+    // 窄面板：按钮溢出时垂直滚轮转横向滚动（滚动条隐藏，滚轮是唯一通道）
+    bar.addEventListener('wheel', (ev) => {
+      if (ev.deltaX !== 0) return; // 触控板横滑走原生
+      if (!bar.querySelector('[data-tb-action]')) return;
+      const overflow = bar.scrollWidth - bar.clientWidth;
+      if (overflow <= 0) return;
+      ev.preventDefault();
+      bar.scrollLeft += ev.deltaY;
+    }, { passive: false });
     const moreBtn = bar.createEl('button', {
       cls: 'clickable-icon logseq-mount-panel-btn',
       attr: { 'data-tb-action': PANEL_TOOLBAR_FIXED },
@@ -950,9 +1098,11 @@ export class MountPanelView extends ItemView {
         0,
         Math.min(restoreScrollTop, this.scrollEl.scrollHeight - this.scrollEl.clientHeight),
       );
+      this.scrollEl.scrollLeft = restoreScrollLeft;
     }
     // Repaint with the final DOM in place — geometry measured mid-build can
     // be stale, and the scroll position may have been reset by the rebuild.
+    this.pinToolbarHorizontally();
     for (const paint of this.rowPainters) paint();
     // 展开态持久化(去抖):每次渲染(含所有展开/收起切换)后序列化当前
     // states,重启后由 scan() 恢复。
@@ -1016,8 +1166,44 @@ export class MountPanelView extends ItemView {
             pinned: false,
           }),
       }).open();
+    } else if (action === 'onedrive-mount') {
+      // OneDrive 挂载入口:接入配置 → 设备码授权 → 浏览驱动器 → 挂载
+      new OneDriveMountModal(this.app, {
+        onPick: (p) =>
+          this.plugin.promptMountEntry({
+            kind: 'remote',
+            path: p.vPath,
+            label: p.label,
+            include: '',
+            exclude: '',
+            refreshSeconds: 0,
+            pinned: false,
+          }),
+      }).open();
+    } else if (action === 'outlook-mount') {
+      // Outlook 邮箱挂载入口(只读):接入配置 → 设备码授权 → 选文件夹 → 挂载
+      new OutlookMailMountModal(this.app, {
+        onPick: (p) =>
+          this.plugin.promptMountEntry({
+            kind: 'remote',
+            path: p.vPath,
+            label: p.label,
+            include: '',
+            exclude: '',
+            refreshSeconds: 0,
+            pinned: false,
+          }),
+      }).open();
     } else if (action === 'refresh') {
       this.refreshMounts();
+    } else if (action === 'trash') {
+      // 插件回收站管理器(思源回收站按钮对齐):恢复/彻底删除/清空
+      const base = this.plugin.vaultBasePath();
+      if (!base) {
+        new Notice('无法确定库根路径');
+        return;
+      }
+      new TrashManagerModal(this.app, base, () => this.refreshMounts()).open();
     } else if (action === 'drag-mode') {
       // 拖拽模式:开时树行可拖拽排序(仅显示顺序,存 mountTreeOrder)
       this.plugin.settings.mountDragMode = this.plugin.settings.mountDragMode !== true;
@@ -1027,6 +1213,10 @@ export class MountPanelView extends ItemView {
       // 全部收起:清空各挂载的展开集合(挂载根一并收起,思源「全部收起」同义)
       for (const st of this.states.values()) st.open.clear();
       this.render();
+    } else if (action === 'tag-filter') {
+      // 标签筛选:工具栏按钮 → 独立面板(用户 2026-11-19 终版:做成一个面板)。
+      // 激活集在 plugin.activeTagFilterIds,树行过滤在 flattenHost。
+      void this.plugin.activatePanel(VIEW_TYPE_TAG_FILTER_PANEL);
     } else if (action === 'new-file' || action === 'new-folder') {
       // 新建目标 = 最近点击的目录;没点过就退回第一个挂载的根
       const dir = this.currentDir ?? this.defaultNewDir();
@@ -1046,9 +1236,48 @@ export class MountPanelView extends ItemView {
     return m ? { mount: m, abs: m.path, rel: '' } : null;
   }
 
+  /**
+   * 打开挂载内某个相对路径(搜索结果/收藏区共用):树上真实节点优先
+   * (remote 的 abs 是虚拟路径,必须复用树里的),找不到按形态构造最小节点。
+   */
+  private openMountRel(mount: ExternalMount, rel: string, isDir: boolean): void {
+    const st = this.states.get(mount.id);
+    const found = st ? this.findNode(st.tree, rel) : null;
+    const node: MountNode = found ?? {
+      name: rel.split('/').pop() || rel,
+      rel,
+      abs: isRemoteMount(mount) ? (rel ? `${mount.path}/${rel}` : mount.path) : isVaultMount(mount) ? '' : joinAbs(mount.path, rel),
+      isDir,
+      children: [],
+    };
+    if (isVaultMount(mount)) void this.openVaultNode(mount, node);
+    else void this.plugin.openExternalEntry(mount, node);
+  }
+
+  /**
+   * 在此目录搜索(思源文件树「搜索」对齐):目录行/挂载头行的右键入口。
+   * 打开行为按挂载形态分流——vault 走 openVaultNode,其余走 openExternalEntry;
+   * 结果条目优先取树上真实节点(remote 的 abs 是虚拟路径,必须复用树里的)。
+   */
+  private openSearchInDir(mount: ExternalMount, rel: string): void {
+    const label = rel
+      ? rel.split('/').pop() || rel
+      : mountDisplayName(mount);
+    new DirSearchModal(this.app, { mount, rel }, {
+      dirLabel: label,
+      listLoaded: (m, r) => {
+        const st = this.states.get(m.id);
+        if (!st || !st.loaded.has(r)) return null;
+        if (r === '') return st.tree;
+        const node = this.findNode(st.tree, r);
+        return node ? node.children : null;
+      },
+      openRel: (m, r, isDir) => this.openMountRel(m, r, isDir),
+    }).open();
+  }
+
   /** 「更多」菜单:收进去的按钮(按顶栏同序)+ 固定的「编辑工具栏…」入口 */
-  private showToolbarMoreMenu(ev?: MouseEvent): void {
-    const menu = new Menu();
+  private showToolbarMoreMenu(ev?: MouseEvent): void {    const menu = new Menu();
     const { order, hidden } = resolvePanelToolbar(this.toolbarCfg ?? undefined);
     for (const key of order) {
       if (!hidden.has(key)) continue;
@@ -1082,7 +1311,7 @@ export class MountPanelView extends ItemView {
     section.dataset.mountId = mount.id;
 
     const head = section.createDiv({ cls: 'logseq-mount-head' });
-    const state = this.scan(mount);
+    const state = this.scanWithLayers(mount);
     // The mount root is a folder too, so it gets the same treatment.
     const headLabel = mountDisplayName(mount);
     // A mounted FILE's head carries the file's own icon, not a folder's.
@@ -1260,7 +1489,7 @@ export class MountPanelView extends ItemView {
    * 挂载头菜单(编辑/卸载/在此挂载…)。拖拽排序与真实子项同一套(wireLevelRowDrag)。
    */
   private renderMountHeadRow(parent: HTMLElement, mount: ExternalMount, depth: number): void {
-    const st = this.states.get(mount.id) ?? this.scan(mount);
+    const st = this.states.get(mount.id) ?? this.scanWithLayers(mount);
     const isOpen = st.open.has('');
     // 嵌套挂载头行 = 顶层挂载头行的行内版:**文件挂载头行就是文件本身**——
     // 文件图标、点头行打开(含修饰键),有子项时 caret 独立点击展开;文件夹
@@ -1313,6 +1542,7 @@ export class MountPanelView extends ItemView {
         fallback: isFileRoot ? '📄' : '📁',
       }),
     );
+    row.setAttribute('title', mountDisplayName(mount));
     row.createSpan({ cls: 'logseq-mount-name', text: mountDisplayName(mount) });
     row.addEventListener('click', (ev) => {
       if (isFileRoot && rootNode) {
@@ -1373,6 +1603,10 @@ export class MountPanelView extends ItemView {
     // 拼成 ROOT.md/ROOT.md 报「文件不存在」）。根层的文件节点跳过，只渲染
     // orderedLevel 织入的嵌套挂载头/虚拟子笔记。
     const skipRootNode = st.tree.length === 1 && !st.tree[0].isDir;
+    // 标签筛选(思源标签筛选对齐):激活时文件按命中保留,目录一律保留——
+    // 打了标签的文件靠目录层级展开到达(父目录剪掉就够不到子命中了)。
+    const activeTagIds = this.plugin.activeTagFilterIds ?? [];
+    const tagFiltering = activeTagIds.length > 0;
     const walkLevel = (parentRel: string, children: MountNode[], depth: number): void => {
       for (const e of this.orderedLevel(host.id, parentRel, children)) {
         if (e.kind === 'mount') {
@@ -1381,6 +1615,7 @@ export class MountPanelView extends ItemView {
         }
         const n = e.node;
         if (skipRootNode && parentRel === '' && n === st.tree[0]) continue;
+        if (tagFiltering && !n.isDir && !pathMatchesTagFilter(this.plugin.settings, n.abs, activeTagIds)) continue;
         out.push({ kind: 'node', node: n, mount: host, state: st, depth });
         if (st.open.has(n.rel)) walkLevel(n.rel, n.children, depth + 1);
       }
@@ -1442,8 +1677,22 @@ export class MountPanelView extends ItemView {
     return entries;
   }
 
-  private renderNode(parent: HTMLElement, mount: ExternalMount, node: MountNode, state: MountState, depth: number): void {
-    const isOpen = state.open.has(node.rel);
+  /**
+   * 标签徽标（colored chips，思源树行 tag 对齐）：命中标签的行在行尾画 chips。
+   * 目录行与文件行共用（此前只挂在目录分支，文件行打了标签也不显示——实测发现）。
+   */
+  private renderTagBadges(row: HTMLElement, node: MountNode): void {
+    const ft = fileTagIds(this.plugin.settings, node.abs);
+    for (const tid of ft.slice(0, 3)) {
+      const td = tagById(this.plugin.settings, tid);
+      if (!td) continue;
+      const chip = row.createSpan({ cls: 'logseq-mount-flag', text: '#' + td.name });
+      chip.style.background = td.color ?? 'var(--background-modifier-border)';
+      chip.style.color = '#fff';
+    }
+  }
+
+  private renderNode(parent: HTMLElement, mount: ExternalMount, node: MountNode, state: MountState, depth: number): void {    const isOpen = state.open.has(node.rel);
     const row = parent.createDiv({
       cls: 'logseq-mount-row ' + (node.isDir ? 'is-dir' : 'is-file'),
     });
@@ -1479,8 +1728,11 @@ export class MountPanelView extends ItemView {
           fallback: '📁',
         }),
       );
+      // 悬浮显示完整名称（横向滚动之外的第二通道，2026-11-18）
+      row.setAttribute('title', node.name);
       row.createSpan({ cls: 'logseq-mount-name', text: node.name });
       if (node.empty) row.createSpan({ cls: 'logseq-mount-flag', text: '空' });
+      this.renderTagBadges(row, node);
       row.addEventListener('click', () => {
         if (isOpen) {
           state.open.delete(node.rel);
@@ -1518,6 +1770,7 @@ export class MountPanelView extends ItemView {
         fallback: text ? '📄' : '🔒',
       }),
     );
+    row.setAttribute('title', node.name);
     row.createSpan({ cls: 'logseq-mount-name', text: node.name });
     // Linked state is the only flair a file row carries: type pills (png /
     // 二进制 / …) read as noise repeated on half the rows, so they are gone.
@@ -1525,6 +1778,8 @@ export class MountPanelView extends ItemView {
     if (!isRemoteMount(mount) && this.isLinked(node)) {
       row.createSpan({ cls: 'logseq-mount-flag is-linked', text: '已链接' });
     }
+    // 文件行同样画标签徽标（此前徽标只挂在目录分支,打了标签的文件行不显示——实测发现）
+    this.renderTagBadges(row, node);
     // A FILE with mounts under it is a container too, so it needs a caret to
     // open them. The caret is a separate click target: the row itself keeps
     // opening the file, which is what a file row has always done.
@@ -1695,6 +1950,13 @@ export class MountPanelView extends ItemView {
       );
       menu.addSeparator();
       this.addVaultFileMenuItems(menu, mount, node);
+      // 收藏(思源 favorites 对齐)
+      this.addFavoriteMenuItems(menu, mount, node);
+      if (node.isDir) {
+        menu.addItem((item) =>
+          item.setTitle('在此目录搜索').setIcon('search' as never).onClick(() => this.openSearchInDir(mount, node.rel)),
+        );
+      }
       menu.addSeparator();
       // 挂载为独立条目：把这个库内子树提升成面板上自己的挂载。
       const vaultPath = vaultJoinPath(mount, node.rel);
@@ -1717,6 +1979,9 @@ export class MountPanelView extends ItemView {
     } else {
       // 挂载根：新建落在挂载根目录（重命名/删除归「编辑这个挂载…/卸载」管）。
       this.addVaultFileMenuItems(menu, mount, null);
+      menu.addItem((item) =>
+        item.setTitle('在此目录搜索').setIcon('search' as never).onClick(() => this.openSearchInDir(mount, '')),
+      );
       menu.addSeparator();
     }
     // 在此挂载库内条目：库内选择器挑一个，挂到本节点之下（跨 kind 嵌套：
@@ -1904,8 +2169,23 @@ export class MountPanelView extends ItemView {
       menu.addSeparator();
     }
     // 新建文件/文件夹/笔记、重命名、删除:共用 external 的菜单构建,各 prompt
-    // 内部按 isRemoteMount 分流到远端提交
-    this.addTreeFileMenuItems(menu, mount, node);
+    // 内部按 isRemoteMount 分流到远端提交。邮箱挂载是只读源:写操作整组隐藏。
+    if (isOutlookPath(mount.path)) {
+      menu.addItem((item) =>
+        item.setTitle('只读挂载(邮箱)').setIcon('eye-off' as never).setDisabled(true).onClick(() => undefined),
+      );
+    } else {
+      this.addTreeFileMenuItems(menu, mount, node);
+    }
+    // 收藏(思源 favorites 对齐;remote 行也收——rel+mountId 语义一致)
+    if (node) this.addFavoriteMenuItems(menu, mount, node);
+    // 在此搜索:远端逐个下载代价过高,只搜「已加载层」的文件名(标题如实)
+    menu.addItem((item) =>
+      item
+        .setTitle('在已加载层搜索')
+        .setIcon('search' as never)
+        .onClick(() => this.openSearchInDir(mount, node && node.isDir ? node.rel : parentRelOf(node ? node.rel : ''))),
+    );
     if (isGitRepoPath(mount.path)) {
       const url = gitRepoWebUrl(node ? node.abs : mount.path, !node || node.isDir);
       if (url) {
@@ -1924,6 +2204,7 @@ export class MountPanelView extends ItemView {
       item.setTitle('重新拉取').setIcon('refresh-cw' as never).onClick(() => {
         if (isGitRepoPath(mount.path)) clearGitRepoCache();
         if (isBaiduPath(mount.path)) clearBaiduListCache();
+        if (isOneDrivePath(mount.path)) clearOneDriveListCache();
         this.rescan(mount);
       }),
     );
@@ -1995,8 +2276,9 @@ export class MountPanelView extends ItemView {
         const linked = this.isLinked(node);
         const md = !node.isDir && node.name.toLowerCase().endsWith('.md');
         // 媒体文件(图片/视频)走应用内增强查看器(库外 abs 模式),不再丢给系统。
+        // .ts 与 openExternalEntry 同款让位:TypeScript 优先于传输流视频。
         const image = !node.isDir && isImageFile(node.name);
-        const video = !node.isDir && isVideoFile(node.name);
+        const video = !node.isDir && isVideoFile(node.name) && extOf(node.name) !== 'ts';
         // 未链接 md 的主项标题跟上实际路由（externalMarkdownChoice = 文件自身
         // editor 属性 ?? 设置，见 main.ts）：默认原生就如实写「用原生编辑器
         // 打开」，并把块编辑器保留为下面的显式入口。只对未链接生效——已链接
@@ -2129,6 +2411,24 @@ export class MountPanelView extends ItemView {
         menu.addSeparator();
         // ---- file management on the external tree (思源文件树对齐) ----
         this.addTreeFileMenuItems(menu, mount, node);
+        // 收藏(思源 favorites 对齐)
+        this.addFavoriteMenuItems(menu, mount, node);
+        // Git 管理(思源 git 面板对齐):仓库探测在点击时做,菜单构建不等 git
+        if (node.isDir) {
+          menu.addItem((item) =>
+            item
+              .setTitle('Git 管理…')
+              .setIcon('git-branch' as never)
+              .onClick(() => new GitPanelModal(this.app, node.abs, node.name).open()),
+          );
+        }
+        // 在此目录搜索(思源文件树「搜索」对齐):目录行直接搜,文件行搜其所在目录
+        menu.addItem((item) =>
+          item
+            .setTitle(node.isDir ? '在此目录搜索' : '在此目录搜索…')
+            .setIcon('search' as never)
+            .onClick(() => this.openSearchInDir(mount, node.isDir ? node.rel : parentRelOf(node.rel))),
+        );
         // 挂载为独立条目：把这个深层目录/文件提升成面板上自己的挂载，
         // 位置由用户在弹窗里选（面板顺序，不动磁盘）。
         menu.addItem((item) =>
@@ -2207,6 +2507,16 @@ export class MountPanelView extends ItemView {
         // Mount header: directory-level ops land on the mount ROOT, matching
         // how the SiYuan file tree exposes 新建 on the tree root.
         this.addTreeFileMenuItems(menu, mount, null);
+        menu.addItem((item) =>
+          item.setTitle('在此目录搜索').setIcon('search' as never).onClick(() => this.openSearchInDir(mount, '')),
+        );
+        // Git 管理(思源 git 面板对齐):挂载头行 = 挂载根目录
+        menu.addItem((item) =>
+          item
+            .setTitle('Git 管理…')
+            .setIcon('git-branch' as never)
+            .onClick(() => new GitPanelModal(this.app, mount.path, mountDisplayName(mount)).open()),
+        );
         // 整个挂载（头行）也能同步到库：文件夹走 /J 一次带过整棵子树。
         this.addSyncMenuItems(menu, mount.path, mountDisplayName(mount), isDirectory(mount.path));
         // 已链接/已同步的挂载头行补「取消链接到库内」（子行由上面的
@@ -2494,6 +2804,82 @@ export class MountPanelView extends ItemView {
     // 新建笔记:文件落在一个**另外配置**的目录里(设置 → 外部挂载 → 新建笔记
     // 的位置),再挂成这里右键条目的子文档 —— 磁盘位置与树上的位置解耦,
     // 与思源「新建笔记」一致(普通"新建文件"才是就地建在挂载目录里)。
+    if (node && !isRemoteMount(mount)) {
+    // 标签… 子菜单：给文件/文件夹打/摘标签（思源 tag-store 交互对齐）
+    // setSubmenu() 无参调用、返回子 Menu（Obsidian API 形态）
+    menu.addItem((item) => {
+      item.setTitle('标签…').setIcon('tag' as never);
+      const sub = item.setSubmenu();
+      const tags = allTags(this.plugin.settings);
+      for (const td of tags) {
+        const on = fileHasTag(this.plugin.settings, node.abs, td.id);
+        sub.addItem((si: any) => {
+          si.setTitle((on ? '✓ ' : '') + td.name).setIcon('tag' as never).onClick(() => {
+            if (on) removeTagFromPath(this.plugin.settings, node.abs, td.id);
+            else addTagToPath(this.plugin.settings, node.abs, td.id);
+            this.plugin.saveSettings();
+            this.render();
+          });
+        });
+      }
+      sub.addItem((si: any) => {
+        si.setTitle('+ 新建标签…').setIcon('plus' as never).onClick(() => {
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.placeholder = '标签名，回车确认';
+          input.style.cssText = 'width:100%;margin-bottom:8px';
+          const wrap = document.createElement('div');
+          wrap.appendChild(input);
+          const modal = new Modal(this.app);
+          modal.contentEl.appendChild(wrap);
+          const commit = (): void => {
+            if (!input.value.trim()) return;
+            const td = addTag(this.plugin.settings, input.value.trim());
+            addTagToPath(this.plugin.settings, node.abs, td.id);
+            this.plugin.saveSettings();
+            modal.close();
+            this.render();
+          };
+          input.addEventListener('keydown', (e2: KeyboardEvent) => {
+            if (e2.key === 'Enter') commit();
+            if (e2.key === 'Escape') modal.close();
+          });
+          modal.open();
+          setTimeout(() => input.focus(), 50);
+        });
+      });
+    });
+      menu.addItem((item) =>
+        item
+          .setTitle('移动到…')
+          .setIcon('arrow-right-left' as never)
+          .onClick(() =>
+            DestPickerModal.openFor(this.app, this.plugin.settings.externalMounts ?? [], {
+              title: '移动到…',
+              srcAbs: node.abs,
+              srcName: node.name,
+              srcIsDir: !!node.isDir,
+              move: true,
+              onDone: () => this.rescan(mount),
+            }),
+          ),
+      );
+      menu.addItem((item) =>
+        item
+          .setTitle('复制到…')
+          .setIcon('copy' as never)
+          .onClick(() =>
+            DestPickerModal.openFor(this.app, this.plugin.settings.externalMounts ?? [], {
+              title: '复制到…',
+              srcAbs: node.abs,
+              srcName: node.name,
+              srcIsDir: !!node.isDir,
+              move: false,
+              onDone: () => this.render(),
+            }),
+          ),
+      );
+    }
     menu.addItem((item) =>
       item
         .setTitle('新建笔记…')
@@ -2554,7 +2940,9 @@ export class MountPanelView extends ItemView {
           const target = remoteChildVPath(dir, name);
           const push = isGitRepoPath(mount.path)
             ? gitUploadFile(target, new Uint8Array(0))
-            : bdUploadFile(target, new Uint8Array(0));
+            : isOneDrivePath(mount.path)
+              ? odUploadFile(target, new Uint8Array(0))
+              : bdUploadFile(target, new Uint8Array(0));
           void push.then(
             () => {
               new Notice(`已提交 ${name}`);
@@ -2619,7 +3007,11 @@ export class MountPanelView extends ItemView {
           if (!name) return;
           const dir = dirRel ? remoteChildVPath(mount.path, dirRel) : mount.path;
           const target = remoteChildVPath(dir, name);
-          const push = isGitRepoPath(mount.path) ? gitCreateDir(target) : bdCreateDir(target);
+          const push = isGitRepoPath(mount.path)
+            ? gitCreateDir(target)
+            : isOneDrivePath(mount.path)
+              ? odCreateDir(target)
+              : bdCreateDir(target);
           void push.then(
             () => {
               new Notice(`已提交 ${name}`);
@@ -2734,7 +3126,11 @@ export class MountPanelView extends ItemView {
           if (!name || name === node.name) return;
           const parent = parentRelOf(node.rel);
           const target = remoteChildVPath(parent ? remoteChildVPath(mount.path, parent) : mount.path, name);
-          const push = isGitRepoPath(mount.path) ? gitRename(node.abs, target) : bdRename(node.abs, target);
+          const push = isGitRepoPath(mount.path)
+            ? gitRename(node.abs, target)
+            : isOneDrivePath(mount.path)
+              ? odRename(node.abs, target)
+              : bdRename(node.abs, target);
           void push.then(
             () => {
               new Notice(`已重命名为 ${name}`);
@@ -2809,7 +3205,9 @@ export class MountPanelView extends ItemView {
     if (isRemoteMount(mount)) {
       const where = isGitRepoPath(mount.path)
         ? `将直接提交一个删除 commit 到 ${remoteRootLabel(mount.path)}`
-        : '将从百度网盘删除';
+        : isOneDrivePath(mount.path)
+          ? '将从 OneDrive 删除(可在 OneDrive 回收站找回)'
+          : '将从百度网盘删除';
       new ConfirmModal(
         this.app,
         {
@@ -2820,7 +3218,11 @@ export class MountPanelView extends ItemView {
         },
         (ok) => {
           if (!ok) return;
-          const push = isGitRepoPath(mount.path) ? gitRemove(node.abs) : bdRemove(node.abs);
+          const push = isGitRepoPath(mount.path)
+            ? gitRemove(node.abs)
+            : isOneDrivePath(mount.path)
+              ? odRemove(node.abs)
+              : bdRemove(node.abs);
           void push.then(
             () => {
               new Notice('已删除并提交到远端');
@@ -2867,7 +3269,10 @@ export class MountPanelView extends ItemView {
       this.app,
       {
         title: `删除${typeStr}`,
-        body: `确定删除${typeStr}「${node.name}」${node.isDir ? '及其全部内容' : ''}吗？将移入系统回收站。`,
+        // 删除方式按设置分流(思源同款语义,两种模式都可恢复);说明文案如实。
+        body: `确定删除${typeStr}「${node.name}」${node.isDir ? '及其全部内容' : ''}吗？将移入${
+          this.plugin.settings.deleteMode === 'system' ? '系统回收站' : '插件回收站（可在回收站中恢复）'
+        }。`,
         confirmText: '删除',
         dangerous: true,
       },
@@ -2877,30 +3282,33 @@ export class MountPanelView extends ItemView {
         const base = this.plugin.vaultBasePath();
         const oldLink = base ? linkTargetFor(base, node.name, safeSegment(node.name)) : '';
         if (base && exists(oldLink)) removeLink(oldLink);
-        void trashEntry(node.abs).then((r) => {
-          if (r.ok) {
-            new Notice('已移入回收站');
+        void deleteToTrash(node.abs, node.isDir, {
+          mode: this.plugin.settings.deleteMode === 'system' ? 'system' : 'plugin',
+          vaultBase: base,
+        })
+          .then((r) => {
+            new Notice(r.note ?? '已移入回收站');
             this.rescan(mount, parentRelOf(node.rel));
-            return;
-          }
-          // 没有回收站(或系统拒绝):二次确认后永久删除,绝不静默。
-          new ConfirmModal(
-            this.app,
-            {
-              title: '无法移入回收站',
-              body: `${r.error ?? '此系统不支持回收站'}。要永久删除「${node.name}」吗？此操作不可恢复。`,
-              confirmText: '永久删除',
-              dangerous: true,
-            },
-            (ok2) => {
-              if (!ok2) return;
-              const rr = deletePermanent(node.abs, node.isDir);
-              if (!rr.ok) new Notice(`删除失败：${rr.error ?? '未知错误'}`);
-              else new Notice('已永久删除');
-              this.rescan(mount, parentRelOf(node.rel));
-            },
-          ).open();
-        });
+          })
+          .catch(() => {
+            // 回收站不可用(插件模式移动失败/系统拒绝):二次确认后永久删除,绝不静默。
+            new ConfirmModal(
+              this.app,
+              {
+                title: '无法移入回收站',
+                body: `回收站暂不可用。要永久删除「${node.name}」吗？此操作不可恢复。`,
+                confirmText: '永久删除',
+                dangerous: true,
+              },
+              (ok2) => {
+                if (!ok2) return;
+                const rr = deletePermanent(node.abs, node.isDir);
+                if (!rr.ok) new Notice(`删除失败：${rr.error ?? '未知错误'}`);
+                else new Notice('已永久删除');
+                this.rescan(mount, parentRelOf(node.rel));
+              },
+            ).open();
+          });
       },
     ).open();
   }

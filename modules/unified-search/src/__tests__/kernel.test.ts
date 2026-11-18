@@ -8,7 +8,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { createDiscoveryIO, discoveryPath, KERNEL_PROTO, kernelSlug, makeToken, parseRegistryCommand } from '../daemon/kernelApi';
+import { createDiscoveryIO, discoveryPath, KERNEL_PROTO, kernelSlug, makeToken, parseRegistryCommand, buildOpenVaultUrl, vaultDisplayName } from '../daemon/kernelApi';
 import { startKernelHttpServer, type KernelHttpServer } from '../daemon/httpServer';
 
 describe('kernelApi', () => {
@@ -51,6 +51,39 @@ describe('kernelApi', () => {
     }
   });
 
+  it('discovery stopping 标记:优雅停机可写可读,旧格式文件读取不受影响', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kernel-stop-'));
+    try {
+      const io = createDiscoveryIO(fs);
+      const db = path.join(dir, 'db.sqlite');
+      io.write(db, {
+        proto: KERNEL_PROTO,
+        pid: 1,
+        port: 2,
+        token: 't',
+        vault: 'V',
+        dbPath: db,
+        startedAt: 1,
+        stopping: true,
+      });
+      expect(io.read(db)?.stopping).toBe(true);
+      // 旧内核写入的 discovery 没有 stopping 字段 → 读出 undefined（客户端
+      // 按崩溃路径重启）。
+      io.write(db, {
+        proto: KERNEL_PROTO,
+        pid: 1,
+        port: 2,
+        token: 't',
+        vault: 'V',
+        dbPath: db,
+        startedAt: 1,
+      });
+      expect(io.read(db)?.stopping).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('makeToken 注入随机源', () => {
     const t1 = makeToken((n) => crypto.randomBytes(n));
     const t2 = makeToken((n) => crypto.randomBytes(n));
@@ -71,6 +104,27 @@ describe('kernelApi', () => {
     expect(parseRegistryCommand('')).toBe('');
     expect(parseRegistryCommand('no exe here')).toBe('');
     expect(parseRegistryCommand('"just text"')).toBe('');
+  });
+
+  it('vaultDisplayName:反斜杠/正斜杠/尾分隔符都切出 basename', () => {
+    // Windows getBasePath() 回反斜杠——2026-11-17 实测只按 / 切会把整条路径
+    // 当库名塞进 URL →「Vault not found」。
+    expect(vaultDisplayName('E:\\HOME\\Local\\logseq-e2e-vault')).toBe('logseq-e2e-vault');
+    expect(vaultDisplayName('E:/HOME/BaiduSyncdisk/')).toBe('BaiduSyncdisk');
+    expect(vaultDisplayName('/home/user/vault')).toBe('vault');
+    expect(vaultDisplayName('vault')).toBe('vault');
+    expect(vaultDisplayName('')).toBe('');
+  });
+
+  it('buildOpenVaultUrl:显示名优先,缺省回落 basename', () => {
+    expect(buildOpenVaultUrl('E:\\HOME\\BaiduSyncdisk', '我的库')).toBe(
+      `obsidian://open?vault=${encodeURIComponent('我的库')}`,
+    );
+    expect(buildOpenVaultUrl('E:\\HOME\\BaiduSyncdisk', '   ')).toBe('obsidian://open?vault=BaiduSyncdisk');
+    expect(buildOpenVaultUrl('E:\\HOME\\BaiduSyncdisk')).toBe('obsidian://open?vault=BaiduSyncdisk');
+    expect(buildOpenVaultUrl('E:\\HOME\\Local\\logseq-e2e-vault', '')).toBe(
+      'obsidian://open?vault=logseq-e2e-vault',
+    );
   });
 });
 

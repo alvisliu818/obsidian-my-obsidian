@@ -28,9 +28,9 @@ import {
   renameEntry,
   renameTarget,
   safeSegment,
-  trashEntry,
   validateEntryName,
 } from './extFs';
+import { deleteToTrash } from './trashStore';
 import { isMarkdownFile, isTextFileName } from './mountFilter';
 import { buildCodeExtLink } from './codeFileLinks';
 import { NamePromptModal, ConfirmModal } from '../panels/promptModals';
@@ -273,8 +273,9 @@ export function promptExternalRename(
 }
 
 /**
- * 删除一个库外条目：优先系统回收站，没有回收站（或系统拒绝）时二次确认后
- * 永久删除，绝不静默走不可恢复路径。
+ * 删除一个库外条目：按设置分流到插件回收站/系统回收站（与挂载面板同一条
+ * deleteToTrash 链路），两种模式都失败时二次确认后永久删除，绝不静默走
+ * 不可恢复路径。
  */
 export function promptExternalDelete(
   host: PaneMenuHost,
@@ -284,11 +285,18 @@ export function promptExternalDelete(
   onDeleted: () => void,
 ): void {
   const typeStr = isDir ? '文件夹' : '文件';
+  // 宿主的设置切片:PaneMenuHost 不直接暴露 settings,经由可选访问器取
+  // (库外分栏打开等宿主都实现了 virtualTreeSettings;取不到回落插件回收站)。
+  const settings = (host as { virtualTreeSettings?: () => { deleteMode?: 'plugin' | 'system' } })
+    .virtualTreeSettings?.();
+  const mode: 'plugin' | 'system' = settings?.deleteMode === 'system' ? 'system' : 'plugin';
   new ConfirmModal(
     host.app,
     {
       title: `删除${typeStr}`,
-      body: `确定删除${typeStr}「${name}」${isDir ? '及其全部内容' : ''}吗？将移入系统回收站。`,
+      body: `确定删除${typeStr}「${name}」${isDir ? '及其全部内容' : ''}吗？将移入${
+        mode === 'system' ? '系统回收站' : '插件回收站（可在回收站中恢复）'
+      }。`,
       confirmText: '删除',
       dangerous: true,
     },
@@ -298,30 +306,30 @@ export function promptExternalDelete(
       const base = host.vaultBasePath();
       const oldLink = base ? linkTargetFor(base, name, safeSegment(name)) : '';
       if (base && exists(oldLink)) removeLink(oldLink);
-      void trashEntry(abs).then((r) => {
-        if (r.ok) {
-          new Notice('已移入回收站');
+      void deleteToTrash(abs, isDir, { mode, vaultBase: base })
+        .then((r) => {
+          new Notice(r.note ?? '已移入回收站');
           onDeleted();
-          return;
-        }
-        // 没有回收站（或系统拒绝）：二次确认后永久删除，绝不静默。
-        new ConfirmModal(
-          host.app,
-          {
-            title: '无法移入回收站',
-            body: `${r.error ?? '此系统不支持回收站'}。要永久删除「${name}」吗？此操作不可恢复。`,
-            confirmText: '永久删除',
-            dangerous: true,
-          },
-          (ok2) => {
-            if (!ok2) return;
-            const rr = deletePermanent(abs, isDir);
-            if (!rr.ok) new Notice(`删除失败：${rr.error ?? '未知错误'}`);
-            else new Notice('已永久删除');
-            onDeleted();
-          },
-        ).open();
-      });
+        })
+        .catch(() => {
+          // 回收站不可用：二次确认后永久删除，绝不静默。
+          new ConfirmModal(
+            host.app,
+            {
+              title: '无法移入回收站',
+              body: `回收站暂不可用。要永久删除「${name}」吗？此操作不可恢复。`,
+              confirmText: '永久删除',
+              dangerous: true,
+            },
+            (ok2) => {
+              if (!ok2) return;
+              const rr = deletePermanent(abs, isDir);
+              if (!rr.ok) new Notice(`删除失败：${rr.error ?? '未知错误'}`);
+              else new Notice('已永久删除');
+              onDeleted();
+            },
+          ).open();
+        });
     },
   ).open();
 }

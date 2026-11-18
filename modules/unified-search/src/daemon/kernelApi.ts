@@ -24,6 +24,11 @@ export interface KernelInfo {
 export interface KernelDiscovery extends KernelInfo {
   port: number;
   token: string;
+  /** 用户显式停机标记（托盘「退出内核」/「停用内核」/优雅停机都会写）：
+   *  客户端读到它就不得复活内核（否则托盘退出后立刻被 restart 回来，
+   *  表现为「内核无法关闭」，2026-11-17 用户实测）。崩溃退出不写标记，
+   *  客户端照常退避重启。下次 start 会整体覆写 discovery，标记自然清除。 */
+  stopping?: true;
 }
 
 export type QueryName =
@@ -123,6 +128,30 @@ export function kernelSlug(dbPath: string): string {
 export function discoveryPath(dbPath: string): string {
   const dir = dbPath.replace(/[\\/]+$/, '').replace(/[\\/][^\\/]*$/, '');
   return `${dir}/kernel-${kernelSlug(dbPath)}.json`;
+}
+
+// ----------------------------------------------------------------------
+// 「打开 Obsidian」URL 构建（纯函数,daemonMain 托盘/open op 共用）
+// ----------------------------------------------------------------------
+
+/**
+ * vault 路径的 basename——**两种分隔符都要切**：渲染进程 getBasePath() 在
+ * Windows 返回反斜杠路径，只按 `/` 切会把整条路径当库名塞进 URL
+ * （2026-11-17 用户实测「Vault not found：vault=E%3A%5CHOME%5C...」的根因）。
+ */
+export function vaultDisplayName(vaultPath: string): string {
+  return vaultPath.replace(/[\\/]+$/, '').split(/[\\/]+/).pop() ?? '';
+}
+
+/**
+ * 托盘「打开 Obsidian」的协议 URL。displayName（客户端 setConfig 推送的
+ * `app.vault.getName()`，= 用户在库里看到的显示名）优先；缺省回落路径
+ * basename。**vault= 参数匹配的是注册表里的库名**——路径形态（path=）与
+ * 注册表分隔符不匹配会弹「Vault not found」（2026-11-06 实测），不用。
+ */
+export function buildOpenVaultUrl(vaultPath: string, displayName?: string): string {
+  const name = (displayName ?? '').trim() || vaultDisplayName(vaultPath);
+  return `obsidian://open?vault=${encodeURIComponent(name)}`;
 }
 
 // ----------------------------------------------------------------------

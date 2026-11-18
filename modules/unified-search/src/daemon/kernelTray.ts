@@ -27,19 +27,26 @@ export interface TrayHandle {
   kill(): Promise<void>;
   /** 同步杀（process 'exit' 钩子/gracefulStop 用，防孤儿图标）。 */
   killSync(): void;
+  /** 运行时改托盘名（客户端 setConfig 推送 app.vault.getName() 显示名，
+   *  比 spawn argv 的路径 basename 更准——用户改过库名时以它为准）。
+   *  helper 已死/不支持时静默降级，绝不影响内核主链路。 */
+  setVaultName(name: string): void;
 }
 
 const ITEM_OPEN = '打开 Obsidian';
 const ITEM_SYNC = '增量索引';
 const ITEM_EXIT = '退出内核';
 
-export function startKernelTray(actions: TrayActions, iconDir?: string): TrayHandle | null {
+export function startKernelTray(
+  actions: TrayActions,
+  opts?: { iconDir?: string; vaultName?: string },
+): TrayHandle | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const SysTray = require('systray2').default as typeof SysTrayNS;
     // 图标：<bundle 目录>/assets/kernel.ico（bundle 跑在插件目录=部署边车；
     // smoke 场景经 iconDir 覆盖）。
-    const dir = iconDir ?? path.dirname(process.argv[1] ?? '.');
+    const dir = opts?.iconDir ?? path.dirname(process.argv[1] ?? '.');
     const iconPath = path.join(dir, 'assets', 'kernel.ico');
     let icon = '';
     try {
@@ -48,11 +55,14 @@ export function startKernelTray(actions: TrayActions, iconDir?: string): TrayHan
       process.stderr.write(`[kernel-tray] icon missing (${iconPath}), tray disabled\n`);
       return null;
     }
+    // 提示名跟库名走（2026-11-17 用户需求）：多库各一个内核托盘时肉眼可辨，
+    // 不再是一排同名 MyKernel。displayName 缺省回落 argv 路径 basename。
+    let vaultName = (opts?.vaultName ?? '').trim() || 'MyKernel';
     const tray = new SysTray({
       menu: {
         icon,
-        title: 'MyKernel',
-        tooltip: 'MyKernel · 运行中',
+        title: vaultName,
+        tooltip: `${vaultName} · 索引内核运行中`,
         items: [
           { title: ITEM_OPEN, tooltip: '在 Obsidian 中打开本库' },
           { title: ITEM_SYNC, tooltip: '增量索引变更文件' },
@@ -90,6 +100,29 @@ export function startKernelTray(actions: TrayActions, iconDir?: string): TrayHan
         } catch {
           /* 已死 */
         }
+      },
+      setVaultName: (name: string) => {
+        const trimmed = name.trim();
+        if (!trimmed || trimmed === vaultName) return;
+        vaultName = trimmed;
+        void tray
+          .sendAction({
+            type: 'update-menu',
+            menu: {
+              icon,
+              title: vaultName,
+              tooltip: `${vaultName} · 索引内核运行中`,
+              items: [
+                { title: ITEM_OPEN, tooltip: '在 Obsidian 中打开本库' },
+                { title: ITEM_SYNC, tooltip: '增量索引变更文件' },
+                SysTray.separator,
+                { title: ITEM_EXIT, tooltip: '优雅停止索引内核' },
+              ],
+            },
+          })
+          .catch((e: unknown) => {
+            process.stderr.write(`[kernel-tray] rename failed: ${String(e).slice(0, 120)}\n`);
+          });
       },
     };
   } catch (e) {

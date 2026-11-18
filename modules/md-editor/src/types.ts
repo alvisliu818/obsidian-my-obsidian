@@ -98,6 +98,8 @@ export interface ShortcutOverrides {
   bulkSelection: boolean;
   /** Undo / redo of block operations (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y). */
   undoRedo: boolean;
+  /** Mod+L inserts/wraps a markdown link (og :editor/insert-link parity). */
+  insertLink: boolean;
 }
 
 export const SHORTCUT_GROUP_LABELS: Record<keyof ShortcutOverrides, string> = {
@@ -109,6 +111,7 @@ export const SHORTCUT_GROUP_LABELS: Record<keyof ShortcutOverrides, string> = {
   selectionWrap: '选区包裹（有选区时输入* _ ~ ` [ {）',
   bulkSelection: '多选块操作（Ctrl+A / X / C / D）',
   undoRedo: '块操作的撤销 / 重做',
+  insertLink: '插入链接（Mod+L）',
 };
 
 /** Every group defaulting to ON = stock Logseq behavior. */
@@ -121,6 +124,7 @@ export const DEFAULT_SHORTCUT_OVERRIDES: ShortcutOverrides = {
   selectionWrap: true,
   bulkSelection: true,
   undoRedo: true,
+  insertLink: true,
 };
 
 /** Merge stored (possibly partial/legacy) data over the defaults. */
@@ -309,6 +313,45 @@ export interface BlockEditorSettings {
   /** 用户自定义语言服务器（语言→启动命令映射）；内置 pyright 不入此表，仅可用同 id 条目覆盖 enabled */
   lspServers: LspServerSpec[];
   /**
+   * 块编辑器内的第三方 EditorSuggest 驱动（Various Complements 并入，
+   * 2026-11-19）：打字/移动光标时防抖走 editorSuggest.trigger，让 VC 等
+   * EditorSuggest 类插件的补全在块编辑器里生效（触发条件/弹层行为全部由
+   * 插件自己的设置管）。关掉即恢复「块编辑器不接第三方 suggest」的旧行为。
+   */
+  thirdPartySuggestsEnabled: boolean;
+  /**
+   * 虚拟链接（fakelink/Virtual Linker 并入，2026-11-19）：正文里命中其他
+   * 笔记的标题/别名/标题头的词动态渲染成链接，不写回 Markdown。渲染态与
+   * 编辑态共用词库索引（metadataCache 驱动）；关掉即完全关闭两个装饰面。
+   */
+  virtualLinksEnabled: boolean;
+  /** 虚拟链接是否收录别名（frontmatter aliases） */
+  virtualLinksIncludeAliases: boolean;
+  /** 虚拟链接是否收录标题头（可跳到对应标题锚） */
+  virtualLinksIncludeHeaders: boolean;
+  /** 全局排除词（换行/逗号分隔，大小写不敏） */
+  virtualLinksExcludedKeywords: string;
+  /** 排除目录前缀（换行分隔，按库内路径匹配） */
+  virtualLinksExcludedDirectories: string;
+  /** 允许「词界起」的前缀匹配（默认仅整词；CJK 恒子串不受此限） */
+  virtualLinksMatchBeginningOfWords: boolean;
+  /** 允许「词界尾」的后缀匹配 */
+  virtualLinksMatchEndOfWords: boolean;
+  /** 允许任意中段子串匹配（误报最多，默认关） */
+  virtualLinksMatchAnyPartsOfWords: boolean;
+  /**
+   * VC 式词补全（Various Complements 原生吸收，2026-11-19）：随打随补，
+   * 候选来自当前页面词频 / 全库标题别名（复用虚拟链接索引）/ 自定义词典 /
+   * emoji shortcode（`:` 前缀）。走 CM6 autocompletion 管线。
+   */
+  wordCompleteEnabled: boolean;
+  /** 触发前缀最短长度（VC minNumberOfCharactersTriggered，最小 2） */
+  wordCompleteMinChars: number;
+  /** 候选上限（VC maxNumberOfSuggestions） */
+  wordCompleteMaxSuggestions: number;
+  /** 自定义词典文件（库内相对路径，每行一词，可 `词<TAB>说明`） */
+  wordCompleteDictionaryPath: string;
+  /**
    * 扩展市场代码配色主题偏好：'' = 自动（优先已装扩展主题，明暗匹配）；
    * '__none__' = 不用扩展主题（内置 Obsidian 配色）；其他 = Monaco 主题名。
    */
@@ -348,6 +391,13 @@ export interface ContentSearchOptions {
   extensions: string;
   /** Files larger than this (KB) are skipped. */
   maxFileKB: number;
+  /**
+   * 库外挂载文件的内容倒排索引（ext_fts，2026-11-19 round2）：默认开（搜索
+   * 毫秒级）。关掉 = 不再建 ext 倒排索引并清空现有条目（实测省 ~300MB 盘
+   * 上空间——代码文本 trigram 放大 ~9×），内容搜索回落为按需读盘扫描
+   * （~30MB 文本 ≈ 百 ms 级/次）。
+   */
+  extFtsEnabled: boolean;
 }
 
 export const DEFAULT_CONTENT_SEARCH: ContentSearchOptions = {
@@ -357,6 +407,7 @@ export const DEFAULT_CONTENT_SEARCH: ContentSearchOptions = {
   folder: '',
   extensions: 'md, txt, markdown',
   maxFileKB: 1024,
+  extFtsEnabled: true,
 };
 
 /** Merge stored (possibly partial) search options over the defaults. */
@@ -370,6 +421,7 @@ export function contentSearchFrom(raw: unknown): ContentSearchOptions {
     folder: typeof o.folder === 'string' ? o.folder : '',
     extensions: typeof o.extensions === 'string' ? o.extensions : DEFAULT_CONTENT_SEARCH.extensions,
     maxFileKB: Number.isFinite(kb) && kb >= 1 ? Math.min(kb, 10240) : DEFAULT_CONTENT_SEARCH.maxFileKB,
+    extFtsEnabled: o.extFtsEnabled !== false,
   };
 }
 
@@ -426,6 +478,19 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   externalCodeHybrid: false,
   lspEnabled: true,
   lspServers: [],
+  thirdPartySuggestsEnabled: true,
+  virtualLinksEnabled: true,
+  virtualLinksIncludeAliases: true,
+  virtualLinksIncludeHeaders: true,
+  virtualLinksExcludedKeywords: '',
+  virtualLinksExcludedDirectories: '',
+  virtualLinksMatchBeginningOfWords: false,
+  virtualLinksMatchEndOfWords: false,
+  virtualLinksMatchAnyPartsOfWords: false,
+  wordCompleteEnabled: true,
+  wordCompleteMinChars: 2,
+  wordCompleteMaxSuggestions: 8,
+  wordCompleteDictionaryPath: '',
   codeThemePref: '',
   iconThemePref: '',
   externalBanner: true,

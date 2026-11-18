@@ -57,6 +57,7 @@ import { applyNativeMarkdownHeaderPath } from './views/headerPath';
 import { openJournal } from './features/dailyNote';
 import { BackupManager } from './core/backup';
 import { registerNativeImgFix } from './features/nativeImgFix';
+import { registerEmojiShortcodes } from './features/emojiShortcodes';
 import { applyMarkedTabIcons, markLeafTabIcon } from '../../virtual-tree/src/features/tabIcon';
 import { ExtensionMarketModal } from './extensions/marketModal';
 import { restoreAllExtensions, registerExtensionConsumer, search as extSearch, installExtension, uninstallExtension, toggleExtension, reinstallExtension, getInstalledExtensions } from './extensions/extensionManager';
@@ -74,6 +75,9 @@ import { discoverPythonEnvs, probeVersions, spawnEnvFor, type PythonEnv } from '
 import { setActivePythonEnv, getActivePythonEnv } from '../../code-editor/src/exec/activeEnv';
 import { BackupRestoreModal } from './features/backupModal';
 import { builtinSlashItems, registerSlashEditorCommands } from './features/commandMenu';
+import { insertLinkCommand } from './features/linkPaste';
+import { VirtualLinkIndex } from './features/virtualLinkIndex';
+import { registerVirtualLinks } from './features/virtualLinks';
 import { getLogseqPageProps } from './pagePropsRegistry';
 import { NativeSlashSuggest, setBuiltinSlashProvider } from './features/nativeSlashSuggest';
 import { isRefFilterActive, refFilterFrom } from './features/backlinkFilter';
@@ -96,6 +100,8 @@ export default class LogseqEditorPlugin extends Plugin {
   opLogPending: OperationRecord[] = [];
   /** Set when a block reference should be revealed after opening a file. */
   pendingReveal: { path: string; blockId: string } | null = null;
+  /** 虚拟链接词库索引(fakelink 并入;metadataCache 驱动,防抖重建)。 */
+  virtualLinkIndex: VirtualLinkIndex | null = null;
   /** Constructor of Obsidian's native properties editor (grabbed off a live instance). */
   nativePropsCtor: unknown = null;
   private nativePropsCtorPromise: Promise<unknown> | null = null;
@@ -274,6 +280,9 @@ export default class LogseqEditorPlugin extends Plugin {
 
     // Native-view HTML img 相对 src 锚定（防库内同名劫持，见 features/nativeImgFix）
     registerNativeImgFix(this);
+    // GitHub 风格 emoji shortcode 渲染（`:star2:` → 🌟）：渲染态后处理器 +
+    // 编辑态 live-preview 装饰，见 features/emojiShortcodes。
+    registerEmojiShortcodes(this);
     // `\(…\)` / `\[…\]` 公式渲染**不在这里注册**：正主是 latex-delimiter-renderer
     // 模块（宿主里单独一个开关），它自己注册实时预览与阅读模式两条路。本模块
     // 只负责那些「自己掌握源但没有 section 信息」的渲染面 —— 静态块、内嵌、
@@ -400,6 +409,16 @@ export default class LogseqEditorPlugin extends Plugin {
     // the suggest's built-in list is empty and the menu shows only registry
     // commands (whose order varies, so the cap could hide them entirely).
     setBuiltinSlashProvider(builtinSlashItems);
+
+    // ---- 虚拟链接(fakelink/Virtual Linker 并入,2026-11-19) ----
+    // 词库索引:metadataCache resolved(初始/全库解析完成)+ changed(单文件
+    // 元数据变更)防抖重建;渲染态 postProcessor 在此注册,编辑态装饰在
+    // createEditorExtensions 里挂 virtualLinkExtension。
+    this.virtualLinkIndex = new VirtualLinkIndex(this);
+    this.registerEvent(this.app.metadataCache.on('resolved', () => this.scheduleVirtualLinkRebuild()));
+    this.registerEvent(this.app.metadataCache.on('changed', () => this.scheduleVirtualLinkRebuild()));
+    void this.virtualLinkIndex.rebuild();
+    registerVirtualLinks(this);
 
     // ---- Commands ----
     // In-page find / replace.
@@ -881,6 +900,14 @@ export default class LogseqEditorPlugin extends Plugin {
       (v) => !!v.focusedBlock && v.focusedBlock.kind === 'list',
       (v) => v.focusedBlock && v.toggleMarker(v.focusedBlock),
     );
+    // Mod+L 插入链接(og :editor/insert-link parity,2026-11-19):作用于
+    // 当前聚焦块的 CM 视图,命令面板可寻(键位在 createBlockKeymap)。
+    blockCmd(
+      'insert-link',
+      'Insert link (empty selection: [](); wraps selection as [text](url))',
+      (v) => !!v.focusedView,
+      (v) => v.focusedView && insertLinkCommand(v.focusedView),
+    );
 
     this.addRibbonIcon('list-tree', 'Open with block editor / native editor', () => {
       const active = this.app.workspace.activeLeaf;
@@ -1093,6 +1120,11 @@ export default class LogseqEditorPlugin extends Plugin {
     }
   }
 
+  /** 虚拟链接词库防抖重建(fakelink 并入;settings 变更/右键排除词共用)。 */
+  scheduleVirtualLinkRebuild(): void {
+    this.virtualLinkIndex?.scheduleRebuild();
+  }
+
   // ------------------------------------------------------------------
   // Take-over patch
   // ------------------------------------------------------------------
@@ -1125,6 +1157,8 @@ export default class LogseqEditorPlugin extends Plugin {
       onChange: () => this.notifyBlockIndexConsumers(),
       kernelResident: this.settings.kernelResident !== false,
       kernelTray: this.settings.kernelTray === true,
+      // 库外内容倒排索引开关(getter:热改后 pushRuntimeConfig 即时推送内核)
+      extFtsEnabled: () => this.settings.contentSearch.extFtsEnabled !== false,
       obsidianExe: process.execPath,
     });
     try {
@@ -1424,6 +1458,8 @@ export default class LogseqEditorPlugin extends Plugin {
     const bar = this.addStatusBarItem();
     bar.addClass('lgp-statusbar');
     this.statusModeEl = bar.createEl('a', { cls: 'lgp-status-item' });
+    // 状态栏贴屏幕底边,tooltip 默认朝下弹会压住条目本身(实测),指到上方。
+    this.statusModeEl.setAttribute('data-tooltip-position', 'top');
     this.statusModeEl.addEventListener('click', (evt) => this.showModeMenu(evt));
     // Keep the label in sync with whatever view is active. A same-leaf view
     // TYPE swap (native ↔ block editor) does not fire active-leaf-change, so
@@ -1483,7 +1519,7 @@ export default class LogseqEditorPlugin extends Plugin {
       menu.addItem((item) =>
         item.setTitle(title).setIcon(icon).setChecked(mode === current).onClick(() => void this.applyMode(mode)),
       );
-    entry('Logseq editor', 'lucide-eye', 'edit');
+    entry('MD editor', 'lucide-eye', 'edit');
     entry('Page source mode', 'lucide-file-code', 'source');
     entry('Native editor', 'lucide-pencil-line', 'native');
     menu.showAtMouseEvent(evt);
@@ -1559,7 +1595,7 @@ export default class LogseqEditorPlugin extends Plugin {
       return;
     }
     el.style.display = '';
-    el.setText(mode === 'edit' ? 'Logseq editor' : mode === 'source' ? 'Page source mode' : 'Native editor');
+    el.setText(mode === 'edit' ? 'MD editor' : mode === 'source' ? 'Page source mode' : 'Native editor');
     el.toggleClass('mod-active-srcmode', mode === 'source');
     el.setAttribute('aria-label', 'Editing mode — click to switch');
   }

@@ -22,8 +22,12 @@
 import { dirOf, ensureDir, joinAbs, onExternalFileSaved, readExternalBinary, writeExternalBytesQuiet } from './extFs';
 import { isGitRepoPath, parseGitRepoPath, buildGitRepoPath, type GitRepoLocation } from './gitRepoPath';
 import { isBaiduPath, baiduPathBody } from './baiduPath';
+import { isOneDrivePath, oneDrivePathBody } from './onedrivePath';
+import { isOutlookPath, outlookPathBody } from './outlookMailPath';
 import { gitDownloadFile, gitUploadFile } from './gitRepoApi';
 import { bdDownloadFile, bdUploadFile } from './baiduPanApi';
+import { odDownloadFile, odUploadFile } from './onedriveApi';
+import { outlookDownloadFile } from './outlookMailApi';
 import { remoteShortName } from './remotePath';
 
 // ==== 路径映射(纯函数,单测覆盖) ====
@@ -59,6 +63,16 @@ export function remoteWorkRelOf(vPath: string): string | null {
     const segs = body.split('/').filter(Boolean).map(enc);
     return ['bdpan', ...segs].join('/');
   }
+  if (isOneDrivePath(vPath)) {
+    const body = oneDrivePathBody(vPath);
+    const segs = body.split('/').filter(Boolean).map(enc);
+    return ['onedrive', ...segs].join('/');
+  }
+  if (isOutlookPath(vPath)) {
+    const body = outlookPathBody(vPath);
+    const segs = body.split('/').filter(Boolean).map(enc);
+    return ['outlook', ...segs].join('/');
+  }
   return null;
 }
 
@@ -84,6 +98,12 @@ export function remoteVPathFromWorkRel(rel: string): string | null {
   }
   if (family === 'bdpan') {
     return 'bdpan://' + segs.slice(1).map(dec).join('/');
+  }
+  if (family === 'onedrive') {
+    return 'onedrive://' + segs.slice(1).map(dec).join('/');
+  }
+  if (family === 'outlook') {
+    return 'outlook://' + segs.slice(1).map(dec).join('/');
   }
   return null;
 }
@@ -136,7 +156,11 @@ export async function ensureRemoteWorkFile(vPath: string): Promise<string> {
     ? await gitDownloadFile(vPath)
     : isBaiduPath(vPath)
       ? await bdDownloadFile(vPath)
-      : null;
+      : isOneDrivePath(vPath)
+        ? await odDownloadFile(vPath)
+        : isOutlookPath(vPath)
+          ? await outlookDownloadFile(vPath)
+          : null;
   if (bytes === null) throw new Error(`不支持的远端路径: ${vPath}`);
   const dir = ensureDir(dirOf(abs));
   if (!dir.ok) throw new Error(`无法创建工作副本目录:${dir.error ?? '未知错误'}`);
@@ -227,6 +251,9 @@ async function pushWorkFile(vPath: string, abs: string): Promise<void> {
       pushed = await gitUploadFile(vPath, bytes);
     } else if (isBaiduPath(vPath)) {
       await bdUploadFile(vPath, bytes);
+      pushed = true;
+    } else if (isOneDrivePath(vPath)) {
+      await odUploadFile(vPath, bytes);
       pushed = true;
     } else {
       return;

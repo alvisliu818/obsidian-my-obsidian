@@ -30,6 +30,7 @@ export class DataStore {
       if (Array.isArray(raw.extensions)) merged.extensions = raw.extensions;
       if (Array.isArray(raw.userscripts)) merged.userscripts = raw.userscripts;
       if (Array.isArray(raw.session)) merged.session = raw.session;
+      if (raw.annPages && typeof raw.annPages === "object") merged.annPages = raw.annPages;
     }
     this.data = merged;
     this.notify();

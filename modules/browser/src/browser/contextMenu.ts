@@ -9,6 +9,7 @@ export interface WebViewMenuCallbacks {
   openInNewTab(url: string): void;
   saveAs(url: string, suggestedName?: string): void;
   excerpt(mode: "article" | "selection"): void;
+  annotate(selectionText: string): void;
   copyImage(srcUrl: string): void;
   openSource(url: string): void;
   inspect(): void;
@@ -53,6 +54,7 @@ export function showWebViewContextMenu(
   menu.addSeparator();
   menu.addItem((i) => i.setTitle("摘录整页为笔记").setIcon("scissors").onClick(() => cb.excerpt("article")));
   if (params.selectionText) {
+    menu.addItem((i) => i.setTitle("标注").setIcon("pen-tool").onClick(() => cb.annotate(params.selectionText!)));
     menu.addItem((i) => i.setTitle("摘录所选内容").setIcon("scissors").onClick(() => cb.excerpt("selection")));
   }
 

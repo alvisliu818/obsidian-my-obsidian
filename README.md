@@ -22,6 +22,7 @@
 | Vault Explorer | obsidian-vault-explorer | frontmatter 可视化库浏览器：网格/列表/表格/动态四种版式、属性过滤与自定义过滤器（第三方） |
 | LaTeX Delimiters | latex-delimiter-renderer | 渲染 `\(…\)` / `\[…\]` 公式而不改源文件：原生编辑器（实时预览/阅读模式）、logseq 块编辑器、内嵌、闪卡、库外文件（第三方） |
 | Code Link | obsidian-code-link | 笔记里链接代码文件：悬停/嵌入预览、按符号（类/函数/方法）链接、tree-sitter 标签搜索（第三方） |
+| EasySync | easy-sync | 双向 OneDrive 同步：冲突保护、移动端支持、设置/插件同步；同步排除扩展了黑名单/白名单/正则模式（第三方，源码快照收编） |
 
 > 2026-10-30 起，各模块自己的插件 id 统一加 `my-` 前缀（如 `my-obsidian-logseq`），
 > 不再与来源插件的上游 id 重名；下表「来源插件」列保持写上游原 id。
@@ -52,6 +53,7 @@ GPL-3 是强 copyleft——衍生作品必须整体以 GPL-3 分发，这不是�
 | Vault Explorer | DecafDev | MIT | https://github.com/decaf-dev/obsidian-vault-explorer |
 | LaTeX Delimiters | Andreas Burger | MIT | https://github.com/BurgerAndreas/latex-delimiter-renderer |
 | Code Link | observerw | MIT | https://github.com/observerw/obsidian-code-link |
+| EasySync | Jiao Yingxing | MIT | https://github.com/jiaoyingxing/easy-sync |
 
 - **Material Icon Theme** 另外打包了 Material Icon Theme 的图标美术资源（来源
   `material-icon-theme` npm 包），其许可声明见

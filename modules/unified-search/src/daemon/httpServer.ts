@@ -214,6 +214,11 @@ export async function startKernelHttpServer(opts: KernelHttpServerOptions): Prom
       sseClients.clear();
       return new Promise((resolve) => {
         server.close(() => resolve());
+        // keep-alive 僵尸连接会让 close() 的回调挂到 keepAliveTimeout（120s）
+        // 才回落——停机语义不允许等：fetch keep-alive 全部强拆（Node ≥18.2；
+        // 老宿主缺该方法就维持原行为，2.5s 强退兜底在 gracefulStop 里）。
+        (server as { closeAllConnections?: () => void }).closeAllConnections?.();
+        (server as { closeIdleConnections?: () => void }).closeIdleConnections?.();
       });
     },
   };

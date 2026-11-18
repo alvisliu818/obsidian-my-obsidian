@@ -48,7 +48,7 @@ import {
   selectAll,
 } from '@codemirror/commands';
 import { EditorSelection } from '@codemirror/state';
-import type { EditorView } from '@codemirror/view';
+import { EditorView } from '@codemirror/view';
 import type { BlockRenderHost } from '../blocks/renderHost';
 import { capturePasteInsertPosition, isPasteInsertPositionAlive, type PasteInsertPosition } from '../features/insertPosition';
 
@@ -779,6 +779,13 @@ export function createEditorAdapter(view: EditorView, host?: BlockRenderHost): R
     },
     // Native Editor has no `cursorCoords`; the native CM6 does, same shape.
     cursorCoords: () => view.coordsAtPos(view.state.selection.main.head),
+    // Editor.scrollIntoView 的近似移植(VC 等插件补全落位后调用):把光标
+    // 滚进视野,nearest 语义与 native 编辑器一致。
+    scrollIntoView: () => {
+      view.dispatch({
+        effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: 'nearest' }),
+      });
+    },
     // Plugins often guard their menu actions on editor focus — but by the
     // time their click handler runs, focus is on the menu itself. Report
     // "focused" while the block editor still holds this live edit session.

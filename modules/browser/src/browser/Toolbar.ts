@@ -14,6 +14,7 @@ export interface ToolbarCallbacks {
   onFindClose(): void;
   onOpenExternal(): void;
   onMenu(e: MouseEvent): void;
+  onAnnotate?(e: MouseEvent): void;
   onExtensionClick?(id: string, anchor: HTMLElement): void;
 }
 
@@ -51,6 +52,7 @@ export class Toolbar {
         <button class="ob-btn" data-act="reload" aria-label="刷新" title="刷新 (Ctrl+R) / Shift 强制刷新"></button>
         <button class="ob-btn" data-act="home" aria-label="主页" title="主页"></button>
         <input class="ob-urlbar" type="text" spellcheck="false" placeholder="搜索或输入网址" />
+        <button class="ob-btn" data-act="annotate" aria-label="标注" title="标注（划词高亮 / 本页标注列表）"></button>
         <button class="ob-btn" data-act="bookmark" aria-label="书签" title="书签"></button>
         <button class="ob-btn" data-act="find" aria-label="查找" title="查找 (Ctrl+F)"></button>
         <button class="ob-btn" data-act="openExternal" aria-label="系统浏览器打开" title="在系统浏览器中打开"></button>
@@ -82,6 +84,7 @@ export class Toolbar {
     setIcon(this.btnReload, "refresh-cw");
     setIcon(q('[data-act="home"]'), "home");
     setIcon(this.btnBookmark, "star");
+    setIcon(q('[data-act="annotate"]'), "pen-tool");
     setIcon(q('[data-act="find"]'), "search");
     setIcon(q('[data-act="openExternal"]'), "external-link");
     setIcon(q('[data-act="menu"]'), "more-vertical");
@@ -106,6 +109,7 @@ export class Toolbar {
         case "stop": this.cb.onStop(); break;
         case "home": this.cb.onHome(); break;
         case "bookmark": this.cb.onToggleBookmark(); break;
+        case "annotate": this.cb.onAnnotate?.(e as MouseEvent); break;
         case "openExternal": this.cb.onOpenExternal(); break;
         case "menu": this.cb.onMenu(e as MouseEvent); break;
         case "find": this.toggleFind(true); break;

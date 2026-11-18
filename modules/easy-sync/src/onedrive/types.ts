@@ -1,0 +1,358 @@
+/**
+ * OneDrive / Microsoft Graph API Types
+ * Subset focused on App Folder file operations for MVP.
+ */
+
+import { describeError } from "../obsidian-compat";
+
+/** Identity set: user, application, or device that performed an action. */
+interface IdentitySet {
+  user?: { id?: string; displayName?: string };
+  application?: { id?: string; displayName?: string };
+  device?: { id?: string; displayName?: string };
+}
+
+/** OneDrive driveItem (file or folder metadata) */
+export interface DriveItem {
+  id: string;
+  name: string;
+  size?: number;
+  file?: {
+    mimeType?: string;
+    hashes?: {
+      quickXorHash?: string;
+      sha1Hash?: string;
+      sha256Hash?: string;
+    };
+  };
+  folder?: { childCount?: number };
+  parentReference?: {
+    driveId?: string;
+    id?: string;
+    path?: string;
+  };
+  lastModifiedDateTime?: string;
+  createdDateTime?: string;
+  /** Identity that last modified the item (user, app, or device). Server-authoritative. */
+  lastModifiedBy?: IdentitySet;
+  /** Identity that created the item. */
+  createdBy?: IdentitySet;
+  eTag?: string;
+  cTag?: string;
+  /** App Folder special folder marker */
+  specialFolder?: { name?: string };
+  /** Download URL for file content */
+  "@microsoft.graph.downloadUrl"?: string;
+  /** Delta token for change tracking */
+  "@odata.deltaLink"?: string;
+  "@odata.nextLink"?: string;
+  /** Deleted marker in delta responses */
+  deleted?: { state?: string };
+}
+
+/** Delta query response */
+export interface DeltaResponse {
+  value: DriveItem[];
+  "@odata.deltaLink"?: string;
+  "@odata.nextLink"?: string;
+}
+
+/**
+ * One retained version of a driveItem (Graph driveItemVersion).
+ *
+ * Read-only forensic surface: OneDrive does not preserve complete metadata for
+ * previous versions, version creation is service/configuration dependent (it
+ * may happen per edit, per save, manually, or never), and retention is bounded
+ * by service/admin settings — so an empty list is a legitimate answer and
+ * `lastModifiedBy` only reaches account/application level, never the device.
+ */
+export interface DriveItemVersion {
+  id: string;
+  size?: number;
+  lastModifiedDateTime?: string;
+  lastModifiedBy?: IdentitySet;
+  /** Pre-authorized URL that downloads *this version's* content directly
+   *  (present on every retained version in the 2026-10-19 field probe; it is
+   *  a one-shot credential, not a stable identity — never persist it). */
+  "@microsoft.graph.downloadUrl"?: string;
+}
+
+/**
+ * One settled page of a delta enumeration (join 弱网「稍后重试」案C,
+ * 2026-09-19). Delivered to the caller right after the page lands so the
+ * enumeration checkpoint can be persisted before the next page is requested.
+ */
+export interface DeltaPageSnapshot {
+  url: string;
+  values: DriveItem[];
+  deltaLink?: string;
+  nextLink?: string;
+}
+
+export type DeltaPageCallback = (
+  page: DeltaPageSnapshot,
+) => void | Promise<void>;
+
+/** Stable Graph identities that define the remote side of one vault. */
+export interface RemoteVaultScope {
+  driveId: string;
+  vaultFolderId: string;
+  filesRootId: string;
+}
+
+/** Read-only scan result for a Remotely Save repository that pairs with one
+ *  vault by exact directory name (layout probe-verified 2026-09/10: the RS
+ *  app folder holds one directory per vault, named after the vault). */
+export interface RemotelySaveRepositoryLocation {
+  driveId: string;
+  appsContainerId: string;
+  remotelySaveDirId: string;
+  vaultDirId: string;
+}
+
+/** Upload response for small file PUT */
+export interface UploadResult {
+  id: string;
+  name: string;
+  size: number;
+  eTag?: string;
+  cTag?: string;
+  lastModifiedDateTime?: string;
+  parentReference?: DriveItem["parentReference"];
+}
+
+/** OneDrive-specific error types for classification */
+export enum OneDriveErrorType {
+  Unauthorized = "Unauthorized",
+  Forbidden = "Forbidden",
+  NotFound = "NotFound",
+  Conflict = "Conflict",
+  RateLimited = "RateLimited",
+  InsufficientStorage = "InsufficientStorage",
+  ServerError = "ServerError",
+  NetworkError = "NetworkError",
+  AuthExpired = "AuthExpired",
+  PreconditionFailed = "PreconditionFailed",
+  RangeNotSatisfiable = "RangeNotSatisfiable",
+  Unknown = "Unknown",
+}
+
+/** Graph error body details kept for diagnostics. `message` is
+ *  developer-facing and must never be shown to users; only `code` and
+ *  `innerCode` are stable enough to reason about. */
+export interface OneDriveGraphErrorDetail {
+  code: string;
+  message: string;
+  innerCode: string | null;
+  requestId: string | null;
+  date: string | null;
+}
+
+export class OneDriveError extends Error {
+  public readonly type: OneDriveErrorType;
+  public readonly statusCode: number;
+  public readonly retryAfterSeconds: number | null;
+  public readonly graphCode: string | null;
+  public readonly graphError: OneDriveGraphErrorDetail | null;
+  /**
+   * 刀 2 错误路由类型化：当本错误承载的是一个不可取消的请求超时（客户端
+   * deadline 到点，请求可能仍在宿主侧运行）时，记录该 deadline 的毫秒数；
+   * 其余错误为 null。路由面以此判别，不再依赖错误消息文本。
+   */
+  public readonly requestTimeoutMs: number | null;
+
+  constructor(
+    type: OneDriveErrorType,
+    message: string,
+    statusCode: number = 0,
+    retryAfterSeconds: number | null = null,
+    graphCode: string | null = null,
+    graphError: OneDriveGraphErrorDetail | null = null,
+    requestTimeoutMs: number | null = null,
+  ) {
+    super(message);
+    this.name = "OneDriveError";
+    this.type = type;
+    this.statusCode = statusCode;
+    this.retryAfterSeconds = retryAfterSeconds;
+    this.graphCode = graphError?.code ?? graphCode;
+    this.graphError = graphError;
+    this.requestTimeoutMs = requestTimeoutMs;
+  }
+
+  get graphMessage(): string | null {
+    return this.graphError?.message ?? null;
+  }
+
+  get graphInnerCode(): string | null {
+    return this.graphError?.innerCode ?? null;
+  }
+
+  get graphRequestId(): string | null {
+    return this.graphError?.requestId ?? null;
+  }
+}
+
+/** What the preflight learned when the default drive was unavailable. */
+export interface OneDriveDriveProbeDetail {
+  statusCode: number;
+  graphError: OneDriveGraphErrorDetail | null;
+  /** `/me/drives` answered with a non-empty list, an empty list, was denied,
+   *  or could not be read. */
+  drivesProbe: "ok" | "empty" | "denied" | "failed";
+  drivesCount: number;
+  driveTypes: string[];
+  drivesGraphCode: string | null;
+  drivesRequestId: string | null;
+  /** Sanitized failure text when the /me/drives probe itself failed. */
+  drivesError: string | null;
+}
+
+/** The signed-in account has no provisionable default OneDrive drive:
+ *  Graph answered 404 for /me/drive, the endpoint documented to provision a
+ *  licensed user's drive automatically. Kept distinct from auth/permission
+ *  failures so the first-sync entry can give account-level guidance. */
+export class OneDriveDriveUnavailableError extends Error {
+  constructor(
+    message = "No OneDrive drive is available for this account",
+    public readonly detail: OneDriveDriveProbeDetail | null = null,
+  ) {
+    super(message);
+    this.name = "OneDriveDriveUnavailableError";
+  }
+
+  get graphCode(): string | null {
+    return this.detail?.graphError?.code ?? null;
+  }
+
+  get requestId(): string | null {
+    return this.detail?.graphError?.requestId ?? null;
+  }
+}
+
+/** A client-side deadline elapsed while Obsidian's requestUrl promise may
+ * still be running. This is not an HTTP response and must never be reported
+ * as status 0 or used to authorize an in-call resend. */
+export class SyntheticRequestTimeoutError extends Error {
+  constructor(
+    public readonly timeoutMs: number,
+    public readonly source: "deadline" | "prior-request-in-flight" = "deadline",
+  ) {
+    super(source === "deadline"
+      ? `Request timed out after ${timeoutMs}ms`
+      : `Previous requestUrl is still running after its ${timeoutMs}ms local deadline`);
+    this.name = "SyntheticRequestTimeoutError";
+  }
+}
+
+export type SharedSyncProtocolObservationComponent =
+  | "directory"
+  | "v2"
+  | "v3";
+
+/** Preserve which part of one logical V2+V3 observation failed without
+ * making the Graph client responsible for protocol-lineage decisions. */
+export class SharedSyncProtocolObservationError extends Error {
+  constructor(
+    public readonly component: SharedSyncProtocolObservationComponent,
+    public readonly observationCause: unknown,
+  ) {
+    super(
+      `Shared sync protocol ${component} observation failed: ${
+        describeError(observationCause)
+      }`,
+    );
+    this.name = "SharedSyncProtocolObservationError";
+  }
+}
+
+export type RemoteVaultScopeIdentityFailureReason =
+  | "scope-incomplete"
+  | "vault-folder-invalid"
+  | "files-root-invalid"
+  | "drive-invalid";
+
+/** Stable client-side classification for committed Graph scope metadata that
+ * was reachable but no longer represents the committed vault/files tree. */
+export class RemoteVaultScopeIdentityError extends Error {
+  constructor(
+    readonly reason: RemoteVaultScopeIdentityFailureReason,
+  ) {
+    super(`Committed remote scope identity is invalid: ${reason}`);
+    this.name = "RemoteVaultScopeIdentityError";
+  }
+}
+
+/**
+ * Encode a path for use in a Graph API URL.
+ * Each path segment is encoded separately to preserve `/` separators.
+ * Characters like #, ?, % in file/directory names would otherwise break the URL.
+ */
+function encodeUrlPath(path: string): string {
+  return path.split("/").map((s) => encodeURIComponent(s)).join("/");
+}
+
+/**
+ * Characters OneDrive / SharePoint does not accept in an item (file or folder)
+ * name. Even when percent-encoded in a Graph URL (`%3F` for `?`, `%23` for `#`,
+ * …), the server rejects the item because the decoded name is invalid, so the
+ * request can never succeed regardless of client-side encoding.
+ *
+ * Surface (the `?` etc. literally break) plus trailing-space / trailing-dot /
+ * reserved range that Microsoft documents as invalid in a file name.
+ */
+const ONE_DRIVE_INVALID_NAME_CHARACTERS = new Set([
+  '"', "*", ":", "<", ">", "?", "/", "\\", "|",
+]);
+
+/** What exactly makes a OneDrive item name unacceptable. */
+type OneDriveInvalidNameIssue =
+  /** A visible reserved character, e.g. `?`, `:`, `"`. The offending char is returned for display. */
+  | { kind: "char"; char: string }
+  /** The name ends with a dot (`.`), which OneDrive treats as an extension-signature. */
+  | { kind: "trailing-dot" }
+  /** The name ends with a space. */
+  | { kind: "trailing-space" }
+  /** An ASCII control character that cannot even be shown to the user. */
+  | { kind: "control-char" };
+
+/** Find the first reason a *name* (not path) can never be stored on OneDrive, or null when storable. */
+export function findOneDriveInvalidNameIssue(fileName: string): OneDriveInvalidNameIssue | null {
+  for (const char of fileName) {
+    if (ONE_DRIVE_INVALID_NAME_CHARACTERS.has(char)) return { kind: "char", char };
+  }
+  // Reserved by OneDrive: a name may not end with a dot or a space, and may not
+  // contain ASCII control characters.
+  if (fileName.endsWith(".")) return { kind: "trailing-dot" };
+  if (fileName.endsWith(" ")) return { kind: "trailing-space" };
+  // eslint-disable-next-line no-control-regex -- the class intentionally spans ASCII control characters (U+0000-U+001F, U+007F), which OneDrive forbids in item names
+  if (/[\u0000-\u001f\u007f]/.test(fileName)) return { kind: "control-char" };
+  return null;
+}
+
+/** App Folder directory structure */
+export const APP_FOLDER_PATHS = {
+  /** App Folder root, accessed via /me/drive/special/approot */
+  appRoot: "/me/drive/special/approot",
+  /** Vault directory: /vaults/<vault-name>/ */
+  vaultDir: (vaultName: string) =>
+    `/me/drive/special/approot:/vaults/${encodeUrlPath(vaultName)}`,
+  /** Files directory: /vaults/<vault-name>/files/ */
+  filesDir: (vaultName: string) =>
+    `/me/drive/special/approot:/vaults/${encodeUrlPath(vaultName)}/files`,
+  /** Plugin state directory: /vaults/<vault-name>/.easy-sync/ */
+  pluginDir: (vaultName: string) =>
+    `/me/drive/special/approot:/vaults/${encodeUrlPath(vaultName)}/.easy-sync`,
+  /** Immutable generation content below the plugin state directory. */
+  pluginItem: (vaultName: string, relativePath: string) =>
+    `/me/drive/special/approot:/vaults/${encodeUrlPath(vaultName)}/.easy-sync/${encodeUrlPath(relativePath)}`,
+  /** Delta endpoint for files directory */
+  filesDelta: (vaultName: string) =>
+    `/me/drive/special/approot:/vaults/${encodeUrlPath(vaultName)}/files:/delta`,
+  /** Single file: /vaults/<vault-name>/files/<path> */
+  filePath: (vaultName: string, filePath: string) =>
+    `/me/drive/special/approot:/vaults/${encodeUrlPath(vaultName)}/files/${encodeUrlPath(filePath)}`,
+} as const;
+
+/** Microsoft Graph base URL */
+export const GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0";

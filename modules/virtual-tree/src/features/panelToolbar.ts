@@ -7,8 +7,9 @@
 //     + 固定的「编辑工具栏…」项;
 //   - 配置(order + hidden)持久化在设置里,改动即时生效。
 //
-// 与思源版的差异:思源按钮集里还有标签筛选/回收站/重新加载标签这类它自己的
-// 域内动作,本面板没有对应能力,不设占位按钮。
+// 与思源版的差异:思源按钮集里还有标签筛选/重新加载标签这类它自己的
+// 域内动作,本面板没有对应能力,不设占位按钮。「回收站」2026-11-18 对齐落地
+// (插件回收站管理器),默认收进「更多」。
 import { Modal, setIcon } from 'obsidian';
 
 export interface PanelToolbarButton {
@@ -27,9 +28,13 @@ export const PANEL_TOOLBAR_BUTTONS: PanelToolbarButton[] = [
   { key: 'mount', label: '添加挂载', icon: 'plus' },
   { key: 'git-mount', label: '挂载 Git 仓库…', icon: 'git-branch' },
   { key: 'baidu-mount', label: '挂载百度网盘…', icon: 'cloud' },
+  { key: 'onedrive-mount', label: '挂载 OneDrive…', icon: 'cloud-upload' },
+  { key: 'outlook-mount', label: '挂载 Outlook 邮箱…', icon: 'mail' },
   { key: 'drag-mode', label: '拖拽排序模式', icon: 'arrow-up-down' },
   { key: 'refresh', label: '重新扫描', icon: 'refresh-cw' },
   { key: 'collapse-all', label: '全部收起', icon: 'chevrons-down-up' },
+  { key: 'tag-filter', label: '标签筛选', icon: 'tags' },
+  { key: 'trash', label: '回收站', icon: 'archive' },
 ];
 
 /** 「更多」是编辑入口,固定在顶栏(收进更多就没法再打开配置) */
@@ -43,7 +48,7 @@ export interface PanelToolbarCfg {
 }
 
 /** 默认收进「更多」的按钮:新建走右键菜单更顺手,顶栏只留高频动作 */
-export const PANEL_MENU_ONLY_DEFAULTS = ['new-file', 'new-folder'];
+export const PANEL_MENU_ONLY_DEFAULTS = ['new-file', 'new-folder', 'trash'];
 
 export function panelToolbarButtonByKey(key: string): PanelToolbarButton | undefined {
   return PANEL_TOOLBAR_BUTTONS.find((b) => b.key === key);

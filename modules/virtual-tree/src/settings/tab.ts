@@ -23,6 +23,7 @@ import {
 } from '../types';
 import { OpenWithEditModal } from '../features/openWithUi';
 import { isDirectory } from '../features/extFs';
+import { TrashManagerModal } from '../panels/trashModal';
 import { invalidateVaultParentPlans } from '../features/vaultFs';
 import { applyTitleRenameLock } from '../titleRename';
 import {
@@ -47,8 +48,65 @@ export class VirtualTreeSettingTab extends PluginSettingTab {
     this.renderMountsSection(containerEl);
     containerEl.createEl('h3', { text: 'Git 仓库' });
     this.renderGitSection(containerEl);
-    containerEl.createEl('h3', { text: '查看器' });
+    containerEl.createEl('h3', { text: 'IMAP 邮箱（挂载凭据）' });
+    const imapCfg = this.plugin.settings.imapMail ?? { provider: 'qq', user: '', pass: '' };
+    new Setting(containerEl)
+      .setName('邮箱地址')
+      .addText((tx) => {
+        tx.setValue(imapCfg.user).onChange((v) => {
+          imapCfg.user = v.trim();
+          this.plugin.settings.imapMail = imapCfg;
+          this.plugin.saveSettings();
+        });
+      });
+    new Setting(containerEl)
+      .setName('IMAP 授权码')
+      .addText((tx) => {
+        tx.inputEl.type = 'password';
+        tx.setValue(imapCfg.pass).onChange((v) => {
+          imapCfg.pass = v.trim();
+          this.plugin.settings.imapMail = imapCfg;
+          this.plugin.saveSettings();
+        });
+      });
+        containerEl.createEl('h3', { text: '查看器' });
     this.renderViewersSection(containerEl);
+    containerEl.createEl('h3', { text: '代码编辑器（库外代码文件）' });
+    this.renderCodeEditorSection(containerEl);
+  }
+
+  /** 代码编辑器（库外代码文件）设置（思源虚拟文档树「代码编辑器」节对齐，
+   *  取 Obsidian 侧常用的三项：字号/自动换行/行号，落 ExternalCodeView 的
+   *  Monaco options）。 */
+  private renderCodeEditorSection(containerEl: HTMLElement): void {
+    const s = this.plugin.settings;
+    new Setting(containerEl)
+      .setName('字号')
+      .setDesc('库外代码文件的 Monaco 字号（px），默认 13')
+      .addText((t) =>
+        t.setValue(String(s.codeFontSize ?? 13)).onChange((v) => {
+          const n = Number(v);
+          s.codeFontSize = Number.isFinite(n) && n >= 8 && n <= 32 ? n : 13;
+          this.plugin.saveSettings();
+        }),
+      );
+    new Setting(containerEl)
+      .setName('自动换行')
+      .setDesc('长行折行显示（默认关闭，横向滚动）')
+      .addToggle((t) =>
+        t.setValue(s.codeWordWrap === true).onChange((v) => {
+          s.codeWordWrap = v;
+          this.plugin.saveSettings();
+        }),
+      );
+    new Setting(containerEl)
+      .setName('显示行号')
+      .addToggle((t) =>
+        t.setValue(s.codeLineNumbers !== false).onChange((v) => {
+          s.codeLineNumbers = v;
+          this.plugin.saveSettings();
+        }),
+      );
   }
 
   /** remote 挂载（github:// / gitee://）的访问令牌。百度网盘凭据不在这里 ——
@@ -253,6 +311,36 @@ export class VirtualTreeSettingTab extends PluginSettingTab {
           this.plugin.settings.mountShowPinnedBadge = v;
           await this.plugin.saveSettings();
           this.plugin.refreshMounts();
+        }),
+      );
+
+    // 删除方式(思源同款:删除必须可恢复,没有"直接删除"选项;2026-11-18 对齐)
+    new Setting(containerEl)
+      .setName('删除方式')
+      .setDesc(
+        '删除库外文件时进入哪条可恢复通道。插件回收站按原路径镜像暂存到库根的 ' +
+          '.vt-trash/ 目录，面板工具栏「回收站」里可恢复/彻底删除/清空；' +
+          '系统回收站由操作系统管理（无法在本插件里枚举恢复）。' +
+          '库内挂载始终走 Obsidian 自己的回收站，不受此设置影响。',
+      )
+      .addDropdown((d) =>
+        d
+          .addOption('plugin', '插件回收站（可在本插件中恢复）')
+          .addOption('system', '系统回收站')
+          .setValue(this.plugin.settings.deleteMode === 'system' ? 'system' : 'plugin')
+          .onChange(async (v) => {
+            this.plugin.settings.deleteMode = v === 'system' ? 'system' : 'plugin';
+            await this.plugin.saveSettings();
+          }),
+      )
+      .addButton((b) =>
+        b.setButtonText('打开回收站').setTooltip('管理插件回收站:恢复/彻底删除/清空').onClick(() => {
+          const base = this.plugin.vaultBasePath();
+          if (!base) {
+            new Notice('无法确定库根路径');
+            return;
+          }
+          new TrashManagerModal(this.app, base, () => this.plugin.refreshMounts()).open();
         }),
       );
 

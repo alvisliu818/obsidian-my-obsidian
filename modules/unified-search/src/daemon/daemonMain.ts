@@ -36,7 +36,7 @@ import * as os from 'os';
 import * as crypto from 'crypto';
 import type { SqliteFileMeta } from '../../../md-editor/src/index/sqliteSchema';
 import type { SqliteRuntimeLike } from '../../../md-editor/src/index/sqliteRuntime';
-import { KERNEL_PROTO, createDiscoveryIO, makeToken, parseRegistryCommand, type KernelEvent } from './kernelApi';
+import { KERNEL_PROTO, buildOpenVaultUrl, createDiscoveryIO, makeToken, parseRegistryCommand, vaultDisplayName, type KernelEvent } from './kernelApi';
 import { startKernelHttpServer } from './httpServer';
 import { startKernelTray, type TrayHandle } from './kernelTray';
 
@@ -94,7 +94,20 @@ type BetterSqlite3Db = {
 };
 
 class BetterSqliteRuntime implements SqliteRuntimeLike {
+  private stmtCache = new Map<string, { run(...p: unknown[]): unknown; all(...p: unknown[]): Record<string, unknown>[] }>();
+
   private constructor(private db: BetterSqlite3Db) {}
+
+  /** 语句缓存(C4,2026-11-19):批量写路径逐条 prepare 是 turbo 的 CPU 主项
+   *  之一;SQL 形态固定(几十条),Map 缓存零失效成本。 */
+  private stmtOf(sql: string): { run(...p: unknown[]): unknown; all(...p: unknown[]): Record<string, unknown>[] } {
+    let s = this.stmtCache.get(sql);
+    if (!s) {
+      s = this.db.prepare(sql) as { run(...p: unknown[]): unknown; all(...p: unknown[]): Record<string, unknown>[] };
+      this.stmtCache.set(sql, s);
+    }
+    return s;
+  }
 
   static open(file: string): BetterSqliteRuntime {
     // 重试加载（2026-11-06）：部署换血窗口期 spawn 的内核会撞上边车半拷贝
@@ -124,16 +137,19 @@ class BetterSqliteRuntime implements SqliteRuntimeLike {
     const db = new (Database as new (f: string) => BetterSqlite3Db)(file);
     db.exec('PRAGMA journal_mode=WAL');
     db.exec('PRAGMA synchronous=NORMAL');
+    // mmap(C7,2026-11-19):1GB 级库文件的 FTS 查询走文件映射,省 read 拷贝;
+    // 文件页可被系统回收,不计入常驻堆。
+    db.exec('PRAGMA mmap_size=268435456');
     return new BetterSqliteRuntime(db);
   }
 
   async run(sql: string, params?: unknown[]): Promise<void> {
-    if (params && params.length > 0) this.db.prepare(sql).run(...params);
+    if (params && params.length > 0) this.stmtOf(sql).run(...params);
     else this.db.exec(sql);
   }
 
   async all(sql: string, params?: unknown[], limit = 1000) {
-    const stmt = this.db.prepare(sql);
+    const stmt = this.stmtOf(sql);
     const rowsIn = params && params.length > 0 ? stmt.all(...params) : stmt.all();
     const rows = rowsIn.slice(0, limit).map((row) => Object.values(row));
     return { columns: rowsIn.length > 0 ? Object.keys(rowsIn[0]) : [], rows };
@@ -144,7 +160,7 @@ class BetterSqliteRuntime implements SqliteRuntimeLike {
       this.db.exec('BEGIN IMMEDIATE');
       for (let i = 0; i < queries.length; i++) {
         const pr = params?.[i];
-        if (pr && pr.length > 0) this.db.prepare(queries[i]).run(...pr);
+        if (pr && pr.length > 0) this.stmtOf(queries[i]).run(...pr);
         else this.db.exec(queries[i]);
       }
       this.db.exec('COMMIT');
@@ -820,6 +836,9 @@ async function main(): Promise<void> {
 
   const syncExt = async (): Promise<{ files: number; updated: number; removed: number }> => {
     const rt = await rtOf();
+    // extFtsEnabled 关：倒排索引不重建——收敛清理(setConfig 关时已清,这里兜
+    // 内核晚开库/清空失败的情形;空表上重复 DELETE 幂等零成本)。
+    if (!extFtsEnabled) await rt.run('DELETE FROM ext_fts').catch(() => {});
     let cands: { path: string; mtime: number }[] = [];
     try {
       cands = JSON.parse((await metaGetRaw(rt, EXT_LIST_KEY)) ?? '[]') as { path: string; mtime: number }[];
@@ -857,7 +876,9 @@ async function main(): Promise<void> {
       }
       const mtime = Math.floor(st.mtimeMs);
       const k = known.get(p);
-      if (k && k[0] === mtime && k[1] === st.size) continue; // stat 门:未变免读
+      // stat 门:未变免读。extFts 重建待办时跳过门(否则关→开的重建会被
+      // "未变"短路,FTS 行永远补不回来——实测 updated=0 的根因)。
+      if (!extFtsRebuildPending && k && k[0] === mtime && k[1] === st.size) continue;
       let content: string;
       try {
         content = await fs.promises.readFile(c.path, 'utf8');
@@ -865,16 +886,19 @@ async function main(): Promise<void> {
         continue;
       }
       await deleteExtRows(rt, p);
-      await rt.batch(
-        [
-          'INSERT OR REPLACE INTO ext_files (path, mtime, size) VALUES (?, ?, ?)',
-          'INSERT INTO ext_fts (bkey, path, text) VALUES (?, ?, ?)',
-        ],
-        [[p, mtime, st.size], ['ext:' + p, p, content]],
-      );
+      // extFtsEnabled 关（2026-11-19 round2）：只存 path/mtime/size（文件清单
+      // 供回落扫描与名称搜索），内容不进倒排索引——省 ~300MB（结构放大 9×）。
+      const stmts: string[] = ['INSERT OR REPLACE INTO ext_files (path, mtime, size) VALUES (?, ?, ?)'];
+      const stmtParams: unknown[][] = [[p, mtime, st.size]];
+      if (extFtsEnabled) {
+        stmts.push('INSERT INTO ext_fts (bkey, path, text) VALUES (?, ?, ?)');
+        stmtParams.push(['ext:' + p, p, content]);
+      }
+      await rt.batch(stmts, stmtParams);
       known.set(p, [mtime, st.size]);
       updated++;
     }
+    extFtsRebuildPending = false; // 重建完成,恢复 stat 门
     return { files: known.size, updated, removed };
   };
 
@@ -885,7 +909,53 @@ async function main(): Promise<void> {
    * bkey 交集,排除项客户端语义(text 不含)。整文件一行,text 是全文——
    * LIMIT 放大倍数给交集留余量。
    */
+  /**
+   * ext 域回落扫描（extFtsEnabled 关,2026-11-19 round2）：不建倒排索引,
+   * 按需逐文件读盘匹配。候选 = EXT_LIST_KEY（与索引同一份清单 + 同一 size
+   * 门）,全部 token 大小写不敏 includes 交集,not 排除,凑满 limit 即止——
+   * ~30MB 文本单次 ≈ 百 ms 级,只在用户真搜库外内容时付费。
+   */
+  const extSearchFallback = async (
+    tokens: string[],
+    not: string[],
+    limit: number,
+  ): Promise<{ path: string; text: string }[]> => {
+    const rt = await rtOf();
+    let cands: { path: string; mtime: number }[] = [];
+    try {
+      cands = JSON.parse((await metaGetRaw(rt, EXT_LIST_KEY)) ?? '[]') as { path: string; mtime: number }[];
+    } catch {
+      return [];
+    }
+    const lower = tokens.map((t) => t.toLowerCase());
+    if (lower.length === 0) return [];
+    const notLower = not.map((n) => n.toLowerCase());
+    const out: { path: string; text: string }[] = [];
+    for (const c of cands) {
+      let st: fs.Stats | null = null;
+      try {
+        st = fs.statSync(c.path);
+      } catch {
+        st = null;
+      }
+      if (!st?.isFile() || st.size > EXT_MAX_BYTES) continue;
+      let content: string;
+      try {
+        content = await fs.promises.readFile(c.path, 'utf8');
+      } catch {
+        continue;
+      }
+      const lc = content.toLowerCase();
+      if (!lower.every((t) => lc.includes(t))) continue;
+      if (notLower.some((n) => lc.includes(n))) continue;
+      out.push({ path: c.path, text: content });
+      if (out.length >= limit) break;
+    }
+    return out;
+  };
+
   const extSearch = async (tokens: string[], not: string[], limit: number): Promise<{ path: string; text: string }[]> => {
+    if (!extFtsEnabled) return extSearchFallback(tokens, not, limit);
     const rt = await rtOf();
     const lim = Math.max(1, Math.min(limit || 30, 200));
     const fetch = Math.min(lim * 6, 2000);
@@ -918,8 +988,18 @@ async function main(): Promise<void> {
   // （复刻其 %1 原样行为）。explorer.exe 中间商已证伪（对带 query 的协议 URL
   // 派发不可靠,2026-11-05 实测打开的是资源管理器窗口）——永远不在候选里,
   // 两个来源都空就明确拒绝并留痕。
+  // 库名决策同构：spawn argv 只带路径（basename 可能与用户改过的库名不一致），
+  // 客户端 setConfig 推送 app.vault.getName() 显示名后以推送为准。
   let openObsidianExe = args.obsidianExe;
+  // 库外内容倒排索引开关（2026-11-19 round2）：客户端 setConfig 推送。关 =
+  // syncExt 跳过 ext_fts 写入 + 一次性清空现有条目 + extSearch 回落按需读盘
+  // 扫描（~30MB 文本 ≈ 百 ms 级/次）——盘上省 ~300MB（代码文本 trigram 放大 9×）。
+  let extFtsEnabled = true;
+  /** 重建待办(2026-11-19 round2):toggle-on 置位 → syncExt 一次性跳过 stat 门
+   *  (关时删了 ext_fts 但 ext_files 的 mtime/size 知识还在,门会误判"未变")。 */
+  let extFtsRebuildPending = false;
   let openExeSource: 'argv' | 'setConfig' = 'argv';
+  let openVaultName = '';
   const resolveOpenExeFromRegistry = (): string => {
     try {
       const cp = require('child_process') as { execFileSync: (f: string, a: string[], o: object) => string };
@@ -954,13 +1034,13 @@ async function main(): Promise<void> {
         spawn: (c: string, a: string[], o?: object) => { unref?(): void; on?: (ev: string, cb: (e: Error) => void) => void };
       };
       // URL 作为 argv 直派 exe（=注册表 HKCU...obsidian\shell\open\command 的
-      // 原样行为）。注意:**不能** windowsHide——我们要的就是窗口。路径归一化
-      // vault=名称形态（2026-11-06 实测）：path= 形态的正斜杠路径与注册表
-      // 反斜杠路径分隔符不匹配 →「Vault not found」对话框；vault= 按库名
-      // 匹配，冷启动/运行中都可靠。库名 = vault 路径 basename（本机两库名
-      // 唯一；同名库场景需换 path 形态并解决分隔符匹配，暂无需求）。
-      const vaultName = args.vault.replace(/[\/]+$/, '').split(/[\/]/).pop() ?? '';
-      const url = `obsidian://open?vault=${encodeURIComponent(vaultName)}`;
+      // 原样行为）。注意:**不能** windowsHide——我们要的就是窗口。vault=
+      // 名称形态（2026-11-06 实测）：path= 形态的正斜杠路径与注册表反斜杠
+      // 路径分隔符不匹配 →「Vault not found」对话框；vault= 按库名匹配，
+      // 冷启动/运行中都可靠。库名 = setConfig 推送的显示名，缺省回落
+      // argv 路径 basename（basename 提取必须双分隔符——Windows 反斜杠路径
+      // 只按 / 切会把整条路径当库名，2026-11-17 实测复现「Vault not found」）。
+      const url = buildOpenVaultUrl(args.vault, openVaultName);
       const child = spawnChild(exe, [url], { detached: true, stdio: 'ignore' });
       child.unref?.();
       child.on?.('error', (e: Error) => process.stderr.write(`[kernel-tray] open failed: ${String(e).slice(0, 120)}\n`));
@@ -991,7 +1071,37 @@ async function main(): Promise<void> {
           openObsidianExe = exe;
           openExeSource = 'setConfig';
         }
-        return { ok: true, obsidianExe: openObsidianExe || null };
+        const pushedName = String((msg as { vaultName?: unknown }).vaultName ?? '').trim();
+        if (pushedName) {
+          openVaultName = pushedName;
+          tray?.setVaultName(pushedName);
+        }
+        // extFtsEnabled 热切换（2026-11-19 round2）：关=清空 ext_fts（省盘上
+        // 空间,syncExt 同步跳过重建）;开=重建（syncExt 补齐）。库不存在时
+        // (未 open)仅记标志——下一次 syncExt/open 生效。
+        const pushedExtFts = (msg as { extFtsEnabled?: unknown }).extFtsEnabled;
+        if (typeof pushedExtFts === 'boolean' && pushedExtFts !== extFtsEnabled) {
+          extFtsEnabled = pushedExtFts;
+          process.stderr.write('[extfts] toggle -> ' + extFtsEnabled + '\n');
+          void (async () => {
+            try {
+              const rt = await rtOf();
+              if (extFtsEnabled) {
+                extFtsRebuildPending = true;
+                const r = await syncExt();
+                process.stderr.write('[extfts] rebuild done: ' + JSON.stringify(r) + '\n');
+              } else {
+                await rt.run('DELETE FROM ext_fts');
+                process.stderr.write('[extfts] cleared\n');
+              }
+            } catch (e) {
+              process.stderr.write('[extfts] ERR: ' + String(e).slice(0, 160) + '\n');
+            }
+          })();
+        } else if (typeof pushedExtFts === 'boolean') {
+          process.stderr.write('[extfts] push same value (' + pushedExtFts + ') - no-op\n');
+        }
+        return { ok: true, obsidianExe: openObsidianExe || null, vaultName: openVaultName || vaultDisplayName(args.vault) };
       }
       case 'open':
         return dispatchOpen();
@@ -1013,7 +1123,11 @@ async function main(): Promise<void> {
               : await turboRebuild(idx, source, (done, total) => {
                   if (!args.oneShot) write({ ev: 'progress', done, total });
                 });
-          return { ...r, ms: Date.now() - t0 };
+          const ms = Date.now() - t0;
+          // 计时落内核日志(C3 测量,2026-11-19):walk+diff vs 写入占比,
+          // 后续按数据决定是否做 walk 缓存/跳过。
+          process.stderr.write(`[turbo] mode=${mode} files=${r.files} blocks=${r.blocks} ms=${ms}\n`);
+          return { ...r, ms };
         });
       }
       case 'sync':
@@ -1054,9 +1168,38 @@ async function main(): Promise<void> {
           Number((msg as { limit?: unknown }).limit ?? 30),
         );
       case 'stats': {
+        // 修复(2026-11-19):旧实现 `await idx` 后调不存在的 stats 方法,永远
+        // 返回 null——内存/体积盘点少了官方探针。真实现:行数 + 体积 + 碎片。
         await ensureOpen();
-        const files = (await idx as unknown as { stats?(): Promise<unknown> }).stats?.();
-        return files ?? null;
+        const rt = await rtOf();
+        const num = async (sql: string): Promise<number> => {
+          try {
+            const r = await rt.all(sql, undefined, 1);
+            return Number(r.rows[0]?.[0] ?? 0);
+          } catch {
+            return -1;
+          }
+        };
+        const pageSize = await num('PRAGMA page_size');
+        const freelist = await num('PRAGMA freelist_count');
+        return {
+          files: await num('SELECT COUNT(*) FROM files'),
+          blocks: await num('SELECT COUNT(*) FROM blocks'),
+          effRefs: await num('SELECT COUNT(*) FROM eff_refs'),
+          extFiles: await num('SELECT COUNT(*) FROM ext_files'),
+          ftsEnabled: ftsEnabled(),
+          freelistMB: pageSize > 0 && freelist >= 0 ? Math.round((freelist * pageSize) / 1024 / 1024) : -1,
+        };
+      }
+      case 'vacuum': {
+        // VACUUM(2026-11-19):churn 碎片回收(主库实测 freelist 237MB)。
+        // mutate 序列化:与索引写互斥;1.6GB 库约 1-2 分钟,调用方自行计时。
+        return mutate(async () => {
+          const t0 = Date.now();
+          const rt = await rtOf();
+          await rt.run('VACUUM');
+          return { ms: Date.now() - t0 };
+        });
       }
       case 'shutdown':
         await idx.close();
@@ -1181,6 +1324,24 @@ async function main(): Promise<void> {
     }
     if (idleTimer) clearInterval(idleTimer);
     clearInterval(extTimer);
+    // 停机标记写进 discovery（先于一切可能挂住的收尾）：客户端 onDaemonExit
+    // 读到 stopping 就不复活内核——否则「退出内核」退出后立刻被退避重启拉回
+    // 来，托盘永远关不掉（2026-11-17 用户实测）。崩溃退出不走这里，无标记
+    // → 照常重启。
+    try {
+      createDiscoveryIO(fs).write(args.db, {
+        proto: KERNEL_PROTO,
+        pid: process.pid,
+        port: server?.port ?? 0,
+        token,
+        vault: args.vault,
+        dbPath: args.db,
+        startedAt,
+        stopping: true,
+      });
+    } catch {
+      /* 标记写不进去不挡停机 */
+    }
     try {
       await server.close();
     } catch {
@@ -1204,7 +1365,7 @@ async function main(): Promise<void> {
       },
       onSync: () => void handle({ op: 'sync' } as Parameters<typeof handle>[0]).catch(() => {}),
       onExit: () => void gracefulStop('tray exit'),
-    });
+    }, { vaultName: vaultDisplayName(args.vault) });
     // 异常退出兜底:防孤儿图标（exit 钩子只允许同步操作）
     process.on('exit', () => {
       try {

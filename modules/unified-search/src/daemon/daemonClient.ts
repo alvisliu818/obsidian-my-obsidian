@@ -21,6 +21,7 @@ export type { IndexedBlock, BacklinkEntry, CardEntry } from '../../../md-editor/
 import type { CardEntry, IndexedBlock } from '../../../md-editor/src/index/blockIndex';
 import type { SupertagDef } from '../../../md-editor/src/features/supertags';
 import type { KernelEvent } from './kernelApi';
+import { createDiscoveryIO } from './kernelApi';
 import { HttpTransport } from './httpTransport';
 
 interface DaemonChild {
@@ -56,6 +57,9 @@ export interface DaemonClientOptions {
   kernelTray?: boolean;
   /** R2c 托盘「打开 Obsidian」用的 exe（渲染进程 process.execPath=Obsidian.exe）。 */
   obsidianExe?: string;
+  /** 库外文件内容倒排索引开关（ext_fts，2026-11-19 round2）。getter 支持热改，
+   *  连接时与热改后都经 setConfig 推送内核（内核侧关=清空 ext_fts+syncExt 跳过）。 */
+  extFtsEnabled?: () => boolean;
   /** 触发 BlockIndex 消费方刷新（onRebuild 监听器的同一条线）。 */
   onChange: () => void;
 }
@@ -142,8 +146,11 @@ export class BlockIndexDaemonClient {
         // R2d 运行时配置推送：HTTP 内核可被探活复用，也可能由旧构建/外部脚本
         // 拉起——argv 里的 --obsidian-exe 不保证在（2026-11-05 实测：旧内核缺
         // 该 flag，托盘「打开 Obsidian」回落 explorer 打开了资源管理器）。连上
-        // 就补送，派发不依赖内核的出生参数。fire-and-forget：失败不碰索引主链路。
-        void this.call('setConfig', { obsidianExe: this.opts.obsidianExe ?? '' }).catch(() => {});
+        // 就补送，派发不依赖内核的出生参数。库名同批推送：app.vault.getName()
+        // 是注册表显示名（用户改过库名时与路径 basename 不一致），内核用它构
+        // 建「打开 Obsidian」的 URL 并更新托盘提示名。fire-and-forget：失败不
+        // 碰索引主链路。
+        void this.pushRuntimeConfig().catch(() => {});
         void this.turboSync().catch(() => {});
         return;
       } catch (e) {
@@ -162,6 +169,9 @@ export class BlockIndexDaemonClient {
       ...(ex.length ? ['--exclude', ex.join(',')] : []),
     ]);
     await this.call('ping');
+    // stdio 兜底路径同样推送运行时配置（obsidianExe/vaultName）——--tray 可随
+    // extra 走 stdio spawn，托盘的「打开 Obsidian」与提示名同样依赖它。
+    void this.pushRuntimeConfig().catch(() => {});
     // 启动同步放后台：等它必撞 60s 超时 → daemon 明明活着却被误回落
     // 内存索引。走 turboSync（并发读池 + 流式写批,2026-11-04）：旧串行
     // idx.sync() 逐文件读+解析,单核满转可达小时级,且把事件循环按住——
@@ -184,6 +194,21 @@ export class BlockIndexDaemonClient {
 
   private async onDaemonExit(): Promise<void> {
     if (this.disposed || this.restarting) return;
+    // 用户显式停机（托盘「退出内核」/停用内核）会在 discovery 留 stopping
+    // 标记——这是用户意图，客户端不得退避重启把它拉回来（否则托盘关不掉，
+    // 2026-11-17 用户实测）。读不到 discovery（stdio 模式无 discovery）/读失败
+    // → 按崩溃处理照常重启。标记由下次 start() 的 discovery 覆写自然清除。
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const fsLike = eval('require')('fs') as Parameters<typeof createDiscoveryIO>[0];
+      if (createDiscoveryIO(fsLike).read(this.opts.dbPath)?.stopping === true) {
+        this.disposed = true;
+        this.rejectAllPending(new Error('MyKernel stopped by user'));
+        return;
+      }
+    } catch {
+      /* 探测失败按崩溃处理 */
+    }
     this.restarting = true;
     this.rejectAllPending(new Error('MyKernel exited'));
     const wait = RESTART_BACKOFF_MS[Math.min(this.restarts, RESTART_BACKOFF_MS.length - 1)];
@@ -288,7 +313,7 @@ export class BlockIndexDaemonClient {
     // hello/fts 暂不消费（与旧行为一致）
   }
 
-  private call<T = unknown>(op: string, extra: Record<string, unknown> = {}): Promise<T> {
+  private call<T = unknown>(op: string, extra: Record<string, unknown> = {}, timeoutMs = 60000): Promise<T> {
     if (this.http) return this.http.call<T>(op, extra);
     return new Promise<T>((resolve, reject) => {
       const child = this.child;
@@ -304,12 +329,38 @@ export class BlockIndexDaemonClient {
           this.pending.delete(id);
           reject(new Error(`daemon call timeout: ${op}`));
         }
-      }, 60000);
+      }, timeoutMs);
     });
+  }
+
+  /** VACUUM 碎片回收(2026-11-19):主库实测 freelist 237MB;1.6GB 库约
+   *  1-2 分钟,超时放宽到 10 分钟。失败(null)= 守护进程未运行/忙。 */
+  async vacuum(): Promise<{ ms: number } | null> {
+    try {
+      return await this.call<{ ms: number }>('vacuum', {}, 600_000);
+    } catch {
+      return null;
+    }
   }
 
   private query<T = unknown>(q: string, args: Record<string, unknown> = {}): Promise<T> {
     return this.call<T>('query', { q, args });
+  }
+
+  /**
+   * 运行时配置推送（连接时与热改后各一次,2026-11-19 round2）：obsidianExe、
+   * vaultName、extFtsEnabled（库外内容倒排索引开关——内核关时清空 ext_fts 并
+   * 让 syncExt 跳过,开时触发 syncExt 重建）。fire-and-forget 语义由调用方定。
+   */
+  async pushRuntimeConfig(): Promise<void> {
+    const vaultName = (
+      this.opts.app.vault as { getName?: () => string }
+    ).getName?.() ?? '';
+    await this.call('setConfig', {
+      obsidianExe: this.opts.obsidianExe ?? '',
+      vaultName,
+      extFtsEnabled: this.opts.extFtsEnabled?.() ?? true,
+    });
   }
 
   private invalidateCaches(): void {

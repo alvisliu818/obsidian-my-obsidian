@@ -18,6 +18,12 @@ import type { MarketStore } from './store';
 
 interface EnhanceCtx {
 	store: MarketStore;
+	/** 弹窗实例捕获（main.ts onModalOpen）——空壳卡填充的精确数据源 */
+	lastCommunityModal: {
+		items?: Record<string, Record<string, unknown>>;
+		itemsVisible?: string[];
+		sortOrder?: string;
+	} | null;
 }
 
 /** 每个文档只注入一次的样式：可选中修复 + 增强块外观。 */
@@ -92,12 +98,100 @@ export function ensureMarketStyles(doc: Document): void {
 	doc.head.appendChild(style);
 }
 
-/** 市场弹窗的一次增强：过滤块 + 详情块 + 卡片筛选/徽标。全部幂等。 */
+/** 市场弹窗的一次增强：过滤块 + 详情块 + 卡片筛选/徽标 + 空壳卡兜底填充。 */
 export function enhanceCommunityModal(modal: HTMLElement, ctx: EnhanceCtx): void {
 	ensureMarketStyles(modal.ownerDocument);
 	enhanceControls(modal, ctx);
 	enhanceDetail(modal, ctx);
 	applyFilter(modal, ctx);
+	fillShellCards(modal, ctx);
+}
+
+// ---------------------------------------------------------------------------
+// 弹窗市场空壳卡兜底填充（核心 1.15 bug 的补偿）
+//
+// 实测（2026-11-19，弹窗市场为独立窗口）：核心把目录全量渲染成
+// .community-item.tappable 空壳（10563 张，无任何身份属性），只有首批 ~31 张
+// 填了内容；滚容器/滚文档/显式 scroll 事件都触发不了继续填充（A/B 排除本
+// 插件，禁用后依旧）——用户看到的就是「没加载过的插件一片空白」。
+// 空壳没有身份信息，但实例的 itemsVisible 是条目对象数组（按当前显示顺序），
+// 第 i 张卡 = itemsVisible[i]，精确对号；对象上还带核心预渲染的
+// nameEl/authorEl/descEl，直接搬进壳里。核心后续自己填充时数据源相同无冲突。
+// ---------------------------------------------------------------------------
+
+function fillShellCards(modal: HTMLElement, ctx: EnhanceCtx): void {
+	const doc = modal.ownerDocument;
+	if (!doc) return;
+	const cards = [...doc.querySelectorAll<HTMLElement>('.community-item.tappable')];
+	const shells = cards.filter((c) => !c.querySelector('.community-item-name')?.textContent?.trim());
+	if (!shells.length) return; // 没有空壳（核心填充正常）——无事可做
+	// 精确数据源：弹窗实例的 itemsVisible——注意它是【条目对象数组】（不是 id
+	// 数组），第 i 个对象就带 name/author/description/downloads/updated 与核心
+	// 预渲染的 nameEl/authorEl/descEl。补丁在 onModalOpen 捕获实例（main.ts）。
+	const inst = ctx.lastCommunityModal;
+	const visible = inst?.itemsVisible;
+	if (!Array.isArray(visible) || !visible.length) return; // 没数据 = 保持空壳，不猜
+	shells.forEach((shell) => {
+		const pos = cards.indexOf(shell);
+		if (pos < 0 || pos >= visible.length) return;
+		const item = visible[pos] as unknown as Record<string, unknown> | undefined;
+		if (!item) return;
+		if (shell.querySelector('.community-item-name')) return; // 竞态防护
+		const name = typeof item.name === 'string' ? item.name : '';
+		if (!name) return;
+		const author = typeof item.author === 'string' ? item.author : '';
+		const description = typeof item.description === 'string' ? item.description : '';
+		const downloads = typeof item.downloads === 'number' ? item.downloads : undefined;
+		const updated = typeof item.updated === 'string' ? item.updated : undefined;
+		const own = (k: string): HTMLElement | undefined => {
+			const v = item[k];
+			// 预制元素活在弹窗 document（跨 realm instanceof 不可用）——按 doc 校验
+			if (v && typeof v === 'object' && (v as HTMLElement).ownerDocument === doc) {
+				return v as HTMLElement;
+			}
+			return undefined;
+		};
+		const nameEl = own('nameEl');
+		if (nameEl) {
+			shell.appendChild(nameEl);
+		} else {
+			const el = doc.createElement('div');
+			el.className = 'community-item-name';
+			el.textContent = name;
+			shell.appendChild(el);
+		}
+		const authorEl = own('authorEl');
+		if (authorEl) {
+			shell.appendChild(authorEl);
+		} else {
+			const el = doc.createElement('div');
+			el.className = 'community-item-author';
+			el.textContent = author ? `作者：${author}` : '';
+			shell.appendChild(el);
+		}
+		if (downloads !== undefined) {
+			const dlEl = doc.createElement('div');
+			dlEl.className = 'community-item-downloads';
+			dlEl.textContent = String(downloads);
+			shell.appendChild(dlEl);
+		}
+		if (updated) {
+			const upEl = doc.createElement('div');
+			upEl.className = 'community-item-updated';
+			upEl.textContent = updated;
+			shell.appendChild(upEl);
+		}
+		const descEl = own('descEl');
+		if (descEl) {
+			shell.appendChild(descEl);
+		} else {
+			const el = doc.createElement('div');
+			el.className = 'community-item-desc';
+			el.textContent = description;
+			shell.appendChild(el);
+		}
+		shell.dataset.lgpMktFilled = '1';
+	});
 }
 
 // ---------------------------------------------------------------------------

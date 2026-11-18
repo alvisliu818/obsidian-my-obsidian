@@ -23,11 +23,17 @@ import { DownloadsView } from "./views/DownloadsView";
 import { BrowserTab } from "./browser/BrowserTab";
 import type { BrowserContext } from "./browser/context";
 import { clipPage } from "./browser/excerpt";
+import { AnnotationController } from "./browser/annotation";
 import { bindSessionDownloads } from "./browser/downloads";
+import { dnrBlocker } from "./browser/dnrEngine";
+import { applyNetFilters } from "./browser/netFilter";
+import { buildEdgeStoreHelperScript, isEdgeAddonsSiteUrl } from "./extensions/edgeStoreHelper";
 import { ExtensionHost } from "./extensions/extensionHost";
 import { UserscriptHost } from "./userscripts/userscriptHost";
 import { InstallUserScriptModal } from "./userscripts/install-modal";
 import { PopupLayer } from "./extensions/popup";
+import { evalInServiceWorker } from "./extensions/swBridge";
+import type { UserScriptRecord } from "./types";
 import { BrowserSettingTab } from "./settings/SettingsTab";
 import { downloadToVault } from "./utils/download";
 import { isUrlExcluded, normalizeUrl } from "./utils/url";
@@ -42,10 +48,16 @@ export default class BrowserPlugin extends Plugin {
 	private usHost!: UserscriptHost;
   private popupLayer: PopupLayer | null = null;
   private ctx!: BrowserContext;
+  private annotation!: AnnotationController;
+  /** DNR 拦截器单例（调试/探针可达）。 */
+  dnrBlocker = dnrBlocker;
 
   private preloadUrl = "";
   private extPreloadUrl = "";
+  private annPopupUrl = "";
   private unbindDownloads: (() => void) | null = null;
+  /** Edge 商店按钮状态去抖（页内按钮 2s 内不重复写状态）。 */
+  private lastEdgeStateWrite = 0;
   private lastRightClickedUrl = "";
   /** URL for the next browser leaf we are about to create (native mode). */
   private pendingLeafUrl = "";
@@ -65,7 +77,11 @@ export default class BrowserPlugin extends Plugin {
       this.app,
       () => this.store.data.extensions,
       () => this.config.extensionsEnabled,
-      () => this.store.save(),
+      () => {
+        this.store.save();
+        this.applyNetFilters();
+        this.syncNativeExtensionLoads();
+      },
     );
 
     this.usHost = new UserscriptHost(
@@ -74,6 +90,12 @@ export default class BrowserPlugin extends Plugin {
     );
 
     await this.writePreloads();
+    this.annotation = new AnnotationController(this.app, () => this.config, {
+      popupFileUrl: () => this.annPopupUrl,
+      openLink: (url, newTab) => void this.openUrl(url, newTab ?? false),
+      saveIndex: () => this.store.save(),
+      pages: () => this.store.data.annPages,
+    });
     this.ctx = this.buildContext();
 
     this.registerView(VIEW_TYPE_BROWSER, (leaf) => {
@@ -99,7 +121,12 @@ export default class BrowserPlugin extends Plugin {
     this.addSettingTab(
       new BrowserSettingTab(this.app, this, {
         settings: this.config,
-        save: () => this.store.save(),
+        save: () => {
+          this.store.save();
+          this.applyNetFilters();
+          this.syncNativeExtensionLoads();
+        },
+        applyNetFilters: () => this.applyNetFilters(),
         applyProxy: () => void this.applyBrowserProxy(),
         usHost: () => this.usHost,
         extHost: this.extHost,
@@ -111,15 +138,27 @@ export default class BrowserPlugin extends Plugin {
 
     this.app.workspace.onLayoutReady(() => {
       this.bindDownloads();
+      this.applyNetFilters();
+      this.syncNativeExtensionLoads();
       if (this.config.restoreSession && this.store.data.session.length) {
         // Nothing to do: BrowserView.onOpen pulls the session from ctx.
       }
     });
   }
 
+  /** 跨模块入口（virtual-tree bmarks:// 挂载/打开用）：全量书签 + 浏览器内打开。 */
+  bookmarksAll(): { title: string; url: string; tags: string[] }[] {
+    return this.store.data.bookmarks.map((b) => ({ title: b.title, url: b.url, tags: b.tags ?? [] }));
+  }
+
+  openExternalInBrowser(url: string, newTab = false): void {
+    void this.openUrl(url, newTab);
+  }
+
   onunload(): void {
     this.unbindDownloads?.();
     this.popupLayer?.close();
+    this.annotation?.closeAllFloats();
     void this.store.flush();
   }
 
@@ -137,6 +176,7 @@ export default class BrowserPlugin extends Plugin {
       bookmarks: this.bookmarks,
       history: this.history,
       downloads: this.downloads,
+      annotation: this.annotation,
       preloadUrl: () => this.preloadUrl,
 
       openInNewTab: (url) => void this.openUrl(url, true),
@@ -173,13 +213,16 @@ export default class BrowserPlugin extends Plugin {
 
       onDomReady: (webview: IWebviewTag, url: string) => {
         void this.extHost.injectDocumentEnd(webview as never, url);
+        void this.injectEdgeStoreHelper(webview as never, url);
         for (const code of this.usHost.documentEndScripts(url)) void this.usHost.injectScript(webview as never, code);
+        void this.annotation.onPageReady(webview, url, String(webview.getTitle?.() ?? ""));
       },
       extensionStartPayload: (url: string) => {
         const p = this.extHost.documentStartPayload(url);
         const u = this.usHost.documentStartPayload(url);
         return { css: [...p.css, ...u.css], js: [...p.js, ...u.js] };
       },
+      onEdgeInstall: (id: string) => void this.installEdgeAddon(id),
       onUserScriptNavigate: (url: string) => this.openUserScriptInstall(url),
       onUserScriptRequest: async (req: { rid: string; params: { method: string; url: string; headers: Record<string, string> | null; body: string | null } }, webview: unknown) => {
         const deliver = (payload: string): void => {
@@ -217,6 +260,8 @@ export default class BrowserPlugin extends Plugin {
       },
 
       notifyTabChanged: (tab) => this.onTabChanged(tab),
+      saveSettings: () => { this.store.save(); this.applyNetFilters(); },
+      startUrl: () => this.resolveStartUrl(),
       requestNewTab: (url) => {
         if (this.openUserScriptInstall(url)) return;
         void this.openUrl(url, true);
@@ -235,8 +280,47 @@ export default class BrowserPlugin extends Plugin {
   private openUserScriptInstall(url: string): boolean {
     if (!/\.user\.js(\?|#|$)/i.test(url)) return false;
     void this.usHost;
-    new InstallUserScriptModal(this.app, this.usHost, url).open();
+    new InstallUserScriptModal(this.app, this.usHost, url, undefined, (record) => {
+      void this.mirrorUserScriptToManagers(record);
+    }).open();
     return true;
+  }
+
+  /**
+   * P7 协作安装收尾：脚本经原生宿主安装/运行后，把注册镜像到已原生装载的
+   * 暴力猴（chrome.userScripts 注册表），其管理面板可见可管。篡改猴的存储
+   * 格式私有，不镜像（重复安装防护靠 usHost 的同 name+namespace 判定）。
+   */
+  private async mirrorUserScriptToManagers(record: UserScriptRecord): Promise<void> {
+    const vm = this.store.data.extensions.find(
+      (r) => r.enabled && r.nativeId && /violentmonkey|暴力猴/i.test(r.name),
+    );
+    if (!vm?.nativeId) return;
+    const matches = record.matches.length ? record.matches : ["*://*/*"];
+    const payload = {
+      id: "ob-install-" + record.id,
+      matches,
+      js: [{ code: record.code }],
+      world: "USER_SCRIPT",
+      runAt: "document_idle",
+    };
+    const inner = JSON.stringify(payload);
+    const expr =
+      "new Promise((res) => chrome.userScripts.register([" +
+      inner +
+      "], (v) => res(!chrome.runtime.lastError)));";
+    const r = await evalInServiceWorker(vm.nativeId, expr);
+    if (r.ok) new Notice("已同步到暴力猴脚本面板");
+    else console.warn("[obsidian-browser] VM mirror failed:", r.err);
+  }
+
+  /** 扩展启用/安装后：尝试原生 loadExtension 装进浏览器分区（TM/VM 协作的前提）。 */
+  private syncNativeExtensionLoads(): void {
+    const partition = this.config.partition || "persist:obsidian-browser";
+    this.extHost.lastPartition = partition;
+    for (const rec of this.store.data.extensions) {
+      if (rec.enabled && !rec.nativeId) void this.extHost.loadNative(rec, partition);
+    }
   }
 
 
@@ -411,6 +495,34 @@ export default class BrowserPlugin extends Plugin {
       },
     });
     this.addCommand({
+      id: "annotate-page",
+      name: "标注当前页面（无选区）",
+      hotkeys: [{ modifiers: ["Mod", "Alt"], key: "A" }],
+      callback: () => {
+        const tab = this.activeTab();
+        if (!tab || !this.annotation) return;
+        void this.annotation.create(tab.webviewElement, tab.url, tab.title, {});
+      },
+    });
+    this.addCommand({
+      id: "zoom-reset",
+      name: "页面缩放重置",
+      hotkeys: [{ modifiers: ["Mod", "Alt"], key: "0" }],
+      callback: () => this.activeTab()?.controllerRef.resetZoom(),
+    });
+    this.addCommand({
+      id: "zoom-in",
+      name: "页面放大",
+      hotkeys: [{ modifiers: ["Mod", "Alt"], key: "=" }],
+      callback: () => this.activeTab()?.controllerRef.applyZoomStep(1.1),
+    });
+    this.addCommand({
+      id: "zoom-out",
+      name: "页面缩小",
+      hotkeys: [{ modifiers: ["Mod", "Alt"], key: "-" }],
+      callback: () => this.activeTab()?.controllerRef.applyZoomStep(1 / 1.1),
+    });
+    this.addCommand({
       id: "open-url-from-clipboard",
       name: "打开剪贴板中的网址",
       callback: async () => {
@@ -501,6 +613,7 @@ export default class BrowserPlugin extends Plugin {
     const sources: [string, string][] = [
       ["preload.js", __PRELOAD_SOURCE__],
       ["ext-preload.js", __EXT_PRELOAD_SOURCE__],
+      ["annotation-popup.html", __ANN_POPUP_HTML__],
     ];
     const rel = `.obsidian/plugins/${PLUGIN_ID}`;
 
@@ -513,6 +626,7 @@ export default class BrowserPlugin extends Plugin {
         for (const [name, src] of sources) fs.writeFileSync(pathMod.join(dir, name), src, "utf8");
         this.preloadUrl = toFileUrl(pathMod.join(dir, "preload.js"));
         this.extPreloadUrl = toFileUrl(pathMod.join(dir, "ext-preload.js"));
+        this.annPopupUrl = toFileUrl(pathMod.join(dir, "annotation-popup.html"));
       } catch (e) {
         console.warn("[obsidian-browser] preload write failed", e);
       }
@@ -530,6 +644,66 @@ export default class BrowserPlugin extends Plugin {
       }
     }
     this.buildPopupLayer();
+  }
+
+  /** DNR 网络过滤 + Edge 商店 UA：设置变更/扩展装卸后全量重放。 */
+  applyNetFilters(): void {
+    if (!this.config.dnrEnabled) return;
+    const adguard = this.store.data.extensions.find((r) => r.enabled && /adguard/i.test(r.name));
+    const dir = adguard && this.extHost.available ? this.extHost.dirOf(adguard) : null;
+    applyNetFilters({
+      defaultPartition: this.config.partition || "persist:obsidian-browser",
+      dnrEnabled: true,
+      adguardExtDir: dir,
+    });
+  }
+
+  /** 页内 Edge 安装按钮状态回写（2s 去抖）。 */
+  private async writeEdgeStoreState(state: "installing" | "ok" | "idle"): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastEdgeStateWrite < 2000) return;
+    this.lastEdgeStateWrite = now;
+    const tab = this.activeTab();
+    if (!tab) return;
+    await tab.execJs(`window.__obEdgeStoreSetState && window.__obEdgeStoreSetState(${JSON.stringify(state)})`);
+  }
+
+  /** Edge 加载项安装（商店页按钮 / microsoft-edge: 协议 / CRX 直链）。 */
+  private async installEdgeAddon(idOrUrl: string): Promise<void> {
+    new Notice("正在从 Edge 加载项商店获取扩展…");
+    void this.writeEdgeStoreState("installing");
+    try {
+      const rec = await this.extHost.installFromEdgeAddons(idOrUrl);
+      this.refreshExtensionIcons();
+      this.applyNetFilters();
+      void this.writeEdgeStoreState("ok");
+      new Notice("已安装扩展：" + rec.name);
+    } catch (e: any) {
+      console.warn("[obsidian-browser] edge install failed", e);
+      new Notice("安装失败：" + String(e?.message || e));
+    }
+  }
+
+  /** Edge 商店详情页注入「安装到 Obsidian」浮动按钮 + 回写状态通道。 */
+  private async injectEdgeStoreHelper(webview: IWebviewTag, url: string): Promise<void> {
+    if (!isEdgeAddonsSiteUrl(url)) return;
+    try {
+      await webview.executeJavaScript(
+        buildEdgeStoreHelperScript({ install: "安装到 Obsidian", installing: "安装中…", installed: "已安装" }),
+        false,
+      );
+    } catch {
+      /* guest gone */
+    }
+  }
+
+  /** 新标签页起始 URL：新标签页扩展（设置）优先，回落主页。 */
+  private resolveStartUrl(): string {
+    if (this.config.newTabExtId) {
+      const page = this.extHost.newtabExtensions().find((x) => x.id === this.config.newTabExtId);
+      if (page) return page.page;
+    }
+    return this.config.homePage || "about:blank";
   }
 
   private bindDownloads(): void {

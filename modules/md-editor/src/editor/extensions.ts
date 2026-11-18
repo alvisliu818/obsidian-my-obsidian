@@ -22,6 +22,7 @@ import {
 } from '@codemirror/view';
 import { EditorState, Prec, RangeSetBuilder, StateField, type Extension } from '@codemirror/state';
 import { caretOverlay } from './caretOverlay';
+import { cm6TableKeymap } from './tableKeymap';
 import { defaultKeymap, history, historyKeymap, insertNewline } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { syntaxHighlighting, defaultHighlightStyle, indentUnit } from '@codemirror/language';
@@ -40,10 +41,12 @@ import { ownedDefaultKeys } from '../interactions/defaultKeymapOwnership';
 import { commandMenuKeymap, maybeOpenMenu, closeMenu } from '../features/commandMenu';
 import { getInternalFromClipboardData } from '../features/internalClipboard';
 import { shouldPasteMarkdownFromHTML } from '../features/markdownClipboard';
+import { tableMarkdownFromClipboard } from '../features/tablePaste';
 import { syncActiveBlockEditor } from '../interactions/textSelectionMenu';
 import { livePreviewConfig, livePreviewExtension } from './livePreview';
 import { mathSyntax } from './mathSyntax';
 import { obsidianInlineSyntax } from './obsidianInlineSyntax';
+import { mdEmojiBypass } from '../features/emojiShortcodes';
 import { BLOCK_PROP_LINE_RE, editorMarkerLen } from '../types';
 
 /**
@@ -227,6 +230,11 @@ import {
   handleWrapChar,
 } from '../interactions/keymap';
 import { formatToolbarExtension } from '../interactions/formatToolbar';
+import { insertLinkCommand, linkPasteDecision } from '../features/linkPaste';
+import { htmlToMarkdown } from '../features/htmlPaste';
+import { maybeTriggerThirdPartySuggests } from '../features/thirdPartySuggests';
+import { virtualLinkExtension } from '../features/virtualLinks';
+import { blockTypeOf } from '../blocks/blockTypes';
 
 /**
  * Selection-wrapping pairs: typing the key with a selection wraps it. */
@@ -324,6 +332,11 @@ export function createBlockKeymap(host: BlockRenderHost): KeyBinding[] {
       { key: 'Alt-Shift-ArrowUp', run: (v) => handleMoveBlock(v, host, -1) },
       { key: 'Alt-Shift-ArrowDown', run: (v) => handleMoveBlock(v, host, 1) },
     );
+  }
+  // Mod+L 插入/包裹 markdown 链接(og :editor/insert-link mod+l parity,
+  // 2026-11-19):空选区 `[]()` 光标进 label,有选区 `[选区]()` 光标进 URL 位。
+  if (on.insertLink) {
+    bindings.push({ key: 'Mod-l', run: (v) => insertLinkCommand(v) });
   }
   // Ctrl+A 二段式(思源 selectAll + getSelectAllBlockAction,2026-10-26):
   // 第一段放给 CM 默认(块内文本全选);文本已全选再按 → 全部可见块进选择态。
@@ -434,6 +447,11 @@ export function createEmbedExtensions(
         ),
       ]
     : [];
+  // Mod+L 与主编辑器同键(og insert-link parity,2026-11-19);剥离规则
+  // (ownedDefaultKeys)同源,组关着时键落回 CM 默认(selectLine)。
+  const linkKeymap: Extension[] = host.plugin.settings.shortcuts.insertLink
+    ? [keymap.of([{ key: 'Mod-l', run: (v: EditorView) => insertLinkCommand(v) }])]
+    : [];
   // 嵌入编辑器同样补齐 Obsidian 导出的编辑器字段(与主编辑器
   // thirdPartyEditorExtensions 同源),防止任何共用扩展在 docChanged 时
   // 读缺席字段炸掉事务。
@@ -441,8 +459,12 @@ export function createEmbedExtensions(
     editorInfoField as unknown as Extension,
     editorLivePreviewField as unknown as Extension,
     editorEditorField as unknown as Extension,
+    // 全局 emoji 扩展(registerEditorExtension)会被 thirdPartyEditorExtensions
+    // 拉进来——自家 CM 有 collectLivePreview 管线出 emoji,这里让位防双份 replace。
+    mdEmojiBypass.of(true),
     ...tabKeymap,
     ...mergeKeymap,
+    ...linkKeymap,
     EditorView.lineWrapping,
     highlightSpecialChars(),
     history(),
@@ -519,10 +541,53 @@ export function createEditorExtensions(host: BlockRenderHost, block?: Block): Ex
       const text = d.getData('text/plain') ?? '';
       const internal = getInternalFromClipboardData(d);
       const effective = internal || text;
+      // URL 粘贴分派(og paste.cljs / SilverBullet pasteLinkExtension 对齐,
+      // 2026-11-19):单行 URL 且有非 URL 选区 → [选区](url);文本粘贴到
+      // URL 选区 → [文本](选区url)。internal 夹带优先于本分支;URL↔URL 与
+      // 空选区不接管(默认替换/字面插入);多光标不接管。
+      if (!internal && view.state.selection.ranges.length === 1) {
+        const sel = view.state.selection.main;
+        const selected = sel.empty ? '' : view.state.sliceDoc(sel.from, sel.to);
+        const link = linkPasteDecision(text, selected);
+        if (link) {
+          view.dispatch({
+            changes: { from: sel.from, to: sel.to, insert: link.insert },
+            selection: { anchor: sel.from + link.insert.length },
+            scrollIntoView: true,
+            userEvent: 'input.paste',
+          });
+          return true;
+        }
+      }
       if (!effective.includes('\n')) return false;
       if (internal) return handlePaste(view, host, event, internal);
       const html = d.getData('text/html') ?? '';
-      if (html && !shouldPasteMarkdownFromHTML(html, text)) return false;
+      // 表格转换(思源 cm6-table 的 pasteAsTable 对齐):剪贴板是 HTML 表格
+      // (Excel/网页)或多行 TSV 时转 markdown 管道表整块插入;光标在表格
+      // 块内不接管(tableMarkdownFromClipboard 内部守卫)。
+      const tableMd = tableMarkdownFromClipboard(html, text, {
+        focusedBlockText: host.focusedBlock?.text ?? '',
+      });
+      if (tableMd) return handlePaste(view, host, event, tableMd);
+      if (html && !shouldPasteMarkdownFromHTML(html, text)) {
+        // HTML → markdown(og html-parser/convert + SilverBullet turndown
+        // 对齐,2026-11-19):真 HTML(网页划选等)不再字面粘贴,转 md 后走
+        // 常规分派(多行拆块/单行块内插入)。代码块内不转换(SB FencedCode
+        // 守卫同款);转换失败/纯文本壳回落字面粘贴(旧行为)。
+        const fb = host.focusedBlock;
+        if (fb && blockTypeOf(fb) === 'code') return false;
+        const md = htmlToMarkdown(html);
+        if (!md) return false;
+        if (md.includes('\n')) return handlePaste(view, host, event, md);
+        const sel = view.state.selection.main;
+        view.dispatch({
+          changes: { from: sel.from, to: sel.to, insert: md },
+          selection: { anchor: sel.from + md.length },
+          scrollIntoView: true,
+          userEvent: 'input.paste',
+        });
+        return true;
+      }
       return handlePaste(view, host, event, text);
     },
   });
@@ -554,6 +619,8 @@ export function createEditorExtensions(host: BlockRenderHost, block?: Block): Ex
   const ext: Extension[] = [
     pasteHandler,
     formatBar,
+    // 同上:自家 emoji 走 collectLivePreview,全局扩展让位。
+    mdEmojiBypass.of(true),
     EditorView.lineWrapping,
     highlightSpecialChars(),
     history(),
@@ -567,6 +634,9 @@ export function createEditorExtensions(host: BlockRenderHost, block?: Block): Ex
     markdown({ base: markdownLanguage, addKeymap: false, extensions: [mathSyntax(), obsidianInlineSyntax()] }),
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     propLineHighlighter,
+    // 虚拟链接 mark 装饰(fakelink 并入):光标让位 + 代码/链接区间排斥,
+    // 右键可转真实链接(见 features/virtualLinks.ts)。
+    virtualLinkExtension(host, block),
     ...livePreview,
     mathLiveBlockPreview(),
     // Autocompletion sources ([[wiki]], #tag, ((ref)) — / and < use the
@@ -578,6 +648,9 @@ export function createEditorExtensions(host: BlockRenderHost, block?: Block): Ex
     // Self-drawn / and < command menus (swallows nav keys while open).
     commandMenuKeymap(),
     // Our block keymap must outrank everything else.
+    // 表格单元格导航键位（Tab/Enter/↑↓）：先于块键码命中——表格行接管，
+    // 表格外返回 false 穿透（同 Prec.high 先注册先命中，思源 cm6-markdown 同款）。
+    cm6TableKeymap(),
     Prec.high(blockKeymap),
     keymap.of(filteredDefaults),
     keymap.of(historyKeymap),
@@ -590,6 +663,13 @@ export function createEditorExtensions(host: BlockRenderHost, block?: Block): Ex
         host.onFocusedTextChange();
         // Open/refresh the self-drawn / and < menus on trigger chars.
         maybeOpenMenu(u.view, host);
+        // 第三方 EditorSuggest(Various Complements 等)随打随触发
+        // (见 features/thirdPartySuggests.ts——防抖 + 自家弹层门)。
+        maybeTriggerThirdPartySuggests(u.view, host);
+      } else if (u.selectionSet) {
+        // 方向键等移动键:native 每 keyup 都触发 editorSuggest,第三方按
+        // evt 自行决定弹/收;纯鼠标移动被键事件新鲜度门拦掉。
+        maybeTriggerThirdPartySuggests(u.view, host);
       }
       if (u.focusChanged) {
         // Native-editor parity: the live editor registers itself as

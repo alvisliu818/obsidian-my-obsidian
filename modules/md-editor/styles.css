@@ -5277,3 +5277,22 @@ body.lgp-table-editor-cursor * {
   display: flex;
   gap: 8px;
 }
+
+/* ============================================================
+   Virtual links (fakelink/Virtual Linker 并入, 2026-11-19)
+   (与根 styles.css 对应分段同步;根文件才是运行时生效文件)
+   ============================================================ */
+.lgp-virtual-link {
+  color: var(--link-color);
+  text-decoration: underline;
+  text-decoration-style: dashed;
+  text-decoration-color: var(--text-faint);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.lgp-virtual-link:hover {
+  text-decoration-style: solid;
+  background: var(--background-modifier-hover);
+}
+.lgp-virtual-link.lgp-vl-alias { text-decoration-style: dotted; }
+.lgp-virtual-link.lgp-vl-header { text-decoration-style: wavy; }

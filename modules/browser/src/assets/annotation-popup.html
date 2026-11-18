@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>标注</title>
+<style>
+  html{margin:0;height:100%;background:transparent;}
+  body{margin:0;height:100%;font-family:sans-serif;font-size:13px;color:#222;background:#fff;border-radius:10px;overflow:hidden;box-sizing:border-box;}
+  /* 标题栏原生拖拽（app-region）：OS 级移动窗口，resizable:false 保证拖动不缩放;
+     拖动期间 dragging 抑制自动收起，宿主 move 停止 400ms 发 dragend 恢复判定 */
+  #bar{display:flex;align-items:center;gap:6px;padding:6px 8px;background:#f5f5f5;border-bottom:1px solid #e0e0e0;cursor:move;user-select:none;border-radius:10px 10px 0 0;-webkit-app-region:drag;}
+  #bar .t{flex:1;font-weight:600;font-size:12px;color:#555;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+  #bar button{border:none;background:transparent;cursor:pointer;font-size:14px;padding:2px 6px;border-radius:4px;color:#555;-webkit-app-region:no-drag;}
+  #bar button:hover{background:#e0e0e0;}
+  #bar button.on{color:#1a73e8;background:#dbeafe;}
+  #body{padding:10px 12px;overflow:auto;height:calc(100% - 33px);box-sizing:border-box;}
+  .q{font-size:12px;color:#666;border-left:3px solid #f5c542;padding-left:8px;margin-bottom:6px;white-space:pre-wrap;}
+  .n{white-space:pre-wrap;margin-bottom:6px;}
+  .empty{color:#999;font-style:italic;}
+  .sws{display:flex;gap:5px;align-items:center;margin:6px 0;}
+  .sw{width:16px;height:16px;border-radius:50%;border:2px solid transparent;cursor:pointer;padding:0;}
+  .sw.on{border-color:#333;}
+  .sw-yellow{background:rgba(255,213,0,.9);} .sw-green{background:rgba(120,220,120,.9);}
+  .sw-blue{background:rgba(120,180,255,.9);} .sw-pink{background:rgba(255,150,200,.9);}
+  .sw-purple{background:rgba(190,140,255,.9);}
+  .tags{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0;}
+  .tag{font-size:11px;background:#eef;border-radius:3px;padding:1px 6px;cursor:pointer;color:#335;}
+  #taginput{font-size:12px;border:1px solid #ddd;border-radius:4px;padding:2px 6px;width:110px;}
+  /* 批注简单编辑：点批注文本进入编辑 */
+  .n.edt,.empty.edt{cursor:pointer;border-radius:4px;padding:2px 4px;margin-left:-4px;}
+  .n.edt:hover,.empty.edt:hover{background:#eef3ff;}
+  #ne{display:block;width:100%;box-sizing:border-box;min-height:110px;font:inherit;font-size:12px;line-height:1.5;color:#222;border:1px solid #ccc;border-radius:4px;padding:6px 8px;resize:vertical;background:#fff;}
+  #ne:focus{outline:none;border-color:#1a73e8;}
+  .eerr{color:#c33;font-size:11px;margin-top:4px;min-height:14px;}
+  .acts{display:flex;gap:6px;justify-content:flex-end;margin-top:10px;}
+  .acts button{border:1px solid #ddd;background:#f7f7f7;border-radius:4px;font-size:12px;padding:3px 10px;cursor:pointer;}
+  .acts .pri{background:#1a73e8;color:#fff;border:none;}
+  .lhead{display:flex;gap:6px;margin-bottom:8px;}
+  .lhead button{border:1px solid #ddd;background:#f7f7f7;border-radius:4px;font-size:12px;padding:3px 8px;cursor:pointer;}
+  .li{display:flex;gap:6px;align-items:flex-start;padding:6px 6px;border-radius:6px;cursor:pointer;border-bottom:1px solid #f0f0f0;}
+  .li:hover{background:#f5f8ff;}
+  .li .dot{flex:0 0 10px;width:10px;height:10px;border-radius:50%;margin-top:4px;}
+  .li .tx{flex:1;min-width:0;}
+  .li .q{font-size:12px;color:#333;margin:0;border:none;padding:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .li .n{font-size:11px;color:#888;margin:2px 0 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .li .tg{font-size:10px;color:#335;background:#eef;border-radius:3px;padding:0 4px;margin-left:4px;}
+  .dot-yellow{background:rgba(255,213,0,.9);} .dot-green{background:rgba(120,220,120,.9);}
+  .dot-blue{background:rgba(120,180,255,.9);} .dot-pink{background:rgba(255,150,200,.9);}
+  .dot-purple{background:rgba(190,140,255,.9);}
+  .lempty{color:#999;font-style:italic;padding:12px 0;}
+  #resize{position:fixed;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;z-index:9;}
+</style>
+</head>
+<body>
+<div id="bar">
+  <span class="t">标注</span>
+  <button id="pin" title="固定（置顶，点别处不消失）">📌</button>
+  <button id="close" title="关闭">×</button>
+</div>
+<div id="body"></div>
+<div id="resize" title="拖动缩放"></div>
+<script>
+(function () {
+  var data = {};
+  try { data = JSON.parse(decodeURIComponent(location.hash.slice(1) || "{}")); } catch (e) {}
+  if (!data.id && data.listKey) data.id = data.listKey;
+  var COLORS = ["yellow", "green", "blue", "pink", "purple"];
+  var color = data.color || "yellow";
+  var tags = (data.tags || []).slice();
+  var pinned = false;
+  var chan = null;
+  try { chan = new BroadcastChannel("sy-ann-float"); } catch (e) {}
+  // 悬浮 opened（hover）未固定时：鼠标离开高亮+窗体 → 自动收起;点击 opened 常驻
+  var autoHide = !!data.hover;
+  var hovered = false;
+  var hideT = null;
+  // 交互中（拖动标题栏/缩放/编辑批注）一律不自动收起，避免拖到一半弹窗消失
+  var dragging = false, resizing = false, editing = false;
+  function busy() { return dragging || resizing || editing; }
+  function cancelHide() { if (hideT) { clearTimeout(hideT); hideT = null; } }
+  function scheduleHide() {
+    cancelHide();
+    if (busy()) return;
+    hideT = setTimeout(function () {
+      hideT = null;
+      if (busy()) return;
+      // 触发时实测 :hover：弹窗显示在光标下时 mouseenter 可能不触发（hovered 滞后），
+      // 鼠标在弹窗上就绝不自动收起——续期等待，移出后再收
+      try { if (document.body.matches(":hover")) { scheduleHide(); return; } } catch (err) {}
+      if (autoHide && !pinned && !hovered && !dragging && !resizing) { if (chan) chan.postMessage({ type: "hide", id: data.id }); }
+    }, 800);
+  }
+  if (chan) chan.onmessage = function (ev) {
+    var m = ev.data || {};
+    if (m.id !== data.id) return;
+    if (m.type === "autohide") { autoHide = !!m.value; if (!autoHide) cancelHide(); }
+    else if (m.type === "markleave") { if (autoHide && !pinned && !hovered) scheduleHide(); }
+    else if (m.type === "dragend") {
+      dragging = false;
+      hovered = document.body.matches(":hover");
+      if (!hovered && autoHide && !pinned) scheduleHide();
+    }
+    else if (m.type === "noteSaved" && m.id === data.id) {
+      if (m.ok) { data.note = m.note || ""; editing = false; render(); }
+      else { var er = document.getElementById("neErr"); if (er) er.textContent = "保存失败，请重试"; }
+    }
+  };
+  document.body.addEventListener("mouseenter", function () { hovered = true; cancelHide(); });
+  document.body.addEventListener("mouseleave", function () { hovered = false; if (autoHide && !pinned) scheduleHide(); });
+  // mouseenter 在「弹窗显示在光标下」时可能不触发边界事件：pointermove 兜底同步 hovered
+  document.body.addEventListener("pointermove", function () { if (!hovered) { hovered = true; cancelHide(); } });
+  function esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+  function send() { if (chan) chan.postMessage({ type: "meta", id: data.id, color: color, tags: tags }); }
+  function renderList() {
+    var items = data.items || [];
+    document.querySelector("#bar .t").textContent = "本页标注 (" + items.length + ")";
+    var h = '<div class="lhead"><button id="cp">标注此页</button><button id="od">打开标注文档</button></div>';
+    if (!items.length) h += '<div class="lempty">本页暂无标注</div>';
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      var nt = String(it.note || "").replace(/\s+/g, " ").trim();
+      h += '<div class="li" data-id="' + esc(it.id) + '"><span class="dot dot-' + esc(it.color || "yellow") + '"></span><span class="tx">' +
+        '<div class="q">' + esc(it.quote || (it.kind === "rect" ? "(框选)" : "(页面级)")) + "</div>" +
+        (nt ? '<div class="n">' + esc(nt) + "</div>" : "") +
+        ((it.tags || []).length ? '<div>' + it.tags.map(function (t) { return '<span class="tg">' + esc(t) + "</span>"; }).join("") + "</div>" : "") +
+        "</span></div>";
+    }
+    document.getElementById("body").innerHTML = h;
+    var lis = document.querySelectorAll(".li");
+    for (var j = 0; j < lis.length; j++) lis[j].onclick = function () { if (chan) chan.postMessage({ type: "goto", id: this.getAttribute("data-id"), url: data.url }); };
+    document.getElementById("cp").onclick = function () { if (chan) chan.postMessage({ type: "createPage", url: data.url }); };
+    document.getElementById("od").onclick = function () { if (chan) chan.postMessage({ type: "openDoc", url: data.url }); };
+  }
+  function render() {
+    if (data.mode === "list") { renderList(); return; }
+    var h = "";
+    if (data.kind === "rect" && data.shot) {
+      var shotSrc = data.shotUrl || (location.origin + esc(data.shot));
+      h += '<div class="q"><img src="' + shotSrc + '" style="max-width:100%;display:block;border-radius:4px;"></div>';
+    } else if (data.quote) h += '<div class="q">' + esc(data.quote) + "</div>";
+    // 批注文本可点击进入简单编辑（写回思源批注块）
+    h += data.note
+      ? '<div class="n edt" id="noteTxt" title="点击编辑批注">' + esc(data.note) + "</div>"
+      : '<div class="empty edt" id="noteTxt" title="点击添加批注">（无批注）</div>';
+    h += '<div class="sws">';
+    for (var i = 0; i < COLORS.length; i++) h += '<button class="sw sw-' + COLORS[i] + (COLORS[i] === color ? " on" : "") + '" data-c="' + COLORS[i] + '"></button>';
+    h += "</div>";
+    h += '<div class="tags">';
+    for (var j = 0; j < tags.length; j++) h += '<span class="tag" data-t="' + esc(tags[j]) + '" title="点击移除">' + esc(tags[j]) + " ×</span>";
+    h += '<input id="taginput" placeholder="+标签(回车)" />';
+    h += "</div>";
+    var extraActs = "";
+    if (data.kind === "rect") extraActs += '<button id="recap">重新框选</button>';
+    else extraActs += '<button id="reasel">重新选中文字</button>';
+    h += '<div class="acts">' + extraActs + '<button id="edit" class="pri">在编辑器中打开</button></div>';
+    document.getElementById("body").innerHTML = h;
+    var sws = document.querySelectorAll(".sw");
+    for (var k = 0; k < sws.length; k++) sws[k].onclick = function () { color = this.getAttribute("data-c"); send(); render(); };
+    var tgs = document.querySelectorAll(".tag");
+    for (var m = 0; m < tgs.length; m++) tgs[m].onclick = function () { var t = this.getAttribute("data-t"); tags = tags.filter(function (x) { return x !== t; }); send(); render(); };
+    var ti = document.getElementById("taginput");
+    ti.onkeydown = function (e) { if (e.key === "Enter") { var v = String(ti.value || "").trim(); if (v && tags.indexOf(v) < 0) { tags.push(v); send(); render(); } } };
+    document.getElementById("edit").onclick = function () { if (chan) chan.postMessage({ type: "edit", id: data.id }); };
+    var rc = document.getElementById("recap");
+    if (rc) rc.onclick = function () { if (chan) chan.postMessage({ type: "recapture", id: data.id }); window.close(); };
+    var rs = document.getElementById("reasel");
+    if (rs) rs.onclick = function () { if (chan) chan.postMessage({ type: "reanchorSel", id: data.id }); window.close(); };
+    document.getElementById("noteTxt").onclick = openEditor;
+  }
+  // 批注简单编辑：textarea 就地编辑 → saveNote 经宿主写回思源批注块；
+  // 编辑期间 editing=true 抑制自动收起，防止草稿随弹窗消失
+  function openEditor() {
+    editing = true;
+    cancelHide();
+    var h = "";
+    if (data.quote) h += '<div class="q">' + esc(data.quote) + "</div>";
+    h += '<textarea id="ne" placeholder="批注内容，Ctrl+Enter 保存，Esc 取消"></textarea>';
+    h += '<div class="eerr" id="neErr"></div>';
+    h += '<div class="acts"><button id="ncancel">取消</button><button id="nsave" class="pri">保存批注</button></div>';
+    document.getElementById("body").innerHTML = h;
+    var ta = document.getElementById("ne");
+    ta.value = data.note || "";
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    ta.onkeydown = function (e) {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveNote(); }
+      else if (e.key === "Escape") { e.preventDefault(); editing = false; render(); }
+    };
+    document.getElementById("nsave").onclick = saveNote;
+    document.getElementById("ncancel").onclick = function () { editing = false; render(); };
+  }
+  function saveNote() {
+    var ta = document.getElementById("ne");
+    var err = document.getElementById("neErr");
+    if (err) err.textContent = "";
+    if (chan) chan.postMessage({ type: "saveNote", id: data.id, note: String(ta.value || "") });
+  }
+  render();
+  // 窗口操作（固定/关闭/缩放）经 BroadcastChannel 请求宿主执行（浮动窗 webContents
+  // 未启用 @electron/remote，不能直接调 remote）
+  document.getElementById("pin").onclick = function () {
+    pinned = !pinned;
+    this.classList.toggle("on", pinned);
+    if (pinned) cancelHide();
+    if (chan) chan.postMessage({ type: "pin", id: data.id, value: pinned });
+  };
+  document.getElementById("close").onclick = function () { if (chan) chan.postMessage({ type: "close", id: data.id }); };
+  // 标题栏原生 app-region 拖拽移动窗口;这里只置 dragging 抑制自动收起。
+  // 宿主监听 window move，停止 400ms 后发 dragend → 恢复收起判定（按指针是否仍在窗内）
+  document.getElementById("bar").addEventListener("pointerdown", function (e) {
+    if (e.button !== 0 || (e.target.closest && e.target.closest("button"))) return;
+    dragging = true;
+    cancelHide();
+  });
+  // 右下角拖拽缩放（frameless 无原生边框，自定义手柄）；缩放中不自动收起
+  document.getElementById("resize").addEventListener("pointerdown", function (e) {
+    e.preventDefault();
+    resizing = true;
+    cancelHide();
+    var w0 = window.outerWidth, h0 = window.outerHeight, sx = e.screenX, sy = e.screenY;
+    var pend = null, raf = 0, rafT = 0;
+    // 同拖动：rAF 合帧 + 50ms 兑底直发（防 rAF 饿死）
+    function flush() {
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      if (rafT) { clearTimeout(rafT); rafT = 0; }
+      if (pend && chan) chan.postMessage({ type: "resize", id: data.id, w: pend[0], h: pend[1] });
+    }
+    function mv(ev) {
+      pend = [Math.max(260, w0 + ev.screenX - sx), Math.max(160, h0 + ev.screenY - sy)];
+      if (!raf && !rafT) { raf = requestAnimationFrame(flush); rafT = setTimeout(flush, 50); }
+    }
+    function up() {
+      flush();
+      resizing = false;
+      this.removeEventListener("pointermove", mv);
+      this.removeEventListener("pointerup", up);
+      this.removeEventListener("pointercancel", up);
+      hovered = document.body.matches(":hover");
+      if (!hovered && autoHide && !pinned) scheduleHide();
+    }
+    try { this.setPointerCapture(e.pointerId); } catch (err) {}
+    this.addEventListener("pointermove", mv);
+    this.addEventListener("pointerup", up);
+    this.addEventListener("pointercancel", up);
+  });
+})();
+</script>
+</body>
+</html>
