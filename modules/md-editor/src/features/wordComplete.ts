@@ -41,12 +41,14 @@ const EMOJI_PREFIX_RE = /:([a-zA-Z0-9_+-]+)$/;
 
 const LATIN_WORD_RE = /[A-Za-z][A-Za-z0-9_-]+/g;
 
-/** 当前文件词频统计(块树文本;>300k 字符的页放弃,大文档不吃满)。 */
+/** 当前文件词频统计(块树文本;>300k 字符的块跳过,整页预算 1MB——大文档不吃满)。 */
 function collectCurrentFileWords(host: BlockRenderHost, freq: Map<string, number>): void {
+  let budget = 1_000_000;
   const walk = (b: Block, depth: number): void => {
-    if (depth > 50) return;
+    if (depth > 50 || budget <= 0) return;
     const text = b.text ?? '';
     if (text.length > 300_000) return;
+    budget -= text.length;
     LATIN_WORD_RE.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = LATIN_WORD_RE.exec(text))) {
@@ -55,7 +57,10 @@ function collectCurrentFileWords(host: BlockRenderHost, freq: Map<string, number
     }
     for (const c of b.children ?? []) walk(c, depth + 1);
   };
-  for (const root of host.doc?.blocks ?? []) walk(root, 0);
+  for (const root of host.doc?.blocks ?? []) {
+    if (budget <= 0) return;
+    walk(root, 0);
+  }
 }
 
 /** 词典缓存:path → {mtime, words, details}。 */
