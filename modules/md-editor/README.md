@@ -19,6 +19,8 @@ A [Logseq](https://logseq.com)-style **block outliner editor** for [Obsidian](ht
 | Block ids & refs | `id::` properties, `((id))` chips, `{{embed ((id))}}` live embeds, in-place embed editing, block graph |
 | Page properties | Top-of-file `key:: value` rendered as a read-only page-props card (Logseq md parity) |
 | Tags | `#tag` autocomplete + vault-wide **Tags panel** with filterable block lists (Logseq md parity) |
+| Virtual links | Titles/aliases/headers of other notes render as clickable links dynamically — never written to the file (fakelink parity); right-click converts to a real `\[\[link\]\]` |
+| Word completion | As-you-type completions from page/vault words, custom dictionary and `:` emoji (Various Complements parity) |
 | Journals | Today's journal + **previous/next daily note navigation** anchored on the open file (Logseq md parity) |
 | Collapse all | `Collapse all` / `Expand all` / toggle (Ctrl+\) — `collapsed:: true` round-trips to disk (Logseq md parity) |
 | Backlinks | Linked mentions **and Unlinked mentions** (title text without `[[links]]`) (Logseq md parity) |

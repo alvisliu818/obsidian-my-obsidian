@@ -7,6 +7,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
 
 ### Added
 
+- **虚拟链接（fakelink/Virtual Linker 并入）。** 正文里出现其他笔记的标题、别名（frontmatter `aliases`）或标题头时，动态渲染成可点击的链接——不写回 Markdown 文件。词库来自 metadataCache（文件改名/元数据变更自动重建），扫描是逐字 Trie 状态机：拉丁词按词界整词命中（前缀/后缀/任意片段三档开关），CJK 文字恒为子串匹配且最长优先（「欧拉方程」赢过「欧拉」）。点击打开目标（标题头条目跳到对应标题锚），右键菜单可**转换为真实链接**（编辑态精确区间改写）或排除该词；frontmatter `linker-exclude: true` 的文件不参与。设置 → 编辑器行为：「虚拟链接」总开关 + 别名/标题头收录 + 排除词/排除目录 + 部分匹配三档。索引挂 metadataCache 的 `resolved`/`changed` 事件，防抖 1.2s 重建。
+- **VC 式词补全（Various Complements 并入）。** 块编辑器里打字随补：前缀 ≥2 字符触发，候选来自当前页面词频、全库标题/别名（与虚拟链接同一份索引）、可选的自定义词典文件（每行一词，可 `词<TAB>说明`，文件改动自动重读），以及 `:` 触发的 emoji 补全（gemoji 全集）。行首 `-#:/^@` 字符与行内代码/链接内不触发（VC firstCharactersDisableSuggestions 同款守卫）。
+- **第三方补全管线接通。** 此前块编辑器只在 `/` `<` 触发符时走 `editorSuggest.trigger`——Various Complements 等基于 EditorSuggest 的补全插件在块编辑器里从未被触发过。现在打字/移动光标会防抖（120ms）驱动整条 editorSuggest 管线，第三方插件的补全按它们自己的设置原生生效（触发条件/弹层行为全由插件自管）。设置 → 编辑器行为：「第三方补全」开关（默认开）。
+- **粘贴语义对齐 og/SilverBullet。** ①粘贴 URL 且有非空选区 → 选区包成 `[选区](url)`；反向粘贴文本到选中的 URL 上 → `[文本](选中的url)`（og paste.cljs + SilverBullet pasteLinkExtension 双参考）。②**Mod+L 插入链接**（og `:editor/insert-link` parity）：空选区插 `[]()` 光标落 label 位，有选区包成 `[选区]()` 光标落 URL 位——快捷键组「插入链接」可在设置里关。③粘贴富 HTML（网页划选等）不再落字面文本，经 turndown 转成 markdown（表格转管道表、列表标记规范化、代码围栏内不转换）。
+- **索引守护进程的体积与内存优化（实测驱动）。** 修复跨文件重复 `id::` 撞 `blocks.bkey` 主键导致整个文件批次永久失败的真 bug（内核日志 2863 次 UNIQUE 冲突——id 并入 key，`((id))` 导航走 block_id 列不受影响）；SQLite 语句缓存 + `mmap_size` 256MB（turbo CPU 与查询路径）；stats 操作修复（旧实现永远返回 null）；**「碎片回收」按钮**（设置 → 索引守护进程 → VACUUM，主库实测回收 277MB）；Undo 栈按 24MB 字节预算收敛（超大文档最坏 200MB/视图 → ~24MB）。
+- **库外内容索引（FTS）可关闭**（**设置 → 文件内容搜索 → 库外文件内容索引（FTS）**，默认开）。挂载的库外代码文件在 trigram 索引下放大 ~9×（实测 32MB 文本占 ~300MB 盘上空间）。关掉 = 立即清空该索引并改用按需读盘扫描（~30MB 文本单次搜索 ≈ 百毫秒级），内核热切换即时生效。
+
 - **库外 markdown 文件也有默认编辑器了，默认 Obsidian 原生。** 挂载面板（及一切走 `openExternalEntry` 的入口，含搜索结果、最近打开）点击库外 `.md` 时不再一律进块编辑器壳，而是按新设置「库外 Markdown 默认编辑器」（设置 → 外部挂载，默认 **Obsidian 原生编辑器**，即 1.14.4+ 的 TExternalFile 原生路线）路由；本机不支持库外原生打开时自动落回块编辑器，原生打开失败（文件刚被移走）也一样。单个文件可以用自己的属性覆盖默认值——frontmatter `editor: logseq|native` 或文件顶部 `editor:: logseq|native`（`editorChoiceFromExternalText`，与库内页面的 `editor` 属性同一套语义；库外文件没有 metadataCache 和页面注册表，文件自身是唯一来源）。右键菜单的主项标题跟着实际路由走（默认原生时如实显示「用原生编辑器打开」），块编辑器保留显式入口（`forceBlockEditor`）。已链接进库的 md 不受影响：它们已是库内文件，走原有接管规则。
 
 ### Fixed
