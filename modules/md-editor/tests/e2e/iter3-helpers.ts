@@ -53,8 +53,16 @@ export interface Ctx {
 }
 
 export async function launchObsidian(ctx: Ctx, fixtures: Record<string, string>): Promise<void> {
-  killTestVaultObsidian();
-  await sleep(2000);
+  // E2E_ATTACH=1:连接到外部代生(Invoke-CimMethod)的实例而不自行 spawn——
+  // AI 会话的沙箱会回收 spawn 的 GUI 子进程(beforeAll 60s 超时的根因)。
+  // 外部代生必须用同款参数:TEST_PROFILE + CDP_PORT + TEST_VAULT_URI;
+  // 钉住的 data.json 在实例已运行时才写入 → 连接后 reload 重新读取。
+  const attach = process.env.E2E_ATTACH === '1';
+  process.stderr.write('[launch] attach=' + attach);
+  if (!attach) {
+    killTestVaultObsidian();
+    await sleep(2000);
+  }
   for (const [rel, content] of Object.entries(fixtures)) {
     writeFileSync(join(VAULT, rel), content);
   }
@@ -104,14 +112,17 @@ export async function launchObsidian(ctx: Ctx, fixtures: Record<string, string>)
     join(TEST_PROFILE, 'obsidian.json'),
     JSON.stringify({ vaults: { e2e0000000000000: { path: VAULT, ts: Date.now(), open: true } } }),
   );
-  spawn(
-    process.env.OBSIDIAN_PATH!,
-    ['--user-data-dir=' + TEST_PROFILE, '--remote-debugging-port=' + CDP_PORT, TEST_VAULT_URI],
-    {
-      detached: true,
-      stdio: 'ignore',
-    },
-  ).unref();
+  if (!attach) {
+    spawn(
+      process.env.OBSIDIAN_PATH!,
+      ['--user-data-dir=' + TEST_PROFILE, '--remote-debugging-port=' + CDP_PORT, TEST_VAULT_URI],
+      {
+        detached: true,
+        stdio: 'ignore',
+      },
+    ).unref();
+  }
+  process.stderr.write("[launch] cdp-wait start");
   const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
     try {
@@ -123,16 +134,32 @@ export async function launchObsidian(ctx: Ctx, fixtures: Record<string, string>)
     await sleep(500);
   }
   await sleep(3000);
+  process.stderr.write("[launch] connecting");
   ctx.browser = await chromium.connectOverCDP(CDP);
+  process.stderr.write("[launch] connected");
   let page: Page | null = null;
   for (const c of ctx.browser.contexts()) {
     for (const p of c.pages()) {
       if (p.url().startsWith('app://') || p.url().includes('obsidian')) page = p;
     }
   }
+  process.stderr.write('[launch] page found');
   if (!page) throw new Error('Obsidian page not found');
   ctx.page = page;
   await page.waitForLoadState('domcontentloaded');
+  if (attach) {
+    // 实例已运行:data.json 钉不进已加载的设置——活体钉(探针同款手法),
+    // 不 reload(reload 打进未就绪的 workspace 会炸 createNewLeaf)。
+    await page.evaluate((pinned) => {
+      const host = window.app.plugins.plugins['obsidian-my-obsidian'];
+      const md = host?.moduleInstance?.('md-editor');
+      if (md) {
+        md.settings = { ...md.settings, ...pinned };
+        void md.saveSettings?.();
+      }
+    }, pinned);
+    await sleep(600);
+  }
   await page.bringToFront();
   // Guard: the harness must act on the TEST vault only — the user's main
   // vault may be running in another instance right now.
@@ -148,6 +175,15 @@ export async function launchObsidian(ctx: Ctx, fixtures: Record<string, string>)
     await sleep(500);
   }
   if (!onTestVault) throw new Error('Connected Obsidian is NOT the test vault — aborting');
+  // 等布局就绪:createNewLeaf 需要 root tab group——启动后布局异步恢复,
+  // 19ms 就 getLeaf 会炸 'No tab group found'(实测)。
+  for (let w = 0; w < 40; w++) {
+    const ready = await page
+      .evaluate(() => (window as unknown as { app?: { workspace?: { layoutReady?: boolean } } }).app?.workspace?.layoutReady === true)
+      .catch(() => false);
+    if (ready) break;
+    await sleep(500);
+  }
   restoreTestWindow();
   // Trust dialog (click trust — Escape means safe mode = plugin disabled).
   for (let k = 0; k < 10; k++) {
