@@ -8,7 +8,10 @@
  */
 import { Menu, Notice, Plugin, TFile, type WorkspaceLeaf } from 'obsidian';
 import { LifeStore } from './store';
+import type { VaultLogRecord } from './types';
 import { VIEW_LIFE_CALENDAR, LifeCalendarView } from './views/calendar';
+import { VIEW_LIFE_HOME, LifeHomeView } from './views/home';
+import { dailyDue, periodDue, scanVaultSig, diffSigTable, changeSummary, dayKeyOf, parseHHmm } from './vaultLog';
 import { VIEW_LIFE_CLOCK, LifeClockView } from './views/clock';
 import { VIEW_LIFE_DDAY, LifeDdayView } from './views/dday';
 import { VIEW_LIFE_HABITS, LifeHabitsView } from './views/habits';
@@ -17,10 +20,11 @@ import { VIEW_LIFE_PLANS, LifePlansView } from './views/plans';
 import { VIEW_LIFE_TASKS, LifeTasksView } from './views/tasks';
 import { VIEW_LIFE_TIMER, LifeTimerView } from './views/timer';
 import { VIEW_LIFE_TODO, LifeTodoView } from './views/todo';
-import { todayKey } from './util';
+import { todayKey, genId } from './util';
 
 /** 面板注册表：viewType / 命令名 / 图标 / 中文显示（命令+ribbon+菜单共用）。 */
 export const LIFE_PANELS = [
+	{ type: VIEW_LIFE_HOME, name: 'HOME', icon: 'home' },
 	{ type: VIEW_LIFE_CLOCK, name: '时钟', icon: 'clock' },
 	{ type: VIEW_LIFE_TIMER, name: '计时', icon: 'timer' },
 	{ type: VIEW_LIFE_DDAY, name: '倒数日', icon: 'calendar-clock' },
@@ -35,6 +39,7 @@ export const LIFE_PANELS = [
 export default class LifePlugin extends Plugin {
 	store!: LifeStore;
 	private timerSentinel: number | null = null;
+	private vaultLogTimer: number | null = null;
 
 	async onload(): Promise<void> {
 		this.store = new LifeStore(this, await this.loadData());
@@ -65,7 +70,14 @@ export default class LifePlugin extends Plugin {
 			if (this.timerSentinel !== null) window.clearInterval(this.timerSentinel);
 		});
 
-		// 今日番茄计数跨天清零：挂一个低频检查（每次 file-open 顺手看）
+		// 库记录调度(2026-11-19 阶段 C):30s 一查——每日时间点/固定周期到期即
+	// 记录+提醒(纯逻辑判定在 vaultLog.ts)。CIM/沙箱无关,面板关着也跑。
+	this.vaultLogTimer = window.setInterval(() => void this.vaultLogTick(), 30000);
+	this.register(() => {
+		if (this.vaultLogTimer !== null) window.clearInterval(this.vaultLogTimer);
+	});
+
+	// 今日番茄计数跨天清零：挂一个低频检查（每次 file-open 顺手看）
 		this.registerEvent(
 			this.app.workspace.on('file-open', (file: TFile | null) => {
 				void file;
@@ -91,8 +103,11 @@ export default class LifePlugin extends Plugin {
 		| LifeHabitsView
 		| LifeCalendarView
 		| LifePlansView
-		| LifeLedgerView {
+		| LifeLedgerView
+		| LifeHomeView {
 		switch (type) {
+			case VIEW_LIFE_HOME:
+				return new LifeHomeView(leaf, this);
 			case VIEW_LIFE_CLOCK:
 				return new LifeClockView(leaf, this);
 			case VIEW_LIFE_TIMER:
@@ -163,4 +178,103 @@ export default class LifePlugin extends Plugin {
 	async onunload(): Promise<void> {
 		await this.store.flush();
 	}
+
+	/**
+	 * 库记录调度 tick(30s):每日时间点到期 → 每日记录;固定周期到期 →
+	 * 周期记录。判定纯函数在 vaultLog.ts;记录本体在 recordVaultChanges。
+	 */
+	private async vaultLogTick(): Promise<void> {
+		const vl = this.store.settings.vaultLog;
+		if (!vl.enabled) return;
+		const now = new Date();
+		if (dailyDue(now, vl.dailyTime, this.store.settings.vaultLogLastDailyDate)) {
+			await this.recordVaultChanges('daily');
+			return; // 同轮不再查周期(每日记录已写 lastDailyDate)
+		}
+		if (periodDue(now, vl.periodMin, this.store.settings.vaultLogLastPeriodAt)) {
+			await this.recordVaultChanges('period');
+		}
+		// 每日提醒时间到期:只提醒当日概要(任务/代办/习惯),不触发记录
+		if (vl.remindTime) {
+			const target = parseHHmm(vl.remindTime);
+			const today = dayKeyOf(now);
+			if (target !== null && this.store.settings.vaultLogLastRemindDate !== today) {
+				const mins = now.getHours() * 60 + now.getMinutes();
+				if (mins >= target) {
+					this.store.settings.vaultLogLastRemindDate = today;
+					await this.store.flush();
+					const due = this.store.settings.tasks.filter((t) => t.due === today && !t.done).length;
+					const todo = this.store.settings.todos.filter((t) => !t.done).length;
+					const habitsLeft = this.store.settings.habits.filter((h) => !h.logs[today]).length;
+					new Notice(
+						'📅 每日提醒:今日到期任务 ' + due + ' · 待办 ' + todo + ' · 习惯待打卡 ' + habitsLeft,
+					);
+				}
+			}
+		}
+	}
+
+	/**
+	 * 记录库变化(2026-11-19 阶段 C):全库文件签名快照 vs 上一次快照 →
+	 * 新增/修改/删除;快照本体存独立文件(data.json 不吃万级条目)。
+	 */
+	async recordVaultChanges(trigger: 'period' | 'daily' | 'manual' = 'manual'): Promise<VaultLogRecord> {
+		const cur = scanVaultSig(this.app.vault);
+		const prev = await this.loadVaultLogSnapshot();
+		const diff = diffSigTable(prev, cur);
+		await this.saveVaultLogSnapshot(cur);
+		const now = new Date();
+		const rec: VaultLogRecord = {
+			id: genId(),
+			at: now.toISOString(),
+			date: dayKeyOf(now),
+			trigger,
+			added: diff.added,
+			modified: diff.modified,
+			deleted: diff.deleted,
+			totalFiles: Object.keys(cur).length,
+		};
+		const cap = (list: string[]): string[] => (list.length > 500 ? list.slice(0, 500) : list);
+		rec.added = cap(rec.added);
+		rec.modified = cap(rec.modified);
+		rec.deleted = cap(rec.deleted);
+		const s = this.store.settings;
+		s.vaultLogRecords = [rec, ...s.vaultLogRecords].slice(0, 200);
+		if (trigger === 'daily') s.vaultLogLastDailyDate = dayKeyOf(now);
+		if (trigger === 'period') s.vaultLogLastPeriodAt = now.getTime();
+		await this.store.flush();
+		this.refreshHomeViews();
+		if (s.vaultLog.remind) {
+			new Notice('📋 库记录(' + (trigger === 'manual' ? '手动' : trigger === 'daily' ? '每日' : '周期') + '):' + changeSummary(diff));
+		}
+		return rec;
+	}
+
+	/** 快照存取(独立文件,manifest.dir 下——data.json 不吃万级签名表)。 */
+	private snapshotPath(): string {
+		return (this.manifest.dir ?? '') + '/vault-log-snapshot.json';
+	}
+
+	private async loadVaultLogSnapshot(): Promise<Record<string, string>> {
+		try {
+			const raw = await this.app.vault.adapter.read(this.snapshotPath());
+			return JSON.parse(raw) as Record<string, string>;
+		} catch {
+			return {};
+		}
+	}
+
+	private async saveVaultLogSnapshot(table: Record<string, string>): Promise<void> {
+		await this.app.vault.adapter.write(this.snapshotPath(), JSON.stringify(table));
+	}
+
+	/** HOME 视图刷新(开着就重绘;记录/设置变更后调用)。 */
+	refreshHomeViews(): void {
+		window.app.workspace.iterateAllLeaves((l) => {
+			if (l.view?.getViewType?.() === VIEW_LIFE_HOME) {
+				(l.view as LifeHomeView).refresh();
+			}
+		});
+	}
+
 }

@@ -111,7 +111,55 @@ export interface LifeSettings {
 	ledger: LedgerEntry[];
 	ledgerExpenseCategories: string[];
 	ledgerIncomeCategories: string[];
+	/** 库记录(HOME 页消费):记录序列(新在前,上限 200) */
+	vaultLogRecords: VaultLogRecord[];
+	/** 库记录设置 */
+	vaultLog: VaultLogSettings;
+	/** 上次每日自动记录的归属日 yyyy-mm-dd(防同日重复) */
+	vaultLogLastDailyDate: string;
+	/** 上次周期记录时刻 epoch ms */
+	vaultLogLastPeriodAt: number;
+	/** 上次每日提醒的归属日 yyyy-mm-dd */
+	vaultLogLastRemindDate: string;
 }
+
+/** 库记录:相对上一次记录的文件变化(2026-11-19 阶段 C)。 */
+export interface VaultLogRecord {
+	id: string;
+	/** 记录时刻 ISO */
+	at: string;
+	/** 归属日 yyyy-mm-dd(HOME 日视图按此聚合) */
+	date: string;
+	/** 触发方式:定时周期 / 每日时间点 / 手动打点 */
+	trigger: 'period' | 'daily' | 'manual';
+	/** 相对上一次记录:新增/修改/删除的库内文件路径(已删除的只有路径) */
+	added: string[];
+	modified: string[];
+	deleted: string[];
+	/** 记录时点的库内文件总数 */
+	totalFiles: number;
+}
+
+export interface VaultLogSettings {
+	/** 自动记录总开关(关=只允许手动打点) */
+	enabled: boolean;
+	/** 每日固定记录时间 HH:mm(''=关) */
+	dailyTime: string;
+	/** 固定周期记录间隔(分钟,0=关) */
+	periodMin: number;
+	/** 记录完成后提醒(Notice 摘要) */
+	remind: boolean;
+	/** 每日提醒时间 HH:mm(''=关;只提醒当日待办/任务概要,不触发记录) */
+	remindTime: string;
+}
+
+export const DEFAULT_VAULT_LOG_SETTINGS: VaultLogSettings = {
+	enabled: true,
+	dailyTime: '21:00',
+	periodMin: 0,
+	remind: true,
+	remindTime: '',
+};
 
 export const DEFAULT_LIFE_SETTINGS: LifeSettings = {
 	timerPomodoroWorkMin: 25,
@@ -126,4 +174,9 @@ export const DEFAULT_LIFE_SETTINGS: LifeSettings = {
 	ledger: [],
 	ledgerExpenseCategories: ['餐饮', '交通', '购物', '日用', '娱乐', '医疗', '居住', '其他'],
 	ledgerIncomeCategories: ['工资', '奖金', '理财', '红包', '其他'],
+	vaultLogRecords: [],
+	vaultLog: DEFAULT_VAULT_LOG_SETTINGS,
+	vaultLogLastDailyDate: '',
+	vaultLogLastPeriodAt: 0,
+	vaultLogLastRemindDate: '',
 };

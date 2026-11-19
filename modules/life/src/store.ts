@@ -6,7 +6,7 @@
  * 「变更即持久化（去抖 400ms）+ 关闭时冲刷」。
  */
 import type { LifeSettings } from './types';
-import { DEFAULT_LIFE_SETTINGS } from './types';
+import { DEFAULT_LIFE_SETTINGS, DEFAULT_VAULT_LOG_SETTINGS } from './types';
 
 export interface LifeStoreHost {
 	loadData(): Promise<unknown>;
@@ -34,6 +34,14 @@ export function lifeSettingsFrom(raw: unknown): LifeSettings {
 		ledgerIncomeCategories: Array.isArray(o.ledgerIncomeCategories) && o.ledgerIncomeCategories.length
 			? o.ledgerIncomeCategories
 			: DEFAULT_LIFE_SETTINGS.ledgerIncomeCategories,
+		vaultLogRecords: Array.isArray(o.vaultLogRecords) ? o.vaultLogRecords.slice(0, 200) : [],
+		vaultLog: {
+			...DEFAULT_VAULT_LOG_SETTINGS,
+			...(o.vaultLog ?? {}),
+		},
+		vaultLogLastDailyDate: typeof o.vaultLogLastDailyDate === 'string' ? o.vaultLogLastDailyDate : '',
+		vaultLogLastPeriodAt: typeof o.vaultLogLastPeriodAt === 'number' ? o.vaultLogLastPeriodAt : 0,
+		vaultLogLastRemindDate: typeof o.vaultLogLastRemindDate === 'string' ? o.vaultLogLastRemindDate : '',
 	};
 }
 
