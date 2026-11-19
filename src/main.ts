@@ -196,6 +196,7 @@ import { registerFreeExtensions } from "./extensionRegistry";
 // 原生 markdown 编辑器（实时预览/源码模式）+ 阅读模式的代码块「▶ 运行」。
 // 执行层与库内代码文件共用 exec/runner（真子进程 + 临时文件，stdin 可用）。
 import { registerNativeCodeBlockRun } from "../modules/code-editor/src/exec/nativeCodeBlockRun";
+import { setupTitlebarWindowMenu } from "./windowFrame";
 import { langFromExt } from "../modules/code-editor/src/exec/runner";
 // 原生 Markdown 编辑器的 @ 检索：文件名模糊匹配 + omnisearch 全文兜底，
 // 回车插入 obsidian://open 链接（见 atLinkSuggest.ts 文件头）。
@@ -989,6 +990,8 @@ export default class MyObsidianPlugin extends Plugin {
 		// 库内代码块运行（原生编辑器 + 阅读模式）：执行层要 spawn 子进程，桌面端专属
 		if (Platform.isDesktopApp) registerNativeCodeBlockRun(this);
 		registerAtLinkSuggest(this);
+		// 标题栏空白区右键 → Obsidian 风格窗口菜单(替换 Chromium 原生系统菜单)
+		setupTitlebarWindowMenu(this);
 	}
 
 	// ------------------------------------------------------------------
