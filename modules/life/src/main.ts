@@ -11,6 +11,7 @@ import { LifeStore } from './store';
 import type { VaultLogRecord } from './types';
 import { VIEW_LIFE_CALENDAR, LifeCalendarView } from './views/calendar';
 import { VIEW_LIFE_HOME, LifeHomeView } from './views/home';
+import { VIEW_LIFE_VAULTLOG, LifeVaultLogView } from './views/vaultlog';
 import { dailyDue, periodDue, scanVaultSig, diffSigTable, changeSummary, dayKeyOf, parseHHmm } from './vaultLog';
 import { VIEW_LIFE_CLOCK, LifeClockView } from './views/clock';
 import { VIEW_LIFE_DDAY, LifeDdayView } from './views/dday';
@@ -25,6 +26,7 @@ import { todayKey, genId } from './util';
 /** 面板注册表：viewType / 命令名 / 图标 / 中文显示（命令+ribbon+菜单共用）。 */
 export const LIFE_PANELS = [
 	{ type: VIEW_LIFE_HOME, name: 'HOME', icon: 'home' },
+	{ type: VIEW_LIFE_VAULTLOG, name: '库记录', icon: 'archive' },
 	{ type: VIEW_LIFE_CLOCK, name: '时钟', icon: 'clock' },
 	{ type: VIEW_LIFE_TIMER, name: '计时', icon: 'timer' },
 	{ type: VIEW_LIFE_DDAY, name: '倒数日', icon: 'calendar-clock' },
@@ -104,10 +106,13 @@ export default class LifePlugin extends Plugin {
 		| LifeCalendarView
 		| LifePlansView
 		| LifeLedgerView
-		| LifeHomeView {
+		| LifeHomeView
+		| LifeVaultLogView {
 		switch (type) {
 			case VIEW_LIFE_HOME:
 				return new LifeHomeView(leaf, this);
+			case VIEW_LIFE_VAULTLOG:
+				return new LifeVaultLogView(leaf, this);
 			case VIEW_LIFE_CLOCK:
 				return new LifeClockView(leaf, this);
 			case VIEW_LIFE_TIMER:
@@ -271,9 +276,9 @@ export default class LifePlugin extends Plugin {
 	/** HOME 视图刷新(开着就重绘;记录/设置变更后调用)。 */
 	refreshHomeViews(): void {
 		window.app.workspace.iterateAllLeaves((l) => {
-			if (l.view?.getViewType?.() === VIEW_LIFE_HOME) {
-				(l.view as LifeHomeView).refresh();
-			}
+			const t = l.view?.getViewType?.();
+			if (t === VIEW_LIFE_HOME) (l.view as LifeHomeView).refresh();
+			if (t === VIEW_LIFE_VAULTLOG) (l.view as LifeVaultLogView).refresh();
 		});
 	}
 
