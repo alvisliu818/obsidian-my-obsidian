@@ -162,12 +162,15 @@ export function wordCompletionSource(host: BlockRenderHost): CompletionSource {
     const options: Completion[] = [];
     const cap = settings.wordCompleteMaxSuggestions ?? 8;
 
+    // vcWord 标记:词源补全不吞 Enter(completionYieldKeymap 检查)——块切分
+    // 语义优先;Tab/点击仍接受。
     const push = (word: string, detail?: string, boost?: number): void => {
       const lower = word.toLowerCase();
       if (lower === query || seen.has(lower)) return;
       if (!lower.startsWith(query)) return;
       seen.add(lower);
-      options.push({ label: word, detail, type: 'text', boost });
+      const c: Completion & { vcWord?: boolean } = { label: word, detail, type: 'text', boost, vcWord: true };
+      options.push(c);
     };
 
     // 1) 当前文件词(频次降序)——含正在编辑的本块文本
