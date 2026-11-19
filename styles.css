@@ -63431,6 +63431,83 @@ body.is-mobile
 .life-prompt-btns { display: flex; gap: 8px; justify-content: flex-end; padding-top: 12px; }
 
 /* ============================================================
+   Life HOME 主区标签页 + 库记录面板(2026-11-20):仪表盘式布局。
+   月历语义与大日历面板(.life-cal__*)一致:task 红 / plan accent /
+   today accent 实底 / out 格淡化。
+   ============================================================ */
+.life-home, .life-vaultlog { max-width: 900px; margin: 0 auto; padding: 6px 4px; font-size: 13.5px; }
+.life-home-head { display: flex; align-items: center; gap: 10px; padding: 4px 2px 12px; }
+.life-home-date { font-size: 21px; font-weight: 700; letter-spacing: 0.01em; margin-right: auto; }
+.life-home-head-btns { display: flex; align-items: center; gap: 6px; }
+.life-home-rec-btn { background: var(--interactive-accent); color: var(--text-on-accent); border: none; border-radius: 8px; padding: 5px 14px; font-size: 13px; cursor: pointer; }
+.life-home-rec-btn:hover { opacity: 0.88; }
+.life-home-gear { background: none; border: none; color: var(--text-muted); font-size: 16px; cursor: pointer; border-radius: 8px; padding: 4px 8px; }
+.life-home-gear:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+.life-home-section { padding: 12px 0 4px; }
+.life-home-section.is-settings { background: var(--background-secondary); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
+.life-home-sec-title { font-size: 12px; font-weight: 600; color: var(--text-muted); letter-spacing: 0.05em; padding-bottom: 8px; }
+.life-home-muted { color: var(--text-faint); font-size: 12.5px; padding: 4px 2px; }
+.life-home-rec-summary { display: flex; align-items: center; gap: 10px; padding: 3px 2px; font-size: 13px; }
+.life-home-card-title { font-weight: 600; }
+
+/* 库记录列表 */
+.life-home-rec-row { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+.life-home-rec-row:hover { background: var(--background-modifier-hover); }
+.life-home-rec-time { color: var(--text-muted); font-size: 12.5px; font-variant-numeric: tabular-nums; flex: none; width: 82px; }
+.life-home-rec-counts { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.life-home-rec-meta { color: var(--text-faint); font-size: 12px; flex: none; }
+.life-home-rec-trigger { color: var(--text-muted); font-size: 11.5px; border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 0 6px; line-height: 18px; flex: none; }
+.life-home-mode-row { display: flex; gap: 6px; padding: 2px 2px 8px; }
+.life-home-mode-btn { background: var(--background-secondary); border: 1px solid var(--background-modifier-border); color: var(--text-muted); border-radius: 8px; padding: 2px 12px; font-size: 12.5px; cursor: pointer; }
+.life-home-mode-btn:hover { color: var(--text-normal); }
+.life-home-mode-btn.is-active { background: var(--interactive-accent); border-color: var(--interactive-accent); color: var(--text-on-accent); }
+.life-home-rec-detail { margin: 2px 0 8px 18px; padding: 6px 10px; border-left: 2px solid var(--background-modifier-border); display: flex; flex-direction: column; gap: 1px; }
+.life-home-rec-kind-title { font-size: 11.5px; color: var(--text-muted); font-weight: 600; padding: 4px 0 2px; }
+.life-home-rec-item { font-family: var(--font-monospace); font-size: 12px; padding: 1px 0 1px 6px; border-radius: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.life-home-rec-item.is-added { color: var(--text-success, #3bb273); }
+.life-home-rec-item.is-modified { color: var(--text-warning, #d9a44a); }
+.life-home-rec-item.is-deleted { color: var(--text-error); }
+.life-home-rec-group-title { font-size: 12.5px; color: var(--text-muted); font-weight: 600; padding: 5px 0 1px; }
+
+/* 迷你月历(7 列网格;星期头行 display:contents 并入同一网格) */
+.life-home-cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.life-home-cal-row.is-head { display: contents; }
+.life-home-cal-wd { text-align: center; font-size: 11px; color: var(--text-faint); padding: 2px 0 6px; }
+.life-home-cal-cell { position: relative; min-height: 34px; display: flex; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 8px; cursor: pointer; font-variant-numeric: tabular-nums; }
+.life-home-cal-cell:hover { background: var(--background-modifier-hover); }
+.life-home-cal-cell.is-out { opacity: 0.35; }
+.life-home-cal-cell.is-today { border-color: var(--interactive-accent); background: var(--interactive-accent); color: var(--text-on-accent); font-weight: 700; }
+.life-home-cal-day { font-size: 12.5px; }
+.life-home-cal-dot { position: absolute; top: 1px; right: 3px; font-size: 9.5px; line-height: 13px; padding: 0 4px; border-radius: 6px; font-variant-numeric: tabular-nums; }
+.life-home-cal-dot.is-task { background: var(--text-error); color: #fff; }
+.life-home-cal-dot.is-plan { background: var(--interactive-accent); color: var(--text-on-accent); }
+.life-home-cal-cell.is-today .life-home-cal-dot { visibility: hidden; }
+.life-home-cal-detail { margin-top: 8px; padding: 8px 10px; background: var(--background-secondary); border-radius: 10px; display: flex; flex-direction: column; gap: 2px; }
+.life-home-cal-item { font-size: 12.5px; padding: 2px 4px; }
+
+/* 今日概览四卡 */
+.life-home-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+.life-home-card { background: var(--background-secondary); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.life-home-card.is-clickable { cursor: pointer; }
+.life-home-card.is-clickable:hover { background: var(--background-modifier-hover); }
+.life-home-card-title { font-size: 13px; font-weight: 600; padding-bottom: 3px; }
+.life-home-card-line { font-size: 12.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 日记 */
+.life-home-diary { display: flex; flex-direction: column; gap: 2px; }
+.life-home-diary-row { display: flex; align-items: baseline; gap: 10px; padding: 4px 8px; border-radius: 8px; cursor: pointer; }
+.life-home-diary-row:hover { background: var(--background-modifier-hover); }
+.life-home-diary-row.is-today .life-home-diary-name { color: var(--interactive-accent); font-weight: 700; }
+.life-home-diary-name { font-size: 13px; font-weight: 600; flex: none; }
+.life-home-diary-meta { font-size: 11.5px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.life-home-diary-preview { font-size: 12px; color: var(--text-muted); margin: 0 8px 4px 18px; padding-left: 8px; border-left: 2px solid var(--background-modifier-border); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 库记录设置 */
+.life-home-setting-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
+.life-home-setting-label { width: 130px; flex: none; color: var(--text-muted); font-size: 12.5px; }
+.life-home-setting-input { flex: 1; min-width: 0; border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 3px 8px; font-size: 12.5px; background: var(--background-primary); }
+
+/* ============================================================
    Virtual links (fakelink/Virtual Linker 并入, 2026-11-19)
    渲染态 span 与编辑态 CM mark 共用类名;虚线下划线与原生链接区分。
    ============================================================ */

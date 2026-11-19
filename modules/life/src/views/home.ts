@@ -107,8 +107,8 @@ export class LifeHomeView extends ItemView {
 		// ---- 迷你月网格(任务/计划圆点 + 当日明细) ----
 		const sec3 = contentEl.createDiv({ cls: 'life-home-section' });
 		sec3.createDiv({ cls: 'life-home-sec-title', text: '大日历' });
-		this.renderMiniCalendar(sec3);
 		sec3.createDiv({ cls: 'life-home-muted', text: '完整版(点格子加任务/计划)在「大日历」面板 →' });
+		this.renderMiniCalendar(sec3);
 
 		// ---- 日记(今日/最近,md-editor journal 体系) ----
 		const secDiary = contentEl.createDiv({ cls: 'life-home-section' });
