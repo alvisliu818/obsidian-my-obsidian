@@ -605,7 +605,6 @@ export default class OpenTabSettingsPlugin extends Plugin {
             // 必须走 rootSplit 树行走。
             ?? firstLayoutLeaf(workspace);
         if (!activeLeaf) throw new Error("No tab group found.");
-        }
         const root = activeLeaf.getRoot();
         const activeTabGroup = activeLeaf.parent as unknown as TabGroup;
         let group: TabGroup|undefined;
