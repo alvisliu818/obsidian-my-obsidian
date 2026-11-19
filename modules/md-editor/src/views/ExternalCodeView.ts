@@ -77,6 +77,8 @@ export class ExternalCodeView extends ItemView {
    * 由 mount() 末尾或 setState 的「编辑器已在」分支消费。
    */
   private pendingRevealLine: number | null = null;
+  /** 行范围锚的结束行(mount 晚于 setEphemeralState 的竞态里与 pendingRevealLine 同批消费) */
+  private pendingRevealEnd: number | null = null;
 
   /** 老 state 没有挂载名时，按最长前缀匹配在挂载配置里找回来。 */
   private mountLabelFromSettings(): string {
@@ -171,7 +173,11 @@ export class ExternalCodeView extends ItemView {
     // mounting here would build an empty editor for a file whose path and
     // content have not arrived yet — and the state that carries them is the
     // only place they exist.
-    await this.mount();
+    //
+    // 2026-11-19 实测修复:这里的 mount 此前是无条件执行的——空挂载建出空
+    // 编辑器,随后的 setState 因 `!this.editor` 跳过重挂,空编辑器永久保留
+    // (用户报「点代码文件打开是空的」的根因)。删掉这里的 mount:setState
+    // 末尾的 `!this.editor && this.abs` 触发真挂载(restore 路径同款)。
     // 行级反链的刷新源:笔记保存(changed)/索引批解析完成(resolved)。
     // registerEvent 随视图卸载自动清理;扫描本身 600ms 防抖。
     this.registerEvent(this.app.metadataCache.on('changed', () => this.scheduleLineLinksScan()));
@@ -245,8 +251,18 @@ export class ExternalCodeView extends ItemView {
     // 行锚落地:新挂载的由 mount() 末尾消费;叶子复用(编辑器已在、不重挂)在这里跳。
     if (this.pendingRevealLine !== null) {
       const n = this.pendingRevealLine;
+      const endN = this.pendingRevealEnd;
       this.pendingRevealLine = null;
+      this.pendingRevealEnd = null;
       this.revealLine(n);
+      if (endN !== null && endN > n && this.editor) {
+        try {
+          const lastCol = this.editor.getModel()?.getLineMaxColumn(endN) ?? 1;
+          this.editor.setSelection({ startLineNumber: n, startColumn: 1, endLineNumber: endN, endColumn: lastCol });
+        } catch {
+          /* 越界行:仅跳转 */
+        }
+      }
     }
     // 视图头部的完整路径（挂载名 / 子目录 / …；库内文件则是 / + 库内目录链）：
     // 库外文件没有库内路径，Obsidian 不会给自定义视图生成目录链。
@@ -272,11 +288,27 @@ export class ExternalCodeView extends ItemView {
    */
   setEphemeralState(state: unknown): void {
     const subpath = (state as { subpath?: string } | null)?.subpath ?? null;
-    const m = subpath ? /^#?L(\d+)$/.exec(subpath) : null;
+    // 行锚:#L42(单行跳转)与 #L10-L20(范围跳转+选中——嵌入块编辑按钮落位
+    // 用,2026-11-19 阶段 B)。
+    const m = subpath ? /^#?L(\d+)(?:-L(\d+))?$/.exec(subpath) : null;
     if (m) {
       const n = Number(m[1]);
-      if (this.editor) this.revealLine(n);
-      else this.pendingRevealLine = n; // mount() 末尾消费(mount 晚于本调用的竞态)
+      const end = m[2] ? Number(m[2]) : n;
+      if (this.editor) {
+        this.revealLine(n);
+        if (end > n) {
+          // 范围锚:跳到起始行后选中范围(Monaco 选中,行尾含换行前)
+          try {
+            const lastCol = this.editor.getModel()?.getLineMaxColumn(end) ?? 1;
+            this.editor.setSelection({ startLineNumber: n, startColumn: 1, endLineNumber: end, endColumn: lastCol });
+          } catch {
+            /* 越界行:仅跳转 */
+          }
+        }
+      } else {
+        this.pendingRevealLine = n; // mount() 末尾消费(mount 晚于本调用的竞态)
+        if (end > n) this.pendingRevealEnd = end;
+      }
       return;
     }
     super.setEphemeralState(state as never);
@@ -394,6 +426,7 @@ export class ExternalCodeView extends ItemView {
   // ------------------------------------------------------------------
 
   private async mount(): Promise<void> {
+    console.warn('[extcode] mount enter lastDiskLen=', (this.lastDiskData ?? '').length, 'abs=', this.abs);
     // 重挂载(切换混合/源码、设置变更)前先销毁旧的:
     // contentEl.empty() 只清 DOM,M Monaco 实例与 FragmentHost 组件会泄漏,
     // 且它们的 ResizeObserver 还盯着已脱离文档的容器。
@@ -514,6 +547,12 @@ export class ExternalCodeView extends ItemView {
         onSave: () => void this.flush(true),
         onChange: () => this.scheduleSave(),
       });
+      console.warn(
+        '[extcode] created len=', this.editor.getValue().length,
+        'contentLen=', content.length,
+        'modelLines=', this.editor.getModel()?.getLineCount(),
+        'abs=', this.abs,
+      );
       // LSP:basedpyright 等语言服务,含语义 token 着色(VS Code 同款);
       // 无匹配 server 或 LSP 关闭时 attach 返回空数组,零开销
       this.lspDisposables = monacoLspAttach(this.plugin, this.editor, language, docUri);
@@ -711,6 +750,25 @@ export class ExternalCodeView extends ItemView {
     return buildCodeExtLink(this.abs, line ? Number(line[1]) : undefined);
   }
 
+  /**
+   * 嵌入块链接(2026-11-19 阶段 B):`![[file#L10-L20]]` 形态——md 里渲染成
+   * 代码嵌入盒(features/codeEmbed),编辑按钮经行锚体系回到本视图。
+   * 行范围来自行号选区(点击/Shift+点击扩展);单行 = `#LN` 无范围段。
+   */
+  buildEmbedLink(startLine: number, endLine: number): string {
+    const anchor = startLine === endLine ? `#L${startLine}` : `#L${startLine}-L${endLine}`;
+    if (this.vaultFile) {
+      const notePath = this.app.workspace.getActiveViewOfType(MarkdownView)?.file?.path ?? '';
+      return '!' + this.plugin.app.fileManager.generateMarkdownLink(this.vaultFile, notePath, anchor, '');
+    }
+    return `![[ext:${toExtPath(this.abs)}${anchor}]]`;
+  }
+
+  private async copyEmbedLink(startLine: number, endLine: number): Promise<void> {
+    const range = startLine === endLine ? `L${startLine}` : `L${startLine}-L${endLine}`;
+    void this.copyWithNotice(this.buildEmbedLink(startLine, endLine), ` ${this.fileName} ${range} 的嵌入块链接`);
+  }
+
   private async copyWithNotice(text: string, what: string): Promise<void> {
     try {
       await navigator.clipboard.writeText(text);
@@ -760,6 +818,24 @@ export class ExternalCodeView extends ItemView {
             .setIcon('link' as never)
             .onClick(() => this.copyLineLink(fileLine)),
         );
+        // 嵌入块链接(2026-11-19 阶段 B):选区行范围(行号点击/Shift+点击选出;
+        // 无选区=点击行单行)——粘进 md 渲染成代码嵌入盒(见 features/codeEmbed)。
+        const sel = editor.getSelection() ?? null;
+        if (!sel) return;
+        const sMonaco = Math.min(sel.startLineNumber, sel.endLineNumber);
+        const eMonaco = Math.max(sel.startLineNumber, sel.endLineNumber);
+        const sFile = this.hybridEngine ? this.hybridEngine.fileLineOfMonaco(sMonaco) : sMonaco;
+        const eFile = this.hybridEngine ? this.hybridEngine.fileLineOfMonaco(eMonaco) : eMonaco;
+        if (sFile && eFile && sFile >= 1 && eFile >= sFile) {
+          const rangeText =
+            sFile === eFile ? `第 ${sFile} 行` : `第 ${sFile}-${eFile} 行`;
+          menu.addItem((item) =>
+            item
+              .setTitle(`复制嵌入块链接(${rangeText})`)
+              .setIcon('bracket' as never)
+              .onClick(() => this.copyEmbedLink(sFile, eFile)),
+          );
+        }
         menu.addItem((item) =>
           item
             .setTitle('复制文件链接')

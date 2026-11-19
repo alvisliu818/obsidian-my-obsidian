@@ -63449,3 +63449,54 @@ body.is-mobile
 /* 别名条目:点线;标题头条目:波浪线——右键菜单里可转真实链接 */
 .lgp-virtual-link.lgp-vl-alias { text-decoration-style: dotted; }
 .lgp-virtual-link.lgp-vl-header { text-decoration-style: wavy; }
+
+/* ============================================================
+   Code line-range embeds (阶段 B, 2026-11-19): ![[file.py#L10-L20]]
+   头部(文件名+行锚+编辑/复制按钮) + pre 正文(文件的那几行)。
+   ============================================================ */
+.lgp-code-embed {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 4px 0;
+}
+.lgp-code-embed-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 8px;
+  background: var(--background-secondary);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+.lgp-code-embed-file {
+  font-family: var(--font-monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lgp-code-embed-actions { display: flex; gap: 4px; }
+.lgp-code-embed-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: var(--font-ui-smaller);
+}
+.lgp-code-embed-btn:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+.lgp-code-embed-body {
+  margin: 0;
+  padding: 6px 10px;
+  overflow: auto;
+  background: var(--code-background, var(--background-primary));
+}
+.lgp-code-embed-body code {
+  font-family: var(--font-monospace);
+  font-size: var(--code-size, 0.9em);
+  color: var(--code-normal, var(--text-normal));
+  white-space: pre;
+}
+.lgp-code-embed.is-broken .lgp-code-embed-body code { color: var(--text-error); }

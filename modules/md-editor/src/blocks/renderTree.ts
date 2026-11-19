@@ -33,6 +33,7 @@ import { headingNumberNeedsSpacing } from '../core/headingNumber';
 import { blockId } from '../types';
 import { foldLevelOf, foldSummary, headingLevel, isFoldableBody, isFoldableHeading, isInsideFoldedSection, isMediaOnlyBlock, normFoldKey } from '../core/fold';
 import { createPageEmbedBox, enhanceBlockRefs, enhanceEmbeds, enhanceInlineMemos } from '../features/links';
+import { buildCodeEmbedBox, enhanceCodeEmbeds, parseCodeEmbedInner, resolveCodeEmbedTarget } from '../features/codeEmbed';
 import {
   buildQueryTableModel,
   execQuery,
@@ -922,7 +923,7 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
   // them up; tokenizing them produced a "page not found" box instead.
   // 库外笔记例外:renderer 解析不到库外文件,media wiki 嵌入也是破图——
   // anchorExternalMedia 把它们(连同 md 形式与 HTML video/audio)统一 token 化。
-  const pageEmbedTokens: { token: string; page: string }[] = [];
+  const pageEmbedTokens: { token: string; page: string; codeEmbed?: { target: string; start: number; end: number } }[] = [];
   const hasWikiEmbed = /!\[\[[^\[\]]+\]\]/.test(b.text);
   // HTML img 相对 src 锚定：防库内同名图片劫持（见 anchorRelativeImgSrcs 注释）
   const imgAnchorTokens: ImgAnchorToken[] = [];
@@ -951,6 +952,14 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
             // 里换成了 md 占位,到不了这里;到这里的媒体 wiki 嵌入是解析失败
             // 的(文件真不在),维持原生渲染 = broken embed 的诚实展示。
             if (mediaTypeOf(inner.split('|')[0].trim())) return m;
+            // 代码行范围嵌入(2026-11-19 阶段 B):target#L 行锚 + 非媒体
+            // → 推专用 token,交换处走 codeEmbed 建盒(见 enhanceCodeEmbeds)。
+            const codeHit = parseCodeEmbedInner(inner);
+            if (codeHit && !mediaTypeOf(codeHit.target)) {
+              const token = `LGPAGEEMBED${pageEmbedTokens.length}LGPAGEEMBED`;
+              pageEmbedTokens.push({ token, page: inner, codeEmbed: codeHit });
+              return token;
+            }
             const token = `LGPAGEEMBED${pageEmbedTokens.length}LGPAGEEMBED`;
             pageEmbedTokens.push({ token, page: inner });
             return token;
@@ -971,6 +980,9 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
       // Embeds FIRST: `{{embed ((id))}` contains an inner `((id))` that
       // enhanceBlockRefs would otherwise turn into a chip, splitting the text
       // node so the embed pattern no longer matches.
+      // 代码行范围嵌入(2026-11-19 阶段 B):先于 enhanceEmbeds——PAGE_EMBED_RE
+      // 会把 ![[...#L…]] 捡走渲染成 page not found 盒。
+      enhanceCodeEmbeds(holder, host);
       enhanceEmbeds(holder, host);
       enhanceCodeBlocks(holder, b, host);
       // Visual table editing. Must run AFTER MarkdownRenderer (it upgrades the
@@ -988,7 +1000,7 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
       wireMediaOpen(holder, host);
       // Swap page-embed tokens for live boxes ( BEFORE block-ref chips so
       // the token is not mistaken for text).
-      for (const { token, page } of pageEmbedTokens) {
+      for (const { token, page, codeEmbed } of pageEmbedTokens) {
         const walker = document.createTreeWalker(holder, NodeFilter.SHOW_TEXT);
         let node = walker.nextNode() as Text | null;
         while (node) {
@@ -997,7 +1009,14 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
             const frag = document.createDocumentFragment();
             const parts = node.data.split(token);
             parts.forEach((part, i) => {
-              if (i > 0) frag.appendChild(createPageEmbedBox(page, host));
+              if (i > 0) {
+                if (codeEmbed) {
+                  const t = resolveCodeEmbedTarget(host.app, codeEmbed.target, codeEmbed.start, codeEmbed.end);
+                  frag.appendChild(t ? buildCodeEmbedBox(host, t) : createPageEmbedBox(page, host));
+                } else {
+                  frag.appendChild(createPageEmbedBox(page, host));
+                }
+              }
               if (part) frag.appendChild(document.createTextNode(part));
             });
             node.replaceWith(frag);
