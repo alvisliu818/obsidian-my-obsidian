@@ -42,6 +42,7 @@ export function lifeSettingsFrom(raw: unknown): LifeSettings {
 		vaultLogLastDailyDate: typeof o.vaultLogLastDailyDate === 'string' ? o.vaultLogLastDailyDate : '',
 		vaultLogLastPeriodAt: typeof o.vaultLogLastPeriodAt === 'number' ? o.vaultLogLastPeriodAt : 0,
 		vaultLogLastRemindDate: typeof o.vaultLogLastRemindDate === 'string' ? o.vaultLogLastRemindDate : '',
+		homeOpenOnStartup: o.homeOpenOnStartup !== false,
 	};
 }
 

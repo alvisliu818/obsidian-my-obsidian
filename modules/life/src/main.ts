@@ -66,6 +66,14 @@ export default class LifePlugin extends Plugin {
 			menu.showAtMouseEvent(ev);
 		});
 
+		// 启动时打开 HOME 标签页(用户 2026-11-20 要求,设置可关):布局就绪后
+		// 开(布局恢复可能已带 life-home 叶——已开即跳过)。
+		this.app.workspace.onLayoutReady(() => {
+			if (this.store.settings.homeOpenOnStartup === false) return;
+			if (this.app.workspace.getLeavesOfType(VIEW_LIFE_HOME).length > 0) return;
+			void this.activatePanel(VIEW_LIFE_HOME);
+		});
+
 		// 计时哨兵：倒计时/番茄到点提醒（面板关着也要响）。1s 一次,开销可忽略。
 		this.timerSentinel = window.setInterval(() => void this.tickSentinel(), 1000);
 		this.register(() => {
@@ -141,6 +149,14 @@ export default class LifePlugin extends Plugin {
 		const existing = this.app.workspace.getLeavesOfType(viewType)[0];
 		if (existing) {
 			this.app.workspace.revealLeaf(existing);
+			return;
+		}
+		// HOME 是主工作区标签页(用户 2026-11-20 定稿):走主区 tab,不进侧栏。
+		if (viewType === VIEW_LIFE_HOME) {
+			const leaf = this.app.workspace.getLeaf('tab');
+			if (!leaf) return;
+			await leaf.setViewState({ type: viewType, active: true });
+			this.app.workspace.revealLeaf(leaf);
 			return;
 		}
 		const leaf = this.app.workspace.getRightLeaf(false) ?? this.app.workspace.getLeaf(true);

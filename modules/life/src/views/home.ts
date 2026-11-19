@@ -1,14 +1,20 @@
 /**
  * HOME 标签页(2026-11-19 阶段 D):一页聚合——今日库变化、库记录列表
  * (点击展开明细,总体/按文件夹双视图)、迷你月网格(任务/计划圆点)、
- * 任务/代办/习惯/计时摘要(点击跳对应面板)、库记录设置(折叠)。
+ * 任务/代办/习惯/计时摘要(点击跳对应面板)、日记显示(今日/最近,
+ * 阶段 D2)、库记录设置(折叠)。
  *
  * 数据源全部来自本模块 store(todos/tasks/habits/plans/timer + vaultLog
  * 记录序列);打开即全量渲染,操作后局部重绘(store 薄层惯例)。
  * 库记录引擎见 ../vaultLog(纯逻辑);调度与手动打点在 main.ts。
+ * 日记数据源 = md-editor 的 journal 体系(journalPathFor + openJournalFor,
+ * 经 moduleInstance 运行时取 md-editor 实例, dailyNote.ts 同款调用)。
  */
-import { ItemView, type WorkspaceLeaf } from 'obsidian';
+import { TFile, ItemView, type WorkspaceLeaf } from 'obsidian';
+import { journalPathFor, openJournalFor } from '../../../md-editor/src/features/dailyNote';
+import { addDays } from '../../../md-editor/src/core/journalDate';
 import type LifePlugin from '../main';
+import type LogseqEditorPlugin from '../../../md-editor/src/main';
 import { VIEW_LIFE_HOME } from './homeTypes';
 import { monthGrid, todayKey, formatDuration } from '../util';
 import { changeSummary } from '../vaultLog';
@@ -103,6 +109,11 @@ export class LifeHomeView extends ItemView {
 		sec3.createDiv({ cls: 'life-home-sec-title', text: '大日历' });
 		this.renderMiniCalendar(sec3);
 		sec3.createDiv({ cls: 'life-home-muted', text: '完整版(点格子加任务/计划)在「大日历」面板 →' });
+
+		// ---- 日记(今日/最近,md-editor journal 体系) ----
+		const secDiary = contentEl.createDiv({ cls: 'life-home-section' });
+		secDiary.createDiv({ cls: 'life-home-sec-title', text: '日记' });
+		this.renderDiarySection(secDiary);
 
 		// ---- 任务/代办/习惯/计时 摘要 ----
 		const sec4 = contentEl.createDiv({ cls: 'life-home-section' });
@@ -232,6 +243,73 @@ export class LifeHomeView extends ItemView {
 		for (const p of plansToday.slice(0, 8)) {
 			detail.createDiv({ cls: 'life-home-cal-item', text: `[计划] ${p.time ? p.time + ' ' : ''}${p.title}` });
 		}
+	}
+
+	/**
+	 * 日记节(2026-11-19 阶段 D2):今日日记(存在=行+预览;不存在=创建按钮)
+	 * + 最近 7 天的日记行。数据源 = md-editor 的 journal 体系(journalPathFor
+	 * 解析路径 / openJournalFor 创建并打开)——运行时取 md-editor 模块实例。
+	 */
+	private renderDiarySection(container: HTMLElement): void {
+		const host2 = window.app.plugins.plugins['obsidian-my-obsidian'] as unknown as { moduleInstance?: (id: string) => LogseqEditorPlugin | undefined };
+		const md = host2?.moduleInstance?.('md-editor') as
+			| LogseqEditorPlugin
+			| undefined;
+		if (!md) {
+			container.createDiv({ cls: 'life-home-muted', text: '(md-editor 模块未启用,日记不可用)' });
+			return;
+		}
+		const list = container.createDiv({ cls: 'life-home-diary' });
+		list.createDiv({ cls: 'life-home-muted', text: '加载中…' });
+		void (async () => {
+			list.empty();
+			const today = new Date();
+			const todayPath = journalPathFor(md, today);
+			const recent: { path: string; date: Date; file: TFile }[] = [];
+			for (let i = 0; i < 7; i++) {
+				const d = addDays(today, -i);
+				const p = journalPathFor(md, d);
+				const af = this.app.vault.getAbstractFileByPath(p);
+				if (af instanceof TFile) recent.push({ path: p, date: d, file: af });
+			}
+			const todayFile = recent[0] && recent[0].date.getTime() >= new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime() ? recent[0].file : null;
+			const labelOf = (d: Date): string => {
+				const p = (n: number) => String(n).padStart(2, '0');
+				return `${p(d.getMonth() + 1)}/${p(d.getDate())}`;
+			};
+			const openRow = (p: string): void => {
+				void this.app.workspace.openLinkText(p, '', false);
+			};
+			// 今日日记行:存在=高亮行(点击打开+预览);不存在=创建按钮
+			if (todayFile) {
+				const row = list.createDiv({ cls: 'life-home-diary-row is-today' });
+				row.createSpan({ cls: 'life-home-diary-name', text: '今日日记' });
+				row.createSpan({ cls: 'life-home-diary-meta', text: todayPath });
+				row.addEventListener('click', () => openRow(todayPath));
+			} else {
+				const mk = list.createEl('button', { cls: 'life-home-mode-btn', text: '创建并打开今日日记' });
+				mk.addEventListener('click', () => void openJournalFor(md, 0));
+			}
+			// 最近日记行(跳过今日;今天已在上方或缺失)
+			for (const r of recent.slice(todayFile ? 1 : 0)) {
+				const row = list.createDiv({ cls: 'life-home-diary-row' });
+				row.createSpan({ cls: 'life-home-diary-name', text: labelOf(r.date) + (r.path.endsWith(todayPath) ? '(今日)' : '') });
+				row.createSpan({ cls: 'life-home-diary-meta', text: r.path });
+				row.addEventListener('click', () => openRow(r.path));
+			}
+			// 今日日记预览(前 6 行)
+			if (todayFile) {
+				try {
+					const content = await this.app.vault.cachedRead(todayFile);
+					const lines = content.split('\n').filter((l) => l.trim() !== '' && !l.startsWith('---')).slice(0, 6);
+					for (const line of lines) {
+						list.createDiv({ cls: 'life-home-diary-preview', text: line.slice(0, 80) });
+					}
+				} catch {
+					/* 预览失败静默 */
+				}
+			}
+		})();
 	}
 
 	/** 今日概览:任务/代办/习惯/计时四卡,点击跳对应面板。 */

@@ -121,6 +121,8 @@ export interface LifeSettings {
 	vaultLogLastPeriodAt: number;
 	/** 上次每日提醒的归属日 yyyy-mm-dd */
 	vaultLogLastRemindDate: string;
+	/** Obsidian 启动时自动打开 HOME 标签页(2026-11-20 用户要求) */
+	homeOpenOnStartup: boolean;
 }
 
 /** 库记录:相对上一次记录的文件变化(2026-11-19 阶段 C)。 */
@@ -179,4 +181,5 @@ export const DEFAULT_LIFE_SETTINGS: LifeSettings = {
 	vaultLogLastDailyDate: '',
 	vaultLogLastPeriodAt: 0,
 	vaultLogLastRemindDate: '',
+	homeOpenOnStartup: true,
 };
