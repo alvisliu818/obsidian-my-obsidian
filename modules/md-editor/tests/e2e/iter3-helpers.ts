@@ -176,13 +176,35 @@ export async function launchObsidian(ctx: Ctx, fixtures: Record<string, string>)
   }
   if (!onTestVault) throw new Error('Connected Obsidian is NOT the test vault — aborting');
   // 等布局就绪:createNewLeaf 需要 root tab group——启动后布局异步恢复,
-  // 19ms 就 getLeaf 会炸 'No tab group found'(实测)。
+  // 19ms 就 getLeaf 会炸 'No tab group found'(实测)。attach 下再等焦点叶
+  // (open-tab-settings 补丁版 createNewLeaf 的 getMostRecentLeaf 在恢复中为
+  // null 会必抛——应用侧已加退化,这里双保险)。
   for (let w = 0; w < 40; w++) {
     const ready = await page
       .evaluate(() => (window as unknown as { app?: { workspace?: { layoutReady?: boolean } } }).app?.workspace?.layoutReady === true)
       .catch(() => false);
     if (ready) break;
     await sleep(500);
+  }
+  if (attach) {
+    for (let w = 0; w < 60; w++) {
+      const hasLeaf = await page
+        .evaluate(() => {
+          const ws = (window as unknown as { app?: { workspace?: { iterateAllLeaves?: (cb: (l: unknown) => void) => void } } }).app?.workspace;
+          // 真实结果判定:叶树已物化(1.15.1 无 getLeaves——原型 86 方法实测
+          // 无此键,iterateAllLeaves 计数)
+          let n = 0;
+          try {
+            ws?.iterateAllLeaves?.(() => {
+              n++;
+            });
+          } catch {}
+          return n > 0;
+        })
+        .catch(() => false);
+      if (hasLeaf) break;
+      await sleep(500);
+    }
   }
   restoreTestWindow();
   // Trust dialog (click trust — Escape means safe mode = plugin disabled).

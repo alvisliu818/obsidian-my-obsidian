@@ -32,6 +32,7 @@ import {
   closeCompletion,
   completionStatus,
   moveCompletionSelection,
+  selectedCompletion,
 } from '@codemirror/autocomplete';
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { editorInfoField, editorLivePreviewField, editorEditorField, renderMath, finishRenderMath } from 'obsidian';
@@ -372,7 +373,7 @@ export function createBlockKeymap(host: BlockRenderHost): KeyBinding[] {
  * ArrowUp/Down/Enter/Tab/Escape for block navigation — the completion keymap
  * that autocompletion() installs runs at default precedence).
  */
-function completionYieldKeymap(): Extension {
+function completionYieldKeymap(host: BlockRenderHost): Extension {
   const popupActive = (v: EditorView): boolean => completionStatus(v.state) === 'active';
   const nav =
     (forward: boolean, by?: 'page') =>
@@ -384,7 +385,22 @@ function completionYieldKeymap(): Extension {
       { key: 'ArrowDown', run: nav(true) },
       { key: 'PageUp', run: nav(false, 'page') },
       { key: 'PageDown', run: nav(true, 'page') },
-      { key: 'Enter', run: (v) => popupActive(v) && acceptCompletion(v) },
+      {
+        key: 'Enter',
+        run: (v) => {
+          if (!popupActive(v)) return false;
+          // 词源补全(vcWord)不吞 Enter——大纲「回车切块」语义优先(2026-11-19
+          // 回归修复:块尾词 ≥2 字符即弹词层,返回 false 会被 completionKeymap
+          // 的 Enter-accept 接棒吞掉,必须自己消费:关弹层 + 落 handleEnter 切块)。
+          // Tab/点击仍接受;emoji(: 显式触发)保持 Enter 接受(GitHub UX)。
+          const sel = selectedCompletion(v.state);
+          if (sel && (sel as { vcWord?: boolean }).vcWord === true) {
+            closeCompletion(v);
+            return handleEnter(v, host);
+          }
+          return acceptCompletion(v);
+        },
+      },
       { key: 'Tab', run: (v) => popupActive(v) && acceptCompletion(v) },
       { key: 'Escape', run: (v) => popupActive(v) && closeCompletion(v) },
     ]),
@@ -477,7 +493,7 @@ export function createEmbedExtensions(
     livePreviewExtension,
     mathLiveBlockPreview(),
     autocompletion({ override: [...host.autocompleteSources(true)], icons: true, activateOnTyping: true }),
-    completionYieldKeymap(),
+    completionYieldKeymap(host),
     Prec.high(
       keymap.of([
         { key: 'Enter', run: commitNew },
@@ -644,7 +660,7 @@ export function createEditorExtensions(host: BlockRenderHost, block?: Block): Ex
     autocompletion({ override: [...host.autocompleteSources()], icons: true, activateOnTyping: true }),
     // Completion popups win nav/commit keys while open (must precede the
     // self-drawn-menu and block keymaps in precedence).
-    completionYieldKeymap(),
+    completionYieldKeymap(host),
     // Self-drawn / and < command menus (swallows nav keys while open).
     commandMenuKeymap(),
     // Our block keymap must outrank everything else.

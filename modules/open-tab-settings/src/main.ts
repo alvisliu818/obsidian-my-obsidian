@@ -11,6 +11,27 @@ import { TabGroup } from './types';
 import { initializeI18n } from './i18n';
 import { t } from 'i18next';
 
+/**
+ * 布局树首叶查找(2026-11-19):1.15.1 移除了 Workspace.getLeaves()(原型
+ * 86 方法实测无此键)——任何 workspace.getLeaves() 调用运行时都是 undefined。
+ * 走 rootSplit 树行走拿第一个真实叶节点(布局树节点即 WorkspaceLeaf 实例,
+ * getRoot/parent 语义完好)。
+ */
+function firstLayoutLeaf(workspace: Workspace): WorkspaceLeaf | null {
+    let found: WorkspaceLeaf | null = null;
+    const visit = (node: unknown): void => {
+        const n = node as { type?: string; children?: unknown[] };
+        if (found || !n) return;
+        if ((n as { type?: string }).type === 'leaf') {
+            found = n as unknown as WorkspaceLeaf;
+            return;
+        }
+        for (const c of ((n as { children?: unknown[] }).children ?? []) as unknown[]) visit(c);
+    };
+    visit(workspace.rootSplit);
+    return found;
+}
+
 
 /**
  * Special view types added by plugins that should be deduplicated like normal files.
@@ -100,6 +121,13 @@ export default class OpenTabSettingsPlugin extends Plugin {
              */
             getLeaf(oldMethod) {
                 return function(this: Workspace, openModeIn?: string|boolean, ...args) {
+                    // 空工作区级联守卫(2026-11-19):cleanup detach 全部叶后异常退出
+                    // 会保存空布局——下次启动 getLeaves() 为 0,createNewLeaf 的
+                    // root 查找抛 'No tab group found' 且每轮启动级联。走原生建叶
+                    // 路径(Obsidian 对空 workspace 自建根叶)。
+                    if ((this as unknown as { getLeaves?: () => WorkspaceLeaf[] }).getLeaves?.().length === 0) {
+                        return (oldMethod as (...args: unknown[]) => WorkspaceLeaf).call(this, openModeIn, ...args);
+                    }
                     const [openMode, override] = parseOverride(openModeIn);
                     const settings = {...plugin.settings, ...override};
                     const activeLeaf = this.getActiveViewOfType(View)?.leaf;
@@ -569,8 +597,15 @@ export default class OpenTabSettingsPlugin extends Plugin {
         focus = focus ?? this.app.vault.getConfig('focusNewTab') as boolean;
         const settings = {...this.settings, replaceEmptyTabs: true, ...override};
 
-        const activeLeaf = workspace.getMostRecentLeaf(); // will be in main area or floating window
+        const activeLeaf = workspace.getMostRecentLeaf() // will be in main area or floating window
+            // 刚 reload/布局恢复中可能尚无焦点叶(2026-11-19:attach E2E 实测必抛
+            // "No tab group found")——退化取布局树首叶。**注意:1.15.1 的
+            // Workspace 已移除 getLeaves()**(原型 86 方法实测无此键,typings
+            // 1.14.4 仍文档)——workspace.getLeaves() 在运行时是 undefined,
+            // 必须走 rootSplit 树行走。
+            ?? firstLayoutLeaf(workspace);
         if (!activeLeaf) throw new Error("No tab group found.");
+        }
         const root = activeLeaf.getRoot();
         const activeTabGroup = activeLeaf.parent as unknown as TabGroup;
         let group: TabGroup|undefined;
