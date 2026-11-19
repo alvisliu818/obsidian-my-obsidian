@@ -6814,7 +6814,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"fflate@npm:^0.8.2":
+"fflate@npm:^0.8.2, fflate@npm:^0.8.3":
   version: 0.8.3
   resolution: "fflate@npm:0.8.3"
   checksum: 10c0/eab181ca37f5348ae76d4b6f840e0026e30220e33153289ac942222d8b9638237d486507dbcc09878d724095bd354993a2ee48bbee99c8f2c6440d4448719aa7
@@ -9953,6 +9953,7 @@ __metadata:
     espree: "npm:^11.1.0"
     fast-check: "npm:^3.23.2"
     fastest-levenshtein: "npm:^1.0.16"
+    fflate: "npm:^0.8.3"
     file-saver: "npm:^2.0.5"
     filenamify: "npm:^6.0.0"
     get-east-asian-width: "npm:^1.6.0"

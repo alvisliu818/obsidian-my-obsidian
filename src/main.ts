@@ -197,6 +197,7 @@ import { registerFreeExtensions } from "./extensionRegistry";
 // 执行层与库内代码文件共用 exec/runner（真子进程 + 临时文件，stdin 可用）。
 import { registerNativeCodeBlockRun } from "../modules/code-editor/src/exec/nativeCodeBlockRun";
 import { setupTitlebarWindowMenu } from "./windowFrame";
+import { registerRuntimeBootstrap } from "./remoteBootstrap";
 import { langFromExt } from "../modules/code-editor/src/exec/runner";
 // 原生 Markdown 编辑器的 @ 检索：文件名模糊匹配 + omnisearch 全文兜底，
 // 回车插入 obsidian://open 链接（见 atLinkSuggest.ts 文件头）。
@@ -992,6 +993,8 @@ export default class MyObsidianPlugin extends Plugin {
 		registerAtLinkSuggest(this);
 		// 标题栏空白区右键 → Obsidian 风格窗口菜单(替换 Chromium 原生系统菜单)
 		setupTitlebarWindowMenu(this);
+		// BRAT/市场裸装(只装三件套)时自动下载运行附属(Terminal 先例模式)
+		registerRuntimeBootstrap(this);
 	}
 
 	// ------------------------------------------------------------------
