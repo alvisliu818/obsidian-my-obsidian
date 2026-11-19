@@ -950,6 +950,11 @@ export default class MyObsidianPlugin extends Plugin {
 			}
 		}
 		for (const d of this.descriptors) await this.bootModule(d);
+		// 占位叶换真:布局恢复与插件加载竞态,恢复时未注册的 viewType 会被
+		// Obsidian 建成通用占位视图(空白标签,点击无反应)——布局就绪后统一
+		// 换回真视图(见 repairPlaceholderLeaves 注释)。onLayoutReady 在布局
+		// 已就绪时会立即回调,两种时序都覆盖。
+		this.app.workspace.onLayoutReady(() => this.repairPlaceholderLeaves());
 		// 兜底清扫：内层实例若经 addTab 之外的路径把「宿主 id」标签塞进
 		// pluginTabs（构造期注册等），这里统一摘除收编——否则与宿主标签撞 id，
 		// openTabById 可能命中空壳导致设置页显示为空。hostTab 自己也是宿主
@@ -1344,5 +1349,44 @@ export default class MyObsidianPlugin extends Plugin {
 			}
 		}
 		this.live.set(d.id, inst);
+	}
+
+	/**
+	 * 占位叶换真(2026-11-20 用户报「测试库无法手动选择打开」)。
+	 *
+	 * 根因:Obsidian 恢复 workspace 与插件加载是**竞态**——恢复遇到尚未
+	 * registerView 的 viewType 时,用内部通用占位视图把叶子建出来(构造里
+	 * 赋 `this.viewType`,state 原样挂在 view 上):标签在、界面空白,点击
+	 * 无反应,此后没有任何机制把它换回真视图。懒注册视图(md-editor 代码
+	 * 视图、life HOME 等)重启后必然中招。
+	 *
+	 * 修复:布局恢复完成后(onLayoutReady;若已 ready 则立即回调)扫描全部
+	 * 叶子,凡命中占位签名(`view.hasOwnProperty('viewType')`——实测占位
+	 * 构造赋 own viewType,真实视图经 getViewType() 原型方法返回,无 own
+	 * 字段),用原 state 重 setViewState——Obsidian 会查已注册的工厂实例化
+	 * 真视图,走正常 onOpen → setState → mount 链路。幂等:换真后签名消失。
+	 */
+	private repairPlaceholderLeaves(): void {
+		try {
+			const fixes: Array<Promise<void>> = [];
+			this.app.workspace.iterateAllLeaves((leaf) => {
+				const view = leaf.view as unknown as { getViewType?: () => string; getState?: () => Record<string, unknown> };
+				const type = view?.getViewType?.();
+				if (!type || !Object.prototype.hasOwnProperty.call(view, 'viewType')) return;
+				const state = typeof view.getState === 'function' ? (view.getState() ?? {}) : {};
+				fixes.push(
+					leaf
+						.setViewState({ type, state })
+						.then(() => console.info(`[my-obsidian] placeholder leaf repaired: ${type}`))
+						.catch((err: unknown) => console.warn(`[my-obsidian] placeholder leaf repair failed for ${type}`, err)),
+				);
+			});
+			if (fixes.length) {
+				console.info(`[my-obsidian] repairing ${fixes.length} placeholder leaf(s)`);
+				void Promise.all(fixes);
+			}
+		} catch (e) {
+			console.warn('[my-obsidian] placeholder leaf scan failed', e);
+		}
 	}
 }
