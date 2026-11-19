@@ -426,7 +426,6 @@ export class ExternalCodeView extends ItemView {
   // ------------------------------------------------------------------
 
   private async mount(): Promise<void> {
-    console.warn('[extcode] mount enter lastDiskLen=', (this.lastDiskData ?? '').length, 'abs=', this.abs);
     // 重挂载(切换混合/源码、设置变更)前先销毁旧的:
     // contentEl.empty() 只清 DOM,M Monaco 实例与 FragmentHost 组件会泄漏,
     // 且它们的 ResizeObserver 还盯着已脱离文档的容器。
@@ -547,12 +546,6 @@ export class ExternalCodeView extends ItemView {
         onSave: () => void this.flush(true),
         onChange: () => this.scheduleSave(),
       });
-      console.warn(
-        '[extcode] created len=', this.editor.getValue().length,
-        'contentLen=', content.length,
-        'modelLines=', this.editor.getModel()?.getLineCount(),
-        'abs=', this.abs,
-      );
       // LSP:basedpyright 等语言服务,含语义 token 着色(VS Code 同款);
       // 无匹配 server 或 LSP 关闭时 attach 返回空数组,零开销
       this.lspDisposables = monacoLspAttach(this.plugin, this.editor, language, docUri);
