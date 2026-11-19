@@ -75,9 +75,11 @@ import {
   entryMatches,
   EMPTY_FILTER,
   isMarkdownFile,
+  isTextFileName,
   isTextMount,
   type MountNode,
 } from '../features/mountFilter';
+import { runOpeners, type OpenerCtx } from '../openers';
 import {
   MOUNT_FOLDER,
   createEmptyFile,
@@ -1916,6 +1918,18 @@ export class MountPanelView extends ItemView {
       // 打开后聚焦（2026-11-07 用户报,同 openRow）
       this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
       return;
+    }
+    // 代码/文本文件(非 md):走 md-editor 的代码编辑器路由(与库外代码文件
+    // 同款 runOpeners('code')——2026-11-19 用户报「库内代码文件点不开」:
+    // 旧路径 targetLeaf.openFile(af) 落原生编辑器,.py/.ts 这类文件等于没开)。
+    // 开不了(模块禁用等)回落原生 openFile(原生至少能看文本)。
+    if (isTextFileName(af.name)) {
+      const ctx: OpenerCtx = { virtualTree: this.plugin };
+      const opened = await runOpeners('code', ctx, mount, { ...node, abs: vaultPath });
+      if (opened) {
+        this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
+        return;
+      }
     }
     await targetLeaf.openFile(af);
     this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
