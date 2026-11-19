@@ -26,6 +26,17 @@ interface LspDiagItem {
 
 const providerLangs = new Set<string>();
 
+/**
+ * 注销并重注册某语言的 provider(2026-11-20):server 推
+ * workspace/semanticTokens/refresh(分析完成)时调用——Monaco 语义缓存按
+ * model version,无公开失效 API;重注册触发对全部模型重算,打开瞬间的
+ * 不完整语义数据被完整数据替换。
+ */
+export function resetSemanticProviders(plugin: LspHostLike, languageId: string): void {
+  if (!providerLangs.delete(languageId)) return;
+  ensureMonacoLspProviders(plugin, languageId);
+}
+
 /** LSP 是否可用(有匹配 server 且设置未关闭) */
 function lspActive(plugin: LspHostLike, languageId: string): boolean {
   if (plugin.settings.lspEnabled === false) return false;

@@ -64,6 +64,28 @@ function hostContextOf(plugin: LspHostLike): { absPluginDir: string; vaultRoot: 
   return hostCtx;
 }
 
+/**
+ * Enabled 的库外挂载根(防御式读 virtual-tree 设置;code-editor 不依赖它,
+ * 读不到就空数组——LSP 行为退回原状)。库内挂载(kind='vault')被 vaultRoot
+ * 覆盖,不在此列。
+ */
+function extraWorkspaceRootsOf(plugin: LspHostLike): string[] {
+	try {
+		const host = (
+			plugin.app as unknown as {
+				plugins?: { plugins?: Record<string, { moduleInstance?: (id: string) => { settings?: Record<string, unknown> } | undefined }> };
+			}
+		).plugins?.plugins?.['obsidian-my-obsidian'];
+		const vt = host?.moduleInstance?.('virtual-tree');
+		const mounts = (vt?.settings as { externalMounts?: Array<{ kind?: string; path?: string; enabled?: boolean }> } | undefined)?.externalMounts ?? [];
+		return mounts
+			.filter((m) => m.enabled !== false && typeof m.path === 'string' && m.path && (m.kind ?? 'external') !== 'vault')
+			.map((m) => m.path as string);
+	} catch {
+		return [];
+	}
+}
+
 export function encodeFileUri(absPath: string): string {
   const p = absPath.replace(/\\/g, '/');
   const enc = p
@@ -196,7 +218,24 @@ async function startServer(plugin: LspHostLike, spec: LspServerSpec): Promise<{ 
     {
       processId: null,
       rootUri: encodeFileUri(vaultRoot),
+      // 挂载根进 pyright workspace(2026-11-20 用户报「run.py 颜色和其他 py
+      // 不一样」):挂载文件在 vaultRoot 之外,pyright 把 workspace 外文件当
+      // untracked——semantic tokens 不覆盖,着色只剩基础 Monarch 层(单调)。
+      // 把 enabled 的库外挂载根作为附加 workspaceFolders 带上,pyright 按
+      // tracked 文件给语义着色/诊断;库内挂载(kind='vault')已被 vaultRoot
+      // 覆盖,跳过。防御式读取 virtual-tree 设置(code-editor 不依赖它)。
+      workspaceFolders: [
+        { uri: encodeFileUri(vaultRoot), name: 'vault' },
+        ...extraWorkspaceRootsOf(plugin).map((p) => ({
+          uri: encodeFileUri(p),
+          name: p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p,
+        })),
+      ],
       capabilities: {
+        // 声明 client 支持多 workspace——pyright 的判定门(clientCapabilities.
+        // workspace.workspaceFolders.supported):不声明时它无视上面的
+        // workspaceFolders,只认 rootUri,挂载文件仍当 untracked。
+        workspace: { workspaceFolders: { supported: true, changeNotifications: false } },
         textDocument: {
           completion: { completionItem: { documentationFormat: ['markdown', 'plaintext'] } },
           hover: { contentFormat: ['markdown', 'plaintext'] },
@@ -253,6 +292,20 @@ async function startServer(plugin: LspHostLike, spec: LspServerSpec): Promise<{ 
       c.reply(msg.id!, null);
     } else if (msg.method === 'window/workDoneProgress/create') {
       c.reply(msg.id!, null);
+    } else if (msg.method === 'workspace/semanticTokens/refresh') {
+      // pyright 分析完成后推送 refresh(首次请求常在分析完成前——数据不完整,
+      // 挂载文件首屏语义色缺失)。Monaco 语义缓存按 model version,没有公开
+      // 的失效 API;注销+重注册 provider 会让它对全部模型重算(最省事的
+      // 官方等价物)。providerLangs 是 monacoLspBridge 的模块级集合,借
+      // ensureMonacoLspProviders 完成重注册。
+      void (async () => {
+        try {
+          const bridge = (await import('./monacoLspBridge')) as typeof import('./monacoLspBridge');
+          bridge.resetSemanticProviders(plugin, spec.languages[0] ?? '');
+        } catch {
+          /* 桥不可用(非渲染态)忽略 */
+        }
+      })();
     } else if (msg.method === 'textDocument/publishDiagnostics') {
       dispatchDiagnostics(msg as { params?: Record<string, unknown> });
     }
