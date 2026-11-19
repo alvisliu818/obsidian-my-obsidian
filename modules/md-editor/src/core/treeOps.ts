@@ -56,16 +56,35 @@ function findListContaining(list: Block[], b: Block): Block[] | null {
 /** Every root array the view has registered (strong refs, view-lifetime). */
 const rootArrays = new Set<Block[]>();
 
+/** 注册时携带的挂载容器（页嵌入/片段宿主传 box）——世代清扫用它判活。 */
+const rootBoxes = new WeakMap<Block[], HTMLElement>();
+
 /** Side-channel mapping root block -> top-level array it lives in (set by the view). */
 const forestRootsCache = new WeakMap<Block, Block[]>();
 
-export function registerRoots(roots: Block[]): void {
+/**
+ * Register root arrays for tree-structure resolution.
+ *
+ * 带 box 的注册（页嵌入、片段宿主）参与**世代清扫**：每次注册时把「挂载
+ * 容器已断连」的旧注册清掉——嵌入框被核心重渲染/移除后，其解析出的块树
+ * 不再被模块级 Set 钉住（用户实报长会话内存单调上涨 + 结构查询随历史
+ * 注册数线性变慢）。整页视图的注册（view-lifetime）不传 box，不受清扫。
+ */
+export function registerRoots(roots: Block[], box?: HTMLElement): void {
+  if (box) {
+    rootBoxes.set(roots, box);
+    for (const entry of [...rootArrays]) {
+      const b = rootBoxes.get(entry);
+      if (b && !b.isConnected) unregisterRoots(entry);
+    }
+  }
   rootArrays.add(roots);
   for (const r of roots) forestRootsCache.set(r, roots);
 }
 
 export function unregisterRoots(roots: Block[]): void {
   rootArrays.delete(roots);
+  rootBoxes.delete(roots);
   for (const r of roots) forestRootsCache.delete(r);
 }
 

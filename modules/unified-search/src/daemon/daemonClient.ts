@@ -368,6 +368,8 @@ export class BlockIndexDaemonClient {
     this.cacheAllTags = null;
     this.cacheCards = null;
     this.cacheSupertags = null;
+    this.cacheSupertagInstances.clear();
+    this.cacheTasksByMarker.clear();
     this.cacheFileBlocks.clear();
   }
 
@@ -402,6 +404,50 @@ export class BlockIndexDaemonClient {
 
   supertagDef(name: string): SupertagDef | null {
     return this.supertagRegistry().get(name.toLowerCase()) ?? null;
+  }
+
+  /** supertag 实例缓存（按 tag；同步读 + 后台填充 + onChange 唤醒消费方）。 */
+  private cacheSupertagInstances = new Map<string, IndexedBlock[]>();
+
+  supertagInstancesCached(tag: string): IndexedBlock[] {
+    const hit = this.cacheSupertagInstances.get(tag);
+    if (!hit) void this.fillSupertagInstances(tag);
+    return hit ?? [];
+  }
+
+  private async fillSupertagInstances(tag: string): Promise<void> {
+    const v0 = this.version;
+    try {
+      const bs = await this.supertagInstances(tag);
+      if (this.version === v0 && bs && bs.length) {
+        this.cacheSupertagInstances.set(tag, bs);
+        this.opts.onChange();
+      }
+    } catch {
+      /* daemon 忙/挂，下次访问再试 */
+    }
+  }
+
+  /** 带任务标记的块缓存（TODO 面板数据源；按 marker 键控，'' = 全部标记块）。 */
+  private cacheTasksByMarker = new Map<string, IndexedBlock[]>();
+
+  tasksByMarkerCached(marker: string): IndexedBlock[] {
+    const hit = this.cacheTasksByMarker.get(marker);
+    if (!hit) void this.fillTasksByMarker(marker);
+    return hit ?? [];
+  }
+
+  private async fillTasksByMarker(marker: string): Promise<void> {
+    const v0 = this.version;
+    try {
+      const bs = await this.query<IndexedBlock[]>('tasksByMarker', { marker });
+      if (this.version === v0 && bs) {
+        this.cacheTasksByMarker.set(marker, bs);
+        this.opts.onChange();
+      }
+    } catch {
+      /* daemon 忙/挂，下次访问再试 */
+    }
   }
 
   /** 单文件全部块（编辑器视图用）——缓存 + 异步补。 */
@@ -461,8 +507,8 @@ export class BlockIndexDaemonClient {
    * 统一搜索查询面:调用方编译好的 FTS5 MATCH 表达式(token 已安全引用,
    * 见 unified-search/src/matchBuilder),返回带 block_id 的块命中(供 #^锚点)。
    */
-  async ftsSearch(match: string, excludePath = '', limit = 50, onlyPath = ''): Promise<{ bkey: string; path: string; blockId: string; text: string }[]> {
-    return this.query<{ bkey: string; path: string; blockId: string; text: string }[]>('fts', { match, excludePath, limit, onlyPath });
+  async ftsSearch(match: string, excludePath = '', limit = 50, onlyPath = ''): Promise<{ bkey: string; path: string; blockId: string; text: string; marker: string | null }[]> {
+    return this.query<{ bkey: string; path: string; blockId: string; text: string; marker: string | null }[]>('fts', { match, excludePath, limit, onlyPath });
   }
 
   /**

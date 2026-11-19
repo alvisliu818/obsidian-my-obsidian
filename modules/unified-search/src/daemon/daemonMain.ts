@@ -476,6 +476,14 @@ class Queries {
     return rs.map((r) => Queries.hydrate(r, r.tags as string, r.links as string, r.props_json as string));
   }
 
+  /** 带任务标记的块（TODO 面板数据源）。marker 空 = 全部标记块。 */
+  async tasksByMarker(marker: string): Promise<DaemonBlock[]> {
+    const where = marker ? 'WHERE b.marker = ?' : "WHERE b.marker IS NOT NULL AND b.marker != ''";
+    const args = marker ? [marker] : [];
+    const rs = await this.rows(`${Queries.BLOCK_SQL} ${where} ORDER BY b.path, b.ord`, args);
+    return rs.map((r) => Queries.hydrate(r, r.tags as string, r.links as string, r.props_json as string));
+  }
+
   /**
    * 未连提及/块搜索扫描。FTS5 可用且 >=3 字符 → trigram MATCH(中文子串,
    * 毫秒级);否则 LIKE 全库扫(~237ms,可接受——老内存版 scanFor 也是全库扫)。
@@ -492,9 +500,9 @@ class Queries {
     const scope = onlyPath ? ' AND path = ?' : '';
     const params: unknown[] = onlyPath ? [match, excludePath, onlyPath, lim] : [match, excludePath, lim];
     const rs = await this.rows(
-      `SELECT s.bkey, s.path, s.text, b.block_id FROM
-         (SELECT bkey, path, text FROM blocks_fts WHERE blocks_fts MATCH ? AND path != ?${scope} LIMIT ?) s
-       JOIN blocks b ON b.bkey = s.bkey`,
+      `SELECT s.bkey, s.path, s.text, b.block_id, b.marker FROM
+         (SELECT bkey, path, text, rank FROM blocks_fts WHERE blocks_fts MATCH ? AND path != ?${scope} ORDER BY rank LIMIT ?) s
+       JOIN blocks b ON b.bkey = s.bkey ORDER BY s.rank`,
       params,
     );
     return rs.map((r) => ({
@@ -502,6 +510,7 @@ class Queries {
       path: String(r.path ?? ''),
       blockId: String(r.block_id ?? ''),
       text: String(r.text ?? ''),
+      marker: r.marker == null ? null : String(r.marker),
     }));
   }
 
@@ -1219,6 +1228,7 @@ async function main(): Promise<void> {
         if (msg.q === 'backlinksTo') return fn.call(queries, String(a.page ?? ''), String(a.selfPath ?? ''));
         if (msg.q === 'refsToBlock') return fn.call(queries, String(a.id ?? ''));
         if (msg.q === 'supertagInstances') return fn.call(queries, String(a.tag ?? ''));
+        if (msg.q === 'tasksByMarker') return fn.call(queries, String(a.marker ?? ''));
         if (msg.q === 'scan')
           return fn.call(queries, String(a.pattern ?? ''), String(a.excludePath ?? ''), Number(a.limit ?? 200), ftsEnabled(), String(a.onlyPath ?? ''));
         if (msg.q === 'fts')

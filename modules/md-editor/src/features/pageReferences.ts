@@ -11,27 +11,23 @@
  */
 
 import { setIcon } from 'obsidian';
+import { perViewState } from '../core/perViewState';
 import type LogseqEditorPlugin from '../main';
 import { renderPageBacklinks } from './pageBacklinks';
 import { renderUnlinkedMentions } from './unlinkedMentions';
 
 export const REFERENCES_SECTION_CLASS = 'page-references';
 
-/** Collapsed state per plugin session. */
-const collapsedByView = new WeakMap<object, { linked: boolean; unlinked: boolean }>();
+/** Collapsed state per plugin session（perViewState 统一出处）。 */
+const collapsedByView = perViewState<LogseqEditorPlugin, { linked: boolean; unlinked: boolean }>((plugin) => ({
+  // 初始折叠态由设置决定（默认：链接引用展开、未链接引用折叠——后者是
+  // 全库线性扫描，见 types.ts）。
+  linked: plugin.settings.refsLinkedDefaultCollapsed === true,
+  unlinked: plugin.settings.refsUnlinkedDefaultCollapsed === true,
+}));
 
 function stateFor(plugin: LogseqEditorPlugin): { linked: boolean; unlinked: boolean } {
-  let s = collapsedByView.get(plugin);
-  if (!s) {
-    // 初始折叠态由设置决定（默认：链接引用展开、未链接引用折叠——后者是
-    // 全库线性扫描，见 types.ts）。会话内用户点过的区记住用户的选择。
-    s = {
-      linked: plugin.settings.refsLinkedDefaultCollapsed === true,
-      unlinked: plugin.settings.refsUnlinkedDefaultCollapsed === true,
-    };
-    collapsedByView.set(plugin, s);
-  }
-  return s;
+  return collapsedByView.get(plugin);
 }
 
 /** Drop the per-session collapse memory so new defaults reach open editors. */

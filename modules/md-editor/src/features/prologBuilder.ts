@@ -175,7 +175,9 @@ export class PrologQueryBuilderModal extends Modal {
     const built = buildQuery(this.conds);
     if (this.codeEl) this.codeEl.textContent = built.source || '—';
 
-    const idx = this.plugin.blockIndex;
+    const idxRaw = this.plugin.blockIndex;
+    // 门面只有部分数据（无全量块集）——prolog fact 构建需要全量,诚实降级
+    const idx = (idxRaw as { isPartialFacade?: boolean } | null)?.isPartialFacade === true ? null : idxRaw;
     const preview = this.previewEl;
     const status = this.statusEl;
     if (!preview || !status) return;

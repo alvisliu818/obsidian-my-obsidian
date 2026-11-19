@@ -27,8 +27,10 @@ import {
 } from '@codemirror/view';
 import { tableAt, cellSourcePos } from './tableKeymap';
 import { syntaxTree } from '@codemirror/language';
-import { finishRenderMath, renderMath } from 'obsidian';
+import { finishRenderMath, renderMath, type App } from 'obsidian';
 import { collectEmojiTokens, emojiReplace } from '../features/emojiShortcodes';
+import { findMathDelimiters } from '../../../latex-delimiter-renderer/src/parser';
+import { LATEX_DELIMITER_API_KEY, type LatexApi } from '../features/latexSource';
 import {
   EditorSelection,
   EditorState,
@@ -476,6 +478,111 @@ export const mathWidgetExtension: Extension = ViewPlugin.fromClass(
   },
   { decorations: (v: { decorations: DecorationSet }) => v.decorations },
 );
+
+// ---------------------------------------------------------------------------
+// 斜杠 LaTeX（\(…\) / \[…\]）的编辑态渲染（用户 2026-11-20）。
+//
+// 此前斜杠 LaTeX 只活在 latex-delimiter-renderer 的两条路（原生 Live
+// Preview + 阅读模式）与本模块的静态渲染面（latexSource 转发）——块编辑器
+// 的**编辑态**（本 CM6 编辑器）里 `\(\sqrt{2}\)` 一直是生文本。这里补齐：
+// 编辑态也按位置精确渲染，光标进入区间退回生文本（与 $…$ 组件同款规则，
+// latex-suite 的补全/预览拥有区间内编辑权）。
+//
+// 数据源 = latex-delimiter-renderer 的 parser.findMathDelimiters（纯函数，
+// 处理转义），与静态转发面共用同一实现（复用而非复刻）。开关同款半关：
+// 模块没在跑（app 上没有它的 API）时本扩展不产装饰。
+//
+// 范围限定：逐可见行扫描——内联 `\(...\)` 天然不跨行；跨行 `\[…\]` 编辑态
+// 不渲染（静态面已覆盖），避免 CM6 replace 装饰跨行的渲染坑。
+// ---------------------------------------------------------------------------
+
+export interface SlashMathMatch {
+  from: number;
+  to: number;
+  body: string;
+  display: boolean;
+}
+
+/**
+ * 纯收集器（可单测）：在可见范围内扫 `\(…\)` / `\[…\]`，按光标规则与跳过
+ * 区（代码块/行内代码/$ 数学区）过滤。skipZones 由调用方从 syntaxTree 收集。
+ */
+export function collectSlashMath(
+  docText: string,
+  visibleRanges: ReadonlyArray<{ from: number; to: number }>,
+  selectionRanges: ReadonlyArray<{ from: number; to: number }>,
+  skipZones: ReadonlyArray<{ from: number; to: number }>,
+  enabled: boolean,
+): SlashMathMatch[] {
+  if (!enabled) return [];
+  const matches: SlashMathMatch[] = [];
+  for (const range of visibleRanges) {
+    const lineText = docText.slice(range.from, range.to);
+    for (const m of findMathDelimiters(lineText, range.from)) {
+      if (m.source.includes('\n')) continue; // 跨行 \[…\] 编辑态不渲染
+      // 光标规则：选区与区间重叠 → 生文本（latex-suite 拥有区间内编辑）
+      if (selectionRanges.some((r) => r.from <= m.to && r.to >= m.from)) continue;
+      // 跳过区（代码/行内代码/$ 数学区）：任一端落在区内即跳过
+      const fromIn = skipZones.some((s) => m.from >= s.from && m.from < s.to);
+      const toIn = skipZones.some((s) => m.to > s.from && m.to <= s.to);
+      if (fromIn || toIn) continue;
+      if (!m.source.trim()) continue;
+      matches.push({ from: m.from, to: m.to, body: m.source, display: m.display });
+    }
+  }
+  return matches;
+}
+
+/** 斜杠 LaTeX 编辑态渲染扩展（挂块编辑器与嵌入行两套列表）。 */
+export function slashMathExtension(app: App): Extension {
+  return ViewPlugin.fromClass(
+    class implements PluginValue {
+      decorations: DecorationSet = Decoration.none;
+      compute(view: EditorView): void {
+        // 半关开关：latex-delimiter-renderer 没在跑 → 不产装饰
+        const api = (app as unknown as Record<string, LatexApi | undefined>)[LATEX_DELIMITER_API_KEY];
+        const enabled = typeof api?.convertForObsidianRender === 'function';
+        // 跳过区：代码块 / 行内代码 / $ 数学区（可见范围内从语法树收集）
+        const skipZones: Array<{ from: number; to: number }> = [];
+        for (const range of view.visibleRanges) {
+          syntaxTree(view.state).iterate({
+            from: range.from,
+            to: range.to,
+            enter: (a) => {
+              if (
+                a.name === 'FencedCode'
+                || a.name === 'CodeBlock'
+                || a.name === 'InlineCode'
+                || a.name.startsWith('Dollar')
+              ) {
+                skipZones.push({ from: a.from, to: a.to });
+                return false;
+              }
+              return undefined;
+            },
+          });
+        }
+        const sel = view.state.selection.ranges.map((r) => ({ from: r.from, to: r.to }));
+        const matches = collectSlashMath(
+          view.state.doc.toString(),
+          view.visibleRanges,
+          sel,
+          skipZones,
+          enabled,
+        );
+        const builder = new RangeSetBuilder<Decoration>();
+        for (const m of matches) {
+          builder.add(m.from, m.to, Decoration.replace({ widget: new MathPreviewWidget(m.body, m.display) }));
+        }
+        this.decorations = builder.finish();
+      }
+      update(u: ViewUpdate): void {
+        if (u.docChanged || u.selectionSet || u.viewportChanged) this.compute(u.view);
+      }
+    },
+    { decorations: (v: { decorations: DecorationSet }) => v.decorations },
+  );
+}
 
 export const livePreviewExtension: Extension = [
   livePreviewField,

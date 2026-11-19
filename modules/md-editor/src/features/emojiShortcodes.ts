@@ -21,6 +21,7 @@ import { syntaxTree } from '@codemirror/language';
 import { Facet, RangeSetBuilder, type Extension } from '@codemirror/state';
 import { editorLivePreviewField } from 'obsidian';
 import { EMOJI_SHORTCODES } from './emojiShortcodesData';
+	import { scanLinesWithFences } from '../core/fenceScan';
 
 /**
  * 与 GitHub 同款扫描:`:([a-z0-9_+-]+):`,名字字符集即 gemoji 命名,大小写
@@ -66,8 +67,6 @@ export interface EmojiToken {
 	emoji: string;
 }
 
-const FENCE_RE = /^\s*(```|~~~)/;
-
 /**
  * 编辑态扫描:全文找可渲染的 shortcode token(整行文本级,含围栏跳过与
  * covered 排除——livePreview 的行内 code 已先声明区间)。纯函数,供
@@ -82,42 +81,35 @@ export function collectEmojiTokens(
 	covered: ReadonlyArray<{ from: number; to: number; code?: boolean }>,
 ): EmojiToken[] {
 	const tokens: EmojiToken[] = [];
-	let inFence = false;
-	let fenceMarker = '';
-	for (let n = 1; n <= doc.lines; n++) {
-		const line = doc.line(n);
-		const fence = FENCE_RE.exec(line.text);
-		if (fence) {
-			if (!inFence) {
-				inFence = true;
-				fenceMarker = fence[1];
-			} else if (line.text.trimStart().startsWith(fenceMarker)) {
-				inFence = false;
+	// 围栏状态走统一扫描（core/fenceScan）——此前手写状态机
+	scanLinesWithFences(
+		(n) => doc.line(n).text,
+		doc.lines,
+		(lineText, inFence, n) => {
+			if (inFence) return;
+			const line = doc.line(n);
+			SHORTCODE_RE.lastIndex = 0;
+			let m: RegExpExecArray | null;
+			while ((m = SHORTCODE_RE.exec(lineText))) {
+				const emoji = resolveShortcode(m[1]);
+				if (!emoji) continue;
+				const from = line.from + m.index;
+				const to = from + m[0].length;
+				if (
+					covered.some((c) => {
+						if (from < c.to && to > c.from) {
+							// 重叠:code 排斥;非 code 只有部分重叠才排斥。
+							return c.code === true || from < c.from || to > c.to;
+						}
+						return false;
+					})
+				) {
+					continue;
+				}
+				tokens.push({ from, to, emoji });
 			}
-			continue;
-		}
-		if (inFence) continue;
-		SHORTCODE_RE.lastIndex = 0;
-		let m: RegExpExecArray | null;
-		while ((m = SHORTCODE_RE.exec(line.text))) {
-			const emoji = resolveShortcode(m[1]);
-			if (!emoji) continue;
-			const from = line.from + m.index;
-			const to = from + m[0].length;
-			if (
-				covered.some((c) => {
-					if (from < c.to && to > c.from) {
-						// 重叠:code 排斥;非 code 只有部分重叠才排斥。
-						return c.code === true || from < c.from || to > c.to;
-					}
-					return false;
-				})
-			) {
-				continue;
-			}
-			tokens.push({ from, to, emoji });
-		}
-	}
+		},
+	);
 	return tokens;
 }
 

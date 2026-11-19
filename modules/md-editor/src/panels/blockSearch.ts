@@ -7,8 +7,6 @@ import { FuzzySuggestModal, type App, type FuzzyMatch } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import type { IndexedBlock } from '../index/blockIndex';
 
-const MAX_ITEMS = 5000;
-
 export class BlockSearchModal extends FuzzySuggestModal<IndexedBlock> {
   plugin: LogseqEditorPlugin;
 
@@ -23,8 +21,31 @@ export class BlockSearchModal extends FuzzySuggestModal<IndexedBlock> {
     ]);
   }
 
+  // 基类 Suggest 支持 Promise（typings: Suggest 层 `T[] | Promise<T[]>`，
+  // FuzzySuggestModal 层只标同步——运行时 updateSuggestions 会 await）。
+  // daemon 模式：查询走内核 FTS（trigram，中文子串毫秒级，已按 rank 排序），
+  // 不再全量拉块进渲染进程。无 daemon → 空列表（与旧态一致）。
+  // @ts-expect-error — override widens the declared sync return to Promise
+  async getSuggestions(query: string): Promise<FuzzyMatch<IndexedBlock>[]> {
+    const q = query.trim();
+    const daemon = this.plugin.daemonIndex;
+    if (!q || !daemon) return [];
+    const rows = await daemon.ftsSearch(q, '', 200).catch(() => []);
+    return rows.map((r) => ({
+      item: {
+        path: r.path,
+        blockId: r.blockId,
+        text: r.text,
+        marker: r.marker,
+      } as IndexedBlock,
+      score: 0, // 内核已按 FTS rank 排序
+      match: { score: 0, matches: [] },
+    }));
+  }
+
+  // 基类抽象方法（typings 要求）——数据由覆写的 getSuggestions 异步供给。
   getItems(): IndexedBlock[] {
-    return (this.plugin.blockIndex?.allBlocks() ?? []).filter((b) => b.text.trim() !== '').slice(0, MAX_ITEMS);
+    return [];
   }
 
   getItemText(item: IndexedBlock): string {

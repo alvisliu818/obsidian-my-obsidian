@@ -23,9 +23,13 @@
  */
 import type { App } from 'obsidian';
 
-const API_KEY = 'latex-delimiter-renderer';
+/** latex-delimiter-renderer 发布在 app 上的 API 键（静态转发与编辑器内联
+ *  渲染共用——模块关掉时所有斜杠 LaTeX 面一起变暗，半关开关）。 */
+export const LATEX_DELIMITER_API_KEY = 'latex-delimiter-renderer';
 
-type LatexApi = { convertForObsidianRender?: (markdown: string) => string };
+export type LatexApi = { convertForObsidianRender?: (markdown: string) => string };
+
+const API_KEY = LATEX_DELIMITER_API_KEY;
 
 /**
  * Rewrite LaTeX delimiters for one rendering pass, if the module is running.

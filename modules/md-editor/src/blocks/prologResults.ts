@@ -45,7 +45,10 @@ export function syncPrologContainer(
 }
 
 function renderPrologResults(b: Block, host: BlockRenderHost): HTMLElement {
-  const idx = host.plugin.blockIndex;
+  const idxRaw = host.plugin.blockIndex;
+  // daemon 门面只有部分数据（无全量块集）——prolog fact 构建需要全量,
+  // 静默渲染不完整结果比显示不可用更糟,诚实降级。
+  const idx = (idxRaw as { isPartialFacade?: boolean } | null)?.isPartialFacade === true ? null : idxRaw;
   const version = idx?.version ?? 0;
   const sig = b.text;
   const hit = cache.get(b);

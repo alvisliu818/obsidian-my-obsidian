@@ -44,7 +44,7 @@ import { getInternalFromClipboardData } from '../features/internalClipboard';
 import { shouldPasteMarkdownFromHTML } from '../features/markdownClipboard';
 import { tableMarkdownFromClipboard } from '../features/tablePaste';
 import { syncActiveBlockEditor } from '../interactions/textSelectionMenu';
-import { livePreviewConfig, livePreviewExtension } from './livePreview';
+import { livePreviewConfig, livePreviewExtension, slashMathExtension } from './livePreview';
 import { mathSyntax } from './mathSyntax';
 import { obsidianInlineSyntax } from './obsidianInlineSyntax';
 import { mdEmojiBypass } from '../features/emojiShortcodes';
@@ -492,6 +492,7 @@ export function createEmbedExtensions(
     propLineHighlighter,
     livePreviewExtension,
     mathLiveBlockPreview(),
+    slashMathExtension(host.app),
     autocompletion({ override: [...host.autocompleteSources(true)], icons: true, activateOnTyping: true }),
     completionYieldKeymap(host),
     Prec.high(
@@ -655,6 +656,7 @@ export function createEditorExtensions(host: BlockRenderHost, block?: Block): Ex
     virtualLinkExtension(host, block),
     ...livePreview,
     mathLiveBlockPreview(),
+    slashMathExtension(host.app),
     // Autocompletion sources ([[wiki]], #tag, ((ref)) — / and < use the
     // self-drawn command menu in the main editor).
     autocompletion({ override: [...host.autocompleteSources()], icons: true, activateOnTyping: true }),

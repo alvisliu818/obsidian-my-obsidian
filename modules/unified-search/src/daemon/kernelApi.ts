@@ -38,6 +38,7 @@ export type QueryName =
   | 'backlinksTo'
   | 'refsToBlock'
   | 'supertagInstances'
+  | 'tasksByMarker'
   | 'scan'
   | 'fts'
   | 'nameSearch'

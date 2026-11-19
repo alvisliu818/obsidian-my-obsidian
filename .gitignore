@@ -67,3 +67,5 @@ monaco-workers/
 /esbuild-meta.json
 /_*.html
 /_*.txt
+
+dist-release/

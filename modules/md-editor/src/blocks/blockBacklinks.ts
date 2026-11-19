@@ -9,6 +9,7 @@ import { setIcon } from 'obsidian';
 import type { BlockEditorView } from '../view/BlockEditorView';
 import type { Block } from '../types';
 import type { BacklinkEntry } from '../index/blockIndex';
+import { perViewState } from '../core/perViewState';
 import { plainText } from '../features/query';
 import { blockId } from '../types';
 import { findBlockEl } from './renderTree';
@@ -17,15 +18,10 @@ const BADGE_CLASS = 'block-backlink-badge';
 const PANEL_CLASS = 'block-backlinks-panel';
 
 /** Currently expanded block ids (per view session). */
-const expandedByView = new WeakMap<BlockEditorView, Set<string>>();
+const expandedByView = perViewState<BlockEditorView, Set<string>>(() => new Set());
 
 function expandedFor(view: BlockEditorView): Set<string> {
-  let s = expandedByView.get(view);
-  if (!s) {
-    s = new Set();
-    expandedByView.set(view, s);
-  }
-  return s;
+  return expandedByView.get(view);
 }
 
 /**

@@ -45,6 +45,7 @@ import {
 } from '../features/query';
 import type { IndexedBlock } from '../index/blockIndex';
 import { flattenVisible } from '../core/treeOps';
+import { scanLinesWithFences } from '../core/fenceScan';
 import { layoutGuideLines } from './guideLayout';
 import { renderBlockView } from './blockView';
 import { isViewBlock, VIEW_COLUMNS_PROP, VIEW_PROP } from '../features/blockViews';
@@ -746,7 +747,9 @@ function renderQueryResults(b: Block, host: BlockRenderHost): HTMLElement {
 function renderQueryList(b: Block, host: BlockRenderHost): HTMLElement {
   const el = document.createElement('div');
   el.className = 'block-query-results';
-  const idx = host.plugin.blockIndex;
+  const idxRaw = host.plugin.blockIndex;
+  // 门面只有部分数据——{{query}} 需要全量块集,诚实降级
+  const idx = (idxRaw as { isPartialFacade?: boolean } | null)?.isPartialFacade === true ? null : idxRaw;
   const ast = parseQueryText(b.text);
   if (!ast) {
     el.createEl('div', { cls: 'query-error', text: 'Invalid query' });
@@ -768,7 +771,9 @@ function renderQueryList(b: Block, host: BlockRenderHost): HTMLElement {
 function renderQueryTable(b: Block, host: BlockRenderHost): HTMLElement {
   const el = document.createElement('div');
   el.className = 'block-query-results block-query-table-wrap';
-  const idx = host.plugin.blockIndex;
+  const idxRaw = host.plugin.blockIndex;
+  // 门面只有部分数据——{{query-table}} 需要全量块集,诚实降级
+  const idx = (idxRaw as { isPartialFacade?: boolean } | null)?.isPartialFacade === true ? null : idxRaw;
   const ast = parseQueryTableText(b.text);
   if (!ast) {
     el.createEl('div', { cls: 'query-error', text: 'Invalid query' });
@@ -850,29 +855,25 @@ export function withTableSeparation(text: string): string {
   if (!/^\s*\|/m.test(text)) return text;
   const lines = text.split('\n');
   const out: string[] = [];
-  let inFence = false;
-  let fenceMarker = '';
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const fenceOpen = /^\s*(```|~~~)/.exec(line);
-    if (fenceOpen && !inFence) {
-      inFence = true;
-      fenceMarker = fenceOpen[1];
-    } else if (inFence && line.trimStart().startsWith(fenceMarker)) {
-      inFence = false;
-    }
-    if (
-      !inFence &&
-      /^\s*\|/.test(line) &&
-      out.length > 0 &&
-      out[out.length - 1].trim() !== '' &&
-      i + 1 < lines.length &&
-      /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(lines[i + 1])
-    ) {
-      out.push('');
-    }
-    out.push(line);
-  }
+  // 围栏状态走统一扫描（core/fenceScan）——此前三处手写同一状态机
+  scanLinesWithFences(
+    (n) => lines[n - 1] ?? '',
+    lines.length,
+    (line, inFence, n1) => {
+      const idx = n1 - 1; // 1 起行号 → 0 起数组索引
+      if (
+        !inFence &&
+        /^\s*\|/.test(line) &&
+        out.length > 0 &&
+        out[out.length - 1].trim() !== '' &&
+        idx + 1 < lines.length &&
+        /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(lines[idx + 1])
+      ) {
+        out.push('');
+      }
+      out.push(line);
+    },
+  );
   return out.join('\n');
 }
 

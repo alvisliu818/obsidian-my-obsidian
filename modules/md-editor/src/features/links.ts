@@ -17,10 +17,13 @@ import { slashMenuSource } from './slashMenu';
 import { isMemoPayload } from '../interactions/inlineMemo';
 import { hintSuppressedAt, isCaretInHeadingPrefix } from './hintGuards';
 import { toObsidianMath } from './latexSource';
+import { BLOCK_REF_RE as BLOCK_REF_RE_G, BLOCK_UUID_BODY } from '../core/refs';
 import type { Block } from '../types';
 
-const BLOCK_REF_RE = /\(\(([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\)\)/g;
-const EMBED_RE = /\{\{embed\s*\(\(([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\)\)\}\}/g;
+// 块引用/嵌入正则的 UUID 捕获体来自 core/refs.ts 的统一出处（EMBED_RE 需要把
+// 同一捕获体嵌进更大的模式,故用 new RegExp 组装）。
+const BLOCK_REF_RE = BLOCK_REF_RE_G;
+const EMBED_RE = new RegExp(`\\{\\{embed\\s*\\(\\(${BLOCK_UUID_BODY}\\)\\)\\}\\}`, 'g');
 /** Page embed: ![[Page Name]] 鈥?embeds the WHOLE page (all top-level blocks). */
 const PAGE_EMBED_RE = /!\[\[([^\[\]|]+)\]\]/g;
 /** Inline memo: `((text))` with a NON-UUID payload (block refs own the UUID form). */
@@ -367,7 +370,7 @@ export function renderPageEmbedBody(
   });
   const body = box.createEl('div', { cls: 'block-embed-body' });
   // Register roots so in-place editing of these rows resolves siblings.
-  registerRoots(blocks);
+  registerRoots(blocks, box);
   // Paths address top-level blocks by index (blocks may lack id:: props —
   // page-embed rows are addressed by path, never by findBlockById).
   const pseudoSrc: EmbedSource = {

@@ -37,7 +37,7 @@ export class BlockGraphModal extends Modal {
       this.contentEl.createEl('p', { text: 'Block index unavailable.' });
       return;
     }
-    const model = buildBlockGraph(idx.allBlocks());
+    const model = buildBlockGraph(idx.withIds());
     if (model.nodes.length === 0) {
       this.contentEl.createEl('p', {
         cls: 'block-graph-empty',

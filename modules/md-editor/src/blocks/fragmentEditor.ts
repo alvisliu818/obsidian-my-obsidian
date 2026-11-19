@@ -33,6 +33,7 @@ import {
   outdent,
   rangeAnchor,
   registerRoots,
+  unregisterRoots,
   removeBlock,
   siblingsOf,
   splitBlock,
@@ -114,6 +115,8 @@ export class FragmentHost extends Component implements BlockRenderHost {
   private savedFocusPos: CursorPos = 'end';
   private lastClicked: Block | null = null;
   private pendingRangeAnchor: Block | null = null;
+  /** 上一轮 renderInner 注册的根数组（换代出册用，防模块级 Set 钉住旧块树）。 */
+  private prevRoots: Block[] | null = null;
 
   constructor(plugin: LogseqEditorPlugin, mount: HTMLElement, opts: FragmentOptions = {}) {
     super();
@@ -138,6 +141,10 @@ export class FragmentHost extends Component implements BlockRenderHost {
     if (this.focusedView) {
       this.focusedView.destroy();
       this.focusedView = null;
+    }
+    if (this.prevRoots) {
+      unregisterRoots(this.prevRoots);
+      this.prevRoots = null;
     }
     this.treeEl.empty();
     this.containerEl.remove();
@@ -183,6 +190,10 @@ export class FragmentHost extends Component implements BlockRenderHost {
 
   private renderInner(): void {
     const roots = this.visibleRoots;
+    // 换代：上一轮注册的根数组出册（不清理 = 模块级 Set 永久钉住旧块树，
+    // 长会话内存单调上涨——与页嵌入同一类泄漏）
+    if (this.prevRoots && this.prevRoots !== roots) unregisterRoots(this.prevRoots);
+    this.prevRoots = roots;
     registerRoots(roots);
     // 上一个 CM 实例的 DOM 将随树重建;焦点块由 renderBlockTree 在命中时
     // 经 mountFocusedInto 重挂(pendingFocus 已带落点)。

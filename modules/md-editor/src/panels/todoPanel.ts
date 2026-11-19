@@ -103,11 +103,9 @@ export class TodoPanelView extends ItemView {
       list.createEl('div', { cls: 'logseq-panel-empty', text: 'Index unavailable.' });
       return;
     }
-    const all = idx.allBlocks();
-    const items =
-      this.filter === 'ALL'
-        ? all.filter((b) => b.marker)
-        : all.filter((b) => (b.marker ?? '').toUpperCase() === this.filter);
+    // 内核查询直供（daemon 模式）：marker 块集从内核 SQL 拉（小集合,缓存化）,
+    // 不再全量 allBlocks 过滤——10563 块全量拉取会撑爆渲染进程内存。
+    const items = idx.tasksByMarker(this.filter === 'ALL' ? '' : this.filter.toUpperCase());
 
     if (items.length === 0) {
       list.createEl('div', {

@@ -193,7 +193,15 @@ export class BlockIndex {
   }
 
   /** All #card flashcards in the vault. */
-  allCards(): CardEntry[] {
+  /** 带任务标记的块（TODO 面板数据源）。marker 空 = 全部标记块。 */
+  tasksByMarker(marker: string): IndexedBlock[] {
+    const all = this.allBlocks();
+    return marker
+      ? all.filter((b) => (b.marker ?? '').toUpperCase() === marker.toUpperCase())
+      : all.filter((b) => b.marker);
+  }
+
+    allCards(): CardEntry[] {
     return this.cards;
   }
 

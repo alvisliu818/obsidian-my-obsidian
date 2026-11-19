@@ -495,11 +495,19 @@ function showEdgeIndicator(target: Block, pos: DropBand): void {
 }
 
 let crossViewBound = false;
+/** document 级监听器的摘除回调（插件卸载时统一执行——此前永不移除,
+ *  重载后旧监听器钉着旧 DOM/模块状态,新实例再挂一套双份并存）。 */
+let crossViewCleanup: Array<() => void> = [];
 
 /**
  * Drops that land OUTSIDE the originating tree. Attached once per document:
  * the per-tree handlers only receive events for their own subtree, so without
  * this a block could never be dragged into a second note.
+ *
+ * 生命周期：document 级监听器挂一次,摘除回调挂进首个 host 的 plugin
+ * register（卸载时统一摘除+复位,防重载后双份并存+旧闭包钉住旧 DOM）。
+ * 「是否在来源树外」的判定不再闭包捕获首个 host 的 treeEl（首树关掉后
+ * 闭包钉住死元素）——改为运行时从 dragOrigin 解析当前来源树。
  */
 function attachCrossViewDnd(host: BlockEditorView): void {
   if (crossViewBound) return;
@@ -507,13 +515,31 @@ function attachCrossViewDnd(host: BlockEditorView): void {
   const treeEl = host.treeRoot();
   (treeEl as HTMLElement & { __logseqHost?: BlockEditorView }).__logseqHost = host;
 
-  document.addEventListener('dragover', (ev) => {
+  // 来源树动态解析：拖拽期间的来源视图（dragOrigin）自己的树
+  const outsideOrigin = (node: Node): boolean => {
+    const originTree = dragOrigin?.treeRoot();
+    return !originTree || !originTree.contains(node);
+  };
+  const originApp = () => dragOrigin?.app ?? host.app;
+
+  const addDoc = (type: string, fn: (ev: DragEvent) => void): void => {
+    const listener = fn as unknown as EventListener;
+    document.addEventListener(type, listener);
+    crossViewCleanup.push(() => document.removeEventListener(type, listener));
+  };
+  host.plugin.register(() => {
+    for (const off of crossViewCleanup) off();
+    crossViewCleanup = [];
+    crossViewBound = false;
+  });
+
+  addDoc('dragover', (ev) => {
     if (dragged.length === 0) return;
     // Nothing draggable under the pointer any more (moved off a valid row):
     // drop the highlight so a stale target can't be left lit.
     if (!explorerFileAt(ev.target as Element)) clearExplorerHighlight();
     const target = blockFromEl(ev.target as HTMLElement);
-    const overOtherTree = !!target && !treeEl.contains(ev.target as Node);
+    const overOtherTree = !!target && outsideOrigin(ev.target as Node);
     if (target && overOtherTree) {
       if (!canDrop(dragged, target, dragGroup).ok) return;
       ev.preventDefault();
@@ -527,7 +553,7 @@ function attachCrossViewDnd(host: BlockEditorView): void {
     if (!target) {
       const path = explorerFileAt(ev.target as Element);
       if (!path) return;
-      const dest = host.app.vault.getAbstractFileByPath(path);
+      const dest = originApp().vault.getAbstractFileByPath(path);
       if (!(dest instanceof TFile) || !dest.extension?.toLowerCase().includes('md')) return;
       if (dest.path === dragOrigin?.file?.path) return;
       ev.preventDefault();
@@ -539,7 +565,7 @@ function attachCrossViewDnd(host: BlockEditorView): void {
     }
   });
 
-  document.addEventListener('dragleave', (ev) => {
+  addDoc('dragleave', (ev) => {
     // Leaving the lit row entirely un-lights it; internal element transitions
     // (row → its own title span) must not, or the highlight flickers.
     const to = ev.relatedTarget as Node | null;
@@ -548,14 +574,14 @@ function attachCrossViewDnd(host: BlockEditorView): void {
     }
   });
 
-  document.addEventListener('drop', async (ev) => {
+  addDoc('drop', async (ev) => {
     if (dragged.length === 0) return;
     stopEdgeScroll();
     const target = blockFromEl(ev.target as HTMLElement);
     const path = explorerFileAt(ev.target as Element);
 
     // --- drop on a block in another open view ---
-    if (target && !treeEl.contains(ev.target as Node)) {
+    if (target && outsideOrigin(ev.target as Node)) {
       const check = canDrop(dragged, target, dragGroup);
       if (!check.ok) return;
       const pos = dropPositionAt(ev.clientY, target, dragged);
@@ -582,7 +608,7 @@ function attachCrossViewDnd(host: BlockEditorView): void {
 
     // --- drop on a file row in the explorer ---
     if (!target && path) {
-      const dest = host.app.vault.getAbstractFileByPath(path);
+      const dest = originApp()?.vault.getAbstractFileByPath(path);
       if (!(dest instanceof TFile) || !dest.extension?.toLowerCase().includes('md')) return;
       const from = dragOrigin;
       const plan = planCrossFile(from?.file?.path ?? '', dest.path);
@@ -597,7 +623,7 @@ function attachCrossViewDnd(host: BlockEditorView): void {
     }
   });
 
-  document.addEventListener('dragend', () => {
+  addDoc('dragend', () => {
     dragged = [];
     dragGroup = [];
     dragOrigin = null;

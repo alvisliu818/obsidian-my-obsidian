@@ -87,7 +87,22 @@ export default class LogseqEditorPlugin extends Plugin {
   settings: BlockEditorSettings = DEFAULT_SETTINGS;
   /** 核心文件浏览器工具栏上的「定位当前文件」按钮（注入式 UI，需自行装卸）。 */
   fileExplorerLocate: FileExplorerLocateButton | null = null;
-  blockIndex: BlockIndex | null = null;
+
+  /**
+   * 块索引消费面（37 处消费方：{{query}}/TODO/标签/闪卡/反链面板/补全…）。
+   *
+   * 历史：内存 BlockIndex 与渲染内 SQLite 两层都已随 daemon-only 转型退役，
+   * 这个字段曾恒 null——37 个消费方全部空转（面板 unavailable、补全恒空）。
+   * 现改为 getter 直通 syncIndex 门面：daemon 在跑时消费方全部复活，未运行
+   * 时返回 null（与旧运行态一致，无回归）。
+   *
+   * 门面补齐了消费方用到的全部方法：buildAll → 内核 rebuild RPC；
+   * allBlocks/backlinksTo/refsToBlock/unlinkedMentions 返回空（内核侧查询
+   * 未实现——与退役前这些消费方在 daemon 模式的表现一致，不新增伤害）。
+   */
+  get blockIndex(): BlockIndex | null {
+    return this.daemonIndex ? (this.syncIndex as unknown as BlockIndex | null) : null;
+  }
   /** 守护进程索引客户端(档位 2):桌面 + sqliteIndexEnabled 时取代内存 blockIndex。 */
   daemonIndex: BlockIndexDaemonClient | null = null;
   /** daemon 模式下的索引变更监听器(等价 blockIndex.onRebuild 的 listener 集)。 */
@@ -275,6 +290,11 @@ export default class LogseqEditorPlugin extends Plugin {
         if (!file) return;
         this.settings.recentFiles = pushRecent(this.settings.recentFiles ?? [], file.path);
         void this.saveSettings();
+        // daemon 模式：预取该文件块的引用反链（块引用徽章只读
+        // daemonPrefetchedRefs 缓存，打开即预热，徽标不用等逐块 RPC）
+        if (this.daemonIndex && !this.isIndexExcluded(file.path)) {
+          void this.prefetchBlockRefs(file.path);
+        }
       }),
     );
 
@@ -1182,10 +1202,19 @@ export default class LogseqEditorPlugin extends Plugin {
     supertagInstances(tag: string): import('./index/blockIndex').IndexedBlock[];
     onRebuild(cb: () => void): () => void;
     readonly version: number;
+    buildAll(): Promise<void>;
+    allBlocks(): import('./index/blockIndex').IndexedBlock[];
+    backlinksTo(path: string): import('./index/blockIndex').BacklinkEntry[];
+    refsToBlock(id: string): import('./index/blockIndex').BacklinkEntry[];
+    unlinkedMentions(query: string): import('./index/blockIndex').IndexedBlock[];
+    tasksByMarker(marker: string): import('./index/blockIndex').IndexedBlock[];
+    prewarmSignatures(): void;
+    readonly isPartialFacade: true;
   } | null {
     // daemon 客户端没有 onRebuild(监听器住在 plugin 上)——包一层同形适配。
+    // 内存 BlockIndex 已退役（永不构造）——无 daemon 时门面为 null。
     const d = this.daemonIndex;
-    if (!d) return this.blockIndex;
+    if (!d) return null;
     return {
       withIds: () => d.withIds(),
       get: (id: string) => d.get(id),
@@ -1193,14 +1222,54 @@ export default class LogseqEditorPlugin extends Plugin {
       allCards: () => d.allCards(),
       supertagRegistry: () => d.supertagRegistry(),
       supertagDef: (name: string) => d.supertagDef(name),
-      supertagInstances: (_tag: string) => [], // 异步查询,同步面禁用(调用方直接用 daemonIndex)
+      supertagInstances: (tag: string) => d.supertagInstancesCached(tag),
+      tasksByMarker: (marker: string) => d.tasksByMarkerCached(marker),
       onRebuild: (cb: () => void) => this.onDaemonIndexChange(cb),
+      // 消费方（TODO 面板刷新/闪卡重建）→ 内核 rebuild RPC
+      buildAll: () => {
+        void d.rebuild().catch(() => {});
+      },
+      // 内核侧查询尚未实现——返回空与退役前的 daemon 表现一致，不新增伤害
+      allBlocks: () => [],
+      backlinksTo: () => [],
+      refsToBlock: (id: string) => this.daemonPrefetchedRefs.get(id) ?? [],
+      unlinkedMentions: () => [],
+      prewarmSignatures: () => {},
       get version() { return d.version; },
+      // 部分数据标记：全量依赖的消费方（prolog {{query}}/unlinkedMentions/
+      // backlinksTo 全库面）据此诚实显示不可用,而非静默渲染不完整结果
+      isPartialFacade: true,
     } as unknown as NonNullable<ReturnType<() => LogseqEditorPlugin['syncIndex']>>;
   }
 
   /** badge 预取缓存(daemon 模式):当前打开文件的块引用反链,打开/变更时刷新。 */
   daemonPrefetchedRefs: Map<string, import('./index/blockIndex').BacklinkEntry[]> = new Map();
+
+  /** 预取去重:同一文件只拉一次（文件切换/变更会再触发）。 */
+  private prefetchingPath: string | null = null;
+
+  /**
+   * 预取一个文件内全部带 id 块的引用反链（块引用徽章的 daemon 数据源）。
+   * 逐块 RPC（内核 SQL 毫秒级）;fill 后 notify 唤醒徽标重绘。
+   */
+  private async prefetchBlockRefs(path: string): Promise<void> {
+    const d = this.daemonIndex;
+    if (!d || this.prefetchingPath === path) return;
+    this.prefetchingPath = path;
+    try {
+      const bs = await d.blocksByPath(path);
+      for (const b of bs) {
+        if (!b.blockId) continue;
+        const refs = await d.refsToBlock(b.blockId).catch(() => []);
+        if (refs.length) this.daemonPrefetchedRefs.set(b.blockId, refs);
+      }
+      this.notifyBlockIndexConsumers();
+    } catch {
+      /* daemon 忙/挂，下次打开再试 */
+    } finally {
+      this.prefetchingPath = null;
+    }
+  }
 
   /** daemon changed 事件落地:唤醒全部消费方缓存。 */
   notifyBlockIndexConsumers(): void {

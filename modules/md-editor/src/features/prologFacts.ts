@@ -39,6 +39,8 @@ import {
   type Clause,
   type Term,
 } from './prolog';
+import { BLOCK_REF_RE as BLOCK_REF_RE_G } from '../core/refs';
+import { normalizeLinkTarget } from './query';
 
 export interface PrologFactBlock {
   path: string;
@@ -61,8 +63,8 @@ export interface PrologFactSource {
 /** Blocks without an `id::` cannot be addressed, so they get no facts. */
 const SKIP_PROPS = new Set(['id', 'collapsed']);
 
-const BLOCK_REF_RE =
-  /\(\(([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\)\)/g;
+// 块引用正则来自 core/refs.ts 的统一出处（BLOCK_REF_RE 精确变体）
+const BLOCK_REF_RE = BLOCK_REF_RE_G;
 
 /** Hard ceiling so one pathological vault cannot stall a render. */
 export const MAX_FACTS = 400_000;
@@ -95,11 +97,11 @@ function builtinRuleClauses(): Clause[] {
   }
 }
 
-/** Page name for a vault path: basename without `.md`, lowercased. */
+/** Page name for a vault path: basename without `.md`, lowercased.
+ *  归一到 query.normalizeLinkTarget（同一语义：取 basename+小写——两份手写
+ *  已核对等价，统一出处防漂移）。 */
 export function pageNameOf(path: string): string {
-  const base = path.replace(/\\/g, '/').split('/').pop() ?? path;
-  const name = base.toLowerCase().endsWith('.md') ? base.slice(0, -3) : base;
-  return name.toLowerCase();
+  return normalizeLinkTarget(path);
 }
 
 export function buildPrologFacts(
@@ -223,7 +225,8 @@ export const PREDICATES: PredicateSpec[] = [
   { pi: 'page/2', name: 'page', args: [{ label: 'Path', kind: 'text' }, { label: 'Name', kind: 'page' }], doc: 'Every page in the vault' },
 ];
 
-export const MARKERS = ['todo', 'doing', 'done', 'now', 'later', 'waiting', 'canceled'];
+/** Prolog 侧的任务词（小写,7 个——与 types.MARKERS 的大写 3 词同名不同义,改名防拿错）。 */
+export const TASK_WORDS = ['todo', 'doing', 'done', 'now', 'later', 'waiting', 'canceled'];
 
 /** Candidate values for an argument kind, for the builder's datalist. */
 export function valuesForKind(src: PrologFactSource, kind: ArgKind, limit = 60): string[] {
@@ -253,7 +256,7 @@ export function valuesForKind(src: PrologFactSource, kind: ArgKind, limit = 60):
       return take(vals);
     }
     case 'marker':
-      return MARKERS;
+      return TASK_WORDS;
     default:
       return [];
   }

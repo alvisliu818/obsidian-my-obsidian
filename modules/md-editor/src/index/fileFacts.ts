@@ -29,8 +29,11 @@ export const SYNTHETIC_PREFIX = '~';
 
 const TAG_RE = /(?:^|[\s(])#([\p{L}\d][\p{L}\d_/-]*)/gu;
 const LINK_RE = /\[\[([^\]]+)\]\]/g;
-/** Block reference scan: ((uuid)) occurrences in block text. */
-export const BLOCK_REF_RE = /\(\(([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\)\)\}?/g;
+/** Block reference scan: ((uuid)) occurrences in block text.
+ *  正则本体在 core/refs.ts（三处消费方共享；本处用容忍尾随 } 的变体）。
+ *  导出名保持 BLOCK_REF_RE（外部测试文件 import 它）。 */
+import { BLOCK_REF_OPT_BRACE_RE as BLOCK_REF_RE } from '../core/refs';
+export { BLOCK_REF_RE };
 
 /** Properties the query engine reads — `props` stays narrow on purpose. */
 const QUERY_PROPS = ['priority', 'scheduled', 'deadline'] as const;
