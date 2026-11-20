@@ -12,6 +12,8 @@ export class SaveStatusIndicator {
   private iconSizePx = 16;
   private pendingSaveCount = 0;
   private pendingNoteNamesProvider: (() => string[]) | null = null;
+  /** 图标点击回调（未保存文件列表,main.ts 提供）。 */
+  private onIconClick: (() => void) | null = null;
 
   constructor(private readonly plugin: Plugin) {}
 
@@ -24,6 +26,9 @@ export class SaveStatusIndicator {
     // Rebuild the tooltip lazily on hover so it always reflects the notes that
     // are pending right now, not whatever they were at the last count change.
     this.element.addEventListener("mouseenter", () => this.refreshTooltip());
+    // 点击 → 未保存文件列表（用户 2026-11-20：状态栏图标可点击）。
+    this.element.addEventListener("click", () => this.onIconClick?.());
+    this.element.addClass("sc-unsaved-icon-clickable");
     this.applyIconSize();
     this.showAllChangesSaved();
     this.refreshTooltip();
@@ -33,6 +38,11 @@ export class SaveStatusIndicator {
   // controller) without coupling this UI class to the controller directly.
   setPendingNoteNamesProvider(provider: () => string[]) {
     this.pendingNoteNamesProvider = provider;
+  }
+
+  /** 图标点击回调（未保存文件列表弹窗，main.ts 提供）。 */
+  setIconClickHandler(handler: () => void) {
+    this.onIconClick = handler;
   }
 
   detach() {

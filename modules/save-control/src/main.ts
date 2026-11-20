@@ -24,7 +24,7 @@
  * 模块总开关在宿主「My Obsidian」设置页。
  */
 
-import { Notice, Plugin, TAbstractFile, TFile, TFolder, Menu, MenuItem, EventRef } from "obsidian";
+import { App, FileView, MarkdownView, Notice, Plugin, TAbstractFile, TFile, TFolder, Menu, MenuItem, EventRef } from "obsidian";
 import {
   DEFAULT_SETTINGS,
   mergeLegacySettings,
@@ -175,6 +175,7 @@ export class SaveControlPlugin extends Plugin {
       this.saveStatusIndicator = new SaveStatusIndicator(this);
       this.saveStatusIndicator.attach();
       this.saveStatusIndicator.setPendingNoteNamesProvider(() => this.getPendingNoteNames());
+      this.saveStatusIndicator.setIconClickHandler(() => this.openUnsavedListModal());
       this.applyStatusColors();
       this.applyStatusIconSize();
     }
@@ -305,6 +306,36 @@ export class SaveControlPlugin extends Plugin {
   // ------------------------------------------------------------------
 
   /** 库外是否有未落盘内容：调度器待写队列（自动模式）+ 仍脏的视图缓冲（持有模式）。 */
+  /** 未保存文件列表弹窗（状态栏图标点击,用户 2026-11-20）。 */
+  private openUnsavedListModal(): void {
+    const { UnsavedListModal } = require('./autosave-ui/UnsavedListModal') as {
+      UnsavedListModal: new (app: App, ctx: {
+        vaultPending: string[];
+        externalEntries: Array<{ path: string; save: () => Promise<void> }>;
+        flushVaultPath: (path: string) => Promise<void>;
+        discardVaultPath: (path: string) => void;
+        refresh: () => void;
+      }) => { render(): void; open(): void };
+    };
+    const entries: Array<{ path: string; save: () => Promise<void> }> = [];
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const h = this.externalHandleOf(leaf.view);
+      if (h?.isDirty?.()) {
+        const path = leaf.view instanceof FileView || leaf.view instanceof MarkdownView
+          ? (leaf.view.file?.path ?? '(未知)')
+          : (leaf.view as { getDisplayText?: () => string }).getDisplayText?.() ?? '(库外视图)';
+        entries.push({ path, save: async () => await h.save() });
+      }
+    });
+    new UnsavedListModal(this.app, {
+      vaultPending: this.autosaveController?.getPendingPaths() ?? [],
+      externalEntries: entries,
+      flushVaultPath: (path) => this.autosaveController!.flushPath(path),
+      discardVaultPath: (path) => this.autosaveController!.discardPath(path),
+      refresh: () => this.saveStatusIndicator?.setPendingSaveCount(this.autosaveController?.getPendingPaths().length ?? 0),
+    }).open();
+  }
+
   private hasExternalUnsaved(): boolean {
     if ((this.externalScheduler?.getPendingCount() ?? 0) > 0) return true;
     let found = false;
@@ -953,6 +984,7 @@ export class SaveControlPlugin extends Plugin {
       this.saveStatusIndicator = new SaveStatusIndicator(this);
       this.saveStatusIndicator.attach();
       this.saveStatusIndicator.setPendingNoteNamesProvider(() => this.getPendingNoteNames());
+      this.saveStatusIndicator.setIconClickHandler(() => this.openUnsavedListModal());
       this.applyStatusColors();
       this.applyStatusIconSize();
     } else if (!this.settings.statusIndicatorEnabled && this.saveStatusIndicator) {
