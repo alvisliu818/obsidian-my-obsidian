@@ -63656,3 +63656,32 @@ body.is-mobile
 /* 浏览器:保存网页路径弹窗 */
 .ob-save-page-input { width: 100%; margin-bottom: 10px; }
 .ob-save-page-row { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* 宿主设置页:设置搜索(2026-11-20)——结果里是搬移的活体设置项,直接可改 */
+.my-setting-search { margin-bottom: 12px; }
+.my-setting-search-input { width: 100%; }
+.my-setting-search-count { font-size: 12px; color: var(--text-muted); margin: 6px 0 10px; }
+.my-setting-search-hit {
+  display: flex;
+  align-items: flex-start;
+  column-gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.my-setting-search-chip {
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  cursor: pointer;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.my-setting-search-chip:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.my-setting-search-node { flex: 1 1 auto; min-width: 0; }
+.my-setting-search-node.setting-item { border: none; padding-top: 6px; padding-bottom: 6px; }

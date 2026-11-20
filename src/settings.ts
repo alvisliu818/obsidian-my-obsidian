@@ -83,6 +83,24 @@ function isDesktopApp(): boolean {
 	return typeof window !== "undefined" && !!(window as unknown as { require?: unknown }).require;
 }
 
+/** 设置搜索索引条目(节点为活体,搬移后控件可用)。 */
+interface SettingSearchEntry {
+	moduleId: string;
+	moduleLabel: string;
+	name: string;
+	desc: string;
+	node: HTMLElement;
+}
+
+type CrawlableTab = {
+	containerEl: HTMLElement;
+	display(): void;
+	onLoad?(): unknown;
+	__myLoaded?: boolean;
+	update?(): unknown;
+	renderTab?(): unknown;
+};
+
 export class MyObsidianSettingTab extends PluginSettingTab {
 	private readonly host: {
 		settings: MyObsidianSettings;
@@ -91,6 +109,18 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 		reload(id: string): Promise<void>;
 		capturedTabs: Map<string, unknown>;
 	};
+
+	/**
+	 * 设置搜索(用户 2026-11-20:插件支持搜索设置,能在搜索出的设置里直接改设置)。
+	 *
+	 * 索引 = 离散爬取全部模块设置页:对每个 captured tab 走模块二级页同款
+	 * 渲染配方(containerEl 迁入分离容器 + update/renderTab 或 display),
+	 * 收集 .setting-item 的名字/描述与**节点本体**。结果列表直接把真实节点
+	 * 搬进去(appendChild 移动,监听器全保留)——开关/输入框在结果里就是活的,
+	 * 改动经模块自己的 onChange 落库,完全满足「直接改」;之后打开该模块页时
+	 * update()/renderTab() 会重建全新节点,自愈。
+	 */
+	private searchEntries: SettingSearchEntry[] | null = null;
 
 	constructor(
 		app: App,
@@ -297,13 +327,141 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 		this.display();
 	}
 
+	/** 离散爬取全部模块设置项(每模块之间让出主线程;单模块失败不影响整体)。 */
+	private async crawlSettingIndex(): Promise<SettingSearchEntry[]> {
+		const items: Array<{ id: string; label: string; tab: CrawlableTab }> = [];
+		for (const m of this.host.descriptors) {
+			const tab = this.host.capturedTabs.get(m.id) as CrawlableTab | undefined;
+			if (tab) items.push({ id: m.id, label: m.name, tab });
+		}
+		for (const [key, tab] of this.host.capturedTabs) {
+			if (!key.startsWith("inner:")) continue;
+			const t = tab as { plugin?: { manifest?: { name?: string } } };
+			items.push({
+				id: key,
+				label: t?.plugin?.manifest?.name || key.split(":")[2] || key,
+				tab: tab as CrawlableTab,
+			});
+		}
+		const entries: SettingSearchEntry[] = [];
+		for (const it of items) {
+			this.crawlOneTab(it, entries);
+			await new Promise((r) => setTimeout(r, 0));
+		}
+		return entries;
+	}
+
+	/** 单模块爬取:二级页同款渲染配方 → 收集节标题上下文 + setting-item 节点。 */
+	private crawlOneTab(it: { id: string; label: string; tab: CrawlableTab }, entries: SettingSearchEntry[]): void {
+		const tab = it.tab;
+		try {
+			const holder = createDiv();
+			holder.appendChild(tab.containerEl);
+			const t0 = tab as { __myLoaded?: boolean; onLoad?(): unknown };
+			if (!t0.__myLoaded && typeof t0.onLoad === "function") {
+				t0.__myLoaded = true;
+				try {
+					t0.onLoad();
+				} catch {
+					/* lifecycle best-effort */
+				}
+			}
+			if (typeof tab.update === "function" && typeof tab.renderTab === "function") {
+				tab.update();
+				tab.renderTab();
+			} else {
+				tab.display();
+			}
+			let section = "";
+			for (const el of Array.from(tab.containerEl.querySelectorAll("h2, h3, .setting-item"))) {
+				if (!(el instanceof HTMLElement)) continue;
+				if (el.matches("h2, h3")) {
+					section = el.textContent?.trim() ?? "";
+					continue;
+				}
+				const name = el.querySelector(".setting-item-name")?.textContent?.trim() ?? "";
+				const desc = el.querySelector(".setting-item-description")?.textContent?.trim() ?? "";
+				if (!name && !desc) continue;
+				entries.push({
+					moduleId: it.id,
+					moduleLabel: it.label,
+					name,
+					desc: section ? `${section} · ${desc}` : desc,
+					node: el,
+				});
+			}
+		} catch {
+			/* 该模块设置爬不出来就跳过 */
+		}
+	}
+
+	/** 渲染搜索结果:真实节点搬入(控件活性保留);空结果给提示。 */
+	private renderSearchResults(query: string, resultsEl: HTMLElement, listEl: HTMLElement): void {
+		resultsEl.empty();
+		const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+		const entries = this.searchEntries ?? [];
+		const hits = entries
+			.filter((e) => {
+				const hay = `${e.moduleLabel} ${e.name} ${e.desc}`.toLowerCase();
+				return tokens.every((t) => hay.includes(t));
+			})
+			.slice(0, 60);
+		const countEl = resultsEl.createDiv({ cls: "my-setting-search-count" });
+		countEl.setText(hits.length === 0 ? `没有匹配「${query.trim()}」的设置项` : `${hits.length} 个匹配(改动即时生效)`);
+		for (const h of hits) {
+			const wrap = resultsEl.createDiv({ cls: "my-setting-search-hit" });
+			const chip = wrap.createEl("button", { cls: "my-setting-search-chip", attr: { "aria-label": `打开 ${h.moduleLabel} 设置页` } });
+			chip.setText(h.moduleLabel);
+			chip.addEventListener("click", () => this.openModulePage(h.moduleId, h.moduleLabel));
+			wrap.appendChild(h.node);
+			h.node.addClass("my-setting-search-node");
+		}
+		if (!hits.length) listEl.show();
+	}
+
+	private async onSearchInput(query: string, resultsEl: HTMLElement, listEl: HTMLElement): Promise<void> {
+		if (!query.trim()) {
+			resultsEl.empty();
+			listEl.show();
+			return;
+		}
+		listEl.hide();
+		if (!this.searchEntries) {
+			resultsEl.empty();
+			resultsEl.createDiv({ cls: "my-setting-search-count", text: "正在索引全部模块设置…" });
+			this.searchEntries = await this.crawlSettingIndex();
+			// 爬取期间输入已变化/清空 → 以当前输入框值为准
+			if (!(this.containerEl.querySelector(".my-setting-search-input") as HTMLInputElement | null)?.value.trim()) {
+				resultsEl.empty();
+				listEl.show();
+				return;
+			}
+		}
+		this.renderSearchResults(query, resultsEl, listEl);
+	}
+
+
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+		this.searchEntries = null; // 每次重渲染重建索引缓存
 		containerEl.createEl("h2", { text: "My Obsidian" });
 		containerEl.createEl("p", {
 			text: "一个插件、一个 id。每个功能一把大开关：关掉的功能在下次启动前不会占用任何资源；开启即时生效，关闭需重启 Obsidian 才能卸载已载入的模块。点齿轮进入该模块的设置页。",
 			cls: "setting-item-description",
+		});
+
+		// 设置搜索(用户 2026-11-20):输入即搜,结果里是活的设置控件,直接改。
+		const searchWrap = containerEl.createDiv({ cls: "my-setting-search" });
+		const searchInput = searchWrap.createEl("input", {
+			type: "search",
+			cls: "my-setting-search-input",
+			attr: { placeholder: "搜索设置(模块名/项名/描述)——结果里可直接改动", spellcheck: "false" },
+		});
+		const resultsEl = containerEl.createDiv({ cls: "my-setting-search-results" });
+		const listEl = containerEl.createDiv({ cls: "my-setting-search-list" });
+		searchInput.addEventListener("input", () => {
+			void this.onSearchInput(searchInput.value, resultsEl, listEl);
 		});
 
 		// 模块行按名称排序（用户 2026-11-20：设置页模块按名称排序）——大小写
@@ -313,7 +471,7 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 		);
 		for (const m of sortedDescriptors) {
 			const state = this.host.settings.modules[m.id] ?? defaultModuleState(m.desktopOnly);
-			new SettingCtor(containerEl)
+			new SettingCtor(listEl)
 				.setName(m.name)
 				.setDesc(m.summary)
 				.addToggle((toggle) =>
@@ -343,7 +501,7 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 			if (!key.startsWith("inner:")) continue;
 			const t = tab as { plugin?: { manifest?: { name?: string } } } | undefined;
 			const label = t?.plugin?.manifest?.name || key.split(":")[2] || key;
-			new SettingCtor(containerEl)
+			new SettingCtor(listEl)
 				.setName(label)
 				.setDesc("内嵌模块设置页")
 				.addExtraButton((btn) =>
@@ -354,11 +512,11 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 				);
 		}
 
-		containerEl.createEl("p", {
+		listEl.createEl("p", {
 			text: "这些扩展名由本插件打开（Obsidian 原本对它们没有视图，点了只会是一片空白）。带 ▶ 运行的会在运行前自动保存。改动后需要重启 Obsidian。",
 			cls: "setting-item-description",
 		});
-		new SettingCtor(containerEl)
+		new SettingCtor(listEl)
 			.setName("接管的扩展名")
 			.setDesc("英文逗号分隔。留空则用默认清单；Markdown 与 canvas 永远不会被接管。")
 			.addText((text) =>
