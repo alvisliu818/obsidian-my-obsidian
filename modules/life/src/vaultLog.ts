@@ -27,6 +27,12 @@ export interface VaultDiff {
 	deleted: string[];
 }
 
+/** 带重命名识别的变化(用户 2026-11-20:库记录识别不准——重命名/移动此前拆成 删除+新增)。 */
+export interface VaultDiffWithRenames extends VaultDiff {
+	/** 签名(mtime:size)完全一致的 删除↔新增 配对 = 重命名/移动 */
+	renames: Array<{ from: string; to: string }>;
+}
+
 export function sigKey(mtime: number, size: number): string {
 	return `${mtime}:${size}`;
 }
@@ -59,6 +65,37 @@ export function diffSigTable(prev: SigTable, cur: SigTable): VaultDiff {
 	modified.sort(byPath);
 	deleted.sort(byPath);
 	return { added, modified, deleted };
+}
+
+/**
+ * 带重命名识别的变化:基础 diff 之后,把签名(mtime:size)完全一致的
+ * 删除↔新增按路径序配对 = 重命名/移动(文件夹移动天然成对识别)。
+ * 修改过内容的先改名后写 → 仍拆成 删除+新增(签名不一致,诚实降级)。
+ */
+export function diffWithRenames(prev: SigTable, cur: SigTable): VaultDiffWithRenames {
+	const base = diffSigTable(prev, cur);
+	const sigOfDeleted = new Map<string, string[]>();
+	for (const p of base.deleted) {
+		const sig = prev[p];
+		const list = sigOfDeleted.get(sig);
+		if (list) list.push(p);
+		else sigOfDeleted.set(sig, [p]);
+	}
+	const renames: Array<{ from: string; to: string }> = [];
+	const used = new Set<string>();
+	const added: string[] = [];
+	for (const p of base.added) {
+		// added/deleted 均已按路径升序 → 配对确定(同签名多候选取字典序最小)
+		const cands = (sigOfDeleted.get(cur[p]) ?? []).find((d) => !used.has(d));
+		if (cands !== undefined) {
+			used.add(cands);
+			renames.push({ from: cands, to: p });
+		} else {
+			added.push(p);
+		}
+	}
+	const deleted = base.deleted.filter((d) => !used.has(d));
+	return { added, modified: base.modified, deleted, renames };
 }
 
 /** HH:mm → 当日分钟数;格式非法返回 null。 */
@@ -104,7 +141,8 @@ export function periodDue(now: Date, periodMin: number, lastPeriodAt: number): b
 	return now.getTime() - lastPeriodAt >= periodMin * 60000;
 }
 
-/** 提醒文案(变化摘要:N 新增 · M 修改 · K 删除)。 */
-export function changeSummary(d: VaultDiff): string {
-	return `新增 ${d.added.length} · 修改 ${d.modified.length} · 删除 ${d.deleted.length}`;
+/** 提醒文案(变化摘要:N 新增 · M 修改 · K 删除 [+ 重命名 R])。 */
+export function changeSummary(d: VaultDiff, renames = 0): string {
+	const base = `新增 ${d.added.length} · 修改 ${d.modified.length} · 删除 ${d.deleted.length}`;
+	return renames > 0 ? `${base} · 重命名 ${renames}` : base;
 }

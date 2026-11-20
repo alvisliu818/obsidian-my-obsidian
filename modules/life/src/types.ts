@@ -138,6 +138,10 @@ export interface VaultLogRecord {
 	added: string[];
 	modified: string[];
 	deleted: string[];
+	/** 重命名/移动配对(签名一致的 删除↔新增;2026-11-20 识别改进) */
+	renames?: Array<{ from: string; to: string }>;
+	/** 首次记录 = 只建立基线,不列变化(此前全量报「新增」不准;2026-11-20) */
+	first?: boolean;
 	/** 记录时点的库内文件总数 */
 	totalFiles: number;
 }

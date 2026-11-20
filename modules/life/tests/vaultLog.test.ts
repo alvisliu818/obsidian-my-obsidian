@@ -1,6 +1,7 @@
-// 库记录引擎纯逻辑:diff 语义/调度判定/行锚解析(阶段 C, 2026-11-19)。
+// 库记录引擎纯逻辑:diff 语义/重命名配对/调度判定/行锚解析(阶段 C, 2026-11-19;
+// 识别改进 2026-11-20)。
 import { describe, expect, it } from 'vitest';
-import { diffSigTable, parseHHmm, dailyDue, periodDue, sigKey, scanVaultSig } from '../src/vaultLog';
+import { diffSigTable, diffWithRenames, changeSummary, parseHHmm, dailyDue, periodDue, sigKey, scanVaultSig } from '../src/vaultLog';
 import { parseCodeEmbedInner } from '../../md-editor/src/features/codeEmbed';
 
 describe('diffSigTable(相对上一次快照的变化)', () => {
@@ -19,6 +20,51 @@ describe('diffSigTable(相对上一次快照的变化)', () => {
   });
 });
 
+describe('diffWithRenames(重命名/移动配对, 2026-11-20)', () => {
+  it('签名一致的 删除↔新增 配成重命名', () => {
+    const prev = { 'old/a.md': '1:10', 'keep.md': '2:20' };
+    const cur = { 'new/a.md': '1:10', 'keep.md': '2:20' };
+    const d = diffWithRenames(prev, cur);
+    expect(d.renames).toEqual([{ from: 'old/a.md', to: 'new/a.md' }]);
+    expect(d.added).toEqual([]);
+    expect(d.deleted).toEqual([]);
+    expect(d.modified).toEqual([]);
+  });
+
+  it('文件夹移动 = 多对配对', () => {
+    const prev = { 'P/x.md': '1:1', 'P/y.md': '2:2' };
+    const cur = { 'Q/x.md': '1:1', 'Q/y.md': '2:2' };
+    const d = diffWithRenames(prev, cur);
+    expect(d.renames).toEqual([
+      { from: 'P/x.md', to: 'Q/x.md' },
+      { from: 'P/y.md', to: 'Q/y.md' },
+    ]);
+  });
+
+  it('签名不一致(改名后改内容)不配对,诚实降级 删除+新增', () => {
+    const prev = { 'a.md': '1:10' };
+    const cur = { 'b.md': '1:99' };
+    const d = diffWithRenames(prev, cur);
+    expect(d.renames).toEqual([]);
+    expect(d.added).toEqual(['b.md']);
+    expect(d.deleted).toEqual(['a.md']);
+  });
+
+  it('同签名多候选按路径序确定配对', () => {
+    const prev = { 'z.md': '1:5', 'a.md': '1:5' };
+    const cur = { 'new.md': '1:5' };
+    const d = diffWithRenames(prev, cur);
+    expect(d.renames).toEqual([{ from: 'a.md', to: 'new.md' }]);
+    expect(d.deleted).toEqual(['z.md']);
+  });
+
+  it('changeSummary 带重命名计数', () => {
+    const d = diffWithRenames({ 'a.md': '1:1' }, { 'b.md': '1:1' });
+    expect(changeSummary(d, d.renames.length)).toBe('新增 0 · 修改 0 · 删除 0 · 重命名 1');
+    expect(changeSummary(d)).toBe('新增 0 · 修改 0 · 删除 0');
+  });
+});
+
 describe('调度判定', () => {
   const noon = new Date(2026, 10, 20, 12, 0);
   it('parseHHmm 合法/非法', () => {
@@ -32,7 +78,7 @@ describe('调度判定', () => {
     expect(dailyDue(noon, '13:00', '')).toBe(false);
   });
   it('periodDue:周期关/上次未知 = 不到期', () => {
-    expect(periodDue(noon, 30, Date.now() - 3600000)).toBe(true);
+    expect(periodDue(noon, 30, noon.getTime() - 3600000)).toBe(true);
     expect(periodDue(noon, 30, 0)).toBe(false);
     expect(periodDue(noon, 0, Date.now() - 3600000)).toBe(false);
   });

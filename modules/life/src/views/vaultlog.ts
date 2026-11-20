@@ -20,6 +20,7 @@ export { VIEW_LIFE_VAULTLOG };
 export class LifeVaultLogView extends ItemView {
 	private expandedIds = new Set<string>();
 	private detailMode: 'overall' | 'folder' = 'overall';
+	private collapsedDirs = new Set<string>();
 	private settingsOpen = false;
 	/** 运行态摘要(计时卡片与 HOME 同款数据源) */
 	private get timerSummary(): string {
@@ -96,7 +97,12 @@ export class LifeVaultLogView extends ItemView {
 		// ---- 全部记录 ----
 		const listSec = contentEl.createDiv({ cls: 'life-home-section' });
 		listSec.createDiv({ cls: 'life-home-sec-title', text: `库记录(${s.vaultLogRecords.length} 条)` });
-		const ui: VaultLogUiState = { expandedIds: this.expandedIds, detailMode: this.detailMode, settingsOpen: this.settingsOpen };
+		const ui: VaultLogUiState = {
+			expandedIds: this.expandedIds,
+			detailMode: this.detailMode,
+			settingsOpen: this.settingsOpen,
+			collapsedDirs: this.collapsedDirs,
+		};
 		renderRecordListInto(
 			listSec,
 			s.vaultLogRecords,
@@ -112,6 +118,7 @@ export class LifeVaultLogView extends ItemView {
 					this.render();
 				},
 				onManualRecord: () => void this.plugin.recordVaultChanges('manual'),
+				onOpenFile: (path) => void this.plugin.app.workspace.openLinkText(path, ''),
 			},
 		);
 	}

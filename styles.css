@@ -63621,3 +63621,21 @@ body.is-mobile
   width: 100%;
   min-height: 90px;
 }
+
+/* 库记录明细:目录树(2026-11-20)/重命名类/条目可点击打开 */
+.life-home-rec-dir-row {
+  display: flex;
+  align-items: baseline;
+  column-gap: 4px;
+  font-family: var(--font-monospace);
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  user-select: none;
+}
+.life-home-rec-dir-row:hover { background: var(--background-modifier-hover); }
+.life-home-rec-dir-chevron { font-size: 10px; width: 10px; }
+.life-home-rec-item.is-renamed { color: var(--text-accent); }
+.life-home-rec-item.is-openable { cursor: pointer; }
+.life-home-rec-item.is-openable:hover { background: var(--background-modifier-hover); text-decoration: underline; }

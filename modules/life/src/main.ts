@@ -12,7 +12,7 @@ import type { VaultLogRecord } from './types';
 import { VIEW_LIFE_CALENDAR, LifeCalendarView } from './views/calendar';
 import { VIEW_LIFE_HOME, LifeHomeView } from './views/home';
 import { VIEW_LIFE_VAULTLOG, LifeVaultLogView } from './views/vaultlog';
-import { dailyDue, periodDue, scanVaultSig, diffSigTable, changeSummary, dayKeyOf, parseHHmm } from './vaultLog';
+import { dailyDue, periodDue, scanVaultSig, diffWithRenames, changeSummary, dayKeyOf, parseHHmm } from './vaultLog';
 import { VIEW_LIFE_CLOCK, LifeClockView } from './views/clock';
 import { VIEW_LIFE_DDAY, LifeDdayView } from './views/dday';
 import { VIEW_LIFE_HABITS, LifeHabitsView } from './views/habits';
@@ -236,15 +236,59 @@ export default class LifePlugin extends Plugin {
 	}
 
 	/**
-	 * 记录库变化(2026-11-19 阶段 C):全库文件签名快照 vs 上一次快照 →
-	 * 新增/修改/删除;快照本体存独立文件(data.json 不吃万级条目)。
+	 * 记录库变化(2026-11-19 阶段 C;2026-11-20 识别改进):全库文件签名快照
+	 * vs 上一次快照 → 重命名/新增/修改/删除;快照本体存独立文件(data.json
+	 * 不吃万级条目)。
+	 *
+	 * 识别改进(用户报「新增 修改 删除识别有问题」):
+	 * - 首次记录只建基线(first=true)——此前全库报「新增」;
+	 * - 签名一致的 删除↔新增 配对成重命名/移动;
+	 * - 自动触发(周期/每日)零变化不落记录——此前空记录刷屏。
 	 */
 	async recordVaultChanges(trigger: 'period' | 'daily' | 'manual' = 'manual'): Promise<VaultLogRecord> {
 		const cur = scanVaultSig(this.app.vault);
 		const prev = await this.loadVaultLogSnapshot();
-		const diff = diffSigTable(prev, cur);
-		await this.saveVaultLogSnapshot(cur);
 		const now = new Date();
+		const s = this.store.settings;
+		if (trigger === 'daily') s.vaultLogLastDailyDate = dayKeyOf(now);
+		if (trigger === 'period') s.vaultLogLastPeriodAt = now.getTime();
+		// 首次记录:快照文件不存在 = 只建立基线,不列变化(万级「新增」是噪声)
+		if (prev === null) {
+			await this.saveVaultLogSnapshot(cur);
+			const rec: VaultLogRecord = {
+				id: genId(),
+				at: now.toISOString(),
+				date: dayKeyOf(now),
+				trigger,
+				added: [],
+				modified: [],
+				deleted: [],
+				first: true,
+				totalFiles: Object.keys(cur).length,
+			};
+			s.vaultLogRecords = [rec, ...s.vaultLogRecords].slice(0, 200);
+			await this.store.flush();
+			this.refreshHomeViews();
+			return rec;
+		}
+		const diff = diffWithRenames(prev, cur);
+		await this.saveVaultLogSnapshot(cur);
+		const empty =
+			diff.added.length + diff.modified.length + diff.deleted.length + diff.renames.length === 0;
+		// 自动触发零变化:标记已推进(防每 30s 重判),不落记录
+		if (empty && trigger !== 'manual') {
+			await this.store.flush();
+			return {
+				id: '',
+				at: now.toISOString(),
+				date: dayKeyOf(now),
+				trigger,
+				added: [],
+				modified: [],
+				deleted: [],
+				totalFiles: Object.keys(cur).length,
+			};
+		}
 		const rec: VaultLogRecord = {
 			id: genId(),
 			at: now.toISOString(),
@@ -253,20 +297,21 @@ export default class LifePlugin extends Plugin {
 			added: diff.added,
 			modified: diff.modified,
 			deleted: diff.deleted,
+			renames: diff.renames,
 			totalFiles: Object.keys(cur).length,
 		};
 		const cap = (list: string[]): string[] => (list.length > 500 ? list.slice(0, 500) : list);
 		rec.added = cap(rec.added);
 		rec.modified = cap(rec.modified);
 		rec.deleted = cap(rec.deleted);
-		const s = this.store.settings;
+		rec.renames = rec.renames?.slice(0, 500);
 		s.vaultLogRecords = [rec, ...s.vaultLogRecords].slice(0, 200);
-		if (trigger === 'daily') s.vaultLogLastDailyDate = dayKeyOf(now);
-		if (trigger === 'period') s.vaultLogLastPeriodAt = now.getTime();
 		await this.store.flush();
 		this.refreshHomeViews();
 		if (s.vaultLog.remind) {
-			new Notice('📋 库记录(' + (trigger === 'manual' ? '手动' : trigger === 'daily' ? '每日' : '周期') + '):' + changeSummary(diff));
+			new Notice(
+				'📋 库记录(' + (trigger === 'manual' ? '手动' : trigger === 'daily' ? '每日' : '周期') + '):' + changeSummary(diff, diff.renames.length),
+			);
 		}
 		return rec;
 	}
@@ -276,12 +321,13 @@ export default class LifePlugin extends Plugin {
 		return (this.manifest.dir ?? '') + '/vault-log-snapshot.json';
 	}
 
-	private async loadVaultLogSnapshot(): Promise<Record<string, string>> {
+	/** null = 快照文件不存在(首次记录语义;读失败当首次,下次收敛)。 */
+	private async loadVaultLogSnapshot(): Promise<Record<string, string> | null> {
 		try {
 			const raw = await this.app.vault.adapter.read(this.snapshotPath());
 			return JSON.parse(raw) as Record<string, string>;
 		} catch {
-			return {};
+			return null;
 		}
 	}
 

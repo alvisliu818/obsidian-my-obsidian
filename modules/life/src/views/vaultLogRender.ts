@@ -1,7 +1,12 @@
 /**
- * 库记录共享渲染层(2026-11-19):HOME 的「库记录」节与独立的库记录面板
- * (life-vaultlog)共用同一套行/明细/设置渲染——状态由调用方持有(展开集/
- * 明细视图模式),变更后由调用方整体重绘。
+ * 库记录共享渲染层(2026-11-19;2026-11-20 改进):HOME 的「库记录」节与独立
+ * 的库记录面板(life-vaultlog)共用同一套行/明细/设置渲染——状态由调用方
+ * 持有(展开集/明细视图模式/折叠目录集),变更后由调用方整体重绘。
+ *
+ * 2026-11-20(用户:文件点击能跳转/像目录树一样展开折叠/识别不准):
+ * - 明细条目可点击打开文件(新增/修改/重命名目标;删除只有路径,不可点);
+ * - 「按文件夹」升级为真目录树(逐级展开折叠,默认全展开,点击目录行收起);
+ * - 重命名/移动单独一类展示(签名配对,识别在 vaultLog.diffWithRenames)。
  *
  * 类名沿用 life-home-*(样式同一套,视觉一致)。
  */
@@ -11,10 +16,12 @@ import type { VaultLogRecord, VaultLogSettings } from '../types';
 export interface VaultLogUiState {
 	/** 明细展开的记录 id 集合 */
 	expandedIds: Set<string>;
-	/** 明细视图:总体平铺 / 按顶级文件夹分组 */
+	/** 明细视图:总体平铺 / 按文件夹树 */
 	detailMode: 'overall' | 'folder';
 	/** 设置节是否展开 */
 	settingsOpen: boolean;
+	/** 目录树里被收起的目录(键 `记录id::目录路径`;缺省 = 全展开) */
+	collapsedDirs?: Set<string>;
 }
 
 export interface VaultLogUiHandlers {
@@ -24,21 +31,41 @@ export interface VaultLogUiHandlers {
 	onModeChange: (mode: 'overall' | 'folder') => void;
 	/** 手动打点 */
 	onManualRecord: () => void | Promise<void>;
+	/** 打开文件(新增/修改/重命名目标条目点击;缺省 = 条目不可点) */
+	onOpenFile?: (path: string) => void;
 	/** 设置变更(开关/输入);设置节独立渲染,记录列表不需要 */
 	onSettingsChange?: () => void;
 }
 
-/** 记录行摘要(+N · ~M · -K + 时间 + 触发方式)。 */
+/** 记录行摘要(+N · ~M · -K [+ 重命名 R] + 时间 + 触发方式)。 */
 export function renderRecordSummaryRow(container: HTMLElement, rec: VaultLogRecord): void {
 	const row = container.createDiv({ cls: 'life-home-rec-summary' });
 	row.createSpan({
 		cls: 'life-home-rec-counts',
-		text: `+${rec.added.length} 新增 · ~${rec.modified.length} 修改 · -${rec.deleted.length} 删除`,
+		text: `+${rec.added.length} 新增 · ~${rec.modified.length} 修改 · -${rec.deleted.length} 删除${rec.renames?.length ? ` · ⇄${rec.renames.length}` : ''}`,
 	});
 	row.createSpan({
 		cls: 'life-home-rec-meta',
 		text: `${rec.at.slice(11, 16)} · ${rec.trigger === 'manual' ? '手动' : rec.trigger === 'daily' ? '每日' : '周期'}`,
 	});
+}
+
+/** 明细条目(可点击打开——删除条目只有路径,不可点)。 */
+function renderDiffItem(
+	container: HTMLElement,
+	text: string,
+	cls: string,
+	path: string | null,
+	handlers: VaultLogUiHandlers,
+): void {
+	const el = container.createDiv({ cls: `life-home-rec-item ${cls}`, text });
+	if (path && handlers.onOpenFile) {
+		el.addClass('is-openable');
+		el.addEventListener('click', (ev) => {
+			ev.stopPropagation();
+			handlers.onOpenFile?.(path);
+		});
+	}
 }
 
 /** 记录列表(摘要行 + 点击展开明细 + 总体/按文件夹切换)。 */
@@ -71,23 +98,157 @@ export function renderRecordListInto(
 			cls: 'life-home-rec-time',
 			text: rec.date.slice(5) + ' ' + rec.at.slice(11, 16),
 		});
-		row.createSpan({ cls: 'life-home-rec-counts', text: changeSummary(rec) });
+		row.createSpan({
+			cls: 'life-home-rec-counts',
+			text: changeSummary(rec, rec.renames?.length ?? 0) + (rec.first ? ' · 基线' : ''),
+		});
 		row.createSpan({ cls: 'life-home-rec-trigger', text: rec.trigger === 'manual' ? '手动' : '自动' });
 		row.addEventListener('click', () => handlers.onToggleRecord(rec.id));
 		if (!isExpanded) continue;
 		const detail = container.createDiv({ cls: 'life-home-rec-detail' });
-		renderDiffListsInto(detail, rec, state.detailMode);
+		renderDiffListsInto(detail, rec, state.detailMode, state, handlers);
 	}
 }
 
-/** 变化清单:overall = 平铺三类;folder = 按顶级文件夹分组(路径→条目)。 */
-export function renderDiffListsInto(container: HTMLElement, rec: VaultLogRecord, mode: 'overall' | 'folder'): void {
-	const empty = rec.added.length + rec.modified.length + rec.deleted.length === 0;
+// ---------------------------------------------------------------------------
+// 目录树(「按文件夹」视图):逐级展开折叠
+// ---------------------------------------------------------------------------
+
+interface PathTreeNode {
+	/** 显示名(路径末段;根节点 = '') */
+	name: string;
+	/** 完整库内目录路径(根 = '';收起状态的 key 用) */
+	fullPath: string;
+	/** 子目录 */
+	dirs: Map<string, PathTreeNode>;
+	/** 挂在本目录下的文件条目(不递归) */
+	files: Array<{ label: string; kind: 'added' | 'modified' | 'deleted' | 'renamed'; openPath: string | null }>;
+}
+
+function emptyNode(name: string, fullPath: string): PathTreeNode {
+	return { name, fullPath, dirs: new Map(), files: [] };
+}
+
+/** 变化路径集 → 目录树(重命名条目挂在目标路径下,显示 ← 原路径)。 */
+function buildPathTree(rec: VaultLogRecord): PathTreeNode {
+	const root = emptyNode('', '');
+	const nodeAt = (dir: string): PathTreeNode => {
+		let node = root;
+		if (dir === '') return node;
+		for (const seg of dir.split('/')) {
+			let next = node.dirs.get(seg);
+			if (!next) {
+				next = emptyNode(seg, node.fullPath === '' ? seg : `${node.fullPath}/${seg}`);
+				node.dirs.set(seg, next);
+			}
+			node = next;
+		}
+		return node;
+	};
+	const put = (path: string, kind: 'added' | 'modified' | 'deleted' | 'renamed', openPath: string | null, label?: string) => {
+		const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+		const name = dir === '' ? path : path.slice(dir.length + 1);
+		nodeAt(dir).files.push({ label: label ?? name, kind, openPath });
+	};
+	for (const p of rec.added) put(p, 'added', p);
+	for (const p of rec.modified) put(p, 'modified', p);
+	for (const p of rec.deleted) put(p, 'deleted', null);
+	for (const r of rec.renames ?? []) put(r.to, 'renamed', r.to, `${r.to.split('/').pop()} ← ${r.from}`);
+	return root;
+}
+
+const KIND_PREFIX: Record<PathTreeNode['files'][number]['kind'], string> = {
+	added: '+ ',
+	modified: '~ ',
+	deleted: '- ',
+	renamed: '⇄ ',
+};
+const KIND_CLASS: Record<PathTreeNode['files'][number]['kind'], string> = {
+	added: 'is-added',
+	modified: 'is-modified',
+	deleted: 'is-deleted',
+	renamed: 'is-renamed',
+};
+
+/** 目录树递归渲染(收起状态存 state.collapsedDirs,键 `记录id::路径`)。 */
+function renderPathTree(
+	container: HTMLElement,
+	node: PathTreeNode,
+	recId: string,
+	state: VaultLogUiState,
+	handlers: VaultLogUiHandlers,
+	depth: number,
+	leafBudget: { n: number },
+): void {
+	for (const [name, child] of [...node.dirs.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+		const key = `${recId}::${child.fullPath}`;
+		const collapsed = state.collapsedDirs?.has(key) ?? false;
+		const row = container.createDiv({ cls: 'life-home-rec-dir-row', attr: { style: `padding-left:${depth * 14}px` } });
+		row.createSpan({ cls: 'life-home-rec-dir-chevron', text: collapsed ? '▸' : '▾' });
+		row.createSpan({ cls: 'life-home-rec-dir-name', text: name });
+		row.addEventListener('click', (ev) => {
+			ev.stopPropagation();
+			const set = state.collapsedDirs ?? (state.collapsedDirs = new Set<string>());
+			if (set.has(key)) set.delete(key);
+			else set.add(key);
+			handlers.onModeChange(state.detailMode); // 借道重绘(视图模式没变,调用方整体重绘)
+		});
+		if (!collapsed) {
+			const box = container.createDiv({ cls: 'life-home-rec-dir-box' });
+			renderPathTree(box, child, recId, state, handlers, depth + 1, leafBudget);
+		}
+	}
+	for (const f of node.files) {
+		if (leafBudget.n <= 0) {
+			container.createDiv({ cls: 'life-home-muted', text: '…条目过多,已截断' });
+			node.files = [];
+			return;
+		}
+		leafBudget.n--;
+		const item = container.createDiv({
+			cls: `life-home-rec-item ${KIND_CLASS[f.kind]}`,
+			attr: { style: `padding-left:${(depth + 1) * 14}px` },
+			text: KIND_PREFIX[f.kind] + f.label,
+		});
+		if (f.openPath && handlers.onOpenFile) {
+			item.addClass('is-openable');
+			item.addEventListener('click', (ev) => {
+				ev.stopPropagation();
+				handlers.onOpenFile?.(f.openPath as string);
+			});
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 明细视图
+// ---------------------------------------------------------------------------
+
+/** 变化清单:overall = 平铺四类;folder = 目录树(逐级展开折叠)。 */
+export function renderDiffListsInto(
+	container: HTMLElement,
+	rec: VaultLogRecord,
+	mode: 'overall' | 'folder',
+	state: VaultLogUiState,
+	handlers: VaultLogUiHandlers,
+): void {
+	if (rec.first) {
+		container.createDiv({ cls: 'life-home-muted', text: '(首次记录:已建立基线快照,下次记录起对比变化)' });
+		return;
+	}
+	const empty = rec.added.length + rec.modified.length + rec.deleted.length + (rec.renames?.length ?? 0) === 0;
 	if (empty) {
 		container.createDiv({ cls: 'life-home-muted', text: '(无变化)' });
 		return;
 	}
 	if (mode === 'overall') {
+		if (rec.renames?.length) {
+			container.createDiv({ cls: 'life-home-rec-kind-title', text: `重命名/移动(${rec.renames.length})` });
+			for (const r of rec.renames.slice(0, 30)) {
+				renderDiffItem(container, `${r.from} ⇄ ${r.to}`, 'is-renamed', r.to, handlers);
+			}
+			if (rec.renames.length > 30) container.createDiv({ cls: 'life-home-muted', text: `…还有 ${rec.renames.length - 30} 条` });
+		}
 		const kinds: [string, string[], string][] = [
 			['新增', rec.added, 'is-added'],
 			['修改', rec.modified, 'is-modified'],
@@ -97,30 +258,15 @@ export function renderDiffListsInto(container: HTMLElement, rec: VaultLogRecord,
 			if (list.length === 0) continue;
 			container.createDiv({ cls: 'life-home-rec-kind-title', text: `${label}(${list.length})` });
 			for (const p of list.slice(0, 30)) {
-				container.createDiv({ cls: `life-home-rec-item ${cls}`, text: p });
+				renderDiffItem(container, p, cls, p, handlers);
 			}
 			if (list.length > 30) container.createDiv({ cls: 'life-home-muted', text: `…还有 ${list.length - 30} 条` });
 		}
 		return;
 	}
-	const groups = new Map<string, { label: string; kind: 'added' | 'modified' | 'deleted' }[]>();
-	const put = (path: string, kind: 'added' | 'modified' | 'deleted') => {
-		const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '(根)';
-		const list = groups.get(dir) ?? [];
-		list.push({ label: path.slice(dir === '(根)' ? 0 : dir.length + 1), kind });
-		groups.set(dir, list);
-	};
-	for (const p of rec.added) put(p, 'added');
-	for (const p of rec.modified) put(p, 'modified');
-	for (const p of rec.deleted) put(p, 'deleted');
-	for (const [dir, items] of [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-		const g = container.createDiv({ cls: 'life-home-rec-group' });
-		g.createDiv({ cls: 'life-home-rec-group-title', text: dir });
-		for (const it of items) {
-			const cls = it.kind === 'added' ? 'is-added' : it.kind === 'modified' ? 'is-modified' : 'is-deleted';
-			g.createDiv({ cls: `life-home-rec-item ${cls}`, text: (it.kind === 'added' ? '+ ' : it.kind === 'modified' ? '~ ' : '- ') + it.label });
-		}
-	}
+	// 目录树视图:逐级展开折叠,叶子可点击打开
+	const tree = buildPathTree(rec);
+	renderPathTree(container, tree, rec.id, state, handlers, 0, { n: 200 });
 }
 
 /** 库记录设置节(开关/每日时间/周期/记录后提醒/每日提醒时间)。 */
