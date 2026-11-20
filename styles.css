@@ -14283,6 +14283,8 @@ body.is-tablet.scrolling-overlay-buttons-top .scrolling-overlay-button-container
 	width: 100%;
 	flex-grow: 1;
 	overflow-y: auto;
+	/* 横向滚动（用户 2026-11-20）：内容超宽时底部出现滚动条 */
+	overflow-x: auto;
 }
 
 .abstract-folder-virtual-container {
@@ -14292,6 +14294,18 @@ body.is-tablet.scrolling-overlay-buttons-top .scrolling-overlay-button-container
 	width: 100%;
 	height: 100%;
 	pointer-events: none;
+	/* 容器按最宽行展开——撑起 wrapper 的横向滚动宽度 */
+	width: max-content;
+	min-width: 100%;
+	box-sizing: border-box;
+}
+
+.abstract-folder-virtual-container > .abstract-folder-virtual-item {
+	pointer-events: auto;
+	/* 行宽随容器展开（不再 100% 裁切）——保持 24px 行高 */
+	width: auto;
+	min-width: 100%;
+	box-sizing: border-box;
 }
 
 .abstract-folder-virtual-container > .abstract-folder-virtual-item {
@@ -14405,6 +14419,17 @@ body.is-tablet.scrolling-overlay-buttons-top .scrolling-overlay-button-container
     flex-shrink: 0;
     gap: 8px;
     margin-bottom: 4px; /* Small margin above title */
+}
+
+/* 顶部工具栏：超宽可横向滚动但不显示滚动条（用户 2026-11-20）。
+   工具栏绝对定位在 wrapper 外（不受 wrapper 滚动影响），自身超宽时
+   overflow-x: auto 让按钮可达，滚动条隐藏（scrollbar-width + webkit）。 */
+.abstract-folder-toolbar-container {
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+.abstract-folder-toolbar-container::-webkit-scrollbar {
+	display: none;
 }
 
 .abstract-folder-toolbar-container:empty {
