@@ -580,6 +580,8 @@ export interface VirtualTreeSettings {
   /** 面板标签筛选激活的标签 id（空 = 不筛选）。 */
   activeTagFilter?: string[];
   /** 文件级收藏（面板顶部「收藏」区 + 树行右键「收藏」，思源 favorites 对齐）。 */
+  /** 新建文件对话框记忆的上次扩展名（不含点；缺省 md）。 */
+  newFileLastExt?: string;
   favorites?: FavoriteEntry[];
   externalSplitView: boolean;
   /**
@@ -872,6 +874,8 @@ export function virtualTreeSettingsFrom(raw: unknown): VirtualTreeSettings {
   s.deleteMode = o.deleteMode === 'system' ? 'system' : 'plugin';
   // 文件级收藏:非法记录丢弃,超限截断(favoritesFrom)。
   s.favorites = favoritesFrom(o.favorites);
+  // 新建文件记忆扩展名（非字符串回落 undefined→默认 md）
+  s.newFileLastExt = typeof o.newFileLastExt === 'string' && o.newFileLastExt.trim() ? o.newFileLastExt.trim() : undefined;
   // 标签:定义 + 文件↔标签映射(思源 tag-store 对齐)。必须进归一化,否则
   // loadSettings 丢字段、下次 saveSettings 把盘上的数据抹掉(实测复现)。
   s.tags = tagsFrom(o.tags);

@@ -141,3 +141,112 @@ export class ConfirmModal extends Modal {
     this.contentEl.empty();
   }
 }
+
+
+// ---------------------------------------------------------------------------
+// 新建文件弹窗（用户 2026-11-20：文件名/扩展名双输入框）：
+//   - 文件名默认 untitled；扩展名默认 .md,记忆上一次成功创建的扩展名
+//   - 什么都不输 → untitled.md；已有 untitled.md → untitled_0/1/2…（调用方
+//     用 withSequence 做序号防撞）
+// ---------------------------------------------------------------------------
+
+export interface NewFileModalOpts {
+	title?: string;
+	defaultName?: string;
+	defaultExt?: string;
+	validateName?: (name: string) => string;
+}
+
+/** 重名序号：base 已存在 → base_0/base_1…（上限 1000,兜底返回原 base）。 */
+export function withSequence(base: string, exists: (candidate: string) => boolean): string {
+	if (!exists(base)) return base;
+	for (let i = 0; i < 1000; i++) {
+		const candidate = `${base}_${i}`;
+		if (!exists(candidate)) return candidate;
+	}
+	return base;
+}
+
+export class NewFileModal extends Modal {
+	private readonly title: string;
+	private readonly defaultName: string;
+	private readonly defaultExt: string;
+	private readonly validateName?: (name: string) => string;
+	private readonly onSubmit: (fullName: string) => void;
+
+	constructor(
+		app: App,
+		opts: NewFileModalOpts,
+		onSubmit: (fullName: string) => void,
+	) {
+		super(app);
+		this.title = opts.title ?? '新建文件';
+		this.defaultName = opts.defaultName ?? 'untitled';
+		this.defaultExt = opts.defaultExt ?? 'md';
+		this.validateName = opts.validateName;
+		this.onSubmit = onSubmit;
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.createEl('h3', { text: this.title });
+
+		const row = contentEl.createDiv({ cls: 'lgp-name-prompt-input' });
+		row.style.display = 'flex';
+		row.style.gap = '8px';
+		const nameInput = row.createEl('input', {
+			type: 'text',
+			cls: 'lgp-name-prompt-input',
+			attr: { placeholder: this.defaultName, spellcheck: 'false' },
+		});
+		nameInput.value = this.defaultName;
+		nameInput.style.flex = '1';
+		nameInput.select();
+		const dotEl = row.createDiv({ text: '.', cls: 'lgp-newfile-dot' });
+		dotEl.style.cssText = 'align-self:center;font-weight:700;color:var(--text-muted)';
+		const extInput = row.createEl('input', {
+			type: 'text',
+			cls: 'lgp-name-prompt-input',
+			attr: { placeholder: 'md', spellcheck: 'false' },
+		});
+		extInput.value = this.defaultExt;
+		extInput.style.width = '72px';
+
+		const errEl = contentEl.createDiv({ cls: 'lgp-name-prompt-error' });
+		errEl.style.display = 'none';
+
+		const commit = () => {
+			const name = nameInput.value.trim();
+			const ext = extInput.value.trim().replace(/^\.+/, '');
+			const nameErr = this.validateName?.(name) ?? '';
+			if (nameErr || !name) {
+				errEl.textContent = nameErr || '请填文件名';
+				errEl.style.display = '';
+				nameInput.focus();
+				return;
+			}
+			if (/[/\\]/.test(ext)) {
+				errEl.textContent = '扩展名不能含路径分隔符';
+				errEl.style.display = '';
+				extInput.focus();
+				return;
+			}
+			// 拼接完整文件名（ext 空 = 无扩展名,显式清空是用户意图）
+			this.onSubmit(ext ? `${name}.${ext}` : name);
+			this.close();
+		};
+
+		const enter = (ev: KeyboardEvent): void => {
+			if (ev.key === 'Enter') {
+				ev.preventDefault();
+				commit();
+			}
+		};
+		nameInput.addEventListener('keydown', enter);
+		extInput.addEventListener('keydown', enter);
+
+		const btn = contentEl.createEl('button', { text: '创建', cls: 'mod-cta' });
+		btn.style.marginTop = '10px';
+		btn.addEventListener('click', commit);
+	}
+}

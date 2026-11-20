@@ -99,7 +99,7 @@ import {
   validateEntryName,
   linkVaultPath,
 } from '../features/extFs';
-import { ConfirmModal, NamePromptModal } from './promptModals';
+import { ConfirmModal, NamePromptModal, NewFileModal, withSequence } from './promptModals';
 import { MountEditorModal, MountTargetPickerModal, VaultMountPickModal } from './mountModals';
 import { GitRepoMountModal } from './gitRepoModal';
 import { BaiduPanMountModal } from './baiduPanModal';
@@ -2942,16 +2942,26 @@ export class MountPanelView extends ItemView {
   }
 
   private promptNewFile(mount: ExternalMount, dirAbs: string, dirRel: string): void {
+    // 双输入框（文件名/扩展名,用户 2026-11-20）：文件名默认 untitled,扩展名
+    // 记忆上一次成功创建的值（缺省 md）;名字空 = untitled;默认名重名 →
+    // untitled_0/1/2 序号防撞（显式名字重名仍报错,保留原语义）。
+    const lastExt = this.plugin.settings.newFileLastExt ?? 'md';
+    const rememberExt = (full: string): void => {
+      const ext = full.includes('.') ? full.slice(full.lastIndexOf('.') + 1) : '';
+      if (ext && ext !== this.plugin.settings.newFileLastExt) {
+        this.plugin.settings.newFileLastExt = ext;
+        void this.plugin.saveSettings();
+      }
+    };
     // remote 挂载:新建 = 直接提交一个空文件到远端(git = Contents/批量提交,
     // bdpan = 上传;官方 API 不支持 0 字节文件时会给出可读错误)
     if (isRemoteMount(mount)) {
-      new NamePromptModal(
+      new NewFileModal(
         this.app,
-        { title: '新建文件', placeholder: 'untitled.md', validate: validateEntryName },
-        (name) => {
-          if (!name) return;
+        { defaultExt: lastExt, validateName: validateEntryName },
+        (fullName) => {
           const dir = dirRel ? remoteChildVPath(mount.path, dirRel) : mount.path;
-          const target = remoteChildVPath(dir, name);
+          const target = remoteChildVPath(dir, fullName);
           const push = isGitRepoPath(mount.path)
             ? gitUploadFile(target, new Uint8Array(0))
             : isOneDrivePath(mount.path)
@@ -2959,7 +2969,8 @@ export class MountPanelView extends ItemView {
               : bdUploadFile(target, new Uint8Array(0));
           void push.then(
             () => {
-              new Notice(`已提交 ${name}`);
+              new Notice(`已提交 ${fullName}`);
+              rememberExt(fullName);
               this.rescan(mount, dirRel);
             },
             (err) => new Notice(`创建失败:${(err as Error)?.message ?? '未知错误'}`),
@@ -2972,20 +2983,25 @@ export class MountPanelView extends ItemView {
     // 但直接写盘不会进索引，面板会看到一个幽灵文件）。dirAbs 在此不用，
     // 新建目标由 mount.path + dirRel 决定。
     if (isVaultMount(mount)) {
-      new NamePromptModal(
+      new NewFileModal(
         this.app,
-        { title: '新建文件', placeholder: 'untitled.md', validate: validateEntryName },
-        (name) => {
-          if (!name) return;
+        { defaultExt: lastExt, validateName: validateEntryName },
+        (fullName) => {
           const dir = vaultJoinPath(mount, dirRel);
-          const target = `${dir}/${name}`;
+          // 默认名重名 → untitled_0/1/2 序号防撞（需求 2026-11-20）;
+          // 显式名字重名仍报错（保留原语义,避免静默换名）。
+          const target =
+            fullName === 'untitled'
+              ? withSequence(`${dir}/${fullName}`, (c) => !!this.app.vault.getAbstractFileByPath(c))
+              : `${dir}/${fullName}`;
           if (this.app.vault.getAbstractFileByPath(target)) {
-            new Notice(`已存在同名条目：${name}`);
+            new Notice(`已存在同名条目：${target.slice(target.lastIndexOf('/') + 1)}`);
             return;
           }
           void this.app.vault.create(target, '').then(
             () => {
-              new Notice(`已创建 ${name}`);
+              new Notice(`已创建 ${target.slice(target.lastIndexOf('/') + 1)}`);
+              rememberExt(fullName);
               this.rescan(mount, dirRel);
             },
             (err) => new Notice(`创建失败：${(err as Error)?.message ?? '未知错误'}`),
@@ -2994,18 +3010,23 @@ export class MountPanelView extends ItemView {
       ).open();
       return;
     }
-    new NamePromptModal(
+    new NewFileModal(
       this.app,
-      { title: '新建文件', placeholder: 'untitled.md', validate: validateEntryName },
-      (name) => {
-        if (!name) return;
-        const abs = joinAbs(dirAbs, name);
-        const r = createEmptyFile(abs);
+      { defaultExt: lastExt, validateName: validateEntryName },
+      (fullName) => {
+        const abs0 = joinAbs(dirAbs, fullName);
+        // 默认名重名 → 序号防撞;显式名字保留原语义（创建失败报错）
+        const target =
+          fullName === 'untitled'
+            ? withSequence(abs0, (c) => exists(c))
+            : abs0;
+        const r = createEmptyFile(target);
         if (!r.ok) {
           new Notice(`创建失败：${r.error ?? '未知错误'}`);
           return;
         }
-        new Notice(`已创建 ${name}`);
+        new Notice(`已创建 ${target.slice(target.lastIndexOf('/') + 1)}`);
+        rememberExt(fullName);
         this.rescan(mount, dirRel);
       },
     ).open();
