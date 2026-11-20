@@ -11740,7 +11740,10 @@ export default class EasySyncPlugin extends Plugin {
     const segment = el.createDiv({ cls: "status-bar-item-segment" });
     const iconEl = segment.createDiv({ cls: "status-bar-item-icon" });
     setIcon(iconEl, iconId);
-    setTooltip(el, text);
+    // placement top 显式置顶：默认的自适应放置在状态栏贴窗口底缘时会把
+    // 提示框压到窗口外裁切（用户实报截图 20261120-212046）。top = 提示框
+    // 整体在状态栏上方展开，永不越下缘。
+    setTooltip(el, text, { placement: "top" });
     el.setAttr("aria-label", text);
   }
 
