@@ -414,7 +414,7 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('双链提示权重')
       .setDesc(
-        '逐行一条:权重,正则——路径命中正则的候选加该权重,越大越靠前。例:10,^Important/ 或 5,项目',
+        '逐行一条:权重:正则——路径命中正则的候选加该权重,越大越靠前。例:10:^Important/ 或 5:项目',
       )
       .addTextArea((text) => {
         const rules = this.plugin.settings.linkWeightPatterns ?? [];

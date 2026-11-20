@@ -18,7 +18,12 @@ import { isMemoPayload } from '../interactions/inlineMemo';
 import { hintSuppressedAt, isCaretInHeadingPrefix } from './hintGuards';
 import { toObsidianMath } from './latexSource';
 import { BLOCK_REF_RE as BLOCK_REF_RE_G, BLOCK_UUID_BODY } from '../core/refs';
+import { parseWeightRules, weightForPath } from '../../../shared/weightRules';
 import type { Block } from '../types';
+
+// 权重规则实现收口到 modules/shared/weightRules.ts（unified-search 搜索结果
+// 加权同款消费）；这里按原 API 名再导出，既有调用面/单测不变。
+export { parseWeightRules as parseLinkWeightRules, weightForPath };
 
 // 块引用/嵌入正则的 UUID 捕获体来自 core/refs.ts 的统一出处（EMBED_RE 需要把
 // 同一捕获体嵌进更大的模式,故用 new RegExp 组装）。
@@ -45,27 +50,6 @@ export function autocompleteSources(host: BlockRenderHost, embed = false): Compl
     : [wikiLinkSource(host), tagSource(host), blockRefSource(host), wordCompletionSource(host)];
 }
 
-/** 权重规则（逐行：权重,正则）。解析失败的行丢弃。 */
-export function parseLinkWeightRules(patterns: readonly string[] | undefined): Array<{ regex: RegExp; weight: number }> {
-	const rules: Array<{ regex: RegExp; weight: number }> = [];
-	for (const raw of patterns ?? []) {
-		const m = /^(\d+):(.+)$/.exec(raw.trim());
-		if (!m) continue;
-		try {
-			rules.push({ regex: new RegExp(m[2], 'i'), weight: Number(m[1]) });
-		} catch {
-			/* 坏正则丢弃 */
-		}
-	}
-	return rules;
-}
-
-/** 路径的权重：第一条命中的规则生效（缺省 0）。 */
-export function weightForPath(path: string, rules: Array<{ regex: RegExp; weight: number }>): number {
-	for (const rule of rules) if (rule.regex.test(path)) return rule.weight;
-	return 0;
-}
-
 export function wikiLinkSource(host: BlockRenderHost): CompletionSource {
   return (ctx: CompletionContext): CompletionResult | null => {
     // Supports BOTH triggers: `[[` (plain link) and `![[` (page embed, Logseq
@@ -86,7 +70,7 @@ export function wikiLinkSource(host: BlockRenderHost): CompletionSource {
     const folders = (host.app.vault.getAllFolders?.() ?? []).filter((fo) => fo.path !== '/');
     // 权重规则（用户 2026-11-20）：路径命中正则的候选加权重，越大越靠前；
     // 同权重保持库内顺序。先按权重降序排，再截前 50——高权重文件稳定在列。
-    const rules = parseLinkWeightRules(
+    const rules = parseWeightRules(
       (host.plugin.settings as { linkWeightPatterns?: string[] } | undefined)?.linkWeightPatterns,
     );
     const weighted = [

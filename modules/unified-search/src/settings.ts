@@ -21,6 +21,9 @@ export interface UnifiedSearchSettings {
 		/** 额外取内容片段（每条一次请求，只对前 5 条做，会慢一些） */
 		snippet: boolean;
 	};
+	/** 本地结果权重规则（逐行 `权重:正则`，如 `10:^Important/`）：路径命中的
+	 * 搜索结果加权靠前（第一条命中生效）；与 md-editor「双链提示权重」各自独立。 */
+	weightPatterns: string[];
 }
 
 export const DEFAULT_SETTINGS: UnifiedSearchSettings = {
@@ -40,4 +43,5 @@ export const DEFAULT_SETTINGS: UnifiedSearchSettings = {
 		limit: 20,
 		snippet: false,
 	},
+	weightPatterns: [],
 };

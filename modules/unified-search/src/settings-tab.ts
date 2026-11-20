@@ -55,6 +55,27 @@ export class UnifiedSearchSettingTab extends PluginSettingTab {
 			cls: "setting-item-description",
 		});
 
+		containerEl.createEl("h3", { text: "本地结果权重" });
+		new Setting(containerEl)
+			.setName("路径权重规则")
+			.setDesc(
+				"逐行一条：权重:正则——路径命中正则的本地搜索结果加权靠前（第一条命中生效，越大越靠前）。例：10:^Important/ 或 5:项目。与 md-editor 设置里的「双链提示权重」各自独立。",
+			)
+			.addTextArea((text) => {
+				text
+					.setPlaceholder("10:^Important/\n5:项目")
+					.setValue((this.plugin.settings.weightPatterns ?? []).join("\n"))
+					.onChange(async (value) => {
+						this.plugin.settings.weightPatterns = value
+							.split("\n")
+							.map((p) => p.trim())
+							.filter((p) => p !== "");
+						await this.plugin.saveData(this.plugin.settings);
+					});
+				text.inputEl.setAttr("rows", 4);
+				text.inputEl.addClass("unified-search-weight-input");
+			});
+
 		containerEl.createEl("h3", { text: "外部搜索引擎（文件名 / 全文）" });
 		containerEl.createEl("p", {
 			text: "守护进程索引之外再挂两个本机引擎：Everything 秒搜全盘文件名，AnyTXT 搜文件内容（含 docx/pdf/图片 OCR）。结果合并进统一搜索面板，可用 ev: 只搜 Everything、at: 只搜 AnyTXT。工具没开或超时都不影响本地搜索。",

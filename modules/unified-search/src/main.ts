@@ -27,6 +27,8 @@ export class UnifiedSearchPlugin extends Plugin {
 	async onload(): Promise<void> {
 		const raw = (await this.loadData()) as Partial<UnifiedSearchSettings> | null;
 		this.settings = { ...DEFAULT_SETTINGS, ...raw };
+		// data.json 里旧数据/脏数据防御（缺字段走 DEFAULT，非数组清空）
+		if (!Array.isArray(this.settings.weightPatterns)) this.settings.weightPatterns = [];
 
 		this.addSettingTab(new UnifiedSearchSettingTab(this.app, this));
 		// id 不能用 "open"：无 manifest.id 覆盖的模块共用宿主命名空间

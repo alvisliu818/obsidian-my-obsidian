@@ -1,6 +1,7 @@
 import { SuggestModal, TFile } from "obsidian";
 import { searchExternal, type ExternalHit } from "./providers";
 import { buildMatchPlan } from "./matchBuilder";
+import { parseWeightRules, rankByWeight } from "../../shared/weightRules";
 import type { BlockIndexDaemonClient } from "./daemon/daemonClient";
 import type { UnifiedSearchPlugin } from "./main";
 
@@ -205,6 +206,10 @@ export class UnifiedSearchModal extends SuggestModal<Suggestion> {
       }
       hits = hits.filter((h) => sources.has(h.path.toLowerCase()));
     }
+    // 权重重排（用户 2026-11-20：搜索结果同款「权重:正则」加权）：命中规则的
+    // 路径靠前，稳定重排（同权重保持 FTS rank / LIKE 原序）后再截前 50。
+    const rules = parseWeightRules(this.plugin.settings.weightPatterns);
+    hits = rankByWeight(hits, rules);
     const out: Suggestion[] = hits
       .slice(0, 50)
       .map((h) => ({ kind: "hit" as const, path: h.path, blockId: h.blockId || null, text: h.text }));
@@ -223,6 +228,7 @@ export class UnifiedSearchModal extends SuggestModal<Suggestion> {
           return plan.exts.some((e) => p.endsWith("." + e));
         });
       }
+      extHits = rankByWeight(extHits, rules);
       out.push(
         ...extHits.slice(0, 20).map((h) => ({ kind: "ext" as const, path: h.path, text: h.text })),
       );
