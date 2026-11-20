@@ -1,6 +1,7 @@
 import { Menu } from "obsidian";
 import type { WebViewContextMenuParams } from "../types";
 import { copyText } from "../utils/dom";
+import { compensateMenuPosition } from "../../../shared/menuPosition";
 
 export interface WebViewMenuCallbacks {
   goBack(): void;
@@ -64,5 +65,8 @@ export function showWebViewContextMenu(
   );
   menu.addItem((i) => i.setTitle("检查元素").setIcon("terminal").onClick(() => cb.inspect()));
 
-  menu.showAtPosition({ x: Math.round(hostRect.left + params.x), y: Math.round(hostRect.top + params.y) });
+  // 1.15 菜单 realm 补偿(用户 2026-11-20 报「右键菜单位置偏移」):见
+  // shared/menuPosition.ts——realm 窗口存在时按原样坐标渲染会偏移窗口原点差。
+  const pos = compensateMenuPosition(Math.round(hostRect.left + params.x), Math.round(hostRect.top + params.y));
+  menu.showAtPosition(pos);
 }

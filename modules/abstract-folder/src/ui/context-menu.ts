@@ -7,6 +7,7 @@ import { BatchDeleteConfirmModal, CreateAbstractChildModal, ChildFileType, Delet
 import { IconModal } from './icon-modal';
 import { updateFileIcon, toggleHiddenStatus, createAbstractChildFile, deleteAbstractFile } from '../utils/file-operations';
 import { FolderIndexer } from "../indexer";
+import { compensateMenuPosition } from "../../../shared/menuPosition";
 
 export class ContextMenuHandler {
     constructor(
@@ -27,14 +28,15 @@ export class ContextMenuHandler {
             this.addSingleItemItems(menu, node, multiSelectedPaths);
         }
 
-        menu.showAtPosition({ x: event.clientX, y: event.clientY });
+        menu.showAtPosition(compensateMenuPosition(event.clientX, event.clientY));
     }
 
     showBackgroundMenu(event: MouseEvent) {
         const menu = new Menu();
         menu.setUseNativeMenu(false);
         this.addCreationItems(menu);
-        menu.showAtPosition({ x: event.clientX, y: event.clientY });
+        // 1.15 菜单 realm 坐标补偿(同 browser 右键菜单偏移修复,shared/menuPosition)
+        menu.showAtPosition(compensateMenuPosition(event.clientX, event.clientY));
     }
 
     private addMultiSelectItems(menu: Menu, multiSelectedPaths: Set<string>) {
