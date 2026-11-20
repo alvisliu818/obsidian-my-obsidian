@@ -306,7 +306,12 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 			cls: "setting-item-description",
 		});
 
-		for (const m of this.host.descriptors) {
+		// 模块行按名称排序（用户 2026-11-20：设置页模块按名称排序）——大小写
+		// 不敏的稳定排序，descriptor 数组本身不动（boot 顺序与 UI 无关）。
+		const sortedDescriptors = [...this.host.descriptors].sort((a, b) =>
+			a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+		);
+		for (const m of sortedDescriptors) {
 			const state = this.host.settings.modules[m.id] ?? defaultModuleState(m.desktopOnly);
 			new SettingCtor(containerEl)
 				.setName(m.name)

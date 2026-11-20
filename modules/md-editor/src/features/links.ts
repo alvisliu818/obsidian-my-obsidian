@@ -5,7 +5,7 @@
  * - {{embed ((uuid))}} 鈫?embedded block sub-trees (click to edit in place)
  */
 
-import { MarkdownRenderer, TFile, Notice, setIcon } from 'obsidian';
+import { MarkdownRenderer, TFile, TFolder, Notice, setIcon } from 'obsidian';
 import type { Completion, CompletionContext, CompletionResult, CompletionSource } from '@codemirror/autocomplete';
 import { wordCompletionSource } from './wordComplete';
 import type { BlockRenderHost } from '../blocks/renderHost';
@@ -81,20 +81,27 @@ export function wikiLinkSource(host: BlockRenderHost): CompletionSource {
     // 思源 isBlockHintQueryAtCaret:查询不以空白开头(`[[ foo` 不是合法查询)
     if (/^\s/.test(query)) return null;
     const files = host.app.vault.getMarkdownFiles();
+    // 文件夹候选（用户 2026-11-20：双链提示能提示文件夹）——TFolder 全集
+    // （根除外），detail 标注「文件夹」。
+    const folders = (host.app.vault.getAllFolders?.() ?? []).filter((fo) => fo.path !== '/');
     // 权重规则（用户 2026-11-20）：路径命中正则的候选加权重，越大越靠前；
     // 同权重保持库内顺序。先按权重降序排，再截前 50——高权重文件稳定在列。
     const rules = parseLinkWeightRules(
       (host.plugin.settings as { linkWeightPatterns?: string[] } | undefined)?.linkWeightPatterns,
     );
-    const weighted = files
-      .map((f) => ({ f, weight: weightForPath(f.path, rules) }))
+    const weighted = [
+      ...files.map((f) => ({ path: f.path, label: f.basename, isFolder: false })),
+      ...folders.map((fo: TFolder) => ({ path: fo.path, label: fo.name, isFolder: true })),
+    ]
+      .map((c) => ({ ...c, weight: weightForPath(c.path, rules) }))
       .sort((a, b) => b.weight - a.weight);
     const options: Completion[] = [];
-    for (const { f } of weighted) {
-      const label = f.basename;
-      if (query && !label.toLowerCase().includes(query)) continue;
+    for (const cand of weighted) {
+      const label = cand.label;
+      if (query && !label.toLowerCase().includes(query) && !cand.path.toLowerCase().includes(query)) continue;
       options.push({
         label,
+        detail: cand.isFolder ? '文件夹' : undefined,
         type: 'text',
         apply: (view, _c, f, to) => {
           // The typed `[[` / `![[` stays; only the name region is replaced.

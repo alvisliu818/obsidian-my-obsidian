@@ -63602,3 +63602,16 @@ body.is-mobile
   white-space: pre;
 }
 .lgp-code-embed.is-broken .lgp-code-embed-body code { color: var(--text-error); }
+
+
+/* 未保存文件列表（状态栏图标点击 → 弹窗,用户 2026-11-20） */
+.sc-unsaved-icon-clickable { cursor: pointer; }
+.sc-unsaved-section { font-weight: 600; padding: 6px 0 2px; }
+.sc-unsaved-list { display: flex; flex-direction: column; gap: 2px; }
+.sc-unsaved-row { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 6px; }
+.sc-unsaved-row:hover { background-color: var(--background-modifier-hover); }
+.sc-unsaved-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-unsaved-act { flex: none; cursor: pointer; color: var(--text-muted); display: inline-flex; align-items: center; }
+.sc-unsaved-act:hover { color: var(--text-accent); }
+.sc-unsaved-act.is-danger:hover { color: var(--text-error); }
+.sc-unsaved-empty { color: var(--text-faint); padding: 12px 6px; }
