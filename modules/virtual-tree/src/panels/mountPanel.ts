@@ -1774,6 +1774,14 @@ export class MountPanelView extends ItemView {
     );
     row.setAttribute('title', node.name);
     row.createSpan({ cls: 'logseq-mount-name', text: node.name });
+    // 修改时间（用户 2026-11-20：树显示状态和对应的时间——时间部分落地;
+    // 状态(新增/修改)需要基线概念,下轮做）。muted 小字靠右,挤压时隐藏。
+    if (node.mtime) {
+      const d = new Date(node.mtime);
+      const stamp = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      const t = row.createSpan({ cls: 'logseq-mount-mtime', text: stamp });
+      t.style.cssText = 'margin-left:auto;flex:none;font-size:10px;color:var(--text-faint);font-variant-numeric:tabular-nums';
+    }
     // Linked state is the only flair a file row carries: type pills (png /
     // 二进制 / …) read as noise repeated on half the rows, so they are gone.
     // remote 行不查链接(isLinked 按文件名查 Mounts/,同名库内文件会误报)
