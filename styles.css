@@ -63652,3 +63652,7 @@ body.is-mobile
 .monaco-scrollable-element > .scrollbar > .slider.active {
   background: var(--scrollbar-thumb-hover-bg, var(--background-modifier-border-hover));
 }
+
+/* 浏览器:保存网页路径弹窗 */
+.ob-save-page-input { width: 100%; margin-bottom: 10px; }
+.ob-save-page-row { display: flex; gap: 8px; justify-content: flex-end; }

@@ -5,6 +5,56 @@ import { webContentsFromId } from "../utils/electron";
 import { escapeHtml } from "../utils/dom";
 import { parseEdgeInstallNavigation } from "../extensions/edgeStore";
 
+/**
+ * guest 侧「复制元素为带样式 HTML」片段(用户 2026-11-20):elementFromPoint
+ * 取右键命中元素,克隆子树逐节点内联计算样式(裁剪到视觉/布局相关属性——
+ * 全量 cssText 每节点 300+ 属性,子树大时体积爆炸);img/source/a 绝对化;
+ * <script>(带 js)由 cloneNode 原样保留;节点 3000 封顶。
+ */
+const COPY_ELEMENT_PROPS = [
+  "display", "position", "top", "right", "bottom", "left", "float", "z-index",
+  "box-sizing", "width", "height", "min-width", "min-height", "max-width", "max-height",
+  "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
+  "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
+  "border", "border-top", "border-right", "border-bottom", "border-left",
+  "border-width", "border-style", "border-color", "border-radius",
+  "border-collapse", "border-spacing", "table-layout",
+  "background-color", "background-image", "background-repeat", "background-position", "background-size",
+  "color", "opacity", "visibility", "overflow", "overflow-x", "overflow-y",
+  "font-family", "font-size", "font-style", "font-weight", "line-height",
+  "text-align", "text-decoration", "text-transform", "text-indent", "letter-spacing", "word-spacing",
+  "white-space", "word-break", "vertical-align", "list-style", "list-style-type",
+  "flex-direction", "flex-wrap", "flex", "gap", "align-items", "align-self", "justify-content",
+  "grid-template-columns", "grid-template-rows", "grid-column", "grid-row",
+  "box-shadow", "text-shadow", "transform", "filter", "aspect-ratio", "object-fit",
+].join(",");
+
+const COPY_ELEMENT_SNIPPET = `(function (px, py) {
+  var el = document.elementFromPoint(px, py);
+  if (!el) return "";
+  var PROPS = ${JSON.stringify(COPY_ELEMENT_PROPS)}.split(",");
+  var count = 0;
+  var walk = function (src, dst) {
+    if (++count > 3000) return;
+    try {
+      var cs = window.getComputedStyle(src);
+      var css = "";
+      for (var i = 0; i < PROPS.length; i++) {
+        var v = cs.getPropertyValue(PROPS[i]);
+        if (v) css += PROPS[i] + ":" + v + ";";
+      }
+      if (css) dst.setAttribute("style", (dst.getAttribute("style") ? dst.getAttribute("style") + ";" : "") + css);
+      if (dst.tagName === "IMG" || dst.tagName === "SOURCE") dst.setAttribute("src", src.src || "");
+      if (dst.tagName === "A") dst.setAttribute("href", src.href || "");
+      var sc = src.children, dc = dst.children;
+      for (var j = 0; j < sc.length && j < dc.length; j++) walk(sc[j], dc[j]);
+    } catch (e) {}
+  };
+  var clone = el.cloneNode(true);
+  walk(el, clone);
+  return clone.outerHTML;
+})`;
+
 export interface WebviewCallbacks {
   onUrlChange?(url: string): void;
   onTitleChange?(title: string): void;
@@ -691,6 +741,33 @@ export class WebviewController {
 
   resetZoom(): void {
     this.setZoomFactor(1);
+  }
+
+  /**
+   * 保存网页(用户 2026-11-20:支持保存网页+自选保存位置):Electron
+   * WebContents.savePage 单文件 MHTML——完整渲染页(含样式/图片/字体,
+   * 与 Chrome「另存为 MHTML」同格式),自选路径由调用方弹窗决定。
+   */
+  async savePageMhtml(absPath: string): Promise<boolean> {
+    const wc = this.webContents();
+    if (!wc?.savePage) return false;
+    try {
+      await wc.savePage(absPath, "MHTML");
+      return true;
+    } catch (e) {
+      console.warn("[obsidian-browser] savePage(MHTML) failed:", e);
+      return false;
+    }
+  }
+
+  /**
+   * 点击点元素 → 内联计算样式的 HTML(用户 2026-11-20:复制部分元素,
+   * 复制为带样式带 js 的 html)。guest 侧 elementFromPoint 取右键命中的
+   * 元素,克隆子树逐节点内联裁剪后的计算样式;img/a 绝对化,子树里的
+   * <script>(带 js)由 cloneNode 原样保留。节点数 3000 封顶防整页爆炸。
+   */
+  async copyElementHtml(x: number, y: number): Promise<string | null> {
+    return await this.execJs<string>(`(${COPY_ELEMENT_SNIPPET})(${Math.round(x)},${Math.round(y)})`);
   }
 
   private webContents(): any | null {

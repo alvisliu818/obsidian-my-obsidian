@@ -29,7 +29,8 @@ export class BrowserTab {
 
   private wrap: HTMLDivElement;
   private webview: IWebviewTag;
-  private controller: WebviewController;
+  /** WebviewController(保存网页 MHTML/复制元素等 ctx 消费方需要;只读外借)。 */
+  readonly controller: WebviewController;
   readonly toolbar: Toolbar;
 
   private healthTimer: ReturnType<typeof setInterval> | null = null;
@@ -130,6 +131,8 @@ export class BrowserTab {
           reload: () => this.reload(false),
           openInNewTab: (url) => this.ctx.requestNewTab(url),
           saveAs: (url, name) => void this.ctx.saveUrlToVault(url, name),
+          savePageMhtml: () => void this.ctx.savePageMhtml(this),
+          copyElement: (x, y) => void this.ctx.copyElementHtml(this, x, y),
           excerpt: (mode) => void this.ctx.excerpt(this, mode),
           annotate: (selectionText) => void this.annotateSelection(selectionText),
           copyImage: (src) => void this.copyImage(src),

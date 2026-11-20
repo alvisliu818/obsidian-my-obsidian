@@ -36,8 +36,10 @@ import { evalInServiceWorker } from "./extensions/swBridge";
 import type { UserScriptRecord } from "./types";
 import { BrowserSettingTab } from "./settings/SettingsTab";
 import { downloadToVault } from "./utils/download";
-import { isUrlExcluded, normalizeUrl } from "./utils/url";
+import { isUrlExcluded, normalizeUrl, safeFilename, formatDateKey } from "./utils/url";
 import { nodeRequire, openExternal, vaultBasePath } from "./utils/electron";
+import { copyText } from "./utils/dom";
+import { SavePageModal } from "./browser/savePageModal";
 
 export default class BrowserPlugin extends Plugin {
   private store = new DataStore(this);
@@ -47,6 +49,8 @@ export default class BrowserPlugin extends Plugin {
   private extHost!: ExtensionHost;
 	private usHost!: UserscriptHost;
   private popupLayer: PopupLayer | null = null;
+  /** 保存网页上次目录(会话内记忆,自选位置的默认值)。 */
+  private lastSavePageDir: string | null = null;
   private ctx!: BrowserContext;
   private annotation!: AnnotationController;
   /** DNR 拦截器单例（调试/探针可达）。 */
@@ -209,6 +213,35 @@ export default class BrowserPlugin extends Plugin {
           tab.url,
         );
         if (file instanceof TFile) await this.app.workspace.getLeaf(false).openFile(file);
+      },
+
+      // 保存网页 MHTML(用户 2026-11-20:保存网页+自选保存位置):标题+日期
+      // 建议名,上次目录会话内记忆;成功后 Notice 落点。
+      savePageMhtml: async (tab) => {
+        const title = (tab.title || "page").slice(0, 60);
+        const name = safeFilename(`${title}-${formatDateKey(Date.now())}`) + ".mhtml";
+        const dir = this.lastSavePageDir ?? "";
+        const suggested = dir ? `${dir.replace(/[\\/]+$/, "")}\\${name}` : name;
+        new SavePageModal(this.app, suggested, (p) => {
+          const abs = p.trim().replace(/^"+|"+$/g, "");
+          if (!abs) return;
+          if (abs.includes("\\")) this.lastSavePageDir = abs.slice(0, abs.lastIndexOf("\\") + 1);
+          void tab.controller.savePageMhtml(abs).then((ok) => {
+            new Notice(ok ? "网页已保存:" + abs : "保存失败(savePage 不可用或路径无效)");
+          });
+        }).open();
+      },
+
+      // 复制右键命中元素为带样式 HTML(用户 2026-11-20):guest 内联计算样式
+      // +保留 script;空串/失败 Notice,成功进剪贴板。
+      copyElementHtml: async (tab, x, y) => {
+        const html = await tab.controller.copyElementHtml(x, y);
+        if (!html) {
+          new Notice("未取到元素(页面未就绪或命中空点)");
+          return;
+        }
+        await copyText(html);
+        new Notice(`已复制元素 HTML(${html.length} 字符,含内联样式)`);
       },
 
       onDomReady: (webview: IWebviewTag, url: string) => {

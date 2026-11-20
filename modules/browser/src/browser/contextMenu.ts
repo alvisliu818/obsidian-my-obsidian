@@ -9,6 +9,10 @@ export interface WebViewMenuCallbacks {
   reload(): void;
   openInNewTab(url: string): void;
   saveAs(url: string, suggestedName?: string): void;
+  /** 保存网页 MHTML(自选位置;用户 2026-11-20) */
+  savePageMhtml(): void;
+  /** 复制右键命中元素为带样式 HTML(用户 2026-11-20) */
+  copyElement(x: number, y: number): void;
   excerpt(mode: "article" | "selection"): void;
   annotate(selectionText: string): void;
   copyImage(srcUrl: string): void;
@@ -47,6 +51,12 @@ export function showWebViewContextMenu(
   if (!params.linkURL && params.mediaType !== "image") {
     menu.addItem((i) => i.setTitle("页面另存到仓库").setIcon("download").onClick(() => cb.saveAs(params.pageURL)));
   }
+  // 保存网页(完整渲染页 MHTML,自选保存位置;用户 2026-11-20)
+  menu.addItem((i) => i.setTitle("保存网页到本地…").setIcon("hard-drive-download").onClick(() => cb.savePageMhtml()));
+  // 复制右键命中元素为带样式 HTML(内联计算样式+保留 script;用户 2026-11-20)
+  menu.addItem((i) =>
+    i.setTitle("复制元素为带样式 HTML").setIcon("code-xml").onClick(() => cb.copyElement(params.x, params.y)),
+  );
 
   if (params.selectionText) {
     menu.addItem((i) => i.setTitle("复制所选文本").setIcon("copy").onClick(() => void copyText(params.selectionText!)));

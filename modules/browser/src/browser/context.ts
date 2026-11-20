@@ -44,6 +44,10 @@ export interface BrowserContext {
   openUrl(url: string, newTab?: boolean): void;
   openInSystemBrowser(url: string): void;
   saveUrlToVault(url: string, suggestedName?: string): Promise<void>;
+  /** 保存网页 MHTML 到自选位置(用户 2026-11-20)。 */
+  savePageMhtml(tab: BrowserTab): Promise<void>;
+  /** 复制右键命中元素为带样式 HTML(内联计算样式;用户 2026-11-20)。 */
+  copyElementHtml(tab: BrowserTab, x: number, y: number): Promise<void>;
   excerpt(tab: BrowserTab, mode: "article" | "selection"): Promise<void>;
 
   /** Injection hook (ad-filter CSS + content scripts). */
