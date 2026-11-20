@@ -275,9 +275,21 @@ export default class SplitDiffView extends ItemView {
 
         this.refreshing = true;
         try {
-            const newContent = await this.app.vault.adapter.read(
-                this.plugin.gitManager.getRelativeVaultPath(this.state.bFile)
-            );
+            let newContent: string;
+            try {
+                newContent = await this.app.vault.adapter.read(
+                    this.plugin.gitManager.getRelativeVaultPath(this.state.bFile)
+                );
+            } catch (readError) {
+                // 嵌套 git 仓库/目录（用户实报：kb_0817 是嵌套仓库）：
+                // adapter.read 抛 EISDIR——之前直接炸穿 merge view。
+                // 诚实占位：编辑器显示说明文本，而不是整个视图报错。
+                const code = (readError as { code?: string }).code ?? '';
+                newContent =
+                    code === 'EISDIR'
+                        ? `[嵌套 git 仓库（目录）——不支持逐行 diff：${this.state.bFile}]`
+                        : `[读取失败：${this.state.bFile}]`;
+            }
             if (newContent != bEditor.state.doc.toString()) {
                 const transaction = bEditor.state.update({
                     changes: {
