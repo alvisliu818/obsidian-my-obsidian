@@ -46,6 +46,7 @@ import {
   isTextFileName,
   type MountNode,
   type ScanEntry,
+  isReadOnlyEntry,
 } from './features/mountFilter';
 import { applyMarkedTabIcons, markLeafTabIcon } from './features/tabIcon';
 import { parseExtVideoTarget } from './features/videoTimestamps';
@@ -1163,6 +1164,15 @@ menu.addItem((item) =>
     opts?: { readOnly?: boolean; forceCodeEditor?: boolean; forceBlockEditor?: boolean; paneMode?: string | boolean },
   ): Promise<void> {
     if (node.isDir) return;
+    // 只读名单命中（用户 2026-11-20：文件夹/文件只读,正则黑白名单）→
+    // 强制只读路由（read-only shim）。名单 = settings.readOnlyPatterns,
+    // 语法与挂载 include/exclude 一致（纯文本前缀/段 + /正则/ 整条路径）。
+    // node.rel 即过滤语义的相对路径（vault 挂载 = 库内相对路径,external =
+    // 挂载相对路径）。
+    if (!opts?.readOnly && isReadOnlyEntry(node.rel, this.settings.readOnlyPatterns)) {
+      opts = { ...opts, readOnly: true };
+      new Notice(`只读（命中只读名单）：${node.name}`);
+    }
     // 链接挂载家族（weblink/action/bmarks 叶子）：不走文件路由——网页类
     // 经 Browser 模块打开，动作类直接执行（思源 editor-tab 同款分流）。
     if (isWeblinkPath(node.abs)) {

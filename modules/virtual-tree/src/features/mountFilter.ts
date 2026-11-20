@@ -312,3 +312,25 @@ export function validateMountPath(p: string): string | null {
   if (/[<>"|?*]/.test(t)) return 'Path contains characters Windows does not allow.';
   return null;
 }
+
+/**
+ * 只读路径判定（用户 2026-11-20：虚拟文档树支持设置文件夹/文件只读,
+ * 支持正则黑白名单——这里实现名单命中）。复用 compileFilter 的 exclude
+ * 三查语义（整路径/裸名/段边界），模式语法与挂载 include/exclude 一致：
+ * 纯文本 = 前缀匹配（整路径/裸名/段），/正则/ = 整条相对路径。
+ * 命中任意模式 → 该路径只读（编辑入口强制走只读视图）。
+ */
+export function isReadOnlyEntry(
+	rel: string,
+	patterns: readonly string[] | undefined,
+): boolean {
+	if (!patterns?.length) return false;
+	const name = rel.slice(rel.lastIndexOf('/') + 1);
+	for (const raw of patterns) {
+		// 单条模式独立编译（mountFilter 的 exclude 是【单条】正则/纯文本,
+		// 多条在调用方逐条判定——join 成一条会让整串变成无意义正则）
+		const f = compileFilter({ include: '', exclude: raw });
+		if (f.exclude && matchesExcluded(rel, name, f.exclude)) return true;
+	}
+	return false;
+}

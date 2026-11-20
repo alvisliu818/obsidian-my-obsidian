@@ -46,6 +46,27 @@ export class VirtualTreeSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.createEl('h3', { text: '外部挂载' });
     this.renderMountsSection(containerEl);
+    // 只读路径模式（用户 2026-11-20：文件夹/文件只读,支持正则）——textarea
+    // 逐行条目,语法与挂载 include/exclude 一致（纯文本前缀/段 + /正则/）。
+    containerEl.createEl('h3', { text: '只读路径' });
+    new Setting(containerEl)
+      .setName('只读名单')
+      .setDesc('命中即只读（编辑入口强制走只读视图）。每行一条:纯文本 = 路径前缀（同段边界,Notes 不误伤 Notes2）;/正则/ = 整条相对路径。')
+      .addTextArea((text) => {
+        const patterns = this.plugin.settings.readOnlyPatterns ?? [];
+        text
+          .setPlaceholder('秘密\n/\\.secret$/i')
+          .setValue(patterns.join('\n'))
+          .onChange(async (value) => {
+            this.plugin.settings.readOnlyPatterns = value
+              .split('\n')
+              .map((p) => p.trim())
+              .filter((p) => p !== '');
+            await this.plugin.saveSettings();
+          });
+        text.inputEl.rows = 5;
+        text.inputEl.style.width = '100%';
+      });
     containerEl.createEl('h3', { text: 'Git 仓库' });
     this.renderGitSection(containerEl);
     containerEl.createEl('h3', { text: 'IMAP 邮箱（挂载凭据）' });
