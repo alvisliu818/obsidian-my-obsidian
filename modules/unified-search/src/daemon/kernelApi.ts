@@ -50,7 +50,13 @@ export type QueryName =
 /** 事件帧（SSE data 行；stdio 模式下即 JSON 行的 ev 消息，语义一一对应）。 */
 export type KernelEvent =
   | { ev: 'hello'; proto: number; pid: number }
-  | { ev: 'changed'; version: number }
+  | {
+      ev: 'changed';
+      version: number;
+      /** 变更报告（og tx-report 思路）：本轮发生变化的库内文件路径。
+       *  undefined = 全量失效语义（重建/报告缺失/截断）。 */
+      paths?: string[];
+    }
   | { ev: 'progress'; done: number; total: number }
   | { ev: 'fts'; enabled: boolean };
 

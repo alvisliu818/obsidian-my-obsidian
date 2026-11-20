@@ -63,9 +63,13 @@ describe('http transport', () => {
       const r = (await t.call('upsert', { paths: ['a.md'] })) as { echoed: { op: string } };
       expect(r.echoed.op).toBe('upsert');
 
-      mk.server.broadcast({ ev: 'changed', version: 3 });
+      mk.server.broadcast({ ev: 'changed', version: 3, paths: ['a.md', 'b.md'] });
       await sleep(150);
       expect(events.some((e) => e.ev === 'changed' && e.version === 3)).toBe(true);
+      // 变更报告（og tx-report 思路）随事件帧透传
+      expect(
+        events.some((e) => e.ev === 'changed' && Array.isArray(e.paths) && e.paths[0] === 'a.md'),
+      ).toBe(true);
 
       await t.stop();
       expect(mk.shutdownCalled()).toBe(true);

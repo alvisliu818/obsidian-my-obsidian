@@ -95,6 +95,9 @@ export interface SqliteIndexStats {
   fullRebuild: boolean;
   /** Files skipped for being too large or unreadable. */
   skipped: string[];
+  /** 本轮发生变化的文件路径（added+changed+removed，og tx-report 思路的
+   *  变更报告；全量重建/超上限截断时为 undefined = 消费方按全量处理）。 */
+  changedPaths?: string[];
   bytes: number;
   persisted: boolean;
   ms: number;
@@ -415,6 +418,11 @@ export class SqliteIndex {
       unchanged: plan.unchanged,
       fullRebuild,
       skipped,
+      // 变更报告（tx-report）：只在非全量重建时携带（2000 封顶防超大批次
+      // 撑爆广播帧；截断/全量 = undefined，消费方按全量失效处理）。
+      changedPaths: fullRebuild
+        ? undefined
+        : [...plan.added, ...plan.changed, ...plan.removed].slice(0, 2000),
       bytes: this.stats.bytes,
       persisted: !!this.opts.snapshot,
       ms: Date.now() - started,

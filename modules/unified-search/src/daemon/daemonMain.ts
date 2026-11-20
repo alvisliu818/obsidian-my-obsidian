@@ -642,12 +642,22 @@ async function main(): Promise<void> {
 
   // mutate 进行中标志：空闲自退的豁免条件（turbo/upsert 期间不许退,§6.3）。
   let mutateRunning = false;
-  const mutate = async (fn: () => Promise<unknown>): Promise<unknown> => {
+  /** 变更报告（og tx-report 思路）：op 侧把本轮变更的文件路径带进 changed
+   *  广播；缺省 = 全量失效语义（rebuild 等）。fn 返回 stats 时自动抽取
+   *  changedPaths（sync 路径）。 */
+  const mutate = async (
+    fn: () => Promise<unknown>,
+    report?: { paths?: string[] },
+  ): Promise<unknown> => {
     mutateRunning = true;
     try {
       const r = await fn();
       version++;
-      if (!args.oneShot) emit({ ev: 'changed', version });
+      if (!args.oneShot) {
+        const statsPaths =
+          (r as { changedPaths?: string[] } | null | undefined)?.changedPaths;
+        emit({ ev: 'changed', version, paths: report?.paths ?? statsPaths });
+      }
       return r;
     } finally {
       mutateRunning = false;
@@ -1143,19 +1153,25 @@ async function main(): Promise<void> {
         return mutate(() => idx.sync());
       case 'upsert': {
         const paths = msg.paths ?? [];
-        return mutate(async () => {
-          for (const p of paths) await idx.syncFile(p);
-          return { files: paths.length };
-        });
+        return mutate(
+          async () => {
+            for (const p of paths) await idx.syncFile(p);
+            return { files: paths.length };
+          },
+          { paths },
+        );
       }
       case 'delete': {
         const paths = msg.paths ?? [];
-        return mutate(async () => {
-          for (const p of paths) {
-            await (idx as unknown as { forgetFile?: (p: string) => Promise<void> }).forgetFile?.(p);
-          }
-          return { files: paths.length };
-        });
+        return mutate(
+          async () => {
+            for (const p of paths) {
+              await (idx as unknown as { forgetFile?: (p: string) => Promise<void> }).forgetFile?.(p);
+            }
+            return { files: paths.length };
+          },
+          { paths },
+        );
       }
       case 'setExclude':
         source.setExcludes(msg.folders ?? []);

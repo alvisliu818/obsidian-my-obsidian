@@ -302,7 +302,7 @@ export class BlockIndexDaemonClient {
   private handleEvent(ev: KernelEvent): void {
     if (ev.ev === 'changed') {
       this.version = ev.version;
-      this.invalidateCaches();
+      this.invalidateCaches(ev.paths);
       this.opts.onChange();
       return;
     }
@@ -363,14 +363,24 @@ export class BlockIndexDaemonClient {
     });
   }
 
-  private invalidateCaches(): void {
+  /**
+   * 缓存失效。paths（og tx-report 变更报告）给出时按路径精准失效：
+   * cacheFileBlocks 只删变更文件的行缓存——跨文件切换不再因别处一次编辑
+   * 而整表重拉；跨文件大池（byId/tags/cards）仍全清（后台异步补，语义
+   * 保守但开销毫秒级）。paths 缺省（重建/旧内核）= 全清。
+   */
+  private invalidateCaches(paths?: string[]): void {
     this.cacheById = null;
     this.cacheAllTags = null;
     this.cacheCards = null;
     this.cacheSupertags = null;
     this.cacheSupertagInstances.clear();
     this.cacheTasksByMarker.clear();
-    this.cacheFileBlocks.clear();
+    if (paths && paths.length > 0) {
+      for (const p of paths) this.cacheFileBlocks.delete(p);
+    } else {
+      this.cacheFileBlocks.clear();
+    }
   }
 
   // ------------------------------------------------------------------
