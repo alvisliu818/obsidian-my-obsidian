@@ -31,7 +31,7 @@ import {
   cachedStaticEl,
   anchorRelativeImgSrcs,
   blockFromEl,
-  type ImgAnchorToken,
+  makeImgAnchorSystem,
   applyAnchoredImgSrcs,
   findBlockEl,
   patchBlockSubtree,
@@ -1189,15 +1189,15 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
           const ph = document.createElement('div');
           ph.className = 'block-content-static';
           content.appendChild(ph);
-          const imgAnchorTokens: ImgAnchorToken[] = [];
+          const imgSys = makeImgAnchorSystem();
           void MarkdownRenderer.render(
             this.app,
-            toObsidianMath(anchorRelativeImgSrcs(codeInfo.prefix, this, imgAnchorTokens), this.app),
+            toObsidianMath(anchorRelativeImgSrcs(codeInfo.prefix, this, imgSys), this.app),
             ph,
             this.file?.path ?? '',
             this,
           )
-            .then(() => applyAnchoredImgSrcs(ph, this, imgAnchorTokens))
+            .then(() => applyAnchoredImgSrcs(ph, this, imgSys))
             .catch(() => {});
         }
       }
