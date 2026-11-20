@@ -64,6 +64,8 @@ export function invalidateVaultParentPlans(): void {
 
 /** frontmatter `parent` 值 → 干净的链接路径（[[..]]、别名、引号都剥掉）。 */
 function cleanParentValue(raw: unknown): string {
+  // Obsidian 属性 UI 的 link 属性可能存成数组（多值）——取第一项
+  if (Array.isArray(raw)) raw = raw[0];
   if (typeof raw !== 'string') return '';
   let v = raw.trim();
   if (!v) return '';
