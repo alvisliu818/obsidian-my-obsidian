@@ -397,6 +397,20 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
             this.plugin.refreshAllViews();
           }),
       );
+    new Setting(containerEl)
+      .setName('[TOC] 标记渲染目录')
+      .setDesc(
+        '块文本为 [TOC] 时渲染为可点击的标题目录（收集全文档的标题块，点击跳转到对应块）。关掉则按字面文本显示。',
+      )
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.tocEnabled !== false)
+          .onChange(async (v) => {
+            this.plugin.settings.tocEnabled = v;
+            await this.plugin.saveSettings();
+            this.plugin.refreshAllViews();
+          }),
+      );
 
     new Setting(containerEl)
       .setName('第三方补全（Various Complements 等）')

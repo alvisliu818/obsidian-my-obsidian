@@ -218,6 +218,8 @@ export interface BlockEditorSettings {
    * appears where it always did (list blocks with children).
    */
   foldEnabled: boolean;
+  /** [TOC] 标记块渲染为可点击的标题目录（用户 2026-11-20；设置可关）。 */
+  tocEnabled: boolean;
   /**
    * 大纲末尾的「添加块」提示行：鼠标移过去会在子弹圆点那一列浮现一条横线
    * 和一个加号，点击就在可见大纲最后追加一个新块并聚焦——对应 Logseq / 思源
@@ -460,6 +462,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   kernelResident: true,
   kernelTray: false,
   foldEnabled: true,
+  tocEnabled: true,
   addBlockAffordance: true,
   addBlockMarks: true,
   hiddenProps: 'collapsed',

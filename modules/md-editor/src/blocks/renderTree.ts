@@ -446,6 +446,10 @@ function renderBlock(b: Block, host: BlockRenderHost, budget?: RenderBudget): HT
     if (!(nativeProps && host.nativePropsEditorFor(content, b))) {
       renderPropsAsContent(content, b, host);
     }
+  } else if (b.text.trim().toUpperCase() === '[TOC]' && host.plugin.settings.tocEnabled !== false) {
+    // [TOC] 标记块（用户 2026-11-20）：渲染为可点击的标题目录（收集全文档
+    // 标题块,点击 focusBlock 跳转）。设置可关——关掉按字面文本显示。
+    renderBlockToc(content, b, host);
   } else {
     attachStaticContent(content, b, host);
     if (b.text === '' && !nativeProps) {
@@ -1673,6 +1677,44 @@ function wireContentEvents(holder: HTMLElement, b: Block, host: BlockRenderHost)
 /** The page-properties block: the doc's FIRST block, empty text. */
 function isPropsBlock(b: Block, host: BlockRenderHost): boolean {
   return host.doc.blocks[0] === b && b.kind === 'list' && (b.text === '' || b.frontmatter === true);
+}
+
+// [TOC] 标记块注释见 renderBlockToc 前置块。
+// 收集范围 = host.visibleRoots（当前渲染的大纲,尊重折叠/缩放）;标题 = 首行
+// `#{1,6} ` 的块。点击条目 → focusBlock 跳转到标题块。设置 tocEnabled 可关。
+// ---------------------------------------------------------------------------
+
+interface TocEntry {
+	block: Block;
+	level: number;
+	title: string;
+}
+
+function collectTocEntries(roots: Block[], out: TocEntry[], depth = 0): void {
+	for (const b of roots) {
+		const head = /^\s*(#{1,6})\s+(.+)$/.exec(b.text.split('\n')[0] ?? '');
+		if (head) out.push({ block: b, level: head[1].length, title: head[2].trim() });
+		collectTocEntries(b.children, out, depth + 1);
+	}
+}
+
+function renderBlockToc(content: HTMLElement, _b: Block, host: BlockRenderHost): void {
+	content.empty();
+	const box = content.createEl('div', { cls: 'block-content-static block-toc' });
+	const entries: TocEntry[] = [];
+	collectTocEntries(host.visibleRoots, entries);
+	if (entries.length === 0) {
+		box.createEl('div', { cls: 'life-empty', text: '本文档还没有标题。' });
+		return;
+	}
+	const list = box.createEl('div', { cls: 'block-toc-list' });
+	for (const e of entries) {
+		const row = list.createEl('div', { cls: 'block-toc-row level-' + e.level });
+		row.style.paddingInlineStart = `${(e.level - 1) * 16 + 8}px`;
+		row.createSpan({ cls: 'block-toc-hash', text: '#'.repeat(e.level) });
+		row.createSpan({ cls: 'block-toc-title', text: e.title });
+		row.addEventListener('click', () => host.focusBlock(e.block));
+	}
 }
 
 /**
