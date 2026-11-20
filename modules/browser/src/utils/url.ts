@@ -16,12 +16,28 @@ export function normalizeUrl(input: string, settings: Pick<BrowserSettings, "sea
   if (/^about:/i.test(raw)) return raw;
   if (/^(data|blob|javascript|chrome-extension|view-source):/i.test(raw)) return raw;
 
-  // Looks like a host: example.com, sub.example.com/path, localhost:3000
-  if (/^[\w-]+(\.[\w-]+)+(\/.*)?$/.test(raw) || /^localhost(:\d+)?(\/.*)?$/i.test(raw)) {
+  // Looks like a host: example.com, sub.example.com/path, localhost:3000,
+  // 中文域名/中文路径(用户 2026-11-20:地址栏支持中文,不转义)——\p{L}\p{N}
+  // 让 `百度百科.com` 这类输入也按主机导航而不是搜索。
+  if (/^[\w\p{L}\p{N}-]+(\.[\w\p{L}\p{N}-]+)+(\/.*)?$/u.test(raw) || /^localhost(:\d+)?(\/.*)?$/i.test(raw)) {
     return "https://" + raw;
   }
 
   return buildSearchUrl(raw, settings);
+}
+
+/**
+ * 地址栏显示用(用户 2026-11-20:地址栏支持中文,不转义):guest 返回的 URL
+ * 是百分号编码形态(%E5%BE%B7%E5%9B%BD),decodeURI 还原可读中文路径,同时
+ * 保留 ?&=/ 等结构字符不被误解;解码失败原样返回。
+ */
+export function displayUrl(url: string): string {
+  const raw = url || "";
+  try {
+    return decodeURI(raw);
+  } catch {
+    return raw;
+  }
 }
 
 export function buildSearchUrl(query: string, settings: Pick<BrowserSettings, "searchEngine" | "customSearchUrl">): string {

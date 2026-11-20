@@ -1,6 +1,6 @@
 import { setIcon } from "obsidian";
 import type { BrowserSettings } from "../types";
-import { normalizeUrl } from "../utils/url";
+import { normalizeUrl, displayUrl } from "../utils/url";
 
 export interface ToolbarCallbacks {
   onBack(): void;
@@ -147,7 +147,8 @@ export class Toolbar {
   setUrl(url: string): void {
     // Never fight the user's typing.
     if (document.activeElement === this.urlbar) return;
-    this.urlbar.value = url === "about:blank" ? "" : url;
+    // 中文不转义(用户 2026-11-20):guest 编码 URL → 显示层还原可读中文
+    this.urlbar.value = url === "about:blank" ? "" : displayUrl(url);
   }
 
   setNavState(canBack: boolean, canForward: boolean): void {
