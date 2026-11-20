@@ -577,6 +577,16 @@ export function createEditor(
     overviewRulerLanes: 0,
     hideCursorInOverviewRuler: true,
     overviewRulerBorder: false,
+    // 原生观感滚动条(用户 2026-11-20「monaco 滚动条换成原生滚动条」):竖向常驻
+    // (Monaco 默认滚动时才浮出)、无渐变阴影、尺寸对齐 Obsidian 原生 12px;
+    // 滑块配色在 styles.css 的 .monaco-scrollable-element 段(与原生 thumb 同源)。
+    scrollbar: {
+      vertical: 'visible',
+      horizontal: 'auto',
+      useShadows: false,
+      verticalScrollbarSize: 12,
+      horizontalScrollbarSize: CODE_HSCROLL_STRIP,
+    },
     smoothScrolling: true,
     cursorBlinking: 'smooth',
     renderWhitespace: 'selection',

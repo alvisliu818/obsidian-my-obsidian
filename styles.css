@@ -63639,3 +63639,16 @@ body.is-mobile
 .life-home-rec-item.is-renamed { color: var(--text-accent); }
 .life-home-rec-item.is-openable { cursor: pointer; }
 .life-home-rec-item.is-openable:hover { background: var(--background-modifier-hover); text-decoration: underline; }
+
+/* Monaco 滚动条原生观感(用户 2026-11-20):滑块配色与 Obsidian 原生
+   scrollbar thumb 同源,去 Monaco 默认的半透明浮层感 */
+.monaco-scrollable-element > .scrollbar > .slider {
+  background: var(--scrollbar-thumb-bg, var(--background-modifier-border));
+  border-radius: 6px;
+}
+.monaco-scrollable-element > .scrollbar > .slider:hover {
+  background: var(--scrollbar-thumb-hover-bg, var(--background-modifier-border-hover));
+}
+.monaco-scrollable-element > .scrollbar > .slider.active {
+  background: var(--scrollbar-thumb-hover-bg, var(--background-modifier-border-hover));
+}
