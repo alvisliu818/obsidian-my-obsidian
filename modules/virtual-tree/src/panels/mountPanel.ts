@@ -2228,6 +2228,17 @@ export class MountPanelView extends ItemView {
         new Notice('已复制路径');
       }),
     );
+    // 复制数据结构（用户 2026-11-20）：JSON 含真实文件绝对路径——文件夹行
+    // 递归收集挂载树里已加载的文件；文件行单条。供外部工具/脚本消费。
+    menu.addItem((item) =>
+      item.setTitle('复制数据结构').setIcon('braces' as never).onClick(() => {
+        const payload = node
+          ? this.buildEntryDataStructure(mount, node)
+          : this.buildMountDataStructure(mount);
+        void navigator.clipboard?.writeText(JSON.stringify(payload, null, 2));
+        new Notice('已复制数据结构');
+      }),
+    );
     if (!node) {
       // 挂载头:固定/卸载与 external 头行同款;不提供「编辑这个挂载」——
       // 改分支需要移除重挂(siyuan 同款刻意不做)
@@ -3030,6 +3041,73 @@ export class MountPanelView extends ItemView {
         this.rescan(mount, dirRel);
       },
     ).open();
+  }
+
+  /**
+   * 右键「复制数据结构」（用户 2026-11-20）：行对应的 JSON（含真实文件的
+   * 绝对路径），供外部工具/脚本消费。
+   *
+   * 文件夹行递归收集**挂载树里已加载**的文件（懒加载层没拉的 depth 不进
+   * file_list——诚实反映当前可见数据）；文件行单条。属性名按通用约定：
+   * folder_absolute_path / file_absolute_path / file_list。
+   */
+  private buildEntryDataStructure(mount: ExternalMount, node: MountNode): Record<string, unknown> {
+    const st = this.states.get(mount.id);
+    const collectFiles = (rel: string): Array<Record<string, unknown>> => {
+      const found = st ? this.findNode(st.tree, rel) : null;
+      const out: Array<Record<string, unknown>> = [];
+      const walk = (children: MountNode[]): void => {
+        for (const c of children) {
+          if (c.isDir) walk(c.children);
+          else
+            out.push({
+              file_absolute_path: c.abs,
+              name: c.name,
+              size: c.size ?? null,
+            });
+        }
+      };
+      if (found) walk(found.children);
+      return out;
+    };
+    if (node.isDir) {
+      return {
+        type: 'folder',
+        name: node.name,
+        folder_absolute_path: node.abs,
+        file_list: collectFiles(node.rel),
+      };
+    }
+    return {
+      type: 'file',
+      name: node.name,
+      file_absolute_path: node.abs,
+      size: node.size ?? null,
+    };
+  }
+
+  /** 挂载头（mount=null）的数据结构：挂载根 + 全部已加载文件。 */
+  private buildMountDataStructure(mount: ExternalMount): Record<string, unknown> {
+    const st = this.states.get(mount.id);
+    const files: Array<Record<string, unknown>> = [];
+    const walk = (children: MountNode[]): void => {
+      for (const c of children) {
+        if (c.isDir) walk(c.children);
+        else
+          files.push({
+            file_absolute_path: c.abs,
+            name: c.name,
+            size: c.size ?? null,
+          });
+      }
+    };
+    walk(st?.tree ?? []);
+    return {
+      type: 'mount',
+      name: mountDisplayName(mount),
+      folder_absolute_path: mount.path,
+      file_list: files,
+    };
   }
 
   private promptNewFolder(mount: ExternalMount, dirAbs: string, dirRel: string): void {
