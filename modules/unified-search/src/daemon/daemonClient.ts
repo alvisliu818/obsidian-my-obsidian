@@ -302,8 +302,13 @@ export class BlockIndexDaemonClient {
   private handleEvent(ev: KernelEvent): void {
     if (ev.ev === 'changed') {
       this.version = ev.version;
-      this.invalidateCaches(ev.paths);
-      this.opts.onChange();
+      if (ev.paths && ev.paths.length > 0) {
+        // 变更报告 → 池增量维护（先清后写）；onChange 由增量完成后统一发
+        void this.applyChangeReport(ev.paths);
+      } else {
+        this.invalidateCaches();
+        this.opts.onChange();
+      }
       return;
     }
     if (ev.ev === 'progress') {
@@ -380,6 +385,50 @@ export class BlockIndexDaemonClient {
       for (const p of paths) this.cacheFileBlocks.delete(p);
     } else {
       this.cacheFileBlocks.clear();
+    }
+  }
+
+  /**
+   * 变更报告驱动的池增量维护（og 吸收②：silverbullet 双 key 索引的
+   * 「先清后写」切片，2026-11-21）：对变更路径拉取新鲜块行，把全部按路径
+   * 可维护的池**就地更新**——cacheById（194ms 的 withIds 池）删旧路径条目
+   * 后写入新行，cacheFileBlocks 直接 set 新行（连按需补都省了）。结构上
+   * 无法按路径维护的扁平池（allTags/cards/supertags/marker·tag 桶）保持
+   * 全清（懒加载补，毫秒级）。任一步失败/期间又有变更 → 保守全清。
+   */
+  private async applyChangeReport(paths: string[]): Promise<void> {
+    const v0 = this.version;
+    try {
+      const fresh = new Map<string, IndexedBlock[]>();
+      for (const p of paths) {
+        const rows = await this.query<IndexedBlock[]>('blocksByPath', { path: p });
+        fresh.set(p, rows ?? []);
+        if (this.version !== v0) return; // 期间又有变更：保守全清
+      }
+      const pathSet = new Set(paths);
+      // 先清：所有按路径可判定的旧条目剔除（池未加载 = 本来就是空的，跳过）
+      if (this.cacheById) {
+        for (const [id, b] of this.cacheById) {
+          if (pathSet.has(b.path)) this.cacheById.delete(id);
+        }
+      }
+      // 后写：新行进池
+      for (const [p, rows] of fresh) {
+        if (rows.length) this.cacheFileBlocks.set(p, rows);
+        else this.cacheFileBlocks.delete(p);
+        if (this.cacheById) {
+          for (const b of rows) if (b.blockId) this.cacheById.set(b.blockId, b);
+        }
+      }
+      // 扁平池/桶池：结构非按路径，保持全清（懒加载补）
+      this.cacheAllTags = null;
+      this.cacheCards = null;
+      this.cacheSupertags = null;
+      this.cacheSupertagInstances.clear();
+      this.cacheTasksByMarker.clear();
+      this.opts.onChange();
+    } catch {
+      this.invalidateCaches(); // daemon 忙/挂等失败：保守全清
     }
   }
 
