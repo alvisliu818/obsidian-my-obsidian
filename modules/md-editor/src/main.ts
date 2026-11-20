@@ -1036,6 +1036,10 @@ export default class LogseqEditorPlugin extends Plugin {
   async loadSettings(): Promise<void> {
     const raw = (await this.loadData()) as Record<string, unknown> | null;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, raw);
+    // 双链提示权重规则（逐行 权重:正则）——links.ts parseLinkWeightRules 消费
+    this.settings.linkWeightPatterns = Array.isArray(raw?.linkWeightPatterns)
+      ? (raw!.linkWeightPatterns as unknown[]).filter((p): p is string => typeof p === 'string')
+      : [];
     // 旧单开关迁移：仅当 data.json 里确实持久化过 refsDefaultCollapsed、
     // 且两个新开关都未持久化时，才让两者跟随旧值（之后以各自开关为准）。
     // 没有任何 refs 键的全新配置走 DEFAULT_SETTINGS——Unlinked references

@@ -220,6 +220,8 @@ export interface BlockEditorSettings {
   foldEnabled: boolean;
   /** [TOC] 标记块渲染为可点击的标题目录（用户 2026-11-20；设置可关）。 */
   tocEnabled: boolean;
+  /** 双链提示权重规则（逐行：权重,正则——路径命中正则的候选加该权重,越大越靠前）。 */
+  linkWeightPatterns?: string[];
   /**
    * 大纲末尾的「添加块」提示行：鼠标移过去会在子弹圆点那一列浮现一条横线
    * 和一个加号，点击就在可见大纲最后追加一个新块并聚焦——对应 Logseq / 思源

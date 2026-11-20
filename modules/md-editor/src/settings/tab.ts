@@ -411,6 +411,26 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
             this.plugin.refreshAllViews();
           }),
       );
+    new Setting(containerEl)
+      .setName('双链提示权重')
+      .setDesc(
+        '逐行一条:权重,正则——路径命中正则的候选加该权重,越大越靠前。例:10,^Important/ 或 5,项目',
+      )
+      .addTextArea((text) => {
+        const rules = this.plugin.settings.linkWeightPatterns ?? [];
+        text
+          .setPlaceholder('10:^Important/')
+          .setValue(rules.join('\n'))
+          .onChange(async (value) => {
+            this.plugin.settings.linkWeightPatterns = value
+              .split('\n')
+              .map((p) => p.trim())
+              .filter((p) => p !== '');
+            await this.plugin.saveSettings();
+          });
+        text.inputEl.rows = 4;
+        text.inputEl.style.width = '100%';
+      });
 
     new Setting(containerEl)
       .setName('第三方补全（Various Complements 等）')

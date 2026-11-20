@@ -45,6 +45,27 @@ export function autocompleteSources(host: BlockRenderHost, embed = false): Compl
     : [wikiLinkSource(host), tagSource(host), blockRefSource(host), wordCompletionSource(host)];
 }
 
+/** 权重规则（逐行：权重,正则）。解析失败的行丢弃。 */
+export function parseLinkWeightRules(patterns: readonly string[] | undefined): Array<{ regex: RegExp; weight: number }> {
+	const rules: Array<{ regex: RegExp; weight: number }> = [];
+	for (const raw of patterns ?? []) {
+		const m = /^(\d+):(.+)$/.exec(raw.trim());
+		if (!m) continue;
+		try {
+			rules.push({ regex: new RegExp(m[2], 'i'), weight: Number(m[1]) });
+		} catch {
+			/* 坏正则丢弃 */
+		}
+	}
+	return rules;
+}
+
+/** 路径的权重：第一条命中的规则生效（缺省 0）。 */
+export function weightForPath(path: string, rules: Array<{ regex: RegExp; weight: number }>): number {
+	for (const rule of rules) if (rule.regex.test(path)) return rule.weight;
+	return 0;
+}
+
 export function wikiLinkSource(host: BlockRenderHost): CompletionSource {
   return (ctx: CompletionContext): CompletionResult | null => {
     // Supports BOTH triggers: `[[` (plain link) and `![[` (page embed, Logseq
@@ -60,8 +81,16 @@ export function wikiLinkSource(host: BlockRenderHost): CompletionSource {
     // 思源 isBlockHintQueryAtCaret:查询不以空白开头(`[[ foo` 不是合法查询)
     if (/^\s/.test(query)) return null;
     const files = host.app.vault.getMarkdownFiles();
+    // 权重规则（用户 2026-11-20）：路径命中正则的候选加权重，越大越靠前；
+    // 同权重保持库内顺序。先按权重降序排，再截前 50——高权重文件稳定在列。
+    const rules = parseLinkWeightRules(
+      (host.plugin.settings as { linkWeightPatterns?: string[] } | undefined)?.linkWeightPatterns,
+    );
+    const weighted = files
+      .map((f) => ({ f, weight: weightForPath(f.path, rules) }))
+      .sort((a, b) => b.weight - a.weight);
     const options: Completion[] = [];
-    for (const f of files) {
+    for (const { f } of weighted) {
       const label = f.basename;
       if (query && !label.toLowerCase().includes(query)) continue;
       options.push({
