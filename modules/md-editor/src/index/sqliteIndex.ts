@@ -430,6 +430,70 @@ export class SqliteIndex {
     return this.stats;
   }
 
+  /**
+   * 多文件合并单事务（og 操作合并单事务,2026-11-21）：一批 upsert 路径的
+   * stat→幂等门控→读→解析→语句构建全部就地完成后,**一次 rt.batch 落库**
+   * ——此前 daemon upsert 逐文件 syncFile,N 个文件 = N 个事务(N 次 fsync);
+   * 合并后 1 个。粘贴多块/移动风暴的写入时间随之骤降。删除(文件已消失)
+   * 的语句也并入同一事务。返回实际写库/删除/跳过的路径(变更报告用)。
+   */
+  syncFiles(paths: string[]): Promise<{ written: string[]; forgotten: string[]; skipped: string[] }> {
+    return this.enqueue(async () => {
+      await this.ensureOpen();
+      const rt = this.rt;
+      if (!rt) return { written: [], forgotten: [], skipped: [] };
+      const written: string[] = [];
+      const forgotten: string[] = [];
+      const skipped: string[] = [];
+      const allSqls: string[] = [];
+      const allParams: unknown[][] = [];
+      const max = this.opts.maxFileBytes ?? MAX_FILE_BYTES;
+      for (const path of paths) {
+        // statFile（O(1) stat）优先;缺席回落全库清单——同 syncFile 注释。
+        const probed = this.opts.source.statFile?.(path);
+        const meta = probed !== undefined
+          ? probed
+          : this.opts.source.listMarkdownFiles().find((f) => f.path === path);
+        if (!meta) {
+          // 文件已消失/不再是 md:删除语句并入同一事务(不单独 forgetFile)
+          const del = deleteFileStatements(path, this.ftsEnabled);
+          for (const st of del) {
+            allSqls.push(st.sql);
+            allParams.push(st.params);
+          }
+          forgotten.push(path);
+          continue;
+        }
+        // 幂等门控（2026-11-04）：mtime+size 与库里一致就跳过。
+        const row = await this.indexedRow(rt, path);
+        if (row && row.mtime === meta.mtime && row.size === meta.size) continue;
+        if (meta.size > max) {
+          skipped.push(path);
+          continue;
+        }
+        let content: string;
+        try {
+          content = await this.opts.source.read(meta.path);
+        } catch {
+          skipped.push(path);
+          continue;
+        }
+        const facts = extractFile(meta.path, content);
+        const stmts = buildFileStatements(facts, meta, hashText(content), this.ftsEnabled);
+        for (const st of stmts) {
+          allSqls.push(st.sql);
+          allParams.push(st.params);
+        }
+        written.push(path);
+        this.dirty = true;
+      }
+      if (allSqls.length > 0) {
+        await rt.batch(allSqls, allParams);
+      }
+      return { written, forgotten, skipped };
+    });
+  }
+
   /** Re-index exactly one file (used by vault event handlers). */
   syncFile(path: string): Promise<void> {
     return this.enqueue(async () => {

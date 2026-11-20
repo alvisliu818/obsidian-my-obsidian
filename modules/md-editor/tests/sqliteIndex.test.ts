@@ -205,6 +205,34 @@ describe('sync — keeping the database and the files in step', () => {
     await idx.close();
   });
 
+  it('syncFiles merges a batch into ONE transaction (written/forgotten/skipped)', async () => {
+    const vault = seedVault();
+    const idx = mk(vault);
+    await idx.rebuild();
+    // 修改 A + 新增 New + 从 vault 移除 B(batch 里还有从未存在的 Missing)
+    vault.touch('pages/Project.md');
+    vault.set('pages/Project.md', `- kickoff #work [[Person]]\nid:: ${ID_A}\n\t- updated detail\n`);
+    vault.set('pages/New.md', '- fresh note\n');
+    vault.remove('pages/Person.md');
+    const r = await idx.syncFiles([
+      'pages/Project.md',
+      'pages/New.md',
+      'pages/Person.md',
+      'pages/Missing.md',
+    ]);
+    expect([...r.written].sort()).toEqual(['pages/New.md', 'pages/Project.md']);
+    expect(r.forgotten).toEqual(['pages/Person.md', 'pages/Missing.md']); // 已消失路径都进删除报告
+    expect(r.skipped).toEqual([]);
+    // 合并事务落地:A 更新/B 消失/New 在场——一次 batch 后的状态正确
+    const a = await idx.query("SELECT text FROM blocks WHERE path = 'pages/Project.md'");
+    expect(a.rows.some((row) => String(row[0]).includes('updated detail'))).toBe(true);
+    const b = await idx.query("SELECT COUNT(*) FROM blocks WHERE path = 'pages/Person.md'");
+    expect(b.rows).toEqual([[0]]);
+    const c = await idx.query("SELECT text FROM blocks WHERE path = 'pages/New.md'");
+    expect(c.rows).toEqual([['fresh note']]);
+    await idx.close();
+  });
+
   it('a rebuild after drift produces the same rows as a fresh build', async () => {
     const vault = seedVault();
     const first = mk(vault);

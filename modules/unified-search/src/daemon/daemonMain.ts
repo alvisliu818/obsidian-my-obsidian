@@ -1153,13 +1153,12 @@ async function main(): Promise<void> {
         return mutate(() => idx.sync());
       case 'upsert': {
         const paths = msg.paths ?? [];
-        return mutate(
-          async () => {
-            for (const p of paths) await idx.syncFile(p);
-            return { files: paths.length };
-          },
-          { paths },
-        );
+        return mutate(async () => {
+          // 操作合并单事务（og 深度吸收⑤）：一批路径一次批量落库;
+          // 变更报告 = 实际写库/删除的路径(mutate 自动抽取 changedPaths)
+          const r = await idx.syncFiles(paths);
+          return { files: r.written.length + r.forgotten.length, changedPaths: [...r.written, ...r.forgotten] };
+        });
       }
       case 'delete': {
         const paths = msg.paths ?? [];
