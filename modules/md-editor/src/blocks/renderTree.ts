@@ -751,9 +751,8 @@ function renderQueryResults(b: Block, host: BlockRenderHost): HTMLElement {
 function renderQueryList(b: Block, host: BlockRenderHost): HTMLElement {
   const el = document.createElement('div');
   el.className = 'block-query-results';
-  const idxRaw = host.plugin.blockIndex;
-  // 门面只有部分数据——{{query}} 需要全量块集,诚实降级
-  const idx = (idxRaw as { isPartialFacade?: boolean } | null)?.isPartialFacade === true ? null : idxRaw;
+  // 门面 allBlocks = 内核 withIds 全量 id 块集(2026-11-21)——不再需要降级
+  const idx = host.plugin.blockIndex;
   const ast = parseQueryText(b.text);
   if (!ast) {
     el.createEl('div', { cls: 'query-error', text: 'Invalid query' });
@@ -775,9 +774,8 @@ function renderQueryList(b: Block, host: BlockRenderHost): HTMLElement {
 function renderQueryTable(b: Block, host: BlockRenderHost): HTMLElement {
   const el = document.createElement('div');
   el.className = 'block-query-results block-query-table-wrap';
-  const idxRaw = host.plugin.blockIndex;
-  // 门面只有部分数据——{{query-table}} 需要全量块集,诚实降级
-  const idx = (idxRaw as { isPartialFacade?: boolean } | null)?.isPartialFacade === true ? null : idxRaw;
+  // 门面 allBlocks = 内核 withIds 全量 id 块集(2026-11-21)——不再需要降级
+  const idx = host.plugin.blockIndex;
   const ast = parseQueryTableText(b.text);
   if (!ast) {
     el.createEl('div', { cls: 'query-error', text: 'Invalid query' });

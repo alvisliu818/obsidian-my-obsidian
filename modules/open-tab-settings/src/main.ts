@@ -184,7 +184,7 @@ export default class OpenTabSettingsPlugin extends Plugin {
                     const {openMode, override, openedFrom} = this.openTabSettings?.openInfo ?? {};
                     const settings = {...plugin.settings, ...override};
 
-                    let matches = plugin.findMatchingLeaves(file);
+                    let matches = file ? plugin.findMatchingLeaves(file) : [];
   
                     // if leaf is new and was opened via an explicit open in new window, split, or "allow duplicate",
                     // don't deduplicate. Note that opening in new window doesn't call getLeaf (it calls openPopoutLeaf
@@ -507,6 +507,9 @@ export default class OpenTabSettingsPlugin extends Plugin {
 
     private findMatchingLeaves(file: TFile) {
         const matches: WorkspaceLeaf[] = [];
+        // 合并宿主内的非文件视图（浏览器 webview 等）走 openFile 链路时 file
+        // 可能是 undefined——无文件即无匹配，别炸（2026-11-21 实机探针撞上）。
+        if (!file) return matches;
         this.app.workspace.iterateAllLeaves(leaf => {
             // file is the same
             const isFileMatch = leaf.getViewState()?.state?.file == file.path;

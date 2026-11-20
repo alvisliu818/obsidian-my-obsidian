@@ -101,8 +101,19 @@ export default class LogseqEditorPlugin extends Plugin {
    * 未实现——与退役前这些消费方在 daemon 模式的表现一致，不新增伤害）。
    */
   get blockIndex(): BlockIndex | null {
-    return this.daemonIndex ? (this.syncIndex as unknown as BlockIndex | null) : null;
+    // 稳定门面(prologFacts 的 WeakMap 缓存按对象身份键控——getter 每次新建
+    // 对象会让 fact 基缓存全 miss,每次渲染重爬全库)。daemon 客户端换身份
+    // (重启)时重建。
+    const d = this.daemonIndex;
+    if (!d) return null;
+    if (this.blockIndexFacadeFor !== d) {
+      this.blockIndexFacade = this.syncIndex as unknown as BlockIndex | null;
+      this.blockIndexFacadeFor = d;
+    }
+    return this.blockIndexFacade;
   }
+  private blockIndexFacade: BlockIndex | null = null;
+  private blockIndexFacadeFor: BlockIndexDaemonClient | null = null;
   /** 守护进程索引客户端(档位 2):桌面 + sqliteIndexEnabled 时取代内存 blockIndex。 */
   daemonIndex: BlockIndexDaemonClient | null = null;
   /** daemon 模式下的索引变更监听器(等价 blockIndex.onRebuild 的 listener 集)。 */
@@ -1213,7 +1224,6 @@ export default class LogseqEditorPlugin extends Plugin {
     unlinkedMentions(query: string): import('./index/blockIndex').IndexedBlock[];
     tasksByMarker(marker: string): import('./index/blockIndex').IndexedBlock[];
     prewarmSignatures(): void;
-    readonly isPartialFacade: true;
   } | null {
     // daemon 客户端没有 onRebuild(监听器住在 plugin 上)——包一层同形适配。
     // 内存 BlockIndex 已退役（永不构造）——无 daemon 时门面为 null。
@@ -1233,16 +1243,18 @@ export default class LogseqEditorPlugin extends Plugin {
       buildAll: () => {
         void d.rebuild().catch(() => {});
       },
-      // 内核侧查询尚未实现——返回空与退役前的 daemon 表现一致，不新增伤害
-      allBlocks: () => [],
+      // 内核 withIds = 全量 id 块集(2026-11-21 prolog 链路重写:BLOCK_SQL 含
+      // text/marker/tags/links/props/parent_id 全列,形状与 PrologFactBlock
+      // 一致——{{query}}/{{query-table}}/prolog/query-builder 不再需要门面
+      // 部分数据降级)。注意语义 = 仅 id 块(与 prolog fact 构建本就跳过无
+      // id 块等价);tag 面板/未链接提及拿到 id 块子集(较此前空数组是改进)。
+      allBlocks: () => d.withIds(),
+      // 页面级反链/未链接提及:内核 SQL 尚未接线,诚实返回空
       backlinksTo: () => [],
       refsToBlock: (id: string) => this.daemonPrefetchedRefs.get(id) ?? [],
       unlinkedMentions: () => [],
       prewarmSignatures: () => {},
       get version() { return d.version; },
-      // 部分数据标记：全量依赖的消费方（prolog {{query}}/unlinkedMentions/
-      // backlinksTo 全库面）据此诚实显示不可用,而非静默渲染不完整结果
-      isPartialFacade: true,
     } as unknown as NonNullable<ReturnType<() => LogseqEditorPlugin['syncIndex']>>;
   }
 
