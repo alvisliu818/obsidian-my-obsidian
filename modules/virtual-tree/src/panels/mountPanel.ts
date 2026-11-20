@@ -149,6 +149,8 @@ interface MountState {
    */
   loaded: Set<string>;
   truncated: boolean;
+  /** 路径状态徽标（new/mod）——与上次该层加载对比的差量（会话级）。 */
+  pathStates: Map<string, 'new' | 'mod'>;
   scannedAt: number;
   error?: string;
   /** remote 挂载:有请求在途(根层/子层)。渲染头行时给「加载中…」提示。 */
@@ -384,6 +386,7 @@ export class MountPanelView extends ItemView {
       // 展开（「刚挂载文件夹的人想看看里面有什么」的旧假设被用户推翻）。
       // 无缓存时按持久化的展开态恢复（重启后层级不再全收起）。
       open: cached?.open ?? new Set<string>(this.plugin.settings.mountOpenState?.[mount.id] ?? []),
+      pathStates: cached?.pathStates ?? new Map<string, 'new' | 'mod'>(),
       tree: [],
       loaded: new Set<string>(),
       truncated: false,
@@ -501,6 +504,7 @@ export class MountPanelView extends ItemView {
       this.sortChildren(mount.id, rel, children);
       if (!rel) {
         state.tree = children;
+        this.diffLayer(mount.id, rel, children, state);
         return;
       }
       const parent = this.findNode(state.tree, rel);
@@ -508,6 +512,7 @@ export class MountPanelView extends ItemView {
         parent.children = children;
         parent.empty = children.length === 0;
       }
+      this.diffLayer(mount.id, rel, children, state);
       return;
     }
 
@@ -535,6 +540,7 @@ export class MountPanelView extends ItemView {
 
     if (!rel) {
       state.tree = children;
+      this.diffLayer(mount.id, rel, children, state);
       return;
     }
     const parent = this.findNode(state.tree, rel);
@@ -542,7 +548,33 @@ export class MountPanelView extends ItemView {
       parent.children = children;
       parent.empty = children.length === 0;
     }
+    this.diffLayer(mount.id, rel, children, state);
   }
+
+  /**
+   * 与上次该层加载的子项对比 → 路径状态徽标（new = 本会话首次出现的文件，
+   * mod = mtime 变了）。首次加载的层静默建档（文件不是「新」——只是第一次
+   * 被扫描）；之后每次重载/重扫的差量出徽标。基线随 load 更新。
+   */
+  private diffLayer(mountId: string, rel: string, children: MountNode[], state: MountState): void {
+    const key = mountId + ' ' + rel;
+    const prev = this.layerBaselines.get(key);
+    const baseline = new Map<string, number>();
+    for (const c of children) {
+      if (c.isDir) continue;
+      const old = prev?.get(c.rel);
+      if (old === undefined) {
+        if (prev) state.pathStates.set(c.rel, 'new');
+      } else if (old !== (c.mtime ?? 0)) {
+        state.pathStates.set(c.rel, 'mod');
+      }
+      baseline.set(c.rel, c.mtime ?? 0);
+    }
+    this.layerBaselines.set(key, baseline);
+  }
+
+  /** 层基线（mountId+rel → 子文件 rel→mtime），会话级。 */
+  private layerBaselines = new Map<string, Map<string, number>>();
 
   /**
    * remote 挂载读一层（github:// / gitee:// 走整树缓存 + gitListDir；
@@ -1776,6 +1808,19 @@ export class MountPanelView extends ItemView {
     row.createSpan({ cls: 'logseq-mount-name', text: node.name });
     // 修改时间（用户 2026-11-20：树显示状态和对应的时间——时间部分落地;
     // 状态(新增/修改)需要基线概念,下轮做）。muted 小字靠右,挤压时隐藏。
+    // 状态徽标（new/mod，与会话基线对比的差量,见 diffLayer）
+    const pstate = state.pathStates.get(node.rel);
+    if (pstate) {
+      const chip = row.createSpan({
+        cls: 'logseq-mount-flag is-' + pstate,
+        text: pstate === 'new' ? '新增' : '修改',
+      });
+      chip.style.cssText =
+        'flex:none;font-size:10px;border-radius:6px;padding:0 5px;margin-right:3px;' +
+        (pstate === 'new'
+          ? 'background:var(--text-success,#3bb273);color:#fff;'
+          : 'background:var(--text-warning,#d4a017);color:#fff;');
+    }
     if (node.mtime) {
       const d = new Date(node.mtime);
       const stamp = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
