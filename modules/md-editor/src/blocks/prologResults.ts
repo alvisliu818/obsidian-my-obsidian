@@ -9,6 +9,7 @@ import type { Block } from '../types';
 import { type Term } from '../features/prolog';
 import { prologFacts } from '../features/prologFacts';
 import { prologSourceOf, runPrologBlock } from '../features/prologQuery';
+import { deferQueryRender } from './queryBudget';
 
 const RESULTS_CLASS = 'block-prolog-results';
 const ERROR_CLASS = 'prolog-error';
@@ -62,63 +63,68 @@ function renderPrologResults(b: Block, host: BlockRenderHost): HTMLElement {
     return el;
   }
 
-  const { program } = prologFacts(idx, version);
-  const model = runPrologBlock(program, b.text);
-
-  if (model.error) {
-    const row = el.createEl('div', { cls: ERROR_CLASS });
-    const icon = row.createEl('span', { cls: 'prolog-error-icon' });
-    setIcon(icon, 'alert-triangle');
-    row.createEl('span', { text: model.error });
-    cache.set(b, { sig, version, el });
-    return el;
-  }
-
-  // --- header: how many, and how expensive ---
-  const head = el.createEl('div', { cls: 'prolog-head' });
-  if (model.propositional) {
-    head.createEl('span', {
-      cls: 'prolog-count',
-      text: model.rows.length > 0 ? 'Yes' : 'No',
-    });
-  } else {
-    const total = model.truncated ? `${model.rows.length}+` : String(model.rows.length);
-    head.createEl('span', { cls: 'prolog-count', text: `${total} ${model.rows.length === 1 ? 'result' : 'results'}` });
-  }
-  head.createEl('span', {
-    cls: 'prolog-meta',
-    text: `${model.steps} steps · ${model.ms} ms`,
-  });
-
-  if (model.rows.length === 0) {
-    el.createEl('div', { cls: 'prolog-empty', text: 'No results' });
-    cache.set(b, { sig, version, el });
-    return el;
-  }
-
-  const table = el.createEl('table', { cls: 'prolog-table' });
-  const headRow = table.createEl('thead').createEl('tr');
-  for (const v of model.vars) headRow.createEl('th', { text: v });
-  const tbody = table.createEl('tbody');
-  for (const row of model.rows) {
-    const tr = tbody.createEl('tr');
-    row.cells.forEach((cell, i) => {
-      const td = tr.createEl('td', { text: cell || '—' });
-      const id = blockIdOf(row.terms[i], idx);
-      if (id) {
-        td.classList.add('is-block-ref');
-        td.addEventListener('click', (e) => {
-          e.stopPropagation();
-          void host.plugin.openBlockRef(id);
-        });
-      }
-    });
-  }
-  if (model.truncated) {
-    el.createEl('div', { cls: 'prolog-more', text: `… showing the first ${model.rows.length}` });
-  }
-
+  // 查询体异步执行(og 查询阈值,queryBudget.deferQueryRender):占位立即
+  // 返回进渲染帧,重查询不再把渲染帧按住几百毫秒。
+  el.createEl('div', { cls: 'prolog-empty', text: '查询执行中…' });
   cache.set(b, { sig, version, el });
+  deferQueryRender(host, el, () => {
+    const filled = document.createElement('div');
+    filled.className = RESULTS_CLASS;
+    const { program } = prologFacts(idx, version);
+    const model = runPrologBlock(program, b.text);
+
+    if (model.error) {
+      const row = filled.createEl('div', { cls: ERROR_CLASS });
+      const icon = row.createEl('span', { cls: 'prolog-error-icon' });
+      setIcon(icon, 'alert-triangle');
+      row.createEl('span', { text: model.error });
+      return filled;
+    }
+
+    // --- header: how many, and how expensive ---
+    const head = filled.createEl('div', { cls: 'prolog-head' });
+    if (model.propositional) {
+      head.createEl('span', {
+        cls: 'prolog-count',
+        text: model.rows.length > 0 ? 'Yes' : 'No',
+      });
+    } else {
+      const total = model.truncated ? `${model.rows.length}+` : String(model.rows.length);
+      head.createEl('span', { cls: 'prolog-count', text: `${total} ${model.rows.length === 1 ? 'result' : 'results'}` });
+    }
+    head.createEl('span', {
+      cls: 'prolog-meta',
+      text: `${model.steps} steps · ${model.ms} ms`,
+    });
+
+    if (model.rows.length === 0) {
+      filled.createEl('div', { cls: 'prolog-empty', text: 'No results' });
+      return filled;
+    }
+
+    const table = filled.createEl('table', { cls: 'prolog-table' });
+    const headRow = table.createEl('thead').createEl('tr');
+    for (const v of model.vars) headRow.createEl('th', { text: v });
+    const tbody = table.createEl('tbody');
+    for (const row of model.rows) {
+      const tr = tbody.createEl('tr');
+      row.cells.forEach((cell, i) => {
+        const td = tr.createEl('td', { text: cell || '—' });
+        const id = blockIdOf(row.terms[i], idx);
+        if (id) {
+          td.classList.add('is-block-ref');
+          td.addEventListener('click', (e) => {
+            e.stopPropagation();
+            void host.plugin.openBlockRef(id);
+          });
+        }
+      });
+    }
+    if (model.truncated) {
+      filled.createEl('div', { cls: 'prolog-more', text: `… showing the first ${model.rows.length}` });
+    }
+    return filled;
+  }, (filled) => cache.set(b, { sig, version, el: filled }));
   return el;
 }
 

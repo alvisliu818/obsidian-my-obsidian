@@ -51,6 +51,7 @@ import { renderBlockView } from './blockView';
 import { isViewBlock, VIEW_COLUMNS_PROP, VIEW_PROP } from '../features/blockViews';
 import { TABLE_WIDTHS_PROP } from './tableWidths';
 import { syncPrologContainer } from './prologResults';
+import { deferQueryRender } from './queryBudget';
 import { detectBlockType, mediaTypeOf } from './blockTypes';
 import { renderBlockTypeBadge } from './blockTypeMenu';
 import { toObsidianMath } from '../features/latexSource';
@@ -741,9 +742,17 @@ function renderQueryResults(b: Block, host: BlockRenderHost): HTMLElement {
   const cached = queryCache.get(b);
   if (cached && cached.sig === sig && cached.version === version) return cached.el;
 
-  const el =
-    queryTableStringOf(b.text) !== null ? renderQueryTable(b, host) : renderQueryList(b, host);
+  // 查询体异步执行(og 查询阈值,queryBudget.deferQueryRender):占位立即
+  // 返回进渲染帧,重查询不再把渲染帧按住几百毫秒。
+  const el = document.createElement('div');
+  el.className = 'block-query-results';
+  el.createEl('div', { cls: 'query-empty', text: '查询执行中…' });
   queryCache.set(b, { el, sig, version });
+  deferQueryRender(host, el, () => {
+    const filled =
+      queryTableStringOf(b.text) !== null ? renderQueryTable(b, host) : renderQueryList(b, host);
+    return filled;
+  }, (filled) => queryCache.set(b, { el: filled, sig, version }));
   return el;
 }
 

@@ -63685,3 +63685,14 @@ body.is-mobile
 .my-setting-search-chip:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
 .my-setting-search-node { flex: 1 1 auto; min-width: 0; }
 .my-setting-search-node.setting-item { border: none; padding-top: 6px; padding-bottom: 6px; }
+
+/* 查询阈值(og 80ms)慢查询标记:超预算的结果容器边角提示 */
+[data-slow-query='1'] .prolog-meta,
+[data-slow-query='1'] .query-more,
+.block-query-results[data-slow-query='1']::before {
+  content: '⏱ 慢查询';
+  font-size: 10px;
+  color: var(--text-warning, #d9a44a);
+  display: block;
+  margin: 2px 0;
+}
