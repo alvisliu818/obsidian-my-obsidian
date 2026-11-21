@@ -203,10 +203,6 @@ export class AbstractFolderView extends ItemView {
 
   private registerDomEvents() {
     this.contentEl.addEventListener("contextmenu", (event: MouseEvent) => {
-        // 顶部栏右键用原生的(用户 2026-11-20):工具栏/搜索头区域的右键不拦
-        // ——不弹自定义背景菜单,也不 preventDefault(交给原生默认行为)。
-        const target = event.target as HTMLElement | null;
-        if (target?.closest(".abstract-folder-toolbar-container, .abstract-folder-search-header")) return;
         if (event.defaultPrevented) return;
         event.preventDefault();
         this.contextMenuHandler.showBackgroundMenu(event);
