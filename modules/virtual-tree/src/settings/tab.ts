@@ -324,6 +324,20 @@ export class VirtualTreeSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName('显示文件修改时间标注')
+      .setDesc(
+        '文件行右侧的「MM-DD HH:mm」修改时间小字。' +
+          '嫌它占地方可以关掉；关掉不影响任何功能，行会更清爽。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.mountShowMtime !== false).onChange(async (v) => {
+          this.plugin.settings.mountShowMtime = v;
+          await this.plugin.saveSettings();
+          this.plugin.refreshMounts();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName('显示「已固定」徽标')
       .setDesc(
         '顶部挂载标题旁的「已固定」小标签。固定的挂载本来就排在最前面，' +

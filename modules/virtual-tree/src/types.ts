@@ -512,6 +512,11 @@ export interface VirtualTreeSettings {
    */
   mountShowPath: boolean;
   /**
+   * 文件行的修改时间标注（2026-11-21 用户加显示开关:文件行右侧的
+   * 「MM-DD HH:mm」小字）。默认开。
+   */
+  mountShowMtime: boolean;
+  /**
    * 库根挂载（面板第一行的库名）meta 行的「/」。纯占位信息，默认不展示；
    * 打开后仍受 mountShowPath 总开关约束。
    */
@@ -686,6 +691,7 @@ export const DEFAULT_VIRTUAL_TREE_SETTINGS: VirtualTreeSettings = {
   mountShowLoadedCount: true,
   mountShowPinnedBadge: false,
   mountShowPath: true,
+  mountShowMtime: true,
   mountShowRootPath: false,
   mountDragMode: false,
   mountTreeOrder: {},
@@ -821,6 +827,7 @@ export function virtualTreeSettingsFrom(raw: unknown): VirtualTreeSettings {
   s.mountShowLoadedCount = o.mountShowLoadedCount !== false;
   s.mountShowPinnedBadge = o.mountShowPinnedBadge === true;
   s.mountShowPath = o.mountShowPath !== false;
+  s.mountShowMtime = o.mountShowMtime !== false;
   s.mountShowRootPath = o.mountShowRootPath === true;
   s.mountDragMode = o.mountDragMode === true;
   s.mountTreeOrder = mountTreeOrderFrom(o.mountTreeOrder);

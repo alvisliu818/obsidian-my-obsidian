@@ -1854,7 +1854,9 @@ export class MountPanelView extends ItemView {
           ? 'background:var(--text-success,#3bb273);color:#fff;'
           : 'background:var(--text-warning,#d4a017);color:#fff;');
     }
-    if (node.mtime) {
+    // 修改时间标注(2026-11-21 用户加显示开关):设置关掉后文件行不再画
+    // 「MM-DD HH:mm」小字。
+    if (node.mtime && this.plugin.settings.mountShowMtime !== false) {
       const d = new Date(node.mtime);
       const stamp = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
       const t = row.createSpan({ cls: 'logseq-mount-mtime', text: stamp });
