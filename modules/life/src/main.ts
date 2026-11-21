@@ -12,7 +12,9 @@ import type { VaultLogRecord } from './types';
 import { VIEW_LIFE_CALENDAR, LifeCalendarView } from './views/calendar';
 import { VIEW_LIFE_HOME, LifeHomeView } from './views/home';
 import { VIEW_LIFE_VAULTLOG, LifeVaultLogView } from './views/vaultlog';
-import { dailyDue, periodDue, scanVaultSig, diffWithRenames, changeSummary, dayKeyOf, parseHHmm } from './vaultLog';
+import { dailyDue, periodDue, scanVaultSig, diffWithRenames, changeSummary, dayKeyOf, parseHHmm, diffLines, type LineDiff, type VaultDiffWithRenames } from './vaultLog';
+import { VaultLogDiffModal } from './vaultLogDiffModal';
+import { dispatchVaultDiffToCm, setVaultDiffEntry, vaultDiffExtension } from './editorDiffCm6';
 import { VIEW_LIFE_CLOCK, LifeClockView } from './views/clock';
 import { VIEW_LIFE_DDAY, LifeDdayView } from './views/dday';
 import { VIEW_LIFE_HABITS, LifeHabitsView } from './views/habits';
@@ -72,6 +74,15 @@ export default class LifePlugin extends Plugin {
 			if (this.store.settings.homeOpenOnStartup === false) return;
 			if (this.app.workspace.getLeavesOfType(VIEW_LIFE_HOME).length > 0) return;
 			void this.activatePanel(VIEW_LIFE_HOME);
+		});
+		// 原生编辑器修改装点(2026-11-21 用户):库记录对比体系的 CM6 扩展
+		// (新增绿/修改蓝,点击标记开对比弹窗)。
+		this.registerEditorExtension(
+			vaultDiffExtension((path, recordId) => this.openRecordDiffModal(recordId, path)),
+		);
+		this.app.workspace.onLayoutReady(() => {
+			// 影子基线兜底:首次记录之前也建好(与 first 记录分支互斥幂等)。
+			window.setTimeout(() => void this.buildVaultShadowBaseline(), 3000);
 		});
 
 		// 计时哨兵：倒计时/番茄到点提醒（面板关着也要响）。1s 一次,开销可忽略。
@@ -245,6 +256,136 @@ export default class LifePlugin extends Plugin {
 	 * - 签名一致的 删除↔新增 配对成重命名/移动;
 	 * - 自动触发(周期/每日)零变化不落记录——此前空记录刷屏。
 	 */
+	/** 库文件内容影子(上次记录时点,单文件 ≤400KB,总量 ≤48MB):修改对比/撤回
+	 * 的 before 来源。内存态,重启后由基线重建(重启前的记录无对比数据,优雅
+	 * 降级为不可对比)。 */
+	private vaultShadow = new Map<string, string>();
+	private vaultShadowBytes = 0;
+	private shadowReady = false;
+	/** 各记录的修改前内容:recordId → (path → before)。内存态,LRU 50 条记录。 */
+	private recordSnapshots = new Map<string, Record<string, string>>();
+	/** 编辑器装点登记表:库内相对路径 → (recordId + 行级 diff)。 */
+	private editorDiffRegistry = new Map<string, { recordId: string; diff: LineDiff }>();
+
+	private static readonly SHADOW_FILE_CAP = 400 * 1024;
+	private static readonly SHADOW_TOTAL_CAP = 48 * 1024 * 1024;
+	private static readonly RECORD_SNAPSHOT_CAP = 50;
+
+	/** 读一个库内文件的文本内容做影子/对比;超限或疑似二进制返回 null。 */
+	private async readShadowable(path: string): Promise<string | null> {
+		const f = this.app.vault.getAbstractFileByPath(path);
+		if (!(f instanceof TFile)) return null;
+		if (f.stat.size > LifePlugin.SHADOW_FILE_CAP) return null;
+		try {
+			const content = await this.app.vault.cachedRead(f);
+			if (content.includes('\u0000')) return null;
+			return content;
+		} catch {
+			return null;
+		}
+	}
+
+	private shadowSet(path: string, content: string): void {
+		const old = this.vaultShadow.get(path);
+		if (old !== undefined) this.vaultShadowBytes -= old.length;
+		this.vaultShadow.set(path, content);
+		this.vaultShadowBytes += content.length;
+		// 总量超限:按插入序淘汰最旧(对比能力优雅降级,记录本身不受影响)
+		while (this.vaultShadowBytes > LifePlugin.SHADOW_TOTAL_CAP) {
+			const oldest = this.vaultShadow.keys().next().value;
+			if (oldest === undefined) break;
+			this.vaultShadowBytes -= this.vaultShadow.get(oldest)?.length ?? 0;
+			this.vaultShadow.delete(oldest);
+		}
+	}
+
+	private shadowDelete(path: string): void {
+		const old = this.vaultShadow.get(path);
+		if (old !== undefined) this.vaultShadowBytes -= old.length;
+		this.vaultShadow.delete(path);
+	}
+
+	/** 启动基线:把当前全库文本读进影子(8ms 分片让出主线程,后台完成)。 */
+	private async buildVaultShadowBaseline(): Promise<void> {
+		if (this.shadowReady) return;
+		this.shadowReady = true;
+		const files = this.app.vault.getFiles();
+		let i = 0;
+		const step = async (): Promise<void> => {
+			const t0 = performance.now();
+			while (i < files.length && performance.now() - t0 < 8) {
+				const f = files[i++];
+				const content = await this.readShadowable(f.path);
+				if (content !== null) this.shadowSet(f.path, content);
+			}
+			if (i < files.length) window.setTimeout(() => void step(), 0);
+		};
+		await step();
+	}
+
+	/** 影子推进到记录时点(修改/新增读当前内容,删除摘除,重命名搬家)。 */
+	private async advanceVaultShadow(diff: VaultDiffWithRenames): Promise<void> {
+		for (const p of [...diff.modified, ...diff.added]) {
+			const content = await this.readShadowable(p);
+			if (content !== null) this.shadowSet(p, content);
+			else this.shadowDelete(p);
+		}
+		for (const p of diff.deleted) this.shadowDelete(p);
+		for (const r of diff.renames ?? []) {
+			const content = this.vaultShadow.get(r.from) ?? (await this.readShadowable(r.to));
+			this.shadowDelete(r.from);
+			if (content !== null) this.shadowSet(r.to, content);
+		}
+	}
+
+	/** 记录修改对比(库内相对路径):快照(before)与当前内容行级 diff;无快照
+	 * 或内容已一致返回 null。 */
+	async getRecordDiff(recordId: string, path: string): Promise<LineDiff | null> {
+		const before = this.recordSnapshots.get(recordId)?.[path];
+		if (before === undefined) return null;
+		const cur = await this.readShadowable(path);
+		if (cur === null || cur === before) return null;
+		return diffLines(before, cur);
+	}
+
+	/** 撤回:把文件写回该记录的修改前内容(对比弹窗的「撤回」按钮)。 */
+	async revertRecordFile(recordId: string, path: string): Promise<boolean> {
+		const before = this.recordSnapshots.get(recordId)?.[path];
+		if (before === undefined) return false;
+		const f = this.app.vault.getAbstractFileByPath(path);
+		if (f instanceof TFile) await this.app.vault.modify(f, before);
+		else await this.app.vault.create(path, before);
+		new Notice(`已撤回:${path} → 该记录前的内容`);
+		this.refreshHomeViews();
+		return true;
+	}
+
+	/** 登记编辑器装点并分发到打开中的同文件编辑器(原生 CM)。 */
+	private setEditorDiff(path: string, recordId: string, diff: LineDiff): void {
+		const entry = { recordId, diff };
+		this.editorDiffRegistry.set(path, entry);
+		setVaultDiffEntry(path, entry);
+		dispatchVaultDiffToCm(this.app, path);
+	}
+
+	getEditorDiff(path: string): { recordId: string; diff: LineDiff } | null {
+		return this.editorDiffRegistry.get(path) ?? null;
+	}
+
+	/** 库记录点击修改的文件:计算对比 → 登记编辑器装点 → 打开文件(打开的
+	 * 编辑器从登记表读装点:原生走 CM 扩展,monaco 视图自行消费)。 */
+	async openModifiedFileWithDiff(recordId: string, path: string): Promise<void> {
+		const diff = await this.getRecordDiff(recordId, path);
+		if (diff) this.setEditorDiff(path, recordId, diff);
+		else this.editorDiffRegistry.delete(path);
+		await this.app.workspace.openLinkText(path, '', false);
+	}
+
+	/** 「对比」小钮:打开修改对比弹窗(可撤回)。 */
+	openRecordDiffModal(recordId: string, path: string): void {
+		new VaultLogDiffModal(this.app, this, recordId, path).open();
+	}
+
 	async recordVaultChanges(trigger: 'period' | 'daily' | 'manual' = 'manual'): Promise<VaultLogRecord> {
 		const cur = scanVaultSig(this.app.vault);
 		const prev = await this.loadVaultLogSnapshot();
@@ -255,6 +396,8 @@ export default class LifePlugin extends Plugin {
 		// 首次记录:快照文件不存在 = 只建立基线,不列变化(万级「新增」是噪声)
 		if (prev === null) {
 			await this.saveVaultLogSnapshot(cur);
+			// 影子基线(后台分片):此后修改的文件才有对比数据。
+			void this.buildVaultShadowBaseline();
 			const rec: VaultLogRecord = {
 				id: genId(),
 				at: now.toISOString(),
@@ -305,6 +448,22 @@ export default class LifePlugin extends Plugin {
 		rec.modified = cap(rec.modified);
 		rec.deleted = cap(rec.deleted);
 		rec.renames = rec.renames?.slice(0, 500);
+		// 修改对比快照(2026-11-21 用户):影子里的修改前内容存为本记录快照
+		// (编辑器装点/对比弹窗/撤回的数据源);影子随后推进到当前。
+		const snaps: Record<string, string> = {};
+		for (const p of rec.modified) {
+			const before = this.vaultShadow.get(p);
+			if (before !== undefined) snaps[p] = before;
+		}
+		if (Object.keys(snaps).length > 0) {
+			this.recordSnapshots.set(rec.id, snaps);
+			while (this.recordSnapshots.size > LifePlugin.RECORD_SNAPSHOT_CAP) {
+				const oldest = this.recordSnapshots.keys().next().value;
+				if (oldest === undefined) break;
+				this.recordSnapshots.delete(oldest);
+			}
+		}
+		await this.advanceVaultShadow(diff);
 		s.vaultLogRecords = [rec, ...s.vaultLogRecords].slice(0, 200);
 		await this.store.flush();
 		this.refreshHomeViews();

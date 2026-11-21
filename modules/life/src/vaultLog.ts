@@ -166,3 +166,127 @@ export function changeSummary(d: VaultDiff, renames = 0): string {
 	const base = `新增 ${d.added.length} · 修改 ${d.modified.length} · 删除 ${d.deleted.length}`;
 	return renames > 0 ? `${base} · 重命名 ${renames}` : base;
 }
+
+// ---------------------------------------------------------------------------
+// 修改对比(2026-11-21 用户):行级 diff——库记录里点修改的文件,在编辑器
+// (原生/monaco)里画 VSCode 式装点(新增绿/修改蓝),点标记可看对比并可撤回。
+// ---------------------------------------------------------------------------
+
+export interface LineDiff {
+	/** after 行号(1-based):纯新增行 */
+	added: number[];
+	/** after 行号(1-based):修改行(与删除配对的替换行) */
+	modified: number[];
+	/** 删除行:line = 在 after 中的插入点(1-based),text = 内容 */
+	deleted: Array<{ line: number; text: string }>;
+	beforeLines: number;
+	afterLines: number;
+}
+
+/**
+ * 行级 LCS diff(VSCode 语义):LCS 匹配行 = 上下文;after 中未匹配行按其
+ * 所在删/增块与删除行位置配对 → 修改(蓝),无配对的 → 新增(绿);
+ * before 未匹配行 = 删除。公共前后缀先裁掉;中段 DP(m*n ≤ 4M 内精确,
+ * 超出退化为中段整体按位置配对,避免大文件 O(n²) 卡死)。
+ */
+export function diffLines(before: string, after: string): LineDiff {
+	const a = before ? before.split('\n') : [];
+	const b = after ? after.split('\n') : [];
+	const n = a.length;
+	const m = b.length;
+	let pre = 0;
+	while (pre < n && pre < m && a[pre] === b[pre]) pre++;
+	let endA = n;
+	let endB = m;
+	while (endA > pre && endB > pre && a[endA - 1] === b[endB - 1]) {
+		endA--;
+		endB--;
+	}
+	const midA = a.slice(pre, endA);
+	const midB = b.slice(pre, endB);
+	const M = midA.length;
+	const N = midB.length;
+	type Op = [kind: 0 | 1 | 2, i: number, j: number];
+	const ops: Op[] = [];
+	if (M > 0 || N > 0) {
+		if (M * N <= 4_000_000) {
+			const width = N + 1;
+			const dp = new Int32Array((M + 1) * width);
+			for (let i = M - 1; i >= 0; i--) {
+				const rowBase = i * width;
+				const nextBase = (i + 1) * width;
+				for (let j = N - 1; j >= 0; j--) {
+					dp[rowBase + j] =
+						midA[i] === midB[j]
+							? dp[nextBase + j + 1] + 1
+							: Math.max(dp[nextBase + j], dp[rowBase + j + 1]);
+				}
+			}
+			let i = 0;
+			let j = 0;
+			while (i < M && j < N) {
+				if (midA[i] === midB[j]) {
+					ops.push([0, i, j]);
+					i++;
+					j++;
+				} else if (dp[(i + 1) * width + j] >= dp[i * width + j + 1]) {
+					ops.push([1, i, j]);
+					i++;
+				} else {
+					ops.push([2, i, j]);
+					j++;
+				}
+			}
+			while (i < M) {
+				ops.push([1, i, j]);
+				i++;
+			}
+			while (j < N) {
+				ops.push([2, i, j]);
+				j++;
+			}
+		} else {
+			// 大文件退化:中段整体按位置配对成交替删/增块(全部 → 修改)
+			for (let i = 0; i < Math.max(M, N); i++) {
+				if (i < M) ops.push([1, i, i]);
+				if (i < N) ops.push([2, Math.min(i, M), i]);
+			}
+		}
+	}
+	const afterLineOf = (j: number): number => pre + j + 1;
+	const added: number[] = [];
+	const modified: number[] = [];
+	const deleted: Array<{ line: number; text: string }> = [];
+	let ai = 0;
+	let bj = 0;
+	let k = 0;
+	while (k < ops.length) {
+		if (ops[k][0] === 0) {
+			ai++;
+			bj++;
+			k++;
+			continue;
+		}
+		const dels: Array<{ text: string; atB: number }> = [];
+		const adds: Array<{ atB: number }> = [];
+		while (k < ops.length && ops[k][0] !== 0) {
+			const [kind, i] = ops[k];
+			if (kind === 1) {
+				dels.push({ text: midA[i], atB: bj });
+				ai++;
+			} else {
+				adds.push({ atB: bj });
+				bj++;
+			}
+			k++;
+		}
+		const paired = Math.min(dels.length, adds.length);
+		for (let t = 0; t < paired; t++) modified.push(afterLineOf(adds[t].atB));
+		for (let t = paired; t < adds.length; t++) added.push(afterLineOf(adds[t].atB));
+		for (const d of dels) deleted.push({ line: afterLineOf(d.atB), text: d.text });
+	}
+	added.sort((x, y) => x - y);
+	modified.sort((x, y) => x - y);
+	deleted.sort((x, y) => x.line - y.line);
+	return { added, modified, deleted, beforeLines: n, afterLines: m };
+}

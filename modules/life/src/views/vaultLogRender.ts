@@ -33,6 +33,11 @@ export interface VaultLogUiHandlers {
 	onManualRecord: () => void | Promise<void>;
 	/** 打开文件(新增/修改/重命名目标条目点击;缺省 = 条目不可点) */
 	onOpenFile?: (path: string) => void;
+	/** 修改条目点击(2026-11-21 用户):打开文件并登记修改装点(行号右侧绿/蓝
+	 * 标志);缺省回落 onOpenFile。 */
+	onOpenModified?: (recordId: string, path: string) => void;
+	/** 「对比」小钮(修改条目):打开修改对比弹窗,可撤回。 */
+	onCompareFile?: (recordId: string, path: string) => void;
 	/** 设置变更(开关/输入);设置节独立渲染,记录列表不需要 */
 	onSettingsChange?: () => void;
 }
@@ -50,14 +55,15 @@ export function renderRecordSummaryRow(container: HTMLElement, rec: VaultLogReco
 	});
 }
 
-/** 明细条目(可点击打开——删除条目只有路径,不可点)。 */
+/** 明细条目(可点击打开——删除条目只有路径,不可点)。返回元素供追加按钮。 */
 function renderDiffItem(
 	container: HTMLElement,
 	text: string,
 	cls: string,
 	path: string | null,
 	handlers: VaultLogUiHandlers,
-): void {
+	compare?: () => void,
+): HTMLElement {
 	const el = container.createDiv({ cls: `life-home-rec-item ${cls}`, text });
 	if (path && handlers.onOpenFile) {
 		el.addClass('is-openable');
@@ -66,6 +72,18 @@ function renderDiffItem(
 			handlers.onOpenFile?.(path);
 		});
 	}
+	if (compare) {
+		const btn = el.createEl('button', {
+			cls: 'life-home-rec-compare',
+			text: '对比',
+			attr: { 'aria-label': '查看修改对比,可撤回' },
+		});
+		btn.addEventListener('click', (ev) => {
+			ev.stopPropagation();
+			compare();
+		});
+	}
+	return el;
 }
 
 /** 记录列表(摘要行 + 点击展开明细 + 总体/按文件夹切换)。 */
@@ -258,7 +276,21 @@ export function renderDiffListsInto(
 			if (list.length === 0) continue;
 			container.createDiv({ cls: 'life-home-rec-kind-title', text: `${label}(${list.length})` });
 			for (const p of list.slice(0, 30)) {
-				renderDiffItem(container, p, cls, p, handlers);
+				if (label === '修改' && rec.id) {
+					// 修改条目(2026-11-21 用户):点击 = 打开文件并画修改装点
+					// (行号右侧绿/蓝标志);「对比」小钮 = 直接看对比并可撤回。
+					const modHandlers: VaultLogUiHandlers = {
+						...handlers,
+						onOpenFile: (pp) =>
+							handlers.onOpenModified
+								? handlers.onOpenModified(rec.id, pp)
+								: handlers.onOpenFile?.(pp),
+					};
+					const item = renderDiffItem(container, p, cls, p, modHandlers, handlers.onCompareFile ? () => handlers.onCompareFile?.(rec.id, p) : undefined);
+					void item;
+				} else {
+					renderDiffItem(container, p, cls, p, handlers);
+				}
 			}
 			if (list.length > 30) container.createDiv({ cls: 'life-home-muted', text: `…还有 ${list.length - 30} 条` });
 		}

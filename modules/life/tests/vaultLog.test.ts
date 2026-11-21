@@ -1,7 +1,7 @@
 // 库记录引擎纯逻辑:diff 语义/重命名配对/调度判定/行锚解析(阶段 C, 2026-11-19;
 // 识别改进 2026-11-20;列表倒序与日期筛选 2026-11-21)。
 import { describe, expect, it } from 'vitest';
-import { diffSigTable, diffWithRenames, changeSummary, parseHHmm, dailyDue, periodDue, sigKey, scanVaultSig, sortVaultLogRecordsDesc, filterVaultLogRecordsByDate } from '../src/vaultLog';
+import { diffSigTable, diffWithRenames, changeSummary, parseHHmm, dailyDue, periodDue, sigKey, scanVaultSig, sortVaultLogRecordsDesc, filterVaultLogRecordsByDate, diffLines } from '../src/vaultLog';
 import type { VaultLogRecord } from '../src/types';
 import { parseCodeEmbedInner } from '../../md-editor/src/features/codeEmbed';
 
@@ -116,6 +116,43 @@ describe('记录列表倒序与日期筛选(2026-11-21)', () => {
   it('sortVaultLogRecordsDesc:按 date 从新到旧(存储序若乱也能兜底)', () => {
     const recs = [mk('a', '2026-11-19'), mk('b', '2026-11-21'), mk('c', '2026-11-20')];
     expect(sortVaultLogRecordsDesc(recs).map((r) => r.id)).toEqual(['b', 'c', 'a']);
+  });
+
+  describe('diffLines:修改对比行级 diff', () => {
+    const d = (before: string, after: string) => diffLines(before, after);
+    it('纯新增:行号落在 after 坐标', () => {
+      const r = d('a\nc', 'a\nb\nc');
+      expect(r.added).toEqual([2]);
+      expect(r.modified).toEqual([]);
+      expect(r.deleted).toEqual([]);
+    });
+    it('纯删除:记插入点与文本', () => {
+      const r = d('a\nb\nc', 'a\nc');
+      expect(r.added).toEqual([]);
+      expect(r.modified).toEqual([]);
+      expect(r.deleted).toEqual([{ line: 2, text: 'b' }]);
+    });
+    it('替换块 = 修改(蓝)', () => {
+      const r = d('a\nold\nc', 'a\nnew\nc');
+      expect(r.added).toEqual([]);
+      expect(r.modified).toEqual([2]);
+      expect(r.deleted.map((x) => x.text)).toEqual(['old']);
+    });
+    it('混合:独立新增与替换并存', () => {
+      const r = d('a\nold\nkeep\nz', 'a\nnew\nkeep\nz\nextra');
+      expect(r.modified).toEqual([2]);
+      expect(r.added).toEqual([5]);
+      expect(r.deleted.map((x) => x.text)).toEqual(['old']);
+    });
+    it('公共前后缀裁剪后仍精确(换空行 = 修改)', () => {
+      const r = d('head\nx\ntail', 'head\n\ntail');
+      expect(r.modified).toEqual([2]);
+      expect(r.deleted).toEqual([{ line: 2, text: 'x' }]);
+    });
+    it('空 → 全新增', () => {
+      const r = d('', 'a\nb');
+      expect(r.added).toEqual([1, 2]);
+    });
   });
 
   it('sortVaultLogRecordsDesc:同日保持传入次序(稳定,不依赖 rec.at 秒级字段)', () => {

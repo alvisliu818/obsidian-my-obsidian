@@ -99,6 +99,12 @@ export class ExternalCodeView extends ItemView {
   }
   /** Public so the e2e probe can read the buffer without reaching into privates. */
   editor: monacoNS.editor.IStandaloneCodeEditor | null = null;
+  /** 库记录修改对比(2026-11-21 用户):当前文件的库内相对路径与装点状态。 */
+  private vaultPath: string | null = null;
+  private diffCollection: monacoNS.editor.IEditorDecorationsCollection | null = null;
+  private diffLineSet = new Set<number>();
+  private diffRecordId: string | null = null;
+  private diffHandlerFor: monacoNS.editor.IStandaloneCodeEditor | null = null;
   private lastDiskData = '';
   // 加载失败标记:挡住 flush,防止把空缓冲覆盖回远端(BlockEditorView 同款)
   private loadFailed = false;
@@ -179,6 +185,74 @@ export class ExternalCodeView extends ItemView {
     window.setTimeout(() => applyMarkedTabIcons(this.app, [this.leaf]), 120);
   }
 
+  /** 库记录对比 API(鸭式取 LifePlugin,不静态 import 防模块环)。 */
+  private lifeDiffApi(): {
+    getEditorDiff?: (path: string) => { recordId: string; diff: { added: number[]; modified: number[] } } | null;
+    openRecordDiffModal?: (recordId: string, path: string) => void;
+  } | null {
+    const host = (this.app as unknown as {
+      plugins?: { plugins?: Record<string, { moduleInstance?: (id: string) => unknown } | undefined> };
+    }).plugins?.plugins?.['obsidian-my-obsidian'];
+    return (
+      (host?.moduleInstance?.('life') as {
+        getEditorDiff?: (path: string) => { recordId: string; diff: { added: number[]; modified: number[] } } | null;
+        openRecordDiffModal?: (recordId: string, path: string) => void;
+      } | undefined) ?? null
+    );
+  }
+
+  /** 应用库记录修改装点(行号右侧 glyph 竖条:新增绿/修改蓝)+ 点击开对比弹窗。
+   * 数据源 = LifePlugin 的编辑器对比登记表(库记录点击修改文件时登记)。 */
+  private async applyVaultDiffDecorations(): Promise<void> {
+    if (!this.editor) return;
+    const life = this.lifeDiffApi();
+    const entry = this.vaultPath && life?.getEditorDiff ? life.getEditorDiff(this.vaultPath) : null;
+    this.diffLineSet.clear();
+    if (entry) this.diffRecordId = entry.recordId;
+    else this.diffRecordId = null;
+    const decos: monacoNS.editor.IModelDeltaDecoration[] = [];
+    if (entry) {
+      for (const l of entry.diff.added) {
+        this.diffLineSet.add(l);
+        decos.push({
+          range: { startLineNumber: l, startColumn: 1, endLineNumber: l, endColumn: 1 },
+          options: { isWholeLine: true, className: 'lgp-diff-line-add', stickiness: monacoRuntime.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges },
+        });
+      }
+      for (const l of entry.diff.modified) {
+        this.diffLineSet.add(l);
+        decos.push({
+          range: { startLineNumber: l, startColumn: 1, endLineNumber: l, endColumn: 1 },
+          options: { isWholeLine: true, className: 'lgp-diff-line-mod', stickiness: monacoRuntime.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges },
+        });
+      }
+    }
+    if (this.diffCollection) {
+      this.diffCollection.clear();
+      this.diffCollection.set(decos);
+    } else {
+      this.diffCollection = this.editor.createDecorationsCollection(decos);
+    }
+    // 跳到首个差异行(VSCode 行为:点对比进来直接看到改动处)
+    const firstDiff = Math.min(...(decos.length ? decos.map((d) => d.range.startLineNumber) : [Infinity]));
+    if (Number.isFinite(firstDiff)) this.editor.revealLineInCenter(firstDiff);
+    // glyph margin 点击 → 对比弹窗(每编辑器实例注册一次)
+    if (this.diffHandlerFor !== this.editor) {
+      this.diffHandlerFor = this.editor;
+      this.editor.onMouseDown((e) => {
+        const line = e.target.position?.lineNumber;
+        if (line === undefined || !this.diffLineSet.has(line)) return;
+        // 竖条区域 = 行元素左缘 10px 内(装点画在行首,点击竖条即开对比)
+        const rect = e.target.element?.getBoundingClientRect();
+        if (!rect || e.event.posx - rect.left > 10) return;
+        const api = this.lifeDiffApi();
+        if (this.diffRecordId && this.vaultPath && api?.openRecordDiffModal) {
+          api.openRecordDiffModal(this.diffRecordId, this.vaultPath);
+        }
+      });
+    }
+  }
+
   async onOpen(): Promise<void> {
     // Mounting waits for setState: Obsidian calls onOpen BEFORE setState, so
     // mounting here would build an empty editor for a file whose path and
@@ -211,6 +285,8 @@ export class ExternalCodeView extends ItemView {
     };
     if (typeof s.abs === 'string') this.abs = s.abs;
     if (typeof s.name === 'string') this.fileName = s.name;
+    // 库记录修改对比:库内相对路径(库外文件无 → 不参与装点)
+    this.vaultPath = typeof s.file === 'string' && s.file ? s.file : null;
     if (typeof s.content === 'string') this.lastDiskData = s.content;
     if (typeof s.mountPath === 'string') this.mountPath = s.mountPath;
     if (typeof s.mountLabel === 'string') this.mountLabel = s.mountLabel;
@@ -260,6 +336,7 @@ export class ExternalCodeView extends ItemView {
     await super.setState(state, result);
     // Now the path is known; build the editor if onOpen ran before us.
     if (!this.editor && this.abs) await this.mount();
+    await this.applyVaultDiffDecorations();
     // 行锚落地:新挂载的由 mount() 末尾消费;叶子复用(编辑器已在、不重挂)在这里跳。
     if (this.pendingRevealLine !== null) {
       const n = this.pendingRevealLine;

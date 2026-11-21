@@ -63534,6 +63534,44 @@ body.is-mobile
 .life-home-rec-item.is-openable { cursor: pointer; }
 .life-home-rec-item.is-openable:hover { background: var(--background-modifier-hover); text-decoration: underline; }
 
+/* 修改对比(2026-11-21 用户):库记录修改文件的编辑器装点与对比弹窗。
+   VSCode 语义:新增绿/修改蓝,竖条画在行号右侧文本左侧。 */
+.life-home-rec-compare {
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	border-radius: 6px;
+	padding: 1px 8px;
+	font-size: 11px;
+	cursor: pointer;
+	margin-left: 8px;
+	flex: none;
+}
+.life-home-rec-compare:hover { color: var(--text-normal); border-color: var(--interactive-accent); }
+/* 原生编辑器(CM6)行标记:inset 阴影 = 行首竖条 */
+.cm-line.lgp-vault-diff-add { box-shadow: inset 3px 0 0 0 var(--color-green, #3fb950); }
+.cm-line.lgp-vault-diff-mod { box-shadow: inset 3px 0 0 0 var(--color-blue, #4493f8); }
+/* Monaco 整行 class 装点:行首 inset 竖条(池化编辑器 glyph 区不渲染,实测) */
+.monaco-editor .view-line.lgp-diff-line-add { box-shadow: inset 3px 0 0 0 var(--color-green, #3fb950); }
+.monaco-editor .view-line.lgp-diff-line-mod { box-shadow: inset 3px 0 0 0 var(--color-blue, #4493f8); }
+/* 对比弹窗 */
+.vl-diff-modal .vl-diff-path { font-weight: 600; margin-bottom: 8px; word-break: break-all; }
+.vl-diff-modal .vl-diff-empty { color: var(--text-muted); padding: 12px 4px; }
+.vl-diff-modal .vl-diff-list {
+	max-height: 380px;
+	overflow: auto;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+}
+.vl-diff-row { display: flex; gap: 8px; padding: 1px 8px; font-family: var(--font-monospace); font-size: 12px; }
+.vl-diff-row.is-del { background: rgba(255, 90, 90, 0.12); color: var(--text-error, #e75a5a); }
+.vl-diff-row.is-add { background: rgba(63, 185, 80, 0.12); color: var(--text-success, #3fb950); }
+.vl-diff-row.is-mod { background: rgba(68, 147, 248, 0.12); color: var(--color-blue, #4493f8); }
+.vl-diff-lineno { width: 3.2em; text-align: right; color: var(--text-faint); flex: none; font-variant-numeric: tabular-nums; }
+.vl-diff-sign { width: 1em; flex: none; }
+.vl-diff-text { white-space: pre-wrap; word-break: break-all; }
+.vl-diff-foot { margin-top: 10px; display: flex; justify-content: flex-end; }
+
 /* 浏览器:保存网页路径弹窗 */
 .ob-save-page-input { width: 100%; margin-bottom: 10px; }
 .ob-save-page-row { display: flex; gap: 8px; justify-content: flex-end; }
