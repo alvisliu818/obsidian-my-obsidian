@@ -4,7 +4,6 @@ import { PADataStore, setDataRoot, planBoardDeletions, resolveSyncPolicy, TaskOw
 import { PAView, VIEW_TYPE_PA, PAHost, PALocation } from "./view";
 import { PANavView, VIEW_TYPE_PA_NAV } from "./nav";
 import { PASideView, VIEW_TYPE_PA_SIDE, momentumNoteType } from "./side";
-import { WhatsNewModal, CHANGELOG, cmpVersion } from "./whatsnew";
 import { CustomPage } from "./types";
 import { FormModal, ConfirmModal, ChoiceModal, FieldSpec } from "./ui";
 import {
@@ -354,7 +353,6 @@ export default class MomentumPlugin extends Plugin implements PAHost {
           window.setTimeout(() => { this.mirrorSyncing = false; }, 1000);
         }
       })(), 1500);
-      this.maybeShowWhatsNew();
       // Adopt any tasks that arrived via sync without frontmatter.
       void this.adoptOrphanTasks();
       // Task-ownership policy (multi-device lock): converge every device on ONE task owner via a
@@ -1555,17 +1553,6 @@ export default class MomentumPlugin extends Plugin implements PAHost {
   private dedupeLeaves(type: string): void {
     const leaves = this.app.workspace.getLeavesOfType(type);
     leaves.slice(1).forEach((l) => l.detach());
-  }
-
-  /** Show the update dialog once per new version, listing changes since last seen. */
-  private maybeShowWhatsNew(): void {
-    const current = this.manifest.version;
-    const last = this.settings.lastSeenVersion;
-    if (last === current) return;
-    const entries = last ? CHANGELOG.filter((e) => cmpVersion(e.version, last) > 0) : CHANGELOG.slice();
-    this.settings.lastSeenVersion = current;
-    void this.saveSettings();
-    if (entries.length) new WhatsNewModal(this.app, this.manifest.name, entries).open();
   }
 
   /**
