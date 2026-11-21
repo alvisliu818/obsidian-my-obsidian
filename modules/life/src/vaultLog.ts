@@ -12,6 +12,7 @@
  * 调度:每日时间点(HH:mm,归属日防重)+ 固定周期(分钟);两者独立,命中即
  * 记录并提醒。纯函数 parseHHmm/dailyDue/periodDue 单测覆盖。
  */
+import type { VaultLogRecord } from './types';
 
 export interface FileSig {
 	mtime: number;
@@ -139,6 +140,25 @@ export function dailyDue(now: Date, time: string, lastDailyDate: string): boolea
 export function periodDue(now: Date, periodMin: number, lastPeriodAt: number): boolean {
 	if (periodMin <= 0 || lastPeriodAt <= 0) return false;
 	return now.getTime() - lastPeriodAt >= periodMin * 60000;
+}
+
+/**
+ * 记录列表按归属日倒序(2026-11-21 用户:最新在最上)。渲染侧排序——存储写入
+ * 本就新在前(main.ts 记录头部插入),这里做显式保证并对旧数据兜底,不动存储。
+ * 只比 rec.date(YYYY-MM-DD 定长 ASCII,字典序即时间序),不依赖 rec.at 的
+ * 秒级字段;同日比较为 0 → 稳定排序保持传入次序(即存储序)。
+ */
+export function sortVaultLogRecordsDesc(records: VaultLogRecord[]): VaultLogRecord[] {
+	return [...records].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+}
+
+/**
+ * 按归属日筛选记录('' = 不过滤,原样返回)。纯函数;选中的日期由调用方
+ * (视图 UI state)持有,不落盘。
+ */
+export function filterVaultLogRecordsByDate(records: VaultLogRecord[], date: string): VaultLogRecord[] {
+	if (!date) return records;
+	return records.filter((r) => r.date === date);
 }
 
 /** 提醒文案(变化摘要:N 新增 · M 修改 · K 删除 [+ 重命名 R])。 */

@@ -1,7 +1,8 @@
 // 库记录引擎纯逻辑:diff 语义/重命名配对/调度判定/行锚解析(阶段 C, 2026-11-19;
-// 识别改进 2026-11-20)。
+// 识别改进 2026-11-20;列表倒序与日期筛选 2026-11-21)。
 import { describe, expect, it } from 'vitest';
-import { diffSigTable, diffWithRenames, changeSummary, parseHHmm, dailyDue, periodDue, sigKey, scanVaultSig } from '../src/vaultLog';
+import { diffSigTable, diffWithRenames, changeSummary, parseHHmm, dailyDue, periodDue, sigKey, scanVaultSig, sortVaultLogRecordsDesc, filterVaultLogRecordsByDate } from '../src/vaultLog';
+import type { VaultLogRecord } from '../src/types';
 import { parseCodeEmbedInner } from '../../md-editor/src/features/codeEmbed';
 
 describe('diffSigTable(相对上一次快照的变化)', () => {
@@ -97,5 +98,44 @@ describe('签名表与形状判定', () => {
     expect(parseCodeEmbedInner('x.py#L7')).toEqual({ target: 'x.py', start: 7, end: 7 });
     expect(parseCodeEmbedInner('x.py')).toBe(null);
     expect(parseCodeEmbedInner('x.py#L0')).toBe(null);
+  });
+});
+
+describe('记录列表倒序与日期筛选(2026-11-21)', () => {
+  const mk = (id: string, date: string): VaultLogRecord => ({
+    id,
+    at: `${date}T12:00:00.000Z`,
+    date,
+    trigger: 'manual',
+    added: [],
+    modified: [],
+    deleted: [],
+    totalFiles: 0,
+  });
+
+  it('sortVaultLogRecordsDesc:按 date 从新到旧(存储序若乱也能兜底)', () => {
+    const recs = [mk('a', '2026-11-19'), mk('b', '2026-11-21'), mk('c', '2026-11-20')];
+    expect(sortVaultLogRecordsDesc(recs).map((r) => r.id)).toEqual(['b', 'c', 'a']);
+  });
+
+  it('sortVaultLogRecordsDesc:同日保持传入次序(稳定,不依赖 rec.at 秒级字段)', () => {
+    // 传入序即存储序(同日新在前);同日比较为 0 → 稳定排序原样保留
+    const recs = [mk('later', '2026-11-20'), mk('earlier', '2026-11-20'), mk('x', '2026-11-19')];
+    expect(sortVaultLogRecordsDesc(recs).map((r) => r.id)).toEqual(['later', 'earlier', 'x']);
+  });
+
+  it('sortVaultLogRecordsDesc:返回新数组,不改传入序(存储序不动)', () => {
+    const recs = [mk('old', '2026-11-01'), mk('new', '2026-11-21')];
+    const sorted = sortVaultLogRecordsDesc(recs);
+    expect(sorted).not.toBe(recs);
+    expect(recs.map((r) => r.id)).toEqual(['old', 'new']);
+    expect(sorted.map((r) => r.id)).toEqual(['new', 'old']);
+  });
+
+  it('filterVaultLogRecordsByDate:空串 = 不过滤,指定日期只留该天', () => {
+    const recs = [mk('a', '2026-11-21'), mk('b', '2026-11-20'), mk('c', '2026-11-21')];
+    expect(filterVaultLogRecordsByDate(recs, '')).toBe(recs);
+    expect(filterVaultLogRecordsByDate(recs, '2026-11-21').map((r) => r.id)).toEqual(['a', 'c']);
+    expect(filterVaultLogRecordsByDate(recs, '2026-11-01')).toEqual([]);
   });
 });

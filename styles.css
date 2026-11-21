@@ -63473,6 +63473,9 @@ body.is-mobile
 .life-home-rec-btn:hover { opacity: 0.88; }
 .life-home-gear { background: none; border: none; color: var(--text-muted); font-size: 16px; cursor: pointer; border-radius: 8px; padding: 4px 8px; }
 .life-home-gear:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+/* 库记录日期筛选(2026-11-21):变量与设置输入框同源,圆角/字号对齐相邻按钮 */
+.life-home-date-filter { border: 1px solid var(--background-modifier-border); border-radius: 8px; padding: 3px 8px; font-size: 12.5px; background: var(--background-primary); color: var(--text-normal); font-family: var(--font-interface); }
+.life-home-date-filter:focus { border-color: var(--interactive-accent); outline: none; }
 .life-home-section { padding: 12px 0 4px; }
 .life-home-section.is-settings { background: var(--background-secondary); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
 .life-home-sec-title { font-size: 12px; font-weight: 600; color: var(--text-muted); letter-spacing: 0.05em; padding-bottom: 8px; }
@@ -63644,19 +63647,6 @@ body.is-mobile
 .life-home-rec-item.is-renamed { color: var(--text-accent); }
 .life-home-rec-item.is-openable { cursor: pointer; }
 .life-home-rec-item.is-openable:hover { background: var(--background-modifier-hover); text-decoration: underline; }
-
-/* Monaco 滚动条原生观感(用户 2026-11-20):滑块配色与 Obsidian 原生
-   scrollbar thumb 同源,去 Monaco 默认的半透明浮层感 */
-.monaco-scrollable-element > .scrollbar > .slider {
-  background: var(--scrollbar-thumb-bg, var(--background-modifier-border));
-  border-radius: 6px;
-}
-.monaco-scrollable-element > .scrollbar > .slider:hover {
-  background: var(--scrollbar-thumb-hover-bg, var(--background-modifier-border-hover));
-}
-.monaco-scrollable-element > .scrollbar > .slider.active {
-  background: var(--scrollbar-thumb-hover-bg, var(--background-modifier-border-hover));
-}
 
 /* 浏览器:保存网页路径弹窗 */
 .ob-save-page-input { width: 100%; margin-bottom: 10px; }
