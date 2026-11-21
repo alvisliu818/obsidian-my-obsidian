@@ -63476,6 +63476,11 @@ body.is-mobile
 /* 库记录日期筛选(2026-11-21):变量与设置输入框同源,圆角/字号对齐相邻按钮 */
 .life-home-date-filter { border: 1px solid var(--background-modifier-border); border-radius: 8px; padding: 3px 8px; font-size: 12.5px; background: var(--background-primary); color: var(--text-normal); font-family: var(--font-interface); }
 .life-home-date-filter:focus { border-color: var(--interactive-accent); outline: none; }
+/* 日期独占一行(2026-11-21 用户实报):窄面板里日期文字与筛选/按钮组同排,
+   被压成一字一行(2026/年/11/月…竖着排)。日期 flex-basis 拉满逼按钮组换行,
+   只作用于库记录面板,HOME 头部不受影响。 */
+.life-vaultlog .life-home-head { flex-wrap: wrap; row-gap: 8px; }
+.life-vaultlog .life-home-date { flex-basis: 100%; }
 .life-home-section { padding: 12px 0 4px; }
 .life-home-section.is-settings { background: var(--background-secondary); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
 .life-home-sec-title { font-size: 12px; font-weight: 600; color: var(--text-muted); letter-spacing: 0.05em; padding-bottom: 8px; }
