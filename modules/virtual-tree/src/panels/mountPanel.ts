@@ -1747,7 +1747,19 @@ export class MountPanelView extends ItemView {
     // (31px vs the head's 14px caret) — the same parent-child step as every
     // deeper level. The old `(depth + 1) * 17` doubled that step (48px) and
     // the root looked detached from its children.
-    row.style.paddingInlineStart = `${(node.isDir ? 14 : 29) + depth * 17}px`;
+    // 例外:有子项的文件行(嵌套挂载/parent 虚拟子笔记)走文件夹的 14px
+    // gutter——caret 落进 29px 预留位本身,图标仍落 29 列,与目录行/顶层
+    // 文件挂载头(renderMount 的 showCaret ? 14 : 29)同一套;无子项的文件
+    // 行维持 29px 预留位,不画空 caret。判定必须提前到 padding 之前,
+    // paddingInlineStart 依赖它(用户 2026-11-21 实报:parent 父笔记行的
+    // caret 掉在行末右侧)。
+    const nested = this.nestedMountsOf(mount.id, node.rel);
+    const hasKids =
+      nested.length > 0 ||
+      (isVaultMount(mount) &&
+        this.plugin.settings.parentMountEnabled !== false &&
+        vaultHasVirtualChildren(mount, node.rel, parentPlanOf(this.app, mount.path)));
+    row.style.paddingInlineStart = `${(node.isDir || hasKids ? 14 : 29) + depth * 17}px`;
 
     if (node.isDir) {
       const caret = row.createSpan({ cls: 'logseq-mount-caret' });
@@ -1787,10 +1799,31 @@ export class MountPanelView extends ItemView {
     }
 
     const text = isTextMount(extOf(node.name));
-    // 文件行不再补空 caret 占位:paddingInlineStart 的 29px(=文件夹 14px +
-    // caret 11px + 间距 4px)本身就是给 caret 留的位置,再画一个空占位会双重
-    // 补偿,文件整体比同级文件夹右移 15px(实测报告:同级文件/文件夹不对齐)。
-    // 不占位时文件图标起点 = 29 + depth*17,正好落在文件夹图标的列上。
+    // 有子项的文件行先画 caret 再画图标:caret 落在行首 gutter,与目录行/
+    // 嵌套头行同位同视觉;点行其他区域仍是打开文件。无子项的文件行不补
+    // 空 caret 占位:.logseq-mount-caret 固定 11px 宽,空 span 也占位,叠加
+    // 29px 预留就是双重补偿,文件比同级文件夹右移 15px(实测报告:同级
+    // 文件/文件夹不对齐);不占位时文件图标起点 = 29 + depth*17,正好落
+    // 在文件夹图标的列上。
+    if (hasKids) {
+      // 文件行名下有挂载/虚拟子笔记时也是容器,需要 caret 来展开。caret
+      // 是独立点击目标:行本身照旧打开文件(文件行一贯的行为)。
+      const caret = row.createSpan({ cls: 'logseq-mount-caret logseq-mount-caret-file' });
+      caret.textContent = isOpen ? '▾' : '▸';
+      caret.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (isOpen) {
+          state.open.delete(node.rel);
+        } else {
+          state.open.add(node.rel);
+          // 虚拟子笔记懒加载:第一次展开才读(与文件夹同节奏)
+          if (isVaultMount(mount) && !state.loaded.has(node.rel)) {
+            this.loadLayer(mount, node.rel, state);
+          }
+        }
+        this.render();
+      });
+    }
     // Files get the icon theme's own artwork when it is installed, so a mounted
     // tree shows the same icons the vault's files do. Folders keep a generic
     // marker: the theme resolves folder icons by vault path, which an
@@ -1835,34 +1868,6 @@ export class MountPanelView extends ItemView {
     }
     // 文件行同样画标签徽标（此前徽标只挂在目录分支,打了标签的文件行不显示——实测发现）
     this.renderTagBadges(row, node);
-    // A FILE with mounts under it is a container too, so it needs a caret to
-    // open them. The caret is a separate click target: the row itself keeps
-    // opening the file, which is what a file row has always done.
-    // parent 属性挂载是库内文件行的第二类容器子项：frontmatter 写了 parent
-    // 的笔记挂到它名下（计划缓存里查，渲染期零扫描开销）。
-    const nested = this.nestedMountsOf(mount.id, node.rel);
-    const hasKids =
-      nested.length > 0 ||
-      (isVaultMount(mount) &&
-        this.plugin.settings.parentMountEnabled !== false &&
-        vaultHasVirtualChildren(mount, node.rel, parentPlanOf(this.app, mount.path)));
-    if (hasKids) {
-      const caret = row.createSpan({ cls: 'logseq-mount-caret logseq-mount-caret-file' });
-      caret.textContent = isOpen ? '▾' : '▸';
-      caret.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        if (isOpen) {
-          state.open.delete(node.rel);
-        } else {
-          state.open.add(node.rel);
-          // 虚拟子笔记懒加载：第一次展开才读（与文件夹同节奏）
-          if (isVaultMount(mount) && !state.loaded.has(node.rel)) {
-            this.loadLayer(mount, node.rel, state);
-          }
-        }
-        this.render();
-      });
-    }
     row.addEventListener('click', (ev) => {
       const mode = this.modOpenMode(ev);
       // 库内挂载行：走 vault 原生 openFile（反链/引用/扩展名路由全是原生
