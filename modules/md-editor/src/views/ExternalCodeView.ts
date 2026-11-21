@@ -37,6 +37,7 @@ import { applyHeaderPath, headerSegmentsFor, isUnderMount, matchMountFor } from 
 import { markLeafTouched } from './tabTouch';
 import { HybridCodeEditor } from './hybridCodeEditor';
 import { buildCodeExtLink, toExtPath } from '../../../virtual-tree/src/features/codeFileLinks';
+import { applyMarkedTabIcons, markLeafTabIcon } from '../../../virtual-tree/src/features/tabIcon';
 import { runFile, langFromExt } from '../../../code-editor/src/exec/runner';
 import type { RunHandle } from '../../../code-editor/src/exec/pythonRunner';
 
@@ -168,6 +169,16 @@ export class ExternalCodeView extends ItemView {
     return state;
   }
 
+  /** 标签页主题图标(2026-11-21 用户):视图知道文件名的第一时间就主动标记
+   * +应用——恢复未激活的叶没有 layout-change,外部轮询永远等不到 fileName。 */
+  private markTabThemeIcon(): void {
+    if (!this.abs || !this.fileName) return;
+    markLeafTabIcon(this.leaf, { name: this.fileName, rel: this.abs });
+    applyMarkedTabIcons(this.app, [this.leaf]);
+    // setIcon/view 加载完成会重画标签头,延迟补一次(同 virtual-tree 开路径)。
+    window.setTimeout(() => applyMarkedTabIcons(this.app, [this.leaf]), 120);
+  }
+
   async onOpen(): Promise<void> {
     // Mounting waits for setState: Obsidian calls onOpen BEFORE setState, so
     // mounting here would build an empty editor for a file whose path and
@@ -245,6 +256,7 @@ export class ExternalCodeView extends ItemView {
       }
     }
     this.displayPath = relativeDisplayPath(this.abs, this.mountPath, this.fileName);
+    this.markTabThemeIcon();
     await super.setState(state, result);
     // Now the path is known; build the editor if onOpen ran before us.
     if (!this.editor && this.abs) await this.mount();

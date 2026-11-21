@@ -71,6 +71,7 @@ import { collectBlockTags, removeTagFromText } from '../features/supertagText';
 import { mountCodeEditor, parseCodeFence, type MountedCodeEditor } from '../blocks/codeBlockEdit';
 import { unwatchGuideLayout, watchGuideLayout } from '../blocks/guideLayout';
 import { baseOf, MOUNT_FOLDER } from '../../../virtual-tree/src/features/extFs';
+import { applyMarkedTabIcons, markLeafTabIcon } from '../../../virtual-tree/src/features/tabIcon';
 import { readTextAny, writeTextAny } from '../../../virtual-tree/src/features/remoteIO';
 import { relativeDisplayPath } from '../features/codeFileKind';
 import { setLeafTitle } from '../features/leafTitle';
@@ -823,6 +824,20 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   }
 
   /** Alias used by the settings tab (default-collapse toggles). */
+  protected async onOpen(): Promise<void> {
+    // 恢复未激活的叶没有 layout-change,外部轮询等不到 file——onOpen 即标记。
+    this.markTabThemeIcon();
+  }
+
+  /** 标签页主题图标(2026-11-21 用户):文件已知即主动标记+应用。 */
+  private markTabThemeIcon(): void {
+    if (!(this.file instanceof TFile)) return;
+    markLeafTabIcon(this.leaf, { name: this.file.name, rel: this.file.path });
+    applyMarkedTabIcons(this.app, [this.leaf]);
+    // setIcon/编辑器加载完成会重画标签头,延迟补一次。
+    window.setTimeout(() => applyMarkedTabIcons(this.app, [this.leaf]), 120);
+  }
+
   refreshReferences(): void {
     this.renderReferences();
   }

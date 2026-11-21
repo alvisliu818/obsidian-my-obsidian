@@ -267,6 +267,14 @@ export default class VirtualTreePlugin extends Plugin {
         tabIconTimer = window.setTimeout(() => this.refreshTabIcons(), 400);
       }),
     );
+    // 启动期补拍:恢复的标签页第一次应用时,社区/市场图标主题的数据可能
+    // 还没就绪(getFileIconFor/getFileIconSvg 恒 null → 原生图标留下),而
+    // 之后未必再有 layout-change。按主题模块自己的启动重试节奏补几拍,
+    // 主题一就绪标签页即换装(幂等,已主题化的跳过)。
+    for (const delay of [0, 200, 600, 1500, 3000, 6000]) {
+      const t = window.setTimeout(() => this.refreshTabIcons(), delay);
+      this.register(() => window.clearTimeout(t));
+    }
 
     // 虚拟文件浏览器接管（2026-11-05）：必须在布局恢复之前注册好——社区
     // 插件先于 workspace 布局还原加载，所以侧栏叶子会直接实例化虚拟视图，
@@ -399,7 +407,11 @@ export default class VirtualTreePlugin extends Plugin {
 
     // 图标主题就绪/切换 → 挂载面板行内图标重绘（iconForEntry 每次渲染时查询）
     // 自定义事件不走 registerDomEvent（其重载只收已知事件名），register 兜底注销。
+    // 同一事件也是标签页主题图标的补齐信号：启动恢复的标签页在主题异步加载
+    // 完成前跑过一次应用（getFileIconFor() 恒为 null → 原生图标留下），事件是
+    // 唯一能补上的信号（2026-11-21 用户实报「标签页图标显示不对」）。
     const onIconThemeChanged = () => {
+      this.refreshTabIconsSoon();
       for (const leaf of this.mountPanelLeaves()) {
         (leaf.view as MountPanelView).render();
       }
