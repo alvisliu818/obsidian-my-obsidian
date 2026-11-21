@@ -21,7 +21,6 @@ import WorkLifePlugin from "./worklife/main";
 interface PASettings {
   dataRoot: string;
   notifyTasks: boolean;
-  lastSeenVersion: string;
   readableNotesSchema?: number;
   taskListsSchema?: number;
   taskFoldersSchema?: number;
@@ -61,7 +60,6 @@ interface PASettings {
 const DEFAULT_SETTINGS: PASettings = {
   dataRoot: "Momentum Life",
   notifyTasks: false,
-  lastSeenVersion: "",
   readableNotesSchema: 0,
   taskListsSchema: 0,
   taskFoldersSchema: 0,
@@ -130,6 +128,12 @@ export default class MomentumPlugin extends Plugin implements PAHost {
   async onload(): Promise<void> {
     const data = (await this.loadData()) as Partial<PASettings> | null;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+    // What's new 弹窗移除后的死键清理(2026-11-21 用户):lastSeenVersion 不再
+    // 被读写,还在旧数据片里的清一次并立即落盘。
+    if ("lastSeenVersion" in this.settings) {
+      delete (this.settings as Record<string, unknown>).lastSeenVersion;
+      void this.saveSettings();
+    }
     // Legacy safety: if the user never chose a folder and the new default doesn't
     // exist yet but a legacy "Personal Assistant" folder does, keep using it.
     if (!data || !data.dataRoot) {
