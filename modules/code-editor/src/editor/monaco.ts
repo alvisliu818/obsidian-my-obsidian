@@ -498,10 +498,11 @@ fontSize?: number;
 }
 
 // 创建编辑器实例(两个代码面共用:外部代码文件 / 块内代码块)
-/** 块内代码块底部预留的横向滚动条条带(px):与静态阅读态的条高一致
- *  (styles.css 的 ::-webkit-scrollbar height:10px),两态盒子才等高——
- *  Monaco 自己的条是浮层不占布局,不预留的话编辑态比阅读态矮一截。
- *  仅 autoHeight(块内)生效;代码文件编辑器是整页滚动,不受影响。 */
+/** 块内代码块底部预留的横向滚动条条带(px):与静态阅读态的条高一致,
+ *  两态盒子才等高——Monaco 自己的条是浮层不占布局,不预留的话编辑态比
+ *  阅读态矮一截。仅 autoHeight(块内)生效;代码文件编辑器整页滚动不受影响。
+ *  (用户 2026-11-21 终版:滚动条用 Monaco 自带的,不自绘也不换原生代理。)
+ */
 const CODE_HSCROLL_STRIP = 10;
 
 export function createEditor(
@@ -577,16 +578,10 @@ export function createEditor(
     overviewRulerLanes: 0,
     hideCursorInOverviewRuler: true,
     overviewRulerBorder: false,
-    // 原生观感滚动条(用户 2026-11-20「monaco 滚动条换成原生滚动条」):竖向常驻
-    // (Monaco 默认滚动时才浮出)、无渐变阴影、尺寸对齐 Obsidian 原生 12px;
-    // 滑块配色在 styles.css 的 .monaco-scrollable-element 段(与原生 thumb 同源)。
-    scrollbar: {
-      vertical: 'visible',
-      horizontal: 'auto',
-      useShadows: false,
-      verticalScrollbarSize: 12,
-      horizontalScrollbarSize: CODE_HSCROLL_STRIP,
-    },
+    // 滚动条用 Monaco 自带的(用户 2026-11-21 终版「用 monaco 自带的原生滚动条」
+    // ——此前两版(观感仿制/原生代理条带)都被驳回):不传 scrollbar 选项,一切
+    // 走 Monaco 默认(需要时浮现、尺寸默认)。仅块内 autoHeight 分支为条带几何
+    // 与滚轮透传补充两个功能项,见下方分支。
     smoothScrolling: true,
     cursorBlinking: 'smooth',
     renderWhitespace: 'selection',
@@ -603,16 +598,14 @@ export function createEditor(
   // autoHeight 是结构意图(容器贴内容,滚动无意义),复位掉覆盖层可能给的 true。
   if (opts.autoHeight) {
     options.scrollBeyondLastLine = false;
-    // 块内同样不留末列空位(同 pooled 路径的注释)
+    // 块内同样不留末列空位(Monaco 默认 scrollBeyondLastColumn:5 会在末列后
+    // 留 ~50px 空白,滚到头就是一条空白带——2026-10-24 用户报)。
     options.scrollBeyondLastColumn = 0;
     // 滚轮还给页面:块内编辑器贴内容、自身纵向无溢出,Monaco 默认
     // alwaysConsumeMouseWheel:true 会把滚轮吞掉(页面不动)——关掉后
     // Monaco 滚不动时滚轮透传给外层大纲容器(2026-10-24 用户报)。
-    options.scrollbar = {
-      ...options.scrollbar,
-      horizontalScrollbarSize: CODE_HSCROLL_STRIP,
-      alwaysConsumeMouseWheel: false,
-    };
+    // 横向条尺寸对齐底部条带(CODE_HSCROLL_STRIP),条浮在那 10px 空带里。
+    options.scrollbar = { horizontalScrollbarSize: CODE_HSCROLL_STRIP, alwaysConsumeMouseWheel: false };
   }
   // LSP 文档身份:model 绑定到 file:/// uri(applyDoc 同款套路)。同一个 uri
   // 已有存活 model 时复用(视图重挂载),值不同才覆盖。
@@ -855,7 +848,7 @@ function ensureSharedBlockEditor(): SharedBlockEditor {
     // 留 ~50px 空白,滚到头就是一条空白带——2026-10-24 用户报)
     scrollBeyondLastColumn: 0,
     // 滚轮还给页面(同 createEditor autoHeight 分支的论证);横向滚动条
-    // 尺寸与静态阅读态细条一致。
+    // 尺寸与静态阅读态细条一致。滚动条本体用 Monaco 自带(2026-11-21 终版)。
     scrollbar: { horizontalScrollbarSize: CODE_HSCROLL_STRIP, alwaysConsumeMouseWheel: false },
     smoothScrolling: true,
     cursorBlinking: 'smooth',
