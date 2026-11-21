@@ -300,7 +300,12 @@ export default class MyObsidianPlugin extends Plugin {
 				name: "Momentum",
 				cls: MomentumPlugin as unknown as ModuleDescriptor["cls"],
 			},
-			subPages: [{ id: "momentum", name: "Momentum" }],
+			subPages: [
+				{ id: "momentum", name: "Momentum" },
+				// WorkLife Calendar 的设置 tab 由垫片以稳定键 inner:<tabId> 收编,
+				// 这里作为 Life 的附属页直达(不再落「其他」区)。
+				{ id: "inner:my-worklife-calendar", name: "WorkLife Calendar" },
+			],
 			internalTabIds: ["my-worklife-calendar"],
 		},
 		{
@@ -923,10 +928,10 @@ export default class MyObsidianPlugin extends Plugin {
 					(t?.id && internalIds.has(t.id)) ||
 					(t?.plugin && this.isInternalPluginInstance(t.plugin))
 				) {
-					this.capturedTabs.set(
-						`inner:${this.capturedTabs.size}:${t.id ?? "unknown"}`,
-						tab,
-					);
+					// 稳定键(2026-11-21 WorkLife Calendar 并入 life):内部 tab 按
+					// tab id 建键——descriptor.subPages 用同一键直达;同 id 重复
+					// 注册(模块重载)直接覆盖,不再 inner:0/1/2 累积。
+					this.capturedTabs.set(`inner:${t.id ?? `anon${this.capturedTabs.size}`}`, tab);
 					scheduleTabRefresh();
 					return true;
 				}
