@@ -4423,15 +4423,6 @@ span.lgp-hdr-ctx-open {
   flex: 0 0 auto;
 }
 
-/* banner 关闭时,可运行代码文件的孤立运行按钮行(2026-11-01):
-   只给功能,不带文件名/路径/徽标 —— 那些才是用户关 banner 想去掉的 */
-.logseq-external-run-solo {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-  padding: 4px 8px 0;
-}
-
 .logseq-external-tree {
   flex: 1 1 auto;
   overflow-y: auto;

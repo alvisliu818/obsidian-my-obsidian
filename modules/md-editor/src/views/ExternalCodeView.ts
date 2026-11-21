@@ -457,25 +457,11 @@ export class ExternalCodeView extends ItemView {
       status.setAttribute('title', '保存时写回原文件');
       const saveBtn = banner.createEl('button', { cls: 'logseq-external-save', text: '保存' });
       saveBtn.addEventListener('click', () => void this.flush(true));
-
-      // 运行:仅对可执行的扩展名显示(py / js / sh / ps1 …),用设置里选中的
-      // Python 环境跑 —— 与代码块 ▶ 走同一条执行路径。
-      const runLang = langFromExt(this.fileName);
-      if (runLang) {
-        const runBtn = banner.createEl('button', { cls: 'logseq-external-save', text: '▶ 运行' });
-        runBtn.setAttribute('title', `运行 ${this.fileName}`);
-        runBtn.addEventListener('click', () => void this.runCurrentFile());
-      }
-    } else if (langFromExt(this.fileName)) {
-      // banner 被用户关掉 = 整条顶条 GONE(上面的设计意图),但可运行文件的
-      // 运行入口不能跟着一起没(2026-11-01 用户报:关了 banner 打开 .py 连 ▶
-      // 都没有)。这里只渲染孤立的运行按钮,不带文件名/路径/徽标——用户嫌挤
-      // 的是那些信息,不是功能。
-      const solo = contentEl.createDiv({ cls: 'logseq-external-run-solo' });
-      const runBtn = solo.createEl('button', { cls: 'logseq-external-save', text: '▶ 运行' });
-      runBtn.setAttribute('title', `运行 ${this.fileName}`);
-      runBtn.addEventListener('click', () => void this.runCurrentFile());
     }
+    // 运行入口改编辑器右键菜单(2026-11-21 用户「运行按钮放右键菜单」):顶条的
+    // ▶运行 与 banner 关闭后的孤立按钮都撤——右键即达,入口不再随 banner 开关
+    // 消失(2026-11-01 报障的根因一并消除)。可执行扩展名才挂(py / js / sh / ps1…),
+    // 与代码块 ▶ 走同一条执行路径 runCurrentFile。挂载点在编辑器就绪之后。
 
     const host = contentEl.createDiv({ cls: 'logseq-external-code-host' });
 
@@ -551,6 +537,17 @@ export class ExternalCodeView extends ItemView {
       this.lspDisposables = monacoLspAttach(this.plugin, this.editor, language, docUri);
     }
     this.editor?.focus();
+    // 运行入口:编辑器右键菜单(顶条/孤立按钮已撤,见上方 banner 注释)
+    if (this.editor && langFromExt(this.fileName)) {
+      this.editor.addAction({
+        id: 'logseq-external-run-file',
+        label: '▶ 运行',
+        keybindings: [],
+        contextMenuGroupId: 'navigation',
+        contextMenuOrder: 1.4,
+        run: () => void this.runCurrentFile(),
+      });
+    }
     // The leaf's own view header caches the name it was mounted with; on a fresh
     // mount that is nothing, on a re-mount it is the previous file. Writing it
     // here covers both.
