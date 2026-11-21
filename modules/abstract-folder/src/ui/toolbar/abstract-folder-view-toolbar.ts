@@ -43,7 +43,17 @@ export class AbstractFolderViewToolbar {
     public setupToolbarActions(): void {
         this.containerEl.empty();
         this.containerEl.addClass("abstract-folder-toolbar");
-        
+        // 滚轮上下 → 工具栏左右滚动(用户 2026-11-21):容器超宽可滚时,
+        // 竖向滚轮映射为 scrollLeft;未超宽不拦截(页面滚轮不受影响)。
+        this.containerEl.addEventListener("wheel", (evt: WheelEvent) => {
+            if (evt.deltaY === 0) return;
+            const c = this.containerEl;
+            const max = c.scrollWidth - c.clientWidth;
+            if (max <= 0) return;
+            evt.preventDefault();
+            c.scrollLeft += evt.deltaY;
+        }, { passive: false });
+
         // Clear references before rebuilding
         this.viewStyleToggleAction = undefined;
         this.expandAllAction = undefined;

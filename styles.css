@@ -63702,11 +63702,3 @@ body.is-mobile
   margin: 2px 0;
 }
 
-/* abstract-folder 搜索头:窄面板下超宽同样可滚无条(同工具栏 2026-11-21) */
-.abstract-folder-search-header {
-	overflow-x: auto;
-	scrollbar-width: none;
-}
-.abstract-folder-search-header::-webkit-scrollbar {
-	display: none;
-}
