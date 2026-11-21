@@ -182,10 +182,6 @@ export interface ISettings {
   weatherProvider?: string; // WeatherProvider: 'open-meteo' | 'openweathermap' | 'weatherapi' | 'visual-crossing'
   weatherApiKey?: string;
 
-  // Status bar
-  showStatusBar: boolean;
-  dtwShowOnAllPages: boolean;
-
   // Ollama AI settings
   ollamaEnabled: boolean;
   ollamaUrl: string;
@@ -330,9 +326,6 @@ export const defaultSettings = Object.freeze({
   weatherEnabled: false,
   weatherLatitude: 55.75,
   weatherLongitude: 37.62,
-
-  showStatusBar: true,
-  dtwShowOnAllPages: false,
 
   // Ollama AI defaults
   ollamaEnabled: false,
@@ -746,8 +739,6 @@ export class CalendarSettingsTab extends PluginSettingTab {
       desc: tRaw("settings.general.sectionPanelsDesc"),
       icon: "panel-top",
     });
-    this.addShowStatusBarSetting(panels);
-    this.addDtwShowOnAllPagesSetting(panels);
     this.addViewSwitcherModeSetting(panels);
     this.addHabitTrackerModeSetting(panels);
     this.addWeightControlSetting(panels);
@@ -985,33 +976,6 @@ export class CalendarSettingsTab extends PluginSettingTab {
     this.note(container, tRaw("settings.general.helloBlockDesc"));
     this.codeSample(container, "```hello\n```");
     this.note(container, tRaw("settings.general.helloBlockHint"));
-  }
-
-  addShowStatusBarSetting(container: HTMLElement): void {
-    new Setting(container)
-      .setName(tRaw("settings.general.statusBar"))
-      .setDesc(tRaw("settings.general.statusBarDesc"))
-      .addToggle((toggle) => {
-        toggle.setValue(this.calendarPlugin.options.showStatusBar);
-        toggle.onChange(async (value) => {
-          await this.calendarPlugin.writeOptions({ showStatusBar: value });
-          // Toggle visibility in real-time
-          const el = document.querySelector(".mcp-dtw-global");
-          if (el) (el as HTMLElement).style.display = value ? "" : "none";
-        });
-      });
-  }
-
-  addDtwShowOnAllPagesSetting(container: HTMLElement): void {
-    new Setting(container)
-      .setName(tRaw("settings.general.statusBarAllPages"))
-      .setDesc(tRaw("settings.general.statusBarAllPagesDesc"))
-      .addToggle((toggle) => {
-        toggle.setValue(this.calendarPlugin.options.dtwShowOnAllPages);
-        toggle.onChange(async (value) => {
-          await this.calendarPlugin.writeOptions({ dtwShowOnAllPages: value });
-        });
-      });
   }
 
   addHabitTrackerModeSetting(container: HTMLElement): void {

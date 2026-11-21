@@ -54,7 +54,6 @@ import { initFinanceStores, reloadFinanceStores, immediateFinanceSave } from "./
 import { initFinancialAnalyticsStores, reloadFinancialAnalyticsStores, immediateAnalyticsSave } from "./finance/financialAnalyticsStorage";
 import { initWeightStores, reloadWeightStores, immediateWeightSave } from "./weight/stores";
 import { initLocale, locale, tRaw, currencyOverride } from "./i18n";
-import DateTimeWeather from "./components/DateTimeWeather.svelte";
 import Dashboard from "./dashboard/Dashboard.svelte";
 import HelloView from "./components/HelloView.svelte";
 import { NotificationService } from "./services/NotificationService";
@@ -128,7 +127,6 @@ function addAiMenuItems(menu: Menu, actions: AiMenuAction[]): void {
 }
 import { migrateFromSingleFile, migrateRootModuleFiles, VAULT_DATA_DIR } from "./io/vaultStorage";
 import { cleanupSyncConflictFiles } from "./io/syncConflicts";
-import { VIEW_SWITCHED_EVENT } from "./views/viewSwitch";
 
 declare global {
   interface Window {
@@ -148,20 +146,8 @@ export default class CalendarPlugin extends Plugin {
   private syncReloadTimer: number | null = null;
   private lastSavedDataJson = "";
   public notificationService!: NotificationService;
-  private dtwPanel: DateTimeWeather | null = null;
-  private dtwContainer: HTMLElement | null = null;
 
   onunload(): void {
-    // Destroy global DateTimeWeather panel
-    if (this.dtwPanel) {
-      this.dtwPanel.$destroy();
-      this.dtwPanel = null;
-    }
-    if (this.dtwContainer) {
-      this.dtwContainer.remove();
-      this.dtwContainer = null;
-    }
-
     // Flush pending debounced saves before teardown
     immediateTaskSave();
     immediateHabitSave();
@@ -704,134 +690,10 @@ export default class CalendarPlugin extends Plugin {
 
     if (this.app.workspace.layoutReady) {
       this.initLeaf();
-      this.injectDateTimeWeather();
     } else {
       this.app.workspace.onLayoutReady(() => {
         this.initLeaf();
-        this.injectDateTimeWeather();
       });
-    }
-
-    // Re-inject panel when active leaf changes (move to active view)
-    this.registerEvent(
-      this.app.workspace.on("active-leaf-change", () => {
-        if (this.options.dtwShowOnAllPages) {
-          this.moveDateTimeWeatherToActiveView();
-        }
-      })
-    );
-
-    // Смена view внутри одного leaf (tasks/kanban/schedule) не кидает active-leaf-change,
-    // а dtw-bar висит в DOM leaf и уничтожается — перевешиваем после переключения.
-    const onTabSwitched = () => {
-      if (this.options.dtwShowOnAllPages) {
-        this.moveDateTimeWeatherToActiveView();
-      } else {
-        this.injectDateTimeWeather();
-      }
-    };
-    document.addEventListener(VIEW_SWITCHED_EVENT, onTabSwitched);
-    this.register(() =>
-      document.removeEventListener(VIEW_SWITCHED_EVENT, onTabSwitched)
-    );
-  }
-
-  /** dtw-bar is desktop-only — phones/tablets hide the info panel. */
-  private isDtwMobile(): boolean {
-    return typeof window !== "undefined" && window.innerWidth <= 768;
-  }
-
-  private injectDateTimeWeather(): void {
-    if (!this.options.showStatusBar || this.isDtwMobile()) {
-      this.removeDateTimeWeather();
-      return;
-    }
-
-    // If container still exists in DOM, don't re-inject
-    if (this.dtwContainer && document.body.contains(this.dtwContainer)) return;
-
-    // Clean up any orphaned dtw-bar elements from previous plugin loads
-    document.querySelectorAll(".mcp-dtw-global").forEach((el) => el.remove());
-
-    this.createDateTimeWeatherPanel();
-  }
-
-  private moveDateTimeWeatherToActiveView(): void {
-    if (!this.options.showStatusBar || this.isDtwMobile()) {
-      this.removeDateTimeWeather();
-      return;
-    }
-
-    const activeLeaf = this.app.workspace.getMostRecentLeaf();
-    if (!activeLeaf) return;
-
-    // Don't move to sidebar leaves — only main content area
-    const isSidebar = activeLeaf.view.containerEl.closest(
-      ".workspace-split.left-split, .workspace-split.right-split, .workspace-split.mod-left-split, .workspace-split.mod-right-split, .sidebar"
-    );
-    if (isSidebar) return;
-
-    // Always destroy old panel first to prevent duplicates
-    this.removeDateTimeWeather();
-    // Also clean up any orphaned elements
-    document.querySelectorAll(".mcp-dtw-global").forEach((el) => el.remove());
-
-    this.createDateTimeWeatherPanel();
-  }
-
-  private createDateTimeWeatherPanel(): void {
-    const mainSplit = this.app.workspace.containerEl.querySelector(
-      ".workspace-split.mod-root"
-    );
-    if (!mainSplit) return;
-
-    // Find the active leaf's view-header
-    const activeLeaf = this.app.workspace.getMostRecentLeaf();
-    let headerEl: Element | null = null;
-
-    if (activeLeaf?.view?.containerEl) {
-      headerEl = activeLeaf.view.containerEl.querySelector(".view-header");
-    }
-
-    // Fallback to first view-header if active leaf not found
-    if (!headerEl) {
-      headerEl = mainSplit.querySelector(".view-header");
-    }
-
-    // Header может быть ещё не пересобран после setViewState — повторим
-    if (!headerEl) {
-      window.setTimeout(() => {
-        if (!this.dtwContainer && this.options.showStatusBar && !this.isDtwMobile()) {
-          this.createDateTimeWeatherPanel();
-        }
-      }, 80);
-      return;
-    }
-
-    this.dtwContainer = createDiv({ cls: "mcp-dtw-global" });
-    // Prevent clicks on dtw-bar from triggering active-leaf-change
-    this.dtwContainer.addEventListener("click", (e) => {
-      e.stopPropagation();
-    });
-    headerEl.parentElement?.insertBefore(this.dtwContainer, headerEl.nextSibling);
-
-    this.dtwPanel = new DateTimeWeather({
-      target: this.dtwContainer,
-      props: {
-        onOpenCalendar: () => this.activateCalendarView(),
-        onOpenFinance: () => this.activateFinanceView(),
-      },
-    });
-  }
-
-  private removeDateTimeWeather(): void {
-    if (this.dtwPanel) {
-      this.dtwPanel.$destroy();
-      this.dtwPanel = null;
-    }
-    if (this.dtwContainer) {
-      this.dtwContainer.remove();
-      this.dtwContainer = null;
     }
   }
 

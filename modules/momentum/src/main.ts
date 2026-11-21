@@ -17,7 +17,7 @@ import { DriveBrowserView, VIEW_TYPE_DRIVE, DriveViewConfig } from "./driveBrows
 import { runDriveSync, DriveBaselineStore, VaultFS, DriveConflictStrategy, DEFAULT_CONFLICT_STRATEGY, ConflictChoice, DriveSyncResult, DriveSyncSummary, DriveProgress, acquireDriveLock, releaseDriveLock } from "./driveSync";
 import { authorizeDrive, completeDriveAuth, ensureFreshDriveToken, revokeDriveToken, DriveAuthExpiredError, DRIVE_PROTOCOL_ACTION } from "./driveAuth";
 import { DriveFolderPicker } from "./driveFolderPicker";
-import { isProActive, proNeedsRecheck, validateLicense, PRO_BETA_FREE, PRO_PRICE, PRO_CHECKOUT_URL, PRO_BETA_OFFER, ProState } from "./pro";
+import { isProActive, proNeedsRecheck, validateLicense, PRO_BETA_FREE, ProState } from "./pro";
 import WorkLifePlugin from "./worklife/main";
 interface PASettings {
   dataRoot: string;
@@ -1837,6 +1837,15 @@ export default class MomentumPlugin extends Plugin implements PAHost {
   private installSaveBridge(): void {
     const rawSave = this.saveData.bind(this);
     const outer = this;
+    // 透出底层写:WorkLife 的数据片写 shim 必须走它直写完整 blob——经由
+    // 桥会先 delete worklife 再用桥内重读的旧 blob 合并(旧 worklife 覆盖
+    // 新值=设置永远存不上)。rawSaveData **不排队**:调用方(wl shim / 桥的
+    // 队列体)本就在 saveQueue 体内,再排队 = 队列自等自死锁(实测 wl.onload
+    // 卡死在 loadOptions→persistOptions,settings tab 永不注册)。
+    (outer as unknown as { rawSaveData: (data: unknown) => Promise<void> }).rawSaveData =
+      async (data: unknown): Promise<void> => {
+        await rawSave(data);
+      };
     this.saveData = async (data: unknown): Promise<void> => {
       const run = outer.saveQueue.then(async () => {
         const all = ((await outer.loadData()) as Record<string, unknown> | null) ?? {};
@@ -1881,7 +1890,11 @@ export default class MomentumPlugin extends Plugin implements PAHost {
         const run = outer.saveQueue.then(async () => {
           const all = ((await outer.loadData()) as Record<string, unknown>) ?? {};
           all.worklife = data;
-          await outer.saveData(all);
+          // 直写底层(绕过桥):桥会剥掉 worklife 键再用旧 blob 合并,新值永远
+          // 落不了盘(2026-11-21 实测);rawSave 同样经 saveQueue 串行,不破坏
+          // 与 momentum 自身写的互斥。
+          await (outer as unknown as { rawSaveData: (d: unknown) => Promise<void> })
+            .rawSaveData(all);
         });
         outer.saveQueue = run.catch(() => {});
         await run;
@@ -2237,69 +2250,5 @@ class PASettingTab extends PluginSettingTab {
       }
     }
 
-    // ── Momentum Pro ──────────────────────────────────────────────────────
-    new Setting(containerEl).setName("Momentum pro").setHeading();
-    const proOn = this.plugin.isProEnabled();
-
-    // What Pro unlocks — shown always, so people know exactly what they're getting.
-    const benefits = containerEl.createDiv({ cls: "pa-pro-benefits" });
-    benefits.createDiv({ text: "What you unlock", cls: "pa-pro-benefits-title" });
-    const benefitsList = benefits.createEl("ul");
-    benefitsList.createEl("li", {
-      text: "Google Drive sync — two-way sync between a drive folder (or your whole vault) and Obsidian, on its own Google sign-in, kept separate from tasks.",
-    });
-    benefitsList.createEl("li", {
-      text: "Any file type — images, pdfs and other binaries sync too, not just Markdown and text.",
-    });
-    benefitsList.createEl("li", {
-      text: "Multi-device — phone and desktop stay in step, with a safe keep-both conflict mode and a lock so two devices never clobber each other.",
-    });
-    benefitsList.createEl("li", {
-      text: "One-time purchase, no subscription — what you unlock stays yours.",
-    });
-
-    new Setting(containerEl)
-      .setName(PRO_BETA_FREE ? "Status: beta — free" : proOn ? "Status: active" : "Status: not active")
-      .setDesc(
-        PRO_BETA_FREE
-          ? "During the closed beta, all Pro features (like Google Drive sync) are unlocked for free."
-          : proOn
-            ? "Active — thank you!"
-            : `A one-time unlock (${PRO_PRICE}) for the features above.`,
-      );
-
-    if (!PRO_BETA_FREE && !proOn) {
-      new Setting(containerEl)
-        .setName(PRO_BETA_OFFER ? "Get momentum pro — free for the first 100 beta users" : "Buy momentum pro")
-        .setDesc(
-          PRO_BETA_OFFER
-            ? "Free while the beta lasts (first 100 sign-ups), then a one-time " + PRO_PRICE + ". " +
-              "Checkout opens in your browser and gives you a license key to paste below."
-            : `One-time ${PRO_PRICE}, handled by the store (tax included). Opens checkout in your browser.`,
-        )
-        .addButton((b) =>
-          b.setButtonText(PRO_BETA_OFFER ? "Get it free" : "Buy").setCta().onClick(() => {
-            if (PRO_CHECKOUT_URL) window.open(PRO_CHECKOUT_URL, "_blank");
-            else new Notice("Checkout link isn't configured yet.");
-          }),
-        );
-      let keyInput = this.plugin.settings.proLicenseKey ?? "";
-      new Setting(containerEl)
-        .setName("Activate with your license key")
-        .setDesc("After checkout, your license key is shown on screen and emailed to you. Paste it here and activate. Only the key is sent to the store to verify it — nothing else.")
-        .addText((t) => t.setPlaceholder("Your license key").setValue(keyInput).onChange((v) => { keyInput = v; }))
-        .addButton((b) => b.setButtonText("Activate").onClick(() => { void this.plugin.activatePro(keyInput).then(() => rerender()); }));
-    }
-
-    new Setting(containerEl)
-      .setName("Terms")
-      .setDesc(
-        "Beta, provided as-is, with no guaranteed support. If the project is ever discontinued, the " +
-        "intent is to open-source it (Pro becomes free for everyone) or hand it to a new maintainer. " +
-        "Your free, local features never depend on us. Activating Pro means you accept these terms.",
-      )
-      .addButton((b) => b.setButtonText("View terms").onClick(() => {
-        window.open("https://github.com/jnagase/obsidian-momentum/blob/main/docs/pro-terms.md", "_blank");
-      }));
   }
 }
