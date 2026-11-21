@@ -17,7 +17,7 @@ import type LifePlugin from '../main';
 import type LogseqEditorPlugin from '../../../md-editor/src/main';
 import { VIEW_LIFE_HOME } from './homeTypes';
 import { monthGrid, todayKey, formatDuration } from '../util';
-import { changeSummary } from '../vaultLog';
+import { changeSummary, filterVaultLogRecordsByDate, sortVaultLogRecordsDesc } from '../vaultLog';
 import {
 	renderRecordListInto,
 	renderRecordSummaryRow,
@@ -35,6 +35,8 @@ export class LifeHomeView extends ItemView {
 	/** 目录树收起集(共享渲染层按「记录id::路径」记键) */
 	private collapsedDirs = new Set<string>();
 	private settingsOpen = false;
+	/** 库记录日期筛选(2026-11-21 用户):yyyy-mm-dd,''=全部;只存视图 UI state,不落盘 */
+	private filterDate = '';
 
 	constructor(leaf: WorkspaceLeaf, private plugin: LifePlugin) {
 		super(leaf);
@@ -106,10 +108,34 @@ export class LifeHomeView extends ItemView {
 			sec1.createDiv({ cls: 'life-home-muted', text: '还没有任何记录。点「记录库变化」打第一笔。' });
 		}
 
-		// ---- 库记录列表(最近 10 条,点击展开明细) ----
+		// ---- 库记录列表(倒序;日期筛选 2026-11-21 用户,与独立库记录面板同款) ----
 		const sec2 = contentEl.createDiv({ cls: 'life-home-section' });
 		sec2.createDiv({ cls: 'life-home-sec-title', text: '库记录' });
-		if (s.vaultLogRecords.length === 0) {
+		// 日期筛选:选日期只看该天,「全部」清空恢复;状态不落盘
+		const filterRow = sec2.createDiv({ cls: 'life-home-head-btns' });
+		const dateInput = filterRow.createEl('input', {
+			cls: 'life-home-date-filter',
+			attr: { type: 'date', 'aria-label': '按日期筛选记录' },
+		});
+		dateInput.value = this.filterDate;
+		dateInput.addEventListener('change', () => {
+			this.filterDate = dateInput.value.trim();
+			this.render();
+		});
+		const clearBtn = filterRow.createEl('button', {
+			cls: 'life-home-mode-btn',
+			text: '全部',
+			attr: { 'aria-label': '清除日期筛选,显示全部记录' },
+		});
+		clearBtn.addEventListener('click', () => {
+			if (this.filterDate === '') return; // 已是全部,避免无谓重绘
+			this.filterDate = '';
+			this.render();
+		});
+		const shown = filterVaultLogRecordsByDate(sortVaultLogRecordsDesc(s.vaultLogRecords), this.filterDate);
+		if (this.filterDate !== '' && shown.length === 0) {
+			sec2.createDiv({ cls: 'life-home-muted', text: `${this.filterDate} 当天没有记录。点「全部」清除筛选。` });
+		} else if (shown.length === 0) {
 			sec2.createDiv({ cls: 'life-home-muted', text: '暂无记录。' });
 		} else {
 			const ui: VaultLogUiState = {
@@ -118,7 +144,7 @@ export class LifeHomeView extends ItemView {
 				settingsOpen: this.settingsOpen,
 				collapsedDirs: this.collapsedDirs,
 			};
-			renderRecordListInto(sec2, s.vaultLogRecords.slice(0, 10), ui, {
+			renderRecordListInto(sec2, shown.slice(0, 10), ui, {
 				onToggleRecord: (id) => {
 					this.detailRecordId = this.detailRecordId === id ? null : id;
 					this.render();
