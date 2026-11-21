@@ -298,7 +298,7 @@ export class MyAdapter {
     }
 
     private get gitDir(): string {
-        return this.plugin.settings.gitDir || ".git";
+        return this.plugin.settings.gitDir || this.plugin.resolvedGitPointer || ".git";
     }
 
     private getIndexPath(): string {

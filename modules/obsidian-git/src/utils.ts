@@ -1,7 +1,7 @@
 import * as cssColorConverter from "css-color-converter";
 import { spawn, type SpawnOptionsWithoutStdio } from "child_process";
-import type { App, ItemView, RGB, WorkspaceLeaf } from "obsidian";
-import { Keymap, Menu, moment, TFile } from "obsidian";
+import type { App, DataAdapter, ItemView, RGB, WorkspaceLeaf } from "obsidian";
+import { Keymap, Menu, moment, normalizePath, TFile } from "obsidian";
 import { BINARY_EXTENSIONS } from "./constants";
 
 type WorkspaceRootWithSide = {
@@ -324,4 +324,38 @@ export function spawnAsync(
             });
         });
     });
+}
+
+/**
+ * 解析库的 .git 指针文件(2026-11-21 用户):`.git` 是文件且内容为
+ * `gitdir: <路径>`(工作树/外置 gitdir 布局)时返回解析后的 gitdir 路径;
+ * 常规 .git 目录、指针指向 URL、读取失败一律返回 null(调用方回退原行为)。
+ * baseDir 为库内仓库根(库相对路径,如 "" = 库根);返回路径尽量库相对
+ * (指针相对路径按 baseDir 解析),指向库外时原样返回绝对路径。
+ *
+ * 为什么需要:桌面 simple-git 的真 git 会透明跟随指针文件,但移动端
+ * isomorphic-git 是纯 JS 实现、不会跟,各处的 `.git` 路径推导也会错——
+ * 统一解析后两条路径行为一致。
+ */
+export async function resolveGitPointerFile(
+    adapter: DataAdapter,
+    baseDir: string,
+): Promise<string | null> {
+    const dotGit = normalizePath(baseDir && baseDir !== "/" ? `${baseDir}/.git` : ".git");
+    try {
+        const stat = await adapter.stat(dotGit);
+        if (!stat || stat.type !== "file") return null;
+        const content = await adapter.read(dotGit);
+        const m = content.match(/^\s*gitdir:\s*(\S.*?)\s*$/m);
+        if (!m) return null;
+        const raw = m[1].trim().replace(/\\/g, "/");
+        if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return null;
+        if (/^[a-zA-Z]:\//.test(raw) || raw.startsWith("/")) return raw.replace(/\/$/, "");
+        return normalizePath(baseDir && baseDir !== "/" ? `${baseDir}/${raw}` : raw).replace(
+            /\/$/,
+            ""
+        );
+    } catch {
+        return null;
+    }
 }

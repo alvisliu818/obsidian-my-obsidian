@@ -51,6 +51,8 @@ import { EditorIntegration } from "./editor/editorIntegration";
 import { runGitAction, type GitActionResult } from "./gitAction";
 import { GitActions } from "./gitActions";
 
+import { resolveGitPointerFile } from "./utils";
+
 export default class ObsidianGit extends Plugin {
     gitActions = new GitActions(this);
     gitManager!: GitManager;
@@ -169,6 +171,9 @@ export default class ObsidianGit extends Plugin {
     }
 
     refreshUpdatedHead() {}
+
+    /** 解析出的 .git 指针文件("gitdir: 路径")目标;null = 常规布局/无指针。 */
+    resolvedGitPointer: string | null = null;
 
     async onload() {
         console.log(
@@ -556,6 +561,22 @@ export default class ObsidianGit extends Plugin {
             // avoid any issues if `init` is called directly.
             return;
         }
+        // .git 指针文件解析(2026-11-21 用户):.git 是 "gitdir: 路径" 文件的
+        // 外置 gitdir 布局。管理器与 MyAdapter 统一读此缓存;设置显式给了
+        // gitDir 时以设置为准。指针指向库外时,移动端 isomorphic-git 无访问
+        // 权限——那本就不是移动端可用的布局。
+        try {
+            this.resolvedGitPointer = await resolveGitPointerFile(
+                this.app.vault.adapter,
+                this.settings.basePath || ""
+            );
+        } catch (e) {
+            this.displayError(e);
+        }
+        if (this.resolvedGitPointer)
+            this.displayMessage(
+                `ObsidianGit: .git pointer file → ${this.resolvedGitPointer}`
+            );
         this.gitReady = false;
         this.repositoryMissing = false;
         this.app.workspace.trigger("obsidian-git:repository-state-changed");

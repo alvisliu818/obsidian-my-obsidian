@@ -121,18 +121,30 @@ export class GitActions {
                     return { status: "not-found" };
                 }
 
+                // .git 指针文件(2026-11-21):.git 是 "gitdir: 路径" 文件时只摘
+                // 指针本身;真实 gitdir 可能在库外/被其他工作树共享,绝不动。
+                const dotGitStat = await this.plugin.app.vault.adapter.stat(
+                    repositoryPath
+                );
+                const isPointerFile = dotGitStat?.type === "file";
+
                 const shouldDelete =
                     (await new GeneralModal(this.plugin, {
                         options: ["NO", "YES"],
-                        placeholder:
-                            "Do you really want to delete the repository (.git directory)? This action cannot be undone.",
+                        placeholder: isPointerFile
+                            ? ".git is a pointer file — only the pointer will be removed; the external git directory it points to will be left untouched. Continue?"
+                            : "Do you really want to delete the repository (.git directory)? This action cannot be undone.",
                         onlySelection: true,
                     }).openAndGetResult()) === "YES";
                 if (!shouldDelete) {
                     return { status: "cancelled" };
                 }
 
-                await this.plugin.app.vault.adapter.rmdir(repositoryPath, true);
+                if (isPointerFile) {
+                    await this.plugin.app.vault.adapter.remove(repositoryPath);
+                } else {
+                    await this.plugin.app.vault.adapter.rmdir(repositoryPath, true);
+                }
                 return { status: "deleted" };
             }
         );

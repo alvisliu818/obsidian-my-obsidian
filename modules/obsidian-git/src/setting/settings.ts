@@ -818,7 +818,7 @@ export class ObsidianGitSettingsTab extends PluginSettingTab {
                     },
                     {
                         name: "Custom Git directory path (instead of .git)",
-                        desc: "Resolved from the custom base path or vault root. Restart Obsidian to apply. Use backslashes on Windows.",
+                        desc: "Resolved from the custom base path or vault root. Restart Obsidian to apply. Use backslashes on Windows. Leave empty to auto-detect a `.git` pointer file (`gitdir: <path>`) in the repo root.",
                         control: {
                             type: "text",
                             key: "gitDir",

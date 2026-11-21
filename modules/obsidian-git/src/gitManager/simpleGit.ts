@@ -65,7 +65,8 @@ export class SimpleGit extends GitManager {
 
             const pathPaths = this.plugin.localStorage.getPATHPaths();
             const envVars = this.plugin.localStorage.getEnvVars();
-            const gitDir = this.plugin.settings.gitDir;
+            const gitDir =
+                this.plugin.settings.gitDir || this.plugin.resolvedGitPointer;
             const envs = { ...process.env };
             if (pathPaths.length > 0) {
                 const joinedPath =
@@ -75,7 +76,17 @@ export class SimpleGit extends GitManager {
                 envs["PATH"] = joinedPath;
             }
             if (gitDir) {
-                envs["GIT_DIR"] = gitDir;
+                // GIT_DIR 相对值由 git 按 cwd(basePath)解析——仓库不是库根时
+                // 会错位,统一转绝对路径再给(指针文件解析出的库相对路径同理)。
+                envs["GIT_DIR"] =
+                    /^[a-zA-Z]:[\/\\]/.test(gitDir) || gitDir.startsWith("/")
+                        ? gitDir
+                        : path.join(
+                              (this.plugin.app.vault.adapter as unknown as {
+                                  basePath?: string;
+                              }).basePath ?? "",
+                              gitDir
+                          );
                 envs["GIT_WORK_TREE"] = basePath;
             }
             for (const envVar of envVars) {

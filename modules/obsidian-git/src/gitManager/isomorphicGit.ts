@@ -78,9 +78,10 @@ export class IsomorphicGit extends GitManager {
         return {
             fs: this.fs,
             dir: this.plugin.settings.basePath || "/",
-            gitdir: this.plugin.settings.gitDir
-                ? this.getGitDirPath()
-                : undefined,
+            gitdir:
+                this.plugin.settings.gitDir || this.plugin.resolvedGitPointer
+                    ? this.getGitDirPath()
+                    : undefined,
             onAuth: () => {
                 return {
                     username:
@@ -935,7 +936,11 @@ export class IsomorphicGit extends GitManager {
 
     private getGitDirPath(): string {
         return normalizePath(
-            this.getRelativeVaultPath(this.plugin.settings.gitDir || ".git")
+            this.getRelativeVaultPath(
+                this.plugin.settings.gitDir ||
+                    this.plugin.resolvedGitPointer ||
+                    ".git"
+            )
         );
     }
 
