@@ -127,6 +127,14 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 	 */
 	private searchEntries: SettingSearchEntry[] | null = null;
 
+	/**
+	 * 上一次搜索词(仅内存,不落盘):点结果里的齿轮进模块二级页再返回时,
+	 * closePage 出栈后框架重放本 tab 的 display()(obsidian.asar 逆向:栈空走
+	 * activeTab.renderTab(),legacy tab 的 settingItems 恒空 → this.display()),
+	 * 输入框与结果区都是全新节点——靠它回填并自动恢复结果。
+	 */
+	private lastQuery = "";
+
 	constructor(
 		app: App,
 		plugin: unknown,
@@ -483,8 +491,20 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 		const resultsEl = containerEl.createDiv({ cls: "my-setting-search-results" });
 		const listEl = containerEl.createDiv({ cls: "my-setting-search-list" });
 		searchInput.addEventListener("input", () => {
+			// 输入每次变化同步记忆(清空即置空);仅内存,不落盘。
+			this.lastQuery = searchInput.value;
 			void this.onSearchInput(searchInput.value, resultsEl, listEl);
 		});
+
+		// 二级页返回恢复(用户 2026-11-21「返回搜索结果没了」):display() 被框架
+		// 重放后搜索 UI 全是新节点,lastQuery 非空则回填并自动触发一次恢复——
+		// 走与正常搜索同一条 onSearchInput 路径,计数条/分组头/活控件完全一致;
+		// searchEntries 重建索引是既有行为,爬取是异步的,期间输入再变化仍由
+		// onSearchInput 的既有防护兜底(以输入框当前值为准)。
+		if (this.lastQuery) {
+			searchInput.value = this.lastQuery;
+			void this.onSearchInput(this.lastQuery, resultsEl, listEl);
+		}
 
 		// 模块行按名称排序（用户 2026-11-20：设置页模块按名称排序）——大小写
 		// 不敏的稳定排序，descriptor 数组本身不动（boot 顺序与 UI 无关）。
