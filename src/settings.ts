@@ -11,6 +11,7 @@
 import type { App, PluginManifest } from "obsidian";
 import { Notice, PluginSettingTab, Setting as SettingCtor } from "obsidian";
 import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
+import { setTitlebarMenuSuppressed } from "./frameTitlebar";
 
 export interface ModuleState {
 	/** Master switch. Off = the module is never loaded at all. */
@@ -23,6 +24,10 @@ export interface MyObsidianSettings {
 	modules: Record<string, ModuleState>;
 	/** 宿主自己的代码文件视图接管哪些扩展名（Markdown 永远不在其中） */
 	codeFileExtensions?: string[];
+	/** true = 无边框窗口顶栏（标题栏条/标签条空白区）右键不再弹「最小化/还原/
+	 *  关闭」窗口菜单（frameTitlebar 拦截）；false/缺省 = 原生行为（弹）。
+	 *  用户 2026-11-21「自定义菜单用开关控制,不去掉了」。 */
+	suppressTitlebarMenu?: boolean;
 }
 
 /** Catalogue of what can be switched on. Order = the order shown in settings. */
@@ -73,7 +78,7 @@ export interface SubPluginLike {
 	saveData?(data: unknown): Promise<void>;
 }
 
-export const DEFAULT_SETTINGS: MyObsidianSettings = { modules: {}, codeFileExtensions: [] };
+export const DEFAULT_SETTINGS: MyObsidianSettings = { modules: {}, codeFileExtensions: [], suppressTitlebarMenu: false };
 
 export function defaultModuleState(desktopOnly: boolean): ModuleState {
 	return { enabled: !desktopOnly || isDesktopApp(), data: {} };
@@ -450,6 +455,23 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 			text: "一个插件、一个 id。每个功能一把大开关：关掉的功能在下次启动前不会占用任何资源；开启即时生效，关闭需重启 Obsidian 才能卸载已载入的模块。点齿轮进入该模块的设置页。",
 			cls: "setting-item-description",
 		});
+
+		// 顶栏右键窗口菜单开关(用户 2026-11-21「自定义菜单用开关控制」):
+		// 开 = 标题栏条/标签条空白右键弹「最小化/还原/关闭」(原生行为);
+		// 关 = 不弹(frameTitlebar 拦截)。标签本身的右键菜单不受影响。
+		new SettingCtor(containerEl)
+			.setName("顶栏右键窗口菜单")
+			.setDesc(
+				"开启后,无边框窗口顶栏（标题栏条/标签条空白区）右键弹「最小化/还原/关闭」窗口菜单;关闭则右键不弹。标签本身的右键菜单不受影响。",
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.host.settings.suppressTitlebarMenu === true ? false : true).onChange(async (value) => {
+					// value = 「弹菜单」;settings 存的是「抑制」语义,取反落盘
+					this.host.settings.suppressTitlebarMenu = !value;
+					setTitlebarMenuSuppressed(!value);
+					await this.host.save();
+				}),
+			);
 
 		// 设置搜索(用户 2026-11-20):输入即搜,结果里是活的设置控件,直接改。
 		const searchWrap = containerEl.createDiv({ cls: "my-setting-search" });
