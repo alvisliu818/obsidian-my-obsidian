@@ -28,7 +28,6 @@ import {
 import VirtualTreePlugin from "../modules/virtual-tree/src/main";
 import CodeEditorPlugin from "../modules/code-editor/src/main";
 import LogseqEditorPlugin from "../modules/md-editor/src/main";
-import { setTitlebarMenuSuppressed } from "./frameTitlebar";
 import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE } from "../modules/md-editor/src/views/ExternalCodeView";
 import BrowserPlugin from "../modules/browser/src/main";
 import JupyterNotebookPlugin from "../modules/jupyter/src/main";
@@ -875,9 +874,6 @@ export default class MyObsidianPlugin extends Plugin {
 		}
 		// ===== 临时内存插桩结束 =====
 		await this.loadSettings();
-		// 顶栏右键窗口菜单开关(用户 2026-11-21「用开关控制,不去掉了」):
-		// suppressTitlebarMenu 开才拦(见 frameTitlebar.ts);默认关=原生行为。
-		setTitlebarMenuSuppressed(this.settings.suppressTitlebarMenu === true);
 		const hostTab = new MyObsidianSettingTab(this.app, this, {
 			settings: this.settings,
 			descriptors: this.descriptors,
@@ -995,8 +991,9 @@ export default class MyObsidianPlugin extends Plugin {
 		// 库内代码块运行（原生编辑器 + 阅读模式）：执行层要 spawn 子进程，桌面端专属
 		if (Platform.isDesktopApp) registerNativeCodeBlockRun(this);
 		registerAtLinkSuggest(this);
-		// 标题栏空白区右键 → Obsidian 风格窗口菜单(替换 Chromium 原生系统菜单)
-		setupTitlebarWindowMenu(this);
+		// 顶栏右键窗口菜单(用户 2026-11-21 终版):开=接管 spacer 弹自定义简版
+		// 菜单;关(默认)=完全放手,主窗口 drag 区原生完整系统菜单/拖窗免费回归。
+		setupTitlebarWindowMenu(this, this.settings.suppressTitlebarMenu === true);
 		// BRAT/市场裸装(只装三件套)时自动下载运行附属(Terminal 先例模式)
 		registerRuntimeBootstrap(this);
 	}
@@ -1020,8 +1017,9 @@ export default class MyObsidianPlugin extends Plugin {
 	 * code files get exactly the same coverage — and the same editor.
 	 *
 	 * An empty setting falls back to the default list (the settings UI promises
-	 * "leave empty to use the default", and loadSettings() never populates it
-	 * from a previous version's raw value, so [] must not mean "nothing").
+	 * "leave empty to use the default", so [] must not mean "nothing"). A saved
+	 * non-empty list survives restarts: loadSettings() restores top-level keys
+	 * from raw (that used to silently drop them — see the comment there).
 	 */
 	private registerCodeFiles(): void {
 		const configured = this.settings.codeFileExtensions;
@@ -1129,7 +1127,11 @@ export default class MyObsidianPlugin extends Plugin {
 			rawModules["md-editor"] = rawModules["logseq"];
 			delete rawModules["logseq"];
 		}
-		this.settings = { modules: {} };
+		// 顶层键(codeFileExtensions/suppressTitlebarMenu 等)必须从 raw 恢复——
+		// 曾经只重建 modules,顶层键重启即丢:开关/扩展名清单改完重启就回默认
+		// (2026-11-21 用户报「开关关了」实测 data.json 里连键都没有,即被此吞)。
+		// modules 单独重建,raw.modules 的其余形状不盲合。
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, raw ?? {}, { modules: {} });
 		for (const d of this.descriptors) {
 			this.settings.modules[d.id] = Object.assign(
 				defaultModuleState(d.desktopOnly),

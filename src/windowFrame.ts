@@ -1,21 +1,22 @@
 /**
- * 标题栏右键窗口菜单(2026-11-20 用户报「主库右键系统菜单变很丑」)。
+ * 标题栏 spacer 接管，受「顶栏右键窗口菜单」开关控制（2026-11-21 终版）。
  *
- * 背景:Obsidian 1.14+ 的 frameless 标题栏里,标签栏容器是
- * `-webkit-app-region: drag`——drag 区域右键由 **Chromium 原生**弹 Windows
- * 系统窗口菜单(还原/移动/大小/最小化/最大化/关闭):黑框系统样式,与
- * Obsidian 界面格格不入;且该行为在 native 层,JS 的 preventDefault 拦不住
- * (合成输入实验确认 contextmenu 会派发到页面,但真实输入的系统菜单在
- * native 弹,菜单内容不受渲染进程控制)。
+ * 背景:Obsidian 1.14+ 的 frameless 标题栏里,标签栏空白区
+ * (.workspace-tab-header-spacer)是 `-webkit-app-region: drag`——drag 区域
+ * 右键由 Chromium 弹 Windows 完整系统窗口菜单（还原/移动/大小/最小化/
+ * 最大化/关闭）,样式与 Obsidian 界面格格不入（2026-11-20 用户报「很丑」）。
  *
- * 方案:把标签栏**空白区**(.workspace-tab-header-spacer)改为 no-drag
- * (非 drag 区 Chromium 不弹系统菜单),在此区域自接管:
- *  - 右键 → Obsidian Menu(最小化/最大化·还原/关闭,风格与界面统一;
- *    关闭走 window.close() 与标题栏 X 同路,保留未保存三选一流程);
- *  - 左键拖动 → 自实现拖窗(electron.remote 同步 IPC,按 rAF 节流;
- *    最大化状态下跳过,不模拟系统「拖动即还原」)。
+ * 开关语义（用户 2026-11-21「主窗口本来就有完整系统菜单,不需要写代码」）:
+ *  - 开（suppressTitlebarMenu=true）→ 接管 spacer:改 no-drag(根除原生菜单),
+ *    右键弹 Obsidian 简版菜单（最小化/最大化·还原/关闭;关闭走 window.close()
+ *    与标题栏 X 同路,保留未保存三选一流程）,左键拖窗自实现（no-drag 后
+ *    spacer 失去原生拖窗;electron.remote 同步 IPC,按 rAF 节流;最大化状态
+ *    跳过,不模拟系统「拖动即还原」）。
+ *  - 关（false/缺省）→ **完全放手**:样式与监听器全部撤除,spacer 恢复
+ *    drag——右键完整系统菜单、左键拖窗都是主窗口原生行为,零代码。
  *
- * 标签页本体与其余 titlebar 区域保持 drag:拖窗口、标签操作都原样。
+ * 标签页本体与其余 titlebar 区域永远不动:拖窗口、标签操作、标签右键菜单
+ * 两种状态下都原样。
  */
 import { Menu, Platform, type Plugin } from 'obsidian';
 
@@ -36,15 +37,20 @@ function currentWindow(): ElectronWin | null {
 	}
 }
 
-export function setupTitlebarWindowMenu(plugin: Plugin): void {
+/** 开关的运行时入口:设置页 toggle 与 onload 初始态都走这里(幂等)。 */
+let applyTakeover: ((on: boolean) => void) | null = null;
+
+export function setTitlebarMenuSuppressed(on: boolean): void {
+	applyTakeover?.(on);
+}
+
+export function setupTitlebarWindowMenu(plugin: Plugin, initial: boolean): void {
 	if (!Platform.isDesktopApp) return;
 	const spacerSel = '.workspace-tab-header-spacer';
 
-	// spacer → no-drag(根除 Chromium 原生系统菜单)
+	// spacer → no-drag(根除 Chromium 原生系统菜单;关=撤样式恢复 drag)
 	const style = document.createElement('style');
 	style.textContent = `${spacerSel} { -webkit-app-region: no-drag !important; }`;
-	document.head.appendChild(style);
-	plugin.register(() => style.remove());
 
 	const inSpacer = (target: EventTarget | null): boolean =>
 		target instanceof Element && target.closest(spacerSel) !== null;
@@ -64,8 +70,6 @@ export function setupTitlebarWindowMenu(plugin: Plugin): void {
 		menu.addItem((item) => item.setTitle('关闭').onClick(() => window.close()));
 		menu.showAtMouseEvent(ev);
 	};
-	document.addEventListener('contextmenu', onCtx, true);
-	plugin.register(() => document.removeEventListener('contextmenu', onCtx, true));
 
 	// 左键拖动:自实现拖窗(rAF 节流,同步 IPC 每帧至多一次)
 	let drag: { mx: number; my: number; wx: number; wy: number } | null = null;
@@ -93,12 +97,29 @@ export function setupTitlebarWindowMenu(plugin: Plugin): void {
 		pendingFrame = 0;
 		drag = null;
 	};
-	document.addEventListener('mousedown', onDown, true);
-	document.addEventListener('mousemove', onMove, true);
-	document.addEventListener('mouseup', onUp, true);
+
+	let applied = false;
+	const apply = (on: boolean): void => {
+		if (on === applied) return;
+		applied = on;
+		if (on) {
+			document.head.appendChild(style);
+			document.addEventListener('contextmenu', onCtx, true);
+			document.addEventListener('mousedown', onDown, true);
+			document.addEventListener('mousemove', onMove, true);
+			document.addEventListener('mouseup', onUp, true);
+		} else {
+			style.remove();
+			document.removeEventListener('contextmenu', onCtx, true);
+			document.removeEventListener('mousedown', onDown, true);
+			document.removeEventListener('mousemove', onMove, true);
+			document.removeEventListener('mouseup', onUp, true);
+		}
+	};
+	apply(initial);
+	applyTakeover = apply;
 	plugin.register(() => {
-		document.removeEventListener('mousedown', onDown, true);
-		document.removeEventListener('mousemove', onMove, true);
-		document.removeEventListener('mouseup', onUp, true);
+		apply(false);
+		applyTakeover = null;
 	});
 }

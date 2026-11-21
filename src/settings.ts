@@ -11,7 +11,7 @@
 import type { App, PluginManifest } from "obsidian";
 import { Notice, PluginSettingTab, Setting as SettingCtor, setIcon } from "obsidian";
 import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
-import { setTitlebarMenuSuppressed } from "./frameTitlebar";
+import { setTitlebarMenuSuppressed } from "./windowFrame";
 
 export interface ModuleState {
 	/** Master switch. Off = the module is never loaded at all. */
@@ -24,9 +24,9 @@ export interface MyObsidianSettings {
 	modules: Record<string, ModuleState>;
 	/** 宿主自己的代码文件视图接管哪些扩展名（Markdown 永远不在其中） */
 	codeFileExtensions?: string[];
-	/** true = 无边框窗口顶栏（标题栏条/标签条空白区）右键不再弹「最小化/还原/
-	 *  关闭」窗口菜单（frameTitlebar 拦截）；false/缺省 = 原生行为（弹）。
-	 *  用户 2026-11-21「自定义菜单用开关控制,不去掉了」。 */
+	/** true = 接管无边框窗口顶栏的标签条空白区:右键弹「最小化/还原/关闭」
+	 *  Obsidian 简版菜单;false/缺省 = 完全放手,原生完整系统菜单与拖窗照旧
+	 *  （主窗口 drag 区自带,无需代码）。用户 2026-11-21 终版定案。 */
 	suppressTitlebarMenu?: boolean;
 }
 
@@ -557,19 +557,21 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		// 顶栏右键窗口菜单开关(用户 2026-11-21「自定义菜单用开关控制,不去掉了」,
-		// 「放到设置页底部」):开 = 标题栏条/标签条空白右键弹「最小化/还原/关闭」
-		// (原生行为);关 = 不弹(frameTitlebar 拦截)。标签本身的右键菜单不受影响。
+		// 顶栏右键窗口菜单开关(用户 2026-11-21 终版定案「主窗口本来就有完整
+		// 系统菜单,不需要写代码」):开 = 接管标签条空白区,右键弹 Obsidian 简版
+		// 菜单(windowFrame 接管);关/缺省 = 完全放手,原生完整系统菜单与拖窗
+		// 照旧。存值语义 = 抑制原生(true=接管),与开关方向一致。标签本身的
+		// 右键菜单不受影响。
 		new SettingCtor(listEl)
 			.setName("顶栏右键窗口菜单")
 			.setDesc(
-				"开启后,无边框窗口顶栏（标题栏条/标签条空白区）右键弹「最小化/还原/关闭」窗口菜单;关闭则右键不弹。标签本身的右键菜单不受影响。",
+				"开启后,无边框窗口顶栏的标签条空白区右键弹「最小化/还原/关闭」Obsidian 简版菜单;关闭则恢复 Windows 原生完整系统菜单（还原/移动/大小/最小化/最大化/关闭）。标签本身的右键菜单不受影响。",
 			)
 			.addToggle((toggle) =>
-				toggle.setValue(this.host.settings.suppressTitlebarMenu === true ? false : true).onChange(async (value) => {
-					// value = 「弹菜单」;settings 存的是「抑制」语义,取反落盘
-					this.host.settings.suppressTitlebarMenu = !value;
-					setTitlebarMenuSuppressed(!value);
+				toggle.setValue(this.host.settings.suppressTitlebarMenu === true).onChange(async (value) => {
+					// value = 开 = 接管(简版菜单);关 = 放手回原生完整菜单。
+					this.host.settings.suppressTitlebarMenu = value;
+					setTitlebarMenuSuppressed(value);
 					await this.host.save();
 				}),
 			);
