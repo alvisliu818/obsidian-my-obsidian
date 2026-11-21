@@ -28,6 +28,7 @@ import {
 import VirtualTreePlugin from "../modules/virtual-tree/src/main";
 import CodeEditorPlugin from "../modules/code-editor/src/main";
 import LogseqEditorPlugin from "../modules/md-editor/src/main";
+import { suppressFrameTitlebarMenu } from "./frameTitlebar";
 import { ExternalCodeView, VIEW_TYPE_EXTERNAL_CODE } from "../modules/md-editor/src/views/ExternalCodeView";
 import BrowserPlugin from "../modules/browser/src/main";
 import JupyterNotebookPlugin from "../modules/jupyter/src/main";
@@ -779,6 +780,9 @@ export default class MyObsidianPlugin extends Plugin {
 	];
 
 	async onload(): Promise<void> {
+		// 去掉自定义顶栏右键菜单(用户 2026-11-21):无边框窗口标题栏条/标签条
+		// 空白区右键不再弹「最小化/还原/关闭」,标签本身的右键菜单保留。
+		suppressFrameTitlebarMenu();
 		// FML/ERH 的账本后端开关:index-core 的 plugin-kv shim 检测此标记,
 		// true 时它们的 LocalDataStore 走本机 sqlite(Runtime/unified-index/
 		// plugin-kv.sqlite),否则回退原 IDB。桌面端恒开(shim 自检 node:sqlite)。
