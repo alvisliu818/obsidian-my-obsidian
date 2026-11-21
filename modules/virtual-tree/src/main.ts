@@ -48,7 +48,7 @@ import {
   type ScanEntry,
   isReadOnlyEntry,
 } from './features/mountFilter';
-import { applyMarkedTabIcons, markLeafTabIcon } from './features/tabIcon';
+import { applyMarkedTabIcons, autoMarkFileTabIcons, markLeafTabIcon } from './features/tabIcon';
 import { parseExtVideoTarget } from './features/videoTimestamps';
 import { parseExtCodeTarget } from './features/codeFileLinks';
 import { ICON_THEME_CHANGED_EVENT } from './extensions/iconThemeLoader';
@@ -255,6 +255,16 @@ export default class VirtualTreePlugin extends Plugin {
           if (!this.settings.vaultVirtualExplorer) return;
           void this.enforceUnifiedPanel();
         }, 400);
+      }),
+    );
+    // 标签页主题图标执法(2026-11-21 用户:标签页文件图标应显示 material
+    // 图标):tabHeader 会被 Obsidian 重建/setIcon 重设,layout-change 后
+    // 全量自动标记+重应用(幂等,400ms 去抖)。
+    let tabIconTimer = 0;
+    this.registerEvent(
+      this.app.workspace.on("layout-change", () => {
+        if (tabIconTimer) window.clearTimeout(tabIconTimer);
+        tabIconTimer = window.setTimeout(() => this.refreshTabIcons(), 400);
       }),
     );
 
@@ -1653,9 +1663,11 @@ menu.addItem((item) =>
    * 标签页头重建/setIcon 重设后 marker 元素丢失,layout-change 时重应用。
    */
   private refreshTabIcons(): void {
-    const leaves = [VIEW_TYPE_IMAGE, VIEW_TYPE_VIDEO].flatMap((t) =>
-      this.app.workspace.getLeavesOfType(t),
-    );
+    // 全量自动标记(2026-11-21 用户:标签页文件图标应显示 material 图标):
+    // 凡视图带文件的 leaf 都交给主题,不再限于库外打开时手动标记的两个视图。
+    const leaves: WorkspaceLeaf[] = [];
+    this.app.workspace.iterateAllLeaves((leaf) => leaves.push(leaf));
+    autoMarkFileTabIcons(leaves);
     applyMarkedTabIcons(this.app, leaves);
   }
 

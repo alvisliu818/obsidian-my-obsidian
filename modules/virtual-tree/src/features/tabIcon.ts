@@ -10,6 +10,7 @@
  * 存在与否判断要不要补——setIcon 重设内容会清掉 marker 元素,重建则是全新
  * 元素,两种丢法都会被下一次重应用接住。
  */
+import { TFile } from 'obsidian';
 import { decideIcon, EXT_ICON_CLASS } from './iconTheme';
 
 /** 标签页图标占位元素类名(marker + 样式钩子)。 */
@@ -32,6 +33,39 @@ interface LeafLike {
 /** 打开外部文件后调用:把这个 leaf 的标签页图标标记为主题图标候选。 */
 export function markLeafTabIcon(leaf: unknown, info: TabIconInfo): void {
   (leaf as LeafLike).__lgTabIconInfo = info;
+}
+
+/**
+ * 全量自动标记(2026-11-21 用户「标签页文件图标应该显示 material 图标」):
+ * 凡视图带文件的 leaf(原生 markdown / 块编辑器 / 库内外代码文件等)一律
+ * 覆写候选信息——鸭式探测,不 import 其他模块。带文件的叶**每次都覆写**
+ * (同叶换文件后旧信息会被自动纠正);视图不带文件的叶清除候选(避免同叶
+ * 切到面板后旧文件图标残留)。主题不认识的文件仍保留 Obsidian 原图标。
+ */
+export function autoMarkFileTabIcons(leaves: unknown[]): void {
+  for (const leaf of leaves) {
+    const l = leaf as LeafLike & {
+      view?: {
+        file?: unknown;
+        abs?: unknown;
+        fileName?: unknown;
+        file_path?: unknown;
+      } | null;
+    };
+    const v = l.view;
+    let info: TabIconInfo | null = null;
+    if (v?.file instanceof TFile) {
+      info = { name: v.file.name, rel: v.file.path };
+    } else if (v && typeof v.fileName === 'string' && v.fileName && typeof v.abs === 'string' && v.abs) {
+      // 库外/库内代码文件视图(ExternalCodeView):abs 可能在库外,直接给主题
+      info = { name: v.fileName, rel: v.abs };
+    } else if (v && typeof v.file_path === 'string' && v.file_path) {
+      const name = v.file_path.split(/[\\/]/).pop() ?? v.file_path;
+      info = { name, rel: v.file_path };
+    }
+    if (info) l.__lgTabIconInfo = info;
+    else delete l.__lgTabIconInfo;
+  }
 }
 
 /**
