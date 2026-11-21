@@ -288,6 +288,16 @@ export interface BlockEditorSettings {
   refsLinkedDefaultCollapsed: boolean;
   refsUnlinkedDefaultCollapsed: boolean;
   /**
+   * 底部链接引用区总开关(2026-11-21 用户):false = 整块不渲染(Linked/
+   * Unlinked references 都不出现在页面底部)。
+   */
+  pageReferencesEnabled: boolean;
+  /**
+   * 引用区布局:stacked = 上下堆叠(默认,与 v0.2.5 一致);dual = 左右双
+   * 面板(窄容器自动回落单列,见 styles.css 的 is-dual 规则)。
+   */
+  pageReferencesLayout: 'stacked' | 'dual';
+  /**
    * 布局就绪后后台预热未链接引用的签名索引。
    *
    * 未链接引用靠「按文件分片的 128 位字符签名」剪枝（见 BlockIndex）。分片
@@ -474,6 +484,8 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   // Unlinked references 是全库线性扫描，大库上每次开页几百 ms~数秒，默认折叠
   // （打开时不跑查询，点标题栏展开才跑）。需要默认展开的在设置里关掉本项。
   refsUnlinkedDefaultCollapsed: true,
+  pageReferencesEnabled: true,
+  pageReferencesLayout: 'stacked',
   refsDefaultCollapsed: false,
   // 预热的成本是按 8ms 分片让出主线程的后台 CPU，用户几乎无感，换来首次
   // 展开 Unlinked references 也是 ~10ms。不想常驻那点内存的可关掉。

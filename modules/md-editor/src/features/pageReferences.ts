@@ -48,9 +48,16 @@ export function renderPageReferences(
 ): void {
   containerEl.querySelector(`:scope > .${REFERENCES_SECTION_CLASS}`)?.remove();
   if (!currentPath) return;
+  // 总开关(2026-11-21 用户):关 = 底部引用区整块不渲染。
+  if (plugin.settings.pageReferencesEnabled === false) return;
   const state = stateFor(plugin);
 
-  const wrapper = containerEl.createEl('div', { cls: REFERENCES_SECTION_CLASS });
+  // 布局(2026-11-21 用户):stacked = 上下堆叠(默认);dual = 左右双面板,
+  // 窄容器由 CSS 自动回落单列。
+  const dual = plugin.settings.pageReferencesLayout === 'dual';
+  const wrapper = containerEl.createEl('div', {
+    cls: dual ? `${REFERENCES_SECTION_CLASS} is-dual` : REFERENCES_SECTION_CLASS,
+  });
 
   // --- Linked references (collapsible) ---
   const linkedHead = wrapper.createEl('div', { cls: 'refs-collapse-header', attr: { 'aria-expanded': String(!state.linked) } });
