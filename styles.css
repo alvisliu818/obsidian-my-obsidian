@@ -14413,7 +14413,12 @@ body.is-tablet.scrolling-overlay-buttons-top .scrolling-overlay-button-container
 	border-bottom: 1px solid var(--background-modifier-border);
     display: flex;
     align-items: center;
+    /* 溢出时安全居中:普通 center 会把左侧溢出内容裁成不可达(滚不过去),
+       safe center 在溢出时回退 flex-start——整组按钮可横向滚动
+       (用户 2026-11-21 顶部工具栏超出可视范围也可以滚动)。
+    */
     justify-content: center;
+    justify-content: safe center;
     height: 32px;
     padding: 0 10px;
     flex-shrink: 0;
@@ -63695,4 +63700,13 @@ body.is-mobile
   color: var(--text-warning, #d9a44a);
   display: block;
   margin: 2px 0;
+}
+
+/* abstract-folder 搜索头:窄面板下超宽同样可滚无条(同工具栏 2026-11-21) */
+.abstract-folder-search-header {
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+.abstract-folder-search-header::-webkit-scrollbar {
+	display: none;
 }
