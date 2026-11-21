@@ -1,6 +1,10 @@
 /**
- * Backlinks panel (right sidebar): blocks in other files that link to the
- * currently active file. Click an entry to jump to the referencing block.
+ * References side panels (native sidebar panes, 2026-11-21 用户「跟原生一样的
+ * 侧边面板」): one class, two fixed-mode instances —
+ *   linked   → logseq-backlink-panel  「Linked references」([[wiki links]] 反链)
+ *   unlinked → logseq-unlinked-mentions-panel「Unlinked references」(纯文本提及)
+ * 内容跟随当前活动文件;点条目跳转到引用块/文件。(原单面板双 tab 版被拆开,
+ * 用户要的是两个独立面板,与原生 Backlinks 面板同款停靠方式。)
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
@@ -8,27 +12,29 @@ import type LogseqEditorPlugin from '../main';
 import { plainText } from '../features/query';
 
 export const VIEW_TYPE_BACKLINK_PANEL = 'logseq-backlink-panel';
+export const VIEW_TYPE_UNLINKED_PANEL = 'logseq-unlinked-mentions-panel';
 
 export class BacklinkPanelView extends ItemView {
   plugin: LogseqEditorPlugin;
   private listEl!: HTMLElement;
   private disposer: (() => void) | null = null;
-  /** 'linked' = [[wiki links]]; 'unlinked' = plain-text title mentions (Logseq parity). */
-  private mode: 'linked' | 'unlinked' = 'linked';
+  /** 'linked' = [[wiki links]]; 'unlinked' = plain-text mentions — 固定模式,一叶一面板。 */
+  private mode: 'linked' | 'unlinked';
 
-  constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
+  constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin, mode: 'linked' | 'unlinked' = 'linked') {
     super(leaf);
     this.plugin = plugin;
+    this.mode = mode;
   }
 
   getViewType(): string {
-    return VIEW_TYPE_BACKLINK_PANEL;
+    return this.mode === 'linked' ? VIEW_TYPE_BACKLINK_PANEL : VIEW_TYPE_UNLINKED_PANEL;
   }
   getDisplayText(): string {
-    return 'Logseq backlinks';
+    return this.mode === 'linked' ? 'Linked references' : 'Unlinked references';
   }
   getIcon(): string {
-    return 'link';
+    return this.mode === 'linked' ? 'link' : 'unlink';
   }
 
   onload(): void {
@@ -44,15 +50,6 @@ export class BacklinkPanelView extends ItemView {
   async onOpen(): Promise<void> {
     this.contentEl.empty();
     this.contentEl.addClass('logseq-panel');
-    const header = this.contentEl.createEl('div', { cls: 'logseq-panel-header' });
-    const tabs = header.createEl('div', { cls: 'logseq-panel-tabs' });
-    for (const f of [{ key: 'linked', label: 'Linked mentions' }, { key: 'unlinked', label: 'Unlinked mentions' }] as const) {
-      const t = tabs.createEl('div', { cls: 'logseq-panel-tab', text: f.label });
-      t.addEventListener('click', () => {
-        this.mode = f.key;
-        this.renderList();
-      });
-    }
     this.listEl = this.contentEl.createEl('div', { cls: 'logseq-panel-list' });
     this.renderList();
   }

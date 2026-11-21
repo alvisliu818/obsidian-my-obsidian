@@ -30,7 +30,7 @@ import { BlockIndexDaemonClient, forwardVaultEvents } from '../../unified-search
 import { PrologQueryBuilderModal } from './features/prologBuilder';
 import { prologTemplate } from './features/prologQuery';
 import { TodoPanelView, VIEW_TYPE_TODO_PANEL } from './panels/todoPanel';
-import { BacklinkPanelView, VIEW_TYPE_BACKLINK_PANEL } from './panels/backlinkPanel';
+import { BacklinkPanelView, VIEW_TYPE_BACKLINK_PANEL, VIEW_TYPE_UNLINKED_PANEL } from './panels/backlinkPanel';
 import { TagPanelView, VIEW_TYPE_TAG_PANEL } from './panels/tagPanel';
 import { BlockSearchModal } from './panels/blockSearch';
 import { FlashcardPanelView, VIEW_TYPE_FLASHCARD_PANEL } from './panels/flashcardPanel';
@@ -244,7 +244,8 @@ export default class LogseqEditorPlugin extends Plugin {
 
     this.registerView(VIEW_TYPE_BLOCK_EDITOR, (leaf) => new BlockEditorView(leaf, this));
     this.registerView(VIEW_TYPE_TODO_PANEL, (leaf) => new TodoPanelView(leaf, this));
-    this.registerView(VIEW_TYPE_BACKLINK_PANEL, (leaf) => new BacklinkPanelView(leaf, this));
+    this.registerView(VIEW_TYPE_BACKLINK_PANEL, (leaf) => new BacklinkPanelView(leaf, this, 'linked'));
+    this.registerView(VIEW_TYPE_UNLINKED_PANEL, (leaf) => new BacklinkPanelView(leaf, this, 'unlinked'));
     this.registerView(VIEW_TYPE_TAG_PANEL, (leaf) => new TagPanelView(leaf, this));
     this.registerView(VIEW_TYPE_FLASHCARD_PANEL, (leaf) => new FlashcardPanelView(leaf, this));
     this.registerView(VIEW_TYPE_EXTERNAL_FILE, (leaf) => new ExternalFileView(leaf, this));
@@ -662,8 +663,14 @@ export default class LogseqEditorPlugin extends Plugin {
 
     this.addCommand({
       id: 'open-backlink-panel',
-      name: 'Open the backlinks panel',
+      name: 'Open the linked references panel',
       callback: () => void this.activatePanel(VIEW_TYPE_BACKLINK_PANEL),
+    });
+
+    this.addCommand({
+      id: 'open-unlinked-mentions-panel',
+      name: 'Open the unlinked references panel',
+      callback: () => void this.activatePanel(VIEW_TYPE_UNLINKED_PANEL),
     });
 
     this.addCommand({
@@ -995,7 +1002,7 @@ export default class LogseqEditorPlugin extends Plugin {
       }
     }
     // Detach plugin-owned side panels.
-    for (const vt of [VIEW_TYPE_TODO_PANEL, VIEW_TYPE_BACKLINK_PANEL, VIEW_TYPE_TAG_PANEL, VIEW_TYPE_FLASHCARD_PANEL]) {
+    for (const vt of [VIEW_TYPE_TODO_PANEL, VIEW_TYPE_BACKLINK_PANEL, VIEW_TYPE_UNLINKED_PANEL, VIEW_TYPE_TAG_PANEL, VIEW_TYPE_FLASHCARD_PANEL]) {
       for (const leaf of this.app.workspace.getLeavesOfType(vt)) leaf.detach();
     }
   }

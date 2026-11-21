@@ -864,7 +864,8 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       .setName('底部链接引用区')
       .setDesc(
         '页面底部的 Linked references / Unlinked references 区总开关。' +
-          '关闭后整块不再渲染（省掉展开查询的开销），其他功能不受影响。',
+          '关闭后整块不再渲染（省掉展开查询的开销）；要侧栏面板就在区头点' +
+          '「作为侧边面板打开」图标，或用命令「Open the linked/unlinked references panel」。',
       )
       .addToggle((t) =>
         t.setValue(this.plugin.settings.pageReferencesEnabled !== false).onChange(async (v) => {
@@ -880,29 +881,6 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         }),
       );
 
-    new Setting(containerEl)
-      .setName('引用区布局')
-      .setDesc(
-        '上下堆叠 = 现有版式（Linked 在上、Unlinked 在下，各自可折叠）；' +
-          '左右双面板 = 两区并排两栏，容器太窄时自动回落上下堆叠。' +
-          '每个面板的折叠行为不受布局影响。',
-      )
-      .addDropdown((d) => {
-        d.addOption('stacked', '上下堆叠');
-        d.addOption('dual', '左右双面板');
-        d.setValue(this.plugin.settings.pageReferencesLayout === 'dual' ? 'dual' : 'stacked');
-        d.onChange(async (v) => {
-          this.plugin.settings.pageReferencesLayout = v === 'dual' ? 'dual' : 'stacked';
-          await this.plugin.saveSettings();
-          resetReferencesCollapse(this.plugin);
-          for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_BLOCK_EDITOR)) {
-            (leaf.view as BlockEditorView | null)?.refreshReferences?.();
-          }
-          for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_EXTERNAL_BLOCK)) {
-            (leaf.view as { blockEditor?: BlockEditorView | null } | null)?.blockEditor?.refreshReferences?.();
-          }
-        });
-      });
 
     new Setting(containerEl)
       .setName('后台预热未链接引用索引')

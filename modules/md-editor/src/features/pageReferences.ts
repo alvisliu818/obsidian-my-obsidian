@@ -15,6 +15,7 @@ import { perViewState } from '../core/perViewState';
 import type LogseqEditorPlugin from '../main';
 import { renderPageBacklinks } from './pageBacklinks';
 import { renderUnlinkedMentions } from './unlinkedMentions';
+import { VIEW_TYPE_BACKLINK_PANEL, VIEW_TYPE_UNLINKED_PANEL } from '../panels/backlinkPanel';
 
 export const REFERENCES_SECTION_CLASS = 'page-references';
 
@@ -52,18 +53,24 @@ export function renderPageReferences(
   if (plugin.settings.pageReferencesEnabled === false) return;
   const state = stateFor(plugin);
 
-  // 布局(2026-11-21 用户):stacked = 上下堆叠(默认);dual = 左右双面板,
-  // 窄容器由 CSS 自动回落单列。
-  const dual = plugin.settings.pageReferencesLayout === 'dual';
-  const wrapper = containerEl.createEl('div', {
-    cls: dual ? `${REFERENCES_SECTION_CLASS} is-dual` : REFERENCES_SECTION_CLASS,
-  });
+  const wrapper = containerEl.createEl('div', { cls: REFERENCES_SECTION_CLASS });
 
   // --- Linked references (collapsible) ---
   const linkedHead = wrapper.createEl('div', { cls: 'refs-collapse-header', attr: { 'aria-expanded': String(!state.linked) } });
   const linkedChevron = linkedHead.createEl('span', { cls: 'refs-chevron' });
   setIcon(linkedChevron, state.linked ? 'chevron-right' : 'chevron-down');
   linkedHead.createEl('span', { cls: 'refs-collapse-title', text: 'Linked references' });
+  // 原生侧边面板入口(2026-11-21 用户「跟原生一样的侧边面板」):区头小图标,
+  // 点开停靠侧栏的同名面板,不触发折叠。
+  const linkedPop = linkedHead.createEl('span', {
+    cls: 'refs-open-panel clickable-icon',
+    attr: { 'aria-label': '作为侧边面板打开' },
+  });
+  setIcon(linkedPop, 'panel-right');
+  linkedPop.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    void plugin.activatePanel(VIEW_TYPE_BACKLINK_PANEL);
+  });
   const linkedBody = wrapper.createEl('div', { cls: 'refs-collapse-body' });
   if (state.linked) linkedBody.addClass('is-collapsed');
   // 折叠的区不渲染查询体（懒加载）：折叠时打开笔记只画标题栏，不跑反链
@@ -80,6 +87,15 @@ export function renderPageReferences(
   const unlinkedChevron = unlinkedHead.createEl('span', { cls: 'refs-chevron' });
   setIcon(unlinkedChevron, state.unlinked ? 'chevron-right' : 'chevron-down');
   unlinkedHead.createEl('span', { cls: 'refs-collapse-title', text: 'Unlinked references' });
+  const unlinkedPop = unlinkedHead.createEl('span', {
+    cls: 'refs-open-panel clickable-icon',
+    attr: { 'aria-label': '作为侧边面板打开' },
+  });
+  setIcon(unlinkedPop, 'panel-right');
+  unlinkedPop.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    void plugin.activatePanel(VIEW_TYPE_UNLINKED_PANEL);
+  });
   const unlinkedBody = wrapper.createEl('div', { cls: 'refs-collapse-body' });
   if (state.unlinked) unlinkedBody.addClass('is-collapsed');
   else renderUnlinkedMentions(unlinkedBody, plugin, currentPath, fileBasename);

@@ -2443,16 +2443,6 @@ body.block-touch-dragging {
 /* --- collapsible references section (v0.2.5) --- */
 .page-references { margin-top: 28px; }
 
-/* 双面板(2026-11-21 用户):左右两栏;auto-fit + minmax 让窄容器自动回落
-   单列(块编辑器叶宽不定,容器查询不用管——这一条就够)。面板各自可折叠,
-   折叠态 display:none 不占栏位。 */
-.page-references.is-dual {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(400px, 100%), 1fr));
-  gap: 4px 24px;
-  align-items: start;
-}
-.page-references.is-dual .refs-collapse-header { margin-top: 0; }
 
 .refs-collapse-header {
   display: flex;
@@ -2468,6 +2458,10 @@ body.block-touch-dragging {
   user-select: none;
 }
 .refs-collapse-header:hover { color: var(--text-normal); }
+/* 区头「作为侧边面板打开」小图标:淡显,hover/面板打开后可见性提升 */
+.refs-open-panel { display: inline-flex; margin-left: auto; opacity: 0.45; }
+.refs-open-panel:hover { opacity: 1; }
+.refs-collapse-header:hover .refs-open-panel { opacity: 0.75; }
 .refs-collapse-title { text-transform: uppercase; letter-spacing: 0.05em; font-size: var(--font-ui-smaller); }
 .refs-chevron { display: inline-flex; }
 .refs-chevron svg { width: 12px; height: 12px; }
