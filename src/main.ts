@@ -286,11 +286,22 @@ export default class MyObsidianPlugin extends Plugin {
 		{
 			// 自研(2026-11-19)：生活面板——倒计时/正计时/时钟/任务/习惯/代办/大日历/倒数日/计划/计时/记账。
 			// 全部落模块数据片；计时运行态墙钟法跨重启,模块内 1s 哨兵到点提醒。
+			// 2026-11-21 momentum 并入本模块(companion 伴生启停,数据片嵌在
+			// data.momentum,设置页走 subPages 齿轮)——上游 jnagase + atinss(均 MIT,
+			// 见 modules/momentum/NOTICE)。
 			id: "life",
 			name: "Life",
-			summary: "生活面板：时钟、计时（倒计时/正计时/番茄钟）、倒数日、代办、任务、习惯打卡、大日历、计划、记账。",
+			summary:
+				"生活面板：时钟、计时（倒计时/正计时/番茄钟）、倒数日、代办、任务、习惯打卡、大日历、计划、记账；并入 Momentum（习惯/任务/健身/营养看板、Google Tasks 与 Drive 同步、日历/日程/财务/hello 代码块）。",
 			desktopOnly: false,
 			cls: LifePlugin as unknown as ModuleDescriptor["cls"],
+			companion: {
+				id: "momentum",
+				name: "Momentum",
+				cls: MomentumPlugin as unknown as ModuleDescriptor["cls"],
+			},
+			subPages: [{ id: "momentum", name: "Momentum" }],
+			internalTabIds: ["my-worklife-calendar"],
 		},
 		{
 			id: "doc-assist",
@@ -634,20 +645,6 @@ export default class MyObsidianPlugin extends Plugin {
 				"动态虚拟文件夹：按父级关系把散落各处的笔记聚成虚拟文件夹，树形/列式两种版式、拖拽整理、文件夹结构生成与转换（冲突消解、分组管理）、图标与配色自定义。上游 Erfan Rahmani（GPL-3.0）。",
 			desktopOnly: true,
 			cls: AbstractFolderPlugin as unknown as ModuleDescriptor["cls"],
-		},
-		{
-			// Two upstreams merged into one project (see modules/momentum/NOTICE):
-			// Momentum Life (jnagase, MIT) is the base; WorkLife Calendar (atinss,
-			// MIT, 145 commits grafted as a second parent) runs inside it as an
-			// in-process sub-plugin — one manifest, one data.json, the calendar's
-			// settings living under a "worklife" key of this module's slice.
-			id: "momentum",
-			name: "Momentum",
-			summary:
-				"生活仪表盘：习惯/任务/健身/营养/学习看板、Google Tasks 与 Google Drive 同步、快速访问面板；并入 WorkLife Calendar 后另有日历/日程/看板/习惯分析/财务/天气视图与 dashboard、hello 代码块。上游 jnagase + atinss（均 MIT）。",
-			desktopOnly: false,
-			internalTabIds: ["my-worklife-calendar"],
-			cls: MomentumPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
 			// 库首页（ondreu/Hearth，MIT）——搜索/仪表盘/启动器三合一。
@@ -1127,6 +1124,27 @@ export default class MyObsidianPlugin extends Plugin {
 			rawModules["md-editor"] = rawModules["logseq"];
 			delete rawModules["logseq"];
 		}
+		// 一次性合并迁移(2026-11-21 momentum 并入 life):旧 momentum 独立数据片
+		// 整体嵌进 life.data.momentum 子键——settings.modules 重建只认 descriptors,
+		// momentum 键删除后不迁移即被整片丢弃(习惯/Drive/worklife 数据全没)。
+		// life 片里已有 momentum 子键则以新为准(只跑一次);momentum 的 enabled
+		// 开关废弃(随 life 启停)。
+		if (rawModules && rawModules["momentum"]) {
+			const lifeState = (rawModules["life"] ?? {}) as Record<string, unknown>;
+			const lifeData = (lifeState.data && typeof lifeState.data === "object"
+				? lifeState.data
+				: {}) as Record<string, unknown>;
+			if (!lifeData.momentum) {
+				const momState = rawModules["momentum"] as { data?: unknown } | undefined;
+				lifeData.momentum =
+					momState && typeof momState === "object" && "data" in momState
+						? (momState.data ?? {})
+						: (momState ?? {});
+			}
+			lifeState.data = lifeData;
+			rawModules["life"] = lifeState;
+			delete rawModules["momentum"];
+		}
 		// 顶层键(codeFileExtensions/suppressTitlebarMenu 等)必须从 raw 恢复——
 		// 曾经只重建 modules,顶层键重启即丢:开关/扩展名清单改完重启就回默认
 		// (2026-11-21 用户报「开关关了」实测 data.json 里连键都没有,即被此吞)。
@@ -1361,6 +1379,43 @@ export default class MyObsidianPlugin extends Plugin {
 			}
 		}
 		this.live.set(d.id, inst);
+		// 伴生子插件(momentum 并入 life,2026-11-21):同宿主 manifest,数据片嵌在
+		// 本模块 data.<id> 子键(迁移自旧独立 modules.<id> 片);设置 tab 截进
+		// capturedTabs 的 <id> 键(设置行 subPages 齿轮直达);实例进 live——
+		// moduleInstance('<id>') 跨模块查询与内层 tab 垫片判定都靠它。
+		if (d.companion) await this.startCompanion(d, state);
+	}
+
+	/** 启动一个伴生子插件(见 startModule 尾注)。 */
+	private async startCompanion(d: ModuleDescriptor, state: ModuleState): Promise<void> {
+		const c = d.companion!;
+		const manifest = { ...this.manifest, name: c.name } as PluginManifest;
+		const inst = new c.cls(this.app as App, manifest);
+		const host = this;
+		const slice = (): Record<string, unknown> =>
+			state.data && typeof state.data === "object"
+				? (state.data as Record<string, unknown>)
+				: {};
+		inst.loadData = async (): Promise<unknown> => slice()[c.id] ?? {};
+		inst.saveData = async (data: unknown): Promise<void> => {
+			const next = slice();
+			next[c.id] = data;
+			state.data = next;
+			await host.saveSettings();
+		};
+		(inst as { addSettingTab?: (tab: unknown) => void }).addSettingTab = (tab: unknown) => {
+			host.capturedTabs.set(c.id, tab);
+		};
+		const t0 = performance.now();
+		try {
+			await inst.onload();
+		} catch (e) {
+			console.error(`[my-obsidian] companion ${c.id} onload failed`, e);
+			new Notice(`伴生模块 ${c.name} 启动失败，其他功能不受影响（见控制台）`);
+			return;
+		}
+		this.moduleInitMs[c.id] = Math.round(performance.now() - t0);
+		this.live.set(c.id, inst);
 	}
 
 	/**

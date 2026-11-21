@@ -63,6 +63,18 @@ export interface ModuleDescriptor {
 	 * 在设置侧栏单独成栏。
 	 */
 	internalTabIds?: string[];
+	/**
+	 * 随本模块一并启停的伴生子插件（2026-11-21 momentum 并入 life）：宿主在
+	 * 启动本模块后立即启动它，数据片嵌在本模块 data 的以 id 为键的子对象里
+	 * （迁移自旧的独立 modules.<id> 片），设置 tab 截进 capturedTabs 的
+	 * <id> 键——设置列表不再单独成行，入口走 subPages。
+	 */
+	companion?: { id: string; cls: new (app: App, manifest: unknown) => SubPluginLike; name: string };
+	/**
+	 * 本模块设置页之外的附属设置页（如并入 life 的 momentum）：模块行上多画
+	 * 一个齿轮直达 capturedTabs.get(id)，设置搜索也把这些页爬进索引。
+	 */
+	subPages?: Array<{ id: string; name: string }>;
 	/** The module's own Plugin class, imported from modules/<id>/src/main. */
 	cls: new (app: App, manifest: unknown) => SubPluginLike;
 }
@@ -346,6 +358,12 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 		for (const m of this.host.descriptors) {
 			const tab = this.host.capturedTabs.get(m.id) as CrawlableTab | undefined;
 			if (tab) items.push({ id: m.id, label: m.name, tab });
+			// 附属设置页(momentum 并入 life):同主页一起爬进索引,搜索按
+			// 附属页自己的名字分组,齿轮直达该页。
+			for (const sp of m.subPages ?? []) {
+				const spTab = this.host.capturedTabs.get(sp.id) as CrawlableTab | undefined;
+				if (spTab) items.push({ id: sp.id, label: sp.name, tab: spTab });
+			}
 		}
 		for (const [key, tab] of this.host.capturedTabs) {
 			if (!key.startsWith("inner:")) continue;
@@ -513,7 +531,7 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 		);
 		for (const m of sortedDescriptors) {
 			const state = this.host.settings.modules[m.id] ?? defaultModuleState(m.desktopOnly);
-			new SettingCtor(listEl)
+			const row = new SettingCtor(listEl)
 				.setName(m.name)
 				.setDesc(m.summary)
 				.addToggle((toggle) =>
@@ -533,6 +551,16 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 						.setTooltip(`${m.name} 设置`)
 						.onClick(() => this.openModulePage(m.id, m.name)),
 				);
+			// 附属设置页(momentum 并入 life,2026-11-21):每页一枚齿轮直达,
+			// 与主齿轮同款样式——并入的模块不再单独占行。
+			for (const sp of m.subPages ?? []) {
+				row.addExtraButton((btn) =>
+					btn
+						.setIcon("settings-2")
+						.setTooltip(`${sp.name} 设置`)
+						.onClick(() => this.openModulePage(sp.id, sp.name)),
+				);
+			}
 		}
 
 		// 内层子插件实例的设置页（addTab 垫片截获的 inner: 键）：没有对应的
