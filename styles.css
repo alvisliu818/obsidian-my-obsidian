@@ -63673,22 +63673,22 @@ body.is-mobile
   padding: 4px 0;
   border-bottom: 1px solid var(--background-modifier-border);
 }
-.my-setting-search-chip {
-  flex: 0 0 auto;
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: var(--background-secondary);
-  border: 1px solid var(--background-modifier-border);
-  color: var(--text-muted);
-  cursor: pointer;
-  max-width: 140px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* 按模块分组(用户 2026-11-21):模块名独立成栏,组内条目不带左侧芯片 */
+.my-setting-search-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  column-gap: 8px;
+  margin-top: 14px;
+  padding: 4px 0 2px;
+  border-bottom: 1px solid var(--background-modifier-border);
 }
-.my-setting-search-chip:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
-.my-setting-search-node { flex: 1 1 auto; min-width: 0; }
+.my-setting-search-group-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.my-setting-search-group-gear { flex: 0 0 auto; }
 .my-setting-search-node.setting-item { border: none; padding-top: 6px; padding-bottom: 6px; }
 
 /* 查询阈值(og 80ms)慢查询标记:超预算的结果容器边角提示 */
