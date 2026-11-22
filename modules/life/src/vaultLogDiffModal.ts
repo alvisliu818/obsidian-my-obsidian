@@ -148,6 +148,13 @@ export class VaultLogDiffModal extends Modal {
 			void this.app.workspace.openLinkText(this.path, '', false);
 			this.close();
 		});
+		// 「用 VSCode 打开对比」(2026-11-22 用户):基线写临时文件,
+		// code --diff <基线> <当前> 起原生两栏 diff。
+		const vsBtn = foot.createEl('button', { cls: 'life-home-rec-btn', text: '用 VSCode 打开对比' });
+		vsBtn.addEventListener('click', async () => {
+			const ok = await this.plugin.openRecordDiffInVscode(this.path);
+			if (ok) new Notice('已在 VSCode 打开对比:' + this.path);
+		});
 		const btn = foot.createEl('button', { cls: 'life-home-rec-btn', text: '撤回此文件到上次提交' });
 		btn.addEventListener('click', async () => {
 			const ok = await this.plugin.revertRecordFile(this.path);

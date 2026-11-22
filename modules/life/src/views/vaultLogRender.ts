@@ -363,6 +363,7 @@ export function renderVaultLogSettingsInto(
 				onChange?.();
 			});
 		});
+
 	const toggleRow = (label: string, value: boolean, cb: (v: boolean) => void): void => {
 		const row = container.createDiv({ cls: 'life-home-setting-row' });
 		row.createSpan({ cls: 'life-home-setting-label', text: label });
@@ -383,6 +384,31 @@ export function renderVaultLogSettingsInto(
 			onChange();
 		});
 	};
+	// VSCode 路径(2026-11-22 用户):「用 VSCode 打开对比」钮用的可执行文件;
+	// 留空自动探测(常见安装位置 → PATH 的 code)。
+	if (vl.diffEnabled !== false) textRow(
+		'VSCode 路径',
+		vl.vscodePath ?? '',
+		'留空自动探测;填可执行文件路径(如 D:/Programs/VS Code/bin/code.cmd)',
+		(v) => {
+			vl.vscodePath = v || undefined;
+		},
+	);
+
+	// 对比默认打开方式(2026-11-22 用户):库记录点击修改文件时用哪种对比。
+	// vscode 需本机装有 VSCode 或上方路径有效。
+	if (vl.diffEnabled !== false) new Setting(container)
+		.setName('对比默认打开方式')
+		.setDesc('库记录里点击修改的文件时用什么打开对比。内置对比弹窗 = 行列表或两栏对照(见上);VSCode = 拉起 VSCode 的 diff 视图(需要 VSCode)。')
+		.addDropdown((d) => {
+			d.addOption('modal', '内置对比弹窗');
+			d.addOption('vscode', 'VSCode');
+			d.setValue(vl.diffOpenWith === 'vscode' ? 'vscode' : 'modal');
+			d.onChange(async (v) => {
+				vl.diffOpenWith = v === 'vscode' ? 'vscode' : 'modal';
+				onChange?.();
+			});
+		});
 	toggleRow('自动记录', vl.enabled, (v) => {
 		vl.enabled = v;
 	});

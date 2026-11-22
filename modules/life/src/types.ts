@@ -156,6 +156,13 @@ export interface VaultLogSettings {
 	/** 对比弹窗视图样式(2026-11-22 用户):list = 行级差异列表(原视图);
 	 * split = VSCode 式两栏对照(左基线/右当前)。缺省 list。 */
 	diffViewMode?: 'list' | 'split';
+	/** VSCode 可执行/CLI 路径(2026-11-22 用户):「用 VSCode 打开对比」用。
+	 * 留空自动探测(LOCALAPPDATA 常见安装位置 → PATH 的 code)。 */
+	vscodePath?: string;
+	/** 库记录点击修改文件的默认打开方式(2026-11-22 用户):modal = 内置对比
+	 * 弹窗(样式见 diffViewMode);vscode = 直接拉 VSCode diff(需 vscodePath
+	 * 或本机装有 VSCode)。缺省 modal。 */
+	diffOpenWith?: 'modal' | 'vscode';
 	/** 自动记录总开关(关=只允许手动打点) */
 	enabled: boolean;
 	/** 每日固定记录时间 HH:mm(''=关) */

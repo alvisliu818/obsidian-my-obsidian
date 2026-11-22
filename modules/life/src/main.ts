@@ -366,29 +366,29 @@ export default class LifePlugin extends Plugin {
 		if (this.store.settings.vaultLog?.diffEnabled === false) return null;
 		const f = this.app.vault.getAbstractFileByPath(path);
 		if (!(f instanceof TFile)) return null;
-		let before: string | null = null;
-		if (this.vaultDiffBaseline() === 'record') {
-			before = this.vaultShadow.get(path) ?? null;
-		} else {
-			const mgr = this.gitDiffManager();
-			if (!mgr?.showFileAtHead) return null;
-			before = await mgr.showFileAtHead(path);
-		}
+		const before = await this.recordBaselineContent(path);
 		if (before === null) return null;
 		const cur = await this.app.vault.cachedRead(f);
 		if (cur === before) return null;
 		return diffLines(before, cur);
 	}
 
+	/** 修改对比的基线内容(2026-11-22 抽公共方法):git = 上次提交(HEAD);
+	 * record = 上次库记录时点(影子)。getRecordDiff/revertRecordFile/VSCode
+	 * 对比共用。无基线(null)/总开关关 → null。 */
+	async recordBaselineContent(path: string): Promise<string | null> {
+		if (this.store.settings.vaultLog?.diffEnabled === false) return null;
+		if (this.vaultDiffBaseline() === 'record') {
+			return this.vaultShadow.get(path) ?? null;
+		}
+		const mgr = this.gitDiffManager();
+		if (!mgr?.showFileAtHead) return null;
+		return await mgr.showFileAtHead(path);
+	}
+
 	/** 撤回:单文件还原到上次提交(丢弃未提交修改;git restore HEAD -- path)。 */
 	async revertRecordFile(path: string): Promise<boolean> {
-		let before: string | null = null;
-		if (this.vaultDiffBaseline() === 'record') {
-			before = this.vaultShadow.get(path) ?? null;
-		} else {
-			const mgr = this.gitDiffManager();
-			before = mgr?.showFileAtHead ? await mgr.showFileAtHead(path) : null;
-		}
+		const before = await this.recordBaselineContent(path);
 		if (before === null) return false;
 		const f = this.app.vault.getAbstractFileByPath(path);
 		if (!(f instanceof TFile)) return false;
@@ -461,12 +461,87 @@ export default class LifePlugin extends Plugin {
 	 * 「对比」小钮同弹窗。 */
 	async openModifiedFileWithDiff(path: string): Promise<void> {
 		this.editorDiffRegistry.delete(path);
+		// 默认打开方式(2026-11-22 用户):vscode = 直接拉 VSCode diff;
+		// modal(缺省) = 内置对比弹窗。弹窗 footer 两种方式手动可用。
+		if (this.store.settings.vaultLog?.diffOpenWith === 'vscode') {
+			await this.openRecordDiffInVscode(path);
+			return;
+		}
 		this.openRecordDiffModal(path);
 	}
 
 	/** 「对比」小钮:打开修改对比弹窗(可撤回)。 */
 	openRecordDiffModal(path: string): void {
 		new VaultLogDiffModal(this.app, this, path).open();
+	}
+
+	/** 用 VSCode 打开 diff(2026-11-22 用户):基线内容写临时文件,
+	 * `code --diff <基线> <当前>` 起原生两栏对比。可执行文件探测:
+	 * 设置路径 → 常见安装位置 → PATH。失败返回 false(弹 Notice)。 */
+	async openRecordDiffInVscode(path: string): Promise<boolean> {
+		const before = await this.recordBaselineContent(path);
+		if (before === null) {
+			new Notice('无基线内容:git 模块未启用或无库记录影子');
+			return false;
+		}
+		const f = this.app.vault.getAbstractFileByPath(path);
+		if (!(f instanceof TFile)) return false;
+		// eslint-disable-next-line @typescript-eslint/no-var-requires
+		const nodeRequire = eval('require') as NodeRequire;
+		const fs = nodeRequire('fs') as typeof import('fs');
+		const pathMod = nodeRequire('path') as typeof import('path');
+		const osMod = nodeRequire('os') as typeof import('os');
+		const cp = nodeRequire('child_process') as typeof import('child_process');
+		const adapter = this.app.vault.adapter as { getBasePath?: () => string };
+		const base = (adapter.getBasePath?.() ?? '').replace(/[\\/]+$/, '');
+		const absCurrent = base ? base + '/' + path : path;
+		// 基线临时文件:固定名(路径哈希)覆盖写,不堆积
+		let h = 5381;
+		for (let i = 0; i < path.length; i++) h = (Math.imul(h, 33) ^ path.charCodeAt(i)) >>> 0;
+		const tmp = pathMod.join(osMod.tmpdir(), 'obsidian-diff-base-' + h.toString(16) + (pathMod.extname(path) || '.txt'));
+		fs.writeFileSync(tmp, before, 'utf8');
+
+		const exe = this.resolveVscodeExe(fs);
+		if (!exe) {
+			new Notice('未找到 VSCode——可在库记录设置里填写 VSCode 路径');
+			return false;
+		}
+		try {
+			const child = cp.spawn(exe, ['--diff', tmp, absCurrent], {
+				detached: true,
+				stdio: 'ignore',
+				// code.cmd 等 CLI 包装需要 shell 解析;.exe 直接起
+				shell: !/\.exe$/i.test(exe),
+			});
+			child.unref?.();
+			return true;
+		} catch (e) {
+			new Notice('VSCode 启动失败:' + String(e).slice(0, 120));
+			return false;
+		}
+	}
+
+	/** VSCode 可执行探测:设置路径 → 本机常见安装位置 → PATH('code')。 */
+	private resolveVscodeExe(fs: typeof import('fs')): string | null {
+		const custom = this.store.settings.vaultLog?.vscodePath?.trim();
+		const cands: string[] = [];
+		if (custom) cands.push(custom);
+		const local = process.env.LOCALAPPDATA;
+		if (local) {
+			cands.push(local + '\\Programs\\Microsoft VS Code\\Code.exe');
+			cands.push(local + '\\Programs\\Microsoft VS Code Insiders\\Code.exe');
+			cands.push(local + '\\Programs\\Cursor\\Cursor.exe');
+		}
+		cands.push('C:\\Program Files\\Microsoft VS Code\\Code.exe');
+		cands.push('C:\\Program Files\\Cursor\\Cursor.exe');
+		for (const c of cands) {
+			try {
+				if (c && fs.existsSync(c)) return c;
+			} catch {
+				/* 探测失败继续 */
+			}
+		}
+		return 'code'; // PATH 兜底(shell:true 解析 code.cmd)
 	}
 
 	async recordVaultChanges(trigger: 'period' | 'daily' | 'manual' = 'manual'): Promise<VaultLogRecord> {
