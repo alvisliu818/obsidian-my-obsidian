@@ -314,9 +314,9 @@ export default class MyObsidianPlugin extends Plugin {
 				{ id: "momentum", name: "Momentum" },
 				// WorkLife Calendar 的设置 tab 由垫片以稳定键 inner:<tabId> 收编,
 				// 这里作为 Life 的附属页直达(不再落「其他」区)。
-				{ id: "inner:my-worklife-calendar", name: "WorkLife Calendar" },
+				{ id: "inner:worklife-calendar", name: "WorkLife Calendar" },
 			],
-			internalTabIds: ["my-worklife-calendar"],
+			internalTabIds: ["worklife-calendar"],
 		},
 		{
 			id: "doc-assist",
@@ -804,7 +804,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// version 保持上游值（模块的代际判定读 manifest.version）；
 			// migrateFrom 指向独立版 easy-sync——老用户 data.json 自动迁入模块片。
 			// 同步排除在本仓扩展了黑名单/白名单/正则模式（NOTICE 功能增强节）。
-			id: "my-easy-sync",
+			id: "easy-sync",
 			name: "EasySync",
 			manifest: { version: "1.7.1" },
 			migrateFrom: "easy-sync",
@@ -946,7 +946,7 @@ export default class MyObsidianPlugin extends Plugin {
 			this.scheduleSettingTabRefresh = scheduleTabRefresh;
 			// 统一拦截逻辑:①宿主 id 的冒名 tab(1.14 语义)②内层实例的 tab
 			// (组件树判定 + descriptor 声明的 internalTabIds,如 momentum 的
-			// WorkLife 报 my-worklife-calendar)——都截进 capturedTabs 的
+			// WorkLife 报 worklife-calendar)——都截进 capturedTabs 的
 			// inner: 键,由宿主设置页「其他」区渲染。其余放行原生注册。
 			const intercept = (tab: unknown): boolean => {
 				const t = tab as { id?: string; plugin?: unknown };

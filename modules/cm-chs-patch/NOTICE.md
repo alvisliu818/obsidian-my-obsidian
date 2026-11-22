@@ -1,4 +1,4 @@
-# NOTICE — my-cm-chs-patch
+# NOTICE — cm-chs-patch
 
 - **上游**：cm-chs-patch v1.14.0（AidenLx，MIT，见本目录 `LICENSE`）
   https://github.com/AidenLx/cm-chs-patch
@@ -25,6 +25,6 @@
   一次性导入（读 `.obsidian/plugins/cm-chs-patch/data.json`，仅当模块数据
   片为空）。jieba wasm 本体存 IndexedDB（库名固定
   `cm-chs-patch-jieba`），跨插件实例自动复用，无需迁移。
-- **宿主注册**：模块 id `chs-patch`，插件表别名 `my-cm-chs-patch`
-  （manifest.id 覆盖为同值——PluginSettingTab 按 manifest.id 建键，不覆盖
-  会与宿主设置页撞车）。Omnisearch 的分词查找已指向该别名。
+- **宿主注册**：模块 id `chs-patch`（2026-11-23 去掉 my- 前缀；运行时
+  manifest.id 由宿主统一覆盖为 `obsidian-my-obsidian`）。Omnisearch 的分词
+  查找按模块 id 解析。

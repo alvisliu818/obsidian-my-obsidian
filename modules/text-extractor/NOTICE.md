@@ -1,4 +1,4 @@
-# NOTICE — my-text-extractor
+# NOTICE — text-extractor
 
 - **上游**：Text Extractor v0.7.0（Simon Cambier / scambier，GPL-3.0，见本
   目录 `LICENSE`）https://github.com/scambier/obsidian-text-extractor
@@ -22,7 +22,7 @@
   同款先例。根 svelte@5 不动。
 - **对上游源码的修改**：`LangSelector.svelte` 的 `import ... from
   'src/settings'` 改为相对路径 `../settings`——上游 baseUrl 约定与宿主
-  tsconfig 的 `src/*` 别名（指向 my-obsidian-git）冲突，esbuild 按 tsconfig
+  tsconfig 的 `src/*` 别名（指向 obsidian-git）冲突，esbuild 按 tsconfig
   paths 解析会错拿。另加 `plugin/src/svelte-shims.d.ts`（tsc 的 .svelte
   导入垫片）。
 - **数据迁移**：独立版设置（`ocrLanguages/rightClickMenu/useSystemOCR/
@@ -30,7 +30,6 @@
   `.obsidian/plugins/text-extractor/data.json`，仅当模块数据片为空）。
   提取缓存按 cacheLocation 落盘/IndexedDB，旧缓存不迁移（与上游改设置时
   的语义一致，缺了会按需重提取）。
-- **宿主注册**：模块 id `text-extractor`，插件表别名 `my-text-extractor`
-  （manifest.id 覆盖为同值、version 覆盖 0.7.0——PluginSettingTab 按
-  manifest.id 建键，不覆盖会与宿主设置页撞车）。Omnisearch 的提取查找已
+- **宿主注册**：模块 id `text-extractor`（2026-11-23 去掉 my- 前缀；version
+  覆盖 0.7.0——其内部语义读 manifest.version）。Omnisearch 的提取查找已
   指向该别名。

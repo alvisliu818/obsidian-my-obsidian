@@ -94,10 +94,19 @@ export function createEmptyDeviceCommunityPluginParticipation(
   };
 }
 
-export function readDeviceCommunityPluginParticipation(
-  value: unknown,
-  ownPluginId = "easy-sync",
-): DeviceCommunityPluginParticipationV1 {
+/**
+ * Ownership-agnostic shape validation. Checks the container and every entry
+ * structure, but does NOT re-normalize plugin ids against an `ownPluginId`:
+ * whether a given id is the running plugin's own id is a device-local fact
+ * owned by the StateManager (which passes its real manifest.id), not a
+ * property of the persisted envelope. Used by `validateEnvelope`, which has
+ * no plugin context and previously hardcoded "easy-sync" — in the
+ * obsidian-my-obsidian aggregate host that id is "obsidian-my-obsidian", and
+ * the disabled standalone `easy-sync` plugin still present in the vault made
+ * the old check reject perfectly valid envelopes (entry key "easy-sync" was
+ * filtered out by the wrong own-id, so normalization returned undefined).
+ */
+export function validateParticipationEnvelopeShape(value: unknown): void {
   if (!isRecord(value)
     || value.schemaVersion !== 1
     || value.kind !== "device-community-plugin-participation"
@@ -111,13 +120,30 @@ export function readDeviceCommunityPluginParticipation(
     ])) {
     throw new Error("Device community-plugin participation state is invalid");
   }
+  for (const pluginId of Object.keys(value.pluginsById)) {
+    if (!isParticipationEntry(value.pluginsById[pluginId], pluginId)) {
+      throw new Error(
+        `Device community-plugin participation entry is invalid: ${pluginId}`,
+      );
+    }
+  }
+}
+
+export function readDeviceCommunityPluginParticipation(
+  value: unknown,
+  ownPluginId = "easy-sync",
+): DeviceCommunityPluginParticipationV1 {
+  validateParticipationEnvelopeShape(value);
+  const record = value as Record<string, unknown> & {
+    pluginsById: Record<string, DeviceCommunityPluginParticipationEntryV1>;
+  };
   const pluginsById: Record<
     string,
     DeviceCommunityPluginParticipationEntryV1
   > = {};
-  for (const pluginId of Object.keys(value.pluginsById).sort(compareText)) {
+  for (const pluginId of Object.keys(record.pluginsById).sort(compareText)) {
     const normalized = normalizePluginIds([pluginId], ownPluginId)[0];
-    const entry = value.pluginsById[pluginId];
+    const entry = record.pluginsById[pluginId];
     if (normalized !== pluginId || !isParticipationEntry(entry, pluginId)) {
       throw new Error(
         `Device community-plugin participation entry is invalid: ${pluginId}`,
@@ -128,7 +154,7 @@ export function readDeviceCommunityPluginParticipation(
   return {
     schemaVersion: 1,
     kind: "device-community-plugin-participation",
-    scopeEnabled: value.scopeEnabled,
+    scopeEnabled: record.scopeEnabled as boolean,
     pluginsById,
   };
 }

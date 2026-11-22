@@ -35,7 +35,7 @@
 import type { App } from "obsidian";
 
 /** The community-plugin id obsidian-git registers itself under. */
-export const GIT_PLUGIN_ID = "my-obsidian-git";
+export const GIT_PLUGIN_ID = "obsidian-git";
 
 /** obsidian-git's source-control view type (its "Source control" side panel). */
 export const GIT_SOURCE_CONTROL_VIEW = "git-view";
@@ -128,7 +128,7 @@ interface GitManagerLike {
 
 /**
  * The obsidian-git plugin instance, as far as Hearth is concerned. Reachable
- * at `app.plugins.plugins["my-obsidian-git"]` once the plugin is enabled.
+ * at `app.plugins.plugins["obsidian-git"]` once the plugin is enabled.
  *
  * Only `gitReady` and `gitManager` are required to consider the plugin usable
  * — everything else is probed per call.
@@ -186,7 +186,7 @@ export interface GitPlugin {
  * it hides, since it usually means the repo is still being found on startup.
  */
 export function getGitPlugin(app: App): GitPlugin | null {
-	// 单一插件 id：git 模块实例经由宿主 moduleInstance 查找，回落旧 my-* 表键。
+	// 单一插件 id：git 模块实例经由宿主 moduleInstance 查找，按插件表 id 兜底。
 	const host = app.plugins.plugins["obsidian-my-obsidian"] as
 		| { moduleInstance?: (id: string) => unknown }
 		| undefined;

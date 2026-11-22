@@ -85,8 +85,8 @@ function deps() {
 
 /** 发现本机可用环境(毫秒级,同步)。 */
 export function discoverPythonEnvs(): PythonEnv[] {
-  // 软依赖:装了 my-obsidian-logseq（聚合内的 logseq 模块）就用它的同一份清单。
-  // 单一插件 id：经宿主 moduleInstance 查找，回落旧 my-* 表键。
+  // 软依赖:装了 md-editor（聚合内的 logseq 模块）就用它的同一份清单。
+  // 单一插件 id：经宿主 moduleInstance 查找，按插件表 id 兜底。
   const pluginTable = (
     globalThis as {
       app?: { plugins?: { plugins?: Record<string, unknown> } };
@@ -97,7 +97,7 @@ export function discoverPythonEnvs(): PythonEnv[] {
     | undefined;
   const shared = (
     (hostInst?.moduleInstance?.('logseq') ??
-      pluginTable?.['my-obsidian-logseq']) as
+      pluginTable?.['md-editor']) as
       | { pythonEnvs?: { discover?: (r?: string[]) => PythonEnv[] } }
       | undefined
   )?.pythonEnvs;

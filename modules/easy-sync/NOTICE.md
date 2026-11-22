@@ -12,7 +12,7 @@
   text-extractor 的快照收编先例，出处以本文件为准。
 - 体量: 172 个 TS 文件 / 13.9 万行（`sync-executor.ts` 单文件 3.4 万行），
   本仓收编体量第二（仅次于 livesync）。
-- manifest: `id: my-easy-sync`（2026-10-30 前缀政策）、
+- manifest: `id: easy-sync`（2026-11-23 去掉 my- 前缀，与上游 id 一致）、
   `minAppVersion: 1.13.4`、`isDesktopOnly: false`（上游支持移动端，聚合内
   同样移动端装载）。
 
@@ -50,7 +50,7 @@ OneDrive 应用目录（`应用/EasySync/vaults/<仓库名>/`），不设中转�
    指向同一云端空间。旧独立版目录 `.obsidian/plugins/easy-sync/` 会被社区
    插件选择逻辑按非代码文件排除，内部状态文件不会泄进同步范围。
 6. **`migrateFrom: "easy-sync"`**：老用户独立版 `data.json` 首次启用时自动
-   迁入聚合的 `modules.my-easy-sync` 切片（宿主既有机制，terminal/advanced-uri
+   迁入聚合的 `modules.easy-sync` 切片（宿主既有机制，terminal/advanced-uri
    同款）。独立版的设备级 localStorage（更新检查记账）不迁移——无意义，
    见第 8 条。
 7. **样式并入根 `styles.css`** 的 EasySync 分段：上游 `styles.css`（2557 行，

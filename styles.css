@@ -59386,23 +59386,23 @@ body.hearth-snapshot-capturing .hearth-view:not(#hearth-boost) {
 }
 
 /* ==================== 单一插件 id：宿主设置页内嵌模块设置 ==================== */
-.my-module-settings {
+.module-settings {
   border: 1px solid var(--background-modifier-border);
   border-radius: 8px;
   margin: 4px 0 12px 0;
   padding: 4px 8px;
   background: var(--background-secondary);
 }
-.my-module-settings > summary {
+.module-settings > summary {
   cursor: pointer;
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
   padding: 4px 2px;
   user-select: none;
 }
-.my-module-settings > summary:hover { color: var(--text-normal); }
-.my-embedded-setting-tab { padding: 4px 2px; }
-.my-embedded-setting-tab .setting-item { border: none; }
+.module-settings > summary:hover { color: var(--text-normal); }
+.embedded-setting-tab { padding: 4px 2px; }
+.embedded-setting-tab .setting-item { border: none; }
 
 /* ==================== Frontmatter Markdown Links (modules/frontmatter-markdown-links) ==================== */
 /* 上游 src/styles/main.scss 经 sass 编译并入；模块内 import 走 .scss -> empty loader */
@@ -59448,7 +59448,7 @@ body.hearth-snapshot-capturing .hearth-view:not(#hearth-boost) {
    overflow-y:auto 的滚动容器样式），嵌进 .setting-page 后与外层滚动叠加成
    双滚动条——嵌入时加本标记类取消其高度约束与滚动，滚动职责上交
    .setting-page（唯一滚动容器）。 */
-.setting-page .vertical-tab-content.my-module-page-embed {
+.setting-page .vertical-tab-content.module-page-embed {
   height: auto;
   overflow-y: visible;
 }
@@ -63796,10 +63796,10 @@ body.is-mobile
 .ob-save-page-row { display: flex; gap: 8px; justify-content: flex-end; }
 
 /* 宿主设置页:设置搜索(2026-11-20)——结果里是搬移的活体设置项,直接可改 */
-.my-setting-search { margin-bottom: 12px; }
-.my-setting-search-input { width: 100%; }
-.my-setting-search-count { font-size: 12px; color: var(--text-muted); margin: 6px 0 10px; }
-.my-setting-search-hit {
+.setting-search { margin-bottom: 12px; }
+.setting-search-input { width: 100%; }
+.setting-search-count { font-size: 12px; color: var(--text-muted); margin: 6px 0 10px; }
+.setting-search-hit {
   display: flex;
   align-items: flex-start;
   column-gap: 10px;
@@ -63807,7 +63807,7 @@ body.is-mobile
   border-bottom: 1px solid var(--background-modifier-border);
 }
 /* 按模块分组(用户 2026-11-21):模块名独立成栏,组内条目不带左侧芯片 */
-.my-setting-search-group-header {
+.setting-search-group-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -63816,13 +63816,13 @@ body.is-mobile
   padding: 4px 0 2px;
   border-bottom: 1px solid var(--background-modifier-border);
 }
-.my-setting-search-group-name {
+.setting-search-group-name {
   font-weight: 600;
   font-size: 13px;
   color: var(--text-muted);
 }
-.my-setting-search-group-gear { flex: 0 0 auto; }
-.my-setting-search-node.setting-item { border: none; padding-top: 6px; padding-bottom: 6px; }
+.setting-search-group-gear { flex: 0 0 auto; }
+.setting-search-node.setting-item { border: none; padding-top: 6px; padding-bottom: 6px; }
 
 /* 查询阈值(og 80ms)慢查询标记:超预算的结果容器边角提示 */
 [data-slow-query='1'] .prolog-meta,

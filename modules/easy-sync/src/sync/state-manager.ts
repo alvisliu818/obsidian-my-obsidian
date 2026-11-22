@@ -2509,6 +2509,7 @@ export class StateManager {
   > {
     const adapter = this.plugin.app.vault.adapter;
     let backupSnapshot: unknown;
+    let backupCreatedAt: unknown;
     try {
       if (!await adapter.exists(paths.stateV1BackupFile)) return null;
       const backup = JSON.parse(
@@ -2522,6 +2523,7 @@ export class StateManager {
         return "public-1.1.3-cutover-backup-unreadable";
       }
       backupSnapshot = backup.snapshot;
+      backupCreatedAt = backup.createdAt;
     } catch {
       return "public-1.1.3-cutover-backup-unreadable";
     }
@@ -2540,11 +2542,36 @@ export class StateManager {
     }
     const rawMarker = rawPluginData[KEY_PUBLIC_113_CUTOVER];
     const existingMarker = readPublic113CutoverMarker(rawMarker);
+    // Aggregate-host build (obsidian-my-obsidian): the module inherits the
+    // standalone easy-sync data slice via `migrateFrom`, including the 1.1.3
+    // cutover marker from an earlier migration. But the sidecar state files
+    // live in the HOST plugin dir, so this module later re-runs 1.1.3→V2
+    // migration and rewrites state-v1.backup.json with a NEW source digest.
+    // finalize() then sees marker.digest (old) != backup.digest (new) and
+    // refuses forever — even though authority was already committed. Treat a
+    // marker that is strictly OLDER than the current backup as stale evidence
+    // of a previous migration and re-bind it to this backup's digest, instead
+    // of failing closed. A marker from a FUTURE / same-time backup is still a
+    // hard mismatch (never downgrade or race-log a cutover marker).
+    const staleInheritedMarker =
+      existingMarker !== null
+      && typeof backupCreatedAt === "number"
+      && Number.isFinite(backupCreatedAt)
+      && existingMarker.finalizedAt < backupCreatedAt;
+    if (staleInheritedMarker && existingMarker) {
+      this.plugin.diag?.warn("state", "stale inherited 1.1.3 cutover marker rebound to current backup", {
+        markerDigest: existingMarker.sourceStateDigest,
+        backupDigest: sourceStateDigest,
+        markerFinalizedAt: existingMarker.finalizedAt,
+        backupCreatedAt,
+      });
+    }
     if (
       (rawMarker !== undefined && rawMarker !== null && !existingMarker)
       || (
         existingMarker
         && existingMarker.sourceStateDigest !== sourceStateDigest
+        && !staleInheritedMarker
       )
     ) {
       return "public-1.1.3-cutover-marker-mismatch";
@@ -2560,6 +2587,7 @@ export class StateManager {
       Array.isArray(rawPluginData[KEY_MUTATION_LEDGER]);
     if (
       existingMarker
+      && !staleInheritedMarker
       && liveLegacyBaseEmpty
       && publicLedgerEmpty
       && activeLedgerPresent
@@ -2572,13 +2600,23 @@ export class StateManager {
     }
 
     try {
-      await this.commitPluginData((current) =>
-        finalizePublic113PluginDataCutover({
-          pluginData: current as unknown as Record<string, unknown>,
+      await this.commitPluginData((current) => {
+        // For a stale inherited marker, drop it first so
+        // finalizePublic113PluginDataCutover takes the fresh-marker path
+        // bound to THIS backup's digest; leaving it in would make that helper
+        // throw "marker belongs to another migration input" again.
+        const effective: PluginData = staleInheritedMarker
+          ? { ...current } as PluginData
+          : current;
+        if (staleInheritedMarker) {
+          delete (effective as unknown as Record<string, unknown>)[KEY_PUBLIC_113_CUTOVER];
+        }
+        return finalizePublic113PluginDataCutover({
+          pluginData: effective as unknown as Record<string, unknown>,
           sourceStateDigest,
           finalizedAt: now,
-        }).pluginData as unknown as PluginData
-      );
+        }).pluginData as unknown as PluginData;
+      });
       return null;
     } catch {
       return "public-1.1.3-cutover-finalization-failed";

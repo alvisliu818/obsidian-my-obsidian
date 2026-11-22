@@ -2,7 +2,7 @@ import type { DataAdapter } from "obsidian";
 import { sha256Hex } from "../crypto";
 import { isRecord } from "../obsidian-compat";
 import {
-  readDeviceCommunityPluginParticipation,
+  validateParticipationEnvelopeShape,
   type DeviceCommunityPluginParticipationV1,
 } from "./community-plugin-participation";
 import type { RemoteIndexV2, RemoteNodeV2 } from "./remote-index-v2";
@@ -1019,10 +1019,13 @@ function validateEnvelopeImpl(value: unknown): asserts value is SyncStateEnvelop
     throw new Error("V2 remote scope recovery hold is invalid");
   }
   if (value.communityPluginParticipation !== undefined) {
+    // Ownership-agnostic check: this layer has no plugin context, so it must
+    // not re-normalize entry ids against a hardcoded "easy-sync" own-id.
+    // The device-local id check happens in StateManager, which passes the
+    // real manifest.id. See validateParticipationEnvelopeShape for the
+    // obsidian-my-obsidian aggregate-host failure this avoids.
     try {
-      readDeviceCommunityPluginParticipation(
-        value.communityPluginParticipation,
-      );
+      validateParticipationEnvelopeShape(value.communityPluginParticipation);
     } catch {
       throw new Error("V2 community-plugin participation state is invalid");
     }

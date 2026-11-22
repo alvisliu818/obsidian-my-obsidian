@@ -102,7 +102,7 @@ class AtLinkSuggest extends EditorSuggest<AtSuggestion> {
 		query: string,
 	): Promise<Array<{ path: string; excerpt: string }>> {
 		const api = (
-			this.app.plugins?.plugins?.["my-omnisearch"] as unknown as {
+			this.app.plugins?.plugins?.["omnisearch"] as unknown as {
 				api?: OmnisearchApi;
 			} | undefined
 		)?.api;

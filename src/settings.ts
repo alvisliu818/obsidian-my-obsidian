@@ -59,7 +59,7 @@ export interface ModuleDescriptor {
 	migrateFrom?: string;
 	/**
 	 * 内层子插件实例会注册的设置 tab id 清单（如 momentum 的 WorkLife 报
-	 * my-worklife-calendar）。垫片按此截获这类 tab 进「其他」区，避免它们
+	 * worklife-calendar）。垫片按此截获这类 tab 进「其他」区，避免它们
 	 * 在设置侧栏单独成栏。
 	 */
 	internalTabIds?: string[];
@@ -298,7 +298,7 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 				// 它自身就是滚动容器（height:100% + overflow-y:auto），嵌进
 				// 二级页后与 .setting-page 的滚动叠加成双滚动条（实测）。加标
 				// 记类取消它的高度约束与滚动，滚动职责上交 .setting-page。
-				tab.containerEl.addClass("my-module-page-embed");
+				tab.containerEl.addClass("module-page-embed");
 				if (typeof tab.update === "function" && typeof tab.renderTab === "function") {
 					tab.update();
 					tab.renderTab();
@@ -444,7 +444,7 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 				return tokens.every((t) => hay.includes(t));
 			})
 			.slice(0, 60);
-		const countEl = resultsEl.createDiv({ cls: "my-setting-search-count" });
+		const countEl = resultsEl.createDiv({ cls: "setting-search-count" });
 		countEl.setText(hits.length === 0 ? `没有匹配「${query.trim()}」的设置项` : `${hits.length} 个匹配(改动即时生效)`);
 		// 按模块分组(保持索引序=设置页模块序);模块名独立成栏,右侧小齿轮
 		// 进该模块设置页;组内条目不再带左侧芯片。
@@ -455,18 +455,18 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 			groups.set(h.moduleId, g);
 		}
 		for (const [, g] of groups) {
-			const header = resultsEl.createDiv({ cls: "my-setting-search-group-header" });
-			header.createSpan({ cls: "my-setting-search-group-name", text: g.label });
+			const header = resultsEl.createDiv({ cls: "setting-search-group-header" });
+			header.createSpan({ cls: "setting-search-group-name", text: g.label });
 			const gear = header.createEl("button", {
-				cls: "my-setting-search-group-gear clickable-icon",
+				cls: "setting-search-group-gear clickable-icon",
 				attr: { "aria-label": `打开 ${g.label} 设置页` },
 			});
 			setIcon(gear, "settings-2");
 			gear.addEventListener("click", () => this.openModulePage(g.items[0].moduleId, g.label));
 			for (const item of g.items) {
-				const wrap = resultsEl.createDiv({ cls: "my-setting-search-hit" });
+				const wrap = resultsEl.createDiv({ cls: "setting-search-hit" });
 				wrap.appendChild(item.node);
-				item.node.addClass("my-setting-search-node");
+				item.node.addClass("setting-search-node");
 			}
 		}
 		if (!hits.length) listEl.show();
@@ -481,10 +481,10 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 		listEl.hide();
 		if (!this.searchEntries) {
 			resultsEl.empty();
-			resultsEl.createDiv({ cls: "my-setting-search-count", text: "正在索引全部模块设置…" });
+			resultsEl.createDiv({ cls: "setting-search-count", text: "正在索引全部模块设置…" });
 			this.searchEntries = await this.crawlSettingIndex();
 			// 爬取期间输入已变化/清空 → 以当前输入框值为准
-			if (!(this.containerEl.querySelector(".my-setting-search-input") as HTMLInputElement | null)?.value.trim()) {
+			if (!(this.containerEl.querySelector(".setting-search-input") as HTMLInputElement | null)?.value.trim()) {
 				resultsEl.empty();
 				listEl.show();
 				return;
@@ -505,14 +505,14 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 		});
 
 		// 设置搜索(用户 2026-11-20):输入即搜,结果里是活的设置控件,直接改。
-		const searchWrap = containerEl.createDiv({ cls: "my-setting-search" });
+		const searchWrap = containerEl.createDiv({ cls: "setting-search" });
 		const searchInput = searchWrap.createEl("input", {
 			type: "search",
-			cls: "my-setting-search-input",
+			cls: "setting-search-input",
 			attr: { placeholder: "搜索设置(模块名/项名/描述)——结果里可直接改动", spellcheck: "false" },
 		});
-		const resultsEl = containerEl.createDiv({ cls: "my-setting-search-results" });
-		const listEl = containerEl.createDiv({ cls: "my-setting-search-list" });
+		const resultsEl = containerEl.createDiv({ cls: "setting-search-results" });
+		const listEl = containerEl.createDiv({ cls: "setting-search-list" });
 		searchInput.addEventListener("input", () => {
 			// 输入每次变化同步记忆(清空即置空);仅内存,不落盘。
 			this.lastQuery = searchInput.value;

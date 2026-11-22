@@ -12,7 +12,7 @@
 - 收编方式: 工作区整体拷贝（`src/`、`CHANGELOG.md`、`LICENSE`、`README.md`、
   `README.zh-CN.md`、`manifest.json`、`versions.json`、`tsconfig.json`、
   `package.json`、`styles.css` 与上游 HEAD 逐文件一致），未改源码语义
-- manifest id: `my-hearth`（2026-10-30 起聚合内 id 与 legacyId 均用 my- 前缀 id，不再占用上游 id）
+- manifest id: `hearth`（2026-11-23 去掉 my- 前缀，与上游 id 一致；运行时 manifest.id 由宿主统一覆盖为 `obsidian-my-obsidian`）
 
 ## 功能
 

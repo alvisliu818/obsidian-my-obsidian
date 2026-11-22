@@ -65,10 +65,9 @@ Changes relative to upstream
 
 Manifest / id
 -------------
-上游 id `obsidian-advanced-uri`；按 2026-10-30 约定模块以 `my-advanced-uri`
-注册（descriptor 的 manifest.id 覆盖 —— 设置页 id 与命令命名空间隔离），
-`legacyId: "my-advanced-uri"` 保持插件表可查，`migrateFrom:
-"obsidian-advanced-uri"` 走宿主 migrateStandaloneSettings，独立版遗留的
-data.json 首次启动时一次性迁入。
+上游 id `obsidian-advanced-uri`；模块 id `advanced-uri`（2026-11-23 去掉
+my- 前缀；运行时 manifest.id 由宿主统一覆盖为 `obsidian-my-obsidian`）。
+`migrateFrom: "obsidian-advanced-uri"` 走宿主 migrateStandaloneSettings，
+独立版遗留的 data.json 首次启动时一次性迁入。
 protocol handler（obsidian://advanced-uri / adv-uri）按 handler 名全局注册，
 不依赖插件 id，URI 语义与独立版完全一致。

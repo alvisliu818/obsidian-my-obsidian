@@ -54,7 +54,7 @@ export function formatTimecode(seconds: number): string {
 }
 
 // ------------------------------------------------------------------
-// ext: 伪路径(与 my-omnisearch externalDocs 同一格式,此处不反向依赖)
+// ext: 伪路径(与 omnisearch externalDocs 同一格式,此处不反向依赖)
 // ------------------------------------------------------------------
 
 /** 库外文件 → `ext:<绝对路径正斜杠>`(omnisearch/unified-search 同款前缀)。 */

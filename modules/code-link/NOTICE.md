@@ -91,10 +91,10 @@ before the merge), so they are deliberately NOT carried over.
 
 Manifest / id
 -------------
-Upstream id `code-link`; per the 2026-10-30 convention the module registers
-as `my-code-link` (descriptor `manifest.id` override — the settings tab and
-the `my-code-link:import-project` command namespace key off manifest.id).
-`legacyId: "my-code-link"` keeps `app.plugins.plugins["my-code-link"]`
-resolvable. `migrateFrom: "code-link"` piggybacks the host's
+Upstream id `code-link`; module id `code-link` (my- prefix dropped on
+2026-11-23; at runtime the host overrides manifest.id to
+`obsidian-my-obsidian` uniformly). The `code-link:import-project` command
+namespace keys off the resolved module id. `migrateFrom: "code-link"`
+piggybacks the host's
 migrateStandaloneSettings: if a vault still has the standalone plugin's
 data.json, its settings are imported once on first boot of this module.

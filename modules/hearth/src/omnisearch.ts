@@ -4,7 +4,7 @@ import { groupForFile } from "./filetypes";
 import { QueryFilter, QueryHit } from "./query";
 
 /** The community-plugin id Omnisearch registers itself under. */
-export const OMNISEARCH_PLUGIN_ID = "my-omnisearch";
+export const OMNISEARCH_PLUGIN_ID = "omnisearch";
 
 /** A single result from Omnisearch's public search API. Only the fields Hearth
  * uses are declared; Omnisearch returns a few more. */
@@ -20,7 +20,7 @@ interface OmnisearchResult {
 }
 
 /** The slice of Omnisearch's public API Hearth calls. Exposed by the plugin at
- * `app.plugins.plugins["my-omnisearch"].api` once Omnisearch is enabled. */
+ * `app.plugins.plugins["omnisearch"].api` once Omnisearch is enabled. */
 interface OmnisearchApi {
 	search(query: string): Promise<OmnisearchResult[]>;
 }
@@ -28,7 +28,7 @@ interface OmnisearchApi {
 /** Reach Omnisearch's public API, or null when the plugin isn't installed,
  * isn't enabled, or is too old to expose one. */
 export function getOmnisearchApi(app: App): OmnisearchApi | null {
-	// 单一插件 id：omnisearch 模块实例经由宿主 moduleInstance 查找，回落旧表键。
+	// 单一插件 id：omnisearch 模块实例经由宿主 moduleInstance 查找，按插件表 id 兜底。
 	const host = app.plugins.plugins["obsidian-my-obsidian"] as
 		| { moduleInstance?: (id: string) => unknown }
 		| undefined;

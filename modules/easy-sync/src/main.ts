@@ -1196,12 +1196,14 @@ export default class EasySyncPlugin extends Plugin {
         typeof document === "undefined" ? "" : document.visibilityState,
     });
     this.startupPerformance.markStage("onload:begin");
+    // Set the adapter BEFORE the first log so even onload-start lines land in
+    // the host plugin dir, not the default "easy-sync" standalone dir.
+    this.diag.setAdapter(this.app.vault.adapter, getConfigDir(this.app.vault), this.manifest.id);
     this.diag.log("lifecycle", "====== onload start ======");
     this.diag.log(
       "lifecycle",
       `structuredClone implementation: ${structuredCloneImplementation}`,
     );
-    this.diag.setAdapter(this.app.vault.adapter, getConfigDir(this.app.vault));
 
     // ════ ① Fast init (all synchronous / negligible I/O) ════
 
@@ -1432,6 +1434,9 @@ export default class EasySyncPlugin extends Plugin {
       this.platformFacts,
       (path) => this.noteSelfDeletedLocalPath(path),
     );
+    // Sidecar paths (tmp/archive/manifest) must resolve under the host plugin
+    // dir, never the default "easy-sync" standalone dir.
+    this.syncExecutor.pluginId = this.manifest.id;
     this.syncExecutor.setAutomaticHandlingPolicy(this.automaticHandlingPolicy);
     this.syncExecutor.setSyncDirection(this.syncDirection);
     this.syncExecutor.setCommunityPluginSyncPolicy(

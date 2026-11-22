@@ -386,7 +386,7 @@
         appInstance as unknown as {
           plugins?: { getPlugin?: (id: string) => { writeOptions?: (c: Record<string, unknown>) => Promise<void> } | undefined };
         }
-      ).plugins?.getPlugin?.("my-worklife-calendar");
+      ).plugins?.getPlugin?.("worklife-calendar");
       await openWorkoutPlanModal(appInstance, async (changes) => {
         if (plugin?.writeOptions) await plugin.writeOptions(changes);
       });
@@ -400,7 +400,7 @@
   onMount(() => {
     const plugin = (appInstance as unknown as {
       plugins?: { getPlugin?: (id: string) => { manifest?: { version?: string } } | undefined };
-    }).plugins?.getPlugin?.("my-worklife-calendar");
+    }).plugins?.getPlugin?.("worklife-calendar");
     currentPluginVersion = plugin?.manifest?.version || "";
   });
   async function runPluginUpdate() {
@@ -409,7 +409,7 @@
     try {
       const plugin = (appInstance as unknown as {
         plugins?: { getPlugin?: (id: string) => import("../main").default | undefined };
-      }).plugins?.getPlugin?.("my-worklife-calendar");
+      }).plugins?.getPlugin?.("worklife-calendar");
       if (!plugin) {
         new Notice($t("settings.update.updateFailed"));
         return;

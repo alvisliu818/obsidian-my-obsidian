@@ -109,10 +109,18 @@ export class DiagnosticLogger {
   /** Paths already reported by the external-rewrite probe (once per session). */
   private externalRewriteReported = new Set<string>();
 
-  /** Must be called after the Obsidian vault adapter is available. */
-  setAdapter(adapter: DataAdapter, configDir: string = DEFAULT_CONFIG_DIR): void {
+  /** Must be called after the Obsidian vault adapter is available.
+   *  `pluginId` must be the host manifest id in aggregate builds — the
+   *  DiagnosticLogger has no plugin context and must not fall back to the
+   *  default "easy-sync" id, which would write logs into the disabled
+   *  standalone plugin dir instead of the host's own plugin dir. */
+  setAdapter(
+    adapter: DataAdapter,
+    configDir: string = DEFAULT_CONFIG_DIR,
+    pluginId = "easy-sync",
+  ): void {
     this.adapter = adapter;
-    this.logDir = getEasySyncPaths(configDir).logsDir;
+    this.logDir = getEasySyncPaths(configDir, pluginId).logsDir;
     // The byte record belongs to the previous log directory.
     this.segment = null;
   }

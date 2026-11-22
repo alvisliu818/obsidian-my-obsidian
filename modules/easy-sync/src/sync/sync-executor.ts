@@ -1944,6 +1944,14 @@ export class SyncExecutor {
     private onSelfLocalDelete?: (path: string) => void,
   ) {}
 
+  /** Plugin id used to resolve EasySync sidecar paths (tmp/archive/manifest).
+   *  In the obsidian-my-obsidian aggregate host this is the HOST manifest id,
+   *  set once at construction by the caller; the default keeps standalone
+   *  builds and tests unchanged. Path helpers below must all use this value
+   *  instead of getEasySyncPaths(vault)'s hardcoded "easy-sync" default,
+   *  which would write temp/backup files into the disabled standalone dir. */
+  pluginId = "easy-sync";
+
   /** Live accumulator of the run in flight; the connection-speed sampler
    *  polls it on a fixed cadence. Not cleared at run end — callers gate on
    *  isRunning, and the next run overwrites the reference. */
@@ -6563,7 +6571,7 @@ export class SyncExecutor {
   }
 
   private getDownloadTempPath(filePath: string): string {
-    const { tmpDir } = getEasySyncPaths(this.scanner.vault);
+    const { tmpDir } = getEasySyncPaths(this.scanner.vault, this.pluginId);
     return `${tmpDir}/downloads/${filePath}.part`;
   }
 
@@ -6695,7 +6703,7 @@ export class SyncExecutor {
     const expected = queuedConflict.local;
     // 本机侧没有将丢失的版本（本机已删/云端新增）：没有东西可留档。
     if (!expected) return true;
-    const paths = getEasySyncPaths(this.scanner.vault);
+    const paths = getEasySyncPaths(this.scanner.vault, this.pluginId);
     let archived: { archivePath: string } | null;
     try {
       archived = await writeLocalArchiveCopyV1({
@@ -6911,7 +6919,7 @@ export class SyncExecutor {
   private getRecoveryJournal(): LocalRecoveryJournal {
     return new LocalRecoveryJournal(
       this.scanner.vault.adapter,
-      getEasySyncPaths(this.scanner.vault).tmpDir,
+      getEasySyncPaths(this.scanner.vault, this.pluginId).tmpDir,
     );
   }
 
@@ -7957,7 +7965,7 @@ export class SyncExecutor {
   private getMergeReadyStore(): MergeReadyStore {
     return new MergeReadyStore(
       this.scanner.vault.adapter,
-      getEasySyncPaths(this.scanner.vault).tmpDir,
+      getEasySyncPaths(this.scanner.vault, this.pluginId).tmpDir,
     );
   }
 
@@ -16071,7 +16079,7 @@ export class SyncExecutor {
     // M19: anti-downgrade guard for EasySync self-sync.
     // Before any plugin files are downloaded, fetch remote manifest.json and
     // compare versions. If remote < local, skip all EasySync downloads this round.
-    const { pluginDirPrefix } = getEasySyncPaths(this.scanner.vault);
+    const { pluginDirPrefix } = getEasySyncPaths(this.scanner.vault, this.pluginId);
     const easySyncDownloads = run.downloads.filter((i) =>
       i.path.startsWith(pluginDirPrefix));
     if (easySyncDownloads.length > 0) {
@@ -30784,7 +30792,7 @@ export class SyncExecutor {
    *  Returns the number of EasySync items to skip (0 = remote >= local, all = downgrade). */
   private async guardEasySyncDowngrade(
     items: SyncPlanItem[],
-  ): Promise<number> {    const { manifestFile } = getEasySyncPaths(this.scanner.vault);
+  ): Promise<number> {    const { manifestFile } = getEasySyncPaths(this.scanner.vault, this.pluginId);
     const manifestItem = items.find((i) => i.path === manifestFile);
     if (!manifestItem?.remote) return 0; // no remote manifest to check
 

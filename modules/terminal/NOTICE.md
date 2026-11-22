@@ -38,7 +38,7 @@ esbuild 出 main.js。合并版改为：
 --------------------------------
 1. `terminalSveltePlugin`：子库有 find.svelte 组件与 src/svelte.svelte.ts
    （$state runes 模块）。esbuild-svelte 默认 filter 只认 `\.svelte$`，
-   此插件以 `/my-terminal[\\/]vendor.*\.svelte(?:\.ts)?$/` 作用域编译
+   此插件以 `/terminal[\\/]vendor.*\.svelte(?:\.ts)?$/` 作用域编译
    `.svelte.ts`（moduleCompilerOptions generate client），注册在根
    sveltePlugin 之前。上游的 PACKAGE_ID 定制 cssHash 未带（默认哈希无碰撞）。
 2. `terminalPyPlugin`：`.py` → text loader（同上游 esbuild-compress 语义，
@@ -58,8 +58,9 @@ Known deviations from upstream
 3. `esbuildPluginGlobals({ moment })` 未带：上游把全局 moment 映射到 npm
    moment 包；宿主直接用 Obsidian 提供的 window.moment，语义一致。
 4. manifest.version 由 descriptor 覆盖为上游 3.28.0（其内部语义读
-   manifest.version，同 ARDH/CAL/vault-explorer 先例）；id 用 my- 前缀
-   `my-terminal`（设置页命名空间隔离），legacyId 同值供迁移与查找。
+   manifest.version，同 ARDH/CAL/vault-explorer 先例）；模块 id `terminal`
+   （2026-11-23 去掉 my- 前缀；运行时 manifest.id 由宿主统一覆盖为
+   `obsidian-my-obsidian`）。
 
 Settings migration
 -------------------

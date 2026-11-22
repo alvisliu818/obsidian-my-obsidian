@@ -12,9 +12,8 @@
 - 收编方式: 工作区整体拷贝（`src/`、`main.ts`、`LICENSE`、`README.md`、
   `manifest.json`、`versions.json`、`tsconfig.json`、`package.json`），
   嫁接提交的树与上游 HEAD 逐文件一致
-- manifest id: `my-abstract-folder`（2026-10-30 起聚合内 id 与 legacyId 均用
-  my- 前缀 id，不再占用上游 id；`app.plugins.plugins["my-abstract-folder"]`
-  可解析）
+- manifest id: `abstract-folder`（2026-11-23 去掉 my- 前缀，与上游 id 一致；
+  运行时 manifest.id 由宿主统一覆盖为 `obsidian-my-obsidian`）
 - `isDesktopOnly: true`，宿主 descriptor 同步标 `desktopOnly: true`
 
 ## 功能

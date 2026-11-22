@@ -462,7 +462,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     const plugins = (this.app as unknown as {
       plugins?: { plugins?: Record<string, { refresh?: () => void }> };
     }).plugins?.plugins;
-    for (const id of ['my-breadcrumb-nav']) {
+    for (const id of ['breadcrumb']) {
       const p = plugins?.[id];
       if (typeof p?.refresh === 'function') {
         try {
@@ -689,7 +689,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
         | { moduleInstance?: (id: string) => unknown }
         | undefined;
       const sc = (hostInst?.moduleInstance?.('save-control') ??
-        table?.['my-save-history']) as
+        table?.['save-control']) as
         | { onExternalSaved?: (abs: string, fileName: string, previousContent?: string | null) => void }
         | undefined;
       sc?.onExternalSaved?.(this.externalAbs, baseOf(this.externalAbs), previousDiskData);

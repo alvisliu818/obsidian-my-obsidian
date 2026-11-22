@@ -224,7 +224,7 @@ export default class OmnisearchPlugin extends Plugin {
 
   async onunload(): Promise<void> {
     // @ts-ignore
-    delete globalThis['my-omnisearch']
+    delete globalThis['omnisearch']
 
     if (this.refreshIndexCallback) {
       removeEventListener('blur', this.refreshIndexCallback)
@@ -258,7 +258,7 @@ export default class OmnisearchPlugin extends Plugin {
    * @returns
    */
   public getChsSegmenter(): any | undefined {
-    return resolveHostModule(this.app, 'chs-patch', 'my-cm-chs-patch', 'cm-chs-patch')
+    return resolveHostModule(this.app, 'chs-patch', 'chs-patch', 'cm-chs-patch')
   }
 
   /**
@@ -270,7 +270,7 @@ export default class OmnisearchPlugin extends Plugin {
     return resolveHostModule(
       this.app,
       'text-extractor',
-      'my-text-extractor',
+      'text-extractor',
       'text-extractor',
     )?.api
   }
@@ -280,7 +280,7 @@ export default class OmnisearchPlugin extends Plugin {
    * @returns
    */
   public getAIImageAnalyzer(): AIImageAnalyzerAPI | undefined {
-    return resolveHostModule(this.app, 'ai-image-analyzer', 'my-ai-image-analyzer')?.api
+    return resolveHostModule(this.app, 'ai-image-analyzer', 'ai-image-analyzer')?.api
   }
 
   /**
@@ -296,7 +296,7 @@ export default class OmnisearchPlugin extends Plugin {
   private async getExternalIndexableFiles(): Promise<Array<{ path: string; mtime: number }>> {
     try {
       // 模块 id 2026-11-07 由 logseq 改名 md-editor;老独立版插件 id 留作软依赖回落。
-      const logseq = resolveHostModule(this.app, 'md-editor', 'logseq', 'my-obsidian-logseq') as
+      const logseq = resolveHostModule(this.app, 'md-editor', 'logseq', 'md-editor') as
         | {
             listExternalSearchFiles?: () => Array<{ abs: string; name: string; mtime: number }>
             listExternalSearchFilesAsync?: () => Promise<Array<{ abs: string; name: string; mtime: number }>>
