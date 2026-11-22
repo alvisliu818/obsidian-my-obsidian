@@ -147,6 +147,9 @@ export interface VaultLogRecord {
 }
 
 export interface VaultLogSettings {
+	/** 修改对比基线(2026-11-21 用户改成设置项):git = 上次 git 提交(HEAD);
+	 * record = 上次库记录时点。默认 git。 */
+	diffBaseline?: 'git' | 'record';
 	/** 自动记录总开关(关=只允许手动打点) */
 	enabled: boolean;
 	/** 每日固定记录时间 HH:mm(''=关) */

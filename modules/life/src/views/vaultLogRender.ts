@@ -11,6 +11,7 @@
  * 类名沿用 life-home-*(样式同一套,视觉一致)。
  */
 import { changeSummary } from '../vaultLog';
+import { Setting } from 'obsidian';
 import type { VaultLogRecord, VaultLogSettings } from '../types';
 
 export interface VaultLogUiState {
@@ -33,11 +34,11 @@ export interface VaultLogUiHandlers {
 	onManualRecord: () => void | Promise<void>;
 	/** 打开文件(新增/修改/重命名目标条目点击;缺省 = 条目不可点) */
 	onOpenFile?: (path: string) => void;
-	/** 修改条目点击(2026-11-21 用户):打开文件并登记修改装点(行号右侧绿/蓝
-	 * 标志);缺省回落 onOpenFile。 */
-	onOpenModified?: (recordId: string, path: string) => void;
-	/** 「对比」小钮(修改条目):打开修改对比弹窗,可撤回。 */
-	onCompareFile?: (recordId: string, path: string) => void;
+	/** 修改条目点击(2026-11-21 用户,基线=上次 git 提交):打开文件并登记修改
+	 * 装点(行号右侧绿/蓝标志);缺省回落 onOpenFile。 */
+	onOpenModified?: (path: string) => void;
+	/** 「对比」小钮(修改条目):打开修改对比弹窗(与上次提交比),可撤回。 */
+	onCompareFile?: (path: string) => void;
 	/** 设置变更(开关/输入);设置节独立渲染,记录列表不需要 */
 	onSettingsChange?: () => void;
 }
@@ -276,17 +277,18 @@ export function renderDiffListsInto(
 			if (list.length === 0) continue;
 			container.createDiv({ cls: 'life-home-rec-kind-title', text: `${label}(${list.length})` });
 			for (const p of list.slice(0, 30)) {
-				if (label === '修改' && rec.id) {
-					// 修改条目(2026-11-21 用户):点击 = 打开文件并画修改装点
-					// (行号右侧绿/蓝标志);「对比」小钮 = 直接看对比并可撤回。
+				if (label === '修改') {
+					// 修改条目(2026-11-21 用户,基线=上次 git 提交):点击 = 打开
+					// 文件并画修改装点(行号右侧绿/蓝标志);「对比」小钮 = 直接看
+					// 对比并可撤回到上次提交。
 					const modHandlers: VaultLogUiHandlers = {
 						...handlers,
 						onOpenFile: (pp) =>
 							handlers.onOpenModified
-								? handlers.onOpenModified(rec.id, pp)
+								? handlers.onOpenModified(pp)
 								: handlers.onOpenFile?.(pp),
 					};
-					const item = renderDiffItem(container, p, cls, p, modHandlers, handlers.onCompareFile ? () => handlers.onCompareFile?.(rec.id, p) : undefined);
+					const item = renderDiffItem(container, p, cls, p, modHandlers, handlers.onCompareFile ? () => handlers.onCompareFile?.(p) : undefined);
 					void item;
 				} else {
 					renderDiffItem(container, p, cls, p, handlers);
@@ -307,6 +309,24 @@ export function renderVaultLogSettingsInto(
 	vl: VaultLogSettings,
 	onChange: () => void,
 ): void {
+	// 修改对比基线(2026-11-21 用户改成设置项):编辑器修改装点/对比视图与
+	// 「撤回」的对比基准。
+	new Setting(container)
+		.setName('修改对比基线')
+		.setDesc(
+			'编辑器里修改装点/对比视图与「撤回」的对比基准。' +
+				'上次 git 提交 = 需要 Git 模块(推荐,数据在 git 里持久);' +
+				'上次库记录时点 = 与最近一次库记录时的内容比(内存快照,重启后不可用)。',
+		)
+		.addDropdown((d) => {
+			d.addOption('git', '上次 git 提交(HEAD)');
+			d.addOption('record', '上次库记录时点');
+			d.setValue(vl.diffBaseline === 'record' ? 'record' : 'git');
+			d.onChange(async (v) => {
+				vl.diffBaseline = v === 'record' ? 'record' : 'git';
+				onChange?.();
+			});
+		});
 	const toggleRow = (label: string, value: boolean, cb: (v: boolean) => void): void => {
 		const row = container.createDiv({ cls: 'life-home-setting-row' });
 		row.createSpan({ cls: 'life-home-setting-label', text: label });

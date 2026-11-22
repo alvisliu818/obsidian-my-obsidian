@@ -436,6 +436,20 @@ export class SimpleGit extends GitManager {
         this.watchAbortController?.abort();
     }
 
+    /**
+     * 读一个文件在上次提交(HEAD)里的内容(2026-11-21 用户:库记录修改对比
+     * 跟上次 git 提交相比)。文件不在 HEAD(新文件/未提交)返回 null;
+     * GIT_DIR/GIT_WORK_TREE env 已在 setGitInstance 配好,指针文件布局同样可用。
+     */
+    async showFileAtHead(path: string): Promise<string | null> {
+        try {
+            const out = await this.git.show(["HEAD:" + path.replace(/\\/g, "/")]);
+            return typeof out === "string" ? out : null;
+        } catch {
+            return null;
+        }
+    }
+
     async status(opts?: { path?: string }): Promise<Status> {
         const dir = opts?.path ?? this.getVaultPathspec();
         const [status, stagedOutsideVault, conflictedOutsideVault] =

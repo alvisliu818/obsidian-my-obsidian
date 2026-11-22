@@ -63551,9 +63551,13 @@ body.is-mobile
 /* 原生编辑器(CM6)行标记:inset 阴影 = 行首竖条 */
 .cm-line.lgp-vault-diff-add { box-shadow: inset 3px 0 0 0 var(--color-green, #3fb950); }
 .cm-line.lgp-vault-diff-mod { box-shadow: inset 3px 0 0 0 var(--color-blue, #4493f8); }
-/* Monaco 整行 class 装点:行首 inset 竖条(池化编辑器 glyph 区不渲染,实测) */
-.monaco-editor .view-line.lgp-diff-line-add { box-shadow: inset 3px 0 0 0 var(--color-green, #3fb950); }
-.monaco-editor .view-line.lgp-diff-line-mod { box-shadow: inset 3px 0 0 0 var(--color-blue, #4493f8); }
+/* Monaco 整行 class 装点:落在 .cdr 内容装饰覆盖层(实测),inset 竖条画行首
+   = 行号右侧文本左侧(VSCode 同位)。pointer-events:none 让点击穿透到文本
+   (覆盖层会吞 mousedown 的坐标解析);编辑器级 mousedown + 行首带宽判定开弹窗。 */
+.monaco-editor .cdr.lgp-diff-line-add,
+.monaco-editor .cdr.lgp-diff-line-mod { pointer-events: none; }
+.monaco-editor .cdr.lgp-diff-line-add { box-shadow: inset 3px 0 0 0 var(--color-green, #3fb950); }
+.monaco-editor .cdr.lgp-diff-line-mod { box-shadow: inset 3px 0 0 0 var(--color-blue, #4493f8); }
 /* 对比弹窗 */
 .vl-diff-modal .vl-diff-path { font-weight: 600; margin-bottom: 8px; word-break: break-all; }
 .vl-diff-modal .vl-diff-empty { color: var(--text-muted); padding: 12px 4px; }

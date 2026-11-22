@@ -10,7 +10,6 @@ export class VaultLogDiffModal extends Modal {
 	constructor(
 		app: App,
 		private plugin: LifePlugin,
-		private recordId: string,
 		private path: string,
 	) {
 		super(app);
@@ -23,11 +22,11 @@ export class VaultLogDiffModal extends Modal {
 		contentEl.addClass('vl-diff-modal');
 		contentEl.createDiv({ cls: 'vl-diff-path', text: this.path });
 
-		const diff = await this.plugin.getRecordDiff(this.recordId, this.path);
+		const diff = await this.plugin.getRecordDiff(this.path);
 		if (!diff) {
 			contentEl.createDiv({
 				cls: 'vl-diff-empty',
-				text: '该文件当前与记录时内容一致(可能已撤回,或快照已随旧记录清理)。',
+				text: '该文件当前与上次提交(HEAD)一致(可能已撤回/已提交)。',
 			});
 			return;
 		}
@@ -50,14 +49,14 @@ export class VaultLogDiffModal extends Modal {
 		}
 
 		const foot = contentEl.createDiv({ cls: 'vl-diff-foot' });
-		const btn = foot.createEl('button', { cls: 'life-home-rec-btn', text: '撤回此文件到该记录前' });
+		const btn = foot.createEl('button', { cls: 'life-home-rec-btn', text: '撤回此文件到上次提交' });
 		btn.addEventListener('click', async () => {
-			const ok = await this.plugin.revertRecordFile(this.recordId, this.path);
+			const ok = await this.plugin.revertRecordFile(this.path);
 			if (ok) {
-				new Notice(`已撤回:${this.path} → 该记录前的内容`);
+				new Notice(`已撤回:${this.path} → 上次提交(HEAD)的内容`);
 				this.close();
 			} else {
-				new Notice('撤回失败:没有该记录的修改前快照');
+				new Notice('撤回失败:git 模块未启用或文件不在仓库中');
 			}
 		});
 	}

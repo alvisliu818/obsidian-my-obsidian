@@ -38,6 +38,7 @@ import { markLeafTouched } from './tabTouch';
 import { HybridCodeEditor } from './hybridCodeEditor';
 import { buildCodeExtLink, toExtPath } from '../../../virtual-tree/src/features/codeFileLinks';
 import { applyMarkedTabIcons, markLeafTabIcon } from '../../../virtual-tree/src/features/tabIcon';
+import { buildDiffOverlayDom } from '../../../virtual-tree/src/features/diffOverlayDom';
 import { runFile, langFromExt } from '../../../code-editor/src/exec/runner';
 import type { RunHandle } from '../../../code-editor/src/exec/pythonRunner';
 
@@ -102,9 +103,12 @@ export class ExternalCodeView extends ItemView {
   /** 库记录修改对比(2026-11-21 用户):当前文件的库内相对路径与装点状态。 */
   private vaultPath: string | null = null;
   private diffCollection: monacoNS.editor.IEditorDecorationsCollection | null = null;
+  private diffCollectionOwner: monacoNS.editor.IStandaloneCodeEditor | null = null;
   private diffLineSet = new Set<number>();
-  private diffRecordId: string | null = null;
   private diffHandlerFor: monacoNS.editor.IStandaloneCodeEditor | null = null;
+  private diffZoneId: string | null = null;
+  private diffZoneOwner: monacoNS.editor.IStandaloneCodeEditor | null = null;
+  private diffZoneOpen = false;
   private lastDiskData = '';
   // 加载失败标记:挡住 flush,防止把空缓冲覆盖回远端(BlockEditorView 同款)
   private loadFailed = false;
@@ -187,29 +191,39 @@ export class ExternalCodeView extends ItemView {
 
   /** 库记录对比 API(鸭式取 LifePlugin,不静态 import 防模块环)。 */
   private lifeDiffApi(): {
-    getEditorDiff?: (path: string) => { recordId: string; diff: { added: number[]; modified: number[] } } | null;
-    openRecordDiffModal?: (recordId: string, path: string) => void;
+    getEditorDiff?: (path: string) => {
+      diff: {
+        added: number[];
+        modified: number[];
+        rows?: Array<{ beforeLine: number | null; afterLine: number | null; kind: 'ctx' | 'add' | 'mod' | 'del'; text: string }>;
+      };
+    } | null;
+    revertRecordFile?: (path: string) => Promise<boolean>;
   } | null {
     const host = (this.app as unknown as {
       plugins?: { plugins?: Record<string, { moduleInstance?: (id: string) => unknown } | undefined> };
     }).plugins?.plugins?.['obsidian-my-obsidian'];
     return (
       (host?.moduleInstance?.('life') as {
-        getEditorDiff?: (path: string) => { recordId: string; diff: { added: number[]; modified: number[] } } | null;
-        openRecordDiffModal?: (recordId: string, path: string) => void;
+        getEditorDiff?: (path: string) => { diff: { added: number[]; modified: number[] } } | null;
+        openRecordDiffModal?: (path: string) => void;
       } | undefined) ?? null
     );
   }
 
-  /** 应用库记录修改装点(行号右侧 glyph 竖条:新增绿/修改蓝)+ 点击开对比弹窗。
-   * 数据源 = LifePlugin 的编辑器对比登记表(库记录点击修改文件时登记)。 */
+  /** 外部内容变更(git 撤回等)后强制从磁盘重读并刷新编辑器。 */
+  async reloadFromDisk(): Promise<void> {
+    await this.mount();
+    await this.applyVaultDiffDecorations();
+  }
+
+  /** 应用库记录修改装点(行首竖条:新增绿/修改蓝)+ 对比覆盖层(有差异自动
+   * 展开,点击竖条开/收)。数据源 = LifePlugin 的编辑器对比登记表。 */
   private async applyVaultDiffDecorations(): Promise<void> {
     if (!this.editor) return;
     const life = this.lifeDiffApi();
     const entry = this.vaultPath && life?.getEditorDiff ? life.getEditorDiff(this.vaultPath) : null;
     this.diffLineSet.clear();
-    if (entry) this.diffRecordId = entry.recordId;
-    else this.diffRecordId = null;
     const decos: monacoNS.editor.IModelDeltaDecoration[] = [];
     if (entry) {
       for (const l of entry.diff.added) {
@@ -227,30 +241,108 @@ export class ExternalCodeView extends ItemView {
         });
       }
     }
-    if (this.diffCollection) {
+    // 池化编辑器每次 mount 可能换实例:集合归属不是当前 editor 就重建,
+    // 否则 clear/set 打在已停放的旧实例上,新编辑器永远没有装点(实测)。
+    if (this.diffCollection && this.diffCollectionOwner === this.editor) {
       this.diffCollection.clear();
       this.diffCollection.set(decos);
     } else {
       this.diffCollection = this.editor.createDecorationsCollection(decos);
+      this.diffCollectionOwner = this.editor;
     }
-    // 跳到首个差异行(VSCode 行为:点对比进来直接看到改动处)
+    // 跳到首个差异行(VSCode 行为:点对比进来直接看到改动处)。延迟一拍:
+    // 池化编辑器重挂后尺寸未收敛,立即 reveal 用旧几何计算会落空(实测)。
     const firstDiff = Math.min(...(decos.length ? decos.map((d) => d.range.startLineNumber) : [Infinity]));
-    if (Number.isFinite(firstDiff)) this.editor.revealLineInCenter(firstDiff);
-    // glyph margin 点击 → 对比弹窗(每编辑器实例注册一次)
-    if (this.diffHandlerFor !== this.editor) {
-      this.diffHandlerFor = this.editor;
-      this.editor.onMouseDown((e) => {
-        const line = e.target.position?.lineNumber;
-        if (line === undefined || !this.diffLineSet.has(line)) return;
-        // 竖条区域 = 行元素左缘 10px 内(装点画在行首,点击竖条即开对比)
-        const rect = e.target.element?.getBoundingClientRect();
-        if (!rect || e.event.posx - rect.left > 10) return;
-        const api = this.lifeDiffApi();
-        if (this.diffRecordId && this.vaultPath && api?.openRecordDiffModal) {
-          api.openRecordDiffModal(this.diffRecordId, this.vaultPath);
+    const edNow = this.editor;
+    if (Number.isFinite(firstDiff) && edNow) {
+      window.setTimeout(() => {
+        try {
+          edNow.revealLineInCenter(firstDiff);
+        } catch {
+          /* 模型可能已换,忽略 */
         }
-      });
+      }, 150);
     }
+    // 对比覆盖层:有差异自动展开;点击竖条开/收(每编辑器实例注册一次)。
+    if (this.diffHandlerFor !== this.editor || !this.editor) {
+      const edNow = this.editor;
+      this.diffHandlerFor = edNow;
+      if (edNow) {
+        const editor: monacoNS.editor.IStandaloneCodeEditor = edNow;
+        editor.onMouseDown((e) => {
+          const line = e.target.position?.lineNumber;
+          // 命中放宽 L/L+1:末行覆盖层的 hit-test 会偏一行(实测 117 解析成 116)
+          if (line === undefined || (!this.diffLineSet.has(line) && !this.diffLineSet.has(line + 1))) return;
+          // 竖条区域 = 内容区左缘 12px 内(装点画在行首)。用 .view-lines 的
+          // 左缘做参照(稳定),不依赖事件 target 元素(monaco 报的是下层文本)。
+          const dom = editor.getDomNode();
+          if (!dom) return;
+          const linesEl = dom.querySelector('.view-lines');
+          const left = linesEl?.getBoundingClientRect().left ?? null;
+          if (left === null || e.event.posx - left > 12) return;
+          this.toggleDiffZone(!this.diffZoneOpen);
+        });
+      }
+    }
+    // 覆盖层展开状态随编辑器实例失效(池化换实例/重挂后重建)
+    if (this.diffZoneOwner !== this.editor) {
+      this.diffZoneId = null;
+      this.diffZoneOpen = false;
+      this.diffZoneOwner = this.editor;
+    }
+    if (entry && !this.diffZoneOpen && !this.diffZoneId) this.toggleDiffZone(true);
+  }
+
+  /** 开/收对比覆盖层(monaco 视区:插入在首个差异行下方,推挤内容)。
+   * DOM = virtual-tree 的 buildDiffOverlayDom(VSCode peek 同款:红删/绿增/
+   * 双行号,头部撤回/关闭)。 */
+  private toggleDiffZone(open: boolean): void {
+    const ed = this.editor;
+    const vp = this.vaultPath;
+    const life = this.lifeDiffApi();
+    if (!ed || !vp) return;
+    const model = ed.getModel();
+    if (!model) return;
+    const lineCount = model.getLineCount();
+    if (this.diffZoneOwner !== ed) {
+      this.diffZoneId = null;
+      this.diffZoneOwner = ed;
+      this.diffZoneOpen = false;
+    }
+    if (this.diffZoneId) {
+      const stale = this.diffZoneId;
+      ed.changeViewZones((a) => a.removeZone(stale));
+      this.diffZoneId = null;
+      this.diffZoneOpen = false;
+      if (!open) return;
+    }
+    if (!open) return;
+    const entry = life?.getEditorDiff ? life.getEditorDiff(vp) : null;
+    if (!entry) return;
+    const rows = (entry.diff.rows ?? []).map((r) => ({
+      bl: r.beforeLine,
+      al: r.afterLine,
+      k: r.kind,
+      t: r.text,
+    }));
+    const dom = buildDiffOverlayDom({
+      title: vp,
+      rows,
+      onRevert: () => {
+        void life?.revertRecordFile?.(vp).then(() => this.reloadFromDisk());
+      },
+      onClose: () => this.toggleDiffZone(false),
+    });
+    const firstDiff = Math.min(...(rows.length ? rows.map((r) => r.al ?? r.bl ?? lineCount) : [lineCount]));
+    const height = rows.length * 18 + 34;
+    ed.changeViewZones((a) => {
+      this.diffZoneId = a.addZone({
+        afterLineNumber: Math.min(Math.max(1, firstDiff), lineCount),
+        heightInPx: height,
+        domNode: dom,
+      });
+    });
+    this.diffZoneOpen = true;
   }
 
   async onOpen(): Promise<void> {

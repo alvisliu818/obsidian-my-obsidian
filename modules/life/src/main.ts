@@ -15,6 +15,7 @@ import { VIEW_LIFE_VAULTLOG, LifeVaultLogView } from './views/vaultlog';
 import { dailyDue, periodDue, scanVaultSig, diffWithRenames, changeSummary, dayKeyOf, parseHHmm, diffLines, type LineDiff, type VaultDiffWithRenames } from './vaultLog';
 import { VaultLogDiffModal } from './vaultLogDiffModal';
 import { dispatchVaultDiffToCm, setVaultDiffEntry, vaultDiffExtension } from './editorDiffCm6';
+import { TFile as _TFileReuse } from 'obsidian';
 import { VIEW_LIFE_CLOCK, LifeClockView } from './views/clock';
 import { VIEW_LIFE_DDAY, LifeDdayView } from './views/dday';
 import { VIEW_LIFE_HABITS, LifeHabitsView } from './views/habits';
@@ -78,11 +79,13 @@ export default class LifePlugin extends Plugin {
 		// 原生编辑器修改装点(2026-11-21 用户):库记录对比体系的 CM6 扩展
 		// (新增绿/修改蓝,点击标记开对比弹窗)。
 		this.registerEditorExtension(
-			vaultDiffExtension((path, recordId) => this.openRecordDiffModal(recordId, path)),
+			vaultDiffExtension((path) => this.openRecordDiffModal(path)),
 		);
 		this.app.workspace.onLayoutReady(() => {
-			// 影子基线兜底:首次记录之前也建好(与 first 记录分支互斥幂等)。
-			window.setTimeout(() => void this.buildVaultShadowBaseline(), 3000);
+			// record 基线的影子兜底:与 first 记录分支互斥幂等。
+			if (this.vaultDiffBaseline() === 'record') {
+				window.setTimeout(() => void this.buildVaultShadowBaseline(), 3000);
+			}
 		});
 
 		// 计时哨兵：倒计时/番茄到点提醒（面板关着也要响）。1s 一次,开销可忽略。
@@ -256,22 +259,39 @@ export default class LifePlugin extends Plugin {
 	 * - 签名一致的 删除↔新增 配对成重命名/移动;
 	 * - 自动触发(周期/每日)零变化不落记录——此前空记录刷屏。
 	 */
-	/** 库文件内容影子(上次记录时点,单文件 ≤400KB,总量 ≤48MB):修改对比/撤回
-	 * 的 before 来源。内存态,重启后由基线重建(重启前的记录无对比数据,优雅
-	 * 降级为不可对比)。 */
+	/** 编辑器装点登记表:库内相对路径 → 行级 diff(基线见 vaultDiffBaseline)。 */
+	private editorDiffRegistry = new Map<string, { diff: LineDiff }>();
+	/** 库文件内容影子(上次记录时点,单文件 ≤400KB,总量 ≤48MB):record 基线的
+	 * before 来源。内存态,重启后由基线重建。仅 diffBaseline='record' 时构建。 */
 	private vaultShadow = new Map<string, string>();
 	private vaultShadowBytes = 0;
 	private shadowReady = false;
-	/** 各记录的修改前内容:recordId → (path → before)。内存态,LRU 50 条记录。 */
-	private recordSnapshots = new Map<string, Record<string, string>>();
-	/** 编辑器装点登记表:库内相对路径 → (recordId + 行级 diff)。 */
-	private editorDiffRegistry = new Map<string, { recordId: string; diff: LineDiff }>();
-
 	private static readonly SHADOW_FILE_CAP = 400 * 1024;
 	private static readonly SHADOW_TOTAL_CAP = 48 * 1024 * 1024;
-	private static readonly RECORD_SNAPSHOT_CAP = 50;
 
-	/** 读一个库内文件的文本内容做影子/对比;超限或疑似二进制返回 null。 */
+	private vaultDiffBaseline(): 'git' | 'record' {
+		return this.store.settings.vaultLog?.diffBaseline === 'record' ? 'record' : 'git';
+	}
+
+	/** obsidian-git 的桌面 git 管理器(HEAD 内容读取/单文件还原);未启用或
+	 * 移动端(isomorphic)返回 null——对比/撤回优雅降级为不可用。 */
+	private gitDiffManager(): {
+		showFileAtHead?: (path: string) => Promise<string | null>;
+		restoreFileToHead?: (path: string) => Promise<boolean>;
+	} | null {
+		const host = (this.app as unknown as {
+			plugins?: { plugins?: Record<string, { moduleInstance?: (id: string) => unknown } | undefined> };
+		}).plugins?.plugins?.['obsidian-my-obsidian'];
+		const git = host?.moduleInstance?.('obsidian-git') as
+			| { gitManager?: { showFileAtHead?: unknown; restoreFileToHead?: unknown; useSimpleGit?: boolean } }
+			| undefined;
+		const mgr = git?.gitManager as
+			| { showFileAtHead?: (path: string) => Promise<string | null>; restoreFileToHead?: (path: string) => Promise<boolean> }
+			| undefined;
+		return mgr && typeof mgr.showFileAtHead === 'function' ? mgr : null;
+	}
+
+	/** 读一个库内文件的文本内容做影子;超限或疑似二进制返回 null。 */
 	private async readShadowable(path: string): Promise<string | null> {
 		const f = this.app.vault.getAbstractFileByPath(path);
 		if (!(f instanceof TFile)) return null;
@@ -305,9 +325,10 @@ export default class LifePlugin extends Plugin {
 		this.vaultShadow.delete(path);
 	}
 
-	/** 启动基线:把当前全库文本读进影子(8ms 分片让出主线程,后台完成)。 */
+	/** 启动基线:把当前全库文本读进影子(8ms 分片让出主线程,后台完成)。
+	 * 仅 record 基线需要(git 基线数据源在 git 模块)。 */
 	private async buildVaultShadowBaseline(): Promise<void> {
-		if (this.shadowReady) return;
+		if (this.shadowReady || this.vaultDiffBaseline() !== 'record') return;
 		this.shadowReady = true;
 		const files = this.app.vault.getFiles();
 		let i = 0;
@@ -338,52 +359,94 @@ export default class LifePlugin extends Plugin {
 		}
 	}
 
-	/** 记录修改对比(库内相对路径):快照(before)与当前内容行级 diff;无快照
-	 * 或内容已一致返回 null。 */
-	async getRecordDiff(recordId: string, path: string): Promise<LineDiff | null> {
-		const before = this.recordSnapshots.get(recordId)?.[path];
-		if (before === undefined) return null;
-		const cur = await this.readShadowable(path);
-		if (cur === null || cur === before) return null;
+	/** 修改对比(库内相对路径):当前内容与基线的行级 diff。基线按设置:
+	 * git = 上次提交(HEAD);record = 上次库记录时点(影子)。无基线/无差异
+	 * 返回 null。 */
+	async getRecordDiff(path: string): Promise<LineDiff | null> {
+		const f = this.app.vault.getAbstractFileByPath(path);
+		if (!(f instanceof TFile)) return null;
+		let before: string | null = null;
+		if (this.vaultDiffBaseline() === 'record') {
+			before = this.vaultShadow.get(path) ?? null;
+		} else {
+			const mgr = this.gitDiffManager();
+			if (!mgr?.showFileAtHead) return null;
+			before = await mgr.showFileAtHead(path);
+		}
+		if (before === null) return null;
+		const cur = await this.app.vault.cachedRead(f);
+		if (cur === before) return null;
 		return diffLines(before, cur);
 	}
 
-	/** 撤回:把文件写回该记录的修改前内容(对比弹窗的「撤回」按钮)。 */
-	async revertRecordFile(recordId: string, path: string): Promise<boolean> {
-		const before = this.recordSnapshots.get(recordId)?.[path];
-		if (before === undefined) return false;
+	/** 撤回:单文件还原到上次提交(丢弃未提交修改;git restore HEAD -- path)。 */
+	async revertRecordFile(path: string): Promise<boolean> {
+		let before: string | null = null;
+		if (this.vaultDiffBaseline() === 'record') {
+			before = this.vaultShadow.get(path) ?? null;
+		} else {
+			const mgr = this.gitDiffManager();
+			before = mgr?.showFileAtHead ? await mgr.showFileAtHead(path) : null;
+		}
+		if (before === null) return false;
 		const f = this.app.vault.getAbstractFileByPath(path);
-		if (f instanceof TFile) await this.app.vault.modify(f, before);
-		else await this.app.vault.create(path, before);
-		new Notice(`已撤回:${path} → 该记录前的内容`);
+		if (!(f instanceof TFile)) return false;
+		const cur = await this.app.vault.cachedRead(f);
+		if (cur === before) return true; // 已是基线内容,幂等
+		await this.app.vault.modify(f, before);
+		new Notice(
+			`已撤回:${path} → ` +
+				(this.vaultDiffBaseline() === 'git' ? '上次提交(HEAD)' : '上次库记录时点') +
+				'的内容',
+		);
 		this.refreshHomeViews();
+		// monaco 视图无 file→editor 同步:撤回后强制打开中的代码视图重读,
+		// 否则其缓冲(旧内容)的自动保存会把撤回覆盖回去(实测)。
+		await this.reloadExternalCodeViews(path);
 		return true;
 	}
 
+	/** 撤回后强制重读打开中的代码视图(monaco 无 file→editor 同步)。 */
+	private async reloadExternalCodeViews(path: string): Promise<void> {
+		const wanted = path.replace(/\\/g, '/').toLowerCase();
+		const leaves: WorkspaceLeaf[] = [];
+		this.app.workspace.iterateAllLeaves((leaf) => leaves.push(leaf));
+		for (const leaf of leaves) {
+			const v = leaf.view as {
+				viewType?: string;
+				abs?: string;
+				reloadFromDisk?: () => Promise<void>;
+			} | null;
+			if (v?.viewType !== 'logseq-external-code' || typeof v.reloadFromDisk !== 'function') continue;
+			const abs = typeof v.abs === 'string' ? v.abs.replace(/\\/g, '/').toLowerCase() : '';
+			if (abs.endsWith('/' + wanted) || abs === wanted) await v.reloadFromDisk();
+		}
+	}
+
 	/** 登记编辑器装点并分发到打开中的同文件编辑器(原生 CM)。 */
-	private setEditorDiff(path: string, recordId: string, diff: LineDiff): void {
-		const entry = { recordId, diff };
+	private setEditorDiff(path: string, diff: LineDiff): void {
+		const entry = { diff, open: true };
 		this.editorDiffRegistry.set(path, entry);
 		setVaultDiffEntry(path, entry);
 		dispatchVaultDiffToCm(this.app, path);
 	}
 
-	getEditorDiff(path: string): { recordId: string; diff: LineDiff } | null {
+	getEditorDiff(path: string): { diff: LineDiff } | null {
 		return this.editorDiffRegistry.get(path) ?? null;
 	}
 
-	/** 库记录点击修改的文件:计算对比 → 登记编辑器装点 → 打开文件(打开的
-	 * 编辑器从登记表读装点:原生走 CM 扩展,monaco 视图自行消费)。 */
-	async openModifiedFileWithDiff(recordId: string, path: string): Promise<void> {
-		const diff = await this.getRecordDiff(recordId, path);
-		if (diff) this.setEditorDiff(path, recordId, diff);
+	/** 库记录点击修改的文件:计算与上次提交的对比 → 登记编辑器装点 → 打开
+	 * 文件(打开的编辑器从登记表读装点:原生走 CM 扩展,monaco 视图自行消费)。 */
+	async openModifiedFileWithDiff(path: string): Promise<void> {
+		const diff = await this.getRecordDiff(path);
+		if (diff) this.setEditorDiff(path, diff);
 		else this.editorDiffRegistry.delete(path);
 		await this.app.workspace.openLinkText(path, '', false);
 	}
 
 	/** 「对比」小钮:打开修改对比弹窗(可撤回)。 */
-	openRecordDiffModal(recordId: string, path: string): void {
-		new VaultLogDiffModal(this.app, this, recordId, path).open();
+	openRecordDiffModal(path: string): void {
+		new VaultLogDiffModal(this.app, this, path).open();
 	}
 
 	async recordVaultChanges(trigger: 'period' | 'daily' | 'manual' = 'manual'): Promise<VaultLogRecord> {
@@ -396,8 +459,8 @@ export default class LifePlugin extends Plugin {
 		// 首次记录:快照文件不存在 = 只建立基线,不列变化(万级「新增」是噪声)
 		if (prev === null) {
 			await this.saveVaultLogSnapshot(cur);
-			// 影子基线(后台分片):此后修改的文件才有对比数据。
-			void this.buildVaultShadowBaseline();
+			// record 基线:影子基线(后台分片),此后修改的文件才有对比数据。
+			if (this.vaultDiffBaseline() === 'record') void this.buildVaultShadowBaseline();
 			const rec: VaultLogRecord = {
 				id: genId(),
 				at: now.toISOString(),
@@ -416,6 +479,8 @@ export default class LifePlugin extends Plugin {
 		}
 		const diff = diffWithRenames(prev, cur);
 		await this.saveVaultLogSnapshot(cur);
+		// record 基线:影子推进到本次记录时点(下次对比的 before)。
+		if (this.vaultDiffBaseline() === 'record') await this.advanceVaultShadow(diff);
 		const empty =
 			diff.added.length + diff.modified.length + diff.deleted.length + diff.renames.length === 0;
 		// 自动触发零变化:标记已推进(防每 30s 重判),不落记录
@@ -448,22 +513,6 @@ export default class LifePlugin extends Plugin {
 		rec.modified = cap(rec.modified);
 		rec.deleted = cap(rec.deleted);
 		rec.renames = rec.renames?.slice(0, 500);
-		// 修改对比快照(2026-11-21 用户):影子里的修改前内容存为本记录快照
-		// (编辑器装点/对比弹窗/撤回的数据源);影子随后推进到当前。
-		const snaps: Record<string, string> = {};
-		for (const p of rec.modified) {
-			const before = this.vaultShadow.get(p);
-			if (before !== undefined) snaps[p] = before;
-		}
-		if (Object.keys(snaps).length > 0) {
-			this.recordSnapshots.set(rec.id, snaps);
-			while (this.recordSnapshots.size > LifePlugin.RECORD_SNAPSHOT_CAP) {
-				const oldest = this.recordSnapshots.keys().next().value;
-				if (oldest === undefined) break;
-				this.recordSnapshots.delete(oldest);
-			}
-		}
-		await this.advanceVaultShadow(diff);
 		s.vaultLogRecords = [rec, ...s.vaultLogRecords].slice(0, 200);
 		await this.store.flush();
 		this.refreshHomeViews();
