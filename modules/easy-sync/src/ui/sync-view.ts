@@ -925,6 +925,9 @@ export function diffCompletedFileRows(
  *  mounting them makes every later append re-lay out the whole list. */
 const COMPLETED_ROW_DISPLAY_LIMIT = 300;
 
+/** Ribbon 点击回执描边的时长，与 styles.css 的动画时长一致。 */
+const RIBBON_ENTRY_PULSE_MS = 800;
+
 export function selectCompletedDisplayRows(
   files: readonly FileProgress[],
   limit = COMPLETED_ROW_DISPLAY_LIMIT,
@@ -1797,6 +1800,8 @@ export class EasySyncSyncView extends ItemView {
   // 顶部状态行与计划区说明行改说既有的「同步计划已更新」文案。
   private planReviewBaselineRevision: number | null = null;
   private planReviewDetailsRecoveryInFlight = false;
+  // Ribbon 点击回执高亮的收尾定时器（见 pulseRibbonEntry）。
+  private ribbonEntryPulseTimer: number | null = null;
   // P0: incremental render — frame merging + diffed file list
   private renderFrameId: AnimationFrameHandle | null = null;
   /** 同一帧内已经有人请求整屏渲染：轻量帧调度必须让位，否则结构变化会被
@@ -1967,6 +1972,11 @@ export class EasySyncSyncView extends ItemView {
       window.clearTimeout(this.adaptivePathResizeTimer);
       this.adaptivePathResizeTimer = null;
     }
+    if (this.ribbonEntryPulseTimer !== null) {
+      window.clearTimeout(this.ribbonEntryPulseTimer);
+      this.ribbonEntryPulseTimer = null;
+    }
+    this.contentEl.removeClass("easy-sync-ribbon-entry-pulse");
     this.adaptivePathScrollScopes.clear();
     this.adaptivePathProbe?.remove();
     this.adaptivePathProbe = null;
@@ -2083,6 +2093,28 @@ export class EasySyncSyncView extends ItemView {
    */
   renderProgress(): void {
     this.scheduleRenderFrame();
+  }
+
+  /**
+   * Ribbon 点击回执（2026-11-22 用户反馈：侧栏云图标点了没反应）。
+   *
+   * 面板已经展开且可见时，`revealLeaf` / `setActiveLeaf` 都不会改变画面，
+   * 点击看起来像没生效。这里给视图容器套一记短暂的强调色描边，让点击有
+   * 可见回执；连续点击重启动画，卸载/关闭时清掉定时器与类名。
+   */
+  pulseRibbonEntry(): void {
+    const container = this.contentEl;
+    container.removeClass("easy-sync-ribbon-entry-pulse");
+    // 读一次布局强制刷新样式，否则重复点击时类名增删被合并、动画不重播。
+    void container.offsetWidth;
+    container.addClass("easy-sync-ribbon-entry-pulse");
+    if (this.ribbonEntryPulseTimer !== null) {
+      window.clearTimeout(this.ribbonEntryPulseTimer);
+    }
+    this.ribbonEntryPulseTimer = window.setTimeout(() => {
+      this.ribbonEntryPulseTimer = null;
+      container.removeClass("easy-sync-ribbon-entry-pulse");
+    }, RIBBON_ENTRY_PULSE_MS);
   }
 
   private scheduleRenderFrame(): void {

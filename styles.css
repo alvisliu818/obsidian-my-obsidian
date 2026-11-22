@@ -61326,6 +61326,23 @@ body:not(.is-mobile) .easy-sync-view-content {
   overflow-y: auto;
 }
 
+/* Ribbon 点击回执（2026-11-22）：面板已展开时 revealLeaf/setActiveLeaf 都不
+   改变画面，侧栏云图标点击读成「没反应」。点击后在视图容器上画一记强调色
+   内描边（只闪边框、不动内容），时长与 sync-view.ts 的
+   RIBBON_ENTRY_PULSE_MS 对齐；重复点击重启动画。 */
+@keyframes easy-sync-ribbon-entry-pulse {
+  from {
+    box-shadow: inset 0 0 0 2px var(--text-accent);
+  }
+  to {
+    box-shadow: inset 0 0 0 2px transparent;
+  }
+}
+
+.view-content.easy-sync-view.easy-sync-ribbon-entry-pulse {
+  animation: easy-sync-ribbon-entry-pulse 800ms ease-out;
+}
+
 .easy-sync-status-panel {
   display: flex;
   flex-direction: column;

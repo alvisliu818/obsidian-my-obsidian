@@ -2024,6 +2024,10 @@ export default class EasySyncPlugin extends Plugin {
       await this.app.workspace.revealLeaf(existing);
       this.focusSyncPanel(existing);
       this.refreshSyncNoticeVisibility();
+      // 面板已在屏上时 revealLeaf/setActiveLeaf 都不改变画面，Ribbon 点击
+      // 读成「没反应」（2026-11-22 用户反馈：侧栏云图标点了没反应）。补一记
+      // 短暂高亮作为点击回执；面板本来就在该处，只闪边框、不动内容。
+      this.syncView?.pulseRibbonEntry();
       return;
     }
     const leaf = this.app.workspace.getLeftLeaf(false);
@@ -12054,7 +12058,18 @@ export default class EasySyncPlugin extends Plugin {
   }
 
   private async handleRibbonClick(): Promise<void> {
-    if ((this.auth?.isInitializing ?? true) || !this._stateLoaded) return;
+    if (this.auth?.isInitializing ?? true) return;
+    if (!this._stateLoaded) {
+      // 冷启动时 Ribbon 早于状态读取就位；旧的静默返回让这段窗口里的每次
+      // 点击都是死点击。先把状态读进来，再按点击本意继续；读取失败要出声
+      // （2026-11-22 用户反馈：点云图标毫无反应）。
+      try {
+        await this.ensureStateLoaded();
+      } catch (error) {
+        this.presentSyncEntryFailure(error, "ribbon entry");
+        return;
+      }
+    }
     switch (this.getRibbonStatus()) {
       case "loggedOut":
         this.openPluginSettings();
