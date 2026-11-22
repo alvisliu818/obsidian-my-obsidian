@@ -64064,3 +64064,93 @@ body.ots-tab-min-width-on .workspace-split.mod-root > .workspace-tabs.mod-top .w
 
 
 /* 修改对比视图样式见上方「修改对比视图」块(弹窗已退役,2026-11-22) */
+
+/* ==== 云端历史版本弹窗(OneDrive / 百度同步空间,2026-11-22) ==== */
+.lgp-cloud-history .lgp-cloud-history-path {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin-bottom: 8px;
+  word-break: break-all;
+}
+
+.lgp-cloud-history .lgp-cloud-history-muted {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  padding: 4px 0;
+}
+
+.lgp-cloud-history .lgp-cloud-history-error {
+  color: var(--text-error);
+  font-size: var(--font-ui-smaller);
+  padding: 8px 0;
+  white-space: pre-wrap;
+}
+
+.lgp-cloud-history .lgp-cloud-history-list {
+  max-height: 420px;
+  overflow-y: auto;
+  margin-top: 8px;
+}
+
+.lgp-cloud-history .lgp-cloud-history-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.lgp-cloud-history .lgp-cloud-history-row.is-current {
+  opacity: 0.75;
+}
+
+.lgp-cloud-history .lgp-cloud-history-time {
+  flex: 1 1 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.lgp-cloud-history .lgp-cloud-history-size {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  min-width: 64px;
+  text-align: right;
+}
+
+.lgp-cloud-history .lgp-cloud-history-badge {
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  border-radius: 4px;
+  font-size: var(--font-ui-smaller);
+  padding: 0 6px;
+}
+
+.lgp-cloud-history .lgp-cloud-history-btns {
+  display: flex;
+  gap: 6px;
+}
+
+.lgp-cloud-history .lgp-cloud-history-preview {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  margin-top: 10px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.lgp-cloud-history .lgp-cloud-history-preview-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.lgp-cloud-history .lgp-cloud-history-preview pre {
+  margin: 0;
+  padding: 8px;
+  font-size: var(--font-ui-smaller);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

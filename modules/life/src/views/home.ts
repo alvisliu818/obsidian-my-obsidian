@@ -237,6 +237,17 @@ export class LifeHomeView extends ItemView {
 		});
 		const refresh = btns.createEl('button', { cls: 'life-home-mode-btn', text: '刷新' });
 		refresh.addEventListener('click', () => void this.refreshSaveHistory());
+		// 云端历史版本(2026-11-22 用户):OneDrive / 百度同步空间是逐文件接口,
+		// 没法在 HOME 里全量枚举;入口放在挂载面板的文件右键。
+		const cloudBtn = btns.createEl('button', { cls: 'life-home-mode-btn', text: '云端历史' });
+		cloudBtn.setAttr('title', 'OneDrive / 百度同步空间:在挂载面板右键文件 →「云端历史版本」');
+		cloudBtn.addEventListener('click', () => {
+			// 优先走 virtual-tree 自己的激活逻辑(统一文件面板/左侧栏,和 ribbon 一致)
+			const vt = this.hostModule<{ activatePanel?: (t: string) => Promise<void> }>('virtual-tree');
+			if (vt?.activatePanel) void vt.activatePanel('logseq-mount-panel');
+			else void this.openModuleView('logseq-mount-panel');
+			new Notice('在挂载面板右键 OneDrive / 百度网盘文件 →「云端历史版本」。');
+		});
 
 		if (this.saveHistoryError) {
 			container.createDiv({ cls: 'life-home-muted', text: this.saveHistoryError });

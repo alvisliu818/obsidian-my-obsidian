@@ -433,3 +433,64 @@ export async function odRename(vPath: string, newVPath: string): Promise<void> {
   await odGraph('PATCH', `/me/drive/items/${id}`, JSON.stringify({ name: newCloud.slice(newSlash + 1) }), 'application/json');
   clearOneDriveListCache(parent);
 }
+
+// ==== 云端历史版本(2026-11-22 用户) ====
+
+/** OneDrive 历史版本元数据(Graph driveItemVersion;当前版本不在列表里)。 */
+export interface OneDriveVersion {
+  id: string;
+  /** ISO 时间 */
+  modified: string;
+  size: number;
+}
+
+/** 列文件的历史版本(按时间倒序;分页拉全)。 */
+export async function odListVersions(vPath: string): Promise<OneDriveVersion[]> {
+  const cloud = oneDrivePathBody(vPath);
+  if (!cloud || cloud === '/') throw new Error('OneDrive 根目录没有历史版本');
+  const itemId = await resolveItemId(cloud);
+  const out: OneDriveVersion[] = [];
+  let next: string | null = `/me/drive/items/${itemId}/versions`;
+  let guard = 0;
+  while (next && guard++ < 10) {
+    const page = await odGraph('GET', next);
+    const json = (page.json ?? {}) as {
+      value?: Array<Record<string, unknown>>;
+      '@odata.nextLink'?: string;
+    };
+    for (const v of json.value || []) {
+      const id = String(v.id ?? '');
+      if (!id) continue;
+      out.push({
+        id,
+        modified: String(v.lastModifiedDateTime ?? ''),
+        size: Number(v.size) || 0,
+      });
+    }
+    const link = json['@odata.nextLink'];
+    next = link ? String(link).replace(GRAPH, '') : null;
+  }
+  return out.sort((a, b) => (a.modified < b.modified ? 1 : a.modified > b.modified ? -1 : 0));
+}
+
+/** 下载某个历史版本的完整内容。 */
+export async function odDownloadVersion(vPath: string, versionId: string): Promise<Uint8Array> {
+  const cloud = oneDrivePathBody(vPath);
+  if (!cloud || cloud === '/') throw new Error('OneDrive 根目录没有历史版本');
+  const itemId = await resolveItemId(cloud);
+  const bytes = await odGraphBytes(
+    'GET',
+    `/me/drive/items/${itemId}/versions/${encodeURIComponent(versionId)}/content`,
+  );
+  return new Uint8Array(bytes);
+}
+
+/**
+ * 恢复历史版本:下载该版本内容后覆盖回原路径。
+ * 不走 Graph 的 restore 端点(个人版 OneDrive 不保证支持),下载+上传是通用路径;
+ * 覆盖后 Graph 会再生成一个新版本。
+ */
+export async function odRestoreVersion(vPath: string, versionId: string): Promise<void> {
+  const data = await odDownloadVersion(vPath, versionId);
+  await odUploadFile(vPath, data);
+}

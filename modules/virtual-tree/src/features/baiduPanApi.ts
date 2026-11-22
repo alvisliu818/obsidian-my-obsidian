@@ -899,3 +899,130 @@ export async function bdRename(vPath: string, newVPath: string): Promise<void> {
   }
   clearBaiduListCache(cloudParent(from));
 }
+
+// ==== 同步空间历史版本(2026-11-22 用户) ====
+//
+// 百度网盘官方 xpan API 没有历史版本接口;这里走客户端同款的网页内部接口
+// (pan.baidu.com/workspace/revisionlist|revisionrevert,2026-11-22 从客户端
+// core.asar 反查确认):需要 cookie 模式(BDUSS/STOKEN)+ bdstoken,且只覆盖
+// 同步空间(workspace)内的文件。接口未公开,百度改版可能失效——调用处做好降级。
+
+/** 同步空间历史版本元数据(字段按客户端列表条目归一)。 */
+export interface BaiduRevision {
+  /** revision 标识(恢复时原样传回) */
+  id: string;
+  /** ISO 时间('' = 未知) */
+  modified: string;
+  size: number;
+  current?: boolean;
+}
+
+const BD_WEB_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+let bdWebTokenCache: { token: string; ts: number } | null = null;
+
+function requireBaiduCookie(op: string): void {
+  if (bdConfig.mode !== 'cookie') {
+    throw new Error(
+      `${op}需要「cookie 模式」(BDUSS/STOKEN):官方 xpan API 没有历史版本接口,` +
+        '请在挂载设置里切换百度网盘接入方式后重试',
+    );
+  }
+}
+
+/** 网页接口通用的 bdstoken(10 分钟缓存;失败不致命,cookie 仍可能直接放行)。 */
+async function bdWebToken(): Promise<string> {
+  if (bdWebTokenCache && Date.now() - bdWebTokenCache.ts < 10 * 60 * 1000) {
+    return bdWebTokenCache.token;
+  }
+  try {
+    const url =
+      'https://pan.baidu.com/api/gettemplatevariable?clienttype=0&app_id=250528&web=1&fields=' +
+      encodeURIComponent('["bdstoken"]');
+    const json = await bdJSON<Record<string, any>>(url, { headers: { 'User-Agent': BD_WEB_UA } }, '获取网盘令牌');
+    const token = String(json?.result?.bdstoken ?? json?.bdstoken ?? '');
+    bdWebTokenCache = { token, ts: Date.now() };
+    return token;
+  } catch {
+    return '';
+  }
+}
+
+/** 时间字段归一:秒/毫秒都见过,>1e12 视为毫秒。 */
+function revisionTimeMs(raw: unknown): number {
+  const n = Number(raw) || 0;
+  if (!n) return 0;
+  return n > 1e12 ? n : n * 1000;
+}
+
+/**
+ * 列同步空间文件的历史版本(时间倒序)。
+ * 注意:百度侧只对「同步空间」内的文件保留历史版本;普通网盘文件可能返回空列表。
+ */
+export async function bdListRevisions(vPath: string): Promise<BaiduRevision[]> {
+  requireBaiduCookie('读取百度云端历史');
+  const cloud = baiduCloudPath(vPath);
+  if (!cloud || cloud === '/') throw new Error('根目录没有历史版本');
+  const token = await bdWebToken();
+  const qs = new URLSearchParams({
+    clienttype: '0',
+    app_id: '250528',
+    web: '1',
+    product_type: 'workspace',
+    path: cloud,
+    desc: '0',
+  });
+  if (token) qs.set('bdstoken', token);
+  const json = await bdJSON<Record<string, any>>(
+    'https://pan.baidu.com/workspace/revisionlist?' + qs.toString(),
+    { headers: { 'User-Agent': BD_WEB_UA } },
+    '读取百度云端历史',
+  );
+  const rawList = json?.data?.list ?? json?.list ?? json?.data ?? [];
+  const list = Array.isArray(rawList) ? rawList : [];
+  return list
+    .map((it: any) => {
+      const id = String(it?.revision ?? it?.revision_id ?? it?.rev ?? '');
+      const ms = revisionTimeMs(it?.server_mtime ?? it?.mtime ?? it?.ctime ?? it?.time);
+      return {
+        id,
+        modified: ms ? new Date(ms).toISOString() : '',
+        size: Number(it?.size) || 0,
+        current: it?.isCurHistory === true || Number(it?.index) === 0,
+      };
+    })
+    .filter((v) => !!v.id)
+    .sort((a, b) => (a.modified < b.modified ? 1 : a.modified > b.modified ? -1 : 0));
+}
+
+/**
+ * 恢复同步空间历史版本。
+ * 客户端同款语义:百度是「另存为新文件」(type=new&ondup=fail),不会覆盖当前文件;
+ * 返回新文件路径(响应未给则空串)。
+ */
+export async function bdRestoreRevision(vPath: string, revisionId: string): Promise<string> {
+  requireBaiduCookie('恢复百度历史版本');
+  const cloud = baiduCloudPath(vPath);
+  if (!cloud || cloud === '/') throw new Error('根目录没有历史版本');
+  const fsid = await resolveFsid(cloud);
+  const token = await bdWebToken();
+  const qs = new URLSearchParams({
+    clienttype: '0',
+    app_id: '250528',
+    web: '1',
+    product_type: 'workspace',
+    type: 'new',
+    ondup: 'fail',
+    fsid: String(fsid),
+    revision: revisionId,
+    path: cloud,
+  });
+  if (token) qs.set('bdstoken', token);
+  const json = await bdJSON<Record<string, any>>(
+    'https://pan.baidu.com/workspace/revisionrevert?' + qs.toString(),
+    { headers: { 'User-Agent': BD_WEB_UA } },
+    '恢复百度历史版本',
+  );
+  clearBaiduListCache(cloudParent(cloud));
+  return String(json?.data?.path ?? json?.path ?? '');
+}

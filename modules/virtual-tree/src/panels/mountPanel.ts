@@ -104,6 +104,8 @@ import { MountEditorModal, MountTargetPickerModal, VaultMountPickModal } from '.
 import { GitRepoMountModal } from './gitRepoModal';
 import { BaiduPanMountModal } from './baiduPanModal';
 import { OneDriveMountModal } from './onedriveModal';
+import { CloudHistoryModal } from './cloudHistoryModal';
+import { cloudProviderOf } from '../features/cloudVersions';
 import { OutlookMailMountModal } from './outlookMailModal';
 import { TrashManagerModal } from './trashModal';
 import { deleteToTrash } from '../features/trashStore';
@@ -2242,6 +2244,16 @@ export class MountPanelView extends ItemView {
           .setIcon('eye' as never)
           .onClick(() => void this.plugin.openExternalEntry(mount, node, { readOnly: true })),
       );
+      // 云端历史版本(2026-11-22 用户):OneDrive 走 Graph,百度同步空间走
+      // 客户端同款网页接口(cookie 模式);其他 remote 挂载(仓库/邮箱)不显示。
+      if (cloudProviderOf(node.abs)) {
+        menu.addItem((item) =>
+          item
+            .setTitle('云端历史版本…')
+            .setIcon('history' as never)
+            .onClick(() => new CloudHistoryModal(this.app, node.abs).open()),
+        );
+      }
       menu.addSeparator();
     }
     // 新建文件/文件夹/笔记、重命名、删除:共用 external 的菜单构建,各 prompt
