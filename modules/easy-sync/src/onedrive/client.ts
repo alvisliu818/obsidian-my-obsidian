@@ -361,6 +361,59 @@ interface DriveItemMetadataChunkOptions {
   onChunkResolved?: (resolved: ReadonlyMap<string, DriveItem | null>) => void;
 }
 
+/**
+ * Graph `$batch` allows at most 20 sub-requests per POST. Chunks used to be
+ * issued strictly one after another, so a 1.4k-file plan spent ~70 sequential
+ * round trips (~40 s on the field link) before it could even plan. Four
+ * concurrent POSTs keep ~80 sub-requests in flight — enough to overlap the
+ * per-request latency while staying far below Graph's throttling window.
+ * Results are still published and returned in input order; the first fatal
+ * error stops new chunks and is rethrown after the in-flight ones settle.
+ */
+const METADATA_BATCH_CONCURRENCY = 4;
+
+async function runOrderedMetadataBatchPool<T>(
+  count: number,
+  run: (index: number) => Promise<T>,
+  publish?: (value: T) => void,
+): Promise<T[]> {
+  if (count <= 0) return [];
+  const results: Array<T | undefined> = new Array(count);
+  const done = new Array<boolean>(count).fill(false);
+  let next = 0;
+  let publishCursor = 0;
+  let fatal: unknown = null;
+  const publishReady = (): void => {
+    if (!publish) return;
+    while (publishCursor < count && done[publishCursor]) {
+      publish(results[publishCursor] as T);
+      publishCursor++;
+    }
+  };
+  const worker = async (): Promise<void> => {
+    while (fatal === null) {
+      const index = next++;
+      if (index >= count) return;
+      try {
+        results[index] = await run(index);
+        done[index] = true;
+        publishReady();
+      } catch (error) {
+        if (fatal === null) fatal = error;
+        return;
+      }
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(METADATA_BATCH_CONCURRENCY, count) },
+      () => worker(),
+    ),
+  );
+  if (fatal !== null) throw fatal;
+  return results as T[];
+}
+
 export class OneDriveClient {
   private initializedVaults = new Set<string>();
   private storageVaultNames = new Map<string, string>();
@@ -1071,60 +1124,64 @@ export class OneDriveClient {
     options?: DriveItemMetadataChunkOptions,
   ): Promise<Map<string, DriveItem | null>> {
     const uniqueIds = [...new Set(driveItemIds.filter(Boolean))];
-    const resolved = new Map<string, DriveItem | null>();
+    const chunks: string[][] = [];
     for (let offset = 0; offset < uniqueIds.length; offset += 20) {
-      const batchIds = uniqueIds.slice(offset, offset + 20);
-      const chunkResolved = new Map<string, DriveItem | null>();
-      let response: RequestUrlResponse;
-      try {
-        response = await this.request(
-          "POST",
-          "/$batch",
-          {
-            requests: batchIds.map((driveItemId, index) => ({
-              id: String(index + 1),
-              method: "GET",
-              url: `/me/drive/items/${encodeURIComponent(driveItemId)}`,
-            })),
-          },
-          undefined,
-          { metadataReason },
-        );
-      } catch (error) {
-        if (isAbortError(error) || this.abortSignal?.aborted) throw error;
-        if (isFatalMetadataBatchReadError(error)) throw error;
-        this.diag?.warn(
-          "onedrive",
-          `$batch metadata read failed for ${batchIds.length} item(s) — per-item verification takes over`,
-          {
-            reason: describeError(error),
-            batchRequests: 1,
-            items: batchIds.length,
-            mutations: 0,
-          },
-        );
-        for (const driveItemId of batchIds) {
-          chunkResolved.set(
-            driveItemId,
-            await this.getDriveItemMetadataById(driveItemId, metadataReason),
+      chunks.push(uniqueIds.slice(offset, offset + 20));
+    }
+    const chunkResults = await runOrderedMetadataBatchPool(
+      chunks.length,
+      async (chunkIndex): Promise<Map<string, DriveItem | null>> => {
+        const batchIds = chunks[chunkIndex];
+        const chunkResolved = new Map<string, DriveItem | null>();
+        let response: RequestUrlResponse;
+        try {
+          response = await this.request(
+            "POST",
+            "/$batch",
+            {
+              requests: batchIds.map((driveItemId, index) => ({
+                id: String(index + 1),
+                method: "GET",
+                url: `/me/drive/items/${encodeURIComponent(driveItemId)}`,
+              })),
+            },
+            undefined,
+            { metadataReason },
           );
+        } catch (error) {
+          if (isAbortError(error) || this.abortSignal?.aborted) throw error;
+          if (isFatalMetadataBatchReadError(error)) throw error;
+          this.diag?.warn(
+            "onedrive",
+            `$batch metadata read failed for ${batchIds.length} item(s) — per-item verification takes over`,
+            {
+              reason: describeError(error),
+              batchRequests: 1,
+              items: batchIds.length,
+              mutations: 0,
+            },
+          );
+          for (const driveItemId of batchIds) {
+            chunkResolved.set(
+              driveItemId,
+              await this.getDriveItemMetadataById(driveItemId, metadataReason),
+            );
+          }
+          return chunkResolved;
         }
-        for (const [driveItemId, item] of chunkResolved) {
-          resolved.set(driveItemId, item);
-        }
-        options?.onChunkResolved?.(chunkResolved);
-        continue;
-      }
-      await this.readDriveItemIdBatchResponse(
-        response,
-        batchIds,
-        metadataReason,
-        chunkResolved,
-      );
-      for (const [driveItemId, item] of chunkResolved) {
-        resolved.set(driveItemId, item);
-      }
-      options?.onChunkResolved?.(chunkResolved);
+        await this.readDriveItemIdBatchResponse(
+          response,
+          batchIds,
+          metadataReason,
+          chunkResolved,
+        );
+        return chunkResolved;
+      },
+      (chunk) => options?.onChunkResolved?.(chunk),
+    );
+    const resolved = new Map<string, DriveItem | null>();
+    for (const chunk of chunkResults) {
+      for (const [driveItemId, item] of chunk) resolved.set(driveItemId, item);
     }
     return resolved;
   }
@@ -1204,30 +1261,42 @@ export class OneDriveClient {
     metadataReason: OneDriveMetadataReason = "other",
   ): Promise<Map<string, DriveItem | null>> {
     const uniquePaths = [...new Set(filePaths.filter(Boolean))];
-    const resolved = new Map<string, DriveItem | null>();
+    const chunks: string[][] = [];
     for (let offset = 0; offset < uniquePaths.length; offset += 20) {
-      const batchPaths = uniquePaths.slice(offset, offset + 20);
-      try {
-        await this.readFilePathBatch(
-          vaultName,
-          batchPaths,
-          metadataReason,
-          resolved,
-        );
-      } catch (error) {
-        if (isAbortError(error) || this.abortSignal?.aborted) throw error;
-        if (isFatalMetadataBatchReadError(error)) throw error;
-        this.diag?.warn(
-          "onedrive",
-          `$batch path read failed for ${batchPaths.length} path(s) — per-item verification takes over`,
-          {
-            reason: describeError(error),
-            batchRequests: 1,
-            paths: batchPaths.length,
-            mutations: 0,
-          },
-        );
-      }
+      chunks.push(uniquePaths.slice(offset, offset + 20));
+    }
+    const chunkResults = await runOrderedMetadataBatchPool(
+      chunks.length,
+      async (chunkIndex): Promise<Map<string, DriveItem | null>> => {
+        const batchPaths = chunks[chunkIndex];
+        const chunkResolved = new Map<string, DriveItem | null>();
+        try {
+          await this.readFilePathBatch(
+            vaultName,
+            batchPaths,
+            metadataReason,
+            chunkResolved,
+          );
+        } catch (error) {
+          if (isAbortError(error) || this.abortSignal?.aborted) throw error;
+          if (isFatalMetadataBatchReadError(error)) throw error;
+          this.diag?.warn(
+            "onedrive",
+            `$batch path read failed for ${batchPaths.length} path(s) — per-item verification takes over`,
+            {
+              reason: describeError(error),
+              batchRequests: 1,
+              paths: batchPaths.length,
+              mutations: 0,
+            },
+          );
+        }
+        return chunkResolved;
+      },
+    );
+    const resolved = new Map<string, DriveItem | null>();
+    for (const chunk of chunkResults) {
+      for (const [path, item] of chunk) resolved.set(path, item);
     }
     return resolved;
   }
