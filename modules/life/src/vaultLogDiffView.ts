@@ -8,11 +8,15 @@
  * = 连续非上下文行组成的一处差异,跳到该处首行并加当前高亮。
  *
  * 视图固定两栏对照(全文,含未改动的上下文),跳转单位 = 连续非上下文行。
+ * 行内容按文件类型渲染:.md 默认行内 Markdown(顶部按钮可切 Monaco 源码着色),
+ * 代码文件用 Monaco colorize 着色。
  * 数据源 = LifePlugin.getRecordDiff(基线 git HEAD / 上次库记录时点)。
  */
 import { ItemView, Notice, setIcon, type ViewStateResult, type WorkspaceLeaf } from 'obsidian';
 import type LifePlugin from './main';
 import type { LineDiff } from './vaultLog';
+import { renderFileLines } from './lineRender';
+import { colorizeCode, getLanguageByPath, setupMonaco } from '../../code-editor/src/editor/monaco';
 
 export const VIEW_LIFE_DIFF = 'life-vault-diff';
 
@@ -56,6 +60,17 @@ function buildSplitPairs(diff: LineDiff): SplitPair[] {
 }
 
 const isCtxPair = (p: SplitPair): boolean => p.l?.kind === 'ctx' && p.r?.kind === 'ctx';
+
+/** 从 diff.rows 还原两栏全文行数组(按各自行号落位)。 */
+function paneLines(diff: LineDiff): { before: string[]; after: string[] } {
+	const before: string[] = new Array<string>(diff.beforeLines).fill('');
+	const after: string[] = new Array<string>(diff.afterLines).fill('');
+	for (const r of diff.rows) {
+		if (r.beforeLine != null) before[r.beforeLine - 1] = r.text;
+		if (r.afterLine != null) after[r.afterLine - 1] = r.text;
+	}
+	return { before, after };
+}
 
 /** 连续非上下文行 = 一处差异;返回每处首行的 pair 下标。 */
 function hunkStartsOf(pairs: SplitPair[]): number[] {
@@ -151,6 +166,15 @@ export class VaultLogDiffView extends ItemView {
 		return this.isRecordBaseline() ? '上次库记录时点' : '上次提交(HEAD)';
 	}
 
+	/** Markdown 文件的渲染方式(2026-11-22 用户):editor = 行内渲染;monaco = Monaco 源码着色。 */
+	private mdMode(): 'editor' | 'monaco' {
+		return this.plugin.store.settings.vaultLog?.mdDiffRender === 'monaco' ? 'monaco' : 'editor';
+	}
+
+	private isMarkdownFile(): boolean {
+		return /\.md$/i.test(this.path);
+	}
+
 	private async render(): Promise<void> {
 		const { contentEl } = this;
 		contentEl.empty();
@@ -193,6 +217,16 @@ export class VaultLogDiffView extends ItemView {
 			this.nextBtn.addEventListener('click', () => this.gotoHunk(this.hunkIdx + 1));
 		}
 
+		// Markdown 渲染方式切换(2026-11-22 用户:差异视图内加按钮)
+		if (diff && this.isMarkdownFile()) {
+			const modeBtn = bar.createEl('button', {
+				cls: 'vl-diff-bar-btn vl-diff-mode-btn',
+				attr: { title: '切换 Markdown 渲染方式（行内渲染 / Monaco 源码）' },
+			});
+			modeBtn.setText(this.mdMode() === 'monaco' ? 'Monaco' : '渲染');
+			modeBtn.addEventListener('click', () => this.setMdMode(this.mdMode() === 'monaco' ? 'editor' : 'monaco'));
+		}
+
 		const actions = bar.createDiv({ cls: 'vl-diff-bar-group' });
 		this.actionButton(actions, 'refresh-cw', '刷新对比', () => void this.render());
 		this.actionButton(actions, 'file-text', '打开原文件', () => {
@@ -212,7 +246,18 @@ export class VaultLogDiffView extends ItemView {
 			return;
 		}
 
-		this.renderSplit(diff);
+		await this.renderSplit(diff);
+	}
+
+	/** 切换 Markdown 渲染方式并重绘(设置持久化,下次打开沿用)。 */
+	private setMdMode(mode: 'editor' | 'monaco'): void {
+		const settings = this.plugin.store.settings;
+		if (!settings.vaultLog) {
+			settings.vaultLog = { enabled: true, dailyTime: '21:00', periodMin: 0, remind: true, remindTime: '' };
+		}
+		settings.vaultLog.mdDiffRender = mode;
+		this.plugin.store.scheduleSave();
+		void this.render();
 	}
 
 	/** 工具栏动作按钮(图标 + aria-label;hover 提示走 title)。 */
@@ -222,16 +267,32 @@ export class VaultLogDiffView extends ItemView {
 		btn.addEventListener('click', onClick);
 	}
 
-	/** VSCode 式分栏:左基线 / 右当前,按对齐序列逐行并排。 */
-	private renderSplit(diff: LineDiff): void {
+	/** VSCode 式分栏:左基线 / 右当前,按对齐序列逐行并排(内容按类型渲染)。 */
+	private async renderSplit(diff: LineDiff): Promise<void> {
+		// Monaco colorize 依赖运行时初始化(worker/主题 CSS);失败则退化为纯文本
+		try {
+			setupMonaco(this.plugin);
+		} catch {
+			/* 无 Monaco 环境 */
+		}
 		const split = this.contentEl.createDiv({ cls: 'vl-diff-split' });
 		const left = this.makePane(split, `基线 · ${this.baselineLong()}`, diff.beforeLines);
 		const right = this.makePane(split, '当前', diff.afterLines);
+		const { before, after } = paneLines(diff);
+		const opts = {
+			mdMode: this.mdMode(),
+			colorize: colorizeCode,
+			languageId: this.isMarkdownFile() ? null : getLanguageByPath(this.path),
+		};
+		const [leftHtml, rightHtml] = await Promise.all([
+			renderFileLines(this.path, before, opts),
+			renderFileLines(this.path, after, opts),
+		]);
 
 		for (let i = 0; i < this.pairs.length; i++) {
 			const pair = this.pairs[i];
-			this.leftRows.push(this.appendRow(left.scroll, pair.l));
-			this.rightRows.push(this.appendRow(right.scroll, pair.r));
+			this.leftRows.push(this.appendRow(left.scroll, pair.l, leftHtml));
+			this.rightRows.push(this.appendRow(right.scroll, pair.r, rightHtml));
 		}
 		this.leftScroll = left.scroll;
 		this.rightScroll = right.scroll;
@@ -257,12 +318,15 @@ export class VaultLogDiffView extends ItemView {
 		return { pane, scroll };
 	}
 
-	private appendRow(scroll: HTMLElement, cell: SplitCell | null): HTMLElement {
+	private appendRow(scroll: HTMLElement, cell: SplitCell | null, htmlLines: string[]): HTMLElement {
 		const row = scroll.createDiv({
 			cls: 'vl-split-row ' + (cell ? `is-${cell.kind}` : 'is-empty'),
 		});
 		row.createSpan({ cls: 'vl-split-no', text: cell?.no != null ? String(cell.no) : '' });
-		row.createSpan({ cls: 'vl-split-text', text: cell ? cell.text || ' ' : '' });
+		const textEl = row.createSpan({ cls: 'vl-split-text' });
+		const html = cell && cell.no != null ? htmlLines[cell.no - 1] : '';
+		// html 来自 lineRender(文本全部转义);空内容保留一个空格占行高
+		textEl.innerHTML = html || ' ';
 		return row;
 	}
 

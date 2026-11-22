@@ -153,6 +153,9 @@ export interface VaultLogSettings {
 	/** 修改对比整个功能的总开关(2026-11-22 用户):false = 编辑器装点/覆盖层/
 	 * 库记录「对比」钮全部消失。缺省开。 */
 	diffEnabled?: boolean;
+	/** 对比视图 Markdown 渲染方式(2026-11-22 用户):editor = 行内渲染(默认);
+	 * monaco = Monaco 源码着色(差异视图顶部按钮切换)。 */
+	mdDiffRender?: 'editor' | 'monaco';
 	/** VSCode 可执行/CLI 路径(2026-11-22 用户):「用 VSCode 打开对比」用。
 	 * 留空自动探测(LOCALAPPDATA 常见安装位置 → PATH 的 code)。 */
 	vscodePath?: string;
