@@ -63622,6 +63622,21 @@ body.is-mobile
 
 
 
+/* 标签页最小宽度+溢出横滚(open-tab-settings,2026-11-22 用户):
+   body.ots-tab-min-width-on 由插件按设置开合;限定主区顶部标签条,
+   inner 横向滚动(scrollbar 隐藏)、滚轮驱动,侧栏图标 tab 不参与 */
+body.ots-tab-min-width-on .workspace-tabs.mod-top .workspace-tab-header-container-inner {
+	overflow-x: auto;
+	scrollbar-width: none;
+	min-width: 0;
+}
+body.ots-tab-min-width-on .workspace-tabs.mod-top .workspace-tab-header-container-inner::-webkit-scrollbar { display: none; }
+body.ots-tab-min-width-on .workspace-tabs.mod-top .workspace-tab-header {
+	min-width: var(--ots-tab-min-width, 140px);
+	flex: 0 0 auto;
+}
+
+
 /* 修改对比覆盖层(2026-11-22 用户:VSCode 那样的弹层)——monaco 视区/CM6 块
    widget 共用 DOM(buildDiffOverlayDom)。头部文件名+撤回/关闭,行列表双行号
    (before | after)+符号+内容,红删/绿增/蓝改/灰上下文。 */

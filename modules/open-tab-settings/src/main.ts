@@ -109,6 +109,32 @@ export default class OpenTabSettingsPlugin extends Plugin {
         this.registerCommands();
         this.registerFileMenuOptions();
         this.registerPreviewTabsEvents();
+        this.applyTabWidth();
+        // 标签溢出滚轮横滚(2026-11-22 用户)。Obsidian 1.15.1 已在
+        // .workspace-tab-header-container-inner 上自带 wheel→scrollLeft(bundle 内
+        // _0e:主轴分量滚动+preventDefault,passive:false),但只挂在 inner 上——
+        // 滚轮悬停在 inner 之外(标签右侧空白/new-tab 按钮)时不触发。
+        // 这里挂 document 兜底:原生已处理(defaultPrevented)就跳过避免双倍
+        // 滚动;原生没吃到(inner 外落点)才补滚。
+        this.registerDomEvent(document, 'wheel', (ev: WheelEvent) => {
+            if (this.settings.tabWheelScroll === false) return;
+            if (ev.defaultPrevented) return;
+            const target = ev.target as HTMLElement | null;
+            const container = target?.closest?.('.workspace-tab-header-container') as HTMLElement | null;
+            if (!container) return;
+            const inner = container.querySelector('.workspace-tab-header-container-inner') as HTMLElement | null;
+            const scroller =
+                inner && inner.scrollWidth > inner.clientWidth
+                    ? inner
+                    : container.scrollWidth > container.clientWidth
+                        ? container
+                        : null;
+            if (!scroller) return;
+            const delta = Math.abs(ev.deltaX) > Math.abs(ev.deltaY) ? ev.deltaX : ev.deltaY;
+            if (!delta) return;
+            ev.preventDefault();
+            scroller.scrollLeft += delta;
+        }, { passive: false } as AddEventListenerOptions);
     }
 
     registerMonkeyPatches() {
@@ -472,6 +498,14 @@ export default class OpenTabSettingsPlugin extends Plugin {
         }
     }
 
+    /** 标签页最小宽度应用:body class + CSS 变量(styles.css 按变量渲染)。 */
+    applyTabWidth(): void {
+        const w = this.settings.tabMinWidth ?? 0;
+        document.body.classList.toggle('ots-tab-min-width-on', w > 0);
+        if (w > 0) document.body.style.setProperty('--ots-tab-min-width', `${w}px`);
+        else document.body.style.removeProperty('--ots-tab-min-width');
+    }
+
     async updateSettings(newSettings: Partial<OpenTabSettingsPluginSettings>) {
         const settings = {...this.settings, ...newSettings}
 
@@ -497,6 +531,7 @@ export default class OpenTabSettingsPlugin extends Plugin {
             this.app.workspace.iterateAllLeaves(l => this.setLeafIsPreview(l, false));
         }
         await this.saveData(this.settings);
+        this.applyTabWidth();
     }
 
     private getAllWindows() {

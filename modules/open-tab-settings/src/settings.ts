@@ -36,6 +36,10 @@ export interface OpenTabSettingsPluginSettings {
     newTabPlacement: keyof typeof NEW_TAB_PLACEMENTS,
     newTabTabGroupPlacement: "same"|"opposite"|"first"|"last",
     modClickBehavior: keyof typeof MOD_CLICK_BEHAVIOR,
+    /** 标签页最小宽度(px,2026-11-22 用户):0 = 跟随 Obsidian 默认(收缩)。 */
+    tabMinWidth?: number,
+    /** 标签溢出时滚轮横滚(2026-11-22 用户):默认开。 */
+    tabWheelScroll?: boolean,
 }
 
 export const DEFAULT_SETTINGS: OpenTabSettingsPluginSettings = {
@@ -47,6 +51,8 @@ export const DEFAULT_SETTINGS: OpenTabSettingsPluginSettings = {
     newTabPlacement: "afterActive",
     newTabTabGroupPlacement: "same",
     modClickBehavior: "tab",
+    tabMinWidth: 0,
+    tabWheelScroll: true,
 }
 
 function translateOptions(options: Record<string, string>): Record<string, string> {
@@ -173,6 +179,28 @@ export class OpenTabSettingsPluginSettingTab extends PluginSettingTab {
                             })
                     )
                 }
+            }, {
+                name: '标签页最小宽度(px)',
+                desc: '标签页不再无限收缩,超出可视宽度时滚轮/拖动横滚标签栏。' +
+                    '0 = 关闭(跟随 Obsidian 默认收缩)。改动即时生效。',
+                render: setting => {
+                    setting.addText(text =>
+                        text
+                            .setValue(String(this.plugin.settings.tabMinWidth ?? 0))
+                            .onChange(async (value) => {
+                                const n = Math.max(0, Math.round(Number(value) || 0));
+                                await this.setControlValue('tabMinWidth', n);
+                            })
+                    )
+                }
+            }, {
+                name: '标签溢出时滚轮横滚',
+                desc: '标签栏横向溢出时,鼠标滚轮直接横滚标签栏(不缩放页面)。' +
+                    '关闭则回到系统默认行为。',
+                control: {
+                    type: 'toggle',
+                    key: 'tabWheelScroll',
+                },
             }
         ];
     };
