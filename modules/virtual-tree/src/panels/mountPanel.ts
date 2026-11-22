@@ -1854,6 +1854,16 @@ export class MountPanelView extends ItemView {
           ? 'background:var(--text-success,#3bb273);color:#fff;'
           : 'background:var(--text-warning,#d4a017);color:#fff;');
     }
+    // Linked state is the only flair a file row carries: type pills (png /
+    // 二进制 / …) read as noise repeated on half the rows, so they are gone.
+    // remote 行不查链接(isLinked 按文件名查 Mounts/,同名库内文件会误报)
+    if (!isRemoteMount(mount) && this.isLinked(node)) {
+      row.createSpan({ cls: 'logseq-mount-flag is-linked', text: '已链接' });
+    }
+    // 文件行同样画标签徽标（此前徽标只挂在目录分支,打了标签的文件行不显示——实测发现）
+    // 标签在时间前面(2026-11-22 用户):mtime 保持 margin-left:auto 恒右侧对齐,
+    // 标签徽标插在它之前,不再把时间挤离行尾。
+    this.renderTagBadges(row, node);
     // 修改时间标注(2026-11-21 用户加显示开关):设置关掉后文件行不再画
     // 「MM-DD HH:mm」小字。
     if (node.mtime && this.plugin.settings.mountShowMtime !== false) {
@@ -1862,14 +1872,6 @@ export class MountPanelView extends ItemView {
       const t = row.createSpan({ cls: 'logseq-mount-mtime', text: stamp });
       t.style.cssText = 'margin-left:auto;flex:none;font-size:10px;color:var(--text-faint);font-variant-numeric:tabular-nums';
     }
-    // Linked state is the only flair a file row carries: type pills (png /
-    // 二进制 / …) read as noise repeated on half the rows, so they are gone.
-    // remote 行不查链接(isLinked 按文件名查 Mounts/,同名库内文件会误报)
-    if (!isRemoteMount(mount) && this.isLinked(node)) {
-      row.createSpan({ cls: 'logseq-mount-flag is-linked', text: '已链接' });
-    }
-    // 文件行同样画标签徽标（此前徽标只挂在目录分支,打了标签的文件行不显示——实测发现）
-    this.renderTagBadges(row, node);
     row.addEventListener('click', (ev) => {
       const mode = this.modOpenMode(ev);
       // 库内挂载行：走 vault 原生 openFile（反链/引用/扩展名路由全是原生
