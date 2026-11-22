@@ -13792,6 +13792,47 @@ export class SyncExecutor {
       );
       return { terminated: result };
     }
+    // 2026-11-22 用户裁决：只用 v3 同步。云端已经存在 V3 世代协议时，直接
+    // 加入这条 scope-free 血缘，不再先要求 V2 前驱记录的 scope 与本机当前文件夹
+    // 一致——OneDrive 还原/重建会让文件夹 ID 变化（实测 v2 前驱记的是
+    // !s9f7531/!s3ca6fa，本机已是 !sbb9b63c/!s70961b），V2 scope 因而永远
+    // 对不上；V3 本身不存 scope，只锁世代与前驱字节，才是可长期加入的锚点。
+    // 迁移审阅没有可加入的 V3 就停在协议闸门，不再回落到 V2 加入（那会把
+    // 审阅反复清掉）；V2 记录只作为 V3 的前驱字节证据被读取。
+    if (reviewKind === "v2-migration") {
+      const scopeFree =
+        await this.adoptExistingScopeFreeSharedProtocolForFreshActivation();
+      if (scopeFree.status === "ready") {
+        this.diag?.warn(
+          "state",
+          "joined the existing scope-free V3 protocol",
+          {
+            protocolVersion: scopeFree.binding.protocolVersion,
+            migrationGeneration:
+              scopeFree.binding.migrationGeneration.slice(0, 12),
+            source: scopeFree.source,
+            mutations: 0,
+          },
+        );
+        return {
+          terminated: null,
+          protocolBinding: scopeFree.binding,
+          activeReviewedAuthorization,
+        };
+      }
+      result.errors = 1;
+      result.message = this.t(
+        scopeFree.status === "unavailable"
+          ? "result.remoteReadUnavailable"
+          : "result.v2ProtocolBlocked",
+      );
+      this.diag?.warn(
+        "state",
+        "V3-only activation could not join an existing scope-free protocol",
+        { reason: scopeFree.reason, mutations: 0 },
+      );
+      return { terminated: result };
+    }
     const protocolTransport = availableSharedSyncProtocolTransportV2(
       this.onedrive,
       this.vaultName,
@@ -27635,7 +27676,9 @@ export class SyncExecutor {
     event: string,
   ): Promise<SyncResult> {
     const recoverable =
-      reason === "binding-mismatch" || reason === "generation-mismatch";
+      reason === "binding-mismatch"
+      || reason === "generation-mismatch"
+      || reason === "scope-mismatch";
     const hold = this.state.activeV2MigrationHold;
     let cleared = false;
     if (recoverable && hold?.phase === "pending") {
