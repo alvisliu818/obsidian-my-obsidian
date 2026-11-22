@@ -1,5 +1,9 @@
 node_modules/
 main.js
+# sync-embeds 模块入口是纯 CJS 源码（module.exports = class），宿主 require 桥
+# 直接引用；上面的全局 main.js 规则会误伤它，这里精确放行（宿主根 main.js
+# 构建产物仍被忽略）。
+!modules/sync-embeds/src/main.js
 # 聚合宿主 build 的副产物(esbuild 每次 build 都生成在仓库根,不部署、不入库)
 main.css
 styles.css.map

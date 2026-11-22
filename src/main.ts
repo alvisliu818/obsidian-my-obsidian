@@ -201,6 +201,13 @@ const EasySyncPlugin = (
 		default: new (app: unknown, manifest: unknown) => SubPluginLike;
 	}
 ).default;
+// sync-embeds v2.0.3（uthvah，MIT）：上游是 6 个纯 CJS JS 文件（module.exports
+// = class），无 TS/类型声明，走 require 桥不进宿主 tsc；唯一外部依赖
+// monkey-around 根已具备。见 modules/sync-embeds/NOTICE.md。
+const SyncEmbedsPlugin = require("../modules/sync-embeds/src/main") as new (
+	app: unknown,
+	manifest: unknown,
+) => SubPluginLike;
 import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
 import { registerFreeExtensions } from "./extensionRegistry";
 // 原生 markdown 编辑器（实时预览/源码模式）+ 阅读模式的代码块「▶ 运行」。
@@ -812,6 +819,19 @@ export default class MyObsidianPlugin extends Plugin {
 				"双向 OneDrive 同步：冲突保护、移动端支持、可选的设置/插件同步；同步计划先预览再执行，中断可恢复。同步排除支持文件夹与黑名单/白名单/正则模式。上游 jiaoyingxing（MIT）。",
 			desktopOnly: false,
 			cls: EasySyncPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// sync-embeds v2.0.3（uthvah，MIT）：把静态嵌入变成双向实时同步块，
+			// 6 个纯 CJS JS 文件走 require 桥（见 NOTICE）。version 保持上游值；
+			// migrateFrom 指向独立版 sync-embeds——老用户 data.json 自动迁入模块片。
+			id: "sync-embeds",
+			name: "Sync Embeds",
+			manifest: { version: "2.0.3" },
+			migrateFrom: "sync-embeds",
+			summary:
+				"双向实时同步嵌入：在 ![[笔记]] 或 ![[笔记#标题]] 嵌入处直接编辑源笔记，改动即时写回；完整快捷键、动态日期路径、视口限制与标题层级保护。上游 uthvah（MIT）。",
+			desktopOnly: false,
+			cls: SyncEmbedsPlugin as unknown as ModuleDescriptor["cls"],
 		},
 	];
 
