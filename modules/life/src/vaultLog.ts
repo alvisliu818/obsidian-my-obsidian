@@ -181,6 +181,9 @@ export interface LineDiff {
 	deleted: Array<{ line: number; text: string }>;
 	beforeLines: number;
 	afterLines: number;
+	/** 合并序列(上下文+增删改,按 after 位置序):对比视图渲染数据源。
+	 * beforeLine/afterLine = null 表示该侧不存在(新增/删除)。 */
+	rows: Array<{ beforeLine: number | null; afterLine: number | null; kind: 'ctx' | 'add' | 'mod' | 'del'; text: string }>;
 }
 
 /**
@@ -257,13 +260,18 @@ export function diffLines(before: string, after: string): LineDiff {
 	const added: number[] = [];
 	const modified: number[] = [];
 	const deleted: Array<{ line: number; text: string }> = [];
+	const rows: LineDiff['rows'] = [];
 	let ai = 0;
 	let bj = 0;
 	let k = 0;
+	const ctxRow = (): void => {
+		rows.push({ beforeLine: pre + ai + 1, afterLine: pre + bj + 1, kind: 'ctx', text: midA[ai] ?? '' });
+		ai++;
+		bj++;
+	};
 	while (k < ops.length) {
 		if (ops[k][0] === 0) {
-			ai++;
-			bj++;
+			ctxRow();
 			k++;
 			continue;
 		}
@@ -281,12 +289,28 @@ export function diffLines(before: string, after: string): LineDiff {
 			k++;
 		}
 		const paired = Math.min(dels.length, adds.length);
-		for (let t = 0; t < paired; t++) modified.push(afterLineOf(adds[t].atB));
-		for (let t = paired; t < adds.length; t++) added.push(afterLineOf(adds[t].atB));
-		for (const d of dels) deleted.push({ line: afterLineOf(d.atB), text: d.text });
+		for (let t = 0; t < paired; t++) {
+			const atB = adds[t].atB;
+			modified.push(afterLineOf(atB));
+			deleted.push({ line: afterLineOf(dels[t].atB), text: dels[t].text });
+			// 行序:旧文本行(红)在前、新文本行(蓝)在后——VSCode 内嵌同款
+			rows.push({ beforeLine: pre + ai - dels.length + t + 1, afterLine: null, kind: 'del', text: dels[t].text });
+			rows.push({ beforeLine: null, afterLine: pre + atB + 1, kind: 'mod', text: midB[atB] ?? '' });
+		}
+		for (let t = paired; t < adds.length; t++) {
+			const atB = adds[t].atB;
+			added.push(afterLineOf(atB));
+			rows.push({ beforeLine: null, afterLine: pre + atB + 1, kind: 'add', text: midB[atB] ?? '' });
+		}
+		for (let t = paired; t < dels.length; t++) {
+			const d = dels[t];
+			deleted.push({ line: afterLineOf(d.atB), text: d.text });
+			rows.push({ beforeLine: pre + ai - dels.length + t + 1, afterLine: null, kind: 'del', text: d.text });
+		}
 	}
 	added.sort((x, y) => x - y);
 	modified.sort((x, y) => x - y);
 	deleted.sort((x, y) => x.line - y.line);
-	return { added, modified, deleted, beforeLines: n, afterLines: m };
+	rows.sort((x, y) => (x.afterLine ?? y.beforeLine ?? 0) - (y.afterLine ?? x.beforeLine ?? 0));
+	return { added, modified, deleted, beforeLines: n, afterLines: m, rows };
 }
