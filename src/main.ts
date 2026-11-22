@@ -77,6 +77,13 @@ import PluginMarketPlugin from "../modules/plugin-market/src/main";
 // file-props（自研,2026-11-22）：任意文件/文件夹的自定义属性——权威数据在
 // daemon 库 file_props 表（全量重建不清），右键编辑 + 属性浏览器筛选查看。
 import FilePropsPlugin from "../modules/file-props/src/main";
+// Super Useful SQL v0.2.1（serena-sheng,MIT）：上游只发布构建产物（无源码
+// 目录,见 modules/super-useful-sql/NOTICE.md）——require 桥取 Plugin 子类。
+// 产物内 require('obsidian')/require('node:sqlite') 均为 esbuild external。
+const SuperUsefulSqlPlugin = require("../modules/super-useful-sql/main.cjs") as unknown as new (
+	app: unknown,
+	manifest: unknown,
+) => SubPluginLike;
 // Advanced URI v2.2.1（Vinzent03，MIT）：require 桥（见 modules/advanced-uri/NOTICE）。
 // 上游 tsconfig 非 strict 且其构建不过 tsc，直连会在宿主严格配置下爆 175 处
 // 类型噪音（obsidian 类型版本漂移 + strictNullChecks）——同 media-extended/
@@ -746,6 +753,19 @@ export default class MyObsidianPlugin extends Plugin {
 				"给任意文件和文件夹添加自定义属性（key/value），存索引守护进程 SQLite，全量重建不清空；文件管理器右键编辑，属性浏览器按属性名/属性值/文件夹/文件类型/路径筛选查看。",
 			desktopOnly: true,
 			cls: FilePropsPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// Super Useful SQL v0.2.1（serena-sheng,MIT,2026-11-22 用户指定并入）：
+			// 上游仅发布产物（main.js 未压缩、无源码目录）,require 桥整包接入。
+			// 只读查询库外 SQLite(node:sqlite 直读磁盘,query_only+authorizer),
+			// 数据片仅存数据库别名与查询历史。
+			id: "super-useful-sql",
+			name: "Super Useful SQL",
+			manifest: { version: "0.2.1" },
+			summary:
+				"侧边栏 SQL 面板,查询库外任意 SQLite 数据库（只读强制,node:sqlite 直读磁盘不进内存,支持多库注册/跨库 JOIN/数据字典/导出 Markdown）。查询历史存模块数据片。",
+			desktopOnly: true,
+			cls: SuperUsefulSqlPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
 			// Third-party (Vinzent03, MIT), kept whole — see

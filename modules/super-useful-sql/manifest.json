@@ -1,0 +1,9 @@
+{
+  "id": "super-useful-sql",
+  "name": "Super Useful SQL",
+  "version": "0.2.1",
+  "minAppVersion": "1.13.0",
+  "description": "Query SQLite databases that live outside your vault and read the results in a side panel. Read-only by design, with cross-database joins, an optional data dictionary, and plain Markdown exports.",
+  "author": "serena-sheng",
+  "isDesktopOnly": true
+}

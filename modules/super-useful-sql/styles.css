@@ -1,0 +1,149 @@
+.susql-root {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  padding: 8px;
+  overflow: hidden;
+}
+
+.susql-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.susql-label {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.susql-ro {
+  color: var(--text-success);
+  font-size: var(--font-ui-smaller);
+}
+
+.susql-hist {
+  max-width: 45%;
+}
+
+.susql-dict {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.susql-dict-body {
+  max-height: 30vh;
+  overflow: auto;
+}
+
+.susql-dict-db {
+  margin: 6px 0;
+}
+
+.susql-dict-dbhead {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.susql-dict-dbname {
+  font-weight: 600;
+}
+
+.susql-dict-path {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+}
+
+.susql-dict-cols {
+  margin: 4px 0 4px 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.susql-dict-cols li {
+  font-size: var(--font-ui-smaller);
+  margin: 2px 0;
+}
+
+.susql-col-name {
+  font-weight: 600;
+  font-family: var(--font-monospace);
+}
+
+.susql-col-type {
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+}
+
+.susql-editor {
+  flex: 0 0 auto;
+  min-height: 120px;
+  resize: vertical;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small);
+  width: 100%;
+}
+
+.susql-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.susql-status {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.susql-result {
+  flex: 1 1 auto;
+  overflow: auto;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.susql-table {
+  border-collapse: collapse;
+  font-size: var(--font-ui-smaller);
+  width: 100%;
+}
+
+.susql-table th,
+.susql-table td {
+  border: 1px solid var(--background-modifier-border);
+  padding: 2px 6px;
+  text-align: left;
+  vertical-align: top;
+  max-width: 380px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.susql-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--background-secondary);
+  z-index: 1;
+}
+
+.susql-error {
+  color: var(--text-error);
+  font-family: var(--font-monospace);
+  white-space: pre-wrap;
+  padding: 6px;
+}
+
+.susql-muted {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  padding: 4px 0;
+}
+
+.susql-notice-btn {
+  margin-left: 8px;
+}
