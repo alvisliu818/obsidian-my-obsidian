@@ -222,16 +222,33 @@ module.exports = class SyncEmbedPlugin extends Plugin {
             if (origLeafDesc) {
                 const plugin = this;
                 const origGet = origLeafDesc.get;
+                const origSet = origLeafDesc.set;
+                // Aggregate fix (see NOTICE): spreading the original descriptor
+                // and adding get() breaks when activeLeaf is a DATA descriptor
+                // (value+writable, e.g. an instance shadow written by
+                // Obsidian internals or another module) — defineProperty then
+                // rejects the mixed {value,writable,get} descriptor and
+                // command interception dies at boot. Build an accessor-only
+                // descriptor explicitly and preserve both source shapes:
+                //   accessor source → delegate get/set to the originals;
+                //   data source     → keep writable semantics in a slot so
+                //   writers don't throw on a getter-only property.
+                let slotValue = origGet ? undefined : origLeafDesc.value;
                 Object.defineProperty(workspace, 'activeLeaf', {
-                    ...origLeafDesc,
                     configurable: true,
+                    enumerable: origLeafDesc.enumerable !== false,
                     get() {
                         const focusedEmbed = plugin.getFocusedEmbed();
                         if (focusedEmbed && focusedEmbed.leaf) {
                             plugin.log('Returning embed leaf as active leaf');
                             return focusedEmbed.leaf;
                         }
-                        return origGet ? origGet.call(this) : undefined;
+                        if (origGet) return origGet.call(this);
+                        return slotValue;
+                    },
+                    set(v) {
+                        if (origSet) return origSet.call(this, v);
+                        if (!origGet) slotValue = v;
                     }
                 });
                 this.uninstallers.push(() => Object.defineProperty(workspace, 'activeLeaf', origLeafDesc));

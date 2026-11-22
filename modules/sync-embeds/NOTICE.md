@@ -53,8 +53,15 @@ Changes relative to upstream
 3. **Styles**：上游 `styles.css`（470 行，`.sync-*` / `.metadata-container`
    等前缀）整段并入根 `styles.css` 的 Sync Embeds 分段；模块目录保留副本
    供出处核对，根构建对模块目录的 css import 按 empty 处理。
-4. **无源码改动**：6 个 src/*.js 与上游逐字节一致（CJS 源码直连 require 桥，
-   不需要改导入路径或依赖）。
+4. **修一处上游 bug**（`src/main.js` setupCommandInterception，2026-11-23）：
+   上游把 `workspace.activeLeaf` 的原属性描述符整体 spread 后再加 `get()`
+   ——原描述符是 **data descriptor**（实例上有直接赋值的影子属性，含
+   value/writable）时 defineProperty 抛
+   `Invalid property descriptor. Cannot both specify accessors and a value
+   or writable attribute`，命令拦截在启动时整体失效。上游环境里 activeLeaf
+   是 accessor 所以未触发；聚合环境（46 模块先行启动）是 data 描述符即崩。
+   修复：显式构造纯 accessor 描述符——accessor 源透传原 get/set，data 源
+   用内部槽保留可写语义，卸载时恢复原描述符。
 
 本模块的设置入口由宿主内嵌渲染（单 id 策略：addSettingTab 被截获进
 capturedTabs，通过宿主设置页「其他模块」区直达），不再单独成栏。
