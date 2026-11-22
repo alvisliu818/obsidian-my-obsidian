@@ -13890,14 +13890,13 @@ export class SyncExecutor {
       return { terminated: result };
     }
     if (protocol.status !== "ready") {
-      result.errors = 1;
-      result.message = this.t("result.v2ProtocolBlocked");
-      this.diag?.error(
-        "state",
-        "shared V2 sync protocol could not be joined safely",
-        { reason: protocol.reason, mutations: 0 },
-      );
-      return { terminated: result };
+      return {
+        terminated: await this.recoverStaleReviewedProtocolBlock(
+          result,
+          protocol.reason,
+          "shared V2 sync protocol could not be joined safely",
+        ),
+      };
     }
     const scopeFreeProtocol =
       await this.ensureScopeFreeSharedProtocolFromObservation(
@@ -13916,17 +13915,13 @@ export class SyncExecutor {
       return { terminated: result };
     }
     if (scopeFreeProtocol.status !== "ready") {
-      result.errors = 1;
-      result.message = this.t("result.v2ProtocolBlocked");
-      this.diag?.error(
-        "state",
-        "scope-free shared protocol could not be established before authority commit",
-        {
-          reason: scopeFreeProtocol.reason,
-          mutations: 0,
-        },
-      );
-      return { terminated: result };
+      return {
+        terminated: await this.recoverStaleReviewedProtocolBlock(
+          result,
+          scopeFreeProtocol.reason,
+          "scope-free shared protocol could not be established before authority commit",
+        ),
+      };
     }
     protocolBinding = scopeFreeProtocol.binding;
     this.diag?.log(
@@ -27620,6 +27615,47 @@ export class SyncExecutor {
     const error = new Error("Shared sync protocol operation was cancelled");
     error.name = "AbortError";
     throw error;
+  }
+
+  /**
+   * A pending V2 migration review can outlive the cloud protocol it was staged
+   * against (another device re-created the protocol object, or an earlier
+   * authority commit failed). Re-observing then yields a stable
+   * binding/generation mismatch: the review can never commit, so every retry
+   * fails with the same opaque message. No mutation reached the vault in this
+   * path (`mutations: 0`), therefore the only honest recovery is to retire the
+   * stale review and let the next sync re-plan from a fresh observation.
+   * Confirmed/authority-committed holds are deliberately left untouched —
+   * clearing those would commit authority or hide an interrupted commit; they
+   * still require the explicit state reset.
+   */
+  private async recoverStaleReviewedProtocolBlock(
+    result: SyncResult,
+    reason: string,
+    event: string,
+  ): Promise<SyncResult> {
+    const recoverable =
+      reason === "binding-mismatch" || reason === "generation-mismatch";
+    const hold = this.state.activeV2MigrationHold;
+    let cleared = false;
+    if (recoverable && hold?.phase === "pending") {
+      try {
+        cleared = await this.state.clearPlanReview();
+      } catch {
+        cleared = false;
+      }
+    }
+    result.errors = 1;
+    result.message = this.t(
+      cleared ? "result.v2ProtocolReviewCleared" : "result.v2ProtocolBlocked",
+    );
+    this.diag?.warn("state", event, {
+      reason,
+      mutations: 0,
+      reviewCleared: cleared,
+      holdPhase: hold?.phase ?? null,
+    });
+    return result;
   }
 
   private async runSharedSyncProtocolMutationStep<

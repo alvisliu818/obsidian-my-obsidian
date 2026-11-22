@@ -793,7 +793,8 @@ const en: LocaleStrings = {
 
   // ---- Sync Results ----
   "result.pausedForReview": "Sync paused — plan available for review in sidebar",
-  "result.v2ProtocolBlocked": "The sync upgrade state could not be verified safely. Try again later.",
+  "result.v2ProtocolBlocked": "The sync upgrade state could not be verified safely. Sync again; if it keeps failing, reset the sync state in EasySync settings.",
+  "result.v2ProtocolReviewCleared": "The stale sync-upgrade review was cleared (no files were changed). Sync again; if it still fails, reset the sync state in EasySync settings.",
 
   // ---- Sync Progress Display ----
   "syncView.fileStatus.upload": "Upload",

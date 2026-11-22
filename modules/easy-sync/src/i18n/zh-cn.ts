@@ -791,7 +791,8 @@ const zhCN: LocaleStrings = {
 
   // ---- 同步结果 ----
   "result.pausedForReview": "同步已暂停：计划可在侧边栏查看",
-  "result.v2ProtocolBlocked": "无法安全确认同步升级状态，请稍后重试",
+  "result.v2ProtocolBlocked": "无法安全确认同步升级状态。请重新同步；若持续失败，请到 EasySync 设置里「重置同步状态」。",
+  "result.v2ProtocolReviewCleared": "已清理失效的同步升级审阅（本次未改动任何文件），请重新同步；若仍失败，请到 EasySync 设置里重置同步状态。",
 
   // ---- 同步进度展示 ----
   "syncView.fileStatus.upload": "上传",
