@@ -49,6 +49,13 @@ export class VaultLogDiffModal extends Modal {
 		}
 
 		const foot = contentEl.createDiv({ cls: 'vl-diff-foot' });
+		// 「打开原文件」(2026-11-22 用户):对比看完直接跳原文件编辑。装点已在
+		// openModifiedFileWithDiff 登记,编辑器里仍能看到行级差异标记。
+		const openBtn = foot.createEl('button', { cls: 'life-home-rec-btn', text: '打开原文件' });
+		openBtn.addEventListener('click', () => {
+			void this.app.workspace.openLinkText(this.path, '', false);
+			this.close();
+		});
 		const btn = foot.createEl('button', { cls: 'life-home-rec-btn', text: '撤回此文件到上次提交' });
 		btn.addEventListener('click', async () => {
 			const ok = await this.plugin.revertRecordFile(this.path);

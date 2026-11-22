@@ -459,13 +459,15 @@ export default class LifePlugin extends Plugin {
 		}
 	}
 
-	/** 库记录点击修改的文件:计算与上次提交的对比 → 登记编辑器装点 → 打开
-	 * 文件(打开的编辑器从登记表读装点:原生走 CM 扩展,monaco 视图自行消费)。 */
+	/** 库记录点击修改的文件:计算与上次提交的对比 → 登记编辑器装点 → **打开
+	 * 修改对比弹窗**(2026-11-22 用户:点击直接看差异,不再直接开文件;弹窗里
+	 * 有「打开原文件」跳编辑。打开的编辑器仍从登记表读装点:原生走 CM 扩展,
+	 * monaco 视图自行消费)。 */
 	async openModifiedFileWithDiff(path: string): Promise<void> {
 		const diff = await this.getRecordDiff(path);
 		if (diff) this.setEditorDiff(path, diff);
 		else this.editorDiffRegistry.delete(path);
-		await this.app.workspace.openLinkText(path, '', false);
+		this.openRecordDiffModal(path);
 	}
 
 	/** 「对比」小钮:打开修改对比弹窗(可撤回)。 */
