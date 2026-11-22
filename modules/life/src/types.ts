@@ -6,6 +6,8 @@
  * JSON 片足够；将来如果记账膨胀再迁独立 JSON 文件（store.ts 一处改）。
  */
 
+import { DEFAULT_HOME_SECTION_ORDER, type HomeSectionId } from './homeSections';
+
 // ---- 日期键：全部 yyyy-mm-dd 本地日（不落时区坑,大日历/习惯/计划共用） ----
 
 export interface TodoItem {
@@ -123,6 +125,8 @@ export interface LifeSettings {
 	vaultLogLastRemindDate: string;
 	/** Obsidian 启动时自动打开 HOME 标签页(2026-11-20 用户要求) */
 	homeOpenOnStartup: boolean;
+	/** HOME 各区块的展示顺序(2026-11-22 用户;id 见 homeSections.ts) */
+	homeSectionOrder: HomeSectionId[];
 }
 
 /** 库记录:相对上一次记录的文件变化(2026-11-19 阶段 C)。 */
@@ -202,4 +206,5 @@ export const DEFAULT_LIFE_SETTINGS: LifeSettings = {
 	vaultLogLastPeriodAt: 0,
 	vaultLogLastRemindDate: '',
 	homeOpenOnStartup: true,
+	homeSectionOrder: DEFAULT_HOME_SECTION_ORDER,
 };

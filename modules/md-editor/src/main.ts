@@ -23,7 +23,7 @@ import { isMarkdownFile } from './features/codeFileKind';
 import { isTextFileName } from '../../virtual-tree/src/features/mountFilter';
 import { FileExplorerLocateButton } from './features/fileExplorerLocate';
 import { LogseqEditorSettingTab } from './settings/tab';
-import { initEditorSettingsStore, loadEditorSettings, saveEditorSettings } from './settings/editorSettingsStore';
+import { initEditorSettingsStore, loadEditorSettings, saveEditorSettings } from '../../code-editor/src/settings/editorSettingsStore';
 import { BlockIndex } from './index/blockIndex';
 import { vaultSlugOf } from '../../index-core/src/sqlite-service';
 import { BlockIndexDaemonClient, forwardVaultEvents } from '../../unified-search/src/daemon/daemonClient';

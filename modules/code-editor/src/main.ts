@@ -18,6 +18,8 @@ import { FileSystemAdapter, Plugin } from 'obsidian';
 import { disposeMonaco } from './editor/monaco';
 import { initLazyMonaco } from './editor/lazyMonaco';
 import { shutdownAllLsp } from './lsp/lspHost';
+import { initEditorSettingsStore, loadEditorSettings } from './settings/editorSettingsStore';
+import { CodeEditorSettingTab } from './settings/settingsTab';
 
 /** The id this instance is re-published under in the app's plugin table. */
 export const CODE_EDITOR_ALIAS_ID = 'obsidian-code-editor';
@@ -29,6 +31,11 @@ export default class CodeEditorPlugin extends Plugin {
     // LSP 子进程在首次 openLspDocument 时 spawn（lspHost）。
     const adapter = this.app.vault.adapter as FileSystemAdapter;
     initLazyMonaco(adapter.getFullPath(this.manifest.dir ?? ''));
+    // Monaco 设置(2026-11-22 迁入本模块):settings.json 已存在就先行载入,
+    // 缺失不落盘——首建仍留给 md-editor 的同次启动迁移(data.json 旧换行开关)。
+    initEditorSettingsStore(this);
+    loadEditorSettings(this, false);
+    this.addSettingTab(new CodeEditorSettingTab(this.app, this));
   }
 
   async onunload(): Promise<void> {

@@ -6,8 +6,11 @@
  * 路径:<configDir>/plugins/obsidian-my-obsidian/settings.json,即插件自己的
  * 目录(与 main.js/data.json 同层),文件可同步、可手动编辑。
  *
+ * 2026-11-22:随 code-editor 模块设置页迁入本模块(原在 md-editor/settings)。
+ *
  * 容错:
- *  - 文件缺失 → 写入完整默认对象(用户能看到全部可用键);
+ *  - 文件缺失 → 写入完整默认对象(用户能看到全部可用键);createIfMissing=false
+ *    时只返回默认不落盘(留给 md-editor 做首建时的旧开关迁移);
  *  - JSON 损坏 → **不改写文件**(保住用户手改的内容),返回默认并带 corrupt 标记,
  *    调用方负责 Notice;下次 UI 保存时会覆盖它;
  *  - 未知键/非法值 → editorSettingsFrom 逐键清洗,非法项回退默认。
@@ -19,7 +22,7 @@ import {
   editorSettingsFrom,
   setEditorSettings,
   type EditorSettings,
-} from '../../../code-editor/src/editor/editorSettings';
+} from '../editor/editorSettings';
 import { exists, ensureDir, readExternalText, writeExternalText } from '../../../virtual-tree/src/features/extFs';
 
 /** 存取层需要的宿主最小面(Plugin 满足)。 */
@@ -66,8 +69,12 @@ export function settingsJsonPath(host?: EditorSettingsHost): string {
   return `${basePath()}/${dir}/settings.json`;
 }
 
-/** 读 settings.json(缺失即创建默认文件),并把结果写进运行态。 */
-export function loadEditorSettings(host?: EditorSettingsHost): LoadEditorSettingsResult {
+/**
+ * 读 settings.json(默认缺失即创建默认文件),并把结果写进运行态。
+ * createIfMissing=false:文件不存在时只返回默认、不落盘(code-editor onload
+ * 先读不建,首建与旧开关迁移仍交给 md-editor,避免迁移逻辑失效)。
+ */
+export function loadEditorSettings(host?: EditorSettingsHost, createIfMissing = true): LoadEditorSettingsResult {
   const h = host ?? cachedHost;
   const fallback: LoadEditorSettingsResult = {
     settings: { ...EDITOR_SETTINGS_DEFAULTS },
@@ -86,11 +93,13 @@ export function loadEditorSettings(host?: EditorSettingsHost): LoadEditorSetting
   let corrupt = false;
   let parsed: unknown = EDITOR_SETTINGS_DEFAULTS;
   if (!exists(path)) {
-    try {
-      writeExternalText(path, JSON.stringify(EDITOR_SETTINGS_DEFAULTS, null, 2) + '\n');
-      created = true;
-    } catch {
-      /* 只读环境等:留在默认,不打断启动 */
+    if (createIfMissing) {
+      try {
+        writeExternalText(path, JSON.stringify(EDITOR_SETTINGS_DEFAULTS, null, 2) + '\n');
+        created = true;
+      } catch {
+        /* 只读环境等:留在默认,不打断启动 */
+      }
     }
   } else {
     try {

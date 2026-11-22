@@ -21,7 +21,7 @@ import {
   saveEditorSettings,
   settingsJsonPath,
   type EditorSettingsHost,
-} from '../src/settings/editorSettingsStore';
+} from '../../code-editor/src/settings/editorSettingsStore';
 
 const norm = (p: string): string => p.replace(/\\/g, '/').toLowerCase();
 const PATH = 'E:/vault/.obsidian/plugins/obsidian-my-obsidian/settings.json';

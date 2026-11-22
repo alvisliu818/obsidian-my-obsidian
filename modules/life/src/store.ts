@@ -7,6 +7,7 @@
  */
 import type { LifeSettings } from './types';
 import { DEFAULT_LIFE_SETTINGS, DEFAULT_VAULT_LOG_SETTINGS } from './types';
+import { normalizeHomeSectionOrder } from './homeSections';
 
 export interface LifeStoreHost {
 	loadData(): Promise<unknown>;
@@ -43,6 +44,8 @@ export function lifeSettingsFrom(raw: unknown): LifeSettings {
 		vaultLogLastPeriodAt: typeof o.vaultLogLastPeriodAt === 'number' ? o.vaultLogLastPeriodAt : 0,
 		vaultLogLastRemindDate: typeof o.vaultLogLastRemindDate === 'string' ? o.vaultLogLastRemindDate : '',
 		homeOpenOnStartup: o.homeOpenOnStartup !== false,
+		// HOME 区块顺序:非法/缺失自动回落默认并补齐(旧数据无此字段)
+		homeSectionOrder: normalizeHomeSectionOrder(o.homeSectionOrder),
 	};
 }
 

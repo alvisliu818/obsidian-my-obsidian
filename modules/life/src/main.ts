@@ -8,6 +8,7 @@
  */
 import { Menu, Notice, Plugin, TFile, type WorkspaceLeaf } from 'obsidian';
 import { LifeStore } from './store';
+import { LifeSettingTab } from './ui/settingsTab';
 import type { VaultLogRecord } from './types';
 import { VIEW_LIFE_CALENDAR, LifeCalendarView } from './views/calendar';
 import { VIEW_LIFE_HOME, LifeHomeView } from './views/home';
@@ -48,6 +49,8 @@ export default class LifePlugin extends Plugin {
 
 	async onload(): Promise<void> {
 		this.store = new LifeStore(this, await this.loadData());
+		// 模块设置页(启动行为/HOME 组件排序/库记录设置;2026-11-22 用户)
+		this.addSettingTab(new LifeSettingTab(this.app, this));
 
 		for (const p of LIFE_PANELS) {
 			this.registerView(p.type, (leaf) => this.makeView(p.type, leaf));

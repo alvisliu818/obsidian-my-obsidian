@@ -18,6 +18,7 @@ import type LogseqEditorPlugin from '../../../md-editor/src/main';
 import { VIEW_LIFE_HOME } from './homeTypes';
 import { SnapshotPreviewModal } from './snapshotPreview';
 import { monthGrid, todayKey, formatDuration } from '../util';
+import { normalizeHomeSectionOrder } from '../homeSections';
 import { changeSummary, filterVaultLogRecordsByDate, sortVaultLogRecordsDesc } from '../vaultLog';
 import {
 	renderRecordListInto,
@@ -345,7 +346,6 @@ export class LifeHomeView extends ItemView {
 		contentEl.addClass('life-home');
 		const s = this.plugin.store.settings;
 		const now = new Date();
-		const dateStr = todayKey();
 
 		// ---- 头部:日期 + 立即记录按钮 ----
 		const head = contentEl.createDiv({ cls: 'life-home-head' });
@@ -370,27 +370,61 @@ export class LifeHomeView extends ItemView {
 			});
 		}
 
-		// ---- 今日库变化(今天的最新一条) ----
-		const todayRec = s.vaultLogRecords.find((r) => r.date === dateStr) ?? null;
+		// ---- 各区块:顺序来自设置页「HOME 组件排序」(2026-11-22 用户) ----
+		for (const id of normalizeHomeSectionOrder(s.homeSectionOrder)) {
+			const sec = contentEl.createDiv({ cls: 'life-home-section' });
+			switch (id) {
+				case 'todayChanges':
+					this.renderTodayChangesSection(sec);
+					break;
+				case 'vaultLog':
+					this.renderVaultLogSection(sec);
+					break;
+				case 'gitHistory':
+					this.renderGitHistorySection(sec);
+					break;
+				case 'saveHistory':
+					this.renderSaveSection(sec);
+					break;
+				case 'calendar':
+					this.renderCalendarSection(sec);
+					break;
+				case 'diary':
+					sec.createDiv({ cls: 'life-home-sec-title', text: '日记' });
+					this.renderDiarySection(sec);
+					break;
+				case 'overview':
+					sec.createDiv({ cls: 'life-home-sec-title', text: '今日概览' });
+					this.renderLifeSummaries(sec);
+					break;
+			}
+		}
+	}
+
+	/** 今日库变化:今天最新一条记录摘要(没有则提示最近一条/空态)。 */
+	private renderTodayChangesSection(sec: HTMLElement): void {
+		const s = this.plugin.store.settings;
+		const todayRec = s.vaultLogRecords.find((r) => r.date === todayKey()) ?? null;
 		const latest = s.vaultLogRecords[0] ?? null;
-		const sec1 = contentEl.createDiv({ cls: 'life-home-section' });
-		sec1.createDiv({ cls: 'life-home-sec-title', text: '今日库变化' });
+		sec.createDiv({ cls: 'life-home-sec-title', text: '今日库变化' });
 		if (todayRec) {
-			renderRecordSummaryRow(sec1, todayRec);
+			renderRecordSummaryRow(sec, todayRec);
 		} else if (latest) {
-			sec1.createDiv({
+			sec.createDiv({
 				cls: 'life-home-muted',
 				text: `今天还没有记录。最近一条:${latest.date.slice(5)}(${changeSummary(latest)})`,
 			});
 		} else {
-			sec1.createDiv({ cls: 'life-home-muted', text: '还没有任何记录。点「记录库变化」打第一笔。' });
+			sec.createDiv({ cls: 'life-home-muted', text: '还没有任何记录。点「记录库变化」打第一笔。' });
 		}
+	}
 
-		// ---- 库记录列表(倒序;日期筛选 2026-11-21 用户,与独立库记录面板同款) ----
-		const sec2 = contentEl.createDiv({ cls: 'life-home-section' });
-		sec2.createDiv({ cls: 'life-home-sec-title', text: '库记录' });
+	/** 库记录列表(倒序;日期筛选,与独立库记录面板同款)。 */
+	private renderVaultLogSection(sec: HTMLElement): void {
+		const s = this.plugin.store.settings;
+		sec.createDiv({ cls: 'life-home-sec-title', text: '库记录' });
 		// 日期筛选:选日期只看该天,「全部」清空恢复;状态不落盘
-		const filterRow = sec2.createDiv({ cls: 'life-home-head-btns' });
+		const filterRow = sec.createDiv({ cls: 'life-home-head-btns' });
 		const dateInput = filterRow.createEl('input', {
 			cls: 'life-home-date-filter',
 			attr: { type: 'date', 'aria-label': '按日期筛选记录' },
@@ -412,9 +446,9 @@ export class LifeHomeView extends ItemView {
 		});
 		const shown = filterVaultLogRecordsByDate(sortVaultLogRecordsDesc(s.vaultLogRecords), this.filterDate);
 		if (this.filterDate !== '' && shown.length === 0) {
-			sec2.createDiv({ cls: 'life-home-muted', text: `${this.filterDate} 当天没有记录。点「全部」清除筛选。` });
+			sec.createDiv({ cls: 'life-home-muted', text: `${this.filterDate} 当天没有记录。点「全部」清除筛选。` });
 		} else if (shown.length === 0) {
-			sec2.createDiv({ cls: 'life-home-muted', text: '暂无记录。' });
+			sec.createDiv({ cls: 'life-home-muted', text: '暂无记录。' });
 		} else {
 			const ui: VaultLogUiState = {
 				expandedIds: this.detailRecordId ? new Set([this.detailRecordId]) : new Set(),
@@ -422,7 +456,7 @@ export class LifeHomeView extends ItemView {
 				settingsOpen: this.settingsOpen,
 				collapsedDirs: this.collapsedDirs,
 			};
-			renderRecordListInto(sec2, shown.slice(0, 10), ui, {
+			renderRecordListInto(sec, shown.slice(0, 10), ui, {
 				onToggleRecord: (id) => {
 					this.detailRecordId = this.detailRecordId === id ? null : id;
 					this.render();
@@ -437,10 +471,11 @@ export class LifeHomeView extends ItemView {
 				onCompareFile: (path) => void this.plugin.openRecordDiffView(path),
 			});
 		}
+	}
 
-		// ---- Git 历史记录(2026-11-22 用户;参考库记录:列表 + 展开文件) ----
-		const secGit = contentEl.createDiv({ cls: 'life-home-section' });
-		const gitHead = secGit.createDiv({ cls: 'life-home-sec-head' });
+	/** Git 历史:最近 10 条提交,展开看文件。 */
+	private renderGitHistorySection(sec: HTMLElement): void {
+		const gitHead = sec.createDiv({ cls: 'life-home-sec-head' });
 		gitHead.createDiv({ cls: 'life-home-sec-title', text: 'Git 历史' });
 		const gitBtns = gitHead.createDiv({ cls: 'life-home-head-btns' });
 		const gitRefresh = gitBtns.createEl('button', { cls: 'life-home-mode-btn', text: '刷新' });
@@ -448,15 +483,15 @@ export class LifeHomeView extends ItemView {
 		const gitOpen = gitBtns.createEl('button', { cls: 'life-home-mode-btn', text: '历史视图' });
 		gitOpen.addEventListener('click', () => void this.openModuleView('git-history-view'));
 		if (this.gitLog === null) {
-			secGit.createDiv({ cls: 'life-home-muted', text: '加载中…' });
+			sec.createDiv({ cls: 'life-home-muted', text: '加载中…' });
 		} else if (this.gitLogError) {
-			secGit.createDiv({ cls: 'life-home-muted', text: this.gitLogError });
+			sec.createDiv({ cls: 'life-home-muted', text: this.gitLogError });
 		} else if (this.gitLog.length === 0) {
-			secGit.createDiv({ cls: 'life-home-muted', text: '暂无提交。' });
+			sec.createDiv({ cls: 'life-home-muted', text: '暂无提交。' });
 		} else {
 			for (const c of this.gitLog) {
 				const expanded = this.gitLogExpanded.has(c.hash);
-				const row = secGit.createDiv({ cls: 'life-home-hist-row' });
+				const row = sec.createDiv({ cls: 'life-home-hist-row' });
 				row.createSpan({ cls: 'life-home-hist-chevron', text: expanded ? '▾' : '▸' });
 				row.createSpan({ cls: 'life-home-hist-hash', text: c.hash.slice(0, 7) });
 				const msg = row.createSpan({ cls: 'life-home-hist-msg', text: c.message.split('\n')[0] || '(无提交信息)' });
@@ -472,7 +507,7 @@ export class LifeHomeView extends ItemView {
 				});
 				if (!expanded) continue;
 				const files = c.diff?.files ?? [];
-				const box = secGit.createDiv({ cls: 'life-home-hist-files' });
+				const box = sec.createDiv({ cls: 'life-home-hist-files' });
 				if (!files.length) {
 					box.createDiv({ cls: 'life-home-muted', text: '没有文件变更（合并/空提交）。' });
 					continue;
@@ -490,26 +525,13 @@ export class LifeHomeView extends ItemView {
 				}
 			}
 		}
+	}
 
-		// ---- 保存历史(2026-11-22 用户:所有有历史的文件;列表/按文件夹) ----
-		const secSave = contentEl.createDiv({ cls: 'life-home-section' });
-		this.renderSaveSection(secSave);
-
-		// ---- 迷你月网格(任务/计划圆点 + 当日明细) ----
-		const sec3 = contentEl.createDiv({ cls: 'life-home-section' });
-		sec3.createDiv({ cls: 'life-home-sec-title', text: '大日历' });
-		sec3.createDiv({ cls: 'life-home-muted', text: '完整版(点格子加任务/计划)在「大日历」面板 →' });
-		this.renderMiniCalendar(sec3);
-
-		// ---- 日记(今日/最近,md-editor journal 体系) ----
-		const secDiary = contentEl.createDiv({ cls: 'life-home-section' });
-		secDiary.createDiv({ cls: 'life-home-sec-title', text: '日记' });
-		this.renderDiarySection(secDiary);
-
-		// ---- 任务/代办/习惯/计时 摘要 ----
-		const sec4 = contentEl.createDiv({ cls: 'life-home-section' });
-		sec4.createDiv({ cls: 'life-home-sec-title', text: '今日概览' });
-		this.renderLifeSummaries(sec4);
+	/** 大日历区块:迷你月网格 + 当日明细。 */
+	private renderCalendarSection(sec: HTMLElement): void {
+		sec.createDiv({ cls: 'life-home-sec-title', text: '大日历' });
+		sec.createDiv({ cls: 'life-home-muted', text: '完整版(点格子加任务/计划)在「大日历」面板 →' });
+		this.renderMiniCalendar(sec);
 	}
 
 

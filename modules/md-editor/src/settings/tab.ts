@@ -11,7 +11,6 @@ import { VIEW_TYPE_EXTERNAL_BLOCK } from '../views/ExternalBlockView';
 import { SHORTCUT_GROUP_LABELS, type LspServerSpec, type PagePropsEditor, type ScopeMode, type ShortcutOverrides } from '../types';
 import { effectiveLspServers } from '../../../code-editor/src/lsp/serverSpecs';
 import { LspServerEditModal } from './lspServerModal';
-import { renderEditorSettingsRows } from './editorSettingsUI';
 
 export class LogseqEditorSettingTab extends PluginSettingTab {
   plugin: LogseqEditorPlugin;
@@ -59,8 +58,7 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
     this.renderSqliteSection(containerEl);
     containerEl.createEl('h3', { text: '代码运行' });
     this.renderCodeRunSection(containerEl);
-    containerEl.createEl('h3', { text: '代码编辑器' });
-    this.renderEditorSettingsSection(containerEl);
+    // 「代码编辑器」设置节已迁到 code-editor 模块自己的设置页(2026-11-22 用户)。
   }
 
   private renderBlocksSection(containerEl: HTMLElement): void {
@@ -1173,9 +1171,5 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
 
   }
 
-  private renderEditorSettingsSection(containerEl: HTMLElement): void {
-    // 编辑器设置(25 行 + settings.json 操作行),平铺 Setting 行,Obsidian 原生观感
-    renderEditorSettingsRows(containerEl, this.plugin);
-  }
 }
 

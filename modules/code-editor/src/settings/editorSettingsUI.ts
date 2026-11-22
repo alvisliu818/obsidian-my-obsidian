@@ -1,8 +1,8 @@
 /**
  * 「代码编辑器设置」的行内容(25 条用户可调项)。
  *
- * Obsidian 原生平铺 Setting 行,作为设置页「代码编辑器」节渲染
- * (tab.ts → renderEditorSettingsSection)。
+ * Obsidian 原生平铺 Setting 行,由 code-editor 模块设置页渲染
+ * (settingsTab.ts → renderEditorSettingsRows;2026-11-22 从 md-editor 迁入)。
  *
  * 存储与生效:
  *  - settings.json 是唯一存储(<configDir>/plugins/<dir>/settings.json),
@@ -13,8 +13,8 @@
  */
 
 import { Notice, Setting, TextComponent } from 'obsidian';
-import { getEditorSettings, type EditorSettings } from '../../../code-editor/src/editor/editorSettings';
-import { applyEditorSettings } from '../../../code-editor/src/editor/monaco';
+import { getEditorSettings, type EditorSettings } from '../editor/editorSettings';
+import { applyEditorSettings } from '../editor/monaco';
 import {
   loadEditorSettings,
   saveEditorSettings,
