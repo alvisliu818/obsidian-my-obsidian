@@ -4450,8 +4450,16 @@ export default class EasySyncPlugin extends Plugin {
     // When a regenerated plan is byte-for-byte identical to the review that
     // was already sitting in the sidebar there is nothing new to show. The
     // user still needs to confirm in the sidebar, so we still pause.
+    //
+    // V2 激活类审阅（plan.reviewKind 存在）不走这条去重：hold 在
+    // publishPreview 之前就已由引擎暂存，上面读到的 previousIdentity 正是
+    // 本次计划的身份，比较恒等——凡是「计划已变、引擎刚重新暂存」的路径都会
+    // 被误判成没变，弹框永不出现（2026-11-22 实测：重新暂存 hold rev 8 后
+    // 侧栏毫无提示，"同步计划" 看起来没出现）。这类路径的调用方已经判定
+    // 审阅需要重新展示，直接弹框。
     if (
-      kind === "threshold"
+      plan.reviewKind === undefined
+      && kind === "threshold"
       && previousIdentity
       && plan.canonicalIdentity
       && sameCanonicalPlanIdentityV2(previousIdentity, plan.canonicalIdentity)
