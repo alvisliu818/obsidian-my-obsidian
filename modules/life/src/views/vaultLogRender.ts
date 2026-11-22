@@ -309,9 +309,24 @@ export function renderVaultLogSettingsInto(
 	vl: VaultLogSettings,
 	onChange: () => void,
 ): void {
+	// 修改对比总开关(2026-11-22 用户):关 = 编辑器装点/覆盖层/「对比」钮全消失
+	new Setting(container)
+		.setName('修改对比')
+		.setDesc(
+			'库记录里修改的文件,在编辑器(原生/monaco)里显示修改新增标志' +
+				'(行号右侧绿/蓝竖条),点击可看与基线的对比并可撤回。' +
+				'关闭后这些全部不渲染。',
+		)
+		.addToggle((t) => {
+			t.setValue(vl.diffEnabled !== false).onChange(async (v) => {
+				vl.diffEnabled = v;
+				onChange?.();
+			});
+		});
+
 	// 修改对比基线(2026-11-21 用户改成设置项):编辑器修改装点/对比视图与
 	// 「撤回」的对比基准。
-	new Setting(container)
+	if (vl.diffEnabled !== false) new Setting(container)
 		.setName('修改对比基线')
 		.setDesc(
 			'编辑器里修改装点/对比视图与「撤回」的对比基准。' +

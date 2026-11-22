@@ -360,9 +360,10 @@ export default class LifePlugin extends Plugin {
 	}
 
 	/** 修改对比(库内相对路径):当前内容与基线的行级 diff。基线按设置:
-	 * git = 上次提交(HEAD);record = 上次库记录时点(影子)。无基线/无差异
-	 * 返回 null。 */
+	 * git = 上次提交(HEAD);record = 上次库记录时点(影子)。无基线/无差异/
+	 * 总开关关闭返回 null。 */
 	async getRecordDiff(path: string): Promise<LineDiff | null> {
+		if (this.store.settings.vaultLog?.diffEnabled === false) return null;
 		const f = this.app.vault.getAbstractFileByPath(path);
 		if (!(f instanceof TFile)) return null;
 		let before: string | null = null;
@@ -425,6 +426,7 @@ export default class LifePlugin extends Plugin {
 
 	/** 登记编辑器装点并分发到打开中的同文件编辑器(原生 CM)。 */
 	private setEditorDiff(path: string, diff: LineDiff): void {
+		if (this.store.settings.vaultLog?.diffEnabled === false) return;
 		const entry = { diff, open: true };
 		this.editorDiffRegistry.set(path, entry);
 		setVaultDiffEntry(path, entry);
@@ -433,6 +435,28 @@ export default class LifePlugin extends Plugin {
 
 	getEditorDiff(path: string): { diff: LineDiff } | null {
 		return this.editorDiffRegistry.get(path) ?? null;
+	}
+
+	/** 开关切换后刷新编辑器装点:清登记表 + CM 分发 null + monaco 视图重应用。 */
+	async refreshEditorDiffs(): Promise<void> {
+		for (const p of [...this.editorDiffRegistry.keys()]) {
+			this.editorDiffRegistry.delete(p);
+			setVaultDiffEntry(p, null);
+			dispatchVaultDiffToCm(this.app, p);
+		}
+		// monaco 视图(库内代码文件)重应用:读新开关状态清装点
+		const leaves: WorkspaceLeaf[] = [];
+		this.app.workspace.iterateAllLeaves((leaf) => leaves.push(leaf));
+		for (const leaf of leaves) {
+			const v = leaf.view as { viewType?: string; applyVaultDiffDecorations?: () => Promise<void> } | null;
+			if (v?.viewType === 'logseq-external-code' && typeof v.applyVaultDiffDecorations === 'function') {
+				try {
+					await v.applyVaultDiffDecorations();
+				} catch {
+					/* 单视图失败不阻断 */
+				}
+			}
+		}
 	}
 
 	/** 库记录点击修改的文件:计算与上次提交的对比 → 登记编辑器装点 → 打开

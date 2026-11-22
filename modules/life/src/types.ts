@@ -150,6 +150,9 @@ export interface VaultLogSettings {
 	/** 修改对比基线(2026-11-21 用户改成设置项):git = 上次 git 提交(HEAD);
 	 * record = 上次库记录时点。默认 git。 */
 	diffBaseline?: 'git' | 'record';
+	/** 修改对比整个功能的总开关(2026-11-22 用户):false = 编辑器装点/覆盖层/
+	 * 库记录「对比」钮全部消失。缺省开。 */
+	diffEnabled?: boolean;
 	/** 自动记录总开关(关=只允许手动打点) */
 	enabled: boolean;
 	/** 每日固定记录时间 HH:mm(''=关) */

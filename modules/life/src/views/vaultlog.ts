@@ -112,6 +112,7 @@ export class LifeVaultLogView extends ItemView {
 				s.vaultLog,
 				() => {
 					this.plugin.store.scheduleSave();
+					void this.plugin.refreshEditorDiffs();
 					void this.plugin.recordVaultChanges('manual').catch(() => {});
 				},
 			);

@@ -89,7 +89,10 @@ export class LifeHomeView extends ItemView {
 		if (this.settingsOpen) {
 			const sec = contentEl.createDiv({ cls: 'life-home-section is-settings' });
 			sec.createDiv({ cls: 'life-home-sec-title', text: '库记录设置' });
-			renderVaultLogSettingsInto(sec, s.vaultLog, () => this.plugin.store.scheduleSave());
+			renderVaultLogSettingsInto(sec, s.vaultLog, () => {
+				this.plugin.store.scheduleSave();
+				void this.plugin.refreshEditorDiffs();
+			});
 		}
 
 		// ---- 今日库变化(今天的最新一条) ----
