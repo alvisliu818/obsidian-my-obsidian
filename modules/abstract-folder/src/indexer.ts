@@ -732,7 +732,15 @@ export class FolderIndexer {
     for (const file of allFiles) {
       if (file.path === deletedFilePath) continue;
 
-      await this.app.fileManager.processFrontMatter(file, (frontmatter: AbstractFolderFrontmatter) => {
+      // 只清理 Markdown:父/子关系只来自 frontmatter,而 processFrontMatter
+      // 会对任何文件解析 YAML——非 md(画布/代码/JSON 等)既没有可维护的
+      // 父引用,解析失败还会把整轮清理打断(实测报 YAMLParseError)。
+      // 没有 frontmatter 的文件也跳过,少一次无意义的读写。
+      if (file.extension !== 'md') continue;
+      if (!this.app.metadataCache.getFileCache(file)?.frontmatter) continue;
+
+      try {
+        await this.app.fileManager.processFrontMatter(file, (frontmatter: AbstractFolderFrontmatter) => {
         for (const childrenPropertyName of childrenPropertyNames) {
             const rawChildren = frontmatter[childrenPropertyName];
 
@@ -773,6 +781,11 @@ export class FolderIndexer {
             }
         }
       });
+      } catch (error) {
+        // 单个文件的 frontmatter 损坏(如重复 key 的 YAML)不应中断删除清理:
+        // 跳过它,其余父笔记照常移除对已删文件的引用。
+        Logger.warn(`跳过父引用清理(frontmatter 解析失败): ${file.path}`, error);
+      }
     }
   }
 
