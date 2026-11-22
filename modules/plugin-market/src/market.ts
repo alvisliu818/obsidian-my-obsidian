@@ -26,6 +26,9 @@ interface EnhanceCtx {
 	} | null;
 }
 
+/** 空壳兜底的最小壳数：低于它视为核心正常填充的小列表（搜索结果等），不插手。 */
+const SHELL_FILL_MIN = 20;
+
 /** 每个文档只注入一次的样式：可选中修复 + 增强块外观。 */
 const STYLE_ID = 'lgp-mkt-style';
 const STYLE_CSS = `
@@ -105,6 +108,7 @@ export function enhanceCommunityModal(modal: HTMLElement, ctx: EnhanceCtx): void
 	enhanceDetail(modal, ctx);
 	applyFilter(modal, ctx);
 	fillShellCards(modal, ctx);
+	cleanupShellFill(modal);
 }
 
 // ---------------------------------------------------------------------------
@@ -124,7 +128,11 @@ function fillShellCards(modal: HTMLElement, ctx: EnhanceCtx): void {
 	if (!doc) return;
 	const cards = [...doc.querySelectorAll<HTMLElement>('.community-item.tappable')];
 	const shells = cards.filter((c) => !c.querySelector('.community-item-name')?.textContent?.trim());
-	if (!shells.length) return; // 没有空壳（核心填充正常）——无事可做
+	// 最小壳数阈值（2026-11-22 用户实报「插件重复显示」）：搜索结果等小列表里
+	// 核心填充是正常的,补丁抢填会与核心二次填充竞态——卡内双份内容、甚至残留
+	// 壳被按位置错填成搜索结果（列表同插件两张卡）。兜底只服务全量浏览场景
+	// （核心渲染 1 万多张空壳且填充失效）,壳数低于阈值一律不插手。
+	if (shells.length < SHELL_FILL_MIN) return; // 没有空壳（核心填充正常）——无事可做
 	// 精确数据源：弹窗实例的 itemsVisible——注意它是【条目对象数组】（不是 id
 	// 数组），第 i 个对象就带 name/author/description/downloads/updated 与核心
 	// 预渲染的 nameEl/authorEl/descEl。补丁在 onModalOpen 捕获实例（main.ts）。
@@ -151,47 +159,94 @@ function fillShellCards(modal: HTMLElement, ctx: EnhanceCtx): void {
 			}
 			return undefined;
 		};
+		// 补丁塞入的元素统一打标记——cleanupShellFill 据此与核心自己渲染的
+		// 内容区分（竞态发生后拆补丁组时只拆自己的）
+		const put = (el: HTMLElement): void => {
+			el.dataset['lgpMktShellEl'] = '1';
+			shell.appendChild(el);
+		};
 		const nameEl = own('nameEl');
 		if (nameEl) {
-			shell.appendChild(nameEl);
+			put(nameEl);
 		} else {
 			const el = doc.createElement('div');
 			el.className = 'community-item-name';
 			el.textContent = name;
-			shell.appendChild(el);
+			put(el);
 		}
 		const authorEl = own('authorEl');
 		if (authorEl) {
-			shell.appendChild(authorEl);
+			put(authorEl);
 		} else {
 			const el = doc.createElement('div');
 			el.className = 'community-item-author';
 			el.textContent = author ? `作者：${author}` : '';
-			shell.appendChild(el);
+			put(el);
 		}
 		if (downloads !== undefined) {
 			const dlEl = doc.createElement('div');
 			dlEl.className = 'community-item-downloads';
 			dlEl.textContent = String(downloads);
-			shell.appendChild(dlEl);
+			put(dlEl);
 		}
 		if (updated) {
 			const upEl = doc.createElement('div');
 			upEl.className = 'community-item-updated';
 			upEl.textContent = updated;
-			shell.appendChild(upEl);
+			put(upEl);
 		}
 		const descEl = own('descEl');
 		if (descEl) {
-			shell.appendChild(descEl);
+			put(descEl);
 		} else {
 			const el = doc.createElement('div');
 			el.className = 'community-item-desc';
 			el.textContent = description;
-			shell.appendChild(el);
+			put(el);
 		}
 		shell.dataset.lgpMktFilled = '1';
 	});
+}
+
+// ---------------------------------------------------------------------------
+// 竞态善后：核心接管后的去重
+//
+// 补丁填壳后核心可能接着自己填（搜索场景填充正常,见 SHELL_FILL_MIN 注释;
+// 阈值挡不住的残留壳错填也一样）。两种症状,对应两种清理:
+//   ① 卡内双份内容（names×2）——移除补丁标记的元素组,核心组完整保留
+//     （带搜索高亮/downloads/updated,后续归核心管理）;
+//   ② 列表同名同作者出现两张卡（残留壳被错填 + 核心真卡）——隐藏补丁卡,
+//     只留核心真卡。核心自己的重复（无补丁卡参与）不动,不猜。
+// ---------------------------------------------------------------------------
+
+function cleanupShellFill(modal: HTMLElement): void {
+	for (const card of modal.querySelectorAll<HTMLElement>('.community-item.tappable')) {
+		if (card.dataset.lgpMktFilled !== '1') continue;
+		if (card.querySelectorAll('.community-item-name').length <= 1) continue;
+		for (const el of [...card.querySelectorAll<HTMLElement>('[data-lgp-mkt-shell-el="1"]')]) {
+			el.remove();
+		}
+		delete card.dataset.lgpMktFilled;
+	}
+	const byIdent = new Map<string, HTMLElement[]>();
+	for (const card of modal.querySelectorAll<HTMLElement>('.community-item.tappable')) {
+		const name = card.querySelector('.community-item-name')?.textContent?.trim() ?? '';
+		if (!name) continue;
+		const author = (card.querySelector('.community-item-author')?.textContent?.trim() ?? '').replace(
+			/^(?:作者|by)\s*[：:]\s*/i,
+			'',
+		);
+		const k = `${name}\n${author}`;
+		const arr = byIdent.get(k) ?? [];
+		arr.push(card);
+		byIdent.set(k, arr);
+	}
+	for (const arr of byIdent.values()) {
+		if (arr.length < 2) continue;
+		const shellCard = arr.find((c) => c.dataset.lgpMktFilled === '1');
+		if (!shellCard) continue;
+		shellCard.style.display = 'none';
+	}
 }
 
 // ---------------------------------------------------------------------------
