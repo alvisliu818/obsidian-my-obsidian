@@ -63771,15 +63771,16 @@ body.is-mobile
 
 
 /* 标签页最小宽度+溢出横滚(open-tab-settings,2026-11-22 用户):
-   body.ots-tab-min-width-on 由插件按设置开合;限定主区顶部标签条,
-   inner 横向滚动(scrollbar 隐藏)、滚轮驱动,侧栏图标 tab 不参与 */
-body.ots-tab-min-width-on .workspace-tabs.mod-top .workspace-tab-header-container-inner {
+   body.ots-tab-min-width-on 由插件按设置开合;**只限主区顶部标签条**
+   (.workspace-split.mod-root > .workspace-tabs.mod-top)——侧栏图标 tab
+   不是主区标签,加 min-width 会把侧栏头部撑坏(用户实报 bug)。 */
+body.ots-tab-min-width-on .workspace-split.mod-root > .workspace-tabs.mod-top .workspace-tab-header-container-inner {
 	overflow-x: auto;
 	scrollbar-width: none;
 	min-width: 0;
 }
-body.ots-tab-min-width-on .workspace-tabs.mod-top .workspace-tab-header-container-inner::-webkit-scrollbar { display: none; }
-body.ots-tab-min-width-on .workspace-tabs.mod-top .workspace-tab-header {
+body.ots-tab-min-width-on .workspace-split.mod-root > .workspace-tabs.mod-top .workspace-tab-header-container-inner::-webkit-scrollbar { display: none; }
+body.ots-tab-min-width-on .workspace-split.mod-root > .workspace-tabs.mod-top .workspace-tab-header {
 	min-width: var(--ots-tab-min-width, 140px);
 	flex: 0 0 auto;
 }

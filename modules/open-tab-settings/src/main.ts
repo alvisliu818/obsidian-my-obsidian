@@ -122,6 +122,8 @@ export default class OpenTabSettingsPlugin extends Plugin {
             const target = ev.target as HTMLElement | null;
             const container = target?.closest?.('.workspace-tab-header-container') as HTMLElement | null;
             if (!container) return;
+            // 只处理主区标签条:侧栏图标 tab 的滚动/宽度不归本功能管
+            if (container.closest('.mod-left-split, .mod-right-split')) return;
             const inner = container.querySelector('.workspace-tab-header-container-inner') as HTMLElement | null;
             const scroller =
                 inner && inner.scrollWidth > inner.clientWidth
