@@ -74,6 +74,9 @@ import CodeLinkPlugin from "../modules/code-link/src/main";
 // plugin-market（自研）：社区插件市场增强——详情顶部区可选中复制（核心
 // user-select:none 传导）、插件评价打标签（绑定社区插件 id）、按标签筛选。
 import PluginMarketPlugin from "../modules/plugin-market/src/main";
+// file-props（自研,2026-11-22）：任意文件/文件夹的自定义属性——权威数据在
+// daemon 库 file_props 表（全量重建不清），右键编辑 + 属性浏览器筛选查看。
+import FilePropsPlugin from "../modules/file-props/src/main";
 // Advanced URI v2.2.1（Vinzent03，MIT）：require 桥（见 modules/advanced-uri/NOTICE）。
 // 上游 tsconfig 非 strict 且其构建不过 tsc，直连会在宿主严格配置下爆 175 处
 // 类型噪音（obsidian 类型版本漂移 + strictNullChecks）——同 media-extended/
@@ -731,6 +734,18 @@ export default class MyObsidianPlugin extends Plugin {
 				"社区插件市场增强：详情页信息可选中复制；插件可打 1-5 星评分与标签（绑定插件 id 持久化）；侧栏按标签筛选市场列表，卡片显示评价/标签徽标。",
 			desktopOnly: false,
 			cls: PluginMarketPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
+			// 自研：用户自定义文件属性（2026-11-22 用户需求）——任意文件/文件夹
+			// 的 key/value 属性，权威数据存 daemon 库 file_props 表（全量重建不清）；
+			// 文件管理器右键编辑 + 属性浏览器按属性/值/文件夹/扩展名/路径筛选。
+			// daemon（md-editor 模块）不在时只读不可用——桌面端专用。
+			id: "file-props",
+			name: "File Props",
+			summary:
+				"给任意文件和文件夹添加自定义属性（key/value），存索引守护进程 SQLite，全量重建不清空；文件管理器右键编辑，属性浏览器按属性名/属性值/文件夹/文件类型/路径筛选查看。",
+			desktopOnly: true,
+			cls: FilePropsPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
 			// Third-party (Vinzent03, MIT), kept whole — see

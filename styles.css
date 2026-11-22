@@ -63688,3 +63688,25 @@ body.ots-tab-min-width-on .workspace-tabs.mod-top .workspace-tab-header {
 .lgp-diff-overlay-sign { width: 1em; flex: none; }
 .lgp-diff-overlay-text { white-space: pre-wrap; word-break: break-all; }
 .lgp-diff-overlay-empty { color: var(--text-muted); padding: 10px; }
+
+/* 文件属性(file-props,2026-11-22 用户):编辑弹窗 + 属性浏览器视图 */
+.lgp-fp-unavailable { color: var(--text-muted); padding: 8px 4px; font-size: var(--font-ui-small); }
+.lgp-fp-row, .lgp-fp-add, .lgp-fp-prop-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
+.lgp-fp-add { border-top: 1px solid var(--background-modifier-border); margin-top: 6px; padding-top: 8px; }
+.lgp-fp-key { flex: 0 0 auto; min-width: 88px; font-weight: 600; color: var(--text-normal); word-break: break-all; }
+.lgp-fp-value { flex: 1 1 auto; min-width: 0; background: var(--background-primary); color: var(--text-normal);
+  border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s, 4px); padding: 2px 6px; font-size: var(--font-ui-smaller); }
+.lgp-fp-btn { flex: 0 0 auto; font-size: var(--font-ui-smaller); cursor: pointer; }
+.lgp-fp-danger:hover { color: var(--text-error); border-color: var(--text-error); }
+.lgp-fp-del { border: none; background: none; color: var(--text-muted); padding: 0 4px; }
+.lgp-fp-empty { color: var(--text-muted); font-size: var(--font-ui-smaller); padding: 4px 0; }
+.lgp-fp-filters { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid var(--background-modifier-border); margin-bottom: 8px; }
+.lgp-fp-filter { flex: 1 1 110px; min-width: 90px; background: var(--background-primary); color: var(--text-normal);
+  border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s, 4px); padding: 3px 6px; font-size: var(--font-ui-smaller); }
+.lgp-fp-filter-btns { display: flex; gap: 6px; align-items: center; }
+.lgp-fp-status { color: var(--text-muted); font-size: var(--font-ui-smaller); padding: 2px 0 6px; }
+.lgp-fp-group { border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s, 4px); padding: 4px 8px; margin-bottom: 6px; }
+.lgp-fp-path { display: flex; align-items: center; gap: 6px; }
+.lgp-fp-path-text { flex: 1 1 auto; min-width: 0; font-weight: 600; font-size: var(--font-ui-smaller); word-break: break-all; }
+.lgp-fp-props { padding-top: 2px; }
+.lgp-fp-val { flex: 1 1 auto; min-width: 0; color: var(--text-muted); font-size: var(--font-ui-smaller); word-break: break-all; }

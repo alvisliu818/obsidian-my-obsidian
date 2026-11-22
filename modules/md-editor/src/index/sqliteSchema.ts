@@ -135,6 +135,21 @@ export const SCHEMA_SQL: readonly string[] = [
      mtime INTEGER NOT NULL,
      size INTEGER NOT NULL
    )`,
+
+  // ---- 用户自定义文件属性(2026-11-22 用户需求):任意文件/文件夹的 key/value。
+  // **权威数据,不进 TABLE_NAMES**——本库其他表都是从文件内容重建的派生缓存,
+  // dropAll/全量重建会清空;用户手工录入的属性不是派生物,必须原地存活。
+  // path = vault 相对路径或 ext: 伪路径(挂载的库外文件);文件夹 is_dir=1。
+  // (path, key) 唯一:同一路径同名属性 upsert,不堆历史行。
+  `CREATE TABLE IF NOT EXISTS file_props (
+     path TEXT NOT NULL,
+     is_dir INTEGER NOT NULL DEFAULT 0,
+     key TEXT NOT NULL,
+     value TEXT NOT NULL DEFAULT '',
+     updated_at INTEGER NOT NULL DEFAULT 0,
+     PRIMARY KEY (path, key)
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_file_props_key_val ON file_props(key, value)`,
 ];
 
 export const TABLE_NAMES: readonly string[] = [

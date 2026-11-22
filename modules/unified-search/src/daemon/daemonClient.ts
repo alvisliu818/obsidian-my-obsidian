@@ -579,6 +579,31 @@ export class BlockIndexDaemonClient {
   }
 
   // ------------------------------------------------------------------
+  // 用户自定义文件属性(2026-11-22):daemon 库 file_props 表(权威数据,
+  // 全量重建不清)。任意文件/文件夹的 key/value,CRUD 直通 op 通道。
+  // ------------------------------------------------------------------
+
+  /** upsert 单条属性（同 path+key 覆盖）。 */
+  propsSet(path: string, key: string, value: string, isDir = false): Promise<{ ok: true }> {
+    return this.call('propsSet', { path, key, value, isDir });
+  }
+
+  /** 删除属性：key 省略时清空该路径全部属性。 */
+  propsDelete(path: string, key: string): Promise<{ ok: true }> {
+    return this.call('propsDelete', { path, key });
+  }
+
+  propsList(path: string): Promise<{ path: string; props: { key: string; value: string; updatedAt: number }[] }> {
+    return this.call('propsList', { path });
+  }
+
+  propsQuery(
+    query: { key?: string; value?: string; folder?: string; ext?: string; path?: string; limit?: number },
+  ): Promise<{ rows: { path: string; isDir: boolean; key: string; value: string; updatedAt: number }[] }> {
+    return this.call('propsQuery', { query });
+  }
+
+  // ------------------------------------------------------------------
   // 变更通道（main.ts 的 vault 事件转发进来）
   // ------------------------------------------------------------------
 

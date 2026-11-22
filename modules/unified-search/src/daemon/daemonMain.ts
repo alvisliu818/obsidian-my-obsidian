@@ -1255,6 +1255,91 @@ async function main(): Promise<void> {
         }
         return fn.call(queries);
       }
+      // ---- 用户自定义文件属性(2026-11-22):file_props 表是权威数据,独立于
+      // 派生缓存表(见 sqliteSchema.ts)。写入路径不经 mutate()——不触发索引
+      // 变更广播,属性编辑不应惊动整个索引消费链。
+      case 'propsSet': {
+        const path = String(msg.path ?? '');
+        const key = String((msg as { key?: unknown }).key ?? '').trim();
+        const value = String((msg as { value?: unknown }).value ?? '');
+        const isDir = (msg as { isDir?: unknown }).isDir === true ? 1 : 0;
+        if (!path || !key) throw new Error('propsSet: path and key are required');
+        const rt = await rtOf();
+        await rt.run(
+          'INSERT INTO file_props (path, is_dir, key, value, updated_at) VALUES (?, ?, ?, ?, ?) ' +
+            'ON CONFLICT(path, key) DO UPDATE SET is_dir=excluded.is_dir, value=excluded.value, updated_at=excluded.updated_at',
+          [path, isDir, key, value, Date.now()],
+        );
+        return { ok: true };
+      }
+      case 'propsDelete': {
+        const path = String(msg.path ?? '');
+        const key = String((msg as { key?: unknown }).key ?? '').trim();
+        if (!path) throw new Error('propsDelete: path is required');
+        const rt = await rtOf();
+        if (key) await rt.run('DELETE FROM file_props WHERE path = ? AND key = ?', [path, key]);
+        else await rt.run('DELETE FROM file_props WHERE path = ?', [path]);
+        return { ok: true };
+      }
+      case 'propsList': {
+        const path = String(msg.path ?? '');
+        if (!path) throw new Error('propsList: path is required');
+        const rt = await rtOf();
+        const res = await rt.all('SELECT key, value, updated_at FROM file_props WHERE path = ? ORDER BY key', [path], 1000);
+        return {
+          path,
+          props: res.rows.map((r) => ({ key: String(r[0] ?? ''), value: String(r[1] ?? ''), updatedAt: Number(r[2] ?? 0) })),
+        };
+      }
+      case 'propsQuery': {
+        // 筛选组合 AND,全部可选:key 精确 / value 子串 / folder 目录前缀 /
+        // ext 扩展名 / path 路径子串 / limit 行数上限。WHERE 片段全是常量,
+        // 用户输入一律走占位符——无注入面。
+        const q = (msg as { query?: Record<string, unknown> }).query ?? {};
+        const where: string[] = [];
+        const params: unknown[] = [];
+        const key = typeof q.key === 'string' ? q.key.trim() : '';
+        if (key) {
+          where.push('key = ?');
+          params.push(key);
+        }
+        const value = typeof q.value === 'string' ? q.value.trim() : '';
+        if (value) {
+          where.push("value LIKE '%' || ? || '%' ESCAPE '\\'");
+          params.push(likeEscape(value));
+        }
+        const folder = typeof q.folder === 'string' ? q.folder.trim().replace(/[\\/]+$/, '') : '';
+        if (folder) {
+          where.push('(path LIKE ? ESCAPE \'\\\' OR path LIKE ? ESCAPE \'\\\')');
+          params.push(likeEscape(folder) + '/%', likeEscape(folder) + '\\%');
+        }
+        const ext = typeof q.ext === 'string' ? q.ext.trim().replace(/^\./, '').replace(/[^\w]/g, '') : '';
+        if (ext) {
+          where.push("lower(path) LIKE '%.' || ?");
+          params.push(ext.toLowerCase());
+        }
+        const pathQ = typeof q.path === 'string' ? q.path.trim() : '';
+        if (pathQ) {
+          where.push("path LIKE '%' || ? || '%' ESCAPE '\\'");
+          params.push(pathQ.replace(/[\\%_]/g, (ch) => '\\' + ch));
+        }
+        const limit = Math.min(1000, Math.max(1, Number(q.limit ?? 200) || 200));
+        const rt = await rtOf();
+        const sql =
+          'SELECT path, is_dir, key, value, updated_at FROM file_props' +
+          (where.length ? ' WHERE ' + where.join(' AND ') : '') +
+          ' ORDER BY path, key LIMIT ' + String(limit);
+        const res = await rt.all(sql, params, limit);
+        return {
+          rows: res.rows.map((r) => ({
+            path: String(r[0] ?? ''),
+            isDir: Number(r[1] ?? 0) === 1,
+            key: String(r[2] ?? ''),
+            value: String(r[3] ?? ''),
+            updatedAt: Number(r[4] ?? 0),
+          })),
+        };
+      }
       default:
         throw new Error(`unknown op: ${String(msg.op)}`);
     }
