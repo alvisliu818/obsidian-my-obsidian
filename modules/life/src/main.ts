@@ -13,7 +13,7 @@ import { VIEW_LIFE_CALENDAR, LifeCalendarView } from './views/calendar';
 import { VIEW_LIFE_HOME, LifeHomeView } from './views/home';
 import { VIEW_LIFE_VAULTLOG, LifeVaultLogView } from './views/vaultlog';
 import { dailyDue, periodDue, scanVaultSig, diffWithRenames, changeSummary, dayKeyOf, parseHHmm, diffLines, type LineDiff, type VaultDiffWithRenames } from './vaultLog';
-import { VaultLogDiffModal } from './vaultLogDiffModal';
+import { VIEW_LIFE_DIFF, VaultLogDiffView } from './vaultLogDiffView';
 import { dispatchVaultDiffToCm, setVaultDiffEntry, vaultDiffExtension } from './editorDiffCm6';
 import { TFile as _TFileReuse } from 'obsidian';
 import { VIEW_LIFE_CLOCK, LifeClockView } from './views/clock';
@@ -58,6 +58,9 @@ export default class LifePlugin extends Plugin {
 			});
 		}
 
+		// 修改对比:独立标签页(VSCode 式分栏 + 上下跳转差异)。
+		this.registerView(VIEW_LIFE_DIFF, (leaf) => new VaultLogDiffView(leaf, this));
+
 		// ribbon 一枚：点击弹「生活」菜单（九个面板,不占九个 ribbon 位）
 		this.addRibbonIcon('life-buoy', '生活面板', (ev) => {
 			const menu = new Menu();
@@ -77,9 +80,9 @@ export default class LifePlugin extends Plugin {
 			void this.activatePanel(VIEW_LIFE_HOME);
 		});
 		// 原生编辑器修改装点(2026-11-21 用户):库记录对比体系的 CM6 扩展
-		// (新增绿/修改蓝,点击标记开对比弹窗)。
+		// (新增绿/修改蓝,点击标记开对比视图)。
 		this.registerEditorExtension(
-			vaultDiffExtension((path) => this.openRecordDiffModal(path)),
+			vaultDiffExtension((path) => void this.openRecordDiffView(path)),
 		);
 		this.app.workspace.onLayoutReady(() => {
 			// record 基线的影子兜底:与 first 记录分支互斥幂等。
@@ -455,24 +458,33 @@ export default class LifePlugin extends Plugin {
 		}
 	}
 
-	/** 库记录点击修改的文件:打开**修改对比弹窗**(2026-11-22 用户两轮澄清:
-	 * 原来的对比视图是嵌入编辑器的覆盖层区块——整体退役,统一弹「定位对比
-	 * 弹窗」;不再登记 editorDiffRegistry,编辑器里不再出现嵌入区块/装点)。
-	 * 「对比」小钮同弹窗。 */
+	/** 库记录点击修改的文件:打开**修改对比视图**(2026-11-22 用户:由弹窗升级
+	 * 为标签页——VSCode 式分栏 + 上下跳转差异;不再登记 editorDiffRegistry)。
+	 * 「对比」小钮同入口。 */
 	async openModifiedFileWithDiff(path: string): Promise<void> {
 		this.editorDiffRegistry.delete(path);
 		// 默认打开方式(2026-11-22 用户):vscode = 直接拉 VSCode diff;
-		// modal(缺省) = 内置对比弹窗。弹窗 footer 两种方式手动可用。
+		// view(缺省) = 内置对比标签页。视图内两种方式手动可用。
 		if (this.store.settings.vaultLog?.diffOpenWith === 'vscode') {
 			await this.openRecordDiffInVscode(path);
 			return;
 		}
-		this.openRecordDiffModal(path);
+		await this.openRecordDiffView(path);
 	}
 
-	/** 「对比」小钮:打开修改对比弹窗(可撤回)。 */
-	openRecordDiffModal(path: string): void {
-		new VaultLogDiffModal(this.app, this, path).open();
+	/** 「对比」小钮:打开修改对比标签页(可撤回)。同一文件已开则复用叶子并重读。 */
+	async openRecordDiffView(path: string): Promise<void> {
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_LIFE_DIFF)) {
+			const v = leaf.view as { path?: string; refresh?: () => Promise<void> } | null;
+			if (v?.path !== path) continue;
+			this.app.workspace.revealLeaf(leaf);
+			await v.refresh?.();
+			return;
+		}
+		const leaf = this.app.workspace.getLeaf('tab');
+		if (!leaf) return;
+		await leaf.setViewState({ type: VIEW_LIFE_DIFF, active: true, state: { path } });
+		this.app.workspace.revealLeaf(leaf);
 	}
 
 	/** 用 VSCode 打开 diff(2026-11-22 用户):基线内容写临时文件,

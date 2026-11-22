@@ -159,7 +159,7 @@ export class LifeHomeView extends ItemView {
 				onManualRecord: () => void this.plugin.recordVaultChanges('manual'),
 				onOpenFile: (path) => void this.plugin.app.workspace.openLinkText(path, ''),
 				onOpenModified: (path) => void this.plugin.openModifiedFileWithDiff(path),
-				onCompareFile: (path) => this.plugin.openRecordDiffModal(path),
+				onCompareFile: (path) => void this.plugin.openRecordDiffView(path),
 			});
 		}
 

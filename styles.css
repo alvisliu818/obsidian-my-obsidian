@@ -63558,23 +63558,169 @@ body.is-mobile
 .monaco-editor .cdr.lgp-diff-line-mod { pointer-events: none; }
 .monaco-editor .cdr.lgp-diff-line-add { box-shadow: inset 3px 0 0 0 var(--color-green, #3fb950); }
 .monaco-editor .cdr.lgp-diff-line-mod { box-shadow: inset 3px 0 0 0 var(--color-blue, #4493f8); }
-/* 对比弹窗 */
-.vl-diff-modal .vl-diff-path { font-weight: 600; margin-bottom: 8px; word-break: break-all; }
-.vl-diff-modal .vl-diff-empty { color: var(--text-muted); padding: 12px 4px; }
-.vl-diff-modal .vl-diff-list {
-	max-height: 380px;
-	overflow: auto;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 8px;
+/* 修改对比视图(2026-11-22 用户:弹窗升级为标签页——VSCode 式文件分栏对照,
+   顶部带上下跳转差异按钮)。两栏按对齐序列逐行并排,单侧缺行用斜纹占位。 */
+.vl-diff-view {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	padding: 0 !important;
+	overflow: hidden;
 }
-.vl-diff-row { display: flex; gap: 8px; padding: 1px 8px; font-family: var(--font-monospace); font-size: 12px; }
+/* 顶栏:文件名 + 基线徽标 + 路径 + 跳转/动作按钮 */
+.vl-diff-bar {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex: none;
+	min-width: 0;
+	padding: 6px 10px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}
+.vl-diff-bar-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.vl-diff-bar-name { font-weight: 600; white-space: nowrap; }
+.vl-diff-chip {
+	flex: none;
+	padding: 2px 6px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 999px;
+	background: var(--background-primary);
+	color: var(--text-muted);
+	font-size: 11px;
+	line-height: 1;
+}
+.vl-diff-bar-path {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+}
+.vl-diff-bar-spacer { flex: 1 1 auto; }
+.vl-diff-bar-group { display: flex; align-items: center; gap: 4px; flex: none; }
+.vl-diff-bar-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	padding: 0;
+	border: none;
+	border-radius: var(--radius-s);
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+.vl-diff-bar-btn:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+.vl-diff-bar-btn:disabled { opacity: 0.35; background: transparent; cursor: default; }
+.vl-diff-bar-btn .svg-icon { width: 16px; height: 16px; }
+.vl-diff-count {
+	min-width: 8.5em;
+	text-align: center;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-variant-numeric: tabular-nums;
+}
+/* 两栏主体 */
+.vl-diff-split {
+	flex: 1 1 auto;
+	display: flex;
+	gap: 1px;
+	min-height: 0;
+	background: var(--background-modifier-border);
+}
+.vl-diff-pane {
+	flex: 1 1 50%;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	background: var(--background-primary);
+}
+.vl-diff-pane-head {
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 3px 10px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+.vl-diff-pane-meta { margin-left: auto; color: var(--text-faint); }
+.vl-diff-scroll {
+	flex: 1 1 auto;
+	position: relative;
+	overflow: auto;
+	font-family: var(--font-monospace);
+	font-size: 12px;
+	line-height: 18px;
+}
+.vl-split-row {
+	display: flex;
+	gap: 8px;
+	width: max-content;
+	min-width: 100%;
+	height: 18px;
+	line-height: 18px;
+	padding-right: 10px;
+	box-sizing: border-box;
+	white-space: pre;
+}
+.vl-split-no {
+	flex: 0 0 3.4em;
+	padding-right: 6px;
+	border-right: 1px solid var(--background-modifier-border);
+	text-align: right;
+	color: var(--text-faint);
+	user-select: none;
+	font-variant-numeric: tabular-nums;
+}
+.vl-split-text { flex: 1 0 auto; min-width: 0; color: var(--text-normal); }
+.vl-split-row.is-del { background: rgba(255, 90, 90, 0.14); }
+.vl-split-row.is-add { background: rgba(63, 185, 80, 0.14); }
+.vl-split-row.is-mod { background: rgba(68, 147, 248, 0.14); }
+.vl-split-row.is-empty,
+.vl-split-row.is-empty .vl-split-text {
+	background-image: repeating-linear-gradient(-45deg, transparent 0 5px, rgba(127, 127, 127, 0.12) 5px 6px);
+}
+.vl-split-row.is-current { box-shadow: inset 3px 0 0 0 var(--interactive-accent); }
+/* 行列表模式(设置 diffViewMode='list') */
+.vl-diff-view .vl-diff-list {
+	flex: 1 1 auto;
+	overflow: auto;
+	font-family: var(--font-monospace);
+	font-size: 12px;
+	line-height: 18px;
+}
+.vl-diff-row {
+	display: flex;
+	gap: 8px;
+	height: 18px;
+	line-height: 18px;
+	padding: 0 10px;
+	font-family: inherit;
+	font-size: inherit;
+}
 .vl-diff-row.is-del { background: rgba(255, 90, 90, 0.12); color: var(--text-error, #e75a5a); }
 .vl-diff-row.is-add { background: rgba(63, 185, 80, 0.12); color: var(--text-success, #3fb950); }
 .vl-diff-row.is-mod { background: rgba(68, 147, 248, 0.12); color: var(--color-blue, #4493f8); }
 .vl-diff-lineno { width: 3.2em; text-align: right; color: var(--text-faint); flex: none; font-variant-numeric: tabular-nums; }
 .vl-diff-sign { width: 1em; flex: none; }
 .vl-diff-text { white-space: pre-wrap; word-break: break-all; }
-.vl-diff-foot { margin-top: 10px; display: flex; justify-content: flex-end; }
+/* 无差异 / 无路径空态 */
+.vl-diff-view .vl-diff-empty {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	padding: 24px;
+	color: var(--text-muted);
+}
 
 /* 浏览器:保存网页路径弹窗 */
 .ob-save-page-input { width: 100%; margin-bottom: 10px; }
@@ -63864,45 +64010,4 @@ body.ots-tab-min-width-on .workspace-tabs.mod-top .workspace-tab-header {
 }
 
 
-/* 库记录修改对比弹窗——两栏对照模式(vl-diff-split,2026-11-22 用户) */
-.vl-diff-split {
-	display: flex;
-	gap: 1px;
-	background: var(--background-modifier-border);
-	max-height: 58vh;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 6px;
-	overflow: hidden;
-}
-.vl-diff-pane {
-	flex: 1 1 50%;
-	min-width: 0;
-	max-height: 58vh;
-	overflow: auto;
-	background: var(--background-primary);
-	font-family: var(--font-monospace);
-	font-size: 12px;
-	line-height: 18px;
-}
-.vl-split-row {
-	display: flex;
-	gap: 6px;
-	padding: 0 6px;
-	white-space: pre;
-}
-.vl-split-row.is-del .vl-split-text,
-.vl-split-row.is-del { background: rgba(255, 90, 90, 0.14); }
-.vl-split-row.is-add .vl-split-text,
-.vl-split-row.is-add { background: rgba(63, 185, 80, 0.14); }
-.vl-split-row.is-mod .vl-split-text,
-.vl-split-row.is-mod { background: rgba(68, 147, 248, 0.14); }
-.vl-split-row.is-empty { background: rgba(127, 127, 127, 0.06); }
-.vl-split-no {
-	flex: 0 0 3em;
-	text-align: right;
-	color: var(--text-faint);
-	font-variant-numeric: tabular-nums;
-	user-select: none;
-}
-.vl-split-text { flex: 1 1 auto; min-width: 0; color: var(--text-normal); }
-.vl-diff-row.is-revealed { outline: 2px solid var(--interactive-accent); border-radius: 4px; }
+/* 修改对比视图样式见上方「修改对比视图」块(弹窗已退役,2026-11-22) */
