@@ -95,6 +95,12 @@ export class LifeHomeView extends ItemView {
 	private saveExpanded = new Set<string>();
 	private saveCollapsedDirs = new Set<string>();
 	private saveHistoryError = '';
+	/** 懒加载(2026-11-22 用户:提高启动速度):首次渲染推迟到启动空闲后,
+	 * 且只在本视图可见时执行;历史数据加载也一并推迟。 */
+	private lazyRendered = false;
+	private lazyScheduled = false;
+	private lazyTimer: number | null = null;
+	private lazyIdleId: number | null = null;
 
 	constructor(leaf: WorkspaceLeaf, private plugin: LifePlugin) {
 		super(leaf);
@@ -114,8 +120,21 @@ export class LifeHomeView extends ItemView {
 	}
 
 	async onOpen(): Promise<void> {
-		this.render();
-		void this.loadHomeHistory();
+		// 懒加载:启动阶段只挂空壳,内容与历史(Git/保存历史)等启动空闲后
+		// 再渲染——HOME 自动打开也不再阻塞 Obsidian 首屏。
+		this.contentEl.addClass('life-home');
+		this.contentEl.createDiv({ cls: 'life-home-muted', text: '加载中…' });
+		this.scheduleLazyRender();
+		this.registerEvent(
+			this.app.workspace.on('active-leaf-change', () => {
+				if (!this.lazyRendered) this.scheduleLazyRender();
+			}),
+		);
+		this.register(() => {
+			if (this.lazyTimer !== null) window.clearTimeout(this.lazyTimer);
+			const cancel = (window as unknown as { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback;
+			if (this.lazyIdleId !== null && typeof cancel === 'function') cancel(this.lazyIdleId);
+		});
 		// obsidian-git 在 life 之后才建好 gitManager:就绪/刷新事件到达时补拉一次
 		const ws = this.app.workspace as unknown as { on(name: string, cb: () => void): EventRef };
 		this.registerEvent(ws.on('obsidian-git:refreshed', () => void this.refreshGitHistory()));
@@ -125,8 +144,43 @@ export class LifeHomeView extends ItemView {
 		});
 	}
 
+	/** 视图当前是否可见(后台标签页不渲染;首次激活时再排)。 */
+	private isViewVisible(): boolean {
+		const el = this.containerEl as HTMLElement & { isShown?: () => boolean };
+		return typeof el.isShown === 'function' ? el.isShown() : el.getClientRects().length > 0;
+	}
+
+	/** 懒渲染调度:启动空闲时执行一次(2s 超时兜底),不可见则等激活事件。 */
+	private scheduleLazyRender(): void {
+		if (this.lazyRendered || this.lazyScheduled) return;
+		this.lazyScheduled = true;
+		const run = (): void => {
+			this.lazyScheduled = false;
+			this.lazyIdleId = null;
+			this.lazyTimer = null;
+			if (this.lazyRendered) return;
+			if (!this.isViewVisible()) return; // 后台标签:等 active-leaf-change
+			this.lazyRendered = true;
+			this.render();
+			void this.loadHomeHistory();
+		};
+		const idle = (window as unknown as {
+			requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+		}).requestIdleCallback;
+		if (typeof idle === 'function') {
+			this.lazyIdleId = idle(run, { timeout: 2000 });
+		} else {
+			this.lazyTimer = window.setTimeout(run, 60);
+		}
+	}
+
 	/** 外部刷新入口(记录/设置变更后由 LifePlugin 调)。 */
 	refresh(): void {
+		// 首次渲染还没发生:只重新排队懒渲染(启动期不抢跑)
+		if (!this.lazyRendered) {
+			this.scheduleLazyRender();
+			return;
+		}
 		this.render();
 	}
 
@@ -181,6 +235,8 @@ export class LifeHomeView extends ItemView {
 	}
 
 	private async refreshGitHistory(): Promise<void> {
+		// 懒加载未完成时不抢跑渲染(首次渲染后会统一拉一次)
+		if (!this.lazyRendered) return;
 		const before = `${this.gitLog ? this.gitLog.length : 'null'}|${this.gitLogError}`;
 		await this.fetchGitHistory();
 		const after = `${this.gitLog ? this.gitLog.length : 'null'}|${this.gitLogError}`;
