@@ -462,9 +462,14 @@ if (!only) {
 	}
 	// better-sqlite3 的运行时依赖 bindings(定位 .node)——纯 JS,住在全局
 	// cache zip 里(不 unplugged),解包到边车 node_modules。
-	const cacheDir = path.join(ROOT, "..", "..", ".yarn-global", "cache");
-	const bindingsZip = existsSync(cacheDir)
-		? readdirSync(cacheDir).find((d) => d.startsWith("bindings-npm-") && d.endsWith(".zip"))
+	// 2026-11-22:globalFolder 迁到 E:/HOME/Runtime/.yarn-global(.yarnrc.yml),
+	// 旧路径一并尝试——两处谁存在用谁。
+	const cacheDir = [
+		path.join(ROOT, "..", "..", "..", "Runtime", ".yarn-global", "cache"),
+		path.join(ROOT, "..", "..", ".yarn-global", "cache"),
+	].find((d) => existsSync(d));
+	const bindingsZip = cacheDir
+		? (readdirSync(cacheDir).find((d) => d.startsWith("bindings-npm-") && d.endsWith(".zip")) ?? null)
 		: null;
 	if (bindingsZip) {
 		const bDst = path.join(TARGET, "node_modules", "bindings");
