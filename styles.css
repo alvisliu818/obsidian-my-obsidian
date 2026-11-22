@@ -63620,3 +63620,56 @@ body.is-mobile
   margin: 2px 0;
 }
 
+
+
+/* 修改对比覆盖层(2026-11-22 用户:VSCode 那样的弹层)——monaco 视区/CM6 块
+   widget 共用 DOM(buildDiffOverlayDom)。头部文件名+撤回/关闭,行列表双行号
+   (before | after)+符号+内容,红删/绿增/蓝改/灰上下文。 */
+.lgp-diff-overlay {
+	position: relative;
+	background: var(--background-primary);
+	border-top: 1px solid var(--background-modifier-border);
+	border-bottom: 1px solid var(--background-modifier-border);
+	font-family: var(--font-monospace);
+	font-size: 12px;
+}
+.lgp-diff-overlay-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 4px 10px;
+	background: var(--background-secondary);
+	border-bottom: 1px solid var(--background-modifier-border);
+	font-family: var(--font-interface);
+	font-size: var(--font-ui-smaller);
+}
+.lgp-diff-overlay-brand { font-weight: 600; color: var(--text-muted); white-space: nowrap; }
+.lgp-diff-overlay-title { color: var(--text-normal); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lgp-diff-overlay-flex { flex: 1 1 auto; }
+.lgp-diff-overlay-btn {
+	background: none;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	color: var(--text-muted);
+	cursor: pointer;
+	padding: 1px 10px;
+	font-size: 12px;
+	flex: none;
+}
+.lgp-diff-overlay-btn:hover { color: var(--text-normal); border-color: var(--interactive-accent); }
+.lgp-diff-overlay-rows { max-height: 320px; overflow-y: auto; }
+.lgp-diff-overlay-row { display: flex; gap: 8px; padding: 1px 10px; align-items: center; }
+.lgp-diff-overlay-row.is-del { background: rgba(255, 90, 90, 0.12); color: var(--text-error, #e75a5a); }
+.lgp-diff-overlay-row.is-add { background: rgba(63, 185, 80, 0.12); color: var(--text-success, #3fb950); }
+.lgp-diff-overlay-row.is-mod { background: rgba(68, 147, 248, 0.12); color: var(--color-blue, #4493f8); }
+.lgp-diff-overlay-row.is-ctx { color: var(--text-faint); }
+.lgp-diff-overlay-no {
+	width: 3em;
+	text-align: right;
+	color: var(--text-faint);
+	flex: none;
+	font-variant-numeric: tabular-nums;
+}
+.lgp-diff-overlay-sign { width: 1em; flex: none; }
+.lgp-diff-overlay-text { white-space: pre-wrap; word-break: break-all; }
+.lgp-diff-overlay-empty { color: var(--text-muted); padding: 10px; }
