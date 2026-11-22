@@ -153,14 +153,11 @@ export interface VaultLogSettings {
 	/** 修改对比整个功能的总开关(2026-11-22 用户):false = 编辑器装点/覆盖层/
 	 * 库记录「对比」钮全部消失。缺省开。 */
 	diffEnabled?: boolean;
-	/** 对比视图样式(2026-11-22 用户):split = VSCode 式两栏对照(左基线/右
-	 * 当前,缺省);list = 只列变化行的原视图。 */
-	diffViewMode?: 'list' | 'split';
 	/** VSCode 可执行/CLI 路径(2026-11-22 用户):「用 VSCode 打开对比」用。
 	 * 留空自动探测(LOCALAPPDATA 常见安装位置 → PATH 的 code)。 */
 	vscodePath?: string;
 	/** 库记录点击修改文件的默认打开方式(2026-11-22 用户):view = 内置对比
-	 * 标签页(样式见 diffViewMode);vscode = 直接拉 VSCode diff(需 vscodePath
+	 * 标签页(两栏全文,固定);vscode = 直接拉 VSCode diff(需 vscodePath
 	 * 或本机装有 VSCode)。缺省 view。 */
 	diffOpenWith?: 'view' | 'vscode';
 	/** 自动记录总开关(关=只允许手动打点) */

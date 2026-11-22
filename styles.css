@@ -63687,29 +63687,6 @@ body.is-mobile
 	background-image: repeating-linear-gradient(-45deg, transparent 0 5px, rgba(127, 127, 127, 0.12) 5px 6px);
 }
 .vl-split-row.is-current { box-shadow: inset 3px 0 0 0 var(--interactive-accent); }
-/* 行列表模式(设置 diffViewMode='list') */
-.vl-diff-view .vl-diff-list {
-	flex: 1 1 auto;
-	overflow: auto;
-	font-family: var(--font-monospace);
-	font-size: 12px;
-	line-height: 18px;
-}
-.vl-diff-row {
-	display: flex;
-	gap: 8px;
-	height: 18px;
-	line-height: 18px;
-	padding: 0 10px;
-	font-family: inherit;
-	font-size: inherit;
-}
-.vl-diff-row.is-del { background: rgba(255, 90, 90, 0.12); color: var(--text-error, #e75a5a); }
-.vl-diff-row.is-add { background: rgba(63, 185, 80, 0.12); color: var(--text-success, #3fb950); }
-.vl-diff-row.is-mod { background: rgba(68, 147, 248, 0.12); color: var(--color-blue, #4493f8); }
-.vl-diff-lineno { width: 3.2em; text-align: right; color: var(--text-faint); flex: none; font-variant-numeric: tabular-nums; }
-.vl-diff-sign { width: 1em; flex: none; }
-.vl-diff-text { white-space: pre-wrap; word-break: break-all; }
 /* 无差异 / 无路径空态 */
 .vl-diff-view .vl-diff-empty {
 	flex: 1 1 auto;

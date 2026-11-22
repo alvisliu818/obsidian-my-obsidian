@@ -7,7 +7,7 @@
  * 右=当前,行号 + 红删/绿增/蓝改,单侧缺行用斜纹占位;两栏滚动联动。跳转单位
  * = 连续非上下文行组成的一处差异,跳到该处首行并加当前高亮。
  *
- * 视图样式跟随设置 vaultLog.diffViewMode(缺省 split;list = 只列变化行)。
+ * 视图固定两栏对照(全文,含未改动的上下文),跳转单位 = 连续非上下文行。
  * 数据源 = LifePlugin.getRecordDiff(基线 git HEAD / 上次库记录时点)。
  */
 import { ItemView, Notice, setIcon, type ViewStateResult, type WorkspaceLeaf } from 'obsidian';
@@ -25,12 +25,6 @@ interface SplitCell {
 interface SplitPair {
 	l: SplitCell | null;
 	r: SplitCell | null;
-}
-
-interface ListEvent {
-	line: number;
-	kind: 'add' | 'mod' | 'del';
-	text: string;
 }
 
 /** rows(对齐序列) → 两栏行对。del 缓存与配对 mod 组一行;孤立 del/add 各占一侧。 */
@@ -157,10 +151,6 @@ export class VaultLogDiffView extends ItemView {
 		return this.isRecordBaseline() ? '上次库记录时点' : '上次提交(HEAD)';
 	}
 
-	private mode(): 'split' | 'list' {
-		return this.plugin.store.settings.vaultLog?.diffViewMode === 'list' ? 'list' : 'split';
-	}
-
 	private async render(): Promise<void> {
 		const { contentEl } = this;
 		contentEl.empty();
@@ -172,9 +162,8 @@ export class VaultLogDiffView extends ItemView {
 		this.refreshTabTitle();
 
 		const diff = await this.plugin.getRecordDiff(this.path);
-		const mode = this.mode();
 		this.pairs = diff ? buildSplitPairs(diff) : [];
-		this.hunkStarts = diff && mode === 'split' ? hunkStartsOf(this.pairs) : [];
+		this.hunkStarts = diff ? hunkStartsOf(this.pairs) : [];
 		this.leftRows = [];
 		this.rightRows = [];
 		this.leftScroll = null;
@@ -193,7 +182,7 @@ export class VaultLogDiffView extends ItemView {
 		pathEl.setAttr('title', this.path);
 		bar.createDiv({ cls: 'vl-diff-bar-spacer' });
 
-		if (diff && mode === 'split' && this.hunkStarts.length > 0) {
+		if (diff && this.hunkStarts.length > 0) {
 			const nav = bar.createDiv({ cls: 'vl-diff-bar-group' });
 			this.prevBtn = nav.createEl('button', { cls: 'vl-diff-bar-btn', attr: { 'aria-label': '上一处差异' } });
 			setIcon(this.prevBtn, 'arrow-up');
@@ -223,8 +212,7 @@ export class VaultLogDiffView extends ItemView {
 			return;
 		}
 
-		if (mode === 'split') this.renderSplit(diff);
-		else this.renderList(diff);
+		this.renderSplit(diff);
 	}
 
 	/** 工具栏动作按钮(图标 + aria-label;hover 提示走 title)。 */
@@ -333,26 +321,5 @@ export class VaultLogDiffView extends ItemView {
 		if (this.counterEl) this.counterEl.setText(total ? `第 ${idx + 1} / ${total} 处差异` : '无差异');
 		if (this.prevBtn) this.prevBtn.disabled = total === 0 || idx <= 0;
 		if (this.nextBtn) this.nextBtn.disabled = total === 0 || idx >= total - 1;
-	}
-
-	/** 原视图:行级差异列表(设置 diffViewMode='list' 时)。 */
-	private renderList(diff: LineDiff): void {
-		const events: ListEvent[] = [
-			...diff.added.map((l) => ({ line: l, kind: 'add' as const, text: '' })),
-			...diff.modified.map((l) => ({ line: l, kind: 'mod' as const, text: '' })),
-			...diff.deleted.map((d) => ({ line: d.line, kind: 'del' as const, text: d.text })),
-		].sort((x, y) => x.line - y.line || (x.kind === 'del' ? -1 : 1));
-
-		const list = this.contentEl.createDiv({ cls: 'vl-diff-list' });
-		for (const ev of events) {
-			const row = list.createDiv({ cls: `vl-diff-row is-${ev.kind}` });
-			row.createSpan({
-				cls: 'vl-diff-lineno',
-				text: String(ev.kind === 'del' ? Math.max(0, ev.line - 1) : ev.line),
-			});
-			row.createSpan({ cls: 'vl-diff-sign', text: ev.kind === 'add' ? '+' : ev.kind === 'mod' ? '~' : '-' });
-			row.createSpan({ cls: 'vl-diff-text', text: ev.text });
-		}
-		if (events.length === 0) list.createDiv({ cls: 'vl-diff-empty', text: '无差异。' });
 	}
 }

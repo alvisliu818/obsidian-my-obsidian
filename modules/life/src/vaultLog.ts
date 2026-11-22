@@ -181,8 +181,8 @@ export interface LineDiff {
 	deleted: Array<{ line: number; text: string }>;
 	beforeLines: number;
 	afterLines: number;
-	/** 合并序列(上下文+增删改,按 after 位置序):对比视图渲染数据源。
-	 * beforeLine/afterLine = null 表示该侧不存在(新增/删除)。 */
+	/** 合并序列(全文:公共前后缀上下文 + 增删改,按 after 位置序):对比视图
+	 * 渲染数据源。beforeLine/afterLine = null 表示该侧不存在(新增/删除)。 */
 	rows: Array<{ beforeLine: number | null; afterLine: number | null; kind: 'ctx' | 'add' | 'mod' | 'del'; text: string }>;
 }
 
@@ -261,6 +261,10 @@ export function diffLines(before: string, after: string): LineDiff {
 	const modified: number[] = [];
 	const deleted: Array<{ line: number; text: string }> = [];
 	const rows: LineDiff['rows'] = [];
+	// 公共前缀也进 rows:分栏视图要展示全文,不能只剩改动段(2026-11-22 用户)
+	for (let i = 0; i < pre; i++) {
+		rows.push({ beforeLine: i + 1, afterLine: i + 1, kind: 'ctx', text: a[i] });
+	}
 	let ai = 0;
 	let bj = 0;
 	let k = 0;
@@ -307,6 +311,10 @@ export function diffLines(before: string, after: string): LineDiff {
 			deleted.push({ line: afterLineOf(d.atB), text: d.text });
 			rows.push({ beforeLine: pre + ai - dels.length + t + 1, afterLine: null, kind: 'del', text: d.text });
 		}
+	}
+	// 公共后缀:全文尾段,行号两侧各自延续(before i / after endB+(i-endA))
+	for (let i = endA; i < n; i++) {
+		rows.push({ beforeLine: i + 1, afterLine: endB + (i - endA) + 1, kind: 'ctx', text: a[i] });
 	}
 	added.sort((x, y) => x - y);
 	modified.sort((x, y) => x - y);

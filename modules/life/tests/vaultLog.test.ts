@@ -153,6 +153,13 @@ describe('记录列表倒序与日期筛选(2026-11-21)', () => {
       const r = d('', 'a\nb');
       expect(r.added).toEqual([1, 2]);
     });
+    it('rows 含全文:公共前后缀上下文也进对齐序列(分栏要展示全文)', () => {
+      const r = d('head\nA\nkeep\ntail', 'head\nB\nkeep\ntail');
+      expect(r.rows.length).toBe(5);
+      expect(r.rows.filter((x) => x.kind === 'ctx').map((x) => x.text)).toEqual(['head', 'keep', 'tail']);
+      expect(r.rows[0]).toMatchObject({ beforeLine: 1, afterLine: 1, text: 'head' });
+      expect(r.rows[r.rows.length - 1]).toMatchObject({ beforeLine: 4, afterLine: 4, text: 'tail' });
+    });
   });
 
   it('sortVaultLogRecordsDesc:同日保持传入次序(稳定,不依赖 rec.at 秒级字段)', () => {

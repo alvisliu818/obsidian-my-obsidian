@@ -349,21 +349,6 @@ export function renderVaultLogSettingsInto(
 			});
 		});
 
-	// 对比视图样式(2026-11-22 用户):split 为 VSCode 式两栏对照(左基线/
-	// 右当前,缺省);list 只列有变化的行。
-	if (vl.diffEnabled !== false) new Setting(container)
-		.setName('对比视图样式')
-		.setDesc('修改对比标签页的展示方式。两栏对照 = 左右并排显示基线与当前全文,差异行着色,支持上下跳转差异(VSCode 风格);行列表 = 只列有变化的行。')
-		.addDropdown((d) => {
-			d.addOption('split', '两栏对照(VSCode 式)');
-			d.addOption('list', '行列表(原视图)');
-			d.setValue(vl.diffViewMode === 'list' ? 'list' : 'split');
-			d.onChange(async (v) => {
-				vl.diffViewMode = v === 'list' ? 'list' : 'split';
-				onChange?.();
-			});
-		});
-
 	const toggleRow = (label: string, value: boolean, cb: (v: boolean) => void): void => {
 		const row = container.createDiv({ cls: 'life-home-setting-row' });
 		row.createSpan({ cls: 'life-home-setting-label', text: label });
