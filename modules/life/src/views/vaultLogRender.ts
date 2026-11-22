@@ -233,6 +233,12 @@ function renderPathTree(
 			item.addClass('is-openable');
 			item.addEventListener('click', (ev) => {
 				ev.stopPropagation();
+				// 修改条目(2026-11-22 用户):点击 = 打开定位对比弹窗(与 overall
+				// 视图同语义),不再直接打开文件。
+				if (f.kind === 'modified' && handlers.onOpenModified) {
+					handlers.onOpenModified(f.openPath as string);
+					return;
+				}
 				handlers.onOpenFile?.(f.openPath as string);
 			});
 		}
@@ -339,6 +345,21 @@ export function renderVaultLogSettingsInto(
 			d.setValue(vl.diffBaseline === 'record' ? 'record' : 'git');
 			d.onChange(async (v) => {
 				vl.diffBaseline = v === 'record' ? 'record' : 'git';
+				onChange?.();
+			});
+		});
+
+	// 对比弹窗视图样式(2026-11-22 用户):list 保留原行列表;split 为 VSCode
+	// 式两栏对照(左基线/右当前)。
+	if (vl.diffEnabled !== false) new Setting(container)
+		.setName('对比视图样式')
+		.setDesc('修改对比弹窗的展示方式。行列表 = 只列有变化的行;两栏对照 = 左右并排显示基线与当前全文,差异行着色(VSCode 风格)。')
+		.addDropdown((d) => {
+			d.addOption('list', '行列表(原视图)');
+			d.addOption('split', '两栏对照(VSCode 式)');
+			d.setValue(vl.diffViewMode === 'split' ? 'split' : 'list');
+			d.onChange(async (v) => {
+				vl.diffViewMode = v === 'split' ? 'split' : 'list';
 				onChange?.();
 			});
 		});

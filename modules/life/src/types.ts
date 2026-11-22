@@ -153,6 +153,9 @@ export interface VaultLogSettings {
 	/** 修改对比整个功能的总开关(2026-11-22 用户):false = 编辑器装点/覆盖层/
 	 * 库记录「对比」钮全部消失。缺省开。 */
 	diffEnabled?: boolean;
+	/** 对比弹窗视图样式(2026-11-22 用户):list = 行级差异列表(原视图);
+	 * split = VSCode 式两栏对照(左基线/右当前)。缺省 list。 */
+	diffViewMode?: 'list' | 'split';
 	/** 自动记录总开关(关=只允许手动打点) */
 	enabled: boolean;
 	/** 每日固定记录时间 HH:mm(''=关) */

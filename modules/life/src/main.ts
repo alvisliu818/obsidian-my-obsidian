@@ -424,14 +424,10 @@ export default class LifePlugin extends Plugin {
 		}
 	}
 
-	/** 登记编辑器装点并分发到打开中的同文件编辑器(原生 CM)。 */
-	private setEditorDiff(path: string, diff: LineDiff): void {
-		if (this.store.settings.vaultLog?.diffEnabled === false) return;
-		const entry = { diff, open: true };
-		this.editorDiffRegistry.set(path, entry);
-		setVaultDiffEntry(path, entry);
-		dispatchVaultDiffToCm(this.app, path);
-	}
+	// setEditorDiff 已退役(2026-11-22 用户:嵌入编辑器的覆盖层区块整体替换为
+	// 「定位对比弹窗」)——不再有任何路径写入登记表,editorDiffRegistry 恒空,
+	// monaco 视区 zone / CM6 覆盖层 widget 自然绝迹。registry 的读侧(get/
+	// refresh)保留,消费方(ExternalCodeView/CM 扩展)读到 null 即无装饰。
 
 	getEditorDiff(path: string): { diff: LineDiff } | null {
 		return this.editorDiffRegistry.get(path) ?? null;
@@ -459,14 +455,12 @@ export default class LifePlugin extends Plugin {
 		}
 	}
 
-	/** 库记录点击修改的文件:计算与上次提交的对比 → 登记编辑器装点 → **打开
-	 * 修改对比弹窗**(2026-11-22 用户:点击直接看差异,不再直接开文件;弹窗里
-	 * 有「打开原文件」跳编辑。打开的编辑器仍从登记表读装点:原生走 CM 扩展,
-	 * monaco 视图自行消费)。 */
+	/** 库记录点击修改的文件:打开**修改对比弹窗**(2026-11-22 用户两轮澄清:
+	 * 原来的对比视图是嵌入编辑器的覆盖层区块——整体退役,统一弹「定位对比
+	 * 弹窗」;不再登记 editorDiffRegistry,编辑器里不再出现嵌入区块/装点)。
+	 * 「对比」小钮同弹窗。 */
 	async openModifiedFileWithDiff(path: string): Promise<void> {
-		const diff = await this.getRecordDiff(path);
-		if (diff) this.setEditorDiff(path, diff);
-		else this.editorDiffRegistry.delete(path);
+		this.editorDiffRegistry.delete(path);
 		this.openRecordDiffModal(path);
 	}
 

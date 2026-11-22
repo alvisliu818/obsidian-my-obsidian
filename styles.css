@@ -63863,3 +63863,46 @@ body.ots-tab-min-width-on .workspace-tabs.mod-top .workspace-tab-header {
   margin-left: 8px;
 }
 
+
+/* 库记录修改对比弹窗——两栏对照模式(vl-diff-split,2026-11-22 用户) */
+.vl-diff-split {
+	display: flex;
+	gap: 1px;
+	background: var(--background-modifier-border);
+	max-height: 58vh;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	overflow: hidden;
+}
+.vl-diff-pane {
+	flex: 1 1 50%;
+	min-width: 0;
+	max-height: 58vh;
+	overflow: auto;
+	background: var(--background-primary);
+	font-family: var(--font-monospace);
+	font-size: 12px;
+	line-height: 18px;
+}
+.vl-split-row {
+	display: flex;
+	gap: 6px;
+	padding: 0 6px;
+	white-space: pre;
+}
+.vl-split-row.is-del .vl-split-text,
+.vl-split-row.is-del { background: rgba(255, 90, 90, 0.14); }
+.vl-split-row.is-add .vl-split-text,
+.vl-split-row.is-add { background: rgba(63, 185, 80, 0.14); }
+.vl-split-row.is-mod .vl-split-text,
+.vl-split-row.is-mod { background: rgba(68, 147, 248, 0.14); }
+.vl-split-row.is-empty { background: rgba(127, 127, 127, 0.06); }
+.vl-split-no {
+	flex: 0 0 3em;
+	text-align: right;
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
+	user-select: none;
+}
+.vl-split-text { flex: 1 1 auto; min-width: 0; color: var(--text-normal); }
+.vl-diff-row.is-revealed { outline: 2px solid var(--interactive-accent); border-radius: 4px; }
