@@ -22,6 +22,7 @@ export interface AbstractFolderPluginSettings {
   groups: Group[]; // New: List of defined groups
   activeGroupId: string | null; // New: ID of the currently active group, or null if no group is active
   expandTargetFolderOnDrop: boolean; // Whether to expand the target folder after a drag-and-drop operation
+  showCycleWarning: boolean; // Whether to show a notice when circular parent/child relationships are detected
   metrics: Record<string, { thermal: number; lastInteraction: number }>; // Path -> Metrics (persisted)
   defaultSort: SortConfig; // Default sort configuration for the main view
   defaultFilter: FilterConfig; // Default filter configuration for the main view
@@ -71,6 +72,7 @@ export const DEFAULT_SETTINGS: AbstractFolderPluginSettings = {
   groups: [],
   activeGroupId: null,
   expandTargetFolderOnDrop: true, // Default to true for now
+  showCycleWarning: true,
   metrics: {},
   defaultSort: { sortBy: 'name', sortOrder: 'asc' },
   defaultFilter: { excludeExtensions: [] },

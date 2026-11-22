@@ -270,6 +270,20 @@ export class AbstractFolderSettingTab extends PluginSettingTab {
 					}),
 			);
 
+		new Setting(containerEl)
+			.setName("Show circular relationship warning")
+			.setDesc(
+				"Show a notice when the indexer detects circular parent/child relationships. The cycle paths are always written to the developer logs.",
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.showCycleWarning !== false)
+					.onChange(async (value) => {
+						this.plugin.settings.showCycleWarning = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
 		new Setting(containerEl).setName("Startup & layout").setHeading();
 
 		new Setting(containerEl)

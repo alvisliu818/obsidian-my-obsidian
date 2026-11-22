@@ -510,7 +510,10 @@ export class FolderIndexer {
   private displayCycleWarning(cycles: Cycle[]) {
     if (cycles.length > 0) {
       const message = `Abstract Folder Plugin: ${cycles.length} circular relationship(s) detected. See logs for details.`;
-      new Notice(message, 5000); // Display a concise notice for 5 seconds
+      // 提示开关(设置 → Behavior):关闭只停 Notice,环路径仍写日志
+      if (this.settings.showCycleWarning !== false) {
+        new Notice(message, 5000); // Display a concise notice for 5 seconds
+      }
       // 环路径可读化（A → B → A）——数组折叠形式无法定位具体文件
       const readable = cycles.map((c) => c.join(" → "));
       Logger.warn("Circular relationships detected!", readable);
