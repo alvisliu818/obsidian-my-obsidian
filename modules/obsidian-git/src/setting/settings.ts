@@ -826,6 +826,14 @@ export class ObsidianGitSettingsTab extends PluginSettingTab {
                         },
                     },
                     {
+                        name: "Show .git pointer file notice",
+                        desc: "Show a notice at startup when `.git` is a pointer file (external gitdir layout). Off by default — the pointer is resolved regardless, this only controls the startup message.",
+                        control: {
+                            type: "toggle",
+                            key: "showGitPointerNotice",
+                        },
+                    },
+                    {
                         name: "Disable on this device",
                         desc: "This setting is not synced.",
                         render: (setting) => {

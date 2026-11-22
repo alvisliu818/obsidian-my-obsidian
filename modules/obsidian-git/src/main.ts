@@ -573,7 +573,7 @@ export default class ObsidianGit extends Plugin {
         } catch (e) {
             this.displayError(e);
         }
-        if (this.resolvedGitPointer)
+        if (this.resolvedGitPointer && this.settings.showGitPointerNotice === true)
             this.displayMessage(
                 `ObsidianGit: .git pointer file → ${this.resolvedGitPointer}`
             );

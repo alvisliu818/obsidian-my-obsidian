@@ -41,6 +41,11 @@ export interface ObsidianGitSettings {
      */
     showErrorNotices: boolean;
     disablePopupsForNoChanges: boolean;
+    /**
+     * .git 指针文件（`gitdir: <path>` 外置 gitdir 布局）解析成功的启动提示。
+     * 默认 false——外置布局是长期形态,每次启动弹一遍是噪音(2026-11-22 用户)。
+     */
+    showGitPointerNotice: boolean;
     listChangedFilesInMessageBody: boolean;
     showStatusBar: boolean;
     updateSubmodules: boolean;

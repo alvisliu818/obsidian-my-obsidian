@@ -22,6 +22,7 @@ export const DEFAULT_SETTINGS: ObsidianGitSettings = {
     disablePopups: false,
     showErrorNotices: true,
     disablePopupsForNoChanges: false,
+    showGitPointerNotice: false,
     listChangedFilesInMessageBody: false,
     showStatusBar: true,
     updateSubmodules: false,
