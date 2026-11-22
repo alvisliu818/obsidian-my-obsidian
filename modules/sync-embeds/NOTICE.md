@@ -28,6 +28,17 @@ TypeScript、无类型声明，进不了宿主的严格 tsc 程序。按收编�
 依赖 `monkey-around`（上游用于命令拦截的 `around()`）根 package.json 已有
 （^3.0.0，多个模块共用），无需新增依赖。
 
+**⚠️ 根 package.json `"type": "module"` 坑（2026-11-23 实测）**：根仓声明了
+ESM，esbuild 对 `.js` 文件按最近 package.json 的 `type` 判定格式——模块目录
+没有 package.json 时会继承根的 `module`，6 个 CJS 源文件被当 ESM 解析：
+模块体执行了（addCommand 字面量留在 bundle 里），但 `module.exports` 落到
+无效 shim，require 桥拿到非构造函数 → 宿主 onload 抛
+`SLu is not a constructor`，**插件整体加载失败**；且无导出可分析时模块体
+还可能被 tree-shaking 摇掉。修法：本目录新增 `package.json`
+`{ "type": "commonjs" }`（esbuild 按 CJS 解析，源码零改动）。这是本仓第一个
+「纯 JS CJS 源码」收编的模块，后续同类收编（src/*.js + CJS 语法）必须带
+同款 package.json。
+
 Changes relative to upstream
 ----------------------------
 1. **数据片**：插件用 `this.loadData()` / `this.saveData()` 存设置（默认键
