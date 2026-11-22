@@ -1492,11 +1492,18 @@ export default class MyObsidianPlugin extends Plugin {
 	 * 构造赋 own viewType,真实视图经 getViewType() 原型方法返回,无 own
 	 * 字段),用原 state 重 setViewState——Obsidian 会查已注册的工厂实例化
 	 * 真视图,走正常 onOpen → setState → mount 链路。幂等:换真后签名消失。
+	 *
+	 * 2026-11-23 修正:必须跳过 `leaf.isDeferred`。延迟视图(rI)是 Obsidian
+	 * 自己的占位,插入/点击时会自行 rerender 成真视图,不是坏占位;旧实现
+	 * 把两者一并当占位强拉,启动时一次把 12 个后台标签页的真视图全建出来
+	 * (实测),与 Obsidian 的延迟加载竞争、拖慢首屏。只有未知视图(sI,
+	 * 「This pane doesn't look like anything to me」)才需要修。
 	 */
 	private repairPlaceholderLeaves(): void {
 		try {
 			const fixes: Array<Promise<void>> = [];
 			this.app.workspace.iterateAllLeaves((leaf) => {
+				if ((leaf as unknown as { isDeferred?: boolean }).isDeferred) return;
 				const view = leaf.view as unknown as { getViewType?: () => string; getState?: () => Record<string, unknown> };
 				const type = view?.getViewType?.();
 				if (!type || !Object.prototype.hasOwnProperty.call(view, 'viewType')) return;

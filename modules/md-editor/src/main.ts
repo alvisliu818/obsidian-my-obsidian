@@ -1721,6 +1721,26 @@ export default class LogseqEditorPlugin extends Plugin {
     else await leaf.setViewState(state, eState);
   }
 
+  /**
+   * 在给定 leaf 上开**原生 markdown 视图**，绕过接管补丁（2026-11-23）。
+   *
+   * 供 sync-embeds 模块用：它把源笔记的真 MarkdownView 容器 reparent 到嵌入
+   * 位置做双向编辑，需要整文件 `editor`；块编辑器（logseq-block-editor）没有
+   * 这一层，接管后会被它判成 "Failed to load a markdown view"。游离 leaf
+   * （new WorkspaceLeaf）同样适用——补丁装在 prototype 上，必须走 bypass。
+   */
+  async openNativeMarkdownInLeaf(
+    leaf: WorkspaceLeaf,
+    file: TFile,
+    opts: { mode?: 'source' | 'preview'; active?: boolean } = {},
+  ): Promise<void> {
+    await this.bypassingSetViewState(leaf, {
+      type: 'markdown',
+      state: { file: file.path, mode: opts.mode ?? 'source' },
+      active: opts.active === true,
+    } as ViewState);
+  }
+
   private async switchToBlockEditor(leaf: WorkspaceLeaf): Promise<void> {
     const file = (leaf.getViewState().state as { file?: string } | undefined)?.file;
     if (!file) return;

@@ -192,7 +192,17 @@ class EmbedManager {
                 }
             })(this, embedData));
 
-            await leaf.openFile(file, { state: { mode: 'source' } });
+            // 宿主聚合环境:md-editor 模块把 .md 的 setViewState 接管成块编辑器
+            // (logseq-block-editor),它没有整文件 editor,无法 reparent——嵌入
+            // 会判 "Failed to load a markdown view"。向宿主模块要原生 markdown
+            // 视图(绕过接管补丁);宿主不可用(独立版)时回落 openFile。
+            const host = this.plugin.app.plugins?.plugins?.['obsidian-my-obsidian'];
+            const mdEditor = typeof host?.moduleInstance === 'function' ? host.moduleInstance('md-editor') : null;
+            if (typeof mdEditor?.openNativeMarkdownInLeaf === 'function') {
+                await mdEditor.openNativeMarkdownInLeaf(leaf, file, { mode: 'source' });
+            } else {
+                await leaf.openFile(file, { state: { mode: 'source' } });
+            }
             const view = leaf.view;
 
             if (!(view instanceof MarkdownView)) {

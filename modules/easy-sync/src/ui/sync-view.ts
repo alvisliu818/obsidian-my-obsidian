@@ -1900,8 +1900,23 @@ export class EasySyncSyncView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.closed = false;
-    await this.plugin.ensureStateLoaded();
-    if (this.closed) return;
+    // 启动期状态加载不能阻塞视图打开(2026-11-23):55k 文件库冷启动时
+    // ensureStateLoaded 可能跑十几秒,而 Obsidian 布局恢复对可见延迟视图
+    // 有 10s 超时(控制台报 "Failed to load deferred view Error: Timeout")。
+    // 视图先按可用信息渲染,状态就绪后由这里补一次整屏重绘;失败只告警
+    // (状态加载本身在 main 的后台流程里另有自愈与通知)。
+    void this.plugin
+      .ensureStateLoaded()
+      .then(() => {
+        if (!this.closed) this.render();
+      })
+      .catch((error) => {
+        this.plugin.diag?.warn(
+          "state",
+          "sync view opened before state load settled",
+          describeError(error),
+        );
+      });
     // The mobile chip pins above the (in-flow) buttons row: re-anchor it as
     // the list scrolls or the window resizes. Capture scroll on the window —
     // the drawer's scroller is a nested element, and scroll does not bubble.

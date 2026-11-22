@@ -65,3 +65,32 @@ Changes relative to upstream
 
 本模块的设置入口由宿主内嵌渲染（单 id 策略：addSettingTab 被截获进
 capturedTabs，通过宿主设置页「其他模块」区直达），不再单独成栏。
+
+宿主聚合环境适配（2026-11-23 实机验证）
+--------------------------------------
+1. **```sync 块在块编辑器里拿不到嵌入语法**（md-editor `renderTree.ts`
+   `attachStaticContent`）：静态渲染前会把整块文本里的 `![[X]]` 全部换成
+   LGPAGEEMBED 占位 token（防原生渲染先变成内链），围栏内部也被换 → 代码块
+   处理器收到的 source 里没有 `![[...]]`，sync 块显示 "No embeds found"。
+   修复：`tokenizePageEmbedsOutsideFences`——围栏外才 token 化，围栏内容
+   逐字交给 MarkdownRenderer。
+2. **源笔记被块编辑器接管后嵌入加载失败**（`embed-manager.js`）：md-editor
+   在 `WorkspaceLeaf.prototype.setViewState` 上把 .md 接管成
+   `logseq-block-editor`，而本模块要把真 `MarkdownView` 的容器 reparent 到
+   嵌入位置编辑，块编辑器没有整文件 editor → 判 "Failed to load a markdown
+   view"。修复：嵌入打开源笔记时优先调用 `md-editor` 模块的
+   `openNativeMarkdownInLeaf(leaf, file, {mode:'source'})`（内部走
+   `bypassingSetViewState`，绕过接管补丁）；宿主不可用（独立版）回落
+   `leaf.openFile`。
+
+同批启动错误修复（宿主侧）
+--------------------------
+- 宿主 `repairPlaceholderLeaves` 跳过 `leaf.isDeferred`：延迟视图（rI）会在
+  插入/点击时自行换真，旧实现把它与「未知视图」一并强拉——启动时一次建出
+  12 个后台标签页真视图，拖慢首屏。
+- easy-sync 的 `easy-sync-detail` 视图 `onOpen` 不再 `await
+  ensureStateLoaded()`（大库冷启动可 >10s，触发 Obsidian 延迟视图 10s 超时
+  "Failed to load deferred view Error: Timeout"），改为就绪后补渲染。
+- jupyter HTML 输出进 `sandbox=""` iframe 前剥掉 `<script>`：脚本本来就被
+  sandbox 禁止，留着只会刷控制台 "Blocked script execution in
+  'about:srcdoc'"。

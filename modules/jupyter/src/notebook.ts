@@ -54,6 +54,13 @@ export function stripANSI(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
+/** 剥掉 <script> 块(HTML 输出进 sandbox="" iframe 前;脚本本来也执行不了) */
+export function stripScriptTags(html: string): string {
+  return html
+    .replace(/<script\b[\s\S]*?<\/script\s*>/gi, '')
+    .replace(/<script\b[^>]*\/>/gi, '');
+}
+
 /** 单元格 source 兼容 string / string[] 两种 nbformat 形态 */
 export function getSourceText(cell: NbCell): string {
   const src = cell.source;
@@ -163,9 +170,12 @@ export function renderOutputsHTML(cell: NbCell): string {
       } else if (mime === 'text/markdown') {
         parts.push(`<div class="lgp-nb__out lgp-nb__out--md" data-md="${encodeURIComponent(mimeText(value))}"></div>`);
       } else if (mime === 'text/html') {
-        // 沙箱 iframe(禁脚本),防恶意笔记本注入
+        // 沙箱 iframe(禁脚本),防恶意笔记本注入。srcdoc 里的 <script> 先剥掉:
+        // sandbox="" 本来就不允许执行,留着只会让 Chromium 控制台刷
+        // "Blocked script execution in 'about:srcdoc' because the document's
+        // frame is sandboxed and the 'allow-scripts' permission is not set."
         parts.push(
-          `<iframe class="lgp-nb__out lgp-nb__out--html" sandbox="" srcdoc="${escapeHTML(mimeText(value))}"></iframe>`,
+          `<iframe class="lgp-nb__out lgp-nb__out--html" sandbox="" srcdoc="${escapeHTML(stripScriptTags(mimeText(value)))}"></iframe>`,
         );
       } else if (mime === 'application/json') {
         let pretty: string;

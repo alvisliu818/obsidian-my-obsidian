@@ -888,9 +888,35 @@ export function withTableSeparation(text: string): string {
   return out.join('\n');
 }
 
+/**
+ * 只在代码围栏外 token 化 `![[...]]`(2026-11-23,```sync 收编实测)。
+ *
+ * 围栏内容必须逐字交给 MarkdownRenderer:代码块处理器(```sync 等)拿到的
+ * source 若被换成 LGPAGEEMBED token,嵌入语法就消失了——实测 sync 块报
+ * "No embeds found"、嵌入笔记无法渲染。围栏分隔行(insideFence=false)
+ * 不含嵌入,照常处理无害。
+ */
+function tokenizePageEmbedsOutsideFences(
+	text: string,
+	take: (match: string, inner: string) => string,
+): string {
+	const lines = text.split('\n');
+	const out = lines.slice();
+	scanLinesWithFences(
+		(n) => lines[n - 1] ?? '',
+		lines.length,
+		(line, insideFence, n1) => {
+			if (insideFence) return;
+			out[n1 - 1] = line.replace(/!\[\[([^\[\]]+)\]\]/g, (m, inner: string) =>
+				take(m, inner),
+			);
+		},
+	);
+	return out.join('\n');
+}
+
 /** Render static content with cache reuse when the block text is unchanged. */
-function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHost): void {
-  const sig = contentSig(b);
+function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHost): void {  const sig = contentSig(b);
   const cached = contentCache.get(b);
   if (cached && cached.sig === sig) {
     content.appendChild(cached.el); // DOM move preserves rendered children
@@ -959,7 +985,7 @@ function attachStaticContent(content: HTMLElement, b: Block, host: BlockRenderHo
   const mdSource = withTableSeparation(
     anchorRelativeImgSrcs(
       hasWikiEmbed
-        ? mediaAnchored.replace(/!\[\[([^\[\]]+)\]\]/g, (m, inner: string) => {
+        ? tokenizePageEmbedsOutsideFences(mediaAnchored, (m, inner: string) => {
             // media: native render。库外已解析成功的媒体在 anchorExternalMedia
             // 里换成了 md 占位,到不了这里;到这里的媒体 wiki 嵌入是解析失败
             // 的(文件真不在),维持原生渲染 = broken embed 的诚实展示。
