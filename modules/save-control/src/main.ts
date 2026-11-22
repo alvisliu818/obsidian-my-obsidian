@@ -43,6 +43,8 @@ import {
   migrateLegacySnapshots,
   deleteSnapshotDirForFile,
   listSnapshotsForFile,
+  listAllSnapshotFiles,
+  readSnapshotContent,
   saveSnapshotContent,
   ensureExportDir,
   getExportFolderPath,
@@ -511,6 +513,18 @@ export class SaveControlPlugin extends Plugin {
     if (!target) return null;
     if (target.kind === "vault") return target.file ?? null;
     return this.mintTargetHandle(target);
+  }
+
+  /**
+   * 跨模块只读 API(2026-11-22 life HOME「保存历史」区块用):
+   * 列出所有有历史的文件(库内相对路径 / 库外绝对路径) / 读取一个快照内容。
+   */
+  listAllSnapshotFiles() {
+    return listAllSnapshotFiles(this);
+  }
+
+  readSnapshotContent(filePath: string) {
+    return readSnapshotContent(this, filePath);
   }
 
   /** 某个视图如果是库外文件视图，返回它的保存探针。 */

@@ -10,12 +10,13 @@
  * 日记数据源 = md-editor 的 journal 体系(journalPathFor + openJournalFor,
  * 经 moduleInstance 运行时取 md-editor 实例, dailyNote.ts 同款调用)。
  */
-import { TFile, ItemView, type WorkspaceLeaf } from 'obsidian';
+import { TFile, ItemView, Notice, type EventRef, type WorkspaceLeaf } from 'obsidian';
 import { journalPathFor, openJournalFor } from '../../../md-editor/src/features/dailyNote';
 import { addDays } from '../../../md-editor/src/core/journalDate';
 import type LifePlugin from '../main';
 import type LogseqEditorPlugin from '../../../md-editor/src/main';
 import { VIEW_LIFE_HOME } from './homeTypes';
+import { SnapshotPreviewModal } from './snapshotPreview';
 import { monthGrid, todayKey, formatDuration } from '../util';
 import { changeSummary, filterVaultLogRecordsByDate, sortVaultLogRecordsDesc } from '../vaultLog';
 import {
@@ -27,6 +28,46 @@ import {
 
 export { VIEW_LIFE_HOME };
 
+/** Git 历史条目(HOME 区块用到的字段;来自 obsidian-git GitManager.log)。 */
+interface GitCommitLite {
+	hash: string;
+	date: string;
+	message: string;
+	author?: { name?: string };
+	diff?: { changed?: number; files?: Array<{ path: string; vaultPath?: string; fromPath?: string }> };
+}
+
+/** 保存历史快照(HOME 区块;来自 save-control.listAllSnapshotFiles)。 */
+interface SaveSnapshotLite {
+	timestamp: string;
+	name?: string;
+	favorite?: boolean;
+	filePath: string;
+	content?: string;
+}
+
+interface SnapshotFileLite {
+	targetPath: string;
+	kind: 'vault' | 'external';
+	lastAt: string;
+	count: number;
+	snapshots: SaveSnapshotLite[];
+}
+
+interface SaveControlApi {
+	listAllSnapshotFiles?: () => Promise<SnapshotFileLite[]>;
+	readSnapshotContent?: (filePath: string) => Promise<{ content?: string } | null>;
+}
+
+interface GitModuleApi {
+	gitManager?: {
+		log?: (file?: string, relativeToVault?: boolean, limit?: number) => Promise<GitCommitLite[]>;
+	};
+	tools?: {
+		openDiff?: (opts: Record<string, unknown>) => void;
+	};
+}
+
 export class LifeHomeView extends ItemView {
 	/** 库记录明细视图:overall = 总体列表;folder = 按顶级文件夹分组 */
 	private detailMode: 'overall' | 'folder' = 'folder';
@@ -37,6 +78,18 @@ export class LifeHomeView extends ItemView {
 	private settingsOpen = false;
 	/** 库记录日期筛选(2026-11-21 用户):yyyy-mm-dd,''=全部;只存视图 UI state,不落盘 */
 	private filterDate = '';
+	/** Git 历史(HOME 区块,2026-11-22 用户):异步缓存 + 展开集 */
+	private gitLog: GitCommitLite[] | null = null;
+	private gitLogError = '';
+	private gitLogExpanded = new Set<string>();
+	private gitRetryTimer: number | null = null;
+	private gitRetryCount = 0;
+	/** 保存历史(HOME 区块,2026-11-22 用户):所有有历史的文件 + 列表/按文件夹 */
+	private saveFiles: SnapshotFileLite[] = [];
+	private saveDetailMode: 'overall' | 'folder' = 'overall';
+	private saveExpanded = new Set<string>();
+	private saveCollapsedDirs = new Set<string>();
+	private saveHistoryError = '';
 
 	constructor(leaf: WorkspaceLeaf, private plugin: LifePlugin) {
 		super(leaf);
@@ -57,11 +110,233 @@ export class LifeHomeView extends ItemView {
 
 	async onOpen(): Promise<void> {
 		this.render();
+		void this.loadHomeHistory();
+		// obsidian-git 在 life 之后才建好 gitManager:就绪/刷新事件到达时补拉一次
+		const ws = this.app.workspace as unknown as { on(name: string, cb: () => void): EventRef };
+		this.registerEvent(ws.on('obsidian-git:refreshed', () => void this.refreshGitHistory()));
+		this.registerEvent(ws.on('obsidian-git:status-changed', () => void this.refreshGitHistory()));
+		this.register(() => {
+			if (this.gitRetryTimer !== null) window.clearTimeout(this.gitRetryTimer);
+		});
 	}
 
 	/** 外部刷新入口(记录/设置变更后由 LifePlugin 调)。 */
 	refresh(): void {
 		this.render();
+	}
+
+	// ------------------------------------------------------------------
+	// HOME 历史区块(2026-11-22 用户):Git 提交 + 保存历史(参考库记录)
+	// ------------------------------------------------------------------
+
+	/** 取并入模块实例(与 ExternalCodeView/life 其他跨模块调用同款鸭子类型)。 */
+	private hostModule<T>(id: string): T | null {
+		const host = (
+			this.app as unknown as {
+				plugins?: {
+					plugins?: Record<string, { moduleInstance?: (id: string) => unknown } | undefined>;
+				};
+			}
+		).plugins?.plugins?.['obsidian-my-obsidian'];
+		return (host?.moduleInstance?.(id) as T | undefined) ?? null;
+	}
+
+	private async loadHomeHistory(): Promise<void> {
+		await Promise.all([this.fetchGitHistory(), this.fetchSaveHistory()]);
+		this.render();
+	}
+
+	private async fetchGitHistory(): Promise<void> {
+		try {
+			const git = this.hostModule<GitModuleApi>('obsidian-git');
+			const mgr = git?.gitManager;
+			if (!mgr?.log) {
+				this.gitLog = [];
+				this.gitLogError = 'Git 模块未就绪（稍后自动重试，或点「刷新」）。';
+				this.scheduleGitRetry();
+				return;
+			}
+			this.gitLog = (await mgr.log(undefined, true, 10)) ?? [];
+			this.gitLogError = '';
+			this.gitRetryCount = 0;
+		} catch (e) {
+			this.gitLog = [];
+			this.gitLogError = `读取 Git 历史失败:${String(e).slice(0, 100)}`;
+			this.scheduleGitRetry();
+		}
+	}
+
+	private scheduleGitRetry(): void {
+		if (this.gitRetryTimer !== null || this.gitRetryCount >= 5) return;
+		this.gitRetryCount++;
+		this.gitRetryTimer = window.setTimeout(() => {
+			this.gitRetryTimer = null;
+			void this.refreshGitHistory();
+		}, 4000);
+	}
+
+	private async refreshGitHistory(): Promise<void> {
+		const before = `${this.gitLog ? this.gitLog.length : 'null'}|${this.gitLogError}`;
+		await this.fetchGitHistory();
+		const after = `${this.gitLog ? this.gitLog.length : 'null'}|${this.gitLogError}`;
+		if (after !== before) this.render();
+	}
+
+	private async fetchSaveHistory(): Promise<void> {
+		const sc = this.hostModule<SaveControlApi>('save-control');
+		if (!sc?.listAllSnapshotFiles) {
+			this.saveFiles = [];
+			this.saveHistoryError = '保存历史模块未启用。';
+			return;
+		}
+		try {
+			this.saveFiles = (await sc.listAllSnapshotFiles()) ?? [];
+			this.saveHistoryError = '';
+		} catch (e) {
+			this.saveFiles = [];
+			this.saveHistoryError = `读取保存历史失败:${String(e).slice(0, 100)}`;
+		}
+	}
+
+	private async refreshSaveHistory(): Promise<void> {
+		await this.fetchSaveHistory();
+		this.render();
+	}
+
+	private async previewSnapshot(targetPath: string, snap: SaveSnapshotLite): Promise<void> {
+		const sc = this.hostModule<SaveControlApi>('save-control');
+		try {
+			const rec = await sc?.readSnapshotContent?.(snap.filePath);
+			new SnapshotPreviewModal(
+				this.app,
+				`${targetPath} · ${this.fmtWhen(snap.timestamp)}`,
+				rec?.content ?? snap.content ?? '',
+			).open();
+		} catch (e) {
+			new Notice(`读取历史版本失败:${String(e).slice(0, 80)}`);
+		}
+	}
+
+	/** 保存历史区块:所有有历史的文件;列表模式或按文件夹分组。 */
+	private renderSaveSection(container: HTMLElement): void {
+		const head = container.createDiv({ cls: 'life-home-sec-head' });
+		head.createDiv({
+			cls: 'life-home-sec-title',
+			text: `保存历史${this.saveFiles.length ? `（${this.saveFiles.length} 个文件）` : ''}`,
+		});
+		const btns = head.createDiv({ cls: 'life-home-head-btns' });
+		const modeBtn = btns.createEl('button', {
+			cls: 'life-home-mode-btn',
+			text: this.saveDetailMode === 'folder' ? '文件夹' : '列表',
+		});
+		modeBtn.setAttr('title', '切换 列表 / 按文件夹');
+		modeBtn.addEventListener('click', () => {
+			this.saveDetailMode = this.saveDetailMode === 'folder' ? 'overall' : 'folder';
+			this.render();
+		});
+		const refresh = btns.createEl('button', { cls: 'life-home-mode-btn', text: '刷新' });
+		refresh.addEventListener('click', () => void this.refreshSaveHistory());
+
+		if (this.saveHistoryError) {
+			container.createDiv({ cls: 'life-home-muted', text: this.saveHistoryError });
+			return;
+		}
+		if (this.saveFiles.length === 0) {
+			container.createDiv({ cls: 'life-home-muted', text: '还没有任何保存历史。' });
+			return;
+		}
+		// 文件可能很多(实测 190+):列表区独立滚动,别把 HOME 拉成无限长
+		const list = container.createDiv({ cls: 'life-home-hist-list' });
+		if (this.saveDetailMode === 'overall') {
+			for (const file of this.saveFiles) this.renderSaveFileRow(list, file, false);
+			return;
+		}
+		const groups = new Map<string, SnapshotFileLite[]>();
+		for (const file of this.saveFiles) {
+			const norm = file.targetPath.replace(/\\/g, '/');
+			const idx = norm.lastIndexOf('/');
+			const dir = idx >= 0 ? norm.slice(0, idx) : '';
+			const arr = groups.get(dir);
+			if (arr) arr.push(file);
+			else groups.set(dir, [file]);
+		}
+		for (const [dir, files] of [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+			const collapsed = this.saveCollapsedDirs.has(dir);
+			const row = list.createDiv({ cls: 'life-home-hist-row is-dir' });
+			row.createSpan({ cls: 'life-home-hist-chevron', text: collapsed ? '▸' : '▾' });
+			row.createSpan({ cls: 'life-home-hist-msg', text: dir || '(根目录)' });
+			row.createSpan({ cls: 'life-home-hist-meta', text: `${files.length} 个文件` });
+			row.addEventListener('click', () => {
+				if (collapsed) this.saveCollapsedDirs.delete(dir);
+				else this.saveCollapsedDirs.add(dir);
+				this.render();
+			});
+			if (collapsed) continue;
+			for (const file of files) this.renderSaveFileRow(list, file, true);
+		}
+	}
+
+	private renderSaveFileRow(container: HTMLElement, file: SnapshotFileLite, indent: boolean): void {
+		const expanded = this.saveExpanded.has(file.targetPath);
+		const row = container.createDiv({ cls: 'life-home-hist-row' + (indent ? ' is-sub' : '') });
+		row.createSpan({ cls: 'life-home-hist-chevron', text: expanded ? '▾' : '▸' });
+		row.createSpan({ cls: 'life-home-hist-msg', text: file.targetPath.split('/').pop() || file.targetPath });
+		row.setAttr('title', file.targetPath);
+		row.createSpan({
+			cls: 'life-home-hist-meta',
+			text: `${file.kind === 'external' ? '库外 · ' : ''}${file.count} 版本 · ${this.fmtWhen(file.lastAt)}`,
+		});
+		row.addEventListener('click', () => {
+			if (expanded) this.saveExpanded.delete(file.targetPath);
+			else this.saveExpanded.add(file.targetPath);
+			this.render();
+		});
+		if (!expanded) return;
+		const box = container.createDiv({ cls: 'life-home-hist-files' });
+		for (const snap of file.snapshots.slice(0, 10)) {
+			const srow = box.createDiv({ cls: 'life-home-hist-row is-snap' });
+			srow.createSpan({ cls: 'life-home-hist-msg', text: `${snap.name || '自动保存'}${snap.favorite ? ' ★' : ''}` });
+			srow.createSpan({
+				cls: 'life-home-hist-meta',
+				text: `${this.fmtWhen(snap.timestamp)} · ${(snap.content ?? '').length} 字`,
+			});
+			srow.setAttr('title', '点击预览该历史版本');
+			srow.addEventListener('click', (ev) => {
+				ev.stopPropagation();
+				void this.previewSnapshot(file.targetPath, snap);
+			});
+		}
+		if (file.snapshots.length > 10) {
+			box.createDiv({ cls: 'life-home-muted', text: `…还有 ${file.snapshots.length - 10} 个版本` });
+		}
+	}
+
+	private openCommitFile(commit: GitCommitLite, file: { path: string; fromPath?: string }): void {
+		const git = this.hostModule<GitModuleApi>('obsidian-git');
+		if (git?.tools?.openDiff) {
+			git.tools.openDiff({
+				aFile: file.fromPath ?? file.path,
+				aRef: `${commit.hash}^`,
+				bFile: file.path,
+				bRef: commit.hash,
+			});
+			return;
+		}
+		void this.openModuleView('git-history-view');
+	}
+
+	private async openModuleView(viewType: string): Promise<void> {
+		const leaf = this.app.workspace.getRightLeaf(false) ?? this.app.workspace.getLeaf('tab');
+		if (!leaf) return;
+		await leaf.setViewState({ type: viewType, active: true });
+		this.app.workspace.revealLeaf(leaf);
+	}
+
+	private fmtWhen(value: string): string {
+		const d = new Date(value);
+		if (Number.isNaN(d.getTime())) return value.slice(0, 16);
+		const p = (n: number): string => String(n).padStart(2, '0');
+		return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 	}
 
 	private render(): void {
@@ -162,6 +437,63 @@ export class LifeHomeView extends ItemView {
 				onCompareFile: (path) => void this.plugin.openRecordDiffView(path),
 			});
 		}
+
+		// ---- Git 历史记录(2026-11-22 用户;参考库记录:列表 + 展开文件) ----
+		const secGit = contentEl.createDiv({ cls: 'life-home-section' });
+		const gitHead = secGit.createDiv({ cls: 'life-home-sec-head' });
+		gitHead.createDiv({ cls: 'life-home-sec-title', text: 'Git 历史' });
+		const gitBtns = gitHead.createDiv({ cls: 'life-home-head-btns' });
+		const gitRefresh = gitBtns.createEl('button', { cls: 'life-home-mode-btn', text: '刷新' });
+		gitRefresh.addEventListener('click', () => void this.loadHomeHistory());
+		const gitOpen = gitBtns.createEl('button', { cls: 'life-home-mode-btn', text: '历史视图' });
+		gitOpen.addEventListener('click', () => void this.openModuleView('git-history-view'));
+		if (this.gitLog === null) {
+			secGit.createDiv({ cls: 'life-home-muted', text: '加载中…' });
+		} else if (this.gitLogError) {
+			secGit.createDiv({ cls: 'life-home-muted', text: this.gitLogError });
+		} else if (this.gitLog.length === 0) {
+			secGit.createDiv({ cls: 'life-home-muted', text: '暂无提交。' });
+		} else {
+			for (const c of this.gitLog) {
+				const expanded = this.gitLogExpanded.has(c.hash);
+				const row = secGit.createDiv({ cls: 'life-home-hist-row' });
+				row.createSpan({ cls: 'life-home-hist-chevron', text: expanded ? '▾' : '▸' });
+				row.createSpan({ cls: 'life-home-hist-hash', text: c.hash.slice(0, 7) });
+				const msg = row.createSpan({ cls: 'life-home-hist-msg', text: c.message.split('\n')[0] || '(无提交信息)' });
+				msg.setAttr('title', c.message);
+				row.createSpan({
+					cls: 'life-home-hist-meta',
+					text: `${c.author?.name ?? ''} · ${this.fmtWhen(c.date)} · ${c.diff?.changed ?? 0} 文件`,
+				});
+				row.addEventListener('click', () => {
+					if (expanded) this.gitLogExpanded.delete(c.hash);
+					else this.gitLogExpanded.add(c.hash);
+					this.render();
+				});
+				if (!expanded) continue;
+				const files = c.diff?.files ?? [];
+				const box = secGit.createDiv({ cls: 'life-home-hist-files' });
+				if (!files.length) {
+					box.createDiv({ cls: 'life-home-muted', text: '没有文件变更（合并/空提交）。' });
+					continue;
+				}
+				for (const f of files.slice(0, 20)) {
+					const frow = box.createDiv({ cls: 'life-home-hist-file', text: f.path });
+					frow.setAttr('title', '打开该提交的差异');
+					frow.addEventListener('click', (ev) => {
+						ev.stopPropagation();
+						this.openCommitFile(c, f);
+					});
+				}
+				if (files.length > 20) {
+					box.createDiv({ cls: 'life-home-muted', text: `…还有 ${files.length - 20} 个文件` });
+				}
+			}
+		}
+
+		// ---- 保存历史(2026-11-22 用户:所有有历史的文件;列表/按文件夹) ----
+		const secSave = contentEl.createDiv({ cls: 'life-home-section' });
+		this.renderSaveSection(secSave);
 
 		// ---- 迷你月网格(任务/计划圆点 + 当日明细) ----
 		const sec3 = contentEl.createDiv({ cls: 'life-home-section' });

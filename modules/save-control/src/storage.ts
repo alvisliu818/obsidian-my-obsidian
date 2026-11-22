@@ -113,6 +113,74 @@ export async function listSnapshotsForFile(
   return listExternalSnapshots(root, key).sort((a, b) => (a.timestamp > b.timestamp ? -1 : 1));
 }
 
+/** 一个有保存历史的文件(库内相对路径 / 库外绝对路径)。 */
+export type SnapshotFileEntry = {
+  targetPath: string;
+  kind: "vault" | "external";
+  /** 最近一次快照时间(ISO) */
+  lastAt: string;
+  count: number;
+  snapshots: (SnapshotRecord & { filePath: string })[];
+};
+
+/**
+ * 列出**所有有保存历史的文件**(2026-11-22 life HOME 用)。
+ *
+ * 版本存储根按文件绝对路径镜像成目录树(`<root>/<absPathKey>/<时间戳>.json`),
+ * 这里递归遍历,把含 .json 快照的目录还原成目标文件:
+ * 绝对路径落在库根下 = 库内相对路径(vault),否则按库外绝对路径(external)。
+ */
+export function listAllSnapshotFiles(plugin: SaveControlPlugin): SnapshotFileEntry[] {
+  const root = getVersionRoot(plugin);
+  const fs = fsLike();
+  if (!fs.existsSync(root)) return [];
+  const vaultBase = getVaultBase(plugin).replace(/\\/g, "/").replace(/\/+$/, "");
+  const out: SnapshotFileEntry[] = [];
+  const walk = (dirAbs: string, relKey: string): void => {
+    let names: string[] = [];
+    try {
+      names = fs.readdirSync(dirAbs);
+    } catch {
+      return;
+    }
+    if (names.some((n) => n.endsWith(".json"))) {
+      const snapshots = listExternalSnapshots(root, relKey).sort((a, b) =>
+        a.timestamp > b.timestamp ? -1 : 1,
+      );
+      if (snapshots.length > 0) {
+        const abs = decodeAbsKey(relKey).replace(/\\/g, "/");
+        const isVault = !!vaultBase && (
+          abs.toLowerCase() === vaultBase.toLowerCase() ||
+          abs.toLowerCase().startsWith(`${vaultBase.toLowerCase()}/`)
+        );
+        out.push({
+          targetPath: isVault ? abs.slice(vaultBase.length + 1) : abs,
+          kind: isVault ? "vault" : "external",
+          lastAt: snapshots[0]?.timestamp ?? "",
+          count: snapshots.length,
+          snapshots,
+        });
+      }
+    }
+    for (const n of names) {
+      if (n.endsWith(".json")) continue;
+      const childAbs = `${dirAbs.replace(/[\\/]+$/, "")}/${n}`;
+      let isDir = true;
+      if (fs.statSync) {
+        try {
+          isDir = fs.statSync(childAbs).isDirectory();
+        } catch {
+          isDir = false;
+        }
+      }
+      if (isDir) walk(childAbs, relKey ? `${relKey}/${n}` : n);
+    }
+  };
+  walk(root.replace(/[\\/]+$/, ""), "");
+  out.sort((a, b) => (a.lastAt < b.lastAt ? 1 : a.lastAt > b.lastAt ? -1 : a.targetPath.localeCompare(b.targetPath)));
+  return out;
+}
+
 export async function readSnapshotContent(
   _plugin: SaveControlPlugin,
   filePath: string

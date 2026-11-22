@@ -63365,6 +63365,56 @@ body.is-mobile
 .life-home-section { padding: 12px 0 4px; }
 .life-home-section.is-settings { background: var(--background-secondary); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
 .life-home-sec-title { font-size: 12px; font-weight: 600; color: var(--text-muted); letter-spacing: 0.05em; padding-bottom: 8px; }
+/* HOME 历史区块(Git / 保存历史,2026-11-22 用户) */
+.life-home-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.life-home-sec-head .life-home-sec-title { padding-bottom: 0; }
+.life-home-hist-row {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	padding: 3px 6px;
+	border-radius: 4px;
+	cursor: pointer;
+}
+.life-home-hist-row:hover { background: var(--background-modifier-hover); }
+.life-home-hist-row.is-sub { margin-left: 24px; }
+.life-home-hist-row.is-snap { padding-left: 10px; }
+.life-home-hist-row.is-snap .life-home-hist-msg { font-size: var(--font-ui-smaller); }
+.life-home-hist-list { max-height: 320px; overflow: auto; padding-right: 4px; }
+.life-home-hist-chevron { flex: none; width: 10px; color: var(--text-faint); }
+.life-home-hist-hash { flex: none; font-family: var(--font-monospace); color: var(--text-accent); }
+.life-home-hist-msg {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.life-home-hist-meta { flex: none; color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.life-home-hist-files {
+	margin: 2px 0 6px 24px;
+	padding-left: 10px;
+	border-left: 2px solid var(--background-modifier-border);
+}
+.life-home-hist-file {
+	padding: 2px 0;
+	color: var(--text-muted);
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	cursor: pointer;
+}
+.life-home-hist-file:hover { color: var(--text-normal); text-decoration: underline; }
+.life-snapshot-preview {
+	max-height: 70vh;
+	overflow: auto;
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-family: var(--font-monospace);
+	font-size: 12px;
+}
 .life-home-muted { color: var(--text-faint); font-size: 12.5px; padding: 4px 2px; }
 .life-home-rec-summary { display: flex; align-items: center; gap: 10px; padding: 3px 2px; font-size: 13px; }
 .life-home-card-title { font-weight: 600; }
