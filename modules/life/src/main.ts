@@ -6,10 +6,10 @@
  * 计时：运行态墙钟法（settings.timerRun）,面板关闭也计时——本模块 onload
  * 注册 1s 哨兵（registerInterval）到点 Notice,TimerView 开着时由它自己走针。
  */
-import { Menu, Notice, Plugin, TFile, type WorkspaceLeaf } from 'obsidian';
+import { Menu, Notice, Plugin, TFile, type Tasks, type WorkspaceLeaf } from 'obsidian';
 import { LifeStore } from './store';
 import { LifeSettingTab } from './ui/settingsTab';
-import type { VaultLogRecord } from './types';
+import type { VaultLogRecord, VaultLogSnapshotFile } from './types';
 import { VIEW_LIFE_CALENDAR, LifeCalendarView } from './views/calendar';
 import { VIEW_LIFE_HOME, LifeHomeView } from './views/home';
 import { VIEW_LIFE_VAULTLOG, LifeVaultLogView } from './views/vaultlog';
@@ -44,6 +44,9 @@ export const LIFE_PANELS = [
 
 export default class LifePlugin extends Plugin {
 	store!: LifeStore;
+	/** 今日基线 = 今天之前最后一次打点时的库快照(2026-11-22 用户:
+	 * 今日库变化 = 现在的库 vs 昨天最后打点的库)。 */
+	dayBaseline: VaultLogSnapshotFile | null = null;
 	private timerSentinel: number | null = null;
 	private vaultLogTimer: number | null = null;
 
@@ -51,6 +54,22 @@ export default class LifePlugin extends Plugin {
 		this.store = new LifeStore(this, await this.loadData());
 		// 模块设置页(启动行为/HOME 组件排序/库记录设置;2026-11-22 用户)
 		this.addSettingTab(new LifeSettingTab(this.app, this));
+		this.dayBaseline = await this.resolveStartupDayBaseline();
+		// 关闭 Obsidian 时自动打点(2026-11-22 用户):quit 事件带 Tasks,
+		// 异步任务会被 Obsidian 等待完成后再退出。
+		this.registerEvent(
+			this.app.workspace.on('quit', (tasks: Tasks) => {
+				const vl = this.store.settings.vaultLog;
+				if (!vl.enabled || vl.quitRecord === false) return;
+				tasks.add(async () => {
+					try {
+						await this.recordVaultChanges('quit');
+					} catch (e) {
+						console.warn('[life] 退出时库记录失败', e);
+					}
+				});
+			}),
+		);
 
 		for (const p of LIFE_PANELS) {
 			this.registerView(p.type, (leaf) => this.makeView(p.type, leaf));
@@ -228,6 +247,14 @@ export default class LifePlugin extends Plugin {
 		const vl = this.store.settings.vaultLog;
 		if (!vl.enabled) return;
 		const now = new Date();
+		const today = dayKeyOf(now);
+		// 0 点自动打点(2026-11-22 用户):当天还没打点过就补一次(应用没在
+		// 0 点开着时,当天首次启动后第一个 tick 补上)。独立于「每日记录时间」。
+		if (vl.midnightRecord !== false && this.store.settings.vaultLogLastMidnightDate !== today) {
+			this.store.settings.vaultLogLastMidnightDate = today;
+			await this.recordVaultChanges('midnight');
+			return;
+		}
 		if (dailyDue(now, vl.dailyTime, this.store.settings.vaultLogLastDailyDate)) {
 			await this.recordVaultChanges('daily');
 			return; // 同轮不再查周期(每日记录已写 lastDailyDate)
@@ -559,22 +586,29 @@ export default class LifePlugin extends Plugin {
 		return 'code'; // PATH 兜底(shell:true 解析 code.cmd)
 	}
 
-	async recordVaultChanges(trigger: 'period' | 'daily' | 'manual' = 'manual'): Promise<VaultLogRecord> {
+	async recordVaultChanges(
+		trigger: 'period' | 'daily' | 'midnight' | 'quit' | 'manual' = 'manual',
+	): Promise<VaultLogRecord> {
 		const cur = scanVaultSig(this.app.vault);
 		const prev = await this.loadVaultLogSnapshot();
 		const now = new Date();
+		const today = dayKeyOf(now);
 		const s = this.store.settings;
-		if (trigger === 'daily') s.vaultLogLastDailyDate = dayKeyOf(now);
+		if (trigger === 'daily') s.vaultLogLastDailyDate = today;
+		if (trigger === 'midnight') s.vaultLogLastMidnightDate = today;
 		if (trigger === 'period') s.vaultLogLastPeriodAt = now.getTime();
 		// 首次记录:快照文件不存在 = 只建立基线,不列变化(万级「新增」是噪声)
 		if (prev === null) {
-			await this.saveVaultLogSnapshot(cur);
+			// 今日基线 = 当前(首次记录没有「昨天的库」,今日变化从基线起算)
+			this.dayBaseline = { date: today, at: now.toISOString(), sig: cur };
+			await this.saveDayBaseline(this.dayBaseline);
+			await this.saveVaultLogSnapshot(cur, today, now.toISOString());
 			// record 基线:影子基线(后台分片),此后修改的文件才有对比数据。
 			if (this.vaultDiffBaseline() === 'record') void this.buildVaultShadowBaseline();
 			const rec: VaultLogRecord = {
 				id: genId(),
 				at: now.toISOString(),
-				date: dayKeyOf(now),
+				date: today,
 				trigger,
 				added: [],
 				modified: [],
@@ -587,8 +621,15 @@ export default class LifePlugin extends Plugin {
 			this.refreshHomeViews();
 			return rec;
 		}
-		const diff = diffWithRenames(prev, cur);
-		await this.saveVaultLogSnapshot(cur);
+		const diff = diffWithRenames(prev.sig, cur);
+		// 今天的第一次记录:prev 就是「今天之前最后一次打点」的库 → 冻结为
+		// 今日基线(HOME 的「今日库变化」= 现在 vs 这份快照);同一天后续记录
+		// 不再覆盖它。旧格式快照没有 date,也按「上次打点」当基线。
+		if (prev.date !== today) {
+			this.dayBaseline = prev;
+			await this.saveDayBaseline(prev);
+		}
+		await this.saveVaultLogSnapshot(cur, today, now.toISOString());
 		// record 基线:影子推进到本次记录时点(下次对比的 before)。
 		if (this.vaultDiffBaseline() === 'record') await this.advanceVaultShadow(diff);
 		const empty =
@@ -599,7 +640,7 @@ export default class LifePlugin extends Plugin {
 			return {
 				id: '',
 				at: now.toISOString(),
-				date: dayKeyOf(now),
+				date: today,
 				trigger,
 				added: [],
 				modified: [],
@@ -610,7 +651,7 @@ export default class LifePlugin extends Plugin {
 		const rec: VaultLogRecord = {
 			id: genId(),
 			at: now.toISOString(),
-			date: dayKeyOf(now),
+			date: today,
 			trigger,
 			added: diff.added,
 			modified: diff.modified,
@@ -626,31 +667,78 @@ export default class LifePlugin extends Plugin {
 		s.vaultLogRecords = [rec, ...s.vaultLogRecords].slice(0, 200);
 		await this.store.flush();
 		this.refreshHomeViews();
-		if (s.vaultLog.remind) {
-			new Notice(
-				'📋 库记录(' + (trigger === 'manual' ? '手动' : trigger === 'daily' ? '每日' : '周期') + '):' + changeSummary(diff, diff.renames.length),
-			);
+		// 退出时提醒没有意义(窗口正在关),跳过
+		if (s.vaultLog.remind && trigger !== 'quit') {
+			const label =
+				trigger === 'manual' ? '手动' : trigger === 'daily' ? '每日' : trigger === 'midnight' ? '0 点' : '周期';
+			new Notice('📋 库记录(' + label + '):' + changeSummary(diff, diff.renames.length));
 		}
 		return rec;
 	}
 
-	/** 快照存取(独立文件,manifest.dir 下——data.json 不吃万级签名表)。 */
+	/** 快照存取(独立文件,manifest.dir 下——data.json 不吃万级签名表)。
+	 * 2026-11-22 起带归属日/时刻(旧格式裸签名表读取时自动识别)。 */
 	private snapshotPath(): string {
 		return (this.manifest.dir ?? '') + '/vault-log-snapshot.json';
 	}
 
-	/** null = 快照文件不存在(首次记录语义;读失败当首次,下次收敛)。 */
-	private async loadVaultLogSnapshot(): Promise<Record<string, string> | null> {
+	private dayBaselinePath(): string {
+		return (this.manifest.dir ?? '') + '/vault-log-day-baseline.json';
+	}
+
+	private async loadSnapshotFile(path: string): Promise<VaultLogSnapshotFile | null> {
 		try {
-			const raw = await this.app.vault.adapter.read(this.snapshotPath());
-			return JSON.parse(raw) as Record<string, string>;
+			const raw = await this.app.vault.adapter.read(path);
+			const data = JSON.parse(raw) as Record<string, unknown>;
+			// 新格式 {date,at,sig};旧格式是裸签名表(path → "mtime:size")
+			if (data && typeof data === 'object' && data.sig && typeof data.sig === 'object') {
+				return {
+					date: typeof data.date === 'string' ? data.date : '',
+					at: typeof data.at === 'string' ? data.at : '',
+					sig: data.sig as Record<string, string>,
+				};
+			}
+			return { date: '', at: '', sig: data as unknown as Record<string, string> };
 		} catch {
 			return null;
 		}
 	}
 
-	private async saveVaultLogSnapshot(table: Record<string, string>): Promise<void> {
-		await this.app.vault.adapter.write(this.snapshotPath(), JSON.stringify(table));
+	private async loadVaultLogSnapshot(): Promise<VaultLogSnapshotFile | null> {
+		return this.loadSnapshotFile(this.snapshotPath());
+	}
+
+	/** 读今日基线(今天之前最后一次打点的快照);文件不存在返回 null。 */
+	private async loadDayBaseline(): Promise<VaultLogSnapshotFile | null> {
+		return this.loadSnapshotFile(this.dayBaselinePath());
+	}
+
+	/**
+	 * 启动时确定今日基线:
+	 *  - 主快照若是今天之前的(含旧格式 date='')→ 它本身就是「今天之前最后
+	 *    一次打点」的库,直接采用并落盘(今天还没打点也能正确显示今日变化);
+	 *  - 主快照已是今天 → 用今天首次记录时冻结的日基线文件。
+	 */
+	private async resolveStartupDayBaseline(): Promise<VaultLogSnapshotFile | null> {
+		const [snap, saved] = await Promise.all([this.loadVaultLogSnapshot(), this.loadDayBaseline()]);
+		const today = dayKeyOf(new Date());
+		if (snap && snap.date !== today && (!saved || snap.date >= saved.date)) {
+			await this.saveDayBaseline(snap);
+			return snap;
+		}
+		return saved;
+	}
+
+	private async writeSnapshotFile(path: string, snap: VaultLogSnapshotFile): Promise<void> {
+		await this.app.vault.adapter.write(path, JSON.stringify(snap));
+	}
+
+	private async saveVaultLogSnapshot(sig: Record<string, string>, date: string, at: string): Promise<void> {
+		await this.writeSnapshotFile(this.snapshotPath(), { date, at, sig });
+	}
+
+	private async saveDayBaseline(snap: VaultLogSnapshotFile): Promise<void> {
+		await this.writeSnapshotFile(this.dayBaselinePath(), snap);
 	}
 
 	/** HOME 视图刷新(开着就重绘;记录/设置变更后调用)。 */

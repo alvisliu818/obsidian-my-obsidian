@@ -119,6 +119,8 @@ export interface LifeSettings {
 	vaultLog: VaultLogSettings;
 	/** 上次每日自动记录的归属日 yyyy-mm-dd(防同日重复) */
 	vaultLogLastDailyDate: string;
+	/** 上次 0 点自动记录的归属日 yyyy-mm-dd(2026-11-22 用户;防同日重复) */
+	vaultLogLastMidnightDate: string;
 	/** 上次周期记录时刻 epoch ms */
 	vaultLogLastPeriodAt: number;
 	/** 上次每日提醒的归属日 yyyy-mm-dd */
@@ -136,8 +138,8 @@ export interface VaultLogRecord {
 	at: string;
 	/** 归属日 yyyy-mm-dd(HOME 日视图按此聚合) */
 	date: string;
-	/** 触发方式:定时周期 / 每日时间点 / 手动打点 */
-	trigger: 'period' | 'daily' | 'manual';
+	/** 触发方式:定时周期 / 每日时间点 / 0 点 / 退出 Obsidian / 手动打点 */
+	trigger: 'period' | 'daily' | 'midnight' | 'quit' | 'manual';
 	/** 相对上一次记录:新增/修改/删除的库内文件路径(已删除的只有路径) */
 	added: string[];
 	modified: string[];
@@ -169,6 +171,10 @@ export interface VaultLogSettings {
 	diffOpenWith?: 'view' | 'vscode';
 	/** 自动记录总开关(关=只允许手动打点) */
 	enabled: boolean;
+	/** 0 点自动打点(2026-11-22 用户;缺省开。当天首次启动也会补一次) */
+	midnightRecord?: boolean;
+	/** 关闭 Obsidian 时自动打点(2026-11-22 用户;缺省开) */
+	quitRecord?: boolean;
 	/** 每日固定记录时间 HH:mm(''=关) */
 	dailyTime: string;
 	/** 固定周期记录间隔(分钟,0=关) */
@@ -181,11 +187,23 @@ export interface VaultLogSettings {
 
 export const DEFAULT_VAULT_LOG_SETTINGS: VaultLogSettings = {
 	enabled: true,
+	midnightRecord: true,
+	quitRecord: true,
 	dailyTime: '21:00',
 	periodMin: 0,
 	remind: true,
 	remindTime: '',
 };
+
+/** 库快照文件(主快照 + 当日基线共用):记录归属日/时刻 + 签名表。 */
+export interface VaultLogSnapshotFile {
+	/** 记录归属日 yyyy-mm-dd('' = 旧格式/未知) */
+	date: string;
+	/** 记录时刻 ISO('' = 未知) */
+	at: string;
+	/** 路径 → "mtime:size" */
+	sig: Record<string, string>;
+}
 
 export const DEFAULT_LIFE_SETTINGS: LifeSettings = {
 	timerPomodoroWorkMin: 25,
@@ -203,6 +221,7 @@ export const DEFAULT_LIFE_SETTINGS: LifeSettings = {
 	vaultLogRecords: [],
 	vaultLog: DEFAULT_VAULT_LOG_SETTINGS,
 	vaultLogLastDailyDate: '',
+	vaultLogLastMidnightDate: '',
 	vaultLogLastPeriodAt: 0,
 	vaultLogLastRemindDate: '',
 	homeOpenOnStartup: true,

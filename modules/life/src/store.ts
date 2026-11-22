@@ -41,6 +41,8 @@ export function lifeSettingsFrom(raw: unknown): LifeSettings {
 			...(o.vaultLog ?? {}),
 		},
 		vaultLogLastDailyDate: typeof o.vaultLogLastDailyDate === 'string' ? o.vaultLogLastDailyDate : '',
+		vaultLogLastMidnightDate:
+			typeof o.vaultLogLastMidnightDate === 'string' ? o.vaultLogLastMidnightDate : '',
 		vaultLogLastPeriodAt: typeof o.vaultLogLastPeriodAt === 'number' ? o.vaultLogLastPeriodAt : 0,
 		vaultLogLastRemindDate: typeof o.vaultLogLastRemindDate === 'string' ? o.vaultLogLastRemindDate : '',
 		homeOpenOnStartup: o.homeOpenOnStartup !== false,

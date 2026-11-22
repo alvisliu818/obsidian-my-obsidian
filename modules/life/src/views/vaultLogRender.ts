@@ -52,7 +52,17 @@ export function renderRecordSummaryRow(container: HTMLElement, rec: VaultLogReco
 	});
 	row.createSpan({
 		cls: 'life-home-rec-meta',
-		text: `${rec.at.slice(11, 16)} · ${rec.trigger === 'manual' ? '手动' : rec.trigger === 'daily' ? '每日' : '周期'}`,
+		text: `${rec.at.slice(11, 16)} · ${
+			rec.trigger === 'manual'
+				? '手动'
+				: rec.trigger === 'daily'
+					? '每日'
+					: rec.trigger === 'midnight'
+						? '0 点'
+						: rec.trigger === 'quit'
+							? '退出'
+							: '周期'
+		}`,
 	});
 }
 
@@ -121,7 +131,17 @@ export function renderRecordListInto(
 			cls: 'life-home-rec-counts',
 			text: changeSummary(rec, rec.renames?.length ?? 0) + (rec.first ? ' · 基线' : ''),
 		});
-		row.createSpan({ cls: 'life-home-rec-trigger', text: rec.trigger === 'manual' ? '手动' : '自动' });
+		row.createSpan({
+			cls: 'life-home-rec-trigger',
+			text:
+				rec.trigger === 'manual'
+					? '手动'
+					: rec.trigger === 'midnight'
+						? '0 点'
+						: rec.trigger === 'quit'
+							? '退出'
+							: '自动',
+		});
 		row.addEventListener('click', () => handlers.onToggleRecord(rec.id));
 		if (!isExpanded) continue;
 		const detail = container.createDiv({ cls: 'life-home-rec-detail' });
@@ -396,6 +416,12 @@ export function renderVaultLogSettingsInto(
 		});
 	toggleRow('自动记录', vl.enabled, (v) => {
 		vl.enabled = v;
+	});
+	toggleRow('0 点自动打点', vl.midnightRecord !== false, (v) => {
+		vl.midnightRecord = v;
+	});
+	toggleRow('关闭 Obsidian 时自动打点', vl.quitRecord !== false, (v) => {
+		vl.quitRecord = v;
 	});
 	textRow('每日记录时间', vl.dailyTime, '21:00', (v) => {
 		vl.dailyTime = v;

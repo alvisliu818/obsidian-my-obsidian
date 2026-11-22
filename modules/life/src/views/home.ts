@@ -19,8 +19,10 @@ import { VIEW_LIFE_HOME } from './homeTypes';
 import { SnapshotPreviewModal } from './snapshotPreview';
 import { monthGrid, todayKey, formatDuration } from '../util';
 import { normalizeHomeSectionOrder } from '../homeSections';
-import { changeSummary, filterVaultLogRecordsByDate, sortVaultLogRecordsDesc } from '../vaultLog';
+import { changeSummary, filterVaultLogRecordsByDate, sortVaultLogRecordsDesc, scanVaultSig, diffWithRenames } from '../vaultLog';
+import type { VaultLogRecord } from '../types';
 import {
+	renderDiffListsInto,
 	renderRecordListInto,
 	renderRecordSummaryRow,
 	renderVaultLogSettingsInto,
@@ -77,6 +79,8 @@ export class LifeHomeView extends ItemView {
 	/** 目录树收起集(共享渲染层按「记录id::路径」记键) */
 	private collapsedDirs = new Set<string>();
 	private settingsOpen = false;
+	/** 今日库变化(实时 diff)明细是否展开(2026-11-22) */
+	private todayLiveExpanded = false;
 	/** 库记录日期筛选(2026-11-21 用户):yyyy-mm-dd,''=全部;只存视图 UI state,不落盘 */
 	private filterDate = '';
 	/** Git 历史(HOME 区块,2026-11-22 用户):异步缓存 + 展开集 */
@@ -412,22 +416,105 @@ export class LifeHomeView extends ItemView {
 		}
 	}
 
-	/** 今日库变化:今天最新一条记录摘要(没有则提示最近一条/空态)。 */
+	/**
+	 * 今日库变化(2026-11-22 用户语义):现在的库 vs 今天之前最后一次打点的库。
+	 * 基线 = 插件启动时读入的 dayBaseline(昨天最后打点的快照);实时扫描当前
+	 * 库算 diff,不再只显示今天已落盘记录里的数字。没有基线时回落旧行为。
+	 */
 	private renderTodayChangesSection(sec: HTMLElement): void {
-		const s = this.plugin.store.settings;
-		const todayRec = s.vaultLogRecords.find((r) => r.date === todayKey()) ?? null;
-		const latest = s.vaultLogRecords[0] ?? null;
-		sec.createDiv({ cls: 'life-home-sec-title', text: '今日库变化' });
-		if (todayRec) {
-			renderRecordSummaryRow(sec, todayRec);
-		} else if (latest) {
-			sec.createDiv({
-				cls: 'life-home-muted',
-				text: `今天还没有记录。最近一条:${latest.date.slice(5)}(${changeSummary(latest)})`,
-			});
-		} else {
-			sec.createDiv({ cls: 'life-home-muted', text: '还没有任何记录。点「记录库变化」打第一笔。' });
+		const head = sec.createDiv({ cls: 'life-home-sec-head' });
+		head.createDiv({ cls: 'life-home-sec-title', text: '今日库变化' });
+		const btns = head.createDiv({ cls: 'life-home-head-btns' });
+		const refresh = btns.createEl('button', { cls: 'life-home-mode-btn', text: '刷新' });
+		refresh.addEventListener('click', () => this.render());
+
+		const base = this.plugin.dayBaseline;
+		if (!base) {
+			// 没有今日基线(升级后首日/快照缺失):回落显示最近一条记录
+			const s = this.plugin.store.settings;
+			const latest = s.vaultLogRecords[0] ?? null;
+			if (latest) {
+				renderRecordSummaryRow(sec, latest);
+				sec.createDiv({
+					cls: 'life-home-muted',
+					text: `还没有今日基线;上面是最近一条记录(${latest.date.slice(5)})。`,
+				});
+			} else {
+				sec.createDiv({ cls: 'life-home-muted', text: '还没有任何记录。点「记录库变化」打第一笔。' });
+			}
+			return;
 		}
+
+		const cur = scanVaultSig(this.app.vault);
+		const diff = diffWithRenames(base.sig, cur);
+		const total = diff.added.length + diff.modified.length + diff.deleted.length + diff.renames.length;
+		const today = todayKey();
+		const baseLabel = !base.date
+			? '上次打点'
+			: base.date === today
+				? `今天 ${base.at ? base.at.slice(11, 16) : ''} 首次打点`
+				: `${base.date.slice(5)}${base.at ? ' ' + base.at.slice(11, 16) : ''} 最后打点`;
+		const row = sec.createDiv({ cls: 'life-home-rec-summary is-live' });
+		row.createSpan({ cls: 'life-home-rec-counts', text: changeSummary(diff, diff.renames.length) });
+		row.createSpan({ cls: 'life-home-rec-meta', text: `此刻 vs ${baseLabel}` });
+		row.setAttr('title', '现在的库 与 今天之前最后一次打点时的库 对比(点击展开明细)');
+		row.addEventListener('click', () => {
+			this.todayLiveExpanded = !this.todayLiveExpanded;
+			this.render();
+		});
+		if (total === 0) {
+			sec.createDiv({ cls: 'life-home-muted', text: '与基线一致,今天还没有变化。' });
+			return;
+		}
+		if (!this.todayLiveExpanded) return;
+
+		const modeRow = sec.createDiv({ cls: 'life-home-mode-row' });
+		for (const [label, mode] of [
+			['总体', 'overall'],
+			['按文件夹', 'folder'],
+		] as const) {
+			const btn = modeRow.createEl('button', { cls: 'life-home-mode-btn', text: label });
+			if (this.detailMode === mode) btn.addClass('is-active');
+			btn.addEventListener('click', (ev) => {
+				ev.stopPropagation();
+				this.detailMode = mode;
+				this.render();
+			});
+		}
+		const synthetic: VaultLogRecord = {
+			id: 'today-live',
+			at: new Date().toISOString(),
+			date: today,
+			trigger: 'manual',
+			added: diff.added,
+			modified: diff.modified,
+			deleted: diff.deleted,
+			renames: diff.renames,
+			totalFiles: Object.keys(cur).length,
+		};
+		const detail = sec.createDiv({ cls: 'life-home-rec-detail' });
+		renderDiffListsInto(
+			detail,
+			synthetic,
+			this.detailMode,
+			{
+				expandedIds: new Set([synthetic.id]),
+				detailMode: this.detailMode,
+				settingsOpen: false,
+				collapsedDirs: this.collapsedDirs,
+			},
+			{
+				onToggleRecord: () => undefined,
+				onModeChange: (mode) => {
+					this.detailMode = mode;
+					this.render();
+				},
+				onManualRecord: () => void this.plugin.recordVaultChanges('manual'),
+				onOpenFile: (path) => void this.plugin.app.workspace.openLinkText(path, ''),
+				onOpenModified: (path) => void this.plugin.openModifiedFileWithDiff(path),
+				onCompareFile: (path) => void this.plugin.openRecordDiffView(path),
+			},
+		);
 	}
 
 	/** 库记录列表(倒序;日期筛选,与独立库记录面板同款)。 */
