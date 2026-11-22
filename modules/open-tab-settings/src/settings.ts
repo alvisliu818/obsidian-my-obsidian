@@ -51,7 +51,10 @@ export const DEFAULT_SETTINGS: OpenTabSettingsPluginSettings = {
     newTabPlacement: "afterActive",
     newTabTabGroupPlacement: "same",
     modClickBehavior: "tab",
-    tabMinWidth: 0,
+    // 默认 140(2026-11-22):默认 0 时标签收缩永不溢出,滚轮横滚整个功能
+    // 表现为「没效果」,用户实测误以为没部署。140 与 styles.css fallback 一致;
+    // 显式设 0 仍是关闭。
+    tabMinWidth: 140,
     tabWheelScroll: true,
 }
 
