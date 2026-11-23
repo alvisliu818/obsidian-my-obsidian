@@ -1,7 +1,7 @@
 {
   "id": "obsidian-my-obsidian",
   "name": "My Obsidian (Mobile)",
-  "version": "0.2.11-mobile",
+  "version": "0.2.12-mobile",
   "minAppVersion": "1.5.0",
   "description": "Mobile build of My Obsidian: desktop-only modules are skipped at boot; surviving modules keep their own settings switches.",
   "author": "alvisliu",
