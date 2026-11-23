@@ -1,0 +1,22 @@
+# pnpm 设置（2026-11-23 从 yarn PnP 迁移）。
+# pnpm 12 的设置新家是本文件（package.json 的 pnpm 字段已废弃）。
+#
+# xlsx 以 CDN URL 形式出现在子依赖里（SheetJS 不发布 npm registry）——
+# root dependencies 已直连 xlsx@0.18.5，此处 overrides 统一压版；
+# blockExoticSubdeps 关闭以对齐 yarn 行为（否则安装直接失败）。
+blockExoticSubdeps: false
+overrides:
+  xlsx: ^0.18.5
+
+# 依赖构建脚本白名单（pnpm 12 默认全部拦截；yarn 时代 enableScripts: true 全跑，
+# 迁移按原行为放行——2026-11-23 install 报错清单全量收录）。
+allowBuilds:
+  '@google/genai': true
+  '@parcel/watcher': true
+  better-sqlite3: true
+  core-js-pure: true
+  esbuild: true
+  node-pty: true
+  protobufjs: true
+  svelte-preprocess: true
+  tesseract.js: true

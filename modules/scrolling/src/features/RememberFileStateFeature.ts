@@ -859,7 +859,12 @@ export class RememberFileStateFeature implements Feature {
     private isFileOpenedInSplit(leaf: WorkspaceLeaf): boolean {
         if (!(leaf.view instanceof FileView)) return false;
 
-        for (let sibling of leaf.parentSplit.children) {
+        // parentSplit 在 obsidian 1.14.4 类型里是 Split | null（pnpm 迁移后首次
+        // 全量检查暴露，2026-11-23）：分屏根/独立窗口的 leaf 可为 null——守卫。
+        const parentSplit = leaf.parentSplit;
+        if (!parentSplit) return false;
+
+        for (let sibling of parentSplit.children) {
             if (
                 !(sibling instanceof WorkspaceLeaf) ||
                 !(sibling.view instanceof FileView) ||

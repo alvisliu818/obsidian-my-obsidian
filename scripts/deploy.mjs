@@ -143,17 +143,12 @@ if (!only) {
 // 同目录的 typeshed-fallback(lspHost 的 resolvePyrightLaunch 优先用它)。
 // 36MB,和 pty-helper 一样不进 git。
 if (!only) {
-	// PnP:依赖躺在全局 cache 的 zip 里,必须 unplugged(见 package.json
-	// dependenciesMeta)才能整目录复制;没有 PnP 时回落到老 node_modules 布局。
+	// pnpm（2026-11-23 迁移）：basedpyright 是直连依赖，node_modules 常规解析
+	// 即可（require.resolve 返回 .pnpm 真实目录，整目录复制照旧）。
 	let basedpyrightDir;
 	try {
-		const pnpFile = path.join(ROOT, ".pnp.cjs");
-		if (existsSync(pnpFile)) {
-			createRequire(import.meta.url)(pnpFile).setup();
-			createRequire(path.join(ROOT, "package.json")).resolve("basedpyright/package.json");
-		}
 		basedpyrightDir = path.dirname(
-			createRequire(path.join(ROOT, "index.js")).resolve("basedpyright/package.json"),
+			createRequire(path.join(ROOT, "package.json")).resolve("basedpyright/package.json"),
 		);
 	} catch {
 		basedpyrightDir = path.join(ROOT, "node_modules", "basedpyright");
@@ -301,17 +296,13 @@ if (!only) {
 				: "tray_linux_release";
 	let trayBinSrc = null;
 	try {
-		// PnP 解析（basedpyright 块同款机制）——unplugged 目录在全局 cache
-		const requirePnp = createRequire(path.join(ROOT, "index.js"));
-		trayBinSrc = path.join(path.dirname(requirePnp.resolve("systray2/package.json")), "traybin", binName);
-	} catch { /* PnP 不可用,fallback 到全局目录 glob */ }
-	if (!trayBinSrc || !existsSync(trayBinSrc)) {
-		try {
-			const upRoot = "E:/HOME/Code/.yarn-global/unplugged";
-			const dir = readdirSync(upRoot).find((d) => d.startsWith("systray2-npm-"));
-			if (dir) trayBinSrc = path.join(upRoot, dir, "node_modules", "systray2", "traybin", binName);
-		} catch { /* 找不到就报缺 */ }
-	}
+		// pnpm（2026-11-23 迁移）：直连依赖 node_modules/systray2 常规解析。
+		trayBinSrc = path.join(
+			path.dirname(createRequire(path.join(ROOT, "package.json")).resolve("systray2/package.json")),
+			"traybin",
+			binName,
+		);
+	} catch { /* 解析不到就报缺 */ }
 	// 复制守则（2026-11-05 实测）：换血钩子停旧内核后,运行中 Obsidian 的客户端
 	// 会在 ~1s 内 respawn 新内核+helper 并**重新锁住 exe**——直接 copyFileSync
 	// 会 EBUSY 且炸掉整个部署。守则：内容相同即跳过（二进制基本不变）+ EBUSY
@@ -347,7 +338,7 @@ if (!only) {
 		mkdirSync(path.join(TARGET, "traybin"), { recursive: true });
 		copyExeSafe(trayBinSrc, path.join(TARGET, "traybin", binName), `traybin/${binName}`);
 	} else {
-		console.warn("  ! systray2 托盘二进制未找到（托盘不可用,内核无头继续）——先 yarn add systray2");
+		console.warn("  ! systray2 托盘二进制未找到（托盘不可用,内核无头继续）——先 pnpm add systray2");
 	}
 	// 托盘图标（R2c）:kernelTray.ts 从 <bundle 目录>/assets/kernel.ico 读——
 	// 漏了它托盘静默禁用（icon missing → null,2026-11-05 实测教训）。
@@ -371,30 +362,14 @@ if (wanted("lazy")) {
 }
 
 if (!only) {
-	// PnP 迁移后 unplugged 在全局 cache（.yarnrc.yml pnpUnpluggedFolder），仓库内
-	// .yarn/unplugged 已不存在——用 createRequire 解析（basedpyright/systray2 同款），
-	// 失败再试旧路径与新全局路径。
+	// pnpm（2026-11-23 迁移）：better-sqlite3 直连依赖，node_modules 常规解析
+	//（require.resolve 返回 .pnpm 真实目录），旧 unplugged 目录猜测整段删除。
 	let bs3Dir = null;
 	try {
-		const pnpFile = path.join(ROOT, ".pnp.cjs");
-		if (existsSync(pnpFile)) {
-			createRequire(import.meta.url)(pnpFile).setup();
-		}
 		bs3Dir = path.dirname(
-			createRequire(path.join(ROOT, "index.js")).resolve("better-sqlite3/package.json"),
+			createRequire(path.join(ROOT, "package.json")).resolve("better-sqlite3/package.json"),
 		);
-	} catch { /* PnP resolve 失败,走目录猜测 */ }
-	if (!bs3Dir || !existsSync(bs3Dir)) {
-		for (const up of [path.join(ROOT, ".yarn", "unplugged"), "E:/HOME/Code/.yarn-global/unplugged"]) {
-			try {
-				const hit = readdirSync(up).find((d) => d.startsWith("better-sqlite3-npm-"));
-				if (hit) {
-					bs3Dir = path.join(up, hit, "node_modules", "better-sqlite3");
-					break;
-				}
-			} catch { /* 目录不存在 */ }
-		}
-	}
+	} catch { /* 依赖缺失,走目录猜测 */ }
 	if (bs3Dir && existsSync(bs3Dir)) {
 	const src = bs3Dir;
 	const dst = path.join(TARGET, "node_modules", "better-sqlite3");
@@ -460,51 +435,38 @@ if (!only) {
 			console.warn(`  ! better-sqlite3 边车复制失败(内核锁着旧 .node,本次沿用旧边车,稍后重跑部署收敛): ${e?.message || e}`);
 		}
 	}
-	// better-sqlite3 的运行时依赖 bindings(定位 .node)——纯 JS,住在全局
-	// cache zip 里(不 unplugged),解包到边车 node_modules。
-	// 2026-11-22:globalFolder 迁到 E:/HOME/Runtime/.yarn-global(.yarnrc.yml),
-	// 旧路径一并尝试——两处谁存在用谁。
-	const cacheDir = [
-		path.join(ROOT, "..", "..", "..", "Runtime", ".yarn-global", "cache"),
-		path.join(ROOT, "..", "..", ".yarn-global", "cache"),
-	].find((d) => existsSync(d));
-	const bindingsZip = cacheDir
-		? (readdirSync(cacheDir).find((d) => d.startsWith("bindings-npm-") && d.endsWith(".zip")) ?? null)
-		: null;
-	if (bindingsZip) {
+	// better-sqlite3 的运行时依赖 bindings(定位 .node)与 file-uri-to-path——
+	// pnpm（2026-11-23 迁移）：从 better-sqlite3 自己的 package.json 解析
+	//（.pnpm 虚拟 store 内互查），不再读 yarn cache zip。
+	let bindingsDir = null;
+	try {
+		bindingsDir = path.dirname(
+			createRequire(path.join(src, "package.json")).resolve("bindings/package.json"),
+		);
+	} catch { /* 解析不到=未安装 */ }
+	if (bindingsDir && existsSync(bindingsDir)) {
 		const bDst = path.join(TARGET, "node_modules", "bindings");
-		const tmp = path.join(TARGET, "node_modules", ".bindings-tmp");
 		rmSync(bDst, { recursive: true, force: true });
-		rmSync(tmp, { recursive: true, force: true });
-		// yarn cache zip 内部是 node_modules/<pkg>/ 布局
-		execSync(
-			`powershell -NoProfile -Command "Expand-Archive -Force -Path '${path.join(cacheDir, bindingsZip)}' -DestinationPath '${tmp}'"`,
-			{ stdio: "ignore" },
-		);
-		cpSync(path.join(tmp, "node_modules", "bindings"), bDst, { recursive: true });
-		rmSync(tmp, { recursive: true, force: true });
-		// bindings 的运行时依赖 file-uri-to-path(纯 JS,同住 cache zip)
-		const f2pZip = readdirSync(cacheDir).find(
-			(d) => d.startsWith("file-uri-to-path-npm-") && d.endsWith(".zip"),
-		);
-		if (f2pZip) {
-			const fDst = path.join(TARGET, "node_modules", "file-uri-to-path");
-			const fTmp = path.join(TARGET, "node_modules", ".f2p-tmp");
-			rmSync(fDst, { recursive: true, force: true });
-			rmSync(fTmp, { recursive: true, force: true });
-			execSync(
-				`powershell -NoProfile -Command "Expand-Archive -Force -Path '${path.join(cacheDir, f2pZip)}' -DestinationPath '${fTmp}'"`,
-				{ stdio: "ignore" },
+		cpSync(bindingsDir, bDst, { recursive: true });
+		// bindings 的运行时依赖 file-uri-to-path(纯 JS)——从 bindings 自己的
+		// package.json 解析（.pnpm 内互查）。
+		let f2pDir = null;
+		try {
+			f2pDir = path.dirname(
+				createRequire(path.join(bindingsDir, "package.json")).resolve("file-uri-to-path/package.json"),
 			);
-			cpSync(path.join(fTmp, "node_modules", "file-uri-to-path"), fDst, { recursive: true });
-			rmSync(fTmp, { recursive: true, force: true });
+		} catch { /* 找不到就报缺 */ }
+		if (f2pDir && existsSync(f2pDir)) {
+			const fDst = path.join(TARGET, "node_modules", "file-uri-to-path");
+			rmSync(fDst, { recursive: true, force: true });
+			cpSync(f2pDir, fDst, { recursive: true });
 		}
 		console.log("  node_modules/better-sqlite3 + bindings  (FTS5)");
 	} else {
 		console.warn("  ! bindings 未找到(better-sqlite3 运行时定位 .node 需要)");
 	}
 	} else {
-		console.warn("  ! better-sqlite3 未 unplugged(守护进程将回落 node:sqlite,无 FTS5)");
+		console.warn("  ! better-sqlite3 未安装(守护进程将回落 node:sqlite,无 FTS5)");
 	}
 }
 

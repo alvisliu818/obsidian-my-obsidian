@@ -56,7 +56,7 @@ const t0 = Date.now();
 const iconsOut = `${ROOT}/modules/material-icon-theme/src/icon-data.ts`;
 const iconsScript = `${ROOT}/modules/material-icon-theme/scripts/build-icons.mjs`;
 const iconsPkg = `${ROOT}/modules/material-icon-theme/package.json`;
-let iconsCmd = 'yarn build:icons';
+let iconsCmd = 'node modules/material-icon-theme/scripts/build-icons.mjs';
 try {
 	const { statSync } = await import('node:fs');
 	const outM = statSync(iconsOut).mtimeMs;
@@ -71,8 +71,8 @@ try {
 } catch { /* 文件缺失则不跳过 */ }
 
 const [tscCode, esbCode] = await Promise.all([
-	run('tsc', 'yarn tsc -noEmit -skipLibCheck -incremental -tsBuildInfoFile .cache/tsc-noemit.tsbuildinfo'),
-	run('esb', `${iconsCmd} && yarn node esbuild.mjs production`),
+	run('tsc', 'node node_modules/typescript/lib/tsc.js -noEmit -skipLibCheck -incremental -tsBuildInfoFile .cache/tsc-noemit.tsbuildinfo'),
+	run('esb', `${iconsCmd} && node esbuild.mjs production`),
 ]);
 const total = ((Date.now() - t0) / 1000).toFixed(1);
 if (tscCode !== 0 || esbCode !== 0) {
