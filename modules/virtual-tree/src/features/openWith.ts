@@ -240,3 +240,25 @@ export function addOpenWithMenuItems(
 ): void {
   addOpenWithMenuItemsAt(absolutePath(app, file), menu, apps);
 }
+
+// ---------------------------------------------------------------------------
+// 「打开方式」子菜单的过滤语义（siyuan-virtual-tree open-with 同款，2026-11-23
+// 用户需求：挂载项右键菜单的各种打开方式 + 可配置）。
+// ---------------------------------------------------------------------------
+
+/** 小写无点扩展名（无扩展名 → ''）。 */
+export function extOfName(name: string): string {
+  const i = name.lastIndexOf('.');
+  return i >= 0 ? name.slice(i + 1).toLowerCase() : '';
+}
+
+/**
+ * 自定义打开方式与当前条目是否匹配（siyuan openWithMatches 同语义）：
+ * 目录只认 forDirs；文件看 extensions 白名单（空/缺省 = 所有文件），
+ * 仅 forDirs 的项（无扩展名白名单）不匹配文件。
+ */
+export function openWithMatches(app: OpenWithApp, isDir: boolean, ext: string): boolean {
+  if (isDir) return app.forDirs === true;
+  if (app.extensions && app.extensions.length > 0) return app.extensions.includes(ext);
+  return app.forDirs !== true;
+}

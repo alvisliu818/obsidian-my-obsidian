@@ -58,6 +58,31 @@ export class OpenWithEditModal extends Modal {
         }),
       );
 
+    new Setting(contentEl)
+      .setName('扩展名')
+      .setDesc('逗号分隔（如 md,txt,py），留空 = 所有文件都显示。')
+      .addText((t) =>
+        t
+          .setPlaceholder('留空 = 所有文件')
+          .setValue((this.draft.extensions ?? []).join(', '))
+          .onChange((v) => {
+            const list = v
+              .split(/[,，\s]+/)
+              .map((x) => x.trim().toLowerCase().replace(/^\./, ''))
+              .filter(Boolean);
+            this.draft.extensions = list.length ? list : undefined;
+          }),
+      );
+
+    new Setting(contentEl)
+      .setName('文件夹也显示')
+      .setDesc('目录右键菜单里也出现（适合资源管理器/终端类命令）。')
+      .addToggle((t) =>
+        t.setValue(this.draft.forDirs === true).onChange((v) => {
+          this.draft.forDirs = v;
+        }),
+      );
+
     new Setting(contentEl).setName('启用').addToggle((t) =>
       t.setValue(this.draft.enabled).onChange((v) => {
         this.draft.enabled = v;

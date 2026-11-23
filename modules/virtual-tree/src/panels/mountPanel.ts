@@ -80,6 +80,7 @@ import {
   type MountNode,
 } from '../features/mountFilter';
 import { runOpeners, type OpenerCtx } from '../openers';
+import { extOfName, openWithAppAt, openWithMatches, revealAbs } from '../features/openWith';
 import {
   MOUNT_FOLDER,
   createEmptyFile,
@@ -2026,6 +2027,15 @@ export class MountPanelView extends ItemView {
             else void this.openVaultNode(mount, node);
           }),
       );
+      // 「打开方式」子菜单（siyuan-virtual-tree 同范式，可配置见设置页）。
+      this.addOpenWithSubmenu(menu, {
+        abs: this.vaultAbsPath(vaultJoinPath(mount, node.rel)),
+        name: node.name,
+        isDir: node.isDir,
+        route: 'vault',
+        mount,
+        node,
+      });
       menu.addSeparator();
       this.addVaultFileMenuItems(menu, mount, node);
       // 收藏(思源 favorites 对齐)
@@ -2057,6 +2067,15 @@ export class MountPanelView extends ItemView {
     } else {
       // 挂载根：新建落在挂载根目录（重命名/删除归「编辑这个挂载…/卸载」管）。
       this.addVaultFileMenuItems(menu, mount, null);
+      // 挂载根 = 目录：打开方式里给文件管理器 + forDirs 自定义项。
+      this.addOpenWithSubmenu(menu, {
+        abs: this.vaultAbsPath(mount.path),
+        name: mountDisplayName(mount),
+        isDir: true,
+        route: 'vault',
+        mount,
+        node: null,
+      });
       menu.addItem((item) =>
         item.setTitle('在此目录搜索').setIcon('search' as never).onClick(() => this.openSearchInDir(mount, '')),
       );
@@ -2193,6 +2212,111 @@ export class MountPanelView extends ItemView {
   }
 
   /** vault 版文件操作入口（新建/新建笔记/重命名/删除），走 vault API。 */
+  /**
+   * 「打开方式」子菜单（siyuan-virtual-tree file-tree 同范式，2026-11-23 用户
+   * 需求：挂载项的各种打开方式收进右键菜单、自定义项可配置）。
+   *
+   * route='vault'：应用内备选路由（默认路由 / md 的块编辑器与原生显式项）
+   *   + 系统默认 + 文件管理器 + 自定义项；route='external'：库外文件的应用内
+   *   主路由已是顶层菜单项，子菜单只补系统默认/文件管理器/自定义项。
+   * 自定义项来自 settings.openWithApps（启用 + 扩展名/目录过滤，见
+   * openWithMatches）。remote 挂载不接（无磁盘路径，系统/自定义必败，
+   * siyuan 对虚拟路径同款跳过）。
+   */
+  private addOpenWithSubmenu(
+    menu: Menu,
+    opts: { abs: string; name: string; isDir: boolean; route: 'vault' | 'external'; mount: ExternalMount; node: MountNode | null },
+  ): void {
+    const { abs, name, isDir, route, mount, node } = opts;
+    if (!abs) return;
+    const ext = extOfName(name);
+    menu.addItem((item) => {
+      item.setTitle('打开方式').setIcon('external-link' as never);
+      const sub = item.setSubmenu();
+      // —— 应用内备选路由（vault：md 的双编辑器决策 + 默认路由）——
+      if (route === 'vault' && !isDir && node) {
+        const vaultPath = vaultJoinPath(mount, node.rel);
+        const af = this.app.vault.getAbstractFileByPath(vaultPath);
+        if (af instanceof TFile) {
+          sub.addItem((si) =>
+            si.setTitle('在 Obsidian 中打开（默认路由）').setIcon('file-text' as never).onClick(() => {
+              void this.openVaultNode(mount, node);
+            }),
+          );
+          if (isMarkdownFile(name)) {
+            const logseq = this.hostModule('md-editor') as
+              | {
+                  openVaultMarkdownDefault?: (
+                    leaf: WorkspaceLeaf,
+                    file: TFile,
+                    defaultChoice: 'native' | 'logseq',
+                  ) => Promise<void>;
+                }
+              | undefined;
+            if (typeof logseq?.openVaultMarkdownDefault === 'function') {
+              sub.addItem((si) =>
+                si.setTitle('在块编辑器中打开').setIcon('file-text' as never).onClick(() => {
+                  const leaf = this.app.workspace.getLeaf('tab');
+                  void logseq.openVaultMarkdownDefault!(leaf, af, 'logseq');
+                }),
+              );
+              sub.addItem((si) =>
+                si.setTitle('用原生编辑器打开').setIcon('app-window' as never).onClick(() => {
+                  const leaf = this.app.workspace.getLeaf('tab');
+                  void leaf.openFile(af);
+                }),
+              );
+            }
+          }
+        }
+      }
+      // —— 系统与文件管理器 ——
+      if (!isDir) {
+        sub.addItem((si) =>
+          si.setTitle('用系统默认应用打开').setIcon('arrow-up-right' as never).onClick(() => {
+            this.plugin.openWithSystem(abs);
+          }),
+        );
+      }
+      sub.addItem((si) =>
+        si.setTitle('在文件管理器中显示').setIcon('folder-open' as never).onClick(() => {
+          revealAbs(abs);
+        }),
+      );
+      // —— 自定义打开方式（可配置；扩展名/目录过滤）——
+      const customs = (this.plugin.settings.openWithApps ?? []).filter(
+        (a) => a.enabled && openWithMatches(a, isDir, ext),
+      );
+      if (customs.length > 0) {
+        sub.addSeparator();
+        for (const a of customs) {
+          sub.addItem((si) =>
+            si.setTitle(`用 ${a.name} 打开`).setIcon('external-link' as never).onClick(() => {
+              void openWithAppAt(abs, a);
+            }),
+          );
+        }
+      }
+    });
+  }
+
+  /** 库内相对路径 → 磁盘绝对路径（vault.adapter basePath + 分隔符归一）。 */
+  private vaultAbsPath(vaultPath: string): string {
+    const adapter = this.app.vault.adapter as unknown as {
+      getBasePath?: () => string;
+      basePath?: string;
+    };
+    let base = '';
+    try {
+      base = typeof adapter?.getBasePath === 'function' ? adapter.getBasePath() : adapter?.basePath || '';
+    } catch {
+      base = '';
+    }
+    if (!base) return '';
+    const sep = base.includes('\\') ? '\\' : '/';
+    return `${base.replace(/[\\/]+$/, '')}${sep}${vaultPath.split('/').join(sep)}`;
+  }
+
   private addVaultFileMenuItems(menu: Menu, mount: ExternalMount, node: MountNode | null): void {
     const dirRel = node?.isDir ? node.rel : node ? parentRelOf(node.rel) : '';
     menu.addItem((item) =>
@@ -2460,6 +2584,16 @@ export class MountPanelView extends ItemView {
               .onClick(() => void this.plugin.openExternalInNativeEditor(node)),
           );
         }
+        // 「打开方式」子菜单：系统默认/文件管理器/自定义项（应用内主路由已在
+        // 上面的顶层项里，不重复堆叠）。
+        this.addOpenWithSubmenu(menu, {
+          abs: node.abs,
+          name: node.name,
+          isDir: node.isDir,
+          route: 'external',
+          mount,
+          node,
+        });
         menu.addSeparator();
 
         // ---- the link-into-vault action (hideable via 设置 → 外部挂载) ----
@@ -2605,6 +2739,15 @@ export class MountPanelView extends ItemView {
       } else {
         // Mount header: directory-level ops land on the mount ROOT, matching
         // how the SiYuan file tree exposes 新建 on the tree root.
+        // 「打开方式」子菜单（目录）：文件管理器 + forDirs 自定义项。
+        this.addOpenWithSubmenu(menu, {
+          abs: mount.path,
+          name: mountDisplayName(mount),
+          isDir: true,
+          route: 'external',
+          mount,
+          node: null,
+        });
         this.addTreeFileMenuItems(menu, mount, null);
         menu.addItem((item) =>
           item.setTitle('在此目录搜索').setIcon('search' as never).onClick(() => this.openSearchInDir(mount, '')),

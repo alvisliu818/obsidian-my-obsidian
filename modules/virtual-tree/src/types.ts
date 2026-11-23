@@ -274,6 +274,10 @@ export interface OpenWithApp {
   args: string;
   /** Hide without deleting. */
   enabled: boolean;
+  /** 适用扩展名（小写、无点，如 ['md','txt']）；空/缺省 = 所有文件。 */
+  extensions?: string[];
+  /** 目录行也显示（配合资源管理器/终端类命令）。 */
+  forDirs?: boolean;
 }
 
 /** Drop malformed entries — `data.json` is user-editable. */
@@ -282,12 +286,21 @@ export function openWithAppFrom(raw: unknown): OpenWithApp | null {
   const a = raw as Partial<OpenWithApp>;
   if (typeof a.id !== 'string' || !a.id.trim()) return null;
   if (typeof a.command !== 'string' || !a.command.trim()) return null;
+  const extensions =
+    Array.isArray(a.extensions)
+      ? a.extensions
+          .filter((x): x is string => typeof x === 'string')
+          .map((x) => x.trim().toLowerCase().replace(/^\./, ''))
+          .filter(Boolean)
+      : undefined;
   return {
     id: a.id.trim(),
     name: typeof a.name === 'string' && a.name.trim() ? a.name.trim() : a.id.trim(),
     command: a.command.trim(),
     args: typeof a.args === 'string' ? a.args : '%1',
     enabled: a.enabled !== false,
+    ...(extensions && extensions.length ? { extensions } : {}),
+    ...(a.forDirs === true ? { forDirs: true } : {}),
   };
 }
 

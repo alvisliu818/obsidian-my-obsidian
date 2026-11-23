@@ -682,7 +682,12 @@ export class VirtualTreeSettingTab extends PluginSettingTab {
     for (const a of apps) {
       new Setting(containerEl)
         .setName(a.name)
-        .setDesc(`${a.command} ${a.args}${a.enabled ? '' : '（已停用）'}`)
+        .setDesc(
+          `${a.command} ${a.args}` +
+            (a.extensions && a.extensions.length ? ` · 扩展名: ${a.extensions.join(', ')}` : ' · 所有文件') +
+            (a.forDirs ? ' · 含文件夹' : '') +
+            (a.enabled ? '' : '（已停用）'),
+        )
         .addExtraButton((b) =>
           b
             .setIcon('settings')
