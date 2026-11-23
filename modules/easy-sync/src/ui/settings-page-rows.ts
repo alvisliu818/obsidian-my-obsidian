@@ -284,6 +284,12 @@ function applyPathPatternFilterRow(
 ): void {
   const { plugin, t } = host;
 
+  // update() 重跑渲染回调但不重建行节点：先复位控件槽，且 setDesc() 必须
+  // 早于 ensureDescSlot()——setDesc(string) 会 empty(descEl)，若在其后
+  // 调用会把刚建好的 chips 容器从 DOM 抹掉，renderChips() 就写进游离
+  // 节点，界面上一条都不显示（添加后不反显）。
+  setting.controlEl.empty();
+  setting.setDesc(t(options.descKey));
   const chipHost = ensureDescSlot(setting, "easy-sync-exclusion-chips-host");
   const renderChips = (): void => {
     const current = options.getCurrent(plugin);
@@ -343,7 +349,6 @@ function applyPathPatternFilterRow(
   };
 
   setting
-    .setDesc(t(options.descKey))
     .addText((text) => {
       inputRef = text;
       text.setPlaceholder(t(options.addPlaceholderKey));
