@@ -68,6 +68,12 @@ export let settings: AIImageAnalyzerPluginSettings = Object.assign(
  */
 export async function loadSettings(plugin: AIImageAnalyzerPlugin) {
 	settings = Object.assign({}, DEFAULT_SETTINGS, await plugin.loadData());
+	// 旧 data.json 缺少后加的适配器字段（如 llmHubSettings）——补齐适配器层默认值
+	settings.aiAdapterSettings = Object.assign(
+		{},
+		AI_ADAPTER_DEFAULT_SETTINGS,
+		settings.aiAdapterSettings,
+	);
 	settings.indexMode === "colocated"
 }
 

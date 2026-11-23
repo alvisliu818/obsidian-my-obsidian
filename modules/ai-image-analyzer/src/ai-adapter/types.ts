@@ -25,7 +25,7 @@ export type Models = {
  * 支持的 AI 提供者类型
  * 添加新提供者时需在此处扩展
  */
-export type Providers = "ollama" | "gemini";
+export type Providers = "ollama" | "gemini" | "llm-hub";
 
 /** 所有支持的 AI 提供者名称列表 */
-export const providerNames: Providers[] = ["ollama", "gemini"];
+export const providerNames: Providers[] = ["ollama", "gemini", "llm-hub"];

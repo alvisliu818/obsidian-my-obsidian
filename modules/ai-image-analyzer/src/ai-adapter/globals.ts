@@ -123,6 +123,20 @@ export const possibleModels: Models[] = [
 		imageReady: true,
 		provider: "ollama",
 	},
+	// LLM Hub 占位（2026-11-23 收编）：连接 LLM Hub 后由 llmHubProvider 用
+	// listModels() 动态填充真实模型；model 为空表示尚未选择真实模型。
+	{
+		name: "LLM Hub models (connect to load)",
+		model: "",
+		imageReady: true,
+		provider: "llm-hub",
+	},
+	{
+		name: "LLM Hub models (connect to load)",
+		model: "",
+		imageReady: false,
+		provider: "llm-hub",
+	},
 ];
 
 /** 设置变更的取消订阅函数，用于插件卸载时清理 */

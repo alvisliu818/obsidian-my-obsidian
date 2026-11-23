@@ -23,6 +23,10 @@ import {
 	DEFAULT_GEMINI_SETTINGS,
 	GeminiSettings,
 } from "./providers/geminiProvider";
+import {
+	DEFAULT_LLM_HUB_SETTINGS,
+	LlmHubSettings,
+} from "./providers/llmHubProvider";
 import AIImageAnalyzerPlugin from "../main";
 import { saveSettings, settings } from "../settings";
 
@@ -40,6 +44,8 @@ export type AIAdapterPluginSettings = {
 	ollamaSettings: OllamaSettings;
 	/** Gemini 提供者的配置 */
 	geminiSettings: GeminiSettings;
+	/** LLM Hub 提供者的配置 */
+	llmHubSettings: LlmHubSettings;
 };
 
 /** AI 适配器设置的默认值 */
@@ -49,6 +55,14 @@ export const DEFAULT_SETTINGS: AIAdapterPluginSettings = {
 	selectedImageModel: possibleModels[0],
 	ollamaSettings: DEFAULT_OLLAMA_SETTINGS,
 	geminiSettings: DEFAULT_GEMINI_SETTINGS,
+	llmHubSettings: DEFAULT_LLM_HUB_SETTINGS,
+};
+
+/** 提供者在设置下拉框里的显示名 */
+const PROVIDER_LABELS: Record<Providers, string> = {
+	ollama: "Ollama",
+	gemini: "Gemini",
+	"llm-hub": "LLM Hub",
 };
 
 /**
@@ -71,7 +85,7 @@ export function generateSettings(
 				.addOptions(
 					providerNames.reduce(
 						(acc, provider) => {
-							acc[provider] = provider;
+							acc[provider] = PROVIDER_LABELS[provider];
 							return acc;
 						},
 						{} as Record<Providers, string>,

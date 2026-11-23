@@ -9,6 +9,7 @@ import { settings } from "../settings";
 import { Provider } from "./provider";
 import { OllamaProvider } from "./providers/ollamaProvider";
 import { GeminiProvider } from "./providers/geminiProvider";
+import { LlmHubProvider } from "./providers/llmHubProvider";
 import { provider } from "./globals";
 import { Notice } from "obsidian";
 import { debugLog } from "../util";
@@ -31,6 +32,9 @@ export function initProvider(): Provider {
 		}
 		case "gemini": {
 			return new GeminiProvider();
+		}
+		case "llm-hub": {
+			return new LlmHubProvider();
 		}
 	}
 }
