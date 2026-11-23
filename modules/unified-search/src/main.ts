@@ -141,7 +141,11 @@ export class UnifiedSearchPlugin extends Plugin {
 		const host = (
 			this.app as unknown as { plugins?: { plugins?: Record<string, { live?: Map<string, unknown> }> } }
 		).plugins?.plugins?.["obsidian-my-obsidian"];
-		const lg = host?.live?.get("logseq") as { daemonIndex?: BlockIndexDaemonClient | null } | undefined;
+		// 2026-11-23 实测修复：md-editor 模块 2026-11-07 由 logseq 改名后，live
+		// 键同步改成了 md-editor（宿主 startModule 按 descriptor id 注册），这里
+		// 还在读旧键 logseq → 恒为 null → daemon-only 模式搜索一直零本地结果。
+		// 改读新键，与宿主 moduleInstance('md-editor') 同一入口。
+		const lg = host?.live?.get("md-editor") as { daemonIndex?: BlockIndexDaemonClient | null } | undefined;
 		return lg?.daemonIndex ?? null;
 	}
 }
