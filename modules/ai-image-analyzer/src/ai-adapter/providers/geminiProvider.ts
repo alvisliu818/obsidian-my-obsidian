@@ -51,9 +51,9 @@ export class GeminiProvider extends Provider {
 		this.lastImageModel =
 			settings.aiAdapterSettings.geminiSettings.lastImageModel;
 		GeminiProvider.restartSession();
-		this.checkGemini().then((success) => {
-			debugLog(context, "Gemini check success: " + success);
-		});
+		// 收编适配（2026-11-23）：构造期不再探活（同 ollamaProvider——聚合默认
+		// provider 是 ollama，gemini 构造期探活在未配 key 时也是空发请求）。
+		// 探活移到 generateSettings（静默失败）与 API key 变更（保留提示）。
 	}
 
 	/**
@@ -61,6 +61,8 @@ export class GeminiProvider extends Provider {
 	 * 包括 API 密钥配置
 	 */
 	generateSettings(containerEl: HTMLElement, plugin: AIImageAnalyzerPlugin) {
+		// 打开设置页时补一次探活（静默失败）：模型列表在这里才有消费方。
+		void this.checkGemini(false);
 		new Setting(containerEl).setName("Gemini").setHeading();
 
 		// API 密钥输入
@@ -173,7 +175,7 @@ export class GeminiProvider extends Provider {
 	 * 遍历所有支持 generateContent 的模型，同时注册为文本模型和图片分析模型
 	 * @returns 连接是否成功
 	 */
-	private async checkGemini() {
+	private async checkGemini(notify = true) {
 		try {
 			let updated = false;
 
@@ -232,10 +234,12 @@ export class GeminiProvider extends Provider {
 			return true;
 		} catch (e) {
 			debugLog(context, e);
-			new Notice(
-				"Error connecting to gemini API. Please check your gemini API key.",
-			);
-			new Notice(String(e));
+			if (notify) {
+				new Notice(
+					"Error connecting to gemini API. Please check your gemini API key.",
+				);
+				new Notice(String(e));
+			}
 			return false;
 		}
 	}

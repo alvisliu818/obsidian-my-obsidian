@@ -64,9 +64,11 @@ export class OllamaProvider extends Provider {
 		this.lastImageModel =
 			settings.aiAdapterSettings.ollamaSettings.lastImageModel;
 		OllamaProvider.refreshInstance();
-		this.checkOllama().then((success) => {
-			debugLog(context, "Ollama check success: " + success);
-		});
+		// 收编适配（2026-11-23）：构造期不再探活——聚合环境默认 provider 就是
+		// ollama，没跑 Ollama 的机器每次启动都吃两条 Notice + 控制台
+		// GET /api/tags ERR_CONNECTION_REFUSED（用户实测）。探活移到
+		// generateSettings（打开 AI 设置页，静默失败）与 URL/备用 URL 变更
+		// （显式动作，保留提示）；查询不经探活，ollama 客户端直连模型。
 	}
 
 	/**
@@ -74,6 +76,8 @@ export class OllamaProvider extends Provider {
 	 * 包括模型拉取按钮、URL 配置、备用 URL 和认证令牌
 	 */
 	generateSettings(containerEl: HTMLElement, plugin: AIImageAnalyzerPlugin) {
+		// 打开设置页时补一次探活（静默失败）：自定义模型列表在这里才有消费方。
+		void this.checkOllama(false);
 		new Setting(containerEl).setName("Ollama").setHeading();
 
 		// 模型拉取按钮
@@ -193,7 +197,7 @@ export class OllamaProvider extends Provider {
 	 * 如果主 URL 不可用且配置了备用 URL，自动切换到备用 URL
 	 * @returns 连接是否成功
 	 */
-	private async checkOllama(): Promise<boolean> {
+	private async checkOllama(notify = true): Promise<boolean> {
 		try {
 			const models = await ollama.list();
 			debugLog(context, models);
@@ -284,10 +288,12 @@ export class OllamaProvider extends Provider {
 				OllamaProvider.fallback = true;
 				debugLog(context, "Falling back to fallback URL");
 				OllamaProvider.refreshInstance();
-				return await this.checkOllama();
+				return await this.checkOllama(notify);
 			}
-			new Notice("Error connecting to ollama.");
-			new Notice(String(e));
+			if (notify) {
+				new Notice("Error connecting to ollama.");
+				new Notice(String(e));
+			}
 			return false;
 		}
 	}
