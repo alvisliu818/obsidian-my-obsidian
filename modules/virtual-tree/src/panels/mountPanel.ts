@@ -2898,7 +2898,13 @@ export class MountPanelView extends ItemView {
    * out of each other's way.
    */
   private wireRowDrag(row: HTMLElement, mount: ExternalMount, node: MountNode): void {
-    this.wireLevelRowDrag(row, mount.id, parentRelOf(node.rel), node.name, node.name);
+    // 父级取**树里的实际父 rel**（flattenHost 记录的祖先链末位）：parent 属性
+    // 挂载的虚拟子行 rel 是库内路径，parentRelOf 会推出 `notes/` 这种路径前缀，
+    // 和渲染层的父级（`/notes/大模型.md`）对不上——拖拽永远匹配不到同一层，
+    // 排序存进去也查不到兄弟列表。
+    const ancestors = this.nodeAncestorsMap.get(node);
+    const parentRel = ancestors ? (ancestors[ancestors.length - 1] ?? '') : parentRelOf(node.rel);
+    this.wireLevelRowDrag(row, mount.id, parentRel, node.name, node.name);
   }
 
   /**
