@@ -30,7 +30,7 @@ export interface MyObsidianSettings {
 	suppressTitlebarMenu?: boolean;
 	/** 全局代理地址（http/https/socks5；空 = 直连）。宿主级配置——经 startModule
 	 *  注入的 hostServices.getProxy() 提供给需要联网的模块（2026-11-23：
-	 *  插件社区的克隆走它），实时读取改动即时生效。 */
+	 *  Plugin Community 的克隆走它），实时读取改动即时生效。 */
 	proxy?: string;
 }
 
@@ -649,12 +649,12 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 				}),
 			);
 
-		// 全局代理（2026-11-23）：需要联网的宿主功能（如「插件社区」的克隆）
+		// 全局代理（2026-11-23）：需要联网的宿主功能（如「Plugin Community」的克隆）
 		// 走它；模块经 hostServices.getProxy() 实时读取，改动即时生效。
 		new SettingCtor(listEl)
 			.setName("代理")
 			.setDesc(
-				"全局代理地址（http/https/socks5，如 http://127.0.0.1:7890）——「插件社区」的克隆等联网功能走它；留空直连。",
+				"全局代理地址（http/https/socks5，如 http://127.0.0.1:7890）——「Plugin Community」的克隆等联网功能走它；留空直连。",
 			)
 			.addText((text) =>
 				text

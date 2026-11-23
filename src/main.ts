@@ -776,7 +776,7 @@ export default class MyObsidianPlugin extends Plugin {
 			// 链接旁一键克隆插件源码（克隆后按模板复制插件目录）。不 patch 核心
 			// 类，纯 DOM 观察 + 注入；克隆仅桌面端。
 			id: "plugin-community",
-			name: "插件社区",
+			name: "Plugin Community",
 			summary:
 				"社区插件市场页增强：详情页信息可选中复制；插件可写备注与标签（绑定插件 id 持久化）、按标签筛选列表；GitHub 链接旁一键克隆插件源码到指定目录，克隆后可按模板复制插件目录。",
 			desktopOnly: false,
@@ -1224,7 +1224,7 @@ export default class MyObsidianPlugin extends Plugin {
 			delete rawModules["logseq"];
 		}
 		// 一次性键名迁移(2026-11-23 模块更名):plugin-market 数据片改键
-		// plugin-community(社区页增强抽成「插件社区」模块)。同款规则。
+		// plugin-community(社区页增强抽成「Plugin Community」模块)。同款规则。
 		if (rawModules && rawModules["plugin-market"] && !rawModules["plugin-community"]) {
 			rawModules["plugin-community"] = rawModules["plugin-market"];
 			delete rawModules["plugin-market"];

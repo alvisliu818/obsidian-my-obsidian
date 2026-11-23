@@ -191,7 +191,7 @@ function renderCloneRow(row: HTMLElement, repo: string, ctx: EnhanceCtx): void {
 	if (!cloneDir) {
 		const hint = doc.createElement('span');
 		hint.className = 'lgp-pc-hint';
-		hint.textContent = '（未配置克隆位置——在「插件社区」设置里填写后重开本页）';
+		hint.textContent = '（未配置克隆位置——在「Plugin Community」设置里填写后重开本页）';
 		row.appendChild(hint);
 		return;
 	}

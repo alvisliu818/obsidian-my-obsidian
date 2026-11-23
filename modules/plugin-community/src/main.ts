@@ -183,7 +183,7 @@ export default class PluginCommunityPlugin extends Plugin {
 	}
 }
 
-/** 模块设置页：克隆位置 + 复制模板（宿主 shim 截获后进「插件社区」二级页）。 */
+/** 模块设置页：克隆位置 + 复制模板（宿主 shim 截获后进「Plugin Community」二级页）。 */
 class CommunitySettingTab extends PluginSettingTab {
 	constructor(app: App, plugin: Plugin, private readonly store: CommunityStore) {
 		super(app, plugin);
@@ -192,7 +192,7 @@ class CommunitySettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
-		containerEl.createEl('h2', { text: '插件社区' });
+		containerEl.createEl('h2', { text: 'Plugin Community' });
 
 		new Setting(containerEl)
 			.setName('克隆位置')
