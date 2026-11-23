@@ -266,7 +266,7 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 		hide(): void;
 	} {
 		const self = this;
-		const rootEl = createDiv("setting-page vertical-tab-content");
+		const rootEl = createDiv("setting-page vertical-tab-content myobsidian-settings-page");
 		const titlebarEl = rootEl.createDiv("setting-page-titlebar");
 		const containerEl = rootEl.createDiv("setting-page-content");
 		return {
@@ -497,6 +497,10 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+		// 设置页文字可选中复制（2026-11-23）：Obsidian 给 app UI（含设置）
+		// user-select:none——本插件设置页整体放开，见 styles.css 的
+		// .myobsidian-settings-page 规则。
+		containerEl.addClass("myobsidian-settings-page");
 		this.searchEntries = null; // 每次重渲染重建索引缓存
 		containerEl.createEl("h2", { text: "My Obsidian" });
 		containerEl.createEl("p", {

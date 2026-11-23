@@ -64792,3 +64792,17 @@ div.dataview-error-box {
 .dataview.small-text::after {
 	content: ")";
 }
+
+/* 设置页文字可选中复制（2026-11-23）：Obsidian 给 app UI（含设置）user-select:none，
+ * 本插件设置页（宿主页 + 模块二级页 + 搜索结果）整体放开；按钮等控件保持不可选，
+ * 输入框本就可编辑。与 plugin-market 对社区市场弹窗的修复（market.ts）同款。 */
+.myobsidian-settings-page,
+.myobsidian-settings-page * {
+  user-select: text;
+  -webkit-user-select: text;
+}
+.myobsidian-settings-page button,
+.myobsidian-settings-page .clickable-icon {
+  user-select: none;
+  -webkit-user-select: none;
+}
