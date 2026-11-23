@@ -1399,6 +1399,15 @@ export default class MyObsidianPlugin extends Plugin {
 			bootlog.push(`${d.id}: disabled`);
 			return;
 		}
+		// 移动端发布包：从桌面同步过来的 settings 里这些开关可能是开的，但模块
+		// 依赖 Electron/Node（eval('require')、fs/child_process、原生 pty 等），
+		// 在移动端只会抛错拖慢启动。无论保存的开关状态如何一律跳过；桌面端
+		// Platform.isMobileApp 恒 false，行为完全不变。
+		if (d.desktopOnly && Platform.isMobileApp) {
+			console.debug(`[my-obsidian] ${d.id}: desktop-only, skip on mobile`);
+			bootlog.push(`${d.id}: desktop-only on mobile`);
+			return;
+		}
 		if (this.live.has(d.id)) return;
 		try {
 			console.debug(`[my-obsidian] booting ${d.id}...`);
