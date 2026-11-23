@@ -604,6 +604,33 @@ export class BlockIndexDaemonClient {
   }
 
   // ------------------------------------------------------------------
+  // dataview 页面缓存（2026-11-23 收编，解析归一）：dv_pages 表是
+  // parsePage 产物的唯一权威存储（全量重建不清，见 sqliteSchema.ts）。渲染端
+  // dataviewBridge 经这组直通 op 取数；op 面与 file_props 同款。data 为
+  // JSON 文本（Transferable + dehydrate，见 shared/dvSerialize）。
+  // ------------------------------------------------------------------
+
+  /** 单页取数：新鲜行（version+mtime+size 全匹配）直接回，否则现解析并落库。 */
+  dvPage(path: string, version: string): Promise<{ version: string; time: number; data: string } | null> {
+    return this.call('dvPage', { path, version });
+  }
+
+  /** 全量拉取（冷启动快照，一次请求；渲染端按自身文件 mtime/version 过滤）。 */
+  dvPages(): Promise<{ rows: { path: string; version: string; time: number; mtime: number; size: number; data: string }[] }> {
+    return this.call('dvPages', {});
+  }
+
+  /** 清扫不在 keep 清单里的行（FullIndex.synchronize 语义）。 */
+  dvPrune(paths: string[]): Promise<{ dropped: number }> {
+    return this.call('dvPrune', { paths });
+  }
+
+  /** 清空整表（dataview 的 reinitialize 路径）。 */
+  dvRecreate(): Promise<{ ok: true }> {
+    return this.call('dvRecreate', {});
+  }
+
+  // ------------------------------------------------------------------
   // 变更通道（main.ts 的 vault 事件转发进来）
   // ------------------------------------------------------------------
 

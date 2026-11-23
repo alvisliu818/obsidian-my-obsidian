@@ -3775,6 +3775,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@types/js-yaml@npm:^4.0.9":
+  version: 4.0.9
+  resolution: "@types/js-yaml@npm:4.0.9"
+  checksum: 10c0/24de857aa8d61526bbfbbaa383aa538283ad17363fcd5bb5148e2c7f604547db36646440e739d78241ed008702a8920665d1add5618687b6743858fae00da211
+  languageName: node
+  linkType: hard
+
 "@types/jsdom@npm:^21.1.7":
   version: 21.1.7
   resolution: "@types/jsdom@npm:21.1.7"
@@ -3805,7 +3812,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/luxon@npm:^3.7.5":
+"@types/luxon@npm:^3.4.2, @types/luxon@npm:^3.7.5":
   version: 3.7.6
   resolution: "@types/luxon@npm:3.7.6"
   checksum: 10c0/135c55910d8f4fb615cbfaa93b173e57e3eed9731da683005acdb84dba5ece5dbbf56cc82330015ccf5247a6e84fefbb2e2ebe255c957636f604f79efacb4214
@@ -3864,7 +3871,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/parsimmon@npm:^1.10.9":
+"@types/papaparse@npm:^5.2.6":
+  version: 5.5.2
+  resolution: "@types/papaparse@npm:5.5.2"
+  dependencies:
+    "@types/node": "npm:*"
+  checksum: 10c0/27b097b6f8f204b20ade1f2cbf4798eb38caa5fbfa3180fd0faa5e3f9aea371c1786ae180d56f3287556463eefe3100c953e316ea6ee99d7ae1d04111cfc9e50
+  languageName: node
+  linkType: hard
+
+"@types/parsimmon@npm:^1.10.6, @types/parsimmon@npm:^1.10.9":
   version: 1.10.9
   resolution: "@types/parsimmon@npm:1.10.9"
   checksum: 10c0/fc7f47550b2e1f9ead12ec7820134e2428208ec27a0072a3d33de468537ca337c611bdb86b1b14611a7dfbf7fedd9ef17bc080dad68c65aa27e7b9191963c0c3
@@ -6221,6 +6237,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"emoji-regex@npm:^10.0.0":
+  version: 10.6.0
+  resolution: "emoji-regex@npm:10.6.0"
+  checksum: 10c0/1e4aa097bb007301c3b4b1913879ae27327fdc48e93eeefefe3b87e495eb33c5af155300be951b4349ff6ac084f4403dc9eff970acba7c1c572d89396a9a32d7
+  languageName: node
+  linkType: hard
+
 "emoji-regex@npm:^8.0.0":
   version: 8.0.0
   resolution: "emoji-regex@npm:8.0.0"
@@ -8315,6 +8338,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"js-yaml@npm:^4.1.0":
+  version: 4.3.2
+  resolution: "js-yaml@npm:4.3.2"
+  dependencies:
+    argparse: "npm:^2.0.1"
+  bin:
+    js-yaml: bin/js-yaml.js
+  checksum: 10c0/dedd34c2e8fef1d504687f1bc94ed0ee1311a1f78770fa2800352c6d59c635ccf555009d74e9afe529ae62199da2b1ccef30e53dc84dcd8d2d8187c22574bc97
+  languageName: node
+  linkType: hard
+
 "jsdom@npm:^26.1.0":
   version: 26.1.0
   resolution: "jsdom@npm:26.1.0"
@@ -9891,10 +9925,14 @@ __metadata:
     "@types/debug": "npm:^4.1.13"
     "@types/diff-match-patch": "npm:^1"
     "@types/diff3": "npm:^0.0.2"
+    "@types/js-yaml": "npm:^4.0.9"
     "@types/jsdom": "npm:^30"
     "@types/lodash": "npm:^4.17.16"
+    "@types/luxon": "npm:^3.4.2"
     "@types/moment": "npm:^2.13.0"
     "@types/node": "npm:^22.0.0"
+    "@types/papaparse": "npm:^5.2.6"
+    "@types/parsimmon": "npm:^1.10.6"
     "@types/prismjs": "npm:^1.26.6"
     "@types/react": "npm:^18.2.0"
     "@types/react-dom": "npm:^18.2.0"
@@ -9947,6 +9985,7 @@ __metadata:
     diff3: "npm:^0.0.4"
     dompurify: "npm:^3.4.12"
     electron: "npm:^44.5.1"
+    emoji-regex: "npm:^10.0.0"
     es-toolkit: "npm:^1.50.0"
     esbuild: "npm:^0.25.0"
     esbuild-svelte: "npm:^0.9.5"
@@ -9973,9 +10012,11 @@ __metadata:
     jieba-wasm: "npm:^2.4.0"
     js-logger: "npm:^1.6.1"
     js-sha256: "npm:^1.0.0"
+    js-yaml: "npm:^4.1.0"
     jsdom: "npm:^26.1.0"
     json5: "npm:^2.2.3"
     jszip: "npm:^3.10.2"
+    localforage: "npm:^1.10.0"
     lodash: "npm:^4.17.21"
     lodash-es: "npm:^4.17.21"
     lucide: "npm:^1.16.0"
@@ -10009,6 +10050,9 @@ __metadata:
     p-limit: "npm:^5.0.0"
     p-queue: "npm:^9.0.1"
     pagerank.js: "npm:^1.0.2"
+    papaparse: "npm:^5.3.1"
+    parsimmon: "npm:^1.18.0"
+    preact: "npm:^10.6.5"
     prismjs: "npm:^1.30.0"
     pure-md5: "npm:^0.1.14"
     pyright: "npm:^1.1.414"
@@ -10020,6 +10064,7 @@ __metadata:
     remark-gfm: "npm:^4.0.0"
     remark-parse: "npm:^11.0.0"
     remark-wiki-link: "npm:^2.0.1"
+    remove-markdown: "npm:^0.5.5"
     sass: "npm:^1.105.1"
     search-query-parser: "npm:^1.6.0"
     semver: "npm:^7.8.5"
@@ -10338,6 +10383,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"papaparse@npm:^5.3.1":
+  version: 5.7.1
+  resolution: "papaparse@npm:5.7.1"
+  checksum: 10c0/623319ba95fb35b3d1b105810649545e2e615b842c4ed2fb76217640a0e3343f51ef09163b32bff8df9f47efaa7e528457773da5b434fbf95beee742f3854a1b
+  languageName: node
+  linkType: hard
+
 "parse-entities@npm:^2.0.0":
   version: 2.0.0
   resolution: "parse-entities@npm:2.0.0"
@@ -10398,6 +10450,13 @@ __metadata:
   dependencies:
     entities: "npm:^8.0.0"
   checksum: 10c0/c3c1c5aab55f6e4be5245599790e56e64be7764a4a0edd7f98db4fe3bb380f63add752fa047dff0496446c25f4104f0c7c1967723de640bde92306a7bb67ed2f
+  languageName: node
+  linkType: hard
+
+"parsimmon@npm:^1.18.0":
+  version: 1.18.1
+  resolution: "parsimmon@npm:1.18.1"
+  checksum: 10c0/c365759d8f5baeede0d7903fd34499e07d2f9d0a6ce8bfa69096c9d2bf39be75a7e03fc0a6ec4ffcd285e40d76bf2a5c28c1741d97b8f8a049c06723d063ede8
   languageName: node
   linkType: hard
 
@@ -10870,7 +10929,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"preact@npm:^10.11.3, preact@npm:^10.29.8":
+"preact@npm:^10.11.3, preact@npm:^10.29.8, preact@npm:^10.6.5":
   version: 10.29.8
   resolution: "preact@npm:10.29.8"
   peerDependencies:
@@ -11340,6 +11399,13 @@ __metadata:
     remark-stringify: "npm:^11.0.0"
     unified: "npm:^11.0.0"
   checksum: 10c0/ba675e4a5b114355991d2c6f5b09a632121fc8825257b0d148b3938420713f9e9b6f012120604435d5c217d42742f60195ac6f898dc1339d313a6608a84dbc49
+  languageName: node
+  linkType: hard
+
+"remove-markdown@npm:^0.5.5":
+  version: 0.5.5
+  resolution: "remove-markdown@npm:0.5.5"
+  checksum: 10c0/f120f9c7742f7d5724bc07be2b1ab73830afd44ed9afc622256862a71fdbc6b117baac6e5ecbed381d47ca47c1b41ebf524439cdcf119ca70a6d0321f719099c
   languageName: node
   linkType: hard
 

@@ -78,7 +78,14 @@ export type KernelOp =
   | { op: 'setConfig'; obsidianExe?: string }
   /** 在 Obsidian 中打开 vault（托盘「打开 Obsidian」与 HTTP 客户端共用同一条
    *  派发链：runtime exe → 注册表关联 → 拒绝，绝无 explorer 中间商）。 */
-  | { op: 'open' };
+  | { op: 'open' }
+  /** dataview 页面缓存直通 op（2026-11-23 收编）：dv_pages 表（parsePage 产物
+   *  权威存储，全量重建不清）。渲染端 dataviewBridge 经 daemonClient 的 dv*
+   *  方法调用；dvPage 命中新鲜行直接回，否则现解析并落库。 */
+  | { op: 'dvPage'; path: string; version?: string }
+  | { op: 'dvPages' }
+  | { op: 'dvPrune'; paths?: string[] }
+  | { op: 'dvRecreate' };
 
 /** op → 客户端超时（ms）。turbo/rebuild 应答只是收尾，进度走事件（§5）。 */
 export const OP_TIMEOUT_MS: Record<string, number> = {

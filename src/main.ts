@@ -208,7 +208,19 @@ const SyncEmbedsPlugin = require("../modules/sync-embeds/src/main") as new (
 	app: unknown,
 	manifest: unknown,
 ) => SubPluginLike;
+// dataview v0.5.70（blacksmithgu，MIT）：本仓收编体量又一级（69 文件，DQL 引擎
+// + Preact 渲染 + 索引 worker）——require 桥：上游自有 tsconfig（部分 strict +
+// baseUrl 裸导入 + jsxFactory h），不进宿主 tsc 程序。baseUrl 裸导入与
+// web-worker 导入由根 esbuild.mjs 的模块级插件处理；解析/缓存由
+// dataviewBridge 上收 daemon（见 src/dataviewBridge.ts 与模块 NOTICE）。
+const DataviewPlugin = (
+	require("../modules/dataview/src/main") as {
+		default: new (app: unknown, manifest: unknown) => SubPluginLike;
+	}
+).default;
 import { DEFAULT_CODE_EXTENSIONS } from "./codeFileView";
+// dataview 索引归一桥：原型垫片接管解析/缓存两条链（daemon 优先，上游回落）。
+import { installDataviewIndexBridge, uninstallDataviewIndexBridge } from "./dataviewBridge";
 import { registerFreeExtensions } from "./extensionRegistry";
 // 原生 markdown 编辑器（实时预览/源码模式）+ 阅读模式的代码块「▶ 运行」。
 // 执行层与库内代码文件共用 exec/runner（真子进程 + 临时文件，stdin 可用）。
@@ -725,6 +737,24 @@ export default class MyObsidianPlugin extends Plugin {
 			cls: UnifiedSearchPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
+			// dataview v0.5.70（blacksmithgu，MIT，2026-11-23 用户指定并入）：
+			// 本仓收编体量又一级（69 文件，DQL 引擎 + Preact 渲染 + 索引 worker）。
+			// 解析归一（用户选定 B 方案）：解析与缓存全部上收 daemon——
+			// dvImport（dvMeta 形状 + dataview 自家 parsePage）→ dv_pages 表，
+			// 渲染端经 dataviewBridge 取数，worker/IndexedDB 仅作回落。见
+			// modules/dataview/NOTICE.md 与 src/dataviewBridge.ts。
+			// manifest.version 必须与 daemon 侧 DV_PARSE_VERSION 一致（快照行
+			// 按 version+mtime 判新鲜；漂移会自愈为逐文件重解析）。
+			id: "dataview",
+			name: "Dataview",
+			manifest: { version: "0.5.70" },
+			migrateFrom: "dataview",
+			summary:
+				"DQL 查询与 dataviewjs 代码块、内联字段渲染（TABLE/LIST/TASK/CALENDAR），页面数据由统一索引守护进程解析缓存（dv_pages 表），本端零解析零私有存储；daemon 缺席时自动回落上游自解析。上游 blacksmithgu（MIT）。",
+			desktopOnly: false,
+			cls: DataviewPlugin as unknown as ModuleDescriptor["cls"],
+		},
+		{
 			// Third-party (observerw, MIT), kept whole — see modules/code-link/NOTICE.
 			// 独立版运行时从 CDN 拉 tree-sitter.wasm，聚合版构建期内嵌（同
 			// wa-sqlite/jieba 先例）；语言级 wasm 仍按上游设计运行时下载。
@@ -1156,6 +1186,12 @@ export default class MyObsidianPlugin extends Plugin {
 	}
 
 	onunload(): void {
+		// dataview 收编（2026-11-23）：摘原型垫片与 plugins 表别名。
+		if (this.live.has("dataview")) {
+			uninstallDataviewIndexBridge();
+			const pluginsMap = (this.app as App).plugins?.plugins as Record<string, unknown> | undefined;
+			if (pluginsMap && "dataview" in pluginsMap) delete pluginsMap["dataview"];
+		}
 		for (const [id, inst] of this.live) {
 			try {
 				inst.onunload?.();
@@ -1411,6 +1447,11 @@ export default class MyObsidianPlugin extends Plugin {
 		};
 		// 启动性能观测（2026-11-06）：逐模块 onload 耗时——「界面出现慢」的
 		// 分段定位。全量在 host.moduleInitMs（探针可读），≥150ms 打 console.info
+		// dataview 收编（2026-11-23）：原型垫片必须在模块 onload（FullIndex 构造）
+		// 之前装好；版本取 descriptor 的 manifest.version（dvPage 落库盖章用）。
+		if (d.id === "dataview") {
+			installDataviewIndexBridge(this.app as App, String(d.manifest?.version ?? ""));
+		}
 		const modT0 = performance.now();
 		await inst.onload();
 		const modMs = Math.round(performance.now() - modT0);
@@ -1439,6 +1480,19 @@ export default class MyObsidianPlugin extends Plugin {
 			}
 		}
 		this.live.set(d.id, inst);
+		// dataview 收编（2026-11-23）：第三方 id 兼容别名——外部插件（hearth 卡片、
+		// tasknotes 等）与用户 dataviewjs 经 app.plugins.plugins.dataview.api 的
+		// 查找路径保持不变；独立版 dataview 仍启用时键已存在，不覆盖。onunload 摘除。
+		if (d.id === "dataview") {
+			const pluginsMap = (this.app as App).plugins?.plugins as Record<string, unknown> | undefined;
+			if (pluginsMap && !("dataview" in pluginsMap)) {
+				Object.defineProperty(pluginsMap, "dataview", {
+					get: () => this.live.get("dataview"),
+					configurable: true,
+					enumerable: false,
+				});
+			}
+		}
 		// 伴生子插件(momentum 并入 life,2026-11-21):同宿主 manifest,数据片嵌在
 		// 本模块 data.<id> 子键(迁移自旧独立 modules.<id> 片);设置 tab 截进
 		// capturedTabs 的 <id> 键(设置行 subPages 齿轮直达);实例进 live——

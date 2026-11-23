@@ -39,6 +39,7 @@ import type { SqliteRuntimeLike } from '../../../md-editor/src/index/sqliteRunti
 import { KERNEL_PROTO, buildOpenVaultUrl, createDiscoveryIO, makeToken, parseRegistryCommand, vaultDisplayName, type KernelEvent } from './kernelApi';
 import { startKernelHttpServer } from './httpServer';
 import { startKernelTray, type TrayHandle } from './kernelTray';
+import { dvStoreStatements, parseDvPage } from './dvImport';
 
 // ---------------------------------------------------------------------
 // argv
@@ -725,7 +726,13 @@ async function main(): Promise<void> {
           if (f.size <= 2_000_000) {
             const content = await src.read(f.path);
             const facts = extractFile(f.path, content);
-            enqueueWrite(buildFileStatements(facts, f, hashText(content), fts));
+            const stmts = buildFileStatements(facts, f, hashText(content), fts);
+            // dataview 收编（2026-11-23）：同批解析页面数据进 dv_pages（解析归一，
+            // 见 dvImport.ts 与 modules/dataview/NOTICE.md）。失败不挡主索引。
+            try {
+              stmts.push(...dvStoreStatements(parseDvPage(f.path, content, { ctime: f.mtime, mtime: f.mtime, size: f.size })));
+            } catch { /* dv 解析失败不挡主索引 */ }
+            enqueueWrite(stmts);
           }
         } catch {
           /* 单文件失败不挡全库(与渲染内路径同语义) */
@@ -777,6 +784,7 @@ async function main(): Promise<void> {
     for (const [p] of known) {
       if (!onDisk.has(p)) {
         const stmts = deleteFileStatements(p);
+        stmts.push({ sql: 'DELETE FROM dv_pages WHERE path = ?', params: [p] });
         await rt.batch(stmts.map((st) => st.sql), stmts.map((st) => st.params));
       }
     }
@@ -808,7 +816,12 @@ async function main(): Promise<void> {
           if (f.size <= 2_000_000) {
             const content = await src.read(f.path);
             const facts = extractFile(f.path, content);
-            enqueueWrite(buildFileStatements(facts, f, hashText(content), fts));
+            const stmts = buildFileStatements(facts, f, hashText(content), fts);
+            // dataview 收编（2026-11-23）：同批重解析 dv_pages，同 turbo。
+            try {
+              stmts.push(...dvStoreStatements(parseDvPage(f.path, content, { ctime: f.mtime, mtime: f.mtime, size: f.size })));
+            } catch { /* dv 解析失败不挡主索引 */ }
+            enqueueWrite(stmts);
           }
         } catch {
           /* 单文件失败不挡全库 */
@@ -1157,6 +1170,26 @@ async function main(): Promise<void> {
           // 操作合并单事务（og 深度吸收⑤）：一批路径一次批量落库;
           // 变更报告 = 实际写库/删除的路径(mutate 自动抽取 changedPaths)
           const r = await idx.syncFiles(paths);
+          // dataview 收编（2026-11-23）：变更文件同步重解析 dv_pages（与 turbo
+          // 同语义，ctime 用真实 birthtime；单文件失败不挡主索引）。
+          const rt = await rtOf().catch(() => null);
+          if (rt) {
+            for (const p of r.written) {
+              try {
+                const meta = source.statFile(p);
+                if (!meta || meta.size > 2_000_000) continue;
+                const content = await source.read(p);
+                let ctime = meta.mtime;
+                try {
+                  const st = fs.statSync(path.join(args.vault, p));
+                  ctime = Math.floor(st.birthtimeMs || st.ctimeMs) || meta.mtime;
+                } catch { /* stat 不可得退 mtime */ }
+                const row = parseDvPage(p, content, { ctime, mtime: meta.mtime, size: meta.size });
+                const stmts = dvStoreStatements(row);
+                await rt.batch(stmts.map((s) => s.sql), stmts.map((s) => s.params));
+              } catch { /* 单文件失败不挡 */ }
+            }
+          }
           return { files: r.written.length + r.forgotten.length, changedPaths: [...r.written, ...r.forgotten] };
         });
       }
@@ -1166,6 +1199,9 @@ async function main(): Promise<void> {
           async () => {
             for (const p of paths) {
               await (idx as unknown as { forgetFile?: (p: string) => Promise<void> }).forgetFile?.(p);
+              await rtOf()
+                .then((rt) => rt.run('DELETE FROM dv_pages WHERE path = ?', [p]))
+                .catch(() => {});
             }
             return { files: paths.length };
           },
@@ -1339,6 +1375,61 @@ async function main(): Promise<void> {
             updatedAt: Number(r[4] ?? 0),
           })),
         };
+      }
+      // ---- dataview 页面缓存直通 op（2026-11-23 收编）：dv_pages 是
+      // parsePage 产物的权威存储（不进 TABLE_NAMES，全量重建不清）。渲染端
+      // dataviewBridge 经这组 op 取数；op 面与 file_props 同款。
+      case 'dvPage': {
+        const p = String(msg.path ?? '');
+        if (!p) throw new Error('dvPage: path is required');
+        const version = String((msg as { version?: unknown }).version ?? '');
+        const meta = source.statFile(p);
+        if (!meta) return null;
+        const rt = await rtOf();
+        const hit = await rt.all('SELECT version, time, mtime, size, data FROM dv_pages WHERE path = ?', [p], 1);
+        const row = hit.rows[0];
+        if (row && String(row[0]) === version && Number(row[2]) === meta.mtime && Number(row[3]) === meta.size) {
+          return { version: String(row[0]), time: Number(row[1]), data: String(row[4]) };
+        }
+        const content = await source.read(p);
+        let ctime = meta.mtime;
+        try {
+          const st = fs.statSync(path.join(args.vault, p));
+          ctime = Math.floor(st.birthtimeMs || st.ctimeMs) || meta.mtime;
+        } catch { /* stat 不可得退 mtime（file.cday 近似，见 NOTICE） */ }
+        const fresh = parseDvPage(p, content, { ctime, mtime: meta.mtime, size: meta.size });
+        if (version) fresh.version = version;
+        const stmts = dvStoreStatements(fresh);
+        await rt.batch(stmts.map((s) => s.sql), stmts.map((s) => s.params));
+        return { version: fresh.version, time: fresh.time, data: fresh.data };
+      }
+      case 'dvPages': {
+        const rt = await rtOf();
+        const res = await rt.all('SELECT path, version, time, mtime, size, data FROM dv_pages', undefined, 1_000_000);
+        return {
+          rows: res.rows.map((r) => ({
+            path: String(r[0]),
+            version: String(r[1]),
+            time: Number(r[2]),
+            mtime: Number(r[3]),
+            size: Number(r[4]),
+            data: String(r[5]),
+          })),
+        };
+      }
+      case 'dvPrune': {
+        const keep = ((msg as { paths?: unknown }).paths ?? []) as string[];
+        const keepSet = new Set(keep);
+        const rt = await rtOf();
+        const res = await rt.all('SELECT path FROM dv_pages', undefined, 1_000_000);
+        const stale = res.rows.map((r) => String(r[0])).filter((p) => !keepSet.has(p));
+        for (const p of stale) await rt.run('DELETE FROM dv_pages WHERE path = ?', [p]);
+        return { dropped: stale.length };
+      }
+      case 'dvRecreate': {
+        const rt = await rtOf();
+        await rt.run('DELETE FROM dv_pages');
+        return { ok: true as const };
       }
       default:
         throw new Error(`unknown op: ${String(msg.op)}`);

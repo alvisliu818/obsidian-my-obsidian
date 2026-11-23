@@ -150,6 +150,21 @@ export const SCHEMA_SQL: readonly string[] = [
      PRIMARY KEY (path, key)
    )`,
   `CREATE INDEX IF NOT EXISTS idx_file_props_key_val ON file_props(key, value)`,
+
+  // ---- dataview 页面数据缓存（2026-11-23 收编，解析归一）：parsePage 产物
+  // （Transferable+dehydrate JSON 文本）的唯一权威存储，daemon sync/turbo
+  // 随主索引同批写入；渲染端 dataviewBridge 经 dvPage/dvPages 直通 op 取数。
+  // **不进 TABLE_NAMES**（同 file_props）：全量重建不清空——行自带
+  // (mtime, size, version) 新鲜度戳，陈旧行由渲染端按需触发重解析覆写，
+  // 删除文件由 turboSync/sync 的删除路径与 dvPrune 清扫。
+  `CREATE TABLE IF NOT EXISTS dv_pages (
+     path TEXT PRIMARY KEY,
+     mtime INTEGER NOT NULL,
+     size INTEGER NOT NULL,
+     version TEXT NOT NULL DEFAULT '',
+     time INTEGER NOT NULL,
+     data TEXT NOT NULL
+   )`,
 ];
 
 export const TABLE_NAMES: readonly string[] = [

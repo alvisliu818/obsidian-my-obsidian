@@ -548,6 +548,80 @@ const inlineImportPlugin = {
     },
   };
 
+// ---------------------------------------------------------------------------
+// dataview（收编 0.5.70，见 modules/dataview/NOTICE.md）：上游 tsconfig baseUrl
+// 裸导入（from "data-model/value" 等以 src/ 为根）。esbuild 不支持「无 paths 的
+// baseUrl」，且经 onResolve 插件解析的文件会丢 per-file tsconfig（jsxFactory
+// 失效 → 默认 React.createElement，实测复现）——所以不走 resolver，改为在模块
+// tsconfig 里把 baseUrl 定成 "." 并显式枚举 paths（tsc/esbuild 两侧语义一致），
+// 裸导入全部走 esbuild 原生解析，tsx 的 jsxFactory: h 保得住。
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// dataview: "util/*" 裸导入与 node 内建 "util" 的 external 规则撞车（esbuild 的
+// 包名 external 覆盖其全部子路径）——tsconfig paths 救不了它，"util/normalize"
+// 会变成运行时 require 并在渲染进程炸掉（2026-11-23 实测 9 处）。importer 限定
+// modules/dataview/，解析回真实文件；其余内建名（path/crypto 等）dataview 不
+// 以裸段+子路径的形式使用，按需再加。
+// ---------------------------------------------------------------------------
+const dataviewUtilResolver = {
+  name: "dataview-util-alias",
+  setup(build) {
+    build.onResolve({ filter: /^util(\/|$)/ }, (args) => {
+      const importer = args.importer.split(path.sep).join("/");
+      if (!importer.includes("/modules/dataview/")) return undefined;
+      const base = path.resolve("modules/dataview/src", args.path);
+      for (const cand of [`${base}.ts`, path.join(base, "index.ts")]) {
+        if (fs.existsSync(cand)) return { path: cand };
+      }
+      return undefined;
+    });
+  },
+};
+
+// ---------------------------------------------------------------------------
+// dataview: `web-worker:` 导入（rollup-plugin-web-worker-loader 的
+// inline+forceInline 语义移植）。构建期把 worker 入口打成自包含 IIFE 字符串，
+// 默认导出工厂类——`new 工厂(options)` 返回真 Worker（Blob URL），与上游
+// 运行时语义一致（import-manager.ts 里 new DataviewImportWorker({name})）。
+// 解析归一后渲染端走 daemon 取数（见 src/dataviewBridge.ts），worker 通道仅
+// 在 daemon 不可达时（移动端/内核停机）作为上游回落路径保留。
+// 子构建同样要过 dataviewSrcResolver（worker 入口内部也是 baseUrl 裸导入）；
+// obsidian 照上游 external（worker 图里仅类型引用，擦除后不可达）。
+// ---------------------------------------------------------------------------
+const dataviewWebWorkerPlugin = {
+  name: "dataview-web-worker",
+  setup(build) {
+    build.onResolve({ filter: /^web-worker:/ }, (args) => {
+      const importer = args.importer.split(path.sep).join("/");
+      if (!importer.includes("/modules/dataview/")) return undefined;
+      return {
+        path: path.resolve(args.resolveDir, args.path.slice("web-worker:".length)),
+        namespace: "dv-worker",
+      };
+    });
+    build.onLoad({ filter: /.*/, namespace: "dv-worker" }, async (args) => {
+      const r = await esbuild.build({
+        entryPoints: [args.path],
+        bundle: true,
+        format: "iife",
+        target: "es2020",
+        write: false,
+        minify: prod,
+        legalComments: "none",
+        logLevel: "silent",
+        external: ["obsidian"],
+      });
+      const code = r.outputFiles[0].text;
+      return {
+        contents: `export default class DataviewImportWorker { constructor(options) { return new Worker(URL.createObjectURL(new Blob([${JSON.stringify(code)}], { type: "text/javascript" })), options); } }`,
+        loader: "js",
+        resolveDir: path.dirname(args.path),
+      };
+    });
+  },
+};
+
 const context = await esbuild.context({
   banner: { js: banner },
   entryPoints: ["src/main.ts"],
@@ -598,7 +672,7 @@ const context = await esbuild.context({
     // ollama 等包用 `node:fs` 带前缀的写法，裸名列表罩不住
     ...builtins.map((m) => `node:${m}`),
   ],
-  plugins: [srSrcResolver, lib10Resolver, livesyncResolver, cmBundlePlugin, momentumSveltePlugin, terminalSveltePlugin, sveltePlugin, jiebaPatchPlugin, dexiePatchPlugin, unicornMagicPatchPlugin, importGlobPlugin, musicPlayerShimsPlugin, inlineImportPlugin, mxInlinePlugin, mxCaptionsPlugin, mxNodeEnvPlugin, terminalPyPlugin],
+  plugins: [srSrcResolver, lib10Resolver, livesyncResolver, dataviewUtilResolver, dataviewWebWorkerPlugin, cmBundlePlugin, momentumSveltePlugin, terminalSveltePlugin, sveltePlugin, jiebaPatchPlugin, dexiePatchPlugin, unicornMagicPatchPlugin, importGlobPlugin, musicPlayerShimsPlugin, inlineImportPlugin, mxInlinePlugin, mxCaptionsPlugin, mxNodeEnvPlugin, terminalPyPlugin],
   // Monaco 的 codicon.css 引用 .ttf 字体(图标字形)。内联成 dataurl:图标
   // 只有几 KB,而少这一条整个构建会以 "No loader is configured for .ttf" 失败。
   // (与独立插件 obsidian-logseq 的 esbuild.mjs 同款配置。)
@@ -677,6 +751,8 @@ const daemon = await esbuild.context({
   entryPoints: ["modules/unified-search/src/daemon/daemonMain.ts"],
   bundle: true,
   platform: "node",
+  // dataview 解析链（dvImport require 桥）的 util/* 裸导入同样要拦内建撞车。
+  plugins: [dataviewUtilResolver],
   // 原生模块不可 bundle:运行时从插件目录 node_modules 解析(deploy 边车)
   external: ["better-sqlite3"],
   format: "cjs",

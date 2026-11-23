@@ -1,0 +1,41 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "sourceMap": true,
+    "inlineSourceMap": false,
+    "inlineSources": true,
+    "module": "ESNext",
+    "target": "ES2022",
+    "allowJs": false,
+    "jsx": "react",
+    "jsxFactory": "h",
+    "noImplicitAny": true,
+    "strictFunctionTypes": true,
+    "strictNullChecks": true,
+    "noImplicitReturns": true,
+    "noImplicitThis": true,
+    "noUnusedLocals": true,
+    "skipLibCheck": true,
+    "moduleResolution": "node",
+    "importHelpers": true,
+    "downlevelIteration": true,
+    "esModuleInterop": true,
+    "lib": ["dom", "scripthost", "ES2022"],
+    "paths": {
+      "api/*": ["src/api/*"],
+      "data-import/*": ["src/data-import/*"],
+      "data-index/*": ["src/data-index/*"],
+      "data-index": ["src/data-index"],
+      "data-model/*": ["src/data-model/*"],
+      "expression/*": ["src/expression/*"],
+      "query/*": ["src/query/*"],
+      "ui/*": ["src/ui/*"],
+      "util/*": ["src/util/*"],
+      "settings": ["src/settings"],
+      "status": ["src/status"],
+      "index": ["src/index"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["lib/**/*", "src/test/**"]
+}
