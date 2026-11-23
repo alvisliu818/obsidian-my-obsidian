@@ -35,16 +35,19 @@ export function vaultJoinPath(mount: ExternalMount, rel: string): string {
 // 树里把笔记挂到那篇笔记名下作为**子文档**显示——文件的真实位置不动，纯
 // 树形展示（与 attachTo 嵌套挂载同一哲学：文档归库管，位置归树管）。
 //
-// 计划（ParentPlan）按挂载根缓存：floating = 要从真实目录列表里摘出来的
-// 笔记（它们的展示位置在父笔记名下）；childrenOf = 父笔记 → 虚拟子笔记。
-// 环（A.parent=B 且 B.parent=A）里的笔记保持原位——挂环上谁都渲染不出来，
-// 原位才不会丢行。指向环外某笔记的笔记照常浮动：它的展示终点是一棵
-// 原位渲染的笔记，链路每个中间层都浮动，树里逐层嵌套。
+// 计划（ParentPlan）按挂载根缓存：floating = 带 parent 属性、要额外挂到父
+// 笔记名下的笔记；childrenOf = 父笔记 → 虚拟子笔记。2026-11-23 用户要求
+// 「parent 自动挂载要有，原位置也要保留」——floating 笔记不再从真实目录
+// 摘出，而是两处都显示（真实目录原位 + 父笔记名下虚拟子行）。
+// 环（A.parent=B 且 B.parent=A）里的笔记不生成虚拟挂载——挂环上谁都渲染
+// 不出来；它们仍原位显示（本来就保留）。指向环外某笔记的笔记照常挂：
+// 它的展示终点是一棵原位渲染的笔记，链路每个中间层都挂，树里逐层嵌套。
 // ---------------------------------------------------------------------------
 
-/** 一次 parent 挂载计划：floating 摘出，childrenOf 挂入。 */
+/** 一次 parent 挂载计划：floating 两处显示，childrenOf 挂入。 */
 export interface ParentPlan {
-  /** 从真实所在目录列表摘出的笔记（vault 绝对路径，库内 path 域）。 */
+  /** 带 parent 属性、额外挂到父笔记名下的笔记（vault 绝对路径，库内 path 域）。
+   *  它们在真实目录里照常保留——floating 只表示"多一处展示"，不再摘出。 */
   floating: Set<string>;
   /** 父笔记 vault 路径 → 挂到它名下的子笔记 vault 路径（名称序）。 */
   childrenOf: Map<string, string[]>;
@@ -187,9 +190,10 @@ export function vaultRootOf(app: App, mount: ExternalMount): VaultRoot {
  * `base` 是库根的磁盘绝对路径（vaultAbsOf 的基数），由调用方传入以避免
  * 每个 child 都重读 adapter。TFolder 没有文件 stat，size/mtime 仅文件有。
  *
- * `plan`（parent 属性挂载计划，开关关闭时传 null）：目录层摘掉浮动笔记
- * （它们的展示位在父笔记名下）；`rel` 指向一篇 md 笔记时返回挂到它名下的
- * 虚拟子笔记——文件节点由此变成可展开容器（与嵌套挂载同一套面板机制）。
+ * `plan`（parent 属性挂载计划，开关关闭时传 null）：`rel` 指向一篇 md 笔记
+ * 时返回挂到它名下的虚拟子笔记——文件节点由此变成可展开容器（与嵌套挂载
+ * 同一套面板机制）。带 parent 的笔记**原位照常保留**（2026-11-23 用户要求
+ * 两处都显示），不再从真实目录层摘出。
  */
 export function vaultScanLayer(
   app: App,
@@ -227,8 +231,9 @@ export function vaultScanLayer(
   for (const child of node.children) {
     const childRel = rel ? `${rel}/${child.name}` : child.name;
     const isDir = child instanceof TFolder;
-    // 浮动笔记从真实目录列表摘出——它已挂到父笔记名下，两处都列会重复
-    if (!isDir && plan?.floating.has(child.path)) continue;
+    // 带 parent 的笔记原位保留（2026-11-23 用户：parent 挂载+原位两处都要），
+    // 不再从真实目录摘出——摘出会让用户误以为文件「消失」。父笔记名下的
+    // 虚拟子行是额外一处展示，两者 rel 相同、指向同一真实文件。
     if (isDir ? dirPruned(childRel, f) : !entryMatches(childRel, f)) continue;
     const tf = child instanceof TFile ? child : null;
     out.push({
