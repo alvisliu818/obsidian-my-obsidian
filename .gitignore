@@ -75,3 +75,6 @@ monaco-workers/
 /_*.txt
 
 dist-release/
+
+# 嵌套独立仓：obsidian-llm-hub 整仓放在 modules/llm-hub（自带 .git 目录），本仓不跟踪
+/modules/llm-hub/
