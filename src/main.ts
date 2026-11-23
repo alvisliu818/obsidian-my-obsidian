@@ -71,9 +71,10 @@ import UnifiedSearchPlugin from "../modules/unified-search/src/main";
 // 已被 obsidian-git 占用）即通过宿主严格配置 → 源码直连，无需 require 桥；
 // tree-sitter 核心 wasm 构建期内嵌（见模块 NOTICE 与根 esbuild.mjs）。
 import CodeLinkPlugin from "../modules/code-link/src/main";
-// plugin-market（自研）：社区插件市场增强——详情顶部区可选中复制（核心
-// user-select:none 传导）、插件评价打标签（绑定社区插件 id）、按标签筛选。
-import PluginMarketPlugin from "../modules/plugin-market/src/main";
+// plugin-community（自研，2026-11-23 自 plugin-market 抽出更名）：社区插件页
+// 增强——详情顶部区可选中复制（核心 user-select:none 传导）、备注/标签评价、
+// 按标签筛选、GitHub 链接旁一键克隆插件源码（克隆后按模板复制插件目录）。
+import PluginCommunityPlugin from "../modules/plugin-community/src/main";
 // file-props（自研,2026-11-22）：任意文件/文件夹的自定义属性——权威数据在
 // daemon 库 file_props 表（全量重建不清），右键编辑 + 属性浏览器筛选查看。
 import FilePropsPlugin from "../modules/file-props/src/main";
@@ -769,15 +770,16 @@ export default class MyObsidianPlugin extends Plugin {
 			cls: CodeLinkPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
-			// 自研：社区插件市场增强（2026-11-04 用户需求）——详情顶部区可选中
-			// 复制、插件评价打标签（绑定社区插件 id，数据在模块片）、按标签筛选
-			// 市场列表。不 patch 核心类，纯 DOM 观察 + 注入。
-			id: "plugin-market",
-			name: "Plugin Market",
+			// 自研：社区插件页增强（2026-11-04 需求；2026-11-23 自 plugin-market
+			// 抽出更名）——详情顶部区可选中复制、备注/标签评价与筛选、GitHub
+			// 链接旁一键克隆插件源码（克隆后按模板复制插件目录）。不 patch 核心
+			// 类，纯 DOM 观察 + 注入；克隆仅桌面端。
+			id: "plugin-community",
+			name: "插件社区",
 			summary:
-				"社区插件市场增强：详情页信息可选中复制；插件可打 1-5 星评分与标签（绑定插件 id 持久化）；侧栏按标签筛选市场列表，卡片显示评价/标签徽标。",
+				"社区插件市场页增强：详情页信息可选中复制；插件可写备注与标签（绑定插件 id 持久化）、按标签筛选列表；GitHub 链接旁一键克隆插件源码到指定目录，克隆后可按模板复制插件目录。",
 			desktopOnly: false,
-			cls: PluginMarketPlugin as unknown as ModuleDescriptor["cls"],
+			cls: PluginCommunityPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{
 			// 自研：用户自定义文件属性（2026-11-22 用户需求）——任意文件/文件夹
@@ -1219,6 +1221,12 @@ export default class MyObsidianPlugin extends Plugin {
 		if (rawModules && rawModules["logseq"] && !rawModules["md-editor"]) {
 			rawModules["md-editor"] = rawModules["logseq"];
 			delete rawModules["logseq"];
+		}
+		// 一次性键名迁移(2026-11-23 模块更名):plugin-market 数据片改键
+		// plugin-community(社区页增强抽成「插件社区」模块)。同款规则。
+		if (rawModules && rawModules["plugin-market"] && !rawModules["plugin-community"]) {
+			rawModules["plugin-community"] = rawModules["plugin-market"];
+			delete rawModules["plugin-market"];
 		}
 		// 一次性合并迁移(2026-11-21 momentum 并入 life):旧 momentum 独立数据片
 		// 整体嵌进 life.data.momentum 子键——settings.modules 重建只认 descriptors,

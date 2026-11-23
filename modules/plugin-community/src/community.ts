@@ -1,23 +1,32 @@
 /**
- * 市场弹窗的 DOM 增强——不 patch 任何核心类，纯观察 + 注入：
+ * 社区插件弹窗的 DOM 增强——不 patch 任何核心类，纯观察 + 注入：
  *
  *   1. **可选中复制**：市场弹窗整棵树继承 body 的 `user-select: none`，详情
  *      顶部区（名称/下载量/版本/作者/仓库/更新/描述）没有任何元素显式开回
  *      text，所以选不中；README 区因为有 .markdown-rendered 规则能选。样式
  *      修复 = 给 .community-modal-meta 及其后代显式 user-select: text。
- *   2. **评价 + 标签**：注入到 `.community-modal-meta` 里（星星 1-5 + 标签
- *      chips + 输入框），绑定到目录缓存反查出的插件 id。
+ *   2. **评价 + 标签**：注入到 `.community-modal-meta` 里（标签 chips + 输入
+ *      框 + 备注），绑定到目录缓存反查出的插件 id。
  *   3. **按标签筛选**：侧栏搜索区下方注入「我的标签」chips；激活后把不匹配
  *      的 .community-item 卡片 display:none（核心重渲染列表后由观察器重套）。
+ *   4. **一键克隆 + 模板复制**（2026-11-23）：详情页 GitHub 仓库链接旁注入
+ *      「⚙ 克隆」按钮——git clone 到设置目录的 <目录>/<仓库名>；克隆完成按钮
+ *      变为「已克隆」，旁边「复制」按钮变为可用——按设置里的模板复制内容
+ *      （{dir}/{repo}/{name}/{id} 占位符，{dir}=插件目录）。
  *
  * id 反查通道（见 store.ts）：详情页用 GitHub 仓库链接（精确），列表卡片用
  * 名字+作者（目录匹配，冲突极少）。反查失败 = 无标签无筛选，优雅退化。
  */
 
-import type { MarketStore } from './store';
+import { Notice, Platform } from 'obsidian';
+import { execFile } from 'node:child_process';
+import { existsSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
+import type { CommunityStore } from './store';
+import { normRepo } from './store';
 
 interface EnhanceCtx {
-	store: MarketStore;
+	store: CommunityStore;
 	/** 弹窗实例捕获（main.ts onModalOpen）——空壳卡填充的精确数据源 */
 	lastCommunityModal: {
 		items?: Record<string, Record<string, unknown>>;
@@ -30,7 +39,7 @@ interface EnhanceCtx {
 const SHELL_FILL_MIN = 20;
 
 /** 每个文档只注入一次的样式：可选中修复 + 增强块外观。 */
-const STYLE_ID = 'lgp-mkt-style';
+const STYLE_ID = 'lgp-pc-style';
 const STYLE_CSS = `
 .community-modal-info .community-modal-meta,
 .community-modal-info .community-modal-meta * {
@@ -91,6 +100,26 @@ const STYLE_CSS = `
   padding: 2px 4px 0;
 }
 .lgp-mkt-badge .lgp-mkt-badge-star { color: var(--color-accent); font-weight: 600; }
+/* 一键克隆 + 模板复制（2026-11-23）：GitHub 链接旁的操作行 */
+.lgp-pc-actions {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding-top: 2px;
+}
+.lgp-pc-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s, 4px);
+  background: var(--background-secondary); color: var(--text-normal);
+  padding: 2px 10px; font-size: var(--font-ui-smaller);
+  cursor: pointer; flex: 0 0 auto;
+}
+.lgp-pc-btn:hover { border-color: var(--background-modifier-border-hover); }
+.lgp-pc-btn:disabled { opacity: 0.55; cursor: default; }
+.lgp-pc-btn.is-done {
+  background: transparent; color: var(--text-muted);
+  border-color: var(--background-modifier-border);
+}
+.lgp-pc-hint { font-size: var(--font-ui-smaller); color: var(--text-muted); }
 `;
 
 export function ensureMarketStyles(doc: Document): void {
@@ -101,14 +130,132 @@ export function ensureMarketStyles(doc: Document): void {
 	doc.head.appendChild(style);
 }
 
-/** 市场弹窗的一次增强：过滤块 + 详情块 + 卡片筛选/徽标 + 空壳卡兜底填充。 */
+/** 市场弹窗的一次增强：过滤块 + 详情块 + 克隆操作 + 卡片筛选/徽标 + 空壳卡兜底填充。 */
 export function enhanceCommunityModal(modal: HTMLElement, ctx: EnhanceCtx): void {
 	ensureMarketStyles(modal.ownerDocument);
 	enhanceControls(modal, ctx);
 	enhanceDetail(modal, ctx);
+	enhanceClone(modal, ctx);
 	applyFilter(modal, ctx);
 	fillShellCards(modal, ctx);
 	cleanupShellFill(modal);
+}
+
+// ---------------------------------------------------------------------------
+// 详情页 GitHub 链接旁：一键克隆 + 模板复制（2026-11-23）
+//
+// 「克隆」= git clone https://github.com/<owner>/<repo>.git 到设置目录的
+// <目录>/<仓库名>；克隆完成按钮变「已克隆」（此后打开详情页直接就是已克隆
+// 态——按 <目录>/.git 是否存在判定，不额外记状态），旁边「复制」按钮变为
+// 可用——按设置里的模板复制内容（占位符 {dir}/{repo}/{name}/{id}）。
+// 仅桌面端提供（git/child_process）；克隆位置未配置时显示指引文字。
+// ---------------------------------------------------------------------------
+
+function enhanceClone(modal: HTMLElement, ctx: EnhanceCtx): void {
+	if (!Platform.isDesktopApp) return;
+	const info = modal.querySelector('.community-modal-info');
+	if (!info) return;
+	const repoAnchor = info.querySelector<HTMLAnchorElement>(
+		'.community-modal-info-repo a[href*="github.com"]',
+	);
+	if (!repoAnchor) return;
+	const repo = normRepo(repoAnchor.href);
+	if (!repo) return;
+	let row = info.querySelector<HTMLElement>('.lgp-pc-actions');
+	if (row && row.dataset['lgpRepo'] === repo) return; // 已就位且是同一插件
+	if (row) row.remove();
+	row = info.ownerDocument!.createElement('div');
+	row.className = 'lgp-pc-actions';
+	row.dataset['lgpRepo'] = repo;
+	renderCloneRow(row as HTMLElement, repo, ctx);
+	const repoRow = repoAnchor.closest('.community-modal-info-repo') ?? repoAnchor.parentElement;
+	if (repoRow?.parentElement) {
+		repoRow.parentElement.insertBefore(row, repoRow.nextSibling);
+	} else {
+		info.appendChild(row);
+	}
+}
+
+/** 渲染克隆操作行（幂等：每次整体重画，按目录是否存在判定克隆态）。 */
+function renderCloneRow(row: HTMLElement, repo: string, ctx: EnhanceCtx): void {
+	const doc = row.ownerDocument!;
+	row.empty();
+	const id = ctx.store.byRepoUrl(repo)?.id ?? null;
+	const cloneDir = (ctx.store.data.cloneDir ?? '').trim();
+	const name = repo.split('/')[1] || repo;
+	const dir = cloneDir ? `${cloneDir.replace(/[\\/]+$/, '')}/${name}` : '';
+	const template = (ctx.store.data.template ?? '').trim() || '{dir}';
+
+	if (!cloneDir) {
+		const hint = doc.createElement('span');
+		hint.className = 'lgp-pc-hint';
+		hint.textContent = '（未配置克隆位置——在「插件社区」设置里填写后重开本页）';
+		row.appendChild(hint);
+		return;
+	}
+
+	const cloned = existsSync(path.join(dir, '.git'));
+
+	const cloneBtn = doc.createElement('button');
+	cloneBtn.className = 'lgp-pc-btn';
+	if (cloned) {
+		cloneBtn.className += ' is-done';
+		cloneBtn.textContent = '✓ 已克隆';
+		cloneBtn.disabled = true;
+		cloneBtn.title = dir;
+	} else {
+		cloneBtn.textContent = '⚙ 克隆';
+		cloneBtn.title = `git clone ${repo} → ${dir}`;
+		cloneBtn.addEventListener('click', () => {
+			if (row.dataset['lgpCloning'] === '1') return;
+			row.dataset['lgpCloning'] = '1';
+			cloneBtn.disabled = true;
+			cloneBtn.textContent = '克隆中…';
+			// 目标根目录可能还不存在——先建好再克隆
+			try {
+				mkdirSync(path.dirname(dir), { recursive: true });
+			} catch { /* git 自己也会报错 */ }
+			execFile(
+				'git',
+				['clone', `https://github.com/${repo}.git`, dir],
+				{ windowsHide: true },
+				(err, _stdout, stderr) => {
+					row.dataset['lgpCloning'] = '0';
+					if (err) {
+						cloneBtn.disabled = false;
+						cloneBtn.textContent = '⚙ 克隆';
+						new Notice(`克隆失败：${String(stderr || err.message).slice(-300)}`);
+						return;
+					}
+					new Notice(`已克隆到 ${dir}`);
+					renderCloneRow(row, repo, ctx); // 重画：已克隆 + 复制可用
+				},
+			);
+		});
+	}
+	row.appendChild(cloneBtn);
+
+	const copyBtn = doc.createElement('button');
+	copyBtn.className = 'lgp-pc-btn';
+	copyBtn.textContent = '复制';
+	if (!cloned) {
+		copyBtn.disabled = true;
+		copyBtn.title = '克隆后可用：按模板复制插件目录';
+	} else {
+		copyBtn.title = '按模板复制（{dir}=插件目录 {repo}=owner/repo {name}=仓库名 {id}=插件 id）';
+		copyBtn.addEventListener('click', () => {
+			const text = template
+				.replace(/\{dir\}/g, dir)
+				.replace(/\{repo\}/g, repo)
+				.replace(/\{name\}/g, name)
+				.replace(/\{id\}/g, id ?? '');
+			void navigator.clipboard.writeText(text).then(
+				() => new Notice('已复制：' + text),
+				(e) => new Notice('复制失败：' + String(e)),
+			);
+		});
+	}
+	row.appendChild(copyBtn);
 }
 
 // ---------------------------------------------------------------------------
@@ -297,7 +444,7 @@ function enhanceControls(modal: HTMLElement, ctx: EnhanceCtx): void {
 }
 
 // ---------------------------------------------------------------------------
-// 详情页：评分 + 标签编辑
+// 详情页：备注 + 标签编辑
 // ---------------------------------------------------------------------------
 
 function enhanceDetail(modal: HTMLElement, ctx: EnhanceCtx): void {

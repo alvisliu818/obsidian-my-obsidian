@@ -1,10 +1,11 @@
 /**
- * plugin-market —— 社区插件市场增强。
+ * plugin-community —— 社区插件页增强（2026-11-23 自 plugin-market 抽出更名）。
  *
  * 面向 Obsidian 核心的社区插件市场弹窗（1.15 起总是开成独立弹窗窗口）：
- * 详情顶部区可选中复制（核心把整棵树 user-select:none 了）；详情页可打
- * 1-5 星评分与标签（绑定社区插件 id，存模块数据片）；侧栏按标签筛选列表
- * 卡片，卡片上给评价/标签徽标。
+ * 详情顶部区可选中复制（核心把整棵树 user-select:none 了）；详情页可写备注
+ * 与标签（绑定社区插件 id，存模块数据片）；侧栏按标签筛选列表卡片，卡片上
+ * 给备注/标签徽标；详情页 GitHub 仓库链接旁一键克隆插件源码到设置目录
+ * （克隆完成按钮变「已克隆」，旁边「复制」按钮按模板复制插件目录）。
  *
  * 捕获点：市场弹窗不走 workspace window（`window-open` 不触发、`window.open`
  * 也不经过主 realm，实测均空），唯一公开捕获点是 `Modal.prototype.open`——
@@ -15,12 +16,13 @@
  * 目录独立文件，7 天刷新。
  */
 
-import { Modal, Plugin } from 'obsidian';
-import { MarketStore } from './store';
-import { enhanceCommunityModal } from './market';
+import { Modal, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import type { App } from 'obsidian';
+import { CommunityStore, DEFAULT_TEMPLATE } from './store';
+import { enhanceCommunityModal } from './community';
 
-export default class PluginMarketPlugin extends Plugin {
-	private store!: MarketStore;
+export default class PluginCommunityPlugin extends Plugin {
+	private store!: CommunityStore;
 	/**
 	 * 最近一次打开的社区市场弹窗实例（Modal.prototype.open 补丁捕获）。
 	 * 弹窗实例带 items（id→完整条目,含 downloads/updated）与 itemsVisible
@@ -37,7 +39,7 @@ export default class PluginMarketPlugin extends Plugin {
 	private stylesDocs = new Set<Document>();
 
 	async onload(): Promise<void> {
-		this.store = new MarketStore(
+		this.store = new CommunityStore(
 			this.app,
 			this.manifest,
 			() => this.loadData(),
@@ -49,6 +51,7 @@ export default class PluginMarketPlugin extends Plugin {
 
 		this.attachWindow(window);
 		this.patchModalOpen();
+		this.addSettingTab(new CommunitySettingTab(this.app, this, this.store));
 	}
 
 	onunload(): void {
@@ -57,7 +60,7 @@ export default class PluginMarketPlugin extends Plugin {
 		for (const t of this.timers.values()) window.clearTimeout(t);
 		this.timers.clear();
 		for (const doc of new Set<Document>([window.document, ...this.stylesDocs])) {
-			doc.getElementById('lgp-mkt-style')?.remove();
+			doc.getElementById('lgp-pc-style')?.remove();
 		}
 		this.stylesDocs.clear();
 		this.store.flush();
@@ -71,11 +74,11 @@ export default class PluginMarketPlugin extends Plugin {
 	private patchModalOpen(): void {
 		const proto = Modal.prototype as unknown as {
 			open: (...args: unknown[]) => unknown;
-			__lgpMktPatched?: boolean;
+			__lgpPcPatched?: boolean;
 		};
-		if (proto.__lgpMktPatched) return;
+		if (proto.__lgpPcPatched) return;
 		const orig = proto.open;
-		proto.__lgpMktPatched = true;
+		proto.__lgpPcPatched = true;
 		const self = this;
 		proto.open = function (this: { modalEl?: HTMLElement }, ...args: unknown[]) {
 			const result = orig.apply(this, args);
@@ -84,7 +87,7 @@ export default class PluginMarketPlugin extends Plugin {
 		};
 		this.register(() => {
 			proto.open = orig;
-			delete proto.__lgpMktPatched;
+			delete proto.__lgpPcPatched;
 		});
 	}
 
@@ -144,7 +147,7 @@ export default class PluginMarketPlugin extends Plugin {
 			enhanceCommunityModal(modal, { store: this.store, lastCommunityModal: this.lastCommunityModal });
 		} catch (e) {
 			// 核心 DOM 结构变动不应拖垮设置弹窗——增强失败静默跳过
-			console.error('[plugin-market] enhance failed', e);
+			console.error('[plugin-community] enhance failed', e);
 		}
 		// 兜底重试：数据在途（目录网络拉取）时首轮 enhance 空手而归——只要还有
 		// 空壳就限时补跑（2s × 15 次 ≈ 30s 覆盖慢网;每次真增强都会消掉一批空壳，
@@ -170,5 +173,42 @@ export default class PluginMarketPlugin extends Plugin {
 			this.timers.delete(doc);
 			this.enhanceDoc(doc);
 		}
+	}
+}
+
+/** 模块设置页：克隆位置 + 复制模板（宿主 shim 截获后进「插件社区」二级页）。 */
+class CommunitySettingTab extends PluginSettingTab {
+	constructor(app: App, plugin: Plugin, private readonly store: CommunityStore) {
+		super(app, plugin);
+	}
+
+	display(): void {
+		const { containerEl } = this;
+		containerEl.empty();
+		containerEl.createEl('h2', { text: '插件社区' });
+
+		new Setting(containerEl)
+			.setName('克隆位置')
+			.setDesc(
+				'git clone 的目标根目录：插件源码会克隆到 <该目录>/<仓库名>。例如 E:\\dev\\obsidian-plugins。留空则详情页只显示指引。',
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder('E:\\dev\\obsidian-plugins')
+					.setValue(this.store.data.cloneDir ?? '')
+					.onChange((value) => this.store.setCloneDir(value)),
+			);
+
+		new Setting(containerEl)
+			.setName('复制模板')
+			.setDesc(
+				'克隆后「复制」按钮渲染的模板。占位符：{dir}=插件目录、{repo}=owner/repo、{name}=仓库名、{id}=插件 id。默认 {dir}。',
+			)
+			.addTextArea((text) => {
+				text.inputEl.rows = 2;
+				text.setPlaceholder(DEFAULT_TEMPLATE)
+					.setValue(this.store.data.template ?? DEFAULT_TEMPLATE)
+					.onChange((value) => this.store.setTemplate(value));
+			});
 	}
 }

@@ -1,5 +1,6 @@
 /**
- * plugin-market 的 store 纯逻辑：备注/标签/全部标签 + 目录反查索引。
+ * plugin-community 的 store 纯逻辑：备注/标签/全部标签 + 目录反查索引 +
+ * 克隆设置（setCloneDir/setTemplate）。
  *
  * normRepo 的回归锚点：官方 community-plugins.json 的 repo 字段是裸
  * "owner/repo"（v1 曾把它当 URL 误剥成空串 → 整列反查通道失效），两种输入
@@ -7,12 +8,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { MarketStore, normRepo } from '../src/store';
+import { CommunityStore, normRepo } from '../src/store';
 import type { CatalogEntry } from '../src/types';
 
-function makeStore(): MarketStore {
+function makeStore(): CommunityStore {
 	let saved: unknown = null;
-	return new MarketStore(
+	return new CommunityStore(
 		{} as any,
 		{ dir: '.obsidian/plugins/obsidian-my-obsidian' } as any,
 		async () => null,
@@ -36,7 +37,7 @@ describe('normRepo', () => {
 	});
 });
 
-describe('MarketStore 备注与标签', () => {
+describe('CommunityStore 备注与标签', () => {
 	it('setNote：trim + 截断 2000 + 空删除 + v1 rating 清除', () => {
 		const st = makeStore();
 		// 模拟 v1 遗留数据
@@ -103,5 +104,17 @@ describe('目录反查索引（adoptCatalog）', () => {
 		expect(st.lookupNameAuthor('Excalidraw', 'zsviczian')?.id).toBe('obsidian-excalidraw-plugin');
 		expect(st.lookupNameAuthor('excalidraw', 'ZSVICZIAN')?.id).toBe('obsidian-excalidraw-plugin');
 		expect(st.lookupNameAuthor('Nope', 'x')).toBeUndefined();
+	});
+});
+
+describe('克隆设置', () => {
+	it('setCloneDir trim；setTemplate trim + 空回落默认', () => {
+		const st = makeStore();
+		st.setCloneDir('  E:/dev/plugins  ');
+		expect(st.data.cloneDir).toBe('E:/dev/plugins');
+		st.setTemplate('   ');
+		expect(st.data.template).toBe('{dir}');
+		st.setTemplate('  {dir} -- {repo}  ');
+		expect(st.data.template).toBe('{dir} -- {repo}');
 	});
 });

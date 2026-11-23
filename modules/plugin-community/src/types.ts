@@ -1,5 +1,5 @@
 /**
- * 社区插件市场增强（plugin-market）——数据形状。
+ * 社区插件页增强（plugin-community）——数据形状。
  *
  * 评价/标签绑定到**社区插件 id**（official community-plugins.json 里的 id，
  * 与已安装插件的 manifest.id 同一空间），存在模块自己的数据片里；
@@ -15,11 +15,15 @@ export interface PluginReview {
 	updatedAt?: number;
 }
 
-/** 模块数据片（宿主 data.json 的 modules['plugin-market'].data）。 */
-export interface MarketData {
+/** 模块数据片（宿主 data.json 的 modules['plugin-community'].data）。 */
+export interface CommunityData {
 	reviews: Record<string, PluginReview>;
 	/** 当前的标签筛选；undefined = 不过滤 */
 	activeTag?: string;
+	/** git clone 的目标根目录：插件源码克隆到 <cloneDir>/<仓库名> */
+	cloneDir?: string;
+	/** 克隆后「复制」按钮渲染的模板（占位符 {dir}/{repo}/{name}/{id}） */
+	template?: string;
 }
 
 /** 目录缓存里的一条（community-plugins.json 的子集 + 便于匹配的小写字段）。 */
@@ -39,7 +43,7 @@ export interface CatalogFile {
 	plugins: CatalogEntry[];
 }
 
-export const DEFAULT_MARKET_DATA: MarketData = { reviews: {} };
+export const DEFAULT_COMMUNITY_DATA: CommunityData = { reviews: {} };
 
 /** 目录缓存刷新周期：7 天。 */
 export const CATALOG_TTL_MS = 7 * 24 * 60 * 60 * 1000;

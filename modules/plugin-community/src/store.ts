@@ -1,8 +1,8 @@
 /**
  * 数据与目录缓存。
  *
- * - 评价/标签/当前筛选：模块数据片（宿主 data.json），写时去抖 800ms——
- *   星星连点、连续加标签不打爆 saveData。
+ * - 评价/标签/当前筛选/克隆设置：模块数据片（宿主 data.json），写时去抖
+ *   800ms——星星连点、连续加标签不打爆 saveData。
  * - 目录缓存：官方 community-plugins.json 拉回来落在插件目录
  *   `community-catalog.json`（约 2MB，不进 data.json），7 天刷新，离线用旧的。
  *   它提供 repo→id 与 name+author→id 两条反查通道：详情页有 GitHub 仓库链接
@@ -13,15 +13,18 @@ import { requestUrl, type App, type PluginManifest } from 'obsidian';
 import {
 	CATALOG_TTL_MS,
 	CATALOG_URL,
-	DEFAULT_MARKET_DATA,
+	DEFAULT_COMMUNITY_DATA,
 	type CatalogEntry,
 	type CatalogFile,
-	type MarketData,
+	type CommunityData,
 	type PluginReview,
 } from './types';
 
-export class MarketStore {
-	data: MarketData = { ...DEFAULT_MARKET_DATA, reviews: {} };
+/** 克隆后复制模板的默认值：只给插件目录。 */
+export const DEFAULT_TEMPLATE = '{dir}';
+
+export class CommunityStore {
+	data: CommunityData = { ...DEFAULT_COMMUNITY_DATA, reviews: {} };
 	private saveTimer = 0;
 	private catalog: CatalogEntry[] | null = null;
 	private catalogLoading: Promise<CatalogEntry[]> | null = null;
@@ -37,10 +40,12 @@ export class MarketStore {
 	) {}
 
 	async load(): Promise<void> {
-		const raw = (await this.loadData()) as Partial<MarketData> | null;
+		const raw = (await this.loadData()) as Partial<CommunityData> | null;
 		this.data = {
 			reviews: raw?.reviews && typeof raw.reviews === 'object' ? raw.reviews : {},
 			activeTag: typeof raw?.activeTag === 'string' && raw.activeTag ? raw.activeTag : undefined,
+			cloneDir: typeof raw?.cloneDir === 'string' ? raw.cloneDir : '',
+			template: typeof raw?.template === 'string' && raw.template ? raw.template : DEFAULT_TEMPLATE,
 		};
 	}
 
@@ -60,6 +65,25 @@ export class MarketStore {
 		}, 800);
 	}
 
+	// ------------------------------------------------------------------
+	// 克隆设置（2026-11-23：GitHub 链接旁一键克隆 + 模板复制）
+	// ------------------------------------------------------------------
+
+	setCloneDir(dir: string): void {
+		this.data.cloneDir = dir.trim();
+		this.scheduleSave();
+	}
+
+	setTemplate(template: string): void {
+		const v = template.trim();
+		this.data.template = v || DEFAULT_TEMPLATE;
+		this.scheduleSave();
+	}
+
+	// ------------------------------------------------------------------
+	// 评价/标签
+	// ------------------------------------------------------------------
+
 	reviewOf(pluginId: string): PluginReview | undefined {
 		return this.data.reviews[pluginId];
 	}
@@ -69,7 +93,7 @@ export class MarketStore {
 
 	setNote(pluginId: string, note: string | undefined): void {
 		const rec = { ...this.data.reviews[pluginId] } as PluginReview & { rating?: number };
-		const text = (note ?? '').replace(/\r\n/g, '\n').trim().slice(0, MarketStore.NOTE_MAX);
+		const text = (note ?? '').replace(/\r\n/g, '\n').trim().slice(0, CommunityStore.NOTE_MAX);
 		if (text) rec.note = text;
 		else delete rec.note;
 		// 星级字段已废弃（v1 遗留），写入时顺手清掉
