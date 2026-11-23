@@ -5,7 +5,9 @@
  * （`.HyperMD-quote`），不产出列表行语义：`- ` 原样显示、没有圆点/序号与缩进
  * （CDP 实测；阅读视图与块编辑器静态渲染都正常，只有原生编辑器的实时预览缺）。
  * 这里用编辑器扩展在**视图层**补这一层：
- *   - 命中「引述前缀 + 列表标记 + 空白」的行，把标记替换成圆点/序号 widget；
+ *   - 命中「引述前缀 + 列表标记 + 空白」的行，给标记字符套上 Obsidian 自己的
+ *     `list-bullet` / `list-number` 类（主题圆点/序号，与普通列表同一套样式；
+ *     标记仍是真文本，点击、光标、回车续列表的行为都和普通列表一致）；
  *   - 行上打 `vt-quote-list-line`（嵌套层级写进 data 属性），CSS 给缩进；
  *   - 文档一个字都不改，纯装饰，保存/往返零影响。
  *
@@ -13,7 +15,7 @@
  * （那边是单块编辑器，不需要整篇的引述列表渲染）。
  */
 
-import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, type PluginValue, type ViewUpdate } from '@codemirror/view';
+import { Decoration, EditorView, ViewPlugin, type DecorationSet, type PluginValue, type ViewUpdate } from '@codemirror/view';
 import { RangeSetBuilder, type Extension } from '@codemirror/state';
 import { editorLivePreviewField } from 'obsidian';
 import { codeRangesInView, mdEmojiBypass } from './emojiShortcodes';
@@ -57,38 +59,6 @@ export function scanQuoteListLine(text: string): QuoteListHit | null {
 	};
 }
 
-class QuoteListBullet extends WidgetType {
-	constructor(
-		private readonly ordered: boolean,
-		private readonly markerText: string,
-		private readonly indentLevel: number,
-	) {
-		super();
-	}
-
-	eq(other: QuoteListBullet): boolean {
-		return (
-			other.ordered === this.ordered &&
-			other.markerText === this.markerText &&
-			other.indentLevel === this.indentLevel
-		);
-	}
-
-	toDOM(): HTMLElement {
-		const span = document.createElement('span');
-		span.className = 'vt-quote-list-bullet' + (this.ordered ? ' is-ordered' : '');
-		span.textContent = this.ordered ? this.markerText : '•';
-		if (this.indentLevel > 0) {
-			span.style.marginInlineStart = `${this.indentLevel * 1.1}em`;
-		}
-		return span;
-	}
-
-	ignoreEvent(): boolean {
-		return false;
-	}
-}
-
 /** 原生编辑器 Live Preview 的引述列表渲染扩展。 */
 export const quoteListEditorExtension: Extension = ViewPlugin.fromClass(
 	class implements PluginValue {
@@ -125,12 +95,16 @@ export const quoteListEditorExtension: Extension = ViewPlugin.fromClass(
 								attributes: { 'data-vt-ql-indent': String(hit.indentLevel) },
 							}),
 						);
+						// 直接复用 Obsidian 自己的列表标记类，而不是自造 widget：
+						// `.list-bullet` 会把标记字符变透明、用 ::after 画主题圆点
+						// （大小/颜色/形状与普通列表完全一致），`.list-number` 保留
+						// 序号文本。标记仍是文档里的真文本——光标、点选、复制、
+						// 回车续列表的行为都与普通列表一样，也没有 contenteditable
+						// =false 的替换 widget 在点击时消失的问题。
 						builder.add(
 							line.from + hit.markerFrom,
-							line.from + hit.markerEnd,
-							Decoration.replace({
-								widget: new QuoteListBullet(hit.ordered, hit.markerText, hit.indentLevel),
-							}),
+							line.from + (hit.ordered ? hit.markerEnd : hit.markerTo),
+							Decoration.mark({ class: hit.ordered ? 'list-number' : 'list-bullet' }),
 						);
 					}
 					if (line.to >= vr.to) break;
