@@ -1353,6 +1353,24 @@
   font-size: var(--font-size-preview-blockquote, inherit);
 }
 
+/* ---------- 原生编辑器：引述块内的列表 ---------- */
+/* Live Preview 只把 `> - 项` 当引述行（.HyperMD-quote），不产出列表语义；
+   features/quoteListRender 的编辑器扩展把列表标记换成这个 widget。阅读视图与
+   块编辑器静态渲染不走这里（那边 MarkdownRenderer 本就是真列表）。 */
+.vt-quote-list-bullet {
+  display: inline-block;
+  min-width: 0.9em;
+  margin-inline-end: 0.35em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.vt-quote-list-bullet.is-ordered {
+  min-width: 1.7em;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------- Live preview (实时预览) in the block editors ---------- */
 /* Syntax marks hidden by the live-preview decorations; the remaining text
    takes its rendered form. Class names are unprefixed (unique) so both the

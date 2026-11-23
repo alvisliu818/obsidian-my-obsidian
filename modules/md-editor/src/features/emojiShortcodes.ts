@@ -194,7 +194,7 @@ export function collectNativeEmojiTokens(input: NativeEmojiScan): EmojiToken[] {
  * - stock @lezer/markdown(名字保险):`InlineCode` / `FencedCode` / `CodeBlock`。
  * 节点名含 `code`(大小写不敏)即视为代码环境——两套命名里所有带 code 的
  * 节点都是代码相关,无非代码误伤。 */
-function codeRangesInView(view: EditorView): Array<{ from: number; to: number }> {
+export function codeRangesInView(view: EditorView): Array<{ from: number; to: number }> {
 	const out: Array<{ from: number; to: number }> = [];
 	const tree = syntaxTree(view.state);
 	for (const vr of view.visibleRanges) {
