@@ -58,7 +58,7 @@ import { openJournal } from './features/dailyNote';
 import { BackupManager } from './core/backup';
 import { registerNativeImgFix } from './features/nativeImgFix';
 import { registerEmojiShortcodes } from './features/emojiShortcodes';
-import { quoteListEditorExtension } from './features/quoteListRender';
+import { quoteListEditorExtension, quoteListFoldService } from './features/quoteListRender';
 import { applyMarkedTabIcons, markLeafTabIcon } from '../../virtual-tree/src/features/tabIcon';
 import { ExtensionMarketModal } from './extensions/marketModal';
 import { restoreAllExtensions, registerExtensionConsumer, search as extSearch, installExtension, uninstallExtension, toggleExtension, reinstallExtension, getInstalledExtensions } from './extensions/extensionManager';
@@ -318,7 +318,9 @@ export default class LogseqEditorPlugin extends Plugin {
     registerEmojiShortcodes(this);
     // 原生编辑器实时预览里补渲染引述块内的列表（`> - 项`）。阅读视图与块编辑器
     // 静态渲染本就正常，只有 Live Preview 缺这一层，见 features/quoteListRender。
-    this.registerEditorExtension(quoteListEditorExtension);
+    // 同文件另给引述列表项提供 foldService，直接复用 Obsidian 的折叠指示器/
+    // 折叠态/`…` 占位，点击折叠行为与普通列表一致。
+    this.registerEditorExtension([quoteListEditorExtension, quoteListFoldService]);
     // `\(…\)` / `\[…\]` 公式渲染**不在这里注册**：正主是 latex-delimiter-renderer
     // 模块（宿主里单独一个开关），它自己注册实时预览与阅读模式两条路。本模块
     // 只负责那些「自己掌握源但没有 section 信息」的渲染面 —— 静态块、内嵌、

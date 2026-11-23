@@ -16,6 +16,7 @@
  */
 
 import { Decoration, EditorView, ViewPlugin, type DecorationSet, type PluginValue, type ViewUpdate } from '@codemirror/view';
+import { foldService } from '@codemirror/language';
 import { RangeSetBuilder, type Extension } from '@codemirror/state';
 import { editorLivePreviewField } from 'obsidian';
 import { codeRangesInView, mdEmojiBypass } from './emojiShortcodes';
@@ -58,6 +59,58 @@ export function scanQuoteListLine(text: string): QuoteListHit | null {
 		indentLevel: quoteDepth - 1 + Math.floor(extra.length / 2),
 	};
 }
+
+/**
+ * 引述行里「正文列」：引述前缀之后第一个非空白字符的列（tab 按 2 列）。
+ * 非引述行返回 null；只有 `>` 的空引述行返回 +∞（视为子树内部，不终止折叠）。
+ * 用来比较引述内列表/段落的缩进层级。
+ */
+export function quoteContentColumn(text: string): number | null {
+	const prefix = /^(?:>[ \t]?)+/.exec(text);
+	if (!prefix) return null;
+	const rest = text.slice(prefix[0].length);
+	const ws = /^[ \t]*/.exec(rest)?.[0] ?? '';
+	const width = (s: string): number => s.replace(/\t/g, '  ').length;
+	if (!rest.slice(ws.length)) return Number.POSITIVE_INFINITY;
+	return width(prefix[0]) + width(ws);
+}
+
+/**
+ * 从 `startIndex`（0 基）这一行引述列表项向后找出子树的最后一行；没有子行
+ * 返回 -1。只统计仍在引述内、且正文列比当前项更深的行（嵌套列表、缩进续行、
+ * 空引述行）；普通行或同级/更浅的引述行结束子树。
+ */
+export function quoteListFoldEnd(lineAt: (index: number) => string | null, startIndex: number): number {
+	const text = lineAt(startIndex);
+	if (text == null || !scanQuoteListLine(text)) return -1;
+	const base = quoteContentColumn(text);
+	if (base === null) return -1;
+	let last = -1;
+	for (let i = startIndex + 1; ; i++) {
+		const next = lineAt(i);
+		if (next == null) break;
+		const col = quoteContentColumn(next);
+		if (col === null || col <= base) break;
+		last = i;
+	}
+	return last;
+}
+
+/**
+ * 引述列表的折叠服务。Obsidian 的 Live Preview 折叠 UI（指示器、折叠态、
+ * `…` 占位）统一走 `foldable()`/`foldService`，这里只提供引述列表项的子树
+ * 范围，指示器与折叠行为即与普通列表一致。
+ */
+export const quoteListFoldService: Extension = foldService.of((state, lineStart) => {
+	const line = state.doc.lineAt(lineStart);
+	const endIndex = quoteListFoldEnd(
+		(i) => (i < state.doc.lines ? state.doc.line(i + 1).text : null),
+		line.number - 1,
+	);
+	if (endIndex < 0) return null;
+	const last = state.doc.line(endIndex + 1);
+	return last.to > line.to ? { from: line.to, to: last.to } : null;
+});
 
 /** 原生编辑器 Live Preview 的引述列表渲染扩展。 */
 export const quoteListEditorExtension: Extension = ViewPlugin.fromClass(
