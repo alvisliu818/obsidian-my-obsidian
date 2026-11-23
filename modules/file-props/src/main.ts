@@ -15,7 +15,7 @@
  * 提示行。数据不落 Obsidian 设置或笔记，卸载模块不会丢属性（在 SQLite 里）。
  */
 
-import { Menu, Plugin, TFolder, WorkspaceLeaf } from 'obsidian';
+import { App, Menu, Plugin, TFile, TFolder, WorkspaceLeaf } from 'obsidian';
 import { PropsEditModal } from './modal';
 import { FilePropsView, VIEW_TYPE_FILE_PROPS } from './view';
 
@@ -71,11 +71,23 @@ export default class FilePropsPlugin extends Plugin {
 		return getDaemon(this);
 	}
 
+	/**
+	 * 跨模块入口（虚拟文档树等）：直接打开某个路径的属性编辑弹窗。
+	 * 路径语义由调用方决定——库内文件用库内相对路径，库外挂载用绝对路径，
+	 * 远端挂载用虚拟路径；file_props 表按字符串存，三者互不冲突。
+	 */
+	openPropsEditor(path: string, isDir: boolean): void {
+		new PropsEditModal(this, path, isDir).open();
+	}
+
 	async onload(): Promise<void> {
-		// 文件管理器右键（文件与文件夹都触发 file-menu）：加「文件属性」入口
+		// 文件管理器右键（文件与文件夹都触发 file-menu）：加「文件属性」入口。
+		// 只认真正的库内 TFile/TFolder：虚拟文档树会把库外文件以 TExternalFile /
+		// 适配器形状转发同一条事件，路径不是库内相对路径，交给它在树菜单里的
+		// 「文件属性…」显式入口处理，避免重复项与错误主键。
 		this.registerEvent(
 			this.app.workspace.on('file-menu', (menu: Menu, file) => {
-				if (!file) return;
+				if (!(file instanceof TFile) && !(file instanceof TFolder)) return;
 				const isDir = file instanceof TFolder;
 				menu.addItem((item) => {
 					item
@@ -122,3 +134,21 @@ export default class FilePropsPlugin extends Plugin {
 }
 
 export { PropsEditModal, FilePropsView, VIEW_TYPE_FILE_PROPS };
+
+/**
+ * 取当前宿主里已启用的 file-props 模块实例（未启用/未加载时 null）。
+ * 虚拟文档树的右键入口与工具栏按钮经此调用，不直接依赖模块生命周期。
+ */
+export function filePropsOf(app: App): FilePropsPlugin | null {
+	try {
+		const host = (
+			app as unknown as {
+				plugins?: { plugins?: Record<string, { live?: Map<string, unknown> }> };
+			}
+		).plugins?.plugins?.['obsidian-my-obsidian'];
+		const inst = host?.live?.get('file-props') as FilePropsPlugin | undefined;
+		return inst && typeof inst.openPropsEditor === 'function' ? inst : null;
+	} catch {
+		return null;
+	}
+}

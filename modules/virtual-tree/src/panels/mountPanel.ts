@@ -69,6 +69,8 @@ import {
   vaultRootOf,
   vaultScanLayer,
 } from '../features/vaultFs';
+// 文件属性（file-props 模块）：右键「文件属性…」与工具栏「文件属性」共用。
+import { filePropsOf } from '../../../file-props/src/main';
 import {
   compileFilter,
   countTree,
@@ -1234,6 +1236,11 @@ export class MountPanelView extends ItemView {
       // 标签筛选:工具栏按钮 → 独立面板(用户 2026-11-19 终版:做成一个面板)。
       // 激活集在 plugin.activeTagFilterIds,树行过滤在 flattenHost。
       void this.plugin.activatePanel(VIEW_TYPE_TAG_FILTER_PANEL);
+    } else if (action === 'file-props') {
+      // 文件属性浏览器（file-props 模块）；筛属性名/属性值/文件夹/扩展名/路径。
+      const fp = filePropsOf(this.app);
+      if (fp) void fp.openView();
+      else new Notice('文件属性模块未启用（设置 → 模块开关）');
     } else if (action === 'focus-clear') {
       // 取消全部聚集（右键「聚集到此」设置；这里一键清除运行态目标）。
       if (this.plugin.focusTargets.length) {
@@ -2359,6 +2366,7 @@ export class MountPanelView extends ItemView {
       item.setTitle('新建笔记…').setIcon('pencil' as never).onClick(() => this.promptNewNote(mount, node)),
     );
     this.addFocusMenuItem(menu, mount, node);
+    this.addFilePropsMenuItem(menu, mount, node);
     if (node) {
       menu.addItem((item) =>
         item.setTitle('重命名').setIcon('text-cursor-input' as never).onClick(() => this.promptRename(mount, node)),
@@ -3062,6 +3070,28 @@ export class MountPanelView extends ItemView {
    * 归「编辑这个挂载…/卸载」管,不在这里给)。
    */
   /**
+   * 「文件属性…」菜单项（库内 / 库外 / remote 三类挂载共用）。
+   *
+   * 属性权威数据在索引守护进程的 file_props 表（file-props 模块），浏览/筛选
+   * 走该模块的「文件属性浏览器」。路径主键按挂载类型取：库内用**库内相对
+   * 路径**（与文件管理器右键、属性浏览器同一键），库外用磁盘绝对路径，remote
+   * 用虚拟路径——三者都是字符串键，互不冲突。模块未启用时不显示入口。
+   */
+  private addFilePropsMenuItem(menu: Menu, mount: ExternalMount, node: MountNode | null): void {
+    if (!node) return;
+    const fp = filePropsOf(this.app);
+    if (!fp) return;
+    const path = isVaultMount(mount) ? vaultJoinPath(mount, node.rel) : node.abs;
+    if (!path) return;
+    menu.addItem((item) =>
+      item
+        .setTitle('文件属性…')
+        .setIcon('list-plus' as never)
+        .onClick(() => fp.openPropsEditor(path, !!node.isDir)),
+    );
+  }
+
+  /**
    * 聚集菜单项（库内 / 库外 / remote 三类挂载共用）：按设置「聚焦方式」只显示
    * 目标的上下文（默认）或仅目标与子树。可叠加多个目标；再次点同一目标 =
    * 取消该目标。运行态，重启清空。
@@ -3109,6 +3139,7 @@ export class MountPanelView extends ItemView {
         .onClick(() => this.promptNewFolder(mount, newDirAbs, dirNode?.rel ?? (node ? parentRelOf(node.rel) : ''))),
     );
     this.addFocusMenuItem(menu, mount, node);
+    this.addFilePropsMenuItem(menu, mount, node);
     // 新建笔记:文件落在一个**另外配置**的目录里(设置 → 外部挂载 → 新建笔记
     // 的位置),再挂成这里右键条目的子文档 —— 磁盘位置与树上的位置解耦,
     // 与思源「新建笔记」一致(普通"新建文件"才是就地建在挂载目录里)。

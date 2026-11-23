@@ -34,6 +34,7 @@ export const PANEL_TOOLBAR_BUTTONS: PanelToolbarButton[] = [
   { key: 'refresh', label: '重新扫描', icon: 'refresh-cw' },
   { key: 'collapse-all', label: '全部收起', icon: 'chevrons-down-up' },
   { key: 'tag-filter', label: '标签筛选', icon: 'tags' },
+  { key: 'file-props', label: '文件属性浏览器', icon: 'list-plus' },
   { key: 'focus-clear', label: '取消聚集', icon: 'focus-off' },
   { key: 'trash', label: '回收站', icon: 'archive' },
 ];
@@ -49,7 +50,7 @@ export interface PanelToolbarCfg {
 }
 
 /** 默认收进「更多」的按钮:新建走右键菜单更顺手,顶栏只留高频动作 */
-export const PANEL_MENU_ONLY_DEFAULTS = ['new-file', 'new-folder', 'trash'];
+export const PANEL_MENU_ONLY_DEFAULTS = ['new-file', 'new-folder', 'file-props', 'trash'];
 
 export function panelToolbarButtonByKey(key: string): PanelToolbarButton | undefined {
   return PANEL_TOOLBAR_BUTTONS.find((b) => b.key === key);
