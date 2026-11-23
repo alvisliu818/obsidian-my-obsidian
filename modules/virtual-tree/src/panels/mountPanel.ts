@@ -1335,9 +1335,14 @@ export class MountPanelView extends ItemView {
   private renderMount(root: HTMLElement, mount: ExternalMount): void {    const section = root.createDiv({ cls: 'logseq-mount-section' });
     // 定位当前文件时按挂载找到区段、再按固定行高算偏移。
     section.dataset.mountId = mount.id;
-
-    const head = section.createDiv({ cls: 'logseq-mount-head' });
     const state = this.scanWithLayers(mount);
+    // 聚集时顶层挂载行也不展示（2026-11-23 用户要求）：不画挂载头与统计行，
+    // 过滤后的目标子树直接铺在面板顶层（baseDepth 0）。此时也不受挂载折叠态
+    // 拦截——头都不可见，没有可点开的入口。
+    const focusHidden = (this.plugin.focusTargets ?? []).some((t) => t.mountId === mount.id);
+
+    if (!focusHidden) {
+    const head = section.createDiv({ cls: 'logseq-mount-head' });
     // The mount root is a folder too, so it gets the same treatment.
     const headLabel = mountDisplayName(mount);
     // A mounted FILE's head carries the file's own icon, not a folder's.
@@ -1421,12 +1426,14 @@ export class MountPanelView extends ItemView {
     this.wireDragReorder(section, head, mount);
 
     if (!state.open.has('')) return;
+    }
 
     if (state.error) section.createDiv({ cls: 'logseq-mount-error', text: state.error });
     // remote 挂载:请求在途且根层还没有数据时给加载提示(数据到达后自动重绘)
     if (isRemoteMount(mount) && state.loading && state.tree.length === 0) {
       section.createDiv({ cls: 'logseq-mount-flag', text: '加载中…' });
     }
+    if (!focusHidden) {
     const filtering = this.plugin.settings.mountFilterEnabled !== false;
     const counts = countTree(state.tree);
     const meta: string[] = [];
@@ -1457,7 +1464,8 @@ export class MountPanelView extends ItemView {
       section.createDiv({ cls: 'logseq-mount-empty', text: '没有符合过滤条件的条目。' });
       return;
     }
-    this.renderRows(section, mount, state);
+    }
+    this.renderRows(section, mount, state, focusHidden ? 0 : 1);
   }
 
   /**
@@ -1470,8 +1478,8 @@ export class MountPanelView extends ItemView {
    * scrolls as one — the mount header scrolls away with its tree — and the
    * band is repainted by the panel scroll listener (`onScrollRepaint`).
    */
-  private renderRows(section: HTMLElement, mount: ExternalMount, state: MountState): void {
-    const rows = this.flatten(mount, state);
+  private renderRows(section: HTMLElement, mount: ExternalMount, state: MountState, baseDepth = 1): void {
+    const rows = this.flatten(mount, state, baseDepth);
     const spacer = section.createDiv({ cls: 'logseq-mount-spacer' });
     spacer.style.position = 'relative';
     spacer.style.height = `${rows.length * MOUNT_ROW_HEIGHT}px`;
@@ -1690,13 +1698,14 @@ export class MountPanelView extends ItemView {
    * 嵌套挂载头与同层真实子项的先后由 orderedLevel 决定(按名称或拖拽序),
    * 不再像早期版本那样硬钉在最前。
    */
-  private flatten(mount: ExternalMount, state: MountState): FlattenRow[] {
+  private flatten(mount: ExternalMount, state: MountState, baseDepth = 1): FlattenRow[] {
     const out: FlattenRow[] = [];
     // 宿主自身不查 open(''):renderMount 在折叠时根本不会走到这里;不设防才能
     // 让 consumePendingReveal 折叠态也量出行偏移(见 mountNestedFlatten 测试)。
     // 根层从 depth 1 起排:挂载根是区块头(不在行流里),子项整体缩进一级,
     // 与根形成父子缩进关系(此前 depth 0 与头完全平齐,被报告为 bug)。
-    this.flattenHost(mount, state, new Set([mount.id]), out, 1);
+    // 聚集时挂载头不画(baseDepth 0),目标子树直接作为顶层行。
+    this.flattenHost(mount, state, new Set([mount.id]), out, baseDepth);
     return out;
   }
 
