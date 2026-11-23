@@ -309,6 +309,27 @@ export class VirtualTreeSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName('聚焦方式')
+      .setDesc(
+        '树行右键「聚集到此」后树里保留什么。「保留上级与兄弟」（默认）会保留目标的' +
+          '祖先链和同级条目，方便在上下文中翻看；「仅目标与子树」只显示聚集的那个条目' +
+          '和它下面的全部内容，目标的父级与兄弟都不展示。',
+      )
+      .addDropdown((d) =>
+        d
+          .addOptions({
+            context: '保留上级与兄弟（默认）',
+            subtree: '仅目标与子树（父级不展示）',
+          })
+          .setValue(this.plugin.settings.focusMode === 'subtree' ? 'subtree' : 'context')
+          .onChange(async (v) => {
+            this.plugin.settings.focusMode = v === 'subtree' ? 'subtree' : 'context';
+            await this.plugin.saveSettings();
+            this.plugin.refreshMounts();
+          }),
+      );
+
+    new Setting(containerEl)
       .setName('显示「已加载」统计')
       .setDesc(
         '挂载标题下方的「已加载 N 文件 · M 文件夹」提示。' +

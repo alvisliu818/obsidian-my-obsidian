@@ -77,6 +77,7 @@ import {
   unlinkVaultEntry,
 } from './features/syncToVault';
 import { isRemoteMount } from './types';
+import { invalidateVaultParentPlans } from './features/vaultFs';
 import type { RecentOpenEntry } from './types';
 import {
   isWeblinkPath,
@@ -136,6 +137,12 @@ export default class VirtualTreePlugin extends Plugin {
    * 会话内运行态：命中任一激活标签的文件行保留、目录一律保留；重启清空。
    */
   activeTagFilterIds: string[] = [];
+
+  /**
+   * 「聚集」目标（会话内运行态，重启清空、不落盘）：在树行右键设置后，面板
+   * 只显示目标所在兄弟组及子树。见 features/focusStore.ts。
+   */
+  focusTargets: import('./features/focusStore').FocusTarget[] = [];
 
   /** Timer id for the mount panel's optional auto-refresh; 0 = not scheduled. */
   private mountRefreshTimer = 0;
@@ -350,14 +357,25 @@ export default class VirtualTreePlugin extends Plugin {
     // 库内挂载强刷（同一去抖）。只在功能开着时听，不给不用它的人添常驻开销；
     // 'resolved' 覆盖启动索引完成的那一刻（此前 getFirstLinkpathDest 拿不到目标）。
     this.registerEvent(
-      this.app.metadataCache.on('changed', () => {
+      this.app.metadataCache.on('changed', (file) => {
         if (this.settings.parentMountEnabled === false) return;
+        // 换代独立于面板是否存在：面板没打开时 refreshVaultMounts 没人调，
+        // 若把换代只放在那里，之后打开面板会用到旧 gen 的空计划缓存——parent
+        // 改了不展示（2026-11-23 实报）。changed/resolved 直接换代，重绘仍走去抖。
+        // 只关心 frontmatter 含 parent 键的变化才换代，避免正文编辑也反复作废全库计划。
+        if (
+          file instanceof TFile &&
+          this.app.metadataCache.getFileCache(file)?.frontmatter?.['parent'] !== undefined
+        ) {
+          invalidateVaultParentPlans();
+        }
         refreshVaultMountsSoon();
       }),
     );
     this.registerEvent(
       this.app.metadataCache.on('resolved', () => {
         if (this.settings.parentMountEnabled === false) return;
+        invalidateVaultParentPlans();
         refreshVaultMountsSoon();
       }),
     );

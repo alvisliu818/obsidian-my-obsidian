@@ -14,6 +14,7 @@ import type { App, TAbstractFile } from 'obsidian';
 import {
   invalidateVaultParentPlans,
   parentPlanOf,
+  vaultJoinPath,
   vaultScanLayer,
 } from '../src/features/vaultFs';
 import { compileFilter, EMPTY_FILTER } from '../src/features/mountFilter';
@@ -72,7 +73,9 @@ function fakeApp(files: Record<string, string | null>): {
     }
   }
   const resolve = (linkpath: string): TFile | null => {
-    const clean = linkpath.trim();
+    // 模拟 Obsidian getLinkpathDest：前导 '/' 表示库内绝对路径，剥掉后按
+    // 全路径 / 路径+.md / 唯一同名命中（同它的 o.startsWith('/') 分支）。
+    const clean = linkpath.trim().replace(/^\/+/, '');
     const hit = byPath.get(clean) ?? byPath.get(`${clean}.md`);
     if (hit instanceof TFile) return hit;
     const stems = byStem.get(clean.replace(/\.md$/i, ''));
@@ -180,6 +183,72 @@ describe('parentPlanOf', () => {
     setParent('root/c.md', '[[P]]');
     invalidateVaultParentPlans();
     expect(parentPlanOf(app, 'root').floating.has('root/c.md')).toBe(true);
+  });
+
+  // 2026-11-23 用户实报：挂载根是一篇笔记 `!.md`（externalMounts path='!.md'），
+  // 子笔记 `notes/大模型.md` 写 parent=[[!]]，期望挂到 ! 文档名下却没挂上。
+  // 文件型挂载根时子笔记必然在根路径之外，underRoot(f.path) 的文件夹假设失效。
+  it('文件型挂载根：库内别处的笔记挂到根笔记名下', () => {
+    const { app } = fakeApp({
+      '!.md': null,
+      'notes/大模型.md': '[[!]]',
+    });
+    const plan = parentPlanOf(app, '!.md');
+    expect(plan.floating.has('notes/大模型.md')).toBe(true);
+    expect(plan.childrenOf.get('!.md')).toEqual(['notes/大模型.md']);
+  });
+
+  // 2026-11-23 用户实报：链式 + 文件型挂载根。掌柜智库.parent=
+  // [[/notes/大模型|大模型]]（带前导斜杠+别名），大模型.parent=[[!]]。
+  // 期望 !.md → 大模型.md → 掌柜智库.md 三层；此前父目标校验把
+  // 「掌柜智库→大模型」这条边过滤掉，链断在第二层。
+  it('文件型挂载根：链式挂载（子→中间→根笔记）逐层挂上', () => {
+    const { app } = fakeApp({
+      '!.md': null,
+      'notes/大模型.md': '[[!]]',
+      'notes/掌柜智库.md': '[[/notes/大模型|大模型]]',
+    });
+    const plan = parentPlanOf(app, '!.md');
+    expect(plan.parentOf.get('notes/大模型.md')).toBe('!.md');
+    expect(plan.parentOf.get('notes/掌柜智库.md')).toBe('notes/大模型.md');
+    expect(plan.childrenOf.get('!.md')).toEqual(['notes/大模型.md']);
+    expect(plan.childrenOf.get('notes/大模型.md')).toEqual(['notes/掌柜智库.md']);
+  });
+
+  it('文件型挂载根：与根无关的 parent 关系不串入计划', () => {
+    const { app } = fakeApp({
+      '!.md': null,
+      'notes/大模型.md': '[[!]]',
+      'other/a.md': '[[other/b]]',
+      'other/b.md': null,
+    });
+    const plan = parentPlanOf(app, '!.md');
+    expect(plan.floating.has('other/a.md')).toBe(false);
+    expect(plan.childrenOf.has('other/b.md')).toBe(false);
+  });
+
+  it('带引号的 wiki link（手写 YAML `- \"[[!]]\"`）也能解析', () => {
+    const { app } = fakeApp({
+      '!.md': null,
+      'notes/大模型.md': '"[[!]]"',
+    });
+    const plan = parentPlanOf(app, '!.md');
+    expect(plan.childrenOf.get('!.md')).toEqual(['notes/大模型.md']);
+  });
+
+  it('文件型挂载根：rel 用 / 前缀编码库内路径，vaultJoinPath 还原正确', () => {
+    const { app } = fakeApp({
+      '!.md': null,
+      'notes/大模型.md': '[[!]]',
+    });
+    const plan = parentPlanOf(app, '!.md');
+    const fileMount = { kind: 'vault', id: 'mf', path: '!.md', label: '!.md' } as unknown as ExternalMount;
+    const layer = vaultScanLayer(app, fileMount, '', 'E:/base', f, plan);
+    expect(layer.map((n) => n.name)).toEqual(['大模型.md']);
+    // rel 以 / 开头 = 库内绝对路径，避免被当作相对根的路径拼接
+    expect(layer[0].rel).toBe('/notes/大模型.md');
+    expect(layer[0].abs).toBe('E:/base/notes/大模型.md');
+    expect(vaultJoinPath(fileMount, layer[0].rel)).toBe('notes/大模型.md');
   });
 });
 

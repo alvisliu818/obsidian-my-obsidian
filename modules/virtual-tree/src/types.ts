@@ -21,6 +21,13 @@ export type EditorChoice = 'logseq' | 'native';
 export type VideoOpenMode = 'player' | 'native';
 
 /**
+ * 聚集（树行右键「聚集到此」）的展示方式：
+ *   - 'context'：保留目标的祖先链与兄弟组（默认，目标在树里的原位可见）；
+ *   - 'subtree'：只显示聚集的那个条目与它的子树，目标的父级/兄弟都不展示。
+ */
+export type FocusMode = 'context' | 'subtree';
+
+/**
  * One mount: a folder (or single file) shown as a tree in the mount panel.
  *
  * Nothing is copied anywhere — a mounted file is read from and written
@@ -530,6 +537,12 @@ export interface VirtualTreeSettings {
    */
   mountShowMtime: boolean;
   /**
+   * 聚集（右键「聚集到此」）的展示方式（2026-11-23 用户需求）：
+   * 'context' = 保留目标的祖先链与兄弟组，目标在树里的原位可见；
+   * 'subtree' = 只显示聚集的那个条目与它的子树，目标的父级/兄弟不展示。
+   */
+  focusMode: FocusMode;
+  /**
    * 库根挂载（面板第一行的库名）meta 行的「/」。纯占位信息，默认不展示；
    * 打开后仍受 mountShowPath 总开关约束。
    */
@@ -705,6 +718,8 @@ export const DEFAULT_VIRTUAL_TREE_SETTINGS: VirtualTreeSettings = {
   mountShowPinnedBadge: false,
   mountShowPath: true,
   mountShowMtime: true,
+  // 聚集默认保留上下文（祖先链 + 兄弟组），"仅目标与子树"在设置里选。
+  focusMode: 'context',
   mountShowRootPath: false,
   mountDragMode: false,
   mountTreeOrder: {},
@@ -841,6 +856,8 @@ export function virtualTreeSettingsFrom(raw: unknown): VirtualTreeSettings {
   s.mountShowPinnedBadge = o.mountShowPinnedBadge === true;
   s.mountShowPath = o.mountShowPath !== false;
   s.mountShowMtime = o.mountShowMtime !== false;
+  // 聚焦方式：显式 'subtree' 才隐藏父级/兄弟；缺席或其他值落默认 'context'。
+  s.focusMode = o.focusMode === 'subtree' ? 'subtree' : 'context';
   s.mountShowRootPath = o.mountShowRootPath === true;
   s.mountDragMode = o.mountDragMode === true;
   s.mountTreeOrder = mountTreeOrderFrom(o.mountTreeOrder);

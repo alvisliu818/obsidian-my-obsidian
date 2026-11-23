@@ -34,6 +34,7 @@ export const PANEL_TOOLBAR_BUTTONS: PanelToolbarButton[] = [
   { key: 'refresh', label: '重新扫描', icon: 'refresh-cw' },
   { key: 'collapse-all', label: '全部收起', icon: 'chevrons-down-up' },
   { key: 'tag-filter', label: '标签筛选', icon: 'tags' },
+  { key: 'focus-clear', label: '取消聚集', icon: 'focus-off' },
   { key: 'trash', label: '回收站', icon: 'archive' },
 ];
 

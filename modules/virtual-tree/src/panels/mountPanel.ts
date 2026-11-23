@@ -38,6 +38,7 @@ import {
 import { DestPickerModal } from '../features/moveCopy';
 import { allTags, tagById, addTag, fileHasTag, addTagToPath, removeTagFromPath, fileTagIds, pathMatchesTagFilter } from '../features/tagStore';
 import { VIEW_TYPE_TAG_FILTER_PANEL } from './tagFilterPanel';
+import { nodeVisibleUnderFocus, focusTargetBelow, type FocusTarget } from '../features/focusStore';
 import { imapListDir } from '../features/imapMailApi';
 import { isImapPath } from '../features/imapPath';
 import {
@@ -168,7 +169,7 @@ interface MountState {
  * 显式嵌套挂载行排在宿主自动子项**之前**(与 si-yuan buildRows 同序)。
  */
 type FlattenRow =
-  | { kind: 'node'; node: MountNode; mount: ExternalMount; state: MountState; depth: number }
+  | { kind: 'node'; node: MountNode; mount: ExternalMount; state: MountState; depth: number; ancestors: string[] }
   | { kind: 'mountHead'; mount: ExternalMount; depth: number };
 
 /**
@@ -196,6 +197,8 @@ export class MountPanelView extends ItemView {
   private draggedMountId: string | null = null;
   /** 待定位目标行（挂载 + 相对路径），渲染后由 consumePendingReveal 消费。 */
   private pendingReveal: { mountId: string; rel: string } | null = null;
+  /** 节点 → 树里祖先 rel 链（flattenHost 填充；聚集关系判定用，虚拟子行 rel 前缀不可靠）。 */
+  private nodeAncestorsMap = new Map<MountNode, string[]>();
   /** 定位高亮目标：画笔时点应用——虚拟重绘会反复重建行元素,当场加类随旧
    * 元素一起丢弃;按时间戳在窗口内每次 paint 重上,平滑滚动也不丢。 */
   private revealGlow: { mountId: string; rel: string; until: number } | null = null;
@@ -282,6 +285,10 @@ export class MountPanelView extends ItemView {
    * 重扫后 render 命中新缓存即可;已卸载的挂载残留 state 顺手清掉。
    */
   refreshMounts(): void {
+    // 工具栏「重新扫描」也要重算 parent 计划：plan 按 gen 缓存，不换代的话
+    // parent 属性改了点刷新仍是旧计划（2026-11-23 实报）。换代本身只 +1 计数，
+    // 真正的全库重算发生在随后 scan→loadLayer 的 parentPlanOf 调用里。
+    invalidateVaultParentPlans();
     // remote 挂载:磁盘重扫之外,远端缓存一并清掉(手动刷新 = 拉到远端最新)
     clearGitRepoCache();
     clearBaiduListCache();
@@ -406,20 +413,15 @@ export class MountPanelView extends ItemView {
         return state;
       }
       if (root.kind === 'file') {
-        // 挂载单个库内文件：树就是那一行（与库外挂单文件同款）。
-        state.tree = [
-          {
-            name: root.file.name,
-            rel: root.file.name,
-            abs: vaultAbsOf(this.app, root.file.path),
-            isDir: false,
-            size: root.file.stat.size,
-            mtime: root.file.stat.mtime,
-            children: [],
-          },
-        ];
-        state.loaded.add('');
+        // 挂载单个库内文件：文件自己由头行渲染（flattenHost 的 skipRootNode
+        // 跳过根层文件行），树里放的是它名下的 parent 虚拟子文档 / 嵌套挂载。
+        // 此前这里直接把「文件自己」塞进 tree 且 loaded.add('')，导致
+        // loadLayer 永不执行 → parent 挂到该文件的子文档永远列不出来
+        // （2026-11-23 用户实报：大模型.md 挂不到 ! 文档下）。
+        // 改为与文件夹根同一条路径：loadLayer 里 vaultScanLayer 的 TFile
+        // 分支会把 childrenOf.get(root.file.path) 的子文档作为根层返回。
         this.states.set(mount.id, state);
+        this.loadLayer(mount, '', state);
         return state;
       }
       this.states.set(mount.id, state);
@@ -1051,19 +1053,27 @@ export class MountPanelView extends ItemView {
       if (hidden.has(key)) continue;
       const b = panelToolbarButtonByKey(key);
       if (!b) continue;
+      const focusCount = this.plugin.focusTargets?.length ?? 0;
+      const focusOn = key === 'focus-clear' && focusCount > 0;
       const btn = bar.createEl('button', {
         cls:
           'clickable-icon logseq-mount-panel-btn' +
           (key === 'drag-mode' && dragOn ? ' is-active' : '') +
-          (key === 'tag-filter' && this.plugin.activeTagFilterIds.length ? ' is-active' : ''),
+          (key === 'tag-filter' && this.plugin.activeTagFilterIds.length ? ' is-active' : '') +
+          (focusOn ? ' is-active mod-cta' : ''),
         attr: { 'data-tb-action': b.key },
       });
       setIcon(btn, b.icon);
+      // 聚集激活时把按钮做成醒目的「取消聚集 (N)」文字态——纯图标在顶栏
+      // 太不显眼（2026-11-23 用户实报）。非激活时保持图标 + tooltip。
+      if (focusOn) btn.createSpan({ text: ` 取消聚集 (${focusCount})` });
       btn.setAttribute(
         'aria-label',
         key === 'tag-filter' && this.plugin.activeTagFilterIds.length
           ? `${b.label}（${this.plugin.activeTagFilterIds.length} 个激活）`
-          : b.label,
+          : focusOn
+            ? `${b.label}（${focusCount} 个目标）`
+            : b.label,
       );
     }
     // 「更多」:收进去的按钮(按顶栏同序)+ 固定「编辑工具栏…」入口
@@ -1091,7 +1101,12 @@ export class MountPanelView extends ItemView {
       this.runToolbarAction(actionEl.dataset.tbAction || '', ev);
     });
 
-    for (const m of mounts) this.renderMount(contentEl, m);
+    // 聚集跨挂载生效：只渲染含聚集目标的挂载，其余挂载整体隐藏。
+    const focusTargets = this.plugin.focusTargets ?? [];
+    const mountsToRender = focusTargets.length
+      ? mounts.filter((m) => focusTargets.some((t) => t.mountId === m.id))
+      : mounts;
+    for (const m of mountsToRender) this.renderMount(contentEl, m);
     // Restore the scroll position BEFORE the first paint so the viewport band
     // is computed against the real scrollTop, not the post-clamp 0. Clamping
     // to the new scrollable range keeps collapses (shrunk content) honest.
@@ -1219,6 +1234,15 @@ export class MountPanelView extends ItemView {
       // 标签筛选:工具栏按钮 → 独立面板(用户 2026-11-19 终版:做成一个面板)。
       // 激活集在 plugin.activeTagFilterIds,树行过滤在 flattenHost。
       void this.plugin.activatePanel(VIEW_TYPE_TAG_FILTER_PANEL);
+    } else if (action === 'focus-clear') {
+      // 取消全部聚集（右键「聚集到此」设置；这里一键清除运行态目标）。
+      if (this.plugin.focusTargets.length) {
+        this.plugin.focusTargets = [];
+        this.render();
+        new Notice('已取消聚集');
+      } else {
+        new Notice('当前没有聚集目标');
+      }
     } else if (action === 'new-file' || action === 'new-folder') {
       // 新建目标 = 最近点击的目录;没点过就退回第一个挂载的根
       const dir = this.currentDir ?? this.defaultNewDir();
@@ -1366,7 +1390,10 @@ export class MountPanelView extends ItemView {
       head.createSpan({ cls: 'logseq-mount-flag is-pinned', text: '已固定' });
     }
     head.addEventListener('click', (ev) => {
-      if (isFileRoot && rootNode) {
+      // 文件根名下有真子项（parent 虚拟子笔记 / 嵌套挂载）= 当作容器：
+      // 点头行即展开/收起，与文件夹挂载一致（2026-11-23 用户要求 !.md
+      // 跟其他挂载一样直接展示子项）。纯文件根（无子项）仍点头行打开文件。
+      if (isFileRoot && rootNode && !fileRootHasKids) {
         const mode = this.modOpenMode(ev);
         // rel 传 ''：vaultJoinPath(mount, '') = mount.path（文件自身路径）。
         if (isVaultMount(mount)) void this.openVaultNode(mount, { ...rootNode, rel: '' }, mode);
@@ -1547,7 +1574,9 @@ export class MountPanelView extends ItemView {
     row.setAttribute('title', mountDisplayName(mount));
     row.createSpan({ cls: 'logseq-mount-name', text: mountDisplayName(mount) });
     row.addEventListener('click', (ev) => {
-      if (isFileRoot && rootNode) {
+      // 同顶层头行：文件根有真子项时当容器，点头行 = 展开/收起；
+      // 纯文件根（无子项）才点头行打开文件。
+      if (isFileRoot && rootNode && !hasKids) {
         // 头行即文件:点头行 = 打开(与文件行同款,含 Ctrl/中键新标签)。
         const mode = this.modOpenMode(ev);
         if (isVaultMount(mount)) void this.openVaultNode(mount, { ...rootNode, rel: '' }, mode);
@@ -1604,25 +1633,52 @@ export class MountPanelView extends ItemView {
     // 子行 = 头行下又出现一个"自己"（用户实报「子Root又出现」；点它路径
     // 拼成 ROOT.md/ROOT.md 报「文件不存在」）。根层的文件节点跳过，只渲染
     // orderedLevel 织入的嵌套挂载头/虚拟子笔记。
-    const skipRootNode = st.tree.length === 1 && !st.tree[0].isDir;
+    // 仅当根层唯一节点就是挂载根文件自己（rel === mount.path 归一值）时才
+    // 跳过。文件型挂载根下有 parent 虚拟子文档时 tree 也可能只有一个文件
+    // 节点（子文档），但它的 rel 是 `/` 前缀的库内路径、不等于根路径——
+    // 这种不能跳过，否则子文档被吞、展开空白（2026-11-23 实报）。
+    const skipRootNode =
+      st.tree.length === 1 && !st.tree[0].isDir && !st.tree[0].rel.startsWith('/');
     // 标签筛选(思源标签筛选对齐):激活时文件按命中保留,目录一律保留——
     // 打了标签的文件靠目录层级展开到达(父目录剪掉就够不到子命中了)。
     const activeTagIds = this.plugin.activeTagFilterIds ?? [];
     const tagFiltering = activeTagIds.length > 0;
-    const walkLevel = (parentRel: string, children: MountNode[], depth: number): void => {
+    // 聚集：只留目标 / 子树 / 兄弟 / 兄弟子树 / 祖先链，跨挂载隐藏其余。
+    // ancestors 是节点在树里从根到直接父的 rel 链（不走 rel 路径前缀——
+    // 虚拟子行 rel 是库内路径，父子两行前缀相同，路径判定会把父子当兄弟）。
+    // focusMode = 'subtree' 时只留目标与子树；目标的祖先行虽不上屏，仍要
+    // 下潜穿过（underHidden），否则目标被整棵剪掉。
+    const focusTargets = this.plugin.focusTargets ?? [];
+    const focusMode = this.plugin.settings.focusMode ?? 'context';
+    const walkLevel = (
+      parentRel: string,
+      children: MountNode[],
+      depth: number,
+      ancestors: string[],
+      underHidden = false,
+    ): void => {
       for (const e of this.orderedLevel(host.id, parentRel, children)) {
         if (e.kind === 'mount') {
-          this.emitMountHead(e.m, depth, out, chain);
+          if (!underHidden) this.emitMountHead(e.m, depth, out, chain);
           continue;
         }
         const n = e.node;
         if (skipRootNode && parentRel === '' && n === st.tree[0]) continue;
         if (tagFiltering && !n.isDir && !pathMatchesTagFilter(this.plugin.settings, n.abs, activeTagIds)) continue;
-        out.push({ kind: 'node', node: n, mount: host, state: st, depth });
-        if (st.open.has(n.rel)) walkLevel(n.rel, n.children, depth + 1);
+        if (!nodeVisibleUnderFocus(focusTargets, host.id, n.rel, ancestors, focusMode)) {
+          // 仅目标与子树：目标祖先自身不展示，但下潜才能画出目标（深度不增）。
+          // 不查 open：祖先行不可见，无法再展开，聚集必须保证目标直接可见。
+          if (focusMode === 'subtree' && focusTargetBelow(focusTargets, host.id, n.rel)) {
+            walkLevel(n.rel, n.children, depth, [...ancestors, n.rel], true);
+          }
+          continue;
+        }
+        this.nodeAncestorsMap.set(n, ancestors);
+        out.push({ kind: 'node', node: n, mount: host, state: st, depth, ancestors });
+        if (st.open.has(n.rel)) walkLevel(n.rel, n.children, depth + 1, [...ancestors, n.rel]);
       }
     };
-    walkLevel('', st.tree, baseDepth);
+    walkLevel('', st.tree, baseDepth, []);
   }
 
   /**
@@ -2293,6 +2349,7 @@ export class MountPanelView extends ItemView {
     menu.addItem((item) =>
       item.setTitle('新建笔记…').setIcon('pencil' as never).onClick(() => this.promptNewNote(mount, node)),
     );
+    this.addFocusMenuItem(menu, mount, node);
     if (node) {
       menu.addItem((item) =>
         item.setTitle('重命名').setIcon('text-cursor-input' as never).onClick(() => this.promptRename(mount, node)),
@@ -2989,6 +3046,34 @@ export class MountPanelView extends ItemView {
    * node == null 表示挂载根:只给两个新建(重命名/删除属于挂载本身,
    * 归「编辑这个挂载…/卸载」管,不在这里给)。
    */
+  /**
+   * 聚集菜单项（库内 / 库外 / remote 三类挂载共用）：按设置「聚焦方式」只显示
+   * 目标的上下文（默认）或仅目标与子树。可叠加多个目标；再次点同一目标 =
+   * 取消该目标。运行态，重启清空。
+   */
+  private addFocusMenuItem(menu: Menu, mount: ExternalMount, node: MountNode | null): void {
+    if (!node) return;
+    const targets = this.plugin.focusTargets ?? (this.plugin.focusTargets = []);
+    const isFocused = targets.some((t) => t.mountId === mount.id && t.rel === node.rel);
+    menu.addItem((item) =>
+      item
+        .setTitle(isFocused ? '取消聚集此节点' : '聚集到此')
+        .setIcon(isFocused ? 'focus-off' : 'focus' as never)
+        .onClick(() => {
+          const cur: FocusTarget = {
+            mountId: mount.id,
+            rel: node.rel,
+            ancestors: this.nodeAncestorsMap.get(node) ?? [],
+            isDir: !!node.isDir,
+          };
+          const hit = targets.findIndex((t) => t.mountId === cur.mountId && t.rel === cur.rel);
+          if (hit >= 0) targets.splice(hit, 1);
+          else targets.push(cur);
+          this.render();
+        }),
+    );
+  }
+
   private addTreeFileMenuItems(menu: Menu, mount: ExternalMount, node: MountNode | null): void {
     const dirNode = node?.isDir ? node : null;
     const newDirAbs = dirNode ? dirNode.abs : node ? parentAbsOf(node.rel, mount.path) : mount.path;
@@ -3008,6 +3093,7 @@ export class MountPanelView extends ItemView {
         .setIcon('folder-plus' as never)
         .onClick(() => this.promptNewFolder(mount, newDirAbs, dirNode?.rel ?? (node ? parentRelOf(node.rel) : ''))),
     );
+    this.addFocusMenuItem(menu, mount, node);
     // 新建笔记:文件落在一个**另外配置**的目录里(设置 → 外部挂载 → 新建笔记
     // 的位置),再挂成这里右键条目的子文档 —— 磁盘位置与树上的位置解耦,
     // 与思源「新建笔记」一致(普通"新建文件"才是就地建在挂载目录里)。

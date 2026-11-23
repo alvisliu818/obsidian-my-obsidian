@@ -24,8 +24,16 @@ import { dirPruned, entryMatches } from './mountFilter';
 // 带首斜杠的路径（getAbstractFileByPath 不认）。
 // ---------------------------------------------------------------------------
 
-/** 库内挂载内 `rel` 对应的 vault 相对路径（挂载根为库根时 rel 原样返回）。 */
+/** 虚拟子行 rel 的库内绝对路径前缀。文件型挂载根（如把单篇笔记 `!.md`
+ *  挂成根）下，子文档在库内别处、并非根节点的后代，无法用相对根的路径
+ *  表达；这类子行 rel 以 `/` 开头，去掉前缀即为库内相对路径。 */
+const VAULT_ABS_REL = '/';
+
+/** 库内挂载内 `rel` 对应的 vault 相对路径（挂载根为库根时 rel 原样返回）。
+ *  以 `/` 开头的 rel 是文件型挂载根下的虚拟子行，直接剥掉前缀返回库内路径
+ *  （否则会误拼成 `!.md/notes/x.md`）。 */
 export function vaultJoinPath(mount: ExternalMount, rel: string): string {
+  if (rel.startsWith(VAULT_ABS_REL)) return rel.slice(VAULT_ABS_REL.length);
   const base = vaultRelPath(mount.path);
   return base && rel ? `${base}/${rel}` : base || rel;
 }
@@ -72,6 +80,10 @@ function cleanParentValue(raw: unknown): string {
   if (typeof raw !== 'string') return '';
   let v = raw.trim();
   if (!v) return '';
+  // 先剥首尾引号：手写 YAML 的 link 值可能带引号（`- "[[!]]"`），某些解析路径
+  // 会把引号连同 wiki 语法一起吐出来。剥引号后再匹配 [[..]]，否则 `"[[!]]"`
+  // 会跳过 wiki 分支、留下未解析的 `[[!]]`，getFirstLinkpathDest 找不到目标。
+  v = v.replace(/^["']|["']$/g, '').trim();
   // Obsidian 链接属性常写成 "[[Note|alias]]" 或 "[[Note]]"
   const wiki = v.match(/^\[\[([^\]]+)\]\]$/);
   if (wiki) v = wiki[1];
@@ -94,18 +106,25 @@ export function parentPlanOf(app: App, mountPath: string): ParentPlan {
   // 根挂载（mountPath='' 或 '/'）= 整库都是挂载域。
   const root = vaultRelPath(mountPath);
   const underRoot = (p: string): boolean => !root || p === root || p.startsWith(`${root}/`);
+  // 文件型挂载根（如把单篇笔记 `!.md` 挂成根）：整库都是它的潜在展示域——
+  // 子文档（parent 值指向根笔记的）来自库内任何位置，父目标也可能是库内别处
+  // 的中间笔记（链式：A.parent=根笔记，B.parent=A）。两者都不能用 `root/`
+  // 前缀过滤，否则 B→A 这条边被丢、链断在第二层（2026-11-23 用户实报：
+  // 掌柜智库.parent=大模型、大模型.parent=!，掌柜智库挂不到大模型下）。
+  // 为了防止无关 parent 关系串入，链路分析里额外要求链必须走到根笔记。
+  const rootIsFile = !!root && app.vault.getAbstractFileByPath(root) instanceof TFile;
 
   // 逐笔记读 frontmatter.parent，解析成 child → parent 的原始映射
   const raw = new Map<string, string>();
   for (const f of app.vault.getMarkdownFiles()) {
-    if (!underRoot(f.path)) continue;
+    if (!rootIsFile && !underRoot(f.path)) continue;
     const fm = app.metadataCache.getFileCache(f)?.frontmatter;
     const target = cleanParentValue(fm?.['parent']);
     if (!target || target === f.path) continue;
     if (/^(?:https?|file|app|obsidian):/i.test(target)) continue;
     const dest = app.metadataCache.getFirstLinkpathDest(target, f.path);
     if (!(dest instanceof TFile) || dest.path === f.path) continue;
-    if (!underRoot(dest.path)) continue;
+    if (!rootIsFile && !underRoot(dest.path)) continue;
     raw.set(f.path, dest.path);
   }
 
@@ -120,10 +139,20 @@ export function parentPlanOf(app: App, mountPath: string): ParentPlan {
     while (cur) {
       if (seen.has(cur)) break; // 环：cur（环入口）保持原位
       seen.add(cur);
+      // 文件型挂载根：链必须走到根笔记才算有效展示链；只走到某个与根无关的
+      // 锚（库里别处的 parent 关系）不算——否则这些无关笔记会被算进计划。
+      if (rootIsFile && cur === root) {
+        ok = true;
+        anchored.add(cur);
+        break;
+      }
       const next = raw.get(cur);
       if (!next) {
-        ok = true; // 链尾是锚（无 parent 的笔记，原位渲染）
-        anchored.add(cur);
+        // 文件夹根：链尾是锚（无 parent 的笔记，原位渲染）
+        if (!rootIsFile) {
+          ok = true;
+          anchored.add(cur);
+        }
         break;
       }
       cur = next;
@@ -209,10 +238,16 @@ export function vaultScanLayer(
     if (!plan) return [];
     const out: MountNode[] = [];
     const mountBase = vaultRelPath(mount.path);
+    // 文件型挂载根：子文档不在根路径之下，rel 用 `/` 前缀编码库内绝对路径
+    // （vaultJoinPath 会剥前缀还原），否则 slice 会把 notes/x.md 截坏、打开
+    // 又误拼成 `!.md/notes/x.md`。文件夹挂载根保持原有相对 rel 语义。
+    const fileRoot = !!mountBase && app.vault.getAbstractFileByPath(mountBase) instanceof TFile;
     for (const childPath of plan.childrenOf.get(node.path) ?? []) {
       const child = app.vault.getAbstractFileByPath(childPath);
       if (!(child instanceof TFile)) continue;
-      const childRel = mountBase ? child.path.slice(mountBase.length + 1) : child.path;
+      const childRel = fileRoot
+        ? `${VAULT_ABS_REL}${child.path}`
+        : mountBase ? child.path.slice(mountBase.length + 1) : child.path;
       if (!entryMatches(childRel, f)) continue;
       out.push({
         name: child.name,
