@@ -510,8 +510,9 @@ export class MountPanelView extends ItemView {
         this.diffLayer(mount.id, rel, children, state);
         return;
       }
-      const parent = this.findNode(state.tree, rel);
-      if (parent) {
+      // 同一笔记可能两处显示（原位 + 父笔记名下的虚拟子行，2026-11-23），
+      // 两行 rel 相同——子层要挂到全部匹配行，否则其中一行展开是空的。
+      for (const parent of this.findNodes(state.tree, rel)) {
         parent.children = children;
         parent.empty = children.length === 0;
       }
@@ -825,19 +826,8 @@ export class MountPanelView extends ItemView {
     // 单文件挂载根：头行即文件本身（不可展开,无子行）,定位目标就是头行
     // （rel=''）——旧实现把 rel 改指文件名找子行,子行已不存在（2026-11-07
     // 用户实报「挂载文件下面多了自身」后一并调整）。
-    // parent 属性挂载的浮动笔记：真实目录列表里没有它（摘出去挂在父笔记
-    // 名下），按段走 ancestors 永远走不到。改走显示父链——从链顶笔记的
-    // 真实祖先逐层展开，再沿链展开每个父笔记行，最后定位它自己的 rel。
-    if (isVaultMount(mount) && rel && this.plugin.settings.parentMountEnabled !== false) {
-      const plan = parentPlanOf(this.app, mount.path);
-      if (plan.floating.has(`${mount.path}/${rel}`)) {
-        this.revealParentMounted(mount, state, rel);
-        this.pendingReveal = { mountId: mount.id, rel };
-        this.render();
-        this.consumePendingReveal();
-        return;
-      }
-    }
+    // 2026-11-23：parent 挂载的笔记原位保留，不再摘出——定位走下面的普通
+    // ancestors 路径即可落到原位的那一行，无需再沿显示父链展开。
     let acc = '';
     for (const seg of rel.split('/').filter(Boolean)) {
       if (!state.loaded.has(acc)) this.loadLayer(mount, acc, state);
@@ -848,37 +838,6 @@ export class MountPanelView extends ItemView {
     this.pendingReveal = { mountId: mount.id, rel: acc };
     this.render();
     this.consumePendingReveal();
-  }
-
-  /**
-   * parent 属性挂载的浮动笔记定位辅助：按显示父链展开。链顶（原位笔记）
-   * 的真实目录祖先逐层 loadLayer + 展开；链上每个父笔记行再逐个展开——
-   * 每步 loadLayer 拉的正是它名下的虚拟子层，行渲染后 pendingReveal 按
-   * 浮动笔记自己的 rel 找行（dataset.rel 仍是真身）。
-   */
-  private revealParentMounted(mount: ExternalMount, state: MountState, rel: string): void {
-    const plan = parentPlanOf(this.app, mount.path);
-    // 显示链：child → parent → … → 链顶（原位笔记）。计划已滤环，这里设防。
-    const chainRels: string[] = [];
-    const seen = new Set<string>([`${mount.path}/${rel}`]);
-    let cur = plan.parentOf.get(`${mount.path}/${rel}`);
-    while (cur && !seen.has(cur)) {
-      seen.add(cur);
-      chainRels.unshift(cur.slice(mount.path.length + 1));
-      cur = plan.parentOf.get(cur);
-    }
-    // 链顶笔记的真实目录祖先
-    let acc = '';
-    for (const seg of (chainRels[0] ?? '').split('/').filter(Boolean)) {
-      if (!state.loaded.has(acc)) this.loadLayer(mount, acc, state);
-      state.open.add(acc);
-      acc = acc ? `${acc}/${seg}` : seg;
-    }
-    // 链上每个父笔记行（链顶行本身在上一段最后一级目录里）
-    for (const nodeRel of chainRels) {
-      if (!state.loaded.has(nodeRel)) this.loadLayer(mount, nodeRel, state);
-      state.open.add(nodeRel);
-    }
   }
 
   /**
@@ -964,15 +923,21 @@ export class MountPanelView extends ItemView {
   }
 
   private findNode(list: MountNode[], rel: string): MountNode | null {
-    for (const n of list) {
-      if (n.rel === rel) return n;
-      // parent 属性挂载后文件节点也带（虚拟）子层，一并下潜
-      if (n.isDir || n.children.length > 0) {
-        const hit = this.findNode(n.children, rel);
-        if (hit) return hit;
+    return this.findNodes(list, rel)[0] ?? null;
+  }
+
+  /** 找出所有 rel 匹配的行——parent 两处显示后同一笔记有多行，都要挂子层。 */
+  private findNodes(list: MountNode[], rel: string): MountNode[] {
+    const out: MountNode[] = [];
+    const walk = (nodes: MountNode[]): void => {
+      for (const n of nodes) {
+        if (n.rel === rel) out.push(n);
+        // parent 属性挂载后文件节点也带（虚拟）子层，一并下潜
+        if (n.isDir || n.children.length > 0) walk(n.children);
       }
-    }
-    return null;
+    };
+    walk(list);
+    return out;
   }
 
   // ------------------------------------------------------------------

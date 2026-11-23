@@ -1,9 +1,10 @@
 /**
- * parent 属性挂载（2026-11-03 用户需求）：frontmatter 写 `parent:` 的笔记
- * 从真实目录列表摘出、挂到目标笔记名下作为虚拟子文档。
+ * parent 属性挂载（2026-11-03 用户需求，2026-11-23 改为两处显示）：
+ * frontmatter 写 `parent:` 的笔记**原位保留**，同时挂到目标笔记名下作为
+ * 虚拟子文档——两处都能看到同一文件。
  *
  * 这里打的是 plan 的纯逻辑（浮动判定 / 环处理 / 链式嵌套）和 vaultScanLayer
- * 的两个消费面（目录层摘出、笔记层挂入），vault/metadataCache 全部用假件——
+ * 的两个消费面（目录层原位保留、笔记层挂入），vault/metadataCache 全部用假件——
  * TFile/TFolder 用 obsidian-stub 的类，instanceof 判定与运行时同构。
  */
 
@@ -189,20 +190,31 @@ describe('vaultScanLayer 的两个消费面', () => {
     'root/inbox/plain.md': null,
   });
 
-  it('目录层：浮动笔记从真实列表摘出，其余照常', () => {
+  it('目录层：parent 笔记原位保留，其余照常（2026-11-23 两处显示）', () => {
     const { app } = fakeApp(notes());
     const plan = parentPlanOf(app, 'root');
     const inboxLayer = vaultScanLayer(app, mount, 'inbox', 'E:/base', f, plan);
-    expect(inboxLayer.map((n) => n.name)).toEqual(['plain.md']);
+    expect(inboxLayer.map((n) => n.name)).toEqual(['c.md', 'plain.md']);
   });
 
-  it('笔记层：挂到它名下的虚拟子文档按 md 行返回', () => {
+  it('笔记层：挂到它名下的虚拟子文档按 md 行返回（原位之外多一处）', () => {
     const { app } = fakeApp(notes());
     const plan = parentPlanOf(app, 'root');
     const layer = vaultScanLayer(app, mount, 'P.md', 'E:/base', f, plan);
     expect(layer.map((n) => n.rel)).toEqual(['inbox/c.md']);
     expect(layer[0].isDir).toBe(false);
     expect(layer[0].abs).toBe('E:/base/root/inbox/c.md');
+  });
+
+  it('两处显示：原位行与虚拟子行 rel / abs 一致，指向同一真实文件', () => {
+    const { app } = fakeApp(notes());
+    const plan = parentPlanOf(app, 'root');
+    const inboxLayer = vaultScanLayer(app, mount, 'inbox', 'E:/base', f, plan);
+    const virtualLayer = vaultScanLayer(app, mount, 'P.md', 'E:/base', f, plan);
+    const original = inboxLayer.find((n) => n.name === 'c.md')!;
+    const virtual = virtualLayer.find((n) => n.name === 'c.md')!;
+    expect(original.rel).toBe(virtual.rel);
+    expect(original.abs).toBe(virtual.abs);
   });
 
   it('计划为 null（开关关闭）时：目录层不摘、笔记层无子', () => {
