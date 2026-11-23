@@ -18,10 +18,13 @@
 
 import { Modal, Plugin, PluginSettingTab, Setting } from 'obsidian';
 import type { App } from 'obsidian';
+import type { HostServices } from '../../../src/settings';
 import { CommunityStore, DEFAULT_TEMPLATE } from './store';
 import { enhanceCommunityModal } from './community';
 
 export default class PluginCommunityPlugin extends Plugin {
+	/** 宿主 startModule 注入的全局服务（代理等全局配置的读取通道）。 */
+	hostServices?: HostServices;
 	private store!: CommunityStore;
 	/**
 	 * 最近一次打开的社区市场弹窗实例（Modal.prototype.open 补丁捕获）。
@@ -144,7 +147,11 @@ export default class PluginCommunityPlugin extends Plugin {
 		const modal = doc.querySelector<HTMLElement>('.modal.mod-community-modal');
 		if (!modal) return;
 		try {
-			enhanceCommunityModal(modal, { store: this.store, lastCommunityModal: this.lastCommunityModal });
+			enhanceCommunityModal(modal, {
+				store: this.store,
+				lastCommunityModal: this.lastCommunityModal,
+				getProxy: () => this.hostServices?.getProxy() ?? '',
+			});
 		} catch (e) {
 			// 核心 DOM 结构变动不应拖垮设置弹窗——增强失败静默跳过
 			console.error('[plugin-community] enhance failed', e);

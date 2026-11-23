@@ -33,6 +33,8 @@ interface EnhanceCtx {
 		itemsVisible?: string[];
 		sortOrder?: string;
 	} | null;
+	/** 宿主全局代理（实时读取；空 = 直连）——克隆走它 */
+	getProxy: () => string;
 }
 
 /** 空壳兜底的最小壳数：低于它视为核心正常填充的小列表（搜索结果等），不插手。 */
@@ -195,6 +197,7 @@ function renderCloneRow(row: HTMLElement, repo: string, ctx: EnhanceCtx): void {
 	}
 
 	const cloned = existsSync(path.join(dir, '.git'));
+	const proxy = (ctx.getProxy() ?? '').trim();
 
 	const cloneBtn = doc.createElement('button');
 	cloneBtn.className = 'lgp-pc-btn';
@@ -205,7 +208,9 @@ function renderCloneRow(row: HTMLElement, repo: string, ctx: EnhanceCtx): void {
 		cloneBtn.title = dir;
 	} else {
 		cloneBtn.textContent = '⚙ 克隆';
-		cloneBtn.title = `git clone ${repo} → ${dir}`;
+		cloneBtn.title = proxy
+			? `git clone（代理 ${proxy}）→ ${dir}`
+			: `git clone ${repo} → ${dir}`;
 		cloneBtn.addEventListener('click', () => {
 			if (row.dataset['lgpCloning'] === '1') return;
 			row.dataset['lgpCloning'] = '1';
@@ -215,10 +220,19 @@ function renderCloneRow(row: HTMLElement, repo: string, ctx: EnhanceCtx): void {
 			try {
 				mkdirSync(path.dirname(dir), { recursive: true });
 			} catch { /* git 自己也会报错 */ }
+			// 代理（宿主全局设置）经每仓库 -c 注入，不改全局 git 配置
+			const cloneArgs = [
+				'clone',
+				...(proxy
+					? ['-c', `http.proxy=${proxy}`, '-c', `https.proxy=${proxy}`]
+					: []),
+				`https://github.com/${repo}.git`,
+				dir,
+			];
 			execFile(
 				'git',
-				['clone', `https://github.com/${repo}.git`, dir],
-				{ windowsHide: true },
+				cloneArgs,
+				{ windowsHide: true, timeout: 600_000 },
 				(err, _stdout, stderr) => {
 					row.dataset['lgpCloning'] = '0';
 					if (err) {

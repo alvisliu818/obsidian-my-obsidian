@@ -23,6 +23,7 @@ import {
 	type ModuleState,
 	type MyObsidianSettings,
 	type SubPluginLike,
+	type HostServices,
 } from "./settings";
 
 import VirtualTreePlugin from "../modules/virtual-tree/src/main";
@@ -1452,6 +1453,11 @@ export default class MyObsidianPlugin extends Plugin {
 			tab: unknown,
 		) => {
 			host.capturedTabs.set(d.id, tab);
+		};
+		// 全局服务注入（2026-11-23）：模块经 inst.hostServices 读取宿主级设置
+		//（实时 getter——宿主设置改动即时生效，无需重启模块）。
+		(inst as unknown as { hostServices?: HostServices }).hostServices = {
+			getProxy: () => this.settings.proxy ?? "",
 		};
 		// 启动性能观测（2026-11-06）：逐模块 onload 耗时——「界面出现慢」的
 		// 分段定位。全量在 host.moduleInitMs（探针可读），≥150ms 打 console.info

@@ -28,6 +28,10 @@ export interface MyObsidianSettings {
 	 *  Obsidian 简版菜单;false/缺省 = 完全放手,原生完整系统菜单与拖窗照旧
 	 *  （主窗口 drag 区自带,无需代码）。用户 2026-11-21 终版定案。 */
 	suppressTitlebarMenu?: boolean;
+	/** 全局代理地址（http/https/socks5；空 = 直连）。宿主级配置——经 startModule
+	 *  注入的 hostServices.getProxy() 提供给需要联网的模块（2026-11-23：
+	 *  插件社区的克隆走它），实时读取改动即时生效。 */
+	proxy?: string;
 }
 
 /** Catalogue of what can be switched on. Order = the order shown in settings. */
@@ -90,7 +94,16 @@ export interface SubPluginLike {
 	saveData?(data: unknown): Promise<void>;
 }
 
-export const DEFAULT_SETTINGS: MyObsidianSettings = { modules: {}, codeFileExtensions: [], suppressTitlebarMenu: false };
+/**
+ * 宿主注入到每个模块实例的全局服务（startModule 装配，2026-11-23）。
+ * 模块经 inst.hostServices 读取宿主级设置——实时 getter，改动即时生效。
+ */
+export interface HostServices {
+	/** 宿主设置里的全局代理（http/https/socks5，空 = 直连） */
+	getProxy(): string;
+}
+
+export const DEFAULT_SETTINGS: MyObsidianSettings = { modules: {}, codeFileExtensions: [], suppressTitlebarMenu: false, proxy: "" };
 
 export function defaultModuleState(desktopOnly: boolean): ModuleState {
 	return { enabled: !desktopOnly || isDesktopApp(), data: {} };
@@ -634,6 +647,23 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 					setTitlebarMenuSuppressed(value);
 					await this.host.save();
 				}),
+			);
+
+		// 全局代理（2026-11-23）：需要联网的宿主功能（如「插件社区」的克隆）
+		// 走它；模块经 hostServices.getProxy() 实时读取，改动即时生效。
+		new SettingCtor(listEl)
+			.setName("代理")
+			.setDesc(
+				"全局代理地址（http/https/socks5，如 http://127.0.0.1:7890）——「插件社区」的克隆等联网功能走它；留空直连。",
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("http://127.0.0.1:7890")
+					.setValue(this.host.settings.proxy ?? "")
+					.onChange(async (value) => {
+						this.host.settings.proxy = value.trim();
+						await this.host.save();
+					}),
 			);
 	}
 }
