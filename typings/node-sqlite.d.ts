@@ -1,46 +1,17 @@
 /**
- * The `node:sqlite` module facilitates working with SQLite databases.
- * To access it:
+ * node:sqlite ambient 兜底（2026-11-23，防御层）。
  *
- * ```js
- * import sqlite from 'node:sqlite';
- * ```
- *
- * This module is only available under the `node:` scheme. The following will not
- * work:
- *
- * ```js
- * import sqlite from 'sqlite';
- * ```
- *
- * The following example shows the basic usage of the `node:sqlite` module to open
- * an in-memory database, write data to the database, and then read the data back.
- *
- * ```js
- * import { DatabaseSync } from 'node:sqlite';
- * const database = new DatabaseSync(':memory:');
- *
- * // Execute SQL statements from strings.
- * database.exec(`
- *   CREATE TABLE data(
- *     key INTEGER PRIMARY KEY,
- *     value TEXT
- *   ) STRICT
- * `);
- * // Create a prepared statement to insert data into the database.
- * const insert = database.prepare('INSERT INTO data (key, value) VALUES (?, ?)');
- * // Execute the prepared statement with bound values.
- * insert.run(1, 'hello');
- * insert.run(2, 'world');
- * // Create a prepared statement to read data from the database.
- * const query = database.prepare('SELECT * FROM data ORDER BY key');
- * // Execute the prepared statement and log the result set.
- * console.log(query.all());
- * // Prints: [ { key: 1, value: 'hello' }, { key: 2, value: 'world' } ]
- * ```
- * @since v22.5.0
- * @experimental
- * @see [source](https://github.com/nodejs/node/blob/v22.x/lib/sqlite.js)
+ * 真实根因（A/B 实验确认）：本仓曾并入 obsidian-llm-hub（3 层深布局）。当时 TS 的
+ * typeRoots 向上扫描命中了祖先 obsidian-llm-hub/node_modules/@types/node —— 即
+ * llm-hub 自己的 @types/node@20.x（没有 node:sqlite 类型）。jszip / undici-types 的
+ * /// <reference types="node"/> 因此解析到 20.x，ambient 表缺 node:sqlite，
+ * index-core/md-editor 的 5 处 import 报 TS2307；node:fs/path 在 20.x 里有声明所以不报。
+ * 在祖先位置放置无 sqlite 的 @types/node 可精确复现这 5 个错误（A/B 实验证实）；
+ * 目录反转回原位后祖先链不再有 node_modules，"node" 类型库经 PnP 解析到 22.20.5
+ * （含 sqlite），不加本文件 typecheck 也已全绿。
+ * 本文件保留作防御层：未来若有任何祖先目录再次出现无 sqlite 类型的 @types/node，
+ * typecheck 仍保持绿色。内容 = @types/node 22.20.5 sqlite.d.ts 原样拷贝（MIT），
+ * 升级后可同步更新或删除。
  */
 declare module "node:sqlite" {
     import { PathLike } from "node:fs";
