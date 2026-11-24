@@ -27,15 +27,17 @@ const prod = process.argv[2] === "production";
 const mobileFull = process.env.MOBILE_BUILD === "full";
 const mobileVt = process.env.MOBILE_BUILD === "vt";
 const mobileCore = process.env.MOBILE_BUILD === "core";
-const { mobileFullNodePlugin } = mobileFull || mobileVt || mobileCore
+const mobileEasy = process.env.MOBILE_BUILD === "easy";
+const { mobileFullNodePlugin } = mobileFull || mobileVt || mobileCore || mobileEasy
   ? await import("./scripts/mobile-full-node-plugin.mjs")
   : {};
-const { mobileVtPlugin, mobileCorePlugin } = mobileVt || mobileCore
+const { mobileVtPlugin, mobileCorePlugin, mobileEasyPlugin } = mobileVt || mobileCore || mobileEasy
   ? await import("./scripts/mobile-vt-build-plugin.mjs")
   : {};
 if (mobileFull) console.log("[mobile] 整包构建：所有模块 + Node/Electron 替身");
 if (mobileVt) console.log("[mobile] 精简构建：宿主壳 + EasySync + 虚拟文档树");
 if (mobileCore) console.log("[mobile] 核心构建：EasySync + 虚拟树 + MD Editor + Code Editor");
+if (mobileEasy) console.log("[mobile] 极简构建：仅 EasySync");
 
 const banner = `window.__myBundleTag = "bundle-1793683236";
 /*
@@ -667,7 +669,7 @@ const context = await esbuild.context({
     // advanced-uri 的 types.ts 用 obsidian 包的 canvas 类型扩展；external 按
     // 包路径精确匹配，不覆盖子路径，需单独列出（运行时由 Obsidian 提供）
     "obsidian/canvas",
-    ...((mobileFull || mobileVt || mobileCore) ? [] : ["electron"]),
+    ...((mobileFull || mobileVt || mobileCore || mobileEasy) ? [] : ["electron"]),
     // node:sqlite（unified-search 的索引库）：builtin-modules@3.3.0 早于
     // Node 22.5 新增的 sqlite，罩不住，需显式 external（运行时由 Electron 提供）
     "sqlite",
@@ -683,13 +685,13 @@ const context = await esbuild.context({
     "@lezer/common",
     "@lezer/highlight",
     "@lezer/lr",
-    ...((mobileFull || mobileVt || mobileCore) ? [] : builtins),
+    ...((mobileFull || mobileVt || mobileCore || mobileEasy) ? [] : builtins),
     // ollama 等包用 `node:fs` 带前缀的写法，裸名列表罩不住
-    ...((mobileFull || mobileVt || mobileCore) ? [] : builtins.map((m) => `node:${m}`)),
+    ...((mobileFull || mobileVt || mobileCore || mobileEasy) ? [] : builtins.map((m) => `node:${m}`)),
   ],
   plugins: [
-    ...(mobileVt ? [mobileVtPlugin()] : mobileCore ? [mobileCorePlugin()] : []),
-    ...((mobileFull || mobileVt || mobileCore) ? [mobileFullNodePlugin()] : []),
+    ...(mobileEasy ? [mobileEasyPlugin()] : mobileVt ? [mobileVtPlugin()] : mobileCore ? [mobileCorePlugin()] : []),
+    ...((mobileFull || mobileVt || mobileCore || mobileEasy) ? [mobileFullNodePlugin()] : []),
     srSrcResolver, lib10Resolver, livesyncResolver, dataviewUtilResolver, dataviewWebWorkerPlugin, cmBundlePlugin, momentumSveltePlugin, terminalSveltePlugin, sveltePlugin, jiebaPatchPlugin, dexiePatchPlugin, unicornMagicPatchPlugin, importGlobPlugin, musicPlayerShimsPlugin, inlineImportPlugin, mxInlinePlugin, mxCaptionsPlugin, mxNodeEnvPlugin, terminalPyPlugin],
   // Monaco 的 codicon.css 引用 .ttf 字体(图标字形)。内联成 dataurl:图标
   // 只有几 KB,而少这一条整个构建会以 "No loader is configured for .ttf" 失败。
@@ -762,7 +764,9 @@ const context = await esbuild.context({
       ? (process.env.MOBILE_OUT || "dist-release/mobile-vt/main.js")
       : mobileCore
         ? (process.env.MOBILE_OUT || "dist-release/mobile-core/main.js")
-        : "main.js",
+        : mobileEasy
+          ? (process.env.MOBILE_OUT || "dist-release/mobile-easy/main.js")
+          : "main.js",
   minify: prod,
 });
 
@@ -831,7 +835,7 @@ for (const lb of LAZY_BUNDLES) {
 }
 
 if (prod) {
-  if (mobileFull || mobileVt || mobileCore) {
+  if (mobileFull || mobileVt || mobileCore || mobileEasy) {
     // 移动端包只产主 bundle：daemon / lazy 分包是桌面 Node 专属，
     // 移动端不加载，也不该覆盖仓库根的 MyKernel.cjs / lazy/*。
     await context.rebuild();

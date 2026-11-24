@@ -14,7 +14,8 @@ const STUB = path.resolve('src/mobile-stub.ts');
 const HOST_MAIN = path.resolve('src/main.ts');
 const MONACO_STATIC = path.resolve('src/mobile-monaco-static.ts');
 
-const KEEP_VT = [/modules\/easy-sync\//, /modules\/virtual-tree\//];
+const KEEP_EASY = [/modules\/easy-sync\//];
+const KEEP_VT = [...KEEP_EASY, /modules\/virtual-tree\//];
 const KEEP_CORE = [...KEEP_VT, /modules\/md-editor\//, /modules\/code-editor\//];
 
 // 注意：extensionRegistry 必须保留真实实现——virtual-tree 直接 import 它的
@@ -99,6 +100,13 @@ function makePlugin(keep, modules, name, helpers, staticMonaco = false) {
     },
   });
 }
+
+export const mobileEasyPlugin = makePlugin(
+  KEEP_EASY,
+  [ENTRY.easy],
+  'mobile-easy-sync-only',
+  [...HOST_HELPERS, 'codeFileView'],
+);
 
 export const mobileVtPlugin = makePlugin(
   KEEP_VT,
