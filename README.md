@@ -73,16 +73,18 @@ GPL-3 是强 copyleft——衍生作品必须整体以 GPL-3 分发，这不是�
 
 ## 构建
 
+项目使用 pnpm（`packageManager: pnpm@12.6.0`，依赖以 `pnpm-lock.yaml` 为准）。
+
 ```sh
-npm install
-npm run build      # 先生成图标数据，再类型检查，最后打包
+pnpm install
+pnpm run build      # 先生成图标数据，再类型检查，最后打包
 ```
 
-`npm run build` 比一般的 Obsidian 插件多两步：
+`pnpm run build` 比一般的 Obsidian 插件多两步：
 
 1. **Material Icon Theme 的图标数据**（`modules/material-icon-theme/src/icon-data.ts`，
    约 2MB 内联 SVG）由 `scripts/build-icons.mjs` 从 `material-icon-theme` npm 包
-   生成，未入库——这一步由 `npm run build:icons` 完成。
+   生成，未入库——这一步由 `pnpm run build:icons` 完成。
 2. **Omnisearch 的 Svelte 组件**由主仓 esbuild 里的 `esbuild-svelte` 插件编译
    （`css: 'injected'`，与上游配置一致）；它依赖的 dexie 在打包时由
    `dexie-patch` 插件套用上游的补丁（移除 dual-package-hazard 检查，见

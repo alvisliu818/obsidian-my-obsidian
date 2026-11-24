@@ -104,7 +104,7 @@ for (const f of ["main.js", "manifest.json", "styles.css"]) {
 	if (!wanted(f)) continue;
 	const src = path.join(ROOT, f);
 	if (!existsSync(src)) {
-		console.error(`缺少 ${f} —— 先 npm run build`);
+		console.error(`缺少 ${f} —— 先 pnpm run build`);
 		process.exit(1);
 	}
 	atomicWriteFile(src, path.join(TARGET, f));
