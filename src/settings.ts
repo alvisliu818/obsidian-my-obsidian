@@ -213,6 +213,9 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 	/** 待执行的延迟 detach 定时器（hide 挂、openModulePage 取消——防单例 rootEl 复用竞态）。 */
 	private modulePageDetachTimer: number | null = null;
 
+	/** 正在跑「本页渲染」：update() 的补渲染钩子据此防重入（见 ensureTabAutoRefresh）。 */
+	private renderingTab = false;
+
 	private openModulePage(moduleId: string, moduleName: string): void {
 		const tab = this.host.capturedTabs.get(moduleId) as
 			| {
@@ -312,12 +315,8 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 				// 二级页后与 .setting-page 的滚动叠加成双滚动条（实测）。加标
 				// 记类取消它的高度约束与滚动，滚动职责上交 .setting-page。
 				tab.containerEl.addClass("module-page-embed");
-				if (typeof tab.update === "function" && typeof tab.renderTab === "function") {
-					tab.update();
-					tab.renderTab();
-				} else {
-					tab.display();
-				}
+				self.ensureTabAutoRefresh(tab);
+				self.renderTabNow(tab);
 			},
 			hide() {
 				self.modulePageTab?.hide?.();
@@ -342,6 +341,64 @@ export class MyObsidianSettingTab extends PluginSettingTab {
 					}
 				}, 250);
 			},
+		};
+	}
+
+	/**
+	 * 1.15 定义式模块 tab（getSettingDefinitions）的统一渲染配方：
+	 * update() 只重建 settingItems，renderTab() 才铺 DOM——两步都要跑；
+	 * 老式 tab（只有 display()）直接走 display()。
+	 *
+	 * 防重入：模块的 render 回调里若再次触发 update（llm-hub 的 ctx.display），
+	 * 由 renderingTab 挡住，不会滚成死循环。
+	 */
+	private renderTabNow(tab: CrawlableTab): void {
+		if (this.renderingTab) return;
+		this.renderingTab = true;
+		try {
+			if (typeof tab.update === "function" && typeof tab.renderTab === "function") {
+				tab.update();
+				tab.renderTab();
+			} else {
+				tab.display();
+			}
+		} finally {
+			this.renderingTab = false;
+		}
+	}
+
+	/**
+	 * 模块自己的「改完设置后重画」入口因代际而不同：老 tab 调 display()，
+	 * 1.15 定义式 tab 调 update()（llm-hub 的 SettingsContext.display 就是
+	 * `() => this.update()`）。
+	 *
+	 * 但 update() 的契约只是「重建 settingItems」——真重画 DOM 发生在框架自己的
+	 * 渲染循环里。tab 被我们搬进二级页手工渲染后就不在那个循环里了：模块内
+	 * onChange 调 update() 界面纹丝不动，用户实报「添加 Local LLM 要退出模块
+	 * 设置页重新进才显示」（2026-11-24，llm-hub 复现：update 后行数不变、
+	 * 补一次 renderTab 才出现）。
+	 *
+	 * 修法：给实例的 update 包一层（只包一次，__myAutoRefresh 打标），调完原
+	 * 方法后，若该 tab 正嵌在**已挂载**的模块页里，补一次完整渲染。
+	 */
+	private ensureTabAutoRefresh(tab: CrawlableTab): void {
+		const t = tab as CrawlableTab & { __myAutoRefresh?: boolean };
+		if (t.__myAutoRefresh) return;
+		if (typeof t.update !== "function" || typeof t.renderTab !== "function") return;
+		t.__myAutoRefresh = true;
+		const self = this;
+		const origUpdate = t.update.bind(t);
+		t.update = function () {
+			const out = origUpdate();
+			if (
+				!self.renderingTab &&
+				self.modulePageTab === tab &&
+				!!self.modulePage?.rootEl.isConnected &&
+				tab.containerEl.isConnected
+			) {
+				self.renderTabNow(tab);
+			}
+			return out;
 		};
 	}
 
