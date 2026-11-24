@@ -20,6 +20,7 @@ import { TFile as _TFileReuse } from 'obsidian';
 import { VIEW_LIFE_CLOCK, LifeClockView } from './views/clock';
 import { VIEW_LIFE_DDAY, LifeDdayView } from './views/dday';
 import { VIEW_LIFE_HABITS, LifeHabitsView } from './views/habits';
+import { VIEW_LIFE_NAV, LifeNavView } from './views/nav';
 import { VIEW_LIFE_LEDGER, LifeLedgerView } from './views/ledger';
 import { VIEW_LIFE_PLANS, LifePlansView } from './views/plans';
 import { VIEW_LIFE_TASKS, LifeTasksView } from './views/tasks';
@@ -83,8 +84,23 @@ export default class LifePlugin extends Plugin {
 		// 修改对比:独立标签页(VSCode 式分栏 + 上下跳转差异)。
 		this.registerView(VIEW_LIFE_DIFF, (leaf) => new VaultLogDiffView(leaf, this));
 
-		// ribbon 一枚：点击弹「生活」菜单（九个面板,不占九个 ribbon 位）
-		this.addRibbonIcon('life-buoy', '生活面板', (ev) => {
+		// 侧边导航面板(2026-11-24 用户)：习惯/代办/计划/计时等收进常驻列表,
+		// 点一项在主区标签页打开对应面板；命令面板也能直接打开这个侧栏。
+		this.registerView(VIEW_LIFE_NAV, (leaf) => new LifeNavView(leaf, this));
+		this.addCommand({
+			id: 'open-life-nav',
+			name: '打开生活面板侧栏',
+			callback: () => void this.openNavSidebar(),
+		});
+
+		// ribbon 一枚：左键开侧栏列表（新入口），右键仍是原来的弹出菜单。
+		const ribbon = this.addRibbonIcon('life-buoy', '生活面板（左键侧栏 / 右键菜单）', (ev) => {
+			// 右键交给下面的 contextmenu 处理，这里只响应左键
+			if (ev.button === 2) return;
+			void this.openNavSidebar();
+		});
+		ribbon.addEventListener('contextmenu', (ev) => {
+			ev.preventDefault();
 			const menu = new Menu();
 			for (const p of LIFE_PANELS) {
 				menu.addItem((item) =>
@@ -181,6 +197,48 @@ export default class LifePlugin extends Plugin {
 			default:
 				throw new Error(`life: unknown view ${type}`);
 		}
+	}
+
+	/**
+	 * 打开侧边导航列表（life-nav）：优先左侧栏，左侧被占就用右侧栏，
+	 * 桌面端再不行才开一个主区标签。已开则直接 reveal，不叠多个。
+	 */
+	async openNavSidebar(): Promise<void> {
+		const existing = this.app.workspace.getLeavesOfType(VIEW_LIFE_NAV)[0];
+		if (existing) {
+			this.app.workspace.revealLeaf(existing);
+			return;
+		}
+		const leaf =
+			this.app.workspace.getLeftLeaf(false) ??
+			this.app.workspace.getRightLeaf(false) ??
+			this.app.workspace.getLeaf(true);
+		if (!leaf) return;
+		await leaf.setViewState({ type: VIEW_LIFE_NAV, active: true });
+		this.app.workspace.revealLeaf(leaf);
+	}
+
+	/**
+	 * 侧栏点击：在**主区标签页**打开具体面板（2026-11-24 用户明确要标签页）。
+	 *
+	 * 与 activatePanel 的区别：activatePanel 首开放右侧栏（老命令/ribbon 右键
+	 * 菜单的语义，保持不动）；这里只认主工作区里已开的同类型叶，侧栏里即使
+	 * 有同类型叶也不复用，而是新开一个主区标签——这样“点列表 → 标签页”的
+	 * 行为稳定，不会因之前从菜单开过一次就跑去侧栏。
+	 */
+	async openPanelInTab(viewType: string): Promise<void> {
+		const root = this.app.workspace.rootSplit;
+		const inTab = this.app.workspace
+			.getLeavesOfType(viewType)
+			.find((leaf) => leaf.getRoot?.() === root);
+		if (inTab) {
+			this.app.workspace.revealLeaf(inTab);
+			return;
+		}
+		const leaf = this.app.workspace.getLeaf('tab');
+		if (!leaf) return;
+		await leaf.setViewState({ type: viewType, active: true });
+		this.app.workspace.revealLeaf(leaf);
 	}
 
 	/** 激活面板（存在即复用,否则右侧新开）。 */
