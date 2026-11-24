@@ -9,6 +9,7 @@ import {
   isFileFromDataloom,
   isFileImage,
   isFilePDF,
+  isAIImageIndexPath,
   logVerbose,
 } from './tools/utils'
 
@@ -59,6 +60,9 @@ export class NotesIndexer {
     // 这样 `node_modules` 之类的规则对库内和库外两边都生效。
     const filterPath = isExternalDocPath(path) ? absFromExternalDocPath(path) : path
     if (!this.isPathAllowed(filterPath)) return false
+
+    // 图片 AI 索引 sidecar 的内容属于对应图片，不能作为独立文档进索引/结果
+    if (isAIImageIndexPath(filterPath)) return false
 
     // 库外文件（ext: 伪路径）：按真实扩展名走明文索引那条路。
     if (isExternalDocPath(path)) return this.isFilePlaintext(path)

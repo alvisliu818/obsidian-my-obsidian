@@ -20,7 +20,7 @@ import type { ResultNote } from '../globals'
 import type { Query } from '../search/query'
 import type OmnisearchPlugin from '../main'
 import { isExternalDocPath, toExternalDocPath } from './externalDocs'
-import { logVerbose } from './utils'
+import { isAIImageIndexPath, logVerbose } from './utils'
 
 /** daemon 客户端的本桥所需最小面（结构化类型，避免跨模块类型耦合）。 */
 interface DaemonLike {
@@ -80,7 +80,8 @@ function filterHits<T extends { path: string }>(
 	hits: T[],
 	query: Query,
 ): T[] {
-	let out = hits
+	// 图片 AI 索引 sidecar 不作为独立结果出现（其内容通过图片路径命中）
+	let out = hits.filter(h => !isAIImageIndexPath(h.path))
 	if (query.query.path?.length) {
 		const subs = query.query.path.map(p => p.toLowerCase())
 		out = out.filter(h => {
@@ -267,6 +268,55 @@ export async function searchIndexDaemonUnified(
 			}
 		} catch (e) {
 			logVerbose('Omnisearch - unified ext search failed', e)
+		}
+
+		// ---- 图片 AI 索引域：索引文件内容 → 展示/打开对应图片 ----
+		// daemon 只索引 .md；图片内容存在图片同目录的 *_index.json 里。
+		// 这里按关键词命中的索引反查图片路径，结果项就是图片文件本身。
+		try {
+			if (plugin.settings.aiImageIndexing) {
+				const entries =
+					(await plugin.getAIImageAnalyzer()?.getAllIndexEntries?.()) ?? []
+				const exactTerms = query.getExactTerms()
+				const required = [
+					...tokens.filter(t => !t.startsWith('#')),
+					...exactTerms,
+				].map(t => t.toLowerCase())
+				const excluded = excludes.map(n => n.toLowerCase())
+
+				if (required.length && entries.length) {
+					let imageScore = -1000
+					for (const entry of entries) {
+						const keywords = entry.keywords.toLowerCase()
+						const imagePath = entry.imagePath.toLowerCase()
+						if (
+							!required.every(
+								t => keywords.includes(t) || imagePath.includes(t),
+							)
+						) {
+							continue
+						}
+						if (excluded.some(n => keywords.includes(n))) continue
+						if (!filterHits([{ path: entry.imagePath }], query).length) continue
+						if (
+							!push(
+								toResultNote(
+									plugin,
+									query,
+									entry.imagePath,
+									entry.keywords,
+									imageScore--,
+								),
+							)
+						) {
+							continue
+						}
+						if (out.length >= 80) break
+					}
+				}
+			}
+		} catch (e) {
+			logVerbose('Omnisearch - image AI index search failed', e)
 		}
 
 		// hideExcluded:Obsidian 排除文件直接过滤（与 minisearch 侧同语义）

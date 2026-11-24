@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { CachedMetadata } from 'obsidian'
 import {
   getAliasesFromMetadata,
+  isAIImageIndexPath,
   normalizeExactMatchContent,
   removeBase64Images,
 } from '../tools/utils'
@@ -110,6 +111,25 @@ describe('Utils', () => {
       expect(normalizeExactMatchContent('A *Crème* _brûlée_')).toBe(
         'a creme brulee'
       )
+    })
+  })
+
+  describe('isAIImageIndexPath', () => {
+    it('matches the new {name}_{ext}_index.json naming', () => {
+      expect(isAIImageIndexPath('photos/test_png_index.json')).toBe(true)
+      expect(isAIImageIndexPath('my_photo_jpeg_index.json')).toBe(true)
+      expect(isAIImageIndexPath('a/b/icon_svg_index.json')).toBe(true)
+    })
+
+    it('matches the legacy .ai-index.json naming', () => {
+      expect(isAIImageIndexPath('photos/test.png.ai-index.json')).toBe(true)
+    })
+
+    it('does not match unrelated json files', () => {
+      expect(isAIImageIndexPath('photos/test_index.json')).toBe(false)
+      expect(isAIImageIndexPath('data/db_index.json')).toBe(false)
+      expect(isAIImageIndexPath('photos/test_png_index.json.bak')).toBe(false)
+      expect(isAIImageIndexPath('photos/test.png')).toBe(false)
     })
   })
 })

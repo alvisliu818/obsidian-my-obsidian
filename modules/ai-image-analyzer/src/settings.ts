@@ -38,8 +38,6 @@ interface AIImageAnalyzerPluginSettings {
 	autoClearCache: boolean;
 	/** 索引文件的存储模式：centralized（集中式）或 colocated（同文件夹） */
 	indexMode: IndexMode;
-	/** 索引文件的后缀名，仅在同文件夹模式下使用 */
-	indexFileSuffix: string;
 	/** AI 适配器相关配置 */
 	aiAdapterSettings: AIAdapterPluginSettings;
 }
@@ -51,7 +49,6 @@ const DEFAULT_SETTINGS: AIImageAnalyzerPluginSettings = {
 		"Describe the image. Just use Keywords. For example: cat, dog, tree. This must be Computer readable. The provided pictures are used in an notebook. Please provide at least 5 Keywords. It will be used to search for the image later.",
 	autoClearCache: true,
 	indexMode: "colocated",
-	indexFileSuffix: ".ai-index.json",
 	aiAdapterSettings: AI_ADAPTER_DEFAULT_SETTINGS,
 };
 
@@ -74,7 +71,6 @@ export async function loadSettings(plugin: AIImageAnalyzerPlugin) {
 		AI_ADAPTER_DEFAULT_SETTINGS,
 		settings.aiAdapterSettings,
 	);
-	settings.indexMode === "colocated"
 }
 
 /**
@@ -143,6 +139,7 @@ export class AIImageAnalyzerSettingsTab extends PluginSettingTab {
 			.setDesc(
 				"Centralized: Store all index files in the plugin config directory. " +
 					"Co-located: Store index files in the same folder as the indexed images, " +
+					"named {imageName}_{extension}_index.json (e.g. test.png → test_png_index.json), " +
 					"so that search can locate images based on index file location.",
 			)
 			.addDropdown((dropdown) =>
@@ -158,28 +155,6 @@ export class AIImageAnalyzerSettingsTab extends PluginSettingTab {
 								"Cache cleared due to index mode change",
 							);
 						}
-						await saveSettings(this.plugin);
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName("Index file suffix")
-			.setDesc(
-				"Suffix for index files in co-located mode (e.g., .ai-index.json). " +
-					"Changing this will make existing index files unrecognizable.",
-			)
-			.addText((text) =>
-				text
-					.setPlaceholder(".ai-index.json")
-					.setValue(settings.indexFileSuffix)
-					.onChange(async (value) => {
-						if (value.length === 0) {
-							value = DEFAULT_SETTINGS.indexFileSuffix;
-						}
-						if (!value.startsWith(".")) {
-							value = "." + value;
-						}
-						settings.indexFileSuffix = value;
 						await saveSettings(this.plugin);
 					}),
 			);

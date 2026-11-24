@@ -186,6 +186,25 @@ export function isFileImage(path: string): boolean {
   )
 }
 
+/** 图片 AI 索引文件对应的图片扩展名（含 SVG，见 ai-image-analyzer） */
+const AI_IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'])
+
+/**
+ * 判断路径是否为图片 AI 索引文件（sidecar）。
+ * 新命名：photo_png_index.json；旧命名：photo.png.ai-index.json。
+ * 索引内容属于对应图片，因此不能把它当独立文档索引/展示。
+ */
+export function isAIImageIndexPath(path: string): boolean {
+  const name = path.split('/').pop() ?? path
+  if (name.endsWith('.ai-index.json')) return true
+  if (!name.endsWith('_index.json')) return false
+
+  const stem = name.slice(0, -'_index.json'.length)
+  const separator = stem.lastIndexOf('_')
+  if (separator <= 0 || separator === stem.length - 1) return false
+  return AI_IMAGE_EXTENSIONS.has(stem.slice(separator + 1).toLowerCase())
+}
+
 export function isFilePDF(path: string): boolean {
   return getExtension(path) === 'pdf'
 }

@@ -108,6 +108,10 @@ export type TextExtractorApi = {
 export type AIImageAnalyzerAPI = {
   analyzeImage: (file: TFile) => Promise<string>
   canBeAnalyzed: (file: TFile) => boolean
+  /** 读取所有图片索引文件（索引内容 → 图片路径）；独立版旧 API 可能没有 */
+  getAllIndexEntries?: () => Promise<
+    Array<{ imagePath: string; keywords: string; indexPath: string }>
+  >
 }
 
 export const SEPARATORS =

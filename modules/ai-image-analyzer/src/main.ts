@@ -8,7 +8,14 @@
  * - 暴露插件 API 供其他插件调用
  */
 import { MenuItem, Notice, Plugin, TFile } from "obsidian";
-import { isInCache, removeFromCache } from "./cache";
+import {
+	getAllIndexEntries,
+	invalidateIndexEntriesCache,
+	isInCache,
+	isIndexFile,
+	migrateLegacyIndexFiles,
+	removeFromCache,
+} from "./cache";
 import {
 	analyzeImage,
 	analyzeImageWithNotice,
@@ -24,6 +31,7 @@ import {
 } from "./ai-adapter/globals";
 import { initProvider } from "./ai-adapter/util";
 import { SearchModal } from "./searchModal";
+import type { SearchResult } from "./types";
 
 const context = "main";
 
@@ -38,6 +46,8 @@ export type AIImageAnalyzerAPI = {
 	canBeAnalyzed: (file: TFile) => boolean;
 	/** 检查指定图片是否已有缓存/索引 */
 	isInCache: (file: TFile) => Promise<boolean>;
+	/** 读取所有图片索引文件（索引内容 → 图片路径），供搜索方按内容反查图片 */
+	getAllIndexEntries: () => Promise<SearchResult[]>;
 };
 
 /**
@@ -50,6 +60,7 @@ export default class AIImageAnalyzerPlugin extends Plugin {
 		analyzeImage: analyzeImage,
 		canBeAnalyzed: isImageFile,
 		isInCache: isInCache,
+		getAllIndexEntries: getAllIndexEntries,
 	};
 
 	/**
@@ -59,6 +70,22 @@ export default class AIImageAnalyzerPlugin extends Plugin {
 	async onload() {
 		debugLog(context, "loading ai image analyzer plugin");
 		await loadSettings(this);
+
+		// 索引文件增删改后清空内存缓存，让搜索立刻看到最新索引
+		const invalidateForIndexFile = (file: unknown) => {
+			if (file instanceof TFile && isIndexFile(file.path)) {
+				invalidateIndexEntriesCache();
+			}
+		};
+		this.registerEvent(this.app.vault.on("create", invalidateForIndexFile));
+		this.registerEvent(this.app.vault.on("modify", invalidateForIndexFile));
+		this.registerEvent(this.app.vault.on("delete", invalidateForIndexFile));
+		this.registerEvent(this.app.vault.on("rename", invalidateForIndexFile));
+
+		// 旧命名（*.ai-index.json）后台迁移到 {name}_{ext}_index.json
+		this.app.workspace.onLayoutReady(() => {
+			void migrateLegacyIndexFiles();
+		});
 
 		setProvider(initProvider());
 
