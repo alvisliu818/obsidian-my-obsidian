@@ -1445,6 +1445,14 @@ export default class MyObsidianPlugin extends Plugin {
 			bootlog.push(`${d.id}: disabled`);
 			return;
 		}
+		// 移动端整包：桌面专用模块（Electron/Node/pty 等）即使从桌面同步来
+		// 的 settings 里是开的也一律跳过；桌面端 Platform.isMobileApp 恒 false，
+		// 行为完全不变。
+		if (d.desktopOnly && Platform.isMobileApp) {
+			console.debug(`[my-obsidian] ${d.id}: desktop-only, skip on mobile`);
+			bootlog.push(`${d.id}: desktop-only on mobile`);
+			return;
+		}
 		if (this.live.has(d.id)) return;
 		try {
 			console.debug(`[my-obsidian] booting ${d.id}...`);

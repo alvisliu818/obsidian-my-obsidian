@@ -21,6 +21,14 @@ import path from "node:path";
 
 const nodeRequire = createRequire(import.meta.url);
 const prod = process.argv[2] === "production";
+// MOBILE_BUILD=full：整包移动端构建。保留所有模块，只把 Node/Electron
+// 内建模块解析到轻量替身（src/mobile-node-stub.ts），避免移动端加载时
+// 顶层 require("electron") / import "fs" 直接抛错。桌面常规构建零改动。
+const mobileFull = process.env.MOBILE_BUILD === "full";
+const { mobileFullNodePlugin } = mobileFull
+  ? await import("./scripts/mobile-full-node-plugin.mjs")
+  : {};
+if (mobileFull) console.log("[mobile] 整包构建：所有模块 + Node/Electron 替身");
 
 const banner = `window.__myBundleTag = "bundle-1793683236";
 /*
@@ -652,7 +660,7 @@ const context = await esbuild.context({
     // advanced-uri 的 types.ts 用 obsidian 包的 canvas 类型扩展；external 按
     // 包路径精确匹配，不覆盖子路径，需单独列出（运行时由 Obsidian 提供）
     "obsidian/canvas",
-    "electron",
+    ...(mobileFull ? [] : ["electron"]),
     // node:sqlite（unified-search 的索引库）：builtin-modules@3.3.0 早于
     // Node 22.5 新增的 sqlite，罩不住，需显式 external（运行时由 Electron 提供）
     "sqlite",
@@ -668,11 +676,13 @@ const context = await esbuild.context({
     "@lezer/common",
     "@lezer/highlight",
     "@lezer/lr",
-    ...builtins,
+    ...(mobileFull ? [] : builtins),
     // ollama 等包用 `node:fs` 带前缀的写法，裸名列表罩不住
-    ...builtins.map((m) => `node:${m}`),
+    ...(mobileFull ? [] : builtins.map((m) => `node:${m}`)),
   ],
-  plugins: [srSrcResolver, lib10Resolver, livesyncResolver, dataviewUtilResolver, dataviewWebWorkerPlugin, cmBundlePlugin, momentumSveltePlugin, terminalSveltePlugin, sveltePlugin, jiebaPatchPlugin, dexiePatchPlugin, unicornMagicPatchPlugin, importGlobPlugin, musicPlayerShimsPlugin, inlineImportPlugin, mxInlinePlugin, mxCaptionsPlugin, mxNodeEnvPlugin, terminalPyPlugin],
+  plugins: [
+    ...(mobileFull ? [mobileFullNodePlugin()] : []),
+    srSrcResolver, lib10Resolver, livesyncResolver, dataviewUtilResolver, dataviewWebWorkerPlugin, cmBundlePlugin, momentumSveltePlugin, terminalSveltePlugin, sveltePlugin, jiebaPatchPlugin, dexiePatchPlugin, unicornMagicPatchPlugin, importGlobPlugin, musicPlayerShimsPlugin, inlineImportPlugin, mxInlinePlugin, mxCaptionsPlugin, mxNodeEnvPlugin, terminalPyPlugin],
   // Monaco 的 codicon.css 引用 .ttf 字体(图标字形)。内联成 dataurl:图标
   // 只有几 KB,而少这一条整个构建会以 "No loader is configured for .ttf" 失败。
   // (与独立插件 obsidian-logseq 的 esbuild.mjs 同款配置。)
@@ -738,7 +748,7 @@ const context = await esbuild.context({
   metafile: !!process.env.METAFILE,
   sourcemap: prod ? false : "inline",
   treeShaking: true,
-  outfile: "main.js",
+  outfile: mobileFull ? (process.env.MOBILE_OUT || "dist-release/mobile/main.js") : "main.js",
   minify: prod,
 });
 
@@ -807,6 +817,12 @@ for (const lb of LAZY_BUNDLES) {
 }
 
 if (prod) {
+  if (mobileFull) {
+    // 移动端整包只产主 bundle：daemon / lazy 分包是桌面 Node 专属，
+    // 移动端不加载，也不该覆盖仓库根的 MyKernel.cjs / lazy/*。
+    await context.rebuild();
+    process.exit(0);
+  }
   // 所有 context 并行 rebuild——main/daemon/lazy 互不依赖，串行浪费
   // 5-8s（lazy ×4 + daemon 各 1-2s 的等待被 main 的 8-9s 遮不住）。
   const results = await Promise.all([
