@@ -52,7 +52,7 @@ describe('Settings', () => {
 			{ key: 'outputMode', value: 'single' },
 			{ key: 'useSourceNamesForTracks', value: true },
 			{ key: 'debug', value: false },
-			{ key: 'showReleaseNotes', value: true },
+			{ key: 'showReleaseNotes', value: false },
 			// Nothing has been announced in a fresh config, which is what
 			// keeps a first install from being greeted with the history.
 			{ key: 'lastReleaseNotesVersion', value: '' },

@@ -1749,14 +1749,27 @@ describe('AudioRecorderPlugin announcing what changed', () => {
 	}
 
 	it('shows what changed since the version last announced', async () => {
-		await announceOver({ lastReleaseNotesVersion: '1.0.0' });
+		await announceOver({
+			lastReleaseNotesVersion: '1.0.0',
+			showReleaseNotes: true,
+		});
 
 		expect(announcedNotes()).toContain('# 1.0.1');
+	});
+
+	it('stays quiet by default even when the version changed', async () => {
+		const { saveData } = await announceOver({
+			lastReleaseNotesVersion: '1.0.0',
+		});
+
+		expect(modalInstances).toHaveLength(0);
+		expect(announcedVersion(saveData)).toBe(RUNNING_VERSION);
 	});
 
 	it('records the version it announced, so the next start is quiet', async () => {
 		const { saveData } = await announceOver({
 			lastReleaseNotesVersion: '1.0.0',
+			showReleaseNotes: true,
 		});
 
 		expect(modalInstances).toHaveLength(1);
@@ -1768,7 +1781,7 @@ describe('AudioRecorderPlugin announcing what changed', () => {
 		// what the update was about, and the bookkeeping failing is no reason
 		// to withhold it.
 		const harness = createPlugin(
-			[{ lastReleaseNotesVersion: '1.0.0' }],
+			[{ lastReleaseNotesVersion: '1.0.0', showReleaseNotes: true }],
 			RUNNING_VERSION,
 		);
 		harness.saveData.mockRejectedValue(new Error('disk full'));

@@ -115,7 +115,7 @@ export function buildSettingsDefinitions(
 				// reader looks for them before they have a session in mind.
 				name: 'Release notes',
 				aliases: ['changelog', 'updates', 'what is new'],
-				desc: "Show what changed the first time a new version runs. The notes stay available through the Show what's new command.",
+				desc: "Automatically show what changed the first time a new version runs (off by default). The notes stay available through the Show what's new command.",
 				control: { type: 'toggle', key: 'showReleaseNotes' },
 			},
 		]),

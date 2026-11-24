@@ -986,7 +986,7 @@ export const DEFAULT_SETTINGS: AudioRecorderSettings = {
 	trackAudioSources: new Map(),
 	perPlatform: createPerPlatformDefaults(),
 	debug: false,
-	showReleaseNotes: true,
+	showReleaseNotes: false,
 	lastReleaseNotesVersion: '',
 	insertAtOriginalPosition: false,
 	deleteSourceAfterConversion: false,
