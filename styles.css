@@ -63402,7 +63402,8 @@ body.is-mobile
 	cursor: pointer;
 }
 .life-home-hist-row:hover { background: var(--background-modifier-hover); }
-.life-home-hist-row.is-sub { margin-left: 24px; }
+/* 保存历史「按文件夹」目录树(2026-11-24 用户):目录行加粗,层级用行内左内边距表达 */
+.life-home-hist-row.is-dir .life-home-hist-msg { font-weight: 600; }
 .life-home-hist-row.is-snap { padding-left: 10px; }
 .life-home-hist-row.is-snap .life-home-hist-msg { font-size: var(--font-ui-smaller); }
 .life-home-hist-list { max-height: 320px; overflow: auto; padding-right: 4px; }

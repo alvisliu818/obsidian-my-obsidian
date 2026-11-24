@@ -57,6 +57,15 @@ interface SnapshotFileLite {
 	snapshots: SaveSnapshotLite[];
 }
 
+/** 保存历史目录树节点(2026-11-24 用户:按文件夹 = 逐级目录树)。 */
+interface SavePathNode {
+	name: string;
+	/** 完整目录路径(根 = '';收起状态按它记键) */
+	fullPath: string;
+	dirs: Map<string, SavePathNode>;
+	files: SnapshotFileLite[];
+}
+
 interface SaveControlApi {
 	listAllSnapshotFiles?: () => Promise<SnapshotFileLite[]>;
 	readSnapshotContent?: (filePath: string) => Promise<{ content?: string } | null>;
@@ -278,7 +287,7 @@ export class LifeHomeView extends ItemView {
 		}
 	}
 
-	/** 保存历史区块:所有有历史的文件;列表模式或按文件夹分组。 */
+	/** 保存历史区块:所有有历史的文件;列表或按文件夹(逐级目录树)。 */
 	private renderSaveSection(container: HTMLElement): void {
 		const head = container.createDiv({ cls: 'life-home-sec-head' });
 		head.createDiv({
@@ -286,15 +295,6 @@ export class LifeHomeView extends ItemView {
 			text: `保存历史${this.saveFiles.length ? `（${this.saveFiles.length} 个文件）` : ''}`,
 		});
 		const btns = head.createDiv({ cls: 'life-home-head-btns' });
-		const modeBtn = btns.createEl('button', {
-			cls: 'life-home-mode-btn',
-			text: this.saveDetailMode === 'folder' ? '文件夹' : '列表',
-		});
-		modeBtn.setAttr('title', '切换 列表 / 按文件夹');
-		modeBtn.addEventListener('click', () => {
-			this.saveDetailMode = this.saveDetailMode === 'folder' ? 'overall' : 'folder';
-			this.render();
-		});
 		const refresh = btns.createEl('button', { cls: 'life-home-mode-btn', text: '刷新' });
 		refresh.addEventListener('click', () => void this.refreshSaveHistory());
 		// 云端历史版本(2026-11-22 用户):OneDrive / 百度同步空间是逐文件接口,
@@ -317,42 +317,105 @@ export class LifeHomeView extends ItemView {
 			container.createDiv({ cls: 'life-home-muted', text: '还没有任何保存历史。' });
 			return;
 		}
-		// 文件可能很多(实测 190+):列表区独立滚动,别把 HOME 拉成无限长
-		const list = container.createDiv({ cls: 'life-home-hist-list' });
-		if (this.saveDetailMode === 'overall') {
-			for (const file of this.saveFiles) this.renderSaveFileRow(list, file, false);
-			return;
-		}
-		const groups = new Map<string, SnapshotFileLite[]>();
-		for (const file of this.saveFiles) {
-			const norm = file.targetPath.replace(/\\/g, '/');
-			const idx = norm.lastIndexOf('/');
-			const dir = idx >= 0 ? norm.slice(0, idx) : '';
-			const arr = groups.get(dir);
-			if (arr) arr.push(file);
-			else groups.set(dir, [file]);
-		}
-		for (const [dir, files] of [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-			const collapsed = this.saveCollapsedDirs.has(dir);
-			const row = list.createDiv({ cls: 'life-home-hist-row is-dir' });
-			row.createSpan({ cls: 'life-home-hist-chevron', text: collapsed ? '▸' : '▾' });
-			row.createSpan({ cls: 'life-home-hist-msg', text: dir || '(根目录)' });
-			row.createSpan({ cls: 'life-home-hist-meta', text: `${files.length} 个文件` });
-			row.addEventListener('click', () => {
-				if (collapsed) this.saveCollapsedDirs.delete(dir);
-				else this.saveCollapsedDirs.add(dir);
+		// 列表 / 按文件夹:两个常显按钮(与「库记录」同款),当前模式高亮。
+		const modeRow = container.createDiv({ cls: 'life-home-mode-row' });
+		for (const [label, mode] of [
+			['列表', 'overall'],
+			['按文件夹', 'folder'],
+		] as const) {
+			const btn = modeRow.createEl('button', { cls: 'life-home-mode-btn', text: label });
+			if (this.saveDetailMode === mode) btn.addClass('is-active');
+			btn.addEventListener('click', (ev) => {
+				ev.stopPropagation();
+				this.saveDetailMode = mode;
 				this.render();
 			});
-			if (collapsed) continue;
-			for (const file of files) this.renderSaveFileRow(list, file, true);
 		}
+		// 文件可能很多(实测 215+):列表区独立滚动,别把 HOME 拉成无限长
+		const list = container.createDiv({ cls: 'life-home-hist-list' });
+		if (this.saveDetailMode === 'overall') {
+			// 列表模式只看最近 10 个文件(2026-11-24 用户);按文件夹模式可看全部
+			const shown = this.saveFiles.slice(0, 10);
+			for (const file of shown) this.renderSaveFileRow(list, file, 0);
+			if (this.saveFiles.length > shown.length) {
+				list.createDiv({
+					cls: 'life-home-muted',
+					text: `…还有 ${this.saveFiles.length - shown.length} 个文件(切到「按文件夹」查看全部)`,
+				});
+			}
+			return;
+		}
+		this.renderSaveTree(list, this.buildSaveTree(), 0);
 	}
 
-	private renderSaveFileRow(container: HTMLElement, file: SnapshotFileLite, indent: boolean): void {
+	/** 保存历史文件路径 → 逐级目录树(根节点自身不渲染)。 */
+	private buildSaveTree(): SavePathNode {
+		const root: SavePathNode = { name: '', fullPath: '', dirs: new Map(), files: [] };
+		for (const file of this.saveFiles) {
+			const segs = file.targetPath.replace(/\\/g, '/').split('/').filter(Boolean);
+			segs.pop(); // 末段是文件名
+			let node = root;
+			for (const seg of segs) {
+				let next = node.dirs.get(seg);
+				if (!next) {
+					next = {
+						name: seg,
+						fullPath: node.fullPath ? `${node.fullPath}/${seg}` : seg,
+						dirs: new Map(),
+						files: [],
+					};
+					node.dirs.set(seg, next);
+				}
+				node = next;
+			}
+			node.files.push(file);
+		}
+		return root;
+	}
+
+	/** 目录(含子目录)里的文件总数。 */
+	private countSaveTreeFiles(node: SavePathNode): number {
+		let n = node.files.length;
+		for (const child of node.dirs.values()) n += this.countSaveTreeFiles(child);
+		return n;
+	}
+
+	/** 目录树递归渲染:目录行可收起,深度用左内边距表达。 */
+	private renderSaveTree(container: HTMLElement, node: SavePathNode, depth: number): void {
+		const pad = (d: number): string => `padding-left:${6 + d * 14}px`;
+		for (const dir of [...node.dirs.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+			const collapsed = this.saveCollapsedDirs.has(dir.fullPath);
+			const row = container.createDiv({ cls: 'life-home-hist-row is-dir', attr: { style: pad(depth) } });
+			row.createSpan({ cls: 'life-home-hist-chevron', text: collapsed ? '▸' : '▾' });
+			row.createSpan({ cls: 'life-home-hist-msg', text: dir.name });
+			row.setAttr('title', dir.fullPath);
+			row.createSpan({ cls: 'life-home-hist-meta', text: `${this.countSaveTreeFiles(dir)} 个文件` });
+			row.addEventListener('click', (ev) => {
+				ev.stopPropagation();
+				if (collapsed) this.saveCollapsedDirs.delete(dir.fullPath);
+				else this.saveCollapsedDirs.add(dir.fullPath);
+				this.render();
+			});
+			if (!collapsed) this.renderSaveTree(container, dir, depth + 1);
+		}
+		const files = [...node.files].sort((a, b) =>
+			this.saveBaseName(a.targetPath).localeCompare(this.saveBaseName(b.targetPath)),
+		);
+		for (const file of files) this.renderSaveFileRow(container, file, depth);
+	}
+
+	private saveBaseName(path: string): string {
+		return path.replace(/\\/g, '/').split('/').pop() || path;
+	}
+
+	private renderSaveFileRow(container: HTMLElement, file: SnapshotFileLite, depth: number): void {
 		const expanded = this.saveExpanded.has(file.targetPath);
-		const row = container.createDiv({ cls: 'life-home-hist-row' + (indent ? ' is-sub' : '') });
+		const row = container.createDiv({
+			cls: 'life-home-hist-row',
+			attr: { style: `padding-left:${6 + depth * 14}px` },
+		});
 		row.createSpan({ cls: 'life-home-hist-chevron', text: expanded ? '▾' : '▸' });
-		row.createSpan({ cls: 'life-home-hist-msg', text: file.targetPath.split('/').pop() || file.targetPath });
+		row.createSpan({ cls: 'life-home-hist-msg', text: this.saveBaseName(file.targetPath) });
 		row.setAttr('title', file.targetPath);
 		row.createSpan({
 			cls: 'life-home-hist-meta',
@@ -364,7 +427,10 @@ export class LifeHomeView extends ItemView {
 			this.render();
 		});
 		if (!expanded) return;
-		const box = container.createDiv({ cls: 'life-home-hist-files' });
+		const box = container.createDiv({
+			cls: 'life-home-hist-files',
+			attr: { style: `margin-left:${24 + depth * 14}px` },
+		});
 		for (const snap of file.snapshots.slice(0, 10)) {
 			const srow = box.createDiv({ cls: 'life-home-hist-row is-snap' });
 			srow.createSpan({ cls: 'life-home-hist-msg', text: `${snap.name || '自动保存'}${snap.favorite ? ' ★' : ''}` });
