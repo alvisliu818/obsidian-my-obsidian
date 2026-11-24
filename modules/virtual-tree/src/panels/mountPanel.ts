@@ -1347,6 +1347,27 @@ export class MountPanelView extends ItemView {
     else menu.showAtPosition({ x: window.innerWidth / 2, y: 80 });
   }
 
+  /**
+   * 挂载根本身是「文件」时返回它的节点（`rel` 恒为 `''`，即挂载根本身），
+   * 否则 null。
+   *
+   * 不能用 `state.tree` 推：库内单文件挂载的树里只放**它名下的虚拟子文档**
+   * （文件自己由头行代表，见 scan 的 `root.kind === 'file'` 分支），树长度
+   * 天然不是 1；库外单文件挂载的树才是 `[文件自己]`。头行的图标、点击语义、
+   * caret 都按这里判定，否则库内文件挂载会被当成文件夹——2026-11-24 用户
+   * 实报：点顶部挂载的 !.md 名字只展开、不打开文件。
+   */
+  private rootFileOf(mount: ExternalMount): MountNode | null {
+    if (isVaultMount(mount)) {
+      const root = vaultRootOf(this.app, mount);
+      if (root.kind !== 'file') return null;
+      return { name: root.file.name, rel: '', abs: root.file.path, isDir: false, children: [] };
+    }
+    if (isRemoteMount(mount) || !exists(mount.path) || isDirectory(mount.path)) return null;
+    const base = mount.path.replace(/[\\/]+$/, '').split(/[\\/]+/).pop() ?? mount.path;
+    return { name: base, rel: '', abs: mount.path, isDir: false, children: [] };
+  }
+
   private renderMount(root: HTMLElement, mount: ExternalMount): void {    const section = root.createDiv({ cls: 'logseq-mount-section' });
     // 定位当前文件时按挂载找到区段、再按固定行高算偏移。
     section.dataset.mountId = mount.id;
@@ -1361,8 +1382,15 @@ export class MountPanelView extends ItemView {
     // The mount root is a folder too, so it gets the same treatment.
     const headLabel = mountDisplayName(mount);
     // A mounted FILE's head carries the file's own icon, not a folder's.
-    const rootNode = state.tree.length === 1 ? state.tree[0] : null;
-    const isFileRoot = !!rootNode && !rootNode.isDir;
+    // 判定走 rootFileOf（不看 state.tree：库内文件挂载的树里只有虚拟子文档）。
+    const rootFile = this.rootFileOf(mount);
+    const isFileRoot = rootFile !== null;
+    // 头行点击要打开的那一行：库内直接用合成节点；库外文件挂载优先用树里的
+    // 文件自己（它的 rel 是文件名，只读名单/最近打开按挂载相对路径匹配）。
+    const openNode =
+      isFileRoot && !isVaultMount(mount) && state.tree.length === 1 && !state.tree[0].isDir
+        ? state.tree[0]
+        : rootFile;
     // 单文件挂载：头行**就是**文件本身——展开只会渲染出"自己在自己下面"
     // （挂 ROOT.md 后多出一行 /ROOT.md，用户实报）。强制收起，**但**名下有
     // 嵌套挂载/虚拟子笔记时例外：它们是真子项，收起就永远看不见（用户实报
@@ -1396,7 +1424,7 @@ export class MountPanelView extends ItemView {
     head.appendChild(
       iconForEntry(this.plugin.app, {
         name: headLabel,
-        isDir: rootNode ? rootNode.isDir : true,
+        isDir: !isFileRoot,
         mountPath: mount.path,
         rel: isFileRoot ? mount.path : '',
         collapsed: !state.open.has(''),
@@ -1410,14 +1438,14 @@ export class MountPanelView extends ItemView {
       head.createSpan({ cls: 'logseq-mount-flag is-pinned', text: '已固定' });
     }
     head.addEventListener('click', (ev) => {
-      // 文件根名下有真子项（parent 虚拟子笔记 / 嵌套挂载）= 当作容器：
-      // 点头行即展开/收起，与文件夹挂载一致（2026-11-23 用户要求 !.md
-      // 跟其他挂载一样直接展示子项）。纯文件根（无子项）仍点头行打开文件。
-      if (isFileRoot && rootNode && !fileRootHasKids) {
+      // 挂载文件的名字 = **打开文件**，与名下有没有子项无关（2026-11-24 用户
+      // 实报：点顶部挂载的 !.md 名字只展开了）。文件根的展开/收起只走 caret
+      // （有真子项时才给 caret）；文件夹挂载照旧点头行展开/收起。
+      if (isFileRoot && openNode) {
         const mode = this.modOpenMode(ev);
         // rel 传 ''：vaultJoinPath(mount, '') = mount.path（文件自身路径）。
-        if (isVaultMount(mount)) void this.openVaultNode(mount, { ...rootNode, rel: '' }, mode);
-        else void this.plugin.openExternalEntry(mount, rootNode, { paneMode: mode });
+        if (isVaultMount(mount)) void this.openVaultNode(mount, openNode, mode);
+        else void this.plugin.openExternalEntry(mount, openNode, { paneMode: mode });
         return;
       }
       if (state.open.has('')) state.open.delete('');
@@ -1475,7 +1503,10 @@ export class MountPanelView extends ItemView {
     const metaText = meta.join(' · ') || (showPath ? mountDisplayPath(mount) : '');
     if (metaText) section.createDiv({ cls: 'logseq-mount-meta', text: metaText });
 
-    if (state.tree.length === 0 && !state.truncated) {
+    // 空树 ≠ 没内容：嵌套挂载是画在宿主行流里的（orderedLevel 织入）。库内
+    // 单文件挂载没有虚拟子文档时树是空的，但名下可能挂着别的挂载——那时还
+    // 要画行，否则「文件下挂载」展开恒空（2026-11-24 探针实证）。
+    if (state.tree.length === 0 && !state.truncated && this.nestedMountsOf(mount.id, '').length === 0) {
       section.createDiv({ cls: 'logseq-mount-empty', text: '没有符合过滤条件的条目。' });
       return;
     }
@@ -1547,8 +1578,13 @@ export class MountPanelView extends ItemView {
     // 文件图标、点头行打开(含修饰键),有子项时 caret 独立点击展开;文件夹
     // 挂载照旧(文件夹图标,点头行展开/收起)。此前一律 is-dir+📁,文件挂载
     // 被画成文件夹(用户实报「挂载的文件变成文件夹了」)。
-    const rootNode = st.tree.length === 1 ? st.tree[0] : null;
-    const isFileRoot = !!rootNode && !rootNode.isDir;
+    // 判定与顶层头行同源（rootFileOf）:库内文件挂载的 tree 里只有虚拟子文档。
+    const rootFile = this.rootFileOf(mount);
+    const isFileRoot = rootFile !== null;
+    const openNode =
+      isFileRoot && !isVaultMount(mount) && st.tree.length === 1 && !st.tree[0].isDir
+        ? st.tree[0]
+        : rootFile;
     const hasKids =
       this.nestedMountsOf(mount.id, '').length > 0 ||
       (isVaultMount(mount) &&
@@ -1597,13 +1633,13 @@ export class MountPanelView extends ItemView {
     row.setAttribute('title', mountDisplayName(mount));
     row.createSpan({ cls: 'logseq-mount-name', text: mountDisplayName(mount) });
     row.addEventListener('click', (ev) => {
-      // 同顶层头行：文件根有真子项时当容器，点头行 = 展开/收起；
-      // 纯文件根（无子项）才点头行打开文件。
-      if (isFileRoot && rootNode && !hasKids) {
+      // 同顶层头行：文件挂载的名字一律 = 打开文件（有无子项都一样），
+      // 展开/收起只由 caret 负责（文件挂载有真子项时才画 caret）。
+      if (isFileRoot && openNode) {
         // 头行即文件:点头行 = 打开(与文件行同款,含 Ctrl/中键新标签)。
         const mode = this.modOpenMode(ev);
-        if (isVaultMount(mount)) void this.openVaultNode(mount, { ...rootNode, rel: '' }, mode);
-        else void this.plugin.openExternalEntry(mount, rootNode, { paneMode: mode });
+        if (isVaultMount(mount)) void this.openVaultNode(mount, openNode, mode);
+        else void this.plugin.openExternalEntry(mount, openNode, { paneMode: mode });
         return;
       }
       if (st.open.has('')) st.open.delete('');
