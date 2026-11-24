@@ -257,19 +257,6 @@ export async function searchIndexDaemonUnified(
 			logVerbose('Omnisearch - unified content search failed', e)
 		}
 
-		// ---- ext 域：挂载库外文件 ----
-		try {
-			const hits = filterHits(await daemon.extSearch(tokens, excludes, 15), query)
-			let count = 0
-			for (const hit of hits) {
-				const pseudoPath = toExternalDocPath(hit.path)
-				if (!push(toResultNote(plugin, query, pseudoPath, hit.text, -100 - count))) continue
-				if (++count >= 15) break
-			}
-		} catch (e) {
-			logVerbose('Omnisearch - unified ext search failed', e)
-		}
-
 		// ---- 图片 AI 索引域：索引文件内容 → 展示/打开对应图片 ----
 		// daemon 只索引 .md；图片内容存在图片同目录的 *_index.json 里。
 		// 这里按关键词命中的索引反查图片路径，结果项就是图片文件本身。
@@ -285,7 +272,7 @@ export async function searchIndexDaemonUnified(
 				const excluded = excludes.map(n => n.toLowerCase())
 
 				if (required.length && entries.length) {
-					let imageScore = -1000
+					let imageScore = -50
 					for (const entry of entries) {
 						const keywords = entry.keywords.toLowerCase()
 						const imagePath = entry.imagePath.toLowerCase()
@@ -317,6 +304,19 @@ export async function searchIndexDaemonUnified(
 			}
 		} catch (e) {
 			logVerbose('Omnisearch - image AI index search failed', e)
+		}
+
+		// ---- ext 域：挂载库外文件 ----
+		try {
+			const hits = filterHits(await daemon.extSearch(tokens, excludes, 15), query)
+			let count = 0
+			for (const hit of hits) {
+				const pseudoPath = toExternalDocPath(hit.path)
+				if (!push(toResultNote(plugin, query, pseudoPath, hit.text, -100 - count))) continue
+				if (++count >= 15) break
+			}
+		} catch (e) {
+			logVerbose('Omnisearch - unified ext search failed', e)
 		}
 
 		// hideExcluded:Obsidian 排除文件直接过滤（与 minisearch 侧同语义）
