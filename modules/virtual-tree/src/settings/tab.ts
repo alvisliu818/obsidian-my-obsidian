@@ -19,6 +19,7 @@ import {
   normalizeVaultFolder,
   VAULT_ROOT_MOUNT_ID,
   type EditorChoice,
+  type RevealPreference,
   type VideoOpenMode,
 } from '../types';
 import { OpenWithEditModal } from '../features/openWithUi';
@@ -46,6 +47,28 @@ export class VirtualTreeSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.createEl('h3', { text: '外部挂载' });
     this.renderMountsSection(containerEl);
+    // 定位当前文件：同一文件同时出现在多个挂载里时（主库 260817 场景），
+    // 让用户决定优先落到哪一份（2026-11-24）。
+    containerEl.createEl('h3', { text: '定位当前文件' });
+    new Setting(containerEl)
+      .setName('多处命中时优先定位到')
+      .setDesc(
+        '当前文件同时出现在库内和库外挂载时的处理方式。「已展开的路径」会跳到树里已经展开/加载了该文件的那一份；' +
+          '固定选库内/库外则忽略展开状态。设置后点工具栏的定位按钮立即生效。',
+      )
+      .addDropdown((d) =>
+        d
+          .addOptions({
+            expanded: '已展开的路径（推荐）',
+            vault: '库内挂载（含库根）',
+            external: '库外挂载',
+          })
+          .setValue(this.plugin.settings.revealPrefer ?? 'expanded')
+          .onChange(async (value) => {
+            this.plugin.settings.revealPrefer = value as RevealPreference;
+            await this.plugin.saveSettings();
+          }),
+      );
     // 只读路径模式（用户 2026-11-20：文件夹/文件只读,支持正则）——textarea
     // 逐行条目,语法与挂载 include/exclude 一致（纯文本前缀/段 + /正则/）。
     containerEl.createEl('h3', { text: '只读路径' });

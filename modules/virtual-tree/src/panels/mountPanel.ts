@@ -129,6 +129,7 @@ import {
   resolvePanelToolbar,
   type PanelToolbarCfg,
 } from '../features/panelToolbar';
+import { pickRevealTarget } from '../features/revealTarget';
 
 export const VIEW_TYPE_MOUNT_PANEL = 'logseq-mount-panel';
 
@@ -769,47 +770,52 @@ export class MountPanelView extends ItemView {
       this.effectiveVaultRootMount(),
       ...(this.plugin.settings.externalMounts ?? []).filter((m) => m.id !== VAULT_ROOT_MOUNT_ID),
     ].filter((m) => m.enabled !== false);
-    // 库内挂载优先：活动文件是库内文件时按库内相对路径匹配（库外挂载的
-    // 绝对路径前缀匹配管不到相对路径域）。库根本身嵌在某个库外挂载里时
-    // 两个域都能命中，取更具体的库内挂载。
+    // 候选 = 所有能匹配到该文件的挂载（库内相对域 + 库外绝对域）。同一文件
+    // 可能同时落在多个挂载里（主库 260817/.../STEP1.md 同时在库根和库外
+    // 挂载 260817 下）：不再「先命中库内就 return」，而是交给
+    // pickRevealTarget 优先挑**已展开/已加载该文件路径**的那一份（用户
+    // 2026-11-24 要求），否则按更具体的挂载根兜底。
+    const candidates: Array<{ mount: ExternalMount; mountId: string; rel: string; kind: 'vault' | 'external' }> = [];
     const activeFile = this.app.workspace.getActiveFile();
     if (activeFile) {
       // 库根挂载（path 为 '' 的合成态）匹配所有库内文件——startsWith('/')
       // 对空路径恒 false,库内文件的定位因此全灭（2026-11-07 用户报）
-      const vm = all
+      for (const vm of all
         .filter(isVaultMount)
-        .sort((a, b) => b.path.length - a.path.length)
-        .find((m) => m.path === '' || activeFile.path === m.path || activeFile.path.startsWith(`${m.path}/`));
-      if (vm) {
-        this.revealInMount(
-          vm,
-          vm.path === '' ? activeFile.path : activeFile.path === vm.path ? '' : activeFile.path.slice(vm.path.length + 1),
-        );
-        return;
+        .slice()
+        .sort((a, b) => b.path.length - a.path.length)) {
+        if (!(vm.path === '' || activeFile.path === vm.path || activeFile.path.startsWith(`${vm.path}/`))) continue;
+        const rel =
+          vm.path === '' ? activeFile.path : activeFile.path === vm.path ? '' : activeFile.path.slice(vm.path.length + 1);
+        candidates.push({ mount: vm, mountId: vm.id, rel, kind: 'vault' });
       }
     }
     const norm = (p: string): string => p.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
     const target = norm(abs);
-    // 候选含嵌套挂载:命中后沿 attachTo 链回溯,把宿主头行逐级展开,
-    // 否则嵌套挂载行根本不渲染,定位无从谈起。
-    // 同一文件同时落在宿主与嵌套挂载范围内时取**最长前缀**(更具体的根)。
-    const mount = all
+    for (const m of all
+      .filter((x) => !isVaultMount(x))
       .slice()
-      .sort((a, b) => b.path.length - a.path.length)
-      .find((m) => {
-        const root = norm(m.path);
-        return target === root || target.startsWith(root + '/');
-      });
-    if (!mount) {
+      .sort((a, b) => b.path.length - a.path.length)) {
+      const root = norm(m.path);
+      if (!(target === root || target.startsWith(root + '/'))) continue;
+      const rootSlash = m.path.replace(/[\\/]+$/, '').replace(/\\/g, '/');
+      const absSlash = abs.replace(/\\/g, '/');
+      const rel = absSlash.toLowerCase().startsWith(rootSlash.toLowerCase())
+        ? absSlash.slice(rootSlash.length).replace(/^\/+/, '')
+        : '';
+      candidates.push({ mount: m, mountId: m.id, rel, kind: 'external' });
+    }
+    if (!candidates.length) {
       new Notice('当前文件不在任何挂载目录内');
       return;
     }
-    const rootSlash = mount.path.replace(/[\\/]+$/, '').replace(/\\/g, '/');
-    const absSlash = abs.replace(/\\/g, '/');
-    const rel = absSlash.toLowerCase().startsWith(rootSlash.toLowerCase())
-      ? absSlash.slice(rootSlash.length).replace(/^\/+/, '')
-      : '';
-    this.revealInMount(mount, rel);
+    // 候选挂载的展开状态取当前面板扫描缓存（scan 只读缓存,不重扫盘）。
+    const target1 = pickRevealTarget(candidates, (mountId) => {
+      const st = this.scan(all.find((m) => m.id === mountId)!);
+      return { loaded: st.loaded, open: st.open };
+    }, this.plugin.settings.revealPrefer ?? 'expanded');
+    if (!target1) return;
+    this.revealInMount(target1.mount, target1.rel);
   }
 
   /**

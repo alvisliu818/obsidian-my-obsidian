@@ -455,6 +455,9 @@ export interface ImapMailConfig {
   port?: number;
 }
 
+/** 「定位当前文件」多挂载命中时的优先策略。 */
+export type RevealPreference = 'expanded' | 'vault' | 'external';
+
 export interface VirtualTreeSettings {
   /**
    * Apply each mount's include/exclude regexes to the virtual document tree.
@@ -620,6 +623,12 @@ export interface VirtualTreeSettings {
   /** 文件级收藏（面板顶部「收藏」区 + 树行右键「收藏」，思源 favorites 对齐）。 */
   /** 新建文件对话框记忆的上次扩展名（不含点；缺省 md）。 */
   newFileLastExt?: string;
+  /**
+   * 侧栏「定位当前文件」命中多个挂载时优先哪一个（2026-11-24）：
+   * expanded = 已展开/已加载该文件路径的那一份（默认）；
+   * vault = 库内挂载（含内置库根）；external = 库外挂载。
+   */
+  revealPrefer?: RevealPreference;
   /** 只读路径模式（逐行：纯文本前缀或 /正则/，命中即只读——虚拟文档树）。 */
   readOnlyPatterns?: string[];
   favorites?: FavoriteEntry[];
@@ -755,6 +764,8 @@ export const DEFAULT_VIRTUAL_TREE_SETTINGS: VirtualTreeSettings = {
   videoTimestampsEnabled: true,
   videoMarksFolder: 'Video Marks',
   openWithApps: [],
+  // 定位当前文件：默认优先落到用户已展开的那一份（2026-11-24）。
+  revealPrefer: 'expanded',
   gitGithubToken: '',
   gitGiteeToken: '',
   baiduPan: { ...DEFAULT_BAIDU_PAN_SETTINGS },
@@ -925,6 +936,9 @@ export function virtualTreeSettingsFrom(raw: unknown): VirtualTreeSettings {
   s.favorites = favoritesFrom(o.favorites);
   // 新建文件记忆扩展名（非字符串回落 undefined→默认 md）
   s.newFileLastExt = typeof o.newFileLastExt === 'string' && o.newFileLastExt.trim() ? o.newFileLastExt.trim() : undefined;
+  // 定位优先策略：非法值回落 'expanded'（默认已展开路径优先）
+  s.revealPrefer =
+    o.revealPrefer === 'vault' || o.revealPrefer === 'external' ? o.revealPrefer : 'expanded';
   // 只读模式：逐行收集,空行丢弃
   s.readOnlyPatterns = Array.isArray(o.readOnlyPatterns)
     ? o.readOnlyPatterns.filter((p): p is string => typeof p === 'string' && p.trim() !== '')
