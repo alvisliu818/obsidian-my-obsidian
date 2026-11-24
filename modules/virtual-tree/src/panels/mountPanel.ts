@@ -738,19 +738,66 @@ export class MountPanelView extends ItemView {
    *  external-code（py 等代码文件）、external-file（库外 md 原生视图）、
    *  code-doc（旧混合视图）。漏一个 = 那类文件点定位提示「当前没有打开的
    *  文件」（2026-10-29 用户报：py 文件定位不了，external-code 不在名单）。 */
+  /**
+   * 最近活跃的文件类叶子。点侧栏工具栏会把 activeLeaf 抢成面板自身，
+   * getActiveFile() 随之变 null（第二次点定位就没反应）——按 Obsidian
+   * 内部 activeTime 兜底取回最近的文件标签页。
+   */
+  private lastFileLeaf(): WorkspaceLeaf | null {
+    const ws = this.app.workspace;
+    const types = ['markdown', 'logseq-block-editor', ...EXTERNAL_ABS_VIEW_TYPES];
+    const leaves = types.flatMap((t) => ws.getLeavesOfType(t));
+    return (
+      leaves.sort(
+        (a, b) =>
+          ((b as unknown as { activeTime?: number }).activeTime ?? 0) -
+          ((a as unknown as { activeTime?: number }).activeTime ?? 0),
+      )[0] ?? null
+    );
+  }
+
+  /** 从叶子上取 file（TFile 或库外 TExternalFile），侧栏叶子没有。 */
+  private fileOfLeaf(leaf: WorkspaceLeaf | null): TAbstractFile | null {
+    return ((leaf?.view as unknown as { file?: TAbstractFile } | undefined)?.file ?? null);
+  }
+
   private activeAbsPath(): string | null {
     // 外部块视图优先：getActiveFile 对它返回 null，甚至可能残留上一个
     // 库内文件的 TFile —— 那会让定位静默走“不在任何挂载内”分支。
-    const leaf = this.app.workspace.getMostRecentLeaf();
-    const view = leaf?.view as { getViewType?: () => string; abs?: string } | undefined;
-    const vt = view?.getViewType?.();
-    if (vt && EXTERNAL_ABS_VIEW_TYPES.has(vt) && view!.abs) return view!.abs;
-    const f = this.app.workspace.getActiveFile();
+    const leaves = [this.app.workspace.getMostRecentLeaf(), this.lastFileLeaf()];
+    for (const leaf of leaves) {
+      const view = leaf?.view as { getViewType?: () => string; abs?: string } | undefined;
+      const vt = view?.getViewType?.();
+      if (vt && EXTERNAL_ABS_VIEW_TYPES.has(vt) && view!.abs) return view!.abs;
+    }
+    const f = this.app.workspace.getActiveFile() ?? this.fileOfLeaf(this.lastFileLeaf());
     if (f) {
+      // 恢复的库外文件标签页（Obsidian 1.14+ TExternalFile）的 path 是
+      // `file:E:/...` 伪路径，不能再拼到库根后面（会得到
+      // `<vault>/file:E:/...`，任何挂载都匹配不上 → 点定位没反应）。
+      // 2026-11-24 用户「直接打开主库、用恢复的标签页点定位无反应」实证。
+      const raw = f.path.replace(/\\/g, '/');
+      if (raw.startsWith('file:')) {
+        try {
+          return decodeURIComponent(raw.slice(5)).replace(/^\/+/, '');
+        } catch {
+          return raw.slice(5);
+        }
+      }
+      if (/^[A-Za-z]:\//.test(raw)) return raw; // 已经是绝对路径
       const adapter = this.app.vault.adapter as FileSystemAdapter;
-      return `${adapter.getBasePath().replace(/[\\/]+$/, '')}/${f.path}`;
+      return `${adapter.getBasePath().replace(/[\\/]+$/, '')}/${raw}`;
     }
     return null;
+  }
+
+  /** 活动文件是否是真正的库内文件（相对路径）；库外伪路径返回 null。 */
+  private activeVaultRelativePath(): string | null {
+    const f = this.app.workspace.getActiveFile() ?? this.fileOfLeaf(this.lastFileLeaf());
+    if (!f) return null;
+    const raw = f.path.replace(/\\/g, '/');
+    if (raw.startsWith('file:') || /^[A-Za-z]:\//.test(raw)) return null;
+    return raw;
   }
 
   /**
@@ -776,17 +823,17 @@ export class MountPanelView extends ItemView {
     // pickRevealTarget 优先挑**已展开/已加载该文件路径**的那一份（用户
     // 2026-11-24 要求），否则按更具体的挂载根兜底。
     const candidates: Array<{ mount: ExternalMount; mountId: string; rel: string; kind: 'vault' | 'external' }> = [];
-    const activeFile = this.app.workspace.getActiveFile();
-    if (activeFile) {
+    const vaultRel = this.activeVaultRelativePath();
+    if (vaultRel) {
       // 库根挂载（path 为 '' 的合成态）匹配所有库内文件——startsWith('/')
       // 对空路径恒 false,库内文件的定位因此全灭（2026-11-07 用户报）
       for (const vm of all
         .filter(isVaultMount)
         .slice()
         .sort((a, b) => b.path.length - a.path.length)) {
-        if (!(vm.path === '' || activeFile.path === vm.path || activeFile.path.startsWith(`${vm.path}/`))) continue;
+        if (!(vm.path === '' || vaultRel === vm.path || vaultRel.startsWith(`${vm.path}/`))) continue;
         const rel =
-          vm.path === '' ? activeFile.path : activeFile.path === vm.path ? '' : activeFile.path.slice(vm.path.length + 1);
+          vm.path === '' ? vaultRel : vaultRel === vm.path ? '' : vaultRel.slice(vm.path.length + 1);
         candidates.push({ mount: vm, mountId: vm.id, rel, kind: 'vault' });
       }
     }
