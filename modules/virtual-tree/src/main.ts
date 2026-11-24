@@ -96,6 +96,9 @@ import { initOneDriveApi, initOneDriveConfigFromSettings } from './features/oned
 import { initImapMailConfig } from './features/imapMailApi';
 import { ImapMailMountModal } from './panels/imapMailModal';
 import { initOutlookMailApi, initOutlookMailConfigFromSettings } from './features/outlookMailApi';
+import { loadPropTags } from './features/propTags';
+import { addTag, emitTagsChanged, tagByName } from './features/tagStore';
+import { FILE_PROPS_CHANGED_EVENT } from '../../file-props/src/main';
 import { ensureRemoteWorkFile, initRemoteWorkspace, stopRemoteWorkspace } from './features/remoteWorkspace';
 import { GitRepoMountModal } from './panels/gitRepoModal';
 import { BaiduPanMountModal } from './panels/baiduPanModal';
@@ -143,6 +146,14 @@ export default class VirtualTreePlugin extends Plugin {
    * 只显示目标所在兄弟组及子树。见 features/focusStore.ts。
    */
   focusTargets: import('./features/focusStore').FocusTarget[] = [];
+
+  /**
+   * 属性标签缓存（归一化路径 → 标签名）。标签就是一种属性（2026-11-24 用户
+   * 定调）：权威数据是 file_props 表的 `tags` 行，树行渲染是同步的、查询是
+   * 异步的——面板打开 / 标签改动后 refreshPropTags() 预取，渲染只读本缓存。
+   */
+  propTags = new Map<string, string[]>();
+  private propTagsRefreshing: Promise<void> | null = null;
 
   /** Timer id for the mount panel's optional auto-refresh; 0 = not scheduled. */
   private mountRefreshTimer = 0;
@@ -250,7 +261,17 @@ export default class VirtualTreePlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       void unifyExplorerLeaves().then(() => dedupeMountPanels());
       window.setTimeout(() => void unifyExplorerLeaves().then(() => dedupeMountPanels()), 3000);
+      // 属性标签（tags）：首屏后预取一次（daemon 可能比宿主晚起，面板 onOpen
+      // 还会再拉一次兜底），树行徽标才有数据。
+      void this.refreshPropTags();
     });
+    // 文件属性（含 tags）在别处改了——属性浏览器/编辑弹窗/原生右键——树行徽标
+    // 与标签筛选缓存跟着刷新（同一个 file_props 表，两处内存快照）。
+    const onPropsChanged = (): void => {
+      void this.refreshPropTags();
+    };
+    window.addEventListener(FILE_PROPS_CHANGED_EVENT, onPropsChanged);
+    this.register(() => window.removeEventListener(FILE_PROPS_CHANGED_EVENT, onPropsChanged));
     // 布局变化持续执法（去抖 400ms）：独立面板被任何路径（设置开关现场
     // 开启、activatePanel 兜底、残留 workspace 还原时序）建出来都能被收掉。
     let layoutEnforceTimer = 0;
@@ -1071,6 +1092,53 @@ menu.addItem((item) =>
     if (!target) return false;
     this.app.workspace.setActiveLeaf(target, { focus: true });
     return true;
+  }
+
+  /**
+   * 预取全库 `tags` 属性并重绘挂载树（标签就是一种属性）。
+   *
+   * 幂等 + 单飞：面板 onOpen、标签编辑完、筛选面板打开都会调，重叠调用共用
+   * 同一次查询。属性里冒出的新标签名顺手登记成 TagDef——筛选面板的 chips
+   * 与树行配色都查这张表，不登记就会出现「行上有 #x、筛选面板里没有 x」。
+   */
+  refreshPropTags(): Promise<void> {
+    if (this.propTagsRefreshing) return this.propTagsRefreshing;
+    this.propTagsRefreshing = (async () => {
+      try {
+        const map = await loadPropTags(this.app);
+        this.propTags = map;
+        let added = 0;
+        for (const names of map.values()) {
+          for (const n of names) {
+            if (!tagByName(this.settings, n)) {
+              addTag(this.settings, n);
+              added++;
+            }
+          }
+        }
+        if (added) await this.saveSettings();
+        emitTagsChanged();
+        this.redrawMountPanels();
+      } catch (e) {
+        console.warn('[virtual-tree] refreshPropTags failed', e);
+      } finally {
+        this.propTagsRefreshing = null;
+      }
+    })();
+    return this.propTagsRefreshing;
+  }
+
+  /** 重绘所有挂载树（独立面板 + 接管后的 file-explorer）。 */
+  redrawMountPanels(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_MOUNT_PANEL)) {
+      (leaf.view as unknown as { render?: () => void }).render?.();
+    }
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (leaf.view?.getViewType?.() === 'file-explorer') {
+        (leaf.view as unknown as { renderMountPanel?: () => void }).renderMountPanel?.();
+        (leaf.view as unknown as { render?: () => void }).render?.();
+      }
+    });
   }
 
   /** Reveal a sidebar panel, creating its leaf on first use. */

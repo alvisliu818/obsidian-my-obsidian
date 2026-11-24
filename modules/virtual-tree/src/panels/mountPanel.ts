@@ -14,7 +14,7 @@
  * that implies — backlinks, block references, search.
  */
 
-import { FileSystemAdapter, ItemView, Menu, Modal, Notice, setIcon, TFile, TFolder, type PaneType, type WorkspaceLeaf } from 'obsidian';
+import { FileSystemAdapter, ItemView, Menu, Notice, setIcon, TFile, TFolder, type PaneType, type WorkspaceLeaf } from 'obsidian';
 import type VirtualTreePlugin from '../main';
 import { compareNames } from '../nameCompare';
 import type { ExternalMount } from '../types';
@@ -36,7 +36,9 @@ import {
   bmarksListDir,
 } from '../features/linkMount';
 import { DestPickerModal } from '../features/moveCopy';
-import { allTags, tagById, addTag, fileHasTag, addTagToPath, removeTagFromPath, fileTagIds, pathMatchesTagFilter } from '../features/tagStore';
+import { allTags, tagById, fileTagIds, pathMatchesTagFilter, colorForTagName, clearLegacyTags } from '../features/tagStore';
+import { normPropKey, propPathKey } from '../features/propTags';
+import { formatTagValue, TAGS_PROP_KEY } from '../../../file-props/src/tags';
 import { VIEW_TYPE_TAG_FILTER_PANEL } from './tagFilterPanel';
 import { nodeVisibleUnderFocus, focusTargetBelow, type FocusTarget } from '../features/focusStore';
 import { imapListDir } from '../features/imapMailApi';
@@ -236,6 +238,9 @@ export class MountPanelView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.render();
+    // 属性标签（tags）是异步查询：先按缓存渲染，拉到之后 refreshPropTags 自己
+    // 重绘（树行徽标不闪空，daemon 未就绪时下次打开再补）。
+    void this.plugin.refreshPropTags();
   }
 
   async onClose(): Promise<void> {
@@ -1679,7 +1684,7 @@ export class MountPanelView extends ItemView {
         }
         const n = e.node;
         if (skipRootNode && parentRel === '' && n === st.tree[0]) continue;
-        if (tagFiltering && !n.isDir && !pathMatchesTagFilter(this.plugin.settings, n.abs, activeTagIds)) continue;
+        if (tagFiltering && !n.isDir && !this.nodeMatchesTagFilter(host, n, activeTagIds)) continue;
         if (!nodeVisibleUnderFocus(focusTargets, host.id, n.rel, ancestors, focusMode)) {
           // 仅目标与子树：目标祖先自身不展示，但下潜才能画出目标（深度不增）。
           // 不查 open：祖先行不可见，无法再展开，聚集必须保证目标直接可见。
@@ -1754,16 +1759,106 @@ export class MountPanelView extends ItemView {
   /**
    * 标签徽标（colored chips，思源树行 tag 对齐）：命中标签的行在行尾画 chips。
    * 目录行与文件行共用（此前只挂在目录分支，文件行打了标签也不显示——实测发现）。
+   *
+   * 2026-11-24「标签就是一种属性」：徽标读两处并集——`tags` 属性（权威，见
+   * features/propTags.ts 的缓存）与旧的 settings.fileTags 映射（历史数据，
+   * 读侧兼容不迁移）。同名标签只画一枚（属性优先取色）。
    */
-  private renderTagBadges(row: HTMLElement, node: MountNode): void {
-    const ft = fileTagIds(this.plugin.settings, node.abs);
-    for (const tid of ft.slice(0, 3)) {
-      const td = tagById(this.plugin.settings, tid);
-      if (!td) continue;
-      const chip = row.createSpan({ cls: 'logseq-mount-flag', text: '#' + td.name });
-      chip.style.background = td.color ?? 'var(--background-modifier-border)';
+  private renderTagBadges(row: HTMLElement, mount: ExternalMount, node: MountNode): void {
+    const names = this.nodeTagNames(mount, node);
+    const MAX = 3;
+    for (const name of names.slice(0, MAX)) {
+      const chip = row.createSpan({ cls: 'logseq-mount-flag', text: '#' + name });
+      chip.style.background = colorForTagName(this.plugin.settings, name);
       chip.style.color = '#fff';
     }
+    if (names.length > MAX) {
+      const rest = row.createSpan({ cls: 'logseq-mount-flag', text: `+${names.length - MAX}` });
+      rest.title = names.slice(MAX).map((n) => '#' + n).join(' ');
+    }
+  }
+
+  /**
+   * 节点当前的标签名（属性 `tags` ∪ 旧的 fileTags 映射），按名去重、属性优先。
+   * 旧映射是历史数据（tagStore 时代按 abs 存 id），读侧兼容、写侧不产生。
+   */
+  private nodeTagNames(mount: ExternalMount, node: MountNode): string[] {
+    const out: string[] = [];
+    const push = (raw: string): void => {
+      const name = String(raw ?? '').trim().replace(/^#+/, '');
+      if (name && !out.includes(name)) out.push(name);
+    };
+    for (const n of this.plugin.propTags.get(normPropKey(propPathKey(mount, node))) ?? []) push(n);
+    for (const tid of fileTagIds(this.plugin.settings, node.abs)) {
+      const td = tagById(this.plugin.settings, tid);
+      if (td) push(td.name);
+    }
+    return out;
+  }
+
+  /** 标签筛选命中：旧映射按 abs 命中，或属性标签按名字命中任一激活标签。 */
+  private nodeMatchesTagFilter(mount: ExternalMount, node: MountNode, activeTagIds: string[]): boolean {
+    if (!activeTagIds.length) return true;
+    if (pathMatchesTagFilter(this.plugin.settings, node.abs, activeTagIds)) return true;
+    const names = this.plugin.propTags.get(normPropKey(propPathKey(mount, node)));
+    if (!names?.length) return false;
+    for (const id of activeTagIds) {
+      const td = tagById(this.plugin.settings, id);
+      if (td && names.includes(td.name)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * 把节点标签整体写回 `tags` 属性（标签就是一种属性,2026-11-24 用户定调）。
+   *
+   * 写成功即清掉该路径旧的 fileTags 映射——属性成为唯一权威,否则「取消勾选」
+   * 会被残留的旧映射立刻顶回来。空列表 = 删除该行。
+   */
+  private async writeNodeTags(mount: ExternalMount, node: MountNode, names: string[]): Promise<boolean> {
+    const fp = filePropsOf(this.app);
+    const daemon = fp?.getDaemon();
+    if (!daemon) {
+      new Notice('索引内核未运行（md-editor 模块未开启或非桌面端）——标签存在文件属性里，暂不可用');
+      return false;
+    }
+    const key = propPathKey(mount, node);
+    try {
+      if (names.length) await daemon.propsSet(key, TAGS_PROP_KEY, formatTagValue(names), !!node.isDir);
+      else await daemon.propsDelete(key, TAGS_PROP_KEY);
+    } catch (e) {
+      new Notice(`保存标签失败：${String(e).slice(0, 120)}`);
+      return false;
+    }
+    clearLegacyTags(this.plugin.settings, node.abs);
+    await this.plugin.saveSettings();
+    await this.plugin.refreshPropTags();
+    this.render();
+    return true;
+  }
+
+  /** 右键「添加标签…」：交给 file-props 的标签弹窗（编辑整行 tags 属性）。 */
+  private promptAddTags(mount: ExternalMount, node: MountNode): void {
+    const fp = filePropsOf(this.app);
+    if (!fp) {
+      new Notice('文件属性模块未启用（设置 → 模块开关）');
+      return;
+    }
+    const seed = async (): Promise<void> => {
+      // 旧映射先落成属性：首次编辑顺手迁移，弹窗里的「已选」才是树上看到的全集
+      const legacy = fileTagIds(this.plugin.settings, node.abs);
+      if (legacy.length) await this.writeNodeTags(mount, node, this.nodeTagNames(mount, node));
+      void fp.openTagEditor(
+        propPathKey(mount, node),
+        !!node.isDir,
+        () => {
+          void this.plugin.refreshPropTags();
+        },
+        // 旧 TagDef 里的标签名也进建议列表（可能没有任何文件在用，属性表查不到）
+        allTags(this.plugin.settings).map((t) => t.name),
+      );
+    };
+    void seed();
   }
 
   private renderNode(parent: HTMLElement, mount: ExternalMount, node: MountNode, state: MountState, depth: number): void {    const isOpen = state.open.has(node.rel);
@@ -1818,7 +1913,7 @@ export class MountPanelView extends ItemView {
       row.setAttribute('title', node.name);
       row.createSpan({ cls: 'logseq-mount-name', text: node.name });
       if (node.empty) row.createSpan({ cls: 'logseq-mount-flag', text: '空' });
-      this.renderTagBadges(row, node);
+      this.renderTagBadges(row, mount, node);
       row.addEventListener('click', () => {
         if (isOpen) {
           state.open.delete(node.rel);
@@ -1903,7 +1998,7 @@ export class MountPanelView extends ItemView {
     // 文件行同样画标签徽标（此前徽标只挂在目录分支,打了标签的文件行不显示——实测发现）
     // 标签在时间前面(2026-11-22 用户):mtime 保持 margin-left:auto 恒右侧对齐,
     // 标签徽标插在它之前,不再把时间挤离行尾。
-    this.renderTagBadges(row, node);
+    this.renderTagBadges(row, mount, node);
     // 修改时间标注(2026-11-21 用户加显示开关):设置关掉后文件行不再画
     // 「MM-DD HH:mm」小字。
     if (node.mtime && this.plugin.settings.mountShowMtime !== false) {
@@ -2367,6 +2462,11 @@ export class MountPanelView extends ItemView {
     );
     this.addFocusMenuItem(menu, mount, node);
     this.addFilePropsMenuItem(menu, mount, node);
+    // 添加标签…（2026-11-24 用户需求）：标签**就是**一条属性——键固定 `tags`、
+    // 值由用户填（点选已有或新输入），三类挂载通用（远端按虚拟路径存，属性表
+    // 本来就是字符串主键）。树行徽标 / 标签筛选都读同一条属性。
+    this.addTagMenuItem(menu, mount, node);
+    if (node) this.addTagSubmenu(menu, mount, node);
     if (node) {
       menu.addItem((item) =>
         item.setTitle('重命名').setIcon('text-cursor-input' as never).onClick(() => this.promptRename(mount, node)),
@@ -3092,6 +3192,56 @@ export class MountPanelView extends ItemView {
   }
 
   /**
+   * 「标签…」子菜单（属性驱动，库内/库外/远端三类挂载共用）。
+   *
+   * 列表 = 已登记标签名 ∪ 该节点当前标签名（属性里出现过但还没登记的名字也要
+   * 能点——refresh 未跑完时的防御）；勾选态取「tags 属性 ∪ 旧 fileTags 映射」；
+   * 任何一次切换都把整行属性重写（见 writeNodeTags）。
+   * 库内挂载原先没有这个子菜单，2026-11-24 补齐——三类挂载同一套交互。
+   */
+  private addTagSubmenu(menu: Menu, mount: ExternalMount, node: MountNode): void {
+    menu.addItem((item) => {
+      item.setTitle('标签…').setIcon('tag' as never);
+      const sub = item.setSubmenu();
+      const current = this.nodeTagNames(mount, node);
+      const names: string[] = [];
+      for (const td of allTags(this.plugin.settings)) {
+        if (!names.includes(td.name)) names.push(td.name);
+      }
+      for (const n of current) if (!names.includes(n)) names.push(n);
+      for (const name of names) {
+        const on = current.includes(name);
+        sub.addItem((si: any) => {
+          si.setTitle((on ? '✓ ' : '') + name).setIcon('tag' as never).onClick(() => {
+            const next = on ? current.filter((x) => x !== name) : [...current, name];
+            void this.writeNodeTags(mount, node, next);
+          });
+        });
+      }
+      sub.addSeparator();
+      sub.addItem((si: any) => {
+        si.setTitle('添加标签…').setIcon('plus' as never).onClick(() => this.promptAddTags(mount, node));
+      });
+    });
+  }
+
+  /**
+   * 「添加标签…」菜单项：打开 file-props 的标签弹窗（键固定 `tags`）。
+   * 与「文件属性…」同一套路径主键——库内用库内相对路径，库外/远端用节点 abs，
+   * 因此原生文件管理器右键加的标签与树上看到的完全是同一行数据。
+   */
+  private addTagMenuItem(menu: Menu, mount: ExternalMount, node: MountNode | null): void {
+    if (!node) return;
+    if (!filePropsOf(this.app)) return;
+    menu.addItem((item) =>
+      item
+        .setTitle('添加标签…')
+        .setIcon('tags' as never)
+        .onClick(() => this.promptAddTags(mount, node)),
+    );
+  }
+
+  /**
    * 聚集菜单项（库内 / 库外 / remote 三类挂载共用）：按设置「聚焦方式」只显示
    * 目标的上下文（默认）或仅目标与子树。可叠加多个目标；再次点同一目标 =
    * 取消该目标。运行态，重启清空。
@@ -3140,54 +3290,18 @@ export class MountPanelView extends ItemView {
     );
     this.addFocusMenuItem(menu, mount, node);
     this.addFilePropsMenuItem(menu, mount, node);
+    // 添加标签…（2026-11-24 用户需求）：标签**就是**一条属性——键固定 `tags`、
+    // 值由用户填（点选已有或新输入），三类挂载通用（远端按虚拟路径存，属性表
+    // 本来就是字符串主键）。树行徽标 / 标签筛选都读同一条属性。
+    this.addTagMenuItem(menu, mount, node);
     // 新建笔记:文件落在一个**另外配置**的目录里(设置 → 外部挂载 → 新建笔记
     // 的位置),再挂成这里右键条目的子文档 —— 磁盘位置与树上的位置解耦,
     // 与思源「新建笔记」一致(普通"新建文件"才是就地建在挂载目录里)。
     if (node && !isRemoteMount(mount)) {
-    // 标签… 子菜单：给文件/文件夹打/摘标签（思源 tag-store 交互对齐）
-    // setSubmenu() 无参调用、返回子 Menu（Obsidian API 形态）
-    menu.addItem((item) => {
-      item.setTitle('标签…').setIcon('tag' as never);
-      const sub = item.setSubmenu();
-      const tags = allTags(this.plugin.settings);
-      for (const td of tags) {
-        const on = fileHasTag(this.plugin.settings, node.abs, td.id);
-        sub.addItem((si: any) => {
-          si.setTitle((on ? '✓ ' : '') + td.name).setIcon('tag' as never).onClick(() => {
-            if (on) removeTagFromPath(this.plugin.settings, node.abs, td.id);
-            else addTagToPath(this.plugin.settings, node.abs, td.id);
-            this.plugin.saveSettings();
-            this.render();
-          });
-        });
-      }
-      sub.addItem((si: any) => {
-        si.setTitle('+ 新建标签…').setIcon('plus' as never).onClick(() => {
-          const input = document.createElement('input');
-          input.type = 'text';
-          input.placeholder = '标签名，回车确认';
-          input.style.cssText = 'width:100%;margin-bottom:8px';
-          const wrap = document.createElement('div');
-          wrap.appendChild(input);
-          const modal = new Modal(this.app);
-          modal.contentEl.appendChild(wrap);
-          const commit = (): void => {
-            if (!input.value.trim()) return;
-            const td = addTag(this.plugin.settings, input.value.trim());
-            addTagToPath(this.plugin.settings, node.abs, td.id);
-            this.plugin.saveSettings();
-            modal.close();
-            this.render();
-          };
-          input.addEventListener('keydown', (e2: KeyboardEvent) => {
-            if (e2.key === 'Enter') commit();
-            if (e2.key === 'Escape') modal.close();
-          });
-          modal.open();
-          setTimeout(() => input.focus(), 50);
-        });
-      });
-    });
+    // 标签… 子菜单：给文件/文件夹打/摘标签。**读写的是 `tags` 属性**（标签就是
+    // 一种属性，2026-11-24）：勾选态取「属性 ∪ 旧映射」，任何一次勾选/取消都把
+    // 整行属性重写并清掉旧映射——两套存储不会各说各话。
+    this.addTagSubmenu(menu, mount, node);
       menu.addItem((item) =>
         item
           .setTitle('移动到…')

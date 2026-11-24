@@ -63936,6 +63936,28 @@ body.ots-tab-min-width-on .workspace-split.mod-root > .workspace-tabs.mod-top .w
 .lgp-fp-props { padding-top: 2px; }
 .lgp-fp-val { flex: 1 1 auto; min-width: 0; color: var(--text-muted); font-size: var(--font-ui-smaller); word-break: break-all; }
 
+/* 标签 = tags 属性（2026-11-24）：录入弹窗——已选 chips / 已知标签点选 / 输入兜底 */
+.lgp-tags-modal { min-width: 320px; }
+.lgp-tags-hint { color: var(--text-faint); font-size: var(--font-ui-smaller); margin-bottom: 10px; word-break: break-all; }
+.lgp-tags-label { color: var(--text-muted); font-size: var(--font-ui-smaller); margin: 8px 0 4px; }
+.lgp-tags-chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 24px; }
+.lgp-tags-chip { display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+  font-size: var(--font-ui-smaller); border-radius: 10px; padding: 2px 9px;
+  border: 1px solid var(--background-modifier-border); background: var(--background-secondary);
+  color: var(--text-muted); }
+.lgp-tags-chip:hover { color: var(--text-normal); border-color: var(--text-accent); }
+.lgp-tags-chip.is-on { background: var(--color-accent); border-color: transparent; color: var(--text-on-accent, #fff); }
+.lgp-tags-x { opacity: 0.75; font-size: 12px; line-height: 1; }
+.lgp-tags-x:hover { opacity: 1; }
+.lgp-tags-empty { color: var(--text-faint); font-size: var(--font-ui-smaller); }
+.lgp-tags-add { display: flex; gap: 6px; margin-top: 10px; }
+.lgp-tags-input { flex: 1 1 auto; min-width: 0; background: var(--background-primary); color: var(--text-normal);
+  border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s, 4px);
+  padding: 4px 8px; font-size: var(--font-ui-small); }
+.lgp-tags-btn { font-size: var(--font-ui-smaller); cursor: pointer; }
+.lgp-tags-bar { display: flex; align-items: center; gap: 6px; margin-top: 14px; }
+.lgp-tags-spacer { flex: 1 1 auto; }
+
 
 /* Super Useful SQL v0.2.1(serena-sheng,MIT,2026-11-22 并入产物 styles 原样收录) */
 .susql-root {

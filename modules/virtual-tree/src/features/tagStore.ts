@@ -15,6 +15,37 @@ export function tagById(settings: VirtualTreeSettings, id: string): TagDef | und
   return allTags(settings).find((t) => t.id === id);
 }
 
+/** 按名字找 TagDef（属性标签名 ↔ 旧标签配色/登记表的桥）。 */
+export function tagByName(settings: VirtualTreeSettings, name: string): TagDef | undefined {
+  const key = name.trim();
+  return allTags(settings).find((t) => t.name === key);
+}
+
+/** 标签色：已登记取登记色，未登记按名字散列到调色板（同一名字恒定同色）。 */
+export function colorForTagName(settings: VirtualTreeSettings, name: string): string {
+  const hit = tagByName(settings, name);
+  if (hit?.color) return hit.color;
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
+  return TAG_PALETTE[Math.abs(h) % TAG_PALETTE.length];
+}
+
+/**
+ * 清掉某个路径的**旧**标签映射（fileTags）。
+ *
+ * 属性标签成为唯一权威之后，同一路径上残留的旧 id 会让「取消勾选」变成
+ * 关不掉（属性删了、旧映射还在）——写属性时顺手清干净。
+ */
+export function clearLegacyTags(settings: VirtualTreeSettings, abs: string): void {
+  const ft = settings.fileTags;
+  if (!ft) return;
+  const keys = Object.keys(ft).filter((k) => k === abs || k.replace(/\\/g, '/') === abs.replace(/\\/g, '/'));
+  if (!keys.length) return;
+  const next = { ...ft };
+  for (const k of keys) delete next[k];
+  settings.fileTags = next;
+}
+
 /** 新建标签（颜色缺省取调色板轮转）。 */
 export function addTag(settings: VirtualTreeSettings, name: string, color?: string): TagDef {
   const tags = allTags(settings);

@@ -54,6 +54,9 @@ export class TagFilterPanelView extends ItemView {
 		this.hintEl = this.contentEl.createDiv();
 		this.hintEl.style.cssText = 'font-size:12px;color:var(--text-muted);padding:0 10px';
 		this.render();
+		// 标签就是一种属性（tags）：打开面板先补一次属性标签——refreshPropTags
+		// 会把属性里出现的新名字登记成 TagDef 并广播，chips 随即跟上。
+		void this.plugin.refreshPropTags();
 		// 树行菜单新建/删除标签后 chips 跟手(不重开面板也不陈旧)。
 		// registerDomEvent 的 typings 只收 HTMLElementEventMap 键名,自定义事件名
 		// 过不了——直接 addEventListener + register 卸载。
@@ -70,7 +73,7 @@ export class TagFilterPanelView extends ItemView {
 		if (!tags.length) {
 			this.chipHostEl.hide();
 			this.hintEl.show();
-			this.hintEl.setText('还没有标签。右键树行 →「标签…」→「+ 新建标签…」先建一个。');
+			this.hintEl.setText('还没有标签。右键树行 →「添加标签…」写一个（标签就是 tags 属性，值自己填）。');
 			return;
 		}
 		this.hintEl.hide();
