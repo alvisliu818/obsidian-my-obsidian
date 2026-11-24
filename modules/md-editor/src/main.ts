@@ -2279,6 +2279,9 @@ export default class LogseqEditorPlugin extends Plugin {
             syncToVault: (abs, name, isDir) => dt.syncToVault(abs, name, isDir),
             linkedStateFor: (abs, name) => dt.linkedStateFor(abs, name),
             unlinkToVault: (abs, name) => dt.unlinkToVault(abs, name),
+            // 标签页 ⋮ 的「打开方式」子菜单用同一份自定义应用配置
+            // （2026-11-24 用户：更多按钮里要有其他打开方式）。
+            openWithApps: () => dt.settings.openWithApps ?? [],
           }
         : undefined,
     };

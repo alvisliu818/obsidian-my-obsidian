@@ -25,13 +25,15 @@
  * banner rather than showing the previous note's results.
  */
 
-import { ItemView, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
+import { ItemView, Menu, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import { BlockEditorView } from '../view/BlockEditorView';
 import type { MountNode } from '../../../virtual-tree/src/features/mountFilter';
 import { installExternalAttachmentHandlers } from '../features/externalAttachment';
 import { virtualTreeOf } from '../../../virtual-tree/src/main';
 import { applyHeaderPath, headerSegmentsFor, isUnderMount, matchMountFor } from './headerPath';
+import { addOpenWithSubmenu } from '../../../virtual-tree/src/features/externalPaneMenu';
+import { copyAbsolutePathAt } from '../../../virtual-tree/src/features/openWith';
 
 export const VIEW_TYPE_EXTERNAL_BLOCK = 'logseq-external-block';
 
@@ -84,6 +86,32 @@ export class ExternalBlockView extends ItemView {
       mountLabel: this.mountLabel,
       mountPath: this.mountPath,
     };
+  }
+
+  /**
+   * 标签页 ⋮：文件操作入口（2026-11-24）。块编辑器壳里 inner 持有自己的
+   * abs/保存闭包，这里只给不会改文件身份的操作：打开方式子菜单（系统默认 /
+   * 文件管理器 / settings.openWithApps 自定义应用）+ 复制绝对路径。
+   * 重命名/删除仍走面包屑右键那条成熟链路（会重挂内部编辑器）。
+   */
+  override onPaneMenu(menu: Menu, source: string): void {
+    super.onPaneMenu(menu, source);
+    if (!this.abs) return;
+    const host = this.plugin.headerMenuHost.paneMenuHost;
+    if (!host) return;
+    addOpenWithSubmenu(
+      host,
+      menu,
+      { abs: this.abs, fileName: this.fileName },
+      { systemActions: true },
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle('复制绝对路径')
+        .setIcon('clipboard-copy' as never)
+        .setSection('action')
+        .onClick(() => void copyAbsolutePathAt(this.abs)),
+    );
   }
 
   async setState(state: unknown, result: ViewStateResult): Promise<void> {

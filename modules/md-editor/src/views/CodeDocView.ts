@@ -17,7 +17,7 @@
  * 行号映射按打开时布局计算,代码行增删后按增量维护,跨区大幅删改以重开为准。
  */
 
-import { ItemView, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
+import { ItemView, Menu, Notice, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
 import type LogseqEditorPlugin from '../main';
 import { createEditor, setupMonaco, getLanguageByPath } from '../../../code-editor/src/editor/monaco';
 import { buildCodeDoc, toOutlineDocText } from '../features/codeDoc';
@@ -28,6 +28,8 @@ import { parseDocument } from '../core/parser';
 import { virtualTreeOf } from '../../../virtual-tree/src/main';
 import { applyHeaderPath, headerSegmentsFor, isUnderMount, matchMountFor } from './headerPath';
 import { markLeafTouched } from './tabTouch';
+import { addOpenWithSubmenu } from '../../../virtual-tree/src/features/externalPaneMenu';
+import { copyAbsolutePathAt } from '../../../virtual-tree/src/features/openWith';
 import type { MountNode } from '../../../virtual-tree/src/features/mountFilter';
 
 export const VIEW_TYPE_CODE_DOC = 'logseq-code-doc';
@@ -115,6 +117,31 @@ export class CodeDocView extends ItemView {
       mountLabel: this.mountLabel,
       mountPath: this.mountPath,
     };
+  }
+
+  /**
+   * 标签页 ⋮：文件操作入口（2026-11-24）。这里只给安全项：打开方式子菜单
+   * （系统默认 / 文件管理器 / settings.openWithApps 自定义应用）+ 复制
+   * 绝对路径；重命名/删除会改文件身份，仍走面包屑右键那条完整链路。
+   */
+  override onPaneMenu(menu: Menu, source: string): void {
+    super.onPaneMenu(menu, source);
+    if (!this.abs) return;
+    const host = this.plugin.headerMenuHost.paneMenuHost;
+    if (!host) return;
+    addOpenWithSubmenu(
+      host,
+      menu,
+      { abs: this.abs, fileName: this.fileName },
+      { systemActions: true },
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle('复制绝对路径')
+        .setIcon('clipboard-copy' as never)
+        .setSection('action')
+        .onClick(() => void copyAbsolutePathAt(this.abs)),
+    );
   }
 
   async setState(state: unknown, result: ViewStateResult): Promise<void> {

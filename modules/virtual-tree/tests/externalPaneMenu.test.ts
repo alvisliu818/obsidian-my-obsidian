@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import { TFile, type Menu } from 'obsidian';
 import {
+  addOpenWithSubmenu,
   buildExternalPaneMenu,
   dedupeMenuByTitle,
   forwardFileMenuEvent,
@@ -31,6 +32,7 @@ interface RecItem {
   icon?: string;
   onClick?: () => void;
   sep?: boolean;
+  submenu?: RecItem[];
 }
 
 function fakeMenu(): { items: RecItem[]; addItem(cb: (item: unknown) => void): void; addSeparator(): void } {
@@ -59,6 +61,12 @@ function fakeMenu(): { items: RecItem[]; addItem(cb: (item: unknown) => void): v
         onClick(cb2: () => void) {
           it.onClick = cb2;
           return chain;
+        },
+        // 真实 Obsidian MenuItem.setSubmenu()（公开 d.ts 没收录，但 1.9+ 稳定存在）
+        setSubmenu() {
+          const sub = fakeMenu();
+          it.submenu = sub.items;
+          return sub;
         },
       };
       cb(chain);
@@ -422,5 +430,59 @@ describe('buildExternalPaneMenu', () => {
     const menu = fakeMenu();
     buildExternalPaneMenu(host, menu as unknown as Menu, target());
     expect(menu.items.some((i) => i.title === '取消链接到库内')).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------------
+// 「打开方式」子菜单（2026-11-24：标签页 ⋮ 的其他打开方式）
+// ------------------------------------------------------------------
+
+describe('addOpenWithSubmenu', () => {
+  const apps = [
+    { id: 'vscode', name: 'VS Code', command: 'code', args: '%1', enabled: true, extensions: ['md'] },
+    { id: 'notepad', name: '记事本', command: 'notepad', args: '%1', enabled: true, extensions: ['py'] },
+    { id: 'off', name: '已禁用', command: 'x', args: '%1', enabled: false },
+  ] as never;
+
+  it('按扩展名过滤自定义应用，系统项按 opts 决定是否带', () => {
+    const host = fakeHost();
+    host.openWithApps = () => apps;
+    const menu = fakeMenu();
+    addOpenWithSubmenu(
+      host,
+      menu as unknown as Menu,
+      { abs: ABS, fileName: 'note.md' },
+      { systemActions: true },
+    );
+    const item = menu.items.find((i) => i.title === '打开方式');
+    expect(item?.section).toBe('open');
+    const titles = (item?.submenu ?? []).map((i) => i.title).filter(Boolean);
+    expect(titles).toEqual(['用系统默认应用打开', '在文件管理器中显示', '用 VS Code 打开']);
+    // 系统项的点击落到真实绝对路径上（对库外假路径无效的核心项已被挡掉）
+    item!.submenu!.find((i) => i.title === '用系统默认应用打开')!.onClick!();
+    expect(host.opened).toEqual([ABS]);
+  });
+
+  it('没有自定义应用且不带系统项时不建空子菜单', () => {
+    const host = fakeHost();
+    const menu = fakeMenu();
+    addOpenWithSubmenu(host, menu as unknown as Menu, { abs: ABS, fileName: 'note.md' });
+    expect(menu.items.some((i) => i.title === '打开方式')).toBe(false);
+  });
+
+  it('buildExternalPaneMenu 带的子菜单不重复顶层的系统项', () => {
+    const host = fakeHost();
+    host.openWithApps = () => apps;
+    const menu = fakeMenu();
+    buildExternalPaneMenu(
+      host,
+      menu as unknown as Menu,
+      { abs: ABS, fileName: 'note.md' },
+    );
+    const sub = menu.items.find((i) => i.title === '打开方式')?.submenu ?? [];
+    expect(sub.map((i) => i.title).filter(Boolean)).toEqual(['用 VS Code 打开']);
+    // 顶层同款仍在（已有 e2e/单测依赖这两项）
+    expect(menu.items.some((i) => i.title === '用系统默认应用打开')).toBe(true);
+    expect(menu.items.some((i) => i.title === '在系统资源管理器中显示')).toBe(true);
   });
 });

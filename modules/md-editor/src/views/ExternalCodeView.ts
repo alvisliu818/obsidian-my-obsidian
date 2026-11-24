@@ -37,6 +37,8 @@ import { applyHeaderPath, headerSegmentsFor, isUnderMount, matchMountFor } from 
 import { markLeafTouched } from './tabTouch';
 import { HybridCodeEditor } from './hybridCodeEditor';
 import { buildCodeExtLink, toExtPath } from '../../../virtual-tree/src/features/codeFileLinks';
+import { buildExternalPaneMenu } from '../../../virtual-tree/src/features/externalPaneMenu';
+import { isMarkdownFile } from '../../../virtual-tree/src/features/mountFilter';
 import { applyMarkedTabIcons, markLeafTabIcon } from '../../../virtual-tree/src/features/tabIcon';
 import { buildDiffOverlayDom } from '../../../virtual-tree/src/features/diffOverlayDom';
 import { runFile, langFromExt } from '../../../code-editor/src/exec/runner';
@@ -177,6 +179,104 @@ export class ExternalCodeView extends ItemView {
     // 临时覆盖随 state 持久化:布局恢复时纯源码/混合不退回设置默认值
     if (this.hybridOverride !== null) state.hybrid = this.hybridOverride;
     return state;
+  }
+
+  /**
+   * 标签页头部「更多」（⋮，pane menu）：文件操作总入口
+   * （2026-11-24 用户：更多按钮对接一些文件操作，比如其他打开方式）。
+   *
+   * 本视图是自定义 ItemView：库外文件没有 TFile、库内文件也没走 FileView
+   * 那条链，基类只会给分屏项。这里复用 virtual-tree 的 buildExternalPaneMenu
+   * ——它在挂载面板右键菜单上已验证，作用在真实绝对路径上：重命名 / 删除 /
+   * 复制链接 / 复制绝对路径 / 同步到库 / 在文件管理器显示 / 系统默认应用打开
+   * / 在新窗口打开，外加「打开方式」子菜单（自定义应用，走
+   * settings.openWithApps）与其他插件 file-menu 的转发项。
+   * 代码文件再补两项自己的：重新从磁盘加载、混合/纯源码切换（.md 才有意义）。
+   */
+  override onPaneMenu(menu: Menu, source: string): void {
+    super.onPaneMenu(menu, source);
+    if (!this.abs) return;
+    const host = this.plugin.headerMenuHost.paneMenuHost;
+    if (!host) return;
+    buildExternalPaneMenu(host, menu, {
+      abs: this.abs,
+      fileName: this.fileName,
+      popout: { viewType: VIEW_TYPE_EXTERNAL_CODE, getState: () => this.getState() },
+      onRenamed: (newAbs, newName) => void this.handleRenamed(newAbs, newName),
+      onDeleted: () => void this.leaf.detach(),
+      extraItems: (m) =>
+        m.addItem((item) =>
+          item
+            .setTitle('重新从磁盘加载')
+            .setIcon('refresh-cw' as never)
+            .setSection('open')
+            .onClick(() => void this.reloadFromDisk()),
+        ),
+      openWithExtras: (sub) => {
+        // 应用内备选呈现（混合模式 = Markdown 注释区走块编辑器）。只对带
+        // Markdown 注释区的文件有意义；纯源码文件两个模式等价，不给假选项。
+        if (!isMarkdownFile(this.fileName) && this.plugin.settings.externalCodeHybrid !== true) return;
+        const toHybrid = !this.hybrid;
+        sub.addItem((si) =>
+          si
+            .setTitle(toHybrid ? '以混合模式打开（注释区用块编辑器）' : '以纯源码模式打开')
+            .setIcon('file-code' as never)
+            .onClick(() => void this.setHybridMode(toHybrid)),
+        );
+      },
+    });
+  }
+
+  /** 菜单里切换混合/纯源码呈现：先落盘再重挂（重挂会从磁盘重读）。 */
+  private async setHybridMode(hybrid: boolean): Promise<void> {
+    if (hybrid === this.hybrid) return;
+    await this.flush(false);
+    this.hybridOverride = hybrid;
+    await this.mount();
+    await this.applyVaultDiffDecorations();
+  }
+
+  /**
+   * 菜单「重命名」落盘之后的视图跟随。
+   *
+   * 改名是在磁盘上完成的（promptExternalRename），所以这里不能照旧路径
+   * flush——那会把旧名字写回来。有未落盘编辑时把缓冲区直接落到**新路径**，
+   * 再更新路径/标题并重挂。
+   */
+  private async handleRenamed(newAbs: string, newName: string): Promise<void> {
+    if (this.saveTimer !== null) {
+      window.clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    if (this.dirty && this.editor) {
+      try {
+        const data = this.hybridEngine ? this.hybridEngine.reconstruct() : this.editor.getValue();
+        await writeTextAny(newAbs, data);
+        this.lastDiskData = data;
+        this.dirty = false;
+      } catch (e) {
+        new Notice(`保存到新文件名失败：${String(e).slice(0, 100)}`);
+      }
+    }
+    this.abs = newAbs;
+    this.fileName = newName;
+    if (this.vaultPath) {
+      this.vaultPath = this.vaultPath.replace(/[^/]+$/, newName);
+      const f = this.app.vault.getAbstractFileByPath(this.vaultPath);
+      this.vaultFile = f instanceof TFile ? f : null;
+    }
+    this.displayPath = relativeDisplayPath(this.abs, this.mountPath, this.fileName);
+    setLeafTitle(this.leaf, this.fileName);
+    this.markTabThemeIcon();
+    await this.mount();
+    await this.applyVaultDiffDecorations();
+    const segments = headerSegmentsFor(
+      this.app,
+      this.abs,
+      this.displayPath || this.fileName,
+      this.mountLabel || this.mountLabelFromSettings(),
+    );
+    applyHeaderPath(this.containerEl, segments, this.plugin.headerMenuHost, this.abs);
   }
 
   /** 标签页主题图标(2026-11-21 用户):视图知道文件名的第一时间就主动标记

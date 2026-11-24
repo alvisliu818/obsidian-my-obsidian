@@ -33,6 +33,7 @@ import {
 import { deleteToTrash } from './trashStore';
 import { isMarkdownFile, isTextFileName } from './mountFilter';
 import { buildCodeExtLink } from './codeFileLinks';
+import { extOfName, openWithAppAt, openWithMatches, revealAbs, type OpenWithApp } from './openWith';
 import { NamePromptModal, ConfirmModal } from '../panels/promptModals';
 
 /** 菜单宿主需要的插件能力（结构化类型，免得反向依赖 main.ts）。 */
@@ -54,6 +55,11 @@ export interface PaneMenuHost {
   linkedStateFor?(abs: string, name: string): boolean;
   /** 取消链接到库内（只删库内链接，外部源文件不动）。 */
   unlinkToVault?(abs: string, name: string): void | Promise<void>;
+  /**
+   * 自定义「打开方式」清单（settings.openWithApps）。2026-11-24：标签页 ⋮
+   * 也接同一套配置，缺省 = 只有系统默认/文件管理器两项。
+   */
+  openWithApps?(): OpenWithApp[];
 }
 
 /** 一个库外文件在当前标签页里的上下文。 */
@@ -68,6 +74,13 @@ export interface ExternalPaneTarget {
   onRenamed?: (newAbs: string, newName: string) => void;
   /** 删除落盘后的视图更新（通常是关标签页）。 */
   onDeleted?: () => void;
+  /**
+   * 「打开方式」子菜单里的应用内选项（视图自己的路由，如代码文件的
+   * 纯源码/混合模式）。排在系统默认应用之前，只在这个子菜单里出现。
+   */
+  openWithExtras?: (sub: Menu) => void;
+  /** 顶层追加项（视图特有的文件操作，如「重新从磁盘加载」）。 */
+  extraItems?: (menu: Menu) => void;
 }
 
 // ------------------------------------------------------------------
@@ -355,6 +368,65 @@ async function copyText(text: string, what = '绝对路径'): Promise<void> {
 }
 
 /**
+ * 「打开方式」子菜单（2026-11-24 用户：标签页 ⋮ 里也要有其他打开方式）。
+ *
+ * 与挂载面板行右键的 addOpenWithSubmenu 同一套语义（siyuan-virtual-tree
+ * 同范式）：应用内路由（视图自带，经 openWithExtras 注入）→ 系统默认应用 /
+ * 文件管理器（`systemActions`，库外标签页已有顶层同款项时不重复给）→
+ * settings.openWithApps 里匹配的自定义应用（扩展名/目录过滤见
+ * openWithMatches）。全部作用在绝对路径上，库内库外通用。
+ *
+ * 没有可给的内容（无自定义应用、无应用内路由、也不带系统项）时不建空子菜单。
+ */
+export function addOpenWithSubmenu(
+  host: PaneMenuHost,
+  menu: Menu,
+  target: ExternalPaneTarget,
+  opts: { systemActions?: boolean } = {},
+): void {
+  const { abs, fileName } = target;
+  if (!abs) return;
+  const isDir = target.isDir === true;
+  const systemActions = opts.systemActions === true;
+  const apps = (host.openWithApps?.() ?? []).filter(
+    (a) => a.enabled && openWithMatches(a, isDir, extOfName(fileName)),
+  );
+  if (!systemActions && !target.openWithExtras && apps.length === 0) return;
+  menu.addItem((item) => {
+    item.setTitle('打开方式').setIcon('external-link' as never).setSection('open');
+    const sub = item.setSubmenu();
+    target.openWithExtras?.(sub);
+    if (systemActions && !isDir) {
+      sub.addItem((si) =>
+        si
+          .setTitle('用系统默认应用打开')
+          .setIcon('arrow-up-right' as never)
+          .onClick(() => host.openWithSystem(abs)),
+      );
+    }
+    if (systemActions) {
+      sub.addItem((si) =>
+        si
+          .setTitle('在文件管理器中显示')
+          .setIcon('folder-open' as never)
+          .onClick(() => revealAbs(abs)),
+      );
+    }
+    if (apps.length > 0) {
+      sub.addSeparator();
+      for (const a of apps) {
+        sub.addItem((si) =>
+          si
+            .setTitle(`用 ${a.name} 打开`)
+            .setIcon('external-link' as never)
+            .onClick(() => void openWithAppAt(abs, a)),
+        );
+      }
+    }
+  });
+}
+
+/**
  * 给一个库外文件标签页构建完整的 pane 菜单。
  *
  * 调用方（视图的 onPaneMenu）应先 `super.onPaneMenu(menu, source)` 拿到底层
@@ -418,6 +490,10 @@ export function buildExternalPaneMenu(
       .setIcon('clipboard-copy' as never)
       .onClick(() => void copyText(abs)),
   );
+  // 「打开方式」子菜单（自定义应用 + 视图自带的应用内路由）。库外标签页的
+  // 顶层已经有「用系统默认应用打开 / 在系统资源管理器中显示」，所以这里
+  // 不带系统项，免得同一菜单里出现两遍。
+  addOpenWithSubmenu(host, menu, target);
   // 「同步到库」：库外标签页的 ⋮ / 面包屑 / 文件名右键也能用 mklink 把当前
   // 文件（或文件夹）链接进库。宿主没接这套能力时整项隐藏，老装配不受影响。
   if (typeof host.syncToVault === 'function' && typeof host.syncStateFor === 'function') {
@@ -479,6 +555,9 @@ export function buildExternalPaneMenu(
   //    核心项（典型：「在系统资源管理器中显示」——它对库外假路径无效）会
   //    存活下来。LAST wins，我们自己的实现是后加的那个，因此赢。
   dedupeMenuByTitle(menu);
+  // 视图特有的顶层操作（如代码文件的「重新从磁盘加载」）放在去重之后：
+  // 它们不属于可被核心同名项顶掉的通用文件操作。
+  target.extraItems?.(menu);
 }
 
 /** popout 窗口是否可用（仅桌面；openPopoutLeaf 只在支持时存在）。 */
