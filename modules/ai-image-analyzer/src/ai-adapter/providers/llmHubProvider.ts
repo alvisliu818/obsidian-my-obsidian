@@ -18,8 +18,19 @@ import { debugLog } from "../../util";
 
 const context = "ai-adapter/providers/llmHubProvider";
 
-/** 只消费 LLM Hub 本体的 backend（id 即其 manifest.id） */
-const LLM_HUB_BACKEND_ID = "llm-hub";
+/** 只消费 LLM Hub 本体的 backend（id 即其 manifest.id）。
+ *
+ *  2026-11-24 llm-hub 并入 My Obsidian 成为模块后，它拿到的是**宿主的** manifest
+ *  （单一插件 id 策略，见 src/main.ts 的 startModule），backend.id 随之变成
+ *  "obsidian-my-obsidian"；独立安装时仍是 "llm-hub"。两个 id 都认，接入方式
+ *  怎么变都不会静默断连。 */
+const LLM_HUB_BACKEND_IDS: ReadonlySet<string> = new Set([
+	"llm-hub",
+	"obsidian-my-obsidian",
+]);
+function isLlmHubBackendId(id: string | undefined): boolean {
+	return !!id && LLM_HUB_BACKEND_IDS.has(id);
+}
 
 /** Connect 协议事件名（与 obsidian-llm-hub 的 connectContract.ts 保持一致） */
 const CONNECT_READY = "llm-connect-hub:ready";
@@ -160,7 +171,7 @@ function ensureAttached(): void {
 	if (!workspace) return;
 	const onRegister = (...data: unknown[]) => {
 		const source = data[0] as LlmHubBackend | undefined;
-		if (source?.id === LLM_HUB_BACKEND_ID) onBackendDiscovered(source);
+		if (source && isLlmHubBackendId(source.id)) onBackendDiscovered(source);
 	};
 	const onUnregister = (...data: unknown[]) => {
 		if (data[0] === backend) backend = null;
@@ -174,7 +185,7 @@ function ensureAttached(): void {
 	// 握手：LLM Hub 若早于本插件加载，让它的 backend 重新注册进来
 	workspace.trigger(CONNECT_READY, {
 		registerBackend: (source: LlmHubBackend) => {
-			if (source.id === LLM_HUB_BACKEND_ID) onBackendDiscovered(source);
+			if (isLlmHubBackendId(source.id)) onBackendDiscovered(source);
 		},
 	});
 	debugLog(context, "Connect listeners attached");

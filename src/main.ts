@@ -86,6 +86,32 @@ const SuperUsefulSqlPlugin = require("../modules/super-useful-sql/main.cjs") as 
 	app: unknown,
 	manifest: unknown,
 ) => SubPluginLike;
+// LLM Hub v0.39.5（takeshy，MIT）：**整仓嵌套**在 modules/llm-hub（自带 .git 目录，
+// 宿主的 .gitignore 忽略它，上游照常独立演进）。
+//
+// 与其它模块不同,这里取的是上游**已构建产物** main.js,不是源码直连：上游构建
+// 链有一整套前置无法在宿主 esbuild 里等价复现——buildChatStyles() 生成 chat-ui
+// 样式、process-shim.js 注入、`src/*` baseUrl 裸导入（与宿主 tsconfig/esbuild 给
+// obsidian-git 占用的同名别名正面冲突）、langfuse 兼容补丁、@google/genai 走
+// /web 变体。复刻它等于长期维护第二份构建配置，所以沿用 super-useful-sql 的
+// require 桥先例：**改 llm-hub 源码后必须先在 modules/llm-hub 里 `npm run build`**，
+// 再构建宿主。
+//
+// try/catch 是必需的：esbuild 给 CJS 桥的初始化是惰性的（require 时才执行），
+// 上游产物一旦在顶层抛错只丢 llm-hub 这一行（设置页看不到它，控制台有原因），
+// 不会把宿主 main.js 的加载一起带走。
+let LlmHubPlugin: ModuleDescriptor["cls"] | null = null;
+try {
+	const llmHubEntry = require("../modules/llm-hub/main.js") as {
+		default: new (app: unknown, manifest: unknown) => SubPluginLike;
+	};
+	LlmHubPlugin = llmHubEntry.default as unknown as ModuleDescriptor["cls"];
+} catch (e) {
+	console.error(
+		"[my-obsidian] llm-hub: 预构建产物载入失败（先在 modules/llm-hub 里 npm run build）",
+		e,
+	);
+}
 // Advanced URI v2.2.1（Vinzent03，MIT）：require 桥（见 modules/advanced-uri/NOTICE）。
 // 上游 tsconfig 非 strict 且其构建不过 tsc，直连会在宿主严格配置下爆 175 处
 // 类型噪音（obsidian 类型版本漂移 + strictNullChecks）——同 media-extended/
@@ -367,6 +393,26 @@ export default class MyObsidianPlugin extends Plugin {
 			desktopOnly: false,
 			cls: TraceTimePlugin as unknown as ModuleDescriptor["cls"],
 		},
+		// LLM Hub（2026-11-24 并入）：顺序必须在 ai-image-analyzer **之前**——后者的
+		// "llm-hub" provider 通过 ConnectBackend 拿模型与生成能力，后端先就位就不必
+		// 依赖 CONNECT_READY 补拉。产物载入失败时这里整段展开为空，设置页不出现
+		// 这一行（控制台有原因），其余模块照常。
+		...(LlmHubPlugin
+			? [
+					{
+						id: "llm-hub",
+						name: "LLM Hub",
+						summary:
+							"AI 助手：多模型对话（Gemini / OpenAI / Anthropic / OpenRouter / Grok / 本地 LLM / CLI 后端）、工作流自动化、RAG 语义检索、技能与斜杠命令；并向本插件的 AI image analyzer 提供模型。上游 takeshy（MIT）。",
+						desktopOnly: true,
+						// 上游读 manifest.version 做设置迁移/显示，须保持上游值。
+						manifest: { version: "0.39.5" },
+						// 曾作为独立插件装在库里的话，首次启动继承它的 data.json（API key 等）。
+						migrateFrom: "llm-hub",
+						cls: LlmHubPlugin,
+					} satisfies ModuleDescriptor,
+				]
+			: []),
 		{
 			// GPL-3.0: merging it in is what switched the whole repo to GPL-3.
 			// Kept whole, upstream is Swaggeroo.
