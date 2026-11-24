@@ -348,6 +348,15 @@ describe('buildExternalPaneMenu', () => {
     expect(host.revealed).toEqual([ABS]); // 不是 BROKEN
   });
 
+  it('主库空配置也有可展开的「打开方式」（系统项兜底）', () => {
+    const host = fakeHost();
+    host.openWithApps = () => [];
+    const menu = fakeMenu();
+    buildExternalPaneMenu(host, menu as unknown as Menu, target({ fileName: 'git_auto_local.log' }));
+    const sub = menu.items.find((i) => i.title === '打开方式')?.submenu ?? [];
+    expect(sub.map((i) => i.title).filter(Boolean)).toEqual(['用系统默认应用打开', '在文件管理器中显示']);
+  });
+
   it('offers the popout item only when popout windows exist', () => {
     const withPopout = fakeHost({ popout: true });
     const menu = fakeMenu();
@@ -463,11 +472,31 @@ describe('addOpenWithSubmenu', () => {
     expect(host.opened).toEqual([ABS]);
   });
 
-  it('没有自定义应用且不带系统项时不建空子菜单', () => {
+  it('没有自定义应用时用系统项兜底，子菜单不会空/不会出现点不开的同名项', () => {
     const host = fakeHost();
     const menu = fakeMenu();
     addOpenWithSubmenu(host, menu as unknown as Menu, { abs: ABS, fileName: 'note.md' });
-    expect(menu.items.some((i) => i.title === '打开方式')).toBe(false);
+    const item = menu.items.find((i) => i.title === '打开方式');
+    expect((item?.submenu ?? []).map((i) => i.title).filter(Boolean)).toEqual([
+      '用系统默认应用打开',
+      '在文件管理器中显示',
+    ]);
+    item!.submenu![0].onClick!();
+    expect(host.opened).toEqual([ABS]);
+  });
+
+  it('视图给了 openWithExtras 但本文件不适用时，仍用系统项兜底不空壳', () => {
+    const host = fakeHost();
+    host.openWithApps = () => [];
+    const menu = fakeMenu();
+    addOpenWithSubmenu(
+      host,
+      menu as unknown as Menu,
+      { abs: ABS, fileName: 'git_auto_local.log', openWithExtras: () => undefined },
+      { systemActions: false },
+    );
+    const sub = menu.items.find((i) => i.title === '打开方式')?.submenu ?? [];
+    expect(sub.map((i) => i.title).filter(Boolean)).toEqual(['用系统默认应用打开', '在文件管理器中显示']);
   });
 
   it('buildExternalPaneMenu 带的子菜单不重复顶层的系统项', () => {

@@ -376,7 +376,8 @@ async function copyText(text: string, what = '绝对路径'): Promise<void> {
  * settings.openWithApps 里匹配的自定义应用（扩展名/目录过滤见
  * openWithMatches）。全部作用在绝对路径上，库内库外通用。
  *
- * 没有可给的内容（无自定义应用、无应用内路由、也不带系统项）时不建空子菜单。
+ * 子菜单建好后再判空：视图的 openWithExtras 可能“给了回调但本文件不适用”
+ * （代码文件的混合模式只对 md 有意义），那种情况下也不能留下一个空壳。
  */
 export function addOpenWithSubmenu(
   host: PaneMenuHost,
@@ -387,16 +388,24 @@ export function addOpenWithSubmenu(
   const { abs, fileName } = target;
   if (!abs) return;
   const isDir = target.isDir === true;
-  const systemActions = opts.systemActions === true;
   const apps = (host.openWithApps?.() ?? []).filter(
     (a) => a.enabled && openWithMatches(a, isDir, extOfName(fileName)),
   );
-  if (!systemActions && !target.openWithExtras && apps.length === 0) return;
+  // 用户没配任何自定义打开方式时（主库实测 openWithApps: []），子菜单不能
+  // 空着——否则第三方 file-menu 转发的同名「打开方式」（点开没反应的那个）
+  // 会留在菜单里，我们这一项却没内容。注意不能只看 openWithExtras 回调是否
+  // 存在：代码视图总会给回调，但非 md 文件里面直接 return，子菜单还是空的。
+  // 所以先建子菜单、跑完视图项，再按实际条目数决定是否用系统项兜底。
+  const systemActions = opts.systemActions === true;
   menu.addItem((item) => {
     item.setTitle('打开方式').setIcon('external-link' as never).setSection('open');
     const sub = item.setSubmenu();
+    const countOf = (m: Menu): number => (m as unknown as { items?: unknown[] }).items?.length ?? 0;
+    const before = countOf(sub);
     target.openWithExtras?.(sub);
-    if (systemActions && !isDir) {
+    const extrasAdded = countOf(sub) > before;
+    const showSystem = systemActions || (apps.length === 0 && !extrasAdded);
+    if (showSystem && !isDir) {
       sub.addItem((si) =>
         si
           .setTitle('用系统默认应用打开')
@@ -404,7 +413,7 @@ export function addOpenWithSubmenu(
           .onClick(() => host.openWithSystem(abs)),
       );
     }
-    if (systemActions) {
+    if (showSystem) {
       sub.addItem((si) =>
         si
           .setTitle('在文件管理器中显示')
