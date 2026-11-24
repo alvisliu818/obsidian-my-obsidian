@@ -36,6 +36,32 @@ export class LifeSettingTab extends PluginSettingTab {
 				}),
 			);
 
+		containerEl.createEl('h3', { text: 'HOME 大日历' });
+		containerEl.createEl('p', {
+			cls: 'setting-item-description',
+			text: '点 HOME 大日历里的日期可切换当日明细;文件变化来自库记录(今天为实时对比)。',
+		});
+		new Setting(containerEl)
+			.setName('显示新增文件')
+			.setDesc('在当日明细中列出当天新增的库内文件。')
+			.addToggle((t) =>
+				t.setValue(s.homeCalendarShowAdded !== false).onChange((v) => {
+					s.homeCalendarShowAdded = v;
+					this.plugin.store.scheduleSave();
+					this.plugin.refreshHomeViews();
+				}),
+			);
+		new Setting(containerEl)
+			.setName('显示修改文件')
+			.setDesc('在当日明细中列出当天修改的库内文件。')
+			.addToggle((t) =>
+				t.setValue(s.homeCalendarShowModified !== false).onChange((v) => {
+					s.homeCalendarShowModified = v;
+					this.plugin.store.scheduleSave();
+					this.plugin.refreshHomeViews();
+				}),
+			);
+
 		containerEl.createEl('h3', { text: 'HOME 组件排序' });
 		containerEl.createEl('p', {
 			cls: 'setting-item-description',

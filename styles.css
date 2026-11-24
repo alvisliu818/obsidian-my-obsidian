@@ -63479,6 +63479,14 @@ body.is-mobile
 .life-home-cal-cell.is-today .life-home-cal-dot { visibility: hidden; }
 .life-home-cal-detail { margin-top: 8px; padding: 8px 10px; background: var(--background-secondary); border-radius: 10px; display: flex; flex-direction: column; gap: 2px; }
 .life-home-cal-item { font-size: 12.5px; padding: 2px 4px; }
+.life-home-cal-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.life-home-cal-title { font-size: 12.5px; font-weight: 600; }
+.life-home-cal-cell.is-selected:not(.is-today) { border-color: var(--interactive-accent); background: var(--background-modifier-active-hover); font-weight: 700; }
+.life-home-cal-cell.is-today.is-selected { box-shadow: 0 0 0 2px var(--interactive-accent); }
+.life-home-cal-detail-title { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.life-home-cal-item.is-done { opacity: 0.55; text-decoration: line-through; }
+.life-home-cal-files-title { margin-top: 4px; font-size: 11.5px; font-weight: 600; color: var(--text-muted); }
+.life-home-cal-files { display: flex; flex-direction: column; gap: 1px; }
 
 /* 今日概览四卡 */
 .life-home-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }

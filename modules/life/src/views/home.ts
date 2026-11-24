@@ -17,7 +17,7 @@ import type LifePlugin from '../main';
 import type LogseqEditorPlugin from '../../../md-editor/src/main';
 import { VIEW_LIFE_HOME } from './homeTypes';
 import { SnapshotPreviewModal } from './snapshotPreview';
-import { monthGrid, todayKey, formatDuration } from '../util';
+import { monthGrid, todayKey, formatDuration, dateKey, parseDateKey, daysInMonth } from '../util';
 import { normalizeHomeSectionOrder } from '../homeSections';
 import { changeSummary, filterVaultLogRecordsByDate, sortVaultLogRecordsDesc, scanVaultSig, diffWithRenames } from '../vaultLog';
 import type { VaultLogRecord } from '../types';
@@ -104,6 +104,10 @@ export class LifeHomeView extends ItemView {
 	private saveExpanded = new Set<string>();
 	private saveCollapsedDirs = new Set<string>();
 	private saveHistoryError = '';
+	/** HOME 大日历(2026-11-24 用户):当前展示年月 + 选中日期(视图状态,不落盘) */
+	private calYear = new Date().getFullYear();
+	private calMonth0 = new Date().getMonth();
+	private calSelectedKey = todayKey();
 	/** 懒加载(2026-11-22 用户:提高启动速度):首次渲染推迟到启动空闲后,
 	 * 且只在本视图可见时执行;历史数据加载也一并推迟。 */
 	private lazyRendered = false;
@@ -747,45 +751,183 @@ export class LifeHomeView extends ItemView {
 		}
 	}
 
-	/** 大日历区块:迷你月网格 + 当日明细。 */
+	/** 大日历区块:迷你月网格 + 选中日明细(任务/计划/文件变化)。 */
 	private renderCalendarSection(sec: HTMLElement): void {
 		sec.createDiv({ cls: 'life-home-sec-title', text: '大日历' });
-		sec.createDiv({ cls: 'life-home-muted', text: '完整版(点格子加任务/计划)在「大日历」面板 →' });
+		sec.createDiv({ cls: 'life-home-muted', text: '点日期切换当日明细(任务/计划/文件变化);完整版在「大日历」面板 →' });
 		this.renderMiniCalendar(sec);
 	}
 
 
-	/** 迷你月网格(任务/计划圆点)+ 当日明细。 */
+	/** 迷你月网格:点日期切换;任务/计划圆点保留。 */
 	private renderMiniCalendar(container: HTMLElement): void {
-		const now = new Date();
-		const cells = monthGrid(now.getFullYear(), now.getMonth(), todayKey());
 		const s = this.plugin.store.settings;
+		const today = todayKey();
+
+		// 月份导航(2026-11-24 用户:日期可点击切换;跨月看历史变化)
+		const bar = container.createDiv({ cls: 'life-home-cal-bar' });
+		const prev = bar.createEl('button', { cls: 'life-home-mode-btn', text: '‹', attr: { 'aria-label': '上一月' } });
+		prev.addEventListener('click', () => this.shiftMiniCalendar(-1));
+		bar.createSpan({ cls: 'life-home-cal-title', text: `${this.calYear} 年 ${this.calMonth0 + 1} 月` });
+		const next = bar.createEl('button', { cls: 'life-home-mode-btn', text: '›', attr: { 'aria-label': '下一月' } });
+		next.addEventListener('click', () => this.shiftMiniCalendar(1));
+		const todayBtn = bar.createEl('button', { cls: 'life-home-mode-btn', text: '今天' });
+		todayBtn.addEventListener('click', () => {
+			const now = new Date();
+			this.calYear = now.getFullYear();
+			this.calMonth0 = now.getMonth();
+			this.calSelectedKey = todayKey();
+			this.render();
+		});
+
+		const cells = monthGrid(this.calYear, this.calMonth0, today);
 		const grid = container.createDiv({ cls: 'life-home-cal' });
 		const headRow = grid.createDiv({ cls: 'life-home-cal-row is-head' });
 		for (const w of ['一', '二', '三', '四', '五', '六', '日']) headRow.createSpan({ cls: 'life-home-cal-wd', text: w });
 		for (const cell of cells) {
-			const cellEl = grid.createDiv({ cls: `life-home-cal-cell${cell.inMonth ? '' : ' is-out'}${cell.key === todayKey() ? ' is-today' : ''}` });
+			const cellEl = grid.createDiv({
+				cls:
+					'life-home-cal-cell' +
+					(cell.inMonth ? '' : ' is-out') +
+					(cell.key === today ? ' is-today' : '') +
+					(cell.key === this.calSelectedKey ? ' is-selected' : ''),
+			});
 			cellEl.createSpan({ cls: 'life-home-cal-day', text: String(cell.day) });
 			const taskCount = s.tasks.filter((t) => t.due === cell.key && !t.done).length;
 			const planCount = s.plans.filter((p) => p.date === cell.key).length;
 			if (taskCount > 0) cellEl.createSpan({ cls: 'life-home-cal-dot is-task', text: String(taskCount) });
 			if (planCount > 0) cellEl.createSpan({ cls: 'life-home-cal-dot is-plan', text: String(planCount) });
+			cellEl.addEventListener('click', () => {
+				this.calSelectedKey = cell.key;
+				// 点到前后月填充格 → 连同月份一起切换
+				if (!cell.inMonth) {
+					const d = parseDateKey(cell.key);
+					if (d) {
+						this.calYear = d.getFullYear();
+						this.calMonth0 = d.getMonth();
+					}
+				}
+				this.render();
+			});
 		}
-		// 当日明细:今日到期任务 + 今日计划
-		const today = todayKey();
-		const dueToday = s.tasks.filter((t) => t.due === today && !t.done);
-		const plansToday = s.plans.filter((p) => p.date === today);
+
+		this.renderMiniCalendarDetail(container);
+	}
+
+	/** 月份切换:保持选中日的「几号」,超出当月天数时收敛到月末。 */
+	private shiftMiniCalendar(delta: number): void {
+		this.calMonth0 += delta;
+		while (this.calMonth0 < 0) {
+			this.calMonth0 += 12;
+			this.calYear--;
+		}
+		while (this.calMonth0 > 11) {
+			this.calMonth0 -= 12;
+			this.calYear++;
+		}
+		const selected = parseDateKey(this.calSelectedKey);
+		const day = Math.min(selected ? selected.getDate() : 1, daysInMonth(this.calYear, this.calMonth0));
+		this.calSelectedKey = dateKey(new Date(this.calYear, this.calMonth0, day));
+		this.render();
+	}
+
+	/** 选中日明细:任务/计划(含已完成)+ 文件变化(开关控制)。 */
+	private renderMiniCalendarDetail(container: HTMLElement): void {
+		const key = this.calSelectedKey;
+		const s = this.plugin.store.settings;
 		const detail = container.createDiv({ cls: 'life-home-cal-detail' });
-		if (dueToday.length === 0 && plansToday.length === 0) {
-			detail.createDiv({ cls: 'life-home-muted', text: '今天没有到期的任务和计划。' });
+		detail.createDiv({ cls: 'life-home-cal-detail-title', text: `${key} 明细` });
+
+		const tasks = s.tasks.filter((t) => t.due === key);
+		const plans = s.plans.filter((p) => p.date === key);
+		if (!tasks.length && !plans.length) {
+			detail.createDiv({ cls: 'life-home-muted', text: '当天没有任务和计划。' });
+		} else {
+			for (const t of tasks.slice(0, 8)) {
+				detail.createDiv({
+					cls: 'life-home-cal-item' + (t.done ? ' is-done' : ''),
+					text: `[任务${t.done ? '✓' : ''}] ${t.title}`,
+				});
+			}
+			if (tasks.length > 8) detail.createDiv({ cls: 'life-home-muted', text: `…还有 ${tasks.length - 8} 条任务` });
+			for (const p of plans.slice(0, 8)) {
+				detail.createDiv({
+					cls: 'life-home-cal-item' + (p.done ? ' is-done' : ''),
+					text: `[计划${p.done ? '✓' : ''}] ${p.time ? p.time + ' ' : ''}${p.title}`,
+				});
+			}
+			if (plans.length > 8) detail.createDiv({ cls: 'life-home-muted', text: `…还有 ${plans.length - 8} 条计划` });
+		}
+
+		this.renderMiniCalendarFiles(detail, key);
+	}
+
+	/** 当日文件变化:今天走实时 diff(启动基线),历史日聚合库记录。 */
+	private renderMiniCalendarFiles(detail: HTMLElement, key: string): void {
+		const s = this.plugin.store.settings;
+		const showAdded = s.homeCalendarShowAdded !== false;
+		const showModified = s.homeCalendarShowModified !== false;
+		if (!showAdded && !showModified) return;
+
+		const files = this.collectCalendarFiles(key);
+		const added = showAdded ? files.added : [];
+		const modified = showModified ? files.modified : [];
+		if (!added.length && !modified.length) {
+			const hasData = key === todayKey() || s.vaultLogRecords.some((r) => r.date === key);
+			detail.createDiv({
+				cls: 'life-home-muted',
+				text: hasData ? '当天没有新增/修改的文件。' : '当天没有库记录,无法显示文件变化。',
+			});
 			return;
 		}
-		for (const t of dueToday.slice(0, 8)) {
-			detail.createDiv({ cls: 'life-home-cal-item', text: `[任务] ${t.title}` });
+
+		detail.createDiv({ cls: 'life-home-cal-files-title', text: '文件变化' });
+		const box = detail.createDiv({ cls: 'life-home-cal-files' });
+		const rec: VaultLogRecord = {
+			id: `calendar-${key}`,
+			at: `${key}T00:00:00`,
+			date: key,
+			trigger: 'manual',
+			added,
+			modified,
+			deleted: [],
+			totalFiles: 0,
+		};
+		renderDiffListsInto(
+			box,
+			rec,
+			'overall',
+			{ expandedIds: new Set([rec.id]), detailMode: 'overall', settingsOpen: false },
+			{
+				onToggleRecord: () => undefined,
+				onModeChange: () => undefined,
+				onManualRecord: () => void this.plugin.recordVaultChanges('manual'),
+				onOpenFile: (path) => void this.app.workspace.openLinkText(path, ''),
+				onOpenModified: (path) => void this.plugin.openModifiedFileWithDiff(path),
+				onCompareFile: (path) => void this.plugin.openRecordDiffView(path),
+			},
+		);
+	}
+
+	/** 某日新增/修改文件:今天实时 diff,历史日聚合当日库记录(新增优先)。 */
+	private collectCalendarFiles(key: string): { added: string[]; modified: string[] } {
+		const s = this.plugin.store.settings;
+		if (key === todayKey() && this.plugin.dayBaseline) {
+			const cur = scanVaultSig(this.app.vault);
+			const diff = diffWithRenames(this.plugin.dayBaseline.sig, cur);
+			return { added: diff.added, modified: diff.modified };
 		}
-		for (const p of plansToday.slice(0, 8)) {
-			detail.createDiv({ cls: 'life-home-cal-item', text: `[计划] ${p.time ? p.time + ' ' : ''}${p.title}` });
+		const added = new Set<string>();
+		const modified = new Set<string>();
+		for (const r of s.vaultLogRecords) {
+			if (r.date !== key || r.first) continue;
+			for (const p of r.added) added.add(p);
+			for (const p of r.modified) modified.add(p);
 		}
+		// 同一天里先新增后又修改的,只按「新增」展示
+		for (const p of added) modified.delete(p);
+		const byPath = (a: string, b: string): number => a.localeCompare(b);
+		return { added: [...added].sort(byPath), modified: [...modified].sort(byPath) };
 	}
 
 	/**

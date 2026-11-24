@@ -48,6 +48,9 @@ export function lifeSettingsFrom(raw: unknown): LifeSettings {
 		homeOpenOnStartup: o.homeOpenOnStartup !== false,
 		// HOME 区块顺序:非法/缺失自动回落默认并补齐(旧数据无此字段)
 		homeSectionOrder: normalizeHomeSectionOrder(o.homeSectionOrder),
+		// HOME 大日历文件变化开关(缺省都显示)
+		homeCalendarShowAdded: o.homeCalendarShowAdded !== false,
+		homeCalendarShowModified: o.homeCalendarShowModified !== false,
 	};
 }
 

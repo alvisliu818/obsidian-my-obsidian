@@ -129,6 +129,10 @@ export interface LifeSettings {
 	homeOpenOnStartup: boolean;
 	/** HOME 各区块的展示顺序(2026-11-22 用户;id 见 homeSections.ts) */
 	homeSectionOrder: HomeSectionId[];
+	/** HOME 大日历当日明细:是否显示当天新增的文件(2026-11-24 用户) */
+	homeCalendarShowAdded: boolean;
+	/** HOME 大日历当日明细:是否显示当天修改的文件 */
+	homeCalendarShowModified: boolean;
 }
 
 /** 库记录:相对上一次记录的文件变化(2026-11-19 阶段 C)。 */
@@ -226,4 +230,6 @@ export const DEFAULT_LIFE_SETTINGS: LifeSettings = {
 	vaultLogLastRemindDate: '',
 	homeOpenOnStartup: true,
 	homeSectionOrder: DEFAULT_HOME_SECTION_ORDER,
+	homeCalendarShowAdded: true,
+	homeCalendarShowModified: true,
 };
