@@ -1,5 +1,5 @@
 /**
- * 「代码编辑器设置」的行内容(25 条用户可调项)。
+ * 「代码编辑器设置」的行内容(26 条用户可调项)。
  *
  * Obsidian 原生平铺 Setting 行,由 code-editor 模块设置页渲染
  * (settingsTab.ts → renderEditorSettingsRows;2026-11-22 从 md-editor 迁入)。
@@ -129,6 +129,16 @@ const ROW_GROUPS: RowDef[][] = [
       name: '滚动越过末行',
       type: 'bool',
       desc: '允许把最后一行滚动到视口顶部（仅文件视图；块内代码块始终贴合内容）。',
+    },
+    {
+      key: 'scrollbarStyle',
+      name: '滚动条样式',
+      type: 'enum',
+      options: [
+        { v: 'custom', label: '现在（细圆角半透明）' },
+        { v: 'native', label: '原生（Monaco 默认）' },
+      ],
+      desc: '右侧（及底部）滚动条外观。「现在」是插件一直使用的细圆角半透明滑块，悬停/拖动时不透明；「原生」回到 Monaco 自带默认外观（贴右缘、平直、始终不透明）。纯样式切换，不影响滚动行为，改完立即生效。',
     },
   ],
   [

@@ -27,6 +27,9 @@ import {
 let initialized = false;
 let getResourcePath: ((rel: string) => string) | null = null;
 
+/** body 上的「滚动条用 Monaco 原生外观」开关类(monaco.css 里 body.<class> 段)。 */
+const NATIVE_SCROLLBAR_CLASS = 'lgp-monaco-native-scrollbar';
+
 /** 扩展名 → Monaco language id(与 basic-languages 内置 tokenizer 对齐) */
 const LANG_MAP: Record<string, string> = {
   '.ts': 'typescript',
@@ -509,6 +512,9 @@ export function createEditor(
   container: HTMLElement,
   opts: CreateEditorOptions,
 ): monacoNs.editor.IStandaloneCodeEditor {
+  // 滚动条外观(设置项 = body 类)兜底落地:settings.json 可能被手改后没走
+  // 设置页重载,首次建编辑器时也把类对齐一次(幂等,纯 classList)。
+  applyScrollbarStyle();
   // 市场扩展的 TM 语法优先:异步注册完成后实时覆盖内置 monarch tokenizer
   void registerTmGrammarForMonaco(opts.language).catch(() => {});
   // 块内模式(lineNumbers:false):折叠槽(lineDecorationsWidth 默认 ~20px)会把
@@ -1103,6 +1109,21 @@ export function disposeMonaco(): void {
   }
   sharedPool?.remove();
   sharedPool = null;
+  // 滚动条样式类是我们挂在 body 上的(设置项):卸载时摘掉,别把门外的
+  // Monaco 实例也带上插件的样式。
+  document.body.classList.remove(NATIVE_SCROLLBAR_CLASS);
+}
+
+/**
+ * 右侧滚动条外观(2026-11-24 用户):monaco.css 里那条「细圆角 + 半透明」的
+ * 美化规则是无条件全局生效的,设置里要能切回 Monaco 原生默认 ——
+ * 用一个 body 级类把覆盖规则打开(monaco.css 里 body.<class> 一段)。
+ *
+ * 纯 CSS 开关,不碰编辑器实例:改完无需重建编辑器,也不影响滚动行为。
+ */
+export function applyScrollbarStyle(): void {
+  const native = getEditorSettings().scrollbarStyle === 'native';
+  document.body.classList.toggle(NATIVE_SCROLLBAR_CLASS, native);
 }
 
 /**
@@ -1117,6 +1138,8 @@ export function disposeMonaco(): void {
  */
 export function applyEditorSettings(): void {
   const s = getEditorSettings();
+  // 滚动条外观是 CSS 开关(body 类),与编辑器实例无关,先落它。
+  applyScrollbarStyle();
   for (const ed of monaco.editor.getEditors()) {
     const scope = editorScopes.get(ed) ?? 'file';
     ed.updateOptions(buildEditorOptionOverrides(scope, s) as unknown as monacoNs.editor.IEditorOptions);

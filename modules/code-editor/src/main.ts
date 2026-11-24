@@ -15,7 +15,7 @@
  * 使用本模块（方向合法：上层 → 底层）。
  */
 import { FileSystemAdapter, Plugin } from 'obsidian';
-import { disposeMonaco } from './editor/monaco';
+import { applyScrollbarStyle, disposeMonaco } from './editor/monaco';
 import { initLazyMonaco } from './editor/lazyMonaco';
 import { shutdownAllLsp } from './lsp/lspHost';
 import { initEditorSettingsStore, loadEditorSettings } from './settings/editorSettingsStore';
@@ -35,6 +35,9 @@ export default class CodeEditorPlugin extends Plugin {
     // 缺失不落盘——首建仍留给 md-editor 的同次启动迁移(data.json 旧换行开关)。
     initEditorSettingsStore(this);
     loadEditorSettings(this, false);
+    // 滚动条外观(settings.json 的 scrollbarStyle)是 body 级 CSS 开关:
+    // 启动就对齐一次,免得首个编辑器创建前短暂用错样式。
+    applyScrollbarStyle();
     this.addSettingTab(new CodeEditorSettingTab(this.app, this));
   }
 

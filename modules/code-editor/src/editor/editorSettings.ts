@@ -24,6 +24,12 @@ export type MatchBracketsMode = 'always' | 'near' | 'never';
 export type WordWrapMode = '' | 'off' | 'on' | 'wordWrapColumn' | 'bounded';
 export type WordBasedSuggestionsMode = 'off' | 'currentDocument' | 'matchingDocuments' | 'allDocuments';
 export type ShowFoldingControlsMode = 'always' | 'never' | 'mouseover';
+/**
+ * 右侧滚动条外观:
+ * - 'custom' = 插件现有观感(monaco.css 的细圆角半透明滑块,内容视觉直达右缘);
+ * - 'native' = Monaco 自带默认样式(贴边、平直、不透明)。
+ */
+export type ScrollbarStyle = 'custom' | 'native';
 
 export interface EditorSettings {
   // ---- 字体(0/'' = 跟随现状) ----
@@ -37,6 +43,7 @@ export interface EditorSettings {
   cursorSmoothCaretAnimation: CursorSmoothCaretMode;
   mouseWheelZoom: boolean;
   scrollBeyondLastLine: boolean;
+  scrollbarStyle: ScrollbarStyle;
   // ---- 渲染 ----
   renderWhitespace: RenderWhitespaceMode;
   renderLineHighlight: RenderLineHighlightMode;
@@ -78,6 +85,8 @@ export const EDITOR_SETTINGS_DEFAULTS: EditorSettings = {
   cursorSmoothCaretAnimation: 'off',
   mouseWheelZoom: false,
   scrollBeyondLastLine: true,
+  // 默认保留插件现有观感(细圆角半透明);'native' = Monaco 默认样式。
+  scrollbarStyle: 'custom',
 
   renderWhitespace: 'selection',
   renderLineHighlight: 'line',
@@ -112,6 +121,7 @@ const MATCH_BRACKETS: readonly MatchBracketsMode[] = ['always', 'near', 'never']
 const WORD_WRAP: readonly WordWrapMode[] = ['', 'off', 'on', 'wordWrapColumn', 'bounded'];
 const WORD_BASED: readonly WordBasedSuggestionsMode[] = ['off', 'currentDocument', 'matchingDocuments', 'allDocuments'];
 const FOLDING_CONTROLS: readonly ShowFoldingControlsMode[] = ['always', 'never', 'mouseover'];
+const SCROLLBAR_STYLES: readonly ScrollbarStyle[] = ['custom', 'native'];
 
 function pickEnum<T extends string>(raw: unknown, allowed: readonly T[], fallback: T): T {
   return typeof raw === 'string' && (allowed as readonly string[]).includes(raw) ? (raw as T) : fallback;
@@ -156,6 +166,7 @@ export function editorSettingsFrom(raw: unknown): { settings: EditorSettings; un
   out.cursorSmoothCaretAnimation = pickEnum(o.cursorSmoothCaretAnimation, CURSOR_SMOOTH_CARET, d.cursorSmoothCaretAnimation);
   out.mouseWheelZoom = pickBool(o.mouseWheelZoom, d.mouseWheelZoom);
   out.scrollBeyondLastLine = pickBool(o.scrollBeyondLastLine, d.scrollBeyondLastLine);
+  out.scrollbarStyle = pickEnum(o.scrollbarStyle, SCROLLBAR_STYLES, d.scrollbarStyle);
 
   out.renderWhitespace = pickEnum(o.renderWhitespace, RENDER_WHITESPACE, d.renderWhitespace);
   out.renderLineHighlight = pickEnum(o.renderLineHighlight, RENDER_LINE_HIGHLIGHT, d.renderLineHighlight);

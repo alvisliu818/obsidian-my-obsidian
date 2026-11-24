@@ -68,6 +68,19 @@ describe('editorSettingsFrom 清洗', () => {
       'allDocuments',
     );
   });
+
+  it('滚动条样式:custom/native 合法,非法与缺失回退 custom,旧 settings.json 不受影响', () => {
+    expect(EDITOR_SETTINGS_DEFAULTS.scrollbarStyle).toBe('custom');
+    expect(editorSettingsFrom({ scrollbarStyle: 'native' }).settings.scrollbarStyle).toBe('native');
+    expect(editorSettingsFrom({ scrollbarStyle: 'custom' }).settings.scrollbarStyle).toBe('custom');
+    expect(editorSettingsFrom({ scrollbarStyle: 'rounded' }).settings.scrollbarStyle).toBe('custom');
+    // 旧版 settings.json 没有这个键 → 默认(不产生未知键计数)
+    const legacy = editorSettingsFrom({ fontSize: 15, minimap: true });
+    expect(legacy.settings.scrollbarStyle).toBe('custom');
+    expect(legacy.unknownKeys).toBe(0);
+    // 纯样式键:不进编辑器选项覆盖表(monaco IEditorOptions 里没有这个键)
+    expect('scrollbarStyle' in buildEditorOptionOverrides('file', { ...EDITOR_SETTINGS_DEFAULTS, scrollbarStyle: 'native' })).toBe(false);
+  });
 });
 
 describe('buildEditorOptionOverrides 作用域', () => {
