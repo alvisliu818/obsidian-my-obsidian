@@ -142,6 +142,11 @@ const EXTERNAL_ABS_VIEW_TYPES = new Set([
 	'logseq-external-code',
 	'logseq-external-file',
 	'logseq-code-doc',
+	// 图片/视频查看器（2026-11-24 用户：打开 duck.jpg 点定位没反应）。
+	// 它们是带 abs 的 ItemView，但没有 view.file，getActiveFile() 取不到，
+	// 必须从 view.abs 拿真实路径。
+	'logseq-image',
+	'logseq-video',
 ]);
 /** Rows drawn beyond the viewport on each side, so fast scrolling stays filled. */
 const MOUNT_OVERSCAN = 8;
@@ -745,7 +750,9 @@ export class MountPanelView extends ItemView {
    */
   private lastFileLeaf(): WorkspaceLeaf | null {
     const ws = this.app.workspace;
-    const types = ['markdown', 'logseq-block-editor', ...EXTERNAL_ABS_VIEW_TYPES];
+    // 普通文件视图（含原生图片/PDF/音频）也列进来：侧栏抢焦点后要靠
+    // activeTime 把它们找回来。
+    const types = ['markdown', 'image', 'video', 'audio', 'pdf', 'logseq-block-editor', ...EXTERNAL_ABS_VIEW_TYPES];
     const leaves = types.flatMap((t) => ws.getLeavesOfType(t));
     return (
       leaves.sort(
@@ -761,15 +768,41 @@ export class MountPanelView extends ItemView {
     return ((leaf?.view as unknown as { file?: TAbstractFile } | undefined)?.file ?? null);
   }
 
+  /** 当前活跃的外部 abs 视图（图片/视频/库外代码块等），没有则 null。 */
+  private activeAbsView(): WorkspaceLeaf | null {
+    const leaves = [this.app.workspace.getMostRecentLeaf(), this.lastFileLeaf()];
+    return (
+      leaves.find((leaf) => {
+        const view = leaf?.view as { getViewType?: () => string; abs?: string } | undefined;
+        const vt = view?.getViewType?.();
+        return !!vt && EXTERNAL_ABS_VIEW_TYPES.has(vt) && !!view!.abs;
+      }) ?? null
+    );
+  }
+
+  /**
+   * 从绝对路径反查库内相对路径（仅当它确实是库内文件时）。
+   * 外部视图（logseq-image 等）没有 view.file，getActiveFile() 还可能残留
+   * 旧 TFile；用 abs 反查才是可靠来源。
+   */
+  private vaultRelFromAbs(abs: string): string | null {
+    try {
+      const adapter = this.app.vault.adapter as FileSystemAdapter;
+      const base = (adapter.getBasePath?.() ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
+      const a = abs.replace(/\\/g, '/');
+      if (!base || !a.toLowerCase().startsWith(`${base.toLowerCase()}/`)) return null;
+      const rel = a.slice(base.length + 1);
+      return this.app.vault.getAbstractFileByPath(rel) ? rel : null;
+    } catch {
+      return null;
+    }
+  }
+
   private activeAbsPath(): string | null {
     // 外部块视图优先：getActiveFile 对它返回 null，甚至可能残留上一个
     // 库内文件的 TFile —— 那会让定位静默走“不在任何挂载内”分支。
-    const leaves = [this.app.workspace.getMostRecentLeaf(), this.lastFileLeaf()];
-    for (const leaf of leaves) {
-      const view = leaf?.view as { getViewType?: () => string; abs?: string } | undefined;
-      const vt = view?.getViewType?.();
-      if (vt && EXTERNAL_ABS_VIEW_TYPES.has(vt) && view!.abs) return view!.abs;
-    }
+    const absView = this.activeAbsView();
+    if (absView) return (absView.view as unknown as { abs: string }).abs;
     const f = this.app.workspace.getActiveFile() ?? this.fileOfLeaf(this.lastFileLeaf());
     if (f) {
       // 恢复的库外文件标签页（Obsidian 1.14+ TExternalFile）的 path 是
@@ -823,7 +856,10 @@ export class MountPanelView extends ItemView {
     // pickRevealTarget 优先挑**已展开/已加载该文件路径**的那一份（用户
     // 2026-11-24 要求），否则按更具体的挂载根兜底。
     const candidates: Array<{ mount: ExternalMount; mountId: string; rel: string; kind: 'vault' | 'external' }> = [];
-    const vaultRel = this.activeVaultRelativePath();
+    // 当前是外部 abs 视图（图片/视频/库外代码块）时，getActiveFile() 可能
+    // 残留上一个库内 TFile；库内相对路径必须从 abs 反查（2026-11-24
+    // duck.jpg 实测：旧逻辑定位跑到 vt-file-root.md 而不是图片）。
+    const vaultRel = this.activeAbsView() ? this.vaultRelFromAbs(abs) : this.activeVaultRelativePath();
     if (vaultRel) {
       // 库根挂载（path 为 '' 的合成态）匹配所有库内文件——startsWith('/')
       // 对空路径恒 false,库内文件的定位因此全灭（2026-11-07 用户报）
