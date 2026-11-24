@@ -113,11 +113,20 @@ export default class FilePropsPlugin extends Plugin {
 
 	async openView(): Promise<void> {
 		const { workspace } = this.app;
+		// 右侧栏已有本视图 → 复用；否则在右侧栏**新开一个标签**（getRightLeaf(true)），
+		// 不顶掉用户当前那一格（反链/大纲等）。
 		const leaf =
 			workspace.getLeavesOfType(VIEW_TYPE_FILE_PROPS)[0] ??
-			workspace.getRightLeaf(false) ??
+			workspace.getRightLeaf(true) ??
 			workspace.getLeaf(true);
 		await leaf.setViewState({ type: VIEW_TYPE_FILE_PROPS, active: true });
+		// 右侧栏折叠时 setViewState 只把视图挂进叶子、**不展开侧栏**——视图量到
+		// 0×0，用户观感就是「点了没反应/打不开」（2026-11-24 实报：工具栏
+		// 「更多 → 文件属性浏览器」点了没有任何界面出现）。revealLeaf 的契约
+		// 是「叶子在 sidedock 里就把 sidedock 展开」，兜底再显式 toggle 一次。
+		await workspace.revealLeaf(leaf);
+		const root = leaf.getRoot() as unknown as { collapsed?: boolean; toggle?: () => void };
+		if (root?.collapsed && typeof root.toggle === 'function') root.toggle();
 	}
 
 	/** 属性变更后刷新所有打开的浏览器视图（编辑弹窗保存回调走这里）。 */
