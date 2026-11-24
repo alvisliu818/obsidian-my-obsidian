@@ -14,7 +14,7 @@
  * that implies — backlinks, block references, search.
  */
 
-import { FileSystemAdapter, ItemView, Menu, Notice, setIcon, TFile, TFolder, type PaneType, type WorkspaceLeaf } from 'obsidian';
+import { FileSystemAdapter, ItemView, Menu, Notice, setIcon, TFile, TFolder, type PaneType, type TAbstractFile, type WorkspaceLeaf } from 'obsidian';
 import type VirtualTreePlugin from '../main';
 import { compareNames } from '../nameCompare';
 import type { ExternalMount } from '../types';
@@ -364,13 +364,16 @@ export class MountPanelView extends ItemView {
     }
   }
 
-  /** 树行右键「收藏/取消收藏」（三种挂载形态共用；条目键 = mountId + rel）。 */
+  /** 树行右键「收藏/取消收藏」（三种挂载形态共用；条目键 = mountId + rel）。
+   *
+   *  标题带上「虚拟树」是为了与 Obsidian 自己的书签项（原生菜单里也叫「收藏」）
+   *  共存——两者语义不同：这里是面板顶部的收藏区，那边是 Obsidian 书签。 */
   private addFavoriteMenuItems(menu: Menu, mount: ExternalMount, node: MountNode): void {
     const list = this.plugin.settings.favorites ?? [];
     const already = isFavorited(list, mount.id, node.rel);
     menu.addItem((item) =>
       item
-        .setTitle(already ? '取消收藏' : '收藏')
+        .setTitle(already ? '从虚拟树取消收藏' : '收藏到虚拟树')
         .setIcon(already ? 'star-off' : 'star')
         .onClick(async () => {
           const r = toggleFavorite(this.plugin.settings.favorites ?? [], {
@@ -2213,6 +2216,11 @@ export class MountPanelView extends ItemView {
       );
       menu.addSeparator();
     }
+    // 接入 Obsidian 原生文件列表菜单（2026-11-24 用户需求）：放在本插件自己的
+    // 文件操作之后、挂载管理之前——先给「打开/新建/重命名/删除/收藏」，再是原生
+    // 与各插件的项，最后才是虚拟树独有的挂载管理。挂载头（node=null）代表的就是
+    // 那个库内文件夹，同样接入；库根挂载 path 为空，函数内直接放弃。
+    this.addVaultNativeFileMenuItems(menu, node ? vaultJoinPath(mount, node.rel) : mount.path);
     // 在此挂载库内条目：库内选择器挑一个，挂到本节点之下（跨 kind 嵌套：
     // 宿主是库内，子挂载可以是库内也可以是库外）。
     const hostAt = node ? `${mount.id}/${node.rel}` : mount.id;
@@ -3097,6 +3105,76 @@ export class MountPanelView extends ItemView {
    * happened, so callers can skip items the handlers already provide —
    * 「复制绝对路径」 in particular is added by the open-with group.
    */
+  /**
+   * 库内节点接入 Obsidian 原生文件列表菜单（2026-11-24 用户需求）。
+   *
+   * `file-menu` 事件带的是**核心插件与其它插件**贡献的项（书签、笔记合并、移动
+   * 文件、Git、标签、文件属性、加密、保存历史、终端、外部编辑器……）——与在文件
+   * 列表里右键看到的一致。文件列表自身的 打开/重命名/删除 不在事件里（那是资源
+   * 管理器视图直接加的），本菜单已有同款自有入口，不重复造。
+   *
+   * 源串用 `'file-explorer'`（文件列表同款）；库外分支用中性串正是为了**屏蔽**
+   * 这类核心项——两边语义不同，别把源串抄错。
+   *
+   * 返回是否真的转发成功：mount 路径在库里找不到（还没进索引、或挂载了已删除的
+   * 目录）时返回 false，菜单保持自有项。
+   */
+  private addVaultNativeFileMenuItems(menu: Menu, vaultPath: string): boolean {
+    if (this.plugin.settings.nativeFileMenu === false) return false;
+    // 库根挂载的 path 是空串（合成态 = 整个库）：没有对应实体，直接放弃。
+    if (!vaultPath) return false;
+    let af: TAbstractFile | null = null;
+    try {
+      af = this.app.vault.getAbstractFileByPath(vaultPath);
+    } catch {
+      return false;
+    }
+    if (!af) return false;
+    menu.addSeparator();
+    try {
+      this.app.workspace.trigger('file-menu', menu, af, 'file-explorer');
+    } catch (e) {
+      console.error('[virtual-tree] file-menu handler failed for', vaultPath, e);
+      return false;
+    }
+    // 转发进来的项与本菜单既有项可能同名（文件属性 / 添加标签… 由 file-props
+    // 自己往原生菜单里加，本菜单也各有一份）——保留**先出现的**（我们自己的），
+    // 顺带清掉多个插件重复注册的同名项。
+    this.dedupeMenuTitlesKeepFirst(menu);
+    return true;
+  }
+
+  /**
+   * 同名菜单项只留第一个（标题为空的分隔符原样保留，它们承担分组）。
+   *
+   * 比较用**归一化标题**：去掉尾部的省略号——本菜单的「文件属性…」与
+   * file-props 往原生菜单里加的「文件属性」是同一件事，字面不同也得去重。
+   *
+   * MenuItem 没有 `.title` 字段（setTitle 只写 titleEl），故读 textContent；
+   * `items` 未文档化，按运行时形状取值——同 addFileMenuEventItems 的先例。
+   */
+  private dedupeMenuTitlesKeepFirst(menu: Menu): void {
+    const items = (menu as unknown as {
+      items: Array<{ titleEl?: { textContent?: string | null }; title?: unknown } | null>;
+    }).items;
+    const seen = new Set<string>();
+    for (let i = 0; i < items.length; ) {
+      const it = items[i];
+      const raw = (it?.titleEl?.textContent ?? (typeof it?.title === 'string' ? it.title : '') ?? '').trim();
+      if (!raw) {
+        i++;
+        continue;
+      }
+      const key = raw.replace(/(…|\.\.\.)\s*$/, '').trim() || raw;
+      if (seen.has(key)) {
+        items.splice(i, 1);
+        continue;
+      }
+      seen.add(key);
+      i++;
+    }
+  }
+
   private addFileMenuEventItems(menu: Menu, abs: string, isDir: boolean): boolean {
     if (!this.plugin.canOpenNativeExternal()) return false;
     // First hop: the TExternalFile lookup only resolves FILES, so folder rows

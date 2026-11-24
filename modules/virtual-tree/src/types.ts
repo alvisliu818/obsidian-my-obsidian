@@ -479,6 +479,13 @@ export interface VirtualTreeSettings {
    */
   titleRenameEnabled: boolean;
   /**
+   * 右键菜单接入原生文件列表菜单（2026-11-24 用户需求）：库内节点右键时把
+   * Obsidian 的 `file-menu` 事件转发进来——核心插件（书签、笔记合并、移动文件）
+   * 与其它插件（Git、文件属性/标签、加密、保存历史、终端、外部编辑器…）贡献的
+   * 项一并出现，与在文件列表里右键看到的一致。默认开；关掉只留本插件自己的项。
+   */
+  nativeFileMenu: boolean;
+  /**
    * parent 属性挂载（2026-11-03 用户需求）：笔记 frontmatter 写 `parent:`
    * 指到另一篇笔记时，虚拟树把笔记挂到那篇笔记名下作为子文档显示。
    * 真实位置不动，纯树形展示；`[[..]]` / 纯名称 / 库内路径都认，
@@ -709,6 +716,8 @@ export const DEFAULT_VIRTUAL_TREE_SETTINGS: VirtualTreeSettings = {
   parentMountEnabled: true,
   // 文件名点击重命名默认开（原生行为本体，开关用于关）
   titleRenameEnabled: true,
+  // 右键菜单接入原生文件列表菜单（用户 2026-11-24 需求本体，开关用于关）
+  nativeFileMenu: true,
   mountLinkEnabled: true,
   // 同步到库默认固定落在 Mounts/：与旧链接同一处，索引与「已链接」呈现一致。
   syncTargetMode: 'fixed',
@@ -846,6 +855,7 @@ export function virtualTreeSettingsFrom(raw: unknown): VirtualTreeSettings {
   s.mountFilterEnabled = o.mountFilterEnabled === true;
   s.parentMountEnabled = o.parentMountEnabled !== false;
   s.titleRenameEnabled = o.titleRenameEnabled !== false;
+  s.nativeFileMenu = o.nativeFileMenu !== false;
   s.mountLinkEnabled = o.mountLinkEnabled !== false;
   // 「同步到库」：目标模式/目录/记录都从用户可编辑的 data.json 归一化。
   s.syncTargetMode = o.syncTargetMode === 'prompt' ? 'prompt' : 'fixed';

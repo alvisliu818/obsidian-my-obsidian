@@ -276,6 +276,21 @@ export class VirtualTreeSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName('右键菜单接入原生文件列表菜单')
+      .setDesc(
+        '默认开：在虚拟树里右键库内文件/文件夹，菜单除本插件自己的项外，还会带上 ' +
+          'Obsidian 文件列表里看到的其它项——核心（书签、笔记合并、移动文件）与其它插件' +
+          '（Git、文件属性/标签、加密、保存历史、终端、外部编辑器…）贡献的条目。' +
+          '关掉只留本插件自己的菜单项（菜单更短）。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.nativeFileMenu !== false).onChange(async (v) => {
+          this.plugin.settings.nativeFileMenu = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName('虚拟文件浏览器')
       .setDesc(
         '默认开：侧栏文件浏览器换成虚拟滚动版——只渲染视口内的行，' +
