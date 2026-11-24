@@ -61,7 +61,8 @@ export function getIndexDaemon(plugin: OmnisearchPlugin): DaemonLike | null {
 				plugins?: { plugins?: Record<string, { live?: Map<string, unknown> }> }
 			}
 		).plugins?.plugins?.['obsidian-my-obsidian']
-		const lg = host?.live?.get('logseq') as
+		// 模块 2026-11-07 由 logseq 改名 md-editor；旧键留作回退。
+		const lg = (host?.live?.get('md-editor') ?? host?.live?.get('logseq')) as
 			| { daemonIndex?: DaemonLike | null }
 			| undefined
 		return lg?.daemonIndex ?? null
