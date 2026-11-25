@@ -16,7 +16,9 @@ const MONACO_STATIC = path.resolve('src/mobile-monaco-static.ts');
 
 const KEEP_EASY = [/modules\/easy-sync\//];
 const KEEP_VT = [...KEEP_EASY, /modules\/virtual-tree\//];
-const KEEP_CORE = [...KEEP_VT, /modules\/md-editor\//, /modules\/code-editor\//];
+// breadcrumb：md editor 笔记顶部的面包屑栏（.bcn-bar）。移动端此前被 stub 掉，
+// 而自带 .block-editor-breadcrumb 又被 CSS 隐藏 → 顶部整条空白（2026-11-25 实报）。
+const KEEP_CORE = [...KEEP_VT, /modules\/md-editor\//, /modules\/code-editor\//, /modules\/breadcrumb\//];
 // 2026-11-25 用户组合包：EasySync + 虚拟文档树（含 GitHub/Gitee 挂载）+
 // MD Editor / Code Editor（挂载文件与库内代码的编辑路由）+ Save Control
 // （移动端快照存库内插件目录）。
@@ -70,6 +72,15 @@ const ENTRY = {
 \t\t\tsummary: "Monaco 代码编辑器基建：代码块/代码文件的语法高亮与编辑。",
 \t\t\tdesktopOnly: false,
 \t\t\tcls: CodeEditorPlugin as unknown as ModuleDescriptor["cls"],
+\t\t},`,
+  crumb: `\t\t{
+\t\t\t// MOBILE_BUILD=core/git-save：笔记顶部面包屑栏（.bcn-bar），
+\t\t\t// 填掉 md editor 顶部空白（自带 block-editor-breadcrumb 被 CSS 隐藏）。
+\t\t\tid: "breadcrumb",
+\t\t\tname: "Breadcrumb Nav",
+\t\t\tsummary: "笔记顶部的面包屑（文件 › 标题 / 块层级）。",
+\t\t\tdesktopOnly: false,
+\t\t\tcls: BreadcrumbNavPlugin as unknown as ModuleDescriptor["cls"],
 \t\t},`,
   save: `\t\t{
 \t\t\t// MOBILE_BUILD=git-save：保存控制 + 版本历史（移动端快照存库内插件目录）。
@@ -129,7 +140,7 @@ export const mobileVtPlugin = makePlugin(
 
 export const mobileCorePlugin = makePlugin(
   KEEP_CORE,
-  [ENTRY.easy, ENTRY.tree, ENTRY.md, ENTRY.code],
+  [ENTRY.easy, ENTRY.tree, ENTRY.md, ENTRY.code, ENTRY.crumb],
   'mobile-core-easysync-tree-md-code',
   // core 必须保留真实 codeFileView：它注册库内 .py/.ts 等扩展名的 CodeMirror 视图，
   // stub 掉会导致打开代码文件落到 empty 占位视图。
@@ -139,7 +150,7 @@ export const mobileCorePlugin = makePlugin(
 
 export const mobileGitSavePlugin = makePlugin(
   KEEP_GIT_SAVE,
-  [ENTRY.easy, ENTRY.tree, ENTRY.md, ENTRY.code, ENTRY.save],
+  [ENTRY.easy, ENTRY.tree, ENTRY.md, ENTRY.code, ENTRY.crumb, ENTRY.save],
   'mobile-git-save-easysync-tree-code-savecontrol',
   // 与 core 同：保留真实 codeFileView（库内代码扩展名视图），Monaco 懒包改静态。
   HOST_HELPERS,

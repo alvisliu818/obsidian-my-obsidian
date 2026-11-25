@@ -81,6 +81,12 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* 顶部 padding 归零：块编辑器自带面包屑被隐藏、移动端面包屑模块曾裁掉,
+     主题给 view-content 的上 padding 裸露成顶部空白(2026-11-25 实报)。 */
+  padding: 0;
+}
+.view-content.view-content:has(> .block-editor-container) {
+  padding: 0;
 }
 .view-content > .block-editor-container {
   flex: 1 1 auto;
