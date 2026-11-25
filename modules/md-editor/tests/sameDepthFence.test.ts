@@ -94,7 +94,10 @@ describe('same-depth fences attach in-block', () => {
     expect(raws).toHaveLength(0);
     const out = serializeDocument(doc);
     expect(out).toContain('def train(): pass');
-    // The file's space indentation is preserved on save (no tab rewrite).
-    expect(out.split('\n').pop()).toBe('          ```');
+    // 原文保真(2026-11-25)：未编辑的块逐字节保留源文件缩进——fence 的
+    // 8 空格原样写回，不规范化成 canonical 的 10 空格（用户明确要求
+    // 「不动原文、真实改了什么才改什么」）。同时验证 fence 没被移到文件底部。
+    expect(out.split('\n').pop()).toBe('        ```');
+    expect(out).toBe(md); // 整文件字节级往返一致
   });
 });

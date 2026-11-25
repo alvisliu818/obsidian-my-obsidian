@@ -19,7 +19,7 @@
  * Invariant: parse(serialize(parse(x))) deep-equals parse(x)  (normalizing round-trip).
  */
 
-import { Block, Marker, MARKERS, ParsedDocument, createBlock } from '../types';
+import { Block, Marker, MARKERS, ParsedDocument, addSrcLine, blockSemanticSig, createBlock } from '../types';
 import { getTaskListMarker } from './taskMarker';
 import { normFoldKey } from './fold';
 
@@ -228,7 +228,7 @@ export function parseDocument(md: string): ParsedDocument {
   // restores the file's own endings via the crlf flag.
   const crlf = /\r/.test(md);
   const lines = (crlf ? md.replace(/\r\n?/g, '\n') : md).split('\n');
-  const doc: ParsedDocument = { frontmatter: '', pageProps: '', blocks: [] };
+  const doc: ParsedDocument = { frontmatter: '', pageProps: '', blocks: [], sourceText: md };
   if (crlf) doc.crlf = true;
   // Indentation unit: tab-evidence lines vs 2-space-evidence lines (Logseq
   // exports indent with two spaces). Majority wins; ties default to tab.
@@ -300,6 +300,7 @@ export function parseDocument(md: string): ParsedDocument {
   let lastBlock: Block | null = null; // most recent 'list' block (property / soft-line target)
   let rawBuf: string[] = [];
   let bareBuf: string[] = []; // consecutive bare lines → ONE first-level block
+  let bareSrcBuf: string[] = []; // 对应的原文行（未 trim），原文保真用
 
   const flushRaw = () => {
     while (rawBuf.length > 0 && rawBuf[rawBuf.length - 1].trim() === '') rawBuf.pop();
@@ -308,6 +309,8 @@ export function parseDocument(md: string): ParsedDocument {
     b.kind = 'raw';
     b.text = rawBuf.join('\n');
     b.parent = null;
+    // 原文保真：逐行照抄（含代码/表格里被 parser trim 掉的缩进与尾空格）。
+    for (const ln of rawBuf) addSrcLine(b, ln);
     doc.blocks.push(b);
     rawBuf = [];
   };
@@ -321,15 +324,19 @@ export function parseDocument(md: string): ParsedDocument {
     // (`TODO x`)语义上是任务项,保持列表容器(显示圆点 + 复选框)。
     if (marker === null) b.bare = true;
     b.parent = null;
+    // 原文保真：bare 行原文（未 trim）。首行可能含 TODO marker，原文照抄。
+    for (const ln of bareSrcBuf) addSrcLine(b, ln);
     doc.blocks.push(b);
     stack.length = 0;
     stack.push(b);
     lastBlock = b;
     bareBuf = [];
+    bareSrcBuf = [];
   };
 
   const appendSoftLine = (block: Block, line: string) => {
     block.text += '\n' + stripIndent(line, realDepth(block) + 1);
+    addSrcLine(block, line); // 原文保真
   };
 
   const realDepth = (b: Block): number => {
@@ -442,6 +449,7 @@ export function parseDocument(md: string): ParsedDocument {
         // In-block fence: everything until the closing fence is block text.
         const prefix = leadingWs(line);
         lastBlock.text += '\n' + stripIndent(line, realDepth(lastBlock) + 1);
+        addSrcLine(lastBlock, line); // 原文保真：fence opening
         i++;
         let closed = false;
         while (i < lines.length) {
@@ -450,11 +458,13 @@ export function parseDocument(md: string): ParsedDocument {
           // closing fence: same char run, no info string
           if (FENCE_OPEN_RE.test(cl) && cTrim.replace(/[`\s~]/g, '') === '') {
             lastBlock.text += '\n' + (cl.startsWith(prefix) ? cl.slice(prefix.length) : cTrim);
+            addSrcLine(lastBlock, cl);
             i++;
             closed = true;
             break;
           }
           lastBlock.text += '\n' + (cl.startsWith(prefix) ? cl.slice(prefix.length) : cl.trimStart());
+          addSrcLine(lastBlock, cl); // 原文保真：fence body
           i++;
         }
         // unterminated fence: swallowed to EOF — acceptable
@@ -492,11 +502,13 @@ export function parseDocument(md: string): ParsedDocument {
         // text, dedented to the block's content column.
         const mPrefix = leadingWs(line);
         lastBlock.text += '\n' + stripIndent(line, realDepth(lastBlock) + 1);
+        addSrcLine(lastBlock, line); // 原文保真：math opening
         i++;
         while (i < lines.length) {
           const cl = lines[i];
           const closed = MATH_FENCE_RE.test(cl);
           lastBlock.text += '\n' + (cl.startsWith(mPrefix) ? cl.slice(mPrefix.length) : cl.trimStart());
+          addSrcLine(lastBlock, cl); // 原文保真：math body
           i++;
           if (closed) break;
         }
@@ -525,6 +537,8 @@ export function parseDocument(md: string): ParsedDocument {
       const { text: blockText, task } = stripTaskPrefix(text);
       const b = createBlock(blockText, marker);
       if (task !== undefined) b.task = task;
+      // 原文保真：own line 逐字节照抄（缩进、`- `、尾空格全保留）。
+      addSrcLine(b, line);
       // Find parent: truncate stack to depth-1 ancestors.
       let parent: Block | null = null;
       if (depth > 0 && stack.length > 0) {
@@ -562,6 +576,7 @@ export function parseDocument(md: string): ParsedDocument {
       flushBare();
       if (lastBlock && depth >= realDepth(lastBlock) + 1) {
         lastBlock.props[propMatch[1]] = propMatch[2];
+        addSrcLine(lastBlock, line); // 原文保真：props 行照抄（缩进不被规范化）
       } else if (rawBuf.length > 0) {
         // Unindented property line closing a RAW region belongs to that block,
         // exactly like a list block's `key:: value` lines. This is how a
@@ -581,7 +596,10 @@ export function parseDocument(md: string): ParsedDocument {
         if (rawBuf.length > 0 && isFoldProperty(propMatch[1]) && isRawRegionTail(rawBuf)) {
           flushRaw();
           const raw = doc.blocks[doc.blocks.length - 1];
-          if (raw && raw.kind === 'raw') raw.props[propMatch[1]] = propMatch[2];
+          if (raw && raw.kind === 'raw') {
+            raw.props[propMatch[1]] = propMatch[2];
+            addSrcLine(raw, line); // 原文保真：raw 的 fold props 行
+          }
           i++;
           continue;
         }
@@ -590,6 +608,7 @@ export function parseDocument(md: string): ParsedDocument {
       } else if (lastBlock) {
         // Unindented property right after blocks: tolerate, attach to last block.
         lastBlock.props[propMatch[1]] = propMatch[2];
+        addSrcLine(lastBlock, line); // 原文保真
       } else {
         pagePropLines.push(line);
         doc.pageProps = pagePropLines.join('\n');
@@ -658,12 +677,22 @@ export function parseDocument(md: string): ParsedDocument {
       continue;
     }
     bareBuf.push(trimmed);
+    bareSrcBuf.push(line);
     i++;
   }
 
   flushRaw();
   flushBare();
   materializeQuoteBlankLines(doc);
+  // 原文保真：解析完成后给每个块盖语义快照。有 srcLines 且快照匹配的块
+  // 序列化时直接吐原文行；新造块（如引用间空段落）无 srcLines，自然走正常序列化。
+  const stamp = (nodes: Block[]): void => {
+    for (const b of nodes) {
+      b.srcSig = blockSemanticSig(b);
+      stamp(b.children);
+    }
+  };
+  stamp(doc.blocks);
   return doc;
 }
 
@@ -681,9 +710,11 @@ function consumeFenceBody(b: Block, lines: string[], i: number, fenceRun: string
     const fm = FENCE_OPEN_RE.exec(cl);
     if (fm && fm[2][0] === run && fm[2].length >= fenceRun.length && fm[3].trim() === '') {
       b.text += '\n' + fm[2];
+      addSrcLine(b, cl); // 原文保真：fence closing
       return i + 1;
     }
     b.text += '\n' + stripIndent(cl, depth + 1);
+    addSrcLine(b, cl); // 原文保真：fence body
     i++;
   }
   return i; // unterminated fence: swallow to EOF

@@ -49,6 +49,23 @@ export interface Block {
    * the `---` fences, never as Logseq `key:: value` lines.
    */
   frontmatter?: boolean;
+  /**
+   * 原文保真(2026-11-25)：该块在源文件中「自己拥有」的行（own line + soft
+   * lines + props lines，不含 children），逐字节照抄。解析时由 parser 填充，
+   * 序列化时若该块语义未变（srcSig 匹配）就直接吐这些原文行——缩进里的
+   * `\t  ` 空格、空列表项的 `-`（无尾空格）等都不被规范化。
+   */
+  srcLines?: string[];
+  /**
+   * 解析完成时的语义快照 text/marker/task/bare/props/kind。编辑后语义变了
+   * 就与快照不等，该块走正常序列化；未编辑块保持相等 → 用 srcLines 原文。
+   */
+  srcSig?: string;
+}
+
+/** 块的语义签名——用于判断块自解析以来是否被编辑过。 */
+export function blockSemanticSig(b: Block): string {
+  return JSON.stringify([b.kind, b.marker, b.task ?? null, !!b.bare, b.text, b.props]);
 }
 
 export interface ParsedDocument {
@@ -64,6 +81,11 @@ export interface ParsedDocument {
   indentUnit?: string;
   /** The source file ended with a newline — serialize back with one. */
   trailingNewline?: boolean;
+  /**
+   * 原文保真(2026-11-25)：打开时的原始文本（按 \n 归一，与 parse 用的 lines
+   * 同源）。序列化时未编辑的块从这份原文里按行号取回，避免规范化改写。
+   */
+  sourceText?: string;
 }
 
 /**
@@ -511,6 +533,11 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
 
 export function createBlock(text = '', marker: Marker = null): Block {
   return { kind: 'list', marker, text, props: {}, children: [], parent: null };
+}
+
+/** 记录一行原文到块的 srcLines（原文保真用）。 */
+export function addSrcLine(b: Block, line: string): void {
+  (b.srcLines ??= []).push(line);
 }
 
 /** Stable block id (Logseq `id::` property). Empty string when unassigned. */

@@ -3117,6 +3117,9 @@ ${content}`;
       if (live !== blockEditorDoc(b)) {
         const savedText = b.text;
         const savedProps = b.props;
+        const savedBare = b.bare;
+        const savedMarker = b.marker;
+        const savedTask = b.task;
         // 提交口径统一入口(2026-10-26 属性块 Enter 链):属性块形态先剥行首
         // 符号再切尾随属性段——否则保存期覆盖把 `- editor:: x` 留在 text 里,
         // 序列化写出双符号/解散属性块。普通块同口径(先切属性再剥符号)。
@@ -3126,6 +3129,12 @@ ${content}`;
         const s = this.serializeDocCurrent();
         b.text = savedText;
         b.props = savedProps;
+        // 2026-11-25 原文保真:splitEditorDocForCommit 会改 bare/marker/task,
+        // 这些参与语义签名。这里必须一并恢复,否则一次「预览保存」就把未编辑
+        // 块的签名改掉,下次序列化走规范化重写(丢原文空格/改动 - 标记)。
+        b.bare = savedBare;
+        b.marker = savedMarker;
+        b.task = savedTask;
         return s;
       }
     }

@@ -8,7 +8,49 @@
  * - Raw blocks are emitted verbatim.
  */
 
-import { Block, ParsedDocument } from '../types';
+import { Block, ParsedDocument, blockSemanticSig } from '../types';
+
+/**
+ * 判断原文行能否安全「逐字节保真」(2026-11-25)。
+ *
+ * parser 有时会对原文做语义决策，这类块必须走规范化重写，否则重解析会
+ * 丢失语义。需要排除的情形：
+ *  - task 块但原文 task 标记缺标准分隔空格（`- []todo` → 标准 `- [ ] todo`）；
+ *  - GFM task 标记大小写/内容非标准（parser 已归一到 b.task）。
+ * 其余情形（缩进风格 `\t  `、空列表项 `-`、尾随空格、deep fence 的空格数）
+ * 都是纯格式差异，保真安全。
+ */
+function srcLinesFaithful(b: Block, depth: number): boolean {
+  const src = b.srcLines;
+  if (!src || src.length === 0) return false;
+  if (b.kind === 'raw') return true; // raw 块逐字保真，parser 不改写结构
+  const first = src[0] ?? '';
+  // list 块（非 bare）：原文首行必须是 `- ` / `-`（空项）形态。
+  // `TODO buy milk` 这种被 parser 提升成 list 的裸行原文没有 `- `，
+  // 保真会让它重解析退回段落 → 必须规范化重写成 `- TODO buy milk`。
+  if (!b.bare && !/^\s*-(?:\s|$)/.test(first)) return false;
+  // 缩进深度：原文首行的缩进级别必须与块的真实 depth 一致。
+  // `\t\t- Paris` 挂在 depth 1 的块下、原文却是 2 级缩进——保真会让
+  // 重解析把它挂到错误层级。deep fence 的空格数同理。
+  const indentUnits = indentDepth(first);
+  if (indentUnits > depth) return false;
+  // task 块：原文首行必须含标准的 `[X] ` 形态，否则是 parser 归一化的
+  // 产物（`- []todo` → `- [ ] todo`），走规范化。
+  if (b.task !== undefined && !/\[.\]\s/.test(first)) return false;
+  return true;
+}
+
+/** 首行缩进折算成 depth 单位（tab=1，2 空格=1）。 */
+function indentDepth(line: string): number {
+  let units = 0;
+  let spaces = 0;
+  for (const ch of line) {
+    if (ch === '\t') { units++; spaces = 0; }
+    else if (ch === ' ') { spaces++; if (spaces === 2) { units++; spaces = 0; } }
+    else break;
+  }
+  return units;
+}
 
 export function serializeDocument(doc: ParsedDocument): string {
   // CRLF files: parse normalized the model to \n; restore the file's own
@@ -76,6 +118,24 @@ function isPropsOnlyBlock(b: Block | undefined): boolean {
 }
 
 export function serializeBlock(b: Block, depth: number, skipProps?: readonly string[], unit: string = '\t'): string {
+  // 原文保真快路径(2026-11-25)：块自解析以来没被编辑过（语义签名匹配）、
+  // 有 srcLines、且不是「跳过 props」的预览模式——直接吐原文行，包含源文件
+  // 里原本的缩进空格（`\t  ` 不被规范成 `\t\t`）、空列表项的 `-`（无尾空格）、
+  // 尾随空格等。这是「不动原文、只改真实编辑过的内容」的关键：未编辑块逐字节
+  // 保留，编辑过的块（签名变了）才走下面的规范化重写。
+  // children 仍递归——它们的原文行在各自 srcLines 里，新增/改过的子块照常重写。
+  if (
+    b.srcLines &&
+    b.srcLines.length > 0 &&
+    b.srcSig !== undefined &&
+    b.srcSig === blockSemanticSig(b) &&
+    srcLinesFaithful(b, depth) &&
+    (!skipProps || skipProps.length === 0)
+  ) {
+    const out = b.srcLines.slice();
+    for (const c of b.children) out.push(serializeBlock(c, depth + 1, skipProps, unit));
+    return out.join('\n');
+  }
   if (b.kind === 'raw') {
     // A verbatim block is emitted as-is, but it may still OWN properties —
     // the parser re-attaches a `key:: value` line written below it (see
