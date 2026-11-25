@@ -125,6 +125,12 @@ export interface BrowserSettings {
   /** DNR 网络层过滤（解析 AdGuard 扩展规则集；装了 AdGuard 才生效）。 */
   dnrEnabled: boolean;
 
+  /**
+   * 自动修复用户脚本的非法 @match 通配模式，缺省视为 true 兼容旧配置。
+   * 镜像注册到暴力猴时生效，避免新版 Chromium 因 bad Mojo 终止渲染进程。
+   */
+  autoFixScriptMatch: boolean;
+
   extensionsEnabled: boolean;
 }
 

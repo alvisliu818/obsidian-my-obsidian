@@ -31,6 +31,7 @@ import { buildEdgeStoreHelperScript, isEdgeAddonsSiteUrl } from "./extensions/ed
 import { ExtensionHost } from "./extensions/extensionHost";
 import { UserscriptHost } from "./userscripts/userscriptHost";
 import { InstallUserScriptModal } from "./userscripts/install-modal";
+import { fixIllegalMatchPatterns } from "./userscripts/parse";
 import { PopupLayer } from "./extensions/popup";
 import { evalInServiceWorker } from "./extensions/swBridge";
 import type { UserScriptRecord } from "./types";
@@ -65,6 +66,10 @@ export default class BrowserPlugin extends Plugin {
   private lastRightClickedUrl = "";
   /** URL for the next browser leaf we are about to create (native mode). */
   private pendingLeafUrl = "";
+  /** 自动修复 @match 的提醒去重（nativeId + 脚本 id，每个会话每条只提醒一次）。 */
+  private notifiedMatchFixIds = new Set<string>();
+  /** syncNativeExtensionLoads 重入保护（原生装载会回调 onChange 再触发同步）。 */
+  private syncingExtensions = false;
 
   /** Plugin base class owns `settings`; this is our own accessor. */
   get config(): BrowserSettings {
@@ -329,7 +334,14 @@ export default class BrowserPlugin extends Plugin {
       (r) => r.enabled && r.nativeId && /violentmonkey|暴力猴/i.test(r.name),
     );
     if (!vm?.nativeId) return;
-    const matches = record.matches.length ? record.matches : ["*://*/*"];
+    const rawMatches = record.matches.length ? record.matches : ["*://*/*"];
+    // 思源 2026-11-25 bad Mojo 修复：非法 @match（*://**/*）注册前收敛为
+    // 合法写法，避免新版 Chromium 判定扩展越权后 native 终止渲染进程。
+    const fixed =
+      this.config.autoFixScriptMatch !== false
+        ? fixIllegalMatchPatterns(rawMatches)
+        : { patterns: rawMatches, changed: false };
+    const matches = fixed.patterns;
     const payload = {
       id: "ob-install-" + record.id,
       matches,
@@ -343,16 +355,46 @@ export default class BrowserPlugin extends Plugin {
       inner +
       "], (v) => res(!chrome.runtime.lastError)));";
     const r = await evalInServiceWorker(vm.nativeId, expr);
-    if (r.ok) new Notice("已同步到暴力猴脚本面板");
-    else console.warn("[obsidian-browser] VM mirror failed:", r.err);
+    if (r.ok) {
+      new Notice("已同步到暴力猴脚本面板");
+      if (fixed.changed) this.notifyMatchFix("mirror:" + record.id);
+    } else console.warn("[obsidian-browser] VM mirror failed:", r.err);
   }
 
-  /** 扩展启用/安装后：尝试原生 loadExtension 装进浏览器分区（TM/VM 协作的前提）。 */
-  private syncNativeExtensionLoads(): void {
-    const partition = this.config.partition || "persist:obsidian-browser";
-    this.extHost.lastPartition = partition;
-    for (const rec of this.store.data.extensions) {
-      if (rec.enabled && !rec.nativeId) void this.extHost.loadNative(rec, partition);
+  /** 自动修复提醒：每个脚本/注册项每个会话只提醒一次（对齐思源 onFix 去重）。 */
+  private notifyMatchFix(key: string): void {
+    if (this.notifiedMatchFixIds.has(key)) return;
+    this.notifiedMatchFixIds.add(key);
+    new Notice(
+      "已自动修复用户脚本的非法匹配模式（如 *://**/*），避免页面进程崩溃；建议修改脚本源码彻底解决。",
+      8000,
+    );
+  }
+
+  /** 读回 SW 垫片的修复日志（油猴面板里自行注册的脚本也覆盖）。 */
+  private async checkScriptMatchFixes(): Promise<void> {
+    for (const key of await this.extHost.collectMatchFixLogs()) this.notifyMatchFix(key);
+  }
+
+  /**
+   * 扩展启用/安装后：先做原生加固（清单 marker + SW 垫片），再尝试
+   * loadExtension 装进浏览器分区（TM/VM 协作的前提）。
+   */
+  private async syncNativeExtensionLoads(): Promise<void> {
+    if (this.syncingExtensions) return;
+    this.syncingExtensions = true;
+    try {
+      const partition = this.config.partition || "persist:obsidian-browser";
+      this.extHost.lastPartition = partition;
+      await this.extHost.prepareNativeExtensions(partition, this.config.autoFixScriptMatch !== false);
+      const loads: Promise<boolean>[] = [];
+      for (const rec of this.store.data.extensions) {
+        if (rec.enabled && !rec.nativeId) loads.push(this.extHost.loadNative(rec, partition));
+      }
+      await Promise.allSettled(loads);
+      void this.checkScriptMatchFixes();
+    } finally {
+      this.syncingExtensions = false;
     }
   }
 

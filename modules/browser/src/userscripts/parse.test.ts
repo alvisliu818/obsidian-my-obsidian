@@ -3,7 +3,7 @@
  * parse.ts 全部为纯函数——直接测语义,无需 Obsidian 环境。
  */
 import { describe, expect, it } from "vitest";
-import { parseUserScript, userScriptMatches } from "./parse";
+import { fixIllegalMatchPattern, fixIllegalMatchPatterns, parseUserScript, userScriptMatches } from "./parse";
 
 describe("parseUserScript", () => {
   it("解析标准 ==UserScript== 头", () => {
@@ -111,5 +111,23 @@ describe("userScriptMatches", () => {
     expect(
       userScriptMatches(["https://example.com/*"], ["https://example.com/private/*"], "https://example.com/private/x"),
     ).toBe(false);
+  });
+});
+
+describe("fixIllegalMatchPatterns", () => {
+  it("非法通配 *://**/* 收敛为合法的 *://*/*", () => {
+    expect(fixIllegalMatchPattern("*://**/*")).toBe("*://*/*");
+    expect(fixIllegalMatchPattern("*://**.example.com/*")).toBe("*://*.example.com/*");
+  });
+
+  it("合法模式不变，批量结果带是否改写标记", () => {
+    expect(fixIllegalMatchPatterns(["*://*/*", "https://example.com/*"])).toEqual({
+      patterns: ["*://*/*", "https://example.com/*"],
+      changed: false,
+    });
+    expect(fixIllegalMatchPatterns(["*://*/*", "*://**/*"])).toEqual({
+      patterns: ["*://*/*", "*://*/*"],
+      changed: true,
+    });
   });
 });

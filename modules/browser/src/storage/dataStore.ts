@@ -14,6 +14,8 @@ export class DataStore {
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private listeners = new Set<() => void>();
   private pending: Promise<void> | null = null;
+  /** 上次落盘快照：内容未变（如只改了会话级 nativeId）时不再写盘。 */
+  private lastSaved = "";
 
   constructor(private plugin: Plugin) {
     this.data = JSON.parse(JSON.stringify(DEFAULT_DATA)) as PluginData;
@@ -28,12 +30,24 @@ export class DataStore {
       if (Array.isArray(raw.history)) merged.history = raw.history;
       if (Array.isArray(raw.downloads)) merged.downloads = raw.downloads;
       if (Array.isArray(raw.extensions)) merged.extensions = raw.extensions;
+      // nativeId 是会话级字段（扩展 session 重建/插件 reload 都会变）：
+      // 不参与持久化，否则重启后拿着旧 id 以为"已加载"，暴力猴等扩展再也不会
+      // 被重新 loadExtension（思源 2026-11-25 electronId 自激循环同款根治）。
+      for (const ext of merged.extensions) delete ext.nativeId;
       if (Array.isArray(raw.userscripts)) merged.userscripts = raw.userscripts;
       if (Array.isArray(raw.session)) merged.session = raw.session;
       if (raw.annPages && typeof raw.annPages === "object") merged.annPages = raw.annPages;
     }
     this.data = merged;
+    this.lastSaved = JSON.stringify(this.snapshot());
     this.notify();
+  }
+
+  /** 落盘快照：nativeId 是会话级字段，不写盘。 */
+  private snapshot(): PluginData {
+    const out = JSON.parse(JSON.stringify(this.data)) as PluginData;
+    for (const ext of out.extensions) delete ext.nativeId;
+    return out;
   }
 
   onChange(fn: () => void): () => void {
@@ -63,10 +77,17 @@ export class DataStore {
 
   saveNow(): Promise<void> {
     if (this.pending) return this.pending;
-    const snapshot = JSON.parse(JSON.stringify(this.data)) as PluginData;
+    const snapshot = this.snapshot();
+    const text = JSON.stringify(snapshot);
+    if (text === this.lastSaved) return Promise.resolve();
+    const previous = this.lastSaved;
+    this.lastSaved = text;
     this.pending = this.plugin
       .saveData(snapshot)
-      .catch((e) => console.error("[obsidian-browser] saveData failed", e))
+      .catch((e) => {
+        this.lastSaved = previous;
+        console.error("[obsidian-browser] saveData failed", e);
+      })
       .finally(() => {
         this.pending = null;
       });

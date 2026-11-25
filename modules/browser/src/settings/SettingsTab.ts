@@ -465,7 +465,21 @@ export class BrowserSettingTab extends PluginSettingTab {
   }
 
   private renderUserscripts(containerEl: HTMLElement): void {
+    const s = this.host.settings;
     new Setting(containerEl).setName("用户脚本").setHeading();
+
+    new Setting(containerEl)
+      .setName("自动修复脚本匹配模式")
+      .setDesc(
+        "部分油猴脚本使用非法的 @match 通配符（如 *://**/*），新版 Chromium 会判定扩展越权并直接终止页面进程。" +
+          "开启后在注册到脚本管理器时自动替换为合法写法（*://*/*）并提醒；即时生效。",
+      )
+      .addToggle((t) =>
+        t.setValue(s.autoFixScriptMatch !== false).onChange((v) => {
+          s.autoFixScriptMatch = v;
+          this.host.save();
+        }),
+      );
 
     new Setting(containerEl)
       .setName("从 URL 安装")

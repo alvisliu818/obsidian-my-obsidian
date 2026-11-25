@@ -6,6 +6,14 @@ import { nodeRequire, sessionFromPartition, vaultBasePath } from "../utils/elect
 import { extractExtensionArchive } from "./crx";
 import { downloadEdgeCrx, fetchEdgeAddonMeta, parseEdgeAddonId } from "./edgeStore";
 import { buildShimSource } from "./cs-runtime";
+import {
+  EVENT_MARKER_FILE,
+  EVENT_MARKER_SOURCE,
+  backgroundShimSource,
+  needsBackgroundShim,
+  stripBackgroundShim,
+} from "./backgroundShim";
+import { evalInServiceWorker } from "./swBridge";
 
 interface RawManifest {
   name?: string;
@@ -94,6 +102,10 @@ export class ExtensionHost {
     }
 
     const rec = this.recordFromManifest(manifest, dir);
+    // 对齐思源：原生加载的扩展不再让 Chromium 自带 CS 副本与宿主注入竞争；
+    // userScripts 类扩展保留一行空 marker 完成事件授权登记。rec.contentScripts
+    // 仍来自安装时的原始 manifest，宿主注入不受影响。
+    this.neutralizeManifest(target);
     this.upsert(rec);
     return rec;
   }
@@ -219,6 +231,119 @@ export class ExtensionHost {
     return rec.nativeId || rec.id;
   }
 
+  // ---------------- 原生加载加固（2026-11-25 bad Mojo 三修） ----------------
+
+  /**
+   * 原生扩展清单收敛（对齐思源 neutralizeNativeContentScripts）。
+   *
+   * Chromium 会把 manifest 的 content_scripts 在原生 isolated world 再注入一份，
+   * 与宿主自己的注入竞争（旧副本还会因无授权事件触发 bad Mojo）。这里清空普通
+   * 扩展的 CS；带 userScripts 权限的扩展改为一行空 marker（<all_urls>,
+   * all_frames）完成 ScriptInjectionTracker 授权登记。宿主侧记录仍来自安装时的
+   * 原始 manifest，注入行为不变。备份为 manifest.orig.json，幂等。
+   */
+  private neutralizeManifest(dir: string): boolean {
+    if (!this.available) return false;
+    try {
+      const manifestPath = this.pathMod.join(dir, "manifest.json");
+      const manifest = JSON.parse(this.fs.readFileSync(manifestPath, "utf8"));
+      const perms: string[] = Array.isArray(manifest.permissions) ? manifest.permissions : [];
+      let desired: any[];
+      if (perms.includes("userScripts")) {
+        const markerAbs = this.pathMod.join(dir, EVENT_MARKER_FILE);
+        let markerOk = false;
+        try {
+          markerOk = this.fs.readFileSync(markerAbs, "utf8") === EVENT_MARKER_SOURCE;
+        } catch { /* 不存在 */ }
+        if (!markerOk) this.fs.writeFileSync(markerAbs, EVENT_MARKER_SOURCE, "utf8");
+        desired = [
+          { matches: ["<all_urls>"], js: [EVENT_MARKER_FILE], run_at: "document_start", all_frames: true },
+        ];
+      } else {
+        desired = [];
+      }
+      if (JSON.stringify(manifest.content_scripts ?? []) === JSON.stringify(desired)) return false;
+      const origPath = this.pathMod.join(dir, "manifest.orig.json");
+      if (!this.fs.existsSync(origPath)) {
+        this.fs.writeFileSync(origPath, JSON.stringify(manifest, null, 2), "utf8");
+      }
+      manifest.content_scripts = desired;
+      this.fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+      return true;
+    } catch (e) {
+      console.warn("[obsidian-browser] neutralizeManifest failed:", e);
+      return false;
+    }
+  }
+
+  /**
+   * 启动/启用扩展前的前置准备：清单收敛 + SW 垫片落盘（幂等，内容哈希换版）。
+   * 有变更时卸掉会话里的原生扩展并清 SW 缓存，让 Chromium 重新从磁盘注册，
+   * 否则会继续执行旧的 service worker 脚本。
+   */
+  async prepareNativeExtensions(partition: string, autoFixScriptMatch: boolean): Promise<boolean> {
+    if (!this.available) return false;
+    const shim = backgroundShimSource(autoFixScriptMatch);
+    const markLine = shim.slice(0, shim.indexOf("\n"));
+    let changed = false;
+    for (const rec of this.getRecords()) {
+      if (!rec.enabled) continue;
+      const dir = this.dirOf(rec);
+      try {
+        if (this.neutralizeManifest(dir)) changed = true;
+        const manifest = JSON.parse(this.fs.readFileSync(this.pathMod.join(dir, "manifest.json"), "utf8"));
+        const sw = manifest.background?.service_worker;
+        if (!sw) continue;
+        const abs = this.pathMod.join(dir, String(sw).replace(/^\/+/, ""));
+        const src = this.fs.readFileSync(abs, "utf8");
+        if (!needsBackgroundShim(src) || src.startsWith(markLine)) continue;
+        this.fs.writeFileSync(abs, shim + stripBackgroundShim(src), "utf8");
+        changed = true;
+      } catch (e) {
+        console.warn("[obsidian-browser] prepareNativeExtensions failed for " + rec.name, e);
+      }
+    }
+    if (changed) await this.clearNativeRuntime(partition);
+    return changed;
+  }
+
+  private async clearNativeRuntime(partition: string): Promise<void> {
+    const ses = sessionFromPartition(partition);
+    if (ses) {
+      try {
+        const all = typeof ses.getAllExtensions === "function" ? ses.getAllExtensions() : [];
+        for (const x of all) {
+          try {
+            if (typeof ses.removeExtension === "function") ses.removeExtension(String(x?.id ?? ""));
+            else if (typeof ses.unloadExtension === "function") ses.unloadExtension(String(x?.id ?? ""));
+          } catch { /* 已卸载 */ }
+        }
+      } catch { /* 无枚举能力 */ }
+      try {
+        await ses.clearStorageData?.({ storages: ["serviceworkers"] });
+      } catch { /* 无权限 */ }
+    }
+    // nativeId 是会话级字段：卸掉后必须一起清掉，否则 sync 不会重新装载。
+    for (const rec of this.getRecords()) rec.nativeId = undefined;
+  }
+
+  /** 从各扩展 SW 取回垫片记录的非法 @match 修复 id（带扩展 id 前缀，宿主去重提醒）。 */
+  async collectMatchFixLogs(): Promise<string[]> {
+    const out: string[] = [];
+    for (const rec of this.getRecords()) {
+      if (!rec.enabled || !rec.nativeId) continue;
+      try {
+        const r = await evalInServiceWorker(rec.nativeId, "JSON.stringify(self.__obUsFixLog || [])");
+        if (!r.ok || typeof r.value !== "string") continue;
+        const ids: unknown = JSON.parse(r.value);
+        if (Array.isArray(ids)) {
+          for (const id of ids) if (typeof id === "string") out.push(rec.nativeId + ":" + id);
+        }
+      } catch { /* 提醒失败不影响注入 */ }
+    }
+    return out;
+  }
+
   get lastPartition(): string {
     return this._lastPartition;
   }
@@ -258,11 +383,21 @@ export class ExtensionHost {
         }
         const js = this.readAll(rec, cs.js).filter(Boolean);
         if (js.length) {
-          const code = this.shimFor(rec) + "\n" + js.join(";\n");
+          // DOMContentLoaded 补发：只在脚本执行窗口内捕获回调，绝不派发到共享 DOM
+          // （思源 2026-11-25 知乎白屏根因；详见 cs-runtime.ts buildShimSource）。
+          const code =
+            this.shimFor(rec) +
+            "\ntry{window.__obBeginDomReadyCapture&&window.__obBeginDomReadyCapture();\n" +
+            js.join(";\n") +
+            "\n}finally{window.__obEndDomReadyCapture&&window.__obEndDomReadyCapture();}";
           void webview.executeJavaScript(code, false).catch(() => undefined);
         }
       }
     }
+    // 所有晚注入脚本执行完后再补发；早注入的监听器由原生 DOMContentLoaded 触发，不重复。
+    void webview
+      .executeJavaScript("window.__obFireDomReady&&window.__obFireDomReady()", false)
+      .catch(() => undefined);
   }
 
   /** The chrome.* shim source for this extension (popups and content scripts). */

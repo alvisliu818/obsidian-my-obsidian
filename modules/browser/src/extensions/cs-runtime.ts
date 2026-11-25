@@ -14,6 +14,40 @@ export function buildShimSource(extId: string, baseUrl: string): string {
   var ID = ${JSON.stringify(extId)};
   var BASE = ${JSON.stringify(baseUrl)};
   var PREFIX = "obext:" + ID + ":";
+  // DOMContentLoaded 安全补发（对齐思源 2026-11-25 知乎白屏修复）。
+  // ★ 绝不能在共享 document 上派发合成 DOMContentLoaded 事件：隔离世界
+  //   与主世界共享同一个 DOM，合成事件也会命中站点脚本（知乎 React 引导二次
+  //   初始化 → statsc 重复安装 + createElement 守卫递归 → 先显示后白屏）。
+  //   这里只在宿主注入内容脚本的窗口期内临时拦截 addEventListener，把晚注入
+  //   脚本登记的回调收进本插件数组，补发时直接调用回调，事件不落到共享 DOM。
+  //   立即恢复原函数，站点脚本的监听器完全不受影响。
+  var __obDomReadyCbs = [];
+  var __obCaptureOriginal = null;
+  window.__obBeginDomReadyCapture = function () {
+    if (__obCaptureOriginal) return;
+    if (document.readyState === "loading") return; // 原生事件还没来，让它正常触发
+    __obCaptureOriginal = document.addEventListener;
+    document.addEventListener = function (type, fn, opts) {
+      if (type === "DOMContentLoaded" && typeof fn === "function") __obDomReadyCbs.push(fn);
+      return __obCaptureOriginal.call(document, type, fn, opts);
+    };
+  };
+  window.__obEndDomReadyCapture = function () {
+    if (!__obCaptureOriginal) return;
+    document.addEventListener = __obCaptureOriginal;
+    __obCaptureOriginal = null;
+  };
+  window.__obFireDomReady = function () {
+    if (document.readyState === "loading") return "loading";
+    if (self.__obDomReadyDispatched) return "already";
+    self.__obDomReadyDispatched = true;
+    var ev;
+    try { ev = new Event("DOMContentLoaded"); } catch (e) { ev = { type: "DOMContentLoaded", target: document }; }
+    for (var i = 0; i < __obDomReadyCbs.length; i++) {
+      try { __obDomReadyCbs[i].call(document, ev); } catch (e) {}
+    }
+    return "fired:" + __obDomReadyCbs.length;
+  };
   var listeners = [];
   var bus = {
     addListener: function (fn) { listeners.push(fn); },

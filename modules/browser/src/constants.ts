@@ -87,6 +87,9 @@ export const DEFAULT_SETTINGS: BrowserSettings = {
 
   dnrEnabled: true,
 
+  /** 非法 @match（TLD 段写成双星号的通配）注册前改为合法写法，防 Chromium bad Mojo 崩溃 */
+  autoFixScriptMatch: true,
+
   extensionsEnabled: true,
 };
 

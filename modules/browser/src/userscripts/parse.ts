@@ -123,3 +123,26 @@ function patternToRegExp(pattern: string): RegExp {
 	}
 	return new RegExp(`^${globPart(pattern)}$`, "i");
 }
+
+/**
+ * 非法 match pattern 自动修复（思源 2026-11-25 bad Mojo 闪退修复同款）。
+ *
+ * 新版 Chromium 的 EventRouter 会校验扩展事件 ID / userScripts.register 的
+ * 模式；TLD 段写成双星号的这类写法属于非法模式，实测
+ * 会让渲染进程被 native 层终止（bad Mojo message, reason 123，try/catch 拦不住）。
+ * 注册前统一收敛为单星通配写法，保留脚本源码不动，另由调用方提示用户。
+ */
+export function fixIllegalMatchPattern(pattern: string): string {
+	return pattern.replace(/\*:\/\/\*\*/g, "*://*");
+}
+
+/** 批量修复；changed 表示是否至少有一条被改写（用于去重提醒）。 */
+export function fixIllegalMatchPatterns(patterns: string[]): { patterns: string[]; changed: boolean } {
+	let changed = false;
+	const out = patterns.map((p) => {
+		const q = fixIllegalMatchPattern(p);
+		if (q !== p) changed = true;
+		return q;
+	});
+	return { patterns: out, changed };
+}

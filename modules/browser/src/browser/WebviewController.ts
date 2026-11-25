@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NEW_TAB_DEDUP_WINDOW } from "../constants";
 import type { BrowserSettings, IWebviewTag, WebViewContextMenuParams } from "../types";
-import { webContentsFromId } from "../utils/electron";
+import { sessionFromPartition, webContentsFromId } from "../utils/electron";
 import { escapeHtml } from "../utils/dom";
 import { parseEdgeInstallNavigation } from "../extensions/edgeStore";
 
@@ -604,17 +604,41 @@ export class WebviewController {
 
   // ---------------- favicon ----------------
 
-  /** Fetch inside the page: the host realm is often blocked from remote images. */
+  /**
+   * 兜底 favicon → data URL（思源 2026-11-25 知乎闪退修复同款）。
+   *
+   * ★ 绝不能回到「guest 页内 fetch + FileReader + executeJavaScript 回传」
+   *   的写法：Electron 44 / Chromium 152 上实测真实页内异步网络请求完成后
+   *   跨进程回传会让整个宿主进程静默崩溃（无 WER / 无 JS 退出记录）。
+   *   宿主 session.fetch 走浏览器进程网络栈，不经过 guest 页面，仍带分区
+   *   UA/代理语义；page-favicon-updated 与 /favicon.ico 兜底共用此路径。
+   */
   private async loadFaviconAsDataUrl(url: string): Promise<string> {
     if (!/^https?:/i.test(url)) return "";
-    const code =
-      `(async()=>{try{const r=await fetch(${JSON.stringify(url)},{mode:"cors",credentials:"omit"});` +
-      `if(!r.ok)return "";const b=await r.blob();if(!b.size)return "";` +
-      `return await new Promise((res)=>{const fr=new FileReader();fr.onload=()=>res(String(fr.result));` +
-      `fr.onerror=()=>res("");fr.readAsDataURL(b);});}catch(e){return "";}})()`;
     try {
-      const out = await this.webview.executeJavaScript<string>(code, false);
-      return typeof out === "string" ? out : "";
+      let ses: any = null;
+      try {
+        ses = webContentsFromId(this.webviewId())?.session ?? null;
+      } catch { /* guest 已销毁 */ }
+      if (!ses?.fetch) {
+        ses = sessionFromPartition(this.getSettings().partition || "persist:obsidian-browser");
+      }
+      if (!ses?.fetch) return "";
+      const resp = await Promise.race([
+        ses.fetch(url, { credentials: "omit" }) as Promise<any>,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+      ]);
+      if (!resp?.ok) return "";
+      const buf = new Uint8Array(await resp.arrayBuffer());
+      if (!buf.length || buf.length > 512 * 1024) return "";
+      let binary = "";
+      const chunk = 0x8000;
+      for (let i = 0; i < buf.length; i += chunk) {
+        binary += String.fromCharCode.apply(null, Array.from(buf.subarray(i, i + chunk)) as any);
+      }
+      const mime =
+        String(resp.headers?.get?.("content-type") || "image/x-icon").split(";")[0].trim() || "image/x-icon";
+      return "data:" + mime + ";base64," + btoa(binary);
     } catch {
       return "";
     }
