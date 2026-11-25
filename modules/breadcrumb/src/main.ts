@@ -32,7 +32,8 @@ const TAG_CACHE_TTL = 10000;
  *  __lgFocusBlocks（块对象链，与文字一一对应）上；__lgRoots 是当前缩放层级的
  *  根块列表（空路径时下一级菜单用），__lgTopBlocks 是文档顶层块（第 0 级的
  *  同级菜单用）。 */
-const LOGSEQ_VIEW_TYPE = "logseq-block-editor";
+// MD Editor 的 viewType（2026-11-25 由 logseq-block-editor 改名）。
+const LOGSEQ_VIEW_TYPE = "md-editor";
 /** obsidian-logseq 打开库外 markdown 的外壳视图（虚拟文档树点击 md 走的正是它）。
  *  它自己没有 file，真正的块编辑器托管在 blockEditor 里。 */
 const LOGSEQ_EXTERNAL_VIEW_TYPE = "logseq-external-block";

@@ -77,7 +77,12 @@ import { relativeDisplayPath } from '../features/codeFileKind';
 import { setLeafTitle } from '../features/leafTitle';
 import { toObsidianMath } from '../features/latexSource';
 
-export const VIEW_TYPE_BLOCK_EDITOR = 'logseq-block-editor';
+/**
+ * MD Editor 的 viewType。2026-11-25 由 `logseq-block-editor` 改名为 `md-editor`
+ * （与模块 id 对齐）。旧 viewType 不再注册——升级后历史标签页会变空白一次，
+ * 关掉重开即用新类型（用户确认接受）。
+ */
+export const VIEW_TYPE_BLOCK_EDITOR = 'md-editor';
 
 
 /** Targeted mutation: which DOM regions to rebuild (computed after fn runs). */

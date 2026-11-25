@@ -26,16 +26,16 @@ import {
 export type CursorPos = number | 'start' | 'end';
 
 /**
- * 活预览的符号可见性(用户指定,2026-10-25,参考 Obsidian 原生编辑器):
- * 符号长度**每帧按文档实测**(内容编辑后符号段不变,但删符号/改符号时
- * 长度变——固定位置会错位)。
+ * 活预览的符号可见性(2026-11-25 改为「尊重原文、始终显示 - 」):
  *
- * 一套渲染器(用户指定,2026-10-26):圆点只由**静态 .block-bullet 元素**
- * 绘制——阅读态/编辑态是同一个元素、同一条 CSS,零跳动。光标不在符号区
- * 时编辑器把 `- `[TODO ] 段零宽隐藏(圆点交给控件列里的静态元素);光标
- * 钻进符号区(现形态)时撤掉隐藏让符号以文本现形,同时给 wrap 挂
- * lg-no-symbol(圆点退场+内容拉进圆点列,段落几何)。装饰范围进
- * atomicRanges(光标/方向键整体越过,不落进隐藏段内部)。
+ * 旧行为(2026-10-25/26,用户当时指定):光标不在符号区时把 `- `[TODO ]
+ * 零宽隐藏、改由控件列静态 .block-bullet 画圆点;光标钻进符号区才现形。
+ * 新要求:编辑态直接显示源文件里的 `- ` 原文(参考 silverbullet 的
+ * 「文档即原文、所见即所存」)——符号段不再零宽隐藏,圆点退场,符号
+ * 像普通文本一样可编辑。CM 文档(blockEditorDoc)本来就含 `- `,提交
+ * 时 applyEditorMarker 会解析回来,所以显示改动不影响保存语义。
+ *
+ * 符号长度仍每帧按文档实测(删符号/改符号时长度变)。
  */
 /** 文档行首符号段实测长度(无符号返回 0)。 */
 function docMarkerLen(view: EditorView): number {
@@ -48,22 +48,17 @@ function docMarkerLen(view: EditorView): number {
 
 type MarkerState = { mlen: number; raw: boolean };
 
-/** 符号段状态:mlen>0 且光标「钻进」符号区 = 现形(文本态)。 */
-const markerState = (view: EditorView, prevHead: number | null, keyboardNav: boolean): MarkerState => {
+/**
+ * 符号段状态(2026-11-25 起):有符号就始终「现形」——原文 `- `[TODO ] 以
+ * 真实文本显示、可编辑，圆点退场。尊重原文，所见即所存。
+ */
+const markerState = (view: EditorView, _prevHead: number | null, _keyboardNav: boolean): MarkerState => {
   const mlen = docMarkerLen(view);
-  const head = view.state.selection.main.head;
-  // 现形判定(用户指定,2026-10-25):
-  //  - 光标**钻进符号内部**(head < mlen)→ 现形;
-  //  - 光标用**方向键**从内容左移到符号后(head === mlen 且上一位置 > mlen)
-  //    → 现形;
-  //  - 鼠标点击符号后 / 新建空块落点 / 打字位 → 圆点保持。
-  const raw =
-    mlen > 0 && (head < mlen || (head === mlen && prevHead !== null && prevHead > mlen && keyboardNav));
-  return { mlen, raw };
+  return { mlen, raw: mlen > 0 };
 };
 
-const markerDecorations = (st: MarkerState): DecorationSet =>
-  st.raw || st.mlen <= 0 ? Decoration.none : Decoration.set([Decoration.replace({}).range(0, st.mlen)]);
+// 符号段始终显示原文 → 永不零宽隐藏（保留函数以维持插件结构）。
+const markerDecorations = (_st: MarkerState): DecorationSet => Decoration.none;
 
 const liveBulletDecorations = (wrap: HTMLElement | null) => {
   // 方向键导航标记:只有键盘移动进符号区才现形(鼠标点击保持圆点)

@@ -788,7 +788,7 @@ export class MountPanelView extends ItemView {
     const ws = this.app.workspace;
     // 普通文件视图（含原生图片/PDF/音频）也列进来：侧栏抢焦点后要靠
     // activeTime 把它们找回来。
-    const types = ['markdown', 'image', 'video', 'audio', 'pdf', 'logseq-block-editor', ...EXTERNAL_ABS_VIEW_TYPES];
+    const types = ['markdown', 'image', 'video', 'audio', 'pdf', 'md-editor', ...EXTERNAL_ABS_VIEW_TYPES];
     const leaves = types.flatMap((t) => ws.getLeavesOfType(t));
     return (
       leaves.sort(
