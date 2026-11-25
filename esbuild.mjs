@@ -753,6 +753,12 @@ const context = await esbuild.context({
     ),
     __ANN_SCRIPT_SOURCE__: JSON.stringify(ANN_SCRIPT_SOURCE),
     __ANN_POPUP_HTML__: JSON.stringify(ANN_POPUP_HTML),
+    // 移动端/BRAT：monaco.css 没有随插件文件落盘时仍要能注入样式。BRAT 只
+    // 下载 main.js / manifest.json / styles.css 三件散文件，附属的 monaco.css
+    // 不会被安装；构建期把原文烧进 bundle 作为兜底（桌面构建不注入，节省体积）。
+    ...(isMobileBuild
+      ? { __MONACO_CSS_INLINE__: JSON.stringify(readFileSync("modules/md-editor/monaco.css", "utf8")) }
+      : {}),
   },
   format: "cjs",
   target: "es2021",

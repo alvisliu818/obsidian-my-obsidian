@@ -292,6 +292,15 @@ export function setupMonaco(plugin: MonacoPluginHost): void {
   if (!getActiveThemeName()) applyTheme(getCurrentMode());
 }
 
+/**
+ * 移动端/BRAT 的内联兜底：MOBILE_BUILD 在构建期把 monaco.css 原文烧进 bundle
+ * （esbuild define `__MONACO_CSS_INLINE__`）。BRAT 只下载 main.js/manifest/
+ * styles.css，monaco-workers 与 monaco.css 这类附属文件不会随安装落盘——
+ * 没有这个兜底，Monaco 会裸奔（.view-line 无样式）。桌面构建不注入此 define，
+ * 仍按文件读取（换 monaco.css 无需重新注入）。
+ */
+declare const __MONACO_CSS_INLINE__: string | undefined;
+
 /** monaco.css 注入(只一次):读内容 → <style> 内联,绕开 CSP 的 style-src。 */
 function injectMonacoCss(plugin: MonacoPluginHost, vaultRelPath: string): void {
   if (cssInjectStarted || document.getElementById('logseq-monaco-css')) {
@@ -299,18 +308,24 @@ function injectMonacoCss(plugin: MonacoPluginHost, vaultRelPath: string): void {
     return;
   }
   cssInjectStarted = true;
+  const inlineCss = typeof __MONACO_CSS_INLINE__ === "string" ? __MONACO_CSS_INLINE__ : "";
   void (async () => {
+    let css = "";
     try {
-      const css = await plugin.app.vault.adapter.read(vaultRelPath);
-      if (document.getElementById('logseq-monaco-css')) return;
-      const style = document.createElement('style');
-      style.id = 'logseq-monaco-css';
-      style.textContent = css;
-      document.head.appendChild(style);
+      css = await plugin.app.vault.adapter.read(vaultRelPath);
     } catch (e) {
-      console.warn('[obsidian-logseq] 注入 monaco.css 失败:', e);
-      cssInjectStarted = false; // 失败允许后续重试
+      if (!inlineCss) {
+        console.warn('[obsidian-logseq] 注入 monaco.css 失败:', e);
+        cssInjectStarted = false; // 失败允许后续重试
+        return;
+      }
+      css = inlineCss;
     }
+    if (document.getElementById('logseq-monaco-css')) return;
+    const style = document.createElement('style');
+    style.id = 'logseq-monaco-css';
+    style.textContent = css;
+    document.head.appendChild(style);
   })();
 }
 
