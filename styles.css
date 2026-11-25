@@ -4125,6 +4125,13 @@ body.lgp-table-editor-cw-cursor * {
 .logseq-mount-row:hover {
   background-color: var(--nav-item-background-hover, var(--background-modifier-hover));
 }
+/* 选中行（左键点击 / 右键菜单）：与原生文件浏览器的 is-active 同款底色，
+   必须排在 hover 之后，选中态优先于悬停。虚拟重绘时由 applySelected 重上。 */
+.logseq-mount-head.is-selected,
+.logseq-mount-row.is-selected {
+  background-color: var(--nav-item-background-active, var(--background-modifier-active-hover));
+  color: var(--nav-item-color-active, var(--text-normal));
+}
 .logseq-mount-head {
   font-weight: var(--font-semibold);
 }

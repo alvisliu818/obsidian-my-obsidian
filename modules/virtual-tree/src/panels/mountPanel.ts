@@ -212,6 +212,8 @@ export class MountPanelView extends ItemView {
   /** 定位高亮目标：画笔时点应用——虚拟重绘会反复重建行元素,当场加类随旧
    * 元素一起丢弃;按时间戳在窗口内每次 paint 重上,平滑滚动也不丢。 */
   private revealGlow: { mountId: string; rel: string; until: number } | null = null;
+  /** 选中行（左键点击或右键菜单的行）：虚拟重绘时按它重新上高亮。 */
+  private selectedRow: { mountId: string; rel: string } | null = null;
   /** The ancestor that actually scrolls the panel (usually `.view-content`). */
   private scrollEl: HTMLElement | null = null;
   /** 工具栏配置(注册表 + 设置,见 features/panelToolbar.ts;渲染时懒读设置) */
@@ -1504,6 +1506,7 @@ export class MountPanelView extends ItemView {
     // 的定位按挂载匹配后 rel 为 ''，正落在头行上。
     head.dataset.mount = mount.id;
     head.dataset.rel = '';
+    this.applySelected(head, mount.id, '');
     const glow = this.revealGlow;
     if (glow && mount.id === glow.mountId && glow.rel === '' && Date.now() < glow.until) {
       head.addClass('is-reveal-row');
@@ -1527,6 +1530,8 @@ export class MountPanelView extends ItemView {
       head.createSpan({ cls: 'logseq-mount-flag is-pinned', text: '已固定' });
     }
     head.addEventListener('click', (ev) => {
+      // 选中反馈先于动作：文件头点击会直接打开文件，不重绘面板。
+      this.markSelected(head);
       // 挂载文件的名字 = **打开文件**，与名下有没有子项无关（2026-11-24 用户
       // 实报：点顶部挂载的 !.md 名字只展开了）。文件根的展开/收起只走 caret
       // （有真子项时才给 caret）；文件夹挂载照旧点头行展开/收起。
@@ -1687,6 +1692,7 @@ export class MountPanelView extends ItemView {
     // 行身份 = 嵌套挂载自己的 id + 空 rel(头行);定位选择器靠它唯一。
     row.dataset.mount = mount.id;
     row.dataset.rel = '';
+    this.applySelected(row, mount.id, '');
     // 定位高亮（画笔时点,同 renderNode）：定位到挂载根时头行也要带光。
     const glow = this.revealGlow;
     if (glow && mount.id === glow.mountId && glow.rel === '' && Date.now() < glow.until) {
@@ -1722,6 +1728,7 @@ export class MountPanelView extends ItemView {
     row.setAttribute('title', mountDisplayName(mount));
     row.createSpan({ cls: 'logseq-mount-name', text: mountDisplayName(mount) });
     row.addEventListener('click', (ev) => {
+      this.markSelected(row);
       // 同顶层头行：文件挂载的名字一律 = 打开文件（有无子项都一样），
       // 展开/收起只由 caret 负责（文件挂载有真子项时才画 caret）。
       if (isFileRoot && openNode) {
@@ -1996,6 +2003,7 @@ export class MountPanelView extends ItemView {
     // 定位与测试用：行级身份（挂载 + 相对路径）。
     row.dataset.mount = mount.id;
     row.dataset.rel = node.rel;
+    this.applySelected(row, mount.id, node.rel);
     // 定位高亮（画笔时点）：定位目标行被虚拟画笔反复重建,当场加的类随旧
     // 元素丢弃——paint 时按 revealGlow 时间戳重上,窗口内每次重建都带高亮。
     const glow = this.revealGlow;
@@ -2043,6 +2051,7 @@ export class MountPanelView extends ItemView {
       if (node.empty) row.createSpan({ cls: 'logseq-mount-flag', text: '空' });
       this.renderTagBadges(row, mount, node);
       row.addEventListener('click', () => {
+        this.markSelected(row);
         if (isOpen) {
           state.open.delete(node.rel);
         } else {
@@ -2136,6 +2145,7 @@ export class MountPanelView extends ItemView {
       t.style.cssText = 'margin-left:auto;flex:none;font-size:10px;color:var(--text-faint);font-variant-numeric:tabular-nums';
     }
     row.addEventListener('click', (ev) => {
+      this.markSelected(row);
       const mode = this.modOpenMode(ev);
       // 库内挂载行：走 vault 原生 openFile（反链/引用/扩展名路由全是原生
       // 行为），不进 openExternalEntry 的库外路由。
@@ -2146,6 +2156,7 @@ export class MountPanelView extends ItemView {
     row.addEventListener('auxclick', (ev) => {
       if (ev.button !== 1) return;
       ev.preventDefault();
+      this.markSelected(row);
       const mode = this.modOpenMode(ev);
       if (isVaultMount(mount)) void this.openVaultNode(mount, node, mode);
       else void this.plugin.openExternalEntry(mount, node, { paneMode: mode });
@@ -2743,6 +2754,30 @@ export class MountPanelView extends ItemView {
   }
 
   /**
+   * 选中一行（视觉 + 会话状态）：左键点击与右键菜单都走这里。
+   *
+   * 行元素由虚拟滚动反复重建，所以状态另存 selectedRow，画笔时点用
+   * applySelected() 恢复；当场再直接改 DOM，点击后无需等重绘就有反馈。
+   */
+  private markSelected(row: HTMLElement): void {
+    const mountId = row.dataset.mount ?? '';
+    const rel = row.dataset.rel ?? '';
+    for (const el of Array.from(
+      this.contentEl.querySelectorAll<HTMLElement>('.logseq-mount-row.is-selected, .logseq-mount-head.is-selected'),
+    )) {
+      el.classList.remove('is-selected');
+    }
+    row.classList.add('is-selected');
+    this.selectedRow = mountId ? { mountId, rel } : null;
+  }
+
+  /** 画笔时点：与 selectedRow 同一身份的行带上选中高亮（虚拟重绘不丢）。 */
+  private applySelected(row: HTMLElement, mountId: string, rel: string): void {
+    const sel = this.selectedRow;
+    if (sel && sel.mountId === mountId && sel.rel === rel) row.classList.add('is-selected');
+  }
+
+  /**
    * Right-click menu.
    *
    * `preventDefault` is essential: without it Obsidian opens ITS menu for the
@@ -2754,6 +2789,8 @@ export class MountPanelView extends ItemView {
       const e = ev as MouseEvent;
       e.preventDefault();
       e.stopPropagation();
+      // 右键先选中该行再弹菜单：菜单针对的行一眼可辨（用户 2026-11-25）。
+      this.markSelected(row);
       const menu = new Menu();
 
       // 库内挂载：独立菜单支（已在库内，无链接/系统编辑器语义，文件操作走
