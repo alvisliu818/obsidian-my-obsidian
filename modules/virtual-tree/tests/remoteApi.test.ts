@@ -3,6 +3,7 @@ import { __setRemoteTransportForTest, type RemoteHttpRequestOptions, type Remote
 import { clearGitRepoCache, gitListDir, gitUploadFile, sameBytesIgnoreEol, initGitRepoApi } from '../src/features/gitRepoApi';
 import { md5Hex } from '../src/features/baiduPanApi';
 import { remoteWorkRelOf, remoteVPathFromWorkRel } from '../src/features/remoteWorkspace';
+import { accumulateGitChildRel, parseGitRepoPath } from '../src/features/gitRepoPath';
 
 function jsonResp(body: unknown, status = 200): RemoteHttpResponse {
   const bytes = new TextEncoder().encode(JSON.stringify(body));
@@ -19,6 +20,25 @@ type Handler = (url: string, opts: RemoteHttpRequestOptions) => Promise<RemoteHt
 afterEach(() => {
   __setRemoteTransportForTest(null);
   clearGitRepoCache();
+});
+
+describe('git 挂载深层 rel 累积', () => {
+  it('路径解析:owner/repo@ref/子路径', () => {
+    const loc = parseGitRepoPath('gitee://alvisliu0/kb@main/atguigu/import_process')!;
+    expect(loc.provider).toBe('gitee');
+    expect(loc.owner).toBe('alvisliu0');
+    expect(loc.repo).toBe('kb');
+    expect(loc.ref).toBe('main');
+    expect(loc.path).toBe('atguigu/import_process');
+  });
+
+  it('每层直接子名累积为相对挂载根的完整 rel', () => {
+    // 根层子项 rel 就是裸名；展开后每下一层把父 rel 累加上去，
+    // 否则 loadLayerRemote 拼 dirVPath 丢祖先段 → 子目录内容空白。
+    expect(accumulateGitChildRel('', 'sub')).toBe('sub');
+    expect(accumulateGitChildRel('sub', 'nested')).toBe('sub/nested');
+    expect(accumulateGitChildRel('sub/nested', 'deep.md')).toBe('sub/nested/deep.md');
+  });
 });
 
 describe('gitRepoApi(假传输层)', () => {

@@ -60,7 +60,7 @@ import {
   gitRename,
   gitUploadFile,
 } from '../features/gitRepoApi';
-import { gitRepoWebUrl, isGitRepoPath } from '../features/gitRepoPath';
+import { accumulateGitChildRel, gitRepoWebUrl, isGitRepoPath } from '../features/gitRepoPath';
 import { remoteChildVPath, remoteRootLabel } from '../features/remotePath';
 import {
   invalidateVaultParentPlans,
@@ -662,6 +662,14 @@ export class MountPanelView extends ItemView {
             }];
           }
         }
+        // git 远端每层 API 只返回「直接子名」(gitListDir/toNode 的 rel),
+        // 而 MountNode.rel 契约是「相对挂载根的完整路径」。展开深层时必须
+        // 累积父级 rel,否则 loadLayerRemote 拼 dirVPath 丢祖先段 → 列错目录
+        // → 子目录内容空白(2026-11-25 实报 gitee://.../atguigu/import_process)。
+        // gitRepoBrowser / gitRepoModal 用 node.abs 递归,不受这里影响。
+        if (rel && isGitRepoPath(mount.path) && children.length) {
+          children = children.map((c) => ({ ...c, rel: accumulateGitChildRel(rel, c.rel) }));
+        }
         if (this.states.get(mount.id) !== state) return; // 挂载已卸载/重扫
         if (!rel) {
           state.tree = children;
@@ -670,6 +678,14 @@ export class MountPanelView extends ItemView {
           if (parent) {
             parent.children = children;
             parent.empty = children.length === 0;
+          }
+        }
+        // 远端是异步的:冷启动/重扫时 reloadOpenLayers 按深度从浅到深调
+        // loadLayer,但深层的请求会在父层数据到达前就被短路。父层数据到位后
+        // 在这里把「已展开但还没加载」的子层接着推进,形成链式恢复。
+        for (const c of children) {
+          if (c.isDir && state.open.has(c.rel) && !state.loaded.has(c.rel)) {
+            this.loadLayer(mount, c.rel, state);
           }
         }
         state.loading = false;

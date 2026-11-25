@@ -103,6 +103,19 @@ export function gitRepoKey(loc: GitRepoLocation): string {
   return `${loc.provider}:${loc.owner}/${loc.repo}@${loc.ref}`;
 }
 
+/**
+ * git 每层 API(gitListDir/toNode)返回的 rel 是「直接子名」,而 MountNode.rel
+ * 契约是「相对挂载根的完整路径」。面板展开深层时必须把父级 rel 累积进去,
+ * 否则 loadLayerRemote 拼出的 dirVPath 丢掉祖先段 → 列错目录 → 子目录空白。
+ *
+ * 只对 git 家族挂载调用:gitRepoBrowser / gitRepoModal 用 node.abs 递归,
+ * 不需要累积 rel。
+ */
+export function accumulateGitChildRel(parentRel: string, childRel: string): string {
+  if (!parentRel) return childRel;
+  return `${parentRel.replace(/\/+$/, '')}/${childRel.replace(/^\/+/, '')}`;
+}
+
 /** 是否仓库根 */
 export function isGitRepoRoot(vPath: string): boolean {
   const loc = parseGitRepoPath(vPath);
