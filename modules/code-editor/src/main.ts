@@ -29,8 +29,12 @@ export default class CodeEditorPlugin extends Plugin {
     // 惰性：monaco 的字节（3.7MB 懒包）在首次属性触碰时 require（lazyMonaco），
     // worker/主题在首次 createEditor 时初始化（monaco.ts 的 setupMonaco），
     // LSP 子进程在首次 openLspDocument 时 spawn（lspHost）。
-    const adapter = this.app.vault.adapter as FileSystemAdapter;
-    initLazyMonaco(adapter.getFullPath(this.manifest.dir ?? ''));
+    // 移动端没有 getFullPath/require：MOBILE_BUILD 下 lazyMonaco 被别名到
+    // src/mobile-monaco-static.ts（静态 Monaco），这里只给个安全目录串。
+    const adapter = this.app.vault.adapter as Partial<FileSystemAdapter>;
+    const dir = this.manifest.dir ?? '';
+    const full = typeof adapter.getFullPath === 'function' ? adapter.getFullPath(dir) : dir;
+    initLazyMonaco(full);
     // Monaco 设置(2026-11-22 迁入本模块):settings.json 已存在就先行载入,
     // 缺失不落盘——首建仍留给 md-editor 的同次启动迁移(data.json 旧换行开关)。
     initEditorSettingsStore(this);

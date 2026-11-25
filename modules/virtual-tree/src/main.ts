@@ -18,6 +18,7 @@ import { startTitleRenameObserver } from './titleRename';
 import { around } from 'monkey-around';
 import { VirtualTreeSettingTab } from './settings/tab';
 import { MountPanelView, VIEW_TYPE_MOUNT_PANEL } from './panels/mountPanel';
+import { GitRepoBrowserView, VIEW_TYPE_GIT_REPO_BROWSER, openGitRepoBrowserFor } from './panels/gitRepoBrowser';
 import { RecentOpenPanelView, VIEW_TYPE_RECENT_OPEN_PANEL } from './panels/recentOpenPanel';
 import { TagFilterPanelView, VIEW_TYPE_TAG_FILTER_PANEL } from './panels/tagFilterPanel';
 import { MountEditorModal, MountListModal, MountPositionModal, VaultMountPickModal } from './panels/mountModals';
@@ -221,6 +222,7 @@ export default class VirtualTreePlugin extends Plugin {
     }
 
     this.registerView(VIEW_TYPE_MOUNT_PANEL, (leaf) => new MountPanelView(leaf, this));
+    this.registerView(VIEW_TYPE_GIT_REPO_BROWSER, (leaf) => new GitRepoBrowserView(leaf, this));
     this.registerView(VIEW_TYPE_RECENT_OPEN_PANEL, (leaf) => new RecentOpenPanelView(leaf, this));
     this.registerView(VIEW_TYPE_TAG_FILTER_PANEL, (leaf) => new TagFilterPanelView(leaf, this));
     this.registerView(VIEW_TYPE_IMAGE, (leaf) => new ImageView(leaf, this));
@@ -463,6 +465,11 @@ export default class VirtualTreePlugin extends Plugin {
       id: 'open-mount-panel',
       name: 'Open the mount panel (folders outside the vault)',
       callback: () => void this.activatePanel(VIEW_TYPE_MOUNT_PANEL),
+    });
+    this.addCommand({
+      id: 'open-git-repo-browser',
+      name: '打开 Git 仓库浏览器（GitHub / Gitee 挂载）',
+      callback: () => void this.openGitRepoBrowser(),
     });
     this.addCommand({
       id: 'open-recent-open-panel',
@@ -1029,9 +1036,19 @@ menu.addItem((item) =>
     for (const leaf of this.mountPanelLeaves()) {
       (leaf.view as MountPanelView | null)?.refreshMounts();
     }
+    // 独立仓库浏览器也读远端缓存：手动重扫时一并重读（移动端不打开挂载面板
+    // 也能刷新）。
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_GIT_REPO_BROWSER)) {
+      (leaf.view as unknown as GitRepoBrowserView | null)?.refresh?.();
+    }
     // 广播「挂载已刷新」：omnisearch / unified-search 据此重索引库外文件。
     // 事件名沿用拆分前的 logseq: 前缀——两个消费方都按这个名字监听，不能改。
     this.app.workspace.trigger('logseq:external-mounts-refreshed');
+  }
+
+  /** 打开 Git 仓库浏览器（GitHub / Gitee 挂载的独立面板，移动端可用）。 */
+  openGitRepoBrowser(mountId?: string): Promise<void> {
+    return openGitRepoBrowserFor(this, mountId);
   }
 
   /** 渲染统一面板的叶子：独立挂载面板叶子 + 托管虚拟 explorer 的 file-explorer

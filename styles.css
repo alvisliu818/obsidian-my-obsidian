@@ -74813,3 +74813,52 @@ button.llm-hub-speech-btn {
 .llm-hub-grounding-save-notice strong { color: var(--text-normal); }
 .llm-hub-grounding-save-notice p { margin: 4px 0 0; }
 .llm-hub-google-search-suggestions { display: block; width: 100%; border: 0; }
+
+/* ==== Git 仓库浏览器（GitHub/Gitee 挂载独立面板，2026-11-25） ==== */
+.vt-gitrepo-browser { display: flex; flex-direction: column; gap: 6px; }
+.vt-gitrepo-browser__header {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 8px; border-bottom: 1px solid var(--background-modifier-border);
+  position: sticky; top: 0; background: var(--background-primary); z-index: 2;
+}
+.vt-gitrepo-browser__titlewrap { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1 1 auto; }
+.vt-gitrepo-browser__icon { display: inline-flex; color: var(--text-muted); }
+.vt-gitrepo-browser__title {
+  font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.vt-gitrepo-browser__actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.vt-gitrepo-browser__btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 4px 8px; min-height: 28px; cursor: pointer;
+}
+.vt-gitrepo-browser__mountselect { max-width: 46vw; }
+.vt-gitrepo-browser__row {
+  display: flex; align-items: center; gap: 4px; min-height: 30px;
+  padding-right: 8px; cursor: pointer; border-radius: 4px;
+}
+.vt-gitrepo-browser__row:hover { background: var(--background-modifier-hover); }
+.vt-gitrepo-browser__rowicon { display: inline-flex; color: var(--text-muted); flex: 0 0 auto; }
+.vt-gitrepo-browser__rowname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vt-gitrepo-browser__loading,
+.vt-gitrepo-browser__empty { padding: 8px; color: var(--text-muted); }
+.vt-gitrepo-browser__error { padding: 8px; color: var(--text-error); white-space: pre-wrap; }
+.vt-gitrepo-browser__preview { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.vt-gitrepo-browser__previewbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 4px 8px; border-bottom: 1px solid var(--background-modifier-border);
+}
+.vt-gitrepo-browser__previewpath {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--text-muted);
+}
+.vt-gitrepo-browser__previewbody { padding: 8px 12px; overflow: auto; }
+.vt-gitrepo-browser__code {
+  white-space: pre-wrap; word-break: break-word; margin: 0;
+  font-family: var(--font-monospace); font-size: var(--font-smaller);
+}
+.vt-gitrepo-browser__mountlist { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.vt-gitrepo-browser__mountrow {
+  padding: 6px 8px; border: 1px solid var(--background-modifier-border);
+  border-radius: 4px; cursor: pointer;
+}
+.vt-gitrepo-browser__mountrow:hover { background: var(--background-modifier-hover); }

@@ -8,7 +8,7 @@
  *   - 库外脏视图：iterateAllLeaves 里 isDirty 的 external handle（逐条 save）
  * 条目动作后重绘（列表与状态栏图标同步）。
  */
-import { Modal, setIcon } from 'obsidian';
+import { Modal, setIcon, type App } from 'obsidian';
 
 export interface UnsavedExternalEntry {
 	/** 展示用路径（库外文件的真实路径）。 */

@@ -16,6 +16,7 @@ import {
   renameExportFolder,
   renameTempVersionFolder,
 } from "./storage";
+import { isMobileStorage } from "./versionFs";
 
 export class SaveControlSettingTab extends PluginSettingTab {
   plugin: SaveControlPlugin;
@@ -348,9 +349,14 @@ export class SaveControlSettingTab extends PluginSettingTab {
     // ----------------------------------------------------------------
     new Setting(containerEl).setName("版本存储").setHeading();
 
+    const mobileStorage = isMobileStorage(this.app);
     const rootSetting = new Setting(containerEl)
       .setName("版本存储位置")
-      .setDesc("历史版本（库内 + 库外）的存放根目录，按文件的绝对路径分文件夹。留空 = E:\\HOME\\Runtime\\save-control-versions；绝对路径按原样用；相对路径相对库根。改动只影响之后的新快照（旧根里的数据不搬动）。");
+      .setDesc(
+        mobileStorage
+          ? "历史版本（库内）的存放根目录。移动端只能使用库内路径：留空 = .obsidian/plugins/obsidian-my-obsidian/save-versions；填写相对路径则相对库根。绝对路径在移动端会被忽略。改动只影响之后的新快照（旧根里的数据不搬动）。"
+          : "历史版本（库内 + 库外）的存放根目录，按文件的绝对路径分文件夹。留空 = E:\\HOME\\Runtime\\save-control-versions；绝对路径按原样用；相对路径相对库根。改动只影响之后的新快照（旧根里的数据不搬动）。",
+      );
     let rootText: TextComponent;
     rootSetting.addText((t) => {
       rootText = t;

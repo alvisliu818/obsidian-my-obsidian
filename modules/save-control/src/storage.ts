@@ -3,14 +3,13 @@ import { SaveControlPlugin } from "./main";
 import {
   DEFAULT_VERSION_ROOT,
   deleteExternalSnapshot,
-  fsLike,
   listExternalSnapshots,
   moveDirFs,
   pruneEmptyDirs,
   readExternalSnapshot,
-  resolveVersionRoot,
   saveExternalSnapshot,
 } from "./externalStore";
+import { isMobileStorage, versionFsOf, versionRootOf } from "./versionFs";
 import { absPathKey, decodeAbsKey, normalizeKey } from "./targets";
 
 export type SnapshotRecord = {
@@ -40,12 +39,9 @@ export function getVaultBase(plugin: SaveControlPlugin): string {
   return (typeof adapter.getBasePath === "function" ? adapter.getBasePath() : adapter.basePath) ?? "";
 }
 
-/** 版本存储根（绝对路径）：所有快照——库内与库外——的统一存放位置。 */
+/** 版本存储根（桌面绝对路径 / 移动端库内插件目录下的相对路径）。 */
 export function getVersionRoot(plugin: SaveControlPlugin): string {
-  return resolveVersionRoot({
-    configured: plugin.settings.versionStorageFolder,
-    vaultBase: getVaultBase(plugin),
-  });
+  return versionRootOf(plugin);
 }
 
 export function normalizeRecord(raw: Record<string, unknown>): SnapshotRecord {
@@ -68,14 +64,29 @@ export function getSnapshotRoot(plugin: SaveControlPlugin): string {
 }
 
 /**
- * 快照目录寻址：入参既可以是 vault 相对路径（库内流程），也可以是根下的
- * 绝对目录（库外流程，原样返回）。库内路径映射为
- * `<版本存储根>/<absPathKey(vaultBase + 路径)>`——按文件绝对路径分文件夹。
+ * 快照目录寻址：入参可以是
+ *   - 已在存储根下的路径（snapshotPathFor 的产物 / 库外绝对目录）→ 原样；
+ *   - 库内相对路径（vault 事件、旧调用）→ 桌面按绝对路径镜像；移动端按
+ *     `vault/<库内相对路径>` 直接镜像。
  */
 export function getSnapshotDirPath(plugin: SaveControlPlugin, p: string): string {
-  if (isExternalSnapshotPath(p)) return p;
+  const root = getVersionRoot(plugin).replace(/\\/g, "/").replace(/\/+$/, "");
+  const norm = p.replace(/\\/g, "/");
+  if (norm === root || norm.startsWith(root + "/")) return norm;
+  if (!isMobileStorage(plugin.app) && isExternalSnapshotPath(p)) return norm;
   const normalized = p.replace(/^\/+/, "");
-  return `${getVersionRoot(plugin)}/${absPathKey(`${getVaultBase(plugin)}/${normalized}`)}`;
+  if (isMobileStorage(plugin.app)) return `${root}/vault/${normalized}`;
+  return `${root}/${absPathKey(`${getVaultBase(plugin)}/${normalized}`)}`;
+}
+
+/** 库外绝对路径之外的任意虚拟路径（github:// 等）在移动端的安全键。 */
+export function safeExternalKey(abs: string): string {
+  const key = absPathKey(abs)
+    .replace(/^\/+/, "")
+    .split("/")
+    .filter((seg) => !!seg)
+    .join("/");
+  return key || "external";
 }
 
 export function getSnapshotFilePath(plugin: SaveControlPlugin, p: string, timestamp: string): string {
@@ -92,8 +103,8 @@ export async function saveSnapshotContent(
 ) {
   const root = getVersionRoot(plugin);
   const dirPath = getSnapshotDirPath(plugin, p);
-  // 统一走 Node fs：目录由 saveExternalSnapshot 内部逐级创建。
-  saveExternalSnapshot(root, keyUnderRoot(root, dirPath), timestamp, content, name);
+  // 统一走 VersionFs：桌面 Node fs / 移动端 vault adapter（目录由内部逐级创建）。
+  await saveExternalSnapshot(versionFsOf(plugin), root, keyUnderRoot(root, dirPath), timestamp, content, name);
 }
 
 /** 绝对快照目录 → 根下的键（去掉根前缀）。 */
@@ -110,7 +121,7 @@ export async function listSnapshotsForFile(
 ): Promise<(SnapshotRecord & { filePath: string })[]> {
   const root = getVersionRoot(plugin);
   const key = keyUnderRoot(root, getSnapshotDirPath(plugin, p));
-  return listExternalSnapshots(root, key).sort((a, b) => (a.timestamp > b.timestamp ? -1 : 1));
+  return (await listExternalSnapshots(versionFsOf(plugin), root, key)).sort((a, b) => (a.timestamp > b.timestamp ? -1 : 1));
 }
 
 /** 一个有保存历史的文件(库内相对路径 / 库外绝对路径)。 */
@@ -130,32 +141,27 @@ export type SnapshotFileEntry = {
  * 这里递归遍历,把含 .json 快照的目录还原成目标文件:
  * 绝对路径落在库根下 = 库内相对路径(vault),否则按库外绝对路径(external)。
  */
-export function listAllSnapshotFiles(plugin: SaveControlPlugin): SnapshotFileEntry[] {
-  const root = getVersionRoot(plugin);
-  const fs = fsLike();
-  if (!fs.existsSync(root)) return [];
-  const vaultBase = getVaultBase(plugin).replace(/\\/g, "/").replace(/\/+$/, "");
+export async function listAllSnapshotFiles(plugin: SaveControlPlugin): Promise<SnapshotFileEntry[]> {
+  const root = getVersionRoot(plugin).replace(/\\/g, "/").replace(/\/+$/, "");
+  const fs = versionFsOf(plugin);
+  if (!(await fs.exists(root))) return [];
   const out: SnapshotFileEntry[] = [];
-  const walk = (dirAbs: string, relKey: string): void => {
+  const walk = async (dirAbs: string, relKey: string): Promise<void> => {
     let names: string[] = [];
     try {
-      names = fs.readdirSync(dirAbs);
+      names = await fs.listNames(dirAbs);
     } catch {
       return;
     }
     if (names.some((n) => n.endsWith(".json"))) {
-      const snapshots = listExternalSnapshots(root, relKey).sort((a, b) =>
+      const snapshots = (await listExternalSnapshots(fs, root, relKey)).sort((a, b) =>
         a.timestamp > b.timestamp ? -1 : 1,
       );
       if (snapshots.length > 0) {
-        const abs = decodeAbsKey(relKey).replace(/\\/g, "/");
-        const isVault = !!vaultBase && (
-          abs.toLowerCase() === vaultBase.toLowerCase() ||
-          abs.toLowerCase().startsWith(`${vaultBase.toLowerCase()}/`)
-        );
+        const { targetPath, kind } = snapshotFileIdentity(plugin, snapshots[0].filePath, relKey);
         out.push({
-          targetPath: isVault ? abs.slice(vaultBase.length + 1) : abs,
-          kind: isVault ? "vault" : "external",
+          targetPath,
+          kind,
           lastAt: snapshots[0]?.timestamp ?? "",
           count: snapshots.length,
           snapshots,
@@ -164,36 +170,27 @@ export function listAllSnapshotFiles(plugin: SaveControlPlugin): SnapshotFileEnt
     }
     for (const n of names) {
       if (n.endsWith(".json")) continue;
-      const childAbs = `${dirAbs.replace(/[\\/]+$/, "")}/${n}`;
-      let isDir = true;
-      if (fs.statSync) {
-        try {
-          isDir = fs.statSync(childAbs).isDirectory();
-        } catch {
-          isDir = false;
-        }
-      }
-      if (isDir) walk(childAbs, relKey ? `${relKey}/${n}` : n);
+      await walk(`${dirAbs.replace(/[\\/]+$/, "")}/${n}`, relKey ? `${relKey}/${n}` : n);
     }
   };
-  walk(root.replace(/[\\/]+$/, ""), "");
+  await walk(root, "");
   out.sort((a, b) => (a.lastAt < b.lastAt ? 1 : a.lastAt > b.lastAt ? -1 : a.targetPath.localeCompare(b.targetPath)));
   return out;
 }
 
 export async function readSnapshotContent(
-  _plugin: SaveControlPlugin,
+  plugin: SaveControlPlugin,
   filePath: string
 ): Promise<SnapshotRecord | null> {
-  // 快照文件路径在统一存储后恒为绝对路径（fs 文件）。参数仅为调用方签名一致。
-  return readExternalSnapshot(filePath);
+  // 快照文件路径恒为存储根下的路径（桌面 fs 文件 / 移动端库内适配器路径）。
+  return readExternalSnapshot(versionFsOf(plugin), filePath);
 }
 
 export async function deleteSnapshotFile(
   plugin: SaveControlPlugin,
   filePath: string
 ): Promise<boolean> {
-  return deleteExternalSnapshot(getVersionRoot(plugin), filePath);
+  return deleteExternalSnapshot(versionFsOf(plugin), getVersionRoot(plugin), filePath);
 }
 
 /**
@@ -230,33 +227,34 @@ export async function deleteOldestAutosaves(
 }
 
 export async function updateSnapshotLabel(
-  _plugin: SaveControlPlugin,
+  plugin: SaveControlPlugin,
   filePath: string,
   newLabel: string
 ): Promise<boolean> {
-  // 快照文件在统一存储后恒为绝对路径，fs 直改。
+  // 快照文件恒为存储根下的路径，走统一 VersionFs。
   try {
-    const fs = fsLike();
-    if (!fs.existsSync(filePath)) return false;
-    const record = normalizeRecord(JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>);
+    const fs = versionFsOf(plugin);
+    const raw = await fs.readText(filePath);
+    if (raw === null) return false;
+    const record = normalizeRecord(JSON.parse(raw) as Record<string, unknown>);
     record.name = newLabel;
-    fs.writeFileSync(filePath, JSON.stringify(record, null, 2), "utf8");
-    return true;
+    return await fs.writeText(filePath, JSON.stringify(record, null, 2));
   } catch {
     return false;
   }
 }
 
 export async function toggleSnapshotFavorite(
-  _plugin: SaveControlPlugin,
+  plugin: SaveControlPlugin,
   filePath: string
 ): Promise<boolean> {
   try {
-    const fs = fsLike();
-    if (!fs.existsSync(filePath)) return false;
-    const record = normalizeRecord(JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>);
+    const fs = versionFsOf(plugin);
+    const raw = await fs.readText(filePath);
+    if (raw === null) return false;
+    const record = normalizeRecord(JSON.parse(raw) as Record<string, unknown>);
     record.favorite = !record.favorite;
-    fs.writeFileSync(filePath, JSON.stringify(record, null, 2), "utf8");
+    if (!(await fs.writeText(filePath, JSON.stringify(record, null, 2)))) return false;
     return record.favorite;
   } catch {
     return false;
@@ -269,11 +267,12 @@ export async function savePreRestoreBackup(
   content: string
 ) {
   const root = getVersionRoot(plugin);
+  const fs = versionFsOf(plugin);
   const key = keyUnderRoot(root, getSnapshotDirPath(plugin, p));
 
   // If a pre-restore backup already exists, don't overwrite it —
   // preserve the original unsaved content until the user explicitly restores it.
-  const existing = listExternalSnapshots(root, key);
+  const existing = await listExternalSnapshots(fs, root, key);
   if (existing.some((s) => s.name === "pre-restore")) return;
 
   const timestamp = new Date().toISOString();
@@ -360,14 +359,14 @@ export async function deleteSnapshotDirForFile(
   plugin: SaveControlPlugin,
   p: string
 ): Promise<void> {
-  // 库外文件没有 vault delete 事件；其快照清理走 EVENT_EXTERNAL_DELETED。
-  if (isExternalSnapshotPath(p)) return;
-  const root = getVersionRoot(plugin);
+  const root = getVersionRoot(plugin).replace(/\\/g, "/").replace(/\/+$/, "");
   const dirPath = getSnapshotDirPath(plugin, p);
+  // 安全闸：只允许删除存储根之下的目录（绝不误删库内/磁盘上的真实目录）。
+  if (dirPath !== root && !dirPath.startsWith(root + "/")) return;
   try {
-    const fs = fsLike();
-    if (fs.existsSync(dirPath)) fs.rmSync?.(dirPath, { recursive: true, force: true });
-    pruneEmptyDirs(root, dirPath.split("/").slice(0, -1).join("/"));
+    const fs = versionFsOf(plugin);
+    if (await fs.exists(dirPath)) await fs.removeTree(dirPath);
+    await pruneEmptyDirs(fs, root, dirPath.split("/").slice(0, -1).join("/"));
   } catch (e) {
     console.error("[save-control] snapshot dir cleanup failed", dirPath, e);
   }
@@ -624,32 +623,44 @@ function generateSnippet(content: string, query: string): string {
 /**
  * 快照文件 → 原文件的身份与显示路径。
  *
- * 统一存储后快照都在版本存储根下，目录树就是原文件绝对路径的镜像；反解：
- *   - 补回盘符冒号得到原绝对路径；
- *   - 在库根之下（Windows 大小写不敏感）→ 身份 = vault 相对路径（与
- *     perFileSettings 的键、getActiveFile().path 一致），显示也用相对路径；
- *   - 库外 → 身份 = normalizeKey(abs)，显示用原绝对路径。
+ * 桌面：目录树是原文件绝对路径的镜像，补回盘符冒号反解；库根之下 → 身份 =
+ * vault 相对路径，库外 → 身份 = normalizeKey(abs)。
+ * 移动端：布局为 `<root>/vault/<库内相对路径>`（库内文件）或
+ * `<root>/ext/<安全键>`（远端/库外目标，键不可逆，按安全键展示）。
  */
 export function snapshotFileIdentity(
   plugin: SaveControlPlugin,
-  filePath: string
-): { identity: string; display: string } {
+  filePath: string,
+  dirKey?: string
+): { identity: string; display: string; targetPath: string; kind: "vault" | "external" } {
   const normalized = filePath.replace(/\\/g, "/");
   const root = getVersionRoot(plugin).replace(/[\\/]+/g, "/").replace(/\/+$/, "");
-  const prefix = root + "/";
-  if (!normalized.startsWith(prefix)) return { identity: "", display: "" };
-  const afterRoot = normalized.slice(prefix.length);
-  const lastSlash = afterRoot.lastIndexOf("/");
-  if (lastSlash < 0) return { identity: "", display: "" };
-  const abs = decodeAbsKey(afterRoot.slice(0, lastSlash));
+  let key = dirKey;
+  if (key === undefined) {
+    if (!normalized.startsWith(root + "/")) return { identity: "", display: "", targetPath: "", kind: "vault" };
+    key = normalized.slice(root.length + 1).replace(/\/[^/]+$/, "");
+  }
+  key = key.replace(/^\/+|\/+$/g, "");
+  if (isMobileStorage(plugin.app)) {
+    if (key.startsWith("vault/")) {
+      const rel = key.slice("vault/".length);
+      return { identity: rel, display: rel, targetPath: rel, kind: "vault" };
+    }
+    if (key.startsWith("ext/")) {
+      const abs = key.slice("ext/".length);
+      return { identity: normalizeKey(abs), display: abs, targetPath: abs, kind: "external" };
+    }
+    return { identity: "", display: "", targetPath: "", kind: "vault" };
+  }
+  const abs = decodeAbsKey(key);
   const vaultBase = getVaultBase(plugin).replace(/[\\/]+/g, "/").replace(/\/+$/, "");
   const absNorm = abs.toLowerCase();
   const baseNorm = vaultBase.toLowerCase();
   if (vaultBase && (absNorm === baseNorm || absNorm.startsWith(baseNorm + "/"))) {
     const rel = abs.slice(vaultBase.length).replace(/^\/+/, "");
-    return { identity: rel, display: rel };
+    return { identity: rel, display: rel, targetPath: rel, kind: "vault" };
   }
-  return { identity: normalizeKey(abs), display: abs };
+  return { identity: normalizeKey(abs), display: abs, targetPath: abs, kind: "external" };
 }
 
 export type SearchMatch = SnapshotRecord & {
@@ -676,33 +687,30 @@ export async function searchSnapshots(
       : normalizeKey(activeTarget.abs ?? activeTarget.key)
     : "";
 
-  const fs = fsLike();
-  if (fs.existsSync(root)) {
+  const fs = versionFsOf(plugin);
+  if (await fs.exists(root)) {
     const stack: string[] = [root];
     while (stack.length > 0) {
       const dir = stack.pop()!;
       let names: string[] = [];
       try {
-        names = fs.readdirSync(dir);
+        names = await fs.listNames(dir);
       } catch {
         continue;
       }
       for (const n of names) {
         const full = `${dir}/${n}`;
-        let isDir = false;
-        try {
-          isDir = fs.statSync ? fs.statSync(full).isDirectory() : !n.endsWith(".json");
-        } catch {
-          continue;
-        }
-        if (isDir) {
+        // 快照文件一律 .json；其余条目按目录处理（与存储布局约定一致）。
+        if (!n.endsWith(".json")) {
           stack.push(full);
           continue;
         }
-        if (!n.endsWith(".json")) continue;
         try {
-          const record = normalizeRecord(JSON.parse(fs.readFileSync(full, "utf8")) as Record<string, unknown>);
-          const { identity, display } = snapshotFileIdentity(plugin, full);
+          const json = await fs.readText(full);
+          if (json === null) continue;
+          const record = normalizeRecord(JSON.parse(json) as Record<string, unknown>);
+          const dirKey = full.slice(root.length + 1).replace(/\/[^/]+$/, "");
+          const { identity, display } = snapshotFileIdentity(plugin, full, dirKey);
           const isCurrentFile = identity !== "" && identity === currentIdentity;
 
           const ranges = getMatchRanges(record.content, queryTrimmed);
@@ -749,6 +757,9 @@ export async function searchSnapshots(
  * - 与新根互嵌时跳过（用户把根设进旧目录里的极端配置，搬了只会套娃）。
  */
 export async function migrateLegacySnapshots(plugin: SaveControlPlugin): Promise<void> {
+  // 移动端：快照直接在版本存储根（库内插件目录），没有 Node fs；旧版库内
+  // 快照目录（.versions(SH)）不迁移——移动端是新装环境，没有历史包袱。
+  if (isMobileStorage(plugin.app)) return;
   const vaultBase = getVaultBase(plugin);
   if (!vaultBase) return;
   const legacyRel = getSnapshotRoot(plugin);
@@ -757,8 +768,8 @@ export async function migrateLegacySnapshots(plugin: SaveControlPlugin): Promise
   const root = norm(getVersionRoot(plugin));
   if (legacyAbs === root || root.startsWith(legacyAbs + "/") || legacyAbs.startsWith(root + "/")) return;
 
-  const fs = fsLike();
-  if (!fs.existsSync(legacyAbs)) return;
+  const fs = versionFsOf(plugin);
+  if (!(await fs.exists(legacyAbs))) return;
 
   // 收集含 .json 的目录（= 每个有版本的文件）。
   const fileDirs: string[] = [];
@@ -767,21 +778,15 @@ export async function migrateLegacySnapshots(plugin: SaveControlPlugin): Promise
     const dir = stack.pop()!;
     let names: string[] = [];
     try {
-      names = fs.readdirSync(dir);
+      names = await fs.listNames(dir);
     } catch {
       continue;
     }
     let hasJson = false;
     for (const n of names) {
       const full = `${dir}/${n}`;
-      let isDir = false;
-      try {
-        isDir = fs.statSync ? fs.statSync(full).isDirectory() : !n.endsWith(".json");
-      } catch {
-        continue;
-      }
-      if (isDir) stack.push(full);
-      else if (n.endsWith(".json")) hasJson = true;
+      if (n.endsWith(".json")) hasJson = true;
+      else stack.push(full);
     }
     if (hasJson) fileDirs.push(dir);
   }
@@ -791,7 +796,7 @@ export async function migrateLegacySnapshots(plugin: SaveControlPlugin): Promise
   for (const dir of fileDirs) {
     const rel = dir.slice(legacyAbs.length + 1);
     const targetDir = `${root}/${absPathKey(`${vaultBase}/${rel}`)}`;
-    if (moveDirFs(dir, targetDir)) moved++;
+    if (await moveDirFs(fs, dir, targetDir)) moved++;
     else failed++;
   }
 
@@ -799,27 +804,14 @@ export async function migrateLegacySnapshots(plugin: SaveControlPlugin): Promise
   for (const dir of fileDirs) {
     let cur = dir.split("/").slice(0, -1).join("/");
     while (cur && cur !== legacyAbs && cur.startsWith(legacyAbs + "/")) {
-      let names: string[] = [];
-      try {
-        names = fs.readdirSync(cur);
-      } catch {
-        break;
-      }
+      const names = await fs.listNames(cur);
       if (names.length > 0) break;
-      try {
-        fs.rmSync?.(cur, { recursive: true, force: true });
-      } catch {
-        break;
-      }
+      await fs.removeTree(cur);
       cur = cur.split("/").slice(0, -1).join("/");
     }
   }
-  try {
-    if (fs.readdirSync(legacyAbs).length === 0) {
-      fs.rmSync?.(legacyAbs, { recursive: true, force: true });
-    }
-  } catch {
-    // 旧根删不掉就留着（空壳无害）
+  if ((await fs.listNames(legacyAbs)).length === 0) {
+    await fs.removeTree(legacyAbs);
   }
 
   if (moved > 0 || failed > 0) {

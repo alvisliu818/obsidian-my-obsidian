@@ -4,3 +4,7 @@ export class TFile {}
 export class TFolder {}
 export class Plugin {}
 export class Notice {}
+// versionFs.ts 用 Platform.isMobileApp 判定存储后端；单测一律按桌面（Node fs
+// 测试替身）处理。
+export const Platform = { isMobileApp: false, isMobile: false, isDesktop: true, isMacOS: false };
+

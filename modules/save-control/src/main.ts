@@ -24,7 +24,7 @@
  * 模块总开关在宿主「My Obsidian」设置页。
  */
 
-import { App, FileView, MarkdownView, Notice, Plugin, TAbstractFile, TFile, TFolder, Menu, MenuItem, EventRef } from "obsidian";
+import { FileView, MarkdownView, Notice, Plugin, TAbstractFile, TFile, TFolder, Menu, MenuItem, EventRef } from "obsidian";
 import {
   DEFAULT_SETTINGS,
   mergeLegacySettings,
@@ -45,10 +45,12 @@ import {
   listSnapshotsForFile,
   listAllSnapshotFiles,
   readSnapshotContent,
+  safeExternalKey,
   saveSnapshotContent,
   ensureExportDir,
   getExportFolderPath,
 } from "./storage";
+import { isMobileStorage, versionFsOf } from "./versionFs";
 import { AutosaveManager } from "./autosave";
 import { AutoVersionManager } from "./autoVersion";
 import { AutoSaveController } from "./autosave/AutoSaveController";
@@ -56,6 +58,7 @@ import { askUnsavedClose } from "./closePrompt";
 import { SaveStatusIndicator } from "./autosave-ui/StatusIndicator";
 import { ExternalSaveScheduler } from "./externalScheduler";
 import { UnsavedDotMonitor } from "./tabUnsavedDot";
+import { UnsavedListModal } from "./autosave-ui/UnsavedListModal";
 import { renameExternalSnapshotDir, pruneEmptyDirs } from "./externalStore";
 import { ON_WRITE_PREVIOUS_NAME, ON_WRITE_SNAPSHOT_NAME } from "./autoVersion";
 import {
@@ -307,18 +310,8 @@ export class SaveControlPlugin extends Plugin {
   // 退出/关窗：库外未保存的发现、落盘与丢弃
   // ------------------------------------------------------------------
 
-  /** 库外是否有未落盘内容：调度器待写队列（自动模式）+ 仍脏的视图缓冲（持有模式）。 */
   /** 未保存文件列表弹窗（状态栏图标点击,用户 2026-11-20）。 */
   private openUnsavedListModal(): void {
-    const { UnsavedListModal } = require('./autosave-ui/UnsavedListModal') as {
-      UnsavedListModal: new (app: App, ctx: {
-        vaultPending: string[];
-        externalEntries: Array<{ path: string; save: () => Promise<void> }>;
-        flushVaultPath: (path: string) => Promise<void>;
-        discardVaultPath: (path: string) => void;
-        refresh: () => void;
-      }) => { render(): void; open(): void };
-    };
     const entries: Array<{ path: string; save: () => Promise<void> }> = [];
     this.app.workspace.iterateAllLeaves((leaf) => {
       const h = this.externalHandleOf(leaf.view);
@@ -521,9 +514,7 @@ export class SaveControlPlugin extends Plugin {
    */
   listAllSnapshotFiles() {
     return listAllSnapshotFiles(this);
-  }
-
-  readSnapshotContent(filePath: string) {
+  }  readSnapshotContent(filePath: string) {
     return readSnapshotContent(this, filePath);
   }
 
@@ -552,10 +543,22 @@ export class SaveControlPlugin extends Plugin {
     return file instanceof TFile ? vaultTarget(file) : null;
   }
 
-  /** 快照存储寻址：库内 = vault 路径（storage 映射进版本存储根）；库外 = 快照目录(绝对路径)。 */
+/**
+ * 版本快照的存储寻址（提交给 storage 的路径身份）。
+ *
+ * 桌面：库内目标 = vault 相对路径（storage 映射进绝对路径镜像），库外 =
+ * `<根>/<绝对路径镜像键>`。
+ * 移动端：统一给存储根下的路径（`<根>/vault/<相对路径>` / `<根>/ext/<安全键>`），
+ * storage 见路径已在根下就原样使用。
+ */
   snapshotPathFor(target: SaveTarget): string {
+    const root = getVersionRoot(this);
+    if (isMobileStorage(this.app)) {
+      if (target.kind === "vault") return `${root}/vault/${target.key}`;
+      return `${root}/ext/${safeExternalKey(target.abs ?? target.key)}`;
+    }
     if (target.kind === "vault") return target.key;
-    return `${getVersionRoot(this)}/${snapshotKeyFor(target)}`;
+    return `${root}/${snapshotKeyFor(target)}`;
   }
 
   private registerExternalTarget(target: SaveTarget): void {
@@ -597,8 +600,13 @@ export class SaveControlPlugin extends Plugin {
     const oldTarget = externalTarget(oldAbs);
     const newTarget = externalTarget(newAbs);
     const root = getVersionRoot(this);
-    renameExternalSnapshotDir(root, snapshotKeyFor(oldTarget), snapshotKeyFor(newTarget));
-    // 按文件设置的键跟着搬（键 = 快照目录）。
+    void renameExternalSnapshotDir(
+      versionFsOf(this),
+      root,
+      keyUnderRoot(root, this.snapshotPathFor(oldTarget)),
+      keyUnderRoot(root, this.snapshotPathFor(newTarget)),
+    );
+    // 按文件设置的键跟着搬（键 = 快照路径）。
     const oldKey = this.snapshotPathFor(oldTarget);
     const newKey = this.snapshotPathFor(newTarget);
     const per = this.settings.perFileSettings;
@@ -613,19 +621,10 @@ export class SaveControlPlugin extends Plugin {
 
   private onExternalDeleted(abs: string): void {
     const target = externalTarget(abs);
-    const root = getVersionRoot(this);
-    const dir = `${root}/${snapshotKeyFor(target)}`;
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const fs = eval("require")("fs") as {
-        existsSync(p: string): boolean;
-        rmSync?(p: string, opts: { recursive: true; force: true }): void;
-      };
-      if (fs.existsSync(dir)) fs.rmSync?.(dir, { recursive: true, force: true });
-    } catch (e) {
-      console.error("[save-control] external snapshot cleanup failed", dir, e);
-    }
-    const key = this.snapshotPathFor(target);
+    const snapshotPath = this.snapshotPathFor(target);
+    // 存储根下的清理走统一后端（桌面 Node fs / 移动端 vault adapter）。
+    void deleteSnapshotDirForFile(this, snapshotPath);
+    const key = snapshotPath;
     delete this.settings.perFileSettings[key];
     this.externalTargets.delete(normalizeKey(key));
     this.handleCache.delete(key);
@@ -650,7 +649,7 @@ export class SaveControlPlugin extends Plugin {
         const oldKey = keyUnderRoot(root, oldDir);
         const newKey = keyUnderRoot(root, newDir);
         const renamePromise = Promise.resolve().then(() =>
-          renameExternalSnapshotDir(root, oldKey, newKey),
+          renameExternalSnapshotDir(versionFsOf(this), root, oldKey, newKey),
         );
 
         const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_SAVE_HISTORY);
@@ -681,7 +680,7 @@ export class SaveControlPlugin extends Plugin {
 
         // 旧名字这棵树搬空后清掉空壳目录（绝不越过多半还在用的根）。
         const parentDir = oldDir.replace(/[\\/]+/g, "/").split("/").slice(0, -1).join("/");
-        pruneEmptyDirs(root, parentDir);
+        void pruneEmptyDirs(versionFsOf(this), root, parentDir);
       }),
     );
     this.registerEvent(

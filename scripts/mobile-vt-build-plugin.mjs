@@ -17,6 +17,10 @@ const MONACO_STATIC = path.resolve('src/mobile-monaco-static.ts');
 const KEEP_EASY = [/modules\/easy-sync\//];
 const KEEP_VT = [...KEEP_EASY, /modules\/virtual-tree\//];
 const KEEP_CORE = [...KEEP_VT, /modules\/md-editor\//, /modules\/code-editor\//];
+// 2026-11-25 用户组合包：EasySync + 虚拟文档树（含 GitHub/Gitee 挂载）+
+// MD Editor / Code Editor（挂载文件与库内代码的编辑路由）+ Save Control
+// （移动端快照存库内插件目录）。
+const KEEP_GIT_SAVE = [...KEEP_CORE, /modules\/save-control\//];
 
 // 注意：extensionRegistry 必须保留真实实现——virtual-tree 直接 import 它的
 // registerFreeExtensions/takeOverExtensions；stub 掉会让虚拟树加载失败。
@@ -66,6 +70,14 @@ const ENTRY = {
 \t\t\tsummary: "Monaco 代码编辑器基建：代码块/代码文件的语法高亮与编辑。",
 \t\t\tdesktopOnly: false,
 \t\t\tcls: CodeEditorPlugin as unknown as ModuleDescriptor["cls"],
+\t\t},`,
+  save: `\t\t{
+\t\t\t// MOBILE_BUILD=git-save：保存控制 + 版本历史（移动端快照存库内插件目录）。
+\t\t\tid: "save-control",
+\t\t\tname: "Save Control",
+\t\t\tsummary: "自动保存节奏控制 + 文件版本历史；移动端快照存库内插件目录。",
+\t\t\tdesktopOnly: false,
+\t\t\tcls: SaveControlPlugin as unknown as ModuleDescriptor["cls"],
 \t\t},`,
 };
 
@@ -121,6 +133,15 @@ export const mobileCorePlugin = makePlugin(
   'mobile-core-easysync-tree-md-code',
   // core 必须保留真实 codeFileView：它注册库内 .py/.ts 等扩展名的 CodeMirror 视图，
   // stub 掉会导致打开代码文件落到 empty 占位视图。
+  HOST_HELPERS,
+  true,
+);
+
+export const mobileGitSavePlugin = makePlugin(
+  KEEP_GIT_SAVE,
+  [ENTRY.easy, ENTRY.tree, ENTRY.md, ENTRY.code, ENTRY.save],
+  'mobile-git-save-easysync-tree-code-savecontrol',
+  // 与 core 同：保留真实 codeFileView（库内代码扩展名视图），Monaco 懒包改静态。
   HOST_HELPERS,
   true,
 );

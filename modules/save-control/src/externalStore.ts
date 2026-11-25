@@ -1,19 +1,22 @@
 /**
- * 版本快照存储：Node fs 版的上游 storage.ts。
+ * 版本快照存储：路径布局 + 基于 VersionFs 的读写原语。
  *
  * 上游把快照放在库内 `<snapshotFolder>/<vault 路径>/<时间戳>.json`，靠
  * vault adapter 读写。统一后（库内 + 库外）快照全部落在一个**版本存储根**
- * （默认 E:/HOME/Runtime/save-control-versions，设置可改）下，按文件绝对
- * 路径镜像出的目录树分文件夹：
+ * （桌面默认 E:/HOME/Runtime/save-control-versions，移动端是库内插件目录）
+ * 下，按文件路径镜像出的目录树分文件夹：
  *
- *   <root>/<absPathKey>/<时间戳>.json
+ *   <root>/<key>/<时间戳>.json
  *
  * key 由 targets.snapshotKeyFor / absPathKey 产生，记录格式与上游完全相同
  * （{timestamp, content, name, favorite?}），所以列举、恢复、对比的代码
  * 两边共用。
  *
- * fs 走可注入的 NodeFsLike：单测不碰真盘，生产用真 fs。
+ * 2026-11-25：存储原语改为基于 VersionFs 的异步接口（桌面 Node fs /
+ * 移动端 vault adapter 双后端，见 versionFs.ts）。
  */
+
+import { __setVersionFsForTest, type VersionFs } from "./versionFs";
 
 /** 快照记录：与上游 storage.ts 的 SnapshotRecord 一致。 */
 export type SnapshotRecord = {
@@ -23,6 +26,7 @@ export type SnapshotRecord = {
   favorite?: boolean;
 };
 
+/** 旧版同步 fs 形状（仅测试注入用，生产参见 versionFs.ts）。 */
 export interface ExternalFsLike {
   existsSync(p: string): boolean;
   mkdirSync(p: string, opts: { recursive: true }): void;
@@ -32,26 +36,71 @@ export interface ExternalFsLike {
   unlinkSync?(p: string): void;
   renameSync?(from: string, to: string): void;
   rmSync?(p: string, opts: { recursive: true; force: true }): void;
-  /** 目录/文件甄别用；缺省时按「不以 .json 结尾 = 目录」兜底。 */
   statSync?(p: string): { isDirectory(): boolean };
 }
 
-const hooks: { fs?: ExternalFsLike } = {};
+/** 把同步测试 fs 包成异步 VersionFs（测试注入用）。 */
+export function versionFsFromSync(fs: ExternalFsLike): VersionFs {
+  const norm = (p: string): string => p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const parent = (p: string): string => {
+    const n = norm(p);
+    const i = n.lastIndexOf("/");
+    return i > 0 ? n.slice(0, i) : "";
+  };
+  const mkdirp = (p: string): void => {
+    const parts = norm(p).split("/").filter(Boolean);
+    let cur = norm(p).startsWith("/") ? "/" : "";
+    for (const part of parts) {
+      cur = cur === "/" ? `/${part}` : cur ? `${cur}/${part}` : part;
+      if (!fs.existsSync(cur)) fs.mkdirSync(cur, { recursive: true });
+    }
+  };
+  return {
+    async exists(p) {
+      return fs.existsSync(norm(p));
+    },
+    async mkdirp(p) {
+      mkdirp(p);
+    },
+    async listNames(p) {
+      try {
+        return fs.readdirSync(norm(p));
+      } catch {
+        return [];
+      }
+    },
+    async readText(p) {
+      try {
+        return fs.readFileSync(norm(p), "utf8");
+      } catch {
+        return null;
+      }
+    },
+    async writeText(p, data) {
+      mkdirp(parent(p));
+      fs.writeFileSync(norm(p), data, "utf8");
+      return true;
+    },
+    async removeFile(p) {
+      if (!fs.existsSync(norm(p))) return false;
+      fs.unlinkSync?.(norm(p));
+      return true;
+    },
+    async removeTree(p) {
+      fs.rmSync?.(norm(p), { recursive: true, force: true });
+    },
+    async rename(from, to) {
+      if (!fs.existsSync(norm(from))) return true;
+      mkdirp(parent(to));
+      fs.renameSync?.(norm(from), norm(to));
+      return true;
+    },
+  };
+}
 
-/** 测试注入点；生产用 Node 真 fs。 */
+/** 测试注入点；传 null 恢复生产后端（生产后端由调用方显式传入）。 */
 export function __setFsForTest(fs: ExternalFsLike | null): void {
-  hooks.fs = fs ?? undefined;
-}
-
-function fsMod(): ExternalFsLike {
-  if (hooks.fs) return hooks.fs;
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  return eval("require")("fs") as ExternalFsLike;
-}
-
-/** 生产用 Node fs、测试用注入 fs 的统一出口（storage 的迁移/清理也走这里）。 */
-export function fsLike(): ExternalFsLike {
-  return fsMod();
+  __setVersionFsForTest(fs ? versionFsFromSync(fs) : null);
 }
 
 function join(...parts: string[]): string {
@@ -105,57 +154,40 @@ export function normalizeRecord(raw: Record<string, unknown>): SnapshotRecord {
   };
 }
 
-/** 逐级建目录（绝对路径两种形态都要保住前缀）。 */
-export function ensureDir(dir: string): void {
-  const fs = fsMod();
-  if (fs.existsSync(dir)) return;
-  const parts = dir.replace(/[\\/]+/g, "/").split("/");
-  // 绝对路径两种形态都要保住前缀：POSIX 的 "/a/b"（首段空串 → "/"）与
-  // Windows 的 "E:/a/b"（首段盘符）。相对路径从 "" 起步。
-  let current = parts[0].includes(":") ? parts[0] : parts[0] === "" ? "/" : "";
-  for (const part of parts.slice(current ? 1 : 0)) {
-    if (!part) continue;
-    current = `${current.replace(/\/+$/, "")}/${part}`;
-    if (!fs.existsSync(current)) fs.mkdirSync(current, { recursive: true });
-  }
+/** 目录下的条目分类：快照文件一律 .json，其余按目录处理。 */
+function isSnapshotFileName(name: string): boolean {
+  return name.endsWith(".json");
 }
 
-export function saveExternalSnapshot(
+export async function saveExternalSnapshot(
+  fs: VersionFs,
   root: string,
   key: string,
   timestamp: string,
   content: string,
   name: string,
-): boolean {
-  try {
-    const fs = fsMod();
-    const dir = externalSnapshotDir(root, key);
-    ensureDir(dir);
-    const record: SnapshotRecord = { timestamp, content, name };
-    fs.writeFileSync(externalSnapshotFilePath(root, key, timestamp), JSON.stringify(record, null, 2), "utf8");
-    return true;
-  } catch (e) {
-    console.error("[save-control] external snapshot write failed", key, e);
-    return false;
-  }
+): Promise<boolean> {
+  const dir = externalSnapshotDir(root, key);
+  await fs.mkdirp(dir);
+  const record: SnapshotRecord = { timestamp, content, name };
+  const ok = await fs.writeText(externalSnapshotFilePath(root, key, timestamp), JSON.stringify(record, null, 2));
+  if (!ok) console.error("[save-control] external snapshot write failed", key);
+  return ok;
 }
 
 /** 列某个库外文件的全部快照（新的在前）。 */
-export function listExternalSnapshots(root: string, key: string): (SnapshotRecord & { filePath: string })[] {
-  const fs = fsMod();
+export async function listExternalSnapshots(
+  fs: VersionFs,
+  root: string,
+  key: string,
+): Promise<(SnapshotRecord & { filePath: string })[]> {
   const dir = externalSnapshotDir(root, key);
-  if (!fs.existsSync(dir)) return [];
-  let names: string[] = [];
-  try {
-    names = fs.readdirSync(dir).filter((n) => n.endsWith(".json")).sort().reverse();
-  } catch {
-    return [];
-  }
+  const names = (await fs.listNames(dir)).filter(isSnapshotFileName).sort().reverse();
   const out: (SnapshotRecord & { filePath: string })[] = [];
   for (const n of names) {
     const filePath = join(dir, n);
     try {
-      const json = fs.readFileSync(filePath, "utf8");
+      const json = await fs.readText(filePath);
       if (json) out.push({ ...normalizeRecord(JSON.parse(json) as Record<string, unknown>), filePath });
     } catch {
       // 单条读不动不该让整个列表失败
@@ -164,73 +196,64 @@ export function listExternalSnapshots(root: string, key: string): (SnapshotRecor
   return out;
 }
 
-export function readExternalSnapshot(filePath: string): SnapshotRecord | null {
+export async function readExternalSnapshot(fs: VersionFs, filePath: string): Promise<SnapshotRecord | null> {
   try {
-    const fs = fsMod();
-    if (!fs.existsSync(filePath)) return null;
-    const json = fs.readFileSync(filePath, "utf8");
+    const json = await fs.readText(filePath);
+    if (!json) return null;
     return normalizeRecord(JSON.parse(json) as Record<string, unknown>);
   } catch {
     return null;
   }
 }
 
-export function deleteExternalSnapshot(root: string, filePath: string): boolean {
-  try {
-    const fs = fsMod();
-    if (!fs.existsSync(filePath)) return false;
-    fs.unlinkSync?.(filePath);
-    pruneEmptyDirs(root, filePath.replace(/[\\/]+/g, "/").split("/").slice(0, -1).join("/"));
-    return true;
-  } catch (e) {
-    console.error("[save-control] external snapshot delete failed", filePath, e);
-    return false;
-  }
+export async function deleteExternalSnapshot(
+  fs: VersionFs,
+  root: string,
+  filePath: string,
+): Promise<boolean> {
+  const ok = await fs.removeFile(filePath);
+  if (ok) await pruneEmptyDirs(fs, root, filePath.replace(/[\\/]+/g, "/").split("/").slice(0, -1).join("/"));
+  return ok;
 }
 
 /** 只保留最近的 keepCount 个 autosave 快照（0 = 不限制）。 */
-export function deleteOldestExternalAutosaves(root: string, key: string, keepCount: number): void {
+export async function deleteOldestExternalAutosaves(
+  fs: VersionFs,
+  root: string,
+  key: string,
+  keepCount: number,
+): Promise<void> {
   if (keepCount <= 0) return;
-  const all = listExternalSnapshots(root, key);
+  const all = await listExternalSnapshots(fs, root, key);
   const autosaves = all.filter((s) => s.name === "autosave");
   for (const s of autosaves.slice(Math.max(0, keepCount))) {
-    deleteExternalSnapshot(root, s.filePath);
+    await deleteExternalSnapshot(fs, root, s.filePath);
   }
 }
 
 /** 库外文件被改名/移动后，把它的快照目录也搬过去（键跟着变）。 */
-export function renameExternalSnapshotDir(root: string, oldKey: string, newKey: string): boolean {
-  try {
-    const fs = fsMod();
-    const from = externalSnapshotDir(root, oldKey);
-    const to = externalSnapshotDir(root, newKey);
-    if (!fs.existsSync(from) || from === to) return true;
-    ensureDir(to.split("/").slice(0, -1).join("/"));
-    fs.renameSync?.(from, to);
-    return true;
-  } catch (e) {
-    console.error("[save-control] external snapshot rename failed", oldKey, newKey, e);
-    return false;
-  }
+export async function renameExternalSnapshotDir(
+  fs: VersionFs,
+  root: string,
+  oldKey: string,
+  newKey: string,
+): Promise<boolean> {
+  const from = externalSnapshotDir(root, oldKey);
+  const to = externalSnapshotDir(root, newKey);
+  if (from === to) return true;
+  if (!(await fs.exists(from))) return true;
+  const ok = await fs.rename(from, to);
+  if (!ok) console.error("[save-control] external snapshot rename failed", oldKey, newKey);
+  return ok;
 }
 
 /** 从 startDir 向上清理空目录，但绝不删根（root 本身与根之外的都不动）。 */
-export function pruneEmptyDirs(root: string, startDir: string): void {
-  const fs = fsMod();
+export async function pruneEmptyDirs(fs: VersionFs, root: string, startDir: string): Promise<void> {
   let dir = startDir.replace(/[\\/]+/g, "/").replace(/\/+$/, "");
   while (dir && dir !== root && dir.startsWith(root + "/")) {
-    let names: string[] = [];
-    try {
-      names = fs.readdirSync(dir);
-    } catch {
-      break;
-    }
+    const names = await fs.listNames(dir);
     if (names.length > 0) break;
-    try {
-      fs.rmSync?.(dir, { recursive: true, force: true });
-    } catch {
-      break;
-    }
+    await fs.removeTree(dir);
     dir = dir.split("/").slice(0, -1).join("/");
   }
 }
@@ -245,46 +268,35 @@ export function pruneEmptyDirs(root: string, startDir: string): void {
  *
  * 返回是否全部搬完（源目录已消失）。
  */
-export function moveDirFs(from: string, to: string): boolean {
-  const fs = fsMod();
+export async function moveDirFs(fs: VersionFs, from: string, to: string): Promise<boolean> {
   const norm = (p: string) => p.replace(/[\\/]+/g, "/").replace(/\/+$/, "");
   const src = norm(from);
   const dst = norm(to);
   if (src === dst) return true;
   try {
-    if (!fs.existsSync(src)) return true;
-    if (!fs.existsSync(dst)) {
-      ensureDir(dst.split("/").slice(0, -1).join("/"));
-      try {
-        fs.renameSync?.(src, dst);
-        return true;
-      } catch {
-        ensureDir(dst); // 跨盘 rename 失败：落个目录接着按文件复制
-      }
+    if (!(await fs.exists(src))) return true;
+    if (!(await fs.exists(dst))) {
+      const renamed = await fs.rename(src, dst);
+      if (renamed) return true;
+      await fs.mkdirp(dst); // rename 失败：落个目录接着按文件复制
     }
     let allMoved = true;
-    for (const n of fs.readdirSync(src)) {
+    for (const n of await fs.listNames(src)) {
       const s = `${src}/${n}`;
       const d = `${dst}/${n}`;
-      const isDir = fs.statSync ? fs.statSync(s).isDirectory() : !n.endsWith(".json");
-      if (isDir) {
-        if (!moveDirFs(s, d)) allMoved = false;
+      if (!isSnapshotFileName(n)) {
+        if (!(await moveDirFs(fs, s, d))) allMoved = false;
         continue;
       }
-      if (fs.existsSync(d)) continue; // 目标已有同名快照：不覆盖，源里的稍后随目录清掉
-      try {
-        fs.writeFileSync(d, fs.readFileSync(s, "utf8"), "utf8");
-      } catch {
+      if (await fs.exists(d)) continue; // 目标已有同名快照：不覆盖
+      const data = await fs.readText(s);
+      if (data === null) {
         allMoved = false;
+        continue;
       }
+      if (!(await fs.writeText(d, data))) allMoved = false;
     }
-    if (allMoved) {
-      try {
-        fs.rmSync?.(src, { recursive: true, force: true });
-      } catch {
-        allMoved = false;
-      }
-    }
+    if (allMoved) await fs.removeTree(src);
     return allMoved;
   } catch (e) {
     console.error("[save-control] move dir failed", src, dst, e);

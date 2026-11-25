@@ -475,12 +475,13 @@ export default class MyObsidianPlugin extends Plugin {
 		},
 		{
 			// 两个上游 MIT 插件的合并（见 modules/save-control/NOTICE.md）。库外
-			// 文件支持依赖 Node fs（快照/读写），只承诺桌面端。
+			// 文件支持桌面端走 Node fs；移动端快照改存库内插件目录（vault adapter），
+			// 库内笔记的自动保存与版本历史在移动端同样可用。
 			id: "save-control",
 			name: "Save Control",
 			summary:
 				"自动保存节奏控制 + 文件版本历史（save-history 与 autosave-control 合并）：延迟落盘、状态栏待保存指示、标签页未保存圆点与关闭提示；虚拟文档树挂载的库外文件同样支持。上游 Sevoni（MIT）+ mihasm（MIT）。",
-			desktopOnly: true,
+			desktopOnly: false,
 			cls: SaveControlPlugin as unknown as ModuleDescriptor["cls"],
 		},
 		{

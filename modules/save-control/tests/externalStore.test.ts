@@ -16,8 +16,10 @@ import {
   renameExternalSnapshotDir,
   resolveVersionRoot,
   saveExternalSnapshot,
+  versionFsFromSync,
   type ExternalFsLike,
 } from '../src/externalStore';
+import { __setVersionFsForTest } from '../src/versionFs';
 import { absPathKey, decodeAbsKey } from '../src/targets';
 import { getSnapshotDirPath, migrateLegacySnapshots } from '../src/storage';
 
@@ -101,6 +103,10 @@ function makeFs(): ExternalFsLike & { files: Map<string, string>; dirs: Set<stri
 
 afterEach(() => __setFsForTest(null));
 
+function vfsOf(fs: ReturnType<typeof makeFs>) {
+  return versionFsFromSync(fs);
+}
+
 describe('resolveVersionRoot', () => {
   it('defaults to the Runtime folder outside the vault', () => {
     expect(resolveVersionRoot({ configured: '', vaultBase: 'E:/Vault' })).toBe(DEFAULT_VERSION_ROOT);
@@ -138,55 +144,59 @@ describe('absPathKey', () => {
 });
 
 describe('snapshot crud', () => {
-  it('saves, lists newest-first, reads and deletes', () => {
+  it('saves, lists newest-first, reads and deletes', async () => {
     const fs = makeFs();
     __setFsForTest(fs);
+    const vfs = vfsOf(fs);
     const root = '/root';
     const key = 'E/Vault/notes/foo.md';
-    saveExternalSnapshot(root, key, '2026-10-13T01:00:00.000Z', 'old content', 'autosave');
-    saveExternalSnapshot(root, key, '2026-10-13T02:00:00.000Z', 'new content', 'autosave');
+    await saveExternalSnapshot(vfs, root, key, '2026-10-13T01:00:00.000Z', 'old content', 'autosave');
+    await saveExternalSnapshot(vfs, root, key, '2026-10-13T02:00:00.000Z', 'new content', 'autosave');
 
-    const list = listExternalSnapshots(root, key);
+    const list = await listExternalSnapshots(vfs, root, key);
     expect(list).toHaveLength(2);
     expect(list[0].content).toBe('new content');
     expect(list[1].content).toBe('old content');
     expect(list[0].filePath).toBe(externalSnapshotFilePath(root, key, '2026-10-13T02:00:00.000Z'));
 
-    expect(readExternalSnapshot(list[0].filePath)?.content).toBe('new content');
+    expect((await readExternalSnapshot(vfs, list[0].filePath))?.content).toBe('new content');
 
-    expect(deleteExternalSnapshot(root, list[0].filePath)).toBe(true);
-    expect(listExternalSnapshots(root, key)).toHaveLength(1);
+    expect(await deleteExternalSnapshot(vfs, root, list[0].filePath)).toBe(true);
+    expect(await listExternalSnapshots(vfs, root, key)).toHaveLength(1);
   });
 
-  it('keeps only the newest N autosaves', () => {
+  it('keeps only the newest N autosaves', async () => {
     const fs = makeFs();
     __setFsForTest(fs);
+    const vfs = vfsOf(fs);
     const root = '/root';
     const key = 'k';
     for (let i = 1; i <= 5; i++) {
-      saveExternalSnapshot(root, key, `2026-10-13T0${i}:00:00.000Z`, `v${i}`, 'autosave');
+      await saveExternalSnapshot(vfs, root, key, `2026-10-13T0${i}:00:00.000Z`, `v${i}`, 'autosave');
     }
-    saveExternalSnapshot(root, key, '2026-10-13T06:00:00.000Z', 'manual', 'manual'); // 非 autosave 不计
-    deleteOldestExternalAutosaves(root, key, 2);
-    const left = listExternalSnapshots(root, key);
+    await saveExternalSnapshot(vfs, root, key, '2026-10-13T06:00:00.000Z', 'manual', 'manual'); // 非 autosave 不计
+    await deleteOldestExternalAutosaves(vfs, root, key, 2);
+    const left = await listExternalSnapshots(vfs, root, key);
     expect(left).toHaveLength(3);
     expect(left.map((s) => s.content)).toEqual(['manual', 'v5', 'v4']);
   });
 
-  it('renames the snapshot dir when the file moves', () => {
+  it('renames the snapshot dir when the file moves', async () => {
     const fs = makeFs();
     __setFsForTest(fs);
-    saveExternalSnapshot('/root', 'old-key', '2026-10-13T01:00:00.000Z', 'c', 'manual');
-    expect(renameExternalSnapshotDir('/root', 'old-key', 'new-key')).toBe(true);
-    expect(listExternalSnapshots('/root', 'old-key')).toHaveLength(0);
-    expect(listExternalSnapshots('/root', 'new-key')[0].content).toBe('c');
+    const vfs = vfsOf(fs);
+    await saveExternalSnapshot(vfs, '/root', 'old-key', '2026-10-13T01:00:00.000Z', 'c', 'manual');
+    expect(await renameExternalSnapshotDir(vfs, '/root', 'old-key', 'new-key')).toBe(true);
+    expect(await listExternalSnapshots(vfs, '/root', 'old-key')).toHaveLength(0);
+    expect((await listExternalSnapshots(vfs, '/root', 'new-key'))[0].content).toBe('c');
   });
 
-  it('does not crash on unknown files', () => {
+  it('does not crash on unknown files', async () => {
     const fs = makeFs();
     __setFsForTest(fs);
-    expect(readExternalSnapshot('/root/none.json')).toBeNull();
-    expect(deleteExternalSnapshot('/root', '/root/none.json')).toBe(false);
+    const vfs = vfsOf(fs);
+    expect(await readExternalSnapshot(vfs, '/root/none.json')).toBeNull();
+    expect(await deleteExternalSnapshot(vfs, '/root', '/root/none.json')).toBe(false);
   });
 });
 

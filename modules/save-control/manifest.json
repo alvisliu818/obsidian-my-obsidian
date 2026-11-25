@@ -3,7 +3,7 @@
   "name": "Save Control",
   "version": "0.1.0",
   "minAppVersion": "1.0.0",
-  "description": "自动保存节奏控制 + 文件版本历史（save-history 与 autosave-control 的合并），支持虚拟文档树挂载的库外文件。",
+  "description": "自动保存节奏控制 + 文件版本历史（save-history 与 autosave-control 的合并），支持虚拟文档树挂载的库外文件；移动端快照存库内插件目录。",
   "author": "alvisliu",
-  "isDesktopOnly": true
+  "isDesktopOnly": false
 }

@@ -2671,6 +2671,13 @@ export class MountPanelView extends ItemView {
         .onClick(() => this.openSearchInDir(mount, node && node.isDir ? node.rel : parentRelOf(node ? node.rel : ''))),
     );
     if (isGitRepoPath(mount.path)) {
+      // 独立仓库浏览器：主区标签页，移动端全屏可用（不依赖统一挂载面板）。
+      menu.addItem((item) =>
+        item
+          .setTitle('在仓库浏览器中打开')
+          .setIcon('git-branch' as never)
+          .onClick(() => void this.plugin.openGitRepoBrowser(mount.id)),
+      );
       const url = gitRepoWebUrl(node ? node.abs : mount.path, !node || node.isDir);
       if (url) {
         menu.addItem((item) =>
