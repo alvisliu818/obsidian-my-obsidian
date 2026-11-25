@@ -151,6 +151,13 @@ const EXTERNAL_ABS_VIEW_TYPES = new Set([
 /** Rows drawn beyond the viewport on each side, so fast scrolling stays filled. */
 const MOUNT_OVERSCAN = 8;
 
+/**
+ * 移动端抽屉开合动画期间几何会暂为 0——此时不能把 band 清空，否则子树
+ * 展开后下方整片空白且没有后续 scroll 事件来重绘（Android 实报）。
+ * 宁可一次性多画一段，几何恢复后正常 paint 会覆盖回去。
+ */
+const MOUNT_GEOMETRY_FALLBACK_ROWS = 400;
+
 /** Per-mount render state, kept across repaints. */
 interface MountState {
   /** Expanded folder paths, relative to the mount root. */
@@ -266,7 +273,18 @@ export class MountPanelView extends ItemView {
    * panel scrolls as one and there is no inner scroll box to fix in place.
    */
   private findScrollEl(): HTMLElement | null {
-    let el: HTMLElement | null = this.contentEl;
+    // 面板自身（.view-content.logseq-mount-panel）才是设计中的滚动容器。
+    // 桌面靠 styles.css 里 `[data-type="file-explorer"] .view-content...`
+    // 那条规则放开 overflow；移动端侧栏的 data-type / DOM 不同，规则可能
+    // 命中不到，向上找到的祖先不滚动 → 展开后的行不重绘（2026-11-25
+    // Android 实报：展开文件夹后下方同级项全消失）。这里直接认自己，
+    // inline 强制 overflow-y，彻底摆脱宿主选择器的差异。
+    const content = this.contentEl;
+    if (content.classList.contains('logseq-mount-panel')) {
+      content.style.overflowY = 'auto';
+      return content;
+    }
+    let el: HTMLElement | null = content;
     while (el) {
       const oy = getComputedStyle(el).overflowY;
       if (oy === 'auto' || oy === 'scroll') return el;
@@ -1638,14 +1656,20 @@ export class MountPanelView extends ItemView {
       if (scroller) {
         const outer = scroller.getBoundingClientRect();
         const inner = spacer.getBoundingClientRect();
-        if (inner.bottom < outer.top || inner.top > outer.bottom) {
+        if (outer.height <= 0 || inner.height <= 0) {
+          // 几何未就绪（移动端抽屉动画 / 后台标签）：降级多画一段，
+          // 绝不清空 band——清空后没有滚动事件就永远不会重画。
+          first = 0;
+          last = Math.min(rows.length, MOUNT_GEOMETRY_FALLBACK_ROWS);
+        } else if (inner.bottom < outer.top || inner.top > outer.bottom) {
           band.empty();
           return;
+        } else {
+          const above = inner.top < outer.top ? Math.floor((outer.top - inner.top) / MOUNT_ROW_HEIGHT) : 0;
+          first = Math.max(0, Math.min(rows.length, above - MOUNT_OVERSCAN));
+          const visible = Math.ceil(outer.height / MOUNT_ROW_HEIGHT) + MOUNT_OVERSCAN * 2;
+          last = Math.min(rows.length, first + visible);
         }
-        const above = inner.top < outer.top ? Math.floor((outer.top - inner.top) / MOUNT_ROW_HEIGHT) : 0;
-        first = Math.max(0, Math.min(rows.length, above - MOUNT_OVERSCAN));
-        const visible = Math.ceil(outer.height / MOUNT_ROW_HEIGHT) + MOUNT_OVERSCAN * 2;
-        last = Math.min(rows.length, first + visible);
       }
       band.empty();
       band.style.transform = `translateY(${first * MOUNT_ROW_HEIGHT}px)`;

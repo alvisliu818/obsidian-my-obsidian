@@ -60038,6 +60038,16 @@ div.SC-modal-output a.SC-icon-terminate-process { /* For terminator icons in Out
     width: 0; height: 0; display: none;
   }
 
+  /* 移动端（2026-11-25 Android 实报）侧栏 data-type / DOM 与桌面不同，下面那条
+     限定 [data-type="file-explorer"] 的规则可能命中不到，view-content 仍是
+     hidden → findScrollEl 向上找到不滚的祖先 → 展开文件夹后下方行不重绘。
+     面板自身一律可滚，不依赖宿主选择器。 */
+  .view-content.logseq-mount-panel {
+    overflow-y: auto !important;
+    overflow-x: auto !important;
+    scrollbar-width: auto;
+  }
+
   /* 挂载面板滚动修复（2026-11-07）：explorer 叶子的 view-content 被「外层不滚」
      规则置 hidden——那条规则针对旧 vault-explorer 视图的内置滚动器；现在该叶子
      宿主是 MountPanelView（findScrollEl 依赖 view-content 可滚）。限定挂载面板
