@@ -124,6 +124,16 @@ export class ExternalCodeView extends ItemView {
    * 悄悄改格式。现在改成只写真正编辑过的。
    */
   private dirty = false;
+  /** 移动端顶部工具栏（body.is-mobile 才显示）——见 buildMobileBar。 */
+  private mobileBarEl: HTMLElement | null = null;
+  private mobileDirtyEl: HTMLElement | null = null;
+  private mobileFontEl: HTMLElement | null = null;
+  private mobileWrapBtn: HTMLButtonElement | null = null;
+  /** 移动端手动字号（px）。0 = 还没手动调过，按 Monaco 当前字号起算。 */
+  private mobileFontSize = 0;
+  private mobileLockBtn: HTMLButtonElement | null = null;
+  /** 只读模式（移动端工具栏「只读」）：Monaco 关掉输入，撤销/缩进按钮落空。 */
+  private readOnly = false;
 
   /**
    * 混合模式引擎:非 null 表示当前以「注释区 = Logseq 块编辑器(view zone 内嵌)」
@@ -155,6 +165,9 @@ export class ExternalCodeView extends ItemView {
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
     super(leaf);
     this.plugin = plugin;
+    // 默认打开模式（设置「默认以只读模式打开文件」）：视图构造在插件
+    // loadSettings 之后。每标签独立，切只读不写回设置。
+    this.readOnly = plugin.settings.defaultReadOnly !== false;
   }
 
   getViewType(): string {
@@ -204,14 +217,22 @@ export class ExternalCodeView extends ItemView {
       popout: { viewType: VIEW_TYPE_EXTERNAL_CODE, getState: () => this.getState() },
       onRenamed: (newAbs, newName) => void this.handleRenamed(newAbs, newName),
       onDeleted: () => void this.leaf.detach(),
-      extraItems: (m) =>
+      extraItems: (m) => {
+        m.addItem((item) =>
+          item
+            .setTitle(this.readOnly ? '退出只读（可编辑）' : '切换为只读')
+            .setIcon((this.readOnly ? 'unlock' : 'lock') as never)
+            .setSection('open')
+            .onClick(() => this.toggleReadOnlyFromCommand()),
+        );
         m.addItem((item) =>
           item
             .setTitle('重新从磁盘加载')
             .setIcon('refresh-cw' as never)
             .setSection('open')
             .onClick(() => void this.reloadFromDisk()),
-        ),
+        );
+      },
       openWithExtras: (sub) => {
         // 应用内备选呈现（混合模式 = Markdown 注释区走块编辑器）。只对带
         // Markdown 注释区的文件有意义；纯源码文件两个模式等价，不给假选项。
@@ -673,6 +694,7 @@ export class ExternalCodeView extends ItemView {
    *  save-control 可经 configureAutoSave 接管这里的节奏(见 autoSaveOverride)。 */
   private scheduleSave(): void {
     this.dirty = true;
+    this.syncMobileBar();
     // 编辑过的 tab 对「复用/替换」保护(见 tabTouch.ts;落盘不清,对齐原生 md)
     markLeafTouched(this.leaf);
     const cfg = this.autoSaveOverride;
@@ -714,6 +736,11 @@ export class ExternalCodeView extends ItemView {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass('logseq-external-code-view');
+    // 初始只读态落到容器 class（桌面端靠它显示锁标记）。
+    contentEl.classList.toggle('lgp-read-only', this.readOnly);
+    // 移动端顶部工具栏：面包屑（breadcrumb 模块的 .bcn-bar 由宿主插在
+    // view-content 首位）下方、代码编辑区上方。
+    this.buildMobileBar();
 
     // The banner is optional and, when hidden, GONE — not compacted. Keeping a
     // one-line version still left a strip at the top, which is exactly what
@@ -749,7 +776,11 @@ export class ExternalCodeView extends ItemView {
     let content = this.lastDiskData;
     if (!content && this.abs) {
       try {
-        content = await readTextAny(this.abs);
+        // 库内文件走 vault 适配器读：移动端没有 Node fs（readTextAny 的
+        // 磁盘分支会抛 require('fs')），适配器是唯一可用的读路径。
+        content = this.inVault && this.vaultFile
+          ? await this.app.vault.read(this.vaultFile)
+          : await readTextAny(this.abs);
         this.loadFailed = false;
       } catch (e) {
         this.loadFailed = true;
@@ -818,6 +849,15 @@ export class ExternalCodeView extends ItemView {
       this.lspDisposables = monacoLspAttach(this.plugin, this.editor, language, docUri);
     }
     this.editor?.focus();
+    // 面包屑（breadcrumb 模块）跟随光标：Monaco 光标事件 → contentEl 自定义
+    // 事件 → 模块重建「文件 › 函数 › 循环…」路径（每实例只挂一次，dispose 释放）。
+    if (this.editor) {
+      this.viewDisposables.push(
+        this.editor.onDidChangeCursorPosition(() => {
+          this.contentEl.dispatchEvent(new CustomEvent('lgp-code-cursor'));
+        }),
+      );
+    }
     // 运行入口:编辑器右键菜单(顶条/孤立按钮已撤,见上方 banner 注释)
     if (this.editor && langFromExt(this.fileName)) {
       this.editor.addAction({
@@ -851,6 +891,9 @@ export class ExternalCodeView extends ItemView {
     }
     // 行级反链扫描(结果落 gutter 着色与悬浮数据)
     this.scanLineLinks();
+    // 编辑器就绪后把工具栏状态对齐到真实编辑器(字号/折行/只读/脏点)。
+    if (this.readOnly) this.editor?.updateOptions({ readOnly: true });
+    this.syncMobileBar();
   }
 
   // ------------------------------------------------------------------
@@ -1206,6 +1249,137 @@ export class ExternalCodeView extends ItemView {
     return el;
   }
 
+  // ------------------------------------------------------------------
+  // 移动端顶部工具栏（2026-11-26）
+  // ------------------------------------------------------------------
+
+  /**
+   * 构建移动端顶部工具栏（撤销/重做/缩进/字号/折行/保存）。
+   *
+   * 与块编辑器的同名工具栏同一套类名与布局（CSS 见 styles.css 的
+   * `.block-editor-mobile-bar` 段）——移动端没有 Tab / Ctrl 键，Monaco 的
+   * 缩进、撤销和手动保存全靠它。只在 body.is-mobile 下显示。
+   *
+   * pointerdown 一律 preventDefault：按钮抢走焦点会让 Monaco 收起软键盘、
+   * 丢掉光标位置（撤销/缩进仍作用于模型，但下一次输入要重新点回编辑区）。
+   */
+  private buildMobileBar(): void {
+    const bar = this.contentEl.createEl('div', {
+      cls: 'block-editor-mobile-bar',
+      attr: { role: 'toolbar', 'aria-label': '编辑工具栏' },
+    });
+    this.mobileBarEl = bar;
+    const tool = (text: string, label: string, action: string): HTMLButtonElement =>
+      bar.createEl('button', {
+        cls: 'lgp-mbar-tool',
+        text,
+        attr: { type: 'button', 'data-tool': action, 'aria-label': label, title: label },
+      });
+    this.mobileDirtyEl = bar.createEl('span', {
+      cls: 'lgp-mbar-dirty',
+      text: '●',
+      attr: { 'aria-label': '有未保存的修改', title: '有未保存的修改' },
+    });
+    tool('↶', '撤销', 'undo');
+    tool('↷', '重做', 'redo');
+    tool('⇤', '减少缩进（Shift+Tab）', 'outdent');
+    tool('⇥', '增加缩进（Tab）', 'indent');
+    tool('A−', '减小字号', 'font-down');
+    this.mobileFontEl = bar.createEl('span', { cls: 'lgp-mbar-font', text: '' });
+    tool('A+', '增大字号', 'font-up');
+    this.mobileWrapBtn = tool('折行', '自动折行', 'wrap');
+    this.mobileLockBtn = tool('只读', '只读模式（禁止编辑）', 'lock');
+    this.mobileLockBtn.setAttribute('aria-pressed', 'false');
+    bar.createEl('span', { cls: 'lgp-mbar-spacer' });
+    tool('保存', '保存', 'save');
+    bar.addEventListener('pointerdown', (ev) => ev.preventDefault());
+    bar.addEventListener('click', (ev) => {
+      const btn = (ev.target as HTMLElement | null)?.closest?.('[data-tool]') as HTMLElement | null;
+      if (!btn) return;
+      this.runMobileTool(btn.dataset?.tool ?? '');
+    });
+    this.syncMobileBar();
+  }
+
+  /** 工具栏按钮分发：全部走 Monaco 的编辑器动作，与快捷键同源。 */
+  private runMobileTool(tool: string): void {
+    // 只读：编辑类按钮落空（视图类——字号/折行/只读——照常）。
+    if (this.readOnly && ['undo', 'redo', 'indent', 'outdent'].includes(tool)) return;
+    const ed = this.editor;
+    switch (tool) {
+      case 'undo':
+        ed?.trigger('mobile-bar', 'undo', null);
+        break;
+      case 'redo':
+        ed?.trigger('mobile-bar', 'redo', null);
+        break;
+      case 'outdent':
+        ed?.trigger('mobile-bar', 'editor.action.outdentLines', null);
+        break;
+      case 'indent':
+        ed?.trigger('mobile-bar', 'editor.action.indentLines', null);
+        break;
+      case 'font-down':
+        this.stepMobileFontSize(ed, -1);
+        break;
+      case 'font-up':
+        this.stepMobileFontSize(ed, 1);
+        break;
+      case 'wrap': {
+        const on = ed ? ed.getOption(monacoRuntime.editor.EditorOption.wordWrap) === 'off' : true;
+        ed?.updateOptions({ wordWrap: on ? 'on' : 'off' });
+        break;
+      }
+      case 'lock':
+        this.toggleReadOnly();
+        break;
+      case 'save':
+        void this.flush(true);
+        break;
+      default:
+        return;
+    }
+    this.syncMobileBar();
+  }
+
+  /** A−/A+：改 Monaco 字号（行高/补全面板高度跟着走）。 */
+  private stepMobileFontSize(ed: monacoNS.editor.IStandaloneCodeEditor | null, delta: number): void {
+    const MIN = 11;
+    const MAX = 26;
+    const current = this.mobileFontSize || (ed ? ed.getOption(monacoRuntime.editor.EditorOption.fontSize) : 13);
+    this.mobileFontSize = Math.min(MAX, Math.max(MIN, current + delta));
+    ed?.updateOptions({ fontSize: this.mobileFontSize });
+  }
+
+  /** 只读开关：Monaco 关掉输入（滚动/选中复制仍可用）。 */
+  private toggleReadOnly(): void {
+    this.readOnly = !this.readOnly;
+    this.editor?.updateOptions({ readOnly: this.readOnly });
+    this.contentEl.classList.toggle('lgp-read-only', this.readOnly);
+    this.syncMobileBar();
+  }
+
+  /** 桌面端命令入口（工具栏在桌面隐藏，另给一条解锁路径）。 */
+  toggleReadOnlyFromCommand(): void {
+    this.toggleReadOnly();
+  }
+
+  /** 同步工具栏可变状态：未保存圆点、折行开关、只读、字号读数。 */
+  private syncMobileBar(): void {
+    if (!this.mobileBarEl) return;
+    this.mobileLockBtn?.classList.toggle('is-on', this.readOnly);
+    this.mobileLockBtn?.setAttribute('aria-pressed', String(this.readOnly));
+    this.mobileDirtyEl?.classList.toggle('is-dirty', this.dirty);
+    const ed = this.editor;
+    const wrapOff = !ed || ed.getOption(monacoRuntime.editor.EditorOption.wordWrap) === 'off';
+    this.mobileWrapBtn?.classList.toggle('is-on', !wrapOff);
+    this.mobileWrapBtn?.setAttribute('aria-pressed', String(!wrapOff));
+    if (this.mobileFontEl) {
+      const size = this.mobileFontSize || (ed ? ed.getOption(monacoRuntime.editor.EditorOption.fontSize) : 13);
+      this.mobileFontEl.setText(String(Math.round(size)));
+    }
+  }
+
   async flush(notify = false): Promise<void> {
     // 丢弃请求在身(「不保存并关闭」):本次以及之后的 flush 都是空操作。
     if (this.discardRequested) return;
@@ -1226,9 +1400,16 @@ export class ExternalCodeView extends ItemView {
     if (!this.dirty || data === this.lastDiskData) return;
     const previousDiskData = this.lastDiskData;
     try {
-      await writeTextAny(this.abs, data);
+      // 库内文件写回 vault（移动端没有 Node fs，writeTextAny 的磁盘分支必失败）；
+      // vault.modify 同时驱动 Obsidian 的修改事件与 save-control 的版本记录。
+      if (this.inVault && this.vaultFile) {
+        await this.app.vault.modify(this.vaultFile, data);
+      } else {
+        await writeTextAny(this.abs, data);
+      }
       this.lastDiskData = data;
       this.dirty = false;
+      this.syncMobileBar();
       if (notify) new Notice(`已保存 ${this.fileName}`);
       logOp(this.plugin, 'external.code.save', this.abs, 'ok');
       // 写盘绕过 vault 时 save-control 的 versionOnWrite(监听 vault modify)

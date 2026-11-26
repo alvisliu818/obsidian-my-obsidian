@@ -6,7 +6,7 @@
  * TextFileView requestSave/save — files stay 100% standard markdown).
  */
 
-import { MarkdownRenderer, Notice, TFile, TextFileView, parseYaml, stringifyYaml, type TAbstractFile, type ViewState, type ViewStateResult, type WorkspaceLeaf } from 'obsidian';
+import { MarkdownRenderer, Notice, TFile, TextFileView, parseYaml, stringifyYaml, type Menu, type TAbstractFile, type ViewState, type ViewStateResult, type WorkspaceLeaf } from 'obsidian';
 import { EditorView } from '@codemirror/view';
 import type { CompletionSource } from '@codemirror/autocomplete';
 import type LogseqEditorPlugin from '../main';
@@ -146,6 +146,19 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
 
   private editorContainerEl!: HTMLElement;
   private breadcrumbEl!: HTMLElement;
+  /** 移动端顶部工具栏（body.is-mobile 才显示）——见 buildMobileBar。 */
+  private mobileBarEl: HTMLElement | null = null;
+  private mobileDirtyEl: HTMLElement | null = null;
+  private mobileFontEl: HTMLElement | null = null;
+  private mobileWrapBtn: HTMLButtonElement | null = null;
+  /** 移动端字号（px）。0 = 尚未手动调节，首次按实际渲染字号起算。 */
+  private mobileFontSize = 0;
+  private mobileLockBtn: HTMLButtonElement | null = null;
+  /**
+   * 只读模式（移动端工具栏「只读」）：禁止一切编辑入口——点击不挂编辑器、
+   * 结构操作不落模型、撤销/重做/保存为空操作。仍可滚动、选中复制。
+   */
+  private readOnly = false;
   /** @internal 嵌入编辑模块(interactions/embedEditing)消费 */
   treeEl!: HTMLElement;
   private refsHostEl!: HTMLElement;
@@ -181,6 +194,9 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   constructor(leaf: WorkspaceLeaf, plugin: LogseqEditorPlugin) {
     super(leaf);
     this.plugin = plugin;
+    // 默认打开模式（设置「默认以只读模式打开文件」）：视图构造发生在插件
+    // loadSettings 之后，settings 此时已就绪。每标签独立，切只读不写回设置。
+    this.readOnly = plugin.settings.defaultReadOnly !== false;
     // TraceTime parity: the tracker reconciles from disk after every save —
     // refresh this page's labels shortly after (its reconcile reads async).
     this.registerEvent(
@@ -204,6 +220,18 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     return 'list-tree';
   }
 
+  /** 标签页 ⋮ 菜单：桌面端唯一的只读解锁入口（工具栏在桌面 CSS 隐藏）。 */
+  override onPaneMenu(menu: Menu, source: string): void {
+    super.onPaneMenu(menu, source);
+    menu.addItem((item) =>
+      item
+        .setTitle(this.readOnly ? '退出只读（可编辑）' : '切换为只读')
+        .setIcon((this.readOnly ? 'unlock' : 'lock') as never)
+        .setSection('open')
+        .onClick(() => this.toggleReadOnlyFromCommand()),
+    );
+  }
+
   // ------------------------------------------------------------------
   // DOM skeleton & lifecycle
   // ------------------------------------------------------------------
@@ -212,8 +240,15 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     super.onload();
     this.editorContainerEl = this.contentEl.createEl('div', { cls: 'block-editor-container' });
     this.breadcrumbEl = this.editorContainerEl.createEl('div', { cls: 'block-editor-breadcrumb' });
+    // 移动端顶部工具栏：面包屑（breadcrumb 模块的 .bcn-bar 由宿主插在
+    // view-content 首位）下方、正文滚动区上方。
+    this.buildMobileBar();
     const scroller = this.editorContainerEl.createEl('div', { cls: 'block-editor-scroller' });
     this.treeEl = scroller.createEl('div', { cls: 'block-editor-tree' });
+    // 初始只读态也要落到容器 class（桌面端靠它显示锁标记/挡住编辑入口）。
+    this.editorContainerEl.classList.toggle('lgp-read-only', this.readOnly);
+    // 工具栏的初始读数（字号）要等 treeEl 存在后才有意义。
+    this.syncMobileBar();
     // Focusable so a MULTI-SELECTION can own the keyboard. Measured on a real
     // instance: after Ctrl+click the focused CM6 is destroyed, focus falls back
     // to <body>, and a keydown on <body> never reaches this view's container
@@ -334,6 +369,155 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     commitEmbedEdit(this);
     clearAllBlockCaches(this.doc.blocks);
     super.onunload();
+  }
+
+  // ------------------------------------------------------------------
+  // 移动端顶部工具栏（2026-11-26）
+  // ------------------------------------------------------------------
+
+  /**
+   * 构建移动端顶部工具栏（撤销/重做/缩进/字号/折行/保存）。
+   *
+   * 位置：块编辑器容器最上面——面包屑（breadcrumb 模块的 .bcn-bar）由宿主
+   * 插在 view-content 首位，容器紧跟其后，工具栏因此正好落在面包屑下方。
+   * 只在移动端显示（CSS 门控 body.is-mobile）：桌面键盘齐全，工具栏是纯噪音；
+   * 移动端没有 Tab / Ctrl 键，没有它就无法缩进、撤销或手动保存（思源
+   * syfe-mopen__bar 的等价物）。
+   *
+   * pointerdown 一律 preventDefault：按钮一旦抢走焦点，focusedBlock 就被
+   * 提交清空——缩进/撤销失去作用对象，软键盘也会收起再弹出。
+   */
+  private buildMobileBar(): void {
+    const bar = this.editorContainerEl.createEl('div', {
+      cls: 'block-editor-mobile-bar',
+      attr: { role: 'toolbar', 'aria-label': '编辑工具栏' },
+    });
+    this.mobileBarEl = bar;
+    const tool = (text: string, label: string, action: string): HTMLButtonElement =>
+      bar.createEl('button', {
+        cls: 'lgp-mbar-tool',
+        text,
+        attr: { type: 'button', 'data-tool': action, 'aria-label': label, title: label },
+      });
+    this.mobileDirtyEl = bar.createEl('span', {
+      cls: 'lgp-mbar-dirty',
+      text: '●',
+      attr: { 'aria-label': '有未保存的修改', title: '有未保存的修改' },
+    });
+    tool('↶', '撤销', 'undo');
+    tool('↷', '重做', 'redo');
+    tool('⇤', '减少缩进（Shift+Tab）', 'outdent');
+    tool('⇥', '增加缩进（Tab）', 'indent');
+    tool('A−', '减小字号', 'font-down');
+    this.mobileFontEl = bar.createEl('span', { cls: 'lgp-mbar-font', text: '' });
+    tool('A+', '增大字号', 'font-up');
+    this.mobileWrapBtn = tool('折行', '代码块自动折行', 'wrap');
+    this.mobileLockBtn = tool('只读', '只读模式（禁止编辑）', 'lock');
+    this.mobileLockBtn.setAttribute('aria-pressed', 'false');
+    bar.createEl('span', { cls: 'lgp-mbar-spacer' });
+    tool('保存', '保存', 'save');
+    bar.addEventListener('pointerdown', (ev) => ev.preventDefault());
+    bar.addEventListener('click', (ev) => {
+      const btn = (ev.target as HTMLElement | null)?.closest?.('[data-tool]') as HTMLElement | null;
+      if (!btn) return;
+      this.runMobileTool(btn.dataset?.tool ?? '');
+    });
+    this.syncMobileBar();
+  }
+
+  /** 工具栏按钮分发（语义与桌面快捷键同源）。 */
+  private runMobileTool(tool: string): void {
+    // 只读：编辑类按钮全部落空（视图类——字号/折行/只读——照常）。
+    if (this.readOnly && ['undo', 'redo', 'indent', 'outdent', 'save'].includes(tool)) return;
+    switch (tool) {
+      case 'undo':
+        this.undoBeyondText();
+        break;
+      case 'redo':
+        this.redoBeyondText();
+        break;
+      case 'outdent':
+      case 'indent':
+        // 块选择态整组缩进；编辑中缩进当前块；都没有则不动。
+        if (this.selectedBlocks.size > 0) this.indentSelected(tool === 'outdent');
+        else this.handleTabFromCommand(tool === 'outdent');
+        break;
+      case 'font-down':
+        this.stepMobileFontSize(-1);
+        break;
+      case 'font-up':
+        this.stepMobileFontSize(1);
+        break;
+      case 'wrap':
+        this.toggleMobileCodeWrap();
+        break;
+      case 'lock':
+        this.toggleReadOnly();
+        break;
+      case 'save':
+        void this.saveFromMobileBar();
+        return;
+      default:
+        return;
+    }
+    this.syncMobileBar();
+  }
+
+  /** A−/A+：整棵树按 px 缩放（标题等用 em 继承，全篇一起变）。 */
+  private stepMobileFontSize(delta: number): void {
+    const MIN = 11;
+    const MAX = 26;
+    const current = this.mobileFontSize || Math.round(parseFloat(getComputedStyle(this.treeEl).fontSize) || 16);
+    this.mobileFontSize = Math.min(MAX, Math.max(MIN, current + delta));
+    this.treeEl.style.setProperty('--font-text-size', `${this.mobileFontSize}px`);
+  }
+
+  /** 「折行」：移动端代码块默认横向滚动，长行看不到右侧；开启后整段折行。 */
+  private toggleMobileCodeWrap(): void {
+    const on = this.editorContainerEl.classList.toggle('lgp-code-wrap');
+    this.mobileWrapBtn?.classList.toggle('is-on', on);
+    this.mobileWrapBtn?.setAttribute('aria-pressed', String(on));
+  }
+
+  /** 工具栏保存：立即落盘（库外走 remoteIO，库内走 TextFileView）。 */
+  private async saveFromMobileBar(): Promise<void> {
+    try {
+      if (this.loadFailed) return; // save() 自己会弹「加载失败，已阻止保存」
+      await this.save(true);
+      new Notice('已保存');
+    } finally {
+      this.syncMobileBar();
+    }
+  }
+
+  /** 只读开关：先提交在编辑的文本，再把所有编辑入口收起。 */
+  private toggleReadOnly(): void {
+    this.readOnly = !this.readOnly;
+    if (this.readOnly) this.commitFocusedText();
+    this.editorContainerEl.classList.toggle('lgp-read-only', this.readOnly);
+    this.syncMobileBar();
+  }
+
+  /** 桌面端命令/⋮ 菜单入口（工具栏在桌面隐藏，另给一条解锁路径）。 */
+  toggleReadOnlyFromCommand(): void {
+    this.toggleReadOnly();
+  }
+
+  /** 同步工具栏的可变状态：未保存圆点、折行开关、只读、字号读数。 */
+  private syncMobileBar(): void {
+    if (!this.mobileBarEl || !this.treeEl) return;
+    this.mobileLockBtn?.classList.toggle('is-on', this.readOnly);
+    this.mobileLockBtn?.setAttribute('aria-pressed', String(this.readOnly));
+    const dirty = this.isExternal
+      ? this.externalDirty
+      : this.lastDiskData !== null && this.serializeCurrent() !== this.lastDiskData;
+    this.mobileDirtyEl?.classList.toggle('is-dirty', dirty);
+    this.mobileWrapBtn?.classList.toggle('is-on', this.editorContainerEl.classList.contains('lgp-code-wrap'));
+    if (this.mobileFontEl) {
+      // 初始读数按实际渲染字号（--font-text-size）显示，与 SiYuan 的字号读数同位。
+      const size = this.mobileFontSize || Math.round(parseFloat(getComputedStyle(this.treeEl).fontSize) || 16);
+      this.mobileFontEl.setText(String(size));
+    }
   }
 
   /** Template expansion context: page title + user-defined variables. */
@@ -648,6 +832,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   async save(force = false): Promise<void> {
     if (!this.isExternal) {
       await super.save(force);
+      this.syncMobileBar();
       return;
     }
     // 丢弃请求在身:本次以及之后的 save 都是空操作(视图马上销毁)。
@@ -667,7 +852,12 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
     // through the edit paths, which all funnel into markDirty().
     if (!this.externalDirty && !force) return;
     const data = this.serializeCurrent();
-    if (data === this.externalDiskData) return;
+    if (data === this.externalDiskData) {
+      // 内容与磁盘一致：未保存圆点是虚警（例如撤销回已保存态后的手动保存）。
+      this.externalDirty = false;
+      this.syncMobileBar();
+      return;
+    }
     // 写盘前的磁盘基线:onExternalSaved 通知到时磁盘已被覆盖,库外又没有
     // 库内那套「首次标脏建会话备份」,不把它递过去,被编辑前的原始内容就
     // 永远进不了版本历史。此刻它必然等于磁盘真实内容(save 只在序列化
@@ -1156,6 +1346,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
 
   /** Called by renderTree when it reaches the focused block's content slot. */
   mountFocusedInto(content: HTMLElement): void {
+    if (this.readOnly) return;
     const b = this.focusedBlock;
     if (!b) return;
     // A re-render while a code editor was already mounted (scroll-cap bump,
@@ -1378,6 +1569,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   // ------------------------------------------------------------------
 
   focusBlock(b: Block, pos: CursorPos = 'end'): void {
+    if (this.readOnly) return;
     if (this.focusedCode?.block === b) {
       this.focusedCode.view.focus();
       return;
@@ -1406,6 +1598,7 @@ export class BlockEditorView extends TextFileView implements BlockRenderHost {
   }
 
   focusBlockFromClick(b: Block, ev: MouseEvent): void {
+    if (this.readOnly) return;
     this.clearSelection(); // editing replaces multi-selection
     const xy = { x: ev.clientX, y: ev.clientY };
     if (this.focusedCode?.block === b) {
@@ -1934,6 +2127,8 @@ ${content}`;
    * structural re-render.
    */
   mutate(fn: () => void, patch?: () => MutatePatch): void {
+    // 只读：结构/文本操作一律不落模型（拖拽、菜单、粘贴、快捷键都走这里）。
+    if (this.readOnly) return;
     const v = this.focusedView;
     const b = this.focusedBlock;
     if (v && b) {
@@ -2809,6 +3004,8 @@ ${content}`;
    * listener never sees it. See `src/interactions/hotkeys.ts`.
    */
   private handleGlobalKeydown(ev: KeyboardEvent): void {
+    // 只读：全局编辑快捷键（撤销/重做/缩进/删除/复制剪切）一律不接。
+    if (this.readOnly) return;
     // Escape exits multi-selection first (思源 Esc 链清除步：锚点或标记
     // 存在即整个退出模式). While a block or an embed row is
     // being edited we must NOT touch it: those editors install their own
@@ -3019,6 +3216,7 @@ ${content}`;
   }
 
   private undoRestore(anchor?: { index: number; caret: number | null } | null): boolean {
+    if (this.readOnly) return false;
     const cur = this.serializeCurrent();
     const snap = this.undo.undoPop(cur);
     if (snap === null) return false;
@@ -3027,6 +3225,7 @@ ${content}`;
   }
 
   private redoRestore(anchor?: { index: number; caret: number | null } | null): boolean {
+    if (this.readOnly) return false;
     const cur = this.serializeCurrent();
     const snap = this.undo.redoPop(cur);
     if (snap === null) return false;
@@ -3190,6 +3389,8 @@ ${content}`;
     if (!this.isExternal || this.externalAutoSaveEnabled) {
       this.requestSave(); // native: sets dirty + debounced save (2s)
     }
+    // 移动端工具栏的「未保存」圆点：只在状态可能变化时重算（每次提交一次）。
+    this.syncMobileBar();
   }
 
   private async onExternalModify(file: TAbstractFile): Promise<void> {

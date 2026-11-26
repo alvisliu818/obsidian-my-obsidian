@@ -552,6 +552,22 @@ export default class LogseqEditorPlugin extends Plugin {
       },
     });
 
+    // 桌面端没有移动端工具栏（CSS 只在 body.is-mobile 显示），默认只读开启时
+    // 必须另给解锁入口，否则电脑打开的文件永远键不进字。命令同时覆盖块编辑器
+    // 与代码编辑器两个视图；⋮ 菜单项也复用这个方法。
+    this.addCommand({
+      id: 'toggle-readonly',
+      name: '切换只读/编辑',
+      checkCallback: (checking) => {
+        const active = this.app.workspace.activeLeaf?.view;
+        const target =
+          active instanceof BlockEditorView || active instanceof ExternalCodeView ? active : null;
+        if (!target) return false;
+        if (!checking) target.toggleReadOnlyFromCommand();
+        return true;
+      },
+    });
+
     this.addCommand({
       id: 'rebuild-block-index',
       name: 'Rebuild block reference index',
@@ -1137,7 +1153,30 @@ export default class LogseqEditorPlugin extends Plugin {
     }
     this.settings.lspEnabled = this.settings.lspEnabled !== false;
     if (!Array.isArray(this.settings.lspServers)) this.settings.lspServers = [];
-    this.settings.externalBanner = this.settings.externalBanner !== false;
+    // 提示栏默认关闭（2026-11-26）：老配置被 loadSettings 回写过
+    // externalBanner:true，分不清是旧默认值还是用户显式选择。一次性迁移：
+    // 首次带新代码启动强制关并落标记；此后手动开/关都忠实保留。
+    if (this.settings.externalBannerDefaultOffMigrated !== true) {
+      this.settings.externalBanner = false;
+      this.settings.externalBannerDefaultOffMigrated = true;
+    }
+    if (typeof this.settings.externalBanner !== 'boolean') {
+      this.settings.externalBanner = DEFAULT_SETTINGS.externalBanner;
+    }
+    // 底部引用区默认关闭（2026-11-26）：同提示栏，老配置被回写过 true，
+    // 一次性迁移到 false 并落标记；此后用户手动开/关都忠实保留。
+    if (this.settings.pageReferencesDefaultOffMigrated !== true) {
+      this.settings.pageReferencesEnabled = false;
+      this.settings.pageReferencesDefaultOffMigrated = true;
+    }
+    if (typeof this.settings.pageReferencesEnabled !== 'boolean') {
+      this.settings.pageReferencesEnabled = DEFAULT_SETTINGS.pageReferencesEnabled;
+    }
+    // 默认只读：新装/升级用户取 DEFAULT_SETTINGS(true)，老配置里若手写了
+    // 非布尔值也收敛回布尔（避免 undefined 被当成「开」而误锁）。
+    if (typeof this.settings.defaultReadOnly !== 'boolean') {
+      this.settings.defaultReadOnly = DEFAULT_SETTINGS.defaultReadOnly;
+    }
     // Absent in every pre-toggle config → the affordance stays visible.
     this.settings.addBlockAffordance = this.settings.addBlockAffordance !== false;
     // Same deal: absent → the hover decorations (line + plus) keep floating in.

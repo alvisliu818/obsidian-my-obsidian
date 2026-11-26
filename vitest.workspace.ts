@@ -21,6 +21,7 @@ export default defineWorkspace([
   'modules/easy-sync/vitest.config.ts',
   'modules/code-editor/vitest.config.ts',
   'modules/code-link/vitest.config.ts',
+  'modules/breadcrumb/vitest.config.ts',
   'modules/index-core/vitest.config.ts',
   'modules/latex-delimiter-renderer/vitest.config.ts',
   'modules/md-editor/vitest.config.ts',

@@ -641,6 +641,87 @@ const nextBtnOf = (item) => item.children.find((c) => c.className === "bcn-popup
 		assert.strictEqual(zoomed[1], b2);
 	});
 
+	// ---------- 场景 18：代码文件按缩进显示函数/循环层级 ----------
+	// 代码没有 md 的标题层级，但缩进就是层级：块头（`:` / `{` 结尾）的嵌套
+	// 链由 codeOutline 构建，交互与标题面包屑一致（点击跳行 / 悬浮同级 / ›）。
+	const codeLines = [
+		'def foo():',
+		'    for i in range(3):',
+		'        if i:',
+		'            print(i)',
+		'bar = 1',
+	];
+	const codeHost = document.createElement("div");
+	codeHost.className = "view-content logseq-external-code-view";
+	document.body.appendChild(codeHost);
+	const codeEditor = {
+		cursor: { lineNumber: 4, column: 1 },
+		revealed: null,
+		scrolled: null,
+		getModel: () => ({ getLinesContent: () => codeLines }),
+		getPosition() {
+			return this.cursor;
+		},
+		setPosition(pos) {
+			this.cursor = pos;
+		},
+		revealLine(line) {
+			this.revealed = line;
+		},
+		revealLineInCenter(line) {
+			this.revealed = line;
+		},
+		setScrollTop(v) {
+			this.scrolled = v;
+		},
+	};
+	const codeView = {
+		contentEl: codeHost,
+		fileName: "probe.py",
+		abs: "/tmp/mount/probe.py",
+		editor: codeEditor,
+		getViewType: () => "logseq-external-code",
+	};
+	const codeApp = {
+		vault: app.vault,
+		metadataCache: app.metadataCache,
+		plugins: { plugins: {} },
+		workspace: {
+			getActiveViewOfType: () => null,
+			activeLeaf: { view: codeView },
+			getLeavesOfType: (type) => (type === "logseq-external-code" ? [{ view: codeView }] : []),
+			getLeaf: () => ({ openFile: async () => {} }),
+			on: () => ({}),
+		},
+	};
+	plugin.app = codeApp;
+	await plugin.refresh();
+	check("代码文件按缩进显示函数/循环层级", () => {
+		const b = barOf(codeView);
+		assert.ok(b, "代码视图里应插入面包屑");
+		assert.strictEqual(codeHost.children[0], b, "面包屑应在最前面");
+		assert.strictEqual(b.textContent, "probe.py›def foo():›for i in range(3):›if i:");
+	});
+	check("代码面包屑：悬浮提示带行号", () => {
+		const items = itemsOf(barOf(codeView));
+		assert.strictEqual(items[1].title, "第 1 行：def foo():");
+	});
+	check("代码面包屑：点某一段跳到那一行（不抢焦点）", () => {
+		itemsOf(barOf(codeView))[2].dispatch("click");
+		assert.deepStrictEqual(codeEditor.cursor, { lineNumber: 2, column: 1 });
+		assert.strictEqual(codeEditor.revealed, 2);
+	});
+	plugin.settings.codeBreadcrumb = false;
+	await plugin.refresh();
+	check("代码面包屑开关：关掉后回收", () => {
+		assert.strictEqual(barOf(codeView), null);
+	});
+	plugin.settings.codeBreadcrumb = true;
+	await plugin.refresh();
+	check("代码面包屑开关：重新打开后恢复", () => {
+		assert.ok(barOf(codeView), "开关打开后应重新渲染");
+	});
+
 	plugin.onunload();
 	assert.strictEqual(barOf(view), null);
 	assert.strictEqual(barOf(extView), null);

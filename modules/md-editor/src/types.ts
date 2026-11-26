@@ -350,10 +350,13 @@ export interface BlockEditorSettings {
   refsLinkedDefaultCollapsed: boolean;
   refsUnlinkedDefaultCollapsed: boolean;
   /**
-   * 底部链接引用区总开关(2026-11-21 用户):false = 整块不渲染(Linked/
-   * Unlinked references 都不出现在页面底部)。侧边面板入口在区头图标。
+   * 底部链接引用区总开关：false = 整块不渲染（Linked / Unlinked references
+   * 都不出现在页面底部）。2026-11-26 起默认关闭——底部更干净，需要时可在
+   * 设置里开启，或用侧边面板命令「Open the linked/unlinked references panel」。
    */
   pageReferencesEnabled: boolean;
+  /** 一次性迁移标记：底部引用区默认值由开改关（2026-11-26）后只强制落一次 false。 */
+  pageReferencesDefaultOffMigrated?: boolean;
   /**
    * 布局就绪后后台预热未链接引用的签名索引。
    *
@@ -433,12 +436,20 @@ export interface BlockEditorSettings {
    */
   iconThemePref: string;
   /**
-   * Show the banner above an external file's content (the "库外" strip with the
-   * path and the Save button). It is honest about where the file lives, but it
-   * eats vertical space, so it can be turned off once the behaviour is familiar.
-   * When hidden, saving still happens on the usual debounce.
+   * 文件顶部的提示栏（文件名 / 库内库外标记 / 路径 / 同步状态 / 保存按钮）。
+   * 2026-11-26 起默认关闭：占竖向空间，保存照常走自动保存节奏，移动端工具栏
+   * 与桌面 Ctrl+S / ⋮ 菜单仍可手动保存。想看提示栏可在设置里手动开启。
    */
   externalBanner: boolean;
+  /** 一次性迁移标记：提示栏默认值由开改关（2026-11-26）后只强制落一次 false。 */
+  externalBannerDefaultOffMigrated?: boolean;
+  /**
+   * 文件打开时默认进入只读模式（2026-11-26）：块编辑器与代码编辑器共用。
+   * 开启后打开的文件锁定、不能输入，需点工具栏「只读」按钮解锁；工具栏只在
+   * 移动端显示，桌面端另有命令「切换只读/编辑」与 ⋮ 菜单项解锁。
+   * 只作为新视图的初值，切换只读是视图会话状态，不写进设置/视图状态。
+   */
+  defaultReadOnly: boolean;
   /** Recently opened file paths, newest first (bounded by RECENT_LIMIT). */
   recentFiles: string[];
   /** Vault-wide content search panel options. */
@@ -541,7 +552,7 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   // Unlinked references 是全库线性扫描，大库上每次开页几百 ms~数秒，默认折叠
   // （打开时不跑查询，点标题栏展开才跑）。需要默认展开的在设置里关掉本项。
   refsUnlinkedDefaultCollapsed: true,
-  pageReferencesEnabled: true,
+  pageReferencesEnabled: false,
   refsDefaultCollapsed: false,
   // 预热的成本是按 8ms 分片让出主线程的后台 CPU，用户几乎无感，换来首次
   // 展开 Unlinked references 也是 ~10ms。不想常驻那点内存的可关掉。
@@ -566,7 +577,8 @@ export const DEFAULT_SETTINGS: BlockEditorSettings = {
   wordCompleteDictionaryPath: '',
   codeThemePref: '',
   iconThemePref: '',
-  externalBanner: true,
+  externalBanner: false,
+  defaultReadOnly: true,
   recentFiles: [],
   contentSearch: { ...DEFAULT_CONTENT_SEARCH },
 };

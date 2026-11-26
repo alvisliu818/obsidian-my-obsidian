@@ -152,6 +152,19 @@ export class BreadcrumbNavSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName("代码文件面包屑")
+			.setDesc(
+				"代码文件（.py/.js/.ts 等）顶部按缩进显示所在函数/循环/条件层级，点击某一段跳到那一行——与笔记的标题面包屑同款交互"
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.codeBreadcrumb).onChange(async (value) => {
+					this.plugin.settings.codeBreadcrumb = value;
+					await this.plugin.saveSettings();
+					this.plugin.scheduleRefresh(0);
+				})
+			);
+
+		new Setting(containerEl)
 			.setName("菜单最多显示项数")
 			.setDesc("悬浮菜单一次最多显示多少个条目")
 			.addText((text) =>

@@ -75,6 +75,107 @@
   scrollbar-gutter: stable;
 }
 
+/* ---------- 移动端顶部工具栏（2026-11-26） ---------- */
+/* 撤销/重做/缩进/字号/折行/保存——只在移动端出现（body.is-mobile 由宿主
+   添加）。桌面键盘齐全，缩进/撤销/保存都有快捷键，工具栏是纯噪音。
+   位置在块编辑器容器最上面：面包屑（breadcrumb 模块的 .bcn-bar）由宿主插在
+   view-content 首位，容器紧跟其后，工具栏因此正好落在面包屑下方。 */
+.block-editor-mobile-bar {
+  display: none;
+}
+
+body.is-mobile .block-editor-mobile-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 4px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  /* 极窄屏允许横向滚动：每个工具都够得着，而不是挤掉或换行遮住编辑区 */
+  overflow-x: auto;
+  scrollbar-width: thin;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.block-editor-mobile-bar .lgp-mbar-tool {
+  flex: none;
+  /* Obsidian 移动端给 button 的触摸高度是 44px —— 30px 才排得下一行工具 */
+  height: 30px;
+  min-width: 28px;
+  min-height: 30px;
+  padding: 0 5px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.block-editor-mobile-bar .lgp-mbar-tool:hover,
+.block-editor-mobile-bar .lgp-mbar-tool:active {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.block-editor-mobile-bar .lgp-mbar-tool.is-on {
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+}
+
+/* 未保存圆点：固定宽度，避免出现/消失时按钮群横移 */
+.block-editor-mobile-bar .lgp-mbar-dirty {
+  flex: none;
+  min-width: 8px;
+  padding: 0 2px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-accent);
+  opacity: 0;
+  transition: opacity 80ms linear;
+}
+
+.block-editor-mobile-bar .lgp-mbar-dirty.is-dirty {
+  opacity: 1;
+}
+
+.block-editor-mobile-bar .lgp-mbar-font {
+  flex: none;
+  min-width: 14px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.block-editor-mobile-bar .lgp-mbar-spacer {
+  flex: 1 1 auto;
+}
+
+/* ---------- 只读态（默认打开模式 / 工具栏「只读」按钮） ---------- */
+/* 编辑入口已在 TS 层全部挡住（mutate / focusBlock / 快捷键 / 保存），
+   这里只做视觉收尾：文末「添加块」行在只读下是死入口，直接藏掉；
+   代码块/选中区照常可选中复制。lgp-read-only 由两个 view 容器在初始
+   渲染与切换只读时同步 toggle。 */
+.block-editor-container.lgp-read-only .block-editor-addblock {
+  display: none !important;
+}
+
+/* 「折行」开启：代码块从横向滚动改为整段折行（移动端长行看不到右侧）。
+   !important 压过阅读态代码块钉死的 white-space: pre / overflow-x: scroll。 */
+.block-editor-container.lgp-code-wrap :is(.block-content-static:not(.block-dataview), .embed-content, .fc-question, .fc-answer) pre,
+.block-editor-container.lgp-code-wrap :is(.block-content-static:not(.block-dataview), .embed-content, .fc-question, .fc-answer) pre code {
+  white-space: pre-wrap !important;
+  overflow-wrap: anywhere;
+  overflow-x: hidden;
+}
+
+
 /* bcn-bar（breadcrumb 模块插在 view-content 首位的 sticky 条）与块编辑器
    同住一个 view-content：bar 占流空间，container 又是 height:100%，两者相加
    必然溢出 —— Obsidian 原生 .view-content 是 overflow:auto，于是编辑器
@@ -9150,6 +9251,12 @@ div:hover > .git-gutter-marker.git-changedelete {
 .logseq-external-block-host .workspace-leaf-content > .view-content {
   padding: 0;
   overflow: hidden;
+  /* 移动端（.is-phone）给每个 .view-content 加 margin-top:
+     var(--view-top-spacing)（实测 90px）以避开悬浮的视图头。库外宿主里嵌套
+     的编辑器不是叶子内容，会二次偏移——面包屑下方多出一条 90px 空白
+     （2026-11-26 用户实报）。!important 压过 Obsidian 的
+     .is-phone .mod-root .workspace-leaf-content .view-content。 */
+  margin-top: 0 !important;
 }
 
 /* External code view — 同上：Obsidian 给 .view-content 的 12px 左右内边距让

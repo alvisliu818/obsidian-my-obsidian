@@ -1,5 +1,6 @@
 import { MarkdownView, Plugin, TFile, addIcon, setIcon } from "obsidian";
 import { buildHeadingTree, chainTo, childrenOf, siblingsOf } from "./headingTree";
+import { buildCodeOutline, type CodeOutlineNode } from "./codeOutline";
 import { BreadcrumbNavSettingTab } from "./settings";
 import { DEFAULT_SETTINGS } from "./types";
 import type { BreadcrumbNavSettings, HeadingNode, HeadingTree, MenuEntry } from "./types";
@@ -37,6 +38,9 @@ const LOGSEQ_VIEW_TYPE = "md-editor";
 /** obsidian-logseq 打开库外 markdown 的外壳视图（虚拟文档树点击 md 走的正是它）。
  *  它自己没有 file，真正的块编辑器托管在 blockEditor 里。 */
 const LOGSEQ_EXTERNAL_VIEW_TYPE = "logseq-external-block";
+/** 代码文件编辑器（MD Editor 的 Monaco 视图；库内代码扩展名与库外代码文件都走它）。
+ *  没有标题也没有块——面包屑按**缩进**给出函数/循环/条件层级。 */
+const EXTERNAL_CODE_VIEW_TYPE = "logseq-external-code";
 /** obsidian-logseq Block 的极小子集（面包屑只读 text / children / parent） */
 interface LgBlockLike {
 	text: string;
@@ -86,8 +90,29 @@ interface PageInfo {
 	file: TFile | null;
 }
 
-/** 能挂面包屑的视图：原生 Markdown 视图、logseq 大纲视图、logseq 库外文件外壳视图 */
-type BarView = MarkdownView | LogseqBlockView | LogseqExternalView;
+/** Monaco 编辑器的极小子集（面包屑只读光标/行文本 + 跳行）。 */
+interface MonacoCodeEditorLike {
+	getModel?: () => { getLinesContent?: () => string[] } | null;
+	getPosition?: () => { lineNumber: number; column: number } | null;
+	setPosition?: (pos: { lineNumber: number; column: number }) => void;
+	revealLine?: (line: number) => void;
+	revealLineInCenter?: (line: number) => void;
+	setScrollTop?: (v: number) => void;
+}
+
+/** 代码文件编辑器视图（logseq-external-code）——按缩进显示结构路径。 */
+interface ExternalCodeViewLike {
+	contentEl: HTMLElement;
+	/** 磁盘绝对路径（库外）或库内绝对路径 */
+	abs: string;
+	fileName: string;
+	getViewType(): string;
+	editor: MonacoCodeEditorLike | null;
+}
+
+/** 能挂面包屑的视图：原生 Markdown 视图、logseq 大纲视图、logseq 库外文件外壳视图、
+ *  代码文件编辑器 */
+type BarView = MarkdownView | LogseqBlockView | LogseqExternalView | ExternalCodeViewLike;
 /** CodeMirror 6 EditorView 的极小子集，避免直接依赖 CM 类型 */
 interface CmLike {
 	scrollDOM?: HTMLElement;
@@ -153,6 +178,10 @@ export default class BreadcrumbNavPlugin extends Plugin {
 	private bars: Map<HTMLElement, HTMLElement> = new Map();
 	/** 已挂 lgp-block-focus 监听的 logseq 视图宿主（每个视图只挂一次） */
 	private wiredLogseqHosts: Set<HTMLElement> = new Set();
+	/** 已挂 lgp-code-cursor 监听的代码视图宿主（每个视图只挂一次） */
+	private wiredCodeHosts: Set<HTMLElement> = new Set();
+	/** 挂着面包屑的代码视图宿主（「代码文件面包屑」开关关掉时据此回收） */
+	private codeBars: Set<HTMLElement> = new Set();
 	private nextIconEl: HTMLElement | null = null;
 	private nextEntriesProvider: (() => MenuEntry[]) | null = null;
 
@@ -327,6 +356,7 @@ export default class BreadcrumbNavPlugin extends Plugin {
 			this.removeBars();
 			return;
 		}
+		if (!this.settings.codeBreadcrumb) this.removeCodeBars();
 
 		const active = this.getActiveBarView();
 		const views = this.collectBarViews(active);
@@ -352,6 +382,7 @@ export default class BreadcrumbNavPlugin extends Plugin {
 		if (md) return md;
 		const v = this.app.workspace.activeLeaf?.view;
 		if (v && (this.isLogseqView(v) || this.isLogseqExternalView(v))) return v;
+		if (v && this.settings.codeBreadcrumb && this.isExternalCodeView(v)) return v;
 		return null;
 	}
 
@@ -360,7 +391,12 @@ export default class BreadcrumbNavPlugin extends Plugin {
 		const out: BarView[] = [];
 		const push = (v: unknown): void => {
 			if (out.indexOf(v as BarView) >= 0) return;
-			if (this.isMarkdownView(v) || this.isLogseqView(v) || this.isLogseqExternalView(v)) {
+			if (
+				this.isMarkdownView(v) ||
+				this.isLogseqView(v) ||
+				this.isLogseqExternalView(v) ||
+				(this.settings.codeBreadcrumb && this.isExternalCodeView(v))
+			) {
 				out.push(v as BarView);
 			}
 		};
@@ -370,6 +406,11 @@ export default class BreadcrumbNavPlugin extends Plugin {
 		this.app.workspace
 			.getLeavesOfType(LOGSEQ_EXTERNAL_VIEW_TYPE)
 			.forEach((leaf) => push(leaf.view));
+		if (this.settings.codeBreadcrumb) {
+			this.app.workspace
+				.getLeavesOfType(EXTERNAL_CODE_VIEW_TYPE)
+				.forEach((leaf) => push(leaf.view));
+		}
 		return out;
 	}
 
@@ -387,6 +428,13 @@ export default class BreadcrumbNavPlugin extends Plugin {
 		return c.getViewType?.() === LOGSEQ_VIEW_TYPE && !!c.contentEl;
 	}
 
+	/** 代码文件编辑器（Monaco；库内代码扩展名与库外代码文件共用） */
+	private isExternalCodeView(v: unknown): v is ExternalCodeViewLike {
+		if (!v || typeof v !== "object") return false;
+		const c = v as Partial<ExternalCodeViewLike> & { getViewType?: () => string };
+		return c.getViewType?.() === EXTERNAL_CODE_VIEW_TYPE && !!c.contentEl;
+	}
+
 	/** logseq 库外文件外壳视图（虚拟文档树点击 md 打开的那个） */
 	private isLogseqExternalView(v: unknown): v is LogseqExternalView {
 		if (!v || typeof v !== "object") return false;
@@ -398,6 +446,12 @@ export default class BreadcrumbNavPlugin extends Plugin {
 
 	/** 当前视图文件是什么（面包屑首项）。 */
 	private pageInfo(view: BarView): PageInfo | null {
+		if (this.isExternalCodeView(view)) {
+			const abs = view.abs ?? "";
+			const name = view.fileName || abs.split(/[\\/]/).pop() || "代码文件";
+			// 代码文件保留扩展名（.py/.json 是有效信息）；tooltip 给绝对路径。
+			return { name, title: abs.replace(/\\/g, "/"), file: null };
+		}
 		if (this.isLogseqExternalView(view)) {
 			const abs = view.abs ?? "";
 			const name = view.fileName || abs.split(/[\\/]/).pop() || "外部笔记";
@@ -426,6 +480,10 @@ export default class BreadcrumbNavPlugin extends Plugin {
 	}
 
 	private renderBar(view: BarView, isActive: boolean): void {
+		if (this.isExternalCodeView(view)) {
+			this.renderCodeBar(view, isActive);
+			return;
+		}
 		if (this.isLogseqView(view) || this.isLogseqExternalView(view)) {
 			this.renderLogseqBar(view, isActive);
 			return;
@@ -670,6 +728,163 @@ export default class BreadcrumbNavPlugin extends Plugin {
 		if (bar.parentElement !== host) host.insertBefore(bar, host.firstChild);
 	}
 
+	/**
+	 * 代码文件面包屑：文件 › 函数 › 循环 › 条件…
+	 *
+	 * 代码没有 md 的标题层级，但缩进就是层级——块头（`:` / `{` 结尾的行）
+	 * 的嵌套链由 codeOutline 构建。交互与 md 标题面包屑同款：点击跳行、
+	 * 悬浮看同级、末尾 › 看下一级（各有设置开关）。
+	 */
+	private renderCodeBar(view: ExternalCodeViewLike, isActive: boolean): void {
+		const info = this.pageInfo(view);
+		if (!info) return;
+		const ed = view.editor;
+		const lines = ed?.getModel?.()?.getLinesContent?.() ?? [];
+		const outline = buildCodeOutline(lines);
+		const pos = ed?.getPosition?.();
+		const chain = pos ? (outline.chainAt.get(pos.lineNumber) ?? []) : [];
+		this.closePopups();
+		// 光标移动 → 视图派发 lgp-code-cursor → 重建路径（只挂一次）。
+		this.wireCodeCursor(view);
+
+		const host = view.contentEl;
+		let bar = this.bars.get(host);
+		if (!bar) {
+			bar = document.createElement("div");
+			this.bars.set(host, bar);
+		}
+		this.codeBars.add(host);
+		if (isActive) bar.id = "bcn-bar";
+		else if (bar.id) bar.removeAttribute("id");
+		bar.className = "bcn-bar" + (this.settings.sticky ? " bcn-sticky" : "");
+		bar.textContent = "";
+		if (isActive) {
+			this.barEl = bar;
+			this.nextIconEl = null;
+			this.nextEntriesProvider = null;
+		}
+
+		// —— 首项：文件名（点击回到文件顶部） ——
+		const pageEl = document.createElement("span");
+		pageEl.className = "bcn-item bcn-page";
+		pageEl.textContent = info.name;
+		pageEl.title = info.title;
+		pageEl.addEventListener("click", () => {
+			this.lastJumpAt = Date.now();
+			this.closePopups();
+			ed?.setScrollTop?.(0);
+			ed?.revealLine?.(1);
+			this.scheduleRefresh(0);
+		});
+		bar.appendChild(pageEl);
+
+		// —— 缩进路径：函数 / 循环 / 条件… ——
+		chain.forEach((node, i) => {
+			bar.appendChild(this.createSeparator());
+			const el = document.createElement("span");
+			el.className = "bcn-item" + (i === chain.length - 1 ? " bcn-active" : "");
+			el.textContent = this.truncate(node.text);
+			el.title = `第 ${node.line} 行：${node.text}`;
+			el.addEventListener("click", () => {
+				this.closePopups();
+				this.jumpToCodeLine(view, node.line);
+				this.scheduleRefresh(0);
+			});
+			if (this.settings.enableSiblingsMenu) {
+				this.attachHover(el, () => {
+					const siblings = i > 0 ? chain[i - 1].children : outline.roots;
+					return this.codeEntries(view, siblings, node);
+				});
+			}
+			bar.appendChild(el);
+		});
+
+		// —— 末尾的 ›：下一级 ——
+		const nextChildren = this.settings.enableNextLevel
+			? chain.length
+				? chain[chain.length - 1].children
+				: outline.roots
+			: [];
+		if (nextChildren.length) {
+			const icon = document.createElement("span");
+			icon.className = "bcn-next";
+			icon.textContent = "›";
+			icon.title = "下一级";
+			const provider = () =>
+				this.codeEntries(view, nextChildren, chain.length ? chain[chain.length - 1] : null);
+			this.attachHover(icon, provider);
+			icon.addEventListener("click", (ev) => {
+				ev.stopPropagation();
+				const root = this.popups[0];
+				if (root && root.anchor === icon) {
+					this.closePopups();
+					return;
+				}
+				this.showPopup(icon, provider());
+			});
+			bar.appendChild(icon);
+			if (isActive) {
+				this.nextIconEl = icon;
+				this.nextEntriesProvider = provider;
+			}
+		}
+
+		if (bar.parentElement !== host) host.insertBefore(bar, host.firstChild);
+	}
+
+	/** 光标事件只挂一次（视图复用同一 contentEl）。 */
+	private wireCodeCursor(view: ExternalCodeViewLike): void {
+		const host = view.contentEl;
+		if (this.wiredCodeHosts.has(host)) return;
+		this.wiredCodeHosts.add(host);
+		host.addEventListener("lgp-code-cursor", () => {
+			if (!host.isConnected) {
+				this.wiredCodeHosts.delete(host);
+				return;
+			}
+			this.scheduleRefresh(120);
+		});
+	}
+
+	/** 跳到某一行：只滚动 + 落光标，不抢焦点（移动端不弹软键盘）。 */
+	private jumpToCodeLine(view: ExternalCodeViewLike, line: number): void {
+		const ed = view.editor;
+		if (!ed) return;
+		this.lastJumpAt = Date.now();
+		ed.setPosition?.({ lineNumber: line, column: 1 });
+		if (typeof ed.revealLineInCenter === "function") ed.revealLineInCenter(line);
+		else ed.revealLine?.(line);
+	}
+
+	/** 代码层级菜单条目：点文本 = 跳到那一行；点 › = 下钻到它的下一级。 */
+	private codeEntries(
+		view: ExternalCodeViewLike,
+		nodes: CodeOutlineNode[],
+		active: CodeOutlineNode | null
+	): MenuEntry[] {
+		return nodes.slice(0, this.settings.maxMenuItems).map((node, idx) => ({
+			key: `code:${node.line}:${idx}`,
+			text: this.truncate(node.text),
+			active: node === active,
+			hasChildren: node.children.length > 0,
+			onSelect: () => {
+				this.closePopups();
+				this.jumpToCodeLine(view, node.line);
+				this.scheduleRefresh(0);
+			},
+			onDrill: () => {
+				this.closePopups();
+				this.jumpToCodeLine(view, node.line);
+				void (async () => {
+					await this.refresh();
+					if (this.nextIconEl && this.nextEntriesProvider) {
+						this.showPopup(this.nextIconEl, this.nextEntriesProvider());
+					}
+				})();
+			},
+		}));
+	}
+
 	/** logseq 块菜单条目：点文本 = 聚焦该块（路径变为它那条链）；点 ▸ = 聚焦并把
 	 *  它的下一级菜单立即展开（下钻，等价 markdown 版 onDrill）。 */
 	private lgBlockEntries(view: LogseqBlockView, blocks: LgBlockLike[], active: LgBlockLike | null): MenuEntry[] {
@@ -707,6 +922,21 @@ export default class BreadcrumbNavPlugin extends Plugin {
 		return sep;
 	}
 
+	/** 只回收代码文件的面包屑（「代码文件面包屑」开关关掉时；笔记的保留）。 */
+	private removeCodeBars(): void {
+		if (!this.codeBars.size) return;
+		let removed = false;
+		this.codeBars.forEach((host) => {
+			const bar = this.bars.get(host);
+			bar?.remove();
+			this.bars.delete(host);
+			if (bar && this.barEl === bar) this.barEl = null;
+			removed = true;
+		});
+		this.codeBars.clear();
+		if (removed) this.closePopups();
+	}
+
 	private removeBars(): void {
 		this.closePopups();
 		this.bars.forEach((bar) => bar.remove());
@@ -723,6 +953,7 @@ export default class BreadcrumbNavPlugin extends Plugin {
 			if (live.has(host)) return;
 			bar.remove();
 			this.bars.delete(host);
+			this.codeBars.delete(host);
 			if (this.barEl === bar) this.barEl = null;
 			removed = true;
 		});

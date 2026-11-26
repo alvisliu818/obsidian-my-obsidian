@@ -59,6 +59,8 @@ export interface BreadcrumbNavSettings {
 	maxMenuItems: number;
 	/** 悬浮多少毫秒后弹出菜单（0 = 立即） */
 	hoverDelayMs: number;
+	/** 代码文件（logseq-external-code）顶部按缩进显示函数/循环层级 */
+	codeBreadcrumb: boolean;
 }
 
 export const DEFAULT_SETTINGS: BreadcrumbNavSettings = {
@@ -74,4 +76,5 @@ export const DEFAULT_SETTINGS: BreadcrumbNavSettings = {
 	followCursor: true,
 	maxMenuItems: 20,
 	hoverDelayMs: 160,
+	codeBreadcrumb: true,
 };

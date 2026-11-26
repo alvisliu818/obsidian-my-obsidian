@@ -768,6 +768,21 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
     // 2026-10-27 模块拆分:挂载/查看器/打开方式各节迁 virtual-tree 模块的设置页;
     // 这里留下的是渲染在本模块视图上的开关——代码块预热、注释区混合、
     // 库外提示栏与底部引用区的默认折叠。
+
+    new Setting(containerEl)
+      .setName('默认以只读模式打开文件')
+      .setDesc(
+        '开启（默认）：笔记与代码文件打开即锁定，不能输入，先点工具栏「只读」按钮解锁。' +
+          '工具栏只在手机端显示；电脑上用命令面板的「切换只读/编辑」或标签页 ⋮ 菜单解锁。' +
+          '关闭：打开即可编辑，与以前一致。切换只读只对当前标签生效，重开文件回到本设置的默认值。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.defaultReadOnly !== false).onChange(async (v) => {
+          this.plugin.settings.defaultReadOnly = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
     new Setting(containerEl)
       .setName('启动时预建代码块编辑器')
       .setDesc(
@@ -801,14 +816,14 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('显示库外文件提示栏')
+      .setName('显示文件顶部提示栏')
       .setDesc(
-        '在文件顶部显示提示栏（文件名、相对路径、「库外」标记与保存按钮）。' +
-          '关闭后提示栏完全不显示；文件仍按原有的自动保存节奏写回原文件，' +
-          '随时可按 Ctrl+S 立即保存。',
+        '在库内/库外文件顶部显示提示栏（文件名、相对路径、「库内/库外」标记与保存按钮）。' +
+          '默认关闭，提示栏完全不显示、内容区更高；文件仍按原有的自动保存节奏写回，' +
+          '随时可按 Ctrl+S（手机端工具栏「保存」）手动保存。想看它可手动开启。',
       )
       .addToggle((t) =>
-        t.setValue(this.plugin.settings.externalBanner !== false).onChange(async (v) => {
+        t.setValue(this.plugin.settings.externalBanner === true).onChange(async (v) => {
           this.plugin.settings.externalBanner = v;
           await this.plugin.saveSettings();
           this.plugin.rerenderExternalViews();
@@ -861,12 +876,13 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('底部链接引用区')
       .setDesc(
-        '页面底部的 Linked references / Unlinked references 区总开关。' +
-          '关闭后整块不再渲染（省掉展开查询的开销）；要侧栏面板就在区头点' +
-          '「作为侧边面板打开」图标，或用命令「Open the linked/unlinked references panel」。',
+        '页面底部的 Linked references / Unlinked references 区总开关，默认关闭：' +
+          '底部更干净，也省掉展开查询的开销。需要时用命令面板的' +
+          '「Open the linked/unlinked references panel」打开侧栏面板；' +
+          '想让区重新出现在每篇笔记底部可手动开启本开关。',
       )
       .addToggle((t) =>
-        t.setValue(this.plugin.settings.pageReferencesEnabled !== false).onChange(async (v) => {
+        t.setValue(this.plugin.settings.pageReferencesEnabled === true).onChange(async (v) => {
           this.plugin.settings.pageReferencesEnabled = v;
           await this.plugin.saveSettings();
           resetReferencesCollapse(this.plugin);
