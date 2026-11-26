@@ -167,6 +167,8 @@ describe('P2 混合视图链路', () => {
     // 进大纲时的转义,不能写回源文件)。
     const walk = (bs: Block[]): string[] =>
       bs.flatMap((b) => {
+        // 空行物化块是合成分隔符，不是代码行。
+        if (b.bare && b.text === '') return [];
         const fence = parseCodeFence(b.text);
         const lines = fence ? fence.content.split('\n') : unescapeNoteLine(b.text).split('\n');
         return b.children.length ? [...lines, ...walk(b.children)] : lines;
@@ -202,6 +204,8 @@ describe('缩进往返:混合视图保存路径逐字节无损', () => {
     const doc = parseDocument(vdoc);
     const walk = (bs: Block[]): string[] =>
       bs.flatMap((b) => {
+        // 空行物化块是合成分隔符，不是代码行（与 HybridCodeEditor 同口径）。
+        if (b.bare && b.text === '') return [];
         const fence = parseCodeFence(b.text);
         const lines = (fence ? fence.content : unescapeNoteLine(b.text)).split('\n');
         return b.children.length ? [...lines, ...walk(b.children)] : lines;
@@ -330,6 +334,8 @@ describe('注释区:一行一项 + 行首转义往返', () => {
     const out: string[] = [];
     const walk = (bs: Block[]): void => {
       for (const b of bs) {
+        // 空行物化块是合成分隔符，不是代码行。
+        if (b.bare && b.text === '') continue;
         const fence = parseCodeFence(b.text);
         if (fence) {
           out.push(...fence.content.split('\n'));
@@ -366,8 +372,8 @@ describe('注释区:一行一项 + 行首转义往返', () => {
     const src = ['"""', '```python', 'docstring 里的围栏示例', '"""', 'print(1)'].join('\n');
     const vdoc = toOutlineDocText(buildCodeDoc(src, 'python'));
     expect(vdoc).toContain('- \u200B```python');
-    // 结构没坏:注释区是 4 个一行块,代码段 1 个;不转义时围栏会吞到 EOF
-    expect(parseDocument(vdoc).blocks.length).toBe(5);
+    // 结构没坏:注释区是 4 个一行块,代码段 1 个 + 物化空行 1 个;不转义时围栏会吞到 EOF
+    expect(parseDocument(vdoc).blocks.length).toBe(6);
     expect(outlineToText(vdoc)).toBe(src);
   });
 

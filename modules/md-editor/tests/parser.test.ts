@@ -74,24 +74,27 @@ describe('parser: basic Logseq structure', () => {
   it('parses Logseq page properties (key:: value) without frontmatter', () => {
     const md = 'title:: My Page\ntags:: a, b\n\n- block';
     const doc = parseDocument(md);
-    expect(doc.blocks.length).toBe(2);
+    expect(doc.blocks.length).toBe(3);
     expect(doc.blocks[0].text).toBe('');
     expect(doc.blocks[0].props).toEqual({ title: 'My Page', tags: 'a, b' });
     expect(doc.blocks[0].frontmatter).toBeUndefined();
-    expect(doc.blocks[1].text).toBe('block');
-    expect(serializeDocument(doc)).toBe('title:: My Page\ntags:: a, b\n- block');
+    expect(doc.blocks[1].text).toBe(''); // 空行物化
+    expect(doc.blocks[2].text).toBe('block');
+    // 原文保真：块间空行不能被吃掉（用户报的 diff 一片红全是这种行）。
+    expect(serializeDocument(doc)).toBe('title:: My Page\ntags:: a, b\n\n- block');
   });
 
   it('frontmatter and Logseq page props coexist', () => {
     const md = '---\ntitle: x\n---\ntitle:: My Page\ntags:: a, b\n\n- block';
     const doc = parseDocument(md);
-    expect(doc.blocks.length).toBe(3);
+    expect(doc.blocks.length).toBe(4);
     expect(doc.blocks[0].frontmatter).toBe(true);
     expect(doc.blocks[0].text).toBe('title: x');
     expect(doc.blocks[1].text).toBe('');
     expect(doc.blocks[1].props).toEqual({ title: 'My Page', tags: 'a, b' });
-    expect(doc.blocks[2].text).toBe('block');
-    expect(serializeDocument(doc)).toBe('---\ntitle: x\n---\ntitle:: My Page\ntags:: a, b\n- block');
+    expect(doc.blocks[2].text).toBe(''); // 空行物化
+    expect(doc.blocks[3].text).toBe('block');
+    expect(serializeDocument(doc)).toBe('---\ntitle: x\n---\ntitle:: My Page\ntags:: a, b\n\n- block');
   });
 
   it('handles empty file', () => {
@@ -103,14 +106,16 @@ describe('parser: basic Logseq structure', () => {
 
 describe('parser: raw content preservation', () => {
   it('keeps headings raw; plain lines become first-level list items', () => {
+    // 空行物化(2026-11-25)：块间空行是可见的空段落块。
     const doc = parseDocument('# Title\n\nSome paragraph text.\n- item');
-    expect(doc.blocks.length).toBe(3);
+    expect(doc.blocks.length).toBe(4);
     expect(doc.blocks[0].kind).toBe('raw');
     expect(doc.blocks[0].text).toBe('# Title');
-    expect(doc.blocks[1].kind).toBe('list');
-    expect(doc.blocks[1].text).toBe('Some paragraph text.');
+    expect(doc.blocks[1].text).toBe(''); // 空行
     expect(doc.blocks[2].kind).toBe('list');
-    expect(doc.blocks[2].text).toBe('item');
+    expect(doc.blocks[2].text).toBe('Some paragraph text.');
+    expect(doc.blocks[3].kind).toBe('list');
+    expect(doc.blocks[3].text).toBe('item');
   });
 
   it('does not parse list lines inside top-level code fences', () => {
@@ -213,6 +218,7 @@ describe('parser: raw content preservation', () => {
     const doc = parseDocument('para A line 1\npara A line 2\n\npara B\n- item');
     expect(doc.blocks.map((b) => [b.kind, b.text])).toEqual([
       ['list', 'para A line 1\npara A line 2'],
+      ['list', ''], // 空行物化
       ['list', 'para B'],
       ['list', 'item'],
     ]);
@@ -348,7 +354,9 @@ describe('empty quote rows stay separate blocks and render as visible empty boxe
     const doc = parseDocument('> 示例代码：浅拷贝\n\n>\n\n```python\nx = 1\n```');
     expect(doc.blocks.map((b) => [b.kind, b.text])).toEqual([
       ['raw', '> 示例代码：浅拷贝'],
+      ['list', ''],
       ['raw', '>'],
+      ['list', ''],
       ['raw', '```python\nx = 1\n```'],
     ]);
   });
@@ -357,14 +365,16 @@ describe('empty quote rows stay separate blocks and render as visible empty boxe
     const doc = parseDocument('para\n\n>\n\n> b');
     expect(doc.blocks.map((b) => [b.kind, b.text])).toEqual([
       ['list', 'para'],
+      ['list', ''],
       ['raw', '>'],
+      ['list', ''],
       ['raw', '> b'],
     ]);
   });
 
   it('an isolated empty quote (no quote neighbor) stays its own block', () => {
     const doc = parseDocument('para\n\n>\n\npara2');
-    expect(doc.blocks.map((b) => b.text)).toEqual(['para', '>', 'para2']);
+    expect(doc.blocks.map((b) => b.text)).toEqual(['para', '', '>', '', 'para2']);
   });
 
   it('round-trips byte-stably for the blank-separated empty quote', () => {
@@ -393,7 +403,7 @@ describe('blank lines between quote blocks become empty paragraph blocks (native
 
   it('idempotent: an existing empty quote block is not given a second one', () => {
     const doc = parseDocument('> a\n\n>\n\n> b');
-    expect(doc.blocks.map((b) => b.text)).toEqual(['> a', '>', '> b']);
+    expect(doc.blocks.map((b) => b.text)).toEqual(['> a', '', '>', '', '> b']);
   });
 
   it('a run of blank-separated quotes gets one empty line per gap', () => {
@@ -401,10 +411,11 @@ describe('blank lines between quote blocks become empty paragraph blocks (native
     expect(doc.blocks.map((b) => b.text)).toEqual(['> a', '', '> b', '', '> c']);
   });
 
-  it('no empty line between a quote and a non-quote block', () => {
+  it('a blank line between a quote and a non-quote block is materialized too', () => {
     const doc = parseDocument('> a\n\npara');
     expect(doc.blocks.map((b) => [b.kind, b.text])).toEqual([
       ['raw', '> a'],
+      ['list', ''],
       ['list', 'para'],
     ]);
   });
@@ -416,9 +427,9 @@ describe('indented blank soft lines', () => {
     expect(doc.blocks[0].text).toBe('$$\n\n$$');
   });
 
-  it('drops a trailing indented blank (block ends, nothing follows)', () => {
+  it('an indented blank between blocks is materialized (never dropped)', () => {
     const doc = parseDocument('- a\n\t\n- b');
-    expect(doc.blocks.map((b) => b.text)).toEqual(['a', 'b']);
+    expect(doc.blocks.map((b) => b.text)).toEqual(['a', '', 'b']);
   });
 
   it('round-trips the math block byte-stably', () => {
@@ -521,15 +532,18 @@ describe('parser: multi-line HTML elements (Word-export images)', () => {
 
   it('keeps a two-line <img> as ONE raw block (tail is not a list block)', () => {
     const doc = parseDocument(IMG_DOC);
-    // 裸行段落按设计归一化为列表块：[list 段落一, raw img, raw 标题]
-    expect(doc.blocks.length).toBe(3);
+    // 裸行段落按设计归一化为列表块；空行物化为空段落块：
+    // [list 段落一, 空行, raw img, 空行, raw 标题]
+    expect(doc.blocks.length).toBe(5);
     expect(doc.blocks[0].text).toBe('段落一。');
-    expect(doc.blocks[1].kind).toBe('raw');
-    expect(doc.blocks[1].text).toBe(
+    expect(doc.blocks[1].text).toBe('');
+    expect(doc.blocks[2].kind).toBe('raw');
+    expect(doc.blocks[2].text).toBe(
       '<img src="media/image1.png"\nstyle="width:2.08162in;height:1.42325in" />',
     );
-    expect(doc.blocks[2].kind).toBe('raw'); // the heading
-    expect(doc.blocks[2].text).toBe('### 1.2.2 序列标注');
+    expect(doc.blocks[3].text).toBe('');
+    expect(doc.blocks[4].kind).toBe('raw'); // the heading
+    expect(doc.blocks[4].text).toBe('### 1.2.2 序列标注');
   });
 
   it('never serializes the style line as a `- ` list item', () => {

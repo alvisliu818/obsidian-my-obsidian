@@ -62,12 +62,13 @@ describe('页面属性块 Enter（2026-10-26 修复）', () => {
     // 编辑文档带 `- ` 弹符号(符号即文本),光标在末尾
     expect(blockEditorDoc(env.doc.blocks[0])).toBe('- editor:: logseq\nstatus:: active');
     expect(handleEnter(env.view(), env.host)).toBe(true);
-    const [props, blank, content] = env.doc.blocks;
+    const [props, blank, materialized, content] = env.doc.blocks;
     expect(props.text).toBe('');
     expect(props.kind).toBe('list');
     expect(props.bare).toBe(false);
     expect(props.props).toEqual({ editor: 'logseq', status: 'active' });
-    expect(blank.text).toBe('');
+    expect(blank.text).toBe(''); // Enter 新建的块
+    expect(materialized.text).toBe(''); // 原文那条空行(物化)
     expect(content.text).toBe('内容块');
     expect(env.focusTargets.at(-1)).toBe(blank);
   });
@@ -98,7 +99,8 @@ describe('页面属性块 Enter（2026-10-26 修复）', () => {
     expect(isPagePropsBlock(rt.blocks[0])).toBe(true);
     expect(rt.blocks[0].props).toEqual({ editor: 'logseq', status: 'active' });
     expect(rt.blocks[1].text).toBe('');
-    expect(rt.blocks[2].text).toBe('内容块');
+    expect(rt.blocks[2].text).toBe('');
+    expect(rt.blocks[3].text).toBe('内容块');
   });
 
   it('P5 空首块(无属性)回车:与原 splitBlock 路径产出一致(新空块在下方)', () => {

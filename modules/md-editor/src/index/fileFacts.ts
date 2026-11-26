@@ -125,6 +125,9 @@ export function extractFile(path: string, content: string): FileFacts {
   let ord = 0;
 
   const walk = (b: Block, depth: number, parentKey: string, parentId: string): void => {
+    // 空行物化块（编辑器里的可见空行）不是内容，不进索引——否则搜索/块计数
+    // 里全是空记录，块序号也会被撑开。
+    if (b.bare && b.text === '') return;
     const id = b.props['id'] ?? '';
     const bkey = bkeyOf(path, ord, id);
     const text = b.text.split('\n')[0] ?? '';

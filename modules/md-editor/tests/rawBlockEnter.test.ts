@@ -162,9 +162,9 @@ describe('splitRawToOutline: raw block converts to outline on Enter', () => {
     // Each heading is independently foldable, which is the point of splitting
     // verbatim regions on a blank line.
     const doc = parseDocument('## 12.3 命名空间和作用域\n\n### 12.3.1 什么是命名空间\n');
-    expect(doc.blocks).toHaveLength(2);
+    expect(doc.blocks).toHaveLength(3); // 两个标题 + 物化空行
     expect(doc.blocks[0].text).toBe('## 12.3 命名空间和作用域');
-    expect(doc.blocks[1].text).toBe('### 12.3.1 什么是命名空间');
+    expect(doc.blocks[2].text).toBe('### 12.3.1 什么是命名空间');
   });
 
   it('caret at block start: empty block in place, converted content below', () => {

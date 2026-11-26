@@ -89,6 +89,9 @@ function outlineTextToLines(outline: string): string[] {
   const out: string[] = [];
   const walk = (blocks: ReturnType<typeof parseDocument>['blocks']): void => {
     for (const b of blocks) {
+      // 空行物化块是合成分隔符（toOutlineDocText 每块之间写的那个空行），
+      // 不是代码文件的真实行——重建时跳过，否则每保存一次多一片空行。
+      if (b.bare && b.text === '') continue;
       const lines = unescapeNoteLine(b.text).split('\n');
       if (b.marker && lines.length > 0) lines[0] = b.marker + ' ' + lines[0];
       out.push(...lines);

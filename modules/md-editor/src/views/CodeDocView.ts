@@ -365,6 +365,8 @@ export class CodeDocView extends ItemView {
         let count = 0;
         const walk = (blocks: ReturnType<typeof parseDocument>['blocks']): void => {
           for (const b of blocks) {
+            // 空行物化块是合成分隔符，不计入代码行号。
+            if (b.bare && b.text === '') continue;
             count += b.text.split('\n').length;
             if (b.children.length) walk(b.children);
           }
@@ -531,6 +533,8 @@ export class CodeDocView extends ItemView {
         const doc = parseDocument(outline);
         const walk = (blocks: ReturnType<typeof parseDocument>['blocks']): void => {
           for (const b of blocks) {
+            // 空行物化块是合成分隔符，不写回代码文件。
+            if (b.bare && b.text === '') continue;
             out.push(...b.text.split('\n'));
             if (b.children.length) walk(b.children);
           }

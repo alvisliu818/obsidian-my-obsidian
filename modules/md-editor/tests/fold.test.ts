@@ -98,9 +98,9 @@ describe('fold state as a property below the block', () => {
       'collapsed:: true',
     ].join('\n');
     const doc = parseDocument(md);
-    expect(doc.blocks).toHaveLength(2);
+    expect(doc.blocks).toHaveLength(3); // 两个围栏 + 物化空行
     expect(foldLevelOf(doc.blocks[0].props)).toBe('summary');
-    expect(foldLevelOf(doc.blocks[1].props)).toBe('summary');
+    expect(foldLevelOf(doc.blocks[2].props)).toBe('summary');
     expect(roundTrip(md)).toBe(md);
   });
 

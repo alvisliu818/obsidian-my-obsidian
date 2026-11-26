@@ -64,6 +64,9 @@ describe('paragraph container (bare blocks)', () => {
   it('a marker-bearing bare line stays a task list item (bullet shown)', () => {
     const doc = parseDocument('TODO buy milk\n');
     expect(doc.blocks[0].bare).toBeFalsy();
-    expect(serializeDocument(doc)).toBe('- TODO buy milk\n');
+    // 原文保真：未编辑的文档原文直出；编辑该块后才规范化成 `- TODO …`。
+    expect(serializeDocument(doc)).toBe('TODO buy milk\n');
+    doc.blocks[0].text = 'buy milk!';
+    expect(serializeDocument(doc)).toBe('- TODO buy milk!\n');
   });
 });

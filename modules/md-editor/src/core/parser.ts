@@ -19,7 +19,7 @@
  * Invariant: parse(serialize(parse(x))) deep-equals parse(x)  (normalizing round-trip).
  */
 
-import { Block, Marker, MARKERS, ParsedDocument, addSrcLine, blockSemanticSig, createBlock } from '../types';
+import { Block, Marker, MARKERS, ParsedDocument, addSrcLine, blockSemanticSig, createBlock, documentSemanticSig } from '../types';
 import { getTaskListMarker } from './taskMarker';
 import { normFoldKey } from './fold';
 
@@ -188,35 +188,54 @@ export function stripIndent(line: string, depth: number): string {
 }
 
 /**
- * True when a raw block is a run of empty quote rows (`>` / `> `) — an
- * "empty quote block", which the user wants rendered as a plain quote block.
- */
-function isEmptyQuoteBlock(text: string): boolean {
-  return text.split('\n').every((line) => /^>\s*$/.test(line));
-}
-
-/**
- * Materialize the blank line between two quote blocks as an EMPTY PARAGRAPH
- * block (bare, no marker, no text). The user's call: an empty line should
- * behave like the NATIVE editor's — one blank line that you can click and
- * edit. In the block model that is exactly an empty paragraph block: it
- * renders as one blank row (is-empty-line CSS gives it a line height),
- * clicking it focuses the editor, and serializing it writes back a blank
- * line — so `> a\n\n> b` round-trips byte-stably.
+ * 空行渲染（2026-11-25，由「引述块之间的空行物化」推广到全文）。
  *
- * Only NON-EMPTY quote blocks get a separator; an empty quote block IS a
- * separator already (and stays a quote block). Idempotent.
+ * 用户诉求：空行要像原生编辑器/思源一样**渲染成一行可点击的空白**，而不是
+ * 被块模型吞掉（打开文件只看到块挨着块）。做法：parser 记录的分隔空行
+ * （块前的 `srcGap`、文件末尾的 `trailingGap`）每一条物化成一个空段落块
+ * （bare，text ''）：
+ *  - 渲染：`is-empty-line` CSS 给一行行高，点击即落焦点、可直接输入；
+ *  - 序列化：空段落块走原文保真，写回原来的空行（含缩进/行尾空格）；
+ *  - 重解析：空行仍在同一位置，物化回同一位置——树结构稳定。
+ *
+ * 位置 = 「下一块」所在的层级（空行作为它的前一个兄弟）；文件末尾的空行
+ * 物化在顶层末尾。文档**首块之前**的空行不物化：页面属性块/frontmatter
+ * 必须是 blocks[0]（否则页面属性语义丢失），文件头的空行也极少需要编辑。
  */
-function materializeQuoteBlankLines(doc: ParsedDocument): void {
-  const isQuote = (x: Block | undefined): boolean =>
-    !!x && x.kind === 'raw' && /^>/.test(x.text) && !isEmptyQuoteBlock(x.text);
-  for (let k = 0; k < doc.blocks.length - 1; k++) {
-    if (isQuote(doc.blocks[k]) && isQuote(doc.blocks[k + 1])) {
-      const blank = createBlock('');
-      blank.bare = true; // 段落容器:序列化不带 `- ` 前缀,写回就是空行
-      doc.blocks.splice(k + 1, 0, blank);
-      k++; // step over the inserted blank line
-    }
+function materializeBlankLines(doc: ParsedDocument): void {
+  const blank = (line: string, parent: Block | null): Block => {
+    const b = createBlock(''); // 空段落块：序列化不写 `- ` 标记
+    b.bare = true;
+    b.parent = parent;
+    // 原文保真：空行的精确字节（缩进/行尾空格）挂在 srcLines 上，未编辑时原样写回。
+    b.srcLines = [line];
+    return b;
+  };
+  const walk = (nodes: Block[], parent: Block | null, isTop: boolean): Block[] => {
+    const out: Block[] = [];
+    nodes.forEach((b, idx) => {
+      // 首块的块前空行保留在 srcGap（见上）。
+      if (!(isTop && idx === 0) && b.srcGap && b.srcGap.length > 0) {
+        for (const line of b.srcGap) out.push(blank(line, parent));
+        b.srcGap = [];
+      }
+      b.parent = parent;
+      b.children = walk(b.children, b, false);
+      out.push(b);
+    });
+    return out;
+  };
+  doc.blocks = walk(doc.blocks, null, true);
+  // 文件末尾的空行：物化在顶层末尾。空文件（没有块）保持原样——编辑器自己
+  // 创建首块，不在这里造空段落。
+  //
+  // 注意 split('\n') 的最后一个元素是「文件以换行结尾」的产物，不是真实的空行
+  // （`a\n` 只有一行；`a\n\n` 才有一条空行）。它留给 trailingNewline 处理，
+  // 否则末尾空行物化出的空段落块会假装成一行，追加内容时多一行。
+  if (doc.blocks.length > 0 && doc.trailingGap && doc.trailingGap.length > 0) {
+    const count = doc.trailingNewline ? Math.max(0, doc.trailingGap.length - 1) : doc.trailingGap.length;
+    for (let k = 0; k < count; k++) doc.blocks.push(blank(doc.trailingGap[k], null));
+    doc.trailingGap = [];
   }
 }
 
@@ -242,6 +261,18 @@ export function parseDocument(md: string): ParsedDocument {
   if (/\n$/.test(md)) doc.trailingNewline = true;
   let i = 0;
 
+  // 原文保真(2026-11-25)：块与块之间的空行（纯分隔行，可能含行尾空格）。
+  // 空行不属于任何块，但丢掉就是改用户文件——存给「下一个块」，序列化时
+  // 原样吐回。文件末尾剩下的就是 trailingGap。
+  let gapBuf: string[] = [];
+
+  /** 取走当前累计的分隔空行（交给即将创建的块）。 */
+  const takeGap = (): string[] => {
+    const g = gapBuf;
+    gapBuf = [];
+    return g;
+  };
+
   // --- frontmatter ---
   if ((lines[0] ?? '').trim() === '---') {
     let j = 1;
@@ -256,6 +287,8 @@ export function parseDocument(md: string): ParsedDocument {
       const fmBlock = createBlock(bodyLines.join('\n'), null);
       fmBlock.frontmatter = true;
       fmBlock.parent = null;
+      // 原文保真：围栏行与正文逐字节照抄（YAML 里的行尾空格、缩进都不动）。
+      fmBlock.srcLines = ['---', ...bodyLines, '---'];
       for (const bl of bodyLines) {
         const pm = /^([A-Za-z][A-Za-z0-9_-]*):(.*)$/.exec(bl);
         if (pm) fmBlock.props[pm[1]] = pm[2].replace(/^ /, '');
@@ -265,15 +298,32 @@ export function parseDocument(md: string): ParsedDocument {
   }
 
   // --- page properties (unindented `key:: value` before any block) ---
+  // 原文保真：属性段自己拥有的行（属性行 + 段内空行）。段前的空行进
+  // gapBuf（属于属性块），段后的空行留给下一块——不能记到属性块头上。
+  const pagePropSrc: string[] = [];
   const pagePropLines: string[] = [];
   while (i < lines.length) {
     const line = lines[i];
     if (line.trim() === '') {
-      i++;
-      continue;
+      // 只有「后面还有属性行」才是属性段内部的空行；否则是块间分隔。
+      let j = i + 1;
+      while (j < lines.length && lines[j].trim() === '') j++;
+      const next = j < lines.length ? lines[j] : '';
+      if (pagePropLines.length > 0 && next && depthOf(next) === 0 && PROPERTY_RE.test(next.trim())) {
+        pagePropSrc.push(line);
+        i++;
+        continue;
+      }
+      if (pagePropLines.length === 0) {
+        gapBuf.push(line);
+        i++;
+        continue;
+      }
+      break; // 段后的空行留给主循环（下一块的 srcGap）
     }
     if (depthOf(line) === 0 && PROPERTY_RE.test(line.trim())) {
       pagePropLines.push(line);
+      pagePropSrc.push(line);
       i++;
     } else {
       break;
@@ -290,6 +340,8 @@ export function parseDocument(md: string): ParsedDocument {
       if (pm) propsBlock.props[pm[1]] = pm[2];
     }
     propsBlock.parent = null;
+    propsBlock.srcLines = pagePropSrc;
+    propsBlock.srcGap = takeGap();
     doc.blocks.push(propsBlock);
     doc.pageProps = '';
   }
@@ -301,17 +353,24 @@ export function parseDocument(md: string): ParsedDocument {
   let rawBuf: string[] = [];
   let bareBuf: string[] = []; // consecutive bare lines → ONE first-level block
   let bareSrcBuf: string[] = []; // 对应的原文行（未 trim），原文保真用
-
   const flushRaw = () => {
-    while (rawBuf.length > 0 && rawBuf[rawBuf.length - 1].trim() === '') rawBuf.pop();
-    if (rawBuf.length === 0) return;
+    // 尾部的空行是分隔行（raw 区之后、下一块之前），不能当成 raw 的内容——
+    // 它们属于「下一块」的 srcGap。先摘出来，等块建好后再入 gapBuf。
+    const tail: string[] = [];
+    while (rawBuf.length > 0 && rawBuf[rawBuf.length - 1].trim() === '') tail.unshift(rawBuf.pop() as string);
+    if (rawBuf.length === 0) {
+      gapBuf.push(...tail);
+      return;
+    }
     const b = createBlock();
     b.kind = 'raw';
     b.text = rawBuf.join('\n');
     b.parent = null;
     // 原文保真：逐行照抄（含代码/表格里被 parser trim 掉的缩进与尾空格）。
     for (const ln of rawBuf) addSrcLine(b, ln);
+    b.srcGap = takeGap();
     doc.blocks.push(b);
+    gapBuf.push(...tail);
     rawBuf = [];
   };
 
@@ -326,6 +385,7 @@ export function parseDocument(md: string): ParsedDocument {
     b.parent = null;
     // 原文保真：bare 行原文（未 trim）。首行可能含 TODO marker，原文照抄。
     for (const ln of bareSrcBuf) addSrcLine(b, ln);
+    b.srcGap = takeGap();
     doc.blocks.push(b);
     stack.length = 0;
     stack.push(b);
@@ -405,6 +465,8 @@ export function parseDocument(md: string): ParsedDocument {
           STRUCTURAL_RAW_RE.test(nextTrim) || FENCE_OPEN_RE.test(next);
         if (next && isRawRegionTail(rawBuf) && depthOf(next) === 0 && startsStructure && !PROPERTY_RE.test(nextTrim)) {
           flushRaw();
+          // 原文保真：这是两个块之间的分隔空行——记给下一块，不丢。
+          gapBuf.push(line);
           i++;
           continue;
         }
@@ -413,6 +475,8 @@ export function parseDocument(md: string): ParsedDocument {
         i++;
         continue;
       }
+      // 原文保真：纯分隔空行（含只有空格的行），原样留给下一块。
+      gapBuf.push(line);
       i++;
       continue;
     }
@@ -539,6 +603,7 @@ export function parseDocument(md: string): ParsedDocument {
       if (task !== undefined) b.task = task;
       // 原文保真：own line 逐字节照抄（缩进、`- `、尾空格全保留）。
       addSrcLine(b, line);
+      b.srcGap = takeGap();
       // Find parent: truncate stack to depth-1 ancestors.
       let parent: Block | null = null;
       if (depth > 0 && stack.length > 0) {
@@ -683,7 +748,10 @@ export function parseDocument(md: string): ParsedDocument {
 
   flushRaw();
   flushBare();
-  materializeQuoteBlankLines(doc);
+  // 原文保真：最后一个块之后剩下的空行（含结尾换行）原样记录，
+  // 序列化时拼回——`a\n\n` 不会被折成 `a\n`。
+  doc.trailingGap = gapBuf;
+  materializeBlankLines(doc);
   // 原文保真：解析完成后给每个块盖语义快照。有 srcLines 且快照匹配的块
   // 序列化时直接吐原文行；新造块（如引用间空段落）无 srcLines，自然走正常序列化。
   const stamp = (nodes: Block[]): void => {
@@ -693,6 +761,8 @@ export function parseDocument(md: string): ParsedDocument {
     }
   };
   stamp(doc.blocks);
+  // 整树签名：保存时若树没动过，serializeDocument 直接返回 sourceText。
+  doc.parseTreeSig = documentSemanticSig(doc.blocks);
   return doc;
 }
 

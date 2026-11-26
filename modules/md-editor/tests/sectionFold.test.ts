@@ -51,8 +51,9 @@ function seqOf(md: string): Block[] {
 
 describe('heading levels', () => {
   it('reads the level from the first line', () => {
+    // 空行物化成空段落块（level 0）——序列里每个正文行前面多一个 0。
     const seq = seqOf(DOC);
-    expect(seq.map(headingLevel)).toEqual([1, 0, 2, 0, 3, 0, 1, 0]);
+    expect(seq.map(headingLevel)).toEqual([1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0]);
   });
 
   it('a non-heading is level 0', () => {
@@ -68,8 +69,8 @@ describe('heading levels', () => {
 describe('section boundaries', () => {
   it('a heading owns everything up to the next same-level heading', () => {
     const seq = seqOf(DOC);
-    expect(sectionEndIndex(seq, 0)).toBe(6); // through 正文丙
-    expect(sectionEndIndex(seq, 6)).toBe(8); // the last section
+    expect(sectionEndIndex(seq, 0)).toBe(12); // through 正文丙（含空行块）
+    expect(sectionEndIndex(seq, 12)).toBe(15); // the last section
   });
 
   it('a section reaches the next same-or-shallower heading, deeper ones included', () => {
@@ -80,10 +81,10 @@ describe('section boundaries', () => {
     // heading closed at the next heading of any level and failed against
     // correct behaviour.)
     const seq = seqOf(DOC);
-    expect(sectionEndIndex(seq, 0)).toBe(6); // through 正文丙
-    expect(sectionEndIndex(seq, 2)).toBe(6); // ## owns ### and its body
-    expect(sectionEndIndex(seq, 4)).toBe(6); // ### up to the next #
-    expect(sectionEndIndex(seq, 6)).toBe(8); // the last section
+    expect(sectionEndIndex(seq, 0)).toBe(12); // through 正文丙
+    expect(sectionEndIndex(seq, 4)).toBe(12); // ## owns ### and its body
+    expect(sectionEndIndex(seq, 8)).toBe(12); // ### up to the next #
+    expect(sectionEndIndex(seq, 12)).toBe(15); // the last section
   });
 
   it('a non-heading has a section of just itself', () => {
@@ -93,7 +94,7 @@ describe('section boundaries', () => {
 
   it('a heading with no body still folds nothing', () => {
     const seq = seqOf('# A\n\n# B\n');
-    expect(sectionEndIndex(seq, 0)).toBe(1);
+    expect(sectionEndIndex(seq, 0)).toBe(2);
   });
 });
 
@@ -107,19 +108,19 @@ describe('folding a heading hides its section', () => {
     console.log('hidden under # 一级标题:', JSON.stringify(hidden));
     expect(hidden).toEqual(['正文甲', '## 二级标题', '正文乙', '### 三级标题', '正文丙']);
     // The next same-level heading and its body stay visible.
-    expect(isInsideFoldedSection(seq[6], 6, seq)).toBe(false);
-    expect(isInsideFoldedSection(seq[7], 7, seq)).toBe(false);
+    expect(isInsideFoldedSection(seq[12], 12, seq)).toBe(false);
+    expect(isInsideFoldedSection(seq[14], 14, seq)).toBe(false);
   });
 
   it('a folded deeper heading hides only its own subsection', () => {
     const seq = seqOf(DOC);
-    setCollapsed(seq[2], true); // ## 二级标题
+    setCollapsed(seq[4], true); // ## 二级标题
     const hidden: string[] = [];
     seq.forEach((b, i) => {
       if (isInsideFoldedSection(b, i, seq)) hidden.push(b.text.split('\n')[0]);
     });
     console.log('hidden under ## 二级标题:', JSON.stringify(hidden));
-    expect(hidden).toEqual(['正文乙', '### 三级标题', '正文丙']);
+    expect(hidden).toEqual(['', '正文乙', '', '### 三级标题', '', '正文丙', '']);
   });
 
   it('nothing is hidden when no heading is folded', () => {

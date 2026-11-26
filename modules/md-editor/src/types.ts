@@ -57,6 +57,13 @@ export interface Block {
    */
   srcLines?: string[];
   /**
+   * 原文保真(2026-11-25)：该块**前面**的空行（分隔行，可能含行尾空格），
+   * 逐字节照抄。空行不属于任何块，但删掉就是改用户文件——记录在「下一块」
+   * 身上，序列化时先吐 gap 再吐块。`undefined` = 运行时新造的块（无原文）；
+   * `[]` = 源文件里该块前面没有空行。
+   */
+  srcGap?: string[];
+  /**
    * 解析完成时的语义快照 text/marker/task/bare/props/kind。编辑后语义变了
    * 就与快照不等，该块走正常序列化；未编辑块保持相等 → 用 srcLines 原文。
    */
@@ -66,6 +73,26 @@ export interface Block {
 /** 块的语义签名——用于判断块自解析以来是否被编辑过。 */
 export function blockSemanticSig(b: Block): string {
   return JSON.stringify([b.kind, b.marker, b.task ?? null, !!b.bare, b.text, b.props]);
+}
+
+/**
+ * 整树结构签名（前序：每块语义签名 + 子块数）。
+ *
+ * 用于「整篇未编辑」判定：序列化时若树与解析时完全一致，直接返回
+ * `sourceText` 原文——一个字节都不改。这覆盖了 parser 会归一化的畸形缩进、
+ * 空行、围栏等所有边角，是「打开文件不要序列化」的最终保证。
+ */
+export function documentSemanticSig(blocks: Block[]): string {
+  const parts: string[] = [];
+  const walk = (nodes: Block[]): void => {
+    for (const b of nodes) {
+      parts.push(blockSemanticSig(b), String(b.children.length));
+      walk(b.children);
+    }
+  };
+  walk(blocks);
+  // \u0000 不会出现在 JSON.stringify 的输出里（控制字符会被转义），作分隔安全。
+  return parts.join('\u0000');
 }
 
 export interface ParsedDocument {
@@ -83,9 +110,22 @@ export interface ParsedDocument {
   trailingNewline?: boolean;
   /**
    * 原文保真(2026-11-25)：打开时的原始文本（按 \n 归一，与 parse 用的 lines
-   * 同源）。序列化时未编辑的块从这份原文里按行号取回，避免规范化改写。
+   * 同源）。序列化时未编辑的块从这份原文里按行号取回，避免规范化改写；
+   * 整篇未编辑时直接返回这份原文（见 documentSemanticSig）。
    */
   sourceText?: string;
+  /**
+   * 解析完成时的整树结构签名。保存时若与当前树一致（一个块都没动），
+   * 序列化直接返回 `sourceText`——打开即保存也是零 diff。
+   */
+  parseTreeSig?: string;
+  /**
+   * 原文保真(2026-11-25)：文件末尾（最后一个块之后）的全部空行，逐字节
+   * 照抄。`['']` 表示文件以单个换行结尾，`[]` 表示没有结尾换行，
+   * `['', '']` 表示多一个空行。序列化时直接拼回，不依赖 trailingNewline
+   * 的布尔近似（那个近似会把连续空行折叠成一个）。
+   */
+  trailingGap?: string[];
 }
 
 /**

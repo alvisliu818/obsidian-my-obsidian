@@ -27,9 +27,10 @@ describe('display math fences', () => {
       ].join('\n'),
     );
 
-    expect(doc.blocks).toHaveLength(3);
-    expect(doc.blocks[1].kind).toBe('raw');
-    expect(doc.blocks[1].text).toBe(
+    // 空行物化(2026-11-25)：块间空行是可见空段落块。
+    expect(doc.blocks).toHaveLength(5);
+    expect(doc.blocks[2].kind).toBe('raw');
+    expect(doc.blocks[2].text).toBe(
       '$$\n\\nabla f(x1,x2)=[  \\frac{\\partial f}{\\partial{x}_{1}} ]\n$$',
     );
   });
@@ -47,9 +48,10 @@ describe('display math fences', () => {
     // and what makes each region independently foldable. The renderer still
     // sees two separate `$$…$$` regions either way, which is what MathJax needs.
     const doc = parseDocument(['$$', 'a=1', '$$', '', '$$', 'b=2', '$$'].join('\n'));
-    expect(doc.blocks).toHaveLength(2);
+    expect(doc.blocks).toHaveLength(3); // 两个公式 + 物化的空行
     expect(doc.blocks[0].text).toBe('$$\na=1\n$$');
-    expect(doc.blocks[1].text).toBe('$$\nb=2\n$$');
+    expect(doc.blocks[1].text).toBe('');
+    expect(doc.blocks[2].text).toBe('$$\nb=2\n$$');
     // Round-trip must put the blank line back, or the two formulas would merge
     // into one construct on the next read.
     expect(serializeDocument(doc)).toBe(['$$', 'a=1', '$$', '', '$$', 'b=2', '$$'].join('\n'));
@@ -81,15 +83,14 @@ describe('display math fences', () => {
   });
 
   it('serializes a math block without mangling the LaTeX body', () => {
-    // The serializer emits the compact Logseq form (no blank lines between
-    // blocks) — same as a code fence. The file's trailing newline is
-    // preserved on save (1-byte fidelity). What matters is that the `$$`
-    // delimiters and every LaTeX byte survive verbatim.
+    // 原文保真(2026-11-25)：块间空行、结尾换行都原样保留——序列化不再把
+    // 文件压成「紧凑 Logseq 形式」（那正是用户报的整片红色 diff）。
+    // `$$` 分隔符与 LaTeX 每个字节逐字保留。
     const md = ['- 段落', '', '$$', '\\sigma(x)=\\frac{1}{1+{e}^{-x}}', '$$', '', '- 结束', ''].join('\n');
     const out = serializeDocument(parseDocument(md));
-    expect(out).toBe('- 段落\n$$\n\\sigma(x)=\\frac{1}{1+{e}^{-x}}\n$$\n- 结束\n');
+    expect(out).toBe('- 段落\n\n$$\n\\sigma(x)=\\frac{1}{1+{e}^{-x}}\n$$\n\n- 结束\n');
     // Re-parsing the serialized form yields the same math block (stable).
-    expect(parseDocument(out).blocks[1].text).toBe('$$\n\\sigma(x)=\\frac{1}{1+{e}^{-x}}\n$$');
+    expect(parseDocument(out).blocks[2].text).toBe('$$\n\\sigma(x)=\\frac{1}{1+{e}^{-x}}\n$$');
   });
 
   it('swallows to EOF on an unterminated math fence', () => {

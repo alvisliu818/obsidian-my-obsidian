@@ -94,7 +94,9 @@ describe('GFM task parse + serialize round-trip', () => {
     const doc = parseDocument('- []todo\n- [x]done');
     expect(doc.blocks.map((b) => b.task)).toEqual([' ', 'x']);
     expect(doc.blocks.map((b) => b.text)).toEqual(['todo', 'done']);
-    expect(rt('- []todo\n- [x]done')).toBe('- [ ] todo\n- [x] done');
+    // 原文保真(2026-11-25)：未编辑的文档保存时原文直出，不再规范化重写。
+    // （编辑过该块才走规范化 → 见 verbatim-preserve 的语义决策用例。）
+    expect(rt('- []todo\n- [x]done')).toBe('- []todo\n- [x]done');
   });
 
   it('does not task-ify bare paragraphs or logseq marker lines', () => {

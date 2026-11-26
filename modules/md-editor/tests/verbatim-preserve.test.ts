@@ -75,10 +75,16 @@ describe('原文保真：未编辑块逐字节保留', () => {
     expect(after[5]).toBe(before[5]); // 空列表项 - 保留
   });
 
-  it('parser 语义决策的块仍走规范化（保真不能破坏语义）', () => {
-    // 这些原文写法与块语义不一致，必须规范化，否则重解析会丢语义。
-    // 保真只对「原文写法本身合法、只是格式细节不同」的块生效。
-    expect(serializeDocument(parseDocument('TODO buy milk\n'))).toBe('- TODO buy milk\n');
-    expect(serializeDocument(parseDocument('- []todo\n'))).toBe('- [ ] todo\n');
+  it('未编辑原文直出；编辑过语义决策的块才规范化（保真不能破坏语义）', () => {
+    // 整篇未编辑 → 原文直出（打开即保存零 diff）。
+    expect(serializeDocument(parseDocument('TODO buy milk\n'))).toBe('TODO buy milk\n');
+    expect(serializeDocument(parseDocument('- []todo\n'))).toBe('- []todo\n');
+    // 编辑了该块 → parser 的语义归一化必须写回，否则重解析丢语义。
+    const a = parseDocument('TODO buy milk\n');
+    a.blocks[0].text = 'buy milk!';
+    expect(serializeDocument(a)).toBe('- TODO buy milk!\n');
+    const b = parseDocument('- []todo\n');
+    b.blocks[0].text = 'todo!';
+    expect(serializeDocument(b)).toBe('- [ ] todo!\n');
   });
 });
