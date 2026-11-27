@@ -639,6 +639,14 @@ export interface VirtualTreeSettings {
   revealPrefer?: RevealPreference;
   /** 只读路径模式（逐行：纯文本前缀或 /正则/，命中即只读——虚拟文档树）。 */
   readOnlyPatterns?: string[];
+  /**
+   * 隐藏名单（2026-11-27 用户需求）：命中即从虚拟文档树里隐藏，目录命中则
+   * 整棵不显示。逐行一条，纯文本按名字/路径段匹配，也接受裸正则或 /正则/flags。
+   * 作用于所有挂载（库内/库外/远端），rel 用挂载内相对路径。
+   */
+  hidePatterns?: string[];
+  /** 例外名单：命中即始终显示，优先于隐藏名单（黑名单的例外通道）。 */
+  showPatterns?: string[];
   favorites?: FavoriteEntry[];
   externalSplitView: boolean;
   /**
@@ -968,6 +976,13 @@ export function virtualTreeSettingsFrom(raw: unknown): VirtualTreeSettings {
   // 只读模式：逐行收集,空行丢弃
   s.readOnlyPatterns = Array.isArray(o.readOnlyPatterns)
     ? o.readOnlyPatterns.filter((p): p is string => typeof p === 'string' && p.trim() !== '')
+    : [];
+  // 隐藏/例外名单：逐行收集，空行丢弃（同只读名单的收口方式）
+  s.hidePatterns = Array.isArray(o.hidePatterns)
+    ? o.hidePatterns.filter((p): p is string => typeof p === 'string' && p.trim() !== '')
+    : [];
+  s.showPatterns = Array.isArray(o.showPatterns)
+    ? o.showPatterns.filter((p): p is string => typeof p === 'string' && p.trim() !== '')
     : [];
   // 标签:定义 + 文件↔标签映射(思源 tag-store 对齐)。必须进归一化,否则
   // loadSettings 丢字段、下次 saveSettings 把盘上的数据抹掉(实测复现)。

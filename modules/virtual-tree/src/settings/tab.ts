@@ -42,6 +42,18 @@ export class VirtualTreeSettingTab extends PluginSettingTab {
     this.plugin = plugin;
   }
 
+  /** 名单输入去抖：每次按键都重扫全部挂载（远端还要发网络请求）会卡。 */
+  private rulesRefreshTimer: number | null = null;
+
+  private scheduleRulesRefresh(): void {
+    if (this.rulesRefreshTimer !== null) window.clearTimeout(this.rulesRefreshTimer);
+    this.rulesRefreshTimer = window.setTimeout(() => {
+      this.rulesRefreshTimer = null;
+      // 规则变了必须重扫：已加载层的 children 是过滤后的结果，不清缓存不会重算
+      this.plugin.refreshMounts();
+    }, 400);
+  }
+
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
@@ -74,7 +86,11 @@ export class VirtualTreeSettingTab extends PluginSettingTab {
     containerEl.createEl('h3', { text: '只读路径' });
     new Setting(containerEl)
       .setName('只读名单')
-      .setDesc('命中即只读（编辑入口强制走只读视图）。每行一条:纯文本 = 路径前缀（同段边界,Notes 不误伤 Notes2）;/正则/ = 整条相对路径。')
+      .setDesc(
+        '命中即只读（编辑入口强制走只读视图）。每行一条：纯文本 = 名字/路径段整段相等' +
+          '（Notes 不误伤 Notes2）；也可写正则，如 ^\\. 或 /\\.secret$/。' +
+          '目前只作用于库外与远端挂载的文件。',
+      )
       .addTextArea((text) => {
         const patterns = this.plugin.settings.readOnlyPatterns ?? [];
         text
@@ -411,6 +427,55 @@ export class VirtualTreeSettingTab extends PluginSettingTab {
           this.plugin.refreshMounts();
         }),
       );
+
+    containerEl.createEl('h3', { text: '隐藏 / 例外名单' });
+    // 逐行条目：纯文本按 名字/路径段 匹配，也接受裸正则与 /正则/flags。
+    // 作用于所有挂载（库内 / 库外 / 远端），rel 用挂载内相对路径。
+    new Setting(containerEl)
+      .setName('隐藏名单')
+      .setDesc(
+        '命中即从虚拟文档树里隐藏；文件夹命中时整棵不显示。每行一条：' +
+          '纯文本按名字/路径段匹配（Notes 不误伤 Notes2），也可以直接写正则，' +
+          '如 ^\\. 或 /\\.tmp$/。作用于全部挂载。',
+      )
+      .addTextArea((text) => {
+        text
+          .setPlaceholder('node_modules\n^\\.\n/\\.draft\\.md$/')
+          .setValue((this.plugin.settings.hidePatterns ?? []).join('\n'))
+          .onChange(async (value) => {
+            this.plugin.settings.hidePatterns = value
+              .split('\n')
+              .map((p) => p.trim())
+              .filter((p) => p !== '');
+            await this.plugin.saveSettings();
+            this.scheduleRulesRefresh();
+          });
+        text.inputEl.rows = 4;
+        text.inputEl.style.width = '100%';
+      });
+
+    new Setting(containerEl)
+      .setName('例外名单（白名单）')
+      .setDesc(
+        '命中即始终显示，优先于隐藏名单（给黑名单开洞）。注意：目录一旦命中隐藏名单就' +
+          '整棵不显示，例外救不回里面的子项——要保留目录里的个别文件，请别隐藏目录本身，' +
+          '改用文件级规则。每行一条，语法同隐藏名单。',
+      )
+      .addTextArea((text) => {
+        text
+          .setPlaceholder('重要不要隐藏.md\n/^projects\\/keep/')
+          .setValue((this.plugin.settings.showPatterns ?? []).join('\n'))
+          .onChange(async (value) => {
+            this.plugin.settings.showPatterns = value
+              .split('\n')
+              .map((p) => p.trim())
+              .filter((p) => p !== '');
+            await this.plugin.saveSettings();
+            this.scheduleRulesRefresh();
+          });
+        text.inputEl.rows = 3;
+        text.inputEl.style.width = '100%';
+      });
 
     new Setting(containerEl)
       .setName('显示「已固定」徽标')

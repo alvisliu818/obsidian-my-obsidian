@@ -314,11 +314,139 @@ export function validateMountPath(p: string): string | null {
 }
 
 /**
+ * 用户自定义的「隐藏 / 例外」名单（2026-11-27 用户需求：虚拟文档树支持隐藏
+ * 文件与文件夹，黑白名单正则）。
+ *
+ * 语法（比 mountFilter 宽松，单条可写三种形态）：
+ *   - 纯文本：名字/路径段匹配（`Notes` 不误伤 `Notes2`，与 exclude 同语义）；
+ *   - 裸正则：`^\.`、`\.tmp$`；
+ *   - `/正则/flags`：`/\.draft\.md$/`，flags 可省（默认 `i`）。
+ *
+ * 语义：
+ *   - 命中 `hide` → 从树里隐藏；目录命中时整棵剪掉（不展开、不扫描）；
+ *   - 命中 `show` → **永远显示**，优先于 hide（例外）；
+ *   - 一旦配置了 show，被 hide 命中的**目录**保留目录行（只过滤其子项）——
+ *     否则例外藏在被剪掉的子树里永远够不着。
+ */
+export interface HideRules {
+	hide: HidePattern[];
+	show: HidePattern[];
+	/** 没配黑名单 = 整条链路不用过滤（白名单单独存在没有意义）。 */
+	active: boolean;
+}
+
+/**
+ * 单条名单模式。纯文本走**整段相等**（`Notes` 不误伤 `Notes2`——子串匹配是
+ * 只读名单的老毛病，这里按用户预期修正）；含正则元字符或写成 `/…/flags` 的
+ * 走正则（仍需段边界语义，交给 matchesExcluded 的三查）。
+ */
+export interface HidePattern {
+	/** 纯文本形态：整段相等。 */
+	literal?: string;
+	/** 正则形态。 */
+	re?: RegExp;
+}
+
+/** 正则元字符：出现任意一个就按正则解释，否则按纯文本段匹配。 */
+const REGEX_META = /[\\^$.*+?()[\]{}|]/;
+
+/** 单条模式 → 编译结果；空/非法返回 null（一条坏正则不该弄坏整棵树）。 */
+function patternFrom(raw: string): HidePattern | null {
+	let body = raw.trim();
+	if (!body) return null;
+	const wrapped = /^\/(.+)\/([a-z]*)$/.exec(body);
+	if (wrapped) {
+		body = wrapped[1];
+		let flags = wrapped[2] || 'i';
+		if (!flags.includes('i')) flags += 'i';
+		// 有状态的 flag 会让 test() 在连续调用间跳着命中，名单匹配必须无状态
+		flags = flags.replace(/[gy]/g, '');
+		try {
+			return { re: new RegExp(body, flags) };
+		} catch {
+			return null;
+		}
+	}
+	if (!REGEX_META.test(body)) return { literal: body };
+	try {
+		return { re: new RegExp(body, 'i') };
+	} catch {
+		return null;
+	}
+}
+
+/** 一组名单模式编译（隐藏名单与只读名单共用同一套语法）。 */
+export function compilePatterns(list: readonly string[] | undefined): HidePattern[] {
+	const out: HidePattern[] = [];
+	for (const p of list ?? []) {
+		const pat = patternFrom(p);
+		if (pat) out.push(pat);
+	}
+	return out;
+}
+
+export function compileHideRules(
+	hide: readonly string[] | undefined,
+	show: readonly string[] | undefined,
+): HideRules {
+	const h = compilePatterns(hide);
+	return { hide: h, show: compilePatterns(show), active: h.length > 0 };
+}
+
+/** 纯文本模式：末段相等，或路径中间某一段相等。 */
+function hitsLiteral(rel: string, name: string, literal: string): boolean {
+	if (name === literal) return true;
+	const segments = rel.split('/');
+	for (let i = 0; i < segments.length - 1; i++) {
+		if (segments[i] === literal) return true;
+	}
+	return false;
+}
+
+function hitsAny(rel: string, name: string, patterns: readonly HidePattern[]): boolean {
+	for (const p of patterns) {
+		if (p.literal !== undefined) {
+			if (hitsLiteral(rel, name, p.literal)) return true;
+		} else if (p.re && matchesExcluded(rel, name, p.re)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * 这一项是否该从树里隐藏。
+ *
+ * `rel` 是**挂载内**相对路径（库根挂载 = 库内路径），与只读名单/挂载过滤同一
+ * 坐标；`name` 是显示名（末尾段），纯文本按整段相等、正则走 matchesExcluded
+ * 的段边界三查。
+ *
+ * 判定只看节点自己：白名单命中即显示（优先于黑名单），否则黑名单命中即隐藏。
+ * 目录被隐藏 = 整棵不显示——要保留目录里的个别文件，别隐藏目录本身，改用
+ * 文件级模式（`draft/keep.md`）而不是 `draft`。
+ */
+export function isHiddenByRules(
+	rel: string,
+	name: string,
+	rules: HideRules,
+): boolean {
+	if (!rules.active) return false;
+	// 例外优先：白名单命中即显示，哪怕黑名单也命中
+	if (rules.show.length && hitsAny(rel, name, rules.show)) return false;
+	return hitsAny(rel, name, rules.hide);
+}
+
+/**
  * 只读路径判定（用户 2026-11-20：虚拟文档树支持设置文件夹/文件只读,
- * 支持正则黑白名单——这里实现名单命中）。复用 compileFilter 的 exclude
- * 三查语义（整路径/裸名/段边界），模式语法与挂载 include/exclude 一致：
- * 纯文本 = 前缀匹配（整路径/裸名/段），/正则/ = 整条相对路径。
- * 命中任意模式 → 该路径只读（编辑入口强制走只读视图）。
+ * 支持正则黑白名单——这里实现名单命中）。
+ *
+ * 与隐藏/例外名单**同一套语法**（compilePatterns）：
+ *   - 纯文本 = 名字或路径段**整段相等**（`Notes` 不误伤 `Notes2`）；
+ *   - 裸正则（`^\.`、`\.tmp$`）或 `/正则/flags`。
+ *
+ * 2026-11-27 修正：旧实现把纯文本丢给 `new RegExp(raw,'i')` 做**子串**匹配
+ * （`Notes` 误伤 `Notes2`），且描述承诺的 `/正则/` 斜杠从未被剥掉；两处都与
+ * 设置页说明不符，现与隐藏名单统一。
  */
 export function isReadOnlyEntry(
 	rel: string,
@@ -326,11 +454,5 @@ export function isReadOnlyEntry(
 ): boolean {
 	if (!patterns?.length) return false;
 	const name = rel.slice(rel.lastIndexOf('/') + 1);
-	for (const raw of patterns) {
-		// 单条模式独立编译（mountFilter 的 exclude 是【单条】正则/纯文本,
-		// 多条在调用方逐条判定——join 成一条会让整串变成无意义正则）
-		const f = compileFilter({ include: '', exclude: raw });
-		if (f.exclude && matchesExcluded(rel, name, f.exclude)) return true;
-	}
-	return false;
+	return hitsAny(rel, name, compilePatterns(patterns));
 }

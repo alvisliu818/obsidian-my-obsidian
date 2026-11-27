@@ -76,13 +76,16 @@ import {
 import { filePropsOf } from '../../../file-props/src/main';
 import {
   compileFilter,
+  compileHideRules,
   countTree,
   dirPruned,
   entryMatches,
   EMPTY_FILTER,
+  isHiddenByRules,
   isMarkdownFile,
   isTextFileName,
   isTextMount,
+  type HideRules,
   type MountNode,
 } from '../features/mountFilter';
 import { runOpeners, type OpenerCtx } from '../openers';
@@ -551,7 +554,7 @@ export class MountPanelView extends ItemView {
         this.plugin.settings.mountShowHidden === false
           ? []
           : vaultScanHiddenLayer(this.app, mount, rel, f);
-      const children = hidden.length ? [...indexed, ...hidden] : indexed;
+      const children = this.applyHideRules(hidden.length ? [...indexed, ...hidden] : indexed);
       this.sortChildren(mount.id, rel, children);
       if (!rel) {
         state.tree = children;
@@ -591,15 +594,17 @@ export class MountPanelView extends ItemView {
       depth: 0,
     });
 
-    const children: MountNode[] = entries.map((e) => ({
-      name: e.name,
-      rel: rel ? `${rel}/${e.rel}` : e.rel,
-      abs: e.abs,
-      isDir: e.isDir,
-      size: e.size,
-      mtime: e.mtime,
-      children: [],
-    }));
+    const children: MountNode[] = this.applyHideRules(
+      entries.map((e) => ({
+        name: e.name,
+        rel: rel ? `${rel}/${e.rel}` : e.rel,
+        abs: e.abs,
+        isDir: e.isDir,
+        size: e.size,
+        mtime: e.mtime,
+        children: [],
+      })),
+    );
     // Folders first, then files; drag-mode display order applies within each class.
     this.sortChildren(mount.id, rel, children);
 
@@ -617,6 +622,30 @@ export class MountPanelView extends ItemView {
     parent.children = children;
     parent.empty = children.length === 0;
     this.diffLayer(mount.id, rel, children, state);
+  }
+
+  /** 编译后的隐藏/例外名单缓存（设置内容变了才重新编译）。 */
+  private hideRuleCache: { key: string; rules: HideRules } | null = null;
+
+  /** 当前生效的隐藏规则（隐藏名单 + 例外名单，见 mountFilter.compileHideRules）。 */
+  private currentHideRules(): HideRules {
+    const hide = this.plugin.settings.hidePatterns ?? [];
+    const show = this.plugin.settings.showPatterns ?? [];
+    const key = `${hide.join('\u0001')}\u0000${show.join('\u0001')}`;
+    if (this.hideRuleCache?.key === key) return this.hideRuleCache.rules;
+    const rules = compileHideRules(hide, show);
+    this.hideRuleCache = { key, rules };
+    return rules;
+  }
+
+  /**
+   * 名单过滤：隐藏项**根本不进树**——不渲染、不参与统计/搜索，目录命中时
+   * 整棵剪掉（连子层都不会被 readdir）。返回新数组，调用方照常排序/挂树。
+   */
+  private applyHideRules(children: MountNode[]): MountNode[] {
+    const rules = this.currentHideRules();
+    if (!rules.active) return children;
+    return children.filter((n) => !isHiddenByRules(n.rel, n.name, rules));
   }
 
   /**
@@ -696,6 +725,8 @@ export class MountPanelView extends ItemView {
         if (rel && isGitRepoPath(mount.path) && children.length) {
           children = children.map((c) => ({ ...c, rel: accumulateGitChildRel(rel, c.rel) }));
         }
+        // 隐藏/例外名单：远端挂载同一套规则（rel 是挂载内相对路径）
+        children = this.applyHideRules(children);
         if (this.states.get(mount.id) !== state) return; // 挂载已卸载/重扫
         if (!rel) {
           state.tree = children;
