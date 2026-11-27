@@ -57,7 +57,7 @@ export class TrashManagerModal extends Modal {
         `位置：${root}。` +
         (shared
           ? '与 Obsidian 共用 .trash：库内删除的条目由 Obsidian 记录，库外删除的条目由插件记录，都可在这里恢复。'
-          : '插件删除的库外文件按原路径镜像暂存，可一键恢复。') +
+          : '库外与库内挂载的删除都按原路径镜像暂存，可一键恢复。') +
         '位置可在 设置 → 虚拟文档树 → 回收站位置 修改。',
     });
 

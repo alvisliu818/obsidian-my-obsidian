@@ -114,7 +114,7 @@ import { CloudHistoryModal } from './cloudHistoryModal';
 import { cloudProviderOf } from '../features/cloudVersions';
 import { OutlookMailMountModal } from './outlookMailModal';
 import { TrashManagerModal } from './trashModal';
-import { deleteToTrash } from '../features/trashStore';
+import { deleteToTrash, deleteVaultEntryToCustomTrash, isObsidianTrashRoot, resolveTrashRoot } from '../features/trashStore';
 import { DirSearchModal } from './searchModal';
 import { GitPanelModal } from './gitPanelModal';
 import { isFavorited, removeFavorite, toggleFavorite } from '../features/favorites';
@@ -4062,8 +4062,10 @@ export class MountPanelView extends ItemView {
       ).open();
       return;
     }
-    // 库内挂载：走 fileManager.trashFile（尊重用户设置的回收站形态），
-    // 索引与反链同步更新。
+    // 库内挂载：回收站位置留空/等于库的 .trash 时走 fileManager.trashFile
+    // （尊重用户设置的回收站形态）；配了自定义位置（通常是库外目录）时，
+    // 库内删除也收编到那里——先经 Obsidian 本地回收站更新索引，再把条目
+    // 搬进自定义位置（2026-11-27 用户反馈：此前自定义位置对库内删除无效）。
     if (isVaultMount(mount)) {
       const vaultPath = vaultJoinPath(mount, node.rel);
       const af = this.app.vault.getAbstractFileByPath(vaultPath);
@@ -4072,16 +4074,41 @@ export class MountPanelView extends ItemView {
         this.rescan(mount);
         return;
       }
+      const base = this.plugin.vaultBasePath();
+      const customTrash =
+        !!base &&
+        this.plugin.settings.deleteMode !== 'system' &&
+        !isObsidianTrashRoot(base, this.plugin.settings.trashPath);
       new ConfirmModal(
         this.app,
         {
           title: `删除${typeStr}`,
-          body: `确定删除${typeStr}「${node.name}」${node.isDir ? '及其全部内容' : ''}吗？将按库设置移入回收站。`,
+          body: `确定删除${typeStr}「${node.name}」${node.isDir ? '及其全部内容' : ''}吗？${
+            customTrash
+              ? `将移入回收站（${resolveTrashRoot(base ?? '', this.plugin.settings.trashPath)}）。`
+              : '将按库设置移入回收站。'
+          }`,
           confirmText: '删除',
           dangerous: true,
         },
         (ok) => {
           if (!ok) return;
+          if (customTrash && base) {
+            void deleteVaultEntryToCustomTrash({
+              vaultBase: base,
+              vaultRel: af.path,
+              isDir: node.isDir,
+              trashPath: this.plugin.settings.trashPath,
+              trashLocally: (rel) => this.app.vault.adapter.trashLocal(rel),
+            }).then(
+              (r) => {
+                new Notice(r.note ?? '已移入回收站');
+                this.rescan(mount, parentRelOf(node.rel));
+              },
+              (err) => new Notice(`删除失败：${(err as Error)?.message ?? '未知错误'}`),
+            );
+            return;
+          }
           void this.app.fileManager.trashFile(af).then(
             () => {
               new Notice('已移入回收站');

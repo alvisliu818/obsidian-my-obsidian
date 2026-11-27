@@ -12,10 +12,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   __setTrashFsForTest,
   deleteToTrash,
+  deleteVaultEntryToCustomTrash,
   emptyTrash,
   isObsidianTrashRoot,
   listObsidianTrashItems,
   listTrashItems,
+  obsidianTrashLandingPath,
   obsidianTrashRoot,
   pluginTrashRoot,
   purgeTrashItem,
@@ -73,6 +75,11 @@ class FakeFs implements TrashFsLike {
   }
 
   mkdirSync(p: string, _opts: { recursive: true }): void {
+    const parts = p.replace(/\\/g, '/').replace(/\/+$/, '').split('/');
+    for (let i = 1; i <= parts.length; i++) {
+      const n = this.nodes.get(this.key(parts.slice(0, i).join('/')));
+      if (n && !n.dir) throw new Error(i < parts.length ? 'ENOTDIR: 上级是文件' : 'EEXIST: 目标是文件');
+    }
     this.add(p, { dir: true });
   }
 
@@ -204,6 +211,88 @@ describe('Obsidian .trash entries', () => {
     const fs = withFs();
     fs.add('E:/Vault/.trash/1.md', {});
     expect(listObsidianTrashItems(VAULT, 'D:\\Trash')).toEqual([]);
+  });
+});
+
+describe('vault mounts with a custom trash location', () => {
+  /** 复刻 Obsidian FileSystemAdapter.trashLocal：扁平命名 + " 2" 起的重名后缀。 */
+  function fakeTrashLocal(fs: FakeFs): (rel: string) => Promise<void> {
+    return async (rel: string) => {
+      const src = `E:/Vault/${rel}`;
+      fs.add('E:/Vault/.trash', { dir: true });
+      const landing = obsidianTrashLandingPath(VAULT, rel);
+      fs.renameSync(src, landing);
+    };
+  }
+
+  it('moves a vault file out of .trash into the configured location', async () => {
+    const fs = withFs();
+    fs.add('E:/Vault/test/untitled.md', { content: 'v' });
+
+    const r = await deleteVaultEntryToCustomTrash({
+      vaultBase: VAULT,
+      vaultRel: 'test/untitled.md',
+      isDir: false,
+      trashPath: 'E:\\HOME\\Runtime\\.trash',
+      trashLocally: fakeTrashLocal(fs),
+    });
+
+    expect(r.mode).toBe('plugin');
+    expect(fs.existsSync('E:/Vault/test/untitled.md')).toBe(false);
+    expect(fs.existsSync('E:/Vault/.trash/untitled.md')).toBe(false);
+    expect(fs.existsSync('E:/HOME/Runtime/.trash/.vt/external/E/Vault/test/untitled.md')).toBe(true);
+    const items = listTrashItems(VAULT, 'E:\\HOME\\Runtime\\.trash');
+    expect(items.map((i) => i.origin)).toEqual(['E:/Vault/test/untitled.md']);
+  });
+
+  it('follows Obsidian flat naming when the trash already has the same name', async () => {
+    const fs = withFs();
+    fs.add('E:/Vault/notes/untitled.md', { content: 'new' });
+    fs.add('E:/Vault/.trash/untitled.md', { content: 'old' });
+
+    expect(obsidianTrashLandingPath(VAULT, 'notes/untitled.md')).toBe('E:/Vault/.trash/untitled 2.md');
+    await deleteVaultEntryToCustomTrash({
+      vaultBase: VAULT,
+      vaultRel: 'notes/untitled.md',
+      isDir: false,
+      trashPath: 'D:\\Trash',
+      trashLocally: fakeTrashLocal(fs),
+    });
+    // 旧条目原地不动，新条目被搬进自定义位置
+    expect(fs.readFileSync('E:/Vault/.trash/untitled.md', 'utf8')).toBe('old');
+    expect(fs.existsSync('D:/Trash/.vt/external/E/Vault/notes/untitled.md')).toBe(true);
+  });
+
+  it('keeps the entry in .trash when the custom location is unusable', async () => {
+    const fs = withFs();
+    fs.add('E:/Vault/a.md', { content: 'a' });
+    // 自定义位置是一个已存在的文件 → mkdir 失败
+    fs.add('D:/Trash', { content: 'not a dir' });
+
+    const r = await deleteVaultEntryToCustomTrash({
+      vaultBase: VAULT,
+      vaultRel: 'a.md',
+      isDir: false,
+      trashPath: 'D:\\Trash',
+      trashLocally: fakeTrashLocal(fs),
+    });
+    expect(r.note).toContain('.trash');
+    expect(fs.existsSync('E:/Vault/.trash/a.md')).toBe(true);
+  });
+
+  it('aborts without touching the file when Obsidian refuses to trash it', async () => {
+    const fs = withFs();
+    fs.add('E:/Vault/b.md', { content: 'b' });
+    await expect(
+      deleteVaultEntryToCustomTrash({
+        vaultBase: VAULT,
+        vaultRel: 'b.md',
+        isDir: false,
+        trashPath: 'D:\\Trash',
+        trashLocally: () => Promise.reject(new Error('索引只读')),
+      }),
+    ).rejects.toThrow('索引只读');
+    expect(fs.existsSync('E:/Vault/b.md')).toBe(true);
   });
 });
 

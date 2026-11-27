@@ -709,18 +709,20 @@ export interface VirtualTreeSettings {
   /** Outlook 邮箱（outlook://，只读）接入配置，同 OneDriveSettings 形状。 */
   outlookMail: OneDriveSettings;
   /**
-   * 库外挂载的删除方式（思源虚拟文档树同款，无"直接删除"选项——删除必须可恢复）：
+   * 删除方式（思源虚拟文档树同款，无"直接删除"选项——删除必须可恢复）：
    * 'plugin' = 移入插件回收站（位置见 trashPath；镜像原路径 + index.json，
    *   面板工具栏「回收站」里可恢复/彻底删除/清空）；
    * 'system' = 移入操作系统回收站（electron shell.trashItem，既有行为）。
-   * vault 挂载始终走 fileManager.trashFile（Obsidian 自己的回收站）；
+   * vault 挂载：trashPath 留空（共用 .trash）时始终走 fileManager.trashFile
+   * （Obsidian 自己的回收站）；trashPath 配了自定义位置且本项为 'plugin' 时，
+   * 库内删除也收编到该位置；
    * remote 挂载删除仍提交到远端（历史可回溯），不受本设置影响。
    */
   deleteMode: 'plugin' | 'system';
   /**
    * 回收站位置（2026-11-27 用户需求：使用 Obsidian 的 .trash，且允许放到库外）：
    * 留空 = `<库根>/.trash`（与 Obsidian 共用）；也可填任意绝对路径（库外亦可）。
-   * 插件索引与库外文件镜像放在该目录下的 `.vt/` 里。
+   * 插件索引与文件镜像放在该目录下的 `.vt/` 里，库外与库内挂载的删除都进这里。
    */
   trashPath: string;
 }

@@ -414,10 +414,11 @@ export class VirtualTreeSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('删除方式')
       .setDesc(
-        '删除库外文件时进入哪条可恢复通道。插件回收站按原路径镜像暂存（位置见下一项，' +
+        '删除文件时进入哪条可恢复通道。插件回收站按原路径镜像暂存（位置见下一项，' +
           '默认与 Obsidian 共用 .trash），面板工具栏「回收站」里可恢复/彻底删除/清空；' +
           '系统回收站由操作系统管理（无法在本插件里枚举恢复）。' +
-          '库内挂载始终走 Obsidian 自己的回收站，不受此设置影响。',
+          '库内挂载：回收站位置留空（即 .trash）时走 Obsidian 自己的回收站，不受此设置影响；' +
+          '配了自定义位置且方式是「插件回收站」时，库内删除也收进该位置。',
       )
       .addDropdown((d) =>
         d
@@ -445,7 +446,8 @@ export class VirtualTreeSettingTab extends PluginSettingTab {
       .setName('回收站位置')
       .setDesc(
         '留空 = 使用 Obsidian 的回收站（<库根>/.trash）。也可以选库外目录（如 D:\\Trash\\obsidian）——' +
-          '插件删除的库外文件会按原路径镜像到该目录的 .vt/ 下；面板「回收站」与上面的「打开回收站」都读这个位置。' +
+          '插件删除的文件（库外与库内挂载）都会按原路径镜像到该目录的 .vt/ 下；' +
+          '面板「回收站」与上面的「打开回收站」都读这个位置。' +
           '注意：不要选一个已有其他文件的目录，插件会往里写 .vt/（清空只动回收站条目）。',
       )
       .addText((t) =>
