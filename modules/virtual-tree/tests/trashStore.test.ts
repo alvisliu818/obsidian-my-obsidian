@@ -135,18 +135,18 @@ afterEach(() => {
 });
 
 describe('trash location', () => {
-  it('defaults to the vault .trash and keeps plugin data in .vt', () => {
+  it('defaults to the vault .trash and uses the location itself', () => {
     expect(obsidianTrashRoot(VAULT)).toBe('E:/Vault/.trash');
     expect(resolveTrashRoot(VAULT, '')).toBe('E:/Vault/.trash');
     expect(resolveTrashRoot(VAULT, '  ')).toBe('E:/Vault/.trash');
-    expect(pluginTrashRoot(VAULT)).toBe('E:/Vault/.trash/.vt');
+    expect(pluginTrashRoot(VAULT)).toBe('E:/Vault/.trash');
     expect(isObsidianTrashRoot(VAULT, '')).toBe(true);
     expect(isObsidianTrashRoot(VAULT, 'E:\\Vault\\.trash\\')).toBe(true);
   });
 
   it('accepts an absolute trash dir outside the vault', () => {
     expect(resolveTrashRoot(VAULT, 'D:\\Trash\\obsidian\\')).toBe('D:/Trash/obsidian');
-    expect(pluginTrashRoot(VAULT, 'D:\\Trash\\obsidian')).toBe('D:/Trash/obsidian/.vt');
+    expect(pluginTrashRoot(VAULT, 'D:\\Trash\\obsidian')).toBe('D:/Trash/obsidian');
     expect(isObsidianTrashRoot(VAULT, 'D:\\Trash\\obsidian')).toBe(false);
   });
 
@@ -156,7 +156,7 @@ describe('trash location', () => {
 });
 
 describe('plugin trash entries', () => {
-  it('mirrors into <location>/.vt/external and restores to the original path', async () => {
+  it('mirrors directly under the location and restores to the original path', async () => {
     const fs = withFs();
     fs.add('E:/OUT/docs/a.md', { content: 'hello' });
 
@@ -167,7 +167,7 @@ describe('plugin trash entries', () => {
     });
     expect(r.mode).toBe('plugin');
     expect(fs.existsSync('E:/OUT/docs/a.md')).toBe(false);
-    expect(fs.existsSync('D:/Trash/obsidian/.vt/external/E/OUT/docs/a.md')).toBe(true);
+    expect(fs.existsSync('D:/Trash/obsidian/E/OUT/docs/a.md')).toBe(true);
 
     const items = listTrashItems(VAULT, 'D:\\Trash\\obsidian');
     expect(items.map((i) => i.origin)).toEqual(['E:\\OUT\\docs\\a.md']);
@@ -185,7 +185,7 @@ describe('plugin trash entries', () => {
     const items = listTrashItems(VAULT);
     purgeTrashItem(VAULT, items[0].id);
     expect(listTrashItems(VAULT)).toEqual([]);
-    expect(fs.existsSync('E:/Vault/.trash/.vt/external/E/OUT/b.md')).toBe(false);
+    expect(fs.existsSync('E:/Vault/.trash/E/OUT/b.md')).toBe(false);
   });
 });
 
@@ -198,8 +198,25 @@ describe('Obsidian .trash entries', () => {
     // media 整个目录被删（库里已无 media）→ 作为一个目录条目。
     fs.add('E:/Vault/.trash/media/a.png', { mtimeMs: 20 });
     fs.add('E:/Vault/.trash/1.md', { mtimeMs: 10 });
-    // 插件自己的 .vt 不算 Obsidian 条目。
-    fs.add('E:/Vault/.trash/.vt/index.json', { content: '{}' });
+    // 插件自己的 index.json 与镜像目录（盘符顶层）不算 Obsidian 条目。
+    fs.add(
+      'E:/Vault/.trash/index.json',
+      {
+        content: JSON.stringify({
+          version: 1,
+          entries: [
+            {
+              id: 't1',
+              origin: 'E:\\OUT\\a.md',
+              trashPath: 'E:/Vault/.trash/E/OUT/a.md',
+              isDir: false,
+              time: 1,
+            },
+          ],
+        }),
+      },
+    );
+    fs.add('E:/Vault/.trash/E/OUT/a.md', {});
 
     const items = listObsidianTrashItems(VAULT);
     expect(items.map((i) => i.rel)).toEqual(['test/untitled.md', 'media', '1.md']);
@@ -234,7 +251,7 @@ describe('vault mounts with a custom trash location', () => {
     expect(fs.existsSync('E:/Vault/test/untitled.md')).toBe(false);
     // 完全不经过 Obsidian 的 .trash（扁平命名只在那边才有）
     expect(fs.existsSync('E:/Vault/.trash')).toBe(false);
-    expect(fs.existsSync('E:/HOME/Runtime/.trash/.vt/external/E/Vault/test/untitled.md')).toBe(true);
+    expect(fs.existsSync('E:/HOME/Runtime/.trash/E/Vault/test/untitled.md')).toBe(true);
     expect(reconciled).toEqual(['test/untitled.md']);
     const items = listTrashItems(VAULT, 'E:\\HOME\\Runtime\\.trash');
     expect(items.map((i) => i.origin)).toEqual(['E:/Vault/test/untitled.md']);
@@ -255,7 +272,7 @@ describe('vault mounts with a custom trash location', () => {
     await deleteVaultEntryToCustomTrash(opts);
 
     expect(listTrashItems(VAULT, 'D:\\Trash').length).toBe(2);
-    const mirrored = fs.readdirSync('D:/Trash/.vt/external/E/Vault').filter((n) => n.startsWith('a.md'));
+    const mirrored = fs.readdirSync('D:/Trash/E/Vault').filter((n) => n.startsWith('a.md'));
     expect(mirrored.length).toBe(2);
   });
 
@@ -290,7 +307,7 @@ describe('vault mounts with a custom trash location', () => {
     });
 
     expect(r.note).toContain('回收站');
-    expect(fs.existsSync('D:/Trash/.vt/external/E/Vault/c.md')).toBe(true);
+    expect(fs.existsSync('D:/Trash/E/Vault/c.md')).toBe(true);
     expect(listTrashItems(VAULT, 'D:\\Trash').length).toBe(1);
   });
 
@@ -313,7 +330,9 @@ describe('emptyTrash', () => {
     emptyTrash(VAULT);
     expect(listTrashItems(VAULT)).toEqual([]);
     expect(listObsidianTrashItems(VAULT)).toEqual([]);
-    expect(fs.existsSync('E:/Vault/.trash/.vt/index.json')).toBe(true);
+    // 插件索引留在共用 .trash 里(唯一保留的文件)
+    expect(fs.existsSync('E:/Vault/.trash/index.json')).toBe(true);
+    expect(fs.existsSync('E:/Vault/.trash/E/OUT/c.md')).toBe(false);
   });
 
   it('keeps unrelated files in a custom trash dir', async () => {
@@ -328,6 +347,91 @@ describe('emptyTrash', () => {
 
     emptyTrash(VAULT, 'D:\\Trash');
     expect(listTrashItems(VAULT, 'D:\\Trash')).toEqual([]);
+    expect(fs.existsSync('D:/Trash/E/OUT/d.md')).toBe(false);
     expect(fs.readFileSync('D:/Trash/keep.txt', 'utf8')).toBe('keep');
+    expect(fs.existsSync('D:/Trash/index.json')).toBe(true);
+  });
+});
+
+describe('legacy .vt layout', () => {
+  it('migrates old entries to the location itself on first access', () => {
+    const fs = withFs();
+    fs.add(
+      'D:/Trash/.vt/index.json',
+      {
+        content: JSON.stringify({
+          version: 1,
+          entries: [
+            {
+              id: 't1',
+              origin: 'E:\\OUT\\a.md',
+              trashPath: 'D:/Trash/.vt/external/E/OUT/a.md',
+              isDir: false,
+              time: 1,
+            },
+          ],
+        }),
+      },
+    );
+    fs.add('D:/Trash/.vt/external/E/OUT/a.md', { content: 'x' });
+    // 新布局已经先落过一个条目（顶层目录已存在）:合并而不是跳过
+    fs.add('D:/Trash/E/OTHER/y.md', { content: 'y' });
+
+    const items = listTrashItems(VAULT, 'D:\\Trash');
+    expect(items.map((i) => i.origin)).toEqual(['E:\\OUT\\a.md']);
+    expect(fs.existsSync('D:/Trash/E/OUT/a.md')).toBe(true);
+    expect(fs.readFileSync('D:/Trash/E/OTHER/y.md', 'utf8')).toBe('y');
+    expect(fs.existsSync('D:/Trash/index.json')).toBe(true);
+    expect(fs.existsSync('D:/Trash/.vt')).toBe(false);
+
+    const restored = restoreFromTrash(VAULT, items[0].id, 'D:\\Trash');
+    expect(restored.restoredAs).toBe('E:\\OUT\\a.md');
+    expect(fs.readFileSync('E:/OUT/a.md', 'utf8')).toBe('x');
+  });
+
+  it('merges the old index into an existing new-layout index', () => {
+    const fs = withFs();
+    fs.add(
+      'D:/Trash/index.json',
+      {
+        content: JSON.stringify({
+          version: 1,
+          entries: [
+            {
+              id: 'new1',
+              origin: 'E:\\OUT\\new.md',
+              trashPath: 'D:/Trash/E/OUT/new.md',
+              isDir: false,
+              time: 2,
+            },
+          ],
+        }),
+      },
+    );
+    fs.add('D:/Trash/E/OUT/new.md', { content: 'new' });
+    fs.add(
+      'D:/Trash/.vt/index.json',
+      {
+        content: JSON.stringify({
+          version: 1,
+          entries: [
+            {
+              id: 'old1',
+              origin: 'E:\\OUT\\old.md',
+              trashPath: 'D:/Trash/.vt/external/E/OUT/old.md',
+              isDir: false,
+              time: 1,
+            },
+          ],
+        }),
+      },
+    );
+    fs.add('D:/Trash/.vt/external/E/OUT/old.md', { content: 'old' });
+
+    const items = listTrashItems(VAULT, 'D:\\Trash');
+    expect(items.map((i) => i.origin)).toEqual(['E:\\OUT\\new.md', 'E:\\OUT\\old.md']);
+    expect(fs.readFileSync('D:/Trash/E/OUT/new.md', 'utf8')).toBe('new');
+    expect(fs.readFileSync('D:/Trash/E/OUT/old.md', 'utf8')).toBe('old');
+    expect(fs.existsSync('D:/Trash/.vt')).toBe(false);
   });
 });

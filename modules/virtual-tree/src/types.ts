@@ -722,7 +722,8 @@ export interface VirtualTreeSettings {
   /**
    * 回收站位置（2026-11-27 用户需求：使用 Obsidian 的 .trash，且允许放到库外）：
    * 留空 = `<库根>/.trash`（与 Obsidian 共用）；也可填任意绝对路径（库外亦可）。
-   * 插件索引与文件镜像放在该目录下的 `.vt/` 里，库外与库内挂载的删除都进这里。
+   * 插件索引（index.json）与文件镜像直接放在该目录下（不再建 .vt/），
+   * 库外与库内挂载的删除都进这里。
    */
   trashPath: string;
 }

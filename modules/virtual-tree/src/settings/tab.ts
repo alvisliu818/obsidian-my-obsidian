@@ -446,9 +446,9 @@ export class VirtualTreeSettingTab extends PluginSettingTab {
       .setName('回收站位置')
       .setDesc(
         '留空 = 使用 Obsidian 的回收站（<库根>/.trash）。也可以选库外目录（如 D:\\Trash\\obsidian）——' +
-          '插件删除的文件（库外与库内挂载）都会按原路径镜像到该目录的 .vt/ 下；' +
+          '插件删除的文件（库外与库内挂载）直接按原路径镜像铺在该目录下，index.json 记录原始路径用于恢复；' +
           '面板「回收站」与上面的「打开回收站」都读这个位置。' +
-          '注意：不要选一个已有其他文件的目录，插件会往里写 .vt/（清空只动回收站条目）。',
+          '注意：该目录会被回收站条目和 index.json 直接占用，不要选一个已有其他文件的目录（清空只动回收站条目）。',
       )
       .addText((t) =>
         t

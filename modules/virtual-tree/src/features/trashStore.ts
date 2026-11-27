@@ -11,8 +11,9 @@
  * 回收站位置(设置「回收站位置」):
  *   留空 = 与 Obsidian 共用 `<库根>/.trash`(Obsidian 的本地回收站);
  *   也可配置任意绝对路径(允许库外,如 `D:\Trash\obsidian`)。
- * 插件自己的索引与镜像放在 `<位置>/.vt/` 里,和 Obsidian 的条目互不干扰;
- * Obsidian 不索引 `.trash`,所以放在里面不会被搜索/文件树/图谱看到。
+ * 插件条目直接按原路径镜像铺在该位置下,index.json 记录原始路径(不再建 .vt/);
+ * 与 Obsidian 共用 .trash 时,插件镜像(盘符目录)和 index.json 与 Obsidian
+ * 自己的条目同处一根,靠索引区分,互不干扰。
  *
  * vault 挂载:留空(共用 .trash)时走 fileManager.trashFile,尊重库自己的
  * 回收站设置;配了自定义位置时,库内删除也收编到该位置,且与库外文件同一套
@@ -47,6 +48,9 @@ const hooks: { fs?: TrashFsLike; require?: Requirer } = {};
 /** Injection point for tests. */
 export function __setTrashFsForTest(fs: TrashFsLike | null): void {
   hooks.fs = fs ?? undefined;
+  // 测试换了 fs:索引缓存必须一起清,否则同根不同盘的内存状态会串。
+  indexCache = null;
+  indexCacheRoot = '';
 }
 
 function nodeRequire(id: string): unknown {
@@ -96,9 +100,12 @@ export function isObsidianTrashRoot(vaultBase: string, configured?: string): boo
   );
 }
 
-/** 插件自己的元数据目录(索引 + 库外文件镜像),藏在回收站根下。 */
+/**
+ * 插件回收站根 = 设置的位置本身(索引与镜像都直接放这里,不再建 `.vt` 子目录)。
+ * 留空 = Obsidian 的 `.trash`(此时 Obsidian 自己的条目也在同一个根下)。
+ */
 export function pluginTrashRoot(vaultBase: string, configured?: string): string {
-  return resolveTrashRoot(vaultBase, configured) + '/.vt';
+  return resolveTrashRoot(vaultBase, configured);
 }
 
 interface TrashEntry {
@@ -119,8 +126,89 @@ interface TrashIndex {
 let indexCache: TrashIndex | null = null;
 let indexCacheRoot = '';
 
+/** 目录合并搬家:目标已存在同名顶层时逐个孩子搬,同名文件保留现有,不覆盖不丢。 */
+function mergeInto(src: string, dst: string): void {
+  const f = fsMod();
+  if (!f.existsSync(dst)) {
+    moveRecursive(src, dst);
+    return;
+  }
+  for (const name of f.readdirSync(src)) {
+    const s = src + '/' + name;
+    const d = dst + '/' + name;
+    if (f.existsSync(d)) {
+      if (isDirOnDisk(s) && isDirOnDisk(d)) mergeInto(s, d);
+      continue;
+    }
+    moveRecursive(s, d);
+  }
+  try {
+    if ((f.readdirSync(src) as string[]).length === 0) f.rmSync(src, { recursive: true, force: true });
+  } catch {
+    /* 还有搬不动的:留着 */
+  }
+}
+
+/**
+ * 旧布局迁移(2026-11-27 用户要求回收站位置下不再建 `.vt`):
+ * `<位置>/.vt/{index.json,external/…}` → `<位置>/{index.json,镜像}`。
+ * 旧索引与新索引并存时按 id 合并(兼容改版前后交替删过文件的情形);
+ * 搬不动的条目原样留在旧目录里,不覆盖也不丢。
+ */
+function migrateLegacyLayout(root: string): void {
+  const f = fsMod();
+  const old = root + '/.vt';
+  if (!f.existsSync(old)) return;
+  const external = old + '/external';
+  if (f.existsSync(external)) {
+    for (const name of f.readdirSync(external)) {
+      try {
+        mergeInto(external + '/' + name, root + '/' + name);
+      } catch {
+        /* 搬不动(占用/权限):留在旧目录,不覆盖也不丢 */
+      }
+    }
+  }
+  if (f.existsSync(old + '/' + INDEX_FILE)) {
+    try {
+      const legacy = JSON.parse(f.readFileSync(old + '/' + INDEX_FILE, 'utf8'));
+      const current = f.existsSync(root + '/' + INDEX_FILE)
+        ? JSON.parse(f.readFileSync(root + '/' + INDEX_FILE, 'utf8'))
+        : { version: 1, entries: [] };
+      if (legacy && Array.isArray(legacy.entries)) {
+        const entries: TrashEntry[] = Array.isArray(current?.entries) ? current.entries : [];
+        const ids = new Set(entries.map((e) => e.id));
+        for (const e of legacy.entries as TrashEntry[]) {
+          if (typeof e.trashPath === 'string') {
+            e.trashPath = toSlashes(e.trashPath).split(old + '/external/').join(root + '/');
+          }
+          if (e.id && ids.has(e.id)) continue;
+          entries.push(e);
+        }
+        f.writeFileSync(
+          root + '/' + INDEX_FILE,
+          JSON.stringify({ version: 1, entries }, null, 2),
+          'utf8',
+        );
+        f.rmSync(old + '/' + INDEX_FILE, { recursive: false, force: true });
+      }
+    } catch {
+      /* 旧索引损坏:当作没有 */
+    }
+  }
+  try {
+    if (f.existsSync(external) && f.readdirSync(external).length === 0) {
+      f.rmSync(external, { recursive: true, force: true });
+    }
+    if (f.readdirSync(old).length === 0) f.rmSync(old, { recursive: true, force: true });
+  } catch {
+    /* 还有搬不动的残留:留着 */
+  }
+}
+
 function loadIndex(root: string): TrashIndex {
   if (indexCache && indexCacheRoot === root) return indexCache;
+  migrateLegacyLayout(root);
   try {
     const parsed = JSON.parse(fsMod().readFileSync(root + '/' + INDEX_FILE, 'utf8'));
     if (parsed && Array.isArray(parsed.entries)) {
@@ -143,13 +231,13 @@ function saveIndex(root: string): void {
 }
 
 /**
- * 原路径 → 回收站内的镜像路径:
- *   E:\HOME\X\a.md → <trash>/.vt/external/E/HOME/X/a.md(绝对路径镜像,冒号丢弃)
+ * 原路径 → 回收站内的镜像路径(直接铺在回收站位置下):
+ *   E:\HOME\X\a.md → <trash>/E/HOME/X/a.md(绝对路径镜像,冒号丢弃)
  * 统一正斜杠便于跨盘符大小写差异时保持结构稳定。
  */
 function mirrorPath(origin: string, root: string): string {
   const flat = origin.replace(/\\/g, '/').replace(/^([A-Za-z]):/, '$1').replace(/^\/+/, '');
-  return root + '/external/' + flat;
+  return root + '/' + flat;
 }
 
 /** 移动文件/目录:同盘 rename 瞬时;跨盘 EXDEV 降级 cp+rm。 */
@@ -208,6 +296,8 @@ export async function deleteToTrash(
   if (opts.mode === 'plugin') {
     if (!f.existsSync(abs)) throw new Error(`文件不存在: ${abs}`);
     const root = pluginTrashRoot(opts.vaultBase, opts.trashPath);
+    // 先触发旧布局迁移:否则新建的镜像目录会挡住 .vt 里的旧条目搬家
+    loadIndex(root);
     const target = resolveCollision(mirrorPath(abs, root));
     f.mkdirSync(dirOf(target), { recursive: true });
     moveRecursive(abs, target);
@@ -243,8 +333,8 @@ export function vaultRelOf(vaultBase: string, abs: string): string {
 
 /**
  * 库内挂载 + 自定义回收站位置:和库外文件走同一套插件命名——按原绝对路径
- * 镜像到 `<位置>/.vt/external/…`,index.json 记原路径,不经过 Obsidian .trash
- * 的扁平命名(2026-11-27 用户要求)。
+ * 镜像到 `<位置>/…`,index.json 记原路径,不经过 Obsidian .trash 的扁平命名
+ * (2026-11-27 用户要求)。
  *
  * Obsidian 不监听文件系统,移走文件不会自己从库索引/反链里消失,所以移完
  * 由调用方触发一次索引同步(reconcileRemoved);同步失败不回滚回收站条目,
@@ -264,6 +354,8 @@ export async function deleteVaultEntryToCustomTrash(opts: {
     trimTrailing(toSlashes(opts.vaultBase)) + '/' + toSlashes(opts.vaultRel).replace(/^\/+/, '');
   if (!f.existsSync(vaultAbs)) throw new Error(`文件不存在: ${vaultAbs}`);
   const root = pluginTrashRoot(opts.vaultBase, opts.trashPath);
+  // 先触发旧布局迁移:否则新建的镜像目录会挡住 .vt 里的旧条目搬家
+  loadIndex(root);
   const target = resolveCollision(mirrorPath(vaultAbs, root));
   f.mkdirSync(dirOf(target), { recursive: true });
   moveRecursive(vaultAbs, target);
@@ -361,22 +453,26 @@ export function emptyTrash(vaultBase: string, configured?: string): void {
   for (const e of idx.entries) {
     try {
       f.rmSync(e.trashPath, { recursive: true, force: true });
+      // 自定义位置直接铺在根下:顺手收掉因此变空的镜像父目录
+      const rel = toSlashes(e.trashPath).startsWith(root + '/')
+        ? toSlashes(e.trashPath).slice(root.length + 1)
+        : '';
+      if (rel) pruneEmptyParents(root, rel);
     } catch {
       /* 已不存在就算了 */
     }
   }
   if (isObsidianTrashRoot(vaultBase, configured)) {
-    const shared = obsidianTrashRoot(vaultBase);
+    // 共用 .trash:Obsidian 自己的条目也一并清掉,只留插件索引
     try {
-      for (const name of f.readdirSync(shared)) {
-        if (name === '.vt') continue;
-        f.rmSync(shared + '/' + name, { recursive: true, force: true });
+      for (const name of f.readdirSync(root)) {
+        if (name === INDEX_FILE) continue;
+        f.rmSync(root + '/' + name, { recursive: true, force: true });
       }
     } catch {
       /* .trash 不存在/读不了:无事可清 */
     }
   }
-  f.rmSync(root, { recursive: true, force: true });
   indexCache = { version: 1, entries: [] };
   indexCacheRoot = root;
   saveIndex(root);
@@ -392,18 +488,36 @@ export interface ObsidianTrashItem {
 }
 
 /**
+ * 插件镜像在回收站根下的顶层名字(盘符目录),用于把插件条目与 Obsidian
+ * 自己的扁平条目分开。
+ */
+function pluginTopNames(root: string): Set<string> {
+  const idx = loadIndex(root);
+  const out = new Set<string>();
+  for (const e of idx.entries) {
+    const p = toSlashes(e.trashPath);
+    if (!p.startsWith(root + '/')) continue;
+    const top = p.slice(root.length + 1).split('/')[0];
+    if (top) out.add(top.toLowerCase());
+  }
+  return out;
+}
+
+/**
  * 列出 Obsidian `.trash` 里由 Obsidian 管理的条目(仅当回收站根就是 .trash)。
+ * 插件的镜像目录(盘符目录)与 index.json 由插件自己管理,这里跳过。
  *
- * Obsidian 的本地回收站按库内相对路径镜像存放,所以 `<库根>/<rel>` 就是恢复
- * 目标。目录的两种来源无法直接区分(整目录删除 vs 目录内某文件删除),用
- * 「库里同名目录是否仍存在」判断:存在说明这是更深删除留下的外层容器,继续
- * 下钻;不存在则是整个目录被删,作为一个目录条目列出。
+ * Obsidian 的本地回收站是扁平命名,原相对路径不再保留,所以恢复目标按
+ * `.trash` 内的路径拼到库根。目录的两种来源无法直接区分(整目录删除 vs
+ * 目录内某文件删除),用「库里同名目录是否仍存在」判断:存在说明这是更深
+ * 删除留下的外层容器,继续下钻;不存在则是整个目录被删,作为一个目录条目列出。
  */
 export function listObsidianTrashItems(vaultBase: string, configured?: string): ObsidianTrashItem[] {
   if (!isObsidianTrashRoot(vaultBase, configured)) return [];
   const f = fsMod();
   const root = obsidianTrashRoot(vaultBase);
   if (!f.existsSync(root)) return [];
+  const pluginTops = pluginTopNames(root);
   const out: ObsidianTrashItem[] = [];
   const walk = (dirRel: string): void => {
     const dir = dirRel ? root + '/' + dirRel : root;
@@ -414,7 +528,7 @@ export function listObsidianTrashItems(vaultBase: string, configured?: string): 
       return;
     }
     for (const name of names) {
-      if (!dirRel && name === '.vt') continue;
+      if (!dirRel && (name === INDEX_FILE || pluginTops.has(name.toLowerCase()))) continue;
       const rel = dirRel ? dirRel + '/' + name : name;
       const full = root + '/' + rel;
       let st: { isDirectory(): boolean; mtimeMs?: number };
