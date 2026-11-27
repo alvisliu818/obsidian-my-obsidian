@@ -83,4 +83,45 @@ describe('reloadOpenLayers — 强制重扫后已展开的层必须重读', () =
     expect(findNode(st2.tree, 'a')?.children.map((c) => c.name)).toEqual(['b', 'top.md']);
     expect(findNode(st2.tree, 'a/b')?.children.map((c) => c.name)).toEqual(['x.md']);
   });
+
+  it('open 里只有深层 rel（父层已折叠）时，祖先链补齐后深层仍能挂上', () => {
+    const root = makeTree();
+    const mount = mountOf(root);
+    const panel = panelWith([mount]);
+    const scan = (panel as unknown as { scan: ScanFn }).scan.bind(panel);
+    const reload = (panel as unknown as { reloadOpenLayers(m: ExternalMount, s: unknown): void }).reloadOpenLayers.bind(
+      panel,
+    );
+
+    // 折叠 a 只删自己、子项 a/b 的记忆仍在 open（toggleNode 语义）
+    const st = scan(mount, true);
+    expect(st.open.size).toBe(0);
+    st.open.add('a/b');
+
+    // 旧实现直接 loadLayer('a/b')：父 a 的 children 还是空，findNodes 找不到，
+    // 结果被丢但 loaded 已置位 → 之后再展开 a/b 永远空白，只能重启。
+    reload(mount, st);
+    expect(findNode(st.tree, 'a')?.children.map((c) => c.name)).toEqual(['b', 'top.md']);
+    expect(findNode(st.tree, 'a/b')?.children.map((c) => c.name)).toEqual(['x.md']);
+  });
+
+  it('挂载点暂不存在时不占用 loaded，后续能重试', () => {
+    const root = makeTree();
+    const mount = mountOf(root);
+    const panel = panelWith([mount]);
+    const scan = (panel as unknown as { scan: ScanFn }).scan.bind(panel);
+    const loadLayer = (
+      panel as unknown as { loadLayer(m: ExternalMount, rel: string, s: unknown): void }
+    ).loadLayer.bind(panel);
+
+    const st = scan(mount, true);
+    // 父目录不存在：这一层不该留下 loaded 标记，否则父目录出现后也不会重读
+    loadLayer(mount, 'ghost/x', st);
+    expect(st.loaded.has('ghost/x')).toBe(false);
+
+    // 正常路径仍会留下标记（它是真的加载过）
+    loadLayer(mount, 'a', st);
+    expect(st.loaded.has('a')).toBe(true);
+    expect(findNode(st.tree, 'a')?.children.map((c) => c.name)).toEqual(['b', 'top.md']);
+  });
 });

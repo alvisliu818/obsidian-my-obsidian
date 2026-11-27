@@ -1286,7 +1286,15 @@ menu.addItem((item) =>
   async openExternalEntry(
     mount: ExternalMount,
     node: MountNode,
-    opts?: { readOnly?: boolean; forceCodeEditor?: boolean; forceBlockEditor?: boolean; paneMode?: string | boolean },
+    opts?: {
+      readOnly?: boolean;
+      forceCodeEditor?: boolean;
+      forceBlockEditor?: boolean;
+      paneMode?: string | boolean;
+      /** 不写「最近打开」——库内隐藏项（.obsidian 等）用伪 external 挂载
+       *  路由打开，记成 ext 路径后最近面板点击会找不到所属挂载。 */
+      skipRecent?: boolean;
+    },
   ): Promise<void> {
     if (node.isDir) return;
     // 只读名单命中（用户 2026-11-20：文件夹/文件只读,正则黑白名单）→
@@ -1315,7 +1323,7 @@ menu.addItem((item) =>
       return; // 书签根/标签目录：无文件语义
     }
     // 最近打开记录（链接/动作叶子不记——它们不是文件打开）。
-    this.recordRecentOpen(mount, node);
+    if (!opts?.skipRecent) this.recordRecentOpen(mount, node);
     // 链接挂载家族（weblink/action/bmarks 叶子）：不走文件路由——网页类
     // 经 Browser 模块打开，动作类直接执行（思源 editor-tab 同款分流）。
     if (isWeblinkPath(node.abs)) {

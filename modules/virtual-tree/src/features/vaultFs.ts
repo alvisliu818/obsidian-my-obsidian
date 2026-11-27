@@ -12,10 +12,11 @@
  * the vault API by the REL path.
  */
 
-import { TFile, TFolder, type App, type TAbstractFile } from 'obsidian';
+import { Platform, TFile, TFolder, type App, type TAbstractFile } from 'obsidian';
 import { isVaultMount, vaultRelPath, type ExternalMount } from '../types';
 import type { CompiledFilter, MountNode } from './mountFilter';
 import { dirPruned, entryMatches } from './mountFilter';
+import { fsMod, joinAbs, type DirentLike } from './extFs';
 
 // ---------------------------------------------------------------------------
 // 库内挂载路径归一。挂载根 `path` 是库内相对路径；内置的库根挂载（mountPanel
@@ -280,6 +281,81 @@ export function vaultScanLayer(
       mtime: tf?.stat.mtime,
       children: [],
     });
+  }
+  return out;
+}
+
+/**
+ * 磁盘 readdir 一层，回填 vault 索引缺失项（**不过滤**，rel = 库内绝对路径）。
+ *
+ * Obsidian 的文件索引会剔除路径中任一以 `.` 开头的段（`.obsidian`、`.git`、
+ * `.trash` …），`TFolder.children` 因此完全看不到它们。2026-11-27 用户实报
+ * 「虚拟文档树里 Obsidian/ObsidianNotes 的内容打不开」：`ObsidianNotes` 下
+ * 只有一个 `.obsidian`，索引里就是 0 个子项，树里必然展开为空。
+ *
+ * 同步是硬要求：异步回来时 MountState 可能已被库结构事件换掉，补层会丢
+ * （2026-11-27 实测踩过）。移动端没有 Node fs，返回空——隐藏项按桌面能力提供。
+ */
+export function vaultMissingChildren(app: App, folderRel: string): MountNode[] {
+  if (!Platform.isDesktopApp) return [];
+  const base = vaultAbsOf(app, '');
+  const dirAbs = folderRel ? joinAbs(base, folderRel) : base;
+  let items: DirentLike[];
+  try {
+    items = fsMod().readdirSync(dirAbs, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out: MountNode[] = [];
+  for (const item of items) {
+    const name = item.name;
+    if (!name) continue;
+    const full = folderRel ? `${folderRel}/${name}` : name;
+    // 索引里已有 → 交给 vault 索引那条路，避免同一项出现两次
+    if (app.vault.getAbstractFileByPath(full)) continue;
+    const abs = joinAbs(base, full);
+    let isDir = item.isDirectory();
+    if (!isDir && item.isSymbolicLink()) {
+      // 指向目录的软链按目录处理（Windows junction 常见）
+      try {
+        isDir = fsMod().statSync(abs).isDirectory?.() === true;
+      } catch {
+        /* 断链：按文件处理 */
+      }
+    }
+    const node: MountNode = { name, rel: full, abs, isDir, children: [] };
+    if (!isDir) {
+      try {
+        const st = fsMod().statSync(abs);
+        node.size = st.size;
+        node.mtime = st.mtimeMs;
+      } catch {
+        /* 读不到 stat 就空着 */
+      }
+    }
+    out.push(node);
+  }
+  return out;
+}
+
+/**
+ * 库内挂载：把「磁盘上有、vault 索引里没有」的隐藏项转成挂载内 rel 的一层。
+ *
+ * 只回填索引缺失项——索引里有的条目仍走 vault API（打开/重命名/删除语义
+ * 不变），回填项只承诺「看得见 + 能打开」（打开由面板交给库外文件路由）。
+ */
+export function vaultScanHiddenLayer(
+  app: App,
+  mount: ExternalMount,
+  rel: string,
+  f: CompiledFilter,
+): MountNode[] {
+  const dirVault = vaultJoinPath(mount, rel);
+  const out: MountNode[] = [];
+  for (const node of vaultMissingChildren(app, dirVault)) {
+    const childRel = rel ? `${rel}/${node.name}` : node.name;
+    if (node.isDir ? dirPruned(childRel, f) : !entryMatches(childRel, f)) continue;
+    out.push({ ...node, rel: childRel });
   }
   return out;
 }

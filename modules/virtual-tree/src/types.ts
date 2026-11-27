@@ -547,6 +547,14 @@ export interface VirtualTreeSettings {
    */
   mountShowMtime: boolean;
   /**
+   * 库内挂载是否列出 Obsidian 索引外的隐藏项（`.obsidian` / `.git` / `.trash`
+   * 等以 `.` 开头的路径段）。Obsidian 的文件索引会剔除这些路径，`TFolder`
+   * 的 children 里根本看不到它们；开启后库内层额外做一次磁盘 readdir 把
+   * 索引缺失项补进树里（打开走库外文件路由）。默认开（2026-11-27 用户要求：
+   * 虚拟文档树要能看到 `Obsidian/ObsidianNotes` 里的内容）。
+   */
+  mountShowHidden: boolean;
+  /**
    * 聚集（右键「聚集到此」）的展示方式（2026-11-23 用户需求）：
    * 'context' = 保留目标的祖先链与兄弟组，目标在树里的原位可见；
    * 'subtree' = 只显示聚集的那个条目与它的子树，目标的父级/兄弟不展示。
@@ -745,6 +753,9 @@ export const DEFAULT_VIRTUAL_TREE_SETTINGS: VirtualTreeSettings = {
   mountShowPinnedBadge: false,
   mountShowPath: true,
   mountShowMtime: true,
+  // 隐藏项默认列出（2026-11-27 用户要求）：Obsidian 索引剔除 .obsidian 等
+  // 点开头路径，库内层不补磁盘 readdir 就永远看不到它们。
+  mountShowHidden: true,
   // 聚集默认保留上下文（祖先链 + 兄弟组），"仅目标与子树"在设置里选。
   focusMode: 'context',
   mountShowRootPath: false,
@@ -888,6 +899,8 @@ export function virtualTreeSettingsFrom(raw: unknown): VirtualTreeSettings {
   s.mountShowPinnedBadge = o.mountShowPinnedBadge === true;
   s.mountShowPath = o.mountShowPath !== false;
   s.mountShowMtime = o.mountShowMtime !== false;
+  // 隐藏项：缺席按开（默认值即用户 2026-11-27 的要求），显式 false 才关。
+  s.mountShowHidden = o.mountShowHidden !== false;
   // 聚焦方式：显式 'subtree' 才隐藏父级/兄弟；缺席或其他值落默认 'context'。
   s.focusMode = o.focusMode === 'subtree' ? 'subtree' : 'context';
   s.mountShowRootPath = o.mountShowRootPath === true;

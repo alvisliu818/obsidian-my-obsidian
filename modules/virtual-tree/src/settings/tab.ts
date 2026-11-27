@@ -397,6 +397,22 @@ export class VirtualTreeSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName('显示隐藏项（.obsidian 等）')
+      .setDesc(
+        '库内挂载里列出 Obsidian 索引外的隐藏目录/文件（.obsidian、.git、.trash 等点开头路径）。' +
+          'Obsidian 的文件索引会剔除这些路径，所以默认视图里它们完全不存在——' +
+          '比如 Obsidian/ObsidianNotes 下只有一个 .obsidian 时，树里就是空文件夹。' +
+          '打开这类文件走库外文件路由（代码编辑器 / 原生编辑器 / 查看器），可正常查看与保存。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.mountShowHidden !== false).onChange(async (v) => {
+          this.plugin.settings.mountShowHidden = v;
+          await this.plugin.saveSettings();
+          this.plugin.refreshMounts();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName('显示「已固定」徽标')
       .setDesc(
         '顶部挂载标题旁的「已固定」小标签。固定的挂载本来就排在最前面，' +

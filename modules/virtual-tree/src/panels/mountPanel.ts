@@ -69,6 +69,7 @@ import {
   vaultHasVirtualChildren,
   vaultJoinPath,
   vaultRootOf,
+  vaultScanHiddenLayer,
   vaultScanLayer,
 } from '../features/vaultFs';
 // 文件属性（file-props 模块）：右键「文件属性…」与工具栏「文件属性」共用。
@@ -537,12 +538,20 @@ export class MountPanelView extends ItemView {
     // 库内挂载：一层子项从 vault 索引读，产出同款 MountNode 后走同一套
     // 排序/挂树逻辑（文件夹懒展开、过滤、拖拽序全部复用）。parent 属性
     // 挂载开启时带上计划：目录层摘浮动笔记，md 笔记层列虚拟子文档。
+    // 索引外隐藏项（.obsidian/.git，2026-11-27 用户要求）由磁盘 readdir
+    // 同步补一层——同步保证补层不会被随后替换的 MountState 丢掉。
     if (isVaultMount(mount)) {
       const plan =
         this.plugin.settings.parentMountEnabled !== false
           ? parentPlanOf(this.app, mount.path)
           : null;
-      const children = vaultScanLayer(this.app, mount, rel, this.plugin.vaultBasePath(), f, plan);
+      const base = this.plugin.vaultBasePath();
+      const indexed = vaultScanLayer(this.app, mount, rel, base, f, plan);
+      const hidden =
+        this.plugin.settings.mountShowHidden === false
+          ? []
+          : vaultScanHiddenLayer(this.app, mount, rel, f);
+      const children = hidden.length ? [...indexed, ...hidden] : indexed;
       this.sortChildren(mount.id, rel, children);
       if (!rel) {
         state.tree = children;
@@ -551,7 +560,15 @@ export class MountPanelView extends ItemView {
       }
       // 同一笔记可能两处显示（原位 + 父笔记名下的虚拟子行，2026-11-23），
       // 两行 rel 相同——子层要挂到全部匹配行，否则其中一行展开是空的。
-      for (const parent of this.findNodes(state.tree, rel)) {
+      const parents = this.findNodes(state.tree, rel);
+      if (!parents.length) {
+        // 父层还没挂进树（open 里残留的深层 rel、父目录刚被删/改名）：
+        // 撤掉 loaded，等父层到位后再加载——否则这层被永久跳过，表现为
+        // 「展开空白、重启才好」（2026-11-27 用户实报）。
+        state.loaded.delete(rel);
+        return;
+      }
+      for (const parent of parents) {
         parent.children = children;
         parent.empty = children.length === 0;
       }
@@ -562,7 +579,12 @@ export class MountPanelView extends ItemView {
     const dirAbs = rel ? joinAbs(mount.path, rel) : mount.path;
     // Guard for mounted-FILE roots and races where the entry vanished:
     // readdir on a non-directory would only produce a confusing error.
-    if (!isDirectory(dirAbs)) return;
+    // 不占 loaded：目录可能只是还没出现（刚建/刚同步）或被临时移走，撤掉标记
+    // 让下次 render 还能重试——否则这条 rel 永久空白（同库内分支的父缺失）。
+    if (!isDirectory(dirAbs)) {
+      state.loaded.delete(rel);
+      return;
+    }
     const { entries } = scanExternal(dirAbs, {
       shouldEnterDir: (childRel) => !dirPruned(rel ? `${rel}/${childRel}` : childRel, f),
       keepFile: (childRel) => entryMatches(rel ? `${rel}/${childRel}` : childRel, f),
@@ -587,10 +609,13 @@ export class MountPanelView extends ItemView {
       return;
     }
     const parent = this.findNode(state.tree, rel);
-    if (parent) {
-      parent.children = children;
-      parent.empty = children.length === 0;
+    if (!parent) {
+      // 与库内分支同因：挂载点还不在树里，撤掉 loaded 留待下次重试。
+      state.loaded.delete(rel);
+      return;
     }
+    parent.children = children;
+    parent.empty = children.length === 0;
     this.diffLayer(mount.id, rel, children, state);
   }
 
@@ -2240,6 +2265,28 @@ export class MountPanelView extends ItemView {
     const vaultPath = vaultJoinPath(mount, node.rel);
     const af = this.app.vault.getAbstractFileByPath(vaultPath);
     if (!(af instanceof TFile)) {
+      // 索引外的隐藏文件（.obsidian / .git 等点开头路径）：Obsidian 永远不会
+      // 把它变成 TFile，vault.openFile 无从谈起。磁盘上存在就交给库外文件
+      // 路由——原生编辑器 / 代码编辑器 / 查看器全部按绝对路径工作。
+      const onDisk = await this.app.vault.adapter.exists(vaultPath).catch(() => false);
+      if (onDisk) {
+        const abs = vaultAbsOf(this.app, vaultPath);
+        const cut = Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\'));
+        const pseudo: ExternalMount = {
+          ...mount,
+          kind: 'external',
+          path: cut > 0 ? abs.slice(0, cut) : mount.path,
+        };
+        await this.plugin.openExternalEntry(
+          pseudo,
+          { ...node, abs },
+          {
+            paneMode: typeof paneMode === 'boolean' ? (paneMode ? 'tab' : undefined) : paneMode,
+            skipRecent: true,
+          },
+        );
+        return;
+      }
       new Notice('文件不存在（可能已被删除或移动）。');
       this.rescan(mount);
       return;
@@ -3300,7 +3347,13 @@ export class MountPanelView extends ItemView {
     const st = this.states.get(mount.id);
     if (!st) return;
     if (st.open.has(rel)) st.open.delete(rel);
-    else st.open.add(rel);
+    else {
+      st.open.add(rel);
+      // 库内层「展开即重读」：索引外路径（.obsidian 等）根本不发 vault 事件，
+      // 外部程序刚写进去的文件也在索引里滞后；一层 readdir 很便宜，换来的是
+      // 展开永远对得上磁盘（2026-11-27「有时展开看不到内容」的另一半原因）。
+      if (isVaultMount(mount)) st.loaded.delete(rel);
+    }
     this.render();
   }
 
@@ -3657,10 +3710,21 @@ export class MountPanelView extends ItemView {
    * （目录已删/改名）由 findNode 返回 null 自然跳过，open 里的陈项无需清理。
    */
   private reloadOpenLayers(mount: ExternalMount, st: MountState): void {
-    const rels = [...st.open].sort(
+    // open 里会残留「父层已折叠」的深层 rel——折叠只删自己、保留子项记忆
+    // （toggleNode）。只按 open 逐层加载会先撞深层：此时父层 children 还是空的，
+    // findNodes 找不到挂载点，结果被丢且 loaded 已置位 → 那层永久空白，重启
+    // 才好（2026-11-27 用户实报「有时展开文件夹显示不了内容」）。这里把每个
+    // open rel 的祖先链补齐去重，浅层先加载，保证每一层都有挂载点。
+    const rels = new Set<string>();
+    for (const rel of st.open) {
+      if (!rel) continue;
+      const parts = rel.split('/');
+      for (let i = 1; i <= parts.length; i++) rels.add(parts.slice(0, i).join('/'));
+    }
+    const ordered = [...rels].sort(
       (a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b),
     );
-    for (const rel of rels) this.loadLayer(mount, rel, st);
+    for (const rel of ordered) this.loadLayer(mount, rel, st);
   }
 
   /** 刷新扫描缓存并重绘;openRel 非空时确保该目录处于展开态。 */

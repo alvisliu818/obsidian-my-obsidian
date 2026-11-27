@@ -93,7 +93,7 @@ function nodeRequire(id: string): unknown {
   return eval('require')(id);
 }
 
-function fsMod(): NodeFsLike {
+export function fsMod(): NodeFsLike {
   if (hooks.fs) return hooks.fs;
   return nodeRequire('fs') as NodeFsLike;
 }
