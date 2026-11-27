@@ -1,18 +1,20 @@
 /**
- * 插件回收站(思源虚拟文档树 trash.ts 对齐):删除文件的统一可恢复通道。
+ * 回收站(思源虚拟文档树 trash.ts 对齐):删除文件的统一可恢复通道。
  *
- * 两种模式(设置「删除方式」;与思源同款,无"直接删除"选项——删除必须可恢复):
- *   plugin  移入插件回收站:物理移动到 `<库根>/.vt-trash/` 下,按原路径镜像保留
- *           目录结构(库外文件镜像去掉盘符冒号的绝对路径),index.json 记录原始
- *           路径与删除时间,可在回收站管理器里一键恢复;
+ * 两种删除方式(设置「删除方式」;与思源同款,无"直接删除"选项——删除必须可恢复):
+ *   plugin  移入插件回收站:物理移动到「回收站位置」下,按原路径镜像保留目录结构
+ *           (库外文件镜像去掉盘符冒号的绝对路径),index.json 记录原始路径与
+ *           删除时间,可在回收站管理器里一键恢复;
  *   system  移入操作系统回收站(此前 external 挂载的既有行为,electron
  *           shell.trashItem,经 extFs.trashEntry)。
  *
- * 回收站根放库根下、以点前缀命名(`.vt-trash`):Obsidian 不索引点文件(搜索/
- * 文件树/图谱全部不可见),又不依赖库外某个可能不存在的目录。
+ * 回收站位置(设置「回收站位置」):
+ *   留空 = 与 Obsidian 共用 `<库根>/.trash`(Obsidian 的本地回收站);
+ *   也可配置任意绝对路径(允许库外,如 `D:\Trash\obsidian`)。
+ * 插件自己的索引与镜像放在 `<位置>/.vt/` 里,和 Obsidian 的条目互不干扰;
+ * Obsidian 不索引 `.trash`,所以放在里面不会被搜索/文件树/图谱看到。
  *
- * 与思源版差异:思源有桌面/移动双后端;Obsidian 桌面 only,一律走 Node fs。
- * vault 挂载不进这里——fileManager.trashFile 尊重库的回收站设置,Obsidian
+ * vault 挂载不走这里——fileManager.trashFile 尊重库的回收站设置,Obsidian
  * 自己的 .trash 就是它的管理器;remote 挂载删除仍提交到远端(历史可回溯)。
  */
 
@@ -26,11 +28,12 @@ export interface TrashFsLike {
   readFileSync(p: string, enc: 'utf8'): string;
   writeFileSync(p: string, data: string, enc: 'utf8'): void;
   mkdirSync(p: string, opts: { recursive: true }): void;
+  readdirSync(p: string): string[];
   renameSync(from: string, to: string): void;
   rmSync(p: string, opts: { recursive: boolean; force: boolean }): void;
   /** 跨盘降级用;Node ≥16.7 才有,老内核缺失时报错让用户换 system 模式。 */
   cpSync?(from: string, to: string, opts: { recursive: boolean }): void;
-  statSync(p: string): { isDirectory(): boolean };
+  statSync(p: string): { isDirectory(): boolean; mtimeMs?: number };
 }
 
 type Requirer = (id: string) => unknown;
@@ -59,9 +62,39 @@ const INDEX_FILE = 'index.json';
 /** index 上限:只保留最近 500 条(回收站内孤儿文件由「清空」处理)。 */
 const MAX_ENTRIES = 500;
 
-/** 插件回收站物理根。 */
-export function pluginTrashRoot(vaultBase: string): string {
-  return vaultBase.replace(/[\\/]+$/, '') + '/.vt-trash';
+function trimTrailing(p: string): string {
+  return p.replace(/[\\/]+$/, '');
+}
+
+/** 统一正斜杠：库根可能来自 Windows 反斜杠路径，回收站内部一律用 '/' 拼接。 */
+function toSlashes(p: string): string {
+  return p.replace(/\\/g, '/');
+}
+
+/** Obsidian 自己的本地回收站根。 */
+export function obsidianTrashRoot(vaultBase: string): string {
+  return trimTrailing(toSlashes(vaultBase)) + '/.trash';
+}
+
+/** 设置里的「回收站位置」→ 实际根目录。留空 = Obsidian 的 .trash。 */
+export function resolveTrashRoot(vaultBase: string, configured?: string): string {
+  const raw = (configured ?? '').trim();
+  if (!raw) return obsidianTrashRoot(vaultBase);
+  const absolute = /^[A-Za-z]:[\\/]/.test(raw) || raw.startsWith('\\\\') || raw.startsWith('/');
+  return trimTrailing(toSlashes(absolute ? raw : trimTrailing(toSlashes(vaultBase)) + '/' + raw));
+}
+
+/** 当前回收站是否就是 Obsidian 的 `.trash`(此时管理器同时列出库内删除条目)。 */
+export function isObsidianTrashRoot(vaultBase: string, configured?: string): boolean {
+  return (
+    resolveTrashRoot(vaultBase, configured).replace(/\\/g, '/').toLowerCase() ===
+    obsidianTrashRoot(vaultBase).replace(/\\/g, '/').toLowerCase()
+  );
+}
+
+/** 插件自己的元数据目录(索引 + 库外文件镜像),藏在回收站根下。 */
+export function pluginTrashRoot(vaultBase: string, configured?: string): string {
+  return resolveTrashRoot(vaultBase, configured) + '/.vt';
 }
 
 interface TrashEntry {
@@ -107,7 +140,7 @@ function saveIndex(root: string): void {
 
 /**
  * 原路径 → 回收站内的镜像路径:
- *   E:\HOME\X\a.md → <trash>/external/E/HOME/X/a.md(绝对路径镜像,冒号丢弃)
+ *   E:\HOME\X\a.md → <trash>/.vt/external/E/HOME/X/a.md(绝对路径镜像,冒号丢弃)
  * 统一正斜杠便于跨盘符大小写差异时保持结构稳定。
  */
 function mirrorPath(origin: string, root: string): string {
@@ -165,12 +198,12 @@ export interface DeleteResult {
 export async function deleteToTrash(
   abs: string,
   isDir: boolean,
-  opts: { mode: TrashMode; vaultBase: string },
+  opts: { mode: TrashMode; vaultBase: string; trashPath?: string },
 ): Promise<DeleteResult> {
   const f = fsMod();
   if (opts.mode === 'plugin') {
     if (!f.existsSync(abs)) throw new Error(`文件不存在: ${abs}`);
-    const root = pluginTrashRoot(opts.vaultBase);
+    const root = pluginTrashRoot(opts.vaultBase, opts.trashPath);
     const target = resolveCollision(mirrorPath(abs, root));
     f.mkdirSync(dirOf(target), { recursive: true });
     moveRecursive(abs, target);
@@ -184,7 +217,7 @@ export async function deleteToTrash(
     });
     if (idx.entries.length > MAX_ENTRIES) idx.entries.length = MAX_ENTRIES;
     saveIndex(root);
-    return { mode: 'plugin', note: '已移入插件回收站(可在回收站中恢复)' };
+    return { mode: 'plugin', note: '已移入回收站(可在「回收站」中恢复)' };
   }
   // system 模式:electron shell.trashItem(extFs.trashEntry;Windows 走系统回收站)
   const { trashEntry } = await import('./extFs');
@@ -202,9 +235,9 @@ export interface TrashListItem {
   time: number;
 }
 
-/** 列出仍在磁盘上的回收站条目(index 里记录但文件已被手动清理的跳过)。 */
-export function listTrashItems(vaultBase: string): TrashListItem[] {
-  const idx = loadIndex(pluginTrashRoot(vaultBase));
+/** 列出仍在磁盘上的插件回收站条目(index 里记录但文件已被手动清理的跳过)。 */
+export function listTrashItems(vaultBase: string, configured?: string): TrashListItem[] {
+  const idx = loadIndex(pluginTrashRoot(vaultBase, configured));
   const f = fsMod();
   const out: TrashListItem[] = [];
   for (const e of idx.entries) {
@@ -219,8 +252,12 @@ export function listTrashItems(vaultBase: string): TrashListItem[] {
 }
 
 /** 恢复:移回原位;原位已存在同名时不覆盖,恢复为「xxx (恢复 yyyy-MM-dd HHmmss)」。 */
-export function restoreFromTrash(vaultBase: string, id: string): { origin: string; restoredAs: string } {
-  const root = pluginTrashRoot(vaultBase);
+export function restoreFromTrash(
+  vaultBase: string,
+  id: string,
+  configured?: string,
+): { origin: string; restoredAs: string } {
+  const root = pluginTrashRoot(vaultBase, configured);
   const idx = loadIndex(root);
   const i = idx.entries.findIndex((e) => e.id === id);
   if (i < 0) throw new Error('记录不存在或已被恢复');
@@ -241,8 +278,8 @@ export function restoreFromTrash(vaultBase: string, id: string): { origin: strin
 }
 
 /** 彻底删除单条(真正从磁盘删除回收站内的副本)。 */
-export function purgeTrashItem(vaultBase: string, id: string): void {
-  const root = pluginTrashRoot(vaultBase);
+export function purgeTrashItem(vaultBase: string, id: string, configured?: string): void {
+  const root = pluginTrashRoot(vaultBase, configured);
   const idx = loadIndex(root);
   const i = idx.entries.findIndex((e) => e.id === id);
   if (i < 0) return;
@@ -254,16 +291,131 @@ export function purgeTrashItem(vaultBase: string, id: string): void {
   }
 }
 
-/** 清空插件回收站:删除整个回收站目录内容并重置 index。 */
-export function emptyPluginTrash(vaultBase: string): void {
-  const root = pluginTrashRoot(vaultBase);
+/**
+ * 清空回收站:插件条目全部彻底删除;当前根是 Obsidian 的 `.trash` 时,
+ * 库内删除的条目也一并清掉(只动 .trash 的内容,不碰自定义目录里的其他文件)。
+ */
+export function emptyTrash(vaultBase: string, configured?: string): void {
   const f = fsMod();
-  if (f.existsSync(root)) {
-    f.rmSync(root, { recursive: true, force: true });
+  const root = pluginTrashRoot(vaultBase, configured);
+  const idx = loadIndex(root);
+  for (const e of idx.entries) {
+    try {
+      f.rmSync(e.trashPath, { recursive: true, force: true });
+    } catch {
+      /* 已不存在就算了 */
+    }
   }
+  if (isObsidianTrashRoot(vaultBase, configured)) {
+    const shared = obsidianTrashRoot(vaultBase);
+    try {
+      for (const name of f.readdirSync(shared)) {
+        if (name === '.vt') continue;
+        f.rmSync(shared + '/' + name, { recursive: true, force: true });
+      }
+    } catch {
+      /* .trash 不存在/读不了:无事可清 */
+    }
+  }
+  f.rmSync(root, { recursive: true, force: true });
   indexCache = { version: 1, entries: [] };
   indexCacheRoot = root;
   saveIndex(root);
+}
+
+// ===== Obsidian 库内回收站(.trash)条目 =====
+
+export interface ObsidianTrashItem {
+  /** `.trash` 内的相对路径;恢复目标 = `<库根>/<rel>`。 */
+  rel: string;
+  isDir: boolean;
+  time: number;
+}
+
+/**
+ * 列出 Obsidian `.trash` 里由 Obsidian 管理的条目(仅当回收站根就是 .trash)。
+ *
+ * Obsidian 的本地回收站按库内相对路径镜像存放,所以 `<库根>/<rel>` 就是恢复
+ * 目标。目录的两种来源无法直接区分(整目录删除 vs 目录内某文件删除),用
+ * 「库里同名目录是否仍存在」判断:存在说明这是更深删除留下的外层容器,继续
+ * 下钻;不存在则是整个目录被删,作为一个目录条目列出。
+ */
+export function listObsidianTrashItems(vaultBase: string, configured?: string): ObsidianTrashItem[] {
+  if (!isObsidianTrashRoot(vaultBase, configured)) return [];
+  const f = fsMod();
+  const root = obsidianTrashRoot(vaultBase);
+  if (!f.existsSync(root)) return [];
+  const out: ObsidianTrashItem[] = [];
+  const walk = (dirRel: string): void => {
+    const dir = dirRel ? root + '/' + dirRel : root;
+    let names: string[];
+    try {
+      names = f.readdirSync(dir) as string[];
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (!dirRel && name === '.vt') continue;
+      const rel = dirRel ? dirRel + '/' + name : name;
+      const full = root + '/' + rel;
+      let st: { isDirectory(): boolean; mtimeMs?: number };
+      try {
+        st = f.statSync(full) as { isDirectory(): boolean; mtimeMs?: number };
+      } catch {
+        continue;
+      }
+      const live = trimTrailing(toSlashes(vaultBase)) + '/' + rel;
+      if (st.isDirectory() && isDirOnDisk(live)) {
+        walk(rel);
+        continue;
+      }
+      out.push({ rel, isDir: st.isDirectory(), time: st.mtimeMs ?? 0 });
+    }
+  };
+  walk('');
+  out.sort((a, b) => b.time - a.time);
+  return out;
+}
+
+/** 恢复一条 Obsidian 回收站条目:`.trash/<rel>` → `<库根>/<rel>`,冲突加后缀。 */
+export function restoreObsidianTrashItem(vaultBase: string, rel: string): { restoredAs: string } {
+  const f = fsMod();
+  const root = obsidianTrashRoot(vaultBase);
+  const src = root + '/' + rel;
+  if (!f.existsSync(src)) throw new Error('回收站内的条目已不存在(可能被手动清理)');
+  let dest = trimTrailing(toSlashes(vaultBase)) + '/' + rel;
+  if (f.existsSync(dest)) {
+    const sep = dest.includes('\\') ? '\\' : '/';
+    dest = dirOf(dest) + sep + baseOf(dest) + ' (恢复 ' + restoreStamp() + ')';
+  }
+  f.mkdirSync(dirOf(dest), { recursive: true });
+  moveRecursive(src, dest);
+  pruneEmptyParents(root, rel);
+  return { restoredAs: dest };
+}
+
+/** 彻底删除一条 Obsidian 回收站条目。 */
+export function purgeObsidianTrashItem(vaultBase: string, rel: string): void {
+  const f = fsMod();
+  const root = obsidianTrashRoot(vaultBase);
+  f.rmSync(root + '/' + rel, { recursive: true, force: true });
+  pruneEmptyParents(root, rel);
+}
+
+/** 移走条目后清掉 .trash 里因此变空的外层容器目录(不动 .trash 根)。 */
+function pruneEmptyParents(root: string, rel: string): void {
+  const f = fsMod();
+  let dirRel = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+  while (dirRel) {
+    const full = root + '/' + dirRel;
+    try {
+      if ((f.readdirSync(full) as string[]).length > 0) return;
+      f.rmSync(full, { recursive: true, force: true });
+    } catch {
+      return;
+    }
+    dirRel = dirRel.includes('/') ? dirRel.slice(0, dirRel.lastIndexOf('/')) : '';
+  }
 }
 
 /** 供显示用:条目名(原路径的最后一段)。 */

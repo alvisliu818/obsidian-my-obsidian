@@ -414,8 +414,8 @@ export class VirtualTreeSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('删除方式')
       .setDesc(
-        '删除库外文件时进入哪条可恢复通道。插件回收站按原路径镜像暂存到库根的 ' +
-          '.vt-trash/ 目录，面板工具栏「回收站」里可恢复/彻底删除/清空；' +
+        '删除库外文件时进入哪条可恢复通道。插件回收站按原路径镜像暂存（位置见下一项，' +
+          '默认与 Obsidian 共用 .trash），面板工具栏「回收站」里可恢复/彻底删除/清空；' +
           '系统回收站由操作系统管理（无法在本插件里枚举恢复）。' +
           '库内挂载始终走 Obsidian 自己的回收站，不受此设置影响。',
       )
@@ -430,15 +430,61 @@ export class VirtualTreeSettingTab extends PluginSettingTab {
           }),
       )
       .addButton((b) =>
-        b.setButtonText('打开回收站').setTooltip('管理插件回收站:恢复/彻底删除/清空').onClick(() => {
+        b.setButtonText('打开回收站').setTooltip('管理回收站:恢复/彻底删除/清空').onClick(() => {
           const base = this.plugin.vaultBasePath();
           if (!base) {
             new Notice('无法确定库根路径');
             return;
           }
-          new TrashManagerModal(this.app, base, () => this.plugin.refreshMounts()).open();
+          new TrashManagerModal(this.app, base, () => this.plugin.refreshMounts(), this.plugin.settings.trashPath).open();
         }),
       );
+
+    // 回收站位置(2026-11-27 用户需求:默认用 Obsidian 的 .trash,且允许放到库外)
+    const trashDir = new Setting(containerEl)
+      .setName('回收站位置')
+      .setDesc(
+        '留空 = 使用 Obsidian 的回收站（<库根>/.trash）。也可以选库外目录（如 D:\\Trash\\obsidian）——' +
+          '插件删除的库外文件会按原路径镜像到该目录的 .vt/ 下；面板「回收站」与上面的「打开回收站」都读这个位置。' +
+          '注意：不要选一个已有其他文件的目录，插件会往里写 .vt/（清空只动回收站条目）。',
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder('留空 = <库根>/.trash')
+          .setValue(this.plugin.settings.trashPath ?? '')
+          .onChange(async (v) => {
+            this.plugin.settings.trashPath = v.trim();
+            await this.plugin.saveSettings();
+          }),
+      )
+      .addExtraButton((b) =>
+        b
+          .setIcon('rotate-ccw')
+          .setTooltip('恢复默认（Obsidian 的 .trash）')
+          .onClick(async () => {
+            this.plugin.settings.trashPath = '';
+            await this.plugin.saveSettings();
+            this.display();
+          }),
+      );
+    if (hasSystemPicker()) {
+      trashDir.addButton((b) =>
+        b.setButtonText('浏览').setTooltip('选择回收站目录（可放库外）').onClick(() => {
+          void (async () => {
+            const current = this.plugin.settings.trashPath ?? '';
+            const picked = await pickExternalPath({
+              kind: 'folder',
+              title: '选择回收站目录',
+              startDir: startDirFor(current, isDirectory(current), this.plugin.settings.mountPickDir ?? ''),
+            });
+            if (!picked) return;
+            this.plugin.settings.trashPath = picked;
+            await this.plugin.saveSettings();
+            this.display();
+          })();
+        }),
+      );
+    }
 
     new Setting(containerEl)
       .setName('库根挂载')

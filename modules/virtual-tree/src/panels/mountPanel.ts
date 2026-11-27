@@ -1355,7 +1355,7 @@ export class MountPanelView extends ItemView {
         new Notice('无法确定库根路径');
         return;
       }
-      new TrashManagerModal(this.app, base, () => this.refreshMounts()).open();
+      new TrashManagerModal(this.app, base, () => this.refreshMounts(), this.plugin.settings.trashPath).open();
     } else if (action === 'drag-mode') {
       // 拖拽模式:开时树行可拖拽排序(仅显示顺序,存 mountTreeOrder)
       this.plugin.settings.mountDragMode = this.plugin.settings.mountDragMode !== true;
@@ -4099,7 +4099,7 @@ export class MountPanelView extends ItemView {
         title: `删除${typeStr}`,
         // 删除方式按设置分流(思源同款语义,两种模式都可恢复);说明文案如实。
         body: `确定删除${typeStr}「${node.name}」${node.isDir ? '及其全部内容' : ''}吗？将移入${
-          this.plugin.settings.deleteMode === 'system' ? '系统回收站' : '插件回收站（可在回收站中恢复）'
+          this.plugin.settings.deleteMode === 'system' ? '系统回收站' : '回收站（可在回收站中恢复）'
         }。`,
         confirmText: '删除',
         dangerous: true,
@@ -4113,6 +4113,7 @@ export class MountPanelView extends ItemView {
         void deleteToTrash(node.abs, node.isDir, {
           mode: this.plugin.settings.deleteMode === 'system' ? 'system' : 'plugin',
           vaultBase: base,
+          trashPath: this.plugin.settings.trashPath,
         })
           .then((r) => {
             new Notice(r.note ?? '已移入回收站');

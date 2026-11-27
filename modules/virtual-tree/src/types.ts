@@ -710,13 +710,19 @@ export interface VirtualTreeSettings {
   outlookMail: OneDriveSettings;
   /**
    * 库外挂载的删除方式（思源虚拟文档树同款，无"直接删除"选项——删除必须可恢复）：
-   * 'plugin' = 移入插件回收站（`<库根>/.vt-trash/`，镜像原路径 + index.json，
+   * 'plugin' = 移入插件回收站（位置见 trashPath；镜像原路径 + index.json，
    *   面板工具栏「回收站」里可恢复/彻底删除/清空）；
    * 'system' = 移入操作系统回收站（electron shell.trashItem，既有行为）。
    * vault 挂载始终走 fileManager.trashFile（Obsidian 自己的回收站）；
    * remote 挂载删除仍提交到远端（历史可回溯），不受本设置影响。
    */
   deleteMode: 'plugin' | 'system';
+  /**
+   * 回收站位置（2026-11-27 用户需求：使用 Obsidian 的 .trash，且允许放到库外）：
+   * 留空 = `<库根>/.trash`（与 Obsidian 共用）；也可填任意绝对路径（库外亦可）。
+   * 插件索引与库外文件镜像放在该目录下的 `.vt/` 里。
+   */
+  trashPath: string;
 }
 
 export const DEFAULT_VIRTUAL_TREE_SETTINGS: VirtualTreeSettings = {
@@ -774,6 +780,8 @@ export const DEFAULT_VIRTUAL_TREE_SETTINGS: VirtualTreeSettings = {
   // 插件回收站默认开(思源同款语义:删除必须可恢复+统一管理器;系统回收站
   // 不可枚举恢复)。既有用户想保留系统回收站行为可在设置里改回。
   deleteMode: 'plugin',
+  // 留空 = 与 Obsidian 共用 <库根>/.trash；可配置到库外目录。
+  trashPath: '',
 };
 
 /** Normalize one raw property value to an editor choice (unknown → null). */
@@ -932,6 +940,8 @@ export function virtualTreeSettingsFrom(raw: unknown): VirtualTreeSettings {
   s.outlookMail = oneDriveFrom(o.outlookMail);
   // 删除方式:显式 'system' 才走系统回收站;缺席/其他值落插件回收站(默认)。
   s.deleteMode = o.deleteMode === 'system' ? 'system' : 'plugin';
+  // 回收站位置:留空 = Obsidian 的 .trash;其余按原样(相对路径在解析时落到库根下)。
+  s.trashPath = typeof o.trashPath === 'string' ? o.trashPath.trim() : '';
   // 文件级收藏:非法记录丢弃,超限截断(favoritesFrom)。
   s.favorites = favoritesFrom(o.favorites);
   // 新建文件记忆扩展名（非字符串回落 undefined→默认 md）

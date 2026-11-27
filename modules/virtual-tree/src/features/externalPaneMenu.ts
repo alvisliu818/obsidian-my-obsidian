@@ -300,7 +300,7 @@ export function promptExternalDelete(
   const typeStr = isDir ? '文件夹' : '文件';
   // 宿主的设置切片:PaneMenuHost 不直接暴露 settings,经由可选访问器取
   // (库外分栏打开等宿主都实现了 virtualTreeSettings;取不到回落插件回收站)。
-  const settings = (host as { virtualTreeSettings?: () => { deleteMode?: 'plugin' | 'system' } })
+  const settings = (host as { virtualTreeSettings?: () => { deleteMode?: 'plugin' | 'system'; trashPath?: string } })
     .virtualTreeSettings?.();
   const mode: 'plugin' | 'system' = settings?.deleteMode === 'system' ? 'system' : 'plugin';
   new ConfirmModal(
@@ -308,7 +308,7 @@ export function promptExternalDelete(
     {
       title: `删除${typeStr}`,
       body: `确定删除${typeStr}「${name}」${isDir ? '及其全部内容' : ''}吗？将移入${
-        mode === 'system' ? '系统回收站' : '插件回收站（可在回收站中恢复）'
+        mode === 'system' ? '系统回收站' : '回收站（可在回收站中恢复）'
       }。`,
       confirmText: '删除',
       dangerous: true,
@@ -319,7 +319,7 @@ export function promptExternalDelete(
       const base = host.vaultBasePath();
       const oldLink = base ? linkTargetFor(base, name, safeSegment(name)) : '';
       if (base && exists(oldLink)) removeLink(oldLink);
-      void deleteToTrash(abs, isDir, { mode, vaultBase: base })
+      void deleteToTrash(abs, isDir, { mode, vaultBase: base, trashPath: settings?.trashPath })
         .then((r) => {
           new Notice(r.note ?? '已移入回收站');
           onDeleted();
