@@ -1,7 +1,7 @@
 /**
  * MOBILE_BUILD 精简包裁剪：只保留指定模块，其余模块与宿主 helper 走空 stub。
  *
- * - MOBILE_BUILD=vt  ：宿主壳 + EasySync + 虚拟文档树
+ * - MOBILE_BUILD=vt  ：宿主壳 + EasySync + Material Icon Theme + 虚拟文档树
  * - MOBILE_BUILD=core：在 vt 基础上再加 MD Editor（块编辑器）+ Code Editor（Monaco）
  *
  * 与 mobile-full-node-plugin 配合：本插件负责模块裁剪与 descriptors 改写，
@@ -15,7 +15,10 @@ const HOST_MAIN = path.resolve('src/main.ts');
 const MONACO_STATIC = path.resolve('src/mobile-monaco-static.ts');
 
 const KEEP_EASY = [/modules\/easy-sync\//];
-const KEEP_VT = [...KEEP_EASY, /modules\/virtual-tree\//];
+// Material Icon Theme 是纯 DOM 模块（无 Node/Electron 依赖），移动端原生文件树与
+// 虚拟树都靠它出图标；虚拟树的 iconTheme 桥会经宿主 moduleInstance 取本模块实例，
+// 所以只要在构建时保留模块并登记 descriptor 即可生效。
+const KEEP_VT = [...KEEP_EASY, /modules\/material-icon-theme\//, /modules\/virtual-tree\//];
 // breadcrumb：md editor 笔记顶部的面包屑栏（.bcn-bar）。移动端此前被 stub 掉，
 // 而自带 .block-editor-breadcrumb 又被 CSS 隐藏 → 顶部整条空白（2026-11-25 实报）。
 const KEEP_CORE = [...KEEP_VT, /modules\/md-editor\//, /modules\/code-editor\//, /modules\/breadcrumb\//];
@@ -56,6 +59,15 @@ const ENTRY = {
 \t\t\tsummary: "虚拟文档树：库内/库外挂载、嵌套挂载、新建笔记、图片/视频查看与打开方式菜单。",
 \t\t\tdesktopOnly: false,
 \t\t\tcls: VirtualTreePlugin as unknown as ModuleDescriptor["cls"],
+\t\t},`,
+  icon: `\t\t{
+\t\t\t// MOBILE_BUILD=vt/core/git-save：原生文件树 + 虚拟树的 Material 图标。
+\t\t\t// 必须先于虚拟树启动：虚拟树渲染行时经宿主 moduleInstance 取图标实例。
+\t\t\tid: "material-icon-theme",
+\t\t\tname: "Material Icon Theme",
+\t\t\tsummary: "文件浏览器换上 Material Design 图标；虚拟文档树的挂载行也复用同一套图标。上游 GilbertzzzZZ（MIT）。",
+\t\t\tdesktopOnly: false,
+\t\t\tcls: MaterialIconThemePlugin as unknown as ModuleDescriptor["cls"],
 \t\t},`,
   md: `\t\t{
 \t\t\t// MOBILE_BUILD=core：块编辑器 / 外部文件视图。
@@ -133,15 +145,15 @@ export const mobileEasyPlugin = makePlugin(
 
 export const mobileVtPlugin = makePlugin(
   KEEP_VT,
-  [ENTRY.easy, ENTRY.tree],
-  'mobile-vt-only-easysync-tree',
+  [ENTRY.easy, ENTRY.icon, ENTRY.tree],
+  'mobile-vt-easysync-icons-tree',
   [...HOST_HELPERS, 'codeFileView'],
 );
 
 export const mobileCorePlugin = makePlugin(
   KEEP_CORE,
-  [ENTRY.easy, ENTRY.tree, ENTRY.md, ENTRY.code, ENTRY.crumb],
-  'mobile-core-easysync-tree-md-code',
+  [ENTRY.easy, ENTRY.icon, ENTRY.tree, ENTRY.md, ENTRY.code, ENTRY.crumb],
+  'mobile-core-easysync-icons-tree-md-code',
   // core 必须保留真实 codeFileView：它注册库内 .py/.ts 等扩展名的 CodeMirror 视图，
   // stub 掉会导致打开代码文件落到 empty 占位视图。
   HOST_HELPERS,
@@ -150,8 +162,8 @@ export const mobileCorePlugin = makePlugin(
 
 export const mobileGitSavePlugin = makePlugin(
   KEEP_GIT_SAVE,
-  [ENTRY.easy, ENTRY.tree, ENTRY.md, ENTRY.code, ENTRY.crumb, ENTRY.save],
-  'mobile-git-save-easysync-tree-code-savecontrol',
+  [ENTRY.easy, ENTRY.icon, ENTRY.tree, ENTRY.md, ENTRY.code, ENTRY.crumb, ENTRY.save],
+  'mobile-git-save-easysync-icons-tree-code-savecontrol',
   // 与 core 同：保留真实 codeFileView（库内代码扩展名视图），Monaco 懒包改静态。
   HOST_HELPERS,
   true,

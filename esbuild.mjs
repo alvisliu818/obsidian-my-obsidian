@@ -40,11 +40,11 @@ const { mobileVtPlugin, mobileCorePlugin, mobileEasyPlugin, mobileGitSavePlugin 
     ? await import("./scripts/mobile-vt-build-plugin.mjs")
     : {};
 if (mobileFull) console.log("[mobile] 整包构建：所有模块 + Node/Electron 替身");
-if (mobileVt) console.log("[mobile] 精简构建：宿主壳 + EasySync + 虚拟文档树");
-if (mobileCore) console.log("[mobile] 核心构建：EasySync + 虚拟树 + MD Editor + Code Editor");
+if (mobileVt) console.log("[mobile] 精简构建：宿主壳 + EasySync + Material Icon Theme + 虚拟文档树");
+if (mobileCore) console.log("[mobile] 核心构建：EasySync + Material Icon Theme + 虚拟树 + MD Editor + Code Editor");
 if (mobileEasy) console.log("[mobile] 极简构建：仅 EasySync");
 if (mobileGitSave)
-  console.log("[mobile] Git+存档构建：EasySync + 虚拟树 + MD Editor + Code Editor + Save Control");
+  console.log("[mobile] Git+存档构建：EasySync + Material Icon Theme + 虚拟树 + MD Editor + Code Editor + Save Control");
 
 const banner = `window.__myBundleTag = "bundle-1793683236";
 /*
