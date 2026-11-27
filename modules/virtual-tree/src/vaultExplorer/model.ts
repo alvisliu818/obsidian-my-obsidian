@@ -36,8 +36,9 @@ export interface VxRow {
 	readonly depth: number;
 }
 
-/** Default sort: folders first, then Obsidian-native name order
- * (case-insensitive, digit runs compared numerically — 260817 after 99). */
+/** Default sort: folders first, then Windows Explorer name order
+ * (case-insensitive, digit runs compared numerically, ASCII before CJK — see
+ * nameCompare). */
 export function vxCompare(a: VxNode, b: VxNode, order: VxSortOrder): number {
 	if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
 	switch (order) {
