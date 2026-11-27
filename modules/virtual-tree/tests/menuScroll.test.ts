@@ -1,7 +1,7 @@
 /**
- * 右键菜单滚动行为（2026-11-27 用户要求：不追光标、用滚轮）：
+ * 右键菜单滚动行为（2026-11-27 用户要求：不追光标、用滚轮、不显示滚动条）：
  *  - 桌面菜单吞掉 Obsidian 注册在 .menu-scroll 上的 mousemove（光标 Y → scrollTop）
- *  - 滚动容器放开纵向滚动并限高，滚轮能滚
+ *  - 滚动容器放开纵向滚动并限高，滚轮能滚，且滚动条隐藏
  *  - 每个菜单项（含子菜单）的 scrollIntoView 换成空实现
  */
 
@@ -15,22 +15,32 @@ function fakeScroll() {
     style: {} as Record<string, string>,
   };
 }
+
 function fakeItem() {
   return { dom: { scrollIntoView: vi.fn() } as unknown as HTMLElement };
 }
 
+function fakeDom() {
+  return { classList: { add: vi.fn() } } as unknown as HTMLElement;
+}
+
 describe('disableMenuHoverAutoScroll', () => {
-  it('swallows the cursor-driven mousemove and makes the container wheel-scrollable', () => {
+  it('swallows the cursor-driven mousemove and makes the container wheel-scrollable without a scrollbar', () => {
     const scroll = fakeScroll();
+    const dom = fakeDom();
     // 补丁会接管 addEventListener，调用记录留在原来的实现上
     const nativeAdd = scroll.addEventListener;
-    const menu = { scrollEl: scroll, items: [] } as unknown as Menu;
+    const menu = { dom, scrollEl: scroll, items: [] } as unknown as Menu;
 
     disableMenuHoverAutoScroll(menu);
 
     expect(scroll.style.overflowY).toBe('auto');
     expect(scroll.style.maxHeight).toBe('calc(100vh - 16px)');
     expect(scroll.style.overscrollBehavior).toBe('contain');
+    expect(scroll.style.scrollbarWidth).toBe('none');
+    expect((dom.classList.add as unknown as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      'lgp-menu-wheel-scroll',
+    );
 
     const el = scroll as unknown as {
       addEventListener: (type: string, listener: unknown) => void;
@@ -45,12 +55,40 @@ describe('disableMenuHoverAutoScroll', () => {
     const subItem = fakeItem();
     const submenu = { items: [subItem] } as unknown as Menu;
     const item = { ...fakeItem(), submenu };
-    const menu = { scrollEl: fakeScroll(), items: [item] } as unknown as Menu;
+    const menu = { dom: fakeDom(), scrollEl: fakeScroll(), items: [item] } as unknown as Menu;
 
     disableMenuHoverAutoScroll(menu);
 
     expect(() => item.dom.scrollIntoView()).not.toThrow();
     expect(() => subItem.dom.scrollIntoView()).not.toThrow();
+  });
+
+  it('injects the scrollbar-hiding style once', () => {
+    const appended: unknown[] = [];
+    const created: { id?: string; textContent?: string }[] = [];
+    Object.defineProperty(globalThis, 'document', {
+      value: {
+        body: { classList: { contains: () => false } },
+        getElementById: (id: string) => created.find((s) => s.id === id) ?? null,
+        createElement: () => {
+          const el: { id?: string; textContent?: string } = {};
+          created.push(el);
+          return el;
+        },
+        head: { appendChild: (el: unknown) => appended.push(el) },
+      },
+      configurable: true,
+    });
+    try {
+      const mk = () => ({ dom: fakeDom(), scrollEl: fakeScroll(), items: [] }) as unknown as Menu;
+      disableMenuHoverAutoScroll(mk());
+      disableMenuHoverAutoScroll(mk());
+      expect(appended.length).toBe(1);
+      expect(created[0].id).toBe('lgp-menu-scrollbar-hide');
+      expect(created[0].textContent).toContain('::-webkit-scrollbar');
+    } finally {
+      delete (globalThis as { document?: unknown }).document;
+    }
   });
 
   it('leaves mobile menus untouched', () => {
