@@ -17,12 +17,12 @@ import {
   isObsidianTrashRoot,
   listObsidianTrashItems,
   listTrashItems,
-  obsidianTrashLandingPath,
   obsidianTrashRoot,
   pluginTrashRoot,
   purgeTrashItem,
   resolveTrashRoot,
   restoreFromTrash,
+  vaultRelOf,
   type TrashFsLike,
 } from '../src/features/trashStore';
 
@@ -215,84 +215,91 @@ describe('Obsidian .trash entries', () => {
 });
 
 describe('vault mounts with a custom trash location', () => {
-  /** 复刻 Obsidian FileSystemAdapter.trashLocal：扁平命名 + " 2" 起的重名后缀。 */
-  function fakeTrashLocal(fs: FakeFs): (rel: string) => Promise<void> {
-    return async (rel: string) => {
-      const src = `E:/Vault/${rel}`;
-      fs.add('E:/Vault/.trash', { dir: true });
-      const landing = obsidianTrashLandingPath(VAULT, rel);
-      fs.renameSync(src, landing);
-    };
-  }
-
-  it('moves a vault file out of .trash into the configured location', async () => {
+  it('moves a vault file straight into the plugin mirror naming (no flat .trash copy)', async () => {
     const fs = withFs();
     fs.add('E:/Vault/test/untitled.md', { content: 'v' });
+    const reconciled: string[] = [];
 
     const r = await deleteVaultEntryToCustomTrash({
       vaultBase: VAULT,
       vaultRel: 'test/untitled.md',
       isDir: false,
       trashPath: 'E:\\HOME\\Runtime\\.trash',
-      trashLocally: fakeTrashLocal(fs),
+      reconcileRemoved: async (rel) => {
+        reconciled.push(rel);
+      },
     });
 
     expect(r.mode).toBe('plugin');
     expect(fs.existsSync('E:/Vault/test/untitled.md')).toBe(false);
-    expect(fs.existsSync('E:/Vault/.trash/untitled.md')).toBe(false);
+    // 完全不经过 Obsidian 的 .trash（扁平命名只在那边才有）
+    expect(fs.existsSync('E:/Vault/.trash')).toBe(false);
     expect(fs.existsSync('E:/HOME/Runtime/.trash/.vt/external/E/Vault/test/untitled.md')).toBe(true);
+    expect(reconciled).toEqual(['test/untitled.md']);
     const items = listTrashItems(VAULT, 'E:\\HOME\\Runtime\\.trash');
     expect(items.map((i) => i.origin)).toEqual(['E:/Vault/test/untitled.md']);
   });
 
-  it('follows Obsidian flat naming when the trash already has the same name', async () => {
+  it('keeps both versions when the same path is deleted twice', async () => {
     const fs = withFs();
-    fs.add('E:/Vault/notes/untitled.md', { content: 'new' });
-    fs.add('E:/Vault/.trash/untitled.md', { content: 'old' });
-
-    expect(obsidianTrashLandingPath(VAULT, 'notes/untitled.md')).toBe('E:/Vault/.trash/untitled 2.md');
-    await deleteVaultEntryToCustomTrash({
-      vaultBase: VAULT,
-      vaultRel: 'notes/untitled.md',
-      isDir: false,
-      trashPath: 'D:\\Trash',
-      trashLocally: fakeTrashLocal(fs),
-    });
-    // 旧条目原地不动，新条目被搬进自定义位置
-    expect(fs.readFileSync('E:/Vault/.trash/untitled.md', 'utf8')).toBe('old');
-    expect(fs.existsSync('D:/Trash/.vt/external/E/Vault/notes/untitled.md')).toBe(true);
-  });
-
-  it('keeps the entry in .trash when the custom location is unusable', async () => {
-    const fs = withFs();
-    fs.add('E:/Vault/a.md', { content: 'a' });
-    // 自定义位置是一个已存在的文件 → mkdir 失败
-    fs.add('D:/Trash', { content: 'not a dir' });
-
-    const r = await deleteVaultEntryToCustomTrash({
+    const opts = {
       vaultBase: VAULT,
       vaultRel: 'a.md',
       isDir: false,
       trashPath: 'D:\\Trash',
-      trashLocally: fakeTrashLocal(fs),
-    });
-    expect(r.note).toContain('.trash');
-    expect(fs.existsSync('E:/Vault/.trash/a.md')).toBe(true);
+      reconcileRemoved: async () => undefined,
+    };
+    fs.add('E:/Vault/a.md', { content: 'v1' });
+    await deleteVaultEntryToCustomTrash(opts);
+    fs.add('E:/Vault/a.md', { content: 'v2' });
+    await deleteVaultEntryToCustomTrash(opts);
+
+    expect(listTrashItems(VAULT, 'D:\\Trash').length).toBe(2);
+    const mirrored = fs.readdirSync('D:/Trash/.vt/external/E/Vault').filter((n) => n.startsWith('a.md'));
+    expect(mirrored.length).toBe(2);
   });
 
-  it('aborts without touching the file when Obsidian refuses to trash it', async () => {
+  it('aborts without touching the file when the custom location is unusable', async () => {
     const fs = withFs();
     fs.add('E:/Vault/b.md', { content: 'b' });
+    // 自定义位置是一个已存在的文件 → mkdir 失败
+    fs.add('D:/Trash', { content: 'not a dir' });
+
     await expect(
       deleteVaultEntryToCustomTrash({
         vaultBase: VAULT,
         vaultRel: 'b.md',
         isDir: false,
         trashPath: 'D:\\Trash',
-        trashLocally: () => Promise.reject(new Error('索引只读')),
+        reconcileRemoved: async () => undefined,
       }),
-    ).rejects.toThrow('索引只读');
-    expect(fs.existsSync('E:/Vault/b.md')).toBe(true);
+    ).rejects.toThrow();
+    expect(fs.readFileSync('E:/Vault/b.md', 'utf8')).toBe('b');
+  });
+
+  it('keeps the trash entry when the Obsidian reconcile fails', async () => {
+    const fs = withFs();
+    fs.add('E:/Vault/c.md', { content: 'c' });
+
+    const r = await deleteVaultEntryToCustomTrash({
+      vaultBase: VAULT,
+      vaultRel: 'c.md',
+      isDir: false,
+      trashPath: 'D:\\Trash',
+      reconcileRemoved: () => Promise.reject(new Error('索引只读')),
+    });
+
+    expect(r.note).toContain('回收站');
+    expect(fs.existsSync('D:/Trash/.vt/external/E/Vault/c.md')).toBe(true);
+    expect(listTrashItems(VAULT, 'D:\\Trash').length).toBe(1);
+  });
+
+  it('vaultRelOf only matches paths inside the vault', () => {
+    expect(vaultRelOf(VAULT, 'E:/Vault/test/a.md')).toBe('test/a.md');
+    expect(vaultRelOf(VAULT, 'E:\\Vault\\a.md')).toBe('a.md');
+    expect(vaultRelOf(VAULT, 'E:/Vault')).toBe('');
+    expect(vaultRelOf(VAULT, 'E:/OUT/a.md')).toBe('');
+    expect(vaultRelOf(VAULT, 'E:/Vaulting/a.md')).toBe('');
   });
 });
 

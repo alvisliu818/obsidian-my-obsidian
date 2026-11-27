@@ -4,7 +4,7 @@
  *
  * 回收站位置可配置(设置→回收站位置):留空 = Obsidian 的 `<库根>/.trash`,
  * 此时管理器同时列出 Obsidian 自己删除的库内条目;配置到库外目录时只管理
- * 插件删除的库外条目。
+ * 插件条目(库外删除 + 库内挂载的删除,统一按原路径镜像)。
  *
  * 入口:面板工具栏「回收站」(默认收进「更多」菜单)+ 设置页按钮。
  */
@@ -22,6 +22,7 @@ import {
   restoreObsidianTrashItem,
   trashItemName,
   trashTimeText,
+  vaultRelOf,
   type ObsidianTrashItem,
   type TrashListItem,
 } from '../features/trashStore';
@@ -109,7 +110,9 @@ export class TrashManagerModal extends Modal {
       return;
     }
     if (pluginItems.length) {
-      listEl.createEl('h4', { text: '库外删除（插件记录）' });
+      listEl.createEl('h4', {
+        text: shared ? '库外删除（插件记录）' : '库内/库外删除（插件记录）',
+      });
       for (const it of pluginItems) this.renderPluginItem(listEl, it);
     }
     if (obsidianItems.length) {
@@ -132,6 +135,7 @@ export class TrashManagerModal extends Modal {
       try {
         const r = restoreFromTrash(this.vaultBase, it.id, this.trashPath);
         new Notice(`已恢复到 ${r.restoredAs}`);
+        this.reconcileVaultPath(r.restoredAs);
         this.onChanged?.();
         this.render();
       } catch (e) {
@@ -151,6 +155,20 @@ export class TrashManagerModal extends Modal {
     });
   }
 
+  /**
+   * 库内条目是 raw fs 移回原位的,Obsidian 不监听文件系统,不会自己重新索引;
+   * 用适配器的 update 入口补一次(未公开 API,缺失时跳过,重载后自行校正)。
+   */
+  private reconcileVaultPath(abs: string): void {
+    const rel = vaultRelOf(this.vaultBase, abs);
+    if (!rel) return;
+    const adapter = this.app.vault.adapter as unknown as {
+      update?: (p: string) => Promise<void>;
+    };
+    const p = adapter.update?.(rel);
+    if (p && typeof p.catch === 'function') p.catch(() => undefined);
+  }
+
   private renderObsidianItem(listEl: HTMLElement, it: ObsidianTrashItem): void {
     const name = it.rel.includes('/') ? it.rel.slice(it.rel.lastIndexOf('/') + 1) : it.rel;
     const row = listEl.createDiv({ cls: 'lgp-trash-modal__row' });
@@ -166,6 +184,7 @@ export class TrashManagerModal extends Modal {
       try {
         const r = restoreObsidianTrashItem(this.vaultBase, it.rel);
         new Notice(`已恢复到 ${r.restoredAs}`);
+        this.reconcileVaultPath(r.restoredAs);
         this.onChanged?.();
         this.render();
       } catch (e) {

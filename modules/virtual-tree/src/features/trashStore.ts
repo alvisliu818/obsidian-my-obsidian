@@ -15,9 +15,10 @@
  * Obsidian 不索引 `.trash`,所以放在里面不会被搜索/文件树/图谱看到。
  *
  * vault 挂载:留空(共用 .trash)时走 fileManager.trashFile,尊重库自己的
- * 回收站设置;配了自定义位置时,库内删除也收编到该位置——先让 Obsidian 的
- * 本地回收站完成索引/反链更新,再把落进 .trash 的条目搬进 `<位置>/.vt/`
- * (2026-11-27 用户反馈:此前自定义位置只对库外文件生效)。
+ * 回收站设置;配了自定义位置时,库内删除也收编到该位置,且与库外文件同一套
+ * 插件命名(按原绝对路径镜像),不经过 Obsidian .trash 的扁平命名;移走后显式
+ * 触发一次 Obsidian 索引同步(Obsidian 不监听文件系统)。
+ * (2026-11-27 用户反馈:此前自定义位置只对库外文件生效)
  * remote 挂载删除仍提交到远端(历史可回溯)。
  */
 
@@ -231,75 +232,55 @@ export async function deleteToTrash(
 
 // ===== 库内挂载:自定义位置收编 =====
 
-/**
- * Obsidian 本地回收站的落点(与 FileSystemAdapter.trashLocal 同款):
- * 扁平命名 `.trash/<名字><扩展名>`,重名从 " 2" 起依次追加。
- * 先算落点再让 Obsidian 动手,搬走时才知道该搬哪一个。
- */
-export function obsidianTrashLandingPath(vaultBase: string, rel: string): string {
-  const f = fsMod();
-  const root = obsidianTrashRoot(vaultBase);
-  const name = baseOf(rel);
-  const dot = name.lastIndexOf('.');
-  const ext = dot > 0 ? name.slice(dot) : '';
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  let target = root + '/' + name;
-  let n = 1;
-  while (f.existsSync(target)) {
-    n += 1;
-    target = root + '/' + stem + ' ' + n + ext;
-  }
-  return target;
+/** 绝对路径若在库内,返回库内相对路径(恢复后让 Obsidian 重新索引用);库外返回 ''。 */
+export function vaultRelOf(vaultBase: string, abs: string): string {
+  const base = trimTrailing(toSlashes(vaultBase)).toLowerCase();
+  const p = toSlashes(abs);
+  if (!base) return '';
+  const prefix = base + '/';
+  return p.toLowerCase().startsWith(prefix) ? p.slice(prefix.length) : '';
 }
 
 /**
- * 库内挂载 + 自定义回收站位置:删除必须既让 Obsidian 更新索引/反链,又把文件
- * 落到配置的位置。做法是先用 Obsidian 的本地回收站接一手(trashLocal 会触发
- * 库的 reconcile,删除事件、链接、缓存全部由 Obsidian 处理),再把 .trash 里的
- * 落点搬进 `<位置>/.vt/external/…` 并按原绝对路径记入插件索引。
+ * 库内挂载 + 自定义回收站位置:和库外文件走同一套插件命名——按原绝对路径
+ * 镜像到 `<位置>/.vt/external/…`,index.json 记原路径,不经过 Obsidian .trash
+ * 的扁平命名(2026-11-27 用户要求)。
  *
- * 搬运失败时条目留在 .trash(仍可在回收站管理器里恢复),不抛错、不丢文件。
+ * Obsidian 不监听文件系统,移走文件不会自己从库索引/反链里消失,所以移完
+ * 由调用方触发一次索引同步(reconcileRemoved);同步失败不回滚回收站条目,
+ * 文件已在回收站里,重载后会自行校正。
  */
 export async function deleteVaultEntryToCustomTrash(opts: {
   vaultBase: string;
-  /** Obsidian 库内相对路径(adapter.trashLocal 需要)。 */
+  /** Obsidian 库内相对路径。 */
   vaultRel: string;
   isDir: boolean;
   trashPath: string;
-  /** 宿主提供的本地回收站动作(app.vault.adapter.trashLocal)。 */
-  trashLocally: (vaultRel: string) => Promise<void>;
+  /** 文件移走后的库索引同步(app.vault.adapter.update)。 */
+  reconcileRemoved: (vaultRel: string) => Promise<void>;
 }): Promise<DeleteResult> {
   const f = fsMod();
   const vaultAbs =
     trimTrailing(toSlashes(opts.vaultBase)) + '/' + toSlashes(opts.vaultRel).replace(/^\/+/, '');
   if (!f.existsSync(vaultAbs)) throw new Error(`文件不存在: ${vaultAbs}`);
-  const landing = obsidianTrashLandingPath(opts.vaultBase, opts.vaultRel);
-  await opts.trashLocally(opts.vaultRel);
-  if (!f.existsSync(landing)) {
-    return { mode: 'plugin', note: '已移入 Obsidian 的 .trash(自定义回收站位置未收到条目)' };
-  }
+  const root = pluginTrashRoot(opts.vaultBase, opts.trashPath);
+  const target = resolveCollision(mirrorPath(vaultAbs, root));
+  f.mkdirSync(dirOf(target), { recursive: true });
+  moveRecursive(vaultAbs, target);
+  const idx = loadIndex(root);
+  idx.entries.unshift({
+    id: 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    origin: vaultAbs,
+    trashPath: target,
+    isDir: opts.isDir || isDirOnDisk(target),
+    time: Date.now(),
+  });
+  if (idx.entries.length > MAX_ENTRIES) idx.entries.length = MAX_ENTRIES;
+  saveIndex(root);
   try {
-    const root = pluginTrashRoot(opts.vaultBase, opts.trashPath);
-    const target = resolveCollision(mirrorPath(vaultAbs, root));
-    f.mkdirSync(dirOf(target), { recursive: true });
-    moveRecursive(landing, target);
-    const idx = loadIndex(root);
-    idx.entries.unshift({
-      id: 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-      origin: vaultAbs,
-      trashPath: target,
-      isDir: opts.isDir || isDirOnDisk(target),
-      time: Date.now(),
-    });
-    if (idx.entries.length > MAX_ENTRIES) idx.entries.length = MAX_ENTRIES;
-    saveIndex(root);
-  } catch (e) {
-    return {
-      mode: 'plugin',
-      note: `已移入 Obsidian 的 .trash(自定义位置不可用:${
-        (e as Error)?.message ?? '未知错误'
-      })`,
-    };
+    await opts.reconcileRemoved(opts.vaultRel);
+  } catch {
+    /* 索引稍后由重载校正;回收站条目保持 */
   }
   return { mode: 'plugin', note: '已移入回收站(可在「回收站」中恢复)' };
 }

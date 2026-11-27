@@ -4064,8 +4064,8 @@ export class MountPanelView extends ItemView {
     }
     // 库内挂载：回收站位置留空/等于库的 .trash 时走 fileManager.trashFile
     // （尊重用户设置的回收站形态）；配了自定义位置（通常是库外目录）时，
-    // 库内删除也收编到那里——先经 Obsidian 本地回收站更新索引，再把条目
-    // 搬进自定义位置（2026-11-27 用户反馈：此前自定义位置对库内删除无效）。
+    // 库内删除也收编到那里，用插件自己的镜像命名（不经过 .trash 扁平命名），
+    // 移走后显式让 Obsidian 重新索引（2026-11-27 用户反馈与要求）。
     if (isVaultMount(mount)) {
       const vaultPath = vaultJoinPath(mount, node.rel);
       const af = this.app.vault.getAbstractFileByPath(vaultPath);
@@ -4099,7 +4099,14 @@ export class MountPanelView extends ItemView {
               vaultRel: af.path,
               isDir: node.isDir,
               trashPath: this.plugin.settings.trashPath,
-              trashLocally: (rel) => this.app.vault.adapter.trashLocal(rel),
+              reconcileRemoved: (rel) => {
+                // adapter.update 是 Obsidian 未公开的索引重扫入口（桌面/移动端适配器都有）；
+                // 缺失时跳过，重载后 Obsidian 自行校正。
+                const adapter = this.app.vault.adapter as unknown as {
+                  update?: (p: string) => Promise<void>;
+                };
+                return adapter.update?.(rel) ?? Promise.resolve();
+              },
             }).then(
               (r) => {
                 new Notice(r.note ?? '已移入回收站');
