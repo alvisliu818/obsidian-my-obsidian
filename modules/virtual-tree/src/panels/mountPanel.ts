@@ -115,6 +115,7 @@ import { cloudProviderOf } from '../features/cloudVersions';
 import { OutlookMailMountModal } from './outlookMailModal';
 import { TrashManagerModal } from './trashModal';
 import { deleteToTrash, deleteVaultEntryToCustomTrash, isObsidianTrashRoot, resolveTrashRoot } from '../features/trashStore';
+import { disableMenuHoverAutoScroll } from '../features/menuScroll';
 import { DirSearchModal } from './searchModal';
 import { GitPanelModal } from './gitPanelModal';
 import { isFavorited, removeFavorite, toggleFavorite } from '../features/favorites';
@@ -2837,6 +2838,8 @@ export class MountPanelView extends ItemView {
       // vault API），菜单项见 wireVaultMenuItems。
       if (isVaultMount(mount)) {
         this.wireVaultMenuItems(menu, mount, node);
+        // 长菜单不追光标：滚动只走滚轮（2026-11-27 用户要求）
+        disableMenuHoverAutoScroll(menu);
         menu.showAtMouseEvent(e);
         return;
       }
@@ -2846,6 +2849,7 @@ export class MountPanelView extends ItemView {
       // promptXxx 的 remote 分支直接提交到远端。
       if (isRemoteMount(mount)) {
         this.wireRemoteMenuItems(menu, mount, node);
+        disableMenuHoverAutoScroll(menu);
         menu.showAtMouseEvent(e);
         return;
       }
@@ -3158,6 +3162,7 @@ export class MountPanelView extends ItemView {
         );
       }
 
+      disableMenuHoverAutoScroll(menu);
       menu.showAtMouseEvent(e);
     });
   }
