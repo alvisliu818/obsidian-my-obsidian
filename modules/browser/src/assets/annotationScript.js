@@ -16,9 +16,13 @@
     var CSS = [
         ".sy-ann-hl{position:relative;background:rgba(255,213,0,.4);border-radius:2px;cursor:pointer;box-decoration-break:clone;-webkit-box-decoration-break:clone;}",
         ".sy-ann-hl:hover{background:rgba(255,170,0,.6);}",
-        ".sy-ann-bubble{position:fixed;z-index:2147483645;display:flex;align-items:center;gap:2px;background:#fff;border:1px solid #e0e0e0;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.22);padding:3px;font-family:sans-serif;margin:0!important;right:auto!important;bottom:auto!important;}",
-        ".sy-ann-bubble button{border:none;background:transparent;cursor:pointer;font-size:12px;padding:3px 10px;border-radius:4px;line-height:16px;}",
-        ".sy-ann-bubble .sy-ann-create{background:#1a73e8;color:#fff;font-weight:600;}",
+        ".sy-ann-hl-off{position:relative;background:transparent!important;color:inherit;border-radius:0;}",
+        ".sy-ann-bubble{position:fixed;z-index:2147483645;display:flex;align-items:center;gap:2px;box-sizing:border-box;max-width:calc(100vw - 16px);padding:5px 6px;background:#fff;color:#1f2937;border:1px solid rgba(15,23,42,.12);border-radius:10px;box-shadow:0 8px 24px rgba(15,23,42,.16),0 1px 3px rgba(15,23,42,.08);font:12px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;white-space:nowrap;margin:0!important;right:auto!important;bottom:auto!important;}",
+        ".sy-ann-bubble *{box-sizing:border-box;}",
+        ".sy-ann-bubble button{border:0;background:transparent;color:#374151;cursor:pointer;font:inherit;line-height:1;height:26px;padding:0 8px;border-radius:6px;white-space:nowrap;transition:background .12s ease,color .12s ease;}",
+        ".sy-ann-bubble button:hover{background:#f3f4f6;}",
+        ".sy-ann-bubble .sy-ann-create{background:#2563eb;color:#fff;font-weight:600;padding:0 12px;}",
+        ".sy-ann-bubble .sy-ann-create:hover{background:#1d4ed8;}",
         ".sy-ann-pop{position:fixed;z-index:2147483645;max-width:340px;max-height:260px;overflow:auto;background:#fff;color:#222;border:none;outline:none;border-radius:10px;box-shadow:0 4px 18px rgba(0,0,0,.18);padding:10px 12px;font-size:13px;line-height:1.5;font-family:sans-serif;word-break:break-word;margin:0!important;right:auto!important;bottom:auto!important;}",
         ".sy-ann-pop-quote{font-size:12px;color:#666;border-left:3px solid #f5c542;padding-left:8px;margin-bottom:6px;white-space:pre-wrap;}",
         ".sy-ann-pop-note{white-space:pre-wrap;}",
@@ -32,13 +36,21 @@
         ".sy-ann-c-pink{background:rgba(255,150,200,.45)!important;}",
         ".sy-ann-c-purple{background:rgba(190,140,255,.45)!important;}",
         ".sy-ann-swatches{display:flex;gap:4px;align-items:center;margin:6px 0;}",
-        ".sy-ann-sw{width:16px;height:16px;border-radius:50%;border:2px solid transparent;cursor:pointer;padding:0;}",
-        ".sy-ann-sw.on{border-color:#333;}",
+        ".sy-ann-bubble .sy-ann-swatches{display:inline-flex;gap:4px;align-items:center;padding:0 6px 0 1px;margin:0 2px 0 0;border-right:1px solid #e5e7eb;}",
+        ".sy-ann-sw{width:14px;height:14px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px rgba(15,23,42,.12);cursor:pointer;padding:0;}",
+        // 气泡内的色块同时是 <button>，需压过 .sy-ann-bubble button 的 transparent/26px 规则
+        ".sy-ann-bubble .sy-ann-sw{width:14px;height:14px;flex:0 0 14px;padding:0;border:2px solid #fff;border-radius:50%;cursor:pointer;transition:none;}",
+        ".sy-ann-sw.on{box-shadow:0 0 0 2px #2563eb;}",
         ".sy-ann-sw-yellow{background:rgba(255,213,0,.9);}",
         ".sy-ann-sw-green{background:rgba(120,220,120,.9);}",
         ".sy-ann-sw-blue{background:rgba(120,180,255,.9);}",
         ".sy-ann-sw-pink{background:rgba(255,150,200,.9);}",
         ".sy-ann-sw-purple{background:rgba(190,140,255,.9);}",
+        ".sy-ann-bubble .sy-ann-sw.sy-ann-sw-yellow{background:rgba(255,213,0,.9);}",
+        ".sy-ann-bubble .sy-ann-sw.sy-ann-sw-green{background:rgba(120,220,120,.9);}",
+        ".sy-ann-bubble .sy-ann-sw.sy-ann-sw-blue{background:rgba(120,180,255,.9);}",
+        ".sy-ann-bubble .sy-ann-sw.sy-ann-sw-pink{background:rgba(255,150,200,.9);}",
+        ".sy-ann-bubble .sy-ann-sw.sy-ann-sw-purple{background:rgba(190,140,255,.9);}",
         ".sy-ann-tags{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0;}",
         ".sy-ann-tag{font-size:11px;background:#eef;border-radius:3px;padding:1px 6px;cursor:pointer;color:#335;}",
         ".sy-ann-taginput{font-size:12px;border:1px solid #ddd;border-radius:4px;padding:2px 6px;width:110px;}",
@@ -57,7 +69,12 @@
         ".sy-ann-capture{position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483646;cursor:crosshair;background:rgba(0,0,0,.06);}",
         ".sy-ann-capture-box{position:fixed;border:1px dashed #1a73e8;background:rgba(26,115,232,.12);pointer-events:none;}",
         ".sy-ann-capture-tip{position:fixed;left:8px;top:8px;z-index:2147483647;background:#1a73e8;color:#fff;font-size:12px;padding:3px 8px;border-radius:4px;font-family:sans-serif;}",
-        ".sy-ann-bubble .sy-ann-remove{color:#d93025;font-size:11px;padding:3px 6px;}"
+        ".sy-ann-bubble .sy-ann-remove{color:#b91c1c;font-size:11px;padding:0 7px;}",
+        ".sy-ann-bubble .sy-ann-remove:hover{background:#fef2f2;color:#991b1b;}",
+        /* × 原来只有 23×26px 且右侧紧贴气泡内边距，用户点偏几像素就完全没反应。
+           这里把按钮做成 30×28 的居中方块并加大字号，热区与视觉一致。 */
+        ".sy-ann-bubble [data-ann-act='close']{display:inline-flex!important;align-items:center;justify-content:center;min-width:30px!important;height:28px!important;margin-left:2px;padding:0 8px;border-radius:6px;color:#6b7280;font-size:18px;line-height:1;}",
+        ".sy-ann-bubble [data-ann-act='close']:hover{background:#fee2e2;color:#b91c1c;}"
     ].join("");
 
     function ensureStyle() {
@@ -203,14 +220,17 @@
         try {
             if ("popover" in el && !el.matches(":popover-open")) el.showPopover();
         } catch (e) {}
-        el.style.display = display;
+        // 宿主注入的 .sy-ann-bubble 带 display:flex!important；普通内联 display
+        // 压不过它，隐藏会失效（Obsidian 实测点 × 后气泡仍挂着）。内联也标
+        // !important，保证显示/隐藏两个方向都能覆盖宿主样式。
+        el.style.setProperty("display", display, "important");
     }
 
     function layerHide(el) {
         try {
             if ("popover" in el && el.matches(":popover-open")) el.hidePopover();
         } catch (e) {}
-        el.style.display = "none";
+        el.style.setProperty("display", "none", "important");
     }
 
     // 定位坐标走 adoptedStyleSheets（CSSOM）：meta CSP 禁 style 属性的站点，
@@ -466,12 +486,11 @@
         b = document.createElement("div");
         b.id = "sy-ann-bubble";
         b.className = "sy-ann-bubble";
-        b.style.display = "none";
+        b.style.setProperty("display", "none", "important");
         try { b.setAttribute("popover", "manual"); } catch (e) {}
         b.innerHTML = '<span class="sy-ann-swatches">' + COLORS.map(function (c) { return '<button class="sy-ann-sw sy-ann-sw-' + c + (c === "yellow" ? " on" : "") + '" data-ann-color="' + c + '" title="' + c + '"></button>'; }).join("") + "</span>" +
             '<button class="sy-ann-create" data-ann-act="create">标注</button>' +
             '<button class="sy-ann-remove" data-ann-act="unhl" style="' + (removeVisible ? "" : "display:none;") + '">取消高亮</button>' +
-            '<button class="sy-ann-remove" data-ann-act="uninline" style="' + (removeVisible ? "" : "display:none;") + '">取消小字</button>' +
             '<button class="sy-ann-remove" data-ann-act="uninline" style="' + (removeVisible ? "" : "display:none;") + '">取消小字</button>' +
             '<button class="sy-ann-remove" data-ann-act="reanchor" style="display:none" title="把这条标注改锚到当前选区(批注保持对应)">改锚</button>' +
             '<button data-ann-act="close" title="关闭">×</button>';
@@ -517,6 +536,10 @@
                 };
                 b.__ann = null;
                 try { window.getSelection().removeAllRanges(); } catch (err) {}
+            } else if (act === "close") {
+                // 必须清掉选区：否则紧随其后的 document mouseup 看到选区仍在，
+                // 会立即重新弹出气泡，表现为「点 × 关不掉」。
+                try { window.getSelection().removeAllRanges(); } catch (err) {}
             }
             hideBubble();
         }, true);
@@ -557,14 +580,48 @@
             // 改锚按钮:改锚模式挂起,或选区压着已有高亮(就地改锚)
             var reBtn = b.querySelector('[data-ann-act="reanchor"]');
             if (reBtn) reBtn.style.display = (reanchorPending || hitId) ? "" : "none";
-            var bx = Math.min(Math.max(r.left + r.width / 2 - 34, 8), window.innerWidth - 90);
-            var by = r.top > 40 ? r.top - 34 : r.bottom + 6;
-            b.style.left = bx + "px";
-            b.style.top = by + "px";
+            // 先显示再量尺寸：按实际宽度居中，避免气泡压住刚选中的文字；
+            // 上方空间不足时翻到选区下方，整体夹在视口内。
             layerShow(b, "flex");
+            var bw = b.offsetWidth || 300;
+            var bh = b.offsetHeight || 36;
+            var bx = r.left + r.width / 2 - bw / 2;
+            bx = Math.min(Math.max(bx, 8), Math.max(8, window.innerWidth - bw - 8));
+            var by = r.top - bh - 8;
+            if (by < 8) by = r.bottom + 8;
+            by = Math.min(Math.max(by, 8), Math.max(8, window.innerHeight - bh - 8));
             setPos("sy-ann-bubble", Math.round(bx), Math.round(by));
         }, 10);
     }, true);
+
+    // 关闭按钮双保险：pointerdown/click 两个阶段都强制收起。
+    // 某些环境 mousedown 被页面/输入法吞掉，或 mouseup 用旧选区把气泡重新弹出来，
+    // 只靠气泡自身的 mousedown 会表现为「点 × 关不掉」。
+    // 另一类真实失败：× 只有 23px 宽、右侧紧邻气泡内边距，点到按钮外几像素时
+    // 脚本完全没有关闭动作（气泡内空白点击不关闭）→ 用户只会觉得「点 × 没反应」。
+    // 因此命中判定改成「× 的矩形外扩 10px」，把热区做厚，点偏也能关。
+    function hitCloseZone(e) {
+        var t = e.target;
+        if (t && t.closest && t.closest('[data-ann-act="close"]')) return true;
+        var b = document.getElementById("sy-ann-bubble");
+        if (!b) return false;
+        var cb = b.querySelector('[data-ann-act="close"]');
+        if (!cb) return false;
+        var r = cb.getBoundingClientRect();
+        if (!r.width || !r.height) return false;
+        var pad = 10;
+        return e.clientX >= r.left - pad && e.clientX <= r.right + pad &&
+            e.clientY >= r.top - pad && e.clientY <= r.bottom + pad;
+    }
+    function forceCloseBubble(e) {
+        if (!hitCloseZone(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        try { window.getSelection().removeAllRanges(); } catch (err) {}
+        hideBubble();
+    }
+    document.addEventListener("pointerdown", forceCloseBubble, true);
+    document.addEventListener("click", forceCloseBubble, true);
 
     document.addEventListener("keydown", function (e) {
         if (e.key === "Escape") { hideBubble(); }
@@ -603,12 +660,14 @@
         for (var i = 0; i < btns.length; i++) btns[i].style.display = removeVisible ? "" : "none";
     }
 
-    // 取消高亮（宿主已写回锚点属性）：去 mark 连带其内联小字；列表项打标记防懒加载重试重新包裹
+    // 取消高亮（宿主已写回锚点属性）：只去高亮、保留内联小字的位置锚点；
+    // 列表项打标记防懒加载重试重新包裹
     window.__syAnnSetMark = function (id) {
         for (var j = 0; j < list.length; j++) {
             if (String(list[j].id) === String(id)) list[j].hlOff = true;
         }
-        removeMarks(String(id));
+        // 只去高亮：保留内联小字的位置锚点，避免小字随 mark 一起被拆掉
+        removeMarks(String(id), true);
     };
 
     // 只取消小字：保高亮
@@ -619,23 +678,32 @@
         removeInline(String(id).replace(/[^A-Za-z0-9_-]/g, ""));
     };
 
-    function removeMarks(id) {
+    function removeMarks(id, keepInline) {
         var safeId = String(id).replace(/[^A-Za-z0-9_-]/g, "");
         var marks = document.querySelectorAll('mark.sy-ann-hl[data-ann-id="' + safeId + '"]');
         for (var i = 0; i < marks.length; i++) {
             var m = marks[i];
             var p = m.parentNode;
             if (!p) continue;
-            while (m.firstChild) p.insertBefore(m.firstChild, m);
-            p.removeChild(m);
-            try { p.normalize(); } catch (err) {}
+            if (keepInline) {
+                // 保留一个无高亮的内联锚点：小字是 mark 内的 absolute 子元素，
+                // 直接拆掉 mark 会让小字失去定位祖先而“跟着消失”。
+                var span = document.createElement("span");
+                span.className = "sy-ann-hl-off";
+                while (m.firstChild) span.appendChild(m.firstChild);
+                p.replaceChild(span, m);
+            } else {
+                while (m.firstChild) p.insertBefore(m.firstChild, m);
+                p.removeChild(m);
+                try { p.normalize(); } catch (err) {}
+            }
         }
         // 框选标注的矩形 overlay 一并移除
         var rects = document.querySelectorAll('.sy-ann-rect[data-ann-id="' + safeId + '"]');
         for (var r = 0; r < rects.length; r++) {
             if (rects[r].parentNode) rects[r].parentNode.removeChild(rects[r]);
         }
-        removeInline(safeId);
+        if (!keepInline) removeInline(safeId);
     }
 
     function removeInline(safeId) {

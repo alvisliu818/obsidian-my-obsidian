@@ -49,9 +49,17 @@ function pad2(n: number): string {
 const ANN_CSS = `
 .sy-ann-hl{position:relative;background:rgba(255,213,0,.4)!important;border-radius:2px;cursor:pointer;box-decoration-break:clone;-webkit-box-decoration-break:clone;}
 .sy-ann-hl:hover{background:rgba(255,170,0,.6)!important;}
-.sy-ann-bubble{position:fixed!important;z-index:2147483645;display:flex;align-items:center;gap:2px;background:#fff;border:1px solid #e0e0e0;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.22);padding:3px;font-family:sans-serif;margin:0!important;right:auto!important;bottom:auto!important;}
-.sy-ann-bubble button{border:none;background:transparent;cursor:pointer;font-size:12px;padding:3px 10px;border-radius:4px;line-height:16px;}
-.sy-ann-bubble .sy-ann-create{background:#1a73e8;color:#fff;font-weight:600;}
+.sy-ann-hl-off{position:relative;background:transparent!important;color:inherit;border-radius:0;}
+.sy-ann-bubble{position:fixed!important;z-index:2147483645!important;display:flex!important;align-items:center;gap:2px;box-sizing:border-box;max-width:calc(100vw - 16px);padding:5px 6px;background:#fff!important;color:#1f2937;border:1px solid rgba(15,23,42,.12);border-radius:10px;box-shadow:0 8px 24px rgba(15,23,42,.16),0 1px 3px rgba(15,23,42,.08);font:12px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;white-space:nowrap;margin:0!important;right:auto!important;bottom:auto!important;}
+.sy-ann-bubble *{box-sizing:border-box;}
+.sy-ann-bubble button{border:0;background:transparent;color:#374151;cursor:pointer;font:inherit;line-height:1;height:26px;padding:0 8px;border-radius:6px;white-space:nowrap;transition:background .12s ease,color .12s ease;}
+.sy-ann-bubble button:hover{background:#f3f4f6;}
+.sy-ann-bubble .sy-ann-create{background:#2563eb;color:#fff;font-weight:600;padding:0 12px;}
+.sy-ann-bubble .sy-ann-create:hover{background:#1d4ed8;}
+.sy-ann-bubble .sy-ann-remove{color:#b91c1c;font-size:11px;padding:0 7px;}
+.sy-ann-bubble .sy-ann-remove:hover{background:#fef2f2;color:#991b1b;}
+.sy-ann-bubble [data-ann-act='close']{display:inline-flex!important;align-items:center;justify-content:center;min-width:30px!important;height:28px!important;margin-left:2px;padding:0 8px;border-radius:6px;color:#6b7280;font-size:18px;line-height:1;}
+.sy-ann-bubble [data-ann-act='close']:hover{background:#fee2e2;color:#b91c1c;}
 .sy-ann-pop{position:fixed!important;z-index:2147483645;max-width:340px;max-height:260px;overflow:auto;background:#fff;color:#222;border:none!important;outline:none;border-radius:10px;box-shadow:0 4px 18px rgba(0,0,0,.18);padding:10px 12px;font-size:13px;line-height:1.5;font-family:sans-serif;word-break:break-word;margin:0!important;right:auto!important;bottom:auto!important;}
 .sy-ann-pop-quote{font-size:12px;color:#666;border-left:3px solid #f5c542;padding-left:8px;margin-bottom:6px;white-space:pre-wrap;}
 .sy-ann-pop-note{white-space:pre-wrap;}
@@ -65,13 +73,21 @@ const ANN_CSS = `
 .sy-ann-c-pink{background:rgba(255,150,200,.45)!important;}
 .sy-ann-c-purple{background:rgba(190,140,255,.45)!important;}
 .sy-ann-swatches{display:flex;gap:4px;align-items:center;margin:6px 0;}
-.sy-ann-sw{width:16px;height:16px;border-radius:50%;border:2px solid transparent;cursor:pointer;padding:0;}
-.sy-ann-sw.on{border-color:#333;}
+.sy-ann-bubble .sy-ann-swatches{display:inline-flex;gap:4px;align-items:center;padding:0 6px 0 1px;margin:0 2px 0 0;border-right:1px solid #e5e7eb;}
+.sy-ann-sw{width:14px;height:14px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px rgba(15,23,42,.12);cursor:pointer;padding:0;}
+/* 气泡内的色块同时是 button，需压过 .sy-ann-bubble button 的 transparent/26px 规则 */
+.sy-ann-bubble .sy-ann-sw{width:14px!important;height:14px!important;flex:0 0 14px!important;padding:0!important;border:2px solid #fff!important;border-radius:50%!important;cursor:pointer!important;transition:none!important;}
+.sy-ann-sw.on{box-shadow:0 0 0 2px #2563eb!important;}
 .sy-ann-sw-yellow{background:rgba(255,213,0,.9);}
 .sy-ann-sw-green{background:rgba(120,220,120,.9);}
 .sy-ann-sw-blue{background:rgba(120,180,255,.9);}
 .sy-ann-sw-pink{background:rgba(255,150,200,.9);}
 .sy-ann-sw-purple{background:rgba(190,140,255,.9);}
+.sy-ann-bubble .sy-ann-sw.sy-ann-sw-yellow{background:rgba(255,213,0,.9)!important;}
+.sy-ann-bubble .sy-ann-sw.sy-ann-sw-green{background:rgba(120,220,120,.9)!important;}
+.sy-ann-bubble .sy-ann-sw.sy-ann-sw-blue{background:rgba(120,180,255,.9)!important;}
+.sy-ann-bubble .sy-ann-sw.sy-ann-sw-pink{background:rgba(255,150,200,.9)!important;}
+.sy-ann-bubble .sy-ann-sw.sy-ann-sw-purple{background:rgba(190,140,255,.9)!important;}
 .sy-ann-tags{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0;}
 .sy-ann-tag{font-size:11px;background:#eef;border-radius:3px;padding:1px 6px;cursor:pointer;color:#335;}
 .sy-ann-taginput{font-size:12px;border:1px solid #ddd;border-radius:4px;padding:2px 6px;width:110px;}
@@ -124,7 +140,19 @@ export class AnnotationController {
         else if (m.type === "createPage") void this.createPageFromFloat(String(m.url || ""));
         else if (m.type === "openDoc") void this.openDoc(String(m.url || ""));
         else if (m.type === "saveNote" && m.id) void this.saveNoteFromFloat(String(m.id), String(m.note ?? ""));
-        else if (m.id && (m.type === "pin" || m.type === "hide" || m.type === "resize" || m.type === "move" || m.type === "close")) {
+        else if (m.type === "removeDisplay" && m.id) {
+          // 浮动窗「取消标注 / 取消小字」：复用页内气泡的显示层取消逻辑
+          const found = this.findItem(String(m.id));
+          const wv = found ? this.webviews.get(found.urlKey) : null;
+          const kind = m.kind === "inline" ? "inline" : "hl";
+          if (!wv) {
+            this.floatChannel?.postMessage({ type: "displayOff", id: String(m.id), kind, ok: false });
+          } else {
+            void this.setDisplayOff(wv, found!.urlKey, { kind, id: String(m.id) })
+              .then(() => this.floatChannel?.postMessage({ type: "displayOff", id: String(m.id), kind, ok: true }))
+              .catch(() => this.floatChannel?.postMessage({ type: "displayOff", id: String(m.id), kind, ok: false }));
+          }
+        } else if (m.id && (m.type === "pin" || m.type === "hide" || m.type === "resize" || m.type === "move" || m.type === "close")) {
           const w = this.floatWins.get(String(m.id));
           if (!w || w.isDestroyed()) return;
           if (m.type === "pin") w.setAlwaysOnTop(!!m.value);
@@ -425,6 +453,9 @@ export class AnnotationController {
         url,
         hover: !!payload?.hover,
         kind: item.kind || "text",
+        // 浮窗「取消标注/取消小字」按钮按当前状态置灰（2026-11-28 对齐思源 099a09b）
+        hlOff: item.hlOff === true,
+        inlineOff: item.inlineOff === true,
       };
       if (item.kind === "rect" && item.shot) {
         data.shot = item.shot;

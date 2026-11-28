@@ -32,9 +32,12 @@
   #ne{display:block;width:100%;box-sizing:border-box;min-height:110px;font:inherit;font-size:12px;line-height:1.5;color:#222;border:1px solid #ccc;border-radius:4px;padding:6px 8px;resize:vertical;background:#fff;}
   #ne:focus{outline:none;border-color:#1a73e8;}
   .eerr{color:#c33;font-size:11px;margin-top:4px;min-height:14px;}
-  .acts{display:flex;gap:6px;justify-content:flex-end;margin-top:10px;}
+  .acts{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;margin-top:10px;}
   .acts button{border:1px solid #ddd;background:#f7f7f7;border-radius:4px;font-size:12px;padding:3px 10px;cursor:pointer;}
   .acts .pri{background:#1a73e8;color:#fff;border:none;}
+  .acts .danger{color:#b91c1c;border-color:#fecaca;background:#fff5f5;}
+  .acts .danger:hover{background:#fee2e2;}
+  .acts button:disabled{color:#9ca3af;border-color:#e5e7eb;background:#f9fafb;cursor:default;}
   .lhead{display:flex;gap:6px;margin-bottom:8px;}
   .lhead button{border:1px solid #ddd;background:#f7f7f7;border-radius:4px;font-size:12px;padding:3px 8px;cursor:pointer;}
   .li{display:flex;gap:6px;align-items:flex-start;padding:6px 6px;border-radius:6px;cursor:pointer;border-bottom:1px solid #f0f0f0;}
@@ -96,6 +99,9 @@
     if (m.type === "autohide") { autoHide = !!m.value; if (!autoHide) cancelHide(); }
     else if (m.type === "markleave") { if (autoHide && !pinned && !hovered) scheduleHide(); }
     else if (m.type === "dragend") {
+      // 宿主在 hover 打开/复用窗口时 setPosition 也会发 dragend；
+      // 那不是用户拖完，不能据此判定「鼠标已离开」而自动收起。
+      if (!dragging) return;
       dragging = false;
       hovered = document.body.matches(":hover");
       if (!hovered && autoHide && !pinned) scheduleHide();
@@ -103,6 +109,11 @@
     else if (m.type === "noteSaved" && m.id === data.id) {
       if (m.ok) { data.note = m.note || ""; editing = false; render(); }
       else { var er = document.getElementById("neErr"); if (er) er.textContent = "保存失败，请重试"; }
+    }
+    else if (m.type === "displayOff" && m.id === data.id) {
+      if (m.kind === "hl") data.hlOff = m.ok !== false;
+      else if (m.kind === "inline") data.inlineOff = m.ok !== false;
+      render();
     }
   };
   document.body.addEventListener("mouseenter", function () { hovered = true; cancelHide(); });
@@ -149,7 +160,8 @@
     for (var j = 0; j < tags.length; j++) h += '<span class="tag" data-t="' + esc(tags[j]) + '" title="点击移除">' + esc(tags[j]) + " ×</span>";
     h += '<input id="taginput" placeholder="+标签(回车)" />';
     h += "</div>";
-    var extraActs = "";
+    var extraActs = '<button id="unhl" class="danger"' + (data.hlOff ? " disabled" : "") + ">" + (data.hlOff ? "高亮已取消" : "取消标注") + "</button>" +
+      '<button id="uninline" class="danger"' + (data.inlineOff ? " disabled" : "") + ">" + (data.inlineOff ? "小字已取消" : "取消小字") + "</button>";
     if (data.kind === "rect") extraActs += '<button id="recap">重新框选</button>';
     else extraActs += '<button id="reasel">重新选中文字</button>';
     h += '<div class="acts">' + extraActs + '<button id="edit" class="pri">在编辑器中打开</button></div>';
@@ -161,6 +173,18 @@
     var ti = document.getElementById("taginput");
     ti.onkeydown = function (e) { if (e.key === "Enter") { var v = String(ti.value || "").trim(); if (v && tags.indexOf(v) < 0) { tags.push(v); send(); render(); } } };
     document.getElementById("edit").onclick = function () { if (chan) chan.postMessage({ type: "edit", id: data.id }); };
+    var uh = document.getElementById("unhl");
+    uh.onclick = function () {
+      if (!chan) return;
+      uh.disabled = true; uh.textContent = "处理中...";
+      chan.postMessage({ type: "removeDisplay", id: data.id, url: data.url, kind: "hl" });
+    };
+    var ui = document.getElementById("uninline");
+    ui.onclick = function () {
+      if (!chan) return;
+      ui.disabled = true; ui.textContent = "处理中...";
+      chan.postMessage({ type: "removeDisplay", id: data.id, url: data.url, kind: "inline" });
+    };
     var rc = document.getElementById("recap");
     if (rc) rc.onclick = function () { if (chan) chan.postMessage({ type: "recapture", id: data.id }); window.close(); };
     var rs = document.getElementById("reasel");

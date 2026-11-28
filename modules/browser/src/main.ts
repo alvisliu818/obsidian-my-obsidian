@@ -134,6 +134,11 @@ export default class BrowserPlugin extends Plugin {
           this.store.save();
           this.applyNetFilters();
           this.syncNativeExtensionLoads();
+          // 标注显示开关热回刷（2026-11-28 对齐思源 27210a3）：传新鲜值，
+          // 避免刚切换设置后页内气泡仍按缓存里的旧开关显示按钮/小字。
+          const s = this.config;
+          this.annotation?.applyInlineVisibility(s.showAnnInline !== false);
+          this.annotation?.applyRemoveVisibility(s.showAnnRemove !== false);
         },
         applyNetFilters: () => this.applyNetFilters(),
         applyProxy: () => void this.applyBrowserProxy(),
