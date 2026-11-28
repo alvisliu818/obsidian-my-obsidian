@@ -4,6 +4,7 @@ import { SEARCH_ENGINES } from "../constants";
 import type { BrowserSettings, ExtensionRecord } from "../types";
 import type { UserscriptHost } from "../userscripts/userscriptHost";
 import type { ExtensionHost } from "../extensions/extensionHost";
+import { pickFolder } from "../utils/electron";
 
 export interface SettingsHost {
   settings: BrowserSettings;
@@ -343,6 +344,16 @@ export class BrowserSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("选中文字显示标注气泡")
+      .setDesc("关闭后选中文字不再弹泡，可用工具栏 ✎ 或页面右键标注")
+      .addToggle((t) =>
+        t.setValue(s.showAnnBubble !== false).onChange((v) => {
+          s.showAnnBubble = v;
+          this.host.save();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName("悬停/点击高亮弹出悬浮窗")
       .addToggle((t) =>
         t.setValue(s.showAnnFloat !== false).onChange((v) => {
@@ -385,6 +396,8 @@ export class BrowserSettingTab extends PluginSettingTab {
   private renderExtensions(): void {
     const { containerEl } = this;
     const s = this.host.settings;
+    /** 目录输入框暂存：点「应用并迁移」才写回设置（换根要搬目录 + 重载扩展）。 */
+    let dirInput: HTMLInputElement | null = null;
 
     new Setting(containerEl).setName("Chrome 扩展").setHeading();
 
@@ -396,6 +409,41 @@ export class BrowserSettingTab extends PluginSettingTab {
           s.extensionsEnabled = v;
           this.host.save();
           this.host.refreshExtensionIcons();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("扩展数据目录")
+      .setDesc(
+        "留空 = 库内 .obsidian/plugins/obsidian-browser/extensions。改到库外可避免扩展体积进同步盘；" +
+          "「应用并迁移」会把已装扩展搬过去，并按 CRX 公钥固定扩展 ID（暴力猴脚本不丢）",
+      )
+      .addText((t) => {
+        dirInput = t.inputEl;
+        t.setPlaceholder(".obsidian/plugins/obsidian-browser/extensions")
+          .setValue(s.extensionsDir || "")
+          .onChange(() => {
+            /* 输入过程中不换根：点「应用并迁移」才生效（换根要搬目录 + 重载扩展） */
+          });
+      })
+      .addButton((b) =>
+        b.setButtonText("选择文件夹…").onClick(async () => {
+          const p = await pickFolder("选择扩展数据目录", s.extensionsDir || this.host.extHost.extensionsRoot());
+          if (p && dirInput) dirInput.value = p;
+        }),
+      )
+      .addButton((b) =>
+        b.setButtonText("应用并迁移").onClick(async () => {
+          const target = String(dirInput?.value || "").trim();
+          const r = await this.host.extHost.migrateExtensionsDir(target);
+          if (!r.ok) {
+            new Notice("迁移失败：" + (r.error || "未知错误"), 6000);
+            return;
+          }
+          s.extensionsDir = target;
+          this.host.save();
+          this.display();
+          new Notice(r.moved ? `已迁移 ${r.moved} 项扩展数据` : "目录已是目标位置，无需迁移");
         }),
       );
 

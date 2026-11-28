@@ -4,7 +4,7 @@ import { HEALTH_CHECK_INTERVAL, HEALTH_FAIL_STREAK } from "../constants";
 import type { IWebviewTag, WebViewContextMenuParams } from "../types";
 import { Toolbar } from "./Toolbar";
 import { WebviewController, createWebview } from "./WebviewController";
-import { showWebViewContextMenu } from "./contextMenu";
+import { closeActiveBrowserMenu, showWebViewContextMenu, trackBrowserMenu } from "./contextMenu";
 import type { BrowserContext } from "./context";
 import { buildAdBlockCss, BUILTIN_ADBLOCK_RULES } from "./adblock";
 import { applyProxyForPartition, rememberBrowserPartition } from "./proxy";
@@ -65,7 +65,7 @@ export class BrowserTab {
         onFindClose: () => this.controller.stopFind(),
         onOpenExternal: () => this.ctx.openInSystemBrowser(this.url),
         onMenu: (e) => this.showMenu(e),
-        onAnnotate: (e) => this.showAnnotationMenu(e),
+        onAnnotate: (e) => void this.showAnnotationMenu(e),
         onExtensionClick: (id, anchor) => this.ctx.onExtensionClick(id, anchor),
       },
     );
@@ -73,6 +73,7 @@ export class BrowserTab {
 
     this.webview = this.createWebviewElement();
     this.wrap.appendChild(this.webview as unknown as HTMLElement);
+    this.bindWebviewMenuDismiss(this.webview);
     this.controller = new WebviewController(this.webview, () => this.ctx.getSettings(), this.callbacks());
 
     if (initialUrl) void this.loadUrl(initialUrl);
@@ -154,9 +155,36 @@ export class BrowserTab {
     };
   }
 
+  /**
+   * 网页内右键兜底关闭（2026-11-28 对齐思源 df226a3）：guest 文档的
+   * contextmenu 不会冒泡到宿主 document，必须在 <webview> 元素本身监听
+   * Electron 的 context-menu 事件。与 WebviewController 的菜单逻辑并存：
+   * 这里先关旧菜单，那里再开新菜单。
+   */
+  private onWebviewMenuDismiss = (): void => closeActiveBrowserMenu();
+
+  private bindWebviewMenuDismiss(wv: IWebviewTag): void {
+    wv.addEventListener("context-menu", this.onWebviewMenuDismiss, true);
+    wv.addEventListener("contextmenu", this.onWebviewMenuDismiss, true);
+  }
+
+  private unbindWebviewMenuDismiss(wv: IWebviewTag): void {
+    wv.removeEventListener("context-menu", this.onWebviewMenuDismiss, true);
+    wv.removeEventListener("contextmenu", this.onWebviewMenuDismiss, true);
+  }
+
   /** 地址栏 ✎ 菜单：标注入口族（选中文字 / 整页 / 标注笔记 / 列表 / 小字开关）。 */
-  private showAnnotationMenu(e: MouseEvent): void {
+  private async showAnnotationMenu(e: MouseEvent): Promise<void> {
+    let hlHidden = false;
+    try {
+      hlHidden = !!(await this.execJs(
+        "!!(document.documentElement && document.documentElement.classList.contains('sy-ann-hl-hidden'))",
+      ));
+    } catch {
+      /* 页面未就绪：按未隐藏处理 */
+    }
     const menu = new Menu();
+    trackBrowserMenu(menu);
     menu.addItem((i) =>
       i
         .setTitle("标注选中文字")
@@ -185,6 +213,13 @@ export class BrowserTab {
         .setIcon("list")
         .onClick(() => void this.ctx.annotation?.openListFloat(this.webview, this.url)),
     );
+    // 隐藏/显示高亮（2026-11-28 对齐思源 dcc08fd）：只改显示层，锚点与标注笔记不动
+    menu.addItem((i) =>
+      i
+        .setTitle(hlHidden ? "显示高亮" : "隐藏高亮")
+        .setIcon(hlHidden ? "eye" : "eye-off")
+        .onClick(() => void this.ctx.annotation?.toggleHighlights(this.webview, !hlHidden)),
+    );
     menu.addItem((i) => {
       const show = this.ctx.getSettings().showAnnInline !== false;
       i.setTitle(show ? "隐藏标注小字" : "显示标注小字")
@@ -212,7 +247,11 @@ export class BrowserTab {
         "return {quote:n(s.toString()),prefix:pre,suffix:suf}})()",
     );
     const quote = payload?.quote || selectionText || "";
-    if (!quote.trim()) return;
+    if (!quote.trim()) {
+      // 无选区右键（2026-11-28 对齐思源 0e96d7b）：走页面级标注
+      void this.ctx.annotation.create(this.webview, this.url, this.title, {});
+      return;
+    }
     void this.ctx.annotation.create(this.webview, this.url, this.title, {
       quote,
       prefix: payload?.prefix ?? "",
@@ -303,6 +342,7 @@ export class BrowserTab {
     // notebookView.ts 同坑先例），点击后菜单静默不出现。
     {
       const menu = new Menu();
+      trackBrowserMenu(menu);
       menu.addItem((i) => i.setTitle("刷新").setIcon("refresh-cw").onClick(() => this.reload(false)));
       menu.addItem((i) => i.setTitle("在系统中打开").setIcon("external-link").onClick(() => this.ctx.openInSystemBrowser(this.url)));
       menu.addSeparator();
@@ -345,8 +385,10 @@ export class BrowserTab {
   private async rebuildWebview(): Promise<void> {
     const saved = this.controller.getCurrentUrl() || this.url;
     const fresh = this.createWebviewElement();
+    this.unbindWebviewMenuDismiss(this.webview);
     (this.webview as unknown as HTMLElement).replaceWith(fresh as unknown as HTMLElement);
     this.webview = fresh;
+    this.bindWebviewMenuDismiss(this.webview);
     this.controller.reattach(fresh);
     const ua = this.ctx.getSettings().userAgent;
     if (ua) this.controller.setUserAgent(ua);
@@ -357,6 +399,7 @@ export class BrowserTab {
     this.disposed = true;
     if (this.healthTimer) clearInterval(this.healthTimer);
     this.healthTimer = null;
+    this.unbindWebviewMenuDismiss(this.webview);
     this.controller.dispose();
     this.element.remove();
   }

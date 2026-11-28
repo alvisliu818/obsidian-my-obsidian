@@ -563,6 +563,32 @@ export class AnnotationController {
     }
   }
 
+  /** 设置开关变更后回刷各页内「选中文字弹气泡」开关（2026-11-28 对齐思源 0e96d7b）。 */
+  applyBubbleVisibility(show?: boolean): void {
+    const v = show === undefined ? this.getSettings().showAnnBubble !== false : !!show;
+    for (const wv of this.webviews.values()) {
+      wv.executeJavaScript("window.__syAnnSetBubbleVisible && window.__syAnnSetBubbleVisible(" + JSON.stringify(v) + ");").catch(() => {});
+    }
+  }
+
+  /**
+   * 隐藏/显示当前页全部标注高亮（2026-11-28 对齐思源 dcc08fd）。
+   * 仅显示层，不改锚点属性、不删标注笔记；页面脚本用 html.sy-ann-hl-hidden
+   * 兜住动态新增的高亮，框选矩形一并隐藏。
+   */
+  async toggleHighlights(webview: IWebviewTag, show?: boolean): Promise<boolean> {
+    const expr =
+      show === undefined
+        ? "(function(){var d=document.documentElement;return !!(d&&d.classList.toggle('sy-ann-hl-hidden'));})()"
+        : "(function(){var d=document.documentElement;if(d)d.classList.toggle('sy-ann-hl-hidden',!" + JSON.stringify(!!show) + ");return !!" + JSON.stringify(!show) + ";})()";
+    try {
+      return !!(await webview.executeJavaScript(expr));
+    } catch (e) {
+      console.warn("[obsidian-browser] toggleHighlights failed:", e);
+      return false;
+    }
+  }
+
   /** 列表浮动窗点条目 → 页内滚动到对应高亮并闪烁。
    *  页签不在/已导航到别的页面/页内定位失败时，回退整页打开 url#syann=<id>（走 onPageReady 的自动定位流程），不再静默无反应 */
   private gotoAnnotation(id: string, url: string): void {
@@ -632,6 +658,8 @@ export class AnnotationController {
         JSON.stringify(!!this.getSettings().showAnnInline) +
         "," +
         JSON.stringify(this.getSettings().showAnnRemove !== false) +
+        "," +
+        JSON.stringify(this.getSettings().showAnnBubble !== false) +
         ");";
       // 样式必须先于脚本经 insertCSS 注入（不受页面 meta CSP 限制）；
       // 页内 ensureStyle 只作兜底

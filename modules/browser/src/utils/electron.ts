@@ -87,3 +87,23 @@ export function vaultBasePath(app: any): string {
   const base = adapter?.basePath ?? adapter?.getBasePath?.();
   return typeof base === "string" ? base : "";
 }
+
+/**
+ * 原生「选择文件夹」对话框（设置页选扩展数据目录用）。
+ * 取消 / remote 不可用返回 null；调用方降级为手动输入路径。
+ */
+export async function pickFolder(title = "选择文件夹", defaultPath?: string): Promise<string | null> {
+  const remote = getRemote();
+  const dialog = remote?.dialog;
+  if (!dialog?.showOpenDialog) return null;
+  try {
+    const win = remote.getCurrentWindow?.() ?? undefined;
+    const opts: Record<string, unknown> = { title, properties: ["openDirectory", "createDirectory"] };
+    if (defaultPath) opts.defaultPath = defaultPath;
+    const r = await dialog.showOpenDialog(win, opts);
+    const p = Array.isArray(r?.filePaths) ? String(r.filePaths[0] || "") : "";
+    return r?.canceled || !p ? null : p;
+  } catch {
+    return null;
+  }
+}

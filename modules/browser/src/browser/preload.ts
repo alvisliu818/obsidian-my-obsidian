@@ -87,4 +87,22 @@
 
   // Tell the host we're alive — the link-interceptor fallback keys off this.
   (window as any).__obsidianBrowserPreload = true;
+
+  // 页内按下鼠标 → 宿主关掉本插件浮出的菜单（2026-11-28 对齐思源 162bc8c）。
+  // 只处理左键：右键 mousedown 与 Electron context-menu 存在竞态，会把刚打开
+  // 的右键菜单立刻关掉；右键关旧菜单交给 webview 的 context-menu 链路。
+  if (/^https?:\/\//i.test(location.href)) {
+    document.addEventListener(
+      "mousedown",
+      (e: any) => {
+        if (e && e.button !== 0) return;
+        try {
+          ipcRenderer.sendToHost("obsidian-browser-guest-mousedown");
+        } catch {
+          /* ignore */
+        }
+      },
+      true,
+    );
+  }
 })();

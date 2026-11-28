@@ -74,6 +74,7 @@ export const DEFAULT_SETTINGS: BrowserSettings = {
   annotationsFolder: "Browser/Annotations",
   showAnnInline: true,
   showAnnRemove: true,
+  showAnnBubble: true,
   showAnnFloat: true,
 
   newTabExtId: "",
@@ -91,6 +92,8 @@ export const DEFAULT_SETTINGS: BrowserSettings = {
   autoFixScriptMatch: true,
 
   extensionsEnabled: true,
+  /** 扩展数据根目录，空 = 库内 .obsidian/plugins/obsidian-browser/extensions。 */
+  extensionsDir: "",
 };
 
 export const DEFAULT_DATA: PluginData = {

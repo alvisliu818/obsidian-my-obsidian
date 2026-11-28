@@ -66,6 +66,10 @@
         ".sy-ann-flash{animation:syAnnFlash 0.9s ease-out 2;}",
         ".sy-ann-rect{position:absolute;box-sizing:border-box;border:2px solid rgba(255,170,0,.85);background:rgba(255,213,0,.12);cursor:pointer;z-index:2147483640;border-radius:2px;}",
         ".sy-ann-rect:hover{background:rgba(255,170,0,.2);}",
+        // 「隐藏高亮」：只去颜色/边框，保留 mark 节点与批注小字；html 类保证懒加载新加的高亮也继承
+        "html.sy-ann-hl-hidden mark.sy-ann-hl,html.sy-ann-hl-hidden .sy-ann-hl-off{background:transparent!important;box-shadow:none!important;}",
+        "html.sy-ann-hl-hidden mark.sy-ann-hl:hover{background:transparent!important;}",
+        "html.sy-ann-hl-hidden .sy-ann-rect{display:none!important;}",
         ".sy-ann-capture{position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483646;cursor:crosshair;background:rgba(0,0,0,.06);}",
         ".sy-ann-capture-box{position:fixed;border:1px dashed #1a73e8;background:rgba(26,115,232,.12);pointer-events:none;}",
         ".sy-ann-capture-tip{position:fixed;left:8px;top:8px;z-index:2147483647;background:#1a73e8;color:#fff;font-size:12px;padding:3px 8px;border-radius:4px;font-family:sans-serif;}",
@@ -87,6 +91,7 @@
 
     var list = window.__syAnnList = [];
     var removeVisible = true;
+    var bubbleVisible = true; // 选中文字后的悬浮气泡（宿主设置 showAnnBubble）
     var captureId = null;     // 框选模式:正在为哪条标注重新框选(null=新建)
     var reanchorPending = null; // 文字改锚模式:待重新选中的标注 id // 选区气泡是否显示「取消高亮/小字」（宿主设置开关，__syAnnInit/SetRemoveVisible 下发）
 
@@ -547,9 +552,20 @@
         return b;
     }
 
+    // 页内左键按下 → 宿主关掉本插件浮出的菜单（2026-11-28 对齐思源 162bc8c）。
+    // Obsidian 的 <webview preload> 不执行（本模块既有结论），guest→宿主只能走
+    // console-message 通道：宿主监听这个标记后调 closeActiveBrowserMenu()。
+    // 只发左键：右键交给 context-menu 链路，避免把刚弹出的菜单立刻关掉。
+    document.addEventListener("mousedown", function (e) {
+        if (!e || e.button !== 0) return;
+        try { console.log("[ob-guest-mousedown]"); } catch (err) {}
+    }, true);
+
     document.addEventListener("mouseup", function (e) {
         // 气泡自身的点击不参与选区判定
         if (e.target && e.target.closest && e.target.closest(".sy-ann-bubble")) return;
+        // 设置关掉选区气泡：不弹泡，并收起已有的
+        if (!bubbleVisible) { hideBubble(); return; }
         setTimeout(function () {
             var sel = window.getSelection();
             if (!sel || !sel.rangeCount || sel.isCollapsed) { hideBubble(); return; }
@@ -632,10 +648,11 @@
 
     // ===== 宿主入口 =====
 
-    window.__syAnnInit = function (items, showInline, showRemove) {
+    window.__syAnnInit = function (items, showInline, showRemove, showBubble) {
         ensureStyle();
         if (showInline !== undefined) inlineVisible = !!showInline;
         if (showRemove !== undefined) removeVisible = !!showRemove;
+        if (showBubble !== undefined) bubbleVisible = !!showBubble;
         list.length = 0;
         for (var i = 0; i < (items || []).length; i++) list.push(items[i]);
         window.__syAnnRender();
@@ -647,6 +664,18 @@
         inlineVisible = !!v;
         var inls = document.querySelectorAll(".sy-ann-inline");
         for (var i = 0; i < inls.length; i++) inls[i].style.display = inlineVisible ? "" : "none";
+    };
+
+    // 标注菜单「隐藏/显示高亮」：只改 html 类，锚点与批注内容不动
+    window.__syAnnSetHlVisible = function (v) {
+        var d = document.documentElement;
+        if (d) d.classList.toggle("sy-ann-hl-hidden", !v);
+    };
+
+    // 设置开关：选中文字时是否显示选区气泡
+    window.__syAnnSetBubbleVisible = function (v) {
+        bubbleVisible = !!v;
+        if (!bubbleVisible) hideBubble();
     };
 
     // 设置开关：显示/隐藏选区气泡「取消高亮/小字」按钮

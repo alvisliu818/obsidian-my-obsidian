@@ -4,6 +4,7 @@ import type { BrowserSettings, IWebviewTag, WebViewContextMenuParams } from "../
 import { sessionFromPartition, webContentsFromId } from "../utils/electron";
 import { escapeHtml } from "../utils/dom";
 import { parseEdgeInstallNavigation } from "../extensions/edgeStore";
+import { closeActiveBrowserMenu } from "./contextMenu";
 
 /**
  * guest 侧「复制元素为带样式 HTML」片段(用户 2026-11-20):elementFromPoint
@@ -201,6 +202,13 @@ export class WebviewController {
         this.openNewTab(String(e.args[0]), true);
         return;
       }
+      // 页内左键按下（preload 桥）：关掉本插件浮出的菜单。guest 的
+      // contextmenu 不会冒泡到宿主，这是网页内关菜单最可靠的一条通道
+      //（2026-11-28 对齐思源 162bc8c；右键不走这里，见 2d2076a）。
+      if (e?.channel === "obsidian-browser-guest-mousedown") {
+        closeActiveBrowserMenu();
+        return;
+      }
       // document_start content scripts: the preload asks, we answer over IPC.
       if (e?.channel === "ob-ext-request") {
         const payload = this.callbacks.onExtensionRequest?.(String(e.args?.[0] ?? this.getCurrentUrl()));
@@ -217,6 +225,9 @@ export class WebviewController {
     // 唯一活的 guest↔宿主通道）
     this.on("console-message", (e: any) => {
       const text = String(e?.message?.message ?? e?.message ?? "");
+      // 页内左键按下（annotationScript 的 console 桥）→ 关掉本插件浮出的菜单
+      //（2026-11-28 对齐思源 162bc8c；右键不走这里，见 2d2076a）
+      if (text.includes("[ob-guest-mousedown]")) closeActiveBrowserMenu();
       const i = text.indexOf("[ob-us-request]");
       if (i < 0) return;
       try {

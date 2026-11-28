@@ -108,6 +108,8 @@ export interface BrowserSettings {
   showAnnInline: boolean;
   /** 选区气泡显示「取消高亮/取消小字」按钮。 */
   showAnnRemove: boolean;
+  /** 选中文字弹标注气泡（关=不弹泡，只留右键/菜单入口）。 */
+  showAnnBubble: boolean;
   /** 悬停/点击高亮弹出悬浮窗（关=只提示）。 */
   showAnnFloat: boolean;
 
@@ -132,6 +134,11 @@ export interface BrowserSettings {
   autoFixScriptMatch: boolean;
 
   extensionsEnabled: boolean;
+  /**
+   * 扩展数据根目录（绝对路径；空 = 库内 .obsidian/plugins/obsidian-browser/extensions）。
+   * 换目录会迁移数据并按 CRX 公钥固定扩展 ID。
+   */
+  extensionsDir: string;
 }
 
 /** A single Chrome-extension-shaped add-on installed into the plugin. */
@@ -155,6 +162,8 @@ export interface ExtensionRecord {
   newtab?: string;
   /** 原生 session.loadExtension 装载后的 Electron 扩展 id（垫片模式为空）。 */
   nativeId?: string;
+  /** Edge 商店扩展 id（安装时记录；迁移目录时用来找回原始 CRX 公钥）。 */
+  edgeId?: string;
 }
 
 export interface ExtensionContentScript {

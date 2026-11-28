@@ -24,6 +24,8 @@ export interface BrowserContext {
     openListFloat(webview: IWebviewTag, url: string): Promise<void>;
     openDoc(url: string): Promise<void>;
     applyInlineVisibility(show?: boolean): void;
+    /** 隐藏/显示当前页全部标注高亮（仅显示层）。 */
+    toggleHighlights(webview: IWebviewTag, show?: boolean): Promise<boolean>;
     /** 取消高亮/取消小字（标注数据保留）。 */
     setDisplayOff(webview: IWebviewTag, url: string, payload: { kind?: string; id?: string; quote?: string; prefix?: string; suffix?: string }): Promise<void>;
     /** 框选完成：截屏落盘并创建/更新框选标注。 */

@@ -91,6 +91,7 @@ export default class BrowserPlugin extends Plugin {
         this.applyNetFilters();
         this.syncNativeExtensionLoads();
       },
+      () => this.config,
     );
 
     this.usHost = new UserscriptHost(
@@ -139,6 +140,7 @@ export default class BrowserPlugin extends Plugin {
           const s = this.config;
           this.annotation?.applyInlineVisibility(s.showAnnInline !== false);
           this.annotation?.applyRemoveVisibility(s.showAnnRemove !== false);
+          this.annotation?.applyBubbleVisibility(s.showAnnBubble !== false);
         },
         applyNetFilters: () => this.applyNetFilters(),
         applyProxy: () => void this.applyBrowserProxy(),

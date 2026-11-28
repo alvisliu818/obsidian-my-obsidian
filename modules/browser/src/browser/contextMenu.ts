@@ -3,6 +3,60 @@ import type { WebViewContextMenuParams } from "../types";
 import { copyText } from "../utils/dom";
 import { compensateMenuPosition } from "../../../shared/menuPosition";
 
+/**
+ * 浏览器模块菜单单例（2026-11-28 对齐思源 dcc08fd/9e995c3）。
+ *
+ * webview 是独立 document：在网页里右键时宿主 document 收不到 contextmenu，
+ * Obsidian Menu 自带的「点外部关闭」因此失效，旧菜单会叠在新菜单后面。
+ * 这里统一登记菜单，并在宿主右键 / webview 事件 / 页内 mousedown 时显式关闭。
+ */
+let activeMenu: Menu | null = null;
+
+export function closeActiveBrowserMenu(): void {
+  const m = activeMenu;
+  activeMenu = null;
+  if (!m) return;
+  // Obsidian 的关闭方法是 hide()（close() 已弃用但仍在），运行时都兜一层
+  try {
+    const anyMenu = m as unknown as { hide?: () => unknown; close?: () => unknown };
+    if (typeof anyMenu.hide === "function") anyMenu.hide();
+    else if (typeof anyMenu.close === "function") anyMenu.close();
+  } catch {
+    /* 菜单已销毁 */
+  }
+}
+
+export function trackBrowserMenu(menu: Menu): void {
+  closeActiveBrowserMenu();
+  activeMenu = menu;
+  try {
+    menu.onHide(() => {
+      if (activeMenu === menu) activeMenu = null;
+    });
+  } catch {
+    /* onHide 不可用：下次打开菜单时仍会先关旧的 */
+  }
+}
+
+// 不用 window 全局标志：插件 reload 时 window 不重建，全局标志会让新模块
+// 拿不到事件监听；重复绑定只会多关一次已经关闭的旧菜单，无副作用。
+if (typeof document !== "undefined") {
+  // 右键点在宿主任意位置都先关掉本插件上一个菜单
+  document.addEventListener("contextmenu", () => closeActiveBrowserMenu(), true);
+  // 左键点菜单外也兜底（Obsidian 自己有关闭逻辑，这里只处理本插件登记的菜单）
+  document.addEventListener(
+    "pointerdown",
+    (e) => {
+      const m = activeMenu as unknown as { dom?: HTMLElement } | null;
+      if (!m) return;
+      const el = m.dom;
+      const target = e.target as Node | null;
+      if (el && target && !el.contains(target)) closeActiveBrowserMenu();
+    },
+    true,
+  );
+}
+
 export interface WebViewMenuCallbacks {
   goBack(): void;
   goForward(): void;
@@ -30,6 +84,7 @@ export function showWebViewContextMenu(
   cb: WebViewMenuCallbacks,
 ): void {
   const menu = new Menu();
+  trackBrowserMenu(menu);
 
   menu.addItem((i) => i.setTitle("后退").setIcon("arrow-left").onClick(() => cb.goBack()));
   menu.addItem((i) => i.setTitle("前进").setIcon("arrow-right").onClick(() => cb.goForward()));
@@ -64,8 +119,15 @@ export function showWebViewContextMenu(
 
   menu.addSeparator();
   menu.addItem((i) => i.setTitle("摘录整页为笔记").setIcon("scissors").onClick(() => cb.excerpt("article")));
-  if (params.selectionText) {
-    menu.addItem((i) => i.setTitle("标注").setIcon("pen-tool").onClick(() => cb.annotate(params.selectionText!)));
+  // 标注：始终显示（2026-11-28 对齐思源 0e96d7b）；有选区标注选中文字，无选区标注整页
+  const hasSelection = !!String(params.selectionText || "").trim();
+  menu.addItem((i) =>
+    i
+      .setTitle(hasSelection ? "标注选中文字" : "标注此页")
+      .setIcon("pen-tool")
+      .onClick(() => cb.annotate(hasSelection ? params.selectionText! : "")),
+  );
+  if (hasSelection) {
     menu.addItem((i) => i.setTitle("摘录所选内容").setIcon("scissors").onClick(() => cb.excerpt("selection")));
   }
 
