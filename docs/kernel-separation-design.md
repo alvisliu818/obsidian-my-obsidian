@@ -112,7 +112,8 @@ export type KernelOp =
   | { op: 'extSearch'; tokens: string[]; not?: string[]; limit?: number }
   | { op: 'query'; q: QueryName; args: Record<string, unknown> }
   | { op: 'setConfig'; obsidianExe?: string }
-  | { op: 'open' };
+  | { op: 'open' }
+  | { op: 'hostQuit' };   // 请宿主退出（托盘组合动作/探针），内核不停
 
 export type QueryName =
   | 'getById' | 'blocksByPath' | 'tagsByPath' | 'backlinksTo' | 'refsToBlock'
@@ -121,7 +122,8 @@ export type QueryName =
 
 export type KernelEvent =
   | { ev: 'changed'; version: number }
-  | { ev: 'progress'; done: number; total: number };
+  | { ev: 'progress'; done: number; total: number }
+  | { ev: 'quitApp' };    // 请宿主退出（托盘「退出内核并退出 Obsidian」）
 ```
 
 `hello`（proto/pid/vault）改由 `GET /ping` 应答承载 + SSE 首帧广播；`close` op
@@ -206,7 +208,11 @@ spawn），不再直接 respawn 固定命令行。
   事件/exit 命令），不凭文档记忆写代码。
 - **菜单**：打开 Obsidian（协议 URL 直派 exe：runtime `setConfig`/argv → 注册表
   obsidian:// 关联兜底 → 两源皆空拒绝；无 shell.openExternal——内核是纯 node）/ 立即同步 /
-  全量重建 / ——分隔线 / **退出内核**。tooltip 显示「索引内核 · 运行中 · N 文件」。
+  全量重建 / ——分隔线 / **退出内核** / **退出内核并退出 Obsidian**
+  （2026-11-28 加：内核经 SSE 广播 `quitApp`，宿主走 `remote.app.quit()`
+  ——1.15 实测无 `app:quit` 命令，这是与菜单 Quit 同一条 before-quit /
+  quit-task 链路，保存拦截/提示照常；宿主断连或 10s 超时后走同一条
+  gracefulStop）。tooltip 显示「索引内核 · 运行中 · N 文件」。
   图标 `<pluginDir>/assets/kernel.ico`（静态手绘一次，不做构建期转换——不为此引
   依赖）。
 - **退出语义（右键退出 = 思源同款）**：菜单点击 → stdio 事件回内核 → 内核走

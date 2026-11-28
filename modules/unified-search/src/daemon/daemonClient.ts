@@ -63,6 +63,9 @@ export interface DaemonClientOptions {
   extFtsEnabled?: () => boolean;
   /** 触发 BlockIndex 消费方刷新（onRebuild 监听器的同一条线）。 */
   onChange: () => void;
+  /** 内核广播 quitApp（托盘「退出内核并退出 Obsidian」，2026-11-28）→ 宿主
+   *  退出请求。宿主侧走 Electron remote.app.quit()，保存拦截/提示照常。 */
+  onQuitRequest?: () => void;
 }
 
 const RESTART_BACKOFF_MS = [500, 2000, 10000];
@@ -82,6 +85,8 @@ export class BlockIndexDaemonClient {
   private disposed = false;
   /** HTTP 传输（R1b）；null = 当前走 stdio。 */
   private http: HttpTransport | null = null;
+  /** 上次 quitApp 处置时刻（去抖：重连/重复帧不重复弹退出提示）。 */
+  private quitHandledAt = 0;
 
   // ---- 小常驻缓存（changed 时作废，懒加载） ----
   private cacheById: Map<string, IndexedBlock> | null = null;
@@ -314,6 +319,16 @@ export class BlockIndexDaemonClient {
     }
     if (ev.ev === 'progress') {
       this.onTurboProgress?.(ev.done, ev.total);
+      return;
+    }
+    if (ev.ev === 'quitApp') {
+      // 内核托盘「退出内核并退出 Obsidian」：内核广播 → 宿主走正常退出流程。
+      // 3s 去抖（重连/重复帧只处置一次）；用户取消退出后再次点托盘是新的
+      // 用户动作，间隔必 > 3s，仍然生效。
+      const now = Date.now();
+      if (now - this.quitHandledAt < 3_000) return;
+      this.quitHandledAt = now;
+      this.opts.onQuitRequest?.();
       return;
     }
     // hello/fts 暂不消费（与旧行为一致）

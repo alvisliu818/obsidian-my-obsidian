@@ -1273,6 +1273,9 @@ export default class LogseqEditorPlugin extends Plugin {
       // 库外内容倒排索引开关(getter:热改后 pushRuntimeConfig 即时推送内核)
       extFtsEnabled: () => this.settings.contentSearch.extFtsEnabled !== false,
       obsidianExe: process.execPath,
+      // 内核托盘「退出内核并退出 Obsidian」（2026-11-28）：内核广播 quitApp
+      // → 这里走宿主自己的 Quit 流程（保存拦截/提示照常）。
+      onQuitRequest: () => this.quitHostFromKernel(),
     });
     try {
       await client.start();
@@ -1282,6 +1285,36 @@ export default class LogseqEditorPlugin extends Plugin {
       console.warn('[logseq] index daemon failed to start (no fallback index):', e);
       client.dispose();
       return null;
+    }
+  }
+
+  /**
+   * 宿主退出请求（内核托盘「退出内核并退出 Obsidian」，2026-11-28）：内核是
+   * 独立进程，只能经 SSE 广播 quitApp，由这里真正退出 Obsidian。
+   *
+   * 落地方式（2026-11-28 实测钉版 1.15）：Obsidian **没有** `app:quit` 命令
+   * （app: 前缀里只有 go-back/reload/settings 等，Quit 只在原生菜单），所以
+   * 走 Electron `remote.app.quit()`——与菜单 Quit 同一条 before-quit /
+   * workspace 'quit' 链路，save-control 的保存三选一与多库退出协调照常生效。
+   * remote 拿不到（未来 Electron 移除 remote）时回落关当前窗口。
+   */
+  quitHostFromKernel(): void {
+    if (Platform.isMobileApp) return;
+    try {
+      const electron = (window as unknown as {
+        require?: (m: string) => { remote?: { app?: { quit?: () => void } } };
+      }).require?.('electron');
+      if (typeof electron?.remote?.app?.quit === 'function') {
+        electron.remote.app.quit();
+        return;
+      }
+    } catch {
+      /* 无 electron/remote → 关窗 */
+    }
+    try {
+      window.close();
+    } catch {
+      /* 无路可走：保持运行，用户可手动退出 */
     }
   }
 
@@ -1585,7 +1618,10 @@ export default class LogseqEditorPlugin extends Plugin {
     }
     if (want && !this.daemonIndex && Platform.isDesktopApp) {
       void this.startDaemonIndex().then((c) => {
-        if (c) void this.daemonIndex?.upsertFiles([]); // 触发 changed→缓存预热
+        // 赋值不能丢（2026-11-28）：漏写 this.daemonIndex 时开关打开后门面恒 null
+        // ——索引其实在跑，但所有消费方都拿不到（重启才恢复）。
+        this.daemonIndex = c;
+        if (c) void c.upsertFiles([]); // 触发 changed→缓存预热
         this.notifyBlockIndexConsumers();
       });
     }

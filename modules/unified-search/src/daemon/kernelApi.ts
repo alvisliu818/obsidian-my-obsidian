@@ -58,7 +58,12 @@ export type KernelEvent =
       paths?: string[];
     }
   | { ev: 'progress'; done: number; total: number }
-  | { ev: 'fts'; enabled: boolean };
+  | { ev: 'fts'; enabled: boolean }
+  /** 内核请宿主退出（托盘「退出内核并退出 Obsidian」，2026-11-28 用户需求）：
+   *  内核是独立进程，无法直接关宿主——广播本帧，客户端收到后走 Electron
+   *  remote.app.quit()（与菜单 Quit 同一条 before-quit / quit-task 链路，
+   *  保存拦截照常生效）。 */
+  | { ev: 'quitApp' };
 
 /** 与现 stdio 协议 op 面一一对应（daemonMain.handle 的 switch）。 */
 export type KernelOp =
@@ -85,6 +90,9 @@ export type KernelOp =
   /** 在 Obsidian 中打开 vault（托盘「打开 Obsidian」与 HTTP 客户端共用同一条
    *  派发链：runtime exe → 注册表关联 → 拒绝，绝无 explorer 中间商）。 */
   | { op: 'open' }
+  /** 请宿主（Obsidian）退出，内核自身不停（托盘「退出内核并退出 Obsidian」=
+   *  本 op 的广播 + 既定停机路径；也可被外部脚本/探针单独调用验证）。 */
+  | { op: 'hostQuit' }
   /** dataview 页面缓存直通 op（2026-11-23 收编）：dv_pages 表（parsePage 产物
    *  权威存储，全量重建不清）。渲染端 dataviewBridge 经 daemonClient 的 dv*
    *  方法调用；dvPage 命中新鲜行直接回，否则现解析并落库。 */
@@ -105,6 +113,7 @@ export const OP_TIMEOUT_MS: Record<string, number> = {
   turbo: 30 * 60_000,
   setConfig: 5_000,
   open: 10_000,
+  hostQuit: 5_000,
 };
 
 /**

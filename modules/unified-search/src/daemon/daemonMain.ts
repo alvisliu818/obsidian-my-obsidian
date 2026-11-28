@@ -647,6 +647,8 @@ async function main(): Promise<void> {
   let version = 0;
   let queries: Queries | null = null;
   let fts = false;
+  /** 宿主退出出口（HTTP 模式在 server 就绪后接线；stdio/一次性模式恒 null）。 */
+  let hostQuit: (() => number) | null = null;
   const ftsEnabled = (): boolean => fts;
 
   // SqliteIndex.open() 惰性（首个操作触发）——为查询层先显式 open 一次。
@@ -1160,6 +1162,10 @@ async function main(): Promise<void> {
       }
       case 'open':
         return dispatchOpen();
+      case 'hostQuit':
+        // 只请宿主退出，内核自身不停（「退出内核并退出 Obsidian」的组合动作
+        // 由托盘/调用方决定后续停机）。宿主不在时广播无人接收，返回 0。
+        return { clients: hostQuit?.() ?? 0 };
       case 'rebuild':
         return mutate(() => idx.rebuild());
       case 'turbo': {
@@ -1576,7 +1582,29 @@ async function main(): Promise<void> {
     process.stderr.write(`[MyKernel] stopped: ${reason}\n`);
     process.exit(0);
   };
-  // 托盘（R2c）:helper 挂掉 → 内核无头继续（降级纪律）。四动作走 handle 同
+  /**
+   * 托盘「退出内核并退出 Obsidian」（2026-11-28 用户需求）：先经 SSE 请宿主
+   * 退出（客户端走 Electron remote.app.quit，与菜单 Quit 同一条链路，保存
+   * 拦截/提示照常），等宿主真的断连再停机——宿主不在（只有内核在托盘里）时
+   * 这一步就是全部语义。保存提示可能让宿主拖很久，但托盘语义是「退出」：
+   * 10s 上限兜底，不把内核永远留在后台（用户点取消也只影响宿主，内核照退）。
+   */
+  const exitKernelWithHost = (): void => {
+    const clients = hostQuit?.() ?? 0;
+    if (clients === 0) {
+      void gracefulStop('tray exit (host not running)');
+      return;
+    }
+    const t0 = Date.now();
+    const timer = setInterval(() => {
+      const left = server.clientCount();
+      if (left > 0 && Date.now() - t0 < 10_000) return;
+      clearInterval(timer);
+      void gracefulStop(`tray exit (host ${left === 0 ? 'closed' : 'quit timeout'})`);
+    }, 200);
+    timer.unref?.();
+  };
+  // 托盘（R2c）:helper 挂掉 → 内核无头继续（降级纪律）。各动作走 handle 同
   // 一条 op 路径;退出走 gracefulStop（与 /shutdown 同语义）。
   if (args.tray) {
     tray = startKernelTray({
@@ -1586,6 +1614,7 @@ async function main(): Promise<void> {
       },
       onSync: () => void handle({ op: 'sync' } as Parameters<typeof handle>[0]).catch(() => {}),
       onExit: () => void gracefulStop('tray exit'),
+      onExitAll: () => exitKernelWithHost(),
     }, { vaultName: vaultDisplayName(args.vault) });
     // 异常退出兜底:防孤儿图标（exit 钩子只允许同步操作）
     process.on('exit', () => {
@@ -1604,6 +1633,14 @@ async function main(): Promise<void> {
   });
   // 事件改道：changed/progress/fts → SSE 广播，stdout 不再承载事件。
   emit = (ev) => server.broadcast(ev);
+  // 宿主退出出口接线（op hostQuit / 托盘组合动作共用）：广播 quitApp 给全部
+  // SSE 客户端（= Obsidian 各窗口），返回广播时的客户端数。
+  hostQuit = () => {
+    const clients = server.clientCount();
+    server.broadcast({ ev: 'quitApp' });
+    process.stderr.write(`[kernel] host quit requested (clients=${clients})\n`);
+    return clients;
+  };
   server.broadcast({ ev: 'hello', proto: KERNEL_PROTO, pid: process.pid });
   // discovery 落盘失败不挡服务（客户端 R1b 靠它发现；R1a 仅有探针消费）。
   try {

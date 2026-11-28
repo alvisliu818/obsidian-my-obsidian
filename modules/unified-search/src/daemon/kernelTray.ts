@@ -15,11 +15,14 @@
 
 import path from 'node:path';
 import type SysTrayNS from 'systray2';
+import type { Menu } from 'systray2';
 
 export interface TrayActions {
   onOpen(): void;
   onSync(): void;
   onExit(): void;
+  /** 退出内核 + 请宿主（Obsidian）一起退出（2026-11-28 用户需求）。 */
+  onExitAll(): void;
 }
 
 export interface TrayHandle {
@@ -36,6 +39,7 @@ export interface TrayHandle {
 const ITEM_OPEN = '打开 Obsidian';
 const ITEM_SYNC = '增量索引';
 const ITEM_EXIT = '退出内核';
+const ITEM_EXIT_ALL = '退出内核并退出 Obsidian';
 
 export function startKernelTray(
   actions: TrayActions,
@@ -58,18 +62,21 @@ export function startKernelTray(
     // 提示名跟库名走（2026-11-17 用户需求）：多库各一个内核托盘时肉眼可辨，
     // 不再是一排同名 MyKernel。displayName 缺省回落 argv 路径 basename。
     let vaultName = (opts?.vaultName ?? '').trim() || 'MyKernel';
+    // 菜单只构建一次语义（初始 + 改名 update-menu 共用同一份，防两处漂移）。
+    const buildMenu = (): Menu => ({
+      icon,
+      title: vaultName,
+      tooltip: `${vaultName} · 索引内核运行中`,
+      items: [
+        { title: ITEM_OPEN, tooltip: '在 Obsidian 中打开本库' },
+        { title: ITEM_SYNC, tooltip: '增量索引变更文件' },
+        SysTray.separator,
+        { title: ITEM_EXIT, tooltip: '优雅停止索引内核' },
+        { title: ITEM_EXIT_ALL, tooltip: '先让 Obsidian 正常退出，再优雅停止索引内核' },
+      ],
+    });
     const tray = new SysTray({
-      menu: {
-        icon,
-        title: vaultName,
-        tooltip: `${vaultName} · 索引内核运行中`,
-        items: [
-          { title: ITEM_OPEN, tooltip: '在 Obsidian 中打开本库' },
-          { title: ITEM_SYNC, tooltip: '增量索引变更文件' },
-          SysTray.separator,
-          { title: ITEM_EXIT, tooltip: '优雅停止索引内核' },
-        ],
-      },
+      menu: buildMenu(),
       debug: false,
     });
     const dispatch = (title: string): void => {
@@ -77,6 +84,7 @@ export function startKernelTray(
       if (title === ITEM_OPEN) actions.onOpen();
       else if (title === ITEM_SYNC) actions.onSync();
       else if (title === ITEM_EXIT) actions.onExit();
+      else if (title === ITEM_EXIT_ALL) actions.onExitAll();
       else process.stderr.write(`[kernel-tray] click unmatched\n`);
     };
     void tray
@@ -108,17 +116,7 @@ export function startKernelTray(
         void tray
           .sendAction({
             type: 'update-menu',
-            menu: {
-              icon,
-              title: vaultName,
-              tooltip: `${vaultName} · 索引内核运行中`,
-              items: [
-                { title: ITEM_OPEN, tooltip: '在 Obsidian 中打开本库' },
-                { title: ITEM_SYNC, tooltip: '增量索引变更文件' },
-                SysTray.separator,
-                { title: ITEM_EXIT, tooltip: '优雅停止索引内核' },
-              ],
-            },
+            menu: buildMenu(),
           })
           .catch((e: unknown) => {
             process.stderr.write(`[kernel-tray] rename failed: ${String(e).slice(0, 120)}\n`);

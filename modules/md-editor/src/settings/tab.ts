@@ -1101,7 +1101,7 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
       new Setting(containerEl)
         .setName('内核托盘')
         .setDesc(
-          '系统托盘图标：打开 Obsidian / 增量索引 / 退出内核。' +
+          '系统托盘图标：打开 Obsidian / 增量索引 / 退出内核 / 退出内核并退出 Obsidian。' +
             '开启后空闲自退关闭（托盘即常驻语义）。切换后自动重启索引内核。',
         )
         .addToggle((t) =>
