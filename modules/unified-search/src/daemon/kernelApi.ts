@@ -69,13 +69,19 @@ export type KernelOp =
   | { op: 'turbo'; mode?: 'rebuild' | 'sync' }
   | { op: 'upsert'; paths?: string[] }
   | { op: 'delete'; paths?: string[] }
-  | { op: 'setExclude'; folders?: string[] }
   | { op: 'setExt'; files?: { path: string; mtime: number }[] }
   | { op: 'extSearch'; tokens?: string[]; not?: string[]; limit?: number }
   | { op: 'query'; q?: QueryName; args?: Record<string, unknown> }
   /** R2d 运行时配置推送：常驻内核可能由旧构建/外部脚本拉起（argv 无
-   *  --obsidian-exe），detach 后配置只能在连接建立后补送（§2 决策 9）。 */
-  | { op: 'setConfig'; obsidianExe?: string }
+   *  --obsidian-exe），detach 后配置只能在连接建立后补送（§2 决策 9）。
+   *  indexIgnore（2026-11-28）：索引忽略黑白名单，连接时/热改后推送。 */
+  | {
+      op: 'setConfig';
+      obsidianExe?: string;
+      vaultName?: string;
+      extFtsEnabled?: boolean;
+      indexIgnore?: { blacklist?: string[]; whitelist?: string[] };
+    }
   /** 在 Obsidian 中打开 vault（托盘「打开 Obsidian」与 HTTP 客户端共用同一条
    *  派发链：runtime exe → 注册表关联 → 拒绝，绝无 explorer 中间商）。 */
   | { op: 'open' }
@@ -94,7 +100,6 @@ export const OP_TIMEOUT_MS: Record<string, number> = {
   upsert: 60_000,
   delete: 60_000,
   sync: 60_000,
-  setExclude: 60_000,
   setExt: 120_000,
   rebuild: 30 * 60_000,
   turbo: 30 * 60_000,

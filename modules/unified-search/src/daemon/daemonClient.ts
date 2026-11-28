@@ -23,6 +23,7 @@ import type { SupertagDef } from '../../../md-editor/src/features/supertags';
 import type { KernelEvent } from './kernelApi';
 import { createDiscoveryIO } from './kernelApi';
 import { HttpTransport } from './httpTransport';
+import { EMPTY_INDEX_IGNORE, type IndexIgnoreConfig } from '../../../shared/indexIgnore';
 
 interface DaemonChild {
   pid: number | undefined;
@@ -45,8 +46,8 @@ export interface DaemonClientOptions {
   dbPath: string;
   /** 找系统 node.exe（terminal/ptyClient 的 findNodeExe 同源问题）。 */
   findNode: () => Promise<string | null>;
-  /** 索引排除目录（indexExcludedFolders 解析结果；热改后调 setExcludes）。 */
-  excludes?: () => string[];
+  /** 索引忽略（黑名单/白名单正则；热改后调 setIndexIgnore 推送并 sync）。 */
+  ignore?: () => IndexIgnoreConfig;
   /** spawn 注入点（测试用）；生产用 require('child_process').spawn。 */
   spawnImpl?: SpawnFn;
   /** 传输选择（R1b 默认 http：discovery 复用 + spawn --http；失败回落 stdio）。 */
@@ -117,9 +118,8 @@ export class BlockIndexDaemonClient {
     const rel = this.opts.pluginDir.replace(/^\/+|\/+$/g, '');
     const script = `${base}/${rel}/MyKernel.cjs`;
     const vault = vaultBase(this.opts.app);
-    const ex = this.opts.excludes?.() ?? [];
-    const extra: string[] = [];
-    if (ex.length) extra.push('--exclude', ex.join(','));
+    const ignore = this.opts.ignore?.() ?? EMPTY_INDEX_IGNORE;
+    const extra: string[] = ['--index-ignore', JSON.stringify(ignore)];
     if (this.opts.kernelTray === true) extra.push('--tray', '--idle-exit-ms', '0');
     // --obsidian-exe 不在这里推：httpTransport 自带同款追加（opts.obsidianExe
     // 单独传了），两边都推会出现重复 flag（2026-11-06 实测,无害但脏）。
@@ -166,7 +166,8 @@ export class BlockIndexDaemonClient {
       this.opts.dbPath,
       '--vault',
       vault,
-      ...(ex.length ? ['--exclude', ex.join(',')] : []),
+      '--index-ignore',
+      JSON.stringify(ignore),
     ]);
     await this.call('ping');
     // stdio 兜底路径同样推送运行时配置（obsidianExe/vaultName）——--tray 可随
@@ -365,6 +366,9 @@ export class BlockIndexDaemonClient {
       obsidianExe: this.opts.obsidianExe ?? '',
       vaultName,
       extFtsEnabled: this.opts.extFtsEnabled?.() ?? true,
+      // 索引忽略（2026-11-28）：连接时补送一次——常驻内核可能是上一份设置
+      // 拉起的（或由外部脚本拉起，argv 里没有 --index-ignore）。
+      indexIgnore: this.opts.ignore?.() ?? EMPTY_INDEX_IGNORE,
     });
   }
 
@@ -684,9 +688,12 @@ export class BlockIndexDaemonClient {
     }
   }
 
-  /** 设置热改排除目录后调用。 */
-  async setExcludes(folders: string[]): Promise<void> {
-    await this.call('setExclude', { folders });
+  /**
+   * 索引忽略名单热应用：推送当前规则（opts.ignore 现取）并触发一次增量同步
+   * ——sync 按新规则重新走清单，新命中的文件被 forget、新放开的补索引。
+   */
+  async setIndexIgnore(): Promise<void> {
+    await this.call('setConfig', { indexIgnore: this.opts.ignore?.() ?? EMPTY_INDEX_IGNORE });
     await this.call('sync');
   }
 

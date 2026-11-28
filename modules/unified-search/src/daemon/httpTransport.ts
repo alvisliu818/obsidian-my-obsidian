@@ -31,7 +31,7 @@ export interface HttpTransportOptions {
   scriptPath: string;
   /** vault 根绝对路径（探活匹配 + --vault）。 */
   vault: string;
-  /** 附加 daemon 参数（--exclude a,b 等；--http 由本层自动追加）。 */
+  /** 附加 daemon 参数（--index-ignore <json> 等；--http 由本层自动追加）。 */
   extraArgs?: string[];
   /** Obsidian.exe 绝对路径（托盘「打开」动作直派协议 URL 用，R2c）。 */
   obsidianExe?: string;

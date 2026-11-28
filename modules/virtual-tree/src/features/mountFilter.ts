@@ -15,6 +15,12 @@
  */
 
 import { compareNames } from '../nameCompare';
+import {
+	compilePatternList,
+	matchesPathPattern,
+	patternsHit,
+	type PatternSpec,
+} from '../../../shared/patternList';
 
 /** A file/dir entry as reported by the scanner, before filtering. */
 export interface ScanEntry {
@@ -83,29 +89,9 @@ export function compileFilter(filter: MountFilter): CompiledFilter {
  */
 export function entryMatches(rel: string, f: CompiledFilter): boolean {
   const name = rel.slice(rel.lastIndexOf('/') + 1);
-  if (f.exclude && matchesExcluded(rel, name, f.exclude)) return false;
+  if (f.exclude && matchesPathPattern(rel, name, f.exclude)) return false;
   if (!f.include) return true;
   return f.include.test(rel) || f.include.test(name);
-}
-
-/**
- * Exclude hit on the full path, the bare name, or any single path SEGMENT.
- *
- * The segment pass fixes a real trap: a pattern like `[\\/]archive[\\/]` is the
- * natural way to write "the archive folder", but it cannot match `archive/n.md`
- * because the folder is the first segment and has no separator in front of it.
- * Testing each segment against the same pattern with a synthetic `/` on both
- * sides makes leading and trailing positions behave like the middle ones —
- * without that, the very first folder in a mount escapes its own filter.
- */
-function matchesExcluded(rel: string, name: string, exclude: RegExp): boolean {
-  if (exclude.test(rel) || exclude.test(name)) return true;
-  const segments = rel.split('/');
-  for (let i = 0; i < segments.length - 1; i++) {
-    if (exclude.test(segments[i])) return true;
-    if (exclude.test(`/${segments[i]}/`)) return true;
-  }
-  return false;
 }
 
 /**
@@ -338,51 +324,16 @@ export interface HideRules {
 /**
  * 单条名单模式。纯文本走**整段相等**（`Notes` 不误伤 `Notes2`——子串匹配是
  * 只读名单的老毛病，这里按用户预期修正）；含正则元字符或写成 `/…/flags` 的
- * 走正则（仍需段边界语义，交给 matchesExcluded 的三查）。
+ * 走正则（仍需段边界语义，交给 matchesPathPattern 的三查）。
+ *
+ * 实现已收口到 shared/patternList.ts（索引忽略名单与这里同一套语法），
+ * 本别名保留给既有类型引用。
  */
-export interface HidePattern {
-	/** 纯文本形态：整段相等。 */
-	literal?: string;
-	/** 正则形态。 */
-	re?: RegExp;
-}
-
-/** 正则元字符：出现任意一个就按正则解释，否则按纯文本段匹配。 */
-const REGEX_META = /[\\^$.*+?()[\]{}|]/;
-
-/** 单条模式 → 编译结果；空/非法返回 null（一条坏正则不该弄坏整棵树）。 */
-function patternFrom(raw: string): HidePattern | null {
-	let body = raw.trim();
-	if (!body) return null;
-	const wrapped = /^\/(.+)\/([a-z]*)$/.exec(body);
-	if (wrapped) {
-		body = wrapped[1];
-		let flags = wrapped[2] || 'i';
-		if (!flags.includes('i')) flags += 'i';
-		// 有状态的 flag 会让 test() 在连续调用间跳着命中，名单匹配必须无状态
-		flags = flags.replace(/[gy]/g, '');
-		try {
-			return { re: new RegExp(body, flags) };
-		} catch {
-			return null;
-		}
-	}
-	if (!REGEX_META.test(body)) return { literal: body };
-	try {
-		return { re: new RegExp(body, 'i') };
-	} catch {
-		return null;
-	}
-}
+export type HidePattern = PatternSpec;
 
 /** 一组名单模式编译（隐藏名单与只读名单共用同一套语法）。 */
 export function compilePatterns(list: readonly string[] | undefined): HidePattern[] {
-	const out: HidePattern[] = [];
-	for (const p of list ?? []) {
-		const pat = patternFrom(p);
-		if (pat) out.push(pat);
-	}
-	return out;
+	return compilePatternList(list);
 }
 
 export function compileHideRules(
@@ -393,32 +344,11 @@ export function compileHideRules(
 	return { hide: h, show: compilePatterns(show), active: h.length > 0 };
 }
 
-/** 纯文本模式：末段相等，或路径中间某一段相等。 */
-function hitsLiteral(rel: string, name: string, literal: string): boolean {
-	if (name === literal) return true;
-	const segments = rel.split('/');
-	for (let i = 0; i < segments.length - 1; i++) {
-		if (segments[i] === literal) return true;
-	}
-	return false;
-}
-
-function hitsAny(rel: string, name: string, patterns: readonly HidePattern[]): boolean {
-	for (const p of patterns) {
-		if (p.literal !== undefined) {
-			if (hitsLiteral(rel, name, p.literal)) return true;
-		} else if (p.re && matchesExcluded(rel, name, p.re)) {
-			return true;
-		}
-	}
-	return false;
-}
-
 /**
  * 这一项是否该从树里隐藏。
  *
  * `rel` 是**挂载内**相对路径（库根挂载 = 库内路径），与只读名单/挂载过滤同一
- * 坐标；`name` 是显示名（末尾段），纯文本按整段相等、正则走 matchesExcluded
+ * 坐标；`name` 是显示名（末尾段），纯文本按整段相等、正则走 matchesPathPattern
  * 的段边界三查。
  *
  * 判定只看节点自己：白名单命中即显示（优先于黑名单），否则黑名单命中即隐藏。
@@ -432,8 +362,8 @@ export function isHiddenByRules(
 ): boolean {
 	if (!rules.active) return false;
 	// 例外优先：白名单命中即显示，哪怕黑名单也命中
-	if (rules.show.length && hitsAny(rel, name, rules.show)) return false;
-	return hitsAny(rel, name, rules.hide);
+	if (rules.show.length && patternsHit(rel, name, rules.show)) return false;
+	return patternsHit(rel, name, rules.hide);
 }
 
 /**
@@ -454,5 +384,5 @@ export function isReadOnlyEntry(
 ): boolean {
 	if (!patterns?.length) return false;
 	const name = rel.slice(rel.lastIndexOf('/') + 1);
-	return hitsAny(rel, name, compilePatterns(patterns));
+	return patternsHit(rel, name, compilePatterns(patterns));
 }

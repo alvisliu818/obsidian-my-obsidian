@@ -203,11 +203,14 @@ export interface BlockEditorSettings {
   /** Folders (paths) where .md files keep opening with the native editor. */
   excludedFolders: string;
   /**
-   * Folders (paths) excluded from the block index: no block-level
-   * backlinks/tags/cards from them (~117 blocks/file resident otherwise).
-   * Independent of excludedFolders (which is about editor take-over).
+   * 索引忽略的黑名单（逐行一条；纯文本 = 名字/路径段整段相等，也接受裸正则
+   * 或 `/正则/flags`）。命中即不进块索引/统一搜索（块级反链/标签/卡片/搜索
+   * 都看不到它）。库内文件按库内相对路径匹配，库外挂载文件按绝对路径匹配。
+   * 2026-11-28 用户需求：取代旧的「索引排除的文件夹」（旧值自动迁移过来）。
    */
-  indexExcludedFolders: string;
+  indexIgnoreBlacklist: string[];
+  /** 索引忽略的白名单（例外）：命中即照常收录，优先于黑名单。 */
+  indexIgnoreWhitelist: string[];
   /** Debounce delay (ms) before writing edits to disk. */
   saveDebounceMs: number;
   /** Python env used to run code ('' = auto-detect). See exec/pythonEnvs.ts. */
@@ -515,7 +518,8 @@ export interface RefFilter {
 
 export const DEFAULT_SETTINGS: BlockEditorSettings = {
   excludedFolders: '',
-  indexExcludedFolders: '',
+  indexIgnoreBlacklist: [],
+  indexIgnoreWhitelist: [],
   saveDebounceMs: 800,
   pythonEnvId: '',
   pythonEnvCustomPath: '',

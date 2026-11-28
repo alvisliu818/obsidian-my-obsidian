@@ -21,6 +21,14 @@ import {
 } from './types';
 import { isMarkdownFile } from './features/codeFileKind';
 import { isTextFileName } from '../../virtual-tree/src/features/mountFilter';
+import {
+  compileIndexIgnore,
+  isIndexIgnored,
+  isIndexIgnoredPath,
+  legacyFolderListToPatterns,
+  normalizeIgnoreConfig,
+  type IndexIgnoreConfig,
+} from '../../shared/indexIgnore';
 import { FileExplorerLocateButton } from './features/fileExplorerLocate';
 import { LogseqEditorSettingTab } from './settings/tab';
 import { initEditorSettingsStore, loadEditorSettings, saveEditorSettings } from '../../code-editor/src/settings/editorSettingsStore';
@@ -326,9 +334,9 @@ export default class LogseqEditorPlugin extends Plugin {
     // 只负责那些「自己掌握源但没有 section 信息」的渲染面 —— 静态块、内嵌、
     // 闪卡、代码块前缀、库外文件 —— 通过 features/latexSource 转发。
 
-    // Vault-wide ((block-id)) index。indexExcludedFolders 的目录不进索引:
+    // Vault-wide ((block-id)) index。indexIgnoreBlacklist 命中的文件不进索引:
     // 备份/参考资料不吃索引内存(~99 万块 ≈ 250-300MB),反链面板也没有副本噪音。
-    // 谓词直读设置(每次调用现取),设置热改后「重建块索引」即生效。
+    // 谓词直读设置(每次调用现取),设置热改后即时推送守护进程。
     //
     // 档位 2(2026-10-25):桌面 + sqliteIndexEnabled 时改走守护进程——
     // 独立 node 进程独占 SQLite(better-sqlite3,FTS5),渲染进程只留小常驻
@@ -1094,7 +1102,25 @@ export default class LogseqEditorPlugin extends Plugin {
     const d = Number(this.settings.saveDebounceMs);
     if (!Number.isFinite(d) || d < 0) this.settings.saveDebounceMs = DEFAULT_SETTINGS.saveDebounceMs;
     if (typeof this.settings.excludedFolders !== 'string') this.settings.excludedFolders = '';
-    if (typeof this.settings.indexExcludedFolders !== 'string') this.settings.indexExcludedFolders = '';
+    // 索引忽略名单（2026-11-28）：数组清洗；旧的「索引排除的文件夹」是一次性
+    // 迁移来源——目录前缀语义换成等价的锚定正则（`^backups(/|$)`），迁移后删键。
+    const legacyIndexFolders =
+      typeof (raw as { indexExcludedFolders?: unknown } | null)?.indexExcludedFolders === 'string'
+        ? String((raw as { indexExcludedFolders: string }).indexExcludedFolders)
+        : '';
+    const ignore = normalizeIgnoreConfig({
+      blacklist: (this.settings as { indexIgnoreBlacklist?: unknown }).indexIgnoreBlacklist,
+      whitelist: (this.settings as { indexIgnoreWhitelist?: unknown }).indexIgnoreWhitelist,
+    });
+    if (legacyIndexFolders.trim()) {
+      for (const p of legacyFolderListToPatterns(legacyIndexFolders)) {
+        if (!ignore.blacklist.includes(p)) ignore.blacklist.push(p);
+      }
+    }
+    this.settings.indexIgnoreBlacklist = ignore.blacklist;
+    this.settings.indexIgnoreWhitelist = ignore.whitelist;
+    // Object.assign 会把旧键带进设置对象，删掉避免下次保存又写回 data.json。
+    delete (this.settings as unknown as Record<string, unknown>).indexExcludedFolders;
     // Take-over scope defaults to 'all' so pre-scope configs keep the old behavior.
     if (this.settings.scopeMode !== 'all' && this.settings.scopeMode !== 'folders') {
       this.settings.scopeMode = 'all';
@@ -1240,7 +1266,7 @@ export default class LogseqEditorPlugin extends Plugin {
       pluginDir: this.manifest.dir ?? '',
       dbPath: this.sqliteDbPath,
       findNode: findNodeExe,
-      excludes: () => parseFolderList(this.settings.indexExcludedFolders),
+      ignore: () => this.indexIgnoreConfig(),
       onChange: () => this.notifyBlockIndexConsumers(),
       kernelResident: this.settings.kernelResident !== false,
       kernelTray: this.settings.kernelTray === true,
@@ -1350,9 +1376,26 @@ export default class LogseqEditorPlugin extends Plugin {
     }
   }
 
-  /** 索引排除(独立于编辑器排除):这些目录不进块索引/块级反链。 */
+  /** 索引忽略配置（守护进程与库外清单过滤共用同一份，热改后现取）。 */
+  indexIgnoreConfig(): IndexIgnoreConfig {
+    return normalizeIgnoreConfig({
+      blacklist: this.settings.indexIgnoreBlacklist,
+      whitelist: this.settings.indexIgnoreWhitelist,
+    });
+  }
+
+  /** 索引排除（独立于编辑器排除）：命中黑名单/白名单判定的文件不进块索引。 */
   isIndexExcluded(file: string): boolean {
-    return pathInFolders(file, parseFolderList(this.settings.indexExcludedFolders ?? ''));
+    return isIndexIgnored(file, compileIndexIgnore(this.indexIgnoreConfig()));
+  }
+
+  /**
+   * 索引忽略名单热应用：把当前规则推给守护进程并触发一次增量同步
+   * （新命中的文件被删除，新放开的文件被补索引）。内核未起时静默——
+   * 下次启动会带新规则。
+   */
+  async applyIndexIgnoreRules(): Promise<void> {
+    await this.daemonIndex?.setIndexIgnore();
   }
 
   /**
@@ -2270,12 +2313,23 @@ export default class LogseqEditorPlugin extends Plugin {
 
   /** 兼容门面:列举库外可搜索文件(omnisearch / unified-search 的数据源)。 */
   listExternalSearchFiles(): Array<{ abs: string; name: string; mtime: number }> {
-    return virtualTreeOf(this.app)?.listExternalSearchFiles() ?? [];
+    return this.filterExternalForIndex(virtualTreeOf(this.app)?.listExternalSearchFiles() ?? []);
   }
 
   /** 协作式异步版:行走让出主线程,统一搜索的启动/周期推送走这条。 */
   async listExternalSearchFilesAsync(): Promise<Array<{ abs: string; name: string; mtime: number }>> {
-    return (await virtualTreeOf(this.app)?.listExternalSearchFilesAsync()) ?? [];
+    return this.filterExternalForIndex((await virtualTreeOf(this.app)?.listExternalSearchFilesAsync()) ?? []);
+  }
+
+  /**
+   * 库外文件（绝对路径）的索引忽略过滤：与库内同一份黑白名单。
+   * 挂载扫描是索引收录的第一道门——在这里滤掉，统一搜索/omnisearch 的
+   * 库外推送清单就不会包含它们，守护进程侧连 stat 都省。
+   */
+  private filterExternalForIndex<T extends { abs: string }>(files: T[]): T[] {
+    const rules = compileIndexIgnore(this.indexIgnoreConfig());
+    if (!rules.active) return files;
+    return files.filter((f) => !isIndexIgnoredPath(f.abs, rules));
   }
 
   /**

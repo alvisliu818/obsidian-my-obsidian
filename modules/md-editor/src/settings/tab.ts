@@ -121,21 +121,57 @@ export class LogseqEditorSettingTab extends PluginSettingTab {
         );
     }
 
-    // ---------- Block index ----------
+    // ---------- Block index: 索引忽略（黑白名单正则，2026-11-28） ----------
+    containerEl.createEl('h3', { text: '索引忽略（黑白名单）' });
+    containerEl.createEl('p', {
+      cls: 'setting-item-description',
+      text:
+        '命中的文件不进块索引/统一搜索（块级反链、标签、卡片、搜索都看不到它们）。' +
+        '库内文件按库内相对路径匹配，库外挂载文件按绝对路径匹配。每行一条：' +
+        '纯文本按名字/路径段整段相等（Notes 不误伤 Notes2），也可以直接写正则，如 ^\\. 或 /\\.tmp$/。',
+    });
+
     new Setting(containerEl)
-      .setName('索引排除的文件夹')
-      .setDesc(
-        '这些目录不进块索引（块级反链/标签/卡片不含它们），逗号分隔。备份和参考资料目录建议排除：省内存（每文件平均 ~117 块常驻），反链面板也不再出现备份副本的噪音。改动后运行命令「Rebuild block reference index」生效。',
-      )
-      .addText((t) =>
-        t
-          .setPlaceholder('backups, courses')
-          .setValue(this.plugin.settings.indexExcludedFolders ?? '')
-          .onChange(async (v) => {
-            this.plugin.settings.indexExcludedFolders = v;
+      .setName('忽略名单（黑名单）')
+      .setDesc('命中即不进索引；目录命中时整棵不收录。留空 = 不启用索引忽略。')
+      .addTextArea((text) => {
+        text
+          .setPlaceholder('backups\n^\\.trash/\n/未命名.*\\.md$/')
+          .setValue((this.plugin.settings.indexIgnoreBlacklist ?? []).join('\n'))
+          .onChange(async (value) => {
+            this.plugin.settings.indexIgnoreBlacklist = value
+              .split('\n')
+              .map((p) => p.trim())
+              .filter((p) => p !== '');
             await this.plugin.saveSettings();
-          }),
-      );
+          });
+        text.inputEl.rows = 4;
+        text.inputEl.style.width = '100%';
+        // 不在每次击键时热同步（全库扫描有成本）：失焦时一次性应用。
+        text.inputEl.addEventListener('blur', () => void this.plugin.applyIndexIgnoreRules());
+      });
+
+    new Setting(containerEl)
+      .setName('例外名单（白名单）')
+      .setDesc(
+        '命中即照常收录，优先于忽略名单（给黑名单开洞），所以被忽略目录里的个别文件也能救回来。' +
+          '每行一条，语法同忽略名单。',
+      )
+      .addTextArea((text) => {
+        text
+          .setPlaceholder('重要资料.md\n/^projects\\/keep/')
+          .setValue((this.plugin.settings.indexIgnoreWhitelist ?? []).join('\n'))
+          .onChange(async (value) => {
+            this.plugin.settings.indexIgnoreWhitelist = value
+              .split('\n')
+              .map((p) => p.trim())
+              .filter((p) => p !== '');
+            await this.plugin.saveSettings();
+          });
+        text.inputEl.rows = 4;
+        text.inputEl.style.width = '100%';
+        text.inputEl.addEventListener('blur', () => void this.plugin.applyIndexIgnoreRules());
+      });
 
     // ---------- Page properties editor ----------
     new Setting(containerEl)

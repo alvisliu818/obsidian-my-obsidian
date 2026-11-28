@@ -9,7 +9,7 @@
  *
  * 协议（stdio，一行一个 JSON）：
  *   → {id, op, ...}          请求；op ∈ ping|rebuild|sync|upsert|delete|
- *                              setExclude|stats|query|close
+ *                              setConfig|stats|query|close
  *   ← {id, ok, data}         应答（ok=false 时 data=error 字符串）
  *   ← {ev:'hello', proto, pid}          启动握手
  *   ← {ev:'progress', done, total}      重建/同步进度
@@ -20,7 +20,7 @@
  * 同源，二者对同一文件永远一致。
  *
  * CLI 一次性模式（构建/调试/基准）：
- *   node MyKernel.cjs --db <file> --vault <dir> [--exclude a,b] --rebuild
+ *   node MyKernel.cjs --db <file> --vault <dir> [--index-ignore <json>] --rebuild
  *   node MyKernel.cjs ... --sync
  *   node MyKernel.cjs ... --query '{"q":"backlinksTo","args":{"page":"foo"}}'
  */
@@ -36,6 +36,15 @@ import * as os from 'os';
 import * as crypto from 'crypto';
 import type { SqliteFileMeta } from '../../../md-editor/src/index/sqliteSchema';
 import type { SqliteRuntimeLike } from '../../../md-editor/src/index/sqliteRuntime';
+import {
+  compileIndexIgnore,
+  isIndexDirPruned,
+  isIndexIgnored,
+  normalizeIgnoreConfig,
+  EMPTY_INDEX_IGNORE,
+  type IndexIgnoreConfig,
+  type IndexIgnoreRules,
+} from '../../../shared/indexIgnore';
 import { KERNEL_PROTO, buildOpenVaultUrl, createDiscoveryIO, makeToken, parseRegistryCommand, vaultDisplayName, type KernelEvent } from './kernelApi';
 import { startKernelHttpServer } from './httpServer';
 import { startKernelTray, type TrayHandle } from './kernelTray';
@@ -48,7 +57,7 @@ import { dvStoreStatements, parseDvPage } from './dvImport';
 interface Args {
   db: string;
   vault: string;
-  exclude: string[];
+  indexIgnore: IndexIgnoreConfig;
   oneShot: 'rebuild' | 'sync' | 'query' | null;
   query: unknown;
   http: boolean;
@@ -57,13 +66,22 @@ interface Args {
   obsidianExe: string;
 }
 
+/** `--index-ignore` 的 JSON 值解析；坏 JSON 当空规则（索引照常可用）。 */
+function parseIgnoreArg(raw: string): IndexIgnoreConfig {
+  try {
+    return normalizeIgnoreConfig(JSON.parse(raw));
+  } catch {
+    return { ...EMPTY_INDEX_IGNORE };
+  }
+}
+
 function parseArgs(argv: string[]): Args {
-  const out: Args = { db: '', vault: '', exclude: [], oneShot: null, query: null, http: false, idleExitMs: 600_000, tray: false, obsidianExe: '' };
+  const out: Args = { db: '', vault: '', indexIgnore: { ...EMPTY_INDEX_IGNORE }, oneShot: null, query: null, http: false, idleExitMs: 600_000, tray: false, obsidianExe: '' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--db') out.db = argv[++i] ?? '';
     else if (a === '--vault') out.vault = argv[++i] ?? '';
-    else if (a === '--exclude') out.exclude = (argv[++i] ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+    else if (a === '--index-ignore') out.indexIgnore = parseIgnoreArg(argv[++i] ?? '');
     else if (a === '--rebuild') out.oneShot = 'rebuild';
     else if (a === '--sync') out.oneShot = 'sync';
     else if (a === '--query') { out.oneShot = 'query'; out.query = JSON.parse(argv[++i] ?? '{}'); }
@@ -213,19 +231,16 @@ async function openRuntime(file: string): Promise<SqliteRuntimeLike> {
 const HIDDEN_DIRS = new Set(['.obsidian', '.trash', '.git', '.logseq-editor', '.versions(SH)']);
 
 class FsSource implements SqliteFileSource {
-  private excludes: string[];
+  /** 索引忽略（黑白名单正则，2026-11-28）：扫描/单文件 stat 共用同一份规则。 */
+  private rules: IndexIgnoreRules;
 
-  constructor(private vault: string, excludes: string[]) {
-    this.excludes = excludes.map((e) => e.replace(/^\/+|\/+$/g, '').toLowerCase());
+  constructor(private vault: string, ignore: IndexIgnoreConfig) {
+    this.rules = compileIndexIgnore(ignore);
   }
 
-  setExcludes(list: string[]): void {
-    this.excludes = list.map((e) => e.replace(/^\/+|\/+$/g, '').toLowerCase());
-  }
-
-  private isExcluded(rel: string): boolean {
-    const lower = rel.toLowerCase();
-    return this.excludes.some((e) => lower === e || lower.startsWith(e + '/'));
+  /** 运行时热更新（客户端 setConfig 推送）；改动后由调用方触发一次 sync 收敛。 */
+  setIndexIgnore(config: IndexIgnoreConfig): void {
+    this.rules = compileIndexIgnore(config);
   }
 
   listMarkdownFiles(): SqliteFileMeta[] {
@@ -242,10 +257,12 @@ class FsSource implements SqliteFileSource {
         const childRel = rel ? `${rel}/${n.name}` : n.name;
         if (n.isDirectory()) {
           if (HIDDEN_DIRS.has(n.name)) continue;
-          if (this.isExcluded(childRel)) continue;
+          // 目录整棵命中黑名单（且没配白名单）就不进——node_modules 这类巨树
+          // 不该边走边丢文件，连 opendir 都省。
+          if (isIndexDirPruned(childRel, this.rules)) continue;
           walk(path.join(abs, n.name), childRel);
         } else if (n.isFile() && n.name.toLowerCase().endsWith('.md')) {
-          if (this.isExcluded(childRel)) continue;
+          if (isIndexIgnored(childRel, this.rules)) continue;
           let st: fs.Stats;
           try {
             st = fs.statSync(path.join(abs, n.name));
@@ -270,10 +287,13 @@ class FsSource implements SqliteFileSource {
    * 网盘 vault 上就是小时级空转。返回 null = 文件不在/非 md/被排除
    * （调用方据此 forgetFile）。未在清单里出现过的路径约定返回 null 而
    * 非 undefined（undefined 语义 = "本源不支持 statFile,回落清单"）。
+   *
+   * 索引忽略也在这里判定：设置热改后，被新规则命中的文件经 upsert/sync
+   * 走到这里返回 null，索引行随之 forget，不需要等一次全库重建。
    */
   statFile(rel: string): SqliteFileMeta | null {
     if (!rel.toLowerCase().endsWith('.md')) return null;
-    if (this.isExcluded(rel)) return null;
+    if (isIndexIgnored(rel, this.rules)) return null;
     const segs = rel.split('/');
     if (segs.some((s) => s.startsWith('.') || HIDDEN_DIRS.has(s))) return null;
     let st: fs.Stats;
@@ -604,11 +624,11 @@ class Queries {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   if (!args.db || !args.vault) {
-    process.stderr.write('usage: MyKernel.cjs --db <file> --vault <dir> [--exclude a,b] [--rebuild|--sync|--query <json>] [--http]\n');
+    process.stderr.write('usage: MyKernel.cjs --db <file> --vault <dir> [--index-ignore <json>] [--rebuild|--sync|--query <json>] [--http]\n');
     process.exit(2);
   }
 
-  const source = new FsSource(args.vault, args.exclude);
+  const source = new FsSource(args.vault, args.indexIgnore);
   const write = (obj: unknown): void => {
     process.stdout.write(JSON.stringify(obj) + '\n');
   };
@@ -1089,7 +1109,6 @@ async function main(): Promise<void> {
     op?: string;
     paths?: string[];
     path?: string;
-    folders?: string[];
     q?: string;
     args?: Record<string, unknown>;
   }): Promise<unknown> => {
@@ -1108,6 +1127,10 @@ async function main(): Promise<void> {
           openVaultName = pushedName;
           tray?.setVaultName(pushedName);
         }
+        // 索引忽略（2026-11-28）：客户端连接/热改时推送。规则立即生效，
+        // 客户端随后调 sync 收敛（新命中的文件被 forget，新放开的补索引）。
+        const pushedIgnore = (msg as { indexIgnore?: unknown }).indexIgnore;
+        if (pushedIgnore !== undefined) source.setIndexIgnore(normalizeIgnoreConfig(pushedIgnore));
         // extFtsEnabled 热切换（2026-11-19 round2）：关=清空 ext_fts（省盘上
         // 空间,syncExt 同步跳过重建）;开=重建（syncExt 补齐）。库不存在时
         // (未 open)仅记标志——下一次 syncExt/open 生效。
@@ -1208,9 +1231,6 @@ async function main(): Promise<void> {
           { paths },
         );
       }
-      case 'setExclude':
-        source.setExcludes(msg.folders ?? []);
-        return { ok: true };
       case 'setExt': {
         // 候选清单落 meta(守护进程重启后不需要客户端重推也能自愈重扫)
         const files = (msg as { files?: { path: string; mtime: number }[] }).files ?? [];
