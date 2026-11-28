@@ -1,7 +1,7 @@
 {
   "id": "obsidian-my-obsidian",
   "name": "My Obsidian",
-  "version": "0.2.25",
+  "version": "0.2.26",
   "minAppVersion": "1.5.0",
   "description": "One plugin for the author's Obsidian add-ons: Logseq-style block editor, in-app browser, Jupyter notebooks, breadcrumb navigation, audio recorder and more — each can be switched off in the settings.",
   "author": "alvisliu",
