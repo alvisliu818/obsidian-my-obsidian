@@ -96,8 +96,3 @@ pnpm run build      # 先生成图标数据，再类型检查，最后打包
    `jiebaPatchPlugin`。Text Extractor 的语言多选组件（LangSelector）经根
    svelte5 工具链编译，`svelte-multiselect` 直引组件源文件（v11，svelte5
    原生）。
-
-## 待并入
-
-- **My Terminal**（obsidian-myterminal）：工具链是 bun + svelte + i18next + 原生
-  pty-helper + Python/uv，作为第二阶段单独迁入。
