@@ -136,6 +136,42 @@ export function isUrlExcluded(url: string, patternsText: string): boolean {
     .some((p) => matchHost(host, p));
 }
 
+/** Origin of the host (Obsidian) window; "" / "null" when opaque or in Node. */
+function hostOrigin(): string {
+  try {
+    return typeof window !== "undefined" ? window.location?.origin || "" : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * 是否指向宿主应用自身页面（与 Obsidian 窗口同源）。
+ *
+ * 对齐思源 f01eaa2：开启「所有链接用插件打开」后，思源的独立设置窗口
+ * `window.open(appOrigin + "/settings.html")` 被全局拦截返回 null，宿主判空
+ * 抛 "Could not open the settings window"。同源页面必须交回原生逻辑。
+ * Obsidian 主窗口多为 app:// / file:// 不透明源，此时恒 false；显式的
+ * origin 参数供单测与未来宿主形态使用。
+ */
+export function isAppInternalUrl(url: string, origin?: string): boolean {
+  const base = origin ?? hostOrigin();
+  if (!url || !base || base === "null") return false;
+  try {
+    return new URL(url, base).origin === new URL(base).origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 全局链接拦截的唯一判定：http(s) 外链，且不在排除名单、不是宿主自身页面。
+ * 与思源 shouldInterceptLink 等价；所有自动拦截入口都必须走这里，避免漏放行。
+ */
+export function shouldInterceptLink(url: string, patternsText: string, origin?: string): boolean {
+  return /^https?:\/\//i.test(url) && !isUrlExcluded(url, patternsText) && !isAppInternalUrl(url, origin);
+}
+
 /** Title -> file-name: full-width slashes keep the note path intact. */
 export function titleToFilename(title: string): string {
   return safeFilename((title || "untitled").replace(/[\\/]/g, "／").replace(/[[\]#^|]/g, ""));

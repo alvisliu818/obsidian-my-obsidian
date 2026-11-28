@@ -37,7 +37,7 @@ import { evalInServiceWorker } from "./extensions/swBridge";
 import type { UserScriptRecord } from "./types";
 import { BrowserSettingTab } from "./settings/SettingsTab";
 import { downloadToVault } from "./utils/download";
-import { isUrlExcluded, normalizeUrl, safeFilename, formatDateKey } from "./utils/url";
+import { normalizeUrl, safeFilename, formatDateKey, shouldInterceptLink } from "./utils/url";
 import { nodeRequire, openExternal, vaultBasePath } from "./utils/electron";
 import { copyText } from "./utils/dom";
 import { SavePageModal } from "./browser/savePageModal";
@@ -647,8 +647,8 @@ export default class BrowserPlugin extends Plugin {
         const anchor = target?.closest?.("a[href]") as HTMLAnchorElement | null;
         if (!anchor) return;
         const href = anchor.getAttribute("href") || "";
-        if (!/^https?:/i.test(href)) return;
-        if (isUrlExcluded(href, this.config.excludedSites)) return;
+        // 统一判定：http(s) 外链 + 非排除站点 + 非宿主自身页面（对齐思源 f01eaa2）
+        if (!shouldInterceptLink(href, this.config.excludedSites)) return;
         e.preventDefault();
         e.stopPropagation();
         void this.openUrl(href, e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1);
